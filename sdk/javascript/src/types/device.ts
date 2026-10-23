@@ -10,18 +10,24 @@
 // =============================================================================
 
 /**
- * Device role
+ * Device role, as the REST API sends and accepts it: the ten lowercase
+ * strings of `entities.DeviceRole` (`pkg/device/entities/profile.go`).
+ * `unknown` is what the server reports for a profile or template saved
+ * without a role. The server reads a role case-insensitively and also takes
+ * `loadbalancer` for `load-balancer`, but it always writes one of these ten
+ * and rejects anything else with a 400 (#119).
  */
 export type DeviceRole =
-  | 'UNSPECIFIED'
-  | 'UNKNOWN'
-  | 'SERVER'
-  | 'CLIENT'
-  | 'WORKSTATION'
-  | 'EDGE'
-  | 'IOT'
-  | 'GATEWAY'
-  | 'LOAD_BALANCER';
+  | 'unknown'
+  | 'control-plane'
+  | 'gateway'
+  | 'worker'
+  | 'server'
+  | 'client'
+  | 'workstation'
+  | 'edge'
+  | 'iot'
+  | 'load-balancer';
 
 /**
  * Authentication method
@@ -356,8 +362,8 @@ function selectorOrDefault(value: string | undefined, fallback: string): string 
  * Create device request
  */
 export interface CreateDeviceRequest {
-  /** Device to create */
-  device: Partial<Device>;
+  /** Device to create. The serial is required; the server refuses an empty one. */
+  device: Partial<Device> & Pick<Device, 'serial'>;
 }
 
 /**
@@ -497,6 +503,32 @@ export interface FindMatchingProfileRequest {
 export interface DeviceAttestRequest {
   /** Base64 of `{quote, signature, nonce, pcrs}` */
   evidence: string;
+}
+
+/**
+ * Disable device request (`POST /api/v1/devices/{id}/disable`,
+ * docs/device/api.md). The device id travels in the path only.
+ */
+export interface DisableDeviceRequest {
+  /** Why the device is disabled; recorded as `operator: <reason>` */
+  reason?: string;
+}
+
+/**
+ * Result of an operator disable or enable
+ * (`pkg/webservice/v1/device/lifecycle_handler.go`, `DeviceLifecycleResponse`).
+ */
+export interface DeviceLifecycleResponse {
+  /** Device ID, a decimal string so 64-bit IDs survive JSON */
+  device_id: string;
+  /** State after the transition: `suspended` on disable, `quarantined` on enable */
+  state: string;
+  /** State the device held before the transition */
+  previous_state: string;
+  /** Recorded reason, present when one was given */
+  state_reason?: string;
+  /** True when an enable queued an immediate re-attestation */
+  reattestation_requested: boolean;
 }
 
 /**
@@ -721,6 +753,55 @@ export interface DeviceAttestResponse {
   pcr_baseline_recorded_at?: string;
   /** True when this call captured the profile's trust-on-first-use baseline */
   pcr_baseline_captured: boolean;
+}
+
+/**
+ * Where a recorded attestation certificate came from: the certificate
+ * already on the record, the platform CA's store, or a CA re-issuance.
+ */
+export type AttestCertSource = 'device' | 'ca' | 'reissued';
+
+/**
+ * Options for recording a device's attestation certificate
+ * (`POST /api/v1/devices/{id}/attest-cert/record`, docs/device/api.md §4.5).
+ *
+ * There is deliberately no override: the server records a candidate only if
+ * it chains to the platform CA, carries tcg-cap-verifiedTPMRestricted and
+ * certifies the enrolled attestation key.
+ */
+export interface RecordAttestCertRequest {
+  /**
+   * When no existing candidate passes, ask the CA to issue a new certificate
+   * over the enrolled attestation public key. Opt-in: a re-issued certificate
+   * the server then refuses is revoked in the same call.
+   */
+  reissue?: boolean;
+}
+
+/** Response from recording a device's attestation certificate */
+export interface RecordAttestCertResponse {
+  /** Device ID */
+  device_id: string;
+  /** Serial number */
+  serial?: string;
+  /** Device model */
+  model?: string;
+  /** False when the record already held this exact certificate and nothing was written */
+  changed: boolean;
+  /** Which candidate was recorded */
+  source: AttestCertSource;
+  /** The CA store name it was found under, or the CN it was issued with */
+  source_detail?: string;
+  /** True when the CA was asked to issue a new certificate */
+  reissued: boolean;
+  /** Subject DN of the recorded certificate */
+  subject: string;
+  /** Serial number of the recorded certificate */
+  certificate_serial: string;
+  /** Expiry of the recorded certificate (RFC 3339) */
+  not_after?: string;
+  /** The recorded certificate, PEM encoded */
+  attest_cert: string;
 }
 
 /**

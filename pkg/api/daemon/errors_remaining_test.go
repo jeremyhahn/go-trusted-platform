@@ -216,33 +216,9 @@ func TestErrOverlayServiceNotAvailable(t *testing.T) {
 	}
 }
 
-func TestErrOverlayOperationNotImplemented(t *testing.T) {
-	err := ErrOverlayOperationNotImplemented{Operation: "OverlayStatus"}
-	expected := "overlay operation not implemented: OverlayStatus"
-	if got := err.Error(); got != expected {
-		t.Errorf("Error() = %q, want %q", got, expected)
-	}
-}
-
 func TestErrGatewayServiceNotAvailable(t *testing.T) {
 	err := ErrGatewayServiceNotAvailable{}
 	expected := "gateway service not available"
-	if got := err.Error(); got != expected {
-		t.Errorf("Error() = %q, want %q", got, expected)
-	}
-}
-
-func TestErrGatewayOperationNotImplemented(t *testing.T) {
-	err := ErrGatewayOperationNotImplemented{Operation: "GatewayStatus"}
-	expected := "gateway operation not implemented: GatewayStatus"
-	if got := err.Error(); got != expected {
-		t.Errorf("Error() = %q, want %q", got, expected)
-	}
-}
-
-func TestErrTPMOperationNotImplemented(t *testing.T) {
-	err := ErrTPMOperationNotImplemented{Operation: "TPMInfo"}
-	expected := "TPM operation not implemented: TPMInfo"
 	if got := err.Error(); got != expected {
 		t.Errorf("Error() = %q, want %q", got, expected)
 	}

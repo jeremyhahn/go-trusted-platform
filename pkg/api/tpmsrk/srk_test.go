@@ -33,10 +33,13 @@ type fakeTPM struct {
 	ssrkErr error
 	psrk    *xkmssdk.KeyAttributes
 	psrkErr error
+	cfg     *xkmssdk.TPMConfig
 
 	ssrkCalls int
 	psrkCalls int
 }
+
+func (f *fakeTPM) Config() *xkmssdk.TPMConfig { return f.cfg }
 
 func (f *fakeTPM) SSRKAttributes() (*xkmssdk.KeyAttributes, error) {
 	f.ssrkCalls++
@@ -176,4 +179,91 @@ func TestIsUnknownHandleIsSpecific(t *testing.T) {
 	assert.False(t, IsUnknownHandle(nil))
 	assert.False(t, IsUnknownHandle(ErrTPMUnavailable{}))
 	assert.False(t, IsUnknownHandle(errors.New("some other failure")))
+}
+
+func configuredTPM(platform, ssrk uint32) *fakeTPM {
+	tpm := newFakeTPM()
+	tpm.cfg = &xkmssdk.TPMConfig{
+		PlatformSRK: &xkmssdk.PlatformSRKConfig{SRKHandle: platform},
+		SSRK:        &xkmssdk.SRKConfig{Handle: ssrk},
+	}
+	return tpm
+}
+
+func TestConfiguredHandlesComeFromConfig(t *testing.T) {
+	tpm := configuredTPM(0x81000005, 0x81000007)
+
+	assert.Equal(t, uint32(0x81000005), ConfiguredPlatformHandle(tpm))
+	assert.Equal(t, uint32(0x81000007), ConfiguredSSRKHandle(tpm))
+}
+
+func TestConfiguredHandlesFallBackToDefaults(t *testing.T) {
+	cases := map[string]*xkmssdk.TPMConfig{
+		"no config":       nil,
+		"empty config":    {},
+		"zero handles":    {PlatformSRK: &xkmssdk.PlatformSRKConfig{}, SSRK: &xkmssdk.SRKConfig{}},
+		"nil sub-configs": {PlatformSRK: nil, SSRK: nil},
+	}
+
+	for name, cfg := range cases {
+		t.Run(name, func(t *testing.T) {
+			tpm := newFakeTPM()
+			tpm.cfg = cfg
+
+			assert.Equal(t, PlatformSRKHandle, ConfiguredPlatformHandle(tpm))
+			assert.Equal(t, SSRKHandle, ConfiguredSSRKHandle(tpm))
+		})
+	}
+}
+
+func TestInfoPropertiesFormatsConfiguredHandles(t *testing.T) {
+	props := InfoProperties(configuredTPM(0x8100000A, 0x81000007))
+
+	assert.Equal(t, map[string]string{
+		PropertyPlatformSRKHandle: "0x8100000A",
+		PropertySSRKHandle:        "0x81000007",
+	}, props)
+}
+
+func TestInfoPropertiesFallBackWithoutConfig(t *testing.T) {
+	props := InfoProperties(newFakeTPM())
+
+	assert.Equal(t, "0x81000002", props[PropertyPlatformSRKHandle])
+	assert.Equal(t, "0x81000001", props[PropertySSRKHandle])
+}
+
+func TestResolveAcceptsTheConfiguredHandles(t *testing.T) {
+	cases := map[string]struct {
+		handle  uint32
+		wantCN  string
+		wantSSR int
+		wantPSR int
+	}{
+		"configured platform handle": {0x81000005, "platform-srk", 0, 1},
+		"configured SSRK handle":     {0x81000007, "ssrk", 1, 0},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			tpm := configuredTPM(0x81000005, 0x81000007)
+
+			got, err := Resolve(tpm, tc.handle)
+			require.NoError(t, err)
+
+			assert.Equal(t, tc.wantCN, got.CN)
+			assert.Equal(t, tc.wantSSR, tpm.ssrkCalls)
+			assert.Equal(t, tc.wantPSR, tpm.psrkCalls)
+		})
+	}
+}
+
+func TestResolveRejectsHandlesNotConfigured(t *testing.T) {
+	tpm := configuredTPM(0x81000005, 0x81000007)
+
+	got, err := Resolve(tpm, 0x81000006)
+
+	require.Error(t, err)
+	assert.Nil(t, got)
+	assert.True(t, IsUnknownHandle(err))
+	assert.Zero(t, tpm.ssrkCalls+tpm.psrkCalls)
 }

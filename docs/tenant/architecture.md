@@ -90,10 +90,12 @@ owned abstractions rather than coding protected memory directly.
    is supplied. The unseal key is the highest-value secret in the feature and
    passes through the CLI as `--key-hex` / `--key-base64` — see
    [cli.md](cli.md) §5.
-4. **Tenant administration.** Currently reachable with any validated token on
-   gRPC, Unix, MCP and embedded, with no required scope — including barrier
-   init, seal and unseal. Recorded in [api.md](api.md) §7 and raised for the
-   owner.
+4. **Tenant administration.** Scoped on gRPC, QUIC and MCP: reads need
+   `tenant:read`; lifecycle, quota, DEK and barrier init/seal/unseal need
+   `tenant:write`; delete needs `tenant:delete`. Behind the scope a
+   tenant-bound caller acts only on its own tenant, and only the system tenant
+   lists, creates or syncs tenants. A tenant may look up its own tenant by
+   name; only the system tenant looks up any other ([api.md](api.md) §7).
 
 ## What this feature deliberately does not do
 
@@ -681,6 +683,10 @@ Redemption does not always produce a member. `entities.Invitation` carries an
 it. This is how the system admin enrolls a tenant's *first* administrator
 without holding that tenant's credential: it mints a single-use invitation whose
 redemption binds the redeemer's own passkey and marks them tenant owner.
+Tenant ownership as a user flag and a token claim is the platform's own role
+model; the tenant-owner IAM clean-up row in
+[SPEC.md §Interfaces](../SPEC.md#interfaces) moves it to a go-qrdb role
+assignment.
 
 **Ownership is a property of the invitation, not of the redeemer.** The decision
 is made once, by the issuer, at creation time:
@@ -699,8 +705,8 @@ themselves an owner — the same reasoning that made the invitation handlers rea
 their tenant from the verified session rather than from request-supplied JSON.
 
 For the same reason it is **not** on the `InvitationServicer` interface. Every
-holder of that interface serves tenant-scoped callers — the gRPC service and MCP
-tool provider in `pkg/api/daemon`, the WebAuthn handler, `TenantUserService` —
+holder of that interface serves tenant-scoped callers — the gRPC service in
+`pkg/api/daemon`, which QUIC and MCP call too, the WebAuthn handler, `TenantUserService` —
 so putting owner-minting there would hand the capability to all of them at once.
 A request field and an interface method are the same widening in two shapes.
 Ownership is conferred only by a call site holding the concrete
@@ -716,9 +722,34 @@ the pinned `v0.3.0-alpha` (see `docs/auth/architecture.md` §6c and #298). Read
 the property as "the platform declines to issue one", not as "the system admin
 cannot get there".
 
-The certificate enrollment mode described in the 2026-09-01 ruling is not
-implemented here: it needs `qrdbsdk.ProvisionTenant` reached through the
+Certificate enrollment of a tenant is not implemented here: it needs `qrdbsdk.ProvisionTenant` reached through the
 quicbaas SDK, which is absent at the pinned version (go-quicbaas#358 item 3).
+
+### Time is a parameter
+
+`entities.Invitation` never reads the clock (#311). Every constructor and method
+whose result depends on the time takes it as `now`:
+
+| | uses `now` to |
+|---|---|
+| `NewInvitation`, `NewInitialAdminInvitation` | stamp `CreatedAt`/`UpdatedAt`; `ExpiresAt = now + duration` |
+| `IsExpired(now)`, `CanAccept(now)` | decide expiry: expired only when `now` is strictly after `ExpiresAt` |
+| `Accept(now)`, `Revoke(now)`, `Expire(now)`, `GenerateToken(now)` | stamp `UpdatedAt` (and `AcceptedAt`) |
+
+Stored timestamps are normalized to UTC whatever zone `now` carries. A zero
+`now` makes `IsExpired` report **expired**: it can only mean a caller that never
+read the clock, and answering it literally would make every invitation
+redeemable forever.
+
+A clock fixed at construction cannot serve an entity: invitations loaded from
+the datastore are reconstituted from a zero value and never run `NewInvitation`.
+The clock therefore lives in the callers. `InvitationService` holds one,
+fixed at construction, reads it **once per operation**, and passes that instant
+to every entity method the operation calls — so `Accept` decides expiry and
+stamps `AcceptedAt` at the same instant, a revoke or expiry stamps `UpdatedAt`,
+and `CleanupExpired` judges every page against one cutoff. The HTTP handlers and
+`TenantUserService.RegisterInvitedUser` read `time.Now()` at the request
+boundary and pass it in the same way.
 
 ### Access Control by Tenant
 
@@ -743,7 +774,7 @@ Authenticated users receive a JWT containing their tenant association:
 
 ```json
 {
-  "uid": 12345678901234567890,
+  "uid": "12345678901234567890",
   "tenant_id": "tenant-550e8400-e29b-41d4",
   "is_tenant_owner": true,
   "roles": ["owner", "admin"],
@@ -752,13 +783,35 @@ Authenticated users receive a JWT containing their tenant association:
 }
 ```
 
+The tenant middleware reads `uid` as a decimal string
+(`strconv.ParseUint`) and refuses a missing, zero or non-decimal value with
+401; see [`docs/auth/api.md`](../auth/api.md#platform-session-token-claims).
+
+### Which tenant a browser login lands in
+
+A browser (WebAuthn) login lands in the **user's own workspace** — the tenant
+in the user's `TenantID`, the one registration created or an invitation joined —
+never in the operating or system tenant the ceremony runs in (#662).
+`TenantUserService.Workspace` resolves it by the backbone subject's email and
+confirms the tenant still exists. A principal with no workspace is refused 403
+rather than signed in to the operating tenant; see
+[`docs/auth/architecture.md`](../auth/architecture.md#which-tenant-a-login-lands-in).
+
+A login session differs from the example above in two ways. It carries no
+`uid`: the identity comes from the backbone, not the platform user store. And
+its `is_tenant_owner` is `false` whatever `User.IsTenantOwner` says, because
+ownership must come from the go-qrdb identity hydrator behind the SDK, which
+carries no ownership attribute yet; the platform does not read its user store
+to fill it (#645).
+
 ## Related Documentation
 
-- [User-Tenant Relationship](user-relationship.md) - Detailed user-tenant model
-- [User Registration](../iam/user-registration.md) - Registration and tenant creation
-- [Invitation Flow](../auth/invitation-flow.md) - User invitation lifecycle
-- [Invitation API Reference](../iam/api-reference-invitations.md) - Invitation REST API endpoints
+- [User-Tenant Relationship](../iam/architecture.md) - Detailed user-tenant model
+- [User Registration](../auth/api.md) - Registration and tenant creation
+- Invitation Flow - User invitation lifecycle
+- Invitation API Reference - Invitation REST API endpoints
 - [Configuration Reference](configuration.md) - Tenant configuration options
-- [Isolation Mechanisms](isolation.md) - Detailed isolation implementation
-- [API Reference](api-reference.md) - Programmatic tenant management
+- Isolation Mechanisms - Detailed isolation implementation
+- [API Reference](api.md) - Programmatic tenant management
 - [Cluster Architecture](../cluster/architecture.md) - Multi-node tenancy
+- [Barrier](../barrier/architecture.md#two-barriers) - Per-tenant barrier versus the platform barrier

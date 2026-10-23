@@ -18,13 +18,15 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
-	iammw "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/middleware/iam"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"testing"
 	"time"
+
+	iammw "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/middleware/iam"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/restwire"
 
 	"github.com/gorilla/mux"
 	"github.com/stretchr/testify/assert"
@@ -35,7 +37,6 @@ import (
 
 	iamsdk "github.com/jeremyhahn/go-quicbaas/sdk/go/client/iam"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
 )
 
 // Mock SDK clients for testing
@@ -45,6 +46,7 @@ type mockIAMClient struct {
 	createUserFn func(ctx context.Context, tenantID string, req *iamsdk.CreateUserRequest) (*iamsdk.User, error)
 	listUsersFn  func(ctx context.Context, tenantID string, req *iamsdk.ListUsersRequest) (*iamsdk.ListUsersResponse, error)
 	getUserFn    func(ctx context.Context, tenantID, userID string) (*iamsdk.User, error)
+	getByEmailFn func(ctx context.Context, tenantID, email string) (*iamsdk.User, error)
 	updateUserFn func(ctx context.Context, tenantID, userID string, req *iamsdk.UpdateUserRequest) (*iamsdk.User, error)
 	deleteUserFn func(ctx context.Context, tenantID, userID string) error
 	assignRoleFn func(ctx context.Context, tenantID, userID, roleID string) error
@@ -108,6 +110,13 @@ func (m *mockIAMClient) ListUsers(ctx context.Context, tenantID string, req *iam
 func (m *mockIAMClient) GetUser(ctx context.Context, tenantID, userID string) (*iamsdk.User, error) {
 	if m.getUserFn != nil {
 		return m.getUserFn(ctx, tenantID, userID)
+	}
+	return nil, status.Error(codes.Unimplemented, "not implemented")
+}
+
+func (m *mockIAMClient) GetUserByEmail(ctx context.Context, tenantID, email string) (*iamsdk.User, error) {
+	if m.getByEmailFn != nil {
+		return m.getByEmailFn(ctx, tenantID, email)
 	}
 	return nil, status.Error(codes.Unimplemented, "not implemented")
 }
@@ -392,7 +401,7 @@ func (m *mockHttpWriter) Success200(w http.ResponseWriter, r *http.Request, payl
 	m.lastStatus = http.StatusOK
 	m.lastPayload = payload
 	w.WriteHeader(http.StatusOK)
-	resp := response.WebServiceResponse{Code: 200, Success: true, Payload: payload}
+	resp := restwire.WebServiceResponse{Code: 200, Success: true, Payload: payload}
 	json.NewEncoder(w).Encode(resp)
 }
 
@@ -417,7 +426,7 @@ func (m *mockHttpWriter) Error400(w http.ResponseWriter, r *http.Request, err er
 	m.lastStatus = http.StatusBadRequest
 	m.lastError = err
 	w.WriteHeader(http.StatusBadRequest)
-	resp := response.WebServiceResponse{Code: 400, Success: false, Error: err.Error()}
+	resp := restwire.WebServiceResponse{Code: 400, Success: false, Error: err.Error()}
 	json.NewEncoder(w).Encode(resp)
 }
 
@@ -438,7 +447,7 @@ func (m *mockHttpWriter) Error404(w http.ResponseWriter, r *http.Request, err er
 	m.lastStatus = http.StatusNotFound
 	m.lastError = err
 	w.WriteHeader(http.StatusNotFound)
-	resp := response.WebServiceResponse{Code: 404, Success: false, Error: err.Error()}
+	resp := restwire.WebServiceResponse{Code: 404, Success: false, Error: err.Error()}
 	json.NewEncoder(w).Encode(resp)
 }
 
@@ -446,7 +455,15 @@ func (m *mockHttpWriter) Error500(w http.ResponseWriter, r *http.Request, err er
 	m.lastStatus = http.StatusInternalServerError
 	m.lastError = err
 	w.WriteHeader(http.StatusInternalServerError)
-	resp := response.WebServiceResponse{Code: 500, Success: false, Error: err.Error()}
+	resp := restwire.WebServiceResponse{Code: 500, Success: false, Error: err.Error()}
+	json.NewEncoder(w).Encode(resp)
+}
+
+func (m *mockHttpWriter) Error503(w http.ResponseWriter, r *http.Request, err error) {
+	m.lastStatus = http.StatusServiceUnavailable
+	m.lastError = err
+	w.WriteHeader(http.StatusServiceUnavailable)
+	resp := restwire.WebServiceResponse{Code: 503, Success: false, Error: err.Error()}
 	json.NewEncoder(w).Encode(resp)
 }
 
@@ -2915,6 +2932,199 @@ func TestTestPolicy_GRPCError(t *testing.T) {
 	handlers.TestPolicy(rec, req)
 
 	assert.Equal(t, http.StatusInternalServerError, writer.lastStatus)
+}
+
+func TestCheckPermission_Success(t *testing.T) {
+	var got *iamsdk.CheckRequest
+	pepClient := &mockPEPClient{
+		checkFn: func(ctx context.Context, req *iamsdk.CheckRequest) (*iamsdk.CheckResponse, error) {
+			got = req
+			return &iamsdk.CheckResponse{
+				Allowed:          true,
+				MatchedPolicy:    "admin-policy",
+				MatchedRule:      "rule-1",
+				EvaluationTimeNs: 1500,
+			}, nil
+		},
+	}
+	handlers, writer := newTestHandlers(&mockIAMClient{}, pepClient)
+
+	body := CheckPermissionRequest{
+		SubjectID:  "user-123",
+		Roles:      []string{"admin"},
+		Groups:     []string{"ops"},
+		Action:     "write",
+		Resource:   "documents/1",
+		Context:    map[string]string{"ip": "10.0.0.1"},
+		Attributes: map[string]string{"clearance": "high"},
+	}
+	req := createRequestWithVars(http.MethodPost, "/api/v1/iam/tenants/tenant-1/permissions/check", body, map[string]string{"tenant": "tenant-1"})
+	rec := httptest.NewRecorder()
+
+	handlers.CheckPermission(rec, req)
+
+	assert.Equal(t, http.StatusOK, writer.lastStatus)
+	payload, ok := writer.lastPayload.(*CheckPermissionResponse)
+	require.True(t, ok)
+	assert.Equal(t, CheckPermissionResponse{
+		Allowed:          true,
+		MatchedPolicy:    "admin-policy",
+		MatchedRule:      "rule-1",
+		EvaluationTimeNs: 1500,
+	}, *payload)
+
+	require.NotNil(t, got, "the PEP was not consulted")
+	assert.Equal(t, iamsdk.CheckSubject{
+		ID:         "user-123",
+		TenantID:   "tenant-1",
+		Roles:      []string{"admin"},
+		Groups:     []string{"ops"},
+		Attributes: map[string]interface{}{"clearance": "high"},
+	}, got.Subject)
+	assert.Equal(t, "write", got.Action)
+	assert.Equal(t, "documents/1", got.Resource)
+	assert.Equal(t, map[string]interface{}{"ip": "10.0.0.1"}, got.Context)
+}
+
+func TestCheckPermission_DeniedIsAVerdictNotAnError(t *testing.T) {
+	pepClient := &mockPEPClient{
+		checkFn: func(ctx context.Context, req *iamsdk.CheckRequest) (*iamsdk.CheckResponse, error) {
+			return &iamsdk.CheckResponse{Allowed: false}, nil
+		},
+	}
+	handlers, writer := newTestHandlers(&mockIAMClient{}, pepClient)
+
+	body := CheckPermissionRequest{SubjectID: "user-123", Action: "delete", Resource: "documents/1"}
+	req := createRequestWithVars(http.MethodPost, "/api/v1/iam/tenants/tenant-1/permissions/check", body, map[string]string{"tenant": "tenant-1"})
+	rec := httptest.NewRecorder()
+
+	handlers.CheckPermission(rec, req)
+
+	assert.Equal(t, http.StatusOK, writer.lastStatus)
+	payload, ok := writer.lastPayload.(*CheckPermissionResponse)
+	require.True(t, ok)
+	assert.False(t, payload.Allowed)
+}
+
+func TestCheckPermission_NoPEPIsServiceUnavailable(t *testing.T) {
+	writer := &mockHttpWriter{}
+	handlers := NewIAMHandlers(newTestLogger(), &mockIAMClient{}, nil, writer)
+
+	body := CheckPermissionRequest{SubjectID: "user-123", Action: "read", Resource: "files/1"}
+	req := createRequestWithVars(http.MethodPost, "/api/v1/iam/tenants/tenant-1/permissions/check", body, map[string]string{"tenant": "tenant-1"})
+	rec := httptest.NewRecorder()
+
+	handlers.CheckPermission(rec, req)
+
+	assert.Equal(t, http.StatusServiceUnavailable, writer.lastStatus)
+	payload, ok := writer.lastPayload.(restwire.WebServiceResponse)
+	require.True(t, ok)
+	assert.Equal(t, ErrPEPClientMissing{}.Error(), payload.Error)
+}
+
+func TestCheckPermission_MissingTenantID(t *testing.T) {
+	handlers, writer := newTestHandlers(&mockIAMClient{}, &mockPEPClient{})
+
+	body := CheckPermissionRequest{SubjectID: "user-123", Action: "read", Resource: "files/1"}
+	req := createRequestWithVars(http.MethodPost, "/api/v1/iam/tenants//permissions/check", body, map[string]string{"tenant": ""})
+	rec := httptest.NewRecorder()
+
+	handlers.CheckPermission(rec, req)
+
+	assert.Equal(t, http.StatusBadRequest, writer.lastStatus)
+}
+
+func TestCheckPermission_InvalidRequestBody(t *testing.T) {
+	handlers, writer := newTestHandlers(&mockIAMClient{}, &mockPEPClient{})
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/iam/tenants/tenant-1/permissions/check", bytes.NewBufferString("invalid json"))
+	req = mux.SetURLVars(req, map[string]string{"tenant": "tenant-1"})
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	handlers.CheckPermission(rec, req)
+
+	assert.Equal(t, http.StatusBadRequest, writer.lastStatus)
+}
+
+func TestCheckPermission_ForeignBodyTenantIsForbidden(t *testing.T) {
+	pepClient := &mockPEPClient{
+		checkFn: func(ctx context.Context, req *iamsdk.CheckRequest) (*iamsdk.CheckResponse, error) {
+			t.Fatal("the PEP was consulted for a body naming another tenant")
+			return nil, nil
+		},
+	}
+	handlers, writer := newTestHandlers(&mockIAMClient{}, pepClient)
+
+	body := CheckPermissionRequest{
+		BodyTenant: BodyTenant{TenantID: "tenant-2"},
+		SubjectID:  "user-123",
+		Action:     "read",
+		Resource:   "files/1",
+	}
+	req := createRequestWithVars(http.MethodPost, "/api/v1/iam/tenants/tenant-1/permissions/check", body, map[string]string{"tenant": "tenant-1"})
+	rec := httptest.NewRecorder()
+
+	handlers.CheckPermission(rec, req)
+
+	assert.Equal(t, http.StatusForbidden, writer.lastStatus)
+}
+
+func TestCheckPermission_MissingRequiredField(t *testing.T) {
+	complete := CheckPermissionRequest{SubjectID: "user-123", Action: "read", Resource: "files/1"}
+	tests := []struct {
+		name  string
+		clear func(*CheckPermissionRequest)
+	}{
+		{"subject_id", func(r *CheckPermissionRequest) { r.SubjectID = "" }},
+		{"action", func(r *CheckPermissionRequest) { r.Action = "" }},
+		{"resource", func(r *CheckPermissionRequest) { r.Resource = "" }},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			pepClient := &mockPEPClient{
+				checkFn: func(ctx context.Context, req *iamsdk.CheckRequest) (*iamsdk.CheckResponse, error) {
+					t.Fatalf("the PEP was consulted without %s", tt.name)
+					return nil, nil
+				},
+			}
+			handlers, writer := newTestHandlers(&mockIAMClient{}, pepClient)
+
+			body := complete
+			tt.clear(&body)
+			req := createRequestWithVars(http.MethodPost, "/api/v1/iam/tenants/tenant-1/permissions/check", body, map[string]string{"tenant": "tenant-1"})
+			rec := httptest.NewRecorder()
+
+			handlers.CheckPermission(rec, req)
+
+			assert.Equal(t, http.StatusBadRequest, writer.lastStatus)
+			assert.ErrorContains(t, writer.lastError, tt.name+" is required")
+		})
+	}
+}
+
+func TestCheckPermission_PEPError(t *testing.T) {
+	pepClient := &mockPEPClient{
+		checkFn: func(ctx context.Context, req *iamsdk.CheckRequest) (*iamsdk.CheckResponse, error) {
+			return nil, status.Error(codes.Internal, "internal error")
+		},
+	}
+	handlers, writer := newTestHandlers(&mockIAMClient{}, pepClient)
+
+	body := CheckPermissionRequest{SubjectID: "user-123", Action: "read", Resource: "files/1"}
+	req := createRequestWithVars(http.MethodPost, "/api/v1/iam/tenants/tenant-1/permissions/check", body, map[string]string{"tenant": "tenant-1"})
+	rec := httptest.NewRecorder()
+
+	handlers.CheckPermission(rec, req)
+
+	assert.Equal(t, http.StatusInternalServerError, writer.lastStatus)
+}
+
+func TestToAnyMap(t *testing.T) {
+	assert.Nil(t, toAnyMap(nil), "a nil map must stay nil")
+	assert.Nil(t, toAnyMap(map[string]string{}), "an empty map must become nil")
+	assert.Equal(t, map[string]interface{}{"a": "1", "b": "2"}, toAnyMap(map[string]string{"a": "1", "b": "2"}))
 }
 
 // Additional error path tests for App handlers

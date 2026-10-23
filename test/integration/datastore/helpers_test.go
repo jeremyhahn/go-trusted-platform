@@ -18,7 +18,8 @@ package datastore
 
 import (
 	"context"
-	"os"
+	"fmt"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -35,14 +36,6 @@ const startupTimeout = 60 * time.Second
 
 // shutdownTimeout is the timeout for factory shutdown operations.
 const shutdownTimeout = 10 * time.Second
-
-// skipIfNotIntegration skips the test if the INTEGRATION_TEST env var is not set.
-func skipIfNotIntegration(t *testing.T) {
-	t.Helper()
-	if os.Getenv("INTEGRATION_TEST") == "" {
-		t.Skip("Skipping integration test. Set INTEGRATION_TEST=1 to run.")
-	}
-}
 
 // newIntegrationClient creates a new QuicBaaS Factory for integration testing.
 // It returns the Factory's Storage interface and a cleanup function that must be called with defer.
@@ -82,4 +75,12 @@ func newIntegrationClient(t *testing.T) (quicbaas.Storage, func()) {
 // testContext returns a context with the test timeout.
 func testContext() (context.Context, context.CancelFunc) {
 	return context.WithTimeout(context.Background(), testTimeout)
+}
+
+// idCounter makes entity names unique across tests and goroutines in this package.
+var idCounter atomic.Uint64
+
+// uniqueID returns prefix with a process-unique suffix, safe to call concurrently.
+func uniqueID(prefix string) string {
+	return fmt.Sprintf("%s-%d", prefix, idCounter.Add(1))
 }

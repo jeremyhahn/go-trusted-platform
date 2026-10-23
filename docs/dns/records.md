@@ -1,5 +1,8 @@
 # DNS Record Types
 
+> **Status: REFERENCE** · Last verified: 2026-10-15
+> The record types a platform zone stores and serves.
+
 ## Overview
 
 The Trusted Platform DNS service supports standard DNS record types and DNSSEC extensions. Records are organized within zones and stored in the platform's datastore. Each record type has specific fields and use cases for resolving domain names, mail routing, service discovery, and cryptographic validation.
@@ -28,8 +31,9 @@ The Trusted Platform DNS service supports standard DNS record types and DNSSEC e
 | **DNSKEY** | DNS Key | Public key for zone signing |
 | **DS** | Delegation Signer | Hash of child zone DNSKEY |
 | **RRSIG** | Resource Record Signature | Cryptographic signature over RRset |
-| **NSEC** | Next Secure | Authenticated denial of existence (planned) |
-| **NSEC3** | Next Secure v3 | Hashed denial of existence (planned) |
+| **NSEC** | Next Secure | Authenticated denial of existence, generated at signing |
+| **NSEC3** | Next Secure v3 | Hashed denial of existence, generated at signing when `nsec-mode: nsec3` |
+| **NSEC3PARAM** | NSEC3 parameters | Published with NSEC3 chains |
 
 ## Record Structure
 
@@ -39,19 +43,30 @@ The `RecordSet` contains all records for a zone:
 
 ```go
 type RecordSet struct {
-    ARecords      []*ARecord
-    AAAARecords   []*AAAARecord
-    CNAMERecords  []*CNAMERecord
-    DNSKEYRecords []*DNSKEYRecord
-    DSRecords     []*DSRecord
-    MXRecords     []*MXRecord
-    NSRecords     []*NSRecord
-    RRSIGRecords  []*RRSIGRecord
-    SOARecord     SOARecord
-    SRVRecords    []*SRVRecord
-    TXTRecords    []*TXTRecord
+    ARecords          []*ARecord
+    AAAARecords       []*AAAARecord
+    CAARecords        []*CAARecord
+    CNAMERecords      []*CNAMERecord
+    DNSKEYRecords     []*DNSKEYRecord
+    DSRecords         []*DSRecord
+    MXRecords         []*MXRecord
+    NSECRecords       []*NSECRecord
+    NSEC3Records      []*NSEC3Record
+    NSEC3PARAMRecords []*NSEC3PARAMRecord
+    NSRecords         []*NSRecord
+    RRSIGRecords      []*RRSIGRecord
+    SOARecord         SOARecord
+    SRVRecords        []*SRVRecord
+    TLSARecords       []*TLSARecord
+    TXTRecords        []*TXTRecord
 }
 ```
+
+`pkg/dns/entities/records.go` defines it. The YAML keys below are the `yaml`
+tags. The config loader decodes through the `mapstructure` tags, which differ
+for five fields: `min_ttl`, `key_tag`, `original_ttl`, `type_covered` and
+`matching_type`. In the `dns:` section of the platform config only the
+underscore spelling is read; the hyphenated spelling is ignored.
 
 ## Owner names
 
@@ -81,10 +96,10 @@ Maps a hostname to an IPv4 address.
 ```yaml
 a:
   - name: "www"
-    value: "192.168.1.100"
+    value: "192.0.2.100"
     ttl: 3600
   - name: "@"           # Zone apex
-    value: "192.168.1.1"
+    value: "192.0.2.1"
     ttl: 3600
 ```
 
@@ -190,7 +205,7 @@ soa:
   refresh: 86400
   retry: 7200
   expire: 604800
-  min-ttl: 3600
+  min_ttl: 3600
   ttl: 3600
 ```
 
@@ -203,7 +218,7 @@ soa:
 | `refresh` | uint32 | Seconds before refresh check |
 | `retry` | uint32 | Seconds before retry on failure |
 | `expire` | uint32 | Seconds before zone expiration |
-| `min-ttl` | uint32 | Minimum TTL for negative caching |
+| `min_ttl` | uint32 | Minimum TTL for negative caching |
 | `ttl` | uint32 | SOA record TTL (optional) |
 
 ### SRV Record
@@ -300,7 +315,7 @@ Delegation Signer - links parent zone to child zone DNSKEY.
 ```yaml
 ds:
   - name: "child.example.com."
-    key-tag: 12345
+    key_tag: 12345
     algorithm: 13
     digest_type: 2
     digest: "hexadecimal-digest-value..."
@@ -310,7 +325,7 @@ ds:
 | Field | Type | Description |
 |-------|------|-------------|
 | `name` | string | Delegated zone name |
-| `key-tag` | uint16 | Key tag of referenced DNSKEY |
+| `key_tag` | uint16 | Key tag of referenced DNSKEY |
 | `algorithm` | uint8 | DNSKEY algorithm |
 | `digest_type` | uint8 | Digest algorithm (2=SHA-256, 4=SHA-384) |
 | `digest` | string | Hex-encoded digest of DNSKEY |
@@ -323,26 +338,28 @@ Resource Record Signature - cryptographic signature over an RRset.
 
 ```yaml
 rrsig:
-  - type-covered: "A"
+  - name: "www.example.com."
+    type_covered: "A"
     algorithm: 13
     labels: 3
-    original-ttl: 3600
+    original_ttl: 3600
     expiration: "20250201000000"
     inception: "20250101000000"
-    key-tag: 12345
+    key_tag: 12345
     signer: "example.com."
     signature: "base64-encoded-signature..."
 ```
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `type-covered` | string | Record type being signed |
+| `name` | string | Owner of the signed RRset; empty means the zone apex (optional) |
+| `type_covered` | string | Record type being signed |
 | `algorithm` | uint8 | Signing algorithm |
 | `labels` | uint8 | Number of labels in owner name |
-| `original-ttl` | uint32 | Original TTL of covered RRset |
+| `original_ttl` | uint32 | Original TTL of covered RRset |
 | `expiration` | string | Signature expiration (YYYYMMDDHHmmSS) |
 | `inception` | string | Signature inception (YYYYMMDDHHmmSS) |
-| `key-tag` | uint16 | Tag of signing key |
+| `key_tag` | uint16 | Tag of signing key |
 | `signer` | string | Signing zone name |
 | `signature` | string | Base64-encoded signature |
 
@@ -403,13 +420,13 @@ tlsa:
   - name: "_443._tcp.www.example.com."
     usage: 3
     selector: 1
-    matching-type: 1
+    matching_type: 1
     data: "sha256-hash-of-certificate..."
     ttl: 3600
   - name: "_25._tcp.mail.example.com."
     usage: 2
     selector: 0
-    matching-type: 2
+    matching_type: 2
     data: "sha512-hash-of-certificate..."
     ttl: 3600
 ```
@@ -420,7 +437,7 @@ tlsa:
 | `ttl` | uint32 | Time-to-live in seconds (optional) |
 | `usage` | uint8 | Certificate usage (0-3) |
 | `selector` | uint8 | Certificate selector (0-1) |
-| `matching-type` | uint8 | Matching type (0-2) |
+| `matching_type` | uint8 | Matching type (0-2) |
 | `data` | string | Certificate association data |
 
 **Usage Values:**
@@ -457,7 +474,7 @@ tlsa:
 // Add A record to zone
 zone.AddARecord(&entities.ARecord{
     Name:  "newhost",
-    Value: "192.168.1.50",
+    Value: "192.0.2.50",
     TTL:   3600,
 })
 
@@ -471,7 +488,7 @@ err := dnsService.Save(ctx, zone)
 import "github.com/jeremyhahn/go-trusted-platform/pkg/dns"
 
 // Create records using helper functions
-aRecord := dns.NewARecord("www", "192.168.1.100", 3600)
+aRecord := dns.NewARecord("www", "192.0.2.100", 3600)
 aaaaRecord := dns.NewAAAARecord("www", "2001:db8::1", 3600)
 cnameRecord := dns.NewCNAMERecord("alias", "target.example.com.", 3600)
 mxRecord := dns.NewMXRecord("example.com.", "mail.example.com.", 10, 3600)
@@ -509,7 +526,7 @@ zone, err := dnsService.Zone(ctx, "example.com")
 // Find and update A record
 for _, record := range zone.RecordSet.ARecords {
     if record.Name == "www" {
-        record.Value = "192.168.1.200"
+        record.Value = "192.0.2.200"
         record.TTL = 7200
     }
 }
@@ -594,10 +611,10 @@ ns:
 a:
   # Glue records for nameservers
   - name: "ns1"
-    value: "192.168.1.10"
+    value: "192.0.2.10"
     ttl: 86400
   - name: "ns2"
-    value: "192.168.1.11"
+    value: "192.0.2.11"
     ttl: 86400
 ```
 
@@ -619,146 +636,15 @@ a:
 - **Covered types**: Each record type gets its own RRSIG
 - **Inception/expiration**: Use absolute timestamps
 
-## CLI Commands
+## Records Without a CLI
 
-### Record Management
-
-**List records in zone:**
-```bash
-platformctl dns record list --zone example.internal
-```
-
-**Add A record:**
-```bash
-platformctl dns record add \
-  --zone example.internal \
-  --type A \
-  --name www \
-  --value 192.168.1.100 \
-  --ttl 3600
-```
-
-**Add AAAA record:**
-```bash
-platformctl dns record add \
-  --zone example.internal \
-  --type AAAA \
-  --name www \
-  --value "2001:db8::1" \
-  --ttl 3600
-```
-
-**Add CNAME record:**
-```bash
-platformctl dns record add \
-  --zone example.internal \
-  --type CNAME \
-  --name alias \
-  --value "target.example.internal." \
-  --ttl 3600
-```
-
-**Add MX record:**
-```bash
-platformctl dns record add \
-  --zone example.internal \
-  --type MX \
-  --name example.internal. \
-  --value "mail.example.internal." \
-  --priority 10 \
-  --ttl 3600
-```
-
-**Add TXT record:**
-```bash
-platformctl dns record add \
-  --zone example.internal \
-  --type TXT \
-  --name example.internal. \
-  --value "v=spf1 -all" \
-  --ttl 3600
-```
-
-**Add SRV record:**
-```bash
-platformctl dns record add \
-  --zone example.internal \
-  --type SRV \
-  --name "_ldap._tcp" \
-  --target "ldap.example.internal." \
-  --port 389 \
-  --priority 0 \
-  --weight 100 \
-  --ttl 3600
-```
-
-**Delete record:**
-```bash
-platformctl dns record delete \
-  --zone example.internal \
-  --type A \
-  --name oldhost
-```
-
-**Update record:**
-```bash
-platformctl dns record update \
-  --zone example.internal \
-  --type A \
-  --name www \
-  --value 192.168.1.200 \
-  --ttl 7200
-```
-
-### DNSSEC Commands
-
-**Add DNSKEY:**
-```bash
-platformctl dns record add \
-  --zone example.com \
-  --type DNSKEY \
-  --name example.com. \
-  --flags 257 \
-  --protocol 3 \
-  --algorithm 13 \
-  --key "base64key..."
-```
-
-**Add DS record:**
-```bash
-platformctl dns record add \
-  --zone example.com \
-  --type DS \
-  --name child.example.com. \
-  --key-tag 12345 \
-  --algorithm 13 \
-  --digest-type 2 \
-  --digest "hexdigest..."
-```
-
-### CLI Options Reference
-
-| Flag | Type | Description |
-|------|------|-------------|
-| `--zone` | string | Zone name |
-| `--type` | string | Record type (A, AAAA, CNAME, etc.) |
-| `--name` | string | Record name |
-| `--value` | string | Record value |
-| `--ttl` | uint32 | Time-to-live in seconds |
-| `--priority` | uint16 | MX/SRV priority |
-| `--weight` | uint16 | SRV weight |
-| `--port` | uint16 | SRV port |
-| `--target` | string | SRV target |
-| `--flags` | uint16 | DNSKEY flags |
-| `--protocol` | uint8 | DNSKEY protocol |
-| `--algorithm` | uint8 | DNSKEY/DS algorithm |
-| `--key` | string | DNSKEY public key |
-| `--key-tag` | uint16 | DS key tag |
-| `--digest-type` | uint8 | DS digest type |
-| `--digest` | string | DS digest value |
+There is no `platformctl dns` command group ([cli.md](cli.md)). Records are
+added, listed, read and deleted through REST `/api/v1/dns/zones/{zone}/records`
+or gRPC `DNSService`; [api-reference-rest.md](api-reference-rest.md) has the
+request bodies. REST has no record update route: delete and re-add.
 
 ## See Also
 
 - [DNS Zones](zones.md) - Zone management guide
-- [Platform Configuration](../configuration.md) - Full configuration reference
-- [Security Documentation](../security/README.md) - Security model and DNSSEC
+- [Platform Configuration](configuration.md) - Full configuration reference
+- [Security Documentation](../security/architecture.md) - Security model and DNSSEC

@@ -78,11 +78,11 @@ type TokenAuthConfig struct {
 	// IntrospectionClientID / IntrospectionClientSecret are the RFC 7662
 	// HTTP Basic credentials presented on introspection requests when set.
 	IntrospectionClientID     string `yaml:"introspection-client-id,omitempty" json:"introspection_client_id,omitempty" mapstructure:"introspection-client-id"`
-	IntrospectionClientSecret string `yaml:"introspection-client-secret,omitempty" json:"introspection_client_secret,omitempty" mapstructure:"introspection-client-secret"`
+	IntrospectionClientSecret string `yaml:"introspection-client-secret,omitempty" json:"introspection_client_secret,omitempty" mapstructure:"introspection-client-secret" secret:"true"`
 
 	// IntrospectionBearerToken, when set, is presented as a Bearer
 	// credential on introspection requests instead of Basic auth.
-	IntrospectionBearerToken string `yaml:"introspection-bearer-token,omitempty" json:"introspection_bearer_token,omitempty" mapstructure:"introspection-bearer-token"`
+	IntrospectionBearerToken string `yaml:"introspection-bearer-token,omitempty" json:"introspection_bearer_token,omitempty" mapstructure:"introspection-bearer-token" secret:"true"`
 
 	// AllowBearer accepts a token presented without a DPoP proof. When
 	// false (the default) every token-path request must present a DPoP

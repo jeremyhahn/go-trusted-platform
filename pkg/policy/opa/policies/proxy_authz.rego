@@ -7,7 +7,7 @@
 # for routes that set Auth.OPAPolicy. Input document:
 #
 #   {
-#     "client":  {"id": "...", "zone": "...", "roles": [...], "attested": bool},
+#     "client":  {"id": "...", "zone": "...", "attested": bool},
 #     "route":   {"id": "...", "allowed_methods": [...]},
 #     "request": {"method": "...", "path": "..."}
 #   }

@@ -36,6 +36,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/login/logintest"
 	iammw "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/middleware/iam"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/restwire"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -140,7 +141,7 @@ func TestHandlerGenerateToken_NoLoginClientFailsClosed(t *testing.T) {
 	// closed: the locked architecture forbids minting an unverified JWT.
 	assert.Equal(t, http.StatusForbidden, w.Code)
 
-	var resp response.WebServiceResponse
+	var resp restwire.WebServiceResponse
 	err = json.Unmarshal(w.Body.Bytes(), &resp)
 	assert.Nil(t, err)
 	assert.False(t, resp.Success)
@@ -181,7 +182,7 @@ func TestHandlerGenerateToken_IgnoresTheRequestBody(t *testing.T) {
 	// Fail closed on the missing driver, not on the body.
 	assert.Equal(t, http.StatusForbidden, w.Code)
 
-	var resp response.WebServiceResponse
+	var resp restwire.WebServiceResponse
 	err = json.Unmarshal(w.Body.Bytes(), &resp)
 	assert.Nil(t, err)
 	assert.False(t, resp.Success)
@@ -226,7 +227,7 @@ func TestHandlerRefreshToken_Success(t *testing.T) {
 	// Check response
 	assert.Equal(t, http.StatusOK, w.Code)
 
-	var resp response.WebServiceResponse
+	var resp restwire.WebServiceResponse
 	err = json.Unmarshal(w.Body.Bytes(), &resp)
 	assert.Nil(t, err)
 	assert.True(t, resp.Success)
@@ -316,7 +317,7 @@ func TestHandlerRefreshToken_ExpiredToken(t *testing.T) {
 	// Create an expired token manually
 	now := time.Now()
 	expiredClaims := TokenClaims{
-		UserID: 12345,
+		UID: "12345",
 		RegisteredClaims: jwt.RegisteredClaims{
 			Audience:  jwt.ClaimStrings{params.Audience},
 			Issuer:    params.Issuer,
@@ -479,7 +480,7 @@ func TestHandlerVerify_VerificationFailure(t *testing.T) {
 	// Create a token with different audience
 	now := time.Now()
 	wrongAudienceClaims := TokenClaims{
-		UserID: 12345,
+		UID: "12345",
 		RegisteredClaims: jwt.RegisteredClaims{
 			Audience:  jwt.ClaimStrings{"wrong-audience"}, // Different from service audience
 			Issuer:    params.Issuer,
@@ -529,14 +530,13 @@ func TestCreateSession_Success(t *testing.T) {
 	handler, err := NewRestHandler(logger, responseWriter, jwtService, mockUserService)
 	assert.Nil(t, err)
 
-	// Generate a valid token
-	user := entities.NewUser("test@localhost")
-	user.ID = 12345
+	// Generate a valid token for an id a float64 cannot hold exactly
+	user := hostileUser(t)
 	tokenString, err := jwtService.GenerateToken(user)
 	assert.Nil(t, err)
 
-	// Setup mock to return the user
-	mockUserService.On("Get", mock.Anything, uint64(12345)).Return(user, nil)
+	// The store must be asked for exactly the id that was issued
+	mockUserService.On("Get", mock.Anything, user.ID).Return(user, nil)
 
 	// Create request with the token
 	req := httptest.NewRequest("GET", "/session", nil)
@@ -818,14 +818,15 @@ func TestHandlerRefreshToken_PreservesTenantAndRoles(t *testing.T) {
 		jwtService, users)
 	require.NoError(t, err)
 
-	user := entities.NewUser("admin")
+	user := hostileUser(t)
 	user.TenantID = "system"
 	user.IsTenantOwner = true
 	user.AddRole(&entities.Role{Name: "admin"})
 	original, err := jwtService.GenerateToken(user)
 	require.NoError(t, err)
 
-	// The store is the authority the refresh reads back.
+	// The store is the authority the refresh reads back, keyed by exactly
+	// the id that was issued.
 	users.On("Get", mock.Anything, user.ID).Return(user, nil)
 
 	req := httptest.NewRequest("POST", "/login/refresh", nil)
@@ -850,8 +851,11 @@ func TestHandlerRefreshToken_PreservesTenantAndRoles(t *testing.T) {
 
 	assert.Equal(t, "system", claims.TenantID, "tenant must survive a refresh")
 	assert.Equal(t, []string{"admin"}, claims.Roles, "roles must survive a refresh")
-	assert.Equal(t, "admin", claims.Email)
+	assert.Equal(t, user.Email, claims.Email)
 	assert.True(t, claims.IsTenantOwner)
+	refreshedID, err := claims.PlatformUserID()
+	require.NoError(t, err)
+	assert.Equal(t, user.ID, refreshedID, "the user id must survive a refresh")
 
 	// And the refreshed token still satisfies a role guard.
 	session := sessionFromClaims(claims)
@@ -1000,6 +1004,44 @@ func TestHandlerRefreshToken_RejectsAWrongAudienceToken(t *testing.T) {
 		"refresh must not launder a token the protected routes reject")
 }
 
+// backboneSessionRequest returns a request bearing a backbone-issued
+// session whose subject is all digits: it parses as a uint64, so a reader
+// that took the platform user id from "user_id" or "sub" would resolve
+// whichever unrelated platform user holds that key.
+func backboneSessionRequest(t *testing.T, handler *RestHandler, target string) *http.Request {
+	t.Helper()
+	bearer, _, err := handler.jwtService.IssueSession(&quicbaas.Identity{
+		Subject: "5083343080743762020", TenantID: "tenant-a",
+	})
+	require.NoError(t, err)
+	req := httptest.NewRequest(http.MethodPost, target, nil)
+	req.Header.Set("Authorization", "Bearer "+bearer)
+	req.Header.Set("Accept", "application/json")
+	return req
+}
+
+func TestHandlerRefreshToken_RefusesABackboneSession(t *testing.T) {
+	handler := newHandlerForLoginTest(t)
+	rec := httptest.NewRecorder()
+
+	handler.RefreshToken(rec, backboneSessionRequest(t, handler, "/login/refresh"))
+
+	assert.Equal(t, http.StatusUnauthorized, rec.Code)
+	handler.userService.(*MockUserService).AssertNotCalled(t, "Get", mock.Anything, mock.Anything)
+}
+
+func TestCreateSession_RefusesABackboneSession(t *testing.T) {
+	handler := newHandlerForLoginTest(t)
+	rec := httptest.NewRecorder()
+
+	session, err := handler.CreateSession(rec, backboneSessionRequest(t, handler, "/session"))
+
+	assert.ErrorIs(t, err, ErrInvalidUserClaim)
+	assert.Nil(t, session)
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+	handler.userService.(*MockUserService).AssertNotCalled(t, "Get", mock.Anything, mock.Anything)
+}
+
 // stubLoginClient is a UnifiedLoginClient that returns a fixed bearer and
 // a resolved identity, so a test can exercise what /login hands back
 // without a live broker.
@@ -1052,7 +1094,7 @@ func completeLogin(t *testing.T, driver *loginpkg.Driver) string {
 	driver.Finish(w, req, quicbaas.FactorTypeFIDO2)
 	require.Equal(t, http.StatusOK, w.Code, "login must succeed: %s", w.Body.String())
 
-	var resp response.WebServiceResponse
+	var resp restwire.WebServiceResponse
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	require.True(t, resp.Success)
 
@@ -1074,7 +1116,7 @@ func completeLogin(t *testing.T, driver *loginpkg.Driver) string {
 func TestGenerateTokenDeclinesTheUnbindableMTLSFactor(t *testing.T) {
 	handler := newHandlerForLoginTest(t)
 	client := &stubLoginClient{bearer: "broker.issued.bearer"}
-	handler.SetLoginDriver(newLoginDriverForTest(t, client, handler.jwtService))
+	handler.SetLoginDriver(newLoginDriverForTest(t, client, handler.jwtService, nil))
 
 	body, err := json.Marshal(service.UserCredential{Email: "admin@system", Password: "x"})
 	require.NoError(t, err)
@@ -1115,7 +1157,7 @@ func TestLoginSessionIsAcceptedByTheDefaultProtectedRouteSeam(t *testing.T) {
 			TenantID: "tenant-a",
 			Roles:    []string{"admin"},
 		},
-	}, handler.jwtService)
+	}, handler.jwtService, staticRoles{"owner"})
 	handler.SetLoginDriver(driver)
 
 	bearer := completeLogin(t, driver)
@@ -1135,13 +1177,62 @@ func TestLoginSessionIsAcceptedByTheDefaultProtectedRouteSeam(t *testing.T) {
 		assert.Equal(t, "operator@platform", session.UserID(),
 			"the session principal is the identity the backbone resolved")
 		assert.Equal(t, "operator@platform", session.Email())
-		assert.Equal(t, "tenant-a", session.TenantID())
-		assert.Equal(t, []string{"admin"}, session.Roles())
+		// The ceremony ran in the operating tenant ("tenant-a"); the
+		// session lands in the principal's own workspace (#662), with the
+		// roles the principal holds THERE, not the operating tenant's.
+		assert.Equal(t, "workspace-a", session.TenantID())
+		assert.Equal(t, []string{"owner"}, session.Roles())
 	})
 
 	assert.True(t, reached,
 		"a completed login must produce a credential the protected routes accept")
 	assert.Equal(t, http.StatusOK, w.Code)
+}
+
+// TestLoginWorkspaceSessionOfAnOperatingAdminIsRefusedByTheAdminGuard is the
+// #662 regression: an admin of the operating tenant who is a plain member of
+// their workspace must not carry "admin" into the workspace session, so the
+// IAM router's admin guard refuses them there.
+func TestLoginWorkspaceSessionOfAnOperatingAdminIsRefusedByTheAdminGuard(t *testing.T) {
+	handler := newHandlerForLoginTest(t)
+	driver := newLoginDriverForTest(t, &stubLoginClient{
+		bearer: "broker.issued.bearer",
+		identity: &logintest.Identity{
+			Subject:  "operator@platform",
+			TenantID: "tenant-a",
+			Roles:    []string{"admin"},
+		},
+	}, handler.jwtService, staticRoles{"member"})
+	handler.SetLoginDriver(driver)
+
+	bearer := completeLogin(t, driver)
+
+	logger := logging.NewLogger(slog.LevelError, os.Stderr)
+	guard, err := iammw.NewSessionGuard(logger, response.NewResponseWriter(logger, nil))
+	require.NoError(t, err)
+	requireAdmin := guard.RequireRoles("admin")
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/iam/users", nil)
+	req.Header.Set("Authorization", "Bearer "+bearer)
+	req.Header.Set("Accept", "application/json")
+	w := httptest.NewRecorder()
+
+	reachedAdmin := false
+	var roles []string
+	handler.Verify(w, req, func(w http.ResponseWriter, r *http.Request) {
+		if session, ok := iammw.GetSessionFromContext(r.Context()); ok {
+			roles = session.Roles()
+		}
+		requireAdmin(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+			reachedAdmin = true
+		})).ServeHTTP(w, r)
+	})
+
+	assert.Equal(t, []string{"member"}, roles,
+		"the workspace session carries the workspace roles only")
+	assert.False(t, reachedAdmin,
+		"an operating-tenant admin must not pass the admin guard in a workspace they only belong to")
+	assert.Equal(t, http.StatusForbidden, w.Code)
 }
 
 // TestLoginRefusesWhenTheCeremonyNamesNobody is the negative half: the
@@ -1152,7 +1243,7 @@ func TestLoginSessionIsAcceptedByTheDefaultProtectedRouteSeam(t *testing.T) {
 func TestLoginRefusesWhenTheCeremonyNamesNobody(t *testing.T) {
 	handler := newHandlerForLoginTest(t)
 	driver := newLoginDriverForTest(t,
-		&stubLoginClient{bearer: "broker.issued.bearer"}, handler.jwtService)
+		&stubLoginClient{bearer: "broker.issued.bearer"}, handler.jwtService, nil)
 
 	req := httptest.NewRequest(http.MethodPost, "/webauthn/login/finish",
 		bytes.NewBufferString(`{"id":"Q1JFRC1JRA","type":"public-key","response":{}}`))
@@ -1249,7 +1340,7 @@ func TestHandlerVerify_UnauthenticatedRequestIsToldSo(t *testing.T) {
 			assert.False(t, reached, "the protected handler must not run")
 			assert.Equal(t, http.StatusUnauthorized, w.Code)
 
-			var resp response.WebServiceResponse
+			var resp restwire.WebServiceResponse
 			require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 			assert.False(t, resp.Success)
 			assert.NotEmpty(t, resp.Error, "the client must be told why")
@@ -1261,23 +1352,41 @@ func TestHandlerVerify_UnauthenticatedRequestIsToldSo(t *testing.T) {
 // the REAL jwt.Service as its session issuer, so the seam test exercises
 // the whole path — ceremony, mint, verification — rather than a stand-in
 // on either end of it.
+// staticWorkspace resolves every principal to one workspace, standing in
+// for the platform's tenant user service.
+type staticWorkspace string
+
+func (w staticWorkspace) Workspace(context.Context, string) (string, error) {
+	return string(w), nil
+}
+
 func newLoginDriverForTest(
-	t *testing.T, client loginpkg.UnifiedLoginClient, issuer loginpkg.SessionIssuer) *loginpkg.Driver {
+	t *testing.T, client loginpkg.UnifiedLoginClient, issuer loginpkg.SessionIssuer,
+	roles loginpkg.RoleResolver) *loginpkg.Driver {
 
 	t.Helper()
 	logger := logging.NewLogger(slog.LevelError, os.Stderr)
 	// Both factors: mtls is the one /login drives (and declines), fido2 the
 	// one that completes, so a single driver serves the route test and the
 	// end-to-end seam test without either needing its own fixture.
-	fido2, err := loginpkg.NewFIDO2Binder("tenant-a")
+	fido2, err := loginpkg.NewFIDO2Binder("tenant-a", staticWorkspace("workspace-a"))
 	require.NoError(t, err)
 	driver, err := loginpkg.NewDriver(loginpkg.DriverParams{
 		Client:         client,
 		Binders:        []loginpkg.Binder{loginpkg.NewMTLSBinder(), fido2},
 		SessionIssuer:  issuer,
+		Roles:          roles,
 		Logger:         logger,
 		ResponseWriter: response.NewResponseWriter(logger, nil),
 	})
 	require.NoError(t, err)
 	return driver
+}
+
+// staticRoles answers one role list for every principal in every tenant,
+// standing in for the IAM-backed restiam.WorkspaceRoleResolver.
+type staticRoles []string
+
+func (r staticRoles) Roles(context.Context, string, string) ([]string, error) {
+	return r, nil
 }

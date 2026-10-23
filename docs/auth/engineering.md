@@ -255,7 +255,7 @@ Everything reaches auth capabilities through the quicbaas SDK:
 
 | Need | Call |
 |---|---|
-| Is the admin claimed? | `Security().Auth().Factors().List(ctx, "admin")` |
+| Is the admin claimed? Was a `fido2` factor revoked before? | `Security().Auth().Factors().List(ctx, "admin")` — one read answers both |
 | WebAuthn registration | `Security().Auth().FIDO2().Begin/FinishRegistration` |
 
 **The passkey is NOT enrolled via `Factors().Add`.** The WebAuthn registration
@@ -282,8 +282,7 @@ The ceremony completes by minting a platform-local JWT, and that seam accepts
 only broker-issued bearers, so a completed claim would hand the operator a
 session every protected route rejects. Refusing to publish the flow is the
 fail-closed answer; converging the two token types is
-#202
-(owner ruling 2026-09-02), which retires the local issuer rather than
+#202, which retires the local issuer rather than
 teaching the seam to accept both. `HandlerRegistry.brokerTokenSeamEnabled()`
 answers from configuration alone, so asking which seam is in force never
 builds the validator or its JWKS client as a side effect.
@@ -352,6 +351,28 @@ seam alone.)
    re-opens the ceremony, which is the recovery path for a lost
    authenticator. Deliberate trade-off, recorded in
    [architecture.md §6b.5](architecture.md).
+8a. **A re-claim is never silent (#169).** The listing that refuses a claimed
+   identity in `FinishPasskey` is also the history the audit record is
+   decided by, read once, before the enrolment adds the new passkey. Exactly
+   one record is written per completed claim:
+   - no revoked `fido2` factor → the routine INFO record
+     `adminclaim: system admin claimed` (a first claim; other factor types
+     do not count);
+   - one or more revoked `fido2` factors → a `security_log` record, severity
+     `High`, category `Access Control`, source `authentication`, whose
+     `details` JSON carries `event: "adminclaim.reclaim"`, the identity,
+     email, tenant, `claimed_at`, the new `credential_id` and
+     `replaced_factors[]` (`enrollment_id`, `enrolled_at`, `revoked_at`);
+   - an error-free but empty SDK answer (no listing) → the same record with
+     `event: "adminclaim.reclaim_status_unknown"` and no replaced factors:
+     nothing proves it is a first claim, so it is raised, not assumed.
+
+   A listing that **fails** refuses the claim (the existing fail-closed
+   path, before any enrolment), so a claim never completes with its audit
+   decision unmade. The record goes through the platform's audit emitter,
+   `logging.Logger.Security`. It is stored at level `SECURITY` and shown on
+   the console's Platform → Logs page under that filter (see
+   [daemon engineering §9](../daemon/engineering.md)).
 9. **`RefreshToken` re-reads the user and mints from the store**, not from
    the presented token. `GenerateToken` derives `tenant_id`, `email` and
    `roles` from the user it is handed, so both shortcuts are wrong: a bare
@@ -370,17 +391,20 @@ seam alone.)
 
 | Layer | Location | Covers |
 |---|---|---|
-| Ceremony | `pkg/webservice/v1/adminclaim/service_test.go` | Both proof paths, leaf-only mTLS acceptance, read-error fail-closed, non-stranding ordering, and completion serialisation (all mutation-verified), nine rejection cases (foreign CA, wrong CN, wrong SPIFFE user, wrong key, no signature, expired, self-signed, garbage PEM, foreign peer cert), replay, already-claimed at every step, role materialisation, token spent on failure |
+| Ceremony | `pkg/webservice/v1/adminclaim/service_test.go` | Both proof paths, leaf-only mTLS acceptance, read-error fail-closed, non-stranding ordering, and completion serialisation (all mutation-verified), nine rejection cases (foreign CA, wrong CN, wrong SPIFFE user, wrong key, no signature, expired, self-signed, garbage PEM, foreign peer cert), replay, already-claimed at every step, role materialisation, token spent on failure, the claim audit record (first claim routine, re-claim `High` with the replaced factor, unknown history `High`, unreadable history refuses before enrolment) |
 | Proof primitives | `.../proof_test.go` | Anchor loading, EKU rejection, the mandatory SPIFFE identity (11 shapes incl. a suffix smuggled into the tenant segment), ECDSA/RSA/Ed25519 verification, unsupported key type, every typed error |
 | Store | `.../store_test.go` | Single use, expiry via injected clock, capacity refusal, sweep reclaim, 32-way redemption race with exactly one winner, and a 256-way issue burst that must not exceed the cap (both races mutation-verified against the buggy implementations) |
 | REST | `.../handler_test.go` | Real router + real response writer; status fails closed, rejection is uninformative, mTLS peer path, rate limit |
 | Guards | `pkg/webservice/v1/middleware/iam/guard_test.go` | Fail-closed without a session, exact role matching, the tenant boundary, promotion through `AuthMiddleware` |
 | Route gating | `pkg/webservice/v1/rest/iam/router_test.go` | Every route authenticates and requires `admin`; tenant records demand the system tenant; tenant-scoped collections demand the caller's own tenant. `TestRegisterRoutes_RealGuardsDenyEndToEnd` uses the real guard and asserts the wire response; `TestRegisterRoutes_EveryTenantScopedRouteIsGuarded` walks the route table so a new route cannot skip the guard (mutation-verified: dropping one guard fails it) |
 | Session publish | `pkg/webservice/v1/jwt/handler_test.go` | `Verify` publishes roles/tenant, publishes none for an unprivileged token, and a refresh preserves the tenant/roles a guard acts on (mutation-verified) |
-| Login ceremony | `pkg/webservice/v1/login/driver_test.go` | The one driver every login route runs on: the fido2 challenge is usernameless and tenant-scoped; the credential id is submitted as the lookup key and the assertion as the proof; a single-shot factor completes in one request with no signature; the mtls binder declines both verbs and reaches no backbone (403); an error-free ceremony with no bearer is refused 401; a bearer naming nobody is refused 401 and mints nothing; a failed mint is a 500, not a rejected login; the backbone's bearer and refresh never reach the client; a missing backbone refuses 403; an unregistered factor is a 500. Fixtures come from `login/logintest` |
+| Login ceremony | `pkg/webservice/v1/login/driver_test.go` | The one driver every login route runs on: the fido2 challenge is usernameless and tenant-scoped; the credential id is submitted as the lookup key and the assertion as the proof; a single-shot factor completes in one request with no signature; the mtls binder declines both verbs and reaches no backbone (403); an error-free ceremony with no bearer is refused 401; a bearer naming nobody is refused 401 and mints nothing; a failed mint is a 500, not a rejected login; the backbone's bearer and refresh never reach the client; a missing backbone refuses 403; an unregistered factor is a 500; a browser login is minted into the principal's workspace, not the ceremony's operating tenant, without mutating the backbone's identity (`TestDriverLandsABrowserLoginInThePrincipalsWorkspace`); a principal whose workspace cannot be resolved, is empty, or is the operating tenant is refused 403 and nothing is minted (`TestDriverRefusesABrowserLoginWithNoWorkspace`); a workspace session carries the roles the resolver reports for the workspace and the subject, never the backbone's (`TestDriverGivesAWorkspaceSessionTheWorkspaceRolesOnly`), none without a resolver (`TestDriverGivesAWorkspaceSessionNoRolesWithoutAResolver`), and a failed role lookup is a 500 that mints nothing (`TestDriverRefusesAWorkspaceSessionWhoseRolesCannotBeResolved`). Fixtures come from `login/logintest` |
+| Workspace roles | `pkg/webservice/v1/rest/iam/workspace_roles_test.go` | The resolver reads the workspace's IAM user by email and returns its roles; a user the workspace does not hold (`NotFound`) has no roles and no error; any other lookup failure is returned; a nil IAM client is refused with `ErrRoleResolverClientMissing` |
+| Workspace resolution | `pkg/platform/service/tenant_user_test.go` | `TestTenantUserService_Workspace_ReturnsTheUsersOwnTenant`: the user's own tenant, confirmed through the tenant manager. `TestTenantUserService_Workspace_RefusesAPrincipalWithNoWorkspace`: no email, an unknown user, a user in no tenant and a deleted workspace each fail with a typed error, never a fallback tenant |
 | Session issuance | `pkg/webservice/v1/jwt/session_issuer_test.go` | Which claims a backbone-issued session carries and which it deliberately omits (`uid`); an incomplete identity is refused rather than minted weaker; a signing failure returns no credential; a credential from a foreign signer is rejected by the seam (the control that makes the acceptance test mean something) |
-| Login seam gate | `pkg/webservice/v1/registry_tenant_wiring_test.go` | The login driver (and the WebAuthn routes with it) is declined under the broker seam, which does not accept a platform-minted session, and declined with no signer; built on the default seam. Same refusal `AdminClaimRestHandler` makes |
-| Login → seam, end to end | `pkg/webservice/v1/jwt/handler_test.go` | `TestLoginSessionIsAcceptedByTheDefaultProtectedRouteSeam`: log in over the real driver and the real signer, then present what the login returned to the seam every protected route runs. It must reach the handler with the backbone's identity published as the session. This is the property whose absence made a login return a token the same server rejected (#646) |
+| User-id claim exactness (#642) | `pkg/webservice/v1/jwt/service_test.go`, `.../handler_test.go`, `pkg/webservice/v1/middleware/tenant/context_test.go` | A user id above 2^53 survives the real issuer and the real validator exactly; a schemaless (`jwt.MapClaims`) decode sees `uid`/`user_id`/`sub` as the exact decimal string, not a float64 (fails on the numeric claim); `PlatformUserID` and the tenant middleware refuse a missing, numeric, non-decimal or overflowing `uid`; refresh (401) and session creation (400) refuse a backbone session whose numeric subject would otherwise name a platform user |
+| Login seam gate | `pkg/webservice/v1/registry_tenant_wiring_test.go` | The login driver (and the WebAuthn routes with it) is declined under the broker seam, which does not accept a platform-minted session, and declined with no signer; built on the default seam. Same refusal `AdminClaimRestHandler` makes. The fido2 factor is offered only with a workspace resolver (a tenant manager behind the tenant user service) and withheld without one |
+| Login → seam, end to end | `pkg/webservice/v1/jwt/handler_test.go` | `TestLoginSessionIsAcceptedByTheDefaultProtectedRouteSeam`: log in over the real driver and the real signer, then present what the login returned to the seam every protected route runs. It must reach the handler with the backbone's identity published as the session, scoped to the principal's workspace with the roles it holds there. This is the property whose absence made a login return a token the same server rejected (#646). `TestLoginWorkspaceSessionOfAnOperatingAdminIsRefusedByTheAdminGuard`: an operating-tenant admin who is a plain workspace member logs in to a session with only `member`, which the IAM router's admin guard refuses 403 (#662) |
 | Login delegation | `pkg/webservice/v1/webauthn/webauthn_test.go` | The WebAuthn login verbs reach the backbone **without** consulting the platform user store — the lookup whose failure was #640 |
 
 **What the login tests cannot tell you.** Every test above fakes the SDK
@@ -461,9 +485,10 @@ vocabulary for callers; do not assume `Authenticate` produces them.
 4. **`ValidateIDevID` failure inside `Authenticate` does not fail
    authentication.** Deliberate (not every client certificate is a device
    certificate) and consequential: enforce it yourself where it matters.
-5. **`ParseStatus`-style permissiveness elsewhere in the transport layer**: an
-   RPC or MCP tool absent from its scope catalog is allowed once the token
-   validates ([`docs/daemon/api.md`](../daemon/api.md) §5).
+5. **The scope catalogs are default-deny**: an RPC or MCP tool absent from its
+   scope catalog is refused whatever the token holds — gRPC `PermissionDenied`,
+   MCP `AuthErrorToolNotClassified` ([`docs/daemon/api.md`](../daemon/api.md)
+   §5). The QUIC opcode catalog is narrower and is tracked separately.
 
 ## 5. Transport-layer contracts
 
@@ -502,6 +527,7 @@ func OIDCUnaryInterceptor(opts ...OIDCInterceptorOption) grpc.UnaryServerInterce
 func OIDCStreamInterceptor(opts ...OIDCInterceptorOption) grpc.StreamServerInterceptor
 
 func WithTokenValidator(v TokenValidator) OIDCInterceptorOption
+func WithAuthorizationChecker(c AuthorizationChecker) OIDCInterceptorOption
 func WithSkipMethods(methods ...string) OIDCInterceptorOption
 func WithRequireAuth(require bool) OIDCInterceptorOption
 
@@ -511,7 +537,39 @@ func AddBearerToken(ctx context.Context, token string) context.Context
 ```
 
 Errors: `ErrTokenValidatorNotConfigured`, `ErrMissingAuthorizationHeader`,
-`ErrInvalidAuthorizationHeader`, `ErrTokenValidationFailed`, `ErrScopeDenied`.
+`ErrInvalidAuthorizationHeader`, `ErrTokenValidationFailed`, `ErrScopeDenied`,
+`ErrAuthorizationCheckerRequired`, `ErrAuthorizationCheckFailed`.
+
+A validator that is a `ClaimsTokenValidator` authorizes the method's catalog
+scope itself (`AuthorizeToken`). A validator that only reports validity cannot,
+so the interceptor asks the `AuthorizationChecker` with the method's
+`resource`/`action`: no checker is `PermissionDenied`
+(`ErrAuthorizationCheckerRequired`), a checker error is `Unavailable`
+(`ErrAuthorizationCheckFailed`), and a refusal is `PermissionDenied`
+(`ErrScopeDenied`). An invalid token is `Unauthenticated` before the checker is
+asked. With platform tokens off the daemon's `selectGRPCTCPAuth` installs its
+local validator with `iamTokenAuthorizer`, the IAM-PEP checker QUIC uses, and
+refuses the transport without a PEP (#768).
+
+Both `AuthorizationChecker` implementations in `pkg/api/daemon` refuse an
+empty resource or action with `ErrEmptyPermission` before the PEP is asked
+(#926). `iamTokenAuthorizer` sends the token principal to
+`IAMPEPClient.Check`; the shared platform-token validator's `CheckPermission`
+first requires the `resource:action` scope in the token, then asks the same
+PEP for the token's subject and tenant. A PEP error is
+`ErrIAMPermissionCheckFailed`, a missing PEP `ErrPEPClientNotAvailable`; both
+deny.
+
+Under embedded quicbaas that PEP exists but cannot decide: `handleIAMPEPCheck`
+in go-quicbaas `sdk/go/transport/embedded/handlers_iam.go` returns
+`ServiceNotConfigured` for every request (sdk/go v0.12.0-alpha), and
+`handleIAMAdminCheckPermission` answers a different question — whether an admin
+holds an admin-role permission, not whether a token may perform a
+resource/action. `daemon.New` therefore runs `Config.validateGRPCAuthorization`
+and returns `ErrEmbeddedPEPUnavailable` (`pkg/api/daemon/errors.go`) when gRPC
+TCP is on, mTLS is off, platform tokens are off, IAM validation is on and
+quicbaas is embedded or unset (#770). `NewService` does not run the check: it
+serves no listener.
 
 ### Unix `SO_PEERCRED` (`pkg/util/peercred/peercred.go`)
 
@@ -550,15 +608,29 @@ func NewAuthMiddleware(opts ...AuthMiddlewareOption) *AuthMiddleware
 
 func WithQUICTokenValidator(v TokenValidator) AuthMiddlewareOption
 func WithQUICAuthorizationChecker(c AuthorizationChecker) AuthMiddlewareOption
-func WithQUICSkipOpcodes(opcodes ...byte) AuthMiddlewareOption
-func WithQUICRequireAuth(require bool) AuthMiddlewareOption
+func WithQUICRequireAuth(require bool) AuthMiddlewareOption // default true
+func WithQUICPeerAuthenticated() AuthMiddlewareOption        // mTLS: the peer certificate authenticates
 
+func (m *AuthMiddleware) GuardRequest(ctx context.Context, req *Request) (context.Context, *Response)
 func (m *AuthMiddleware) AuthenticateRequest(ctx context.Context, req *Request) (context.Context, *Response)
-func (m *AuthMiddleware) AuthorizeRequest(ctx context.Context, req *Request, resource, action string) *Response
+func (m *AuthMiddleware) AuthorizeRequest(ctx context.Context, resource, action string) *Response
 
+// opcode_permissions.go — the operation catalog
 type OpcodePermission struct { Resource, Action string }
-func DefaultOpcodePermissions() map[byte]*OpcodePermission
+func (p OpcodePermission) Scope() string
+func LookupOperationPermission(opcode byte, payload []byte) (perm OpcodePermission, preAuth bool, err error)
 ```
+
+`GuardRequest` is what the daemon's `QUICServiceHandler.HandleRequest` runs on
+every frame before dispatch (#767). Frames on the pre-auth list pass with no
+credential. Every other frame is first authenticated, then classified by
+`LookupOperationPermission`, then authorized by `AuthorizeRequest`.
+Classification keys on the opcode, or for a category opcode on the sub-opcode
+in `payload[0]`. A category frame with no sub-opcode fails with
+`ErrSubOpcodeMissing` → `StatusInvalidRequest`. An unclassified operation fails
+with `ErrOperationNotClassified` → `StatusPermissionDenied`.
+`NewQUICServiceHandler` refuses to build a handler without a middleware
+(`ErrQUICAuthMiddlewareRequired`).
 
 `AuthenticateRequest` prefers the claims path when the validator implements
 `ClaimsTokenValidator` — `AuthorizeToken(ctx, token, "", "", "", "")` — and
@@ -567,8 +639,14 @@ stashes the resulting `AuthorizedContext`. `AuthorizeRequest` then enforces
 DPoP frame**, so proof / htm / htu are always empty: every QUIC token is a
 bearer token.
 
-`DefaultOpcodePermissions` maps `OpHealth`, `OpLiveness` and `OpReadiness` to
-`nil` (no permission).
+The pre-auth list (`preAuthOpcodes`) is `OpHealth`, `OpLiveness`,
+`OpReadiness` and `OpIAMAuthenticate`; the sub-operation list
+(`preAuthSubOpcodes`) is the diskless boot pair `DeviceSubBootCertificate` and
+`DeviceSubBootDelivery` under `OpProvisioningCategory`, which the boot service
+authenticates against the node's own TLS channel. Each entry carries its
+reason; nothing else is exempt. Under mTLS (`WithQUICPeerAuthenticated`) a tokenless frame is
+authenticated by the verified peer certificate, and a presented token is
+still validated.
 
 ### MCP (`pkg/api/mcp/`)
 

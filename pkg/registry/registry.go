@@ -185,6 +185,9 @@ type Registry struct {
 
 	// pushSemaphore limits concurrent pushes
 	pushSemaphore chan struct{}
+
+	// now is time.Now in production; tests replace it to advance time (#284)
+	now func() time.Time
 }
 
 // RegistryOption is a functional option for constructing a Registry.
@@ -227,6 +230,7 @@ func NewRegistry(config RegistryConfig, logger *slog.Logger, opts ...RegistryOpt
 		logger:        logger.With("component", "registry"),
 		pullSemaphore: make(chan struct{}, config.MaxConcurrentPulls),
 		pushSemaphore: make(chan struct{}, config.MaxConcurrentPushes),
+		now:           time.Now,
 	}
 	for _, opt := range opts {
 		opt(r)
@@ -355,7 +359,7 @@ func (r *Registry) Push(ctx context.Context, ref string, image *Image, opts Push
 		}
 	}
 
-	now := time.Now().UTC()
+	now := r.now().UTC()
 	if image.Manifest.CreatedAt.IsZero() {
 		image.Manifest.CreatedAt = now
 	}
@@ -649,7 +653,7 @@ func (r *Registry) VerifyClient(ctx context.Context, attestation *AttestationEvi
 
 	// Check quote age
 	if r.config.Attestation.QuoteMaxAge > 0 {
-		if time.Since(attestation.Timestamp) > r.config.Attestation.QuoteMaxAge {
+		if r.now().Sub(attestation.Timestamp) > r.config.Attestation.QuoteMaxAge {
 			return ErrInvalidQuote{Reason: "quote has expired"}
 		}
 	}
@@ -685,7 +689,7 @@ func (r *Registry) VerifyClient(ctx context.Context, attestation *AttestationEvi
 		ClientID:   attestation.ClientID,
 		AIK:        aikToString(attestation.AIK),
 		PCRs:       attestation.PCRs,
-		ValidUntil: time.Now().Add(r.config.Attestation.CacheSessionDuration),
+		ValidUntil: r.now().Add(r.config.Attestation.CacheSessionDuration),
 	}
 	r.sessions.Store(attestation.ClientID, session)
 
@@ -800,7 +804,7 @@ func (r *Registry) GetSession(clientID string) (*RegistrySessionView, bool) {
 	}
 
 	session := value.(*RegistrySessionView)
-	if time.Now().After(session.ValidUntil) {
+	if r.now().After(session.ValidUntil) {
 		r.sessions.Delete(clientID)
 		return nil, false
 	}

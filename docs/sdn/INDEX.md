@@ -1,5 +1,8 @@
 # SDN Documentation Index
 
+> **Status: REFERENCE** · Last verified: 2026-10-15
+> Index of the SDN documents.
+
 Complete documentation for the Software-Defined Networking (SDN) components in go-trusted-platform.
 
 ## Quick Navigation
@@ -10,8 +13,8 @@ Complete documentation for the Software-Defined Networking (SDN) components in g
 |-----------|---------|-----------------|
 | **Physical Fabric** | Unified switch management (VLAN/EVPN) | [fabric/README.md](./fabric/README.md) |
 | **Stateful Firewall** | Zone-based packet filtering + NAT | [firewall/README.md](./firewall/README.md) |
-| **Gateway Node** | Multi-service overlay, edge, transit node | [gateway/README.md](./gateway/README.md) |
-| **BGP** | Border Gateway Protocol for route announcement | [bgp/README.md](./bgp/README.md) |
+| **Gateway Node** | Multi-service overlay, edge, transit node | [gateway/architecture.md](../gateway/architecture.md) |
+| **BGP** | The gateway's BGP speaker (EVPN overlay, transit peering) | [docs/bgp/](../bgp/architecture.md) |
 | **DHCP** | Dynamic IP allocation | [dhcp/README.md](./dhcp/README.md) |
 | **IPAM** | IP address pool management | [ipam/README.md](./ipam/README.md) |
 | **Tunnels** | GRE/IPIP tunnel lifecycle | [tunnel/README.md](./tunnel/README.md) |
@@ -40,18 +43,15 @@ Complete documentation for the Software-Defined Networking (SDN) components in g
 2. Configure segments in [overlay/configuration.md](./overlay/configuration.md)
 3. Check API integration in [overlay/api-reference.md](./overlay/api-reference.md)
 
-#### BGP Route Announcement
-1. Start with [bgp/README.md](./bgp/README.md)
-2. Configure BGP in [bgp/configuration.md](./bgp/configuration.md)
-3. Understand EVPN in [bgp/evpn.md](./bgp/evpn.md)
+#### BGP
+BGP is its own feature: start with
+[docs/bgp/architecture.md](../bgp/architecture.md), then
+[user.md](../bgp/user.md) to configure peers.
 
 #### Gateway Node Operations
-1. Review [gateway/README.md](./gateway/README.md) for overview
-2. Configure services in [gateway/configuration.md](./gateway/configuration.md)
-3. Check deployment modes:
-   - Overlay mode: [gateway/overlay-mode.md](./gateway/overlay-mode.md)
-   - Edge/P2P mode: [gateway/edge-mode.md](./gateway/edge-mode.md)
-   - Transit/BGP mode: [gateway/transit-mode.md](./gateway/transit-mode.md)
+The gateway is its own feature: start with
+[docs/gateway/architecture.md](../gateway/architecture.md), then
+[user.md](../gateway/user.md) to configure its service sections.
 
 ## Complete Documentation Map
 
@@ -90,44 +90,14 @@ firewall/
 
 ### Gateway Node
 
-```
-gateway/
-├── README.md              # Multi-service gateway overview
-├── configuration.md       # Config-driven service activation
-├── architecture.md        # Service handlers, integration
-├── overlay-mode.md        # VTEP, VXLAN, EVPN configuration
-├── edge-mode.md           # P2P networking, ACME, edge services
-├── transit-mode.md        # BGP route announcement
-├── operations.md          # Runtime management
-└── loadbalancer.md        # Load balancer configuration
-```
-
-**When to use:**
-- Deploying a unified gateway node
-- Configuring overlay networking
-- Setting up edge/P2P services
-- Announcing routes via BGP
-- Managing load balancer
+Documented in the [docs/gateway/](../gateway/) feature folder
+(architecture, engineering, cli, api, user); `docs/sdn/` has no gateway
+folder of its own.
 
 ### BGP Routing
 
-```
-bgp/
-├── README.md              # BGP overview, concepts
-├── configuration.md       # BGP config schema
-├── architecture.md        # Implementation design
-├── evpn.md               # EVPN overlay mode
-├── transit.md            # BGP transit design
-├── troubleshooting.md     # Common issues
-├── cli-usage.md          # CLI commands
-└── api-reference*.md     # REST, gRPC, QUIC, MCP API
-```
-
-**When to use:**
-- Configuring BGP neighbors
-- Setting up EVPN overlay
-- Announcing prefixes
-- Troubleshooting BGP issues
+Documented in the [docs/bgp/](../bgp/architecture.md) feature folder
+(architecture, engineering, cli, api, user).
 
 ### DHCP Service
 
@@ -171,7 +141,7 @@ tunnel/
 ```
 
 **When to use:**
-- Creating GRE tunnels to VPS nodes
+- Creating GRE tunnels to the transit relays
 - Configuring IPv6 tunnels
 - Setting up BGP peer transport
 
@@ -234,22 +204,24 @@ See: [fabric/configuration.md](./fabric/configuration.md)
 
 ### Minimal Gateway
 
+gatewayd reads the top-level `gateway:` section (`sdn.gateway` carries only
+`enabled`):
+
 ```yaml
-sdn:
-  gateway:
+gateway:
+  enabled: true
+  node-id: 1                    # unsigned integer
+
+  overlay:
     enabled: true
-    node-id: gw-01
-    
-    overlay:
-      enabled: true
-      vtep-ip: 10.0.0.1
-    
-    firewall:
-      enabled: true
-      # ... firewall config
+    local-vtep: 10.0.0.1
+
+  firewall:
+    enabled: true
+    # ... firewall config
 ```
 
-See: [gateway/configuration.md](./gateway/configuration.md)
+See: [gateway/user.md — Configuring the daemon](../gateway/user.md#configuring-the-daemon)
 
 ## API References
 
@@ -257,10 +229,10 @@ Each service exposes APIs via multiple protocols:
 
 | Service | REST | gRPC | QUIC | MCP | Unix |
 |---------|------|------|------|-----|------|
-| Fabric | [ref](./fabric/api-reference.md) | N/A | N/A | N/A | N/A |
+| Fabric | No ([Go API only](./fabric/api-reference.md)) | No | No | No | No |
 | Firewall | No | No | No | No | No |
-| Gateway | [ref](./gateway/api-reference-rest.md) | [ref](./gateway/api-reference-grpc.md) | [ref](./gateway/api-reference-quic.md) | [ref](./gateway/api-reference-mcp.md) | [ref](./gateway/api-reference-unix.md) |
-| BGP | [ref](./bgp/api-reference-rest.md) | [ref](./bgp/api-reference-grpc.md) | [ref](./bgp/api-reference-quic.md) | [ref](./bgp/api-reference-mcp.md) | [ref](./bgp/api-reference-unix.md) |
+| Gateway | [ref](../gateway/api.md) | [ref](../gateway/api.md) | [ref](../gateway/api.md) | [ref](../gateway/api.md) | [ref](../gateway/api.md#1-the-six-transports) |
+| BGP | [ref](../bgp/api.md) | [ref](../bgp/api.md) | [ref](../bgp/api.md) | [ref](../bgp/api.md) | [ref](../bgp/api.md#1-the-six-transports) |
 | DHCP | No | No | No | No | No |
 | IPAM | [ref](./ipam/api-reference-rest.md) | [ref](./ipam/api-reference-grpc.md) | [ref](./ipam/api-reference-quic.md) | [ref](./ipam/api-reference-mcp.md) | [ref](./ipam/api-reference-unix.md) |
 
@@ -295,7 +267,7 @@ See: [cli-usage.md](./cli-usage.md) for full command reference
 
 ### System Architecture
 
-See: [ARCHITECTURE.md](./ARCHITECTURE.md)
+See: [architecture.md](./architecture.md)
 
 ```
 Platform Daemon
@@ -322,27 +294,31 @@ Packet → ConnTrack → Zone Resolver → NAT → Rules → Verdict
 |-------|-----------|----------|
 | VLAN not created on switch | [Fabric](./fabric/README.md) | Check driver, vendor config, credentials |
 | Packets dropped unexpectedly | [Firewall](./firewall/README.md) | Review rules, check zones, verify rules order |
-| BGP neighbors not coming up | [BGP](./bgp/troubleshooting.md) | Check tunnel configs, verify ASN, test reachability |
+| BGP neighbors not coming up | [BGP](../bgp/user.md#7-when-it-does-not-start) | Match the error to its cause and fix |
 | Devices not getting DHCP | [DHCP](./dhcp/architecture.md) | Verify pool config, check zone reachability |
 | Overlay segments isolated | [Overlay](./overlay/architecture.md) | Check VNI mapping, EVPN state |
 
-See: [troubleshooting.md](./troubleshooting.md) (if exists)
+See: [user.md — Troubleshooting](./user.md#troubleshooting), and for the gateway
+[gateway/user.md — Troubleshooting](../gateway/user.md#troubleshooting)
 
 ## Testing
 
 ### Unit Tests
 
 ```bash
-make test                          # All tests
-make test-sdn-fabric              # Fabric tests
-make test-sdn-gateway             # Gateway tests
+make test                                   # All tests
+make test-pkg PKG=./pkg/sdn/fabric/...      # Fabric tests
+make test-pkg PKG=./pkg/sdn/gateway/...     # Gateway tests
+make coverage-sdn                           # SDN coverage
+make bench-sdn-gateway                      # Gateway benchmarks
 ```
 
 ### Integration Tests
 
 ```bash
 make integration-test              # All integration tests
-make integration-test-sdn-gateway  # Gateway integration
+make integration-test-sdn          # SDN suite (devcontainer)
+make integration-test-sdn-full     # SDN suite, full
 ```
 
 See: [testing.md](./testing.md) for comprehensive testing guide
@@ -352,7 +328,7 @@ See: [testing.md](./testing.md) for comprehensive testing guide
 - **Firewall**: stateful zone filtering in the OVS kernel datapath via conntrack (`ct()`/`ct_state`) flows; no userspace packet path (no published benchmarks yet) — See [firewall/performance.md](./firewall/performance.md)
 - **Hardware offload**: OVS tc-flower offload for 100/200/400G NICs — ConnectX/BlueField (mlx5 switchdev) and Broadcom NetXtreme-E (bnxt TruFlow) — See [performance/hw-offload.md](./performance/hw-offload.md)
 - **Lab validation runbook**: X10 hardware-offload/400G validation procedure with `platformctl sdn gateway perf` measurement steps and a measured-values-only results template — See [performance/x10-lab-validation.md](./performance/x10-lab-validation.md)
-- **BGP**: native Go BGP speaker for EVPN and transit route propagation — See [bgp/architecture.md](./bgp/architecture.md)
+- **BGP**: GoBGP-based speaker in `gatewayd` for EVPN and transit peering — See [docs/bgp/](../bgp/architecture.md)
 - **DHCP**: native Go DHCP server with IPAM-backed lease allocation — See [dhcp/architecture.md](./dhcp/architecture.md)
 
 ## Security
@@ -371,10 +347,10 @@ All services support mutual TLS for inter-node communication.
 
 ## Related Documentation
 
-- [Configuration Guide](../configuration.md) — Top-level config structure
+- [Configuration Guide](../daemon/configuration.md#configuration-structure) — Top-level config structure
 - [Security Architecture](../security/architecture.md) — Overall security design
-- [Secrets Framework](../secrets/README.md) — Secret management
-- [Bootstrap Process](../bootstrap/README.md) — Node initialization
+- [Secrets Framework](../secrets/architecture.md) — Secret management
+- [Bootstrap Process](../bootstrap/architecture.md) — Node initialization
 - [TPM/Device Identity](../tpm/device-identity-design.md) — IDevID design
 
 ## Contributing
@@ -385,16 +361,9 @@ To update SDN documentation:
 2. Keep examples current with code
 3. Update cross-references in this INDEX.md
 4. Test configuration examples
-5. Run spell-check: `make check-docs`
 
 ## Version History
 
 | Version | Date | Changes |
 |---------|------|---------|
 | 1.0 | 2026-04-13 | Initial comprehensive SDN documentation (Phase 7) |
-
----
-
-**Last Updated**: 2026-04-13
-**Documentation Version**: 1.0
-**Status**: Production-ready

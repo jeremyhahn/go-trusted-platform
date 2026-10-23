@@ -1,5 +1,8 @@
 # Configuration Secret Schemes: `kms://`, `idevid://`, `file://`
 
+> **Status: REFERENCE** · Last verified: 2026-10-13
+> The `kms://`, `idevid://` and `file://` config secret URI schemes; the resolvers are wired in `pkg/app/secrets.go`, and `kms://` resolution itself is go-quicbaas's.
+
 This document describes the secret-reference URI schemes available for
 configuration values. Each keeps plaintext credentials out of config files so
 they can be safely version-controlled and shared.
@@ -88,7 +91,8 @@ generate-and-fetch round trip is byte-clean.)
 
 Short-form paths (not starting with `tenants/`) are expanded to
 `tenants/{tenant}/nodes/{node}/secrets/{path}` at resolution time using
-`platform.tenant_id` and the node hostname. Config files must not embed
+the platform tenant (`App.TenantID`, the top-level `tenant-id` key) and the
+node hostname. Config files must not embed
 `tenants/…/nodes/…` literals.
 
 When QuicBaaS is unreachable at bootstrap, `kms://` URIs **fail closed** — they
@@ -121,8 +125,8 @@ openssl pkeyutl -encrypt \
 ```
 
 Provisioning servers encrypt secrets to each node's enrolled IDevID
-certificate before embedding them in the device profile (see
-[provisioning-secrets.md](provisioning-secrets.md)).
+certificate before embedding them in the device profile (see the
+`idevid://` scheme in [api.md](api.md)).
 
 Characteristics:
 
@@ -176,7 +180,7 @@ secrets:
 
 ## See Also
 
-- [Secrets Framework](./README.md) — overview of the secrets system
-- [Bootstrap Secrets](./bootstrap-secrets.md) — resolution during bootstrap
-- [Provisioning Secrets](./provisioning-secrets.md) — node provisioning workflow
+- [Secrets Framework](./architecture.md) — overview of the secrets system
+- [Bootstrap Secrets](./engineering.md) — resolution during bootstrap
+- Provisioning Secrets — node provisioning workflow
 - [IDevID Design](../tpm/device-identity-design.md) — device identity architecture

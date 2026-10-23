@@ -71,3 +71,21 @@ func (e ErrCloseFailed) Error() string {
 func (e ErrCloseFailed) Unwrap() error {
 	return e.Cause
 }
+
+// ErrServiceUnavailable is returned when go-quicbaas cannot hand out the
+// client of a QRDB-backed service, typically because the lazily created
+// QRDB transport failed to initialize.
+type ErrServiceUnavailable struct {
+	Service string
+	Cause   error
+}
+
+// Error implements the error interface.
+func (e ErrServiceUnavailable) Error() string {
+	return fmt.Sprintf("quicbaas: %s service unavailable: %v", e.Service, e.Cause)
+}
+
+// Unwrap returns the underlying error for errors.Is and errors.As support.
+func (e ErrServiceUnavailable) Unwrap() error {
+	return e.Cause
+}

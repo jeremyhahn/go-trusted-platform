@@ -102,6 +102,10 @@ func TestRegisterRoutes(t *testing.T) {
 		{"validate policy", http.MethodPost, "/api/v1/iam/tenants/tenant-1/policies/validate"},
 		{"test policy", http.MethodPost, "/api/v1/iam/tenants/tenant-1/policies/test"},
 
+		// Permission routes
+		{"check permission", http.MethodPost, "/api/v1/iam/tenants/tenant-1/permissions/check"},
+		{"check permission (flat)", http.MethodPost, "/api/v1/iam/permissions/check"},
+
 		// App routes
 		{"register app", http.MethodPost, "/api/v1/iam/tenants/tenant-1/apps"},
 		{"list apps", http.MethodGet, "/api/v1/iam/tenants/tenant-1/apps"},
@@ -326,6 +330,11 @@ func TestPolicyRoutes_Registration(t *testing.T) {
 		{
 			method:       http.MethodPost,
 			path:         "/api/v1/iam/tenants/tenant-1/policies/test",
+			expectedVars: map[string]string{"tenant": "tenant-1"},
+		},
+		{
+			method:       http.MethodPost,
+			path:         "/api/v1/iam/tenants/tenant-1/permissions/check",
 			expectedVars: map[string]string{"tenant": "tenant-1"},
 		},
 	}
@@ -839,9 +848,27 @@ func TestRegisterRoutes_EveryTenantScopedRouteIsGuarded(t *testing.T) {
 	}))
 	require.NotEmpty(t, routes, "the route table must not be empty")
 
-	tenantScopedSeen, recordSeen := 0, 0
+	tenantScopedSeen, recordSeen, flatSeen := 0, 0, 0
 	for _, rt := range routes {
 		if !strings.Contains(rt.template, "{tenant}") {
+			// A flat route names its tenant in the tenant_id query, so it
+			// needs the own-tenant guard too (#401). The tenant-record
+			// collection (/tenants) is system-tenant only instead.
+			if !strings.HasPrefix(rt.template, "/api/v1/iam/") ||
+				strings.HasPrefix(rt.template, "/api/v1/iam/tenants") {
+				continue
+			}
+			path := strings.NewReplacer(
+				"{id}", "x", "{role}", "r", "{user}", "u",
+			).Replace(rt.template)
+			for _, method := range rt.methods {
+				calls = nil
+				root.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(method, path, nil))
+				flatSeen++
+				assert.Contains(t, calls, "own-tenant",
+					"%s %s accepts a tenant_id query and must be tenant-scoped",
+					method, rt.template)
+			}
 			continue
 		}
 		// Substitute a concrete tenant so the route actually matches.
@@ -872,4 +899,5 @@ func TestRegisterRoutes_EveryTenantScopedRouteIsGuarded(t *testing.T) {
 	assert.GreaterOrEqual(t, tenantScopedSeen, 20,
 		"expected the tenant-scoped collections to be walked")
 	assert.Equal(t, 3, recordSeen, "expected the three tenant-record routes")
+	assert.GreaterOrEqual(t, flatSeen, 30, "expected the flat collections to be walked")
 }

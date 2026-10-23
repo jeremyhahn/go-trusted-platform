@@ -91,6 +91,24 @@ func (c *Client) RebootVM(ctx context.Context, id string, force bool) error {
 	return nil
 }
 
+// SuspendVM pauses a running virtual machine in memory.
+func (c *Client) SuspendVM(ctx context.Context, id string) error {
+	_, err := c.grpc.SuspendVM(ctx, &platformv1.SuspendVMRequest{Id: id})
+	if err != nil {
+		return &ErrSuspendVMFailed{ID: id, Cause: err}
+	}
+	return nil
+}
+
+// ResumeVM continues a suspended virtual machine.
+func (c *Client) ResumeVM(ctx context.Context, id string) error {
+	_, err := c.grpc.ResumeVM(ctx, &platformv1.ResumeVMRequest{Id: id})
+	if err != nil {
+		return &ErrResumeVMFailed{ID: id, Cause: err}
+	}
+	return nil
+}
+
 // DeleteVM deletes a virtual machine.
 func (c *Client) DeleteVM(ctx context.Context, id string, deleteDisks bool) error {
 	_, err := c.grpc.DeleteVM(ctx, &platformv1.DeleteVMRequest{Id: id, DeleteDisks: deleteDisks})
@@ -205,6 +223,15 @@ func (c *Client) ListSnapshots(ctx context.Context, vmID string) ([]*platformv1.
 	return resp.Snapshots, nil
 }
 
+// GetSnapshot returns one snapshot of a VM by id.
+func (c *Client) GetSnapshot(ctx context.Context, vmID, snapshotID string) (*platformv1.Snapshot, error) {
+	resp, err := c.grpc.GetSnapshot(ctx, &platformv1.GetSnapshotRequest{VmId: vmID, SnapshotId: snapshotID})
+	if err != nil {
+		return nil, &ErrGetSnapshotFailed{VMID: vmID, SnapshotID: snapshotID, Cause: err}
+	}
+	return resp.GetSnapshot(), nil
+}
+
 // MigrateVM migrates a virtual machine to another host.
 func (c *Client) MigrateVM(ctx context.Context, vmID, destinationHost string, live bool, bandwidthLimit uint64) error {
 	_, err := c.grpc.MigrateVM(ctx, &platformv1.MigrateVMRequest{
@@ -215,6 +242,26 @@ func (c *Client) MigrateVM(ctx context.Context, vmID, destinationHost string, li
 	})
 	if err != nil {
 		return &ErrMigrateVMFailed{VMID: vmID, Cause: err}
+	}
+	return nil
+}
+
+// PrepareMigration readies this host to receive a migrating VM described by
+// req and returns the receiver the source streams to.
+func (c *Client) PrepareMigration(ctx context.Context, req *platformv1.PrepareMigrationRequest) (*platformv1.PrepareMigrationResponse, error) {
+	resp, err := c.grpc.PrepareMigration(ctx, req)
+	if err != nil {
+		return nil, &ErrPrepareMigrationFailed{VMName: req.GetVmName(), Cause: err}
+	}
+	return resp, nil
+}
+
+// FinalizeMigration commits (commit=true) or discards the VM received by
+// receiverID.
+func (c *Client) FinalizeMigration(ctx context.Context, receiverID string, commit bool) error {
+	_, err := c.grpc.FinalizeMigration(ctx, &platformv1.FinalizeMigrationRequest{ReceiverId: receiverID, Commit: commit})
+	if err != nil {
+		return &ErrFinalizeMigrationFailed{ReceiverID: receiverID, Cause: err}
 	}
 	return nil
 }
@@ -373,6 +420,35 @@ func (c *Client) StopVMDomain(ctx context.Context, params *StopVMParams) (*VMSta
 	})
 	if err != nil {
 		return nil, &ErrStopVMFailed{ID: params.ID, Cause: err}
+	}
+	return statusFromProto(resp.Status), nil
+}
+
+// RebootVMDomain reboots a virtual machine and returns the operation status.
+func (c *Client) RebootVMDomain(ctx context.Context, id string, force bool) (*VMStatus, error) {
+	resp, err := c.grpc.RebootVM(ctx, &platformv1.RebootVMRequest{Id: id, Force: force})
+	if err != nil {
+		return nil, &ErrRebootVMFailed{ID: id, Cause: err}
+	}
+	return statusFromProto(resp.Status), nil
+}
+
+// SuspendVMDomain pauses a running virtual machine in memory and returns the
+// operation status.
+func (c *Client) SuspendVMDomain(ctx context.Context, id string) (*VMStatus, error) {
+	resp, err := c.grpc.SuspendVM(ctx, &platformv1.SuspendVMRequest{Id: id})
+	if err != nil {
+		return nil, &ErrSuspendVMFailed{ID: id, Cause: err}
+	}
+	return statusFromProto(resp.Status), nil
+}
+
+// ResumeVMDomain continues a suspended virtual machine and returns the
+// operation status.
+func (c *Client) ResumeVMDomain(ctx context.Context, id string) (*VMStatus, error) {
+	resp, err := c.grpc.ResumeVM(ctx, &platformv1.ResumeVMRequest{Id: id})
+	if err != nil {
+		return nil, &ErrResumeVMFailed{ID: id, Cause: err}
 	}
 	return statusFromProto(resp.Status), nil
 }

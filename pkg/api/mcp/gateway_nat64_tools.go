@@ -13,11 +13,15 @@
 
 package mcp
 
-import "context"
+import (
+	"context"
+
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/mcpwire"
+)
 
 // registerGatewayNAT64Tools registers the gateway NAT64 MCP tools.
 func (r *ToolRegistry) registerGatewayNAT64Tools() {
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name: "gateway_nat64_status",
 		Description: "Get the NAT64 translator health: whether the kernel instance is present, " +
 			"the RFC 6052 translation prefix in use, live session count, pool4 usage and module version",

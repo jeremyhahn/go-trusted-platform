@@ -137,10 +137,13 @@ certificate-authority:
 # =============================================================================
 # Required for CA identities that set platform-policy: true. The platform
 # PCR + bank are needed when the CA is configured to use TPM-bound platform
-# policy. Integration tests run against swtpm started by the test harness.
+# policy. Integration tests run against swtpm started by the test harness:
+# device is the socket start_swtpm in run-integration-tests.sh serves. The
+# integration container is privileged and sees the host's /dev/tpmrm0, so a
+# hardware path here would provision the CI host's own TPM.
 
 tpm:
-  device: /dev/tpmrm0
+  device: /tmp/swtpm/swtpm.sock
   simulator: false
   encrypt-sessions: false
   entropy: false
@@ -194,6 +197,70 @@ argon2:
   keyLen: 32
 
 # =============================================================================
+# DNS CONFIGURATION
+# =============================================================================
+#
+# An internal server gives platformd a DNS backend (pkg/app/app.go
+# newDNSService and StartDNS run only when dns.HasServer() is true), so the
+# dns suite's REST, QUIC, MCP, Unix and CLI adapters reach real zone and
+# record storage. CoreDNS listens on an unprivileged port; the suite creates
+# and deletes its own zones, so the configured zone only seeds the server.
+# DNSSEC and DANE stay off, and with no webservices nothing would publish
+# TLSA records anyway; the bootstrap suite, whose DANE tests need them, is
+# out of the runner's default set for that reason.
+
+dns:
+  default-ttl: 300
+  internal:
+    port: 9053
+    zone:
+      name: integration.internal.
+      description: Internal zone for the integration platformd
+      ttl: 300
+      internal: true
+      records:
+        soa:
+          name: integration.internal.
+          mname: ns1.integration.internal.
+          rname: hostmaster.integration.internal.
+          serial: 1
+          refresh: 86400
+          retry: 7200
+          expire: 86400
+          min_ttl: 300
+          ttl: 300
+        ns:
+          - name: "@"
+            value: ns1.integration.internal.
+            ttl: 300
+
+# =============================================================================
+# TIME SYNCHRONIZATION
+# =============================================================================
+# Enables the NTP service the ntp suite drives on every transport. Without
+# an ntp: section platformd never touches chrony and every NTP call answers
+# "not configured" (docs/ntp/user.md).
+#
+# platformd renders /etc/chrony/chrony.conf from this section. The
+# devcontainer has no OpenRC, so run-integration-tests.sh starts chronyd on
+# the rendered file itself, with -x: chronyd never adjusts the system clock,
+# which the container shares with the CI host.
+#
+# The one upstream is the loopback, where nothing serves NTP (a consume-only
+# node renders port 0), so no source ever becomes reachable: a step is always
+# the documented refusal, never a clock change. No startup gate: there is
+# nothing to wait for.
+ntp:
+  enabled: true
+  mode: consume
+  consume:
+    upstream:
+      - address: 127.0.0.1
+        iburst: true
+    startup-gate:
+      block-until-synced: false
+
+# =============================================================================
 # SDN CONFIGURATION
 # =============================================================================
 # Enables the overlay controller so TestOverlayMultiProtocol and
@@ -229,3 +296,5 @@ sdn:
     enabled: true
     vxlan-port: 4789
     underlay-interface: lo
+    # A single-node test overlay: the loopback VTEP is explicit (#93).
+    vtep-address: 127.0.0.1

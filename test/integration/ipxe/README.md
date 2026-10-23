@@ -7,100 +7,68 @@ This directory contains integration tests for the iPXE boot server components.
 The integration tests verify end-to-end functionality of:
 
 - **DHCP Server**: PXE-aware DHCP server with proper options for PXE and iPXE clients
-- **TFTP Server**: Serves iPXE firmware files (ipxe.efi, ipxe32.efi)
+- **TFTP Server**: Serves iPXE firmware files (ipxe.efi, ipxe32.efi, undionly.kpxe)
 - **HTTP Server**: Serves boot scripts, menus, and proxies HTTPS resources
 
 ## Test Files
 
 | File | Description |
 |------|-------------|
-| `commands.go` | IPXECommands interface and data structures |
-| `helpers.go` | Test helpers, configuration, and utilities |
+| `commands.go` | Result types the protocol adapters return, and the suite's server config |
+| `helpers.go` | Test helpers, typed errors, configuration, and utilities |
+| `setup_test.go` | `TestMain`: the in-process server and its local fixture upstreams |
 | `dhcp_test.go` | DHCP protocol tests (DISCOVER/OFFER/REQUEST/ACK) |
 | `tftp_test.go` | TFTP download tests for firmware files |
-| `http_test.go` | HTTP boot script and menu tests |
+| `http_test.go` | HTTP boot script, menu, and proxy tests |
 | `multiprotocol_test.go` | Full flow and multi-protocol integration tests |
 
-## Prerequisites
+## What the Suite Starts
 
-### Required Services
+`TestMain` starts everything the tests need, in process, on `127.0.0.1`:
 
-1. **iPXE Server Running**: The PXE server must be running before tests execute
-2. **Network Access**: Tests require access to the server's network interface
-3. **Root Privileges**: DHCP tests require root or CAP_NET_ADMIN capability
+- the platform iPXE server (`pkg/ipxe`) with HTTP and TFTP on free ports, and
+  DHCP on `lo` at a free UDP port when `IPXE_DHCP_ENABLED=1`;
+- a **firmware upstream**: an `httptest` server the TFTP server downloads its
+  firmware from (`FirmwareUpstream`) into a temporary `FirmwareDir`. Each file
+  is deterministic (`FirmwareFixture`), so a test compares what TFTP served
+  byte for byte;
+- a **proxy upstream**: an `httptest` TLS server the `/proxy/https/` route
+  fetches from, trusted through `ProxyCACertPool`.
+
+No test reaches the outside network. If any of this fails to start, the whole
+run fails; nothing in the suite skips.
 
 ### Environment Variables
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `INTEGRATION_TEST` | - | Must be set to `1` to run integration tests |
-| `IPXE_SERVER_IP` | `10.99.99.1` | IP address of the PXE server |
-| `IPXE_HTTP_PORT` | `8080` | HTTP server port |
-| `IPXE_TFTP_PORT` | `69` | TFTP server port |
-| `IPXE_DHCP_ENABLED` | `0` | Set to `1` to run DHCP tests |
-| `IPXE_NETWORK_INTERFACE` | - | Network interface for DHCP testing |
-| `IPXE_TEST_NETWORK` | `10.99.99.0/24` | Test network CIDR |
+| Variable | Description |
+|----------|-------------|
+| `IPXE_DHCP_ENABLED` | Set to `1` and `TestMain` starts the DHCP server on loopback; the DHCP tests **fail** without it |
+| `IPXE_SERVER_IP`, `IPXE_HTTP_PORT`, `IPXE_TFTP_PORT`, `IPXE_DHCP_PORT` | Set by `TestMain` to the address and free ports it chose; not user inputs |
+
+The DHCP tests' client binds UDP port 68, which needs root or
+`CAP_NET_BIND_SERVICE`; the devcontainer runs as root.
 
 ## Running Tests
 
-### In Devcontainer (Recommended)
-
-The devcontainer provides an isolated environment with proper networking:
-
 ```bash
-# Start the devcontainer
-make devcontainer
-
-# Inside devcontainer, run integration tests
-INTEGRATION_TEST=1 go test -v ./test/integration/ipxe/...
-```
-
-### Using Makefile
-
-```bash
-# Run all iPXE integration tests
+# Run all iPXE integration tests in the devcontainer
 make integration-test-ipxe
 
-# Run specific test file
-INTEGRATION_TEST=1 go test -v ./test/integration/ipxe/... -run TestHTTP
-
-# Run DHCP tests (requires root)
-sudo INTEGRATION_TEST=1 IPXE_DHCP_ENABLED=1 go test -v ./test/integration/ipxe/... -run TestDHCP
+# Run one slice
+make integration-test-ipxe-dhcp
+make integration-test-ipxe-tftp
+make integration-test-ipxe-http
 ```
 
-### Test Categories
+The runner sets `IPXE_DHCP_ENABLED=1` for `integration-test-ipxe` and
+`integration-test-ipxe-dhcp`, and selects each slice with `-run`:
+`ipxe-dhcp` runs `.*DHCP.*`, `ipxe-tftp` runs `.*TFTP.*`, `ipxe-http` runs
+`^TestHTTP`.
 
-#### HTTP Tests (No Root Required)
-
-Test the HTTP boot script server:
-
-```bash
-INTEGRATION_TEST=1 go test -v ./test/integration/ipxe/... -run TestHTTP
-```
-
-#### TFTP Tests (No Root Required)
-
-Test TFTP firmware downloads:
-
-```bash
-INTEGRATION_TEST=1 go test -v ./test/integration/ipxe/... -run TestTFTP
-```
-
-#### DHCP Tests (Root Required)
-
-Test DHCP server functionality:
-
-```bash
-sudo INTEGRATION_TEST=1 IPXE_DHCP_ENABLED=1 go test -v ./test/integration/ipxe/... -run TestDHCP
-```
-
-#### Full Flow Tests
-
-Test complete PXE boot sequence:
-
-```bash
-INTEGRATION_TEST=1 go test -v ./test/integration/ipxe/... -run TestIPXEFull
-```
+On a host as root, `make integration-test-ipxe-local` runs the whole package
+with `IPXE_DHCP_ENABLED=1`. The older `run-tests.sh` beside the suite, which
+no target calls, sets the variable the same way on its `all`, `dhcp` and
+`multi` paths; `dhcp` runs `.*DHCP.*` and `multi` runs `^TestIPXE`.
 
 ## Test Architecture
 
@@ -108,110 +76,73 @@ INTEGRATION_TEST=1 go test -v ./test/integration/ipxe/... -run TestIPXEFull
 
 Instead of requiring full QEMU VM boots, these tests use lightweight protocol-level testing:
 
-1. **DHCP Testing**: Uses a DHCP client library to send DISCOVER/REQUEST packets and verify OFFER/ACK responses
-2. **TFTP Testing**: Uses a TFTP client to download firmware and verify file integrity
-3. **HTTP Testing**: Uses standard HTTP client to fetch scripts and verify content
+1. **DHCP Testing**: Sends DISCOVER/REQUEST from `0.0.0.0:68` to the server's
+   port and reads the broadcast reply back on loopback, matched by xid
+2. **TFTP Testing**: Downloads firmware and compares it with the fixture the
+   upstream served, including the `tsize` the server reports
+3. **HTTP Testing**: Fetches scripts and asserts their content
 
-### Test Isolation
+### The DHCP → TFTP / HTTP Chain
 
-Tests use isolated network configurations to avoid conflicts:
+`TestIPXEDHCPToHTTPChain` follows what a booting client is told, not URLs the
+test builds itself:
 
-- Default test network: `10.99.99.0/24`
-- Server IP: `10.99.99.1`
-- DHCP range: `10.99.99.100` - `10.99.99.200`
+- **Non-iPXE client**: the OFFER names `ipxe.efi` and the server address; the
+  test downloads that file over TFTP from that address and compares it with the
+  fixture.
+- **iPXE client**: the OFFER names `http://<ip>:<port>/boot.ipxe`; the test
+  fetches it, follows its `chain menu.ipxe?arch=...` to the menu, follows the
+  menu's `chain` to `/boot/test-kernel.ipxe`, and asserts that entry's `kernel`
+  and `initrd` lines.
 
 ### Concurrent Testing
 
 Tests verify the server handles concurrent clients:
 
 - Multiple DHCP clients requesting IPs simultaneously
-- Parallel TFTP downloads
+- Parallel TFTP downloads, each compared with the fixture
 - Concurrent HTTP requests
 
-## Expected Test Output
+## Common Failures
 
-### Successful Run
-
-```
-=== RUN   TestHTTPBootScript
-=== RUN   TestHTTPBootScript/GetBootScript
---- PASS: TestHTTPBootScript/GetBootScript (0.01s)
-=== RUN   TestHTTPBootScript/BootScriptContentType
---- PASS: TestHTTPBootScript/BootScriptContentType (0.01s)
---- PASS: TestHTTPBootScript (0.02s)
-
-=== RUN   TestTFTPDownloadFirmware
-=== RUN   TestTFTPDownloadFirmware/DownloadIPXEEFI
---- PASS: TestTFTPDownloadFirmware/DownloadIPXEEFI (2.34s)
---- PASS: TestTFTPDownloadFirmware (2.35s)
-
-PASS
-ok      github.com/jeremyhahn/go-trusted-platform/test/integration/ipxe  15.234s
-```
-
-### Common Failures
-
-#### Server Not Running
+#### DHCP Server Not Started
 
 ```
---- FAIL: TestHTTPBootScript/GetBootScript
-    http_test.go:42: HTTP server unreachable: dial tcp 10.99.99.1:8080: connect: connection refused
+--- FAIL: TestDHCPDiscoverOffer
+    helpers.go:187: DHCP server not running: set IPXE_DHCP_ENABLED=1 so TestMain starts it
 ```
 
-**Solution**: Start the iPXE server before running tests.
+**Solution**: Run through `make integration-test-ipxe-dhcp`, which sets the
+variable.
 
 #### DHCP Permission Denied
 
 ```
 --- FAIL: TestDHCPDiscoverOffer/PXEClientDiscover
-    dhcp_test.go:56: failed to create UDP connection: listen udp4 0.0.0.0:0: bind: permission denied
+    DHCP listen for OFFER: listen udp4 0.0.0.0:68: bind: permission denied
 ```
 
-**Solution**: Run DHCP tests with root privileges.
+**Solution**: Run DHCP tests as root (the devcontainer does).
 
-#### TFTP Timeout
+#### Suite Setup Failed
 
 ```
---- FAIL: TestTFTPDownloadFirmware/DownloadIPXEEFI
-    tftp_test.go:45: TFTP download of ipxe.efi should succeed: timeout
+iPXE suite setup failed: start iPXE server: ...
 ```
 
-**Solution**: Verify TFTP server is running and accessible.
+**Solution**: The step named in the message failed before any test ran; the
+run exits non-zero.
 
 ## Extending Tests
 
-### Adding New Tests
-
 1. Create test functions with `Test` prefix
-2. Use `SkipIfNotIntegration(t)` at the start
-3. Use appropriate context helpers for timeouts
-4. Follow existing patterns for protocol testing
-
-### Adding New Protocol Adapters
-
-Implement the `IPXECommands` interface:
-
-```go
-type IPXECommands interface {
-    Name() string
-    Setup(ctx context.Context) error
-    Teardown() error
-
-    // DHCP operations
-    SendDHCPDiscover(...) (*DHCPOfferResult, error)
-    SendDHCPRequest(...) (*DHCPAckResult, error)
-
-    // TFTP operations
-    TFTPDownload(...) (*TFTPDownloadResult, error)
-
-    // HTTP operations
-    HTTPGetBootScript(...) (*HTTPBootScriptResult, error)
-    // ... etc
-}
-```
+2. Use `GetTestServerConfig()` for the server address and ports
+3. Fail, never skip, when a server the test needs does not answer
+4. Compare served firmware with `FirmwareFixture(name)`
+5. Use the context helpers (`TFTPTestContext`, `HTTPTestContext`, ...) for timeouts
 
 ## Related Documentation
 
 - [iPXE Package Documentation](../../../docs/ipxe/)
-- [Integration Testing Guide](../README.md)
+- [Integration Testing Guide](../../../docs/test/integration.md)
 - [Devcontainer Setup](../../../build/docker/devcontainer/)

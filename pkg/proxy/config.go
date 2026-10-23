@@ -108,7 +108,9 @@ type RouteConfig struct {
 
 // AuthRequirements declares what the Phase 2 auth chain must enforce for a
 // route. The engine only interprets Mode; the remaining fields are carried to
-// the injected AuthChain.
+// the injected AuthChain. A route's permission is RequiredScopes; it carries
+// no role requirement, and a config still naming required-roles fails the
+// strict load of its proxy section (#926).
 type AuthRequirements struct {
 	Mode               string        `yaml:"mode" json:"mode" mapstructure:"mode"` // "mtls" | "token" | "mtls-or-token" | "public"
 	RequireIDevID      bool          `yaml:"require-idevid,omitempty" json:"require_idevid,omitempty" mapstructure:"require-idevid"`
@@ -116,7 +118,6 @@ type AuthRequirements struct {
 	BackendZone        string        `yaml:"backend-zone,omitempty" json:"backend_zone,omitempty" mapstructure:"backend-zone"`
 	RequireAttestation bool          `yaml:"require-attestation,omitempty" json:"require_attestation,omitempty" mapstructure:"require-attestation"`
 	AttestationMaxAge  time.Duration `yaml:"attestation-max-age,omitempty" json:"attestation_max_age,omitempty" mapstructure:"attestation-max-age"`
-	RequiredRoles      []string      `yaml:"required-roles,omitempty" json:"required_roles,omitempty" mapstructure:"required-roles"`
 	RequiredScopes     []string      `yaml:"required-scopes,omitempty" json:"required_scopes,omitempty" mapstructure:"required-scopes"`
 	OPAPolicy          string        `yaml:"opa-policy,omitempty" json:"opa_policy,omitempty" mapstructure:"opa-policy"`
 

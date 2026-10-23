@@ -14,9 +14,11 @@
 package platform
 
 import (
+	"context"
 	"errors"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestErrConnectionFailed(t *testing.T) {
@@ -117,14 +119,17 @@ func TestErrDaemonUnavailable(t *testing.T) {
 }
 
 func TestErrProtocolNotSupported(t *testing.T) {
-	t.Run("error message formatting", func(t *testing.T) {
-		err := ErrProtocolNotSupported{
-			Protocol: Protocol(99),
+	t.Run("message names the rejected transport", func(t *testing.T) {
+		msg := ErrProtocolNotSupported{Transport: "embedded"}.Error()
+		if !strings.Contains(msg, "not supported") || !strings.Contains(msg, `"embedded"`) {
+			t.Errorf("message %q should say not supported and name the transport", msg)
 		}
+	})
 
-		msg := err.Error()
-		if !strings.Contains(msg, "not supported") {
-			t.Error("error message should indicate not supported")
+	t.Run("empty transport is still quoted", func(t *testing.T) {
+		msg := ErrProtocolNotSupported{}.Error()
+		if !strings.Contains(msg, `""`) {
+			t.Errorf("message %q should show the empty name", msg)
 		}
 	})
 }
@@ -146,18 +151,27 @@ func TestErrProtocolNotImplemented(t *testing.T) {
 }
 
 func TestErrTimeout(t *testing.T) {
-	t.Run("error message formatting", func(t *testing.T) {
-		err := ErrTimeout{
-			Operation: "connect",
-			Duration:  "5s",
-		}
+	t.Run("message names the operation and elapsed time", func(t *testing.T) {
+		err := ErrTimeout{Operation: "REST health probe", Elapsed: 5 * time.Second, Err: context.DeadlineExceeded}
 
 		msg := err.Error()
-		if !strings.Contains(msg, "connect") {
-			t.Error("error message should contain operation")
+		if !strings.Contains(msg, "REST health probe") || !strings.Contains(msg, "5s") {
+			t.Errorf("message %q should contain operation and elapsed time", msg)
 		}
-		if !strings.Contains(msg, "5s") {
-			t.Error("error message should contain duration")
+	})
+
+	t.Run("unwraps to the deadline error", func(t *testing.T) {
+		err := ErrConnectionFailed{
+			Protocol: ProtocolREST,
+			Err:      ErrTimeout{Operation: "connect", Err: context.DeadlineExceeded},
+		}
+
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Error("errors.Is should reach context.DeadlineExceeded through ErrTimeout")
+		}
+		var timeout ErrTimeout
+		if !errors.As(err, &timeout) {
+			t.Error("errors.As should find ErrTimeout inside ErrConnectionFailed")
 		}
 	})
 }
@@ -189,34 +203,6 @@ func TestErrInvalidOptions(t *testing.T) {
 		}
 		if !strings.Contains(msg, "general error") {
 			t.Error("error message should contain reason")
-		}
-	})
-}
-
-func TestErrTLSConfigFailed(t *testing.T) {
-	t.Run("error message formatting", func(t *testing.T) {
-		underlying := errors.New("invalid certificate")
-		err := ErrTLSConfigFailed{
-			Err: underlying,
-		}
-
-		msg := err.Error()
-		if !strings.Contains(msg, "TLS") {
-			t.Error("error message should mention TLS")
-		}
-		if !strings.Contains(msg, "invalid certificate") {
-			t.Error("error message should contain underlying error")
-		}
-	})
-
-	t.Run("unwrap returns underlying error", func(t *testing.T) {
-		underlying := errors.New("invalid certificate")
-		err := ErrTLSConfigFailed{
-			Err: underlying,
-		}
-
-		if !errors.Is(err, underlying) {
-			t.Error("errors.Is should match underlying error")
 		}
 	})
 }
@@ -267,6 +253,72 @@ func TestErrCloseFailed(t *testing.T) {
 	})
 }
 
+func TestErrInsecureTransport(t *testing.T) {
+	t.Run("error message formatting", func(t *testing.T) {
+		err := ErrInsecureTransport{
+			Protocol: ProtocolREST,
+			Target:   "http://localhost:8443",
+			Reason:   "the REST server only offers TLS",
+		}
+
+		msg := err.Error()
+		if !strings.Contains(msg, "rest") {
+			t.Error("error message should contain protocol")
+		}
+		if !strings.Contains(msg, "http://localhost:8443") {
+			t.Error("error message should contain target")
+		}
+		if !strings.Contains(msg, "only offers TLS") {
+			t.Error("error message should contain reason")
+		}
+	})
+
+	t.Run("errors.As works correctly", func(t *testing.T) {
+		var err error = ErrInsecureTransport{Protocol: ProtocolMCP}
+
+		var insecureErr ErrInsecureTransport
+		if !errors.As(err, &insecureErr) {
+			t.Fatal("errors.As should match ErrInsecureTransport")
+		}
+		if insecureErr.Protocol != ProtocolMCP {
+			t.Errorf("Protocol = %v, want %v", insecureErr.Protocol, ProtocolMCP)
+		}
+	})
+}
+
+func TestErrUnsupportedOption(t *testing.T) {
+	t.Run("error message formatting", func(t *testing.T) {
+		err := ErrUnsupportedOption{
+			Protocol: ProtocolUnix,
+			Option:   "BearerToken",
+			Reason:   "the socket authenticates by peer credentials",
+		}
+
+		msg := err.Error()
+		if !strings.Contains(msg, "unix") {
+			t.Error("error message should contain protocol")
+		}
+		if !strings.Contains(msg, "BearerToken") {
+			t.Error("error message should contain option")
+		}
+		if !strings.Contains(msg, "peer credentials") {
+			t.Error("error message should contain reason")
+		}
+	})
+
+	t.Run("errors.As works correctly", func(t *testing.T) {
+		var err error = ErrUnsupportedOption{Protocol: ProtocolEmbedded, Option: "TLSConfig"}
+
+		var optErr ErrUnsupportedOption
+		if !errors.As(err, &optErr) {
+			t.Fatal("errors.As should match ErrUnsupportedOption")
+		}
+		if optErr.Option != "TLSConfig" {
+			t.Errorf("Option = %q, want %q", optErr.Option, "TLSConfig")
+		}
+	})
+}
+
 func TestSentinelErrors(t *testing.T) {
 	t.Run("ErrNilOptions", func(t *testing.T) {
 		if ErrNilOptions == nil {
@@ -283,15 +335,6 @@ func TestSentinelErrors(t *testing.T) {
 		}
 		if ErrEmptyAddress.Error() == "" {
 			t.Error("ErrEmptyAddress should have a message")
-		}
-	})
-
-	t.Run("ErrEmptySocketPath", func(t *testing.T) {
-		if ErrEmptySocketPath == nil {
-			t.Error("ErrEmptySocketPath should not be nil")
-		}
-		if ErrEmptySocketPath.Error() == "" {
-			t.Error("ErrEmptySocketPath should have a message")
 		}
 	})
 

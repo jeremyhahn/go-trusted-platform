@@ -16,6 +16,7 @@ package device
 import (
 	"time"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/device"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/middleware"
 )
 
@@ -37,69 +38,10 @@ type HeartbeatResponse struct {
 	ReceivedAt time.Time `json:"received_at"`
 }
 
-// DeviceRequest represents the request body for device creation/update.
-//
-// Two shapes are accepted to bridge the legacy REST contract and the SDK
-// contract:
-//
-//  1. Flat: {"id", "serial", "model", ...} — original REST shape used
-//     by the v1 integration tests.
-//  2. Nested: {"device": {"name", "serial", ...}} — shape produced by
-//     the JS SDK's `createDevice({device: {...}})` and the React form.
-//
-// All fields below are optional: the handler infers the canonical
-// representation from whichever subtree carries data. Unknown extra
-// fields produced by the WebUI (name, description, tpmVersion, etc.)
-// are tolerated rather than rejected.
-type DeviceRequest struct {
-	// Flat fields (legacy REST contract).
-	ID         ID     `json:"id,omitempty"`
-	AttestPub  string `json:"attest_pub,omitempty"`
-	AttestCert string `json:"attest_cert,omitempty"`
-	EKCert     string `json:"ek_cert,omitempty"`
-	EventLog   []byte `json:"event_log,omitempty"`
-	HashAlgoID uint32 `json:"hash_algo_id,omitempty"`
-	Model      string `json:"model,omitempty"`
-	Serial     string `json:"serial,omitempty"`
-	SigningPub string `json:"signing_pub,omitempty"`
-	SwitchName string `json:"switch_name,omitempty"`
-	SwitchPort string `json:"switch_port,omitempty"`
-
-	// Nested SDK envelope. When present, fields here override the flat
-	// fields above so the REST contract aligns with the JS SDK.
-	Device *DeviceRequestPayload `json:"device,omitempty"`
-
-	// UI-only fields tolerated for forwards-compatibility with WebUI
-	// forms. The server captures Name into the Device record's serial
-	// when no other identifier is supplied; the rest are informational.
-	Name               string `json:"name,omitempty"`
-	Type               string `json:"type,omitempty"`
-	DeviceType         string `json:"device_type,omitempty"`
-	Description        string `json:"description,omitempty"`
-	Manufacturer       string `json:"manufacturer,omitempty"`
-	Version            string `json:"version,omitempty"`
-	TPMManufacturer    string `json:"tpm_manufacturer,omitempty"`
-	TPMVersion         string `json:"tpm_version,omitempty"`
-	TPMFirmwareVersion string `json:"tpm_firmware_version,omitempty"`
-}
-
-// DeviceRequestPayload mirrors DeviceRequest's flat fields plus a Name
-// alias. The nested {device: {...}} envelope produced by the JS SDK is
-// decoded into this struct.
-type DeviceRequestPayload struct {
-	ID         ID     `json:"id,omitempty"`
-	AttestPub  string `json:"attest_pub,omitempty"`
-	AttestCert string `json:"attest_cert,omitempty"`
-	EKCert     string `json:"ek_cert,omitempty"`
-	EventLog   []byte `json:"event_log,omitempty"`
-	HashAlgoID uint32 `json:"hash_algo_id,omitempty"`
-	Model      string `json:"model,omitempty"`
-	Serial     string `json:"serial,omitempty"`
-	Name       string `json:"name,omitempty"`
-	SigningPub string `json:"signing_pub,omitempty"`
-	SwitchName string `json:"switch_name,omitempty"`
-	SwitchPort string `json:"switch_port,omitempty"`
-}
+// DeviceRequest is the request body for device creation and update. It is
+// the device package's shared request, so this listener and the daemon REST
+// listener accept the same bodies and reach the same entity (#484).
+type DeviceRequest = device.Request
 
 // DeviceResponse represents a device in API responses.
 //
@@ -174,9 +116,10 @@ type ProfileRequest struct {
 	AssignedAt time.Time `json:"assigned_at,omitempty"`
 	// TLSServerName is the certificate name the attestation collector
 	// verifies a node of this profile against when it dials it for a quote
-	// (#430). Empty means the device's own FQDN; an omitted value on PUT
-	// keeps the stored name (ProfileService.Update restores it).
-	TLSServerName string `json:"tls_server_name,omitempty"`
+	// (#430). An unset name means the device's own FQDN. On PUT an omitted
+	// (or null) value keeps the stored name and an explicit "" clears it
+	// (#462).
+	TLSServerName *string `json:"tls_server_name,omitempty"`
 }
 
 // NetworkPhaseRequest represents network configuration for a phase.

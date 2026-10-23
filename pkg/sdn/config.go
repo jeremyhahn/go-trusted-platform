@@ -26,7 +26,7 @@ import (
 	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/fabric"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ipsec"
+	ipsecconfig "github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ipsec/config"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/netplan"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/zone"
 )
@@ -251,6 +251,16 @@ func (c *Config) ZoneIndex() map[zone.Zone]zone.ZoneConfig {
 		idx[z.Name] = z
 	}
 	return idx
+}
+
+// GatewayDatapathSocket returns the gateway section's datapath-socket, or
+// empty when the SDN config, the gateway section or the socket is unset.
+// It is safe on a nil *Config.
+func (c *Config) GatewayDatapathSocket() string {
+	if c == nil || c.Gateway == nil {
+		return ""
+	}
+	return c.Gateway.DatapathSocket
 }
 
 // Validate checks the SDN configuration for internal consistency and derives
@@ -549,21 +559,36 @@ type OverlayConfig struct {
 	// VXLANPort is the UDP port for VXLAN encapsulation.
 	VXLANPort uint16 `yaml:"vxlan-port,omitempty" json:"vxlan_port,omitempty" mapstructure:"vxlan-port"`
 
-	// UnderlayInterface is the physical network interface used for VXLAN underlay
-	// traffic. When empty the daemon defaults to "lo" (loopback), which is always
-	// present and sufficient for single-node and test environments. Production
-	// deployments should set this to the uplink interface (e.g., "eth0", "bond0").
+	// UnderlayInterface is the network interface VXLAN underlay traffic leaves
+	// by (e.g. "eth0", "bond0"; "lo" for a loopback VTEP). Required without
+	// IPsec: there is no default, and an enabled overlay without it refuses to
+	// start. With IPsec it may be unset or name the fabric interface.
 	UnderlayInterface string `yaml:"underlay-interface,omitempty" json:"underlay_interface,omitempty" mapstructure:"underlay-interface"`
+
+	// VTEPAddress is the address this node registers as its VTEP and sources
+	// VXLAN from when IPsec is off. Empty uses the node's detected public IPv4;
+	// with neither, an enabled overlay refuses to start. A single-node or test
+	// overlay sets 127.0.0.1 explicitly. With IPsec the VTEP is always
+	// ipsec.local-address and this field is ignored.
+	VTEPAddress string `yaml:"vtep-address,omitempty" json:"vtep_address,omitempty" mapstructure:"vtep-address"`
 
 	// IPsec protects the underlay with host-to-host transport SAs between
 	// VTEPs and fails closed without them (docs/sdn/overlay/).
-	IPsec *ipsec.Config `yaml:"ipsec,omitempty" json:"ipsec,omitempty" mapstructure:"ipsec"`
+	IPsec *ipsecconfig.Config `yaml:"ipsec,omitempty" json:"ipsec,omitempty" mapstructure:"ipsec"`
 }
 
 // GatewayConfig configures the SDN gateway node.
 type GatewayConfig struct {
 	// Enabled controls whether gateway functionality is active.
 	Enabled bool `yaml:"enabled" json:"enabled" mapstructure:"enabled"`
+
+	// DatapathSocket is the control socket of gatewayd's datapath child
+	// (`<process.runtime-dir>/datapath.sock`, normally
+	// /run/gatewayd/datapath.sock). platformd serves the load-balancer,
+	// NAT64 and perf verbs from it over live IPC (#660). Empty leaves the
+	// load-balancer and NAT64 verbs unavailable and perf on platformd's
+	// local OVS connection.
+	DatapathSocket string `yaml:"datapath-socket,omitempty" json:"datapath_socket,omitempty" mapstructure:"datapath-socket"`
 }
 
 // ManagementVPNConfig configures the admin VPN on the gateway.

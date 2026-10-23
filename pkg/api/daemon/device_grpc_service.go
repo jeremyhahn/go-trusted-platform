@@ -39,13 +39,28 @@ type DeviceGRPCService struct {
 
 	deviceService  device.DeviceService
 	profileService device.DeviceProfileService
-	akTrust        AKTrustAnchor
-	verdictSink    verdict.Sink
-	verifier       *DeviceQuoteVerifier
+	// templateService backs CreateTemplate and CreateProfileFromTemplate;
+	// nil answers Unavailable.
+	templateService device.DeviceTemplateService
+	// configFinder backs FindConfigForDevice. It is the profile service when
+	// that implements device.ConfigForDeviceFinder; nil answers
+	// FailedPrecondition.
+	configFinder device.ConfigForDeviceFinder
+	akTrust      AKTrustAnchor
+	verdictSink  verdict.Sink
+	verifier     *DeviceQuoteVerifier
 	// attestCertRecorder backs RecordAttestationCertificate; nil answers
 	// Unavailable.
 	attestCertRecorder AttestCertRecorder
-	logger             *slog.Logger
+	// lifecycle backs DisableDevice and EnableDevice; nil answers
+	// FailedPrecondition.
+	lifecycle DeviceLifecycle
+	// bootCA is the CA bundle source for BootDelivery; boot is built from it
+	// once the service exists (it is its own quote verifier). A nil boot
+	// answers Unavailable.
+	bootCA BootCABundle
+	boot   BootProvider
+	logger *slog.Logger
 }
 
 // DeviceGRPCOption configures optional dependencies of a DeviceGRPCService.
@@ -81,7 +96,11 @@ func NewDeviceGRPCService(
 	for _, opt := range opts {
 		opt(s)
 	}
+	if finder, ok := profileService.(device.ConfigForDeviceFinder); ok {
+		s.configFinder = finder
+	}
 	s.verifier = NewDeviceQuoteVerifier(deviceService, profileService, s.akTrust, s.verdictSink, logger)
+	s.boot = newDeviceBootProvider(s)
 	return s
 }
 
@@ -325,7 +344,14 @@ func (s *DeviceGRPCService) UpdateProfile(
 		return nil, status.Error(codes.InvalidArgument, convErr.Error())
 	}
 
-	if err := s.profileService.Update(ctx, profile); err != nil {
+	// proto3 cannot tell an unset tls_server_name from an empty one, so the
+	// deliberate clear rides on its own request flag (#462).
+	var opts []device.ProfileUpdateOption
+	if req.GetClearTlsServerName() {
+		opts = append(opts, device.ClearTLSServerName)
+	}
+
+	if err := s.profileService.Update(ctx, profile, opts...); err != nil {
 		s.logger.Error("failed to update profile", "id", profile.ID, "error", err)
 		return nil, s.toGRPCError(err)
 	}
@@ -612,6 +638,27 @@ func (s *DeviceGRPCService) UnassignProfileFromDevice(
 	s.logger.Info("profile unassigned from device", "profile_id", req.GetProfileId())
 
 	return &platformv1.UnassignProfileFromDeviceResponse{
+		Profile: s.profileToPb(profile),
+	}, nil
+}
+
+// FindConfigForDevice resolves the profile a booting machine receives from
+// its EK serial or MAC address, through the same ProfileService method the
+// REST route calls.
+func (s *DeviceGRPCService) FindConfigForDevice(
+	ctx context.Context,
+	req *platformv1.FindConfigForDeviceRequest,
+) (*platformv1.FindConfigForDeviceResponse, error) {
+	if s.configFinder == nil {
+		return nil, status.Error(codes.FailedPrecondition, ErrDeviceConfigFinderUnavailable{}.Error())
+	}
+
+	profile, err := s.configFinder.FindConfigForDevice(ctx, req.GetEkSerial(), req.GetMacAddress())
+	if err != nil {
+		return nil, s.toGRPCError(err)
+	}
+
+	return &platformv1.FindConfigForDeviceResponse{
 		Profile: s.profileToPb(profile),
 	}, nil
 }
@@ -1016,6 +1063,13 @@ func (s *DeviceGRPCService) calculateTotalPages(total, pageSize int) int {
 }
 
 func (s *DeviceGRPCService) toGRPCError(err error) error {
+	return deviceStatusError(err)
+}
+
+// deviceStatusError classifies a device or profile service failure as the
+// gRPC status every transport reports for it. The MCP profile tools use it
+// too, so a missing profile is NotFound there as it is on gRPC.
+func deviceStatusError(err error) error {
 	if err == nil {
 		return nil
 	}
@@ -1023,9 +1077,32 @@ func (s *DeviceGRPCService) toGRPCError(err error) error {
 	errStr := err.Error()
 
 	// Typed validation failures from the service layer are client errors.
-	var vlans device.ErrProfileVLANsNotDistinct
-	if errors.As(err, &vlans) {
+	var (
+		vlans            device.ErrProfileVLANsNotDistinct
+		tlsClear         device.ErrTLSServerNameClearConflict
+		identityRequired device.ErrDeviceIdentityRequired
+		templateID       device.ErrInvalidTemplateID
+		templateName     device.ErrTemplateNameRequired
+		templateAbsent   device.ErrNilTemplate
+	)
+	if errors.As(err, &vlans) || errors.As(err, &tlsClear) ||
+		errors.As(err, &identityRequired) || errors.As(err, &templateID) ||
+		errors.As(err, &templateName) || errors.As(err, &templateAbsent) {
 		return status.Error(codes.InvalidArgument, errStr)
+	}
+	var noConfig device.ErrNoMatchingConfig
+	if errors.As(err, &noConfig) {
+		return status.Error(codes.NotFound, errStr)
+	}
+	var serialTaken device.ErrDeviceSerialExists
+	if errors.As(err, &serialTaken) {
+		return status.Error(codes.AlreadyExists, errStr)
+	}
+	// A daemon started without the template or profile service cannot
+	// serve the template RPCs, as errTemplateServiceUnavailable answers.
+	var templateDependency device.ErrTemplateProfileDependency
+	if errors.As(err, &templateDependency) {
+		return status.Error(codes.Unavailable, errStr)
 	}
 
 	// Check for common error patterns
@@ -1064,9 +1141,8 @@ func containsSubstring(s, substr string) bool {
 
 // AttestDevice verifies a TPM quote submitted for a device.
 //
-// It delegates to verifyDeviceQuote — the same implementation
-// PlatformServiceProvider.DeviceAttest uses, which is what QUIC and the MCP
-// device_attest tool reach. Adding a transport must not add a second
+// It delegates to verifyDeviceQuote — the same implementation QUIC and the
+// MCP device_attest tool reach. Adding a transport must not add a second
 // verifier: two implementations of "did this device attest" is how two
 // transports come to disagree about a security verdict.
 //

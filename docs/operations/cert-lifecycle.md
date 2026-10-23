@@ -1,5 +1,8 @@
 # Certificate Lifecycle -- Operator Runbook
 
+> **Status: REFERENCE** · Last verified: 2026-10-13
+> How platformd issues, registers and renews its managed TLS certificates (`pkg/app` cert targets and the renewal job).
+
 How the platform issues, deploys, and renews TLS certificates for
 its managed identities (webservices + BMCs), and how operators
 intervene when the automatic flow needs a nudge.
@@ -24,10 +27,12 @@ intervene when the automatic flow needs a nudge.
 | Kind | Where configured | Issuance trigger |
 |---|---|---|
 | `CertKindWebservice` | `WebServices` list in platform YAML | `App.InitWebServer()` at boot |
-| `CertKindBMC` | `bmc:` block in platform YAML | `App.InitBMCCertManagement()` at boot |
+| `CertKindBMC` | `bmc:` block in platform YAML | `initBMCCertManagement`, called from `App.InitCertManagement()` at boot |
+| `CertKindNTS` | `ntp.serve.nts` in platform YAML | `App.RegisterNTSCertTarget()` at boot (`pkg/daemon/commands/cert_renewal_wiring.go`) |
+| `CertKindDaemon` | Always, when a TLS transport is enabled (target `daemon.platformd`) | `applyDaemonTLSIdentity` via `App.RegisterCertTarget()` at boot (`pkg/daemon/commands/serve.go`); see [`../daemon/architecture.md`](../daemon/architecture.md) §Daemon TLS identity renewal while running |
 
-Future kinds: Kubernetes ingress, SDN switch mgmt, etc. The
-registry is kind-agnostic.
+A new kind is added to `validCertKinds` in `pkg/app/cert_targets.go`;
+the sweep itself treats every kind the same.
 
 ## The renewal job
 
@@ -47,8 +52,8 @@ MaxRetries:   3
 
 **`NodeAffinity` is mandatory** for correctness. Without it, in a
 3-node cluster the scheduler would fire the job on all three nodes
-simultaneously (see `docs/architecture/quicbaas-integration.md`
-Scheduler Clustering).
+simultaneously (see `docs/architecture/bmc-tls.md`
+Cluster scheduling).
 
 ## Boot wiring
 
@@ -92,10 +97,13 @@ The healthy boot line is `certificate renewal scheduled`.
 
 ## What the sweep verifies against
 
-A webservice target's `Current` dials loopback but sets `ServerName` to the
-service's configured DNS identity — certificates are issued for that name, never
-for `127.0.0.1`, so an unset `ServerName` fails hostname verification before
-`NotAfter` is read and the target is recorded failed forever.
+A webservice target's `Current` dials the webservice's `bind-host`, or loopback
+when it binds every interface (an empty or unspecified `bind-host`): a webservice
+pinned to one interface does not listen on `127.0.0.1`, so a loopback dial there
+would fail every read and nothing would renew it. The dial sets `ServerName` to
+the service's configured DNS identity — certificates are issued for that name,
+never for the dialed address, so an unset `ServerName` fails hostname
+verification before `NotAfter` is read and the target is recorded failed forever.
 
 The verification roots follow the **issuance mode**. A webservice that opts in to
 a public ACME directory serves a certificate signed by that public CA, so the
@@ -262,7 +270,7 @@ platformctl bmc cert replace \
 ### Rotate all certs on a node
 
 Kill the platformd process -- on next boot `InitWebServer` +
-`InitBMCCertManagement` re-issue every managed cert from scratch.
+`InitCertManagement` re-issue every managed cert from scratch.
 Existing certs with time remaining aren't touched, but any near-
 expiry certs will be renewed.
 
@@ -283,8 +291,8 @@ Fix: either
 2. Pin to `bmc.backend: smc-cgi` (opt into the CGI path for this
    BMC; bypasses the gate), or
 3. Run the X10 hardware validation procedure at
-   `docs/operations/x10-smc-cgi-validation.md` and flip the gate
-   platform-wide.
+   `docs/operations/x10-smc-cgi-validation.md` and set
+   `bmc.allow_cgi_fallback: true` for the validated BMC.
 
 ### `ErrRotationReverted` / `ErrRotationCatastrophic` in logs
 
@@ -301,7 +309,7 @@ Inspect the JSON payload for per-target errors. Common causes:
 - ACME rate limit hit -- wait, then trigger manually
 - BMC unreachable -- network issue; next tick will retry
 - Local CA unavailable -- platform CA service not ready; check
-  `platformctl ca status`
+  `platformctl ca info`
 
 ### Renewal job exists but never fires
 
@@ -335,7 +343,7 @@ Code paths:
 ## Related docs
 
 - `docs/architecture/bmc-tls.md` -- overall architecture
-- `docs/architecture/quicbaas-integration.md` -- scheduler clustering semantics
-- `docs/bmc/configuration.md` -- BMC YAML schema
-- `docs/bmc/operations.md` -- BMC admin tasks
+- `docs/architecture/bmc-tls.md` Cluster scheduling -- scheduler clustering semantics
+- `docs/bmc/engineering.md` §3 -- BMC YAML schema
+- `docs/bmc/user.md` -- BMC admin tasks
 - `docs/operations/x10-smc-cgi-validation.md` -- X10 hardware cert path runbook

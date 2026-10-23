@@ -14,7 +14,7 @@
 package compute
 
 import (
-	"fmt"
+	"context"
 
 	"github.com/spf13/cobra"
 
@@ -37,12 +37,15 @@ func newStopCommand(getFlags func() *cli.CommonFlags) *cobra.Command {
 		Short: "Stop a running virtual machine",
 		Long: `Stop a running virtual machine gracefully.
 
-The VM receives a shutdown signal and is given time to shut down
-gracefully. If the VM does not stop within the timeout period,
-it will be forcefully terminated when --force is specified.
+The VM receives an ACPI shutdown request and is given --timeout seconds
+to power down; if it is still running then, it is terminated. A timeout
+of 0 takes the daemon's default (30 seconds); the maximum is 3600.
+
+--force kills the VM at once without asking the guest, so it cannot be
+combined with --timeout.
 
 Examples:
-  # Stop a VM with default timeout
+  # Stop a VM with the default timeout
   platformctl compute stop myvm
 
   # Stop a VM with custom timeout (60 seconds)
@@ -61,57 +64,22 @@ Examples:
 	}
 
 	cmd.Flags().BoolVar(&opts.force, "force", false, "force stop the VM immediately")
-	cmd.Flags().Uint32VarP(&opts.timeout, "timeout", "t", 30, "seconds to wait before timeout")
+	cmd.Flags().Uint32VarP(&opts.timeout, "timeout", "t", 0, "seconds the guest gets to shut down (0 = daemon default)")
 
 	return cmd
 }
 
 // runStop executes the compute stop command
 func runStop(flags *cli.CommonFlags, vmID string, opts *stopOptions) error {
-	if vmID == "" {
-		return ErrInvalidVMConfig{Field: "id", Reason: "VM ID is required"}
-	}
-
-	base, err := cli.NewBaseCommand(flags)
-	if err != nil {
-		return err
-	}
-	defer base.Close()
-
-	grpcClient := base.Client().Compute()
-	if grpcClient == nil {
-		return ErrComputeClientNotInitialized{}
-	}
-
-	sdkClient := computesvc.NewClientFromGRPC(grpcClient)
-
-	params := &computesvc.StopVMParams{
-		ID:             vmID,
-		Force:          opts.force,
-		TimeoutSeconds: opts.timeout,
-	}
-
-	ctx := base.Context()
-	status, err := sdkClient.StopVMDomain(ctx, params)
-	if err != nil {
-		return ErrVMOperationFailed{Operation: "stop", ID: vmID, Err: err}
-	}
-
-	printer := base.Printer()
-
-	switch flags.OutputFormat {
-	case cli.OutputFormatJSON, cli.OutputFormatYAML:
-		return printer.Print(status)
-
-	case cli.OutputFormatTable:
-		if status != nil && status.Success {
-			printer.PrintSuccess(fmt.Sprintf("VM stopped successfully: %s", vmID))
-		} else if status != nil {
-			printer.PrintError(fmt.Sprintf("Failed to stop VM: %s", status.Message))
-		}
-		return nil
-
-	default:
-		return cli.ErrInvalidOutputFormat{Format: string(flags.OutputFormat)}
-	}
+	return runVMVerb(flags, vmID, vmVerb{
+		operation: "stop",
+		done:      "stopped",
+		call: func(ctx context.Context, client *computesvc.Client, id string) (*computesvc.VMStatus, error) {
+			return client.StopVMDomain(ctx, &computesvc.StopVMParams{
+				ID:             id,
+				Force:          opts.force,
+				TimeoutSeconds: opts.timeout,
+			})
+		},
+	})
 }

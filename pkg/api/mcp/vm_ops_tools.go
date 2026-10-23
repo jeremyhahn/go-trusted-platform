@@ -13,7 +13,11 @@
 
 package mcp
 
-import "context"
+import (
+	"context"
+
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/mcpwire"
+)
 
 // =============================================================================
 // Operational VM tool wiring (metrics, disk hotplug/unplug/resize, logs
@@ -91,7 +95,7 @@ func (r *ToolRegistry) vmOpsProvider() VMOpsServiceProvider {
 
 // registerVMOpsTools registers the operational VM tools.
 func (r *ToolRegistry) registerVMOpsTools() {
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "vm_metrics",
 		Description: "Get resource-usage metrics (CPU, memory, disk I/O, network) for a running VM",
 		InputSchema: map[string]interface{}{
@@ -106,7 +110,7 @@ func (r *ToolRegistry) registerVMOpsTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "vm_disk_attach",
 		Description: "Hot-plug a virtio disk onto a running VM, optionally creating the backing image",
 		InputSchema: map[string]interface{}{
@@ -123,7 +127,7 @@ func (r *ToolRegistry) registerVMOpsTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "vm_disk_detach",
 		Description: "Unplug a previously attached disk from a running VM",
 		InputSchema: map[string]interface{}{
@@ -136,7 +140,7 @@ func (r *ToolRegistry) registerVMOpsTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "vm_disk_resize",
 		Description: "Resize a VM disk (online via QMP when running, offline via qemu-img when stopped)",
 		InputSchema: map[string]interface{}{
@@ -150,7 +154,7 @@ func (r *ToolRegistry) registerVMOpsTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "vm_logs",
 		Description: "Get a bounded snapshot of a VM's serial console transcript and lifecycle events (non-following; use gRPC for live follow)",
 		InputSchema: map[string]interface{}{
@@ -163,7 +167,7 @@ func (r *ToolRegistry) registerVMOpsTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "vm_migrate",
 		Description: "Migrate a VM to another host. Cold migration is always available; live migration requires shared storage. Transport is mTLS-secured.",
 		InputSchema: map[string]interface{}{

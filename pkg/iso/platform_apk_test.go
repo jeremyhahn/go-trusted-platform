@@ -80,11 +80,18 @@ func apkSegment(t *testing.T, name, content string) []byte {
 // and data segments each a gzip stream, and its APKINDEX C: checksum.
 func platformAPK(t *testing.T, name, version string) (apk []byte, checksum string) {
 	t.Helper()
+	return platformAPKBuild(t, name, version, "")
+}
+
+// platformAPKBuild is platformAPK from a labelled build: builds of one version
+// with different labels differ in their data, as two runs of the builder do.
+func platformAPKBuild(t *testing.T, name, version, build string) (apk []byte, checksum string) {
+	t.Helper()
 	control := apkSegment(t, ".PKGINFO", fmt.Sprintf("pkgname = %s\npkgver = %s\narch = %s\n", name, version, platformTestArch))
 	apk = slices.Concat(
 		apkSegment(t, ".SIGN.RSA.builder.rsa.pub", "signature"),
 		control,
-		gzipTar(t, map[string]string{"usr/share/doc/" + name + "/README": name}),
+		gzipTar(t, map[string]string{"usr/share/doc/" + name + "/README": name + build}),
 	)
 	hasher, err := newAPKChecksumHasher()
 	require.NoError(t, err)
@@ -107,13 +114,19 @@ var platformBuilds = []struct{ name, version, depends string }{
 // every package but skip; only the named apk files are written.
 func platformOutput(t *testing.T, skip string, apks ...string) string {
 	t.Helper()
+	return platformOutputBuild(t, "", skip, apks...)
+}
+
+// platformOutputBuild is platformOutput holding the apks of a labelled build.
+func platformOutputBuild(t *testing.T, build, skip string, apks ...string) string {
+	t.Helper()
 	dir := t.TempDir()
 	archDir := filepath.Join(dir, platformTestArch)
 	require.NoError(t, os.MkdirAll(archDir, 0o755))
 
 	var index strings.Builder
 	for _, p := range platformBuilds {
-		apk, checksum := platformAPK(t, p.name, p.version)
+		apk, checksum := platformAPKBuild(t, p.name, p.version, build)
 		if p.name != skip {
 			fmt.Fprintf(&index, "P:%s\nV:%s\nA:%s\nS:%d\nC:%s\nD:%s\n\n", p.name, p.version, platformTestArch, len(apk), checksum, p.depends)
 		}
@@ -224,14 +237,14 @@ func TestCollectRequiredPackages_PlatformPackagesAreOptIn(t *testing.T) {
 }
 
 func TestPlatformPackages_ArePresentOnlyWhenTheMediaCarriesThem(t *testing.T) {
-	plain := InstallerOverrides{ExtraPackages: []string{"nginx"}}
-	assert.Equal(t, []string{"nginx"}, plain.installPackages())
+	plain := &PreFetchConfig{ExtraPackages: []string{"nginx"}}
+	assert.Equal(t, []string{"nginx"}, plain.installedPackages())
 
-	carried := InstallerOverrides{ExtraPackages: []string{"nginx"}, PlatformAPKDir: "/builder/output"}
-	assert.Equal(t, append([]string{"nginx"}, PlatformPackages()...), carried.installPackages())
+	carried := &PreFetchConfig{ExtraPackages: []string{"nginx"}, PlatformAPKDir: "/builder/output"}
+	assert.Equal(t, append(PlatformPackages(), "nginx"), carried.installedPackages())
 
 	// The result is a copy: changing it leaves the configuration alone.
-	packages := plain.installPackages()
+	packages := plain.installedPackages()
 	packages[0] = "changed"
 	assert.Equal(t, []string{"nginx"}, plain.ExtraPackages)
 }
@@ -304,6 +317,49 @@ func TestLoadPlatformIndex_PlatformEntriesWin(t *testing.T) {
 	assert.FileExists(t, filepath.Join(dest, platformApkFiles[0]))
 }
 
+// A rebuild keeps its version and pkgrel, so an ISO work directory reused
+// across builds already holds a file of each platform apk's name. The media
+// must carry the build its index describes, not the earlier one.
+func TestBuildLocalRepository_ReplacesTheApksOfAnEarlierBuild(t *testing.T) {
+	isoDir := t.TempDir()
+	mirror := platformMirror(t).URL
+	earlier := platformOutputBuild(t, "earlier build", "", platformApkFiles...)
+	require.NoError(t, newPlatformBuilder(t, mirror, earlier, isoDir).BuildLocalRepository(context.Background()))
+
+	rebuilt := platformOutput(t, "", platformApkFiles...)
+	require.NoError(t, newPlatformBuilder(t, mirror, rebuilt, isoDir).BuildLocalRepository(context.Background()))
+
+	repo := filepath.Join(isoDir, "apks-prefetch", platformTestArch)
+	for _, file := range platformApkFiles {
+		before, err := os.ReadFile(filepath.Join(earlier, platformTestArch, file))
+		require.NoError(t, err)
+		want, err := os.ReadFile(filepath.Join(rebuilt, platformTestArch, file))
+		require.NoError(t, err)
+		require.NotEqual(t, before, want, "the two builds of %s differ", file)
+
+		got, err := os.ReadFile(filepath.Join(repo, file))
+		require.NoError(t, err)
+		assert.Equal(t, want, got, "the media carries the rebuilt %s", file)
+	}
+}
+
+// The copy on the media is checked against the index entry, so an apk that
+// changed after its index was read never reaches the media unnoticed.
+func TestDownloadPackage_RefusesAnApkThatChangedAfterItsIndexWasRead(t *testing.T) {
+	platformDir := platformOutput(t, "", platformApkFiles...)
+	b := newPlatformBuilder(t, "http://unused.invalid", platformDir, t.TempDir())
+	require.NoError(t, b.loadPlatformIndex())
+	entry := b.packageIndex["trusted-platform-strongswan"]
+	require.NoError(t, os.Truncate(entry.LocalPath, 64))
+	dest := t.TempDir()
+
+	err := b.downloadPackage(context.Background(), entry, dest)
+
+	var invalid *ErrPlatformAPKInvalid
+	require.ErrorAs(t, err, &invalid)
+	assert.Equal(t, filepath.Join(dest, platformApkFiles[0]), invalid.Path)
+}
+
 func TestCopyLocalPackage_Errors(t *testing.T) {
 	dir := t.TempDir()
 	assert.Error(t, copyLocalPackage(filepath.Join(dir, "absent.apk"), filepath.Join(dir, "out.apk")), "source that does not exist")
@@ -341,7 +397,9 @@ func writePlatformAPK(t *testing.T, apk []byte, checksum string) *apkPackageEntr
 func TestVerifyPlatformAPK_AcceptsTheApkItsEntryDescribes(t *testing.T) {
 	apk, checksum := platformAPK(t, "trusted-platform-p11-host", "1.0.0-r0")
 
-	assert.NoError(t, verifyPlatformAPK(writePlatformAPK(t, apk, checksum)))
+	entry := writePlatformAPK(t, apk, checksum)
+
+	assert.NoError(t, verifyPlatformAPK(entry.LocalPath, entry))
 }
 
 // Each way a builder output apk can differ from its index entry is refused,
@@ -411,7 +469,7 @@ func TestVerifyPlatformAPK_RefusesWhatItsEntryDoesNotDescribe(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			entry := tt.entry(t)
 
-			err := verifyPlatformAPK(entry)
+			err := verifyPlatformAPK(entry.LocalPath, entry)
 
 			var invalid *ErrPlatformAPKInvalid
 			require.ErrorAs(t, err, &invalid)

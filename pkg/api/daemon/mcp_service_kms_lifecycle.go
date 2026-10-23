@@ -21,7 +21,10 @@ import (
 	"time"
 
 	baasservice "github.com/jeremyhahn/go-quicbaas/sdk/go/service"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/api/errclass"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/mcp"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // KMS key lifecycle and secrets operations for the MCP service provider.
@@ -49,6 +52,54 @@ type ErrSecretNotFound struct {
 
 func (e ErrSecretNotFound) Error() string {
 	return fmt.Sprintf("secret not found: %s", e.SecretID)
+}
+
+// GRPCStatus classifies the error as NotFound, the code the gRPC secrets
+// adapter returns for the same lookup.
+func (e ErrSecretNotFound) GRPCStatus() *status.Status {
+	return status.New(codes.NotFound, e.Error())
+}
+
+// ErrKMSKeyPolicyNotFound is returned when the backend reports a key's
+// policy missing.
+type ErrKMSKeyPolicyNotFound struct {
+	KeyID string
+}
+
+func (e ErrKMSKeyPolicyNotFound) Error() string {
+	return fmt.Sprintf("KMS key policy not found: %s", e.KeyID)
+}
+
+// GRPCStatus classifies the error as NotFound, the code the gRPC KMS
+// adapter returns for the same lookup.
+func (e ErrKMSKeyPolicyNotFound) GRPCStatus() *status.Status {
+	return status.New(codes.NotFound, e.Error())
+}
+
+// ErrSecretRotationPolicyNotFound is returned when a secret's rotation
+// policy cannot be read.
+type ErrSecretRotationPolicyNotFound struct {
+	SecretID string
+}
+
+func (e ErrSecretRotationPolicyNotFound) Error() string {
+	return fmt.Sprintf("secret rotation policy not found: %s", e.SecretID)
+}
+
+// GRPCStatus classifies the error as NotFound, the code the gRPC secrets
+// adapter returns for the same lookup.
+func (e ErrSecretRotationPolicyNotFound) GRPCStatus() *status.Status {
+	return status.New(codes.NotFound, e.Error())
+}
+
+// kmsLookupError answers a failed key lookup the way the gRPC KMS adapter
+// does: notFound when the backend's error is of class NotFound, otherwise
+// the operation failure, which keeps the backend's class through its Cause.
+func kmsLookupError(operation string, notFound, err error) error {
+	if errclass.Code(err) == codes.NotFound {
+		return notFound
+	}
+	return ErrKMSOperationFailed{Operation: operation, Cause: err}
 }
 
 // KMSRevokeKey revokes a key, marking it unusable.
@@ -128,7 +179,7 @@ func (p *MCPServiceProvider) KMSGetKeyMetadata(ctx context.Context, keyID string
 
 	resp, err := p.kmsService.GetKeyMetadata(ctx, &baasservice.GetKeyMetadataRequest{KeyID: keyID})
 	if err != nil {
-		return nil, ErrKMSKeyNotFound{KeyID: keyID}
+		return nil, kmsLookupError("GetKeyMetadata", ErrKMSKeyNotFound{KeyID: keyID}, err)
 	}
 
 	return resp.Metadata, nil
@@ -222,7 +273,7 @@ func (p *MCPServiceProvider) KMSGetKeyPolicy(ctx context.Context, keyID string) 
 
 	resp, err := p.kmsService.GetKeyPolicy(ctx, &baasservice.GetKeyPolicyRequest{KeyID: keyID})
 	if err != nil {
-		return nil, ErrKMSOperationFailed{Operation: "GetKeyPolicy", Cause: err}
+		return nil, kmsLookupError("GetKeyPolicy", ErrKMSKeyPolicyNotFound{KeyID: keyID}, err)
 	}
 
 	return resp.Policy, nil
@@ -370,8 +421,125 @@ func (p *MCPServiceProvider) SecretGetRotationPolicy(ctx context.Context, secret
 
 	resp, err := p.secretsService.GetRotationPolicy(ctx, &baasservice.GetRotationPolicyRequest{SecretID: secretID})
 	if err != nil {
-		return nil, ErrSecretsOperationFailed{Operation: "GetRotationPolicy", Cause: err}
+		return nil, ErrSecretRotationPolicyNotFound{SecretID: secretID}
 	}
 
+	return resp, nil
+}
+
+// SecretGetVersion retrieves one version of a secret.
+func (p *MCPServiceProvider) SecretGetVersion(ctx context.Context, secretID string, version uint64) (interface{}, error) {
+	if p.secretsService == nil {
+		return nil, ErrServiceNotAvailable{Service: "secrets"}
+	}
+	if secretID == "" {
+		return nil, ErrKMSInvalidParameter{Parameter: "secret_id", Reason: "secret ID is required"}
+	}
+	if version == 0 {
+		return nil, ErrKMSInvalidParameter{Parameter: "version", Reason: "version is required"}
+	}
+
+	resp, err := p.secretsService.GetSecretVersion(ctx, &baasservice.GetSecretVersionRequest{
+		SecretID: secretID,
+		Version:  version,
+	})
+	if err != nil {
+		return nil, ErrSecretNotFound{SecretID: secretID}
+	}
+
+	return resp, nil
+}
+
+// SecretListVersions lists the versions of a secret without their data.
+func (p *MCPServiceProvider) SecretListVersions(ctx context.Context, secretID string, limit int) (interface{}, error) {
+	if p.secretsService == nil {
+		return nil, ErrServiceNotAvailable{Service: "secrets"}
+	}
+	if secretID == "" {
+		return nil, ErrKMSInvalidParameter{Parameter: "secret_id", Reason: "secret ID is required"}
+	}
+
+	resp, err := p.secretsService.ListSecretVersions(ctx, &baasservice.ListSecretVersionsRequest{
+		SecretID: secretID,
+		Limit:    limit,
+	})
+	if err != nil {
+		return nil, ErrSecretNotFound{SecretID: secretID}
+	}
+
+	return resp, nil
+}
+
+// SecretRotate stores new data as the secret's next version.
+func (p *MCPServiceProvider) SecretRotate(ctx context.Context, req *mcp.SecretRotateRequest) (interface{}, error) {
+	if p.secretsService == nil {
+		return nil, ErrServiceNotAvailable{Service: "secrets"}
+	}
+	if req == nil || req.SecretID == "" {
+		return nil, ErrKMSInvalidParameter{Parameter: "secret_id", Reason: "secret ID is required"}
+	}
+	if len(req.NewData) == 0 {
+		return nil, ErrKMSInvalidParameter{Parameter: "new_data", Reason: "new secret data is required"}
+	}
+
+	resp, err := p.secretsService.RotateSecret(ctx, &baasservice.RotateSecretRequest{
+		SecretID: req.SecretID,
+		NewData:  req.NewData,
+		Metadata: req.Metadata,
+	})
+	if err != nil {
+		return nil, ErrSecretsOperationFailed{Operation: "RotateSecret", Cause: err}
+	}
+
+	p.logger.Info("secret rotated", "secret_id", req.SecretID)
+	return resp, nil
+}
+
+// SecretRollback makes an earlier version's data the secret's newest version.
+func (p *MCPServiceProvider) SecretRollback(ctx context.Context, secretID string, targetVersion uint64) (interface{}, error) {
+	if p.secretsService == nil {
+		return nil, ErrServiceNotAvailable{Service: "secrets"}
+	}
+	if secretID == "" {
+		return nil, ErrKMSInvalidParameter{Parameter: "secret_id", Reason: "secret ID is required"}
+	}
+	if targetVersion == 0 {
+		return nil, ErrKMSInvalidParameter{Parameter: "target_version", Reason: "target version is required"}
+	}
+
+	resp, err := p.secretsService.RollbackSecret(ctx, &baasservice.RollbackSecretRequest{
+		SecretID:      secretID,
+		TargetVersion: targetVersion,
+	})
+	if err != nil {
+		return nil, ErrSecretsOperationFailed{Operation: "RollbackSecret", Cause: err}
+	}
+
+	p.logger.Info("secret rolled back", "secret_id", secretID, "target_version", targetVersion)
+	return resp, nil
+}
+
+// SecretUpdateStatus enables, disables or soft-deletes a secret.
+func (p *MCPServiceProvider) SecretUpdateStatus(ctx context.Context, secretID, status string) (interface{}, error) {
+	if p.secretsService == nil {
+		return nil, ErrServiceNotAvailable{Service: "secrets"}
+	}
+	if secretID == "" {
+		return nil, ErrKMSInvalidParameter{Parameter: "secret_id", Reason: "secret ID is required"}
+	}
+	secretStatus := baasservice.SecretStatus(status)
+	if !secretStatus.IsValid() {
+		return nil, ErrKMSInvalidParameter{Parameter: "status", Reason: "status must be enabled, disabled or deleted"}
+	}
+
+	resp, err := p.secretsService.UpdateSecretStatus(ctx, &baasservice.UpdateSecretStatusRequest{
+		SecretID: secretID,
+		Status:   secretStatus,
+	})
+	if err != nil {
+		return nil, ErrSecretsOperationFailed{Operation: "UpdateSecretStatus", Cause: err}
+	}
+
+	p.logger.Info("secret status updated", "secret_id", secretID, "status", status)
 	return resp, nil
 }

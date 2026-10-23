@@ -6,10 +6,10 @@ import (
 	"os"
 
 	"github.com/spf13/cobra"
-	"gopkg.in/yaml.v2"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/app"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/config"
 	pkgdiskimage "github.com/jeremyhahn/go-trusted-platform/pkg/diskimage"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/installer"
 )
@@ -61,7 +61,7 @@ func loadInstallerConfig(flags *assembleFlags) (*installer.Config, error) {
 			return nil, ErrConfigLoadFailed{Path: flags.platformConfig, Err: err}
 		}
 		var platform app.App
-		if err := yaml.Unmarshal(data, &platform); err != nil {
+		if err := config.DecodeYAML(data, &platform); err != nil {
 			return nil, ErrConfigLoadFailed{Path: flags.platformConfig, Err: err}
 		}
 		cfg, err := platform.GetInstallerConfig()

@@ -212,6 +212,8 @@ message RRSIGRecord {
   uint32 key_tag = 7;
   string signer_name = 8;
   string signature = 9;
+  // Owner of the signed RRset; empty means the zone apex.
+  string name = 10;
 }
 
 // NSEC Record

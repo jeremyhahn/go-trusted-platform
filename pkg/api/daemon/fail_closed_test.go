@@ -36,6 +36,7 @@ import (
 	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
@@ -199,13 +200,17 @@ func TestDaemon_QUICFailsClosedWithoutTLS(t *testing.T) {
 	config.QUICConfig = nil // no TLS material of any kind
 	config.QUICListenAddr = "127.0.0.1:0"
 
+	// quic.NewServer refuses a config without TLS, and an enabled transport
+	// that cannot be constructed fails New itself (#444): there is no daemon
+	// to start without QUIC.
 	d, err := New(config)
-	require.NoError(t, err)
-
-	err = d.Start(context.Background())
 	require.Error(t, err)
-	var quicFailed ErrQUICServerStartFailed
-	assert.ErrorAs(t, err, &quicFailed)
+	assert.Nil(t, d)
+	var constructFailed ErrTransportConstructionFailed
+	require.ErrorAs(t, err, &constructFailed)
+	assert.Equal(t, transportQUIC, constructFailed.Transport)
+	var invalidConfig quicwire.ErrInvalidConfig
+	assert.ErrorAs(t, err, &invalidConfig, "the cause must be the QUIC server's own refusal")
 }
 
 // TestDaemon_RESTStartFailureIsFatal asserts Daemon.Start propagates a REST

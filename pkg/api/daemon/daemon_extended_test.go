@@ -305,8 +305,7 @@ func TestDaemon_ForceStopWithNilServices(t *testing.T) {
 
 		// ForceStop should not panic with nil services
 		err = d.ForceStop()
-		// May return server error if already stopped
-		if err != nil && err.Error() != "server is not running" {
+		if err != nil {
 			t.Errorf("ForceStop() unexpected error: %v", err)
 		}
 	})
@@ -331,7 +330,7 @@ func TestDaemon_StopWithNilGRPCServer(t *testing.T) {
 
 		// Verify gRPC server is nil
 		if d.grpcServer != nil {
-			t.Skip("gRPC server should be nil when disabled")
+			t.Error("gRPC server should be nil when gRPC TCP is disabled")
 		}
 
 		// Stop should not panic with nil gRPC server

@@ -125,7 +125,9 @@ which does so over the transport handed out by `TrustedPlatformModule`.
    the golden measurement. **PCR values are volatile — this must happen every
    boot or every TPM-sealed platform secret is unreachable.**
 6. **Provision if needed.** `InitTPM` is idempotent. If the TPM is unprovisioned
-   it runs the destructive recovery path (§4c).
+   it runs the destructive recovery path (§4c) — on a disk node. A diskless
+   node (`platform_boot_model=diskless` on the signed kernel command line)
+   decides from the TPM alone (§4d).
 7. **Injection.** The single handle is passed to the gRPC service, the QUIC
    TPM2 handler, the MCP tool service and the REST handler set.
 
@@ -178,6 +180,120 @@ but missing IAK/IDevID certificates is completed non-destructively by
 `CompletePlatformIdentity`. Full detail:
 [docs/installer/factory-reset.md](../installer/factory-reset.md) §platformd's
 seal-preservation gate.
+
+### 4d. Diskless node — the identity lives in the TPM
+
+A diskless node (#690) boots a verified read-only root under a tmpfs overlay,
+so none of §4c's evidence outlives a boot: no ESP to probe, no PPI-clear
+sentinel, no identity certificates. `InitTPM` reads the boot model from
+`/proc/cmdline` (`bootsDiskless`; an unreadable or ambiguous command line is
+`ErrBootModelUnreadable`, never a guess) and on a diskless node decides from
+the TPM alone (`pkg/app/tpm_diskless.go`):
+
+1. **Provisioned means resident.** Each configured handle — EK, SSRK, Platform
+   SRK, IAK, IDevID — must hold a `fixedTPM`/`fixedParent` object of its role
+   (the EK and both SRKs restricted decryption keys, the IAK a restricted
+   signing key, the IDevID an unrestricted signing key) whose reported Name is
+   the Name of its public area. All five resident: the TPM is adopted
+   untouched — no reset, no `Provision`, no clear — on every boot.
+2. **First provisioning only on an empty TPM, once.** All five handles empty
+   runs `FactoryResetWithClear` (empty lockout auth) and `ProvisionPlatform`,
+   which leaves the five handles resident, so the next boot takes step 1.
+   Anything between — some handles empty, or a handle holding an object of
+   another role or under a Name that is not its public area's — is
+   `ErrTPMIdentityPartial`, naming the empty and the mismatched handles. The
+   node fails closed and clears nothing: TPM2_Clear would destroy whatever the
+   TPM still holds, an enrolled identity included, so recovering such a TPM is
+   an operator decision, never an automatic repair. A TPM whose manufacturer
+   persisted the EK at the configured EK handle is therefore refused too; the
+   operator clears it (firmware TPM clear) before the node's first boot.
+
+   *Recovering a partial TPM.* Read the handles `ErrTPMIdentityPartial` names.
+   If the TPM holds no identity worth keeping (an interrupted first
+   provisioning, a vendor-persisted EK), clear it from the firmware and boot:
+   the node provisions all five handles on the empty TPM. The IDevID and IAK
+   are new keys after a clear, so the control plane's recorded enrollment for
+   the device no longer matches the node's leaf; re-enroll the device before
+   its first diskless boot delivery, or `BootCertificate` and `BootDelivery`
+   refuse it. If the TPM does hold an enrolled identity, do not clear it:
+   restore the missing or mismatched objects from the enrollment, or accept
+   the loss and re-enroll as above. A
+   refused reset is logged and provisioning proceeds; there is no seal probe
+   (no LUKS seal exists) and no PPI `ForceClear` escalation (its loop guard is
+   a file, which would not outlive the reset).
+3. **A read failure is not an empty TPM.** Any `ReadHandle` failure other than
+   an empty handle is `ErrTPMHandleUnreadable`, and a configuration missing a
+   handle is `ErrTPMHandleUnset` — provisioning begins with TPM2_Clear.
+4. **Certificates come back from the control plane, never re-minted.** A
+   resident identity whose IAK/IDevID certificates are not on this boot's
+   tmpfs does not run `CompletePlatformIdentity` — re-enrollment recreates the
+   IDevID under the endorsement hierarchy auth, which a stateless node does not
+   hold across boots, and each refused attempt counts toward dictionary-attack
+   lockout. It recovers them instead (`recoverDisklessIdentity`,
+   `pkg/app/tpm_diskless_boot.go`), after `InitCA` brings up the key store
+   that signs with the IDevID and the certificate store the chain lands in:
+   1. The control plane is the ACME directory's origin
+      (`acme.client.directory-url`), the identity is the node's EK-derived
+      name (step 5 below) — the name the IDevID was enrolled under. The node trusts the OS store plus the image's
+      `ca-bundle.pem` (the well-known bundle paths `InitACMEClient` reads).
+   2. `POST /api/v1/device/boot/certificate` returns the IDevID chain
+      recorded at enrollment, which the node needs before it can present it.
+      Having no certificate yet, the node proves itself in the request
+      instead. It reads the IDevID public key from its persistent handle and
+      signs the identity and the connection's channel value (step 3) with the
+      TPM-resident key. The control plane checks that signature against the
+      recorded leaf. Every request without that proof gets one identical
+      `403`, so the route does not reveal which names are enrolled.
+   3. The node presents that chain over TLS 1.3 mTLS, signing with the
+      TPM-resident IDevID, and `POST /api/v1/device/boot` answers a 32-byte
+      challenge the server takes from the connection itself (the TLS exporter,
+      label `EXPORTER-go-trusted-platform-diskless-boot`) with an IAK quote
+      over the default PCR selection. A quote is valid on the connection that
+      produced it and nowhere else; there is no nonce round-trip to replay.
+   4. The control plane refuses unless the presented leaf is the recorded
+      IDevID, it chains to the platform CA with the client-auth usage, the
+      quote's nonce is the connection's, and the device quote verifier — the
+      one `POST /api/v1/device/attest` runs — returns a verified verdict for
+      that device. Revoked and suspended devices are refused; a quarantined one
+      may boot (quarantine is enforced on its port). It then returns that
+      device's IDevID chain, IAK certificate, the platform CA bundle and its
+      provisioning profile ([docs/device/api.md](../device/api.md) §Diskless
+      boot delivery).
+   5. The node stores nothing it has not checked against its TPM: the IAK
+      certificate must certify the resident IAK. The issuers go to the CA
+      certificate store, the leaves to it and to the TPM certificate store,
+      which completes the platform identity for the rest of `InitTPM`.
+
+   Any failure — no control plane configured, CP unreachable or untrusted, a
+   refusal, material that does not certify the resident keys — stops startup
+   with `ErrDisklessIdentityUnavailable`, which names the step that refused
+   and carries its cause. There is no fallback to re-enrollment and no
+   partially-identified start.
+5. **The node is named after its EK, never after the image.** Every node
+   built from one media set boots the same squashfs, so the platform config's
+   TCG product serial and identity Common Names and `/etc/hostname` are the
+   same on all of them. A diskless node therefore derives its identity from
+   its TPM (`applyDisklessNodeIdentity`): `ek-` and the first 128 bits, in hex,
+   of the SHA-256 of the EK's DER SubjectPublicKeyInfo
+   (`entities.EKNodeIdentity`). It does so on every boot — on first
+   provisioning right after `TPM.Provision` leaves the EK resident and before
+   anything is enrolled — and that name replaces the image's
+   `tpm.idevid.serial` (the TCG product serial, the device registry's key),
+   the IDevID and IAK Common Names (`<identity>-idevid`, `<identity>-iak`) and
+   the ACME enrollment Common Name. The hostname stays the image's and is
+   cosmetic. On the control plane the registration refuses an `ek-` serial or
+   Common Name that is not the identity of the EK certificate the enrollment's
+   credential activation proved (`ErrRegistrationEKIdentityUnbound`,
+   `pkg/device/registration.go`), so the record a node recovers from is the
+   one bound to its TPM's EK. An EK the node cannot read is
+   `ErrDisklessIdentityUnavailable`.
+
+**Open:** the verdict reports `pcr_baseline_source`. Until a signed baseline is
+published for a device, the first delivery captures a trust-on-first-use
+baseline, so that boot's quote proves freshness and IAK possession, not that
+the boot state is the expected one; the node logs which applied. Where a
+stateless node's PIN material lives across boots is an open owner decision
+(the SO PIN is never stored — #681).
 
 ## 5. Trust boundaries
 

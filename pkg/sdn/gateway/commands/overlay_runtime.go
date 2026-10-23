@@ -291,13 +291,21 @@ func overlayPlatformError(record string, err error) error {
 	return err
 }
 
+// overlayIPAMAllocationFromProto converts a listed allocation, carrying the
+// status platformd sent. A missing or unknown status is an error, never
+// active: an allocation IPAM expired for inactivity keeps a zero ExpiresAt, so
+// only its status keeps admission from treating it as live (#765).
 func overlayIPAMAllocationFromProto(allocation *platformv1.IPAllocation, zoneName string) (*ipam.Allocation, error) {
 	if allocation == nil {
 		return nil, nil
 	}
 	addr, err := netip.ParseAddr(allocation.GetIp())
 	if err != nil {
-		return nil, err
+		return nil, &ErrOverlayIPAMAllocation{IP: allocation.GetIp(), Reason: "address does not parse", Cause: err}
+	}
+	allocationStatus := ipam.AllocationStatus(allocation.GetStatus())
+	if !allocationStatus.IsValid() {
+		return nil, &ErrOverlayIPAMAllocation{IP: allocation.GetIp(), Reason: "status " + strconv.Quote(allocation.GetStatus()) + " is not an IPAM allocation status"}
 	}
 	converted := &ipam.Allocation{
 		ID:          allocation.GetIp(),
@@ -308,7 +316,7 @@ func overlayIPAMAllocationFromProto(allocation *platformv1.IPAllocation, zoneNam
 		Hostname:    allocation.GetHostname(),
 		AllocatedAt: protoTime(allocation.GetAllocatedAt()),
 		ExpiresAt:   protoTime(allocation.GetExpiresAt()),
-		Status:      ipam.AllocationStatusActive,
+		Status:      allocationStatus,
 	}
 	return converted, nil
 }

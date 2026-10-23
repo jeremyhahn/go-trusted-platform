@@ -14,6 +14,7 @@
 package drive
 
 import (
+	"github.com/jeremyhahn/go-luks2/pkg/luks2"
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 )
 
@@ -511,6 +512,14 @@ func (p *PartitionConfig) Validate() error {
 	}
 	if p.Size == "" {
 		return ErrPartitionSizeRequired
+	}
+	if p.Encryption != nil && p.Encryption.Enabled {
+		if p.Encryption.MappingName == "" {
+			return ErrEncryptionMappingNameRequired
+		}
+		if err := luks2.ValidateMappingName(p.Encryption.MappingName); err != nil {
+			return &InvalidMappingNameError{PartitionID: p.ID, Name: p.Encryption.MappingName, Err: err}
+		}
 	}
 	return nil
 }

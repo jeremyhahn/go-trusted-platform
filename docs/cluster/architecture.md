@@ -55,7 +55,7 @@ the bottom and out of this repository:
 
 ```
        ┌────────────────────────────────────────────────────────────┐
-       │  transports: gRPC · Unix · REST · MCP   (no QUIC, no CLI)  │
+       │  transports: gRPC · Unix · REST · QUIC · MCP   (no CLI)    │
        └───────────────────────────┬────────────────────────────────┘
                                    │
        ┌───────────────────────────▼────────────────────────────────┐
@@ -127,27 +127,26 @@ Verified by grep on 2026-08-18:
 | `daemon.NewClusterService` | **none** |
 | `daemon.Daemon.SetClusterService` | **none** |
 
-The gRPC service the daemon actually registers is
-`daemon.ClusterGRPCService` (`pkg/api/daemon/cluster_grpc_service.go`), whose
-own doc comment says *"This stub returns Unimplemented for all methods until the
-full cluster coordinator is wired in."* It does. The REST handlers wrap that
-same stub, and MCP's `platform_cluster_*` tools return
-`ErrClusterNotConfigured` because no provider is ever set.
+The gRPC service the daemon registers, on the TCP listener and the Unix
+socket, is the full `ClusterGRPCService` in `pkg/api/grpc/cluster_service.go`.
+Its `grpc.ClusterService` dependency is the daemon adapter
+`clusterGRPCBackend` (`pkg/api/daemon/cluster_grpc_backend.go`), which
+answers from the daemon's `ClusterServicer`. The REST handlers, the QUIC `0x90`
+sub-opcodes and the MCP `platform_cluster_*` tools all call that registered
+service. `Daemon.SetClusterService` sets the servicer for all of them — and
+nothing calls it.
 
 **So today: the interfaces, the coordinator implementation, the state machine,
 the node registry, the transports and the CLI package all exist, and no shipped
 code path connects them to a consensus engine.** Every cluster call on every
-transport returns "unimplemented" or "not configured". That is the honest state
+transport returns "unavailable" or "not configured". That is the honest state
 of this feature, it is recorded here rather than in a footnote, and
 [api.md](api.md) shows it per capability.
 
-A second, fully-implemented `ClusterGRPCService` exists at
-`pkg/api/grpc/cluster_service.go`, delegating to a `grpc.ClusterService`
-interface with a richer request shape (cluster names, labels, selectors,
-pagination). **It has no implementor and is not registered anywhere.** Two
-service types with the same name in two packages, one stubbed and registered,
-one complete and unregistered, is the single most confusing thing in this
-feature — [engineering.md](engineering.md) §8.
+The daemon once registered a second, stubbed `ClusterGRPCService` of its own
+whose every RPC returned `Unimplemented`, while the complete one went
+unregistered. That stub was deleted (#317); [engineering.md](engineering.md) §8
+describes the adapter that replaced it.
 
 ### Alternatives rejected
 
@@ -176,10 +175,11 @@ feature — [engineering.md](engineering.md) §8.
 | `ExtendedNode`, `ExtendedNodeList`, `ExtendedNodeRegistry` | `pkg/cluster/node.go` | this repo |
 | 37 typed errors | `pkg/cluster/errors.go` | this repo |
 | Daemon service (build tag `cluster`) | `pkg/api/daemon/cluster_service.go` | this repo |
-| Registered gRPC service (**a stub**) | `pkg/api/daemon/cluster_grpc_service.go` | this repo |
-| REST adapter over that stub | `pkg/api/daemon/cluster_rest.go` | this repo |
-| MCP tools and the tag-agnostic bridge | `pkg/api/mcp/cluster_tools.go`, `pkg/api/daemon/mcp_cluster.go`, `mcp_cluster_adapter.go` | this repo |
-| Unregistered full gRPC service | `pkg/api/grpc/cluster_service.go`, `cluster_types.go` | this repo |
+| Registration and the adapter over `ClusterServicer` | `pkg/api/daemon/cluster_grpc_backend.go` | this repo |
+| REST adapter over the registered service | `pkg/api/daemon/cluster_rest.go` | this repo |
+| QUIC category handler over the registered service | `pkg/api/daemon/quic_cluster.go`, `sdk/go/wire/quicwire/cluster_opcodes.go` | this repo |
+| MCP tools over the registered service, and the tag-agnostic servicer types | `pkg/api/mcp/cluster_tools.go`, `pkg/api/daemon/mcp_cluster.go`, `mcp_cluster_adapter.go` | this repo |
+| Registered gRPC service | `pkg/api/grpc/cluster_service.go`, `cluster_types.go` | this repo |
 | CLI package (**not registered on any root command**) | `pkg/cli/commands/cluster/` | this repo |
 | SDK client | `sdk/go/services/cluster/` | this repo |
 | **Raft consensus, elections, log replication, snapshots** | **go-quicraft** | **not this repo** |
@@ -286,15 +286,14 @@ Within this repo's half:
    `membershipManager.Join` rejects only the empty string. **There is no
    allow-list, no identity check and no attestation gate on a join address in
    this layer.**
-3. **The cluster API is not in the authorization catalog.** `ClusterService` is
-   **absent** from the gRPC scope catalog (`pkg/api/grpc/method_permissions.go`),
-   and the `platform_cluster_*` tools are **absent** from the MCP permission map
-   (`pkg/api/mcp/authz.go`). Both catalogs are default-allow, so **any validated
-   token could call Bootstrap, Join and Leave** if the service were wired.
-   Today it is not, so the exposure is latent rather than live — but wiring the
-   coordinator without adding scopes would make cluster lifecycle
-   scope-unchecked. Recorded in [api.md](api.md) §6 and in the platform-wide
-   question in [`docs/daemon/api.md`](../daemon/api.md) §5.
+3. **Cluster lifecycle is scoped on gRPC, QUIC and MCP.** All three catalogs
+   are default-deny. The gRPC scope catalog
+   (`pkg/api/grpc/method_permissions.go`) gives `GetStatus` and `ListNodes`
+   `cluster:read`, and `Bootstrap`, `Join` and `Leave` `cluster:write`, so a
+   read-only token cannot change membership. The QUIC `0x90` sub-opcodes
+   (`pkg/api/quic/opcode_permissions.go`) and the `platform_cluster_*` MCP
+   tools (`pkg/api/mcp/authz.go`, #304) carry the same pairs.
+   Recorded in [api.md](api.md) §7.
 4. **`ClusterStatus` and the node list are operational disclosure**: node ids,
    addresses, leader identity, term, quorum state. Not secret, but not
    nothing — a reader learns the topology and which node to attack to lose
@@ -310,8 +309,8 @@ Within this repo's half:
 - **It does not discover peers or form clusters.** go-qrdb does, reached through
   `go-quicbaas/sdk/go`.
 - **It does not replicate application state.** Which platform data is replicated
-  and under what consistency level is a go-qrdb question. The legacy
-  `README.md` and `architecture.md` in this folder describe SDN, CA, DNS,
+  and under what consistency level is a go-qrdb question. The deleted legacy
+  `README.md` and the previous revision of this file described SDN, CA, DNS,
   device-profile and tenant replication as if this package performed it; it does
   not.
 - **It does not persist anything.** `DataDir` is validated and unused here.
@@ -320,11 +319,10 @@ Within this repo's half:
   `quicbaas:` section, not the cluster's.
 - **It does not remove a remote node from the API.** `MembershipManager.AddNode`
   and `RemoveNode` exist as Go calls; no transport exposes them
-  ([api.md](api.md) §3). The legacy `api-reference.md` documents `GetNode`,
+  ([api.md](api.md) §3). The deleted legacy `api-reference.md` documented `GetNode`,
   `RemoveNode` and `TransferLeadership` RPCs. **None of them exists** — the
   proto declares five RPCs, and that is the whole service.
 - **It does not transfer leadership.** No `TransferLeadership` anywhere.
-- **It does not expose anything on QUIC.** There is no cluster opcode.
 - **It does not ship a CLI.** `pkg/cli/commands/cluster` is complete and
   registered on no root command ([cli.md](cli.md)).
 - **It does not enforce a node's right to join.** See §6.
@@ -336,9 +334,10 @@ Within this repo's half:
 - [`docs/health/`](../health/) — the platform health registry. **There is no
   `cluster` health component**; `Coordinator.HealthCheck` is a Go call, not a
   registered checker
-- Legacy files in this folder, superseded by this document where they conflict:
-  `README.md`, `configuration.md`, `cli-usage.md`, `api-reference.md`. They
-  document the lower layers' internals and an API surface that does not exist.
+- The legacy files this folder held — `README.md`, `configuration.md`,
+  `cli-usage.md`, `api-reference.md` — are deleted. These five files hold their
+  content. They documented the lower layers' internals and an API surface that
+  does not exist.
 - The other half of this feature is documented by **go-qrdb** (cluster
   formation, peer discovery, replication) and **go-quicbaas** (the SDK edge this
   repo consumes). This repository does not document their code.

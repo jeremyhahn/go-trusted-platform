@@ -53,7 +53,8 @@ package() {
 		error "modulehost.rootfs has no usr/share/xkms/p11-kit.version"
 		return 1
 	}
-	"$srcdir"/p11-kit-pin-check "$_ver" || return 1
+	# Through sh: abuild copies the source with the mode the checkout gave it.
+	sh "$srcdir"/p11-kit-pin-check "$_ver" || return 1
 
 	install -Dm644 "$srcdir"/modulehost.rootfs "$pkgdir"/usr/share/xkms-p11-host/rootfs.tar
 	sha256sum "$srcdir"/modulehost.rootfs | cut -d' ' -f1 > "$pkgdir"/usr/share/xkms-p11-host/rootfs.tar.sha256

@@ -15,10 +15,9 @@
 
 // Package ceremony provides multi-protocol integration tests for the
 // platformd ceremony service. The suite drives platformctl and the SDK
-// clients across all six protocols (CLI, REST, gRPC, QUIC, MCP, Unix) and
-// asserts consistent behaviour — either real backend execution or a
-// consistent "backend not configured" surface when the ceremony backend is
-// not wired into the running platformd.
+// clients across all six protocols (CLI, REST, gRPC, QUIC, MCP, Unix) through
+// one shared ceremony lifecycle. platformd always wires the SDK ceremony
+// backend, so a "not configured" answer is a failure, not an outcome.
 //
 // Run via:
 //
@@ -27,6 +26,11 @@ package ceremony
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/pem"
 	"testing"
 	"time"
 
@@ -36,8 +40,6 @@ import (
 
 // TestCeremonyMultiProtocol runs the same scenario against every transport.
 func TestCeremonyMultiProtocol(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	t.Cleanup(cancel)
 
@@ -52,134 +54,135 @@ func TestCeremonyMultiProtocol(t *testing.T) {
 
 	gate := helpers.NewAdapterGate(t, "ceremony", helpers.AdapterNames(adapters)...)
 	for _, adapter := range adapters {
+		gate.RequireSetup(t, adapter.Name(), adapter.Setup(ctx))
 		adapter := adapter
-		t.Run(adapter.Name(), func(t *testing.T) {
-			gate.RequireSetup(t, adapter.Name(), adapter.Setup(ctx))
-			t.Cleanup(func() {
-				if err := adapter.Teardown(); err != nil {
-					t.Logf("Warning: teardown error for %s: %v", adapter.Name(), err)
-				}
-			})
-			runCeremonyScenario(t, ctx, adapter)
+		t.Cleanup(func() {
+			if err := adapter.Teardown(); err != nil {
+				t.Logf("Warning: teardown error for %s: %v", adapter.Name(), err)
+			}
 		})
+	}
+
+	runCeremonyScenario(t, ctx, adapters)
+}
+
+// runCeremonyScenario initializes the ceremony once, then checks that every
+// transport observes the shared lifecycle state.
+func runCeremonyScenario(t *testing.T, ctx context.Context, adapters []CeremonyCommands) {
+	t.Helper()
+	if len(adapters) == 0 {
+		t.Fatal("no ceremony adapters configured")
+	}
+
+	initAdapter := ceremonyInitAdapter(adapters)
+	fixture := ceremonyLifecycleFixture(t)
+
+	callCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	initResp, err := initAdapter.Init(callCtx, fixture.Init)
+	cancel()
+	if err != nil {
+		t.Fatalf("%s Init failed: %v", initAdapter.Name(), err)
+	}
+	assertInitResponse(t, initResp)
+
+	for _, adapter := range adapters {
+		adapter := adapter
+		t.Run(adapter.Name()+"/Status", func(t *testing.T) {
+			callCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+			defer cancel()
+			status, err := adapter.Status(callCtx)
+			if err != nil {
+				t.Fatalf("Status failed: %v", err)
+			}
+			assertStatusResponse(t, status, initResp)
+		})
+	}
+
+	t.Run(initAdapter.Name()+"/SignCSR", func(t *testing.T) {
+		callCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		defer cancel()
+		resp, err := initAdapter.SignCSR(callCtx, &ceremonysdk.SignCSRRequest{
+			Username: fixture.Officer,
+			SOPIN:    fixture.Init.SOPIN,
+			Role:     ceremonysdk.RoleAdmin,
+			CSRPEM:   fixture.CSRPEM,
+		})
+		if err != nil {
+			t.Fatalf("SignCSR failed: %v", err)
+		}
+		if resp == nil || resp.Certificate == "" {
+			t.Fatalf("SignCSR response = %+v, want certificate PEM", resp)
+		}
+	})
+}
+
+type ceremonyFixture struct {
+	Init    *ceremonysdk.InitRequest
+	Officer string
+	CSRPEM  string
+}
+
+func ceremonyLifecycleFixture(t *testing.T) ceremonyFixture {
+	t.Helper()
+	return ceremonyFixture{
+		Init: &ceremonysdk.InitRequest{
+			SOPIN:     "so-pin-000000",
+			UserPIN:   "user-pin-111111",
+			Threshold: "1-of-1",
+			Hostname:  "ceremony-mp-test",
+			SANs:      []string{"ceremony-mp-test.local"},
+		},
+		Officer: "alice",
+		CSRPEM:  newCSRFixture(t, "alice"),
 	}
 }
 
-// runCeremonyScenario exercises the full ceremony contract surface. Because
-// the backend returns ErrCeremonyNotConfigured on the reference test daemon,
-// each call is expected to either succeed (once a backend lands) or surface
-// a "backend not configured" style error. The test asserts the latter is
-// consistent across protocols.
-func runCeremonyScenario(t *testing.T, ctx context.Context, cmd CeremonyCommands) {
+func newCSRFixture(t *testing.T, commonName string) string {
 	t.Helper()
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("generate CSR key: %v", err)
+	}
+	der, err := x509.CreateCertificateRequest(rand.Reader, &x509.CertificateRequest{
+		Subject: pkix.Name{CommonName: commonName},
+	}, key)
+	if err != nil {
+		t.Fatalf("create CSR: %v", err)
+	}
+	return string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE REQUEST", Bytes: der}))
+}
 
-	t.Run("Status", func(t *testing.T) {
-		callCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-		defer cancel()
-		_, err := cmd.Status(callCtx)
-		if err == nil {
-			return
+func ceremonyInitAdapter(adapters []CeremonyCommands) CeremonyCommands {
+	for _, adapter := range adapters {
+		if adapter.Name() == "REST" {
+			return adapter
 		}
-		if !isBackendUnavailable(err) {
-			t.Fatalf("unexpected Status error (want backend-unavailable): %v", err)
-		}
-	})
+	}
+	return adapters[0]
+}
 
-	t.Run("Init", func(t *testing.T) {
-		callCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-		defer cancel()
-		req := &ceremonysdk.InitRequest{
-			SOPIN:     "so-pin-000000",
-			UserPIN:   "user-pin-111111",
-			Threshold: "3-of-5",
-			Hostname:  "ceremony-mp-test",
-		}
-		_, err := cmd.Init(callCtx, req)
-		if err == nil {
-			return
-		}
-		if !isBackendUnavailable(err) {
-			t.Fatalf("unexpected Init error (want backend-unavailable): %v", err)
-		}
-	})
+func assertInitResponse(t *testing.T, resp *ceremonysdk.InitResponse) {
+	t.Helper()
+	if resp == nil {
+		t.Fatal("Init response is nil")
+	}
+	if resp.State == "" || resp.State == ceremonysdk.StateUnknown {
+		t.Fatalf("Init state = %q, want a real ceremony state", resp.State)
+	}
+	if resp.CeremonyID == "" {
+		t.Fatal("Init ceremony_id is empty")
+	}
+}
 
-	t.Run("ClaimCertBegin", func(t *testing.T) {
-		callCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-		defer cancel()
-		req := &ceremonysdk.ClaimCertBeginRequest{
-			Username:          "alice",
-			AuthenticatorType: ceremonysdk.AuthenticatorSoftware,
-		}
-		_, err := cmd.ClaimCertBegin(callCtx, req)
-		if err == nil {
-			return
-		}
-		if !isBackendUnavailable(err) {
-			t.Fatalf("unexpected ClaimCertBegin error: %v", err)
-		}
-	})
-
-	t.Run("ClaimCertComplete", func(t *testing.T) {
-		callCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-		defer cancel()
-		req := &ceremonysdk.ClaimCertCompleteRequest{
-			Username:  "alice",
-			Nonce:     "deadbeef",
-			Signature: "d3adb33f",
-		}
-		_, err := cmd.ClaimCertComplete(callCtx, req)
-		if err == nil {
-			return
-		}
-		if !isBackendUnavailable(err) {
-			t.Fatalf("unexpected ClaimCertComplete error: %v", err)
-		}
-	})
-
-	t.Run("ClaimShareBegin", func(t *testing.T) {
-		callCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-		defer cancel()
-		_, err := cmd.ClaimShareBegin(callCtx, &ceremonysdk.ClaimShareBeginRequest{Username: "alice"})
-		if err == nil {
-			return
-		}
-		if !isBackendUnavailable(err) {
-			t.Fatalf("unexpected ClaimShareBegin error: %v", err)
-		}
-	})
-
-	t.Run("ClaimShareComplete", func(t *testing.T) {
-		callCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-		defer cancel()
-		req := &ceremonysdk.ClaimShareCompleteRequest{
-			Username:  "alice",
-			Nonce:     "deadbeef",
-			Signature: []byte{0xd3, 0xad, 0xb3, 0x3f},
-		}
-		_, err := cmd.ClaimShareComplete(callCtx, req)
-		if err == nil {
-			return
-		}
-		if !isBackendUnavailable(err) {
-			t.Fatalf("unexpected ClaimShareComplete error: %v", err)
-		}
-	})
-
-	t.Run("SignCSR", func(t *testing.T) {
-		callCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-		defer cancel()
-		req := &ceremonysdk.SignCSRRequest{
-			Username: "alice",
-			SOPIN:    "so-pin-000000",
-			Role:     ceremonysdk.RoleAdmin,
-			CSRPEM:   "-----BEGIN CERTIFICATE REQUEST-----\nAAAA\n-----END CERTIFICATE REQUEST-----\n",
-		}
-		_, err := cmd.SignCSR(callCtx, req)
-		if err == nil {
-			return
-		}
-		if !isBackendUnavailable(err) {
-			t.Fatalf("unexpected SignCSR error: %v", err)
-		}
-	})
+func assertStatusResponse(t *testing.T, resp *ceremonysdk.StatusResponse, init *ceremonysdk.InitResponse) {
+	t.Helper()
+	if resp == nil {
+		t.Fatal("Status response is nil")
+	}
+	if resp.State == "" || resp.State == ceremonysdk.StateUnknown {
+		t.Fatalf("Status state = %q, want a real ceremony state", resp.State)
+	}
+	if init.CeremonyID != "" && resp.CeremonyID != "" && resp.CeremonyID != init.CeremonyID {
+		t.Fatalf("Status ceremony_id = %q, want %q", resp.CeremonyID, init.CeremonyID)
+	}
 }

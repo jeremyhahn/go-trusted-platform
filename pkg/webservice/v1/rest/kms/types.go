@@ -363,6 +363,40 @@ type GenerateRandomResponse struct {
 	Bytes []byte `json:"bytes"`
 }
 
+// GenerateDataKeyRequest asks for a fresh data key wrapped by the key-encryption
+// key KeyID. Algorithm is a proto KMSKeyAlgorithm name and KeySize is in bits;
+// zero takes the algorithm's size.
+type GenerateDataKeyRequest struct {
+	KeyID     string `json:"key_id"`
+	Algorithm string `json:"algorithm,omitempty"`
+	KeySize   int32  `json:"key_size,omitempty"`
+	Context   []byte `json:"context,omitempty"`
+}
+
+// GenerateDataKeyResponse carries the data key in plaintext and wrapped form.
+// Nothing is stored server-side.
+type GenerateDataKeyResponse struct {
+	KeyID        string `json:"key_id"`
+	PlaintextKey []byte `json:"plaintext_key"`
+	EncryptedKey []byte `json:"encrypted_key"`
+}
+
+// GenerateWrappedDataKeyRequest asks for a fresh data key returned only in the
+// form wrapped by WrappingKeyID. KeyAlgorithm is a proto KMSKeyAlgorithm name
+// and KeySize is in bits; zero takes the algorithm's size.
+type GenerateWrappedDataKeyRequest struct {
+	WrappingKeyID string `json:"wrapping_key_id"`
+	KeyAlgorithm  string `json:"key_algorithm,omitempty"`
+	KeySize       int32  `json:"key_size,omitempty"`
+	Context       []byte `json:"context,omitempty"`
+}
+
+// GenerateWrappedDataKeyResponse carries only the wrapped data key.
+type GenerateWrappedDataKeyResponse struct {
+	WrappingKeyID string `json:"wrapping_key_id"`
+	WrappedKey    []byte `json:"wrapped_key"`
+}
+
 // =============================================================================
 // DEK requests / responses (SDK dek.Client)
 // =============================================================================

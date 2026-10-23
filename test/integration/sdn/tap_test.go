@@ -23,15 +23,16 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers/boundedexec"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 // TestTAPDeviceCreation tests creating TAP devices
 func TestTAPDeviceCreation(t *testing.T) {
-	skipIfNotRoot(t)
-	skipIfNoOVS(t)
-	skipIfNoIPCommand(t)
+	requireRoot(t)
+	requireOVS(t)
+	requireCommand(t, "ip")
 
 	bridgeName := "test-br-tap-0"
 	portName := "tap-test-0"
@@ -59,9 +60,9 @@ func TestTAPDeviceCreation(t *testing.T) {
 
 // TestTAPDeviceConfiguration tests configuring TAP device properties
 func TestTAPDeviceConfiguration(t *testing.T) {
-	skipIfNotRoot(t)
-	skipIfNoOVS(t)
-	skipIfNoIPCommand(t)
+	requireRoot(t)
+	requireOVS(t)
+	requireCommand(t, "ip")
 
 	bridgeName := "test-br-tap-1"
 	portName := "tap-test-1"
@@ -92,9 +93,9 @@ func TestTAPDeviceConfiguration(t *testing.T) {
 
 // TestInternalPort tests creating internal ports
 func TestInternalPort(t *testing.T) {
-	skipIfNotRoot(t)
-	skipIfNoOVS(t)
-	skipIfNoIPCommand(t)
+	requireRoot(t)
+	requireOVS(t)
+	requireCommand(t, "ip")
 
 	bridgeName := "test-br-internal"
 	portName := "internal-test"
@@ -131,9 +132,9 @@ func TestInternalPort(t *testing.T) {
 
 // TestVETHPair tests creating virtual ethernet pairs
 func TestVETHPair(t *testing.T) {
-	skipIfNotRoot(t)
-	skipIfNoOVS(t)
-	skipIfNoIPCommand(t)
+	requireRoot(t)
+	requireOVS(t)
+	requireCommand(t, "ip")
 
 	bridgeName := "test-br-veth"
 	vethName := "veth-test-0"
@@ -213,7 +214,7 @@ func addTAPPort(bridge, port string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, "ovs-vsctl", "add-port", bridge, port,
+	cmd := boundedexec.CommandContext(ctx, "ovs-vsctl", "add-port", bridge, port,
 		"--", "set", "interface", port, "type=tap")
 	output, err := cmd.CombinedOutput()
 	if err != nil {
@@ -226,7 +227,7 @@ func addInternalPort(bridge, port string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, "ovs-vsctl", "add-port", bridge, port,
+	cmd := boundedexec.CommandContext(ctx, "ovs-vsctl", "add-port", bridge, port,
 		"--", "set", "interface", port, "type=internal")
 	output, err := cmd.CombinedOutput()
 	if err != nil {
@@ -234,15 +235,7 @@ func addInternalPort(bridge, port string) error {
 	}
 
 	// Wait for OVS to create the internal port interface in the kernel and bring it up
-	var linkUpErr error
-	for i := 0; i < 10; i++ {
-		time.Sleep(100 * time.Millisecond)
-		cmd = exec.CommandContext(ctx, "ip", "link", "set", port, "up")
-		output, linkUpErr = cmd.CombinedOutput()
-		if linkUpErr == nil {
-			break
-		}
-	}
+	output, linkUpErr := bringInternalPortUp(ctx, port)
 	if linkUpErr != nil {
 		return fmt.Errorf("failed to bring up interface %s after retries: %v, output: %s", port, linkUpErr, output)
 	}
@@ -253,7 +246,7 @@ func addPatchPort(bridge, port, peer string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, "ovs-vsctl", "add-port", bridge, port,
+	cmd := boundedexec.CommandContext(ctx, "ovs-vsctl", "add-port", bridge, port,
 		"--", "set", "interface", port, "type=patch",
 		fmt.Sprintf("options:peer=%s", peer))
 	output, err := cmd.CombinedOutput()

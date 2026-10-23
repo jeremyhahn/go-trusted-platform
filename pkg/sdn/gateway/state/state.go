@@ -67,6 +67,7 @@ type Snapshot struct {
 	NAT          *NATState          `json:"nat,omitempty"`
 	Pipeline     *PipelineState     `json:"pipeline,omitempty"`
 	Overlay      *OverlayState      `json:"overlay,omitempty"`
+	VPN          *VPNState          `json:"vpn,omitempty"`
 	Interfaces   []Interface        `json:"interfaces,omitempty"`
 	Annotations  map[string]string  `json:"annotations,omitempty"`
 }
@@ -81,7 +82,6 @@ type OverlayState struct {
 	RemoteMACCount           int                   `json:"remote_mac_count,omitempty"`
 	PrefixCount              int                   `json:"prefix_count,omitempty"`
 	RefusedBindings          uint64                `json:"refused_bindings,omitempty"`
-	RefusedReplays           uint64                `json:"refused_replays,omitempty"`
 	L3VNI                    uint32                `json:"l3_vni,omitempty"`
 	ARPSuppressionEnabled    bool                  `json:"arp_suppression_enabled,omitempty"`
 	AnycastGatewayConfigured bool                  `json:"anycast_gateway_configured,omitempty"`
@@ -89,6 +89,65 @@ type OverlayState struct {
 	Uptime                   time.Duration         `json:"uptime,omitempty"`
 	AdmittedVTEPs            []AdmittedVTEPState   `json:"admitted_vteps,omitempty"`
 	NDCounters               OverlayNDCounterState `json:"nd_counters"`
+}
+
+// VPNState reports the remote-access VPN service (docs/vpn/): its counters,
+// the enrolled peers in force and the live leases. Lease keys are never
+// reported.
+type VPNState struct {
+	Running             bool            `json:"running"`
+	Admissions          uint64          `json:"admissions"`
+	Refusals            uint64          `json:"refusals"`
+	LastRefusal         string          `json:"last_refusal,omitempty"`
+	EnrolledPeers       int             `json:"enrolled_peers"`
+	LeasesByDataPlane   map[string]int  `json:"leases_by_data_plane,omitempty"`
+	Leases              []VPNLeaseState `json:"leases,omitempty"`
+	PosturePolicyErrors []string        `json:"posture_policy_errors,omitempty"`
+	// RejectedPeers are the peers of the delivered enrolment set this
+	// gateway refused to enrol; the rest of the set applies.
+	RejectedPeers []VPNRejectedPeer `json:"rejected_peers,omitempty"`
+	// Revocations counts the revoked leases by reason.
+	Revocations map[string]uint64 `json:"revocations,omitempty"`
+	// PostureViolations counts the posture rules that refused an admission
+	// or a renewal, by rule name.
+	PostureViolations map[string]uint64 `json:"posture_violations,omitempty"`
+	// Reattest is how long the renewal re-attestations took to verify.
+	Reattest *DurationHistogram `json:"reattest,omitempty"`
+}
+
+// DurationHistogram is a cumulative histogram of durations.
+type DurationHistogram struct {
+	Count      uint64  `json:"count"`
+	SumSeconds float64 `json:"sum_seconds"`
+	// Buckets are cumulative: each counts the observations at or under its
+	// upper bound. Observations over the last bound count only in Count.
+	Buckets []HistogramBucket `json:"buckets"`
+}
+
+// HistogramBucket is one cumulative histogram bucket.
+type HistogramBucket struct {
+	UpperBoundSeconds float64 `json:"le"`
+	Count             uint64  `json:"count"`
+}
+
+// VPNRejectedPeer is one enrolment a gateway refused, and why.
+type VPNRejectedPeer struct {
+	TenantID string `json:"tenant_id"`
+	DeviceID string `json:"device_id"`
+	Reason   string `json:"reason"`
+}
+
+// VPNLeaseState is one live VPN lease.
+type VPNLeaseState struct {
+	ID        string    `json:"id"`
+	TenantID  string    `json:"tenant_id"`
+	DeviceID  string    `json:"device_id"`
+	Address   string    `json:"address"`
+	DataPlane string    `json:"data_plane"`
+	Zones     []string  `json:"zones,omitempty"`
+	IssuedAt  time.Time `json:"issued_at"`
+	ExpiresAt time.Time `json:"expires_at"`
+	Renewals  int       `json:"renewals"`
 }
 
 // AdmittedVTEPState is a VTEP the overlay decap table currently admits.
@@ -239,6 +298,9 @@ type BGPState struct {
 	ReceivedPrefixes  int      `json:"received_prefixes"`
 	// Peers is one entry per configured neighbour, sorted by address.
 	Peers []BGPPeerState `json:"peers,omitempty"`
+	// Error is why the peer detail is missing: set when the BGP speaker
+	// runs in a supervised child the snapshot could not reach (#557).
+	Error string `json:"error,omitempty"`
 }
 
 // BGPPeerState is one neighbour's session as the speaker reports it.

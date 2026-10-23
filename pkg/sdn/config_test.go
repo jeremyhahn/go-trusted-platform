@@ -25,7 +25,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ipsec"
+	ipsecconfig "github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ipsec/config"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/netplan"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/zone"
 )
@@ -202,16 +202,16 @@ func TestValidate_OverlayIPsec(t *testing.T) {
 	require.NoError(t, c.Validate())
 
 	c = minValidConfig()
-	c.Overlay = &sdn.OverlayConfig{Enabled: true, IPsec: &ipsec.Config{
+	c.Overlay = &sdn.OverlayConfig{Enabled: true, IPsec: &ipsecconfig.Config{
 		Enabled:         true,
 		FabricInterface: "bond0",
 		LocalAddress:    "10.20.0.11",
-		Token:           ipsec.TokenConfig{Handle: "01"},
+		Token:           ipsecconfig.TokenConfig{Handle: "01"},
 	}}
 	require.NoError(t, c.Validate())
 
 	c.Overlay.IPsec.LocalAddress = ""
-	var target *ipsec.ConfigError
+	var target *ipsecconfig.ConfigError
 	require.ErrorAs(t, c.Validate(), &target)
 	assert.Equal(t, "local-address", target.Field)
 }
@@ -222,6 +222,24 @@ func TestResolvedZonesAndPlan_Nil(t *testing.T) {
 	assert.Nil(t, c.Plan())
 	assert.Empty(t, c.ZoneIndex())
 	assert.Nil(t, (&sdn.Config{}).ResolvedZones())
+}
+
+func TestGatewayDatapathSocket_ReadsTheGatewaySection(t *testing.T) {
+	cfg := &sdn.Config{Gateway: &sdn.GatewayConfig{Enabled: true, DatapathSocket: "/run/gatewayd/datapath.sock"}}
+	assert.Equal(t, "/run/gatewayd/datapath.sock", cfg.GatewayDatapathSocket())
+}
+
+func TestGatewayDatapathSocket_UnsetIsEmpty(t *testing.T) {
+	var nilConfig *sdn.Config
+	for name, cfg := range map[string]*sdn.Config{
+		"nil config":      nilConfig,
+		"no gateway":      {},
+		"no socket given": {Gateway: &sdn.GatewayConfig{Enabled: true}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			assert.Empty(t, cfg.GatewayDatapathSocket())
+		})
+	}
 }
 
 // TestLogPrivilegedPaths writes one audit record per privileged path.

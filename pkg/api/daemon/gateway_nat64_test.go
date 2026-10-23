@@ -165,25 +165,28 @@ func TestGetNAT64Status_SurfacesTheBackendFailure(t *testing.T) {
 		"the operator needs the kernel's own reason, not just a code")
 }
 
-func TestSetNAT64_WiresTheBackendAfterConstruction(t *testing.T) {
-	svc := NewGatewayService()
-	assert.Nil(t, svc.NAT64())
+// TestGatewayBackendSource_NilServiceHasNoBackends: a transport may hold a
+// typed-nil *GatewayService (the daemon built none), so the shared getters
+// must report no backend rather than panic, and the transport answers
+// unavailable.
+func TestGatewayBackendSource_NilServiceHasNoBackends(t *testing.T) {
+	var svc *GatewayService
+	var source GatewayBackendSource = svc
+	assert.Nil(t, source.LoadBalancer())
+	assert.Nil(t, source.NAT64())
+	assert.Nil(t, source.Perf())
 
-	backend := &fakeGatewayNAT64{health: nat64TestHealth()}
-	svc.SetNAT64(backend)
-	assert.NotNil(t, svc.NAT64())
-
-	resp, err := svc.GetNAT64Status(context.Background(), &platformv1.GetNAT64StatusRequest{})
-	require.NoError(t, err)
-	assert.True(t, resp.Status.Active)
+	provider := &MCPServiceProvider{gatewayBackends: source}
+	_, err := provider.GatewayNAT64Status(context.Background())
+	var notAvailable ErrServiceNotAvailable
+	require.ErrorAs(t, err, &notAvailable)
 }
 
 // TestNAT64QUICAdapter_ReportsTheSameSnapshot: the QUIC adapter and the
 // gRPC service must not drift in what they report, so the same health
 // snapshot is asserted through both.
 func TestNAT64QUICAdapter_ReportsTheSameSnapshot(t *testing.T) {
-	adapter := &fullGatewayQUICAdapter{}
-	adapter.SetNAT64(&fakeGatewayNAT64{health: nat64TestHealth()})
+	adapter := &fullGatewayQUICAdapter{backends: NewGatewayService(WithNAT64(&fakeGatewayNAT64{health: nat64TestHealth()}))}
 
 	info, err := adapter.NAT64Status(context.Background())
 	require.NoError(t, err)
@@ -214,7 +217,7 @@ func TestNAT64QUICAdapter_ZoneOnlyAdapterReportsNotConfigured(t *testing.T) {
 }
 
 func TestNAT64RESTAdapter_ReportsTheSameSnapshot(t *testing.T) {
-	svc := &gatewayRESTService{nat64: &fakeGatewayNAT64{health: nat64TestHealth()}}
+	svc := &gatewayRESTService{backends: NewGatewayService(WithNAT64(&fakeGatewayNAT64{health: nat64TestHealth()}))}
 
 	out, err := svc.GetNAT64Status(context.Background())
 	require.NoError(t, err)
@@ -232,28 +235,8 @@ func TestNAT64RESTAdapter_RefusesWhenUnwired(t *testing.T) {
 	assert.Contains(t, err.Error(), "not configured")
 }
 
-func TestNAT64MCPProviders_ReportTheSameSnapshot(t *testing.T) {
-	// Both providers route through one shared path so the two cannot
-	// report the translator differently.
-	backend := &fakeGatewayNAT64{health: nat64TestHealth()}
-
-	mcpProvider := &MCPServiceProvider{}
-	mcpProvider.SetGatewayNAT64(backend)
-	fromMCP, err := mcpProvider.GatewayNAT64Status(context.Background())
-	require.NoError(t, err)
-
-	platformProvider := &PlatformServiceProvider{}
-	platformProvider.SetGatewayNAT64(backend)
-	fromPlatform, err := platformProvider.GatewayNAT64Status(context.Background())
-	require.NoError(t, err)
-
-	assert.Equal(t, fromMCP, fromPlatform)
-}
-
 func TestNAT64MCPProviders_RefuseWhenUnwired(t *testing.T) {
 	_, err := (&MCPServiceProvider{}).GatewayNAT64Status(context.Background())
-	require.Error(t, err)
-	_, err = (&PlatformServiceProvider{}).GatewayNAT64Status(context.Background())
 	require.Error(t, err)
 }
 
@@ -287,14 +270,13 @@ func TestNAT64ErrorMapping_EveryTransportAgrees(t *testing.T) {
 	})
 
 	t.Run("QUIC adapter", func(t *testing.T) {
-		adapter := &fullGatewayQUICAdapter{}
-		adapter.SetNAT64(&fakeGatewayNAT64{err: moduleErr})
+		adapter := &fullGatewayQUICAdapter{backends: NewGatewayService(WithNAT64(&fakeGatewayNAT64{err: moduleErr}))}
 		_, err := adapter.NAT64Status(context.Background())
 		assert.ErrorIs(t, err, quic.ErrGatewayPreconditionFailed)
 	})
 
 	t.Run("REST adapter", func(t *testing.T) {
-		svc := &gatewayRESTService{nat64: &fakeGatewayNAT64{err: moduleErr}}
+		svc := &gatewayRESTService{backends: NewGatewayService(WithNAT64(&fakeGatewayNAT64{err: moduleErr}))}
 		_, err := svc.GetNAT64Status(context.Background())
 		var unavailable rest.ErrNAT64ModuleUnavailable
 		assert.ErrorAs(t, err, &unavailable)

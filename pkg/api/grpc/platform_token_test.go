@@ -94,7 +94,7 @@ func TestOIDCUnaryInterceptor_ClaimsPath_StashesAuthorizedContext(t *testing.T) 
 		return "ok", nil
 	}
 
-	info := &grpc.UnaryServerInfo{FullMethod: "/dns.v1.DNS/AddRecord"}
+	info := &grpc.UnaryServerInfo{FullMethod: "/platform.v1.DNSService/AddRecord"}
 	resp, err := interceptor(bearerCtx("tok-abc"), nil, info, handler)
 	if err != nil {
 		t.Fatalf("interceptor returned error: %v", err)
@@ -108,7 +108,7 @@ func TestOIDCUnaryInterceptor_ClaimsPath_StashesAuthorizedContext(t *testing.T) 
 	if stub.gotToken != "tok-abc" {
 		t.Errorf("token = %q, want tok-abc", stub.gotToken)
 	}
-	if stub.gotHTM != "/dns.v1.DNS/AddRecord" {
+	if stub.gotHTM != "/platform.v1.DNSService/AddRecord" {
 		t.Errorf("htm = %q, want full method", stub.gotHTM)
 	}
 	if seen != want {
@@ -134,7 +134,9 @@ func TestOIDCUnaryInterceptor_ClaimsPath_ScopeGateDenies(t *testing.T) {
 		return "ok", nil
 	}
 
-	info := &grpc.UnaryServerInfo{FullMethod: "/dns.v1.DNS/AddRecord"}
+	// ListRecords needs only dns:read, so the interceptor admits the token and
+	// the downstream dns:write check is the one that refuses it.
+	info := &grpc.UnaryServerInfo{FullMethod: "/platform.v1.DNSService/ListRecords"}
 	_, err := interceptor(bearerCtx("tok"), nil, info, handler)
 	if err == nil {
 		t.Fatal("expected scope-denied error from downstream handler")
@@ -180,14 +182,14 @@ func TestOIDCUnaryInterceptor_ClaimsPath_RequiredPermThreaded(t *testing.T) {
 }
 
 func TestOIDCUnaryInterceptor_ClaimsPath_DPoPMetadataForwarded(t *testing.T) {
-	stub := &claimsValidatorStub{authCtx: &platformtoken.AuthorizedContext{Subject: "u"}}
+	stub := &claimsValidatorStub{authCtx: &platformtoken.AuthorizedContext{Subject: "u", Scopes: []string{"dns:read"}}}
 	interceptor := OIDCUnaryInterceptor(WithTokenValidator(stub))
 
 	md := metadata.Pairs("authorization", "Bearer tok", DPoPMetadataKey, "proof-jwt")
 	ctx := metadata.NewIncomingContext(context.Background(), md)
 
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) { return "ok", nil }
-	info := &grpc.UnaryServerInfo{FullMethod: "/svc/Method"}
+	info := &grpc.UnaryServerInfo{FullMethod: testUnaryMethod}
 	if _, err := interceptor(ctx, nil, info, handler); err != nil {
 		t.Fatalf("interceptor error: %v", err)
 	}
@@ -205,7 +207,7 @@ func TestOIDCUnaryInterceptor_ClaimsPath_InvalidTokenRejected(t *testing.T) {
 		called = true
 		return "ok", nil
 	}
-	info := &grpc.UnaryServerInfo{FullMethod: "/svc/Method"}
+	info := &grpc.UnaryServerInfo{FullMethod: testUnaryMethod}
 	_, err := interceptor(bearerCtx("bad"), nil, info, handler)
 	if err == nil {
 		t.Fatal("expected unauthenticated error for invalid token")
@@ -223,7 +225,7 @@ func TestOIDCUnaryInterceptor_ClaimsPath_ConfigErrorMapsToInternal(t *testing.T)
 	interceptor := OIDCUnaryInterceptor(WithTokenValidator(stub))
 
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) { return "ok", nil }
-	info := &grpc.UnaryServerInfo{FullMethod: "/svc/Method"}
+	info := &grpc.UnaryServerInfo{FullMethod: testUnaryMethod}
 	_, err := interceptor(bearerCtx("tok"), nil, info, handler)
 	if err == nil {
 		t.Fatal("expected a config error response")
@@ -234,10 +236,13 @@ func TestOIDCUnaryInterceptor_ClaimsPath_ConfigErrorMapsToInternal(t *testing.T)
 }
 
 func TestOIDCUnaryInterceptor_LegacyFallback_NoAuthorizedContext(t *testing.T) {
-	// A bool-only validator must continue to work and must not populate an
-	// AuthorizedContext (the legacy path is unchanged).
+	// A bool-only validator authorized by its checker must continue to work
+	// and must not populate an AuthorizedContext.
 	legacy := &mockTokenValidator{valid: true}
-	interceptor := OIDCUnaryInterceptor(WithTokenValidator(legacy))
+	interceptor := OIDCUnaryInterceptor(
+		WithTokenValidator(legacy),
+		WithAuthorizationChecker(&mockAuthorizationChecker{allowed: true}),
+	)
 
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		if _, ok := AuthorizedContextFromContext(ctx); ok {
@@ -248,7 +253,7 @@ func TestOIDCUnaryInterceptor_LegacyFallback_NoAuthorizedContext(t *testing.T) {
 		}
 		return "ok", nil
 	}
-	info := &grpc.UnaryServerInfo{FullMethod: "/svc/Method"}
+	info := &grpc.UnaryServerInfo{FullMethod: testUnaryMethod}
 	if _, err := interceptor(bearerCtx("tok"), nil, info, handler); err != nil {
 		t.Fatalf("legacy interceptor error: %v", err)
 	}
@@ -263,7 +268,7 @@ type streamStub struct {
 func (s *streamStub) Context() context.Context { return s.ctx }
 
 func TestOIDCStreamInterceptor_ClaimsPath_StashesAuthorizedContext(t *testing.T) {
-	want := &platformtoken.AuthorizedContext{Subject: "u", Scopes: []string{"keys:get"}}
+	want := &platformtoken.AuthorizedContext{Subject: "u", Scopes: []string{"platform:read"}}
 	stub := &claimsValidatorStub{authCtx: want}
 	interceptor := OIDCStreamInterceptor(WithTokenValidator(stub))
 
@@ -278,7 +283,7 @@ func TestOIDCStreamInterceptor_ClaimsPath_StashesAuthorizedContext(t *testing.T)
 		return nil
 	}
 	ss := &streamStub{ctx: bearerCtx("tok")}
-	info := &grpc.StreamServerInfo{FullMethod: "/svc/Stream"}
+	info := &grpc.StreamServerInfo{FullMethod: testStreamMethod}
 	if err := interceptor(nil, ss, info, handler); err != nil {
 		t.Fatalf("stream interceptor error: %v", err)
 	}

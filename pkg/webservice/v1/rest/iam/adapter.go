@@ -121,6 +121,11 @@ func (a *QuicBaaSIAMAdapter) GetUser(ctx context.Context, tenantID, userID strin
 	return a.client.User().Get(ctx, tenantID, userID)
 }
 
+// GetUserByEmail delegates to iamsdk.UserClient.GetByEmail.
+func (a *QuicBaaSIAMAdapter) GetUserByEmail(ctx context.Context, tenantID, email string) (*iamsdk.User, error) {
+	return a.client.User().GetByEmail(ctx, tenantID, email)
+}
+
 // ListUsers delegates to iamsdk.UserClient.List.
 func (a *QuicBaaSIAMAdapter) ListUsers(ctx context.Context, tenantID string, req *iamsdk.ListUsersRequest) (*iamsdk.ListUsersResponse, error) {
 	return a.client.User().List(ctx, tenantID, req)

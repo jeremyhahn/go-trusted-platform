@@ -16,7 +16,124 @@ package mcp
 import (
 	"context"
 	"encoding/base64"
+	"fmt"
+
+	"github.com/jeremyhahn/go-trusted-platform/pkg/vtpm"
 )
+
+// ekAlgorithmArg reads the optional "algorithm" argument of the vTPM create
+// tools as the canonical EK algorithm name. Absent is empty, so the service
+// applies its configured default; anything but RSA or ECC (in any case) is
+// InvalidArgument rather than an RSA EK.
+// vtpmBundleAlias routes one vtpm_bundle_* tool to the vtpm_* executor it
+// duplicates. renames maps each documented vtpm_bundle_* argument to the
+// twin's name for it; every other argument passes through unchanged.
+type vtpmBundleAlias struct {
+	twin    func(*ToolRegistry, context.Context, map[string]interface{}) (interface{}, error)
+	renames map[string]string
+}
+
+// vtpmBundleAliases pairs each vtpm_bundle_* tool with its twin (docs/vtpm/api.md §5).
+var vtpmBundleAliases = map[string]vtpmBundleAlias{
+	"vtpm_bundle_create": {
+		twin:    (*ToolRegistry).executeVTPMCreate,
+		renames: map[string]string{"hostname": "name", "ek_algorithm": "algorithm"},
+	},
+	"vtpm_bundle_get": {
+		twin:    (*ToolRegistry).executeVTPMGet,
+		renames: map[string]string{"bundle_id": "name"},
+	},
+	"vtpm_bundle_list": {
+		twin: (*ToolRegistry).executeVTPMList,
+	},
+	"vtpm_bundle_delete": {
+		twin:    (*ToolRegistry).executeVTPMDelete,
+		renames: map[string]string{"bundle_id": "name"},
+	},
+	"vtpm_bundle_quote": {
+		twin:    (*ToolRegistry).executeVTPMQuote,
+		renames: map[string]string{"bundle_id": "name"},
+	},
+	"vtpm_bundle_pcr_read": {
+		twin:    (*ToolRegistry).executeVTPMReadPCR,
+		renames: map[string]string{"bundle_id": "name", "pcr_index": "pcr"},
+	},
+	"vtpm_bundle_pcr_extend": {
+		twin:    (*ToolRegistry).executeVTPMExtendPCR,
+		renames: map[string]string{"bundle_id": "name", "pcr_index": "pcr"},
+	},
+	"vtpm_bundle_seal": {
+		twin:    (*ToolRegistry).executeVTPMSeal,
+		renames: map[string]string{"bundle_id": "name"},
+	},
+	"vtpm_bundle_unseal": {
+		twin:    (*ToolRegistry).executeVTPMUnseal,
+		renames: map[string]string{"bundle_id": "name", "sealed_data": "sealed"},
+	},
+}
+
+// dispatchVTPMBundleTool runs a vtpm_bundle_* tool through its twin's
+// executor. The bool reports whether name is a vtpm_bundle_* tool.
+func (r *ToolRegistry) dispatchVTPMBundleTool(ctx context.Context, name string, args map[string]interface{}) (interface{}, bool, error) {
+	alias, ok := vtpmBundleAliases[name]
+	if !ok {
+		return nil, false, nil
+	}
+	result, err := alias.twin(r, ctx, alias.twinArgs(args))
+	return result, true, err
+}
+
+// twinArgs renames the documented arguments to the twin's names. A twin-named
+// argument sent to the alias is dropped, so only the documented name counts.
+func (a vtpmBundleAlias) twinArgs(args map[string]interface{}) map[string]interface{} {
+	out := make(map[string]interface{}, len(args))
+	targets := make(map[string]bool, len(a.renames))
+	for _, target := range a.renames {
+		targets[target] = true
+	}
+	for key, value := range args {
+		if _, renamed := a.renames[key]; renamed || targets[key] {
+			continue
+		}
+		out[key] = value
+	}
+	for source, target := range a.renames {
+		if value, ok := args[source]; ok {
+			out[target] = value
+		}
+	}
+	return out
+}
+
+func ekAlgorithmArg(args map[string]interface{}) (string, error) {
+	alg, err := vtpm.ParseEKAlgorithm(getString(args, "algorithm"))
+	if err != nil {
+		return "", ErrInvalidArgument{Msg: "invalid algorithm", Cause: err}
+	}
+	return string(alg), nil
+}
+
+// vtpmListOptionsArg reads the optional list filters (mode, labels, limit,
+// offset) the gRPC ListVTPMs request carries. An unknown mode or a negative
+// limit or offset is refused rather than ignored.
+func vtpmListOptionsArg(args map[string]interface{}) (*vtpm.ListOptions, error) {
+	mode := vtpm.BundleMode(getString(args, "mode"))
+	if mode != "" && !mode.IsValid() {
+		return nil, ErrInvalidArgument{Msg: fmt.Sprintf("invalid mode %q: want %q or %q",
+			mode, vtpm.BundleModeTemplate, vtpm.BundleModePreAssigned)}
+	}
+	limit := getInt(args, "limit")
+	offset := getInt(args, "offset")
+	if limit < 0 || offset < 0 {
+		return nil, ErrInvalidArgument{Msg: "limit and offset must not be negative"}
+	}
+	return &vtpm.ListOptions{
+		Mode:   mode,
+		Labels: getStringMap(args, "labels"),
+		Limit:  limit,
+		Offset: offset,
+	}, nil
+}
 
 // =============================================================================
 // vTPM Extended Tool Execution Functions
@@ -70,9 +187,9 @@ func (r *ToolRegistry) executeVTPMImport(ctx context.Context, args map[string]in
 func (r *ToolRegistry) executeVTPMTemplateCreate(ctx context.Context, args map[string]interface{}) (interface{}, error) {
 	id := getString(args, "id")
 	description := getString(args, "description")
-	algorithm := getString(args, "algorithm")
-	if algorithm == "" {
-		algorithm = "RSA"
+	algorithm, err := ekAlgorithmArg(args)
+	if err != nil {
+		return nil, err
 	}
 	secureBoot := getBool(args, "secure_boot")
 

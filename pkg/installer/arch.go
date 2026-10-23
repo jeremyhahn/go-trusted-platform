@@ -3,6 +3,7 @@ package installer
 import (
 	"path/filepath"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/bootstrap/nbd"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/uki"
 )
 
@@ -84,6 +85,25 @@ func (i *installer) bootTarget() bootTarget {
 		return x86BootTarget
 	}
 	return i.boot
+}
+
+// bootModelDrivers are the kernel drivers a boot model's initramfs needs on
+// top of its architecture's set. A diskless-nbd node's platform-initrd
+// attaches /dev/nbd0 to its export before it can unlock the root on it, so
+// the initramfs carries the NBD block driver for a kernel that builds it as
+// a module.
+var bootModelDrivers = map[string]string{
+	nbd.BootModel: "nbd",
+}
+
+// dracutDrivers is the --add-drivers list for the initramfs this install
+// builds: the architecture's set plus its boot model's.
+func (i *installer) dracutDrivers() string {
+	drivers := i.bootTarget().dracutDrivers
+	if extra, ok := bootModelDrivers[i.bootModel]; ok {
+		return drivers + " " + extra
+	}
+	return drivers
 }
 
 // ukiFileName is the file name under EFI/BOOT the unified kernel image is

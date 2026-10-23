@@ -19,15 +19,15 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
-	"github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 )
 
 // Provisioning category (opcode 0xCF) handlers.
 //
 // The pre-enrollment config delivery verbs (get-nonce, fetch-config,
 // sign-digest, poll/fulfill/list/get session) multiplex under
-// quic.OpProvisioningCategory with the first payload byte selecting the
+// quicwire.OpProvisioningCategory with the first payload byte selecting the
 // sub-operation. Dispatch is map-based per project conventions. All
 // handlers delegate to the ConfigDeliveryQUICService, which is backed by
 // the same ConfigDeliveryGRPCService as the gRPC transport, so the typed
@@ -285,21 +285,21 @@ func (r *ConfigDeliveryPollSessionResponse) ToProto() *platformv1.PollSessionRes
 // StatusInvalidRequest since the QUIC status set has no precondition
 // code; Unauthenticated maps to StatusUnauthorized.
 var configDeliveryGRPCCodeToQUICStatus = map[codes.Code]byte{
-	codes.InvalidArgument:    quic.StatusInvalidArgument,
-	codes.Unauthenticated:    quic.StatusUnauthorized,
-	codes.PermissionDenied:   quic.StatusPermissionDenied,
-	codes.NotFound:           quic.StatusNotFound,
-	codes.FailedPrecondition: quic.StatusInvalidRequest,
-	codes.Unavailable:        quic.StatusUnavailable,
-	codes.Internal:           quic.StatusInternalError,
+	codes.InvalidArgument:    quicwire.StatusInvalidArgument,
+	codes.Unauthenticated:    quicwire.StatusUnauthorized,
+	codes.PermissionDenied:   quicwire.StatusPermissionDenied,
+	codes.NotFound:           quicwire.StatusNotFound,
+	codes.FailedPrecondition: quicwire.StatusInvalidRequest,
+	codes.Unavailable:        quicwire.StatusUnavailable,
+	codes.Internal:           quicwire.StatusInternalError,
 }
 
 // configDeliveryErrorToQUICResponse converts a gRPC status error from
 // the shared ConfigDeliveryGRPCService into a QUIC error response,
 // preserving the status-code semantics established by the gRPC matcher
 // tables. Unknown codes map to StatusInternalError.
-func (h *QUICServiceHandler) configDeliveryErrorToQUICResponse(op string, err error) *quic.Response {
-	quicStatus := quic.StatusInternalError
+func (h *QUICServiceHandler) configDeliveryErrorToQUICResponse(op string, err error) *quicwire.Response {
+	quicStatus := quicwire.StatusInternalError
 	if mapped, ok := configDeliveryGRPCCodeToQUICStatus[status.Code(err)]; ok {
 		quicStatus = mapped
 	}
@@ -311,27 +311,27 @@ func (h *QUICServiceHandler) configDeliveryErrorToQUICResponse(op string, err er
 // =============================================================================
 
 // configDeliveryQUICHandler handles a provisioning sub-operation.
-type configDeliveryQUICHandler func(h *QUICServiceHandler, ctx context.Context, payload []byte) *quic.Response
+type configDeliveryQUICHandler func(h *QUICServiceHandler, ctx context.Context, payload []byte) *quicwire.Response
 
 // configDeliveryQUICDispatch routes provisioning sub-opcodes with O(1)
 // lookup.
 var configDeliveryQUICDispatch = map[byte]configDeliveryQUICHandler{
-	quic.ProvisioningSubGetNonce:       (*QUICServiceHandler).handleProvisioningGetNonce,
-	quic.ProvisioningSubFetchConfig:    (*QUICServiceHandler).handleProvisioningFetchConfig,
-	quic.ProvisioningSubSignDigest:     (*QUICServiceHandler).handleProvisioningSignDigest,
-	quic.ProvisioningSubPollSession:    (*QUICServiceHandler).handleProvisioningPollSession,
-	quic.ProvisioningSubFulfillSession: (*QUICServiceHandler).handleProvisioningFulfillSession,
-	quic.ProvisioningSubListSessions:   (*QUICServiceHandler).handleProvisioningListSessions,
-	quic.ProvisioningSubGetSession:     (*QUICServiceHandler).handleProvisioningGetSession,
+	quicwire.ProvisioningSubGetNonce:       (*QUICServiceHandler).handleProvisioningGetNonce,
+	quicwire.ProvisioningSubFetchConfig:    (*QUICServiceHandler).handleProvisioningFetchConfig,
+	quicwire.ProvisioningSubSignDigest:     (*QUICServiceHandler).handleProvisioningSignDigest,
+	quicwire.ProvisioningSubPollSession:    (*QUICServiceHandler).handleProvisioningPollSession,
+	quicwire.ProvisioningSubFulfillSession: (*QUICServiceHandler).handleProvisioningFulfillSession,
+	quicwire.ProvisioningSubListSessions:   (*QUICServiceHandler).handleProvisioningListSessions,
+	quicwire.ProvisioningSubGetSession:     (*QUICServiceHandler).handleProvisioningGetSession,
 }
 
 // handleProvisioningCategory routes a provisioning request to the
 // correct sub-handler based on the first payload byte. A nil backing
 // service yields the same typed unavailable error the gRPC
 // requireService guard produces.
-func (h *QUICServiceHandler) handleProvisioningCategory(ctx context.Context, req *quic.Request) *quic.Response {
+func (h *QUICServiceHandler) handleProvisioningCategory(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.configDeliveryService == nil {
-		return h.errorResponse(quic.StatusUnavailable, ErrConfigDeliveryServiceNotAvailable{})
+		return h.errorResponse(quicwire.StatusUnavailable, ErrConfigDeliveryServiceNotAvailable{})
 	}
 	sub, payload, errResp := subPayload(req)
 	if errResp != nil {
@@ -339,7 +339,7 @@ func (h *QUICServiceHandler) handleProvisioningCategory(ctx context.Context, req
 	}
 	fn, ok := configDeliveryQUICDispatch[sub]
 	if !ok {
-		return h.errorResponse(quic.StatusNotImplemented, ErrQUICUnknownOpcode{Opcode: sub})
+		return h.errorResponse(quicwire.StatusNotImplemented, ErrQUICUnknownOpcode{Opcode: sub})
 	}
 	return fn(h, ctx, payload)
 }
@@ -348,7 +348,7 @@ func (h *QUICServiceHandler) handleProvisioningCategory(ctx context.Context, req
 // Sub-operation Handlers
 // =============================================================================
 
-func (h *QUICServiceHandler) handleProvisioningGetNonce(ctx context.Context, payload []byte) *quic.Response {
+func (h *QUICServiceHandler) handleProvisioningGetNonce(ctx context.Context, payload []byte) *quicwire.Response {
 	pbResp, err := h.configDeliveryService.GetNonce(ctx, &platformv1.GetNonceRequest{})
 	if err != nil {
 		h.logger.Error(err, "failed to issue provisioning nonce")
@@ -359,10 +359,10 @@ func (h *QUICServiceHandler) handleProvisioningGetNonce(ctx context.Context, pay
 	})
 }
 
-func (h *QUICServiceHandler) handleProvisioningFetchConfig(ctx context.Context, payload []byte) *quic.Response {
+func (h *QUICServiceHandler) handleProvisioningFetchConfig(ctx context.Context, payload []byte) *quicwire.Response {
 	var fetchReq ConfigDeliveryFetchConfigRequest
-	if err := quic.DecodePayload(payload, &fetchReq); err != nil {
-		return h.errorResponse(quic.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(payload, &fetchReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
 	}
 
 	pbResp, err := h.configDeliveryService.FetchConfig(ctx, &platformv1.FetchConfigRequest{
@@ -380,10 +380,10 @@ func (h *QUICServiceHandler) handleProvisioningFetchConfig(ctx context.Context, 
 	return h.encodeConfigDeliveryResponse(flattenFetchConfigResponse(pbResp))
 }
 
-func (h *QUICServiceHandler) handleProvisioningSignDigest(ctx context.Context, payload []byte) *quic.Response {
+func (h *QUICServiceHandler) handleProvisioningSignDigest(ctx context.Context, payload []byte) *quicwire.Response {
 	var signReq ConfigDeliverySignDigestRequest
-	if err := quic.DecodePayload(payload, &signReq); err != nil {
-		return h.errorResponse(quic.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(payload, &signReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
 	}
 
 	pbResp, err := h.configDeliveryService.SignDigest(ctx, &platformv1.SignDigestRequest{
@@ -406,13 +406,13 @@ func (h *QUICServiceHandler) handleProvisioningSignDigest(ctx context.Context, p
 	})
 }
 
-func (h *QUICServiceHandler) handleProvisioningPollSession(ctx context.Context, payload []byte) *quic.Response {
+func (h *QUICServiceHandler) handleProvisioningPollSession(ctx context.Context, payload []byte) *quicwire.Response {
 	var pollReq ConfigDeliveryPollSessionRequest
-	if err := quic.DecodePayload(payload, &pollReq); err != nil {
-		return h.errorResponse(quic.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(payload, &pollReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
 	}
 	if pollReq.SessionId == "" {
-		return h.errorResponse(quic.StatusInvalidArgument, ErrQUICMissingField{Field: "session_id"})
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrQUICMissingField{Field: "session_id"})
 	}
 
 	pbResp, err := h.configDeliveryService.PollSession(ctx, &platformv1.PollSessionRequest{
@@ -425,13 +425,13 @@ func (h *QUICServiceHandler) handleProvisioningPollSession(ctx context.Context, 
 	return h.encodeConfigDeliveryResponse(flattenPollSessionResponse(pbResp))
 }
 
-func (h *QUICServiceHandler) handleProvisioningFulfillSession(ctx context.Context, payload []byte) *quic.Response {
+func (h *QUICServiceHandler) handleProvisioningFulfillSession(ctx context.Context, payload []byte) *quicwire.Response {
 	var fulfillReq ConfigDeliveryFulfillSessionRequest
-	if err := quic.DecodePayload(payload, &fulfillReq); err != nil {
-		return h.errorResponse(quic.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(payload, &fulfillReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
 	}
 	if fulfillReq.SessionId == "" {
-		return h.errorResponse(quic.StatusInvalidArgument, ErrQUICMissingField{Field: "session_id"})
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrQUICMissingField{Field: "session_id"})
 	}
 
 	pbResp, err := h.configDeliveryService.FulfillSession(ctx, &platformv1.FulfillSessionRequest{
@@ -447,7 +447,7 @@ func (h *QUICServiceHandler) handleProvisioningFulfillSession(ctx context.Contex
 	})
 }
 
-func (h *QUICServiceHandler) handleProvisioningListSessions(ctx context.Context, payload []byte) *quic.Response {
+func (h *QUICServiceHandler) handleProvisioningListSessions(ctx context.Context, payload []byte) *quicwire.Response {
 	pbResp, err := h.configDeliveryService.ListSessions(ctx, &platformv1.ListSessionsRequest{})
 	if err != nil {
 		h.logger.Error(err, "failed to list provisioning sessions")
@@ -458,13 +458,13 @@ func (h *QUICServiceHandler) handleProvisioningListSessions(ctx context.Context,
 	})
 }
 
-func (h *QUICServiceHandler) handleProvisioningGetSession(ctx context.Context, payload []byte) *quic.Response {
+func (h *QUICServiceHandler) handleProvisioningGetSession(ctx context.Context, payload []byte) *quicwire.Response {
 	var getReq ConfigDeliveryGetSessionRequest
-	if err := quic.DecodePayload(payload, &getReq); err != nil {
-		return h.errorResponse(quic.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(payload, &getReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
 	}
 	if getReq.SessionId == "" {
-		return h.errorResponse(quic.StatusInvalidArgument, ErrQUICMissingField{Field: "session_id"})
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrQUICMissingField{Field: "session_id"})
 	}
 
 	pbResp, err := h.configDeliveryService.GetSession(ctx, &platformv1.GetSessionRequest{
@@ -480,13 +480,13 @@ func (h *QUICServiceHandler) handleProvisioningGetSession(ctx context.Context, p
 }
 
 // encodeConfigDeliveryResponse encodes v as a StatusOK QUIC response.
-func (h *QUICServiceHandler) encodeConfigDeliveryResponse(v interface{}) *quic.Response {
-	payload, err := quic.EncodePayload(v)
+func (h *QUICServiceHandler) encodeConfigDeliveryResponse(v interface{}) *quicwire.Response {
+	payload, err := quicwire.EncodePayload(v)
 	if err != nil {
-		return h.errorResponse(quic.StatusInternalError, ErrQUICEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrQUICEncodingFailed{Cause: err})
 	}
-	return &quic.Response{
-		Status:  quic.StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }

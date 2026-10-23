@@ -1353,10 +1353,10 @@ func TestParseQueriedRecord_SOARecord_Unconfigured(t *testing.T) {
 	assert.Empty(t, rrs)
 }
 
-// TestParseQueriedRecord_RRSIGRecord_ApexOnly asserts the zone's signatures
-// answer at the apex only. RRSIGRecord carries no owner name, so returning the
-// set for every queried name leaked the whole signature set.
-func TestParseQueriedRecord_RRSIGRecord_ApexOnly(t *testing.T) {
+// TestParseQueriedRecord_RRSIGRecord_UnnamedIsApex asserts a signature
+// persisted before RRSIGRecord recorded its owner answers at the apex only,
+// never at every queried name, which would leak the whole signature set.
+func TestParseQueriedRecord_RRSIGRecord_UnnamedIsApex(t *testing.T) {
 	zone := &entities.Zone{
 		Name: "example.com.",
 		RecordSet: entities.RecordSet{

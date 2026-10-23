@@ -100,7 +100,7 @@ func (c *CLIAdapter) Sign(ctx context.Context, opts SignOptions) (*SignResult, e
 		args = append(args, "--input", opts.Input)
 	}
 	if opts.Output != "" {
-		args = append(args, "--output", opts.Output)
+		args = append(args, "--out", opts.Output)
 	}
 
 	output, err := c.runCommand(ctx, args...)

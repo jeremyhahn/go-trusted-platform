@@ -117,9 +117,9 @@ func (e ErrInvalidReplyType) Error() string {
 	return fmt.Sprintf("unexpected reply message type for gRPC method %s", e.Method)
 }
 
-// ErrInvalidArgsType indicates a category-opcode request encoder received
-// a request message of an unexpected concrete type. Like
-// ErrInvalidReplyType, it is a programming error in the method routing.
+// ErrInvalidArgsType indicates a method request encoder received a request
+// message of an unexpected concrete type. Like ErrInvalidReplyType, this is
+// a programming error in the adapter's method routing.
 type ErrInvalidArgsType struct {
 	Method string
 }
@@ -127,4 +127,16 @@ type ErrInvalidArgsType struct {
 // Error implements the error interface.
 func (e ErrInvalidArgsType) Error() string {
 	return fmt.Sprintf("unexpected request message type for gRPC method %s", e.Method)
+}
+
+// ErrDurationClearNotSupported is returned when an IPAM pool update asks to
+// set a duration to zero over QUIC. The QUIC update keeps a zero duration,
+// so a clear cannot be expressed; send -1 to keep the value instead.
+type ErrDurationClearNotSupported struct {
+	Field string
+}
+
+// Error implements the error interface.
+func (e ErrDurationClearNotSupported) Error() string {
+	return fmt.Sprintf("QUIC cannot set %s to zero: the QUIC pool update keeps a zero duration (send -1 to keep it)", e.Field)
 }

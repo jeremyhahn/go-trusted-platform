@@ -1,13 +1,17 @@
 # Config Delivery REST API Reference
 
+> **Status: REFERENCE** · Last verified: 2026-10-15
+> The config-delivery REST routes, as handled by
+> `pkg/provisioning/configdelivery/handler.go`.
+
 Base path: `/api/v1/provisioning`
 
-The routes are served by the platform daemon REST API (port 8443) and, when
-webservices are enabled, by the webservice router at the same paths. They are
-the **pre-identity install-time path**: a booting device has no client
-certificate yet, so these routes are excluded from the mTLS middleware and
-authenticate in-service via EAB + single-use nonce (see
-[api-reference.md](api-reference.md#authentication-model)).
+Two routers register these paths:
+
+| Router | Authentication |
+|--------|----------------|
+| Webservice (`pkg/webservice/v1/router/device.go`) | `config/nonce`, `config`, `sign` and `sessions/{sessionID}/poll` are unauthenticated: a booting device has no client certificate, so the service authenticates it by EAB and a single-use nonce ([api-reference.md](api-reference.md#authentication-model)). `sessions`, `sessions/{sessionID}` and `fulfill` need the `provisioning:read` or `provisioning:write` scope |
+| Daemon REST (`pkg/api/daemon/rest_service.go`, port 8443) | All seven, behind the listener's mTLS: every connection needs a client certificate, so a device without one cannot reach them here |
 
 ## Response Envelope
 
@@ -40,6 +44,9 @@ GET /api/v1/provisioning/config/nonce
 ```json
 { "nonce": "3f8a...64-hex-chars...b1" }
 ```
+
+The nonce is 32 random bytes in hex, valid for 5 minutes and spent on first
+use.
 
 ### Fetch Config
 
@@ -76,8 +83,10 @@ Content-Type: application/json
 }
 ```
 
-**Errors:** 400 malformed/missing fields or spent nonce, 401 EAB validation
-failure, 403 EK certificate required/mismatch, 500 internal.
+**Errors:** 400 malformed or missing fields, spent nonce, or an EK
+certificate that does not parse; 401 EAB validation failure; 403 EK
+certificate required or mismatched, or the EAB key bound to another profile;
+500 internal.
 
 ### Sign Digest
 
@@ -129,8 +138,9 @@ GET /api/v1/provisioning/sessions
 GET /api/v1/provisioning/sessions/{sessionID}
 ```
 
-Returns the session object above (plus `profile_id` / `profile` once
-fulfilled). **404** when the session does not exist.
+Returns the session object above (plus `tenant_id` when the session has one, `profile_id`, as a JSON string, and
+`profile` once fulfilled). Sessions expire 30 minutes after creation. **404**
+when the session does not exist.
 
 ### Poll Session
 
@@ -151,12 +161,17 @@ without a resolved profile (profile-less fulfillment).
 POST /api/v1/provisioning/sessions/{sessionID}/fulfill
 Content-Type: application/json
 
-{ "session_id": "0b6f9c7e-...", "profile_id": 42 }
+{ "session_id": "0b6f9c7e-...", "profile_id": "42" }
 ```
+
+`profile_id` is accepted as a JSON string or number. The path's
+`{sessionID}` wins over `session_id` in the body.
 
 ```json
 { "status": "fulfilled" }
 ```
 
 **Errors:** 404 unknown session or profile, 400 expired or already-fulfilled
-session.
+session, 400 missing or zero `profile_id`
+(`configdelivery: profile_id is required and must be non-zero`, the same typed
+error every transport returns).

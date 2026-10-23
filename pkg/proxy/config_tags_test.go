@@ -49,7 +49,6 @@ routes:
       require-idevid: true
       allowed-zones: [control-plane, management]
       require-attestation: true
-      required-roles: [admin]
       token-zone: control-plane
     preserve-host: true
 `
@@ -71,7 +70,6 @@ func TestControlPlaneConfig_DecodesHyphenatedKeys(t *testing.T) {
 	assert.True(t, r.Auth.RequireIDevID)
 	assert.Equal(t, []string{"control-plane", "management"}, r.Auth.AllowedZones)
 	assert.True(t, r.Auth.RequireAttestation)
-	assert.Equal(t, []string{"admin"}, r.Auth.RequiredRoles)
 	assert.Equal(t, "control-plane", r.Auth.TokenZone)
 	assert.True(t, r.PreserveHost)
 

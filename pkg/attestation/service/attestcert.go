@@ -27,8 +27,9 @@ var _ verdict.AttestCertSink = (*Service)(nil)
 
 // RecordAttestCert writes an attestation-certificate record attempt to the
 // attestation event log. A recorded certificate becomes the trust anchor for
-// every later quote from that device, so both outcomes are audited: what was
-// recorded and where it came from, or what was refused and why.
+// every later quote from that device, so every outcome is audited: what was
+// recorded and where it came from, what was refused and why, or — when the
+// operator asked for it — which refused certificate was cleared and why.
 //
 // Observers are deliberately not notified. Recording a certificate is not a
 // verdict about the device's measured state; the collector's next sweep
@@ -62,7 +63,12 @@ func (s *Service) RecordAttestCert(ctx context.Context, e verdict.AttestCertEven
 		Outcome:  "recorded",
 		Metadata: meta,
 	}
-	if !e.Recorded {
+	switch {
+	case e.Cleared:
+		ev.Kind = store.EventKindDeviceAttestCertCleared
+		ev.Outcome = "cleared"
+		ev.Reason = e.Reason
+	case !e.Recorded:
 		ev.Kind = store.EventKindDeviceAttestCertRefused
 		ev.Outcome = "refused"
 		ev.Reason = e.Reason

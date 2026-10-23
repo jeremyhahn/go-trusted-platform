@@ -24,6 +24,7 @@ export { SDNService } from './sdn-service.js';
 export { TenantService } from './tenant-service.js';
 export { TPMService } from './tpm-service.js';
 export { VTPMService } from './vtpm-service.js';
+export { VPNService } from './vpn-service.js';
 export { InvitationService } from './invitation-service.js';
 export { EABService } from './eab-service.js';
 

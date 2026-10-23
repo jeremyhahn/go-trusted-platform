@@ -15,8 +15,21 @@ package quicbaas
 
 import (
 	"fmt"
+	"strings"
 	"time"
+
+	quicbaas "github.com/jeremyhahn/go-quicbaas/sdk/go"
+	baaserrors "github.com/jeremyhahn/go-quicbaas/sdk/go/errors"
 )
+
+// IsNotFound reports whether err is the refusal a go-quicbaas KV read
+// returns for a missing entity. A KV Get never answers a miss with
+// Found=false: remote transports return an SDK error with CodeNotFound, and
+// the embedded transport returns the go-qrdb DatabaseError with ErrNotFound,
+// which the SDK's errors.IsNotFound does not recognise.
+func IsNotFound(err error) bool {
+	return baaserrors.IsNotFound(err) || quicbaas.IsDatabaseErrorCode(err, quicbaas.ErrNotFound)
+}
 
 // ErrNotFound is returned when an entity is not found in the database.
 type ErrNotFound struct {
@@ -47,6 +60,18 @@ type ErrInvalidConfig struct {
 
 func (e ErrInvalidConfig) Error() string {
 	return fmt.Sprintf("invalid configuration: %s: %s", e.Field, e.Reason)
+}
+
+// ErrVectorUnavailable is returned by every Vector call when the embedded
+// server serves no vector service, instead of the transport's bare
+// "unimplemented". Reason says whether the build lacks the service or the
+// configuration leaves it disabled.
+type ErrVectorUnavailable struct {
+	Reason string
+}
+
+func (e ErrVectorUnavailable) Error() string {
+	return fmt.Sprintf("vector service unavailable: %s", e.Reason)
 }
 
 // ErrInvalidTransport is returned when an invalid transport string is provided.
@@ -181,6 +206,77 @@ type ErrRaftNotReady struct {
 
 func (e ErrRaftNotReady) Error() string {
 	return fmt.Sprintf("raft not ready: %s", e.Reason)
+}
+
+// ErrRaftAdvertiseAddress is returned when a node that joins peers has no
+// routable Raft advertise address. Peers dial the advertised address, so a
+// loopback, unspecified or empty quicbaas.raft-address would publish a peer
+// nobody can reach; the node refuses to start instead.
+type ErrRaftAdvertiseAddress struct {
+	Address string
+}
+
+func (e ErrRaftAdvertiseAddress) Error() string {
+	return fmt.Sprintf("quicbaas.raft-address %q is not routable: a node with join-addresses must advertise an address its peers can dial (set quicbaas.raft-address, PLATFORMD_QUICBAAS_RAFT_ADDRESS or --raft-address)", e.Address)
+}
+
+// ErrRaftPeerAddress is returned when a quicbaas.join-addresses entry is not
+// in go-quicbaas's "id=host:port" member form. go-quicbaas silently drops an
+// entry without an id, so a bare "host:port" would leave the node clustered
+// with no peers; it is refused here instead.
+type ErrRaftPeerAddress struct {
+	Entry  string
+	Reason string
+}
+
+func (e ErrRaftPeerAddress) Error() string {
+	return fmt.Sprintf("quicbaas.join-addresses entry %q is not \"id=host:port\": %s", e.Entry, e.Reason)
+}
+
+// ErrRaftDuplicatePeer is returned when two quicbaas.join-addresses entries
+// carry the same node ID. Every cluster member needs its own ID.
+type ErrRaftDuplicatePeer struct {
+	NodeID uint64
+}
+
+func (e ErrRaftDuplicatePeer) Error() string {
+	return fmt.Sprintf("quicbaas.join-addresses lists node ID %d more than once", e.NodeID)
+}
+
+// ErrRaftSelfPeer is returned when a clustered node's own member entry is
+// missing from quicbaas.join-addresses or names an address other than its
+// quicbaas.raft-address. A bootstrapping member must be in the member list,
+// at the address its peers dial.
+type ErrRaftSelfPeer struct {
+	NodeID      uint64
+	RaftAddress string
+}
+
+func (e ErrRaftSelfPeer) Error() string {
+	return fmt.Sprintf("quicbaas.join-addresses must list this node as \"%d=%s\" (quicbaas.node-id=quicbaas.raft-address)", e.NodeID, e.RaftAddress)
+}
+
+// ErrRaftClusterField is returned when a clustered node leaves a field the
+// cluster cannot form without at its zero value.
+type ErrRaftClusterField struct {
+	Field  string
+	Reason string
+}
+
+func (e ErrRaftClusterField) Error() string {
+	return fmt.Sprintf("quicbaas.%s is required with join-addresses: %s", e.Field, e.Reason)
+}
+
+// ErrRaftTLSRequired is returned when a clustered node does not name all
+// three Raft TLS files. Raft traffic between peers is always mutually
+// authenticated TLS; the platform never lets a cluster form in plaintext or
+// on material it did not supply.
+type ErrRaftTLSRequired struct {
+	Missing []string
+}
+
+func (e ErrRaftTLSRequired) Error() string {
+	return fmt.Sprintf("Raft TLS between peers is required with join-addresses: set %s", strings.Join(e.Missing, ", "))
 }
 
 // ErrFactoryClosed is returned when the factory has been closed.

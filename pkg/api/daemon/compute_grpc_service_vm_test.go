@@ -17,6 +17,7 @@ package daemon
 
 import (
 	"context"
+	"crypto/x509"
 	"testing"
 	"time"
 
@@ -101,9 +102,10 @@ func (m *vmCapableMockOrchestrator) AttestVM(ctx context.Context, instanceID str
 			0: {0x01},
 			7: {0x07},
 		},
-		Quote:       []byte("quote-bytes"),
-		Signature:   []byte("signature-bytes"),
-		AKPublicKey: []byte("ak-public"),
+		Quote:              []byte("quote-bytes"),
+		Signature:          []byte("signature-bytes"),
+		SignatureAlgorithm: x509.SHA256WithRSAPSS.String(),
+		AKPublicKey:        []byte("ak-public"),
 	}, nil
 }
 
@@ -341,6 +343,57 @@ func TestComputeGRPCService_ListSnapshots(t *testing.T) {
 	})
 }
 
+func TestComputeGRPCService_GetSnapshot(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("success", func(t *testing.T) {
+		svc, orchestrator := newVMCapableComputeService()
+		orchestrator.snapshots = []*compute.VMSnapshot{
+			{Name: "snap1", VMID: "vm1", SizeBytes: 100},
+			{Name: "snap2", VMID: "vm1", SizeBytes: 200, Description: "nightly"},
+		}
+
+		resp, err := svc.GetSnapshot(ctx, &platformv1.GetSnapshotRequest{VmId: "vm1", SnapshotId: "snap2"})
+		require.NoError(t, err)
+		assert.Equal(t, "snap2", resp.GetSnapshot().GetId())
+		assert.Equal(t, uint64(200), resp.GetSnapshot().GetSizeBytes())
+		assert.Equal(t, "nightly", resp.GetSnapshot().GetConfig().GetDescription())
+	})
+
+	t.Run("missing VM ID", func(t *testing.T) {
+		svc, _ := newVMCapableComputeService()
+		_, err := svc.GetSnapshot(ctx, &platformv1.GetSnapshotRequest{SnapshotId: "snap1"})
+		assertStatusCode(t, err, codes.InvalidArgument)
+	})
+
+	t.Run("missing snapshot ID", func(t *testing.T) {
+		svc, _ := newVMCapableComputeService()
+		_, err := svc.GetSnapshot(ctx, &platformv1.GetSnapshotRequest{VmId: "vm1"})
+		assertStatusCode(t, err, codes.InvalidArgument)
+	})
+
+	t.Run("unknown snapshot maps to NotFound", func(t *testing.T) {
+		svc, orchestrator := newVMCapableComputeService()
+		orchestrator.snapshots = []*compute.VMSnapshot{{Name: "snap1", VMID: "vm1"}}
+		_, err := svc.GetSnapshot(ctx, &platformv1.GetSnapshotRequest{VmId: "vm1", SnapshotId: "snap9"})
+		require.ErrorAs(t, err, &ErrVMSnapshotNotFound{})
+		assertStatusCode(t, err, codes.NotFound)
+	})
+
+	t.Run("list failure keeps its class", func(t *testing.T) {
+		svc, orchestrator := newVMCapableComputeService()
+		orchestrator.listErr = compute.ErrInstanceNotRunning
+		_, err := svc.GetSnapshot(ctx, &platformv1.GetSnapshotRequest{VmId: "vm1", SnapshotId: "snap1"})
+		assertStatusCode(t, err, codes.FailedPrecondition)
+	})
+
+	t.Run("nil orchestrator", func(t *testing.T) {
+		svc := createTestComputeServiceNoOrchestrator(t)
+		_, err := svc.GetSnapshot(ctx, &platformv1.GetSnapshotRequest{VmId: "vm1", SnapshotId: "snap1"})
+		assertStatusCode(t, err, codes.FailedPrecondition)
+	})
+}
+
 // =============================================================================
 // AttestVM / VerifyVMAttestation
 // =============================================================================
@@ -396,6 +449,7 @@ func TestComputeGRPCService_AttestVM(t *testing.T) {
 		assert.True(t, resp.GetStatus().GetSuccess())
 		assert.Equal(t, []byte("quote-bytes"), resp.GetQuote())
 		assert.Equal(t, []byte("signature-bytes"), resp.GetSignature())
+		assert.Equal(t, x509.SHA256WithRSAPSS.String(), resp.GetSignatureAlgorithm())
 		assert.Equal(t, []byte("ak-public"), resp.GetAkPublic())
 		require.Len(t, resp.GetPcrValues(), 2)
 		assert.Equal(t, uint32(0), resp.GetPcrValues()[0].GetIndex())
@@ -418,10 +472,11 @@ func TestComputeGRPCService_VerifyVMAttestation(t *testing.T) {
 	t.Run("success", func(t *testing.T) {
 		svc, orchestrator := newVMCapableComputeService()
 		resp, err := svc.VerifyVMAttestation(ctx, &platformv1.VerifyVMAttestationRequest{
-			VmId:      "vm1",
-			Quote:     []byte("quote"),
-			Signature: []byte("signature"),
-			Nonce:     []byte("nonce"),
+			VmId:               "vm1",
+			Quote:              []byte("quote"),
+			Signature:          []byte("signature"),
+			SignatureAlgorithm: x509.SHA256WithRSAPSS.String(),
+			Nonce:              []byte("nonce"),
 			ExpectedPcrs: []*platformv1.PCRValue{
 				{Index: 0, Bank: platformv1.PCRBank_PCR_BANK_SHA256, Value: []byte{0x01}},
 			},
@@ -433,6 +488,7 @@ func TestComputeGRPCService_VerifyVMAttestation(t *testing.T) {
 
 		require.NotNil(t, orchestrator.lastEvidence)
 		assert.Equal(t, []byte("quote"), orchestrator.lastEvidence.Quote)
+		assert.Equal(t, x509.SHA256WithRSAPSS.String(), orchestrator.lastEvidence.SignatureAlgorithm)
 		assert.Equal(t, []byte{0x01}, orchestrator.lastEvidence.ExpectedPCRs[0])
 	})
 

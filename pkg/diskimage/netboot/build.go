@@ -27,6 +27,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/bootstrap/container"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/diskimage"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/diskimage/artifacts"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/disklessroot"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/ipxe"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/iso"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
@@ -137,6 +138,20 @@ type Config struct {
 	OutputDir string
 	// Sets are the sets to build (default DefaultSets).
 	Sets []Set
+	// Diskless adds the diskless root to every set with a diskimage target:
+	// the squashfs and its dm-verity hash tree beside the kernel, and the
+	// manifest, signed with the Secure Boot DB key, in the install media.
+	// It needs Secure Boot and a Version. A set serves it only to the nodes
+	// whose boot_model is diskless; every other node installs to its disk.
+	Diskless bool
+	// SourceDateEpoch and Version fix the diskless root's timestamps and its
+	// verity salt, so the same release builds the same root hash.
+	SourceDateEpoch int64
+	Version         string
+	// HTTPBoot, when set, also builds the signed boot.img and boot.sig the
+	// Raspberry Pi bootloader EEPROM fetches over HTTP, from the Pi set's
+	// boot partition; nil builds none.
+	HTTPBoot *HTTPBoot
 }
 
 // Result is a finished netboot media build.
@@ -145,6 +160,11 @@ type Result struct {
 	Dir string
 	// Sets names the media sets built.
 	Sets []string
+	// HTTPBoot describes the HTTP boot files when the build made them.
+	HTTPBoot *HTTPBootFiles
+	// HTTPBootPath is the EEPROM's HTTP_PATH for them, under the HTTP_HOST
+	// the container is reached at; empty without HTTP boot.
+	HTTPBootPath string
 }
 
 // Build produces a netboot media build: one media set per Set, the
@@ -166,6 +186,7 @@ func Build(ctx context.Context, cfg *Config) (*Result, error) {
 	}
 
 	index := container.NetbootMedia{}
+	var httpBoot *HTTPBootFiles
 	for _, set := range c.Sets {
 		staged, err := c.buildSet(ctx, set, work)
 		if err != nil {
@@ -180,6 +201,13 @@ func Build(ctx context.Context, cfg *Config) (*Result, error) {
 		}
 		index.TFTPTree = TFTPTreeDir
 		index.ARM64IPXE = ARM64IPXEFile
+		if c.HTTPBoot == nil {
+			continue
+		}
+		if httpBoot, err = c.httpBootFiles(ctx); err != nil {
+			return nil, &BuildError{Set: set.Name, Step: "the HTTP boot files", Err: err}
+		}
+		index.HTTPBoot = HTTPBootDir
 	}
 	if err := os.RemoveAll(work); err != nil {
 		return nil, &BuildError{Step: "removing the work directory", Err: err}
@@ -197,7 +225,25 @@ func Build(ctx context.Context, cfg *Config) (*Result, error) {
 	if _, err := container.LoadMediaSets(filepath.Join(c.OutputDir, container.NetbootMediaSetsDir), "/data/"+container.NetbootMediaSetsDir); err != nil {
 		return nil, &BuildError{Step: "loading the media sets back", Err: err}
 	}
-	return &Result{Dir: c.OutputDir, Sets: index.MediaSets}, nil
+	result := &Result{Dir: c.OutputDir, Sets: index.MediaSets}
+	if httpBoot != nil {
+		if err := readBackHTTPBoot(c.OutputDir, httpBoot); err != nil {
+			return nil, err
+		}
+		result.HTTPBoot = httpBoot
+		result.HTTPBootPath = (&container.NetbootMedia{HTTPBoot: HTTPBootDir}).HTTPBootPath()
+	}
+	return result, nil
+}
+
+// readBackHTTPBoot reads the HTTP boot files staged under outputDir back as
+// the EEPROM reads them, against the key hash they were staged for. Build's
+// last step: what fails here is never served.
+func readBackHTTPBoot(outputDir string, files *HTTPBootFiles) error {
+	if _, err := VerifyHTTPBoot(filepath.Join(outputDir, HTTPBootDir), files.KeyHash); err != nil {
+		return &BuildError{Step: "loading the HTTP boot files back", Err: err}
+	}
+	return nil
 }
 
 // resolve checks the configuration and fills its defaults.
@@ -215,8 +261,14 @@ func (cfg *Config) resolve() (*Config, error) {
 	if c.Model == "" {
 		c.Model = "rpi4"
 	}
-	if len(c.Sets) == 0 {
-		c.Sets = DefaultSets
+	c.Sets = c.SetsToBuild()
+	if c.Diskless {
+		if !c.Build.ISO.SecureBoot {
+			return nil, &BuildError{Step: "configuration", Err: &MissingFileError{File: "Secure Boot, whose DB key signs the diskless root manifest"}}
+		}
+		if c.Version == "" {
+			return nil, &BuildError{Step: "configuration", Err: &MissingFileError{File: "a version for the diskless root"}}
+		}
 	}
 	for _, set := range c.Sets {
 		if c.binariesDir(set) == "" {
@@ -229,7 +281,47 @@ func (cfg *Config) resolve() (*Config, error) {
 			return nil, &BuildError{Set: set.Name, Step: "configuration", Err: &MissingFileError{File: "the arm64 iPXE"}}
 		}
 	}
+	if c.HTTPBoot != nil {
+		if err := c.resolveHTTPBoot(); err != nil {
+			return nil, err
+		}
+	}
 	return &c, nil
+}
+
+// disklessDefaultSets is DefaultSets without the sets that have no diskless
+// image (no diskimage target, the x86_64 installer), logging each one left
+// out. A set named explicitly is never filtered: it fails with
+// UnsupportedDisklessSetError.
+func (cfg *Config) disklessDefaultSets() []Set {
+	logger := logging.DefaultLogger()
+	if cfg.Build != nil && cfg.Build.Logger != nil {
+		logger = cfg.Build.Logger
+	}
+	sets := make([]Set, 0, len(DefaultSets))
+	for _, set := range DefaultSets {
+		if set.Target == "" {
+			logger.Infof("[NETBOOT] --diskless: leaving the %s set out of the default sets, it has no diskless image; name it in --sets to make this an error", set.Name)
+			continue
+		}
+		sets = append(sets, set)
+	}
+	return sets
+}
+
+// SetsToBuild returns the sets a build of this configuration produces: Sets
+// when any are named, otherwise DefaultSets, less the sets with no diskless
+// image when Diskless is set. A caller that prepares per-set inputs (binaries
+// directories) asks here rather than starting from DefaultSets, so a default
+// diskless build never needs inputs for a set it leaves out.
+func (cfg *Config) SetsToBuild() []Set {
+	if len(cfg.Sets) > 0 {
+		return cfg.Sets
+	}
+	if cfg.Diskless {
+		return cfg.disklessDefaultSets()
+	}
+	return DefaultSets
 }
 
 // setMedia is a set's staged install media and what staging it produced.
@@ -270,6 +362,9 @@ func (c *Config) buildSet(ctx context.Context, set Set, work string) (*stagedSet
 	if err != nil {
 		return nil, fail("staging the install media", err)
 	}
+	if c.Diskless && media.image == nil {
+		return nil, fail("validating the diskless root", &UnsupportedDisklessSetError{Set: set.Name})
+	}
 
 	setDir := filepath.Join(c.OutputDir, container.NetbootMediaSetsDir, set.Name)
 	if err := os.MkdirAll(setDir, 0o755); err != nil {
@@ -306,10 +401,18 @@ func (c *Config) buildSet(ctx context.Context, set Set, work string) (*stagedSet
 		}
 	}
 
+	// The diskless root is built before the payload list, so the signed
+	// manifest under cdrom/ reaches the installer with the rest of the media.
+	diskless := c.Diskless
+	if diskless {
+		if _, err := media.image.BuildDisklessRoot(ctx, setDir, filepath.Join(cdrom, disklessroot.Dir), c.SourceDateEpoch, c.Version); err != nil {
+			return nil, fail("building the diskless root", err)
+		}
+	}
 	if err := writePayloadList(setDir); err != nil {
 		return nil, fail("writing the payload list", err)
 	}
-	if err := writeDescriptor(setDir, container.MediaSet{
+	descriptor := container.MediaSet{
 		Name:         set.Name,
 		Architecture: set.Architecture,
 		Kernel:       files.Kernel,
@@ -317,7 +420,9 @@ func (c *Config) buildSet(ctx context.Context, set Set, work string) (*stagedSet
 		Modloop:      files.Modloop,
 		KernelArgs:   set.KernelArgs,
 		Default:      set.Default,
-	}); err != nil {
+		Diskless:     diskless,
+	}
+	if err := writeDescriptor(setDir, descriptor); err != nil {
 		return nil, fail("writing the descriptor", err)
 	}
 	return &stagedSet{dir: setDir, media: media}, nil
@@ -550,6 +655,14 @@ func writeChecksums(root string) error {
 
 // BuildError is a step of a netboot media build that failed, for a set or
 // for the build as a whole.
+type UnsupportedDisklessSetError struct {
+	Set string
+}
+
+func (e *UnsupportedDisklessSetError) Error() string {
+	return "diskless root is not available for media set " + e.Set
+}
+
 type BuildError struct {
 	Set  string
 	Step string

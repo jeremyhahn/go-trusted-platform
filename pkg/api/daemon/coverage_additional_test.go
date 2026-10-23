@@ -22,6 +22,8 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+
+	"github.com/jeremyhahn/go-trusted-platform/pkg/api/mcp"
 )
 
 // =============================================================================
@@ -65,40 +67,7 @@ func TestErrorTypes_KMSDataKeyErrors(t *testing.T) {
 }
 
 // =============================================================================
-// Platform Service Provider SDN Operations Tests - service_provider.go coverage
-// =============================================================================
-
-func TestPlatformServiceProvider_SDNOperations(t *testing.T) {
-	provider := &PlatformServiceProvider{}
-	ctx := context.Background()
-
-	t.Run("SDNCreateBridge without SDN service", func(t *testing.T) {
-		err := provider.SDNCreateBridge(ctx, "br0")
-		var notAvailableErr ErrServiceNotAvailable
-		assert.ErrorAs(t, err, &notAvailableErr)
-	})
-
-	t.Run("SDNDeleteBridge without SDN service", func(t *testing.T) {
-		err := provider.SDNDeleteBridge(ctx, "br0")
-		var notAvailableErr ErrServiceNotAvailable
-		assert.ErrorAs(t, err, &notAvailableErr)
-	})
-
-	t.Run("SDNAddPort without SDN service", func(t *testing.T) {
-		err := provider.SDNAddPort(ctx, "br0", "eth0", "internal")
-		var notAvailableErr ErrServiceNotAvailable
-		assert.ErrorAs(t, err, &notAvailableErr)
-	})
-
-	t.Run("SDNDeletePort without SDN service", func(t *testing.T) {
-		err := provider.SDNDeletePort(ctx, "br0", "eth0")
-		var notAvailableErr ErrServiceNotAvailable
-		assert.ErrorAs(t, err, &notAvailableErr)
-	})
-}
-
-// =============================================================================
-// MCP Service Provider Health Operations Tests - service_provider.go coverage
+// MCP Service Provider Health Operations Tests
 // =============================================================================
 
 func TestMCPServiceProvider_HealthOperations(t *testing.T) {
@@ -125,39 +94,6 @@ func TestMCPServiceProvider_HealthOperations(t *testing.T) {
 }
 
 // =============================================================================
-// Platform Service Provider Health Operations Tests - service_provider.go coverage
-// =============================================================================
-
-func TestPlatformServiceProvider_HealthOperations(t *testing.T) {
-	provider := &PlatformServiceProvider{}
-	ctx := context.Background()
-
-	t.Run("Health without daemon", func(t *testing.T) {
-		result, err := provider.Health(ctx)
-		assert.Nil(t, result)
-		assert.Error(t, err)
-	})
-
-	t.Run("Liveness without daemon", func(t *testing.T) {
-		result, err := provider.Liveness(ctx)
-		assert.Nil(t, result)
-		assert.Error(t, err)
-	})
-
-	t.Run("Readiness without daemon", func(t *testing.T) {
-		result, err := provider.Readiness(ctx)
-		assert.Nil(t, result)
-		assert.Error(t, err)
-	})
-
-	t.Run("SDNGetFlowStats without SDN service", func(t *testing.T) {
-		result, err := provider.SDNGetFlowStats(ctx, "br0")
-		assert.Nil(t, result)
-		assert.Error(t, err)
-	})
-}
-
-// =============================================================================
 // MCP Service VTPMCreate Tests - mcp_service.go coverage
 // =============================================================================
 
@@ -166,7 +102,7 @@ func TestMCPService_VTPMCreate_NoService(t *testing.T) {
 	ctx := context.Background()
 
 	t.Run("VTPMCreate without vTPM service", func(t *testing.T) {
-		result, err := provider.VTPMCreate(ctx, "test-vtpm", "ECDSA-P256")
+		result, err := provider.VTPMCreate(ctx, "test-vtpm", "ECC", false, nil)
 		assert.Nil(t, result)
 		assert.Error(t, err)
 	})
@@ -196,7 +132,7 @@ func TestMCPService_DeviceOperations_NoService(t *testing.T) {
 	ctx := context.Background()
 
 	t.Run("DeviceRegister without device service", func(t *testing.T) {
-		result, err := provider.DeviceRegister(ctx, "device-001", "test-device", nil)
+		result, err := provider.DeviceRegister(ctx, &mcp.DeviceRegisterRequest{Model: "device-001", Serial: "test-device"})
 		assert.Nil(t, result)
 		assert.Error(t, err)
 	})
@@ -227,12 +163,12 @@ func TestMCPService_SDNOperations_NoService(t *testing.T) {
 	ctx := context.Background()
 
 	t.Run("SDNSetPortState without SDN service", func(t *testing.T) {
-		err := provider.SDNSetPortState(ctx, "br0", "eth0", "up")
+		_, err := provider.SDNSetPortState(ctx, "br0", "eth0", "up", mcp.PortRates{})
 		assert.Error(t, err)
 	})
 
 	t.Run("SDNListPolicies without SDN service", func(t *testing.T) {
-		result, err := provider.SDNListPolicies(ctx)
+		result, err := provider.SDNListPolicies(ctx, "", "")
 		assert.Nil(t, result)
 		assert.Error(t, err)
 	})
@@ -244,7 +180,7 @@ func TestMCPService_SDNOperations_NoService(t *testing.T) {
 	})
 
 	t.Run("SDNGetFlowStats without SDN service", func(t *testing.T) {
-		result, err := provider.SDNGetFlowStats(ctx, "br0")
+		result, err := provider.SDNGetFlowStats(ctx, "br0", "0x1")
 		assert.Nil(t, result)
 		assert.Error(t, err)
 	})

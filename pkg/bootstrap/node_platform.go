@@ -22,6 +22,8 @@ import (
 	"strings"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/bootstrap/container"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/bootstrap/nbd"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/disklessroot"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/ipxe"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/rpinetboot"
@@ -42,12 +44,17 @@ const (
 	ArchitectureAArch64 = "aarch64"
 )
 
-// Boot models for a Raspberry Pi. BootModelSD installs to the SD card over
+// Boot models. BootModelSD installs a Raspberry Pi to the SD card over
 // the network once (the bootloader tries the card first — BOOT_ORDER
-// 0xf21 — so an installed node never asks the boot server again). The
-// diskless models are added with their implementations.
+// 0xf21 — so an installed node never asks the boot server again).
+// BootModelDiskless boots any node from the media set's dm-verity squashfs
+// root, held in RAM under a tmpfs overlay; its identity lives in its TPM.
+// BootModelDisklessNBD boots a Raspberry Pi with no local disk from its own
+// LUKS-encrypted root, exported by the boot server over NBD-over-TLS.
 const (
-	BootModelSD = "sd"
+	BootModelSD          = "sd"
+	BootModelDiskless    = disklessroot.BootModel
+	BootModelDisklessNBD = nbd.BootModel
 )
 
 // validPlatforms, validArchitectures and validPiBootModels are the accepted
@@ -55,7 +62,7 @@ const (
 var (
 	validPlatforms     = []string{PlatformRaspberryPi}
 	validArchitectures = []string{ArchitectureX86_64, ArchitectureAArch64}
-	validPiBootModels  = []string{BootModelSD}
+	validPiBootModels  = []string{BootModelSD, BootModelDiskless, BootModelDisklessNBD}
 )
 
 // EffectiveArchitecture is the node's architecture with its default: a
@@ -83,6 +90,13 @@ func (n *NodeConfig) EffectiveBootModel() string {
 // IsRaspberryPi reports whether the node is a Raspberry Pi.
 func (n *NodeConfig) IsRaspberryPi() bool {
 	return n.Platform == PlatformRaspberryPi
+}
+
+// IsDiskless reports whether the node boots its root from the network
+// (NFS or NBD) rather than from local media.
+func (n *NodeConfig) IsDiskless() bool {
+	model := n.EffectiveBootModel()
+	return model == BootModelDiskless || model == BootModelDisklessNBD
 }
 
 // PiSerial parses the node's serial as the Raspberry Pi bootloader sends
@@ -133,10 +147,12 @@ func (c *BootstrapConfig) validateNetbootMedia() error {
 	if err != nil {
 		return ErrNetbootMediaRequired{Reason: "the build's media sets cannot be used", Err: err}
 	}
-	defaults := map[string]bool{}
+	defaults := map[string]container.MediaSet{}
+	byName := map[string]container.MediaSet{}
 	for _, s := range sets {
+		byName[s.Name] = s
 		if s.Default {
-			defaults[s.Architecture] = true
+			defaults[s.Architecture] = s
 		}
 	}
 	for i := range c.Nodes {
@@ -144,11 +160,18 @@ func (c *BootstrapConfig) validateNetbootMedia() error {
 		if n.SkipInstall || n.EffectiveBootMethod() != BootMethodPXE {
 			continue
 		}
+		setName := n.MediaSet()
+		set, ok := byName[setName]
+		if setName == "" {
+			set, ok = defaults[n.IPXEArchitecture()]
+		}
 		switch {
-		case n.MediaSet() != "" && !media.HasMediaSet(n.MediaSet()):
+		case n.MediaSet() != "" && !ok:
 			return ErrNetbootMediaRequired{Hostname: n.Hostname, Reason: "the build has no media set " + n.MediaSet()}
-		case n.MediaSet() == "" && !defaults[n.IPXEArchitecture()]:
+		case n.MediaSet() == "" && !ok:
 			return ErrNetbootMediaRequired{Hostname: n.Hostname, Reason: "the build has no default " + n.IPXEArchitecture() + " media set"}
+		case n.EffectiveBootModel() == BootModelDiskless && !set.Diskless:
+			return ErrNetbootMediaRequired{Hostname: n.Hostname, Reason: "the selected media set " + set.Name + " has no diskless root"}
 		case n.IsRaspberryPi() && (media.TFTPTree == "" || media.ARM64IPXE == ""):
 			return ErrNetbootMediaRequired{Hostname: n.Hostname, Reason: "the build has no Raspberry Pi TFTP tree or arm64 iPXE"}
 		}
@@ -185,10 +208,13 @@ func (n *NodeConfig) validatePlatform() error {
 	}
 	switch n.Platform {
 	case PlatformGeneric:
-		for _, f := range []struct{ field, value string }{{"model", n.Model}, {"serial", n.Serial}, {"boot_model", n.BootModel}} {
+		for _, f := range []struct{ field, value string }{{"model", n.Model}, {"serial", n.Serial}} {
 			if f.value != "" {
 				return ErrInvalidNodePlatform{Hostname: n.Hostname, Field: f.field, Value: f.value, Reason: "only a node with a platform (" + strings.Join(validPlatforms, ", ") + ") takes " + f.field}
 			}
+		}
+		if n.BootModel != "" && n.BootModel != BootModelDiskless {
+			return ErrInvalidNodePlatform{Hostname: n.Hostname, Field: "boot_model", Value: n.BootModel, Reason: "expected " + BootModelDiskless + " for a generic diskless node"}
 		}
 		return nil
 	case PlatformRaspberryPi:

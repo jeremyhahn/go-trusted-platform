@@ -16,6 +16,7 @@ package bootstrap
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -31,6 +32,13 @@ import (
 )
 
 // --- DryRun tests ---
+
+// unreachableMACDiscovery stands in for a BMC whose MAC walk fails. The
+// real walk would dial the fleet address the test config names and wait
+// out its network timeout (#284).
+func unreachableMACDiscovery(_ context.Context, config *bmc.Config, _ *slog.Logger) ([]string, error) {
+	return nil, bmc.ErrMACNotFound{Address: config.Address}
+}
 
 func TestOrchestrator_DryRun_AllBMCReachable(t *testing.T) {
 	cfg := &BootstrapConfig{
@@ -82,6 +90,7 @@ func TestOrchestrator_DryRun_AllBMCReachable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
+	o.discoverMACs = unreachableMACDiscovery
 
 	ctx := context.Background()
 	result, err := o.DryRun(ctx)
@@ -193,6 +202,7 @@ func TestOrchestrator_DryRun_BMCUnreachable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
+	o.discoverMACs = unreachableMACDiscovery
 
 	ctx := context.Background()
 	result, err := o.DryRun(ctx)
@@ -352,6 +362,23 @@ func TestOrchestrator_DryRun_ManualNodes(t *testing.T) {
 	}
 }
 
+func TestOrchestrator_DryRun_ReportsDisklessBootModel(t *testing.T) {
+	o := &Orchestrator{}
+	node := &NodeConfig{
+		Hostname:  "w-diskless",
+		Role:      RoleWorker,
+		BootModel: BootModelDiskless,
+		MACs:      []string{"aa:bb:cc:dd:ee:10"},
+	}
+	result := o.dryRunSingleNode(context.Background(), node)
+	if result.BootModel != BootModelDiskless {
+		t.Fatalf("boot model = %q, want %q", result.BootModel, BootModelDiskless)
+	}
+	if result.Status != dryRunStatusManual {
+		t.Fatalf("status = %q", result.Status)
+	}
+}
+
 func TestOrchestrator_DryRun_NoNodes(t *testing.T) {
 	cfg := &BootstrapConfig{
 		Deployer:    DeployerConfig{NetbootMediaDir: fleetMedia, Host: "deploy-host"},
@@ -486,6 +513,7 @@ func TestOrchestrator_DryRun_MixedNodes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
+	o.discoverMACs = unreachableMACDiscovery
 
 	ctx := context.Background()
 	result, err := o.DryRun(ctx)

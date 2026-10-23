@@ -53,6 +53,11 @@ var (
 	// ErrManagerAlreadyStarted is returned when Start is called on an already running manager.
 	ErrManagerAlreadyStarted = errors.New("VTEP manager already started")
 
+	// ErrOFPortUnassigned is returned when OVS reports the VXLAN port
+	// without an OpenFlow port number, as it does for an interface it could
+	// not attach.
+	ErrOFPortUnassigned = errors.New("VXLAN port has no OpenFlow port number")
+
 	// ErrInvalidPortName is returned when the VXLAN port name is empty.
 	ErrInvalidPortName = errors.New("VXLAN port name is empty")
 

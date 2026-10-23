@@ -42,6 +42,30 @@ The enhanced devcontainer provides a complete, isolated environment for running 
 └─────────────────────────────────────────────────────────────┘
 ```
 
+## Running the Suites
+
+Every Go suite under `test/integration` runs through one runner,
+`run-integration-tests.sh`, from a `make integration-test-<key>` target:
+
+```bash
+make integration-test              # every devcontainer-runnable suite (the runner's ALL_TARGETS)
+make integration-test-<key>        # one suite; <key> is a TARGET_PACKAGES key in the runner
+```
+
+The runner starts OVS, swtpm and a shared `platformd`, then runs
+`go test` with the tags `make` hands it (`integration` plus
+`make -s print-build-tags`). The keys in its `TARGET_NO_DAEMON` map skip the
+shared `platformd`; `TARGET_RUN` narrows a slice with `-run`, and `TARGET_ENV`
+sets the environment a suite needs (`ipxe` and `ipxe-dhcp` get
+`IPXE_DHCP_ENABLED=1`, so their DHCP tests run against a real server instead
+of failing). `docs/test/integration.md` lists the targets, what
+`make integration-test` leaves out, and the four directories no container
+runs (`secureboot/hardware`, `compute-aws`, `diskimage/userspace`, `web`).
+
+The `run-tests.sh` scripts beside some suites predate the runner. No target
+calls them; they derive their tags from `make -s print-build-tags` the same
+way, but they skip the runner's shared bring-up.
+
 ## Test Categories
 
 ### 1. SDN/OVS Tests (`test/integration/sdn/`)
@@ -98,7 +122,7 @@ make integration-test-vtpm
 ```
 
 **Requirements**:
-- swtpm binary
+- swtpm binary (a swtpm that does not start fails the target)
 - QEMU
 - `/dev/kvm` (optional, for speed)
 
@@ -168,6 +192,8 @@ make integration-test-e2e
 - All of the above
 - `/dev/kvm` strongly recommended
 - At least 4GB RAM
+- The server and client ISOs for the full run; without them the suite checks
+  the infrastructure only
 
 **Test Duration**: ~5-10 minutes (with KVM), ~30 minutes (without KVM)
 
@@ -175,7 +201,7 @@ make integration-test-e2e
 
 ### OVS Services
 
-The `run-tests.sh` scripts automatically:
+`run-integration-tests.sh` automatically:
 1. Initialize OVSDB
 2. Start ovsdb-server
 3. Start ovs-vswitchd
@@ -251,9 +277,9 @@ Manages QEMU VM pool
 # Start all services
 make devcontainer-compose-up
 
-# Run tests across services
-docker exec devcontainer /workspace/test/integration/sdn/run-tests.sh
-docker exec qemu-coordinator /workspace/test/integration/vtpm/run-tests.sh
+# Run a suite inside a service
+docker exec devcontainer bash /workspace/build/docker/devcontainer/run-integration-tests.sh sdn
+docker exec qemu-coordinator bash /workspace/build/docker/devcontainer/run-integration-tests.sh vtpm
 
 # Cleanup
 make devcontainer-compose-down
@@ -494,16 +520,11 @@ jobs:
         sudo chmod 666 /dev/kvm
 
     - name: Run Tests
-      run: make integration-test-all
+      run: make integration-test
 ```
 
-Or disable KVM requirement:
-```go
-// In test code
-if !kvmAvailable() {
-    t.Skip("KVM not available, skipping hardware acceleration test")
-}
-```
+Without `/dev/kvm` the QEMU suites still run, only slower: QEMU falls back to
+software emulation. Do not add a skip guard for a missing device.
 
 ## Best Practices
 
@@ -529,13 +550,13 @@ func TestExample(t *testing.T) {
 
 ### 3. Validate Assumptions
 
-Check prerequisites before testing:
+Check prerequisites before testing, and fail when one is missing:
 ```go
-func TestRequiresKVM(t *testing.T) {
-    if !fileExists("/dev/kvm") {
-        t.Skip("KVM not available")
+func TestRequiresOVS(t *testing.T) {
+    if _, err := exec.LookPath("ovs-vsctl"); err != nil {
+        t.Fatalf("ovs-vsctl not found: %v", err)
     }
-    // Test with KVM
+    // Test with OVS
 }
 ```
 
@@ -594,8 +615,8 @@ go test -bench=. ./test/integration/sdn/...
 ### Resource Usage
 
 ```bash
-# Monitor container resources
-docker stats go-trusted-platform-dev
+# Monitor container resources (make names it go-trusted-platform-<key>-test)
+docker stats go-trusted-platform-sdn-test
 
 # Inside container, monitor OVS
 ovs-appctl memory/show
@@ -617,11 +638,14 @@ ovs-appctl coverage/show
 When adding new integration tests:
 
 1. Place in appropriate directory (`sdn/`, `vtpm/`, etc.)
-2. Update corresponding `run-tests.sh` script
-3. Add Makefile target if needed
-4. Document in this file
-5. Ensure cleanup is robust
-6. Add to `integration-test-all` target
+2. Add a `TARGET_PACKAGES` key in `run-integration-tests.sh` (and a
+   `TARGET_NO_DAEMON` entry if the suite must not share `platformd`, a
+   `TARGET_ENV` entry if it reads a variable the runner must set)
+3. Add an `integration-test-<key>` target that calls `run-integration-suite`
+4. Add the key to the runner's `ALL_TARGETS` unless the suite cannot run in
+   the devcontainer, and say why in the comment there
+5. Document in this file and in `docs/test/integration.md`
+6. Ensure cleanup is robust
 
 ## References
 

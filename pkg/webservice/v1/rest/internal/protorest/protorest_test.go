@@ -24,6 +24,7 @@ import (
 	"testing"
 
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/restwire"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/genproto/googleapis/rpc/errdetails"
@@ -89,7 +90,7 @@ func TestWriteSuccess_MarshalsProto(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/x", nil)
 	protorest.WriteSuccess(w, req, newWriter(), &platformv1.PaginationRequest{Page: 7, PageSize: 25})
 	assert.Equal(t, http.StatusOK, w.Code)
-	var env response.WebServiceResponse
+	var env restwire.WebServiceResponse
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &env))
 	assert.True(t, env.Success)
 	assert.Equal(t, http.StatusOK, env.Code)

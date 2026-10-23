@@ -18,7 +18,6 @@ package quicbaas
 import (
 	"context"
 	"testing"
-	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore"
@@ -27,68 +26,20 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func newTestUserDAO(t *testing.T) (*UserDAO, *Client, func()) {
+func newTestUserDAO(t *testing.T) *UserDAO {
 	t.Helper()
-
-	cfg := TestConfig(t)
-	logger := logging.DefaultLogger()
-
-	// Create embedded server
-	server, err := NewEmbeddedServer(cfg, logger)
-	require.NoError(t, err, "failed to create embedded server")
-
-	// Start embedded server
-	// context.Background(), deliberately (#270): a deadline here bounds
-	// nothing and can only manufacture a false failure. The embedded
-	// server's Start takes no context — it runs first boot synchronously and
-	// the context is consulted only afterwards — and StartWithService
-	// ignores its context entirely. So a deadline cannot interrupt slow
-	// startup; it can only report a startup that already SUCCEEDED as a
-	// failure when the machine was loaded, which is exactly what happened.
-	// go test -timeout is the backstop for a genuine hang, and it prints a
-	// goroutine dump, which says WHERE it hung rather than only that it did.
-	err = server.Start(context.Background())
-	require.NoError(t, err, "failed to start embedded server")
-
-	// Create client
-	client, err := NewClient(cfg, logger)
-	require.NoError(t, err, "failed to create client")
-
-	// Start client with embedded service
-	err = client.StartWithService(context.Background(), server.Service())
-	require.NoError(t, err, "failed to start client with service")
-
-	dao := NewUserDAO(client, logger)
-
-	cleanup := func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-
-		// Stop client first
-		if err := client.Stop(ctx); err != nil {
-			t.Logf("client stop error: %v", err)
-		}
-
-		// Stop embedded server
-		if err := server.Stop(ctx); err != nil {
-			t.Logf("server stop error: %v", err)
-		}
-	}
-
-	return dao, client, cleanup
+	return NewUserDAO(newSharedTestClient(t), logging.DefaultLogger())
 }
 
 func TestNewUserDAO(t *testing.T) {
-	dao, _, cleanup := newTestUserDAO(t)
-	defer cleanup()
+	dao := newTestUserDAO(t)
 
 	assert.NotNil(t, dao)
 	assert.NotNil(t, dao.GenericDAO)
 }
 
 func TestUserDAO_Save_NewUser(t *testing.T) {
-	dao, _, cleanup := newTestUserDAO(t)
-	defer cleanup()
+	dao := newTestUserDAO(t)
 
 	ctx := context.Background()
 	user := entities.NewUser("test@example.com")
@@ -100,8 +51,7 @@ func TestUserDAO_Save_NewUser(t *testing.T) {
 }
 
 func TestUserDAO_Save_WithExistingID(t *testing.T) {
-	dao, _, cleanup := newTestUserDAO(t)
-	defer cleanup()
+	dao := newTestUserDAO(t)
 
 	ctx := context.Background()
 	user := &entities.User{
@@ -116,8 +66,7 @@ func TestUserDAO_Save_WithExistingID(t *testing.T) {
 }
 
 func TestUserDAO_Get_Success(t *testing.T) {
-	dao, _, cleanup := newTestUserDAO(t)
-	defer cleanup()
+	dao := newTestUserDAO(t)
 
 	ctx := context.Background()
 	user := &entities.User{
@@ -139,8 +88,7 @@ func TestUserDAO_Get_Success(t *testing.T) {
 }
 
 func TestUserDAO_Get_NotFound(t *testing.T) {
-	dao, _, cleanup := newTestUserDAO(t)
-	defer cleanup()
+	dao := newTestUserDAO(t)
 
 	ctx := context.Background()
 	_, err := dao.Get(ctx, 88888888)
@@ -151,8 +99,7 @@ func TestUserDAO_Get_NotFound(t *testing.T) {
 }
 
 func TestUserDAO_Delete_Success(t *testing.T) {
-	dao, _, cleanup := newTestUserDAO(t)
-	defer cleanup()
+	dao := newTestUserDAO(t)
 
 	ctx := context.Background()
 	user := &entities.User{
@@ -172,8 +119,7 @@ func TestUserDAO_Delete_Success(t *testing.T) {
 }
 
 func TestUserDAO_Save_WithRoles(t *testing.T) {
-	dao, _, cleanup := newTestUserDAO(t)
-	defer cleanup()
+	dao := newTestUserDAO(t)
 
 	ctx := context.Background()
 	user := entities.NewUser("roles@example.com")
@@ -194,8 +140,7 @@ func TestUserDAO_Save_WithRoles(t *testing.T) {
 }
 
 func TestUserDAO_Update_Success(t *testing.T) {
-	dao, _, cleanup := newTestUserDAO(t)
-	defer cleanup()
+	dao := newTestUserDAO(t)
 
 	ctx := context.Background()
 	user := &entities.User{
@@ -221,8 +166,7 @@ func TestUserDAO_Update_Success(t *testing.T) {
 }
 
 func TestUserDAO_Count(t *testing.T) {
-	dao, _, cleanup := newTestUserDAO(t)
-	defer cleanup()
+	dao := newTestUserDAO(t)
 
 	ctx := context.Background()
 
@@ -241,8 +185,7 @@ func TestUserDAO_Count(t *testing.T) {
 }
 
 func TestUserDAO_Page(t *testing.T) {
-	dao, _, cleanup := newTestUserDAO(t)
-	defer cleanup()
+	dao := newTestUserDAO(t)
 
 	ctx := context.Background()
 
@@ -262,8 +205,7 @@ func TestUserDAO_Page(t *testing.T) {
 }
 
 func TestUserDAO_ForEachPage(t *testing.T) {
-	dao, _, cleanup := newTestUserDAO(t)
-	defer cleanup()
+	dao := newTestUserDAO(t)
 
 	ctx := context.Background()
 
@@ -290,8 +232,7 @@ func TestUserDAO_ForEachPage(t *testing.T) {
 }
 
 func TestUserDAO_ComplexUser(t *testing.T) {
-	dao, _, cleanup := newTestUserDAO(t)
-	defer cleanup()
+	dao := newTestUserDAO(t)
 
 	ctx := context.Background()
 	user := entities.NewUser("complex@example.com")

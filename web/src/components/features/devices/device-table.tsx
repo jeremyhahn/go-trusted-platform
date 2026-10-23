@@ -36,13 +36,17 @@ import {
 import { useToast } from '@/hooks/use-toast';
 import { useAttestation, useDevice, useMutation } from '@/hooks';
 import type { DeviceReport } from 'trusted-platform-sdk';
-import { clockBadge, freshnessBadge, verdictBadge } from '@/lib/attestation-report';
-import { DEVICE_TOGGLE_UNAVAILABLE } from '@/lib/device-lifecycle';
+import { clockBadge, freshnessBadge, verdictBadge, type FleetReportsState } from '@/lib/attestation-report';
+import { useDeviceToggle } from '@/hooks/use-device-toggle';
+import {
+  DEVICE_REVOKED_NO_TOGGLE,
+  deviceDisableConfirmation,
+  deviceToggle,
+  type DeviceToggle,
+} from '@/lib/device-lifecycle';
 import type { Device } from '@/types/device';
 
 /** How the fleet's attestation reports were fetched, for the Attestation column. */
-export type FleetReportsState = 'loading' | 'ready' | 'not-configured' | 'error';
-
 interface DeviceTableProps {
   devices: Device[];
   onDeviceChange?: () => void;
@@ -89,15 +93,25 @@ export function DeviceTable({ devices, onDeviceChange, reports, reportsState = '
     }
   );
 
-  // Enable / Disable Device is not wired to anything real yet.
-  //
-  // The mutation this replaces had no body: it returned
-  // `{ data: {}, error: undefined, success: true }` without sending a
-  // request, and the success handler then toasted "Device disabled
-  // successfully". An operator was told a live machine had been cut off
-  // when nothing had been sent anywhere. There is no server-side
-  // operator lifecycle transition to call instead — see #250 — so the
-  // control is disabled until one lands.
+  // Enable / Disable Device call the control plane's dedicated lifecycle
+  // transitions (#250). The refetch after a transition moves the badge to
+  // the state the control plane recorded; a refusal is a destructive toast.
+  const toggleMutation = useDeviceToggle(onDeviceChange);
+
+  const handleToggle = async (device: Device, toggle: DeviceToggle) => {
+    if (toggle === 'disable' && !confirm(deviceDisableConfirmation(device.name))) {
+      return;
+    }
+
+    setLoadingId(device.id);
+    try {
+      await toggleMutation.mutateAsync({ id: device.id, toggle });
+    } catch {
+      // The hook has already shown the refusal.
+    } finally {
+      setLoadingId(null);
+    }
+  };
 
   const deleteMutation = useMutation(
     async (id: string) => {
@@ -277,23 +291,10 @@ export function DeviceTable({ devices, onDeviceChange, reports, reportsState = '
                           Refresh attestation
                         </DropdownMenuItem>
                       )}
-                      <DropdownMenuItem
-                        disabled
-                        title={DEVICE_TOGGLE_UNAVAILABLE}
-                        className="cursor-not-allowed"
-                      >
-                        {device.status === 'disabled' ? (
-                          <>
-                            <Power className="mr-2 h-4 w-4" />
-                            Enable Device (unavailable)
-                          </>
-                        ) : (
-                          <>
-                            <BanIcon className="mr-2 h-4 w-4" />
-                            Disable Device (unavailable)
-                          </>
-                        )}
-                      </DropdownMenuItem>
+                      <DeviceToggleItem
+                        toggle={deviceToggle(device.state)}
+                        onSelect={(toggle) => handleToggle(device, toggle)}
+                      />
                       <DropdownMenuSeparator />
                       <DropdownMenuItem
                         onClick={() => handleDelete(device)}
@@ -311,6 +312,42 @@ export function DeviceTable({ devices, onDeviceChange, reports, reportsState = '
         </TableBody>
       </Table>
     </div>
+  );
+}
+
+/**
+ * The Enable / Disable Device menu item. A revoked device has no
+ * transition, so its item stays disabled and says why.
+ */
+function DeviceToggleItem({
+  toggle,
+  onSelect,
+}: {
+  toggle: DeviceToggle | null;
+  onSelect: (toggle: DeviceToggle) => void;
+}) {
+  if (toggle === null) {
+    return (
+      <DropdownMenuItem disabled title={DEVICE_REVOKED_NO_TOGGLE} className="cursor-not-allowed">
+        <BanIcon className="mr-2 h-4 w-4" />
+        Disable Device
+      </DropdownMenuItem>
+    );
+  }
+  return (
+    <DropdownMenuItem onClick={() => onSelect(toggle)}>
+      {toggle === 'enable' ? (
+        <>
+          <Power className="mr-2 h-4 w-4" />
+          Enable Device
+        </>
+      ) : (
+        <>
+          <BanIcon className="mr-2 h-4 w-4" />
+          Disable Device
+        </>
+      )}
+    </DropdownMenuItem>
   );
 }
 

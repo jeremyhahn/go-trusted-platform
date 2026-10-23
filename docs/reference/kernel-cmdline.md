@@ -1,14 +1,17 @@
 # Kernel Command-Line Parameter Reference
 
-All `platform_*` and `bootstrap_*` kernel command-line parameters
-recognized by the Trusted Platform ISO live environment and
-`platform-initrd`.
+> **Status: REFERENCE** · Last verified: 2026-10-13
+> Every kernel command-line parameter that `iso create`, the bootstrap server, the installer, the ISO live environment and `platform-initrd` set or read.
+
+All `platform_*` and `bootstrap_*` kernel command-line parameters that
+the Trusted Platform sets or reads, in the ISO live environment, the
+installer and `platform-initrd`.
 
 For architectural context see:
 - `docs/architecture/bootstrap-flow.md`
-- `docs/bootstrap/config-delivery.md`
+- `docs/bootstrap/architecture.md` (Phase 3 · Control plane)
 - `docs/installer/autoinstall.md`
-- `docs/installer/initrd-overview.md`
+- `docs/installer/architecture.md` §5
 
 ---
 
@@ -16,24 +19,34 @@ For architectural context see:
 
 | Parameter | Set by | Read by | Purpose |
 |-----------|--------|---------|---------|
-| `platform_config` | `iso create --config-server` (GRUB), bootstrap server (PXE) | `autoinstall.sh` | Per-MAC `/config/mac` base URL for the merged `installer.yaml` |
+| `platform_config` | `iso create --config-server` (GRUB), bootstrap server (PXE), iPXE script generator | `autoinstall.sh` | Per-MAC `/config/mac` base URL for the merged `installer.yaml` |
 | `platform_bin_url` | Bootstrap server (PXE only) | `autoinstall.sh` | Base URL of the node's media set (`/data/media/<set>`), whose `payload.list` rebuilds `/media/cdrom` on nodes with none |
-| `platform_hostname` | `iso create --platform-config` with `os.hostname` set | `autoinstall.sh` | Hostname override (hostname PRIO 0) |
-| `platform_debug_sink` | Auto-detected via DHCP server, or operator-set | `autoinstall.sh`, `platform-initrd` | HTTP sink for install-log + `/config/mac` fetches |
+| `platform_hostname` | `iso create --platform-config` with `os.hostname` set, iPXE script generator | `autoinstall.sh` | Hostname override (hostname PRIO 0) |
+| `platform_role` | iPXE script generator | Nothing | Node role; no code reads it |
+| `platform_debug` | `iso create` (always `1`), bootstrap server (PXE) | `autoinstall.sh`, installer | Turns on install-log upload; the installer bakes it into the UKI `.cmdline` |
+| `platform_debug_sink` | `iso create` (`platform.debug_sink`), bootstrap server (PXE); when absent `autoinstall.sh` derives it from the DHCP server | `autoinstall.sh`, installer, platformd bootstrap registration | HTTP sink for install-log + `/config/mac` fetches |
 | `platform_apk_mirror` | `iso create --apk-mirror` (GRUB), bootstrap server `BOOTSTRAP_APK_MIRROR` (PXE) | `autoinstall.sh` | Install-time APK repository base for nodes with no `/media/cdrom` |
 | `alpine_repo` | Bootstrap server (PXE only) | Alpine initramfs `init` | Live-system (diskless root) repository; without it PXE installs 0 packages |
 | `modloop` | Bootstrap server (PXE only) | Alpine initramfs `init`, `run-autoinstall.sh` | Kernel-modules squashfs URL; `run-autoinstall.sh` fetches+mounts it over HTTP when no CD is present (dm-crypt/LUKS/ext4/TPM modules) |
+| `platform_boot_model` | Bootstrap server (per node, from `boot_model`) | installer, `platform-initrd` | `diskless` selects the diskless root; absent means the disk install. The installer copies it into the signed UKI `.cmdline`. `diskless-nbd` marks a node whose root is an NBD export: the installer requires `platform_nbd_server` with it, installs onto `/dev/nbd0` (its `nbd` target), and signs both into the UKI `.cmdline`. Any other value is refused before the TPM clear |
+| `platform_rootfs_url` | Installer, from the signed media-set manifest | `platform-initrd` | HTTP(S) URL of the squashfs root image for stateless boot |
+| `platform_verity_url` | Installer, from the signed media-set manifest | `platform-initrd` | HTTP(S) URL of the dm-verity hash tree for `platform_rootfs_url` |
+| `platform_roothash` | Signed UKI `.cmdline`, from the signed media-set manifest | `platform-initrd` | dm-verity SHA-256 root hash of the diskless root; Secure Boot and measured boot cover it |
+| `platform_verity_salt`, `platform_rootfs_size`, `platform_verity_size` | Signed UKI `.cmdline`, from the signed media-set manifest | `platform-initrd` | Pinned dm-verity salt and the exact byte sizes fetched; nothing is read from a superblock |
+| `platform_nbd_server` | Bootstrap server, on a `diskless-nbd` node's installer line; the node reads it from the signed UKI `.cmdline` only (§4, NBD root parameter) | installer (`checkBootModel`, `disklessCmdlineParams`), through `nbd.ServerFromCmdline`; `platform-initrd` does not read it yet | `host:port` of the boot server's NBD listener a `diskless-nbd` node attaches its root from |
 | `platform_autoinstall_debug` | Operator (manual) | `autoinstall.sh` | Enable `set -x` for verbose install trace |
-| `platform_server` | Operator (post-bootstrap) | Interactive provisioning client | Server URL for interactive QR mode |
-| `bootstrap_strategy` | `iso create --bootstrap-strategy` | Post-bootstrap provisioning client | `dane`, `noise`, `spki`, or `auto` |
-| `bootstrap_dns` | `iso create --bootstrap-dns` | Post-bootstrap provisioning client | DNS server for DANE TLSA lookups |
-| `bootstrap_noise_key` | `iso create --bootstrap-noise-key` | Post-bootstrap provisioning client | Hex-encoded Noise_NK server public key |
-| `bootstrap_spki_pin` | `iso create --bootstrap-spki-pin` | Post-bootstrap provisioning client | SHA-256 SPKI certificate pin |
-| `eab_kid` | Operator (post-bootstrap) | Post-bootstrap provisioning client | EAB key ID |
-| `eab_hmac` | Operator (post-bootstrap) | Post-bootstrap provisioning client | Base64-encoded EAB HMAC key |
+| `platform_server` | Nothing | Nothing | Server URL for interactive QR mode; no code sets or reads it (§3) |
+| `bootstrap_strategy` | `iso create --bootstrap-strategy`, iPXE script generator | Nothing (§3) | `dane`, `noise`, `spki`, or `auto` |
+| `bootstrap_dns` | `iso create --bootstrap-dns` | Nothing (§3) | DNS server for DANE TLSA lookups |
+| `bootstrap_noise_key` | `iso create --bootstrap-noise-key` | Nothing (§3) | Hex-encoded Noise_NK server public key |
+| `bootstrap_spki_pin` | `iso create --bootstrap-spki-pin` | Nothing (§3) | SHA-256 SPKI certificate pin |
+| `eab_kid` | Nothing | Nothing (§3) | EAB key ID |
+| `eab_hmac` | Nothing | Nothing (§3) | Base64-encoded EAB HMAC key |
 | `console=` | `iso create` hardware-aware | Kernel, boot loader | Serial console routing |
 | `earlycon=` | `iso create` hardware-aware | Kernel | Pre-console early boot output |
 | `tpm_tis.force=` | Operator (X10 Supermicro workaround) | `tpm_tis` driver | Force legacy ACPI binding |
+| `rd.luks.uuid=`, `rd.luks.name=` | Installer (UKI `.cmdline`), `iso create` | Dracut hook written by `iso create` | LUKS root device and mapper name |
+| `initrd.mode=` | Operator | `platform-initrd` | `install`, `recovery` or `maintenance`; absent means normal boot |
 
 ---
 
@@ -46,7 +59,10 @@ For architectural context see:
 - `platformctl iso create --config-server <URL>` bakes this into the GRUB /
   iPXE kernel cmdline via `pkg/iso/customize.go::buildDynamicConfigParams`
   (virtual-media / standalone ISOs).
-- The bootstrap server (`pkg/bootstrap/container/server.go`) appends it to
+- The iPXE script generator (`pkg/ipxe/script_generator.go:73`) sets it from
+  the node's config-server URL.
+- The bootstrap server (`MediaSet.bootArgs`,
+  `pkg/bootstrap/container/mediaset.go:255`) appends it to
   the PXE iPXE cmdline as `http://<server>:<port>/config/mac`. PXE nodes
   have no `/media/cdrom/configs/installer.yaml`, so this is their primary
   config source. The orchestrator publishes the merged config there via
@@ -70,7 +86,9 @@ Full URL constructed at install time:
 http://deployer.lan:8080/config/mac/aa-bb-cc-dd-ee-ff/installer.yaml
 ```
 
-See `docs/bootstrap/config-delivery.md` §3 for the full dynamic flow.
+See `docs/installer/iso-building.md` (Config Delivery Modes) for the dynamic
+mode and `docs/bootstrap/architecture.md` (Phase 3 · Control plane) for what the
+orchestrator publishes.
 
 ### `platform_bin_url=<URL>`
 
@@ -78,8 +96,8 @@ See `docs/bootstrap/config-delivery.md` §3 for the full dynamic flow.
 on nodes that have **no `/media/cdrom`**, the PXE case.
 Virtual-media installs read these off the mounted ISO's
 `/media/cdrom/platformd-bin/` and ignore this param.
-**Set by:** The bootstrap server (`pkg/bootstrap/container/server.go`)
-appends `platform_bin_url=http://<server>:<port>/data/media/<set>` to the PXE
+**Set by:** The bootstrap server (`MediaSet.bootArgs`,
+`pkg/bootstrap/container/mediaset.go:256`) appends `platform_bin_url=http://<server>:<port>/data/media/<set>` to the PXE
 iPXE cmdline. The set's `payload.list` is written by the netboot media build
 (`platformctl diskimage netboot`) and staged with the build by the deployer
 (`stageNetbootMedia`).
@@ -102,8 +120,9 @@ platform_bin_url=http://deployer.lan:8080/data
 
 **Purpose:** Hostname override (PRIO 0 of the hostname chain).
 **Set by:** `platformctl iso create` inspects the merged platform
-config's `os.hostname` field and bakes this param if present (see
-`customize.go` line ~1417).
+config's `os.hostname` field and bakes this param if present
+(`resolveHostnameForCmdline`, `pkg/iso/customize.go:2048`). The iPXE script
+generator also sets it (`pkg/ipxe/script_generator.go:79`).
 **Read by:** `autoinstall.sh::resolve_platform_hostname`.
 **Behavior:** If no per-MAC orchestrator hostname is published
 (PRIO -1), this value is used as the installed-system hostname.
@@ -113,10 +132,14 @@ See `docs/installer/autoinstall.md` §3.
 ### `platform_debug_sink=<host:port>`
 
 **Purpose:** HTTP sink for install-log uploads AND `/config/mac` fetches.
-**Set by:** Operator via bootstrap.yaml deployer config, or
-auto-detected from the DHCP server-identifier at install time.
+**Set by:** `platformctl iso create` from the ISO config's
+`platform.debug_sink` (`pkg/iso/customize.go:2021-2023`), and the bootstrap
+server with its own address (`pkg/bootstrap/container/mediaset.go:258`). When
+it is absent, the install script derives it from the DHCP server.
 **Read by:** `autoinstall.sh` for install-log upload and per-MAC
-hostname/config fetch fallback.
+hostname/config fetch fallback; the installer, which copies it into the UKI
+`.cmdline` (`pkg/installer/installer.go:1519-1520`); and platformd's bootstrap
+registration (`parseDebugSinkFromCmdline`, `pkg/app/bootstrap_registration.go`).
 
 Example:
 ```
@@ -146,11 +169,14 @@ package set (parted, lvm2, eudev, ...).
 **Set by:**
 - `platformctl iso create --apk-mirror <URL>` bakes `platform_apk_mirror`
   into the GRUB cmdline (`pkg/iso/customize.go::ConfigureBootloader`).
-- The bootstrap server (`pkg/bootstrap/container/server.go`) appends BOTH
+- The bootstrap server (`MediaSet.bootArgs`,
+  `pkg/bootstrap/container/mediaset.go:253-254`) appends BOTH
   `alpine_repo` and `platform_apk_mirror` to the PXE iPXE cmdline, sourced
-  from `BOOTSTRAP_APK_MIRROR` / `BOOTSTRAP_ALPINE_VERSION`
-  (`DeployConfig.BootstrapAPKMirror`). Both default to the public Alpine
-  mirror so internet-connected PXE installs work with no extra config.
+  from the container's `BOOTSTRAP_APK_MIRROR` / `BOOTSTRAP_ALPINE_VERSION`
+  (`build/docker/bootstrap/entrypoint.sh`; the deployer sets the mirror from
+  `DeployConfig.BootstrapAPKMirror`). The mirror defaults to the public Alpine
+  mirror and the version to 3.22.2, so internet-connected PXE installs work
+  with no extra config.
 
 **Read by:** `autoinstall.sh` repo auto-detect (`buildAutoinstallScript`),
 which picks in priority order:
@@ -199,11 +225,14 @@ capture.
 
 ## 3. Post-Bootstrap Config Delivery
 
-These parameters are consumed by the production provisioning client
-(`platformctl-static bootstrap trust` + `provision fetch-config`)
-AFTER the device has its installed OS up. They are NOT used during
-ISO autoinstall. For the flow, see
-`docs/provisioning/config-delivery.md`.
+No code reads these parameters from `/proc/cmdline`. `iso create` bakes the
+`bootstrap_*` values (`buildDynamicConfigParams`, `pkg/iso/customize.go:5923`)
+and the iPXE script generator sets `bootstrap_strategy`
+(`pkg/ipxe/script_generator.go:82`); nothing sets `platform_server`, `eab_kid`
+or `eab_hmac`. The post-bootstrap client takes the same values as flags:
+`platformctl bootstrap trust --strategy/--dns-server/--noise-key/--spki-pin`
+and `platformctl provision fetch-config --eab-kid/--eab-hmac`. For the flow,
+see `docs/provisioning/config-delivery.md`.
 
 ### `platform_server=<URL>`
 
@@ -224,7 +253,8 @@ Hex-encoded Noise_NK server long-term public key (32 bytes = 64 hex chars).
 
 ### `bootstrap_spki_pin=<sha256>`
 
-SHA-256 hash of the server's Subject Public Key Info, base64-encoded.
+SHA-256 hash of the server's Subject Public Key Info, hex-encoded (64 hex
+characters, the form `bootstrap trust --spki-pin` and `trust.*.spki.pin` take).
 Used for SPKI pinning.
 
 ### `eab_kid=<string>`
@@ -241,41 +271,43 @@ EAB HMAC key used to sign the config fetch request.
 
 ## 3a. Kernel cmdline → `trust:` YAML Mapping
 
-The bootstrap kernel cmdline parameters are set by `platformctl iso create`
-and propagate through the install flow to the running platform daemon's
-`trust:` configuration block.
+The `bootstrap_*` parameters do not propagate into `trust:`: nothing reads
+them (§3). Each one has a `trust:` key that takes the same value, which the
+platform config must set itself:
 
 ```
-Kernel cmdline param          Install-time action               trust: YAML key
-─────────────────────────────────────────────────────────────────────────────────
-bootstrap_strategy=<s>        passed to provisioning client     trust.bootstrap.strategies: [<s>]
-bootstrap_dns=<server>        passed to provisioning client     trust.bootstrap.dane.dns-server: <server>
-bootstrap_noise_key=<hex>     passed to provisioning client     trust.bootstrap.noise.server-static-key: <hex>
-bootstrap_spki_pin=<pin>      autoinstall.sh writes pin to      trust.bootstrap.spki.pin-file:
-                              /etc/trusted-platform/                /etc/trusted-platform/bootstrap-spki-pin
-                              bootstrap-spki-pin
+Kernel cmdline param          trust: YAML key
+──────────────────────────────────────────────────────────────────────
+bootstrap_strategy=<s>        trust.bootstrap.strategies: [<s>]
+bootstrap_dns=<server>        trust.bootstrap.dane.dns-server: <server>
+bootstrap_noise_key=<hex>     trust.bootstrap.noise.server-static-key: <hex>
+bootstrap_spki_pin=<pin>      trust.bootstrap.spki.pin: <pin>
 ```
 
-**How the pin-file flow works** (source: `pkg/iso/customize.go` lines 3342-3351):
+**How the SPKI pin-file flow works.** The pin reaches the node by a file,
+not by the cmdline:
 
-1. The orchestrator stages the CP's SPKI pin to `/tmp/cp-spki-pin` on the
-   installer filesystem.
-2. `autoinstall.sh` copies it to `/mnt/etc/trusted-platform/bootstrap-spki-pin`
-   on the installed disk.
-3. The platform YAML template references it via:
+1. The orchestrator stages the control plane's SPKI pin at
+   `/config/mac/<mac>/bootstrap-spki-pin` on the bootstrap server
+   (`pkg/bootstrap/virtual_media.go:1329`).
+2. `autoinstall.sh` fetches it from the debug sink into `/tmp/cp-spki-pin`
+   (`pkg/iso/customize.go:3332-3348`).
+3. Post-install copies it to `/mnt/etc/trusted-platform/bootstrap-spki-pin`
+   on the installed disk (`pkg/iso/customize.go:4422-4426`).
+4. A `trust.bootstrap` scope can reference it. No shipped template does:
 
 ```yaml
 trust:
-  default:
+  bootstrap:
     strategies: [spki]
     spki:
       pin-file: /etc/trusted-platform/bootstrap-spki-pin
 ```
 
-4. At boot, `pkg/trust.Config.Validate()` reads `pin-file` and resolves it
-   into the in-memory `spki.pin` field (`pkg/trust/config.go`).
+5. At boot, `pkg/trust.Config.Validate()` reads `pin-file` and resolves it
+   into the in-memory `spki.pin` field (`pkg/trust/config.go:357-367`).
 
-**`trust:` YAML class summary** (source: `pkg/trust/config.go`):
+**`trust:` YAML class summary** (source: `allowedStrategies`, `pkg/trust/config.go:120`):
 
 | Class | Allowed strategies | Typical use |
 |-------|--------------------|-------------|
@@ -285,12 +317,13 @@ trust:
 Platform-issued peers (attestation, SDN reporter, provisioning, heartbeat) are
 not a class: they are verified against the platform anchor, which needs no
 configuration — see
-[docs/bootstrap/configuration.md](../bootstrap/configuration.md#platform-anchor).
+[docs/trust/architecture.md](../trust/architecture.md#21-platform-anchor).
 
-The `trust:` key is read into `pkg/app.AppConfig.TrustConfig` and wired to
-`pkg/trust.NewResolver()`. It is NOT the same as the `pkg/bootstrap.ClientConfig`
-used for the one-shot CA bundle fetch at first-boot; that path uses
-`bootstrap.Fetch()` from the QuicBaaS SDK re-export.
+The `trust:` key is read into `pkg/app.App.TrustConfig` (`pkg/app/app.go:506`)
+and wired to `pkg/trust.NewResolver()` by `App.BootstrapTrust`. The first-boot
+CA bundle fetch uses that resolver's `trust.bootstrap` scope; there is no
+separate `pkg/bootstrap.ClientConfig` or `bootstrap.Fetch()`.
+
 ---
 
 ## 4. Platform-initrd (LUKS unlock) Parameters
@@ -301,17 +334,74 @@ Consumed by `platform-initrd` in the initramfs context before
 ### `console=`
 
 Inherited from kernel. `platform-initrd` writes progress messages
-to the configured console. See `docs/installer/initrd-overview.md`.
+to the configured console. See `docs/installer/architecture.md` §5.
 
 ### `rd.luks.uuid=<uuid>`
 
-Standard dracut-compatible LUKS UUID. `platform-initrd` reads this
-to find the LUKS device to unlock.
+Standard dracut-compatible LUKS UUID. The installer writes it with
+`rd.luks.name=<uuid>=<name>` (`pkg/installer/diskless.go:82-83`). The dracut
+hook that `iso create` writes reads `rd.luks.name=` first and falls back to
+`rd.luks.uuid=` to find the LUKS device (`pkg/iso/customize.go:4789-4804`).
 
-### `rd.trusted.strategy=<strategy>`
+### `initrd.mode=<install|recovery|maintenance>`
 
-Override the unlock strategy order. Defaults to the order compiled
-into the initrd config. See `docs/installer/UNLOCK_STRATEGIES.md`.
+Selects the `platform-initrd` boot mode (`detectModeFromCmdline`,
+`pkg/initrd/initrd.go:234-240`); absent means normal boot. There is no
+`rd.trusted.strategy` parameter: the unlock order is the registered
+strategies' priorities. See `docs/installer/engineering.md` §5.
+
+### Diskless root parameters
+
+Diskless image boot only. Every one of these comes from the **signed UKI
+`.cmdline`**, never from a live command line or an iPXE script. The bootstrap
+server marks a node with `platform_boot_model=diskless` (from its
+`boot_model`) and nothing more; the installer then reads the media set's
+`diskless/manifest.json`, verifies its `.sig` against a pinned anchor — the
+platform's DB certificate enrolled in the node's UEFI `db` (not any other `db`
+entry), or the KMS-held DB certificate,
+never a media-staged key ([installer architecture](../installer/architecture.md))
+— and writes the root parameters from that manifest into the UKI. A root hash on the installer's command line is ignored,
+so a tampered boot script cannot change the root a node boots. `platform-initrd`
+rejects a command line that names any of these keys twice.
+
+| Parameter | Meaning |
+|-----------|---------|
+| `platform_boot_model=diskless` | Selects the diskless root; any other value is refused |
+| `platform_rootfs_url=<url>` | Absolute HTTP(S) URL of the squashfs root, fetched into RAM, attached read-only, and used as the lower root under a tmpfs overlay |
+| `platform_verity_url=<url>` | Absolute HTTP(S) URL of the dm-verity hash tree for that image |
+| `platform_roothash=<sha256-hex>` | 64-hex dm-verity root hash; a mismatch fails closed before any root mount |
+| `platform_verity_salt=<hex>` | dm-verity salt, pinned so the open does not trust on-media parameters |
+| `platform_rootfs_size=<bytes>`, `platform_verity_size=<bytes>` | Exact sizes; the fetch stops at them and the RAM spent is bounded |
+
+The names carry the `platform_` prefix because systemd's
+`systemd-veritysetup-generator` claims `roothash=` and would try to open a
+verity root of its own.
+
+### NBD root parameter
+
+`diskless-nbd` boot only. The node reads it from the **signed UKI
+`.cmdline`**, never from a live command line or an iPXE script.
+
+| Parameter | Meaning |
+|-----------|---------|
+| `platform_nbd_server=<host>:<port>` | The boot server's NBD listener on the provisioning segment. `host` is an IP address (IPv6 in brackets) or a DNS name, and is also the name the server's certificate must carry. The port is required: there is no default |
+
+`nbd.ServerFromCmdline` (`pkg/bootstrap/nbd/cmdline.go`) reads it only when
+`platform_boot_model=diskless-nbd`, and ignores it on any other line. On a
+`diskless-nbd` line it is required, may appear once, and a malformed value is
+refused with `nbd.ErrCmdline`; `platform_boot_model` may appear once on any
+line. The installer calls it; `platform-initrd` does not attach an export yet
+(**Planned**, #689).
+
+The bootstrap server puts the address on the installer's command line for a
+`diskless-nbd` node (`nodeBootArgs`): the NBD listen address, with an empty or
+wildcard host replaced by the DHCP server IP. That line is the installer's
+input only. The installer's `nbd` target writes the value into the signed UKI
+`.cmdline` (`nbdCmdlineParams`, `pkg/installer/nbd_target.go`): exactly
+`platform_boot_model=diskless-nbd platform_nbd_server=<host>:<port>`, with no
+`root=`, `rd.luks.*` or `rd.lvm.*`. Beyond those two, the UKI command line
+carries no live-line parameter but the debug sink (`hostUKICmdlineParams`), so
+nothing else on the live line reaches the node's boot.
 
 ---
 
@@ -346,8 +436,11 @@ by Redfish (a Pi has no BMC).
 
 ### Supermicro X10 (X10SDV-TP8F / -7TP8F)
 
+`pkg/quirks/registry.go:132-149` (manufacturer `supermicro`, model `x10sdv`,
+part number `sys-5018d-fn*`):
+
 ```
-console=ttyS1,115200 console=ttyS0,115200 earlycon=uart8250,io,0x3f8,115200
+earlyprintk=efi,keep earlycon=uart8250,io,0x3f8,115200n8 console=tty0 console=ttyS1,115200n8 console=ttyS0,115200n8 loglevel=7
 ```
 
 X10SDV SOL is wired to COM1 (ttyS0, I/O 0x3f8) on IPMI payload instance 1 —
@@ -359,11 +452,14 @@ it is `/dev/console`. BIOS POST is not redirected to SOL on this board.
 
 ### Dell R640 (14G)
 
+The quirk entry matches every Dell (manufacturer `dell inc.`,
+`pkg/quirks/registry.go:286-295`):
+
 ```
-console=ttyS0,115200
+earlyprintk=efi,keep earlycon=uart8250,io,0x3f8,115200n8 console=tty0 console=ttyS1,115200n8 console=ttyS0,115200n8 loglevel=7
 ```
 
-Dell iDRAC SoL defaults to COM1.
+Dell iDRAC SoL defaults to COM1, which is why `ttyS0` is last.
 
 ### TPM workarounds
 
@@ -372,7 +468,8 @@ tpm_tis.force=1
 ```
 
 Forces the `tpm_tis` driver to use legacy ACPI binding on certain
-X10 firmware versions where CRB auto-detection fails.
+X10 firmware versions where CRB auto-detection fails. Operator-set: no quirk
+entry adds it.
 
 ---
 
@@ -388,7 +485,7 @@ When adding a new kernel cmdline parameter:
 4. Update the code that reads it (usually `pkg/iso/customize.go`
    embedded shell or `pkg/initrd/`).
 5. Update the doc that describes the containing flow
-   (`docs/installer/autoinstall.md`, `docs/installer/initrd-overview.md`,
+   (`docs/installer/autoinstall.md`, `docs/installer/architecture.md` §5,
    or `docs/provisioning/config-delivery.md`).
 
 Parameters without doc coverage are considered broken and may be

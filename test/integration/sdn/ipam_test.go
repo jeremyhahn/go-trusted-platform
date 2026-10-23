@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
+	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers/surface"
 )
 
 // =============================================================================
@@ -33,8 +34,7 @@ import (
 // protocol adapters, verifying feature parity for create, get, update, delete,
 // and zone-filtered list operations.
 func TestIPAMPoolCRUDMultiProtocol(t *testing.T) {
-	SkipIfNotIntegration(t)
-	SkipIfSDNUnavailable(t)
+	requireOVSDB(t)
 
 	adapters := NewSDNTestAdapters()
 
@@ -83,7 +83,7 @@ func testIPAMPoolCRUD(t *testing.T, ctx context.Context, adapter SDNTestAdapter)
 
 	created, err := adapter.CreatePool(ctx, createReq)
 	if err != nil {
-		skipIfNotImplemented(t, err)
+		surface.RequireImplemented(t, err)
 		t.Fatalf("CreatePool failed: %v", err)
 	}
 
@@ -115,7 +115,7 @@ func testIPAMPoolCRUD(t *testing.T, ctx context.Context, adapter SDNTestAdapter)
 	// --- Get ---
 	got, err := adapter.GetPool(ctx, poolID)
 	if err != nil {
-		skipIfNotImplemented(t, err)
+		surface.RequireImplemented(t, err)
 		t.Fatalf("GetPool failed: %v", err)
 	}
 	if got.ID != poolID {
@@ -134,7 +134,7 @@ func testIPAMPoolCRUD(t *testing.T, ctx context.Context, adapter SDNTestAdapter)
 
 	updated, err := adapter.UpdatePool(ctx, poolID, updateReq)
 	if err != nil {
-		skipIfNotImplemented(t, err)
+		surface.RequireImplemented(t, err)
 		t.Fatalf("UpdatePool failed: %v", err)
 	}
 	if updated.Name != updateReq.Name {
@@ -150,7 +150,7 @@ func testIPAMPoolCRUD(t *testing.T, ctx context.Context, adapter SDNTestAdapter)
 	// --- List (confirm pool appears) ---
 	list, err := adapter.ListPools(ctx, "")
 	if err != nil {
-		skipIfNotImplemented(t, err)
+		surface.RequireImplemented(t, err)
 		t.Fatalf("ListPools failed: %v", err)
 	}
 	found := false
@@ -166,7 +166,7 @@ func testIPAMPoolCRUD(t *testing.T, ctx context.Context, adapter SDNTestAdapter)
 
 	// --- Delete ---
 	if err := adapter.DeletePool(ctx, poolID); err != nil {
-		skipIfNotImplemented(t, err)
+		surface.RequireImplemented(t, err)
 		t.Fatalf("DeletePool failed: %v", err)
 	}
 
@@ -198,7 +198,7 @@ func testIPAMPoolZoneFilter(t *testing.T, ctx context.Context, adapter SDNTestAd
 		}
 		pool, err := adapter.CreatePool(ctx, req)
 		if err != nil {
-			skipIfNotImplemented(t, err)
+			surface.RequireImplemented(t, err)
 			t.Fatalf("CreatePool (zone=%s): %v", zone, err)
 		}
 		poolIDs = append(poolIDs, pool.ID)
@@ -220,7 +220,7 @@ func testIPAMPoolZoneFilter(t *testing.T, ctx context.Context, adapter SDNTestAd
 	for i, zone := range zones {
 		resp, err := adapter.ListPools(ctx, zone)
 		if err != nil {
-			skipIfNotImplemented(t, err)
+			surface.RequireImplemented(t, err)
 			t.Fatalf("ListPools(zone=%s): %v", zone, err)
 		}
 
@@ -285,7 +285,7 @@ func testIPAMPoolCIDRImmutable(t *testing.T, ctx context.Context, adapter SDNTes
 		CIDR: originalCIDR,
 	})
 	if err != nil {
-		skipIfNotImplemented(t, err)
+		surface.RequireImplemented(t, err)
 		t.Fatalf("CreatePool: %v", err)
 	}
 
@@ -304,7 +304,7 @@ func testIPAMPoolCIDRImmutable(t *testing.T, ctx context.Context, adapter SDNTes
 		Name: fmt.Sprintf("cidr-immutable-renamed-%s", strings.ToLower(adapter.Name())),
 	})
 	if err != nil {
-		skipIfNotImplemented(t, err)
+		surface.RequireImplemented(t, err)
 		// Some adapters/servers return an explicit error when CIDR change is
 		// attempted; that is also acceptable.
 		t.Logf("[%s] UpdatePool returned error (acceptable for CIDR immutability): %v", adapter.Name(), err)

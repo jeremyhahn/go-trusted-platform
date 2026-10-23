@@ -21,6 +21,7 @@ import (
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/manifest"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/verdict/verdicttest"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/testutil"
 )
 
 // These are POSITIVE CONTROLS. #483's defect was a literal `Verified: true`,
@@ -55,12 +56,16 @@ func TestVMEvidenceThatCannotVerifyIsNotAPass(t *testing.T) {
 			&manifest.VMAttestation{VMID: "vm-1", QuoteData: good, AIKPublicKey: []byte("k")},
 			[]byte("n"), StatusNotEvaluated,
 		},
-		"no nonce, so freshness cannot be established": {
+		"no signature scheme to verify the signature under": {
 			&manifest.VMAttestation{VMID: "vm-1", QuoteData: good, AIKPublicKey: []byte("k"), Signature: []byte("s")},
+			[]byte("n"), StatusNotEvaluated,
+		},
+		"no nonce, so freshness cannot be established": {
+			&manifest.VMAttestation{VMID: "vm-1", QuoteData: good, AIKPublicKey: []byte("k"), Signature: []byte("s"), SignatureAlgorithm: testutil.PSSQuoteScheme},
 			nil, StatusNotEvaluated,
 		},
 		"complete evidence that does not actually verify": {
-			&manifest.VMAttestation{VMID: "vm-1", QuoteData: good, AIKPublicKey: []byte("not-a-key"), Signature: []byte("not-a-signature")},
+			&manifest.VMAttestation{VMID: "vm-1", QuoteData: good, AIKPublicKey: []byte("not-a-key"), Signature: []byte("not-a-signature"), SignatureAlgorithm: testutil.PSSQuoteScheme},
 			[]byte("nonce-the-quote-does-not-carry"), StatusFailed,
 		},
 	}
@@ -85,6 +90,7 @@ func TestNotEvaluatedIsDistinguishableFromFailed(t *testing.T) {
 	couldNotLook := VerifyVMAttestation(&manifest.VMAttestation{VMID: "vm-1"}, []byte("n"))
 	looked := VerifyVMAttestation(&manifest.VMAttestation{
 		VMID: "vm-1", QuoteData: []byte("q"), AIKPublicKey: []byte("k"), Signature: []byte("s"),
+		SignatureAlgorithm: testutil.PSSQuoteScheme,
 	}, []byte("n"))
 
 	require.False(t, couldNotLook.Verified)
@@ -147,4 +153,31 @@ func TestVerifiedIsReachable(t *testing.T) {
 		"the passing verdict must be reachable, or the negative cases above prove nothing: %s", got.Reason)
 	assert.True(t, got.Verified)
 	assert.Empty(t, got.Reason)
+}
+
+// TestVMVerdictJudgesTheDeclaredScheme pins #482: the signature is checked
+// under the scheme the evidence declares, so an RSA-PSS quote verifies and a
+// scheme the signature was not made under fails rather than being guessed.
+func TestVMVerdictJudgesTheDeclaredScheme(t *testing.T) {
+	t.Run("an RSA-PSS quote verifies", func(t *testing.T) {
+		evidence, nonce := verdicttest.SignedVMAttestation(t, "vm-1")
+		evidence.Signature, evidence.AIKPublicKey = testutil.SignPSSQuote(t, evidence.QuoteData)
+		evidence.SignatureAlgorithm = testutil.PSSQuoteScheme
+
+		got := VerifyVMAttestation(evidence, nonce)
+
+		require.Equal(t, StatusVerified, got.Status, got.Reason)
+		assert.True(t, got.Verified)
+	})
+
+	t.Run("a scheme the signature was not made under fails", func(t *testing.T) {
+		evidence, nonce := verdicttest.SignedVMAttestation(t, "vm-1")
+		evidence.SignatureAlgorithm = testutil.PSSQuoteScheme
+
+		got := VerifyVMAttestation(evidence, nonce)
+
+		assert.Equal(t, StatusFailed, got.Status)
+		assert.False(t, got.Verified)
+		assert.Contains(t, got.Reason, testutil.PSSQuoteScheme)
+	})
 }

@@ -83,13 +83,13 @@ type Group struct {
 
 // NewGroup builds a group from a validated configuration.
 func NewGroup(cfg GroupConfig, act Actuator) (*Group, error) {
-	if err := cfg.Validate(); err != nil {
+	src, err := cfg.validate()
+	if err != nil {
 		return nil, err
 	}
 	if act == nil {
 		return nil, &ErrTransportRequired{Dependency: "actuator"}
 	}
-	src, _ := netip.ParseAddr(cfg.Source)
 	return &Group{
 		cfg:                 cfg,
 		family:              cfg.family(),

@@ -33,6 +33,10 @@ export interface Device {
   model?: string;
   serial?: string;
   status: DeviceStatus;
+  /** The lifecycle state the control plane records (`attested`,
+   *  `suspended`, `revoked`, ...). `status` folds it into a badge; the
+   *  Enable/Disable control needs the state itself (#250). */
+  state?: string;
   lastSeen?: string;
   registeredAt: string;
   tpm?: TPMInfo;
@@ -81,7 +85,8 @@ export interface DeviceDetail extends Device {
 export interface RegisterDeviceInput {
   name: string;
   type: DeviceType;
-  serial?: string;
+  /** Required: POST /api/v1/devices refuses a device without a serial. */
+  serial: string;
   description?: string;
   tags?: string[];
   tpmInfo?: {

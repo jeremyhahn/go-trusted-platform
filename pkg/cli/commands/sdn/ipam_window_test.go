@@ -21,6 +21,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
 
 // TestIPAMWindowFlags_Parse checks the window flags parse into the struct
@@ -59,4 +60,60 @@ func TestIPAMPoolCommands_RegisterWindowFlags(t *testing.T) {
 			assert.NotNil(t, cmd.Flags().Lookup(f), "%s --%s", cmd.Use, f)
 		}
 	}
+}
+
+// parsedPoolUpdate parses args into the update command's flags.
+func parsedPoolUpdate(t *testing.T, args ...string) (*ipamPoolUpdateFlags, *cobra.Command) {
+	t.Helper()
+	var opts ipamPoolUpdateFlags
+	cmd := &cobra.Command{Use: "update"}
+	cmd.Flags().StringVar(&opts.poolID, "id", "", "")
+	cmd.Flags().StringVar(&opts.name, "name", "", "")
+	cmd.Flags().StringVar(&opts.zone, "zone", "", "")
+	cmd.Flags().StringVar(&opts.description, "description", "", "")
+	cmd.Flags().Int64Var(&opts.leaseSecs, "lease-seconds", 0, "")
+	opts.window.register(cmd)
+	require.NoError(t, cmd.ParseFlags(args))
+	return &opts, cmd
+}
+
+var currentPool = &platformv1.IPAMPool{Id: "pool-1", Zone: "lab", Description: "lab pool"}
+
+// TestIPAMPoolUpdateFlags_KeepsUnpassedFields: flags that were not passed
+// carry the pool's current zone and description and leave both durations
+// alone, since UpdateIPAMPool would otherwise clear them.
+func TestIPAMPoolUpdateFlags_KeepsUnpassedFields(t *testing.T) {
+	opts, cmd := parsedPoolUpdate(t, "--id", "pool-1", "--name", "renamed")
+
+	req := opts.request(cmd, currentPool)
+
+	assert.Equal(t, "renamed", req.GetName())
+	assert.Equal(t, "lab", req.GetZone())
+	assert.Equal(t, "lab pool", req.GetDescription())
+	assert.Equal(t, keepDuration, req.GetDefaultLeaseDurationNanos())
+	assert.Equal(t, keepDuration, req.GetInactivityTimeoutNanos())
+	assert.False(t, req.GetUpdateWindow())
+}
+
+// TestIPAMPoolUpdateFlags_PassedFieldsReplace: passed flags win, including
+// an explicit empty zone and a zero lease.
+func TestIPAMPoolUpdateFlags_PassedFieldsReplace(t *testing.T) {
+	opts, cmd := parsedPoolUpdate(t, "--id", "pool-1", "--zone", "", "--description", "dmz pool", "--lease-seconds", "0")
+
+	req := opts.request(cmd, currentPool)
+
+	assert.Empty(t, req.GetZone())
+	assert.Equal(t, "dmz pool", req.GetDescription())
+	assert.Zero(t, req.GetDefaultLeaseDurationNanos())
+	assert.Equal(t, keepDuration, req.GetInactivityTimeoutNanos())
+}
+
+func TestRunIPAMPoolUpdate_NoContext(t *testing.T) {
+	built := false
+	err := runIPAMPoolUpdate(noContextFlags(), "pool-1", func(*platformv1.IPAMPool) *platformv1.UpdateIPAMPoolRequest {
+		built = true
+		return &platformv1.UpdateIPAMPoolRequest{}
+	})
+	assertNoContextError(t, err)
+	assert.False(t, built, "no update is built without the current pool")
 }

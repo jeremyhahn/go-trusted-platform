@@ -23,6 +23,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/bootstrap/nbd"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/disklessroot"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -256,6 +258,7 @@ func TestNewInstaller(t *testing.T) {
 }
 
 func TestInstaller_Install_DiskSetupFailure(t *testing.T) {
+	withoutHostTPM(t)
 	mockDisk := new(MockDiskManager)
 	mockOS := new(MockOSInstaller)
 	mockUKI := new(MockUKIBuilder)
@@ -735,4 +738,35 @@ func TestNewAlpineInstaller_QuirkFromPartNumber(t *testing.T) {
 	inst, err = newAlpineInstaller(logger, empty)
 	require.NoError(t, err)
 	assert.Equal(t, "default", inst.(*alpineInstaller).quirk.Key)
+}
+
+func TestHostUKICmdlineParamsCarriesOnlyTheDebugSink(t *testing.T) {
+	live := strings.Join([]string{
+		"BOOT_IMAGE=/vmlinuz-lts",
+		"platform_debug_sink=192.0.2.10:514",
+		"platform_boot_model=diskless",
+		"platform_rootfs_url=http://192.0.2.10/rootfs.squashfs",
+		"platform_roothash=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+		"roothash=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+	}, " ")
+
+	assert.Equal(t, []string{"platform_debug=1", "platform_debug_sink=192.0.2.10:514"}, hostUKICmdlineParams(live, true),
+		"the live command line never names a root")
+	assert.Empty(t, hostUKICmdlineParams(live, false))
+	assert.Equal(t, []string{"platform_debug=1"}, hostUKICmdlineParams("BOOT_IMAGE=/vmlinuz-lts", true))
+}
+
+// A diskless-nbd node's NBD server address reaches the signed UKI only as a
+// signed value, never from the live command line the boot server wrote.
+func TestHostUKICmdlineParamsDropsTheNBDServer(t *testing.T) {
+	live := strings.Join([]string{
+		"BOOT_IMAGE=/vmlinuz-lts",
+		"platform_debug_sink=192.0.2.10:514",
+		disklessroot.ParamBootModel + "=" + nbd.BootModel,
+		nbd.ParamServer + "=192.0.2.66:10809",
+	}, " ")
+
+	assert.Equal(t, []string{"platform_debug=1", "platform_debug_sink=192.0.2.10:514"}, hostUKICmdlineParams(live, true),
+		"the live command line never names the NBD server")
+	assert.Empty(t, hostUKICmdlineParams(live, false))
 }

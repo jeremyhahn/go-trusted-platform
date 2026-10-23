@@ -67,7 +67,7 @@ Verification:
 	}
 
 	cmd.Flags().BoolVarP(&decrypt, "decrypt", "d", false, "decrypt encrypted image layers")
-	cmd.Flags().BoolVarP(&verify, "verify", "v", false, "verify image signature")
+	cmd.Flags().BoolVar(&verify, "verify", false, "verify image signature")
 	cmd.Flags().StringVarP(&platform, "platform", "p", "", "target platform (e.g., linux/amd64)")
 	cmd.Flags().StringVarP(&outputFile, "output", "o", "", "output file path (writes to stdout if not provided)")
 

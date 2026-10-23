@@ -16,27 +16,28 @@
 package tpm
 
 import (
-	"bytes"
 	"context"
-	"encoding/base64"
-	"encoding/json"
-	"fmt"
-	"io"
-	"net/http"
 	"os"
-	"time"
 
+	platform "github.com/jeremyhahn/go-trusted-platform/sdk/go"
+	tpmsvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/tpm"
 	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
+
+	// The REST transport registers itself with the platform SDK.
+	_ "github.com/jeremyhahn/go-trusted-platform/sdk/go/transport/rest"
 )
 
 // =============================================================================
 // REST Protocol Adapter
 // =============================================================================
 
-// RESTAdapter implements TPMCommands using REST API calls to platformd.
+// RESTAdapter implements TPMCommands through the platform SDK over REST, so
+// every call travels the SDK's REST route map and protobuf JSON wire exactly
+// as a production client's does.
 type RESTAdapter struct {
 	endpoint string
-	client   *http.Client
+	platform platform.Client
+	client   *tpmsvc.Client
 }
 
 // NewRESTAdapter creates a new REST protocol adapter instance.
@@ -45,15 +46,7 @@ func NewRESTAdapter() *RESTAdapter {
 	if endpoint == "" {
 		endpoint = GetServiceEndpoints().PlatformREST
 	}
-
-	return &RESTAdapter{
-		endpoint: endpoint,
-		client: &http.Client{
-			Transport: &http.Transport{
-				TLSClientConfig: helpers.TLSConfigOrInsecure(),
-			},
-		},
-	}
+	return &RESTAdapter{endpoint: endpoint}
 }
 
 // Name returns the protocol adapter identifier.
@@ -61,471 +54,147 @@ func (r *RESTAdapter) Name() string {
 	return "REST"
 }
 
-// Setup initializes the REST adapter by verifying connectivity.
+// Setup connects the platform SDK client over REST.
 func (r *RESTAdapter) Setup(ctx context.Context) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, r.endpoint+"/health", nil)
+	client, err := platform.Connect(ctx, platform.NewOptions(
+		platform.WithOnlyProtocol(platform.ProtocolREST),
+		platform.WithRESTAddr(r.endpoint),
+		platform.WithTLSConfig(helpers.TLSConfigOrInsecure()),
+	))
 	if err != nil {
 		return ErrConnectionFailed{Protocol: "REST", Endpoint: r.endpoint, Err: err}
 	}
-
-	resp, err := r.client.Do(req)
-	if err != nil {
-		return ErrConnectionFailed{Protocol: "REST", Endpoint: r.endpoint, Err: err}
-	}
-	defer resp.Body.Close()
-
+	r.platform = client
+	r.client = tpmsvc.NewClientFromGRPC(client.TPM())
 	return nil
 }
 
-// Teardown performs cleanup.
+// Teardown closes the SDK client.
 func (r *RESTAdapter) Teardown() error {
+	if r.platform != nil {
+		return r.platform.Close()
+	}
 	return nil
 }
 
-// doRequest performs an HTTP request and returns the response body.
-func (r *RESTAdapter) doRequest(ctx context.Context, method, path string, body interface{}) ([]byte, error) {
-	var reqBody io.Reader
-	if body != nil {
-		data, err := json.Marshal(body)
-		if err != nil {
-			return nil, ErrCallFailed{Protocol: "REST", Method: method + " " + path, Err: err}
-		}
-		reqBody = bytes.NewReader(data)
-	}
-
-	req, err := http.NewRequestWithContext(ctx, method, r.endpoint+path, reqBody)
-	if err != nil {
-		return nil, ErrCallFailed{Protocol: "REST", Method: method + " " + path, Err: err}
-	}
-
-	if body != nil {
-		req.Header.Set("Content-Type", "application/json")
-	}
-	req.Header.Set("Accept", "application/json")
-
-	resp, err := r.client.Do(req)
-	if err != nil {
-		return nil, ErrCallFailed{Protocol: "REST", Method: method + " " + path, Err: err}
-	}
-	defer resp.Body.Close()
-
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, ErrCallFailed{Protocol: "REST", Method: method + " " + path, Err: err}
-	}
-
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, ErrCallFailed{
-			Protocol: "REST",
-			Method:   method + " " + path,
-			Err:      fmt.Errorf("status %d: %s", resp.StatusCode, string(respBody)),
-		}
-	}
-
-	return respBody, nil
-}
-
-// =============================================================================
-// TPM Info Operations
-// =============================================================================
-
-// Info retrieves TPM information via REST.
+// Info retrieves TPM information via the SDK client over REST.
 func (r *RESTAdapter) Info(ctx context.Context) (*InfoResult, error) {
-	body, err := r.doRequest(ctx, http.MethodGet, "/api/v1/tpm/info", nil)
+	resp, err := r.client.InfoDomain(ctx)
 	if err != nil {
-		return nil, err
-	}
-
-	var resp struct {
-		Info         string `json:"info"`
-		Manufacturer *struct {
-			Name            string `json:"name"`
-			Model           string `json:"model"`
-			FirmwareVersion string `json:"firmware_version"`
-		} `json:"manufacturer"`
-		IsSimulator  bool   `json:"is_simulator"`
-		FIPSMode     bool   `json:"fips_mode"`
-		MaxNVRAMSize uint32 `json:"max_nvram_size"`
-	}
-
-	if err := json.Unmarshal(body, &resp); err != nil {
 		return nil, ErrCallFailed{Protocol: "REST", Method: "Info", Err: err}
 	}
-
-	result := &InfoResult{
-		Version:      "2.0",
-		IsSimulator:  resp.IsSimulator,
-		FIPSMode:     resp.FIPSMode,
-		MaxNVRAMSize: resp.MaxNVRAMSize,
-	}
-
-	if resp.Manufacturer != nil {
-		result.Manufacturer = &ManufacturerInfo{
-			Name:            resp.Manufacturer.Name,
-			Model:           resp.Manufacturer.Model,
-			FirmwareVersion: resp.Manufacturer.FirmwareVersion,
-		}
-	}
-
-	return result, nil
+	return infoResultFromResponse(resp), nil
 }
 
-// =============================================================================
-// TPM Provision Operations
-// =============================================================================
-
-// Provision provisions the TPM via REST.
+// Provision provisions the TPM via the SDK client over REST.
 func (r *RESTAdapter) Provision(ctx context.Context, opts ProvisionOptions) (*ProvisionResult, error) {
-	reqBody := map[string]interface{}{
-		"owner_password": opts.OwnerPassword,
-	}
-
-	body, err := r.doRequest(ctx, http.MethodPost, "/api/v1/tpm/provision", reqBody)
+	resp, err := r.client.ProvisionDomain(ctx, provisionRequestFromOptions(opts))
 	if err != nil {
-		return nil, err
-	}
-
-	var resp struct {
-		Success bool   `json:"success"`
-		Message string `json:"message"`
-	}
-
-	if err := json.Unmarshal(body, &resp); err != nil {
 		return nil, ErrCallFailed{Protocol: "REST", Method: "Provision", Err: err}
 	}
-
-	return &ProvisionResult{
-		Success:    resp.Success,
-		Message:    resp.Message,
-		EKCreated:  resp.Success,
-		SRKCreated: resp.Success,
-		AKCreated:  resp.Success,
-	}, nil
+	return provisionResultFromResponse(resp), nil
 }
 
-// =============================================================================
-// TPM Clear Operations
-// =============================================================================
-
-// Clear clears the TPM via REST.
+// Clear clears the TPM via the SDK client over REST.
 func (r *RESTAdapter) Clear(ctx context.Context, opts ClearOptions) (*ClearResult, error) {
-	reqBody := map[string]interface{}{
-		"owner_password": opts.OwnerPassword,
-	}
-
-	body, err := r.doRequest(ctx, http.MethodPost, "/api/v1/tpm/clear", reqBody)
+	resp, err := r.client.ClearDomain(ctx, opts.OwnerPassword, opts.Confirm)
 	if err != nil {
-		return nil, err
-	}
-
-	var resp struct {
-		Success bool   `json:"success"`
-		Message string `json:"message"`
-	}
-
-	if err := json.Unmarshal(body, &resp); err != nil {
 		return nil, ErrCallFailed{Protocol: "REST", Method: "Clear", Err: err}
 	}
-
-	return &ClearResult{
-		Success: resp.Success,
-		Message: resp.Message,
-	}, nil
+	return clearResultFromResponse(resp), nil
 }
 
-// =============================================================================
-// EK Operations
-// =============================================================================
-
-// EKCreate creates an EK via REST.
+// EKCreate creates an EK via the SDK client over REST.
 func (r *RESTAdapter) EKCreate(ctx context.Context, opts EKCreateOptions) (*EKCreateResult, error) {
-	body, err := r.doRequest(ctx, http.MethodPost, "/api/v1/tpm/ek", nil)
+	resp, err := r.client.CreateEKDomain(ctx, keyAlgorithmFromString(opts.Algorithm), opts.Persistent)
 	if err != nil {
-		return nil, err
+		return nil, ErrCallFailed{Protocol: "REST", Method: "CreateEK", Err: err}
 	}
-
-	var resp struct {
-		Handle    uint32 `json:"handle"`
-		PublicKey string `json:"public_key"`
-		Algorithm string `json:"algorithm"`
-	}
-
-	if err := json.Unmarshal(body, &resp); err != nil {
-		return nil, ErrCallFailed{Protocol: "REST", Method: "EKCreate", Err: err}
-	}
-
-	pubKey, decErr := base64.StdEncoding.DecodeString(resp.PublicKey)
-	if decErr != nil {
-		pubKey = []byte(resp.PublicKey)
-	}
-
-	return &EKCreateResult{
-		Success:   true,
-		Handle:    resp.Handle,
-		Algorithm: resp.Algorithm,
-		PublicKey: pubKey,
-		CreatedAt: time.Now(),
-	}, nil
+	return ekCreateResultFromResponse(resp, opts.Algorithm), nil
 }
 
-// EKInfo retrieves EK information via REST.
+// EKInfo retrieves EK information via the SDK client over REST.
 func (r *RESTAdapter) EKInfo(ctx context.Context, handle uint32) (*EKInfoResult, error) {
-	body, err := r.doRequest(ctx, http.MethodGet, "/api/v1/tpm/ek", nil)
+	resp, err := r.client.GetEKDomain(ctx, tpmsvc.KeyAlgorithmUnspecified, handle)
 	if err != nil {
-		return nil, err
+		return nil, ErrCallFailed{Protocol: "REST", Method: "GetEK", Err: err}
 	}
-
-	var resp struct {
-		Handle    uint32 `json:"handle"`
-		PublicKey string `json:"public_key"`
-		Algorithm string `json:"algorithm"`
-	}
-
-	if err := json.Unmarshal(body, &resp); err != nil {
-		return nil, ErrCallFailed{Protocol: "REST", Method: "EKInfo", Err: err}
-	}
-
-	pubKey, decErr := base64.StdEncoding.DecodeString(resp.PublicKey)
-	if decErr != nil {
-		pubKey = []byte(resp.PublicKey)
-	}
-
-	return &EKInfoResult{
-		Handle:    resp.Handle,
-		Algorithm: resp.Algorithm,
-		PublicKey: pubKey,
-	}, nil
+	return ekInfoResultFromResponse(resp), nil
 }
 
-// EKCertificate retrieves the EK certificate via REST.
+// EKCertificate retrieves the EK certificate via the SDK client over REST.
 func (r *RESTAdapter) EKCertificate(ctx context.Context) (*EKCertificateResult, error) {
-	body, err := r.doRequest(ctx, http.MethodGet, "/api/v1/tpm/ek/certificate", nil)
+	resp, err := r.client.GetEKCertificateDomain(ctx, tpmsvc.KeyAlgorithmUnspecified, 0)
 	if err != nil {
-		return nil, err
+		return nil, ErrCallFailed{Protocol: "REST", Method: "GetEKCertificate", Err: err}
 	}
-
-	var resp struct {
-		Certificate string `json:"certificate"`
-	}
-
-	if err := json.Unmarshal(body, &resp); err != nil {
-		return nil, ErrCallFailed{Protocol: "REST", Method: "EKCertificate", Err: err}
-	}
-
-	cert, decErr := base64.StdEncoding.DecodeString(resp.Certificate)
-	if decErr != nil {
-		cert = []byte(resp.Certificate)
-	}
-
-	return &EKCertificateResult{
-		Format:      "DER",
-		Certificate: cert,
-	}, nil
+	return ekCertificateResultFromResponse(resp), nil
 }
 
-// EKDelete deletes the EK via REST.
+// EKDelete deletes the EK via the SDK client over REST.
 func (r *RESTAdapter) EKDelete(ctx context.Context, handle uint32, password string) (*EKDeleteResult, error) {
-	body, err := r.doRequest(ctx, http.MethodDelete, "/api/v1/tpm/ek", nil)
+	resp, err := r.client.DeleteEKDomain(ctx, handle, tpmsvc.KeyAlgorithmUnspecified, password)
 	if err != nil {
-		return nil, err
+		return nil, ErrCallFailed{Protocol: "REST", Method: "DeleteEK", Err: err}
 	}
-
-	var resp struct {
-		Success bool   `json:"success"`
-		Message string `json:"message"`
-	}
-
-	if err := json.Unmarshal(body, &resp); err != nil {
-		return nil, ErrCallFailed{Protocol: "REST", Method: "EKDelete", Err: err}
-	}
-
-	return &EKDeleteResult{
-		Success: resp.Success,
-		Message: resp.Message,
-	}, nil
+	success, message := statusFields(deleteKeyStatus(resp))
+	return &EKDeleteResult{Success: success, Message: message}, nil
 }
 
-// =============================================================================
-// SRK Operations
-// =============================================================================
-
-// SRKCreate creates an SRK via REST.
+// SRKCreate creates an SRK via the SDK client over REST.
 func (r *RESTAdapter) SRKCreate(ctx context.Context, opts SRKCreateOptions) (*SRKCreateResult, error) {
-	body, err := r.doRequest(ctx, http.MethodPost, "/api/v1/tpm/srk", nil)
+	resp, err := r.client.CreateSRKDomain(ctx, keyAlgorithmFromString(opts.Algorithm),
+		opts.Persistent, opts.Parent, opts.ParentPassword)
 	if err != nil {
-		return nil, err
+		return nil, ErrCallFailed{Protocol: "REST", Method: "CreateSRK", Err: err}
 	}
-
-	var resp struct {
-		Handle    uint32 `json:"handle"`
-		PublicKey string `json:"public_key"`
-		Algorithm string `json:"algorithm"`
-	}
-
-	if err := json.Unmarshal(body, &resp); err != nil {
-		return nil, ErrCallFailed{Protocol: "REST", Method: "SRKCreate", Err: err}
-	}
-
-	pubKey, decErr := base64.StdEncoding.DecodeString(resp.PublicKey)
-	if decErr != nil {
-		pubKey = []byte(resp.PublicKey)
-	}
-
-	return &SRKCreateResult{
-		Success:   true,
-		Handle:    resp.Handle,
-		Algorithm: resp.Algorithm,
-		PublicKey: pubKey,
-		CreatedAt: time.Now(),
-	}, nil
+	return srkCreateResultFromResponse(resp, opts.Algorithm), nil
 }
 
-// SRKInfo retrieves SRK information via REST.
+// SRKInfo retrieves SRK information via the SDK client over REST.
 func (r *RESTAdapter) SRKInfo(ctx context.Context, handle uint32) (*SRKInfoResult, error) {
-	body, err := r.doRequest(ctx, http.MethodGet, "/api/v1/tpm/srk", nil)
+	resp, err := r.client.GetSRKDomain(ctx, tpmsvc.KeyAlgorithmUnspecified, handle)
 	if err != nil {
-		return nil, err
+		return nil, ErrCallFailed{Protocol: "REST", Method: "GetSRK", Err: err}
 	}
-
-	var resp struct {
-		Handle    uint32 `json:"handle"`
-		PublicKey string `json:"public_key"`
-		Algorithm string `json:"algorithm"`
-	}
-
-	if err := json.Unmarshal(body, &resp); err != nil {
-		return nil, ErrCallFailed{Protocol: "REST", Method: "SRKInfo", Err: err}
-	}
-
-	pubKey, decErr := base64.StdEncoding.DecodeString(resp.PublicKey)
-	if decErr != nil {
-		pubKey = []byte(resp.PublicKey)
-	}
-
-	return &SRKInfoResult{
-		Handle:    resp.Handle,
-		Algorithm: resp.Algorithm,
-		PublicKey: pubKey,
-	}, nil
+	return srkInfoResultFromResponse(resp), nil
 }
 
-// SRKDelete deletes the SRK via REST.
+// SRKDelete deletes the SRK via the SDK client over REST.
 func (r *RESTAdapter) SRKDelete(ctx context.Context, handle uint32, password string) (*SRKDeleteResult, error) {
-	body, err := r.doRequest(ctx, http.MethodDelete, "/api/v1/tpm/srk", nil)
+	resp, err := r.client.DeleteSRKDomain(ctx, handle, tpmsvc.KeyAlgorithmUnspecified, password)
 	if err != nil {
-		return nil, err
+		return nil, ErrCallFailed{Protocol: "REST", Method: "DeleteSRK", Err: err}
 	}
-
-	var resp struct {
-		Success bool   `json:"success"`
-		Message string `json:"message"`
-	}
-
-	if err := json.Unmarshal(body, &resp); err != nil {
-		return nil, ErrCallFailed{Protocol: "REST", Method: "SRKDelete", Err: err}
-	}
-
-	return &SRKDeleteResult{
-		Success: resp.Success,
-		Message: resp.Message,
-	}, nil
+	success, message := statusFields(deleteKeyStatus(resp))
+	return &SRKDeleteResult{Success: success, Message: message}, nil
 }
 
-// =============================================================================
-// Seal/Unseal Operations
-// =============================================================================
-
-// Seal seals data to the TPM via REST.
+// Seal seals data to the TPM via the SDK client over REST.
 func (r *RESTAdapter) Seal(ctx context.Context, opts SealOptions) (*SealResult, error) {
-	reqBody := map[string]interface{}{
-		"data": base64.StdEncoding.EncodeToString(opts.Data),
-	}
-
-	body, err := r.doRequest(ctx, http.MethodPost, "/api/v1/tpm/seal", reqBody)
+	resp, err := r.client.SealDomain(ctx, sealRequestFromOptions(opts))
 	if err != nil {
-		return nil, err
-	}
-
-	var resp struct {
-		SealedData string `json:"sealed_data"`
-	}
-
-	if err := json.Unmarshal(body, &resp); err != nil {
 		return nil, ErrCallFailed{Protocol: "REST", Method: "Seal", Err: err}
 	}
-
-	return &SealResult{
-		Success: true,
-		Message: "data sealed successfully",
-	}, nil
+	return sealResultFromResponse(resp), nil
 }
 
-// Unseal unseals data from the TPM via REST.
+// Unseal unseals data from the TPM via the SDK client over REST.
 func (r *RESTAdapter) Unseal(ctx context.Context, opts UnsealOptions) (*UnsealResult, error) {
-	reqBody := map[string]interface{}{
-		"cn": opts.CN,
-	}
-
-	body, err := r.doRequest(ctx, http.MethodPost, "/api/v1/tpm/unseal", reqBody)
+	resp, err := r.client.UnsealDomain(ctx, unsealRequestFromOptions(opts))
 	if err != nil {
-		return nil, err
-	}
-
-	var resp struct {
-		Data string `json:"data"`
-	}
-
-	if err := json.Unmarshal(body, &resp); err != nil {
 		return nil, ErrCallFailed{Protocol: "REST", Method: "Unseal", Err: err}
 	}
-
-	data, decErr := base64.StdEncoding.DecodeString(resp.Data)
-	if decErr != nil {
-		data = []byte(resp.Data)
-	}
-
-	return &UnsealResult{
-		Success: true,
-		Data:    data,
-	}, nil
+	return unsealResultFromResponse(resp), nil
 }
 
-// =============================================================================
-// Event Log Operations
-// =============================================================================
-
-// EventLog reads the TPM event log via REST.
-func (r *RESTAdapter) EventLog(ctx context.Context, path string) (*EventLogResult, error) {
-	body, err := r.doRequest(ctx, http.MethodGet, "/api/v1/tpm/eventlog", nil)
+// EventLog reads the TPM event log via the SDK client over REST.
+func (r *RESTAdapter) EventLog(ctx context.Context) (*EventLogResult, error) {
+	resp, err := r.client.GetEventLogDomain(ctx, "json")
 	if err != nil {
-		return nil, err
+		return nil, ErrCallFailed{Protocol: "REST", Method: "GetEventLog", Err: err}
 	}
-
-	var resp struct {
-		EventLog   string `json:"event_log"`
-		Format     string `json:"format"`
-		EventCount uint64 `json:"event_count"`
-	}
-
-	if err := json.Unmarshal(body, &resp); err != nil {
-		return nil, ErrCallFailed{Protocol: "REST", Method: "EventLog", Err: err}
-	}
-
-	result := &EventLogResult{
-		Events: make([]EventLogEntry, 0),
-	}
-
-	if resp.EventLog != "" {
-		eventData, decErr := base64.StdEncoding.DecodeString(resp.EventLog)
-		if decErr != nil {
-			eventData = []byte(resp.EventLog)
-		}
-		result.Events = append(result.Events, EventLogEntry{
-			EventData: eventData,
-		})
-	}
-
-	return result, nil
+	return eventLogResultFromResponse(resp), nil
 }
 
 // Ensure RESTAdapter implements TPMCommands interface.

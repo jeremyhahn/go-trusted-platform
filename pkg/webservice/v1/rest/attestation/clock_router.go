@@ -20,6 +20,7 @@ import (
 	"github.com/gorilla/mux"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/restwire"
 )
 
 // ClockState is the node's own clock trust state as the attestation surface
@@ -129,7 +130,7 @@ func (r *ClockRouter) getClock(w http.ResponseWriter, req *http.Request) {
 }
 
 func (r *ClockRouter) writeUnavailable(w http.ResponseWriter, req *http.Request, err error) {
-	r.respWriter.Write(w, req, http.StatusServiceUnavailable, response.WebServiceResponse{
+	r.respWriter.Write(w, req, http.StatusServiceUnavailable, restwire.WebServiceResponse{
 		Code: http.StatusServiceUnavailable, Error: err.Error(),
 	})
 }

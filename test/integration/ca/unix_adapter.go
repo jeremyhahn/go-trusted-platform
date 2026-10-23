@@ -21,6 +21,7 @@ import (
 
 	pb "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
+	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers/surface"
 	"google.golang.org/grpc"
 )
 
@@ -139,7 +140,7 @@ func (u *UnixAdapter) Info(ctx context.Context) (*InfoResult, error) {
 // Init initializes the CA via Unix socket.
 // Note: CA initialization is done during daemon startup, not via gRPC.
 func (u *UnixAdapter) Init(ctx context.Context, opts InitOptions) (*InitResult, error) {
-	return nil, ErrNotImplemented{Feature: "CA init via Unix"}
+	return nil, surface.ErrNoSurface{Transport: "Unix", Operation: "CA init"}
 }
 
 // =============================================================================
@@ -175,16 +176,16 @@ func (u *UnixAdapter) IssueCertificate(ctx context.Context, opts IssueCertificat
 	if err != nil {
 		return nil, ErrCallFailed{Protocol: "Unix", Method: "IssueCertificate", Err: err}
 	}
+	return issueResult(resp), nil
+}
 
-	result := &IssueCertificateResult{
-		Success: resp.Status != nil && resp.Status.Success,
+// SignCSR certifies a KMS key for code signing via Unix socket.
+func (u *UnixAdapter) SignCSR(ctx context.Context, opts SignCSROptions) (*IssueCertificateResult, error) {
+	resp, err := u.ca.SignCSR(ctx, &pb.SignCSRRequest{CsrPem: opts.CSRPEM, ValidDays: opts.ValidDays})
+	if err != nil {
+		return nil, ErrCallFailed{Protocol: "Unix", Method: "SignCSR", Err: err}
 	}
-
-	if resp.Certificate != nil {
-		result.Certificate = convertCertificate(resp.Certificate)
-	}
-
-	return result, nil
+	return issueResult(resp), nil
 }
 
 // =============================================================================
@@ -420,6 +421,10 @@ func (u *UnixAdapter) GetCRL(ctx context.Context, opts GetCRLOptions) (*GetCRLRe
 		}
 	}
 
+	if err := result.setIssuerFromData("Unix"); err != nil {
+		return nil, err
+	}
+
 	return result, nil
 }
 
@@ -446,7 +451,7 @@ func (u *UnixAdapter) GenerateCRL(ctx context.Context) (*GenerateCRLResult, erro
 // ExportCRL exports the CRL via Unix socket.
 // Note: CRL export to file is a CLI operation, not exposed via gRPC.
 func (u *UnixAdapter) ExportCRL(ctx context.Context, output string) (*ExportCRLResult, error) {
-	return nil, ErrNotImplemented{Feature: "CRL export via Unix"}
+	return nil, surface.ErrNoSurface{Transport: "Unix", Operation: "CRL export"}
 }
 
 // =============================================================================
@@ -490,13 +495,13 @@ func (u *UnixAdapter) ExportBundle(ctx context.Context, output string) (*ExportB
 // InstallCACertificates installs CA certificates via Unix socket.
 // Note: CA certificate installation is a local OS operation, not exposed via gRPC.
 func (u *UnixAdapter) InstallCACertificates(ctx context.Context) (*InstallCACertificatesResult, error) {
-	return nil, ErrNotImplemented{Feature: "install CA certificates via Unix"}
+	return nil, surface.ErrNoSurface{Transport: "Unix", Operation: "install CA certificates"}
 }
 
 // UninstallCACertificates uninstalls CA certificates via Unix socket.
 // Note: CA certificate uninstallation is a local OS operation, not exposed via gRPC.
 func (u *UnixAdapter) UninstallCACertificates(ctx context.Context) (*UninstallCACertificatesResult, error) {
-	return nil, ErrNotImplemented{Feature: "uninstall CA certificates via Unix"}
+	return nil, surface.ErrNoSurface{Transport: "Unix", Operation: "uninstall CA certificates"}
 }
 
 // Ensure UnixAdapter implements CACommands interface.

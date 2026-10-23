@@ -13,7 +13,11 @@
 
 package barrier
 
-import "fmt"
+import (
+	"fmt"
+
+	platformbarrier "github.com/jeremyhahn/go-trusted-platform/pkg/barrier"
+)
 
 // ---------------------------------------------------------------------------
 // Failure error types — wrap the SDK error so callers can match via
@@ -212,27 +216,34 @@ func (ErrSOPinRequiresUserPin) Error() string {
 	return "--so-pin requires --user-pin (FIPS 140-3 / PCI-DSS v4 dual-control)"
 }
 
-// ErrInvalidThreshold is returned when threshold and total are
-// inconsistent (e.g. threshold > total).
+// ErrInvalidThreshold is returned when threshold and total break the
+// platform Shamir rule (barrier.ValidateShamirSplit). Err is the rule's own
+// error, so errors.Is matches barrier.ErrInvalidThreshold.
 type ErrInvalidThreshold struct {
 	Threshold int
 	Total     int
+	Err       error
 }
 
 // Error implements the error interface.
 func (e ErrInvalidThreshold) Error() string {
-	return fmt.Sprintf("invalid threshold: threshold (%d) must be >= 2 and <= total (%d)",
-		e.Threshold, e.Total)
+	return fmt.Sprintf("invalid threshold: threshold (%d) must be >= %d and <= total (%d)",
+		e.Threshold, platformbarrier.MinShamirThreshold, e.Total)
 }
 
-// ErrInvalidTotal is returned when --total is < threshold or < 2.
+// Unwrap returns the platform rule's error.
+func (e ErrInvalidThreshold) Unwrap() error { return e.Err }
+
+// ErrInvalidTotal is returned when --total is below the minimum Shamir
+// threshold, so no valid split exists.
 type ErrInvalidTotal struct {
 	Total int
 }
 
 // Error implements the error interface.
 func (e ErrInvalidTotal) Error() string {
-	return fmt.Sprintf("invalid total: must be >= 2, got %d", e.Total)
+	return fmt.Sprintf("invalid total: must be >= %d, got %d",
+		platformbarrier.MinShamirThreshold, e.Total)
 }
 
 // ErrMissingSecret is returned when --passphrase is required but absent.

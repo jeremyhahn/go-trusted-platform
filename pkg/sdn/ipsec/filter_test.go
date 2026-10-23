@@ -23,6 +23,7 @@ import (
 
 	"github.com/google/nftables"
 	"github.com/google/nftables/expr"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ipsec/config"
 	"golang.org/x/sys/unix"
 )
 
@@ -260,7 +261,7 @@ func boolByte(b bool) byte {
 	return 0
 }
 
-func newTestFilter(t *testing.T, cfg *Config) (*Filter, *fakeNFT) {
+func newTestFilter(t *testing.T, cfg *config.Config) (*Filter, *fakeNFT) {
 	t.Helper()
 	conn := newFakeNFT()
 	f, err := newFilter(cfg, conn)
@@ -270,7 +271,7 @@ func newTestFilter(t *testing.T, cfg *Config) (*Filter, *fakeNFT) {
 	return f, conn
 }
 
-func appliedFilter(t *testing.T, cfg *Config) (*Filter, *fakeNFT) {
+func appliedFilter(t *testing.T, cfg *config.Config) (*Filter, *fakeNFT) {
 	t.Helper()
 	f, conn := newTestFilter(t, cfg)
 	if err := f.Apply(context.Background()); err != nil {
@@ -575,7 +576,7 @@ func TestFilterEvictionFailures(t *testing.T) {
 	f, conn := appliedFilter(t, validConfig())
 
 	var peerErr *PeerError
-	if err := f.Drop(ctx, addr("fd00::30")); !errors.As(err, &peerErr) || !errors.Is(err, ErrFamilyMismatch) {
+	if err := f.Drop(ctx, addr("fd00::30")); !errors.As(err, &peerErr) || !errors.Is(err, config.ErrFamilyMismatch) {
 		t.Fatalf("Drop of the other family: err = %v", err)
 	}
 	conn.flushErr = errInjected
@@ -678,12 +679,12 @@ func TestNewFilterRejects(t *testing.T) {
 	invalid.FabricInterface = ""
 	for _, tt := range []struct {
 		name string
-		cfg  *Config
+		cfg  *config.Config
 		want error
 	}{
-		{"absent", nil, ErrNotEnabled},
-		{"disabled", &Config{}, ErrNotEnabled},
-		{"invalid", invalid, ErrRequired},
+		{"absent", nil, config.ErrNotEnabled},
+		{"disabled", &config.Config{}, config.ErrNotEnabled},
+		{"invalid", invalid, config.ErrRequired},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			if _, err := newFilter(tt.cfg, newFakeNFT()); !errors.Is(err, tt.want) {

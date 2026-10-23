@@ -27,73 +27,25 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func newTestGenericDAO(t *testing.T) (*GenericDAO[*entities.Role], *Client, func()) {
+func newTestGenericDAO(t *testing.T) *GenericDAO[*entities.Role] {
 	t.Helper()
-
-	cfg := TestConfig(t)
-	logger := logging.DefaultLogger()
-
-	// Create embedded server
-	server, err := NewEmbeddedServer(cfg, logger)
-	require.NoError(t, err, "failed to create embedded server")
-
-	// Start embedded server
-	// context.Background(), deliberately (#270): a deadline here bounds
-	// nothing and can only manufacture a false failure. The embedded
-	// server's Start takes no context — it runs first boot synchronously and
-	// the context is consulted only afterwards — and StartWithService
-	// ignores its context entirely. So a deadline cannot interrupt slow
-	// startup; it can only report a startup that already SUCCEEDED as a
-	// failure when the machine was loaded, which is exactly what happened.
-	// go test -timeout is the backstop for a genuine hang, and it prints a
-	// goroutine dump, which says WHERE it hung rather than only that it did.
-	err = server.Start(context.Background())
-	require.NoError(t, err, "failed to start embedded server")
-
-	// Create client
-	client, err := NewClient(cfg, logger)
-	require.NoError(t, err, "failed to create client")
-
-	// Start client with embedded service
-	err = client.StartWithService(context.Background(), server.Service())
-	require.NoError(t, err, "failed to start client with service")
-
-	dao := NewGenericDAO[*entities.Role](
-		client,
-		"TestRole",
+	return NewGenericDAO[*entities.Role](
+		newSharedTestClient(t),
+		genericTestEntityType,
 		func() *entities.Role { return &entities.Role{} },
-		logger,
+		logging.DefaultLogger(),
 	)
-
-	cleanup := func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-
-		// Stop client first
-		if err := client.Stop(ctx); err != nil {
-			t.Logf("client stop error: %v", err)
-		}
-
-		// Stop embedded server
-		if err := server.Stop(ctx); err != nil {
-			t.Logf("server stop error: %v", err)
-		}
-	}
-
-	return dao, client, cleanup
 }
 
 func TestNewGenericDAO(t *testing.T) {
-	dao, _, cleanup := newTestGenericDAO(t)
-	defer cleanup()
+	dao := newTestGenericDAO(t)
 
 	assert.NotNil(t, dao)
-	assert.Equal(t, "TestRole", dao.EntityType())
+	assert.Equal(t, genericTestEntityType, dao.EntityType())
 }
 
 func TestGenericDAO_Save_NewEntity(t *testing.T) {
-	dao, _, cleanup := newTestGenericDAO(t)
-	defer cleanup()
+	dao := newTestGenericDAO(t)
 
 	ctx := context.Background()
 
@@ -112,8 +64,7 @@ func TestGenericDAO_Save_NewEntity(t *testing.T) {
 }
 
 func TestGenericDAO_Save_ExistingEntity(t *testing.T) {
-	dao, _, cleanup := newTestGenericDAO(t)
-	defer cleanup()
+	dao := newTestGenericDAO(t)
 
 	ctx := context.Background()
 
@@ -140,8 +91,7 @@ func TestGenericDAO_Save_ExistingEntity(t *testing.T) {
 }
 
 func TestGenericDAO_Get_Success(t *testing.T) {
-	dao, _, cleanup := newTestGenericDAO(t)
-	defer cleanup()
+	dao := newTestGenericDAO(t)
 
 	ctx := context.Background()
 
@@ -159,8 +109,7 @@ func TestGenericDAO_Get_Success(t *testing.T) {
 }
 
 func TestGenericDAO_Get_NotFound(t *testing.T) {
-	dao, _, cleanup := newTestGenericDAO(t)
-	defer cleanup()
+	dao := newTestGenericDAO(t)
 
 	ctx := context.Background()
 
@@ -169,13 +118,12 @@ func TestGenericDAO_Get_NotFound(t *testing.T) {
 
 	var notFoundErr ErrNotFound
 	assert.ErrorAs(t, err, &notFoundErr)
-	assert.Equal(t, "TestRole", notFoundErr.EntityType)
+	assert.Equal(t, genericTestEntityType, notFoundErr.EntityType)
 	assert.Equal(t, uint64(99999999), notFoundErr.ID)
 }
 
 func TestGenericDAO_Delete_Success(t *testing.T) {
-	dao, _, cleanup := newTestGenericDAO(t)
-	defer cleanup()
+	dao := newTestGenericDAO(t)
 
 	ctx := context.Background()
 
@@ -200,8 +148,7 @@ func TestGenericDAO_Delete_Success(t *testing.T) {
 }
 
 func TestGenericDAO_Delete_ZeroID(t *testing.T) {
-	dao, _, cleanup := newTestGenericDAO(t)
-	defer cleanup()
+	dao := newTestGenericDAO(t)
 
 	ctx := context.Background()
 
@@ -214,12 +161,11 @@ func TestGenericDAO_Delete_ZeroID(t *testing.T) {
 
 	var invalidIDErr ErrInvalidEntityID
 	assert.ErrorAs(t, err, &invalidIDErr)
-	assert.Equal(t, "TestRole", invalidIDErr.EntityType)
+	assert.Equal(t, genericTestEntityType, invalidIDErr.EntityType)
 }
 
 func TestGenericDAO_Count_Empty(t *testing.T) {
-	dao, _, cleanup := newTestGenericDAO(t)
-	defer cleanup()
+	dao := newTestGenericDAO(t)
 
 	ctx := context.Background()
 
@@ -229,8 +175,7 @@ func TestGenericDAO_Count_Empty(t *testing.T) {
 }
 
 func TestGenericDAO_Count_WithEntities(t *testing.T) {
-	dao, _, cleanup := newTestGenericDAO(t)
-	defer cleanup()
+	dao := newTestGenericDAO(t)
 
 	ctx := context.Background()
 
@@ -250,8 +195,7 @@ func TestGenericDAO_Count_WithEntities(t *testing.T) {
 }
 
 func TestGenericDAO_Page_Success(t *testing.T) {
-	dao, _, cleanup := newTestGenericDAO(t)
-	defer cleanup()
+	dao := newTestGenericDAO(t)
 
 	ctx := context.Background()
 
@@ -286,8 +230,7 @@ func TestGenericDAO_Page_Success(t *testing.T) {
 }
 
 func TestGenericDAO_Page_LastPage(t *testing.T) {
-	dao, _, cleanup := newTestGenericDAO(t)
-	defer cleanup()
+	dao := newTestGenericDAO(t)
 
 	ctx := context.Background()
 
@@ -320,8 +263,7 @@ func TestGenericDAO_Page_LastPage(t *testing.T) {
 }
 
 func TestGenericDAO_Page_EmptyResult(t *testing.T) {
-	dao, _, cleanup := newTestGenericDAO(t)
-	defer cleanup()
+	dao := newTestGenericDAO(t)
 
 	ctx := context.Background()
 
@@ -336,8 +278,7 @@ func TestGenericDAO_Page_EmptyResult(t *testing.T) {
 }
 
 func TestGenericDAO_ForEachPage_Success(t *testing.T) {
-	dao, _, cleanup := newTestGenericDAO(t)
-	defer cleanup()
+	dao := newTestGenericDAO(t)
 
 	ctx := context.Background()
 
@@ -389,8 +330,7 @@ func TestGenericDAO_ForEachPage_Success(t *testing.T) {
 }
 
 func TestGenericDAO_ForEachPage_ProcessorError(t *testing.T) {
-	dao, _, cleanup := newTestGenericDAO(t)
-	defer cleanup()
+	dao := newTestGenericDAO(t)
 
 	ctx := context.Background()
 
@@ -419,8 +359,7 @@ func TestGenericDAO_ForEachPage_ProcessorError(t *testing.T) {
 }
 
 func TestGenericDAO_ForEachPage_Empty(t *testing.T) {
-	dao, _, cleanup := newTestGenericDAO(t)
-	defer cleanup()
+	dao := newTestGenericDAO(t)
 
 	ctx := context.Background()
 

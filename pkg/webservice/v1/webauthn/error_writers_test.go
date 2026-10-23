@@ -164,7 +164,7 @@ func TestWriteRegistrationError_UserAlreadyExists(t *testing.T) {
 	r := httptest.NewRequest(http.MethodPost, "/test", nil)
 
 	regErr := service.ErrUserAlreadyExists{Email: "test@example.com"}
-	mockWriter.On("Write", w, r, http.StatusConflict, mock.AnythingOfType("response.WebServiceResponse")).Once()
+	mockWriter.On("Write", w, r, http.StatusConflict, mock.AnythingOfType("restwire.WebServiceResponse")).Once()
 
 	handler.writeRegistrationError(w, r, regErr)
 	mockWriter.AssertExpectations(t)

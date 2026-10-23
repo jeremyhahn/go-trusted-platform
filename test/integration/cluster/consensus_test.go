@@ -24,6 +24,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/jeremyhahn/go-trusted-platform/pkg/testenv"
 )
 
 // shardID is the default shard ID used for all operations in these tests.
@@ -31,8 +33,6 @@ const shardID uint64 = 0
 
 // TestWriteReplication tests that writes replicate to all nodes.
 func TestWriteReplication(t *testing.T) {
-	skipIfNoRaftCluster(t)
-
 	tc := newTestCluster(t, 3)
 	defer tc.stop()
 
@@ -60,8 +60,6 @@ func TestWriteReplication(t *testing.T) {
 
 	// Wait for replication with timeout
 	replicationTimeout := 5 * time.Second
-	replicatedCtx, replicatedCancel := context.WithTimeout(ctx, replicationTimeout)
-	defer replicatedCancel()
 
 	// Check that data is eventually readable from all followers
 	followers := tc.getFollowers()
@@ -73,18 +71,14 @@ func TestWriteReplication(t *testing.T) {
 		// Poll until data is replicated or timeout
 		var found bool
 		var retrieved []byte
-
-		for !found {
-			select {
-			case <-replicatedCtx.Done():
-				t.Fatalf("Replication timeout on node %d: data not found", follower.id)
-			default:
-				retrieved, found, err = follower.storage.Get(ctx, "TestReplication", hashString(testKey), shardID)
-				if err == nil && found {
-					break
-				}
-				time.Sleep(100 * time.Millisecond)
-			}
+		replicated := func() bool {
+			var getErr error
+			retrieved, found, getErr = follower.storage.Get(ctx, "TestReplication", hashString(testKey), shardID)
+			return getErr == nil && found
+		}
+		condition := fmt.Sprintf("replication to node %d", follower.id)
+		if err := testenv.WaitUntil(ctx, replicationTimeout, condition, replicated); err != nil {
+			t.Fatalf("Replication timeout on node %d: data not found: %v", follower.id, err)
 		}
 
 		assert.True(t, found, "Data should be replicated to node %d", follower.id)
@@ -97,8 +91,6 @@ func TestWriteReplication(t *testing.T) {
 
 // TestWriteReplication_Multiple tests multiple writes replicate correctly.
 func TestWriteReplication_Multiple(t *testing.T) {
-	skipIfNoRaftCluster(t)
-
 	tc := newTestCluster(t, 3)
 	defer tc.stop()
 
@@ -117,6 +109,7 @@ func TestWriteReplication_Multiple(t *testing.T) {
 	// Write multiple records
 	const recordCount = 10
 	keys := make([]uint64, recordCount)
+	written := make(map[uint64][]byte, recordCount)
 
 	for i := 0; i < recordCount; i++ {
 		key := fmt.Sprintf("multi-test-%d-%d", time.Now().UnixNano(), i)
@@ -125,18 +118,17 @@ func TestWriteReplication_Multiple(t *testing.T) {
 
 		err := leader.storage.Put(ctx, "MultiTest", keys[i], data, shardID)
 		require.NoError(t, err, "Write %d should succeed", i)
+		written[keys[i]] = data
 	}
 
 	t.Logf("Wrote %d records to leader", recordCount)
-
-	// Allow time for replication
-	time.Sleep(2 * time.Second)
 
 	// Verify on a follower
 	followers := tc.getFollowers()
 	require.NotEmpty(t, followers)
 
 	follower := followers[0]
+	waitForReplication(ctx, t, []*testNode{follower}, "MultiTest", written)
 	var foundCount int
 
 	for _, key := range keys {
@@ -154,8 +146,6 @@ func TestWriteReplication_Multiple(t *testing.T) {
 
 // TestReadConsistency tests that reads are consistent across nodes.
 func TestReadConsistency(t *testing.T) {
-	skipIfNoRaftCluster(t)
-
 	tc := newTestCluster(t, 3)
 	defer tc.stop()
 
@@ -178,11 +168,9 @@ func TestReadConsistency(t *testing.T) {
 	err = leader.storage.Put(ctx, "ConsistencyTest", testKey, version1, shardID)
 	require.NoError(t, err)
 
-	// Wait for replication
-	time.Sleep(2 * time.Second)
-
 	// Read from all nodes and verify consistency
 	allNodes := tc.getClusterNodes()
+	waitForReplication(ctx, t, allNodes, "ConsistencyTest", map[uint64][]byte{testKey: version1})
 	readings := make([][]byte, len(allNodes))
 
 	for i, node := range allNodes {
@@ -203,8 +191,6 @@ func TestReadConsistency(t *testing.T) {
 
 // TestReadConsistency_AfterUpdate tests consistency after updates.
 func TestReadConsistency_AfterUpdate(t *testing.T) {
-	skipIfNoRaftCluster(t)
-
 	tc := newTestCluster(t, 3)
 	defer tc.stop()
 
@@ -222,28 +208,30 @@ func TestReadConsistency_AfterUpdate(t *testing.T) {
 
 	testKey := hashString(fmt.Sprintf("update-test-%d", time.Now().UnixNano()))
 
+	allNodes := tc.getClusterNodes()
+
 	// Write initial version
-	err = leader.storage.Put(ctx, "UpdateTest", testKey, []byte(`{"version": 1}`), shardID)
+	version1 := []byte(`{"version": 1}`)
+	err = leader.storage.Put(ctx, "UpdateTest", testKey, version1, shardID)
 	require.NoError(t, err)
 
-	time.Sleep(1 * time.Second)
+	waitForReplication(ctx, t, allNodes, "UpdateTest", map[uint64][]byte{testKey: version1})
 
 	// Update to version 2
-	err = leader.storage.Put(ctx, "UpdateTest", testKey, []byte(`{"version": 2}`), shardID)
+	version2 := []byte(`{"version": 2}`)
+	err = leader.storage.Put(ctx, "UpdateTest", testKey, version2, shardID)
 	require.NoError(t, err)
 
-	time.Sleep(1 * time.Second)
+	waitForReplication(ctx, t, allNodes, "UpdateTest", map[uint64][]byte{testKey: version2})
 
 	// Update to version 3
 	version3 := []byte(`{"version": 3}`)
 	err = leader.storage.Put(ctx, "UpdateTest", testKey, version3, shardID)
 	require.NoError(t, err)
 
-	// Wait for replication
-	time.Sleep(2 * time.Second)
+	waitForReplication(ctx, t, allNodes, "UpdateTest", map[uint64][]byte{testKey: version3})
 
 	// All nodes should have version 3
-	allNodes := tc.getClusterNodes()
 	for i, node := range allNodes {
 		data, found, err := node.storage.Get(ctx, "UpdateTest", testKey, shardID)
 		require.NoError(t, err)
@@ -262,8 +250,6 @@ func TestReadConsistency_AfterUpdate(t *testing.T) {
 
 // TestLogReplication tests that Raft log entries replicate.
 func TestLogReplication(t *testing.T) {
-	skipIfNoRaftCluster(t)
-
 	tc := newTestCluster(t, 3)
 	defer tc.stop()
 
@@ -284,17 +270,18 @@ func TestLogReplication(t *testing.T) {
 	t.Logf("Initial Raft term: %d", initialTerm)
 
 	// Write several entries to generate log entries
+	written := make(map[uint64][]byte, 5)
 	for i := 0; i < 5; i++ {
 		key := hashString(fmt.Sprintf("log-test-%d-%d", time.Now().UnixNano(), i))
-		err := leader.storage.Put(ctx, "LogTest", key, []byte(fmt.Sprintf(`{"entry": %d}`, i)), shardID)
+		data := []byte(fmt.Sprintf(`{"entry": %d}`, i))
+		err := leader.storage.Put(ctx, "LogTest", key, data, shardID)
 		require.NoError(t, err)
+		written[key] = data
 	}
-
-	// Allow time for log replication
-	time.Sleep(2 * time.Second)
 
 	// Verify term is consistent across nodes (or at least not decreasing)
 	allNodes := tc.getClusterNodes()
+	waitForReplication(ctx, t, allNodes, "LogTest", written)
 	for _, node := range allNodes {
 		nodeTerm := node.raftOp.GetTerm()
 		assert.GreaterOrEqual(t, nodeTerm, initialTerm,
@@ -306,8 +293,6 @@ func TestLogReplication(t *testing.T) {
 
 // TestLogReplication_TermIncrement tests term increments on leader change.
 func TestLogReplication_TermIncrement(t *testing.T) {
-	skipIfNoRaftCluster(t)
-
 	tc := newTestCluster(t, 3)
 	defer tc.stop()
 
@@ -338,8 +323,6 @@ func TestLogReplication_TermIncrement(t *testing.T) {
 
 // TestSnapshotCreation tests that snapshots are created.
 func TestSnapshotCreation(t *testing.T) {
-	skipIfNoRaftCluster(t)
-
 	tc := newTestCluster(t, 3)
 	defer tc.stop()
 
@@ -367,8 +350,8 @@ func TestSnapshotCreation(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	// Allow time for potential snapshot
-	time.Sleep(3 * time.Second)
+	// Allow time for potential snapshot: nothing observable marks one taken
+	require.NoError(t, testenv.Elapse(ctx, 3*time.Second))
 
 	// Verify cluster is still healthy after snapshot operations
 	assert.True(t, leader.coordinator.IsHealthy(), "Cluster should be healthy after snapshots")
@@ -382,8 +365,6 @@ func TestSnapshotCreation(t *testing.T) {
 
 // TestSnapshotRecovery tests that a new node catches up via snapshot.
 func TestSnapshotRecovery(t *testing.T) {
-	skipIfNoRaftCluster(t)
-
 	tc := newTestCluster(t, 3)
 	defer tc.stop()
 
@@ -401,21 +382,21 @@ func TestSnapshotRecovery(t *testing.T) {
 
 	// Write data that will be in snapshot/logs
 	testKeys := make([]uint64, 20)
+	written := make(map[uint64][]byte, len(testKeys))
 	for i := 0; i < 20; i++ {
 		key := fmt.Sprintf("recovery-test-%d-%d", time.Now().UnixNano(), i)
 		testKeys[i] = hashString(key)
-		data := []byte(fmt.Sprintf(`{"index": %d, "timestamp": "%s"}`, i, time.Now().Format(time.RFC3339)))
+		data := []byte(fmt.Sprintf(`{"index": %d, "timestamp": %q}`, i, time.Now().Format(time.RFC3339)))
 		err := leader.storage.Put(ctx, "RecoveryTest", testKeys[i], data, shardID)
 		require.NoError(t, err)
+		written[testKeys[i]] = data
 	}
 
 	t.Logf("Wrote %d records for recovery test", len(testKeys))
 
-	// Wait for replication to all nodes
-	time.Sleep(3 * time.Second)
-
 	// Verify all followers have the data
 	followers := tc.getFollowers()
+	waitForReplication(ctx, t, followers, "RecoveryTest", written)
 	for _, follower := range followers {
 		var foundCount int
 		for _, key := range testKeys {
@@ -434,8 +415,6 @@ func TestSnapshotRecovery(t *testing.T) {
 
 // TestConsensus_ConcurrentWrites tests concurrent writes achieve consensus.
 func TestConsensus_ConcurrentWrites(t *testing.T) {
-	skipIfNoRaftCluster(t)
-
 	tc := newTestCluster(t, 3)
 	defer tc.stop()
 
@@ -479,8 +458,6 @@ func TestConsensus_ConcurrentWrites(t *testing.T) {
 
 // TestConsensus_OrderPreservation tests that operation order is preserved.
 func TestConsensus_OrderPreservation(t *testing.T) {
-	skipIfNoRaftCluster(t)
-
 	tc := newTestCluster(t, 3)
 	defer tc.stop()
 
@@ -499,18 +476,16 @@ func TestConsensus_OrderPreservation(t *testing.T) {
 	// Write sequential values to the same key
 	testKey := hashString(fmt.Sprintf("order-test-%d", time.Now().UnixNano()))
 
+	allNodes := tc.getClusterNodes()
 	for i := 1; i <= 10; i++ {
 		data := []byte(fmt.Sprintf(`{"sequence": %d}`, i))
 		err := leader.storage.Put(ctx, "OrderTest", testKey, data, shardID)
 		require.NoError(t, err)
-		time.Sleep(50 * time.Millisecond) // Small delay between writes
+		// Each write reaches every node before the next one is sent
+		waitForReplication(ctx, t, allNodes, "OrderTest", map[uint64][]byte{testKey: data})
 	}
 
-	// Wait for replication
-	time.Sleep(2 * time.Second)
-
 	// All nodes should have the final value (10)
-	allNodes := tc.getClusterNodes()
 	for _, node := range allNodes {
 		data, found, err := node.storage.Get(ctx, "OrderTest", testKey, shardID)
 		require.NoError(t, err)

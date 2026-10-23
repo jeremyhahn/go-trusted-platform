@@ -1,41 +1,45 @@
 # `platformctl ceremony`
 
+> **Status: REFERENCE** · Last verified: 2026-10-13
+> The `platformctl ceremony` command reference, wire mapping and scopes.
+
 Ceremony operations for barrier initialization and officer enrollment.
 
-Routes through `quicbaas.SDK().Security().Ceremony()`, which terminates
-at the canonical qrdb `CeremonyService`. The platform repo provides only
-the CLI binding and a thin server-side configurator
-(`pkg/storage/quicbaas/bootstrap_ceremony.go`) that injects runtime
-SO-PIN / User-PIN / hostname / SANs into the ceremony config before
-delegating to qrdb.
+Routes through `platform.Client.Ceremony()` and the platform SDK ceremony
+service adapter, which terminates at the canonical ceremony backend. The
+platform repo provides the CLI binding and a thin server-side backend
+(`CeremonyBackend`, `pkg/app/backends/ceremony.go`) that delegates every call
+to the SDK's barrier ceremony service and mints the admin bundle on Init.
+
+`platformd serve` wires the production ceremony backend (the QuicBaaS SDK
+ceremony service, plus the platform CA as the admin bundle issuer) into
+every transport once the barrier is unsealed. A daemon that reaches that
+point without an SDK client refuses to start (`ErrServeStartup{Phase: "SDK
+backends"}`), so `ceremony: backend not configured` is never the answer of a
+running platformd. platformctl's desktop embedded daemon wires the same
+backend and likewise refuses to start without an SDK client.
 
 The subcommands honor the global flags `--config`, `--context`,
 `--transport`, `--server`, `--output`.
 
 ## Subcommands
 
-### `ceremony init`
+### `ceremony init` (removed)
 
-Initialize a fresh ceremony.
+`platformctl ceremony init` exits non-zero with `CanonicalRedirectError`. Use
+the root `platformctl init` ([`docs/bootstrap/cli.md`](../bootstrap/cli.md) §1a),
+which drives the pre-unseal `POST /init` — the only init surface that exists
+before unseal ([`docs/daemon/api.md`](../daemon/api.md) §1). The
+`CeremonyService.Init` RPC below remains for SDK callers that hold
+`ceremony:write` on an already-unsealed daemon.
 
-```
-platformctl ceremony init \
-    --so-pin 123456 \
-    --user-pin 654321 \
-    --threshold 3-of-5 \
-    --hostname cp-01 \
-    --sans "cp-01.example.com,10.0.0.10" \
-    --credential-seal-strategy shamir
-```
-
-| Flag | Description |
-|------|-------------|
-| `--so-pin` | Security Officer PIN |
-| `--user-pin` | User PIN |
-| `--threshold` | Shamir threshold descriptor (e.g. `3-of-5`) |
-| `--hostname` | Initial node hostname |
-| `--sans` | Subject alternative names (comma-separated) |
-| `--credential-seal-strategy` | Seal strategy (`shamir`, `tpm`, `fido2`, ...) |
+The Init reply carries `ceremony_id`, `state`, `initialized_at`, `spki_pin`,
+`admin_cert_pem` and `admin_key_pem` on every transport (gRPC `AdminCertPem` /
+`AdminKeyPem` / `SpkiPin`). The daemon mints the admin client certificate from
+the platform CA **before** it touches the ceremony, so a minting failure leaves
+the platform uninitialized and retryable. The admin key is not stored anywhere:
+the Init reply is its only copy, and the only admin credential the platform
+issues ([`docs/bootstrap/cli.md`](../bootstrap/cli.md) §1a).
 
 ### `ceremony status`
 
@@ -111,16 +115,16 @@ platformctl ceremony sign-csr \
 
 ## Exit codes
 
-`platformctl ceremony` returns non-zero on any SDK error. Typed errors
-surface from `go-quicbaas/sdk/go/security/ceremony` (which wraps the
-canonical qrdb ceremony errors).
+`platformctl ceremony` returns non-zero on any SDK error. Typed command-surface
+errors live in `sdk/go/services/ceremony/errors.go`; backend errors propagate
+through the selected platform SDK transport.
 
 ## Wire surface
 
 Every CLI subcommand maps 1:1 to a REST endpoint, gRPC RPC, QUIC opcode,
-and MCP tool. All transports terminate at the same SDK
-`Security().Ceremony()` backend — there is no transport that returns
-`BaasTransportNotSupportedError` for ceremony verbs.
+and MCP tool. The CLI opens the selected platform SDK transport and dispatches
+through the ceremony service client exposed by `platform.Client.Ceremony()`;
+there is no transport-local placeholder for ceremony verbs.
 
 | Subcommand | REST (POST unless noted) | MCP tool |
 |------------|--------------------------|----------|
@@ -134,5 +138,33 @@ and MCP tool. All transports terminate at the same SDK
 
 REST responses use snake_case JSON. MCP tool names follow the
 `platform_{module}_{verb}` convention. gRPC service names and QUIC opcodes
-are in `pkg/api/grpc/proto/ceremony.proto` and `pkg/api/quic/protocol.go`
+are in `pkg/api/grpc/proto/ceremony.proto` and `sdk/go/wire/quicwire/phase35_opcodes.go`
 respectively.
+
+### Transports and scopes
+
+The SDK client for each transport is tested against the daemon's real handlers.
+QUIC uses category opcode `0x9A` with the sub-opcode in `payload[0]`.
+The embedded transport dispatches every RPC in-process through
+`ServiceRegistry.Ceremony`.
+
+| Subcommand | gRPC method (`platform.v1.CeremonyService`) | QUIC sub-opcode | Scope |
+|------------|---------------------------------------------|-----------------|-------|
+| `ceremony init` | `Init` | `0x01` | `ceremony:write` |
+| `ceremony status` | `Status` | `0x02` | `ceremony:read` |
+| `ceremony claim-cert begin` | `ClaimCertBegin` | `0x03` | `ceremony:write` |
+| `ceremony claim-cert complete` | `ClaimCertComplete` | `0x04` | `ceremony:write` |
+| `ceremony claim-share begin` | `ClaimShareBegin` | `0x05` | `ceremony:write` |
+| `ceremony claim-share complete` | `ClaimShareComplete` | `0x07` | `ceremony:write` |
+| `ceremony sign-csr` | `SignCSR` | `0x06` | `ceremony:write` |
+
+`init` and `status` are scoped, not pre-auth. First boot has no token to present,
+so it runs over the Unix socket (local, not token-gated) or the pre-auth
+`POST /init` REST route. On gRPC (TCP), QUIC and MCP an unauthenticated `init`
+would let a remote caller seize an uninitialized platform, so those transports
+require `ceremony:write`. A token without the scope is refused
+(`PermissionDenied` / `StatusPermissionDenied`), and so is a QUIC caller with no
+principal; under mTLS the client certificate is the principal and holds every
+scope ([`docs/daemon/api.md`](../daemon/api.md) §5). Scopes are minted by the broker
+from the subject's IAM permissions, so a role gains `ceremony:read` /
+`ceremony:write` by being granted those permissions; the admin role needs both.

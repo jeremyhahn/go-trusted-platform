@@ -19,159 +19,9 @@ import (
 	"errors"
 	"strings"
 	"testing"
+
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 )
-
-func TestErrInvalidConfigError(t *testing.T) {
-	t.Parallel()
-	tests := []struct {
-		name     string
-		err      ErrInvalidConfig
-		expected string
-	}{
-		{
-			name:     "field and reason",
-			err:      ErrInvalidConfig{Field: "ListenAddr", Reason: "cannot be empty"},
-			expected: "invalid configuration: ListenAddr: cannot be empty",
-		},
-		{
-			name:     "empty field",
-			err:      ErrInvalidConfig{Field: "", Reason: "some reason"},
-			expected: "invalid configuration: : some reason",
-		},
-		{
-			name:     "empty reason",
-			err:      ErrInvalidConfig{Field: "SomeField", Reason: ""},
-			expected: "invalid configuration: SomeField: ",
-		},
-		{
-			name:     "both empty",
-			err:      ErrInvalidConfig{Field: "", Reason: ""},
-			expected: "invalid configuration: : ",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			result := tt.err.Error()
-			if result != tt.expected {
-				t.Errorf("expected '%s', got '%s'", tt.expected, result)
-			}
-		})
-	}
-}
-
-func TestErrProtocolError(t *testing.T) {
-	t.Parallel()
-	tests := []struct {
-		name     string
-		err      ErrProtocol
-		expected string
-	}{
-		{
-			name:     "status OK",
-			err:      ErrProtocol{Status: StatusOK, Message: "success"},
-			expected: "protocol error (status 0x00): success",
-		},
-		{
-			name:     "status not found",
-			err:      ErrProtocol{Status: StatusNotFound, Message: "resource not found"},
-			expected: "protocol error (status 0x02): resource not found",
-		},
-		{
-			name:     "status unauthorized",
-			err:      ErrProtocol{Status: StatusUnauthorized, Message: "invalid token"},
-			expected: "protocol error (status 0x03): invalid token",
-		},
-		{
-			name:     "status internal error",
-			err:      ErrProtocol{Status: StatusInternalError, Message: "server error"},
-			expected: "protocol error (status 0x04): server error",
-		},
-		{
-			name:     "empty message",
-			err:      ErrProtocol{Status: StatusTimeout, Message: ""},
-			expected: "protocol error (status 0x05): ",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			result := tt.err.Error()
-			if result != tt.expected {
-				t.Errorf("expected '%s', got '%s'", tt.expected, result)
-			}
-		})
-	}
-}
-
-func TestStatusError(t *testing.T) {
-	t.Parallel()
-	tests := []struct {
-		name        string
-		status      byte
-		message     string
-		expectNil   bool
-		expectError string
-	}{
-		{
-			name:      "status OK returns nil",
-			status:    StatusOK,
-			message:   "success",
-			expectNil: true,
-		},
-		{
-			name:        "status not found",
-			status:      StatusNotFound,
-			message:     "resource not found",
-			expectNil:   false,
-			expectError: "protocol error (status 0x02): resource not found",
-		},
-		{
-			name:        "status unauthorized",
-			status:      StatusUnauthorized,
-			message:     "auth failed",
-			expectNil:   false,
-			expectError: "protocol error (status 0x03): auth failed",
-		},
-		{
-			name:        "status internal error",
-			status:      StatusInternalError,
-			message:     "internal",
-			expectNil:   false,
-			expectError: "protocol error (status 0x04): internal",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			err := StatusError(tt.status, tt.message)
-
-			if tt.expectNil {
-				if err != nil {
-					t.Errorf("expected nil, got %v", err)
-				}
-			} else {
-				if err == nil {
-					t.Error("expected error, got nil")
-					return
-				}
-
-				if err.Error() != tt.expectError {
-					t.Errorf("expected '%s', got '%s'", tt.expectError, err.Error())
-				}
-
-				// Verify it's an ErrProtocol
-				var protoErr *ErrProtocol
-				if !errors.As(err, &protoErr) {
-					t.Errorf("expected error to be *ErrProtocol, got %T", err)
-				}
-			}
-		})
-	}
-}
 
 func TestErrorToStatus(t *testing.T) {
 	t.Parallel()
@@ -183,92 +33,92 @@ func TestErrorToStatus(t *testing.T) {
 		{
 			name:           "nil error returns StatusOK",
 			err:            nil,
-			expectedStatus: StatusOK,
+			expectedStatus: quicwire.StatusOK,
 		},
 		{
 			name:           "ErrProtocol preserves status",
-			err:            &ErrProtocol{Status: StatusNotFound, Message: "not found"},
-			expectedStatus: StatusNotFound,
+			err:            &quicwire.ErrProtocol{Status: quicwire.StatusNotFound, Message: "not found"},
+			expectedStatus: quicwire.StatusNotFound,
 		},
 		{
 			name:           "ErrNilRequest returns StatusInvalidRequest",
-			err:            ErrNilRequest,
-			expectedStatus: StatusInvalidRequest,
+			err:            quicwire.ErrNilRequest,
+			expectedStatus: quicwire.StatusInvalidRequest,
 		},
 		{
 			name:           "ErrNilResponse returns StatusInvalidRequest",
-			err:            ErrNilResponse,
-			expectedStatus: StatusInvalidRequest,
+			err:            quicwire.ErrNilResponse,
+			expectedStatus: quicwire.StatusInvalidRequest,
 		},
 		{
 			name:           "ErrPayloadTooLarge returns StatusInvalidArgument",
-			err:            ErrPayloadTooLarge,
-			expectedStatus: StatusInvalidArgument,
+			err:            quicwire.ErrPayloadTooLarge,
+			expectedStatus: quicwire.StatusInvalidArgument,
 		},
 		{
 			name:           "ErrTokenTooLarge returns StatusInvalidArgument",
-			err:            ErrTokenTooLarge,
-			expectedStatus: StatusInvalidArgument,
+			err:            quicwire.ErrTokenTooLarge,
+			expectedStatus: quicwire.StatusInvalidArgument,
 		},
 		{
 			name:           "ErrClientClosed returns StatusUnavailable",
-			err:            ErrClientClosed,
-			expectedStatus: StatusUnavailable,
+			err:            quicwire.ErrClientClosed,
+			expectedStatus: quicwire.StatusUnavailable,
 		},
 		{
 			name:           "ErrServerNotRunning returns StatusUnavailable",
 			err:            ErrServerNotRunning,
-			expectedStatus: StatusUnavailable,
+			expectedStatus: quicwire.StatusUnavailable,
 		},
 		{
 			name:           "unknown error returns StatusInternalError",
 			err:            errors.New("some unknown error"),
-			expectedStatus: StatusInternalError,
+			expectedStatus: quicwire.StatusInternalError,
 		},
 		{
 			name:           "ErrCANotInitialized returns StatusUnavailable",
 			err:            ErrCANotInitialized,
-			expectedStatus: StatusUnavailable,
+			expectedStatus: quicwire.StatusUnavailable,
 		},
 		{
 			name:           "ErrCACertStoreUnavailable returns StatusUnavailable",
 			err:            ErrCACertStoreUnavailable,
-			expectedStatus: StatusUnavailable,
+			expectedStatus: quicwire.StatusUnavailable,
 		},
 		{
 			name:           "ErrCAMissingCommonName returns StatusInvalidArgument",
 			err:            ErrCAMissingCommonName,
-			expectedStatus: StatusInvalidArgument,
+			expectedStatus: quicwire.StatusInvalidArgument,
 		},
 		{
 			name:           "ErrCAMissingSerial returns StatusInvalidArgument",
 			err:            ErrCAMissingSerial,
-			expectedStatus: StatusInvalidArgument,
+			expectedStatus: quicwire.StatusInvalidArgument,
 		},
 		{
 			name:           "ErrCAMissingCertificate returns StatusInvalidArgument",
 			err:            ErrCAMissingCertificate,
-			expectedStatus: StatusInvalidArgument,
+			expectedStatus: quicwire.StatusInvalidArgument,
 		},
 		{
 			name:           "ErrCAInvalidPEM returns StatusInvalidArgument",
 			err:            ErrCAInvalidPEM,
-			expectedStatus: StatusInvalidArgument,
+			expectedStatus: quicwire.StatusInvalidArgument,
 		},
 		{
 			name:           "ErrCAInvalidExtendDays returns StatusInvalidArgument",
 			err:            ErrCAInvalidExtendDays,
-			expectedStatus: StatusInvalidArgument,
+			expectedStatus: quicwire.StatusInvalidArgument,
 		},
 		{
 			name:           "ErrCACRLNotSupported returns StatusNotImplemented",
 			err:            ErrCACRLNotSupported,
-			expectedStatus: StatusNotImplemented,
+			expectedStatus: quicwire.StatusNotImplemented,
 		},
 		{
 			name:           "ErrCABundleNotFound returns StatusNotFound",
 			err:            ErrCABundleNotFound,
-			expectedStatus: StatusNotFound,
+			expectedStatus: quicwire.StatusNotFound,
 		},
 	}
 
@@ -292,12 +142,12 @@ func TestIsNotFound(t *testing.T) {
 	}{
 		{
 			name:     "ErrProtocol with StatusNotFound",
-			err:      &ErrProtocol{Status: StatusNotFound, Message: "not found"},
+			err:      &quicwire.ErrProtocol{Status: quicwire.StatusNotFound, Message: "not found"},
 			expected: true,
 		},
 		{
 			name:     "ErrProtocol with other status",
-			err:      &ErrProtocol{Status: StatusUnauthorized, Message: "auth failed"},
+			err:      &quicwire.ErrProtocol{Status: quicwire.StatusUnauthorized, Message: "auth failed"},
 			expected: false,
 		},
 		{
@@ -312,7 +162,7 @@ func TestIsNotFound(t *testing.T) {
 		},
 		{
 			name:     "wrapped ErrProtocol with StatusNotFound",
-			err:      &ErrProtocol{Status: StatusNotFound, Message: "wrapped"},
+			err:      &quicwire.ErrProtocol{Status: quicwire.StatusNotFound, Message: "wrapped"},
 			expected: true,
 		},
 		{
@@ -347,12 +197,12 @@ func TestIsUnauthorized(t *testing.T) {
 	}{
 		{
 			name:     "ErrProtocol with StatusUnauthorized",
-			err:      &ErrProtocol{Status: StatusUnauthorized, Message: "auth failed"},
+			err:      &quicwire.ErrProtocol{Status: quicwire.StatusUnauthorized, Message: "auth failed"},
 			expected: true,
 		},
 		{
 			name:     "ErrProtocol with other status",
-			err:      &ErrProtocol{Status: StatusNotFound, Message: "not found"},
+			err:      &quicwire.ErrProtocol{Status: quicwire.StatusNotFound, Message: "not found"},
 			expected: false,
 		},
 		{
@@ -387,7 +237,7 @@ func TestIsUnavailable(t *testing.T) {
 	}{
 		{
 			name:     "ErrProtocol with StatusUnavailable",
-			err:      &ErrProtocol{Status: StatusUnavailable, Message: "unavailable"},
+			err:      &quicwire.ErrProtocol{Status: quicwire.StatusUnavailable, Message: "unavailable"},
 			expected: true,
 		},
 		{
@@ -397,7 +247,7 @@ func TestIsUnavailable(t *testing.T) {
 		},
 		{
 			name:     "ErrClientClosed",
-			err:      ErrClientClosed,
+			err:      quicwire.ErrClientClosed,
 			expected: true,
 		},
 		{
@@ -412,7 +262,7 @@ func TestIsUnavailable(t *testing.T) {
 		},
 		{
 			name:     "ErrProtocol with other status",
-			err:      &ErrProtocol{Status: StatusNotFound, Message: "not found"},
+			err:      &quicwire.ErrProtocol{Status: quicwire.StatusNotFound, Message: "not found"},
 			expected: false,
 		},
 		{
@@ -447,13 +297,13 @@ func TestSentinelErrors(t *testing.T) {
 	}{
 		{"ErrServerNotRunning", ErrServerNotRunning},
 		{"ErrServerRunning", ErrServerRunning},
-		{"ErrClientClosed", ErrClientClosed},
-		{"ErrConnectionFailed", ErrConnectionFailed},
-		{"ErrStreamFailed", ErrStreamFailed},
-		{"ErrPayloadTooLarge", ErrPayloadTooLarge},
-		{"ErrTokenTooLarge", ErrTokenTooLarge},
-		{"ErrNilRequest", ErrNilRequest},
-		{"ErrNilResponse", ErrNilResponse},
+		{"ErrClientClosed", quicwire.ErrClientClosed},
+		{"ErrConnectionFailed", quicwire.ErrConnectionFailed},
+		{"ErrStreamFailed", quicwire.ErrStreamFailed},
+		{"ErrPayloadTooLarge", quicwire.ErrPayloadTooLarge},
+		{"ErrTokenTooLarge", quicwire.ErrTokenTooLarge},
+		{"ErrNilRequest", quicwire.ErrNilRequest},
+		{"ErrNilResponse", quicwire.ErrNilResponse},
 	}
 
 	for _, tt := range sentinelErrors {
@@ -478,13 +328,13 @@ func TestSentinelErrorMessages(t *testing.T) {
 	}{
 		{ErrServerNotRunning, "not running"},
 		{ErrServerRunning, "already running"},
-		{ErrClientClosed, "closed"},
-		{ErrConnectionFailed, "connection failed"},
-		{ErrStreamFailed, "stream"},
-		{ErrPayloadTooLarge, "payload"},
-		{ErrTokenTooLarge, "token"},
-		{ErrNilRequest, "request"},
-		{ErrNilResponse, "response"},
+		{quicwire.ErrClientClosed, "closed"},
+		{quicwire.ErrConnectionFailed, "connection failed"},
+		{quicwire.ErrStreamFailed, "stream"},
+		{quicwire.ErrPayloadTooLarge, "payload"},
+		{quicwire.ErrTokenTooLarge, "token"},
+		{quicwire.ErrNilRequest, "request"},
+		{quicwire.ErrNilResponse, "response"},
 	}
 
 	for _, tt := range tests {
@@ -500,22 +350,12 @@ func TestSentinelErrorMessages(t *testing.T) {
 func TestErrorToStatusWithWrappedErrors(t *testing.T) {
 	t.Parallel()
 	// Test that ErrorToStatus works with wrapped protocol errors
-	wrapped := &ErrProtocol{Status: StatusNotFound, Message: "wrapped error"}
+	wrapped := &quicwire.ErrProtocol{Status: quicwire.StatusNotFound, Message: "wrapped error"}
 
 	status := ErrorToStatus(wrapped)
-	if status != StatusNotFound {
+	if status != quicwire.StatusNotFound {
 		t.Errorf("expected StatusNotFound (0x02), got 0x%02X", status)
 	}
-}
-
-func TestErrInvalidConfigImplementsError(t *testing.T) {
-	t.Parallel()
-	var _ error = ErrInvalidConfig{}
-}
-
-func TestErrProtocolImplementsError(t *testing.T) {
-	t.Parallel()
-	var _ error = &ErrProtocol{}
 }
 
 func TestErrCAInvalidAlgorithmError(t *testing.T) {
@@ -815,7 +655,7 @@ func TestIsCAError(t *testing.T) {
 		},
 		{
 			name:     "ErrProtocol",
-			err:      &ErrProtocol{Status: StatusNotFound, Message: "test"},
+			err:      &quicwire.ErrProtocol{Status: quicwire.StatusNotFound, Message: "test"},
 			expected: false,
 		},
 	}
@@ -1393,80 +1233,6 @@ func TestErrIAMPermissionDenied(t *testing.T) {
 	}
 }
 
-func TestErrIAMTokenExpired(t *testing.T) {
-	t.Parallel()
-	err := ErrIAMTokenExpired{}
-
-	// Test Error()
-	expected := "token expired"
-	if err.Error() != expected {
-		t.Errorf("expected '%s', got '%s'", expected, err.Error())
-	}
-
-	// Test Is() - same type
-	if !err.Is(ErrIAMTokenExpired{}) {
-		t.Error("expected Is() to return true for same type")
-	}
-
-	// Test Is() - different type
-	if err.Is(ErrIAMTokenInvalid{}) {
-		t.Error("expected Is() to return false for different type")
-	}
-
-	// Test errors.Is with same type
-	if !errors.Is(err, ErrIAMTokenExpired{}) {
-		t.Error("expected errors.Is to find ErrIAMTokenExpired")
-	}
-}
-
-func TestErrIAMTokenInvalid(t *testing.T) {
-	t.Parallel()
-	err := ErrIAMTokenInvalid{}
-
-	// Test Error()
-	expected := "token invalid"
-	if err.Error() != expected {
-		t.Errorf("expected '%s', got '%s'", expected, err.Error())
-	}
-
-	// Test Is() - same type
-	if !err.Is(ErrIAMTokenInvalid{}) {
-		t.Error("expected Is() to return true for same type")
-	}
-
-	// Test Is() - different type
-	if err.Is(ErrIAMTokenExpired{}) {
-		t.Error("expected Is() to return false for different type")
-	}
-
-	// Test errors.Is with same type
-	if !errors.Is(err, ErrIAMTokenInvalid{}) {
-		t.Error("expected errors.Is to find ErrIAMTokenInvalid")
-	}
-}
-
-func TestErrIAMTokenVerificationFailed(t *testing.T) {
-	t.Parallel()
-	cause := errors.New("verification failed")
-	err := ErrIAMTokenVerificationFailed{Cause: cause}
-
-	// Test Error()
-	expected := "token verification failed: verification failed"
-	if err.Error() != expected {
-		t.Errorf("expected '%s', got '%s'", expected, err.Error())
-	}
-
-	// Test Unwrap()
-	if err.Unwrap() != cause {
-		t.Errorf("expected unwrapped error to be the cause")
-	}
-
-	// Verify errors.Is works through Unwrap
-	if !errors.Is(err, cause) {
-		t.Error("expected errors.Is to find the cause")
-	}
-}
-
 func TestIAMErrorTypesInterface(t *testing.T) {
 	t.Parallel()
 	// Verify all IAM error types implement error interface
@@ -1477,9 +1243,6 @@ func TestIAMErrorTypesInterface(t *testing.T) {
 	var _ error = ErrIAMRoleAlreadyExists{}
 	var _ error = ErrIAMGroupAlreadyExists{}
 	var _ error = ErrIAMPermissionDenied{}
-	var _ error = ErrIAMTokenExpired{}
-	var _ error = ErrIAMTokenInvalid{}
-	var _ error = ErrIAMTokenVerificationFailed{}
 }
 
 func TestIAMErrorIsMethodsWithNonMatchingTypes(t *testing.T) {
@@ -1525,16 +1288,6 @@ func TestIAMErrorIsMethodsWithNonMatchingTypes(t *testing.T) {
 			err:    ErrIAMPermissionDenied{},
 			target: errors.New("some error"),
 		},
-		{
-			name:   "TokenExpired vs generic error",
-			err:    ErrIAMTokenExpired{},
-			target: errors.New("some error"),
-		},
-		{
-			name:   "TokenInvalid vs generic error",
-			err:    ErrIAMTokenInvalid{},
-			target: errors.New("some error"),
-		},
 	}
 
 	for _, tt := range tests {
@@ -1570,65 +1323,7 @@ func TestIAMErrorIsMethodsWithNonMatchingTypes(t *testing.T) {
 				if e.Is(tt.target) {
 					t.Error("expected Is() to return false for non-matching type")
 				}
-			case ErrIAMTokenExpired:
-				if e.Is(tt.target) {
-					t.Error("expected Is() to return false for non-matching type")
-				}
-			case ErrIAMTokenInvalid:
-				if e.Is(tt.target) {
-					t.Error("expected Is() to return false for non-matching type")
-				}
 			}
 		})
 	}
-}
-
-// =============================================================================
-// KMS Error Tests
-// =============================================================================
-
-func TestErrKMSBatchSizeExceeded(t *testing.T) {
-	t.Parallel()
-	tests := []struct {
-		name     string
-		err      ErrKMSBatchSizeExceeded
-		expected string
-	}{
-		{
-			name:     "typical values",
-			err:      ErrKMSBatchSizeExceeded{Count: 150, MaxCount: 100},
-			expected: "batch size 150 exceeds maximum allowed 100",
-		},
-		{
-			name:     "zero values",
-			err:      ErrKMSBatchSizeExceeded{Count: 0, MaxCount: 0},
-			expected: "batch size 0 exceeds maximum allowed 0",
-		},
-		{
-			name:     "large values",
-			err:      ErrKMSBatchSizeExceeded{Count: 10000, MaxCount: 1000},
-			expected: "batch size 10000 exceeds maximum allowed 1000",
-		},
-		{
-			name:     "boundary case",
-			err:      ErrKMSBatchSizeExceeded{Count: 101, MaxCount: 100},
-			expected: "batch size 101 exceeds maximum allowed 100",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			result := tt.err.Error()
-			if result != tt.expected {
-				t.Errorf("expected '%s', got '%s'", tt.expected, result)
-			}
-		})
-	}
-}
-
-func TestKMSBatchErrorTypeInterface(t *testing.T) {
-	t.Parallel()
-	// Verify KMS error types implement error interface
-	var _ error = ErrKMSBatchSizeExceeded{}
 }

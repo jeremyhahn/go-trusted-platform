@@ -17,7 +17,11 @@
 // EOS, and similar platforms.
 package switchmgmt
 
-import "context"
+import (
+	"context"
+
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/switchwire"
+)
 
 // SwitchVendor identifies the switch vendor/platform.
 type SwitchVendor string
@@ -100,29 +104,6 @@ type SSHExecutor interface {
 	Close() error
 }
 
-// PortMode is the switchport operating mode.
-type PortMode string
-
-const (
-	// PortModeAccess represents an access-mode switchport.
-	PortModeAccess PortMode = "access"
-
-	// PortModeTrunk represents a trunk-mode switchport.
-	PortModeTrunk PortMode = "trunk"
-)
-
-// PortStatus holds the observable state of a single switch port.
-type PortStatus struct {
-	Port        string   `json:"port"`
-	Mode        PortMode `json:"mode"`
-	AccessVLAN  uint16   `json:"access_vlan"`
-	TrunkVLANs  []uint16 `json:"trunk_vlans,omitempty"`
-	NativeVLAN  uint16   `json:"native_vlan,omitempty"`
-	Enabled     bool     `json:"enabled"`
-	LinkUp      bool     `json:"link_up"`
-	Description string   `json:"description,omitempty"`
-}
-
 // Manager provides runtime per-port operations on a physical switch.
 type Manager interface {
 	// SetPortVLAN moves a single access-mode port to the specified VLAN.
@@ -132,10 +113,10 @@ type Manager interface {
 	GetPortVLAN(ctx context.Context, port string) (uint16, error)
 
 	// GetPortStatus returns the full observable state of a port.
-	GetPortStatus(ctx context.Context, port string) (*PortStatus, error)
+	GetPortStatus(ctx context.Context, port string) (*switchwire.PortStatus, error)
 
 	// ListPorts returns the status of all physical ports on the switch.
-	ListPorts(ctx context.Context) ([]*PortStatus, error)
+	ListPorts(ctx context.Context) ([]*switchwire.PortStatus, error)
 
 	// EnablePort administratively enables a port.
 	EnablePort(ctx context.Context, port string) error

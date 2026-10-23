@@ -26,9 +26,11 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 	"sync/atomic"
+	"time"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -38,7 +40,9 @@ import (
 	"google.golang.org/protobuf/reflect/protoreflect"
 
 	platform "github.com/jeremyhahn/go-trusted-platform/sdk/go"
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/transport"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/transport/pollstream"
 )
 
 func init() {
@@ -53,6 +57,7 @@ type Adapter struct {
 	closed     atomic.Bool
 	tlsConfig  *tls.Config
 	token      atomic.Value // stores auth token as string
+	timeout    time.Duration
 }
 
 // Connect establishes a REST connection to the platform daemon.
@@ -65,43 +70,31 @@ func Connect(ctx context.Context, opts *platform.Options) (transport.Adapter, er
 		return nil, platform.ErrEmptyAddress
 	}
 
+	// The daemon's REST server only listens on TLS (#32), so a plaintext
+	// address can never reach it and would expose the bearer token.
+	if strings.HasPrefix(opts.RESTAddr, "http://") {
+		return nil, platform.ErrInsecureTransport{
+			Protocol: platform.ProtocolREST,
+			Target:   opts.RESTAddr,
+			Reason:   "the REST server only offers TLS; use https://",
+		}
+	}
+
 	timeout := opts.GetTimeout()
 
-	// Build base URL - always use HTTPS
 	baseURL := opts.RESTAddr
-	if !strings.HasPrefix(baseURL, "http://") && !strings.HasPrefix(baseURL, "https://") {
+	if !strings.HasPrefix(baseURL, "https://") {
 		baseURL = "https://" + baseURL
 	}
 	baseURL = strings.TrimSuffix(baseURL, "/")
 
-	// Configure TLS - TLS is mandatory for REST transport
-	var tlsConfig *tls.Config
-	if opts.TLSConfig != nil {
-		tlsConfig = opts.TLSConfig.Clone()
-		if tlsConfig.MinVersion < tls.VersionTLS13 {
-			tlsConfig.MinVersion = tls.VersionTLS13
-		}
-	} else {
-		tlsConfig = &tls.Config{
-			MinVersion: tls.VersionTLS13,
-		}
-	}
-
-	// Honor caller-supplied SNI / certificate verification hostname.
 	// The Go HTTP transport defaults ServerName from the Host header,
-	// which is the dialed address — overriding here lets a CLI talk to
+	// which is the dialed address — TLSServerName lets a CLI talk to
 	// the daemon by IP while still verifying the cert's CN/SAN.
-	if opts.TLSServerName != "" {
-		tlsConfig.ServerName = opts.TLSServerName
-	}
-
-	// Create HTTP transport with TLS
-	httpTransport := &http.Transport{
-		TLSClientConfig: tlsConfig,
-	}
+	tlsConfig := opts.ClientTLSConfig()
 
 	httpClient := &http.Client{
-		Transport: httpTransport,
+		Transport: &http.Transport{TLSClientConfig: tlsConfig},
 		Timeout:   timeout,
 	}
 
@@ -109,18 +102,20 @@ func Connect(ctx context.Context, opts *platform.Options) (transport.Adapter, er
 		httpClient: httpClient,
 		baseURL:    baseURL,
 		tlsConfig:  tlsConfig,
+		timeout:    timeout,
 	}
 	a.connected.Store(true)
 	if opts.BearerToken != "" {
 		a.SetToken(opts.BearerToken)
 	}
 
-	// Optionally verify connectivity with a health check
-	healthCtx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-
-	req, err := http.NewRequestWithContext(healthCtx, http.MethodGet, baseURL+"/health", nil)
-	if err != nil {
+	// Verify the daemon answers before handing the adapter out, so a dead or
+	// untrusted endpoint fails here and auto-detect moves on.
+	start := time.Now()
+	if err := a.probeHealth(ctx, timeout); err != nil {
+		if transport.IsTimeout(err) {
+			err = platform.ErrTimeout{Operation: "REST health probe", Elapsed: time.Since(start), Err: err}
+		}
 		closeErr := a.Close()
 		return nil, platform.ErrConnectionFailed{
 			Protocol: platform.ProtocolREST,
@@ -129,16 +124,32 @@ func Connect(ctx context.Context, opts *platform.Options) (transport.Adapter, er
 		}
 	}
 
-	resp, err := httpClient.Do(req)
+	return a, nil
+}
+
+// probeHealth issues GET /health/live and succeeds only on a 2xx answer.
+// Every REST listener serves the liveness probe unauthenticated. It probes
+// liveness, not /health, because /health answers 503 while a component is
+// degraded, and a degraded platform is still one the client can talk to.
+func (a *Adapter) probeHealth(ctx context.Context, timeout time.Duration) error {
+	healthCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(healthCtx, http.MethodGet, a.baseURL+"/health/live", nil)
 	if err != nil {
-		// Connection test failed, but we still return the adapter
-		// as REST may not have a /health endpoint
-		// The adapter is still usable for other endpoints
-	} else {
-		resp.Body.Close()
+		return err
 	}
 
-	return a, nil
+	resp, err := a.httpClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		return ErrHTTPStatus{StatusCode: resp.StatusCode, Status: resp.Status}
+	}
+	return nil
 }
 
 // Connection returns a gRPC-compatible client connection interface.
@@ -189,6 +200,13 @@ func (a *Adapter) GetToken() string {
 
 // DoRequest performs an HTTP request to the REST API.
 func (a *Adapter) DoRequest(ctx context.Context, method, path string, body interface{}, result interface{}) error {
+	return a.do(ctx, a.httpClient, method, path, body, result)
+}
+
+// do sends one request through client and decodes the response; DoRequest
+// uses the adapter's pooled client, a bound call a one-shot client that
+// owns the connection its proof was computed for.
+func (a *Adapter) do(ctx context.Context, client *http.Client, method, path string, body interface{}, result interface{}) error {
 	if a.closed.Load() {
 		return ErrClientClosed{}
 	}
@@ -216,7 +234,7 @@ func (a *Adapter) DoRequest(ctx context.Context, method, path string, body inter
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
 
-	resp, err := a.httpClient.Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
 		return ErrRequestFailed{Method: method, Path: path, Err: err}
 	}
@@ -241,7 +259,7 @@ func (a *Adapter) DoRequest(ctx context.Context, method, path string, body inter
 		//
 		//   {"code":200,"error":"","success":true,"payload":<actual>}
 		//
-		// (see pkg/webservice/v1/response.WebServiceResponse). The
+		// (see sdk/go/wire/restwire.WebServiceResponse). The
 		// SDK gRPC clients want the inner `<actual>` decoded directly
 		// into their proto / domain types — so we attempt envelope
 		// unwrap first, then fall back to direct unmarshal for any
@@ -289,6 +307,9 @@ func (a *Adapter) DoRequest(ctx context.Context, method, path string, body inter
 // server emits via protorest.WriteSuccess. For non-proto types
 // (domain DTOs, raw maps), regular encoding/json is used.
 func decodeJSONResult(data []byte, result interface{}) error {
+	if resp, ok := result.(*platformv1.GetStatusResponse); ok {
+		return decodeStatusResponse(data, resp)
+	}
 	if msg, ok := result.(proto.Message); ok {
 		opts := protojson.UnmarshalOptions{
 			DiscardUnknown: true,
@@ -310,9 +331,15 @@ type restClientConn struct {
 // have their path params substituted from the request message and
 // stripped from the request body so the server never sees the same
 // field in both URL and body. Flat routes are passed through untouched.
-func (c *restClientConn) Invoke(ctx context.Context, method string, args interface{}, reply interface{}, opts ...grpc.CallOption) error {
+func (c *restClientConn) Invoke(ctx context.Context, method string, args interface{}, reply interface{}, opts ...grpc.CallOption) (err error) {
 	if c.adapter.closed.Load() {
 		return status.Error(codes.Unavailable, "connection closed")
+	}
+
+	// A method the platform serves no REST route for is refused here,
+	// before a channel binding or a request could reach the network.
+	if reason, refused := restRefusedMethods[method]; refused {
+		return ErrNoRESTRoute{Method: method, Reason: reason}
 	}
 
 	// Methods whose server-side JSON shape does not match the pb reply
@@ -326,27 +353,68 @@ func (c *restClientConn) Invoke(ctx context.Context, method string, args interfa
 		result = &raw
 	}
 
-	// Templated routes: substitute path params and strip them from the
-	// body. The body is sent as a clone of args so the caller's message
-	// is not mutated.
+	// A call bound to its channel gets a dedicated connection: the
+	// BindFunc completes args with a proof over that connection's
+	// exporter, and the request travels on the same connection. The route
+	// and body are built after the binding so they carry the proof.
+	send := c.adapter.DoRequest
+	if bind, bound := transport.ChannelBindingFrom(opts); bound {
+		boundConn, bindErr := c.adapter.bindChannel(ctx, bind)
+		if bindErr != nil {
+			return bindErr
+		}
+		defer func() { err = errors.Join(err, boundConn.release()) }()
+		send = func(ctx context.Context, method, path string, body, result interface{}) error {
+			return c.adapter.do(ctx, boundConn.client, method, path, body, result)
+		}
+	}
+
+	httpMethod, path, body, err := route(method, args)
+	if err != nil {
+		return err
+	}
+	if reqErr := send(ctx, httpMethod, path, body, result); reqErr != nil {
+		if probeVerdict(method, reqErr, reply) {
+			return nil
+		}
+		return translateErrorToGRPC(reqErr)
+	}
+	return c.finishInvoke(hasDecoder, decode, raw, reply)
+}
+
+// route resolves the HTTP method, path and body of a gRPC method call.
+// Templated routes substitute path params and strip them from the body,
+// which is sent as a clone of args so the caller's message is not
+// mutated; flat routes derive the path from the static map (or the gRPC
+// method-name heuristic) and send args. Either body then passes through
+// the method's request encoder, if it has one.
+func route(method string, args interface{}) (httpMethod, path string, body interface{}, err error) {
 	if entry, ok := templatedRouteTable[method]; ok {
 		path, body, err := buildTemplatedRequest(entry, args)
 		if err != nil {
-			return err
+			return "", "", nil, err
 		}
-		if reqErr := c.adapter.DoRequest(ctx, entry.method, path, body, result); reqErr != nil {
-			return translateErrorToGRPC(reqErr)
+		if body, err = encodeInvokeBody(method, body); err != nil {
+			return "", "", nil, err
 		}
-		return c.finishInvoke(hasDecoder, decode, raw, reply)
+		return entry.method, path, body, nil
 	}
+	path, httpMethod = mapGRPCMethodToREST(method)
+	if body, err = encodeInvokeBody(method, args); err != nil {
+		return "", "", nil, err
+	}
+	return httpMethod, path, body, nil
+}
 
-	// Flat routes: today's behavior — derive path from the static map
-	// (or fall back to the gRPC method-name heuristic).
-	path, httpMethod := mapGRPCMethodToREST(method)
-	if err := c.adapter.DoRequest(ctx, httpMethod, path, args, result); err != nil {
-		return translateErrorToGRPC(err)
+// encodeInvokeBody applies the method's request encoder, if any, and reports a
+// body the encoder refuses (an enum outside the wire set) as InvalidArgument
+// before anything is sent.
+func encodeInvokeBody(method string, body interface{}) (interface{}, error) {
+	encoded, err := encodeRequestBody(method, body)
+	if err != nil {
+		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
-	return c.finishInvoke(hasDecoder, decode, raw, reply)
+	return encoded, nil
 }
 
 // finishInvoke applies the method's custom response decoder, if any, to the
@@ -376,17 +444,16 @@ func buildTemplatedRequest(route templatedRoute, args interface{}) (path string,
 	resolved := route.path
 
 	for _, p := range route.pathParams {
-		fd := rm.Descriptor().Fields().ByName(p.field)
-		if fd == nil {
+		v, fd, ok := fieldPathValue(rm, p.field)
+		if !ok {
 			return "", nil, status.Errorf(codes.Internal,
 				"REST adapter: proto field %q missing on %s", p.field, rm.Descriptor().FullName())
 		}
-		raw, encoded, ok := encodePathField(rm.Get(fd), fd)
+		encoded, ok := p.render(v, fd)
 		if !ok {
 			return "", nil, status.Errorf(codes.InvalidArgument,
 				"%s requires non-zero %s for templated REST route", rm.Descriptor().FullName(), p.field)
 		}
-		_ = raw
 		resolved = strings.ReplaceAll(resolved, p.placeholder, encoded)
 	}
 
@@ -399,12 +466,12 @@ func buildTemplatedRequest(route templatedRoute, args interface{}) (path string,
 	// "absent" and "no filter" coincide with the server defaults.
 	values := url.Values{}
 	for _, qp := range route.queryParams {
-		encoded, ok, qErr := encodeQueryField(rm, qp.field)
+		encoded, qErr := qp.render(rm)
 		if qErr != nil {
 			return "", nil, qErr
 		}
-		if ok {
-			values.Set(qp.name, encoded)
+		for _, value := range encoded {
+			values.Add(qp.name, value)
 		}
 	}
 
@@ -414,10 +481,7 @@ func buildTemplatedRequest(route templatedRoute, args interface{}) (path string,
 	clone := proto.Clone(msg)
 	cloneRefl := clone.ProtoReflect()
 	for _, p := range route.pathParams {
-		fd := cloneRefl.Descriptor().Fields().ByName(p.field)
-		if fd != nil {
-			cloneRefl.Clear(fd)
-		}
+		clearProtoFieldPath(cloneRefl, p.field)
 	}
 	for _, qp := range route.queryParams {
 		clearProtoFieldPath(cloneRefl, qp.field)
@@ -430,21 +494,22 @@ func buildTemplatedRequest(route templatedRoute, args interface{}) (path string,
 }
 
 // encodeQueryField resolves a dot-separated proto field path on a
-// request message and renders it as a query parameter value. Returns
-// ok=false when the field (or any parent message) is zero-valued so the
+// request message and renders it as query parameter values. Returns no
+// values when the field (or any parent message) is zero-valued so the
 // parameter is omitted. Enum fields render as the proto enum value name
-// (the servers accept both the full enum name and the short form).
-func encodeQueryField(rm protoreflect.Message, fieldPath string) (string, bool, error) {
+// (the servers accept both the full enum name and the short form); a map
+// field renders one "key=value" value per entry.
+func encodeQueryField(rm protoreflect.Message, fieldPath string) ([]string, error) {
 	segments := strings.Split(fieldPath, ".")
 	current := rm
 	for _, segment := range segments[:len(segments)-1] {
 		fd := current.Descriptor().Fields().ByName(protoreflect.Name(segment))
 		if fd == nil || fd.Kind() != protoreflect.MessageKind {
-			return "", false, status.Errorf(codes.Internal,
+			return nil, status.Errorf(codes.Internal,
 				"REST adapter: query field path %q invalid on %s", fieldPath, rm.Descriptor().FullName())
 		}
 		if !current.Has(fd) {
-			return "", false, nil
+			return nil, nil
 		}
 		current = current.Get(fd).Message()
 	}
@@ -452,35 +517,50 @@ func encodeQueryField(rm protoreflect.Message, fieldPath string) (string, bool, 
 	leaf := segments[len(segments)-1]
 	fd := current.Descriptor().Fields().ByName(protoreflect.Name(leaf))
 	if fd == nil {
-		return "", false, status.Errorf(codes.Internal,
+		return nil, status.Errorf(codes.Internal,
 			"REST adapter: query field %q missing on %s", fieldPath, current.Descriptor().FullName())
 	}
 
 	v := current.Get(fd)
+	if fd.IsMap() {
+		return encodeQueryMap(v.Map()), nil
+	}
 	switch fd.Kind() {
 	case protoreflect.BoolKind:
 		if !v.Bool() {
-			return "", false, nil
+			return nil, nil
 		}
-		return "true", true, nil
+		return []string{"true"}, nil
 	case protoreflect.EnumKind:
 		n := v.Enum()
 		if n == 0 {
-			return "", false, nil
+			return nil, nil
 		}
 		if desc := fd.Enum().Values().ByNumber(n); desc != nil {
-			return string(desc.Name()), true, nil
+			return []string{string(desc.Name())}, nil
 		}
-		return strconv.FormatInt(int64(n), 10), true, nil
+		return []string{strconv.FormatInt(int64(n), 10)}, nil
 	default:
 		// Use the RAW value: url.Values.Encode() applies query escaping,
 		// so pre-escaped path encoding would double-escape.
 		raw, _, ok := encodePathField(v, fd)
 		if !ok {
-			return "", false, nil
+			return nil, nil
 		}
-		return raw, true, nil
+		return []string{raw}, nil
 	}
+}
+
+// encodeQueryMap renders a map field as one "key=value" query value per
+// entry, sorted by key so the request is deterministic.
+func encodeQueryMap(m protoreflect.Map) []string {
+	entries := make([]string, 0, m.Len())
+	m.Range(func(k protoreflect.MapKey, v protoreflect.Value) bool {
+		entries = append(entries, k.String()+"="+fmt.Sprint(v.Interface()))
+		return true
+	})
+	sort.Strings(entries)
+	return entries
 }
 
 // clearProtoFieldPath clears a dot-separated proto field path on a
@@ -498,6 +578,39 @@ func clearProtoFieldPath(rm protoreflect.Message, fieldPath string) {
 	if fd := current.Descriptor().Fields().ByName(protoreflect.Name(segments[len(segments)-1])); fd != nil {
 		current.Clear(fd)
 	}
+}
+
+// fieldPathDescriptor resolves a dotted proto field path ("device.id")
+// against md and returns the leaf field. Every segment but the last must
+// name a singular message field; ok is false otherwise.
+func fieldPathDescriptor(md protoreflect.MessageDescriptor, fieldPath string) (protoreflect.FieldDescriptor, bool) {
+	segments := strings.Split(fieldPath, ".")
+	for _, segment := range segments[:len(segments)-1] {
+		fd := md.Fields().ByName(protoreflect.Name(segment))
+		if fd == nil || fd.Kind() != protoreflect.MessageKind || fd.IsList() || fd.IsMap() {
+			return nil, false
+		}
+		md = fd.Message()
+	}
+	leaf := md.Fields().ByName(protoreflect.Name(segments[len(segments)-1]))
+	return leaf, leaf != nil
+}
+
+// fieldPathValue reads the value at a dotted proto field path. An unset
+// intermediate message reads as empty, so its leaf reads as the zero
+// value and encodePathField rejects it. ok is false when the path does not
+// resolve on the message's descriptor.
+func fieldPathValue(rm protoreflect.Message, fieldPath string) (protoreflect.Value, protoreflect.FieldDescriptor, bool) {
+	leaf, ok := fieldPathDescriptor(rm.Descriptor(), fieldPath)
+	if !ok {
+		return protoreflect.Value{}, nil, false
+	}
+	segments := strings.Split(fieldPath, ".")
+	current := rm
+	for _, segment := range segments[:len(segments)-1] {
+		current = current.Get(current.Descriptor().Fields().ByName(protoreflect.Name(segment))).Message()
+	}
+	return current.Get(leaf), leaf, true
 }
 
 // encodePathField extracts a path-parameter value from a proto field.
@@ -551,18 +664,40 @@ func encodePathField(v protoreflect.Value, fd protoreflect.FieldDescriptor) (str
 	}
 }
 
-// NewStream creates a new stream (not fully supported for REST).
+// NewStream serves a server-streaming method by long-polling its unary
+// twin; a method without one is Unimplemented.
 func (c *restClientConn) NewStream(ctx context.Context, desc *grpc.StreamDesc, method string, opts ...grpc.CallOption) (grpc.ClientStream, error) {
-	return nil, status.Error(codes.Unimplemented, "streaming not supported over REST transport")
+	return pollstream.NewStream(ctx, c, method, c.adapter.timeout, opts...)
 }
 
 // pathParam describes a single placeholder substitution in a templated
 // REST route. The placeholder is a literal segment in the route's path
 // template (e.g. "{profileID}") and field is the proto field name in
-// the request message (snake_case, as protoreflect surfaces it).
+// the request message (snake_case, as protoreflect surfaces it). field
+// may be a dotted path ("device.id") into a singular nested message, for
+// update requests that carry the identifier inside the resource. encode,
+// when set, replaces the default rendering for a server that spells the
+// value differently.
 type pathParam struct {
 	placeholder string
-	field       protoreflect.Name
+	field       string
+	encode      fieldEncoder
+}
+
+// fieldEncoder renders a request field's value as the server spells it in
+// the URL, unescaped. An empty result means the field is unset: a path
+// parameter refuses it and a query parameter is omitted.
+type fieldEncoder func(protoreflect.Value) string
+
+// render returns the escaped path segment for the parameter's value and
+// whether the value is set.
+func (p pathParam) render(v protoreflect.Value, fd protoreflect.FieldDescriptor) (string, bool) {
+	if p.encode == nil {
+		_, encoded, ok := encodePathField(v, fd)
+		return encoded, ok
+	}
+	raw := p.encode(v)
+	return url.PathEscape(raw), raw != ""
 }
 
 // queryParam describes a single query-string parameter derived from a
@@ -570,9 +705,27 @@ type pathParam struct {
 // dot-separated proto field path on the request message (snake_case, as
 // protoreflect surfaces it — e.g. "pagination.page"). Zero-valued
 // fields are omitted from the URL so "absent" and "no filter" coincide.
+// encode, when set, replaces the default rendering of a single value.
 type queryParam struct {
-	name  string
-	field string
+	name   string
+	field  string
+	encode fieldEncoder
+}
+
+// render returns the parameter's raw query values; none when it is unset.
+func (q queryParam) render(rm protoreflect.Message) ([]string, error) {
+	if q.encode == nil {
+		return encodeQueryField(rm, q.field)
+	}
+	v, _, ok := fieldPathValue(rm, q.field)
+	if !ok {
+		return nil, status.Errorf(codes.Internal,
+			"REST adapter: query field %q missing on %s", q.field, rm.Descriptor().FullName())
+	}
+	if raw := q.encode(v); raw != "" {
+		return []string{raw}, nil
+	}
+	return nil, nil
 }
 
 // templatedRoute describes a REST route whose URL is derived from the
@@ -620,6 +773,12 @@ var templatedRouteTable = map[string]templatedRoute{
 		method:      http.MethodGet,
 		queryParams: []queryParam{{name: "handle", field: "handle"}},
 	},
+	// NV index operations address the index in the path, the way the
+	// server registers them (pkg/webservice/v1/rest/tpm/router.go); the
+	// password, offset and size stay in the body.
+	"/platform.v1.TPMService/ReadNVRAM":     itemRoute("/api/v1/tpm/nvram/{index}", http.MethodGet, "{index}", "index"),
+	"/platform.v1.TPMService/WriteNVRAM":    itemRoute("/api/v1/tpm/nvram/{index}", http.MethodPut, "{index}", "index"),
+	"/platform.v1.TPMService/UndefineNVRAM": itemRoute("/api/v1/tpm/nvram/{index}", http.MethodDelete, "{index}", "index"),
 
 	// Admitted overlay VTEPs — server registrations in
 	// pkg/api/rest/gateway_handlers.go::RegisterRoutes. An empty gateway_id
@@ -634,6 +793,31 @@ var templatedRouteTable = map[string]templatedRoute{
 		method:      http.MethodGet,
 		pathParams:  []pathParam{{placeholder: "{vtep}", field: "vtep"}},
 		queryParams: []queryParam{{name: "gateway_id", field: "gateway_id"}},
+	},
+
+	// BGP withdraw — server registration in
+	// pkg/webservice/v1/rest/gateway/router.go::RegisterRoutes. The server
+	// reads the prefix from ?prefix= only; sent in the DELETE body it was
+	// never seen, so every REST withdraw failed with "prefix is required".
+	// An empty prefix is omitted and refused by the server, as on gRPC.
+	"/platform.v1.GatewayService/WithdrawPrefix": {
+		path:        "/api/v1/gateway/bgp/prefixes",
+		method:      http.MethodDelete,
+		queryParams: []queryParam{{name: "prefix", field: "prefix"}},
+	},
+	// Overlay MAC forget — server registration in
+	// pkg/webservice/v1/rest/overlay/router.go::RegisterRoutes. The server
+	// reads the MAC and VNI from ?mac= and ?vni= only; sent in the DELETE
+	// body they were never seen, so every REST forget failed with "mac is
+	// required". Empty values are omitted and refused by the server, as on
+	// gRPC.
+	"/platform.v1.OverlayService/ForgetMAC": {
+		path:   "/api/v1/overlay/macs",
+		method: http.MethodDelete,
+		queryParams: []queryParam{
+			{name: "mac", field: "mac"},
+			{name: "vni", field: "vni"},
+		},
 	},
 
 	"/platform.v1.GatewayService/GetPerfDatapath": {
@@ -732,15 +916,14 @@ var templatedRouteTable = map[string]templatedRoute{
 	// server route each one now targets is listed beside it; all ten are in
 	// pkg/webservice/v1/testdata/routes.golden.
 	//
-	// Two singular accessors are NOT here, because the server serves no route
-	// for them at all: DNSService/GetRecord (records live only under
-	// /api/v1/dns/zones/{zone}/records, and platform_dns.proto has no GetRecord
-	// rpc) and PlatformIAMService/GetPermission (the IAM router registers
-	// /policies, never /permissions, and iam.proto has only CheckPermission).
-	// Inventing a path for either would replace a wrong answer with a 404 that
-	// reads as fixed, so they stay in the flat table and are recorded as
-	// exemptions in
+	// One singular accessor is NOT here, because the server serves no route
+	// for it at all: PlatformIAMService/GetPermission (the IAM router
+	// registers /policies, never /permissions, and iam.proto has only
+	// CheckPermission). Inventing a path for it would replace a wrong answer
+	// with a 404 that reads as fixed, so it stays in the flat table and is
+	// recorded as an exemption in
 	// TestRouteClaims_NoSingularAccessorSharesACollectionPathWithItsList.
+	// The DNS record and zone routes live in dns.go.
 	//
 	// The four IAM getters below ARE here even though
 	// pkg/webservice/v1/testdata/routes.golden contains no /api/v1/iam route.
@@ -752,10 +935,75 @@ var templatedRouteTable = map[string]templatedRoute{
 	// that serves none.
 
 	// GET /api/v1/ca/certificates/{serial}
-	"/platform.v1.CAService/GetCertificate": itemRoute("/api/v1/ca/certificates/{serial}", http.MethodGet, "{serial}", "serial"),
+	"/platform.v1.CAService/GetCertificate": {
+		path:        "/api/v1/ca/certificates/{serial}",
+		method:      http.MethodGet,
+		pathParams:  []pathParam{{placeholder: "{serial}", field: "serial"}},
+		queryParams: []queryParam{{name: "include_pem", field: "include_pem"}, {name: "include_der", field: "include_der"}},
+	},
+	// DELETE /api/v1/ca/certificates/{serial} and
+	// POST /api/v1/ca/certificates/{serial}/renew: item operations on the
+	// certificate the serial names. reason and delete_keys (revoke) and
+	// valid_days and the SANs (renew) stay in the body (#452).
+	"/platform.v1.CAService/RevokeCertificate": itemRoute("/api/v1/ca/certificates/{serial}", http.MethodDelete, "{serial}", "serial"),
+	"/platform.v1.CAService/RenewCertificate":  itemRoute("/api/v1/ca/certificates/{serial}/renew", http.MethodPost, "{serial}", "serial"),
 
 	// GET /api/v1/compute/containers/{id}
 	"/platform.v1.ComputeService/GetContainer": itemRoute("/api/v1/compute/containers/{id}", http.MethodGet, "{id}", "id"),
+
+	// DELETE /api/v1/compute/containers/{id}?force=true&delete_volumes=true
+	// -- the handler reads force and delete_volumes from the query.
+	"/platform.v1.ComputeService/DeleteContainer": {
+		path:        "/api/v1/compute/containers/{id}",
+		method:      http.MethodDelete,
+		pathParams:  []pathParam{{placeholder: "{id}", field: "id"}},
+		queryParams: []queryParam{{name: "force", field: "force"}, {name: "delete_volumes", field: "delete_volumes"}},
+	},
+
+	// POST /api/v1/compute/containers/{id}/start
+	"/platform.v1.ComputeService/StartContainer": itemRoute("/api/v1/compute/containers/{id}/start", http.MethodPost, "{id}", "id"),
+
+	// POST /api/v1/compute/containers/{id}/stop -- timeout_seconds stays in the body.
+	"/platform.v1.ComputeService/StopContainer": itemRoute("/api/v1/compute/containers/{id}/stop", http.MethodPost, "{id}", "id"),
+
+	// POST /api/v1/compute/containers/{id}/attest -- nonce, pcr_indices and
+	// pcr_bank stay in the body.
+	"/platform.v1.ComputeService/AttestContainer": itemRoute("/api/v1/compute/containers/{id}/attest", http.MethodPost, "{id}", "id"),
+
+	// DELETE /api/v1/compute/vms/{id}?delete_disks=true -- both REST servers
+	// read delete_disks from the query.
+	"/platform.v1.ComputeService/DeleteVM": {
+		path:        "/api/v1/compute/vms/{id}",
+		method:      http.MethodDelete,
+		pathParams:  []pathParam{{placeholder: "{id}", field: "id"}},
+		queryParams: []queryParam{{name: "delete_disks", field: "delete_disks"}},
+	},
+
+	// POST /api/v1/compute/vms/{id}/{start,stop,reboot,suspend,resume} --
+	// stop's force and timeout_seconds and reboot's force stay in the body.
+	"/platform.v1.ComputeService/StartVM":   itemRoute("/api/v1/compute/vms/{id}/start", http.MethodPost, "{id}", "id"),
+	"/platform.v1.ComputeService/StopVM":    itemRoute("/api/v1/compute/vms/{id}/stop", http.MethodPost, "{id}", "id"),
+	"/platform.v1.ComputeService/RebootVM":  itemRoute("/api/v1/compute/vms/{id}/reboot", http.MethodPost, "{id}", "id"),
+	"/platform.v1.ComputeService/SuspendVM": itemRoute("/api/v1/compute/vms/{id}/suspend", http.MethodPost, "{id}", "id"),
+	"/platform.v1.ComputeService/ResumeVM":  itemRoute("/api/v1/compute/vms/{id}/resume", http.MethodPost, "{id}", "id"),
+
+	// /api/v1/compute/vms/{id}/snapshots[/{snapshotId}[/restore]] -- the VM
+	// and snapshot ids ride the path; create's config stays in the body.
+	"/platform.v1.ComputeService/CreateSnapshot": itemRoute("/api/v1/compute/vms/{id}/snapshots", http.MethodPost, "{id}", "vm_id"),
+	"/platform.v1.ComputeService/ListSnapshots":  itemRoute("/api/v1/compute/vms/{id}/snapshots", http.MethodGet, "{id}", "vm_id"),
+	"/platform.v1.ComputeService/GetSnapshot":    vmSnapshotRoute("/api/v1/compute/vms/{id}/snapshots/{snapshotId}", http.MethodGet),
+	"/platform.v1.ComputeService/DeleteSnapshot": vmSnapshotRoute("/api/v1/compute/vms/{id}/snapshots/{snapshotId}", http.MethodDelete),
+	"/platform.v1.ComputeService/RestoreSnapshot": vmSnapshotRoute(
+		"/api/v1/compute/vms/{id}/snapshots/{snapshotId}/restore", http.MethodPost),
+
+	// POST /api/v1/compute/vms/{id}/attest[/verify] -- the nonce, PCR
+	// selection and evidence stay in the body.
+	"/platform.v1.ComputeService/AttestVM":            itemRoute("/api/v1/compute/vms/{id}/attest", http.MethodPost, "{id}", "vm_id"),
+	"/platform.v1.ComputeService/VerifyVMAttestation": itemRoute("/api/v1/compute/vms/{id}/attest/verify", http.MethodPost, "{id}", "vm_id"),
+	// FinalizeMigration names the receiver PrepareMigration returned in the
+	// path; commit stays in the body.
+	"/platform.v1.ComputeService/FinalizeMigration": itemRoute(
+		"/api/v1/compute/migrations/{receiverId}/finalize", http.MethodPost, "{receiverId}", "receiver_id"),
 
 	// GET /api/v1/devices/{id:[0-9]+} -- uint64, rendered decimal.
 	//
@@ -778,23 +1026,128 @@ var templatedRouteTable = map[string]templatedRoute{
 	// {"reissue": bool}.
 	"/platform.v1.DeviceService/RecordAttestationCertificate": itemRoute("/api/v1/devices/{id:[0-9]+}/attest-cert/record", http.MethodPost, "{id:[0-9]+}", "device_id"),
 
+	// POST /api/v1/devices/{id}/disable and /enable -- the operator
+	// Enable/Disable Device flow (#250), registered in
+	// pkg/webservice/v1/router/device.go::RegisterRoutes (admin gate). The
+	// device_id request field fills the path; a disable body is
+	// {"reason": string}.
+	"/platform.v1.DeviceService/DisableDevice": itemRoute("/api/v1/devices/{id:[0-9]+}/disable", http.MethodPost, "{id:[0-9]+}", "device_id"),
+	"/platform.v1.DeviceService/EnableDevice":  itemRoute("/api/v1/devices/{id:[0-9]+}/enable", http.MethodPost, "{id:[0-9]+}", "device_id"),
+
 	// GET /api/v1/device/profiles/{id:[0-9]+} -- note the singular "device"
-	// prefix: the router serves BOTH /api/v1/device/profiles and
-	// /api/v1/devices/profiles, and this claim targets the former.
+	// prefix: profiles live under /api/v1/device and device records under
+	// /api/v1/devices, and no path is served under both (#266).
 	"/platform.v1.DeviceService/GetProfile": itemRoute("/api/v1/device/profiles/{id:[0-9]+}", http.MethodGet, "{id:[0-9]+}", "id"),
+
+	// The remaining DeviceService item and lookup routes, each written with
+	// the exact template pkg/webservice/v1/router/device.go registers (#321).
+	// Before #321 the update, delete and lookup rows sat in the flat table on
+	// the collection path or on invented by-serial / by-mac paths, so every
+	// one of them answered 404 or 405. Update requests carry the identifier
+	// inside the resource, hence the dotted field.
+	"/platform.v1.DeviceService/UpdateDevice":            itemRoute("/api/v1/devices/{id:[0-9]+}", http.MethodPut, "{id:[0-9]+}", "device.id"),
+	"/platform.v1.DeviceService/DeleteDevice":            itemRoute("/api/v1/devices/{id:[0-9]+}", http.MethodDelete, "{id:[0-9]+}", "id"),
+	"/platform.v1.DeviceService/FindDeviceBySerial":      itemRoute("/api/v1/devices/serial/{serial}", http.MethodGet, "{serial}", "serial"),
+	"/platform.v1.DeviceService/UpdateProfile":           itemRoute("/api/v1/device/profiles/{id:[0-9]+}", http.MethodPut, "{id:[0-9]+}", "profile.id"),
+	"/platform.v1.DeviceService/DeleteProfile":           itemRoute("/api/v1/device/profiles/{id:[0-9]+}", http.MethodDelete, "{id:[0-9]+}", "id"),
+	"/platform.v1.DeviceService/FindProfileByMACAddress": itemRoute("/api/v1/device/profiles/mac/{mac}", http.MethodGet, "{mac}", "mac_address"),
+	"/platform.v1.DeviceService/FindProfileBySerial":     itemRoute("/api/v1/device/profiles/serial/{serial}", http.MethodGet, "{serial}", "serial"),
+
+	// POST /api/v1/devices/{id}/attest (admin gate). The server leaves this
+	// id unconstrained; evidence travels in the body.
+	"/platform.v1.DeviceService/AttestDevice": itemRoute("/api/v1/devices/{id}/attest", http.MethodPost, "{id}", "device_id"),
+
+	// GET, PUT and DELETE /api/v1/device/templates/{id:[0-9]+}.
+	"/platform.v1.DeviceService/GetTemplate":    itemRoute("/api/v1/device/templates/{id:[0-9]+}", http.MethodGet, "{id:[0-9]+}", "id"),
+	"/platform.v1.DeviceService/UpdateTemplate": itemRoute("/api/v1/device/templates/{id:[0-9]+}", http.MethodPut, "{id:[0-9]+}", "template.id"),
+	"/platform.v1.DeviceService/DeleteTemplate": itemRoute("/api/v1/device/templates/{id:[0-9]+}", http.MethodDelete, "{id:[0-9]+}", "id"),
+	// The template list pages by query parameter; a zero page or size is
+	// omitted, so the server's defaults apply.
+	"/platform.v1.DeviceService/ListTemplates": {
+		path:   "/api/v1/device/templates",
+		method: http.MethodGet,
+		queryParams: []queryParam{
+			{name: "page", field: "pagination.page"},
+			{name: "page_size", field: "pagination.page_size"},
+		},
+	},
+	// POST /api/v1/device/templates/{id:[0-9]+}/create-profile. The body
+	// keeps {"overrides": {...}}.
+	"/platform.v1.DeviceService/CreateProfileFromTemplate": itemRoute("/api/v1/device/templates/{id:[0-9]+}/create-profile", http.MethodPost, "{id:[0-9]+}", "template_id"),
+
+	// Config delivery: the lookup keys are query parameters, and the server
+	// names the MAC parameter "mac".
+	"/platform.v1.DeviceService/FindConfigForDevice": {
+		path:   "/api/v1/device/profiles/find-config",
+		method: http.MethodGet,
+		queryParams: []queryParam{
+			{name: "ek_serial", field: "ek_serial"},
+			{name: "mac", field: "mac_address"},
+		},
+	},
+	"/platform.v1.DeviceService/AssignProfileToDevice":     itemRoute("/api/v1/device/profiles/{id:[0-9]+}/assign", http.MethodPost, "{id:[0-9]+}", "profile_id"),
+	"/platform.v1.DeviceService/UnassignProfileFromDevice": itemRoute("/api/v1/device/profiles/{id:[0-9]+}/unassign", http.MethodPost, "{id:[0-9]+}", "profile_id"),
 
 	// GET /api/v1/invitations/{id:[0-9]+} -- proto field is invitation_id.
 	"/platform.v1.InvitationService/GetInvitation": itemRoute("/api/v1/invitations/{id:[0-9]+}", http.MethodGet, "{id:[0-9]+}", "invitation_id"),
+
+	// The invitation item operations (#452), each on the template
+	// pkg/webservice/v1/rest/invitation/router.go registers. The flat rows
+	// sent DELETE /api/v1/invitations, POST /api/v1/invitations/revoke and
+	// GET /api/v1/invitations/by-token with the identifier in the body, and
+	// the server serves none of the three. RevokeInvitation keeps revoker_id
+	// in the POST body. The token route is the invitee half, registered
+	// outside the tenant-admin gate.
+	"/platform.v1.InvitationService/DeleteInvitation":     itemRoute("/api/v1/invitations/{id:[0-9]+}", http.MethodDelete, "{id:[0-9]+}", "invitation_id"),
+	"/platform.v1.InvitationService/RevokeInvitation":     itemRoute("/api/v1/invitations/{id:[0-9]+}/revoke", http.MethodPost, "{id:[0-9]+}", "invitation_id"),
+	"/platform.v1.InvitationService/GetInvitationByToken": itemRoute("/api/v1/invitations/token/{token}", http.MethodGet, "{token}", "token"),
 
 	// GET /api/v1/kms/keys/{name} -- the server names the segment {name}; the
 	// proto field is key_id. The two names describe the same value.
 	"/platform.v1.KeyManagementService/GetKey": itemRoute("/api/v1/kms/keys/{name}", http.MethodGet, "{name}", "key_id"),
 
+	// The KMS key and crypto operations name the key the same way; their
+	// bodies are reshaped to the server's wire names in kms.go.
+	"/platform.v1.KeyManagementService/DeleteKey": itemRoute("/api/v1/kms/keys/{name}", http.MethodDelete, "{name}", "key_id"),
+	"/platform.v1.KeyManagementService/RotateKey": itemRoute("/api/v1/kms/keys/{name}/rotate", http.MethodPost, "{name}", "key_id"),
+	"/platform.v1.KeyManagementService/Encrypt":   itemRoute("/api/v1/kms/encrypt/{name}", http.MethodPost, "{name}", "key_id"),
+	"/platform.v1.KeyManagementService/Decrypt":   itemRoute("/api/v1/kms/decrypt/{name}", http.MethodPost, "{name}", "key_id"),
+	"/platform.v1.KeyManagementService/Sign":      itemRoute("/api/v1/kms/sign/{name}", http.MethodPost, "{name}", "key_id"),
+	"/platform.v1.KeyManagementService/Verify":    itemRoute("/api/v1/kms/verify/{name}", http.MethodPost, "{name}", "key_id"),
+
+	// GET /api/v1/kms/keys/{id}/export -- the daemon REST server's route
+	// (pkg/api/rest/kms_handlers.go). It reads the wrapping algorithm and the
+	// format as their enum numbers, so they are rendered as numbers here.
+	"/platform.v1.KeyManagementService/ExportKey": {
+		path:       "/api/v1/kms/keys/{id}/export",
+		method:     http.MethodGet,
+		pathParams: []pathParam{{placeholder: "{id}", field: "key_id"}},
+		queryParams: []queryParam{
+			{name: "wrapping_key_id", field: "wrapping_key_id"},
+			{name: "wrapping_algorithm", field: "wrapping_algorithm", encode: encodeEnumNumber},
+			{name: "format", field: "format", encode: encodeEnumNumber},
+			{name: "version", field: "version"},
+		},
+	},
+
 	// GET /api/v1/overlay/vteps/{nodeId}
 	"/platform.v1.OverlayService/GetVTEP": itemRoute("/api/v1/overlay/vteps/{nodeId}", http.MethodGet, "{nodeId}", "node_id"),
 
+	// DELETE /api/v1/overlay/vnis/{vni:[0-9]+} --
+	// pkg/webservice/v1/rest/overlay/router.go. The flat row sent the VNI in
+	// the body of DELETE /api/v1/overlay/vnis, which the server does not
+	// serve (#452).
+	"/platform.v1.OverlayService/DeleteVNI": itemRoute("/api/v1/overlay/vnis/{vni:[0-9]+}", http.MethodDelete, "{vni:[0-9]+}", "vni"),
+
 	// GET /api/v1/pxe/devices/{id} -- request message is GetPXEDeviceRequest.
 	"/platform.v1.PXEService/GetDevice": itemRoute("/api/v1/pxe/devices/{id}", http.MethodGet, "{id}", "device_id"),
+
+	// PUT /api/v1/pxe/devices/{id}/state, POST .../{id}/authorize and
+	// POST .../{id}/quarantine (#452) -- the device travels in the path,
+	// the rest of the request in the body.
+	"/platform.v1.PXEService/UpdateState": itemRoute("/api/v1/pxe/devices/{id}/state", http.MethodPut, "{id}", "device_id"),
+	"/platform.v1.PXEService/Authorize":   itemRoute("/api/v1/pxe/devices/{id}/authorize", http.MethodPost, "{id}", "device_id"),
+	"/platform.v1.PXEService/Quarantine":  itemRoute("/api/v1/pxe/devices/{id}/quarantine", http.MethodPost, "{id}", "device_id"),
 
 	// GET /api/v1/sdn/policies/{id}
 	"/platform.v1.SDNService/GetPolicy": itemRoute("/api/v1/sdn/policies/{id}", http.MethodGet, "{id}", "policy_id"),
@@ -802,54 +1155,101 @@ var templatedRouteTable = map[string]templatedRoute{
 	// GET /api/v1/tenants/{id}
 	"/platform.v1.TenantService/GetTenant": itemRoute("/api/v1/tenants/{id}", http.MethodGet, "{id}", "tenant_id"),
 
-	// GET /api/v1/iam/users/{id} -- pkg/webservice/v1/rest/iam/router.go:127.
+	// The tenant item operations (#452), each on the template
+	// pkg/webservice/v1/rest/tenant/router.go registers. The flat rows sent
+	// the collection path (or /tenants/suspend, /tenants/resume) with
+	// tenant_id in the body; the server serves none of them. UpdateTenant
+	// keeps display_name, labels and annotations in the PUT body.
+	"/platform.v1.TenantService/UpdateTenant":  itemRoute("/api/v1/tenants/{id}", http.MethodPut, "{id}", "tenant_id"),
+	"/platform.v1.TenantService/DeleteTenant":  itemRoute("/api/v1/tenants/{id}", http.MethodDelete, "{id}", "tenant_id"),
+	"/platform.v1.TenantService/SuspendTenant": itemRoute("/api/v1/tenants/{id}/suspend", http.MethodPost, "{id}", "tenant_id"),
+	"/platform.v1.TenantService/ResumeTenant":  itemRoute("/api/v1/tenants/{id}/resume", http.MethodPost, "{id}", "tenant_id"),
+
+	// The name lookup, quotas and usage behind platformctl tenant show,
+	// quotas and usage (and every command that names a tenant). The server
+	// registers /by-name/{name} before /{id}, so the name never reads as an
+	// id. UpdateQuotas keeps compute, network and storage in the PUT body.
+	"/platform.v1.TenantService/GetTenantByName": itemRoute("/api/v1/tenants/by-name/{name}", http.MethodGet, "{name}", "name"),
+	"/platform.v1.TenantService/GetQuotas":       itemRoute("/api/v1/tenants/{id}/quotas", http.MethodGet, "{id}", "tenant_id"),
+	"/platform.v1.TenantService/UpdateQuotas":    itemRoute("/api/v1/tenants/{id}/quotas", http.MethodPut, "{id}", "tenant_id"),
+	"/platform.v1.TenantService/GetUsage":        itemRoute("/api/v1/tenants/{id}/usage", http.MethodGet, "{id}", "tenant_id"),
+
+	// The quota check and the DEK routes. CheckQuota keeps the prospective
+	// allocation (resource, amount) in the POST body, and RotateTenantDEK
+	// keeps background there.
+	"/platform.v1.TenantService/CheckQuota":         itemRoute("/api/v1/tenants/{id}/quota-check", http.MethodPost, "{id}", "tenant_id"),
+	"/platform.v1.TenantService/RotateTenantDEK":    itemRoute("/api/v1/tenants/{id}/dek/rotate", http.MethodPost, "{id}", "tenant_id"),
+	"/platform.v1.TenantService/GetTenantDEKStatus": itemRoute("/api/v1/tenants/{id}/dek", http.MethodGet, "{id}", "tenant_id"),
+
+	// GET /api/v1/iam/tenants/{tenant}/users/{id} --
+	// pkg/webservice/v1/rest/iam/router.go registerUserRoutes.
 	//
-	// These four take the UNSCOPED form, which is the tree the flat claim
-	// already named; the id segment is the only thing added. The router also
-	// serves a tenant-scoped twin (/api/v1/iam/tenants/{tenant}/users/{id}),
-	// and GetIAMUserRequest carries tenant_id alongside user_id, so an SDK
-	// caller who sets tenant_id still gets whatever tenant the unscoped
-	// handler derives from context or the token. That ambiguity is
-	// docs/iam/api.md §2's, it predates this change, and choosing the scoped
-	// form instead would be a behaviour decision rather than a repair -- so it
-	// is raised on #379, not settled here.
-	"/platform.v1.PlatformIAMService/GetUser": itemRoute("/api/v1/iam/users/{id}", http.MethodGet, "{id}", "user_id"),
+	// Every IAM request that carries tenant_id alongside an item identifier
+	// targets the TENANT-SCOPED tree, with tenant_id in the {tenant} segment
+	// (#401). The unscoped twin (/api/v1/iam/users/{id}) serves whatever tenant
+	// the session is bound to and never reads tenant_id, so a caller naming
+	// another tenant was answered from its own with a 200 -- while gRPC served
+	// the tenant it named. On the scoped tree the server's RequireOwnTenant
+	// refuses a tenant other than the session's with 403 (PermissionDenied
+	// here), which is what gRPC now returns too; an empty tenant_id never
+	// leaves the client (InvalidArgument), matching gRPC's required field.
+	"/platform.v1.PlatformIAMService/GetUser": tenantItemRoute("/api/v1/iam/tenants/{tenant}/users/{id}", http.MethodGet,
+		pathParam{placeholder: "{id}", field: "user_id"}),
 
-	// GET /api/v1/iam/roles/{id} -- router.go:145.
-	"/platform.v1.PlatformIAMService/GetRole": itemRoute("/api/v1/iam/roles/{id}", http.MethodGet, "{id}", "role_id"),
+	// GET /api/v1/iam/tenants/{tenant}/roles/{id} -- registerRoleRoutes.
+	"/platform.v1.PlatformIAMService/GetRole": tenantItemRoute("/api/v1/iam/tenants/{tenant}/roles/{id}", http.MethodGet,
+		pathParam{placeholder: "{id}", field: "role_id"}),
 
-	// GET /api/v1/iam/groups/{id} -- router.go:136.
-	"/platform.v1.PlatformIAMService/GetGroup": itemRoute("/api/v1/iam/groups/{id}", http.MethodGet, "{id}", "group_id"),
+	// GET /api/v1/iam/tenants/{tenant}/groups/{id} -- registerGroupRoutes.
+	"/platform.v1.PlatformIAMService/GetGroup": tenantItemRoute("/api/v1/iam/tenants/{tenant}/groups/{id}", http.MethodGet,
+		pathParam{placeholder: "{id}", field: "group_id"}),
 
 	// GET /api/v1/iam/tenants/{tenant} -- router.go:208. The server names this
 	// segment {tenant}, not {id}, and the request has only tenant_id.
 	"/platform.v1.PlatformIAMService/GetTenant": itemRoute("/api/v1/iam/tenants/{tenant}", http.MethodGet, "{tenant}", "tenant_id"),
 
-	// DELETE /api/v1/iam/groups/{id}/members/{user} -- rest/iam/router.go:137.
+	// DELETE /api/v1/iam/tenants/{tenant}/groups/{id}/members/{user}.
 	// The flat row sent DELETE /api/v1/iam/groups/members, and the server
 	// routed that to DELETE /groups/{id} with id="members": a DeleteGroup on
 	// whatever group carries that name, not a membership removal (#415).
-	// RemoveGroupMemberRequest carries group_id and user_id; both travel in
-	// the path.
-	"/platform.v1.PlatformIAMService/RemoveGroupMember": nestedItemRoute("/api/v1/iam/groups/{id}/members/{user}", http.MethodDelete,
+	// RemoveGroupMemberRequest carries tenant_id, group_id and user_id; all
+	// three travel in the path.
+	"/platform.v1.PlatformIAMService/RemoveGroupMember": tenantItemRoute("/api/v1/iam/tenants/{tenant}/groups/{id}/members/{user}", http.MethodDelete,
 		pathParam{placeholder: "{id}", field: "group_id"}, pathParam{placeholder: "{user}", field: "user_id"}),
 
 	// The seven item operations #416 repairs (#379's shape on the mutating
 	// verbs, found by #400's fixture). Each sent a collection path the server
 	// does not serve for that verb; the server's routes are the item paths
-	// below (pkg/webservice/v1/rest/iam/router.go, flat tree), and the
-	// identifiers travel in the path, never the body.
-	"/platform.v1.PlatformIAMService/DeleteUser":   itemRoute("/api/v1/iam/users/{id}", http.MethodDelete, "{id}", "user_id"),
-	"/platform.v1.PlatformIAMService/DeleteRole":   itemRoute("/api/v1/iam/roles/{id}", http.MethodDelete, "{id}", "role_id"),
-	"/platform.v1.PlatformIAMService/DeleteGroup":  itemRoute("/api/v1/iam/groups/{id}", http.MethodDelete, "{id}", "group_id"),
+	// below (pkg/webservice/v1/rest/iam/router.go), and the identifiers
+	// travel in the path, never the body. All but DeleteTenant are on the
+	// tenant-scoped tree for the reason given at GetUser (#401).
+	"/platform.v1.PlatformIAMService/DeleteUser": tenantItemRoute("/api/v1/iam/tenants/{tenant}/users/{id}", http.MethodDelete,
+		pathParam{placeholder: "{id}", field: "user_id"}),
+	"/platform.v1.PlatformIAMService/DeleteRole": tenantItemRoute("/api/v1/iam/tenants/{tenant}/roles/{id}", http.MethodDelete,
+		pathParam{placeholder: "{id}", field: "role_id"}),
+	"/platform.v1.PlatformIAMService/DeleteGroup": tenantItemRoute("/api/v1/iam/tenants/{tenant}/groups/{id}", http.MethodDelete,
+		pathParam{placeholder: "{id}", field: "group_id"}),
 	"/platform.v1.PlatformIAMService/DeleteTenant": itemRoute("/api/v1/iam/tenants/{tenant}", http.MethodDelete, "{tenant}", "tenant_id"),
-	"/platform.v1.PlatformIAMService/AssignRole": nestedItemRoute("/api/v1/iam/users/{id}/roles/{role}", http.MethodPost,
+	"/platform.v1.PlatformIAMService/AssignRole": tenantItemRoute("/api/v1/iam/tenants/{tenant}/users/{id}/roles/{role}", http.MethodPost,
 		pathParam{placeholder: "{id}", field: "user_id"}, pathParam{placeholder: "{role}", field: "role_id"}),
 	// RevokeRole changes verb as well as path: the server revokes with DELETE.
-	"/platform.v1.PlatformIAMService/RevokeRole": nestedItemRoute("/api/v1/iam/users/{id}/roles/{role}", http.MethodDelete,
+	"/platform.v1.PlatformIAMService/RevokeRole": tenantItemRoute("/api/v1/iam/tenants/{tenant}/users/{id}/roles/{role}", http.MethodDelete,
 		pathParam{placeholder: "{id}", field: "user_id"}, pathParam{placeholder: "{role}", field: "role_id"}),
-	"/platform.v1.PlatformIAMService/AddGroupMember": nestedItemRoute("/api/v1/iam/groups/{id}/members/{user}", http.MethodPost,
+	"/platform.v1.PlatformIAMService/AddGroupMember": tenantItemRoute("/api/v1/iam/tenants/{tenant}/groups/{id}/members/{user}", http.MethodPost,
 		pathParam{placeholder: "{id}", field: "group_id"}, pathParam{placeholder: "{user}", field: "user_id"}),
+
+	// The four updates are a PUT on the item (router.go). With no row here
+	// they fell back to POST /api/v1/platformiam/update<item>, which the
+	// server does not serve, so none of them worked over REST (#401). The
+	// identifiers travel in the path; the remaining fields are the body,
+	// whose JSON names match the server's Update<Item>Request.
+	"/platform.v1.PlatformIAMService/UpdateUser": tenantItemRoute("/api/v1/iam/tenants/{tenant}/users/{id}", http.MethodPut,
+		pathParam{placeholder: "{id}", field: "user_id"}),
+	"/platform.v1.PlatformIAMService/UpdateRole": tenantItemRoute("/api/v1/iam/tenants/{tenant}/roles/{id}", http.MethodPut,
+		pathParam{placeholder: "{id}", field: "role_id"}),
+	"/platform.v1.PlatformIAMService/UpdateGroup": tenantItemRoute("/api/v1/iam/tenants/{tenant}/groups/{id}", http.MethodPut,
+		pathParam{placeholder: "{id}", field: "group_id"}),
+	"/platform.v1.PlatformIAMService/UpdateTenant": itemRoute("/api/v1/iam/tenants/{tenant}", http.MethodPut, "{tenant}", "tenant_id"),
 }
 
 // itemRoute constructs a templated route for a singular accessor: the
@@ -862,7 +1262,7 @@ var templatedRouteTable = map[string]templatedRoute{
 // and returned the collection with a 200, forever (#379). placeholder is the
 // literal {segment} in path; field is the snake_case proto field on the
 // request message that fills it.
-func itemRoute(path, method, placeholder string, field protoreflect.Name) templatedRoute {
+func itemRoute(path, method, placeholder, field string) templatedRoute {
 	return templatedRoute{
 		path:       path,
 		method:     method,
@@ -870,16 +1270,32 @@ func itemRoute(path, method, placeholder string, field protoreflect.Name) templa
 	}
 }
 
-// nestedItemRoute is itemRoute for a route that names TWO identifiers -- a
-// parent and a child, e.g. /users/{id}/roles/{role} -- each filled from its
-// own request field. Both must be non-zero; a placeholder left unfilled is an
-// error, never a shorter path (#415: the collection-path form of
-// RemoveGroupMember routed to DeleteGroup with id="members").
-func nestedItemRoute(path, method string, parent, child pathParam) templatedRoute {
+// vmSnapshotRoute is itemRoute for a single VM snapshot: vm_id fills {id}
+// and snapshot_id fills {snapshotId}, and neither may be empty.
+func vmSnapshotRoute(path, method string) templatedRoute {
+	return templatedRoute{
+		path:   path,
+		method: method,
+		pathParams: []pathParam{
+			{placeholder: "{id}", field: "vm_id"},
+			{placeholder: "{snapshotId}", field: "snapshot_id"},
+		},
+	}
+}
+
+// tenantItemRoute is itemRoute for the IAM tenant-scoped tree,
+// /api/v1/iam/tenants/{tenant}/...: the request's tenant_id fills {tenant},
+// and items fill the identifiers after it (one, or a parent and a child such
+// as /users/{id}/roles/{role}). Every identifier must be non-zero; a
+// placeholder left unfilled is an error, never a shorter path (#415: the
+// collection-path form of RemoveGroupMember routed to DeleteGroup with
+// id="members"). Putting tenant_id in the path is what lets the server's
+// RequireOwnTenant guard refuse a tenant the caller is not bound to (#401).
+func tenantItemRoute(path, method string, items ...pathParam) templatedRoute {
 	return templatedRoute{
 		path:       path,
 		method:     method,
-		pathParams: []pathParam{parent, child},
+		pathParams: append([]pathParam{{placeholder: "{tenant}", field: "tenant_id"}}, items...),
 	}
 }
 
@@ -947,16 +1363,15 @@ var grpcMethodToRESTMap = map[string]struct {
 	"/platform.v1.PlatformDaemon/GetStatus":  {"/api/v1/status", http.MethodGet},
 
 	// Health endpoints
-	"/platform.v1.PlatformDaemon/Health":    {"/health", http.MethodGet},
+	"/platform.v1.PlatformDaemon/GetHealth": {"/health", http.MethodGet},
 	"/platform.v1.PlatformDaemon/Liveness":  {"/health/live", http.MethodGet},
 	"/platform.v1.PlatformDaemon/Readiness": {"/health/ready", http.MethodGet},
 
 	// CA Service
 	"/platform.v1.CAService/GetCAInfo":         {"/api/v1/ca/info", http.MethodGet},
 	"/platform.v1.CAService/IssueCertificate":  {"/api/v1/ca/certificates", http.MethodPost},
+	"/platform.v1.CAService/SignCSR":           {"/api/v1/ca/sign-csr", http.MethodPost},
 	"/platform.v1.CAService/ListCertificates":  {"/api/v1/ca/certificates", http.MethodGet},
-	"/platform.v1.CAService/RevokeCertificate": {"/api/v1/ca/certificates/revoke", http.MethodPost},
-	"/platform.v1.CAService/RenewCertificate":  {"/api/v1/ca/certificates/renew", http.MethodPost},
 	"/platform.v1.CAService/VerifyCertificate": {"/api/v1/ca/certificates/verify", http.MethodPost},
 	"/platform.v1.CAService/GetCRL":            {"/api/v1/ca/crl", http.MethodGet},
 	"/platform.v1.CAService/GetCABundle":       {"/api/v1/ca/bundle", http.MethodGet},
@@ -977,37 +1392,20 @@ var grpcMethodToRESTMap = map[string]struct {
 	// GetCurrentUser was removed (#415): iam.proto declares no such rpc, and
 	// its path /iam/users/current routed to GetUser with id="current".
 	"/platform.v1.PlatformIAMService/CheckPermission": {"/api/v1/iam/permissions/check", http.MethodPost},
-	"/platform.v1.PlatformIAMService/CreateToken":     {"/api/v1/iam/tokens", http.MethodPost},
-	"/platform.v1.PlatformIAMService/RevokeToken":     {"/api/v1/iam/tokens/revoke", http.MethodPost},
-	"/platform.v1.PlatformIAMService/VerifyToken":     {"/api/v1/iam/tokens/verify", http.MethodPost},
+	// CreateToken, RevokeToken and VerifyToken have no REST route: route()
+	// refuses them through restRefusedMethods (iam.go).
 
 	// KMS Service
 	"/platform.v1.KeyManagementService/GenerateKey":            {"/api/v1/kms/keys", http.MethodPost},
-	"/platform.v1.KeyManagementService/DeleteKey":              {"/api/v1/kms/keys", http.MethodDelete},
 	"/platform.v1.KeyManagementService/ListKeys":               {"/api/v1/kms/keys", http.MethodGet},
-	"/platform.v1.KeyManagementService/RotateKey":              {"/api/v1/kms/keys/rotate", http.MethodPost},
-	"/platform.v1.KeyManagementService/Encrypt":                {"/api/v1/kms/encrypt", http.MethodPost},
-	"/platform.v1.KeyManagementService/Decrypt":                {"/api/v1/kms/decrypt", http.MethodPost},
-	"/platform.v1.KeyManagementService/Sign":                   {"/api/v1/kms/sign", http.MethodPost},
-	"/platform.v1.KeyManagementService/Verify":                 {"/api/v1/kms/verify", http.MethodPost},
 	"/platform.v1.KeyManagementService/GenerateRandom":         {"/api/v1/kms/random", http.MethodPost},
 	"/platform.v1.KeyManagementService/GenerateDataKey":        {"/api/v1/kms/data-keys", http.MethodPost},
 	"/platform.v1.KeyManagementService/GenerateWrappedDataKey": {"/api/v1/kms/data-keys/wrapped", http.MethodPost},
-
-	// VTPM Service — proto: pkg/api/grpc/proto/vtpm.proto
-	// The SDK test suite exercises instance lifecycle through the
-	// /platform.v1.VTPMService/* path forms below.
-	"/platform.v1.VTPMService/Create":        {"/api/v1/vtpm/instances", http.MethodPost},
-	"/platform.v1.VTPMService/Delete":        {"/api/v1/vtpm/instances", http.MethodDelete},
-	"/platform.v1.VTPMService/Start":         {"/api/v1/vtpm/instances/start", http.MethodPost},
-	"/platform.v1.VTPMService/Stop":          {"/api/v1/vtpm/instances/stop", http.MethodPost},
-	"/platform.v1.VTPMService/List":          {"/api/v1/vtpm/instances", http.MethodGet},
-	"/platform.v1.VTPMService/GetState":      {"/api/v1/vtpm/instances/state", http.MethodGet},
-	"/platform.v1.VTPMService/QuoteVTPM":     {"/api/v1/vtpm/quote", http.MethodPost},
-	"/platform.v1.VTPMService/SealVTPM":      {"/api/v1/vtpm/seal", http.MethodPost},
-	"/platform.v1.VTPMService/UnsealVTPM":    {"/api/v1/vtpm/unseal", http.MethodPost},
-	"/platform.v1.VTPMService/ExtendVTPMPCR": {"/api/v1/vtpm/pcrs/extend", http.MethodPost},
-	"/platform.v1.VTPMService/ReadVTPMPCR":   {"/api/v1/vtpm/pcrs", http.MethodGet},
+	// The batch operations and rewrap are the daemon REST server's routes
+	// (pkg/api/rest/kms_handlers.go); kms_batch.go reshapes their bodies.
+	"/platform.v1.KeyManagementService/BatchEncrypt": {"/api/v1/kms/batch-encrypt", http.MethodPost},
+	"/platform.v1.KeyManagementService/BatchDecrypt": {"/api/v1/kms/batch-decrypt", http.MethodPost},
+	"/platform.v1.KeyManagementService/Rewrap":       {"/api/v1/kms/rewrap", http.MethodPost},
 
 	// Physical TPM Service — proto: pkg/api/grpc/proto/tpm.proto
 	// Server registrations live in pkg/webservice/v1/rest/tpm/router.go
@@ -1015,123 +1413,125 @@ var grpcMethodToRESTMap = map[string]struct {
 	// the CLI gets 404 on /tpm/info etc. (the bug was: SDK called
 	// POST /platform.v1.TPMService/Info because no map entry existed,
 	// while the server only handles GET /api/v1/tpm/info).
-	"/platform.v1.TPMService/Info":                {"/api/v1/tpm/info", http.MethodGet},
-	"/platform.v1.TPMService/Provision":           {"/api/v1/tpm/provision", http.MethodPost},
-	"/platform.v1.TPMService/Clear":               {"/api/v1/tpm/clear", http.MethodPost},
-	"/platform.v1.TPMService/CreateEK":            {"/api/v1/tpm/ek", http.MethodPost},
-	"/platform.v1.TPMService/GetEK":               {"/api/v1/tpm/ek", http.MethodGet},
-	"/platform.v1.TPMService/DeleteEK":            {"/api/v1/tpm/ek", http.MethodDelete},
-	"/platform.v1.TPMService/GetEKCertificate":    {"/api/v1/tpm/ek/certificate", http.MethodGet},
-	"/platform.v1.TPMService/ImportEKCertificate": {"/api/v1/tpm/ek/certificate", http.MethodPost},
-	"/platform.v1.TPMService/CreateSRK":           {"/api/v1/tpm/srk", http.MethodPost},
-	"/platform.v1.TPMService/DeleteSRK":           {"/api/v1/tpm/srk", http.MethodDelete},
-	"/platform.v1.TPMService/CreateAK":            {"/api/v1/tpm/ak", http.MethodPost},
-	"/platform.v1.TPMService/GetAK":               {"/api/v1/tpm/ak", http.MethodGet},
-	"/platform.v1.TPMService/DeleteAK":            {"/api/v1/tpm/ak", http.MethodDelete},
-	"/platform.v1.TPMService/Seal":                {"/api/v1/tpm/seal", http.MethodPost},
-	"/platform.v1.TPMService/Unseal":              {"/api/v1/tpm/unseal", http.MethodPost},
-	"/platform.v1.TPMService/Quote":               {"/api/v1/tpm/quote", http.MethodPost},
-	"/platform.v1.TPMService/VerifyQuote":         {"/api/v1/tpm/quote/verify", http.MethodPost},
-	"/platform.v1.TPMService/GetEventLog":         {"/api/v1/tpm/eventlog", http.MethodGet},
-	"/platform.v1.TPMService/GetPCRs":             {"/api/v1/tpm/pcrs", http.MethodGet},
-	"/platform.v1.TPMService/DefineNVRAM":         {"/api/v1/tpm/nvram", http.MethodPost},
-	"/platform.v1.TPMService/ReadNVRAM":           {"/api/v1/tpm/nvram", http.MethodGet},
-	"/platform.v1.TPMService/WriteNVRAM":          {"/api/v1/tpm/nvram", http.MethodPut},
-	"/platform.v1.TPMService/UndefineNVRAM":       {"/api/v1/tpm/nvram", http.MethodDelete},
-	"/platform.v1.TPMService/GetRandom":           {"/api/v1/tpm/random", http.MethodPost},
+	"/platform.v1.TPMService/Info":                  {"/api/v1/tpm/info", http.MethodGet},
+	"/platform.v1.TPMService/Provision":             {"/api/v1/tpm/provision", http.MethodPost},
+	"/platform.v1.TPMService/Clear":                 {"/api/v1/tpm/clear", http.MethodPost},
+	"/platform.v1.TPMService/CreateEK":              {"/api/v1/tpm/ek", http.MethodPost},
+	"/platform.v1.TPMService/GetEK":                 {"/api/v1/tpm/ek", http.MethodGet},
+	"/platform.v1.TPMService/DeleteEK":              {"/api/v1/tpm/ek", http.MethodDelete},
+	"/platform.v1.TPMService/GetEKCertificate":      {"/api/v1/tpm/ek/certificate", http.MethodGet},
+	"/platform.v1.TPMService/ImportEKCertificate":   {"/api/v1/tpm/ek/certificate", http.MethodPost},
+	"/platform.v1.TPMService/CreateSRK":             {"/api/v1/tpm/srk", http.MethodPost},
+	"/platform.v1.TPMService/DeleteSRK":             {"/api/v1/tpm/srk", http.MethodDelete},
+	"/platform.v1.TPMService/CreateAK":              {"/api/v1/tpm/ak", http.MethodPost},
+	"/platform.v1.TPMService/GetAK":                 {"/api/v1/tpm/ak", http.MethodGet},
+	"/platform.v1.TPMService/DeleteAK":              {"/api/v1/tpm/ak", http.MethodDelete},
+	"/platform.v1.TPMService/Seal":                  {"/api/v1/tpm/seal", http.MethodPost},
+	"/platform.v1.TPMService/Unseal":                {"/api/v1/tpm/unseal", http.MethodPost},
+	"/platform.v1.TPMService/Quote":                 {"/api/v1/tpm/quote", http.MethodPost},
+	"/platform.v1.TPMService/VerifyQuote":           {"/api/v1/tpm/quote/verify", http.MethodPost},
+	"/platform.v1.TPMService/Certify":               {"/api/v1/tpm/certify", http.MethodPost},
+	"/platform.v1.TPMService/MakeCredential":        {"/api/v1/tpm/make-credential", http.MethodPost},
+	"/platform.v1.TPMService/ActivateCredential":    {"/api/v1/tpm/activate-credential", http.MethodPost},
+	"/platform.v1.TPMService/GetCapabilities":       {"/api/v1/tpm/capabilities", http.MethodGet},
+	"/platform.v1.TPMService/GetPlatformAttributes": {"/api/v1/tpm/platform", http.MethodGet},
+	"/platform.v1.TPMService/ExtendPCR":             {"/api/v1/tpm/pcrs/extend", http.MethodPost},
+	"/platform.v1.TPMService/GetEventLog":           {"/api/v1/tpm/eventlog", http.MethodGet},
+	"/platform.v1.TPMService/GetPCRs":               {"/api/v1/tpm/pcrs", http.MethodGet},
+	"/platform.v1.TPMService/DefineNVRAM":           {"/api/v1/tpm/nvram", http.MethodPost},
+	"/platform.v1.TPMService/GetRandom":             {"/api/v1/tpm/random", http.MethodPost},
 
-	// Device Service
-	"/platform.v1.DeviceService/CreateDevice":            {"/api/v1/devices", http.MethodPost},
-	"/platform.v1.DeviceService/DeleteDevice":            {"/api/v1/devices", http.MethodDelete},
-	"/platform.v1.DeviceService/ListDevices":             {"/api/v1/devices", http.MethodGet},
-	"/platform.v1.DeviceService/UpdateDevice":            {"/api/v1/devices", http.MethodPut},
-	"/platform.v1.DeviceService/CountDevices":            {"/api/v1/devices/count", http.MethodGet},
-	"/platform.v1.DeviceService/FindDeviceBySerial":      {"/api/v1/devices/by-serial", http.MethodGet},
-	"/platform.v1.DeviceService/ActivateDevice":          {"/api/v1/devices/activate", http.MethodPost},
-	"/platform.v1.DeviceService/CreateProfile":           {"/api/v1/device/profiles", http.MethodPost},
-	"/platform.v1.DeviceService/UpdateProfile":           {"/api/v1/device/profiles", http.MethodPut},
-	"/platform.v1.DeviceService/DeleteProfile":           {"/api/v1/device/profiles", http.MethodDelete},
-	"/platform.v1.DeviceService/ListProfiles":            {"/api/v1/device/profiles", http.MethodGet},
-	"/platform.v1.DeviceService/CountProfiles":           {"/api/v1/device/profiles/count", http.MethodGet},
-	"/platform.v1.DeviceService/FindProfileByMACAddress": {"/api/v1/device/profiles/by-mac", http.MethodGet},
-	"/platform.v1.DeviceService/FindProfileBySerial":     {"/api/v1/device/profiles/by-serial", http.MethodGet},
-	"/platform.v1.DeviceService/FindMatchingProfile":     {"/api/v1/device/profiles/match", http.MethodPost},
+	// Device Service. The item, lookup and nested-action routes live in
+	// templatedRouteTable; these are the collection, count and match routes.
+	// ActivateDevice targets the admin JSON route: /device/activate is the
+	// machine-facing mTLS route a device calls for itself.
+	"/platform.v1.DeviceService/CreateDevice":        {"/api/v1/devices", http.MethodPost},
+	"/platform.v1.DeviceService/ListDevices":         {"/api/v1/devices", http.MethodGet},
+	"/platform.v1.DeviceService/CountDevices":        {"/api/v1/devices/count", http.MethodGet},
+	"/platform.v1.DeviceService/ActivateDevice":      {"/api/v1/device/activate-json", http.MethodPost},
+	"/platform.v1.DeviceService/CreateProfile":       {"/api/v1/device/profiles", http.MethodPost},
+	"/platform.v1.DeviceService/ListProfiles":        {"/api/v1/device/profiles", http.MethodGet},
+	"/platform.v1.DeviceService/CountProfiles":       {"/api/v1/device/profiles/count", http.MethodGet},
+	"/platform.v1.DeviceService/FindMatchingProfile": {"/api/v1/device/profiles/match", http.MethodPost},
+	// A diskless node's per-boot routes. BootDelivery's identity is the
+	// connection's client certificate, so the request carries only evidence.
+	"/platform.v1.DeviceService/BootCertificate": {"/api/v1/device/boot/certificate", http.MethodPost},
+	"/platform.v1.DeviceService/BootDelivery":    {"/api/v1/device/boot", http.MethodPost},
 
 	// SDN Service
-	"/platform.v1.SDNService/CreateBridge":     {"/api/v1/sdn/bridges", http.MethodPost},
-	"/platform.v1.SDNService/DeleteBridge":     {"/api/v1/sdn/bridges", http.MethodDelete},
-	"/platform.v1.SDNService/ListBridges":      {"/api/v1/sdn/bridges", http.MethodGet},
-	"/platform.v1.SDNService/GetPortState":     {"/api/v1/sdn/ports/state", http.MethodGet},
-	"/platform.v1.SDNService/SetPortState":     {"/api/v1/sdn/ports/state", http.MethodPost},
-	"/platform.v1.SDNService/AddPort":          {"/api/v1/sdn/ports", http.MethodPost},
-	"/platform.v1.SDNService/DeletePort":       {"/api/v1/sdn/ports", http.MethodDelete},
-	"/platform.v1.SDNService/AddFlow":          {"/api/v1/sdn/flows", http.MethodPost},
-	"/platform.v1.SDNService/DeleteFlow":       {"/api/v1/sdn/flows", http.MethodDelete},
-	"/platform.v1.SDNService/ListFlows":        {"/api/v1/sdn/flows", http.MethodGet},
-	"/platform.v1.SDNService/ApplyPolicy":      {"/api/v1/sdn/policies/apply", http.MethodPost},
-	"/platform.v1.SDNService/ListPolicies":     {"/api/v1/sdn/policies", http.MethodGet},
-	"/platform.v1.SDNService/AuthenticatePort": {"/api/v1/sdn/ports/auth", http.MethodPost},
-	"/platform.v1.SDNService/RevokePortAuth":   {"/api/v1/sdn/ports/auth", http.MethodDelete},
+	// DeleteBridge, AddPort, DeletePort, AuthenticatePort and RevokePortAuth
+	// are templated in sdn.go.
+	"/platform.v1.SDNService/CreateBridge": {"/api/v1/sdn/bridges", http.MethodPost},
+	"/platform.v1.SDNService/ListBridges":  {"/api/v1/sdn/bridges", http.MethodGet},
+	"/platform.v1.SDNService/AddFlow":      {"/api/v1/sdn/flows", http.MethodPost},
+	"/platform.v1.SDNService/DeleteFlow":   {"/api/v1/sdn/flows", http.MethodDelete},
+	"/platform.v1.SDNService/ListFlows":    {"/api/v1/sdn/flows", http.MethodGet},
+	"/platform.v1.SDNService/ApplyPolicy":  {"/api/v1/sdn/policies", http.MethodPost},
+	"/platform.v1.SDNService/ListPolicies": {"/api/v1/sdn/policies", http.MethodGet},
 
-	// DNS Service
-	"/platform.v1.DNSService/AddRecord":    {"/api/v1/dns/records", http.MethodPost},
-	"/platform.v1.DNSService/DeleteRecord": {"/api/v1/dns/records", http.MethodDelete},
-	"/platform.v1.DNSService/GetRecord":    {"/api/v1/dns/records", http.MethodGet},
-	"/platform.v1.DNSService/ListRecords":  {"/api/v1/dns/records", http.MethodGet},
-	"/platform.v1.DNSService/Resolve":      {"/api/v1/dns/resolve", http.MethodGet},
-	"/platform.v1.DNSService/CreateZone":   {"/api/v1/dns/zones", http.MethodPost},
-	"/platform.v1.DNSService/DeleteZone":   {"/api/v1/dns/zones", http.MethodDelete},
-	"/platform.v1.DNSService/ListZones":    {"/api/v1/dns/zones", http.MethodGet},
+	// DNS Service. The record, resolve and zone-delete routes are templated
+	// in dns.go.
+	"/platform.v1.DNSService/CreateZone": {"/api/v1/dns/zones", http.MethodPost},
+	"/platform.v1.DNSService/ListZones":  {"/api/v1/dns/zones", http.MethodGet},
 
-	// Attestation Service
-	"/platform.v1.AttestationService/GetQuote":       {"/api/v1/attestation/quote", http.MethodPost},
-	"/platform.v1.AttestationService/VerifyQuote":    {"/api/v1/attestation/verify", http.MethodPost},
-	"/platform.v1.AttestationService/GetEK":          {"/api/v1/attestation/ek", http.MethodGet},
-	"/platform.v1.AttestationService/GetAK":          {"/api/v1/attestation/ak", http.MethodGet},
-	"/platform.v1.AttestationService/CreateAK":       {"/api/v1/attestation/ak", http.MethodPost},
-	"/platform.v1.AttestationService/ChallengeAK":    {"/api/v1/attestation/challenge", http.MethodPost},
-	"/platform.v1.AttestationService/VerifyChalleng": {"/api/v1/attestation/challenge/verify", http.MethodPost},
+	// Attestation Service. The keys are the rpcs attestation.proto declares;
+	// the routes are pkg/webservice/v1/rest/attestation/server_router.go's.
+	"/platform.v1.AttestationService/GetAttestationQuote":    {"/api/v1/attestation/quote", http.MethodPost},
+	"/platform.v1.AttestationService/VerifyAttestationQuote": {"/api/v1/attestation/quote/verify", http.MethodPost},
+	"/platform.v1.AttestationService/CollectHostAttestation": {"/api/v1/attestation/host", http.MethodPost},
 
-	// IDevID Service
-	"/platform.v1.IDevIDService/Generate":    {"/api/v1/idevid", http.MethodPost},
-	"/platform.v1.IDevIDService/GetInfo":     {"/api/v1/idevid/info", http.MethodGet},
-	"/platform.v1.IDevIDService/Delete":      {"/api/v1/idevid", http.MethodDelete},
-	"/platform.v1.IDevIDService/GetCSR":      {"/api/v1/idevid/csr", http.MethodGet},
-	"/platform.v1.IDevIDService/InstallCert": {"/api/v1/idevid/cert", http.MethodPost},
-	"/platform.v1.IDevIDService/GetCert":     {"/api/v1/idevid/cert", http.MethodGet},
-	"/platform.v1.IDevIDService/Exists":      {"/api/v1/idevid/exists", http.MethodGet},
+	// IDevID Service — the routes are pkg/webservice/v1/rest/idevid/router.go's.
+	// CreateLDevID is mapped in ldevid.go.
+	//
+	// Key delete is refused on every transport. DeleteIDevID and DeleteIAK
+	// go to the daemon listener's DELETE /api/v1/tpm/idevid and /tpm/iak
+	// (pkg/api/daemon/rest_idevid.go), which answer 412, the HTTP status of
+	// the gRPC class FailedPrecondition. The web service's DELETE
+	// /api/v1/idevid and /idevid/iak write that class as 400.
+	platformv1.IDevIDService_DeleteIDevID_FullMethodName:  {"/api/v1/tpm/idevid", http.MethodDelete},
+	platformv1.IDevIDService_DeleteIAK_FullMethodName:     {"/api/v1/tpm/iak", http.MethodDelete},
+	"/platform.v1.IDevIDService/GenerateIDevID":           {"/api/v1/idevid/generate", http.MethodPost},
+	"/platform.v1.IDevIDService/GetIDevIDInfo":            {"/api/v1/idevid/info", http.MethodGet},
+	"/platform.v1.IDevIDService/HasIDevID":                {"/api/v1/idevid/exists", http.MethodGet},
+	"/platform.v1.IDevIDService/CreateIDevIDCSR":          {"/api/v1/idevid/csr", http.MethodPost},
+	"/platform.v1.IDevIDService/InstallIDevIDCertificate": {"/api/v1/idevid/certificate", http.MethodPost},
+	"/platform.v1.IDevIDService/GetIDevIDCertificate":     {"/api/v1/idevid/certificate", http.MethodGet},
+	"/platform.v1.IDevIDService/DeleteIDevIDCertificate":  {"/api/v1/idevid/certificate", http.MethodDelete},
+	"/platform.v1.IDevIDService/GenerateIAK":              {"/api/v1/idevid/iak/generate", http.MethodPost},
+	"/platform.v1.IDevIDService/GetIAKInfo":               {"/api/v1/idevid/iak", http.MethodGet},
+	"/platform.v1.IDevIDService/HasIAK":                   {"/api/v1/idevid/iak/exists", http.MethodGet},
+	"/platform.v1.IDevIDService/CreateIAKCSR":             {"/api/v1/idevid/iak/csr", http.MethodPost},
+	"/platform.v1.IDevIDService/InstallIAKCertificate":    {"/api/v1/idevid/iak/certificate", http.MethodPost},
+	"/platform.v1.IDevIDService/GetIAKCertificate":        {"/api/v1/idevid/iak/certificate", http.MethodGet},
+	"/platform.v1.IDevIDService/DeleteIAKCertificate":     {"/api/v1/idevid/iak/certificate", http.MethodDelete},
+	"/platform.v1.IDevIDService/GetDeviceAttributes":      {"/api/v1/idevid/attributes", http.MethodGet},
+	"/platform.v1.IDevIDService/FlushTransientContexts":   {"/api/v1/idevid/flush", http.MethodPost},
+	"/platform.v1.IDevIDService/ActivateCredential":       {"/api/v1/idevid/activate-credential", http.MethodPost},
 
 	// Tenant Service
-	"/platform.v1.TenantService/CreateTenant":  {"/api/v1/tenants", http.MethodPost},
-	"/platform.v1.TenantService/DeleteTenant":  {"/api/v1/tenants", http.MethodDelete},
-	"/platform.v1.TenantService/ListTenants":   {"/api/v1/tenants", http.MethodGet},
-	"/platform.v1.TenantService/UpdateTenant":  {"/api/v1/tenants", http.MethodPut},
-	"/platform.v1.TenantService/SuspendTenant": {"/api/v1/tenants/suspend", http.MethodPost},
-	"/platform.v1.TenantService/ResumeTenant":  {"/api/v1/tenants/resume", http.MethodPost},
+	"/platform.v1.TenantService/CreateTenant": {"/api/v1/tenants", http.MethodPost},
+	"/platform.v1.TenantService/ListTenants":  {"/api/v1/tenants", http.MethodGet},
+	"/platform.v1.TenantService/Sync":         {"/api/v1/tenants/sync", http.MethodPost},
 
 	// PXE Service
 	"/platform.v1.PXEService/ListDevices":    {"/api/v1/pxe/devices", http.MethodGet},
 	"/platform.v1.PXEService/RegisterDevice": {"/api/v1/pxe/devices", http.MethodPost},
-	"/platform.v1.PXEService/UpdateState":    {"/api/v1/pxe/devices/state", http.MethodPut},
-	"/platform.v1.PXEService/Authorize":      {"/api/v1/pxe/devices/authorize", http.MethodPost},
-	"/platform.v1.PXEService/Quarantine":     {"/api/v1/pxe/devices/quarantine", http.MethodPost},
 	"/platform.v1.PXEService/GetStatus":      {"/api/v1/pxe/status", http.MethodGet},
 
-	// Switch Service
-	"/platform.v1.SwitchService/ListPorts":     {"/api/v1/switches/ports", http.MethodGet},
-	"/platform.v1.SwitchService/GetPortStatus": {"/api/v1/switches/ports/status", http.MethodGet},
-	"/platform.v1.SwitchService/SetPortVLAN":   {"/api/v1/switches/ports/vlan", http.MethodPost},
-	"/platform.v1.SwitchService/EnablePort":    {"/api/v1/switches/ports/enable", http.MethodPost},
-	"/platform.v1.SwitchService/DisablePort":   {"/api/v1/switches/ports/disable", http.MethodPost},
+	// Switch Service routes are templated: see switches.go.
 
 	// Compute Service
 	"/platform.v1.ComputeService/CreateContainer":  {"/api/v1/compute/containers", http.MethodPost},
-	"/platform.v1.ComputeService/DeleteContainer":  {"/api/v1/compute/containers", http.MethodDelete},
-	"/platform.v1.ComputeService/StartContainer":   {"/api/v1/compute/containers/start", http.MethodPost},
-	"/platform.v1.ComputeService/StopContainer":    {"/api/v1/compute/containers/stop", http.MethodPost},
 	"/platform.v1.ComputeService/ListContainers":   {"/api/v1/compute/containers", http.MethodGet},
-	"/platform.v1.ComputeService/AttestContainer":  {"/api/v1/compute/containers/attest", http.MethodPost},
 	"/platform.v1.ComputeService/GetContainerLogs": {"/api/v1/compute/containers/logs", http.MethodGet},
+	// ListVMs sends its whole request (states, selector, pagination) as the
+	// JSON body, which both REST servers decode on this GET.
+	"/platform.v1.ComputeService/ListVMs": {"/api/v1/compute/vms", http.MethodGet},
+	// CreateVM sends its whole request (config and start) as the JSON body.
+	"/platform.v1.ComputeService/CreateVM": {"/api/v1/compute/vms", http.MethodPost},
+	// PrepareMigration sends its whole request (VM name, mode and spec) as
+	// the JSON body; the receiver it stands up has no id until it answers.
+	"/platform.v1.ComputeService/PrepareMigration": {"/api/v1/compute/migrations/prepare", http.MethodPost},
 
 	// Ceremony Service — proto: pkg/api/grpc/proto/ceremony.proto
 	// Server registrations live in pkg/api/daemon/ceremony_rest.go.
@@ -1156,9 +1556,9 @@ var grpcMethodToRESTMap = map[string]struct {
 	"/platform.v1.EABService/CleanupExpiredCredentials": {"/api/v1/eab/credentials/cleanup", http.MethodPost},
 
 	// FIDO2 Service — proto: pkg/api/grpc/proto/fido2.proto
+	// WaitDevice and Info name the device or the timeout in the URL and live in
+	// templatedRouteTable (phase35.go).
 	"/platform.v1.FIDO2Service/ListDevices":  {"/api/v1/fido2/devices", http.MethodGet},
-	"/platform.v1.FIDO2Service/WaitDevice":   {"/api/v1/fido2/devices/wait", http.MethodPost},
-	"/platform.v1.FIDO2Service/Info":         {"/api/v1/fido2/info", http.MethodGet},
 	"/platform.v1.FIDO2Service/Register":     {"/api/v1/fido2/register", http.MethodPost},
 	"/platform.v1.FIDO2Service/Authenticate": {"/api/v1/fido2/authenticate", http.MethodPost},
 
@@ -1180,12 +1580,9 @@ var grpcMethodToRESTMap = map[string]struct {
 	"/platform.v1.GatewayService/GetBGPStatus":          {"/api/v1/gateway/bgp/status", http.MethodGet},
 	"/platform.v1.GatewayService/ListBGPPeers":          {"/api/v1/gateway/bgp/peers", http.MethodGet},
 	"/platform.v1.GatewayService/AnnouncePrefix":        {"/api/v1/gateway/bgp/prefixes", http.MethodPost},
-	"/platform.v1.GatewayService/WithdrawPrefix":        {"/api/v1/gateway/bgp/prefixes", http.MethodDelete},
 	"/platform.v1.GatewayService/ListAnnouncedPrefixes": {"/api/v1/gateway/bgp/prefixes", http.MethodGet},
-	"/platform.v1.GatewayService/ListIPAMPools":         {"/api/v1/gateway/ipam/pools", http.MethodGet},
-	"/platform.v1.GatewayService/AllocateIP":            {"/api/v1/gateway/ipam/allocations", http.MethodPost},
-	"/platform.v1.GatewayService/ReleaseIP":             {"/api/v1/gateway/ipam/allocations", http.MethodDelete},
-	"/platform.v1.GatewayService/ListAllocations":       {"/api/v1/gateway/ipam/allocations", http.MethodGet},
+	// The IPAM verbs route to the full /sdn/gateway/ipam surface; see
+	// gateway_ipam.go.
 
 	// Gateway perf verification — server registrations live in
 	// pkg/api/rest/gateway_perf_handlers.go::registerPerfRoutes.
@@ -1204,49 +1601,38 @@ var grpcMethodToRESTMap = map[string]struct {
 
 	// Invitation Service — proto: pkg/api/grpc/proto/invitation.proto
 	// Server registrations live in pkg/webservice/v1/rest/invitation/.
-	// Detail/revoke routes carry {id}/{token} in the URL; the SDK
-	// adapter posts the body and the server extracts vars.
-	"/platform.v1.InvitationService/CreateInvitation":     {"/api/v1/invitations", http.MethodPost},
-	"/platform.v1.InvitationService/GetInvitationByToken": {"/api/v1/invitations/by-token", http.MethodGet},
-	"/platform.v1.InvitationService/ListInvitations":      {"/api/v1/invitations", http.MethodGet},
-	"/platform.v1.InvitationService/RevokeInvitation":     {"/api/v1/invitations/revoke", http.MethodPost},
-	"/platform.v1.InvitationService/AcceptInvitation":     {"/api/v1/invitations/accept", http.MethodPost},
-	"/platform.v1.InvitationService/DeleteInvitation":     {"/api/v1/invitations", http.MethodDelete},
+	// The item routes, which carry {id} or {token} in the URL, are in
+	// templatedRouteTable.
+	"/platform.v1.InvitationService/CreateInvitation": {"/api/v1/invitations", http.MethodPost},
+	"/platform.v1.InvitationService/ListInvitations":  {"/api/v1/invitations", http.MethodGet},
+	"/platform.v1.InvitationService/AcceptInvitation": {"/api/v1/invitations/accept", http.MethodPost},
 
 	// LUKS Service — proto: pkg/api/grpc/proto/luks.proto
-	// Server registrations live in pkg/api/daemon/luks_rest_handlers.go.
-	"/platform.v1.LUKSService/Status":           {"/api/v1/luks/status", http.MethodGet},
-	"/platform.v1.LUKSService/ListSlots":        {"/api/v1/luks/slots", http.MethodGet},
-	"/platform.v1.LUKSService/Info":             {"/api/v1/luks/info", http.MethodGet},
+	// Server registrations live in pkg/api/daemon/luks_rest.go. Status,
+	// ListSlots and Info carry ?device= and live in templatedRouteTable
+	// (luks.go).
 	"/platform.v1.LUKSService/EnrollPassphrase": {"/api/v1/luks/enroll/passphrase", http.MethodPost},
 	"/platform.v1.LUKSService/EnrollFIDO2":      {"/api/v1/luks/enroll/fido2", http.MethodPost},
 	"/platform.v1.LUKSService/EnrollTPM":        {"/api/v1/luks/enroll/tpm", http.MethodPost},
 	"/platform.v1.LUKSService/EnrollRecovery":   {"/api/v1/luks/enroll/recovery", http.MethodPost},
-	"/platform.v1.LUKSService/RemoveKey":        {"/api/v1/luks/slots", http.MethodDelete},
-	"/platform.v1.LUKSService/TestUnlock":       {"/api/v1/luks/test-unlock", http.MethodPost},
-	"/platform.v1.LUKSService/ChangePassphrase": {"/api/v1/luks/passphrase", http.MethodPut},
+	"/platform.v1.LUKSService/RemoveKey":        {"/api/v1/luks/keys/remove", http.MethodPost},
+	"/platform.v1.LUKSService/TestUnlock":       {"/api/v1/luks/keys/test-unlock", http.MethodPost},
+	"/platform.v1.LUKSService/ChangePassphrase": {"/api/v1/luks/passphrase/change", http.MethodPost},
 
 	// Overlay Service — proto: pkg/api/grpc/proto/overlay.proto
 	// Server registrations live in pkg/webservice/v1/rest/overlay/.
 	"/platform.v1.OverlayService/ListVTEPs":        {"/api/v1/overlay/vteps", http.MethodGet},
 	"/platform.v1.OverlayService/CreateVNI":        {"/api/v1/overlay/vnis", http.MethodPost},
-	"/platform.v1.OverlayService/DeleteVNI":        {"/api/v1/overlay/vnis", http.MethodDelete},
 	"/platform.v1.OverlayService/ListVNIs":         {"/api/v1/overlay/vnis", http.MethodGet},
 	"/platform.v1.OverlayService/ListTunnels":      {"/api/v1/overlay/tunnels", http.MethodGet},
 	"/platform.v1.OverlayService/GetTunnelStats":   {"/api/v1/overlay/tunnels/stats", http.MethodGet},
 	"/platform.v1.OverlayService/ListRemoteMACs":   {"/api/v1/overlay/macs", http.MethodGet},
-	"/platform.v1.OverlayService/ForgetMAC":        {"/api/v1/overlay/macs", http.MethodDelete},
 	"/platform.v1.OverlayService/GetOverlayStatus": {"/api/v1/overlay/status", http.MethodGet},
 
 	// PIV Service — proto: pkg/api/grpc/proto/piv.proto
+	// Every other PIV method names a slot or a device in the URL and lives in
+	// templatedRouteTable (phase35.go).
 	"/platform.v1.PIVService/ListDevices": {"/api/v1/piv/devices", http.MethodGet},
-	"/platform.v1.PIVService/ListSlots":   {"/api/v1/piv/slots", http.MethodGet},
-	"/platform.v1.PIVService/SlotInfo":    {"/api/v1/piv/slots/info", http.MethodGet},
-	"/platform.v1.PIVService/Generate":    {"/api/v1/piv/generate", http.MethodPost},
-	"/platform.v1.PIVService/Import":      {"/api/v1/piv/import", http.MethodPost},
-	"/platform.v1.PIVService/Sign":        {"/api/v1/piv/sign", http.MethodPost},
-	"/platform.v1.PIVService/Attest":      {"/api/v1/piv/attest", http.MethodPost},
-	"/platform.v1.PIVService/Reset":       {"/api/v1/piv/reset", http.MethodPost},
 
 	// Config Delivery (provisioning) — proto: pkg/api/grpc/proto/configdelivery.proto
 	// Server registrations live in pkg/api/daemon/rest_service.go::SetConfigDeliveryHandler.
@@ -1257,12 +1643,9 @@ var grpcMethodToRESTMap = map[string]struct {
 	"/platform.v1.ConfigDeliveryService/SignDigest":   {"/api/v1/provisioning/sign", http.MethodPost},
 	"/platform.v1.ConfigDeliveryService/ListSessions": {"/api/v1/provisioning/sessions", http.MethodGet},
 
-	// Provisioning Gateway — proto: pkg/api/grpc/proto/provisioning.proto
-	// Server registrations live in pkg/api/daemon/rest_service.go.
-	"/platform.v1.ProvisioningGateway/RegisterPXEDevice":     {"/api/v1/provisioning/pxe/register", http.MethodPost},
-	"/platform.v1.ProvisioningGateway/GetBootConfig":         {"/api/v1/provisioning/boot-config", http.MethodGet},
-	"/platform.v1.ProvisioningGateway/ReportDeviceState":     {"/api/v1/provisioning/devices/state", http.MethodPost},
-	"/platform.v1.ProvisioningGateway/NotifyInstallComplete": {"/api/v1/provisioning/devices/install-complete", http.MethodPost},
+	// Provisioning Gateway — proto: pkg/api/grpc/proto/provisioning.proto.
+	// Every RPC names a device by MAC, so all four are templated routes
+	// (provisioning_gateway.go).
 
 	// Cluster Service — proto: pkg/api/grpc/proto/cluster.proto
 	// REST routes are best-effort; gRPC/Unix remain the canonical
@@ -1324,6 +1707,7 @@ var httpStatusToGRPCMap = map[int]codes.Code{
 	http.StatusForbidden:           codes.PermissionDenied,
 	http.StatusNotFound:            codes.NotFound,
 	http.StatusConflict:            codes.AlreadyExists,
+	http.StatusPreconditionFailed:  codes.FailedPrecondition,
 	http.StatusTooManyRequests:     codes.ResourceExhausted,
 	http.StatusInternalServerError: codes.Internal,
 	http.StatusNotImplemented:      codes.Unimplemented,
@@ -1344,7 +1728,7 @@ func translateErrorToGRPC(err error) error {
 		if !ok {
 			code = codes.Unknown
 		}
-		return status.Error(code, e.Body)
+		return status.Error(code, restErrorMessage(e.Body))
 
 	case ErrClientClosed:
 		return status.Error(codes.Unavailable, e.Error())
@@ -1361,6 +1745,20 @@ func translateErrorToGRPC(err error) error {
 	default:
 		return status.Error(codes.Unknown, err.Error())
 	}
+}
+
+// restErrorMessage returns the message a REST error body carries. platformd
+// handlers answer a failure as {"error":"<message>"}; the status message is
+// that bare message, the same one the QUIC and MCP transports return. A body
+// of any other shape is returned unchanged.
+func restErrorMessage(body string) string {
+	var payload struct {
+		Error string `json:"error"`
+	}
+	if err := json.Unmarshal([]byte(body), &payload); err != nil || payload.Error == "" {
+		return body
+	}
+	return payload.Error
 }
 
 // Ensure Adapter implements transport.Adapter interface.

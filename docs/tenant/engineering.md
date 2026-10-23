@@ -94,6 +94,13 @@ shape. Check the unit and the field before writing a quota value.
 limit alone rather than zeroing it. Zero is a real value meaning "no capacity",
 which is why the `Changed` check is necessary.
 
+**An update never touches usage.** `Manager.UpdateQuotas` applies each section
+through `SetLimits`, which copies the `Max*` fields and leaves the `Used*`
+counters alone; usage moves only through `Reserve` and `Release`.
+`TenantGRPCServer.UpdateQuotas` starts from `GetQuotas` and overwrites only the
+limits the request carries, so an absent section keeps its limits and
+`MaxDiskGB`, which the gRPC message cannot carry, keeps its value.
+
 Exceeding a quota is `ErrQuotaExceeded`; hitting a hard resource ceiling is
 `ErrResourceLimitReached`.
 
@@ -152,6 +159,17 @@ filter applied at read time.
 
 The transition table and `HasCapacity` are pure functions and are the cheapest
 things in the feature to test exhaustively; do so before touching either.
+
+The integration suite tests the one `platformd` the devcontainer runner starts,
+through the endpoints it exports (`TENANT_*_ENDPOINT`, `TENANT_SOCKET_PATH`) and
+the mTLS trio (`PLATFORM_CLIENT_CERT`, `PLATFORM_CLIENT_KEY`,
+`PLATFORM_CA_CERT`). A test never starts a QuicBaaS node of its own: a second
+node in the container binds the ports the daemon already holds and tests nothing
+the daemon serves (#541). `pkg/arch/integration_daemon_guard_test.go` fails
+`make test` on any reference to the SDK's `NewServer` under `test/integration/`.
+`TestTenantGRPCService` (`grpc_adapter_test.go`) checks the TenantService
+protobuf contract over the gRPC adapter's connection and deletes the tenants it
+creates in `t.Cleanup`.
 
 **Known repo-wide gap:** no `CommandDefinition` type exists in this repository
 (grepped 2026-08-18), so the CLI parity requirement in

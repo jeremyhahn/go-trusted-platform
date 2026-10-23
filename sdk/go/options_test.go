@@ -145,6 +145,74 @@ func TestWithEmbeddedServices(t *testing.T) {
 	})
 }
 
+func TestOptions_ClientTLSConfig(t *testing.T) {
+	t.Run("defaults to TLS 1.3 when no config is set", func(t *testing.T) {
+		cfg := NewOptions().ClientTLSConfig()
+
+		if cfg.MinVersion != tls.VersionTLS13 {
+			t.Errorf("MinVersion = %x, want TLS 1.3", cfg.MinVersion)
+		}
+	})
+
+	t.Run("clones the caller config and raises the minimum version", func(t *testing.T) {
+		callerCfg := &tls.Config{MinVersion: tls.VersionTLS12, ServerName: "original"}
+		opts := NewOptions(WithTLSConfig(callerCfg))
+
+		cfg := opts.ClientTLSConfig()
+
+		if cfg == callerCfg {
+			t.Fatal("ClientTLSConfig() must return a clone, not the caller's config")
+		}
+		if cfg.MinVersion != tls.VersionTLS13 {
+			t.Errorf("MinVersion = %x, want TLS 1.3", cfg.MinVersion)
+		}
+		if callerCfg.MinVersion != tls.VersionTLS12 {
+			t.Error("ClientTLSConfig() must not modify the caller's config")
+		}
+		if cfg.ServerName != "original" {
+			t.Errorf("ServerName = %q, want %q", cfg.ServerName, "original")
+		}
+	})
+
+	t.Run("TLSServerName overrides the server name", func(t *testing.T) {
+		opts := NewOptions(
+			WithTLSConfig(&tls.Config{ServerName: "original"}),
+			WithTLSServerName("platform.example"),
+		)
+
+		if got := opts.ClientTLSConfig().ServerName; got != "platform.example" {
+			t.Errorf("ServerName = %q, want %q", got, "platform.example")
+		}
+	})
+}
+
+func TestOptions_CredentialOptions(t *testing.T) {
+	t.Run("empty when nothing is set", func(t *testing.T) {
+		if got := NewOptions().CredentialOptions(); len(got) != 0 {
+			t.Errorf("CredentialOptions() = %v, want none", got)
+		}
+	})
+
+	t.Run("names every option that is set", func(t *testing.T) {
+		opts := NewOptions(
+			WithBearerToken("token"),
+			WithTLSConfig(&tls.Config{}),
+			WithTLSServerName("platform.example"),
+		)
+
+		got := opts.CredentialOptions()
+		want := []string{"BearerToken", "TLSConfig", "TLSServerName"}
+		if len(got) != len(want) {
+			t.Fatalf("CredentialOptions() = %v, want %v", got, want)
+		}
+		for i := range want {
+			if got[i] != want[i] {
+				t.Errorf("CredentialOptions()[%d] = %q, want %q", i, got[i], want[i])
+			}
+		}
+	})
+}
+
 func TestOptions_HasEmbeddedServices(t *testing.T) {
 	t.Run("returns true when set", func(t *testing.T) {
 		opts := NewOptions(WithEmbeddedServices(&struct{}{}))

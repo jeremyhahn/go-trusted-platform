@@ -16,8 +16,8 @@ package quic
 import (
 	"testing"
 
-	quicapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 )
 
 // TestLDevIDQUICMapping verifies the LDevID create RPC routes onto the
@@ -30,8 +30,8 @@ func TestLDevIDQUICMapping(t *testing.T) {
 	if !ok {
 		t.Fatalf("CreateLDevID not mapped to a QUIC opcode")
 	}
-	if opcode != quicapi.OpTPM2Category {
-		t.Fatalf("CreateLDevID opcode = 0x%02X, want OpTPM2Category (0x%02X)", opcode, quicapi.OpTPM2Category)
+	if opcode != quicwire.OpTPM2Category {
+		t.Fatalf("CreateLDevID opcode = 0x%02X, want OpTPM2Category (0x%02X)", opcode, quicwire.OpTPM2Category)
 	}
 
 	if !isCategoryOpcode(opcode) {
@@ -42,8 +42,8 @@ func TestLDevIDQUICMapping(t *testing.T) {
 	if !ok {
 		t.Fatalf("CreateLDevID has no category sub-opcode mapping")
 	}
-	if sub != quicapi.SubOpTPM2LDevIDCSR {
-		t.Fatalf("CreateLDevID sub-opcode = 0x%02X, want SubOpTPM2LDevIDCSR (0x%02X)", sub, quicapi.SubOpTPM2LDevIDCSR)
+	if sub != quicwire.SubOpTPM2LDevIDCSR {
+		t.Fatalf("CreateLDevID sub-opcode = 0x%02X, want SubOpTPM2LDevIDCSR (0x%02X)", sub, quicwire.SubOpTPM2LDevIDCSR)
 	}
 }
 
@@ -63,12 +63,12 @@ func TestLDevIDQUICWireCompat(t *testing.T) {
 		Overwrite:    true,
 	}
 
-	data, err := quicapi.EncodePayload(req)
+	data, err := quicwire.EncodePayload(req)
 	if err != nil {
 		t.Fatalf("encode request: %v", err)
 	}
 	var gotReq platformv1.CreateLDevIDRequest
-	if err := quicapi.DecodePayload(data, &gotReq); err != nil {
+	if err := quicwire.DecodePayload(data, &gotReq); err != nil {
 		t.Fatalf("decode request: %v", err)
 	}
 	if gotReq.GetHandle() != req.GetHandle() || gotReq.GetProfile() != req.GetProfile() ||
@@ -85,12 +85,12 @@ func TestLDevIDQUICWireCompat(t *testing.T) {
 		CsrPem:         []byte("CSR"),
 		CertificatePem: []byte("CERT"),
 	}
-	rd, err := quicapi.EncodePayload(resp)
+	rd, err := quicwire.EncodePayload(resp)
 	if err != nil {
 		t.Fatalf("encode response: %v", err)
 	}
 	var gotResp platformv1.CreateLDevIDResponse
-	if err := quicapi.DecodePayload(rd, &gotResp); err != nil {
+	if err := quicwire.DecodePayload(rd, &gotResp); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
 	if !gotResp.GetStatus().GetSuccess() || string(gotResp.GetCsrPem()) != "CSR" ||

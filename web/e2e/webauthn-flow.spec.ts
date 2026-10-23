@@ -55,7 +55,7 @@ test.describe('WebAuthn Full Flow Integration', () => {
   // TODO: Enable when backend infrastructure is available for CI
   test.skip('should complete full registration flow with virtual authenticator', async ({ page }) => {
     // Generate unique username for this test
-    const username = `testuser_${Date.now()}`;
+    const username = `testuser_${Date.now()}@example.com`;
 
     // Navigate to registration page
     await page.goto('/auth/webauthn?status=not_registered');
@@ -64,7 +64,7 @@ test.describe('WebAuthn Full Flow Integration', () => {
     await expect(page.locator('h2')).toContainText('Create Account');
 
     // Fill in username
-    await page.fill('input[placeholder="Enter your username"]', username);
+    await page.fill('input[placeholder="Enter your email"]', username);
 
     // Click register button
     await page.click('button:has-text("Register")');
@@ -98,11 +98,11 @@ test.describe('WebAuthn Full Flow Integration', () => {
   // Skip by default - requires backend with TPM/HSM infrastructure
   // TODO: Enable when backend infrastructure is available for CI
   test.skip('should complete full login flow after registration', async ({ page }) => {
-    const username = `testuser_login_${Date.now()}`;
+    const username = `testuser_login_${Date.now()}@example.com`;
 
     // First, register
     await page.goto('/auth/webauthn?status=not_registered');
-    await page.fill('input[placeholder="Enter your username"]', username);
+    await page.fill('input[placeholder="Enter your email"]', username);
     await page.click('button:has-text("Register")');
 
     // Wait for registration to complete
@@ -115,7 +115,7 @@ test.describe('WebAuthn Full Flow Integration', () => {
     await page.goto('/auth/webauthn?status=registered');
     await expect(page.locator('h2')).toContainText('Login');
 
-    await page.fill('input[placeholder="Enter your username"]', username);
+    await page.fill('input[placeholder="Enter your email"]', username);
     await page.click('button:has-text("Log In")');
 
     // Wait for result
@@ -139,15 +139,15 @@ test.describe('WebAuthn Full Flow Integration', () => {
     await page.click('button:has-text("Register")');
 
     // Should show validation error
-    await expect(page.getByText(/please enter a username/i)).toBeVisible();
+    await expect(page.getByText(/please enter your email address/i)).toBeVisible();
   });
 
   test('should handle backend connection errors gracefully', async ({ page }) => {
     // This test verifies error handling when backend is unavailable
-    const username = `testuser_error_${Date.now()}`;
+    const username = `testuser_error_${Date.now()}@example.com`;
 
     await page.goto('/auth/webauthn?status=not_registered');
-    await page.fill('input[placeholder="Enter your username"]', username);
+    await page.fill('input[placeholder="Enter your email"]', username);
     await page.click('button:has-text("Register")');
 
     // Wait for response - WebAuthn requires browser interaction so we just verify
@@ -267,7 +267,7 @@ test.describe('Backend API Health', () => {
     try {
       const response = await request.post('https://localhost:8443/api/v1/webauthn/registration/begin', {
         ignoreHTTPSErrors: true,
-        data: { username: 'test' },
+        data: { email: 'test@example.com' },
         timeout: 5000,
       });
 

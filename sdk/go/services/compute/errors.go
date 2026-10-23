@@ -72,6 +72,34 @@ func (e *ErrRebootVMFailed) Unwrap() error {
 	return e.Cause
 }
 
+// ErrSuspendVMFailed is returned when suspending a VM fails.
+type ErrSuspendVMFailed struct {
+	ID    string
+	Cause error
+}
+
+func (e *ErrSuspendVMFailed) Error() string {
+	return fmt.Sprintf("failed to suspend VM %s: %v", e.ID, e.Cause)
+}
+
+func (e *ErrSuspendVMFailed) Unwrap() error {
+	return e.Cause
+}
+
+// ErrResumeVMFailed is returned when resuming a VM fails.
+type ErrResumeVMFailed struct {
+	ID    string
+	Cause error
+}
+
+func (e *ErrResumeVMFailed) Error() string {
+	return fmt.Sprintf("failed to resume VM %s: %v", e.ID, e.Cause)
+}
+
+func (e *ErrResumeVMFailed) Unwrap() error {
+	return e.Cause
+}
+
 // ErrDeleteVMFailed is returned when deleting a VM fails.
 type ErrDeleteVMFailed struct {
 	ID    string
@@ -138,6 +166,36 @@ func (e *ErrMigrateVMFailed) Error() string {
 }
 
 func (e *ErrMigrateVMFailed) Unwrap() error {
+	return e.Cause
+}
+
+// ErrPrepareMigrationFailed is returned when the destination cannot prepare
+// to receive a migrating VM.
+type ErrPrepareMigrationFailed struct {
+	VMName string
+	Cause  error
+}
+
+func (e *ErrPrepareMigrationFailed) Error() string {
+	return fmt.Sprintf("failed to prepare migration of VM %s: %v", e.VMName, e.Cause)
+}
+
+func (e *ErrPrepareMigrationFailed) Unwrap() error {
+	return e.Cause
+}
+
+// ErrFinalizeMigrationFailed is returned when finalizing a received migration
+// fails.
+type ErrFinalizeMigrationFailed struct {
+	ReceiverID string
+	Cause      error
+}
+
+func (e *ErrFinalizeMigrationFailed) Error() string {
+	return fmt.Sprintf("failed to finalize migration receiver %s: %v", e.ReceiverID, e.Cause)
+}
+
+func (e *ErrFinalizeMigrationFailed) Unwrap() error {
 	return e.Cause
 }
 
@@ -244,6 +302,21 @@ func (e *ErrListSnapshotsFailed) Error() string {
 }
 
 func (e *ErrListSnapshotsFailed) Unwrap() error {
+	return e.Cause
+}
+
+// ErrGetSnapshotFailed is returned when reading one snapshot fails.
+type ErrGetSnapshotFailed struct {
+	VMID       string
+	SnapshotID string
+	Cause      error
+}
+
+func (e *ErrGetSnapshotFailed) Error() string {
+	return fmt.Sprintf("failed to get snapshot %s for VM %s: %v", e.SnapshotID, e.VMID, e.Cause)
+}
+
+func (e *ErrGetSnapshotFailed) Unwrap() error {
 	return e.Cause
 }
 

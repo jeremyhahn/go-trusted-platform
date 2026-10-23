@@ -15,6 +15,7 @@ package container
 
 import (
 	"fmt"
+	"strconv"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/ipxe"
 )
@@ -152,6 +153,61 @@ func (e ErrUnknownMediaSet) Error() string {
 	}
 	return "bootstrap container: " + e.MAC + " is " + e.Architecture + " and no media set is that architecture's default"
 }
+
+// ErrDisklessUnavailable is a diskless node whose media set was built without
+// the diskless root (netboot media build without --diskless). Booting it
+// anyway would install it to a disk it is not meant to have.
+type ErrDisklessUnavailable struct {
+	MAC      string
+	MediaSet string
+}
+
+func (e ErrDisklessUnavailable) Error() string {
+	return "bootstrap container: " + e.MAC + " boots diskless and media set " + e.MediaSet + " has no diskless root (rebuild the netboot media with --diskless)"
+}
+
+// ErrNotDisklessNBD is a request for the installed UKI of a node whose boot
+// model is not diskless-nbd: it has no export, so no UKI there to serve.
+type ErrNotDisklessNBD struct {
+	MAC       string
+	BootModel string
+}
+
+func (e ErrNotDisklessNBD) Error() string {
+	model := e.BootModel
+	if model == "" {
+		model = "disk"
+	}
+	return "bootstrap container: " + e.MAC + " boots " + model + ", not diskless-nbd, and has no installed UKI to serve"
+}
+
+// ErrNBDCredentials is an NBD export server certificate or key that cannot
+// be loaded. Without them no diskless-nbd node can attach its root.
+type ErrNBDCredentials struct {
+	CertFile string
+	KeyFile  string
+	Err      error
+}
+
+func (e ErrNBDCredentials) Error() string {
+	return "bootstrap container: nbd certificate " + e.CertFile + " and key " + e.KeyFile + ": " + e.Err.Error()
+}
+
+func (e ErrNBDCredentials) Unwrap() error { return e.Err }
+
+// ErrNBDServerAddress is an NBD listener address from which no address a
+// diskless-nbd node can dial follows, so that node cannot be told where its
+// root is.
+type ErrNBDServerAddress struct {
+	ListenAddr string
+	Err        error
+}
+
+func (e ErrNBDServerAddress) Error() string {
+	return "bootstrap container: nbd.listen_addr " + strconv.Quote(e.ListenAddr) + " names no address a diskless-nbd node can dial: " + e.Err.Error()
+}
+
+func (e ErrNBDServerAddress) Unwrap() error { return e.Err }
 
 // ErrNetbootMedia is a netboot media build whose index is unreadable or
 // names something the build does not hold.

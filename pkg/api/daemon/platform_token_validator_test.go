@@ -27,6 +27,8 @@ import (
 
 	jose "github.com/go-jose/go-jose/v4"
 	"github.com/golang-jwt/jwt/v5"
+	quicbaas "github.com/jeremyhahn/go-quicbaas/sdk/go"
+	sdkiam "github.com/jeremyhahn/go-quicbaas/sdk/go/client/iam"
 )
 
 const (
@@ -71,13 +73,19 @@ func (k *ptIssuerKey) jwksHandler(t *testing.T) *httptest.Server {
 
 func (k *ptIssuerKey) sign(t *testing.T, sub, tid string, scp []string) string {
 	t.Helper()
-	now := time.Now()
+	return k.signExpiring(t, sub, tid, scp, time.Now().Add(10*time.Minute))
+}
+
+// signExpiring mints a token like sign whose exp is exp, issued ten minutes
+// before it, so a past exp yields an expired but otherwise valid token.
+func (k *ptIssuerKey) signExpiring(t *testing.T, sub, tid string, scp []string, exp time.Time) string {
+	t.Helper()
 	m := jwt.MapClaims{
 		"iss": testPTIssuer,
 		"aud": []string{testPTAudience},
 		"sub": sub,
-		"exp": now.Add(10 * time.Minute).Unix(),
-		"iat": now.Unix(),
+		"exp": exp.Unix(),
+		"iat": exp.Add(-10 * time.Minute).Unix(),
 		"jti": "jti-" + sub,
 	}
 	if tid != "" {
@@ -98,6 +106,13 @@ func (k *ptIssuerKey) sign(t *testing.T, sub, tid string, scp []string) string {
 
 func newSharedValidator(t *testing.T, jwksURL string, allowBearer bool) *platformTokenValidator {
 	t.Helper()
+	return newSharedValidatorWithPEP(t, jwksURL, allowBearer, allowingPEP())
+}
+
+// newSharedValidatorWithPEP builds the shared validator with pep deciding
+// CheckPermission.
+func newSharedValidatorWithPEP(t *testing.T, jwksURL string, allowBearer bool, pep quicbaas.IAMPEPClient) *platformTokenValidator {
+	t.Helper()
 	v, err := newPlatformTokenValidator(PlatformTokenConfig{
 		Enabled:     true,
 		Issuer:      testPTIssuer,
@@ -107,11 +122,18 @@ func newSharedValidator(t *testing.T, jwksURL string, allowBearer bool) *platfor
 		// Offline mode: these tests exercise signature / scope projection, not
 		// online liveness, so no introspection endpoint is required.
 		AuthzMode: "offline",
-	}, nil)
+	}, pep, nil)
 	if err != nil {
 		t.Fatalf("newPlatformTokenValidator: %v", err)
 	}
 	return v
+}
+
+// allowingPEP is a policy enforcement point that grants every check.
+func allowingPEP() *mockSDKPEPClient {
+	return &mockSDKPEPClient{checkFunc: func(context.Context, *sdkiam.CheckRequest) (*sdkiam.CheckResponse, error) {
+		return &sdkiam.CheckResponse{Allowed: true}, nil
+	}}
 }
 
 func TestPlatformTokenValidator_AuthorizeToken_Valid(t *testing.T) {
@@ -203,6 +225,82 @@ func TestPlatformTokenValidator_CheckPermission(t *testing.T) {
 	}
 }
 
+// TestPlatformTokenValidator_CheckPermissionThroughPEP pins #926: an empty
+// permission is refused, the PEP decides a scoped permission for the token's
+// principal, and a PEP that cannot answer — or is absent — fails closed.
+func TestPlatformTokenValidator_CheckPermissionThroughPEP(t *testing.T) {
+	key := newPTIssuerKey(t)
+	srv := key.jwksHandler(t)
+	tok := key.sign(t, "user-1", "tenant-a", []string{"dns:write"})
+
+	t.Run("empty resource is denied", func(t *testing.T) {
+		v := newSharedValidator(t, srv.URL, true)
+		allowed, err := v.CheckPermission(context.Background(), tok, "", "write")
+		var want ErrEmptyPermission
+		if allowed || !errors.As(err, &want) {
+			t.Fatalf("empty resource: allowed=%v err=%v, want ErrEmptyPermission", allowed, err)
+		}
+	})
+	t.Run("empty action is denied", func(t *testing.T) {
+		v := newSharedValidator(t, srv.URL, true)
+		allowed, err := v.CheckPermission(context.Background(), tok, "dns", " ")
+		var want ErrEmptyPermission
+		if allowed || !errors.As(err, &want) {
+			t.Fatalf("empty action: allowed=%v err=%v, want ErrEmptyPermission", allowed, err)
+		}
+	})
+	t.Run("PEP is asked for the token principal", func(t *testing.T) {
+		var got *sdkiam.CheckRequest
+		pep := &mockSDKPEPClient{checkFunc: func(_ context.Context, req *sdkiam.CheckRequest) (*sdkiam.CheckResponse, error) {
+			got = req
+			return &sdkiam.CheckResponse{Allowed: true}, nil
+		}}
+		v := newSharedValidatorWithPEP(t, srv.URL, true, pep)
+		allowed, err := v.CheckPermission(context.Background(), tok, "dns", "write")
+		if err != nil || !allowed {
+			t.Fatalf("granted permission: allowed=%v err=%v", allowed, err)
+		}
+		if got == nil || got.Subject.ID != "user-1" || got.Subject.TenantID != "tenant-a" || got.Resource != "dns" || got.Action != "write" {
+			t.Fatalf("PEP request = %+v, want user-1@tenant-a dns:write", got)
+		}
+	})
+	t.Run("PEP denial denies", func(t *testing.T) {
+		v := newSharedValidatorWithPEP(t, srv.URL, true, &mockSDKPEPClient{})
+		allowed, err := v.CheckPermission(context.Background(), tok, "dns", "write")
+		if err != nil || allowed {
+			t.Fatalf("PEP denial: allowed=%v err=%v", allowed, err)
+		}
+	})
+	t.Run("PEP error fails closed", func(t *testing.T) {
+		pepErr := errors.New("pep unreachable")
+		pep := &mockSDKPEPClient{checkFunc: func(context.Context, *sdkiam.CheckRequest) (*sdkiam.CheckResponse, error) {
+			return nil, pepErr
+		}}
+		v := newSharedValidatorWithPEP(t, srv.URL, true, pep)
+		allowed, err := v.CheckPermission(context.Background(), tok, "dns", "write")
+		var want ErrIAMPermissionCheckFailed
+		if allowed || !errors.As(err, &want) || !errors.Is(err, pepErr) {
+			t.Fatalf("PEP error: allowed=%v err=%v, want ErrIAMPermissionCheckFailed", allowed, err)
+		}
+	})
+	t.Run("no PEP fails closed", func(t *testing.T) {
+		v := newSharedValidatorWithPEP(t, srv.URL, true, nil)
+		allowed, err := v.CheckPermission(context.Background(), tok, "dns", "write")
+		var want ErrPEPClientNotAvailable
+		if allowed || !errors.As(err, &want) {
+			t.Fatalf("no PEP: allowed=%v err=%v, want ErrPEPClientNotAvailable", allowed, err)
+		}
+	})
+	t.Run("token without a tenant is denied", func(t *testing.T) {
+		v := newSharedValidator(t, srv.URL, true)
+		untenanted := key.sign(t, "user-1", "", []string{"dns:write"})
+		allowed, err := v.CheckPermission(context.Background(), untenanted, "dns", "write")
+		if err != nil || allowed {
+			t.Fatalf("untenanted token: allowed=%v err=%v", allowed, err)
+		}
+	})
+}
+
 func TestPlatformTokenValidator_GetTokenClaims(t *testing.T) {
 	key := newPTIssuerKey(t)
 	srv := key.jwksHandler(t)
@@ -219,10 +317,10 @@ func TestPlatformTokenValidator_GetTokenClaims(t *testing.T) {
 }
 
 func TestNewPlatformTokenValidator_MissingConfig(t *testing.T) {
-	if _, err := newPlatformTokenValidator(PlatformTokenConfig{Enabled: true}, nil); err == nil {
+	if _, err := newPlatformTokenValidator(PlatformTokenConfig{Enabled: true}, nil, nil); err == nil {
 		t.Fatal("expected error for missing issuer")
 	}
-	if _, err := newPlatformTokenValidator(PlatformTokenConfig{Enabled: true, Issuer: testPTIssuer}, nil); err == nil {
+	if _, err := newPlatformTokenValidator(PlatformTokenConfig{Enabled: true, Issuer: testPTIssuer}, nil, nil); err == nil {
 		t.Fatal("expected error for missing JWKS URL")
 	}
 }
@@ -238,13 +336,6 @@ func TestPlatformTokenValidator_ErrorBranches(t *testing.T) {
 	}
 	if _, err := v.CheckPermission(context.Background(), "garbage", "dns", "write"); err == nil {
 		t.Error("CheckPermission should error on invalid token")
-	}
-
-	// CheckPermission with empty resource/action allows (no scope required).
-	tok := key.sign(t, "user-1", "", nil)
-	allowed, err := v.CheckPermission(context.Background(), tok, "", "")
-	if err != nil || !allowed {
-		t.Errorf("empty resource/action should allow: allowed=%v err=%v", allowed, err)
 	}
 
 	// AuthorizeToken surfaces validation errors on the bearer path.

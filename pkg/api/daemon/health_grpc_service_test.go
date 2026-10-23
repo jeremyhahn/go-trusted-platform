@@ -20,6 +20,7 @@ import (
 	"errors"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
@@ -597,157 +598,167 @@ func TestHealthGRPCService_Watch(t *testing.T) {
 		require.Error(t, err)
 	})
 
+	// The subtests below wait for Watch's one-second poll ticker. They run
+	// in synctest bubbles, where a tick costs no wall-clock time (#284).
 	t.Run("sends NOT_SERVING on shutdown", func(t *testing.T) {
-		svc := createTestHealthService(t)
-		svc.RegisterService("test-service", HealthServiceStatusServing)
+		synctest.Test(t, func(t *testing.T) {
+			svc := createTestHealthService(t)
+			svc.RegisterService("test-service", HealthServiceStatusServing)
 
-		stream := newMockWatchServer()
+			stream := newMockWatchServer()
 
-		// Start watch in goroutine and shutdown after some time
-		// done joins this goroutine before the subtest returns. The await
-		// helpers call t.Errorf, and calling that after a subtest has
-		// completed panics the whole package — so the goroutine must not
-		// outlive it.
-		done := make(chan struct{})
-		go func() {
-			defer close(done)
-			// Act once the initial status has been delivered.
-			stream.awaitResponses(t, 1)
-			svc.Shutdown()
-		}()
+			// Start watch in goroutine and shutdown after some time
+			// done joins this goroutine before the subtest returns. The await
+			// helpers call t.Errorf, and calling that after a subtest has
+			// completed panics the whole package — so the goroutine must not
+			// outlive it.
+			done := make(chan struct{})
+			go func() {
+				defer close(done)
+				// Act once the initial status has been delivered.
+				stream.awaitResponses(t, 1)
+				svc.Shutdown()
+			}()
 
-		err := svc.Watch(&grpc_health_v1.HealthCheckRequest{
-			Service: "test-service",
-		}, stream)
-		<-done
+			err := svc.Watch(&grpc_health_v1.HealthCheckRequest{
+				Service: "test-service",
+			}, stream)
+			<-done
 
-		assert.NoError(t, err)
-		responses := stream.getResponses()
-		assert.NotEmpty(t, responses)
-		// Last response should be NOT_SERVING
-		lastResp := responses[len(responses)-1]
-		assert.Equal(t, grpc_health_v1.HealthCheckResponse_NOT_SERVING, lastResp.Status)
+			assert.NoError(t, err)
+			responses := stream.getResponses()
+			assert.NotEmpty(t, responses)
+			// Last response should be NOT_SERVING
+			lastResp := responses[len(responses)-1]
+			assert.Equal(t, grpc_health_v1.HealthCheckResponse_NOT_SERVING, lastResp.Status)
+		})
 	})
 
 	t.Run("sends update when status changes", func(t *testing.T) {
-		svc := createTestHealthService(t)
-		svc.RegisterService("test-service", HealthServiceStatusServing)
+		synctest.Test(t, func(t *testing.T) {
+			svc := createTestHealthService(t)
+			svc.RegisterService("test-service", HealthServiceStatusServing)
 
-		stream := newMockWatchServer()
+			stream := newMockWatchServer()
 
-		// Change status and then cancel
-		// done joins this goroutine before the subtest returns. The await
-		// helpers call t.Errorf, and calling that after a subtest has
-		// completed panics the whole package — so the goroutine must not
-		// outlive it.
-		done := make(chan struct{})
-		go func() {
-			defer close(done)
-			// Wait for the initial status, change it, then wait for the change
-			// to be DELIVERED. The 1200ms this replaces was waiting for the
-			// service's poll ticker to notice; the second response is that
-			// same event, observed instead of estimated.
-			stream.awaitResponses(t, 1)
-			svc.SetServingStatus("test-service", HealthServiceStatusNotServing)
-			stream.awaitResponses(t, 2)
-			stream.cancel()
-		}()
+			// Change status and then cancel
+			// done joins this goroutine before the subtest returns. The await
+			// helpers call t.Errorf, and calling that after a subtest has
+			// completed panics the whole package — so the goroutine must not
+			// outlive it.
+			done := make(chan struct{})
+			go func() {
+				defer close(done)
+				// Wait for the initial status, change it, then wait for the change
+				// to be DELIVERED. The 1200ms this replaces was waiting for the
+				// service's poll ticker to notice; the second response is that
+				// same event, observed instead of estimated.
+				stream.awaitResponses(t, 1)
+				svc.SetServingStatus("test-service", HealthServiceStatusNotServing)
+				stream.awaitResponses(t, 2)
+				stream.cancel()
+			}()
 
-		_ = svc.Watch(&grpc_health_v1.HealthCheckRequest{
-			Service: "test-service",
-		}, stream)
-		<-done
+			_ = svc.Watch(&grpc_health_v1.HealthCheckRequest{
+				Service: "test-service",
+			}, stream)
+			<-done
 
-		responses := stream.getResponses()
-		assert.NotEmpty(t, responses)
-		// Should have at least initial status and one update
-		if len(responses) >= 2 {
-			assert.Equal(t, grpc_health_v1.HealthCheckResponse_SERVING, responses[0].Status)
-			// Later response should be NOT_SERVING
-			found := false
-			for _, r := range responses {
-				if r.Status == grpc_health_v1.HealthCheckResponse_NOT_SERVING {
-					found = true
-					break
+			responses := stream.getResponses()
+			assert.NotEmpty(t, responses)
+			// Should have at least initial status and one update
+			if len(responses) >= 2 {
+				assert.Equal(t, grpc_health_v1.HealthCheckResponse_SERVING, responses[0].Status)
+				// Later response should be NOT_SERVING
+				found := false
+				for _, r := range responses {
+					if r.Status == grpc_health_v1.HealthCheckResponse_NOT_SERVING {
+						found = true
+						break
+					}
 				}
+				assert.True(t, found, "expected to find NOT_SERVING status after change")
 			}
-			assert.True(t, found, "expected to find NOT_SERVING status after change")
-		}
+		})
 	})
 
 	t.Run("returns error on send failure during status change", func(t *testing.T) {
-		svc := createTestHealthService(t)
-		svc.RegisterService("test-service", HealthServiceStatusServing)
+		synctest.Test(t, func(t *testing.T) {
+			svc := createTestHealthService(t)
+			svc.RegisterService("test-service", HealthServiceStatusServing)
 
-		stream := newMockWatchServer()
+			stream := newMockWatchServer()
 
-		// Change status then set send error, then cancel
-		// done joins this goroutine before the subtest returns. The await
-		// helpers call t.Errorf, and calling that after a subtest has
-		// completed panics the whole package — so the goroutine must not
-		// outlive it.
-		done := make(chan struct{})
-		go func() {
-			defer close(done)
-			// Act once the initial status has been delivered.
-			stream.awaitResponses(t, 1)
-			// Install the send error BEFORE changing the status, then change it.
-			//
-			// Watch only sends when the status DIFFERS from the last one it
-			// sent (health_grpc_service.go: `if resp.Status != lastStatus`), so
-			// a status change is the only thing that produces a send here. The
-			// sleeps this replaces installed the error after the change and
-			// hoped 100ms was short enough that the change had not been
-			// delivered yet — if it had been, no further send would ever occur
-			// and the 1500ms wait was watching for something that could not
-			// happen. Ordering the two explicitly removes the race instead of
-			// timing it.
-			before := stream.sendAttempts()
-			stream.setSendError(errors.New("send failed on status change"))
-			svc.SetServingStatus("test-service", HealthServiceStatusNotServing)
+			// Change status then set send error, then cancel
+			// done joins this goroutine before the subtest returns. The await
+			// helpers call t.Errorf, and calling that after a subtest has
+			// completed panics the whole package — so the goroutine must not
+			// outlive it.
+			done := make(chan struct{})
+			go func() {
+				defer close(done)
+				// Act once the initial status has been delivered.
+				stream.awaitResponses(t, 1)
+				// Install the send error BEFORE changing the status, then change it.
+				//
+				// Watch only sends when the status DIFFERS from the last one it
+				// sent (health_grpc_service.go: `if resp.Status != lastStatus`), so
+				// a status change is the only thing that produces a send here. The
+				// sleeps this replaces installed the error after the change and
+				// hoped 100ms was short enough that the change had not been
+				// delivered yet — if it had been, no further send would ever occur
+				// and the 1500ms wait was watching for something that could not
+				// happen. Ordering the two explicitly removes the race instead of
+				// timing it.
+				before := stream.sendAttempts()
+				stream.setSendError(errors.New("send failed on status change"))
+				svc.SetServingStatus("test-service", HealthServiceStatusNotServing)
 
-			// A failed send appends no response, so only the attempt count
-			// records that the error was reached.
-			stream.awaitSendAttempts(t, before+1)
-			stream.cancel()
-		}()
+				// A failed send appends no response, so only the attempt count
+				// records that the error was reached.
+				stream.awaitSendAttempts(t, before+1)
+				stream.cancel()
+			}()
 
-		err := svc.Watch(&grpc_health_v1.HealthCheckRequest{
-			Service: "test-service",
-		}, stream)
-		<-done
+			err := svc.Watch(&grpc_health_v1.HealthCheckRequest{
+				Service: "test-service",
+			}, stream)
+			<-done
 
-		// Either returns send error or context cancel - both are acceptable
-		_ = err
+			// Either returns send error or context cancel - both are acceptable
+			_ = err
+		})
 	})
 
 	t.Run("returns error on send failure during shutdown", func(t *testing.T) {
-		svc := createTestHealthService(t)
-		svc.RegisterService("test-service", HealthServiceStatusServing)
+		synctest.Test(t, func(t *testing.T) {
+			svc := createTestHealthService(t)
+			svc.RegisterService("test-service", HealthServiceStatusServing)
 
-		stream := newMockWatchServer()
+			stream := newMockWatchServer()
 
-		// Start watch, wait for initial send, set error, then shutdown
-		// done joins this goroutine before the subtest returns. The await
-		// helpers call t.Errorf, and calling that after a subtest has
-		// completed panics the whole package — so the goroutine must not
-		// outlive it.
-		done := make(chan struct{})
-		go func() {
-			defer close(done)
-			// Cancel once the initial status has actually been delivered,
-			// rather than after a duration chosen to be probably long enough.
-			stream.awaitResponses(t, 1)
-			stream.setSendError(errors.New("send failed on shutdown"))
-			svc.Shutdown()
-		}()
+			// Start watch, wait for initial send, set error, then shutdown
+			// done joins this goroutine before the subtest returns. The await
+			// helpers call t.Errorf, and calling that after a subtest has
+			// completed panics the whole package — so the goroutine must not
+			// outlive it.
+			done := make(chan struct{})
+			go func() {
+				defer close(done)
+				// Cancel once the initial status has actually been delivered,
+				// rather than after a duration chosen to be probably long enough.
+				stream.awaitResponses(t, 1)
+				stream.setSendError(errors.New("send failed on shutdown"))
+				svc.Shutdown()
+			}()
 
-		err := svc.Watch(&grpc_health_v1.HealthCheckRequest{
-			Service: "test-service",
-		}, stream)
-		<-done
+			err := svc.Watch(&grpc_health_v1.HealthCheckRequest{
+				Service: "test-service",
+			}, stream)
+			<-done
 
-		require.Error(t, err)
+			require.Error(t, err)
+		})
 	})
 }
 

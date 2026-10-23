@@ -20,6 +20,8 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
+	platform "github.com/jeremyhahn/go-trusted-platform/sdk/go"
+	pivsvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/piv"
 )
 
 // NewCommand creates the piv root command.
@@ -73,6 +75,18 @@ Examples:
 	cmd.AddCommand(newResetCommand(getFlags))
 
 	return cmd
+}
+
+const pivsvcName = "piv"
+
+// newService returns the PIV service backed by the client's active transport,
+// or ErrServiceUnavailable when the client exposes no PIV service.
+func newService(client platform.Client) (pivsvc.Service, error) {
+	rpc := client.PIV()
+	if rpc == nil {
+		return nil, platform.ErrServiceUnavailable{Service: pivsvcName}
+	}
+	return pivsvc.NewGRPCClientFromClient(rpc), nil
 }
 
 // algorithms maps CLI --algorithm values to SDK enum values.

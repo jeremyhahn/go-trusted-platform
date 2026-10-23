@@ -1,10 +1,13 @@
 # X10 Lab Validation Runbook — Hardware Offload / 400G
 
+> **Status: REFERENCE** · Last verified: 2026-10-15
+> The lab runbook for offload and datapath measurements.
+
 Concise procedure for validating OVS hardware flow offload and recording
 datapath performance numbers on the X10 mini cluster. Companion to
 [hw-offload.md](./hw-offload.md) (bring-up detail) and the
 `platformctl sdn gateway perf` command
-([operations.md](../gateway/operations.md#performance-verification)).
+([user.md](../../gateway/user.md#measuring-the-datapath)).
 
 > **Written ahead of hardware availability.** The current lab NICs on the
 > X10 minis are 1/10G Intel parts with no tc-flower offload engine —
@@ -21,10 +24,10 @@ datapath performance numbers on the X10 mini cluster. Companion to
   ConnectX-7 / QSFP-DD DACs; the X10 minis' onboard NICs cannot carry
   this test).
 - Kernel config verified on BOTH nodes — run the checks from
-  [hw-offload.md §Kernel config](./hw-offload.md) (the installer's
-  `CheckHWOffloadSupport` in `pkg/installer/hwoffload.go` performs the
-  same symbol scan at provisioning time and its report is in the install
-  log).
+  [hw-offload.md §Kernel config](./hw-offload.md#kernel-config) on both.
+  `CheckHWOffloadSupport` in `pkg/installer/hwoffload.go` implements the
+  same symbol scan, but no installer step calls it, so the install log
+  carries no report.
 - A traffic generator peer: T-Rex (stateful profiles preferred for CT
   validation) or kernel `pktgen` for raw packet-rate ceilings.
 - platformd running on the device-under-test (DUT) with the `sdn:`
@@ -127,5 +130,5 @@ Flows not offloading (`dpctl/dump-flows type=offloaded` empty):
 ## 7. Related
 
 - [hw-offload.md](./hw-offload.md) — requirements, bring-up, verification detail
-- [operations.md §Performance Verification](../gateway/operations.md#performance-verification) — the perf CLI
+- [user.md §Measuring the datapath](../../gateway/user.md#measuring-the-datapath) — the perf CLI
 - [firewall/performance.md](../firewall/performance.md) — ct pipeline characteristics

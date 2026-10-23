@@ -17,6 +17,7 @@ import (
 	"sync/atomic"
 
 	quicbaas "github.com/jeremyhahn/go-quicbaas/sdk/go"
+	"github.com/jeremyhahn/go-quicbaas/sdk/go/secret"
 )
 
 // Client wraps the go-quicbaas SDK client for platform SDK consumers.
@@ -167,6 +168,83 @@ func (c *Client) DEK() quicbaas.DEKClient {
 	return c.sdk.Security().DEK()
 }
 
+// CertificateExt returns the certificate extensions client: TCG identity
+// issuance and the TrustedCA primitives.
+func (c *Client) CertificateExt() quicbaas.CertificateExtensions {
+	return c.sdk.Security().CertificateExt()
+}
+
+// ACME returns the ACME service: the RFC 8555 protocol client with ARI,
+// cross-signing and TPM enrollment, and the server-side challenge verifiers.
+func (c *Client) ACME() quicbaas.ACMEService {
+	return c.sdk.Security().ACME()
+}
+
+// Trust returns the trust service: DANE TLSA publication, cross-signed
+// root pools and AIA-driven root import.
+func (c *Client) Trust() quicbaas.TrustService {
+	return c.sdk.Security().Trust()
+}
+
+// Attestation returns the attestation service: verification of hardware
+// attestation statements and certificate chains, the image endorsement
+// check and container attestation.
+func (c *Client) Attestation() quicbaas.AttestationService {
+	return c.sdk.Security().Attestation()
+}
+
+// SSH returns the SSH key, known-hosts and authorized-keys client.
+func (c *Client) SSH() quicbaas.SSHService {
+	return c.sdk.Security().SSH()
+}
+
+// Barrier returns the storage barrier client: initialize, unseal, seal,
+// status, rekey and Shamir share management.
+func (c *Client) Barrier() (quicbaas.QRDBBarrierClient, error) {
+	barrier, err := c.sdk.Security().Barrier()
+	if err != nil {
+		return nil, ErrServiceUnavailable{Service: "barrier", Cause: err}
+	}
+	return barrier, nil
+}
+
+// Ceremony returns the initialization ceremony client: Shamir M-of-N share
+// enrollment, officer certificate claims, share claims and CSR signing.
+func (c *Client) Ceremony() (quicbaas.QRDBCeremonyClient, error) {
+	ceremony, err := c.sdk.Security().Ceremony()
+	if err != nil {
+		return nil, ErrServiceUnavailable{Service: "ceremony", Cause: err}
+	}
+	return ceremony, nil
+}
+
+// Credentials returns the named-credential client, including versioned
+// rotation.
+func (c *Client) Credentials() (quicbaas.QRDBCredentialClient, error) {
+	credentials, err := c.sdk.Security().Credentials()
+	if err != nil {
+		return nil, ErrServiceUnavailable{Service: "credentials", Cause: err}
+	}
+	return credentials, nil
+}
+
+// SealStore returns the seal store client.
+func (c *Client) SealStore() (quicbaas.QRDBSealStoreClient, error) {
+	sealStore, err := c.sdk.Security().SealStore()
+	if err != nil {
+		return nil, ErrServiceUnavailable{Service: "seal store", Cause: err}
+	}
+	return sealStore, nil
+}
+
+// SecretResolver returns the secret resolver registry that dispatches
+// credential://, kms:// and remote-kms:// references. It is nil when the
+// SDK client was built without a secret registry, as a pure network client
+// is.
+func (c *Client) SecretResolver() *secret.ResolverRegistry {
+	return c.sdk.Security().SecretResolver()
+}
+
 // =============================================================================
 // Identity and Access Management
 // =============================================================================
@@ -247,6 +325,96 @@ func (c *Client) Embedding() quicbaas.EmbeddingClient {
 // Ollama returns the Ollama service client for local LLM/embedding operations.
 func (c *Client) Ollama() quicbaas.OllamaClient {
 	return c.sdk.Ollama()
+}
+
+// RAG returns the retrieval-augmented generation service client.
+func (c *Client) RAG() quicbaas.RAGClient {
+	return c.sdk.RAG()
+}
+
+// =============================================================================
+// Agentic Operations
+// =============================================================================
+
+// Orchestrator returns the orchestrator service client for agent fleet
+// management: agents, sessions, tasks, jobs and workflows.
+func (c *Client) Orchestrator() quicbaas.OrchestratorClient {
+	return c.sdk.Orchestrator()
+}
+
+// Project returns the project service client for agentic project management.
+func (c *Client) Project() quicbaas.ProjectClient {
+	return c.sdk.Project()
+}
+
+// Account returns the account service client for the per-tenant pool of
+// provider accounts an agent session can be spawned against.
+func (c *Client) Account() quicbaas.AccountClient {
+	return c.sdk.Account()
+}
+
+// SDLC returns the SDLC module client: forge bindings, project onboarding,
+// conformance checks and deliveries.
+func (c *Client) SDLC() quicbaas.SDLCClient {
+	return c.sdk.SDLC()
+}
+
+// =============================================================================
+// Barrier Ceremony and Tenant Management
+// =============================================================================
+
+// The ceremony client of BarrierCeremonyMgmt() is the one Ceremony() returns:
+// go-quicbaas routes both to the same QRDB ceremony client.
+
+// CustodianGroup returns the client for the custodian groups used in Shamir
+// secret sharing.
+func (c *Client) CustodianGroup() (quicbaas.QRDBCustodianGroupClient, error) {
+	custodianGroup, err := c.sdk.BarrierCeremonyMgmt().CustodianGroup()
+	if err != nil {
+		return nil, ErrServiceUnavailable{Service: "custodian group", Cause: err}
+	}
+	return custodianGroup, nil
+}
+
+// Share returns the client for submitting and tracking Shamir shares.
+func (c *Client) Share() (quicbaas.QRDBShareClient, error) {
+	share, err := c.sdk.BarrierCeremonyMgmt().Share()
+	if err != nil {
+		return nil, ErrServiceUnavailable{Service: "share", Cause: err}
+	}
+	return share, nil
+}
+
+// Tenant returns the tenant client: tenant lifecycle and per-tenant barriers.
+func (c *Client) Tenant() (quicbaas.QRDBTenantClient, error) {
+	tenant, err := c.sdk.TenantMgmtService().Tenant()
+	if err != nil {
+		return nil, ErrServiceUnavailable{Service: "tenant", Cause: err}
+	}
+	return tenant, nil
+}
+
+// =============================================================================
+// Service Registry
+// =============================================================================
+
+// Discovery returns the service-discovery registry: register, renew,
+// deregister, resolve and watch, built on QRDB leases, watches and KV.
+func (c *Client) Discovery() (*quicbaas.DiscoveryRegistry, error) {
+	discovery, err := c.sdk.Discovery()
+	if err != nil {
+		return nil, ErrServiceUnavailable{Service: "discovery", Cause: err}
+	}
+	return discovery, nil
+}
+
+// DataStore returns a QRDB key-value store suitable for constructing DAOs.
+func (c *Client) DataStore() (quicbaas.QRDBKVStore, error) {
+	dataStore, err := c.sdk.DataStore()
+	if err != nil {
+		return nil, ErrServiceUnavailable{Service: "data store", Cause: err}
+	}
+	return dataStore, nil
 }
 
 // =============================================================================

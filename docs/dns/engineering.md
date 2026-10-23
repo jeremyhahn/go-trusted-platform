@@ -77,30 +77,17 @@ An empty forwarder list now renders no `forward` directive. It used to render
 `forward .` with no upstream, which is a CoreDNS setup error — a latent defect
 that never fired because every caller checked the length first.
 
-## 3. Two known defects — read before trusting DNSSEC
+## 3. Known defects — read before trusting DNSSEC
 
-Both are in the code today and both are security-relevant. They are recorded
-here rather than left as comments an implementer will not find.
+### 3.1 The quicbaas DNSSEC key store publishes the KMS key
 
-### 3.1 The quicbaas DNSSEC key store generates a local placeholder key pair
-
-`pkg/dns/dnssec_keystore_quicbaas.go:597` carries the comment:
-
-> *"Note: This generates a local placeholder key pair. The actual public key
-> should come from the QuicBaaS KMS."*
-
-The function generates a key locally (RSA or Ed25519 by algorithm) and encodes
-it to PEM. A paired failure path at `:138` wraps *"failed to generate local
-public key placeholder"*.
-
-**A DNSSEC signing key that is generated locally rather than fetched from the
-KMS is not managed by the KMS**: it is not rotated by it, not audited by it, and
-not protected by it. Zones signed with such a key validate — that is the
-hazard — while the operator believes the key lives somewhere it does not.
-
-The other key store backends (`XKMSKeyStore`, `SDKKeyStore`) do not have this
-comment. **Whether the quicbaas backend should be blocked until this is fixed
-is an owner decision**, raised in the migration report and not made here.
+Fixed. `QuicBaaSKMSKeyStore.generateKey`
+(`pkg/dns/dnssec_keystore_quicbaas.go`) used to publish a DNSKEY for a key pair
+it generated locally, which did not match the KMS key that signs. It now
+fetches the public half of the generated key from the KMS (`GetPublicKey`,
+DER SubjectPublicKeyInfo) and builds the DNSKEY from that. The DNSKEY is built
+before the key metadata is stored, and any failure after the KMS key exists
+deletes it; a failed delete is reported as `CleanupError`.
 
 ### 3.2 Domain ownership verification is not implemented
 
@@ -148,16 +135,19 @@ Read §3.2 before setting `allow-external-registration`.
 **DNS64 (`dns64:`)**: `enabled`, `prefix`, `translate-all`, `allow-ipv4`,
 `servers`. See §6a.
 
-**DNSSEC (`dnssec:`)**: `enabled`, `algorithm`, `auto-generate`, `key-reuse`,
-`ksk`, `lifetime`, `max-age`, `nsec-mode`, `nsec3-iterations`, `nsec3-salt`.
+**DNSSEC (`dnssec:`)**: `enabled`, `default-key`, `ksk` and `zsk` (each `key`,
+`lifetime`, `ttl`), `signature-expiry`, `nsec-mode`, `nsec3-iterations`,
+`nsec3-salt`.
 
 `DNSSECConfig.Validate()` is called from `dns.Run` before the server starts, and
 again from each `NewDNSSECService*` constructor for a config that reaches the
-service by another route. It refuses `nsec-mode: nsec3` under FIPS activation
+service by another route. With DNSSEC enabled it refuses a `ksk` or `zsk`
+`lifetime` that is not a positive duration (`365d`, `720h`) with
+`ErrInvalidKeyLifetime`; `DNSSECKeyConfig.LifetimeDuration` returns the value,
+but nothing schedules a rollover from it yet. It refuses `nsec-mode: nsec3` under FIPS activation
 with `ErrFIPSNSEC3Unsupported` — RFC 5155 defines only a SHA-1 NSEC3 hash, which
 `crypto/sha1` refuses by panicking under `fips140=only`. The check is a runtime
-one, not build-tagged: doc 04 ruling 1 makes activation a deployment decision,
-so an untagged binary can still be run under `fips140=only`. `validateForMode`
+one, not build-tagged ([FIPS mode](../fips/architecture.md)). `validateForMode`
 takes the mode as a parameter so both states are testable from one binary —
 GODEBUG is fixed before `main`. See [dnssec.md](dnssec.md) for the operator-facing
 consequence.
@@ -265,8 +255,9 @@ that route to no translator.
    (`owner.go`) compares the WHOLE query name against the record's owner,
    resolved from the relative or fully qualified stored form, case- and
    trailing-dot insensitively (RFC 4343 §3). There is no wildcard synthesis:
-   a `*` owner matches the literal name `*.<zone>`. SOA and RRSIG answer at the
-   zone apex only. Restoring first-label matching re-opens #182, where a zone
+   a `*` owner matches the literal name `*.<zone>`. The SOA answers at the
+   zone apex only; an RRSIG answers at, and transfers under, the owner it
+   signs (`RRSIGRecord.Name`, set by `rrsigToEntity`). Restoring first-label matching re-opens #182, where a zone
    holding `www` answered `www.anything.example.com`.
 7. **A query with no matching record gets the right KIND of negative answer.**
    `buildResponse` (`plugin.go`) sends NXDOMAIN when `zoneHasName` reports the
@@ -340,13 +331,15 @@ practice — there is no DNS CLI at all ([cli.md](cli.md)).
 ## 8. Observability
 
 `OpDNSGetMetrics` (`0x2C`) exposes DNS metrics over QUIC; there is no REST or
-gRPC equivalent. `OpDNSFlushCache` (`0x2D`) is likewise QUIC-only. Both are
-operational verbs that an operator on REST cannot reach.
+gRPC equivalent, so an operator on REST cannot reach it. There is no cache
+flush on any transport: `OpDNSFlushCache` (`0x2D`) only ever answered
+`StatusNotImplemented` and was retired with `OpDNSUpdateConfig` (`0x2B`) in
+#317 ([api.md](api.md) §2).
 
 ## 9. Related
 
 - [architecture.md](architecture.md) · [api.md](api.md) · [cli.md](cli.md) · [user.md](user.md)
-- Deep dives carried over and not re-verified in this pass:
+- Deep dives:
   [dnssec.md](dnssec.md), [dnssec-rollover.md](dnssec-rollover.md),
   [dane.md](dane.md), [dot-doh.md](dot-doh.md),
   [dynamic-dns.md](dynamic-dns.md), [acme-integration.md](acme-integration.md),

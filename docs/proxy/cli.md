@@ -86,7 +86,6 @@ configuration and bumps the config version.**
 | `--backend-zone` | string | `""` | no | SDN zone the backend pool lives in |
 | `--require-attestation` | bool | `false` | no | Require fresh workload attestation |
 | `--attestation-max-age` | duration | `0` | no | Maximum accepted attestation age, e.g. `5m`. `0` falls back to `defaults.attestation-max-age`, then 24h |
-| `--required-role` | string slice | none | no | Role required on the caller; repeatable |
 | `--required-scope` | string slice | none | no | Token scope required; repeatable. **Token modes only** |
 | `--opa-policy` | string | `""` | no | OPA policy name evaluated for this route |
 | `--strip-prefix` | bool | `false` | no | Strip the matched prefix before forwarding |
@@ -96,9 +95,13 @@ configuration and bumps the config version.**
 `ErrRouteAuthModeRequired` rather than an implicit `public`.
 
 **The flags are singular, the config keys are plural.** `--host`,
-`--allowed-zone`, `--required-role`, `--required-scope` are repeatable flags
-that map onto `hosts`, `allowed-zones`, `required-roles`, `required-scopes` in
-YAML. Passing `--allowed-zones` fails.
+`--allowed-zone`, `--required-scope` are repeatable flags that map onto
+`hosts`, `allowed-zones`, `required-scopes` in YAML. Passing `--allowed-zones`
+fails.
+
+**There is no `--required-role`.** A route's permission is its
+`--required-scope`; the role requirement was removed (#926) and the flag is an
+unknown-flag error.
 
 **`update` is a replace, not a patch.** Any flag you omit is sent at its
 zero value. Re-state the full route.
@@ -159,7 +162,7 @@ routes.
 | `--id` | string | `""` | **yes** | Pool identifier |
 | `--backend` | string slice | none | **yes (≥1)** | Backend URL, optionally `URL=WEIGHT`; repeatable |
 | `--balancer` | string | `""` | no | Empty defaults to `round-robin`, the only registered balancer |
-| `--trust-class` | string | `""` | no | `default`, `bmc` or `internal` (`pkg/trust`). Unknown → `ErrUnknownTrustClass` |
+| `--trust-class` | string | `""` | no | `platform` or `bmc` ([`docs/trust/`](../trust/architecture.md)). Unknown → `ErrUnknownTrustClass` |
 | `--mtls-client-cert` | bool | `false` | no | Present a client certificate to backends |
 | `--max-idle-conns-per-host` | int | `0` | no | `0` ⇒ engine default 128 |
 | `--idle-conn-timeout` | duration | `0` | no | `0` ⇒ engine default 90s |

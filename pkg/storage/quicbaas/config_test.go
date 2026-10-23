@@ -14,6 +14,8 @@
 package quicbaas
 
 import (
+	"fmt"
+	"net"
 	"testing"
 	"time"
 
@@ -28,7 +30,7 @@ func TestDefaultConfig(t *testing.T) {
 	assert.NotEmpty(t, cfg.DataDir)
 	assert.NotEmpty(t, cfg.WALDir)
 	assert.Equal(t, uint64(1), cfg.NodeID)
-	assert.NotEmpty(t, cfg.RaftAddress)
+	assert.Empty(t, cfg.RaftAddress, "no hard-coded Raft address (#93)")
 	assert.Greater(t, cfg.CacheSize, int64(0))
 	assert.Equal(t, ConsistencyLinearizable, cfg.ConsistencyLevel)
 	assert.Greater(t, cfg.RequestTimeout, time.Duration(0))
@@ -196,11 +198,106 @@ func TestConsistencyLevel_MarshalText(t *testing.T) {
 	}
 }
 
-func TestGetFreeAddress(t *testing.T) {
-	addr := GetFreeAddress()
+func TestFreeLoopbackAddress(t *testing.T) {
+	addr := FreeLoopbackAddress(t)
 
-	assert.Contains(t, addr, "127.0.0.1:")
-	assert.NotEqual(t, "127.0.0.1:0", addr)
+	host, port, err := net.SplitHostPort(addr)
+	require.NoError(t, err)
+	assert.Equal(t, "127.0.0.1", host)
+	assert.NotEqual(t, "0", port)
+
+	// The port was released: a Raft transport can bind it.
+	listener, err := net.Listen("tcp", addr)
+	require.NoError(t, err)
+	require.NoError(t, listener.Close())
+}
+
+// fatalT records Fatalf instead of stopping, so a test can observe a helper
+// failing the test it was handed.
+type fatalT struct {
+	*testing.T
+	fatal string
+}
+
+func (f *fatalT) Fatalf(format string, args ...any) {
+	f.fatal = fmt.Sprintf(format, args...)
+}
+
+func TestFreeLoopbackAddress_DistinctWhileHeld(t *testing.T) {
+	// Two probes never hand out the same live port, and neither fails the
+	// test: the probe binds port 0, it never guesses a fallback port.
+	ft := &fatalT{T: t}
+	first := FreeLoopbackAddress(ft)
+	held, err := net.Listen("tcp", first)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, held.Close()) }()
+
+	second := FreeLoopbackAddress(ft)
+	assert.Empty(t, ft.fatal)
+	assert.NotEqual(t, first, second)
+}
+
+func TestEffectiveRaftListenAddress(t *testing.T) {
+	cfg := &Config{RaftAddress: "10.0.0.5:63000"}
+	assert.Equal(t, "10.0.0.5:63000", cfg.EffectiveRaftListenAddress(), "empty listen address binds the advertised one")
+
+	cfg.RaftListenAddress = "0.0.0.0:63000"
+	assert.Equal(t, "0.0.0.0:63000", cfg.EffectiveRaftListenAddress())
+}
+
+func TestEffectiveRaftListenAddress_BothEmpty(t *testing.T) {
+	cfg := &Config{}
+	assert.Empty(t, cfg.EffectiveRaftListenAddress())
+}
+
+func TestIsRoutableRaftAddress(t *testing.T) {
+	for _, addr := range []string{"10.0.0.5:63000", "[2001:db8::5]:63000", "node-1.cluster.internal:63000", "10.0.0.5"} {
+		assert.True(t, IsRoutableRaftAddress(addr), addr)
+	}
+}
+
+func TestIsRoutableRaftAddress_NotRoutable(t *testing.T) {
+	for _, addr := range []string{"", "  ", "127.0.0.1:63000", "[::1]:63000", "0.0.0.0:63000", "[::]:63000", "localhost:63000", "LOCALHOST", ":63000"} {
+		assert.False(t, IsRoutableRaftAddress(addr), addr)
+	}
+}
+
+func TestConfig_Validate_JoinRequiresRoutableAdvertise(t *testing.T) {
+	cfg := clusterMemberConfig(t, 1)
+	assert.NoError(t, cfg.Validate())
+}
+
+func TestConfig_Validate_JoinWithLoopbackAdvertise(t *testing.T) {
+	for _, addr := range []string{"", "127.0.0.1:63000", "0.0.0.0:63000"} {
+		cfg := clusterMemberConfig(t, 1)
+		cfg.RaftAddress = addr
+
+		err := cfg.Validate()
+		var advErr ErrRaftAdvertiseAddress
+		require.ErrorAs(t, err, &advErr, addr)
+		assert.Equal(t, addr, advErr.Address)
+		assert.Contains(t, err.Error(), "quicbaas.raft-address")
+		assert.Contains(t, err.Error(), "PLATFORMD_QUICBAAS_RAFT_ADDRESS")
+		assert.Contains(t, err.Error(), "--raft-address")
+	}
+}
+
+func TestConfig_ToQuicBaaSConfig_RaftListenAddress(t *testing.T) {
+	cfg := TestConfig(t)
+	cfg.RaftAddress = "10.0.0.5:63000"
+	cfg.RaftListenAddress = "10.0.0.5:63001"
+
+	qcfg := cfg.ToQuicBaaSConfig()
+	assert.Equal(t, "10.0.0.5:63000", qcfg.Raft.RaftAddress)
+	assert.Equal(t, "10.0.0.5:63001", qcfg.Raft.ListenAddress)
+}
+
+func TestConfig_ToQuicBaaSConfig_RaftListenDefaultsToAdvertise(t *testing.T) {
+	cfg := TestConfig(t)
+	cfg.RaftListenAddress = ""
+
+	qcfg := cfg.ToQuicBaaSConfig()
+	assert.Equal(t, cfg.RaftAddress, qcfg.Raft.ListenAddress)
 }
 
 func TestConfig_Validate_NegativeCacheSize_AutoDefault(t *testing.T) {

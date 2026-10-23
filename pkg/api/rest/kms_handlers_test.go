@@ -27,8 +27,12 @@ import (
 	"time"
 
 	"github.com/gorilla/mux"
+	quicbaas "github.com/jeremyhahn/go-quicbaas/sdk/go"
+	sdkerrors "github.com/jeremyhahn/go-quicbaas/sdk/go/errors"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // =============================================================================
@@ -92,7 +96,6 @@ type mockKMSService struct {
 	lastVerifyReq         *KMSVerifyServiceRequest
 	lastHashReq           *KMSHashServiceRequest
 	lastHMACReq           *KMSHMACServiceRequest
-	lastRandomReq         *KMSGenerateRandomServiceRequest
 	lastBatchEncryptReq   *KMSBatchEncryptServiceRequest
 	lastBatchDecryptReq   *KMSBatchDecryptServiceRequest
 	lastRewrapReq         *KMSRewrapServiceRequest
@@ -383,7 +386,6 @@ func (m *mockKMSService) Verify(ctx context.Context, req *KMSVerifyServiceReques
 }
 
 func (m *mockKMSService) GenerateRandom(ctx context.Context, req *KMSGenerateRandomServiceRequest) (*KMSGenerateRandomServiceResponse, error) {
-	m.lastRandomReq = req
 	if m.generateRandomErr != nil {
 		return nil, m.generateRandomErr
 	}
@@ -678,6 +680,9 @@ func TestHandleGenerateKey(t *testing.T) {
 		decodeKMSResponse(t, resp.Body, &genResp)
 		assert.Equal(t, "test-key-123", genResp.Key.KeyID)
 		assert.Equal(t, "test-key", genResp.Metadata.Name)
+		require.NotNil(t, svc.lastGenerateKeyReq.KeySpec)
+		assert.Equal(t, int32(3), svc.lastGenerateKeyReq.KeySpec.Algorithm, "AES-256-GCM")
+		assert.Equal(t, []int32{1, 2}, svc.lastGenerateKeyReq.KeySpec.Usage, "ENCRYPT, DECRYPT")
 	})
 
 	t.Run("returns error when service not available", func(t *testing.T) {
@@ -1158,6 +1163,26 @@ func TestHandleExportKey(t *testing.T) {
 		assert.Equal(t, uint64(2), svc.lastExportKeyReq.Version)
 	})
 
+	t.Run("refuses a malformed numeric parameter", func(t *testing.T) {
+		for _, query := range []string{"wrapping_algorithm=aes", "format=-x", "version=-1", "version=two"} {
+			t.Run(query, func(t *testing.T) {
+				svc := newMockKMSService()
+				_, router := setupKMSTestHandler(svc)
+
+				req := httptest.NewRequest(http.MethodGet, "/api/v1/kms/keys/test-key-123/export?"+query, nil)
+				w := httptest.NewRecorder()
+
+				router.ServeHTTP(w, req)
+
+				resp := w.Result()
+				defer resp.Body.Close()
+
+				assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+				assert.Nil(t, svc.lastExportKeyReq, "a refused request must not reach the service")
+			})
+		}
+	})
+
 	t.Run("returns error when key not exportable", func(t *testing.T) {
 		svc := newMockKMSService()
 		svc.exportKeyErr = ErrKMSKeyNotExportable{KeyID: "test-key-123"}
@@ -1299,6 +1324,9 @@ func TestHandleImportKey(t *testing.T) {
 		var impResp KMSImportKeyResponse
 		decodeKMSResponse(t, resp.Body, &impResp)
 		assert.Equal(t, "imported-key-123", impResp.Key.KeyID)
+		assert.Equal(t, []byte("test-key-material"), svc.lastImportKeyReq.KeyMaterial, "the key material reaches the KMS decoded")
+		require.NotNil(t, svc.lastImportKeyReq.KeySpec)
+		assert.Equal(t, int32(3), svc.lastImportKeyReq.KeySpec.Algorithm, "AES-256-GCM")
 	})
 
 	t.Run("returns error when key_material is missing", func(t *testing.T) {
@@ -1861,6 +1889,7 @@ func TestHandleSign(t *testing.T) {
 		decodeKMSResponse(t, resp.Body, &signResp)
 		assert.Equal(t, "test-key-123", signResp.KeyID)
 		assert.NotEmpty(t, signResp.Signature)
+		assert.Equal(t, []byte("message to sign"), svc.lastSignReq.Message, "the message reaches the KMS decoded")
 	})
 
 	t.Run("returns error when key_id is missing", func(t *testing.T) {
@@ -2000,6 +2029,8 @@ func TestHandleVerify(t *testing.T) {
 		decodeKMSResponse(t, resp.Body, &verifyResp)
 		assert.Equal(t, "test-key-123", verifyResp.KeyID)
 		assert.True(t, verifyResp.Valid)
+		assert.Equal(t, []byte("message"), svc.lastVerifyReq.Message, "the message reaches the KMS decoded")
+		assert.Equal(t, []byte("signature"), svc.lastVerifyReq.Signature, "the signature reaches the KMS decoded")
 	})
 
 	t.Run("returns error when key_id is missing", func(t *testing.T) {
@@ -2185,6 +2216,7 @@ func TestHandleHash(t *testing.T) {
 		var hashResp KMSHashResponse
 		decodeKMSResponse(t, resp.Body, &hashResp)
 		assert.NotEmpty(t, hashResp.Hash)
+		assert.Equal(t, []byte("data to hash"), svc.lastHashReq.Data, "the data reaches the KMS decoded")
 	})
 
 	t.Run("returns error when data is missing", func(t *testing.T) {
@@ -2300,6 +2332,7 @@ func TestHandleHMAC(t *testing.T) {
 		decodeKMSResponse(t, resp.Body, &hmacResp)
 		assert.Equal(t, "test-key-123", hmacResp.KeyID)
 		assert.NotEmpty(t, hmacResp.HMAC)
+		assert.Equal(t, []byte("message"), svc.lastHMACReq.Message, "the message reaches the KMS decoded")
 	})
 
 	t.Run("returns error when key_id is missing", func(t *testing.T) {
@@ -2677,7 +2710,10 @@ func TestWriteKMSError(t *testing.T) {
 		err            error
 		expectedStatus int
 	}{
-		{"not implemented", ErrKMSOperationFailed{Reason: "not implemented"}, http.StatusNotImplemented},
+		{"message never decides the class", ErrKMSOperationFailed{Reason: "not implemented"}, http.StatusInternalServerError},
+		{"batch items empty", ErrKMSBatchItemsEmpty{}, http.StatusBadRequest},
+		{"batch items too many", ErrKMSBatchItemsTooMany{Count: 2, Max: 1}, http.StatusBadRequest},
+		{"batch partly failed", ErrKMSBatchOperationFailed{Operation: "encrypt"}, http.StatusMultiStatus},
 		{"operation failed", ErrKMSOperationFailed{Reason: "other"}, http.StatusInternalServerError},
 		{"key not found", ErrKMSKeyNotFound{KeyID: "key"}, http.StatusNotFound},
 		{"key already exists", ErrKMSKeyAlreadyExists{KeyID: "key"}, http.StatusConflict},
@@ -2701,6 +2737,50 @@ func TestWriteKMSError(t *testing.T) {
 			assert.Equal(t, tt.expectedStatus, w.Code)
 		})
 	}
+}
+
+// TestWriteKMSError_Classes covers the errors the live KMS backend returns:
+// REST answers each with the HTTP status for its class, as gRPC does (#304).
+func TestWriteKMSError_Classes(t *testing.T) {
+	h := NewKMSHandlers(nil, slog.Default())
+
+	tests := []struct {
+		name           string
+		err            error
+		expectedStatus int
+	}{
+		{"sdk not found", sdkerrors.NewNotFound("GetKey", "no key"), http.StatusNotFound},
+		{"database not found", quicbaas.NewDatabaseError(quicbaas.ErrNotFound, "GetKey", "no key"), http.StatusNotFound},
+		{"sdk invalid input", sdkerrors.NewInvalidInput("GetKey", "bad id"), http.StatusBadRequest},
+		{"sdk already exists", sdkerrors.NewAlreadyExists("ImportKey", "dup"), http.StatusConflict},
+		{"sdk precondition", sdkerrors.NewPreconditionFailed("DeleteKey", "in use"), http.StatusPreconditionFailed},
+		{"sdk forbidden", sdkerrors.NewForbidden("ExportKey", "no"), http.StatusForbidden},
+		{"sdk unimplemented", sdkerrors.NewUnimplemented("Rewrap", "later"), http.StatusNotImplemented},
+		{"sdk unavailable", sdkerrors.NewUnavailable("GetKey", "down"), http.StatusServiceUnavailable},
+		{"typed status error", status.Error(codes.InvalidArgument, "bad cursor"), http.StatusBadRequest},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			w := httptest.NewRecorder()
+			h.writeKMSError(w, "test", tt.err)
+			assert.Equal(t, tt.expectedStatus, w.Code)
+		})
+	}
+}
+
+// TestKMSHandlers_GetKey_SDKNotFound asks REST for a key the SDK does not
+// have: the answer is 404, not 500.
+func TestKMSHandlers_GetKey_SDKNotFound(t *testing.T) {
+	svc := newMockKMSService()
+	svc.getKeyErr = sdkerrors.NewNotFound("GetKey", "no key missing")
+	_, router := setupKMSTestHandler(svc)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/kms/keys/missing", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusNotFound, w.Code)
 }
 
 // =============================================================================
@@ -2870,6 +2950,9 @@ func TestKMSHandlers_BatchEncrypt(t *testing.T) {
 		decodeKMSResponse(t, rec.Body, &resp)
 		assert.Equal(t, "test-key-id", resp.KeyID)
 		assert.Len(t, resp.Results, 2)
+		require.Len(t, svc.lastBatchEncryptReq.Items, 2)
+		assert.Equal(t, []byte("hello"), svc.lastBatchEncryptReq.Items[0].Plaintext, "each item reaches the KMS decoded, in order")
+		assert.Equal(t, []byte("world"), svc.lastBatchEncryptReq.Items[1].Plaintext)
 	})
 
 	t.Run("invalid JSON", func(t *testing.T) {
@@ -3070,6 +3153,9 @@ func TestKMSHandlers_BatchDecrypt(t *testing.T) {
 		decodeKMSResponse(t, rec.Body, &resp)
 		assert.Equal(t, "test-key-id", resp.KeyID)
 		assert.Len(t, resp.Results, 2)
+		require.Len(t, svc.lastBatchDecryptReq.Items, 2)
+		assert.Equal(t, []byte("encrypted1"), svc.lastBatchDecryptReq.Items[0].Ciphertext, "each item reaches the KMS decoded, in order")
+		assert.Equal(t, []byte("encrypted2"), svc.lastBatchDecryptReq.Items[1].Ciphertext)
 	})
 
 	t.Run("invalid JSON", func(t *testing.T) {
@@ -3267,6 +3353,9 @@ func TestKMSHandlers_Rewrap(t *testing.T) {
 		var resp KMSRewrapResponse
 		decodeKMSResponse(t, rec.Body, &resp)
 		assert.NotEmpty(t, resp.Ciphertext)
+		assert.Equal(t, "source-key", svc.lastRewrapReq.SourceKeyID)
+		assert.Equal(t, "dest-key", svc.lastRewrapReq.DestinationKeyID, "source and destination must not be swapped")
+		assert.Equal(t, []byte("encrypted"), svc.lastRewrapReq.Ciphertext, "the ciphertext reaches the KMS decoded")
 	})
 
 	t.Run("invalid JSON", func(t *testing.T) {

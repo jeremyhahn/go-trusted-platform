@@ -18,6 +18,8 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+
+	"github.com/jeremyhahn/go-trusted-platform/pkg/dns"
 )
 
 // Config holds the configuration for a QEMU VM
@@ -45,11 +47,23 @@ var validDiskCacheModes = map[string]struct{}{
 
 type Config struct {
 	// Arch is the guest architecture: x86_64 (default, q35 + OVMF) or
-	// aarch64 (virt + U-Boot as -bios). It selects the archProfile.
+	// aarch64 (virt + U-Boot as -bios, or AAVMF from pflash). It selects
+	// the archProfile.
 	Arch Arch `yaml:"arch" json:"arch" mapstructure:"arch"`
 
+	// HostArch is the GOARCH of the machine QEMU runs on; it decides
+	// whether KVM can accelerate the guest. Empty means runtime.GOARCH.
+	HostArch string `yaml:"-" json:"-" mapstructure:"-"`
+
+	// KVMProbe reports why the host's KVM device cannot be used, or nil
+	// when it can. Nil means probeKVMDevice, which opens /dev/kvm
+	// read-write; tests inject one so they never touch the host.
+	KVMProbe func() error `yaml:"-" json:"-" mapstructure:"-"`
+
 	// Firmware is the firmware image for architectures that take one as
-	// -bios (aarch64: u-boot.bin). x86_64 uses the OVMF fields instead.
+	// -bios (aarch64: u-boot.bin). x86_64 uses the OVMF fields instead,
+	// and so does aarch64 when Firmware is empty and OVMFCode is set: it
+	// then boots UEFI (AAVMF) from pflash.
 	Firmware string `yaml:"firmware" json:"firmware" mapstructure:"firmware"`
 
 	// DiskFormat is the disk image format: qcow2 (x86_64 default) or raw
@@ -113,8 +127,15 @@ type Config struct {
 	// QMPSocketPath is the path to the QMP (QEMU Machine Protocol) socket.
 	// This socket enables runtime control of the VM via QMP commands for
 	// graceful shutdown, pause/resume, status queries, and other operations.
-	// If empty, defaults to $WorkDir/qmp.sock
+	// If empty, defaults to qmp.sock in the per-run RuntimeDir.
 	QMPSocketPath string `yaml:"qmp_socket_path" json:"qmp_socket_path" mapstructure:"qmp_socket_path"`
+
+	// RuntimeDir is the short directory that holds the VM's unix sockets.
+	// Start creates it under the system temp directory (tp-vm-*) when unset and
+	// removes it when the VM stops; WorkDir is not used because a deep WorkDir
+	// exceeds the 108-byte unix socket path limit. A directory set by the
+	// caller is used as is and never removed.
+	RuntimeDir string `yaml:"-" json:"-" mapstructure:"-"`
 
 	// EnableKVM enables KVM acceleration
 	EnableKVM bool `yaml:"enable_kvm" json:"enable_kvm" mapstructure:"enable_kvm"`
@@ -230,10 +251,10 @@ func DefaultPortForwards() []PortForward {
 		{HostPort: 9080, GuestPort: 9080, Protocol: "tcp"}, // HTTP
 		{HostPort: 9443, GuestPort: 9443, Protocol: "tcp"}, // HTTPS
 		// DNS services
-		{HostPort: 8053, GuestPort: 8053, Protocol: "udp"}, // Public DNS
-		{HostPort: 8053, GuestPort: 8053, Protocol: "tcp"}, // Public DNS (TCP)
-		{HostPort: 9053, GuestPort: 9053, Protocol: "udp"}, // Internal DNS
-		{HostPort: 9053, GuestPort: 9053, Protocol: "tcp"}, // Internal DNS (TCP)
+		{HostPort: dns.DefaultPublicPort, GuestPort: dns.DefaultPublicPort, Protocol: "udp"},     // Public DNS
+		{HostPort: dns.DefaultPublicPort, GuestPort: dns.DefaultPublicPort, Protocol: "tcp"},     // Public DNS (TCP)
+		{HostPort: dns.DefaultInternalPort, GuestPort: dns.DefaultInternalPort, Protocol: "udp"}, // Internal DNS
+		{HostPort: dns.DefaultInternalPort, GuestPort: dns.DefaultInternalPort, Protocol: "tcp"}, // Internal DNS (TCP)
 	}
 }
 
@@ -484,7 +505,7 @@ func (c *Config) Validate() error {
 	if _, ok := validDiskFormats[c.diskFormat(p)]; !ok {
 		return &SentinelCauseError{Sentinel: ErrInvalidConfiguration, Cause: &MessageError{Msg: "disk format must be qcow2 or raw, got " + c.DiskFormat}}
 	}
-	if !p.nvram {
+	if !p.nvram(c) {
 		// A -bios firmware: present or not, nothing else to check.
 		_, err := p.firmware(c)
 		return err
@@ -540,7 +561,7 @@ func (c *Config) GetQMPSocketPath() string {
 	if c.QMPSocketPath != "" {
 		return c.QMPSocketPath
 	}
-	return filepath.Join(c.WorkDir, "qmp.sock")
+	return c.socketPath(qmpSocketName)
 }
 
 // GetConsoleSocketPath returns the interactive console socket path. It returns

@@ -20,6 +20,7 @@ import (
 
 	"google.golang.org/grpc"
 
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/transport"
 )
 
@@ -53,20 +54,40 @@ func (m *mockAdapter) Target() string {
 var _ transport.Adapter = (*mockAdapter)(nil)
 
 func TestConnect_NilOptions(t *testing.T) {
-	ctx := context.Background()
+	originalConnectors := protocolConnectors
+	t.Cleanup(func() {
+		protocolConnectors = originalConnectors
+	})
 
-	// Connect with nil options should use defaults
-	// This test verifies no panic occurs with nil options
-	_, err := Connect(ctx, nil)
-	if err == nil {
-		t.Skip("expected error when no protocols are available (test running as non-root)")
+	// Every connector refuses, so the result does not depend on a daemon
+	// listening on the host or on the user the test runs as.
+	refused := errors.New("connection refused")
+	protocolConnectors = make(map[Protocol]ConnectFunc)
+	for _, proto := range []Protocol{ProtocolUnix, ProtocolGRPC, ProtocolREST, ProtocolQUIC, ProtocolMCP, ProtocolEmbedded} {
+		protocolConnectors[proto] = func(context.Context, *Options) (transport.Adapter, error) {
+			return nil, refused
+		}
 	}
 
-	// Should get daemon unavailable or protocol not implemented error
+	client, err := Connect(context.Background(), nil)
+	if client != nil {
+		t.Fatalf("Connect(nil) returned a client with every connector refusing")
+	}
+
 	var unavailableErr ErrDaemonUnavailable
-	var notImplErr ErrProtocolNotImplemented
-	if !errors.As(err, &unavailableErr) && !errors.As(err, &notImplErr) {
-		t.Errorf("unexpected error type: %T: %v", err, err)
+	if !errors.As(err, &unavailableErr) {
+		t.Fatalf("Connect(nil) error = %T: %v, want ErrDaemonUnavailable", err, err)
+	}
+
+	// Nil options fall back to NewOptions, which configures only the Unix
+	// socket: no network protocol may be attempted.
+	for _, proto := range unavailableErr.Attempted {
+		if proto != ProtocolUnix {
+			t.Errorf("Connect(nil) attempted %v, want only %v from the default options", proto, ProtocolUnix)
+		}
+	}
+	if len(unavailableErr.Attempted) > 0 && !errors.Is(unavailableErr.LastErr, refused) {
+		t.Errorf("LastErr = %v, want the connector's error", unavailableErr.LastErr)
 	}
 }
 
@@ -425,8 +446,201 @@ func TestPlatformClient_ServiceClients(t *testing.T) {
 	if c.Overlay() != nil {
 		t.Error("Overlay() should return nil with nil services")
 	}
+	if c.PIV() != nil {
+		t.Error("PIV() should return nil with nil services")
+	}
+	if c.FIDO2() != nil {
+		t.Error("FIDO2() should return nil with nil services")
+	}
+	if c.Ceremony() != nil {
+		t.Error("Ceremony() should return nil with nil services")
+	}
+	if c.LUKS() != nil {
+		t.Error("LUKS() should return nil with nil services")
+	}
+	if c.Invitation() != nil {
+		t.Error("Invitation() should return nil with nil services")
+	}
+	if c.EAB() != nil {
+		t.Error("EAB() should return nil with nil services")
+	}
+	if c.Switch() != nil {
+		t.Error("Switch() should return nil with nil services")
+	}
 	if c.ConfigDelivery() != nil {
 		t.Error("ConfigDelivery() should return nil with nil services")
+	}
+	if c.Cache() != nil || c.Scheduler() != nil || c.Messaging() != nil || c.ObjectStorage() != nil {
+		t.Error("the application service clients should be nil with nil services")
+	}
+}
+
+// connAdapter is a mockAdapter with a live connection.
+type connAdapter struct {
+	mockAdapter
+	conn grpc.ClientConnInterface
+}
+
+func (a *connAdapter) Connection() grpc.ClientConnInterface { return a.conn }
+
+type fakeClientConn struct {
+	grpc.ClientConnInterface
+}
+
+func TestPlatformClient_AppServiceClientsAreBuiltOnTheConnection(t *testing.T) {
+	c := newClientFromAdapter(&connAdapter{conn: fakeClientConn{}}, ProtocolGRPC, nil)
+	if c.Cache() == nil || c.Scheduler() == nil || c.Messaging() == nil || c.ObjectStorage() == nil {
+		t.Fatalf("Cache, Scheduler, Messaging and ObjectStorage must be built on the adapter connection")
+	}
+
+	// Without a connection no service client is built.
+	c = newClientFromAdapter(&connAdapter{}, ProtocolGRPC, nil)
+	if c.Cache() != nil || c.Scheduler() != nil || c.Messaging() != nil || c.ObjectStorage() != nil {
+		t.Error("the application service clients must be nil without a connection")
+	}
+}
+
+type fakePIVClient struct {
+	platformv1.PIVServiceClient
+}
+
+type fakeFIDO2Client struct {
+	platformv1.FIDO2ServiceClient
+}
+
+type fakeCeremonyClient struct {
+	platformv1.CeremonyServiceClient
+}
+
+type fakeLUKSClient struct {
+	platformv1.LUKSServiceClient
+}
+
+func TestPlatformClient_PIVReturnsTheConfiguredServiceClient(t *testing.T) {
+	want := &fakePIVClient{}
+	c := &platformClient{services: &ServiceClients{PIV: want}}
+
+	if got := c.PIV(); got != platformv1.PIVServiceClient(want) {
+		t.Errorf("PIV() = %v, want the client held by ServiceClients", got)
+	}
+}
+
+func TestPlatformClient_FIDO2ReturnsTheConfiguredServiceClient(t *testing.T) {
+	want := &fakeFIDO2Client{}
+	c := &platformClient{services: &ServiceClients{FIDO2: want}}
+
+	if got := c.FIDO2(); got != platformv1.FIDO2ServiceClient(want) {
+		t.Errorf("FIDO2() = %v, want the client held by ServiceClients", got)
+	}
+}
+
+func TestPlatformClient_CeremonyReturnsTheConfiguredServiceClient(t *testing.T) {
+	want := &fakeCeremonyClient{}
+	c := &platformClient{services: &ServiceClients{Ceremony: want}}
+
+	if got := c.Ceremony(); got != platformv1.CeremonyServiceClient(want) {
+		t.Errorf("Ceremony() = %v, want the client held by ServiceClients", got)
+	}
+}
+
+func TestPlatformClient_LUKSReturnsTheConfiguredServiceClient(t *testing.T) {
+	want := &fakeLUKSClient{}
+	c := &platformClient{services: &ServiceClients{LUKS: want}}
+
+	if got := c.LUKS(); got != platformv1.LUKSServiceClient(want) {
+		t.Errorf("LUKS() = %v, want the client held by ServiceClients", got)
+	}
+}
+
+// recordingConn records the full method name of the last unary call.
+type recordingConn struct {
+	grpc.ClientConnInterface
+	method string
+}
+
+func (r *recordingConn) Invoke(_ context.Context, method string, _, _ any, _ ...grpc.CallOption) error {
+	r.method = method
+	return nil
+}
+
+func TestPlatformClient_InvitationCallsTheInvitationService(t *testing.T) {
+	conn := &recordingConn{}
+	c := newClientFromAdapter(&connAdapter{conn: conn}, ProtocolGRPC, nil)
+
+	if _, err := c.Invitation().GetInvitation(context.Background(), &platformv1.GetInvitationRequest{InvitationId: 1}); err != nil {
+		t.Fatalf("GetInvitation: %v", err)
+	}
+	if conn.method != platformv1.InvitationService_GetInvitation_FullMethodName {
+		t.Errorf("Invitation() called %q, want %q", conn.method, platformv1.InvitationService_GetInvitation_FullMethodName)
+	}
+
+	if c := newClientFromAdapter(&connAdapter{}, ProtocolGRPC, nil); c.Invitation() != nil {
+		t.Error("Invitation() must be nil without a connection")
+	}
+}
+
+func TestPlatformClient_EABCallsTheEABService(t *testing.T) {
+	conn := &recordingConn{}
+	c := newClientFromAdapter(&connAdapter{conn: conn}, ProtocolGRPC, nil)
+
+	if _, err := c.EAB().ListCredentials(context.Background(), &platformv1.ListEABCredentialsRequest{}); err != nil {
+		t.Fatalf("ListCredentials: %v", err)
+	}
+	if conn.method != platformv1.EABService_ListCredentials_FullMethodName {
+		t.Errorf("EAB() called %q, want %q", conn.method, platformv1.EABService_ListCredentials_FullMethodName)
+	}
+
+	if c := newClientFromAdapter(&connAdapter{}, ProtocolGRPC, nil); c.EAB() != nil {
+		t.Error("EAB() must be nil without a connection")
+	}
+}
+
+// methodRecordingConn records the method of every call and answers err.
+type methodRecordingConn struct {
+	grpc.ClientConnInterface
+	methods []string
+	err     error
+}
+
+func (c *methodRecordingConn) Invoke(_ context.Context, method string, _, _ interface{}, _ ...grpc.CallOption) error {
+	c.methods = append(c.methods, method)
+	return c.err
+}
+
+// Switch() is built on the adapter connection, so its calls reach the
+// transport under the SwitchService method names; without a connection it
+// is nil.
+func TestPlatformClient_SwitchIsBuiltOnTheConnection(t *testing.T) {
+	conn := &methodRecordingConn{}
+	c := newClientFromAdapter(&connAdapter{conn: conn}, ProtocolMCP, nil)
+	if c.Switch() == nil {
+		t.Fatal("Switch() must be built on the adapter connection")
+	}
+
+	if _, err := c.Switch().ListPorts(context.Background(), &platformv1.ListSwitchPortsRequest{SwitchName: "tor-1"}); err != nil {
+		t.Fatalf("ListPorts: %v", err)
+	}
+	if _, err := c.Switch().DisablePort(context.Background(), &platformv1.DisableSwitchPortRequest{SwitchName: "tor-1", PortName: "Eth1/3"}); err != nil {
+		t.Fatalf("DisablePort: %v", err)
+	}
+	want := []string{platformv1.SwitchService_ListPorts_FullMethodName, platformv1.SwitchService_DisablePort_FullMethodName}
+	if len(conn.methods) != len(want) || conn.methods[0] != want[0] || conn.methods[1] != want[1] {
+		t.Errorf("calls reached the transport as %v, want %v", conn.methods, want)
+	}
+
+	if c := newClientFromAdapter(&connAdapter{}, ProtocolMCP, nil); c.Switch() != nil {
+		t.Error("Switch() must be nil without a connection")
+	}
+}
+
+// A transport failure reaches the Switch() caller unchanged.
+func TestPlatformClient_SwitchReturnsTheTransportError(t *testing.T) {
+	transportErr := errors.New("transport down")
+	c := newClientFromAdapter(&connAdapter{conn: &methodRecordingConn{err: transportErr}}, ProtocolEmbedded, nil)
+
+	_, err := c.Switch().EnablePort(context.Background(), &platformv1.EnableSwitchPortRequest{SwitchName: "tor-1", PortName: "Eth1/3"})
+	if !errors.Is(err, transportErr) {
+		t.Fatalf("EnablePort error = %v, want the transport error", err)
 	}
 }
 

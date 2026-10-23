@@ -18,6 +18,7 @@ import (
 	"errors"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/bmc"
@@ -764,35 +765,40 @@ func TestService_Provision_MountError(t *testing.T) {
 }
 
 func TestService_Provision_InstallTimeout(t *testing.T) {
-	svc, err := NewService(ServiceParams{
-		BMC:      newMockBMC(),
-		Profiles: testProfiles(),
-		Config: &Config{
-			InstallTimeout: 200 * time.Millisecond,
-			PowerOnDelay:   10 * time.Millisecond,
-		},
+	// The install timeout runs on synctest time, so the test waits it out
+	// without spending it (#284).
+	synctest.Test(t, func(t *testing.T) {
+		const installTimeout = 200 * time.Millisecond
+		svc, err := NewService(ServiceParams{
+			BMC:      newMockBMC(),
+			Profiles: testProfiles(),
+			Config: &Config{
+				InstallTimeout: installTimeout,
+				PowerOnDelay:   10 * time.Millisecond,
+			},
+		})
+		if err != nil {
+			t.Fatalf("NewService() error = %v", err)
+		}
+
+		result, err := svc.Provision(t.Context(), &ProvisionRequest{ProfileID: 1})
+		if err != nil {
+			t.Fatalf("Provision() error = %v", err)
+		}
+
+		// Do NOT call CompleteInstall; let it time out, then let the
+		// provisioning goroutine record the failure and exit.
+		<-time.After(installTimeout)
+		synctest.Wait()
+
+		final, err := svc.Status(result.ProvisionID)
+		if err != nil {
+			t.Fatalf("Status() error = %v", err)
+		}
+		if final.Status != StatusFailed {
+			t.Errorf("Status = %s, want failed", final.Status)
+		}
 	})
-	if err != nil {
-		t.Fatalf("NewService() error = %v", err)
-	}
-
-	ctx := context.Background()
-	result, err := svc.Provision(ctx, &ProvisionRequest{ProfileID: 1})
-	if err != nil {
-		t.Fatalf("Provision() error = %v", err)
-	}
-
-	// Do NOT call CompleteInstall; let it timeout.
-	waitCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
-	t.Cleanup(cancel)
-
-	final, err := waitForStatus(waitCtx, svc, result.ProvisionID, StatusFailed)
-	if err != nil {
-		t.Fatalf("failed to reach failed state: %v", err)
-	}
-	if final.Status != StatusFailed {
-		t.Errorf("Status = %s, want failed", final.Status)
-	}
 }
 
 func TestService_Provision_SetBootError(t *testing.T) {

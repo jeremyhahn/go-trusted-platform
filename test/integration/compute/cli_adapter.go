@@ -16,11 +16,16 @@
 package compute_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
+
+	computesvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/compute"
+	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
 )
 
 // =============================================================================
@@ -59,41 +64,17 @@ func (e ErrCLIParse) Error() string {
 }
 
 // =============================================================================
-// CLI Response Types
-// =============================================================================
-
-// cliVMResponse represents the JSON output from CLI VM commands.
-type cliVMResponse struct {
-	ID      string            `json:"id"`
-	Name    string            `json:"name"`
-	State   string            `json:"state"`
-	CPUs    uint32            `json:"cpus"`
-	Memory  uint64            `json:"memory_mb"`
-	Labels  map[string]string `json:"labels"`
-	Status  *cliStatus        `json:"status,omitempty"`
-	Success bool              `json:"success"`
-	Message string            `json:"message"`
-}
-
-// cliStatus represents a status message from CLI output.
-type cliStatus struct {
-	Success bool   `json:"success"`
-	Message string `json:"message"`
-}
-
-// cliListResponse represents the JSON output from CLI list commands.
-type cliListResponse struct {
-	VMs        []cliVMResponse `json:"vms"`
-	TotalItems uint64          `json:"total_items"`
-}
-
-// =============================================================================
 // CLI Adapter
 // =============================================================================
 
-// CLIAdapter implements ComputeCommands using the platformctl CLI.
+// CLIAdapter implements ComputeCommands using the platformctl CLI. Every
+// command prints JSON whose shape is the Go SDK compute type it renders
+// (computesvc.VM, computesvc.VMStatus, computesvc.ListVMsResult), so the
+// adapter decodes into those types and shares the gRPC adapter's converters.
 type CLIAdapter struct {
-	cliPath string
+	cliPath    string
+	configDir  string
+	configPath string
 }
 
 // NewCLIAdapter creates a new CLI adapter.
@@ -103,18 +84,27 @@ func NewCLIAdapter() *CLIAdapter {
 	}
 }
 
-// Setup verifies the CLI binary is available.
+// Setup verifies the CLI binary is available and writes the config file that
+// points it at the harness daemon.
 func (a *CLIAdapter) Setup(ctx context.Context) error {
-	_, err := exec.LookPath(a.cliPath)
-	if err != nil {
+	if _, err := exec.LookPath(a.cliPath); err != nil {
 		return ErrCLINotFound{Path: a.cliPath}
 	}
+
+	dir, path, err := helpers.WriteTempLocalCLIConfig(GetSocketPath(), GetGRPCEndpoint())
+	if err != nil {
+		return err
+	}
+	a.configDir, a.configPath = dir, path
 	return nil
 }
 
-// Teardown cleans up after testing.
+// Teardown removes the config file Setup wrote.
 func (a *CLIAdapter) Teardown(ctx context.Context) error {
-	return nil
+	if a.configDir == "" {
+		return nil
+	}
+	return os.RemoveAll(a.configDir)
 }
 
 // Name returns the adapter name.
@@ -122,18 +112,50 @@ func (a *CLIAdapter) Name() string {
 	return "CLI"
 }
 
-// runCommand executes a CLI command and returns the combined output.
+// runCommand executes a CLI command with JSON output and returns its stdout.
+// platformctl has no --socket flag; the harness socket reaches it through the
+// config file Setup wrote (#540).
 func (a *CLIAdapter) runCommand(ctx context.Context, args ...string) ([]byte, error) {
-	cmd := exec.CommandContext(ctx, a.cliPath, args...)
-	output, err := cmd.CombinedOutput()
-	if err != nil {
+	fullArgs := []string{"--output", "json"}
+	if a.configPath != "" {
+		fullArgs = append(fullArgs, "--config", a.configPath)
+	}
+	fullArgs = append(fullArgs, args...)
+
+	cmd := exec.CommandContext(ctx, a.cliPath, fullArgs...)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	if err := cmd.Run(); err != nil {
 		return nil, ErrCLIExecution{
 			Operation: strings.Join(args, " "),
 			Message:   err.Error(),
-			Output:    string(output),
+			Output:    stdout.String() + stderr.String(),
 		}
 	}
-	return output, nil
+	return stdout.Bytes(), nil
+}
+
+// runJSON executes a CLI command and decodes its JSON output into out.
+func (a *CLIAdapter) runJSON(ctx context.Context, operation string, out any, args ...string) error {
+	output, err := a.runCommand(ctx, args...)
+	if err != nil {
+		return err
+	}
+	if err := json.Unmarshal(output, out); err != nil {
+		return ErrCLIParse{Operation: operation, Message: err.Error()}
+	}
+	return nil
+}
+
+// runVerb executes a VM lifecycle verb and returns the status it prints.
+func (a *CLIAdapter) runVerb(ctx context.Context, operation string, args ...string) (*computesvc.VMStatus, error) {
+	status := &computesvc.VMStatus{}
+	if err := a.runJSON(ctx, operation, status, args...); err != nil {
+		return nil, err
+	}
+	return status, nil
 }
 
 // =============================================================================
@@ -148,7 +170,6 @@ func (a *CLIAdapter) CreateVM(ctx context.Context, opts CreateVMOptions) (*Creat
 		"--cpus", fmt.Sprint(opts.CPUs),
 		"--memory", fmt.Sprint(opts.MemoryMB),
 		"--disk-size", fmt.Sprint(opts.DiskSizeGB),
-		"--output", "json",
 	}
 
 	if opts.Firmware != "" {
@@ -167,55 +188,25 @@ func (a *CLIAdapter) CreateVM(ctx context.Context, opts CreateVMOptions) (*Creat
 		args = append(args, "--label", k+"="+v)
 	}
 
-	output, err := a.runCommand(ctx, args...)
-	if err != nil {
+	vm := &computesvc.VM{}
+	if err := a.runJSON(ctx, "CreateVM", vm, args...); err != nil {
 		return nil, err
 	}
-
-	var resp cliVMResponse
-	if err := json.Unmarshal(output, &resp); err != nil {
-		return nil, ErrCLIParse{
-			Operation: "CreateVM",
-			Message:   err.Error(),
-		}
-	}
-
-	return &CreateVMResult{
-		VMID:    resp.ID,
-		Name:    resp.Name,
-		State:   resp.State,
-		Success: resp.Success,
-		Labels:  resp.Labels,
-	}, nil
+	return createVMResultFromDomain(vm), nil
 }
 
 // StartVM starts a virtual machine via the CLI.
 func (a *CLIAdapter) StartVM(ctx context.Context, opts StartVMOptions) (*StartVMResult, error) {
-	args := []string{"compute", "start", "--id", opts.VMID, "--output", "json"}
-
-	output, err := a.runCommand(ctx, args...)
+	status, err := a.runVerb(ctx, "StartVM", "compute", "start", opts.VMID)
 	if err != nil {
 		return nil, err
 	}
-
-	var resp cliVMResponse
-	if err := json.Unmarshal(output, &resp); err != nil {
-		return nil, ErrCLIParse{
-			Operation: "StartVM",
-			Message:   err.Error(),
-		}
-	}
-
-	return &StartVMResult{
-		Success: resp.Success,
-		Message: resp.Message,
-	}, nil
+	return &StartVMResult{Success: status.Success, Message: status.Message}, nil
 }
 
 // StopVM stops a virtual machine via the CLI.
 func (a *CLIAdapter) StopVM(ctx context.Context, opts StopVMOptions) (*StopVMResult, error) {
-	args := []string{"compute", "stop", "--id", opts.VMID, "--output", "json"}
-
+	args := []string{"compute", "stop", opts.VMID}
 	if opts.Force {
 		args = append(args, "--force")
 	}
@@ -223,118 +214,86 @@ func (a *CLIAdapter) StopVM(ctx context.Context, opts StopVMOptions) (*StopVMRes
 		args = append(args, "--timeout", fmt.Sprint(opts.TimeoutSeconds))
 	}
 
-	output, err := a.runCommand(ctx, args...)
+	status, err := a.runVerb(ctx, "StopVM", args...)
 	if err != nil {
 		return nil, err
 	}
+	return &StopVMResult{Success: status.Success, Message: status.Message}, nil
+}
 
-	var resp cliVMResponse
-	if err := json.Unmarshal(output, &resp); err != nil {
-		return nil, ErrCLIParse{
-			Operation: "StopVM",
-			Message:   err.Error(),
-		}
+// RebootVM restarts a running virtual machine via the CLI.
+func (a *CLIAdapter) RebootVM(ctx context.Context, opts RebootVMOptions) (*RebootVMResult, error) {
+	args := []string{"compute", "reboot", opts.VMID}
+	if opts.Force {
+		args = append(args, "--force")
 	}
 
-	return &StopVMResult{
-		Success: resp.Success,
-		Message: resp.Message,
-	}, nil
+	status, err := a.runVerb(ctx, "RebootVM", args...)
+	if err != nil {
+		return nil, err
+	}
+	return &RebootVMResult{Success: status.Success, Message: status.Message}, nil
+}
+
+// SuspendVM pauses a running virtual machine via the CLI.
+func (a *CLIAdapter) SuspendVM(ctx context.Context, opts SuspendVMOptions) (*SuspendVMResult, error) {
+	status, err := a.runVerb(ctx, "SuspendVM", "compute", "suspend", opts.VMID)
+	if err != nil {
+		return nil, err
+	}
+	return &SuspendVMResult{Success: status.Success, Message: status.Message}, nil
+}
+
+// ResumeVM continues a suspended virtual machine via the CLI.
+func (a *CLIAdapter) ResumeVM(ctx context.Context, opts ResumeVMOptions) (*ResumeVMResult, error) {
+	status, err := a.runVerb(ctx, "ResumeVM", "compute", "resume", opts.VMID)
+	if err != nil {
+		return nil, err
+	}
+	return &ResumeVMResult{Success: status.Success, Message: status.Message}, nil
 }
 
 // DeleteVM deletes a virtual machine via the CLI.
 func (a *CLIAdapter) DeleteVM(ctx context.Context, opts DeleteVMOptions) (*DeleteVMResult, error) {
-	args := []string{"compute", "delete", "--id", opts.VMID, "--output", "json"}
-
+	args := []string{"compute", "delete", opts.VMID}
 	if opts.DeleteDisks {
 		args = append(args, "--delete-disks")
 	}
 
-	output, err := a.runCommand(ctx, args...)
+	status, err := a.runVerb(ctx, "DeleteVM", args...)
 	if err != nil {
 		return nil, err
 	}
-
-	var resp cliVMResponse
-	if err := json.Unmarshal(output, &resp); err != nil {
-		return nil, ErrCLIParse{
-			Operation: "DeleteVM",
-			Message:   err.Error(),
-		}
-	}
-
-	return &DeleteVMResult{
-		Success: resp.Success,
-		Message: resp.Message,
-	}, nil
+	return &DeleteVMResult{Success: status.Success, Message: status.Message}, nil
 }
 
 // GetVM retrieves a virtual machine via the CLI.
 func (a *CLIAdapter) GetVM(ctx context.Context, opts GetVMOptions) (*GetVMResult, error) {
-	args := []string{"compute", "get", "--id", opts.VMID, "--output", "json"}
-
-	output, err := a.runCommand(ctx, args...)
-	if err != nil {
+	vm := &computesvc.VM{}
+	if err := a.runJSON(ctx, "GetVM", vm, "compute", "get", opts.VMID); err != nil {
 		return nil, err
 	}
-
-	var resp cliVMResponse
-	if err := json.Unmarshal(output, &resp); err != nil {
-		return nil, ErrCLIParse{
-			Operation: "GetVM",
-			Message:   err.Error(),
-		}
-	}
-
-	return &GetVMResult{
-		VMID:     resp.ID,
-		Name:     resp.Name,
-		State:    resp.State,
-		CPUs:     resp.CPUs,
-		MemoryMB: resp.Memory,
-		Labels:   resp.Labels,
-	}, nil
+	return getVMResultFromDomain(vm), nil
 }
 
-// ListVMs lists virtual machines via the CLI.
+// ListVMs lists virtual machines via the CLI. It passes --all because the
+// CLI otherwise lists only running VMs, which no other transport does.
 func (a *CLIAdapter) ListVMs(ctx context.Context, opts ListVMsOptions) (*ListVMsResult, error) {
-	args := []string{"compute", "list", "--output", "json"}
+	args := []string{"compute", "list", "--all"}
 
 	if opts.StateFilter != "" {
-		args = append(args, "--state", opts.StateFilter)
+		args = append(args, "--filter", "state="+opts.StateFilter)
 	}
 	if opts.PageSize > 0 {
-		args = append(args, "--page-size", fmt.Sprint(opts.PageSize))
+		args = append(args, "--limit", fmt.Sprint(opts.PageSize))
 	}
 	for k, v := range opts.Labels {
-		args = append(args, "--label", k+"="+v)
+		args = append(args, "--filter", "label="+k+"="+v)
 	}
 
-	output, err := a.runCommand(ctx, args...)
-	if err != nil {
+	result := &computesvc.ListVMsResult{}
+	if err := a.runJSON(ctx, "ListVMs", result, args...); err != nil {
 		return nil, err
 	}
-
-	var resp cliListResponse
-	if err := json.Unmarshal(output, &resp); err != nil {
-		return nil, ErrCLIParse{
-			Operation: "ListVMs",
-			Message:   err.Error(),
-		}
-	}
-
-	vms := make([]VMSummary, len(resp.VMs))
-	for i, vm := range resp.VMs {
-		vms[i] = VMSummary{
-			VMID:   vm.ID,
-			Name:   vm.Name,
-			State:  vm.State,
-			Labels: vm.Labels,
-		}
-	}
-
-	return &ListVMsResult{
-		VMs:        vms,
-		TotalItems: resp.TotalItems,
-	}, nil
+	return listVMsResultFromDomain(result), nil
 }

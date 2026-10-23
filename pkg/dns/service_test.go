@@ -634,6 +634,7 @@ func TestNewRRSIGRecord(t *testing.T) {
 				tt.originalTTL, tt.expiration, tt.inception,
 				tt.keyTag, tt.signerName, tt.signature,
 			)
+			assert.Equal(t, tt.recName, record.Name)
 			assert.Equal(t, tt.signerName, record.SignerName)
 			assert.Equal(t, tt.signature, record.Signature)
 			assert.Equal(t, tt.typeCovered, record.TypeCovered)
@@ -1011,6 +1012,16 @@ func TestService_PublicDomain(t *testing.T) {
 
 	domain := svc.PublicDomain()
 	assert.Equal(t, "example.com.", domain)
+}
+
+// A daemon may run the DNS service with neither server configured (the
+// integration platformd does); its domains are then empty, and reading them
+// must not dereference the absent server config (QUIC DNS GetConfig panicked).
+func TestService_Domains_NoServerConfigured(t *testing.T) {
+	svc := &Service{params: &Params{Config: &Config{}}}
+
+	assert.Empty(t, svc.InternalDomain())
+	assert.Empty(t, svc.PublicDomain())
 }
 
 // TestService_InternalZone verifies internal zone retrieval.

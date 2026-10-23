@@ -50,7 +50,7 @@ func GetServiceEndpoints() *ServiceEndpoints {
 		PlatformGRPC: envOr(EnvPlatformGRPCEndpoint, "localhost:10443"),
 		PlatformREST: envOr(EnvPlatformRESTEndpoint, "https://localhost:8443"),
 		PlatformQUIC: envOr(EnvPlatformQUICEndpoint, "localhost:9444"),
-		PlatformMCP:  envOr(EnvPlatformMCPEndpoint, "http://localhost:9445"),
+		PlatformMCP:  envOr(EnvPlatformMCPEndpoint, "https://localhost:9445"),
 		PlatformUnix: envOr(EnvPlatformUnixSocket, "/run/platformd.sock"),
 		PlatformCTL:  envOr(EnvPlatformCTL, "platformctl"),
 	}
@@ -65,16 +65,17 @@ func envOr(key, fallback string) string {
 }
 
 // notConfiguredMarkers are the substrings every transport surfaces when the
-// devcontainer's platformd has no `ntp:` section. The suite treats that as a
-// valid contract outcome — it still proves the route/opcode/tool is wired —
-// while any other failure is a real regression.
+// devcontainer's platformd has no `ntp:` section. The suite fails on that
+// with ErrNTPNotConfigured, naming the missing section; any other failure is
+// reported as itself. A bare Unavailable or 503 is not one of them: chronyd
+// not answering its control socket (ntp.ErrControlUnavailable) carries the
+// same class (docs/ntp/api.md §5), and naming it "no ntp: section" sent the
+// diagnosis to a config that has one.
 var notConfiguredMarkers = []string{
 	"ntp service is not configured",
 	"time synchronization is not enabled",
 	"service not available: ntp",
 	"quic service unavailable: ntp",
-	"unavailable",
-	"503",
 }
 
 // IsNotConfigured reports whether err is the "no ntp: section" surface.
@@ -90,6 +91,23 @@ func IsNotConfigured(err error) bool {
 	}
 	return false
 }
+
+// ErrNTPNotConfigured is the missing prerequisite the suite fails on when
+// platformd answers that it has no `ntp:` section: the NTP service is not
+// running, so nothing the suite asserts can be checked.
+type ErrNTPNotConfigured struct {
+	Transport string
+	Err       error
+}
+
+// Error implements the error interface.
+func (e ErrNTPNotConfigured) Error() string {
+	return e.Transport + ": platformd has no ntp: section, so its NTP service is not running; " +
+		"the integration daemon's config (test/integration/config.yaml) needs one: " + e.Err.Error()
+}
+
+// Unwrap returns the transport's refusal.
+func (e ErrNTPNotConfigured) Unwrap() error { return e.Err }
 
 // noReachableSourceMarkers are the substrings every transport surfaces when a
 // manual step is requested with no reachable source. The condition is a
@@ -112,16 +130,6 @@ func IsNoReachableSource(err error) bool {
 		}
 	}
 	return false
-}
-
-// SkipIfNotIntegration skips the test when INTEGRATION_TEST is not set, which
-// is how the devcontainer runner gates every suite.
-func SkipIfNotIntegration(t interface {
-	Skip(args ...any)
-}) {
-	if os.Getenv("INTEGRATION_TEST") == "" {
-		t.Skip("Skipping integration test: INTEGRATION_TEST not set")
-	}
 }
 
 // ShortContext derives a bounded per-call context.

@@ -41,6 +41,18 @@ func init() {
 		method string
 	}{"/api/v1/attestation/callers", http.MethodGet}
 
+	// Device verdicts are polled from a cursor; the webservice answers the
+	// pb reply as protojson, which decodes generically. StreamDeviceVerdicts
+	// is served over this route by NewStream.
+	templatedRouteTable[platformv1.AttestationService_PollDeviceVerdicts_FullMethodName] = templatedRoute{
+		path:   "/api/v1/attestation/verdicts",
+		method: http.MethodGet,
+		queryParams: []queryParam{
+			{name: "cursor", field: "cursor"},
+			{name: "wait_ms", field: "wait_ms"},
+		},
+	}
+
 	restResponseDecoders[platformv1.AttestationService_GetDeviceReport_FullMethodName] = decodeDeviceReport
 	restResponseDecoders[platformv1.AttestationService_ListDeviceReports_FullMethodName] = decodeDeviceReports
 	restResponseDecoders[platformv1.AttestationService_DescribeCallerPolicy_FullMethodName] = decodeCallerPolicy

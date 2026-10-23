@@ -16,12 +16,19 @@ package commands
 import (
 	"context"
 	"errors"
+	"log/slog"
+	"net/netip"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/process"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/proxysvc"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ipsec"
+	ipsecconfig "github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ipsec/config"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/netplan"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/zone"
 )
@@ -126,6 +133,24 @@ func TestDatapathService(t *testing.T) {
 		{"nat", &gateway.GatewayConfig{NAT: &gateway.NATConfig{Enabled: true}}, gateway.ServiceNAT},
 		{"load-balancer", &gateway.GatewayConfig{LoadBalancer: &gateway.LoadBalancerConfig{Enabled: true}}, gateway.ServiceLoadBalancer},
 		{"none", &gateway.GatewayConfig{Enabled: true}, ""},
+		// A supervised child that hosts no datapath service never opens
+		// OVSDB, whatever else the shared configuration enables.
+		{"firewall hosted elsewhere", &gateway.GatewayConfig{
+			Firewall:       &gateway.FirewallConfig{Enabled: true},
+			HostedServices: []string{gateway.ServiceTransit},
+		}, ""},
+		{"nat hosted here", &gateway.GatewayConfig{
+			Firewall:       &gateway.FirewallConfig{Enabled: true},
+			NAT:            &gateway.NATConfig{Enabled: true},
+			HostedServices: []string{gateway.ServiceNAT},
+		}, gateway.ServiceNAT},
+		{"overlay", &gateway.GatewayConfig{Overlay: &gateway.OverlayServiceConfig{Enabled: true}}, gateway.ServiceOverlay},
+		// The routing child reads the same configuration as the datapath
+		// process; an overlay it does not host opens nothing (#765).
+		{"overlay hosted elsewhere", &gateway.GatewayConfig{
+			Overlay:        &gateway.OverlayServiceConfig{Enabled: true},
+			HostedServices: []string{gateway.ServiceTransit},
+		}, ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -181,5 +206,202 @@ func TestBuildGatewaySkipsRuntimeWithoutDatapathService(t *testing.T) {
 	}
 	if gw.GetConfig().Runtime != nil {
 		t.Fatal("runtime must not be assembled without a datapath service")
+	}
+}
+
+// supervisedDatapathConfig enables every OVS-backed datapath service over an
+// sdn: section whose OVSDB socket does not exist, so any dial fails the build.
+func supervisedDatapathConfig(t *testing.T) *ServeConfig {
+	t.Helper()
+	return &ServeConfig{
+		Gateway: &gateway.GatewayConfig{
+			Enabled:  true,
+			ID:       "gw-supervisor",
+			Firewall: &gateway.FirewallConfig{Enabled: true, DefaultPolicy: "deny"},
+			NAT: &gateway.NATConfig{
+				Enabled:        true,
+				ExternalIP:     "203.0.113.10",
+				PortRangeStart: 1024,
+				PortRangeEnd:   65535,
+				MaxSessions:    1000,
+				InternalCIDR:   "10.0.100.0/24",
+			},
+			LoadBalancer: &gateway.LoadBalancerConfig{
+				Enabled:             true,
+				Algorithm:           "hash",
+				HealthCheckInterval: time.Hour,
+				HealthCheckTimeout:  time.Second,
+				MaxBackends:         8,
+			},
+		},
+		SDN: &sdn.Config{
+			Enabled:     true,
+			OVS:         &sdn.OVSConfig{Socket: filepath.Join(t.TempDir(), "missing.sock"), Bridge: "br0"},
+			Environment: &netplan.Environment{ID: 4},
+		},
+		Process: supervisorSettings(t),
+		DataDir: t.TempDir(),
+	}
+}
+
+func TestBuildGatewaySupervisorRelaysTheDatapathWithoutDialingOVSDB(t *testing.T) {
+	// The datapath child holds the OVS runtime (#557, R14); the supervising
+	// parent relays to it and must not dial OVSDB itself.
+	cfg := supervisedDatapathConfig(t)
+	if _, err := BuildSupervisor(cfg, process.Inherited{ConfigFile: "/etc/gatewayd/config.yaml"}, testLogger()); err != nil {
+		t.Fatalf("BuildSupervisor: %v", err)
+	}
+	gw, err := BuildGateway(context.Background(), cfg, testLogger())
+	if err != nil {
+		t.Fatalf("BuildGateway must relay the datapath, not dial OVSDB: %v", err)
+	}
+	if gw.GetConfig().Runtime != nil {
+		t.Fatal("the supervising parent must not hold the OVS runtime")
+	}
+	registered := make(map[string]bool)
+	for _, report := range gw.ServiceReports() {
+		registered[report.Name] = true
+	}
+	for _, service := range []string{gateway.ServiceFirewall, gateway.ServiceNAT, gateway.ServiceLoadBalancer} {
+		if !registered[service] {
+			t.Fatalf("the supervising parent must register the %s relay", service)
+		}
+	}
+}
+
+func TestBuildGatewayWithoutSupervisorDialsOVSDBForTheDatapath(t *testing.T) {
+	// The same configuration without a supervisor runs the datapath in this
+	// process, so the missing OVSDB socket fails the build.
+	var connectErr *ErrOVSConnectFailed
+	if _, err := BuildGateway(context.Background(), supervisedDatapathConfig(t), testLogger()); !errors.As(err, &connectErr) {
+		t.Fatalf("err = %v, want *ErrOVSConnectFailed: an unsupervised datapath dials OVSDB", err)
+	}
+}
+
+func TestRunsOverlay(t *testing.T) {
+	cases := []struct {
+		name string
+		cfg  *gateway.GatewayConfig
+		want bool
+	}{
+		{"no overlay section", &gateway.GatewayConfig{}, false},
+		{"overlay disabled", &gateway.GatewayConfig{Overlay: &gateway.OverlayServiceConfig{}}, false},
+		{"overlay hosted by the only process", &gateway.GatewayConfig{Overlay: &gateway.OverlayServiceConfig{Enabled: true}}, true},
+		{"overlay hosted here", &gateway.GatewayConfig{
+			Overlay:        &gateway.OverlayServiceConfig{Enabled: true},
+			HostedServices: []string{gateway.ServiceOverlay},
+		}, true},
+		{"overlay hosted elsewhere", &gateway.GatewayConfig{
+			Overlay:        &gateway.OverlayServiceConfig{Enabled: true},
+			HostedServices: []string{gateway.ServiceTransit},
+		}, false},
+		{"hosted but disabled", &gateway.GatewayConfig{
+			Overlay:        &gateway.OverlayServiceConfig{},
+			HostedServices: []string{gateway.ServiceOverlay},
+		}, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := runsOverlay(tc.cfg); got != tc.want {
+				t.Fatalf("runsOverlay = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// overlaySharedConfig is the configuration every supervised gatewayd
+// process reads on an overlay gateway, with hosted as the process's
+// HostedServices. Its OVS socket does not exist and its platformd protocol
+// is unknown, so opening OVSDB or dialing platformd fails the build.
+func overlaySharedConfig(t *testing.T, hosted ...string) *ServeConfig {
+	t.Helper()
+	return &ServeConfig{
+		Gateway: &gateway.GatewayConfig{
+			Enabled:        true,
+			ID:             "gw-overlay",
+			HostedServices: hosted,
+			Overlay: &gateway.OverlayServiceConfig{
+				Enabled:           true,
+				LocalVTEP:         netip.MustParseAddr("10.4.100.20"),
+				UnderlayInterface: "vtep0",
+				UnderlayMTU:       9216,
+				AccessPort:        "patch-workloads",
+				OverlayASN:        65000,
+				VXLANPort:         4789,
+				VNIs:              []gateway.OverlayVNIConfig{{VNI: 40100, VLAN: 100}},
+				DefaultVNI:        40100,
+				MaxVNIs:           gateway.DefaultMaxVNIs,
+				VerdictMaxAge:     time.Minute,
+			},
+		},
+		SDN: &sdn.Config{
+			Enabled:     true,
+			OVS:         &sdn.OVSConfig{Socket: filepath.Join(t.TempDir(), "missing.sock"), Bridge: "br0"},
+			Environment: &netplan.Environment{ID: 4},
+		},
+		Proxy: &proxysvc.Config{Platformd: proxysvc.PlatformdConfig{Protocol: "carrier-pigeon"}},
+	}
+}
+
+func TestBuildGateway_RoutingChildAssemblesNoOverlay(t *testing.T) {
+	cfg := overlaySharedConfig(t, gateway.ServiceTransit)
+	gw, err := BuildGateway(context.Background(), cfg, testLogger())
+	if err != nil {
+		t.Fatalf("BuildGateway: %v (the routing child opened OVSDB or dialed platformd)", err)
+	}
+	if gw.GetConfig().Runtime != nil {
+		t.Fatal("the routing child must not assemble the overlay runtime")
+	}
+}
+
+func TestBuildGateway_OverlayHostOpensOVSDB(t *testing.T) {
+	for _, hosted := range [][]string{nil, {gateway.ServiceOverlay}} {
+		cfg := overlaySharedConfig(t, hosted...)
+		var connectErr *ErrOVSConnectFailed
+		if _, err := BuildGateway(context.Background(), cfg, testLogger()); !errors.As(err, &connectErr) {
+			t.Fatalf("hosted %v: err = %v, want *ErrOVSConnectFailed", hosted, err)
+		}
+	}
+}
+
+func TestWireOverlayRuntime_DialsOnlyInTheOverlayHost(t *testing.T) {
+	runtime := &gateway.GatewayRuntime{}
+	if err := wireOverlayRuntime(context.Background(), overlaySharedConfig(t, gateway.ServiceTransit), nil, runtime); err != nil {
+		t.Fatalf("routing child: err = %v, want no dial", err)
+	}
+	if runtime.OverlayPlatform != nil {
+		t.Fatal("routing child: the overlay platform must not be wired")
+	}
+
+	var cfgErr *proxysvc.ErrConfigInvalid
+	if err := wireOverlayRuntime(context.Background(), overlaySharedConfig(t, gateway.ServiceOverlay), nil, runtime); !errors.As(err, &cfgErr) {
+		t.Fatalf("overlay host: err = %v, want the dial's *proxysvc.ErrConfigInvalid", err)
+	}
+}
+
+// admitEvery is a modes.VTEPAdmitter that admits every VTEP.
+type admitEvery struct{}
+
+func (admitEvery) AdmitVTEP(context.Context, uint32, netip.Addr) error { return nil }
+
+// newOverlayIPsec refuses before it opens the token or the certificate: an
+// overlay IPsec without the admitter would bring up an SA to any VTEP a
+// route names, and one without CRLs could not check a peer's revocation.
+func TestNewOverlayIPsec_RefusesBeforeOpeningAnything(t *testing.T) {
+	cfg := &ipsecconfig.Config{
+		Enabled:         true,
+		FabricInterface: "vtep0",
+		LocalAddress:    "10.4.100.20",
+		Token:           ipsecconfig.TokenConfig{Handle: "6970736563"},
+	}
+	logger := slog.New(slog.DiscardHandler)
+
+	if _, err := newOverlayIPsec(cfg, nil, logger); !errors.Is(err, ipsec.ErrMissingDependency) {
+		t.Errorf("no admitter: err = %v, want ipsec.ErrMissingDependency", err)
+	}
+	_, err := newOverlayIPsec(cfg, admitEvery{}, logger)
+	var invalid *ipsecconfig.ConfigError
+	if !errors.As(err, &invalid) || invalid.Field != "crl-files" {
+		t.Errorf("no CRLs: err = %v, want a crl-files *ipsecconfig.ConfigError", err)
 	}
 }

@@ -57,6 +57,21 @@ func (e *ErrDeleteIDevIDFailed) Error() string {
 
 func (e *ErrDeleteIDevIDFailed) Unwrap() error { return e.Cause }
 
+// ErrIdentityKeyNotDeletable is returned when the daemon refuses to delete
+// the IDevID or IAK key, which every transport does until the owner rules on
+// eviction. The key stays in the TPM and the refused call changed nothing;
+// the key's certificate has its own delete.
+type ErrIdentityKeyNotDeletable struct {
+	Key   string // "IDevID" or "IAK"
+	Cause error
+}
+
+func (e *ErrIdentityKeyNotDeletable) Error() string {
+	return fmt.Sprintf("%s key delete refused; the key stays in the TPM and nothing was changed: %v", e.Key, e.Cause)
+}
+
+func (e *ErrIdentityKeyNotDeletable) Unwrap() error { return e.Cause }
+
 // IAK Errors
 
 type ErrGenerateIAKFailed struct {

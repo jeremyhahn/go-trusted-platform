@@ -19,6 +19,7 @@ import (
 	"io"
 	"log/slog"
 	"math"
+	"sync"
 	"testing"
 	"time"
 
@@ -38,6 +39,12 @@ import (
 // Zero values for responses and errors are the defaults; tests override
 // individual fields per case.
 type fakeBMCService struct {
+	// mu guards bmcCalls and powerStatusSequence: a transport's server
+	// goroutine records a call while the test reads it, and a reply over a
+	// socket gives the race detector no happens-before edge.
+	mu sync.Mutex
+	bmcCalls
+
 	powerOnErr     error
 	powerOffErr    error
 	powerResetErr  error
@@ -49,15 +56,11 @@ type fakeBMCService struct {
 	// one entry at a time; powerStatus/powerStatusErr are used once the
 	// slice is exhausted.
 	powerStatusSequence []powerStatusStep
-	powerStatusCalls    int
 
-	setBootDevice    bmc.BootDevice
-	setBootPersist   bool
 	setBootErr       error
 	getBootDevice    bmc.BootDevice
 	getBootDeviceErr error
 
-	mountISOURL string
 	mountISOErr error
 	unmountErr  error
 	vmedia      *bmc.VirtualMediaInfo
@@ -70,24 +73,50 @@ type fakeBMCService struct {
 	getCertInfo    *bmc.CertificateInfo
 	getCertInfoErr error
 	replaceCertErr error
+
+	listUsers      []bmc.User
+	listUsersErr   error
+	createUserErr  error
+	deleteUserErr  error
+	setPasswordErr error
+	setPrivErr     error
+}
+
+// bmcCalls is what fakeBMCService records of the calls it serves.
+type bmcCalls struct {
+	lastProfileID    uint64
+	powerStatusCalls int
+
+	setBootDevice  bmc.BootDevice
+	setBootPersist bool
+	mountISOURL    string
 	replaceCert    []byte
 	replaceKey     []byte
 
-	listUsers        []bmc.User
-	listUsersErr     error
-	createUserErr    error
 	lastCreatedUser  bmc.User
 	lastPassword     string
-	deleteUserErr    error
 	lastDeletedSlot  uint8
-	setPasswordErr   error
 	lastPasswordSlot uint8
-	setPrivErr       error
 	lastPrivilege    bmc.Privilege
 	lastPrivSlot     uint8
 	lastPrivChannel  uint8
+}
 
-	lastProfileID uint64
+// calls returns a copy of the recorded calls, taken under the lock.
+func (f *fakeBMCService) calls() bmcCalls {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.bmcCalls
+}
+
+// record runs one call's bookkeeping under the lock.
+func (f *fakeBMCService) record(profileID uint64, note func(*bmcCalls)) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.lastProfileID = profileID
+	if note != nil {
+		note(&f.bmcCalls)
+	}
 }
 
 type powerStatusStep struct {
@@ -96,26 +125,28 @@ type powerStatusStep struct {
 }
 
 func (f *fakeBMCService) PowerOn(ctx context.Context, profileID uint64) error {
-	f.lastProfileID = profileID
+	f.record(profileID, nil)
 	return f.powerOnErr
 }
 
 func (f *fakeBMCService) PowerOff(ctx context.Context, profileID uint64) error {
-	f.lastProfileID = profileID
+	f.record(profileID, nil)
 	return f.powerOffErr
 }
 
 func (f *fakeBMCService) PowerReset(ctx context.Context, profileID uint64) error {
-	f.lastProfileID = profileID
+	f.record(profileID, nil)
 	return f.powerResetErr
 }
 
 func (f *fakeBMCService) PowerCycle(ctx context.Context, profileID uint64) error {
-	f.lastProfileID = profileID
+	f.record(profileID, nil)
 	return f.powerCycleErr
 }
 
 func (f *fakeBMCService) PowerStatus(ctx context.Context, profileID uint64) (bmc.PowerState, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.lastProfileID = profileID
 	if f.powerStatusSequence != nil && f.powerStatusCalls < len(f.powerStatusSequence) {
 		step := f.powerStatusSequence[f.powerStatusCalls]
@@ -127,104 +158,126 @@ func (f *fakeBMCService) PowerStatus(ctx context.Context, profileID uint64) (bmc
 }
 
 func (f *fakeBMCService) SetBootDevice(ctx context.Context, profileID uint64, device bmc.BootDevice, persistent bool) error {
-	f.lastProfileID = profileID
-	f.setBootDevice = device
-	f.setBootPersist = persistent
+	f.record(profileID, func(c *bmcCalls) {
+		c.setBootDevice = device
+		c.setBootPersist = persistent
+	})
 	return f.setBootErr
 }
 
 func (f *fakeBMCService) GetBootDevice(ctx context.Context, profileID uint64) (bmc.BootDevice, error) {
-	f.lastProfileID = profileID
+	f.record(profileID, nil)
 	return f.getBootDevice, f.getBootDeviceErr
 }
 
 func (f *fakeBMCService) MountISO(ctx context.Context, profileID uint64, isoURL string) error {
-	f.lastProfileID = profileID
-	f.mountISOURL = isoURL
+	f.record(profileID, func(c *bmcCalls) { c.mountISOURL = isoURL })
 	return f.mountISOErr
 }
 
 func (f *fakeBMCService) UnmountISO(ctx context.Context, profileID uint64) error {
-	f.lastProfileID = profileID
+	f.record(profileID, nil)
 	return f.unmountErr
 }
 
 func (f *fakeBMCService) VirtualMediaStatus(ctx context.Context, profileID uint64) (*bmc.VirtualMediaInfo, error) {
-	f.lastProfileID = profileID
+	f.record(profileID, nil)
 	return f.vmedia, f.vmediaErr
 }
 
 func (f *fakeBMCService) GetSensors(ctx context.Context, profileID uint64) ([]bmc.SensorReading, error) {
-	f.lastProfileID = profileID
+	f.record(profileID, nil)
 	return f.sensors, f.sensorsErr
 }
 
 func (f *fakeBMCService) GetSystemInfo(ctx context.Context, profileID uint64) (*bmc.SystemInfo, error) {
-	f.lastProfileID = profileID
+	f.record(profileID, nil)
 	return f.systemInfo, f.systemInfoErr
 }
 
 func (f *fakeBMCService) GetWebCertificate(ctx context.Context, profileID uint64) (*bmc.CertificateInfo, error) {
-	f.lastProfileID = profileID
+	f.record(profileID, nil)
 	return f.getCertInfo, f.getCertInfoErr
 }
 
 func (f *fakeBMCService) ReplaceWebCertificate(ctx context.Context, profileID uint64, certPEM, keyPEM []byte) error {
-	f.lastProfileID = profileID
-	f.replaceCert = certPEM
-	f.replaceKey = keyPEM
+	f.record(profileID, func(c *bmcCalls) {
+		c.replaceCert = certPEM
+		c.replaceKey = keyPEM
+	})
 	return f.replaceCertErr
 }
 
 func (f *fakeBMCService) ListUsers(ctx context.Context, profileID uint64) ([]bmc.User, error) {
-	f.lastProfileID = profileID
+	f.record(profileID, nil)
 	return f.listUsers, f.listUsersErr
 }
 
 func (f *fakeBMCService) CreateUser(ctx context.Context, profileID uint64, user bmc.User, password string) error {
-	f.lastProfileID = profileID
-	f.lastCreatedUser = user
-	f.lastPassword = password
+	f.record(profileID, func(c *bmcCalls) {
+		c.lastCreatedUser = user
+		c.lastPassword = password
+	})
 	return f.createUserErr
 }
 
 func (f *fakeBMCService) DeleteUser(ctx context.Context, profileID uint64, slot uint8) error {
-	f.lastProfileID = profileID
-	f.lastDeletedSlot = slot
+	f.record(profileID, func(c *bmcCalls) { c.lastDeletedSlot = slot })
 	return f.deleteUserErr
 }
 
 func (f *fakeBMCService) SetUserPassword(ctx context.Context, profileID uint64, slot uint8, password string) error {
-	f.lastProfileID = profileID
-	f.lastPasswordSlot = slot
-	f.lastPassword = password
+	f.record(profileID, func(c *bmcCalls) {
+		c.lastPasswordSlot = slot
+		c.lastPassword = password
+	})
 	return f.setPasswordErr
 }
 
 func (f *fakeBMCService) SetUserPrivilege(ctx context.Context, profileID uint64, slot, channel uint8, privilege bmc.Privilege) error {
-	f.lastProfileID = profileID
-	f.lastPrivSlot = slot
-	f.lastPrivChannel = channel
-	f.lastPrivilege = privilege
+	f.record(profileID, func(c *bmcCalls) {
+		c.lastPrivSlot = slot
+		c.lastPrivChannel = channel
+		c.lastPrivilege = privilege
+	})
 	return f.setPrivErr
 }
 
 // fakeBaremetalService records call args and returns configured responses.
 type fakeBaremetalService struct {
-	provisionResult  *baremetal.ProvisionResult
-	provisionErr     error
-	statusResult     *baremetal.ProvisionResult
-	statusErr        error
+	// mu guards baremetalCalls; see fakeBMCService.mu.
+	mu sync.Mutex
+	baremetalCalls
+
+	provisionResult *baremetal.ProvisionResult
+	provisionErr    error
+	statusResult    *baremetal.ProvisionResult
+	statusErr       error
+}
+
+// baremetalCalls is what fakeBaremetalService records of the calls it serves.
+type baremetalCalls struct {
 	lastProvisionReq *baremetal.ProvisionRequest
 	lastStatusID     uint64
 }
 
+// calls returns a copy of the recorded calls, taken under the lock.
+func (f *fakeBaremetalService) calls() baremetalCalls {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.baremetalCalls
+}
+
 func (f *fakeBaremetalService) Provision(ctx context.Context, req *baremetal.ProvisionRequest) (*baremetal.ProvisionResult, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.lastProvisionReq = req
 	return f.provisionResult, f.provisionErr
 }
 
 func (f *fakeBaremetalService) StatusForProfile(ctx context.Context, profileID uint64) (*baremetal.ProvisionResult, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.lastStatusID = profileID
 	return f.statusResult, f.statusErr
 }
@@ -309,11 +362,11 @@ func TestBMCPowerOn_HappyPath(t *testing.T) {
 	}
 }
 
-func TestBMCPowerOn_NilServiceReturnsFailedPrecondition(t *testing.T) {
+func TestBMCPowerOn_NilServiceReturnsUnavailable(t *testing.T) {
 	svc := NewBMCGRPCService(nil, nil, slog.Default())
 	_, err := svc.PowerOn(context.Background(), &platformv1.BMCPowerRequest{ProfileId: 1})
-	if got := statusCode(err); got != codes.FailedPrecondition {
-		t.Fatalf("code = %v, want FailedPrecondition", got)
+	if got := statusCode(err); got != codes.Unavailable {
+		t.Fatalf("code = %v, want Unavailable", got)
 	}
 }
 
@@ -484,8 +537,8 @@ func TestBMCPowerStatus_ServiceError(t *testing.T) {
 func TestBMCPowerStatus_NilService(t *testing.T) {
 	svc := NewBMCGRPCService(nil, nil, slog.Default())
 	_, err := svc.PowerStatus(context.Background(), &platformv1.BMCPowerStatusRequest{ProfileId: 1})
-	if got := statusCode(err); got != codes.FailedPrecondition {
-		t.Fatalf("code = %v, want FailedPrecondition", got)
+	if got := statusCode(err); got != codes.Unavailable {
+		t.Fatalf("code = %v, want Unavailable", got)
 	}
 }
 
@@ -538,8 +591,8 @@ func TestBMCSetBootDevice_InvalidDevice(t *testing.T) {
 func TestBMCSetBootDevice_NilService(t *testing.T) {
 	svc := NewBMCGRPCService(nil, nil, slog.Default())
 	_, err := svc.SetBootDevice(context.Background(), &platformv1.BMCSetBootDeviceRequest{ProfileId: 1, Device: platformv1.BMCBootDevice_BMC_BOOT_DEVICE_PXE})
-	if got := statusCode(err); got != codes.FailedPrecondition {
-		t.Fatalf("code = %v, want FailedPrecondition", got)
+	if got := statusCode(err); got != codes.Unavailable {
+		t.Fatalf("code = %v, want Unavailable", got)
 	}
 }
 
@@ -586,8 +639,8 @@ func TestBMCGetBootDevice_ServiceError(t *testing.T) {
 func TestBMCGetBootDevice_NilService(t *testing.T) {
 	svc := NewBMCGRPCService(nil, nil, slog.Default())
 	_, err := svc.GetBootDevice(context.Background(), &platformv1.BMCGetBootDeviceRequest{ProfileId: 1})
-	if got := statusCode(err); got != codes.FailedPrecondition {
-		t.Fatalf("code = %v, want FailedPrecondition", got)
+	if got := statusCode(err); got != codes.Unavailable {
+		t.Fatalf("code = %v, want Unavailable", got)
 	}
 }
 
@@ -631,8 +684,8 @@ func TestBMCMountISO_MissingURL(t *testing.T) {
 func TestBMCMountISO_NilService(t *testing.T) {
 	svc := NewBMCGRPCService(nil, nil, slog.Default())
 	_, err := svc.MountISO(context.Background(), &platformv1.BMCMountISORequest{ProfileId: 1, IsoUrl: "x"})
-	if got := statusCode(err); got != codes.FailedPrecondition {
-		t.Fatalf("code = %v, want FailedPrecondition", got)
+	if got := statusCode(err); got != codes.Unavailable {
+		t.Fatalf("code = %v, want Unavailable", got)
 	}
 }
 
@@ -668,8 +721,8 @@ func TestBMCUnmountISO_HappyPath(t *testing.T) {
 func TestBMCUnmountISO_NilService(t *testing.T) {
 	svc := NewBMCGRPCService(nil, nil, slog.Default())
 	_, err := svc.UnmountISO(context.Background(), &platformv1.BMCUnmountISORequest{ProfileId: 1})
-	if got := statusCode(err); got != codes.FailedPrecondition {
-		t.Fatalf("code = %v, want FailedPrecondition", got)
+	if got := statusCode(err); got != codes.Unavailable {
+		t.Fatalf("code = %v, want Unavailable", got)
 	}
 }
 
@@ -730,8 +783,8 @@ func TestBMCVirtualMediaStatus_ServiceError(t *testing.T) {
 func TestBMCVirtualMediaStatus_NilService(t *testing.T) {
 	svc := NewBMCGRPCService(nil, nil, slog.Default())
 	_, err := svc.VirtualMediaStatus(context.Background(), &platformv1.BMCVirtualMediaStatusRequest{ProfileId: 1})
-	if got := statusCode(err); got != codes.FailedPrecondition {
-		t.Fatalf("code = %v, want FailedPrecondition", got)
+	if got := statusCode(err); got != codes.Unavailable {
+		t.Fatalf("code = %v, want Unavailable", got)
 	}
 }
 
@@ -777,8 +830,8 @@ func TestBMCGetSensors_ServiceError(t *testing.T) {
 func TestBMCGetSensors_NilService(t *testing.T) {
 	svc := NewBMCGRPCService(nil, nil, slog.Default())
 	_, err := svc.GetSensors(context.Background(), &platformv1.BMCGetSensorsRequest{ProfileId: 1})
-	if got := statusCode(err); got != codes.FailedPrecondition {
-		t.Fatalf("code = %v, want FailedPrecondition", got)
+	if got := statusCode(err); got != codes.Unavailable {
+		t.Fatalf("code = %v, want Unavailable", got)
 	}
 }
 
@@ -838,8 +891,8 @@ func TestBMCGetSystemInfo_ServiceError(t *testing.T) {
 func TestBMCGetSystemInfo_NilService(t *testing.T) {
 	svc := NewBMCGRPCService(nil, nil, slog.Default())
 	_, err := svc.GetSystemInfo(context.Background(), &platformv1.BMCGetSystemInfoRequest{ProfileId: 1})
-	if got := statusCode(err); got != codes.FailedPrecondition {
-		t.Fatalf("code = %v, want FailedPrecondition", got)
+	if got := statusCode(err); got != codes.Unavailable {
+		t.Fatalf("code = %v, want Unavailable", got)
 	}
 }
 
@@ -882,8 +935,8 @@ func TestBMCProvision_HappyPath(t *testing.T) {
 func TestBMCProvision_NilBaremetal(t *testing.T) {
 	svc := newTestService(&fakeBMCService{}, nil)
 	_, err := svc.Provision(context.Background(), &platformv1.BMCProvisionRequest{ProfileId: 1, IsoUrl: "x"})
-	if got := statusCode(err); got != codes.FailedPrecondition {
-		t.Fatalf("code = %v, want FailedPrecondition", got)
+	if got := statusCode(err); got != codes.Unavailable {
+		t.Fatalf("code = %v, want Unavailable", got)
 	}
 }
 
@@ -960,8 +1013,8 @@ func TestBMCProvisionStatus_NotFound(t *testing.T) {
 func TestBMCProvisionStatus_NilBaremetal(t *testing.T) {
 	svc := newTestService(&fakeBMCService{}, nil)
 	_, err := svc.ProvisionStatus(context.Background(), &platformv1.BMCProvisionStatusRequest{ProfileId: 1})
-	if got := statusCode(err); got != codes.FailedPrecondition {
-		t.Fatalf("code = %v, want FailedPrecondition", got)
+	if got := statusCode(err); got != codes.Unavailable {
+		t.Fatalf("code = %v, want Unavailable", got)
 	}
 }
 
@@ -1030,8 +1083,8 @@ func TestBMCGetWebCertificate_ServiceError(t *testing.T) {
 func TestBMCGetWebCertificate_NilService(t *testing.T) {
 	svc := NewBMCGRPCService(nil, nil, slog.Default())
 	_, err := svc.GetWebCertificate(context.Background(), &platformv1.BMCGetWebCertificateRequest{ProfileId: 1})
-	if got := statusCode(err); got != codes.FailedPrecondition {
-		t.Fatalf("code = %v, want FailedPrecondition", got)
+	if got := statusCode(err); got != codes.Unavailable {
+		t.Fatalf("code = %v, want Unavailable", got)
 	}
 }
 
@@ -1087,8 +1140,8 @@ func TestBMCReplaceWebCertificate_NilService(t *testing.T) {
 	_, err := svc.ReplaceWebCertificate(context.Background(), &platformv1.BMCReplaceWebCertificateRequest{
 		ProfileId: 1, CertPem: []byte("x"), KeyPem: []byte("y"),
 	})
-	if got := statusCode(err); got != codes.FailedPrecondition {
-		t.Fatalf("code = %v, want FailedPrecondition", got)
+	if got := statusCode(err); got != codes.Unavailable {
+		t.Fatalf("code = %v, want Unavailable", got)
 	}
 }
 
@@ -1148,8 +1201,8 @@ func TestBMCListUsers_ServiceError(t *testing.T) {
 func TestBMCListUsers_NilService(t *testing.T) {
 	svc := NewBMCGRPCService(nil, nil, slog.Default())
 	_, err := svc.ListUsers(context.Background(), &platformv1.BMCListUsersRequest{ProfileId: 1})
-	if got := statusCode(err); got != codes.FailedPrecondition {
-		t.Fatalf("code = %v, want FailedPrecondition", got)
+	if got := statusCode(err); got != codes.Unavailable {
+		t.Fatalf("code = %v, want Unavailable", got)
 	}
 }
 
@@ -1254,8 +1307,8 @@ func TestBMCCreateUser_NilService(t *testing.T) {
 	_, err := svc.CreateUser(context.Background(), &platformv1.BMCCreateUserRequest{
 		ProfileId: 1, User: &platformv1.BMCUser{Slot: 1},
 	})
-	if got := statusCode(err); got != codes.FailedPrecondition {
-		t.Fatalf("code = %v, want FailedPrecondition", got)
+	if got := statusCode(err); got != codes.Unavailable {
+		t.Fatalf("code = %v, want Unavailable", got)
 	}
 }
 
@@ -1303,8 +1356,8 @@ func TestBMCDeleteUser_ServiceError(t *testing.T) {
 func TestBMCDeleteUser_NilService(t *testing.T) {
 	svc := NewBMCGRPCService(nil, nil, slog.Default())
 	_, err := svc.DeleteUser(context.Background(), &platformv1.BMCDeleteUserRequest{ProfileId: 1})
-	if got := statusCode(err); got != codes.FailedPrecondition {
-		t.Fatalf("code = %v, want FailedPrecondition", got)
+	if got := statusCode(err); got != codes.Unavailable {
+		t.Fatalf("code = %v, want Unavailable", got)
 	}
 }
 
@@ -1354,8 +1407,8 @@ func TestBMCSetUserPassword_ServiceError(t *testing.T) {
 func TestBMCSetUserPassword_NilService(t *testing.T) {
 	svc := NewBMCGRPCService(nil, nil, slog.Default())
 	_, err := svc.SetUserPassword(context.Background(), &platformv1.BMCSetUserPasswordRequest{ProfileId: 1})
-	if got := statusCode(err); got != codes.FailedPrecondition {
-		t.Fatalf("code = %v, want FailedPrecondition", got)
+	if got := statusCode(err); got != codes.Unavailable {
+		t.Fatalf("code = %v, want Unavailable", got)
 	}
 }
 
@@ -1431,8 +1484,8 @@ func TestBMCSetUserPrivilege_ServiceError(t *testing.T) {
 func TestBMCSetUserPrivilege_NilService(t *testing.T) {
 	svc := NewBMCGRPCService(nil, nil, slog.Default())
 	_, err := svc.SetUserPrivilege(context.Background(), &platformv1.BMCSetUserPrivilegeRequest{ProfileId: 1})
-	if got := statusCode(err); got != codes.FailedPrecondition {
-		t.Fatalf("code = %v, want FailedPrecondition", got)
+	if got := statusCode(err); got != codes.Unavailable {
+		t.Fatalf("code = %v, want Unavailable", got)
 	}
 }
 

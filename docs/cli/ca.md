@@ -1,8 +1,11 @@
 # platformctl ca
 
+> **Status: REFERENCE** · Last verified: 2026-10-13
+> The `platformctl ca` command reference.
+
 Certificate Authority operations exposed by `platformctl`. All commands
 work against any of the platform's six transports (`unix`, `grpc`, `rest`,
-`quic`, `mcp`, `embedded`) — see [global-flags.md](global-flags.md) for
+`quic`, `mcp`, `embedded`) — see [daemon/cli.md](../daemon/cli.md) §2 for
 how to select a transport.
 
 ## Subcommands
@@ -18,8 +21,8 @@ how to select a transport.
 | `ca renew` | Renew an existing certificate, optionally preserving SANs. |
 | `ca revoke` | Revoke a certificate by serial number. |
 | `ca crl` | Display the current Certificate Revocation List. |
-| `ca crl generate` | Force generation of a new CRL. |
 | `ca crl export` | Write the CRL to disk. |
+| `ca sign-csr` | Certify a KMS key for code signing from its CSR. |
 | `ca bundle` | Print or save the CA trust bundle (PEM). |
 | `ca install-ca-certificates` | Install the trust bundle into the system trust store. |
 | `ca uninstall-ca-certificates` | Remove the trust bundle from the system trust store. |

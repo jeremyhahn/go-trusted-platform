@@ -1,5 +1,8 @@
 # Health Check Framework
 
+> **Status: REFERENCE** · Last verified: 2026-10-13
+> The `pkg/health` component registry: status vocabulary, checker interface and usage.
+
 Component-health registry for platform services, layered on the shared
 quicbaas SDK health-probe framework.
 

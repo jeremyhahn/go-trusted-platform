@@ -875,6 +875,21 @@ func TestClusterGRPCService_MapError(t *testing.T) {
 			wantCode: codes.OK,
 		},
 		{
+			name:     "ErrClusterServiceUnavailable returns Unavailable",
+			err:      ErrClusterServiceUnavailable{},
+			wantCode: codes.Unavailable,
+		},
+		{
+			name:     "ErrLeaveNodeNotLocal returns InvalidArgument",
+			err:      ErrLeaveNodeNotLocal{NodeID: "2", LocalNodeID: "1"},
+			wantCode: codes.InvalidArgument,
+		},
+		{
+			name:     "ErrUnsupportedNodeSortField returns InvalidArgument",
+			err:      ErrUnsupportedNodeSortField{Field: "uptime"},
+			wantCode: codes.InvalidArgument,
+		},
+		{
 			name:     "ErrClusterNotInitialized returns FailedPrecondition",
 			err:      ErrClusterNotInitialized{},
 			wantCode: codes.FailedPrecondition,
@@ -1029,6 +1044,21 @@ func TestClusterErrorTypes(t *testing.T) {
 			name: "ErrLeaveTimeout",
 			err:  ErrLeaveTimeout{},
 			want: "leave operation timed out",
+		},
+		{
+			name: "ErrClusterServiceUnavailable",
+			err:  ErrClusterServiceUnavailable{},
+			want: "cluster service not configured",
+		},
+		{
+			name: "ErrLeaveNodeNotLocal",
+			err:  ErrLeaveNodeNotLocal{NodeID: "2", LocalNodeID: "1"},
+			want: "leave removes the serving node 1, not node 2; send the leave request to node 2",
+		},
+		{
+			name: "ErrUnsupportedNodeSortField",
+			err:  ErrUnsupportedNodeSortField{Field: "uptime"},
+			want: "unsupported node sort field: uptime",
 		},
 	}
 

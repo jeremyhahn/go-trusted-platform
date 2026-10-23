@@ -145,11 +145,53 @@ Cluster deployment is configured under **`quicbaas:`**, not `cluster:`
 | `quicbaas.data-dir` | string | required for `file`/`pebble` |
 | `quicbaas.wal-dir` | string | required for `pebble`; defaults to `<data-dir>/wal` |
 | `quicbaas.node-id` | uint64 | unique per node |
-| `quicbaas.raft-address` | string | `host:port` for Raft communication |
-| `quicbaas.join-addresses` | []string | peer addresses for multi-node clusters |
+| `quicbaas.raft-address` | string | `host:port` advertised to peers; env `PLATFORMD_QUICBAAS_RAFT_ADDRESS`, flag `--raft-address` |
+| `quicbaas.raft-listen-address` | string | `host:port` the Raft transport binds; empty binds `raft-address`; env `PLATFORMD_QUICBAAS_RAFT_LISTEN_ADDRESS`, flag `--raft-listen-address` |
+| `quicbaas.join-addresses` | []string | every member as `id=host:port`, this node included; non-empty makes the node clustered |
+| `quicbaas.deployment-id` | uint64 | required when clustered; the same on every member |
+| `quicbaas.raft-tls-cert-file`, `raft-tls-key-file`, `raft-tls-ca-file` | string | required when clustered; Raft peer mTLS |
 | `quicbaas.consistency-level` | `linearizable` \| `strong` \| `eventual` | default `linearizable` |
 | `quicbaas.cache-size`, `compression`, `sync-writes`, `log-level`, `request-timeout` | | |
 | `quicbaas.startup-timeout` | duration | default `2m`; liveness backstop for embedded-server startup |
+
+**Raft addresses are configuration, never probed** (#93). `pkg/config/raft.go`
+binds both keys to the file, the environment and `platformd serve` flags. A node
+with `join-addresses` must advertise a routable `raft-address`. If it is
+loopback, unspecified or empty, `Config.Validate` returns
+`ErrRaftAdvertiseAddress`, which names the three ways to set it. A single node
+may leave the address loopback. Free-port probing exists only in the test
+constructors (`pkg/storage/quicbaas/testconfig.go`). The upstream embedded node
+(go-quicbaas `pkg/server/qrdb_node.go`) still rewrites an empty
+`raft-listen-address`, or `127.0.0.1:63000`, to `0.0.0.0:<port>`. Until that is
+fixed upstream, an explicit non-default `raft-listen-address` is the only way to
+keep the Raft bind off the wildcard.
+
+**A clustered config is mapped onto go-quicbaas cluster mode, and checked
+first** (#685). Formation is go-qrdb's, reached through go-quicbaas; the
+platform only passes config through. `Config.IsClustered` is
+`len(join-addresses) > 0`. For a clustered node, `ToQuicBaaSConfig` sets
+`Server.Mode` to `ServerModeCluster` and copies `join-addresses`,
+`deployment-id` and the three Raft TLS paths into `Raft`. A standalone node's
+mapping is unchanged: those fields stay empty even when set. `validateCluster`
+refuses, with typed errors, what go-quicbaas would otherwise accept silently:
+
+| go-quicbaas behavior (`pkg/server`) | Platform check |
+|---|---|
+| An empty `Server.Mode` starts a standalone node | mode set from `join-addresses` |
+| `buildClusterMembers` drops entries without `id=`; with none it starts a one-node cluster | `ErrRaftPeerAddress` on any entry that is not `id=host:port` |
+| Bootstrap requires self in the members map | `ErrRaftSelfPeer` unless the list holds `node-id=raft-address` |
+| `ParsePeers` keeps the last of two equal IDs | `ErrRaftDuplicatePeer` |
+| `buildQRDBConfig` derives `DeploymentID` from `NodeID` when unset, so members disagree | `ErrRaftClusterField` on a zero `deployment-id` or `node-id` |
+| No TLS files falls through to auto-enrolled or (without `-tags raft`) plaintext transport | `ErrRaftTLSRequired` names each missing `raft-tls-*-file` |
+
+The TLS check is presence only; go-quicbaas reads the files at start and fails
+with `RaftMTLSLoadError`. TPM-held Raft keys are out of scope until the issuer
+of peer certificates is ruled on. `TestShippedExamples_LoadOnTheCurrentSchema`
+(`pkg/app/example_configs_test.go`) loads every `configs/platform/cluster` and
+`configs/platform/standalone` example through platformd's strict key check and
+full decode, `Validate`, and the host-network and web-service checks, and
+refuses a literal secret in any of them. `TestShippedClusterExamples_*`
+(`pkg/app/templates_network_test.go`) prove the three servers form one cluster.
 
 **`startup-timeout` is deliberately separate from `request-timeout`** (#270).
 `request-timeout` bounds ONE DAO operation; startup constructs the data-plane
@@ -171,7 +213,18 @@ Two things to know when reading a startup failure:
   when the caller's 30s deadline was the constraint and the budget had 56
   seconds left.
 
-**Correction to `docs/cluster/configuration.md`:** that file documents
+**The package's DAO tests share one embedded server** (#208). Booting a server
+per test made bootstrap nearly all of the package's wall time, and that cost
+grows with host load. `newSharedTestClient` (`shared_server_test.go`) boots
+the server on first use and `TestMain` stops it. Before each test it deletes
+every entity of the types the DAO tests write, which leaves the store in the
+state a fresh server has. `TestSharedServer_FreshServerHoldsNoTestEntities`
+pins that equivalence: if first boot ever seeds one of those types, that test
+fails before any data is wiped. Tests whose subject is the server or client
+lifecycle still boot their own server. Tests on the shared server must not
+call `t.Parallel`.
+
+**Correction to the deleted legacy `docs/cluster/configuration.md`:** that file documented
 `storage-backend: raft` as the way to enable clustering. It is not.
 `validateEmbeddedConfig` rejects anything but `memory`, `file` and `pebble` with
 *"invalid storage backend: must be 'memory', 'file', or 'pebble'"*, and the code
@@ -382,19 +435,31 @@ Declared and never returned by any code path:
 
 ## 8. The daemon and API layers
 
-### Two `ClusterGRPCService` types
+### The registered `ClusterGRPCService`
 
-| | `pkg/api/daemon/cluster_grpc_service.go` | `pkg/api/grpc/cluster_service.go` |
-|---|---|---|
-| Behaviour | **Every RPC returns `codes.Unimplemented`** | Full implementation |
-| Delegates to | nothing | `grpc.ClusterService` interface |
-| Constructor | `NewClusterGRPCService(logger)` | `NewClusterGRPCService(logger, service)` |
-| **Registered by the daemon** | **yes** — `daemon.go:885` (TCP) and `:888` (UDS) | **no** |
-| Backs the REST routes | yes (`cluster_rest.go`) | no |
-| Implementors of its service interface | — | **none in this repository** |
+The daemon registers `pkg/api/grpc`'s `ClusterGRPCService` on the TCP server
+and the Unix-socket server through `registerClusterGRPCService`
+(`pkg/api/daemon/cluster_grpc_backend.go`, called at `daemon.go:954`), and
+passes the same service to the QUIC category handler (`daemon.go:1284`), the
+REST routes (`daemon.go:1595`) and the MCP provider (`daemon.go:1985`). The
+stub that used to be registered in its place was deleted (#317).
 
-The registered one is the stub. The complete one is unreachable. It carries a
-much richer request model — `ClusterBootstrapRequest{ClusterName, NodeName,
+Its `grpc.ClusterService` is `clusterGRPCBackend`, the daemon adapter over
+`ClusterServicer`:
+
+- The servicer is late-bound: `Daemon.SetClusterService` stores it in an
+  `atomic.Pointer`. Unset, every method returns
+  `ErrClusterServiceUnavailable` (`Unavailable`) on every transport.
+- `ClusterServicer` acts on the serving node only, so `Leave` with another
+  node's ID is `ErrLeaveNodeNotLocal`, and the bind/advertise fields of
+  `Bootstrap` and `Join` and `Leave`'s `force` are not applied.
+- `ListNodes` filters, sorts (`id`, `address`; anything else is
+  `ErrUnsupportedNodeSortField`) and pages in the adapter, because the
+  servicer returns the whole membership.
+- [api.md](api.md) §3 and §5 give the per-RPC behaviour and the state
+  projections.
+
+The service carries a much richer request model — `ClusterBootstrapRequest{ClusterName, NodeName,
 BindAddress, BindPort, AdvertiseAddress, AdvertisePort, Labels, Metadata}`,
 `ClusterListNodesRequest{Roles, States, MatchLabels, Page, PageSize, SortBy,
 Ascending}` — plus its own vocabularies (`ClusterStateType`, `NodeRoleType`,
@@ -404,10 +469,12 @@ Ascending}` — plus its own vocabularies (`ClusterStateType`, `NodeRoleType`,
 `ErrCannotLeaveAsLeader`, `ErrNoSeedReachable`, `ErrJoinTimeout`,
 `ErrLeaveTimeout`, `ErrClusterOperationFailed`).
 
-Its `mapError` is the intended gRPC mapping when it is wired:
+Its `mapError`:
 
 | Error | Code |
 |---|---|
+| `ErrClusterServiceUnavailable` | `Unavailable` |
+| `ErrLeaveNodeNotLocal`, `ErrUnsupportedNodeSortField` | `InvalidArgument` |
 | `ErrClusterNotInitialized`, `ErrCannotLeaveAsLeader` | `FailedPrecondition` |
 | `ErrClusterAlreadyInitialized`, `ErrNodeAlreadyInCluster` | `AlreadyExists` |
 | `ErrNodeNotInCluster` | `NotFound` |
@@ -439,7 +506,7 @@ Its `mapError` is the intended gRPC mapping when it is wired:
 `interface{}` instead of the `cluster.*` types. Code that compiles against one
 does not necessarily compile against the other.
 
-### The tag-agnostic MCP bridge
+### The tag-agnostic servicer types
 
 `pkg/api/daemon/mcp_cluster.go` defines `ClusterServicer` plus
 `ClusterStatusInfo` and `ClusterNodeInfo` — plain structs mirroring
@@ -449,9 +516,10 @@ does not necessarily compile against the other.
 through the unexported `clusterCore` interface, which exists so the adapter is
 unit-testable without a real coordinator.
 
-`Daemon.SetClusterService(svc ClusterServicer)` stores it and forwards to
-`mcpProvider.SetClusterService`. **Nothing calls it**, so `p.clusterService`
-stays nil and every MCP cluster tool returns `ErrClusterNotConfigured`.
+`Daemon.SetClusterService(svc ClusterServicer)` stores it in the gRPC
+backend. **Nothing calls it**, so every transport — the MCP
+`platform_cluster_*` tools and the QUIC `0x90` sub-opcodes included, since both
+call the registered gRPC service — returns `Unavailable`.
 
 ## 9. Persistence
 
@@ -482,7 +550,8 @@ make integration-test-cluster-failover
 make stress-sdn-cluster                  # -run TestCluster ./stress/...
 ```
 
-The integration targets set `RAFT_CLUSTER_TEST=1` and `CLUSTER_SIZE=3`.
+The suite runs on the integration build tags alone: no environment variable
+gates its replication tests.
 
 **Fault-injection seams.** `RaftOperator` is the seam: a fake that returns
 `ErrClusterUnavailable`, an empty node list, no leader, or a leader that flips

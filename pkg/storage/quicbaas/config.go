@@ -20,10 +20,13 @@ import (
 	"fmt"
 	"net"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
 	quicbaas "github.com/jeremyhahn/go-quicbaas/sdk/go"
+
+	"github.com/jeremyhahn/go-trusted-platform/pkg/barrier"
 )
 
 // Transport defines the transport type for QuicBaaS connections.
@@ -126,7 +129,8 @@ type Config struct {
 	//   - "file": Simple file-based storage (development/low-volume)
 	//   - "pebble": PebbleDB for high-performance local storage (recommended)
 	// Default: "pebble" for high-performance local storage.
-	// Raft consensus is enabled separately via server mode, not storage backend.
+	// There is no "raft" backend: Raft consensus is enabled by JoinAddresses,
+	// and a clustered node keeps its replicated state on this backend.
 	// Use quicbaas.StorageBackendPebble, quicbaas.StorageBackendMemory, etc.
 	StorageBackend string `yaml:"storage-backend" json:"storage_backend" mapstructure:"storage-backend"`
 
@@ -158,6 +162,12 @@ type Config struct {
 	// and passes it through to the embedded server's IAM config.
 	SelfServiceRegistration *SelfServiceRegistrationConfig `yaml:"self-service-registration,omitempty" json:"self_service_registration,omitempty" mapstructure:"self-service-registration"`
 
+	// Vector turns the embedded server's vector database on
+	// (vector.enabled). Absent or disabled (the DEFAULT), the SDK's Vector
+	// client fails every call with ErrVectorUnavailable. Enabling it needs
+	// a WITH_VECTOR=1 build; Validate refuses it in any other.
+	Vector *VectorServiceConfig `yaml:"vector,omitempty" json:"vector,omitempty" mapstructure:"vector"`
+
 	// WebAuthnRPID, WebAuthnRPDisplayName and WebAuthnRPOrigins configure
 	// the embedded server's IAM WebAuthn relying party (iam.webauthn.*).
 	// They are populated programmatically from the platform's primary
@@ -168,6 +178,27 @@ type Config struct {
 	WebAuthnRPID          string   `yaml:"-" json:"-" mapstructure:"-"`
 	WebAuthnRPDisplayName string   `yaml:"-" json:"-" mapstructure:"-"`
 	WebAuthnRPOrigins     []string `yaml:"-" json:"-" mapstructure:"-"`
+
+	// BarrierSealStrategy, BarrierShamirThreshold and BarrierShamirShares
+	// select the embedded server's data-plane barrier strategy. Only
+	// "shamir" is passed through (seal.strategy: shamir, with the M-of-N
+	// when set; quicbaas defaults 2-of-3 otherwise), because the Shamir
+	// strategy is the one the SDK registers from config alone. They are
+	// populated programmatically from the platform's barrier section — they
+	// are NOT platform YAML keys. Without them the barrier is single-key,
+	// and a shamir /init would split only the user PIN while that PIN alone
+	// still unseals.
+	BarrierSealStrategy    string `yaml:"-" json:"-" mapstructure:"-"`
+	BarrierShamirThreshold int    `yaml:"-" json:"-" mapstructure:"-"`
+	BarrierShamirShares    int    `yaml:"-" json:"-" mapstructure:"-"`
+
+	// TPMDevice is the TPM the embedded server's hardware probe and TPM2
+	// seal strategy open (seal.tpm2.device). It is populated
+	// programmatically from the platform's tpm.device — it is NOT a platform
+	// YAML key. Left empty, quicbaas opens its default /dev/tpmrm0, which on
+	// a node whose platform TPM is elsewhere (a swtpm socket) is a TPM the
+	// platform never configured.
+	TPMDevice string `yaml:"-" json:"-" mapstructure:"-"`
 
 	// BootstrapAdminCSRPath, BootstrapAdminPIVCertPath, AdminFactors and
 	// PasskeyDevice select how the FIRST administrator is enrolled at first
@@ -230,18 +261,44 @@ type Config struct {
 	// on a loaded host. Zero means DefaultStartupTimeout.
 	StartupTimeout time.Duration `yaml:"startup-timeout,omitempty" json:"startup_timeout,omitempty" mapstructure:"startup-timeout"`
 
-	// RaftAddress is the address for Raft consensus communication.
-	// Required when StorageBackend is "raft".
-	// Format: "host:port"
+	// RaftAddress is the Raft address this node ADVERTISES to its peers
+	// ("host:port"). Peers dial it, so a node with JoinAddresses must set a
+	// routable one: Validate refuses a loopback, unspecified or empty value
+	// there with ErrRaftAdvertiseAddress rather than publish an unreachable
+	// peer. A single node may leave it loopback.
 	RaftAddress string `yaml:"raft-address" json:"raft_address" mapstructure:"raft-address"`
 
-	// JoinAddresses is a list of peer addresses to join for multi-node clusters.
-	// Only used with "raft" backend for production clusters.
+	// RaftListenAddress is the local address the Raft transport binds
+	// ("host:port"). Empty binds RaftAddress itself; set it when the bind
+	// differs from the advertised address (NAT, a wildcard bind, a
+	// container port mapping).
+	RaftListenAddress string `yaml:"raft-listen-address" json:"raft_listen_address" mapstructure:"raft-listen-address"`
+
+	// JoinAddresses is the cluster's full member list, one "id=host:port"
+	// entry per member, this node included ("<node-id>=<raft-address>").
+	// Every member carries the same list and they bootstrap the cluster
+	// together. Setting it makes the node clustered: ToQuicBaaSConfig runs
+	// go-quicbaas in cluster mode, and Validate requires DeploymentID and
+	// the three Raft TLS files. Empty means a standalone node.
 	JoinAddresses []string `yaml:"join-addresses" json:"join_addresses" mapstructure:"join-addresses"`
 
 	// NodeID is the unique identifier for this node in the cluster.
 	// Must be unique across all nodes.
 	NodeID uint64 `yaml:"node-id" json:"node_id" mapstructure:"node-id"`
+
+	// DeploymentID identifies the cluster; every member must carry the same
+	// non-zero value. Required with JoinAddresses: left unset, go-quicbaas
+	// derives it from each node's own NodeID, so no two members would agree.
+	DeploymentID uint64 `yaml:"deployment-id,omitempty" json:"deployment_id,omitempty" mapstructure:"deployment-id"`
+
+	// RaftTLSCertFile, RaftTLSKeyFile and RaftTLSCAFile are the PEM files
+	// for mutually authenticated TLS between Raft peers: this node's
+	// certificate, its private key, and the CA that issued every member's
+	// certificate. All three are required with JoinAddresses; the operator
+	// supplies them.
+	RaftTLSCertFile string `yaml:"raft-tls-cert-file,omitempty" json:"raft_tls_cert_file,omitempty" mapstructure:"raft-tls-cert-file"`
+	RaftTLSKeyFile  string `yaml:"raft-tls-key-file,omitempty" json:"raft_tls_key_file,omitempty" mapstructure:"raft-tls-key-file"`
+	RaftTLSCAFile   string `yaml:"raft-tls-ca-file,omitempty" json:"raft_tls_ca_file,omitempty" mapstructure:"raft-tls-ca-file"`
 
 	// CacheSize is the size of the in-memory cache in bytes.
 	// Defaults to 128MB.
@@ -330,7 +387,9 @@ func (c ConsistencyLevel) MarshalText() ([]byte, error) {
 
 // DefaultConfig returns a configuration suitable for embedded single-node usage.
 // Uses PebbleDB backend for high-performance local storage (fastest, single-node only).
-// KMS is supported in all backends.
+// KMS is supported in all backends. RaftAddress is left empty, as it is for a
+// platformd config file that omits quicbaas.raft-address: a single node
+// advertises nothing to peers, and a node that joins them must set one.
 func DefaultConfig() *Config {
 	return &Config{
 		TransportStr:      "embedded",
@@ -339,7 +398,6 @@ func DefaultConfig() *Config {
 		SPIFFETrustDomain: "example.internal",
 		DataDir:           "./data/quicbaas",
 		WALDir:            "./data/quicbaas/wal",
-		RaftAddress:       "127.0.0.1:63000",
 		NodeID:            1,
 		CacheSize:         128 * 1024 * 1024, // 128MB
 		LogLevel:          "info",
@@ -347,107 +405,6 @@ func DefaultConfig() *Config {
 		Compression:       "snappy",
 		SyncWrites:        true,
 		RequestTimeout:    5 * time.Second,
-	}
-}
-
-// TestConfig returns a configuration optimized for unit testing.
-// Uses minimal resources and fast timeouts. Creates a temporary
-// directory that will be cleaned up when the test completes.
-// Uses PebbleDB backend for high-performance local storage without Raft.
-// For faster unit tests that don't need persistence, use MemoryTestConfig instead.
-func TestConfig(t TestingT) *Config {
-	t.Helper()
-	dataDir := t.TempDir()
-	port := getFreePort()
-	return &Config{
-		TransportStr:      "embedded",
-		Transport:         TransportEmbedded,
-		StorageBackend:    quicbaas.StorageBackendPebble, // High-performance local storage, no Raft
-		SPIFFETrustDomain: "example.internal",
-		DataDir:           dataDir,
-		WALDir:            dataDir + "/wal",
-		RaftAddress:       fmt.Sprintf("127.0.0.1:%d", port),
-		NodeID:            1,
-		CacheSize:         8 * 1024 * 1024, // 8MB
-		LogLevel:          "error",         // Reduce log noise in tests
-		ConsistencyLevel:  ConsistencyLinearizable,
-		Compression:       "none",
-		SyncWrites:        false,
-		RequestTimeout:    30 * time.Second,
-	}
-}
-
-// MemoryTestConfig returns a configuration using in-memory storage.
-// This is the fastest option for unit tests that don't need persistence.
-// Data is lost when the server stops - ideal for isolated test cases.
-func MemoryTestConfig(t TestingT) *Config {
-	t.Helper()
-	dataDir := t.TempDir() // Still needed for some internal operations
-	return &Config{
-		TransportStr:      "embedded",
-		Transport:         TransportEmbedded,
-		StorageBackend:    quicbaas.StorageBackendMemory,
-		SPIFFETrustDomain: "example.internal",
-		DataDir:           dataDir,
-		WALDir:            dataDir + "/wal",
-		RaftAddress:       "",              // Not needed for memory backend
-		NodeID:            0,               // Not needed for memory backend
-		CacheSize:         4 * 1024 * 1024, // 4MB - smaller for tests
-		LogLevel:          "error",
-		ConsistencyLevel:  ConsistencyEventual, // Memory is always consistent
-		Compression:       "none",
-		SyncWrites:        false,
-		RequestTimeout:    10 * time.Second,
-	}
-}
-
-// FileTestConfig returns a configuration using file-based storage.
-// Each key-value pair is stored as a separate file, making it easy
-// to inspect and debug data. Slower than Pebble but human-readable.
-func FileTestConfig(t TestingT) *Config {
-	t.Helper()
-	dataDir := t.TempDir()
-	return &Config{
-		TransportStr:      "embedded",
-		Transport:         TransportEmbedded,
-		StorageBackend:    quicbaas.StorageBackendFile,
-		SPIFFETrustDomain: "example.internal",
-		DataDir:           dataDir,
-		WALDir:            dataDir + "/wal",
-		RaftAddress:       "",              // Not needed for file backend
-		NodeID:            0,               // Not needed for file backend
-		CacheSize:         4 * 1024 * 1024, // 4MB
-		LogLevel:          "debug",         // Debug level for visibility
-		ConsistencyLevel:  ConsistencyLinearizable,
-		Compression:       "none", // No compression for readability
-		SyncWrites:        true,   // Sync for debugging reliability
-		RequestTimeout:    30 * time.Second,
-	}
-}
-
-// RaftTestConfig returns a configuration suitable for Raft cluster testing.
-// Uses PebbleDB storage with Raft-related settings configured.
-// Note: Raft consensus is enabled via server mode, not storage backend.
-// This config just ensures Raft address and NodeID are set for cluster tests.
-func RaftTestConfig(t TestingT) *Config {
-	t.Helper()
-	dataDir := t.TempDir()
-	port := getFreePort()
-	return &Config{
-		TransportStr:      "embedded",
-		Transport:         TransportEmbedded,
-		StorageBackend:    quicbaas.StorageBackendPebble, // Raft uses pebble for storage
-		SPIFFETrustDomain: "example.internal",
-		DataDir:           dataDir,
-		WALDir:            dataDir + "/wal",
-		RaftAddress:       fmt.Sprintf("127.0.0.1:%d", port),
-		NodeID:            1,
-		CacheSize:         8 * 1024 * 1024, // 8MB
-		LogLevel:          "error",
-		ConsistencyLevel:  ConsistencyLinearizable,
-		Compression:       "snappy",
-		SyncWrites:        true,
-		RequestTimeout:    30 * time.Second,
 	}
 }
 
@@ -502,39 +459,10 @@ func (c *Config) SetTransport(transport Transport) {
 	c.TransportStr = transport.String()
 }
 
-// getFreePort returns an available TCP port by briefly binding to port 0.
-// Returns 0 if no port can be found (e.g., loopback interface not available).
-func getFreePort() int {
-	// Try localhost first
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		// Try binding to any interface as fallback
-		listener, err = net.Listen("tcp", "0.0.0.0:0")
-		if err != nil {
-			// In initrd/early boot, network may not be available
-			// Return a default port instead of panicking
-			return 17001
-		}
-	}
-	port := listener.Addr().(*net.TCPAddr).Port
-	listener.Close()
-	return port
-}
-
-// GetFreeAddress returns a free localhost address in the format "127.0.0.1:PORT".
-// This is useful for embedded mode when no specific Raft address is configured.
-// Falls back to a default port if network is unavailable (e.g., during initrd boot).
-func GetFreeAddress() string {
-	return fmt.Sprintf("127.0.0.1:%d", getFreePort())
-}
-
-// TestingT is a minimal interface for testing helpers.
-// Satisfied by *testing.T and *testing.B.
-type TestingT interface {
-	TempDir() string
-	Name() string
-	Helper()
-}
+// webAuthnResidentKeyRequired is the iam.webauthn.resident_key_requirement
+// value that makes every passkey registration create a discoverable
+// credential.
+const webAuthnResidentKeyRequired = "required"
 
 // ToQuicBaaSConfig converts our Config to go-quicbaas's native config.Config.
 // This is only applicable for embedded transport mode.
@@ -559,15 +487,22 @@ func (c *Config) ToQuicBaaSConfig() *quicbaas.ServerFullConfig {
 	cfg.Storage.SyncWrites = c.SyncWrites
 	cfg.Storage.CompressionType = c.Compression
 
-	// Raft settings (only used in cluster/node modes)
+	// Raft settings (only used in cluster mode)
 	cfg.Raft.NodeID = c.NodeID
 	cfg.Raft.RaftAddress = c.RaftAddress
-	cfg.Raft.ListenAddress = c.RaftAddress
+	cfg.Raft.ListenAddress = c.EffectiveRaftListenAddress()
 	cfg.Raft.RequestTimeout = c.RequestTimeout
 
-	// Join addresses for multi-node production clusters
-	if len(c.JoinAddresses) > 0 {
+	// A clustered node runs go-quicbaas in cluster mode, which forms
+	// go-qrdb's Raft cluster from the member list. The platform only passes
+	// the configuration through; formation is go-qrdb's.
+	if c.IsClustered() {
+		cfg.Server.Mode = quicbaas.ServerModeCluster
 		cfg.Raft.JoinAddresses = c.JoinAddresses
+		cfg.Raft.DeploymentID = c.DeploymentID
+		cfg.Raft.TLSCertFile = c.RaftTLSCertFile
+		cfg.Raft.TLSKeyFile = c.RaftTLSKeyFile
+		cfg.Raft.TLSCAFile = c.RaftTLSCAFile
 	}
 
 	// Logging
@@ -588,6 +523,10 @@ func (c *Config) ToQuicBaaSConfig() *quicbaas.ServerFullConfig {
 		cfg.IAM.SelfServiceRegistration.Enabled = c.SelfServiceRegistration.Enabled
 	}
 
+	// Vector database: the embedded server registers the vector service
+	// only when vector.enabled is set (and the build carries it).
+	cfg.Vector.Enabled = c.Vector.Active()
+
 	// Admin enrollment and login factors: passed through verbatim to the
 	// embedded server's auth.* section, which is where first-boot reads
 	// them (pkg/server/iam_init.go for the CSR / PIV paths,
@@ -605,6 +544,32 @@ func (c *Config) ToQuicBaaSConfig() *quicbaas.ServerFullConfig {
 	cfg.IAM.WebAuthn.RPID = c.WebAuthnRPID
 	cfg.IAM.WebAuthn.RPDisplayName = c.WebAuthnRPDisplayName
 	cfg.IAM.WebAuthn.RPOrigins = c.WebAuthnRPOrigins
+
+	// Browser login is usernameless: the authenticator must find the
+	// credential on its own, so a credential registered without a resident
+	// key can never sign in. Require one at registration instead of taking
+	// the upstream "preferred" default, which lets such a credential enrol.
+	cfg.IAM.WebAuthn.ResidentKeyRequirement = webAuthnResidentKeyRequired
+
+	// Data-plane barrier: a shamir barrier must be sealed by the Shamir
+	// strategy, or InitializeShamir runs in credential mode and the quorum
+	// is not enforced. Every other strategy keeps the embedded default.
+	if c.BarrierSealStrategy == barrier.SealStrategyShamir {
+		cfg.Seal.Strategy = barrier.SealStrategyShamir
+		if c.BarrierShamirThreshold > 0 {
+			cfg.Seal.Threshold = c.BarrierShamirThreshold
+		}
+		if c.BarrierShamirShares > 0 {
+			cfg.Seal.TotalShares = c.BarrierShamirShares
+		}
+	}
+
+	// The embedded server probes, and a tpm2 seal strategy seals against,
+	// the platform's own TPM — never a default device the platform did not
+	// configure.
+	if c.TPMDevice != "" {
+		cfg.Seal.TPM2.Device = c.TPMDevice
+	}
 
 	// Enable KMS for key management operations
 	// This is required for DNSSEC key management and other crypto operations.
@@ -670,8 +635,6 @@ func validateSPIFFETrustDomain(domain string) error {
 	return nil
 }
 
-// SetDefaults sets default values for zero-valued fields.
-// This ensures the config has sensible defaults when fields are omitted from YAML/JSON.
 // EffectiveStartupTimeout returns the startup budget to use, falling back to
 // DefaultStartupTimeout when none is configured.
 //
@@ -689,6 +652,43 @@ func (c *Config) EffectiveStartupTimeout() time.Duration {
 	return c.StartupTimeout
 }
 
+// EffectiveRaftListenAddress returns the address the Raft transport binds:
+// RaftListenAddress when set, otherwise the advertised RaftAddress.
+func (c *Config) EffectiveRaftListenAddress() string {
+	if c.RaftListenAddress != "" {
+		return c.RaftListenAddress
+	}
+	return c.RaftAddress
+}
+
+// IsRoutableRaftAddress reports whether addr advertises a node to peers on
+// the network, as opposed to the loopback, unspecified or empty values a
+// single-node deployment carries. A host that is not an IP literal (a DNS
+// name other than localhost) is treated as routable: it is not evidence of
+// a single node, so callers gating on it fail closed.
+func IsRoutableRaftAddress(addr string) bool {
+	if strings.TrimSpace(addr) == "" {
+		return false
+	}
+	host := addr
+	if h, _, err := net.SplitHostPort(addr); err == nil {
+		host = h
+	}
+	host = strings.Trim(strings.TrimSpace(host), "[]")
+	if host == "" {
+		return false
+	}
+	if strings.EqualFold(host, "localhost") {
+		return false
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		return !ip.IsLoopback() && !ip.IsUnspecified()
+	}
+	return true
+}
+
+// SetDefaults sets default values for zero-valued fields.
+// This ensures the config has sensible defaults when fields are omitted from YAML/JSON.
 func (c *Config) SetDefaults() {
 	if c.RequestTimeout <= 0 {
 		c.RequestTimeout = 30 * time.Second // Default 30s timeout
@@ -794,6 +794,16 @@ func (c *Config) validateEmbeddedConfig() error {
 		return ErrInvalidConfig{Field: "CacheSize", Reason: "cache size cannot be negative"}
 	}
 
+	if err := c.validateVector(); err != nil {
+		return err
+	}
+
+	if c.IsClustered() {
+		if err := c.validateCluster(); err != nil {
+			return err
+		}
+	}
+
 	// The embedded server runs qrdb first-boot, whose IAM seeding (system
 	// tenant, built-in roles, admin certificate) requires the SPIFFE
 	// trust domain. An empty value would start a partially initialized
@@ -804,6 +814,104 @@ func (c *Config) validateEmbeddedConfig() error {
 	}
 
 	return nil
+}
+
+// IsClustered reports whether this node is a member of a multi-node Raft
+// cluster, which is what a non-empty JoinAddresses declares.
+func (c *Config) IsClustered() bool {
+	return len(c.JoinAddresses) > 0
+}
+
+// validateCluster checks a clustered node's configuration before go-quicbaas
+// sees it: go-quicbaas drops malformed members silently and cannot tell a
+// missing TLS file from a deliberate one, so the platform refuses both here.
+func (c *Config) validateCluster() error {
+	// Peers dial the address this node advertises: loopback would publish
+	// an unreachable peer.
+	if !IsRoutableRaftAddress(c.RaftAddress) {
+		return ErrRaftAdvertiseAddress{Address: c.RaftAddress}
+	}
+	if c.NodeID == 0 {
+		return ErrRaftClusterField{Field: "node-id", Reason: "every member needs a non-zero node ID"}
+	}
+	if c.DeploymentID == 0 {
+		return ErrRaftClusterField{Field: "deployment-id", Reason: "every member must carry the same non-zero deployment ID"}
+	}
+
+	members := make(map[uint64]string, len(c.JoinAddresses))
+	for _, entry := range c.JoinAddresses {
+		id, addr, err := parseRaftMember(entry)
+		if err != nil {
+			return err
+		}
+		if _, seen := members[id]; seen {
+			return ErrRaftDuplicatePeer{NodeID: id}
+		}
+		members[id] = addr
+	}
+	if members[c.NodeID] != c.RaftAddress {
+		return ErrRaftSelfPeer{NodeID: c.NodeID, RaftAddress: c.RaftAddress}
+	}
+
+	var missing []string
+	if c.RaftTLSCertFile == "" {
+		missing = append(missing, "quicbaas.raft-tls-cert-file")
+	}
+	if c.RaftTLSKeyFile == "" {
+		missing = append(missing, "quicbaas.raft-tls-key-file")
+	}
+	if c.RaftTLSCAFile == "" {
+		missing = append(missing, "quicbaas.raft-tls-ca-file")
+	}
+	if len(missing) > 0 {
+		return ErrRaftTLSRequired{Missing: missing}
+	}
+	return nil
+}
+
+// parseRaftMember splits a join-addresses entry in go-quicbaas's
+// "id=host:port" member form into its node ID and address.
+func parseRaftMember(entry string) (uint64, string, error) {
+	idText, addr, found := strings.Cut(entry, "=")
+	if !found {
+		return 0, "", ErrRaftPeerAddress{Entry: entry, Reason: "missing the \"id=\" prefix"}
+	}
+	id, err := strconv.ParseUint(idText, 10, 64)
+	if err != nil || id == 0 {
+		return 0, "", ErrRaftPeerAddress{Entry: entry, Reason: "the node ID must be a positive integer"}
+	}
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil || host == "" {
+		return 0, "", ErrRaftPeerAddress{Entry: entry, Reason: "the address must be host:port"}
+	}
+	if portNum, err := strconv.ParseUint(port, 10, 16); err != nil || portNum == 0 {
+		return 0, "", ErrRaftPeerAddress{Entry: entry, Reason: "the port must be 1-65535"}
+	}
+	return id, addr, nil
+}
+
+// ValidateSPIFFETrustDomain checks spiffe-trust-domain the way the
+// embedded server will, without constructing anything, so config load can
+// reject a config the factory would refuse later. A nil Config is an absent
+// quicbaas: section, which selects the embedded server with no trust
+// domain, so it fails too. Remote transports run no first boot and need no
+// trust domain; an unknown transport string is ErrInvalidTransport.
+func (c *Config) ValidateSPIFFETrustDomain() error {
+	if c == nil {
+		return validateSPIFFETrustDomain("")
+	}
+	transport := c.Transport
+	if c.TransportStr != "" {
+		parsed, err := ParseTransport(c.TransportStr)
+		if err != nil {
+			return err
+		}
+		transport = parsed
+	}
+	if transport != TransportEmbedded {
+		return nil
+	}
+	return validateSPIFFETrustDomain(c.SPIFFETrustDomain)
 }
 
 // IsEmbedded returns true if the transport is embedded mode.

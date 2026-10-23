@@ -32,8 +32,10 @@ import (
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/client/objectstorage"
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	quicbaasca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/ca"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/api/healthprobe"
 	restapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/rest"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/app"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/ca/issuance"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/provisioning/configdelivery"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/vtpm"
 	bmcwebsvc "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/bmc"
@@ -58,6 +60,12 @@ var serviceStatusStringMap = map[platformv1.ServiceStatus]string{
 
 // serviceStatusToString converts an atomic int32 service status value to
 // a human-readable string using the protobuf ServiceStatus enum.
+// restServiceRefusalStatus answers ErrServiceNotControllable. The refusal is
+// FailedPrecondition, which the platform webservice REST mapper
+// (protorest.WriteError) sends as 400; this server matches it so both REST
+// surfaces answer the same refusal the same way.
+const restServiceRefusalStatus = http.StatusBadRequest
+
 func serviceStatusToString(rawStatus int32) string {
 	s, ok := serviceStatusStringMap[platformv1.ServiceStatus(rawStatus)]
 	if !ok {
@@ -85,6 +93,11 @@ type RESTServer struct {
 }
 
 // NewRESTServer creates a new REST server for the daemon
+// newRESTServer is the constructor New uses for the built-in REST server. It
+// is a variable so a test can force a construction failure and assert that
+// New refuses to run without an enabled transport (#444).
+var newRESTServer = NewRESTServer
+
 func NewRESTServer(config *Config, service *Service, logger *slog.Logger) (*RESTServer, error) {
 	if logger == nil {
 		logger = slog.Default()
@@ -140,10 +153,11 @@ func (s *RESTServer) Start() error {
 	// files. tlsCertificateUsable treats a structurally empty certificate
 	// as absent (#32): binding with it would report a healthy TLS
 	// transport whose every handshake fails.
-	if tlsCertificateUsable(s.config.TLSCertificate) || (s.config.RESTTLSCertFile != "" && s.config.RESTTLSKeyFile != "") {
+	inMemory := s.config.inMemoryCertificate()
+	if tlsCertificateUsable(inMemory) || (s.config.RESTTLSCertFile != "" && s.config.RESTTLSKeyFile != "") {
 		var cert tls.Certificate
-		if tlsCertificateUsable(s.config.TLSCertificate) {
-			cert = *s.config.TLSCertificate
+		if tlsCertificateUsable(inMemory) {
+			cert = *inMemory
 		} else {
 			var err error
 			cert, err = tls.LoadX509KeyPair(s.config.RESTTLSCertFile, s.config.RESTTLSKeyFile)
@@ -152,22 +166,15 @@ func (s *RESTServer) Start() error {
 				return ErrRESTServerStartFailed{Reason: "failed to load TLS certificates: " + err.Error()}
 			}
 		}
-		tlsConfig := &tls.Config{
-			Certificates: []tls.Certificate{cert},
-			MinVersion:   tls.VersionTLS12,
-		}
-
 		// Enable mutual TLS if configured. Fails closed: mTLS with no
 		// resolvable client CA pool is a typed error, never a listener that
 		// merely does not ask for a client certificate (#550).
-		clientCAPool, poolErr := resolveMTLSClientCAPool(s.config, transportREST)
-		if poolErr != nil {
+		tlsConfig, tlsErr := newServerTLSConfig(s.config, transportREST, cert)
+		if tlsErr != nil {
 			s.running.Store(false)
-			return poolErr
+			return tlsErr
 		}
-		if clientCAPool != nil {
-			tlsConfig.ClientAuth = tls.RequireAndVerifyClientCert
-			tlsConfig.ClientCAs = clientCAPool
+		if tlsConfig.ClientCAs != nil {
 			s.logger.Info("REST server mTLS enabled", "addr", s.config.RESTListenAddr)
 		}
 
@@ -249,8 +256,10 @@ func (s *RESTServer) Router() *mux.Router {
 
 // registerRoutes registers all daemon-level REST endpoints
 func (s *RESTServer) registerRoutes() {
-	// Root-level health endpoint for service discovery and load balancers
-	s.router.HandleFunc("/health", s.handleHealth).Methods(http.MethodGet)
+	// Root-level probes for service discovery and load balancers: GET /health,
+	// /health/live and /health/ready, status only, the answers the webservice
+	// listener and every other transport give (docs/health/api.md §4).
+	healthprobe.NewHandlers(s.service.currentHealthRegistry).RegisterRoutes(s.router)
 
 	api := s.router.PathPrefix(restBasePath).Subrouter()
 
@@ -346,14 +355,40 @@ func (s *RESTServer) SetBMCHandler(handler bmcwebsvc.RestHandler) {
 // the same in-process NTPServiceServer that backs gRPC, QUIC, MCP, and the
 // Unix socket, so every transport reports one clock. A nil server leaves the
 // routes unmounted, which is the correct signal on a node with no `ntp:`
-// section.
-func (s *RESTServer) SetNTPHandlers(server platformv1.NTPServiceServer) {
+// section. guard checks each route's ntp:* scope; nil refuses every route.
+func (s *RESTServer) SetNTPHandlers(server platformv1.NTPServiceServer, guard *restapi.ScopeGuard) {
 	if server == nil {
 		return
 	}
-	handlers := restapi.NewNTPHandlers(server, s.logger)
+	handlers := restapi.NewNTPHandlers(server, guard, s.logger)
 	handlers.RegisterRoutes(s.router)
 	s.logger.Info("NTP REST routes registered")
+}
+
+// SetVPNHandlers wires the VPN control-plane REST handlers onto the daemon's
+// REST router so /api/v1/vpn/* is served. The handlers delegate to the same
+// in-process VPNServiceServer that backs gRPC, QUIC, MCP, and the Unix
+// socket. A nil server leaves the routes unmounted. guard checks each route's
+// vpn:* scope; nil refuses every route.
+func (s *RESTServer) SetVPNHandlers(server platformv1.VPNServiceServer, guard *restapi.ScopeGuard) {
+	if server == nil {
+		return
+	}
+	handlers := restapi.NewVPNHandlers(server, guard, s.logger)
+	handlers.RegisterRoutes(s.router)
+	s.logger.Info("VPN REST routes registered")
+}
+
+// SetAppServiceHandlers wires the Cache, Scheduler and Messaging REST
+// handlers onto the daemon's REST router so /api/v1/cache/*,
+// /api/v1/scheduler/* and /api/v1/messaging/* are served by the same
+// in-process servers that back gRPC, QUIC, MCP, and the Unix socket. A nil
+// server answers its routes with 503. guard checks each route's scope; nil
+// refuses every route.
+func (s *RESTServer) SetAppServiceHandlers(servers restapi.AppServiceServers, guard *restapi.ScopeGuard) {
+	handlers := restapi.NewAppServiceHandlers(servers, guard, s.logger)
+	handlers.RegisterRoutes(s.router)
+	s.logger.Info("Application service REST routes registered")
 }
 
 // SetDeviceHandlers wires the device REST handlers (CRUD + profiles) onto
@@ -392,13 +427,19 @@ func (s *RESTServer) SetDeviceHandlers(
 //
 // Without this wiring /api/v1/tenants/* would 404 even though the gRPC
 // TenantService is registered. Mirrors SetDeviceHandlers / SetCAHandlers.
-func (s *RESTServer) SetTenantHandlers(manager restapi.TenantManagerInterface) {
+//
+// Every route runs behind guard and authorizes the caller it verified as the
+// tenant gRPC server does, with systemTenantID as the one tenant allowed to
+// act on every other (restapi.TenantHandlers). A nil guard answers 403.
+func (s *RESTServer) SetTenantHandlers(manager restapi.TenantManagerInterface, guard *restapi.ScopeGuard, systemTenantID string) {
 	if manager == nil {
 		return
 	}
 	handlers := restapi.NewTenantHandlers(
 		restapi.WithTenantManager(manager),
 		restapi.WithTenantLogger(s.logger),
+		restapi.WithTenantGuard(guard),
+		restapi.WithTenantSystemTenant(systemTenantID),
 	)
 	handlers.RegisterRoutes(s.router)
 	s.logger.Info("Tenant REST routes registered")
@@ -418,20 +459,15 @@ func (s *RESTServer) SetKMSHandlers(service restapi.KMSService) {
 	s.logger.Info("KMS REST routes registered")
 }
 
-// SetComputeHandlers wires the compute (VM + container) REST handlers onto the
-// daemon's REST router so /api/v1/compute/* endpoints are served. orch is the
-// shared compute.Orchestrator; when it satisfies the VM orchestration
-// capability the VM lifecycle + operational routes (metrics, disks, logs,
-// migrate) are mounted, so REST clients see the same VMs as gRPC/QUIC/MCP.
-// Mirrors SetDeviceHandlers / SetKMSHandlers.
-func (s *RESTServer) SetComputeHandlers(orch any) {
-	vmOrch, ok := orch.(restapi.VMOrchestrator)
-	if !ok {
+// SetComputeHandlers wires the compute (VM and container) REST handlers onto
+// the daemon's REST router. Every /api/v1/compute/* route runs the same
+// ComputeService RPC gRPC serves, over protobuf JSON, behind the scope that
+// RPC requires on gRPC, checked by guard.
+func (s *RESTServer) SetComputeHandlers(compute platformv1.ComputeServiceServer, guard *restapi.ScopeGuard) {
+	if compute == nil {
 		return
 	}
-	handlers := restapi.NewComputeHandlers(vmOrch, nil, s.logger)
-	handlers.RegisterRoutes(s.router)
-	s.logger.Info("Compute REST routes registered")
+	restapi.NewComputeHandlers(compute, guard, s.logger).RegisterRoutes(s.router)
 }
 
 // SetOverlayHandlers wires the overlay REST handlers onto the daemon's REST
@@ -454,7 +490,11 @@ func (s *RESTServer) SetOverlayHandlers(svc restapi.OverlayServiceInterface) {
 // the same CA instance used by the gRPC, QUIC, MCP and Unix-socket adapters.
 // All transports therefore share state — certificates issued via gRPC are
 // visible via REST and vice-versa.
-func (s *RESTServer) SetCAHandlers(ca quicbaasca.CACertificateAuthority) {
+//
+// guard authorizes POST /api/v1/ca/sign-csr, which needs a platform token
+// granting ca:sign-csr (a client certificate alone is refused); when it is
+// nil, sign-csr refuses every request.
+func (s *RESTServer) SetCAHandlers(ca quicbaasca.CACertificateAuthority, guard *restapi.ScopeGuard) {
 	if ca == nil {
 		return
 	}
@@ -463,10 +503,14 @@ func (s *RESTServer) SetCAHandlers(ca quicbaasca.CACertificateAuthority) {
 		return
 	}
 	var caObjStorage objectstorage.Client
-	if s.config != nil && s.config.App != nil {
-		caObjStorage = s.config.App.Storage
+	var caKMS issuance.KMS
+	if s.config != nil {
+		caKMS = s.config.csrKMS()
+		if s.config.App != nil {
+			caObjStorage = s.config.App.Storage
+		}
 	}
-	handlers := restapi.NewCAHandlers(adapter, s.logger, caObjStorage)
+	handlers := restapi.NewCAHandlers(adapter, s.logger, caObjStorage).WithKMS(caKMS).WithScopeGuard(guard)
 	handlers.RegisterRoutes(s.router)
 	s.logger.Info("CA REST routes registered")
 
@@ -476,6 +520,19 @@ func (s *RESTServer) SetCAHandlers(ca quicbaasca.CACertificateAuthority) {
 	authFactorHandlers := restapi.NewAuthFactorHandlers(ca, s.logger)
 	authFactorHandlers.RegisterRoutes(s.router)
 	s.logger.Info("Auth factor REST routes registered")
+}
+
+// SetTPMHandlers mounts the physical TPM routes (/api/v1/tpm/...). Every
+// route runs on tpm, the daemon's TPM service, with the protobuf JSON request
+// and response the SDK speaks, so a REST call is the one gRPC, QUIC, MCP and
+// Unix serve. Every route requires tpm:read, tpm:write or tpm:delete, checked
+// by guard (a platform token, else the verified client certificate); with no
+// guard every route refuses. A nil TPM service mounts nothing.
+func (s *RESTServer) SetTPMHandlers(tpm platformv1.TPMServiceServer, guard *restapi.ScopeGuard) {
+	if tpm == nil {
+		return
+	}
+	restapi.NewTPMHandlers(s.logger).WithTPMService(tpm).WithScopeGuard(guard).RegisterRoutes(s.router)
 }
 
 // applyMiddleware wraps the router with middleware handlers
@@ -654,7 +711,7 @@ func (s *RESTServer) handleListServices(w http.ResponseWriter, r *http.Request) 
 	services := make([]ServiceInfoResponse, 0, len(s.service.services))
 	for name, state := range s.service.services {
 		state.mu.RLock()
-		status := serviceStatusToString(state.status.Load())
+		status := serviceStatusToString(int32(state.observedStatus()))
 
 		var uptime string
 		if !state.startedAt.IsZero() {
@@ -696,7 +753,7 @@ func (s *RESTServer) handleGetService(w http.ResponseWriter, r *http.Request) {
 	}
 
 	state.mu.RLock()
-	status := serviceStatusToString(state.status.Load())
+	status := serviceStatusToString(int32(state.observedStatus()))
 
 	var uptime string
 	if !state.startedAt.IsZero() {
@@ -730,9 +787,13 @@ func (s *RESTServer) handleStartService(w http.ResponseWriter, r *http.Request) 
 		s.writeError(w, http.StatusNotFound, ErrServiceNotFound{ServiceName: serviceName})
 		return
 	}
+	if refusal, owned := processOwned(state.service); owned {
+		s.writeError(w, restServiceRefusalStatus, refusal)
+		return
+	}
 
 	state.mu.Lock()
-	if platformv1.ServiceStatus(state.status.Load()) == platformv1.ServiceStatus_SERVICE_STATUS_RUNNING {
+	if state.observedStatus() == platformv1.ServiceStatus_SERVICE_STATUS_RUNNING {
 		state.mu.Unlock()
 		s.writeError(w, http.StatusConflict, ErrServiceAlreadyRunning{ServiceName: serviceName})
 		return
@@ -775,9 +836,13 @@ func (s *RESTServer) handleStopService(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusNotFound, ErrServiceNotFound{ServiceName: serviceName})
 		return
 	}
+	if refusal, owned := processOwned(state.service); owned {
+		s.writeError(w, restServiceRefusalStatus, refusal)
+		return
+	}
 
 	state.mu.Lock()
-	if platformv1.ServiceStatus(state.status.Load()) == platformv1.ServiceStatus_SERVICE_STATUS_STOPPED {
+	if state.observedStatus() == platformv1.ServiceStatus_SERVICE_STATUS_STOPPED {
 		state.mu.Unlock()
 		s.writeError(w, http.StatusConflict, ErrServiceNotRunning{ServiceName: serviceName})
 		return
@@ -818,12 +883,16 @@ func (s *RESTServer) handleRestartService(w http.ResponseWriter, r *http.Request
 		s.writeError(w, http.StatusNotFound, ErrServiceNotFound{ServiceName: serviceName})
 		return
 	}
+	if refusal, owned := processOwned(state.service); owned {
+		s.writeError(w, restServiceRefusalStatus, refusal)
+		return
+	}
 
 	ctx := r.Context()
 
 	state.mu.Lock()
 	// Stop if running
-	if platformv1.ServiceStatus(state.status.Load()) == platformv1.ServiceStatus_SERVICE_STATUS_RUNNING {
+	if state.observedStatus() == platformv1.ServiceStatus_SERVICE_STATUS_RUNNING {
 		state.status.Store(int32(platformv1.ServiceStatus_SERVICE_STATUS_STOPPING))
 		if err := state.service.Stop(ctx); err != nil {
 			state.status.Store(int32(platformv1.ServiceStatus_SERVICE_STATUS_ERROR))
@@ -900,7 +969,7 @@ func (s *RESTServer) handleProtocols(w http.ResponseWriter, r *http.Request) {
 			Address: getMCPAddress(s.config),
 			Port:    extractPort(getMCPAddress(s.config)),
 			Status:  boolToStatus(s.config.EnableMCP),
-			TLS:     false,
+			TLS:     s.config.MCPServesHTTP(),
 		},
 	}
 
@@ -1129,7 +1198,7 @@ func (s *RESTServer) SetFIDO2Service(svc *FIDO2Service) {
 // and mounts /api/v1/cluster routes. The handlers fall through to the
 // gRPC implementation, so REST and gRPC report identical state when the
 // underlying coordinator is missing (HTTP 503 + Unavailable code).
-func (s *RESTServer) SetClusterService(svc *ClusterGRPCService) {
+func (s *RESTServer) SetClusterService(svc platformv1.ClusterServiceServer) {
 	h := newClusterRESTHandlers(svc)
 	api := s.router.PathPrefix(restBasePath).Subrouter()
 	h.registerClusterRoutes(api)

@@ -217,6 +217,7 @@ func (r *ControlPlaneRegistrar) identity() (Registration, error) {
 			"error", err)
 	} else if idevidCert != nil {
 		reg.Hostname = strings.TrimSpace(idevidCert.Subject.CommonName)
+		reg.IDevIDCertPEM = EncodeCertificatePEM(idevidCert)
 	}
 
 	if idevidAttrs, err := r.tpm.IDevIDAttributes(); err != nil {

@@ -426,10 +426,22 @@ func TestIsEnrolled_KeysRegeneratedAfterEnrollment(t *testing.T) {
 	flagPath := filepath.Join(config.NVRAMDir, "OVMF_VARS_ENROLLED.flag")
 	require.NoError(t, os.WriteFile(flagPath, []byte(""), 0644))
 
-	// Wait a bit then update a key file (simulates key regeneration)
-	time.Sleep(10 * time.Millisecond)
+	// The mtimes are set explicitly instead of sleeping between writes, so
+	// the ordering does not depend on filesystem timestamp granularity.
+	// Enrollment and every key share one instant: enrolled, not stale.
+	enrolledAt := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	require.NoError(t, os.Chtimes(flagPath, enrolledAt, enrolledAt))
+	for _, keyFile := range []string{"PK.crt", "KEK.crt", "DB.crt"} {
+		keyPath := filepath.Join(config.KeysDir, keyFile)
+		require.NoError(t, os.Chtimes(keyPath, enrolledAt, enrolledAt))
+	}
+	require.True(t, enroller.IsEnrolled(), "keys no newer than the flag")
+
+	// Regenerate one key a second after enrollment.
 	pkPath := filepath.Join(config.KeysDir, "PK.crt")
 	require.NoError(t, os.WriteFile(pkPath, []byte("regenerated-key"), 0644))
+	regeneratedAt := enrolledAt.Add(time.Second)
+	require.NoError(t, os.Chtimes(pkPath, regeneratedAt, regeneratedAt))
 
 	enrolled := enroller.IsEnrolled()
 	assert.False(t, enrolled, "should not be enrolled when keys are newer than flag")

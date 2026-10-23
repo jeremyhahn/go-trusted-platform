@@ -1,5 +1,7 @@
 # Governance and Economics
 
+> **Status: PLANNED** · Scope: design only, no implementation · Last verified: 2026-10-20
+
 This document consolidates the governance, economic, and privacy models for go-trusted-platform, covering upgrade mechanisms, free market pricing, gateway incentives, and optional privacy features.
 
 ## Table of Contents

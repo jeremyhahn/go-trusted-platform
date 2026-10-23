@@ -15,6 +15,7 @@ package commands
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -25,6 +26,7 @@ import (
 
 	"github.com/jeremyhahn/go-luks2/pkg/luks2"
 	bootconfig "github.com/jeremyhahn/go-trusted-platform/pkg/boot/config"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/disklessroot"
 	platforminitrd "github.com/jeremyhahn/go-trusted-platform/pkg/initrd"
 	storageluks "github.com/jeremyhahn/go-trusted-platform/pkg/storage/luks"
 	"github.com/spf13/cobra"
@@ -49,7 +51,14 @@ var (
 	bootVerbose      bool
 	bootDebug        bool
 	bootFIPS         bool
+	bootDiskless     bool
+	bootRootMount    string
+	bootDisklessWork string
 )
+
+// procCmdlinePath is the kernel command line. Under Secure Boot it is the
+// command line signed into the UKI: systemd-stub ignores any other.
+var procCmdlinePath = "/proc/cmdline"
 
 // BootCmd provides the boot command for platform-initrd
 var BootCmd = &cobra.Command{
@@ -70,7 +79,10 @@ This command is typically called automatically by the initramfs.`,
   platform-initrd boot --device /dev/sda2 --timeout 60
 
   # Boot with fallback enabled
-  platform-initrd boot --device /dev/sda2 --fallback`,
+  platform-initrd boot --device /dev/sda2 --fallback
+
+  # Diskless node: mount the dm-verity root the signed cmdline describes
+  platform-initrd boot --diskless`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return runBoot(cmd.Context())
 	},
@@ -89,8 +101,9 @@ func init() {
 	BootCmd.Flags().BoolVarP(&bootVerbose, "verbose", "v", false, "Enable verbose logging")
 	BootCmd.Flags().BoolVar(&bootDebug, "debug", false, "Enable debug logging (implies verbose)")
 	BootCmd.Flags().BoolVar(&bootFIPS, "fips", false, "Enable FIPS mode (use PBKDF2 instead of Argon2id)")
-
-	BootCmd.MarkFlagRequired("device")
+	BootCmd.Flags().BoolVar(&bootDiskless, "diskless", false, "Mount the diskless dm-verity root described by the signed kernel command line instead of unlocking --device")
+	BootCmd.Flags().StringVar(&bootRootMount, "root-mount", "/sysroot", "Root mount point for diskless boot")
+	BootCmd.Flags().StringVar(&bootDisklessWork, "diskless-work-dir", "/run/platform/diskless-root", "Tmpfs work directory for diskless root material")
 }
 
 func runBoot(ctx context.Context) error {
@@ -114,9 +127,10 @@ func runBoot(ctx context.Context) error {
 	bc("step01: runBoot entered, validating flags (device=%q mapping=%q)", bootDevice, bootMappingName)
 
 	// Validate required flags
-	if bootDevice == "" {
-		bc("step01: ERROR --device flag is required")
-		return &MessageError{Msg: "--device flag is required"}
+	disklessConfig, err := disklessBootConfig()
+	if err != nil {
+		bc("step01: ERROR %v", err)
+		return err
 	}
 
 	bc("step02: InitializeLogger(mode=boot, verbose=%v, debug=%v)", bootVerbose, bootDebug)
@@ -133,6 +147,25 @@ func runBoot(ctx context.Context) error {
 		"device", bootDevice,
 		"mapping", bootMappingName,
 		"version", Version)
+
+	if disklessConfig != nil {
+		bc("step03: mounting diskless dm-verity root")
+		startTime := time.Now()
+		mount, err := platforminitrd.MountDisklessRoot(ctx, *disklessConfig)
+		if err != nil {
+			bc("step03: ERROR diskless root mount failed: %v", err)
+			return handleBootFailure(ctx, err, bootEmergency)
+		}
+		duration := time.Since(startTime)
+		logger.Info("Diskless root mounted",
+			"rootfs", mount.RootFSPath,
+			"verity", mount.VerityPath,
+			"mapper", mount.MapperPath,
+			"mount", mount.RootMount,
+			"duration", duration)
+		fmt.Printf("Mounted diskless root at %s (%v)\n", mount.RootMount, duration)
+		return nil
+	}
 
 	bc("step03: tryMountInstaller(efiPath=%q)", bootEFIPath)
 	// PRE-MOUNT: Try to mount installer.luks using go-luks2 BEFORE loading config
@@ -297,6 +330,39 @@ func runBoot(ctx context.Context) error {
 	return nil
 }
 
+// disklessBootConfig selects the boot path from the flags alone: --diskless
+// mounts the verity root, anything else unlocks --device. Root parameters on
+// the command line never select the diskless path by themselves, so a disk
+// node still unlocks LUKS whatever else its command line carries. It returns
+// nil for the LUKS path.
+func disklessBootConfig() (*platforminitrd.DisklessRootConfig, error) {
+	if !bootDiskless {
+		if bootDevice == "" {
+			return nil, &MessageError{Msg: "--device flag is required"}
+		}
+		return nil, nil
+	}
+	if bootDevice != "" {
+		return nil, &MessageError{Msg: "--diskless and --device are mutually exclusive"}
+	}
+	cmdline, err := os.ReadFile(procCmdlinePath)
+	if err != nil {
+		return nil, &WrappedError{Msg: "read the kernel command line", Err: err}
+	}
+	params, ok, err := disklessroot.ParamsFromCmdline(string(cmdline))
+	if err != nil {
+		return nil, &WrappedError{Msg: "invalid diskless root configuration", Err: err}
+	}
+	if !ok {
+		return nil, &MessageError{Msg: "--diskless requires " + disklessroot.ParamBootModel + "=" + disklessroot.BootModel + " on the kernel command line"}
+	}
+	return &platforminitrd.DisklessRootConfig{
+		Params:    params,
+		RootMount: bootRootMount,
+		WorkDir:   bootDisklessWork,
+	}, nil
+}
+
 // handleBootFailure handles boot failures with appropriate actions
 func handleBootFailure(ctx context.Context, err error, emergency bool) error {
 	if emergency {
@@ -423,10 +489,11 @@ type installerCloser struct {
 	sync func()
 }
 
-// Retry policy for closing the LUKS mapping: the same shape as firstboot's
-// closeInstaller.
+// Retry policy for closing the LUKS mapping. go-luks2's Lock already retries a
+// busy mapping for about 3s before it returns luks2.ErrMappingBusy, so three
+// attempts give a mapping held after the unmount about 10s to come free.
 const (
-	installerLockAttempts = 10
+	installerLockAttempts = 3
 	installerLockInterval = 500 * time.Millisecond
 )
 
@@ -462,10 +529,17 @@ func closeInstaller(loopDev string, ops installerCloser) error {
 
 	var lockErr error
 	for attempt := 1; attempt <= installerLockAttempts; attempt++ {
-		if lockErr = ops.lock("installer"); lockErr == nil {
+		lockErr = ops.lock("installer")
+		if lockErr == nil || errors.Is(lockErr, luks2.ErrVolumeNotUnlocked) {
+			// A mapping that is not open is already closed.
+			lockErr = nil
 			break
 		}
 		fmt.Fprintf(os.Stderr, "[BOOT] LUKS close attempt %d/%d failed: %v\n", attempt, installerLockAttempts, lockErr)
+		if !errors.Is(lockErr, luks2.ErrMappingBusy) {
+			// Only a held mapping can come free; anything else will not.
+			break
+		}
 		if attempt < installerLockAttempts {
 			ops.wait()
 		}

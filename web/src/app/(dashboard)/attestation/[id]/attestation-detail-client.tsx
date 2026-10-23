@@ -12,7 +12,7 @@ import { PCRValues } from "@/components/features/attestation/pcr-values";
 import { EventLogViewer } from "@/components/features/attestation/event-log-viewer";
 import { useAttestation, useApi } from "@/hooks";
 import type { AttestationDetail } from "@/types/security";
-import { ArrowLeft, Loader2, AlertCircle, ShieldCheck, ShieldAlert } from "lucide-react";
+import { ArrowLeft, Loader2, AlertCircle, ShieldQuestion } from "lucide-react";
 
 /**
  * Attestation Detail Page
@@ -22,7 +22,8 @@ import { ArrowLeft, Loader2, AlertCircle, ShieldCheck, ShieldAlert } from "lucid
  * - Display device information
  * - Show PCR values
  * - View event log
- * - Display verification result
+ * - Point at the verifier's verdict: a manifest is signed or unsigned
+ *   evidence, never a verdict (#643)
  */
 export default function AttestationDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const resolved = use(params);
@@ -50,12 +51,8 @@ export default function AttestationDetailPage({ params }: { params: Promise<{ id
       deviceName: attestationData.hostId || "Unknown Device",
       tpmManufacturer: attestationData.host?.akPublicKey ? "TPM 2.0" : "Unknown",
       attestedAt: attestationData.timestamp || new Date().toISOString(),
-      status: "pending" as const, // TODO: Derive status from verification result
+      status: attestationData.signature ? ("signed" as const) : ("unsigned" as const),
       quote: attestationData.host?.quoteData || "",
-      verificationResult: {
-        valid: true, // TODO: Add verification logic
-        errors: [],
-      },
       deviceInfo: {
         tpmVersion: "2.0",
         firmwareVersion: attestationData.host?.firmwareVersion || "Unknown",
@@ -128,61 +125,30 @@ export default function AttestationDetailPage({ params }: { params: Promise<{ id
           </div>
         </div>
         <Badge
-          variant={
-            attestationDetail.status === "verified"
-              ? "default"
-              : attestationDetail.status === "failed"
-              ? "destructive"
-              : "secondary"
-          }
+          variant={attestationDetail.status === "signed" ? "outline" : "secondary"}
           className="text-base px-4 py-2"
         >
-          {attestationDetail.status}
+          {attestationDetail.status === "signed" ? "Signed" : "Unsigned"}
         </Badge>
       </div>
 
-      {/* Verification Result */}
+      {/* Verification Result: a manifest is evidence; the verifier's verdict is the device report (#643) */}
       <Card>
         <CardHeader>
           <div className="flex items-center gap-2">
-            {attestationDetail.verificationResult.valid ? (
-              <ShieldCheck className="h-5 w-5 text-green-500" />
-            ) : (
-              <ShieldAlert className="h-5 w-5 text-destructive" />
-            )}
+            <ShieldQuestion className="h-5 w-5 text-muted-foreground" />
             <CardTitle>Verification Result</CardTitle>
           </div>
         </CardHeader>
-        <CardContent>
-          <div
-            className={`p-4 rounded-lg border ${
-              attestationDetail.verificationResult.valid
-                ? "bg-green-50 border-green-200 dark:bg-green-950 dark:border-green-800"
-                : "bg-red-50 border-red-200 dark:bg-red-950 dark:border-red-800"
-            }`}
-          >
-            <p
-              className={`font-medium ${
-                attestationDetail.verificationResult.valid
-                  ? "text-green-900 dark:text-green-100"
-                  : "text-red-900 dark:text-red-100"
-              }`}
-            >
-              {attestationDetail.verificationResult.valid
-                ? "Attestation Verified Successfully"
-                : "Attestation Verification Failed"}
-            </p>
-            {attestationDetail.verificationResult.errors &&
-              attestationDetail.verificationResult.errors.length > 0 && (
-                <ul className="mt-2 space-y-1">
-                  {attestationDetail.verificationResult.errors.map((error, idx) => (
-                    <li key={idx} className="text-sm text-red-800 dark:text-red-200">
-                      • {error}
-                    </li>
-                  ))}
-                </ul>
-              )}
-          </div>
+        <CardContent className="space-y-3">
+          <p className="text-sm text-muted-foreground" data-testid="manifest-not-a-verdict">
+            This manifest is evidence, not a verdict. The control plane&apos;s collector
+            verifies each device&apos;s quote and serves the verdict with its age as the
+            device&apos;s attestation report.
+          </p>
+          <Button variant="outline" size="sm" onClick={() => router.push("/devices")}>
+            View device verdicts
+          </Button>
         </CardContent>
       </Card>
 

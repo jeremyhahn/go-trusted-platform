@@ -334,6 +334,10 @@ func (s *vbmcServer) routes() *http.ServeMux {
 	mux.HandleFunc("/redfish/v1/", s.handleRedfishRoot)
 	mux.HandleFunc("/redfish/v1/Managers", s.handleRedfishManagers)
 	mux.HandleFunc("/redfish/v1/Managers/1", s.handleRedfishManager1)
+	mux.HandleFunc("/redfish/v1/Systems", s.handleRedfishSystems)
+	mux.HandleFunc("/redfish/v1/Systems/1", s.handleRedfishSystem1)
+	mux.HandleFunc("/redfish/v1/Chassis", s.handleRedfishChassisCollection)
+	mux.HandleFunc("/redfish/v1/Chassis/1", s.handleRedfishChassis1)
 	mux.HandleFunc("/redfish/v1/Managers/1/Actions/Manager.Reset", s.handleRedfishReset)
 	mux.HandleFunc("/redfish/v1/CertificateService/Actions/CertificateService.ReplaceCertificate", s.handleRedfishReplaceCert)
 	mux.HandleFunc("/redfish/v1/Managers/1/NetworkProtocol/HTTPS/Certificates/1", s.handleRedfishDeleteCert)
@@ -429,6 +433,93 @@ func (s *vbmcServer) handleRedfishManager1(w http.ResponseWriter, _ *http.Reques
 			},
 		},
 	})
+}
+
+// hardwareIdentity is the identity a real BMC serves on its System and
+// Chassis resources. pkg/quirks resolves board quirks from it.
+type hardwareIdentity struct {
+	Manufacturer string
+	Model        string
+	PartNumber   string
+	SerialNumber string
+	SKU          string
+}
+
+// vendorIdentities maps the (lower-cased) --vendor value to the identity the
+// fixture serves. Supermicro matches the pkg/quirks X10SDV entry and Dell the
+// manufacturer-wide "Dell Inc." entry, so each variant resolves to a distinct
+// quirk.
+var vendorIdentities = map[string]hardwareIdentity{
+	"supermicro": {
+		Manufacturer: "Supermicro",
+		Model:        "X10SDV-TP8F",
+		PartNumber:   "SYS-5018D-FN8T-AS001",
+		SerialNumber: "VBMC-SMC-0001",
+		SKU:          "SYS-5018D-FN8T",
+	},
+	"dell": {
+		Manufacturer: "Dell Inc.",
+		Model:        "PowerEdge R650",
+		PartNumber:   "0X3D66A00",
+		SerialNumber: "VBMC-DELL-0001",
+		SKU:          "R650-VBMC",
+	},
+}
+
+// identity returns the hardware identity for the configured vendor. Any other
+// vendor string is served as its own manufacturer, so a custom --vendor still
+// answers with a complete, self-describing identity.
+func (s *vbmcServer) identity() hardwareIdentity {
+	if id, ok := vendorIdentities[strings.ToLower(s.cfg.vendor)]; ok {
+		return id
+	}
+	return hardwareIdentity{
+		Manufacturer: s.cfg.vendor,
+		Model:        "Virtual BMC",
+		PartNumber:   "VBMC-GENERIC",
+		SerialNumber: "VBMC-GENERIC-0001",
+		SKU:          "VBMC-GENERIC",
+	}
+}
+
+// identityBody renders the identity fields shared by System and Chassis.
+func (s *vbmcServer) identityBody(odataID string) map[string]any {
+	id := s.identity()
+	return map[string]any{
+		"@odata.id":    odataID,
+		"Id":           "1",
+		"Manufacturer": id.Manufacturer,
+		"Model":        id.Model,
+		"PartNumber":   id.PartNumber,
+		"SerialNumber": id.SerialNumber,
+		"SKU":          id.SKU,
+	}
+}
+
+func (s *vbmcServer) handleRedfishSystems(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]any{
+		"@odata.id": "/redfish/v1/Systems",
+		"Members": []map[string]any{
+			{"@odata.id": "/redfish/v1/Systems/1"},
+		},
+	})
+}
+
+func (s *vbmcServer) handleRedfishSystem1(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, http.StatusOK, s.identityBody("/redfish/v1/Systems/1"))
+}
+
+func (s *vbmcServer) handleRedfishChassisCollection(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]any{
+		"@odata.id": "/redfish/v1/Chassis",
+		"Members": []map[string]any{
+			{"@odata.id": "/redfish/v1/Chassis/1"},
+		},
+	})
+}
+
+func (s *vbmcServer) handleRedfishChassis1(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, http.StatusOK, s.identityBody("/redfish/v1/Chassis/1"))
 }
 
 func (s *vbmcServer) handleRedfishReset(w http.ResponseWriter, r *http.Request) {

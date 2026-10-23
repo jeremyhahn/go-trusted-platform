@@ -21,9 +21,10 @@ import (
 	"testing"
 
 	pb "github.com/jeremyhahn/go-quicbaas/api/proto"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
+	kmssdk "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/kms"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -36,16 +37,16 @@ import (
 func TestHandleKMSImportKey_DecodingError(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockKMS := newMockKMSService()
-	handler := NewQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
+	handler := newTestQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
 	ctx := context.Background()
 
-	req := &quic.Request{
-		Opcode:  quic.OpKMSImportKey,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpKMSImportKey,
 		Payload: []byte{0xFF, 0xFE, 0xFD}, // Invalid msgpack data
 	}
 	resp := handler.HandleRequest(ctx, req)
 
-	assert.Equal(t, quic.StatusInvalidRequest, resp.Status)
+	assert.Equal(t, quicwire.StatusInvalidRequest, resp.Status)
 }
 
 // TestHandleKMSImportKey_ServiceError tests service failure path
@@ -54,7 +55,7 @@ func TestHandleKMSImportKey_ServiceError(t *testing.T) {
 	mockKMS := newMockKMSService()
 	mockKMS.shouldErr = true
 	mockKMS.errToReturn = errors.New("import failed")
-	handler := NewQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
+	handler := newTestQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
 	ctx := context.Background()
 
 	importReq := KMSImportKeyRequest{
@@ -62,23 +63,23 @@ func TestHandleKMSImportKey_ServiceError(t *testing.T) {
 		Name:        "imported-key",
 	}
 
-	payload, err := quic.EncodePayload(importReq)
+	payload, err := quicwire.EncodePayload(importReq)
 	require.NoError(t, err)
 
-	req := &quic.Request{
-		Opcode:  quic.OpKMSImportKey,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpKMSImportKey,
 		Payload: payload,
 	}
 	resp := handler.HandleRequest(ctx, req)
 
-	assert.Equal(t, quic.StatusInternalError, resp.Status)
+	assert.Equal(t, quicwire.StatusInternalError, resp.Status)
 }
 
 // TestHandleKMSImportKey_WithKeySpec tests import with key spec
 func TestHandleKMSImportKey_WithKeySpec(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockKMS := newMockKMSService()
-	handler := NewQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
+	handler := newTestQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
 	ctx := context.Background()
 
 	importReq := KMSImportKeyRequest{
@@ -99,32 +100,32 @@ func TestHandleKMSImportKey_WithKeySpec(t *testing.T) {
 		Tags: map[string]string{"env": "test"},
 	}
 
-	payload, err := quic.EncodePayload(importReq)
+	payload, err := quicwire.EncodePayload(importReq)
 	require.NoError(t, err)
 
-	req := &quic.Request{
-		Opcode:  quic.OpKMSImportKey,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpKMSImportKey,
 		Payload: payload,
 	}
 	resp := handler.HandleRequest(ctx, req)
 
-	assert.Equal(t, quic.StatusOK, resp.Status)
+	assert.Equal(t, quicwire.StatusOK, resp.Status)
 }
 
 // TestHandleKMSExportKey_DecodingError tests decoding failure path
 func TestHandleKMSExportKey_DecodingError(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockKMS := newMockKMSService()
-	handler := NewQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
+	handler := newTestQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
 	ctx := context.Background()
 
-	req := &quic.Request{
-		Opcode:  quic.OpKMSExportKey,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpKMSExportKey,
 		Payload: []byte{0xFF, 0xFE, 0xFD}, // Invalid msgpack data
 	}
 	resp := handler.HandleRequest(ctx, req)
 
-	assert.Equal(t, quic.StatusInvalidRequest, resp.Status)
+	assert.Equal(t, quicwire.StatusInvalidRequest, resp.Status)
 }
 
 // TestHandleKMSExportKey_ServiceError tests service failure path
@@ -133,7 +134,7 @@ func TestHandleKMSExportKey_ServiceError(t *testing.T) {
 	mockKMS := newMockKMSService()
 	mockKMS.shouldErr = true
 	mockKMS.errToReturn = errors.New("export failed")
-	handler := NewQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
+	handler := newTestQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
 	ctx := context.Background()
 
 	exportReq := KMSExportKeyRequest{
@@ -144,32 +145,32 @@ func TestHandleKMSExportKey_ServiceError(t *testing.T) {
 		Version:           1,
 	}
 
-	payload, err := quic.EncodePayload(exportReq)
+	payload, err := quicwire.EncodePayload(exportReq)
 	require.NoError(t, err)
 
-	req := &quic.Request{
-		Opcode:  quic.OpKMSExportKey,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpKMSExportKey,
 		Payload: payload,
 	}
 	resp := handler.HandleRequest(ctx, req)
 
-	assert.Equal(t, quic.StatusInternalError, resp.Status)
+	assert.Equal(t, quicwire.StatusInternalError, resp.Status)
 }
 
 // TestHandleKMSDeleteKey_DecodingError tests decoding failure path
 func TestHandleKMSDeleteKey_DecodingError(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockKMS := newMockKMSService()
-	handler := NewQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
+	handler := newTestQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
 	ctx := context.Background()
 
-	req := &quic.Request{
-		Opcode:  quic.OpKMSDeleteKey,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpKMSDeleteKey,
 		Payload: []byte{0xFF, 0xFE, 0xFD}, // Invalid msgpack data
 	}
 	resp := handler.HandleRequest(ctx, req)
 
-	assert.Equal(t, quic.StatusInvalidRequest, resp.Status)
+	assert.Equal(t, quicwire.StatusInvalidRequest, resp.Status)
 }
 
 // TestHandleKMSDeleteKey_ServiceError tests service failure path
@@ -178,7 +179,7 @@ func TestHandleKMSDeleteKey_ServiceError(t *testing.T) {
 	mockKMS := newMockKMSService()
 	mockKMS.shouldErr = true
 	mockKMS.errToReturn = errors.New("delete failed")
-	handler := NewQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
+	handler := newTestQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
 	ctx := context.Background()
 
 	deleteReq := KMSDeleteKeyRequest{
@@ -187,32 +188,32 @@ func TestHandleKMSDeleteKey_ServiceError(t *testing.T) {
 		Force:             true,
 	}
 
-	payload, err := quic.EncodePayload(deleteReq)
+	payload, err := quicwire.EncodePayload(deleteReq)
 	require.NoError(t, err)
 
-	req := &quic.Request{
-		Opcode:  quic.OpKMSDeleteKey,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpKMSDeleteKey,
 		Payload: payload,
 	}
 	resp := handler.HandleRequest(ctx, req)
 
-	assert.Equal(t, quic.StatusInternalError, resp.Status)
+	assert.Equal(t, quicwire.StatusInternalError, resp.Status)
 }
 
 // TestHandleKMSRotateKey_DecodingError tests decoding failure path
 func TestHandleKMSRotateKey_DecodingError(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockKMS := newMockKMSService()
-	handler := NewQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
+	handler := newTestQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
 	ctx := context.Background()
 
-	req := &quic.Request{
-		Opcode:  quic.OpKMSRotateKey,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpKMSRotateKey,
 		Payload: []byte{0xFF, 0xFE, 0xFD}, // Invalid msgpack data
 	}
 	resp := handler.HandleRequest(ctx, req)
 
-	assert.Equal(t, quic.StatusInvalidRequest, resp.Status)
+	assert.Equal(t, quicwire.StatusInvalidRequest, resp.Status)
 }
 
 // TestHandleKMSRotateKey_ServiceError tests service failure path
@@ -221,7 +222,7 @@ func TestHandleKMSRotateKey_ServiceError(t *testing.T) {
 	mockKMS := newMockKMSService()
 	mockKMS.shouldErr = true
 	mockKMS.errToReturn = errors.New("rotate failed")
-	handler := NewQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
+	handler := newTestQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
 	ctx := context.Background()
 
 	rotateReq := KMSRotateKeyRequest{
@@ -229,32 +230,32 @@ func TestHandleKMSRotateKey_ServiceError(t *testing.T) {
 		RetainOldVersion: true,
 	}
 
-	payload, err := quic.EncodePayload(rotateReq)
+	payload, err := quicwire.EncodePayload(rotateReq)
 	require.NoError(t, err)
 
-	req := &quic.Request{
-		Opcode:  quic.OpKMSRotateKey,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpKMSRotateKey,
 		Payload: payload,
 	}
 	resp := handler.HandleRequest(ctx, req)
 
-	assert.Equal(t, quic.StatusInternalError, resp.Status)
+	assert.Equal(t, quicwire.StatusInternalError, resp.Status)
 }
 
 // TestHandleKMSUpdateKeyStatus_DecodingError tests decoding failure path
 func TestHandleKMSUpdateKeyStatus_DecodingError(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockKMS := newMockKMSService()
-	handler := NewQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
+	handler := newTestQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
 	ctx := context.Background()
 
-	req := &quic.Request{
-		Opcode:  quic.OpKMSUpdateKeyStatus,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpKMSUpdateKeyStatus,
 		Payload: []byte{0xFF, 0xFE, 0xFD}, // Invalid msgpack data
 	}
 	resp := handler.HandleRequest(ctx, req)
 
-	assert.Equal(t, quic.StatusInvalidRequest, resp.Status)
+	assert.Equal(t, quicwire.StatusInvalidRequest, resp.Status)
 }
 
 // TestHandleKMSUpdateKeyStatus_ServiceError tests service failure path
@@ -263,7 +264,7 @@ func TestHandleKMSUpdateKeyStatus_ServiceError(t *testing.T) {
 	mockKMS := newMockKMSService()
 	mockKMS.shouldErr = true
 	mockKMS.errToReturn = errors.New("update status failed")
-	handler := NewQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
+	handler := newTestQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
 	ctx := context.Background()
 
 	updateReq := KMSUpdateKeyStatusRequest{
@@ -272,32 +273,32 @@ func TestHandleKMSUpdateKeyStatus_ServiceError(t *testing.T) {
 		Status:  int32(platformv1.KeyStatus_KEY_STATUS_DISABLED),
 	}
 
-	payload, err := quic.EncodePayload(updateReq)
+	payload, err := quicwire.EncodePayload(updateReq)
 	require.NoError(t, err)
 
-	req := &quic.Request{
-		Opcode:  quic.OpKMSUpdateKeyStatus,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpKMSUpdateKeyStatus,
 		Payload: payload,
 	}
 	resp := handler.HandleRequest(ctx, req)
 
-	assert.Equal(t, quic.StatusInternalError, resp.Status)
+	assert.Equal(t, quicwire.StatusInternalError, resp.Status)
 }
 
 // TestHandleKMSGenerateRandom_DecodingError tests decoding failure path
 func TestHandleKMSGenerateRandom_DecodingError(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockKMS := newMockKMSService()
-	handler := NewQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
+	handler := newTestQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
 	ctx := context.Background()
 
-	req := &quic.Request{
-		Opcode:  quic.OpKMSGenerateRandom,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpKMSGenerateRandom,
 		Payload: []byte{0xFF, 0xFE, 0xFD}, // Invalid msgpack data
 	}
 	resp := handler.HandleRequest(ctx, req)
 
-	assert.Equal(t, quic.StatusInvalidRequest, resp.Status)
+	assert.Equal(t, quicwire.StatusInvalidRequest, resp.Status)
 }
 
 // TestHandleKMSGenerateRandom_ServiceError tests service failure path
@@ -306,62 +307,62 @@ func TestHandleKMSGenerateRandom_ServiceError(t *testing.T) {
 	mockKMS := newMockKMSService()
 	mockKMS.shouldErr = true
 	mockKMS.errToReturn = errors.New("random generation failed")
-	handler := NewQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
+	handler := newTestQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
 	ctx := context.Background()
 
 	randomReq := KMSGenerateRandomRequest{
 		NumBytes: 32,
 	}
 
-	payload, err := quic.EncodePayload(randomReq)
+	payload, err := quicwire.EncodePayload(randomReq)
 	require.NoError(t, err)
 
-	req := &quic.Request{
-		Opcode:  quic.OpKMSGenerateRandom,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpKMSGenerateRandom,
 		Payload: payload,
 	}
 	resp := handler.HandleRequest(ctx, req)
 
-	assert.Equal(t, quic.StatusInternalError, resp.Status)
+	assert.Equal(t, quicwire.StatusInternalError, resp.Status)
 }
 
 // TestHandleKMSGenerateRandom_NegativeNumBytes tests negative num_bytes validation
 func TestHandleKMSGenerateRandom_NegativeNumBytes(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockKMS := newMockKMSService()
-	handler := NewQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
+	handler := newTestQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
 	ctx := context.Background()
 
 	randomReq := KMSGenerateRandomRequest{
 		NumBytes: -5,
 	}
 
-	payload, err := quic.EncodePayload(randomReq)
+	payload, err := quicwire.EncodePayload(randomReq)
 	require.NoError(t, err)
 
-	req := &quic.Request{
-		Opcode:  quic.OpKMSGenerateRandom,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpKMSGenerateRandom,
 		Payload: payload,
 	}
 	resp := handler.HandleRequest(ctx, req)
 
-	assert.Equal(t, quic.StatusInvalidArgument, resp.Status)
+	assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 }
 
 // TestHandleKMSHash_DecodingError tests decoding failure path
 func TestHandleKMSHash_DecodingError(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockKMS := newMockKMSService()
-	handler := NewQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
+	handler := newTestQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
 	ctx := context.Background()
 
-	req := &quic.Request{
-		Opcode:  quic.OpKMSHash,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpKMSHash,
 		Payload: []byte{0xFF, 0xFE, 0xFD}, // Invalid msgpack data
 	}
 	resp := handler.HandleRequest(ctx, req)
 
-	assert.Equal(t, quic.StatusInvalidRequest, resp.Status)
+	assert.Equal(t, quicwire.StatusInvalidRequest, resp.Status)
 }
 
 // TestHandleKMSHash_ServiceError tests service failure path
@@ -370,7 +371,7 @@ func TestHandleKMSHash_ServiceError(t *testing.T) {
 	mockKMS := newMockKMSService()
 	mockKMS.shouldErr = true
 	mockKMS.errToReturn = errors.New("hash failed")
-	handler := NewQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
+	handler := newTestQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
 	ctx := context.Background()
 
 	hashReq := KMSHashRequest{
@@ -378,23 +379,23 @@ func TestHandleKMSHash_ServiceError(t *testing.T) {
 		Algorithm: int32(platformv1.HashAlgorithm_HASH_ALGORITHM_SHA256),
 	}
 
-	payload, err := quic.EncodePayload(hashReq)
+	payload, err := quicwire.EncodePayload(hashReq)
 	require.NoError(t, err)
 
-	req := &quic.Request{
-		Opcode:  quic.OpKMSHash,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpKMSHash,
 		Payload: payload,
 	}
 	resp := handler.HandleRequest(ctx, req)
 
-	assert.Equal(t, quic.StatusInternalError, resp.Status)
+	assert.Equal(t, quicwire.StatusInternalError, resp.Status)
 }
 
 // TestHandleKMSHash_DifferentAlgorithms tests various hash algorithms
 func TestHandleKMSHash_DifferentAlgorithms(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockKMS := newMockKMSService()
-	handler := NewQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
+	handler := newTestQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
 	ctx := context.Background()
 
 	supported := []platformv1.HashAlgorithm{
@@ -411,16 +412,16 @@ func TestHandleKMSHash_DifferentAlgorithms(t *testing.T) {
 				Algorithm: int32(alg),
 			}
 
-			payload, err := quic.EncodePayload(hashReq)
+			payload, err := quicwire.EncodePayload(hashReq)
 			require.NoError(t, err)
 
-			req := &quic.Request{
-				Opcode:  quic.OpKMSHash,
+			req := &quicwire.Request{
+				Opcode:  quicwire.OpKMSHash,
 				Payload: payload,
 			}
 			resp := handler.HandleRequest(ctx, req)
 
-			assert.Equal(t, quic.StatusOK, resp.Status)
+			assert.Equal(t, quicwire.StatusOK, resp.Status)
 		})
 	}
 
@@ -436,16 +437,16 @@ func TestHandleKMSHash_DifferentAlgorithms(t *testing.T) {
 				Algorithm: int32(alg),
 			}
 
-			payload, err := quic.EncodePayload(hashReq)
+			payload, err := quicwire.EncodePayload(hashReq)
 			require.NoError(t, err)
 
-			req := &quic.Request{
-				Opcode:  quic.OpKMSHash,
+			req := &quicwire.Request{
+				Opcode:  quicwire.OpKMSHash,
 				Payload: payload,
 			}
 			resp := handler.HandleRequest(ctx, req)
 
-			assert.Equal(t, quic.StatusInvalidArgument, resp.Status)
+			assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 		})
 	}
 }
@@ -455,16 +456,16 @@ func TestHandleKMSGenerateDataKey_DecodingError(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockKMS := newMockKMSService()
 	mockCrypto := newMockCryptoService()
-	handler := NewQUICServiceHandler(logger, WithQUICKMSService(mockKMS), WithQUICCryptoService(mockCrypto))
+	handler := newTestQUICServiceHandler(logger, WithQUICKMSService(mockKMS), WithQUICCryptoService(mockCrypto))
 	ctx := context.Background()
 
-	req := &quic.Request{
-		Opcode:  quic.OpKMSGenerateDataKey,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpKMSGenerateDataKey,
 		Payload: []byte{0xFF, 0xFE, 0xFD}, // Invalid msgpack data
 	}
 	resp := handler.HandleRequest(ctx, req)
 
-	assert.Equal(t, quic.StatusInvalidRequest, resp.Status)
+	assert.Equal(t, quicwire.StatusInvalidRequest, resp.Status)
 }
 
 // TestHandleKMSGenerateDataKey_ServiceError tests service failure path
@@ -474,7 +475,7 @@ func TestHandleKMSGenerateDataKey_ServiceError(t *testing.T) {
 	mockCrypto := newMockCryptoService()
 	mockCrypto.shouldErr = true
 	mockCrypto.errToReturn = errors.New("data key generation failed")
-	handler := NewQUICServiceHandler(logger, WithQUICKMSService(mockKMS), WithQUICCryptoService(mockCrypto))
+	handler := newTestQUICServiceHandler(logger, WithQUICKMSService(mockKMS), WithQUICCryptoService(mockCrypto))
 	ctx := context.Background()
 
 	dataKeyReq := KMSGenerateDataKeyQUICRequest{
@@ -482,16 +483,16 @@ func TestHandleKMSGenerateDataKey_ServiceError(t *testing.T) {
 		Algorithm: int32(platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_AES_256),
 	}
 
-	payload, err := quic.EncodePayload(dataKeyReq)
+	payload, err := quicwire.EncodePayload(dataKeyReq)
 	require.NoError(t, err)
 
-	req := &quic.Request{
-		Opcode:  quic.OpKMSGenerateDataKey,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpKMSGenerateDataKey,
 		Payload: payload,
 	}
 	resp := handler.HandleRequest(ctx, req)
 
-	assert.Equal(t, quic.StatusInternalError, resp.Status)
+	assert.Equal(t, quicwire.StatusInternalError, resp.Status)
 }
 
 // TestHandleKMSGenerateDataKey_InvalidAlgorithm tests invalid algorithm error path
@@ -499,7 +500,7 @@ func TestHandleKMSGenerateDataKey_InvalidAlgorithm(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockKMS := newMockKMSService()
 	mockCrypto := newMockCryptoService()
-	handler := NewQUICServiceHandler(logger, WithQUICKMSService(mockKMS), WithQUICCryptoService(mockCrypto))
+	handler := newTestQUICServiceHandler(logger, WithQUICKMSService(mockKMS), WithQUICCryptoService(mockCrypto))
 	ctx := context.Background()
 
 	dataKeyReq := KMSGenerateDataKeyQUICRequest{
@@ -507,16 +508,16 @@ func TestHandleKMSGenerateDataKey_InvalidAlgorithm(t *testing.T) {
 		Algorithm: int32(platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_RSA_2048),
 	}
 
-	payload, err := quic.EncodePayload(dataKeyReq)
+	payload, err := quicwire.EncodePayload(dataKeyReq)
 	require.NoError(t, err)
 
-	req := &quic.Request{
-		Opcode:  quic.OpKMSGenerateDataKey,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpKMSGenerateDataKey,
 		Payload: payload,
 	}
 	resp := handler.HandleRequest(ctx, req)
 
-	assert.Equal(t, quic.StatusInvalidArgument, resp.Status)
+	assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 }
 
 // TestHandleKMSGenerateDataKey_DefaultAlgorithm tests default algorithm when not specified
@@ -524,7 +525,7 @@ func TestHandleKMSGenerateDataKey_DefaultAlgorithm(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockKMS := newMockKMSService()
 	mockCrypto := newMockCryptoService()
-	handler := NewQUICServiceHandler(logger, WithQUICKMSService(mockKMS), WithQUICCryptoService(mockCrypto))
+	handler := newTestQUICServiceHandler(logger, WithQUICKMSService(mockKMS), WithQUICCryptoService(mockCrypto))
 	ctx := context.Background()
 
 	dataKeyReq := KMSGenerateDataKeyQUICRequest{
@@ -533,16 +534,16 @@ func TestHandleKMSGenerateDataKey_DefaultAlgorithm(t *testing.T) {
 		Context:   []byte("encryption-context"),
 	}
 
-	payload, err := quic.EncodePayload(dataKeyReq)
+	payload, err := quicwire.EncodePayload(dataKeyReq)
 	require.NoError(t, err)
 
-	req := &quic.Request{
-		Opcode:  quic.OpKMSGenerateDataKey,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpKMSGenerateDataKey,
 		Payload: payload,
 	}
 	resp := handler.HandleRequest(ctx, req)
 
-	assert.Equal(t, quic.StatusOK, resp.Status)
+	assert.Equal(t, quicwire.StatusOK, resp.Status)
 }
 
 // TestHandleKMSGenerateDataKey_AllAlgorithms tests all supported algorithms
@@ -550,7 +551,7 @@ func TestHandleKMSGenerateDataKey_AllAlgorithms(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockKMS := newMockKMSService()
 	mockCrypto := newMockCryptoService()
-	handler := NewQUICServiceHandler(logger, WithQUICKMSService(mockKMS), WithQUICCryptoService(mockCrypto))
+	handler := newTestQUICServiceHandler(logger, WithQUICKMSService(mockKMS), WithQUICCryptoService(mockCrypto))
 	ctx := context.Background()
 
 	algorithms := []platformv1.KMSKeyAlgorithm{
@@ -568,16 +569,16 @@ func TestHandleKMSGenerateDataKey_AllAlgorithms(t *testing.T) {
 				Algorithm: int32(alg),
 			}
 
-			payload, err := quic.EncodePayload(dataKeyReq)
+			payload, err := quicwire.EncodePayload(dataKeyReq)
 			require.NoError(t, err)
 
-			req := &quic.Request{
-				Opcode:  quic.OpKMSGenerateDataKey,
+			req := &quicwire.Request{
+				Opcode:  quicwire.OpKMSGenerateDataKey,
 				Payload: payload,
 			}
 			resp := handler.HandleRequest(ctx, req)
 
-			assert.Equal(t, quic.StatusOK, resp.Status)
+			assert.Equal(t, quicwire.StatusOK, resp.Status)
 		})
 	}
 }
@@ -587,16 +588,16 @@ func TestHandleKMSGenerateWrappedDataKey_DecodingError(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockKMS := newMockKMSService()
 	mockCrypto := newMockCryptoService()
-	handler := NewQUICServiceHandler(logger, WithQUICKMSService(mockKMS), WithQUICCryptoService(mockCrypto))
+	handler := newTestQUICServiceHandler(logger, WithQUICKMSService(mockKMS), WithQUICCryptoService(mockCrypto))
 	ctx := context.Background()
 
-	req := &quic.Request{
-		Opcode:  quic.OpKMSGenerateWrappedDataKey,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpKMSGenerateWrappedDataKey,
 		Payload: []byte{0xFF, 0xFE, 0xFD}, // Invalid msgpack data
 	}
 	resp := handler.HandleRequest(ctx, req)
 
-	assert.Equal(t, quic.StatusInvalidRequest, resp.Status)
+	assert.Equal(t, quicwire.StatusInvalidRequest, resp.Status)
 }
 
 // TestHandleKMSGenerateWrappedDataKey_ServiceError tests service failure path
@@ -606,7 +607,7 @@ func TestHandleKMSGenerateWrappedDataKey_ServiceError(t *testing.T) {
 	mockCrypto := newMockCryptoService()
 	mockCrypto.shouldErr = true
 	mockCrypto.errToReturn = errors.New("wrapped data key generation failed")
-	handler := NewQUICServiceHandler(logger, WithQUICKMSService(mockKMS), WithQUICCryptoService(mockCrypto))
+	handler := newTestQUICServiceHandler(logger, WithQUICKMSService(mockKMS), WithQUICCryptoService(mockCrypto))
 	ctx := context.Background()
 
 	wrappedReq := KMSGenerateWrappedDataKeyQUICRequest{
@@ -614,16 +615,16 @@ func TestHandleKMSGenerateWrappedDataKey_ServiceError(t *testing.T) {
 		KeyAlgorithm:  int32(platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_AES_256),
 	}
 
-	payload, err := quic.EncodePayload(wrappedReq)
+	payload, err := quicwire.EncodePayload(wrappedReq)
 	require.NoError(t, err)
 
-	req := &quic.Request{
-		Opcode:  quic.OpKMSGenerateWrappedDataKey,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpKMSGenerateWrappedDataKey,
 		Payload: payload,
 	}
 	resp := handler.HandleRequest(ctx, req)
 
-	assert.Equal(t, quic.StatusInternalError, resp.Status)
+	assert.Equal(t, quicwire.StatusInternalError, resp.Status)
 }
 
 // TestHandleKMSGenerateWrappedDataKey_InvalidAlgorithm tests invalid algorithm error path
@@ -631,7 +632,7 @@ func TestHandleKMSGenerateWrappedDataKey_InvalidAlgorithm(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockKMS := newMockKMSService()
 	mockCrypto := newMockCryptoService()
-	handler := NewQUICServiceHandler(logger, WithQUICKMSService(mockKMS), WithQUICCryptoService(mockCrypto))
+	handler := newTestQUICServiceHandler(logger, WithQUICKMSService(mockKMS), WithQUICCryptoService(mockCrypto))
 	ctx := context.Background()
 
 	wrappedReq := KMSGenerateWrappedDataKeyQUICRequest{
@@ -639,16 +640,16 @@ func TestHandleKMSGenerateWrappedDataKey_InvalidAlgorithm(t *testing.T) {
 		KeyAlgorithm:  int32(platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_RSA_2048),
 	}
 
-	payload, err := quic.EncodePayload(wrappedReq)
+	payload, err := quicwire.EncodePayload(wrappedReq)
 	require.NoError(t, err)
 
-	req := &quic.Request{
-		Opcode:  quic.OpKMSGenerateWrappedDataKey,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpKMSGenerateWrappedDataKey,
 		Payload: payload,
 	}
 	resp := handler.HandleRequest(ctx, req)
 
-	assert.Equal(t, quic.StatusInvalidArgument, resp.Status)
+	assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 }
 
 // TestHandleKMSGenerateWrappedDataKey_DefaultAlgorithm tests default algorithm when not specified
@@ -656,7 +657,7 @@ func TestHandleKMSGenerateWrappedDataKey_DefaultAlgorithm(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockKMS := newMockKMSService()
 	mockCrypto := newMockCryptoService()
-	handler := NewQUICServiceHandler(logger, WithQUICKMSService(mockKMS), WithQUICCryptoService(mockCrypto))
+	handler := newTestQUICServiceHandler(logger, WithQUICKMSService(mockKMS), WithQUICCryptoService(mockCrypto))
 	ctx := context.Background()
 
 	wrappedReq := KMSGenerateWrappedDataKeyQUICRequest{
@@ -665,16 +666,16 @@ func TestHandleKMSGenerateWrappedDataKey_DefaultAlgorithm(t *testing.T) {
 		Context:       []byte("encryption-context"),
 	}
 
-	payload, err := quic.EncodePayload(wrappedReq)
+	payload, err := quicwire.EncodePayload(wrappedReq)
 	require.NoError(t, err)
 
-	req := &quic.Request{
-		Opcode:  quic.OpKMSGenerateWrappedDataKey,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpKMSGenerateWrappedDataKey,
 		Payload: payload,
 	}
 	resp := handler.HandleRequest(ctx, req)
 
-	assert.Equal(t, quic.StatusOK, resp.Status)
+	assert.Equal(t, quicwire.StatusOK, resp.Status)
 }
 
 // =============================================================================
@@ -685,48 +686,48 @@ func TestHandleKMSGenerateWrappedDataKey_DefaultAlgorithm(t *testing.T) {
 func TestHandleKMSGenerateKey_DecodingError(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockKMS := newMockKMSService()
-	handler := NewQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
+	handler := newTestQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
 	ctx := context.Background()
 
-	req := &quic.Request{
-		Opcode:  quic.OpKMSGenerateKey,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpKMSGenerateKey,
 		Payload: []byte{0xFF, 0xFE, 0xFD}, // Invalid msgpack data
 	}
 	resp := handler.HandleRequest(ctx, req)
 
-	assert.Equal(t, quic.StatusInvalidRequest, resp.Status)
+	assert.Equal(t, quicwire.StatusInvalidRequest, resp.Status)
 }
 
 // TestHandleKMSGetKey_DecodingError tests decoding failure path
 func TestHandleKMSGetKey_DecodingError(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockKMS := newMockKMSService()
-	handler := NewQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
+	handler := newTestQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
 	ctx := context.Background()
 
-	req := &quic.Request{
-		Opcode:  quic.OpKMSGetKey,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpKMSGetKey,
 		Payload: []byte{0xFF, 0xFE, 0xFD}, // Invalid msgpack data
 	}
 	resp := handler.HandleRequest(ctx, req)
 
-	assert.Equal(t, quic.StatusInvalidRequest, resp.Status)
+	assert.Equal(t, quicwire.StatusInvalidRequest, resp.Status)
 }
 
 // TestHandleKMSListKeys_DecodingError tests decoding failure path when payload is present
 func TestHandleKMSListKeys_DecodingError(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockKMS := newMockKMSService()
-	handler := NewQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
+	handler := newTestQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
 	ctx := context.Background()
 
-	req := &quic.Request{
-		Opcode:  quic.OpKMSListKeys,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpKMSListKeys,
 		Payload: []byte{0xFF, 0xFE, 0xFD}, // Invalid msgpack data
 	}
 	resp := handler.HandleRequest(ctx, req)
 
-	assert.Equal(t, quic.StatusInvalidRequest, resp.Status)
+	assert.Equal(t, quicwire.StatusInvalidRequest, resp.Status)
 }
 
 // TestHandleKMSListKeys_ServiceError tests service failure path
@@ -735,23 +736,23 @@ func TestHandleKMSListKeys_ServiceError(t *testing.T) {
 	mockKMS := newMockKMSService()
 	mockKMS.shouldErr = true
 	mockKMS.errToReturn = errors.New("list failed")
-	handler := NewQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
+	handler := newTestQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
 	ctx := context.Background()
 
-	req := &quic.Request{
-		Opcode:  quic.OpKMSListKeys,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpKMSListKeys,
 		Payload: nil,
 	}
 	resp := handler.HandleRequest(ctx, req)
 
-	assert.Equal(t, quic.StatusInternalError, resp.Status)
+	assert.Equal(t, quicwire.StatusInternalError, resp.Status)
 }
 
 // TestHandleKMSListKeys_LimitClamping tests limit clamping behavior
 func TestHandleKMSListKeys_LimitClamping(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockKMS := newMockKMSService()
-	handler := NewQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
+	handler := newTestQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
 	ctx := context.Background()
 
 	t.Run("limit_exceeds_max", func(t *testing.T) {
@@ -759,16 +760,16 @@ func TestHandleKMSListKeys_LimitClamping(t *testing.T) {
 			Limit: 5000, // Exceeds kmsMaxLimit of 1000
 		}
 
-		payload, err := quic.EncodePayload(listReq)
+		payload, err := quicwire.EncodePayload(listReq)
 		require.NoError(t, err)
 
-		req := &quic.Request{
-			Opcode:  quic.OpKMSListKeys,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpKMSListKeys,
 			Payload: payload,
 		}
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, quic.StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 	})
 
 	t.Run("negative_limit_uses_default", func(t *testing.T) {
@@ -776,16 +777,16 @@ func TestHandleKMSListKeys_LimitClamping(t *testing.T) {
 			Limit: -10,
 		}
 
-		payload, err := quic.EncodePayload(listReq)
+		payload, err := quicwire.EncodePayload(listReq)
 		require.NoError(t, err)
 
-		req := &quic.Request{
-			Opcode:  quic.OpKMSListKeys,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpKMSListKeys,
 			Payload: payload,
 		}
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, quic.StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 	})
 }
 
@@ -793,16 +794,16 @@ func TestHandleKMSListKeys_LimitClamping(t *testing.T) {
 func TestHandleKMSGetKeyVersions_DecodingError(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockKMS := newMockKMSService()
-	handler := NewQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
+	handler := newTestQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
 	ctx := context.Background()
 
-	req := &quic.Request{
-		Opcode:  quic.OpKMSGetKeyVersions,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpKMSGetKeyVersions,
 		Payload: []byte{0xFF, 0xFE, 0xFD}, // Invalid msgpack data
 	}
 	resp := handler.HandleRequest(ctx, req)
 
-	assert.Equal(t, quic.StatusInvalidRequest, resp.Status)
+	assert.Equal(t, quicwire.StatusInvalidRequest, resp.Status)
 }
 
 // TestHandleKMSGetKeyVersions_ServiceError tests service failure path
@@ -811,7 +812,7 @@ func TestHandleKMSGetKeyVersions_ServiceError(t *testing.T) {
 	mockKMS := newMockKMSService()
 	mockKMS.shouldErr = true
 	mockKMS.errToReturn = errors.New("list versions failed")
-	handler := NewQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
+	handler := newTestQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
 	ctx := context.Background()
 
 	versionsReq := KMSGetKeyVersionsRequest{
@@ -819,23 +820,23 @@ func TestHandleKMSGetKeyVersions_ServiceError(t *testing.T) {
 		Limit: 10,
 	}
 
-	payload, err := quic.EncodePayload(versionsReq)
+	payload, err := quicwire.EncodePayload(versionsReq)
 	require.NoError(t, err)
 
-	req := &quic.Request{
-		Opcode:  quic.OpKMSGetKeyVersions,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpKMSGetKeyVersions,
 		Payload: payload,
 	}
 	resp := handler.HandleRequest(ctx, req)
 
-	assert.Equal(t, quic.StatusInternalError, resp.Status)
+	assert.Equal(t, quicwire.StatusInternalError, resp.Status)
 }
 
 // TestHandleKMSGetKeyVersions_LimitClamping tests limit clamping behavior
 func TestHandleKMSGetKeyVersions_LimitClamping(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockKMS := newMockKMSService()
-	handler := NewQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
+	handler := newTestQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
 	ctx := context.Background()
 
 	t.Run("limit_exceeds_max", func(t *testing.T) {
@@ -844,16 +845,16 @@ func TestHandleKMSGetKeyVersions_LimitClamping(t *testing.T) {
 			Limit: 5000, // Exceeds kmsMaxLimit of 1000
 		}
 
-		payload, err := quic.EncodePayload(versionsReq)
+		payload, err := quicwire.EncodePayload(versionsReq)
 		require.NoError(t, err)
 
-		req := &quic.Request{
-			Opcode:  quic.OpKMSGetKeyVersions,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpKMSGetKeyVersions,
 			Payload: payload,
 		}
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, quic.StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 	})
 
 	t.Run("zero_limit_uses_default", func(t *testing.T) {
@@ -862,16 +863,16 @@ func TestHandleKMSGetKeyVersions_LimitClamping(t *testing.T) {
 			Limit: 0,
 		}
 
-		payload, err := quic.EncodePayload(versionsReq)
+		payload, err := quicwire.EncodePayload(versionsReq)
 		require.NoError(t, err)
 
-		req := &quic.Request{
-			Opcode:  quic.OpKMSGetKeyVersions,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpKMSGetKeyVersions,
 			Payload: payload,
 		}
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, quic.StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 	})
 }
 
@@ -879,16 +880,16 @@ func TestHandleKMSGetKeyVersions_LimitClamping(t *testing.T) {
 func TestHandleKMSEncrypt_DecodingError(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockKMS := newMockKMSService()
-	handler := NewQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
+	handler := newTestQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
 	ctx := context.Background()
 
-	req := &quic.Request{
-		Opcode:  quic.OpKMSEncrypt,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpKMSEncrypt,
 		Payload: []byte{0xFF, 0xFE, 0xFD}, // Invalid msgpack data
 	}
 	resp := handler.HandleRequest(ctx, req)
 
-	assert.Equal(t, quic.StatusInvalidRequest, resp.Status)
+	assert.Equal(t, quicwire.StatusInvalidRequest, resp.Status)
 }
 
 // TestHandleKMSEncrypt_ServiceError tests service failure path
@@ -897,7 +898,7 @@ func TestHandleKMSEncrypt_ServiceError(t *testing.T) {
 	mockKMS := newMockKMSService()
 	mockKMS.shouldErr = true
 	mockKMS.errToReturn = errors.New("encrypt failed")
-	handler := NewQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
+	handler := newTestQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
 	ctx := context.Background()
 
 	encryptReq := KMSEncryptRequest{
@@ -905,32 +906,32 @@ func TestHandleKMSEncrypt_ServiceError(t *testing.T) {
 		Plaintext: []byte("secret data"),
 	}
 
-	payload, err := quic.EncodePayload(encryptReq)
+	payload, err := quicwire.EncodePayload(encryptReq)
 	require.NoError(t, err)
 
-	req := &quic.Request{
-		Opcode:  quic.OpKMSEncrypt,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpKMSEncrypt,
 		Payload: payload,
 	}
 	resp := handler.HandleRequest(ctx, req)
 
-	assert.Equal(t, quic.StatusInternalError, resp.Status)
+	assert.Equal(t, quicwire.StatusInternalError, resp.Status)
 }
 
 // TestHandleKMSDecrypt_DecodingError tests decoding failure path
 func TestHandleKMSDecrypt_DecodingError(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockKMS := newMockKMSService()
-	handler := NewQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
+	handler := newTestQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
 	ctx := context.Background()
 
-	req := &quic.Request{
-		Opcode:  quic.OpKMSDecrypt,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpKMSDecrypt,
 		Payload: []byte{0xFF, 0xFE, 0xFD}, // Invalid msgpack data
 	}
 	resp := handler.HandleRequest(ctx, req)
 
-	assert.Equal(t, quic.StatusInvalidRequest, resp.Status)
+	assert.Equal(t, quicwire.StatusInvalidRequest, resp.Status)
 }
 
 // TestHandleKMSDecrypt_ServiceError tests service failure path
@@ -939,7 +940,7 @@ func TestHandleKMSDecrypt_ServiceError(t *testing.T) {
 	mockKMS := newMockKMSService()
 	mockKMS.shouldErr = true
 	mockKMS.errToReturn = errors.New("decrypt failed")
-	handler := NewQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
+	handler := newTestQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
 	ctx := context.Background()
 
 	decryptReq := KMSDecryptRequest{
@@ -947,32 +948,32 @@ func TestHandleKMSDecrypt_ServiceError(t *testing.T) {
 		Ciphertext: []byte("encrypted-data"),
 	}
 
-	payload, err := quic.EncodePayload(decryptReq)
+	payload, err := quicwire.EncodePayload(decryptReq)
 	require.NoError(t, err)
 
-	req := &quic.Request{
-		Opcode:  quic.OpKMSDecrypt,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpKMSDecrypt,
 		Payload: payload,
 	}
 	resp := handler.HandleRequest(ctx, req)
 
-	assert.Equal(t, quic.StatusInternalError, resp.Status)
+	assert.Equal(t, quicwire.StatusInternalError, resp.Status)
 }
 
 // TestHandleKMSSign_DecodingError tests decoding failure path
 func TestHandleKMSSign_DecodingError(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockKMS := newMockKMSService()
-	handler := NewQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
+	handler := newTestQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
 	ctx := context.Background()
 
-	req := &quic.Request{
-		Opcode:  quic.OpKMSSign,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpKMSSign,
 		Payload: []byte{0xFF, 0xFE, 0xFD}, // Invalid msgpack data
 	}
 	resp := handler.HandleRequest(ctx, req)
 
-	assert.Equal(t, quic.StatusInvalidRequest, resp.Status)
+	assert.Equal(t, quicwire.StatusInvalidRequest, resp.Status)
 }
 
 // TestHandleKMSSign_ServiceError tests service failure path
@@ -981,7 +982,7 @@ func TestHandleKMSSign_ServiceError(t *testing.T) {
 	mockKMS := newMockKMSService()
 	mockKMS.shouldErr = true
 	mockKMS.errToReturn = errors.New("sign failed")
-	handler := NewQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
+	handler := newTestQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
 	ctx := context.Background()
 
 	signReq := KMSSignRequest{
@@ -989,32 +990,32 @@ func TestHandleKMSSign_ServiceError(t *testing.T) {
 		Message: []byte("message to sign"),
 	}
 
-	payload, err := quic.EncodePayload(signReq)
+	payload, err := quicwire.EncodePayload(signReq)
 	require.NoError(t, err)
 
-	req := &quic.Request{
-		Opcode:  quic.OpKMSSign,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpKMSSign,
 		Payload: payload,
 	}
 	resp := handler.HandleRequest(ctx, req)
 
-	assert.Equal(t, quic.StatusInternalError, resp.Status)
+	assert.Equal(t, quicwire.StatusInternalError, resp.Status)
 }
 
 // TestHandleKMSVerify_DecodingError tests decoding failure path
 func TestHandleKMSVerify_DecodingError(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockKMS := newMockKMSService()
-	handler := NewQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
+	handler := newTestQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
 	ctx := context.Background()
 
-	req := &quic.Request{
-		Opcode:  quic.OpKMSVerify,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpKMSVerify,
 		Payload: []byte{0xFF, 0xFE, 0xFD}, // Invalid msgpack data
 	}
 	resp := handler.HandleRequest(ctx, req)
 
-	assert.Equal(t, quic.StatusInvalidRequest, resp.Status)
+	assert.Equal(t, quicwire.StatusInvalidRequest, resp.Status)
 }
 
 // TestHandleKMSVerify_ServiceError tests service failure path
@@ -1023,7 +1024,7 @@ func TestHandleKMSVerify_ServiceError(t *testing.T) {
 	mockKMS := newMockKMSService()
 	mockKMS.shouldErr = true
 	mockKMS.errToReturn = errors.New("verify failed")
-	handler := NewQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
+	handler := newTestQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
 	ctx := context.Background()
 
 	verifyReq := KMSVerifyRequest{
@@ -1032,33 +1033,33 @@ func TestHandleKMSVerify_ServiceError(t *testing.T) {
 		Signature: []byte("signature"),
 	}
 
-	payload, err := quic.EncodePayload(verifyReq)
+	payload, err := quicwire.EncodePayload(verifyReq)
 	require.NoError(t, err)
 
-	req := &quic.Request{
-		Opcode:  quic.OpKMSVerify,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpKMSVerify,
 		Payload: payload,
 	}
 	resp := handler.HandleRequest(ctx, req)
 
-	assert.Equal(t, quic.StatusInternalError, resp.Status)
+	assert.Equal(t, quicwire.StatusInternalError, resp.Status)
 }
 
 // TestHandleKMSOperation_UnknownOpcode tests unknown opcode handling
 func TestHandleKMSOperation_UnknownOpcode(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockKMS := newMockKMSService()
-	handler := NewQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
+	handler := newTestQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
 	ctx := context.Background()
 
 	// Use an opcode in the KMS range but not defined
-	req := &quic.Request{
+	req := &quicwire.Request{
 		Opcode:  0xCF, // Unused KMS opcode
 		Payload: nil,
 	}
 	resp := handler.handleKMSOperation(ctx, req)
 
-	assert.Equal(t, quic.StatusNotImplemented, resp.Status)
+	assert.Equal(t, quicwire.StatusNotImplemented, resp.Status)
 }
 
 // =============================================================================
@@ -1115,4 +1116,26 @@ func TestBuildDataKeySpecForQUIC_KeySize(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, pb.KeyAlgorithm_KEY_ALG_AES_128_GCM, spec.Algorithm)
 	assert.Equal(t, int32(128), spec.KeySize)
+}
+
+// TestBuildDataKeySpecForQUIC_KeySizeIsBits: before, an unspecified
+// algorithm with key_size 128 asked quicbaas for AES-256-GCM, and a byte
+// count or a size contradicting the algorithm went through unchecked.
+func TestBuildDataKeySpecForQUIC_KeySizeIsBits(t *testing.T) {
+	spec, err := buildDataKeySpecForQUIC(int32(platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_UNSPECIFIED), 128)
+	require.NoError(t, err)
+	assert.Equal(t, pb.KeyAlgorithm_KEY_ALG_AES_128_GCM, spec.Algorithm)
+	assert.Equal(t, int32(128), spec.KeySize)
+
+	for _, tc := range []struct {
+		algorithm platformv1.KMSKeyAlgorithm
+		keySize   int32
+	}{
+		{platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_UNSPECIFIED, 32},
+		{platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_AES_128, 256},
+	} {
+		_, err := buildDataKeySpecForQUIC(int32(tc.algorithm), tc.keySize)
+		var sizeErr *kmssdk.ErrInvalidDataKeySize
+		assert.True(t, errors.As(err, &sizeErr), "%s with %d bits: err = %v", tc.algorithm, tc.keySize, err)
+	}
 }

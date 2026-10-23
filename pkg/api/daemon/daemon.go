@@ -15,8 +15,7 @@ package daemon
 
 import (
 	"context"
-	"crypto/tls"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/verdict"
+	"errors"
 	"net"
 	"os"
 	"strconv"
@@ -24,8 +23,10 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/verdict"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/verdict/feed"
+
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials"
 
 	"github.com/jeremyhahn/go-codec"
 	iamsdk "github.com/jeremyhahn/go-quicbaas/sdk/go/client/iam"
@@ -35,6 +36,7 @@ import (
 	grpccreds "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/mcp"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
+	restapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/rest"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/barrier"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/bmc"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/eab"
@@ -43,14 +45,18 @@ import (
 	platformservice "github.com/jeremyhahn/go-trusted-platform/pkg/platform/service"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/provisioning/configdelivery"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/ipc"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/services/perf"
 	ipambackends "github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ipam/backends"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ovs"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/storage/quicbaas"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/util/peercred"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/vpn"
 	bmcwebsvc "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/bmc"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/jwt"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 )
 
 // DaemonOption is a functional option for configuring the Daemon
@@ -112,6 +118,7 @@ func WithRESTServer(s RESTServerInterface) DaemonOption {
 func WithMCPServer(s MCPServerInterface) DaemonOption {
 	return func(d *Daemon) {
 		d.mcpServer = s
+		d.mcpServerReplaced = true
 	}
 }
 
@@ -141,6 +148,10 @@ type Daemon struct {
 	grpcServerReplaced bool
 	restServerReplaced bool
 	quicServerReplaced bool
+	// mcpServerReplaced records that WithMCPServer swapped in an MCP
+	// server. The built-in one is TLS-or-nothing by construction (#844),
+	// so the preflight's MCP certificate check applies only to it.
+	mcpServerReplaced bool
 	// retryUnsafe is set by rollbackPartialStart after it had to stop a
 	// gRPC server that had already served: grpc.Server.Stop is permanent,
 	// so a Start retry on this instance cannot restore that transport and
@@ -157,6 +168,7 @@ type Daemon struct {
 	sdnService         *SDNService
 	kmsService         *KMSService
 	kmsPlatformGRPC    *grpccreds.KMSGRPCService
+	kmsPlatformBackend *PlatformKMSBackend
 	iamService         *IAMService
 	tenantService      *TenantService
 	vtpmService        *VTPMServiceServer
@@ -188,6 +200,7 @@ type Daemon struct {
 	// shared across gRPC/QUIC/MCP when config.PlatformToken.Enabled. Stored so
 	// the lazily-built MCP server can reuse the same instance.
 	platformTokenValidatorShared *platformTokenValidator
+	iamTokenService              *IAMTokenService // IAM token operations on every transport
 	tpm2Service                  xkmssdk.TrustedPlatformModule
 	ceremonyService              *CeremonyGRPCService
 	pivService                   *PIVGRPCService
@@ -195,37 +208,51 @@ type Daemon struct {
 	fido2Service                 *FIDO2GRPCService
 	mcpServer                    MCPServerInterface
 	mcpProvider                  *MCPServiceProvider
-	bmcService                   BMCServicer
+	bmcGRPCService               *BMCGRPCService
+	switchGRPCService            *SwitchGRPCService
 	eabService                   EABServicer
 	eabGRPCService               *EABGRPCService
 	eabDelivery                  EABDeliveryServicer
-	clusterService               ClusterServicer
+	clusterGRPCService           platformv1.ClusterServiceServer
+	clusterBackend               *clusterGRPCBackend
 	invitationService            platformservice.InvitationServicer
 	invitationGRPCService        *InvitationGRPCService
 	gatewayGRPCService           *GatewayService
-	// gatewayPerfService is the shared OVS-backed perf backend behind the
-	// gateway perf operations on every transport; nil without OVS access.
-	gatewayPerfService GatewayPerfInterface
+	// gatewayIPC is the live IPC client to gatewayd's datapath child behind
+	// the gateway load-balancer, NAT64 and perf backends (#660); nil when no
+	// datapath socket is configured. Closed by Stop.
+	gatewayIPC *ipc.Client
 	// proxyGRPCService is the shared reverse-proxy configuration service
 	// backing the gRPC, REST, QUIC and MCP proxy transports.
 	proxyGRPCService   *grpccreds.ProxyGRPCService
 	overlayGRPCService *OverlayService
+	// overlayCtrl is the overlay controller every overlay transport answers
+	// from; nil when the overlay is disabled.
+	overlayCtrl OverlayControllerInterface
 	// overlayIPsec runs overlay IPsec between Start and Stop; its floor was
 	// installed by New. nil when overlay.ipsec is disabled.
 	overlayIPsec   *overlayIPsecRun
+	dnsGRPCService *DNSServiceServer
 	pxeGRPCService *PXEGRPCService
 	ntpGRPCService *NTPGRPCService
+	vpnGRPCService *VPNGRPCService
+	// vpnControlPlane is the store behind vpnGRPCService, or nil when the
+	// daemon runs without a platform store.
+	vpnControlPlane *vpn.Service
+	// appServices are the SDK-served Cache, Scheduler and Messaging services.
+	appServices    appServiceServers
 	healthRegistry health.Registry
 
 	// healthGRPCService serves grpc.health.v1.Health. Held so the daemon can
 	// flip it to NOT_SERVING on shutdown, draining load balancers before the
 	// listeners go away.
 	healthGRPCService *HealthGRPCService
-	// verdictHub serves StreamDeviceVerdicts; nil when the attestation
-	// service cannot hand out its verdicts. Closed on shutdown so the open
-	// streams end before the gRPC servers stop gracefully.
-	verdictHub *deviceVerdictHub
-	zoneSvc    gateway.ZoneService
+	// verdictFeed serves StreamDeviceVerdicts and PollDeviceVerdicts on
+	// every transport; nil when the attestation service cannot hand out its
+	// verdicts. Closed on shutdown so the open streams and polls end before
+	// the servers stop gracefully.
+	verdictFeed *feed.Feed
+	zoneSvc     gateway.ZoneService
 
 	// Concrete server references for accessor methods (set only for real servers)
 	concreteRestServer    *RESTServer
@@ -234,6 +261,11 @@ type Daemon struct {
 
 	running atomic.Bool
 	mu      sync.RWMutex
+
+	// subsystemProbes holds, per platformv1.ServiceType, the func() bool
+	// probes SetSubsystemProbe stored for the subsystems run outside the
+	// daemon. Lock-free because status RPCs read it while Stop holds mu.
+	subsystemProbes sync.Map
 
 	// onAutoStart, when non-nil, is invoked by autoStartServices after it has
 	// finished its pass over the configured services. It turns a background
@@ -272,6 +304,9 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 	if err := config.Validate(); err != nil {
 		return nil, err
 	}
+	if err := config.validateGRPCAuthorization(); err != nil {
+		return nil, err
+	}
 
 	// Set up logger
 	logger := config.Logger
@@ -287,15 +322,35 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 	var grpcAuthValidator *grpcTokenValidator
 	var quicAuthValidator *grpcTokenValidator
 
+	// Create the IAM service - MANDATORY for the platform (unless
+	// SkipIAMValidation is set for testing). It is built before the transports
+	// because the gRPC and QUIC token validators authorize tokens without scope
+	// claims through its policy enforcement point (#767, #768). Its gRPC handler
+	// is registered once the servers exist; a missing App is refused there.
+	var iamService *IAMService
+	if !config.SkipIAMValidation && config.App != nil {
+		var iamErr error
+		iamService, iamErr = NewIAMService(config.App, logger.Slog())
+		if iamErr != nil {
+			return nil, ErrInvalidConfig{Reason: "IAM service is mandatory: " + iamErr.Error()}
+		}
+		logger.Info("IAM service initialized (using QuicBaaS SDK clients)")
+	}
+	var iamPEP iamsdk.PEPClient
+	if iamService != nil {
+		iamPEP = iamService.PEP()
+	}
+
 	// Build the shared broker platform-token validator once when configured. It
 	// is reused across the gRPC, QUIC, and MCP inbound transports so all of them
 	// validate the same QuicBaaS OIDC tokens (JWKS-by-kid + aud + exp + DPoP
 	// where applicable) and enforce scp -> RBAC + tenant_id -> RLS via the
 	// AuthorizedContext, matching the HTTP path. nil means the legacy
 	// per-transport validators are used (additive cutover).
+	// Its CheckPermission is decided by the IAM PEP built above (#926).
 	var platformTokenValidatorShared *platformTokenValidator
 	if config.PlatformToken.Enabled {
-		ptv, err := newPlatformTokenValidator(config.PlatformToken, logger)
+		ptv, err := newPlatformTokenValidator(config.PlatformToken, iamPEP, logger)
 		if err != nil {
 			return nil, err
 		}
@@ -336,53 +391,16 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 			grpc.ChainStreamInterceptor(RecoveryStreamInterceptor(logger)),
 		)
 
-		// Configure TLS: prefer a USABLE in-memory certificate, fall back
-		// to files. The inner selection mirrors grpcTLSMaterialPresent —
-		// keying on mere non-nilness here would attach a structurally
-		// empty in-memory certificate even when a valid file pair is
-		// configured (#32).
-		if config.grpcTLSMaterialPresent() {
-			var cert tls.Certificate
-			if tlsCertificateUsable(config.TLSCertificate) {
-				cert = *config.TLSCertificate
-			} else {
-				var err error
-				cert, err = tls.LoadX509KeyPair(config.GRPCTLSCertFile, config.GRPCTLSKeyFile)
-				if err != nil {
-					return nil, ErrTLSConfigFailed{Reason: "gRPC: " + err.Error()}
-				}
-			}
-			tlsConfig := &tls.Config{
-				Certificates: []tls.Certificate{cert},
-				MinVersion:   tls.VersionTLS12,
-			}
-
-			// Enable mutual TLS if configured. Fails closed: mTLS with no
-			// resolvable client CA pool is a typed error, never a listener
-			// that merely does not ask for a client certificate (#550).
-			clientCAPool, poolErr := resolveMTLSClientCAPool(config, transportGRPCTCP)
-			if poolErr != nil {
-				return nil, poolErr
-			}
-			if clientCAPool != nil {
-				tlsConfig.ClientAuth = tls.RequireAndVerifyClientCert
-				tlsConfig.ClientCAs = clientCAPool
-				logger.Info("gRPC TCP server mTLS enabled", "addr", config.GRPCListenAddr)
-			}
-
-			grpcOpts = append(grpcOpts, grpc.Creds(credentials.NewTLS(tlsConfig)))
-			grpcTLSCredsAttached = true
+		tlsOpts, tlsErr := grpcTCPServerTLS(config, logger)
+		if tlsErr != nil {
+			return nil, tlsErr
 		}
-
-		// Skip health check methods from authentication
-		skipMethods := []string{
-			"/platform.v1.PlatformDaemon/HealthCheck",
-			"/grpc.health.v1.Health/Check",
-		}
+		grpcOpts = append(grpcOpts, tlsOpts...)
+		grpcTLSCredsAttached = config.grpcTLSMaterialPresent()
 
 		// Configure authentication interceptors. Fails closed (#550): with
 		// SkipIAMValidation off, no authentication backend means no server.
-		authSel, authErr := selectGRPCTCPAuth(config, platformTokenValidatorShared, logger, skipMethods)
+		authSel, authErr := selectGRPCTCPAuth(config, platformTokenValidatorShared, iamPEP, logger, grpcTCPSkipMethods)
 		if authErr != nil {
 			return nil, authErr
 		}
@@ -417,7 +435,6 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 
 	// Initialize optional services based on available backends
 	var sdnService *SDNService
-	var iamService *IAMService
 	var iamGRPCService *IAMGRPCService
 	var tenantService *TenantService
 
@@ -478,16 +495,17 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 	// the overlay controller registers the local VTEP, and platformd refuses
 	// to start without it. The controller is started synchronously here —
 	// Start() only registers the local VTEP in memory and launches lightweight
-	// background goroutines, so it does not block daemon startup. The VTEP IP
-	// defaults to loopback when App.PublicIPv4 is nil (test and single-node
-	// environments without a public IP), and the underlay interface defaults
-	// to "lo" when not set in config.
+	// background goroutines, so it does not block daemon startup. With IPsec
+	// the VTEP is the IPsec local endpoint on the fabric interface, and a
+	// VTEP the floor would not protect stops platformd; without it the VTEP
+	// is sdn.overlay.vtep-address (else App.PublicIPv4) on
+	// sdn.overlay.underlay-interface, and a missing one stops platformd
+	// naming the key to set (resolveOverlayVTEP).
 	//
 	// overlayCtrl is hoisted so the QUIC overlay adapter can reference it below
 	// when wiring quicHandler.SetOverlayHandler.
 	var overlayCtrl OverlayControllerInterface
 	var overlayIPsecSvc *overlayIPsecRun
-	var overlayIPsecStatus overlayIPsec
 	if config.App != nil && config.App.SDNConfig != nil {
 		sec, ctrl, overlayErr := startOverlay(context.Background(), config.App.SDNConfig.Overlay,
 			newOverlayStarters(config, logger), logger)
@@ -497,8 +515,6 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 		}
 		if sec != nil {
 			overlayIPsecSvc = &overlayIPsecRun{svc: sec}
-			overlayIPsecStatus = sec
-			overlayService.SetIPsec(sec)
 		}
 		if ctrl != nil {
 			overlayCtrl = ctrl
@@ -512,11 +528,12 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 	// Production deployments replace this with a QuicBaaS-backed allocator.
 	defaultIPAM := ipambackends.NewMemoryBackend()
 
-	// Build the gateway perf backend when the daemon has OVS access. The
-	// perf service measures REAL flow programming (timed install/teardown
-	// on a live bridge) and reads live ovs-vswitchd counters via
-	// ovs-appctl. Without OVS it stays nil and every transport reports
-	// Unavailable for the perf operations.
+	// Build the local gateway perf backend when the daemon has OVS access.
+	// The perf service measures REAL flow programming (timed
+	// install/teardown on a live bridge) and reads live ovs-vswitchd
+	// counters via ovs-appctl. A configured gatewayd datapath socket
+	// replaces it below; with neither, every transport reports Unavailable
+	// for the perf operations.
 	var gatewayPerf GatewayPerfInterface
 	if sdnService != nil && sdnService.OVSClient() != nil {
 		perfDeps := perf.Deps{OVS: sdnService.OVSClient()}
@@ -533,10 +550,18 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 	}
 
 	// Create Gateway gRPC service (always available - gracefully handles nil dependencies)
-	gatewayService := NewGatewayService(WithIPAMAllocator(defaultIPAM))
-	if gatewayPerf != nil {
-		gatewayService.SetPerf(gatewayPerf)
+	// The load-balancer, NAT64 and perf backends live in gatewayd and are
+	// served over live IPC when the datapath socket is configured (#660).
+	gatewayOpts, gatewayIPC, gatewayIPCErr := gatewayBackendOptions(config.GatewayDatapathSocket, gatewayPerf)
+	if gatewayIPCErr != nil {
+		logger.Error(gatewayIPCErr, "component", "gateway_ipc")
+		return nil, gatewayIPCErr
 	}
+	if gatewayIPC != nil {
+		logger.Info("Gateway LB, NAT64 and perf served from gatewayd over IPC",
+			"socket", config.GatewayDatapathSocket)
+	}
+	gatewayService := NewGatewayService(append(gatewayOpts, WithIPAMAllocator(defaultIPAM))...)
 	if grpcServer != nil {
 		platformv1.RegisterGatewayServiceServer(grpcServer, gatewayService)
 	}
@@ -579,7 +604,7 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 		if config.App != nil {
 			caObjStorage = config.App.Storage
 		}
-		caService = NewCAGRPCService(caLogger, config.CAService, caObjStorage)
+		caService = NewCAGRPCService(caLogger, config.CAService, caObjStorage).WithKMS(config.csrKMS())
 
 		// Register with TCP gRPC server if available
 		if grpcServer != nil {
@@ -642,25 +667,16 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 		logger.Info("KMS service not available (QuicBaaS backend not configured)")
 	}
 
-	// Create IAM service - MANDATORY for the platform (unless SkipIAMValidation is set for testing)
-	// IAM provides authentication, authorization, tenant management, and policy enforcement
+	// Register the IAM service built above, before the transports.
 	if !config.SkipIAMValidation {
-		if config.App != nil {
-			var iamErr error
-			iamService, iamErr = NewIAMService(config.App, logger.Slog())
-			if iamErr != nil {
-				// IAM is mandatory - fail if it cannot be initialized
-				return nil, ErrInvalidConfig{Reason: "IAM service is mandatory: " + iamErr.Error()}
-			}
-
-			logger.Info("IAM service initialized (using QuicBaaS SDK clients)")
-
+		if iamService != nil {
 			// Wire the PlatformIAMService gRPC handler so platformctl --transport
 			// {unix,grpc,quic} iam … reaches IAM operations. Without this the
 			// gRPC servers report "unknown service platform.v1.PlatformIAMService"
 			// even though the REST router has IAM available via the embedded
 			// transport.
 			iamGRPCService = NewIAMGRPCService(logger.Slog(), iamService.Client(), iamService.PEP())
+			iamGRPCService.SetSystemTenant(config.PlatformTenantID)
 			if grpcServer != nil {
 				platformv1.RegisterPlatformIAMServiceServer(grpcServer, iamGRPCService)
 			}
@@ -729,6 +745,9 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 			WithDeviceAKTrust(deviceAKTrust(config)),
 			WithDeviceVerdictSink(deviceVerdictSink(config)),
 			WithDeviceAttestCertRecorder(newDeviceAttestCertRecorder(config, logger.Slog())),
+			WithDeviceLifecycle(config.DeviceLifecycle),
+			WithDeviceTemplateService(config.DeviceTemplateService),
+			WithDeviceBootCA(config.CAService),
 		)
 
 		// Register with TCP gRPC server if enabled
@@ -784,7 +803,7 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 	attestationService.SetReporting(config.AttestationReporting)
 	// Serve every recorded device verdict on StreamDeviceVerdicts, so the
 	// overlay gateways withdraw a device whose quote fails (#709).
-	verdictHub := streamDeviceVerdicts(attestationService, config.AttestationService)
+	verdictFeed := streamDeviceVerdicts(attestationService, config.AttestationService)
 	if grpcServer != nil {
 		platformv1.RegisterAttestationServiceServer(grpcServer, attestationService)
 	}
@@ -944,24 +963,21 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 	}
 	logger.Info("Invitation gRPC service registered (stub)")
 
-	// Create Cluster gRPC service. This stub answers every RPC with
-	// codes.Unimplemented, and it is what gets registered in EVERY build:
-	// this file carries no build tag, the two registrations below are
-	// unconditional, and no tagged file registers an alternative. Building
-	// with -tags cluster compiles more cluster code but does not change
-	// which implementation serves the RPCs. See #334.
-	clusterGRPCService := NewClusterGRPCService(logger)
-	if grpcServer != nil {
-		platformv1.RegisterClusterServiceServer(grpcServer, clusterGRPCService)
-	}
-	if grpcUDSServer != nil {
-		platformv1.RegisterClusterServiceServer(grpcUDSServer, clusterGRPCService)
-	}
-	logger.Info("Cluster gRPC service registered (stub)")
+	// Register the Cluster gRPC service on the TCP listener and the Unix
+	// socket. It is the pkg/api/grpc implementation over the daemon's
+	// ClusterServicer — the same servicer the MCP cluster tools use, set
+	// through Daemon.SetClusterService. Until one is set every RPC returns
+	// Unavailable.
+	clusterGRPCService, clusterBackend := registerClusterGRPCService(logger, grpcServer, grpcUDSServer)
+	logger.Info("Cluster gRPC service registered")
 
-	// Create DNS gRPC service - stub returning Unimplemented
-	// Full implementation wired when DNS service is available
-	dnsGRPCService := NewDNSServiceServer(nil, logger.Slog())
+	// Create the DNS gRPC service over the DNS service a dns: section with
+	// a server starts (config.DNSService): the same instance the QUIC
+	// handler, the MCP provider and the embedded SDK transport reach. A node
+	// without one builds it with no backend, and every handler answers
+	// Unavailable with SERVICE_NOT_CONFIGURED (requireService), as REST
+	// answers 503.
+	dnsGRPCService := NewDNSServiceServer(fullDNSService(config.DNSService), logger.Slog())
 	if grpcServer != nil {
 		platformv1.RegisterDNSServiceServer(grpcServer, dnsGRPCService)
 	}
@@ -970,8 +986,10 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 	}
 	logger.Info("DNS gRPC service registered")
 
-	// Create PXE gRPC service - stub returning Unimplemented
-	// Full implementation wired when PXE service is available
+	// Create the PXE gRPC service. Every transport serves this one
+	// instance. platformd never sets its backend (PXE is a gateway-role
+	// service and the platformd config has no pxe: section), so each call
+	// answers Unavailable with SERVICE_NOT_CONFIGURED (requireService).
 	pxeGRPCService := NewPXEGRPCService(logger, nil)
 	if grpcServer != nil {
 		platformv1.RegisterPXEServiceServer(grpcServer, pxeGRPCService)
@@ -998,8 +1016,39 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 	}
 	logger.Info("NTP gRPC service registered")
 
-	// Create Switch gRPC service - stub returning Unimplemented
-	// Full implementation wired when switch service is available
+	// Create the VPN control-plane gRPC service. It is backed by the
+	// platform store; without one every RPC answers the typed
+	// not-configured status on every transport.
+	vpnControlPlane := buildVPNControlPlane(config, logger)
+	vpnGRPCService := NewVPNGRPCService(logger, nil)
+	if vpnControlPlane != nil {
+		vpnGRPCService = NewVPNGRPCService(logger, vpnControlPlane)
+	}
+	if grpcServer != nil {
+		platformv1.RegisterVPNServiceServer(grpcServer, vpnGRPCService)
+	}
+	if grpcUDSServer != nil {
+		platformv1.RegisterVPNServiceServer(grpcUDSServer, vpnGRPCService)
+	}
+	logger.Info("VPN gRPC service registered")
+
+	// Cache, Scheduler and Messaging are served by the composed go-quicbaas
+	// SDK; one instance of each backs every transport.
+	appServices := newAppServiceServers(config, logger)
+	for _, server := range []*grpc.Server{grpcServer, grpcUDSServer} {
+		if server == nil {
+			continue
+		}
+		platformv1.RegisterCacheServiceServer(server, appServices.cache)
+		platformv1.RegisterSchedulerServiceServer(server, appServices.scheduler)
+		platformv1.RegisterMessagingServiceServer(server, appServices.messaging)
+		platformv1.RegisterObjectStorageServiceServer(server, appServices.objectStorage)
+	}
+	logger.Info("Cache, Scheduler, Messaging and ObjectStorage gRPC services registered")
+
+	// Create the Switch gRPC service. It has no switch backend yet, so every
+	// method answers Unavailable (not configured); the QUIC opcodes, the MCP
+	// tools and the embedded transport call this same servicer.
 	switchGRPCService := NewSwitchGRPCService(logger, nil)
 	if grpcServer != nil {
 		platformv1.RegisterSwitchServiceServer(grpcServer, switchGRPCService)
@@ -1065,11 +1114,14 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 	// Create QUIC service handler and server if enabled
 	var quicServerIntf QUICServerInterface // Use interface type to avoid typed nil issue
 	var quicHandler *QUICServiceHandler
+	// quicConstructErr is decided after the options are applied: a
+	// WithQUICServer replacement supersedes the built-in server (#444).
+	var quicConstructErr error
 	if config.EnableQUIC {
 		// Initialize QUIC protocol codec before creating server
-		if codecErr := quic.SetDefaultCodecType(codec.MsgPack); codecErr != nil {
+		if codecErr := quicwire.SetDefaultCodecType(codec.MsgPack); codecErr != nil {
 			logger.Warn("Failed to set MsgPack codec for QUIC, falling back to JSON", "error", codecErr)
-			_ = quic.SetDefaultCodecType(codec.JSON)
+			_ = quicwire.SetDefaultCodecType(codec.JSON)
 		}
 		// Get logging.Logger for QUIC handler
 		var quicLogger *logging.Logger
@@ -1080,26 +1132,38 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 		}
 
 		// Configure QUIC authentication middleware. When mTLS is enabled the
-		// TLS layer authenticates (enforced below); otherwise a token
-		// validator is mandatory and its absence refuses the transport (#550).
-		quicAuthMiddleware, quicLocalValidator, quicAuthErr := selectQUICAuth(config, platformTokenValidatorShared, logger)
+		// TLS layer verifies the client certificate against this pool
+		// (enforced below) and the middleware authenticates it as the
+		// request's principal; otherwise a token validator is mandatory and
+		// its absence refuses the transport (#550).
+		quicClientCAPool, poolErr := resolveMTLSClientCAPool(config, transportQUIC)
+		if poolErr != nil {
+			return nil, poolErr
+		}
+		quicAuthMiddleware, quicLocalValidator, quicAuthErr := selectQUICAuth(config, platformTokenValidatorShared, quicClientCAPool, logger)
 		if quicAuthErr != nil {
 			return nil, quicAuthErr
 		}
 		quicAuthValidator = quicLocalValidator
 
 		// Create the QUIC service handler with available services
-		quicHandler = NewQUICServiceHandler(
+		var quicHandlerErr error
+		quicHandler, quicHandlerErr = NewQUICServiceHandler(
 			quicLogger,
 			WithQUICHealthRegistry(healthRegistry),
 			WithQUICAuthMiddleware(quicAuthMiddleware),
 		)
+		if quicHandlerErr != nil {
+			return nil, quicHandlerErr
+		}
 
 		// Set daemon service for QUIC daemon operations
 		quicHandler.SetDaemonService(service)
 		// Time synchronization: the same NTPGRPCService instance backs
 		// REST, gRPC, MCP, and the Unix socket.
 		quicHandler.SetNTPService(ntpGRPCService)
+		quicHandler.SetVPNService(vpnGRPCService)
+		quicHandler.SetAppServices(appServices)
 		quicHandler.SetIDevIDService(idevidService)
 
 		// Set CA handler if available
@@ -1108,7 +1172,7 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 			if config.App != nil {
 				quicObjStorage = config.App.Storage
 			}
-			quicHandler.SetCAHandler(quic.NewCAHandler(quicLogger, config.CAService, quicObjStorage))
+			quicHandler.SetCAHandler(quic.NewCAHandler(quicLogger, config.CAService, quicObjStorage).WithKMS(config.csrKMS()))
 			quicHandler.SetDeviceAKTrust(config.CAService)
 		}
 
@@ -1129,8 +1193,15 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 			quicHandler.SetDeviceProfileService(config.DeviceProfileService)
 			quicHandler.SetDeviceVerdictSink(deviceVerdictSink(config))
 		}
+		if config.DeviceTemplateService != nil {
+			quicHandler.SetDeviceTemplateService(config.DeviceTemplateService)
+		}
 		if config.DeviceService != nil {
 			quicHandler.SetDeviceAttestCertRecorder(newDeviceAttestCertRecorder(config, quicLogger.Slog()))
+			quicHandler.SetDeviceLifecycle(config.DeviceLifecycle)
+			if config.CAService != nil {
+				quicHandler.SetDeviceBootCA(config.CAService)
+			}
 		}
 
 		// Set Container orchestrator if available
@@ -1161,6 +1232,10 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 					quicHandler.SetSecretsService(kmsService.SecretsServer())
 					logger.Debug("Secrets service set for QUIC handler")
 				}
+				if kmsService.DEKServer() != nil {
+					quicHandler.SetDEKService(kmsService.DEKServer())
+					logger.Debug("DEK service set for QUIC handler")
+				}
 			}
 		}
 
@@ -1183,6 +1258,7 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 			logger.Debug("Compute gRPC service set for QUIC handler")
 		}
 		quicHandler.SetAttestationGRPCService(attestationService)
+		quicHandler.SetAttestationService(newAttestationQUICAdapter(attestationService))
 
 		// Set up overlay and gateway QUIC handlers for proper request routing.
 		// Even without concrete service implementations, having these handlers
@@ -1193,7 +1269,7 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 		// handler emits StatusUnavailable for all overlay requests.
 		var overlayQUICService quic.OverlayServiceInterface
 		if overlayCtrl != nil {
-			overlayQUICService = newOverlayControllerQUICAdapter(overlayCtrl, overlayIPsecStatus)
+			overlayQUICService = newOverlayControllerQUICAdapter(overlayCtrl)
 		}
 		quicHandler.SetOverlayHandler(quic.NewOverlayHandler(quicLogger, overlayQUICService))
 
@@ -1201,14 +1277,12 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 		// 0x08, 0x0C-0x0F) and zone operations (0x10-0x14) are both served over QUIC.
 		// defaultIPAM is the in-memory allocator created above. zoneSvcInstance may
 		// be nil — zone methods degrade to StatusUnavailable in that case.
-		quicGatewaySvc := newFullGatewayQUICAdapter(defaultIPAM, zoneSvcInstance, gatewayService)
+		quicGatewaySvc := newFullGatewayQUICAdapter(defaultIPAM, zoneSvcInstance, gatewayService, gatewayService, gatewayService, gatewayService)
 		gatewayQUICHandler := quic.NewGatewayHandler(quicLogger, quicGatewaySvc)
-		// Wire the perf backend so the perf sub-opcodes (0x36-0x38) are
-		// served over QUIC by the same shared perf service as the other
-		// transports; nil leaves them returning StatusUnavailable.
-		if gatewayPerf != nil {
-			gatewayQUICHandler.SetPerfService(newGatewayPerfQUICAdapter(gatewayPerf))
-		}
+		// The perf sub-opcodes (0x36-0x38) read the shared gateway service's
+		// perf backend like every other transport; with none wired they
+		// return StatusUnavailable.
+		gatewayQUICHandler.SetPerfService(newGatewayPerfQUICAdapter(gatewayService))
 		quicHandler.SetGatewayHandler(gatewayQUICHandler)
 
 		// Wire the proxy handler so the proxy sub-opcodes (0x20-0x2D)
@@ -1225,16 +1299,6 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 		quicHandler.SetLUKSService(luksSvc)
 		quicHandler.SetFIDO2Service(fido2Svc)
 
-		// Wire the BMCEnroller and BMCRestorer into the QUIC handler so
-		// OpBMCCategory requests execute the real enrollment and restore
-		// ceremonies. Guarded on both App and DeviceProfileService being present.
-		if config.App != nil && config.DeviceProfileService != nil {
-			quicHandler.SetBMCEnroller(config.App, config.DeviceProfileService)
-			logger.Info("BMC QUIC enroller wired")
-			quicHandler.SetBMCRestorer(config.App, config.DeviceProfileService)
-			logger.Info("BMC QUIC restorer wired")
-		}
-
 		// Wire the shared IAM gRPC delegate into the QUIC handler so IAM QUIC
 		// operations dispatch through the pb service instead of returning
 		// Unavailable. Reuses the instance registered on the gRPC servers.
@@ -1242,6 +1306,14 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 			quicHandler.SetIAMGRPCService(iamGRPCService)
 			logger.Info("IAM gRPC delegate wired into QUIC handler")
 		}
+
+		// Invitations ride the IAM category through the servicer the gRPC
+		// servers registered, so QUIC answers and refuses as gRPC does.
+		quicHandler.SetInvitationServer(invitationService)
+
+		// The cluster category dispatches to the same ClusterService
+		// servicer the gRPC servers carry, so QUIC answers as gRPC does.
+		quicHandler.SetClusterServer(clusterGRPCService)
 
 		// Prepare QUIC server configuration
 		quicConfig := config.QUICConfig
@@ -1258,21 +1330,10 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 		// verification. mTLS is QUIC's only authentication when enabled, so
 		// it fails closed: no TLS config to enforce it on, or no resolvable
 		// client CA pool, refuses the transport instead of a Warn followed by
-		// an unauthenticated listener (#550).
-		if config.EnableMTLS {
-			if quicConfig.TLSConfig == nil {
-				return nil, ErrTransportAuthRequired{
-					Transport: transportQUIC,
-					Reason:    "mTLS is enabled but the QUIC server has no TLS configuration to enforce it on",
-				}
-			}
-			clientCAPool, poolErr := resolveMTLSClientCAPool(config, transportQUIC)
-			if poolErr != nil {
-				return nil, poolErr
-			}
-			quicConfig.TLSConfig.ClientAuth = tls.RequireAndVerifyClientCert
-			quicConfig.TLSConfig.ClientCAs = clientCAPool
-			logger.Info("QUIC server mTLS enabled on TLS config")
+		// an unauthenticated listener (#550). The pool is the one resolved
+		// above for the authenticator; the CA file is read once (#766).
+		if err := quicServerMTLS(config, quicConfig.TLSConfig, quicClientCAPool, quicHandler, logger); err != nil {
+			return nil, err
 		}
 
 		// Create QUIC server
@@ -1282,7 +1343,7 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 			quic.WithLogger(quicLogger),
 		)
 		if quicErr != nil {
-			logger.Warn("QUIC server creation failed", "error", quicErr)
+			quicConstructErr = ErrTransportConstructionFailed{Transport: transportQUIC, Cause: quicErr}
 			// quicServerIntf stays nil (interface nil, not typed nil)
 			quicHandler = nil
 		} else {
@@ -1305,15 +1366,28 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 		grpcUDSServerIntf = &grpcServerWrapper{server: grpcUDSServer}
 	}
 
+	// One token service answers the IAM token operations on every transport:
+	// gRPC (TCP and UDS), QUIC and the embedded transport through
+	// iamGRPCService, MCP through createMCPServer. Servers start in Start(),
+	// so wiring it here is race-free.
+	iamTokenService := newIAMTokenService(
+		selectIAMTokenVerifier(platformTokenValidatorShared, grpcAuthValidator, quicAuthValidator))
+	if iamGRPCService != nil {
+		iamGRPCService.SetTokenService(iamTokenService)
+	}
+
 	daemon := &Daemon{
 		config:                       config,
 		logger:                       logger,
 		grpcAuthValidator:            grpcAuthValidator,
 		quicAuthValidator:            quicAuthValidator,
 		platformTokenValidatorShared: platformTokenValidatorShared,
+		iamTokenService:              iamTokenService,
 		grpcServer:                   grpcServerIntf,
 		grpcTLSCredsAttached:         grpcTLSCredsAttached,
 		grpcUDSServer:                grpcUDSServerIntf,
+		clusterGRPCService:           clusterGRPCService,
+		clusterBackend:               clusterBackend,
 		concreteGrpcUDSServer:        grpcUDSServer,
 		quicServer:                   quicServerIntf,
 		quicHandler:                  quicHandler,
@@ -1322,6 +1396,7 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 		sdnService:                   sdnService,
 		kmsService:                   kmsService,
 		kmsPlatformGRPC:              kmsPlatformGRPC,
+		kmsPlatformBackend:           kmsPlatformBackend,
 		iamService:                   iamService,
 		tenantService:                tenantService,
 		vtpmService:                  vtpmService,
@@ -1341,20 +1416,33 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 		eabDelivery:                  eabDeliveryServicer,
 		eabGRPCService:               eabGRPCService,
 		gatewayGRPCService:           gatewayService,
-		gatewayPerfService:           gatewayPerf,
+		gatewayIPC:                   gatewayIPC,
 		proxyGRPCService:             proxyService,
 		overlayGRPCService:           overlayService,
+		overlayCtrl:                  overlayCtrl,
 		overlayIPsec:                 overlayIPsecSvc,
+		dnsGRPCService:               dnsGRPCService,
 		pxeGRPCService:               pxeGRPCService,
 		ntpGRPCService:               ntpGRPCService,
+		vpnGRPCService:               vpnGRPCService,
+		vpnControlPlane:              vpnControlPlane,
+		switchGRPCService:            switchGRPCService,
+		appServices:                  appServices,
 		healthRegistry:               healthRegistry,
-		verdictHub:                   verdictHub,
+		verdictFeed:                  verdictFeed,
 		zoneSvc:                      zoneSvcInstance,
 	}
 
 	// Apply functional options (allows overriding servers with mocks)
 	for _, opt := range opts {
 		opt(daemon)
+	}
+
+	// An enabled transport that cannot be constructed stops the daemon
+	// (#444); only a WithQUICServer replacement supersedes the failure.
+	if quicConstructErr != nil && !daemon.quicServerReplaced {
+		logger.Error(quicConstructErr, "component", "quic_server")
+		return nil, quicConstructErr
 	}
 
 	// Wire the platform InvitationServicer from the App's service registry
@@ -1375,15 +1463,16 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 
 	// Create REST server if enabled and not overridden by option
 	if config.EnableREST && daemon.restServer == nil {
-		restServer, restErr := NewRESTServer(config, service, logger.Slog())
+		restServer, restErr := newRESTServer(config, service, logger.Slog())
 		if restErr != nil {
-			logger.Warn("REST server creation failed", "error", restErr)
-		} else {
-			daemon.restServer = restServer
-			daemon.concreteRestServer = restServer
-			restServer.SetIDevIDService(idevidService)
-			logger.Info("REST server created", "addr", config.RESTListenAddr)
+			constructErr := ErrTransportConstructionFailed{Transport: transportREST, Cause: restErr}
+			logger.Error(constructErr, "component", "rest_server")
+			return nil, constructErr
 		}
+		daemon.restServer = restServer
+		daemon.concreteRestServer = restServer
+		restServer.SetIDevIDService(idevidService)
+		logger.Info("REST server created", "addr", config.RESTListenAddr)
 	} else if !config.EnableREST {
 		logger.Info("REST server not enabled")
 	}
@@ -1394,11 +1483,29 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 		logger.Info("vTPM service wired into REST server")
 	}
 
-	// Wire the time-synchronization REST handlers. Without this
-	// /api/v1/ntp/* would not be served on the daemon's own REST listener
-	// and `platformctl --protocol rest ntp status` would 404.
-	if daemon.concreteRestServer != nil && ntpGRPCService != nil {
-		daemon.concreteRestServer.SetNTPHandlers(ntpGRPCService)
+	// Wire the time-synchronization, VPN control-plane and compute REST
+	// handlers onto the daemon's own REST listener. Without them
+	// /api/v1/ntp/*, /api/v1/vpn/* and /api/v1/compute/* would 404 there.
+	// Each route requires the scope its RPC requires on gRPC, checked by one
+	// guard: a platform token, else the verified client certificate. The
+	// compute routes run the same ComputeGRPCService gRPC and QUIC serve.
+	var restGuard *restapi.ScopeGuard
+	if daemon.concreteRestServer != nil {
+		var guardErr error
+		restGuard, guardErr = newRESTScopeGuard(config, platformTokenValidatorShared, logger)
+		if guardErr != nil {
+			constructErr := ErrTransportConstructionFailed{Transport: transportREST, Cause: guardErr}
+			logger.Error(constructErr, "component", "rest_server")
+			return nil, constructErr
+		}
+		if ntpGRPCService != nil {
+			daemon.concreteRestServer.SetNTPHandlers(ntpGRPCService, restGuard)
+		}
+		daemon.concreteRestServer.SetVPNHandlers(vpnGRPCService, restGuard)
+		daemon.concreteRestServer.SetAppServiceHandlers(appServices.restServers(), restGuard)
+		if computeService != nil {
+			daemon.concreteRestServer.SetComputeHandlers(computeService, restGuard)
+		}
 	}
 
 	// Wire device + profile REST handlers if the services are available.
@@ -1423,7 +1530,14 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 	// the same CA instance as the gRPC, QUIC, MCP and Unix-socket adapters
 	// so all transports return identical results.
 	if daemon.concreteRestServer != nil && config.CAService != nil {
-		daemon.concreteRestServer.SetCAHandlers(config.CAService)
+		daemon.concreteRestServer.SetCAHandlers(config.CAService, restGuard)
+	}
+
+	// Wire the physical TPM REST handlers. Quote and verify run on the same
+	// TPM service gRPC and the Unix socket serve, so one quote verifies the
+	// same way on every transport (#482).
+	if daemon.concreteRestServer != nil {
+		daemon.concreteRestServer.SetTPMHandlers(tpmService, restGuard)
 	}
 
 	// Wire KMS REST handlers when the platform KMS backend is available.
@@ -1440,12 +1554,14 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 	// TenantService methods would return FailedPrecondition. The manager
 	// instance is shared across REST, gRPC, QUIC, MCP, and Unix so every
 	// transport sees identical per-tenant state including barrier lifecycle.
+	// REST and gRPC both authorize the caller against the same system tenant.
 	if config.PlatformTenantManager != nil {
 		if daemon.concreteRestServer != nil {
-			daemon.concreteRestServer.SetTenantHandlers(config.PlatformTenantManager)
+			daemon.concreteRestServer.SetTenantHandlers(config.PlatformTenantManager, restGuard, config.PlatformTenantID)
 		}
 		if daemon.tenantService != nil && daemon.tenantService.grpcServer != nil {
 			daemon.tenantService.grpcServer.SetManager(config.PlatformTenantManager)
+			daemon.tenantService.grpcServer.SetSystemTenant(config.PlatformTenantID)
 			logger.Info("Platform tenant manager wired into gRPC TenantService")
 
 			// Share the same *TenantGRPCServer delegate with the QUIC handler so
@@ -1458,16 +1574,9 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 		}
 	}
 
-	// Wire the compute orchestrator into REST handlers so /api/v1/compute/*
-	// (VM lifecycle + metrics/disks/logs/migrate) is served at parity with
-	// gRPC/QUIC/MCP. No-op when the orchestrator is not VM-capable.
-	if daemon.concreteRestServer != nil && config.ComputeOrchestrator != nil {
-		daemon.concreteRestServer.SetComputeHandlers(config.ComputeOrchestrator)
-	}
-
 	// Wire SDN service into REST server if both are available
 	if daemon.concreteRestServer != nil && daemon.sdnService != nil {
-		daemon.concreteRestServer.SetSDNService(daemon.sdnService.OVSClient())
+		daemon.concreteRestServer.SetSDNService(daemon.sdnService)
 		logger.Info("SDN service wired into REST server")
 	}
 
@@ -1481,16 +1590,17 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 	// Uses the same controller hoisted during QUIC wiring so all transports
 	// share the same in-process overlay state.
 	if daemon.concreteRestServer != nil && overlayCtrl != nil {
-		daemon.concreteRestServer.SetOverlayHandlers(newOverlayControllerRESTAdapter(overlayCtrl, overlayIPsecStatus))
+		daemon.concreteRestServer.SetOverlayHandlers(newOverlayControllerRESTAdapter(overlayCtrl))
 		logger.Info("Overlay REST routes registered")
 	}
 
 	// Wire gateway IPAM REST handlers. Pass the same in-memory allocator
 	// used by the gRPC service so REST and gRPC share the same state.
 	if daemon.concreteRestServer != nil && daemon.gatewayGRPCService != nil {
-		daemon.concreteRestServer.SetGatewayIPAMService(daemon.gatewayGRPCService.IPAMAllocator())
+		daemon.concreteRestServer.SetGatewayIPAMService(daemon.gatewayGRPCService.IPAMAllocator(), daemon.gatewayGRPCService)
 		daemon.concreteRestServer.SetGatewaySnapshotService(daemon.gatewayGRPCService)
-		daemon.concreteRestServer.SetGatewayPerfService(daemon.gatewayPerfService)
+		daemon.concreteRestServer.SetGatewayBGPService(daemon.gatewayGRPCService)
+		daemon.concreteRestServer.SetGatewayBackends(daemon.gatewayGRPCService)
 		logger.Info("Gateway IPAM REST service wired into REST server")
 	}
 
@@ -1644,7 +1754,7 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 	} else {
 		// Register BMC gRPC service with both TCP and UDS endpoints.
 		// The baremetal service is left nil here; Provision and
-		// ProvisionStatus return FailedPrecondition until a baremetal
+		// ProvisionStatus return Unavailable (not configured) until a baremetal
 		// orchestrator is wired via SetBaremetalService.
 		bmcGRPCService := NewBMCGRPCService(bmcSvc, nil, logger.Slog())
 
@@ -1697,22 +1807,40 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 			}
 		}
 
-		// Stash the BMC service so the MCP server (created below) can
-		// expose it via the platform_bmc_* tools. Direct field assignment
-		// keeps the gRPC and MCP surfaces backed by the same Servicer.
-		daemon.bmcService = bmcSvc
+		// Stash the BMC gRPC servicer so the MCP server (created below)
+		// and the embedded transport serve BMCService through it, and
+		// hand it to the QUIC handler: every transport then answers and
+		// refuses alike.
+		daemon.bmcGRPCService = bmcGRPCService
+		if daemon.quicHandler != nil {
+			daemon.quicHandler.SetBMCServer(bmcGRPCService)
+		}
+	}
+
+	// The PXE opcodes delegate to the same PXEService servicer gRPC serves.
+	if daemon.quicHandler != nil {
+		daemon.quicHandler.SetPXEServer(daemon.pxeGRPCService)
+	}
+
+	// The switch sub-opcodes delegate to the same SwitchService servicer gRPC
+	// serves. The nil check keeps a missing servicer a nil interface, so the
+	// category answers unavailable.
+	if daemon.quicHandler != nil && daemon.switchGRPCService != nil {
+		daemon.quicHandler.SetSwitchServer(daemon.switchGRPCService)
 	}
 
 	// Create MCP server if enabled and not overridden by option
 	if config.EnableMCP && daemon.mcpServer == nil {
 		mcpServer, mcpErr := daemon.createMCPServer()
 		if mcpErr != nil {
-			logger.Warn("MCP server creation failed", "error", mcpErr)
-		} else {
-			daemon.mcpServer = mcpServer
-			daemon.concreteMcpServer = mcpServer
-			logger.Info("MCP server created", "transport", config.MCPConfig.Transport, "addr", config.MCPConfig.HTTPAddr)
+			constructErr := ErrTransportConstructionFailed{Transport: transportMCP, Cause: mcpErr}
+			logger.Error(constructErr, "component", "mcp_server")
+			return nil, constructErr
 		}
+		daemon.mcpServer = mcpServer
+		daemon.concreteMcpServer = mcpServer
+		mcpCfg := config.effectiveMCPConfig()
+		logger.Info("MCP server created", "transport", mcpCfg.Transport, "addr", mcpCfg.HTTPAddr)
 	} else if !config.EnableMCP {
 		logger.Info("MCP server not enabled")
 	}
@@ -1747,7 +1875,7 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 	// it nowhere.
 	//
 	// SECURITY: this activates an exemption that was already in the tree.
-	// "/grpc.health.v1.Health/Check" is in skipMethods above, so from this
+	// "/grpc.health.v1.Health/Check" is in grpcTCPSkipMethods, so from this
 	// point it answers UNAUTHENTICATED callers on the TCP listener. Only an
 	// aggregate SERVING/NOT_SERVING is exposed: no service names are
 	// registered, so Check returns NOT_FOUND for every name and the service
@@ -1817,32 +1945,45 @@ func (w *grpcServerWrapper) Unwrap() *grpc.Server {
 
 // createMCPServer creates and configures the MCP server.
 func (d *Daemon) createMCPServer() (*mcp.Server, error) {
-	// Create the MCP service provider that bridges MCP to daemon services
+	// Create the MCP service provider that bridges MCP to daemon services.
+	// The IAM tools answer through the same QuicBaaS IAM and PEP clients
+	// as the gRPC IAM service; without IAM both are nil and the tools
+	// answer ErrIAMServiceNotAvailable.
 	serviceProvider := NewMCPServiceProvider(&MCPServiceProviderConfig{
+		IAMClient:             d.iamService.Client(),
+		PEPClient:             d.iamService.PEP(),
+		IAMTokens:             d.iamTokenService,
+		PlatformTenantID:      d.config.PlatformTenantID,
 		CAService:             d.caService,
 		VTPMService:           d.config.VTPMService,
 		DeviceService:         d.config.DeviceService,
 		DeviceProfileService:  d.config.DeviceProfileService,
+		DeviceTemplateService: d.config.DeviceTemplateService,
 		VerdictSink:           deviceVerdictSink(d.config),
 		AttestCertRecorder:    newDeviceAttestCertRecorder(d.config, d.logger.Slog()),
+		DeviceLifecycle:       d.config.DeviceLifecycle,
 		AttestationReporting:  d.config.AttestationReporting,
+		AttestationServer:     d.attestationService,
 		SDNService:            d.sdnService,
 		HealthService:         d.service,
 		Logger:                d.logger.Slog(),
 		ComputeOrchestrator:   d.config.ComputeOrchestrator,
-		BMCService:            d.bmcService,
 		RegistryService:       d.config.RegistryService,
 		EABService:            d.eabService,
 		EABDelivery:           d.eabDelivery,
-		ClusterService:        d.clusterService,
-		InvitationService:     d.invitationService,
-		BMCEnroller:           d.config.App,
 		ZoneService:           d.zoneSvc,
 		IPAMService:           d.gatewayGRPCService.IPAMAllocator(),
-		GatewayPerf:           d.gatewayPerfService,
+		GatewayBackends:       d.gatewayGRPCService,
 		GatewaySnapshots:      d.gatewayGRPCService,
+		GatewayStatus:         d.gatewayGRPCService,
+		GatewayBGP:            d.gatewayGRPCService,
+		Overlay:               d.overlayCtrl,
 		ConfigDeliveryService: d.configDeliveryService,
 		ProxyService:          d.proxyGRPCService,
+		// The hash, HMAC, rewrap, batch, import, export and key-version
+		// tools call the backend gRPC KeyManagementService, QUIC and the
+		// daemon REST facade call, so every transport shares one method.
+		KMSBackend: d.kmsPlatformBackend,
 	})
 
 	// Wire DNS service to MCP provider if available via App
@@ -1856,6 +1997,23 @@ func (d *Daemon) createMCPServer() (*mcp.Server, error) {
 		serviceProvider.SetNTPService(d.ntpGRPCService)
 	}
 
+	// Wire the VPN control plane so the vpn_* tools delegate to the same
+	// VPNGRPCService instance that backs REST, gRPC, QUIC, and Unix.
+	if d.vpnGRPCService != nil {
+		serviceProvider.SetVPNService(d.vpnGRPCService)
+	}
+
+	// Wire the TenantService so the tenant tools delegate to the same
+	// TenantGRPCServer that backs REST, gRPC, QUIC, and Unix. The nil check
+	// keeps a typed-nil server out of the interface field.
+	if tenantServer := d.TenantGRPCServer(); tenantServer != nil {
+		serviceProvider.SetTenantService(tenantServer)
+	}
+
+	// Wire Cache, Scheduler and Messaging so their tools delegate to the
+	// same servers that back REST, gRPC, QUIC, and Unix.
+	serviceProvider.SetAppServiceServers(d.appServices.mcpServers())
+
 	// Wire the QuicBaaS KMS / Crypto / Secrets service layer into the MCP
 	// provider so the kms_* and secret_* tools delegate to the same
 	// quicbaas services that back the gRPC, QUIC, and Unix transports.
@@ -1864,20 +2022,49 @@ func (d *Daemon) createMCPServer() (*mcp.Server, error) {
 		serviceProvider.cryptoService = d.config.App.CryptoService()
 		serviceProvider.secretsService = d.config.App.Secrets()
 	}
-
-	// Wire the BMCRestorer into the MCP provider so the platform_bmc_cert_restore
-	// tool executes the real ceremony. Guarded on both App and DeviceProfileService
-	// being present, matching the gRPC and QUIC wiring pattern.
-	if d.config.App != nil && d.config.DeviceProfileService != nil {
-		serviceProvider.SetBMCRestorer(d.config.App, d.config.DeviceProfileService)
-		d.logger.Info("BMC MCP restorer wired")
+	// The dek_* tools call the gRPC DEKManagement adapter, the one the QUIC
+	// DEK sub-opcodes call. initializeServers is idempotent.
+	if d.kmsService != nil {
+		if initErr := d.kmsService.initializeServers(); initErr != nil {
+			d.logger.Warn("KMS service MCP initialization failed", "error", initErr)
+		} else if d.kmsService.DEKServer() != nil {
+			serviceProvider.SetDEKService(d.kmsService.DEKServer())
+		}
 	}
 
-	// Mirror the invitation servicer into the gRPC service so MCP and gRPC
-	// share the same backing implementation. When d.invitationService is nil
-	// the gRPC service stays in stub mode (Unimplemented).
-	if d.invitationService != nil && d.invitationGRPCService != nil {
-		d.invitationGRPCService.SetService(d.invitationService)
+	// The platform_bmc_* tools call the gRPC BMC servicer, which already
+	// carries the enroller and restorer. The nil check keeps a missing BMC
+	// service a nil interface, so the tools refuse with ErrBMCNotConfigured.
+	if d.bmcGRPCService != nil {
+		serviceProvider.SetBMCServer(d.bmcGRPCService)
+	}
+	// The pxe_* tools call the PXEService servicer gRPC serves, under the
+	// same nil check, so a missing PXE service refuses with
+	// ErrPXENotConfigured.
+	if d.pxeGRPCService != nil {
+		serviceProvider.SetPXEServer(d.pxeGRPCService)
+	}
+
+	// The switch_* tools call the SwitchService servicer gRPC serves. The nil
+	// check keeps a missing switch service a nil interface, so the tools
+	// answer Unimplemented as a host without the service does.
+	if d.switchGRPCService != nil {
+		serviceProvider.SetSwitchServer(d.switchGRPCService)
+	}
+
+	// The platform_cluster_* tools call the gRPC ClusterService servicer, so
+	// they answer Unavailable, as gRPC does, until SetClusterService wires a
+	// cluster service behind it.
+	serviceProvider.SetClusterServer(d.clusterGRPCService)
+
+	// The platform_invitation_* tools call the gRPC InvitationService
+	// servicer, as QUIC does. When d.invitationService is nil the servicer
+	// answers Unimplemented on every transport alike.
+	if d.invitationGRPCService != nil {
+		if d.invitationService != nil {
+			d.invitationGRPCService.SetService(d.invitationService)
+		}
+		serviceProvider.SetInvitationServer(d.invitationGRPCService)
 	}
 
 	// Store the provider for later service injection
@@ -1907,10 +2094,7 @@ func (d *Daemon) createMCPServer() (*mcp.Server, error) {
 	serviceProvider.SetPhase35Services(phase35Svcs)
 
 	// Build MCP config from daemon MCPConfig
-	mcpCfg := d.config.MCPConfig
-	if mcpCfg == nil {
-		mcpCfg = DefaultMCPConfig()
-	}
+	mcpCfg := d.config.effectiveMCPConfig()
 
 	mcpConfig := &mcp.Config{
 		ServerName:            mcpCfg.ServerName,
@@ -1919,6 +2103,28 @@ func (d *Daemon) createMCPServer() (*mcp.Server, error) {
 		HTTPAddr:              mcpCfg.HTTPAddr,
 		RequestTimeout:        mcpCfg.RequestTimeout,
 		MaxConcurrentRequests: mcpCfg.MaxConcurrentRequests,
+	}
+
+	// The HTTP transport serves TLS 1.3 only, with the identity and mTLS
+	// policy REST and gRPC serve (#844). There is no plaintext fallback:
+	// without a usable certificate the server is not created, and
+	// tlsPreflight refuses Start for the same configuration.
+	if mcpCfg.Transport == "http" {
+		inMemory := d.config.inMemoryCertificate()
+		if !tlsCertificateUsable(inMemory) {
+			return nil, ErrTLSConfigFailed{Reason: "MCP: no usable TLS certificate for the HTTP transport on " + mcpCfg.HTTPAddr}
+		}
+		tlsConfig, err := newServerTLSConfig(d.config, transportMCP, *inMemory)
+		if err != nil {
+			return nil, err
+		}
+		mcpConfig.TLSConfig = tlsConfig
+
+		peers, err := newMCPPeerAuthenticator(d.config, d.logger)
+		if err != nil {
+			return nil, err
+		}
+		mcpConfig.PeerAuthenticator = peers
 	}
 
 	// Try to set up MCP auth. Prefer the shared broker platform-token
@@ -1939,8 +2145,8 @@ func (d *Daemon) createMCPServer() (*mcp.Server, error) {
 			// tool that requires a permission, so a server started here would
 			// be dark for everything but the explicitly open tools -- and the
 			// old behaviour, a Warn followed by a server that allowed every
-			// tool, is the defect. Refuse to create it; the caller logs the
-			// error and the daemon runs without MCP.
+			// tool, is the defect. Refuse to create it; New fails with the
+			// error (#444) rather than run without the enabled transport.
 			return nil, ErrMCPAuthorizationBackendRequired{}
 		}
 	}
@@ -2118,43 +2324,61 @@ func newGRPCTokenValidator(service quicbaas.ServiceInterface, logger *logging.Lo
 // At least one verifier must be configured or every call returns an
 // "authentication service not configured" error.
 func (v *grpcTokenValidator) ValidateToken(ctx context.Context, token string) (bool, error) {
-	// Try every registered platform JWT verifier (one per webservice).
-	// Multiple webservices may each mint tokens with their own signing
-	// key; we accept the token if ANY verifier validates it.
-	for idx, vf := range v.jwtVerifiers {
+	if _, err := v.platformJWTClaims(token); err == nil {
+		return true, nil
+	}
+	resp, err := v.validateWithQuicBaaS(ctx, token)
+	if err != nil {
+		return false, err
+	}
+	return resp.Valid, nil
+}
+
+// platformJWTClaims returns the claims of the first platform JWT verifier
+// that accepts token. Multiple webservices may each mint tokens with their
+// own signing key; the token is accepted if ANY verifier validates it.
+// When none accepts it the error is ErrPlatformJWTRejected joining every
+// verifier's rejection, or ErrNoPlatformJWTVerifier when none is attached.
+func (v *grpcTokenValidator) platformJWTClaims(token string) (*jwt.TokenClaims, error) {
+	verifiers := v.jwtVerifiers
+	if len(verifiers) == 0 && v.jwtVerifier != nil {
+		verifiers = []PlatformJWTVerifier{v.jwtVerifier}
+	}
+	var rejections []error
+	for idx, vf := range verifiers {
 		if vf == nil {
 			continue
 		}
-		ok, err := vf.VerifyToken(token)
-		if err == nil && ok {
-			return true, nil
+		claims, err := vf.VerifyTokenClaims(token)
+		if err == nil && claims != nil {
+			return claims, nil
 		}
+		if err == nil {
+			err = jwt.ErrInvalidToken
+		}
+		rejections = append(rejections, err)
 		if v.logger != nil {
 			v.logger.Debug("Platform JWT verifier rejected token",
 				"verifier_index", idx,
-				"verifier_count", len(v.jwtVerifiers),
-				"ok", ok,
+				"verifier_count", len(verifiers),
 				"err", err)
 		}
 	}
-	if v.jwtVerifier != nil && len(v.jwtVerifiers) == 0 {
-		ok, err := v.jwtVerifier.VerifyToken(token)
-		if err == nil && ok {
-			return true, nil
-		}
-		if v.logger != nil {
-			v.logger.Debug("Platform JWT verification rejected token, trying QuicBaaS",
-				"ok", ok, "err", err)
-		}
+	if len(rejections) == 0 {
+		return nil, ErrNoPlatformJWTVerifier{}
 	}
+	return nil, ErrPlatformJWTRejected{Cause: errors.Join(rejections...)}
+}
 
+// validateWithQuicBaaS validates a token minted by the QuicBaaS auth
+// provider — the fallback when no platform JWT verifier accepts it.
+func (v *grpcTokenValidator) validateWithQuicBaaS(ctx context.Context, token string) (*quicbaas.ValidateTokenResponse, error) {
 	if v.service == nil {
 		if v.logger != nil {
 			v.logger.Debug("Token validation failed: QuicBaaS service not available")
 		}
-		return false, ErrQuicBaaSServiceUnavailable{}
+		return nil, ErrQuicBaaSServiceUnavailable{}
 	}
-
 	resp, err := v.service.ValidateToken(ctx, &quicbaas.ValidateTokenRequest{
 		AccessToken: token,
 	})
@@ -2162,17 +2386,16 @@ func (v *grpcTokenValidator) ValidateToken(ctx context.Context, token string) (b
 		if v.logger != nil {
 			v.logger.Debug("Token validation failed", "error", err)
 		}
-		return false, ErrTokenValidationFailed{Cause: err}
+		return nil, ErrTokenValidationFailed{Cause: err}
 	}
-
-	return resp.Valid, nil
+	return resp, nil
 }
 
 // PlatformJWTVerifier is the minimal surface needed by grpcTokenValidator
-// to verify a platform-issued JWT. The webserver's jwt.Service satisfies
-// this via a thin adapter (see pkg/api/daemon/jwt_verifier.go).
+// to verify a platform-issued JWT and read the principal it names. The
+// webserver's jwt.Service satisfies it.
 type PlatformJWTVerifier interface {
-	VerifyToken(tokenString string) (bool, error)
+	VerifyTokenClaims(tokenString string) (*jwt.TokenClaims, error)
 }
 
 // SetPlatformJWTVerifier wires a platform JWT verifier into the daemon's
@@ -2261,6 +2484,15 @@ func (d *Daemon) tlsPreflight() error {
 		}
 	}
 
+	// MCP over HTTP serves TLS 1.3 only with the daemon certificate (#844).
+	// Without one New refuses to build the daemon (#444); this check covers
+	// a certificate removed from the shared config after New.
+	if d.config.MCPServesHTTP() && !d.mcpServerReplaced && !tlsCertificateUsable(d.config.inMemoryCertificate()) {
+		return ErrTLSConfigFailed{
+			Reason: "MCP: TLS material absent (no usable in-memory certificate): refusing to start the HTTP transport on " + d.config.effectiveMCPConfig().HTTPAddr,
+		}
+	}
+
 	return nil
 }
 
@@ -2341,6 +2573,13 @@ func (d *Daemon) Start(ctx context.Context) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
+	// Re-check under the lock: a concurrent Start that won the lock has
+	// started every transport, and a second pass would fail on them and roll
+	// the first one's servers back.
+	if d.running.Load() {
+		return ErrDaemonAlreadyRunning{}
+	}
+
 	// A prior failed Start that had to stop a served gRPC server left
 	// that server permanently unusable (grpc.Server.Stop). Refuse the
 	// retry rather than reporting a running daemon with a dead transport.
@@ -2403,11 +2642,11 @@ func (d *Daemon) Start(ctx context.Context) error {
 	if d.mcpServer != nil {
 		d.logger.Info("Starting MCP server...")
 		if err := d.mcpServer.Start(); err != nil {
-			d.logger.Warn("MCP server start failed", "error", err)
-			// Log error but continue - MCP operations will fail
-		} else {
-			d.logger.Info("MCP server started successfully")
+			d.logger.Error(err, "component", "mcp_server")
+			d.rollbackPartialStart(ctx)
+			return &MCPServerStartError{Err: err}
 		}
+		d.logger.Info("MCP server started successfully")
 	}
 
 	// Start gRPC TCP server if enabled. Fail closed (#32): without TLS
@@ -2473,8 +2712,9 @@ func (d *Daemon) Start(ctx context.Context) error {
 	// protocol; a missing or certificate-less tls.Config is refused here
 	// with a typed error rather than left to fail (or improvise) deeper in
 	// the stack. The check keys off EnableQUIC, not server non-nilness —
-	// New leaves quicServer nil when creation fails, and a daemon asked to
-	// serve QUIC that cannot must not start quietly without it.
+	// New refuses a QUIC server it cannot construct (#444), but a nil
+	// WithQUICServer replacement still leaves quicServer nil, and a daemon
+	// asked to serve QUIC that cannot must not start quietly without it.
 	if d.config.EnableQUIC {
 		d.logger.Info("Starting QUIC server...", "addr", d.config.QUICListenAddr)
 		if err := d.quicServer.Start(); err != nil {
@@ -2514,12 +2754,19 @@ func (d *Daemon) Stop(ctx context.Context) error {
 	if d.healthGRPCService != nil {
 		d.healthGRPCService.Shutdown()
 	}
-	if d.verdictHub != nil {
-		d.verdictHub.Close()
+	if d.verdictFeed != nil {
+		d.verdictFeed.Close()
 	}
 
 	d.mu.Lock()
 	defer d.mu.Unlock()
+
+	// Re-check under the lock: a concurrent Stop or ForceStop that won the
+	// lock has already torn everything down, and running only flips to false
+	// at the end of that teardown.
+	if !d.running.Load() {
+		return ErrDaemonNotRunning{}
+	}
 
 	// Close health registry
 	if d.healthRegistry != nil {
@@ -2582,6 +2829,8 @@ func (d *Daemon) Stop(ctx context.Context) error {
 	// Detach overlay IPsec from charon; its fail-closed floor stays.
 	d.overlayIPsec.stop()
 
+	d.closeGatewayIPC()
+
 	// Disconnect SDN service if available
 	if d.sdnService != nil {
 		_ = d.sdnService.Disconnect()
@@ -2616,6 +2865,10 @@ func (d *Daemon) Stop(ctx context.Context) error {
 	return err
 }
 
+// forceStopTimeoutSeconds is the deadline ForceStop hands each service's
+// Stop. A forced stop ignores the error a failed or expired Stop returns.
+const forceStopTimeoutSeconds = 5
+
 // ForceStop immediately stops the daemon
 func (d *Daemon) ForceStop() error {
 	if !d.running.Load() {
@@ -2624,6 +2877,11 @@ func (d *Daemon) ForceStop() error {
 
 	d.mu.Lock()
 	defer d.mu.Unlock()
+
+	// Re-check under the lock, as Stop does.
+	if !d.running.Load() {
+		return ErrDaemonNotRunning{}
+	}
 
 	// Close health registry
 	if d.healthRegistry != nil {
@@ -2663,6 +2921,8 @@ func (d *Daemon) ForceStop() error {
 	// Detach overlay IPsec from charon; its fail-closed floor stays.
 	d.overlayIPsec.stop()
 
+	d.closeGatewayIPC()
+
 	// Disconnect SDN service if available
 	if d.sdnService != nil {
 		_ = d.sdnService.Disconnect()
@@ -2687,7 +2947,7 @@ func (d *Daemon) ForceStop() error {
 	// Force shutdown through the service
 	_, _ = d.service.Shutdown(context.Background(), &platformv1.ShutdownRequest{
 		Graceful:       false,
-		TimeoutSeconds: 5,
+		TimeoutSeconds: forceStopTimeoutSeconds,
 	})
 
 	d.running.Store(false)
@@ -2876,6 +3136,13 @@ func (d *Daemon) OverlayGRPCService() *OverlayService {
 	return d.overlayGRPCService
 }
 
+// DNSGRPCServiceServer returns the DNS gRPC service registered on the gRPC
+// and Unix servers and the embedded transport. It is never nil; on a node
+// without a DNS backend every handler answers not-configured.
+func (d *Daemon) DNSGRPCServiceServer() *DNSServiceServer {
+	return d.dnsGRPCService
+}
+
 // PXEGRPCServiceServer returns the PXE gRPC service backing /api/v1/pxe.
 // Returns nil if not configured.
 func (d *Daemon) PXEGRPCServiceServer() *PXEGRPCService {
@@ -2886,6 +3153,17 @@ func (d *Daemon) PXEGRPCServiceServer() *PXEGRPCService {
 // Returns nil if not configured.
 func (d *Daemon) NTPGRPCServiceServer() *NTPGRPCService {
 	return d.ntpGRPCService
+}
+
+// VPNGRPCServiceServer returns the VPN gRPC service backing /api/v1/vpn.
+func (d *Daemon) VPNGRPCServiceServer() *VPNGRPCService {
+	return d.vpnGRPCService
+}
+
+// VPNControlPlane returns the control-plane VPN service, or nil when the
+// daemon runs without a platform store.
+func (d *Daemon) VPNControlPlane() *vpn.Service {
+	return d.vpnControlPlane
 }
 
 // TenantGRPCServer returns the Tenant gRPC server backing /api/v1/tenants.
@@ -2947,21 +3225,23 @@ func (d *Daemon) MCPServiceProvider() *MCPServiceProvider {
 	return d.mcpProvider
 }
 
-// SetClusterService injects the platform cluster servicer used by the
-// MCP cluster tools.
+// SetClusterService injects the platform cluster servicer behind every
+// cluster transport: the registered gRPC ClusterService (TCP and Unix
+// socket), which the REST /cluster routes, the QUIC cluster category and the
+// MCP cluster tools all call.
+// A nil svc clears it.
 //
 // NOTHING CALLS THIS IN PRODUCTION, in any build. There is no tagged
-// wiring that constructs a *ClusterService and injects it here, so
-// d.clusterService is always nil and every MCP cluster tool returns
-// ErrClusterNotConfigured — with -tags cluster exactly as without it.
-// Do not read the build tag as the difference. See #334.
+// wiring that constructs a *ClusterService and injects it here, so every
+// cluster operation reports the service as not configured — with -tags
+// cluster exactly as without it. Do not read the build tag as the
+// difference. See #334.
 func (d *Daemon) SetClusterService(svc ClusterServicer) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
-	d.clusterService = svc
-	if d.mcpProvider != nil {
-		d.mcpProvider.SetClusterService(svc)
+	if d.clusterBackend != nil {
+		d.clusterBackend.set(svc)
 	}
 }
 
@@ -3098,10 +3378,12 @@ func (d *Daemon) IsGRPCTCPEnabled() bool {
 	return d.config.EnableGRPCTCP && d.grpcServer != nil
 }
 
-// registerConfiguredServices registers a configManagedService for each
-// enabled entry in d.config.Services that has a valid protobuf ServiceType
-// mapping, making them visible via ListServices and manageable through
-// all protocols (gRPC, REST, CLI, QUIC, MCP, Unix).
+// registerConfiguredServices registers a subsystemService for each enabled
+// entry in d.config.Services that names a platform subsystem, making it
+// visible via ListServices on every protocol (gRPC, REST, CLI, QUIC, MCP,
+// Unix). Its status is the subsystem's real state; start, stop and restart
+// are refused with ErrServiceNotControllable because platformd owns the
+// subsystem's lifecycle.
 func (d *Daemon) registerConfiguredServices() {
 	for name, cfg := range d.config.Services {
 		if !cfg.Enabled {
@@ -3110,20 +3392,67 @@ func (d *Daemon) registerConfiguredServices() {
 		// Only register services that have a valid protobuf ServiceType mapping.
 		// Services without mappings (e.g., kms, vtpm, ca, mcp) cannot be
 		// managed through gRPC/CLI which require ServiceType enum values.
-		if serviceTypeFromName(name) == platformv1.ServiceType_SERVICE_TYPE_UNSPECIFIED {
+		svcType := serviceTypeFromName(name)
+		spec, known := subsystemSpecs[svcType]
+		if !known {
 			continue
 		}
-		svc := newConfigManagedService(name, cfg)
+		svc := &subsystemService{
+			name:    name,
+			reason:  spec.reason,
+			running: d.subsystemProbe(svcType, spec),
+		}
 		if err := d.RegisterService(svc); err != nil {
 			d.logger.Warn("Failed to register configured service", "service", name, "error", err)
 		}
 	}
 }
 
+// subsystemProbe returns how a configured subsystem's state is observed.
+// Start calls it with d.mu held, so a daemon-built subsystem's wiring is read
+// once here. The returned probe never takes d.mu: Stop holds that lock while
+// it drains in-flight status RPCs, which call the probe.
+func (d *Daemon) subsystemProbe(svcType platformv1.ServiceType, spec subsystemSpec) func() bool {
+	if spec.wired == nil {
+		return func() bool {
+			probe, ok := d.subsystemProbes.Load(svcType)
+			if !ok {
+				return false
+			}
+			running, ok := probe.(func() bool)
+			return ok && running()
+		}
+	}
+	wired := spec.wired(d)
+	return func() bool { return wired }
+}
+
+// SetSubsystemProbe reports the live state of a subsystem the composition
+// root runs outside the daemon: the web services and the ACME server they
+// carry. Until a probe is set, or after a nil one, the subsystem reports
+// stopped.
+func (d *Daemon) SetSubsystemProbe(svcType platformv1.ServiceType, running func() bool) {
+	if running == nil {
+		d.subsystemProbes.Delete(svcType)
+		return
+	}
+	d.subsystemProbes.Store(svcType, running)
+}
+
 // autoStartServices starts services configured for auto-start
 func (d *Daemon) autoStartServices(ctx context.Context) {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
+	if d.onAutoStart != nil {
+		defer d.onAutoStart()
+	}
+
+	// Start launches this pass in a goroutine, so a Stop can take the lock
+	// first. Starting services on a daemon that has already stopped would
+	// leave them running with nothing left to stop them.
+	if !d.running.Load() {
+		return
+	}
 
 	for name, svcConfig := range d.config.Services {
 		if !svcConfig.Enabled || !svcConfig.AutoStart {
@@ -3138,11 +3467,15 @@ func (d *Daemon) autoStartServices(ctx context.Context) {
 		if !exists {
 			continue
 		}
+		// A process-owned subsystem came up with the process; there is
+		// nothing to start, and its refusal is not a failure.
+		if _, owned := processOwned(state.service); owned {
+			continue
+		}
 
 		// Start the service directly using the state
 		state.mu.Lock()
-		currentStatus := platformv1.ServiceStatus(state.status.Load())
-		if currentStatus == platformv1.ServiceStatus_SERVICE_STATUS_RUNNING {
+		if state.observedStatus() == platformv1.ServiceStatus_SERVICE_STATUS_RUNNING {
 			state.mu.Unlock()
 			continue
 		}
@@ -3164,10 +3497,6 @@ func (d *Daemon) autoStartServices(ctx context.Context) {
 		state.mu.Unlock()
 
 		d.logger.Info("Auto-started service", "service", name)
-	}
-
-	if d.onAutoStart != nil {
-		d.onAutoStart()
 	}
 }
 
@@ -3373,6 +3702,20 @@ func (d *Daemon) PIVService() *PIVGRPCService {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
 	return d.pivService
+}
+
+// SwitchService returns the Switch gRPC service, or nil when not wired.
+func (d *Daemon) SwitchService() *SwitchGRPCService {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	return d.switchGRPCService
+}
+
+// BMCService returns the BMC gRPC service, or nil when not wired.
+func (d *Daemon) BMCService() *BMCGRPCService {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	return d.bmcGRPCService
 }
 
 // SetPIVBackend wires a backend into the PIV service.

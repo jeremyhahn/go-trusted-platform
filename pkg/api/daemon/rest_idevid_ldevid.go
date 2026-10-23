@@ -55,7 +55,7 @@ func (s *RESTServer) handleLDevIDCreate(w http.ResponseWriter, r *http.Request) 
 	resp, err := s.idevidService.CreateLDevID(r.Context(), &req)
 	if err != nil {
 		s.logger.Error("Failed to issue LDevID over REST", "error", err)
-		s.writeError(w, ldevidGRPCToHTTPStatus(err), err)
+		s.writeError(w, idevidGRPCToHTTPStatus(err), err)
 		return
 	}
 

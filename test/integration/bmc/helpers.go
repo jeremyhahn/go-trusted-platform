@@ -20,10 +20,12 @@ package bmc_integration
 
 import (
 	"context"
+	"errors"
 	"os"
 	"strings"
-	"testing"
 	"time"
+
+	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers/surface"
 )
 
 // =============================================================================
@@ -31,14 +33,10 @@ import (
 // =============================================================================
 
 const (
-	// EnvIntegrationTest is the environment variable that must be set to run
-	// integration tests. Set INTEGRATION_TEST=1 to enable.
-	EnvIntegrationTest = "INTEGRATION_TEST"
-
 	// EnvPlatformdSocket is the Unix socket path for platformd.
 	EnvPlatformdSocket = "PLATFORMD_SOCKET"
 
-	// EnvPlatformAPIEndpoint is the environment variable for platform-api REST endpoint.
+	// EnvPlatformAPIEndpoint is the environment variable for the platformd REST endpoint.
 	EnvPlatformAPIEndpoint = "PLATFORM_API_ENDPOINT"
 
 	// EnvPlatformGRPCEndpoint is the environment variable for platformd gRPC endpoint.
@@ -62,7 +60,7 @@ const (
 	// DefaultPlatformdSocket is the default Unix socket path.
 	DefaultPlatformdSocket = "/run/platformd.sock"
 
-	// DefaultPlatformAPIEndpoint is the default platform-api REST endpoint.
+	// DefaultPlatformAPIEndpoint is the default platformd REST endpoint.
 	DefaultPlatformAPIEndpoint = "http://127.0.0.1:8443"
 
 	// DefaultPlatformGRPCEndpoint is the default platformd gRPC endpoint.
@@ -80,20 +78,6 @@ const (
 	// DefaultCommandTimeout is the default timeout for CLI commands.
 	DefaultCommandTimeout = 30 * time.Second
 )
-
-// =============================================================================
-// Skip Helpers
-// =============================================================================
-
-// SkipIfNotIntegration skips the test if the INTEGRATION_TEST environment
-// variable is not set. This ensures integration tests only run when explicitly
-// requested, preventing accidental execution during normal unit testing.
-func SkipIfNotIntegration(t *testing.T) {
-	t.Helper()
-	if os.Getenv(EnvIntegrationTest) == "" {
-		t.Skip("Skipping integration test. Set INTEGRATION_TEST=1 to run.")
-	}
-}
 
 // =============================================================================
 // Endpoint Configuration
@@ -141,20 +125,12 @@ func DefaultTestContext() (context.Context, context.CancelFunc) {
 // Not-Implemented / Tolerated-Failure Detection
 // =============================================================================
 
-// isNotImplementedError returns true if the error indicates an adapter is not
-// yet wired for the BMC service.
-func isNotImplementedError(err error) bool {
-	if err == nil {
-		return false
-	}
-	switch err.(type) {
-	case ErrQUICNotImplemented:
-		return true
-	case ErrMCPNotImplemented:
-		return true
-	}
-	return false
-}
+// daemonWithoutApp is the suffix of the refusal every transport returns when
+// platformd runs without an App, so no BMC enroller is wired
+// (ErrBMCEnrollerNotConfigured in pkg/api/daemon, ErrBMCEnrollerNotAvailable in
+// pkg/webservice/v1/bmc). It names that one deployment gap and nothing else;
+// a missing surface is matched by type through surface.IsNotImplemented (#487).
+const daemonWithoutApp = "(daemon started without App)"
 
 // isEnrollServiceUnavailable returns true if the error indicates the enrollment
 // ceremony service is not wired or available on the current transport. Tests
@@ -164,27 +140,11 @@ func isEnrollServiceUnavailable(err error) bool {
 	if err == nil {
 		return false
 	}
-	switch err.(type) {
-	case ErrEnrollServiceUnavailable:
+	var unavailable ErrEnrollServiceUnavailable
+	if errors.As(err, &unavailable) || surface.IsNotImplemented(err) {
 		return true
 	}
-	// Also tolerate well-known "not configured" strings that may surface from
-	// the server side when the enroller is not wired into the daemon.
-	msg := err.Error()
-	for _, substr := range []string{
-		"enroller not available",
-		"not configured",
-		"not implemented",
-		"unimplemented",
-		"service unavailable",
-		"not available",
-		"unknown service",
-	} {
-		if strings.Contains(msg, substr) {
-			return true
-		}
-	}
-	return false
+	return strings.Contains(err.Error(), daemonWithoutApp)
 }
 
 // isRestoreServiceUnavailable returns true if the error indicates the factory-

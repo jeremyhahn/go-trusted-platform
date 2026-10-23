@@ -1,5 +1,7 @@
 # DHT Unix Socket API Reference
 
+> **Status: PLANNED** · Scope: design only, no implementation · Last verified: 2026-10-20
+
 ## Overview
 
 The Unix socket interface provides high-performance local IPC (Inter-Process Communication) for the DHT service. This transport is optimized for:

@@ -29,11 +29,15 @@ import (
 const HostTPMDevicePath = "/dev/tpm0"
 
 // QuoteTPM is the platform's host TPM: the SDK HostTPM seam plus the IAK
-// accessor the Tier-3 quote verifier needs. The platform's host TPM (App.TPM)
+// accessors the Tier-3 quote verifier needs. The platform's host TPM (App.TPM)
 // satisfies it, as does any per-container /dev/tpm0 passthrough TPM opened
 // through the xkms SDK.
 type QuoteTPM interface {
 	orchestration.HostTPM
+
+	// IAKAttributes names the IAK's signature scheme, the one every quote
+	// it signs is checked under.
+	vm.IAKSource
 
 	// IAK returns the Initial Attestation Key public key.
 	IAK() (crypto.PublicKey, error)
@@ -174,7 +178,9 @@ func (p *HostTPMProvider) IAK() (crypto.PublicKey, error) {
 }
 
 // VerifyQuote verifies an IAK signature over the TPMS_ATTEST structure using
-// the TPM's IAK public key.
+// the TPM's IAK public key, under the signature scheme the IAK declares. An
+// IAK that names no scheme fails verification rather than have one guessed
+// from its key type.
 func (p *HostTPMProvider) VerifyQuote(ctx context.Context, quoted, signature []byte) error {
 	if err := ctx.Err(); err != nil {
 		return ErrHostTPMOperationFailed{Op: "verify", Cause: err}
@@ -193,7 +199,12 @@ func (p *HostTPMProvider) VerifyQuote(ctx context.Context, quoted, signature []b
 		return ErrHostTPMOperationFailed{Op: "verify", Cause: err}
 	}
 
-	if err := vm.VerifyQuoteSignature(iakDER, quoted, signature); err != nil {
+	scheme, err := vm.QuoteSignatureAlgorithm(p.tpm)
+	if err != nil {
+		return ErrHostTPMOperationFailed{Op: "verify", Cause: err}
+	}
+
+	if err := vm.VerifyQuoteSignatureWithAlgorithm(iakDER, quoted, signature, scheme); err != nil {
 		return ErrHostTPMOperationFailed{Op: "verify", Cause: err}
 	}
 	return nil

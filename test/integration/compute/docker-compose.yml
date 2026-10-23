@@ -2,9 +2,9 @@ version: '3.8'
 
 services:
   compute-test:
-    build:
-      context: ../../../build/docker/devcontainer
-      dockerfile: Dockerfile
+    # Built by `make build-devcontainer`, never here.
+    image: trusted-platform-dev:latest
+    pull_policy: never
     container_name: go-trusted-platform-compute-test
     hostname: compute-test
     privileged: true
@@ -35,8 +35,9 @@ services:
       - GOCACHE=/tmp/go-cache
       - GOPATH=/go
       - AUTO_START_OVS=true
-      - INTEGRATION_TEST=1
       - QEMU_ENABLE_KVM=true
+      # Optional override; unset, the command derives the tags from make.
+      - BUILD_TAGS
 
     ulimits:
       memlock:
@@ -55,7 +56,8 @@ services:
         echo 'Waiting for OVS to start...';
         sleep 5;
         echo 'Running compute integration tests...';
-        go test -v -timeout 30m ./...
+        TAGS=$${BUILD_TAGS:-integration $$(make -s -C /workspace print-build-tags)};
+        go test -v -tags \"$$TAGS\" -timeout 30m ./...
       "
 
 volumes:

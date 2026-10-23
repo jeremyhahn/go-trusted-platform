@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/secure"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ipsec/config"
 )
 
 // TunnelIdentity is what charon needs to authenticate this node: the
@@ -89,16 +90,16 @@ type FileIdentity struct {
 
 // NewFileIdentity builds the provider for an enabled section that names a
 // certificate file. Close releases the PIN.
-func NewFileIdentity(cfg *Config) (*FileIdentity, error) {
-	if _, err := enabledLocal(cfg); err != nil {
+func NewFileIdentity(cfg *config.Config) (*FileIdentity, error) {
+	if _, err := config.EnabledLocal(cfg); err != nil {
 		return nil, err
 	}
 	if cfg.CertificateFile == "" {
-		return nil, &ConfigError{Field: "certificate-file", Err: ErrRequired}
+		return nil, &config.ConfigError{Field: "certificate-file", Err: config.ErrRequired}
 	}
 	keyID, err := hex.DecodeString(cfg.Token.Handle)
 	if err != nil {
-		return nil, &ConfigError{Field: "token.handle", Err: ErrInvalidHandle}
+		return nil, &config.ConfigError{Field: "token.handle", Err: config.ErrInvalidHandle}
 	}
 	f := &FileIdentity{
 		chainFile: cfg.CertificateFile,
@@ -117,17 +118,17 @@ func NewFileIdentity(cfg *Config) (*FileIdentity, error) {
 func readPIN(path string) (*secure.Secret, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
-		return nil, &ConfigError{Field: "token.pin-file", Err: err}
+		return nil, &config.ConfigError{Field: "token.pin-file", Err: err}
 	}
 	defer secure.Wipe(raw)
 	line, _, _ := bytes.Cut(raw, []byte("\n"))
 	line = bytes.TrimSuffix(line, []byte("\r"))
 	if len(line) == 0 {
-		return nil, &ConfigError{Field: "token.pin-file", Err: ErrRequired}
+		return nil, &config.ConfigError{Field: "token.pin-file", Err: config.ErrRequired}
 	}
 	pin, err := secure.NewSecret(line)
 	if err != nil {
-		return nil, &ConfigError{Field: "token.pin-file", Err: err}
+		return nil, &config.ConfigError{Field: "token.pin-file", Err: err}
 	}
 	return pin, nil
 }
@@ -152,7 +153,7 @@ func (f *FileIdentity) Close() {
 func readChain(path string) ([]*x509.Certificate, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return nil, &ConfigError{Field: "certificate-file", Err: err}
+		return nil, &config.ConfigError{Field: "certificate-file", Err: err}
 	}
 	var chain []*x509.Certificate
 	for block, rest := pem.Decode(data); block != nil; block, rest = pem.Decode(rest) {
@@ -161,12 +162,12 @@ func readChain(path string) ([]*x509.Certificate, error) {
 		}
 		cert, err := x509.ParseCertificate(block.Bytes)
 		if err != nil {
-			return nil, &ConfigError{Field: "certificate-file", Err: err}
+			return nil, &config.ConfigError{Field: "certificate-file", Err: err}
 		}
 		chain = append(chain, cert)
 	}
 	if len(chain) == 0 {
-		return nil, &ConfigError{Field: "certificate-file", Err: ErrNoCertificate}
+		return nil, &config.ConfigError{Field: "certificate-file", Err: ErrNoCertificate}
 	}
 	return chain, nil
 }

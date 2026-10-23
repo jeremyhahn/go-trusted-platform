@@ -94,8 +94,11 @@ func (s *CeremonyGRPCService) Init(ctx context.Context, req *platformv1.Ceremony
 		return nil, ceremonyErrorToGRPC(err)
 	}
 	resp := &platformv1.CeremonyInitResponse{
-		CeremonyId: out.CeremonyID,
-		State:      ceremonyStateToProto[out.State],
+		CeremonyId:   out.CeremonyID,
+		State:        ceremonyStateToProto[out.State],
+		AdminCertPem: out.AdminCertPEM,
+		AdminKeyPem:  out.AdminKeyPEM,
+		SpkiPin:      out.SPKIPin,
 	}
 	if !out.InitializedAt.IsZero() {
 		resp.InitializedAt = timestamppb.New(out.InitializedAt)

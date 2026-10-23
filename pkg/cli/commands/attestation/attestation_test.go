@@ -174,7 +174,7 @@ func TestNewCommand_Surface(t *testing.T) {
 	for _, sub := range cmd.Commands() {
 		names[sub.Name()] = true
 	}
-	assert.Equal(t, map[string]bool{"reports": true, "callers": true}, names)
+	assert.Equal(t, map[string]bool{"reports": true, "callers": true, "verdicts": true}, names)
 
 	reports, _, err := cmd.Find([]string{"reports"})
 	require.NoError(t, err)
@@ -210,6 +210,7 @@ func TestCommands_WithoutContextReportTheConnectionError(t *testing.T) {
 		{"reports", "get", "9"},
 		{"reports", "refresh", "9"},
 		{"callers"},
+		{"verdicts", "follow"},
 	} {
 		cmd.SetArgs(args)
 		err := cmd.Execute()
@@ -366,7 +367,7 @@ func TestGetReport_JSONCarriesTheWireShape(t *testing.T) {
 func TestGetReport_NeverCollected_IsItsOwnState(t *testing.T) {
 	causes := map[string]error{
 		"grpc/unix/rest NotFound": status.Error(codes.NotFound, "no report has been collected for device 9"),
-		"mcp collapsed error":     status.Error(codes.Internal, "attestation: no report has been collected for device 9"),
+		"mcp NotFound":            status.Error(codes.NotFound, "attestation: no report has been collected for device 9"),
 	}
 	for name, cause := range causes {
 		for _, format := range []cli.OutputFormat{cli.OutputFormatTable, cli.OutputFormatJSON, cli.OutputFormatYAML} {

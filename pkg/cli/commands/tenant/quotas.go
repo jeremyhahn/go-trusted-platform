@@ -51,6 +51,7 @@ Examples:
 
 	cmd.AddCommand(newQuotasGetCommand(getFlags))
 	cmd.AddCommand(newQuotasSetCommand(getFlags))
+	cmd.AddCommand(newQuotasCheckCommand(getFlags))
 
 	return cmd
 }
@@ -337,11 +338,11 @@ func runQuotasSet(flags *cli.CommonFlags, tenantName string, opts *quotasSetOpti
 	}
 
 	// Fetch updated tenant to show results using domain-typed method
-	t, err = tenantClient.GetDomain(ctx, t.ID)
+	t, err = tenantClient.GetDomain(ctx, params.TenantID)
 	if err != nil {
 		return ErrOperationFailed{
 			Operation: "quotas get",
-			TenantID:  t.ID,
+			TenantID:  params.TenantID,
 			Err:       err,
 		}
 	}
@@ -366,6 +367,109 @@ func runQuotasSet(flags *cli.CommonFlags, tenantName string, opts *quotasSetOpti
 		if t.StorageQuota != nil {
 			printStorageQuota(printer, t.StorageQuota)
 		}
+		return nil
+
+	default:
+		return cli.ErrInvalidOutputFormat{Format: string(flags.OutputFormat)}
+	}
+}
+
+// QuotaCheckResult is the JSON/YAML output of tenant quotas check.
+type QuotaCheckResult struct {
+	TenantID   string `json:"tenant_id" yaml:"tenant_id"`
+	TenantName string `json:"tenant_name" yaml:"tenant_name"`
+	Resource   string `json:"resource" yaml:"resource"`
+	Amount     int64  `json:"amount" yaml:"amount"`
+	Allowed    bool   `json:"allowed" yaml:"allowed"`
+	Message    string `json:"message,omitempty" yaml:"message,omitempty"`
+}
+
+// newQuotasCheckCommand creates the quotas check subcommand.
+func newQuotasCheckCommand(getFlags func() *cli.CommonFlags) *cobra.Command {
+	var (
+		resource string
+		amount   int64
+	)
+
+	cmd := &cobra.Command{
+		Use:   "check <tenant-name>",
+		Short: "Check whether a tenant has quota left for a request",
+		Long: `Check whether a tenant could allocate an amount of a resource without
+going over its quota. Nothing is allocated.
+
+A request over quota is a result, not an error: allowed is false and the
+message says which limit it hits.
+
+Resources: vms, containers, vcpus, memory, disk, bridges, ports,
+bandwidth, volumes, snapshots.
+
+Examples:
+  # Could the tenant start two more VMs?
+  platformctl tenant quotas check my-tenant --resource vms --amount 2
+
+  # Output as JSON
+  platformctl tenant quotas check my-tenant --resource vcpus --amount 8 -o json`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runQuotasCheck(getFlags(), args[0], resource, amount)
+		},
+	}
+
+	cmd.Flags().StringVar(&resource, "resource", "", "resource to check (required)")
+	cmd.Flags().Int64Var(&amount, "amount", 0, "amount to check; must be positive (required)")
+
+	return cmd
+}
+
+func runQuotasCheck(flags *cli.CommonFlags, tenantName, resource string, amount int64) error {
+	if resource == "" {
+		return ErrInvalidArguments{Reason: "--resource is required"}
+	}
+	if amount <= 0 {
+		return ErrInvalidQuotaValue{Field: "amount", Value: amount, Reason: "must be positive"}
+	}
+
+	base, err := cli.NewBaseCommand(flags)
+	if err != nil {
+		return err
+	}
+	defer base.Close()
+
+	tenantClient := sdktenant.NewClientFromGRPC(base.Client().Tenant())
+
+	ctx := context.Background()
+
+	t, err := tenantClient.GetByNameDomain(ctx, tenantName)
+	if err != nil {
+		return ErrTenantNotFound{Name: tenantName}
+	}
+
+	resp, err := tenantClient.CheckQuota(ctx, t.ID, resource, amount)
+	if err != nil {
+		return ErrOperationFailed{Operation: "quotas check", TenantID: t.ID, Err: err}
+	}
+
+	result := &QuotaCheckResult{
+		TenantID:   t.ID,
+		TenantName: tenantName,
+		Resource:   resp.GetResource(),
+		Amount:     resp.GetAmount(),
+		Allowed:    resp.GetAvailable(),
+		Message:    resp.GetMessage(),
+	}
+
+	printer := base.Printer()
+
+	switch flags.OutputFormat {
+	case cli.OutputFormatJSON, cli.OutputFormatYAML:
+		return printer.Print(result)
+
+	case cli.OutputFormatTable:
+		if result.Allowed {
+			printer.PrintSuccess(fmt.Sprintf("Tenant %s can allocate %d %s", tenantName, amount, resource))
+			return nil
+		}
+		printer.PrintWarning(fmt.Sprintf("Tenant %s cannot allocate %d %s: %s", tenantName, amount, resource, result.Message))
 		return nil
 
 	default:

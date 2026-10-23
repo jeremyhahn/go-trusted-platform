@@ -28,8 +28,24 @@ var (
 	// ErrInstanceAlreadyRunning is returned when attempting to start an already running instance
 	ErrInstanceAlreadyRunning = errors.New("instance is already running")
 
+	// ErrInstanceNotSuspended is returned when resuming an instance that is
+	// not suspended
+	ErrInstanceNotSuspended = errors.New("instance is not suspended")
+
+	// ErrVMExitedDuringStart is returned when QEMU exits before its QMP
+	// monitor accepts a connection; the cause carries QEMU's reason
+	ErrVMExitedDuringStart = errors.New("QEMU exited during start")
+
+	// ErrMonitorNotReady is returned when QEMU keeps running but its QMP
+	// monitor does not accept a connection within the start deadline
+	ErrMonitorNotReady = errors.New("QMP monitor not ready")
+
 	// ErrInvalidConfiguration is returned when the configuration is invalid
 	ErrInvalidConfiguration = errors.New("invalid configuration")
+
+	// ErrUnsupportedHostArch is returned when the local QEMU defaults are
+	// derived from a host architecture with no compute VM guest mapping
+	ErrUnsupportedHostArch = errors.New("unsupported host architecture for compute VMs")
 
 	// ErrInvalidInstanceID is returned when an instance ID is invalid
 	ErrInvalidInstanceID = errors.New("invalid instance ID")

@@ -107,6 +107,32 @@ webservices:
 	}
 }
 
+func TestControlPlaneTLSName_FollowsConfiguredPort(t *testing.T) {
+	o, _ := newTLSNameTestOrchestrator()
+	o.config.Platform.ControlPlanePort = 9443
+	writeCPTemplate(t, o, `
+webservices:
+  - name: internal
+    tls-port: 9443
+    certificate:
+      subject:
+        cn: cp.internal.test
+  - name: public
+    tls-port: 8443
+    certificate:
+      subject:
+        cn: cp.public.test
+`)
+
+	name, err := o.controlPlaneTLSName()
+	if err != nil {
+		t.Fatalf("controlPlaneTLSName: %v", err)
+	}
+	if name != "cp.internal.test" {
+		t.Fatalf("the identity must come from the webservice on platform.control_plane_port, got %q", name)
+	}
+}
+
 func TestControlPlaneTLSName_FallsBackToRoleAliasAtWarn(t *testing.T) {
 	o, logs := newTLSNameTestOrchestrator()
 	// A template that carries no webservice certificate identity.
@@ -197,14 +223,39 @@ func TestWebserviceTLSNameFromConfig(t *testing.T) {
 		"other port ignored": {
 			yaml: "webservices:\n  - tls-port: 9443\n    certificate:\n      subject: {cn: a.test}\n",
 		},
-		"no webservices":   {yaml: "network: {}\n"},
-		"unparseable yaml": {yaml: "webservices: [\n"},
+		"singular webservice": {
+			yaml:       "webservice:\n  tls-port: 8443\n  certificate:\n    sans: {dns: [c.test]}\n",
+			wantName:   "c.test",
+			wantSource: "webservice.certificate.sans.dns[0]",
+		},
+		"list wins over singular": {
+			yaml:       "webservices:\n  - tls-port: 8443\n    certificate:\n      subject: {cn: a.test}\nwebservice:\n  tls-port: 8443\n  certificate:\n    subject: {cn: c.test}\n",
+			wantName:   "a.test",
+			wantSource: "webservices[0].certificate.subject.cn",
+		},
+		"singular on other port ignored": {
+			yaml: "webservice:\n  tls-port: 9443\n  certificate:\n    subject: {cn: c.test}\n",
+		},
+		"no webservices": {yaml: "network: {}\n"},
 	}
 	for name, tc := range cases {
-		gotName, gotSource := webserviceTLSNameFromConfig(tc.yaml, cpWebserviceTLSPort)
+		gotName, gotSource, err := webserviceTLSNameFromConfig(tc.yaml, DefaultControlPlanePort)
+		if err != nil {
+			t.Errorf("%s: unexpected error %v", name, err)
+		}
 		if gotName != tc.wantName || gotSource != tc.wantSource {
 			t.Errorf("%s: got (%q, %q), want (%q, %q)", name, gotName, gotSource, tc.wantName, tc.wantSource)
 		}
+	}
+}
+
+func TestWebserviceTLSNameFromConfig_UnparseableYAMLIsAnError(t *testing.T) {
+	name, source, err := webserviceTLSNameFromConfig("webservices: [\n", DefaultControlPlanePort)
+	if err == nil {
+		t.Fatal("a config that is not YAML must be reported, not read as carrying no name")
+	}
+	if name != "" || source != "" {
+		t.Errorf("no name may be returned with an error, got (%q, %q)", name, source)
 	}
 }
 
@@ -250,8 +301,9 @@ func TestControlPlaneDialCandidates_NoRegistrationNoDeployer(t *testing.T) {
 
 func TestFetchControlPlaneCABundle_VerifiesByTLSNameNotAddress(t *testing.T) {
 	pki := newTestCPPKI(t)
-	startTestCPServer(t, pki, http.StatusOK, pki.caPEM)
+	srv := startTestCPServer(t, pki, http.StatusOK, pki.caPEM)
 	o := newTrustTestOrchestrator()
+	pointControlPlaneAt(t, o, srv)
 	// The leaf names only cp.example.test; the orchestrator dials
 	// 127.0.0.1. Verification must be for the name.
 	if _, err := o.fetchControlPlaneCABundle(context.Background()); err != nil {
@@ -261,6 +313,7 @@ func TestFetchControlPlaneCABundle_VerifiesByTLSNameNotAddress(t *testing.T) {
 	// The same server, expected under a different name, is rejected
 	// even though its chain is genuine.
 	o = newTrustTestOrchestrator()
+	pointControlPlaneAt(t, o, srv)
 	o.config.Platform.Domain = "other.test"
 	_, err := o.fetchControlPlaneCABundle(context.Background())
 	var verifyErr ErrCABundleVerifyFailed
@@ -274,8 +327,9 @@ func TestFetchControlPlaneCABundle_VerifiesByTLSNameNotAddress(t *testing.T) {
 
 func TestFetchControlPlaneSPKIPin_DialsStaticIPOnly(t *testing.T) {
 	pki := newTestCPPKI(t)
-	startTestCPServer(t, pki, http.StatusOK, pki.caPEM)
+	srv := startTestCPServer(t, pki, http.StatusOK, pki.caPEM)
 	o := newTrustTestOrchestrator()
+	pointControlPlaneAt(t, o, srv)
 	pool := x509.NewCertPool()
 	pool.AddCert(pki.caCert)
 	o.storeControlPlaneCAPool(pool)

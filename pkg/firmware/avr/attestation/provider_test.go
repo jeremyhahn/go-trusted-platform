@@ -17,7 +17,7 @@ import (
 	"testing"
 	"time"
 
-	aggeneric "github.com/jeremyhahn/arduino-generic/sdk/go"
+	tfw "github.com/jeremyhahn/trusted-firmware/sdk/go"
 
 	bmcattestation "github.com/jeremyhahn/go-trusted-platform/pkg/bmc/attestation"
 )
@@ -29,7 +29,7 @@ func TestNew_AttachesToSecureElementDevice(t *testing.T) {
 	if b.TenantID() != testTenant {
 		t.Fatalf("tenant = %q, want %q", b.TenantID(), testTenant)
 	}
-	if got := b.Caps().CryptoTier; got != aggeneric.CryptoSecureElement {
+	if got := b.Caps().CryptoTier; got != tfw.CryptoSecureElement {
 		t.Fatalf("crypto tier = %v, want secure element", got)
 	}
 	if want := hex.EncodeToString(testSerial); b.elementSerial != want {
@@ -38,7 +38,7 @@ func TestNew_AttachesToSecureElementDevice(t *testing.T) {
 	// A secure-element device is asked for its element identity exactly
 	// once, at construction: a backend that re-read it would have to invent
 	// an answer whenever the device did not reply.
-	if n := link.commandCount(aggeneric.CmdProvInfo); n != 1 {
+	if n := link.commandCount(tfw.CmdProvInfo); n != 1 {
 		t.Fatalf("PROV_INFO round trips = %d, want 1", n)
 	}
 }
@@ -50,7 +50,7 @@ func TestNew_SoftwareDeviceIsNotAskedForAnElement(t *testing.T) {
 	if b.elementSerial != "" {
 		t.Fatalf("element serial = %q, want empty on a software-tier device", b.elementSerial)
 	}
-	if n := link.commandCount(aggeneric.CmdProvInfo); n != 0 {
+	if n := link.commandCount(tfw.CmdProvInfo); n != 0 {
 		t.Fatalf("PROV_INFO round trips = %d, want 0 on a device with no element", n)
 	}
 }
@@ -59,37 +59,37 @@ func TestNew_RefusesBadInput(t *testing.T) {
 	tests := []struct {
 		name   string
 		config *Config
-		device func() *aggeneric.Device
+		device func() *tfw.Device
 		want   error
 	}{
 		{
 			name:   "nil config",
 			config: nil,
-			device: func() *aggeneric.Device { return newTestDevice(secureElementLink()) },
+			device: func() *tfw.Device { return newTestDevice(secureElementLink()) },
 			want:   ErrNilConfig{},
 		},
 		{
 			name:   "no tenant",
 			config: &Config{RequestTimeout: linkTimeout},
-			device: func() *aggeneric.Device { return newTestDevice(secureElementLink()) },
+			device: func() *tfw.Device { return newTestDevice(secureElementLink()) },
 			want:   ErrInvalidTenant{},
 		},
 		{
 			name:   "tenant with a path separator",
 			config: &Config{TenantID: "acme/evil", RequestTimeout: linkTimeout},
-			device: func() *aggeneric.Device { return newTestDevice(secureElementLink()) },
+			device: func() *tfw.Device { return newTestDevice(secureElementLink()) },
 			want:   ErrInvalidTenant{},
 		},
 		{
 			name:   "negative timeout",
 			config: &Config{TenantID: testTenant, RequestTimeout: -time.Second},
-			device: func() *aggeneric.Device { return newTestDevice(secureElementLink()) },
+			device: func() *tfw.Device { return newTestDevice(secureElementLink()) },
 			want:   ErrInvalidConfig{},
 		},
 		{
 			name:   "nil device",
 			config: testConfig(frozenNow),
-			device: func() *aggeneric.Device { return nil },
+			device: func() *tfw.Device { return nil },
 			want:   ErrNilDevice{},
 		},
 	}
@@ -107,10 +107,10 @@ func TestNew_RefusesBadInput(t *testing.T) {
 }
 
 func TestNew_RefusesDeviceWithoutAttestationCompiledIn(t *testing.T) {
-	link := newFakeLink().answer(aggeneric.CmdCaps, capsPayload(
-		aggeneric.CryptoSecureElement,
-		aggeneric.FeatureGPIO, // no FeatureAttest
-		aggeneric.AlgECDSAP256SHA256,
+	link := newFakeLink().answer(tfw.CmdCaps, capsPayload(
+		tfw.CryptoSecureElement,
+		tfw.FeatureGPIO, // no FeatureAttest
+		tfw.AlgECDSAP256SHA256,
 	))
 
 	_, err := New(context.Background(), testConfig(frozenNow), newTestDevice(link))
@@ -122,13 +122,13 @@ func TestNew_RefusesDeviceWithoutAttestationCompiledIn(t *testing.T) {
 		t.Fatalf("crypto tier in error = %q", want.CryptoTier)
 	}
 	// The refusal happens before the element is touched.
-	if n := link.commandCount(aggeneric.CmdProvInfo); n != 0 {
+	if n := link.commandCount(tfw.CmdProvInfo); n != 0 {
 		t.Fatalf("PROV_INFO round trips = %d, want 0", n)
 	}
 }
 
 func TestNew_RefusesDeviceThatWillNotSayWhatItIs(t *testing.T) {
-	link := newFakeLink().refuse(aggeneric.CmdCaps, aggeneric.StatusErrInternal)
+	link := newFakeLink().refuse(tfw.CmdCaps, tfw.StatusErrInternal)
 
 	_, err := New(context.Background(), testConfig(frozenNow), newTestDevice(link))
 	var want bmcattestation.ErrAttestationFailed
@@ -145,12 +145,12 @@ func TestNew_RefusesDeviceThatWillNotSayWhatItIs(t *testing.T) {
 
 func TestNew_RefusesSecureElementThatWillNotIdentifyItself(t *testing.T) {
 	link := newFakeLink().
-		answer(aggeneric.CmdCaps, capsPayload(
-			aggeneric.CryptoSecureElement,
-			aggeneric.FeatureAttest,
-			aggeneric.AlgECDSAP256SHA256,
+		answer(tfw.CmdCaps, capsPayload(
+			tfw.CryptoSecureElement,
+			tfw.FeatureAttest,
+			tfw.AlgECDSAP256SHA256,
 		)).
-		refuse(aggeneric.CmdProvInfo, aggeneric.StatusErrInternal)
+		refuse(tfw.CmdProvInfo, tfw.StatusErrInternal)
 
 	_, err := New(context.Background(), testConfig(frozenNow), newTestDevice(link))
 	var want bmcattestation.ErrAttestationFailed
@@ -219,7 +219,7 @@ func TestDump_RecordsTheChallengeIssuedNotTheDevicesEcho(t *testing.T) {
 func TestDump_RefusesTheWrongNonceWidthWithoutARoundTrip(t *testing.T) {
 	link := secureElementLink().answerAttest(defaultFrame(attestNonce(1)))
 	b := newTestBackend(t, link)
-	before := link.commandCount(aggeneric.CmdAttest)
+	before := link.commandCount(tfw.CmdAttest)
 
 	for _, n := range [][]byte{nil, aliasNonce(1), make([]byte, 15)} {
 		_, err := b.Dump(context.Background(), n)
@@ -227,17 +227,17 @@ func TestDump_RefusesTheWrongNonceWidthWithoutARoundTrip(t *testing.T) {
 		if !errors.As(err, &want) {
 			t.Fatalf("nonce of %d bytes: err = %T (%v), want ErrNonceLength", len(n), err, err)
 		}
-		if want.Flow != "runtime" || want.Want != aggeneric.AttestNonceLen {
+		if want.Flow != "runtime" || want.Want != tfw.AttestNonceLen {
 			t.Fatalf("error describes the wrong flow: %+v", want)
 		}
 	}
-	if link.commandCount(aggeneric.CmdAttest) != before {
+	if link.commandCount(tfw.CmdAttest) != before {
 		t.Fatal("a refused nonce cost a device round trip")
 	}
 }
 
 func TestDump_ReportsADeviceThatRefuses(t *testing.T) {
-	link := secureElementLink().refuse(aggeneric.CmdAttest, aggeneric.StatusErrUnsupported)
+	link := secureElementLink().refuse(tfw.CmdAttest, tfw.StatusErrUnsupported)
 	b := newTestBackend(t, link)
 
 	_, err := b.Dump(context.Background(), attestNonce(1))
@@ -286,10 +286,10 @@ func TestAttestCert_RefusesTheWrongNonceWidthWithoutARoundTrip(t *testing.T) {
 	if !errors.As(err, &want) {
 		t.Fatalf("err = %T (%v), want ErrNonceLength", err, err)
 	}
-	if want.Flow != "enrolment" || want.Want != aggeneric.AliasNonceLen {
+	if want.Flow != "enrolment" || want.Want != tfw.AliasNonceLen {
 		t.Fatalf("error describes the wrong flow: %+v", want)
 	}
-	if link.commandCount(aggeneric.CmdAttestCert) != 0 {
+	if link.commandCount(tfw.CmdAttestCert) != 0 {
 		t.Fatal("a refused nonce cost a device round trip")
 	}
 }
@@ -297,7 +297,7 @@ func TestAttestCert_RefusesTheWrongNonceWidthWithoutARoundTrip(t *testing.T) {
 func TestAttestCert_ReportsADeviceWithNothingToCertify(t *testing.T) {
 	// A software-tier build knows what a certificate is and has no public
 	// half to put in one, so it answers unsupported.
-	link := softwareLink().refuse(aggeneric.CmdAttestCert, aggeneric.StatusErrUnsupported)
+	link := softwareLink().refuse(tfw.CmdAttestCert, tfw.StatusErrUnsupported)
 	b := newTestBackend(t, link)
 
 	_, err := b.AttestCert(context.Background(), aliasNonce(1))

@@ -61,7 +61,7 @@ func (s *UnixAdapter) Setup(ctx context.Context) error {
 	}
 
 	conn, err := grpc.DialContext(ctx, "unix://"+s.socketPath,
-		helpers.GRPCTransportCredentials(),
+		helpers.GRPCUnixCredentials(),
 		grpc.WithContextDialer(func(ctx context.Context, addr string) (net.Conn, error) {
 			socketAddr := strings.TrimPrefix(addr, "unix://")
 			var d net.Dialer
@@ -125,6 +125,9 @@ func (s *UnixAdapter) CreateZone(ctx context.Context, opts CreateZoneOptions) (*
 	if err != nil {
 		return nil, ErrUnixRPCFailed{Method: "CreateZone", Err: err}
 	}
+	if resp.Zone == nil {
+		return nil, ErrGRPCMissingInResponse{Method: "CreateZone", Field: "zone"}
+	}
 
 	return &CreateZoneResult{
 		Name:      resp.Zone.Name,
@@ -144,6 +147,9 @@ func (s *UnixAdapter) GetZone(ctx context.Context, zoneName string) (*GetZoneRes
 	resp, err := s.dns.GetZone(ctx, req)
 	if err != nil {
 		return nil, ErrUnixRPCFailed{Method: "GetZone", Err: err}
+	}
+	if resp.Zone == nil {
+		return nil, ErrGRPCMissingInResponse{Method: "GetZone", Field: "zone"}
 	}
 
 	result := &GetZoneResult{
@@ -183,6 +189,9 @@ func (s *UnixAdapter) UpdateZone(ctx context.Context, zoneName string, opts Upda
 	resp, err := s.dns.UpdateZone(ctx, req)
 	if err != nil {
 		return nil, ErrUnixRPCFailed{Method: "UpdateZone", Err: err}
+	}
+	if resp.Zone == nil {
+		return nil, ErrGRPCMissingInResponse{Method: "UpdateZone", Field: "zone"}
 	}
 
 	return &UpdateZoneResult{

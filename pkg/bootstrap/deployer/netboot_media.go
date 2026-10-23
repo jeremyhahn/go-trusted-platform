@@ -68,7 +68,7 @@ func stageNetbootMedia(ctx context.Context, host remoteHost, localRoot, remoteRo
 	if err != nil {
 		return paths, ErrNetbootMediaStage{Step: "hashing the checksums file", Err: err}
 	}
-	verify := "cd " + shellQuote(remoteRoot) + " && sha256sum -c --quiet " + container.NetbootMediaSums
+	verify := verifyCommand(remoteRoot, media)
 	current := "cd " + shellQuote(remoteRoot) + " && sha256sum " + container.NetbootMediaSums + " | cut -d' ' -f1"
 	if out, err := host.Run(ctx, current); err == nil && strings.TrimSpace(out) == localSums {
 		if _, err := host.Run(ctx, verify); err == nil {
@@ -77,12 +77,11 @@ func stageNetbootMedia(ctx context.Context, host remoteHost, localRoot, remoteRo
 		}
 	}
 
-	owned := []string{container.NetbootMediaSetsDir, container.NetbootMediaIndex, container.NetbootMediaSums}
-	for _, p := range []string{media.TFTPTree, media.ARM64IPXE} {
-		if p != "" {
-			owned = append(owned, filepath.Clean(p))
-		}
+	owned := []string{container.NetbootMediaIndex, container.NetbootMediaSums, container.HTTPBootDir}
+	if media.ARM64IPXE != "" {
+		owned = append(owned, filepath.Clean(media.ARM64IPXE))
 	}
+	owned = append(owned, ownedDirs(media)...)
 	clear := make([]string, 0, len(owned))
 	for _, p := range owned {
 		clear = append(clear, shellQuote(path.Join(remoteRoot, filepath.ToSlash(p))))
@@ -119,6 +118,36 @@ func stageNetbootMedia(ctx context.Context, host remoteHost, localRoot, remoteRo
 // buildFiles lists a build's files and directories, slash-separated and
 // relative to root, with the checksums file last so a partial upload is
 // never mistaken for a complete one.
+// ownedDirs lists the directories a build owns, relative to the data
+// directory. The canonical HTTP boot directory is always one, whether or not
+// this build has HTTP boot files: a build without them must not leave an
+// older build's signed image behind.
+func ownedDirs(media *container.NetbootMedia) []string {
+	dirs := []string{container.NetbootMediaSetsDir, container.HTTPBootDir}
+	for _, p := range []string{media.TFTPTree, media.HTTPBoot} {
+		if p != "" {
+			dirs = append(dirs, filepath.Clean(p))
+		}
+	}
+	return dirs
+}
+
+// verifyCommand checks the staged copy in place: every file the checksums
+// list matches, and no file lies under a build-owned directory that the
+// checksums do not list (sha256sum -c alone cannot see those).
+func verifyCommand(remoteRoot string, media *container.NetbootMedia) string {
+	dirs := ownedDirs(media)
+	quoted := make([]string, 0, len(dirs))
+	for _, d := range dirs {
+		quoted = append(quoted, shellQuote(filepath.ToSlash(d)))
+	}
+	listed := "sed 's/^[0-9a-f]\\{64\\} [ *]//' " + container.NetbootMediaSums + " > \"$l\""
+	unlisted := "! find " + strings.Join(quoted, " ") + " -type f 2>/dev/null | grep -vxFf \"$l\""
+	return "cd " + shellQuote(remoteRoot) +
+		" && sha256sum -c --quiet " + container.NetbootMediaSums +
+		" && l=$(mktemp) && " + listed + " && { " + unlisted + "; r=$?; rm -f \"$l\"; exit $r; }"
+}
+
 func buildFiles(root string) (files, dirs []string, err error) {
 	err = filepath.WalkDir(root, func(p string, d fs.DirEntry, walkErr error) error {
 		if walkErr != nil {

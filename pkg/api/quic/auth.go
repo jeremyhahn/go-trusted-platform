@@ -15,6 +15,9 @@ package quic
 
 import (
 	"context"
+	"errors"
+
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 )
 
 // =============================================================================
@@ -102,11 +105,17 @@ func TokenFromContext(ctx context.Context) (string, bool) {
 // =============================================================================
 
 // AuthMiddleware provides authentication and authorization for QUIC handlers.
+//
+// GuardRequest is the single entry point the dispatcher calls for every
+// request: it resolves the operation's permission from the catalog
+// (opcode_permissions.go), authenticates the caller and enforces the
+// permission. Unclassified operations are refused.
 type AuthMiddleware struct {
-	tokenValidator TokenValidator
-	authzChecker   AuthorizationChecker
-	skipOpcodes    map[byte]bool
-	requireAuth    bool
+	tokenValidator    TokenValidator
+	peerAuthenticator PeerAuthenticator
+	authzChecker      AuthorizationChecker
+	requireAuth       bool
+	peerAuthenticated bool
 }
 
 // AuthMiddlewareOption configures the auth middleware.
@@ -126,15 +135,6 @@ func WithQUICAuthorizationChecker(c AuthorizationChecker) AuthMiddlewareOption {
 	}
 }
 
-// WithQUICSkipOpcodes sets opcodes that don't require authentication.
-func WithQUICSkipOpcodes(opcodes ...byte) AuthMiddlewareOption {
-	return func(m *AuthMiddleware) {
-		for _, op := range opcodes {
-			m.skipOpcodes[op] = true
-		}
-	}
-}
-
 // WithQUICRequireAuth sets whether authentication is required.
 func WithQUICRequireAuth(require bool) AuthMiddlewareOption {
 	return func(m *AuthMiddleware) {
@@ -142,37 +142,84 @@ func WithQUICRequireAuth(require bool) AuthMiddlewareOption {
 	}
 }
 
+// WithQUICPeerAuthenticated marks the transport as having authenticated the
+// peer itself (mutual TLS: the listener rejects any client certificate the
+// client CA pool does not verify). A request without a token is then
+// authenticated by its certificate, the same as the gRPC mTLS listener. A
+// request that does present a token is still validated, and its scopes are
+// still enforced, when a token validator is configured.
+func WithQUICPeerAuthenticated() AuthMiddlewareOption {
+	return func(m *AuthMiddleware) {
+		m.peerAuthenticated = true
+	}
+}
+
 // NewAuthMiddleware creates a new auth middleware.
 func NewAuthMiddleware(opts ...AuthMiddlewareOption) *AuthMiddleware {
 	m := &AuthMiddleware{
-		skipOpcodes: make(map[byte]bool),
 		requireAuth: true, // Default to requiring auth
 	}
-
-	// Default: skip health check opcodes
-	m.skipOpcodes[OpHealth] = true
-	m.skipOpcodes[OpLiveness] = true
-	m.skipOpcodes[OpReadiness] = true
-
 	for _, opt := range opts {
 		opt(m)
 	}
 	return m
 }
 
+// GuardRequest authenticates and authorizes a request before it is
+// dispatched. It returns the context to dispatch with (carrying the
+// validated token and AuthorizedContext), or a non-nil response that must be
+// sent instead of dispatching.
+//
+// Order matters: pre-auth operations pass untouched; every other request is
+// authenticated first, so an anonymous caller learns nothing about which
+// operations exist; then an unclassified operation is refused and a
+// classified one must carry its permission.
+func (m *AuthMiddleware) GuardRequest(ctx context.Context, req *quicwire.Request) (context.Context, *quicwire.Response) {
+	perm, preAuth, lookupErr := LookupOperationPermission(req.Opcode, req.Payload)
+	if preAuth {
+		return ctx, nil
+	}
+
+	ctx, resp := m.AuthenticateRequest(ctx, req)
+	if resp != nil {
+		return ctx, resp
+	}
+
+	if lookupErr != nil {
+		var missing ErrSubOpcodeMissing
+		if errors.As(lookupErr, &missing) {
+			return ctx, &quicwire.Response{Status: quicwire.StatusInvalidRequest, Payload: []byte(lookupErr.Error())}
+		}
+		return ctx, &quicwire.Response{Status: quicwire.StatusPermissionDenied, Payload: []byte(lookupErr.Error())}
+	}
+
+	if resp := m.AuthorizeRequest(ctx, perm.Resource, perm.Action); resp != nil {
+		return ctx, resp
+	}
+	return ctx, nil
+}
+
 // AuthenticateRequest validates the token in a request.
 // Returns the validated token, or an error response if authentication fails.
-func (m *AuthMiddleware) AuthenticateRequest(ctx context.Context, req *Request) (context.Context, *Response) {
-	// Skip authentication for certain opcodes
-	if m.skipOpcodes[req.Opcode] {
+func (m *AuthMiddleware) AuthenticateRequest(ctx context.Context, req *quicwire.Request) (context.Context, *quicwire.Response) {
+	// Under mTLS the connection's verified client certificate is the
+	// credential of a request without a token, and of every request when no
+	// token validator is configured. A presented token is still validated.
+	if m.peerAuthenticator != nil && (req.Token == "" || m.tokenValidator == nil) {
+		return m.authenticatePeer(ctx)
+	}
+
+	// The transport verified the peer certificate; a request without a token
+	// is authenticated by it.
+	if m.peerAuthenticated && req.Token == "" {
 		return ctx, nil
 	}
 
 	// If no validator configured, handle based on requireAuth setting
 	if m.tokenValidator == nil {
-		if m.requireAuth {
-			return ctx, &Response{
-				Status:  StatusUnavailable,
+		if m.requireAuth && !m.peerAuthenticated {
+			return ctx, &quicwire.Response{
+				Status:  quicwire.StatusUnavailable,
 				Payload: []byte(ErrAuthValidatorNotConfigured{}.Error()),
 			}
 		}
@@ -181,8 +228,8 @@ func (m *AuthMiddleware) AuthenticateRequest(ctx context.Context, req *Request) 
 
 	// Check for token
 	if req.Token == "" {
-		return ctx, &Response{
-			Status:  StatusUnauthorized,
+		return ctx, &quicwire.Response{
+			Status:  quicwire.StatusUnauthorized,
 			Payload: []byte(ErrMissingToken{}.Error()),
 		}
 	}
@@ -193,15 +240,16 @@ func (m *AuthMiddleware) AuthenticateRequest(ctx context.Context, req *Request) 
 	// handlers. QUIC has no DPoP frame, so this is always a bearer validation.
 	//
 	// requiredPerm="" routes through the validator's scope-free path: the
-	// opcode's required scope is only resolved later in AuthorizeRequest,
-	// which enforces it against the stored AuthorizedContext. Online
+	// operation's required scope is enforced afterwards in AuthorizeRequest
+	// against the stored AuthorizedContext, so a valid token lacking the
+	// scope is answered PermissionDenied rather than Unauthorized. Online
 	// liveness/revocation is still enforced here on every request. QUIC has
 	// no DPoP frame, so the proof / htm / htu inputs are empty.
 	if cv, ok := m.tokenValidator.(ClaimsTokenValidator); ok {
 		authCtx, err := cv.AuthorizeToken(ctx, req.Token, "", "", "", "")
 		if err != nil {
-			return ctx, &Response{
-				Status:  StatusUnauthorized,
+			return ctx, &quicwire.Response{
+				Status:  quicwire.StatusUnauthorized,
 				Payload: []byte(ErrTokenValidationFailed{Cause: err}.Error()),
 			}
 		}
@@ -212,14 +260,14 @@ func (m *AuthMiddleware) AuthenticateRequest(ctx context.Context, req *Request) 
 	// Validate token (legacy bool-only path)
 	valid, err := m.tokenValidator.ValidateToken(ctx, req.Token)
 	if err != nil {
-		return ctx, &Response{
-			Status:  StatusUnauthorized,
+		return ctx, &quicwire.Response{
+			Status:  quicwire.StatusUnauthorized,
 			Payload: []byte(ErrTokenValidationFailed{Cause: err}.Error()),
 		}
 	}
 	if !valid {
-		return ctx, &Response{
-			Status:  StatusUnauthorized,
+		return ctx, &quicwire.Response{
+			Status:  quicwire.StatusUnauthorized,
 			Payload: []byte("invalid token"),
 		}
 	}
@@ -230,31 +278,28 @@ func (m *AuthMiddleware) AuthenticateRequest(ctx context.Context, req *Request) 
 
 // AuthorizeRequest checks if the authenticated user has permission for the operation.
 // This should be called after AuthenticateRequest.
-func (m *AuthMiddleware) AuthorizeRequest(ctx context.Context, req *Request, resource, action string) *Response {
-	// Skip authorization for certain opcodes
-	if m.skipOpcodes[req.Opcode] {
-		return nil
-	}
-
+func (m *AuthMiddleware) AuthorizeRequest(ctx context.Context, resource, action string) *quicwire.Response {
 	// When the request was validated via the platform-token (claims) path, an
 	// AuthorizedContext is present: enforce scp -> RBAC against it directly
-	// (the resource/action pair projects to the "<svc>.<verb>" scope). This is
-	// the canonical authorization path for broker-issued tokens.
+	// (the resource/action pair projects to the "resource:action" scope). This
+	// is the canonical authorization path for broker-issued tokens.
 	if authCtx, ok := AuthorizedContextFromContext(ctx); ok {
 		scope := scopeForOperation(resource, action)
 		if scope == "" {
 			return nil
 		}
 		if err := authCtx.RequireScope(scope); err != nil {
-			return &Response{
-				Status:  StatusPermissionDenied,
+			return &quicwire.Response{
+				Status:  quicwire.StatusPermissionDenied,
 				Payload: []byte(ErrPermissionDenied{Resource: resource, Action: action}.Error()),
 			}
 		}
 		return nil
 	}
 
-	// If no authorization checker, allow (legacy path)
+	// No claims and no authorization checker: the caller was authenticated
+	// by a scope-less credential (a peer certificate, or a validator without
+	// claims), which authorizes every classified operation, as on gRPC.
 	if m.authzChecker == nil {
 		return nil
 	}
@@ -262,8 +307,8 @@ func (m *AuthMiddleware) AuthorizeRequest(ctx context.Context, req *Request, res
 	// Get token from context
 	token, ok := TokenFromContext(ctx)
 	if !ok {
-		return &Response{
-			Status:  StatusUnauthorized,
+		return &quicwire.Response{
+			Status:  quicwire.StatusUnauthorized,
 			Payload: []byte("no authenticated session"),
 		}
 	}
@@ -271,129 +316,17 @@ func (m *AuthMiddleware) AuthorizeRequest(ctx context.Context, req *Request, res
 	// Check permission
 	allowed, err := m.authzChecker.CheckPermission(ctx, token, resource, action)
 	if err != nil {
-		return &Response{
-			Status:  StatusInternalError,
+		return &quicwire.Response{
+			Status:  quicwire.StatusInternalError,
 			Payload: []byte("authorization check failed: " + err.Error()),
 		}
 	}
 	if !allowed {
-		return &Response{
-			Status:  StatusPermissionDenied,
+		return &quicwire.Response{
+			Status:  quicwire.StatusPermissionDenied,
 			Payload: []byte(ErrPermissionDenied{Resource: resource, Action: action}.Error()),
 		}
 	}
 
 	return nil
-}
-
-// =============================================================================
-// Opcode to Permission Mapping
-// =============================================================================
-
-// OpcodePermission maps an opcode to its required permission.
-type OpcodePermission struct {
-	Resource string
-	Action   string
-}
-
-// DefaultOpcodePermissions returns the default permission mappings for QUIC opcodes.
-// Returns nil for opcodes that don't require authorization (health checks, etc.).
-func DefaultOpcodePermissions() map[byte]*OpcodePermission {
-	return map[byte]*OpcodePermission{
-		// Health - no permission required
-		OpHealth:    nil,
-		OpLiveness:  nil,
-		OpReadiness: nil,
-
-		// vTPM operations
-		OpVTPMCreate:    {Resource: "vtpm", Action: "write"},
-		OpVTPMDelete:    {Resource: "vtpm", Action: "delete"},
-		OpVTPMStart:     {Resource: "vtpm", Action: "write"},
-		OpVTPMStop:      {Resource: "vtpm", Action: "write"},
-		OpVTPMGetState:  {Resource: "vtpm", Action: "read"},
-		OpVTPMList:      {Resource: "vtpm", Action: "read"},
-		OpVTPMGetEK:     {Resource: "vtpm", Action: "read"},
-		OpVTPMGetAK:     {Resource: "vtpm", Action: "read"},
-		OpVTPMCreateAK:  {Resource: "vtpm", Action: "write"},
-		OpVTPMQuote:     {Resource: "vtpm", Action: "read"},
-		OpVTPMExtendPCR: {Resource: "vtpm", Action: "write"},
-		OpVTPMReadPCR:   {Resource: "vtpm", Action: "read"},
-		OpVTPMSeal:      {Resource: "vtpm", Action: "write"},
-		OpVTPMUnseal:    {Resource: "vtpm", Action: "read"},
-
-		// DNS operations
-		OpDNSAddRecord:    {Resource: "dns", Action: "write"},
-		OpDNSDeleteRecord: {Resource: "dns", Action: "delete"},
-		OpDNSUpdateRecord: {Resource: "dns", Action: "write"},
-		OpDNSGetRecord:    {Resource: "dns", Action: "read"},
-		OpDNSListRecords:  {Resource: "dns", Action: "read"},
-		OpDNSAddZone:      {Resource: "dns", Action: "write"},
-		OpDNSDeleteZone:   {Resource: "dns", Action: "delete"},
-		OpDNSGetZone:      {Resource: "dns", Action: "read"},
-		OpDNSListZones:    {Resource: "dns", Action: "read"},
-		OpDNSResolve:      {Resource: "dns", Action: "read"},
-
-		// Device operations
-		OpDeviceRegister:   {Resource: "device", Action: "write"},
-		OpDeviceUnregister: {Resource: "device", Action: "delete"},
-		OpDeviceGet:        {Resource: "device", Action: "read"},
-		OpDeviceList:       {Resource: "device", Action: "read"},
-		OpDeviceUpdate:     {Resource: "device", Action: "write"},
-		OpDeviceAttest:     {Resource: "device", Action: "read"},
-
-		// SDN operations
-		OpSDNGetPortState: {Resource: "sdn", Action: "read"},
-		OpSDNSetPortState: {Resource: "sdn", Action: "write"},
-		OpSDNListPorts:    {Resource: "sdn", Action: "read"},
-		OpSDNApplyPolicy:  {Resource: "sdn", Action: "write"},
-		OpSDNGetPolicy:    {Resource: "sdn", Action: "read"},
-		OpSDNListPolicies: {Resource: "sdn", Action: "read"},
-		OpSDNListBridges:  {Resource: "sdn", Action: "read"},
-		OpSDNCreateBridge: {Resource: "sdn", Action: "write"},
-		OpSDNDeleteBridge: {Resource: "sdn", Action: "delete"},
-		OpSDNCreatePort:   {Resource: "sdn", Action: "write"},
-		OpSDNDeletePort:   {Resource: "sdn", Action: "delete"},
-		OpSDNDeletePolicy: {Resource: "sdn", Action: "delete"},
-
-		// KMS operations
-		OpKMSGenerateKey: {Resource: "kms", Action: "write"},
-		OpKMSImportKey:   {Resource: "kms", Action: "write"},
-		OpKMSGetKey:      {Resource: "kms", Action: "read"},
-		OpKMSListKeys:    {Resource: "kms", Action: "read"},
-		OpKMSDeleteKey:   {Resource: "kms", Action: "delete"},
-		OpKMSRotateKey:   {Resource: "kms", Action: "write"},
-		OpKMSEncrypt:     {Resource: "kms", Action: "write"},
-		OpKMSDecrypt:     {Resource: "kms", Action: "read"},
-		OpKMSSign:        {Resource: "kms", Action: "write"},
-		OpKMSVerify:      {Resource: "kms", Action: "read"},
-
-		// IAM operations
-		OpIAMUserCreate: {Resource: "iam", Action: "write"},
-		OpIAMUserDelete: {Resource: "iam", Action: "delete"},
-		OpIAMUserGet:    {Resource: "iam", Action: "read"},
-		OpIAMUserList:   {Resource: "iam", Action: "read"},
-		OpIAMUserUpdate: {Resource: "iam", Action: "write"},
-		OpIAMRoleCreate: {Resource: "iam", Action: "write"},
-		OpIAMRoleDelete: {Resource: "iam", Action: "delete"},
-		OpIAMRoleGet:    {Resource: "iam", Action: "read"},
-		OpIAMRoleList:   {Resource: "iam", Action: "read"},
-
-		// NTP (time synchronization). The category opcode multiplexes
-		// read (status, sources) and write (step) sub-operations in
-		// payload[0], which this opcode-level catalog cannot
-		// distinguish, so it records the floor scope every NTP caller
-		// needs. Per-operation scope enforcement lives in the gRPC
-		// method catalog (pkg/api/grpc/method_permissions.go) and the
-		// MCP tool catalog, which is where ntp:write is required for
-		// the manual step.
-		OpNTPCategory: {Resource: "ntp", Action: "read"},
-
-		// CA operations
-		OpCAInfo:   {Resource: "ca", Action: "read"},
-		OpCAIssue:  {Resource: "ca", Action: "write"},
-		OpCARevoke: {Resource: "ca", Action: "write"},
-		OpCARenew:  {Resource: "ca", Action: "write"},
-		OpCAGet:    {Resource: "ca", Action: "read"},
-		OpCAList:   {Resource: "ca", Action: "read"},
-	}
 }

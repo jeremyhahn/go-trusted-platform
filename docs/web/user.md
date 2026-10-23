@@ -94,6 +94,56 @@ host it does not serve with `421`. Edge listeners default to 64 KiB request
 headers, 4096 connections per listener and 50 requests/s per source (burst
 100); `max-header-bytes`, `max-connections` and `rate-limit` override them.
 
+**Booting machines fetch their config from a provisioning listener.**
+`GET /api/v1/devices/config` needs no credentials, so no full or edge listener
+serves it (#177). Add a second webservice with `surface: provisioning` bound to
+an address in the provisioning VLAN. Usually that is the provisioning zone's
+gateway: `192.0.2.1` with environment 4 (`platformctl sdn zone list` shows it).
+The provisioning zone's flows admit HTTPS on 443, 8443 and 9443 only. Choose
+one that no wildcard listener on the node already holds:
+
+```yaml
+webservices:
+  - name: provisioning
+    surface: provisioning
+    bind-host: 192.0.2.1     # the provisioning zone's gateway, environment 4
+    port: 0
+    tls-port: 9443
+    key:                    # this listener's own TLS key
+      algorithm: ECDSA
+      ecc:
+        curve: P-256
+      signature-algorithm: ECDSA-SHA256
+      hash: SHA-256
+      store: software
+      password: "kms://webservices/provisioning/key/password?ensure=true&len=32&enc=raw"
+      platform-policy: true
+    certificate:
+      subject:
+        cn: cp-provisioning.example.internal   # the host config-server-url names
+        organization: Trusted Platform
+        country: US
+```
+
+Like every listener it needs its own `key` and `certificate`: copy the
+general listener's `key` block with its own password reference, and give the
+certificate the host name that `config-server-url` dials. A listener with no
+`key` refuses to start (`ErrWebServiceKeyRequired`), unless its certificate CN
+equals `tpm.idevid.cn` and the TPM IDevID is already provisioned, in which
+case it serves the IDevID.
+
+It serves that one route and nothing else. It takes the edge limits above and
+registers no virtual hosts. `platformd` refuses to start when any of these
+hold:
+
+- the node has no `sdn` section;
+- `bind-host` is empty, a hostname or a wildcard (`0.0.0.0`, `::`);
+- `bind-host` is outside the provisioning zone;
+- `tls-port` is `0`;
+- `virtual-hosts` is set.
+
+Point the templates' `config-server-url` at this listener.
+
 **The plain HTTP port only redirects.** `http://console.example.com:8080/…`
 answers with a permanent redirect to the TLS port and nothing else; set
 `port: 0` to open no plaintext port at all. A webservice with a plaintext port
@@ -106,11 +156,13 @@ a browser will not run a WebAuthn ceremony from an `http://` page anyway.
 
 ## Signing in
 
-`/` redirects to `/auth/webauthn`. Enter a username and either register a
-passkey or log in with one.
+`/` redirects to `/auth/webauthn`. Log in with a passkey, or register one.
 
-- **Registration** creates the credential and drops you at `/dashboard`.
-- **Login** authenticates an existing passkey.
+- **Registration** asks for your email address, creates the credential and
+  drops you at `/dashboard`. The address must be a full one
+  (`name@example.com`); anything the IAM identity store would reject is
+  refused before an account exists (#643).
+- **Login** asks for nothing: your authenticator picks the passkey.
 - **Invitations** arrive as `/auth/webauthn?invitation=<token>` and put the
   page straight into registration mode. `?tenant_name=` is displayed if present.
 - **If a `jwt` cookie already exists**, the page skips straight to
@@ -120,8 +172,9 @@ Common messages and what they actually mean:
 
 | You see | It means |
 |---|---|
-| "Account not found…" | 404 — no such username |
-| "An account with this username already exists. Please log in instead." | 409 on register |
+| "Account not found…" | 404 — no such account |
+| "An account with this email already exists. Please log in instead." | 409 on register |
+| "Invalid input. Please check your email address and try again." | 400 on register, e.g. an address that is not `name@domain.tld` |
 | "Please enter your passkey to log in." | 409 on login |
 | "Too many attempts. Please wait a moment and try again." | 429 |
 | "Something went wrong on our end." | 5xx |
@@ -132,8 +185,11 @@ Raw errors are never shown; the mapping is deliberate.
 
 ## What is in the console
 
-The authenticated surface is one dashboard with a sidebar. Roughly seventy
-pages across:
+The authenticated surface is one dashboard with a sidebar. The sidebar footer
+and the header's account menu show the signed-in account — its email and
+tenant, read from the session token's claims. The token carries no display
+name, so there is none to show; without a session the slot is empty rather
+than a placeholder. Roughly seventy pages across:
 
 | Area | Covers |
 |---|---|
@@ -142,8 +198,8 @@ pages across:
 | Tenant | Workspace, members, quotas, invitations |
 | CA | Certificates, requests, CRL, trust bundle |
 | KMS | Keys, encrypt/decrypt |
-| Devices | Device registry with each device's attestation verdict beside its age (fresh / stale / never collected), whether an attestation certificate is enrolled, and a "Refresh attestation" action that enqueues a collection; device detail with the full report (which check failed, cryptographic vs could-not-run, baseline source and age) and the address of the last heartbeat; profiles (with each profile's PCR baseline: source, age, registers, seeding device), templates, IDevID, vTPM |
-| Attestation | Manifests, quotes, event logs, verification. Per-device verdicts live on the Devices pages (above) |
+| Devices | Device registry with each device's attestation verdict beside its age (fresh / stale / never collected), whether an attestation certificate is enrolled, and a "Refresh attestation" action that enqueues a collection; device detail with the full report (which check failed, cryptographic vs could-not-run, baseline source and age) and the address of the last heartbeat, and the device's attestation certificate with a "Record certificate" action (re-issuance opt-in behind a confirm step; a refusal shown verbatim — [device/api.md §4.5](../device/api.md#45-recording-the-attestation-certificate-without-re-enrolling-473)); profiles (with each profile's PCR baseline: source, age, registers, seeding device), templates, IDevID, vTPM |
+| Attestation | The fleet's verifier verdicts (devices reporting, verified, failed, not verified, stale) with an **Attestation needs attention** banner when there are none, any are stale past the collector TTL, unverdicted or failed, or reporting is not configured; then manifests and quotes, labelled **Signed** / **Unsigned** — evidence, never a verdict — event logs, verification. Per-device verdicts live on the Devices pages (above) |
 | TPM | Status, PCRs, quote, seal, NV RAM, keys, event log, lockout |
 | Compute | VMs, containers, images, snapshots. On a node without the compute service (e.g. a control plane), the VM/container/snapshot pages show an informational "not available on this node" state; Images stays live (registry-backed) |
 | Networking | SDN, zones, VLANs, DNS, IPAM, overlays, gateway, ports, flows, PXE. PXE and gatewayd run on the gateway role, so on a control plane the PXE and Gateway pages show an informational "not available on this node" state in place of the local-service cards, and the fleet telemetry from `/api/v1/gateway/state` (reporting gateways, their PXE status and boots served) stays the primary content. Selecting a reported gateway opens its **Datapath** detail: per-service active/healthy state with the reason a refused service cannot run, BGP sessions with prefix counters and BFD, tunnels with their transport and uplink pin, uplink policy routes, the nftables host filter's fingerprint, NAT and the base OVS pipeline. A section a gateway does not run is not drawn, so an empty table never stands in for "not running" |
@@ -271,9 +327,10 @@ raise `jwt.expiration`.
 mismatch is rejected by the browser, not by the platform, and the message is
 unhelpful.
 
-**HTTP/3 is not being used.** `Alt-Svc: h3=":443"` is sent on every response
-regardless of your actual `tls-port` — the value is hard-coded. On a
-non-standard port, clients will not upgrade. Everything still works over
+**HTTP/3 is not being used.** Every response carries `Alt-Svc: h3=":<tls-port>"`,
+and HTTP/3 listens on UDP at that same port number. Clients only upgrade if UDP
+reaches that port: open it in the firewall alongside TCP. With `tls-port: 0`
+there is no HTTP/3 and no `Alt-Svc` header. Everything still works over
 HTTP/1.1 and HTTP/2.
 
 **A long-running request is cut off around 30 seconds.** The server's write

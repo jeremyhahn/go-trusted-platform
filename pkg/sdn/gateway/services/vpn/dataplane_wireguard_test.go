@@ -20,6 +20,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"net/http"
 	"net/netip"
 	"sync"
 	"testing"
@@ -197,4 +198,65 @@ func TestWireGuardPlaneExistsOutsideFIPS(t *testing.T) {
 	plane, err := NewWireGuardPlane(newFakeHub(), nil)
 	require.NoError(t, err)
 	assert.Equal(t, DataPlaneWireGuard, plane.Kind())
+}
+
+// TestWireGuardPlane_BadKeyIsAnInvalidRequest: the plane's refusal of a
+// malformed client key reaches the caller as an invalid request, not as an
+// unavailable data plane.
+func TestWireGuardPlane_BadKeyIsAnInvalidRequest(t *testing.T) {
+	plane, _ := newWireGuardPlaneForTest(t)
+	err := plane.InstallPeer(context.Background(), wgLease("l1", "10.9.0.23/32", []byte("short")))
+
+	refusal, status := RefusalOf(err)
+	assert.Equal(t, RefusalInvalidRequest, refusal.Reason)
+	assert.Equal(t, http.StatusBadRequest, status)
+}
+
+// TestRestore_DropsAWireGuardLeaseTheGatewayDoesNotOffer: a recorded
+// WireGuard lease on a gateway that offers only MASQUE is dropped
+// (restore.go:58-59).
+func TestRestore_DropsAWireGuardLeaseTheGatewayDoesNotOffer(t *testing.T) {
+	requireRestoreDrops(t, func(t *testing.T, h *restoreHarness, l *Lease) {
+		l.DataPlane = DataPlaneWireGuard
+		require.NoError(t, h.store.Put(context.Background(), l))
+	}, "data plane not offered")
+}
+
+func TestPlaneHost_HostsBothPlanesAndUnwindsAFailedStart(t *testing.T) {
+	var log []string
+	wg := newManagedFakePlane(DataPlaneWireGuard, &log)
+	masque := newManagedFakePlane(DataPlaneMASQUE, &log)
+	host, err := NewPlaneHost(wg, masque)
+	require.NoError(t, err)
+	ctx := context.Background()
+
+	require.NoError(t, host.Start(ctx))
+	require.NoError(t, host.Stop(ctx))
+	assert.Equal(t, []string{"start wireguard", "start masque", "stop masque", "stop wireguard"}, log)
+
+	log = nil
+	masque.startErr = errors.New("bind: address in use")
+	err = host.Start(ctx)
+	assert.ErrorIs(t, err, masque.startErr)
+	assert.Equal(t, []string{"start wireguard", "start masque", "stop wireguard"}, log,
+		"the plane that started is stopped again; the one that failed is not")
+}
+
+func TestDatapathPlane_ForwardsAWireGuardPeer(t *testing.T) {
+	var log []string
+	plane := newManagedFakePlane(DataPlaneWireGuard, &log)
+	host, err := NewPlaneHost(plane)
+	require.NoError(t, err)
+	p, err := NewDatapathPlane(DataPlaneWireGuard, &hostPeers{host: host})
+	require.NoError(t, err)
+
+	lease := &Lease{ID: "l1", DataPlane: DataPlaneWireGuard, Address: netip.MustParsePrefix("100.64.0.9/32"),
+		Keys: PeerKeys{WireGuardPublicKey: bytesOf(0x01, 32)}}
+	require.NoError(t, p.InstallPeer(context.Background(), lease))
+	require.NotNil(t, plane.installed["l1"])
+	assert.Equal(t, bytesOf(0x01, 32), plane.installed["l1"].Keys.WireGuardPublicKey)
+
+	// A refusal from the child's WireGuard plane comes back typed.
+	plane.installErr = &ErrPeerKeyInvalid{Kind: DataPlaneWireGuard, Reason: "the public key is not 32 bytes"}
+	assert.Equal(t, plane.installErr, p.InstallPeer(context.Background(), lease))
 }

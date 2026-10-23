@@ -23,6 +23,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
@@ -203,7 +204,7 @@ func TestServer_BuildDHCPConfig_AllOptionalFields(t *testing.T) {
 		DHCPSubnetMask: "255.255.255.0",
 		DHCPLeaseTime:  2 * time.Hour,
 		DHCPGateway:    "127.0.0.1",
-		DHCPDNS:        "8.8.8.8",
+		DHCPDNS:        []string{"8.8.8.8"},
 		DHCPServerIP:   "127.0.0.1",
 		TFTPServerName: "pxeserver",
 		BootFilename:   "ipxe.efi",
@@ -504,18 +505,21 @@ func TestFindBootFiles_InitrdGz(t *testing.T) {
 // TestServer_WaitForHTTPReady_NotReady tests waitForHTTPReady when server
 // is not ready.
 func TestServer_WaitForHTTPReady_NotReady(t *testing.T) {
-	config := createMinimalConfig(t)
-	config.HTTPPort = 39880 // Unused port
+	// The deadline runs on synctest time (#284).
+	synctest.Test(t, func(t *testing.T) {
+		config := createMinimalConfig(t)
+		config.HTTPPort = 39880 // Unused port
 
-	logger := logging.DefaultLogger()
-	server, err := NewServer(config, logger)
-	require.NoError(t, err)
+		logger := logging.DefaultLogger()
+		server, err := NewServer(config, logger)
+		require.NoError(t, err)
 
-	// Don't start the server - it should not be ready
-	deadline := time.Now().Add(100 * time.Millisecond)
-	ready := server.waitForHTTPReady(deadline)
+		// Don't start the server - it should not be ready
+		deadline := time.Now().Add(100 * time.Millisecond)
+		ready := server.waitForHTTPReady(deadline)
 
-	assert.False(t, ready, "server should not be ready when not started")
+		assert.False(t, ready, "server should not be ready when not started")
+	})
 }
 
 // TestDHCPServer_handleDiscover_NoIPAvailable tests handleDiscover when

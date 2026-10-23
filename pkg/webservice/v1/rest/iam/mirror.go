@@ -52,7 +52,7 @@ func (m *QuicBaaSUserMirror) MirrorUser(ctx context.Context, tenantID, email, di
 	}
 	username := displayName
 	if username == "" {
-		username = localPart(email)
+		username = UsernameFromEmail(email)
 	}
 	req := &iamsdk.CreateUserRequest{
 		Username:    username,
@@ -74,7 +74,40 @@ func (m *QuicBaaSUserMirror) MirrorUser(ctx context.Context, tenantID, email, di
 	return err
 }
 
-func localPart(email string) string {
+// mirroredEmailsPageSize is the IAM ListUsers page size MirroredEmails reads
+// with.
+const mirroredEmailsPageSize = 100
+
+// MirroredEmails returns the lower-cased email of every user the IAM tenant
+// holds. The startup reconcile compares it with the platform user store to
+// find users the mirror never wrote.
+func (m *QuicBaaSUserMirror) MirroredEmails(ctx context.Context, tenantID string) (map[string]struct{}, error) {
+	if m == nil || m.client == nil {
+		return nil, ErrMirrorClientMissing{}
+	}
+	emails := make(map[string]struct{})
+	req := &iamsdk.ListUsersRequest{PageSize: mirroredEmailsPageSize}
+	for {
+		resp, err := m.client.ListUsers(ctx, tenantID, req)
+		if err != nil {
+			return nil, err
+		}
+		for _, user := range resp.Users {
+			emails[strings.ToLower(user.Email)] = struct{}{}
+		}
+		next := resp.Pagination.NextPageToken
+		if !resp.Pagination.HasMore || next == "" || next == req.PageToken {
+			return emails, nil
+		}
+		req.PageToken = next
+	}
+}
+
+// UsernameFromEmail is the username a user created with only an email gets:
+// the email's local part, or the whole address when it has none. The IAM SDK
+// refuses an empty username, so every create path that takes an email and no
+// username (REST, gRPC, Unix, QUIC and MCP alike) derives it here.
+func UsernameFromEmail(email string) string {
 	if i := strings.IndexByte(email, '@'); i > 0 {
 		return email[:i]
 	}

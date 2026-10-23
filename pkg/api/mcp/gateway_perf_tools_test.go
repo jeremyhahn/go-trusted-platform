@@ -17,6 +17,11 @@ import (
 	"context"
 	"errors"
 	"testing"
+
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/mcpwire"
 )
 
 // newPerfToolRegistry builds a tool registry backed by the shared mock
@@ -199,6 +204,58 @@ func TestGatewayAdmittedVTEPToolPermissions(t *testing.T) {
 	for _, tool := range []string{"gateway_admitted_vtep", "gateway_admitted_vteps"} {
 		if got := checker.toolPermissions[tool]; got != "sdn:read" {
 			t.Errorf("permission for %s = %q, want %q", tool, got, "sdn:read")
+		}
+	}
+}
+
+// admissionProvider answers the admitted-VTEP tools with fixed values.
+type admissionProvider struct {
+	*mockServiceProvider
+	vtep  interface{}
+	vteps []interface{}
+	err   error
+}
+
+func (p admissionProvider) GatewayAdmittedVTEP(context.Context, string, string) (interface{}, error) {
+	return p.vtep, p.err
+}
+
+func (p admissionProvider) GatewayAdmittedVTEPs(context.Context, string) ([]interface{}, error) {
+	return p.vteps, p.err
+}
+
+func TestExecuteGatewayAdmittedVTEPTools(t *testing.T) {
+	provider := admissionProvider{
+		mockServiceProvider: newMockServiceProvider(),
+		vtep:                "198.51.100.10",
+		vteps:               []interface{}{"198.51.100.10", "198.51.100.11"},
+	}
+	registry := NewToolRegistry(provider, newTestLogger())
+
+	got, err := registry.executeGatewayAdmittedVTEP(context.Background(), map[string]interface{}{"gateway_id": "gw-1", "vtep": "198.51.100.10"})
+	if err != nil || got != "198.51.100.10" {
+		t.Fatalf("admitted_vtep = %v, %v", got, err)
+	}
+	list, err := registry.executeGatewayAdmittedVTEPs(context.Background(), map[string]interface{}{"gateway_id": "gw-1"})
+	if err != nil {
+		t.Fatalf("admitted_vteps: %v", err)
+	}
+	if reply, ok := list.(map[string]interface{}); !ok || reply["count"] != 2 {
+		t.Fatalf("admitted_vteps = %+v, want a count of 2", list)
+	}
+}
+
+// The provider's status class must reach the MCP client: an unknown
+// gateway or VTEP is NotFound there as it is over gRPC and REST.
+func TestExecuteGatewayAdmittedVTEPToolsKeepProviderClass(t *testing.T) {
+	notFound := status.Error(codes.NotFound, "gateway gw-9 has reported no overlay")
+	registry := NewToolRegistry(admissionProvider{mockServiceProvider: newMockServiceProvider(), err: notFound}, newTestLogger())
+
+	_, oneErr := registry.executeGatewayAdmittedVTEP(context.Background(), map[string]interface{}{"gateway_id": "gw-9", "vtep": "198.51.100.10"})
+	_, listErr := registry.executeGatewayAdmittedVTEPs(context.Background(), map[string]interface{}{"gateway_id": "gw-9"})
+	for name, err := range map[string]error{"admitted_vtep": oneErr, "admitted_vteps": listErr} {
+		if code := toolErrorCode(err); code != mcpwire.NotFound {
+			t.Errorf("%s: toolErrorCode(%v) = %d, want NotFound", name, err, code)
 		}
 	}
 }

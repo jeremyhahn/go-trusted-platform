@@ -90,6 +90,13 @@ func (e *errorServiceProvider) OverlayTunnelList(ctx context.Context, vni uint32
 	return e.mockServiceProvider.OverlayTunnelList(ctx, vni)
 }
 
+func (e *errorServiceProvider) OverlayTunnelStats(ctx context.Context, remoteVTEP string, vni uint32) (interface{}, error) {
+	if e.shouldFail("OverlayTunnelStats") {
+		return nil, ErrMockServiceError
+	}
+	return e.mockServiceProvider.OverlayTunnelStats(ctx, remoteVTEP, vni)
+}
+
 func (e *errorServiceProvider) OverlayMACList(ctx context.Context, vni uint32) ([]interface{}, error) {
 	if e.shouldFail("OverlayMACList") {
 		return nil, ErrMockServiceError
@@ -267,18 +274,18 @@ func (e *errorServiceProvider) TPMNVList(ctx context.Context) (interface{}, erro
 	return e.mockServiceProvider.TPMNVList(ctx)
 }
 
-func (e *errorServiceProvider) TPMNVRead(ctx context.Context, index int, size int) ([]byte, error) {
+func (e *errorServiceProvider) TPMNVRead(ctx context.Context, index uint32, size, offset uint16, password string) ([]byte, error) {
 	if e.shouldFail("TPMNVRead") {
 		return nil, ErrMockServiceError
 	}
-	return e.mockServiceProvider.TPMNVRead(ctx, index, size)
+	return e.mockServiceProvider.TPMNVRead(ctx, index, size, offset, password)
 }
 
-func (e *errorServiceProvider) TPMNVDelete(ctx context.Context, index int) (interface{}, error) {
+func (e *errorServiceProvider) TPMNVDelete(ctx context.Context, index uint32, parentPassword string) (interface{}, error) {
 	if e.shouldFail("TPMNVDelete") {
 		return nil, ErrMockServiceError
 	}
-	return e.mockServiceProvider.TPMNVDelete(ctx, index)
+	return e.mockServiceProvider.TPMNVDelete(ctx, index, parentPassword)
 }
 
 func (e *errorServiceProvider) TPMPlatform(ctx context.Context) (interface{}, error) {
@@ -288,18 +295,18 @@ func (e *errorServiceProvider) TPMPlatform(ctx context.Context) (interface{}, er
 	return e.mockServiceProvider.TPMPlatform(ctx)
 }
 
-func (e *errorServiceProvider) TPMCertify(ctx context.Context, keyHandle int) (interface{}, error) {
+func (e *errorServiceProvider) TPMCertify(ctx context.Context, keyHandle uint32, keyPassword string, nonce []byte) (interface{}, error) {
 	if e.shouldFail("TPMCertify") {
 		return nil, ErrMockServiceError
 	}
-	return e.mockServiceProvider.TPMCertify(ctx, keyHandle)
+	return e.mockServiceProvider.TPMCertify(ctx, keyHandle, keyPassword, nonce)
 }
 
-func (e *errorServiceProvider) TPMUnseal(ctx context.Context, cn string) ([]byte, error) {
+func (e *errorServiceProvider) TPMUnseal(ctx context.Context, cn, password string) ([]byte, error) {
 	if e.shouldFail("TPMUnseal") {
 		return nil, ErrMockServiceError
 	}
-	return e.mockServiceProvider.TPMUnseal(ctx, cn)
+	return e.mockServiceProvider.TPMUnseal(ctx, cn, password)
 }
 
 func TestServiceErrorPaths(t *testing.T) {
@@ -320,6 +327,7 @@ func TestServiceErrorPaths(t *testing.T) {
 		{"overlay_vni_create error", "overlay_vni_create", map[string]interface{}{"vni": float64(100)}, "OverlayVNICreate"},
 		{"overlay_vni_delete error", "overlay_vni_delete", map[string]interface{}{"vni": float64(100)}, "OverlayVNIDelete"},
 		{"overlay_tunnel_list error", "overlay_tunnel_list", map[string]interface{}{"vni": float64(100)}, "OverlayTunnelList"},
+		{"overlay_tunnel_stats error", "overlay_tunnel_stats", map[string]interface{}{"remote_vtep": "10.0.0.2"}, "OverlayTunnelStats"},
 		{"overlay_mac_list error", "overlay_mac_list", map[string]interface{}{"vni": float64(100)}, "OverlayMACList"},
 		{"overlay_mac_forget error", "overlay_mac_forget", map[string]interface{}{"mac": "aa:bb:cc:dd:ee:ff", "vni": float64(100)}, "OverlayMACForget"},
 

@@ -15,6 +15,7 @@ package quic
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/x509"
 	"encoding/hex"
 	"encoding/pem"
@@ -24,9 +25,12 @@ import (
 	"time"
 
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/client/objectstorage"
+	"github.com/jeremyhahn/go-quicbaas/sdk/go/platformtoken"
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	quicbaasca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/ca"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/ca/issuance"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 )
 
 // CA pagination defaults
@@ -41,7 +45,13 @@ type CAHandler struct {
 	ca         quicbaasca.CACertificateAuthority
 	logger     *logging.Logger
 	objStorage objectstorage.Client
+	kms        issuance.KMS
 }
+
+// CASignCSRPermission is the permission SignCSR needs. It is its own
+// admin-level action: certs:generate, which issues ordinary certificates,
+// does not confer it.
+var CASignCSRPermission = OpcodePermission{Resource: "ca", Action: actionSignCSR}
 
 // NewCAHandler creates a new CA handler.
 // objStorage may be nil; if nil, the revocation object-store check is skipped.
@@ -53,37 +63,44 @@ func NewCAHandler(logger *logging.Logger, ca quicbaasca.CACertificateAuthority, 
 	}
 }
 
+// WithKMS sets the KMS a CSR's key must belong to. Without one, SignCSR
+// refuses every request.
+func (h *CAHandler) WithKMS(kms issuance.KMS) *CAHandler {
+	h.kms = kms
+	return h
+}
+
 // HandleRequest processes a CA request and returns a response
-func (h *CAHandler) HandleRequest(ctx context.Context, req *Request) *Response {
+func (h *CAHandler) HandleRequest(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if req == nil {
-		return &Response{
-			Status:  StatusInvalidRequest,
-			Payload: []byte(ErrNilRequest.Error()),
+		return &quicwire.Response{
+			Status:  quicwire.StatusInvalidRequest,
+			Payload: []byte(quicwire.ErrNilRequest.Error()),
 		}
 	}
 
 	switch req.Opcode {
-	case OpCAInfo:
+	case quicwire.OpCAInfo:
 		return h.handleInfo(ctx, req)
-	case OpCAIssue, OpCertIssue:
+	case quicwire.OpCAIssue, quicwire.OpCertIssue:
 		return h.handleIssue(ctx, req)
-	case OpCAGet, OpCertGet:
+	case quicwire.OpCAGet, quicwire.OpCertGet:
 		return h.handleGet(ctx, req)
-	case OpCAList, OpCertList:
+	case quicwire.OpCAList, quicwire.OpCertList:
 		return h.handleList(ctx, req)
-	case OpCARevoke, OpCertRevoke:
+	case quicwire.OpCARevoke, quicwire.OpCertRevoke:
 		return h.handleRevoke(ctx, req)
-	case OpCARenew, OpCertRenew:
+	case quicwire.OpCARenew, quicwire.OpCertRenew:
 		return h.handleRenew(ctx, req)
-	case OpCAVerify, OpCertVerify:
+	case quicwire.OpCAVerify, quicwire.OpCertVerify:
 		return h.handleVerify(ctx, req)
-	case OpCACRL, OpCertGetCRL:
+	case quicwire.OpCACRL, quicwire.OpCertGetCRL:
 		return h.handleCRL(ctx, req)
-	case OpCABundle, OpCertGetChain:
+	case quicwire.OpCABundle, quicwire.OpCertGetChain:
 		return h.handleBundle(ctx, req)
 	default:
-		return &Response{
-			Status:  StatusInvalidRequest,
+		return &quicwire.Response{
+			Status:  quicwire.StatusInvalidRequest,
 			Payload: []byte("unknown CA operation"),
 		}
 	}
@@ -126,7 +143,12 @@ type Certificate struct {
 	KeyAlgorithm       string   `codec:"key_algorithm"`
 	SignatureAlgorithm string   `codec:"signature_algorithm"`
 	IsCA               bool     `codec:"is_ca"`
+	MaxPathLen         int32    `codec:"max_path_len"`
+	KeyUsage           []string `codec:"key_usage"`
+	ExtKeyUsage        []string `codec:"ext_key_usage"`
+	FingerprintSHA256  string   `codec:"fingerprint_sha256"`
 	Pem                string   `codec:"pem"`
+	Der                []byte   `codec:"der"`
 	Sans               *SANs    `codec:"sans"`
 }
 
@@ -163,16 +185,27 @@ type CAIssueRequest struct {
 	MaxPathLen   int32    `codec:"max_path_len"`
 }
 
+// CASignCSRRequest asks the CA to certify, for code signing only, the KMS
+// key a PEM PKCS#10 request names in its common name. The field names match
+// platformv1.SignCSRRequest, which the SDK sends as is: the codec pairs
+// fields by Go name.
+type CASignCSRRequest struct {
+	CsrPem    string `codec:"csr_pem"`
+	ValidDays int32  `codec:"valid_days"`
+}
+
 // CAIssueResponse represents a certificate issuance response
 type CAIssueResponse struct {
 	Certificate *Certificate `codec:"certificate"`
 	Timestamp   int64        `codec:"timestamp"`
 }
 
-// CAGetRequest represents a certificate retrieval request
+// CAGetRequest represents a certificate retrieval request. The field names
+// match platformv1.GetCertificateRequest, which the SDK sends as is.
 type CAGetRequest struct {
 	Serial     string `codec:"serial"`
 	IncludePem bool   `codec:"include_pem"`
+	IncludeDer bool   `codec:"include_der"`
 }
 
 // CAGetResponse represents a certificate retrieval response
@@ -278,9 +311,9 @@ type CABundleResponse struct {
 }
 
 // handleInfo returns CA information
-func (h *CAHandler) handleInfo(ctx context.Context, req *Request) *Response {
+func (h *CAHandler) handleInfo(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.ca == nil {
-		return h.errorResponse(StatusUnavailable, ErrCANotInitialized)
+		return h.errorResponse(quicwire.StatusUnavailable, ErrCANotInitialized)
 	}
 
 	now := time.Now().Unix()
@@ -307,35 +340,35 @@ func (h *CAHandler) handleInfo(ctx context.Context, req *Request) *Response {
 		}
 	}
 
-	payload, err := EncodePayload(resp)
+	payload, err := quicwire.EncodePayload(resp)
 	if err != nil {
-		return h.errorResponse(StatusInternalError, ErrCAEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrCAEncodingFailed{Cause: err})
 	}
 
-	return &Response{
-		Status:  StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
 
 // handleIssue issues a new certificate
-func (h *CAHandler) handleIssue(ctx context.Context, req *Request) *Response {
+func (h *CAHandler) handleIssue(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.ca == nil {
-		return h.errorResponse(StatusUnavailable, ErrCANotInitialized)
+		return h.errorResponse(quicwire.StatusUnavailable, ErrCANotInitialized)
 	}
 
 	var issueReq CAIssueRequest
-	if err := DecodePayload(req.Payload, &issueReq); err != nil {
-		return h.errorResponse(StatusInvalidRequest, ErrCADecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &issueReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrCADecodingFailed{Cause: err})
 	}
 
 	if issueReq.Subject == nil || issueReq.Subject.CommonName == "" {
-		return h.errorResponse(StatusInvalidArgument, ErrCAMissingCommonName)
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrCAMissingCommonName)
 	}
 
 	keyAlg, err := h.parseKeyAlgorithm(issueReq.KeyAlgorithm)
 	if err != nil {
-		return h.errorResponse(StatusInvalidArgument, err)
+		return h.errorResponse(quicwire.StatusInvalidArgument, err)
 	}
 
 	caReq := &quicbaasca.CACertificateRequest{
@@ -365,9 +398,9 @@ func (h *CAHandler) handleIssue(ctx context.Context, req *Request) *Response {
 		}
 	}
 
-	storeType := h.parseStoreType(issueReq.StoreType)
-	if storeType == xkmssdk.StoreUnknown {
-		storeType = xkmssdk.StoreSoftware
+	storeType, err := issuance.StoreType(issueReq.StoreType)
+	if err != nil {
+		return h.errorResponse(quicwire.StatusInvalidArgument, err)
 	}
 
 	caReq.KeyAttributes = &xkmssdk.KeyAttributes{
@@ -380,69 +413,112 @@ func (h *CAHandler) handleIssue(ctx context.Context, req *Request) *Response {
 	issued, err := h.ca.IssueCertificate(ctx, caReq)
 	if err != nil {
 		h.logger.Error(err, "failed to issue certificate")
-		return h.errorResponse(StatusInternalError, ErrCAIssueFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrCAIssueFailed{Cause: err})
+	}
+	return h.issueResponse(issued.Certificate)
+}
+
+// SignCSR certifies, for code signing only, the KMS key a CSR names — a key
+// the CA never holds. The payload is a CASignCSRRequest. The caller's
+// platform token must grant ca:sign-csr: a request authenticated without
+// one (a legacy token validator) is refused here even when the dispatcher's
+// CASignCSRPermission check let it through.
+func (h *CAHandler) SignCSR(ctx context.Context, payload []byte) *quicwire.Response {
+	var authCtx *platformtoken.AuthorizedContext
+	if granted, ok := AuthorizedContextFromContext(ctx); ok {
+		authCtx = granted
+	}
+	if err := issuance.AuthorizeSignCSR(authCtx); err != nil {
+		return h.errorResponse(quicwire.StatusPermissionDenied, err)
+	}
+	if h.ca == nil {
+		return h.errorResponse(quicwire.StatusUnavailable, ErrCANotInitialized)
 	}
 
-	cert := issued.Certificate
+	var signReq CASignCSRRequest
+	if err := quicwire.DecodePayload(payload, &signReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrCADecodingFailed{Cause: err})
+	}
+
+	cert, err := issuance.SignCSR(ctx, h.ca, h.kms, &issuance.CSR{
+		PEM:       []byte(signReq.CsrPem),
+		ValidDays: int(signReq.ValidDays),
+	})
+	if err != nil {
+		if issuance.IsInvalidRequest(err) {
+			return h.errorResponse(quicwire.StatusInvalidArgument, err)
+		}
+		h.logger.Error(err, "failed to sign CSR")
+		return h.errorResponse(quicwire.StatusInternalError, ErrCAIssueFailed{Cause: err})
+	}
+	return h.issueResponse(cert)
+}
+
+// issueResponse encodes a newly issued certificate.
+func (h *CAHandler) issueResponse(cert *x509.Certificate) *quicwire.Response {
 	resp := &CAIssueResponse{
 		Certificate: h.certToFull(cert, true),
 		Timestamp:   time.Now().Unix(),
 	}
 
-	payload, err := EncodePayload(resp)
+	payload, err := quicwire.EncodePayload(resp)
 	if err != nil {
-		return h.errorResponse(StatusInternalError, ErrCAEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrCAEncodingFailed{Cause: err})
 	}
 
-	return &Response{
-		Status:  StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
 
 // handleGet retrieves a certificate by serial number or common name
-func (h *CAHandler) handleGet(ctx context.Context, req *Request) *Response {
+func (h *CAHandler) handleGet(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.ca == nil {
-		return h.errorResponse(StatusUnavailable, ErrCANotInitialized)
+		return h.errorResponse(quicwire.StatusUnavailable, ErrCANotInitialized)
 	}
 
 	var getReq CAGetRequest
-	if err := DecodePayload(req.Payload, &getReq); err != nil {
-		return h.errorResponse(StatusInvalidRequest, ErrCADecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &getReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrCADecodingFailed{Cause: err})
 	}
 
 	if getReq.Serial == "" {
-		return h.errorResponse(StatusInvalidArgument, ErrCAMissingSerial)
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrCAMissingSerial)
 	}
 
 	cert := h.findCertByIdentifier(getReq.Serial)
 	if cert == nil {
-		return h.errorResponse(StatusNotFound, ErrCACertNotFound{Serial: getReq.Serial})
+		return h.errorResponse(quicwire.StatusNotFound, ErrCACertNotFound{Serial: getReq.Serial})
 	}
 
+	full := h.certToFull(cert, getReq.IncludePem)
+	if getReq.IncludeDer {
+		full.Der = cert.Raw
+	}
 	resp := &CAGetResponse{
-		Certificate: h.certToFull(cert, getReq.IncludePem),
+		Certificate: full,
 		Timestamp:   time.Now().Unix(),
 	}
-	payload, err := EncodePayload(resp)
+	payload, err := quicwire.EncodePayload(resp)
 	if err != nil {
-		return h.errorResponse(StatusInternalError, ErrCAEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrCAEncodingFailed{Cause: err})
 	}
-	return &Response{
-		Status:  StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
 
 // handleList lists certificates with pagination
-func (h *CAHandler) handleList(ctx context.Context, req *Request) *Response {
+func (h *CAHandler) handleList(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.ca == nil {
-		return h.errorResponse(StatusUnavailable, ErrCANotInitialized)
+		return h.errorResponse(quicwire.StatusUnavailable, ErrCANotInitialized)
 	}
 
 	var listReq CAListRequest
-	if err := DecodePayload(req.Payload, &listReq); err != nil {
-		return h.errorResponse(StatusInvalidRequest, ErrCADecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &listReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrCADecodingFailed{Cause: err})
 	}
 
 	limit := listReq.Limit
@@ -455,7 +531,7 @@ func (h *CAHandler) handleList(ctx context.Context, req *Request) *Response {
 
 	certStore := h.ca.CertStore()
 	if certStore == nil {
-		return h.errorResponse(StatusUnavailable, ErrCACertStoreUnavailable)
+		return h.errorResponse(quicwire.StatusUnavailable, ErrCACertStoreUnavailable)
 	}
 
 	var certificates []*CertificateSummary
@@ -482,35 +558,35 @@ func (h *CAHandler) handleList(ctx context.Context, req *Request) *Response {
 		Timestamp:    time.Now().Unix(),
 	}
 
-	payload, err := EncodePayload(resp)
+	payload, err := quicwire.EncodePayload(resp)
 	if err != nil {
-		return h.errorResponse(StatusInternalError, ErrCAEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrCAEncodingFailed{Cause: err})
 	}
 
-	return &Response{
-		Status:  StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
 
 // handleRevoke revokes a certificate
-func (h *CAHandler) handleRevoke(ctx context.Context, req *Request) *Response {
+func (h *CAHandler) handleRevoke(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.ca == nil {
-		return h.errorResponse(StatusUnavailable, ErrCANotInitialized)
+		return h.errorResponse(quicwire.StatusUnavailable, ErrCANotInitialized)
 	}
 
 	var revokeReq CARevokeRequest
-	if err := DecodePayload(req.Payload, &revokeReq); err != nil {
-		return h.errorResponse(StatusInvalidRequest, ErrCADecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &revokeReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrCADecodingFailed{Cause: err})
 	}
 
 	if revokeReq.Serial == "" {
-		return h.errorResponse(StatusInvalidArgument, ErrCAMissingSerial)
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrCAMissingSerial)
 	}
 
 	cert := h.findCertByIdentifier(revokeReq.Serial)
 	if cert == nil {
-		return h.errorResponse(StatusNotFound, ErrCACertNotFound{Serial: revokeReq.Serial})
+		return h.errorResponse(quicwire.StatusNotFound, ErrCACertNotFound{Serial: revokeReq.Serial})
 	}
 
 	var keyAttrs *xkmssdk.KeyAttributes
@@ -522,7 +598,7 @@ func (h *CAHandler) handleRevoke(ctx context.Context, req *Request) *Response {
 
 	if err := h.ca.RevokeCert(ctx, cert, quicbaasca.RevokeOptions{DeleteKeys: keyAttrs != nil}); err != nil {
 		h.logger.Error(err, "failed to revoke certificate")
-		return h.errorResponse(StatusInternalError, ErrCARevokeFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrCARevokeFailed{Cause: err})
 	}
 
 	resp := &CARevokeResponse{
@@ -533,39 +609,39 @@ func (h *CAHandler) handleRevoke(ctx context.Context, req *Request) *Response {
 		Timestamp: time.Now().Unix(),
 	}
 
-	payload, err := EncodePayload(resp)
+	payload, err := quicwire.EncodePayload(resp)
 	if err != nil {
-		return h.errorResponse(StatusInternalError, ErrCAEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrCAEncodingFailed{Cause: err})
 	}
 
-	return &Response{
-		Status:  StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
 
 // handleRenew renews an existing certificate
-func (h *CAHandler) handleRenew(ctx context.Context, req *Request) *Response {
+func (h *CAHandler) handleRenew(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.ca == nil {
-		return h.errorResponse(StatusUnavailable, ErrCANotInitialized)
+		return h.errorResponse(quicwire.StatusUnavailable, ErrCANotInitialized)
 	}
 
 	var renewReq CARenewRequest
-	if err := DecodePayload(req.Payload, &renewReq); err != nil {
-		return h.errorResponse(StatusInvalidRequest, ErrCADecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &renewReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrCADecodingFailed{Cause: err})
 	}
 
 	if renewReq.Serial == "" {
-		return h.errorResponse(StatusInvalidArgument, ErrCAMissingSerial)
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrCAMissingSerial)
 	}
 
 	if renewReq.ExtendDays <= 0 {
-		return h.errorResponse(StatusInvalidArgument, ErrCAInvalidExtendDays)
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrCAInvalidExtendDays)
 	}
 
 	existingCert := h.findCertByIdentifier(renewReq.Serial)
 	if existingCert == nil {
-		return h.errorResponse(StatusNotFound, ErrCACertNotFound{Serial: renewReq.Serial})
+		return h.errorResponse(quicwire.StatusNotFound, ErrCACertNotFound{Serial: renewReq.Serial})
 	}
 
 	caReq := &quicbaasca.CACertificateRequest{
@@ -613,13 +689,13 @@ func (h *CAHandler) handleRenew(ctx context.Context, req *Request) *Response {
 	// ErrCertificateAlreadyExists. Mirrors the gRPC and REST renew handlers.
 	if revokeErr := h.ca.RevokeCert(ctx, existingCert, quicbaasca.RevokeOptions{DeleteKeys: true}); revokeErr != nil {
 		h.logger.Error(revokeErr, "failed to supersede old certificate during renewal")
-		return h.errorResponse(StatusInternalError, ErrCARenewFailed{Cause: revokeErr})
+		return h.errorResponse(quicwire.StatusInternalError, ErrCARenewFailed{Cause: revokeErr})
 	}
 
 	issuedRenew, err := h.ca.IssueCertificate(ctx, caReq)
 	if err != nil {
 		h.logger.Error(err, "failed to renew certificate")
-		return h.errorResponse(StatusInternalError, ErrCARenewFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrCARenewFailed{Cause: err})
 	}
 
 	newCert := issuedRenew.Certificate
@@ -629,30 +705,30 @@ func (h *CAHandler) handleRenew(ctx context.Context, req *Request) *Response {
 		Timestamp:   time.Now().Unix(),
 	}
 
-	payload, err := EncodePayload(resp)
+	payload, err := quicwire.EncodePayload(resp)
 	if err != nil {
-		return h.errorResponse(StatusInternalError, ErrCAEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrCAEncodingFailed{Cause: err})
 	}
 
-	return &Response{
-		Status:  StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
 
 // handleVerify verifies a certificate against the CA bundle
-func (h *CAHandler) handleVerify(ctx context.Context, req *Request) *Response {
+func (h *CAHandler) handleVerify(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.ca == nil {
-		return h.errorResponse(StatusUnavailable, ErrCANotInitialized)
+		return h.errorResponse(quicwire.StatusUnavailable, ErrCANotInitialized)
 	}
 
 	var verifyReq CAVerifyRequest
-	if err := DecodePayload(req.Payload, &verifyReq); err != nil {
-		return h.errorResponse(StatusInvalidRequest, ErrCADecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &verifyReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrCADecodingFailed{Cause: err})
 	}
 
 	if verifyReq.CertificatePem == "" && len(verifyReq.CertificateDer) == 0 {
-		return h.errorResponse(StatusInvalidArgument, ErrCAMissingCertificate)
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrCAMissingCertificate)
 	}
 
 	var cert *x509.Certificate
@@ -663,13 +739,13 @@ func (h *CAHandler) handleVerify(ctx context.Context, req *Request) *Response {
 	} else {
 		block, _ := pem.Decode([]byte(verifyReq.CertificatePem))
 		if block == nil {
-			return h.errorResponse(StatusInvalidArgument, ErrCAInvalidPEM)
+			return h.errorResponse(quicwire.StatusInvalidArgument, ErrCAInvalidPEM)
 		}
 		cert, err = x509.ParseCertificate(block.Bytes)
 	}
 
 	if err != nil {
-		return h.errorResponse(StatusInvalidArgument, ErrCAParseFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrCAParseFailed{Cause: err})
 	}
 
 	roots := x509.NewCertPool()
@@ -699,12 +775,12 @@ func (h *CAHandler) handleVerify(ctx context.Context, req *Request) *Response {
 			Errors:    []string{err.Error()},
 			Timestamp: time.Now().Unix(),
 		}
-		payload, encErr := EncodePayload(resp)
+		payload, encErr := quicwire.EncodePayload(resp)
 		if encErr != nil {
-			return h.errorResponse(StatusInternalError, ErrCAEncodingFailed{Cause: encErr})
+			return h.errorResponse(quicwire.StatusInternalError, ErrCAEncodingFailed{Cause: encErr})
 		}
-		return &Response{
-			Status:  StatusOK,
+		return &quicwire.Response{
+			Status:  quicwire.StatusOK,
 			Payload: payload,
 		}
 	}
@@ -748,21 +824,21 @@ func (h *CAHandler) handleVerify(ctx context.Context, req *Request) *Response {
 		Revoked:   revoked,
 	}
 
-	payload, err := EncodePayload(resp)
+	payload, err := quicwire.EncodePayload(resp)
 	if err != nil {
-		return h.errorResponse(StatusInternalError, ErrCAEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrCAEncodingFailed{Cause: err})
 	}
 
-	return &Response{
-		Status:  StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
 
 // handleCRL returns the Certificate Revocation List
-func (h *CAHandler) handleCRL(ctx context.Context, req *Request) *Response {
+func (h *CAHandler) handleCRL(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.ca == nil {
-		return h.errorResponse(StatusUnavailable, ErrCANotInitialized)
+		return h.errorResponse(quicwire.StatusUnavailable, ErrCANotInitialized)
 	}
 
 	type crlGenerator interface {
@@ -774,7 +850,7 @@ func (h *CAHandler) handleCRL(ctx context.Context, req *Request) *Response {
 
 	gen, ok := h.ca.(crlGenerator)
 	if !ok {
-		return h.errorResponse(StatusNotImplemented, ErrCACRLNotSupported)
+		return h.errorResponse(quicwire.StatusNotImplemented, ErrCACRLNotSupported)
 	}
 
 	crlDER, err = gen.GenerateCRL(ctx)
@@ -782,15 +858,15 @@ func (h *CAHandler) handleCRL(ctx context.Context, req *Request) *Response {
 		h.logger.Error(err, "failed to generate CRL")
 		// Check if CRL generation is not supported by this CA
 		if errors.Is(err, ErrCACRLNotSupported) {
-			return h.errorResponse(StatusNotImplemented, ErrCACRLNotSupported)
+			return h.errorResponse(quicwire.StatusNotImplemented, ErrCACRLNotSupported)
 		}
-		return h.errorResponse(StatusInternalError, ErrCACRLFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrCACRLFailed{Cause: err})
 	}
 
 	crl, err := x509.ParseRevocationList(crlDER)
 	if err != nil {
 		h.logger.Error(err, "failed to parse CRL")
-		return h.errorResponse(StatusInternalError, ErrCACRLParseFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrCACRLParseFailed{Cause: err})
 	}
 
 	var revokedCerts []*RevokedCertEntry
@@ -811,13 +887,13 @@ func (h *CAHandler) handleCRL(ctx context.Context, req *Request) *Response {
 		Timestamp:    time.Now().Unix(),
 	}
 
-	payload, err := EncodePayload(resp)
+	payload, err := quicwire.EncodePayload(resp)
 	if err != nil {
-		return h.errorResponse(StatusInternalError, ErrCAEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrCAEncodingFailed{Cause: err})
 	}
 
-	return &Response{
-		Status:  StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
@@ -830,14 +906,14 @@ func (h *CAHandler) handleCRL(ctx context.Context, req *Request) *Response {
 // triggers the identity-matching filter path in go-xkms and returns
 // "no certificates match filter" when none of the configured CA identities
 // advertise that store type — which is always the case for a normal software CA.
-func (h *CAHandler) handleBundle(ctx context.Context, req *Request) *Response {
+func (h *CAHandler) handleBundle(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.ca == nil {
-		return h.errorResponse(StatusUnavailable, ErrCANotInitialized)
+		return h.errorResponse(quicwire.StatusUnavailable, ErrCANotInitialized)
 	}
 
 	var bundleReq CABundleRequest
-	if err := DecodePayload(req.Payload, &bundleReq); err != nil {
-		return h.errorResponse(StatusInvalidRequest, ErrCADecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &bundleReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrCADecodingFailed{Cause: err})
 	}
 
 	var keyAlg x509.PublicKeyAlgorithm
@@ -845,7 +921,7 @@ func (h *CAHandler) handleBundle(ctx context.Context, req *Request) *Response {
 		var err error
 		keyAlg, err = h.parseKeyAlgorithm(bundleReq.Algorithm)
 		if err != nil {
-			return h.errorResponse(StatusInvalidArgument, err)
+			return h.errorResponse(quicwire.StatusInvalidArgument, err)
 		}
 	}
 
@@ -861,11 +937,11 @@ func (h *CAHandler) handleBundle(ctx context.Context, req *Request) *Response {
 	}
 	if err != nil {
 		h.logger.Error(err, "failed to get CA bundle")
-		return h.errorResponse(StatusInternalError, ErrCABundleFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrCABundleFailed{Cause: err})
 	}
 
 	if len(bundle) == 0 {
-		return h.errorResponse(StatusNotFound, ErrCABundleNotFound)
+		return h.errorResponse(quicwire.StatusNotFound, ErrCABundleNotFound)
 	}
 
 	var certificates []*CertificateSummary
@@ -883,13 +959,13 @@ func (h *CAHandler) handleBundle(ctx context.Context, req *Request) *Response {
 		Timestamp:    time.Now().Unix(),
 	}
 
-	payload, err := EncodePayload(resp)
+	payload, err := quicwire.EncodePayload(resp)
 	if err != nil {
-		return h.errorResponse(StatusInternalError, ErrCAEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrCAEncodingFailed{Cause: err})
 	}
 
-	return &Response{
-		Status:  StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
@@ -979,8 +1055,8 @@ func (h *CAHandler) checkRevocationViaObjectStore(cert *x509.Certificate) bool {
 // Helper methods
 // =============================================================================
 
-func (h *CAHandler) errorResponse(status byte, err error) *Response {
-	return &Response{
+func (h *CAHandler) errorResponse(status byte, err error) *quicwire.Response {
+	return &quicwire.Response{
 		Status:  status,
 		Payload: []byte(err.Error()),
 	}
@@ -1084,6 +1160,7 @@ func (h *CAHandler) certToFull(cert *x509.Certificate, includePEM bool) *Certifi
 	} else if now.After(cert.NotAfter) {
 		certStatus = "EXPIRED"
 	}
+	fingerprint := sha256.Sum256(cert.Raw)
 
 	c := &Certificate{
 		Serial: hex.EncodeToString(cert.SerialNumber.Bytes()),
@@ -1104,6 +1181,10 @@ func (h *CAHandler) certToFull(cert *x509.Certificate, includePEM bool) *Certifi
 		KeyAlgorithm:       h.keyAlgorithmToString(cert.PublicKeyAlgorithm),
 		SignatureAlgorithm: h.signatureAlgorithmToString(cert.SignatureAlgorithm),
 		IsCA:               cert.IsCA,
+		MaxPathLen:         int32(cert.MaxPathLen),
+		KeyUsage:           keyUsageNames(cert.KeyUsage),
+		ExtKeyUsage:        extKeyUsageNames(cert.ExtKeyUsage),
+		FingerprintSHA256:  hex.EncodeToString(fingerprint[:]),
 	}
 
 	// Add SANs if present
@@ -1130,6 +1211,57 @@ func (h *CAHandler) certToFull(cert *x509.Certificate, includePEM bool) *Certifi
 	}
 
 	return c
+}
+
+// keyUsageBits lists each key usage the gRPC service reports, in bit order,
+// with the name it reports it under.
+var keyUsageBits = []struct {
+	bit  x509.KeyUsage
+	name string
+}{
+	{x509.KeyUsageDigitalSignature, "DIGITAL_SIGNATURE"},
+	{x509.KeyUsageContentCommitment, "CONTENT_COMMITMENT"},
+	{x509.KeyUsageKeyEncipherment, "KEY_ENCIPHERMENT"},
+	{x509.KeyUsageDataEncipherment, "DATA_ENCIPHERMENT"},
+	{x509.KeyUsageKeyAgreement, "KEY_AGREEMENT"},
+	{x509.KeyUsageCertSign, "CERT_SIGN"},
+	{x509.KeyUsageCRLSign, "CRL_SIGN"},
+	{x509.KeyUsageEncipherOnly, "ENCIPHER_ONLY"},
+	{x509.KeyUsageDecipherOnly, "DECIPHER_ONLY"},
+}
+
+// extKeyUsages names each extended key usage the gRPC service reports;
+// any other usage is left out, as it is there.
+var extKeyUsages = map[x509.ExtKeyUsage]string{
+	x509.ExtKeyUsageAny:             "ANY",
+	x509.ExtKeyUsageServerAuth:      "SERVER_AUTH",
+	x509.ExtKeyUsageClientAuth:      "CLIENT_AUTH",
+	x509.ExtKeyUsageCodeSigning:     "CODE_SIGNING",
+	x509.ExtKeyUsageEmailProtection: "EMAIL_PROTECTION",
+	x509.ExtKeyUsageTimeStamping:    "TIME_STAMPING",
+	x509.ExtKeyUsageOCSPSigning:     "OCSP_SIGNING",
+}
+
+// keyUsageNames names the key usages set in usage, in bit order.
+func keyUsageNames(usage x509.KeyUsage) []string {
+	var names []string
+	for _, ku := range keyUsageBits {
+		if usage&ku.bit != 0 {
+			names = append(names, ku.name)
+		}
+	}
+	return names
+}
+
+// extKeyUsageNames names the extended key usages in usages, in their order.
+func extKeyUsageNames(usages []x509.ExtKeyUsage) []string {
+	var names []string
+	for _, u := range usages {
+		if name, ok := extKeyUsages[u]; ok {
+			names = append(names, name)
+		}
+	}
+	return names
 }
 
 func (h *CAHandler) certToSummary(cert *x509.Certificate) *CertificateSummary {

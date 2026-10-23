@@ -118,7 +118,7 @@ func (m *MCPServiceProvider) VMMetrics(ctx context.Context, vmID string) (interf
 	}
 	metrics, err := reader.GetVMMetrics(ctx, vmID)
 	if err != nil {
-		return nil, err
+		return nil, classifyComputeErr(err, vmOpsErrToStatus)
 	}
 	return map[string]interface{}{
 		"vm_id":               vmID,
@@ -147,7 +147,7 @@ func (m *MCPServiceProvider) VMDiskAttach(ctx context.Context, vmID string, spec
 		Readonly: spec.Readonly,
 	})
 	if err != nil {
-		return nil, err
+		return nil, classifyComputeErr(err, vmOpsErrToStatus)
 	}
 	return map[string]interface{}{
 		"vm_id":     vmID,
@@ -167,7 +167,7 @@ func (m *MCPServiceProvider) VMDiskDetach(ctx context.Context, vmID, diskID stri
 	if err != nil {
 		return err
 	}
-	return mgr.DetachDisk(ctx, vmID, diskID)
+	return classifyComputeErr(mgr.DetachDisk(ctx, vmID, diskID), vmOpsErrToStatus)
 }
 
 // VMDiskResize changes a disk's virtual size.
@@ -176,7 +176,7 @@ func (m *MCPServiceProvider) VMDiskResize(ctx context.Context, vmID, diskID stri
 	if err != nil {
 		return err
 	}
-	return mgr.ResizeDisk(ctx, vmID, diskID, newSizeGB)
+	return classifyComputeErr(mgr.ResizeDisk(ctx, vmID, diskID, newSizeGB), vmOpsErrToStatus)
 }
 
 // VMLogsSnapshot returns a bounded, non-following snapshot of a VM's serial
@@ -199,7 +199,7 @@ func (m *MCPServiceProvider) VMLogsSnapshot(ctx context.Context, vmID string, ta
 		return nil
 	}
 	if err := streamer.StreamVMLogs(ctx, vmID, compute.VMLogOptions{Follow: false, TailLines: tailLines}, sink); err != nil {
-		return nil, err
+		return nil, classifyComputeErr(err, vmOpsErrToStatus)
 	}
 	return map[string]interface{}{
 		"vm_id":   vmID,
@@ -221,7 +221,7 @@ func (m *MCPServiceProvider) VMMigrate(ctx context.Context, vmID, destinationHos
 		BandwidthLimitMbps: bandwidthMbps,
 	})
 	if err != nil {
-		return nil, err
+		return nil, classifyComputeErr(err, migrateVMErrToStatus)
 	}
 	return map[string]interface{}{
 		"vm_id":            vmID,

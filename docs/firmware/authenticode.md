@@ -1,5 +1,8 @@
 # Authenticode Signing Package
 
+> **Status: REFERENCE** · Last verified: 2026-10-15
+> The Authenticode signer in `pkg/authenticode`.
+
 ## Overview
 
 The Authenticode package (`pkg/authenticode`) provides native Go implementation of Microsoft Authenticode signing for PE/COFF (Portable Executable) files. This is primarily used for signing EFI binaries to enable UEFI Secure Boot verification.
@@ -32,12 +35,12 @@ The signing process:
 | Native Go Implementation | No external tool dependencies (sbsigntool, osslsigncode) |
 | Hardware Key Support | TPM 2.0, PKCS#11 (HSM), and software keystores |
 | RSA and ECDSA | Supports both signature algorithms |
-| Full PKCS#7 Compliance | Compatible with sbverify, osslsigncode verification |
+| PKCS#7 SignedData | `sbverify` accepts the signatures (`test/integration/secureboot/ovmf_test.go`) |
 | Certificate Chain | Embeds full certificate chain in signature |
 | PE32/PE32+ Support | Both 32-bit and 64-bit PE formats |
 | Signature Verification | Verify existing Authenticode signatures |
 | Certificate Extraction | Extract signing certificate from signed binaries |
-| RFC3161 Timestamps | Optional timestamping support (placeholder) |
+| RFC3161 Timestamps | Optional TSA countersignature, embedded and verified; a failed stamp fails signing |
 
 ## Architecture
 
@@ -125,7 +128,8 @@ type Authenticode interface {
     // Sign signs a PE/COFF file with Authenticode signature
     Sign(input io.Reader, output io.Writer) error
 
-    // SignFile signs a PE/COFF file and writes the signed output
+    // SignFile signs a PE/COFF file and writes the signed output. The output
+    // is replaced atomically, so outputPath may equal inputPath.
     SignFile(inputPath, outputPath string) error
 
     // Verify verifies an Authenticode signature on a PE/COFF file
@@ -147,10 +151,10 @@ type Authenticode interface {
 ```go
 type SignerOptions struct {
     // KeyStore is the keystore backend (TPM, PKCS#11, or PKCS8)
-    KeyStore types.Backend
+    KeyStore xkmssdk.KeyProvider
 
     // KeyAttributes identifies which key to use for signing
-    KeyAttributes *types.KeyAttributes
+    KeyAttributes *xkmssdk.KeyAttributes
 
     // Certificate is the code signing certificate
     Certificate *x509.Certificate
@@ -166,13 +170,26 @@ type SignerOptions struct {
 }
 ```
 
+`xkmssdk` is `github.com/jeremyhahn/go-quicbaas/sdk/go/xkms`.
+
+A non-empty `TimestampURL` makes `Sign` request an RFC 3161 countersignature
+over the signature from that time-stamp authority. The token must verify and
+carry the request's nonce; it is embedded as an unauthenticated attribute, and
+`Verify` checks every embedded timestamp. A TSA that cannot stamp returns a
+`*TimestampError` and fails the signing.
+
 ### Constructor
 
 ```go
-func NewSigner(opts *SignerOptions) (Authenticode, error)
+func NewSigner(ctx context.Context, opts *SignerOptions) (Authenticode, error)
+func NewFileSigner(ctx context.Context, keyPath, certPath string, logger *logging.Logger) (Authenticode, error)
+func NewCryptoSigner(ctx context.Context, signer crypto.Signer, cert *x509.Certificate, logger *logging.Logger) (Authenticode, error)
+func NewVerifier(ctx context.Context, logger *logging.Logger) Authenticode
 ```
 
-Creates a new Authenticode signer. Returns an error if:
+`NewFileSigner` signs with a PEM key and certificate; `NewCryptoSigner` with
+any `crypto.Signer`; `NewVerifier` returns a value that only verifies and
+extracts. `NewSigner` returns an error if:
 - KeyStore is nil
 - KeyAttributes is nil
 - Certificate is nil
@@ -188,22 +205,14 @@ func SigningTime(input io.Reader) (time.Time, error)
 
 ## Usage Examples
 
-### Basic Signing with Software Key
+### Signing with a PEM Key File
 
 ```go
 import (
     "github.com/jeremyhahn/go-trusted-platform/pkg/authenticode"
-    xkmssdk "github.com/jeremyhahn/go-xkms/sdk/go"
 )
 
-// Create signer with PKCS#8 software keystore
-signer, err := authenticode.NewSigner(&authenticode.SignerOptions{
-    KeyStore:      pkcs8Backend,
-    KeyAttributes: &xkmssdk.KeyAttributes{CN: "secure-boot-db"},
-    Certificate:   dbCert,
-    CertChain:     []*x509.Certificate{intermediateCert, rootCert},
-    Logger:        logger,
-})
+signer, err := authenticode.NewFileSigner(ctx, "DB.key", "DB.crt", logger)
 if err != nil {
     log.Fatal(err)
 }
@@ -215,76 +224,28 @@ if err != nil {
 }
 ```
 
-### Signing with TPM-Backed Key
+### Signing with a Keystore Key
 
 ```go
 import (
+    xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
     "github.com/jeremyhahn/go-trusted-platform/pkg/authenticode"
-    xkmssdk "github.com/jeremyhahn/go-xkms/sdk/go"
 )
 
-// Create TPM backend using SDK
-tpmBackend, err := xkmssdk.NewTPM2Backend(&xkmssdk.TPMConfig{
-    DevicePath: "/dev/tpmrm0",
-})
-if err != nil {
-    log.Fatal(err)
-}
-
-// Create signer with TPM keystore
-signer, err := authenticode.NewSigner(&authenticode.SignerOptions{
-    KeyStore:      tpmBackend,
-    KeyAttributes: &xkmssdk.KeyAttributes{
-        CN:          "secure-boot-db",
-        KeyType:     xkmssdk.KeyTypeRSA,
-        KeySize:     2048,
-        StoreType:   xkmssdk.StoreTypeTPM2,
-    },
+// keyStore is any xkmssdk.KeyProvider: a TPM 2.0, PKCS#11 or software
+// backend built through the go-quicbaas SDK re-exports.
+signer, err := authenticode.NewSigner(ctx, &authenticode.SignerOptions{
+    KeyStore:      keyStore,
+    KeyAttributes: &xkmssdk.KeyAttributes{CN: "secure-boot-db"},
     Certificate:   dbCert,
+    CertChain:     []*x509.Certificate{intermediateCert, rootCert},
     Logger:        logger,
 })
 if err != nil {
     log.Fatal(err)
 }
 
-// Sign EFI binary with hardware-protected key
 err = signer.SignFile("grubx64.efi", "grubx64-signed.efi")
-```
-
-### Signing with PKCS#11 HSM
-
-```go
-import (
-    "github.com/jeremyhahn/go-trusted-platform/pkg/authenticode"
-    xkmssdk "github.com/jeremyhahn/go-xkms/sdk/go"
-)
-
-// Create PKCS#11 backend using SDK
-hsmBackend, err := xkmssdk.NewPKCS11Backend(&xkmssdk.PKCS11Config{
-    Library: "/usr/lib/softhsm/libsofthsm2.so",
-    Slot:    0,
-    PIN:     "1234",
-})
-if err != nil {
-    log.Fatal(err)
-}
-
-// Create signer with HSM keystore
-signer, err := authenticode.NewSigner(&authenticode.SignerOptions{
-    KeyStore:      hsmBackend,
-    KeyAttributes: &xkmssdk.KeyAttributes{
-        CN:        "code-signing-key",
-        StoreType: xkmssdk.StoreTypePKCS11,
-    },
-    Certificate:   signingCert,
-    CertChain:     certChain,
-    Logger:        logger,
-})
-if err != nil {
-    log.Fatal(err)
-}
-
-err = signer.SignFile("shimx64.efi", "shimx64-signed.efi")
 ```
 
 ### Verifying Signatures
@@ -330,29 +291,26 @@ if err == nil {
 
 ```bash
 # Sign an EFI binary
-platformd authenticode sign \
+platformctl authenticode sign \
     --key /path/to/DB.key \
     --cert /path/to/DB.crt \
     --input bootx64.efi \
-    --output bootx64-signed.efi
+    --out bootx64-signed.efi
 
-# Verify a signature
-platformd authenticode verify \
+# Verify a signature (--cert is optional)
+platformctl authenticode verify \
     --cert /path/to/DB.crt \
     --input bootx64-signed.efi
-
-# Sign with TPM key
-platformd authenticode sign \
-    --keystore tpm \
-    --key-cn secure-boot-db \
-    --cert /path/to/DB.crt \
-    --input kernel.efi \
-    --output kernel-signed.efi
 ```
+
+The CLI signs with a PEM key file only (`pkg/cli/commands/authenticode`); it
+has no keystore or TPM option.
 
 ## Integration with TPM/HSM Key Stores
 
-The Authenticode package integrates with the go-xkms library to support hardware-backed signing operations. The key never leaves the secure hardware.
+`NewSigner` signs through any `xkmssdk.KeyProvider`, the go-xkms keystore
+surface re-exported by the go-quicbaas SDK, so a hardware-backed key never
+leaves the hardware.
 
 ### Supported Backends
 
@@ -400,16 +358,14 @@ Signed binaries are compatible with standard verification tools:
 # Verify with sbverify (sbsigntool)
 sbverify --cert DB.crt bootx64-signed.efi
 
-# Verify with osslsigncode
-osslsigncode verify -CAfile ca-bundle.crt bootx64-signed.efi
-
 # UEFI firmware verification
 # Happens automatically during Secure Boot
 ```
 
 ## Error Handling
 
-The package returns typed errors for proper error handling:
+Errors are `*MessageError` and `*WrappedError` (`pkg/authenticode/errors.go`)
+carrying the messages below; `NewSigner` returns the keystore ones:
 
 ```go
 err := signer.SignFile(input, output)
@@ -435,5 +391,5 @@ if err != nil {
 - [UEFI Secure Boot](uefi-secure-boot.md) - UEFI Secure Boot concepts
 - [Firmware Architecture](architecture.md) - Overall firmware architecture
 - [API Reference](api-reference.md) - Firmware CLI commands
-- [KMS API Reference](/docs/kms/api-reference.md) - Key management integration
-- [TPM CLI Usage](/docs/tpm/cli-usage.md) - TPM key operations
+- [KMS API Reference](../kms/api.md) - Key management integration
+- [TPM CLI Usage](../tpm/cli-usage.md) - TPM key operations

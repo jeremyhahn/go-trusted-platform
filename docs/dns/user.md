@@ -18,9 +18,8 @@ state rather than hand-maintained.
 ## Before anything else: there is no `platformctl dns`
 
 Every task below is an API call. The CLI group does not exist
-([cli.md](cli.md)), and a document in this folder
-([cli-reference.md](cli-reference.md)) describes one that was never built — it is
-fenced with an archive banner. Use REST or gRPC.
+([cli.md](cli.md)), and a deleted document
+(cli-reference.md) described one that was never built. Use REST or gRPC.
 
 ---
 
@@ -44,14 +43,9 @@ is not already taken.** Decide deliberately:
 
 ### 2. Which DNSSEC key store you are using
 
-Three backends exist. The **quicbaas KMS key store generates a local placeholder
-key pair** rather than fetching the key from the KMS — the code says so at
-`pkg/dns/dnssec_keystore_quicbaas.go:597`.
-
-Zones signed with such a key validate normally, which is exactly the problem:
-nothing looks wrong, and the key is not actually under KMS management, rotation
-or audit. If DNSSEC key custody matters to you, use the xkms-backed key store
-and confirm which backend is configured before signing anything.
+Three backends exist. Each keeps the private key in its KMS and publishes the
+matching public key as the zone's DNSKEY; confirm which backend is configured
+before signing anything.
 
 ---
 
@@ -103,19 +97,19 @@ MCP route for signing or status.
 
 ---
 
-## Operational verbs are QUIC-only
+## Operational reads are QUIC-only
 
-Four things an operator regularly wants have **no REST and no gRPC route**:
+Two things an operator regularly wants have **no REST and no gRPC route**:
 
 | Task | QUIC opcode |
 |---|---|
-| Flush the DNS cache | `OpDNSFlushCache` (`0x2D`) |
 | Read DNS metrics | `OpDNSGetMetrics` (`0x2C`) |
 | Read DNS config | `OpDNSGetConfig` (`0x2A`) |
-| Update DNS config | `OpDNSUpdateConfig` (`0x2B`) |
 
-If you do not have a QUIC client, you cannot flush the cache. That is a real
-constraint on day-to-day operation, recorded as a gap in [api.md](api.md).
+There is no way to change DNS config at runtime or to flush a cache on any
+transport: change the configuration and restart. The two QUIC opcodes that
+claimed those verbs never did anything and were retired (#317); see
+[api.md](api.md) §2.
 
 ---
 
@@ -212,8 +206,9 @@ It is outside the thirteen supported types.
 The name is taken. With registration open, it may have been taken by somebody
 else — see "zone registration does not verify ownership" above.
 
-**Everything returns 503.**
-The DNS service is not wired into the daemon. Configuration, not a crash.
+**Everything returns 503 (gRPC `UNAVAILABLE`, reason `SERVICE_NOT_CONFIGURED`).**
+The daemon configuration has no `dns:` section, so no DNS service started.
+Configuration, not a crash.
 
 **Hand edits to the CoreDNS Corefile keep disappearing.**
 The Corefile is generated from platform state. Change the platform's zones and
@@ -227,5 +222,4 @@ forwarder configuration instead.
 - [engineering.md](engineering.md) — the two known defects, in detail
 - [architecture.md](architecture.md) — how zones, DNSSEC and the resolver compose
 - [dnssec.md](dnssec.md), [dnssec-rollover.md](dnssec-rollover.md),
-  [dane.md](dane.md), [dot-doh.md](dot-doh.md) — deep dives (not re-verified in
-  the 2026-08-18 pass)
+  [dane.md](dane.md), [dot-doh.md](dot-doh.md) — deep dives

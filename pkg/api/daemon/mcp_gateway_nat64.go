@@ -48,50 +48,17 @@ func gatewayNAT64Status(ctx context.Context, backend GatewayNAT64Interface) (int
 // MCPServiceProvider — gateway NAT64 operations
 // =============================================================================
 
-// SetGatewayNAT64 wires the NAT64 backend into the MCP service provider. A
-// nil backend leaves the tool reporting the service unavailable.
-func (m *MCPServiceProvider) SetGatewayNAT64(n GatewayNAT64Interface) {
-	m.gatewayNAT64 = n
-}
-
 // requireGatewayNAT64 resolves the translator backend or reports it absent.
 func (m *MCPServiceProvider) requireGatewayNAT64() (GatewayNAT64Interface, error) {
-	if m.gatewayNAT64 == nil {
+	if m.gatewayBackends == nil || m.gatewayBackends.NAT64() == nil {
 		return nil, ErrServiceNotAvailable{Service: "nat64"}
 	}
-	return m.gatewayNAT64, nil
+	return m.gatewayBackends.NAT64(), nil
 }
 
 // GatewayNAT64Status returns the NAT64 translator's health snapshot.
 func (m *MCPServiceProvider) GatewayNAT64Status(ctx context.Context) (interface{}, error) {
 	backend, err := m.requireGatewayNAT64()
-	if err != nil {
-		return nil, err
-	}
-	return gatewayNAT64Status(ctx, backend)
-}
-
-// =============================================================================
-// PlatformServiceProvider — gateway NAT64 operations
-// =============================================================================
-
-// SetGatewayNAT64 wires the NAT64 backend into the platform service
-// provider.
-func (p *PlatformServiceProvider) SetGatewayNAT64(n GatewayNAT64Interface) {
-	p.gatewayNAT64 = n
-}
-
-// requireGatewayNAT64 resolves the translator backend or reports it absent.
-func (p *PlatformServiceProvider) requireGatewayNAT64() (GatewayNAT64Interface, error) {
-	if p.gatewayNAT64 == nil {
-		return nil, ErrServiceNotAvailable{Service: "nat64"}
-	}
-	return p.gatewayNAT64, nil
-}
-
-// GatewayNAT64Status returns the NAT64 translator's health snapshot.
-func (p *PlatformServiceProvider) GatewayNAT64Status(ctx context.Context) (interface{}, error) {
-	backend, err := p.requireGatewayNAT64()
 	if err != nil {
 		return nil, err
 	}

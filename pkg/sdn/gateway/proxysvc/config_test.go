@@ -80,6 +80,23 @@ func TestConfigValidateErrors(t *testing.T) {
 			field:  "platformd.grpc-addr",
 		},
 		{
+			name: "grpc without a client identity",
+			mutate: func(c *Config) {
+				c.Platformd.Protocol = PlatformdProtocolGRPC
+				c.Platformd.GRPCAddr = "platformd:10443"
+			},
+			field: "platformd",
+		},
+		{
+			name: "grpc client cert without key",
+			mutate: func(c *Config) {
+				c.Platformd.Protocol = PlatformdProtocolGRPC
+				c.Platformd.GRPCAddr = "platformd:10443"
+				c.Platformd.CertFile = "/etc/gatewayd/platformd-client.pem"
+			},
+			field: "platformd",
+		},
+		{
 			name:   "cert without key",
 			mutate: func(c *Config) { c.TLS.CertFile = "/etc/gatewayd/server.pem" },
 			field:  "tls",
@@ -101,6 +118,30 @@ func TestConfigValidateErrors(t *testing.T) {
 			}
 			if cfgErr.Field != tc.field {
 				t.Fatalf("Field = %q, want %q", cfgErr.Field, tc.field)
+			}
+		})
+	}
+}
+
+func TestPlatformdConfigValidateAcceptsEitherGRPCIdentity(t *testing.T) {
+	tests := []struct {
+		name   string
+		config PlatformdConfig
+	}{
+		{"unix needs no identity", PlatformdConfig{Protocol: PlatformdProtocolUnix}},
+		{"grpc with a client certificate", PlatformdConfig{
+			Protocol: PlatformdProtocolGRPC, GRPCAddr: "platformd:10443",
+			CertFile: "/etc/gatewayd/platformd-client.pem", KeyFile: "/etc/gatewayd/platformd-client-key.pem",
+		}},
+		{"grpc with a token file", PlatformdConfig{
+			Protocol: PlatformdProtocolGRPC, GRPCAddr: "platformd:10443",
+			TokenFile: "/etc/gatewayd/platformd.token",
+		}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := tc.config.Validate(); err != nil {
+				t.Fatalf("Validate: %v", err)
 			}
 		})
 	}
@@ -132,7 +173,6 @@ func TestEngineConfigConversion(t *testing.T) {
 				BackendZone:        "services",
 				RequireAttestation: true,
 				AttestationMaxAge:  time.Minute,
-				RequiredRoles:      []string{"admin"},
 				RequiredScopes:     []string{"read"},
 				OPAPolicy:          "policy.rego",
 				TokenZone:          "edge",
@@ -162,7 +202,7 @@ func TestEngineConfigConversion(t *testing.T) {
 	if route.PoolID != "backend" || !route.Auth.RequireIDevID || route.Auth.AttestationMaxAge != time.Minute {
 		t.Fatalf("route not converted: %+v", route)
 	}
-	if route.Auth.OPAPolicy != "policy.rego" || route.Auth.RequiredRoles[0] != "admin" ||
+	if route.Auth.OPAPolicy != "policy.rego" || route.Auth.RequiredScopes[0] != "read" ||
 		route.Auth.TokenZone != "edge" {
 		t.Fatalf("route auth not converted: %+v", route.Auth)
 	}

@@ -16,6 +16,7 @@ package mcp
 import (
 	"bufio"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	stderrors "errors"
 	"fmt"
@@ -28,7 +29,10 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/channelbind"
+	tpconfig "github.com/jeremyhahn/go-trusted-platform/pkg/config"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/mcpwire"
 )
 
 // Config contains MCP server configuration.
@@ -45,6 +49,12 @@ type Config struct {
 	// HTTPAddr is the HTTP listen address (for HTTP transport)
 	HTTPAddr string
 
+	// TLSConfig is the server TLS configuration for the HTTP transport. It
+	// is required: the HTTP transport serves TLS 1.3 only, and Start
+	// refuses with HTTPTLSRequiredError when TLSConfig carries no server
+	// certificate. There is no plaintext mode. Unused by stdio.
+	TLSConfig *tls.Config
+
 	// RequestTimeout is the default timeout for operations
 	RequestTimeout time.Duration
 
@@ -57,6 +67,12 @@ type Config struct {
 	// AuthManager for validating tokens (optional)
 	AuthManager AuthManager
 
+	// PeerAuthenticator authenticates a tokenless request by the verified
+	// client certificate of its TLS connection (mTLS), as REST, gRPC and
+	// QUIC do (optional). A presented bearer token is still validated by the
+	// token backend.
+	PeerAuthenticator PeerAuthenticator
+
 	// OAuthMetadata is the OAuth 2.1 Protected Resource Metadata configuration.
 	// Required for OAuth 2.1 compliance per RFC 9728.
 	OAuthMetadata *OAuthMetadataConfig
@@ -68,7 +84,7 @@ func DefaultConfig() *Config {
 		ServerName:            "Trusted Platform MCP Server",
 		ServerVersion:         "1.0.0",
 		Transport:             "http",
-		HTTPAddr:              "127.0.0.1:9445",
+		HTTPAddr:              tpconfig.DefaultDaemonListeners().MCP.Address(),
 		RequestTimeout:        30 * time.Second,
 		MaxConcurrentRequests: 100,
 	}
@@ -91,8 +107,9 @@ type Server struct {
 	shutdown chan struct{}
 	wg       sync.WaitGroup
 
-	// HTTP server for HTTP transport
-	httpServer *http.Server
+	// HTTP server for HTTP transport, and the listener it serves TLS on
+	httpServer   *http.Server
+	httpListener net.Listener
 
 	// Tools and resources registry
 	tools     *ToolRegistry
@@ -117,7 +134,8 @@ func NewServer(svc ServiceProvider, config *Config, log *logging.Logger) *Server
 	}
 
 	// Initialize authorization checker
-	s.authChecker = NewAuthorizationChecker(config.AuthorizationService, config.AuthManager)
+	s.authChecker = NewAuthorizationChecker(config.AuthorizationService, config.AuthManager,
+		WithPeerAuthenticator(config.PeerAuthenticator))
 
 	// Initialize OAuth 2.1 metadata handler
 	s.oauthMetadata = NewOAuthMetadataHandler(config.OAuthMetadata)
@@ -134,7 +152,12 @@ func NewServer(svc ServiceProvider, config *Config, log *logging.Logger) *Server
 
 // SetAuthorizationService sets the authorization service for the server.
 func (s *Server) SetAuthorizationService(authService AuthorizationService, authManager AuthManager) {
-	s.authChecker = NewAuthorizationChecker(authService, authManager)
+	// Keep the certificate authenticator the server was built with.
+	var peers PeerAuthenticator
+	if s.authChecker != nil {
+		peers = s.authChecker.peerAuthenticator
+	}
+	s.authChecker = NewAuthorizationChecker(authService, authManager, WithPeerAuthenticator(peers))
 	s.tools.SetAuthorizationChecker(s.authChecker)
 }
 
@@ -154,11 +177,11 @@ func (s *Server) GetOAuthMetadataHandler() *OAuthMetadataHandler {
 // Start starts the MCP server with the configured transport.
 func (s *Server) Start() error {
 	if s.running.Swap(true) {
-		return &MessageError{Msg: "server already running"}
+		return &mcpwire.MessageError{Msg: "server already running"}
 	}
 
-	s.logger.Info("Starting MCP server transport=%s server=%s version=%s",
-		s.config.Transport, s.config.ServerName, s.config.ServerVersion)
+	s.logger.Info("Starting MCP server",
+		"transport", s.config.Transport, "server", s.config.ServerName, "version", s.config.ServerVersion)
 
 	switch s.config.Transport {
 	case "stdio":
@@ -167,14 +190,14 @@ func (s *Server) Start() error {
 		return s.startHTTPTransport()
 	default:
 		s.running.Store(false)
-		return &MessageError{Msg: fmt.Sprintf("unsupported transport: %s", s.config.Transport)}
+		return &mcpwire.MessageError{Msg: fmt.Sprintf("unsupported transport: %s", s.config.Transport)}
 	}
 }
 
 // Stop gracefully shuts down the MCP server.
 func (s *Server) Stop() error {
 	if !s.running.Swap(false) {
-		return &MessageError{Msg: "server not running"}
+		return &mcpwire.MessageError{Msg: "server not running"}
 	}
 
 	s.logger.Info("Stopping MCP server")
@@ -232,17 +255,20 @@ func (s *Server) handleStdioRequests() {
 			}
 
 			// Parse JSON-RPC request
-			var req JSONRPCRequest
+			var req mcpwire.JSONRPCRequest
 			if err := json.Unmarshal(line, &req); err != nil {
-				resp := s.makeErrorResponse(nil, ParseError, "Parse error", err.Error())
+				resp := s.makeErrorResponse(nil, mcpwire.ParseError, "Parse error", err.Error())
 				if err := encoder.Encode(resp); err != nil {
 					s.logger.Errorf("Failed to write error response: %v", err)
 				}
 				continue
 			}
 
-			// Handle request with timeout
+			// Handle request with timeout. stdio has no TLS connection, so
+			// a quote requested over it is refused rather than produced
+			// unbound.
 			ctx, cancel := context.WithTimeout(context.Background(), s.config.RequestTimeout)
+			ctx = channelbind.WithConnectionTLS(ctx, channelbind.TransportMCP, nil)
 			resp := s.handleRequest(ctx, &req)
 			cancel()
 
@@ -258,10 +284,10 @@ func (s *Server) handleStdioRequests() {
 	}
 }
 
-// startHTTPTransport starts the HTTP transport (JSON-RPC over HTTP).
-func (s *Server) startHTTPTransport() error {
-	s.logger.Info("Starting HTTP transport addr=%s", s.config.HTTPAddr)
-
+// Handler returns the HTTP transport's routes: the RFC 9728 metadata
+// endpoint, JSON-RPC on /mcp and /health. startHTTPTransport serves it on
+// the configured address; callers that own their listener can mount it.
+func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 
 	// OAuth 2.1 Protected Resource Metadata (RFC 9728)
@@ -272,30 +298,83 @@ func (s *Server) startHTTPTransport() error {
 	mux.HandleFunc("/mcp", s.handleHTTPRequest)
 	mux.HandleFunc("/health", s.handleHealthCheck)
 
+	return mux
+}
+
+// startHTTPTransport starts the HTTP transport (JSON-RPC over HTTPS). It
+// serves TLS 1.3 only and refuses to start without a server certificate;
+// there is no plaintext listener.
+func (s *Server) startHTTPTransport() error {
+	s.logger.Info("Starting HTTPS transport", "addr", s.config.HTTPAddr)
+
+	tlsConfig := serverTLSConfig(s.config.TLSConfig)
+	if tlsConfig == nil {
+		s.running.Store(false)
+		return &HTTPTLSRequiredError{Addr: s.config.HTTPAddr}
+	}
+
 	s.httpServer = &http.Server{
 		Addr:         s.config.HTTPAddr,
-		Handler:      mux,
+		Handler:      s.Handler(),
+		TLSConfig:    tlsConfig,
 		ReadTimeout:  s.config.RequestTimeout,
 		WriteTimeout: s.config.RequestTimeout,
 	}
 
-	// Start HTTP server in goroutine
+	// Bind before returning so a bad address fails Start instead of being
+	// logged from a goroutine after the daemon reports the server up.
+	listener, err := net.Listen("tcp", s.config.HTTPAddr)
+	if err != nil {
+		s.running.Store(false)
+		return &HTTPListenError{Addr: s.config.HTTPAddr, Err: err}
+	}
+	s.httpListener = listener
+
+	// Start HTTPS server in goroutine
 	s.wg.Add(1)
 	go func() {
 		defer s.wg.Done()
 
-		listener, err := net.Listen("tcp", s.config.HTTPAddr)
-		if err != nil {
-			s.logger.Errorf("Failed to listen on HTTP address: %v", err)
-			return
-		}
-
-		if err := s.httpServer.Serve(listener); err != nil && err != http.ErrServerClosed {
+		// The certificate comes from httpServer.TLSConfig, so no files.
+		if err := s.httpServer.ServeTLS(listener, "", ""); err != nil && err != http.ErrServerClosed {
 			s.logger.Errorf("HTTP server error: %v", err)
 		}
 	}()
 
 	return nil
+}
+
+// serverTLSConfig returns a clone of cfg pinned to TLS 1.3, or nil when cfg
+// cannot present a server certificate. The caller's config is not modified.
+func serverTLSConfig(cfg *tls.Config) *tls.Config {
+	if cfg == nil {
+		return nil
+	}
+	if len(cfg.Certificates) == 0 && cfg.GetCertificate == nil {
+		return nil
+	}
+
+	pinned := pinTLS13(cfg.Clone())
+
+	// A per-client config replaces this one for the handshake, so it is
+	// pinned too; otherwise it could reopen TLS 1.2.
+	if perClient := cfg.GetConfigForClient; perClient != nil {
+		pinned.GetConfigForClient = func(hello *tls.ClientHelloInfo) (*tls.Config, error) {
+			clientCfg, err := perClient(hello)
+			if err != nil || clientCfg == nil {
+				return clientCfg, err
+			}
+			return pinTLS13(clientCfg.Clone()), nil
+		}
+	}
+	return pinned
+}
+
+// pinTLS13 restricts cfg to TLS 1.3 and returns it.
+func pinTLS13(cfg *tls.Config) *tls.Config {
+	cfg.MinVersion = tls.VersionTLS13
+	cfg.MaxVersion = tls.VersionTLS13
+	return cfg
 }
 
 // handleHTTPRequest handles HTTP POST requests containing JSON-RPC payloads.
@@ -306,9 +385,9 @@ func (s *Server) handleHTTPRequest(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Parse JSON-RPC request
-	var req JSONRPCRequest
+	var req mcpwire.JSONRPCRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		resp := s.makeErrorResponse(nil, ParseError, "Parse error", err.Error())
+		resp := s.makeErrorResponse(nil, mcpwire.ParseError, "Parse error", err.Error())
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(resp)
 		return
@@ -318,7 +397,7 @@ func (s *Server) handleHTTPRequest(w http.ResponseWriter, r *http.Request) {
 	token := extractTokenFromHTTPRequest(r)
 
 	// Create context with token
-	ctx := ContextWithToken(r.Context(), token)
+	ctx := channelbind.WithConnectionTLS(ContextWithToken(r.Context(), token), channelbind.TransportMCP, r.TLS)
 
 	// Handle request
 	resp := s.handleRequest(ctx, &req)
@@ -337,17 +416,17 @@ func (s *Server) handleHealthCheck(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{
 		"status":  "healthy",
 		"version": s.config.ServerVersion,
-		"mcp":     MCPVersion,
+		"mcp":     mcpwire.MCPVersion,
 	})
 }
 
 // handleRequest processes a JSON-RPC request and returns a response.
-func (s *Server) handleRequest(ctx context.Context, req *JSONRPCRequest) *JSONRPCResponse {
-	s.logger.Debug("Handling MCP request method=%s id=%v", req.Method, req.ID)
+func (s *Server) handleRequest(ctx context.Context, req *mcpwire.JSONRPCRequest) *mcpwire.JSONRPCResponse {
+	s.logger.Debug("Handling MCP request", "method", req.Method, "id", req.ID)
 
 	// Validate JSON-RPC version
 	if req.JSONRPC != "2.0" {
-		return s.makeErrorResponse(req.ID, InvalidRequest, "Invalid request", "JSON-RPC version must be 2.0")
+		return s.makeErrorResponse(req.ID, mcpwire.InvalidRequest, "Invalid request", "JSON-RPC version must be 2.0")
 	}
 
 	// Route to appropriate handler
@@ -365,14 +444,14 @@ func (s *Server) handleRequest(ctx context.Context, req *JSONRPCRequest) *JSONRP
 	case "ping":
 		return s.handlePing(ctx, req)
 	default:
-		return s.makeErrorResponse(req.ID, MethodNotFound, "Method not found", fmt.Sprintf("Unknown method: %s", req.Method))
+		return s.makeErrorResponse(req.ID, mcpwire.MethodNotFound, "Method not found", fmt.Sprintf("Unknown method: %s", req.Method))
 	}
 }
 
 // handleInitialize handles the "initialize" method.
-func (s *Server) handleInitialize(ctx context.Context, req *JSONRPCRequest) *JSONRPCResponse {
+func (s *Server) handleInitialize(ctx context.Context, req *mcpwire.JSONRPCRequest) *mcpwire.JSONRPCResponse {
 	result := map[string]interface{}{
-		"protocolVersion": MCPVersion,
+		"protocolVersion": mcpwire.MCPVersion,
 		"serverInfo": map[string]interface{}{
 			"name":    s.config.ServerName,
 			"version": s.config.ServerVersion,
@@ -383,7 +462,7 @@ func (s *Server) handleInitialize(ctx context.Context, req *JSONRPCRequest) *JSO
 		},
 	}
 
-	return &JSONRPCResponse{
+	return &mcpwire.JSONRPCResponse{
 		JSONRPC: "2.0",
 		ID:      req.ID,
 		Result:  result,
@@ -391,14 +470,14 @@ func (s *Server) handleInitialize(ctx context.Context, req *JSONRPCRequest) *JSO
 }
 
 // handleToolsList handles the "tools/list" method.
-func (s *Server) handleToolsList(ctx context.Context, req *JSONRPCRequest) *JSONRPCResponse {
+func (s *Server) handleToolsList(ctx context.Context, req *mcpwire.JSONRPCRequest) *mcpwire.JSONRPCResponse {
 	tools := s.tools.ListTools()
 
 	result := map[string]interface{}{
 		"tools": tools,
 	}
 
-	return &JSONRPCResponse{
+	return &mcpwire.JSONRPCResponse{
 		JSONRPC: "2.0",
 		ID:      req.ID,
 		Result:  result,
@@ -406,16 +485,16 @@ func (s *Server) handleToolsList(ctx context.Context, req *JSONRPCRequest) *JSON
 }
 
 // handleToolsCall handles the "tools/call" method.
-func (s *Server) handleToolsCall(ctx context.Context, req *JSONRPCRequest) *JSONRPCResponse {
+func (s *Server) handleToolsCall(ctx context.Context, req *mcpwire.JSONRPCRequest) *mcpwire.JSONRPCResponse {
 	// Parse parameters
 	params, ok := req.Params.(map[string]interface{})
 	if !ok {
-		return s.makeErrorResponse(req.ID, InvalidParams, "Invalid params", "Params must be an object")
+		return s.makeErrorResponse(req.ID, mcpwire.InvalidParams, "Invalid params", "Params must be an object")
 	}
 
 	name, ok := params["name"].(string)
 	if !ok {
-		return s.makeErrorResponse(req.ID, InvalidParams, "Invalid params", "Missing or invalid 'name' parameter")
+		return s.makeErrorResponse(req.ID, mcpwire.InvalidParams, "Invalid params", "Missing or invalid 'name' parameter")
 	}
 
 	arguments, _ := params["arguments"].(map[string]interface{})
@@ -439,13 +518,13 @@ func (s *Server) handleToolsCall(ctx context.Context, req *JSONRPCRequest) *JSON
 	// Execute tool
 	result, err := s.tools.ExecuteTool(ctx, name, arguments)
 	if err != nil {
-		// Pass through the actual error message so clients can detect
-		// specific error conditions (e.g., "not implemented" for graceful skips).
-		// The tool name is included in the data field for debugging context.
-		return s.makeErrorResponse(req.ID, InternalError, err.Error(), name)
+		// The code carries the error's class (NotFound, InvalidArgument, ...)
+		// so clients decode the typed error gRPC and REST return; the
+		// message is the error text and the data field names the tool.
+		return s.makeErrorResponse(req.ID, toolErrorCode(err), err.Error(), name)
 	}
 
-	return &JSONRPCResponse{
+	return &mcpwire.JSONRPCResponse{
 		JSONRPC: "2.0",
 		ID:      req.ID,
 		Result:  result,
@@ -453,14 +532,14 @@ func (s *Server) handleToolsCall(ctx context.Context, req *JSONRPCRequest) *JSON
 }
 
 // handleResourcesList handles the "resources/list" method.
-func (s *Server) handleResourcesList(ctx context.Context, req *JSONRPCRequest) *JSONRPCResponse {
+func (s *Server) handleResourcesList(ctx context.Context, req *mcpwire.JSONRPCRequest) *mcpwire.JSONRPCResponse {
 	resources := s.resources.ListResources()
 
 	result := map[string]interface{}{
 		"resources": resources,
 	}
 
-	return &JSONRPCResponse{
+	return &mcpwire.JSONRPCResponse{
 		JSONRPC: "2.0",
 		ID:      req.ID,
 		Result:  result,
@@ -468,28 +547,27 @@ func (s *Server) handleResourcesList(ctx context.Context, req *JSONRPCRequest) *
 }
 
 // handleResourcesRead handles the "resources/read" method.
-func (s *Server) handleResourcesRead(ctx context.Context, req *JSONRPCRequest) *JSONRPCResponse {
+func (s *Server) handleResourcesRead(ctx context.Context, req *mcpwire.JSONRPCRequest) *mcpwire.JSONRPCResponse {
 	// Parse parameters
 	params, ok := req.Params.(map[string]interface{})
 	if !ok {
-		return s.makeErrorResponse(req.ID, InvalidParams, "Invalid params", "Params must be an object")
+		return s.makeErrorResponse(req.ID, mcpwire.InvalidParams, "Invalid params", "Params must be an object")
 	}
 
 	uri, ok := params["uri"].(string)
 	if !ok {
-		return s.makeErrorResponse(req.ID, InvalidParams, "Invalid params", "Missing or invalid 'uri' parameter")
+		return s.makeErrorResponse(req.ID, mcpwire.InvalidParams, "Invalid params", "Missing or invalid 'uri' parameter")
 	}
 
 	// Read resource
 	result, err := s.resources.ReadResource(ctx, uri)
 	if err != nil {
-		// Pass through the actual error message so clients can detect
-		// specific error conditions (e.g., "not implemented" for graceful skips).
-		// The resource URI is included in the data field for debugging context.
-		return s.makeErrorResponse(req.ID, InternalError, err.Error(), uri)
+		// As for tools: the code carries the error's class and the data
+		// field names the resource URI.
+		return s.makeErrorResponse(req.ID, toolErrorCode(err), err.Error(), uri)
 	}
 
-	return &JSONRPCResponse{
+	return &mcpwire.JSONRPCResponse{
 		JSONRPC: "2.0",
 		ID:      req.ID,
 		Result:  result,
@@ -497,41 +575,43 @@ func (s *Server) handleResourcesRead(ctx context.Context, req *JSONRPCRequest) *
 }
 
 // handlePing handles the "ping" method for connection testing.
-func (s *Server) handlePing(ctx context.Context, req *JSONRPCRequest) *JSONRPCResponse {
-	return &JSONRPCResponse{
+func (s *Server) handlePing(ctx context.Context, req *mcpwire.JSONRPCRequest) *mcpwire.JSONRPCResponse {
+	return &mcpwire.JSONRPCResponse{
 		JSONRPC: "2.0",
 		ID:      req.ID,
 		Result:  map[string]interface{}{"pong": true},
 	}
 }
 
-// handleAuthError converts an authorization error to a JSON-RPC error response.
-func (s *Server) handleAuthError(id interface{}, authErr *AuthorizationError) *JSONRPCResponse {
-	var code int
-	switch authErr.Type {
-	case AuthErrorMissingToken:
-		code = AuthenticationRequired
-	case AuthErrorInvalidToken:
-		code = InvalidToken
-	case AuthErrorPermissionDenied:
-		code = PermissionDenied
-	default:
-		code = InternalError
-	}
+// authErrorCodes maps each authorization failure to its JSON-RPC code. A
+// tool with no permission mapping is absent on purpose: it is a gap in the
+// platform's configuration, not the caller's, so it answers InternalError.
+var authErrorCodes = map[AuthErrorType]int{
+	AuthErrorMissingToken:       mcpwire.AuthenticationRequired,
+	AuthErrorInvalidToken:       mcpwire.InvalidToken,
+	AuthErrorPermissionDenied:   mcpwire.PermissionDenied,
+	AuthErrorServiceUnavailable: mcpwire.ServiceUnavailable,
+}
 
+// handleAuthError converts an authorization error to a JSON-RPC error response.
+func (s *Server) handleAuthError(id interface{}, authErr *AuthorizationError) *mcpwire.JSONRPCResponse {
+	code, ok := authErrorCodes[authErr.Type]
+	if !ok {
+		code = mcpwire.InternalError
+	}
 	return s.makeErrorResponse(id, code, authErr.Message, "")
 }
 
 // makeErrorResponse creates a JSON-RPC error response.
-func (s *Server) makeErrorResponse(id interface{}, code int, message string, data string) *JSONRPCResponse {
+func (s *Server) makeErrorResponse(id interface{}, code int, message string, data string) *mcpwire.JSONRPCResponse {
 	var dataVal interface{}
 	if data != "" {
 		dataVal = data
 	}
-	return &JSONRPCResponse{
+	return &mcpwire.JSONRPCResponse{
 		JSONRPC: "2.0",
 		ID:      id,
-		Error: &JSONRPCError{
+		Error: &mcpwire.JSONRPCError{
 			Code:    code,
 			Message: message,
 			Data:    dataVal,
@@ -558,15 +638,19 @@ func extractTokenFromHTTPRequest(r *http.Request) string {
 	return ""
 }
 
+// tokenArgumentKeys are the tool arguments that may carry the caller's
+// token, in the order extractTokenFromParams prefers them. They are the
+// transport's credential, not a tool argument.
+var tokenArgumentKeys = []string{"_token", "accessToken"}
+
 // extractTokenFromParams extracts the authentication token from MCP params.
 func extractTokenFromParams(params map[string]interface{}) string {
 	// Check for token in arguments
 	if args, ok := params["arguments"].(map[string]interface{}); ok {
-		if token, ok := args["_token"].(string); ok {
-			return token
-		}
-		if token, ok := args["accessToken"].(string); ok {
-			return token
+		for _, key := range tokenArgumentKeys {
+			if token, ok := args[key].(string); ok {
+				return token
+			}
 		}
 	}
 

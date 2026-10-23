@@ -87,7 +87,6 @@ message OverlayStatus {
   bool healthy = 7;
   uint32 vxlan_port = 8;              // VXLAN UDP port (typically 4789)
   uint32 underlay_mtu = 9;            // MTU of the underlay network
-  uint32 unpeered_vteps = 10;         // Overlay VTEPs absent from IPsec static-peers
 }
 
 // Request/Response messages

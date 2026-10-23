@@ -24,6 +24,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"os"
 	"sync/atomic"
 	"syscall"
 
@@ -124,6 +125,21 @@ type unixCredentialsKey struct{}
 // ContextWithUnixCredentials adds Unix credentials to a context.
 func ContextWithUnixCredentials(ctx context.Context, creds UnixCredentials) context.Context {
 	return context.WithValue(ctx, unixCredentialsKey{}, creds)
+}
+
+// ContextWithProcessCredentials adds this process's own credentials to a
+// context, replacing any already there. They are what SO_PEERCRED reports
+// for it: the PID and the effective UID and GID. An embedder of platformd's
+// services uses it to give in-process callers the identity a Unix socket
+// peer has.
+func ContextWithProcessCredentials(ctx context.Context) context.Context {
+	// Linux PIDs stay below pid_max (at most 2^22) and IDs are 32-bit
+	// kernel values, so the conversions are exact.
+	return ContextWithUnixCredentials(ctx, UnixCredentials{
+		PID: int32(os.Getpid()),
+		UID: uint32(os.Geteuid()),
+		GID: uint32(os.Getegid()),
+	})
 }
 
 // UnixCredentialsFromContext extracts Unix credentials from a context.

@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -31,6 +32,7 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/device"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
@@ -55,6 +57,14 @@ func newMockDeviceService() *mockDeviceService {
 	return &mockDeviceService{
 		devices: make(map[uint64]*entities.Device),
 	}
+}
+
+// Create assigns an id the way device.Service.Create does, then saves.
+func (m *mockDeviceService) Create(ctx context.Context, d *entities.Device) error {
+	if d.ID == 0 {
+		d.ID = device.NewID()
+	}
+	return m.Save(ctx, d)
 }
 
 func (m *mockDeviceService) Save(ctx context.Context, device *entities.Device) error {
@@ -143,6 +153,7 @@ func (m *mockDeviceService) addDevice(d *entities.Device) {
 }
 
 type mockProfileService struct {
+	updateOpts    []device.ProfileUpdateOption
 	profiles      map[uint64]*entities.DeviceProfile
 	saveErr       error
 	getErr        error
@@ -190,7 +201,8 @@ func (m *mockProfileService) Delete(ctx context.Context, profile *entities.Devic
 	return nil
 }
 
-func (m *mockProfileService) Update(ctx context.Context, profile *entities.DeviceProfile) error {
+func (m *mockProfileService) Update(ctx context.Context, profile *entities.DeviceProfile, opts ...device.ProfileUpdateOption) error {
+	m.updateOpts = opts
 	if m.updateErr != nil {
 		return m.updateErr
 	}
@@ -367,16 +379,6 @@ func TestDeviceHandlerErrors(t *testing.T) {
 		assert.Equal(t, "profile not found with ID: 456", err.Error())
 	})
 
-	t.Run("ErrDeviceSerialRequired", func(t *testing.T) {
-		err := ErrDeviceSerialRequired{}
-		assert.Equal(t, "device serial is required", err.Error())
-	})
-
-	t.Run("ErrDeviceAlreadyExists", func(t *testing.T) {
-		err := ErrDeviceAlreadyExists{Serial: "SN123"}
-		assert.Equal(t, "device already exists with serial: SN123", err.Error())
-	})
-
 	t.Run("ErrDeviceOperationFailed", func(t *testing.T) {
 		cause := errors.New("underlying error")
 		err := ErrDeviceOperationFailed{Operation: "register", Cause: cause}
@@ -484,7 +486,7 @@ func TestHandleRegisterDevice(t *testing.T) {
 		profileSvc := newMockProfileService()
 		_, router := setupDeviceTestHandler(deviceSvc, profileSvc)
 
-		reqBody := DeviceRegisterRequest{
+		reqBody := device.RequestFields{
 			Serial: "SN-12345",
 			Model:  "Model-A",
 		}
@@ -513,7 +515,7 @@ func TestHandleRegisterDevice(t *testing.T) {
 		profileSvc := newMockProfileService()
 		_, router := setupDeviceTestHandler(deviceSvc, profileSvc)
 
-		reqBody := DeviceRegisterRequest{
+		reqBody := device.RequestFields{
 			Serial:     "SN-99999",
 			Model:      "Model-B",
 			AttestPub:  "attest-pub-key",
@@ -551,7 +553,7 @@ func TestHandleRegisterDevice(t *testing.T) {
 		profileSvc := newMockProfileService()
 		_, router := setupDeviceTestHandler(deviceSvc, profileSvc)
 
-		reqBody := DeviceRegisterRequest{
+		reqBody := device.RequestFields{
 			Model: "Model-A",
 		}
 		body, _ := json.Marshal(reqBody)
@@ -589,7 +591,7 @@ func TestHandleRegisterDevice(t *testing.T) {
 		profileSvc := newMockProfileService()
 		_, router := setupDeviceTestHandler(nil, profileSvc)
 
-		reqBody := DeviceRegisterRequest{Serial: "SN-12345"}
+		reqBody := device.RequestFields{Serial: "SN-12345"}
 		body, _ := json.Marshal(reqBody)
 
 		req := httptest.NewRequest(http.MethodPost, "/api/v1/devices", bytes.NewReader(body))
@@ -610,7 +612,7 @@ func TestHandleRegisterDevice(t *testing.T) {
 		profileSvc := newMockProfileService()
 		_, router := setupDeviceTestHandler(deviceSvc, profileSvc)
 
-		reqBody := DeviceRegisterRequest{Serial: "SN-12345"}
+		reqBody := device.RequestFields{Serial: "SN-12345"}
 		body, _ := json.Marshal(reqBody)
 
 		req := httptest.NewRequest(http.MethodPost, "/api/v1/devices", bytes.NewReader(body))
@@ -730,8 +732,8 @@ func TestHandleListDevices(t *testing.T) {
 func TestHandleGetDevice(t *testing.T) {
 	t.Run("gets device successfully", func(t *testing.T) {
 		deviceSvc := newMockDeviceService()
-		device := &entities.Device{ID: 12345, Serial: "SN-12345", Model: "Model-A"}
-		deviceSvc.addDevice(device)
+		existing := &entities.Device{ID: 12345, Serial: "SN-12345", Model: "Model-A"}
+		deviceSvc.addDevice(existing)
 		profileSvc := newMockProfileService()
 		_, router := setupDeviceTestHandler(deviceSvc, profileSvc)
 
@@ -806,12 +808,12 @@ func TestHandleGetDevice(t *testing.T) {
 func TestHandleUpdateDevice(t *testing.T) {
 	t.Run("updates device successfully", func(t *testing.T) {
 		deviceSvc := newMockDeviceService()
-		device := &entities.Device{ID: 12345, Serial: "SN-12345", Model: "Model-A"}
-		deviceSvc.addDevice(device)
+		existing := &entities.Device{ID: 12345, Serial: "SN-12345", Model: "Model-A"}
+		deviceSvc.addDevice(existing)
 		profileSvc := newMockProfileService()
 		_, router := setupDeviceTestHandler(deviceSvc, profileSvc)
 
-		reqBody := DeviceUpdateRequest{
+		reqBody := device.RequestFields{
 			Model: "Model-B",
 		}
 		body, _ := json.Marshal(reqBody)
@@ -834,12 +836,12 @@ func TestHandleUpdateDevice(t *testing.T) {
 
 	t.Run("updates device with all fields", func(t *testing.T) {
 		deviceSvc := newMockDeviceService()
-		device := &entities.Device{ID: 12345, Serial: "SN-12345", Model: "Model-A"}
-		deviceSvc.addDevice(device)
+		existing := &entities.Device{ID: 12345, Serial: "SN-12345", Model: "Model-A"}
+		deviceSvc.addDevice(existing)
 		profileSvc := newMockProfileService()
 		_, router := setupDeviceTestHandler(deviceSvc, profileSvc)
 
-		reqBody := DeviceUpdateRequest{
+		reqBody := device.RequestFields{
 			Serial:     "SN-UPDATED",
 			Model:      "Model-C",
 			AttestPub:  "new-attest-pub",
@@ -877,7 +879,7 @@ func TestHandleUpdateDevice(t *testing.T) {
 		profileSvc := newMockProfileService()
 		_, router := setupDeviceTestHandler(deviceSvc, profileSvc)
 
-		reqBody := DeviceUpdateRequest{Model: "Model-B"}
+		reqBody := device.RequestFields{Model: "Model-B"}
 		body, _ := json.Marshal(reqBody)
 
 		req := httptest.NewRequest(http.MethodPut, "/api/v1/devices/invalid-id", bytes.NewReader(body))
@@ -894,8 +896,8 @@ func TestHandleUpdateDevice(t *testing.T) {
 
 	t.Run("returns error for invalid JSON", func(t *testing.T) {
 		deviceSvc := newMockDeviceService()
-		device := &entities.Device{ID: 12345, Serial: "SN-12345", State: entities.DeviceStateRegistered}
-		deviceSvc.addDevice(device)
+		existing := &entities.Device{ID: 12345, Serial: "SN-12345", State: entities.DeviceStateRegistered}
+		deviceSvc.addDevice(existing)
 		profileSvc := newMockProfileService()
 		_, router := setupDeviceTestHandler(deviceSvc, profileSvc)
 
@@ -916,7 +918,7 @@ func TestHandleUpdateDevice(t *testing.T) {
 		profileSvc := newMockProfileService()
 		_, router := setupDeviceTestHandler(deviceSvc, profileSvc)
 
-		reqBody := DeviceUpdateRequest{Model: "Model-B"}
+		reqBody := device.RequestFields{Model: "Model-B"}
 		body, _ := json.Marshal(reqBody)
 
 		req := httptest.NewRequest(http.MethodPut, "/api/v1/devices/99999", bytes.NewReader(body))
@@ -933,13 +935,13 @@ func TestHandleUpdateDevice(t *testing.T) {
 
 	t.Run("returns error when update fails", func(t *testing.T) {
 		deviceSvc := newMockDeviceService()
-		device := &entities.Device{ID: 12345, Serial: "SN-12345", State: entities.DeviceStateRegistered}
-		deviceSvc.addDevice(device)
+		existing := &entities.Device{ID: 12345, Serial: "SN-12345", State: entities.DeviceStateRegistered}
+		deviceSvc.addDevice(existing)
 		deviceSvc.updateErr = errors.New("update error")
 		profileSvc := newMockProfileService()
 		_, router := setupDeviceTestHandler(deviceSvc, profileSvc)
 
-		reqBody := DeviceUpdateRequest{Model: "Model-B"}
+		reqBody := device.RequestFields{Model: "Model-B"}
 		body, _ := json.Marshal(reqBody)
 
 		req := httptest.NewRequest(http.MethodPut, "/api/v1/devices/12345", bytes.NewReader(body))
@@ -958,7 +960,7 @@ func TestHandleUpdateDevice(t *testing.T) {
 		profileSvc := newMockProfileService()
 		_, router := setupDeviceTestHandler(nil, profileSvc)
 
-		reqBody := DeviceUpdateRequest{Model: "Model-B"}
+		reqBody := device.RequestFields{Model: "Model-B"}
 		body, _ := json.Marshal(reqBody)
 
 		req := httptest.NewRequest(http.MethodPut, "/api/v1/devices/12345", bytes.NewReader(body))
@@ -981,8 +983,8 @@ func TestHandleUpdateDevice(t *testing.T) {
 func TestHandleDeleteDevice(t *testing.T) {
 	t.Run("deletes device successfully", func(t *testing.T) {
 		deviceSvc := newMockDeviceService()
-		device := &entities.Device{ID: 12345, Serial: "SN-12345", State: entities.DeviceStateRegistered}
-		deviceSvc.addDevice(device)
+		existing := &entities.Device{ID: 12345, Serial: "SN-12345", State: entities.DeviceStateRegistered}
+		deviceSvc.addDevice(existing)
 		profileSvc := newMockProfileService()
 		_, router := setupDeviceTestHandler(deviceSvc, profileSvc)
 
@@ -1037,8 +1039,8 @@ func TestHandleDeleteDevice(t *testing.T) {
 
 	t.Run("returns error when delete fails", func(t *testing.T) {
 		deviceSvc := newMockDeviceService()
-		device := &entities.Device{ID: 12345, Serial: "SN-12345", State: entities.DeviceStateRegistered}
-		deviceSvc.addDevice(device)
+		existing := &entities.Device{ID: 12345, Serial: "SN-12345", State: entities.DeviceStateRegistered}
+		deviceSvc.addDevice(existing)
 		deviceSvc.deleteErr = errors.New("delete error")
 		profileSvc := newMockProfileService()
 		_, router := setupDeviceTestHandler(deviceSvc, profileSvc)
@@ -1077,8 +1079,8 @@ func TestHandleDeleteDevice(t *testing.T) {
 func TestHandleActivateDevice(t *testing.T) {
 	t.Run("activates device successfully", func(t *testing.T) {
 		deviceSvc := newMockDeviceService()
-		device := &entities.Device{ID: 12345, Serial: "SN-12345", State: entities.DeviceStateRegistered}
-		deviceSvc.addDevice(device)
+		existing := &entities.Device{ID: 12345, Serial: "SN-12345", State: entities.DeviceStateRegistered}
+		deviceSvc.addDevice(existing)
 		profileSvc := newMockProfileService()
 		_, router := setupDeviceTestHandler(deviceSvc, profileSvc)
 
@@ -1100,8 +1102,8 @@ func TestHandleActivateDevice(t *testing.T) {
 
 	t.Run("activates device with request body", func(t *testing.T) {
 		deviceSvc := newMockDeviceService()
-		device := &entities.Device{ID: 12345, Serial: "SN-12345", State: entities.DeviceStateRegistered}
-		deviceSvc.addDevice(device)
+		existing := &entities.Device{ID: 12345, Serial: "SN-12345", State: entities.DeviceStateRegistered}
+		deviceSvc.addDevice(existing)
 		profileSvc := newMockProfileService()
 		_, router := setupDeviceTestHandler(deviceSvc, profileSvc)
 
@@ -1122,8 +1124,8 @@ func TestHandleActivateDevice(t *testing.T) {
 
 	t.Run("returns error for invalid request body", func(t *testing.T) {
 		deviceSvc := newMockDeviceService()
-		device := &entities.Device{ID: 12345, Serial: "SN-12345", State: entities.DeviceStateRegistered}
-		deviceSvc.addDevice(device)
+		existing := &entities.Device{ID: 12345, Serial: "SN-12345", State: entities.DeviceStateRegistered}
+		deviceSvc.addDevice(existing)
 		profileSvc := newMockProfileService()
 		_, router := setupDeviceTestHandler(deviceSvc, profileSvc)
 
@@ -1397,8 +1399,8 @@ func TestHandleAttestDevice(t *testing.T) {
 func TestHandleGetDeviceState(t *testing.T) {
 	t.Run("gets device state successfully", func(t *testing.T) {
 		deviceSvc := newMockDeviceService()
-		device := &entities.Device{ID: 12345, Serial: "SN-12345", State: entities.DeviceStateRegistered}
-		deviceSvc.addDevice(device)
+		existing := &entities.Device{ID: 12345, Serial: "SN-12345", State: entities.DeviceStateRegistered}
+		deviceSvc.addDevice(existing)
 		profileSvc := newMockProfileService()
 		_, router := setupDeviceTestHandler(deviceSvc, profileSvc)
 
@@ -1474,8 +1476,8 @@ func TestHandleGetDeviceState(t *testing.T) {
 func TestHandleGetDeviceBySerial(t *testing.T) {
 	t.Run("gets device by serial successfully", func(t *testing.T) {
 		deviceSvc := newMockDeviceService()
-		device := &entities.Device{ID: 12345, Serial: "SN-12345", Model: "Model-A"}
-		deviceSvc.addDevice(device)
+		existing := &entities.Device{ID: 12345, Serial: "SN-12345", Model: "Model-A"}
+		deviceSvc.addDevice(existing)
 		profileSvc := newMockProfileService()
 		_, router := setupDeviceTestHandler(deviceSvc, profileSvc)
 
@@ -2161,23 +2163,33 @@ func TestHandleDeleteProfile(t *testing.T) {
 // Utility Function Tests
 // =============================================================================
 
-func TestGenerateDeviceID(t *testing.T) {
-	t.Run("generates deterministic ID from serial", func(t *testing.T) {
-		id1 := generateDeviceID("SN-12345")
-		id2 := generateDeviceID("SN-12345")
-		assert.Equal(t, id1, id2)
-		assert.NotZero(t, id1)
+func TestApplyDevicePatch(t *testing.T) {
+	stored := func() *entities.Device {
+		return &entities.Device{
+			ID: 7, Serial: "SN-1", Model: "M-1", AttestPub: "ap", AttestCert: "ac",
+			SigningPub: "sp", EKCert: "ek", EventLog: []byte{1}, HashAlgoId: 11,
+			SwitchName: "sw-1", SwitchPort: "p1", State: entities.DeviceStateActivated,
+		}
+	}
+
+	t.Run("copies every field the request set", func(t *testing.T) {
+		existing := stored()
+		applyDevicePatch(existing, &entities.Device{
+			Serial: "SN-2", Model: "M-2", AttestPub: "ap2", AttestCert: "ac2",
+			SigningPub: "sp2", EKCert: "ek2", EventLog: []byte{2}, HashAlgoId: 12,
+			SwitchName: "sw-2", SwitchPort: "p2",
+		})
+		assert.Equal(t, &entities.Device{
+			ID: 7, Serial: "SN-2", Model: "M-2", AttestPub: "ap2", AttestCert: "ac2",
+			SigningPub: "sp2", EKCert: "ek2", EventLog: []byte{2}, HashAlgoId: 12,
+			SwitchName: "sw-2", SwitchPort: "p2", State: entities.DeviceStateActivated,
+		}, existing)
 	})
 
-	t.Run("generates different IDs for different serials", func(t *testing.T) {
-		id1 := generateDeviceID("SN-12345")
-		id2 := generateDeviceID("SN-67890")
-		assert.NotEqual(t, id1, id2)
-	})
-
-	t.Run("returns zero for empty serial", func(t *testing.T) {
-		id := generateDeviceID("")
-		assert.Zero(t, id)
+	t.Run("an empty request changes nothing", func(t *testing.T) {
+		existing := stored()
+		applyDevicePatch(existing, &entities.Device{ID: 99, State: entities.DeviceStateQuarantined})
+		assert.Equal(t, stored(), existing, "id and state are not patchable through PUT")
 	})
 }
 
@@ -2238,6 +2250,10 @@ func TestIsAlreadyExistsError(t *testing.T) {
 	t.Run("returns true for already exists error", func(t *testing.T) {
 		assert.True(t, isAlreadyExistsError(errors.New("device already exists")))
 		assert.True(t, isAlreadyExistsError(errors.New("duplicate key")))
+	})
+
+	t.Run("returns true for a taken serial however it is wrapped", func(t *testing.T) {
+		assert.True(t, isAlreadyExistsError(fmt.Errorf("register: %w", device.ErrDeviceSerialExists{Serial: "SN1"})))
 	})
 
 	t.Run("returns false for other errors", func(t *testing.T) {
@@ -2345,7 +2361,7 @@ func TestWriteDeviceError(t *testing.T) {
 		profileSvc := newMockProfileService()
 		_, router := setupDeviceTestHandler(deviceSvc, profileSvc)
 
-		reqBody := DeviceRegisterRequest{Serial: "SN-12345"}
+		reqBody := device.RequestFields{Serial: "SN-12345"}
 		body, _ := json.Marshal(reqBody)
 
 		req := httptest.NewRequest(http.MethodPost, "/api/v1/devices", bytes.NewReader(body))
@@ -2362,13 +2378,13 @@ func TestWriteDeviceError(t *testing.T) {
 
 	t.Run("maps invalid ID error to bad request", func(t *testing.T) {
 		deviceSvc := newMockDeviceService()
-		device := &entities.Device{ID: 12345, Serial: "SN-12345", State: entities.DeviceStateRegistered}
-		deviceSvc.addDevice(device)
+		existing := &entities.Device{ID: 12345, Serial: "SN-12345", State: entities.DeviceStateRegistered}
+		deviceSvc.addDevice(existing)
 		deviceSvc.updateErr = errors.New("invalid device ID format")
 		profileSvc := newMockProfileService()
 		_, router := setupDeviceTestHandler(deviceSvc, profileSvc)
 
-		reqBody := DeviceUpdateRequest{Model: "Model-B"}
+		reqBody := device.RequestFields{Model: "Model-B"}
 		body, _ := json.Marshal(reqBody)
 
 		req := httptest.NewRequest(http.MethodPut, "/api/v1/devices/12345", bytes.NewReader(body))

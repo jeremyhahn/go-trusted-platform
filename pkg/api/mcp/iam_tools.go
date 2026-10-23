@@ -15,6 +15,9 @@ package mcp
 
 import (
 	"fmt"
+
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/mcpwire"
+	"google.golang.org/grpc/status"
 )
 
 // =============================================================================
@@ -29,6 +32,12 @@ type IAMError struct {
 
 func (e *IAMError) Error() string {
 	return fmt.Sprintf("%s: %s", e.Code, e.Message)
+}
+
+// GRPCStatus classifies the error by its Code (codeClass), so the MCP
+// server answers it with the matching JSON-RPC code.
+func (e *IAMError) GRPCStatus() *status.Status {
+	return codeStatus(e.Code, e.Error())
 }
 
 // ErrIAMServiceUnavailable indicates the IAM service is not available.
@@ -116,9 +125,30 @@ func (r *ToolRegistry) registerIAMTools() {
 	r.registerIAMTokenTools()
 }
 
+// iamPaginationSchema is the "pagination" argument of the IAM list tools, the
+// gRPC PaginationRequest.
+func iamPaginationSchema() map[string]interface{} {
+	return map[string]interface{}{
+		"type":        "object",
+		"description": "Page to return",
+		"properties": map[string]interface{}{
+			"page": map[string]interface{}{
+				"type":        "integer",
+				"description": "Page number, counting from 1",
+				"default":     1,
+			},
+			"page_size": map[string]interface{}{
+				"type":        "integer",
+				"description": "Items per page (default 50, at most 1000)",
+				"default":     50,
+			},
+		},
+	}
+}
+
 // registerIAMUserTools registers IAM user management tools.
 func (r *ToolRegistry) registerIAMUserTools() {
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "iam_create_user",
 		Description: "Create a new IAM user in a tenant",
 		InputSchema: map[string]interface{}{
@@ -155,7 +185,7 @@ func (r *ToolRegistry) registerIAMUserTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "iam_delete_user",
 		Description: "Delete an IAM user from a tenant",
 		InputSchema: map[string]interface{}{
@@ -174,7 +204,7 @@ func (r *ToolRegistry) registerIAMUserTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "iam_get_user",
 		Description: "Get IAM user details by ID",
 		InputSchema: map[string]interface{}{
@@ -193,7 +223,7 @@ func (r *ToolRegistry) registerIAMUserTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "iam_list_users",
 		Description: "List IAM users in a tenant with pagination",
 		InputSchema: map[string]interface{}{
@@ -203,15 +233,18 @@ func (r *ToolRegistry) registerIAMUserTools() {
 					"type":        "string",
 					"description": "Tenant ID",
 				},
-				"limit": map[string]interface{}{
-					"type":        "integer",
-					"description": "Maximum number of users to return",
-					"default":     50,
+				"pagination": iamPaginationSchema(),
+				"email_filter": map[string]interface{}{
+					"type":        "string",
+					"description": "Only users whose email matches this filter",
 				},
-				"offset": map[string]interface{}{
-					"type":        "integer",
-					"description": "Number of users to skip for pagination",
-					"default":     0,
+				"role_filter": map[string]interface{}{
+					"type":        "string",
+					"description": "Only users holding this role ID",
+				},
+				"group_filter": map[string]interface{}{
+					"type":        "string",
+					"description": "Only members of this group ID",
 				},
 			},
 			"required": []string{"tenant_id"},
@@ -221,7 +254,7 @@ func (r *ToolRegistry) registerIAMUserTools() {
 
 // registerIAMRoleTools registers IAM role management tools.
 func (r *ToolRegistry) registerIAMRoleTools() {
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "iam_create_role",
 		Description: "Create a new IAM role in a tenant",
 		InputSchema: map[string]interface{}{
@@ -253,7 +286,7 @@ func (r *ToolRegistry) registerIAMRoleTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "iam_delete_role",
 		Description: "Delete an IAM role from a tenant",
 		InputSchema: map[string]interface{}{
@@ -272,7 +305,7 @@ func (r *ToolRegistry) registerIAMRoleTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "iam_get_role",
 		Description: "Get IAM role details by ID",
 		InputSchema: map[string]interface{}{
@@ -291,7 +324,7 @@ func (r *ToolRegistry) registerIAMRoleTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "iam_list_roles",
 		Description: "List IAM roles in a tenant with pagination",
 		InputSchema: map[string]interface{}{
@@ -301,22 +334,13 @@ func (r *ToolRegistry) registerIAMRoleTools() {
 					"type":        "string",
 					"description": "Tenant ID",
 				},
-				"limit": map[string]interface{}{
-					"type":        "integer",
-					"description": "Maximum number of roles to return",
-					"default":     50,
-				},
-				"offset": map[string]interface{}{
-					"type":        "integer",
-					"description": "Number of roles to skip for pagination",
-					"default":     0,
-				},
+				"pagination": iamPaginationSchema(),
 			},
 			"required": []string{"tenant_id"},
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "iam_assign_role",
 		Description: "Assign a role to a user",
 		InputSchema: map[string]interface{}{
@@ -330,16 +354,16 @@ func (r *ToolRegistry) registerIAMRoleTools() {
 					"type":        "string",
 					"description": "User ID to assign the role to",
 				},
-				"role": map[string]interface{}{
+				"role_id": map[string]interface{}{
 					"type":        "string",
 					"description": "Role ID to assign",
 				},
 			},
-			"required": []string{"tenant_id", "user_id", "role"},
+			"required": []string{"tenant_id", "user_id", "role_id"},
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "iam_revoke_role",
 		Description: "Revoke a role from a user",
 		InputSchema: map[string]interface{}{
@@ -353,19 +377,19 @@ func (r *ToolRegistry) registerIAMRoleTools() {
 					"type":        "string",
 					"description": "User ID to revoke the role from",
 				},
-				"role": map[string]interface{}{
+				"role_id": map[string]interface{}{
 					"type":        "string",
 					"description": "Role ID to revoke",
 				},
 			},
-			"required": []string{"tenant_id", "user_id", "role"},
+			"required": []string{"tenant_id", "user_id", "role_id"},
 		},
 	})
 }
 
 // registerIAMGroupTools registers IAM group management tools.
 func (r *ToolRegistry) registerIAMGroupTools() {
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "iam_create_group",
 		Description: "Create a new IAM group in a tenant",
 		InputSchema: map[string]interface{}{
@@ -392,7 +416,7 @@ func (r *ToolRegistry) registerIAMGroupTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "iam_delete_group",
 		Description: "Delete an IAM group from a tenant",
 		InputSchema: map[string]interface{}{
@@ -411,7 +435,7 @@ func (r *ToolRegistry) registerIAMGroupTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "iam_get_group",
 		Description: "Get IAM group details by ID",
 		InputSchema: map[string]interface{}{
@@ -430,7 +454,7 @@ func (r *ToolRegistry) registerIAMGroupTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "iam_list_groups",
 		Description: "List IAM groups in a tenant with pagination",
 		InputSchema: map[string]interface{}{
@@ -440,22 +464,13 @@ func (r *ToolRegistry) registerIAMGroupTools() {
 					"type":        "string",
 					"description": "Tenant ID",
 				},
-				"limit": map[string]interface{}{
-					"type":        "integer",
-					"description": "Maximum number of groups to return",
-					"default":     50,
-				},
-				"offset": map[string]interface{}{
-					"type":        "integer",
-					"description": "Number of groups to skip for pagination",
-					"default":     0,
-				},
+				"pagination": iamPaginationSchema(),
 			},
 			"required": []string{"tenant_id"},
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "iam_add_group_member",
 		Description: "Add a user to an IAM group",
 		InputSchema: map[string]interface{}{
@@ -478,7 +493,7 @@ func (r *ToolRegistry) registerIAMGroupTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "iam_remove_group_member",
 		Description: "Remove a user from an IAM group",
 		InputSchema: map[string]interface{}{
@@ -504,9 +519,9 @@ func (r *ToolRegistry) registerIAMGroupTools() {
 
 // registerIAMAuthTools registers IAM authentication and authorization tools.
 func (r *ToolRegistry) registerIAMAuthTools() {
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "iam_check_permission",
-		Description: "Check if a user has permission to perform an action on a resource",
+		Description: "Check if a subject has permission to perform an action on a resource",
 		InputSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
@@ -514,9 +529,19 @@ func (r *ToolRegistry) registerIAMAuthTools() {
 					"type":        "string",
 					"description": "Tenant ID",
 				},
-				"user_id": map[string]interface{}{
+				"subject_id": map[string]interface{}{
 					"type":        "string",
-					"description": "User ID to check permissions for",
+					"description": "Subject (user or application) ID to check permissions for",
+				},
+				"roles": map[string]interface{}{
+					"type":        "array",
+					"items":       map[string]interface{}{"type": "string"},
+					"description": "Roles the subject holds",
+				},
+				"groups": map[string]interface{}{
+					"type":        "array",
+					"items":       map[string]interface{}{"type": "string"},
+					"description": "Groups the subject belongs to",
 				},
 				"resource": map[string]interface{}{
 					"type":        "string",
@@ -526,12 +551,22 @@ func (r *ToolRegistry) registerIAMAuthTools() {
 					"type":        "string",
 					"description": "Action to check (e.g., 'read', 'write', 'delete')",
 				},
+				"context": map[string]interface{}{
+					"type":                 "object",
+					"additionalProperties": map[string]interface{}{"type": "string"},
+					"description":          "Request context the policies evaluate",
+				},
+				"attributes": map[string]interface{}{
+					"type":                 "object",
+					"additionalProperties": map[string]interface{}{"type": "string"},
+					"description":          "Subject attributes the policies evaluate",
+				},
 			},
-			"required": []string{"tenant_id", "user_id", "resource", "action"},
+			"required": []string{"tenant_id", "subject_id", "resource", "action"},
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "iam_authenticate",
 		Description: "Authenticate a user with credentials",
 		InputSchema: map[string]interface{}{
@@ -565,7 +600,7 @@ func (r *ToolRegistry) registerIAMAuthTools() {
 
 // registerIAMTenantTools registers IAM tenant management tools.
 func (r *ToolRegistry) registerIAMTenantTools() {
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "iam_create_tenant",
 		Description: "Create a new tenant in the IAM system",
 		InputSchema: map[string]interface{}{
@@ -579,16 +614,26 @@ func (r *ToolRegistry) registerIAMTenantTools() {
 					"type":        "string",
 					"description": "Tenant display name",
 				},
-				"description": map[string]interface{}{
-					"type":        "string",
-					"description": "Tenant description",
+				"settings": map[string]interface{}{
+					"type":        "object",
+					"description": "Tenant settings",
+					"properties": map[string]interface{}{
+						"max_users": map[string]interface{}{
+							"type":        "integer",
+							"description": "Maximum number of users in the tenant",
+						},
+						"mfa_required": map[string]interface{}{
+							"type":        "boolean",
+							"description": "Whether the tenant's users must use MFA",
+						},
+					},
 				},
 			},
-			"required": []string{"id", "name"},
+			"required": []string{"id"},
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "iam_delete_tenant",
 		Description: "Delete a tenant from the IAM system",
 		InputSchema: map[string]interface{}{
@@ -603,7 +648,7 @@ func (r *ToolRegistry) registerIAMTenantTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "iam_get_tenant",
 		Description: "Get tenant details by ID",
 		InputSchema: map[string]interface{}{
@@ -618,22 +663,13 @@ func (r *ToolRegistry) registerIAMTenantTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "iam_list_tenants",
 		Description: "List all tenants with pagination",
 		InputSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
-				"limit": map[string]interface{}{
-					"type":        "integer",
-					"description": "Maximum number of tenants to return",
-					"default":     50,
-				},
-				"offset": map[string]interface{}{
-					"type":        "integer",
-					"description": "Number of tenants to skip for pagination",
-					"default":     0,
-				},
+				"pagination": iamPaginationSchema(),
 			},
 		},
 	})
@@ -641,7 +677,7 @@ func (r *ToolRegistry) registerIAMTenantTools() {
 
 // registerIAMTokenTools registers IAM token management tools.
 func (r *ToolRegistry) registerIAMTokenTools() {
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "iam_create_token",
 		Description: "Create a new access token for a user",
 		InputSchema: map[string]interface{}{
@@ -673,7 +709,7 @@ func (r *ToolRegistry) registerIAMTokenTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "iam_revoke_token",
 		Description: "Revoke an access token",
 		InputSchema: map[string]interface{}{
@@ -688,7 +724,7 @@ func (r *ToolRegistry) registerIAMTokenTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "iam_verify_token",
 		Description: "Verify an access token",
 		InputSchema: map[string]interface{}{

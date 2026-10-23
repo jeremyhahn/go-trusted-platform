@@ -22,6 +22,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/golang-jwt/jwt/v5"
 	quicbaas "github.com/jeremyhahn/go-quicbaas/sdk/go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -62,7 +63,13 @@ func TestIssueSessionProjectsTheBackboneIdentity(t *testing.T) {
 	// "uid" keys the PLATFORM user store and the backbone's subject keys a
 	// different one, so it is deliberately left unset rather than filled
 	// with an identifier from the wrong namespace.
-	assert.Zero(t, claims.UserID)
+	assert.Empty(t, claims.UID)
+	_, err = claims.PlatformUserID()
+	assert.ErrorIs(t, err, ErrInvalidUserClaim,
+		"a route that re-reads the platform user must refuse this session")
+	raw, err := jwt.Parse(bearer, handler.jwtService.KeyFunc)
+	require.NoError(t, err)
+	assert.NotContains(t, raw.Claims, "uid", "the claim is omitted, not zero")
 }
 
 // TestIssueSessionRefusesAnIncompleteIdentity covers the inputs that would

@@ -167,6 +167,26 @@ starts the collector. That key is also the gate on the control plane
 registering itself as a device in its own registry (#472), so a control plane
 without it is absent from its own fleet view.
 
+## Gateway node: the NAT64 translator packages
+
+`gateway.yaml` lists Alpine's Jool packages in `os.packages` —
+`jool-modules-lts`, `jool-tools` and `jool-tools-openrc` — so the gateway node
+can run gatewayd's `nat64:` section. Only the gateway carries them; the control
+plane and compute nodes do not run gatewayd. A gateway-role ISO prefetches the
+same three into its offline repository.
+
+`gatewayd.yaml` ships the `nat64:` section commented out, because its
+`translator-port` and `pool4` addresses are site decisions. Uncommenting it
+yields a section the gateway accepts as-is (the profile's template test loads it
+that way). With it enabled, the gatewayd init script platformd writes at first
+boot runs `modprobe jool` before starting the daemon.
+
+`jool-modules-lts` is built for exactly one `linux-lts` release. Upgrade the
+two together: a kernel that outruns the module package leaves `jool`
+unloadable, the init script warns and starts gatewayd anyway, and gatewayd
+refuses the `nat64:` section (`ErrNAT64ModuleUnavailable`) instead of passing
+IPv6-only traffic untranslated. See `docs/gateway/user.md`, "IPv6-only clients".
+
 ## Other notes
 
 - **Serial-over-LAN** works (`ipmitool -I lanplus … sol activate`) and the
@@ -180,8 +200,13 @@ without it is absent from its own fleet view.
 - A successful install **powers the node off** rather than rebooting
   ("Remove the installation media and reboot"). A powered-off node after
   an install is the success case, not a failure.
+- **Every secret is a `kms://` reference**, the platform PINs included
+  (`platform.so-pin`, `platform.user-pin`). platformd generates them on its
+  first start and returns the same values on every start after; nothing
+  earlier in the boot reads them. Put no literal PIN or password in an
+  override ([docs/device-templates.md](../../../../../../docs/device-templates.md#platform-pins)).
 
 
 ### Gateway overlay fields
 
-`gatewayd.yaml` includes a disabled `gateway.overlay:` example for #709. Fill `local-vtep` with the gateway's fabric VLAN address, `access-port` with the OVS port that carries workload VLANs into the overlay, and `rr-peers` with the control-plane route reflectors. The overlay's EVPN speaker dials those reflectors from `local-vtep` and opens no listener (the transit speaker already holds TCP 179), so each reflector must accept the session from that address, and no RR peer may be `passive`. `vnis` lists the L2VNIs the overlay joins at start, each with the access-port VLAN that carries it (VLAN 401 carries VNI 40100 here); `default-vni` must be one of them, and the overlay reports healthy only while it carries all of them. `verdict-max-age` defaults to 15m and is the maximum age of a signed attestation verdict accepted for remote VTEP admission. `verdict-clock-skew` (30s) bounds how far ahead of the gateway's clock that verdict may be dated, and `admission-sweep-interval` (30s) is how often installed VTEPs are re-admitted. `overlay-asn` must be a private 2-octet ASN (64512-65534). The overlay cannot be enabled beside the firewall, NAT or load balancer, so enabling it on this profile means disabling `gateway.firewall`.
+`gatewayd.yaml` includes a disabled `gateway.overlay:` example for #709. Fill `local-vtep` with the gateway's fabric VLAN address, `access-port` with the OVS port that carries workload VLANs into the overlay, and `rr-peers` with the control-plane route reflectors. The overlay's EVPN speaker dials those reflectors from `local-vtep` and opens no listener (the transit speaker already holds TCP 179), so each reflector must accept the session from that address, and no RR peer may be `passive`. `vnis` lists the L2VNIs the overlay joins at start, each with the access-port VLAN that carries it (VLAN 401 carries VNI 40100 here); `default-vni` must be one of them, and the overlay reports healthy only while it carries all of them. A VNI with a `subnet` (an IPv4 network from the tenant pool `10.E.192.0/18`; 10.4.192.0/24 here) is routed: every VTEP answers for the subnet's first host address with `anycast-gateway-mac`, which is required with any subnet, must be unicast and non-zero, and must stay out of `02:00:xx:xx:xx:xx` (the VTEPs' router MACs, derived from `local-vtep`). Subnets may not overlap. `l3vni` (40999 here) routes between VTEPs; it must be a 24-bit VNI that is not in `vnis` and needs a routed VNI and `rr-peers`. Leave all three out and the overlay bridges only. `verdict-max-age` defaults to 15m and is the maximum age of a signed attestation verdict accepted for remote VTEP admission. `verdict-clock-skew` (30s) bounds how far ahead of the gateway's clock that verdict may be dated, and `admission-sweep-interval` (30s) is how often installed VTEPs are re-admitted. `overlay-asn` must be a private 2-octet ASN (64512-65534). The overlay cannot be enabled beside the firewall, NAT or load balancer, so enabling it on this profile means disabling `gateway.firewall`.

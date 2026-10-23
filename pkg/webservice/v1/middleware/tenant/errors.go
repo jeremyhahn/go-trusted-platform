@@ -60,11 +60,12 @@ func (e ErrMissingTenantClaim) Error() string {
 	return "tenant: token missing tenant_id claim"
 }
 
-// ErrMissingUserClaim indicates the JWT token is missing the user_id claim.
+// ErrMissingUserClaim indicates the JWT token carries no platform user id:
+// the uid claim is absent, zero, or not a decimal uint64 string.
 type ErrMissingUserClaim struct{}
 
 func (e ErrMissingUserClaim) Error() string {
-	return "tenant: token missing user_id claim"
+	return "tenant: token missing uid claim"
 }
 
 // ErrInvalidConfig indicates an invalid middleware configuration.

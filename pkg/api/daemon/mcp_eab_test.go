@@ -40,7 +40,6 @@ type fakeEABService struct {
 
 	// Last-call record for assertion.
 	lastGenerate     eab.GenerateParams
-	lastValidateKey  string
 	lastValidateHMAC []byte
 	cleanupCount     int
 
@@ -149,7 +148,6 @@ func (f *fakeEABService) Revoke(ctx context.Context, id uint64) error {
 }
 
 func (f *fakeEABService) Validate(ctx context.Context, keyID string, hmacKey []byte) (*eab.Credential, error) {
-	f.lastValidateKey = keyID
 	f.lastValidateHMAC = append([]byte(nil), hmacKey...)
 	if f.errValidate != nil {
 		return nil, f.errValidate
@@ -696,16 +694,13 @@ func TestEAB_CleanupExpiredCredentials(t *testing.T) {
 	svc.cleanupCount = 5
 	p := newEABProvider(svc, nil)
 
-	result, err := p.EABCleanupExpiredCredentials(context.Background(), "tenant-x")
+	result, err := p.EABCleanupExpiredCredentials(context.Background(), "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	m := result.(map[string]interface{})
 	if m["deleted_count"].(int) != 5 {
-		t.Errorf("expected deleted_count=5, got %v", m["deleted_count"])
-	}
-	if m["tenant_id"].(string) != "tenant-x" {
-		t.Errorf("expected echoed tenant_id, got %v", m["tenant_id"])
+		t.Errorf("expected deleted_count=5 from the all-tenant cleanup, got %v", m["deleted_count"])
 	}
 }
 

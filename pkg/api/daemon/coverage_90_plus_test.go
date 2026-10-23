@@ -31,10 +31,11 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/tenant"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/tenant/quota"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 )
 
 func init() {
-	_ = quic.SetDefaultCodecType(codec.MsgPack)
+	_ = quicwire.SetDefaultCodecType(codec.MsgPack)
 }
 
 // =============================================================================
@@ -175,7 +176,7 @@ func TestDaemonFunctionalOptions(t *testing.T) {
 
 func TestQUICServiceHandler_Setters(t *testing.T) {
 	logger := logging.DefaultLogger()
-	handler := NewQUICServiceHandler(logger)
+	handler := newTestQUICServiceHandler(logger)
 
 	t.Run("SetContainerHandler", func(t *testing.T) {
 		// Test setting to nil
@@ -198,16 +199,6 @@ func TestQUICServiceHandler_Setters(t *testing.T) {
 		assert.Nil(t, handler.attestationHandler)
 	})
 
-	t.Run("SetVMHandler", func(t *testing.T) {
-		handler.SetVMHandler(nil)
-		assert.Nil(t, handler.vmHandler)
-	})
-
-	t.Run("SetVMOrchestrator_Nil", func(t *testing.T) {
-		handler.SetVMOrchestrator(nil)
-		assert.Nil(t, handler.vmHandler)
-	})
-
 	t.Run("SetTenantManager", func(t *testing.T) {
 		handler.SetTenantManager(nil)
 		assert.Nil(t, handler.tenantManager)
@@ -222,23 +213,18 @@ func TestQUICServiceHandlerOptions(t *testing.T) {
 	logger := logging.DefaultLogger()
 
 	t.Run("WithQUICContainerService_Nil", func(t *testing.T) {
-		handler := NewQUICServiceHandler(logger, WithQUICContainerService(nil))
+		handler := newTestQUICServiceHandler(logger, WithQUICContainerService(nil))
 		assert.Nil(t, handler.containerHandler)
 	})
 
 	t.Run("WithQUICAttestationService_Nil", func(t *testing.T) {
-		handler := NewQUICServiceHandler(logger, WithQUICAttestationService(nil))
+		handler := newTestQUICServiceHandler(logger, WithQUICAttestationService(nil))
 		assert.Nil(t, handler.attestationHandler)
-	})
-
-	t.Run("WithQUICVMService_Nil", func(t *testing.T) {
-		handler := NewQUICServiceHandler(logger, WithQUICVMService(nil))
-		assert.Nil(t, handler.vmHandler)
 	})
 
 	t.Run("WithQUICTenantManager", func(t *testing.T) {
 		mockMgr := &mockTenantManager90{}
-		handler := NewQUICServiceHandler(logger, WithQUICTenantManager(mockMgr))
+		handler := newTestQUICServiceHandler(logger, WithQUICTenantManager(mockMgr))
 		assert.Equal(t, mockMgr, handler.tenantManager)
 	})
 }
@@ -246,125 +232,6 @@ func TestQUICServiceHandlerOptions(t *testing.T) {
 // =============================================================================
 // Service Provider IDevID/IAK Method Tests
 // =============================================================================
-
-func TestPlatformServiceProvider_IDevIDMethods(t *testing.T) {
-	provider := &PlatformServiceProvider{}
-	ctx := context.Background()
-
-	t.Run("IDevIDGenerate_NotAvailable", func(t *testing.T) {
-		result, err := provider.IDevIDGenerate(ctx, &mcp.IDevIDGenerateMCPRequest{})
-		assert.Nil(t, result)
-		assert.ErrorAs(t, err, &ErrTPM2ServiceNotAvailable{})
-	})
-
-	t.Run("IDevIDInfo_NotAvailable", func(t *testing.T) {
-		result, err := provider.IDevIDInfo(ctx)
-		assert.Nil(t, result)
-		assert.ErrorAs(t, err, &ErrTPM2ServiceNotAvailable{})
-	})
-
-	t.Run("IDevIDDelete_NotAvailable", func(t *testing.T) {
-		err := provider.IDevIDDelete(ctx)
-		assert.ErrorAs(t, err, &ErrTPM2ServiceNotAvailable{})
-	})
-
-	t.Run("IDevIDCSR_NotAvailable", func(t *testing.T) {
-		result, err := provider.IDevIDCSR(ctx, &mcp.IDevIDCSRMCPRequest{})
-		assert.Nil(t, result)
-		assert.ErrorAs(t, err, &ErrTPM2ServiceNotAvailable{})
-	})
-
-	t.Run("IDevIDInstallCert_NotAvailable", func(t *testing.T) {
-		result, err := provider.IDevIDInstallCert(ctx, "-----BEGIN CERTIFICATE-----")
-		assert.Nil(t, result)
-		assert.ErrorAs(t, err, &ErrTPM2ServiceNotAvailable{})
-	})
-
-	t.Run("IDevIDGetCert_NotAvailable", func(t *testing.T) {
-		result, err := provider.IDevIDGetCert(ctx, true)
-		assert.Nil(t, result)
-		assert.ErrorAs(t, err, &ErrTPM2ServiceNotAvailable{})
-	})
-
-	t.Run("IDevIDDeleteCert_NotAvailable", func(t *testing.T) {
-		err := provider.IDevIDDeleteCert(ctx)
-		assert.ErrorAs(t, err, &ErrTPM2ServiceNotAvailable{})
-	})
-
-	t.Run("IDevIDExists_NotAvailable", func(t *testing.T) {
-		exists, err := provider.IDevIDExists(ctx)
-		assert.False(t, exists)
-		assert.ErrorAs(t, err, &ErrTPM2ServiceNotAvailable{})
-	})
-}
-
-func TestPlatformServiceProvider_IAKMethods(t *testing.T) {
-	provider := &PlatformServiceProvider{}
-	ctx := context.Background()
-
-	t.Run("IAKGenerate_NotAvailable", func(t *testing.T) {
-		result, err := provider.IAKGenerate(ctx, &mcp.IDevIDGenerateMCPRequest{})
-		assert.Nil(t, result)
-		assert.ErrorAs(t, err, &ErrTPM2ServiceNotAvailable{})
-	})
-
-	t.Run("IAKInfo_NotAvailable", func(t *testing.T) {
-		result, err := provider.IAKInfo(ctx)
-		assert.Nil(t, result)
-		assert.ErrorAs(t, err, &ErrTPM2ServiceNotAvailable{})
-	})
-
-	t.Run("IAKDelete_NotAvailable", func(t *testing.T) {
-		err := provider.IAKDelete(ctx)
-		assert.ErrorAs(t, err, &ErrTPM2ServiceNotAvailable{})
-	})
-
-	t.Run("IAKCSR_NotAvailable", func(t *testing.T) {
-		result, err := provider.IAKCSR(ctx, &mcp.IDevIDCSRMCPRequest{})
-		assert.Nil(t, result)
-		assert.ErrorAs(t, err, &ErrTPM2ServiceNotAvailable{})
-	})
-
-	t.Run("IAKInstallCert_NotAvailable", func(t *testing.T) {
-		result, err := provider.IAKInstallCert(ctx, "-----BEGIN CERTIFICATE-----")
-		assert.Nil(t, result)
-		assert.ErrorAs(t, err, &ErrTPM2ServiceNotAvailable{})
-	})
-
-	t.Run("IAKGetCert_NotAvailable", func(t *testing.T) {
-		result, err := provider.IAKGetCert(ctx, true)
-		assert.Nil(t, result)
-		assert.ErrorAs(t, err, &ErrTPM2ServiceNotAvailable{})
-	})
-
-	t.Run("IAKDeleteCert_NotAvailable", func(t *testing.T) {
-		err := provider.IAKDeleteCert(ctx)
-		assert.ErrorAs(t, err, &ErrTPM2ServiceNotAvailable{})
-	})
-
-	t.Run("IAKExists_NotAvailable", func(t *testing.T) {
-		exists, err := provider.IAKExists(ctx)
-		assert.False(t, exists)
-		assert.ErrorAs(t, err, &ErrTPM2ServiceNotAvailable{})
-	})
-}
-
-func TestPlatformServiceProvider_DeviceAttributeMethods(t *testing.T) {
-	provider := &PlatformServiceProvider{}
-	ctx := context.Background()
-
-	t.Run("DeviceAttributes_NotAvailable", func(t *testing.T) {
-		result, err := provider.DeviceAttributes(ctx)
-		assert.Nil(t, result)
-		assert.ErrorAs(t, err, &ErrTPM2ServiceNotAvailable{})
-	})
-
-	t.Run("ActivateCredential_NotAvailable", func(t *testing.T) {
-		result, err := provider.ActivateCredential(ctx, []byte("blob"), []byte("secret"))
-		assert.Nil(t, result)
-		assert.ErrorAs(t, err, &ErrTPM2ServiceNotAvailable{})
-	})
-}
 
 // =============================================================================
 // Tenant gRPC Server Tests
@@ -394,11 +261,11 @@ func TestQUICServiceHandler_ContainerOperation(t *testing.T) {
 	ctx := context.Background()
 
 	t.Run("handleContainerOperation_NoHandler", func(t *testing.T) {
-		handler := NewQUICServiceHandler(logger)
-		req := &quic.Request{Opcode: quic.OpContainerCreate}
+		handler := newTestQUICServiceHandler(logger)
+		req := &quicwire.Request{Opcode: quicwire.OpContainerCreate}
 
 		resp := handler.handleContainerOperation(ctx, req)
-		assert.Equal(t, quic.StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 
 }
@@ -407,14 +274,30 @@ func TestQUICServiceHandler_VMServiceOperation(t *testing.T) {
 	logger := logging.DefaultLogger()
 	ctx := context.Background()
 
-	t.Run("handleVMServiceOperation_NoHandler", func(t *testing.T) {
-		handler := NewQUICServiceHandler(logger)
-		req := &quic.Request{Opcode: quic.OpVMCreate}
+	t.Run("empty payload has no sub-opcode", func(t *testing.T) {
+		handler := newTestQUICServiceHandler(logger)
+		req := &quicwire.Request{Opcode: quicwire.OpVMExtendedCategory}
 
 		resp := handler.handleVMServiceOperation(ctx, req)
-		assert.Equal(t, quic.StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidRequest, resp.Status)
 	})
 
+	t.Run("VM sub-opcode without the compute service", func(t *testing.T) {
+		handler := newTestQUICServiceHandler(logger)
+		req := &quicwire.Request{Opcode: quicwire.OpVMExtendedCategory, Payload: []byte{quicwire.OpVMCreate}}
+
+		resp := handler.handleVMServiceOperation(ctx, req)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
+	})
+
+	t.Run("unknown sub-opcode is not implemented", func(t *testing.T) {
+		handler := newTestQUICServiceHandler(logger)
+		// 0x01 is no VM or container sub-opcode.
+		req := &quicwire.Request{Opcode: quicwire.OpVMExtendedCategory, Payload: []byte{0x01}}
+
+		resp := handler.handleVMServiceOperation(ctx, req)
+		assert.Equal(t, quicwire.StatusNotImplemented, resp.Status)
+	})
 }
 
 func TestQUICServiceHandler_AttestationOperation(t *testing.T) {
@@ -422,11 +305,11 @@ func TestQUICServiceHandler_AttestationOperation(t *testing.T) {
 	ctx := context.Background()
 
 	t.Run("handleAttestationOperation_NoHandler", func(t *testing.T) {
-		handler := NewQUICServiceHandler(logger)
-		req := &quic.Request{Opcode: quic.OpAttestQuote}
+		handler := newTestQUICServiceHandler(logger)
+		req := &quicwire.Request{Opcode: quicwire.OpAttestQuote}
 
 		resp := handler.handleAttestationOperation(ctx, req)
-		assert.Equal(t, quic.StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 
 }
@@ -1055,67 +938,69 @@ func TestTenantGRPCServer_GetDEKStatus_NoManager(t *testing.T) {
 func TestQUICServiceHandler_HandleRequest_SDN(t *testing.T) {
 	logger := logging.DefaultLogger()
 	ctx := context.Background()
-	handler := NewQUICServiceHandler(logger)
+	handler := newTestQUICServiceHandler(logger)
 
 	t.Run("SDN opcode without service", func(t *testing.T) {
-		req := &quic.Request{Opcode: quic.OpSDNCreateBridge}
+		req := &quicwire.Request{Opcode: quicwire.OpSDNCreateBridge}
 		resp := handler.HandleRequest(ctx, req)
-		assert.Equal(t, quic.StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 }
 
 func TestQUICServiceHandler_HandleRequest_PXE(t *testing.T) {
 	logger := logging.DefaultLogger()
 	ctx := context.Background()
-	handler := NewQUICServiceHandler(logger)
+	handler := newTestQUICServiceHandler(logger)
 
 	t.Run("PXE opcode without service", func(t *testing.T) {
-		req := &quic.Request{Opcode: OpPXEListDevices}
+		req := &quicwire.Request{Opcode: quicwire.OpPXEListDevices}
 		resp := handler.HandleRequest(ctx, req)
-		assert.Equal(t, quic.StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 }
 
 func TestQUICServiceHandler_HandleRequest_Health(t *testing.T) {
 	logger := logging.DefaultLogger()
 	ctx := context.Background()
-	handler := NewQUICServiceHandler(logger)
+	handler := newTestQUICServiceHandler(logger)
 
 	t.Run("Health opcode", func(t *testing.T) {
-		req := &quic.Request{Opcode: quic.OpHealth}
+		req := &quicwire.Request{Opcode: quicwire.OpHealth}
 		resp := handler.HandleRequest(ctx, req)
 		// Health checks return OK even without service
-		assert.Equal(t, quic.StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 	})
 
 	t.Run("Liveness opcode", func(t *testing.T) {
-		req := &quic.Request{Opcode: quic.OpLiveness}
+		req := &quicwire.Request{Opcode: quicwire.OpLiveness}
 		resp := handler.HandleRequest(ctx, req)
-		assert.Equal(t, quic.StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 	})
 
 	t.Run("Readiness opcode", func(t *testing.T) {
-		req := &quic.Request{Opcode: quic.OpReadiness}
+		req := &quicwire.Request{Opcode: quicwire.OpReadiness}
 		resp := handler.HandleRequest(ctx, req)
-		assert.Equal(t, quic.StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 	})
 }
 
 func TestQUICServiceHandler_HandleRequest_Unknown(t *testing.T) {
 	logger := logging.DefaultLogger()
 	ctx := context.Background()
-	handler := NewQUICServiceHandler(logger)
+	handler := newTestQUICServiceHandler(logger)
 
 	t.Run("Unknown opcode", func(t *testing.T) {
-		req := &quic.Request{Opcode: 0x55}
+		// An unallocated opcode is unclassified: the authorization guard
+		// refuses it before dispatch.
+		req := &quicwire.Request{Opcode: quicwire.OpJWTVerify}
 		resp := handler.HandleRequest(ctx, req)
-		assert.Equal(t, quic.StatusNotImplemented, resp.Status)
+		assert.Equal(t, quicwire.StatusPermissionDenied, resp.Status)
 	})
 }
 
 func TestQUICServiceHandler_SetOrchestrators_WithNonNil(t *testing.T) {
 	logger := logging.DefaultLogger()
-	handler := NewQUICServiceHandler(logger)
+	handler := newTestQUICServiceHandler(logger)
 
 	// These tests verify the setters work without nil checks
 	// The actual initialization requires real orchestrator instances
@@ -1124,11 +1009,6 @@ func TestQUICServiceHandler_SetOrchestrators_WithNonNil(t *testing.T) {
 	t.Run("SetContainerHandler clears to nil", func(t *testing.T) {
 		handler.SetContainerHandler(nil)
 		assert.Nil(t, handler.containerHandler)
-	})
-
-	t.Run("SetVMHandler clears to nil", func(t *testing.T) {
-		handler.SetVMHandler(nil)
-		assert.Nil(t, handler.vmHandler)
 	})
 
 	t.Run("SetAttestationHandler clears to nil", func(t *testing.T) {
@@ -1261,9 +1141,9 @@ func TestMCPServiceProvider_SDNListPolicies(t *testing.T) {
 	provider := &MCPServiceProvider{}
 	ctx := context.Background()
 
-	result, err := provider.SDNListPolicies(ctx)
+	result, err := provider.SDNListPolicies(ctx, "", "")
 	assert.Nil(t, result)
-	assert.Error(t, err)
+	assert.IsType(t, ErrServiceNotAvailable{}, err)
 }
 
 func TestMCPServiceProvider_SDNGetPolicy(t *testing.T) {
@@ -1272,7 +1152,7 @@ func TestMCPServiceProvider_SDNGetPolicy(t *testing.T) {
 
 	result, err := provider.SDNGetPolicy(ctx, "policy-1")
 	assert.Nil(t, result)
-	assert.Error(t, err)
+	assert.IsType(t, ErrServiceNotAvailable{}, err)
 }
 
 func TestMCPServiceProvider_SDNListBridges(t *testing.T) {
@@ -1316,7 +1196,7 @@ func TestMCPServiceProvider_VTPMList(t *testing.T) {
 	provider := &MCPServiceProvider{}
 	ctx := context.Background()
 
-	result, err := provider.VTPMList(ctx)
+	result, err := provider.VTPMList(ctx, nil)
 	assert.Nil(t, result)
 	assert.Error(t, err)
 }
@@ -1328,54 +1208,54 @@ func TestMCPServiceProvider_VTPMList(t *testing.T) {
 func TestQUICServiceHandler_SDNOperation_NoService(t *testing.T) {
 	logger := logging.DefaultLogger()
 	ctx := context.Background()
-	handler := NewQUICServiceHandler(logger)
+	handler := newTestQUICServiceHandler(logger)
 
 	t.Run("CreateBridge", func(t *testing.T) {
-		req := &quic.Request{Opcode: quic.OpSDNCreateBridge}
+		req := &quicwire.Request{Opcode: quicwire.OpSDNCreateBridge}
 		resp := handler.handleSDNOperation(ctx, req)
-		assert.Equal(t, quic.StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 
 	t.Run("DeleteBridge", func(t *testing.T) {
-		req := &quic.Request{Opcode: quic.OpSDNDeleteBridge}
+		req := &quicwire.Request{Opcode: quicwire.OpSDNDeleteBridge}
 		resp := handler.handleSDNOperation(ctx, req)
-		assert.Equal(t, quic.StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 
 	t.Run("AddPort", func(t *testing.T) {
-		req := &quic.Request{Opcode: quic.OpSDNCreateBridge}
+		req := &quicwire.Request{Opcode: quicwire.OpSDNCreateBridge}
 		resp := handler.handleSDNOperation(ctx, req)
-		assert.Equal(t, quic.StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 
 	t.Run("DeletePort", func(t *testing.T) {
-		req := &quic.Request{Opcode: quic.OpSDNDeleteBridge}
+		req := &quicwire.Request{Opcode: quicwire.OpSDNDeleteBridge}
 		resp := handler.handleSDNOperation(ctx, req)
-		assert.Equal(t, quic.StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 
 	t.Run("GetPortState", func(t *testing.T) {
-		req := &quic.Request{Opcode: quic.OpSDNGetPortState}
+		req := &quicwire.Request{Opcode: quicwire.OpSDNGetPortState}
 		resp := handler.handleSDNOperation(ctx, req)
-		assert.Equal(t, quic.StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 
 	t.Run("SetPortState", func(t *testing.T) {
-		req := &quic.Request{Opcode: quic.OpSDNSetPortState}
+		req := &quicwire.Request{Opcode: quicwire.OpSDNSetPortState}
 		resp := handler.handleSDNOperation(ctx, req)
-		assert.Equal(t, quic.StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 
 	t.Run("ListPolicies", func(t *testing.T) {
-		req := &quic.Request{Opcode: quic.OpSDNListPolicies}
+		req := &quicwire.Request{Opcode: quicwire.OpSDNListPolicies}
 		resp := handler.handleSDNOperation(ctx, req)
-		assert.Equal(t, quic.StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 
 	t.Run("GetPortStats", func(t *testing.T) {
-		req := &quic.Request{Opcode: quic.OpSDNGetPortState}
+		req := &quicwire.Request{Opcode: quicwire.OpSDNGetPortState}
 		resp := handler.handleSDNOperation(ctx, req)
-		assert.Equal(t, quic.StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 
 }
@@ -1387,29 +1267,29 @@ func TestQUICServiceHandler_SDNOperation_NoService(t *testing.T) {
 func TestQUICServiceHandler_PXEOperation_NoService(t *testing.T) {
 	logger := logging.DefaultLogger()
 	ctx := context.Background()
-	handler := NewQUICServiceHandler(logger)
+	handler := newTestQUICServiceHandler(logger)
 
 	t.Run("ListDevices", func(t *testing.T) {
-		req := &quic.Request{Opcode: OpPXEListDevices}
+		req := &quicwire.Request{Opcode: quicwire.OpPXEListDevices}
 		resp := handler.handlePXEOperation(ctx, req)
-		assert.Equal(t, quic.StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 
 	t.Run("GetDevice", func(t *testing.T) {
-		req := &quic.Request{Opcode: OpPXEGetDevice}
+		req := &quicwire.Request{Opcode: quicwire.OpPXEGetDevice}
 		resp := handler.handlePXEOperation(ctx, req)
-		assert.Equal(t, quic.StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 
 	t.Run("RegisterDevice", func(t *testing.T) {
-		req := &quic.Request{Opcode: OpPXERegisterDevice}
+		req := &quicwire.Request{Opcode: quicwire.OpPXERegisterDevice}
 		resp := handler.handlePXEOperation(ctx, req)
-		assert.Equal(t, quic.StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 
 	t.Run("UpdateState", func(t *testing.T) {
-		req := &quic.Request{Opcode: OpPXEUpdateState}
+		req := &quicwire.Request{Opcode: quicwire.OpPXEUpdateState}
 		resp := handler.handlePXEOperation(ctx, req)
-		assert.Equal(t, quic.StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 }

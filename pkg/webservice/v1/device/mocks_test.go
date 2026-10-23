@@ -20,6 +20,7 @@ import (
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/policy"
 	switchmgmt "github.com/jeremyhahn/go-trusted-platform/pkg/switch"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/switchwire"
 	"github.com/stretchr/testify/mock"
 )
 
@@ -140,6 +141,10 @@ func (m *MockHttpWriter) Error500(w http.ResponseWriter, r *http.Request, err er
 	m.Called(w, r, err)
 }
 
+func (m *MockHttpWriter) Error503(w http.ResponseWriter, r *http.Request, err error) {
+	m.Called(w, r, err)
+}
+
 // MockSwitchService is a mock implementation of SwitchServiceProvider
 type MockSwitchService struct {
 	mock.Mock
@@ -168,20 +173,20 @@ func (m *MockSwitchManager) GetPortVLAN(ctx context.Context, port string) (uint1
 	return args.Get(0).(uint16), args.Error(1)
 }
 
-func (m *MockSwitchManager) GetPortStatus(ctx context.Context, port string) (*switchmgmt.PortStatus, error) {
+func (m *MockSwitchManager) GetPortStatus(ctx context.Context, port string) (*switchwire.PortStatus, error) {
 	args := m.Called(ctx, port)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
-	return args.Get(0).(*switchmgmt.PortStatus), args.Error(1)
+	return args.Get(0).(*switchwire.PortStatus), args.Error(1)
 }
 
-func (m *MockSwitchManager) ListPorts(ctx context.Context) ([]*switchmgmt.PortStatus, error) {
+func (m *MockSwitchManager) ListPorts(ctx context.Context) ([]*switchwire.PortStatus, error) {
 	args := m.Called(ctx)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
-	return args.Get(0).([]*switchmgmt.PortStatus), args.Error(1)
+	return args.Get(0).([]*switchwire.PortStatus), args.Error(1)
 }
 
 func (m *MockSwitchManager) EnablePort(ctx context.Context, port string) error {

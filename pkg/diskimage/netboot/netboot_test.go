@@ -48,11 +48,9 @@ func writeImage(t *testing.T) string {
 // would.
 type fakeMtools struct {
 	files map[string][]byte
-	calls []string
 }
 
 func (m *fakeMtools) run(_ context.Context, name string, args ...string) ([]byte, error) {
-	m.calls = append(m.calls, name)
 	switch name {
 	case "mdir":
 		var out strings.Builder
@@ -115,6 +113,15 @@ func TestStageFromImage_NoImage(t *testing.T) {
 	_, err := StageFromImage(context.Background(), filepath.Join(t.TempDir(), "absent.img"), filepath.Join(t.TempDir(), "tftp"), (&fakeMtools{}).run)
 	var treeErr *Error
 	require.ErrorAs(t, err, &treeErr)
+}
+
+func TestStageFromImage_UnusableDestination(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "file")
+	require.NoError(t, os.WriteFile(file, nil, 0o644))
+	_, err := StageFromImage(context.Background(), writeImage(t), filepath.Join(file, "tftp"), (&fakeMtools{}).run)
+	var treeErr *Error
+	require.ErrorAs(t, err, &treeErr)
+	assert.Contains(t, treeErr.Error(), "from "+treeErr.Source)
 }
 
 // writeAPK writes a minimal apk (a gzip tar) holding files under boot/.

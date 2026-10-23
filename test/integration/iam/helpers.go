@@ -17,23 +17,18 @@ package iam
 
 import (
 	"os"
-	"testing"
+
+	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
 )
 
-// SkipIfNotIntegration skips the test if not running in integration mode
-func SkipIfNotIntegration(t *testing.T) {
-	t.Helper()
-	if os.Getenv("INTEGRATION_TEST") == "" {
-		t.Skip("Skipping integration test. Set INTEGRATION_TEST=1 to run.")
-	}
-}
-
-// DefaultTenantID returns the default tenant ID for tests
+// DefaultTenantID returns the tenant the IAM tests name. It defaults to the
+// harness credential's own tenant: the IAM services refuse a request that
+// names a tenant other than the caller's.
 func DefaultTenantID() string {
 	if id := os.Getenv("IAM_TENANT_ID"); id != "" {
 		return id
 	}
-	return "test-tenant"
+	return helpers.HarnessTenantID
 }
 
 // GetRESTEndpoint returns the REST API endpoint
@@ -41,7 +36,7 @@ func GetRESTEndpoint() string {
 	if endpoint := os.Getenv("IAM_REST_ENDPOINT"); endpoint != "" {
 		return endpoint
 	}
-	return "https://localhost:8443"
+	return helpers.GetRESTEndpoint()
 }
 
 // GetGRPCEndpoint returns the gRPC API endpoint
@@ -49,7 +44,7 @@ func GetGRPCEndpoint() string {
 	if endpoint := os.Getenv("IAM_GRPC_ENDPOINT"); endpoint != "" {
 		return endpoint
 	}
-	return "localhost:10443"
+	return helpers.GetGRPCEndpoint()
 }
 
 // GetQUICEndpoint returns the QUIC API endpoint
@@ -57,7 +52,7 @@ func GetQUICEndpoint() string {
 	if endpoint := os.Getenv("IAM_QUIC_ENDPOINT"); endpoint != "" {
 		return endpoint
 	}
-	return "localhost:9444"
+	return helpers.GetQUICEndpoint()
 }
 
 // GetMCPEndpoint returns the MCP API endpoint
@@ -65,7 +60,7 @@ func GetMCPEndpoint() string {
 	if endpoint := os.Getenv("IAM_MCP_ENDPOINT"); endpoint != "" {
 		return endpoint
 	}
-	return "http://localhost:9445"
+	return helpers.GetMCPEndpoint()
 }
 
 // GetSocketPath returns the Unix socket path
@@ -73,7 +68,7 @@ func GetSocketPath() string {
 	if path := os.Getenv("IAM_SOCKET_PATH"); path != "" {
 		return path
 	}
-	return "/run/platformd.sock"
+	return helpers.GetSocketPath()
 }
 
 // GetCLIPath returns the path to the platformctl CLI

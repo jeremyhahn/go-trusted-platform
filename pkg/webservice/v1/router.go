@@ -22,7 +22,9 @@ import (
 	"github.com/gorilla/mux"
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	trustedca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/acme"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/verdict"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/api/healthprobe"
+	restapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/rest"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/ca/issuance"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/common"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/device"
@@ -47,6 +49,7 @@ import (
 	switchapi "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/switch"
 	resttenant "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/tenant"
 	resttpm "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/tpm"
+	restvpn "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/vpn"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/vtpm"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/router"
 )
@@ -93,8 +96,13 @@ func NewRouter(
 
 // Registers all websocket and REST services
 // RegisterRootRoutes mounts the surfaces the platform serves at the host
-// root rather than under /api/v1 — today only the OCI Distribution
-// protocol, which its spec fixes at /v2/ (#549).
+// root rather than under /api/v1: the health probes and the OCI
+// Distribution protocol, which its spec fixes at /v2/ (#549).
+//
+// The probes — GET /health, /health/live and /health/ready — are
+// unauthenticated so load balancers and orchestrators can reach them; their
+// bodies carry the verdict only, never a component (docs/health/api.md §4).
+// The component breakdown stays admin-gated at /api/v1/platform/health.
 //
 // The registry's authentication method is TPM attestation, so /v2 takes
 // the two principals the attestation quote routes take: a machine caller
@@ -109,6 +117,8 @@ func NewRouter(
 // applies to a nil service. Anything else that stops the mount is an
 // error, never a silent skip.
 func (v1Router *Router) RegisterRootRoutes(root *mux.Router) error {
+	healthprobe.NewHandlers(v1Router.restHandlerRegistry.HealthRegistry).RegisterRoutes(root)
+
 	backend := v1Router.restHandlerRegistry.OCIDistBackend()
 	if backend == nil {
 		v1Router.logger.Debug("OCI distribution backend is nil - /v2 not registered")
@@ -140,6 +150,28 @@ func (v1Router *Router) RegisterEdgeRoutes(root *mux.Router, baseURI string) boo
 	v1Router.router = root.PathPrefix(baseURI).Subrouter()
 	v1Router.gatedGroups = make(map[string]*mux.Router)
 	v1Router.acmeRoutes()
+	return true
+}
+
+// RegisterProvisioningRoutes mounts on root the one route a provisioning
+// listener carries: GET {baseURI}/devices/config, the boot-time config fetch
+// (#177). The route is unauthenticated by design — its caller is a machine
+// still booting with no credential — so it is served only from a listener
+// bound inside the isolated provisioning zone, and no other surface mounts
+// it. It reports whether the route was mounted: without the device profile
+// service there is nothing to deliver.
+func (v1Router *Router) RegisterProvisioningRoutes(root *mux.Router, baseURI string) bool {
+	profileService := v1Router.restHandlerRegistry.DeviceProfileService()
+	if profileService == nil {
+		v1Router.logger.Debug("Device profile service is nil - provisioning surface carries no route")
+		return false
+	}
+	restdevice.NewDeviceRouter(
+		v1Router.logger,
+		v1Router.restHandlerRegistry.ResponseWriter(),
+		nil,
+		profileService,
+	).RegisterConfigRoute(root.PathPrefix(baseURI).Subrouter())
 	return true
 }
 
@@ -184,6 +216,8 @@ func (v1Router *Router) RegisterRoutes(router *mux.Router) {
 	v1Router.kmsRoutes()
 	v1Router.overlayRoutes()
 	v1Router.ntpRoutes()
+	v1Router.vpnRoutes()
+	v1Router.appServiceRoutes()
 	v1Router.pxeRoutes()
 	v1Router.sdnRoutes()
 	v1Router.switchRoutes()
@@ -390,10 +424,19 @@ func (v1Router *Router) caRoutes() {
 	v1Router.serviceRegistry.requireService(
 		v1Router.router, "ca", "/ca", v1Router.ca,
 		func() {
+			kmsClient, _, _, _ := v1Router.restHandlerRegistry.KMSSDKClients()
 			caRouter := restca.NewCARouter(
 				v1Router.logger,
 				v1Router.ca,
-				v1Router.responseWriter)
+				v1Router.responseWriter).WithKMS(issuance.ClientKMS(kmsClient))
+			// Renew and verify are served by the same CA service gRPC
+			// serves; without it they answer 503.
+			if server := v1Router.restHandlerRegistry.CAServiceServer(); server != nil {
+				caRouter.WithService(server)
+			}
+			if scoped, ok := v1Router.authMiddleware().(middleware.ScopeAuthorizer); ok {
+				caRouter.SetScopeAuthorizer(scoped)
+			}
 			caRouter.RegisterPublicRoutes(v1Router.router)
 			caRouter.RegisterRoutes(v1Router.gated(common.ROLE_ADMIN))
 		},
@@ -450,13 +493,24 @@ func (v1Router *Router) deviceRoutes() {
 		v1Router.restHandlerRegistry.ResponseWriter(),
 		v1Router.restHandlerRegistry.DeviceServiceServer(),
 	)
+	// Operator Enable/Disable Device (#250) delegates to the same in-process
+	// DeviceService, so REST enforces what every other transport enforces.
+	lifecycleHandler := device.NewLifecycleHandler(
+		v1Router.logger,
+		v1Router.restHandlerRegistry.ResponseWriter(),
+		v1Router.restHandlerRegistry.DeviceServiceServer(),
+	)
 
-	if deviceHandler == nil && configDeliveryHandler == nil && templateHandler == nil && crudHandler == nil && attestHandler == nil {
+	// A diskless node's per-boot delivery (#690) runs the same verifier as
+	// attestHandler, behind the node's IDevID instead of an operator role.
+	bootHandler := v1Router.restHandlerRegistry.DeviceBootHandler()
+
+	if deviceHandler == nil && configDeliveryHandler == nil && templateHandler == nil && crudHandler == nil && attestHandler == nil && bootHandler == nil {
 		v1Router.logger.Debug("Device, config delivery, template, and CRUD handlers are nil - device routes not registered")
 		return
 	}
 
-	deviceRouter := router.NewDeviceRouter(
+	deviceRouter, err := router.NewDeviceRouter(
 		v1Router.restHandlerRegistry.MTLSMiddleware(),
 		deviceHandler,
 		crudHandler,
@@ -464,11 +518,22 @@ func (v1Router *Router) deviceRoutes() {
 		configDeliveryHandler,
 		attestHandler,
 	)
+	if err != nil {
+		// Routes without a handler would nil-dereference on first request
+		// (#320); register none rather than a broken half.
+		v1Router.logger.Error(err, "Device routes not registered: the device, profile and template services are required")
+		return
+	}
 	deviceRouter.SetAttestCertHandler(attestCertHandler)
+	deviceRouter.SetLifecycleHandler(lifecycleHandler)
+	deviceRouter.SetBootHandler(bootHandler)
+	if scoped, ok := v1Router.authMiddleware().(middleware.ScopeAuthorizer); ok {
+		deviceRouter.SetScopeAuthorizer(scoped)
+	}
 	// Split by principal. Device and profile CRUD, templates, profile
 	// assignment and the provisioning SESSION surface are operator work and
 	// take the admin gate. The machine-facing half — the mTLS-verified
-	// /device/{profile,activate,heartbeat} and the EAB-authenticated
+	// /device/{profile,activate,heartbeat,boot} and the EAB-authenticated
 	// /provisioning/{config,config/nonce,sign} plus the client's session
 	// poll — stays off it: a machine at boot has no operator session, and
 	// several of those routes run before it holds any platform credential.
@@ -477,6 +542,8 @@ func (v1Router *Router) deviceRoutes() {
 
 	// Register bootstrap seeder routes at /devices/templates.
 	// These use a simplified request format consumed by the bootstrap seeder.
+	// Its GET /devices/config is not mounted here: only the provisioning
+	// surface carries it (RegisterProvisioningRoutes, #177).
 	if templateService != nil && profileService != nil {
 		seederRouter := restdevice.NewDeviceRouter(
 			v1Router.logger,
@@ -554,13 +621,10 @@ func (v1Router *Router) attestationRoutes() {
 	restattestation.NewReportsRouter(v1Router.logger, rep, v1Router.responseWriter).
 		RegisterRoutes(v1Router.gated(common.ROLE_ADMIN))
 
-	// The device verdict stream (#709) as Server-Sent Events. Admin-gated
-	// like the reports it follows; which tenants' verdicts the caller sees is
-	// decided by the stream service, the same for gRPC, Unix and REST. A
-	// server that serves no stream leaves the opener nil and the route
-	// answers 503.
-	opener, _ := server.(verdict.StreamOpener)
-	restattestation.NewVerdictsRouter(opener, v1Router.responseWriter).
+	// Device verdicts (#709): the long-poll StreamDeviceVerdicts rides on
+	// over HTTP. Admin-gated like the reports; the session's tenant decides
+	// which devices' verdicts the caller sees.
+	restattestation.NewVerdictsRouter(v1Router.restHandlerRegistry.AttestationVerdicts(), v1Router.responseWriter).
 		RegisterRoutes(v1Router.gated(common.ROLE_ADMIN))
 
 	// Events surface — distinct from the proto-defined manifest /
@@ -599,10 +663,14 @@ func (v1Router *Router) computeRoutes() {
 				v1Router.logger,
 				server,
 				v1Router.responseWriter)
+			if scoped, ok := v1Router.authMiddleware().(middleware.ScopeAuthorizer); ok {
+				r.SetScopeAuthorizer(scoped)
+			}
 			// VM and container lifecycle: create, delete, start, stop,
 			// reboot, migrate, snapshot and restore, disk attach/detach,
-			// and container exec. Reads are gated with the writes — the
-			// VM and container inventory is the tenant workload map.
+			// container exec and attestation. Reads are gated with the
+			// writes — the VM and container inventory is the tenant
+			// workload map.
 			r.RegisterRoutes(v1Router.gated(common.ROLE_ADMIN))
 		},
 		"/compute/images",
@@ -696,6 +764,7 @@ func (v1Router *Router) gatewayRoutes() {
 			store,
 			cfgSource,
 			v1Router.responseWriter)
+		cp.SetVPNLeaseSink(v1Router.restHandlerRegistry.GatewayVPNLeases())
 		// The control plane is split by PRINCIPAL, not by verb. The
 		// operator half (the fleet-wide /gateway/state surface) takes the
 		// admin gate; the gatewayd-facing half authenticates itself with a
@@ -776,6 +845,60 @@ func (v1Router *Router) ntpRoutes() {
 	r.RegisterRoutes(v1Router.gated(common.ROLE_ADMIN))
 }
 
+func (v1Router *Router) vpnRoutes() {
+	server := v1Router.restHandlerRegistry.VPNServiceServer()
+	if server == nil {
+		v1Router.logger.Debug("VPN service server is nil - VPN routes not registered")
+		return
+	}
+	r := restvpn.NewVPNRouter(
+		v1Router.logger,
+		server,
+		v1Router.responseWriter)
+	if scoped, ok := v1Router.authMiddleware().(middleware.ScopeAuthorizer); ok {
+		r.SetScopeAuthorizer(scoped)
+	}
+	// Enrolling or revoking a peer decides which devices reach the
+	// management network, and a posture policy decides which of them stay
+	// there: operator work behind the admin gate, then vpn:read, vpn:write
+	// or vpn:admin per route, as on gRPC, QUIC and MCP.
+	r.RegisterRoutes(v1Router.gated(common.ROLE_ADMIN))
+}
+
+// appServiceRoutes mounts /cache, /scheduler, /messaging and /object-storage
+// over the daemon's Cache, Scheduler, Messaging and ObjectStorage servers,
+// with the route table the daemon REST listener serves. Like the VPN routes
+// they are operator work behind the admin gate, then each route's cache:,
+// scheduler:, messaging: or objectstorage: scope, as on gRPC, QUIC and MCP.
+func (v1Router *Router) appServiceRoutes() {
+	servers := v1Router.restHandlerRegistry.AppServiceServers()
+	if servers.Cache == nil && servers.Scheduler == nil && servers.Messaging == nil && servers.ObjectStorage == nil {
+		v1Router.logger.Debug("Application service servers are nil - cache, scheduler, messaging and object storage routes not registered")
+		return
+	}
+	guard := scopeRouteGuard{}
+	if scoped, ok := v1Router.authMiddleware().(middleware.ScopeAuthorizer); ok {
+		guard.authorizer = scoped
+	}
+	restapi.NewAppServiceHandlers(servers, guard, v1Router.logger.Slog()).
+		RegisterVersionedRoutes(v1Router.gated(common.ROLE_ADMIN))
+}
+
+// scopeRouteGuard checks an application service route's scope with the
+// platform token middleware. Without one the routes stay on the role gate
+// alone, as the VPN routes do under the legacy JWT handler: its sessions
+// carry roles, not scopes.
+type scopeRouteGuard struct {
+	authorizer middleware.ScopeAuthorizer
+}
+
+func (g scopeRouteGuard) Require(scope string, next http.HandlerFunc) http.HandlerFunc {
+	if g.authorizer == nil {
+		return next
+	}
+	return g.authorizer.RequireScope(scope)(next).ServeHTTP
+}
+
 func (v1Router *Router) pxeRoutes() {
 	server := v1Router.restHandlerRegistry.PXEServiceServer()
 	if server == nil {
@@ -785,14 +908,29 @@ func (v1Router *Router) pxeRoutes() {
 	r := restpxe.NewPXERouter(
 		v1Router.logger,
 		server,
-		v1Router.responseWriter)
+		v1Router.responseWriter,
+		v1Router.restHandlerRegistry.PXEWebhookEnabled())
 	// Split by principal. Service controls and the device lifecycle —
 	// authorize, quarantine, retry, state — are operator work and take the
-	// admin gate. The install-completion webhook stays off it because its
-	// caller is a booting node; it is NOT certified by this campaign, and
-	// the fact that it presents and checks no credential at all is #238.
+	// admin gate, then per route the pxe:* scope its RPC takes on gRPC. The
+	// install-completion webhook stays off both because its caller is a
+	// booting node; it presents and checks no credential at all (#238), so
+	// it is mounted only when the operator enabled it.
+	//
+	// The provisioning gateway's device reports (register, state, install
+	// complete) under /provisioning/devices/{mac}: the admin gate, then
+	// provisioning:write per route, as on gRPC. The install-complete report
+	// is the webhook's operation behind a credential, so it does not widen
+	// #238.
+	//
+	// Under the legacy JWT handler, which carries roles and no scopes, the
+	// role gate alone applies (docs/ipxe/api.md §5).
+	if scoped, ok := v1Router.authMiddleware().(middleware.ScopeAuthorizer); ok {
+		r.SetScopeAuthorizer(scoped)
+	}
 	r.RegisterMachineFacingRoutes(v1Router.router)
 	r.RegisterRoutes(v1Router.gated(common.ROLE_ADMIN))
+	r.RegisterGatewayRoutes(v1Router.gated(common.ROLE_ADMIN))
 }
 
 func (v1Router *Router) tenantRoutes() {
@@ -805,7 +943,7 @@ func (v1Router *Router) tenantRoutes() {
 	// cannot say they administer the tenant they named, and every route under
 	// /{id} takes its target tenant from the URL — so a tenant-scoped admin
 	// would reach any other tenant's quotas, DEK and barrier by changing a
-	// path segment (#234). These two guards close that.
+	// path segment (#234). These guards close that.
 	_, guard, err := v1Router.authorization()
 	if err != nil {
 		v1Router.logger.Error(err,
@@ -827,11 +965,17 @@ func (v1Router *Router) tenantRoutes() {
 			RequireOwnTenantOrSystem: guard.RequireOwnTenantOrSystem(
 				v1Router.restHandlerRegistry.TenantID(),
 				func(r *http.Request) string { return mux.Vars(r)["id"] }),
-			// Listing, creating, syncing and by-name lookup are inherently
-			// cross-tenant; a tenant admin must not enumerate or create
-			// tenants with the role they hold inside their own.
+			// Listing, creating and syncing are inherently cross-tenant; a
+			// tenant admin must not enumerate or create tenants with the
+			// role they hold inside their own.
 			RequireSystemTenant: guard.RequireTenant(
 				v1Router.restHandlerRegistry.TenantID()),
+			// The lookup by name applies the rule every other transport
+			// applies (#304): the session's tenant resolves its own name,
+			// the system tenant any.
+			RequireOwnTenantNameOrSystem: guard.RequireOwnTenantNameOrSystem(
+				v1Router.restHandlerRegistry.TenantID(),
+				resttenant.NameResolver(server)),
 		})
 	if err != nil {
 		v1Router.logger.Error(err, "Tenant routes not registered")
@@ -890,11 +1034,10 @@ func (v1Router *Router) iamRoutes() {
 			// tenant this guard admits.
 			RequireSystemTenant: guard.RequireTenant(v1Router.restHandlerRegistry.TenantID()),
 			// The IAM handlers give the URL's {tenant} precedence over the
-			// session's, so the tenant a request NAMES has to be the
-			// caller's own.
-			RequireOwnTenant: guard.RequireOwnTenant(func(r *http.Request) string {
-				return mux.Vars(r)["tenant"]
-			}),
+			// session's, and a flat route names its tenant in the
+			// tenant_id query, so the tenant a request NAMES has to be
+			// the caller's own.
+			RequireOwnTenant: guard.RequireOwnTenant(restiam.RequestedTenant),
 		})
 	if err != nil {
 		v1Router.logger.Error(err, "IAM routes not registered")

@@ -19,6 +19,7 @@ import (
 
 	"github.com/gorilla/mux"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/channelbind"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/internal/protorest"
@@ -65,6 +66,34 @@ func (h *Handlers) Info(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	resp, err := h.server.Info(r.Context(), &platformv1.TPMInfoRequest{})
+	if err != nil {
+		protorest.WriteError(w, r, h.respWriter, err)
+		return
+	}
+	protorest.WriteSuccess(w, r, h.respWriter, resp)
+}
+
+// Capabilities returns the algorithms, commands and ECC curves the TPM
+// implements.
+func (h *Handlers) Capabilities(w http.ResponseWriter, r *http.Request) {
+	if !h.ensureAvailable(w, r) {
+		return
+	}
+	resp, err := h.server.GetCapabilities(r.Context(), &platformv1.TPMCapabilitiesRequest{})
+	if err != nil {
+		protorest.WriteError(w, r, h.respWriter, err)
+		return
+	}
+	protorest.WriteSuccess(w, r, h.respWriter, resp)
+}
+
+// PlatformAttributes returns the TPM device, FIPS mode, platform PCR
+// state and the provisioned EK, SRK and IAK.
+func (h *Handlers) PlatformAttributes(w http.ResponseWriter, r *http.Request) {
+	if !h.ensureAvailable(w, r) {
+		return
+	}
+	resp, err := h.server.GetPlatformAttributes(r.Context(), &platformv1.TPMPlatformAttributesRequest{})
 	if err != nil {
 		protorest.WriteError(w, r, h.respWriter, err)
 		return
@@ -311,7 +340,8 @@ func (h *Handlers) DeleteAK(w http.ResponseWriter, r *http.Request) {
 	}
 	resp, err := h.server.DeleteAK(r.Context(), req)
 	if err != nil {
-		protorest.WriteError(w, r, h.respWriter, err)
+		// DeleteAK refuses (the IAK is not evicted); the refusal is 412.
+		protorest.WriteIdentityDeleteError(w, r, h.respWriter, err)
 		return
 	}
 	protorest.WriteSuccess(w, r, h.respWriter, resp)
@@ -363,7 +393,10 @@ func (h *Handlers) Quote(w http.ResponseWriter, r *http.Request) {
 		h.respWriter.Error400(w, r, err)
 		return
 	}
-	resp, err := h.server.Quote(r.Context(), req)
+	// The node binds its quote to the connection this request arrived on
+	// (#482); nil records a plain-HTTP request, which it refuses.
+	ctx := channelbind.WithConnectionTLS(r.Context(), channelbind.TransportREST, r.TLS)
+	resp, err := h.server.Quote(ctx, req)
 	if err != nil {
 		protorest.WriteError(w, r, h.respWriter, err)
 		return
@@ -382,6 +415,60 @@ func (h *Handlers) VerifyQuote(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	resp, err := h.server.VerifyQuote(r.Context(), req)
+	if err != nil {
+		protorest.WriteError(w, r, h.respWriter, err)
+		return
+	}
+	protorest.WriteSuccess(w, r, h.respWriter, resp)
+}
+
+// Certify handles POST /api/v1/tpm/certify.
+func (h *Handlers) Certify(w http.ResponseWriter, r *http.Request) {
+	if !h.ensureAvailable(w, r) {
+		return
+	}
+	req := &platformv1.CertifyRequest{}
+	if err := protorest.DecodeRequest(r, req); err != nil {
+		h.respWriter.Error400(w, r, err)
+		return
+	}
+	resp, err := h.server.Certify(r.Context(), req)
+	if err != nil {
+		protorest.WriteError(w, r, h.respWriter, err)
+		return
+	}
+	protorest.WriteSuccess(w, r, h.respWriter, resp)
+}
+
+// MakeCredential wraps a secret to an EK and an attestation key name.
+func (h *Handlers) MakeCredential(w http.ResponseWriter, r *http.Request) {
+	if !h.ensureAvailable(w, r) {
+		return
+	}
+	req := &platformv1.MakeCredentialRequest{}
+	if err := protorest.DecodeRequest(r, req); err != nil {
+		h.respWriter.Error400(w, r, err)
+		return
+	}
+	resp, err := h.server.MakeCredential(r.Context(), req)
+	if err != nil {
+		protorest.WriteError(w, r, h.respWriter, err)
+		return
+	}
+	protorest.WriteSuccess(w, r, h.respWriter, resp)
+}
+
+// ActivateCredential recovers the secret MakeCredential wrapped.
+func (h *Handlers) ActivateCredential(w http.ResponseWriter, r *http.Request) {
+	if !h.ensureAvailable(w, r) {
+		return
+	}
+	req := &platformv1.TPMActivateCredentialRequest{}
+	if err := protorest.DecodeRequest(r, req); err != nil {
+		h.respWriter.Error400(w, r, err)
+		return
+	}
+	resp, err := h.server.ActivateCredential(r.Context(), req)
 	if err != nil {
 		protorest.WriteError(w, r, h.respWriter, err)
 		return
@@ -429,6 +516,24 @@ func (h *Handlers) GetPCRs(w http.ResponseWriter, r *http.Request) {
 	protorest.WriteSuccess(w, r, h.respWriter, resp)
 }
 
+// ExtendPCR extends one PCR with the request data.
+func (h *Handlers) ExtendPCR(w http.ResponseWriter, r *http.Request) {
+	if !h.ensureAvailable(w, r) {
+		return
+	}
+	req := &platformv1.ExtendPCRRequest{}
+	if err := protorest.DecodeRequest(r, req); err != nil {
+		h.respWriter.Error400(w, r, err)
+		return
+	}
+	resp, err := h.server.ExtendPCR(r.Context(), req)
+	if err != nil {
+		protorest.WriteError(w, r, h.respWriter, err)
+		return
+	}
+	protorest.WriteSuccess(w, r, h.respWriter, resp)
+}
+
 // DefineNVRAM handles POST /api/v1/tpm/nvram.
 func (h *Handlers) DefineNVRAM(w http.ResponseWriter, r *http.Request) {
 	if !h.ensureAvailable(w, r) {
@@ -447,7 +552,8 @@ func (h *Handlers) DefineNVRAM(w http.ResponseWriter, r *http.Request) {
 	protorest.WriteSuccessStatus(w, r, h.respWriter, http.StatusCreated, resp)
 }
 
-// ReadNVRAM handles GET /api/v1/tpm/nvram/{index}.
+// ReadNVRAM handles GET /api/v1/tpm/nvram/{index}. The optional body
+// carries password, offset and size; the index always comes from the path.
 func (h *Handlers) ReadNVRAM(w http.ResponseWriter, r *http.Request) {
 	if !h.ensureAvailable(w, r) {
 		return
@@ -456,7 +562,13 @@ func (h *Handlers) ReadNVRAM(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	resp, err := h.server.ReadNVRAM(r.Context(), &platformv1.ReadNVRAMRequest{Index: idx})
+	req := &platformv1.ReadNVRAMRequest{}
+	if err := protorest.DecodeRequest(r, req); err != nil {
+		h.respWriter.Error400(w, r, err)
+		return
+	}
+	req.Index = idx
+	resp, err := h.server.ReadNVRAM(r.Context(), req)
 	if err != nil {
 		protorest.WriteError(w, r, h.respWriter, err)
 		return
@@ -487,7 +599,8 @@ func (h *Handlers) WriteNVRAM(w http.ResponseWriter, r *http.Request) {
 	protorest.WriteSuccess(w, r, h.respWriter, resp)
 }
 
-// UndefineNVRAM handles DELETE /api/v1/tpm/nvram/{index}.
+// UndefineNVRAM handles DELETE /api/v1/tpm/nvram/{index}. The optional
+// body carries the password; the index always comes from the path.
 func (h *Handlers) UndefineNVRAM(w http.ResponseWriter, r *http.Request) {
 	if !h.ensureAvailable(w, r) {
 		return
@@ -496,7 +609,13 @@ func (h *Handlers) UndefineNVRAM(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	resp, err := h.server.UndefineNVRAM(r.Context(), &platformv1.UndefineNVRAMRequest{Index: idx})
+	req := &platformv1.UndefineNVRAMRequest{}
+	if err := protorest.DecodeRequest(r, req); err != nil {
+		h.respWriter.Error400(w, r, err)
+		return
+	}
+	req.Index = idx
+	resp, err := h.server.UndefineNVRAM(r.Context(), req)
 	if err != nil {
 		protorest.WriteError(w, r, h.respWriter, err)
 		return

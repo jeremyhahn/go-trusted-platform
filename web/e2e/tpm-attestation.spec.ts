@@ -4,6 +4,7 @@ import {
   createTenantMemberSession,
 } from './fixtures/auth-setup';
 import { mockTenantApi, ApiError } from './fixtures/api-mock';
+import type { TPMInfoResponse } from 'trusted-platform-sdk';
 
 /**
  * TPM and Attestation E2E Tests
@@ -25,11 +26,6 @@ import { mockTenantApi, ApiError } from './fixtures/api-mock';
 // ============================================================================
 
 /**
- * TPM version from SDK
- */
-export type TPMVersion = 'UNSPECIFIED' | 'TPM_1_2' | 'TPM_2_0';
-
-/**
  * PCR bank (hash algorithm) from SDK
  */
 export type PCRBank = 'UNSPECIFIED' | 'SHA1' | 'SHA256' | 'SHA384' | 'SHA512' | 'SM3_256';
@@ -48,39 +44,6 @@ export type AttestationHashAlgorithm = 'UNSPECIFIED' | 'SHA1' | 'SHA256' | 'SHA3
  * Manifest verification status from SDK
  */
 export type ManifestVerificationStatus = 'UNSPECIFIED' | 'UNKNOWN' | 'PENDING' | 'VERIFIED' | 'FAILED';
-
-/**
- * TPM manufacturer information - matches SDK TPMManufacturer
- */
-export interface TPMManufacturer {
-  name: string;
-  id: number;
-  model: string;
-  firmwareVersion: string;
-}
-
-/**
- * TPM capability - matches SDK TPMCapability
- */
-export interface TPMCapability {
-  name: string;
-  supported: boolean;
-  value?: string;
-}
-
-/**
- * TPM info response - matches SDK TPMInfoResponse
- */
-export interface TPMInfoResponse {
-  version: TPMVersion;
-  manufacturer: TPMManufacturer;
-  capabilities: TPMCapability[];
-  pcrBanks: PCRBank[];
-  maxNvramSize: number;
-  isSimulator: boolean;
-  fipsMode: boolean;
-  properties?: Record<string, string>;
-}
 
 /**
  * Get EK response - matches SDK GetEKResponse
@@ -299,7 +262,7 @@ let manifestIdCounter = 1;
  */
 export function createMockTPMInfo(overrides: Partial<TPMInfoResponse> = {}): TPMInfoResponse {
   return {
-    version: 'TPM_2_0',
+    version: 'TPM_VERSION_2_0',
     manufacturer: {
       id: 0x49465800,
       name: 'Infineon',
@@ -322,10 +285,12 @@ export function createMockTPMInfo(overrides: Partial<TPMInfoResponse> = {}): TPM
       { name: 'lockoutRecovery', supported: true, value: '7200' },
       { name: 'maxAuthFail', supported: true, value: '32' },
     ],
-    pcrBanks: ['SHA256', 'SHA1'],
+    pcrBanks: ['PCR_BANK_SHA256', 'PCR_BANK_SHA1'],
     maxNvramSize: 16384,
     isSimulator: false,
     fipsMode: false,
+    properties: {},
+    nvIndexes: [],
     ...overrides,
   };
 }
@@ -1432,10 +1397,12 @@ test.describe('Attestation Management', () => {
       }
     });
 
-    test('should display attestation status badges', async ({ page }) => {
+    test('should label manifests by signature, never as a verdict', async ({ page }) => {
+      // #643: a manifest is evidence. It used to read "verified" with a host
+      // section and "pending" without one, whether or not a verifier ever ran.
       const manifests = [
-        createMockManifest({ id: '1', hostId: 'verified-host' }),
-        createMockManifest({ id: '2', hostId: 'pending-host', host: undefined }),
+        createMockManifest({ id: '1', hostId: 'alpha-host' }),
+        createMockManifest({ id: '2', hostId: 'bravo-host', host: undefined, signature: '' }),
       ];
 
       await mockAttestationApi(page, { manifests });
@@ -1443,9 +1410,10 @@ test.describe('Attestation Management', () => {
 
       await page.goto('/attestation');
 
-      // Verify status badges are shown
-      await expect(page.getByText('verified').first()).toBeVisible();
-      await expect(page.getByText('pending').first()).toBeVisible();
+      const rowFor = (name: string) => page.getByRole('row').filter({ hasText: name });
+      await expect(rowFor('alpha-host')).toContainText('Signed');
+      await expect(rowFor('bravo-host')).toContainText('Unsigned');
+      await expect(page.getByText('Pending', { exact: true })).toHaveCount(0);
     });
 
     test('should show attestation table', async ({ page }) => {
@@ -1858,11 +1826,13 @@ test.describe('Attestation Management', () => {
 
       await page.goto('/attestation/quotes');
 
-      // Verify stats cards
+      // A quote's signature is evidence, not a verdict (#643): the cards count
+      // signed and unsigned quotes and never claim one was verified.
       await expect(page.getByText('Total Quotes')).toBeVisible();
-      await expect(page.getByText('Verified').first()).toBeVisible();
-      await expect(page.getByText('Pending').first()).toBeVisible();
-      await expect(page.getByText('Failed').first()).toBeVisible();
+      await expect(page.getByText('Signed').first()).toBeVisible();
+      await expect(page.getByText('Unsigned').first()).toBeVisible();
+      await expect(page.getByText('Expired').first()).toBeVisible();
+      await expect(page.getByText('Verified', { exact: true })).toHaveCount(0);
     });
 
     test('should show quote status badges', async ({ page }) => {
@@ -1874,7 +1844,7 @@ test.describe('Attestation Management', () => {
       await page.goto('/attestation/quotes');
 
       // Verify status badges
-      await expect(page.getByText('Verified').first()).toBeVisible();
+      await expect(page.getByText('Signed').first()).toBeVisible();
     });
 
     test('should show empty state when no quotes', async ({ page }) => {

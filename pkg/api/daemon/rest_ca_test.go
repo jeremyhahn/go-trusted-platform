@@ -21,11 +21,13 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/gorilla/mux"
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	xkmsca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/ca"
+	restapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/rest"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -73,7 +75,7 @@ func TestRESTServer_SetCAHandlers_Nil(t *testing.T) {
 	require.NoError(t, err)
 
 	// Calling SetCAHandlers with nil should be a no-op (must not panic).
-	server.SetCAHandlers(nil)
+	server.SetCAHandlers(nil, nil)
 
 	// /api/v1/ca/info should NOT be registered when CA is nil.
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/ca/info", nil)
@@ -92,7 +94,7 @@ func TestRESTServer_SetCAHandlers_RegistersRoutes(t *testing.T) {
 	server, err := NewRESTServer(config, service, slog.Default())
 	require.NoError(t, err)
 
-	server.SetCAHandlers(&fakeRESTCA{})
+	server.SetCAHandlers(&fakeRESTCA{}, nil)
 
 	// /api/v1/ca/info should now be registered. The handler will respond
 	// (status will be 200 because the fake CA reports IsInitialized=true).
@@ -113,7 +115,7 @@ func TestRESTServer_SetCAHandlers_AllRoutesRegistered(t *testing.T) {
 	server, err := NewRESTServer(config, service, slog.Default())
 	require.NoError(t, err)
 
-	server.SetCAHandlers(&fakeRESTCA{})
+	server.SetCAHandlers(&fakeRESTCA{}, nil)
 
 	// Walk the router and verify every CA route is present. We can't
 	// distinguish handler-returned 404 from router 404 by status code, so
@@ -123,6 +125,7 @@ func TestRESTServer_SetCAHandlers_AllRoutesRegistered(t *testing.T) {
 		"GET /api/v1/ca/info":                          "",
 		"GET /api/v1/ca/certificates":                  "",
 		"POST /api/v1/ca/certificates":                 "",
+		"POST /api/v1/ca/sign-csr":                     "",
 		"GET /api/v1/ca/certificates/{serial}":         "",
 		"POST /api/v1/ca/certificates/{serial}/revoke": "",
 		"POST /api/v1/ca/certificates/{serial}/renew":  "",
@@ -147,4 +150,50 @@ func TestRESTServer_SetCAHandlers_AllRoutesRegistered(t *testing.T) {
 	for key := range expected {
 		assert.Truef(t, found[key], "route %q must be registered", key)
 	}
+}
+
+// tokenScopeGuard is the daemon's REST guard with tokens as its only
+// credential; a nil validator stays a nil TokenAuthorizer, as in
+// newRESTScopeGuard.
+func tokenScopeGuard(tokens *platformTokenValidator) *restapi.ScopeGuard {
+	if tokens == nil {
+		return restapi.NewScopeGuard(nil, nil, nil)
+	}
+	return restapi.NewScopeGuard(tokens, nil, nil)
+}
+
+// signCSRStatus posts an empty sign-csr request, with bearer when it is set,
+// to a REST server whose CA handlers are authorized by tokens.
+func signCSRStatus(t *testing.T, tokens *platformTokenValidator, bearer string) int {
+	t.Helper()
+	config := DefaultConfig()
+	service, err := NewService(config)
+	require.NoError(t, err)
+	server, err := NewRESTServer(config, service, slog.Default())
+	require.NoError(t, err)
+	server.SetCAHandlers(&fakeRESTCA{}, tokenScopeGuard(tokens))
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/ca/sign-csr", strings.NewReader(`{"csr_pem":"x"}`))
+	if bearer != "" {
+		req.Header.Set("Authorization", "Bearer "+bearer)
+	}
+	w := httptest.NewRecorder()
+	server.router.ServeHTTP(w, req)
+	return w.Code
+}
+
+// Without the platform-token validator nobody can hold ca:sign-csr, so the
+// daemon's REST sign-csr refuses every bearer as unauthenticated.
+func TestRESTServer_SetCAHandlers_SignCSRWithoutAValidator(t *testing.T) {
+	t.Parallel()
+	assert.Equal(t, http.StatusUnauthorized, signCSRStatus(t, nil, "token"))
+}
+
+// With the validator wired, sign-csr asks for a bearer token, and a token
+// the validator refuses (here: a bearer without its required DPoP proof)
+// is unauthenticated.
+func TestRESTServer_SetCAHandlers_SignCSRUsesTheValidator(t *testing.T) {
+	t.Parallel()
+	assert.Equal(t, http.StatusUnauthorized, signCSRStatus(t, &platformTokenValidator{}, ""))
+	assert.Equal(t, http.StatusUnauthorized, signCSRStatus(t, &platformTokenValidator{}, "token"))
 }

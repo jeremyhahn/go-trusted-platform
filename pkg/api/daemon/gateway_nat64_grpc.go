@@ -42,16 +42,14 @@ func WithNAT64(n GatewayNAT64Interface) GatewayServiceOption {
 	}
 }
 
-// NAT64 returns the NAT64 backend, for tests.
+// NAT64 returns the NAT64 backend every transport serves the translator
+// status from; nil when none is wired. It is set only at construction, so
+// it needs no lock. A nil service has no backend.
 func (s *GatewayService) NAT64() GatewayNAT64Interface {
+	if s == nil {
+		return nil
+	}
 	return s.nat64
-}
-
-// SetNAT64 sets the NAT64 backend, for tests.
-func (s *GatewayService) SetNAT64(n GatewayNAT64Interface) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.nat64 = n
 }
 
 // requireNAT64 refuses the call when no translator backend is wired.

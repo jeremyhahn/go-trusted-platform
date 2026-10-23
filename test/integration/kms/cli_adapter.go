@@ -29,6 +29,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
 )
 
 // =============================================================================
@@ -70,6 +72,19 @@ func (e ErrCLICommandFailed) Error() string {
 	return fmt.Sprintf("CLI command %q failed: %v", e.Command, e.Err)
 }
 
+// ErrCLIVerifyExitMismatch is returned when a verify verb's exit status
+// disagrees with the verdict it printed: a failed verification must exit
+// non-zero and a passed one must exit zero.
+type ErrCLIVerifyExitMismatch struct {
+	Operation string
+	Valid     bool
+	Err       error
+}
+
+func (e ErrCLIVerifyExitMismatch) Error() string {
+	return fmt.Sprintf("CLI %s printed valid=%t but exited with error %v", e.Operation, e.Valid, e.Err)
+}
+
 // ErrCLIOutputParseFailed is returned when CLI output cannot be parsed.
 type ErrCLIOutputParseFailed struct {
 	Operation string
@@ -100,6 +115,8 @@ func (e ErrCLIBinaryNotFound) Error() string {
 type CLIAdapter struct {
 	binaryPath     string
 	socketPath     string
+	configDir      string
+	configPath     string
 	commandTimeout time.Duration
 }
 
@@ -144,8 +161,14 @@ func (c *CLIAdapter) Setup(ctx context.Context) error {
 		return ErrCLIBinaryNotFound{Path: c.binaryPath}
 	}
 
+	dir, path, err := helpers.WriteTempLocalCLIConfig(c.socketPath, helpers.GetGRPCEndpoint())
+	if err != nil {
+		return err
+	}
+	c.configDir, c.configPath = dir, path
+
 	// Verify binary works by running version command
-	_, err := c.runCommand(ctx, "version")
+	_, err = c.runCommand(ctx, "version")
 	if err != nil {
 		return fmt.Errorf("CLI binary verification failed: %w", err)
 	}
@@ -155,7 +178,10 @@ func (c *CLIAdapter) Setup(ctx context.Context) error {
 
 // Teardown performs cleanup (no-op for CLI adapter).
 func (c *CLIAdapter) Teardown() error {
-	return nil
+	if c.configDir == "" {
+		return nil
+	}
+	return os.RemoveAll(c.configDir)
 }
 
 // =============================================================================
@@ -164,6 +190,33 @@ func (c *CLIAdapter) Teardown() error {
 
 // runCommand executes a platformctl command and returns the output.
 func (c *CLIAdapter) runCommand(ctx context.Context, args ...string) ([]byte, error) {
+	stdout, err := c.runCommandStdout(ctx, args...)
+	if err != nil {
+		return nil, err
+	}
+	return stdout, nil
+}
+
+// runVerifyCommand runs a verify verb and checks that its exit status matches
+// the verdict it printed. A failed verification prints the verdict and exits
+// non-zero, so it is returned as a result rather than as a command failure.
+func (c *CLIAdapter) runVerifyCommand(ctx context.Context, operation string, result any, valid func() bool, args ...string) error {
+	stdout, runErr := c.runCommandStdout(ctx, args...)
+	if err := json.Unmarshal(stdout, result); err != nil {
+		if runErr != nil {
+			return runErr
+		}
+		return ErrCLIOutputParseFailed{Operation: operation, Output: string(stdout), Err: err}
+	}
+	if valid() == (runErr != nil) {
+		return ErrCLIVerifyExitMismatch{Operation: operation, Valid: valid(), Err: runErr}
+	}
+	return nil
+}
+
+// runCommandStdout runs the CLI and returns its stdout even when the command
+// fails, alongside ErrCLICommandFailed.
+func (c *CLIAdapter) runCommandStdout(ctx context.Context, args ...string) ([]byte, error) {
 	// Create context with timeout if not already set
 	if _, hasDeadline := ctx.Deadline(); !hasDeadline {
 		var cancel context.CancelFunc
@@ -176,9 +229,10 @@ func (c *CLIAdapter) runCommand(ctx context.Context, args ...string) ([]byte, er
 		"--output", "json",
 	}
 
-	// Add socket path if specified and not default
-	if c.socketPath != "" && c.socketPath != DefaultPlatformdSocket {
-		fullArgs = append(fullArgs, "--socket", c.socketPath)
+	// platformctl has no --socket flag; the harness socket reaches it through
+	// the config file Setup wrote (#540).
+	if c.configPath != "" {
+		fullArgs = append(fullArgs, "--config", c.configPath)
 	}
 
 	fullArgs = append(fullArgs, args...)
@@ -196,7 +250,7 @@ func (c *CLIAdapter) runCommand(ctx context.Context, args ...string) ([]byte, er
 		if stderr.Len() > 0 {
 			output += "\nstderr: " + stderr.String()
 		}
-		return nil, ErrCLICommandFailed{
+		return stdout.Bytes(), ErrCLICommandFailed{
 			Command: strings.Join(fullArgs, " "),
 			Output:  output,
 			Err:     err,
@@ -661,14 +715,10 @@ func (c *CLIAdapter) CryptoVerify(ctx context.Context, opts CryptoVerifyOptions)
 		args = append(args, "--version", strconv.FormatUint(opts.KeyVersion, 10))
 	}
 
-	output, err := c.runCommand(ctx, args...)
-	if err != nil {
-		return nil, err
-	}
-
 	var result cliCryptoVerifyResponse
-	if err := json.Unmarshal(output, &result); err != nil {
-		return nil, ErrCLIOutputParseFailed{Operation: "CryptoVerify", Output: string(output), Err: err}
+	valid := func() bool { return result.Valid }
+	if err := c.runVerifyCommand(ctx, "CryptoVerify", &result, valid, args...); err != nil {
+		return nil, err
 	}
 
 	return result.toResult(), nil
@@ -741,14 +791,10 @@ func (c *CLIAdapter) CryptoVerifyHMAC(ctx context.Context, opts CryptoVerifyHMAC
 		args = append(args, "--version", strconv.FormatUint(opts.KeyVersion, 10))
 	}
 
-	output, err := c.runCommand(ctx, args...)
-	if err != nil {
-		return nil, err
-	}
-
 	var result cliCryptoVerifyHMACResponse
-	if err := json.Unmarshal(output, &result); err != nil {
-		return nil, ErrCLIOutputParseFailed{Operation: "CryptoVerifyHMAC", Output: string(output), Err: err}
+	valid := func() bool { return result.Valid }
+	if err := c.runVerifyCommand(ctx, "CryptoVerifyHMAC", &result, valid, args...); err != nil {
+		return nil, err
 	}
 
 	return result.toResult(), nil

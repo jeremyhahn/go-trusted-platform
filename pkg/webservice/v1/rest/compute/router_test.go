@@ -57,13 +57,18 @@ func TestComputeRouter_RoutesRegistered(t *testing.T) {
 		{http.MethodPost, "/api/v1/compute/vms/abc/start"},
 		{http.MethodPost, "/api/v1/compute/vms/abc/stop"},
 		{http.MethodPost, "/api/v1/compute/vms/abc/reboot"},
+		{http.MethodPost, "/api/v1/compute/vms/abc/suspend"},
+		{http.MethodPost, "/api/v1/compute/vms/abc/resume"},
 		{http.MethodGet, "/api/v1/compute/vms/abc/metrics"},
 		{http.MethodPost, "/api/v1/compute/vms/abc/migrate"},
+		{http.MethodPost, "/api/v1/compute/migrations/prepare"},
+		{http.MethodPost, "/api/v1/compute/migrations/abc/finalize"},
 		{http.MethodPost, "/api/v1/compute/vms/abc/disks"},
 		{http.MethodDelete, "/api/v1/compute/vms/abc/disks/d1"},
 		{http.MethodPatch, "/api/v1/compute/vms/abc/disks/d1"},
 		{http.MethodPost, "/api/v1/compute/vms/abc/snapshots"},
 		{http.MethodGet, "/api/v1/compute/vms/abc/snapshots"},
+		{http.MethodGet, "/api/v1/compute/vms/abc/snapshots/s1"},
 		{http.MethodDelete, "/api/v1/compute/vms/abc/snapshots/s1"},
 		{http.MethodPost, "/api/v1/compute/vms/abc/snapshots/s1/restore"},
 		{http.MethodPost, "/api/v1/compute/vms/abc/attest"},
@@ -76,6 +81,7 @@ func TestComputeRouter_RoutesRegistered(t *testing.T) {
 		{http.MethodPost, "/api/v1/compute/containers/c1/stop"},
 		{http.MethodPost, "/api/v1/compute/containers/c1/exec"},
 		{http.MethodGet, "/api/v1/compute/containers/c1/metrics"},
+		{http.MethodPost, "/api/v1/compute/containers/c1/attest"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.method+" "+tc.path, func(t *testing.T) {

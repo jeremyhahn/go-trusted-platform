@@ -14,7 +14,11 @@
 package daemon
 
 import (
+	"fmt"
 	"testing"
+
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 func TestErrDaemonNotRunning(t *testing.T) {
@@ -482,5 +486,35 @@ func TestErrServiceNotAvailable(t *testing.T) {
 				t.Errorf("ErrServiceNotAvailable.Error() = %q, want %q", got, tt.expected)
 			}
 		})
+	}
+}
+
+// TestErrorClasses_GRPCStatus pins the class the MCP server encodes into its
+// JSON-RPC code for the errors MCP tools return: a missing service is
+// Unavailable and a malformed device ID is InvalidArgument, wrapped or not.
+func TestErrorClasses_GRPCStatus(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want codes.Code
+	}{
+		{"service not available", ErrServiceNotAvailable{Service: "device"}, codes.Unavailable},
+		{"invalid device id", ErrInvalidDeviceID{ID: "abc"}, codes.InvalidArgument},
+		{"wrapped service not available", fmt.Errorf("device_get: %w", ErrServiceNotAvailable{Service: "device"}), codes.Unavailable},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := status.Code(tt.err); got != tt.want {
+				t.Errorf("status.Code(%v) = %s, want %s", tt.err, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestErrorClasses_UnclassifiedStaysUnknown keeps an error without a class
+// out of the table, so the MCP server answers it with InternalError.
+func TestErrorClasses_UnclassifiedStaysUnknown(t *testing.T) {
+	if got := status.Code(ErrServiceAlreadyRunning{ServiceName: "dns"}); got != codes.Unknown {
+		t.Errorf("status.Code(ErrServiceAlreadyRunning) = %s, want Unknown", got)
 	}
 }

@@ -224,3 +224,35 @@ func TestGenerateScript_RetriesAndGuardsItsArchitecture(t *testing.T) {
 	assert.Contains(t, script, "iseq ${attempts} 20 && goto boot_giveup")
 	assert.Contains(t, script, "echo Booting pi-01...")
 }
+
+// TestGenerateScript_BootsAnInstalledUKI: a device with a boot image boots it
+// alone, with no argument and no initrd, so only its signed command line runs,
+// and keeps the architecture guard and the retry loop.
+func TestGenerateScript_BootsAnInstalledUKI(t *testing.T) {
+	gen := NewScriptGenerator("http://10.99.99.1:8080", logging.DefaultLogger().Slog())
+	script := gen.GenerateScript(&DeviceBootInfo{
+		MAC: "dc:a6:32:01:36:c2", Hostname: "pi-01", Role: "worker", Architecture: ArchitectureARM64,
+		KernelURL:       "http://10.99.99.1:8080/data/media/aarch64-rpi/vmlinuz",
+		InitrdURL:       "http://10.99.99.1:8080/data/media/aarch64-rpi/initramfs",
+		ExtraKernelArgs: []string{"alpine_start=autoinstall platform_boot_model=diskless-nbd"},
+		BootImageURL:    "http://10.99.99.1:8080/boot/uki/dc:a6:32:01:36:c2.efi",
+	})
+	assert.Contains(t, script, "kernel http://10.99.99.1:8080/boot/uki/dc:a6:32:01:36:c2.efi || goto boot_failed\nboot || goto boot_failed\n")
+	assert.NotContains(t, script, "initrd ")
+	assert.NotContains(t, script, "vmlinuz")
+	assert.NotContains(t, script, "platform_", "no argument reaches the UKI")
+	assert.Contains(t, script, "iseq ${buildarch} arm64 || chain /menu.ipxe?arch=${buildarch}\n")
+	assert.Contains(t, script, "iseq ${attempts} 20 && goto boot_giveup")
+}
+
+// TestGenerateScript_WithoutABootImageFetchesTheInitrd: the installer path is
+// unchanged, the initrd fetched between the kernel and the boot.
+func TestGenerateScript_WithoutABootImageFetchesTheInitrd(t *testing.T) {
+	gen := NewScriptGenerator("http://10.99.99.1:8080", logging.DefaultLogger().Slog())
+	script := gen.GenerateScript(&DeviceBootInfo{
+		MAC: "dc:a6:32:01:36:c2", Hostname: "pi-01",
+		KernelURL: "http://10.99.99.1:8080/vmlinuz", InitrdURL: "http://10.99.99.1:8080/initramfs",
+	})
+	assert.Contains(t, script, "kernel http://10.99.99.1:8080/vmlinuz platform_hostname=pi-01 || goto boot_failed\n"+
+		"initrd http://10.99.99.1:8080/initramfs || goto boot_failed\nboot || goto boot_failed\n")
+}

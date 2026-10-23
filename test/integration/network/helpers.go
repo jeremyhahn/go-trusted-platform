@@ -34,7 +34,6 @@ import (
 	"os"
 	"os/exec"
 	"strings"
-	"testing"
 	"time"
 )
 
@@ -43,15 +42,11 @@ import (
 // =============================================================================
 
 const (
-	// EnvIntegrationTest is the environment variable that must be set to run
-	// integration tests. Set INTEGRATION_TEST=1 to enable.
-	EnvIntegrationTest = "INTEGRATION_TEST"
-
 	// EnvPlatformdGRPCEndpoint is the environment variable for platformd gRPC endpoint.
 	// Default: 127.0.0.1:8443
 	EnvPlatformdGRPCEndpoint = "PLATFORMD_GRPC_ENDPOINT"
 
-	// EnvPlatformAPIEndpoint is the environment variable for platform-api REST endpoint.
+	// EnvPlatformAPIEndpoint is the environment variable for the platformd REST endpoint.
 	// Default: 127.0.0.1:8080
 	EnvPlatformAPIEndpoint = "PLATFORM_API_ENDPOINT"
 
@@ -84,7 +79,7 @@ const (
 	// DefaultPlatformdGRPCEndpoint is the default platformd gRPC endpoint.
 	DefaultPlatformdGRPCEndpoint = "127.0.0.1:10443"
 
-	// DefaultPlatformAPIEndpoint is the default platform-api REST endpoint.
+	// DefaultPlatformAPIEndpoint is the default platformd REST endpoint.
 	DefaultPlatformAPIEndpoint = "127.0.0.1:8443"
 
 	// DefaultPlatformQUICEndpoint is the default platform QUIC endpoint.
@@ -147,39 +142,6 @@ func GetServiceEndpoints() ServiceEndpoints {
 		PlatformdSock: getEnvOrDefault(EnvPlatformdSocket, DefaultPlatformdSocket),
 		NetworkAuth:   getEnvOrDefault(EnvNetworkAuthEndpoint, DefaultNetworkAuthEndpoint),
 		OPA:           getEnvOrDefault(EnvOPAEndpoint, DefaultOPAEndpoint),
-	}
-}
-
-// =============================================================================
-// Skip Helpers
-// =============================================================================
-
-// SkipIfNotIntegration skips the test if the INTEGRATION_TEST environment
-// variable is not set. This ensures integration tests only run when explicitly
-// requested, preventing accidental execution during normal unit testing.
-func SkipIfNotIntegration(t *testing.T) {
-	t.Helper()
-	if os.Getenv(EnvIntegrationTest) == "" {
-		t.Skip("Skipping integration test. Set INTEGRATION_TEST=1 to run.")
-	}
-}
-
-// SkipIfNoOVS skips the test if Open vSwitch is not available.
-// It checks for both the ovs-vsctl command and the OVS database socket.
-func SkipIfNoOVS(t *testing.T) {
-	t.Helper()
-	if !CheckOVSAvailable() {
-		t.Skip("Skipping test: Open vSwitch not available")
-	}
-}
-
-// SkipIfNoOPA skips the test if OPA is not running.
-// It checks if the OPA endpoint is reachable and responding.
-func SkipIfNoOPA(t *testing.T) {
-	t.Helper()
-	endpoint := getEnvOrDefault(EnvOPAEndpoint, DefaultOPAEndpoint)
-	if !CheckOPAAvailable(endpoint) {
-		t.Skip("Skipping test: OPA not available at " + endpoint)
 	}
 }
 

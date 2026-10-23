@@ -605,22 +605,37 @@ func zeroBytes(b []byte) {
 	}
 }
 
-// unresolvedSchemes are the secret-reference schemes that must have been
-// substituted by the platform secrets engine before the service runs.
-var unresolvedSchemes = []string{"kms://", "secret://", "file://"}
-
-// assertResolved rejects a value that is still a secret reference.
+// assertResolved rejects a value that is still a secret reference. The
+// platform secrets engine substitutes every reference (kms://, file://, ...)
+// before the service runs, and PEM material never begins with a URI scheme,
+// so any "<scheme>://" value is refused whatever the scheme — a reference
+// whose scheme no resolver serves fails closed here too.
 func assertResolved(field, value string) error {
 	trimmed := strings.TrimSpace(value)
 	if trimmed == "" {
 		return ErrMissingNTSMaterial{Field: field}
 	}
-	for _, scheme := range unresolvedSchemes {
-		if strings.HasPrefix(trimmed, scheme) {
-			return ErrUnresolvedNTSMaterial{Field: field, Value: trimmed}
-		}
+	if isSecretReference(trimmed) {
+		return ErrUnresolvedNTSMaterial{Field: field, Value: trimmed}
 	}
 	return nil
+}
+
+// isSecretReference reports whether value begins with an RFC 3986 §3.1
+// scheme (ALPHA *( ALPHA / DIGIT / "+" / "-" / "." )) followed by "://".
+func isSecretReference(value string) bool {
+	end := strings.Index(value, "://")
+	if end <= 0 {
+		return false
+	}
+	for i, c := range value[:end] {
+		isAlpha := (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
+		isOther := (c >= '0' && c <= '9') || c == '+' || c == '-' || c == '.'
+		if !isAlpha && (i == 0 || !isOther) {
+			return false
+		}
+	}
+	return true
 }
 
 // writeConfigFile writes chrony.conf and reports whether the content changed.

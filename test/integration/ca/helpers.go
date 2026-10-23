@@ -17,9 +17,6 @@ package ca
 
 import (
 	"fmt"
-	"os"
-	"strings"
-	"testing"
 )
 
 // Environment variable names for service endpoints
@@ -51,40 +48,6 @@ func GetServiceEndpoints() *ServiceEndpoints {
 		PlatformMCP:  "localhost:9445",
 		PlatformUnix: "/run/platformd.sock",
 		PlatformCTL:  "platformctl",
-	}
-}
-
-// SkipIfNotIntegration skips the test if not running integration tests.
-func SkipIfNotIntegration(t *testing.T) {
-	if os.Getenv("INTEGRATION_TEST") == "" {
-		t.Skip("Skipping integration test: INTEGRATION_TEST not set")
-	}
-}
-
-// skipIfNotImplemented skips the test if the error indicates the method
-// is not implemented for the current protocol adapter. This is used for
-// operations that may legitimately not be wired on a given transport
-// (e.g. install-ca-certificates is OS-level only).
-func skipIfNotImplemented(t *testing.T, err error) {
-	t.Helper()
-	if err == nil {
-		return
-	}
-
-	errMsg := strings.ToLower(err.Error())
-	if strings.Contains(errMsg, "not implemented") ||
-		strings.Contains(errMsg, "unimplemented") ||
-		strings.Contains(errMsg, "not supported") ||
-		strings.Contains(errMsg, "service unavailable") ||
-		strings.Contains(errMsg, "not available") ||
-		strings.Contains(errMsg, "unknown service") ||
-		strings.Contains(errMsg, "connection required") ||
-		strings.Contains(errMsg, "404 page not found") ||
-		strings.Contains(errMsg, "status: 404") ||
-		strings.Contains(errMsg, "unknown flag") ||
-		strings.Contains(errMsg, "context canceled") ||
-		strings.Contains(errMsg, "context deadline exceeded") {
-		t.Skipf("Not implemented: %v", err)
 	}
 }
 
@@ -249,15 +212,6 @@ type ErrUninstallFailed struct {
 
 func (e ErrUninstallFailed) Error() string {
 	return fmt.Sprintf("CA certificate uninstallation failed: %s", e.Reason)
-}
-
-// ErrNotImplemented indicates a feature is not implemented.
-type ErrNotImplemented struct {
-	Feature string
-}
-
-func (e ErrNotImplemented) Error() string {
-	return fmt.Sprintf("not implemented: %s", e.Feature)
 }
 
 // ErrCLIConfigCreationFailed indicates failure to create the temporary CLI config file.

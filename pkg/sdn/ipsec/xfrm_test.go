@@ -21,8 +21,8 @@ import (
 	"strconv"
 	"sync"
 	"testing"
-	"time"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ipsec/config"
 	"github.com/vishvananda/netlink"
 	"github.com/vishvananda/netns"
 	"golang.org/x/sys/unix"
@@ -127,9 +127,9 @@ func action(p *netlink.XfrmPolicy) string {
 	return p.Action.String()
 }
 
-func testBlockPolicy(t *testing.T, cfg *Config) (*BlockPolicy, *fakeXFRM) {
+func testBlockPolicy(t *testing.T, cfg *config.Config) (*BlockPolicy, *fakeXFRM) {
 	t.Helper()
-	local, err := enabledLocal(cfg)
+	local, err := config.EnabledLocal(cfg)
 	if err != nil {
 		t.Fatalf("config: %v", err)
 	}
@@ -137,7 +137,7 @@ func testBlockPolicy(t *testing.T, cfg *Config) (*BlockPolicy, *fakeXFRM) {
 	return &BlockPolicy{local: local, iface: cfg.FabricInterface, slaac: cfg.UnderlaySLAAC, handle: x}, x
 }
 
-func installedBlockPolicy(t *testing.T, cfg *Config) (*BlockPolicy, *fakeXFRM) {
+func installedBlockPolicy(t *testing.T, cfg *config.Config) (*BlockPolicy, *fakeXFRM) {
 	t.Helper()
 	b, x := testBlockPolicy(t, cfg)
 	if err := b.Install(context.Background()); err != nil {
@@ -146,7 +146,7 @@ func installedBlockPolicy(t *testing.T, cfg *Config) (*BlockPolicy, *fakeXFRM) {
 	return b, x
 }
 
-func ipv6Config() *Config {
+func ipv6Config() *config.Config {
 	cfg := validConfig()
 	cfg.LocalAddress = "fd00:20::11"
 	cfg.StaticPeers = []string{"fd00:20::1"}
@@ -261,52 +261,6 @@ func TestBlockPolicyInstallFailures(t *testing.T) {
 	}
 	if x.updates != 0 {
 		t.Fatalf("failed Installs wrote %d policies", x.updates)
-	}
-}
-
-func TestBlockPolicyInstallWaitsForTheFabricLink(t *testing.T) {
-	b, x := testBlockPolicy(t, validConfig())
-	delete(x.links, "bond0")
-	b.linkWait = time.Second
-	subs := make(chan chan<- netlink.LinkUpdate, 1)
-	b.subscribe = func(ch chan<- netlink.LinkUpdate, done <-chan struct{}) error {
-		subs <- ch
-		go func() {
-			<-done
-			close(ch)
-		}()
-		return nil
-	}
-	errc := make(chan error, 1)
-	go func() { errc <- b.Install(context.Background()) }()
-	updates := <-subs
-	x.links["bond0"] = fabricIndex
-	updates <- fabricUpdate(fabricIndex)
-	if err := <-errc; err != nil {
-		t.Fatalf("Install after link update: %v", err)
-	}
-	if len(x.spd) != 3 {
-		t.Fatalf("SPD holds %d policies after delayed link, want 3", len(x.spd))
-	}
-}
-
-func TestBlockPolicyInstallTimesOutWaitingForTheFabricLink(t *testing.T) {
-	b, x := testBlockPolicy(t, validConfig())
-	delete(x.links, "bond0")
-	b.linkWait = time.Nanosecond
-	b.subscribe = func(ch chan<- netlink.LinkUpdate, done <-chan struct{}) error {
-		go func() {
-			<-done
-			close(ch)
-		}()
-		return nil
-	}
-	var opErr *OpError
-	if err := b.Install(context.Background()); !errors.As(err, &opErr) || !errors.Is(err, unix.ENODEV) {
-		t.Fatalf("Install after fabric wait timeout: err = %v", err)
-	}
-	if x.updates != 0 {
-		t.Fatalf("timed-out Install wrote %d policies", x.updates)
 	}
 }
 
@@ -606,12 +560,12 @@ func TestNewBlockPolicy(t *testing.T) {
 	invalid.FabricInterface = ""
 	for _, tt := range []struct {
 		name string
-		cfg  *Config
+		cfg  *config.Config
 		want error
 	}{
-		{"absent", nil, ErrNotEnabled},
-		{"disabled", &Config{}, ErrNotEnabled},
-		{"invalid", invalid, ErrRequired},
+		{"absent", nil, config.ErrNotEnabled},
+		{"disabled", &config.Config{}, config.ErrNotEnabled},
+		{"invalid", invalid, config.ErrRequired},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			if _, err := NewBlockPolicy(tt.cfg, netns.None()); !errors.Is(err, tt.want) {

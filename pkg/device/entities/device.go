@@ -106,9 +106,12 @@ var allowedTransitions = map[DeviceState]map[DeviceState]struct{}{
 		DeviceStateRevoked:   {},
 	},
 	DeviceStateSuspended: {
-		// Manual operator restore only; can also be revoked.
-		DeviceStateAttested: {},
-		DeviceStateRevoked:  {},
+		// Manual operator restore only; can also be revoked. An operator
+		// re-enable re-admits the device to quarantine, where only a passing
+		// re-attestation lifts it (issue #250).
+		DeviceStateAttested:    {},
+		DeviceStateQuarantined: {},
+		DeviceStateRevoked:     {},
 	},
 	DeviceStateRevoked: {
 		// Terminal state — no further transitions allowed.
@@ -170,6 +173,12 @@ type Device struct {
 	// DevID v1 r12 §8.2 requires before signed data is trusted as TPM
 	// internal data (#374).
 	AttestCert string `yaml:"att-cert,omitempty" json:"attest_cert,omitempty"`
+	// IDevIDCert is the PEM-encoded IDevID certificate chain (leaf first) the
+	// platform CA issued at enrollment. A diskless node keeps no certificate
+	// across a reboot: it fetches this chain back to present its
+	// TPM-resident IDevID key over mTLS, and the control plane requires the
+	// presented leaf to be this one before it delivers anything (#690).
+	IDevIDCert string `yaml:"idevid-cert,omitempty" json:"idevid_cert,omitempty"`
 	EKCert     string `yaml:"ek-cert" json:"ek_cert"`
 	EventLog   []byte `yaml:"event-log" json:"event_log"`
 	HashAlgoId uint32 `yaml:"hash-algo" json:"hash_algo"`
@@ -211,8 +220,9 @@ type Device struct {
 	UpdatedAt         time.Time `yaml:"updated_at" json:"updated_at"`
 
 	// PriorState records the state the device held immediately before being
-	// quarantined. It is used by the remediation restore path to return the
-	// device to the correct lifecycle state when re-attestation succeeds.
+	// quarantined or suspended. It is used by the remediation restore path to
+	// return the device to the correct lifecycle state when re-attestation
+	// succeeds.
 	PriorState DeviceState `yaml:"prior_state,omitempty" json:"prior_state,omitempty"`
 
 	// PriorZone records the zone name the device was assigned to before

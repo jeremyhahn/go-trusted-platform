@@ -13,6 +13,8 @@
 
 package config
 
+import "strconv"
+
 // WrappedError wraps an underlying cause with a contextual message while
 // preserving errors.Is / errors.As matching through Unwrap. It replaces
 // inline formatted-error constructions that wrap another error.
@@ -28,5 +30,31 @@ func (e *WrappedError) Error() string {
 
 // Unwrap returns the wrapped cause.
 func (e *WrappedError) Unwrap() error {
+	return e.Err
+}
+
+// ErrInvalidConfigKey reports a key that is missing or invalid when the
+// configuration is loaded, naming the file it was read from and the dotted
+// key path, so the operator can fix the file without reading the source.
+type ErrInvalidConfigKey struct {
+	// File is the configuration file the key was read from.
+	File string
+	// Key is the dotted key path, e.g. "quicbaas.spiffe-trust-domain".
+	Key string
+	// Err is the validation failure.
+	Err error
+}
+
+// Error implements the error interface.
+func (e *ErrInvalidConfigKey) Error() string {
+	msg := "config file " + strconv.Quote(e.File) + ": key " + e.Key
+	if e.Err == nil {
+		return msg + ": invalid"
+	}
+	return msg + ": " + e.Err.Error()
+}
+
+// Unwrap returns the validation failure.
+func (e *ErrInvalidConfigKey) Unwrap() error {
 	return e.Err
 }

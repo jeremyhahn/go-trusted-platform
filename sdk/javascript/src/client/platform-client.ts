@@ -29,6 +29,7 @@ import { SDNService } from '../services/sdn-service.js';
 import { TenantService } from '../services/tenant-service.js';
 import { TPMService } from '../services/tpm-service.js';
 import { VTPMService } from '../services/vtpm-service.js';
+import { VPNService } from '../services/vpn-service.js';
 import { InvitationService } from '../services/invitation-service.js';
 import { EABService } from '../services/eab-service.js';
 
@@ -215,6 +216,9 @@ export class PlatformClient {
   /** vTPM service for virtual TPM management */
   public readonly vtpm: VTPMService;
 
+  /** VPN service for the remote-access VPN control plane */
+  public readonly vpn: VPNService;
+
   /** Invitation service for tenant invitation management */
   public readonly invitation: InvitationService;
 
@@ -355,6 +359,7 @@ export class PlatformClient {
     this.tenant = new TenantService(t);
     this.tpm = new TPMService(t);
     this.vtpm = new VTPMService(t);
+    this.vpn = new VPNService(t);
     this.invitation = new InvitationService(t);
     this.eab = new EABService(t);
 

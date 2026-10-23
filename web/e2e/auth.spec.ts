@@ -169,7 +169,7 @@ test.describe('Authentication Flow', () => {
     await page.goto('/auth/webauthn?status=not_registered');
 
     await expect(page.locator('h2')).toContainText('Create Account');
-    await expect(page.getByPlaceholder('Enter your username')).toBeVisible();
+    await expect(page.getByPlaceholder('Enter your email')).toBeVisible();
     await expect(page.getByRole('button', { name: /register/i })).toBeVisible();
   });
 
@@ -184,7 +184,7 @@ test.describe('Authentication Flow', () => {
     // account you sign in to, while the authenticator's picker actually
     // decides, misrepresents what happened. Registration keeps its field —
     // the test above asserts that — so this is not a styling preference.
-    await expect(page.getByPlaceholder('Enter your username')).toHaveCount(0);
+    await expect(page.getByPlaceholder('Enter your email')).toHaveCount(0);
   });
 
   test('should toggle between registration and login forms', async ({ page }) => {
@@ -216,7 +216,7 @@ test.describe('Authentication Flow', () => {
     await page.click('button:has-text("Register")');
 
     // Should show validation error
-    await expect(page.getByText(/please enter a username/i)).toBeVisible();
+    await expect(page.getByText(/please enter your email address/i)).toBeVisible();
   });
 
   // Login does NOT require a username. The ceremony uses discoverable
@@ -285,7 +285,7 @@ test.describe('Invitation Token Flow', () => {
     await expect(page.getByText(/You've been invited to join Acme Corp/i)).toBeVisible();
 
     // Should show registration form for invitation acceptance
-    await expect(page.getByPlaceholder('Enter your username')).toBeVisible();
+    await expect(page.getByPlaceholder('Enter your email')).toBeVisible();
     await expect(page.getByRole('button', { name: /register/i })).toBeVisible();
   });
 
@@ -327,7 +327,7 @@ test.describe('Registration Flow', () => {
     await page.goto('/auth/webauthn?status=not_registered');
 
     // Fill in username and click register
-    await page.fill('input[placeholder="Enter your username"]', 'newuser');
+    await page.fill('input[placeholder="Enter your email"]', 'newuser');
     await page.click('button:has-text("Register")');
 
     // Wait for either successful redirect or the WebAuthn flow to complete
@@ -352,7 +352,7 @@ test.describe('Registration Flow', () => {
       const currentUrl = page.url();
       if (currentUrl.includes('/auth/webauthn')) {
         // Check if an error message is displayed or the form is still usable
-        const usernameInput = page.getByPlaceholder('Enter your username');
+        const usernameInput = page.getByPlaceholder('Enter your email');
         const isFormVisible = await usernameInput.isVisible().catch(() => false);
         expect(isFormVisible || currentUrl.includes('/dashboard')).toBe(true);
       } else {
@@ -370,7 +370,7 @@ test.describe('Registration Flow', () => {
 
     await page.goto('/auth/webauthn?status=not_registered');
 
-    await page.fill('input[placeholder="Enter your username"]', 'failuser');
+    await page.fill('input[placeholder="Enter your email"]', 'failuser');
     await page.click('button:has-text("Register")');
 
     // Wait for form to process
@@ -380,7 +380,7 @@ test.describe('Registration Flow', () => {
     await expect(page).toHaveURL(/\/auth\/webauthn/);
 
     // Form should still be visible for retry - accept any outcome that keeps user on auth page
-    const usernameInput = page.getByPlaceholder('Enter your username');
+    const usernameInput = page.getByPlaceholder('Enter your email');
     await expect(usernameInput).toBeVisible();
 
     // The registration should not proceed - user stays on auth page
@@ -396,7 +396,7 @@ test.describe('Registration Flow', () => {
 
     await page.goto('/auth/webauthn?status=not_registered');
 
-    await page.fill('input[placeholder="Enter your username"]', 'existinguser');
+    await page.fill('input[placeholder="Enter your email"]', 'existinguser');
     await page.click('button:has-text("Register")');
 
     // Wait for the form to process
@@ -408,10 +408,10 @@ test.describe('Registration Flow', () => {
     const hasErrorMessage = await errorMessage.isVisible();
 
     // Also check for the specific text pattern
-    const hasExistsError = await page.getByText('An account with this username already exists').isVisible();
+    const hasExistsError = await page.getByText('An account with this email already exists').isVisible();
 
     // At minimum, the form should still be visible and username filled
-    const usernameInput = page.getByPlaceholder('Enter your username');
+    const usernameInput = page.getByPlaceholder('Enter your email');
     await expect(usernameInput).toBeVisible();
     await expect(usernameInput).toHaveValue('existinguser');
 
@@ -438,7 +438,7 @@ test.describe('Login Flow', () => {
     await page.goto('/auth/webauthn?status=registered');
 
     // Fill in username and click login
-    await page.fill('input[placeholder="Enter your username"]', 'existinguser');
+    await page.fill('input[placeholder="Enter your email"]', 'existinguser');
     await page.click('button:has-text("Log In")');
 
     // Wait for either successful redirect or the WebAuthn flow to complete
@@ -462,7 +462,7 @@ test.describe('Login Flow', () => {
       const currentUrl = page.url();
       if (currentUrl.includes('/auth/webauthn')) {
         // Check if an error message is displayed or the form is still usable
-        const usernameInput = page.getByPlaceholder('Enter your username');
+        const usernameInput = page.getByPlaceholder('Enter your email');
         const isFormVisible = await usernameInput.isVisible().catch(() => false);
         expect(isFormVisible || currentUrl.includes('/dashboard')).toBe(true);
       } else {
@@ -480,7 +480,7 @@ test.describe('Login Flow', () => {
 
     await page.goto('/auth/webauthn?status=registered');
 
-    await page.fill('input[placeholder="Enter your username"]', 'nonexistent');
+    await page.fill('input[placeholder="Enter your email"]', 'nonexistent');
     await page.click('button:has-text("Log In")');
 
     // Should show user-friendly error
@@ -495,7 +495,7 @@ test.describe('Login Flow', () => {
 
     await page.goto('/auth/webauthn?status=registered');
 
-    await page.fill('input[placeholder="Enter your username"]', 'testuser');
+    await page.fill('input[placeholder="Enter your email"]', 'testuser');
     await page.click('button:has-text("Log In")');
 
     // Wait for error message to appear - the actual message varies based on how the error is processed
@@ -531,7 +531,7 @@ test.describe('Invited User Registration', () => {
     await expect(page.getByText(/You've been invited to join Engineering Team/i)).toBeVisible();
 
     // Complete registration
-    await page.fill('input[placeholder="Enter your username"]', 'inviteduser');
+    await page.fill('input[placeholder="Enter your email"]', 'inviteduser');
     await page.click('button:has-text("Register")');
 
     // Wait for either successful redirect or the WebAuthn flow to complete
@@ -554,7 +554,7 @@ test.describe('Invited User Registration', () => {
       const currentUrl = page.url();
       if (currentUrl.includes('/auth/webauthn')) {
         // Form should still be visible for retry
-        const usernameInput = page.getByPlaceholder('Enter your username');
+        const usernameInput = page.getByPlaceholder('Enter your email');
         const isFormVisible = await usernameInput.isVisible().catch(() => false);
         expect(isFormVisible || currentUrl.includes('/dashboard')).toBe(true);
       } else {
@@ -577,7 +577,7 @@ test.describe('Invited User Registration', () => {
 
     await page.goto('/auth/webauthn?invitation=expired-token');
 
-    await page.fill('input[placeholder="Enter your username"]', 'expireduser');
+    await page.fill('input[placeholder="Enter your email"]', 'expireduser');
     await page.click('button:has-text("Register")');
 
     // Should show error message (check for any error message element)
@@ -645,7 +645,7 @@ test.describe('Error State UI', () => {
 
     await page.goto('/auth/webauthn?status=not_registered');
 
-    await page.fill('input[placeholder="Enter your username"]', 'testuser');
+    await page.fill('input[placeholder="Enter your email"]', 'testuser');
     await page.click('button:has-text("Register")');
 
     // Error message should be visible
@@ -658,10 +658,10 @@ test.describe('Error State UI', () => {
 
     // Trigger validation error
     await page.click('button:has-text("Register")');
-    await expect(page.getByText(/please enter a username/i)).toBeVisible();
+    await expect(page.getByText(/please enter your email address/i)).toBeVisible();
 
     // Start typing - error may persist until valid input
-    await page.fill('input[placeholder="Enter your username"]', 't');
+    await page.fill('input[placeholder="Enter your email"]', 't');
 
     // Form should be usable
     await expect(page.getByRole('button', { name: /register/i })).toBeEnabled();
@@ -700,7 +700,7 @@ test.describe('Error State UI', () => {
 
     await page.goto('/auth/webauthn?status=not_registered');
 
-    await page.fill('input[placeholder="Enter your username"]', 'testuser');
+    await page.fill('input[placeholder="Enter your email"]', 'testuser');
 
     // Get the button reference before clicking
     const button = page.getByRole('button', { name: /register/i });
@@ -743,7 +743,7 @@ test.describe('Accessibility', () => {
     await page.goto('/auth/webauthn?status=not_registered');
 
     // Input should be accessible
-    const usernameInput = page.getByPlaceholder('Enter your username');
+    const usernameInput = page.getByPlaceholder('Enter your email');
     await expect(usernameInput).toBeVisible();
     await expect(usernameInput).toBeEnabled();
   });
@@ -752,7 +752,7 @@ test.describe('Accessibility', () => {
     await page.goto('/auth/webauthn?status=not_registered');
 
     // Click on the input first to ensure focus is within the form
-    const usernameInput = page.getByPlaceholder('Enter your username');
+    const usernameInput = page.getByPlaceholder('Enter your email');
     await usernameInput.click();
 
     // Use evaluate for focus check - more reliable across browsers/devices
@@ -777,7 +777,7 @@ test.describe('Accessibility', () => {
   test('should have visible focus indicators', async ({ page }) => {
     await page.goto('/auth/webauthn?status=not_registered');
 
-    const usernameInput = page.getByPlaceholder('Enter your username');
+    const usernameInput = page.getByPlaceholder('Enter your email');
 
     // Click and then explicitly focus to ensure focus is set
     await usernameInput.click();

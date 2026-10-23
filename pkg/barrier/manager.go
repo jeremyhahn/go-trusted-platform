@@ -31,7 +31,32 @@ type Manager struct {
 	logger      *slog.Logger
 	initialized atomic.Bool
 	sealed      atomic.Bool
-	ready       chan struct{}
+	// unsealing records that at least one Shamir share has been accepted
+	// toward the threshold since the barrier was last sealed.
+	unsealing atomic.Bool
+	// ready holds the current ready generation. Seal swaps in a new one;
+	// every unseal path opens whichever generation is current.
+	ready atomic.Pointer[readyGate]
+}
+
+// readyGate is one generation of the ready signal. Its channel is closed
+// when the barrier is unsealed, and the CompareAndSwap on opened makes the
+// close happen exactly once however many unseal paths signal together.
+type readyGate struct {
+	ch     chan struct{}
+	opened atomic.Bool
+}
+
+// newReadyGate returns a generation that has not been opened.
+func newReadyGate() *readyGate {
+	return &readyGate{ch: make(chan struct{})}
+}
+
+// open closes the gate's channel on the first call and does nothing after.
+func (g *readyGate) open() {
+	if g.opened.CompareAndSwap(false, true) {
+		close(g.ch)
+	}
 }
 
 // NewManager creates a new barrier Manager backed by the given SDK client.
@@ -54,8 +79,8 @@ func NewManager(sdk quicbaassdk.Client, config *Config, logger *slog.Logger) (*M
 		sdk:    sdk,
 		config: config,
 		logger: logger,
-		ready:  make(chan struct{}),
 	}
+	m.ready.Store(newReadyGate())
 
 	// Default to sealed until status is checked.
 	m.sealed.Store(true)
@@ -85,6 +110,7 @@ func (m *Manager) SyncStatus(ctx context.Context) error {
 	m.sealed.Store(status.Sealed)
 
 	if !status.Sealed {
+		m.unsealing.Store(false)
 		m.signalReady()
 	}
 
@@ -140,8 +166,8 @@ func (m *Manager) InitializeShamir(ctx context.Context, secret string, threshold
 	if secret == "" {
 		return nil, ErrEmptySecret
 	}
-	if threshold < 1 || shares < 1 || threshold > shares {
-		return nil, ErrInvalidThreshold
+	if err := ValidateShamirSplit(threshold, shares); err != nil {
+		return nil, err
 	}
 	if m.initialized.Load() {
 		return nil, ErrAlreadyInitialized
@@ -172,6 +198,65 @@ func (m *Manager) InitializeShamir(ctx context.Context, secret string, threshold
 		slog.Int("shares", shares))
 
 	return resp, nil
+}
+
+// RegisterOfficer enrolls a Security Officer with the barrier's share
+// ceremony through the SDK: the ceremony signs csrPEM into the officer's
+// custodian certificate and reserves the officer a share slot. A Shamir
+// barrier seals one share to each enrolled officer, so InitializeShamir needs
+// one registered officer per share.
+func (m *Manager) RegisterOfficer(ctx context.Context, username string, csrPEM []byte) error {
+	if ctx == nil {
+		return ErrNilContext
+	}
+	if username == "" {
+		return ErrEmptyUsername
+	}
+	if len(csrPEM) == 0 {
+		return ErrEmptyCSR
+	}
+
+	barrierClient, err := m.barrierClient()
+	if err != nil {
+		return &ManagerError{Op: "RegisterOfficer", Err: err}
+	}
+
+	_, err = barrierClient.OfficerRegister(ctx, &quicbaassdk.QRDBOfficerRegisterRequest{
+		Username: username,
+		CSRPEM:   csrPEM,
+	})
+	if err != nil {
+		return &ManagerError{Op: "RegisterOfficer", Err: err}
+	}
+
+	m.logger.Info("Barrier officer registered", slog.String("username", username))
+	return nil
+}
+
+// Officers returns the usernames of the Security Officers enrolled with the
+// barrier's share ceremony.
+func (m *Manager) Officers(ctx context.Context) ([]string, error) {
+	if ctx == nil {
+		return nil, ErrNilContext
+	}
+
+	barrierClient, err := m.barrierClient()
+	if err != nil {
+		return nil, &ManagerError{Op: "Officers", Err: err}
+	}
+
+	statuses, err := barrierClient.OfficerList(ctx)
+	if err != nil {
+		return nil, &ManagerError{Op: "Officers", Err: err}
+	}
+
+	usernames := make([]string, 0, len(statuses))
+	for _, status := range statuses {
+		if status != nil {
+			usernames = append(usernames, status.Username)
+		}
+	}
+	return usernames, nil
 }
 
 // Unseal unseals the barrier using the master key.
@@ -232,9 +317,11 @@ func (m *Manager) UnsealWithShare(ctx context.Context, share string) (*quicbaass
 
 	if resp.Complete {
 		m.sealed.Store(false)
+		m.unsealing.Store(false)
 		m.signalReady()
 		m.logger.Info("Barrier unsealed via Shamir shares")
 	} else {
+		m.unsealing.Store(resp.Submitted > 0)
 		m.logger.Info("Barrier unseal share submitted",
 			slog.Int("submitted", resp.Submitted),
 			slog.Int("required", resp.Required))
@@ -262,10 +349,13 @@ func (m *Manager) Seal(ctx context.Context) error {
 		return &ManagerError{Op: "Seal", Err: err}
 	}
 
+	// Mark the barrier sealed before starting the new ready generation. If an
+	// unseal lands between the two, the manager reports unsealed with an
+	// unopened gate, so a waiter blocks until the next signal; the other order would
+	// let a waiter through while the barrier reports sealed.
 	m.sealed.Store(true)
-
-	// Reset the ready channel so WaitReady blocks again.
-	m.ready = make(chan struct{})
+	m.unsealing.Store(false)
+	m.ready.Store(newReadyGate())
 
 	m.logger.Info("Barrier sealed")
 
@@ -292,8 +382,8 @@ func (m *Manager) Rekey(ctx context.Context, threshold, total int) (*quicbaassdk
 	if ctx == nil {
 		return nil, ErrNilContext
 	}
-	if threshold < 1 || total < 1 || threshold > total {
-		return nil, ErrInvalidThreshold
+	if err := ValidateShamirSplit(threshold, total); err != nil {
+		return nil, err
 	}
 	if m.sealed.Load() {
 		return nil, ErrSealed
@@ -551,7 +641,7 @@ func (m *Manager) WaitReady(ctx context.Context) error {
 		return ErrNilContext
 	}
 	select {
-	case <-m.ready:
+	case <-m.ready.Load().ch:
 		return nil
 	case <-ctx.Done():
 		return ctx.Err()
@@ -561,6 +651,12 @@ func (m *Manager) WaitReady(ctx context.Context) error {
 // IsSealed returns true if the barrier is currently sealed.
 func (m *Manager) IsSealed() bool {
 	return m.sealed.Load()
+}
+
+// IsUnsealing returns true while the barrier is sealed and at least one
+// Shamir share has been accepted toward the unseal threshold.
+func (m *Manager) IsUnsealing() bool {
+	return m.sealed.Load() && m.unsealing.Load()
 }
 
 // IsInitialized returns true if the barrier has been initialized.
@@ -587,14 +683,10 @@ func (m *Manager) barrierStatus(ctx context.Context) (*quicbaassdk.QRDBBarrierSt
 	return barrierClient.BarrierStatus(ctx)
 }
 
-// signalReady signals the ready channel if it has not been signaled already.
+// signalReady opens the current ready generation. It is safe to call from
+// any number of goroutines at once.
 func (m *Manager) signalReady() {
-	select {
-	case <-m.ready:
-		// Already closed / signaled.
-	default:
-		close(m.ready)
-	}
+	m.ready.Load().open()
 }
 
 // secretBytes copies a credential into a slice the request can carry and the

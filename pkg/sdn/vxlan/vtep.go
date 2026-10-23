@@ -139,11 +139,10 @@ func (m *VTEPManager) Start(ctx context.Context) error {
 		return err
 	}
 
-	ofPort, err := m.ovsClient.GetOFPort(ctx, m.portName)
+	ofPort, err := m.readOFPort(ctx)
 	if err != nil {
-		return &ErrOVSOperationFailed{Operation: "resolve ofport", Target: m.portName, Cause: err}
+		return err
 	}
-	m.ofPort.Store(uint32(ofPort))
 	m.started.Store(true)
 
 	m.logger.Info("VTEP manager started",
@@ -188,7 +187,9 @@ func (m *VTEPManager) ensurePort(ctx context.Context) error {
 	return nil
 }
 
-// Stop removes the VXLAN port. Flows that output to it go with it.
+// Stop removes the VXLAN port. Flows that output to it go with it. A port
+// that is already gone (a successor sharing the bridge, or an operator,
+// removed it) leaves nothing to remove, so the stop succeeds.
 func (m *VTEPManager) Stop(ctx context.Context) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -199,7 +200,8 @@ func (m *VTEPManager) Stop(ctx context.Context) error {
 	m.started.Store(false)
 	m.ofPort.Store(0)
 
-	if err := m.ovsClient.DeleteVXLANPort(ctx, m.bridgeName, m.portName); err != nil {
+	err := m.ovsClient.DeleteVXLANPort(ctx, m.bridgeName, m.portName)
+	if err != nil && !errors.Is(err, ovs.ErrVXLANPortNotFound) {
 		return &ErrOVSOperationFailed{Operation: "delete VXLAN port", Target: m.portName, Cause: err}
 	}
 
@@ -214,6 +216,34 @@ func (m *VTEPManager) OFPort() (uint32, error) {
 		return 0, ErrManagerNotStarted
 	}
 	return m.ofPort.Load(), nil
+}
+
+// ResolveOFPort reads the VXLAN port's OpenFlow number from OVS again and
+// keeps it. A restarted ovs-vswitchd can renumber the port, so a caller that
+// reconnects to the switch resolves it before building flows on it.
+func (m *VTEPManager) ResolveOFPort(ctx context.Context) (uint32, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if !m.started.Load() {
+		return 0, ErrManagerNotStarted
+	}
+	return m.readOFPort(ctx)
+}
+
+// readOFPort reads the VXLAN port's OpenFlow number and stores it. OVS
+// reports -1 for an interface it could not attach; that is no port to
+// build flows on.
+func (m *VTEPManager) readOFPort(ctx context.Context) (uint32, error) {
+	ofPort, err := m.ovsClient.GetOFPort(ctx, m.portName)
+	if err == nil && ofPort <= 0 {
+		err = ErrOFPortUnassigned
+	}
+	if err != nil {
+		return 0, &ErrOVSOperationFailed{Operation: "resolve ofport", Target: m.portName, Cause: err}
+	}
+	m.ofPort.Store(uint32(ofPort))
+	return uint32(ofPort), nil
 }
 
 // PortName returns the name of the VXLAN port.

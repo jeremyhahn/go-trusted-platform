@@ -2,6 +2,7 @@ package diskimage
 
 import (
 	"path/filepath"
+	"runtime"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/diskimage/runner"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/iso"
@@ -13,7 +14,9 @@ const (
 	DefaultTarget           = "rpi"
 	DefaultSizeMB           = 4096
 	DefaultContainerRuntime = "docker"
-	DefaultBuilderImage     = "trusted-platform-diskimage-builder:arm64"
+	// DefaultBuilderImage is the builder image repository; the image tag is
+	// the architecture it is built for (see BuildConfig.builderImageFor).
+	DefaultBuilderImage = "trusted-platform-diskimage-builder"
 	// DefaultBuilderDir is the assemble container's build context, relative
 	// to the repository root.
 	DefaultBuilderDir = "build/docker/diskimage-builder"
@@ -28,6 +31,10 @@ const (
 	MediaDirName = "media"
 	// containerMediaMount is where the installer reads the media.
 	containerMediaMount = "/media/cdrom"
+	// containerInstallerMount is where the host-architecture installer binary
+	// lands in a foreign-architecture build; hostInstallerName is its name.
+	containerInstallerMount = "/installer"
+	hostInstallerName       = "platformctl-static"
 	// containerWorkMount is where the image is written inside the container.
 	containerWorkMount = "/work"
 	// minimumSizeMB is the smallest image that fits the installer's 538 MB
@@ -51,8 +58,18 @@ type BuildConfig struct {
 	// BinariesDir holds the target-architecture platformd, platformctl,
 	// platformctl-static, platform-initrd and gatewayd.
 	BinariesDir string
+	// HostArch is the Go architecture of the build host (default
+	// runtime.GOARCH). The assemble container runs at this platform, so
+	// partitioning, LUKS and mkfs run natively; only the target chroot steps
+	// run under binfmt.
+	HostArch string
+	// HostInstallerBinary is a static platformctl built for HostArch. It runs
+	// the installer in the assemble container when the target is a foreign
+	// architecture (the media's platformctl-static is the target's, and is
+	// what the finished image carries). Unused when the target is the host.
+	HostInstallerBinary string
 	// ContainerRuntime is docker (default); BuilderImage the assemble
-	// image tag; BuilderDir its build context.
+	// image repository (tagged per architecture); BuilderDir its build context.
 	ContainerRuntime string
 	BuilderImage     string
 	BuilderDir       string
@@ -87,6 +104,14 @@ type BuildConfig struct {
 	SkipPreflight bool
 }
 
+// builderImageFor is the builder image tag for a Go architecture. The assemble
+// step (host) and the netboot-initfs and diskless-root steps (target) build
+// different platforms, so each gets its own tag and no step can run another
+// platform's image.
+func (c *BuildConfig) builderImageFor(arch string) string {
+	return c.BuilderImage + ":" + arch
+}
+
 // withDefaults fills the zero fields.
 func (c *BuildConfig) withDefaults() *BuildConfig {
 	out := *c
@@ -95,6 +120,9 @@ func (c *BuildConfig) withDefaults() *BuildConfig {
 	}
 	if out.SizeMB == 0 {
 		out.SizeMB = DefaultSizeMB
+	}
+	if out.HostArch == "" {
+		out.HostArch = runtime.GOARCH
 	}
 	if out.ContainerRuntime == "" {
 		out.ContainerRuntime = DefaultContainerRuntime

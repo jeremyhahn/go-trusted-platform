@@ -53,11 +53,14 @@ a client cannot connect on a transport you assumed was running.
 ## Transports
 
 ```bash
-platformctl --transport embedded status   # in-process; no daemon required
 platformctl --transport unix status       # gRPC over a Unix socket
 platformctl --transport rest status
 platformctl --transport quic status
 ```
+
+`--transport embedded` hosts platformd inside `platformctl` itself, with the
+node's own configuration and the calling user's credentials, and opens no
+network listener — run it as root on the node ([cli.md](cli.md) §2.3).
 
 Precedence for every setting is **flag > environment > config file > default**,
 so `PLATFORMCTL_TRANSPORT=quic` sets it for a shell and `--transport rest`
@@ -79,6 +82,16 @@ curl -s -X POST https://platform.example.com/api/v1/platform/services/dns/start
 curl -s -X POST https://platform.example.com/api/v1/platform/services/dns/stop
 curl -s -X POST https://platform.example.com/api/v1/platform/services/dns/restart
 ```
+
+**Start, stop and restart are refused for every service today.** `tpm`, `sdn`,
+`compute`, `dns`, `acme`, `webservice` and `attestation` are built once by
+`platformd serve` and live as long as the process, so each verb answers
+`service <name> cannot be started or stopped at runtime: <reason>` and changes
+nothing (400 on REST, `FailedPrecondition` on gRPC and the Unix socket,
+`StatusInvalidRequest` on QUIC, `-32007` on MCP). Restart the daemon instead:
+`systemctl restart platformd`. `list` and `get` report what is actually
+running, read from the subsystem itself. The reasons per service are in
+[api.md](api.md) §2.
 
 **A service that is off answers 503, not 404.** Across the whole platform, 503
 means "this capability exists and is not running or not wired in" — configuration,
@@ -127,6 +140,12 @@ curl -s https://platform.example.com/api/v1/platform/system
 `StreamEvents`, `StreamLogs` and `StreamMetrics` are the gRPC streaming
 equivalents.
 
+`?level=` takes a minimum level: `DEBUG`, `INFO`, `WARN`, `ERROR`, `FATAL`
+or `SECURITY`. `level=SECURITY` returns only security events, such as the
+admin re-claim alert (`adminclaim.reclaim`; see
+[`docs/auth/user.md`](../auth/user.md)). The console's **Platform → Logs**
+page has the same filter. Expand a row to read the event's `details`.
+
 `ListEntityTypes` and `DumpEntityType` (gRPC) enumerate and dump the stored
 entity types — a debugging surface, and `DumpEntityType` streams because a dump
 is unbounded.
@@ -141,8 +160,11 @@ is unbounded.
 | **Readiness** | It is ready to serve. Take it out of rotation if this fails, but do not restart it. |
 | **Health** | The composite view. |
 
-On QUIC these are `0x00`, `0x01` and `0x02`; on MCP, `platform_health`,
-`platform_liveness` and `platform_readiness`.
+On REST these are `GET /health`, `/health/live` and `/health/ready`; on gRPC,
+`PlatformDaemon/GetHealth`, `/Liveness` and `/Readiness`; on QUIC, `0x00`,
+`0x01` and `0x02`; on MCP, `platform_health`, `platform_liveness` and
+`platform_readiness`. Every transport answers them from the same functions
+([`health/api.md`](../health/api.md) §4).
 
 **Wiring a load balancer to liveness instead of readiness** sends traffic to a
 node that is up and not ready. It is a common mistake and the platform gives you
@@ -172,6 +194,24 @@ It should not — panicking handlers are recovered into an internal-error respon
 on both QUIC and gRPC specifically so a client never sees a bare EOF. A genuine
 bare EOF is a different problem.
 
+**`platformd` refuses to start with a log error.**
+It could not use `--log-dir`. "invalid log directory" means the value is
+empty or contains a NUL byte; "failed to create log directory" or "failed to
+open log file" carries the operating system's reason, usually a permission
+problem or a file where a directory should be. `platformd serve` prints the
+error and exits non-zero; it no longer panics with a stack trace.
+
+**`platformd` refuses to start with "failed to read the local hostname".**
+No hostname is configured and the operating system could not supply one. Set
+the hostname in the configuration.
+
+**`platformd serve` refuses to start: "tokens without scope claims are authorized by the IAM policy enforcement point".**
+gRPC TCP is on with neither mTLS nor platform tokens, and quicbaas is embedded.
+The embedded SDK cannot answer the policy check that plain tokens need, so
+every gRPC call would fail. Start with `--enable-mtls` (the shipped units do),
+or, with webservices configured, set `jwt.platform-token.enabled: true`. See
+[configuration.md](configuration.md#grpc-tcp-needs-mtls-or-platform-tokens-under-embedded-quicbaas).
+
 **Configuration changed and something broke.**
 Roll back to a snapshot. If you did not take one, that is the lesson.
 
@@ -179,15 +219,17 @@ Roll back to a snapshot. If you did not take one, that is the lesson.
 
 ## One thing to be aware of
 
-`PlatformDaemon` has 17 RPCs and **16 of them carry no required scope** —
-including `Shutdown`, `UpdateConfig` and `StopService`. The gRPC scope catalog
-covers 185 of 461 RPCs and the MCP authorization map covers 71 of 449 tools, and
-**both default to allow** for anything unlisted.
+Both scope catalogs **refuse anything unlisted**. Every gRPC RPC carries a
+required scope: the `PlatformDaemon` observers need `platform:read`,
+`UpdateConfig`, `ReloadConfig` and the service start/stop/restart calls need
+`platform:write`, and `Shutdown` and `DumpEntityType` need `platform:admin`.
+Only `grpc.health.v1.Health/Check` answers without a token.
 
-In practice that means a valid token is close to an administrative credential on
-several surfaces. Treat token issuance accordingly until the default is
-revisited. The full picture is in [api.md](api.md) §5, and it is raised for the
-owner as the largest single question this documentation migration surfaced.
+On MCP every tool is classified. `platform_daemon_status`, `_version`,
+`_list_services` and `_get_service` need `platform:read`, and the service
+start, stop and restart tools need `platform:write`, as on gRPC.
+`platform_daemon_list_protocols` needs `platform:read`, as on QUIC. The full
+picture is in [api.md](api.md) §5.
 
 ---
 

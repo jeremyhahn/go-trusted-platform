@@ -150,6 +150,7 @@ func (a *linuxDeployerAdapter) deployConfig(manifestPath string) *deployer.Deplo
 		DataDir:            c.EffectiveDataDir(),
 		RedeployMode:       string(c.EffectiveRedeployMode()),
 		BootstrapInterface: c.BootstrapInterface,
+		BootstrapBindHost:  c.BootstrapBindHost,
 		BootstrapServerIP:  c.BootstrapServerIP,
 		// Effective* rather than the raw fields so the deployer sends the
 		// same ports the orchestrator builds its URLs against.
@@ -158,10 +159,13 @@ func (a *linuxDeployerAdapter) deployConfig(manifestPath string) *deployer.Deplo
 		BootstrapDHCPStart:        c.BootstrapDHCPStart,
 		BootstrapDHCPEnd:          c.BootstrapDHCPEnd,
 		BootstrapGateway:          c.BootstrapGateway,
+		BootstrapNoRouter:         c.BootstrapNoRouter,
 		BootstrapDNS:              c.BootstrapDNS,
 		BootstrapAPKMirror:        c.BootstrapAPKMirror,
 		NetbootMediaDir:           c.NetbootMediaDir,
 		BootstrapProxyDHCP:        c.ProxyDHCP,
+		BootNode:                  c.BootNode,
+		FirmwareCacheDir:          c.FirmwareCacheDir,
 	}
 	dc.ApplyDefaults()
 	return dc

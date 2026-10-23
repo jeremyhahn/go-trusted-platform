@@ -35,11 +35,24 @@ const (
 	// bootstrap mode. Its value is the host:port of the bootstrap server's
 	// forensic/sink HTTP endpoint.
 	kernelCmdlineParam = "platform_debug_sink"
-
-	// procCmdlinePath is the path to the kernel cmdline pseudo-file.
-	// Declared as a variable so tests can override it.
-	procCmdlinePath = "/proc/cmdline"
 )
+
+// procCmdlinePath is the path to the kernel cmdline pseudo-file.
+// Overridable seam for tests; defaults to /proc/cmdline.
+var procCmdlinePath = "/proc/cmdline"
+
+// dialUDP opens the logical UDP connection preferredOutboundIP reads its
+// local address from.
+// Overridable seam for tests; defaults to net.Dial.
+var dialUDP = net.Dial
+
+// listInterfaces lists the host's network interfaces for primaryInterfaceInfo.
+// Overridable seam for tests; defaults to net.Interfaces.
+var listInterfaces = net.Interfaces
+
+// interfaceAddrs lists one interface's addresses for primaryInterfaceInfo.
+// Overridable seam for tests; defaults to (*net.Interface).Addrs.
+var interfaceAddrs = (*net.Interface).Addrs
 
 // ErrBootstrapRegistration is returned when the bootstrap registration POST fails.
 type ErrBootstrapRegistration struct {
@@ -236,7 +249,7 @@ func primaryInterfaceInfo() (string, string) {
 		return "", ""
 	}
 
-	ifaces, err := net.Interfaces()
+	ifaces, err := listInterfaces()
 	if err != nil {
 		return preferredIP, ""
 	}
@@ -248,7 +261,7 @@ func primaryInterfaceInfo() (string, string) {
 		if iface.Flags&net.FlagUp == 0 {
 			continue
 		}
-		addrs, err := iface.Addrs()
+		addrs, err := interfaceAddrs(&iface)
 		if err != nil {
 			continue
 		}
@@ -269,7 +282,7 @@ func primaryInterfaceInfo() (string, string) {
 // preferredOutboundIP returns the local IPv4 address the OS would use to reach
 // an external destination. Uses a connectionless UDP dial to avoid actual traffic.
 func preferredOutboundIP() string {
-	conn, err := net.Dial("udp", "1.2.3.4:80")
+	conn, err := dialUDP("udp", "1.2.3.4:80")
 	if err != nil {
 		return ""
 	}

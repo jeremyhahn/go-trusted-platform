@@ -116,16 +116,9 @@ func (c *Client) SetMode(ctx context.Context, modes uint32) (*platformv1.Gateway
 // SetModeFromStrings sets the gateway operating mode(s) from string names.
 // Accepts mode names like "overlay", "edge", "transit".
 func (c *Client) SetModeFromStrings(ctx context.Context, modes []string) (*platformv1.GatewayStatus, error) {
-	var modeBitmask uint32
-	for _, mode := range modes {
-		switch mode {
-		case "overlay":
-			modeBitmask |= uint32(platformv1.GatewayModeEnum_GATEWAY_MODE_OVERLAY)
-		case "edge":
-			modeBitmask |= uint32(platformv1.GatewayModeEnum_GATEWAY_MODE_EDGE)
-		case "transit":
-			modeBitmask |= uint32(platformv1.GatewayModeEnum_GATEWAY_MODE_TRANSIT)
-		}
+	modeBitmask, err := ModesFromNames(modes)
+	if err != nil {
+		return nil, &ErrSetModeFailed{Cause: err}
 	}
 	return c.SetMode(ctx, modeBitmask)
 }

@@ -14,11 +14,15 @@
 package container
 
 import (
+	"net"
 	"os"
 	"path"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
+
+	"github.com/jeremyhahn/go-trusted-platform/pkg/bootstrap/nbd"
 )
 
 const (
@@ -60,6 +64,11 @@ const DataURLPath = "/data"
 type ServerConfig struct {
 	// Interface is the network interface to bind to.
 	Interface string
+
+	// BindHost is the address the HTTP and TFTP servers bind (#93); empty
+	// is every interface. DHCP keeps the unspecified address on Interface:
+	// see ipxe.ServerConfig.BindHost.
+	BindHost string
 
 	// HTTPPort is the HTTP server port (default: 8080).
 	HTTPPort int
@@ -134,6 +143,60 @@ type ServerConfig struct {
 	// no /sbin/init) and as platform_apk_mirror=<mirror> (so the
 	// post-switch-root autoinstall repo setup resolves packages too).
 	APKMirror string
+
+	// NBD configures the NBD-over-TLS export server, which runs only when
+	// the manifest holds a diskless-nbd node (#689).
+	NBD NBDConfig
+}
+
+// NBDConfig configures the export server for diskless-nbd nodes. Its
+// fields are checked only when the manifest holds such a node, so a
+// container that serves none needs none of them.
+type NBDConfig struct {
+	// ListenAddr is the host:port the export server binds. Empty derives
+	// the provisioning address, DHCPConfig.ServerIP, on nbd.DefaultPort.
+	ListenAddr string `yaml:"listen_addr" json:"listen_addr"`
+
+	// VolumeDir holds one volume file per device. Empty derives
+	// <DataDir>/nbd, so volumes persist on the container's bind mount.
+	VolumeDir string `yaml:"volume_dir" json:"volume_dir"`
+
+	// VolumeSize is the size in bytes a device's volume is created at on
+	// its first attach: positive and a multiple of 512. Required.
+	VolumeSize int64 `yaml:"volume_size" json:"volume_size"`
+
+	// CAFile is the platform CA bundle the nodes' IDevID certificates must
+	// chain to. It is read on every handshake. Required.
+	CAFile string `yaml:"ca_file" json:"ca_file"`
+
+	// CertFile and KeyFile are the server's TLS certificate and key, in
+	// PEM. Required.
+	CertFile string `yaml:"cert_file" json:"cert_file"`
+	KeyFile  string `yaml:"key_file" json:"key_file"`
+}
+
+// nbdVolumeSubdir is where volumes live under DataDir by default.
+const nbdVolumeSubdir = "nbd"
+
+// validate checks the settings the export server cannot start without.
+// The volume size and identities are checked again by nbd.Config.
+func (c NBDConfig) validate() error {
+	if _, _, err := net.SplitHostPort(c.ListenAddr); err != nil {
+		return ErrInvalidServerConfig{Field: "nbd.listen_addr", Reason: "must be host:port"}
+	}
+	if c.VolumeSize <= 0 {
+		return ErrInvalidServerConfig{Field: "nbd.volume_size", Reason: "must be set when the manifest has a diskless-nbd node"}
+	}
+	if c.CAFile == "" {
+		return ErrInvalidServerConfig{Field: "nbd.ca_file", Reason: "must name the platform CA bundle"}
+	}
+	if c.CertFile == "" {
+		return ErrInvalidServerConfig{Field: "nbd.cert_file", Reason: "must not be empty"}
+	}
+	if c.KeyFile == "" {
+		return ErrInvalidServerConfig{Field: "nbd.key_file", Reason: "must not be empty"}
+	}
+	return nil
 }
 
 // DHCPConfig holds DHCP server settings for the bootstrap container.
@@ -236,6 +299,12 @@ func (c *ServerConfig) ApplyDefaults() {
 	}
 	if c.APKMirror == "" {
 		c.APKMirror = DefaultAPKMirror
+	}
+	if c.NBD.ListenAddr == "" && c.DHCPConfig.ServerIP != "" {
+		c.NBD.ListenAddr = net.JoinHostPort(c.DHCPConfig.ServerIP, strconv.Itoa(nbd.DefaultPort))
+	}
+	if c.NBD.VolumeDir == "" {
+		c.NBD.VolumeDir = filepath.Join(c.DataDir, nbdVolumeSubdir)
 	}
 }
 

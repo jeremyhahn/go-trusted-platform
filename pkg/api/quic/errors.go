@@ -16,19 +16,14 @@ package quic
 import (
 	"errors"
 	"fmt"
+
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 )
 
 // Sentinel errors for QUIC operations
 var (
 	ErrServerNotRunning = errors.New("server is not running")
 	ErrServerRunning    = errors.New("server is already running")
-	ErrClientClosed     = errors.New("client is closed")
-	ErrConnectionFailed = errors.New("connection failed")
-	ErrStreamFailed     = errors.New("stream operation failed")
-	ErrPayloadTooLarge  = errors.New("payload exceeds maximum size")
-	ErrTokenTooLarge    = errors.New("token exceeds maximum size")
-	ErrNilRequest       = errors.New("request cannot be nil")
-	ErrNilResponse      = errors.New("response cannot be nil")
 )
 
 // CA sentinel errors
@@ -43,16 +38,6 @@ var (
 	ErrCABundleNotFound       = errors.New("CA bundle not found")
 	ErrCACertStoreUnavailable = errors.New("certificate store not available")
 )
-
-// ErrInvalidConfig represents a configuration validation error
-type ErrInvalidConfig struct {
-	Field  string
-	Reason string
-}
-
-func (e ErrInvalidConfig) Error() string {
-	return fmt.Sprintf("invalid configuration: %s: %s", e.Field, e.Reason)
-}
 
 // ErrTLSConfigGeneration represents a TLS configuration generation failure
 type ErrTLSConfigGeneration struct {
@@ -69,16 +54,6 @@ func (e ErrTLSConfigGeneration) Error() string {
 
 func (e ErrTLSConfigGeneration) Unwrap() error {
 	return e.Err
-}
-
-// ErrProtocol represents a protocol-level error
-type ErrProtocol struct {
-	Status  byte
-	Message string
-}
-
-func (e ErrProtocol) Error() string {
-	return fmt.Sprintf("protocol error (status 0x%02X): %s", e.Status, e.Message)
 }
 
 // ErrCAInvalidAlgorithm represents an invalid key algorithm error
@@ -216,56 +191,45 @@ func (e ErrCABundleFailed) Unwrap() error {
 	return e.Cause
 }
 
-// StatusError returns an error for a given status code
-func StatusError(status byte, message string) error {
-	if status == StatusOK {
-		return nil
-	}
-	return &ErrProtocol{
-		Status:  status,
-		Message: message,
-	}
-}
-
 // ErrorToStatus converts an error to a status code
 func ErrorToStatus(err error) byte {
 	if err == nil {
-		return StatusOK
+		return quicwire.StatusOK
 	}
 
-	var protoErr *ErrProtocol
+	var protoErr *quicwire.ErrProtocol
 	if errors.As(err, &protoErr) {
 		return protoErr.Status
 	}
 
 	// Map common errors to status codes
 	switch {
-	case errors.Is(err, ErrNilRequest), errors.Is(err, ErrNilResponse):
-		return StatusInvalidRequest
-	case errors.Is(err, ErrPayloadTooLarge), errors.Is(err, ErrTokenTooLarge):
-		return StatusInvalidArgument
-	case errors.Is(err, ErrClientClosed), errors.Is(err, ErrServerNotRunning):
-		return StatusUnavailable
+	case errors.Is(err, quicwire.ErrNilRequest), errors.Is(err, quicwire.ErrNilResponse):
+		return quicwire.StatusInvalidRequest
+	case errors.Is(err, quicwire.ErrPayloadTooLarge), errors.Is(err, quicwire.ErrTokenTooLarge):
+		return quicwire.StatusInvalidArgument
+	case errors.Is(err, quicwire.ErrClientClosed), errors.Is(err, ErrServerNotRunning):
+		return quicwire.StatusUnavailable
 	case errors.Is(err, ErrCANotInitialized), errors.Is(err, ErrCACertStoreUnavailable):
-		return StatusUnavailable
+		return quicwire.StatusUnavailable
 	case errors.Is(err, ErrCAMissingCommonName), errors.Is(err, ErrCAMissingSerial),
 		errors.Is(err, ErrCAMissingCertificate), errors.Is(err, ErrCAInvalidPEM),
 		errors.Is(err, ErrCAInvalidExtendDays):
-		return StatusInvalidArgument
+		return quicwire.StatusInvalidArgument
 	case errors.Is(err, ErrCACRLNotSupported):
-		return StatusNotImplemented
+		return quicwire.StatusNotImplemented
 	case errors.Is(err, ErrCABundleNotFound):
-		return StatusNotFound
+		return quicwire.StatusNotFound
 	default:
-		return StatusInternalError
+		return quicwire.StatusInternalError
 	}
 }
 
 // IsNotFound checks if the error represents a "not found" condition
 func IsNotFound(err error) bool {
-	var protoErr *ErrProtocol
+	var protoErr *quicwire.ErrProtocol
 	if errors.As(err, &protoErr) {
-		return protoErr.Status == StatusNotFound
+		return protoErr.Status == quicwire.StatusNotFound
 	}
 	var certNotFound ErrCACertNotFound
 	if errors.As(err, &certNotFound) {
@@ -276,20 +240,20 @@ func IsNotFound(err error) bool {
 
 // IsUnauthorized checks if the error represents an authorization failure
 func IsUnauthorized(err error) bool {
-	var protoErr *ErrProtocol
+	var protoErr *quicwire.ErrProtocol
 	if errors.As(err, &protoErr) {
-		return protoErr.Status == StatusUnauthorized
+		return protoErr.Status == quicwire.StatusUnauthorized
 	}
 	return false
 }
 
 // IsUnavailable checks if the error represents service unavailability
 func IsUnavailable(err error) bool {
-	var protoErr *ErrProtocol
+	var protoErr *quicwire.ErrProtocol
 	if errors.As(err, &protoErr) {
-		return protoErr.Status == StatusUnavailable
+		return protoErr.Status == quicwire.StatusUnavailable
 	}
-	return errors.Is(err, ErrServerNotRunning) || errors.Is(err, ErrClientClosed) ||
+	return errors.Is(err, ErrServerNotRunning) || errors.Is(err, quicwire.ErrClientClosed) ||
 		errors.Is(err, ErrCANotInitialized) || errors.Is(err, ErrCACertStoreUnavailable)
 }
 
@@ -360,34 +324,4 @@ func IsCAError(err error) bool {
 
 	var bundleFailed ErrCABundleFailed
 	return errors.As(err, &bundleFailed)
-}
-
-// MessageError is a typed error carrying a fully formatted message with no
-// underlying cause. It replaces inline formatted-error constructions that do not wrap
-// another error.
-type MessageError struct {
-	Msg string
-}
-
-// Error implements the error interface.
-func (e *MessageError) Error() string {
-	return e.Msg
-}
-
-// WrappedError wraps an underlying cause with a contextual message while
-// preserving errors.Is / errors.As matching through Unwrap. It replaces
-// inline formatted-error constructions that wrap another error.
-type WrappedError struct {
-	Msg string
-	Err error
-}
-
-// Error implements the error interface.
-func (e *WrappedError) Error() string {
-	return e.Msg + ": " + e.Err.Error()
-}
-
-// Unwrap returns the wrapped cause.
-func (e *WrappedError) Unwrap() error {
-	return e.Err
 }

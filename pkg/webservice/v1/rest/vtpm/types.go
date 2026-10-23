@@ -25,6 +25,7 @@ type CreateBundleRequest struct {
 	SecureBootEnabled bool              `json:"secure_boot_enabled"`
 	Labels            map[string]string `json:"labels,omitempty"`
 	TemplateID        string            `json:"template_id,omitempty"`
+	DeviceProfileID   uint64            `json:"device_profile_id,omitempty"`
 }
 
 // CreateTemplateRequest is the request body for creating a template.
@@ -105,6 +106,7 @@ type ManifestResponse struct {
 	Checksums         map[string]string          `json:"checksums,omitempty"`
 	Labels            map[string]string          `json:"labels,omitempty"`
 	ClonedFrom        string                     `json:"cloned_from,omitempty"`
+	DeviceProfileID   uint64                     `json:"device_profile_id,omitempty"`
 }
 
 // BundleResponse is the response for bundle operations.
@@ -157,4 +159,91 @@ type PathResponse struct {
 type SuccessResponse struct {
 	Success bool   `json:"success"`
 	Message string `json:"message,omitempty"`
+}
+
+// QuoteRequest is the body of POST /bundles/{id}/quote.
+type QuoteRequest struct {
+	Nonce []byte `json:"nonce"`
+	PCRs  []int  `json:"pcrs,omitempty"`
+}
+
+// SealRequest is the body of POST /bundles/{id}/seal.
+type SealRequest struct {
+	Data      []byte `json:"data"`
+	PCRs      []int  `json:"pcrs,omitempty"`
+	AuthValue string `json:"auth_value,omitempty"`
+}
+
+// UnsealRequest is the body of POST /bundles/{id}/unseal.
+type UnsealRequest struct {
+	SealedData []byte `json:"sealed_data"`
+	AuthValue  string `json:"auth_value,omitempty"`
+}
+
+// ExtendPCRRequest is the body of POST /bundles/{id}/pcrs/extend.
+type ExtendPCRRequest struct {
+	PCRIndex int    `json:"pcr_index"`
+	Data     []byte `json:"data"`
+}
+
+// StartResponse is the reply to POST /bundles/{id}/start.
+type StartResponse struct {
+	Status     SuccessResponse `json:"status"`
+	BundleID   string          `json:"bundle_id"`
+	Running    bool            `json:"running"`
+	SocketPath string          `json:"socket_path"`
+}
+
+// StopResponse is the reply to POST /bundles/{id}/stop.
+type StopResponse struct {
+	Status   SuccessResponse `json:"status"`
+	BundleID string          `json:"bundle_id"`
+	Stopped  bool            `json:"stopped"`
+}
+
+// StateResponse is the reply to GET /bundles/{id}/state.
+type StateResponse struct {
+	BundleID   string `json:"bundle_id"`
+	Running    bool   `json:"running"`
+	SocketPath string `json:"socket_path"`
+}
+
+// QuoteResponse is the reply to POST /bundles/{id}/quote.
+type QuoteResponse struct {
+	Status        SuccessResponse `json:"status"`
+	BundleID      string          `json:"bundle_id"`
+	Quote         []byte          `json:"quote"`
+	Signature     []byte          `json:"signature"`
+	PCRValues     map[int][]byte  `json:"pcr_values"`
+	HashAlgorithm string          `json:"hash_algorithm"`
+}
+
+// SealResponse is the reply to POST /bundles/{id}/seal.
+type SealResponse struct {
+	Status     SuccessResponse `json:"status"`
+	BundleID   string          `json:"bundle_id"`
+	SealedData []byte          `json:"sealed_data"`
+}
+
+// UnsealResponse is the reply to POST /bundles/{id}/unseal.
+type UnsealResponse struct {
+	Status   SuccessResponse `json:"status"`
+	BundleID string          `json:"bundle_id"`
+	Data     []byte          `json:"data"`
+}
+
+// ExtendPCRResponse is the reply to POST /bundles/{id}/pcrs/extend.
+type ExtendPCRResponse struct {
+	Status   SuccessResponse `json:"status"`
+	BundleID string          `json:"bundle_id"`
+	PCRIndex int             `json:"pcr_index"`
+	Extended bool            `json:"extended"`
+}
+
+// ReadPCRResponse is the reply to GET /bundles/{id}/pcrs.
+type ReadPCRResponse struct {
+	Status   SuccessResponse `json:"status"`
+	BundleID string          `json:"bundle_id"`
+	PCRIndex int             `json:"pcr_index"`
+	Value    []byte          `json:"value"`
 }

@@ -185,6 +185,12 @@ platformctl tpm idevid ldevid create \
     --out ./node-01-ldevid.pem
 ```
 
+**`tpm idevid delete` and `tpm iak delete` are refused** until the owner rules
+on eviction. The key is TPM-resident and is not evicted; the daemon refuses on
+every transport with `FailedPrecondition`, nothing is changed, and the command
+exits `1` with "… key delete refused". No transport reports a key as deleted
+while it stays in the TPM (#304).
+
 That writes the certificate to `./node-01-ldevid.pem` and the CSR to
 `./node-01-ldevid.pem.csr`. **Issuance is refused without a proven, currently
 valid IDevID certificate** — that is the whole point of layering it.
@@ -331,12 +337,11 @@ the daemon will not help. See [cli.md](cli.md) §6 for what to use instead.
 
 ## Two things to be aware of
 
-**Nothing in the TPM surface is scope-checked.** Neither the gRPC `TPMService`
-and `IDevIDService`, nor the 48 TPM/device-identity MCP tools, nor the QUIC
-TPM2 opcodes appear in the platform's authorization catalogs, and both catalogs
-are default-allow. Any valid platform token reaches `Clear`, `Unseal`,
-`DeleteEK` and `DeleteIDevID`. Treat token issuance for a node with a TPM as the
-actual access control until this is fixed — [api.md](api.md) §9.
+**Device identity takes `idevid:*`, not `tpm:*`.** The TPM operations need
+`tpm:*` scopes and the IDevID, IAK and LDevID operations need `idevid:*`, the
+same on gRPC, QUIC and MCP — `Clear` and `DeleteEK` need `tpm:delete`,
+`DeleteIDevID` needs `idevid:delete`. A `tpm:*` grant does not reach the device
+identity — [api.md](api.md) §9.
 
 **The same key has two names depending on transport.** What gRPC and REST call
 the AK (`CreateAK`, `/api/v1/tpm/ak`), QUIC and MCP call the IAK

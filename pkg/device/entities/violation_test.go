@@ -173,13 +173,14 @@ func TestDeviceState_CanTransitionTo(t *testing.T) {
 		{DeviceStateQuarantined, DeviceStateSuspended, false},
 		{DeviceStateQuarantined, DeviceStateRevoked, false},
 		{DeviceStateSuspended, DeviceStateAttested, false},
+		{DeviceStateSuspended, DeviceStateQuarantined, false},
 		{DeviceStateSuspended, DeviceStateRevoked, false},
 		// Invalid transitions
 		{DeviceStateRevoked, DeviceStateAttested, true},
 		{DeviceStateRevoked, DeviceStateRegistered, true},
 		{DeviceStateAttested, DeviceStateRegistered, true},
 		{DeviceStateQuarantined, DeviceStateRegistered, true},
-		{DeviceStateSuspended, DeviceStateQuarantined, true},
+		{DeviceStateSuspended, DeviceStateActivated, true},
 		{"bogus", DeviceStateRegistered, true},
 	}
 	for _, tt := range tests {

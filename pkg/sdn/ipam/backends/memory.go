@@ -28,7 +28,16 @@ var (
 type MemoryBackendConfig struct {
 	// Logger is the logger instance for the backend.
 	Logger *slog.Logger
+	// Clock overrides the time source. Nil uses time.Now. Injected for
+	// deterministic tests of lease expiry and inactivity timeouts.
+	Clock func() time.Time
 }
+
+// maxMemoryPoolSize bounds the addresses one memory-backend pool may hold.
+// The backend tracks a pool with one bit per usable address, so the bound
+// caps a pool's bitmap at 2 MiB: an IPv4 /8 or an IPv6 /104. Larger pools,
+// such as an IPv6 /64, belong to the QuicBaaS backend, which keeps no bitmap.
+const maxMemoryPoolSize = 1 << 24
 
 // MemoryBackend implements ipam.Allocator using in-memory storage.
 // It is safe for concurrent use and designed for testing and single-node development.
@@ -41,21 +50,13 @@ type MemoryBackend struct {
 	bitmaps     map[string]*ipam.Bitmap         // poolID -> Bitmap
 
 	logger *slog.Logger
+	now    func() time.Time
 	closed atomic.Bool
 }
 
 // NewMemoryBackend creates a new in-memory IPAM backend.
 func NewMemoryBackend(opts ...ipam.AllocatorOption) *MemoryBackend {
-	logger := slog.Default()
-
-	return &MemoryBackend{
-		pools:       make(map[string]*ipam.Pool),
-		poolsByName: make(map[string]string),
-		poolsByCIDR: make(map[netip.Prefix]string),
-		allocations: make(map[netip.Addr]*ipam.Allocation),
-		bitmaps:     make(map[string]*ipam.Bitmap),
-		logger:      logger,
-	}
+	return NewMemoryBackendWithConfig(nil)
 }
 
 // NewMemoryBackendWithConfig creates a new in-memory IPAM backend with config.
@@ -64,6 +65,10 @@ func NewMemoryBackendWithConfig(config *MemoryBackendConfig) *MemoryBackend {
 	if config != nil && config.Logger != nil {
 		logger = config.Logger
 	}
+	now := time.Now
+	if config != nil && config.Clock != nil {
+		now = config.Clock
+	}
 
 	return &MemoryBackend{
 		pools:       make(map[string]*ipam.Pool),
@@ -72,6 +77,7 @@ func NewMemoryBackendWithConfig(config *MemoryBackendConfig) *MemoryBackend {
 		allocations: make(map[netip.Addr]*ipam.Allocation),
 		bitmaps:     make(map[string]*ipam.Bitmap),
 		logger:      logger,
+		now:         now,
 	}
 }
 
@@ -85,6 +91,9 @@ func (m *MemoryBackend) CreatePool(ctx context.Context, pool *ipam.Pool) error {
 
 	if err := m.validatePool(pool); err != nil {
 		return err
+	}
+	if ipam.CalculatePoolSize(pool.CIDR) > maxMemoryPoolSize {
+		return &ipam.ErrPoolTooLarge{CIDR: pool.CIDR, Max: maxMemoryPoolSize}
 	}
 
 	m.mu.Lock()
@@ -112,7 +121,7 @@ func (m *MemoryBackend) CreatePool(ctx context.Context, pool *ipam.Pool) error {
 	pool.TotalIPs = pool.AllocatableIPs()
 	pool.AvailableIPs = pool.TotalIPs
 	pool.AllocatedIPs = 0
-	pool.CreatedAt = time.Now()
+	pool.CreatedAt = m.now()
 	pool.UpdatedAt = pool.CreatedAt
 
 	// The bitmap covers every usable address, indexed by usable position;
@@ -282,7 +291,7 @@ func (m *MemoryBackend) UpdatePool(ctx context.Context, pool *ipam.Pool) error {
 		pool.AvailableIPs = pool.TotalIPs - pool.AllocatedIPs
 	}
 	pool.CreatedAt = existing.CreatedAt
-	pool.UpdatedAt = time.Now()
+	pool.UpdatedAt = m.now()
 
 	m.pools[pool.ID] = pool.Clone()
 
@@ -425,7 +434,7 @@ func (m *MemoryBackend) Allocate(ctx context.Context, req *ipam.AllocationReques
 	// Update pool stats
 	pool.AllocatedIPs++
 	pool.AvailableIPs--
-	pool.UpdatedAt = time.Now()
+	pool.UpdatedAt = m.now()
 
 	m.logger.Debug("IP allocated",
 		slog.String("pool_id", req.PoolID),
@@ -505,7 +514,7 @@ func (m *MemoryBackend) AllocateSpecific(ctx context.Context, req *ipam.Allocati
 	// Update pool stats
 	pool.AllocatedIPs++
 	pool.AvailableIPs--
-	pool.UpdatedAt = time.Now()
+	pool.UpdatedAt = m.now()
 
 	m.logger.Debug("specific IP allocated",
 		slog.String("pool_id", req.PoolID),
@@ -563,11 +572,11 @@ func (m *MemoryBackend) Release(ctx context.Context, ip netip.Addr) error {
 
 		pool.AllocatedIPs--
 		pool.AvailableIPs++
-		pool.UpdatedAt = time.Now()
+		pool.UpdatedAt = m.now()
 	}
 
 	alloc.Status = ipam.AllocationStatusReleased
-	alloc.ReleasedAt = time.Now()
+	alloc.ReleasedAt = m.now()
 
 	m.logger.Debug("IP released",
 		slog.String("ip", ip.String()),
@@ -621,12 +630,12 @@ func (m *MemoryBackend) ReleaseByDeviceID(ctx context.Context, deviceID string) 
 
 		// Update allocation status
 		alloc.Status = ipam.AllocationStatusReleased
-		alloc.ReleasedAt = time.Now()
+		alloc.ReleasedAt = m.now()
 
 		// Update pool stats
 		pool.AllocatedIPs--
 		pool.AvailableIPs++
-		pool.UpdatedAt = time.Now()
+		pool.UpdatedAt = m.now()
 
 		released++
 	}
@@ -671,7 +680,7 @@ func (m *MemoryBackend) Renew(ctx context.Context, ip netip.Addr) error {
 		return ipam.ErrPoolNotFound
 	}
 
-	now := time.Now()
+	now := m.now()
 	alloc.LastSeen = now
 
 	// Extend lease if applicable
@@ -775,7 +784,7 @@ func (m *MemoryBackend) ExpireInactive(ctx context.Context, poolID string) ([]*i
 		return nil, nil // No timeout configured
 	}
 
-	threshold := time.Now().Add(-pool.InactivityTimeout)
+	threshold := m.now().Add(-pool.InactivityTimeout)
 	var expired []*ipam.Allocation
 
 	for ip, alloc := range m.allocations {
@@ -788,7 +797,7 @@ func (m *MemoryBackend) ExpireInactive(ctx context.Context, poolID string) ([]*i
 		if alloc.LastSeen.Before(threshold) {
 			// Mark as expired
 			alloc.Status = ipam.AllocationStatusExpired
-			alloc.ReleasedAt = time.Now()
+			alloc.ReleasedAt = m.now()
 			expired = append(expired, alloc.Clone())
 
 			// Clear bitmap
@@ -812,7 +821,7 @@ func (m *MemoryBackend) ExpireInactive(ctx context.Context, poolID string) ([]*i
 	}
 
 	if len(expired) > 0 {
-		pool.UpdatedAt = time.Now()
+		pool.UpdatedAt = m.now()
 		m.logger.Debug("expired inactive allocations",
 			slog.String("pool_id", poolID),
 			slog.Int("count", len(expired)))
@@ -914,7 +923,7 @@ func (m *MemoryBackend) Reserve(ctx context.Context, poolID string, ip netip.Add
 	bitmap.Set(bitmapOffset)
 
 	// Create reservation
-	now := time.Now()
+	now := m.now()
 	alloc := &ipam.Allocation{
 		ID:          generateID(),
 		PoolID:      poolID,
@@ -993,7 +1002,7 @@ func (m *MemoryBackend) Unreserve(ctx context.Context, ip netip.Addr) error {
 	// Update pool stats
 	pool.AllocatedIPs--
 	pool.AvailableIPs++
-	pool.UpdatedAt = time.Now()
+	pool.UpdatedAt = m.now()
 
 	m.logger.Debug("IP unreserved",
 		slog.String("pool_id", alloc.PoolID),
@@ -1078,7 +1087,7 @@ func (m *MemoryBackend) validatePool(pool *ipam.Pool) error {
 }
 
 func (m *MemoryBackend) createAllocation(req *ipam.AllocationRequest, pool *ipam.Pool, ip netip.Addr) *ipam.Allocation {
-	now := time.Now()
+	now := m.now()
 	alloc := &ipam.Allocation{
 		ID:          generateID(),
 		PoolID:      req.PoolID,

@@ -69,15 +69,6 @@ func (e ErrGRPCCallFailed) Unwrap() error {
 	return e.Err
 }
 
-// ErrGRPCNotImplemented indicates a method is not yet implemented.
-type ErrGRPCNotImplemented struct {
-	Method string
-}
-
-func (e ErrGRPCNotImplemented) Error() string {
-	return fmt.Sprintf("gRPC method %s not implemented", e.Method)
-}
-
 // ErrGRPCBackendUnavailable indicates the backend is unavailable.
 type ErrGRPCBackendUnavailable struct {
 	Endpoint string

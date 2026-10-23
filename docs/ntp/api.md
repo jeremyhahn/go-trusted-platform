@@ -29,12 +29,14 @@ For NTP:
   dispatched by `handleNTPCategory` (`pkg/api/daemon/quic_ntp.go`).
 - **MCP**: `ntp_status`, `ntp_sources`, `ntp_step`
   (`pkg/api/mcp/ntp_tools.go`).
-- **Embedded**: **no route.** `ServiceRegistry`
-  (`sdk/go/transport/embedded/adapter.go`) has no `NTP` field.
+- **Embedded**: `ServiceRegistry.NTP`
+  (`sdk/go/transport/embedded/adapter.go`), dispatched by `registerNTPHandlers`
+  (`sdk/go/transport/embedded/dispatch.go`) under the gRPC method names.
 
 **One implementation backs all of them.** `NTPGRPCService` is registered on the
 TCP gRPC server and the Unix-socket gRPC server, handed to the QUIC handler and
-both REST routers, and reached by the MCP tools — so semantics and error
+both REST routers, reached by the MCP tools, and placed in the embedded host's
+`ServiceRegistry` (`pkg/api/daemon/embedded_host.go`) — so semantics and error
 mapping are identical everywhere by construction, not by convention.
 
 ## 2. Two REST routers serve the same three paths
@@ -50,7 +52,7 @@ the message with `protojson` under identical options
 (`UseProtoNames: false`, `EmitUnpopulated: true`). The paths match by design —
 `ntpBasePath` is hard-coded to `/api/v1/ntp` in the daemon handler
 *"so a client sees the same URLs regardless of which listener it reaches"* —
-and the status mapping is duplicated to match: `ntpGRPCToHTTPStatus` in the
+and the status mapping is duplicated to match: `protorestHTTPStatus` in the
 daemon handler mirrors `protorest`'s switch.
 
 **The envelopes differ, and this is the one place the two listeners are not
@@ -62,7 +64,7 @@ whole body:
 ```
 
 The webservice listener wraps it in the standard `WebServiceResponse` envelope
-(`pkg/webservice/v1/response/writer.go`):
+(`sdk/go/wire/restwire/envelope.go`, written by `pkg/webservice/v1/response`):
 
 ```json
 { "code": 200, "error": "", "success": true, "payload": { "status": { "synced": true, ... } } }
@@ -81,20 +83,15 @@ daemon side.
 
 | Capability | Embedded (Go) | Unix | REST | gRPC | QUIC | MCP |
 |---|---|---|---|---|---|---|
-| **Get sync status** | `MISSING — docs/13 G7` (no `ServiceRegistry.NTP`); in-process `ntp.Service.Status(ctx)` | `platform.v1.NTPService/GetStatus` | `GET /api/v1/ntp/status` | `platform.v1.NTPService/GetStatus` | `OpNTPCategory` `0x50` + `NTPSubGetStatus` `0x01` | `ntp_status` |
-| **List time sources** | `MISSING — docs/13 G7`; in-process `ntp.Service.Sources(ctx)` | `platform.v1.NTPService/ListSources` | `GET /api/v1/ntp/sources` | `platform.v1.NTPService/ListSources` | `0x50` + `NTPSubListSources` `0x02` | `ntp_sources` |
-| **Step the clock** | `MISSING — docs/13 G7`; in-process `ntp.Service.Step(ctx)` | `platform.v1.NTPService/Step` | `POST /api/v1/ntp/step` | `platform.v1.NTPService/Step` | `0x50` + `NTPSubStep` `0x03` | `ntp_step` |
+| **Get sync status** | `platform.v1.NTPService/GetStatus` via `ServiceRegistry.NTP` | `platform.v1.NTPService/GetStatus` | `GET /api/v1/ntp/status` | `platform.v1.NTPService/GetStatus` | `OpNTPCategory` `0x50` + `NTPSubGetStatus` `0x01` | `ntp_status` |
+| **List time sources** | `platform.v1.NTPService/ListSources` via `ServiceRegistry.NTP` | `platform.v1.NTPService/ListSources` | `GET /api/v1/ntp/sources` | `platform.v1.NTPService/ListSources` | `0x50` + `NTPSubListSources` `0x02` | `ntp_sources` |
+| **Step the clock** | `platform.v1.NTPService/Step` via `ServiceRegistry.NTP` | `platform.v1.NTPService/Step` | `POST /api/v1/ntp/step` | `platform.v1.NTPService/Step` | `0x50` + `NTPSubStep` `0x03` | `ntp_step` |
 | **Apply configuration** (render `chrony.conf`, enable and restart chronyd) | `ntp.Service.Apply(ctx)` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` |
 | **Wait for the startup gate** | `ntp.Service.WaitForSync(ctx)` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` |
 | **Read the cached last status** (no poll) | `ntp.Service.LastStatus()` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` |
 | **Clock trustworthiness as a health component** | via `pkg/health` | see [`docs/health/api.md`](../health/api.md) | ditto | ditto | ditto | ditto |
 
-Two gaps worth naming:
-
-**NTP is absent from the embedded transport.** `ServiceRegistry` has no `NTP`
-field, so `platformctl --transport embedded ntp status` cannot reach the
-service, and an in-process SDK consumer has no NTP client. The in-process route
-that exists is a direct `*ntp.Service` call, which is not the SDK boundary.
+One gap worth naming:
 
 **Configuration application has no remote surface at all.** `Apply` and
 `WaitForSync` are bring-up-only Go calls. Changing a node's time configuration
@@ -244,9 +241,8 @@ listeners. Note that `pkg/webservice/v1/rest/ntp/router.go`'s doc comment says
 
 ## 6. Authorization
 
-**NTPService is one of the eleven services in the gRPC scope catalog**
-(`pkg/api/grpc/method_permissions.go`), and its coverage is complete — all
-three RPCs are mapped:
+**NTPService is fully scoped in the default-deny gRPC scope catalog**
+(`pkg/api/grpc/method_permissions.go`) — all three RPCs are mapped:
 
 | Method | Scope |
 |---|---|
@@ -262,13 +258,18 @@ three RPCs are mapped:
 | `ntp_sources` | `ntp:read` |
 | `ntp_step` | **`ntp:write`** |
 
-NTP is one of the few surfaces where the gRPC and MCP catalogs both cover every
-operation, so the platform-wide default-allow question
-([`docs/daemon/api.md`](../daemon/api.md) §5) does not apply here — an unlisted
-NTP operation does not exist.
+Both catalogs are default-deny ([`docs/daemon/api.md`](../daemon/api.md) §5),
+and both cover every NTP operation, so no NTP call is refused for want of a
+classification.
 
-QUIC enforcement goes through `AuthorizeRequest` on the same `scp` claims. REST
-inherits whatever the listener's middleware chain applies to `/api/v1`.
+QUIC enforcement goes through `AuthorizeRequest` on the same `scp` claims. The
+daemon REST listener checks the same scope per route through
+`restapi.ScopeGuard` (#584): `ntp:read` on status and sources, `ntp:write` on
+step, from a platform token's `scp` or from the verified mTLS client
+certificate admitted as the operator (`*:*`). No credential is 401, a missing
+scope 403, and handlers built without a guard refuse every route
+([`docs/daemon/api.md`](../daemon/api.md)). The webservice applies its own
+middleware chain to `/api/v1`, below.
 
 `ntp:write` gates exactly one operation — `Step` — because it is the only one
 that mutates the system clock. The scope split is the reason `Step` is a
@@ -297,7 +298,10 @@ REST under `/api/v1`; gRPC package `platform.v1`; QUIC `ProtocolVersion`
 
 **Opcode note.** `OpNTPCategory` = `0x50` reclaims the head of the
 never-implemented `OpProv*` range (the provisioning surface actually ships under
-`OpProvisioningCategory`, `0xCF`). `0x51`–`0x55` are reserved for NTP growth.
+`OpProvisioningCategory`, `0xCF`). `0x51` is `OpIAMCategory` (IAM tenant records, #767); `0x52` is
+`OpVPNCategory`, and `0x53`–`0x55` are the cache, scheduler and messaging
+categories ([../sdk/api.md](../sdk/api.md) §3.5). `0x60` is object storage
+([../objectstorage/api-reference-quic.md](../objectstorage/api-reference-quic.md)).
 The same reclamation precedent applies to `OpAttestCollectHost` and
 `OpVMExtendedCategory` — see [`docs/daemon/api.md`](../daemon/api.md) §4 for why
 opcode values repeat across categories.
@@ -308,8 +312,7 @@ opcode values repeat across categories.
   only NTP signal that reaches an unauthenticated probe
 - [`docs/daemon/api.md`](../daemon/api.md) — transports, QUIC frame format,
   status bytes, platform-wide authorization
-- The legacy per-transport files in this folder — `api-reference.md`,
+- The legacy per-transport files this folder held — `api-reference.md`,
   `api-reference-rest.md`, `api-reference-grpc.md`, `api-reference-quic.md`,
-  `api-reference-mcp.md`, `api-reference-unix.md` — predate this convention.
-  **This file supersedes them**; where they disagree, this file is verified
-  against code and they are not.
+  `api-reference-mcp.md`, `api-reference-unix.md` — are deleted. This file
+  holds their content, verified against the code.

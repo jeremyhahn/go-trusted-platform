@@ -19,6 +19,7 @@ import (
 	"log/slog"
 	"net"
 	"os"
+	"syscall"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -542,6 +543,109 @@ func TestManager_EnsureTunnel_ReclainsUnmanagedLink(t *testing.T) {
 	require.NoError(t, err)
 	_, ok := link.(*vnl.Gretun)
 	assert.True(t, ok, "expected GRE tunnel link")
+}
+
+// tunnelAddr parses a CIDR the test states.
+func tunnelAddr(t *testing.T, cidr string) vnl.Addr {
+	t.Helper()
+	addr, err := vnl.ParseAddr(cidr)
+	require.NoError(t, err)
+	return *addr
+}
+
+// leftGRE puts the link EnsureTunnel would build for validGREConfig into
+// the mock, up and addressed, as a killed datapath leaves it behind.
+func leftGRE(t *testing.T, mock *mockNetlinkOps) *vnl.Gretun {
+	link := &vnl.Gretun{
+		LinkAttrs: vnl.LinkAttrs{Name: "gre1", MTU: 1400, Flags: net.FlagUp},
+		Local:     net.ParseIP("198.51.100.4"),
+		Remote:    net.ParseIP("198.51.100.100"),
+		Ttl:       64,
+	}
+	mock.mu.Lock()
+	mock.links["gre1"] = link
+	mock.addrs["gre1"] = []vnl.Addr{tunnelAddr(t, "10.255.0.1/30"), tunnelAddr(t, "fe80::c633:6404/64")}
+	mock.mu.Unlock()
+	return link
+}
+
+func TestManager_EnsureTunnel_AdoptsTheTunnelAKilledDatapathLeft(t *testing.T) {
+	mock := newMockNetlinkOps()
+	left := leftGRE(t, mock)
+	mock.linkDelFn = func(vnl.Link) error { return errors.New("an adopted link is never deleted") }
+	mock.linkAddFn = func(vnl.Link) error { return errors.New("an adopted link is never recreated") }
+	mgr := newManagerWithOps(testLogger(), mock)
+
+	require.NoError(t, mgr.EnsureTunnel(context.Background(), validGREConfig()))
+
+	link, err := mock.LinkByName("gre1")
+	require.NoError(t, err)
+	assert.Same(t, left, link, "the link carrying traffic is the one kept")
+	assert.Contains(t, mgr.tunnels, "gre1", "the adopted tunnel is managed from now on")
+}
+
+func TestManager_EnsureTunnel_RecreatesALinkThatDiffers(t *testing.T) {
+	cases := map[string]func(*vnl.Gretun, *mockNetlinkOps){
+		"remote":  func(l *vnl.Gretun, _ *mockNetlinkOps) { l.Remote = net.ParseIP("198.51.100.101") },
+		"ttl":     func(l *vnl.Gretun, _ *mockNetlinkOps) { l.Ttl = 32 },
+		"key":     func(l *vnl.Gretun, _ *mockNetlinkOps) { l.IKey, l.OKey = 7, 7 },
+		"mtu":     func(l *vnl.Gretun, _ *mockNetlinkOps) { l.MTU = 1500 },
+		"down":    func(l *vnl.Gretun, _ *mockNetlinkOps) { l.Flags = 0 },
+		"no addr": func(_ *vnl.Gretun, m *mockNetlinkOps) { m.addrs["gre1"] = nil },
+		"extra addr": func(_ *vnl.Gretun, m *mockNetlinkOps) {
+			m.addrs["gre1"] = append(m.addrs["gre1"], tunnelAddr(t, "10.9.9.9/32"))
+		},
+	}
+	for name, mutate := range cases {
+		t.Run(name, func(t *testing.T) {
+			mock := newMockNetlinkOps()
+			left := leftGRE(t, mock)
+			mutate(left, mock)
+			mgr := newManagerWithOps(testLogger(), mock)
+
+			require.NoError(t, mgr.EnsureTunnel(context.Background(), validGREConfig()))
+
+			link, err := mock.LinkByName("gre1")
+			require.NoError(t, err)
+			assert.NotSame(t, left, link, "a link that differs in any field is replaced")
+		})
+	}
+}
+
+func TestManager_EnsureTunnel_AdoptionAddrListFails(t *testing.T) {
+	mock := newMockNetlinkOps()
+	leftGRE(t, mock)
+	mock.addrListFn = func(vnl.Link, int) ([]vnl.Addr, error) { return nil, errors.New("netlink busy") }
+	mgr := newManagerWithOps(testLogger(), mock)
+
+	err := mgr.EnsureTunnel(context.Background(), validGREConfig())
+
+	var failed *ErrTunnelCreateFailed
+	require.ErrorAs(t, err, &failed)
+	assert.Empty(t, mgr.tunnels)
+}
+
+func TestLinkMatches_EachTunnelKind(t *testing.T) {
+	gre6 := TunnelConfig{Type: TunnelTypeGRE6, Local: "2001:db8::1", Remote: "2001:db8::2", MTU: 1400, TTL: 64}
+	ipip := TunnelConfig{Type: TunnelTypeIPIP, Local: "198.51.100.4", Remote: "198.51.100.100", MTU: 1400, TTL: 64}
+	up := vnl.LinkAttrs{MTU: 1400, Flags: net.FlagUp}
+
+	assert.True(t, linkMatches(&vnl.Ip6tnl{LinkAttrs: up, Local: net.ParseIP("2001:db8::1"),
+		Remote: net.ParseIP("2001:db8::2"), Ttl: 64, Proto: syscall.IPPROTO_GRE}, gre6))
+	assert.False(t, linkMatches(&vnl.Ip6tnl{LinkAttrs: up, Local: net.ParseIP("2001:db8::1"),
+		Remote: net.ParseIP("2001:db8::2"), Ttl: 64, Proto: syscall.IPPROTO_IPIP}, gre6), "another protocol")
+	assert.True(t, linkMatches(&vnl.Iptun{LinkAttrs: up, Local: net.ParseIP("198.51.100.4"),
+		Remote: net.ParseIP("198.51.100.100"), Ttl: 64}, ipip))
+	assert.False(t, linkMatches(&vnl.Iptun{LinkAttrs: up, Local: net.ParseIP("198.51.100.4"),
+		Remote: net.ParseIP("198.51.100.100"), Ttl: 64}, gre6), "another kind")
+	assert.False(t, linkMatches(&vnl.Dummy{LinkAttrs: up}, ipip), "not a tunnel")
+}
+
+func TestSameAddresses_RejectsAnUnparsableWant(t *testing.T) {
+	addrs := []vnl.Addr{tunnelAddr(t, "10.255.0.1/30")}
+
+	assert.True(t, sameAddresses(addrs, []string{"10.255.0.1/30"}))
+	assert.False(t, sameAddresses(addrs, []string{"not-a-cidr"}))
 }
 
 func TestTunnelConfigEqual(t *testing.T) {

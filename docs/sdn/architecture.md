@@ -1,14 +1,14 @@
 # SDN Architecture
 
-> **Status: NORMATIVE** · Scope: `pkg/sdn/` (excluding `pkg/sdn/gateway/`), `pkg/switch/` · Last verified: 2026-08-18
+> **Status: NORMATIVE** · Scope: `pkg/sdn/` (excluding `pkg/sdn/gateway/`), `pkg/switch/` · Last verified: 2026-10-15
 > Conflicts with this document are defects. Fix them here first.
 > The feature folder is: architecture (this file) · [engineering.md](engineering.md) ·
 > [cli.md](cli.md) · [api.md](api.md) · [user.md](user.md).
 >
-> **Verification scope.** Package boundaries, the port state machine,
-> configuration errors, CLI verbs and the transport matrix were re-checked
-> against code on 2026-08-18. The diagrams and narrative below predate the
-> feature-folder migration and were carried over rather than re-derived.
+> **Verification scope.** The whole page was re-checked against the code on
+> 2026-10-15: package boundaries, the port state machine and its diagram, the
+> package details, struct snippets and error lists. The box diagrams are
+> schematic; the error lists are a selection, not the full set.
 
 ## The problem
 
@@ -26,8 +26,9 @@ the port is on a provisioning-only path or in quarantine.
 
 Segmentation is layered: **zones** (the trust boundary), **VLANs** (the L2
 boundary within a host), and **VXLAN/EVPN** (the L2 boundary across hosts).
-Zones are the unit everything else is checked against, which is why five of the
-twenty-two configuration errors are about the zone graph.
+Zones are the unit everything else is checked against, which is why seventeen
+of the configuration errors ([engineering.md](engineering.md) §3) are about
+zones.
 
 ### Alternatives rejected
 
@@ -37,7 +38,7 @@ twenty-two configuration errors are about the zone graph.
 | **Shelling out to `ovs-vsctl` / `ovs-ofctl`** | External command dependencies mean parsing human-oriented output, no typed errors, and a binary that must be present and version-matched on every node. The OVSDB and OpenFlow clients are implemented in Go. |
 | **Trusting a VLAN tag as the trust boundary** | A VLAN tag is asserted by whatever is on the wire. A zone carried in an IDevID certificate (`encode_zone_in_cert`) is attested. VLANs remain the *mechanism*; zones are the *decision*. |
 | **Letting an unauthenticated port default to a guest VLAN with internet access** | That converts an authentication failure into working connectivity, which is how default-allow gets shipped. An unauthenticated port reaches enrollment and nothing else. |
-| **A `blocked` state that ages out** | Auto-recovery from a policy violation means the violation is not enforced, only delayed. `blocked` is a source state for no transition; clearing it is an administrative act. |
+| **A `blocked` state that ages out** | Auto-recovery from a policy violation means the violation is not enforced, only delayed. Nothing leaves `blocked` on its own; its two exits (reset to `unconnected`, re-enrollment to `provisioning`) are administrative acts. |
 | **Validating network configuration lazily** | An inconsistent zone/pool/VLAN graph produces silent cross-zone reachability — traffic going where it should not, with nothing logged. Validation is eager and the subsystem refuses to start. |
 
 ## Component boundaries
@@ -66,18 +67,29 @@ platform SDK.
 is the port state machine; `pkg/policy/opa` decides container admission. They
 answer different questions and neither is a token-authorization decision point.
 
+**The API does not reach the engine yet, so it refuses port authentication.**
+The daemon builds the engine for quarantine and enrollment only (`initSDNPolicy`,
+`pkg/daemon/commands/quarantine_init.go`), and it has no certificate validator
+that checks the chain to the platform anchor and that the certificate is an
+IDevID. Until both exist, `SDNService.AuthenticatePort` and `RevokePortAuth`
+refuse on every transport with `policy.ErrPortAuthNotEnforced`
+(`FailedPrecondition`) and keep no state ([api.md](api.md) §4, #304).
+
 ## Data flow — a device joining the network
 
 1. Link comes up. Port state is `unconnected`.
 2. The port moves to `provisioning`: flows permit only enrollment traffic.
 3. The device enrolls and obtains an IDevID. Port state becomes `enrolled`.
-4. The device activates; its certificate is validated. Port state moves through
-   `authenticating` to `authorized`.
+4. The device activates; its certificate is validated and `Engine.ApplyPolicy`
+   authorizes the port: from `enrolled` straight to `authorized`, from
+   `provisioning` or `unauthorized` through `authenticating`.
 5. The zone is decided — from the certificate when `encode_zone_in_cert` is on,
    from configuration otherwise — and `zone_flow_manager` programs the flows
    that put the port in that zone's VLAN.
-6. If any check fails, the port goes to `quarantined` (isolated VLAN,
-   remediable) or `blocked` (administrative).
+6. A certificate whose zone does not match the profile, or names a zone the
+   node has not declared, puts the port in `quarantined` (the quarantine zone,
+   remediable). Zone flows that fail to install leave it `unauthorized`. An
+   expired or revoked certificate, or an administrator, makes it `blocked`.
 
 Steps 5 and 6 happen in the datapath. A quarantine that only set a database
 field would not be a quarantine.
@@ -158,7 +170,7 @@ Go without external command dependencies.
 │  │ Port State Machine  │  │ Certificate Policy  │  │ Flow Rule        │  │
 │  │ - State transitions │  │ - X.509 extraction  │  │ - ACL generation │  │
 │  │ - Event handling    │  │ - Tenant ID         │  │ - VLAN rules     │  │
-│  └─────────────────────┘  │ - VLAN assignment   │  │ - DROP rules     │  │
+│  └─────────────────────┘  │ - Zone extension    │  │ - DROP rules     │  │
 │                           └─────────────────────┘  └──────────────────┘  │
 └───────────────┬────────────────────────────┬─────────────────────────────┘
                 │                            │
@@ -210,7 +222,7 @@ Go without external command dependencies.
     │  ┌─────────────────┐  │
     │  │ Actions         │  │
     │  │ - output        │  │
-    │  │ - set_vlan      │  │
+    │  │ - set_field     │  │
     │  │ - pop_vlan      │  │
     │  │ - drop          │  │
     │  └─────────────────┘  │
@@ -227,15 +239,15 @@ bridge addressing. Neither shells out — no `arping`, no `ip`.
 The table reader parses `/proc/net/arp` directly without external commands.
 
 ```go
-// Entry represents an ARP table entry
+// Entry represents an ARP table entry (pkg/sdn/arp/arp.go)
 // Parse format: 203.0.113.1 0x1 0x2 aa:bb:cc:dd:ee:ff * eth0
 type Entry struct {
-    IP        string
-    HWType    int
-    Flags     int
-    HWAddress string
-    Mask      string
-    Device    string
+    IPAddress  net.IP
+    HWType     string
+    Flags      string
+    MACAddress net.HardwareAddr
+    Mask       string
+    Device     string
 }
 ```
 
@@ -246,8 +258,9 @@ Key features:
 - No external dependencies
 
 `DuplicateAddressDetector` is the RFC 5227 probe platformd runs before it
-assigns an address to an OVS bridge. It opens a raw `AF_PACKET` socket bound
-to the bridge and filtered to the ARP EtherType, sends three probes whose
+assigns a zone address to its OVS port (`zone<VLAN>`). It opens a raw
+`AF_PACKET` socket bound to that port and filtered to the ARP EtherType, sends
+three probes (`DefaultProbeCount`, `DefaultProbeInterval` apart) whose
 sender protocol address is `0.0.0.0`, and listens a second after each. A reply
 or request carrying the probed address from a foreign MAC is a
 `ConflictError` naming both hardware addresses.
@@ -272,18 +285,23 @@ Native OpenFlow 1.3 protocol implementation over Unix socket.
 
 **Supported Messages:**
 - Hello / FeaturesRequest / FeaturesReply
-- FlowMod (add/modify/delete)
+- GetConfig / SetConfig (the handshake sets `miss_send_len` so packet-in works)
+- FlowMod (add/modify/delete), GroupMod, MeterMod
+- PacketIn / PacketOut
 - MultipartRequest/Reply (flow stats)
 - BarrierRequest/Reply
 - EchoRequest/Reply
 
 **Match Fields:**
-- in_port, eth_dst, eth_src, eth_type
-- ip_dst, ip_src, ip_proto
-- tcp_dst, udp_dst, vlan_vid
+- in_port, eth_dst, eth_src, eth_type, vlan_vid
+- ip_dst, ip_src (IPv4, optionally masked), ip_proto
+- tcp_dst, tcp_src, udp_dst, udp_src
+- ct_state, ct_zone, ct_mark, tunnel id and IPv4 destination, registers
 
 **Actions:**
-- output, set_vlan, pop_vlan, drop, goto_table
+- output, set_field (VLAN and others), push_vlan, pop_vlan, dec_ttl
+- ct, nat, group, meter, tunnel set, register load and move, resubmit
+- the goto_table instruction; drop is an empty action list
 
 ```go
 // Binary message format (big-endian)
@@ -312,13 +330,20 @@ OVSDB client implementing RFC 7047 JSON-RPC 2.0 protocol.
 - Open_vSwitch
 
 ```go
-// OVSDB transaction operation
+// OVSDB transaction operation (pkg/sdn/ovs/protocol.go)
 type Operation struct {
-    Op      string                 `json:"op"`
-    Table   string                 `json:"table"`
-    Where   []Condition            `json:"where,omitempty"`
-    Row     map[string]interface{} `json:"row,omitempty"`
-    Columns []string               `json:"columns,omitempty"`
+    Op        string                   `json:"op"`
+    Table     string                   `json:"table,omitempty"`
+    Row       map[string]interface{}   `json:"row,omitempty"`
+    Rows      []map[string]interface{} `json:"rows,omitempty"`
+    Where     *[][]interface{}         `json:"where,omitempty"`
+    Columns   []string                 `json:"columns,omitempty"`
+    Mutations [][]interface{}          `json:"mutations,omitempty"`
+    Timeout   uint                     `json:"timeout,omitempty"`
+    UUID      string                   `json:"uuid,omitempty"`
+    UUIDName  string                   `json:"uuid-name,omitempty"`
+    Comment   string                   `json:"comment,omitempty"`
+    Durable   *bool                    `json:"durable,omitempty"`
 }
 ```
 
@@ -333,9 +358,11 @@ TAP device management using netlink protocol.
 
 ### pkg/sdn/policy
 
-802.1X-style port authentication with certificate-based policies.
+IDevID-certificate port authentication with certificate-based policies. It
+has the shape of 802.1X but no EAP exchange and no RADIUS server.
 
-**Port State Machine:**
+**Port State Machine** (`pkg/sdn/policy/state.go:186`; the full transition
+list is in [engineering.md](engineering.md) §2):
 
 ```
 ┌────────────────────────┐
@@ -343,34 +370,37 @@ TAP device management using netlink protocol.
 └───────────┬────────────┘
             │ device connects
 ┌───────────▼────────────┐
-│      Provisioning      │  VLAN 998 - Limited access
-│                        │  (DHCP, DNS, HTTPS to platform)
+│      Provisioning      │  provisioning zone (VLAN E·100+5):
+│                        │  enough to enroll, nothing else
 └───────────┬────────────┘
             │ enrollment complete
 ┌───────────▼────────────┐
-│        Enrolled        │  Still VLAN 998 - Awaiting activation
+│        Enrolled        │  still provisioning, awaiting activation
 └───────────┬────────────┘
-            │ client activates
+            │ client activates (ApplyPolicy)
 ┌───────────▼────────────┐
-│       Authorized       │  Production VLAN - Full access per ACLs
+│       Authorized       │  the certificate's zone, per its flows
 └───────────┬────────────┘
-            │ cert expired/compliance
+            │ zone mismatch / compliance
 ┌───────────▼────────────┐
-│      Quarantined       │  VLAN 666 - Isolated for remediation
-└───────────┬────────────┘
-            │ cert revoked
-┌───────────▼────────────┐
-│        Blocked         │  DROP all traffic
+│      Quarantined       │  quarantine zone (VLAN E·100+4),
+│                        │  back to Authorized after remediation
 └────────────────────────┘
+
+Any state ──(cert expired or revoked, admin)──▶ Blocked: drop all traffic,
+OVSDB admin down. Blocked leaves only by an admin reset (→ Unconnected) or
+re-enrollment (→ Provisioning, Engine.UnblockPort).
 ```
 
-**Certificate Policy Extraction:**
-
-Policies encoded in IDevID certificate extensions:
-- Tenant ID (from Subject.Organization)
-- VLAN assignment (custom OID or profile lookup)
-- ACL rules (from profile)
-- Rate limits (future)
+**Certificate Policy Extraction** (`X509PolicyExtractor`,
+`pkg/sdn/policy/certificate.go`):
+- Tenant ID: the first `Subject.Organization`, else the first dot-separated
+  part of the CommonName
+- Zone: the network-zone extension (OID `1.3.6.1.4.1.29377.101.21`). Absent,
+  the profile decides; a zone the node has not declared is replaced by the
+  quarantine zone and reported as `ErrZoneNotDeclared`
+- ACL rules: a fixed allow-all default; the certificate is not read for them
+- No rate limits
 
 ## OVS/OVSDB Integration
 
@@ -402,9 +432,6 @@ Client                             ovsdb-server
    │                                     │
    │──── Connect (Unix socket) ─────────>│
    │                                     │
-   │──── list_dbs ──────────────────────>│
-   │<─── ["Open_vSwitch"] ───────────────│
-   │                                     │
    │──── transact [ops...] ─────────────>│
    │<─── [{uuid, rows}, ...] ────────────│
 ```
@@ -414,13 +441,15 @@ Client                             ovsdb-server
 ```
 Client                             ovs-vswitchd
    │                                     │
-   │──── Connect (br0.mgmt socket) ─────>│
+   │──── Connect (<bridge>.mgmt) ───────>│
    │                                     │
    │──── Hello (OF 1.3) ────────────────>│
    │<─── Hello (OF 1.3) ─────────────────│
    │                                     │
    │──── FeaturesRequest ───────────────>│
    │<─── FeaturesReply ──────────────────│
+   │                                     │
+   │──── GetConfig / SetConfig ─────────>│
    │                                     │
    │──── FlowMod (add flow) ────────────>│
    │──── BarrierRequest ────────────────>│
@@ -449,45 +478,45 @@ Client                             ovs-vswitchd
 
 ## Thread Safety
 
-All clients use mutex protection for concurrent access:
-- OVSDB client: Single connection, serialized requests
+The clients and the engine are safe for concurrent use:
+- OVSDB client: Single connection; one dispatcher goroutine serializes socket I/O
 - OpenFlow client: Atomic transaction IDs, pending response map
 - ARP reader: Lock-free reads from /proc filesystem
-- Policy engine: RWMutex for state machine access
+- Policy engine and state machine: RWMutex
 
 ## Error Handling
 
-All packages use typed errors:
+All packages use typed errors. A selection:
 
 ```go
 // pkg/sdn/ovs/errors.go
 var (
     ErrNotConnected      = errors.New("not connected to OVSDB")
+    ErrInvalidSocket     = errors.New("invalid OVSDB socket path")
     ErrBridgeNotFound    = errors.New("bridge not found")
     ErrPortNotFound      = errors.New("port not found")
     ErrTransactionFailed = errors.New("OVSDB transaction failed")
-    ErrInvalidSocket     = errors.New("invalid socket path")
-    ErrConnectionFailed  = errors.New("connection failed")
+    ErrConnectionFailed  = errors.New("failed to connect to OVSDB")
     ErrConnectionClosed  = errors.New("connection closed")
 )
 
 // pkg/sdn/openflow/errors.go
 var (
-    ErrNotConnected     = errors.New("not connected")
-    ErrVersionMismatch  = errors.New("OpenFlow version mismatch")
-    ErrTimeout          = errors.New("operation timed out")
-    ErrSocketNotFound   = errors.New("management socket not found")
+    ErrNotConnected    = errors.New("not connected to OpenFlow switch")
+    ErrVersionMismatch = errors.New("OpenFlow version mismatch")
+    ErrTimeout         = errors.New("operation timed out")
+    ErrSocketPath      = errors.New("invalid socket path")
 )
 
 // pkg/sdn/policy/errors.go
 var (
     ErrInvalidPortID     = errors.New("invalid port ID")
-    ErrInvalidPolicy     = errors.New("invalid policy")
+    ErrInvalidPolicy     = errors.New("invalid policy specification")
     ErrInvalidState      = errors.New("invalid state transition")
     ErrInvalidVLAN       = errors.New("invalid VLAN ID")
     ErrPolicyNotFound    = errors.New("policy not found")
-    ErrFlowInstallFailed = errors.New("flow installation failed")
-    ErrFlowDeleteFailed  = errors.New("flow deletion failed")
+    ErrFlowInstallFailed = errors.New("failed to install flow rule")
+    ErrFlowDeleteFailed  = errors.New("failed to delete flow rule")
 )
 ```
 
@@ -517,7 +546,7 @@ The lifecycle flow templates per zone (provisioning, quarantine) are in
 
 ## Performance Considerations
 
-- OpenFlow client maintains connection pool per bridge
+- One OpenFlow client, and one connection, per bridge
 - Related OVSDB operations (e.g., bridge/port/interface creation) are combined into single multi-operation transactions
 - ARP lookups are O(n) but table is typically small
 - Policy engine caches port states in memory
@@ -528,7 +557,7 @@ The lifecycle flow templates per zone (provisioning, quarantine) are in
 1. **Unix Socket Authentication** - OVSDB and OpenFlow use Unix sockets
 2. **Certificate Validation** - IDevID certificates validated before policy
 3. **Flow Rule Isolation** - Each port has isolated flow rules
-4. **VLAN Segmentation** - Provisioning and quarantine VLANs isolated
+4. **Zone Segmentation** - The provisioning and quarantine zones are isolated from the production zones
 5. **Defense in Depth** - Both OpenFlow DROP and OVSDB admin_state=down for blocking
 
 ## Bridges on a host

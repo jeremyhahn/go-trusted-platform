@@ -129,7 +129,8 @@ func (v *Verifier) Verify(ctx context.Context, ev *bmcattestation.Evidence, pol 
 func (v *Verifier) checkNonceEcho(ev *bmcattestation.Evidence, info *bmcattestation.Measurement, fail func(rule, detail string)) {
 	if len(info.NonceEcho) == 0 {
 		fail(RuleNonceEcho, "this evidence carries no readable nonce echo; the challenge in an "+
-			"alias certificate is inside tcg-dice-UCCS-evidence and is verified by go-xkms, not here")
+			"alias certificate is inside tcg-dice-UCCS-evidence and is verified through the go-quicbaas SDK, "+
+			"which delegates to go-xkms, not here")
 		return
 	}
 	if len(ev.Nonce) == 0 {
@@ -144,7 +145,8 @@ func (v *Verifier) checkNonceEcho(ev *bmcattestation.Evidence, info *bmcattestat
 // checkIssuer requires the leaf's issuer to be one the policy trusts.
 //
 // This is a NAME check and not a chain verification. Building a DICE chain
-// and verifying the signatures over it is go-xkms's dice.Verify; a name match
+// and verifying the signatures over it is go-xkms's dice.Verify, reached
+// through the go-quicbaas SDK (not yet published); a name match
 // here narrows which certificates are worth forwarding and claims nothing
 // more than that.
 func (v *Verifier) checkIssuer(trusted []string, info *bmcattestation.Measurement, fail func(rule, detail string)) {
@@ -162,7 +164,7 @@ func (v *Verifier) checkIssuer(trusted []string, info *bmcattestation.Measuremen
 }
 
 // checkReference runs the golden-build comparison. This is where
-// arduino-generic's reproducible FWHash lands.
+// trusted-firmware's reproducible FWHash lands.
 func (v *Verifier) checkReference(ctx context.Context, live, ref *bmcattestation.Evidence, fail func(rule, detail string)) {
 	cmp, err := v.provider.Compare(ctx, live, ref)
 	if err != nil {

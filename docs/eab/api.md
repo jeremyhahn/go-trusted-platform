@@ -1,6 +1,6 @@
 # ACME External Account Binding — API
 
-> **Status: NORMATIVE** · Scope: `pkg/eab/` · Last verified: 2026-08-18
+> **Status: NORMATIVE** · Scope: `pkg/eab/` · Last verified: 2026-10-14
 > Conflicts with this document are defects. Fix them here first.
 > The feature folder is: [architecture.md](architecture.md) · [engineering.md](engineering.md) · [cli.md](cli.md) · [api.md](api.md) · [user.md](user.md).
 >
@@ -23,7 +23,7 @@ For EAB specifically:
 | Unix | `platform.v1.EABService` over the platformd Unix socket — **the same gRPC service set** |
 | gRPC | `platform.v1.EABService`, 11 RPCs (`pkg/api/grpc/proto/eab.proto`) |
 | REST | `/api/v1/eab/credentials` (`pkg/webservice/v1/rest/eab/router.go`) |
-| QUIC | `OpProvisioningCategory` (`0xCF`), sub-opcodes `0x10`–`0x1A` (`pkg/api/quic/eab_opcodes.go`) |
+| QUIC | `OpProvisioningCategory` (`0xCF`), sub-opcodes `0x10`–`0x1A` (`sdk/go/wire/quicwire/eab_opcodes.go`) |
 | MCP | `platform_eab_*`, 11 tools (`pkg/api/mcp/eab_tools.go`) |
 
 **One implementation backs all six.** `EABGRPCService`
@@ -53,18 +53,24 @@ there is no `platformctl eab` group.
 | Get credential by ID | `EABService_GetCredential_FullMethodName` | `GetCredential` | `GetCredential` | `GET /api/v1/eab/credentials/{id:[0-9]+}` | `EABSubGetCredential` (`0x11`) | `platform_eab_get_credential` |
 | Get credential by KeyID | `EABService_GetCredentialByKeyID_FullMethodName` | `GetCredentialByKeyID` | `GetCredentialByKeyID` | `GET /api/v1/eab/credentials/key/{key}` | `EABSubGetCredentialByKeyID` (`0x12`) | `platform_eab_get_credential_by_key_id` |
 | List credentials | `EABService_ListCredentials_FullMethodName` | `ListCredentials` | `ListCredentials` | `GET /api/v1/eab/credentials` | `EABSubListCredentials` (`0x13`) | `platform_eab_list_credentials` |
-| Revoke credential | `EABService_RevokeCredential_FullMethodName` | `RevokeCredential` | `RevokeCredential` | `POST /api/v1/eab/credentials/{id}/revoke` | `EABSubRevokeCredential` (`0x14`) | `platform_eab_revoke_credential` |
+| Revoke credential | `EABService_RevokeCredential_FullMethodName` | `RevokeCredential` | `RevokeCredential` | `POST /api/v1/eab/credentials/{id:[0-9]+}/revoke` | `EABSubRevokeCredential` (`0x14`) | `platform_eab_revoke_credential` |
 | Validate credential | `EABService_ValidateCredential_FullMethodName` | `ValidateCredential` | `ValidateCredential` | `POST /api/v1/eab/credentials/validate` | `EABSubValidateCredential` (`0x15`) | `platform_eab_validate_credential` |
-| Delete credential | `EABService_DeleteCredential_FullMethodName` | `DeleteCredential` | `DeleteCredential` | `DELETE /api/v1/eab/credentials/{id}` | `EABSubDeleteCredential` (`0x16`) | `platform_eab_delete_credential` |
-| Render QR code | `EABService_GetCredentialQRCode_FullMethodName` | `GetCredentialQRCode` | `GetCredentialQRCode` | `GET /api/v1/eab/credentials/{id}/qrcode` | `EABSubGetCredentialQRCode` (`0x17`) | `platform_eab_get_credential_qr_code` |
-| Render enrollment URL | `EABService_GetEnrollmentURL_FullMethodName` | `GetEnrollmentURL` | `GetEnrollmentURL` | `GET /api/v1/eab/credentials/{id}/url` | `EABSubGetEnrollmentURL` (`0x18`) | `platform_eab_get_enrollment_url` |
-| Mark credential used | `EABService_MarkCredentialUsed_FullMethodName` | `MarkCredentialUsed` | `MarkCredentialUsed` | `POST /api/v1/eab/credentials/{id}/used` | `EABSubMarkCredentialUsed` (`0x19`) | `platform_eab_mark_credential_used` |
+| Delete credential | `EABService_DeleteCredential_FullMethodName` | `DeleteCredential` | `DeleteCredential` | `DELETE /api/v1/eab/credentials/{id:[0-9]+}` | `EABSubDeleteCredential` (`0x16`) | `platform_eab_delete_credential` |
+| Render QR code | `EABService_GetCredentialQRCode_FullMethodName` | `GetCredentialQRCode` | `GetCredentialQRCode` | `GET /api/v1/eab/credentials/{id:[0-9]+}/qrcode` | `EABSubGetCredentialQRCode` (`0x17`) | `platform_eab_get_credential_qr_code` |
+| Render enrollment URL | `EABService_GetEnrollmentURL_FullMethodName` | `GetEnrollmentURL` | `GetEnrollmentURL` | `GET /api/v1/eab/credentials/{id:[0-9]+}/url` | `EABSubGetEnrollmentURL` (`0x18`) | `platform_eab_get_enrollment_url` |
+| Mark credential used | `EABService_MarkCredentialUsed_FullMethodName` | `MarkCredentialUsed` | `MarkCredentialUsed` | `POST /api/v1/eab/credentials/{id:[0-9]+}/used` | `EABSubMarkCredentialUsed` (`0x19`) | `platform_eab_mark_credential_used` |
 | Cleanup expired | `EABService_CleanupExpiredCredentials_FullMethodName` | `CleanupExpiredCredentials` | `CleanupExpiredCredentials` | `POST /api/v1/eab/credentials/cleanup` | `EABSubCleanupExpiredCredentials` (`0x1A`) | `platform_eab_cleanup_expired_credentials` |
 
 REST route ordering matters and is handled: `/credentials/cleanup`,
 `/credentials/validate` and `/credentials/key/{key}` are registered **before**
 `/credentials/{id:[0-9]+}`, and the `{id}` pattern is digits-only, so no literal
-path segment is swallowed as an id.
+path segment is swallowed as an id. A non-numeric id matches no route and is
+answered 404 before any handler runs.
+
+The Go SDK's REST transport carries `credential_id` in the path, never the body
+(`eabCredentialRoute`, `sdk/go/transport/rest/adapter.go`). On revoke the
+handler takes the id from the path and the rest of the request, `revoker_id`,
+from the body.
 
 An ergonomic Go wrapper over the same eleven is
 `sdk/go/services/eab.Client` — note two names differ from the RPC:
@@ -111,7 +117,10 @@ comment), `profile_id` (optional filter), `pagination` (`PaginationRequest`),
 Pagination is the shared `PaginationRequest`/`PaginationResponse` from
 `common.proto`. On the MCP surface, `page` and `page_size` of `0` mean "return
 the full set"; the service walks the store in pages of `eabPageCollectSize`
-(100) to assemble an unfiltered list.
+(100) to assemble an unfiltered list. MCP lists through the same
+`collectEABCredentials` / `filterEABCredentials` / `paginateEABCredentials`
+path as gRPC, in gRPC's default order (`id` ascending); it has no `sort_by` or
+`ascending` argument. An unknown `status` is `InvalidArgument`.
 
 ### Validate
 
@@ -151,7 +160,9 @@ The URL is built from the configured base
 
 `CleanupExpiredEABCredentialsRequest`: `tenant_id` (optional; empty = all
 tenants). `CleanupExpiredEABCredentialsResponse`: `deleted_count` (`int32`),
-`status`, `timestamp`.
+`status`, `timestamp`. A named tenant deletes only that tenant's expired
+credentials (`cleanupExpiredEABCredentials`) on gRPC and MCP alike; before #304
+the MCP tool ignored `tenant_id` and swept every tenant.
 
 ---
 
@@ -164,7 +175,7 @@ tenants). `CleanupExpiredEABCredentialsResponse`: `deleted_count` (`int32`),
 | `0x02` | `StatusNotFound` | `NotFound` | 404 | `ErrCredentialNotFound` |
 | `0x03` | `StatusUnauthorized` | `Unauthenticated` | 401 | Token invalid |
 | `0x04` | `StatusInternalError` | `Internal` | 500 | `ErrKeyGenerationFailed`, `ErrQRCodeGenerationFailed`, `ErrFileExportFailed`, any unmatched error |
-| `0x07` | `StatusPermissionDenied` | `PermissionDenied` | 403 | See §5 — no scope is currently required |
+| `0x07` | `StatusPermissionDenied` | `PermissionDenied` | 403 | Missing `eab:*` scope (§5) |
 | `0x09` | `StatusInvalidArgument` | `InvalidArgument` | 400 | `ErrInvalidCredential`, `ErrInvalidProfileID`, `ErrInvalidTenantID`, `ErrInvalidExpiresAt`, `ErrCredentialExpired`, `ErrCredentialRevoked`, `ErrCredentialAlreadyUsed` (the last three as `FailedPrecondition`) |
 | `0x0A` | `StatusUnavailable` | `Unavailable` | 503 | `ErrEABNotConfigured`, `ErrEABDeliveryNotConfigured` |
 
@@ -179,27 +190,53 @@ unconfigured (`requireDelivery`) while the credential service is fine.
 
 ## 5. Authorization
 
-**`EABService` is not in the gRPC scope catalog.** `pkg/api/grpc/method_permissions.go`
-covers 185 of 461 RPCs across 11 of 31 services, and `EABService` is one of the
-services **not** covered ([`docs/daemon/api.md`](../daemon/api.md) §5). The
-interceptor's documented behaviour for an uncatalogued method is that it
-*"carries no required scope: the interceptor allows it once the token is
-validated."*
+Both catalogs are **default-deny**
+([`docs/auth/architecture.md`](../auth/architecture.md)).
 
-**No `platform_eab_*` tool is in the MCP authorization map.**
-`AuthorizationChecker.initToolPermissions` (`pkg/api/mcp/authz.go`) has no EAB
-entries, and `AuthorizeTool` returns no error for a tool absent from the map.
+**`EABService` is fully scoped on gRPC** (`pkg/api/grpc/method_permissions.go`):
 
-Net effect, verified 2026-08-18: **any principal holding a valid platform token
-can create, read, revoke and delete EAB credentials on gRPC, Unix, QUIC and
-MCP.** A create response contains a fresh HMAC key. Whether both catalogs should
-default to deny is the platform-wide open question recorded in
-[`docs/daemon/api.md`](../daemon/api.md) §5; this row is one of its sharper
-consequences and is raised for the owner rather than decided here.
+| Permission | RPCs |
+|---|---|
+| `eab:read` | `GetCredential`, `GetCredentialByKeyID`, `GetCredentialQRCode`, `GetEnrollmentURL`, `ListCredentials`, `ValidateCredential` |
+| `eab:write` | `CreateCredential`, `MarkCredentialUsed`, `RevokeCredential`, `CleanupExpiredCredentials` |
+| `eab:delete` | `DeleteCredential` |
 
-The `hmac_key` suppression on read paths is therefore the **only** thing
-standing between a token holder and an existing credential's secret — and it
-holds: `eabCredentialToPb(..., false)` on every path but create.
+**QUIC requires the `eab` scopes (#767).** The EAB sub-opcodes of
+`OpProvisioningCategory` (`0xCF`) are classified in
+`pkg/api/quic/opcode_permissions.go`:
+
+| Scope | Sub-opcodes |
+|---|---|
+| `eab:read` | `EABSubGetCredential`, `EABSubGetCredentialByKeyID`, `EABSubListCredentials`, `EABSubValidateCredential`, `EABSubGetCredentialQRCode`, `EABSubGetEnrollmentURL` |
+| `eab:write` | `EABSubCreateCredential`, `EABSubRevokeCredential`, `EABSubMarkCredentialUsed` |
+| `eab:delete` | `EABSubDeleteCredential`, `EABSubCleanupExpiredCredentials` |
+
+**MCP tools carry the gRPC scopes (#304).** Each `platform_eab_*` tool is in
+the MCP permission map (`pkg/api/mcp/authz.go`) with its gRPC twin's pair; a
+caller without it gets `AuthErrorPermissionDenied` and the tool never runs:
+
+| Scope | MCP tools |
+|---|---|
+| `eab:read` | `platform_eab_get_credential`, `platform_eab_get_credential_by_key_id`, `platform_eab_list_credentials`, `platform_eab_validate_credential`, `platform_eab_get_credential_qr_code`, `platform_eab_get_enrollment_url` |
+| `eab:write` | `platform_eab_create_credential`, `platform_eab_revoke_credential`, `platform_eab_mark_credential_used`, `platform_eab_cleanup_expired_credentials` |
+| `eab:delete` | `platform_eab_delete_credential` |
+
+QUIC puts `CleanupExpiredCredentials` under `eab:delete`; gRPC and MCP put it
+under `eab:write`. The two catalogs disagree on that one operation.
+
+MCP errors carry the gRPC class of §4 (`ErrEABToolFailure`,
+`pkg/api/daemon/mcp_eab.go`), so a missing credential is `NotFound` and a bad
+argument is `InvalidArgument` on both transports, not `Internal`.
+
+**No transport binds EAB to the caller's tenant.** gRPC, QUIC and MCP serve the
+`tenant_id` the request names, or the whole store when it names none; `eab:*`
+is a store-wide grant.
+
+**`eab:read` does reach the HMAC secret.** `get_credential`, `get_by_key_id`
+and `list` omit `hmac_key` (`eabCredentialToPb(..., false)` and the MCP
+renderer), but the QR code and the enrollment URL embed it by design
+(`pkg/eab/delivery.go`) and are `eab:read` on gRPC, QUIC and MCP. Treat
+`eab:read` as credential-bearing.
 
 ### REST is gated on the `admin` role (#165)
 
@@ -208,7 +245,7 @@ credential is a bearer secret that authorises certificate issuance, so create,
 revoke, delete and the credential listing are all credential-bearing — before
 #165 they answered a caller with no token at all.
 
-This changes the REST position only. The gRPC, Unix, MCP and embedded
+This changes the REST position only. The gRPC, Unix, QUIC, MCP and embedded
 positions described above are unchanged. See
 [`docs/auth/architecture.md`](../auth/architecture.md) §6c.
 

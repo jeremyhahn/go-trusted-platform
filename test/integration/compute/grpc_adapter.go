@@ -81,7 +81,7 @@ func NewGRPCAdapter() *GRPCAdapter {
 func (a *GRPCAdapter) Setup(ctx context.Context) error {
 	tlsConfig := helpers.TLSConfigOrInsecure()
 
-	conn, err := grpc.DialContext(ctx, a.endpoint,
+	conn, err := grpc.NewClient(a.endpoint,
 		grpc.WithTransportCredentials(credentials.NewTLS(tlsConfig)),
 	)
 	if err != nil {
@@ -157,6 +157,51 @@ func (a *GRPCAdapter) StopVM(ctx context.Context, opts StopVMOptions) (*StopVMRe
 	return result, nil
 }
 
+// RebootVM restarts a running virtual machine via gRPC.
+func (a *GRPCAdapter) RebootVM(ctx context.Context, opts RebootVMOptions) (*RebootVMResult, error) {
+	status, err := a.client.RebootVMDomain(ctx, opts.VMID, opts.Force)
+	if err != nil {
+		return nil, ErrGRPCCallFailed{Method: "RebootVM", Err: err}
+	}
+
+	result := &RebootVMResult{}
+	if status != nil {
+		result.Success = status.Success
+		result.Message = status.Message
+	}
+	return result, nil
+}
+
+// SuspendVM pauses a running virtual machine via gRPC.
+func (a *GRPCAdapter) SuspendVM(ctx context.Context, opts SuspendVMOptions) (*SuspendVMResult, error) {
+	status, err := a.client.SuspendVMDomain(ctx, opts.VMID)
+	if err != nil {
+		return nil, ErrGRPCCallFailed{Method: "SuspendVM", Err: err}
+	}
+
+	result := &SuspendVMResult{}
+	if status != nil {
+		result.Success = status.Success
+		result.Message = status.Message
+	}
+	return result, nil
+}
+
+// ResumeVM continues a suspended virtual machine via gRPC.
+func (a *GRPCAdapter) ResumeVM(ctx context.Context, opts ResumeVMOptions) (*ResumeVMResult, error) {
+	status, err := a.client.ResumeVMDomain(ctx, opts.VMID)
+	if err != nil {
+		return nil, ErrGRPCCallFailed{Method: "ResumeVM", Err: err}
+	}
+
+	result := &ResumeVMResult{}
+	if status != nil {
+		result.Success = status.Success
+		result.Message = status.Message
+	}
+	return result, nil
+}
+
 // DeleteVM deletes a virtual machine via the SDK client over gRPC.
 func (a *GRPCAdapter) DeleteVM(ctx context.Context, opts DeleteVMOptions) (*DeleteVMResult, error) {
 	status, err := a.client.DeleteVMDomain(ctx, &computesvc.DeleteVMParams{
@@ -185,7 +230,7 @@ func (a *GRPCAdapter) GetVM(ctx context.Context, opts GetVMOptions) (*GetVMResul
 	if vm == nil {
 		return nil, ErrGRPCCallFailed{
 			Method: "GetVM",
-			Err:    ErrVMNotFound{VMID: opts.VMID},
+			Err:    ErrVMNotFound(opts),
 		}
 	}
 
@@ -200,6 +245,88 @@ func (a *GRPCAdapter) ListVMs(ctx context.Context, opts ListVMsOptions) (*ListVM
 	}
 
 	return listVMsResultFromDomain(domainResult), nil
+}
+
+// CreateSnapshot snapshots a VM via the gRPC SDK client.
+func (a *GRPCAdapter) CreateSnapshot(ctx context.Context, opts CreateSnapshotOptions) (*SnapshotSummary, error) {
+	snapshot, err := a.client.CreateSnapshot(ctx, opts.VMID, fullSnapshotConfig(opts))
+	if err != nil {
+		return nil, ErrGRPCCallFailed{Method: "CreateSnapshot", Err: err}
+	}
+
+	summary := snapshotSummary(snapshot)
+	return &summary, nil
+}
+
+// RestoreSnapshot restores a VM from a snapshot via the gRPC SDK client.
+func (a *GRPCAdapter) RestoreSnapshot(ctx context.Context, opts SnapshotOptions) error {
+	if err := a.client.RestoreSnapshot(ctx, opts.VMID, opts.SnapshotID); err != nil {
+		return ErrGRPCCallFailed{Method: "RestoreSnapshot", Err: err}
+	}
+	return nil
+}
+
+// GetSnapshot returns one VM snapshot via the gRPC SDK client.
+func (a *GRPCAdapter) GetSnapshot(ctx context.Context, opts SnapshotOptions) (*SnapshotSummary, error) {
+	snapshot, err := a.client.GetSnapshot(ctx, opts.VMID, opts.SnapshotID)
+	if err != nil {
+		return nil, ErrGRPCCallFailed{Method: "GetSnapshot", Err: err}
+	}
+
+	summary := snapshotSummary(snapshot)
+	return &summary, nil
+}
+
+// PrepareMigration starts a migration receiver via the gRPC SDK client.
+func (a *GRPCAdapter) PrepareMigration(ctx context.Context, opts PrepareMigrationOptions) (*MigrationReceiverSummary, error) {
+	resp, err := a.client.PrepareMigration(ctx, prepareMigrationRequest(opts))
+	if err != nil {
+		return nil, ErrGRPCCallFailed{Method: "PrepareMigration", Err: err}
+	}
+	return migrationReceiverSummary(resp), nil
+}
+
+// FinalizeMigration commits or aborts a migration receiver via the gRPC SDK client.
+func (a *GRPCAdapter) FinalizeMigration(ctx context.Context, receiverID string, commit bool) error {
+	if err := a.client.FinalizeMigration(ctx, receiverID, commit); err != nil {
+		return ErrGRPCCallFailed{Method: "FinalizeMigration", Err: err}
+	}
+	return nil
+}
+
+// DeleteSnapshot deletes a VM snapshot via the gRPC SDK client.
+func (a *GRPCAdapter) DeleteSnapshot(ctx context.Context, opts SnapshotOptions) error {
+	if err := a.client.DeleteSnapshot(ctx, opts.VMID, opts.SnapshotID); err != nil {
+		return ErrGRPCCallFailed{Method: "DeleteSnapshot", Err: err}
+	}
+	return nil
+}
+
+// ListSnapshots lists a VM's snapshots via the gRPC SDK client.
+func (a *GRPCAdapter) ListSnapshots(ctx context.Context, vmID string) ([]SnapshotSummary, error) {
+	snapshots, err := a.client.ListSnapshots(ctx, vmID)
+	if err != nil {
+		return nil, ErrGRPCCallFailed{Method: "ListSnapshots", Err: err}
+	}
+	return snapshotSummaries(snapshots), nil
+}
+
+// AttestVM generates a VM's vTPM quote via the gRPC SDK client.
+func (a *GRPCAdapter) AttestVM(ctx context.Context, opts AttestVMOptions) (*VMQuote, error) {
+	resp, err := a.client.AttestVM(ctx, opts.VMID, opts.Nonce, opts.PCRIndices, pb.PCRBank_PCR_BANK_SHA256)
+	if err != nil {
+		return nil, ErrGRPCCallFailed{Method: "AttestVM", Err: err}
+	}
+	return vmQuote(resp), nil
+}
+
+// VerifyVMAttestation verifies VM quote evidence via the gRPC SDK client.
+func (a *GRPCAdapter) VerifyVMAttestation(ctx context.Context, opts VerifyVMAttestationOptions) (bool, error) {
+	resp, err := a.client.VerifyVMAttestation(ctx, verifyVMAttestationRequest(opts))
+	if err != nil {
+		return false, ErrGRPCCallFailed{Method: "VerifyVMAttestation", Err: err}
+	}
+	return resp.GetVerified(), nil
 }
 
 // =============================================================================

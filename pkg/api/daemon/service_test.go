@@ -17,6 +17,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
@@ -569,6 +570,10 @@ func TestService_GetServiceStatus(t *testing.T) {
 			t.Fatalf("NewService() error: %v", err)
 		}
 
+		startedAt := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+		current := startedAt
+		svc.now = func() time.Time { return current }
+
 		mock := newMockService("tpm")
 		_ = svc.RegisterService(mock)
 
@@ -581,22 +586,47 @@ func TestService_GetServiceStatus(t *testing.T) {
 			t.Fatalf("StartService() error: %v", err)
 		}
 
-		// Wait a bit for uptime
-		time.Sleep(1100 * time.Millisecond) // Sleep at least 1 second to ensure UptimeSeconds > 0
+		current = current.Add(90 * time.Second)
 
 		resp, err := svc.GetServiceStatus(ctx, &platformv1.GetServiceStatusRequest{
 			Service: platformv1.ServiceType_SERVICE_TYPE_TPM,
 		})
 		if err != nil {
-			t.Errorf("GetServiceStatus() error: %v", err)
+			t.Fatalf("GetServiceStatus() error: %v", err)
 		}
 
 		if resp.Service.StartedAt == nil {
-			t.Error("StartedAt should not be nil for running service")
+			t.Fatal("StartedAt should not be nil for running service")
+		}
+		if got := resp.Service.StartedAt.AsTime(); !got.Equal(startedAt) {
+			t.Errorf("StartedAt = %v, want %v", got, startedAt)
 		}
 
-		if resp.Service.UptimeSeconds == 0 {
-			t.Error("UptimeSeconds should be greater than 0")
+		if resp.Service.UptimeSeconds != 90 {
+			t.Errorf("UptimeSeconds = %d, want 90", resp.Service.UptimeSeconds)
+		}
+	})
+}
+
+func TestService_CurrentTime(t *testing.T) {
+	t.Run("uses the injected clock", func(t *testing.T) {
+		fixed := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+		svc := &Service{now: func() time.Time { return fixed }}
+
+		if got := svc.currentTime(); !got.Equal(fixed) {
+			t.Errorf("currentTime() = %v, want %v", got, fixed)
+		}
+	})
+
+	t.Run("falls back to the wall clock when unset", func(t *testing.T) {
+		svc := &Service{}
+
+		before := time.Now()
+		got := svc.currentTime()
+		after := time.Now()
+
+		if got.Before(before) || got.After(after) {
+			t.Errorf("currentTime() = %v, want between %v and %v", got, before, after)
 		}
 	})
 }
@@ -1076,39 +1106,43 @@ func TestService_Shutdown(t *testing.T) {
 	})
 
 	t.Run("force shutdown", func(t *testing.T) {
-		svc, err := NewService(DefaultConfig())
-		if err != nil {
-			t.Fatalf("NewService() error: %v", err)
-		}
+		// The bubble's fake clock runs the timeout and the stop delay, so
+		// the elapsed time is exact and costs nothing (#284).
+		synctest.Test(t, func(t *testing.T) {
+			svc, err := NewService(DefaultConfig())
+			if err != nil {
+				t.Fatalf("NewService() error: %v", err)
+			}
 
-		mock := newMockService("tpm")
-		mock.stopDelay = 10 * time.Second // Long delay
-		_ = svc.RegisterService(mock)
+			mock := newMockService("tpm")
+			mock.stopDelay = 10 * time.Second // Long delay
+			_ = svc.RegisterService(mock)
 
-		ctx := context.Background()
-		_, err = svc.StartService(ctx, &platformv1.StartServiceRequest{
-			Service: platformv1.ServiceType_SERVICE_TYPE_TPM,
+			ctx := context.Background()
+			_, err = svc.StartService(ctx, &platformv1.StartServiceRequest{
+				Service: platformv1.ServiceType_SERVICE_TYPE_TPM,
+			})
+			if err != nil {
+				t.Fatalf("StartService() error: %v", err)
+			}
+
+			start := time.Now()
+			_, err = svc.Shutdown(ctx, &platformv1.ShutdownRequest{
+				Graceful:       false,
+				TimeoutSeconds: 1,
+			})
+			elapsed := time.Since(start)
+
+			if err != nil {
+				t.Errorf("Shutdown() error: %v", err)
+			}
+
+			// A forced shutdown ends at the request's timeout, not after the
+			// service's stop delay.
+			if elapsed != time.Second {
+				t.Errorf("force shutdown took %v, want the 1s timeout", elapsed)
+			}
 		})
-		if err != nil {
-			t.Fatalf("StartService() error: %v", err)
-		}
-
-		// Force shutdown should complete quickly
-		start := time.Now()
-		_, err = svc.Shutdown(ctx, &platformv1.ShutdownRequest{
-			Graceful:       false,
-			TimeoutSeconds: 1,
-		})
-		elapsed := time.Since(start)
-
-		if err != nil {
-			t.Errorf("Shutdown() error: %v", err)
-		}
-
-		// Should complete faster than the service's stop delay
-		if elapsed > 5*time.Second {
-			t.Errorf("force shutdown took too long: %v", elapsed)
-		}
 	})
 
 	t.Run("calls shutdown handler", func(t *testing.T) {

@@ -54,19 +54,57 @@ service DeviceService {
   // CA's certificate store, and -- only when reissue is set -- a
   // certificate the CA issues over the enrolled attestation public key.
   // There is no override for an unrestricted certificate: recording one
-  // would quarantine the device on its next quote.
+  // would quarantine the device on its next quote. clear_on_refusal is the
+  // repair for a record that already holds one: when every candidate --
+  // that certificate included -- is refused, the certificate is removed and
+  // the response reports cleared, moving the device from quarantine to
+  // denied service. Without it a refusal writes nothing.
   rpc RecordAttestationCertificate(RecordAttestationCertificateRequest) returns (RecordAttestationCertificateResponse);
 
-  // Device-template CRUD lives on the REST surface only (see
-  // pkg/webservice/v1/device/template_handlers.go). The Create/Get/Update/
-  // Delete/List/FindByName Template RPCs that used to be declared here
-  // collided with vtpm.proto's identically-named messages, never got
-  // generated into device.pb.go, and were not referenced from any Go code.
-  // They have been removed; if a gRPC device-template service is needed
-  // in the future, define it with `DeviceTemplate…` message prefixes so
-  // the names cannot collide with vtpm.
+  // DisableDevice is the operator Disable: it cuts the device's switch port
+  // and records the device suspended, reason as its state reason. It fails
+  // FAILED_PRECONDITION when no SDN policy engine runs, when the device has
+  // no switch port, or when its state cannot move to suspended.
+  rpc DisableDevice(DisableDeviceRequest) returns (DeviceLifecycleResponse);
 
-  // Template operations
+  // EnableDevice is the operator Enable of a disabled device. It never
+  // vouches for the device: the port is re-admitted to the quarantine zone,
+  // the device recorded quarantined and a re-attestation requested; only a
+  // passing verdict restores the state and placement held before the
+  // disable. It fails FAILED_PRECONDITION when the device is not suspended.
+  rpc EnableDevice(EnableDeviceRequest) returns (DeviceLifecycleResponse);
+
+  // Diskless boot. A diskless node holds its IDevID key in the TPM and has no
+  // local disk, so each boot it asks the control plane for its recorded IDevID
+  // chain (BootCertificate) and then for its profile and CA bundle
+  // (BootDelivery). Both bind the call to the node's own TLS connection: the
+  // caller's proof covers the connection's TLS 1.3 exporter value, which the
+  // server derives from the connection itself and never reads from the
+  // message. A transport with no TLS connection has no exporter value and is
+  // refused.
+  //
+  // BootCertificate is anonymous at the transport (the node needs the chain to
+  // present a client certificate): it requires a signature by the recorded
+  // IDevID key over the identity and the connection's exporter value.
+  rpc BootCertificate(BootCertificateRequest) returns (BootCertificateResponse);
+
+  // BootDelivery requires a verified client certificate; the delivered
+  // identity is taken from it. The evidence is quote evidence made over the
+  // connection's exporter value, verified by the same verifier as AttestDevice.
+  rpc BootDelivery(BootDeliveryRequest) returns (BootDeliveryResponse);
+
+  // Template operations. CreateTemplate stores a device template — the
+  // blueprint CreateProfileFromTemplate turns into a profile. It is not a
+  // vTPM template (VTPMService.CreateTemplate). Device-template messages
+  // carry a `DeviceTemplate…` prefix so their names cannot collide with
+  // vtpm.proto's template messages.
+  rpc CreateTemplate(DeviceTemplateCreateRequest) returns (DeviceTemplateCreateResponse);
+  rpc GetTemplate(DeviceTemplateGetRequest) returns (DeviceTemplateGetResponse);
+  rpc ListTemplates(DeviceTemplateListRequest) returns (DeviceTemplateListResponse);
+  // UpdateTemplate replaces the stored template whose id the request
+  // carries; it fails NOT_FOUND when no template has that id.
+  rpc UpdateTemplate(DeviceTemplateUpdateRequest) returns (DeviceTemplateUpdateResponse);
+  rpc DeleteTemplate(DeviceTemplateDeleteRequest) returns (DeviceTemplateDeleteResponse);
   rpc CreateProfileFromTemplate(CreateProfileFromTemplateRequest) returns (CreateProfileResponse);
 
   // Profile lookup by device identity
@@ -252,7 +290,8 @@ message DeviceProfile {
   // Set it for fleets whose node webservice certificates carry a role name
   // rather than the device name (the shipped worker templates issue
   // compute.<domain>.internal to every worker). Writable on create and
-  // update; an update that omits it keeps the stored value.
+  // update; an update that omits it keeps the stored value. To clear it,
+  // set UpdateProfileRequest.clear_tls_server_name.
   string tls_server_name = 26;
   // pcr_baseline is the expected measured state devices on this profile are
   // verified against (#373). It is READ-ONLY on every transport: the
@@ -375,6 +414,12 @@ message GetProfileResponse {
 
 message UpdateProfileRequest {
   DeviceProfile profile = 1;
+  // clear_tls_server_name blanks the stored tls_server_name. proto3 cannot
+  // tell an unset string from an empty one, so an empty
+  // profile.tls_server_name keeps the stored name; this flag is the
+  // deliberate clear (#462). Setting it together with a non-empty
+  // profile.tls_server_name is rejected with InvalidArgument.
+  bool clear_tls_server_name = 2;
 }
 
 message UpdateProfileResponse {
@@ -499,11 +544,14 @@ message AttestDeviceResponse {
 message RecordAttestationCertificateRequest {
   string device_id = 1;
   bool reissue = 2;
+  // clear_on_refusal removes the certificate the record holds when every
+  // candidate, that certificate included, is refused. Off by default.
+  bool clear_on_refusal = 3;
 }
 
-// RecordAttestationCertificateResponse reports what was recorded. It is only
-// returned on success; a refusal is a FAILED_PRECONDITION error whose message
-// names every candidate and why it was refused.
+// RecordAttestationCertificateResponse reports what was recorded, or what was
+// cleared. It is only returned on success; a refusal is a FAILED_PRECONDITION
+// error whose message names every candidate and why it was refused.
 message RecordAttestationCertificateResponse {
   Status status = 1;
   uint64 device_id = 2;
@@ -523,17 +571,95 @@ message RecordAttestationCertificateResponse {
   string subject = 9;
   string certificate_serial = 10;
   google.protobuf.Timestamp not_after = 11;
-  // attest_cert is the recorded certificate, PEM encoded.
+  // attest_cert is the recorded certificate, PEM encoded; empty when cleared.
   string attest_cert = 12;
+  // cleared is true when clear_on_refusal removed a refused certificate.
+  // source and attest_cert are then empty, subject, certificate_serial and
+  // not_after describe the removed certificate when it parsed, and refusal
+  // names every candidate and why it was refused.
+  bool cleared = 13;
+  string refusal = 14;
 }
 
-// Template CRUD messages were removed from this proto to resolve a
-// fully-qualified-name collision with vtpm.proto. Device-template CRUD is
-// served from the REST surface only — see pkg/webservice/v1/device/
-// template_handlers.go. The DeviceTemplate message itself (used as a
-// nested field on other RPCs) remains defined below.
+// DisableDeviceRequest names the device to disable and why. reason is
+// trimmed, at most 256 bytes, and defaults to "disabled".
+message DisableDeviceRequest {
+  string device_id = 1;
+  string reason = 2;
+}
 
-// Template operation messages
+// EnableDeviceRequest names the disabled device to re-enable.
+message EnableDeviceRequest {
+  string device_id = 1;
+}
+
+// DeviceLifecycleResponse reports the state an operator Enable or Disable
+// left the device in.
+message DeviceLifecycleResponse {
+  Status status = 1;
+  uint64 device_id = 2;
+  // state is the device's state after the call: "suspended" after a
+  // disable, "quarantined" after an enable.
+  string state = 3;
+  string previous_state = 4;
+  string state_reason = 5;
+  // reattestation_requested is true when an enable queued an immediate
+  // re-attestation; otherwise the collector's scheduled cycle re-attests
+  // the device.
+  bool reattestation_requested = 6;
+}
+
+// Template operation messages. Device-template messages use the
+// `DeviceTemplate…` prefix: vtpm.proto already owns CreateTemplateRequest
+// and its siblings in this package.
+
+// DeviceTemplateCreateRequest carries the template to store. A zero id is
+// assigned by the server; name is required.
+message DeviceTemplateCreateRequest {
+  DeviceTemplate template = 1;
+}
+
+message DeviceTemplateCreateResponse {
+  Status status = 1;
+  DeviceTemplate template = 2;
+}
+
+message DeviceTemplateGetRequest {
+  uint64 id = 1;
+}
+
+message DeviceTemplateGetResponse {
+  DeviceTemplate template = 1;
+}
+
+message DeviceTemplateListRequest {
+  PaginationRequest pagination = 1;
+}
+
+message DeviceTemplateListResponse {
+  repeated DeviceTemplate templates = 1;
+  PaginationResponse pagination = 2;
+}
+
+// DeviceTemplateUpdateRequest carries the template to store; its id names
+// the template to replace and is required.
+message DeviceTemplateUpdateRequest {
+  DeviceTemplate template = 1;
+}
+
+message DeviceTemplateUpdateResponse {
+  Status status = 1;
+  DeviceTemplate template = 2;
+}
+
+message DeviceTemplateDeleteRequest {
+  uint64 id = 1;
+}
+
+message DeviceTemplateDeleteResponse {
+  Status status = 1;
+}
+
 
 message CreateProfileFromTemplateRequest {
   uint64 template_id = 1;
@@ -549,6 +675,67 @@ message FindConfigForDeviceRequest {
 
 message FindConfigForDeviceResponse {
   DeviceProfile profile = 1;
+}
+
+// Diskless boot messages
+
+message BootCertificateRequest {
+  // identity is the serial or IDevID common name the node claims.
+  string identity = 1;
+  // signature is the node's IDevID signature over the identity and the
+  // connection's exporter value (provisioning.VerifyBootCertificateProof).
+  bytes signature = 2;
+}
+
+message BootCertificateResponse {
+  string identity = 1;
+  // idevid_chain is the recorded IDevID chain, PEM.
+  string idevid_chain = 2;
+}
+
+message BootDeliveryRequest {
+  // evidence is the JSON-encoded quote evidence, made over the connection's
+  // exporter value.
+  bytes evidence = 1;
+}
+
+message BootNetworkConfig {
+  uint32 vlan = 1;
+  bool use_dhcp = 2;
+  string static_ip = 3;
+  string gateway = 4;
+  repeated string dns = 5;
+}
+
+message BootACL {
+  string name = 1;
+  int32 priority = 2;
+  map<string, string> match = 3;
+  string action = 4;
+}
+
+message BootRateLimit {
+  int32 ingress_mbps = 1;
+  int32 egress_mbps = 2;
+}
+
+message BootProfile {
+  string serial_number = 1;
+  BootNetworkConfig admitted_network = 2;
+  BootNetworkConfig provisioning_network = 3;
+  repeated BootACL acls = 4;
+  BootRateLimit rate_limit = 5;
+}
+
+message BootDeliveryResponse {
+  string serial = 1;
+  string idevid_chain = 2;
+  string attest_cert = 3;
+  string ca_bundle = 4;
+  BootProfile profile = 5;
+  // pcr_baseline_source is "signed" or "tofu".
+  string pcr_baseline_source = 6;
+  bool pcr_baseline_captured = 7;
 }
 
 // Profile assignment messages

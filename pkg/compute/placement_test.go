@@ -150,6 +150,9 @@ func TestPlaceVNIC_ZoneFlowManager(t *testing.T) {
 	if placement.VLAN != 408 || len(ovsPort.vlans) != 1 || ovsPort.vlans[0] != 408 {
 		t.Errorf("placement %+v, port VLANs %v; want 408", placement, ovsPort.vlans)
 	}
+	if ovsPort.flows == 0 {
+		t.Error("no zone flows installed; the vNIC is tagged but not isolated")
+	}
 }
 
 // TestPlaceVNIC_PolicyEngine applies a port policy carrying the zone VLAN

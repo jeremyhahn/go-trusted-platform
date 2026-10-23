@@ -21,6 +21,7 @@ import (
 	quicbaassdk "github.com/jeremyhahn/go-quicbaas/sdk/go"
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/client/embedding"
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/client/vector"
+	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -30,8 +31,6 @@ import (
 // These tests verify the SDK client is properly connected and handles responses.
 // Actual embedding generation may fail if no provider is configured.
 func TestEmbeddingService_Generate(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	tf := newTestFactory(t)
 	defer tf.Cleanup()
 
@@ -75,11 +74,9 @@ func TestEmbeddingService_Generate(t *testing.T) {
 	})
 }
 
-// TestEmbeddingService_Ollama tests Ollama embedding operations.
-// Note: These tests require Ollama to be running locally with embedding models available.
+// TestEmbeddingService_Ollama tests Ollama embedding operations. It needs an
+// Ollama reachable from the embedded QuicBaaS, with an embedding model.
 func TestEmbeddingService_Ollama(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	tf := newTestFactory(t)
 	defer tf.Cleanup()
 
@@ -94,12 +91,13 @@ func TestEmbeddingService_Ollama(t *testing.T) {
 	})
 
 	t.Run("Health", func(t *testing.T) {
-		// Check Ollama health - this will fail if Ollama is not running
 		resp, err := ollama.Health(ctx, &quicbaassdk.OllamaHealthRequest{})
-		if err != nil {
-			t.Logf("Ollama health check failed (expected if Ollama not running): %v", err)
-			t.Skip("Ollama is not available")
+		// Declared gap: go-quicbaas #1535 — flips to the success path on the pin bump that carries the fix.
+		if helpers.GapEmbeddedOllama.Unserved(t, "Health", err) {
 			return
+		}
+		if err != nil {
+			t.Fatalf("missing prerequisite: %v", ErrOllamaUnavailable{Op: "Health", Err: err})
 		}
 		assert.NotNil(t, resp)
 		t.Logf("Ollama status: available=%v", resp.Available)
@@ -107,10 +105,12 @@ func TestEmbeddingService_Ollama(t *testing.T) {
 
 	t.Run("ListModels", func(t *testing.T) {
 		resp, err := ollama.ListModels(ctx, &quicbaassdk.OllamaListModelsRequest{})
-		if err != nil {
-			t.Logf("ListModels failed (expected if Ollama not running): %v", err)
-			t.Skip("Ollama is not available")
+		// Declared gap: go-quicbaas #1535 — flips to the success path on the pin bump that carries the fix.
+		if helpers.GapEmbeddedOllama.Unserved(t, "ListModels", err) {
 			return
+		}
+		if err != nil {
+			t.Fatalf("missing prerequisite: %v", ErrOllamaUnavailable{Op: "ListModels", Err: err})
 		}
 		assert.NotNil(t, resp)
 		t.Logf("Available Ollama models: %d", len(resp.Models))
@@ -120,14 +120,15 @@ func TestEmbeddingService_Ollama(t *testing.T) {
 	})
 
 	t.Run("EmbedWithDefaultModel", func(t *testing.T) {
-		// This requires an embedding model to be available in Ollama
 		resp, err := ollama.Embed(ctx, &quicbaassdk.OllamaEmbedRequest{
 			Text: "Hello, this is a test embedding request.",
 		})
-		if err != nil {
-			t.Logf("Embed failed (expected if Ollama not running or no model): %v", err)
-			t.Skip("Ollama embedding not available")
+		// Declared gap: go-quicbaas #1535 — flips to the success path on the pin bump that carries the fix.
+		if helpers.GapEmbeddedOllama.Unserved(t, "Embed", err) {
 			return
+		}
+		if err != nil {
+			t.Fatalf("missing prerequisite: %v", ErrOllamaUnavailable{Op: "Embed", Err: err})
 		}
 		assert.NotNil(t, resp)
 		assert.NotEmpty(t, resp.Embedding)
@@ -138,8 +139,6 @@ func TestEmbeddingService_Ollama(t *testing.T) {
 // TestEmbeddingService_BatchGenerate tests batch embedding generation.
 // Note: This requires external providers to be configured.
 func TestEmbeddingService_BatchGenerate(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	tf := newTestFactory(t)
 	defer tf.Cleanup()
 
@@ -169,8 +168,6 @@ func TestEmbeddingService_BatchGenerate(t *testing.T) {
 
 // TestEmbeddingService_OllamaBatch tests batch Ollama embedding generation.
 func TestEmbeddingService_OllamaBatch(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	tf := newTestFactory(t)
 	defer tf.Cleanup()
 
@@ -180,12 +177,12 @@ func TestEmbeddingService_OllamaBatch(t *testing.T) {
 	ctx, cancel := testContext()
 	defer cancel()
 
-	// First check if Ollama is available
-	_, err := ollama.Health(ctx, &quicbaassdk.OllamaHealthRequest{})
-	if err != nil {
-		t.Skip("Ollama is not available")
+	// Declared gap: go-quicbaas #1535 — flips to the success path on the pin bump that carries the fix.
+	_, healthErr := ollama.Health(ctx, &quicbaassdk.OllamaHealthRequest{})
+	if helpers.GapEmbeddedOllama.Unserved(t, "Health", healthErr) {
 		return
 	}
+	requireOllama(ctx, t, ollama)
 
 	t.Run("BatchEmbed", func(t *testing.T) {
 		inputs := []string{
@@ -198,9 +195,7 @@ func TestEmbeddingService_OllamaBatch(t *testing.T) {
 			Texts: inputs,
 		})
 		if err != nil {
-			t.Logf("EmbedBatch failed (may need embedding model): %v", err)
-			t.Skip("Ollama batch embedding not available")
-			return
+			t.Fatalf("missing prerequisite: %v", ErrOllamaUnavailable{Op: "EmbedBatch", Err: err})
 		}
 		assert.NotNil(t, resp)
 		assert.Equal(t, len(inputs), len(resp.Embeddings))
@@ -209,8 +204,6 @@ func TestEmbeddingService_OllamaBatch(t *testing.T) {
 
 // TestEmbeddingService_InputTypes tests different input types for embeddings.
 func TestEmbeddingService_InputTypes(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	tf := newTestFactory(t)
 	defer tf.Cleanup()
 
@@ -244,8 +237,6 @@ func TestEmbeddingService_InputTypes(t *testing.T) {
 // TestEmbeddingService_WithVectorStorage tests the integration of embeddings with vector storage.
 // This demonstrates the typical workflow of generating embeddings and storing them for search.
 func TestEmbeddingService_WithVectorStorage(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	tf := newTestFactory(t)
 	defer tf.Cleanup()
 
@@ -256,12 +247,12 @@ func TestEmbeddingService_WithVectorStorage(t *testing.T) {
 	ctx, cancel := testContext()
 	defer cancel()
 
-	// Check if Ollama is available for embedding generation
-	_, err := ollama.Health(ctx, &quicbaassdk.OllamaHealthRequest{})
-	if err != nil {
-		t.Skip("Ollama is not available - skipping embedding+vector integration test")
+	// Declared gap: go-quicbaas #1535 — flips to the success path on the pin bump that carries the fix.
+	_, healthErr := ollama.Health(ctx, &quicbaassdk.OllamaHealthRequest{})
+	if helpers.GapEmbeddedOllama.Unserved(t, "Health", healthErr) {
 		return
 	}
+	requireOllama(ctx, t, ollama)
 
 	t.Run("EmbedAndStore", func(t *testing.T) {
 		// Generate embedding using Ollama
@@ -269,9 +260,7 @@ func TestEmbeddingService_WithVectorStorage(t *testing.T) {
 			Text: "This is a test document for vector similarity search.",
 		})
 		if err != nil {
-			t.Logf("Ollama embed failed: %v", err)
-			t.Skip("Ollama embedding not available")
-			return
+			t.Fatalf("missing prerequisite: %v", ErrOllamaUnavailable{Op: "Embed", Err: err})
 		}
 
 		// Store the embedding in vector storage
@@ -279,7 +268,7 @@ func TestEmbeddingService_WithVectorStorage(t *testing.T) {
 		vectorClient := sdk.Vector()
 		_, err = vectorClient.Upsert(ctx, &vector.UpsertRequest{
 			Vector: &vector.VectorEntity{
-				ID:        "doc-001",
+				ID:        "1",
 				Namespace: namespace,
 				Vector:    embedResp.Embedding,
 				Metadata: map[string]string{
@@ -288,6 +277,10 @@ func TestEmbeddingService_WithVectorStorage(t *testing.T) {
 				},
 			},
 		})
+		// Declared gap: go-quicbaas #1404 — flips to the success path on the pin bump that carries the fix.
+		if helpers.GapEmbeddedVector.Unserved(t, "Upsert", err) {
+			return
+		}
 		require.NoError(t, err)
 
 		// Search for similar vectors
@@ -298,6 +291,6 @@ func TestEmbeddingService_WithVectorStorage(t *testing.T) {
 		})
 		require.NoError(t, err)
 		assert.NotEmpty(t, searchResp.Results)
-		assert.Equal(t, "doc-001", searchResp.Results[0].Vector.ID)
+		assert.Equal(t, "1", searchResp.Results[0].Vector.ID)
 	})
 }

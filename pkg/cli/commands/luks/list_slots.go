@@ -59,7 +59,10 @@ func runListSlots(commonFlags *cli.CommonFlags, f *listSlotsFlags) error {
 	}
 	defer base.Close()
 
-	client := lukssvc.NewClient()
+	client, err := newService(base.Client())
+	if err != nil {
+		return err
+	}
 	resp, err := client.ListSlots(base.Context(), &lukssvc.ListSlotsRequest{Device: device})
 	if err != nil {
 		return err

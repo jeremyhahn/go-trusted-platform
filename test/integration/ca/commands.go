@@ -17,6 +17,8 @@ package ca
 
 import (
 	"context"
+	"crypto/x509"
+	"fmt"
 	"time"
 )
 
@@ -37,6 +39,9 @@ type CACommands interface {
 
 	// Certificate Issue Commands (platformctl ca issue)
 	IssueCertificate(ctx context.Context, opts IssueCertificateOptions) (*IssueCertificateResult, error)
+
+	// CSR Signing Commands (platformctl ca sign-csr)
+	SignCSR(ctx context.Context, opts SignCSROptions) (*IssueCertificateResult, error)
 
 	// Certificate Get Commands (platformctl ca certificate)
 	GetCertificate(ctx context.Context, opts GetCertificateOptions) (*GetCertificateResult, error)
@@ -127,6 +132,13 @@ type IssueCertificateOptions struct {
 	ExtKeyUsage []string
 	IsCA        bool
 	MaxPathLen  int32
+}
+
+// SignCSROptions contains the CSR that asks the CA to certify a KMS key for
+// code signing. Its common name is the KMS key ID.
+type SignCSROptions struct {
+	CSRPEM    string
+	ValidDays int32
 }
 
 // IssueCertificateResult contains the result of a certificate issuance.
@@ -342,6 +354,44 @@ type GetCRLResult struct {
 	RevokedCount int32
 	RevokedCerts []RevokedCertEntry
 	Data         []byte
+}
+
+// ErrCRLDataMissing is returned when a CRL response carries no DER.
+type ErrCRLDataMissing struct {
+	Protocol string
+}
+
+func (e ErrCRLDataMissing) Error() string {
+	return fmt.Sprintf("%s CRL response carries no CRL data", e.Protocol)
+}
+
+// ErrCRLParseFailed is returned when a CRL response's DER does not parse.
+type ErrCRLParseFailed struct {
+	Protocol string
+	Err      error
+}
+
+func (e ErrCRLParseFailed) Error() string {
+	return fmt.Sprintf("%s CRL data does not parse: %v", e.Protocol, e.Err)
+}
+
+func (e ErrCRLParseFailed) Unwrap() error {
+	return e.Err
+}
+
+// setIssuerFromData reads the issuer from the signed CRL. No transport's CRL
+// message carries the issuer name beside the DER; it is the CRL's own issuer
+// field (RFC 5280 §5.1.2.3).
+func (r *GetCRLResult) setIssuerFromData(protocol string) error {
+	if len(r.Data) == 0 {
+		return ErrCRLDataMissing{Protocol: protocol}
+	}
+	crl, err := x509.ParseRevocationList(r.Data)
+	if err != nil {
+		return ErrCRLParseFailed{Protocol: protocol, Err: err}
+	}
+	r.Issuer = crl.Issuer.String()
+	return nil
 }
 
 // RevokedCertEntry represents a revoked certificate entry.

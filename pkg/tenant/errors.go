@@ -123,6 +123,23 @@ func (e ErrDEKOperationFailed) Unwrap() error {
 	return e.Err
 }
 
+// ErrDefaultRolesFailed is returned when the IAM tenant's default roles
+// could not be provisioned. A tenant without them cannot hold a user: every
+// user the platform mirrors into IAM names a role, and a name that resolves
+// to nothing fails the create (#641).
+type ErrDefaultRolesFailed struct {
+	TenantID string
+	Err      error
+}
+
+func (e ErrDefaultRolesFailed) Error() string {
+	return fmt.Sprintf("failed to provision default IAM roles for tenant %s: %v", e.TenantID, e.Err)
+}
+
+func (e ErrDefaultRolesFailed) Unwrap() error {
+	return e.Err
+}
+
 // ErrConfigValidation is returned when configuration validation fails.
 type ErrConfigValidation struct {
 	Field  string
@@ -156,6 +173,40 @@ type ErrBarrierNotSupported struct {
 
 func (e ErrBarrierNotSupported) Error() string {
 	return fmt.Sprintf("barrier operation not supported: %s", e.Operation)
+}
+
+// ErrNameLookupDenied is returned when a caller other than the system tenant
+// looks a tenant up by a name that is not its own tenant's. A name that does
+// not exist gets the same error, so the denial says nothing about which names
+// exist. It carries no field for the same reason: the two cases must read
+// alike on every transport.
+type ErrNameLookupDenied struct{}
+
+func (e ErrNameLookupDenied) Error() string {
+	return "tenant lookup by name: a tenant may resolve only its own name"
+}
+
+// ErrTenantForbidden is returned when a request names a tenant other than
+// the caller's own and the caller is not the system tenant
+// (AuthorizeTenantAccess). Every transport refuses with it: gRPC as
+// PermissionDenied, daemon REST as 403.
+type ErrTenantForbidden struct {
+	Requested string
+}
+
+func (e ErrTenantForbidden) Error() string {
+	return fmt.Sprintf("tenant request names tenant %q: caller may not act on another tenant", e.Requested)
+}
+
+// ErrTenantSystemOnly is returned when a caller other than the system tenant
+// makes a request that acts across tenants (AuthorizeCrossTenant). Method is
+// the TenantService method the request maps to on every transport.
+type ErrTenantSystemOnly struct {
+	Method string
+}
+
+func (e ErrTenantSystemOnly) Error() string {
+	return fmt.Sprintf("%s acts across tenants: only the system tenant may call it", e.Method)
 }
 
 // ErrNilBarrierStatus is returned when the barrier status RPC returns nil

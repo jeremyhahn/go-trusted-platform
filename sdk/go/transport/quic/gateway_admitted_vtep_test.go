@@ -25,15 +25,15 @@ import (
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
-	quicapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	sdkgateway "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/gateway"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 )
 
 var verdictAt = time.Date(2026, 10, 9, 12, 0, 0, 0, time.UTC)
 
-func admittedWire(vtep string) *quicapi.GatewayAdmittedVTEPInfo {
-	return &quicapi.GatewayAdmittedVTEPInfo{
+func admittedWire(vtep string) *quicwire.GatewayAdmittedVTEPInfo {
+	return &quicwire.GatewayAdmittedVTEPInfo{
 		VTEP: vtep, DeviceID: 42, HostID: "host-42", Serial: "SN42", Hostname: "edge-42",
 		AllocationID: "alloc-42", BaselineSource: "signed", ProfileID: 9, VerdictAt: verdictAt.Unix(),
 	}
@@ -50,7 +50,7 @@ func admittedPB(vtep string) *platformv1.GatewayAdmittedVTEP {
 // --protocol quic, wired to a sender that answers like the daemon.
 func sdkGatewayOverQUIC(t *testing.T, wireResp interface{}) (*sdkgateway.Client, *recordingSender) {
 	t.Helper()
-	respPayload, err := quicapi.EncodePayload(wireResp)
+	respPayload, err := quicwire.EncodePayload(wireResp)
 	if err != nil {
 		t.Fatalf("encode daemon response: %v", err)
 	}
@@ -63,18 +63,18 @@ func sdkGatewayOverQUIC(t *testing.T, wireResp interface{}) (*sdkgateway.Client,
 // neither method had an opcode. A by-name decode would also have dropped
 // every field whose wire and pb names differ, and the verdict time.
 func TestGatewayAdmittedVTEP_SDKOverQUIC(t *testing.T) {
-	client, sender := sdkGatewayOverQUIC(t, &quicapi.GatewayAdmittedVTEPResponse{VTEP: admittedWire("198.51.100.10")})
+	client, sender := sdkGatewayOverQUIC(t, &quicwire.GatewayAdmittedVTEPResponse{VTEP: admittedWire("198.51.100.10")})
 
 	got, err := client.GetAdmittedVTEP(context.Background(), "gw-01", "198.51.100.10")
 	if err != nil {
 		t.Fatalf("GetAdmittedVTEP: %v", err)
 	}
-	if sender.rawOpcode != quicapi.OpGatewayCategory || sender.rawPayload[0] != quicapi.OpGatewayAdmittedVTEP {
+	if sender.rawOpcode != quicwire.OpGatewayCategory || sender.rawPayload[0] != quicwire.OpGatewayAdmittedVTEP {
 		t.Fatalf("sent opcode 0x%02X sub 0x%02X, want the gateway category and OpGatewayAdmittedVTEP",
 			sender.rawOpcode, sender.rawPayload[0])
 	}
-	var req quicapi.GatewayAdmittedVTEPRequest
-	if err := quicapi.DecodePayload(sender.rawPayload[1:], &req); err != nil {
+	var req quicwire.GatewayAdmittedVTEPRequest
+	if err := quicwire.DecodePayload(sender.rawPayload[1:], &req); err != nil {
 		t.Fatalf("daemon-side decode: %v", err)
 	}
 	if req.GatewayID != "gw-01" || req.VTEP != "198.51.100.10" {
@@ -86,8 +86,8 @@ func TestGatewayAdmittedVTEP_SDKOverQUIC(t *testing.T) {
 }
 
 func TestListGatewayAdmittedVTEPs_SDKOverQUIC(t *testing.T) {
-	client, sender := sdkGatewayOverQUIC(t, &quicapi.GatewayListAdmittedVTEPsResponse{
-		VTEPs: []*quicapi.GatewayAdmittedVTEPInfo{admittedWire("198.51.100.10"), {VTEP: "198.51.100.11"}},
+	client, sender := sdkGatewayOverQUIC(t, &quicwire.GatewayListAdmittedVTEPsResponse{
+		VTEPs: []*quicwire.GatewayAdmittedVTEPInfo{admittedWire("198.51.100.10"), {VTEP: "198.51.100.11"}},
 		Count: 2,
 	})
 
@@ -95,11 +95,11 @@ func TestListGatewayAdmittedVTEPs_SDKOverQUIC(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListAdmittedVTEPs: %v", err)
 	}
-	if sender.rawPayload[0] != quicapi.OpGatewayListAdmittedVTEPs {
+	if sender.rawPayload[0] != quicwire.OpGatewayListAdmittedVTEPs {
 		t.Fatalf("sub-opcode 0x%02X, want OpGatewayListAdmittedVTEPs", sender.rawPayload[0])
 	}
-	var req quicapi.GatewayListAdmittedVTEPsRequest
-	if err := quicapi.DecodePayload(sender.rawPayload[1:], &req); err != nil {
+	var req quicwire.GatewayListAdmittedVTEPsRequest
+	if err := quicwire.DecodePayload(sender.rawPayload[1:], &req); err != nil {
 		t.Fatalf("daemon-side decode: %v", err)
 	}
 	if req.GatewayID != "gw-01" {
@@ -118,7 +118,7 @@ func TestGatewayAdmittedVTEP_QUICRefusesMistypedMessages(t *testing.T) {
 	conn := newConnWithSender(t, sender)
 	err := conn.Invoke(context.Background(), platformv1.GatewayService_GetGatewayAdmittedVTEP_FullMethodName,
 		&platformv1.ListGatewayAdmittedVTEPsRequest{}, &platformv1.GetGatewayAdmittedVTEPResponse{})
-	if status.Code(err) != codes.Internal || sender.rawCalls != 0 {
+	if status.Code(err) != codes.InvalidArgument || sender.rawCalls != 0 {
 		t.Fatalf("a mistyped request must fail before the wire: code %v, sends %d", status.Code(err), sender.rawCalls)
 	}
 

@@ -104,6 +104,8 @@ func (s *mockOVSDBServer) initializeDatabase() {
 	db.tables["Bridge"] = &mockTable{name: "Bridge", rows: make(map[string]map[string]interface{})}
 	db.tables["Port"] = &mockTable{name: "Port", rows: make(map[string]map[string]interface{})}
 	db.tables["Interface"] = &mockTable{name: "Interface", rows: make(map[string]map[string]interface{})}
+	db.tables["QoS"] = &mockTable{name: "QoS", rows: make(map[string]map[string]interface{})}
+	db.tables["Queue"] = &mockTable{name: "Queue", rows: make(map[string]map[string]interface{})}
 
 	s.mu.Lock()
 	s.databases[DefaultDatabase] = db
@@ -581,6 +583,14 @@ func (s *mockOVSDBServer) resolveNamedUUIDValue(val interface{}, namedUUIDs map[
 		}
 		return s.resolveNamedUUIDs(v, namedUUIDs)
 	case []interface{}:
+		// NamedUUID marshals to the wire form ["named-uuid", name].
+		if len(v) == 2 && v[0] == "named-uuid" {
+			if name, ok := v[1].(string); ok {
+				if uuid, exists := namedUUIDs[name]; exists {
+					return []interface{}{"uuid", uuid}
+				}
+			}
+		}
 		resolved := make([]interface{}, len(v))
 		for i, item := range v {
 			resolved[i] = s.resolveNamedUUIDValue(item, namedUUIDs)

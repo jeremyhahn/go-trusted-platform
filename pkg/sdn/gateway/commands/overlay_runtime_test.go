@@ -18,6 +18,8 @@ import (
 	"errors"
 	"io"
 	"net/netip"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -55,7 +57,7 @@ func (f *fakeOverlayIPAMClient) ListAllocations(_ context.Context, poolID string
 }
 
 func fabricAllocation(ip, deviceID string) *platformv1.IPAllocation {
-	return &platformv1.IPAllocation{Ip: ip, PoolId: "fabric-pool", DeviceId: deviceID}
+	return &platformv1.IPAllocation{Ip: ip, PoolId: "fabric-pool", DeviceId: deviceID, Status: string(ipam.AllocationStatusActive)}
 }
 
 // steppingClock returns a clock that advances one second per reading, so
@@ -167,8 +169,85 @@ func TestOverlayRuntimeIPAM_RejectsMalformedAllocation(t *testing.T) {
 	r := &overlayRuntimeIPAM{client: client, now: steppingClock()}
 
 	_, err := r.GetAllocation(context.Background(), netip.MustParseAddr("10.0.0.1"))
-	if err == nil || errors.Is(err, ipam.ErrAllocationNotFound) {
-		t.Fatalf("GetAllocation over a malformed allocation = %v, want a parse error", err)
+	var malformed *ErrOverlayIPAMAllocation
+	if !errors.As(err, &malformed) || malformed.Cause == nil || errors.Is(err, ipam.ErrAllocationNotFound) {
+		t.Fatalf("GetAllocation over a malformed allocation = %v, want ErrOverlayIPAMAllocation with the parse error", err)
+	}
+}
+
+// The status platformd lists is carried into the index, never re-synthesized:
+// an allocation without one cannot be told from one IPAM expired.
+func TestOverlayRuntimeIPAM_CarriesTheListedStatus(t *testing.T) {
+	expired := fabricAllocation("10.0.0.2", "7")
+	expired.Status = string(ipam.AllocationStatusExpired)
+	r := &overlayRuntimeIPAM{client: &fakeOverlayIPAMClient{allocations: []*platformv1.IPAllocation{expired}}, now: steppingClock()}
+
+	got, err := r.GetAllocation(context.Background(), netip.MustParseAddr("10.0.0.2"))
+	if err != nil {
+		t.Fatalf("GetAllocation: %v", err)
+	}
+	if got.Status != ipam.AllocationStatusExpired || got.IsActive() {
+		t.Fatalf("Status = %q, IsActive = %v; want the listed expired status", got.Status, got.IsActive())
+	}
+}
+
+func TestOverlayRuntimeIPAM_RejectsAllocationWithoutStatus(t *testing.T) {
+	for _, status := range []string{"", "leased"} {
+		t.Run("status "+strconv.Quote(status), func(t *testing.T) {
+			allocation := fabricAllocation("10.0.0.1", "7")
+			allocation.Status = status
+			r := &overlayRuntimeIPAM{client: &fakeOverlayIPAMClient{allocations: []*platformv1.IPAllocation{allocation}}, now: steppingClock()}
+
+			_, err := r.GetAllocation(context.Background(), netip.MustParseAddr("10.0.0.1"))
+			var unknown *ErrOverlayIPAMAllocation
+			if !errors.As(err, &unknown) || unknown.IP != "10.0.0.1" || unknown.Cause != nil {
+				t.Fatalf("GetAllocation = %v, want ErrOverlayIPAMAllocation for 10.0.0.1", err)
+			}
+			if !strings.Contains(err.Error(), strconv.Quote(status)) {
+				t.Fatalf("error %q does not name the status %q", err, status)
+			}
+		})
+	}
+}
+
+// overlayNopRevoker satisfies the admitter's revoker and replayer; admission
+// through the runtime adapters revokes and replays nothing in these tests.
+type overlayNopRevoker struct{}
+
+func (overlayNopRevoker) RevokeVTEP(context.Context, netip.Addr) error { return nil }
+func (overlayNopRevoker) RefusedVTEPs() []netip.Addr                   { return nil }
+func (overlayNopRevoker) ReplayVTEP(context.Context, netip.Addr) error { return nil }
+
+// An allocation IPAM expired for inactivity keeps a zero ExpiresAt. Listed
+// with its status, admission refuses it after the refresh; an active
+// allocation of the same device is still admitted (#765).
+func TestOverlayRuntimeIPAM_AdmissionRefusesAnExpiredAllocation(t *testing.T) {
+	attestedAt := time.Date(2026, 10, 9, 11, 0, 0, 0, time.UTC)
+	expired := fabricAllocation("10.0.0.2", "7")
+	expired.Status = string(ipam.AllocationStatusExpired)
+	ipamClient := &fakeOverlayIPAMClient{allocations: []*platformv1.IPAllocation{fabricAllocation("10.0.0.1", "7"), expired}}
+	admitter, err := gateway.NewVTEPAdmitter(gateway.VTEPAdmissionConfig{
+		IPAM:    &overlayRuntimeIPAM{client: ipamClient, now: steppingClock()},
+		Devices: &overlayRuntimeDevices{client: &fakeOverlayDeviceClient{device: &platformv1.Device{Id: 7, Serial: "SN-7", Hostname: "node-7"}}},
+		Verdicts: &overlayRuntimeVerdicts{client: &fakeOverlayReportClient{report: &platformv1.DeviceAttestationReport{
+			Serial: "SN-7", Verified: true, Fresh: true, PcrBaselineCaptured: true, PcrBaselineSource: "signed",
+			AttestedAt: timestamppb.New(attestedAt),
+		}}},
+		Revoker:  overlayNopRevoker{},
+		Replayer: overlayNopRevoker{},
+		Now:      func() time.Time { return attestedAt.Add(time.Minute) },
+	})
+	if err != nil {
+		t.Fatalf("NewVTEPAdmitter: %v", err)
+	}
+
+	err = admitter.AdmitVTEP(context.Background(), 100, netip.MustParseAddr("10.0.0.2"))
+	var refused gateway.ErrOverlayVTEPRegistry
+	if !errors.As(err, &refused) || refused.Reason != "allocation is not active" {
+		t.Fatalf("AdmitVTEP of the expired allocation = %v, want it refused as not active", err)
+	}
+	if err := admitter.AdmitVTEP(context.Background(), 100, netip.MustParseAddr("10.0.0.1")); err != nil {
+		t.Fatalf("AdmitVTEP of the active allocation: %v", err)
 	}
 }
 

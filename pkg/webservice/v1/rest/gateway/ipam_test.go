@@ -280,7 +280,7 @@ func TestIPAMRoutes_Allocations(t *testing.T) {
 			gotPoolID = req.GetPoolId()
 			return &platformv1.ListAllocationsResponse{
 				Allocations: []*platformv1.IPAllocation{
-					{Ip: "10.0.0.10", PoolId: req.GetPoolId(), Hostname: "node-03", AllocatedAt: timestamppb.Now()},
+					{Ip: "10.0.0.10", PoolId: req.GetPoolId(), Hostname: "node-03", Status: "active", AllocatedAt: timestamppb.Now()},
 				},
 			}, nil
 		},
@@ -308,7 +308,7 @@ func TestIPAMRoutes_Allocations(t *testing.T) {
 	if err := json.Unmarshal(env.Payload, &payload); err != nil {
 		t.Fatalf("decode payload: %v", err)
 	}
-	if payload.Count != 1 || payload.Allocations[0].IP != "10.0.0.10" {
+	if payload.Count != 1 || payload.Allocations[0].IP != "10.0.0.10" || payload.Allocations[0].Status != "active" {
 		t.Fatalf("allocations wrong: %+v", payload)
 	}
 

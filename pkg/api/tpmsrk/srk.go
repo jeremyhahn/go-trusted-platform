@@ -33,6 +33,7 @@ import (
 	"fmt"
 
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
+	tpmsvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/tpm"
 )
 
 // The persistent handles the platform dispatches on. These are the wire
@@ -81,11 +82,50 @@ var resolvers = map[uint32]func(xkmssdk.TrustedPlatformModule) (*xkmssdk.KeyAttr
 	},
 }
 
+// Info property keys under which the daemon publishes the SRK handles it
+// is configured with, so a client probes the real handle instead of
+// assuming the default. The client SDK owns the key names.
+const (
+	PropertyPlatformSRKHandle = tpmsvc.InfoPropertyPlatformSRKHandle
+	PropertySSRKHandle        = tpmsvc.InfoPropertySSRKHandle
+)
+
+// ConfiguredPlatformHandle returns the Platform KeyStore SRK handle the TPM
+// is configured with (tpm.platform-srk.handle), or PlatformSRKHandle when
+// the config is absent or leaves it unset.
+func ConfiguredPlatformHandle(tpm xkmssdk.TrustedPlatformModule) uint32 {
+	if cfg := tpm.Config(); cfg != nil && cfg.PlatformSRK != nil && cfg.PlatformSRK.SRKHandle != 0 {
+		return uint32(cfg.PlatformSRK.SRKHandle)
+	}
+	return PlatformSRKHandle
+}
+
+// ConfiguredSSRKHandle returns the storage-hierarchy SRK handle the TPM is
+// configured with (tpm.ssrk.handle), or SSRKHandle when the config is
+// absent or leaves it unset.
+func ConfiguredSSRKHandle(tpm xkmssdk.TrustedPlatformModule) uint32 {
+	if cfg := tpm.Config(); cfg != nil && cfg.SSRK != nil && cfg.SSRK.Handle != 0 {
+		return uint32(cfg.SSRK.Handle)
+	}
+	return SSRKHandle
+}
+
+// InfoProperties returns the SRK handles the TPM is configured with, as
+// 0x%08X strings keyed by PropertyPlatformSRKHandle and PropertySSRKHandle.
+// Every transport's Info response publishes this map so they agree.
+func InfoProperties(tpm xkmssdk.TrustedPlatformModule) map[string]string {
+	return map[string]string{
+		PropertyPlatformSRKHandle: fmt.Sprintf("0x%08X", ConfiguredPlatformHandle(tpm)),
+		PropertySSRKHandle:        fmt.Sprintf("0x%08X", ConfiguredSSRKHandle(tpm)),
+	}
+}
+
 // Resolve returns the attributes of the SRK the caller named.
 //
 // handle 0 and SSRKHandle resolve to the SSRK; PlatformSRKHandle
-// resolves to the PlatformSRK; anything else is ErrUnknownHandle. A nil
-// TPM is ErrTPMUnavailable.
+// resolves to the PlatformSRK; the configured PlatformSRK and SSRK handles
+// (see InfoProperties) resolve to their keys; anything else is
+// ErrUnknownHandle. A nil TPM is ErrTPMUnavailable.
 //
 // The returned attributes carry the handle the key actually occupies,
 // which is the deployment's configured value and need not equal the one
@@ -96,11 +136,16 @@ func Resolve(tpm xkmssdk.TrustedPlatformModule, handle uint32) (*xkmssdk.KeyAttr
 	if tpm == nil {
 		return nil, ErrTPMUnavailable{}
 	}
-	resolve, ok := resolvers[handle]
-	if !ok {
-		return nil, ErrUnknownHandle{Requested: handle}
+	if resolve, ok := resolvers[handle]; ok {
+		return resolve(tpm)
 	}
-	return resolve(tpm)
+	if handle == ConfiguredPlatformHandle(tpm) {
+		return resolvers[PlatformSRKHandle](tpm)
+	}
+	if handle == ConfiguredSSRKHandle(tpm) {
+		return resolvers[SSRKHandle](tpm)
+	}
+	return nil, ErrUnknownHandle{Requested: handle}
 }
 
 // IsUnknownHandle reports whether err is an ErrUnknownHandle, so a

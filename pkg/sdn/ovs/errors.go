@@ -193,3 +193,31 @@ func (e *ErrConfigNotApplied) Error() string {
 
 // Unwrap returns the context error.
 func (e *ErrConfigNotApplied) Unwrap() error { return e.Err }
+
+// ErrInvalidPolicing is returned for an ingress policing rate (bps) or burst
+// (bits) Open vSwitch cannot apply: it polices in kbps and kb, so each value
+// must be 0 or a whole multiple of 1000, and a burst needs a rate.
+type ErrInvalidPolicing struct {
+	RateBps   uint64
+	BurstBits uint64
+}
+
+// Error implements the error interface.
+func (e *ErrInvalidPolicing) Error() string {
+	return "ovs: invalid ingress policing: rate " + strconv.FormatUint(e.RateBps, 10) +
+		" bps, burst " + strconv.FormatUint(e.BurstBits, 10) +
+		" bits (each must be 0 or a whole multiple of 1000, and a burst needs a rate)"
+}
+
+// ErrInvalidShaping is returned for an egress shaping rate (bps) and burst
+// (bits) Open vSwitch cannot apply: a burst needs a rate.
+type ErrInvalidShaping struct {
+	RateBps   uint64
+	BurstBits uint64
+}
+
+// Error implements the error interface.
+func (e *ErrInvalidShaping) Error() string {
+	return "ovs: invalid egress shaping: rate " + strconv.FormatUint(e.RateBps, 10) +
+		" bps, burst " + strconv.FormatUint(e.BurstBits, 10) + " bits (a burst needs a rate)"
+}

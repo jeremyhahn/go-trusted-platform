@@ -14,15 +14,22 @@
 package daemon
 
 import (
+	"context"
+	"crypto/tls"
 	"crypto/x509"
 	"os"
 
+	quicbaassdk "github.com/jeremyhahn/go-quicbaas/sdk/go"
+	"github.com/jeremyhahn/go-quicbaas/sdk/go/platformtoken"
 	"google.golang.org/grpc"
 
 	grpccreds "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/api/mcp"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
+	restapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/rest"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/auth"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
 
 // Transport names used in fail-closed authentication errors.
@@ -30,6 +37,7 @@ const (
 	transportGRPCTCP = "grpc"
 	transportQUIC    = "quic"
 	transportREST    = "rest"
+	transportMCP     = "mcp"
 )
 
 // grpcAuthSelection is the authentication the gRPC TCP transport resolved to.
@@ -63,7 +71,31 @@ func (s grpcAuthSelection) options() []grpc.ServerOption {
 // configuration under which no backend exists refuses the transport with
 // ErrTransportAuthRequired instead. SkipIAMValidation remains the explicit,
 // testing-only opt-out, mirroring the MCP precedent (#440).
-func selectGRPCTCPAuth(config *Config, shared *platformTokenValidator, logger *logging.Logger, skipMethods []string) (grpcAuthSelection, error) {
+//
+// The local validator's tokens carry no scope claims, so each method's catalog
+// permission is decided by the IAM policy enforcement point (pep): without one
+// the transport is refused rather than letting any valid token reach every
+// method, Shutdown and BMC power included (#768).
+// grpcTCPSkipMethods are the gRPC methods the TCP transport serves without a
+// credential, under both the mTLS and the OIDC interceptor. The unary health
+// probe and the status-only Liveness and Readiness probes are here, but not
+// PlatformDaemon/GetHealth: it names every component with its failure
+// message, so it needs a credential like the REST /api/v1/platform/health
+// route (#768). The diskless boot calls are here
+// because a diskless node holds no platform token and, for BootCertificate,
+// no certificate yet; the boot service authenticates both itself, verifying
+// the node's proof or its chain and quote, bound to the connection. The OIDC
+// interceptor adds its own documented pre-auth list (method_permissions.go)
+// and refuses every method absent from its scope catalog.
+var grpcTCPSkipMethods = []string{
+	"/grpc.health.v1.Health/Check",
+	platformv1.PlatformDaemon_Liveness_FullMethodName,
+	platformv1.PlatformDaemon_Readiness_FullMethodName,
+	platformv1.DeviceService_BootCertificate_FullMethodName,
+	platformv1.DeviceService_BootDelivery_FullMethodName,
+}
+
+func selectGRPCTCPAuth(config *Config, shared *platformTokenValidator, pep quicbaassdk.IAMPEPClient, logger *logging.Logger, skipMethods []string) (grpcAuthSelection, error) {
 	if config.EnableMTLS {
 		if config.CAService == nil {
 			return grpcAuthSelection{}, ErrTransportAuthRequired{
@@ -97,12 +129,15 @@ func selectGRPCTCPAuth(config *Config, shared *platformTokenValidator, logger *l
 		return grpcAuthSelection{}, nil
 	}
 
-	var tokenValidator grpccreds.TokenValidator
 	var local *grpcTokenValidator
+	opts := []grpccreds.OIDCInterceptorOption{
+		grpccreds.WithSkipMethods(skipMethods...),
+		grpccreds.WithRequireAuth(true),
+	}
 	if shared != nil {
 		// Preferred path: validate broker platform tokens and project
 		// scp -> RBAC / tenant_id -> RLS into the request context.
-		tokenValidator = shared
+		opts = append(opts, grpccreds.WithTokenValidator(shared))
 		logger.Info("gRPC TCP server: platform-token validation enabled")
 	} else {
 		local = buildLocalTokenValidator(config, logger, transportGRPCTCP)
@@ -112,38 +147,63 @@ func selectGRPCTCPAuth(config *Config, shared *platformTokenValidator, logger *l
 				Reason:    "neither the platform-token validator, the QuicBaaS service nor a platform JWT verifier is available",
 			}
 		}
-		tokenValidator = local
+		authorizer, err := newIAMTokenAuthorizer(local, pep)
+		if err != nil {
+			return grpcAuthSelection{}, ErrTransportAuthRequired{
+				Transport: transportGRPCTCP,
+				Reason:    "tokens without scope claims need the IAM policy enforcement point to be authorized: " + err.Error(),
+			}
+		}
+		opts = append(opts,
+			grpccreds.WithTokenValidator(local),
+			grpccreds.WithAuthorizationChecker(authorizer),
+		)
 	}
 
 	return grpcAuthSelection{
-		unary: grpccreds.OIDCUnaryInterceptor(
-			grpccreds.WithTokenValidator(tokenValidator),
-			grpccreds.WithSkipMethods(skipMethods...),
-			grpccreds.WithRequireAuth(true),
-		),
-		stream: grpccreds.OIDCStreamInterceptor(
-			grpccreds.WithTokenValidator(tokenValidator),
-			grpccreds.WithSkipMethods(skipMethods...),
-			grpccreds.WithRequireAuth(true),
-		),
+		unary:     grpccreds.OIDCUnaryInterceptor(opts...),
+		stream:    grpccreds.OIDCStreamInterceptor(opts...),
 		validator: local,
 		required:  true,
 	}, nil
 }
 
-// selectQUICAuth decides how the QUIC transport authenticates callers. The
-// returned middleware is nil only under mTLS (the TLS layer authenticates, and
-// resolveMTLSClientCAPool guarantees that it really does) or under the
-// SkipIAMValidation opt-out; a configuration with no backend is refused with
-// ErrTransportAuthRequired instead of yielding an unauthenticated server (#550).
-func selectQUICAuth(config *Config, shared *platformTokenValidator, logger *logging.Logger) (*quic.AuthMiddleware, *grpcTokenValidator, error) {
+// selectQUICAuth decides how the QUIC transport authenticates callers. It
+// always returns a middleware, because the QUIC dispatcher authorizes every
+// request against the operation catalog (#767). Under mTLS the TLS layer
+// verifies the client certificate against clientCAPool and the middleware
+// turns it into the principal of a tokenless request, so the per-operation
+// scope checks see an authorized caller (#720); a presented token is still
+// validated when the shared platform-token validator exists. Under the
+// SkipIAMValidation opt-out authentication is skipped, but unclassified
+// operations are still refused. A configuration with no backend is refused
+// with ErrTransportAuthRequired instead of yielding an unauthenticated server
+// (#550).
+func selectQUICAuth(config *Config, shared *platformTokenValidator, clientCAPool *x509.CertPool, logger *logging.Logger) (*quic.AuthMiddleware, *grpcTokenValidator, error) {
 	if config.EnableMTLS {
-		logger.Info("QUIC server: mTLS authentication enabled (TLS layer)")
-		return nil, nil, nil
+		if clientCAPool == nil {
+			return nil, nil, ErrTransportAuthRequired{
+				Transport: transportQUIC,
+				Reason:    "mTLS is enabled but no client CA pool is available to authenticate client certificates",
+			}
+		}
+		mtlsAuth, err := auth.NewMTLSAdapterFromRoots(logger, clientCAPool)
+		if err != nil {
+			return nil, nil, ErrTLSConfigFailed{Reason: "QUIC mTLS auth: " + err.Error()}
+		}
+		logger.Info("QUIC server: mTLS authentication enabled")
+		opts := []quic.AuthMiddlewareOption{
+			quic.WithQUICPeerAuthenticator(mtlsPeerAuthenticator{authenticator: mtlsAuth}),
+			quic.WithQUICRequireAuth(true),
+		}
+		if shared != nil {
+			opts = append(opts, quic.WithQUICTokenValidator(shared))
+		}
+		return quic.NewAuthMiddleware(opts...), nil, nil
 	}
 	if config.SkipIAMValidation {
 		logger.Warn("QUIC server: authentication DISABLED by SkipIAMValidation (testing only)")
-		return nil, nil, nil
+		return quic.NewAuthMiddleware(quic.WithQUICRequireAuth(false)), nil, nil
 	}
 	if shared != nil {
 		logger.Info("QUIC server: platform-token validation enabled")
@@ -163,6 +223,84 @@ func selectQUICAuth(config *Config, shared *platformTokenValidator, logger *logg
 		quic.WithQUICTokenValidator(local),
 		quic.WithQUICRequireAuth(true),
 	), local, nil
+}
+
+// mtlsOperatorScope is the grant of a principal authenticated by an mTLS
+// client certificate. The daemon's client CA pool admits only operator
+// certificates (the admin bundle /init issues), and gRPC and REST authorize
+// such a caller for every operation without a scope check, so QUIC grants the
+// same authority rather than refusing the operator its own platform.
+const mtlsOperatorScope = "*:*"
+
+// mtlsPeerAuthenticator turns the verified client certificate of a QUIC
+// connection or REST request into the principal it acts as, through the same
+// certificate authenticator the gRPC mTLS interceptor uses.
+type mtlsPeerAuthenticator struct {
+	authenticator auth.Authenticator
+}
+
+// AuthenticatePeer implements quic.PeerAuthenticator.
+func (a mtlsPeerAuthenticator) AuthenticatePeer(ctx context.Context, chain []*x509.Certificate) (*platformtoken.AuthorizedContext, error) {
+	if len(chain) == 0 {
+		return nil, quic.ErrMissingClientCertificate{}
+	}
+	identity, err := a.authenticator.Authenticate(ctx, chain[0])
+	if err != nil {
+		return nil, err
+	}
+	return &platformtoken.AuthorizedContext{
+		Subject:  identity.ID,
+		Username: identity.Name,
+		TenantID: identity.TenantID,
+		Scopes:   []string{mtlsOperatorScope},
+	}, nil
+}
+
+// newRESTScopeGuard builds the guard that checks each daemon REST route's
+// scope. It accepts the same credentials as QUIC: a platform token through
+// the shared validator, else a client certificate verified against the mTLS
+// client CA pool, admitted as the operator. A credential with no verifier
+// configured is refused, so the guard never admits by default.
+func newRESTScopeGuard(config *Config, shared *platformTokenValidator, logger *logging.Logger) (*restapi.ScopeGuard, error) {
+	var tokens restapi.TokenAuthorizer
+	// A nil *platformTokenValidator must not become a non-nil interface.
+	if shared != nil {
+		tokens = shared
+	}
+	var peers restapi.PeerAuthenticator
+	clientCAPool, err := resolveMTLSClientCAPool(config, transportREST)
+	if err != nil {
+		return nil, err
+	}
+	if clientCAPool != nil {
+		mtlsAuth, authErr := auth.NewMTLSAdapterFromRoots(logger, clientCAPool)
+		if authErr != nil {
+			return nil, ErrTLSConfigFailed{Reason: "REST mTLS auth: " + authErr.Error()}
+		}
+		peers = mtlsPeerAuthenticator{authenticator: mtlsAuth}
+	}
+	return restapi.NewScopeGuard(tokens, peers, logger.Slog()), nil
+}
+
+// newMCPPeerAuthenticator builds the authenticator that admits a tokenless
+// MCP-over-HTTP request by its verified client certificate, the credential
+// REST, gRPC and QUIC accept under mTLS. It returns nil without mTLS: the MCP
+// listener then requests no client certificate and only bearer tokens
+// authenticate.
+func newMCPPeerAuthenticator(config *Config, logger *logging.Logger) (mcp.PeerAuthenticator, error) {
+	clientCAPool, err := resolveMTLSClientCAPool(config, transportMCP)
+	if err != nil {
+		return nil, err
+	}
+	if clientCAPool == nil {
+		return nil, nil
+	}
+	mtlsAuth, err := auth.NewMTLSAdapterFromRoots(logger, clientCAPool)
+	if err != nil {
+		return nil, ErrTLSConfigFailed{Reason: "MCP mTLS auth: " + err.Error()}
+	}
+	logger.Info("MCP server: mTLS authentication enabled")
+	return mtlsPeerAuthenticator{authenticator: mtlsAuth}, nil
 }
 
 // buildLocalTokenValidator builds the per-transport token validator from the
@@ -219,4 +357,33 @@ func resolveMTLSClientCAPool(config *Config, transport string) (*x509.CertPool, 
 		return nil, ErrTLSConfigFailed{Reason: transport + ": failed to parse mTLS client CA certificates"}
 	}
 	return pool, nil
+}
+
+// newServerTLSConfig builds the server TLS configuration a TCP transport
+// serves cert with. When mTLS is enabled it requires and verifies a client
+// certificate against the pool resolveMTLSClientCAPool resolves for the
+// transport, failing closed on the same terms (#550). REST, gRPC and MCP
+// share it so every listener presents one identity under one trust policy.
+func newServerTLSConfig(config *Config, transport string, cert tls.Certificate) (*tls.Config, error) {
+	tlsConfig := &tls.Config{
+		Certificates: []tls.Certificate{cert},
+		MinVersion:   tls.VersionTLS12,
+	}
+	// A renewable identity is read per handshake. Certificates must stay
+	// empty: crypto/tls prefers Certificates[0] over GetCertificate when a
+	// client sends no SNI, which would pin the boot-time certificate (#36).
+	if config.TLSIdentity.Current() != nil {
+		tlsConfig.Certificates = nil
+		tlsConfig.GetCertificate = config.TLSIdentity.GetCertificate
+	}
+
+	clientCAPool, err := resolveMTLSClientCAPool(config, transport)
+	if err != nil {
+		return nil, err
+	}
+	if clientCAPool != nil {
+		tlsConfig.ClientAuth = tls.RequireAndVerifyClientCert
+		tlsConfig.ClientCAs = clientCAPool
+	}
+	return tlsConfig, nil
 }

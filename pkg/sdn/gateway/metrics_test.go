@@ -69,6 +69,15 @@ func metricsSnapshot() *gwstate.Snapshot {
 			{Name: "isp-a", PoolAddresses: 8, Ports: 64512},
 		}},
 		Pipeline: &gwstate.PipelineState{Installed: true, Bridge: "br-fabric", Terminal: "normal"},
+		VPN: &gwstate.VPNState{
+			Running: true, Admissions: 7, Refusals: 2,
+			LeasesByDataPlane: map[string]int{"masque": 3, "wireguard": 1},
+			Revocations:       map[string]uint64{"expired": 4, "attestation-failed": 1},
+			PostureViolations: map[string]uint64{"secure-boot": 2},
+			Reattest: &gwstate.DurationHistogram{Count: 3, SumSeconds: 0.75, Buckets: []gwstate.HistogramBucket{
+				{UpperBoundSeconds: 0.1, Count: 1}, {UpperBoundSeconds: 0.5, Count: 3},
+			}},
+		},
 	}
 }
 
@@ -92,6 +101,8 @@ func TestCollector_ExportsEverySection(t *testing.T) {
 		"gatewayd_tunnel_up", "gatewayd_tunnel_bytes_total",
 		"gatewayd_uplink_policy_rules", "gatewayd_hostfw_installed",
 		"gatewayd_firewall_flows", "gatewayd_nat_dnat_rules", "gatewayd_pipeline_installed",
+		"gatewayd_vpn_leases_active", "gatewayd_vpn_admissions_total", "gatewayd_vpn_revocations_total",
+		"gatewayd_vpn_posture_violations_total", "gatewayd_vpn_reattest_duration_seconds",
 	} {
 		assert.True(t, names[want], "missing metric %s", want)
 	}
@@ -116,6 +127,39 @@ gatewayd_bfd_failure_transitions_total{gateway="node-01-gateway",peer="10.255.0.
 `
 	require.NoError(t, testutil.GatherAndCompare(registry, strings.NewReader(bfd),
 		"gatewayd_bfd_failure_transitions_total"), "only the peer that runs BFD reports one")
+}
+
+func TestCollector_ExportsTheVPNSection(t *testing.T) {
+	registry := prometheus.NewRegistry()
+	require.NoError(t, registry.Register(NewCollector(&staticSnapshot{snap: metricsSnapshot()})))
+
+	expected := `
+# HELP gatewayd_vpn_admissions_total Remote-access VPN admission decisions by outcome: admitted or refused.
+# TYPE gatewayd_vpn_admissions_total counter
+gatewayd_vpn_admissions_total{gateway="node-01-gateway",outcome="admitted"} 7
+gatewayd_vpn_admissions_total{gateway="node-01-gateway",outcome="refused"} 2
+# HELP gatewayd_vpn_leases_active Active remote-access VPN leases by data plane.
+# TYPE gatewayd_vpn_leases_active gauge
+gatewayd_vpn_leases_active{data_plane="masque",gateway="node-01-gateway"} 3
+gatewayd_vpn_leases_active{data_plane="wireguard",gateway="node-01-gateway"} 1
+# HELP gatewayd_vpn_posture_violations_total Posture rules that refused a VPN admission or renewal, by rule; rules past the label bound count as other.
+# TYPE gatewayd_vpn_posture_violations_total counter
+gatewayd_vpn_posture_violations_total{gateway="node-01-gateway",rule="secure-boot"} 2
+# HELP gatewayd_vpn_reattest_duration_seconds How long a VPN lease renewal's re-attestation took to verify.
+# TYPE gatewayd_vpn_reattest_duration_seconds histogram
+gatewayd_vpn_reattest_duration_seconds_bucket{gateway="node-01-gateway",le="0.1"} 1
+gatewayd_vpn_reattest_duration_seconds_bucket{gateway="node-01-gateway",le="0.5"} 3
+gatewayd_vpn_reattest_duration_seconds_bucket{gateway="node-01-gateway",le="+Inf"} 3
+gatewayd_vpn_reattest_duration_seconds_sum{gateway="node-01-gateway"} 0.75
+gatewayd_vpn_reattest_duration_seconds_count{gateway="node-01-gateway"} 3
+# HELP gatewayd_vpn_revocations_total Revoked remote-access VPN leases by reason.
+# TYPE gatewayd_vpn_revocations_total counter
+gatewayd_vpn_revocations_total{gateway="node-01-gateway",reason="attestation-failed"} 1
+gatewayd_vpn_revocations_total{gateway="node-01-gateway",reason="expired"} 4
+`
+	require.NoError(t, testutil.GatherAndCompare(registry, strings.NewReader(expected),
+		"gatewayd_vpn_admissions_total", "gatewayd_vpn_leases_active", "gatewayd_vpn_posture_violations_total",
+		"gatewayd_vpn_reattest_duration_seconds", "gatewayd_vpn_revocations_total"))
 }
 
 func TestCollector_AbsentSectionsEmitNoSeries(t *testing.T) {
@@ -145,6 +189,13 @@ func TestCollector_AbsentSectionsEmitNoSeries(t *testing.T) {
 		count, err := testutil.GatherAndCount(registry, "gatewayd_tunnel_last_rekey_timestamp_seconds")
 		require.NoError(t, err)
 		assert.Zero(t, count)
+	})
+
+	t.Run("a VPN that has counted nothing emits only its admission counters", func(t *testing.T) {
+		source.snap = &gwstate.Snapshot{GatewayID: "bare", VPN: &gwstate.VPNState{Running: true}}
+		count, err := testutil.GatherAndCount(registry)
+		require.NoError(t, err)
+		assert.Equal(t, 2, count, "admitted and refused, both zero; no leases, revocations, violations or histogram")
 	})
 }
 

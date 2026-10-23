@@ -36,6 +36,7 @@ type mockVTPMDevice struct {
 	generateQuoteErr error
 	readPCRErr       error
 	getAIKPubKeyErr  error
+	getAIKSigAlgErr  error
 	getEKCertErr     error
 }
 
@@ -106,6 +107,13 @@ func (m *mockVTPMDevice) GetAIKPublicKey(ctx context.Context) ([]byte, error) {
 		return nil, m.getAIKPubKeyErr
 	}
 	return m.aikPubKey, nil
+}
+
+func (m *mockVTPMDevice) GetAIKSignatureAlgorithm(ctx context.Context) (string, error) {
+	if m.getAIKSigAlgErr != nil {
+		return "", m.getAIKSigAlgErr
+	}
+	return x509.SHA256WithRSAPSS.String(), nil
 }
 
 func (m *mockVTPMDevice) GetEKCertificate(ctx context.Context) ([]byte, error) {
@@ -334,6 +342,26 @@ func TestVMAttestor_GenerateQuote(t *testing.T) {
 		}
 		if quote.HashAlgorithm != HashAlgorithmSHA256 {
 			t.Errorf("Expected SHA256, got %s", quote.HashAlgorithm)
+		}
+		if quote.SignatureAlgorithm != x509.SHA256WithRSAPSS.String() {
+			t.Errorf("Expected the AIK's declared scheme, got %q", quote.SignatureAlgorithm)
+		}
+	})
+
+	t.Run("AIK signature algorithm error", func(t *testing.T) {
+		mock, attestor := setupAttestor()
+		mock.getAIKSigAlgErr = errors.New("IAK attributes unavailable")
+
+		request := &QuoteRequest{
+			Nonce:         []byte{0x01, 0x02},
+			PCRIndices:    []int{0},
+			HashAlgorithm: HashAlgorithmSHA256,
+		}
+
+		_, err := attestor.GenerateQuote(ctx, request)
+		var quoteErr ErrQuoteGenerationFailed
+		if !errors.As(err, &quoteErr) {
+			t.Errorf("Expected ErrQuoteGenerationFailed, got %v", err)
 		}
 	})
 

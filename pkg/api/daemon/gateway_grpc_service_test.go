@@ -477,6 +477,13 @@ func TestGatewayService_SetGatewayMode(t *testing.T) {
 			errorContains: "modes is required",
 		},
 		{
+			name:          "undefined mode bit",
+			modes:         uint32(gateway.GatewayModeOverlay) | 8,
+			setupMock:     newMockGateway,
+			expectError:   true,
+			errorContains: "undefined mode bit",
+		},
+		{
 			name:  "gateway not configured",
 			modes: uint32(gateway.GatewayModeOverlay),
 			setupMock: func() *mockGateway {
@@ -1147,6 +1154,7 @@ func TestGatewayService_ListAllocations(t *testing.T) {
 					PoolID:   "pool-1",
 					IP:       netip.MustParseAddr("192.168.1.10"),
 					DeviceID: "device-1",
+					Status:   ipam.AllocationStatusActive,
 				}
 				return mock
 			},
@@ -1163,6 +1171,7 @@ func TestGatewayService_ListAllocations(t *testing.T) {
 					PoolID:   "pool-1",
 					IP:       netip.MustParseAddr("192.168.1.10"),
 					DeviceID: "device-1",
+					Status:   ipam.AllocationStatusActive,
 				}
 				return mock
 			},
@@ -1288,6 +1297,7 @@ func TestIpamAllocationToProto(t *testing.T) {
 			PoolID:      "pool-1",
 			DeviceID:    "device-1",
 			Hostname:    "host-1",
+			Status:      ipam.AllocationStatusExpired,
 			AllocatedAt: now,
 		}
 		result := ipamAllocationToProto(alloc)
@@ -1296,6 +1306,7 @@ func TestIpamAllocationToProto(t *testing.T) {
 		assert.Equal(t, "pool-1", result.PoolId)
 		assert.Equal(t, "device-1", result.DeviceId)
 		assert.Equal(t, "host-1", result.Hostname)
+		assert.Equal(t, "expired", result.Status)
 		assert.Nil(t, result.ExpiresAt)
 	})
 

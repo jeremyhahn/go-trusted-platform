@@ -19,22 +19,34 @@ appears here.
 - **Unix is gRPC over a Unix domain socket**, so gRPC and Unix share a column.
 - **Embedded** is `ServiceRegistry.Device`
   (`sdk/go/transport/embedded/adapter.go:37`), dispatched by gRPC method string
-  through `registerDeviceHandlers` (`sdk/go/transport/embedded/dispatch.go:336`).
-- gRPC: `DeviceService`, **21 RPCs** (`pkg/api/grpc/proto/device.proto`).
+  through `registerDeviceHandlers` (`sdk/go/transport/embedded/dispatch.go:340`).
+- gRPC: `DeviceService`, **28 RPCs** (`pkg/api/grpc/proto/device.proto`).
 - REST: `/api/v1/devices/*`, `/api/v1/device/*`
   (`pkg/webservice/v1/router/device.go`, `pkg/webservice/v1/rest/device/router.go`).
-- QUIC: top-level opcodes **`0x30`–`0x3E`**, dispatched by
-  `req.Opcode >= OpDeviceRegister && req.Opcode <= OpDeviceGetMetrics`
-  (`pkg/api/daemon/quic_service.go:489`). No category indirection.
-- MCP: two device tool families plus one profile family — see §6.
+- QUIC: top-level opcodes **`0x30`–`0x3D`**, dispatched by
+  `req.Opcode >= OpDeviceRegister && req.Opcode <= OpDeviceGetState`
+  (`pkg/api/daemon/quic_service.go:617`). No category indirection. `0x3C` and
+  `0x3E` are retired (see below).
+- MCP: one device tool family, one profile family and two template tools —
+  see §6.
 - Go SDK: `sdk/go/services/device` — `NewClient(transport.Adapter)` or
-  `NewClientFromGRPC(platformv1.DeviceServiceClient)`.
+  `NewClientFromGRPC(platformv1.DeviceServiceClient)`. Over REST the SDK sends
+  every RPC to the exact route in §2, verb and id constraint included (#321).
+  `ActivateDevice` targets the admin `/device/activate-json`, not the mTLS
+  `/device/activate`. `TestDeviceServiceRoutes_MatchTheServerRouter`
+  (`sdk/go/transport/rest`) and
+  `TestSDKRouteClaims_DeviceServiceDispatchesToItsHandler`
+  (`pkg/webservice/v1`) fail on any drift. The body it sends and the reply it
+  decodes are the handlers' own shapes, not the gRPC messages — see §1b.
 
-**Four DeviceService RPCs have no embedded route.**
-`CreateProfileFromTemplate`, `FindConfigForDevice`, `AssignProfileToDevice` and
-`UnassignProfileFromDevice` are absent from `registerDeviceHandlers`
-(grepped 2026-08-18), so `--transport embedded` cannot reach them even though
-gRPC, Unix and REST can. They are marked in the tables below.
+**Every DeviceService RPC has an embedded route** (#250), except the two
+channel-bound diskless boot RPCs (§4.6), which need a TLS connection the
+embedded transport does not have. The embedded
+transport hands the call to the same `DeviceServiceServer` gRPC and Unix
+serve, so a server-side refusal (including its own `Unimplemented`) reaches
+the caller unchanged. `TestDispatch_DeviceAttestationAndProfileAssignment`
+(`sdk/go/transport/embedded`) drives the attestation, template and
+profile-assignment RPCs through the generated client over the embedded conn.
 
 ---
 
@@ -80,6 +92,43 @@ does not round, and it does not land on a neighbouring record.
 field leaves in place. On fields tagged `omitempty`, a zero id is still elided
 from the output.
 
+## 1b. REST wire shapes the SDK translates
+
+The REST handlers do not speak the gRPC messages. They decode their own request
+types (`pkg/webservice/v1/device/types.go`) and answer through the webservice
+response writer, so every body arrives in the envelope
+`{"code", "success", "payload"}` with the resource **bare** in `payload` and its
+`id` a string (§1a). The Go SDK's REST transport translates in both directions
+(`sdk/go/transport/rest/device.go`, mappings in
+`sdk/go/wire/restwire/device_profile.go`). `TestDeviceSDKREST_*`
+(`pkg/webservice/v1/router/device_sdk_rest_test.go`) drives the profile writes,
+the template create and device register and read through the real router and
+handlers.
+
+| RPC | request body sent | reply decoded |
+|---|---|---|
+| `CreateProfile`, `UpdateProfile` | the profile **flat** — the `ProfileRequest` fields at the top level, never `{"profile": {...}}` | bare `ProfileFullResponse` → `reply.profile` |
+| `CreateProfileFromTemplate` | `{"overrides": {...}}`, the overrides as a flat `ProfileRequest`; `{}` when there are none | bare `ProfileFullResponse` → `reply.profile` |
+| `CreateDevice`, `GetDevice`, `UpdateDevice`, `FindDeviceBySerial` | unchanged | bare `DeviceResponse` → `reply.device` |
+| the other single-profile RPCs (find, match, assign, config) | unchanged | bare `ProfileFullResponse` → `reply.profile` |
+| `ListDevices`, `ListProfiles` | unchanged | `pagination.total` → `pagination.total_items` |
+| `ActivateDevice` | unchanged | `status` → `activation_status` |
+
+Field mapping on profiles, both directions:
+
+- `role` and a network's `auth_method` are the handler's strings
+  (`load-balancer`, `802.1x`), not the proto enum names;
+- `config` is inline JSON, not base64 — a non-JSON `config` is refused before
+  the request is sent (`ErrProfileConfigNotJSON`);
+- the digests in a reply's `pcr_baseline.values` are hex, not base64
+  (`ErrPCRDigestNotHex` on a bad one);
+- a zero `assigned_at` in a reply (`0001-01-01T00:00:00Z`) is dropped rather
+  than decoded as a timestamp.
+
+REST does not carry `tenant_id` or `bmc` on a profile, nor `pcr_baseline` on a
+write, so those fields are lost on a round trip over REST and survive one over
+gRPC, Unix, QUIC and embedded.
+
 ## 2. Devices
 
 | Capability | REST | gRPC / Unix | QUIC | MCP | Embedded |
@@ -90,23 +139,31 @@ from the output.
 | Delete device | `DELETE /api/v1/devices/{id}` | `DeleteDevice` | `OpDeviceUnregister` (`0x31`) | `device_delete` | ✅ |
 | List devices | `GET /api/v1/devices` | `ListDevices` | `OpDeviceList` (`0x33`) | `device_list` | ✅ |
 | Count devices | `GET /api/v1/devices/count` | `CountDevices` | `OpDeviceList` (`0x33`) — total in the list reply's pagination | `MISSING — docs/13 G7` | ✅ |
-| Find device by serial | `GET /api/v1/devices/serial/{serial}` | `FindDeviceBySerial` | `OpDeviceGet` (`0x32`) — union on `Serial` | `MISSING — docs/13 G7` | ✅ |
+| Find device by serial | `GET /api/v1/devices/serial/{serial}` | `FindDeviceBySerial` | `OpDeviceGet` (`0x32`) — union on `Serial` | `device_find_by_serial` | ✅ |
 | Find device by hostname (IDevID CN) | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | in-process Go only: `(*device.Service).FindByHostname` — no adapter route |
 | Activate device (mTLS, serial from client cert) | `POST /api/v1/device/activate` | `ActivateDevice` | `OpDeviceActivate` (`0x3B`) | `MISSING — docs/13 G7` | ✅ |
 | Activate device (JSON body) | `POST /api/v1/device/activate-json` | `ActivateDevice` | `OpDeviceActivate` (`0x3B`) | `MISSING — docs/13 G7` | ✅ |
 | Device heartbeat (mTLS, identity from client cert) | `POST /api/v1/device/heartbeat` | machine-facing REST only — see note | machine-facing REST only | machine-facing REST only | in-process Go only: `(*device.Service).RecordHeartbeat` |
 | Get device lifecycle state | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `OpDeviceGetState` (`0x3D`) | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` |
 | Attest device (verify submitted quote evidence) | `POST /api/v1/devices/{id}/attest` | `AttestDevice` | `OpDeviceAttest` (`0x3A`) | `device_attest` | ✅ |
-| Deactivate device | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `OpDeviceDeactivate` (`0x3C`) — **returns `StatusNotImplemented`** | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` |
-| Device metrics | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `OpDeviceGetMetrics` (`0x3E`) — **returns `StatusNotImplemented`** | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` |
+| Disable device (block its port, record `suspended`) | `POST /api/v1/devices/{id}/disable` | `DisableDevice` | `OpProvisioningCategory` (`0xCF`) sub `DeviceSubDisable` (`0x25`) | `device_disable` | ✅ |
+| Enable device (re-admit to quarantine, request re-attestation) | `POST /api/v1/devices/{id}/enable` | `EnableDevice` | `OpProvisioningCategory` (`0xCF`) sub `DeviceSubEnable` (`0x26`) | `device_enable` | ✅ |
 | Provision device with a profile | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `device_provision` | `MISSING — docs/13 G7` |
 
 **Create assigns the device id; a caller does not have to supply one.** Every
 create verb in the table above reaches `DeviceService.Create`, which mints the
 id through `device.NewID()` when the request carries none. A request that does
-carry a non-zero id is honoured, so create behaves as an upsert on that path —
-it does not assert the id is unused. Responses always carry the assigned id
-(encoded per §1a), and the device is readable under it immediately.
+carry a non-zero id is honoured; create does not assert the id is unused.
+Responses always carry the assigned id (encoded per §1a), and the device is
+readable under it immediately.
+
+**Create holds one device per serial.** `DeviceService.Create` refuses a serial
+another device already carries with `ErrDeviceSerialExists`, which every
+transport maps: `409 Conflict` on both REST listeners, `AlreadyExists` on gRPC /
+Unix, `StatusAlreadyExists` on QUIC, and the error text on MCP. Creates are serialised in-process so
+two concurrent creates of one serial cannot both pass the check. A created
+device starts in `registered` with both timestamps set unless the caller
+supplied them, whichever transport created it (#484).
 
 Until #525 the create verbs called `DeviceService.Save`, which requires a
 non-zero id because it doubles as the update primitive, so a caller creating a
@@ -120,28 +177,32 @@ anchor.** `attest_pub` is the bare attestation public key from the TCG CSR.
 at enrollment (#404); it is what the quote verifier chains and checks for
 `tcg-cap-verifiedTPMRestricted` (§4.4). Both travel on every transport that
 carries a device — REST (flat and `{device: {...}}` envelope), gRPC / Unix /
-QUIC (`Device.attest_cert = 14`), the MCP `device_create` /
-`device_update_by_id` schemas, `platformctl device get`, and the JS SDK `Device`
+QUIC (`Device.attest_cert = 14`), the MCP `device_register` schema and every
+MCP device result, `platformctl device get`, and the JS SDK `Device`
 type — and both are server-owned on update (§3.3). Neither is validated on the
 way in: a caller may register a device with any string in `attest_cert`, and
 the device is then denied at attest time when that string does not chain.
 Nothing is trusted because it was stored.
 
-**Two QUIC opcodes are allocated, named and dispatched to an explicit
-`StatusNotImplemented`**: `OpDeviceDeactivate` and `OpDeviceGetMetrics`, each
-with `ErrDeviceOperationNotImplemented{Operation:…}`
-(`pkg/api/daemon/quic_device_handlers.go`). A third,
-`OpDeviceAttributes` (`0x6D`), is *also* routed by the device handler to
-`StatusNotImplemented` — but the same opcode is separately handled by the
-IDevID/TPM2 path in `pkg/api/daemon/quic_idevid.go:315`, where it does real
-work. `0x6D` falls outside the `0x30`–`0x3E` device range, so the device
-handler's case for it is unreachable from `quic_service.go` dispatch. Treat
-`OpDeviceAttributes` as the IDevID feature's, not this one's.
+**There is no device deactivate and no device metrics operation.** QUIC
+once allocated `OpDeviceDeactivate` (`0x3C`) and `OpDeviceGetMetrics`
+(`0x3E`) and answered both with `StatusNotImplemented`, but no transport,
+service method or go-quicbaas SDK call ever carried either operation, and the
+device state model has no `deactivated` state: taking a device out of service
+is **Disable** (`suspended`, above). #317 retired both bytes: the constants are
+gone, the bytes have no entry in the QUIC permission catalog, and the guard
+refuses them as unclassified (`StatusPermissionDenied`,
+`ErrOperationNotClassified`). Do not reuse them.
 
-`OpDeviceAttest` was a third until #226. It answered `StatusNotImplemented`
+`OpDeviceAttributes` (`0x6D`) is the IDevID/TPM2 feature's
+(`pkg/api/daemon/quic_idevid.go`, [`docs/tpm/api.md`](../tpm/api.md)). The
+device dispatcher carried an unreachable `StatusNotImplemented` case for it
+(`0x6D` is outside the device range) until #317 removed it.
+
+`OpDeviceAttest` answered `StatusNotImplemented` too, until #226: it did so
 on the live dispatcher while a `handleAttest` sat in
-`pkg/api/quic/device_handlers.go` — a package whose `NewDeviceHandler` has no
-non-test caller (#291). So the operation read as implemented in one package
+`pkg/api/quic/device_handlers.go`, whose `NewDeviceHandler` had no non-test
+caller (#291); #317 deleted it. So the operation read as implemented in one package
 and was a stub in the one actually served, which is the failure mode
 CLAUDE.md names when it says a "wire this up later" stub on a multi-protocol
 service is a bug rather than a transitional state. It now delegates to the
@@ -190,64 +251,77 @@ non-numeric id 404s before reaching a handler. `/devices/count` and
 `/devices/serial/{serial}` are registered before `/devices/{id}` so they are
 not swallowed.
 
-### 2.2 `POST /api/v1/devices` has two handlers, and they take different bodies
+### 2.2 `POST /api/v1/devices` — one contract on both REST listeners
 
-Two packages register a handler for this method and path. Which one answers
-depends on which server is listening, and their request contracts are not the
-same. Read this before assuming what a body does.
+Two servers mount this method and path: the webservice
+(`device.CRUDHandler.CreateDevice`, `pkg/webservice/v1/device/rest_handlers.go`)
+and the daemon REST listener (`restapi.DeviceHandlers.handleRegisterDevice`,
+`pkg/api/rest/device_handlers.go`). The console reaches the webservice — its
+SDK `baseUrl` is `/api` (`web/src/app/providers.tsx`) and `DeviceService`
+appends `/v1/devices`. Both handlers decode the body with the one shared
+`device.DecodeCreateRequest` (`pkg/device/request.go`), so the same body gets
+the same status and persists the same device on either listener (#484):
 
-| Server | Handler | Body it accepts |
-|---|---|---|
-| Webservice (`baseURI` `/api/v1`, `pkg/webservice/webserver_v1.go:203`) | `device.CRUDHandler.CreateDevice` (`pkg/webservice/v1/device/rest_handlers.go:91`) | `DeviceRequest` — flat fields **and** the nested `{device: {…}}` envelope, plus UI-only keys |
-| Daemon REST (`pkg/api/daemon/rest_service.go:365`) | `restapi.DeviceHandlers.handleRegisterDevice` (`pkg/api/rest/device_handlers.go:538`) | `DeviceRegisterRequest` — **flat only**, no envelope, and an empty `serial` is a `400` |
+| Body | Status on both listeners |
+|---|---|
+| Flat fields: `{"serial":"SN-1","model":"R640"}` | `201`, device created |
+| Proto / SDK envelope: `{"device":{"serial":"SN-1"}}` | `201`, the same device |
+| Fields split between flat and envelope, or repeated with equal values | `201`, the same device |
+| A field set flat and in the envelope to different values | `400` — `ErrDeviceRequestConflict` names the field |
+| No serial: `{}`, `{"serial":""}`, `{"device":{}}`, a name-only body | `400` — `ErrDeviceSerialRequired` |
+| Empty body, invalid JSON, a field of the wrong type, a negative id | `400` — `ErrDeviceRequestBody` |
+| A serial another device already carries | `409` — `ErrDeviceSerialExists` |
 
-**The console reaches the webservice handler.** Its SDK `baseUrl` is `/api`
-(`web/src/app/providers.tsx:27`), same-origin with the server that serves the
-console, and `DeviceService` appends `/v1/devices`.
+**The serial is required.** It is the key enrollment and `RecordHeartbeat`
+match a TPM against (`pkg/device/service.go`), so a device created without one
+could never be claimed. The webservice used to synthesise `dev-<id>` for an
+empty serial, which made `{}` a `201` there and a `400` on the daemon; that
+fallback is gone. The console's register form requires the serial, and the JS
+SDK's `CreateDeviceRequest` and the console's `RegisterDeviceInput` type it as
+required.
 
-**The webservice handler accepts either shape, envelope wins.** `DeviceRequest`
-carries the flat fields and a `device` object; `requestToDevice` starts from the
-flat fields and overlays any non-zero field from the envelope. So the proto and
-SDK shape (`CreateDeviceRequest { Device device = 1; }`, mirrored by the JS
-SDK's `{device: Partial<Device>}`) and the flat REST shape both work, and a
-client sending both gets the envelope's values.
+**A conflict is refused, not resolved.** The flat shape and the proto envelope
+(`CreateDeviceRequest { Device device = 1; }`, mirrored by the JS SDK's
+`{device: {...}}` and sent by the Go SDK REST transport) are both accepted. A
+field present in both places with different values has no right answer, so the
+request is a `400` instead of quietly taking one side.
 
-**It also accepts UI-only keys, and almost all of them go nowhere.** `name`,
-`type`, `device_type`, `description`, `manufacturer`, `version`,
-`tpm_manufacturer`, `tpm_version` and `tpm_firmware_version` decode into
-`DeviceRequest`, but `entities.Device` has fields for none of them. Exactly one
-has any effect: `manufacturer` becomes the `Model` when no `model` is supplied.
-
-**`name` is deliberately not mapped to anything.** `requestToDevice` used to
-reuse it as the **`Serial`** when no serial was supplied, at either nesting
-level. The console's serial field is optional and its name is required, so the
-ordinary registration wrote a display string into the serial number: a row that
-can never match a TPM serial at enrollment, and that `RecordHeartbeat` cannot
-resolve, because it matches the mTLS identity against `Serial` or `Hostname`
-(`pkg/device/service.go:322`).
-
-On `PUT` it was worse. `UpdateDevice` shares `requestToDevice` and has no
-synthesis fallback, and the service layer preserves an existing serial only when
-the incoming one is empty (`pkg/device/service.go:214`). The coercion made it
-non-empty, so a `PUT` carrying just a name **overwrote a real TPM serial with
-the display name** — the identity-erasure class of #252.
-
-A name-only `POST` now falls through to the synthesis below, and a name-only
-`PUT` leaves the serial empty so the service layer restores the existing one.
-Pinned by `TestCreateDeviceDoesNotStoreTheNameAsTheSerial`,
-`TestCreateDeviceDoesNotStoreTheFlatNameAsTheSerial` and
+**Keys the device has no column for are ignored.** The console sends `name`,
+`type`, `device_type`, `description`, `version`, `tpm_manufacturer`,
+`tpm_version` and `tpm_firmware_version`; `entities.Device` stores none of
+them and `device.Request` does not declare them, so both listeners drop them.
+`manufacturer` is the one key with an effect: it becomes the `model` when no
+`model` is supplied. `name` is deliberately never the serial — reusing it as one
+once wrote a display string where a TPM serial belongs, and on `PUT` overwrote
+a real serial with it (#252). Pinned by
+`TestCreateDeviceDoesNotStoreTheNameAsTheSerial` and
 `TestUpdateDeviceDoesNotOverwriteASerialWithAName`.
 
-**A device has no name.** The proto `Device` (`device.proto:82`) and
-`entities.Device` have no name field, so no transport persists one. The
-console's `web/src/types/device.ts` declares its own `Device` and
-`RegisterDeviceInput` that *do* carry `name`, `type`, `description`, `tags` and
-`tpmInfo`; those are console-local types describing no server state. Whether a
-device should gain a first-class display name is open on #455.
+**A device has no name.** The proto `Device` and `entities.Device` have no name
+field, so no transport persists one. The console's `web/src/types/device.ts`
+declares its own `Device` and `RegisterDeviceInput` with `name`, `type`,
+`description`, `tags` and `tpmInfo`; those are console-local types describing no
+server state. Whether a device should gain a first-class display name is open
+on #455.
 
-**An empty body is accepted.** `CreateDevice` allocates an id when none is
-given and falls back to a synthesised `dev-<id>` serial, so `{}` yields a `201`
-and a saved device. The daemon REST handler rejects the same body with `400`.
+**The two listeners still differ on `PUT /api/v1/devices/{id}`.** Both decode
+the body with `device.DecodeRequest`, agree on every status, and leave the
+server-owned fields to `device.Service.Update` (§3.3). They differ on the two
+fields outside that set: the daemon patches the stored device, so an omitted
+`switch_name` or `switch_port` is kept, while the webservice builds the entity
+from the request alone, so an omitted one is cleared.
+
+**Authorization is per listener, not per body.** Behind the platform-token
+middleware the webservice route requires `device:write`, as `CreateDevice` does
+on gRPC, QUIC and MCP, and answers a `device:read` token `403` before the body
+is read; the daemon REST device routes check only the mTLS client certificate
+(§7).
+
+`pkg/webservice/v1/router/device_listener_contract_test.go` pins the
+contract: it posts the bodies above to both listeners and asserts equal
+statuses and equal persisted devices, and it walks both routers and fails when
+any `POST`, `PUT` or `PATCH` route both register answers the same body with
+different statuses.
 
 ---
 
@@ -255,46 +329,54 @@ and a saved device. The daemon REST handler rejects the same body with `400`.
 
 | Capability | REST | gRPC / Unix | QUIC | MCP | Embedded |
 |---|---|---|---|---|---|
-| Create profile | `POST /api/v1/device/profiles`, `POST /api/v1/devices/profiles` | `CreateProfile` | `OpDeviceCreateProfile` (`0x38`) | `profile_create` | ✅ |
-| Get profile | `GET /api/v1/device/profiles/{id}`, `GET /api/v1/devices/profiles/{id}` | `GetProfile` | `OpDeviceGetProfile` (`0x35`) | `profile_get_by_id` | ✅ |
-| Update profile (full replace) | `PUT /api/v1/device/profiles/{id}`, `PUT /api/v1/devices/profiles/{id}` | `UpdateProfile` | `OpDeviceSetProfile` (`0x36`) | `profile_update_by_id` (partial merge) | ✅ |
-| Delete profile | `DELETE /api/v1/device/profiles/{id}`, `DELETE /api/v1/devices/profiles/{id}` | `DeleteProfile` | `OpDeviceDeleteProfile` (`0x39`) | `profile_delete_by_id` | ✅ |
-| List profiles | `GET /api/v1/device/profiles`, `GET /api/v1/devices/profiles` | `ListProfiles` | `OpDeviceListProfiles` (`0x37`) | `profile_list_all` | ✅ |
+| Create profile | `POST /api/v1/device/profiles` | `CreateProfile` | `OpDeviceCreateProfile` (`0x38`) | `profile_create` | ✅ |
+| Get profile | `GET /api/v1/device/profiles/{id}` | `GetProfile` | `OpDeviceGetProfile` (`0x35`) | `profile_get_by_id` | ✅ |
+| Update profile (full replace) | `PUT /api/v1/device/profiles/{id}` | `UpdateProfile` | `OpDeviceSetProfile` (`0x36`) | `profile_update_by_id` (partial merge) | ✅ |
+| Delete profile | `DELETE /api/v1/device/profiles/{id}` | `DeleteProfile` | `OpDeviceDeleteProfile` (`0x39`) | `profile_delete_by_id` | ✅ |
+| List profiles | `GET /api/v1/device/profiles` | `ListProfiles` | `OpDeviceListProfiles` (`0x37`) | `profile_list_all` | ✅ |
 | Count profiles | `GET /api/v1/device/profiles/count` | `CountProfiles` | `OpDeviceListProfiles` (`0x37`) — total in the list reply | `MISSING — docs/13 G7` | ✅ |
-| Find profile by MAC | `GET /api/v1/device/profiles/mac/{mac}` | `FindProfileByMACAddress` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | ✅ |
-| Find profile by serial | `GET /api/v1/device/profiles/serial/{serial}` | `FindProfileBySerial` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | ✅ |
-| Find matching profile | `POST /api/v1/device/profiles/match` | `FindMatchingProfile` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | ✅ |
-| Find config for a device (EK serial / MAC) | `GET /api/v1/device/profiles/find-config` | `FindConfigForDevice` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` |
-| Assign profile to a device identity (explicit `ek_serial`/`mac_address`, or `device_id` of a registered device — the server derives the EK serial from its stored EK certificate, #463) | `POST /api/v1/device/profiles/{id}/assign` | `AssignProfileToDevice` | `OpProvisioningCategory` (`0xCF`) sub `0x20` — see §3.7 | `profile_assign_to_device` | `MISSING — docs/13 G7` |
-| Unassign profile | `POST /api/v1/device/profiles/{id}/unassign` | `UnassignProfileFromDevice` | `MISSING — docs/13 G7` | `profile_unassign_from_device` | `MISSING — docs/13 G7` |
+| Find profile by MAC | `GET /api/v1/device/profiles/mac/{mac}` | `FindProfileByMACAddress` | `MISSING — docs/13 G7` | `profile_find_by_mac` — no match `NotFound` | ✅ |
+| Find profile by serial | `GET /api/v1/device/profiles/serial/{serial}` | `FindProfileBySerial` | `MISSING — docs/13 G7` | `profile_find_by_serial` — no match `NotFound` | ✅ |
+| Find matching profile | `POST /api/v1/device/profiles/match` | `FindMatchingProfile` — no match `NotFound` | `OpProvisioningCategory` (`0xCF`) sub-op `DeviceSubFindMatchingProfile` (`0x29`) — see §3.7 | `profile_find_matching` — no match `NotFound` | ✅ |
+| Find config for a device (EK serial / MAC) | `GET /api/v1/device/profiles/find-config` | `FindConfigForDevice` — no identity `InvalidArgument`, unknown identity `NotFound` | `OpProvisioningCategory` (`0xCF`) sub-op `DeviceSubFindConfigForDevice` (`0x2E`) — same codes | `profile_find_config` — same codes | ✅ |
+| Assign profile to a device identity (explicit `ek_serial`/`mac_address`, or `device_id` of a registered device — the server derives the EK serial from its stored EK certificate, #463) | `POST /api/v1/device/profiles/{id}/assign` | `AssignProfileToDevice` | `OpProvisioningCategory` (`0xCF`) sub `0x20` — see §3.7 | `profile_assign_to_device` | ✅ |
+| Unassign profile | `POST /api/v1/device/profiles/{id}/unassign` | `UnassignProfileFromDevice` | `MISSING — docs/13 G7` | `profile_unassign_from_device` | ✅ |
 | Get profile over mTLS (device self-service) | `GET /api/v1/device/profile` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` |
 
-### 3.1 The singular / plural REST aliasing
+### 3.1 One name per resource
 
-`/api/v1/device/profiles` and `/api/v1/devices/profiles` dispatch to the **same
-handlers**. The source states why: *"the dashboard hits
-`/api/v1/devices/profiles` while the platform originally exposed singular
-`/api/v1/device/profiles`. Both forms must dispatch to the same handler so REST
-and SDK callers agree."* The same applies to `/device/templates` versus
-`/devices/templates` for `GET`, and for `GET`/`PUT`/`DELETE` on `{id}` — but
-**not** for `POST /devices/templates`, which is the bootstrap seeder's route
-(§4.1); CRUD creation is singular only.
+Device **records** live under the plural `/api/v1/devices`. Their **profiles
+and templates** live under the singular `/api/v1/device`. No path is served
+under both (#266). Until #266 the router also answered a partial set of plural
+aliases: `POST`/`GET /devices/profiles`, `GET`/`PUT`/`DELETE
+/devices/profiles/{id}`, `GET /devices/templates` and `GET`/`PUT`/`DELETE
+/devices/templates/{id}`. They stopped short of `count`, `match`,
+`serial/{serial}`, `mac/{mac}`, `find-config`, `assign` and `unassign`, so a
+client had to know which name each operation used. The aliases were deleted,
+and the plural sub-resources were not renamed. A plural profile or template
+request now gets `404`.
 
-**The aliasing is not complete.** Only these exist on the plural form:
-`POST` and `GET /devices/profiles`, and `GET`/`PUT`/`DELETE
-/devices/profiles/{id}`. `count`, `match`, `serial/{serial}`, `mac/{mac}`,
-`find-config`, `assign` and `unassign` are **singular-only**. Write new clients
-against the singular form.
+`TestDeviceRoutesHaveOneName` (`pkg/webservice/v1/device_route_names_test.go`)
+walks the router platformd builds and fails if any path below one prefix is
+also registered below the other. The bootstrap seeder's two plural routes on
+that router are the only exemption. They are `POST /devices/templates` and
+`POST /devices/templates/{id}/create-profile` (§4.1, §4.3), and the exemption
+is keyed by method and path, so a CRUD alias on one of those paths is still
+caught. The seeder's third route, `GET /devices/config`, is not on that router:
+only the provisioning listener serves it (§5, #177).
 
-`GET /api/v1/devices/config` was listed beside `find-config` in the table above
-until #265. **It has never been registered** — `grep -rn '"/devices/config"'`
-over `pkg/` returns nothing — so it was a claimed route with no handler, in the
-one document a client author would consult to find the right one. Removed.
+The justification once quoted for the aliases did not hold: the dashboard
+never called `/api/v1/devices/profiles`. Every `/devices/...` string under
+`web/src` is a single-page-app route, such as the `app-sidebar.tsx` `href:`
+entries and the `${templateId}/edit` paths, not an API call.
 
-The quoted justification for the aliasing is also worth reading with care: the
-dashboard does **not** call `/api/v1/devices/profiles`. Every `/devices/...`
-string under `web/src` is a single-page-app route — `app-sidebar.tsx:123-124`
-`href:` entries and `${templateId}/edit` paths — not an API call. See #266.
+The JS SDK's `DeviceService` calls device records under `/v1/devices` and
+profiles, templates and `activate-json` under `/v1/device` (#228). The route
+table in `sdk/javascript/src/services/__tests__/device-service.test.ts` pins the
+verb and the path of every method. Before #228 it called eight routes the server
+has never registered: `devices/by-serial`, `devices/activate`,
+`devices/profiles/by-mac`, `devices/profiles/by-serial`, the plural `match`,
+`count` and `assign`, and `devices/templates/{id}/profiles` for create-from-template.
 
 ### 3.2 `GET /api/v1/device/profile` is a different shape
 
@@ -317,9 +399,10 @@ The primary field is **`admittedNetwork`**, with an optional
 (used server-side as the fail-closed revert target for the physical switch
 move during activation). There is no snake_case `production_network`,
 `provisioning_network` or `quarantine_network` in this response, and no such
-fields exist on `entities.DeviceProfile` either. The legacy
-`docs/device/network-setup.md` documents `production_network`; the code wins
-and the correction is recorded here.
+fields exist on `entities.DeviceProfile` either. The removed
+`trusted-platform-network` script and the deleted legacy
+`docs/device/network-setup.md` read `production_network`; neither exists any
+more (#149). The code wins and the correction is recorded here.
 
 The JavaScript SDK models this body as `DeviceSelfServiceProfile`
 (`sdk/javascript/src/types/device-self-service.ts`, read via
@@ -345,15 +428,27 @@ Like the gateway control-plane routes, this deliberately has no
 gRPC/QUIC/MCP variants: it is not an operator API; the reporting client
 is platformd itself (`heartbeat:` config section, `pkg/app/heartbeat.go`)
 using the node's TPM-backed IDevID identity — the same identity and
-client (`pkg/provisioning`) that performs post-enrollment activation.
+client (`pkg/provisioning`) that performs post-enrollment activation. Both
+are built by `App.newIDevIDClient`: the IDevID certificate, its
+`CertificateVerify` signed inside the TPM by the IDevID key over TLS 1.3
+(RSA-PSS for an RSA IDevID; the platform `TPMSigner` passes the PSS
+options through). The IDevID key is unrestricted, so the TPM signs the
+handshake digest as given. These are the only activation and heartbeat an
+installed image performs; no key file is involved (#149).
+
+The client fails at construction, never at the handshake, when it cannot
+sign: no TPM, IDevID config or platform key store ⇒
+`provisioning.ErrMissingCertificate`; no IDevID public key ⇒
+`app.ErrIDevIDPublicKeyMissing`; key attributes carrying public-key bytes
+that do not parse ⇒ `platform.ErrTPMSignerPublicKey`. (A signer with no
+public key would make `crypto/tls` silently send no certificate, which the
+server reports as 401 "client certificate required".)
 
 The section optionally takes `cert-file` / `key-file` (and `ca-file`) to
 select a file-based mTLS identity instead, mirroring the gatewayd
-control-plane reporter. This exists because a **restricted** IDevID
-signing key cannot produce a TLS `CertificateVerify` signature — the TPM
-ticket-hashes the digest before signing — so fleets whose IDevID keys
-are restricted enroll a dedicated client certificate (CN = the device
-serial) from the control plane CA. Server verification is anchored to
+control-plane reporter (#147): a dedicated client certificate (CN = the
+device serial) from the control plane CA. It is an override; the IDevID
+is the default. Server verification is anchored to
 `ca-file` when set, else the platform CA store, else the OS trust store
 (where the installer bakes the control-plane root); it is never skipped.
 
@@ -387,7 +482,21 @@ platformctl device profile update <profile-id> --tls-server-name compute.example
 ```
 
 An update that omits the name keeps the stored one (§3.3), so a console edit
-cannot silently disarm the collector.
+cannot silently disarm the collector. Clearing it is a deliberate act (#462),
+spelled per transport:
+
+| Transport | Clear | Keep |
+|-----------|-------|------|
+| Live REST `PUT /device/profiles/{id}`, dark REST/QUIC update, MCP `profile_update_by_id` | `"tls_server_name": ""` | omit the field, or send `null` |
+| pb `UpdateProfileRequest` (gRPC, Unix, live QUIC) | `clear_tls_server_name: true` | leave the flag unset; an empty `profile.tls_server_name` keeps the name, because proto3 cannot tell unset from empty |
+| CLI | `platformctl device profile update <id> --clear-tls-server-name` | omit both flags |
+
+A pb request that sets `clear_tls_server_name` together with a non-empty
+`profile.tls_server_name` is `InvalidArgument`
+(`device.ErrTLSServerNameClearConflict`), and the CLI rejects
+`--clear-tls-server-name` with `--tls-server-name`. The service learns about
+the clear through the `device.ClearTLSServerName` option on
+`ProfileService.Update`; the entity alone cannot say it.
 
 `POST /api/v1/device/activate` returns
 `{"status":"activated","vlan":200,"transitionedAt":"…"}` (`ActivateResponse`).
@@ -418,12 +527,12 @@ Two consequences worth knowing before writing a client:
 `ProfileService.Update` restores from the stored record when the incoming
 entity carries none: the read-only `pcr_baseline` (§3.6) and
 `tls_server_name` (§3.2) — both are state the attestation collector depends
-on, and neither can be erased by omission on any transport. Every other
-field is replaced. `profile_update_by_id` (MCP), the dark REST/QUIC update
+on, and neither can be erased by omission on any transport; only the explicit
+clear in §3.2 blanks `tls_server_name`. Every other field is replaced. `profile_update_by_id` (MCP), the dark REST/QUIC update
 handlers and `platformctl device profile update` are **partial merges**: they
 fetch the profile and apply only the supplied non-zero fields, with
-`assigned` and `assigned_at` as tri-state pointers where the wire allows so
-"not sent" and "set to zero" are distinguishable. A client that switches
+`assigned`, `assigned_at` and `tls_server_name` as tri-state pointers where
+the wire allows so "not sent" and "set to zero" are distinguishable. A client that switches
 transports and keeps the same payload will get different semantics.
 
 ### 3.4 uint64 ids on the wire
@@ -444,17 +553,18 @@ profile's networks as:
   "networks": {
     "provisioning": { "vlan": 998, "dhcp": true },
     "admitted":     { "vlan": 406, "static_ip": "203.0.113.50" },
-    "lab-dmz":      { "vlan": 42 }
+    "lab":          { "vlan": 409 }
   },
   "enrollment_network": "provisioning",
-  "post_enrollment_network": "lab-dmz",
+  "post_enrollment_network": "lab",
   "failure_network": "quarantine"
 }
 ```
 
 - **`networks` is open-keyed.** `provisioning`, `admitted` and `quarantine` are
   the keys the selectors fall back to when unset (`entities.Default*Network`),
-  not an enumeration; `lab-dmz` above is as valid as any of them.
+  not an enumeration; `lab` above (an owner-defined zone) is as valid as any of
+  them.
 - **The three selectors are strings naming a key**, and each is `omitempty`.
   Absent on the wire means the default applies — it never means "no network".
   Resolve before reading (the JavaScript SDK's `networkPhaseSelectors`).
@@ -468,7 +578,8 @@ profile's networks as:
   `ProfileRequest` and maps it through the one mapper both routes share
   (`pkg/webservice/v1/device/profile_mapping.go`); its `201` — and the
   `find-config`, `assign` and `unassign` replies from the same handler — is the
-  full shape above. The template merge (`pkg/device`
+  full shape above. Like the CRUD route, it mints the profile `id` server-side
+  when `overrides` names none. The template merge (`pkg/device`
   `ToProfileWithConfigOverrides`) then applies `name`, `model`, `role`, `zone`,
   `networks` (per key, over the template's), the three selectors,
   `platformd_config`, `match_rules`, `ek_serial` and `mac_address`. It does
@@ -476,9 +587,9 @@ profile's networks as:
   from overrides: `config` is the template's, and EK binding belongs to
   `POST /device/profiles/{id}/assign`. Until #378 the template handler mapped
   only `name`/`model`/`role` and its `201` omitted networks, so a network
-  override on that route was discarded with a `2xx`; the daemon-only REST stack
-  (`pkg/api/rest/template_handlers.go`) still maps only those three, on a path
-  shipped configurations do not reach.
+  override on that route was discarded with a `2xx`. An unreached daemon-side
+  copy (`pkg/api/rest/template_handlers.go`) mapped only those three until #317
+  deleted it.
 
 ---
 
@@ -513,8 +624,8 @@ not come back through any profile route (#448):
 The update route is otherwise a full replace, but the baseline is
 server-owned: `ProfileService.Update` restores `PCRBaseline` (and
 `Assigned` / `AssignedAt`, which only the assign/unassign flows may change,
-and `tls_server_name`, §3.2) from the stored record when the incoming entity
-carries none, the same way `device.Service.Update` restores a device's
+and `tls_server_name` unless the update carries the explicit clear, §3.2)
+from the stored record when the incoming entity carries none, the same way `device.Service.Update` restores a device's
 enrollment material (§3.3). A `PUT` that edits a profile's name or networks
 cannot erase the baseline the verifier captured (#446), and a pb
 `UpdateProfile` that supplies a different baseline does not replace the
@@ -533,9 +644,15 @@ falls through to the config-delivery handler, the same multiplexing precedent
 the EAB sub-range uses.
 
 `DeviceSubRecordAttestCert` (`0x22`) shares that same sub-range and the same
-dispatcher; §2's attestation-certificate section records it. The device
-integration suite's QUIC adapter reaches all three through the category
-opcode rather than a top-level one.
+dispatcher; §4.5 records it. So do `DeviceSubBootCertificate` (`0x23`) and
+`DeviceSubBootDelivery` (`0x24`), the diskless boot requests of §4.6,
+`DeviceSubDisable` (`0x25`) and `DeviceSubEnable` (`0x26`), the operator
+lifecycle transitions of §4.7, and `DeviceSubTemplateCreate` (`0x27`) and
+`DeviceSubProfileFromTemplate` (`0x28`), which carry `CreateTemplate` and
+`CreateProfileFromTemplate` (§4), and `DeviceSubFindMatchingProfile` (`0x29`),
+which carries `FindMatchingProfile` (#460). The device integration suite's QUIC adapter
+reaches the profile, attestation-certificate, lifecycle and template
+sub-opcodes through the category opcode rather than a top-level one.
 
 The transport table above read `MISSING` for this row until #480, while
 [`api-reference-quic.md`](api-reference-quic.md) had documented the sub-opcode
@@ -550,28 +667,100 @@ accepted gap rather than an untested one.
 
 | Capability | REST | gRPC / Unix | QUIC | MCP | Embedded |
 |---|---|---|---|---|---|
-| Create template | `POST /api/v1/device/templates` (singular only — the plural `POST` is the seeder's, §4.1) | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` |
-| Get template | `GET /api/v1/device/templates/{id}`, `GET /api/v1/devices/templates/{id}` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` |
-| Update template | `PUT /api/v1/device/templates/{id}`, `PUT /api/v1/devices/templates/{id}` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` |
-| Delete template | `DELETE /api/v1/device/templates/{id}`, `DELETE /api/v1/devices/templates/{id}` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` |
-| List templates | `GET /api/v1/device/templates`, `GET /api/v1/devices/templates` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` |
+| Create template | `POST /api/v1/device/templates` (the plural `POST` is the seeder's, §4.1) → `201` envelope, `payload.id` string | `CreateTemplate` | `OpProvisioningCategory` (`0xCF`) sub-op `DeviceSubTemplateCreate` (`0x27`) | `device_template_create` | ✅ |
+| Get template | `GET /api/v1/device/templates/{id}` | `GetTemplate` — unknown id `NotFound` | `OpProvisioningCategory` (`0xCF`) sub-op `DeviceSubTemplateGet` (`0x2A`) | `device_template_get` | ✅ |
+| Update template | `PUT /api/v1/device/templates/{id}` | `UpdateTemplate` — replaces the stored template; a zero id `InvalidArgument`, unknown id `NotFound` | `OpProvisioningCategory` (`0xCF`) sub-op `DeviceSubTemplateUpdate` (`0x2C`) | `device_template_update` | ✅ |
+| Delete template | `DELETE /api/v1/device/templates/{id}` → `204` | `DeleteTemplate` — unknown id `NotFound` | `OpProvisioningCategory` (`0xCF`) sub-op `DeviceSubTemplateDelete` (`0x2D`) | `device_template_delete` | ✅ |
+| List templates | `GET /api/v1/device/templates?page=&page_size=` | `ListTemplates` — paged by `pagination` | `OpProvisioningCategory` (`0xCF`) sub-op `DeviceSubTemplateList` (`0x2B`) | `device_template_list` | ✅ |
 | Find template by name | `GET /api/v1/device/templates/name/{name}` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` |
-| Create profile from template | `POST /api/v1/device/templates/{id}/create-profile`, `POST /api/v1/devices/templates/{id}/create-profile` → `201` envelope, `payload.id` string (§4.3) | `CreateProfileFromTemplate` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` |
+| Create profile from template | `POST /api/v1/device/templates/{id}/create-profile`; the seeder's own `POST /api/v1/devices/templates/{id}/create-profile` → `201` envelope, `payload.id` string (§4.3) | `CreateProfileFromTemplate` — unset override fields (an unspecified role included) keep the template's value; unknown template `NotFound`, a daemon without a template or profile service `Unavailable` | `OpProvisioningCategory` (`0xCF`) sub-op `DeviceSubProfileFromTemplate` (`0x28`) | `profile_create_from_template` | ✅ |
 
-**Device templates are REST-only, and that is deliberate — with a stated
-reason.** `device.proto` carries a comment where the RPCs used to be:
+**Creating a template, and building a profile from one, is served on every
+transport (#497).** Every column of those two rows reaches the same code: the
+gRPC and Unix `DeviceService.CreateTemplate` / `CreateProfileFromTemplate`
+(`pkg/api/daemon/device_grpc_template.go`) store through the template service
+the REST handlers use, and QUIC, MCP and embedded call those two methods rather
+than a copy of them. REST and gRPC build the profile through the one
+`device.CreateProfileFromTemplate` (`pkg/device/template_service.go`). A zero
+template id is assigned by the server, as on REST. A daemon started without the
+template or the profile service answers `Unavailable` on every transport (REST
+`503`).
 
-> *"Device-template CRUD lives on the REST surface only … The
-> Create/Get/Update/Delete/List/FindByName Template RPCs that used to be
-> declared here collided with vtpm.proto's identically-named messages, never
-> got generated into device.pb.go, and were not referenced from any Go code.
-> They have been removed; if a gRPC device-template service is needed in the
-> future, define it with `DeviceTemplate…` message prefixes so the names cannot
-> collide with vtpm."*
+| Operation | REST | gRPC / Unix | QUIC | MCP | Embedded | Go SDK |
+|---|---|---|---|---|---|---|
+| CreateTemplate | yes | yes | yes | yes | yes | `device.Client.CreateTemplate` |
+| CreateProfileFromTemplate | yes | yes | yes | yes | yes | `device.Client.CreateProfileFromTemplate` |
+| GetTemplate | yes | yes | yes | yes | yes | `device.Client.GetTemplate` |
+| ListTemplates | yes | yes | yes | yes | yes | `device.Client.ListTemplates` |
+| UpdateTemplate | yes | yes | yes | yes | yes | `device.Client.UpdateTemplate` |
+| DeleteTemplate | yes | yes | yes | yes | yes | `device.Client.DeleteTemplate` |
 
-This is the one row set in this document where `MISSING` is a recorded design
-decision rather than an untracked hole. The prefix requirement is binding on
-whoever adds it back.
+The messages carry the `DeviceTemplate…` prefix (`DeviceTemplate`,
+`DeviceTemplateCreateRequest`, `DeviceTemplateCreateResponse`) that the
+removal note in `device.proto` required, so they cannot collide with
+`vtpm.proto`'s `CreateTemplateRequest`. A vTPM template
+(`VTPMService.CreateTemplate`, the `vtpm_*` tools) is a different object.
+Get, list, update and delete are served on every transport (#949) through the
+same template service; update replaces the stored template, so a field left
+unset is cleared. Find-by-name remains REST-only, an untracked gap.
+
+**Wire shapes.**
+
+- **QUIC**: `payload[0]` is the sub-opcode; the rest is the operation's
+  `DeviceTemplate…Request` or `CreateProfileFromTemplateRequest` in the
+  build's payload codec (`quicwire.EncodePayload`); the reply is the matching
+  response message. Sub-opcodes `0x23` and `0x24` share
+  the §3.7 sub-range and dispatcher.
+- **MCP**: `device_template_create` takes `tenant_id`, `name` (required),
+  `description`, `role` (the §4.2 string), `config` (YAML **text**) and
+  `match_rules`; `profile_create_from_template` takes `template_id` (required)
+  and `overrides`, using the `profile_create` argument names. Both return the
+  domain JSON with `id` as a string; a template's `config` comes back as text.
+  `device_template_get` and `device_template_delete` take `id` (a string or a
+  number); `device_template_update` takes `id` plus the create arguments, with
+  `name` required; `device_template_list` takes `page` and `page_size`
+  (defaults 1 and 50) and returns `{templates, total, page, page_size}`.
+- **REST**: `config` is bytes, so it is **base64** in both directions. The
+  `create-profile` body is `{"overrides": ProfileRequest}` with the template id
+  in the path only. A body that does not decode is a **`400`**
+  (`ErrInvalidRequestBody`) and nothing is stored; an empty body means "no
+  overrides". `GET /device/templates` pages by the `page` and `page_size`
+  query parameters and returns `{"templates": [...], "pagination": {page,
+  page_size, total, total_pages, has_more}}`; the SDK sends a zero page or size
+  as absent so the server's defaults apply.
+
+**Fields the REST and MCP SDK paths refuse.** The Go SDK translates the pb
+messages into the domain JSON those two transports take. Three pb fields have
+no place in that shape, and the SDK refuses them before anything is sent
+(`provision.ErrFieldNotSupported`; MCP reports it as
+`mcp.ErrFieldNotSupported`, REST as `InvalidArgument`) rather than dropping
+them with a `2xx`:
+
+| Field | Why |
+|---|---|
+| template `bmc` | the REST and MCP template shapes carry no BMC block |
+| `overrides.tenant_id` | the profile takes the template's tenant |
+| `overrides.networks`, `overrides.platformd_config` | not part of the MCP override arguments; refused on both paths so they agree |
+
+gRPC, Unix, QUIC and embedded carry the pb message directly and are not
+limited this way.
+
+**The template routes always have a handler (#320).** `router.NewDeviceRouter`
+(`pkg/webservice/v1/router/device.go`) requires the device CRUD handler and the
+template handler, and returns `ErrDeviceHandlerRequired{Handler}` when either is
+nil. That is because `RegisterRoutes` mounts the device, profile and template
+routes, and `find-config` / `assign` / `unassign`, with no nil check. Before
+#320 every use of the template handler carried its own `if handler != nil`.
+The plural aliases #266 removed even had a second check nested inside the
+CRUD group. So the guarantee lasted only as long as each new route
+remembered its check, and a route that forgot one would dereference nil on
+its first request. The remaining handlers
+are optional, and each one gates a whole capability: the mTLS device handler,
+config delivery, and the attestation verifier. If `deviceRoutes`
+(`pkg/webservice/v1/router.go`) gets the constructor error, it logs at Error
+and registers no device routes at all. It does not serve a broken half.
+`TestNewDeviceRouter_RequiresTheHandlersRegisterRoutesDereferences` and
+`TestRegisterRoutes_MountsTheTemplateRoutes` pin both halves of this.
 
 ### 4.1 `POST /api/v1/devices/templates` belongs to the bootstrap seeder
 
@@ -589,16 +778,16 @@ templates listed as `name=""`, `role="unknown"` with no config (#114).
 [`docs/bootstrap/api.md`](../bootstrap/api.md) §6. The CRUD create
 (`TemplateCRUDHandler.CreateTemplate`, flat or `{template: {...}}` envelope)
 is singular `POST /api/v1/device/templates` only; the JS SDK's
-`createTemplate` posts there. `GET /devices/templates` and the
-`GET`/`PUT`/`DELETE /devices/templates/{id}` plural aliases remain CRUD
-because they do not collide. One handler per route — a request is never
+`createTemplate` posts there. Every other template operation is singular
+only (§3.1). One handler per route — a request is never
 interpreted by guessing its shape; `pkg/webservice/v1/router/device_templates_test.go`
 pins which handler answers the plural `POST`.
 
-The seeder's other two routes do not collide: `GET /api/v1/devices/config` is
-unique to it, and `POST /api/v1/devices/templates/{id}/create-profile` is not
-registered by the CRUD alias block (which only aliases `GET`/`PUT`/`DELETE` on
-`{id}`).
+The seeder's other two routes do not collide either. `GET /api/v1/devices/config`
+is unique to it and is not on this router at all: only the provisioning
+listener mounts it (§5, #177). Its
+`POST /api/v1/devices/templates/{id}/create-profile` sits beside the singular
+CRUD `create-profile` under the other prefix, with a different body (§4.3).
 
 ### 4.2 Role vocabulary
 
@@ -607,7 +796,7 @@ are `control-plane`, `gateway`, `worker`, `server`, `client`, `workstation`,
 `edge`, `iot`, `load-balancer` and `unknown`; `loadbalancer` is accepted as an
 alias of `load-balancer`, and matching is case-insensitive. The first three are
 the bootstrap configuration's node roles
-([`docs/bootstrap/config-reference.md`](../bootstrap/config-reference.md)) and
+([`docs/bootstrap/engineering.md`](../bootstrap/engineering.md)) and
 round-trip verbatim. Every REST create/update path resolves the string through
 `entities.ParseDeviceRole`: an omitted `role` is `unknown`; any other string
 outside the vocabulary is a **`400`** carrying `device: unknown role "<value>"`
@@ -618,6 +807,12 @@ outside the vocabulary is a **`400`** carrying `device: unknown role "<value>"`
 gRPC and Unix services use, so a role written over REST reads back identically
 over every transport. `platformctl device profile --role` accepts the same
 list.
+
+The JavaScript SDK's `DeviceRole` (`sdk/javascript/src/types/device.ts`) is
+exactly these ten REST strings, with no index signature, so a role the server
+adds fails the web console's typecheck wherever it keeps an exhaustive
+`Record<DeviceRole, …>`. The console reads, labels and submits roles through
+`web/src/lib/device-role.ts`; it never sends the gRPC enum spelling (#119).
 
 ### 4.3 `create-profile` request and response (seeder shape)
 
@@ -630,7 +825,7 @@ a `400`); `ek_cert` is **refused** with `400` because this route is
 unauthenticated — EK binding belongs to the authenticated
 `POST /api/v1/device/profiles/{id}/assign`. It answers `201` with the
 created profile in the standard `{code, success, payload}` envelope. The
-payload is the subset of the `GET /api/v1/devices/profiles` item shape the
+payload is the subset of the `GET /api/v1/device/profiles` item shape the
 seeder consumes — `id` (**JSON string**, deterministic from the hostname),
 `name`, `role`, `mac_address`, `match_rules` and `assigned` — with identical
 field names and encoding, so a client that lists profiles parses this payload
@@ -666,7 +861,11 @@ delegate here (§2.1).
 **A failed verification is a `200` with a negative verdict, not an error.**
 The caller asked whether the device attests; "no" is a successful answer.
 Error statuses are reserved for requests that could not be evaluated at all —
-unusable evidence, an unknown device, or a missing dependency.
+unusable evidence, an unknown device, a missing dependency, a profile store
+that could not answer (`ErrDeviceProfileLookupFailed`; distinct from no
+profile, which is an absence verdict), or a verification abandoned by a
+cancelled or expired request (`ErrAttestationFailed`, which wraps the context
+error so `errors.Is(err, context.Canceled)` still matches).
 
 Request body — `evidence` is the JSON-encoded `DeviceQuoteEvidence`
 (base64 in JSON), identical on every transport so the wire contract does not
@@ -684,7 +883,7 @@ The checks, in order, and what each one means:
 |---|---|---|
 | `ak_certificate_verified` | the device's **enrolled `attest_cert`** chains to the platform CA and carries `tcg-cap-verifiedTPMRestricted` (2.23.133.11.1.3), the MUST of TCG DevID v1 r12 §8.2 | no certificate / no CA → *absence*; wrong CA or attribute missing → *cryptographic* |
 | `signature_valid` | the certified key signed the quote | cryptographic |
-| `nonce_valid` | the quote's `extraData` is the caller's nonce | cryptographic |
+| `nonce_valid` | the quote's `extraData` is the caller's nonce; on the attestation reporting path, where the collector binds the quote to its TLS connection, it is `QualifyingData(nonce, binding)` instead ([attestation engineering §3, invariant 10](../attestation/engineering.md#3-invariants)) | cryptographic |
 | `pcrs_valid` | the reported values hash to the signed digest **and** equal the PCR baseline on the device's profile | digest mismatch or baseline mismatch → cryptographic; no matching profile → absence |
 
 A bare `attest_pub` is **not** a trust anchor: without the certificate the
@@ -761,14 +960,17 @@ is the trust anchor every later quote is verified against, so a candidate is
 written only if it (a) parses, (b) chains to the platform CA, (c) carries
 `tcg-cap-verifiedTPMRestricted` (2.23.133.11.1.3) and (d) certifies the
 device's **enrolled attestation public key** (`att_pub`, the TPMT_PUBLIC
-recorded at enrollment). (a)–(c) run through the very `VerifyAKCertificate`
-the verifier uses, so the verb and the verifier agree by construction; (d)
+recorded at enrollment). (a)–(c) are the checks the quote verifier's
+attested-peer primitive applies to the same certificate; the verb runs them
+through `pkg/attestation/vm.VerifyAKCertificate` because go-quicbaas does not
+yet re-export the primitive's standalone certificate check (#482); (d)
 exists because a certificate over any other key would fail every quote
 signature and quarantine the device. A certificate that chains but lacks the
 attribute — which is what the fleet's CA issued at enrollment before go-xkms
 stamped `.3` — is refused, because recording it would move the device from
 *absence* (denied) to *cryptographic failure* (quarantined) on its next
-quote. Nothing is written on refusal.
+quote. Nothing is written on refusal unless the caller asks for the clear
+below.
 
 Candidates, in order; the first to pass is recorded:
 
@@ -804,7 +1006,24 @@ the go-quicbaas re-export lands, the hookup is an alias swap with no
 platform change. On this fleet today the CA handle does not implement it
 and the CN lookups return not-found.
 
-Request body is optional: `{"reissue": <bool>}`. The response mirrors
+**Clearing a refused certificate (#516).** A device that already holds a
+non-compliant certificate (one enrolled before go-xkms stamped `.3`) is
+quarantined by every quote, and no candidate can replace it while the CA
+cannot issue a compliant one. `{"clear_on_refusal": true}` is the way out:
+when every candidate is refused, the recorder clears the certificate on the
+record, so the next quote is an *absence* (denied, not quarantined) until a
+compliant certificate is recorded. The flag is never on by default, and it
+clears only on that outcome: a compliant certificate is recorded as usual, and
+a device with no stored certificate, no enrolled attestation key, an
+unreachable CA or a failed revocation of a re-issued certificate keeps the
+error unchanged. The clear is a compare-and-clear: if the record changed while
+the call ran, nothing is written and the call fails with `ABORTED` (REST
+`409`, QUIC status `0x06`). The clear itself is audited as its own event,
+`device_attest_cert_cleared`, carrying the refusal that caused it, after the
+`device_attest_cert_refused` event for the attempt.
+
+Request body is optional: `{"reissue": <bool>, "clear_on_refusal": <bool>}`.
+The response mirrors
 `RecordAttestationCertificateResponse` with proto field names:
 
 ```json
@@ -814,12 +1033,18 @@ Request body is optional: `{"reissue": <bool>}`. The response mirrors
  "not_after":"9999-12-31T23:59:59Z","attest_cert":"-----BEGIN CERTIFICATE-----…"}
 ```
 
+After a clear the response has `"cleared": true`, `"refusal"` names every
+refused candidate, `source` and `attest_cert` are empty, and `subject`,
+`certificate_serial` and `not_after` describe the certificate that was
+removed.
+
 `source` is `device`, `ca` or `reissued`. A refusal is `FAILED_PRECONDITION`
 on gRPC/Unix/MCP, QUIC status `0x01`, and `400` on REST, with a message that
 names **every** candidate and why it was refused (`ca[node-03]: … does not
 carry tcg-cap-verifiedTPMRestricted`). `UNAVAILABLE` means no CA is
 configured. Every attempt is audited as an attestation store event —
-`device_attest_cert_recorded` or `device_attest_cert_refused` — and never
+`device_attest_cert_recorded`, `device_attest_cert_refused` or
+`device_attest_cert_cleared` — and never
 reaches the quarantine observers: recording is not a verdict; the collector's
 next sweep (§4.4, [attestation/user.md](../attestation/user.md)) produces
 that.
@@ -828,9 +1053,239 @@ that.
 serve `DeviceService.RecordAttestationCertificate`; QUIC multiplexes it as
 sub-opcode `0x22` under `OpProvisioningCategory` (0xCF), the device
 sub-range the profile-assignment verbs use; MCP's `device_record_attest_cert`
-(`device:write`) and REST delegate to the same in-process gRPC service; the
+(`device:write`), REST and the embedded transport delegate to the same
+in-process gRPC service; the
 Go SDK exposes `device.Client.RecordAttestationCertificate`; the CLI is
-`platformctl device attest-cert record <id> [--reissue]`.
+`platformctl device attest-cert record <id> [--reissue] [--clear-on-refusal]`.
+The JavaScript SDK exposes `DeviceService.recordAttestCert(id, {reissue})` over
+the REST route, returning a refusal's message verbatim in `error.message`
+(`error.status` 400). The web console's device detail page carries it as
+**Record certificate** on the Attestation Certificate card (#491): re-issuance
+is an unchecked option in the confirm dialog, and a refusal is shown verbatim
+in that dialog. There is no override in either, because none exists here.
+Neither carries `clear_on_refusal` yet; clear a refused certificate through
+the CLI or any other surface above.
+
+### 4.6 Diskless boot delivery (#690)
+
+A provisioned diskless node keeps its keys in the TPM and nothing else across
+a reboot. Each boot, platformd fetches its identity certificates back
+(`pkg/app/tpm_diskless_boot.go`; the node side is
+[docs/tpm/architecture.md](../tpm/architecture.md) §4d). Two machine-facing
+REST routes serve it, through one service (`BootService`,
+`pkg/webservice/v1/device/boot_service.go`):
+
+| Method | Path | Auth | Returns |
+|---|---|---|---|
+| POST | `/api/v1/device/boot/certificate` | proof of the IDevID key (no client certificate) | `{"identity":"…","idevidChain":"<PEM>"}` — the IDevID chain recorded at enrollment |
+| POST | `/api/v1/device/boot` | mTLS (the node's IDevID) | `BootDeliveryResponse`, below |
+
+The certificate route takes no client certificate because the node needs the
+chain before it can present it. It authenticates in the body instead,
+`{"identity":"<name>","signature":"<base64>"}`: the signature is made with the
+TPM-resident IDevID key over SHA-256 of
+`go-trusted-platform diskless boot certificate v1 ‖ 0x00 ‖ identity ‖ 0x00 ‖ nonce`,
+where the nonce is the same connection channel value the delivery quotes over
+(below). It is RSASSA-PSS with a salt as long as the hash, or ASN.1 ECDSA
+(`provisioning.SignBootCertificateProof`). The control plane looks the identity
+up by serial, then by enrollment hostname, and verifies the signature against
+the recorded IDevID leaf. It returns the chain only to the node that holds that
+key, on the connection the proof was made for.
+
+The recorded chain is the IDevID leaf first, then the CA certificates of its
+issuing chain; the IAK certificate is not in it (it is recorded on its own, as
+the attestation certificate). The enrollment hook builds it that way rather than
+storing the finalize PEM as delivered: an enroll-01 finalize delivers the IAK,
+then the IDevID, then the issuing chain, and a chain led by the IAK would make
+every proof above fail against the IAK's key. A finalize chain that does not
+parse fails the enrollment instead of being recorded.
+
+An unknown name, a device enrolled before its chain was recorded, and a proof
+that does not verify all get the same `403` body,
+`device: boot certificate refused`. The route therefore cannot be used to learn
+which names are enrolled.
+
+A diskless node's identity is its EK-derived name, `ek-<32 hex>`
+([docs/tpm/architecture.md](../tpm/architecture.md) §4d step 5). It enrolls
+under that serial and Common Name, and registration refuses either unless it is
+the identity of the enrollment's proven EK certificate. The delivery route takes the identity from the
+verified client certificate, like the heartbeat, and its body is
+`{"evidence":"<base64 vm.QuoteEvidence JSON>"}` — the evidence shape
+`POST /api/v1/device/attest` takes. The control plane serves it only when all
+of these hold:
+
+1. the presented leaf is byte-for-byte the recorded IDevID, and it chains to
+   the platform CA bundle with the client-auth usage;
+2. the quote's nonce is the connection's channel value — the TLS 1.3 exporter
+   with label `EXPORTER-go-trusted-platform-diskless-boot`, 32 bytes
+   (`provisioning.BootChannelNonce`). There is no nonce endpoint: a quote is
+   valid only on the connection that produced it, and a TLS 1.2 connection
+   cannot be bound and is refused;
+3. the device quote verifier (§4.4) returns a verified verdict for that
+   device; and
+4. the device is not `revoked` or `suspended`. A `quarantined` device may
+   boot, because quarantine is enforced on its port and remediation needs it
+   up.
+
+```json
+{"serial":"SN0042","idevidChain":"-----BEGIN CERTIFICATE-----…",
+ "attestCert":"-----BEGIN CERTIFICATE-----…","caBundle":"-----BEGIN CERTIFICATE-----…",
+ "profile":{"serialNumber":"SN0042","admittedNetwork":{"vlan":200,…}},
+ "pcrBaselineSource":"tofu","pcrBaselineCaptured":true}
+```
+
+`profile` is the §3.2 `ProfileResponse`. `pcrBaselineSource` is `signed` or
+`tofu` — what the quote was compared against — and the node logs it: a `tofu`
+boot proved freshness and IAK possession, not the expected boot state.
+
+| Status | Cause |
+|---|---|
+| 400 | no identity, a body that is not the JSON above, or a connection with no TLS 1.3 exporter to bind to (`ErrBootChannelRequired`) |
+| 403 | certificate: any request that does not prove the recorded IDevID key, one body for all of them. Delivery: wrong or unchained certificate, a quote nonce that is not this connection's, failed or unevaluable attestation, revoked or suspended device |
+| 404 | delivery: identity unknown, or no profile bound to the device |
+| 500 | recorded chain unparseable, CA bundle, storage or verifier fault |
+
+#### Transports
+
+Both operations are `DeviceService.BootCertificate` and
+`DeviceService.BootDelivery` on every transport. They are not an operator API:
+the client is a diskless node's platformd before it has started. Every
+transport reaches the same `BootService`, which holds all enforcement — the
+proof of possession, the leaf-to-CA and recorded-IDevID check, the channel
+binding and the attestation verdict — so a transport only peels off its framing
+and maps the typed outcome. No transport can serve a node the others refuse.
+
+| Transport | BootCertificate | BootDelivery |
+|---|---|---|
+| REST | `POST /api/v1/device/boot/certificate` | `POST /api/v1/device/boot` (mTLS) |
+| gRPC | `platform.v1.DeviceService/BootCertificate` | `platform.v1.DeviceService/BootDelivery` |
+| QUIC | `OpProvisioningCategory` (0xCF), sub-opcode `0x23` | `OpProvisioningCategory` (0xCF), sub-opcode `0x24` |
+| MCP | tool `device_boot_certificate` | tool `device_boot_delivery` |
+| Unix socket | gRPC over the socket | gRPC over the socket |
+
+The gRPC messages mirror the REST bodies (`BootCertificateRequest{identity,
+signature}`, `BootDeliveryRequest{evidence}`, and the `BootDeliveryResponse`
+with its `BootProfile`). gRPC statuses map the REST statuses: `InvalidArgument`
+(400), `PermissionDenied` (403), `NotFound` (404), `Unavailable` and `Internal`
+(500). QUIC carries the same messages in the codec payload after the sub-opcode
+byte, with the matching QUIC status.
+
+**Authentication.** A diskless node holds no token, so these methods are exempt
+from the transport's token check: the gRPC interceptor skip list, the QUIC
+`AuthMiddleware` sub-opcode skip, and an explicitly open (`""`) MCP tool
+permission. The exemption is safe only because the boot service authenticates
+every request itself. On gRPC and QUIC the connection's TLS state reaches the
+service — the gRPC peer's `TLSInfo`, the QUIC connection state carried in the
+request context — and the delivery identity is the verified client
+certificate, never a request field.
+
+**Where a transport cannot serve a node.** The channel nonce is a TLS 1.3
+exporter, so a transport with no TLS connection has none. The transport
+refuses the request itself, with the typed `ErrBootChannelRequired` naming
+it, before the boot service runs — an empty nonce never reaches it:
+
+| Transport | Refusal for a connection with no channel |
+|---|---|
+| REST | `400` |
+| gRPC, Unix socket | `FailedPrecondition` |
+| QUIC | `StatusInvalidRequest` |
+| MCP | `-32007` (`FailedPrecondition`): tool error `ErrBootChannelRequired` (Transport `MCP`), from both MCP service providers |
+
+- The Unix socket and MCP (plain HTTP or stdio) carry no TLS connection; both
+  operations are refused there, by the SDK before anything is sent (below)
+  and by the daemon for any other client. A proof made for another
+  connection is refused on REST, gRPC and QUIC with `403` /
+  `PermissionDenied`, the same as any proof that does not verify.
+- The gRPC TCP and QUIC listeners with mutual TLS enabled (`EnableMTLS`)
+  verify a client certificate **if one is given** (`tls.VerifyClientCertIfGiven`,
+  set by `grpcTCPServerTLS` and `quicServerMTLS` in
+  `pkg/api/daemon/client_cert_gate.go`) and require one per request: `BootCertificate` may arrive without one (the
+  node has none yet); `BootDelivery` and every other RPC or QUIC opcode are
+  refused (`Unauthenticated` / `StatusUnauthorized`) without a verified
+  certificate. A certificate that does not chain to the client CA fails the
+  handshake. On QUIC the handshake and the request authenticator verify
+  against one client CA pool, read once when the daemon is constructed.
+  Both boot calls therefore share one listener.
+- A TLS-terminating proxy or load balancer in front of the control plane breaks
+  diskless boot: the channel nonce and the client certificate belong to the
+  proxy's connection, not the node's, so the proof fails closed. Pass TLS
+  through (layer 4) to the control plane.
+- A gRPC or QUIC listener that never requests a client certificate cannot serve
+  `BootDelivery`: there is no leaf to verify, so it fails closed.
+
+**Client.** The proof and the evidence are bound to the connection that
+carries them, and that connection's exporter exists only once it is open, so
+the Go SDK takes a callback rather than proof bytes:
+
+```go
+type BootProofFunc func(ctx context.Context, binding []byte) ([]byte, error)
+
+resp, err := client.BootCertificate(ctx, identity, sign)  // sign returns the IDevID proof over binding
+resp, err := client.BootDelivery(ctx, quote)              // quote returns vm.QuoteEvidence JSON whose nonce is binding
+```
+
+The transport calls the function after it has connected, with that
+connection's `provisioning.BootChannelNonce`, and sends the request on the
+same connection ([architecture.md §4.5](architecture.md#45-diskless-boot-a-proof-is-made-on-the-connection-that-carries-it-690)).
+Every failure is the typed `ErrBootCertificateFailed` /
+`ErrBootDeliveryFailed` wrapping its cause: the control plane's status, the
+callback's own error, `ErrBootProofMissing` for a nil callback, or — on a
+transport with no TLS connection (Unix, MCP, embedded) —
+`*transport.ErrChannelBindingUnavailable{Transport, Reason}`, returned
+without calling the function or sending anything. The CLI is
+`platformctl device boot certificate --identity <name> --key <PEM>` and
+`platformctl device boot delivery --quote-command <program>`
+([cli.md §2.7](cli.md#27-device-boot-certificate-and-device-boot-delivery)).
+
+### 4.7 Operator Disable and Enable (#250)
+
+`POST /api/v1/devices/{id}/disable` and `POST /api/v1/devices/{id}/enable`
+(admin gate) are the operator's lifecycle transitions. They are dedicated
+verbs, not a `PUT` of the `state` field: each programs the device's switch port
+through the SDN policy engine **before** it records the state, so a recorded
+state is always an enforced one
+([architecture.md §4.6](architecture.md#46-operator-disable-and-enable-250)).
+
+- **Disable** blocks the port and records `suspended` with
+  `state_reason` `operator: <reason>` (`operator: disabled` without one).
+  Request body is optional: `{"reason": "<text>"}`, at most 256 bytes.
+- **Enable** takes no body. It moves a `suspended` device to `quarantined`,
+  re-admits its port to the zone carrying lifecycle role `quarantine` and asks
+  the attestation collector to quote the device now. Only a passing verdict
+  restores the state and placement it had before the disable.
+
+Both answer in the standard envelope with the `DeviceLifecycleResponse`
+fields under proto names:
+
+```json
+{"device_id":"42","state":"quarantined","previous_state":"suspended",
+ "state_reason":"","reattestation_requested":true}
+```
+
+`reattestation_requested` is `false` on Disable, and on Enable when no
+collector took the request; the device then waits for the next scheduled
+attestation cycle.
+
+**The transitions fail closed.** Every refusal leaves the record and the port
+as they were:
+
+| Cause | Error | gRPC / Unix / MCP | QUIC | REST |
+|---|---|---|---|---|
+| The daemon has no SDN policy engine (not SDN-OVS, or no attestation quarantine observer) | `ErrLifecycleUnenforced` | `FAILED_PRECONDITION` | `0x01` | 400 |
+| The device has no `network_port_id` | `ErrDeviceNotOnFabric` | `FAILED_PRECONDITION` | `0x01` | 400 |
+| Disable from `suspended` or `revoked` | `entities.ErrInvalidTransition` | `FAILED_PRECONDITION` | `0x01` | 400 |
+| Enable from anything but `suspended`; no zone with lifecycle role `quarantine`; the engine knows no port for the device | `policy.ErrDeviceNotSuspended`, `ErrNoQuarantineZone`, `ErrUnknownDevicePort` | `FAILED_PRECONDITION` | `0x01` | 400 |
+| `reason` longer than 256 bytes; id missing or `0` | `ErrLifecycleReasonTooLong`; `ErrInvalidDeviceID` | `INVALID_ARGUMENT` | `0x09` | 400 |
+| Unknown device | — | `NOT_FOUND` | `0x02` | 404 |
+
+**One service behind all transports.** gRPC and Unix serve
+`DeviceService.DisableDevice` / `EnableDevice`; QUIC multiplexes them as
+sub-opcodes `0x25` / `0x26` under `OpProvisioningCategory` (§3.7); MCP's
+`device_disable` / `device_enable` (`device:write`) and REST delegate to the
+same in-process gRPC service; the Go SDK exposes `device.Client.Disable` /
+`Enable`, the JS SDK `DeviceService.disableDevice` / `enableDevice`,
+and the CLI `platformctl device disable <id> [--reason]` /
+`device enable <id>` ([cli.md §2.8](cli.md)).
 
 ## 5. Adjacent routes on the same router
 
@@ -852,32 +1307,57 @@ They are registered **without mTLS**, with the source comment *"These routes
 are UNPROTECTED (no mTLS) since devices at boot have no client cert"* — they
 authenticate at the application layer via EAB and EK binding instead.
 
+**`GET /api/v1/devices/config` is on no general listener (#177).** The
+boot-time config fetch is unauthenticated by design: a candidate asks with
+`?mac=` or `?serial=` and gets its profile's config back as YAML. It is mounted
+only on a webservice whose `surface` is `provisioning`, and that listener serves
+nothing else. Startup refuses that listener unless its `bind-host` is an
+address inside the provisioning zone. A full or edge listener answers the same
+request with the 404 it gives an unknown route. Only REST carries the route.
+`DeviceService.FindConfigForDevice` on gRPC, QUIC, MCP, Unix and embedded is
+the `device:read` operator query (REST: `GET /api/v1/device/profiles/find-config`),
+not the boot fetch. The trust boundary is in
+[architecture.md §4.2](architecture.md); the listener configuration is in
+[`docs/web/`](../web/).
+
 ---
 
-## 6. The MCP surface is triplicated, and one third is dead
+## 6. The MCP surface: one device family, one profile family, two template tools
 
-Three families of device-related MCP tools exist.
+Two families of device-related MCP tools exist, plus the two template tools,
+and every tool in them is dispatched and scope-checked.
 
 | Family | Registered by | Executor | In the authorization map |
 |---|---|---|---|
-| `device_register`, `device_get`, `device_list`, `device_delete`, `device_update`, `device_attest`, `device_provision` | `registerDeviceTools` (`tools.go:554`) | yes (`tools.go:1287`) | **yes** — `device:write` / `device:read` / `device:delete` |
-| `device_create`, `device_get_by_id`, `device_get_by_serial`, `device_list_all`, `device_update_by_id`, `device_delete_by_id`, `device_get_status` | `registerDeviceToolsV2` (`device_tools.go:82`) | **no** | **no** |
-| `profile_create`, `profile_get_by_id`, `profile_list_all`, `profile_update_by_id`, `profile_delete_by_id`, `profile_assign_to_device`, `profile_unassign_from_device` | `registerDeviceToolsV2` | yes (`deviceProfileToolDispatch`) | **yes** — all seven mapped to `device:*` |
+| `device_register`, `device_get`, `device_find_by_serial`, `device_list`, `device_delete`, `device_update`, `device_attest`, `device_record_attest_cert`, `device_provision`, `device_disable`, `device_enable` | `registerDeviceTools` (`tools.go:557`) | `ExecuteTool` (`tools.go:1325`) | **yes** — `device:write` / `device:read` / `device:delete` |
+| `profile_create`, `profile_get_by_id`, `profile_list_all`, `profile_update_by_id`, `profile_delete_by_id`, `profile_find_matching`, `profile_find_by_mac`, `profile_find_by_serial`, `profile_assign_to_device`, `profile_unassign_from_device` | `registerDeviceToolsV2` (`device_tools.go:99`) | `deviceProfileToolDispatch` | **yes** — all ten mapped to `device:*` |
+| `device_template_create`, `device_template_get`, `device_template_list`, `device_template_update`, `device_template_delete`, `profile_create_from_template` (§4) | `registerDeviceTemplateTools` (`device_template_tools.go:157`) | `deviceProfileToolDispatch` | **yes** — create, update and create-from-template `device:write`; get and list `device:read`; delete `device:delete` |
 
-Both registration functions run (`tools.go:63` and `:66`), so all 21 tool names
-are advertised by `tools/list`.
+The template tools are not the `vtpm_*_template_*` tools, which create
+vTPM templates. A template tool called on a daemon without the template or
+profile service answers a typed JSON-RPC error, as every MCP device tool does.
 
-**The seven V2 `device_*` tools have no executor.** `ExecuteTool` has no case
-for them and no `default:` dispatcher claims them (grepped 2026-08-18), so a
-call returns `unknown tool: device_create`. They are advertised and
-non-functional. Use the older family.
 
-This is the same duplicated-family pattern recorded for DNS
-([`docs/dns/api.md`](../dns/api.md) §3) and vTPM
-([`docs/vtpm/api.md`](../vtpm/api.md) §5), with one difference that works in
-this feature's favour: here the **unmapped** family is also the **dead** one,
-so `AuthorizeTool`'s default-allow behaviour for unlisted tools does not open a
-live path. The seven `profile_*` tools are both live and scope-checked.
+**Arguments are named after the device fields.** `device_register` takes
+`serial` (required), `model`, `ek_cert`, `attest_pub`, `attest_cert`,
+`signing_pub` and `hash_algo_id`, and stores each under its own name; the
+result is the created device with its assigned `id`. `device_update` takes
+`device_id` (required) plus `model` and `serial` — the attestation fields are
+server-owned (§3.3) and ignored — and returns the stored device after the
+update. `device_find_by_serial` takes `serial` and returns the device.
+
+Until #533 a third family — `device_create`, `device_get_by_id`,
+`device_get_by_serial`, `device_list_all`, `device_update_by_id`,
+`device_delete_by_id`, `device_get_status` — was advertised by `tools/list`
+with no executor behind it, so every call answered `unknown tool:
+device_create`. It was removed rather than wired: it duplicated the family
+above verb for verb. `device_register` also read `name` / `device_type` and
+stored them as model and serial, so the serial a caller sent was dropped; it
+now maps every argument by name.
+
+`AuthorizeTool` denies any tool with no entry in the permission map, and
+`TestExecuteTool_EveryAdvertisedToolDispatches` fails when a tool is advertised
+without an executor, so an advertised-but-dead tool cannot return unnoticed.
 
 ---
 
@@ -885,24 +1365,103 @@ live path. The seven `profile_*` tools are both live and scope-checked.
 
 Platform tokens carry an `scp` claim in the qrdb-canonical
 `"<resource>:<action>"` form. Enforcement is per operation: gRPC
-`RequireScope`, QUIC `AuthorizeRequest`, MCP `AuthorizeTool`. The catalogs and
-their default-allow behaviour are described in
+`RequireScope`, QUIC `AuthorizeRequest`, MCP `AuthorizeTool`, webservice
+REST `RequireScope` on every operator route (table below). The gRPC, QUIC and MCP catalogs
+and their default-deny behaviour are described in
 [`docs/daemon/api.md`](../daemon/api.md) §5.
 
+**QUIC enforces two catalogs.** `opcodePermissions` maps every top-level
+device opcode (`0x30`–`0x3D`, less the retired `0x3C`) and `categoryPermissions` maps the device
+sub-opcodes under `OpProvisioningCategory` (`0xCF`, keyed by `payload[0]`):
+`0x20`/`0x21` assign and unassign, `0x22` record attestation certificate,
+`0x25`/`0x26` disable and enable, `0x27` create template, `0x28` create profile
+from template, `0x2C` update template — all `device:write` — `0x29` find
+matching profile, `0x2A` get template and `0x2B` list templates, `device:read`,
+and `0x2D` delete template, `device:delete`. The diskless boot sub-opcodes `0x23`/`0x24`
+are pre-auth (§4.6). Both catalogs are in `pkg/api/quic/opcode_permissions.go`;
+an operation absent from them is refused, so a new sub-opcode without an entry
+fails closed. `pkg/api/daemon/quic_device_authz_test.go` sends every device
+write through the daemon's QUIC handler with a read-only, a write and a missing
+token. The other `0xCF` sub-ranges are unscoped by design: config delivery
+(`0x01`–`0x07`) is machine bootstrap without a platform token, and EAB
+(`0x10`–`0x1A`) is unscoped on gRPC and MCP too
+([`docs/eab/api.md`](../eab/api.md) §5). Under mTLS-only QUIC or skipped IAM
+validation no token middleware is installed and nothing is enforced. The
+opcode tables are in [`api-reference-quic.md`](api-reference-quic.md).
+
 **`DeviceService` is in the gRPC scope catalog, and its coverage is complete**
-— all 21 RPCs are mapped in `pkg/api/grpc/method_permissions.go:147-167`,
-resource `device`:
+— all 28 RPCs but the two token-exempt boot RPCs (§4.6) are mapped in
+`pkg/api/grpc/method_permissions.go`, resource `device`:
 
 | Action | RPCs |
 |---|---|
-| `device:read` | `GetDevice`, `ListDevices`, `CountDevices`, `FindDeviceBySerial`, `GetProfile`, `ListProfiles`, `CountProfiles`, `FindMatchingProfile`, `FindProfileByMACAddress`, `FindProfileBySerial`, `FindConfigForDevice` |
-| `device:write` | `CreateDevice`, `UpdateDevice`, `ActivateDevice`, `AssignProfileToDevice`, `UnassignProfileFromDevice`, `CreateProfile`, `CreateProfileFromTemplate`, `UpdateProfile` |
-| `device:delete` | `DeleteDevice`, `DeleteProfile` |
+| `device:read` | `GetDevice`, `ListDevices`, `CountDevices`, `FindDeviceBySerial`, `GetProfile`, `ListProfiles`, `CountProfiles`, `FindMatchingProfile`, `FindProfileByMACAddress`, `FindProfileBySerial`, `FindConfigForDevice`, `GetTemplate`, `ListTemplates` |
+| `device:write` | `CreateDevice`, `UpdateDevice`, `ActivateDevice`, `AssignProfileToDevice`, `UnassignProfileFromDevice`, `CreateProfile`, `CreateProfileFromTemplate`, `CreateTemplate`, `UpdateTemplate`, `UpdateProfile`, `AttestDevice`, `RecordAttestationCertificate`, `DisableDevice`, `EnableDevice` |
+| `device:delete` | `DeleteDevice`, `DeleteProfile`, `DeleteTemplate` |
 
-`DeviceService` is one of only eleven services in that catalog. Device
-templates, being REST-only, have no scope-catalog entry at all.
+The catalog is default-deny, so every `DeviceService` RPC is in it:
+`TestGRPCMethodCatalog_CoversEveryRegisteredMethod` fails on any registered RPC
+with neither a scope nor a pre-auth entry, and
+`TestScopeForMethod_EveryDeviceServiceMethodIsScoped` walks
+`DeviceService_ServiceDesc`, keeps `BootCertificate` and `BootDelivery`
+unscoped and pins the write methods above. Until #250 the catalog stopped at
+21: `AttestDevice` and `RecordAttestationCertificate` were unscoped on gRPC
+while QUIC and MCP checked them, because an unlisted method was then allowed
+for any validated token.
 
-On MCP, 14 of the 21 device-related tool names carry a permission — see §6.
+**Attestation is a write.** `AttestDevice` persists: the first fully verified
+quote seeds the profile's PCR baseline (§4.4), and a cryptographic failure
+quarantines the device. `RecordAttestationCertificate` stores a certificate on
+the device. Both require `device:write` on every scoped transport — gRPC, QUIC
+`OpDeviceAttest` (`0x3A`) and sub-opcode `0x22`, MCP `device_attest` /
+`device_record_attest_cert`, and the webservice REST routes
+`POST /api/v1/devices/{id}/attest` and
+`POST /api/v1/devices/{id}/attest-cert/record` — so a `device:read` token can
+look at devices but cannot change their trust state. The lifecycle routes
+`POST /api/v1/devices/{id}/disable` and `POST /api/v1/devices/{id}/enable`
+require `device:write` the same way.
+
+**Every webservice operator route takes its gRPC twin's scope (#484).** Behind
+the platform-token middleware, `pkg/webservice/v1/router/device.go` wraps each
+device, profile, template and provisioning-session route in `RequireScope` on
+top of the admin role gate, with the scope the twin RPC takes in the catalog
+above (and QUIC and MCP take for the same operation). A token without it gets
+`403` before the handler runs. Under the legacy JWT handler, which carries no
+scopes, the role gate alone applies; the daemon REST device routes
+(`pkg/api/rest/device_handlers.go`) are outside its scope guard: they check
+only the mTLS client certificate and no scope.
+
+| Scope | Webservice routes (under `/api/v1`) | gRPC twin |
+|---|---|---|
+| `device:read` | `GET /devices`, `GET /devices/count`, `GET /devices/serial/{serial}`, `GET /devices/{id}` | `ListDevices`, `CountDevices`, `FindDeviceBySerial`, `GetDevice` |
+| `device:read` | `GET /device/profiles`, `GET /device/profiles/count`, `POST /device/profiles/match`, `GET /device/profiles/serial/{serial}`, `GET /device/profiles/mac/{mac}`, `GET /device/profiles/{id}`, `GET /device/profiles/find-config` | `ListProfiles`, `CountProfiles`, `FindMatchingProfile`, `FindProfileBySerial`, `FindProfileByMACAddress`, `GetProfile`, `FindConfigForDevice` |
+| `device:write` | `POST /devices`, `PUT /devices/{id}`, `POST /device/activate-json` | `CreateDevice`, `UpdateDevice`, `ActivateDevice` |
+| `device:write` | `POST /device/profiles`, `PUT /device/profiles/{id}`, `POST /device/profiles/{id}/assign`, `POST /device/profiles/{id}/unassign` | `CreateProfile`, `UpdateProfile`, `AssignProfileToDevice`, `UnassignProfileFromDevice` |
+| `device:write` | `POST /device/templates`, `POST /device/templates/{id}/create-profile` | `CreateTemplate`, `CreateProfileFromTemplate` |
+| `device:write` | `POST /devices/{id}/attest`, `POST /devices/{id}/attest-cert/record`, `POST /devices/{id}/disable`, `POST /devices/{id}/enable` | `AttestDevice`, `RecordAttestationCertificate`, `DisableDevice`, `EnableDevice` |
+| `device:delete` | `DELETE /devices/{id}`, `DELETE /device/profiles/{id}` | `DeleteDevice`, `DeleteProfile` |
+| `provisioning:read` | `GET /provisioning/sessions`, `GET /provisioning/sessions/{sessionID}` | `ConfigDeliveryService/ListSessions`, `GetSession` |
+| `provisioning:write` | `POST /provisioning/sessions/{sessionID}/fulfill` | `ConfigDeliveryService/FulfillSession` |
+
+The template routes `GET /device/templates` and `GET /device/templates/{id}`
+take `device:read` (gRPC `ListTemplates`, `GetTemplate`),
+`PUT /device/templates/{id}` `device:write` (`UpdateTemplate`) and
+`DELETE /device/templates/{id}` `device:delete` (`DeleteTemplate`).
+`GET /device/templates/name/{name}` takes `device:read` and is REST-only. They
+take the device resource's action so that a token which cannot create a
+template cannot rewrite or remove one either. The machine-facing routes (`/device/{profile,activate,heartbeat}`,
+`/device/boot*`, the EAB provisioning routes and the session poll) are on the
+ungated router and take no scope (§4.6, §5).
+
+Before #484 only create, the attestation routes, the lifecycle routes and
+template create were scoped on the webservice; every other route kept only the
+role gate, so a `device:read` token could update or delete a device over REST
+that every other transport refused. `TestDeviceRouter_OperatorRoutes_*` in
+`pkg/webservice/v1/router/device_attest_scope_test.go` sends each route the
+scope above, every other device and provisioning scope, and no scope
+authorizer at all.
+
+On MCP, all 20 device-related tool names carry a permission — see §6.
 
 ---
 
@@ -911,15 +1470,15 @@ On MCP, 14 of the 21 device-related tool names carry a permission — see §6.
 | QUIC byte | Name | REST | Device cause |
 |---|---|---|---|
 | `0x00` | `StatusOK` | 200 | — |
-| `0x01` | `StatusInvalidRequest` | 400 | Payload failed to decode (`ErrQUICDecodingFailed`) |
+| `0x01` | `StatusInvalidRequest` | 400 | Payload failed to decode (`ErrQUICDecodingFailed`); a refused operator Disable/Enable (`FAILED_PRECONDITION`, §4.7) |
 | `0x02` | `StatusNotFound` | 404 | Unknown device, profile or template; `ErrNoMatchingConfig`; `ErrProfileNotFound` |
 | `0x03` | `StatusUnauthorized` | 401 | Token invalid; missing or unverified mTLS client certificate |
 | `0x04` | `StatusInternalError` | 500 | Storage failure (`*WrappedError`); `ErrARPLookupFailed`; `ErrPortTransitionFailed`; switch VLAN transition failure |
-| `0x06` | `StatusAlreadyExists` | 409 | **No device path produces this today.** `ErrDuplicateTemplateName` is declared in `pkg/device/errors.go` and never returned; no handler under `pkg/webservice/v1/device/` emits 409 (grepped 2026-08-18). Creating a second template with an existing name succeeds. |
+| `0x06` | `StatusAlreadyExists` | 409 | `ErrDeviceSerialExists` — creating a device with a serial another device carries (§2). `ErrDuplicateTemplateName` is declared in `pkg/device/errors.go` and never returned: creating a second template with an existing name succeeds. |
 | `0x07` | `StatusPermissionDenied` | 403 | Missing `device:*` scope |
 | `0x09` | `StatusInvalidArgument` | 400 | `ErrInvalidDeviceID`, `ErrInvalidProfileID`, `ErrInvalidTemplateID`, `ErrDeviceIdentityRequired`, `ErrEKCertNotPEM`, `ErrEKCertInvalid`, `ErrInvalidTransition`, `ErrMissingSerial`, `ErrQUICMissingField{Field:"id"}`, `ErrProfileVLANsNotDistinct` |
 | `0x0A` | `StatusUnavailable` | 503 | `ErrDeviceProfileServiceNotAvailable` — the profile service is not wired into the daemon |
-| `0x0B` | `StatusNotImplemented` | 501 | `ErrDeviceOperationNotImplemented` on `deactivate`, `get_metrics`, `attributes`. `attest` was on this list until #226 wired the live QUIC dispatcher to the shared verifier |
+| `0x0B` | `StatusNotImplemented` | 501 | None from a device operation. `attest` answered it until #226 wired the live QUIC dispatcher to the shared verifier; `deactivate`, `get_metrics` and `attributes` until #317 retired the first two and left `0x6D` to IDevID (§2) |
 
 `ErrProfileVLANsNotDistinct` is mapped **by type** on every transport, with
 `errors.As` so a wrapped instance maps identically: gRPC
@@ -948,7 +1507,8 @@ before it does on REST.
 `ListDevices` and `ListProfiles` take `common.ListOptions` with
 `common.NewPagination(page, pageSize)`; the reply carries a `PageResult` whose
 `TotalItems` is also how `CountDevices`/`CountProfiles` are satisfied over QUIC.
-The CLI defaults are `--page 1 --page-size 20`; the MCP `profile_list_all`
+Over REST the count is `pagination.total`; the SDK renames it to `total_items`
+(§1b). The CLI defaults are `--page 1 --page-size 20`; the MCP `profile_list_all`
 default is `page 1, page_size 50`. Both result sets are unbounded in principle —
 always paginate.
 
@@ -958,9 +1518,10 @@ always paginate.
 
 REST under `/api/v1`; gRPC package `platform.v1`; QUIC `ProtocolVersion`
 `0x01`. Nothing in the device surface is marked deprecated as of 2026-08-18.
-The singular/plural REST duplication (§3.1) and the triplicated MCP families
-(§6) are **not** a versioning scheme — they are drift, and the newer spelling
-is not automatically the better one.
+The singular/plural REST duplication was drift, not a versioning scheme, and
+#266 removed it (§3.1). The dead third MCP device family (§6) was the same kind
+of drift, and #533 removed it: the newer spelling is not automatically the
+better one.
 
 ---
 

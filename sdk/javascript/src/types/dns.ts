@@ -225,6 +225,8 @@ export interface DSRecord {
  * RRSIG record
  */
 export interface RRSIGRecord {
+  /** Owner of the signed RRset; empty means the zone apex */
+  name?: string;
   /** Type covered */
   typeCovered: string;
   /** Algorithm */

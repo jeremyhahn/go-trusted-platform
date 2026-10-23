@@ -6,7 +6,8 @@
 
 import type { ApiClient } from '../client/api-client.js';
 import type { Transport } from '../transport/transport.js';
-import type { ApiResponse } from '../types/api.js';
+import type { ApiResponse, QueryParams } from '../types/api.js';
+import { appendQueryParams } from '../types/api.js';
 import { BaseService } from './base-service.js';
 import type {
   CreateVMRequest,
@@ -57,6 +58,40 @@ import type {
 } from '../types/compute.js';
 
 /**
+ * Returns the proto-canonical name of a short SDK enum value (the PCR bank the
+ * compute and TPM requests share is short, see `PCRBank`). The server
+ * decodes requests with protojson, which accepts only the full name
+ * (`VM_STATE_RUNNING`, not `RUNNING`); an already-canonical value is kept.
+ */
+export function protoEnumName(prefix: string, value: string): string {
+  return value.startsWith(prefix) ? value : `${prefix}${value}`;
+}
+
+/**
+ * Builds the query parameters of a VM or container list request, named after
+ * the fields of the server's list request message: one `states` parameter per
+ * state, `pagination.page`, `pagination.pageSize` and one
+ * `selector.matchLabels.<key>` per label. The states are already the proto
+ * names the server accepts (`VMState`, `ContainerState`).
+ */
+export function listQuery(request?: {
+  labels?: Record<string, string>;
+  states?: string[];
+  page?: number;
+  pageSize?: number;
+}): QueryParams {
+  const params: QueryParams = {
+    states: request?.states,
+    'pagination.page': request?.page,
+    'pagination.pageSize': request?.pageSize,
+  };
+  for (const [key, value] of Object.entries(request?.labels ?? {})) {
+    params[`selector.matchLabels.${key}`] = value;
+  }
+  return params;
+}
+
+/**
  * Compute Service class
  *
  * @example
@@ -69,7 +104,7 @@ import type {
  *     name: 'my-vm',
  *     cpu: { cores: 2 },
  *     memory: { sizeMb: 4096 },
- *     disks: [{ path: '/data/vm-001.qcow2', type: 'QCOW2', sizeGb: 100 }],
+ *     disks: [{ path: '/data/vm-001.qcow2', type: 'DISK_TYPE_QCOW2', sizeGb: 100 }],
  *     networks: [{ bridge: 'br0' }],
  *   },
  *   start: true,
@@ -178,20 +213,9 @@ export class ComputeService extends BaseService {
    * @returns List of VMs
    */
   async listVMs(request?: ListVMsRequest): Promise<ApiResponse<ListVMsResponse>> {
-    const filters: Record<string, string | undefined> = {};
-    if (request?.labels !== undefined) {
-      Object.entries(request.labels).forEach(([k, v]) => {
-        filters[`label_${k}`] = v;
-      });
-    }
-    if (request?.states !== undefined) {
-      filters.states = request.states.join(',');
-    }
-    return this.client.get<ListVMsResponse>(this.buildUrl('/vms', {
-      page: request?.page,
-      limit: request?.pageSize,
-      filters,
-    }));
+    return this.client.get<ListVMsResponse>(
+      appendQueryParams(this.buildUrl('/vms'), listQuery(request))
+    );
   }
 
   /**
@@ -219,7 +243,7 @@ export class ComputeService extends BaseService {
   async attachDisk(request: AttachDiskRequest): Promise<ApiResponse<AttachDiskResponse>> {
     return this.client.post<AttachDiskResponse>(
       this.buildUrl(`/vms/${this.encodePathSegment(request.vmId)}/disks`),
-      request.disk
+      { disk: request.disk }
     );
   }
 
@@ -261,7 +285,7 @@ export class ComputeService extends BaseService {
   async createSnapshot(request: CreateSnapshotRequest): Promise<ApiResponse<CreateSnapshotResponse>> {
     return this.client.post<CreateSnapshotResponse>(
       this.buildUrl(`/vms/${this.encodePathSegment(request.vmId)}/snapshots`),
-      request.config
+      { config: request.config }
     );
   }
 
@@ -336,7 +360,11 @@ export class ComputeService extends BaseService {
   async attestVM(request: AttestVMRequest): Promise<ApiResponse<AttestVMResponse>> {
     return this.client.post<AttestVMResponse>(
       this.buildUrl(`/vms/${this.encodePathSegment(request.vmId)}/attest`),
-      { nonce: request.nonce, pcrIndices: request.pcrIndices, pcrBank: request.pcrBank }
+      {
+        nonce: request.nonce,
+        pcrIndices: request.pcrIndices,
+        pcrBank: request.pcrBank === undefined ? undefined : protoEnumName('PCR_BANK_', request.pcrBank),
+      }
     );
   }
 
@@ -429,20 +457,9 @@ export class ComputeService extends BaseService {
    * @returns List of containers
    */
   async listContainers(request?: ListContainersRequest): Promise<ApiResponse<ListContainersResponse>> {
-    const filters: Record<string, string | undefined> = {};
-    if (request?.labels !== undefined) {
-      Object.entries(request.labels).forEach(([k, v]) => {
-        filters[`label_${k}`] = v;
-      });
-    }
-    if (request?.states !== undefined) {
-      filters.states = request.states.join(',');
-    }
-    return this.client.get<ListContainersResponse>(this.buildUrl('/containers', {
-      page: request?.page,
-      limit: request?.pageSize,
-      filters,
-    }));
+    return this.client.get<ListContainersResponse>(
+      appendQueryParams(this.buildUrl('/containers'), listQuery(request))
+    );
   }
 
   /**

@@ -26,6 +26,7 @@ RUN apk add --no-cache \
     bash \
     coreutils \
     cpio \
+    cryptsetup \
     dosfstools \
     e2fsprogs \
     e2fsprogs-extra \

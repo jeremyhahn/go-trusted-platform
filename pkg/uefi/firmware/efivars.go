@@ -49,6 +49,16 @@ var (
 	ErrImmutable = errors.New("variable is immutable")
 )
 
+// efiVarsRoot is the efivarfs directory every variable operation uses.
+// Overridable seam for tests; defaults to EfiVarsPath.
+var efiVarsRoot = EfiVarsPath
+
+// runChattr runs chattr with args and returns its combined output.
+// Overridable seam for tests; defaults to the host chattr.
+var runChattr = func(args ...string) ([]byte, error) {
+	return exec.Command("chattr", args...).CombinedOutput()
+}
+
 // VariableInfo contains metadata about an EFI variable
 type VariableInfo struct {
 	Name       string
@@ -59,7 +69,7 @@ type VariableInfo struct {
 
 // IsAvailable returns true if efivarfs is mounted and accessible
 func IsAvailable() bool {
-	info, err := os.Stat(EfiVarsPath)
+	info, err := os.Stat(efiVarsRoot)
 	if err != nil {
 		return false
 	}
@@ -74,7 +84,7 @@ func variableFilename(name string, guid uefi.GUID) string {
 
 // variablePath returns the full path to a variable file
 func variablePath(name string, guid uefi.GUID) string {
-	return filepath.Join(EfiVarsPath, variableFilename(name, guid))
+	return filepath.Join(efiVarsRoot, variableFilename(name, guid))
 }
 
 // ReadVariable reads an EFI variable from efivarfs
@@ -190,7 +200,7 @@ func ListVariables() ([]VariableInfo, error) {
 		return nil, ErrNotAvailable
 	}
 
-	entries, err := os.ReadDir(EfiVarsPath)
+	entries, err := os.ReadDir(efiVarsRoot)
 	if err != nil {
 		return nil, &WrappedError{Msg: "failed to read efivarfs directory", Err: err}
 	}
@@ -205,14 +215,12 @@ func ListVariables() ([]VariableInfo, error) {
 		name := entry.Name()
 
 		// Parse the variable name and GUID from filename
-		// Format: {name}-{guid}
-		lastDash := strings.LastIndex(name, "-")
-		if lastDash == -1 || lastDash < 36 {
+		// Format: {name}-{guid}, where the GUID is the last 36 characters
+		if len(name) < 38 || name[len(name)-37] != '-' {
 			// Invalid format, skip
 			continue
 		}
 
-		// GUID is the last 36 characters before any extension
 		guidStr := name[len(name)-36:]
 		varName := name[:len(name)-37] // name without "-guid"
 
@@ -253,8 +261,7 @@ func ListVariables() ([]VariableInfo, error) {
 
 // removeImmutable removes the immutable attribute from a file using chattr
 func removeImmutable(path string) error {
-	cmd := exec.Command("chattr", "-i", path)
-	if output, err := cmd.CombinedOutput(); err != nil {
+	if output, err := runChattr("-i", path); err != nil {
 		return &WrappedError{Msg: fmt.Sprintf("chattr -i failed: %s", strings.TrimSpace(string(output))), Err: err}
 	}
 	return nil
@@ -262,8 +269,7 @@ func removeImmutable(path string) error {
 
 // setImmutable sets the immutable attribute on a file using chattr
 func setImmutable(path string) error {
-	cmd := exec.Command("chattr", "+i", path)
-	if output, err := cmd.CombinedOutput(); err != nil {
+	if output, err := runChattr("+i", path); err != nil {
 		return &WrappedError{Msg: fmt.Sprintf("chattr +i failed: %s", strings.TrimSpace(string(output))), Err: err}
 	}
 	return nil

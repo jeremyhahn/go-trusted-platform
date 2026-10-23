@@ -97,6 +97,9 @@ config := compute.DefaultOrchestratorConfig(compute.ComputeTypeVM)
 // MaxInstances:    100
 // EnableKVM:       true
 // NetworkBridge:   br-int
+// Arch:            x86_64 on an amd64 host, aarch64 on an arm64 host
+// QEMUBinary, OVMFCode, OVMFCodeSecure, OVMFVars: the defaults for Arch
+//                  (OVMF on x86_64, AAVMF on aarch64)
 ```
 
 ### Custom Configuration
@@ -112,6 +115,7 @@ config := &compute.OrchestratorConfig{
     EnableKVM:       true,
     NetworkBridge:   "br0",
     OVSSocketPath:   "/var/run/openvswitch/db.sock",
+    Arch:            qemu.ArchX86_64,
     QEMUBinary:      "qemu-system-x86_64",
     OVMFCode:        "/usr/share/OVMF/OVMF_CODE_4M.fd",
     OVMFVars:        "/usr/share/OVMF/OVMF_VARS_4M.fd",
@@ -157,6 +161,12 @@ Run with verbose output:
 ```bash
 go test -v ./pkg/compute/...
 ```
+
+The unit tests need no `swtpm`, `swtpm_setup`, `qemu-img`, OVMF firmware or
+OVSDB socket: they replace each with an in-memory fake or a temp file and
+never skip. The test that creates a VM against the real binaries lives in
+`test/integration/vtpm/qemu_swtpm_test.go` and runs in the devcontainer with
+`make integration-test-vtpm`; a missing binary or firmware file fails it.
 
 ## Implementation Status
 

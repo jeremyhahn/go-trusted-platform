@@ -229,11 +229,11 @@ transport. Issue a new credential and revoke the old one.
 
 ## One thing to be aware of
 
-`EABService` carries **no required scope** on gRPC, Unix or QUIC, and no
-`platform_eab_*` tool carries one on MCP. Any valid platform token can issue a
-credential — and a create response contains a live HMAC key. Until that
-changes, treat platform token issuance as equivalent to EAB issuance. Recorded
-in [api.md](api.md) §5.
+On gRPC and Unix, issuing an EAB credential needs `eab:write`, and a create
+response contains a live HMAC key, so guard that grant. MCP refuses every
+`platform_eab_*` tool until they are classified. The QUIC opcode catalog
+(`DefaultOpcodePermissions`) has no EAB entry, so on QUIC any valid platform
+token can still issue a credential. Recorded in [api.md](api.md) §5.
 
 ---
 

@@ -64,6 +64,12 @@ import {
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { useToast, useApi, useDevice, useMutation } from '@/hooks';
 import type { DeviceProfile, DeviceRole } from 'trusted-platform-sdk';
+import {
+  ASSIGNABLE_DEVICE_ROLES,
+  DEVICE_ROLES,
+  deviceRoleLabel,
+  toDeviceRole,
+} from '@/lib/device-role';
 import { networkPhaseRows } from '@/lib/device-profile-networks';
 import { baselineAge, baselineRegisters, baselineSourceLabel } from '@/lib/pcr-baseline';
 
@@ -78,7 +84,7 @@ interface ProfileFilters {
 
 interface ProfileStats {
   total: number;
-  byRole: Record<string, number>;
+  byRole: Partial<Record<DeviceRole, number>>;
 }
 
 // ============================================================================
@@ -86,9 +92,9 @@ interface ProfileStats {
 // ============================================================================
 
 function computeStats(profiles: DeviceProfile[]): ProfileStats {
-  const byRole: Record<string, number> = {};
+  const byRole: Partial<Record<DeviceRole, number>> = {};
   profiles.forEach((profile) => {
-    const role = profile.role || 'UNSPECIFIED';
+    const role = profile.role || 'unknown';
     byRole[role] = (byRole[role] || 0) + 1;
   });
 
@@ -99,19 +105,7 @@ function computeStats(profiles: DeviceProfile[]): ProfileStats {
 }
 
 function getRoleBadge(role: DeviceRole) {
-  const roleLabels: Record<DeviceRole, string> = {
-    UNSPECIFIED: 'Unspecified',
-    UNKNOWN: 'Unknown',
-    SERVER: 'Server',
-    CLIENT: 'Client',
-    WORKSTATION: 'Workstation',
-    EDGE: 'Edge',
-    IOT: 'IoT',
-    GATEWAY: 'Gateway',
-    LOAD_BALANCER: 'Load Balancer',
-  };
-
-  return <Badge variant="outline">{roleLabels[role]}</Badge>;
+  return <Badge variant="outline">{deviceRoleLabel(role)}</Badge>;
 }
 
 /**
@@ -345,7 +339,7 @@ export default function DeviceProfilesPage() {
     await createProfileMutation.mutateAsync({
       name: formData.get('name') as string,
       model: formData.get('model') as string || undefined,
-      role: formData.get('role') as DeviceRole,
+      role: toDeviceRole(formData.get('role')),
     });
   };
 
@@ -422,18 +416,16 @@ export default function DeviceProfilesPage() {
                   </div>
                   <div className="grid gap-2">
                     <Label htmlFor="role">Device Role</Label>
-                    <Select name="role" defaultValue="SERVER">
+                    <Select name="role" defaultValue="server">
                       <SelectTrigger>
                         <SelectValue placeholder="Select device role" />
                       </SelectTrigger>
                       <SelectContent>
-                        <SelectItem value="SERVER">Server</SelectItem>
-                        <SelectItem value="CLIENT">Client</SelectItem>
-                        <SelectItem value="WORKSTATION">Workstation</SelectItem>
-                        <SelectItem value="EDGE">Edge</SelectItem>
-                        <SelectItem value="IOT">IoT</SelectItem>
-                        <SelectItem value="GATEWAY">Gateway</SelectItem>
-                        <SelectItem value="LOAD_BALANCER">Load Balancer</SelectItem>
+                        {ASSIGNABLE_DEVICE_ROLES.map((role) => (
+                          <SelectItem key={role} value={role}>
+                            {deviceRoleLabel(role)}
+                          </SelectItem>
+                        ))}
                       </SelectContent>
                     </Select>
                   </div>
@@ -479,7 +471,7 @@ export default function DeviceProfilesPage() {
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold text-green-600 dark:text-green-400">
-              {stats.byRole.SERVER || 0}
+              {stats.byRole.server || 0}
             </div>
             <p className="text-xs text-muted-foreground">Server profiles</p>
           </CardContent>
@@ -492,7 +484,7 @@ export default function DeviceProfilesPage() {
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold text-orange-600 dark:text-orange-400">
-              {stats.byRole.WORKSTATION || 0}
+              {stats.byRole.workstation || 0}
             </div>
             <p className="text-xs text-muted-foreground">Workstation profiles</p>
           </CardContent>
@@ -505,7 +497,7 @@ export default function DeviceProfilesPage() {
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold text-blue-600 dark:text-blue-400">
-              {stats.byRole.IOT || 0}
+              {stats.byRole.iot || 0}
             </div>
             <p className="text-xs text-muted-foreground">IoT profiles</p>
           </CardContent>
@@ -533,13 +525,11 @@ export default function DeviceProfilesPage() {
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="all">All roles</SelectItem>
-              <SelectItem value="SERVER">Server</SelectItem>
-              <SelectItem value="CLIENT">Client</SelectItem>
-              <SelectItem value="WORKSTATION">Workstation</SelectItem>
-              <SelectItem value="EDGE">Edge</SelectItem>
-              <SelectItem value="IOT">IoT</SelectItem>
-              <SelectItem value="GATEWAY">Gateway</SelectItem>
-              <SelectItem value="LOAD_BALANCER">Load Balancer</SelectItem>
+              {DEVICE_ROLES.map((role) => (
+                <SelectItem key={role} value={role}>
+                  {deviceRoleLabel(role)}
+                </SelectItem>
+              ))}
             </SelectContent>
           </Select>
           {(filters.role || filters.search) && (

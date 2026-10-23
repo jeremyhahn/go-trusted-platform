@@ -202,10 +202,10 @@ type PortDeleteResult struct {
 // PortSetStateOptions contains options for setting port state.
 type PortSetStateOptions struct {
 	AdminState   string // "up", "down"
-	IngressRate  uint64
-	EgressRate   uint64
-	IngressBurst uint64
-	EgressBurst  uint64
+	IngressRate  uint64 // Ingress policing rate in bps (0 leaves it unchanged)
+	EgressRate   uint64 // Egress shaping rate in bps (0 leaves it unchanged)
+	IngressBurst uint64 // Ingress policing burst in bits
+	EgressBurst  uint64 // Egress shaping burst in bits
 }
 
 // PortStateResult contains the result of a port state operation.

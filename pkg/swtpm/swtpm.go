@@ -50,6 +50,7 @@ type Config struct {
 type SWTPM struct {
 	config       *Config
 	logger       *logging.Logger
+	tools        tools
 	cmd          *exec.Cmd
 	mu           sync.RWMutex
 	pid          int
@@ -58,10 +59,45 @@ type SWTPM struct {
 	exited       atomic.Bool // Set to true when process exits
 	exitErr      error       // Error from process exit
 	exitMu       sync.RWMutex
+	exitCh       chan struct{} // Closed when the process exits
 }
+
+// tools reaches the swtpm host binaries.
+// Overridable seam for tests; defaults to hostTools.
+type tools struct {
+	// lookPath reports where the named binary is installed.
+	lookPath func(file string) (string, error)
+
+	// runSetup runs swtpm_setup with args, writing its output to stdout
+	// and stderr.
+	runSetup func(ctx context.Context, args []string, stdout, stderr io.Writer) error
+}
+
+// hostTools finds and runs the swtpm binaries on PATH.
+var hostTools = tools{
+	lookPath: exec.LookPath,
+	runSetup: runSWTPMSetup,
+}
+
+// runSWTPMSetup runs the swtpm_setup binary.
+func runSWTPMSetup(ctx context.Context, args []string, stdout, stderr io.Writer) error {
+	cmd := exec.CommandContext(ctx, "swtpm_setup", args...)
+	cmd.Stdout = stdout
+	cmd.Stderr = stderr
+	return cmd.Run()
+}
+
+// stopGracePeriod is how long Stop waits after SIGTERM before it kills
+// swtpm. A variable so tests can shorten it.
+var stopGracePeriod = 5 * time.Second
 
 // NewSWTPM creates a new software TPM instance
 func NewSWTPM(config *Config, logger *logging.Logger) (*SWTPM, error) {
+	return newSWTPM(config, logger, hostTools)
+}
+
+// newSWTPM builds an SWTPM that reaches the swtpm binaries through tools.
+func newSWTPM(config *Config, logger *logging.Logger, tools tools) (*SWTPM, error) {
 	if config == nil {
 		return nil, ErrInvalidConfig
 	}
@@ -87,17 +123,18 @@ func NewSWTPM(config *Config, logger *logging.Logger) (*SWTPM, error) {
 	}
 
 	// Check if swtpm is installed
-	if _, err := exec.LookPath("swtpm"); err != nil {
+	if _, err := tools.lookPath("swtpm"); err != nil {
 		return nil, ErrSWTPMNotInstalled
 	}
 
-	if _, err := exec.LookPath("swtpm_setup"); err != nil {
+	if _, err := tools.lookPath("swtpm_setup"); err != nil {
 		return nil, ErrSWTPMNotInstalled
 	}
 
 	return &SWTPM{
 		config: config,
 		logger: logger,
+		tools:  tools,
 	}, nil
 }
 
@@ -134,20 +171,18 @@ func (s *SWTPM) Initialize(ctx context.Context) error {
 		"--overwrite",
 	}
 
-	cmd := exec.CommandContext(ctx, "swtpm_setup", args...)
-
 	// Capture stderr for error reporting
 	var stderr bytes.Buffer
+	var stdout io.Writer
+	var stderrOut io.Writer = &stderr
 	if s.config.Debug {
-		cmd.Stdout = os.Stdout
-		cmd.Stderr = io.MultiWriter(os.Stderr, &stderr)
-	} else {
-		cmd.Stderr = &stderr
+		stdout = os.Stdout
+		stderrOut = io.MultiWriter(os.Stderr, &stderr)
 	}
 
 	s.logger.Debugf("Running: swtpm_setup %s", strings.Join(args, " "))
 
-	if err := cmd.Run(); err != nil {
+	if err := s.tools.runSetup(ctx, args, stdout, stderrOut); err != nil {
 		return &SentinelCauseError{Sentinel: ErrInitFailed, Cause: &MessageError{Msg: fmt.Sprintf("swtpm_setup failed: %v (stderr: %s)", err, stderr.String())}}
 	}
 
@@ -320,20 +355,27 @@ func (s *SWTPM) Start(ctx context.Context) error {
 	s.cmd = cmd
 	s.pid = cmd.Process.Pid
 
-	// Start a goroutine to wait for process exit and record the status.
-	// This allows us to detect process death immediately via the exited flag
-	// rather than polling with signal 0 (which doesn't work well for zombies).
+	s.watchExit(cmd)
+
+	s.logger.Infof("swtpm daemon started with PID %d", s.pid)
+
+	return nil
+}
+
+// watchExit waits for cmd in a goroutine and records its exit status. The
+// exited flag and exitCh report process death at once, without polling with
+// signal 0 (which doesn't work well for zombies).
+func (s *SWTPM) watchExit(cmd *exec.Cmd) {
+	exitCh := make(chan struct{})
+	s.exitCh = exitCh
 	go func() {
 		err := cmd.Wait()
 		s.exitMu.Lock()
 		s.exitErr = err
 		s.exitMu.Unlock()
 		s.exited.Store(true)
+		close(exitCh)
 	}()
-
-	s.logger.Infof("swtpm daemon started with PID %d", s.pid)
-
-	return nil
 }
 
 // Stop stops the swtpm daemon
@@ -365,37 +407,24 @@ func (s *SWTPM) Stop() error {
 			}
 		}
 
-		// Wait for process to exit with timeout using channel-based synchronization
-		timeout := time.NewTimer(5 * time.Second)
+		// Wait for process to exit, killing it once the grace period ends
+		timeout := time.NewTimer(stopGracePeriod)
 		defer timeout.Stop()
 
-		ticker := time.NewTicker(50 * time.Millisecond)
-		defer ticker.Stop()
-
-	waitLoop:
-		for {
-			select {
-			case <-timeout.C:
-				s.logger.Warn("swtpm did not exit in time, forcing kill")
-				if err := s.cmd.Process.Kill(); err != nil {
-					return &WrappedError{Msg: "failed to force kill swtpm", Err: err}
-				}
-				// Wait for goroutine to record exit
-				for !s.exited.Load() {
-					time.Sleep(10 * time.Millisecond)
-				}
-				break waitLoop
-			case <-ticker.C:
-				if s.exited.Load() {
-					s.exitMu.RLock()
-					exitErr := s.exitErr
-					s.exitMu.RUnlock()
-					if exitErr != nil {
-						s.logger.Debugf("swtpm exited with error: %v", exitErr)
-					}
-					break waitLoop
-				}
+		select {
+		case <-s.exitCh:
+			s.exitMu.RLock()
+			exitErr := s.exitErr
+			s.exitMu.RUnlock()
+			if exitErr != nil {
+				s.logger.Debugf("swtpm exited with error: %v", exitErr)
 			}
+		case <-timeout.C:
+			s.logger.Warn("swtpm did not exit in time, forcing kill")
+			if err := s.cmd.Process.Kill(); err != nil {
+				return &WrappedError{Msg: "failed to force kill swtpm", Err: err}
+			}
+			<-s.exitCh
 		}
 	}
 

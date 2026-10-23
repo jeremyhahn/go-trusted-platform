@@ -24,3 +24,20 @@ type MessageError struct {
 func (e *MessageError) Error() string {
 	return e.Msg
 }
+
+// FlagError reports a flag value pxeboot refuses at startup.
+type FlagError struct {
+	// Flag is the flag name without its dashes, e.g. "dhcp-dns".
+	Flag string
+	Err  error
+}
+
+// Error implements the error interface.
+func (e *FlagError) Error() string {
+	return "--" + e.Flag + ": " + e.Err.Error()
+}
+
+// Unwrap returns the underlying cause.
+func (e *FlagError) Unwrap() error {
+	return e.Err
+}

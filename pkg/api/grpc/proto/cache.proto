@@ -1,0 +1,80 @@
+syntax = "proto3";
+
+package platform.v1;
+
+option go_package = "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen;platformv1";
+
+// CacheService manages the cache of the composed go-quicbaas data plane
+// (docs/sdk/api.md §3.5). platformd serves it through the SDK's Cache group;
+// a daemon whose SDK does not serve the group answers every call Unavailable.
+service CacheService {
+  // GetStats returns the cache statistics, of every entity type or of one.
+  // Requires cache:read.
+  rpc GetStats(GetCacheStatsRequest) returns (GetCacheStatsResponse);
+
+  // Clear removes cache entries: every entry, or those of one entity type.
+  // Exactly one of entity_type and all must be set. Requires cache:delete.
+  rpc Clear(ClearCacheRequest) returns (ClearCacheResponse);
+
+  // GetConfig returns the cache configuration. Requires cache:read.
+  rpc GetConfig(GetCacheConfigRequest) returns (GetCacheConfigResponse);
+
+  // UpdateConfig changes the fields that are set and leaves the rest.
+  // Requires cache:write.
+  rpc UpdateConfig(UpdateCacheConfigRequest) returns (UpdateCacheConfigResponse);
+}
+
+// CacheConfig is the cache configuration.
+message CacheConfig {
+  // l1_size is the maximum number of entries in the L1 cache.
+  int64 l1_size = 1;
+  int64 l1_ttl_ms = 2;
+  int64 cleanup_interval_ms = 3;
+  bool enabled = 4;
+}
+
+message GetCacheStatsRequest {
+  // entity_type limits the statistics to one entity type. Empty reports the
+  // whole cache.
+  string entity_type = 1;
+}
+
+message GetCacheStatsResponse {
+  // hit_rate is the hit ratio, 0.0 to 1.0.
+  double hit_rate = 1;
+  uint64 size = 2;
+  uint64 max_size = 3;
+  uint64 evictions = 4;
+  uint64 hits = 5;
+  uint64 misses = 6;
+}
+
+message ClearCacheRequest {
+  // entity_type clears only the entries of one entity type.
+  string entity_type = 1;
+
+  // all clears every entry.
+  bool all = 2;
+}
+
+message ClearCacheResponse {
+  uint64 entries_cleared = 1;
+}
+
+message GetCacheConfigRequest {}
+
+message GetCacheConfigResponse {
+  CacheConfig config = 1;
+}
+
+message UpdateCacheConfigRequest {
+  // Only the fields that are set change; at least one must be set.
+  optional int64 l1_size = 1;
+  optional int64 l1_ttl_ms = 2;
+  optional int64 cleanup_interval_ms = 3;
+}
+
+message UpdateCacheConfigResponse {
+  bool updated = 1;
+  CacheConfig config = 2;
+}

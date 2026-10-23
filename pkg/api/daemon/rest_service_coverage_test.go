@@ -287,8 +287,8 @@ func TestRESTServerStart_AlreadyRunning(t *testing.T) {
 		t.Fatalf("Start() failed: %v", err)
 	}
 
-	time.Sleep(50 * time.Millisecond)
-
+	// Start binds synchronously and marks the server running before it
+	// returns, so a second Start is refused at once.
 	// Try to start again - should return error
 	err = server.Start()
 	if err == nil {
@@ -460,17 +460,21 @@ func TestHandleGetService_NotFound(t *testing.T) {
 }
 
 func TestHandleGetService_AllStatuses(t *testing.T) {
+	// The reported status is the service's observed state: running when it
+	// says it runs, a recorded transition or error otherwise, else stopped.
 	tests := []struct {
 		name           string
 		statusValue    int32
+		running        bool
 		expectedStatus string
 	}{
-		{"unspecified", int32(platformv1.ServiceStatus_SERVICE_STATUS_UNSPECIFIED), "unspecified"},
-		{"stopped", int32(platformv1.ServiceStatus_SERVICE_STATUS_STOPPED), "stopped"},
-		{"starting", int32(platformv1.ServiceStatus_SERVICE_STATUS_STARTING), "starting"},
-		{"running", int32(platformv1.ServiceStatus_SERVICE_STATUS_RUNNING), "running"},
-		{"stopping", int32(platformv1.ServiceStatus_SERVICE_STATUS_STOPPING), "stopping"},
-		{"error", int32(platformv1.ServiceStatus_SERVICE_STATUS_ERROR), "error"},
+		{"unspecified", int32(platformv1.ServiceStatus_SERVICE_STATUS_UNSPECIFIED), false, "stopped"},
+		{"stopped", int32(platformv1.ServiceStatus_SERVICE_STATUS_STOPPED), false, "stopped"},
+		{"starting", int32(platformv1.ServiceStatus_SERVICE_STATUS_STARTING), false, "starting"},
+		{"running", int32(platformv1.ServiceStatus_SERVICE_STATUS_RUNNING), true, "running"},
+		{"recorded running but not running", int32(platformv1.ServiceStatus_SERVICE_STATUS_RUNNING), false, "stopped"},
+		{"stopping", int32(platformv1.ServiceStatus_SERVICE_STATUS_STOPPING), false, "stopping"},
+		{"error", int32(platformv1.ServiceStatus_SERVICE_STATUS_ERROR), false, "error"},
 	}
 
 	for _, tt := range tests {
@@ -482,6 +486,7 @@ func TestHandleGetService_AllStatuses(t *testing.T) {
 			}
 
 			mockSvc := newMockService("test-service")
+			mockSvc.running.Store(tt.running)
 			if err := service.RegisterService(mockSvc); err != nil {
 				t.Fatalf("RegisterService failed: %v", err)
 			}

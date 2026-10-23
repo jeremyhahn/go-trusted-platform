@@ -23,9 +23,9 @@ import (
 
 	"github.com/gorilla/mux"
 
-	"github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 )
 
 // Every PIV transport must (a) carry the PIN and key material to the backend
@@ -275,45 +275,64 @@ func TestPIVGRPC_EnclaveLifecycle(t *testing.T) {
 
 // --- QUIC ------------------------------------------------------------------
 
-func pivQUICCall(t *testing.T, svc *PIVService, sub byte, payload any) *quic.Response {
+// pivQUICCall dispatches a PIV sub-opcode as the QUIC listener does: the
+// daemon's mTLS middleware authenticates the caller's client certificate
+// before the handler runs.
+func pivQUICCall(t *testing.T, svc *PIVService, sub byte, payload any) *quicwire.Response {
 	t.Helper()
-	raw, err := quic.EncodePayload(payload)
+	req := pivQUICRequest(t, sub, payload)
+	h := &pivQUICHandlers{service: svc}
+	return h.Handle(mtlsAuthenticatedQUICContext(t, req), req)
+}
+
+func pivQUICRequest(t *testing.T, sub byte, payload any) *quicwire.Request {
+	t.Helper()
+	raw, err := quicwire.EncodePayload(payload)
 	if err != nil {
 		t.Fatalf("EncodePayload: %v", err)
 	}
-	h := &pivQUICHandlers{service: svc}
-	return h.Handle(context.Background(), &quic.Request{
-		Payload: append([]byte{sub}, raw...),
-	})
+	return &quicwire.Request{Opcode: quicwire.OpPIVCategory, Payload: append([]byte{sub}, raw...)}
 }
 
 func TestPIVQUIC_EnclaveLifecycle(t *testing.T) {
 	t.Run("generate", func(t *testing.T) {
 		p := &pivEnclaveProbe{}
-		pivQUICCall(t, newPIVProbeService(p), quic.PIVSubGenerate,
-			&quic.PIVGenerateReq{Slot: "9a", Algorithm: "RSA2048", PIN: "111111"})
+		pivQUICCall(t, newPIVProbeService(p), quicwire.PIVSubGenerate,
+			&quicwire.PIVGenerateReq{Slot: "9a", Algorithm: "RSA2048", PIN: "111111"})
 		assertGenerateWiped(t, p, "111111")
 	})
 	t.Run("import", func(t *testing.T) {
 		p := &pivEnclaveProbe{}
-		pivQUICCall(t, newPIVProbeService(p), quic.PIVSubImport,
-			&quic.PIVImportReq{Slot: "9a", PrivateKeyPEM: "PEM", PIN: "222222"})
+		pivQUICCall(t, newPIVProbeService(p), quicwire.PIVSubImport,
+			&quicwire.PIVImportReq{Slot: "9a", PrivateKeyPEM: "PEM", PIN: "222222"})
 		assertImportWiped(t, p, "PEM", "222222")
 	})
 	t.Run("sign", func(t *testing.T) {
 		p := &pivEnclaveProbe{}
-		pivQUICCall(t, newPIVProbeService(p), quic.PIVSubSign,
-			&quic.PIVSignReq{Slot: "9a", Payload: []byte("data"), PIN: "333333"})
+		pivQUICCall(t, newPIVProbeService(p), quicwire.PIVSubSign,
+			&quicwire.PIVSignReq{Slot: "9a", Payload: []byte("data"), PIN: "333333"})
 		assertSignWiped(t, p, "333333")
 	})
 	t.Run("generate wipes on the error path", func(t *testing.T) {
 		p := &pivEnclaveProbe{err: errors.New("backend down")}
-		resp := pivQUICCall(t, newPIVProbeService(p), quic.PIVSubGenerate,
-			&quic.PIVGenerateReq{Slot: "9a", PIN: "444444"})
-		if resp.Status == quic.StatusOK {
+		resp := pivQUICCall(t, newPIVProbeService(p), quicwire.PIVSubGenerate,
+			&quicwire.PIVGenerateReq{Slot: "9a", PIN: "444444"})
+		if resp.Status == quicwire.StatusOK {
 			t.Fatal("expected a failure status")
 		}
 		assertGenerateWiped(t, p, "444444")
+	})
+	t.Run("anonymous is refused before the backend", func(t *testing.T) {
+		p := &pivEnclaveProbe{}
+		h := &pivQUICHandlers{service: newPIVProbeService(p)}
+		resp := h.Handle(context.Background(), pivQUICRequest(t, quicwire.PIVSubGenerate,
+			&quicwire.PIVGenerateReq{Slot: "9a", Algorithm: "RSA2048", PIN: "555555"}))
+		if resp.Status != quicwire.StatusPermissionDenied {
+			t.Fatalf("status = %d, want PermissionDenied for an anonymous caller", resp.Status)
+		}
+		if p.gen != nil {
+			t.Fatal("the backend saw a request from an anonymous caller")
+		}
 	})
 }
 

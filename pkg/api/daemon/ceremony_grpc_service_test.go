@@ -72,6 +72,9 @@ func TestCeremonyGRPC_Success(t *testing.T) {
 	if initResp.GetState() != platformv1.CeremonyState_CEREMONY_STATE_IN_PROGRESS {
 		t.Errorf("state = %v", initResp.GetState())
 	}
+	if initResp.GetAdminCertPem() != "ADMIN-CERT" || initResp.GetAdminKeyPem() != "ADMIN-KEY" || initResp.GetSpkiPin() != "PIN" {
+		t.Errorf("admin bundle not carried: %+v", initResp)
+	}
 
 	beginResp, err := svc.ClaimCertBegin(ctx, &platformv1.CeremonyClaimCertBeginRequest{
 		Username:          "alice",

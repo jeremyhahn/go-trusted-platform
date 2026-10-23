@@ -34,6 +34,10 @@ const (
 
 	// MaxVNI is the maximum valid VNI value (2^24 - 1).
 	MaxVNI uint32 = 16777215
+
+	// MaxVLAN is the highest VLAN ID a VNI may map to (IEEE 802.1Q; 0 is
+	// no VLAN, 4095 is reserved).
+	MaxVLAN = 4094
 )
 
 // Default configuration values.
@@ -449,7 +453,7 @@ func (c *VNIConfig) Validate() error {
 			return ErrInvalidOverlayKind{Kind: c.Kind}
 		}
 	}
-	if c.VLAN > 4094 {
+	if c.VLAN > MaxVLAN {
 		return ErrVLANOutOfRange
 	}
 	return nil

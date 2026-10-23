@@ -24,14 +24,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"log/slog"
 	"net"
 	"net/http"
 	"os"
-	"os/user"
 	"path/filepath"
-	"runtime"
 	"strconv"
 	"strings"
 	"syscall"
@@ -304,8 +301,8 @@ func ParseEnvironment(env string) Environment {
 // PIN values can be set in the YAML config to enable non-interactive startup,
 // for example when using kms:// URIs resolved by the secrets engine.
 type PlatformInitConfig struct {
-	SOPin   string `yaml:"so-pin,omitempty" json:"so-pin,omitempty" mapstructure:"so-pin"`
-	UserPin string `yaml:"user-pin,omitempty" json:"user-pin,omitempty" mapstructure:"user-pin"`
+	SOPin   string `yaml:"so-pin,omitempty" json:"so-pin,omitempty" mapstructure:"so-pin" secret:"true"`
+	UserPin string `yaml:"user-pin,omitempty" json:"user-pin,omitempty" mapstructure:"user-pin" secret:"true"`
 }
 
 type App struct {
@@ -381,6 +378,12 @@ type App struct {
 	TenantID         string                        `yaml:"tenant-id" json:"tenant_id" mapstructure:"tenant-id"`
 	ShutdownChan     chan bool                     `yaml:"-" json:"-" mapstructure:"-"`
 	TPM              xkmssdk.TrustedPlatformModule `yaml:"-" json:"-" mapstructure:"-"`
+	// nodeIdentity is a diskless node's EK-derived identity
+	// (applyDisklessNodeIdentity). Every node built from one media set boots
+	// the same hostname, so a diskless node enrolls and recovers its
+	// certificates under this name instead; empty on a disk node.
+	nodeIdentity string
+
 	// tpmManufacturerCode caches the TCG TPM manufacturer code, e.g.
 	// "id:49465800". It is read once from TPM_PT_MANUFACTURER and kept:
 	// the value is a property of the silicon and cannot change for the
@@ -590,7 +593,9 @@ func (app *App) Init(ctx context.Context, initParams *AppInitParams) (*App, erro
 	}
 
 	// Initialize the logger
-	app.initLogger()
+	if err := app.initLogger(); err != nil {
+		return nil, err
+	}
 
 	// Debug: Log the environment value
 	app.Logger.Debug("Environment configuration",
@@ -598,12 +603,8 @@ func (app *App) Init(ctx context.Context, initParams *AppInitParams) (*App, erro
 		"is_test", app.Environment == EnvTest)
 
 	// Set the hostname
-	if app.Hostname == "" {
-		hostname, err := os.Hostname()
-		if err != nil {
-			panic("Unable to get the local hostname")
-		}
-		app.Hostname = hostname
+	if err := app.resolveHostname(os.Hostname); err != nil {
+		return nil, err
 	}
 
 	// TenantID is defaulted to "default" via viper.SetDefault in
@@ -678,6 +679,12 @@ func (app *App) Init(ctx context.Context, initParams *AppInitParams) (*App, erro
 		return nil, err
 	}
 
+	// A provisioning listener outside the provisioning zone would expose
+	// the unauthenticated config fetch beyond it (#177): fatal here too.
+	if err := app.validateWebServices(); err != nil {
+		return nil, err
+	}
+
 	// Initialize the SDN controller (OVS bridge, IPAM pools)
 	// Non-fatal: SDN may not be available during early boot or on non-controller nodes
 	if err := app.initSDN(context.Background()); err != nil {
@@ -719,34 +726,9 @@ func (app *App) Init(ctx context.Context, initParams *AppInitParams) (*App, erro
 		return nil, err
 	}
 
-	// Mirror the resolved soPIN into TPMConfig.{SSRK,EK}.HierarchyAuth on
-	// every boot — not just during ProvisionPlatform. When an already-
-	// provisioned TPM reboots (handles persistent), ProvisionPlatform
-	// short-circuits and never sets these fields, leaving them empty.
-	// Downstream CreatePrimary / Certify calls under OWNER / ENDORSEMENT
-	// then submit PasswordAuth(nil), which the TPM rejects with
-	// TPM_RC_BAD_AUTH (the hierarchy auth is soPIN, established at
-	// first-boot provision). Paired with the autogen cache so the
-	// resolved soPIN matches the one the TPM was originally provisioned
-	// with.
-	if app.TPMConfig.SSRK == nil {
-		app.TPMConfig.SSRK = &xkmssdk.SRKConfig{}
-	}
-	if app.TPMConfig.SSRK.HierarchyAuth == "" {
-		app.TPMConfig.SSRK.HierarchyAuth = string(soPIN.Bytes())
-	}
-	if app.TPMConfig.EK == nil {
-		app.TPMConfig.EK = &xkmssdk.EKConfig{}
-	}
-	if app.TPMConfig.EK.HierarchyAuth == "" {
-		app.TPMConfig.EK.HierarchyAuth = string(soPIN.Bytes())
-	}
-	if err := assertNoUnresolvedKMSURI("TPMConfig.SSRK.HierarchyAuth", app.TPMConfig.SSRK.HierarchyAuth); err != nil {
-		return nil, err
-	}
-	if err := assertNoUnresolvedKMSURI("TPMConfig.EK.HierarchyAuth", app.TPMConfig.EK.HierarchyAuth); err != nil {
-		return nil, err
-	}
+	// TPMConfig.{SSRK,EK}.HierarchyAuth are not taken from config: InitTPM
+	// and InitPlatformKeyStore set them from the TPM's own TPMA_PERMANENT
+	// record (tpm_ownership.go), the SO PIN once a hierarchy is owned.
 
 	// Initialize the TPM / platform. InitTPM is idempotent: it calls
 	// OpenTPM first; if the TPM is already provisioned (EK + IAK +
@@ -832,11 +814,11 @@ func (app *App) parsePrivateAndPublicIPs() error {
 }
 
 // Returns a singleton instance of the platform service registry
-// systemTenantID is the fixed ID of the system tenant created by go-qrdb's
+// SystemTenantID is the fixed ID of the system tenant created by go-qrdb's
 // firstboot on first server start. It mirrors go-qrdb/pkg/tenant.SystemTenantID;
 // the platform consumes it through the go-quicbaas IAM SDK rather than importing
 // go-qrdb directly.
-const systemTenantID = "system"
+const SystemTenantID = "system"
 
 // adoptSystemTenant verifies that firstboot's system tenant exists in IAM (the
 // embedded QuicBaaS server runs firstboot idempotently on Start) and adopts it
@@ -857,7 +839,7 @@ func (app *App) adoptSystemTenant(ctx context.Context) error {
 	if tenantClient == nil {
 		return nil
 	}
-	t, err := tenantClient.Get(ctx, systemTenantID)
+	t, err := tenantClient.Get(ctx, SystemTenantID)
 	if err != nil {
 		// A lean build's embedded server has no IAM, but the SDK
 		// constructs its IAM/Tenant clients lazily and always non-nil —
@@ -872,7 +854,7 @@ func (app *App) adoptSystemTenant(ctx context.Context) error {
 				slog.String("error", err.Error()))
 			return nil
 		}
-		return &WrappedError{Msg: fmt.Sprintf("adopt system tenant: firstboot system tenant %q not present after factory start", systemTenantID), Err: err}
+		return &WrappedError{Msg: fmt.Sprintf("adopt system tenant: firstboot system tenant %q not present after factory start", SystemTenantID), Err: err}
 	}
 	app.TenantID = t.ID
 	app.tenantAdopted = true
@@ -1272,8 +1254,8 @@ func (app *App) StartDNS() error {
 	//
 	// We replicate the keystore construction from newDNSService
 	// here — extracting a helper is overkill for two call sites
-	// that use slightly different error propagation (one FatalErrors,
-	// this one logs and continues).
+	// that use slightly different error propagation (one returns the
+	// error, this one logs and continues).
 	if app.DNSConfig.DNSSEC != nil && app.DNSConfig.DNSSEC.Enabled && dns.KeyStore == nil {
 		if dbFactory == nil {
 			app.Logger.Error(nil, "DNSSEC enabled but QuicBaaS factory unavailable; CoreDNS will fail to load zones")
@@ -1358,6 +1340,26 @@ func (app *App) validateHostNetwork() error {
 	return nil
 }
 
+// validateWebServices refuses, at startup, a provisioning-surface webservice
+// that is not bound inside the provisioning zone (#177). That listener
+// serves the unauthenticated boot-time config fetch, so its address is its
+// trust boundary; the zone's addressing comes from the network plan alone.
+func (app *App) validateWebServices() error {
+	for _, ws := range app.WebServices {
+		if ws == nil || ws.Surface != v1.SurfaceProvisioning {
+			continue
+		}
+		plan, err := app.NetworkPlan()
+		if err != nil {
+			return err
+		}
+		if err := webservice.ValidateProvisioningSurface(ws, plan); err != nil {
+			return ErrWebServiceValidation{Name: ws.Name, Cause: err}
+		}
+	}
+	return nil
+}
+
 // GetInstallerConfig extracts an installer.Config from the App fields,
 // including the network plan of the node's environment so the installer can
 // resolve zone VLANs and check host addressing by role. It fails when the
@@ -1367,18 +1369,9 @@ func (app *App) GetInstallerConfig() (*installer.Config, error) {
 	if err != nil {
 		return nil, err
 	}
-	osConfig := app.OSConfig
-	if osConfig != nil {
-		copied := *osConfig
-		copied.OverlayIPsecEnabled = app.SDNConfig != nil &&
-			app.SDNConfig.Overlay != nil &&
-			app.SDNConfig.Overlay.IPsec != nil &&
-			app.SDNConfig.Overlay.IPsec.Enabled
-		osConfig = &copied
-	}
 	return &installer.Config{
 		Disk:                  app.DiskConfig,
-		OS:                    osConfig,
+		OS:                    app.OSConfig,
 		Network:               app.NetworkConfig,
 		Plan:                  plan,
 		UKI:                   app.UKIConfig,
@@ -1506,6 +1499,39 @@ func (app *App) mirrorWebAuthnRelyingParty() {
 	app.QuicBaaSConfig.WebAuthnRPOrigins = origins
 }
 
+// mirrorBarrierSealStrategy copies the platform barrier's shamir seal
+// strategy into the embedded QuicBaaS config, so the SDK seals the data-plane
+// barrier with its Shamir strategy. The barrier section is the single YAML
+// source; without the mirror the embedded barrier is single-key and the gate
+// refuses a shamir /init it could not enforce. Other strategies are left to
+// the embedded default.
+func (app *App) mirrorBarrierSealStrategy() {
+	if app.BarrierConfig == nil || app.BarrierConfig.SealStrategy != barrier.SealStrategyShamir {
+		return
+	}
+	app.QuicBaaSConfig.BarrierSealStrategy = barrier.SealStrategyShamir
+	app.QuicBaaSConfig.BarrierShamirThreshold = app.BarrierConfig.ShamirThreshold
+	app.QuicBaaSConfig.BarrierShamirShares = app.BarrierConfig.ShamirShares
+}
+
+// mirrorTPMDevice copies the platform's tpm.device into the embedded quicbaas
+// config, so the embedded server's hardware probe and tpm2 seal strategy open
+// the platform's own TPM. Without the mirror quicbaas opens its default
+// /dev/tpmrm0 during the store start — a TPM the platform never configured
+// (on a CI runner, the shared host TPM). Nothing is mirrored when the
+// simulator is on (no device to name), or when the device is empty or "auto"
+// (not resolved until OpenTPM, which runs after the stores start).
+func (app *App) mirrorTPMDevice() {
+	if app.TPMConfig.UseSimulator {
+		return
+	}
+	device := app.TPMConfig.Device
+	if device == "" || device == vtpm.TPMDeviceAuto {
+		return
+	}
+	app.QuicBaaSConfig.TPMDevice = device
+}
+
 // Initializes the Viper configuration library and unmarshals it
 // into this App struct.
 func (app *App) initConfig(env string) error {
@@ -1554,6 +1580,12 @@ func (app *App) initConfig(env string) error {
 		return err
 	}
 
+	// A required key the file omits is reported here, naming the file,
+	// not later from deep inside factory construction.
+	if err := checkRequiredConfig(viper.ConfigFileUsed(), app.QuicBaaSConfig); err != nil {
+		return err
+	}
+
 	// Manually parse the environment from viper since the custom type
 	// doesn't get decoded properly by mapstructure
 	if envStr := viper.GetString("environment"); envStr != "" {
@@ -1569,27 +1601,20 @@ func (app *App) initConfig(env string) error {
 	return nil
 }
 
-// Creates a new file and STDOUT logger. If the global DebugFlag is set,
-// the logger is initialized in debug mode, executing all logger.Debug*
-// statements.
-func (app *App) initLogger() {
+// initLogger creates the platform log file under LogDir and the logger that
+// writes to it, in debug mode when DebugFlag is set. A LogDir it cannot use
+// is returned as LogDirInvalidError, LogDirCreateError or LogFileOpenError.
+func (app *App) initLogger() error {
+	if err := validateLogDir(app.LogDir); err != nil {
+		return err
+	}
 	if err := os.MkdirAll(app.LogDir, os.ModePerm); err != nil {
-		panic(err)
+		return LogDirCreateError{Dir: app.LogDir, Cause: err}
 	}
-	// Name is an ldflag-populated package variable. When a build skips
-	// the -X linker flag (e.g. a bare `go build ./cmd/platformd` used
-	// for quick debug iteration), Name is empty and the log filename
-	// becomes a hidden ".log" file with no prefix. Fall back to a
-	// stable known name so the log is always discoverable by the
-	// OpenRC init script and by operators grepping /var/log.
-	logName := Name
-	if logName == "" {
-		logName = "platformd"
-	}
-	logfile := fmt.Sprintf("%s/%s.log", app.LogDir, logName)
+	logfile := filepath.Join(app.LogDir, logFileName())
 	file, err := os.Create(logfile)
 	if err != nil {
-		panic(err)
+		return LogFileOpenError{Path: logfile, Cause: err}
 	}
 	format := logging.ParseFormat(app.LogFormat)
 	if app.DebugFlag {
@@ -1601,6 +1626,21 @@ func (app *App) initLogger() {
 		slog.String("file", viper.ConfigFileUsed()),
 		slog.String("config-dir", app.ConfigDir),
 		slog.String("log-dir", app.LogDir))
+	return nil
+}
+
+// resolveHostname fills an unset Hostname from osHostname (os.Hostname in
+// production).
+func (app *App) resolveHostname(osHostname func() (string, error)) error {
+	if app.Hostname != "" {
+		return nil
+	}
+	hostname, err := osHostname()
+	if err != nil {
+		return HostnameError{Cause: err}
+	}
+	app.Hostname = hostname
+	return nil
 }
 
 // Initialize object and certificate stores
@@ -1676,6 +1716,8 @@ func (app *App) initStores() error {
 		// a DIFFERENT RP ID are alarmed — their WebAuthn ceremonies
 		// cannot work against a single-RP factory (upstream gap).
 		app.mirrorWebAuthnRelyingParty()
+		app.mirrorBarrierSealStrategy()
+		app.mirrorTPMDevice()
 
 		app.Logger.Info("Initializing QuicBaaS",
 			slog.String("transport", app.QuicBaaSConfig.Transport.String()),
@@ -1832,6 +1874,13 @@ func (app *App) ParsePINs(soPIN, userPIN []byte) (xkmssdk.Password, xkmssdk.Pass
 // will support a HSM TRNG.
 func (app *App) InitTPM(ctx context.Context, soPIN, userPIN xkmssdk.Password, initParams *AppInitParams) error {
 	err := app.OpenTPM(initParams.Initialize)
+	// A diskless node's provisioning state is its TPM-resident identity
+	// alone (tpm_diskless.go): none of the disk path's on-disk evidence
+	// survives its boots.
+	diskless, bootModelErr := bootsDiskless()
+	if bootModelErr != nil {
+		return bootModelErr
+	}
 	needsProvisioning := false
 	ranFullProvision := false
 	provisionCause := tpmCauseUnprovisioned
@@ -1841,7 +1890,7 @@ func (app *App) InitTPM(ctx context.Context, soPIN, userPIN xkmssdk.Password, in
 		} else {
 			return err
 		}
-	} else if app.TPMConfig.IAK != nil && app.TPMConfig.IDevID != nil && app.TPM != nil {
+	} else if !diskless && app.TPMConfig.IAK != nil && app.TPMConfig.IDevID != nil && app.TPM != nil {
 		// EK is resident but the platform may still be un-provisioned —
 		// or PARTIALLY provisioned if a prior boot crashed mid-flow.
 		// Check IAK and Platform SRK both; missing EITHER means the
@@ -1882,7 +1931,19 @@ func (app *App) InitTPM(ctx context.Context, soPIN, userPIN xkmssdk.Password, in
 			}
 		}
 	}
-	if needsProvisioning {
+	// Present the owner and endorsement hierarchies the auth the TPM says
+	// they hold (TPMA_PERMANENT, tpm_ownership.go), never an assumed one:
+	// a fresh TPM's are empty. Provisioning below re-mirrors what it sets.
+	if app.TPM != nil {
+		if _, authErr := app.applyTPMHierarchyAuth(soPIN); authErr != nil {
+			return authErr
+		}
+	}
+	if diskless {
+		if ranFullProvision, err = app.provisionDisklessTPM(ctx, soPIN, userPIN, initParams); err != nil {
+			return err
+		}
+	} else if needsProvisioning {
 		// Whenever we determine a provisioning run is needed, factory
 		// reset stale platform handles (preserving EKs) first. When
 		// the TPM is in DA lockout or the Lockout hierarchy auth is
@@ -2148,6 +2209,9 @@ func (app *App) InitTPM(ctx context.Context, soPIN, userPIN xkmssdk.Password, in
 	if !ranFullProvision && app.TPM != nil && app.CAConfig != nil &&
 		app.TPMConfig.IAK != nil && app.TPMConfig.IDevID != nil &&
 		!platformIdentityComplete(app.TPM) {
+		if diskless {
+			return app.recoverDisklessIdentity(ctx, soPIN, userPIN, initParams)
+		}
 		app.Logger.Info("TPM handles present but identity certificates missing — completing platform identity without re-provisioning")
 		if _, err := app.CompletePlatformIdentity(ctx, soPIN, userPIN, initParams); err != nil {
 			return err
@@ -2295,6 +2359,18 @@ func (app *App) InitPlatformKeyStore(soPIN, userPIN xkmssdk.Password) error {
 			return err
 		}
 
+		// Present the owner hierarchy the auth the TPM says it holds
+		// (tpm_ownership.go): empty until platformd takes ownership,
+		// the SO PIN after.
+		takeOwnership := false
+		if app.TPM != nil {
+			pending, err := app.prepareOwnerHierarchy(soPIN)
+			if err != nil {
+				return err
+			}
+			takeOwnership = pending
+		}
+
 		// Set default CN if not configured
 		if app.TPMConfig.PlatformSRK.CN == "" {
 			app.TPMConfig.PlatformSRK.CN = "platform"
@@ -2320,17 +2396,13 @@ func (app *App) InitPlatformKeyStore(soPIN, userPIN xkmssdk.Password) error {
 				// hierarchy-auth when the TPM has empty owner auth fails
 				// with TPM_RC_BAD_AUTH.
 				//
-				// Signal: TPMConfig.SSRK.HierarchyAuth. The SSRK and
-				// PlatformSRK share the same (OWNER) hierarchy, so if the
-				// operator configured an empty owner auth for SSRK, it
-				// must also be empty for PlatformSRK. Previously the code
-				// unconditionally used Initialize() with a randomly
-				// autogenerated soPIN as hierarchy auth, which failed on
-				// every fresh TPM because firstboot intentionally leaves
-				// owner auth empty per
-				// docs/installer/factory-reset.md. Diagnosed 2026-04-08
-				// on node-02: hierarchy_auth_hex showed the 8-digit
-				// autogen numeric soPIN instead of the expected empty.
+				// Signal: TPMConfig.SSRK.HierarchyAuth, which
+				// prepareOwnerHierarchy set from TPMA_PERMANENT.ownerAuthSet.
+				// The SSRK and PlatformSRK share the OWNER hierarchy. On
+				// first provisioning the owner auth is still empty
+				// (firstboot leaves it so, docs/installer/factory-reset.md),
+				// the SRK is created under it, and ownership is taken
+				// below.
 				useDefaults := app.TPMConfig.SSRK == nil || app.TPMConfig.SSRK.HierarchyAuth == ""
 				if useDefaults {
 					app.Logger.Info("Platform KeyStore: TPM owner hierarchy is unauthenticated (SSRK.HierarchyAuth empty), initializing with defaults")
@@ -2346,6 +2418,12 @@ func (app *App) InitPlatformKeyStore(soPIN, userPIN xkmssdk.Password) error {
 				app.Logger.Info("Platform KeyStore SRK created successfully")
 			} else {
 				return &WrappedError{Msg: "failed to create Platform KeyStore", Err: err}
+			}
+		}
+
+		if takeOwnership {
+			if err := app.takeTPMOwnership(soPIN); err != nil {
+				return err
 			}
 		}
 
@@ -2403,18 +2481,9 @@ func (app *App) InitACMEClient(ctx context.Context, initialize bool) error {
 	// 1. The OS trust store isn't properly updated
 	// 2. request-server-bundle fails due to network issues
 	// 3. The CA bundle was embedded in the ISO during installation
-	caBundlePaths := []string{
-		"/usr/local/share/ca-certificates/trusted-platform-ca.crt", // Alpine installer target
-		filepath.Join(app.ConfigDir, "ca-bundle.pem"),              // Config directory
-		filepath.Join(app.PlatformDir, "ca-bundle.pem"),            // Platform directory
-		"/media/cdrom/configs/ca-bundle.pem",                       // ISO mount point
-	}
-	for _, bundlePath := range caBundlePaths {
-		if bundleData, err := os.ReadFile(bundlePath); err == nil {
-			app.Logger.Info("Loaded CA bundle from file", "path", bundlePath)
-			trustedRoots = append(trustedRoots, string(bundleData))
-			break // Use the first one found
-		}
+	if bundlePath, bundleData, ok := app.readWellKnownCABundle(); ok {
+		app.Logger.Info("Loaded CA bundle from file", "path", bundlePath)
+		trustedRoots = append(trustedRoots, string(bundleData))
 	}
 
 	clientConfig := &trustedca.ACMEClientConfig{
@@ -2498,6 +2567,28 @@ func (app *App) InitACMEClient(ctx context.Context, initialize bool) error {
 	return nil
 }
 
+// wellKnownCABundlePaths lists where an installed system or a booted image
+// carries the platform CA bundle, in the order they are consulted.
+func (app *App) wellKnownCABundlePaths() []string {
+	return []string{
+		"/usr/local/share/ca-certificates/trusted-platform-ca.crt", // Alpine installer target
+		filepath.Join(app.ConfigDir, "ca-bundle.pem"),              // Config directory
+		filepath.Join(app.PlatformDir, "ca-bundle.pem"),            // Platform directory
+		"/media/cdrom/configs/ca-bundle.pem",                       // ISO mount point
+	}
+}
+
+// readWellKnownCABundle returns the first well-known CA bundle that exists.
+// An absent or unreadable path is the normal case and is skipped.
+func (app *App) readWellKnownCABundle() (string, []byte, bool) {
+	for _, bundlePath := range app.wellKnownCABundlePaths() {
+		if bundleData, err := os.ReadFile(bundlePath); err == nil {
+			return bundlePath, bundleData, true
+		}
+	}
+	return "", nil, false
+}
+
 // Initializes a new ACME cross-signer client using the account email
 // provided in the platform configuration.
 func (app *App) NewACMECrossSigner(crossSigner *trustedca.ACMECrossSignConfig, initialize bool) (*trustedca.ACMEClient, error) {
@@ -2532,13 +2623,24 @@ func (app *App) ProvisionPlatform(
 	soPIN, userPIN xkmssdk.Password,
 	initParams *AppInitParams) (*xkmssdk.KeyAttributes, error) {
 
+	if err := app.provisionTPMHierarchies(soPIN); err != nil {
+		return nil, err
+	}
+	return app.provisionPlatformIdentity(ctx, soPIN, userPIN, initParams)
+}
+
+// provisionTPMHierarchies is ProvisionPlatform's first half: TPM.Provision,
+// which leaves the EK resident, and the hierarchy auth it set mirrored into
+// TPMConfig. Nothing has been enrolled when it returns, so a diskless node
+// derives its identity from that EK here (provisionDisklessTPM).
+func (app *App) provisionTPMHierarchies(soPIN xkmssdk.Password) error {
 	app.Logger.Debug("Provisioning TPM 2.0")
 
 	// Provision the TPM — this sets Lockout/Endorsement/Owner hierarchy
 	// auth to soPIN. After this call, the TPM owner hierarchy is
 	// authenticated with soPIN, NOT the empty default.
 	if err := app.TPM.Provision(soPIN); err != nil {
-		return nil, err
+		return err
 	}
 
 	// Reflect the post-Provision TPM state in TPMConfig.SSRK so that
@@ -2561,6 +2663,15 @@ func (app *App) ProvisionPlatform(
 		app.TPMConfig.EK = &xkmssdk.EKConfig{}
 	}
 	app.TPMConfig.EK.HierarchyAuth = string(soPIN.Bytes())
+	return nil
+}
+
+// provisionPlatformIdentity is ProvisionPlatform's second half: the
+// platform key store, then the IAK/IDevID enrollment.
+func (app *App) provisionPlatformIdentity(
+	ctx context.Context,
+	soPIN, userPIN xkmssdk.Password,
+	initParams *AppInitParams) (*xkmssdk.KeyAttributes, error) {
 
 	// Provision the platform TPM 2.0 key store
 	if err := app.InitPlatformKeyStore(soPIN, userPIN); err != nil {
@@ -2685,7 +2796,7 @@ func (app *App) CompletePlatformIdentity(
 				Challenge:  app.ACMEConfig.Client.Enrollment.Challenge,
 				IPAddress:  enrollmentIP,
 				TPMModule:  trustedca.NewACMEXKMSTPMAdapter(app.TPM),
-				CommonName: app.Hostname,
+				CommonName: app.enrollmentName(),
 			}
 			enrollResult, err := app.ACMEClient.EnrollDevice(enrollCtx, enrollConfig)
 			if err != nil {
@@ -2934,19 +3045,6 @@ func (app *App) FetchProfileAndActivate(
 		slog.String("server", serverURL),
 		slog.String("idevid_cn", idevidCert.Subject.CommonName))
 
-	// Get IDevID key attributes for TPM signing
-	idevidAttrs, err := app.TPM.IDevIDAttributes()
-	if err != nil {
-		return nil, nil, &WrappedError{Msg: "failed to get IDevID key attributes", Err: err}
-	}
-
-	// Create TPM signer for IDevID key
-	tpmSigner := platform.NewTPMSigner(
-		app.TPM,
-		idevidAttrs,
-		app.PlatformKS.Backend(),
-	)
-
 	// The provisioning server is a platform service, so it is verified
 	// against the platform anchor. TLS verification is mandatory — the
 	// platform cannot provision securely without it.
@@ -2959,17 +3057,9 @@ func (app *App) FetchProfileAndActivate(
 		return nil, nil, &WrappedError{Msg: "failed to resolve the platform anchor for provisioning", Err: err}
 	}
 
-	// Create provisioning client config
-	provConfig := &provisioning.ClientConfig{
-		ServerURL:   serverURL,
-		Certificate: idevidCert,
-		PrivateKey:  tpmSigner, // crypto.Signer is compatible with crypto.PrivateKey
-		CACertPool:  caPool,
-		Timeout:     30 * time.Second,
-	}
-
-	// Create provisioning client
-	provClient, err := provisioning.NewClient(provConfig, app.Logger)
+	// Activation presents the device's IDevID, signed in the TPM — the same
+	// client identity the heartbeat uses.
+	provClient, err := app.newIDevIDClient(serverURL, idevidCert, caPool)
 	if err != nil {
 		return nil, nil, &WrappedError{Msg: "failed to create provisioning client", Err: err}
 	}
@@ -3094,7 +3184,7 @@ func (app *App) ImportEndorsementKeyCertificate(ctx context.Context) (*x509.Cert
 					Challenge:  "endorse-01",
 					IPAddress:  enrollmentIP,
 					TPMModule:  trustedca.NewACMEXKMSTPMAdapter(app.TPM),
-					CommonName: app.Hostname,
+					CommonName: app.enrollmentName(),
 				}
 				ekCert, err = app.ACMEClient.RequestEndorsementKeyCertificate(ctx, ekConfig)
 				if err != nil {
@@ -3164,6 +3254,39 @@ func (app *App) ImportEndorsementKeyCertificate(ctx context.Context) (*x509.Cert
 }
 
 // Loads an initialized Certificate Authority
+// LoadOrInitCA makes the node's certificate authority available as app.CA:
+// it loads the CA from storage and, when there is none yet, initializes
+// it. PINs not given in initParams come from the platform configuration.
+// An already loaded CA is kept. platformd serve and the embedded host
+// both bring up the CA through this one path.
+func (app *App) LoadOrInitCA(ctx context.Context, initParams *AppInitParams) error {
+	if app.CA != nil {
+		return nil
+	}
+	if app.CAConfig == nil {
+		return ErrCANotConfigured{}
+	}
+	if initParams == nil {
+		initParams = &AppInitParams{}
+	}
+
+	soPIN, userPIN, err := app.ParsePINs(initParams.SOPin, initParams.Pin)
+	if err != nil {
+		return ErrCAPINs{Cause: err}
+	}
+	loadErr := app.LoadCA(ctx, soPIN, userPIN)
+	if loadErr == nil {
+		app.Logger.Info("CA loaded successfully")
+		return nil
+	}
+	app.Logger.Warn("CA not found, attempting to initialize", "error", loadErr)
+	if _, initErr := app.InitCA(ctx, soPIN, userPIN, initParams); initErr != nil {
+		return ErrCALoadOrInit{LoadErr: loadErr, InitErr: initErr}
+	}
+	app.Logger.Info("CA initialized successfully")
+	return nil
+}
+
 func (app *App) LoadCA(ctx context.Context, soPIN, userPIN xkmssdk.Password) error {
 
 	if len(app.CAConfig.Identity) == 0 {
@@ -3562,6 +3685,9 @@ func (app *App) initWebServiceKeyAttributes(ctx context.Context, wsConfig *v1.Co
 	}
 	if keyAttrs == nil {
 		app.Logger.Info("using dedicated web server certificate for TLS", "webservice", wsName)
+		if wsConfig.Key == nil {
+			return ErrWebServiceKeyRequired{Name: wsName}
+		}
 		serverKeyAttrs, err := wsConfig.Key.ToKeyAttributes()
 		if err != nil {
 			return err
@@ -4002,6 +4128,15 @@ func (app *App) certTargets() *CertTargetRegistry {
 	return app.CertTargets
 }
 
+// RegisterCertTarget adds target to the platform's renewal registry, or
+// replaces the target already registered under its name, so the renewal
+// sweep evaluates it on every tick. It is how a certificate owned outside
+// this package -- platformd's own TLS identity (#36) -- joins the one sweep
+// instead of running a second one.
+func (app *App) RegisterCertTarget(target *CertTarget) error {
+	return app.certTargets().Replace(target)
+}
+
 // webServiceVerifyRoots returns the roots the renewal sweep verifies this
 // webservice's served certificate against, following the ISSUANCE mode.
 //
@@ -4057,6 +4192,21 @@ func (app *App) webServiceUsesPublicACME(wsConfig *v1.Config, useLocalCA bool) b
 		app.ACMEConfig.Client.DirectoryURL != ""
 }
 
+// webServiceDialHost is the address the renewal sweep dials to read the
+// certificate a webservice serves: its bind-host when that names one address,
+// or loopback when the webservice binds every interface. A webservice pinned
+// to one interface does not listen on loopback, so dialing 127.0.0.1 there
+// would fail every read and the certificate would never be renewed.
+func webServiceDialHost(bindHost string) string {
+	if bindHost == "" {
+		return "127.0.0.1"
+	}
+	if ip := net.ParseIP(bindHost); ip != nil && ip.IsUnspecified() {
+		return "127.0.0.1"
+	}
+	return bindHost
+}
+
 // buildWebServiceCertTarget constructs a CertTarget for a webservice
 // TLS identity. The Current closure performs a live TLS handshake
 // against the local webservice endpoint so the renewal handler always
@@ -4085,13 +4235,14 @@ func buildWebServiceCertTarget(ctx context.Context, wsName string, wsConfig *v1.
 	if port == 0 {
 		port = 443
 	}
-	addr := net.JoinHostPort("127.0.0.1", strconv.Itoa(port))
+	addr := net.JoinHostPort(webServiceDialHost(wsConfig.BindHost), strconv.Itoa(port))
 
-	// The dial goes to the loopback address, but the certificate is issued for
-	// the service's DNS identity (keyAttrs.CN), not for 127.0.0.1. Left unset,
-	// crypto/tls derives ServerName from the dial address and every handshake
-	// fails hostname verification before NotAfter is ever read -- so the sweep
-	// would report each target as failed and never reissue any of them.
+	// The dial goes to the bind address, but the certificate is issued for
+	// the service's DNS identity (keyAttrs.CN), not for that address. Left
+	// unset, crypto/tls derives ServerName from the dial address and every
+	// handshake fails hostname verification before NotAfter is ever read -- so
+	// the sweep would report each target as failed and never reissue any of
+	// them.
 	serverName := keyAttrs.CN
 
 	return &CertTarget{
@@ -4387,77 +4538,13 @@ func (app *App) NewCertificateStore(
 	return certStore, nil
 }
 
-// Initialize the platform log file
-func (app *App) InitLogFile(uid, gid int) *os.File {
-	// Same defensive fallback as initLogger — Name is ldflag-populated
-	// and is empty on bare `go build` runs, which would produce a
-	// hidden ".log" file.
-	logName := Name
-	if logName == "" {
-		logName = "platformd"
-	}
-	logFile := fmt.Sprintf("%s/%s.log", app.LogDir, logName)
-	if err := os.MkdirAll(app.LogDir, os.ModePerm); err != nil {
-		log.Fatal(err)
-	}
-	f, err := os.OpenFile(logFile, os.O_RDWR|os.O_CREATE|os.O_APPEND, os.ModePerm)
-	if err != nil {
-		log.Fatal(err)
-	}
-	if uid == 0 {
-		if err = os.Chown(logFile, uid, gid); err != nil {
-			log.Fatal(err)
-		}
-		perm := os.FileMode(0644)
-		if app.DebugFlag {
-			perm = os.ModePerm
-		}
-		if err = os.Chmod(logFile, perm); err != nil {
-			log.Fatal(err)
-		}
-	}
-	return f
-}
-
-// If started as root, drop the privileges after startup to
-// the lesser privileged app user.
-func (app *App) DropPrivileges() {
-	if runtime.GOOS != "linux" {
-		return
-	}
-	if syscall.Getuid() == 0 && app.RuntimeUser != "root" {
-		app.Logger.Debugf("Running as root, downgrading to user %s", app.RuntimeUser)
-		user, err := user.Lookup(app.RuntimeUser)
-		if err != nil {
-			log.Fatalf("setuid %s user not found! Error: %s", app.RuntimeUser, err)
-		}
-		uid, err := strconv.ParseInt(user.Uid, 10, 32)
-		if err != nil {
-			app.Logger.Fatalf("Unable to parse UID: %s", err)
-		}
-		gid, err := strconv.ParseInt(user.Gid, 10, 32)
-		if err != nil {
-			app.Logger.Fatalf("Unable to parse GID: %s", err)
-		}
-		cerr := syscall.Setgid(int(gid))
-		if cerr != nil {
-			app.Logger.Fatalf("Unable to setgid: message=%s", cerr)
-		}
-		cerr = syscall.Setuid(int(uid))
-		if cerr != nil {
-			app.Logger.Fatalf("Unable to setuid: message=%s", cerr)
-		}
-		app.InitLogFile(int(uid), int(gid))
-	}
-}
-
-func DefaultTestConfig() *App {
+func DefaultTestConfig() (*App, error) {
 	// Storage is nil initially; tests must start the QuicBaaS factory
 	// to get an ObjectStorage client, or inject one via TestConfigWithStorage.
 	return TestConfigWithStorage(nil)
 }
 
-func TestConfigWithStorage(storage objectstorage.Client) *App {
+func TestConfigWithStorage(storage objectstorage.Client) (*App, error) {
 	Name = "trusted-platform"
 
 	app := NewApp()
@@ -4473,7 +4560,7 @@ func TestConfigWithStorage(storage objectstorage.Client) *App {
 
 	configYaml, err := yaml.Marshal(testConfig)
 	if err != nil {
-		panic(err)
+		return nil, TestConfigError{Step: "marshal", Cause: err}
 	}
 
 	fmt.Println("Test configuration:")
@@ -4481,20 +4568,20 @@ func TestConfigWithStorage(storage objectstorage.Client) *App {
 
 	// Create log directory on real filesystem for tests
 	if err := os.MkdirAll(testConfig.LogDir, os.ModePerm); err != nil {
-		panic(err)
+		return nil, LogDirCreateError{Dir: testConfig.LogDir, Cause: err}
 	}
-	logFile := fmt.Sprintf("%s/trusted-platform.log", testConfig.LogDir)
+	logFile := filepath.Join(testConfig.LogDir, logFileName())
 	if err := os.WriteFile(logFile, []byte{}, os.ModePerm); err != nil {
-		panic(err)
+		return nil, LogFileOpenError{Path: logFile, Cause: err}
 	}
 
 	// Write app config to real filesystem for viper
 	if err := os.MkdirAll(testConfig.ConfigDir, os.ModePerm); err != nil {
-		panic(err)
+		return nil, TestConfigError{Step: "create config directory", Path: testConfig.ConfigDir, Cause: err}
 	}
-	configFile := fmt.Sprintf("%s/config.yaml", testConfig.ConfigDir)
+	configFile := filepath.Join(testConfig.ConfigDir, "config.yaml")
 	if err := os.WriteFile(configFile, configYaml, os.ModePerm); err != nil {
-		panic(err)
+		return nil, TestConfigError{Step: "write config", Path: configFile, Cause: err}
 	}
 
 	// Configure viper with real filesystem
@@ -4504,17 +4591,17 @@ func TestConfigWithStorage(storage objectstorage.Client) *App {
 	// Debug info
 	fmt.Println(viper.GetViper().ConfigFileUsed())
 	if err = viper.ReadInConfig(); err != nil {
-		panic(err)
+		return nil, TestConfigError{Step: "read config", Path: configFile, Cause: err}
 	}
 
 	// Unmarshal with TextUnmarshaler support for custom types
 	if err := viper.Unmarshal(app, config.DecodeHook()); err != nil {
-		panic(err)
+		return nil, TestConfigError{Step: "unmarshal config", Path: configFile, Cause: err}
 	}
 
 	app.Logger = logging.NewLoggerWithFormat(slog.LevelDebug, logging.FormatJSON, os.Stdout)
 
-	return app
+	return app, nil
 }
 
 func parsePublicIPs(_ Environment) (net.IP, net.IP, error) {

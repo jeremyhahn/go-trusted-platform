@@ -295,35 +295,10 @@ func runHMACVerify(flags *cli.CommonFlags, cmdFlags *hmacVerifyFlags) error {
 		return ErrCryptoOperationFailed{Operation: "verify HMAC", Err: err}
 	}
 
-	printer := base.Printer()
-
-	switch flags.OutputFormat {
-	case cli.OutputFormatJSON, cli.OutputFormatYAML:
-		output := struct {
-			KeyID      string `json:"key_id" yaml:"key_id"`
-			KeyVersion uint64 `json:"key_version" yaml:"key_version"`
-			Valid      bool   `json:"valid" yaml:"valid"`
-			Timestamp  string `json:"timestamp" yaml:"timestamp"`
-		}{
-			KeyID:      resp.KeyID,
-			KeyVersion: resp.KeyVersion,
-			Valid:      resp.Valid,
-			Timestamp:  formatTimestamp(resp.Timestamp),
-		}
-		return printer.Print(output)
-
-	case cli.OutputFormatTable:
-		if resp.Valid {
-			printer.PrintSuccess("HMAC verification PASSED")
-		} else {
-			printer.PrintError("HMAC verification FAILED")
-		}
-		printer.PrintKeyValue("Key ID", resp.KeyID)
-		printer.PrintKeyValue("Key Version", fmt.Sprintf("%d", resp.KeyVersion))
-		printer.PrintKeyValue("Valid", fmt.Sprintf("%t", resp.Valid))
-		return nil
-
-	default:
-		return cli.ErrInvalidOutputFormat{Format: string(flags.OutputFormat)}
-	}
+	return printVerifyResult(base.Printer(), flags.OutputFormat, "HMAC", verifyResult{
+		KeyID:      resp.KeyID,
+		KeyVersion: resp.KeyVersion,
+		Valid:      resp.Valid,
+		Timestamp:  formatTimestamp(resp.Timestamp),
+	})
 }

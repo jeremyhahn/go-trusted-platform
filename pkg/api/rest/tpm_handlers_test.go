@@ -14,2690 +14,867 @@
 package rest
 
 import (
-	"bytes"
 	"context"
-	"crypto"
-	"crypto/ecdsa"
-	"crypto/elliptic"
-	"crypto/rand"
-	"crypto/x509"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
-	"log/slog"
-	"math/big"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"testing/iotest"
 
 	"github.com/gorilla/mux"
-	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
-
+	"github.com/jeremyhahn/go-quicbaas/sdk/go/platformtoken"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/proto"
+
+	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/channelbind"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/testutil"
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
 
-// =============================================================================
-// Mock TPM Service
-// =============================================================================
+const (
+	tpmReaderToken = "tpm-reader"
+	tpmWriterToken = "tpm-writer"
+	tpmAdminToken  = "tpm-admin"
+)
 
-// mockTPMService implements xkmssdk.TrustedPlatformModule for TPM handler testing.
-// It embeds the interface so only methods used by the handlers need to be overridden.
-type mockTPMService struct {
-	xkmssdk.TrustedPlatformModule
+// fakeTPMService records the request the handlers forwarded and answers
+// every TPMService RPC with resp when it is that RPC's response type, an
+// empty response otherwise, or err when it is set.
+type fakeTPMService struct {
+	platformv1.UnimplementedTPMServiceServer
 
-	infoResult          string
-	infoErr             error
-	fixedProps          *xkmssdk.PropertiesFixed
-	fixedPropsErr       error
-	config              *xkmssdk.TPMConfig
-	provisionOwnerErr   error
-	clearErr            error
-	ekAttrs             *xkmssdk.KeyAttributes
-	ekAttrsErr          error
-	createEKErr         error
-	flushed             []xkmssdk.TPMHandle
-	ekCert              *x509.Certificate
-	ekCertErr           error
-	provisionEKCertErr  error
-	ssrkAttrs           *xkmssdk.KeyAttributes
-	psrkAttrs           *xkmssdk.KeyAttributes
-	psrkAttrsErr        error
-	ssrkAttrsErr        error
-	createSRKErr        error
-	iakAttrs            *xkmssdk.KeyAttributes
-	iakAttrsErr         error
-	iakPubKey           crypto.PublicKey
-	iakPubKeyErr        error
-	createIAKAttrs      *xkmssdk.KeyAttributes
-	createIAKErr        error
-	idevidAttrs         *xkmssdk.KeyAttributes
-	idevidAttrsErr      error
-	idevidPubKey        crypto.PublicKey
-	idevidPubKeyErr     error
-	quoteResult         xkmssdk.Quote
-	quoteErr            error
-	certifyResult       *xkmssdk.CertifyResult
-	certifyErr          error
-	keyAttrs            *xkmssdk.KeyAttributes
-	keyAttrsErr         error
-	readPCRsResult      []xkmssdk.PCRBank
-	readPCRsErr         error
-	extendPCRErr        error
-	eventLogData        []byte
-	eventLogErr         error
-	parsedEvents        []xkmssdk.TPMEvent
-	parsedEventLogErr   error
-	supportedAlgorithms []string
-	supportedAlgoErr    error
-	supportedCommands   []string
-	supportedCmdsErr    error
-	supportedCurves     []string
-	supportedCurvesErr  error
-	randomBytesResult   []byte
-	randomBytesErr      error
-	sealResult          *xkmssdk.SealedData
-	sealErr             error
-	unsealResult        []byte
-	unsealErr           error
+	resp proto.Message
+	err  error
+
+	ctx context.Context
+	req proto.Message
 }
 
-func newMockTPMService() *mockTPMService {
-	return &mockTPMService{
-		config: &xkmssdk.TPMConfig{
-			UseSimulator: true,
-		},
-		ekAttrs: &xkmssdk.KeyAttributes{
-			KeyAlgorithm: x509.RSA,
-			TPMAttributes: &xkmssdk.TPMAttributes{
-				Handle:         0x81010001,
-				PublicKeyBytes: []byte("test-ek-public-key"),
-			},
-		},
-		ssrkAttrs: &xkmssdk.KeyAttributes{
-			KeyAlgorithm: x509.RSA,
-			TPMAttributes: &xkmssdk.TPMAttributes{
-				Handle:         0x81000001,
-				PublicKeyBytes: []byte("test-srk-public-key"),
-			},
-		},
-		// Deliberately distinct from the SSRK in BOTH handle and public
-		// key: a test that only checked the handle could not tell a
-		// transport that resolved the platform key from one that
-		// ignored the request and returned the SSRK.
-		psrkAttrs: &xkmssdk.KeyAttributes{
-			KeyAlgorithm: x509.ECDSA,
-			TPMAttributes: &xkmssdk.TPMAttributes{
-				Handle:         0x81000002,
-				PublicKeyBytes: []byte("test-platform-srk-public-key"),
-			},
-		},
-		iakAttrs: &xkmssdk.KeyAttributes{
-			KeyAlgorithm: x509.RSA,
-			TPMAttributes: &xkmssdk.TPMAttributes{
-				Handle:         0x81020001,
-				PublicKeyBytes: []byte("test-iak-public-key"),
-			},
-		},
-		idevidAttrs: &xkmssdk.KeyAttributes{
-			KeyAlgorithm: x509.RSA,
-			TPMAttributes: &xkmssdk.TPMAttributes{
-				Handle:         0x81030001,
-				PublicKeyBytes: []byte("test-idevid-public-key"),
-			},
-		},
+func tpmAnswer[Resp proto.Message](f *fakeTPMService, ctx context.Context, req proto.Message, empty Resp) (Resp, error) {
+	f.ctx, f.req = ctx, req
+	if f.err != nil {
+		var none Resp
+		return none, f.err
 	}
-}
-
-func (m *mockTPMService) Info() (string, error) {
-	return m.infoResult, m.infoErr
-}
-
-func (m *mockTPMService) FixedProperties() (*xkmssdk.PropertiesFixed, error) {
-	return m.fixedProps, m.fixedPropsErr
-}
-
-func (m *mockTPMService) Config() *xkmssdk.TPMConfig {
-	return m.config
-}
-
-func (m *mockTPMService) ProvisionOwner(hierarchyAuth xkmssdk.Password) (*xkmssdk.KeyAttributes, error) {
-	if m.provisionOwnerErr != nil {
-		return nil, m.provisionOwnerErr
+	if resp, ok := f.resp.(Resp); ok {
+		return resp, nil
 	}
-	return m.ekAttrs, nil
+	return empty, nil
 }
 
-func (m *mockTPMService) Clear(lockoutAuth []byte) error {
-	return m.clearErr
+func (f *fakeTPMService) Info(ctx context.Context, req *platformv1.TPMInfoRequest) (*platformv1.TPMInfoResponse, error) {
+	return tpmAnswer(f, ctx, req, &platformv1.TPMInfoResponse{})
 }
 
-func (m *mockTPMService) EKAttributes() (*xkmssdk.KeyAttributes, error) {
-	return m.ekAttrs, m.ekAttrsErr
+func (f *fakeTPMService) Provision(ctx context.Context, req *platformv1.TPMProvisionRequest) (*platformv1.TPMProvisionResponse, error) {
+	return tpmAnswer(f, ctx, req, &platformv1.TPMProvisionResponse{})
 }
 
-func (m *mockTPMService) CreateEK(keyAttrs *xkmssdk.KeyAttributes) error {
-	return m.createEKErr
+func (f *fakeTPMService) Clear(ctx context.Context, req *platformv1.TPMClearRequest) (*platformv1.TPMClearResponse, error) {
+	return tpmAnswer(f, ctx, req, &platformv1.TPMClearResponse{})
 }
 
-func (m *mockTPMService) Flush(handle xkmssdk.TPMHandle) {
-	m.flushed = append(m.flushed, handle)
+func (f *fakeTPMService) GetCapabilities(ctx context.Context, req *platformv1.TPMCapabilitiesRequest) (*platformv1.TPMCapabilitiesResponse, error) {
+	return tpmAnswer(f, ctx, req, &platformv1.TPMCapabilitiesResponse{})
 }
 
-func (m *mockTPMService) EKCertificate() (*x509.Certificate, error) {
-	if m.ekCertErr != nil {
-		return nil, m.ekCertErr
-	}
-	if m.ekCert != nil {
-		return m.ekCert, nil
-	}
-	return &x509.Certificate{
-		Raw:          []byte("test-ek-cert"),
-		SerialNumber: big.NewInt(1),
-	}, nil
+func (f *fakeTPMService) GetPlatformAttributes(ctx context.Context, req *platformv1.TPMPlatformAttributesRequest) (*platformv1.TPMPlatformAttributesResponse, error) {
+	return tpmAnswer(f, ctx, req, &platformv1.TPMPlatformAttributesResponse{})
 }
 
-func (m *mockTPMService) ProvisionEKCert(hierarchyAuth, ekCert []byte) error {
-	return m.provisionEKCertErr
+func (f *fakeTPMService) ExtendPCR(ctx context.Context, req *platformv1.ExtendPCRRequest) (*platformv1.ExtendPCRResponse, error) {
+	return tpmAnswer(f, ctx, req, &platformv1.ExtendPCRResponse{})
 }
 
-func (m *mockTPMService) SSRKAttributes() (*xkmssdk.KeyAttributes, error) {
-	return m.ssrkAttrs, m.ssrkAttrsErr
+func (f *fakeTPMService) CreateEK(ctx context.Context, req *platformv1.CreateEKRequest) (*platformv1.CreateEKResponse, error) {
+	return tpmAnswer(f, ctx, req, &platformv1.CreateEKResponse{})
 }
 
-func (m *mockTPMService) PlatformSRKAttributes() (*xkmssdk.KeyAttributes, error) {
-	return m.psrkAttrs, m.psrkAttrsErr
+func (f *fakeTPMService) GetEK(ctx context.Context, req *platformv1.GetEKRequest) (*platformv1.GetEKResponse, error) {
+	return tpmAnswer(f, ctx, req, &platformv1.GetEKResponse{})
 }
 
-func (m *mockTPMService) CreateSRK(keyAttrs *xkmssdk.KeyAttributes) error {
-	return m.createSRKErr
+func (f *fakeTPMService) GetEKCertificate(ctx context.Context, req *platformv1.GetEKCertificateRequest) (*platformv1.GetEKCertificateResponse, error) {
+	return tpmAnswer(f, ctx, req, &platformv1.GetEKCertificateResponse{})
 }
 
-func (m *mockTPMService) IAKAttributes() (*xkmssdk.KeyAttributes, error) {
-	return m.iakAttrs, m.iakAttrsErr
+func (f *fakeTPMService) ImportEKCertificate(ctx context.Context, req *platformv1.ImportEKCertificateRequest) (*platformv1.ImportEKCertificateResponse, error) {
+	return tpmAnswer(f, ctx, req, &platformv1.ImportEKCertificateResponse{})
 }
 
-func (m *mockTPMService) IAK() (crypto.PublicKey, error) {
-	if m.iakPubKeyErr != nil {
-		return nil, m.iakPubKeyErr
-	}
-	return m.iakPubKey, nil
+func (f *fakeTPMService) DeleteEK(ctx context.Context, req *platformv1.DeleteEKRequest) (*platformv1.DeleteEKResponse, error) {
+	return tpmAnswer(f, ctx, req, &platformv1.DeleteEKResponse{})
 }
 
-func (m *mockTPMService) CreateIAK(ekAttrs *xkmssdk.KeyAttributes, qualifyingData []byte) (*xkmssdk.KeyAttributes, error) {
-	if m.createIAKErr != nil {
-		return nil, m.createIAKErr
-	}
-	return m.createIAKAttrs, nil
+func (f *fakeTPMService) CreateSRK(ctx context.Context, req *platformv1.CreateSRKRequest) (*platformv1.CreateSRKResponse, error) {
+	return tpmAnswer(f, ctx, req, &platformv1.CreateSRKResponse{})
 }
 
-func (m *mockTPMService) IDevIDAttributes() (*xkmssdk.KeyAttributes, error) {
-	return m.idevidAttrs, m.idevidAttrsErr
+func (f *fakeTPMService) GetSRK(ctx context.Context, req *platformv1.GetSRKRequest) (*platformv1.GetSRKResponse, error) {
+	return tpmAnswer(f, ctx, req, &platformv1.GetSRKResponse{})
 }
 
-func (m *mockTPMService) IDevID() (crypto.PublicKey, error) {
-	if m.idevidPubKeyErr != nil {
-		return nil, m.idevidPubKeyErr
-	}
-	return m.idevidPubKey, nil
+func (f *fakeTPMService) DeleteSRK(ctx context.Context, req *platformv1.DeleteSRKRequest) (*platformv1.DeleteSRKResponse, error) {
+	return tpmAnswer(f, ctx, req, &platformv1.DeleteSRKResponse{})
 }
 
-func (m *mockTPMService) Quote(pcrs []uint, nonce []byte) (xkmssdk.Quote, error) {
-	return m.quoteResult, m.quoteErr
+func (f *fakeTPMService) CreateAK(ctx context.Context, req *platformv1.CreateAKRequest) (*platformv1.CreateAKResponse, error) {
+	return tpmAnswer(f, ctx, req, &platformv1.CreateAKResponse{})
 }
 
-func (m *mockTPMService) CertifyKey(keyAttrs *xkmssdk.KeyAttributes, nonce []byte, backend xkmssdk.TPMKeyBackend) (*xkmssdk.CertifyResult, error) {
-	return m.certifyResult, m.certifyErr
+func (f *fakeTPMService) GetAK(ctx context.Context, req *platformv1.GetAKRequest) (*platformv1.GetAKResponse, error) {
+	return tpmAnswer(f, ctx, req, &platformv1.GetAKResponse{})
 }
 
-func (m *mockTPMService) KeyAttributes(handle xkmssdk.TPMHandle) (*xkmssdk.KeyAttributes, error) {
-	return m.keyAttrs, m.keyAttrsErr
+func (f *fakeTPMService) DeleteAK(ctx context.Context, req *platformv1.DeleteAKRequest) (*platformv1.DeleteAKResponse, error) {
+	return tpmAnswer(f, ctx, req, &platformv1.DeleteAKResponse{})
 }
 
-func (m *mockTPMService) ReadPCRs(pcrList []uint) ([]xkmssdk.PCRBank, error) {
-	return m.readPCRsResult, m.readPCRsErr
+func (f *fakeTPMService) Seal(ctx context.Context, req *platformv1.SealRequest) (*platformv1.SealResponse, error) {
+	return tpmAnswer(f, ctx, req, &platformv1.SealResponse{})
 }
 
-func (m *mockTPMService) ExtendPCR(pcrIndex int, hashAlg string, data []byte) error {
-	return m.extendPCRErr
+func (f *fakeTPMService) Unseal(ctx context.Context, req *platformv1.UnsealRequest) (*platformv1.UnsealResponse, error) {
+	return tpmAnswer(f, ctx, req, &platformv1.UnsealResponse{})
 }
 
-func (m *mockTPMService) EventLog() ([]byte, error) {
-	return m.eventLogData, m.eventLogErr
+func (f *fakeTPMService) Quote(ctx context.Context, req *platformv1.QuoteRequest) (*platformv1.QuoteResponse, error) {
+	return tpmAnswer(f, ctx, req, &platformv1.QuoteResponse{})
 }
 
-func (m *mockTPMService) ParsedEventLog() ([]xkmssdk.TPMEvent, error) {
-	return m.parsedEvents, m.parsedEventLogErr
+func (f *fakeTPMService) VerifyQuote(ctx context.Context, req *platformv1.VerifyQuoteRequest) (*platformv1.VerifyQuoteResponse, error) {
+	return tpmAnswer(f, ctx, req, &platformv1.VerifyQuoteResponse{})
 }
 
-func (m *mockTPMService) SupportedAlgorithms() ([]string, error) {
-	return m.supportedAlgorithms, m.supportedAlgoErr
+func (f *fakeTPMService) Certify(ctx context.Context, req *platformv1.CertifyRequest) (*platformv1.CertifyResponse, error) {
+	return tpmAnswer(f, ctx, req, &platformv1.CertifyResponse{})
 }
 
-func (m *mockTPMService) SupportedCommands() ([]string, error) {
-	return m.supportedCommands, m.supportedCmdsErr
+func (f *fakeTPMService) GetEventLog(ctx context.Context, req *platformv1.GetEventLogRequest) (*platformv1.GetEventLogResponse, error) {
+	return tpmAnswer(f, ctx, req, &platformv1.GetEventLogResponse{})
 }
 
-func (m *mockTPMService) SupportedECCCurves() ([]string, error) {
-	return m.supportedCurves, m.supportedCurvesErr
+func (f *fakeTPMService) GetPCRs(ctx context.Context, req *platformv1.GetPCRsRequest) (*platformv1.GetPCRsResponse, error) {
+	return tpmAnswer(f, ctx, req, &platformv1.GetPCRsResponse{})
 }
 
-func (m *mockTPMService) RandomBytes(fixedLength int) ([]byte, error) {
-	return m.randomBytesResult, m.randomBytesErr
+func (f *fakeTPMService) MakeCredential(ctx context.Context, req *platformv1.MakeCredentialRequest) (*platformv1.MakeCredentialResponse, error) {
+	return tpmAnswer(f, ctx, req, &platformv1.MakeCredentialResponse{})
 }
 
-func (m *mockTPMService) Seal(ctx context.Context, data []byte, opts *xkmssdk.SealOptions) (*xkmssdk.SealedData, error) {
-	if m.sealErr != nil {
-		return nil, m.sealErr
-	}
-	if m.sealResult != nil {
-		return m.sealResult, nil
-	}
-	return &xkmssdk.SealedData{
-		Ciphertext: []byte("sealed-" + string(data)),
-	}, nil
+func (f *fakeTPMService) ActivateCredential(ctx context.Context, req *platformv1.TPMActivateCredentialRequest) (*platformv1.TPMActivateCredentialResponse, error) {
+	return tpmAnswer(f, ctx, req, &platformv1.TPMActivateCredentialResponse{})
 }
 
-func (m *mockTPMService) Unseal(ctx context.Context, sealed *xkmssdk.SealedData, opts *xkmssdk.UnsealOptions) ([]byte, error) {
-	if m.unsealErr != nil {
-		return nil, m.unsealErr
-	}
-	return m.unsealResult, nil
+func (f *fakeTPMService) DefineNVRAM(ctx context.Context, req *platformv1.DefineNVRAMRequest) (*platformv1.DefineNVRAMResponse, error) {
+	return tpmAnswer(f, ctx, req, &platformv1.DefineNVRAMResponse{})
 }
 
-// =============================================================================
-// Test Helpers
-// =============================================================================
+func (f *fakeTPMService) WriteNVRAM(ctx context.Context, req *platformv1.WriteNVRAMRequest) (*platformv1.WriteNVRAMResponse, error) {
+	return tpmAnswer(f, ctx, req, &platformv1.WriteNVRAMResponse{})
+}
 
-func setupTPMTestHandler(tpm *mockTPMService) (*TPMHandlers, *mux.Router) {
-	logger := slog.Default()
-	handlers := NewTPMHandlers(logger)
-	if tpm != nil {
-		handlers.SetTPM2Service(tpm)
-	}
+func (f *fakeTPMService) ReadNVRAM(ctx context.Context, req *platformv1.ReadNVRAMRequest) (*platformv1.ReadNVRAMResponse, error) {
+	return tpmAnswer(f, ctx, req, &platformv1.ReadNVRAMResponse{})
+}
+
+func (f *fakeTPMService) UndefineNVRAM(ctx context.Context, req *platformv1.UndefineNVRAMRequest) (*platformv1.UndefineNVRAMResponse, error) {
+	return tpmAnswer(f, ctx, req, &platformv1.UndefineNVRAMResponse{})
+}
+
+func (f *fakeTPMService) GetRandom(ctx context.Context, req *platformv1.GetRandomRequest) (*platformv1.GetRandomResponse, error) {
+	return tpmAnswer(f, ctx, req, &platformv1.GetRandomResponse{})
+}
+
+// nilContextAuthorizer accepts every token but authorizes no context.
+type nilContextAuthorizer struct{}
+
+func (nilContextAuthorizer) AuthorizeToken(context.Context, string, string, string, string, string) (*platformtoken.AuthorizedContext, error) {
+	return nil, nil
+}
+
+// tpmScopedAuthorizer grants tpmReaderToken tpm:read, tpmWriterToken
+// tpm:read and tpm:write, and tpmAdminToken all three TPM scopes.
+func tpmScopedAuthorizer() *scopedAuthorizer {
+	return &scopedAuthorizer{scopes: map[string][]string{
+		tpmReaderToken: {tpmScopeRead},
+		tpmWriterToken: {tpmScopeRead, tpmScopeWrite},
+		tpmAdminToken:  {tpmScopeRead, tpmScopeWrite, tpmScopeDelete},
+	}}
+}
+
+// tpmGuard checks bearer tokens through tpmScopedAuthorizer.
+func tpmGuard() *ScopeGuard {
+	return NewScopeGuard(tpmScopedAuthorizer(), nil, nil)
+}
+
+// tpmRouter mounts TPM handlers that serve tpm and authorize through
+// guard. Either may be nil.
+func tpmRouter(tpm platformv1.TPMServiceServer, guard *ScopeGuard) *mux.Router {
 	router := mux.NewRouter()
-	handlers.RegisterRoutes(router)
-	return handlers, router
+	NewTPMHandlers(nil).WithTPMService(tpm).WithScopeGuard(guard).RegisterRoutes(router)
+	return router
 }
 
-func decodeTPMResponse(t *testing.T, resp *http.Response, v interface{}) {
+// serveTPM sends one request through router, with token as its bearer token
+// when it is not empty.
+func serveTPM(router http.Handler, req *http.Request, token string) *httptest.ResponseRecorder {
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	return rec
+}
+
+// newTPMRequest builds a request with body as its JSON body when it is not
+// empty.
+func newTPMRequest(method, target, body string) *http.Request {
+	if body == "" {
+		return httptest.NewRequest(method, target, nil)
+	}
+	req := httptest.NewRequest(method, target, strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	return req
+}
+
+// decodeTPMError decodes the ErrorResponse a refused request answers with.
+func decodeTPMError(t *testing.T, rec *httptest.ResponseRecorder) ErrorResponse {
 	t.Helper()
-	defer resp.Body.Close()
-	err := json.NewDecoder(resp.Body).Decode(v)
-	require.NoError(t, err)
+	var body ErrorResponse
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body), rec.Body.String())
+	return body
 }
 
-// =============================================================================
-// Error Type Tests
-// =============================================================================
+// tpmRouteCase is one mounted route called the way an SDK calls it.
+type tpmRouteCase struct {
+	route  string // the mounted method and path template
+	method string
+	target string
+	body   string        // the camelCase protojson body, if any
+	want   proto.Message // the request the TPM service must receive
+	resp   proto.Message // what the TPM service answers
+	key    string        // a camelCase key the response must carry
+}
+
+const (
+	ekHandle    = 0x81010001
+	akHandle    = 0x81010002
+	srkHandle   = 0x81000002
+	nvramIndex  = 0x1c00002
+	ekHandleDec = "2164326401"
+	akHandleDec = "2164326402"
+	srkHandleJS = "2164260866"
+	nvramDec    = "29360130"
+)
+
+func tpmRouteCases() []tpmRouteCase {
+	rsa := platformv1.KeyAlgorithm_KEY_ALGORITHM_RSA_2048
+	p256 := platformv1.KeyAlgorithm_KEY_ALGORITHM_ECDSA_P256
+	sha256 := platformv1.PCRBank_PCR_BANK_SHA256
+	sha384 := platformv1.PCRBank_PCR_BANK_SHA384
+	return []tpmRouteCase{
+		{
+			route: "GET /api/v1/tpm/info", method: http.MethodGet, target: "/api/v1/tpm/info",
+			want: &platformv1.TPMInfoRequest{},
+			resp: &platformv1.TPMInfoResponse{MaxNvramSize: 2048}, key: "maxNvramSize",
+		},
+		{
+			route: "POST /api/v1/tpm/provision", method: http.MethodPost, target: "/api/v1/tpm/provision",
+			body: `{"ownerPassword":"owner","createEk":true,"createSrk":true}`,
+			want: &platformv1.TPMProvisionRequest{OwnerPassword: "owner", CreateEk: true, CreateSrk: true},
+			resp: &platformv1.TPMProvisionResponse{EkPublic: []byte("ek")}, key: "ekPublic",
+		},
+		{
+			route: "POST /api/v1/tpm/clear", method: http.MethodPost, target: "/api/v1/tpm/clear",
+			body: `{"ownerPassword":"owner","confirm":true}`,
+			want: &platformv1.TPMClearRequest{OwnerPassword: "owner", Confirm: true},
+			resp: &platformv1.TPMClearResponse{}, key: "status",
+		},
+		{
+			route: "GET /api/v1/tpm/capabilities", method: http.MethodGet, target: "/api/v1/tpm/capabilities",
+			want: &platformv1.TPMCapabilitiesRequest{},
+			resp: &platformv1.TPMCapabilitiesResponse{Algorithms: []string{"RSA"}, EccCurves: []string{"NIST_P256"}}, key: "eccCurves",
+		},
+		{
+			route: "GET /api/v1/tpm/platform", method: http.MethodGet, target: "/api/v1/tpm/platform",
+			want: &platformv1.TPMPlatformAttributesRequest{},
+			resp: &platformv1.TPMPlatformAttributesResponse{Device: "/dev/tpmrm0", Ek: &platformv1.TPMKeyRef{Handle: ekHandle, Algorithm: "RSA"}}, key: "ek",
+		},
+		{
+			route: "GET /api/v1/tpm/ek", method: http.MethodGet, target: "/api/v1/tpm/ek?algorithm=KEY_ALGORITHM_RSA_2048&handle=0x81010001",
+			want: &platformv1.GetEKRequest{Algorithm: rsa, Handle: ekHandle},
+			resp: &platformv1.GetEKResponse{PublicKey: []byte("ek")}, key: "publicKey",
+		},
+		{
+			route: "POST /api/v1/tpm/ek", method: http.MethodPost, target: "/api/v1/tpm/ek",
+			body: `{"persistent":true}`,
+			want: &platformv1.CreateEKRequest{Persistent: true},
+			resp: &platformv1.CreateEKResponse{Handle: ekHandle}, key: "publicKey",
+		},
+		{
+			route: "DELETE /api/v1/tpm/ek", method: http.MethodDelete, target: "/api/v1/tpm/ek",
+			body: `{"handle":` + ekHandleDec + `,"algorithm":"KEY_ALGORITHM_ECDSA_P256"}`,
+			want: &platformv1.DeleteEKRequest{Handle: ekHandle, Algorithm: p256},
+			resp: &platformv1.DeleteEKResponse{}, key: "status",
+		},
+		{
+			route: "DELETE /api/v1/tpm/ek/{handle}", method: http.MethodDelete, target: "/api/v1/tpm/ek/0x81010001",
+			want: &platformv1.DeleteEKRequest{Handle: ekHandle},
+			resp: &platformv1.DeleteEKResponse{}, key: "status",
+		},
+		{
+			route: "GET /api/v1/tpm/ek/certificate", method: http.MethodGet, target: "/api/v1/tpm/ek/certificate?algorithm=1",
+			want: &platformv1.GetEKCertificateRequest{Algorithm: rsa},
+			resp: &platformv1.GetEKCertificateResponse{Certificate: []byte("der"), Format: "DER"}, key: "certificate",
+		},
+		{
+			route: "POST /api/v1/tpm/ek/certificate", method: http.MethodPost, target: "/api/v1/tpm/ek/certificate",
+			body: `{"certificate":"ZGVy","format":"DER","nvramIndex":` + nvramDec + `}`,
+			want: &platformv1.ImportEKCertificateRequest{Certificate: []byte("der"), Format: "DER", NvramIndex: nvramIndex},
+			resp: &platformv1.ImportEKCertificateResponse{}, key: "status",
+		},
+		{
+			route: "GET /api/v1/tpm/srk", method: http.MethodGet, target: "/api/v1/tpm/srk?handle=0x81000002",
+			want: &platformv1.GetSRKRequest{Handle: srkHandle},
+			resp: &platformv1.GetSRKResponse{PublicKey: []byte("srk")}, key: "publicKey",
+		},
+		{
+			route: "POST /api/v1/tpm/srk", method: http.MethodPost, target: "/api/v1/tpm/srk",
+			body: `{"persistent":true,"parentHandle":` + ekHandleDec + `,"parentPassword":"pw"}`,
+			want: &platformv1.CreateSRKRequest{Persistent: true, ParentHandle: ekHandle, ParentPassword: "pw"},
+			resp: &platformv1.CreateSRKResponse{Handle: srkHandle}, key: "publicKey",
+		},
+		{
+			route: "DELETE /api/v1/tpm/srk", method: http.MethodDelete, target: "/api/v1/tpm/srk",
+			body: `{"handle":` + srkHandleJS + `}`,
+			want: &platformv1.DeleteSRKRequest{Handle: srkHandle},
+			resp: &platformv1.DeleteSRKResponse{}, key: "status",
+		},
+		{
+			route: "DELETE /api/v1/tpm/srk/{handle}", method: http.MethodDelete, target: "/api/v1/tpm/srk/" + srkHandleJS,
+			want: &platformv1.DeleteSRKRequest{Handle: srkHandle},
+			resp: &platformv1.DeleteSRKResponse{}, key: "status",
+		},
+		{
+			route: "GET /api/v1/tpm/ak", method: http.MethodGet, target: "/api/v1/tpm/ak?algorithm=KEY_ALGORITHM_ECDSA_P256",
+			want: &platformv1.GetAKRequest{Algorithm: p256},
+			resp: &platformv1.GetAKResponse{PublicKey: []byte("ak")}, key: "publicKey",
+		},
+		{
+			route: "POST /api/v1/tpm/ak", method: http.MethodPost, target: "/api/v1/tpm/ak",
+			body: `{"parentHandle":` + srkHandleJS + `}`,
+			want: &platformv1.CreateAKRequest{ParentHandle: srkHandle},
+			resp: &platformv1.CreateAKResponse{Handle: akHandle}, key: "credentialBlob",
+		},
+		{
+			route: "DELETE /api/v1/tpm/ak", method: http.MethodDelete, target: "/api/v1/tpm/ak",
+			body: `{"handle":` + akHandleDec + `,"password":"pw"}`,
+			want: &platformv1.DeleteAKRequest{Handle: akHandle, Password: "pw"},
+			resp: &platformv1.DeleteAKResponse{}, key: "status",
+		},
+		{
+			route: "DELETE /api/v1/tpm/ak/{handle}", method: http.MethodDelete, target: "/api/v1/tpm/ak/0x81010002",
+			want: &platformv1.DeleteAKRequest{Handle: akHandle},
+			resp: &platformv1.DeleteAKResponse{}, key: "status",
+		},
+		{
+			route: "POST /api/v1/tpm/make-credential", method: http.MethodPost, target: "/api/v1/tpm/make-credential",
+			body: `{"akName":"bmFtZQ==","secret":"c2VjcmV0"}`,
+			want: &platformv1.MakeCredentialRequest{AkName: []byte("name"), Secret: []byte("secret")},
+			resp: &platformv1.MakeCredentialResponse{CredentialBlob: []byte("blob")}, key: "encryptedSecret",
+		},
+		{
+			route: "POST /api/v1/tpm/activate-credential", method: http.MethodPost, target: "/api/v1/tpm/activate-credential",
+			body: `{"credentialBlob":"YmxvYg==","encryptedSecret":"c2VjcmV0"}`,
+			want: &platformv1.TPMActivateCredentialRequest{CredentialBlob: []byte("blob"), EncryptedSecret: []byte("secret")},
+			resp: &platformv1.TPMActivateCredentialResponse{Secret: []byte("activated")}, key: "secret",
+		},
+		{
+			route: "POST /api/v1/tpm/quote", method: http.MethodPost, target: "/api/v1/tpm/quote",
+			body: `{"akHandle":` + akHandleDec + `,"pcrIndices":[0,7],"pcrBank":"PCR_BANK_SHA256","nonce":"bm9uY2U="}`,
+			want: &platformv1.QuoteRequest{AkHandle: akHandle, PcrIndices: []uint32{0, 7}, PcrBank: sha256, Nonce: []byte("nonce")},
+			resp: &platformv1.QuoteResponse{Quote: []byte("quote"), SignatureAlgorithm: "SHA256-RSAPSS"}, key: "signatureAlgorithm",
+		},
+		{
+			route: "POST /api/v1/tpm/quote/verify", method: http.MethodPost, target: "/api/v1/tpm/quote/verify",
+			body: `{"quote":"cXVvdGU=","akPublic":"YWs=","signatureAlgorithm":"SHA256-RSAPSS","channelBinding":"Ymlu"}`,
+			want: &platformv1.VerifyQuoteRequest{Quote: []byte("quote"), AkPublic: []byte("ak"), SignatureAlgorithm: "SHA256-RSAPSS", ChannelBinding: []byte("bin")},
+			resp: &platformv1.VerifyQuoteResponse{Verified: true}, key: "actualPcrs",
+		},
+		{
+			route: "POST /api/v1/tpm/certify", method: http.MethodPost, target: "/api/v1/tpm/certify",
+			body: `{"keyHandle":2164260865,"keyPassword":"pw","nonce":"bm9uY2U="}`,
+			want: &platformv1.CertifyRequest{KeyHandle: 0x81000001, KeyPassword: "pw", Nonce: []byte("nonce")},
+			resp: &platformv1.CertifyResponse{CertifyInfo: []byte("attest"), SignatureAlgorithm: "SHA256-RSAPSS"}, key: "certifyInfo",
+		},
+		{
+			route: "GET /api/v1/tpm/pcrs", method: http.MethodGet, target: "/api/v1/tpm/pcrs?indices=0&indices=7&bank=PCR_BANK_SHA256",
+			want: &platformv1.GetPCRsRequest{Indices: []uint32{0, 7}, Bank: sha256},
+			resp: &platformv1.GetPCRsResponse{}, key: "pcrValues",
+		},
+		{
+			route: "POST /api/v1/tpm/pcrs", method: http.MethodPost, target: "/api/v1/tpm/pcrs",
+			body: `{"indices":[0,7],"bank":"PCR_BANK_SHA384"}`,
+			want: &platformv1.GetPCRsRequest{Indices: []uint32{0, 7}, Bank: sha384},
+			resp: &platformv1.GetPCRsResponse{}, key: "pcrValues",
+		},
+		{
+			route: "POST /api/v1/tpm/pcrs/extend", method: http.MethodPost, target: "/api/v1/tpm/pcrs/extend",
+			body: `{"index":16,"hashAlg":"sha256","data":"bWVhc3VyZW1lbnQ="}`,
+			want: &platformv1.ExtendPCRRequest{Index: 16, HashAlg: "sha256", Data: []byte("measurement")},
+			resp: &platformv1.ExtendPCRResponse{}, key: "status",
+		},
+		{
+			route: "GET /api/v1/tpm/eventlog", method: http.MethodGet, target: "/api/v1/tpm/eventlog?format=json",
+			want: &platformv1.GetEventLogRequest{Format: "json"},
+			resp: &platformv1.GetEventLogResponse{EventCount: 3}, key: "eventCount",
+		},
+		{
+			route: "POST /api/v1/tpm/nvram", method: http.MethodPost, target: "/api/v1/tpm/nvram",
+			body: `{"index":` + nvramDec + `,"size":64,"password":"pw","parentPassword":"owner"}`,
+			want: &platformv1.DefineNVRAMRequest{Index: nvramIndex, Size: 64, Password: "pw", ParentPassword: "owner"},
+			resp: &platformv1.DefineNVRAMResponse{}, key: "status",
+		},
+		{
+			route: "GET /api/v1/tpm/nvram", method: http.MethodGet, target: "/api/v1/tpm/nvram",
+			body: `{"index":` + nvramDec + `,"size":32}`,
+			want: &platformv1.ReadNVRAMRequest{Index: nvramIndex, Size: 32},
+			resp: &platformv1.ReadNVRAMResponse{Data: []byte("data")}, key: "data",
+		},
+		{
+			route: "PUT /api/v1/tpm/nvram", method: http.MethodPut, target: "/api/v1/tpm/nvram",
+			body: `{"index":` + nvramDec + `,"data":"ZGF0YQ==","offset":4}`,
+			want: &platformv1.WriteNVRAMRequest{Index: nvramIndex, Data: []byte("data"), Offset: 4},
+			resp: &platformv1.WriteNVRAMResponse{}, key: "status",
+		},
+		{
+			route: "DELETE /api/v1/tpm/nvram", method: http.MethodDelete, target: "/api/v1/tpm/nvram",
+			body: `{"index":` + nvramDec + `,"parentPassword":"owner"}`,
+			want: &platformv1.UndefineNVRAMRequest{Index: nvramIndex, ParentPassword: "owner"},
+			resp: &platformv1.UndefineNVRAMResponse{}, key: "status",
+		},
+		{
+			route: "GET /api/v1/tpm/nvram/{index}", method: http.MethodGet, target: "/api/v1/tpm/nvram/0x1c00002?offset=4&size=32",
+			want: &platformv1.ReadNVRAMRequest{Index: nvramIndex, Offset: 4, Size: 32},
+			resp: &platformv1.ReadNVRAMResponse{Data: []byte("data")}, key: "data",
+		},
+		{
+			route: "PUT /api/v1/tpm/nvram/{index}", method: http.MethodPut, target: "/api/v1/tpm/nvram/0x1c00002",
+			body: `{"data":"ZGF0YQ==","password":"pw","offset":4}`,
+			want: &platformv1.WriteNVRAMRequest{Index: nvramIndex, Data: []byte("data"), Password: "pw", Offset: 4},
+			resp: &platformv1.WriteNVRAMResponse{}, key: "status",
+		},
+		{
+			route: "DELETE /api/v1/tpm/nvram/{index}", method: http.MethodDelete, target: "/api/v1/tpm/nvram/0x1c00002",
+			want: &platformv1.UndefineNVRAMRequest{Index: nvramIndex},
+			resp: &platformv1.UndefineNVRAMResponse{}, key: "status",
+		},
+		{
+			route: "POST /api/v1/tpm/random", method: http.MethodPost, target: "/api/v1/tpm/random",
+			body: `{"numBytes":32}`,
+			want: &platformv1.GetRandomRequest{NumBytes: 32},
+			resp: &platformv1.GetRandomResponse{RandomBytes: []byte{1, 2, 3}}, key: "randomBytes",
+		},
+		{
+			route: "POST /api/v1/tpm/seal", method: http.MethodPost, target: "/api/v1/tpm/seal",
+			body: `{"data":"c2VjcmV0","cn":"disk","parentHandle":` + srkHandleJS + `}`,
+			want: &platformv1.SealRequest{Data: []byte("secret"), Cn: "disk", ParentHandle: srkHandle},
+			resp: &platformv1.SealResponse{SealedData: []byte("sealed")}, key: "sealedData",
+		},
+		{
+			route: "POST /api/v1/tpm/unseal", method: http.MethodPost, target: "/api/v1/tpm/unseal",
+			body: `{"cn":"disk","pcrIndices":[7]}`,
+			want: &platformv1.UnsealRequest{Cn: "disk", PcrIndices: []uint32{7}},
+			resp: &platformv1.UnsealResponse{Data: []byte("secret")}, key: "data",
+		},
+	}
+}
+
+// TestTPMRoutesServeTheSDKContract calls every mounted route the way the
+// SDKs do: a camelCase protojson body, query parameters or a path parameter
+// must reach the TPM service as the matching request, and the response must
+// come back as protojson.
+func TestTPMRoutesServeTheSDKContract(t *testing.T) {
+	cases := tpmRouteCases()
+
+	mounted := map[string]bool{}
+	for _, route := range NewTPMHandlers(nil).routes() {
+		mounted[route.method+" "+route.path] = true
+	}
+	covered := map[string]bool{}
+	for _, tc := range cases {
+		covered[tc.route] = true
+	}
+	require.Equal(t, mounted, covered, "every mounted TPM route needs exactly one case")
+
+	for _, tc := range cases {
+		t.Run(tc.route, func(t *testing.T) {
+			tpm := &fakeTPMService{resp: tc.resp}
+			router := tpmRouter(tpm, tpmGuard())
+
+			rec := serveTPM(router, newTPMRequest(tc.method, tc.target, tc.body), tpmAdminToken)
+
+			require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+			assert.Equal(t, "application/json", rec.Header().Get("Content-Type"))
+			require.NotNil(t, tpm.req, "the TPM service must be called")
+			assert.True(t, proto.Equal(tc.want, tpm.req), "want %v, got %v", tc.want, tpm.req)
+
+			var keys map[string]json.RawMessage
+			require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &keys), rec.Body.String())
+			assert.Contains(t, keys, tc.key, rec.Body.String())
+
+			got := tc.resp.ProtoReflect().New().Interface()
+			require.NoError(t, protojson.Unmarshal(rec.Body.Bytes(), got))
+			assert.True(t, proto.Equal(tc.resp, got), "want %v, got %v", tc.resp, got)
+		})
+	}
+}
+
+// TestTPMRoutesRefuseMalformedRequests pins that a request field the
+// message does not have is an error on every route, never a silent default.
+func TestTPMRoutesRefuseMalformedRequests(t *testing.T) {
+	for _, tc := range tpmRouteCases() {
+		t.Run(tc.route+" unknown body field", func(t *testing.T) {
+			tpm := &fakeTPMService{}
+			router := tpmRouter(tpm, tpmGuard())
+
+			rec := serveTPM(router, newTPMRequest(tc.method, tc.target, `{"notAField":1}`), tpmAdminToken)
+
+			require.Equal(t, http.StatusBadRequest, rec.Code, rec.Body.String())
+			assert.Contains(t, decodeTPMError(t, rec).Error, `unknown field "notAField"`)
+			assert.Nil(t, tpm.req, "a malformed request must not reach the TPM service")
+		})
+
+		t.Run(tc.route+" unknown query parameter", func(t *testing.T) {
+			tpm := &fakeTPMService{}
+			router := tpmRouter(tpm, tpmGuard())
+			separator := "?"
+			if strings.Contains(tc.target, "?") {
+				separator = "&"
+			}
+
+			rec := serveTPM(router, newTPMRequest(tc.method, tc.target+separator+"notAField=1", ""), tpmAdminToken)
+
+			require.Equal(t, http.StatusBadRequest, rec.Code, rec.Body.String())
+			want := ErrInvalidQueryParameter{
+				Name:   "notAField",
+				Value:  "1",
+				Reason: "not a field of " + string(tc.want.ProtoReflect().Descriptor().FullName()),
+			}
+			assert.Equal(t, want.Error(), decodeTPMError(t, rec).Error)
+			assert.Nil(t, tpm.req, "a malformed request must not reach the TPM service")
+		})
+	}
+
+	t.Run("a body that is not a JSON object", func(t *testing.T) {
+		tpm := &fakeTPMService{}
+		router := tpmRouter(tpm, tpmGuard())
+
+		rec := serveTPM(router, newTPMRequest(http.MethodPost, "/api/v1/tpm/quote/verify", "[]"), tpmReaderToken)
+
+		assert.Equal(t, http.StatusBadRequest, rec.Code)
+		assert.Nil(t, tpm.req)
+	})
+
+	t.Run("a path handle that is not a uint32", func(t *testing.T) {
+		tpm := &fakeTPMService{}
+		router := tpmRouter(tpm, tpmGuard())
+
+		rec := serveTPM(router, newTPMRequest(http.MethodDelete, "/api/v1/tpm/ak/persistent", ""), tpmAdminToken)
+
+		require.Equal(t, http.StatusBadRequest, rec.Code)
+		want := ErrInvalidQueryParameter{Name: "handle", Value: "persistent", Reason: "not a valid uint32"}
+		assert.Equal(t, want.Error(), decodeTPMError(t, rec).Error)
+		assert.Nil(t, tpm.req)
+	})
+}
+
+// TestTPMLegacyRoutesAreGone pins that the routes the TPMService has no RPC
+// for are no longer mounted.
+func TestTPMLegacyRoutesAreGone(t *testing.T) {
+	legacy := []struct{ method, path string }{
+		{http.MethodPost, "/api/v1/tpm/csr/idevid"},
+		{http.MethodPost, "/api/v1/tpm/iak"},
+	}
+	router := tpmRouter(&fakeTPMService{}, tpmGuard())
+	for _, route := range legacy {
+		t.Run(route.method+" "+route.path, func(t *testing.T) {
+			rec := serveTPM(router, newTPMRequest(route.method, route.path, ""), tpmAdminToken)
+
+			assert.Equal(t, http.StatusNotFound, rec.Code)
+		})
+	}
+}
+
+func TestTPMRequireScope(t *testing.T) {
+	t.Run("a token granting the route's scope reaches the handler", func(t *testing.T) {
+		tpm := &fakeTPMService{}
+		router := tpmRouter(tpm, tpmGuard())
+
+		rec := serveTPM(router, newTPMRequest(http.MethodPost, "/api/v1/tpm/quote", ""), tpmReaderToken)
+
+		assert.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+		assert.NotNil(t, tpm.req, "the TPM service must be called")
+	})
+
+	t.Run("the token is validated at the request URL and the guard checks the scope", func(t *testing.T) {
+		tokens := tpmScopedAuthorizer()
+		router := tpmRouter(&fakeTPMService{}, NewScopeGuard(tokens, nil, nil))
+
+		rec := serveTPM(router, newTPMRequest(http.MethodPost, "/api/v1/tpm/seal", ""), tpmWriterToken)
+
+		assert.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+		assert.Empty(t, tokens.asked, "the guard checks the route scope itself")
+		assert.True(t, strings.HasSuffix(tokens.askedHTU, "/api/v1/tpm/seal"), tokens.askedHTU)
+	})
+
+	t.Run("the verified operator client certificate reaches every route", func(t *testing.T) {
+		guard := NewScopeGuard(nil, grantingPeers{scopes: []string{"*:*"}}, nil)
+		for _, route := range NewTPMHandlers(nil).routes() {
+			tpm := &fakeTPMService{}
+			target := strings.NewReplacer("{handle}", ekHandleDec, "{index}", nvramDec).Replace(route.path)
+
+			rec := serveTPM(tpmRouter(tpm, guard), certificateRequest(route.method, target, "operator"), "")
+
+			assert.NotEqual(t, http.StatusUnauthorized, rec.Code, "%s %s: %s", route.method, route.path, rec.Body.String())
+			assert.NotEqual(t, http.StatusForbidden, rec.Code, "%s %s: %s", route.method, route.path, rec.Body.String())
+		}
+	})
+
+	refusals := []struct {
+		name       string
+		guard      *ScopeGuard
+		method     string
+		path       string
+		header     string
+		wantStatus int
+		wantErr    error
+	}{
+		{
+			name:       "no bearer token or client certificate",
+			guard:      tpmGuard(),
+			method:     http.MethodPost,
+			path:       "/api/v1/tpm/quote",
+			wantStatus: http.StatusUnauthorized,
+			wantErr:    ErrRouteUnauthenticated{Reason: "no bearer token or verified client certificate"},
+		},
+		{
+			name:       "a token the authorizer rejects",
+			guard:      tpmGuard(),
+			method:     http.MethodPost,
+			path:       "/api/v1/tpm/quote",
+			header:     "Bearer stolen",
+			wantStatus: http.StatusUnauthorized,
+			wantErr:    ErrRouteUnauthenticated{Reason: "token invalid"},
+		},
+		{
+			name:       "a read token on a write route",
+			guard:      tpmGuard(),
+			method:     http.MethodPost,
+			path:       "/api/v1/tpm/seal",
+			header:     "Bearer " + tpmReaderToken,
+			wantStatus: http.StatusForbidden,
+		},
+		{
+			name:       "a write token on a delete route",
+			guard:      tpmGuard(),
+			method:     http.MethodDelete,
+			path:       "/api/v1/tpm/ek",
+			header:     "Bearer " + tpmWriterToken,
+			wantStatus: http.StatusForbidden,
+		},
+		{
+			name:       "no guard configured",
+			method:     http.MethodPost,
+			path:       "/api/v1/tpm/quote",
+			header:     "Bearer " + tpmReaderToken,
+			wantStatus: http.StatusForbidden,
+			wantErr:    ErrRouteForbidden{Scope: tpmScopeRead, Reason: "no authorization is configured for this route"},
+		},
+		{
+			name:       "an authorizer that authorizes no context",
+			guard:      NewScopeGuard(nilContextAuthorizer{}, nil, nil),
+			method:     http.MethodPost,
+			path:       "/api/v1/tpm/quote",
+			header:     "Bearer " + tpmReaderToken,
+			wantStatus: http.StatusUnauthorized,
+			wantErr:    ErrRouteUnauthenticated{Reason: "the credential authorized no caller"},
+		},
+	}
+	for _, tc := range refusals {
+		t.Run("refuses "+tc.name, func(t *testing.T) {
+			tpm := &fakeTPMService{}
+			router := tpmRouter(tpm, tc.guard)
+			req := newTPMRequest(tc.method, tc.path, "")
+			if tc.header != "" {
+				req.Header.Set("Authorization", tc.header)
+			}
+
+			rec := serveTPM(router, req, "")
+
+			assert.Equal(t, tc.wantStatus, rec.Code, rec.Body.String())
+			if tc.wantErr != nil {
+				assert.Equal(t, tc.wantErr.Error(), decodeTPMError(t, rec).Error)
+			}
+			assert.Nil(t, tpm.req, "a refused request must not reach the TPM service")
+		})
+	}
+}
+
+// TestTPMRouteScopes pins the scope tiers of docs/tpm/api.md §9: every route
+// has a scope, observers need tpm:read, and every DELETE needs tpm:delete.
+func TestTPMRouteScopes(t *testing.T) {
+	tiers := map[string]bool{tpmScopeRead: true, tpmScopeWrite: true, tpmScopeDelete: true}
+	for _, route := range NewTPMHandlers(nil).routes() {
+		assert.True(t, tiers[route.scope], "%s %s has scope %q", route.method, route.path, route.scope)
+		switch route.method {
+		case http.MethodGet:
+			assert.Equal(t, tpmScopeRead, route.scope, "%s %s", route.method, route.path)
+		case http.MethodDelete:
+			assert.Equal(t, tpmScopeDelete, route.scope, "%s %s", route.method, route.path)
+		}
+	}
+}
+
+func TestTPMRPC(t *testing.T) {
+	t.Run("hands the service the request's TLS connection", func(t *testing.T) {
+		tpm := &fakeTPMService{}
+		router := tpmRouter(tpm, tpmGuard())
+		req := newTPMRequest(http.MethodPost, "/api/v1/tpm/quote", "")
+		req.TLS = testutil.ServerConnectionState(t)
+
+		rec := serveTPM(router, req, tpmReaderToken)
+
+		require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+		state, transport, ok := channelbind.ConnectionTLS(tpm.ctx)
+		require.True(t, ok, "the RPC context must record the connection")
+		assert.Same(t, req.TLS, state)
+		assert.Equal(t, channelbind.TransportREST, transport)
+	})
+
+	t.Run("an empty body is the zero request", func(t *testing.T) {
+		tpm := &fakeTPMService{}
+		router := tpmRouter(tpm, tpmGuard())
+
+		rec := serveTPM(router, newTPMRequest(http.MethodPost, "/api/v1/tpm/quote", ""), tpmReaderToken)
+
+		require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+		assert.True(t, proto.Equal(&platformv1.QuoteRequest{}, tpm.req), "%v", tpm.req)
+	})
+
+	t.Run("no TPM service is 503", func(t *testing.T) {
+		router := tpmRouter(nil, tpmGuard())
+
+		rec := serveTPM(router, newTPMRequest(http.MethodPost, "/api/v1/tpm/quote", ""), tpmReaderToken)
+
+		assert.Equal(t, http.StatusServiceUnavailable, rec.Code)
+		assert.Equal(t, ErrTPMServiceNotAvailable{}.Error(), decodeTPMError(t, rec).Error)
+	})
+
+	t.Run("a body that cannot be read is 400", func(t *testing.T) {
+		tpm := &fakeTPMService{}
+		router := tpmRouter(tpm, tpmGuard())
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/tpm/quote", iotest.ErrReader(errors.New("connection reset")))
+
+		rec := serveTPM(router, req, tpmReaderToken)
+
+		assert.Equal(t, http.StatusBadRequest, rec.Code)
+		assert.Contains(t, rec.Body.String(), "connection reset")
+		assert.Nil(t, tpm.req)
+	})
+
+	t.Run("a response that cannot be encoded is 500", func(t *testing.T) {
+		// protojson refuses a string field that is not valid UTF-8.
+		tpm := &fakeTPMService{resp: &platformv1.QuoteResponse{SignatureAlgorithm: "\xff"}}
+		router := tpmRouter(tpm, tpmGuard())
+
+		rec := serveTPM(router, newTPMRequest(http.MethodPost, "/api/v1/tpm/quote", ""), tpmReaderToken)
+
+		assert.Equal(t, http.StatusInternalServerError, rec.Code)
+		assert.Contains(t, rec.Body.String(), "encode_response")
+	})
+
+	t.Run("a quote that fails verification is 200 with the reason", func(t *testing.T) {
+		tpm := &fakeTPMService{resp: &platformv1.VerifyQuoteResponse{Message: "signature_verification_failed"}}
+		router := tpmRouter(tpm, tpmGuard())
+
+		rec := serveTPM(router, newTPMRequest(http.MethodPost, "/api/v1/tpm/quote/verify", ""), tpmReaderToken)
+
+		require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+		var resp platformv1.VerifyQuoteResponse
+		require.NoError(t, protojson.Unmarshal(rec.Body.Bytes(), &resp))
+		assert.False(t, resp.GetVerified())
+		assert.Equal(t, "signature_verification_failed", resp.GetMessage())
+	})
+
+	statuses := []struct {
+		err  error
+		want int
+	}{
+		{status.Error(codes.InvalidArgument, "nonce too long"), http.StatusBadRequest},
+		{status.Error(codes.FailedPrecondition, "no channel binding"), http.StatusBadRequest},
+		{status.Error(codes.PermissionDenied, "denied"), http.StatusForbidden},
+		{status.Error(codes.Unavailable, "no TPM"), http.StatusServiceUnavailable},
+		{errors.New("not a status error"), http.StatusInternalServerError},
+	}
+	for _, tc := range statuses {
+		t.Run("maps "+tc.err.Error(), func(t *testing.T) {
+			router := tpmRouter(&fakeTPMService{err: tc.err}, tpmGuard())
+
+			rec := serveTPM(router, newTPMRequest(http.MethodPost, "/api/v1/tpm/quote", ""), tpmReaderToken)
+
+			assert.Equal(t, tc.want, rec.Code)
+			assert.Contains(t, rec.Body.String(), status.Convert(tc.err).Message())
+		})
+	}
+}
+
+// DeleteAK refuses because the IAK is not evicted. Both routes answer that
+// refusal 412, as the daemon's IAK delete route does, while every other
+// error keeps the generic mapping.
+func TestTPMDeleteAKStatuses(t *testing.T) {
+	refused := status.Error(codes.FailedPrecondition, "the IAK key is TPM-resident")
+	cases := []struct {
+		name string
+		err  error
+		want int
+	}{
+		{"refusal is 412", refused, http.StatusPreconditionFailed},
+		{"unavailable stays 503", status.Error(codes.Unavailable, "no TPM"), http.StatusServiceUnavailable},
+		{"non-status error stays 500", errors.New("not a status error"), http.StatusInternalServerError},
+	}
+	for _, target := range []string{"/api/v1/tpm/ak", "/api/v1/tpm/ak/0x81010002"} {
+		for _, tc := range cases {
+			t.Run(target+" "+tc.name, func(t *testing.T) {
+				router := tpmRouter(&fakeTPMService{err: tc.err}, tpmGuard())
+
+				rec := serveTPM(router, newTPMRequest(http.MethodDelete, target, ""), tpmAdminToken)
+
+				assert.Equal(t, tc.want, rec.Code)
+				assert.Contains(t, rec.Body.String(), status.Convert(tc.err).Message())
+			})
+		}
+	}
+
+	t.Run("other routes keep FailedPrecondition at 400", func(t *testing.T) {
+		router := tpmRouter(&fakeTPMService{err: refused}, tpmGuard())
+
+		rec := serveTPM(router, newTPMRequest(http.MethodDelete, "/api/v1/tpm/srk", ""), tpmAdminToken)
+
+		assert.Equal(t, http.StatusBadRequest, rec.Code)
+	})
+}
 
 func TestTPMHandlerErrors(t *testing.T) {
 	t.Run("ErrTPMServiceNotAvailable", func(t *testing.T) {
-		err := ErrTPMServiceNotAvailable{}
-		assert.Equal(t, "TPM service not available", err.Error())
+		assert.Equal(t, "TPM service not available", ErrTPMServiceNotAvailable{}.Error())
 	})
 
-	t.Run("ErrTPMInvalidPCRIndex", func(t *testing.T) {
-		err := ErrTPMInvalidPCRIndex{Index: 25}
-		assert.Equal(t, "invalid PCR index: 25 (must be 0-23)", err.Error())
-	})
-
-	t.Run("ErrTPMOperationFailed", func(t *testing.T) {
-		cause := errors.New("underlying error")
-		err := ErrTPMOperationFailed{Operation: "seal", Cause: cause}
-		assert.Equal(t, "TPM operation seal failed: underlying error", err.Error())
-		assert.Equal(t, cause, err.Unwrap())
-	})
-
-	t.Run("ErrTPMInvalidNVIndex empty", func(t *testing.T) {
-		err := ErrTPMInvalidNVIndex{}
-		assert.Equal(t, "NV index is required", err.Error())
-	})
-
-	t.Run("ErrTPMInvalidNVIndex with value", func(t *testing.T) {
-		err := ErrTPMInvalidNVIndex{Index: "0xBadIndex"}
-		assert.Equal(t, "invalid NV index: 0xBadIndex", err.Error())
-	})
-
-	t.Run("ErrTPMInvalidRandomSize", func(t *testing.T) {
-		err := ErrTPMInvalidRandomSize{Size: 2048}
-		assert.Equal(t, "invalid random size: 2048 (must be 1-1024)", err.Error())
-	})
-}
-
-// =============================================================================
-// Constructor Tests
-// =============================================================================
-
-func TestNewTPMHandlers(t *testing.T) {
-	t.Run("creates handlers with logger", func(t *testing.T) {
-		logger := slog.Default()
-		handlers := NewTPMHandlers(logger)
-		require.NotNil(t, handlers)
-		assert.Equal(t, logger, handlers.logger)
-	})
-
-	t.Run("creates handlers with nil logger uses default", func(t *testing.T) {
-		handlers := NewTPMHandlers(nil)
-		require.NotNil(t, handlers)
-		assert.NotNil(t, handlers.logger)
-	})
-}
-
-func TestSetTPM2Service(t *testing.T) {
-	t.Run("sets TPM service", func(t *testing.T) {
-		handlers := NewTPMHandlers(slog.Default())
-		tpm := newMockTPMService()
-		handlers.SetTPM2Service(tpm)
-		assert.NotNil(t, handlers.getTPM())
-	})
-}
-
-func TestTPMRegisterRoutes(t *testing.T) {
-	t.Run("registers all TPM routes", func(t *testing.T) {
-		_, router := setupTPMTestHandler(nil)
-
-		routes := []struct {
-			method string
-			path   string
-		}{
-			{http.MethodGet, "/api/v1/tpm/info"},
-			{http.MethodPost, "/api/v1/tpm/provision"},
-			{http.MethodPost, "/api/v1/tpm/clear"},
-			{http.MethodGet, "/api/v1/tpm/ek"},
-			{http.MethodPost, "/api/v1/tpm/ek"},
-			{http.MethodDelete, "/api/v1/tpm/ek"},
-			{http.MethodGet, "/api/v1/tpm/ek/certificate"},
-			{http.MethodPost, "/api/v1/tpm/ek/certificate"},
-			{http.MethodGet, "/api/v1/tpm/srk"},
-			{http.MethodPost, "/api/v1/tpm/srk"},
-			{http.MethodDelete, "/api/v1/tpm/srk"},
-			{http.MethodGet, "/api/v1/tpm/iak"},
-			{http.MethodPost, "/api/v1/tpm/iak"},
-			{http.MethodDelete, "/api/v1/tpm/iak"},
-			{http.MethodGet, "/api/v1/tpm/idevid"},
-			{http.MethodPost, "/api/v1/tpm/quote"},
-			{http.MethodPost, "/api/v1/tpm/verify-quote"},
-			{http.MethodPost, "/api/v1/tpm/certify"},
-			{http.MethodGet, "/api/v1/tpm/pcrs"},
-			{http.MethodPost, "/api/v1/tpm/pcrs/extend"},
-			{http.MethodGet, "/api/v1/tpm/eventlog"},
-			{http.MethodGet, "/api/v1/tpm/capabilities"},
-			{http.MethodPost, "/api/v1/tpm/random"},
-			{http.MethodPost, "/api/v1/tpm/seal"},
-			{http.MethodPost, "/api/v1/tpm/unseal"},
-			{http.MethodPost, "/api/v1/tpm/nv/read"},
-			{http.MethodPost, "/api/v1/tpm/nv/write"},
-			{http.MethodDelete, "/api/v1/tpm/nv"},
-			{http.MethodPost, "/api/v1/tpm/nv/define"},
-			{http.MethodPost, "/api/v1/tpm/csr/idevid"},
-			{http.MethodPost, "/api/v1/tpm/csr/ldevid"},
-			{http.MethodGet, "/api/v1/tpm/platform"},
-		}
-
-		for _, route := range routes {
-			req := httptest.NewRequest(route.method, route.path, nil)
-			match := &mux.RouteMatch{}
-			matched := router.Match(req, match)
-			assert.True(t, matched, "Route %s %s should be registered", route.method, route.path)
-		}
-	})
-}
-
-// =============================================================================
-// handleGetInfo Tests
-// =============================================================================
-
-func TestTPMHandleGetInfo(t *testing.T) {
-	t.Run("returns info successfully", func(t *testing.T) {
-		tpm := newMockTPMService()
-		tpm.infoResult = "TPM Simulator v2.0"
-		tpm.fixedProps = &xkmssdk.PropertiesFixed{
-			Manufacturer:   "TestMfg",
-			Model:          "TestModel",
-			FwMajor:        1,
-			FwMinor:        2,
-			NVBufferMax:    2048,
-			Fips1402:       true,
-			LockoutCounter: 0,
-			MaxAuthFail:    32,
-			Family:         "2.0",
-			Revision:       "164",
-			VendorID:       "TST",
-		}
-		_, router := setupTPMTestHandler(tpm)
-
-		req := httptest.NewRequest(http.MethodGet, "/api/v1/tpm/info", nil)
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-
-		resp := w.Result()
-		assert.Equal(t, http.StatusOK, resp.StatusCode)
-
-		var infoResp TPMInfoResponse
-		decodeTPMResponse(t, resp, &infoResp)
-		assert.Equal(t, "TPM Simulator v2.0", infoResp.Info)
-		assert.True(t, infoResp.IsSimulator)
-		assert.True(t, infoResp.FIPSMode)
-		assert.Equal(t, uint32(2048), infoResp.MaxNVRAMSize)
-		require.NotNil(t, infoResp.Manufacturer)
-		assert.Equal(t, "TestMfg", infoResp.Manufacturer.Name)
-		assert.Equal(t, "TestModel", infoResp.Manufacturer.Model)
-		assert.Equal(t, "1.2", infoResp.Manufacturer.FirmwareVersion)
-		require.Len(t, infoResp.Capabilities, 5)
-	})
-
-	t.Run("returns info without fixed properties", func(t *testing.T) {
-		tpm := newMockTPMService()
-		tpm.infoResult = "TPM v2.0"
-		tpm.fixedPropsErr = errors.New("not supported")
-		_, router := setupTPMTestHandler(tpm)
-
-		req := httptest.NewRequest(http.MethodGet, "/api/v1/tpm/info", nil)
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-
-		resp := w.Result()
-		assert.Equal(t, http.StatusOK, resp.StatusCode)
-
-		var infoResp TPMInfoResponse
-		decodeTPMResponse(t, resp, &infoResp)
-		assert.Equal(t, "TPM v2.0", infoResp.Info)
-		assert.Nil(t, infoResp.Manufacturer)
-	})
-
-	t.Run("returns service unavailable when TPM not set", func(t *testing.T) {
-		_, router := setupTPMTestHandler(nil)
-
-		req := httptest.NewRequest(http.MethodGet, "/api/v1/tpm/info", nil)
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-
-		resp := w.Result()
-		assert.Equal(t, http.StatusServiceUnavailable, resp.StatusCode)
-	})
-
-	t.Run("returns error when Info fails", func(t *testing.T) {
-		tpm := newMockTPMService()
-		tpm.infoErr = errors.New("TPM not initialized")
-		_, router := setupTPMTestHandler(tpm)
-
-		req := httptest.NewRequest(http.MethodGet, "/api/v1/tpm/info", nil)
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-
-		resp := w.Result()
-		assert.NotEqual(t, http.StatusOK, resp.StatusCode)
-	})
-
-	t.Run("returns info with nil config", func(t *testing.T) {
-		tpm := newMockTPMService()
-		tpm.infoResult = "TPM v2.0"
-		tpm.config = nil
-		_, router := setupTPMTestHandler(tpm)
-
-		req := httptest.NewRequest(http.MethodGet, "/api/v1/tpm/info", nil)
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-
-		resp := w.Result()
-		assert.Equal(t, http.StatusOK, resp.StatusCode)
-
-		var infoResp TPMInfoResponse
-		decodeTPMResponse(t, resp, &infoResp)
-		assert.False(t, infoResp.IsSimulator)
-	})
-}
-
-// =============================================================================
-// handleProvision Tests
-// =============================================================================
-
-func TestTPMHandleProvision(t *testing.T) {
-	t.Run("provisions successfully", func(t *testing.T) {
-		tpm := newMockTPMService()
-		_, router := setupTPMTestHandler(tpm)
-
-		body, _ := json.Marshal(TPMProvisionRequest{OwnerPassword: "test-pw"})
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/tpm/provision", bytes.NewReader(body))
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-
-		resp := w.Result()
-		assert.Equal(t, http.StatusOK, resp.StatusCode)
-
-		var status TPMStatusResponse
-		decodeTPMResponse(t, resp, &status)
-		assert.True(t, status.Success)
-	})
-
-	t.Run("provisions without password", func(t *testing.T) {
-		tpm := newMockTPMService()
-		_, router := setupTPMTestHandler(tpm)
-
-		body, _ := json.Marshal(TPMProvisionRequest{})
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/tpm/provision", bytes.NewReader(body))
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-
-		resp := w.Result()
-		assert.Equal(t, http.StatusOK, resp.StatusCode)
-	})
-
-	t.Run("returns service unavailable when TPM not set", func(t *testing.T) {
-		_, router := setupTPMTestHandler(nil)
-
-		body, _ := json.Marshal(TPMProvisionRequest{})
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/tpm/provision", bytes.NewReader(body))
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-
-		resp := w.Result()
-		assert.Equal(t, http.StatusServiceUnavailable, resp.StatusCode)
-	})
-
-	t.Run("returns error for invalid body", func(t *testing.T) {
-		tpm := newMockTPMService()
-		_, router := setupTPMTestHandler(tpm)
-
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/tpm/provision", strings.NewReader("bad json"))
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-
-		resp := w.Result()
-		assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
-	})
-
-	t.Run("returns error when provision fails", func(t *testing.T) {
-		tpm := newMockTPMService()
-		tpm.provisionOwnerErr = errors.New("already provisioned")
-		_, router := setupTPMTestHandler(tpm)
-
-		body, _ := json.Marshal(TPMProvisionRequest{})
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/tpm/provision", bytes.NewReader(body))
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-
-		resp := w.Result()
-		assert.NotEqual(t, http.StatusOK, resp.StatusCode)
-	})
-}
-
-// =============================================================================
-// handleClear Tests
-// =============================================================================
-
-func TestTPMHandleClear(t *testing.T) {
-	t.Run("clears successfully", func(t *testing.T) {
-		tpm := newMockTPMService()
-		_, router := setupTPMTestHandler(tpm)
-
-		body, _ := json.Marshal(TPMClearRequest{OwnerPassword: "test-pw"})
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/tpm/clear", bytes.NewReader(body))
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-
-		resp := w.Result()
-		assert.Equal(t, http.StatusOK, resp.StatusCode)
-
-		var status TPMStatusResponse
-		decodeTPMResponse(t, resp, &status)
-		assert.True(t, status.Success)
-	})
-
-	t.Run("clears without password", func(t *testing.T) {
-		tpm := newMockTPMService()
-		_, router := setupTPMTestHandler(tpm)
-
-		body, _ := json.Marshal(TPMClearRequest{})
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/tpm/clear", bytes.NewReader(body))
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-
-		resp := w.Result()
-		assert.Equal(t, http.StatusOK, resp.StatusCode)
-	})
-
-	t.Run("returns service unavailable when TPM not set", func(t *testing.T) {
-		_, router := setupTPMTestHandler(nil)
-
-		body, _ := json.Marshal(TPMClearRequest{})
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/tpm/clear", bytes.NewReader(body))
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-
-		resp := w.Result()
-		assert.Equal(t, http.StatusServiceUnavailable, resp.StatusCode)
-	})
-
-	t.Run("returns error for invalid body", func(t *testing.T) {
-		tpm := newMockTPMService()
-		_, router := setupTPMTestHandler(tpm)
-
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/tpm/clear", strings.NewReader("not json"))
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-
-		resp := w.Result()
-		assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
-	})
-
-	t.Run("returns error when clear fails", func(t *testing.T) {
-		tpm := newMockTPMService()
-		tpm.clearErr = errors.New("permission denied")
-		_, router := setupTPMTestHandler(tpm)
-
-		body, _ := json.Marshal(TPMClearRequest{})
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/tpm/clear", bytes.NewReader(body))
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-
-		resp := w.Result()
-		assert.Equal(t, http.StatusForbidden, resp.StatusCode)
-	})
-}
-
-// =============================================================================
-// EK Handler Tests
-// =============================================================================
-
-func TestTPMHandleGetEK(t *testing.T) {
-	t.Run("returns EK attributes", func(t *testing.T) {
-		tpm := newMockTPMService()
-		_, router := setupTPMTestHandler(tpm)
-
-		req := httptest.NewRequest(http.MethodGet, "/api/v1/tpm/ek", nil)
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-
-		resp := w.Result()
-		assert.Equal(t, http.StatusOK, resp.StatusCode)
-
-		var keyResp TPMKeyResponse
-		decodeTPMResponse(t, resp, &keyResp)
-		assert.Equal(t, uint32(0x81010001), keyResp.Handle)
-	})
-
-	t.Run("returns service unavailable when TPM not set", func(t *testing.T) {
-		_, router := setupTPMTestHandler(nil)
-
-		req := httptest.NewRequest(http.MethodGet, "/api/v1/tpm/ek", nil)
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-
-		resp := w.Result()
-		assert.Equal(t, http.StatusServiceUnavailable, resp.StatusCode)
-	})
-
-	t.Run("returns error when EKAttributes fails", func(t *testing.T) {
-		tpm := newMockTPMService()
-		tpm.ekAttrs = nil
-		tpm.ekAttrsErr = errors.New("EK not found")
-		_, router := setupTPMTestHandler(tpm)
-
-		req := httptest.NewRequest(http.MethodGet, "/api/v1/tpm/ek", nil)
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-
-		resp := w.Result()
-		assert.Equal(t, http.StatusNotFound, resp.StatusCode)
-	})
-}
-
-func TestTPMHandleCreateEK(t *testing.T) {
-	t.Run("creates EK successfully", func(t *testing.T) {
-		tpm := newMockTPMService()
-		_, router := setupTPMTestHandler(tpm)
-
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/tpm/ek", nil)
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-
-		resp := w.Result()
-		assert.Equal(t, http.StatusCreated, resp.StatusCode)
-
-		var status TPMStatusResponse
-		decodeTPMResponse(t, resp, &status)
-		assert.True(t, status.Success)
-	})
-
-	t.Run("returns service unavailable when TPM not set", func(t *testing.T) {
-		_, router := setupTPMTestHandler(nil)
-
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/tpm/ek", nil)
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-
-		resp := w.Result()
-		assert.Equal(t, http.StatusServiceUnavailable, resp.StatusCode)
-	})
-
-	t.Run("returns error when EKAttributes fails", func(t *testing.T) {
-		tpm := newMockTPMService()
-		tpm.ekAttrs = nil
-		tpm.ekAttrsErr = errors.New("TPM not initialized")
-		_, router := setupTPMTestHandler(tpm)
-
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/tpm/ek", nil)
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-
-		resp := w.Result()
-		assert.NotEqual(t, http.StatusCreated, resp.StatusCode)
-	})
-
-	t.Run("returns error when CreateEK fails", func(t *testing.T) {
-		tpm := newMockTPMService()
-		tpm.createEKErr = errors.New("already exists")
-		_, router := setupTPMTestHandler(tpm)
-
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/tpm/ek", nil)
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-
-		resp := w.Result()
-		assert.Equal(t, http.StatusConflict, resp.StatusCode)
-	})
-}
-
-func TestTPMHandleDeleteEK(t *testing.T) {
-	t.Run("deletes EK successfully", func(t *testing.T) {
-		tpm := newMockTPMService()
-		_, router := setupTPMTestHandler(tpm)
-
-		req := httptest.NewRequest(http.MethodDelete, "/api/v1/tpm/ek", nil)
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-
-		resp := w.Result()
-		assert.Equal(t, http.StatusOK, resp.StatusCode)
-		assert.Contains(t, tpm.flushed, xkmssdk.TPMHandle(0x81010001))
-	})
-
-	t.Run("returns service unavailable when TPM not set", func(t *testing.T) {
-		_, router := setupTPMTestHandler(nil)
-
-		req := httptest.NewRequest(http.MethodDelete, "/api/v1/tpm/ek", nil)
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-
-		resp := w.Result()
-		assert.Equal(t, http.StatusServiceUnavailable, resp.StatusCode)
-	})
-
-	t.Run("returns error when EKAttributes fails", func(t *testing.T) {
-		tpm := newMockTPMService()
-		tpm.ekAttrs = nil
-		tpm.ekAttrsErr = errors.New("not provisioned")
-		_, router := setupTPMTestHandler(tpm)
-
-		req := httptest.NewRequest(http.MethodDelete, "/api/v1/tpm/ek", nil)
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-
-		resp := w.Result()
-		assert.NotEqual(t, http.StatusOK, resp.StatusCode)
-	})
-}
-
-// =============================================================================
-// EK Certificate Tests
-// =============================================================================
-
-func TestTPMHandleGetEKCertificate(t *testing.T) {
-	t.Run("returns EK certificate", func(t *testing.T) {
-		tpm := newMockTPMService()
-		_, router := setupTPMTestHandler(tpm)
-
-		req := httptest.NewRequest(http.MethodGet, "/api/v1/tpm/ek/certificate", nil)
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-
-		resp := w.Result()
-		assert.Equal(t, http.StatusOK, resp.StatusCode)
-
-		var certResp TPMCertificateResponse
-		decodeTPMResponse(t, resp, &certResp)
-		assert.NotEmpty(t, certResp.Certificate)
-	})
-
-	t.Run("returns service unavailable when TPM not set", func(t *testing.T) {
-		_, router := setupTPMTestHandler(nil)
-
-		req := httptest.NewRequest(http.MethodGet, "/api/v1/tpm/ek/certificate", nil)
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-
-		resp := w.Result()
-		assert.Equal(t, http.StatusServiceUnavailable, resp.StatusCode)
-	})
-
-	t.Run("returns error when EKCertificate fails", func(t *testing.T) {
-		tpm := newMockTPMService()
-		tpm.ekCertErr = errors.New("certificate not found")
-		_, router := setupTPMTestHandler(tpm)
-
-		req := httptest.NewRequest(http.MethodGet, "/api/v1/tpm/ek/certificate", nil)
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-
-		resp := w.Result()
-		assert.Equal(t, http.StatusNotFound, resp.StatusCode)
-	})
-}
-
-func TestTPMHandleImportEKCertificate(t *testing.T) {
-	t.Run("imports EK certificate successfully", func(t *testing.T) {
-		tpm := newMockTPMService()
-		_, router := setupTPMTestHandler(tpm)
-
-		certB64 := base64.StdEncoding.EncodeToString([]byte("fake-cert-der"))
-		body, _ := json.Marshal(TPMImportEKCertRequest{Certificate: certB64})
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/tpm/ek/certificate", bytes.NewReader(body))
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-
-		resp := w.Result()
-		assert.Equal(t, http.StatusOK, resp.StatusCode)
-	})
-
-	t.Run("returns service unavailable when TPM not set", func(t *testing.T) {
-		_, router := setupTPMTestHandler(nil)
-
-		body, _ := json.Marshal(TPMImportEKCertRequest{Certificate: "dGVzdA=="})
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/tpm/ek/certificate", bytes.NewReader(body))
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-
-		resp := w.Result()
-		assert.Equal(t, http.StatusServiceUnavailable, resp.StatusCode)
-	})
-
-	t.Run("returns error for invalid body", func(t *testing.T) {
-		tpm := newMockTPMService()
-		_, router := setupTPMTestHandler(tpm)
-
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/tpm/ek/certificate", strings.NewReader("bad"))
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-
-		resp := w.Result()
-		assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
-	})
-
-	t.Run("returns error when certificate field empty", func(t *testing.T) {
-		tpm := newMockTPMService()
-		_, router := setupTPMTestHandler(tpm)
-
-		body, _ := json.Marshal(TPMImportEKCertRequest{Certificate: ""})
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/tpm/ek/certificate", bytes.NewReader(body))
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-
-		resp := w.Result()
-		assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
-	})
-
-	t.Run("returns error for invalid base64", func(t *testing.T) {
-		tpm := newMockTPMService()
-		_, router := setupTPMTestHandler(tpm)
-
-		body, _ := json.Marshal(TPMImportEKCertRequest{Certificate: "not-valid-base64!!!"})
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/tpm/ek/certificate", bytes.NewReader(body))
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-
-		resp := w.Result()
-		assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
-	})
-
-	t.Run("returns error when ProvisionEKCert fails", func(t *testing.T) {
-		tpm := newMockTPMService()
-		tpm.provisionEKCertErr = errors.New("invalid certificate")
-		_, router := setupTPMTestHandler(tpm)
-
-		certB64 := base64.StdEncoding.EncodeToString([]byte("fake-cert"))
-		body, _ := json.Marshal(TPMImportEKCertRequest{Certificate: certB64})
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/tpm/ek/certificate", bytes.NewReader(body))
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-
-		resp := w.Result()
-		assert.NotEqual(t, http.StatusOK, resp.StatusCode)
-	})
-}
-
-// =============================================================================
-// SRK Handler Tests
-// =============================================================================
-
-func TestTPMHandleGetSRK(t *testing.T) {
-	t.Run("returns SRK attributes", func(t *testing.T) {
-		tpm := newMockTPMService()
-		_, router := setupTPMTestHandler(tpm)
-
-		req := httptest.NewRequest(http.MethodGet, "/api/v1/tpm/srk", nil)
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-
-		resp := w.Result()
-		assert.Equal(t, http.StatusOK, resp.StatusCode)
-
-		var keyResp TPMKeyResponse
-		decodeTPMResponse(t, resp, &keyResp)
-		assert.Equal(t, uint32(0x81000001), keyResp.Handle)
-	})
-
-	t.Run("returns service unavailable when TPM not set", func(t *testing.T) {
-		_, router := setupTPMTestHandler(nil)
-
-		req := httptest.NewRequest(http.MethodGet, "/api/v1/tpm/srk", nil)
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-
-		resp := w.Result()
-		assert.Equal(t, http.StatusServiceUnavailable, resp.StatusCode)
-	})
-
-	t.Run("returns error when SSRKAttributes fails", func(t *testing.T) {
-		tpm := newMockTPMService()
-		tpm.ssrkAttrs = nil
-		tpm.ssrkAttrsErr = errors.New("SRK not found")
-		_, router := setupTPMTestHandler(tpm)
-
-		req := httptest.NewRequest(http.MethodGet, "/api/v1/tpm/srk", nil)
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-
-		resp := w.Result()
-		assert.Equal(t, http.StatusNotFound, resp.StatusCode)
-	})
-}
-
-func TestTPMHandleCreateSRK(t *testing.T) {
-	t.Run("creates SRK successfully", func(t *testing.T) {
-		tpm := newMockTPMService()
-		_, router := setupTPMTestHandler(tpm)
-
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/tpm/srk", nil)
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-
-		resp := w.Result()
-		assert.Equal(t, http.StatusCreated, resp.StatusCode)
-	})
-
-	t.Run("returns service unavailable when TPM not set", func(t *testing.T) {
-		_, router := setupTPMTestHandler(nil)
-
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/tpm/srk", nil)
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-
-		resp := w.Result()
-		assert.Equal(t, http.StatusServiceUnavailable, resp.StatusCode)
-	})
-
-	t.Run("returns error when SSRKAttributes fails", func(t *testing.T) {
-		tpm := newMockTPMService()
-		tpm.ssrkAttrs = nil
-		tpm.ssrkAttrsErr = errors.New("not provisioned")
-		_, router := setupTPMTestHandler(tpm)
-
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/tpm/srk", nil)
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-
-		resp := w.Result()
-		assert.NotEqual(t, http.StatusCreated, resp.StatusCode)
-	})
-
-	t.Run("returns error when CreateSRK fails", func(t *testing.T) {
-		tpm := newMockTPMService()
-		tpm.createSRKErr = errors.New("already exists")
-		_, router := setupTPMTestHandler(tpm)
-
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/tpm/srk", nil)
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-
-		resp := w.Result()
-		assert.Equal(t, http.StatusConflict, resp.StatusCode)
-	})
-}
-
-func TestTPMHandleDeleteSRK(t *testing.T) {
-	t.Run("deletes SRK successfully", func(t *testing.T) {
-		tpm := newMockTPMService()
-		_, router := setupTPMTestHandler(tpm)
-
-		req := httptest.NewRequest(http.MethodDelete, "/api/v1/tpm/srk", nil)
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-
-		resp := w.Result()
-		assert.Equal(t, http.StatusOK, resp.StatusCode)
-		assert.Contains(t, tpm.flushed, xkmssdk.TPMHandle(0x81000001))
-	})
-
-	t.Run("returns service unavailable when TPM not set", func(t *testing.T) {
-		_, router := setupTPMTestHandler(nil)
-
-		req := httptest.NewRequest(http.MethodDelete, "/api/v1/tpm/srk", nil)
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-
-		resp := w.Result()
-		assert.Equal(t, http.StatusServiceUnavailable, resp.StatusCode)
-	})
-
-	t.Run("returns error when SSRKAttributes fails", func(t *testing.T) {
-		tpm := newMockTPMService()
-		tpm.ssrkAttrs = nil
-		tpm.ssrkAttrsErr = errors.New("not provisioned")
-		_, router := setupTPMTestHandler(tpm)
-
-		req := httptest.NewRequest(http.MethodDelete, "/api/v1/tpm/srk", nil)
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-
-		resp := w.Result()
-		assert.NotEqual(t, http.StatusOK, resp.StatusCode)
-	})
-}
-
-// =============================================================================
-// IAK Handler Tests
-// =============================================================================
-
-func TestTPMHandleGetIAK(t *testing.T) {
-	t.Run("returns IAK successfully", func(t *testing.T) {
-		tpm := newMockTPMService()
-		tpm.iakPubKey = []byte("public-key-data")
-		_, router := setupTPMTestHandler(tpm)
-
-		req := httptest.NewRequest(http.MethodGet, "/api/v1/tpm/iak", nil)
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-
-		resp := w.Result()
-		assert.Equal(t, http.StatusOK, resp.StatusCode)
-
-		var keyResp TPMKeyResponse
-		decodeTPMResponse(t, resp, &keyResp)
-		assert.Equal(t, uint32(0x81020001), keyResp.Handle)
-	})
-
-	t.Run("returns service unavailable when TPM not set", func(t *testing.T) {
-		_, router := setupTPMTestHandler(nil)
-
-		req := httptest.NewRequest(http.MethodGet, "/api/v1/tpm/iak", nil)
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-
-		resp := w.Result()
-		assert.Equal(t, http.StatusServiceUnavailable, resp.StatusCode)
-	})
-
-	t.Run("returns error when IAKAttributes fails", func(t *testing.T) {
-		tpm := newMockTPMService()
-		tpm.iakAttrs = nil
-		tpm.iakAttrsErr = errors.New("IAK not found")
-		_, router := setupTPMTestHandler(tpm)
-
-		req := httptest.NewRequest(http.MethodGet, "/api/v1/tpm/iak", nil)
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-
-		resp := w.Result()
-		assert.Equal(t, http.StatusNotFound, resp.StatusCode)
-	})
-
-	t.Run("returns error when IAK returns error", func(t *testing.T) {
-		tpm := newMockTPMService()
-		tpm.iakPubKeyErr = errors.New("IAK not initialized")
-		_, router := setupTPMTestHandler(tpm)
-
-		req := httptest.NewRequest(http.MethodGet, "/api/v1/tpm/iak", nil)
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-
-		resp := w.Result()
-		assert.NotEqual(t, http.StatusOK, resp.StatusCode)
-	})
-
-	t.Run("returns not found when IAK returns nil public key", func(t *testing.T) {
-		tpm := newMockTPMService()
-		tpm.iakPubKey = nil
-		_, router := setupTPMTestHandler(tpm)
-
-		req := httptest.NewRequest(http.MethodGet, "/api/v1/tpm/iak", nil)
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-
-		resp := w.Result()
-		assert.Equal(t, http.StatusNotFound, resp.StatusCode)
-	})
-}
-
-func TestTPMHandleCreateIAK(t *testing.T) {
-	t.Run("creates IAK successfully", func(t *testing.T) {
-		tpm := newMockTPMService()
-		tpm.createIAKAttrs = &xkmssdk.KeyAttributes{
-			TPMAttributes: &xkmssdk.TPMAttributes{
-				Handle: 0x81020001,
-			},
-		}
-		_, router := setupTPMTestHandler(tpm)
-
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/tpm/iak", nil)
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-
-		resp := w.Result()
-		assert.Equal(t, http.StatusCreated, resp.StatusCode)
-	})
-
-	t.Run("returns service unavailable when TPM not set", func(t *testing.T) {
-		_, router := setupTPMTestHandler(nil)
-
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/tpm/iak", nil)
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-
-		resp := w.Result()
-		assert.Equal(t, http.StatusServiceUnavailable, resp.StatusCode)
-	})
-
-	t.Run("returns error when EKAttributes fails", func(t *testing.T) {
-		tpm := newMockTPMService()
-		tpm.ekAttrs = nil
-		tpm.ekAttrsErr = errors.New("EK not found")
-		_, router := setupTPMTestHandler(tpm)
-
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/tpm/iak", nil)
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-
-		resp := w.Result()
-		assert.Equal(t, http.StatusNotFound, resp.StatusCode)
-	})
-
-	t.Run("returns error when CreateIAK fails", func(t *testing.T) {
-		tpm := newMockTPMService()
-		tpm.createIAKErr = errors.New("duplicate key")
-		_, router := setupTPMTestHandler(tpm)
-
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/tpm/iak", nil)
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-
-		resp := w.Result()
-		assert.NotEqual(t, http.StatusCreated, resp.StatusCode)
-	})
-}
-
-func TestTPMHandleDeleteIAK(t *testing.T) {
-	t.Run("deletes IAK successfully", func(t *testing.T) {
-		tpm := newMockTPMService()
-		_, router := setupTPMTestHandler(tpm)
-
-		req := httptest.NewRequest(http.MethodDelete, "/api/v1/tpm/iak", nil)
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-
-		resp := w.Result()
-		assert.Equal(t, http.StatusOK, resp.StatusCode)
-		assert.Contains(t, tpm.flushed, xkmssdk.TPMHandle(0x81020001))
-	})
-
-	t.Run("returns service unavailable when TPM not set", func(t *testing.T) {
-		_, router := setupTPMTestHandler(nil)
-
-		req := httptest.NewRequest(http.MethodDelete, "/api/v1/tpm/iak", nil)
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-
-		resp := w.Result()
-		assert.Equal(t, http.StatusServiceUnavailable, resp.StatusCode)
-	})
-
-	t.Run("returns error when IAKAttributes fails", func(t *testing.T) {
-		tpm := newMockTPMService()
-		tpm.iakAttrs = nil
-		tpm.iakAttrsErr = errors.New("not provisioned")
-		_, router := setupTPMTestHandler(tpm)
-
-		req := httptest.NewRequest(http.MethodDelete, "/api/v1/tpm/iak", nil)
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-
-		resp := w.Result()
-		assert.NotEqual(t, http.StatusOK, resp.StatusCode)
-	})
-}
-
-// =============================================================================
-// IDevID Handler Tests
-// =============================================================================
-
-func TestTPMHandleGetIDevID(t *testing.T) {
-	t.Run("returns IDevID successfully", func(t *testing.T) {
-		tpm := newMockTPMService()
-		tpm.idevidPubKey = []byte("idevid-public-key")
-		_, router := setupTPMTestHandler(tpm)
-
-		req := httptest.NewRequest(http.MethodGet, "/api/v1/tpm/idevid", nil)
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-
-		resp := w.Result()
-		assert.Equal(t, http.StatusOK, resp.StatusCode)
-
-		var keyResp TPMKeyResponse
-		decodeTPMResponse(t, resp, &keyResp)
-		assert.Equal(t, uint32(0x81030001), keyResp.Handle)
-	})
-
-	t.Run("returns service unavailable when TPM not set", func(t *testing.T) {
-		_, router := setupTPMTestHandler(nil)
-
-		req := httptest.NewRequest(http.MethodGet, "/api/v1/tpm/idevid", nil)
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-
-		resp := w.Result()
-		assert.Equal(t, http.StatusServiceUnavailable, resp.StatusCode)
-	})
-
-	t.Run("returns error when IDevIDAttributes fails", func(t *testing.T) {
-		tpm := newMockTPMService()
-		tpm.idevidAttrs = nil
-		tpm.idevidAttrsErr = errors.New("IDevID not found")
-		_, router := setupTPMTestHandler(tpm)
-
-		req := httptest.NewRequest(http.MethodGet, "/api/v1/tpm/idevid", nil)
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-
-		resp := w.Result()
-		assert.Equal(t, http.StatusNotFound, resp.StatusCode)
-	})
-
-	t.Run("returns error when IDevID returns error", func(t *testing.T) {
-		tpm := newMockTPMService()
-		tpm.idevidPubKeyErr = errors.New("IDevID not initialized")
-		_, router := setupTPMTestHandler(tpm)
-
-		req := httptest.NewRequest(http.MethodGet, "/api/v1/tpm/idevid", nil)
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-
-		resp := w.Result()
-		assert.NotEqual(t, http.StatusOK, resp.StatusCode)
-	})
-
-	t.Run("returns not found when IDevID returns nil public key", func(t *testing.T) {
-		tpm := newMockTPMService()
-		tpm.idevidPubKey = nil
-		_, router := setupTPMTestHandler(tpm)
-
-		req := httptest.NewRequest(http.MethodGet, "/api/v1/tpm/idevid", nil)
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-
-		resp := w.Result()
-		assert.Equal(t, http.StatusNotFound, resp.StatusCode)
-	})
-}
-
-// =============================================================================
-// Quote Handler Tests
-// =============================================================================
-
-func TestTPMHandleQuote(t *testing.T) {
-	t.Run("generates quote successfully", func(t *testing.T) {
-		tpm := newMockTPMService()
-		tpm.quoteResult = xkmssdk.Quote{
-			Quoted:    []byte("test-quoted"),
-			Signature: []byte("test-sig"),
-		}
-		_, router := setupTPMTestHandler(tpm)
-
-		nonce := base64.StdEncoding.EncodeToString([]byte("test-nonce"))
-		body, _ := json.Marshal(TPMQuoteRequest{
-			Nonce:      nonce,
-			PCRIndices: []int{0, 1, 7},
-		})
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/tpm/quote", bytes.NewReader(body))
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-
-		resp := w.Result()
-		assert.Equal(t, http.StatusOK, resp.StatusCode)
-
-		var quoteResp TPMQuoteResponse
-		decodeTPMResponse(t, resp, &quoteResp)
-		assert.NotEmpty(t, quoteResp.Quote)
-		assert.NotEmpty(t, quoteResp.Signature)
-	})
-
-	t.Run("includes event log when present", func(t *testing.T) {
-		tpm := newMockTPMService()
-		tpm.quoteResult = xkmssdk.Quote{
-			Quoted:    []byte("quoted"),
-			Signature: []byte("sig"),
-			EventLog:  []byte("event-log-data"),
-		}
-		_, router := setupTPMTestHandler(tpm)
-
-		nonce := base64.StdEncoding.EncodeToString([]byte("nonce"))
-		body, _ := json.Marshal(TPMQuoteRequest{Nonce: nonce})
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/tpm/quote", bytes.NewReader(body))
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-
-		resp := w.Result()
-		assert.Equal(t, http.StatusOK, resp.StatusCode)
-
-		var quoteResp TPMQuoteResponse
-		decodeTPMResponse(t, resp, &quoteResp)
-		assert.NotEmpty(t, quoteResp.EventLog)
-	})
-
-	t.Run("returns service unavailable when TPM not set", func(t *testing.T) {
-		_, router := setupTPMTestHandler(nil)
-
-		body, _ := json.Marshal(TPMQuoteRequest{Nonce: "dGVzdA=="})
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/tpm/quote", bytes.NewReader(body))
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-
-		resp := w.Result()
-		assert.Equal(t, http.StatusServiceUnavailable, resp.StatusCode)
-	})
-
-	t.Run("returns error for invalid body", func(t *testing.T) {
-		tpm := newMockTPMService()
-		_, router := setupTPMTestHandler(tpm)
-
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/tpm/quote", strings.NewReader("bad"))
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-
-		resp := w.Result()
-		assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
-	})
-
-	t.Run("returns error when nonce is missing", func(t *testing.T) {
-		tpm := newMockTPMService()
-		_, router := setupTPMTestHandler(tpm)
-
-		body, _ := json.Marshal(TPMQuoteRequest{})
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/tpm/quote", bytes.NewReader(body))
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-
-		resp := w.Result()
-		assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
-	})
-
-	t.Run("returns error for invalid base64 nonce", func(t *testing.T) {
-		tpm := newMockTPMService()
-		_, router := setupTPMTestHandler(tpm)
-
-		body, _ := json.Marshal(TPMQuoteRequest{Nonce: "not-valid-base64!!!"})
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/tpm/quote", bytes.NewReader(body))
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-
-		resp := w.Result()
-		assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
-	})
-
-	t.Run("returns error for out of range PCR index", func(t *testing.T) {
-		tpm := newMockTPMService()
-		_, router := setupTPMTestHandler(tpm)
-
-		nonce := base64.StdEncoding.EncodeToString([]byte("nonce"))
-		body, _ := json.Marshal(TPMQuoteRequest{
-			Nonce:      nonce,
-			PCRIndices: []int{0, 25},
-		})
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/tpm/quote", bytes.NewReader(body))
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-
-		resp := w.Result()
-		assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
-	})
-
-	t.Run("returns error when Quote fails", func(t *testing.T) {
-		tpm := newMockTPMService()
-		tpm.quoteErr = errors.New("TPM not initialized")
-		_, router := setupTPMTestHandler(tpm)
-
-		nonce := base64.StdEncoding.EncodeToString([]byte("nonce"))
-		body, _ := json.Marshal(TPMQuoteRequest{Nonce: nonce})
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/tpm/quote", bytes.NewReader(body))
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-
-		resp := w.Result()
-		assert.NotEqual(t, http.StatusOK, resp.StatusCode)
-	})
-}
-
-// =============================================================================
-// Verify Quote Handler Tests
-// =============================================================================
-
-func TestTPMHandleVerifyQuote(t *testing.T) {
-	t.Run("rejects missing quote", func(t *testing.T) {
-		tpm := newMockTPMService()
-		_, router := setupTPMTestHandler(tpm)
-
-		body, _ := json.Marshal(TPMVerifyQuoteRequest{Signature: base64.StdEncoding.EncodeToString([]byte("s"))})
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/tpm/verify-quote", bytes.NewReader(body))
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-
-		assert.Equal(t, http.StatusBadRequest, w.Result().StatusCode)
-	})
-
-	t.Run("returns verified=false for a bad signature", func(t *testing.T) {
-		tpm := newMockTPMService()
-		_, router := setupTPMTestHandler(tpm)
-
-		key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-		assert.NoError(t, err)
-		der, err := x509.MarshalPKIXPublicKey(&key.PublicKey)
-		assert.NoError(t, err)
-
-		body, _ := json.Marshal(TPMVerifyQuoteRequest{
-			Quote:     base64.StdEncoding.EncodeToString([]byte("not-a-real-attest")),
-			Signature: base64.StdEncoding.EncodeToString([]byte("garbage")),
-			AKPublic:  base64.StdEncoding.EncodeToString(der),
-		})
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/tpm/verify-quote", bytes.NewReader(body))
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-
-		assert.Equal(t, http.StatusOK, w.Result().StatusCode)
-		var out TPMVerifyQuoteResponse
-		assert.NoError(t, json.NewDecoder(w.Result().Body).Decode(&out))
-		assert.False(t, out.Verified)
-	})
-
-	t.Run("returns service unavailable when TPM not set", func(t *testing.T) {
-		_, router := setupTPMTestHandler(nil)
-
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/tpm/verify-quote", nil)
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-
-		resp := w.Result()
-		assert.Equal(t, http.StatusServiceUnavailable, resp.StatusCode)
-	})
-}
-
-// =============================================================================
-// Certify Handler Tests
-// =============================================================================
-
-func TestTPMHandleCertify(t *testing.T) {
-	t.Run("certifies key successfully", func(t *testing.T) {
-		tpm := newMockTPMService()
-		tpm.keyAttrs = &xkmssdk.KeyAttributes{
-			TPMAttributes: &xkmssdk.TPMAttributes{
-				Handle: 0x81000001,
-			},
-		}
-		tpm.certifyResult = &xkmssdk.CertifyResult{
-			CertifyInfo: []byte("certify-info"),
-			Signature:   []byte("certify-sig"),
-		}
-		_, router := setupTPMTestHandler(tpm)
-
-		body, _ := json.Marshal(TPMCertifyRequest{Handle: 0x81000001})
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/tpm/certify", bytes.NewReader(body))
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-
-		resp := w.Result()
-		assert.Equal(t, http.StatusOK, resp.StatusCode)
-
-		var certResp TPMCertifyResponse
-		decodeTPMResponse(t, resp, &certResp)
-		assert.NotEmpty(t, certResp.CertifyInfo)
-		assert.NotEmpty(t, certResp.Signature)
-	})
-
-	t.Run("certifies with nonce", func(t *testing.T) {
-		tpm := newMockTPMService()
-		tpm.keyAttrs = &xkmssdk.KeyAttributes{
-			TPMAttributes: &xkmssdk.TPMAttributes{Handle: 0x81000001},
-		}
-		tpm.certifyResult = &xkmssdk.CertifyResult{
-			CertifyInfo: []byte("info"),
-			Signature:   []byte("sig"),
-		}
-		_, router := setupTPMTestHandler(tpm)
-
-		nonce := base64.StdEncoding.EncodeToString([]byte("test-nonce"))
-		body, _ := json.Marshal(TPMCertifyRequest{Handle: 0x81000001, Nonce: nonce})
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/tpm/certify", bytes.NewReader(body))
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-
-		resp := w.Result()
-		assert.Equal(t, http.StatusOK, resp.StatusCode)
-	})
-
-	t.Run("returns service unavailable when TPM not set", func(t *testing.T) {
-		_, router := setupTPMTestHandler(nil)
-
-		body, _ := json.Marshal(TPMCertifyRequest{Handle: 1})
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/tpm/certify", bytes.NewReader(body))
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-
-		resp := w.Result()
-		assert.Equal(t, http.StatusServiceUnavailable, resp.StatusCode)
-	})
-
-	t.Run("returns error for invalid body", func(t *testing.T) {
-		tpm := newMockTPMService()
-		_, router := setupTPMTestHandler(tpm)
-
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/tpm/certify", strings.NewReader("bad"))
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-
-		resp := w.Result()
-		assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
-	})
-
-	t.Run("returns error when handle is zero", func(t *testing.T) {
-		tpm := newMockTPMService()
-		_, router := setupTPMTestHandler(tpm)
-
-		body, _ := json.Marshal(TPMCertifyRequest{Handle: 0})
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/tpm/certify", bytes.NewReader(body))
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-
-		resp := w.Result()
-		assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
-	})
-
-	t.Run("returns error for invalid base64 nonce", func(t *testing.T) {
-		tpm := newMockTPMService()
-		_, router := setupTPMTestHandler(tpm)
-
-		body, _ := json.Marshal(TPMCertifyRequest{Handle: 1, Nonce: "bad-base64!!!"})
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/tpm/certify", bytes.NewReader(body))
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-
-		resp := w.Result()
-		assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
-	})
-
-	t.Run("returns error when KeyAttributes fails", func(t *testing.T) {
-		tpm := newMockTPMService()
-		tpm.keyAttrsErr = errors.New("key not found")
-		_, router := setupTPMTestHandler(tpm)
-
-		body, _ := json.Marshal(TPMCertifyRequest{Handle: 0x81000001})
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/tpm/certify", bytes.NewReader(body))
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-
-		resp := w.Result()
-		assert.Equal(t, http.StatusNotFound, resp.StatusCode)
-	})
-
-	t.Run("returns error when CertifyKey fails", func(t *testing.T) {
-		tpm := newMockTPMService()
-		tpm.keyAttrs = &xkmssdk.KeyAttributes{
-			TPMAttributes: &xkmssdk.TPMAttributes{Handle: 0x81000001},
-		}
-		tpm.certifyErr = errors.New("certify failed")
-		_, router := setupTPMTestHandler(tpm)
-
-		body, _ := json.Marshal(TPMCertifyRequest{Handle: 0x81000001})
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/tpm/certify", bytes.NewReader(body))
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-
-		resp := w.Result()
-		assert.NotEqual(t, http.StatusOK, resp.StatusCode)
-	})
-}
-
-// =============================================================================
-// PCR Handler Tests
-// =============================================================================
-
-func TestTPMHandleReadPCRs(t *testing.T) {
-	t.Run("reads all PCRs by default", func(t *testing.T) {
-		tpm := newMockTPMService()
-		tpm.readPCRsResult = []xkmssdk.PCRBank{
-			{
-				Algorithm: "SHA256",
-				PCRs: []xkmssdk.PCR{
-					{ID: 0, Value: []byte{0x01, 0x02}},
-					{ID: 1, Value: []byte{0x03, 0x04}},
-				},
-			},
-		}
-		_, router := setupTPMTestHandler(tpm)
-
-		req := httptest.NewRequest(http.MethodGet, "/api/v1/tpm/pcrs", nil)
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-
-		resp := w.Result()
-		assert.Equal(t, http.StatusOK, resp.StatusCode)
-
-		var pcrResp TPMPCRResponse
-		decodeTPMResponse(t, resp, &pcrResp)
-		assert.Len(t, pcrResp.PCRValues, 2)
-	})
-
-	t.Run("reads specific PCR indices", func(t *testing.T) {
-		tpm := newMockTPMService()
-		tpm.readPCRsResult = []xkmssdk.PCRBank{
-			{
-				Algorithm: "SHA256",
-				PCRs: []xkmssdk.PCR{
-					{ID: 7, Value: []byte{0x01}},
-				},
-			},
-		}
-		_, router := setupTPMTestHandler(tpm)
-
-		req := httptest.NewRequest(http.MethodGet, "/api/v1/tpm/pcrs?indices=7", nil)
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-
-		resp := w.Result()
-		assert.Equal(t, http.StatusOK, resp.StatusCode)
-	})
-
-	t.Run("parses comma-separated PCR indices", func(t *testing.T) {
-		tpm := newMockTPMService()
-		tpm.readPCRsResult = []xkmssdk.PCRBank{}
-		_, router := setupTPMTestHandler(tpm)
-
-		req := httptest.NewRequest(http.MethodGet, "/api/v1/tpm/pcrs?indices=0,1,7", nil)
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-
-		resp := w.Result()
-		assert.Equal(t, http.StatusOK, resp.StatusCode)
-	})
-
-	t.Run("returns service unavailable when TPM not set", func(t *testing.T) {
-		_, router := setupTPMTestHandler(nil)
-
-		req := httptest.NewRequest(http.MethodGet, "/api/v1/tpm/pcrs", nil)
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-
-		resp := w.Result()
-		assert.Equal(t, http.StatusServiceUnavailable, resp.StatusCode)
-	})
-
-	t.Run("returns error for invalid PCR index", func(t *testing.T) {
-		tpm := newMockTPMService()
-		_, router := setupTPMTestHandler(tpm)
-
-		req := httptest.NewRequest(http.MethodGet, "/api/v1/tpm/pcrs?indices=25", nil)
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-
-		resp := w.Result()
-		assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
-	})
-
-	t.Run("returns error for non-numeric PCR index", func(t *testing.T) {
-		tpm := newMockTPMService()
-		_, router := setupTPMTestHandler(tpm)
-
-		req := httptest.NewRequest(http.MethodGet, "/api/v1/tpm/pcrs?indices=abc", nil)
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-
-		resp := w.Result()
-		assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
-	})
-
-	t.Run("returns error when ReadPCRs fails", func(t *testing.T) {
-		tpm := newMockTPMService()
-		tpm.readPCRsErr = errors.New("TPM not initialized")
-		_, router := setupTPMTestHandler(tpm)
-
-		req := httptest.NewRequest(http.MethodGet, "/api/v1/tpm/pcrs", nil)
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-
-		resp := w.Result()
-		assert.NotEqual(t, http.StatusOK, resp.StatusCode)
-	})
-}
-
-func TestTPMHandleExtendPCR(t *testing.T) {
-	t.Run("extends PCR successfully", func(t *testing.T) {
-		tpm := newMockTPMService()
-		_, router := setupTPMTestHandler(tpm)
-
-		data := base64.StdEncoding.EncodeToString([]byte("extend-data"))
-		body, _ := json.Marshal(TPMPCRExtendRequest{
-			PCRIndex: 7,
-			Data:     data,
-		})
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/tpm/pcrs/extend", bytes.NewReader(body))
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-
-		resp := w.Result()
-		assert.Equal(t, http.StatusOK, resp.StatusCode)
-	})
-
-	t.Run("extends PCR with explicit hash algorithm", func(t *testing.T) {
-		tpm := newMockTPMService()
-		_, router := setupTPMTestHandler(tpm)
-
-		data := base64.StdEncoding.EncodeToString([]byte("data"))
-		body, _ := json.Marshal(TPMPCRExtendRequest{
-			PCRIndex: 0,
-			HashAlg:  "sha384",
-			Data:     data,
-		})
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/tpm/pcrs/extend", bytes.NewReader(body))
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-
-		resp := w.Result()
-		assert.Equal(t, http.StatusOK, resp.StatusCode)
-	})
-
-	t.Run("returns service unavailable when TPM not set", func(t *testing.T) {
-		_, router := setupTPMTestHandler(nil)
-
-		body, _ := json.Marshal(TPMPCRExtendRequest{PCRIndex: 0, Data: "dGVzdA=="})
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/tpm/pcrs/extend", bytes.NewReader(body))
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-
-		resp := w.Result()
-		assert.Equal(t, http.StatusServiceUnavailable, resp.StatusCode)
-	})
-
-	t.Run("returns error for invalid body", func(t *testing.T) {
-		tpm := newMockTPMService()
-		_, router := setupTPMTestHandler(tpm)
-
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/tpm/pcrs/extend", strings.NewReader("bad"))
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-
-		resp := w.Result()
-		assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
-	})
-
-	t.Run("returns error for out of range PCR index", func(t *testing.T) {
-		tpm := newMockTPMService()
-		_, router := setupTPMTestHandler(tpm)
-
-		data := base64.StdEncoding.EncodeToString([]byte("data"))
-		body, _ := json.Marshal(TPMPCRExtendRequest{PCRIndex: 24, Data: data})
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/tpm/pcrs/extend", bytes.NewReader(body))
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-
-		resp := w.Result()
-		assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
-	})
-
-	t.Run("returns error for negative PCR index", func(t *testing.T) {
-		tpm := newMockTPMService()
-		_, router := setupTPMTestHandler(tpm)
-
-		data := base64.StdEncoding.EncodeToString([]byte("data"))
-		body, _ := json.Marshal(TPMPCRExtendRequest{PCRIndex: -1, Data: data})
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/tpm/pcrs/extend", bytes.NewReader(body))
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-
-		resp := w.Result()
-		assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
-	})
-
-	t.Run("returns error when data is missing", func(t *testing.T) {
-		tpm := newMockTPMService()
-		_, router := setupTPMTestHandler(tpm)
-
-		body, _ := json.Marshal(TPMPCRExtendRequest{PCRIndex: 7})
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/tpm/pcrs/extend", bytes.NewReader(body))
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-
-		resp := w.Result()
-		assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
-	})
-
-	t.Run("returns error for invalid base64 data", func(t *testing.T) {
-		tpm := newMockTPMService()
-		_, router := setupTPMTestHandler(tpm)
-
-		body, _ := json.Marshal(TPMPCRExtendRequest{PCRIndex: 7, Data: "not-base64!!!"})
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/tpm/pcrs/extend", bytes.NewReader(body))
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-
-		resp := w.Result()
-		assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
-	})
-
-	t.Run("returns error when ExtendPCR fails", func(t *testing.T) {
-		tpm := newMockTPMService()
-		tpm.extendPCRErr = errors.New("extend failed")
-		_, router := setupTPMTestHandler(tpm)
-
-		data := base64.StdEncoding.EncodeToString([]byte("data"))
-		body, _ := json.Marshal(TPMPCRExtendRequest{PCRIndex: 7, Data: data})
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/tpm/pcrs/extend", bytes.NewReader(body))
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-
-		resp := w.Result()
-		assert.NotEqual(t, http.StatusOK, resp.StatusCode)
-	})
-}
-
-// =============================================================================
-// Event Log Handler Tests
-// =============================================================================
-
-func TestTPMHandleEventLog(t *testing.T) {
-	t.Run("returns event log successfully", func(t *testing.T) {
-		tpm := newMockTPMService()
-		tpm.eventLogData = []byte("raw-event-log")
-		tpm.parsedEvents = []xkmssdk.TPMEvent{{}, {}, {}}
-		_, router := setupTPMTestHandler(tpm)
-
-		req := httptest.NewRequest(http.MethodGet, "/api/v1/tpm/eventlog", nil)
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-
-		resp := w.Result()
-		assert.Equal(t, http.StatusOK, resp.StatusCode)
-
-		var logResp TPMEventLogResponse
-		decodeTPMResponse(t, resp, &logResp)
-		assert.NotEmpty(t, logResp.EventLog)
-		assert.Equal(t, "tcg2", logResp.Format)
-		assert.Equal(t, uint64(3), logResp.EventCount)
-	})
-
-	t.Run("returns event log with parse error", func(t *testing.T) {
-		tpm := newMockTPMService()
-		tpm.eventLogData = []byte("raw-log")
-		tpm.parsedEventLogErr = errors.New("parse error")
-		_, router := setupTPMTestHandler(tpm)
-
-		req := httptest.NewRequest(http.MethodGet, "/api/v1/tpm/eventlog", nil)
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-
-		resp := w.Result()
-		assert.Equal(t, http.StatusOK, resp.StatusCode)
-
-		var logResp TPMEventLogResponse
-		decodeTPMResponse(t, resp, &logResp)
-		assert.Equal(t, uint64(0), logResp.EventCount)
-	})
-
-	t.Run("returns service unavailable when TPM not set", func(t *testing.T) {
-		_, router := setupTPMTestHandler(nil)
-
-		req := httptest.NewRequest(http.MethodGet, "/api/v1/tpm/eventlog", nil)
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-
-		resp := w.Result()
-		assert.Equal(t, http.StatusServiceUnavailable, resp.StatusCode)
-	})
-
-	t.Run("returns error when EventLog fails", func(t *testing.T) {
-		tpm := newMockTPMService()
-		tpm.eventLogErr = errors.New("not available")
-		_, router := setupTPMTestHandler(tpm)
-
-		req := httptest.NewRequest(http.MethodGet, "/api/v1/tpm/eventlog", nil)
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-
-		resp := w.Result()
-		assert.Equal(t, http.StatusServiceUnavailable, resp.StatusCode)
-	})
-}
-
-// =============================================================================
-// Capabilities Handler Tests
-// =============================================================================
-
-func TestTPMHandleCapabilities(t *testing.T) {
-	t.Run("returns capabilities successfully", func(t *testing.T) {
-		tpm := newMockTPMService()
-		tpm.supportedAlgorithms = []string{"RSA", "ECC", "AES"}
-		tpm.supportedCommands = []string{"TPM2_CreatePrimary", "TPM2_Create"}
-		tpm.supportedCurves = []string{"P-256", "P-384"}
-		_, router := setupTPMTestHandler(tpm)
-
-		req := httptest.NewRequest(http.MethodGet, "/api/v1/tpm/capabilities", nil)
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-
-		resp := w.Result()
-		assert.Equal(t, http.StatusOK, resp.StatusCode)
-
-		var capsResp TPMCapabilitiesResponse
-		decodeTPMResponse(t, resp, &capsResp)
-		assert.Len(t, capsResp.Algorithms, 3)
-		assert.Len(t, capsResp.Commands, 2)
-		assert.Len(t, capsResp.ECCCurves, 2)
-	})
-
-	t.Run("returns capabilities with partial errors", func(t *testing.T) {
-		tpm := newMockTPMService()
-		tpm.supportedAlgorithms = []string{"RSA"}
-		tpm.supportedCmdsErr = errors.New("not supported")
-		tpm.supportedCurvesErr = errors.New("not supported")
-		_, router := setupTPMTestHandler(tpm)
-
-		req := httptest.NewRequest(http.MethodGet, "/api/v1/tpm/capabilities", nil)
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-
-		resp := w.Result()
-		assert.Equal(t, http.StatusOK, resp.StatusCode)
-
-		var capsResp TPMCapabilitiesResponse
-		decodeTPMResponse(t, resp, &capsResp)
-		assert.Len(t, capsResp.Algorithms, 1)
-		assert.Nil(t, capsResp.Commands)
-		assert.Nil(t, capsResp.ECCCurves)
-	})
-
-	t.Run("returns service unavailable when TPM not set", func(t *testing.T) {
-		_, router := setupTPMTestHandler(nil)
-
-		req := httptest.NewRequest(http.MethodGet, "/api/v1/tpm/capabilities", nil)
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-
-		resp := w.Result()
-		assert.Equal(t, http.StatusServiceUnavailable, resp.StatusCode)
-	})
-}
-
-// =============================================================================
-// Random Handler Tests
-// =============================================================================
-
-func TestTPMHandleRandom(t *testing.T) {
-	t.Run("returns random bytes successfully", func(t *testing.T) {
-		tpm := newMockTPMService()
-		tpm.randomBytesResult = []byte{0x01, 0x02, 0x03, 0x04}
-		_, router := setupTPMTestHandler(tpm)
-
-		body, _ := json.Marshal(TPMRandomRequest{NumBytes: 4})
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/tpm/random", bytes.NewReader(body))
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-
-		resp := w.Result()
-		assert.Equal(t, http.StatusOK, resp.StatusCode)
-
-		var randResp TPMRandomResponse
-		decodeTPMResponse(t, resp, &randResp)
-		assert.NotEmpty(t, randResp.RandomBytes)
-	})
-
-	t.Run("uses default 32 bytes when NumBytes is zero", func(t *testing.T) {
-		tpm := newMockTPMService()
-		tpm.randomBytesResult = make([]byte, 32)
-		_, router := setupTPMTestHandler(tpm)
-
-		body, _ := json.Marshal(TPMRandomRequest{})
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/tpm/random", bytes.NewReader(body))
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-
-		resp := w.Result()
-		assert.Equal(t, http.StatusOK, resp.StatusCode)
-	})
-
-	t.Run("returns service unavailable when TPM not set", func(t *testing.T) {
-		_, router := setupTPMTestHandler(nil)
-
-		body, _ := json.Marshal(TPMRandomRequest{NumBytes: 16})
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/tpm/random", bytes.NewReader(body))
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-
-		resp := w.Result()
-		assert.Equal(t, http.StatusServiceUnavailable, resp.StatusCode)
-	})
-
-	t.Run("returns error for invalid body", func(t *testing.T) {
-		tpm := newMockTPMService()
-		_, router := setupTPMTestHandler(tpm)
-
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/tpm/random", strings.NewReader("bad"))
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-
-		resp := w.Result()
-		assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
-	})
-
-	t.Run("returns error for size too large", func(t *testing.T) {
-		tpm := newMockTPMService()
-		_, router := setupTPMTestHandler(tpm)
-
-		body, _ := json.Marshal(TPMRandomRequest{NumBytes: 2048})
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/tpm/random", bytes.NewReader(body))
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-
-		resp := w.Result()
-		assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
-	})
-
-	t.Run("returns error when RandomBytes fails", func(t *testing.T) {
-		tpm := newMockTPMService()
-		tpm.randomBytesErr = errors.New("RNG failure")
-		_, router := setupTPMTestHandler(tpm)
-
-		body, _ := json.Marshal(TPMRandomRequest{NumBytes: 16})
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/tpm/random", bytes.NewReader(body))
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-
-		resp := w.Result()
-		assert.NotEqual(t, http.StatusOK, resp.StatusCode)
-	})
-}
-
-// =============================================================================
-// Seal/Unseal Handler Tests
-// =============================================================================
-
-func TestTPMHandleSeal(t *testing.T) {
-	t.Run("seals data successfully", func(t *testing.T) {
-		tpm := newMockTPMService()
-		_, router := setupTPMTestHandler(tpm)
-
-		data := base64.StdEncoding.EncodeToString([]byte("secret-data"))
-		body, _ := json.Marshal(TPMSealRequest{Data: data})
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/tpm/seal", bytes.NewReader(body))
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-
-		resp := w.Result()
-		assert.Equal(t, http.StatusOK, resp.StatusCode)
-
-		var sealResp TPMSealResponse
-		decodeTPMResponse(t, resp, &sealResp)
-		assert.NotEmpty(t, sealResp.SealedData)
-	})
-
-	t.Run("returns service unavailable when TPM not set", func(t *testing.T) {
-		_, router := setupTPMTestHandler(nil)
-
-		body, _ := json.Marshal(TPMSealRequest{Data: "dGVzdA=="})
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/tpm/seal", bytes.NewReader(body))
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-
-		resp := w.Result()
-		assert.Equal(t, http.StatusServiceUnavailable, resp.StatusCode)
-	})
-
-	t.Run("returns error for invalid body", func(t *testing.T) {
-		tpm := newMockTPMService()
-		_, router := setupTPMTestHandler(tpm)
-
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/tpm/seal", strings.NewReader("bad"))
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-
-		resp := w.Result()
-		assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
-	})
-
-	t.Run("returns error when data is missing", func(t *testing.T) {
-		tpm := newMockTPMService()
-		_, router := setupTPMTestHandler(tpm)
-
-		body, _ := json.Marshal(TPMSealRequest{})
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/tpm/seal", bytes.NewReader(body))
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-
-		resp := w.Result()
-		assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
-	})
-
-	t.Run("returns error for invalid base64 data", func(t *testing.T) {
-		tpm := newMockTPMService()
-		_, router := setupTPMTestHandler(tpm)
-
-		body, _ := json.Marshal(TPMSealRequest{Data: "not-base64!!!"})
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/tpm/seal", bytes.NewReader(body))
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-
-		resp := w.Result()
-		assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
-	})
-
-	t.Run("returns error when Seal fails", func(t *testing.T) {
-		tpm := newMockTPMService()
-		tpm.sealErr = errors.New("seal failed")
-		_, router := setupTPMTestHandler(tpm)
-
-		data := base64.StdEncoding.EncodeToString([]byte("data"))
-		body, _ := json.Marshal(TPMSealRequest{Data: data})
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/tpm/seal", bytes.NewReader(body))
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-
-		resp := w.Result()
-		assert.NotEqual(t, http.StatusOK, resp.StatusCode)
-	})
-}
-
-func TestTPMHandleUnseal(t *testing.T) {
-	t.Run("unseals data successfully", func(t *testing.T) {
-		tpm := newMockTPMService()
-		tpm.unsealResult = []byte("unsealed-secret")
-		_, router := setupTPMTestHandler(tpm)
-
-		body, _ := json.Marshal(TPMUnsealRequest{CN: "my-sealed-key"})
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/tpm/unseal", bytes.NewReader(body))
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-
-		resp := w.Result()
-		assert.Equal(t, http.StatusOK, resp.StatusCode)
-
-		var unsealResp TPMUnsealResponse
-		decodeTPMResponse(t, resp, &unsealResp)
-		assert.NotEmpty(t, unsealResp.Data)
-	})
-
-	t.Run("returns service unavailable when TPM not set", func(t *testing.T) {
-		_, router := setupTPMTestHandler(nil)
-
-		body, _ := json.Marshal(TPMUnsealRequest{CN: "test"})
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/tpm/unseal", bytes.NewReader(body))
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-
-		resp := w.Result()
-		assert.Equal(t, http.StatusServiceUnavailable, resp.StatusCode)
-	})
-
-	t.Run("returns error for invalid body", func(t *testing.T) {
-		tpm := newMockTPMService()
-		_, router := setupTPMTestHandler(tpm)
-
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/tpm/unseal", strings.NewReader("bad"))
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-
-		resp := w.Result()
-		assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
-	})
-
-	t.Run("returns error when CN is missing", func(t *testing.T) {
-		tpm := newMockTPMService()
-		_, router := setupTPMTestHandler(tpm)
-
-		body, _ := json.Marshal(TPMUnsealRequest{})
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/tpm/unseal", bytes.NewReader(body))
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-
-		resp := w.Result()
-		assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
-	})
-
-	t.Run("returns error when Unseal fails", func(t *testing.T) {
-		tpm := newMockTPMService()
-		tpm.unsealErr = errors.New("key not found")
-		_, router := setupTPMTestHandler(tpm)
-
-		body, _ := json.Marshal(TPMUnsealRequest{CN: "missing-key"})
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/tpm/unseal", bytes.NewReader(body))
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-
-		resp := w.Result()
-		assert.Equal(t, http.StatusNotFound, resp.StatusCode)
-	})
-}
-
-// =============================================================================
-// NVRAM Handler Tests
-// =============================================================================
-
-func TestTPMHandleNVRead(t *testing.T) {
-	t.Run("returns not implemented", func(t *testing.T) {
-		tpm := newMockTPMService()
-		_, router := setupTPMTestHandler(tpm)
-
-		body, _ := json.Marshal(TPMNVReadRequest{Index: 0x01500001, DataSize: 32})
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/tpm/nv/read", bytes.NewReader(body))
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-
-		resp := w.Result()
-		assert.Equal(t, http.StatusNotImplemented, resp.StatusCode)
-	})
-
-	t.Run("returns service unavailable when TPM not set", func(t *testing.T) {
-		_, router := setupTPMTestHandler(nil)
-
-		body, _ := json.Marshal(TPMNVReadRequest{Index: 1})
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/tpm/nv/read", bytes.NewReader(body))
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-
-		resp := w.Result()
-		assert.Equal(t, http.StatusServiceUnavailable, resp.StatusCode)
-	})
-
-	t.Run("returns error for invalid body", func(t *testing.T) {
-		tpm := newMockTPMService()
-		_, router := setupTPMTestHandler(tpm)
-
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/tpm/nv/read", strings.NewReader("bad"))
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-
-		resp := w.Result()
-		assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
-	})
-
-	t.Run("returns error when index is zero", func(t *testing.T) {
-		tpm := newMockTPMService()
-		_, router := setupTPMTestHandler(tpm)
-
-		body, _ := json.Marshal(TPMNVReadRequest{Index: 0})
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/tpm/nv/read", bytes.NewReader(body))
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-
-		resp := w.Result()
-		assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
-	})
-}
-
-func TestTPMHandleNVWrite(t *testing.T) {
-	t.Run("returns not implemented", func(t *testing.T) {
-		tpm := newMockTPMService()
-		_, router := setupTPMTestHandler(tpm)
-
-		body, _ := json.Marshal(TPMNVWriteRequest{Index: 0x01500001})
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/tpm/nv/write", bytes.NewReader(body))
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-
-		resp := w.Result()
-		assert.Equal(t, http.StatusNotImplemented, resp.StatusCode)
-	})
-
-	t.Run("returns service unavailable when TPM not set", func(t *testing.T) {
-		_, router := setupTPMTestHandler(nil)
-
-		body, _ := json.Marshal(TPMNVWriteRequest{Index: 1})
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/tpm/nv/write", bytes.NewReader(body))
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-
-		resp := w.Result()
-		assert.Equal(t, http.StatusServiceUnavailable, resp.StatusCode)
-	})
-
-	t.Run("returns error for invalid body", func(t *testing.T) {
-		tpm := newMockTPMService()
-		_, router := setupTPMTestHandler(tpm)
-
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/tpm/nv/write", strings.NewReader("bad"))
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-
-		resp := w.Result()
-		assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
-	})
-
-	t.Run("returns error when index is zero", func(t *testing.T) {
-		tpm := newMockTPMService()
-		_, router := setupTPMTestHandler(tpm)
-
-		body, _ := json.Marshal(TPMNVWriteRequest{Index: 0})
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/tpm/nv/write", bytes.NewReader(body))
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-
-		resp := w.Result()
-		assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
-	})
-}
-
-func TestTPMHandleNVDelete(t *testing.T) {
-	t.Run("returns not implemented", func(t *testing.T) {
-		tpm := newMockTPMService()
-		_, router := setupTPMTestHandler(tpm)
-
-		req := httptest.NewRequest(http.MethodDelete, "/api/v1/tpm/nv", nil)
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-
-		resp := w.Result()
-		assert.Equal(t, http.StatusNotImplemented, resp.StatusCode)
-	})
-
-	t.Run("returns service unavailable when TPM not set", func(t *testing.T) {
-		_, router := setupTPMTestHandler(nil)
-
-		req := httptest.NewRequest(http.MethodDelete, "/api/v1/tpm/nv", nil)
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-
-		resp := w.Result()
-		assert.Equal(t, http.StatusServiceUnavailable, resp.StatusCode)
-	})
-}
-
-func TestTPMHandleNVDefine(t *testing.T) {
-	t.Run("returns not implemented", func(t *testing.T) {
-		tpm := newMockTPMService()
-		_, router := setupTPMTestHandler(tpm)
-
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/tpm/nv/define", nil)
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-
-		resp := w.Result()
-		assert.Equal(t, http.StatusNotImplemented, resp.StatusCode)
-	})
-
-	t.Run("returns service unavailable when TPM not set", func(t *testing.T) {
-		_, router := setupTPMTestHandler(nil)
-
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/tpm/nv/define", nil)
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-
-		resp := w.Result()
-		assert.Equal(t, http.StatusServiceUnavailable, resp.StatusCode)
-	})
-}
-
-// =============================================================================
-// CSR Handler Tests
-// =============================================================================
-
-func TestTPMHandleCreateLDevIDCSR(t *testing.T) {
-	t.Run("returns not implemented", func(t *testing.T) {
-		tpm := newMockTPMService()
-		_, router := setupTPMTestHandler(tpm)
-
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/tpm/csr/ldevid", nil)
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-
-		resp := w.Result()
-		assert.Equal(t, http.StatusNotImplemented, resp.StatusCode)
-	})
-
-	t.Run("returns service unavailable when TPM not set", func(t *testing.T) {
-		_, router := setupTPMTestHandler(nil)
-
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/tpm/csr/ldevid", nil)
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-
-		resp := w.Result()
-		assert.Equal(t, http.StatusServiceUnavailable, resp.StatusCode)
-	})
-}
-
-// =============================================================================
-// Platform Attributes Handler Tests
-// =============================================================================
-
-func TestTPMHandlePlatformAttributes(t *testing.T) {
-	t.Run("returns platform attributes", func(t *testing.T) {
-		tpm := newMockTPMService()
-		_, router := setupTPMTestHandler(tpm)
-
-		req := httptest.NewRequest(http.MethodGet, "/api/v1/tpm/platform", nil)
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-
-		resp := w.Result()
-		assert.Equal(t, http.StatusOK, resp.StatusCode)
-
-		var attrs TPMPlatformAttributesResponse
-		decodeTPMResponse(t, resp, &attrs)
-		assert.NotZero(t, attrs.Timestamp)
-	})
-
-	t.Run("returns service unavailable when TPM not set", func(t *testing.T) {
-		_, router := setupTPMTestHandler(nil)
-
-		req := httptest.NewRequest(http.MethodGet, "/api/v1/tpm/platform", nil)
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-
-		resp := w.Result()
-		assert.Equal(t, http.StatusServiceUnavailable, resp.StatusCode)
-	})
-}
-
-// =============================================================================
-// mapErrorToStatus Tests
-// =============================================================================
-
-func TestTPMMapErrorToStatus(t *testing.T) {
-	handlers := NewTPMHandlers(slog.Default())
-
-	tests := []struct {
-		name     string
-		err      error
-		expected int
-	}{
-		{
-			name:     "nil error returns OK",
-			err:      nil,
-			expected: http.StatusOK,
-		},
-		{
-			name:     "not found error",
-			err:      errors.New("key not found"),
-			expected: http.StatusNotFound,
-		},
-		{
-			name:     "does not exist error",
-			err:      errors.New("handle does not exist"),
-			expected: http.StatusNotFound,
-		},
-		{
-			name:     "not initialized error",
-			err:      errors.New("TPM not initialized"),
-			expected: http.StatusNotFound,
-		},
-		{
-			name:     "not provisioned error",
-			err:      errors.New("TPM not provisioned"),
-			expected: http.StatusNotFound,
-		},
-		{
-			name:     "already exists error",
-			err:      errors.New("key already exists"),
-			expected: http.StatusConflict,
-		},
-		{
-			name:     "duplicate error",
-			err:      errors.New("duplicate handle"),
-			expected: http.StatusConflict,
-		},
-		{
-			name:     "already open error",
-			err:      errors.New("device already open"),
-			expected: http.StatusConflict,
-		},
-		{
-			name:     "invalid error",
-			err:      errors.New("invalid parameter"),
-			expected: http.StatusBadRequest,
-		},
-		{
-			name:     "required error",
-			err:      errors.New("field required"),
-			expected: http.StatusBadRequest,
-		},
-		{
-			name:     "must be error",
-			err:      errors.New("value must be positive"),
-			expected: http.StatusBadRequest,
-		},
-		{
-			name:     "cannot be error",
-			err:      errors.New("value cannot be zero"),
-			expected: http.StatusBadRequest,
-		},
-		{
-			name:     "too large error",
-			err:      errors.New("data too large"),
-			expected: http.StatusBadRequest,
-		},
-		{
-			name:     "permission denied error",
-			err:      errors.New("permission denied"),
-			expected: http.StatusForbidden,
-		},
-		{
-			name:     "unauthorized error",
-			err:      errors.New("unauthorized access"),
-			expected: http.StatusForbidden,
-		},
-		{
-			name:     "forbidden error",
-			err:      errors.New("forbidden operation"),
-			expected: http.StatusForbidden,
-		},
-		{
-			name:     "authorization error",
-			err:      errors.New("authorization failed"),
-			expected: http.StatusForbidden,
-		},
-		{
-			name:     "not configured error",
-			err:      errors.New("TPM not configured"),
-			expected: http.StatusServiceUnavailable,
-		},
-		{
-			name:     "not available error",
-			err:      errors.New("service not available"),
-			expected: http.StatusServiceUnavailable,
-		},
-		{
-			name:     "unavailable error",
-			err:      errors.New("TPM unavailable"),
-			expected: http.StatusServiceUnavailable,
-		},
-		{
-			name:     "unknown error returns 500",
-			err:      errors.New("something completely unexpected"),
-			expected: http.StatusInternalServerError,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			status := handlers.mapErrorToStatus(tt.err)
-			assert.Equal(t, tt.expected, status)
-		})
-	}
-}
-
-// =============================================================================
-// writeJSON, writeError, writeTPMError Tests
-// =============================================================================
-
-func TestTPMWriteJSON(t *testing.T) {
-	t.Run("writes JSON response", func(t *testing.T) {
-		handlers := NewTPMHandlers(slog.Default())
-		w := httptest.NewRecorder()
-
-		handlers.writeJSON(w, http.StatusOK, map[string]string{"key": "value"})
-
-		resp := w.Result()
-		defer resp.Body.Close()
-		assert.Equal(t, http.StatusOK, resp.StatusCode)
-		assert.Equal(t, "application/json", resp.Header.Get("Content-Type"))
-
-		var body map[string]string
-		err := json.NewDecoder(resp.Body).Decode(&body)
-		require.NoError(t, err)
-		assert.Equal(t, "value", body["key"])
-	})
-}
-
-func TestTPMWriteError(t *testing.T) {
-	t.Run("writes error response", func(t *testing.T) {
-		handlers := NewTPMHandlers(slog.Default())
-		w := httptest.NewRecorder()
-
-		handlers.writeError(w, http.StatusBadRequest, ErrTPMInvalidPCRIndex{Index: 30})
-
-		resp := w.Result()
-		defer resp.Body.Close()
-		assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
-
-		var errResp ErrorResponse
-		err := json.NewDecoder(resp.Body).Decode(&errResp)
-		require.NoError(t, err)
-		assert.Contains(t, errResp.Error, "invalid PCR index")
-		assert.Equal(t, http.StatusBadRequest, errResp.Code)
-	})
-}
-
-func TestTPMWriteTPMError(t *testing.T) {
-	t.Run("maps TPM error to appropriate status", func(t *testing.T) {
-		handlers := NewTPMHandlers(slog.Default())
-		w := httptest.NewRecorder()
-
-		handlers.writeTPMError(w, "test_op", errors.New("key not found"))
-
-		resp := w.Result()
-		defer resp.Body.Close()
-		assert.Equal(t, http.StatusNotFound, resp.StatusCode)
-
-		var errResp ErrorResponse
-		err := json.NewDecoder(resp.Body).Decode(&errResp)
-		require.NoError(t, err)
-		assert.Contains(t, errResp.Error, "test_op")
-	})
 }

@@ -3,10 +3,14 @@
  * Consumed by the Security page and login screen.
  */
 
+import {
+  ErrorCode,
+  getErrorCodeFromStatus,
+  type ApiResponse,
+} from "trusted-platform-sdk";
 import { getBaseUrl } from "./getBaseUrl";
 import { getCookie } from "./cookie";
 import type {
-  AuthFactor,
   ListAuthFactorsResponse,
   AddAuthFactorRequest,
   AddAuthFactorResponse,
@@ -27,6 +31,33 @@ interface ApiErr {
 }
 
 type ApiResult<T> = ApiOk<T> | ApiErr;
+
+/**
+ * Convert an ApiResult into the SDK's ApiResponse, so a factor read can be
+ * loaded through the SDK's useApi hook like every other console page (#435).
+ *
+ * Status 0 is how factorsFetch reports a transport failure; it maps to the
+ * SDK's NETWORK_ERROR code and carries no status, because no response arrived.
+ */
+export function toApiResponse<T>(result: ApiResult<T>): ApiResponse<T> {
+  if (result.ok) {
+    return { success: true, data: result.data };
+  }
+  if (result.status === 0) {
+    return {
+      success: false,
+      error: { code: ErrorCode.NETWORK_ERROR, message: result.error },
+    };
+  }
+  return {
+    success: false,
+    error: {
+      code: getErrorCodeFromStatus(result.status),
+      message: result.error,
+      status: result.status,
+    },
+  };
+}
 
 async function factorsFetch<T>(
   path: string,

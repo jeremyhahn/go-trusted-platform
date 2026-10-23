@@ -24,6 +24,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/device"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
 )
 
@@ -55,7 +56,7 @@ func restDeviceCall(t *testing.T, router *mux.Router, method, path string, body 
 func TestDeviceHandlers_AttestCert_SurvivesUpdateWithoutIt(t *testing.T) {
 	_, router := setupDeviceTestHandler(newMockDeviceService(), newMockProfileService())
 
-	registered := restDeviceCall(t, router, http.MethodPost, "/api/v1/devices", DeviceRegisterRequest{
+	registered := restDeviceCall(t, router, http.MethodPost, "/api/v1/devices", device.RequestFields{
 		Serial: "SN-404", Model: "X10SDV", AttestPub: "pub", AttestCert: testAttestCertPEM,
 	}, http.StatusCreated)
 	assert.Equal(t, testAttestCertPEM, registered.AttestCert)
@@ -64,7 +65,7 @@ func TestDeviceHandlers_AttestCert_SurvivesUpdateWithoutIt(t *testing.T) {
 	got := restDeviceCall(t, router, http.MethodGet, path, nil, http.StatusOK)
 	assert.Equal(t, testAttestCertPEM, got.AttestCert)
 
-	updated := restDeviceCall(t, router, http.MethodPut, path, DeviceUpdateRequest{Model: "X10SDV-TP8F"}, http.StatusOK)
+	updated := restDeviceCall(t, router, http.MethodPut, path, device.RequestFields{Model: "X10SDV-TP8F"}, http.StatusOK)
 	assert.Equal(t, "X10SDV-TP8F", updated.Model)
 	assert.Equal(t, testAttestCertPEM, updated.AttestCert)
 
@@ -80,7 +81,7 @@ func TestDeviceHandlers_AttestCert_UpdateReplaces(t *testing.T) {
 	deviceSvc.addDevice(&entities.Device{ID: 9, Serial: "SN-9", AttestCert: "old"})
 	_, router := setupDeviceTestHandler(deviceSvc, newMockProfileService())
 
-	updated := restDeviceCall(t, router, http.MethodPut, "/api/v1/devices/9", DeviceUpdateRequest{AttestCert: testAttestCertPEM}, http.StatusOK)
+	updated := restDeviceCall(t, router, http.MethodPut, "/api/v1/devices/9", device.RequestFields{AttestCert: testAttestCertPEM}, http.StatusOK)
 	assert.Equal(t, testAttestCertPEM, updated.AttestCert)
 	assert.Equal(t, testAttestCertPEM, deviceSvc.devices[9].AttestCert)
 }

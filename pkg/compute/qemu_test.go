@@ -63,7 +63,7 @@ func TestNewQEMUOrchestrator(t *testing.T) {
 
 		t.Run(tt.name, func(t *testing.T) {
 			logger := logging.NewLogger(slog.LevelDebug, nil)
-			orch, err := NewQEMUOrchestrator(tt.config, logger)
+			orch, err := newFakeHostOrchestrator(t, tt.config, logger)
 
 			if (err != nil) != tt.wantErr {
 				t.Errorf("NewQEMUOrchestrator() error = %v, wantErr %v", err, tt.wantErr)
@@ -101,7 +101,7 @@ func TestQEMUOrchestrator_Create(t *testing.T) {
 	config.WorkDir = tmpDir
 
 	logger := logging.NewLogger(slog.LevelDebug, nil)
-	orch, err := NewQEMUOrchestrator(config, logger)
+	orch, err := newFakeHostOrchestrator(t, config, logger)
 	if err != nil {
 		t.Fatalf("Failed to create orchestrator: %v", err)
 	}
@@ -173,7 +173,7 @@ func TestQEMUOrchestrator_GetState(t *testing.T) {
 	config.WorkDir = tmpDir
 
 	logger := logging.NewLogger(slog.LevelDebug, nil)
-	orch, err := NewQEMUOrchestrator(config, logger)
+	orch, err := newFakeHostOrchestrator(t, config, logger)
 	if err != nil {
 		t.Fatalf("Failed to create orchestrator: %v", err)
 	}
@@ -223,7 +223,7 @@ func TestQEMUOrchestrator_Get(t *testing.T) {
 	config.WorkDir = tmpDir
 
 	logger := logging.NewLogger(slog.LevelDebug, nil)
-	orch, err := NewQEMUOrchestrator(config, logger)
+	orch, err := newFakeHostOrchestrator(t, config, logger)
 	if err != nil {
 		t.Fatalf("Failed to create orchestrator: %v", err)
 	}
@@ -278,7 +278,7 @@ func TestQEMUOrchestrator_List(t *testing.T) {
 	config.MaxInstances = 10
 
 	logger := logging.NewLogger(slog.LevelDebug, nil)
-	orch, err := NewQEMUOrchestrator(config, logger)
+	orch, err := newFakeHostOrchestrator(t, config, logger)
 	if err != nil {
 		t.Fatalf("Failed to create orchestrator: %v", err)
 	}
@@ -369,7 +369,7 @@ func TestQEMUOrchestrator_Delete(t *testing.T) {
 	config.WorkDir = tmpDir
 
 	logger := logging.NewLogger(slog.LevelDebug, nil)
-	orch, err := NewQEMUOrchestrator(config, logger)
+	orch, err := newFakeHostOrchestrator(t, config, logger)
 	if err != nil {
 		t.Fatalf("Failed to create orchestrator: %v", err)
 	}
@@ -429,7 +429,7 @@ func TestQEMUOrchestrator_Stop_NotRunning(t *testing.T) {
 	config.WorkDir = tmpDir
 
 	logger := logging.NewLogger(slog.LevelDebug, nil)
-	orch, err := NewQEMUOrchestrator(config, logger)
+	orch, err := newFakeHostOrchestrator(t, config, logger)
 	if err != nil {
 		t.Fatalf("Failed to create orchestrator: %v", err)
 	}
@@ -461,7 +461,7 @@ func TestQEMUOrchestrator_AttachNetwork_Errors(t *testing.T) {
 	config.WorkDir = tmpDir
 
 	logger := logging.NewLogger(slog.LevelDebug, nil)
-	orch, err := NewQEMUOrchestrator(config, logger)
+	orch, err := newFakeHostOrchestrator(t, config, logger)
 	if err != nil {
 		t.Fatalf("Failed to create orchestrator: %v", err)
 	}
@@ -498,7 +498,7 @@ func TestQEMUOrchestrator_DetachNetwork_Errors(t *testing.T) {
 	config.WorkDir = tmpDir
 
 	logger := logging.NewLogger(slog.LevelDebug, nil)
-	orch, err := NewQEMUOrchestrator(config, logger)
+	orch, err := newFakeHostOrchestrator(t, config, logger)
 	if err != nil {
 		t.Fatalf("Failed to create orchestrator: %v", err)
 	}
@@ -552,7 +552,7 @@ func TestQEMUOrchestrator_Wait_NonExistent(t *testing.T) {
 	config.WorkDir = tmpDir
 
 	logger := logging.NewLogger(slog.LevelDebug, nil)
-	orch, err := NewQEMUOrchestrator(config, logger)
+	orch, err := newFakeHostOrchestrator(t, config, logger)
 	if err != nil {
 		t.Fatalf("Failed to create orchestrator: %v", err)
 	}
@@ -573,7 +573,7 @@ func TestQEMUOrchestrator_Close(t *testing.T) {
 	config.WorkDir = tmpDir
 
 	logger := logging.NewLogger(slog.LevelDebug, nil)
-	orch, err := NewQEMUOrchestrator(config, logger)
+	orch, err := newFakeHostOrchestrator(t, config, logger)
 	if err != nil {
 		t.Fatalf("Failed to create orchestrator: %v", err)
 	}
@@ -609,7 +609,7 @@ func TestQEMUOrchestrator_ConfigPropagation(t *testing.T) {
 	config.DefaultDiskSize = "50G"
 
 	logger := logging.NewLogger(slog.LevelDebug, nil)
-	orch, err := NewQEMUOrchestrator(config, logger)
+	orch, err := newFakeHostOrchestrator(t, config, logger)
 	if err != nil {
 		t.Fatalf("Failed to create orchestrator: %v", err)
 	}

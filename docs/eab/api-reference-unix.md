@@ -1,5 +1,8 @@
 # EAB Unix Socket API Reference
 
+> **Status: REFERENCE** · Last verified: 2026-10-13
+> The EAB gRPC service on the local Unix socket.
+
 | Property | Value |
 |----------|-------|
 | Socket | `/run/platformd.sock` |
@@ -14,8 +17,7 @@ error-mapping and security property documented in
 ## SDK Usage
 
 ```go
-client, err := platform.NewClient(ctx,
-    platform.WithOnlyProtocol(platform.ProtocolUnix),
-    platform.WithUnixSocket("/run/platformd.sock"))
-eabClient, err := eab.NewClient(client.Transport())
+opts := platform.NewOptions(platform.WithUnixSocket("/run/platformd.sock"))
+conn, err := unix.Connect(ctx, opts) // sdk/go/transport/unix
+eabClient, err := eab.NewClient(conn)
 ```

@@ -61,6 +61,9 @@ export * from './tpm.js';
 // vTPM types
 export * from './vtpm.js';
 
+// VPN types
+export * from './vpn.js';
+
 // Compute types
 export * from './compute.js';
 

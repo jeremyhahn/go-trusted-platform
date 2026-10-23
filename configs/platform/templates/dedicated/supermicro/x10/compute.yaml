@@ -51,9 +51,8 @@ platform:
   # a distributed lock in the SecretsService. Paths are short-form —
   # tenant and node identifiers are implicitly prepended at resolution
   # time from platform.tenant_id and the node hostname.
-  # TODO: revert to kms:// once firstboot seeds SecretsService pre-platformd.
-  so-pin: "12345678"
-  user-pin: "123456"
+  so-pin: "kms://platform/so-pin?ensure=true&len=8&enc=numeric"
+  user-pin: "kms://platform/user-pin?ensure=true&len=6&enc=numeric"
 
 
 # =============================================================================
@@ -422,9 +421,11 @@ bmc:
   protocol: ipmi
 
 # QuicBaaS runs in STANDALONE EMBEDDED MODE (non-HA reference architecture).
-# storage-backend=file with node-id=1 and no join-addresses means Raft
-# consensus is NOT engaged. For HA, switch to storage-backend=raft and
-# populate join-addresses (see configs/platform/templates/high-availability/).
+# No join-addresses means Raft consensus is NOT engaged. For HA, use
+# storage-backend=pebble (there is no "raft" backend), list every member as
+# "id=host:port" in join-addresses (this node included), and set the same
+# deployment-id on every member plus raft-tls-{cert,key,ca}-file: a clustered
+# node without Raft TLS is refused (see docs/cluster/user.md).
 quicbaas:
   data-dir: /var/lib/trusted-platform/quicbaas
   storage-backend: file

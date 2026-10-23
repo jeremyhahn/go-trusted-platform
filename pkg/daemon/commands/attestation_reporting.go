@@ -158,6 +158,8 @@ func initReportingCollector(ctx context.Context, logger *slog.Logger, a *app.App
 		return nil
 	}
 
+	reportEveryVerdict(svcs, cache)
+
 	runCtx, cancel := context.WithCancel(ctx)
 	go func() {
 		if err := collector.Run(runCtx); err != nil && runCtx.Err() == nil {
@@ -176,6 +178,17 @@ func initReportingCollector(ctx context.Context, logger *slog.Logger, a *app.App
 		AttestedPeers: &attestedPeersAdapter{devices: cfg.DeviceService, reports: cache},
 		Stop:          cancel,
 	}
+}
+
+// reportEveryVerdict makes every verdict the attestation service records, not
+// only the collector's, update the device's report. A failed AttestDevice must
+// not leave the last collected pass behind for overlay admission, which reads
+// this cache, to keep trusting (#765).
+func reportEveryVerdict(svcs *attestationServices, cache *reporting.Cache) {
+	if svcs == nil || svcs.Service == nil || cache == nil {
+		return
+	}
+	svcs.Service.RegisterDeviceVerdictObserver(cache)
 }
 
 // collectorPCRs returns the configured PCR selection, or nil for the node
@@ -226,11 +239,7 @@ func collectorTLSDialer(a *app.App, c *config.CollectorConfig, logger *slog.Logg
 		if err != nil {
 			return nil, ErrCollectorIdentity{Reason: "client certificate unavailable: " + err.Error()}
 		}
-		if len(cert.Certificate) == 1 {
-			if inter, err := ca.TrustedIntermediate(); err == nil && inter != nil {
-				cert.Certificate = append(cert.Certificate, inter.Raw)
-			}
-		}
+		cert = appendTrustedIntermediate(ca, cert)
 		pool, err := anchors(ctx, ep)
 		if err != nil {
 			return nil, err

@@ -23,6 +23,7 @@ import { Separator } from '@/components/ui/separator';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { useToast, useApi, useDevice, useMutation } from '@/hooks';
 import type { DeviceRole, CreateProfileFromTemplateRequest } from 'trusted-platform-sdk';
+import { deviceRoleLabel } from '@/lib/device-role';
 import { profileOverrides } from '@/lib/device-profile-networks';
 
 // ============================================================================
@@ -30,19 +31,7 @@ import { profileOverrides } from '@/lib/device-profile-networks';
 // ============================================================================
 
 function getRoleBadge(role: DeviceRole) {
-  const roleLabels: Record<DeviceRole, string> = {
-    UNSPECIFIED: 'Unspecified',
-    UNKNOWN: 'Unknown',
-    SERVER: 'Server',
-    CLIENT: 'Client',
-    WORKSTATION: 'Workstation',
-    EDGE: 'Edge',
-    IOT: 'IoT',
-    GATEWAY: 'Gateway',
-    LOAD_BALANCER: 'Load Balancer',
-  };
-
-  return <Badge variant="outline">{roleLabels[role] ?? role}</Badge>;
+  return <Badge variant="outline">{deviceRoleLabel(role)}</Badge>;
 }
 
 // ============================================================================

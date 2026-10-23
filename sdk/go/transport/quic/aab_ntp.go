@@ -14,8 +14,8 @@
 package quic
 
 import (
-	quicapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 )
 
 // NTP (time synchronization) QUIC wire mapping.
@@ -32,16 +32,16 @@ import (
 
 // ntpMethodOpcodes routes NTPService methods to the category opcode.
 var ntpMethodOpcodes = map[string]byte{
-	platformv1.NTPService_GetStatus_FullMethodName:   quicapi.OpNTPCategory,
-	platformv1.NTPService_ListSources_FullMethodName: quicapi.OpNTPCategory,
-	platformv1.NTPService_Step_FullMethodName:        quicapi.OpNTPCategory,
+	platformv1.NTPService_GetStatus_FullMethodName:   quicwire.OpNTPCategory,
+	platformv1.NTPService_ListSources_FullMethodName: quicwire.OpNTPCategory,
+	platformv1.NTPService_Step_FullMethodName:        quicwire.OpNTPCategory,
 }
 
 // ntpSubOpcodes routes NTPService methods to their sub-opcode byte.
 var ntpSubOpcodes = map[string]byte{
-	platformv1.NTPService_GetStatus_FullMethodName:   quicapi.NTPSubGetStatus,
-	platformv1.NTPService_ListSources_FullMethodName: quicapi.NTPSubListSources,
-	platformv1.NTPService_Step_FullMethodName:        quicapi.NTPSubStep,
+	platformv1.NTPService_GetStatus_FullMethodName:   quicwire.NTPSubGetStatus,
+	platformv1.NTPService_ListSources_FullMethodName: quicwire.NTPSubListSources,
+	platformv1.NTPService_Step_FullMethodName:        quicwire.NTPSubStep,
 }
 
 // ntpEmptyBodyMethods marks every NTP method as carrying no request body.
@@ -56,7 +56,7 @@ var ntpEmptyBodyMethods = map[string]struct{}{
 // category-invariant assertion, which then validates that every
 // category-routed NTP method has its required sub-opcode mapping.
 func init() {
-	categoryOpcodes[quicapi.OpNTPCategory] = struct{}{}
+	categoryOpcodes[quicwire.OpNTPCategory] = struct{}{}
 	for method, opcode := range ntpMethodOpcodes {
 		grpcMethodToOpcodeMap[method] = opcode
 	}

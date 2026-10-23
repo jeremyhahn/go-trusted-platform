@@ -1,0 +1,270 @@
+syntax = "proto3";
+
+package platform.v1;
+
+option go_package = "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen;platformv1";
+
+// ObjectStorageService stores and reads objects in the object store of the
+// composed go-quicbaas data plane (docs/objectstorage/api-reference.md).
+// platformd serves it through the SDK's ObjectStorage group; a daemon whose
+// SDK does not serve the group answers every call Unavailable. Object keys
+// take the form "namespace:path".
+service ObjectStorageService {
+  // PutObject stores an object. Requires objectstorage:write.
+  rpc PutObject(PutObjectRequest) returns (PutObjectResponse);
+
+  // GetObject returns an object with its data. Requires objectstorage:read.
+  rpc GetObject(GetObjectRequest) returns (GetObjectResponse);
+
+  // DeleteObject removes an object. Requires objectstorage:delete.
+  rpc DeleteObject(DeleteObjectRequest) returns (DeleteObjectResponse);
+
+  // HeadObject returns the metadata of an object without its data.
+  // Requires objectstorage:read.
+  rpc HeadObject(HeadObjectRequest) returns (HeadObjectResponse);
+
+  // ListObjects lists the objects under a key prefix. Requires
+  // objectstorage:read.
+  rpc ListObjects(ListObjectsRequest) returns (ListObjectsResponse);
+
+  // CopyObject copies an object to a new key. Requires objectstorage:write.
+  rpc CopyObject(CopyObjectRequest) returns (CopyObjectResponse);
+
+  // ListObjectsByTag lists the objects whose tag has a value. Requires
+  // objectstorage:read.
+  rpc ListObjectsByTag(ListObjectsByTagRequest) returns (ListObjectsResponse);
+
+  // ListTenantObjects lists the objects one tenant owns. Requires
+  // objectstorage:read.
+  rpc ListTenantObjects(ListTenantObjectsRequest) returns (ListObjectsResponse);
+}
+
+// ObjectReplicationPolicy says how an object is replicated across backends.
+message ObjectReplicationPolicy {
+  bool enabled = 1;
+
+  // min_replicas counts the primary copy.
+  int32 min_replicas = 2;
+
+  // target_stores names the backends to replicate to.
+  repeated string target_stores = 3;
+
+  // mode is sync, async or quorum.
+  string mode = 4;
+
+  // priority orders replication, 1 to 10; higher replicates sooner.
+  int32 priority = 5;
+}
+
+// ObjectArchivePolicy says when an object moves to cold storage.
+message ObjectArchivePolicy {
+  bool enabled = 1;
+
+  // archive_after_days counts days since the last access.
+  int32 archive_after_days = 2;
+  string target_store = 3;
+  bool delete_from_primary = 4;
+
+  // compression_level is 0 for none, else 1 to 9.
+  int32 compression_level = 5;
+}
+
+// ObjectRetentionPolicy says how long an object is kept.
+message ObjectRetentionPolicy {
+  bool enabled = 1;
+
+  // retention_days deletes the object after that many days; 0 keeps it.
+  int32 retention_days = 2;
+
+  // max_versions keeps the last N versions; 0 keeps every version.
+  int32 max_versions = 3;
+
+  // delete_after is the Unix time of deletion, passed to the SDK as given;
+  // 0 uses retention_days.
+  int64 delete_after = 4;
+}
+
+// ObjectSummary is one entry of an object listing.
+message ObjectSummary {
+  string key = 1;
+  int64 size = 2;
+  string content_type = 3;
+  uint64 version = 4;
+  string status = 5;
+
+  // tags is set only when the listing asks for tags.
+  map<string, string> tags = 6;
+  int64 created_at_unix_ms = 7;
+  int64 modified_at_unix_ms = 8;
+}
+
+message PutObjectRequest {
+  // key is the object key, "namespace:path". Required.
+  string key = 1;
+  bytes value = 2;
+  string content_type = 3;
+
+  // tenant_id is the owning tenant; empty leaves the object untenanted.
+  string tenant_id = 4;
+
+  // shard_id places the object on one shard; 0 lets the store choose.
+  uint64 shard_id = 5;
+  map<string, string> tags = 6;
+
+  // The policies override the store defaults for this object.
+  ObjectReplicationPolicy replication_policy = 7;
+  ObjectArchivePolicy archive_policy = 8;
+  ObjectRetentionPolicy retention_policy = 9;
+
+  // target_backend names the backend. Required: the pinned go-quicbaas
+  // object store has no primary backend to choose, so platformd refuses an
+  // empty one with InvalidArgument (docs/objectstorage/api-reference.md).
+  string target_backend = 10;
+
+  // checksum is the caller's checksum of value, verified on store.
+  bytes checksum = 11;
+}
+
+message PutObjectResponse {
+  string key = 1;
+  uint64 object_id = 2;
+
+  // checksum is the SHA-256 of the stored data.
+  bytes checksum = 3;
+  int64 size = 4;
+  string backend = 5;
+  uint64 version = 6;
+  int64 created_at_unix_ms = 7;
+}
+
+message GetObjectRequest {
+  // key is the object key. Required.
+  string key = 1;
+
+  // tenant_id restricts the read to one tenant's objects.
+  string tenant_id = 2;
+
+  // include_metadata returns the tags and timestamps with the data.
+  bool include_metadata = 3;
+}
+
+message GetObjectResponse {
+  string key = 1;
+  bytes value = 2;
+  string content_type = 3;
+  int64 size = 4;
+  bytes checksum = 5;
+  uint64 version = 6;
+  map<string, string> tags = 7;
+  string tenant_id = 8;
+  int64 created_at_unix_ms = 9;
+  int64 modified_at_unix_ms = 10;
+  string backend = 11;
+}
+
+message DeleteObjectRequest {
+  // key is the object key. Required.
+  string key = 1;
+  string tenant_id = 2;
+}
+
+message DeleteObjectResponse {
+  string key = 1;
+  bool deleted = 2;
+
+  // size is the size of the deleted object.
+  int64 size = 3;
+  int64 deleted_at_unix_ms = 4;
+}
+
+message HeadObjectRequest {
+  // key is the object key. Required.
+  string key = 1;
+  string tenant_id = 2;
+}
+
+message HeadObjectResponse {
+  string key = 1;
+  bool exists = 2;
+  string content_type = 3;
+  int64 size = 4;
+  bytes checksum = 5;
+  uint64 version = 6;
+  map<string, string> tags = 7;
+  string tenant_id = 8;
+
+  // status is the object state, such as active or archived.
+  string status = 9;
+  int64 created_at_unix_ms = 10;
+  int64 modified_at_unix_ms = 11;
+  int64 last_access_at_unix_ms = 12;
+
+  // backend is the primary backend.
+  string backend = 13;
+  int32 replica_count = 14;
+}
+
+message ListObjectsRequest {
+  string prefix = 1;
+  string tenant_id = 2;
+
+  // limit caps the page; 0 takes the store default.
+  int32 limit = 3;
+
+  // cursor is the next_cursor of the previous page.
+  string cursor = 4;
+  bool include_tags = 5;
+}
+
+// ListObjectsResponse is one page of an object listing.
+message ListObjectsResponse {
+  repeated ObjectSummary objects = 1;
+  string next_cursor = 2;
+  bool has_more = 3;
+
+  // total_count is approximate.
+  int64 total_count = 4;
+  int64 listed_at_unix_ms = 5;
+}
+
+message CopyObjectRequest {
+  // source_key and destination_key are required.
+  string source_key = 1;
+  string destination_key = 2;
+
+  // tenant_id owns the copy; empty keeps the source tenant.
+  string tenant_id = 3;
+  bool overwrite_existing = 4;
+
+  // target_backend names the backend of the copy. Required, as in
+  // PutObjectRequest.
+  string target_backend = 5;
+}
+
+message CopyObjectResponse {
+  // key is the destination key.
+  string key = 1;
+  uint64 object_id = 2;
+  int64 size = 3;
+  bytes checksum = 4;
+  uint64 version = 5;
+  string backend = 6;
+  int64 created_at_unix_ms = 7;
+}
+
+message ListObjectsByTagRequest {
+  // tag_name is required.
+  string tag_name = 1;
+  string tag_value = 2;
+  string tenant_id = 3;
+  int32 limit = 4;
+  string cursor = 5;
+}
+
+message ListTenantObjectsRequest {
+  // tenant_id is required.
+  string tenant_id = 1;
+  int32 limit = 2;
+  string cursor = 3;
+  bool include_tags = 4;
+}

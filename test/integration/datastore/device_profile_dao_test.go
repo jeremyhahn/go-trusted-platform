@@ -15,7 +15,7 @@
 
 // Package datastore provides integration tests for the QuicBaaS DeviceProfileDAO implementation.
 // These tests verify device profile-specific operations using real QuicBaaS with embedded PebbleDB.
-// Run via: make integration-test-datastore or INTEGRATION_TEST=1 go test ./test/integration/datastore/...
+// Run via: make integration-test-datastore
 package datastore
 
 import (
@@ -65,8 +65,6 @@ func createTestDeviceProfileWithMatchRules(name, model, macPrefix, serialPrefix 
 
 // TestDeviceProfileDAO_Save_NewProfile tests saving a new device profile with auto-generated ID.
 func TestDeviceProfileDAO_Save_NewProfile(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	client, cleanup := newIntegrationClient(t)
 	defer cleanup()
 
@@ -74,7 +72,7 @@ func TestDeviceProfileDAO_Save_NewProfile(t *testing.T) {
 	dao := quicbaas.NewDeviceProfileDAO(client, logger)
 
 	ctx := context.Background()
-	uniqueName := "profile-new-" + time.Now().Format("20060102150405.000")
+	uniqueName := uniqueID("profile-new")
 	profile := createTestDeviceProfile(uniqueName, "Model-A")
 
 	// ID should be 0 before save
@@ -99,8 +97,6 @@ func TestDeviceProfileDAO_Save_NewProfile(t *testing.T) {
 
 // TestDeviceProfileDAO_Save_UpdateProfile tests updating an existing device profile.
 func TestDeviceProfileDAO_Save_UpdateProfile(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	client, cleanup := newIntegrationClient(t)
 	defer cleanup()
 
@@ -108,7 +104,7 @@ func TestDeviceProfileDAO_Save_UpdateProfile(t *testing.T) {
 	dao := quicbaas.NewDeviceProfileDAO(client, logger)
 
 	ctx := context.Background()
-	uniqueName := "profile-update-" + time.Now().Format("20060102150405.000")
+	uniqueName := uniqueID("profile-update")
 	profile := createTestDeviceProfile(uniqueName, "Model-B")
 
 	require.NoError(t, dao.Save(ctx, profile))
@@ -133,8 +129,6 @@ func TestDeviceProfileDAO_Save_UpdateProfile(t *testing.T) {
 
 // TestDeviceProfileDAO_Get_Success tests successful device profile retrieval.
 func TestDeviceProfileDAO_Get_Success(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	client, cleanup := newIntegrationClient(t)
 	defer cleanup()
 
@@ -142,7 +136,7 @@ func TestDeviceProfileDAO_Get_Success(t *testing.T) {
 	dao := quicbaas.NewDeviceProfileDAO(client, logger)
 
 	ctx := context.Background()
-	uniqueName := "profile-get-" + time.Now().Format("20060102150405.000")
+	uniqueName := uniqueID("profile-get")
 	profile := createTestDeviceProfile(uniqueName, "Model-C")
 	require.NoError(t, dao.Save(ctx, profile))
 
@@ -155,8 +149,6 @@ func TestDeviceProfileDAO_Get_Success(t *testing.T) {
 
 // TestDeviceProfileDAO_Get_NotFound tests retrieval of non-existent device profile.
 func TestDeviceProfileDAO_Get_NotFound(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	client, cleanup := newIntegrationClient(t)
 	defer cleanup()
 
@@ -174,8 +166,6 @@ func TestDeviceProfileDAO_Get_NotFound(t *testing.T) {
 
 // TestDeviceProfileDAO_Delete_Success tests successful device profile deletion.
 func TestDeviceProfileDAO_Delete_Success(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	client, cleanup := newIntegrationClient(t)
 	defer cleanup()
 
@@ -183,7 +173,7 @@ func TestDeviceProfileDAO_Delete_Success(t *testing.T) {
 	dao := quicbaas.NewDeviceProfileDAO(client, logger)
 
 	ctx := context.Background()
-	uniqueName := "profile-delete-" + time.Now().Format("20060102150405.000")
+	uniqueName := uniqueID("profile-delete")
 	profile := createTestDeviceProfile(uniqueName, "Model-D")
 	require.NoError(t, dao.Save(ctx, profile))
 
@@ -203,8 +193,6 @@ func TestDeviceProfileDAO_Delete_Success(t *testing.T) {
 
 // TestDeviceProfileDAO_GetByModel_Success tests retrieving device profile by model name.
 func TestDeviceProfileDAO_GetByModel_Success(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	client, cleanup := newIntegrationClient(t)
 	defer cleanup()
 
@@ -214,8 +202,8 @@ func TestDeviceProfileDAO_GetByModel_Success(t *testing.T) {
 	ctx := context.Background()
 
 	// Create unique model for this test
-	uniqueModel := "MODEL-" + time.Now().Format("20060102150405.000")
-	uniqueName := "profile-model-" + time.Now().Format("20060102150405.000")
+	uniqueModel := uniqueID("MODEL")
+	uniqueName := uniqueID("profile-model")
 	profile := createTestDeviceProfile(uniqueName, uniqueModel)
 	require.NoError(t, dao.Save(ctx, profile))
 
@@ -229,8 +217,6 @@ func TestDeviceProfileDAO_GetByModel_Success(t *testing.T) {
 
 // TestDeviceProfileDAO_GetByModel_NotFound tests GetByModel with non-existent model.
 func TestDeviceProfileDAO_GetByModel_NotFound(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	client, cleanup := newIntegrationClient(t)
 	defer cleanup()
 
@@ -248,8 +234,6 @@ func TestDeviceProfileDAO_GetByModel_NotFound(t *testing.T) {
 
 // TestDeviceProfileDAO_FindByMACPrefix_Success tests finding profile by MAC prefix.
 func TestDeviceProfileDAO_FindByMACPrefix_Success(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	client, cleanup := newIntegrationClient(t)
 	defer cleanup()
 
@@ -259,7 +243,7 @@ func TestDeviceProfileDAO_FindByMACPrefix_Success(t *testing.T) {
 	ctx := context.Background()
 
 	// Create profile with MAC prefix rule
-	uniqueName := "profile-mac-" + time.Now().Format("20060102150405.000")
+	uniqueName := uniqueID("profile-mac")
 	macPrefix := "52:54:00"
 	profile := createTestDeviceProfileWithMatchRules(uniqueName, "Model-MAC", macPrefix, "")
 	require.NoError(t, dao.Save(ctx, profile))
@@ -274,8 +258,6 @@ func TestDeviceProfileDAO_FindByMACPrefix_Success(t *testing.T) {
 
 // TestDeviceProfileDAO_FindByMACPrefix_CaseInsensitive tests case-insensitive MAC prefix matching.
 func TestDeviceProfileDAO_FindByMACPrefix_CaseInsensitive(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	client, cleanup := newIntegrationClient(t)
 	defer cleanup()
 
@@ -285,7 +267,7 @@ func TestDeviceProfileDAO_FindByMACPrefix_CaseInsensitive(t *testing.T) {
 	ctx := context.Background()
 
 	// Create profile with lowercase MAC prefix
-	uniqueName := "profile-mac-case-" + time.Now().Format("20060102150405.000")
+	uniqueName := uniqueID("profile-mac-case")
 	macPrefix := "aa:bb:cc"
 	profile := createTestDeviceProfileWithMatchRules(uniqueName, "Model-MAC-Case", macPrefix, "")
 	require.NoError(t, dao.Save(ctx, profile))
@@ -305,8 +287,6 @@ func TestDeviceProfileDAO_FindByMACPrefix_CaseInsensitive(t *testing.T) {
 
 // TestDeviceProfileDAO_FindByMACPrefix_NotFound tests FindByMACPrefix with no matching profile.
 func TestDeviceProfileDAO_FindByMACPrefix_NotFound(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	client, cleanup := newIntegrationClient(t)
 	defer cleanup()
 
@@ -324,8 +304,6 @@ func TestDeviceProfileDAO_FindByMACPrefix_NotFound(t *testing.T) {
 
 // TestDeviceProfileDAO_FindByMACPrefix_EmptyInput tests FindByMACPrefix with empty MAC address.
 func TestDeviceProfileDAO_FindByMACPrefix_EmptyInput(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	client, cleanup := newIntegrationClient(t)
 	defer cleanup()
 
@@ -343,8 +321,6 @@ func TestDeviceProfileDAO_FindByMACPrefix_EmptyInput(t *testing.T) {
 
 // TestDeviceProfileDAO_FindBySerialPrefix_Success tests finding profile by serial prefix.
 func TestDeviceProfileDAO_FindBySerialPrefix_Success(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	client, cleanup := newIntegrationClient(t)
 	defer cleanup()
 
@@ -354,7 +330,7 @@ func TestDeviceProfileDAO_FindBySerialPrefix_Success(t *testing.T) {
 	ctx := context.Background()
 
 	// Create profile with serial prefix rule
-	uniqueName := "profile-serial-" + time.Now().Format("20060102150405.000")
+	uniqueName := uniqueID("profile-serial")
 	serialPrefix := "SN-ABC"
 	profile := createTestDeviceProfileWithMatchRules(uniqueName, "Model-Serial", "", serialPrefix)
 	require.NoError(t, dao.Save(ctx, profile))
@@ -369,8 +345,6 @@ func TestDeviceProfileDAO_FindBySerialPrefix_Success(t *testing.T) {
 
 // TestDeviceProfileDAO_FindBySerialPrefix_CaseInsensitive tests case-insensitive serial prefix matching.
 func TestDeviceProfileDAO_FindBySerialPrefix_CaseInsensitive(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	client, cleanup := newIntegrationClient(t)
 	defer cleanup()
 
@@ -380,7 +354,7 @@ func TestDeviceProfileDAO_FindBySerialPrefix_CaseInsensitive(t *testing.T) {
 	ctx := context.Background()
 
 	// Create profile with uppercase serial prefix
-	uniqueName := "profile-serial-case-" + time.Now().Format("20060102150405.000")
+	uniqueName := uniqueID("profile-serial-case")
 	serialPrefix := "XYZ-PREFIX"
 	profile := createTestDeviceProfileWithMatchRules(uniqueName, "Model-Serial-Case", "", serialPrefix)
 	require.NoError(t, dao.Save(ctx, profile))
@@ -400,8 +374,6 @@ func TestDeviceProfileDAO_FindBySerialPrefix_CaseInsensitive(t *testing.T) {
 
 // TestDeviceProfileDAO_FindBySerialPrefix_NotFound tests FindBySerialPrefix with no matching profile.
 func TestDeviceProfileDAO_FindBySerialPrefix_NotFound(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	client, cleanup := newIntegrationClient(t)
 	defer cleanup()
 
@@ -419,8 +391,6 @@ func TestDeviceProfileDAO_FindBySerialPrefix_NotFound(t *testing.T) {
 
 // TestDeviceProfileDAO_FindBySerialPrefix_EmptyInput tests FindBySerialPrefix with empty serial.
 func TestDeviceProfileDAO_FindBySerialPrefix_EmptyInput(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	client, cleanup := newIntegrationClient(t)
 	defer cleanup()
 
@@ -438,8 +408,6 @@ func TestDeviceProfileDAO_FindBySerialPrefix_EmptyInput(t *testing.T) {
 
 // TestDeviceProfileDAO_FindMatchingProfile_ByMAC tests FindMatchingProfile matching by MAC prefix.
 func TestDeviceProfileDAO_FindMatchingProfile_ByMAC(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	client, cleanup := newIntegrationClient(t)
 	defer cleanup()
 
@@ -449,7 +417,7 @@ func TestDeviceProfileDAO_FindMatchingProfile_ByMAC(t *testing.T) {
 	ctx := context.Background()
 
 	// Create profile with MAC prefix rule
-	uniqueName := "profile-match-mac-" + time.Now().Format("20060102150405.000")
+	uniqueName := uniqueID("profile-match-mac")
 	profile := createTestDeviceProfileWithMatchRules(uniqueName, "Model-Match-MAC", "de:ad:be", "")
 	require.NoError(t, dao.Save(ctx, profile))
 
@@ -461,8 +429,6 @@ func TestDeviceProfileDAO_FindMatchingProfile_ByMAC(t *testing.T) {
 
 // TestDeviceProfileDAO_FindMatchingProfile_BySerial tests FindMatchingProfile matching by serial prefix.
 func TestDeviceProfileDAO_FindMatchingProfile_BySerial(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	client, cleanup := newIntegrationClient(t)
 	defer cleanup()
 
@@ -472,7 +438,7 @@ func TestDeviceProfileDAO_FindMatchingProfile_BySerial(t *testing.T) {
 	ctx := context.Background()
 
 	// Create profile with serial prefix rule
-	uniqueName := "profile-match-serial-" + time.Now().Format("20060102150405.000")
+	uniqueName := uniqueID("profile-match-serial")
 	profile := createTestDeviceProfileWithMatchRules(uniqueName, "Model-Match-Serial", "", "TPM-SN")
 	require.NoError(t, dao.Save(ctx, profile))
 
@@ -484,8 +450,6 @@ func TestDeviceProfileDAO_FindMatchingProfile_BySerial(t *testing.T) {
 
 // TestDeviceProfileDAO_FindMatchingProfile_ByModel tests FindMatchingProfile matching by model.
 func TestDeviceProfileDAO_FindMatchingProfile_ByModel(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	client, cleanup := newIntegrationClient(t)
 	defer cleanup()
 
@@ -495,8 +459,8 @@ func TestDeviceProfileDAO_FindMatchingProfile_ByModel(t *testing.T) {
 	ctx := context.Background()
 
 	// Create profile with model match rule
-	uniqueModel := "Model-Match-Model-" + time.Now().Format("20060102150405.000")
-	uniqueName := "profile-match-model-" + time.Now().Format("20060102150405.000")
+	uniqueModel := uniqueID("Model-Match-Model")
+	uniqueName := uniqueID("profile-match-model")
 	profile := createTestDeviceProfile(uniqueName, uniqueModel)
 	profile.MatchRules = &deviceEntities.ProfileMatchRules{
 		Model: uniqueModel,
@@ -511,8 +475,6 @@ func TestDeviceProfileDAO_FindMatchingProfile_ByModel(t *testing.T) {
 
 // TestDeviceProfileDAO_FindMatchingProfile_MultipleCriteria tests FindMatchingProfile with multiple criteria.
 func TestDeviceProfileDAO_FindMatchingProfile_MultipleCriteria(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	client, cleanup := newIntegrationClient(t)
 	defer cleanup()
 
@@ -522,8 +484,8 @@ func TestDeviceProfileDAO_FindMatchingProfile_MultipleCriteria(t *testing.T) {
 	ctx := context.Background()
 
 	// Create profile with multiple match rules
-	uniqueModel := "Model-Multi-" + time.Now().Format("20060102150405.000")
-	uniqueName := "profile-match-multi-" + time.Now().Format("20060102150405.000")
+	uniqueModel := uniqueID("Model-Multi")
+	uniqueName := uniqueID("profile-match-multi")
 	profile := createTestDeviceProfileWithMatchRules(uniqueName, uniqueModel, "ca:fe:ba", "MULTI-SN")
 	require.NoError(t, dao.Save(ctx, profile))
 
@@ -550,8 +512,6 @@ func TestDeviceProfileDAO_FindMatchingProfile_MultipleCriteria(t *testing.T) {
 
 // TestDeviceProfileDAO_FindMatchingProfile_NotFound tests FindMatchingProfile with no matching profile.
 func TestDeviceProfileDAO_FindMatchingProfile_NotFound(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	client, cleanup := newIntegrationClient(t)
 	defer cleanup()
 
@@ -569,8 +529,6 @@ func TestDeviceProfileDAO_FindMatchingProfile_NotFound(t *testing.T) {
 
 // TestDeviceProfileDAO_Count tests counting device profiles.
 func TestDeviceProfileDAO_Count(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	client, cleanup := newIntegrationClient(t)
 	defer cleanup()
 
@@ -586,10 +544,9 @@ func TestDeviceProfileDAO_Count(t *testing.T) {
 	// Add profiles
 	numProfiles := 5
 	for i := 0; i < numProfiles; i++ {
-		uniqueName := "profile-count-" + time.Now().Format("150405.000000")
+		uniqueName := uniqueID("profile-count")
 		profile := createTestDeviceProfile(uniqueName, "Model-Count")
 		require.NoError(t, dao.Save(ctx, profile))
-		time.Sleep(time.Millisecond) // Ensure unique timestamp-based IDs
 	}
 
 	// Verify count increased
@@ -600,8 +557,6 @@ func TestDeviceProfileDAO_Count(t *testing.T) {
 
 // TestDeviceProfileDAO_Page_FirstPage tests retrieving the first page of device profiles.
 func TestDeviceProfileDAO_Page_FirstPage(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	client, cleanup := newIntegrationClient(t)
 	defer cleanup()
 
@@ -613,10 +568,9 @@ func TestDeviceProfileDAO_Page_FirstPage(t *testing.T) {
 	// Add profiles
 	numProfiles := 10
 	for i := 0; i < numProfiles; i++ {
-		uniqueName := "profile-page-" + time.Now().Format("150405.000000")
+		uniqueName := uniqueID("profile-page")
 		profile := createTestDeviceProfile(uniqueName, "Model-Page")
 		require.NoError(t, dao.Save(ctx, profile))
-		time.Sleep(time.Millisecond)
 	}
 
 	// Get first page
@@ -636,8 +590,6 @@ func TestDeviceProfileDAO_Page_FirstPage(t *testing.T) {
 
 // TestDeviceProfileDAO_Page_MiddlePage tests retrieving a middle page of device profiles.
 func TestDeviceProfileDAO_Page_MiddlePage(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	client, cleanup := newIntegrationClient(t)
 	defer cleanup()
 
@@ -649,10 +601,9 @@ func TestDeviceProfileDAO_Page_MiddlePage(t *testing.T) {
 	// Add profiles
 	numProfiles := 10
 	for i := 0; i < numProfiles; i++ {
-		uniqueName := "profile-middle-" + time.Now().Format("150405.000000")
+		uniqueName := uniqueID("profile-middle")
 		profile := createTestDeviceProfile(uniqueName, "Model-Middle")
 		require.NoError(t, dao.Save(ctx, profile))
-		time.Sleep(time.Millisecond)
 	}
 
 	// Get second page
@@ -670,8 +621,6 @@ func TestDeviceProfileDAO_Page_MiddlePage(t *testing.T) {
 
 // TestDeviceProfileDAO_Page_EmptyResult tests requesting a page beyond available data.
 func TestDeviceProfileDAO_Page_EmptyResult(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	client, cleanup := newIntegrationClient(t)
 	defer cleanup()
 
@@ -682,10 +631,9 @@ func TestDeviceProfileDAO_Page_EmptyResult(t *testing.T) {
 
 	// Add a few profiles
 	for i := 0; i < 3; i++ {
-		uniqueName := "profile-empty-" + time.Now().Format("150405.000000")
+		uniqueName := uniqueID("profile-empty")
 		profile := createTestDeviceProfile(uniqueName, "Model-Empty")
 		require.NoError(t, dao.Save(ctx, profile))
-		time.Sleep(time.Millisecond)
 	}
 
 	// Request page beyond data
@@ -702,8 +650,6 @@ func TestDeviceProfileDAO_Page_EmptyResult(t *testing.T) {
 
 // TestDeviceProfileDAO_ConcurrentOperations tests concurrent device profile operations.
 func TestDeviceProfileDAO_ConcurrentOperations(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	client, cleanup := newIntegrationClient(t)
 	defer cleanup()
 
@@ -719,14 +665,13 @@ func TestDeviceProfileDAO_ConcurrentOperations(t *testing.T) {
 
 	for i := 0; i < numGoroutines; i++ {
 		go func(idx int) {
-			uniqueName := "profile-concurrent-" + time.Now().Format("150405.000000000")
+			uniqueName := uniqueID("profile-concurrent")
 			profile := createTestDeviceProfile(uniqueName, "Model-Concurrent")
 			if err := dao.Save(ctx, profile); err != nil {
 				errChan <- err
 			}
 			done <- true
 		}(i)
-		time.Sleep(time.Microsecond) // Small delay for unique timestamps
 	}
 
 	// Wait for all goroutines
@@ -749,8 +694,6 @@ func TestDeviceProfileDAO_ConcurrentOperations(t *testing.T) {
 
 // TestDeviceProfileDAO_ConcurrentReadsAndWrites tests concurrent read and write operations.
 func TestDeviceProfileDAO_ConcurrentReadsAndWrites(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	client, cleanup := newIntegrationClient(t)
 	defer cleanup()
 
@@ -763,11 +706,10 @@ func TestDeviceProfileDAO_ConcurrentReadsAndWrites(t *testing.T) {
 	numInitial := 5
 	var profileIDs []uint64
 	for i := 0; i < numInitial; i++ {
-		uniqueName := "profile-rw-init-" + time.Now().Format("150405.000000")
+		uniqueName := uniqueID("profile-rw-init")
 		profile := createTestDeviceProfile(uniqueName, "Model-RW")
 		require.NoError(t, dao.Save(ctx, profile))
 		profileIDs = append(profileIDs, profile.ID)
-		time.Sleep(time.Millisecond)
 	}
 
 	// Concurrent reads and writes
@@ -785,7 +727,7 @@ func TestDeviceProfileDAO_ConcurrentReadsAndWrites(t *testing.T) {
 				}
 			} else {
 				// Write operation
-				uniqueName := "profile-rw-write-" + time.Now().Format("150405.000000000")
+				uniqueName := uniqueID("profile-rw-write")
 				profile := createTestDeviceProfile(uniqueName, "Model-RW-Write")
 				if err := dao.Save(ctx, profile); err != nil {
 					errChan <- err
@@ -793,7 +735,6 @@ func TestDeviceProfileDAO_ConcurrentReadsAndWrites(t *testing.T) {
 			}
 			done <- true
 		}(i)
-		time.Sleep(time.Microsecond)
 	}
 
 	// Wait for all goroutines
@@ -811,8 +752,6 @@ func TestDeviceProfileDAO_ConcurrentReadsAndWrites(t *testing.T) {
 
 // TestDeviceProfileDAO_DataPersistenceAcrossDAOInstances tests data persists across DAO instances.
 func TestDeviceProfileDAO_DataPersistenceAcrossDAOInstances(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	client, cleanup := newIntegrationClient(t)
 	defer cleanup()
 
@@ -822,8 +761,8 @@ func TestDeviceProfileDAO_DataPersistenceAcrossDAOInstances(t *testing.T) {
 	ctx := context.Background()
 
 	// Create profile with first DAO
-	uniqueName := "profile-persistence-" + time.Now().Format("20060102150405.000")
-	uniqueModel := "Model-Persistence-" + time.Now().Format("20060102150405.000")
+	uniqueName := uniqueID("profile-persistence")
+	uniqueModel := uniqueID("Model-Persistence")
 	profile := createTestDeviceProfileWithMatchRules(uniqueName, uniqueModel, "pe:rs:is", "PERSIST")
 	require.NoError(t, dao1.Save(ctx, profile))
 
@@ -856,8 +795,6 @@ func TestDeviceProfileDAO_DataPersistenceAcrossDAOInstances(t *testing.T) {
 
 // TestDeviceProfileDAO_FullProfilePersistence tests that all profile fields persist correctly.
 func TestDeviceProfileDAO_FullProfilePersistence(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	client, cleanup := newIntegrationClient(t)
 	defer cleanup()
 
@@ -868,8 +805,8 @@ func TestDeviceProfileDAO_FullProfilePersistence(t *testing.T) {
 
 	// Create profile with all fields populated
 	profile := &deviceEntities.DeviceProfile{
-		Name:     "full-profile-" + time.Now().Format("20060102150405.000"),
-		Model:    "Model-Full-" + time.Now().Format("20060102150405.000"),
+		Name:     uniqueID("full-profile"),
+		Model:    uniqueID("Model-Full"),
 		TenantID: "tenant-full",
 		Role:     deviceEntities.DeviceRoleEdge,
 		EventLog: []byte{0x01, 0x02, 0x03, 0x04},
@@ -976,8 +913,6 @@ func TestDeviceProfileDAO_FullProfilePersistence(t *testing.T) {
 
 // TestDeviceProfileDAO_GetByModel_FallbackScan tests that GetByModel falls back to scan.
 func TestDeviceProfileDAO_GetByModel_FallbackScan(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	client, cleanup := newIntegrationClient(t)
 	defer cleanup()
 
@@ -987,9 +922,9 @@ func TestDeviceProfileDAO_GetByModel_FallbackScan(t *testing.T) {
 	ctx := context.Background()
 
 	// Create multiple profiles with different models
-	uniqueModel1 := "MODEL-SCAN-1-" + time.Now().Format("20060102150405.000")
-	uniqueModel2 := "MODEL-SCAN-2-" + time.Now().Format("20060102150405.000")
-	uniqueModel3 := "MODEL-SCAN-3-" + time.Now().Format("20060102150405.000")
+	uniqueModel1 := uniqueID("MODEL-SCAN-1")
+	uniqueModel2 := uniqueID("MODEL-SCAN-2")
+	uniqueModel3 := uniqueID("MODEL-SCAN-3")
 
 	profile1 := createTestDeviceProfile("profile-scan1", uniqueModel1)
 	profile2 := createTestDeviceProfile("profile-scan2", uniqueModel2)
@@ -1009,8 +944,6 @@ func TestDeviceProfileDAO_GetByModel_FallbackScan(t *testing.T) {
 
 // TestDeviceProfileDAO_UpdateMatchRules tests updating match rules on an existing profile.
 func TestDeviceProfileDAO_UpdateMatchRules(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	client, cleanup := newIntegrationClient(t)
 	defer cleanup()
 
@@ -1020,7 +953,7 @@ func TestDeviceProfileDAO_UpdateMatchRules(t *testing.T) {
 	ctx := context.Background()
 
 	// Create profile without match rules
-	uniqueName := "profile-updaterules-" + time.Now().Format("20060102150405.000")
+	uniqueName := uniqueID("profile-updaterules")
 	profile := createTestDeviceProfile(uniqueName, "Model-UpdateRules")
 	require.NoError(t, dao.Save(ctx, profile))
 	require.Nil(t, profile.MatchRules)

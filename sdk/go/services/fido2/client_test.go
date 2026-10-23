@@ -14,37 +14,9 @@
 package fido2
 
 import (
-	"context"
 	"errors"
 	"testing"
 )
-
-func TestNewClient_NotNil(t *testing.T) {
-	if NewClient() == nil {
-		t.Fatal("expected non-nil client")
-	}
-}
-
-func TestClient_AllMethodsReturnNotYetWired(t *testing.T) {
-	ctx := context.Background()
-	c := NewClient()
-
-	if _, err := c.ListDevices(ctx, &ListDevicesRequest{}); err == nil || !errors.Is(err, ErrNotYetWired) {
-		t.Errorf("ListDevices: expected ErrNotYetWired, got %v", err)
-	}
-	if _, err := c.WaitDevice(ctx, &WaitDeviceRequest{}); err == nil || !errors.Is(err, ErrNotYetWired) {
-		t.Errorf("WaitDevice: expected ErrNotYetWired, got %v", err)
-	}
-	if _, err := c.Info(ctx, &InfoRequest{}); err == nil || !errors.Is(err, ErrNotYetWired) {
-		t.Errorf("Info: expected ErrNotYetWired, got %v", err)
-	}
-	if _, err := c.Register(ctx, &RegisterRequest{}); err == nil || !errors.Is(err, ErrNotYetWired) {
-		t.Errorf("Register: expected ErrNotYetWired, got %v", err)
-	}
-	if _, err := c.Authenticate(ctx, &AuthenticateRequest{}); err == nil || !errors.Is(err, ErrNotYetWired) {
-		t.Errorf("Authenticate: expected ErrNotYetWired, got %v", err)
-	}
-}
 
 func TestErrors_UnwrapToCause(t *testing.T) {
 	cause := errors.New("underlying")
@@ -72,6 +44,6 @@ func TestErrors_UnwrapToCause(t *testing.T) {
 	}
 }
 
-func TestClientImplementsService(t *testing.T) {
-	var _ Service = (*Client)(nil)
+func TestGRPCClientImplementsService(t *testing.T) {
+	var _ Service = (*GRPCClient)(nil)
 }

@@ -104,6 +104,13 @@ state:          unclaimed
   an authenticated admin session — that re-opens the ceremony so you can
   claim again with the certificate. There is deliberately no permanent
   lock-out marker: losing a security key should not brick the deployment.
+- **A re-claim is announced.** Claiming an admin whose passkey was revoked
+  raises a high-severity security event (`adminclaim.reclaim`) naming the
+  revoked factor it replaces, the time and the new credential. If you did
+  not just recover a lost key yourself, treat it as an intrusion. A claim the
+  node cannot classify raises `adminclaim.reclaim_status_unknown` at the
+  same severity. A first claim is logged as routine. In the console, open
+  **Platform → Logs** and pick the **SECURITY** level to see these events.
 - **Every rejection looks the same.** A wrong certificate, an expired nonce and
   a bad signature all answer "proof rejected". That is deliberate; the message
   is not a diagnostic.
@@ -264,8 +271,14 @@ identifies you and the platform resolves your account from the credential it
 presents. If you hold passkeys for more than one account, your authenticator
 asks which — the platform cannot narrow that down for you, and a username box
 that looked as though it did would be telling you something untrue.
-Registration still asks for a username, because that is when the account is
-named.
+For the same reason registration requires your authenticator to store the
+passkey on itself (a resident, or discoverable, credential): one that cannot is
+refused by your browser at registration rather than leaving you with a passkey
+that can never sign in.
+Registration asks for your email address, because that is when the account is
+named. It must be a full address (`name@example.com`): the platform refuses
+anything else before it creates the account, rather than leaving behind a user
+and workspace that cannot sign in.
 
 Successful login yields a session:
 
@@ -295,13 +308,13 @@ declined.
 The MCP server advertises OAuth 2.1 protected-resource metadata:
 
 ```bash
-curl -s https://platform.example.com:8000/.well-known/oauth-protected-resource
+curl -s https://platform.example.com:9445/.well-known/oauth-protected-resource
 ```
 
 It returns the resource identifier, the authorization servers, and a list of
 supported scopes. Note that **the advertised scope list is broader than what is
-actually enforced** — requesting `ca:write` will be accepted and no `ca_*` tool
-checks it. See [api.md](api.md) §5.
+actually enforced** — requesting `container:write` will be accepted and no
+`container_*` tool checks it. See [api.md](api.md) §5.
 
 ---
 
@@ -353,9 +366,12 @@ Check three things in order:
 All three are documented in [architecture.md](architecture.md) §6.
 
 **A token works on one transport and not another.**
-Authorization coverage is uneven: 185 of 461 gRPC RPCs and 71 of 449 MCP tools
-carry a required scope, and anything uncatalogued is allowed once the token
-validates. A call that "works" may simply be uncatalogued.
+Each transport has its own scope catalog, and both the gRPC and MCP catalogs
+refuse anything uncatalogued. Every gRPC RPC and every registered MCP tool
+carries a required scope or is explicitly open; a tool missing from the MCP
+catalog would fail with `AuthErrorToolNotClassified` whatever scopes the token
+holds. Such a tool needs classifying, not a broader token. The catalogs are listed in
+[`docs/daemon/api.md`](../daemon/api.md) §5.
 
 **You lost your session token.**
 Log in again. There is no recovery path and no token store to read from.

@@ -317,6 +317,26 @@ ifeq ($(strip $(WITH_CODEC_PROTOBUF)),1)
     BUILD_TAGS += codec_protobuf
 endif
 
+# GO_BUILD_TAGS (#960). ci-template v1.21 passes the repository's tag set to
+# lint, build, coverage, security and integration-test as a space-separated
+# make variable (handbook devcontainer.md §6). It is appended here, after
+# every `+=` above and before any variable is derived from BUILD_TAGS, so each
+# consumer — print-build-tags, every `go build`/`go test`, TEST_BUILD_TAGS and
+# the integration runner — reads it from this one place. Like WITH_FIPS it is
+# additive: it never replaces the derived set. Empty or unset changes nothing.
+#
+# The analysers that do not read BUILD_TAGS (golangci-lint, gosec,
+# govulncheck) take GO_BUILD_TAGS alone, comma separated, through
+# GO_BUILD_TAGS_CSV. `make check-go-build-tags` (run by `make test`) fails if
+# any of those targets drops it.
+comma                   := ,
+empty                   :=
+space                   := $(empty) $(empty)
+GO_BUILD_TAGS_CSV       := $(subst $(space),$(comma),$(strip $(GO_BUILD_TAGS)))
+ifneq ($(GO_BUILD_TAGS_CSV),)
+    BUILD_TAGS += $(GO_BUILD_TAGS)
+endif
+
 # =============================================================================
 # Build Tag Flags
 # =============================================================================
@@ -338,7 +358,11 @@ BUILD_TAGS_ARG          := $(if $(strip $(BUILD_TAGS)),-tags '$(strip $(BUILD_TA
 # Integration tests always need codec tags for QUIC protocol support.
 # The go-codec library uses build tags to compile real codecs vs stubs.
 INTEGRATION_CODEC_TAGS  := codec_msgpack codec_json codec_cbor
-TEST_BUILD_TAGS         := integration $(INTEGRATION_CODEC_TAGS) $(strip $(BUILD_TAGS))
+# Integration builds carry the vector service (the WITH_VECTOR=1 tags) so the
+# quicbaas and sdk suites' Vector assertions run against a real vector store;
+# pkg/storage/quicbaas.TestConfig enables it in exactly such a build.
+INTEGRATION_VECTOR_TAGS := vector qrdb_vector
+TEST_BUILD_TAGS         := integration $(INTEGRATION_CODEC_TAGS) $(INTEGRATION_VECTOR_TAGS) $(strip $(BUILD_TAGS))
 TEST_BUILD_TAGS_ARG     := -tags '$(strip $(TEST_BUILD_TAGS))'
 
 # Web embed directory
@@ -420,7 +444,7 @@ CONFIG_DIR                  ?= configs
 EXAMPLE_DIR                 ?= examples
 PLATFORM_CONFIG_DIR         ?= $(CONFIG_DIR)/platform
 
-CONFIG_YAML                 ?= config.dev.server.yaml
+CONFIG_YAML                 ?= standalone/web-test.example.yaml
 
 ROOT_CA                     ?= root-ca
 INTERMEDIATE_CA             ?= intermediate-ca
@@ -462,10 +486,33 @@ GID                         := $(shell id -g)
 # Build and coverage directories
 BUILD_DIR                   := build
 COVERAGE_DIR                := $(BUILD_DIR)/coverage
-# golangci-lint: the pin lives HERE and only here. ci.yml installs it by calling
-# `make install-golangci-lint`, so the version cannot drift between CI and a
-# developer machine — a class of defect this repo has hit repeatedly with two
-# lists that must agree.
+# Pinned Go tools are built from their own tools modules under build/tools-src/
+# (one go.mod + go.sum per tool, outside the main module's graph and outside
+# `./...`), and each pin lives in that go.mod and only there. The Makefile reads
+# the version back out of it, so there is no second list to keep in step — a
+# class of defect this repo has hit repeatedly. ci.yml installs the linters by
+# calling `make install-golangci-lint` / `make lint`, so CI and a developer
+# machine cannot drift either.
+#
+# They are built with `go build -C <tools module> -mod=readonly`, NEVER with
+# `go install <pkg>@<version>` (#584): the @version form makes the go command
+# look up the module's deprecation notice, a module query that a lane's
+# GOPROXY=off refuses even when every module is already in the cache. A build
+# from a module with a committed go.sum makes no query at all, and node-prep
+# fills the cache from every tracked go.mod, so the tools' graphs reach every
+# node. pkg/arch/maketools_test.go fails on a pinned `go install` here.
+#
+# To move a pin, with network: in the tool's module run
+#   go get -tool <tool package>@<version> && go mod tidy
+# and commit go.mod + go.sum (trivy fs scans them, so keep their dependencies
+# patched as the main module's are).
+#
+# $(call tools-module-version,<tools module dir>,<module path>) is the version
+# <tools module dir>/go.mod requires of <module path>. It is read with make's
+# own $(file), so parsing the Makefile starts no process and needs no network.
+tools-module-version = $(patsubst $(2)@%,%,$(filter $(2)@%,$(subst $(2) v,$(2)@v,$(file < $(1)/go.mod))))
+
+# golangci-lint
 #
 # PINNED (devops.md §9, documented). History, because the reason changed:
 #
@@ -489,13 +536,48 @@ COVERAGE_DIR                := $(BUILD_DIR)/coverage
 #   MOVED to v2.14.0 on 2026-10-07 (#744): the CI runner image carries the
 #   upstream latest of every analysis tool and the jobs assert the baked tool
 #   matches this pin. Never pin below the latest release.
-GOLANGCI_LINT_VERSION       := v2.14.0
+#
+#   The tools module requires exactly golangci-lint's own released go.mod, so
+#   the binary links the same dependency versions `go install ...@v2.14.0` did.
+GOLANGCI_LINT_SRC           := build/tools-src/golangci-lint
+GOLANGCI_LINT_VERSION       := $(call tools-module-version,$(GOLANGCI_LINT_SRC),github.com/golangci/golangci-lint/v2)
+
+# actionlint checks .github/workflows/ and is pinned and built the same way as
+# golangci-lint. `make lint` runs it so a broken workflow fails here, not in CI.
+# Its tools module is actionlint's released go.mod with golang.org/x/net raised
+# to the main module's v0.60.0 (CVE-2026-78669; the same move #775 made for gosec)
+# and golang.org/x/sys to the v0.48.0 that x/net version requires.
+ACTIONLINT_SRC              := build/tools-src/actionlint
+ACTIONLINT_VERSION          := $(call tools-module-version,$(ACTIONLINT_SRC),github.com/rhysd/actionlint)
+
+# gosec is pinned and built with THIS module's toolchain, for the same reason as
+# golangci-lint: a gosec built with an older Go cannot type-check a module that
+# declares a newer `go` line, so every package reports "type errors" and the
+# scan exits non-zero with an empty report. v2.29.0 is the newest gosec v2
+# release (and the only one) in the module cache.
+#
+# gosec is built from its own tools module, $(GOSEC_SRC), NOT with
+# `go install ...@$(GOSEC_VERSION)`: that resolves against gosec's own go.mod,
+# whose golang.org/x/tools is too old to read Go 1.27 export data, so every
+# package still reports type errors. The tools module requires gosec (a `tool`
+# directive) and a current x/tools (v0.51.0), and commits its go.sum. The
+# version is that module's gosec requirement; the main module's go.mod is
+# untouched.
+GOSEC_SRC                   := build/tools-src/gosec
+GOSEC_VERSION               := $(call tools-module-version,$(GOSEC_SRC),github.com/securego/gosec/v2)
+
+# An empty version would build into an unstamped directory and print a blank
+# pin; stop at parse time instead, naming the variable.
+$(foreach v,GOLANGCI_LINT_VERSION ACTIONLINT_VERSION GOSEC_VERSION,$(if $($(v)),,$(error $(v) is empty: its tools module's go.mod under build/tools-src does not require the tool)))
+GOSEC_DIR                   := $(BUILD_DIR)/tools/gosec-$(GOSEC_VERSION)
+GOSEC                       := $(GOSEC_DIR)/gosec
 
 # golangci-lint v2 has NO default timeout ("Disabled by default"); this is the
 # only wall-clock bound on the run, and 15m was calibrated on an idle box. It is
 # process wall-clock from the moment the binary starts — queueing for a runner
-# does not count, but waiting on golangci-lint's own instance lock does (parallel
-# runners are disallowed by default, and #309 keeps them serialised). Measured
+# does not count, but waiting on golangci-lint's own instance lock does (`lint`
+# passes --allow-serial-runners, so a concurrent invocation waits for the lock
+# instead of exiting with "parallel golangci-lint is running", #309). Measured
 # 2026-09-05 on the shared capacity-3 fleet (#426), linter phase only, from
 # "Running linters" to "issues.":
 #     406s  #405 rerun (job 49321)   green
@@ -508,10 +590,10 @@ GOLANGCI_LINT_VERSION       := v2.14.0
 # further doubling of contention still lands. The CI lint job carries a
 # timeout-minutes backstop above this so a genuinely hung linter still fails
 # with a job timeout rather than running unbounded. Not --allow-parallel-runners
-# (#309), and not a rerun policy.
+# (runs would share one cache and contend for CPU), and not a rerun policy.
 GOLANGCI_LINT_TIMEOUT       ?= 45m
 
-# Installed with `go install`, NOT downloaded prebuilt. That is the whole point:
+# Built from source with `go build`, NOT downloaded prebuilt. That is the whole point:
 # building from source uses this module's own toolchain, so the linter can never
 # be older than the Go version go.mod targets. A prebuilt release binary is built
 # with whatever Go its release used, which is how `make lint` came to fail with
@@ -523,6 +605,8 @@ GOLANGCI_LINT_TIMEOUT       ?= 45m
 # That also makes the "is it already installed?" check exact instead of a guess.
 GOLANGCI_LINT_DIR           := $(BUILD_DIR)/tools/golangci-lint-$(GOLANGCI_LINT_VERSION)
 GOLANGCI_LINT               := $(GOLANGCI_LINT_DIR)/golangci-lint
+ACTIONLINT_DIR              := $(BUILD_DIR)/tools/actionlint-$(ACTIONLINT_VERSION)
+ACTIONLINT                  := $(ACTIONLINT_DIR)/actionlint
 # Per-checkout analysis cache. golangci-lint's default is one shared
 # ~/.cache/golangci-lint for every checkout on the machine, and cached issues
 # carry the ABSOLUTE path of the tree that produced them. Two checkouts with
@@ -660,7 +744,8 @@ run:
 		--log-dir trusted-data/log \
 		--ca-dir trusted-data/ca \
 		--raw-so-pin 123456 \
-		--raw-pin 123456
+		--raw-pin 123456 \
+		--enable-mtls
 
 
 # Prepare web embed directory when WITH_WEB is set
@@ -949,16 +1034,6 @@ build-deployer-pin:
 	@echo "Binary size: $$(du -h $(DEPLOYER_PIN) | cut -f1)"
 # ==============================================================================
 
-.PHONY: build-dev
-build-dev: clean build-debug
-	sudo chown $(USER):$(USER) /dev/tpmrm0
-	-sudo chown $(USER):$(USER) /sys/kernel/security/tpm0/binary_bios_measurements
-	mkdir -p $(PLATFORM_DIR)/etc/ $(PLATFORM_DIR)/softhsm2 pkg/$(PLATFORM_DIR)/softhsm2
-	cp configs/platform/config.dev.yaml config.yaml
-	cp configs/softhsm.conf $(PLATFORM_DIR)/etc/softhsm.conf
-	cp configs/platform/config.debug.yaml pkg/config.yaml
-	cp -R $(WEB_PUBLIC_HTML) pkg/
-
 # Build the public_html directory using devcontainer
 # This target uses docker to ensure consistent builds regardless of host environment
 .PHONY: build-public-html
@@ -967,7 +1042,7 @@ build-public-html:
 	@# Ensure devcontainer image exists
 	@if ! docker images | grep -q "$(DEVCONTAINER_IMAGE)"; then \
 		echo "Building devcontainer image (first time only)..."; \
-		docker build -t $(DEVCONTAINER_IMAGE) build/docker/devcontainer/; \
+		$(MAKE) build-devcontainer; \
 	fi
 	@# Run the build inside devcontainer (web/ is now part of the monorepo)
 	docker run --rm \
@@ -1233,7 +1308,7 @@ clean:
 # Platform Web Services
 .PHONY: webservice
 webservice: build-debug config
-	./$(PLATFORMD) --init serve
+	./$(PLATFORMD) --init serve --enable-mtls
 
 .PHONY: webservice-verify-tls
 webservice-verify-tls:
@@ -1283,9 +1358,28 @@ softhsm-init:
 TEST_SKIP := TestPickBootSourceOverrideTarget_X10WithCDDVDAlias|TestPickBootSourceOverrideTarget_X10PrefersVendorUEFIOverUSBCD|TestX10SDVBootMediaType|TestSupermicroManufacturerWideBootMediaType|TestResolveVeloCloudEDGE840
 
 .PHONY: test
-test: check-insecure-tls
+test: check-insecure-tls check-go-build-tags
 	@echo "Running all unit tests..."
 	go test -tags "$(BUILD_TAGS)" -v -skip "$(TEST_SKIP)" $$(go list ./pkg/... ./cmd/... 2>/dev/null | grep -v -E "$(TEST_EXCLUDE)") $(TEST_UNIT_PKGS)
+
+.PHONY: test-fips
+## test-fips: FIPS 140-3 suite: build ./... and run `make test`, both with the fips tag under GODEBUG=fips140=only
+#
+# The ONE definition of the FIPS job: ci.yml (push to main, workflow_dispatch)
+# and nightly.yml (workflow_dispatch) both run this target, so the two cannot
+# drift apart. BOTH halves matter and they do different jobs:
+#   WITH_FIPS=1 (the `fips` tag) selects the FIPS implementations at COMPILE
+#       time, so MD5/SHA-1 are not linked in at all;
+#   GODEBUG=fips140=only enforces at RUNTIME, and is what proves the
+#       compile-time gate was complete.
+# STRICT mode, not `fips140=on` (ratified 2026-08-17): `on` loads the Go
+# Cryptographic Module but still PERMITS non-approved algorithms, so the suite
+# would report green while a regulated path used prohibited cryptography.
+# WITH_FIPS=1, never BUILD_TAGS="...": a command-line BUILD_TAGS replaces the
+# Makefile's tag list instead of appending to it.
+test-fips:
+	GOFIPS140=latest GODEBUG=fips140=only go build -tags "$$($(MAKE) -s --no-print-directory print-build-tags WITH_FIPS=1)" ./...
+	GOFIPS140=latest GODEBUG=fips140=only $(MAKE) --no-print-directory test WITH_FIPS=1
 
 .PHONY: test-pkg
 ## test-pkg: Run unit tests for ONE package with the derived tag set, e.g. make test-pkg PKG=./pkg/api/daemon/
@@ -1298,8 +1392,13 @@ test: check-insecure-tls
 # changed, which is how the nightly FIPS job spent weeks reporting it as a FIPS
 # finding. Deriving the tags here means nobody has to know that.
 #
-# TESTFLAGS passes anything else through:
+# TESTFLAGS passes anything else through, split on whitespace only:
 #   make test-pkg PKG=./pkg/api/daemon/ TESTFLAGS='-run TestFoo -v'
+#   make test-pkg PKG=./pkg/api/daemon/ TESTFLAGS='-run TestFoo|TestBar -race'
+# The recipe single-quotes TESTFLAGS into a shell variable and expands it
+# unquoted with globbing off, so `|`, `*`, `;` and `'` reach go test verbatim
+# instead of being read as shell syntax. Do not quote inside TESTFLAGS: a
+# pattern cannot contain spaces (go test -run patterns never need them).
 test-pkg:
 	@if [ -z "$(strip $(PKG))" ]; then \
 		echo "$(RED)$(BOLD)PKG is required$(RESET)"; \
@@ -1307,7 +1406,8 @@ test-pkg:
 		echo "         make test-pkg PKG=./pkg/api/daemon/ TESTFLAGS='-run TestFoo -v'"; \
 		exit 2; \
 	fi
-	go test -tags "$(BUILD_TAGS)" -skip "$(TEST_SKIP)" $(TESTFLAGS) $(PKG)
+	set -f; testflags='$(subst ','\'',$(TESTFLAGS))'; \
+	go test -tags "$(BUILD_TAGS)" -skip "$(TEST_SKIP)" $$testflags $(PKG)
 
 # Tagged for the reason test-pkg above documents. Untagged, the codec registry
 # is empty and every encode fails with "no codec available for encoding";
@@ -1318,6 +1418,11 @@ test-pkg:
 test-sdk-go:
 	@echo "Running Go SDK unit tests..."
 	cd sdk/go && go test -tags "$(BUILD_TAGS)" ./...
+
+.PHONY: sdk-consumer-check
+## sdk-consumer-check: Build sdk/go from a throwaway consumer module, without the root module (#840)
+sdk-consumer-check:
+	@scripts/sdk-consumer-check.sh
 
 .PHONY: test-sdk-js
 ## test-sdk-js: Run JavaScript SDK unit tests (sdk/javascript vitest suite)
@@ -1390,26 +1495,16 @@ test-quicbaas-all:
 	@echo "Running all QuicBaaS tests (includes Raft, serial, ~3 min)..."
 	go test -v -count=1 -tags "$(BUILD_TAGS)" -parallel 1 -timeout 10m ./pkg/storage/quicbaas/...
 
-# QuicBaaS/Datastore Integration Tests (using devcontainer)
+# QuicBaaS and Datastore Integration Tests (using devcontainer)
 .PHONY: integration-test-quicbaas
-## integration-test-quicbaas: Run QuicBaaS/datastore integration tests in development container
+## integration-test-quicbaas: Run the QuicBaaS SDK integration suite (test/integration/quicbaas) in the devcontainer
 integration-test-quicbaas: build-devcontainer
-	@echo "Running QuicBaaS integration tests in development container..."
-	@echo "Build tags: $(TEST_BUILD_TAGS)"
-	@docker run --rm --privileged \
-		--name go-trusted-platform-datastore-test \
-		--tmpfs /tmp:exec,mode=1777 \
-		-v $(PWD):/workspace \
-		$(DOCKER_MODULE_MOUNTS) \
-		-w /workspace \
-		-e INTEGRATION_TEST=1 \
-		-e CGO_ENABLED=0 \
-		$(DEVCONTAINER_IMAGE) \
-		go test -v $(TEST_BUILD_TAGS_ARG) -count=1 -parallel 1 -timeout 10m ./test/integration/datastore/...
+	$(call run-integration-suite,quicbaas)
 
 .PHONY: integration-test-datastore
-## integration-test-datastore: Alias for integration-test-quicbaas
-integration-test-datastore: integration-test-quicbaas
+## integration-test-datastore: Run the datastore integration suite (test/integration/datastore) in the devcontainer
+integration-test-datastore: build-devcontainer
+	$(call run-integration-suite,datastore)
 
 .PHONY: integration-test-ca-quicbaas-adapter
 ## integration-test-ca-quicbaas-adapter: Run CA QuicBaaS adapter integration tests in development container
@@ -1422,7 +1517,6 @@ integration-test-ca-quicbaas-adapter: build-devcontainer
 		-v $(PWD):/workspace \
 		$(DOCKER_MODULE_MOUNTS) \
 		-w /workspace \
-		-e INTEGRATION_TEST=1 \
 		-e CGO_ENABLED=0 \
 		$(DEVCONTAINER_IMAGE) \
 		go test -v $(TEST_BUILD_TAGS_ARG) -count=1 -parallel 1 -timeout 10m ./pkg/store/datastore/...
@@ -1431,24 +1525,14 @@ integration-test-ca-quicbaas-adapter: build-devcontainer
 .PHONY: integration-test-dns
 ## integration-test-dns: Run DNS integration tests (zone CRUD, record types, attestation, DANE)
 integration-test-dns: build-devcontainer
-	@echo "Running DNS integration tests in development container..."
-	@echo "Build tags: $(TEST_BUILD_TAGS)"
-	@docker run --rm \
-		--name go-trusted-platform-dns-test \
-		-v $(PWD):/workspace \
-		$(DOCKER_MODULE_MOUNTS) \
-		-w /workspace \
-		-e INTEGRATION_TEST=1 \
-		-e CGO_ENABLED=0 \
-		$(DEVCONTAINER_IMAGE) \
-		go test -v $(TEST_BUILD_TAGS_ARG) -count=1 -parallel 1 -timeout 10m ./test/integration/dns/...
+	$(call run-integration-suite,dns)
 
 .PHONY: integration-test-dns-local
 ## integration-test-dns-local: Run DNS integration tests locally (no container)
 integration-test-dns-local:
 	@echo "Running DNS integration tests locally..."
 	@echo "Build tags: $(TEST_BUILD_TAGS)"
-	INTEGRATION_TEST=1 go test -v $(TEST_BUILD_TAGS_ARG) -count=1 -timeout=10m ./test/integration/dns/...
+	go test -v $(TEST_BUILD_TAGS_ARG) -count=1 -timeout=10m ./test/integration/dns/...
 
 # Compute Orchestration Tests
 .PHONY: test-compute
@@ -1492,7 +1576,7 @@ coverage-bmc:
 # AVR firmware attestation tests
 #
 # No hardware and no device. The tests drive a fake link through the real
-# arduino-generic codec, so they run as fast as any other unit test and
+# trusted-firmware codec, so they run as fast as any other unit test and
 # modify nothing on the host.
 ## test-avr-attestation: Run AVR firmware attestation provider unit tests
 .PHONY: test-avr-attestation
@@ -1683,7 +1767,7 @@ integration-test-secureboot-hw:
 	@echo "NOTE: run this ON the target node (e.g. Supermicro X10) with a provisioned hardware TPM,"
 	@echo "      NOT in the devcontainer. The efivars checks are strictly read-only; the efivars"
 	@echo "      WRITE path is validated via 'platformctl secure-boot enroll' (dry-run, then --commit)."
-	TP_HW_TPM=1 TP_HW_EFIVARS=1 TP_HW_TPM_DEVICE=$(TP_HW_TPM_DEVICE) 		go test -tags 'integration codec_msgpack codec_json codec_cbor' -count=1 -v 		-run 'TestHardware' ./test/integration/secureboot/hardware/...
+	TP_HW_TPM=1 TP_HW_EFIVARS=1 TP_HW_TPM_DEVICE=$(TP_HW_TPM_DEVICE) 		go test $(TEST_BUILD_TAGS_ARG) -count=1 -v 		-run 'TestHardware' ./test/integration/secureboot/hardware/...
 
 ## integration-test-cold-start: Run cold-start lifecycle integration tests in devcontainer
 .PHONY: integration-test-cold-start
@@ -1693,20 +1777,7 @@ integration-test-cold-start: build-devcontainer
 ## integration-test-barrier-gate: Run M6 barrier-gate (init-only loopback) integration tests in devcontainer
 .PHONY: integration-test-barrier-gate
 integration-test-barrier-gate: build-devcontainer
-	@echo "Running M6 barrier-gate integration tests in development container..."
-	@docker run --rm --privileged \
-		--name go-trusted-platform-barrier-gate-test \
-		--device /dev/net/tun:/dev/net/tun \
-		--tmpfs /tmp:exec,mode=1777 \
-		-v $(PWD):$(SOURCES_BASE)/go-trusted-platform \
-		-v $(PWD):/workspace \
-		$(DOCKER_MODULE_MOUNTS) \
-		-w $(SOURCES_BASE)/go-trusted-platform \
-		-e INTEGRATION_TEST=1 \
-		-e CGO_ENABLED=1 \
-		-e GOTOOLCHAIN=auto \
-		$(DEVCONTAINER_IMAGE) \
-		bash /workspace/build/docker/devcontainer/run-integration-tests.sh barrier-gate
+	$(call run-integration-suite,barrier-gate)
 
 ## integration-test-tpm: Run TPM multi-protocol integration tests in devcontainer
 .PHONY: integration-test-tpm
@@ -1762,6 +1833,119 @@ coverage-ntp:
 .PHONY: integration-test-ntp
 integration-test-ntp: build-devcontainer
 	$(call run-integration-suite,ntp)
+
+## integration-test-objectstorage: Run object storage multi-protocol integration tests in devcontainer
+.PHONY: integration-test-objectstorage
+integration-test-objectstorage: build-devcontainer
+	$(call run-integration-suite,objectstorage)
+
+# VPN (management-VPN control plane) Tests
+#
+# These use the fully assembled $(BUILD_TAGS), never a literal list, so every
+# QUIC codec the transports need is present.
+
+## test-vpn: Run management-VPN unit tests across every transport
+.PHONY: test-vpn
+test-vpn:
+	@echo "Running VPN control-plane unit tests..."
+	go test -count=1 -timeout 120s -tags '$(BUILD_TAGS)' \
+		./pkg/vpn/... \
+		./pkg/cli/commands/vpn/... \
+		./pkg/webservice/v1/rest/vpn/...
+	go test -count=1 -timeout 120s -tags '$(BUILD_TAGS)' -run 'VPN' \
+		./pkg/api/daemon/... \
+		./pkg/api/rest/... \
+		./pkg/api/mcp/...
+	cd sdk/go && go test -count=1 -timeout 120s -tags '$(BUILD_TAGS)' ./services/vpn/... && \
+		go test -count=1 -timeout 120s -tags '$(BUILD_TAGS)' -run 'VPN' ./transport/...
+
+## coverage-vpn: Management-VPN coverage report
+.PHONY: coverage-vpn
+coverage-vpn:
+	@mkdir -p build/coverage
+	go test -count=1 -timeout 120s -tags '$(BUILD_TAGS)' \
+		-coverprofile=/tmp/vpn.cover \
+		./pkg/vpn/... ./pkg/cli/commands/vpn/... ./pkg/webservice/v1/rest/vpn/...
+	go tool cover -func=/tmp/vpn.cover | tail -1
+	@go tool cover -html=/tmp/vpn.cover -o build/coverage/vpn.html
+	@echo "Coverage report: build/coverage/vpn.html"
+
+## bench-vpn: Benchmark the VPN desired-config render and the gateway's enrolment apply
+.PHONY: bench-vpn
+bench-vpn:
+	go test -tags '$(BUILD_TAGS)' -bench=. -benchmem -run=^$$ \
+		./pkg/vpn/... \
+		./pkg/sdn/gateway/services/vpn/...
+
+## integration-test-vpn: Run VPN multi-protocol integration tests in devcontainer
+.PHONY: integration-test-vpn
+integration-test-vpn: build-devcontainer
+	$(call run-integration-suite,vpn)
+
+## integration-test-installer: Run the installer suite (real dnsmasq forwards the internal zone) in devcontainer
+.PHONY: integration-test-installer
+integration-test-installer: build-devcontainer
+	$(call run-integration-suite,installer)
+
+## integration-test-root: Run the root package (test/integration, not its subdirectories) in devcontainer
+.PHONY: integration-test-root
+integration-test-root: build-devcontainer
+	$(call run-integration-suite,root)
+
+## integration-test-helpers: Run the integration-tagged tests of the shared harness library in devcontainer
+.PHONY: integration-test-helpers
+integration-test-helpers: build-devcontainer
+	$(call run-integration-suite,helpers)
+
+## integration-test-acme: Run the ACME suite (test/integration/acme) in devcontainer
+.PHONY: integration-test-acme
+integration-test-acme: build-devcontainer
+	$(call run-integration-suite,acme)
+
+## integration-test-authenticode: Run the Authenticode suite (test/integration/authenticode) in devcontainer
+.PHONY: integration-test-authenticode
+integration-test-authenticode: build-devcontainer
+	$(call run-integration-suite,authenticode)
+
+## integration-test-cli: Run the platformctl suite (test/integration/cli) in devcontainer
+.PHONY: integration-test-cli
+integration-test-cli: build-devcontainer
+	$(call run-integration-suite,cli)
+
+## integration-test-cmd: Run the command suites (test/integration/cmd) in devcontainer, no shared platformd
+.PHONY: integration-test-cmd
+integration-test-cmd: build-devcontainer
+	$(call run-integration-suite,cmd)
+
+## integration-test-compute: Run the compute VM multi-protocol suite (test/integration/compute) in devcontainer, platformd on local-qemu
+.PHONY: integration-test-compute
+integration-test-compute: build-devcontainer
+	$(call run-integration-suite,compute)
+
+## integration-test-container: Run the container suite (test/integration/container) in devcontainer
+.PHONY: integration-test-container
+integration-test-container: build-devcontainer
+	$(call run-integration-suite,container)
+
+## integration-test-iso: Run the ISO suite (test/integration/iso) in devcontainer
+.PHONY: integration-test-iso
+integration-test-iso: build-devcontainer
+	$(call run-integration-suite,iso)
+
+## integration-test-pxe: Run the PXE suite (test/integration/pxe) in devcontainer
+.PHONY: integration-test-pxe
+integration-test-pxe: build-devcontainer
+	$(call run-integration-suite,pxe)
+
+## integration-test-registry: Run the registry suite (test/integration/registry) in devcontainer
+.PHONY: integration-test-registry
+integration-test-registry: build-devcontainer
+	$(call run-integration-suite,registry)
+
+## integration-test-sdk: Run the SDK suite (test/integration/sdk) in devcontainer, no shared platformd
+.PHONY: integration-test-sdk
+integration-test-sdk: build-devcontainer
+	$(call run-integration-suite,sdk)
 
 ## bench-ntp: Run time-synchronization benchmarks
 .PHONY: bench-ntp
@@ -1841,7 +2025,6 @@ define run-integration-suite
 		-v $(GO_MODULE_CACHE):/go/pkg/mod \
 		$(DOCKER_MODULE_MOUNTS) \
 		-w $(SOURCES_BASE)/go-trusted-platform \
-		-e INTEGRATION_TEST=1 \
 		-e CGO_ENABLED=1 \
 		-e GOTOOLCHAIN=auto \
 		-e GOWORK=off \
@@ -1853,25 +2036,36 @@ define run-integration-suite
 endef
 
 .PHONY: integration-test
-## integration-test: Run all integration tests in development container
-## Starts OVS, swtpm, and platformd before running tests.
+## integration-test: Run all integration suites in the integration image
+## The CI standard's integration stage (handbook ci-standard.md §1). Builds the
+## integration stage of build/docker/devcontainer/Dockerfile as $(IT_IMAGE) and
+## runs compose.yaml's integration service under the project $(IT_PROJECT):
+## its entrypoint is the suite runner, which starts OVS, swtpm and platformd,
+## and `all` selects the runner's ALL_TARGETS. The stack is torn down on every
+## exit and the target exits with the suites' status. CI passes a per-run
+## IT_PROJECT and IT_IMAGE so two runs on one daemon never collide.
 ## Set WITH_CODEC_* or other WITH_* flags for additional build tags.
-integration-test: build-devcontainer
-	@echo "Running all integration tests in development container..."
+## CUSTOMIZE (ruling 125): IT_FOREIGN_BASELINE=1 (CI sets it) also writes the
+## suites' output to $(IT_LOG) and, when they fail, makes scripts/foreignfailures
+## the target's verdict: it passes only when every failure is a row of
+## $(FOREIGN_BASELINE), and fails closed on anything it cannot attribute to a
+## listed test. Unset, the target exits with the suites' own status, so a
+## developer sees every failure (docs/test/integration.md).
+integration-test: SHELL := /bin/bash
+integration-test: docker-build-it
 	@echo "Build tags: $(TEST_BUILD_TAGS)"
-	@docker run --rm --privileged \
-		--name go-trusted-platform-integration-test \
-		--device /dev/net/tun:/dev/net/tun \
-		--tmpfs /tmp:exec,mode=1777 \
-		-v $(PWD):$(SOURCES_BASE)/go-trusted-platform \
-		-v $(PWD):/workspace \
-		$(DOCKER_MODULE_MOUNTS) \
-		-w $(SOURCES_BASE)/go-trusted-platform \
-		-e INTEGRATION_TEST=1 \
-		-e CGO_ENABLED=1 \
-		-e GOTOOLCHAIN=auto \
-		$(DEVCONTAINER_IMAGE) \
-		bash /workspace/build/docker/devcontainer/run-integration-tests.sh "$(strip $(TEST_BUILD_TAGS))"
+	@set -o pipefail; status=0; \
+	GO_TRUSTED_PLATFORM_IT_IMAGE=$(IT_IMAGE) HOST_UID=$$(id -u) HOST_GID=$$(id -g) \
+		docker compose -f $(DEVCONTAINER_COMPOSE) -p $(IT_PROJECT) \
+		run --rm integration all "$(strip $(TEST_BUILD_TAGS))" $(if $(IT_FOREIGN_BASELINE),2>&1 | tee "$(IT_LOG)") || status=$$?; \
+	GO_TRUSTED_PLATFORM_IT_IMAGE=$(IT_IMAGE) \
+		docker compose -f $(DEVCONTAINER_COMPOSE) -p $(IT_PROJECT) down --volumes; \
+	if [ $$status -ne 0 ] && [ -n "$(IT_FOREIGN_BASELINE)" ]; then \
+		echo "Integration suites failed (status $$status); checking the failures against $(FOREIGN_BASELINE) (ruling 125)"; \
+		status=0; \
+		$(GO) run ./scripts/foreignfailures -baseline $(FOREIGN_BASELINE) "$(IT_LOG)" || status=$$?; \
+	fi; \
+	exit $$status
 
 .PHONY: integration-test-webservice
 integration-test-webservice: docker-builder-load
@@ -1905,15 +2099,9 @@ integration-test-sdn-shell: build-devcontainer
 
 # KMS Integration Tests (with TPM simulator)
 .PHONY: integration-test-kms
-integration-test-kms: docker-builder-load
-	@echo "Running KMS integration tests in docker container..."
-	docker run --rm --privileged \
-		-v $(PWD):/workspace \
-		$(DOCKER_MODULE_MOUNTS) \
-		-w /workspace \
-		-e INTEGRATION_TEST=1 \
-		$(APPNAME)-builder-$(DOCKER_BUILDER_BASE):amd64 \
-		go test -v $(TEST_BUILD_TAGS_ARG) -count=1 -timeout=10m ./test/integration/kms/...
+## integration-test-kms: Run KMS integration tests in the devcontainer
+integration-test-kms: build-devcontainer
+	$(call run-integration-suite,kms)
 
 .PHONY: integration-test-kms-local
 ## integration-test-kms-local: Run KMS integration tests locally (requires swtpm installed)
@@ -1923,20 +2111,13 @@ integration-test-kms-local:
 		echo "ERROR: swtpm not installed. Install with: apt-get install swtpm swtpm-tools"; \
 		exit 1; \
 	fi
-	INTEGRATION_TEST=1 go test -v $(TEST_BUILD_TAGS_ARG) -count=1 -timeout=10m ./test/integration/kms/...
+	go test -v $(TEST_BUILD_TAGS_ARG) -count=1 -timeout=10m ./test/integration/kms/...
 
 # Secrets Integration Tests (with TPM simulator)
 .PHONY: integration-test-secrets
-## integration-test-secrets: Run Secrets integration tests in docker container
-integration-test-secrets: docker-builder-load
-	@echo "Running Secrets integration tests in docker container..."
-	docker run --rm --privileged \
-		-v $(PWD):/workspace \
-		$(DOCKER_MODULE_MOUNTS) \
-		-w /workspace \
-		-e INTEGRATION_TEST=1 \
-		$(APPNAME)-builder-$(DOCKER_BUILDER_BASE):amd64 \
-		go test -v $(TEST_BUILD_TAGS_ARG) -count=1 -timeout=10m ./test/integration/secrets/...
+## integration-test-secrets: Run Secrets integration tests in the devcontainer
+integration-test-secrets: build-devcontainer
+	$(call run-integration-suite,secrets)
 
 .PHONY: integration-test-secrets-local
 ## integration-test-secrets-local: Run Secrets integration tests locally (requires swtpm installed)
@@ -1946,19 +2127,85 @@ integration-test-secrets-local:
 		echo "ERROR: swtpm not installed. Install with: apt-get install swtpm swtpm-tools"; \
 		exit 1; \
 	fi
-	INTEGRATION_TEST=1 go test -v $(TEST_BUILD_TAGS_ARG) -count=1 -timeout=10m ./test/integration/secrets/...
+	go test -v $(TEST_BUILD_TAGS_ARG) -count=1 -timeout=10m ./test/integration/secrets/...
 
 # =============================================================================
 # Development Container
 # =============================================================================
+# build/docker/devcontainer/Dockerfile builds from the repository root in the
+# template's stages (handbook devcontainer.md §1): `toolchain`, the image every
+# CI stage runs in, and `integration`, the image the integration suites run in.
+# scripts/tool-pins.sh holds the base image and tool pins; both make and the
+# Dockerfile read it, so the image and the Makefile agree on every version.
+include scripts/tool-pins.sh
+
+DEVCONTAINER_DOCKERFILE := build/docker/devcontainer/Dockerfile
+DEVCONTAINER_COMPOSE := build/docker/devcontainer/compose.yaml
 DEVCONTAINER_IMAGE := trusted-platform-dev:latest
 DEVCONTAINER_NAME := trusted-platform-devcontainer
 
+# The toolchain image is tagged with a hash of everything baked into it, so a
+# change to the Dockerfile, a pin or a module list builds a new tag and an
+# unchanged tree reuses the old one. Recursive (=) so the hash runs only when a
+# target needs it.
+TOOLCHAIN_INPUTS := $(DEVCONTAINER_DOCKERFILE) scripts/tool-pins.sh \
+	go.mod go.sum sdk/go/go.mod sdk/go/go.sum \
+	$(wildcard build/tools-src/*/go.mod build/tools-src/*/go.sum)
+TOOLCHAIN_TAG = $(shell cat $(TOOLCHAIN_INPUTS) | sha256sum | cut -c1-16)
+TOOLCHAIN_IMAGE = go-trusted-platform-toolchain:$(TOOLCHAIN_TAG)
+
+# The integration image and the compose project `make integration-test` uses.
+# CI passes per-run values.
+IT_IMAGE ?= go-trusted-platform-it:local
+IT_PROJECT ?= go-trusted-platform-it
+
+# The foreign-failure baseline (ruling 125). IT_FOREIGN_BASELINE is empty by
+# default: only `make integration-test IT_FOREIGN_BASELINE=1` consults it.
+IT_FOREIGN_BASELINE ?=
+IT_LOG ?= $(or $(TMPDIR),/tmp)/go-trusted-platform-integration.log
+FOREIGN_BASELINE ?= .github/foreign-failures.tsv
+
+# A KEY=value file with the forge credentials the module download needs
+# (GOPRIVATE and the GIT_CONFIG_* triple, dependency-resolution.md §6). It
+# reaches the build only as the gomodauth BuildKit secret, never as a layer or
+# a build argument; .dockerignore keeps the default path out of the context.
+MODULE_ENV_FILE ?= .devcontainer/.env
+
+# The docker build arguments every devcontainer stage shares. $(comma) because a
+# literal comma inside $(if ...) would end its condition.
+DEVCONTAINER_BUILD_ARGS = --build-arg GO_IMAGE=$(GO_IMAGE) \
+	$(if $(GO_BUILD_PROXY),--build-arg GO_BUILD_PROXY=$(GO_BUILD_PROXY)) \
+	$(if $(wildcard $(MODULE_ENV_FILE)),--secret id=gomodauth$(comma)src=$(MODULE_ENV_FILE)) \
+	-f $(DEVCONTAINER_DOCKERFILE)
+
+.PHONY: docker-build
+## docker-build: Build the toolchain image and the integration image
+docker-build: docker-build-it
+	DOCKER_BUILDKIT=1 docker build $(DEVCONTAINER_BUILD_ARGS) --target toolchain -t $(TOOLCHAIN_IMAGE) .
+
+.PHONY: docker-build-it
+## docker-build-it: Build the integration image as $(IT_IMAGE)
+docker-build-it:
+	DOCKER_BUILDKIT=1 docker build $(DEVCONTAINER_BUILD_ARGS) --target integration -t $(IT_IMAGE) .
+
+.PHONY: toolchain-image
+## toolchain-image: Print the toolchain image tag (CI reads it with make -s)
+toolchain-image:
+	@echo $(TOOLCHAIN_IMAGE)
+
+.PHONY: docker-run
+## docker-run: Run CMD in the toolchain image with the checkout mounted (CMD='make lint')
+docker-run:
+	@test -n "$(CMD)" || { echo "usage: make docker-run CMD='make lint'" >&2; exit 2; }
+	GO_TRUSTED_PLATFORM_TOOLCHAIN_TAG=$(TOOLCHAIN_TAG) \
+	GO_TRUSTED_PLATFORM_UID=$$(id -u) GO_TRUSTED_PLATFORM_GID=$$(id -g) \
+		docker compose -f $(DEVCONTAINER_COMPOSE) run --rm toolchain sh -c '$(CMD)'
+
 .PHONY: build-devcontainer
-## build-devcontainer: Build the development container with all tooling
+## build-devcontainer: Build the interactive development container (the integration stage)
 build-devcontainer:
 	@echo "Building development container..."
-	@docker build -t $(DEVCONTAINER_IMAGE) build/docker/devcontainer/
+	DOCKER_BUILDKIT=1 docker build $(DEVCONTAINER_BUILD_ARGS) --target integration -t $(DEVCONTAINER_IMAGE) .
 
 .PHONY: devcontainer-shell
 ## devcontainer-shell: Start an interactive shell in the development container
@@ -2070,13 +2317,19 @@ integration-test-sdn-full: build-devcontainer
 		--cap-add=NET_ADMIN \
 		--cap-add=SYS_MODULE \
 		-e AUTO_START_OVS=true \
-		-e INTEGRATION_TEST=1 \
 		-e CGO_ENABLED=0 \
 		-v $(PWD):/workspace \
 		$(DOCKER_MODULE_MOUNTS) \
 		-w /workspace \
 		$(DEVCONTAINER_IMAGE) \
 		go test -v $(TEST_BUILD_TAGS_ARG) -count=1 -parallel 1 -timeout 15m ./test/integration/sdn/...
+
+.PHONY: integration-test-sdn-topology
+## integration-test-sdn-topology: Run the multi-node SDN topology suite on a host with docker-compose
+## The suite starts its nodes with docker-compose, which the devcontainer has neither the binary nor
+## a Docker daemon for, so it carries the topology build tag and stays out of every runner target.
+integration-test-sdn-topology:
+	go test -v -tags '$(strip $(TEST_BUILD_TAGS)) topology' -count=1 -timeout 30m ./test/integration/sdn/topology/
 
 .PHONY: integration-test-lb
 ## integration-test-lb: Run the gateway load balancer datapath test in the devcontainer
@@ -2088,27 +2341,12 @@ integration-test-lb: build-devcontainer
 
 .PHONY: integration-test-e2e
 ## integration-test-e2e: Run end-to-end tests with QEMU VMs and OVS networking
+## Without INTEGRATION_TEST_SERVER_ISO/CLIENT_ISO the suite validates its
+## infrastructure (OVS bridges, policy engine) and stops before provisioning.
+## Set both to paths under the repository (the container sees it at
+## /workspace) for the full provisioning run.
 integration-test-e2e: build-devcontainer
-	@echo "Running E2E integration tests with QEMU and OVS..."
-	@if [ ! -e /dev/kvm ]; then \
-		echo "WARNING: /dev/kvm not available. Tests will run without KVM acceleration."; \
-	fi
-	@docker run --rm --privileged \
-		--name go-trusted-platform-e2e \
-		--device /dev/net/tun:/dev/net/tun \
-		$$([ -e /dev/kvm ] && echo "--device /dev/kvm:/dev/kvm") \
-		--cap-add=NET_ADMIN \
-		--cap-add=SYS_MODULE \
-		--cap-add=IPC_LOCK \
-		--shm-size=2g \
-		-e AUTO_START_OVS=true \
-		-e INTEGRATION_TEST=1 \
-		-e QEMU_ENABLE_KVM=$$([ -e /dev/kvm ] && echo "true" || echo "false") \
-		-v $(PWD):/workspace \
-		$(DOCKER_MODULE_MOUNTS) \
-		-w /workspace \
-		$(DEVCONTAINER_IMAGE) \
-		bash -c "echo 'E2E test infrastructure ready. Add E2E test script here.'"
+	$(call run-integration-suite,e2e,-e INTEGRATION_TEST_SERVER_ISO -e INTEGRATION_TEST_CLIENT_ISO)
 
 .PHONY: integration-test-device-profile
 ## integration-test-device-profile: Test device profile network state transitions
@@ -2120,7 +2358,6 @@ integration-test-device-profile: build-devcontainer
 		--cap-add=NET_ADMIN \
 		--cap-add=SYS_MODULE \
 		-e AUTO_START_OVS=true \
-		-e INTEGRATION_TEST=1 \
 		-e CGO_ENABLED=0 \
 		-v $(PWD):/workspace \
 		$(DOCKER_MODULE_MOUNTS) \
@@ -2139,7 +2376,6 @@ stress-sdn: build-devcontainer
 		--cap-add=NET_ADMIN \
 		--cap-add=SYS_MODULE \
 		-e AUTO_START_OVS=true \
-		-e INTEGRATION_TEST=1 \
 		-e CGO_ENABLED=0 \
 		-v $(PWD):/workspace \
 		$(DOCKER_MODULE_MOUNTS) \
@@ -2153,7 +2389,6 @@ stress-sdn-ipam: build-devcontainer
 	@echo "Running IPAM stress tests..."
 	@docker run --rm --privileged \
 		--name go-trusted-platform-ipam-stress \
-		-e INTEGRATION_TEST=1 \
 		-e CGO_ENABLED=0 \
 		-v $(PWD):/workspace \
 		$(DOCKER_MODULE_MOUNTS) \
@@ -2167,7 +2402,6 @@ stress-sdn-bgp: build-devcontainer
 	@echo "Running BGP stress tests..."
 	@docker run --rm --privileged \
 		--name go-trusted-platform-bgp-stress \
-		-e INTEGRATION_TEST=1 \
 		-e CGO_ENABLED=0 \
 		-v $(PWD):/workspace \
 		$(DOCKER_MODULE_MOUNTS) \
@@ -2181,7 +2415,6 @@ stress-sdn-dhcp: build-devcontainer
 	@echo "Running DHCP stress tests..."
 	@docker run --rm --privileged \
 		--name go-trusted-platform-dhcp-stress \
-		-e INTEGRATION_TEST=1 \
 		-e CGO_ENABLED=0 \
 		-v $(PWD):/workspace \
 		$(DOCKER_MODULE_MOUNTS) \
@@ -2198,7 +2431,6 @@ stress-sdn-overlay: build-devcontainer
 		--device /dev/net/tun:/dev/net/tun \
 		--cap-add=NET_ADMIN \
 		-e AUTO_START_OVS=true \
-		-e INTEGRATION_TEST=1 \
 		-e CGO_ENABLED=0 \
 		-v $(PWD):/workspace \
 		$(DOCKER_MODULE_MOUNTS) \
@@ -2212,7 +2444,6 @@ stress-sdn-cluster: build-devcontainer
 	@echo "Running cluster state stress tests..."
 	@docker run --rm --privileged \
 		--name go-trusted-platform-cluster-stress \
-		-e INTEGRATION_TEST=1 \
 		-e CGO_ENABLED=0 \
 		-v $(PWD):/workspace \
 		$(DOCKER_MODULE_MOUNTS) \
@@ -2224,7 +2455,7 @@ stress-sdn-cluster: build-devcontainer
 ## stress-sdn-local: Run SDN stress tests locally (without container)
 stress-sdn-local:
 	@echo "Running SDN stress tests locally..."
-	cd test/integration/sdn && INTEGRATION_TEST=1 go test -v $(TEST_BUILD_TAGS_ARG) -timeout=30m ./stress/...
+	cd test/integration/sdn && go test -v $(TEST_BUILD_TAGS_ARG) -timeout=30m ./stress/...
 
 # =============================================================================
 # Docker Compose Based Integration Tests
@@ -2260,7 +2491,7 @@ devcontainer-compose-shell: devcontainer-compose-up
 ## integration-test-compose-full: Run full test suite using docker-compose environment
 integration-test-compose-full: devcontainer-compose-up
 	@echo "Running full integration test suite in compose environment..."
-	@docker exec -e INTEGRATION_TEST=1 -e CGO_ENABLED=0 -w /workspace $(DEVCONTAINER_NAME) \
+	@docker exec -e CGO_ENABLED=0 -w /workspace $(DEVCONTAINER_NAME) \
 		go test -v $(TEST_BUILD_TAGS_ARG) -count=1 -parallel 1 -timeout 30m \
 		./test/integration/sdn/... \
 		./test/integration/vtpm/... \
@@ -2302,7 +2533,7 @@ integration-test-web: devcontainer-compose-up
 	@echo ""
 	@echo "$(YELLOW)→ Copying web-test configuration...$(RESET)"
 	@docker exec $(DEVCONTAINER_NAME) bash -c "\
-		cp /workspace/configs/platform/config.web-test.yaml /workspace/pkg/config.yaml && \
+		cp /workspace/configs/platform/standalone/web-test.example.yaml /workspace/pkg/config.yaml && \
 		rm -rf /workspace/pkg/trusted-data && \
 		mkdir -p /workspace/pkg/trusted-data/etc"
 	@echo ""
@@ -2449,19 +2680,9 @@ devcontainer-help: build-devcontainer
 # =============================================================================
 .PHONY: integration-test-vtpm
 ## integration-test-vtpm: Run full E2E vTPM integration tests (ISO creation + QEMU boot)
+## A swtpm that does not start fails this target.
 integration-test-vtpm: build-devcontainer
-	@echo "Running vTPM E2E integration tests in development container..."
-	@docker run --rm --privileged \
-		--name go-trusted-platform-vtpm-test \
-		-v $(PWD):/workspace \
-		$(DOCKER_MODULE_MOUNTS) \
-		-e HOST_UID=$$(id -u) \
-		-e HOST_GID=$$(id -g) \
-		-e INTEGRATION_TEST=1 \
-		-e CGO_ENABLED=0 \
-		-w /workspace \
-		$(DEVCONTAINER_IMAGE) \
-		go test -v $(TEST_BUILD_TAGS_ARG) -count=1 -parallel 1 -timeout 15m ./test/integration/vtpm/...
+	$(call run-integration-suite,vtpm)
 
 .PHONY: integration-test-vtpm-shell
 ## integration-test-vtpm-shell: Start interactive shell for vTPM testing
@@ -2500,19 +2721,7 @@ devcontainer-clean:
 .PHONY: integration-test-cluster
 ## integration-test-cluster: Run cluster integration tests with multi-node Raft cluster
 integration-test-cluster: build-devcontainer
-	@echo "Running cluster integration tests..."
-	@docker run --rm --privileged \
-		--name go-trusted-platform-cluster-test \
-		-v $(PWD):/workspace \
-		$(DOCKER_MODULE_MOUNTS) \
-		-w /workspace \
-		-e INTEGRATION_TEST=1 \
-		-e CGO_ENABLED=0 \
-		-e RAFT_CLUSTER_TEST=1 \
-		-e CLUSTER_SIZE=3 \
-		-e LOG_LEVEL=info \
-		$(DEVCONTAINER_IMAGE) \
-		go test -v $(TEST_BUILD_TAGS_ARG) -count=1 -parallel 1 -timeout 15m ./test/integration/cluster/...
+	$(call run-integration-suite,cluster)
 
 .PHONY: integration-test-cluster-consensus
 ## integration-test-cluster-consensus: Run cluster consensus tests only
@@ -2523,9 +2732,7 @@ integration-test-cluster-consensus: build-devcontainer
 		-v $(PWD):/workspace \
 		$(DOCKER_MODULE_MOUNTS) \
 		-w /workspace \
-		-e INTEGRATION_TEST=1 \
 		-e CGO_ENABLED=0 \
-		-e RAFT_CLUSTER_TEST=1 \
 		$(DEVCONTAINER_IMAGE) \
 		go test -v $(TEST_BUILD_TAGS_ARG) -count=1 -parallel 1 -timeout 10m -run '.*Consensus.*' ./test/integration/cluster/...
 
@@ -2538,9 +2745,7 @@ integration-test-cluster-failover: build-devcontainer
 		-v $(PWD):/workspace \
 		$(DOCKER_MODULE_MOUNTS) \
 		-w /workspace \
-		-e INTEGRATION_TEST=1 \
 		-e CGO_ENABLED=0 \
-		-e RAFT_CLUSTER_TEST=1 \
 		$(DEVCONTAINER_IMAGE) \
 		go test -v $(TEST_BUILD_TAGS_ARG) -count=1 -parallel 1 -timeout 10m -run '.*Failover.*' ./test/integration/cluster/...
 
@@ -2554,8 +2759,6 @@ integration-test-cluster-sdn: build-devcontainer
 		-v $(PWD):/workspace \
 		$(DOCKER_MODULE_MOUNTS) \
 		-w /workspace \
-		-e INTEGRATION_TEST=1 \
-		-e RAFT_CLUSTER_TEST=1 \
 		-e CGO_ENABLED=0 \
 		$(DEVCONTAINER_IMAGE) \
 		go test -v $(TEST_BUILD_TAGS_ARG) -count=1 -parallel 1 -timeout 10m -run '.*SDN.*' ./test/integration/cluster/...
@@ -2569,8 +2772,6 @@ integration-test-cluster-ca: build-devcontainer
 		-v $(PWD):/workspace \
 		$(DOCKER_MODULE_MOUNTS) \
 		-w /workspace \
-		-e RAFT_CLUSTER_TEST=1 \
-		-e INTEGRATION_TEST=1 \
 		-e CGO_ENABLED=0 \
 		$(DEVCONTAINER_IMAGE) \
 		go test -v $(TEST_BUILD_TAGS_ARG) -count=1 -parallel 1 -timeout 10m -run '.*CA.*' ./test/integration/cluster/...
@@ -2584,22 +2785,22 @@ integration-test-cluster-shell: build-devcontainer
 		-v $(PWD):/workspace \
 		$(DOCKER_MODULE_MOUNTS) \
 		-w /workspace/test/integration/cluster \
-		-e INTEGRATION_TEST=1 \
 		$(DEVCONTAINER_IMAGE) \
 		bash
 
 .PHONY: integration-test-cluster-compose
 ## integration-test-cluster-compose: Run cluster tests using docker-compose (full multi-container setup)
-integration-test-cluster-compose:
+integration-test-cluster-compose: build-devcontainer
 	@echo "Starting multi-node cluster with docker-compose..."
-	@cd test/integration/cluster && docker compose up --build --abort-on-container-exit
-	@cd test/integration/cluster && docker compose down -v
+	@cd test/integration/cluster || exit 1; export DEVCONTAINER_IMAGE=$(DEVCONTAINER_IMAGE); \
+		status=0; docker compose up --abort-on-container-exit --exit-code-from test-runner || status=$$?; \
+		docker compose down -v; exit $$status
 
 .PHONY: integration-test-cluster-compose-up
 ## integration-test-cluster-compose-up: Start cluster nodes only (for manual testing)
-integration-test-cluster-compose-up:
+integration-test-cluster-compose-up: build-devcontainer
 	@echo "Starting cluster nodes..."
-	@cd test/integration/cluster && docker compose up -d --scale test-runner=0
+	@cd test/integration/cluster && DEVCONTAINER_IMAGE=$(DEVCONTAINER_IMAGE) docker compose up -d --scale test-runner=0
 
 .PHONY: integration-test-cluster-compose-down
 ## integration-test-cluster-compose-down: Stop cluster nodes and cleanup
@@ -2613,24 +2814,13 @@ integration-test-cluster-compose-down:
 .PHONY: integration-test-daemon
 ## integration-test-daemon: Run daemon multi-protocol integration tests in development container
 integration-test-daemon: build-devcontainer
-	@echo "Running daemon multi-protocol integration tests in development container..."
-	@docker run --rm --privileged \
-		--name go-trusted-platform-daemon-test \
-		--device /dev/net/tun:/dev/net/tun \
-		--tmpfs /tmp:exec,mode=1777 \
-		-v $(PWD):/workspace \
-		$(DOCKER_MODULE_MOUNTS) \
-		-w /workspace \
-		-e INTEGRATION_TEST=1 \
-		-e CGO_ENABLED=0 \
-		$(DEVCONTAINER_IMAGE) \
-		go test -v $(TEST_BUILD_TAGS_ARG) -count=1 -parallel 1 -timeout 10m ./test/integration/daemon/...
+	$(call run-integration-suite,daemon)
 
 .PHONY: integration-test-daemon-local
 ## integration-test-daemon-local: Run daemon integration tests locally (requires services running)
 integration-test-daemon-local:
 	@echo "Running daemon integration tests locally..."
-	INTEGRATION_TEST=1 go test -v $(TEST_BUILD_TAGS_ARG) -count=1 -timeout=10m ./test/integration/daemon/...
+	go test -v $(TEST_BUILD_TAGS_ARG) -count=1 -timeout=10m ./test/integration/daemon/...
 
 # =============================================================================
 # IAM Multi-Protocol Integration Tests
@@ -2644,7 +2834,7 @@ integration-test-iam: build-devcontainer
 ## integration-test-iam-local: Run IAM integration tests locally (requires services running)
 integration-test-iam-local:
 	@echo "Running IAM integration tests locally..."
-	INTEGRATION_TEST=1 go test -v $(TEST_BUILD_TAGS_ARG) -count=1 -timeout=10m ./test/integration/iam/...
+	go test -v $(TEST_BUILD_TAGS_ARG) -count=1 -timeout=10m ./test/integration/iam/...
 
 
 # =============================================================================
@@ -2653,72 +2843,30 @@ integration-test-iam-local:
 .PHONY: integration-test-ipxe
 ## integration-test-ipxe: Run iPXE/PXE integration tests in development container
 integration-test-ipxe: build-devcontainer
-	@echo "Running iPXE/PXE integration tests in development container..."
-	@docker run --rm --privileged \
-		--name go-trusted-platform-ipxe-test \
-		--device /dev/net/tun:/dev/net/tun \
-		--tmpfs /tmp:exec,mode=1777 \
-		-v $(PWD):/workspace \
-		$(DOCKER_MODULE_MOUNTS) \
-		-w /workspace \
-		-e INTEGRATION_TEST=1 \
-		-e CGO_ENABLED=0 \
-		$(DEVCONTAINER_IMAGE) \
-		go test -v $(TEST_BUILD_TAGS_ARG) -count=1 -parallel 1 -timeout 10m ./test/integration/ipxe/...
+	$(call run-integration-suite,ipxe)
 
 .PHONY: integration-test-ipxe-local
-## integration-test-ipxe-local: Run iPXE integration tests locally (requires root for DHCP/TFTP)
+## integration-test-ipxe-local: Run iPXE integration tests locally (requires root: the DHCP client binds UDP 68)
 integration-test-ipxe-local:
 	@echo "Running iPXE integration tests locally..."
-	INTEGRATION_TEST=1 go test -v $(TEST_BUILD_TAGS_ARG) -count=1 -timeout=10m ./test/integration/ipxe/...
+	IPXE_DHCP_ENABLED=1 go test -v $(TEST_BUILD_TAGS_ARG) -count=1 -timeout=10m ./test/integration/ipxe/...
 
 .PHONY: integration-test-ipxe-dhcp
 ## integration-test-ipxe-dhcp: Run only DHCP protocol tests
+## The runner sets IPXE_DHCP_ENABLED=1 for this target and for ipxe
+## (TARGET_ENV); without it the DHCP tests fail, they do not skip.
 integration-test-ipxe-dhcp: build-devcontainer
-	@echo "Running iPXE DHCP protocol tests..."
-	@docker run --rm --privileged \
-		--name go-trusted-platform-ipxe-dhcp-test \
-		--device /dev/net/tun:/dev/net/tun \
-		--tmpfs /tmp:exec,mode=1777 \
-		-v $(PWD):/workspace \
-		$(DOCKER_MODULE_MOUNTS) \
-		-w /workspace \
-		-e INTEGRATION_TEST=1 \
-		-e CGO_ENABLED=0 \
-		$(DEVCONTAINER_IMAGE) \
-		go test -v $(TEST_BUILD_TAGS_ARG) -count=1 -parallel 1 -timeout 10m -run '.*DHCP.*' ./test/integration/ipxe/...
+	$(call run-integration-suite,ipxe-dhcp)
 
 .PHONY: integration-test-ipxe-tftp
 ## integration-test-ipxe-tftp: Run only TFTP protocol tests
 integration-test-ipxe-tftp: build-devcontainer
-	@echo "Running iPXE TFTP protocol tests..."
-	@docker run --rm --privileged \
-		--name go-trusted-platform-ipxe-tftp-test \
-		--device /dev/net/tun:/dev/net/tun \
-		--tmpfs /tmp:exec,mode=1777 \
-		-v $(PWD):/workspace \
-		$(DOCKER_MODULE_MOUNTS) \
-		-w /workspace \
-		-e INTEGRATION_TEST=1 \
-		-e CGO_ENABLED=0 \
-		$(DEVCONTAINER_IMAGE) \
-		go test -v $(TEST_BUILD_TAGS_ARG) -count=1 -parallel 1 -timeout 10m -run '.*TFTP.*' ./test/integration/ipxe/...
+	$(call run-integration-suite,ipxe-tftp)
 
 .PHONY: integration-test-ipxe-http
 ## integration-test-ipxe-http: Run only HTTP boot script tests
 integration-test-ipxe-http: build-devcontainer
-	@echo "Running iPXE HTTP boot script tests..."
-	@docker run --rm --privileged \
-		--name go-trusted-platform-ipxe-http-test \
-		--device /dev/net/tun:/dev/net/tun \
-		--tmpfs /tmp:exec,mode=1777 \
-		-v $(PWD):/workspace \
-		$(DOCKER_MODULE_MOUNTS) \
-		-w /workspace \
-		-e INTEGRATION_TEST=1 \
-		-e CGO_ENABLED=0 \
-		$(DEVCONTAINER_IMAGE) \
-		go test -v $(TEST_BUILD_TAGS_ARG) -count=1 -parallel 1 -timeout 10m -run '.*HTTP.*' ./test/integration/ipxe/...
+	$(call run-integration-suite,ipxe-http)
 
 # =============================================================================
 # QUIC Protocol Integration Tests
@@ -2726,24 +2874,13 @@ integration-test-ipxe-http: build-devcontainer
 .PHONY: integration-test-quic
 ## integration-test-quic: Run QUIC protocol integration tests in development container
 integration-test-quic: build-devcontainer
-	@echo "Running QUIC protocol integration tests in development container..."
-	@docker run --rm --privileged \
-		--name go-trusted-platform-quic-test \
-		--device /dev/net/tun:/dev/net/tun \
-		--tmpfs /tmp:exec,mode=1777 \
-		-v $(PWD):/workspace \
-		$(DOCKER_MODULE_MOUNTS) \
-		-w /workspace \
-		-e INTEGRATION_TEST=1 \
-		-e CGO_ENABLED=0 \
-		$(DEVCONTAINER_IMAGE) \
-		go test -v $(TEST_BUILD_TAGS_ARG) -count=1 -parallel 1 -timeout 10m ./test/integration/quic/...
+	$(call run-integration-suite,quic)
 
 .PHONY: integration-test-quic-local
 ## integration-test-quic-local: Run QUIC integration tests locally (requires QUIC server running)
 integration-test-quic-local:
 	@echo "Running QUIC integration tests locally..."
-	INTEGRATION_TEST=1 go test -v $(TEST_BUILD_TAGS_ARG) -count=1 -timeout=10m ./test/integration/quic/...
+	go test -v $(TEST_BUILD_TAGS_ARG) -count=1 -timeout=10m ./test/integration/quic/...
 
 # =============================================================================
 # Network Authentication Integration Tests
@@ -2751,18 +2888,7 @@ integration-test-quic-local:
 .PHONY: integration-test-network
 ## integration-test-network: Run network authentication integration tests in development container
 integration-test-network: build-devcontainer
-	@echo "Running network authentication integration tests in development container..."
-	@docker run --rm --privileged \
-		--name go-trusted-platform-network-test \
-		--device /dev/net/tun:/dev/net/tun \
-		--tmpfs /tmp:exec,mode=1777 \
-		-v $(PWD):/workspace \
-		$(DOCKER_MODULE_MOUNTS) \
-		-w /workspace \
-		-e INTEGRATION_TEST=1 \
-		-e CGO_ENABLED=0 \
-		$(DEVCONTAINER_IMAGE) \
-		go test -v $(TEST_BUILD_TAGS_ARG) -count=1 -parallel 1 -timeout 10m ./test/integration/network/...
+	$(call run-integration-suite,network)
 
 # vTPM Coverage
 .PHONY: coverage-vtpm
@@ -2897,17 +3023,37 @@ TEST_EXCLUDE := test/integration|sdk/go/gen|pkg/api/grpc/proto|pkg/api/grpc$$|cm
 # `cat /dev/tpm0` refused inside the same sandbox as the negative control. A
 # dev-host pass cannot distinguish "does not need the TPM" from "quietly used
 # the one that was there."
-TEST_UNIT_PKGS := ./pkg/app/ ./pkg/daemon/commands/ ./pkg/cli/commands/bootstrap/ ./pkg/webservice/v1/ ./pkg/dns/ ./pkg/cli/commands/admin/ ./pkg/platform/
+#
+# test/integration/helpers/surface added 2026-10-12 (#487): the matcher every
+# integration suite uses to decide a subtest is "not implemented". It carries no
+# build tag and imports only errors and grpc/status, so it runs in-process in
+# milliseconds; left to the integration tag it would run in no unit stage.
+#
+# test/integration/helpers added 2026-10-12 (#502): without the integration tag
+# the package is endpoints.go and endpoints_test.go alone, which check that the
+# shared endpoint helpers read the variables run-integration-tests.sh exports,
+# built from the ports it gives platformd. Every other file keeps the tag.
+#
+# scripts/depscheck added 2026-10-15 (#927): `make deps-check`'s parse and
+# decision logic, tested over testdata fixtures with no network. Discovery
+# lists only ./pkg/... and ./cmd/..., so without this entry it would run in no
+# unit stage.
+#
+# scripts/foreignfailures added 2026-10-22 (ruling 125): the foreign-failure
+# baseline checker the Integration job runs on a failed suite, and the test
+# that holds .github/foreign-failures.tsv to the ruling. Same reason as
+# depscheck: discovery would not reach it.
+TEST_UNIT_PKGS := ./pkg/app/ ./pkg/daemon/commands/ ./pkg/cli/commands/bootstrap/ ./pkg/webservice/v1/ ./pkg/dns/ ./pkg/cli/commands/admin/ ./pkg/platform/ ./test/integration/helpers/surface/ ./test/integration/helpers/ ./scripts/depscheck/ ./scripts/foreignfailures/
 
 # RACE_EXCLUDE: packages with data races that are KNOWN and TRACKED. The race
 # gate must be green to be a gate, so a package lands here only with an issue
 # number, and the entry is deleted when that issue lands — this list only ever
-# shrinks. Measured 2026-08-23 at daa039a over the full unit set:
-#
-#   pkg/compute/network #41 — test-only race. mockOVSController's maps are
-#                      written from the goroutines TestOVSFlowControllerAdapter_
-#                      ConcurrentAccess starts, with no mutex in the double.
-RACE_EXCLUDE := pkg/compute/network$$
+# shrinks. It is empty now: #41 (mockOVSController written from the goroutines
+# TestOVSFlowControllerAdapter_ConcurrentAccess starts) was fixed by guarding
+# the double with a mutex. The pattern must stay non-empty because grep -E with
+# an empty pattern matches every package and test-race would then run none; the
+# never-matching ^$$ keeps the filter a no-op.
+RACE_EXCLUDE := ^$$
 
 .PHONY: test-race
 ## test-race: Run unit tests under the race detector (CI gate job)
@@ -2917,13 +3063,31 @@ RACE_EXCLUDE := pkg/compute/network$$
 # a discovery failure would vanish (no pipefail, stderr suppressed) and the
 # gate would pass having raced only TEST_UNIT_PKGS. `-tags` matches the test
 # invocation so tag-specific package-loading failures surface here, not there.
+RACE_PKGS_DISCOVER = \
+	pkgs=$$(go list -tags "$(BUILD_TAGS)" ./pkg/... ./cmd/...); \
+	pkgs=$$(printf '%s\n' "$$pkgs" | grep -v -E "$(TEST_EXCLUDE)" | grep -v -E "$(RACE_EXCLUDE)"); \
+	[ -n "$$pkgs" ] || { echo "$@: package discovery produced no packages" >&2; exit 1; }
+
 test-race:
 	@echo "Running unit tests under the race detector..."
 	@set -e; \
-	pkgs=$$(go list -tags "$(BUILD_TAGS)" ./pkg/... ./cmd/...); \
-	pkgs=$$(printf '%s\n' "$$pkgs" | grep -v -E "$(TEST_EXCLUDE)" | grep -v -E "$(RACE_EXCLUDE)"); \
-	[ -n "$$pkgs" ] || { echo "test-race: package discovery produced no packages" >&2; exit 1; }; \
+	$(RACE_PKGS_DISCOVER); \
 	go test -race -tags "$(BUILD_TAGS)" -skip "$(TEST_SKIP)" -timeout 20m $$pkgs $(TEST_UNIT_PKGS)
+
+## print-race-pkgs: Print test-race's package set on one line (batch.yml race-full and bench read it)
+#
+# The same fail-closed discovery as test-race, so batch.yml's race-full job
+# races exactly the packages the CI Race job does, at a different -count.
+.PHONY: print-race-pkgs
+print-race-pkgs:
+	@set -e; \
+	$(RACE_PKGS_DISCOVER); \
+	echo $$pkgs $(TEST_UNIT_PKGS)
+
+## print-test-skip: Print the TEST_SKIP pattern the unit suites pass to -skip
+.PHONY: print-test-skip
+print-test-skip:
+	@echo '$(TEST_SKIP)'
 
 .PHONY: coverage
 ## coverage: Run unit tests with coverage analysis
@@ -3148,6 +3312,30 @@ fmt-check:
 	fi
 	@echo "$(GREEN)✓ All files are properly formatted$(RESET)"
 
+.PHONY: check-go-build-tags
+## check-go-build-tags: Fail if a target ci-template calls drops GO_BUILD_TAGS (#960)
+#
+# Dry-runs (`make -n`) each target with a probe tag and fails unless the
+# probe reaches a command line other than an `echo`: a go build/test/vet,
+# golangci-lint, gosec, govulncheck or the integration runner. Nothing
+# builds and nothing runs. `test` is itself probed and depends on this
+# target, so the probe run sets GO_BUILD_TAGS_PROBING to stop the recursion
+# (`make -n` still executes recipe lines that name $(MAKE)).
+GO_BUILD_TAGS_PROBE     := probe_tag_960
+GO_BUILD_TAGS_TARGETS   := lint build coverage security integration-test test
+check-go-build-tags:
+ifndef GO_BUILD_TAGS_PROBING
+	@echo "$(CYAN)$(BOLD)→ Checking GO_BUILD_TAGS reaches $(GO_BUILD_TAGS_TARGETS)...$(RESET)"
+	@for target in $(GO_BUILD_TAGS_TARGETS); do \
+		$(MAKE) -n --no-print-directory $$target GO_BUILD_TAGS=$(GO_BUILD_TAGS_PROBE) GO_BUILD_TAGS_PROBING=1 2>&1 \
+			| grep -v '^echo ' | grep -q -- '$(GO_BUILD_TAGS_PROBE)' || { \
+			echo "$(RED)$(BOLD)✗ make $$target GO_BUILD_TAGS=$(GO_BUILD_TAGS_PROBE) never passes the tag to a command$(RESET)"; \
+			exit 1; \
+		}; \
+	done
+	@echo "$(GREEN)✓ GO_BUILD_TAGS reaches every ci-template target$(RESET)"
+endif
+
 .PHONY: check-insecure-tls
 ## check-insecure-tls: Enforce InsecureSkipVerify allowlist (fails on unapproved use)
 check-insecure-tls:
@@ -3178,12 +3366,13 @@ check-insecure-tls:
 	@# ONLY for the Unix-domain-socket client transport — filesystem-
 	@# permission-scoped, not network-exposed. Every other use is a
 	@# plaintext network dial and a fail-open regression.
-	@# Allowlist: sdk/go/transport/unix/adapter.go (UDS SDK client) and
-	@# test/integration/helpers/mtls.go GRPCUnixCredentials (UDS test dial).
+	@# Allowlist: sdk/go/transport/unix/adapter.go (UDS SDK client). The
+	@# integration UDS dial (test/integration/helpers/mtls.go
+	@# GRPCUnixCredentials) uses credentials/local, which refuses a non-local
+	@# dial, and needs no entry.
 	@violations=$$(grep -rn 'insecure\.NewCredentials' --include="*.go" . \
 		| grep -Pv '^[^:]+:[0-9]+:[[:space:]]*//' \
 		| grep -v 'sdk/go/transport/unix/adapter.go' \
-		| grep -v 'test/integration/helpers/mtls.go' \
 		|| true); \
 	if [ -n "$$violations" ]; then \
 		echo "$(RED)$(BOLD)✗ FORBIDDEN insecure.NewCredentials outside the UDS allowlist:$(RESET)"; \
@@ -3216,10 +3405,12 @@ lint-cli:
 
 .PHONY: lint
 ## lint: Run golangci-lint on all packages (GOLANGCI_LINT_TIMEOUT bounds the run; see its comment)
-lint: $(GOLANGCI_LINT)
+lint: $(GOLANGCI_LINT) $(ACTIONLINT)
+	@echo "$(CYAN)$(BOLD)→ Running actionlint ($(ACTIONLINT_VERSION))...$(RESET)"
+	@$(ACTIONLINT) || { echo "$(RED)$(BOLD)✗ actionlint failed$(RESET)"; exit 1; }
 	@echo "$(CYAN)$(BOLD)→ Running linters ($(GOLANGCI_LINT_VERSION))...$(RESET)"
 	@mkdir -p $(GOLANGCI_LINT_CACHE)
-	@if $(GOLANGCI_LINT) run --timeout=$(GOLANGCI_LINT_TIMEOUT) ./...; then \
+	@if $(GOLANGCI_LINT) run --allow-serial-runners --timeout=$(GOLANGCI_LINT_TIMEOUT) $(if $(GO_BUILD_TAGS_CSV),--build-tags=$(GO_BUILD_TAGS_CSV)) ./...; then \
 		echo "$(GREEN)✓ Linting complete$(RESET)"; \
 	else \
 		echo "$(RED)$(BOLD)✗ Linting failed with errors$(RESET)"; \
@@ -3232,41 +3423,46 @@ lint: $(GOLANGCI_LINT)
 
 .PHONY: gosec
 ## gosec: Run security analysis with gosec
-gosec:
-	@echo "$(CYAN)$(BOLD)→ Running security analysis with gosec...$(RESET)"
+gosec: $(GOSEC)
+	@echo "$(CYAN)$(BOLD)→ Running security analysis with gosec $(GOSEC_VERSION)...$(RESET)"
 	@mkdir -p $(BUILD_DIR)
-	@GOSEC_BIN=$$(command -v gosec 2>/dev/null || echo "$$HOME/go/bin/gosec"); \
-	if [ -x "$$GOSEC_BIN" ]; then \
-		$$GOSEC_BIN -concurrency 4 -exclude=$(GOSEC_EXCLUDE) -severity medium -confidence medium \
-			-exclude-dir=test -exclude-dir=testdata -exclude-dir=vendor \
-			-exclude-generated \
-			-fmt=text -out=$(BUILD_DIR)/gosec-report.txt ./... && \
-		echo "$(GREEN)✓ Security scan complete - no issues found$(RESET)" && \
-		echo "$(CYAN)Report saved to: $(BUILD_DIR)/gosec-report.txt$(RESET)" || \
-		(echo "$(RED)$(BOLD)✗ Security issues found:$(RESET)" && \
-			cat $(BUILD_DIR)/gosec-report.txt && exit 1); \
+	@rc=0; \
+	$(GOSEC) -concurrency 4 -exclude=$(GOSEC_EXCLUDE) -severity medium -confidence medium \
+		$(if $(GO_BUILD_TAGS_CSV),-tags=$(GO_BUILD_TAGS_CSV)) \
+		-exclude-dir=test -exclude-dir=testdata -exclude-dir=vendor \
+		-exclude-generated \
+		-fmt=text -out=$(BUILD_DIR)/gosec-report.txt ./... 2>$(BUILD_DIR)/gosec-stderr.txt || rc=$$?; \
+	if [ $$rc -eq 0 ]; then \
+		echo "$(GREEN)✓ Security scan complete - no issues found$(RESET)"; \
+		echo "$(CYAN)Report saved to: $(BUILD_DIR)/gosec-report.txt$(RESET)"; \
+	elif grep -qE 'type errors|Golang errors in' $(BUILD_DIR)/gosec-report.txt $(BUILD_DIR)/gosec-stderr.txt; then \
+		echo "$(RED)$(BOLD)✗ gosec could not analyze the module (packages failed to type-check; not a findings failure). First errors:$(RESET)"; \
+		grep -hE 'Golang errors in|^  > |type errors' $(BUILD_DIR)/gosec-report.txt $(BUILD_DIR)/gosec-stderr.txt | head -n 5; \
+		echo "$(YELLOW)  Full report: $(BUILD_DIR)/gosec-report.txt$(RESET)"; \
+		exit $$rc; \
 	else \
-		echo "$(YELLOW)⚠ gosec not found$(RESET)"; \
-		echo "$(YELLOW)  Install with: make install-gosec$(RESET)"; \
-		exit 1; \
+		echo "$(RED)$(BOLD)✗ Security issues found (gosec exit $$rc):$(RESET)"; \
+		cat $(BUILD_DIR)/gosec-stderr.txt $(BUILD_DIR)/gosec-report.txt; \
+		exit $$rc; \
 	fi
 
 .PHONY: gosec-sarif
 ## gosec-sarif: Run gosec and output SARIF format for GitHub Security tab
-gosec-sarif:
-	@echo "$(CYAN)$(BOLD)→ Running gosec with SARIF output...$(RESET)"
+gosec-sarif: $(GOSEC)
+	@echo "$(CYAN)$(BOLD)→ Running gosec $(GOSEC_VERSION) with SARIF output...$(RESET)"
 	@mkdir -p $(BUILD_DIR)
-	@GOSEC_BIN=$$(command -v gosec 2>/dev/null || echo "$$HOME/go/bin/gosec"); \
-	if [ -x "$$GOSEC_BIN" ]; then \
-		$$GOSEC_BIN -concurrency 4 -exclude=$(GOSEC_EXCLUDE) -severity medium -confidence medium \
-			-exclude-dir=test -exclude-dir=testdata -exclude-dir=vendor \
-			-exclude-generated \
-			-fmt=sarif -out=$(BUILD_DIR)/gosec-results.sarif ./... || true; \
-		echo "$(GREEN)✓ SARIF report: $(BUILD_DIR)/gosec-results.sarif$(RESET)"; \
-	else \
-		echo "$(YELLOW)⚠ gosec not found$(RESET)"; \
+	@# Findings do not fail this target (the SARIF file carries them); only a
+	@# run that produced no report at all (type errors, crash) does.
+	@rm -f $(BUILD_DIR)/gosec-results.sarif
+	@$(GOSEC) -concurrency 4 -exclude=$(GOSEC_EXCLUDE) -severity medium -confidence medium \
+		-exclude-dir=test -exclude-dir=testdata -exclude-dir=vendor \
+		-exclude-generated \
+		-fmt=sarif -out=$(BUILD_DIR)/gosec-results.sarif ./... || true
+	@if [ ! -s $(BUILD_DIR)/gosec-results.sarif ]; then \
+		echo "$(RED)$(BOLD)✗ gosec produced no SARIF report$(RESET)"; \
 		exit 1; \
 	fi
+	@echo "$(GREEN)✓ SARIF report: $(BUILD_DIR)/gosec-results.sarif$(RESET)"
 
 # Modules scanned by `make vuln`, kept in step with the module split: the root
 # module and the separately-versioned SDK. Both are blocking.
@@ -3301,6 +3497,16 @@ GOVULN_MODULES := . sdk/go
 #       https://pkg.go.dev/vuln/GO-2026-4736.
 GOVULN_ALLOW := GO-2026-4736
 
+# Each module is scanned in two steps (#940). The symbol scan builds SSA and a
+# call graph for the whole import closure; on module . it outgrew the CI job's
+# 12 GiB memory limit and was OOM-killed, and neither GOMEMLIMIT nor scanning
+# the packages in groups bounds it (cmd/platformctl alone keeps a >5 GB live
+# heap). So every package is first scanned for vulnerable IMPORTS
+# (-scan package, no SSA, well under 1 GiB). A called vulnerability is always
+# an imported one, so when every imported ID is allowlisted the symbol scan's
+# verdict is already known and it is not run. Only an imported ID outside the
+# allowlist runs the symbol scan, which decides as before whether the code calls
+# it; if that scan cannot complete, the target fails.
 .PHONY: vuln
 ## vuln: Run vulnerability scan with govulncheck (allowlist: GOVULN_ALLOW)
 vuln:
@@ -3311,19 +3517,26 @@ vuln:
 		echo "$(YELLOW)  Install with: make install-govulncheck$(RESET)"; \
 		exit 1; \
 	fi; \
-	FAILED=0; \
-	for mod in $(GOVULN_MODULES); do \
-		echo "$(CYAN)  scanning module $$mod$(RESET)"; \
-		OUT=$$(cd $$mod && $$GOVULNCHECK_BIN ./... 2>&1); STATUS=$$?; \
+	scan() { \
+		OUT=$$(cd $$1 && $$GOVULNCHECK_BIN -scan $$2 $(if $(GO_BUILD_TAGS_CSV),-tags=$(GO_BUILD_TAGS_CSV)) ./... 2>&1); STATUS=$$?; \
 		echo "$$OUT"; \
 		if [ $$STATUS -ne 0 ] && [ $$STATUS -ne 3 ]; then \
-			echo "$(RED)✗ govulncheck could not complete in $$mod (exit $$STATUS)$(RESET)"; \
+			echo "$(RED)✗ govulncheck -scan $$2 could not complete in $$1 (exit $$STATUS)$(RESET)"; \
 			echo "$(RED)  A scan that fails to run is not a pass — fix the error above.$(RESET)"; \
 			exit 1; \
 		fi; \
 		FOUND=$$(echo "$$OUT" | sed -n 's/^Vulnerability #[0-9]*: \(GO-[0-9][0-9-]*\).*/\1/p' | sort -u); \
 		for id in $(GOVULN_ALLOW); do FOUND=$$(echo "$$FOUND" | grep -vx "$$id" || true); done; \
 		FOUND=$$(echo $$FOUND); \
+	}; \
+	FAILED=0; \
+	for mod in $(GOVULN_MODULES); do \
+		echo "$(CYAN)  scanning module $$mod (imported packages)$(RESET)"; \
+		scan $$mod package; \
+		if [ -n "$$FOUND" ]; then \
+			echo "$(CYAN)  $$mod imports $$FOUND outside the allowlist; scanning module $$mod (called symbols)$(RESET)"; \
+			scan $$mod symbol; \
+		fi; \
 		if [ -n "$$FOUND" ]; then \
 			echo "$(RED)✗ $$mod: vulnerabilities outside the documented allowlist: $$FOUND$(RESET)"; \
 			echo "$(RED)  Fix them or record an exception in GOVULN_ALLOW with a reason and a date.$(RESET)"; \
@@ -3333,9 +3546,8 @@ vuln:
 	if [ $$FAILED -ne 0 ]; then exit 1; fi; \
 	echo "$(GREEN)✓ Vulnerability scan complete (only allowlisted no-fix findings remain)$(RESET)"
 
-# Directories excluded from the filesystem scan, kept identical to the
-# skip-dirs list in .github/workflows/ci.yml so `make trivy` and CI agree
-# (devops.md §4). test/ and vbmc/ are harnesses and examples/ is a sample tree —
+# Directories excluded from the filesystem scan. CI runs this same target
+# through `make security` in the toolchain image (devops.md §4). test/ and vbmc/ are harnesses and examples/ is a sample tree —
 # none ship in a release. web/node_modules is a build artifact; web/ itself is
 # NOT skipped, because the Next.js frontend is shipped and its lockfiles are in
 # scope. Suppressions belong in .trivyignore with a reason and a date, not here.
@@ -3351,7 +3563,9 @@ trivy:
 			$(TRIVY_SKIP_DIRS) . && \
 		echo "$(GREEN)✓ Trivy scan complete - no critical/high vulnerabilities found$(RESET)"; \
 	else \
-		echo "$(YELLOW)⚠ trivy not found - skipping (install with: make install-trivy)$(RESET)"; \
+		echo "$(RED)$(BOLD)✗ trivy not found on PATH - the security suite cannot pass without it$(RESET)"; \
+		echo "$(YELLOW)  Install with: make install-trivy$(RESET)"; \
+		exit 1; \
 	fi
 
 .PHONY: trivy-image
@@ -3394,9 +3608,8 @@ mod-verify:
 ## security: Run the full security-analysis suite (devops.md §8)
 # The contract CI calls: gosec, govulncheck, go mod verify and trivy fs, in the
 # same form a developer runs locally. Container images are covered separately by
-# `make trivy-image`, which needs a built image. trivy carries its own
-# `command -v` guard so a developer without it installed still gets the Go half
-# of the suite; CI installs the CLI, so nothing is skipped there.
+# `make trivy-image`, which needs a built image. trivy fails closed when the CLI
+# is not on PATH: a suite that silently skips a scanner is not a passing suite.
 security: gosec vuln mod-verify trivy
 	@echo "$(GREEN)$(BOLD)✓ Security suite passed!$(RESET)"
 
@@ -3416,15 +3629,16 @@ install-tools: install-gosec install-govulncheck install-trivy install-grype ins
 
 .PHONY: install-gosec
 ## install-gosec: Install gosec security scanner
-install-gosec:
-	@echo "$(CYAN)$(BOLD)→ Installing gosec...$(RESET)"
-	@if ! command -v gosec >/dev/null 2>&1; then \
-		echo "$(CYAN)  Installing gosec security scanner...$(RESET)"; \
-		go install github.com/securego/gosec/v2/cmd/gosec@latest; \
-		echo "$(GREEN)  ✓ gosec installed$(RESET)"; \
-	else \
-		echo "$(GREEN)  ✓ gosec already installed$(RESET)"; \
-	fi
+install-gosec: $(GOSEC)
+	@echo "$(GREEN)  ✓ gosec $(GOSEC_VERSION) at $(GOSEC)$(RESET)"
+
+# Built from the gosec tools module ($(GOSEC_SRC)) with this module's toolchain
+# into a version-stamped directory; make skips it when the binary is present.
+# Never resolved from PATH.
+$(GOSEC):
+	@echo "$(CYAN)$(BOLD)→ Building gosec $(GOSEC_VERSION) from $(GOSEC_SRC) (module toolchain, x/tools v0.51.0)...$(RESET)"
+	@mkdir -p $(GOSEC_DIR)
+	@go build -C $(GOSEC_SRC) -o $(abspath $(GOSEC)) github.com/securego/gosec/v2/cmd/gosec
 
 .PHONY: install-govulncheck
 ## install-govulncheck: Install govulncheck vulnerability scanner
@@ -3479,7 +3693,12 @@ install-golangci-lint: $(GOLANGCI_LINT)
 $(GOLANGCI_LINT):
 	@echo "$(CYAN)$(BOLD)→ Installing golangci-lint $(GOLANGCI_LINT_VERSION) (built with this module's toolchain)...$(RESET)"
 	@mkdir -p $(GOLANGCI_LINT_DIR)
-	@GOBIN=$(abspath $(GOLANGCI_LINT_DIR)) go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)
+	@go build -C $(GOLANGCI_LINT_SRC) -mod=readonly -o $(abspath $(GOLANGCI_LINT)) github.com/golangci/golangci-lint/v2/cmd/golangci-lint
+
+$(ACTIONLINT):
+	@echo "$(CYAN)$(BOLD)→ Installing actionlint $(ACTIONLINT_VERSION) (built with this module's toolchain)...$(RESET)"
+	@mkdir -p $(ACTIONLINT_DIR)
+	@go build -C $(ACTIONLINT_SRC) -mod=readonly -o $(abspath $(ACTIONLINT)) github.com/rhysd/actionlint/cmd/actionlint
 
 .PHONY: install-gocovmerge
 ## install-gocovmerge: Install gocovmerge for merging coverage files
@@ -4077,9 +4296,10 @@ docker-platform-push:
 		-f build/docker/$(APPNAME)/Dockerfile-alpine .
 
 
-# Docker run targets
-.PHONY: docker-run
-docker-run: build-debug
+# Docker run targets. docker-run itself runs a command in the toolchain image
+# (Development Container section); this is the interactive builder shell.
+.PHONY: docker-run-debug
+docker-run-debug: build-debug
 	docker run -it --privileged \
 	-v .:/mnt \
 	-v /dev/bus/usb:/dev/bus/usb \
@@ -4126,15 +4346,16 @@ DISKIMAGE_TARGET      ?= rpi
 DISKIMAGE_MODEL       ?= rpi4
 DISKIMAGE_SIZE_MB     ?= 4096
 DISKIMAGE_OUTPUT      ?= bin/trusted-platform-$(DISKIMAGE_TARGET).img
-DISKIMAGE_BUILDER_IMG ?= trusted-platform-diskimage-builder:arm64
+DISKIMAGE_BUILDER_IMG ?= trusted-platform-diskimage-builder
+DISKIMAGE_HOST_ARCH   ?= $(shell go env GOARCH)
 DISKIMAGE_FLAGS       ?=
 RPI_SDCARD            ?=
 RPI_SDCARD_CONFIRM    ?=
 
 .PHONY: docker-diskimage-builder-load
-## docker-diskimage-builder-load: Build the arm64 assemble container image for platformctl diskimage
+## docker-diskimage-builder-load: Build the host-platform assemble container image (tag :<hostarch>) for platformctl diskimage
 docker-diskimage-builder-load:
-	docker buildx build --load --platform=linux/arm64 -t $(DISKIMAGE_BUILDER_IMG) build/docker/diskimage-builder
+	docker buildx build --load --platform=linux/$(DISKIMAGE_HOST_ARCH) -t $(DISKIMAGE_BUILDER_IMG):$(DISKIMAGE_HOST_ARCH) build/docker/diskimage-builder
 
 .PHONY: image-rpi
 ## image-rpi: Build the Raspberry Pi SD-card image (DISKIMAGE_MODEL=rpi4, DISKIMAGE_OUTPUT=bin/trusted-platform-rpi.img)
@@ -4481,18 +4702,12 @@ config:
 
 # Testenv Enrollment Integration Tests
 .PHONY: integration-test-testenv-enrollment
-integration-test-testenv-enrollment:
-	@echo "Running testenv enrollment integration tests (requires root)..."
-	@echo "WARNING: This test will create VMs, network bridges, and requires ~20GB disk space"
-	@if [ "$$(id -u)" -ne 0 ]; then \
-		echo "ERROR: This test requires root privileges"; \
-		echo "Run with: sudo make integration-test-testenv-enrollment"; \
-		exit 1; \
-	fi
-	cd test/integration && \
-		CGO_ENABLED=1 go test -tags=integration -v -timeout=40m \
-			-run TestEnrollmentIntegration \
-			./...
+## integration-test-testenv-enrollment: Run TestEnrollmentIntegration in the devcontainer
+## Without ISOs it boots its framework VM on an isolated bridge. Set
+## INTEGRATION_TEST_SERVER_ISO and INTEGRATION_TEST_CLIENT_ISO to paths under
+## the repository (the container sees it at /workspace) for the full ISO run.
+integration-test-testenv-enrollment: build-devcontainer
+	$(call run-integration-suite,testenv-enrollment,-e INTEGRATION_TEST_SERVER_ISO -e INTEGRATION_TEST_CLIENT_ISO)
 
 .PHONY: integration-test-testenv-enrollment-clean
 integration-test-testenv-enrollment-clean:
@@ -4510,62 +4725,16 @@ integration-test-testenv-enrollment-clean:
 	@echo "Cleanup complete"
 
 
-# ==============================================================================
-# Platform API Gateway Build Targets
-# ==============================================================================
-
-PLATFORM_API               ?= platform-api
-
-# Native local build (produces static binaries)
-.PHONY: build-api
-build-api:
-	cd cmd/platform-api; \
-	CGO_ENABLED=1 $(GOBIN)/go build -tags "$(BUILD_TAGS)" -v -o ../../$(PLATFORM_API) --ldflags '-w -s -linkmode external -extldflags -static -v ${LDFLAGS}'
-
-.PHONY: build-api-debug
-build-api-debug:
-	cd cmd/platform-api; \
-	CGO_ENABLED=1 $(GOBIN)/go build -tags "$(BUILD_TAGS)" -v -o ../../$(PLATFORM_API) -gcflags='all=-N -l' --ldflags '-linkmode external -extldflags -static -v ${LDFLAGS}'
-
-.PHONY: build-api-static
-build-api-static: build-api
-	@echo "build-api-static target is deprecated. Use 'make build-api' instead (now produces static binaries by default)."
-
-.PHONY: build-api-debug-static
-build-api-debug-static: build-api-debug
-	@echo "build-api-debug-static target is deprecated. Use 'make build-api-debug' instead (now produces static binaries by default)."
-
-# Cross-compile ARM 64-bit (pure-Go static build)
-.PHONY: build-api-arm64
-build-api-arm64:
-	cd cmd/platform-api; \
-	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 \
-	$(GOBIN)/go build -tags "osusergo netgo $(BUILD_TAGS)" -o ../../$(PLATFORM_API) --ldflags '-w -s ${LDFLAGS}'
-
-.PHONY: build-api-arm64-static
-build-api-arm64-static: build-api-arm64
-	@echo "build-api-arm64-static target is deprecated. Use 'make build-api-arm64' instead (now produces static binaries by default)."
-
-.PHONY: build-api-arm64-debug
-build-api-arm64-debug:
-	cd cmd/platform-api; \
-	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 \
-	$(GOBIN)/go build -tags "osusergo netgo $(BUILD_TAGS)" -gcflags "all=-N -l" -o ../../$(PLATFORM_API) --ldflags='${LDFLAGS}'
-
-.PHONY: build-api-arm64-debug-static
-build-api-arm64-debug-static: build-api-arm64-debug
-	@echo "build-api-arm64-debug-static target is deprecated. Use 'make build-api-arm64-debug' instead (now produces static binaries by default)."
-
-# Build all - includes platformd, platformctl, platform-initrd, and platform-api
+# Build all shipped binaries: platformd and platformctl (build), plus platform-initrd
 .PHONY: build-all
-build-all: build platform-initrd build-api
+build-all: build platform-initrd
 
 .PHONY: build-all-debug
-build-all-debug: build-debug platform-initrd-debug build-api-debug
+build-all-debug: build-debug platform-initrd-debug
 
 .PHONY: build-all-static
-build-all-static: build platform-initrd build-api
-	@echo "build-all-static target is deprecated. Use 'make build && make platform-initrd && make build-api' instead (now produce static binaries by default)."
+build-all-static: build-all
+	@echo "build-all-static target is deprecated. Use 'make build-all' instead (now produces static binaries by default)."
 
 # Build all binaries for ISO/deployment (three-binary architecture)
 # All binaries are static by default
@@ -4602,58 +4771,24 @@ binaries-arm64: rpi-binaries
 binaries-arm64-static: binaries-arm64
 	@echo "binaries-arm64-static target is deprecated. Use 'make rpi-binaries' instead (a CGO_ENABLED=0 cross build is already static)."
 
-# Run platform-api for development/testing
-.PHONY: run-api
-run-api: build-api-debug
-	./$(PLATFORM_API) \
-		--debug \
-		--host 0.0.0.0 \
-		--port 8443 \
-		--socket /run/platformd/platformd.sock \
-		--tls-cert $(PLATFORM_DIR)/certs/api-server.crt \
-		--tls-key $(PLATFORM_DIR)/certs/api-server.key \
-		--log-dir trusted-data/log
-
 # Test the REST API
 .PHONY: test-api
 test-api:
 	# tag-independent
 	cd pkg/api/rest && go test -v
 
-# Integration test the REST API (requires platformd running)
-.PHONY: integration-test-api
-integration-test-api: build-api-debug
-	@echo "Testing REST API integration (requires platformd socket at /run/platformd/platformd.sock)"
-	@echo "Start platformd first with: sudo make run"
-	@echo "Then in another terminal run the API with: make run-api"
-	@echo "Test endpoints with curl:"
-	@echo "  curl -k https://localhost:8443/health"
-	@echo "  curl -k https://localhost:8443/api/v1/status"
-	@echo "  curl -k https://localhost:8443/api/v1/version"
-	@echo "  curl -k https://localhost:8443/api/v1/services"
 
 
-SUBMODULE_TAGS := sdk/go
 # Builds never resolve through a workspace: modules come from Gitea tags
 # (dependency-resolution.md §2). Immunizes against stray go.work files.
 export GOWORK=off
 
 # ---- dependency-resolution.md targets (2026-08-13 cutover) ----
-# SUBMODULE_TAGS lists nested modules tagged in lockstep with the root
-# (release-versioning.md P2). deps-latest runs before compiling in a
-# consumer repo; release-alpha publishes this repo's next -alpha tag to dev.
-# deps-latest picks the highest tag INCLUDING -alpha prereleases — bare
-# 'go get @latest' ignores prereleases and would downgrade to legacy v0.0.0.
+# deps-latest runs before compiling in a consumer repo. It picks the highest
+# tag INCLUDING -alpha prereleases — bare 'go get @latest' ignores
+# prereleases and would downgrade to legacy v0.0.0.
 
-.PHONY: release-alpha deps-latest
-
-release-alpha:
-	@V=$$(git describe --tags --abbrev=0 --match 'v*' 2>/dev/null || echo v0.0.0-alpha); \
-	NEXT=$$(echo $$V | awk -F'[.-]' '{printf "v%s.%s.%d-alpha", substr($$1,2), $$2, $$3+1}'); \
-	echo $${NEXT#v} > VERSION && git add VERSION && git commit -q -m "chore(release): $$NEXT" || true; \
-	git tag $$NEXT; \
-	for s in $(SUBMODULE_TAGS); do git tag "$$s/$$NEXT"; done; \
-	git push dev HEAD --tags && echo "Tagged $$NEXT"
+.PHONY: deps-latest
 
 deps-latest:
 	@GOWORK=off sh -c ' \
@@ -4663,3 +4798,38 @@ deps-latest:
 	  V=$$(go list -m -versions "$$m" 2>/dev/null | tr " " "\n" | tail -1); \
 	  if [ -n "$$V" ] && [ "$$V" != "$$m" ]; then go get "$$m@$$V" || exit 1; fi; \
 	done; go mod tidy'
+
+# deps-check is the CI standard's latest-version stage (handbook ci-standard.md
+# §1, devops.md §4). scripts/depscheck fails when a direct require or a version
+# replace in go.mod or sdk/go/go.mod is behind its latest version and its line
+# carries no comment naming the reason (devops.md §9). First-party modules are
+# compared with their highest tag including -alpha, the version deps-latest
+# moves to (dependency-resolution.md §3). It needs the module proxy and the dev
+# Gitea: under GOPROXY=off it fails with that reason instead of passing.
+.PHONY: deps-check
+## deps-check: Fail when a dependency is behind its latest version without a go.mod reason comment
+deps-check:
+	@$(GO) run ./scripts/depscheck -go $(GO) . sdk/go
+
+# ---- release-alpha: handbook template release-alpha v2.4.0 ----
+# make release-alpha VERSION=vX.Y.Z-alpha cuts an internal alpha from main
+# (release-versioning.md §1a). It writes VERSION, re-pins the root's sdk/go
+# requirement, commits, tags vX.Y.Z-alpha and sdk/go/vX.Y.Z-alpha (annotated,
+# signed through agent-git.sh), and pushes the commit and exactly those two
+# tags in one atomic push. CHANGELOG.md must already hold a
+# "## [X.Y.Z-alpha]" section. build/make/ holds verbatim copies of the
+# handbook templates: refresh them by copying, never edit them here.
+# Set these before the include; the template reads them as it is parsed.
+REPO_NAME        ?= go-trusted-platform
+AGENT_GIT        ?= agent-git.sh
+RELEASE_REMOTE   ?= origin
+LOCKSTEP_MODULES := sdk/go
+include build/make/release-alpha.mk
+
+# The template's version guard is an ordinary recipe line, which `make -n`
+# prints instead of running. This prerequisite runs the same guard under
+# -n as well ('+'), so a dry run without VERSION fails like the real one.
+.PHONY: release-alpha-version
+release-alpha: release-alpha-version
+release-alpha-version:
+	+@test -n "$$REL_VERSION" || { echo 'ERROR: state the version explicitly: make release-alpha VERSION=vX.Y.Z-alpha (release-versioning.md decides patch/minor/major — the recipe refuses to guess)'; exit 1; }

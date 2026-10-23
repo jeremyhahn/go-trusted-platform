@@ -1,12 +1,15 @@
 # X10 Supermicro CGI Cert Upload -- Hardware Validation Procedure
 
+> **Status: REFERENCE** · Last verified: 2026-10-13
+> The hardware procedure that validates the Supermicro ATEN CGI cert upload (`pkg/bmc/smc`) before `allow_cgi_fallback` is enabled.
+
 ## Purpose
 
 Before `bmc.AutoCertManager` is allowed to select the Supermicro ATEN
 CGI backend in `auto` mode, the wire protocol implemented in
 `pkg/bmc/smc/cgi_cert.go` must be validated against a real X10 BMC.
 This document is the runbook an operator follows to perform that
-validation and flip the `allowCGIFallback` gate on.
+validation and flip the `allow_cgi_fallback` gate on.
 
 ## Why the gate exists
 
@@ -18,7 +21,8 @@ byte-for-byte replica of ATEN firmware. Firmware revisions vary;
 undocumented quirks (multipart boundary handling, cookie scope,
 validate-response shape) can break the flow against specific hardware.
 
-The gate -- a package-level `allowCGIFallback atomic.Bool`, default
+The gate -- the per-BMC config field `allow_cgi_fallback`
+(`bmc.Config.AllowCGIFallback`, `pkg/bmc/config.go`), default
 `false` -- prevents auto-mode from resolving Supermicro detection to
 the CGI backend until this validation clears. Explicit
 `backend: smc-cgi` in config still works (operator opt-in).
@@ -60,9 +64,12 @@ cd .
 go build -o /tmp/vbmc ./test/integration/bmc/vbmc
 
 # Confirm your platform CA can issue for the BMC's hostname
-platformctl ca issue --cn <bmc-hostname> --san <bmc-hostname> \
-    --out /tmp/bmc-new.pem --key /tmp/bmc-new.key
+platformctl ca issue <bmc-hostname> pkcs8 ECDSA-P256 --sans-dns <bmc-hostname>
 ```
+
+`ca issue` prints the issued certificate's details; it writes no files.
+Place the PEM certificate and key at `/tmp/bmc-new.pem` and
+`/tmp/bmc-new.key` for the steps below.
 
 ### 3. Dry-run against the vBMC first
 
@@ -73,11 +80,9 @@ before pointing it at real hardware:
 # Start vBMC on a local port, Supermicro flavor
 VBMC_HTTPS_ADDR=:28443 VBMC_VENDOR=Supermicro /tmp/vbmc &
 
-# Point platformctl at it with explicit backend: smc-cgi
-platformctl bmc cert replace \
-    --address 127.0.0.1 --port 28443 \
-    --username admin --password admin \
-    --backend smc-cgi \
+# Replace through platformd, using a BMC profile for the vBMC whose
+# config sets backend: smc-cgi
+platformctl bmc cert replace --profile-id <vbmc-profile> \
     --cert /tmp/bmc-new.pem --key /tmp/bmc-new.key
 
 # Verify by re-reading the vBMC's cert
@@ -89,6 +94,12 @@ openssl s_client -connect 127.0.0.1:28443 -showcerts </dev/null 2>/dev/null \
     | openssl x509 -subject -noout
 # Expect: subject= CN = <bmc-hostname>
 ```
+
+The standalone form (`--bmc-host`, `--bmc-port`, `--bmc-user`,
+`--bmc-pass`) has no backend flag and always runs in `auto` mode with
+the gate off, so against a Supermicro BMC it fails with
+`ErrAutoCertCGIGated`. The explicit `smc-cgi` backend is reachable only
+through a platformd BMC profile.
 
 If this fails against the vBMC, **stop** -- fix the platform code
 before touching hardware.
@@ -102,7 +113,7 @@ real-hardware behavior:
 # Run platformctl against the vBMC again but through mitmproxy
 mitmproxy --mode transparent -p 8080 --ssl-insecure &
 # Redirect traffic via iptables or a socat bridge, then:
-platformctl bmc cert replace --address 127.0.0.1 --port 28443 ...
+platformctl bmc cert replace --profile-id <vbmc-profile> ...
 
 # Export the captured flow for reference
 mitmproxy --set dumper_filter="~u cgi" --save-flow /tmp/vbmc-baseline.har
@@ -115,14 +126,10 @@ Save `/tmp/vbmc-baseline.har` as the reference platform behavior.
 With BMC creds in hand and a fresh cert queued:
 
 ```bash
-# Explicit backend -- bypasses the allowCGIFallback gate
-platformctl bmc cert replace \
-    --address <real-bmc-ip> \
-    --port 443 \
-    --username ADMIN --password <real-pwd> \
-    --backend smc-cgi \
+# Profile with explicit backend: smc-cgi -- bypasses the allow_cgi_fallback gate
+platformctl bmc cert replace --profile-id <real-bmc-profile> \
     --cert /tmp/bmc-new.pem --key /tmp/bmc-new.key \
-    --log-level debug 2>&1 | tee /tmp/real-run.log
+    --verbose 2>&1 | tee /tmp/real-run.log
 ```
 
 ### 6. Verify success
@@ -169,21 +176,18 @@ Update `docs/operations/x10-smc-cgi-validation-results.md`
 ### 8. Flip the gate
 
 Once at least one firmware variant passes all checks, enable
-auto-mode CGI selection platform-wide by setting a platform config
-flag that calls `bmc.SetAllowCGIFallback(true)` at boot:
+auto-mode CGI selection by setting the field in the config of each
+BMC running a validated firmware:
 
 ```yaml
-# platform config
-bmc:
-  allow_cgi_fallback: true  # only set after validation per
-                            # docs/operations/x10-smc-cgi-validation.md
+# per-BMC config (bmc.Config)
+allow_cgi_fallback: true  # only set after validation per
+                          # docs/operations/x10-smc-cgi-validation.md
 ```
 
-Or in code (for test / non-prod contexts):
-
-```go
-bmc.SetAllowCGIFallback(true)
-```
+In code, set `bmc.Config.AllowCGIFallback`. There is no
+package-level switch; `pkg/bmc/auto_cert.go` reads the field at each
+backend resolution.
 
 This is a one-way operator decision -- revert to `false` is safe but
 will cause `auto` mode to start erroring with
@@ -198,7 +202,7 @@ will cause `auto` mode to start erroring with
 | SSL_VALIDATE returns 404 | Firmware doesn't implement this op -- already handled with tolerance in code (`ErrValidateFailed` with 404 status is swallowed) | Verify the tolerance is firing; if not, the response shape differs |
 | BMC_reset.cgi returns 200 but BMC doesn't actually reset | Firmware requires a different CGI endpoint or a full IPMI cold-reset | Add a fallback via IPMI cold-reset when CGI reset doesn't produce a TLS disconnect within N seconds |
 | New cert served but chain is broken | BMC stripped intermediates during validation | Send leaf-only; have platformd pre-chain at a trusted anchor the BMC already knows |
-| IPMI stops working after cert swap | Firmware regenerates IPMI auth keys on cert change | Re-run `platformctl bmc user rotate` to restore known credentials |
+| IPMI stops working after cert swap | Firmware regenerates IPMI auth keys on cert change | Re-run `platformctl bmc user update-password` to restore known credentials |
 
 ## Revocation procedure if validation invalidates the code
 
@@ -221,14 +225,14 @@ quickly:
 - Does NOT cover CMM, Dell iDRAC, or HPE iLO -- those use
   Redfish `CertificateService` which has its own validation
   path (far less risky because the schema is standardized)
-- Does NOT remove the `allowCGIFallback` gate -- the gate stays
+- Does NOT remove the `allow_cgi_fallback` gate -- the gate stays
   as a permanent safety net; the validation just flips it for
   the first time for validated firmware revisions
 
 ## References
 
 - Wire protocol implementation: `pkg/bmc/smc/cgi_cert.go`
-- Gate: `bmc.SetAllowCGIFallback` in `pkg/bmc/auto_cert.go`
+- Gate: `bmc.Config.AllowCGIFallback` (`pkg/bmc/config.go`), checked in `pkg/bmc/auto_cert.go`
 - Test harness: `test/integration/bmc/harness.go`
 - vBMC reference implementation: `test/integration/bmc/vbmc/main.go`
 - Architecture overview: `docs/architecture/bmc-tls.md`

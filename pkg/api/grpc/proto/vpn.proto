@@ -1,0 +1,203 @@
+syntax = "proto3";
+
+package platform.v1;
+
+option go_package = "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen;platformv1";
+
+// VPNService is the control-plane surface of the remote-access VPN
+// (docs/vpn/api.md). It manages the tenant peer enrolments and posture
+// policies the gateways enforce, and reports the session state the gateways
+// send in their telemetry. Every gateway admits only an enrolled peer whose
+// posture the tenant's policy accepts; both sets reach the gateways through
+// the desired-config "vpn" section.
+service VPNService {
+  // EnrolPeer enrols a device as a VPN peer of a tenant, or replaces the zones
+  // of an existing enrolment. Requires vpn:write.
+  rpc EnrolPeer(EnrolVPNPeerRequest) returns (EnrolVPNPeerResponse);
+
+  // ListPeers lists the enrolled peers, of one tenant or of all. Requires
+  // vpn:read.
+  rpc ListPeers(ListVPNPeersRequest) returns (ListVPNPeersResponse);
+
+  // RevokePeer removes an enrolment. The gateways revoke the device's leases
+  // when the change reaches them. Requires vpn:write.
+  rpc RevokePeer(RevokeVPNPeerRequest) returns (RevokeVPNPeerResponse);
+
+  // GetStatus returns the VPN session state the gateways last reported, of one
+  // gateway or of all. Requires vpn:read.
+  rpc GetStatus(GetVPNStatusRequest) returns (GetVPNStatusResponse);
+
+  // GetPosturePolicy returns one tenant posture policy. Requires vpn:admin.
+  rpc GetPosturePolicy(GetVPNPosturePolicyRequest) returns (GetVPNPosturePolicyResponse);
+
+  // SetPosturePolicy creates or replaces a tenant posture policy. The module
+  // must compile as package vpn.posture; an invalid module is refused and
+  // nothing is stored. Requires vpn:admin.
+  rpc SetPosturePolicy(SetVPNPosturePolicyRequest) returns (SetVPNPosturePolicyResponse);
+
+  // DeletePosturePolicy removes a tenant posture policy. Requires vpn:admin.
+  rpc DeletePosturePolicy(DeleteVPNPosturePolicyRequest) returns (DeleteVPNPosturePolicyResponse);
+
+  // ListPosturePolicies lists the posture policies, of one tenant or of all.
+  // Requires vpn:admin.
+  rpc ListPosturePolicies(ListVPNPosturePoliciesRequest) returns (ListVPNPosturePoliciesResponse);
+}
+
+// VPNPeer is a device enrolled as a VPN peer of a tenant.
+message VPNPeer {
+  string tenant_id = 1;
+  string device_id = 2;
+
+  // zones narrows the zones the peer may request below the gateway's allow-to
+  // set. Empty means every allow-to zone.
+  repeated string zones = 3;
+
+  // enrolled_at_unix is when the device was first enrolled (Unix seconds).
+  // Ignored on enrolment.
+  int64 enrolled_at_unix = 4;
+}
+
+// VPNPosturePolicy is a tenant posture policy: a Rego module in package
+// vpn.posture. A gateway evaluates the tenant policy whose name equals its
+// configured posture-policy.
+message VPNPosturePolicy {
+  string tenant_id = 1;
+  string name = 2;
+  string module = 3;
+
+  // updated_at_unix is when the policy was last set (Unix seconds). Ignored
+  // on set.
+  int64 updated_at_unix = 4;
+}
+
+// VPNLease is one active address lease a gateway holds for a peer.
+message VPNLease {
+  string id = 1;
+  string tenant_id = 2;
+  string device_id = 3;
+  string address = 4;
+
+  // data_plane is the tunnel that carries the session: masque or wireguard.
+  string data_plane = 5;
+  repeated string zones = 6;
+  int64 issued_at_unix = 7;
+  int64 expires_at_unix = 8;
+  uint32 renewals = 9;
+}
+
+// VPNGatewayStatus is the VPN section of one gateway's last telemetry report.
+message VPNGatewayStatus {
+  string gateway_id = 1;
+  int64 reported_at_unix = 2;
+
+  // reporting is false when the gateway reports telemetry without a VPN
+  // section: the VPN service is not configured there. The remaining fields
+  // are then zero.
+  bool reporting = 3;
+  bool running = 4;
+  uint64 admissions = 5;
+  uint64 refusals = 6;
+  string last_refusal = 7;
+  uint32 enrolled_peers = 8;
+  map<string, uint32> leases_by_data_plane = 9;
+  repeated VPNLease leases = 10;
+  repeated string posture_policy_errors = 11;
+  // rejected_peers are the enrolled peers this gateway refused (a zone it
+  // does not serve). Each is refused admission; the rest of the set applies.
+  repeated VPNRejectedPeer rejected_peers = 12;
+  // revocations counts the revoked leases by reason.
+  map<string, uint64> revocations = 13;
+  // posture_violations counts the posture rules that refused an admission
+  // or a renewal, by rule name; past 64 distinct rules the rest count as
+  // "other".
+  map<string, uint64> posture_violations = 14;
+  // reattest is how long the renewal re-attestations took to verify.
+  VPNDurationHistogram reattest = 15;
+}
+
+// VPNDurationHistogram is a cumulative histogram of durations.
+message VPNDurationHistogram {
+  uint64 count = 1;
+  double sum_seconds = 2;
+  // buckets are cumulative: each counts the observations at or under its
+  // upper bound. Observations over the last bound count only in count.
+  repeated VPNHistogramBucket buckets = 3;
+}
+
+message VPNHistogramBucket {
+  double upper_bound_seconds = 1;
+  uint64 count = 2;
+}
+
+// VPNRejectedPeer is one enrolment a gateway refused, and why.
+message VPNRejectedPeer {
+  string tenant_id = 1;
+  string device_id = 2;
+  string reason = 3;
+}
+
+message EnrolVPNPeerRequest {
+  VPNPeer peer = 1;
+}
+
+message EnrolVPNPeerResponse {
+  VPNPeer peer = 1;
+}
+
+message ListVPNPeersRequest {
+  // tenant_id limits the list to one tenant. Empty lists every tenant.
+  string tenant_id = 1;
+}
+
+message ListVPNPeersResponse {
+  repeated VPNPeer peers = 1;
+}
+
+message RevokeVPNPeerRequest {
+  string tenant_id = 1;
+  string device_id = 2;
+}
+
+message RevokeVPNPeerResponse {}
+
+message GetVPNStatusRequest {
+  // gateway_id limits the status to one gateway. Empty reports every gateway.
+  string gateway_id = 1;
+}
+
+message GetVPNStatusResponse {
+  repeated VPNGatewayStatus gateways = 1;
+}
+
+message GetVPNPosturePolicyRequest {
+  string tenant_id = 1;
+  string name = 2;
+}
+
+message GetVPNPosturePolicyResponse {
+  VPNPosturePolicy policy = 1;
+}
+
+message SetVPNPosturePolicyRequest {
+  VPNPosturePolicy policy = 1;
+}
+
+message SetVPNPosturePolicyResponse {
+  VPNPosturePolicy policy = 1;
+}
+
+message DeleteVPNPosturePolicyRequest {
+  string tenant_id = 1;
+  string name = 2;
+}
+
+message DeleteVPNPosturePolicyResponse {}
+
+message ListVPNPosturePoliciesRequest {
+  // tenant_id limits the list to one tenant. Empty lists every tenant.
+  string tenant_id = 1;
+}
+
+message ListVPNPosturePoliciesResponse {
+  repeated VPNPosturePolicy policies = 1;
+}

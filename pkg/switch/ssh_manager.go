@@ -20,6 +20,8 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/switchwire"
 )
 
 // sshManager implements Manager using SSH CLI commands compatible with
@@ -110,7 +112,7 @@ func (m *sshManager) GetPortVLAN(ctx context.Context, port string) (uint16, erro
 	return vlan, nil
 }
 
-func (m *sshManager) GetPortStatus(ctx context.Context, port string) (*PortStatus, error) {
+func (m *sshManager) GetPortStatus(ctx context.Context, port string) (*switchwire.PortStatus, error) {
 	if err := m.ensureConnected(ctx); err != nil {
 		return nil, err
 	}
@@ -134,7 +136,7 @@ func (m *sshManager) GetPortStatus(ctx context.Context, port string) (*PortStatu
 	return status, nil
 }
 
-func (m *sshManager) ListPorts(ctx context.Context) ([]*PortStatus, error) {
+func (m *sshManager) ListPorts(ctx context.Context) ([]*switchwire.PortStatus, error) {
 	if err := m.ensureConnected(ctx); err != nil {
 		return nil, err
 	}
@@ -291,23 +293,23 @@ func parseAccessVLANFromSwitchport(output string) (uint16, error) {
 
 // parseSwitchportOutput parses "show interfaces {port} switchport" text output
 // into a PortStatus.
-func parseSwitchportOutput(port string, output string) (*PortStatus, error) {
-	status := &PortStatus{Port: port}
+func parseSwitchportOutput(port string, output string) (*switchwire.PortStatus, error) {
+	status := &switchwire.PortStatus{Port: port}
 
 	// Determine mode from administrative or operational mode line.
 	if matches := operModeRegexp.FindStringSubmatch(output); matches != nil {
 		modeLine := strings.TrimSpace(strings.ToLower(matches[1]))
 		if strings.Contains(modeLine, "trunk") {
-			status.Mode = PortModeTrunk
+			status.Mode = switchwire.PortModeTrunk
 		} else {
-			status.Mode = PortModeAccess
+			status.Mode = switchwire.PortModeAccess
 		}
 	} else if matches := adminModeRegexp.FindStringSubmatch(output); matches != nil {
 		modeLine := strings.TrimSpace(strings.ToLower(matches[1]))
 		if strings.Contains(modeLine, "trunk") {
-			status.Mode = PortModeTrunk
+			status.Mode = switchwire.PortModeTrunk
 		} else {
-			status.Mode = PortModeAccess
+			status.Mode = switchwire.PortModeAccess
 		}
 	}
 
@@ -347,7 +349,7 @@ func parseSwitchportOutput(port string, output string) (*PortStatus, error) {
 //	Eth1/1    uplink             connected    trunk      full    1000    10/100/1000
 //	Eth1/2    server-01          connected    100        full    1000    10/100/1000
 //	Eth1/3    --                 disabled     200        auto    auto    10/100/1000
-func parseInterfaceStatusTable(output string) ([]*PortStatus, error) {
+func parseInterfaceStatusTable(output string) ([]*switchwire.PortStatus, error) {
 	lines := strings.Split(output, "\n")
 
 	// Find the header line to determine column positions.
@@ -371,7 +373,7 @@ func parseInterfaceStatusTable(output string) ([]*PortStatus, error) {
 	header := lines[headerIdx]
 	cols := parseColumnPositions(header)
 
-	var ports []*PortStatus
+	var ports []*switchwire.PortStatus
 	for i := headerIdx + 1; i < len(lines); i++ {
 		line := lines[i]
 		if strings.TrimSpace(line) == "" {
@@ -437,7 +439,7 @@ func extractColumn(line string, start, end int) string {
 }
 
 // parseStatusLine parses a single data line from "show interfaces status" output.
-func parseStatusLine(line string, cols columnPositions) *PortStatus {
+func parseStatusLine(line string, cols columnPositions) *switchwire.PortStatus {
 	port := extractColumn(line, cols.port, cols.name)
 	if port == "" {
 		return nil
@@ -446,7 +448,7 @@ func parseStatusLine(line string, cols columnPositions) *PortStatus {
 	statusStr := strings.ToLower(extractColumn(line, cols.status, cols.vlan))
 	vlanStr := extractColumn(line, cols.vlan, cols.duplex)
 
-	ps := &PortStatus{
+	ps := &switchwire.PortStatus{
 		Port: port,
 	}
 
@@ -468,9 +470,9 @@ func parseStatusLine(line string, cols columnPositions) *PortStatus {
 	// Parse VLAN / mode.
 	vlanLower := strings.ToLower(strings.TrimSpace(vlanStr))
 	if vlanLower == "trunk" || vlanLower == "routed" {
-		ps.Mode = PortModeTrunk
+		ps.Mode = switchwire.PortModeTrunk
 	} else {
-		ps.Mode = PortModeAccess
+		ps.Mode = switchwire.PortModeAccess
 		if vlan, err := strconv.ParseUint(strings.TrimSpace(vlanStr), 10, 16); err == nil {
 			ps.AccessVLAN = uint16(vlan)
 		}

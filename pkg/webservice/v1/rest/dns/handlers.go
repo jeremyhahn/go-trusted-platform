@@ -506,10 +506,87 @@ func (h *DNSHandlers) ListRecords(w http.ResponseWriter, r *http.Request) {
 	// Filter by type if provided
 	typeFilter := strings.ToUpper(r.URL.Query().Get("type"))
 
-	records := h.extractRecords(zone, typeFilter)
+	records := h.extractRecords(&zone.RecordSet, typeFilter)
 
 	h.respWriter.Success200(w, r, ListRecordsResponse{
 		Records: records,
+	})
+}
+
+// recordTypes are the record types a zone's record set carries.
+var recordTypes = map[string]bool{
+	"A": true, "AAAA": true, "CNAME": true, "MX": true, "NS": true,
+	"TXT": true, "SRV": true, "CAA": true, "TLSA": true,
+}
+
+// GetRecord returns the record of one type and name in a zone.
+func (h *DNSHandlers) GetRecord(w http.ResponseWriter, r *http.Request) {
+	zoneName := h.getZoneName(r)
+	if zoneName == "" {
+		h.respWriter.Error400(w, r, ErrMissingZoneName{})
+		return
+	}
+
+	recordType := strings.ToUpper(h.getRecordType(r))
+	if recordType == "" {
+		h.respWriter.Error400(w, r, ErrMissingRecordType{})
+		return
+	}
+	if !recordTypes[recordType] {
+		h.respWriter.Error400(w, r, ErrInvalidRecordType{Type: recordType})
+		return
+	}
+
+	recordName := h.getRecordName(r)
+	if recordName == "" {
+		h.respWriter.Error400(w, r, ErrMissingRecordName{})
+		return
+	}
+
+	ctx, cancel := h.createContext()
+	defer cancel()
+
+	zone, err := h.service.Zone(ctx, zoneName)
+	if err != nil {
+		h.respWriter.Error404(w, r, err)
+		return
+	}
+
+	for _, record := range h.extractRecords(&zone.RecordSet, recordType) {
+		if record.Name() == recordName {
+			h.respWriter.Success200(w, r, record)
+			return
+		}
+	}
+	h.respWriter.Error404(w, r, ErrRecordNotFound{Type: recordType, Name: recordName})
+}
+
+// Resolve answers a name from the zones this platform serves, through
+// dns.ResolveName as every transport does. A name with no managed zone is not
+// an error: the answer is empty and not authoritative. A type resolution does
+// not serve is a 400.
+func (h *DNSHandlers) Resolve(w http.ResponseWriter, r *http.Request) {
+	fqdn := r.URL.Query().Get("fqdn")
+	if fqdn == "" {
+		h.respWriter.Error400(w, r, ErrMissingFQDN{})
+		return
+	}
+
+	ctx, cancel := h.createContext()
+	defer cancel()
+
+	recordType := r.URL.Query().Get("type")
+	resolution, err := dns.ResolveName(ctx, h.service, fqdn, recordType)
+	if err != nil {
+		h.respWriter.Error400(w, r, ErrInvalidRecordType{Type: recordType})
+		return
+	}
+
+	// An empty answer is an empty list, never null.
+	records := append([]RecordResponse{}, h.extractRecords(&resolution.Records, "")...)
+	h.respWriter.Success200(w, r, ResolveResponse{
+		Records:       records,
+		Authoritative: resolution.Authoritative,
 	})
 }
 
@@ -790,11 +867,11 @@ func (h *DNSHandlers) recordSetToResponse(rs *entities.RecordSet) *RecordSetResp
 	return resp
 }
 
-func (h *DNSHandlers) extractRecords(zone *entities.Zone, typeFilter string) []RecordResponse {
+func (h *DNSHandlers) extractRecords(rs *entities.RecordSet, typeFilter string) []RecordResponse {
 	var records []RecordResponse
 
 	if typeFilter == "" || typeFilter == "A" {
-		for _, r := range zone.RecordSet.ARecords {
+		for _, r := range rs.ARecords {
 			records = append(records, RecordResponse{
 				Type: "A",
 				A:    &AResponse{Name: r.Name, Value: r.Value, TTL: r.TTL},
@@ -803,7 +880,7 @@ func (h *DNSHandlers) extractRecords(zone *entities.Zone, typeFilter string) []R
 	}
 
 	if typeFilter == "" || typeFilter == "AAAA" {
-		for _, r := range zone.RecordSet.AAAARecords {
+		for _, r := range rs.AAAARecords {
 			records = append(records, RecordResponse{
 				Type: "AAAA",
 				AAAA: &AAAAResponse{Name: r.Name, Value: r.Value, TTL: r.TTL},
@@ -812,7 +889,7 @@ func (h *DNSHandlers) extractRecords(zone *entities.Zone, typeFilter string) []R
 	}
 
 	if typeFilter == "" || typeFilter == "CNAME" {
-		for _, r := range zone.RecordSet.CNAMERecords {
+		for _, r := range rs.CNAMERecords {
 			records = append(records, RecordResponse{
 				Type:  "CNAME",
 				CNAME: &CNAMEResponse{Name: r.Name, Value: r.Value, TTL: r.TTL},
@@ -821,7 +898,7 @@ func (h *DNSHandlers) extractRecords(zone *entities.Zone, typeFilter string) []R
 	}
 
 	if typeFilter == "" || typeFilter == "MX" {
-		for _, r := range zone.RecordSet.MXRecords {
+		for _, r := range rs.MXRecords {
 			records = append(records, RecordResponse{
 				Type: "MX",
 				MX:   &MXResponse{Name: r.Name, Value: r.Value, Priority: r.Priority, TTL: r.TTL},
@@ -830,7 +907,7 @@ func (h *DNSHandlers) extractRecords(zone *entities.Zone, typeFilter string) []R
 	}
 
 	if typeFilter == "" || typeFilter == "NS" {
-		for _, r := range zone.RecordSet.NSRecords {
+		for _, r := range rs.NSRecords {
 			records = append(records, RecordResponse{
 				Type: "NS",
 				NS:   &NSResponse{Name: r.Name, Value: r.Value, TTL: r.TTL},
@@ -839,7 +916,7 @@ func (h *DNSHandlers) extractRecords(zone *entities.Zone, typeFilter string) []R
 	}
 
 	if typeFilter == "" || typeFilter == "TXT" {
-		for _, r := range zone.RecordSet.TXTRecords {
+		for _, r := range rs.TXTRecords {
 			records = append(records, RecordResponse{
 				Type: "TXT",
 				TXT:  &TXTResponse{Name: r.Name, Value: r.Value, TTL: r.TTL},
@@ -848,7 +925,7 @@ func (h *DNSHandlers) extractRecords(zone *entities.Zone, typeFilter string) []R
 	}
 
 	if typeFilter == "" || typeFilter == "SRV" {
-		for _, r := range zone.RecordSet.SRVRecords {
+		for _, r := range rs.SRVRecords {
 			records = append(records, RecordResponse{
 				Type: "SRV",
 				SRV:  &SRVResponse{Name: r.Name, Target: r.Target, Port: r.Port, Priority: r.Priority, Weight: r.Weight, TTL: r.TTL},
@@ -857,7 +934,7 @@ func (h *DNSHandlers) extractRecords(zone *entities.Zone, typeFilter string) []R
 	}
 
 	if typeFilter == "" || typeFilter == "CAA" {
-		for _, r := range zone.RecordSet.CAARecords {
+		for _, r := range rs.CAARecords {
 			records = append(records, RecordResponse{
 				Type: "CAA",
 				CAA:  &CAAResponse{Name: r.Name, Flags: r.Flags, Tag: r.Tag, Value: r.Value, TTL: r.TTL},
@@ -866,7 +943,7 @@ func (h *DNSHandlers) extractRecords(zone *entities.Zone, typeFilter string) []R
 	}
 
 	if typeFilter == "" || typeFilter == "TLSA" {
-		for _, r := range zone.RecordSet.TLSARecords {
+		for _, r := range rs.TLSARecords {
 			records = append(records, RecordResponse{
 				Type: "TLSA",
 				TLSA: &TLSAResponse{Name: r.Name, Usage: r.Usage, Selector: r.Selector, MatchingType: r.MatchingType, Data: r.Data, TTL: r.TTL},

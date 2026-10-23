@@ -41,6 +41,7 @@ func serviceClientContracts() map[string]reflect.Type {
 		"BMCService":            reflect.TypeOf((*platformv1.BMCServiceClient)(nil)).Elem(),
 		"BarrierService":        reflect.TypeOf((*platformv1.BarrierServiceClient)(nil)).Elem(),
 		"CAService":             reflect.TypeOf((*platformv1.CAServiceClient)(nil)).Elem(),
+		"CacheService":          reflect.TypeOf((*platformv1.CacheServiceClient)(nil)).Elem(),
 		"CeremonyService":       reflect.TypeOf((*platformv1.CeremonyServiceClient)(nil)).Elem(),
 		"ClusterService":        reflect.TypeOf((*platformv1.ClusterServiceClient)(nil)).Elem(),
 		"ComputeService":        reflect.TypeOf((*platformv1.ComputeServiceClient)(nil)).Elem(),
@@ -54,7 +55,9 @@ func serviceClientContracts() map[string]reflect.Type {
 		"InvitationService":     reflect.TypeOf((*platformv1.InvitationServiceClient)(nil)).Elem(),
 		"KeyManagementService":  reflect.TypeOf((*platformv1.KeyManagementServiceClient)(nil)).Elem(),
 		"LUKSService":           reflect.TypeOf((*platformv1.LUKSServiceClient)(nil)).Elem(),
+		"MessagingService":      reflect.TypeOf((*platformv1.MessagingServiceClient)(nil)).Elem(),
 		"NTPService":            reflect.TypeOf((*platformv1.NTPServiceClient)(nil)).Elem(),
+		"ObjectStorageService":  reflect.TypeOf((*platformv1.ObjectStorageServiceClient)(nil)).Elem(),
 		"OverlayService":        reflect.TypeOf((*platformv1.OverlayServiceClient)(nil)).Elem(),
 		"PIVService":            reflect.TypeOf((*platformv1.PIVServiceClient)(nil)).Elem(),
 		"PXEService":            reflect.TypeOf((*platformv1.PXEServiceClient)(nil)).Elem(),
@@ -64,9 +67,11 @@ func serviceClientContracts() map[string]reflect.Type {
 		"ProxyService":          reflect.TypeOf((*platformv1.ProxyServiceClient)(nil)).Elem(),
 		"RegistryService":       reflect.TypeOf((*platformv1.RegistryServiceClient)(nil)).Elem(),
 		"SDNService":            reflect.TypeOf((*platformv1.SDNServiceClient)(nil)).Elem(),
+		"SchedulerService":      reflect.TypeOf((*platformv1.SchedulerServiceClient)(nil)).Elem(),
 		"SwitchService":         reflect.TypeOf((*platformv1.SwitchServiceClient)(nil)).Elem(),
 		"TPMService":            reflect.TypeOf((*platformv1.TPMServiceClient)(nil)).Elem(),
 		"TenantService":         reflect.TypeOf((*platformv1.TenantServiceClient)(nil)).Elem(),
+		"VPNService":            reflect.TypeOf((*platformv1.VPNServiceClient)(nil)).Elem(),
 		"VTPMService":           reflect.TypeOf((*platformv1.VTPMServiceClient)(nil)).Elem(),
 	}
 }
@@ -140,42 +145,14 @@ func TestRouteMaps_DeclareNoMethodThatDoesNotExist(t *testing.T) {
 	//
 	//   - Some name a method that does not exist AND a path that is served
 	//     nowhere — pure cruft, safe to delete.
-	//   - Others name a method that does not exist but a path that IS served.
-	//     "/platform.v1.PlatformDaemon/Health" maps to "/health", which
-	//     pkg/api/daemon/rest_service.go really registers; the proto method is
-	//     GetHealth. That entry is a MISNAMED BRIDGE to a working route, so
-	//     the fix is to correct the key, not to remove the row — deleting it
-	//     would drop a correctable link to a live endpoint.
+	//   - Others named a method that did not exist but a path that WAS served.
+	//     Liveness and Readiness were such MISNAMED BRIDGES until #452 added
+	//     the rpcs; Health was one until #138 renamed its key to the real
+	//     GetHealth.
 	//
 	// Sorting the two apart is per-entry work tracked separately; doing it by
 	// eye here would be the guess this test exists to remove.
-	knownUnroutable := map[string]bool{
-		"/platform.v1.AttestationService/ChallengeAK":    true,
-		"/platform.v1.AttestationService/CreateAK":       true,
-		"/platform.v1.AttestationService/GetAK":          true,
-		"/platform.v1.AttestationService/GetEK":          true,
-		"/platform.v1.AttestationService/GetQuote":       true,
-		"/platform.v1.AttestationService/VerifyChalleng": true,
-		"/platform.v1.AttestationService/VerifyQuote":    true,
-		"/platform.v1.DNSService/GetRecord":              true,
-		"/platform.v1.IDevIDService/Delete":              true,
-		"/platform.v1.IDevIDService/Exists":              true,
-		"/platform.v1.IDevIDService/Generate":            true,
-		"/platform.v1.IDevIDService/GetCSR":              true,
-		"/platform.v1.IDevIDService/GetCert":             true,
-		"/platform.v1.IDevIDService/GetInfo":             true,
-		"/platform.v1.IDevIDService/InstallCert":         true,
-		"/platform.v1.PlatformDaemon/Health":             true,
-		"/platform.v1.PlatformDaemon/Liveness":           true,
-		"/platform.v1.PlatformDaemon/Readiness":          true,
-		"/platform.v1.SDNService/GetPortState":           true,
-		"/platform.v1.VTPMService/Create":                true,
-		"/platform.v1.VTPMService/Delete":                true,
-		"/platform.v1.VTPMService/GetState":              true,
-		"/platform.v1.VTPMService/List":                  true,
-		"/platform.v1.VTPMService/Start":                 true,
-		"/platform.v1.VTPMService/Stop":                  true,
-	}
+	knownUnroutable := map[string]bool{}
 
 	var unexpected []string
 	for _, g := range ghosts {

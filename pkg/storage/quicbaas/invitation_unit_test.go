@@ -56,7 +56,7 @@ func TestInvitationDAO_Save_Mock(t *testing.T) {
 	defer mock.Stop(context.Background())
 
 	ctx := context.Background()
-	invitation, err := entities.NewInvitation("tenant-123", "user@example.com", "member", 999, 24*time.Hour)
+	invitation, err := entities.NewInvitation("tenant-123", "user@example.com", "member", 999, 24*time.Hour, time.Now())
 	require.NoError(t, err)
 
 	err = dao.Save(ctx, invitation)

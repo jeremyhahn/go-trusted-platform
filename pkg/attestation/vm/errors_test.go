@@ -369,6 +369,46 @@ func TestErrSignatureInvalid(t *testing.T) {
 	})
 }
 
+func TestErrUnsupportedSignatureAlgorithm(t *testing.T) {
+	err := ErrUnsupportedSignatureAlgorithm{Algorithm: "SHA1-RSA"}
+	if err.Error() != `vm: unsupported quote signature algorithm "SHA1-RSA"` {
+		t.Errorf("unexpected error message: %s", err.Error())
+	}
+	if (ErrUnsupportedSignatureAlgorithm{}).Error() != `vm: unsupported quote signature algorithm ""` {
+		t.Errorf("an undeclared algorithm must show as empty: %s", ErrUnsupportedSignatureAlgorithm{}.Error())
+	}
+}
+
+func TestErrSignatureSchemeMismatch(t *testing.T) {
+	err := ErrSignatureSchemeMismatch{Scheme: "RSASSA-PSS", KeyType: "*ecdsa.PublicKey"}
+	if err.Error() != "vm: RSASSA-PSS quote signature cannot be verified with a *ecdsa.PublicKey AK" {
+		t.Errorf("unexpected error message: %s", err.Error())
+	}
+}
+
+func TestErrQuoteSchemeUnavailable(t *testing.T) {
+	t.Run("with cause", func(t *testing.T) {
+		cause := errors.New("TPM_RC_HANDLE")
+		err := ErrQuoteSchemeUnavailable{Cause: cause}
+		if err.Error() != "vm: IAK signature scheme unavailable: TPM_RC_HANDLE" {
+			t.Errorf("unexpected error message: %s", err.Error())
+		}
+		if !errors.Is(err, cause) {
+			t.Error("expected error to unwrap to its cause")
+		}
+	})
+
+	t.Run("without cause", func(t *testing.T) {
+		err := ErrQuoteSchemeUnavailable{}
+		if err.Error() != "vm: the IAK declares no signature scheme" {
+			t.Errorf("unexpected error message: %s", err.Error())
+		}
+		if err.Unwrap() != nil {
+			t.Error("expected nil unwrap without a cause")
+		}
+	})
+}
+
 func TestErrPCRReadFailed(t *testing.T) {
 	t.Run("with cause", func(t *testing.T) {
 		cause := errors.New("auth error")

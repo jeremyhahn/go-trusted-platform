@@ -13,13 +13,6 @@
 
 package fido2
 
-import "errors"
-
-// ErrNotYetWired indicates the FIDO2 service handler has not yet been wired
-// up on the server side. Phase 3 delivers the CLI + SDK stub only; handler
-// implementations land in Phase 3.5.
-var ErrNotYetWired = errors.New("fido2: service not yet wired in this release")
-
 // ErrListDevicesFailed indicates a list-devices RPC failure.
 type ErrListDevicesFailed struct {
 	Cause error
@@ -82,3 +75,29 @@ func (e *ErrAuthenticateFailed) Error() string {
 
 // Unwrap returns the underlying cause.
 func (e *ErrAuthenticateFailed) Unwrap() error { return e.Cause }
+
+// ErrUnknownWireValue indicates a transport carried an enum value the SDK
+// does not recognise. It is refused rather than reported as UNSPECIFIED.
+type ErrUnknownWireValue struct {
+	Kind  string
+	Value string
+}
+
+// Error implements the error interface.
+func (e *ErrUnknownWireValue) Error() string {
+	return "fido2: unknown " + e.Kind + " " + e.Value
+}
+
+// ErrWireDecode indicates a REST or MCP result could not be decoded.
+type ErrWireDecode struct {
+	Message string
+	Err     error
+}
+
+// Error implements the error interface.
+func (e *ErrWireDecode) Error() string {
+	return "fido2: decode " + e.Message + " result: " + e.Err.Error()
+}
+
+// Unwrap returns the underlying cause.
+func (e *ErrWireDecode) Unwrap() error { return e.Err }

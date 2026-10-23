@@ -1,37 +1,19 @@
 # Daemon Configuration
 
-Complete configuration reference for the Trusted Platform daemon.
+> **Status: REFERENCE** · Last verified: 2026-10-13
+> The `daemon:` listen-address keys, the `platformd serve` flags and environment, and the keys required at load.
+
+Configuration reference for the Trusted Platform daemon (`platformd serve`).
 
 ## Configuration Structure
 
-```yaml
-daemon:
-  # Core daemon settings
-  socket_path: /run/platformd.sock
-  socket_group: trusted-platform
-  socket_mode: 0660
-  shutdown_timeout: 30s
-  enable_metrics: true
-  enable_events: true
+The daemon reads three things, and only these:
 
-  # Protocol configurations
-  rest: { ... }
-  grpc: { ... }
-  quic: { ... }
-  mcp: { ... }
-
-  # Service configurations
-  services: { ... }
-```
-
-## Listen addresses — bind hosts and ports (#552, #93)
-
-Where each transport binds is configuration, never a literal in code
-(handbook `conventions/configuration.md` §3, owner ruling 2026-08-26). The
-one defaults layer is **loopback on the canonical ports**; a transport reaches
-an interface only because an operator named one. The keys below are the
-**live** keys — `platformd serve` resolves exactly these through viper and
-the listeners consume the resolved value.
+| Source | What it sets |
+|---|---|
+| The `daemon:` section of the platform YAML | Where each network transport binds — `daemon.<transport>.bind-host` and `.port`, nothing else |
+| `platformd serve` flags | The Unix socket path, which transports run, mTLS, the listen addresses again (they win over the file) |
+| `PLATFORMD_*` environment | The listen addresses, between the flags and the file |
 
 ```yaml
 daemon:
@@ -40,6 +22,23 @@ daemon:
   quic: {bind-host: 127.0.0.1, port: 9444}
   mcp:  {bind-host: 127.0.0.1, port: 9445}
 ```
+
+Those eight keys are the whole `daemon:` schema: the decoder is
+`pkg/config/daemon.go` (`SetDaemonListenerDefaults`, `ResolveDaemonListeners`),
+and any other key under `daemon:` is not read. Everything else in the
+in-process `daemon.Config` (`pkg/api/daemon/config.go`) — socket mode, shutdown
+timeout, REST server timeouts and CORS, MCP server name and limits, the
+per-service table — is its `DefaultConfig()` value or is derived at startup;
+none of it is configurable from the file, the flags or the environment.
+
+## Listen addresses — bind hosts and ports (#552, #93)
+
+Where each transport binds is configuration, never a literal in code
+(handbook `conventions/configuration.md` §3). The
+one defaults layer is **loopback on the canonical ports**; a transport reaches
+an interface only because an operator named one. `platformd serve` resolves
+exactly the keys above through viper and the listeners consume the resolved
+value.
 
 | Layer | Form | Example |
 |---|---|---|
@@ -57,283 +56,78 @@ by the listener. A value outside `1..65535`, or a host carrying a port, stops
 startup with `ErrServeStartup{Phase: "daemon listener configuration"}` naming
 the field.
 
-The Unix socket (`--socket-path`) is unaffected. The webservice listeners
-(`webservices[].bind-host`) are documented in [`docs/web/engineering.md`](../web/engineering.md).
+Both serve paths apply the resolved section in one place
+(`applyDaemonListeners`). With webservices enabled, REST is the webservice's
+listener on its own `webservices[].bind-host`, documented in
+[`docs/web/engineering.md`](../web/engineering.md).
 
-> The `rest.listen_addr`, `grpc.listen_addr`, `quic.listen_addr` and
-> `mcp.http_addr` keys shown in the sections below describe the in-process
-> `daemon.Config` fields; they are not read from the platform YAML. Use the
-> `daemon.<transport>` keys above.
+## `platformd serve` flags
 
-## Core Settings
+| Flag | Default | Effect |
+|---|---|---|
+| `--socket-path` | `/run/platformd.sock` | Unix socket path, shared by the Unix and gRPC-over-UDS transports |
+| `--enable-rest` | `true` | Daemon REST listener on `daemon.rest`; daemon-only mode, where it requires `--enable-mtls` |
+| `--enable-grpc` | `true` | gRPC TCP listener on `daemon.grpc` (gRPC always serves the Unix socket) |
+| `--enable-quic` | `true` | QUIC listener on `daemon.quic` |
+| `--enable-mcp` | `true` | MCP listener on `daemon.mcp` |
+| `--enable-mtls` | `false` | Require client certificates on the network transports |
+| `--skip-iam-validation` | `false` | Testing only: every transport accepts unauthenticated requests |
+| `--<transport>-bind-host`, `--<transport>-port` | see above | Listen address |
 
-| Setting | Type | Default | Description |
-|---------|------|---------|-------------|
-| `socket_path` | string | `/run/platformd.sock` | Unix socket file path |
-| `socket_group` | string | `trusted-platform` | Unix socket group ownership |
-| `socket_mode` | octal | `0660` | Unix socket file permissions |
-| `shutdown_timeout` | duration | `30s` | Graceful shutdown timeout |
-| `enable_metrics` | bool | `true` | Enable metrics collection |
-| `enable_events` | bool | `true` | Enable event emission |
+In webservices mode (the platform YAML lists at least one `webservices[]`
+entry) the webservice
+serves REST and the daemon's own REST listener stays off, so `--enable-rest`
+and `daemon.rest` apply only in daemon-only mode. The Unix socket is created
+with mode `0660` and no group change.
 
-## REST Configuration
+### gRPC TCP needs mTLS or platform tokens under embedded quicbaas
 
-```yaml
-rest:
-  enabled: true
-  listen_addr: "127.0.0.1:8443"
-  tls_cert_file: ""
-  tls_key_file: ""
+A token without scope claims is authorized on gRPC TCP by the IAM policy
+enforcement point (`IAMService.PEP().Check`). The embedded quicbaas SDK does
+not implement that check — every call answers `ServiceNotConfigured` — so such
+a daemon would serve gRPC and fail every scoped call with `Unavailable`.
+`daemon.New` refuses the combination at startup instead, with
+`ErrEmbeddedPEPUnavailable`:
 
-  # Server timeouts
-  read_timeout: 30s
-  write_timeout: 30s
-  idle_timeout: 120s
-  max_header_bytes: 1048576  # 1 MB
+| Condition | Refused when all hold |
+|---|---|
+| `--enable-grpc` | `true` (the default) |
+| `--enable-mtls` | `false` (the default) |
+| Platform tokens | off: no webservice `jwt.platform-token.enabled: true` |
+| `--skip-iam-validation` | `false` |
+| `quicbaas.transport` | `embedded`, unset, or no `quicbaas:` section |
 
-  # Features
-  enable_cors: false
-  enable_compression: true
+Any one of these makes the daemon start:
 
-  # CORS settings (when enabled)
-  allowed_origins:
-    - "*"
-  allowed_methods:
-    - GET
-    - POST
-    - PUT
-    - DELETE
-    - OPTIONS
-  allowed_headers:
-    - Accept
-    - Authorization
-    - Content-Type
-    - X-Request-ID
+- `--enable-mtls`: gRPC authorizes by client certificate. Every shipped
+  launcher (systemd and OpenRC units, the installer, the compose files and the
+  devcontainer) passes it.
+- `jwt.platform-token.enabled: true` on the primary webservice: platform tokens
+  carry their own scope claims. This applies only in webservices mode; daemon-only
+  mode bridges no platform-token config, so there mTLS is the only option.
+- `--enable-grpc=false`: no gRPC TCP listener (gRPC still serves the Unix
+  socket).
+- A remote `quicbaas.transport` (`unix`, `grpc`, `rest`, `quic`): the remote
+  SDK answers the check.
 
-  # Rate limiting (0 = disabled)
-  rate_limit_requests: 0
-  rate_limit_burst: 100
-```
+The gap is upstream, in go-quicbaas `sdk/go/transport/embedded/handlers_iam.go`
+`handleIAMPEPCheck`. The platform builds no local policy engine to replace it
+and never falls back to allow. See [auth architecture](../auth/architecture.md).
 
-### REST Settings Reference
+## TLS
 
-| Setting | Type | Default | Description |
-|---------|------|---------|-------------|
-| `enabled` | bool | `true` | Enable REST server |
-| `listen_addr` | string | `127.0.0.1:8443` | HTTP listen address — set via `daemon.rest` (see Listen addresses) |
-| `tls_cert_file` | string | `""` | TLS certificate file path |
-| `tls_key_file` | string | `""` | TLS private key file path |
-| `read_timeout` | duration | `30s` | Maximum request read time |
-| `write_timeout` | duration | `30s` | Maximum response write time |
-| `idle_timeout` | duration | `120s` | Keep-alive idle timeout |
-| `max_header_bytes` | int | `1048576` | Maximum header size |
-| `enable_cors` | bool | `false` | Enable CORS headers |
-| `enable_compression` | bool | `true` | Enable gzip compression |
-| `rate_limit_requests` | int | `0` | Requests per second (0=off) |
-| `rate_limit_burst` | int | `100` | Rate limit burst size |
-
-### TLS Configuration
-
-When TLS files are provided, the REST server uses HTTPS with TLS 1.2 minimum:
-
-```yaml
-rest:
-  enabled: true
-  listen_addr: "127.0.0.1:8443"
-  tls_cert_file: /etc/trusted-platform/certs/server.crt
-  tls_key_file: /etc/trusted-platform/certs/server.key
-```
-
-TLS material is mandatory: with no in-memory certificate (provisioned at
-startup from the platform CA) and no cert/key file pair, the REST server
-refuses to start with `ErrRESTServerStartFailed` instead of serving plain
-HTTP. The same fail-closed rule applies to gRPC TCP (`ErrTLSConfigFailed`)
-and QUIC (`ErrQUICServerStartFailed`). The Unix-domain-socket transport is
-the single sanctioned non-TLS carve-out — it is filesystem-permission-scoped,
-not network-exposed.
-
-## gRPC Configuration
-
-```yaml
-grpc:
-  enabled: true
-  listen_addr: "127.0.0.1:10443"
-  tls_cert_file: ""
-  tls_key_file: ""
-```
-
-### gRPC Settings Reference
-
-| Setting | Type | Default | Description |
-|---------|------|---------|-------------|
-| `enabled` | bool | `true` | Enable gRPC TCP server |
-| `listen_addr` | string | `127.0.0.1:10443` | TCP listen address — set via `daemon.grpc` (see Listen addresses) |
-| `tls_cert_file` | string | `""` | TLS certificate file path |
-| `tls_key_file` | string | `""` | TLS private key file path |
-
-The gRPC server always listens on the Unix socket regardless of TCP settings.
-
-## QUIC Configuration
-
-```yaml
-quic:
-  enabled: false
-  listen_addr: "127.0.0.1:9444"
-  # Additional QUIC settings from pkg/api/quic/config.go
-```
-
-### QUIC Settings Reference
-
-| Setting | Type | Default | Description |
-|---------|------|---------|-------------|
-| `enabled` | bool | `false` | Enable QUIC server |
-| `listen_addr` | string | `127.0.0.1:9444` | UDP listen address — set via `daemon.quic` (see Listen addresses) |
-
-QUIC requires TLS and uses certificates from the platform CA or provided configuration.
-
-## MCP Configuration
-
-```yaml
-mcp:
-  enabled: false
-  server_name: "Trusted Platform MCP Server"
-  server_version: "1.0.0"
-  transport: http
-  http_addr: "127.0.0.1:9445"
-  request_timeout: 30s
-  max_concurrent_requests: 100
-```
-
-### MCP Settings Reference
-
-| Setting | Type | Default | Description |
-|---------|------|---------|-------------|
-| `enabled` | bool | `false` | Enable MCP server |
-| `server_name` | string | `Trusted Platform MCP Server` | Server name for clients |
-| `server_version` | string | `1.0.0` | Platform version string |
-| `transport` | string | `http` | Transport type: `stdio` or `http` |
-| `http_addr` | string | `127.0.0.1:9445` | HTTP listen address — set via `daemon.mcp` (see Listen addresses) |
-| `request_timeout` | duration | `30s` | Default operation timeout |
-| `max_concurrent_requests` | int | `100` | Concurrent request limit |
-
-### Transport Modes
-
-**HTTP Transport:**
-```yaml
-mcp:
-  transport: http
-  http_addr: "127.0.0.1:9445"
-```
-
-**stdio Transport:**
-```yaml
-mcp:
-  transport: stdio
-```
-
-The `stdio` transport is used for direct CLI integration.
-
-## Service Configuration
-
-Each managed service can be individually configured:
-
-```yaml
-services:
-  tpm:
-    enabled: true
-    auto_start: true
-    timeout: 10s
-    max_retries: 3
-
-  vtpm:
-    enabled: true
-    auto_start: true
-    timeout: 10s
-    max_retries: 3
-
-  ca:
-    enabled: true
-    auto_start: true
-    timeout: 10s
-    max_retries: 3
-
-  kms:
-    enabled: true
-    auto_start: true
-    timeout: 10s
-    max_retries: 3
-
-  sdn:
-    enabled: true
-    auto_start: false
-    timeout: 15s
-    max_retries: 3
-
-  dns:
-    enabled: true
-    auto_start: false
-    timeout: 10s
-    max_retries: 3
-
-  attestation:
-    enabled: true
-    auto_start: false
-    timeout: 10s
-    max_retries: 3
-
-  compute:
-    enabled: true
-    auto_start: false
-    timeout: 20s
-    max_retries: 3
-
-  acme:
-    enabled: true
-    auto_start: false
-    timeout: 10s
-    max_retries: 3
-
-  webservice:
-    enabled: true
-    auto_start: false
-    timeout: 15s
-    max_retries: 3
-
-  mcp:
-    enabled: true
-    auto_start: true
-    timeout: 10s
-    max_retries: 3
-```
-
-### Service Settings Reference
-
-| Setting | Type | Default | Description |
-|---------|------|---------|-------------|
-| `enabled` | bool | varies | Enable the service |
-| `auto_start` | bool | varies | Start automatically with daemon |
-| `timeout` | duration | varies | Operation timeout |
-| `max_retries` | int | `3` | Maximum retry attempts |
-
-### Default Service Configuration
-
-| Service | Enabled | Auto-Start | Timeout |
-|---------|---------|------------|---------|
-| `tpm` | Yes | Yes | 10s |
-| `vtpm` | Yes | Yes | 10s |
-| `ca` | Yes | Yes | 10s |
-| `kms` | Yes | Yes | 10s |
-| `mcp` | Yes | Yes | 10s |
-| `sdn` | Yes | No | 15s |
-| `dns` | Yes | No | 10s |
-| `attestation` | Yes | No | 10s |
-| `compute` | Yes | No | 20s |
-| `acme` | Yes | No | 10s |
-| `webservice` | Yes | No | 15s |
+The network transports carry the daemon TLS identity, provisioned at startup
+from the platform CA; there is no certificate or key file setting. TLS is
+mandatory: when the identity cannot be provisioned the daemon refuses to start
+instead of serving plaintext — REST with `ErrRESTServerStartFailed`, gRPC TCP
+and MCP with `ErrTLSConfigFailed`, QUIC with `ErrQUICServerStartFailed` (or
+`ErrTransportConstructionFailed` from `New` when the QUIC config carries no
+TLS at all, #444). MCP serves HTTPS, TLS 1.3 only, under the same
+client-certificate policy as REST and gRPC; see [`api.md`](api.md) §5. The
+Unix-domain-socket transport is the single sanctioned non-TLS carve-out — it
+is filesystem-permission-scoped, not network-exposed.
 
 ## Environment Variables
-
-Configuration can be overridden via environment variables:
 
 The environment layer is `PLATFORMD_` + the config key with every `.` and
 `-` as `_` (`tpconfig.BindDaemonListenerEnv`, installed by the root command).
@@ -347,109 +141,87 @@ the environment.
 | `PLATFORMD_DAEMON_QUIC_BIND_HOST` / `_PORT` | `daemon.quic.bind-host` / `.port` | QUIC bind host / port |
 | `PLATFORMD_DAEMON_MCP_BIND_HOST` / `_PORT` | `daemon.mcp.bind-host` / `.port` | MCP bind host / port |
 
-## Configuration Validation
+## Required keys at load
 
-The daemon validates configuration at startup:
+These keys are in the platform YAML's `quicbaas:` section, not `daemon:`.
+`platformd` checks the keys it cannot start without when it loads the config
+file, before it constructs the QuicBaaS factory. A failure is a
+`config.ErrInvalidConfigKey` that names the file and the dotted key:
 
-| Validation | Error |
-|------------|-------|
-| Empty socket path | `socket path cannot be empty` |
-| Non-positive shutdown timeout | `shutdown timeout must be positive` |
-| Empty QUIC address when enabled | `QUIC listen address cannot be empty` |
-| Empty REST address when enabled | `REST listen address cannot be empty` |
-| Invalid MCP transport | `MCP transport must be 'stdio' or 'http'` |
-| Empty MCP HTTP address | `MCP HTTP address cannot be empty` |
-| Invalid REST timeouts | Various timeout validation errors |
-| Invalid service timeout | `service X timeout must be positive` |
-| Negative max retries | `service X max retries cannot be negative` |
+```
+config file "/etc/trusted-platform/config.yaml": key quicbaas.spiffe-trust-domain: invalid configuration: SPIFFETrustDomain: spiffe-trust-domain is required for the embedded server: ...
+```
+
+| Key | Required when | Why |
+|-----|---------------|-----|
+| `quicbaas.spiffe-trust-domain` | the embedded server is selected: `quicbaas.transport` is `embedded` or unset, **or the `quicbaas:` section is absent** | qrdb first boot seeds IAM (system tenant, roles, admin certificate) under this trust domain, and the `/init` admin bundle's SPIFFE SAN is issued under it. It must be a lowercase name with no scheme, port or path. |
+| `quicbaas.transport` | set | It must be `embedded`, `unix`, `grpc`, `rest` or `quic`. |
+
+The remote transports (`unix`, `grpc`, `rest`, `quic`) run no first boot, so
+they do not need a trust domain. No default applies: a config that leaves the
+key out is rejected, even if a code-level `App` literal carries a placeholder.
+The bootstrap seeder fills the key from `platform.internal_domain` (see
+[bootstrap engineering](../bootstrap/engineering.md)).
+
+### Cluster keys
+
+A non-empty `quicbaas.join-addresses` makes the node a member of a go-qrdb
+Raft cluster: platformd passes the keys below to go-quicbaas cluster mode.
+`quicbaas.Config.Validate` checks them when `App.Init` builds the store, so a
+bad cluster config stops platformd before the store opens.
+
+| Key | Rule |
+|-----|------|
+| `quicbaas.join-addresses` | Every member as `id=host:port`, this node included as `node-id=raft-address`. A bare `host:port`, a repeated ID or a missing self entry is refused. |
+| `quicbaas.node-id`, `quicbaas.deployment-id` | Non-zero. `deployment-id` is the same on every member; left at zero, go-quicbaas would derive a different one on each. |
+| `quicbaas.raft-address` | Routable: not loopback, unspecified or empty. |
+| `quicbaas.raft-tls-cert-file`, `raft-tls-key-file`, `raft-tls-ca-file` | All three set. Raft between peers is always mutual TLS; a clustered config without the files is refused, never run in plaintext. |
+
+TPM-held Raft keys are out of scope until the issuer of peer certificates is
+ruled on. The [cluster user guide](../cluster/user.md#configuring-a-cluster)
+has the full example.
+
+### Values platformd copies into the embedded server
+
+Some embedded-server settings are not `quicbaas:` keys. `App.initStores`
+copies them from other sections before the store starts:
+
+| Source | Embedded server setting | Rule |
+|--------|-------------------------|------|
+| `tpm.device` | `seal.tpm2.device` | Copied when `tpm.simulator` is off and the device is a concrete path, not empty and not `auto`. go-quicbaas's hardware probe and its tpm2 seal strategy then open the platform's TPM. Without the copy, they open the default `/dev/tpmrm0` while the store starts, even when the platform's TPM is a swtpm socket. On a shared CI runner, that is the runner's own TPM. |
+| `barrier.seal_strategy: shamir` | `seal.strategy` and the shamir threshold and share count | The quorum is copied so the embedded barrier enforces it. |
 
 ## Example Configurations
 
-### Development
+### Development (loopback, the defaults)
 
-```yaml
-daemon:
-  socket_path: /tmp/platformd.sock
-  shutdown_timeout: 5s
+No `daemon:` section is needed; every transport binds `127.0.0.1` on its
+canonical port. gRPC TCP still needs mTLS under embedded quicbaas (see above):
 
-  rest:
-    enabled: true
-    listen_addr: "127.0.0.1:8443"
-    enable_cors: true
-    allowed_origins:
-      - "http://localhost:3000"
-
-  grpc:
-    enabled: true
-    listen_addr: "127.0.0.1:9443"
-
-  quic:
-    enabled: false
-
-  mcp:
-    enabled: true
-    transport: http
-    http_addr: "127.0.0.1:9445"
+```sh
+platformd serve --enable-mtls
 ```
 
-### Production
+### Production (gRPC and QUIC on every interface)
 
 ```yaml
 daemon:
-  socket_path: /run/platformd.sock
-  socket_group: trusted-platform
-  socket_mode: 0660
-  shutdown_timeout: 60s
-  enable_metrics: true
-  enable_events: true
-
-  rest:
-    enabled: true
-    listen_addr: "127.0.0.1:8443"
-    tls_cert_file: /etc/trusted-platform/certs/server.crt
-    tls_key_file: /etc/trusted-platform/certs/server.key
-    read_timeout: 30s
-    write_timeout: 30s
-    enable_cors: false
-    enable_compression: true
-    rate_limit_requests: 100
-    rate_limit_burst: 200
-
-  grpc:
-    enabled: true
-    listen_addr: "127.0.0.1:10443"
-    tls_cert_file: /etc/trusted-platform/certs/server.crt
-    tls_key_file: /etc/trusted-platform/certs/server.key
-
-  quic:
-    enabled: true
-    listen_addr: "127.0.0.1:9444"
-
-  mcp:
-    enabled: false
+  grpc: {bind-host: 0.0.0.0, port: 10443}
+  quic: {bind-host: "::", port: 9444}
 ```
 
-### Minimal (Unix Socket Only)
+```sh
+platformd serve --enable-mtls
+```
 
-```yaml
-daemon:
-  socket_path: /run/platformd.sock
+### Minimal (Unix socket only)
 
-  rest:
-    enabled: false
-
-  grpc:
-    enabled: false
-
-  quic:
-    enabled: false
-
-  mcp:
-    enabled: false
+```sh
+platformd serve --enable-rest=false --enable-grpc=false --enable-quic=false --enable-mcp=false
 ```
 
 ## See Also
 
 - [Architecture](architecture.md)
-- [API Reference](api-reference.md)
-- [README](README.md)
+- [API](api.md)
+- [User guide](user.md)

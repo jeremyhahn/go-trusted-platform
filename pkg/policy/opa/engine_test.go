@@ -1226,6 +1226,10 @@ func TestOPAEngine_Stats(t *testing.T) {
 		engine := NewOPAEngine()
 		ctx := context.Background()
 
+		initializedAt := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+		current := initializedAt
+		engine.now = func() time.Time { return current }
+
 		cfg := &config.PolicyConfig{
 			Engine:        config.PolicyEngineOPA,
 			DefaultAction: config.DefaultActionDeny,
@@ -1236,19 +1240,18 @@ func TestOPAEngine_Stats(t *testing.T) {
 		err = engine.LoadPolicy(ctx, "testpolicy", []byte(testPolicy))
 		require.NoError(t, err)
 
-		beforeEval := time.Now()
-		// Not synchronisation, so not the pattern #203 removed elsewhere in
-		// this package: nothing is being waited for. This only guarantees the
-		// two timestamps are distinguishable, and load can only widen the gap,
-		// never close it.
-		time.Sleep(time.Millisecond)
+		stats := engine.Stats()
+		assert.True(t, stats.LastEvaluationTime.IsZero(), "no evaluation yet")
+
+		evaluatedAt := initializedAt.Add(time.Minute)
+		current = evaluatedAt
 
 		_, err = engine.Evaluate(ctx, "testpolicy", map[string]interface{}{"user": "admin"})
 		require.NoError(t, err)
 
-		stats := engine.Stats()
-		assert.False(t, stats.LastEvaluationTime.IsZero())
-		assert.True(t, stats.LastEvaluationTime.After(beforeEval))
+		stats = engine.Stats()
+		assert.True(t, stats.InitializedAt.Equal(initializedAt), "InitializedAt = %v", stats.InitializedAt)
+		assert.True(t, stats.LastEvaluationTime.Equal(evaluatedAt), "LastEvaluationTime = %v", stats.LastEvaluationTime)
 	})
 
 	t.Run("policy count in stats", func(t *testing.T) {

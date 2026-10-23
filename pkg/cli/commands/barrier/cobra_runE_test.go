@@ -143,6 +143,23 @@ func TestCobra_SealRunE_AssumeYesSkipsPrompt(t *testing.T) {
 	}
 }
 
+// TestCobra_SealRunE_RejectsSOPin verifies seal refuses --so-pin instead
+// of accepting a PIN it cannot send, and that the refusal does not echo
+// the PIN.
+func TestCobra_SealRunE_RejectsSOPin(t *testing.T) {
+	root := NewCommand(brokenFlagsCtor())
+	err := runCobra(root, []string{"seal", "-y", "--so-pin", "secret-so-pin"}, "")
+	if err == nil {
+		t.Fatal("expected seal --so-pin to be rejected")
+	}
+	if !strings.Contains(err.Error(), "unknown flag: --so-pin") {
+		t.Errorf("expected an unknown-flag error, got %T: %v", err, err)
+	}
+	if strings.Contains(err.Error(), "secret-so-pin") {
+		t.Errorf("error echoes the PIN: %v", err)
+	}
+}
+
 // TestCobra_RekeyRunE_PartialFlags drives barrier rekey through cobra
 // with only --threshold (no --total).
 func TestCobra_RekeyRunE_PartialFlags(t *testing.T) {

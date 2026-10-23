@@ -17,7 +17,11 @@ import (
 	"context"
 	"time"
 
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+
 	grpcapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/api/mcp"
 )
 
 // =============================================================================
@@ -45,6 +49,12 @@ func (ErrRegistryNotConfigured) Error() string {
 	return "registry service not configured"
 }
 
+// GRPCStatus classifies the error as Unavailable, the class every other
+// MCP tool answers with while its backing service is not wired.
+func (e ErrRegistryNotConfigured) GRPCStatus() *status.Status {
+	return status.New(codes.Unavailable, e.Error())
+}
+
 // ErrRegistryRepositoryRequired indicates that an MCP request was missing
 // the required `repository` argument.
 type ErrRegistryRepositoryRequired struct{}
@@ -52,6 +62,12 @@ type ErrRegistryRepositoryRequired struct{}
 // Error returns a human-readable description of the error.
 func (ErrRegistryRepositoryRequired) Error() string {
 	return "registry: repository is required"
+}
+
+// GRPCStatus classifies the error as InvalidArgument, as gRPC Inspect and
+// Delete do.
+func (e ErrRegistryRepositoryRequired) GRPCStatus() *status.Status {
+	return status.New(codes.InvalidArgument, e.Error())
 }
 
 // ErrRegistryReferenceRequired indicates that an MCP request was missing
@@ -62,6 +78,32 @@ type ErrRegistryReferenceRequired struct{}
 // Error returns a human-readable description of the error.
 func (ErrRegistryReferenceRequired) Error() string {
 	return "registry: reference (tag) or digest is required"
+}
+
+// GRPCStatus classifies the error as InvalidArgument, as gRPC Inspect and
+// Delete do.
+func (e ErrRegistryReferenceRequired) GRPCStatus() *status.Status {
+	return status.New(codes.InvalidArgument, e.Error())
+}
+
+// ErrRegistryServiceFailed is a registry service failure answered over MCP.
+// It keeps the service's error and carries the class the gRPC
+// RegistryService answers the same failure with.
+type ErrRegistryServiceFailed struct {
+	Cause error
+}
+
+func (e ErrRegistryServiceFailed) Error() string {
+	return e.Cause.Error()
+}
+
+func (e ErrRegistryServiceFailed) Unwrap() error {
+	return e.Cause
+}
+
+// GRPCStatus classifies the failure as grpcapi.RegistryErrorStatus does.
+func (e ErrRegistryServiceFailed) GRPCStatus() *status.Status {
+	return status.Convert(grpcapi.RegistryErrorStatus(e.Cause))
 }
 
 // SetRegistryService injects the registry service after construction.
@@ -78,19 +120,28 @@ func (p *MCPServiceProvider) SetRegistryService(svc grpcapi.RegistryService) {
 
 // RegistryList returns a paginated set of artifacts. `repository` and
 // `artifactType` are optional filters; pass empty / 0 to disable.
-func (p *MCPServiceProvider) RegistryList(ctx context.Context, repository string, artifactType int32, limit, offset int32) (interface{}, error) {
+func (p *MCPServiceProvider) RegistryList(ctx context.Context, query mcp.RegistryListQuery) (interface{}, error) {
 	if p.registryService == nil {
 		return nil, ErrRegistryNotConfigured{}
 	}
 	req := &grpcapi.RegistryListRequest{
-		Repository: repository,
-		Type:       grpcapi.ArtifactType(artifactType),
-		Limit:      limit,
-		Offset:     offset,
+		Repository: query.Repository,
+		Type:       grpcapi.ArtifactType(query.ArtifactType),
+		Limit:      query.Limit,
+		Offset:     query.Offset,
+		Cursor:     query.Cursor,
+		SortBy:     query.SortBy,
+		Ascending:  query.Ascending,
+	}
+	if len(query.MatchLabels) > 0 || len(query.MatchExpressions) > 0 {
+		req.Selector = &grpcapi.RegistryLabelSelector{
+			MatchLabels:      query.MatchLabels,
+			MatchExpressions: query.MatchExpressions,
+		}
 	}
 	resp, err := p.registryService.List(ctx, req)
 	if err != nil {
-		return nil, err
+		return nil, ErrRegistryServiceFailed{Cause: err}
 	}
 	out := map[string]interface{}{
 		"total":       resp.Total,
@@ -133,7 +184,7 @@ func (p *MCPServiceProvider) RegistryInspect(ctx context.Context, repository, re
 	}
 	resp, err := p.registryService.Inspect(ctx, req)
 	if err != nil {
-		return nil, err
+		return nil, ErrRegistryServiceFailed{Cause: err}
 	}
 	if resp == nil || resp.Detail == nil {
 		return map[string]interface{}{
@@ -168,7 +219,7 @@ func (p *MCPServiceProvider) RegistryDelete(ctx context.Context, repository, ref
 	}
 	resp, err := p.registryService.Delete(ctx, req)
 	if err != nil {
-		return nil, err
+		return nil, ErrRegistryServiceFailed{Cause: err}
 	}
 	out := map[string]interface{}{
 		"repository":  repository,
@@ -191,7 +242,7 @@ func (p *MCPServiceProvider) RegistryStatus(ctx context.Context) (interface{}, e
 	}
 	resp, err := p.registryService.Status(ctx)
 	if err != nil {
-		return nil, err
+		return nil, ErrRegistryServiceFailed{Cause: err}
 	}
 	out := map[string]interface{}{
 		"health":     registryHealthString(resp.Health),

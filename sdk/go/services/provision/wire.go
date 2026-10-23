@@ -33,22 +33,18 @@ package provision
 
 import (
 	"bytes"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 
 	"google.golang.org/protobuf/encoding/protojson"
 
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/restwire"
 )
 
 // pollSessionPendingStatus is the status string the server returns for a
 // not-yet-fulfilled session on both the REST and MCP transports.
 const pollSessionPendingStatus = "pending"
-
-// zeroRFC3339 is the JSON encoding of Go's zero time.Time, emitted by the
-// REST/MCP transports for an unassigned profile's assigned_at field.
-const zeroRFC3339 = "0001-01-01T00:00:00Z"
 
 // fetchConfigPendingJSON carries the pending-session arm of a FetchConfig
 // response (configdelivery.PendingResponse).
@@ -242,32 +238,6 @@ func firstNonSpace(data []byte) byte {
 	return 0
 }
 
-// deviceRoleJSONToEnum maps the domain entities.DeviceRole JSON strings to
-// the platform.v1 DeviceRole enum value names protojson expects. The mapping
-// mirrors pkg/api/grpc EntityRoleToProto exactly (unknown strings map to
-// DEVICE_ROLE_UNKNOWN).
-var deviceRoleJSONToEnum = map[string]string{
-	"unknown":       "DEVICE_ROLE_UNKNOWN",
-	"server":        "DEVICE_ROLE_SERVER",
-	"client":        "DEVICE_ROLE_CLIENT",
-	"workstation":   "DEVICE_ROLE_WORKSTATION",
-	"edge":          "DEVICE_ROLE_EDGE",
-	"iot":           "DEVICE_ROLE_IOT",
-	"gateway":       "DEVICE_ROLE_GATEWAY",
-	"load-balancer": "DEVICE_ROLE_LOAD_BALANCER",
-	"control-plane": "DEVICE_ROLE_CONTROL_PLANE",
-	"worker":        "DEVICE_ROLE_WORKER",
-}
-
-// authMethodJSONToEnum maps the domain entities.AuthMethod JSON strings to
-// the platform.v1 AuthMethod enum value names. The mapping mirrors
-// DeviceGRPCService.authMethodToPb exactly (everything except "802.1x" maps
-// to AUTH_METHOD_NONE).
-var authMethodJSONToEnum = map[string]string{
-	"none":   "AUTH_METHOD_NONE",
-	"802.1x": "AUTH_METHOD_802_1X",
-}
-
 // errSessionNotObject indicates a session wire payload was not a JSON object.
 var errSessionNotObject = errors.New("session payload is not a JSON object")
 
@@ -290,8 +260,10 @@ func sessionJSONToProto(data []byte) (*platformv1.ProvisioningSession, error) {
 		return nil, errSessionNotObject
 	}
 
+	// The domain ek_cert key matches the pb field name and decodes as is;
+	// the domain-only workload_pcr has no pb counterpart and is discarded.
 	if profile, ok := obj["profile"].(map[string]any); ok {
-		normalizeProfileJSON(profile)
+		restwire.NormalizeProfileJSON(profile)
 	}
 
 	normalized, err := json.Marshal(obj)
@@ -305,81 +277,4 @@ func sessionJSONToProto(data []byte) (*platformv1.ProvisioningSession, error) {
 		return nil, err
 	}
 	return session, nil
-}
-
-// normalizeProfileJSON rewrites a domain entities.DeviceProfile JSON object
-// in place so it decodes into the pb DeviceProfile via protojson:
-//
-//   - role: domain lowercase string -> pb enum value name
-//   - networks[*].auth_method: domain string -> pb enum value name
-//   - config: domain JSON value -> base64(JSON) to fit the pb bytes field,
-//     matching the gRPC profileToPb converter's json.Marshal(p.Config)
-//   - assigned_at: dropped when it is the zero time, matching the gRPC
-//     converter's IsZero guard (an unassigned profile has no timestamp)
-//   - platformd: renamed to platformd_config; its object-typed "inline"
-//     value becomes base64(JSON) to fit the pb bytes field
-//
-// The domain ek_cert key needs no handling: it matches the pb DeviceProfile
-// ek_cert field name, so protojson decodes the prestaged EK certificate
-// directly and it survives the cross-transport round trip. The domain-only
-// workload_pcr field has no pb counterpart and is dropped by protojson's
-// DiscardUnknown.
-func normalizeProfileJSON(profile map[string]any) {
-	if role, ok := profile["role"].(string); ok {
-		mapped, known := deviceRoleJSONToEnum[role]
-		if !known {
-			mapped = "DEVICE_ROLE_UNKNOWN"
-		}
-		profile["role"] = mapped
-	}
-
-	// The full merged device config is an arbitrary JSON value; the pb
-	// DeviceProfile.config bytes field carries its JSON encoding, exactly
-	// as the gRPC converter serializes the domain config.
-	if config, present := profile["config"]; present {
-		if config == nil {
-			delete(profile, "config")
-		} else if encoded, err := json.Marshal(config); err == nil {
-			profile["config"] = base64.StdEncoding.EncodeToString(encoded)
-		} else {
-			delete(profile, "config")
-		}
-	}
-
-	// A zero assignment timestamp means "never assigned"; the gRPC
-	// converter leaves the pb field unset, so drop it here for parity.
-	if assignedAt, ok := profile["assigned_at"].(string); ok && assignedAt == zeroRFC3339 {
-		delete(profile, "assigned_at")
-	}
-
-	if networks, ok := profile["networks"].(map[string]any); ok {
-		for _, v := range networks {
-			network, ok := v.(map[string]any)
-			if !ok {
-				continue
-			}
-			if method, ok := network["auth_method"].(string); ok {
-				mapped, known := authMethodJSONToEnum[method]
-				if !known {
-					mapped = "AUTH_METHOD_NONE"
-				}
-				network["auth_method"] = mapped
-			}
-		}
-	}
-
-	if platformd, ok := profile["platformd"].(map[string]any); ok {
-		if inline, present := platformd["inline"]; present {
-			if _, isString := inline.(string); !isString {
-				encoded, err := json.Marshal(inline)
-				if err == nil {
-					platformd["inline"] = base64.StdEncoding.EncodeToString(encoded)
-				} else {
-					delete(platformd, "inline")
-				}
-			}
-		}
-		profile["platformd_config"] = platformd
-		delete(profile, "platformd")
-	}
 }

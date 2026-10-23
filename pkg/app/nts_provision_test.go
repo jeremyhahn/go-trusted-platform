@@ -24,6 +24,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"math/big"
+	"net"
 	"testing"
 	"time"
 
@@ -277,35 +278,49 @@ func TestNTSServedCertificate(t *testing.T) {
 		}
 	}()
 
-	previous := ntsKEDialAddr
-	ntsKEDialAddr = listener.Addr().String()
-	defer func() { ntsKEDialAddr = previous }()
+	// The sweep dials the configured NTS-KE port, so pointing the config at
+	// the listener exercises the same address resolution production uses.
+	app.NTPConfig.Serve.NTS.Port = listener.Addr().(*net.TCPAddr).Port
 
-	served, err := ntsServedCertificate(context.Background())
+	served, err := ntsServedCertificate(context.Background(), app.ntsKEDialAddress())
 	require.NoError(t, err)
 	assert.Equal(t, "cp-test.example.test", served.Subject.CommonName)
 
 	t.Run("unreachable endpoint is the typed error", func(t *testing.T) {
 		listener.Close()
-		_, err := ntsServedCertificate(context.Background())
+		_, err := ntsServedCertificate(context.Background(), app.ntsKEDialAddress())
 		var typed *ErrNTSProvision
 		require.ErrorAs(t, err, &typed)
 	})
 }
 
+// TestNTSKEDialAddress asserts the sweep dials the port chronyd is rendered
+// with: the configured serve.nts.port, or the IANA default when it is unset.
+func TestNTSKEDialAddress(t *testing.T) {
+	app := ntsTestApp()
+	assert.Equal(t, "127.0.0.1:4460", app.ntsKEDialAddress())
+
+	app.NTPConfig.Serve.NTS.Port = 14460
+	assert.Equal(t, "127.0.0.1:14460", app.ntsKEDialAddress())
+}
+
+// TestNTSKEDialAddress_NoNTPSection asserts a node without an ntp section
+// still resolves the default port rather than panicking.
+func TestNTSKEDialAddress_NoNTPSection(t *testing.T) {
+	app := &App{}
+	assert.Equal(t, "127.0.0.1:4460", app.ntsKEDialAddress())
+}
+
 // fakeNTPApplier records deployment requests from certificate renewal.
 type fakeNTPApplier struct {
-	applies             int
 	rotations           int
 	rotatedKey          []byte
 	rotatedCert         []byte
 	rotatedEnclaveAlive bool
 	err                 error
-	serveNameCalls      int
-	serveNameResult     []ntp.ServeNameFinding
 }
 
-func (f *fakeNTPApplier) Apply(context.Context) error { f.applies++; return f.err }
+func (f *fakeNTPApplier) Apply(context.Context) error { return f.err }
 
 // RotateNTSMaterial records what renewal handed the service. The key is
 // read through the enclave's scoped borrow, exactly as the real service
@@ -324,11 +339,10 @@ func (f *fakeNTPApplier) RotateNTSMaterial(_ context.Context, key *memguard.Memo
 
 func (f *fakeNTPApplier) WaitForSync(context.Context) error { return nil }
 
-// CheckServeNames records the allow-list reconciliation the renewal path
-// runs after a successful deploy.
+// CheckServeNames reports no findings; recordingNTPApplier covers the
+// reconciliation the renewal path runs after a successful deploy.
 func (f *fakeNTPApplier) CheckServeNames(context.Context, ntp.NameResolver) []ntp.ServeNameFinding {
-	f.serveNameCalls++
-	return f.serveNameResult
+	return nil
 }
 
 // TestDeployNTSMaterial asserts renewal deployment hands the new pair to

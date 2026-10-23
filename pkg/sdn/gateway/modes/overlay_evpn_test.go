@@ -774,7 +774,6 @@ func TestOverlayModeHandler_ReplayVTEP(t *testing.T) {
 			f.sw.lookup(t, TableMACLearning, "tun_id=10100", "eth_dst=02:00:00:00:02:20"))
 		assert.Contains(t, f.sw.lookup(t, TableL3Routing, "eth_type=0x800", "ipv4_dst=10.44.0.7"), "tun_dst=10.0.0.2")
 		assert.Empty(t, f.handler.RefusedVTEPs())
-		assert.Zero(t, f.handler.GetStatus().RefusedReplays, "a replay that completes is not counted")
 	})
 
 	t.Run("a revoked VTEP is reinstalled once admitted again", func(t *testing.T) {
@@ -800,12 +799,6 @@ func TestOverlayModeHandler_ReplayVTEP(t *testing.T) {
 		assert.ErrorIs(t, vtepErr, errAdmissionRefused)
 		assert.Equal(t, "drop", f.sw.lookup(t, TableVXLANDecap, fromVTEP(ovlL2VNI, ovlVTEPB)...))
 		assert.Equal(t, []netip.Addr{ovlVTEPB}, f.handler.RefusedVTEPs())
-		assert.Equal(t, uint64(1), f.handler.GetStatus().RefusedReplays)
-
-		// A replay that keeps failing is counted every time, so the status
-		// shows a VTEP the sweep cannot bring back.
-		assertVTEPFailed(t, f.handler.ReplayVTEP(ctx, ovlVTEPB), "replay")
-		assert.Equal(t, uint64(2), f.handler.GetStatus().RefusedReplays)
 	})
 
 	t.Run("a VTEP not refused replays nothing", func(t *testing.T) {

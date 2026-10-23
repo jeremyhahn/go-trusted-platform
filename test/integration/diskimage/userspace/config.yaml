@@ -251,3 +251,5 @@ sdn:
     enabled: true
     vxlan-port: 4789
     underlay-interface: lo
+    # A single-node test overlay: the loopback VTEP is explicit (#93).
+    vtep-address: 127.0.0.1

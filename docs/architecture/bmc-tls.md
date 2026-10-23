@@ -1,5 +1,8 @@
 # BMC TLS Certificate Management -- Architecture
 
+> **Status: REFERENCE** · Last verified: 2026-10-13
+> Automated BMC TLS certificate issuance and renewal; [../bmc/](../bmc/) is normative.
+
 End-to-end automated TLS certificate issuance, deployment, and
 renewal for each node's own baseboard management controller (BMC).
 Each platformd instance manages only its own BMC's cert; renewal is
@@ -238,7 +241,7 @@ build tag) provides:
 - `GetStats(ctx, flavor)` -- reads the vBMC's `/debug/stats` for
   before/after counter diffs
 
-See `docs/bmc/testing.md` for runbook.
+See `docs/bmc/engineering.md` §11 for runbook.
 
 ## File map
 

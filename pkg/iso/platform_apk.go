@@ -18,6 +18,7 @@ import (
 	"bufio"
 	"compress/gzip"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -83,17 +84,6 @@ func (c *ISOBuildConfig) ValidatePlatformAPKDir() error {
 	return nil
 }
 
-// installPackages returns the packages the installer installs beyond its own
-// set: the configured extras and, when the media carries the platform-built
-// apks, the overlay IPsec packages.
-func (o InstallerOverrides) installPackages() []string {
-	packages := append([]string(nil), o.ExtraPackages...)
-	if o.PlatformAPKDir != "" {
-		packages = append(packages, PlatformPackages()...)
-	}
-	return packages
-}
-
 // ErrPlatformAPKMissing reports a platform-built apk the media must carry that
 // the builder output does not provide. The media build fails rather than
 // producing media that installs without charon: a node whose overlay cannot
@@ -146,7 +136,7 @@ func (b *PreFetchBuilder) loadPlatformIndex() error {
 		if _, err := os.Stat(entry.LocalPath); err != nil {
 			return &ErrPlatformAPKMissing{Dir: dir, Package: name, Err: err}
 		}
-		if err := verifyPlatformAPK(entry); err != nil {
+		if err := verifyPlatformAPK(entry.LocalPath, entry); err != nil {
 			return err
 		}
 		b.packageIndex[name] = entry
@@ -155,7 +145,6 @@ func (b *PreFetchBuilder) loadPlatformIndex() error {
 	return nil
 }
 
-// copyLocalPackage copies a platform-built apk to the prefetch directory.
 // ErrPlatformAPKInvalid reports a platform-built apk that does not match its
 // entry in the builder's APKINDEX, or cannot be indexed: truncated, corrupt,
 // or from another build. The media build fails rather than producing media
@@ -184,39 +173,40 @@ type ErrAPKNoControlSegment struct{}
 
 func (ErrAPKNoControlSegment) Error() string { return "no gzip stream holds a .PKGINFO" }
 
-// verifyPlatformAPK checks a platform-built apk against its APKINDEX entry:
+// verifyPlatformAPK checks the platform-built apk at path, the builder's or the
+// copy on the media, against its APKINDEX entry:
 // its size (S:), every gzip stream decompressing whole (gzip checks each
 // stream's CRC-32 and length), and the checksum of its control segment (C:,
 // "Q1" and the base64 SHA-1 of the gzip stream holding .PKGINFO, which apk
 // itself checks at install).
-func verifyPlatformAPK(entry *apkPackageEntry) error {
+func verifyPlatformAPK(path string, entry *apkPackageEntry) error {
 	// A FIPS build cannot compute C: and refuses before reading anything.
 	hasher, err := newAPKChecksumHasher()
 	if err != nil {
 		return err
 	}
-	f, err := os.Open(entry.LocalPath)
+	f, err := os.Open(path)
 	if err != nil {
-		return &ErrPlatformAPKInvalid{Path: entry.LocalPath, Reason: "cannot be read", Err: err}
+		return &ErrPlatformAPKInvalid{Path: path, Reason: "cannot be read", Err: err}
 	}
 	defer f.Close()
 
 	info, err := f.Stat()
 	if err != nil {
-		return &ErrPlatformAPKInvalid{Path: entry.LocalPath, Reason: "cannot be read", Err: err}
+		return &ErrPlatformAPKInvalid{Path: path, Reason: "cannot be read", Err: err}
 	}
 	if info.Size() != entry.Size {
-		return &ErrPlatformAPKInvalid{Path: entry.LocalPath, Reason: fmt.Sprintf("is %d bytes, its index entry %d", info.Size(), entry.Size)}
+		return &ErrPlatformAPKInvalid{Path: path, Reason: fmt.Sprintf("is %d bytes, its index entry %d", info.Size(), entry.Size)}
 	}
 	control, err := apkControlSegment(f)
 	if err != nil {
-		return &ErrPlatformAPKInvalid{Path: entry.LocalPath, Reason: "is not a well-formed apk", Err: err}
+		return &ErrPlatformAPKInvalid{Path: path, Reason: "is not a well-formed apk", Err: err}
 	}
 	if _, err := io.Copy(hasher, control); err != nil {
-		return &ErrPlatformAPKInvalid{Path: entry.LocalPath, Reason: "cannot be read", Err: err}
+		return &ErrPlatformAPKInvalid{Path: path, Reason: "cannot be read", Err: err}
 	}
 	if sum := "Q1" + base64.StdEncoding.EncodeToString(hasher.Sum(nil)); sum != entry.Checksum {
-		return &ErrPlatformAPKInvalid{Path: entry.LocalPath, Reason: fmt.Sprintf("has control checksum %s, its index entry %s", sum, entry.Checksum)}
+		return &ErrPlatformAPKInvalid{Path: path, Reason: fmt.Sprintf("has control checksum %s, its index entry %s", sum, entry.Checksum)}
 	}
 	return nil
 }
@@ -290,6 +280,8 @@ func (b *PreFetchBuilder) isPlatformAPK(file string) bool {
 	return false
 }
 
+// copyLocalPackage copies a platform-built apk to the prefetch directory,
+// replacing any file already there.
 func copyLocalPackage(src, dest string) error {
 	in, err := os.Open(src)
 	if err != nil {
@@ -302,8 +294,7 @@ func copyLocalPackage(src, dest string) error {
 		return err
 	}
 	if _, err := io.Copy(out, in); err != nil {
-		_ = out.Close()
-		return err
+		return errors.Join(err, out.Close())
 	}
 	return out.Close()
 }

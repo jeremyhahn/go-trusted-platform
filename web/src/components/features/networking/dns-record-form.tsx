@@ -23,6 +23,7 @@ import {
   FormMessage,
 } from '@/components/ui/form';
 import { Input } from '@/components/ui/input';
+import { numberFieldProps } from '@/lib/number-field';
 import {
   Select,
   SelectContent,
@@ -39,10 +40,10 @@ const formSchema = z.object({
   name: z.string().min(1, 'Name is required'),
   type: z.enum(['A', 'AAAA', 'CNAME', 'MX', 'TXT', 'NS', 'SRV'] as const),
   value: z.string().min(1, 'Value is required'),
-  ttl: z.coerce.number().min(60).max(86400),
-  priority: z.coerce.number().min(0).optional(),
-  weight: z.coerce.number().min(0).optional(),
-  port: z.coerce.number().min(1).max(65535).optional(),
+  ttl: z.number().min(60).max(86400),
+  priority: z.number().min(0).optional(),
+  weight: z.number().min(0).optional(),
+  port: z.number().min(1).max(65535).optional(),
 });
 
 type FormValues = z.infer<typeof formSchema>;
@@ -67,7 +68,7 @@ export function DNSRecordForm({
   const isEdit = !!record;
 
   const form = useForm<FormValues>({
-    resolver: zodResolver(formSchema) as any, // zod 4 input/output split on coerced number fields (#451)
+    resolver: zodResolver(formSchema),
     defaultValues: {
       name: '',
       type: 'A',
@@ -305,7 +306,7 @@ export function DNSRecordForm({
                 <FormItem>
                   <FormLabel>TTL (seconds)</FormLabel>
                   <FormControl>
-                    <Input type="number" min={60} max={86400} {...field} />
+                    <Input type="number" min={60} max={86400} {...numberFieldProps(field)} />
                   </FormControl>
                   <FormDescription>Time to live (60-86400)</FormDescription>
                   <FormMessage />
@@ -321,7 +322,7 @@ export function DNSRecordForm({
                   <FormItem>
                     <FormLabel>Priority</FormLabel>
                     <FormControl>
-                      <Input type="number" min={0} {...field} />
+                      <Input type="number" min={0} {...numberFieldProps(field)} />
                     </FormControl>
                     <FormMessage />
                   </FormItem>
@@ -338,7 +339,7 @@ export function DNSRecordForm({
                     <FormItem>
                       <FormLabel>Weight</FormLabel>
                       <FormControl>
-                        <Input type="number" min={0} {...field} />
+                        <Input type="number" min={0} {...numberFieldProps(field)} />
                       </FormControl>
                       <FormMessage />
                     </FormItem>
@@ -352,7 +353,7 @@ export function DNSRecordForm({
                     <FormItem>
                       <FormLabel>Port</FormLabel>
                       <FormControl>
-                        <Input type="number" min={1} max={65535} {...field} />
+                        <Input type="number" min={1} max={65535} {...numberFieldProps(field)} />
                       </FormControl>
                       <FormMessage />
                     </FormItem>

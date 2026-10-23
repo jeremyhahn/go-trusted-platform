@@ -1,5 +1,8 @@
 # Push Infrastructure
 
+> **Status: REFERENCE** · Last verified: 2026-10-13
+> The `pkg/attestation/push` client and scheduler API; [architecture.md](architecture.md) is normative.
+
 The push subsystem distributes signed host manifests to remote verification services. It supports multiple transports, authentication methods, and trigger modes with built-in retry logic.
 
 ## Overview
@@ -557,4 +560,4 @@ schedCfg := push.DefaultSchedulerConfig()
 - [Manifest](manifest.md) - Building manifests to push
 - [Workload Attestation](workload-attestation.md) - Container attestation
 - [VM Attestation](vm-attestation.md) - VM attestation
-- [API Reference](api-reference.md) - REST/gRPC APIs
+- [API Reference](api.md) - REST/gRPC APIs

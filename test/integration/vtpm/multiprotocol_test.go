@@ -32,7 +32,6 @@ import (
 	"context"
 	"crypto/rand"
 	"fmt"
-	"strings"
 	"testing"
 	"time"
 
@@ -51,8 +50,6 @@ import (
 // Each adapter implements the VTPMCommands interface, enabling unified testing across
 // CLI, REST, gRPC, QUIC, MCP, and Unix protocols.
 func TestVTPMMultiProtocol(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 
@@ -138,9 +135,7 @@ func testBundleCreate(t *testing.T, ctx context.Context, cmd VTPMCommands, prefi
 		}
 
 		result, err := cmd.CreateBundle(testCtx, opts)
-		if isNotImplemented(err) {
-			t.Skip("CreateBundle not implemented for this adapter")
-		}
+		requireSurface(t, "CreateBundle", err)
 		require.NoError(t, err, "CreateBundle should succeed")
 		require.NotNil(t, result, "Result should not be nil")
 		require.NotNil(t, result.Bundle, "Bundle should not be nil")
@@ -163,9 +158,7 @@ func testBundleCreate(t *testing.T, ctx context.Context, cmd VTPMCommands, prefi
 		}
 
 		result, err := cmd.CreateBundle(testCtx, opts)
-		if isNotImplemented(err) {
-			t.Skip("CreateBundle not implemented for this adapter")
-		}
+		requireSurface(t, "CreateBundle", err)
 		require.NoError(t, err, "CreateBundle with ECC should succeed")
 		require.NotNil(t, result, "Result should not be nil")
 		require.NotNil(t, result.Bundle, "Bundle should not be nil")
@@ -187,9 +180,7 @@ func testBundleCreate(t *testing.T, ctx context.Context, cmd VTPMCommands, prefi
 		}
 
 		result, err := cmd.CreateBundle(testCtx, opts)
-		if isNotImplemented(err) {
-			t.Skip("CreateBundle not implemented for this adapter")
-		}
+		requireSurface(t, "CreateBundle", err)
 		require.NoError(t, err, "CreateBundle with SecureBoot should succeed")
 		require.NotNil(t, result, "Result should not be nil")
 		require.NotNil(t, result.Bundle, "Bundle should not be nil")
@@ -209,9 +200,7 @@ func testBundleCreate(t *testing.T, ctx context.Context, cmd VTPMCommands, prefi
 		}
 
 		_, err := cmd.CreateBundle(testCtx, opts)
-		if isNotImplemented(err) {
-			t.Skip("CreateBundle not implemented for this adapter")
-		}
+		requireSurface(t, "CreateBundle", err)
 		require.Error(t, err, "CreateBundle should fail with missing hostname")
 	})
 }
@@ -229,9 +218,7 @@ func testBundleGet(t *testing.T, ctx context.Context, cmd VTPMCommands, prefix s
 		SecureBootEnabled: false,
 	}
 	createResult, err := cmd.CreateBundle(testCtx, createOpts)
-	if isNotImplemented(err) {
-		t.Skip("CreateBundle not implemented for this adapter")
-	}
+	requireSurface(t, "CreateBundle", err)
 	require.NoError(t, err, "Setup: CreateBundle should succeed")
 	require.NotNil(t, createResult, "Setup: CreateBundle result should not be nil")
 	require.NotNil(t, createResult.Bundle, "Setup: Bundle should not be nil")
@@ -243,9 +230,7 @@ func testBundleGet(t *testing.T, ctx context.Context, cmd VTPMCommands, prefix s
 
 	t.Run("GetExistingBundle", func(t *testing.T) {
 		result, err := cmd.GetBundle(testCtx, GetBundleOptions{ID: createResult.Bundle.ID})
-		if isNotImplemented(err) {
-			t.Skip("GetBundle not implemented for this adapter")
-		}
+		requireSurface(t, "GetBundle", err)
 		require.NoError(t, err, "GetBundle should succeed")
 		require.NotNil(t, result, "Result should not be nil")
 		require.NotNil(t, result.Bundle, "Bundle should not be nil")
@@ -255,9 +240,7 @@ func testBundleGet(t *testing.T, ctx context.Context, cmd VTPMCommands, prefix s
 
 	t.Run("GetNonexistentBundleFails", func(t *testing.T) {
 		_, err := cmd.GetBundle(testCtx, GetBundleOptions{ID: prefix + "-nonexistent-bundle-id"})
-		if isNotImplemented(err) {
-			t.Skip("GetBundle not implemented for this adapter")
-		}
+		requireSurface(t, "GetBundle", err)
 		require.Error(t, err, "GetBundle should fail for nonexistent bundle")
 	})
 }
@@ -275,18 +258,14 @@ func testBundleDelete(t *testing.T, ctx context.Context, cmd VTPMCommands, prefi
 		SecureBootEnabled: false,
 	}
 	createResult, err := cmd.CreateBundle(testCtx, createOpts)
-	if isNotImplemented(err) {
-		t.Skip("CreateBundle not implemented for this adapter")
-	}
+	requireSurface(t, "CreateBundle", err)
 	require.NoError(t, err, "Setup: CreateBundle should succeed")
 	require.NotNil(t, createResult, "Setup: CreateBundle result should not be nil")
 	require.NotNil(t, createResult.Bundle, "Setup: Bundle should not be nil")
 
 	t.Run("DeleteExistingBundle", func(t *testing.T) {
 		result, err := cmd.DeleteBundle(testCtx, DeleteBundleOptions{ID: createResult.Bundle.ID})
-		if isNotImplemented(err) {
-			t.Skip("DeleteBundle not implemented for this adapter")
-		}
+		requireSurface(t, "DeleteBundle", err)
 		require.NoError(t, err, "DeleteBundle should succeed")
 		require.NotNil(t, result, "Result should not be nil")
 		assert.True(t, result.Success, "Delete should be successful")
@@ -294,17 +273,13 @@ func testBundleDelete(t *testing.T, ctx context.Context, cmd VTPMCommands, prefi
 
 	t.Run("VerifyBundleIsDeleted", func(t *testing.T) {
 		_, err := cmd.GetBundle(testCtx, GetBundleOptions{ID: createResult.Bundle.ID})
-		if isNotImplemented(err) {
-			t.Skip("GetBundle not implemented for this adapter")
-		}
+		requireSurface(t, "GetBundle", err)
 		require.Error(t, err, "GetBundle should fail for deleted bundle")
 	})
 
 	t.Run("DeleteNonexistentBundleFails", func(t *testing.T) {
 		_, err := cmd.DeleteBundle(testCtx, DeleteBundleOptions{ID: prefix + "-nonexistent-delete-id"})
-		if isNotImplemented(err) {
-			t.Skip("DeleteBundle not implemented for this adapter")
-		}
+		requireSurface(t, "DeleteBundle", err)
 		require.Error(t, err, "DeleteBundle should fail for nonexistent bundle")
 	})
 }
@@ -327,9 +302,7 @@ func testBundleList(t *testing.T, ctx context.Context, cmd VTPMCommands, prefix 
 			},
 		}
 		result, err := cmd.CreateBundle(testCtx, opts)
-		if isNotImplemented(err) {
-			t.Skip("CreateBundle not implemented for this adapter")
-		}
+		requireSurface(t, "CreateBundle", err)
 		require.NoError(t, err, "Setup: CreateBundle should succeed")
 		if result != nil && result.Bundle != nil && result.Bundle.ID != "" {
 			createdIDs = append(createdIDs, result.Bundle.ID)
@@ -346,9 +319,7 @@ func testBundleList(t *testing.T, ctx context.Context, cmd VTPMCommands, prefix 
 			Limit: 100,
 		}
 		result, err := cmd.ListBundles(testCtx, opts)
-		if isNotImplemented(err) {
-			t.Skip("ListBundles not implemented for this adapter")
-		}
+		requireSurface(t, "ListBundles", err)
 		require.NoError(t, err, "ListBundles should succeed")
 		require.NotNil(t, result, "Result should not be nil")
 		assert.GreaterOrEqual(t, len(result.Bundles), 3, "Should have at least 3 bundles")
@@ -359,9 +330,7 @@ func testBundleList(t *testing.T, ctx context.Context, cmd VTPMCommands, prefix 
 			Limit: 2,
 		}
 		result, err := cmd.ListBundles(testCtx, opts)
-		if isNotImplemented(err) {
-			t.Skip("ListBundles not implemented for this adapter")
-		}
+		requireSurface(t, "ListBundles", err)
 		require.NoError(t, err, "ListBundles should succeed with limit")
 		require.NotNil(t, result, "Result should not be nil")
 		assert.LessOrEqual(t, len(result.Bundles), 2, "Should respect limit")
@@ -373,9 +342,7 @@ func testBundleList(t *testing.T, ctx context.Context, cmd VTPMCommands, prefix 
 			Limit: 100,
 		}
 		result, err := cmd.ListBundles(testCtx, opts)
-		if isNotImplemented(err) {
-			t.Skip("ListBundles not implemented for this adapter")
-		}
+		requireSurface(t, "ListBundles", err)
 		require.NoError(t, err, "ListBundles should succeed for mode filter")
 		require.NotNil(t, result, "Result should not be nil")
 
@@ -403,9 +370,7 @@ func testBundleLifecycle(t *testing.T, ctx context.Context, cmd VTPMCommands, pr
 		}
 
 		createResult, err := cmd.CreateBundle(testCtx, createOpts)
-		if isNotImplemented(err) {
-			t.Skip("CreateBundle not implemented for this adapter")
-		}
+		requireSurface(t, "CreateBundle", err)
 		require.NoError(t, err, "CreateBundle should succeed")
 		require.NotNil(t, createResult, "Create result should not be nil")
 		require.NotNil(t, createResult.Bundle, "Bundle should not be nil")
@@ -415,9 +380,7 @@ func testBundleLifecycle(t *testing.T, ctx context.Context, cmd VTPMCommands, pr
 
 		// Get bundle
 		getResult, err := cmd.GetBundle(testCtx, GetBundleOptions{ID: bundleID})
-		if isNotImplemented(err) {
-			t.Skip("GetBundle not implemented for this adapter")
-		}
+		requireSurface(t, "GetBundle", err)
 		require.NoError(t, err, "GetBundle should succeed")
 		require.NotNil(t, getResult, "Get result should not be nil")
 		require.NotNil(t, getResult.Bundle, "Bundle should not be nil")
@@ -425,37 +388,26 @@ func testBundleLifecycle(t *testing.T, ctx context.Context, cmd VTPMCommands, pr
 
 		// Validate bundle
 		validateResult, err := cmd.ValidateBundle(testCtx, ValidateBundleOptions{ID: bundleID})
-		if isNotImplemented(err) {
-			t.Log("ValidateBundle not implemented, skipping validation step")
-		} else {
-			require.NoError(t, err, "ValidateBundle should succeed")
-			require.NotNil(t, validateResult, "Validate result should not be nil")
-			assert.True(t, validateResult.Valid, "Bundle should be valid")
-		}
+		requireSurface(t, "ValidateBundle", err)
+		require.NoError(t, err, "ValidateBundle should succeed")
+		require.NotNil(t, validateResult, "Validate result should not be nil")
+		assert.True(t, validateResult.Valid, "Bundle should be valid")
 
 		// Get bundle path
 		pathResult, err := cmd.GetBundlePath(testCtx, GetBundlePathOptions{ID: bundleID})
-		if isNotImplemented(err) {
-			t.Log("GetBundlePath not implemented, skipping path check")
-		} else {
-			require.NoError(t, err, "GetBundlePath should succeed")
-			assert.NotEmpty(t, pathResult.Path, "Path should not be empty")
-		}
+		requireSurface(t, "GetBundlePath", err)
+		require.NoError(t, err, "GetBundlePath should succeed")
+		assert.NotEmpty(t, pathResult.Path, "Path should not be empty")
 
 		// Get TPM socket path
 		socketResult, err := cmd.GetTPMSocketPath(testCtx, GetTPMSocketPathOptions{ID: bundleID})
-		if isNotImplemented(err) {
-			t.Log("GetTPMSocketPath not implemented, skipping socket check")
-		} else {
-			require.NoError(t, err, "GetTPMSocketPath should succeed")
-			assert.NotEmpty(t, socketResult.Path, "Socket path should not be empty")
-		}
+		requireSurface(t, "GetTPMSocketPath", err)
+		require.NoError(t, err, "GetTPMSocketPath should succeed")
+		assert.NotEmpty(t, socketResult.Path, "Socket path should not be empty")
 
 		// Delete bundle
 		deleteResult, err := cmd.DeleteBundle(testCtx, DeleteBundleOptions{ID: bundleID})
-		if isNotImplemented(err) {
-			t.Skip("DeleteBundle not implemented for this adapter")
-		}
+		requireSurface(t, "DeleteBundle", err)
 		require.NoError(t, err, "DeleteBundle should succeed")
 		require.NotNil(t, deleteResult, "Delete result should not be nil")
 		assert.True(t, deleteResult.Success, "Delete should be successful")
@@ -492,9 +444,7 @@ func testTemplateCreate(t *testing.T, ctx context.Context, cmd VTPMCommands, pre
 		}
 
 		result, err := cmd.CreateTemplate(testCtx, opts)
-		if isNotImplemented(err) {
-			t.Skip("CreateTemplate not implemented for this adapter")
-		}
+		requireSurface(t, "CreateTemplate", err)
 		require.NoError(t, err, "CreateTemplate should succeed")
 		require.NotNil(t, result, "Result should not be nil")
 		require.NotNil(t, result.Template, "Template should not be nil")
@@ -517,9 +467,7 @@ func testTemplateCreate(t *testing.T, ctx context.Context, cmd VTPMCommands, pre
 		}
 
 		result, err := cmd.CreateTemplate(testCtx, opts)
-		if isNotImplemented(err) {
-			t.Skip("CreateTemplate not implemented for this adapter")
-		}
+		requireSurface(t, "CreateTemplate", err)
 		require.NoError(t, err, "CreateTemplate with SecureBoot should succeed")
 		require.NotNil(t, result, "Result should not be nil")
 		require.NotNil(t, result.Template, "Template should not be nil")
@@ -542,9 +490,7 @@ func testTemplateCreate(t *testing.T, ctx context.Context, cmd VTPMCommands, pre
 		}
 
 		result, err := cmd.CreateTemplate(testCtx, opts)
-		if isNotImplemented(err) {
-			t.Skip("CreateTemplate not implemented for this adapter")
-		}
+		requireSurface(t, "CreateTemplate", err)
 		require.NoError(t, err, "CreateTemplate with ECC should succeed")
 		require.NotNil(t, result, "Result should not be nil")
 		require.NotNil(t, result.Template, "Template should not be nil")
@@ -563,9 +509,7 @@ func testTemplateCreate(t *testing.T, ctx context.Context, cmd VTPMCommands, pre
 		}
 
 		_, err := cmd.CreateTemplate(testCtx, opts)
-		if isNotImplemented(err) {
-			t.Skip("CreateTemplate not implemented for this adapter")
-		}
+		requireSurface(t, "CreateTemplate", err)
 		require.Error(t, err, "CreateTemplate should fail with missing ID")
 	})
 }
@@ -583,9 +527,7 @@ func testTemplateGet(t *testing.T, ctx context.Context, cmd VTPMCommands, prefix
 		SecureBootEnabled: false,
 	}
 	createResult, err := cmd.CreateTemplate(testCtx, createOpts)
-	if isNotImplemented(err) {
-		t.Skip("CreateTemplate not implemented for this adapter")
-	}
+	requireSurface(t, "CreateTemplate", err)
 	require.NoError(t, err, "Setup: CreateTemplate should succeed")
 	defer func() {
 		if createResult != nil && createResult.Template != nil && createResult.Template.ID != "" {
@@ -595,9 +537,7 @@ func testTemplateGet(t *testing.T, ctx context.Context, cmd VTPMCommands, prefix
 
 	t.Run("GetExistingTemplate", func(t *testing.T) {
 		result, err := cmd.GetTemplate(testCtx, GetTemplateOptions{ID: templateID})
-		if isNotImplemented(err) {
-			t.Skip("GetTemplate not implemented for this adapter")
-		}
+		requireSurface(t, "GetTemplate", err)
 		require.NoError(t, err, "GetTemplate should succeed")
 		require.NotNil(t, result, "Result should not be nil")
 		require.NotNil(t, result.Template, "Template should not be nil")
@@ -607,9 +547,7 @@ func testTemplateGet(t *testing.T, ctx context.Context, cmd VTPMCommands, prefix
 
 	t.Run("GetNonexistentTemplateFails", func(t *testing.T) {
 		_, err := cmd.GetTemplate(testCtx, GetTemplateOptions{ID: prefix + "-nonexistent-template-id"})
-		if isNotImplemented(err) {
-			t.Skip("GetTemplate not implemented for this adapter")
-		}
+		requireSurface(t, "GetTemplate", err)
 		require.Error(t, err, "GetTemplate should fail for nonexistent template")
 	})
 }
@@ -627,16 +565,12 @@ func testTemplateDelete(t *testing.T, ctx context.Context, cmd VTPMCommands, pre
 		SecureBootEnabled: false,
 	}
 	_, err := cmd.CreateTemplate(testCtx, createOpts)
-	if isNotImplemented(err) {
-		t.Skip("CreateTemplate not implemented for this adapter")
-	}
+	requireSurface(t, "CreateTemplate", err)
 	require.NoError(t, err, "Setup: CreateTemplate should succeed")
 
 	t.Run("DeleteExistingTemplate", func(t *testing.T) {
 		result, err := cmd.DeleteTemplate(testCtx, DeleteTemplateOptions{ID: templateID})
-		if isNotImplemented(err) {
-			t.Skip("DeleteTemplate not implemented for this adapter")
-		}
+		requireSurface(t, "DeleteTemplate", err)
 		require.NoError(t, err, "DeleteTemplate should succeed")
 		require.NotNil(t, result, "Result should not be nil")
 		assert.True(t, result.Success, "Delete should be successful")
@@ -644,17 +578,13 @@ func testTemplateDelete(t *testing.T, ctx context.Context, cmd VTPMCommands, pre
 
 	t.Run("VerifyTemplateIsDeleted", func(t *testing.T) {
 		_, err := cmd.GetTemplate(testCtx, GetTemplateOptions{ID: templateID})
-		if isNotImplemented(err) {
-			t.Skip("GetTemplate not implemented for this adapter")
-		}
+		requireSurface(t, "GetTemplate", err)
 		require.Error(t, err, "GetTemplate should fail for deleted template")
 	})
 
 	t.Run("DeleteNonexistentTemplateFails", func(t *testing.T) {
 		_, err := cmd.DeleteTemplate(testCtx, DeleteTemplateOptions{ID: prefix + "-nonexistent-template-delete"})
-		if isNotImplemented(err) {
-			t.Skip("DeleteTemplate not implemented for this adapter")
-		}
+		requireSurface(t, "DeleteTemplate", err)
 		require.Error(t, err, "DeleteTemplate should fail for nonexistent template")
 	})
 }
@@ -674,9 +604,7 @@ func testTemplateList(t *testing.T, ctx context.Context, cmd VTPMCommands, prefi
 			SecureBootEnabled: false,
 		}
 		result, err := cmd.CreateTemplate(testCtx, opts)
-		if isNotImplemented(err) {
-			t.Skip("CreateTemplate not implemented for this adapter")
-		}
+		requireSurface(t, "CreateTemplate", err)
 		require.NoError(t, err, "Setup: CreateTemplate should succeed")
 		if result != nil && result.Template != nil && result.Template.ID != "" {
 			createdIDs = append(createdIDs, result.Template.ID)
@@ -690,9 +618,7 @@ func testTemplateList(t *testing.T, ctx context.Context, cmd VTPMCommands, prefi
 
 	t.Run("ListAllTemplates", func(t *testing.T) {
 		result, err := cmd.ListTemplates(testCtx, ListTemplatesOptions{})
-		if isNotImplemented(err) {
-			t.Skip("ListTemplates not implemented for this adapter")
-		}
+		requireSurface(t, "ListTemplates", err)
 		require.NoError(t, err, "ListTemplates should succeed")
 		require.NotNil(t, result, "Result should not be nil")
 		assert.GreaterOrEqual(t, len(result.Templates), 3, "Should have at least 3 templates")
@@ -712,9 +638,7 @@ func testTemplateClone(t *testing.T, ctx context.Context, cmd VTPMCommands, pref
 		SecureBootEnabled: false,
 	}
 	_, err := cmd.CreateTemplate(testCtx, createOpts)
-	if isNotImplemented(err) {
-		t.Skip("CreateTemplate not implemented for this adapter")
-	}
+	requireSurface(t, "CreateTemplate", err)
 	require.NoError(t, err, "Setup: CreateTemplate should succeed")
 
 	var clonedBundleID string
@@ -736,9 +660,7 @@ func testTemplateClone(t *testing.T, ctx context.Context, cmd VTPMCommands, pref
 		}
 
 		result, err := cmd.CloneTemplate(testCtx, cloneOpts)
-		if isNotImplemented(err) {
-			t.Skip("CloneTemplate not implemented for this adapter")
-		}
+		requireSurface(t, "CloneTemplate", err)
 		require.NoError(t, err, "CloneTemplate should succeed")
 		require.NotNil(t, result, "Result should not be nil")
 		require.NotNil(t, result.Bundle, "Bundle should not be nil")
@@ -756,9 +678,7 @@ func testTemplateClone(t *testing.T, ctx context.Context, cmd VTPMCommands, pref
 		}
 
 		_, err := cmd.CloneTemplate(testCtx, cloneOpts)
-		if isNotImplemented(err) {
-			t.Skip("CloneTemplate not implemented for this adapter")
-		}
+		requireSurface(t, "CloneTemplate", err)
 		require.Error(t, err, "CloneTemplate should fail for nonexistent template")
 	})
 
@@ -769,9 +689,7 @@ func testTemplateClone(t *testing.T, ctx context.Context, cmd VTPMCommands, pref
 		}
 
 		_, err := cmd.CloneTemplate(testCtx, cloneOpts)
-		if isNotImplemented(err) {
-			t.Skip("CloneTemplate not implemented for this adapter")
-		}
+		requireSurface(t, "CloneTemplate", err)
 		require.Error(t, err, "CloneTemplate should fail with missing hostname")
 	})
 }
@@ -798,9 +716,7 @@ func testExportBundle(t *testing.T, ctx context.Context, cmd VTPMCommands, prefi
 		SecureBootEnabled: false,
 	}
 	createResult, err := cmd.CreateBundle(testCtx, createOpts)
-	if isNotImplemented(err) {
-		t.Skip("CreateBundle not implemented for this adapter")
-	}
+	requireSurface(t, "CreateBundle", err)
 	require.NoError(t, err, "Setup: CreateBundle should succeed")
 	require.NotNil(t, createResult, "Create result should not be nil")
 	require.NotNil(t, createResult.Bundle, "Bundle should not be nil")
@@ -812,9 +728,7 @@ func testExportBundle(t *testing.T, ctx context.Context, cmd VTPMCommands, prefi
 
 	t.Run("ExportExistingBundle", func(t *testing.T) {
 		result, err := cmd.ExportBundle(testCtx, ExportBundleOptions{ID: createResult.Bundle.ID})
-		if isNotImplemented(err) {
-			t.Skip("ExportBundle not implemented for this adapter")
-		}
+		requireSurface(t, "ExportBundle", err)
 		require.NoError(t, err, "ExportBundle should succeed")
 		require.NotNil(t, result, "Result should not be nil")
 		assert.NotEmpty(t, result.ArchivePath, "Archive path should not be empty")
@@ -822,9 +736,7 @@ func testExportBundle(t *testing.T, ctx context.Context, cmd VTPMCommands, prefi
 
 	t.Run("ExportNonexistentBundleFails", func(t *testing.T) {
 		_, err := cmd.ExportBundle(testCtx, ExportBundleOptions{ID: prefix + "-nonexistent-export"})
-		if isNotImplemented(err) {
-			t.Skip("ExportBundle not implemented for this adapter")
-		}
+		requireSurface(t, "ExportBundle", err)
 		require.Error(t, err, "ExportBundle should fail for nonexistent bundle")
 	})
 }
@@ -842,17 +754,13 @@ func testImportBundle(t *testing.T, ctx context.Context, cmd VTPMCommands, prefi
 		SecureBootEnabled: false,
 	}
 	createResult, err := cmd.CreateBundle(testCtx, createOpts)
-	if isNotImplemented(err) {
-		t.Skip("CreateBundle not implemented for this adapter")
-	}
+	requireSurface(t, "CreateBundle", err)
 	require.NoError(t, err, "Setup: CreateBundle should succeed")
 	require.NotNil(t, createResult, "Create result should not be nil")
 	require.NotNil(t, createResult.Bundle, "Bundle should not be nil")
 
 	exportResult, err := cmd.ExportBundle(testCtx, ExportBundleOptions{ID: createResult.Bundle.ID})
-	if isNotImplemented(err) {
-		t.Skip("ExportBundle not implemented for this adapter")
-	}
+	requireSurface(t, "ExportBundle", err)
 	require.NoError(t, err, "Setup: ExportBundle should succeed")
 
 	// Delete the original bundle to allow importing
@@ -868,9 +776,7 @@ func testImportBundle(t *testing.T, ctx context.Context, cmd VTPMCommands, prefi
 
 	t.Run("ImportValidBundle", func(t *testing.T) {
 		result, err := cmd.ImportBundle(testCtx, ImportBundleOptions{ArchivePath: exportResult.ArchivePath})
-		if isNotImplemented(err) {
-			t.Skip("ImportBundle not implemented for this adapter")
-		}
+		requireSurface(t, "ImportBundle", err)
 		require.NoError(t, err, "ImportBundle should succeed")
 		require.NotNil(t, result, "Result should not be nil")
 		require.NotNil(t, result.Bundle, "Bundle should not be nil")
@@ -881,9 +787,7 @@ func testImportBundle(t *testing.T, ctx context.Context, cmd VTPMCommands, prefi
 
 	t.Run("ImportInvalidPathFails", func(t *testing.T) {
 		_, err := cmd.ImportBundle(testCtx, ImportBundleOptions{ArchivePath: "/nonexistent/path/bundle.tar.gz"})
-		if isNotImplemented(err) {
-			t.Skip("ImportBundle not implemented for this adapter")
-		}
+		requireSurface(t, "ImportBundle", err)
 		require.Error(t, err, "ImportBundle should fail with invalid path")
 	})
 }
@@ -909,9 +813,7 @@ func testValidateBundle(t *testing.T, ctx context.Context, cmd VTPMCommands, pre
 		SecureBootEnabled: false,
 	}
 	createResult, err := cmd.CreateBundle(testCtx, createOpts)
-	if isNotImplemented(err) {
-		t.Skip("CreateBundle not implemented for this adapter")
-	}
+	requireSurface(t, "CreateBundle", err)
 	require.NoError(t, err, "Setup: CreateBundle should succeed")
 	require.NotNil(t, createResult, "Create result should not be nil")
 	require.NotNil(t, createResult.Bundle, "Bundle should not be nil")
@@ -923,9 +825,7 @@ func testValidateBundle(t *testing.T, ctx context.Context, cmd VTPMCommands, pre
 
 	t.Run("ValidateExistingBundle", func(t *testing.T) {
 		result, err := cmd.ValidateBundle(testCtx, ValidateBundleOptions{ID: createResult.Bundle.ID})
-		if isNotImplemented(err) {
-			t.Skip("ValidateBundle not implemented for this adapter")
-		}
+		requireSurface(t, "ValidateBundle", err)
 		require.NoError(t, err, "ValidateBundle should succeed")
 		require.NotNil(t, result, "Result should not be nil")
 		assert.True(t, result.Valid, "Bundle should be valid")
@@ -934,9 +834,7 @@ func testValidateBundle(t *testing.T, ctx context.Context, cmd VTPMCommands, pre
 
 	t.Run("ValidateNonexistentBundleFails", func(t *testing.T) {
 		_, err := cmd.ValidateBundle(testCtx, ValidateBundleOptions{ID: prefix + "-nonexistent-validate"})
-		if isNotImplemented(err) {
-			t.Skip("ValidateBundle not implemented for this adapter")
-		}
+		requireSurface(t, "ValidateBundle", err)
 		require.Error(t, err, "ValidateBundle should fail for nonexistent bundle")
 	})
 }
@@ -965,9 +863,7 @@ func testStartStop(t *testing.T, ctx context.Context, cmd VTPMCommands, prefix s
 		SecureBootEnabled: false,
 	}
 	createResult, err := cmd.CreateBundle(testCtx, createOpts)
-	if isNotImplemented(err) {
-		t.Skip("CreateBundle not implemented for this adapter")
-	}
+	requireSurface(t, "CreateBundle", err)
 	require.NoError(t, err, "Setup: CreateBundle should succeed")
 	require.NotNil(t, createResult, "Create result should not be nil")
 	require.NotNil(t, createResult.Bundle, "Bundle should not be nil")
@@ -985,9 +881,7 @@ func testStartStop(t *testing.T, ctx context.Context, cmd VTPMCommands, prefix s
 
 	t.Run("StartVTPM", func(t *testing.T) {
 		result, err := cmd.Start(testCtx, StartOptions{BundleID: bundleID})
-		if isNotImplemented(err) {
-			t.Skip("Start not implemented for this adapter")
-		}
+		requireSurface(t, "Start", err)
 		require.NoError(t, err, "Start should succeed")
 		require.NotNil(t, result, "Result should not be nil")
 		assert.Equal(t, bundleID, result.BundleID, "Bundle ID should match")
@@ -998,12 +892,10 @@ func testStartStop(t *testing.T, ctx context.Context, cmd VTPMCommands, prefix s
 
 	t.Run("IsRunning", func(t *testing.T) {
 		if !startSucceeded {
-			t.Skip("Skipping: Start did not succeed")
+			t.Fatal(ErrMissingPrerequisite{Name: "a running vTPM", Provide: "the StartVTPM subtest starts it and failed; fix that failure first"})
 		}
 		result, err := cmd.IsRunning(testCtx, IsRunningOptions{BundleID: bundleID})
-		if isNotImplemented(err) {
-			t.Skip("IsRunning not implemented for this adapter")
-		}
+		requireSurface(t, "IsRunning", err)
 		require.NoError(t, err, "IsRunning should succeed")
 		require.NotNil(t, result, "Result should not be nil")
 		assert.Equal(t, bundleID, result.BundleID, "Bundle ID should match")
@@ -1012,12 +904,10 @@ func testStartStop(t *testing.T, ctx context.Context, cmd VTPMCommands, prefix s
 
 	t.Run("StopVTPM", func(t *testing.T) {
 		if !startSucceeded {
-			t.Skip("Skipping: Start did not succeed")
+			t.Fatal(ErrMissingPrerequisite{Name: "a running vTPM", Provide: "the StartVTPM subtest starts it and failed; fix that failure first"})
 		}
 		result, err := cmd.Stop(testCtx, StopOptions{BundleID: bundleID})
-		if isNotImplemented(err) {
-			t.Skip("Stop not implemented for this adapter")
-		}
+		requireSurface(t, "Stop", err)
 		require.NoError(t, err, "Stop should succeed")
 		require.NotNil(t, result, "Result should not be nil")
 		assert.Equal(t, bundleID, result.BundleID, "Bundle ID should match")
@@ -1026,12 +916,10 @@ func testStartStop(t *testing.T, ctx context.Context, cmd VTPMCommands, prefix s
 
 	t.Run("IsRunningAfterStop", func(t *testing.T) {
 		if !startSucceeded {
-			t.Skip("Skipping: Start did not succeed")
+			t.Fatal(ErrMissingPrerequisite{Name: "a running vTPM", Provide: "the StartVTPM subtest starts it and failed; fix that failure first"})
 		}
 		result, err := cmd.IsRunning(testCtx, IsRunningOptions{BundleID: bundleID})
-		if isNotImplemented(err) {
-			t.Skip("IsRunning not implemented for this adapter")
-		}
+		requireSurface(t, "IsRunning", err)
 		require.NoError(t, err, "IsRunning should succeed")
 		require.NotNil(t, result, "Result should not be nil")
 		assert.False(t, result.Running, "vTPM should not be running after stop")
@@ -1051,9 +939,7 @@ func testSealUnseal(t *testing.T, ctx context.Context, cmd VTPMCommands, prefix 
 		SecureBootEnabled: false,
 	}
 	createResult, err := cmd.CreateBundle(testCtx, createOpts)
-	if isNotImplemented(err) {
-		t.Skip("CreateBundle not implemented for this adapter")
-	}
+	requireSurface(t, "CreateBundle", err)
 	require.NoError(t, err, "Setup: CreateBundle should succeed")
 	require.NotNil(t, createResult, "Create result should not be nil")
 	require.NotNil(t, createResult.Bundle, "Bundle should not be nil")
@@ -1066,9 +952,7 @@ func testSealUnseal(t *testing.T, ctx context.Context, cmd VTPMCommands, prefix 
 
 	// Start the vTPM
 	_, err = cmd.Start(testCtx, StartOptions{BundleID: bundleID})
-	if isNotImplemented(err) {
-		t.Skip("Start not implemented for this adapter")
-	}
+	requireSurface(t, "Start", err)
 	require.NoError(t, err, "Setup: Start should succeed")
 
 	t.Run("SealAndUnseal", func(t *testing.T) {
@@ -1082,9 +966,7 @@ func testSealUnseal(t *testing.T, ctx context.Context, cmd VTPMCommands, prefix 
 			BundleID: bundleID,
 			Data:     plaintext,
 		})
-		if isNotImplemented(err) {
-			t.Skip("Seal not implemented for this adapter")
-		}
+		requireSurface(t, "Seal", err)
 		require.NoError(t, err, "Seal should succeed")
 		require.NotNil(t, sealResult, "Seal result should not be nil")
 		assert.NotEmpty(t, sealResult.SealedData, "Sealed data should not be empty")
@@ -1095,9 +977,7 @@ func testSealUnseal(t *testing.T, ctx context.Context, cmd VTPMCommands, prefix 
 			BundleID:   bundleID,
 			SealedData: sealResult.SealedData,
 		})
-		if isNotImplemented(err) {
-			t.Skip("Unseal not implemented for this adapter")
-		}
+		requireSurface(t, "Unseal", err)
 		require.NoError(t, err, "Unseal should succeed")
 		require.NotNil(t, unsealResult, "Unseal result should not be nil")
 		assert.True(t, bytes.Equal(plaintext, unsealResult.Data), "Unsealed data should match original plaintext")
@@ -1115,9 +995,7 @@ func testSealUnseal(t *testing.T, ctx context.Context, cmd VTPMCommands, prefix 
 			Data:     plaintext,
 			PCRs:     []int{0, 1, 7},
 		})
-		if isNotImplemented(err) {
-			t.Skip("Seal not implemented for this adapter")
-		}
+		requireSurface(t, "Seal", err)
 		require.NoError(t, err, "Seal with PCR policy should succeed")
 		require.NotNil(t, sealResult, "Seal result should not be nil")
 		assert.NotEmpty(t, sealResult.SealedData, "Sealed data should not be empty")
@@ -1127,9 +1005,7 @@ func testSealUnseal(t *testing.T, ctx context.Context, cmd VTPMCommands, prefix 
 			BundleID:   bundleID,
 			SealedData: sealResult.SealedData,
 		})
-		if isNotImplemented(err) {
-			t.Skip("Unseal not implemented for this adapter")
-		}
+		requireSurface(t, "Unseal", err)
 		require.NoError(t, err, "Unseal should succeed when PCRs match")
 		require.NotNil(t, unsealResult, "Unseal result should not be nil")
 		assert.True(t, bytes.Equal(plaintext, unsealResult.Data), "Unsealed data should match original plaintext")
@@ -1149,9 +1025,7 @@ func testPCROperations(t *testing.T, ctx context.Context, cmd VTPMCommands, pref
 		SecureBootEnabled: false,
 	}
 	createResult, err := cmd.CreateBundle(testCtx, createOpts)
-	if isNotImplemented(err) {
-		t.Skip("CreateBundle not implemented for this adapter")
-	}
+	requireSurface(t, "CreateBundle", err)
 	require.NoError(t, err, "Setup: CreateBundle should succeed")
 	require.NotNil(t, createResult, "Create result should not be nil")
 	require.NotNil(t, createResult.Bundle, "Bundle should not be nil")
@@ -1164,9 +1038,7 @@ func testPCROperations(t *testing.T, ctx context.Context, cmd VTPMCommands, pref
 
 	// Start the vTPM
 	_, err = cmd.Start(testCtx, StartOptions{BundleID: bundleID})
-	if isNotImplemented(err) {
-		t.Skip("Start not implemented for this adapter")
-	}
+	requireSurface(t, "Start", err)
 	require.NoError(t, err, "Setup: Start should succeed")
 
 	t.Run("ReadPCR", func(t *testing.T) {
@@ -1174,9 +1046,7 @@ func testPCROperations(t *testing.T, ctx context.Context, cmd VTPMCommands, pref
 			BundleID: bundleID,
 			PCRIndex: 0,
 		})
-		if isNotImplemented(err) {
-			t.Skip("ReadPCR not implemented for this adapter")
-		}
+		requireSurface(t, "ReadPCR", err)
 		require.NoError(t, err, "ReadPCR should succeed")
 		require.NotNil(t, result, "Result should not be nil")
 		assert.Equal(t, bundleID, result.BundleID, "Bundle ID should match")
@@ -1191,9 +1061,7 @@ func testPCROperations(t *testing.T, ctx context.Context, cmd VTPMCommands, pref
 			BundleID: bundleID,
 			PCRIndex: 16, // Use PCR 16 which is typically user-extendable
 		})
-		if isNotImplemented(err) {
-			t.Skip("ReadPCR not implemented for this adapter")
-		}
+		requireSurface(t, "ReadPCR", err)
 		require.NoError(t, err, "ReadPCR should succeed")
 		initialValue := initialResult.Value
 
@@ -1204,9 +1072,7 @@ func testPCROperations(t *testing.T, ctx context.Context, cmd VTPMCommands, pref
 			PCRIndex: 16,
 			Data:     extendData,
 		})
-		if isNotImplemented(err) {
-			t.Skip("ExtendPCR not implemented for this adapter")
-		}
+		requireSurface(t, "ExtendPCR", err)
 		require.NoError(t, err, "ExtendPCR should succeed")
 		require.NotNil(t, extendResult, "Result should not be nil")
 		assert.True(t, extendResult.Extended, "PCR should be extended")
@@ -1228,9 +1094,7 @@ func testPCROperations(t *testing.T, ctx context.Context, cmd VTPMCommands, pref
 				BundleID: bundleID,
 				PCRIndex: pcrIndex,
 			})
-			if isNotImplemented(err) {
-				t.Skipf("ReadPCR not implemented for this adapter")
-			}
+			requireSurface(t, "ReadPCR", err)
 			require.NoError(t, err, "ReadPCR for PCR %d should succeed", pcrIndex)
 			require.NotNil(t, result, "Result should not be nil for PCR %d", pcrIndex)
 			assert.Equal(t, pcrIndex, result.PCRIndex, "PCR index should match")
@@ -1251,9 +1115,7 @@ func testQuote(t *testing.T, ctx context.Context, cmd VTPMCommands, prefix strin
 		SecureBootEnabled: false,
 	}
 	createResult, err := cmd.CreateBundle(testCtx, createOpts)
-	if isNotImplemented(err) {
-		t.Skip("CreateBundle not implemented for this adapter")
-	}
+	requireSurface(t, "CreateBundle", err)
 	require.NoError(t, err, "Setup: CreateBundle should succeed")
 	require.NotNil(t, createResult, "Create result should not be nil")
 	require.NotNil(t, createResult.Bundle, "Bundle should not be nil")
@@ -1266,9 +1128,7 @@ func testQuote(t *testing.T, ctx context.Context, cmd VTPMCommands, prefix strin
 
 	// Start the vTPM
 	_, err = cmd.Start(testCtx, StartOptions{BundleID: bundleID})
-	if isNotImplemented(err) {
-		t.Skip("Start not implemented for this adapter")
-	}
+	requireSurface(t, "Start", err)
 	require.NoError(t, err, "Setup: Start should succeed")
 
 	t.Run("GenerateQuote", func(t *testing.T) {
@@ -1282,9 +1142,7 @@ func testQuote(t *testing.T, ctx context.Context, cmd VTPMCommands, prefix strin
 			Nonce:    nonce,
 			PCRs:     []int{0, 1, 7},
 		})
-		if isNotImplemented(err) {
-			t.Skip("Quote not implemented for this adapter")
-		}
+		requireSurface(t, "Quote", err)
 		require.NoError(t, err, "Quote should succeed")
 		require.NotNil(t, result, "Result should not be nil")
 		assert.Equal(t, bundleID, result.BundleID, "Bundle ID should match")
@@ -1312,9 +1170,7 @@ func testQuote(t *testing.T, ctx context.Context, cmd VTPMCommands, prefix strin
 			Nonce:    nonce1,
 			PCRs:     []int{0},
 		})
-		if isNotImplemented(err) {
-			t.Skip("Quote not implemented for this adapter")
-		}
+		requireSurface(t, "Quote", err)
 		require.NoError(t, err, "Quote with nonce1 should succeed")
 
 		// Generate second nonce
@@ -1340,8 +1196,6 @@ func testQuote(t *testing.T, ctx context.Context, cmd VTPMCommands, prefix strin
 // =============================================================================
 
 func TestVTPMCLI(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
@@ -1357,8 +1211,6 @@ func TestVTPMCLI(t *testing.T) {
 }
 
 func TestVTPMREST(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
@@ -1374,8 +1226,6 @@ func TestVTPMREST(t *testing.T) {
 }
 
 func TestVTPMGRPC(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
@@ -1391,8 +1241,6 @@ func TestVTPMGRPC(t *testing.T) {
 }
 
 func TestVTPMQUIC(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
@@ -1409,8 +1257,6 @@ func TestVTPMQUIC(t *testing.T) {
 }
 
 func TestVTPMMCP(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
@@ -1427,8 +1273,6 @@ func TestVTPMMCP(t *testing.T) {
 }
 
 func TestVTPMUnix(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
@@ -1448,8 +1292,6 @@ func TestVTPMUnix(t *testing.T) {
 // =============================================================================
 
 func TestVTPMErrorHandling(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
@@ -1472,17 +1314,13 @@ func TestVTPMErrorHandling(t *testing.T) {
 
 			t.Run("GetBundle_NotFound", func(t *testing.T) {
 				_, err := adapter.GetBundle(ctx, GetBundleOptions{ID: "nonexistent-bundle-id-" + prefix})
-				if isNotImplemented(err) {
-					t.Skip("GetBundle not implemented for this adapter")
-				}
+				requireSurface(t, "GetBundle", err)
 				require.Error(t, err, "GetBundle should return error for non-existent bundle")
 			})
 
 			t.Run("GetTemplate_NotFound", func(t *testing.T) {
 				_, err := adapter.GetTemplate(ctx, GetTemplateOptions{ID: "nonexistent-template-id-" + prefix})
-				if isNotImplemented(err) {
-					t.Skip("GetTemplate not implemented for this adapter")
-				}
+				requireSurface(t, "GetTemplate", err)
 				require.Error(t, err, "GetTemplate should return error for non-existent template")
 			})
 
@@ -1493,18 +1331,14 @@ func TestVTPMErrorHandling(t *testing.T) {
 					EKAlgorithm: vtpm.EKAlgorithmRSA,
 				}
 				_, err := adapter.CreateBundle(ctx, opts)
-				if isNotImplemented(err) {
-					t.Skip("CreateBundle not implemented for this adapter")
-				}
+				requireSurface(t, "CreateBundle", err)
 				// Some adapters may accept empty mode, which is fine
 				// Just verifying the call doesn't panic
 			})
 
 			t.Run("DeleteBundle_NotFound", func(t *testing.T) {
 				_, err := adapter.DeleteBundle(ctx, DeleteBundleOptions{ID: "nonexistent-delete-id-" + prefix})
-				if isNotImplemented(err) {
-					t.Skip("DeleteBundle not implemented for this adapter")
-				}
+				requireSurface(t, "DeleteBundle", err)
 				require.Error(t, err, "DeleteBundle should fail for non-existent bundle")
 			})
 
@@ -1514,25 +1348,19 @@ func TestVTPMErrorHandling(t *testing.T) {
 					Hostname:   "test-clone-invalid",
 				}
 				_, err := adapter.CloneTemplate(ctx, opts)
-				if isNotImplemented(err) {
-					t.Skip("CloneTemplate not implemented for this adapter")
-				}
+				requireSurface(t, "CloneTemplate", err)
 				require.Error(t, err, "CloneTemplate should fail for non-existent template")
 			})
 
 			t.Run("ExportBundle_NotFound", func(t *testing.T) {
 				_, err := adapter.ExportBundle(ctx, ExportBundleOptions{ID: "nonexistent-export-id-" + prefix})
-				if isNotImplemented(err) {
-					t.Skip("ExportBundle not implemented for this adapter")
-				}
+				requireSurface(t, "ExportBundle", err)
 				require.Error(t, err, "ExportBundle should fail for non-existent bundle")
 			})
 
 			t.Run("ValidateBundle_NotFound", func(t *testing.T) {
 				_, err := adapter.ValidateBundle(ctx, ValidateBundleOptions{ID: "nonexistent-validate-id-" + prefix})
-				if isNotImplemented(err) {
-					t.Skip("ValidateBundle not implemented for this adapter")
-				}
+				requireSurface(t, "ValidateBundle", err)
 				require.Error(t, err, "ValidateBundle should fail for non-existent bundle")
 			})
 		})
@@ -1542,24 +1370,3 @@ func TestVTPMErrorHandling(t *testing.T) {
 // =============================================================================
 // Helper Functions
 // =============================================================================
-
-// isNotImplemented checks if an error indicates the operation is not implemented
-// or the service is unavailable (not registered in daemon test mode).
-func isNotImplemented(err error) bool {
-	if err == nil {
-		return false
-	}
-	errMsg := strings.ToLower(err.Error())
-	return strings.Contains(errMsg, "not implemented") ||
-		strings.Contains(errMsg, "unimplemented") ||
-		strings.Contains(errMsg, "not supported") ||
-		strings.Contains(errMsg, "service unavailable") ||
-		strings.Contains(errMsg, "not available") ||
-		strings.Contains(errMsg, "unknown service") ||
-		strings.Contains(errMsg, "connection required") ||
-		strings.Contains(errMsg, "404 page not found") ||
-		strings.Contains(errMsg, "status: 404") ||
-		strings.Contains(errMsg, "context canceled") ||
-		strings.Contains(errMsg, "context deadline exceeded") ||
-		strings.Contains(errMsg, "invalid hash function")
-}

@@ -20,6 +20,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/jeremyhahn/go-trusted-platform/pkg/crypto/aesgcm"
 )
 
 // Mock KMS client for testing
@@ -612,6 +614,31 @@ func TestDecryptContent_TamperedCiphertext(t *testing.T) {
 	_, err := decryptContent(ciphertext, dek)
 	if err == nil {
 		t.Fatal("expected error for tampered ciphertext")
+	}
+}
+
+// A layer blob too short to hold a nonce and a tag must surface as the typed
+// pkg/crypto/aesgcm error inside ErrDecryptionFailed, not as the standard
+// library's opaque authentication failure.
+func TestDecryptContent_TruncatedCiphertext(t *testing.T) {
+	dek, err := generateDEK()
+	if err != nil {
+		t.Fatalf("generateDEK: %v", err)
+	}
+	ciphertext, err := encryptContent([]byte("test content"), dek)
+	if err != nil {
+		t.Fatalf("encryptContent: %v", err)
+	}
+
+	_, err = decryptContent(ciphertext[:NonceSize+TagSize-1], dek)
+
+	var decryptErr ErrDecryptionFailed
+	if !errors.As(err, &decryptErr) {
+		t.Fatalf("want ErrDecryptionFailed, got %T: %v", err, err)
+	}
+	var tooShort aesgcm.ErrCiphertextTooShort
+	if !errors.As(err, &tooShort) {
+		t.Errorf("want aesgcm.ErrCiphertextTooShort as the cause, got %v", decryptErr.Cause)
 	}
 }
 

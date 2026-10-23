@@ -58,6 +58,10 @@ type profileFlags struct {
 	// tlsServerName is the certificate name the attestation collector
 	// verifies a node of this profile against (#430).
 	tlsServerName string
+	// clearTLSServerName blanks the stored tlsServerName on update (#462).
+	clearTLSServerName bool
+	// match is the rule set FindMatchingProfile selects the profile by.
+	match matchRuleFlags
 }
 
 // registerProfileFlags binds the shared profile field flags onto cmd.
@@ -71,6 +75,7 @@ func registerProfileFlags(cmd *cobra.Command, pf *profileFlags) {
 	cmd.Flags().StringVar(&pf.ekCert, "ek-cert", "", "prestaged TPM EK certificate: path to a PEM file or an inline PEM string")
 	cmd.Flags().StringVar(&pf.configFile, "config-file", "", "path to the device platform config (YAML or JSON)")
 	cmd.Flags().StringVar(&pf.tlsServerName, "tls-server-name", "", "certificate name the attestation collector verifies nodes of this profile against (e.g. compute.example.internal); empty means the device's own FQDN")
+	registerMatchRuleFlags(cmd, &pf.match)
 }
 
 // newProfileCommand creates the profile subcommand group for device
@@ -79,7 +84,7 @@ func newProfileCommand(getFlags func() *cli.CommonFlags) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "profile",
 		Short: "Device profile management",
-		Long: `Create and update device profiles on the control plane.
+		Long: `Create, update, read, match and delete device profiles on the control plane.
 
 A device profile is the pre-boot record for a node: it binds the device
 identity (TPM EK certificate serial, MAC address), the prestaged EK
@@ -105,8 +110,7 @@ Examples:
   platformctl device profile get 123 --output json`,
 	}
 
-	cmd.AddCommand(newProfileGetCommand(getFlags))
-	cmd.AddCommand(newProfileListCommand(getFlags))
+	cmd.AddCommand(NewProfileLookupCommands(getFlags)...)
 	cmd.AddCommand(newProfileCreateCommand(getFlags))
 	cmd.AddCommand(newProfileUpdateCommand(getFlags))
 	cmd.AddCommand(newProfileAssignCommand(getFlags))
@@ -178,7 +182,10 @@ Examples:
 
   # Name the certificate the attestation collector verifies nodes of this
   # profile against (fleets whose node certificates carry a role name)
-  platformctl device profile update 123 --tls-server-name compute.example.internal`,
+  platformctl device profile update 123 --tls-server-name compute.example.internal
+
+  # Clear it again, so the collector verifies nodes against their own FQDN
+  platformctl device profile update 123 --clear-tls-server-name`,
 		Args:         cobra.ExactArgs(1),
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -191,6 +198,8 @@ Examples:
 	}
 
 	registerProfileFlags(cmd, &pf)
+	cmd.Flags().BoolVar(&pf.clearTLSServerName, "clear-tls-server-name", false, "clear the profile's TLS server name so the attestation collector verifies nodes against their own FQDN")
+	cmd.MarkFlagsMutuallyExclusive("tls-server-name", "clear-tls-server-name")
 
 	return cmd
 }
@@ -232,6 +241,7 @@ func runProfileCreate(flags *cli.CommonFlags, pf *profileFlags) error {
 		EkCert:        ekCertPEM,
 		Config:        configJSON,
 		TlsServerName: pf.tlsServerName,
+		MatchRules:    applyMatchRuleFlags(nil, &pf.match),
 	}
 
 	created, err := deviceClient.CreateProfile(base.Context(), profile)
@@ -273,7 +283,12 @@ func runProfileUpdate(flags *cli.CommonFlags, id uint64, pf *profileFlags) error
 		return err
 	}
 
-	updated, err := deviceClient.UpdateProfile(ctx, profile)
+	var opts []device.ProfileUpdateOption
+	if pf.clearTLSServerName {
+		opts = append(opts, device.WithClearTLSServerName())
+	}
+
+	updated, err := deviceClient.UpdateProfile(ctx, profile, opts...)
 	if err != nil {
 		return ErrProfileUpdateFailed{ID: id, Cause: err}
 	}
@@ -318,6 +333,10 @@ func applyProfileUpdateFlags(profile *platformv1.DeviceProfile, pf *profileFlags
 	if pf.tlsServerName != "" {
 		profile.TlsServerName = pf.tlsServerName
 	}
+	if pf.clearTLSServerName {
+		profile.TlsServerName = ""
+	}
+	profile.MatchRules = applyMatchRuleFlags(profile.MatchRules, &pf.match)
 	return nil
 }
 
@@ -427,6 +446,9 @@ func buildProfileOutput(profile *platformv1.DeviceProfile) map[string]interface{
 	if profile.GetTlsServerName() != "" {
 		output["tls_server_name"] = profile.GetTlsServerName()
 	}
+	if rules := buildMatchRulesOutput(profile.GetMatchRules()); rules != nil {
+		output["match_rules"] = rules
+	}
 	if baseline := profileBaselineOutput(profile.GetPcrBaseline()); baseline != nil {
 		output["pcr_baseline"] = baseline
 	}
@@ -506,6 +528,9 @@ func printProfileResult(printer *cli.Printer, profile *platformv1.DeviceProfile)
 	}
 	if profile.GetTlsServerName() != "" {
 		printer.PrintKeyValue("TLS Server Name", profile.GetTlsServerName())
+	}
+	if rules := matchRulesSummary(profile.GetMatchRules()); rules != "" {
+		printer.PrintKeyValue("Match Rules", rules)
 	}
 	if profile.GetPcrBaseline() != nil {
 		printer.PrintKeyValue("PCR Baseline", profileBaselineSummary(profile.GetPcrBaseline()))

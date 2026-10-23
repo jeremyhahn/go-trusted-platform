@@ -23,17 +23,19 @@
 package container
 
 import (
+	"bytes"
 	"context"
 	"crypto"
 	"crypto/sha256"
+	"encoding/hex"
+	"io"
 	"log/slog"
-	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
-	"testing"
 	"time"
 
+	"github.com/google/go-tpm/tpm2"
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/orchestration"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/compute/container"
 )
@@ -43,25 +45,9 @@ import (
 // =============================================================================
 
 const (
-	// EnvIntegrationTest is the environment variable that must be set to run
-	// integration tests. Set INTEGRATION_TEST=1 to enable.
-	EnvIntegrationTest = "INTEGRATION_TEST"
-
 	// DefaultTestTimeout is the default timeout for integration tests.
 	DefaultTestTimeout = 2 * time.Minute
 )
-
-// =============================================================================
-// Skip Helpers
-// =============================================================================
-
-// SkipIfNotIntegration skips the test if INTEGRATION_TEST is not set.
-func SkipIfNotIntegration(t *testing.T) {
-	t.Helper()
-	if os.Getenv(EnvIntegrationTest) == "" {
-		t.Skip("Skipping integration test. Set INTEGRATION_TEST=1 to run.")
-	}
-}
 
 // =============================================================================
 // Mock TPM Provider
@@ -192,19 +178,45 @@ func (m *MockTPMProvider) Quote(pcrs []uint, nonce []byte) (orchestration.TPMQuo
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	// The quoted body commits to the PCR values as read at this instant,
-	// in the order the selection names them.
-	body := sha256.New()
+	// The quoted body is a TPMS_ATTEST whose TPMS_QUOTE_INFO names the
+	// selected SHA-256 PCRs and commits to their values as read at this
+	// instant, in ascending index order (TPM 2.0 Part 2, TPMS_QUOTE_INFO), with the
+	// nonce as qualifying data. The SDK re-derives that digest from its own
+	// PCR read and refuses a quote that disagrees.
+	bitmap := make([]byte, (orchestration.MaxPCRIndex+8)/8)
 	for _, index := range pcrs {
 		if index > orchestration.MaxPCRIndex {
 			return orchestration.TPMQuote{}, container.ErrInvalidSpec
 		}
-		body.Write(m.pcrs[int(index)])
+		bitmap[index/8] |= 1 << (index % 8)
 	}
-	body.Write(nonce)
+	pcrDigest := sha256.New()
+	for index := 0; index <= orchestration.MaxPCRIndex; index++ {
+		if bitmap[index/8]&(1<<(index%8)) != 0 {
+			pcrDigest.Write(m.pcrs[index])
+		}
+	}
+
+	attest := tpm2.TPMSAttest{
+		Magic:           tpm2.TPMGeneratedValue,
+		Type:            tpm2.TPMSTAttestQuote,
+		QualifiedSigner: tpm2.TPM2BName{Buffer: []byte("mock-iak")},
+		ExtraData:       tpm2.TPM2BData{Buffer: nonce},
+		ClockInfo:       tpm2.TPMSClockInfo{Clock: 1, ResetCount: 1, Safe: true},
+		FirmwareVersion: 1,
+		Attested: tpm2.NewTPMUAttest(tpm2.TPMSTAttestQuote, &tpm2.TPMSQuoteInfo{
+			PCRSelect: tpm2.TPMLPCRSelection{
+				PCRSelections: []tpm2.TPMSPCRSelection{{
+					Hash:      tpm2.TPMAlgSHA256,
+					PCRSelect: bitmap,
+				}},
+			},
+			PCRDigest: tpm2.TPM2BDigest{Buffer: pcrDigest.Sum(nil)},
+		}),
+	}
 
 	return orchestration.TPMQuote{
-		Quoted:    body.Sum(nil),
+		Quoted:    tpm2.Marshal(&attest),
 		Signature: []byte("mock-signature"),
 		Nonce:     append([]byte(nil), nonce...),
 	}, nil
@@ -377,6 +389,90 @@ func (m *MockPodmanBackend) InspectImage(ctx context.Context, imageRef string) (
 		Size:    1024 * 1024,
 		Created: time.Now(),
 	}, nil
+}
+
+// ResolveImageDigest fills the orchestrator's ImageDigestResolver seam, which
+// a measured launch requires. The digest is the canonical "sha256:<64 hex>"
+// form of a hash over the reference, so the same image always measures the
+// same and two images never collide.
+func (m *MockPodmanBackend) ResolveImageDigest(ctx context.Context, imageRef string) (string, error) {
+	if m.shouldFail {
+		return "", m.failError
+	}
+	sum := sha256.Sum256([]byte(imageRef))
+	return "sha256:" + hex.EncodeToString(sum[:]), nil
+}
+
+// fixtureRuntimeError reports a Tier 0 operation the fixture runtime refuses:
+// the orchestrator under test launches through MockPodmanBackend, so the SDK
+// attesting runtime layered over this runtime may only ask about state.
+type fixtureRuntimeError struct {
+	// Op is the refused operation.
+	Op string
+}
+
+func (e fixtureRuntimeError) Error() string {
+	return "fixture Tier 0 runtime does not " + e.Op + ": the orchestrator launches through MockPodmanBackend"
+}
+
+// MockTier0Runtime is the Tier 0 runtime the SDK attesting runtime is layered
+// over in these fixtures. It reports container state from the same
+// MockPodmanBackend the orchestrator launches through.
+type MockTier0Runtime struct {
+	podman *MockPodmanBackend
+}
+
+var _ orchestration.ContainerRuntime = (*MockTier0Runtime)(nil)
+
+// Run refuses: launches go through the orchestrator's podman backend.
+func (r *MockTier0Runtime) Run(context.Context, *orchestration.ContainerSpec) (string, error) {
+	return "", fixtureRuntimeError{Op: "run containers"}
+}
+
+// RunInteractive refuses: launches go through the orchestrator's podman backend.
+func (r *MockTier0Runtime) RunInteractive(context.Context, *orchestration.ContainerSpec) (*orchestration.InteractiveProcess, error) {
+	return nil, fixtureRuntimeError{Op: "run interactive containers"}
+}
+
+// Stop refuses: the orchestrator stops through its podman backend.
+func (r *MockTier0Runtime) Stop(context.Context, string) error {
+	return fixtureRuntimeError{Op: "stop containers"}
+}
+
+// Remove refuses: the orchestrator removes through its podman backend.
+func (r *MockTier0Runtime) Remove(context.Context, string) error {
+	return fixtureRuntimeError{Op: "remove containers"}
+}
+
+// Logs returns the podman backend's stdout for id.
+func (r *MockTier0Runtime) Logs(ctx context.Context, id string) (io.ReadCloser, error) {
+	logs, err := r.podman.GetContainerLogs(ctx, id, false, nil)
+	if err != nil {
+		return nil, err
+	}
+	return io.NopCloser(bytes.NewReader(logs.Stdout)), nil
+}
+
+// IsRunning reports whether the podman backend holds id in the running state.
+func (r *MockTier0Runtime) IsRunning(ctx context.Context, id string) (bool, error) {
+	pc, err := r.podman.InspectContainer(ctx, id)
+	if err != nil {
+		return false, err
+	}
+	return pc.State == "running", nil
+}
+
+// Exec refuses: nothing runs inside a fixture container.
+func (r *MockTier0Runtime) Exec(context.Context, string, *orchestration.ExecSpec) (*orchestration.ExecResult, error) {
+	return nil, fixtureRuntimeError{Op: "exec in containers"}
+}
+
+// IsAvailable reports the runtime usable.
+func (r *MockTier0Runtime) IsAvailable() bool { return true }
+
+// Pull refuses: images are pulled through the orchestrator's podman backend.
+func (r *MockTier0Runtime) Pull(context.Context, string) error {
+	return fixtureRuntimeError{Op: "pull images"}
 }
 
 // CreateContainer creates a mock container.
@@ -885,13 +981,21 @@ func (f *TestFixtures) CreateOrchestrator(enableAttestation, enablePolicy bool) 
 		container.WithLifecycleNetworkManager(f.Network),
 	}
 
-	// Add attestor if enabled
+	// Add attestor if enabled: the SDK attesting runtime over the mock TPM
+	// takes the quotes, as it does in platformd over the host TPM.
 	if enableAttestation {
-		attestor, err := container.NewContainerAttestor(f.TPM)
+		attesting, err := container.NewAttestingRuntime(&MockTier0Runtime{podman: f.Podman}, f.TPM, f.Logger)
 		if err != nil {
 			return nil, err
 		}
-		opts = append(opts, container.WithAttestor(attestor))
+		attestor, err := container.NewContainerAttestor(f.TPM, container.WithAttestingRuntime(attesting))
+		if err != nil {
+			return nil, err
+		}
+		opts = append(opts,
+			container.WithAttestor(attestor),
+			container.WithImageDigestResolver(f.Podman),
+		)
 	}
 
 	return container.NewOrchestrator(config, opts...)

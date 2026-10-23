@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/netip"
 	"slices"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -229,6 +230,7 @@ func TestNewVTEPAdmitter_RejectsBadConfig(t *testing.T) {
 		"replayer":           func(c *VTEPAdmissionConfig) { c.Replayer = nil },
 		"max_verdict_age":    func(c *VTEPAdmissionConfig) { c.MaxVerdictAge = -time.Second },
 		"verdict_clock_skew": func(c *VTEPAdmissionConfig) { c.VerdictClockSkew = -time.Second },
+		"read_timeout":       func(c *VTEPAdmissionConfig) { c.ReadTimeout = -time.Second },
 	}
 	for field, breakIt := range cases {
 		t.Run(field, func(t *testing.T) {
@@ -249,6 +251,7 @@ func TestNewVTEPAdmitter_RejectsBadConfig(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, DefaultOverlayVerdictMaxAge, admitter.maxVerdictAge)
 		assert.Equal(t, DefaultOverlayVerdictClockSkew, admitter.clockSkew)
+		assert.Equal(t, DefaultOverlayAdmissionReadTimeout, admitter.readTimeout)
 	})
 }
 
@@ -454,6 +457,173 @@ func TestVTEPAdmitter_RefusesANewAdmissionItCannotConfirm(t *testing.T) {
 	assert.Equal(t, []AdmittedVTEP{{VTEP: admissionVTEP}}, f.admitter.Admitted(installed(admissionVTEP)))
 }
 
+// A replay installs new decap flows, so it must rest on a fresh listing. With
+// the refresh failed, the sweep judged a VTEP that was both installed and
+// refused from the cached allocation, remembered it, and the replayed routes
+// were then admitted without being confirmed: new flows from an address IPAM
+// had already given to another device.
+func TestVTEPAdmitter_ReplaysNothingWithoutAFreshListing(t *testing.T) {
+	ctx := context.Background()
+	stale := func(t *testing.T) (*admissionFixture, *cachedIPAM) {
+		f, cache := reassignedFixture(t)
+		cache.refreshErr = errPlatformDown
+		f.overlay.refuse(admissionVTEP)
+		return f, cache
+	}
+
+	t.Run("an installed and refused VTEP", func(t *testing.T) {
+		f, _ := stale(t)
+
+		err := f.admitter.Sweep(ctx, installed(admissionVTEP))
+
+		var unavailable ErrOverlayAdmissionUnavailable
+		require.True(t, errors.As(err, &unavailable), "got %v", err)
+		assert.Equal(t, "ipam", unavailable.Source)
+		assert.Empty(t, f.overlay.replayed, "no route is replayed from a stale allocation")
+		assert.Equal(t, []netip.Addr{admissionVTEP}, f.overlay.refused)
+	})
+
+	t.Run("a refused VTEP that is not installed", func(t *testing.T) {
+		f, _ := stale(t)
+
+		require.Error(t, f.admitter.Sweep(ctx, nil))
+
+		assert.Empty(t, f.overlay.replayed)
+	})
+
+	t.Run("a device that passed attestation", func(t *testing.T) {
+		f, _ := stale(t)
+
+		deliverVerdict(ctx, f.admitter, *signedVerdict(admissionNow))
+
+		assert.Empty(t, f.overlay.replayed)
+	})
+
+	t.Run("the next sweep with a fresh listing judges the new holder", func(t *testing.T) {
+		f, cache := stale(t)
+		require.Error(t, f.admitter.Sweep(ctx, nil))
+		cache.refreshErr = nil
+
+		require.NoError(t, f.admitter.Sweep(ctx, nil))
+
+		assert.Empty(t, f.overlay.replayed, "device 8 has no verdict")
+	})
+}
+
+// outageFixture admits admissionVTEP for device 7 on a fresh listing, with
+// a verdict attested at outageValidated, and then fails every IPAM refresh.
+func outageFixture(t *testing.T) (*admissionFixture, *cachedIPAM) {
+	t.Helper()
+	f := newAdmissionFixture(t)
+	owned := newAdmissionAllocator(t, "7", admissionVTEP)
+	cache := &cachedIPAM{cached: owned, current: owned}
+	f.admitter.ipam = cache
+	require.NoError(t, f.admitter.Sweep(context.Background(), installed(admissionVTEP)))
+	cache.refreshErr = errPlatformDown
+	return f, cache
+}
+
+// outageValidated is when the verdict behind outageFixture's last fully
+// validated admission was attested; that admission lapses five minutes later.
+var outageValidated = admissionNow.Add(-time.Minute)
+
+// attestAt moves the clock to at and records a passing verdict attested then.
+func (f *admissionFixture) attestAt(at time.Time) {
+	f.now = at
+	f.verdicts.records[7] = signedVerdict(at)
+}
+
+func (f *admissionFixture) admittedVerdictAt(t *testing.T) time.Time {
+	t.Helper()
+	admitted := f.admitter.Admitted(installed(admissionVTEP))
+	require.Len(t, admitted, 1)
+	return admitted[0].VerdictAt
+}
+
+func TestVTEPAdmitter_AnIPAMOutageCannotRenewAdmission(t *testing.T) {
+	ctx := context.Background()
+	f, _ := outageFixture(t)
+
+	f.attestAt(admissionNow.Add(3 * time.Minute))
+	err := f.admitter.Sweep(ctx, installed(admissionVTEP))
+
+	var unavailable ErrOverlayAdmissionUnavailable
+	require.True(t, errors.As(err, &unavailable), "got %v", err)
+	assert.Equal(t, "ipam", unavailable.Source)
+	assert.Empty(t, f.overlay.revoked, "the last validated admission is still within verdict-max-age")
+	assert.Equal(t, outageValidated, f.admittedVerdictAt(t), "a pass on a stale allocation renews nothing")
+
+	f.attestAt(outageValidated.Add(5*time.Minute + time.Second))
+	require.Error(t, f.admitter.Sweep(ctx, installed(admissionVTEP)))
+
+	assert.Equal(t, []netip.Addr{admissionVTEP}, f.overlay.revoked,
+		"the VTEP is withdrawn at the last validated bound, however fresh its verdict")
+}
+
+func TestVTEPAdmitter_ReportsAFailedRevocationOfALapsedAdmission(t *testing.T) {
+	f, _ := outageFixture(t)
+	f.overlay.fail = map[netip.Addr]error{admissionVTEP: errPlatformDown}
+	f.attestAt(outageValidated.Add(5*time.Minute + time.Second))
+
+	err := f.admitter.Sweep(context.Background(), installed(admissionVTEP))
+
+	var revokeErr ErrOverlayVTEPRevoke
+	require.True(t, errors.As(err, &revokeErr), "got %v", err)
+	assert.Equal(t, admissionVTEP, revokeErr.VTEP)
+	assert.Equal(t, []AdmittedVTEP{{VTEP: admissionVTEP}}, f.admitter.Admitted(installed(admissionVTEP)))
+}
+
+func TestVTEPAdmitter_AnIPAMOutageCannotRenewAdmissionThroughARoute(t *testing.T) {
+	f, cache := outageFixture(t)
+	require.Error(t, f.admitter.Sweep(context.Background(), installed(admissionVTEP)))
+	f.attestAt(admissionNow.Add(3 * time.Minute))
+
+	err := f.admitter.AdmitVTEP(context.Background(), 10100, admissionVTEP)
+
+	var unavailable ErrOverlayAdmissionUnavailable
+	require.True(t, errors.As(err, &unavailable), "got %v", err)
+	assert.ErrorIs(t, err, errPlatformDown)
+	assert.Equal(t, 3, cache.refreshes, "a route on a stale index is confirmed first")
+	assert.Equal(t, outageValidated, f.admittedVerdictAt(t))
+}
+
+func TestVTEPAdmitter_RenewsAdmissionWhenIPAMRecovers(t *testing.T) {
+	ctx := context.Background()
+	f, cache := outageFixture(t)
+	f.attestAt(admissionNow.Add(3 * time.Minute))
+	require.Error(t, f.admitter.Sweep(ctx, installed(admissionVTEP)))
+
+	cache.refreshErr = nil
+	require.NoError(t, f.admitter.Sweep(ctx, installed(admissionVTEP)))
+	assert.Equal(t, f.now, f.admittedVerdictAt(t), "a fresh listing that still names device 7 renews")
+
+	f.now = outageValidated.Add(5*time.Minute + time.Second)
+	require.NoError(t, f.admitter.Sweep(ctx, installed(admissionVTEP)))
+	assert.Empty(t, f.overlay.revoked)
+
+	t.Run("a route after recovery needs no listing", func(t *testing.T) {
+		refreshes := cache.refreshes
+		require.NoError(t, f.admitter.AdmitVTEP(ctx, 10100, admissionVTEP))
+		assert.Equal(t, refreshes, cache.refreshes)
+	})
+}
+
+func TestVTEPAdmitter_WithdrawsAnAddressReassignedDuringAnIPAMOutage(t *testing.T) {
+	ctx := context.Background()
+	f, cache := outageFixture(t)
+	f.attestAt(admissionNow.Add(time.Minute))
+	require.Error(t, f.admitter.Sweep(ctx, installed(admissionVTEP)))
+	require.Empty(t, f.overlay.revoked)
+
+	cache.current = newAdmissionAllocator(t, "8", admissionVTEP)
+	f.devices.devices[8] = &deviceentities.Device{ID: 8, Hostname: "node-8", Serial: "SN8"}
+	cache.refreshErr = nil
+
+	require.NoError(t, f.admitter.Sweep(ctx, installed(admissionVTEP)))
+	assert.Equal(t, []netip.Addr{admissionVTEP}, f.overlay.revoked, "device 8 has no verdict")
+	assert.Equal(t, []AdmittedVTEP{{VTEP: admissionVTEP}}, f.admitter.Admitted(installed(admissionVTEP)))
+}
+
 func TestVTEPAdmitter_Admitted(t *testing.T) {
 	f := newAdmissionFixture(t, admissionVTEP, admissionVTEP2)
 	require.NoError(t, f.admitter.AdmitVTEP(context.Background(), 10100, admissionVTEP))
@@ -631,21 +801,6 @@ func TestVTEPAdmitter_Sweep(t *testing.T) {
 	})
 }
 
-func TestVTEPAdmitter_SweepDoesNotReplayInstalledRefusedVTEPAfterFailedRefresh(t *testing.T) {
-	f, cache := reassignedFixture(t)
-	cache.current = cache.cached
-	require.NoError(t, f.admitter.AdmitVTEP(context.Background(), 10100, admissionVTEP))
-	f.overlay.refused = []netip.Addr{admissionVTEP}
-	cache.refreshErr = errPlatformDown
-
-	err := f.admitter.Sweep(context.Background(), installed(admissionVTEP))
-
-	var unavailable ErrOverlayAdmissionUnavailable
-	require.True(t, errors.As(err, &unavailable), "got %v", err)
-	assert.Equal(t, "ipam", unavailable.Source)
-	assert.Empty(t, f.overlay.replayed, "stale cached IPAM must not reopen refused routes after a failed refresh")
-}
-
 func TestVTEPAdmitter_RevokeDevice(t *testing.T) {
 	ctx := context.Background()
 
@@ -711,6 +866,30 @@ func TestRunAdmissionSweep(t *testing.T) {
 			"each tick re-evaluates the installed VTEP and revokes it again")
 	})
 
+	t.Run("a sweep whose platform reads hang ends before the next tick", func(t *testing.T) {
+		f := newAdmissionFixture(t)
+		require.NoError(t, f.admitter.Sweep(context.Background(), installed(admissionVTEP)))
+		hung := &hungPlatform{}
+		f.admitter.devices = hung
+		f.admitter.readTimeout = time.Nanosecond
+		f.now = admissionNow.Add(5 * time.Minute)
+		ticks := make(chan time.Time)
+		ctx, cancel := context.WithCancel(context.Background())
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			runAdmissionSweep(ctx, ticks, staticDatapath(installed(admissionVTEP)), f.admitter, logger)
+		}()
+		// The second send is taken only once the hung first sweep has ended.
+		ticks <- f.now
+		ticks <- f.now
+		cancel()
+		<-done
+		assert.Zero(t, hung.unbounded, "every platform read ran under a deadline")
+		assert.Equal(t, []netip.Addr{admissionVTEP, admissionVTEP}, f.overlay.revoked,
+			"both sweeps ran and withdrew the expired admission")
+	})
+
 	t.Run("returns on cancel without sweeping", func(t *testing.T) {
 		f := newAdmissionFixture(t)
 		f.verdicts.records[7].Verdict.Passed = false
@@ -718,6 +897,154 @@ func TestRunAdmissionSweep(t *testing.T) {
 		cancel()
 		runAdmissionSweep(ctx, make(chan time.Time), staticDatapath(installed(admissionVTEP)), f.admitter, logger)
 		assert.Empty(t, f.overlay.revoked)
+	})
+}
+
+// errUnboundedRead fails a platform read made without a deadline: against a
+// hung platformd that read would never return.
+var errUnboundedRead = errors.New("platform read has no deadline")
+
+// hungPlatform is a platformd that accepted each read and stopped answering:
+// a read ends only when its ctx does. A read with no deadline is counted and
+// failed at once, so a missing bound fails the test instead of hanging it.
+type hungPlatform struct {
+	unbounded int
+}
+
+func (h *hungPlatform) wait(ctx context.Context) error {
+	if _, bounded := ctx.Deadline(); !bounded {
+		h.unbounded++
+		return errUnboundedRead
+	}
+	<-ctx.Done()
+	return ctx.Err()
+}
+
+func (h *hungPlatform) Get(ctx context.Context, _ uint64) (*deviceentities.Device, error) {
+	return nil, h.wait(ctx)
+}
+
+func (h *hungPlatform) GetAllocation(ctx context.Context, _ netip.Addr) (*ipam.Allocation, error) {
+	return nil, h.wait(ctx)
+}
+
+func (h *hungPlatform) GetAllocationsByDevice(ctx context.Context, _ string) ([]*ipam.Allocation, error) {
+	return nil, h.wait(ctx)
+}
+
+func (h *hungPlatform) Refresh(ctx context.Context) error {
+	return h.wait(ctx)
+}
+
+// liveRevoker records the state of the ctx each revocation ran under.
+type liveRevoker struct {
+	*admissionOverlay
+	ctxErrs []error
+}
+
+func (r *liveRevoker) RevokeVTEP(ctx context.Context, vtep netip.Addr) error {
+	r.ctxErrs = append(r.ctxErrs, ctx.Err())
+	return r.admissionOverlay.RevokeVTEP(ctx, vtep)
+}
+
+func TestVTEPAdmitter_HungPlatformReads(t *testing.T) {
+	ctx := context.Background()
+	// hang admits the fixture's VTEP, then routes the reads named by attach
+	// to a platformd that never answers, behind a deadline that has already
+	// passed by the time a read waits on it.
+	hang := func(t *testing.T, attach func(*VTEPAdmitter, *hungPlatform)) (*admissionFixture, *hungPlatform, *liveRevoker) {
+		t.Helper()
+		f := newAdmissionFixture(t)
+		require.NoError(t, f.admitter.Sweep(ctx, installed(admissionVTEP)))
+		hung := &hungPlatform{}
+		revoker := &liveRevoker{admissionOverlay: f.overlay}
+		attach(f.admitter, hung)
+		f.admitter.revoker = revoker
+		f.admitter.readTimeout = time.Nanosecond
+		return f, hung, revoker
+	}
+	hangDevices := func(a *VTEPAdmitter, hung *hungPlatform) { a.devices = hung }
+	hangIPAM := func(a *VTEPAdmitter, hung *hungPlatform) { a.ipam = hung }
+
+	t.Run("a sweep withdraws an expired admission while platformd hangs", func(t *testing.T) {
+		f, hung, revoker := hang(t, hangDevices)
+		f.now = admissionNow.Add(5 * time.Minute)
+
+		require.NoError(t, f.admitter.Sweep(ctx, installed(admissionVTEP)))
+
+		assert.Zero(t, hung.unbounded, "every platform read ran under a deadline")
+		assert.Equal(t, []netip.Addr{admissionVTEP}, f.overlay.revoked)
+		assert.Equal(t, []error{nil}, revoker.ctxErrs, "the revocation did not wait on the read deadline")
+	})
+
+	t.Run("a sweep holds a fresh admission through the hang as an outage", func(t *testing.T) {
+		f, hung, _ := hang(t, hangDevices)
+
+		err := f.admitter.Sweep(ctx, installed(admissionVTEP))
+
+		var unavailable ErrOverlayAdmissionUnavailable
+		require.True(t, errors.As(err, &unavailable), "got %v", err)
+		assert.Equal(t, "device", unavailable.Source)
+		assert.ErrorIs(t, err, context.DeadlineExceeded)
+		assert.Zero(t, hung.unbounded)
+		assert.Empty(t, f.overlay.revoked)
+		assert.Equal(t, uint64(7), f.admitter.Admitted(installed(admissionVTEP))[0].DeviceID)
+	})
+
+	t.Run("route admission reports a hung read as an outage", func(t *testing.T) {
+		f, hung, _ := hang(t, hangDevices)
+
+		err := f.admitter.AdmitVTEP(ctx, 10100, admissionVTEP)
+
+		var unavailable ErrOverlayAdmissionUnavailable
+		require.True(t, errors.As(err, &unavailable), "got %v", err)
+		assert.ErrorIs(t, err, context.DeadlineExceeded)
+		assert.Zero(t, hung.unbounded)
+	})
+
+	t.Run("a failed verdict withdraws the device while the IPAM listing hangs", func(t *testing.T) {
+		f, hung, revoker := hang(t, hangIPAM)
+
+		deliverVerdict(ctx, f.admitter, streamed(deviceverdict.DeviceVerdict{DeviceID: 7}, admissionNow))
+
+		assert.Zero(t, hung.unbounded)
+		assert.Equal(t, []netip.Addr{admissionVTEP}, f.overlay.revoked)
+		assert.Equal(t, []error{nil}, revoker.ctxErrs, "the revocation did not wait on the listing")
+	})
+
+	t.Run("a passed verdict replays nothing while the IPAM refresh hangs", func(t *testing.T) {
+		f, hung, _ := hang(t, hangIPAM)
+		f.overlay.refuse(admissionVTEP)
+
+		deliverVerdict(ctx, f.admitter, streamed(deviceverdict.DeviceVerdict{DeviceID: 7, Passed: true}, admissionNow))
+
+		assert.Zero(t, hung.unbounded)
+		assert.Empty(t, f.overlay.replayed)
+		assert.Equal(t, []netip.Addr{admissionVTEP}, f.overlay.refused)
+	})
+}
+
+func TestVTEPAdmitter_PlatformReads(t *testing.T) {
+	t.Run("bounds the reads by the read timeout", func(t *testing.T) {
+		f := newAdmissionFixture(t)
+
+		reads, cancel := f.admitter.platformReads(context.Background())
+		defer cancel()
+
+		deadline, bounded := reads.Deadline()
+		require.True(t, bounded)
+		assert.False(t, deadline.After(time.Now().Add(DefaultOverlayAdmissionReadTimeout)))
+	})
+
+	t.Run("a cancelled caller ends the reads", func(t *testing.T) {
+		f := newAdmissionFixture(t)
+		ctx, cancelCaller := context.WithCancel(context.Background())
+		cancelCaller()
+
+		reads, cancel := f.admitter.platformReads(ctx)
+		defer cancel()
+
+		assert.ErrorIs(t, reads.Err(), context.Canceled)
 	})
 }
 
@@ -736,7 +1063,7 @@ func TestOverlayHandlerProxy(t *testing.T) {
 	t.Run("hands everything to the handler once built", func(t *testing.T) {
 		overlay := &admissionOverlay{}
 		proxy := &overlayHandlerProxy{}
-		proxy.set(overlay)
+		proxy.set(overlay, nil)
 
 		require.NoError(t, proxy.RevokeVTEP(ctx, admissionVTEP))
 		assert.Equal(t, []netip.Addr{admissionVTEP}, proxy.RefusedVTEPs())
@@ -753,6 +1080,278 @@ func streamed(v deviceverdict.DeviceVerdict, at time.Time) deviceverdict.Recorde
 	return deviceverdict.RecordedDeviceVerdict{Verdict: v, EventID: "streamed-verdict", RecordedAt: at}
 }
 
+// deliverVerdict hands the admitter a streamed verdict and waits for the IPAM
+// listing a failed verdict leaves running, as the follower does before it returns.
+func deliverVerdict(ctx context.Context, a *VTEPAdmitter, recorded deviceverdict.RecordedDeviceVerdict) {
+	a.OnDeviceVerdict(ctx, recorded)
+	a.waitListings()
+}
+
+// gatedIPAM announces each device listing on listing and holds it until
+// release is closed or the listing's ctx ends.
+type gatedIPAM struct {
+	*admissionIPAM
+	listing chan string
+	release chan struct{}
+}
+
+func (g *gatedIPAM) GetAllocationsByDevice(ctx context.Context, deviceID string) ([]*ipam.Allocation, error) {
+	g.listing <- deviceID
+	select {
+	case <-g.release:
+		return g.admissionIPAM.GetAllocationsByDevice(ctx, deviceID)
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+// signalRevoker reports each revoked VTEP on revoked.
+type signalRevoker struct {
+	revoked chan netip.Addr
+}
+
+func (r signalRevoker) RevokeVTEP(_ context.Context, vtep netip.Addr) error {
+	r.revoked <- vtep
+	return nil
+}
+
+// drain closes revoked and returns what is left on it. Call it only once no
+// revocation can still be running.
+func (r signalRevoker) drain() []netip.Addr {
+	close(r.revoked)
+	var left []netip.Addr
+	for vtep := range r.revoked {
+		left = append(left, vtep)
+	}
+	return left
+}
+
+func TestVTEPAdmitter_FailedVerdictDoesNotWaitOnIPAM(t *testing.T) {
+	device8VTEP := netip.MustParseAddr("10.4.100.30")
+	// gate admits admissionVTEP for device 7 and device8VTEP for device 8,
+	// leaves admissionVTEP2 allocated to device 7 but never admitted, and
+	// puts the admitter behind an IPAM that holds every listing.
+	gate := func(t *testing.T) (*admissionFixture, *gatedIPAM, signalRevoker) {
+		t.Helper()
+		f := newAdmissionFixture(t, admissionVTEP, admissionVTEP2)
+		gated := &gatedIPAM{admissionIPAM: f.ipam, listing: make(chan string, 2), release: make(chan struct{})}
+		revoker := signalRevoker{revoked: make(chan netip.Addr, 8)}
+		f.admitter.ipam = gated
+		f.admitter.revoker = revoker
+		// Only release or the caller's ctx ends a held listing; a read
+		// deadline would let an admitter that waits on IPAM through.
+		f.admitter.readTimeout = time.Hour
+		require.NoError(t, f.admitter.remember(0, evaluation{admitted: AdmittedVTEP{VTEP: admissionVTEP, DeviceID: 7}}))
+		require.NoError(t, f.admitter.remember(0, evaluation{admitted: AdmittedVTEP{VTEP: device8VTEP, DeviceID: 8}}))
+		return f, gated, revoker
+	}
+	failed := func(deviceID uint64) deviceverdict.RecordedDeviceVerdict {
+		return streamed(deviceverdict.DeviceVerdict{DeviceID: deviceID, Reason: "quote rejected"}, admissionNow)
+	}
+
+	t.Run("withdraws admitted VTEPs while the listing is held", func(t *testing.T) {
+		ctx := context.Background()
+		f, gated, revoker := gate(t)
+
+		f.admitter.OnDeviceVerdict(ctx, failed(7))
+		assert.Equal(t, admissionVTEP, <-revoker.revoked, "the admitted VTEP goes before IPAM answers")
+		assert.Equal(t, "7", <-gated.listing)
+
+		f.admitter.OnDeviceVerdict(ctx, failed(8))
+		assert.Equal(t, device8VTEP, <-revoker.revoked, "the next failure is withdrawn while the first listing is pending")
+		assert.Equal(t, "8", <-gated.listing)
+
+		close(gated.release)
+		f.admitter.waitListings()
+		assert.Equal(t, []netip.Addr{admissionVTEP2}, revoker.drain(),
+			"the listing withdraws only the allocation never admitted")
+		assert.False(t, f.admitter.admittedFor(admissionVTEP, 7))
+		assert.False(t, f.admitter.admittedFor(device8VTEP, 8))
+	})
+
+	t.Run("listing ends with the stream", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		f, gated, revoker := gate(t)
+
+		f.admitter.OnDeviceVerdict(ctx, failed(7))
+		assert.Equal(t, admissionVTEP, <-revoker.revoked)
+		assert.Equal(t, "7", <-gated.listing)
+
+		cancel()
+		f.admitter.waitListings()
+		assert.Empty(t, revoker.drain(),
+			"a listing cut off by the stream withdraws nothing more; the held failure leaves the rest to the sweep")
+		held, epoch := f.admitter.failureHeld(7, admissionNow)
+		assert.True(t, held)
+		assert.NotZero(t, epoch)
+	})
+
+	t.Run("skips an allocation admitted again on a newer verdict during the listing", func(t *testing.T) {
+		ctx := context.Background()
+		f, gated, revoker := gate(t)
+
+		f.admitter.OnDeviceVerdict(ctx, failed(7))
+		assert.Equal(t, admissionVTEP, <-revoker.revoked)
+		assert.Equal(t, "7", <-gated.listing)
+
+		newer := AdmittedVTEP{VTEP: admissionVTEP2, DeviceID: 7, VerdictAt: admissionNow.Add(time.Second)}
+		require.NoError(t, f.admitter.remember(0, evaluation{admitted: newer}))
+		close(gated.release)
+		f.admitter.waitListings()
+		assert.Empty(t, revoker.drain())
+		assert.True(t, f.admitter.admittedFor(admissionVTEP2, 7))
+	})
+}
+
+// gatedClock is the admitter's clock. Once armed, the next reading signals
+// entered and waits for release. evaluate reads the clock after its hold
+// check, so an armed clock stops an admission between that check and
+// remember.
+type gatedClock struct {
+	now     time.Time
+	armed   atomic.Bool
+	entered chan struct{}
+	release chan struct{}
+}
+
+func newGatedClock(now time.Time) *gatedClock {
+	clock := &gatedClock{now: now, entered: make(chan struct{}), release: make(chan struct{})}
+	clock.armed.Store(true)
+	return clock
+}
+
+func (c *gatedClock) Now() time.Time {
+	if c.armed.CompareAndSwap(true, false) {
+		close(c.entered)
+		<-c.release
+	}
+	return c.now
+}
+
+// overlayReaderOnly hides a caching reader's Refresh, so a first admission
+// is published straight from its one evaluation.
+type overlayReaderOnly struct {
+	OverlayIPAMReader
+}
+
+func TestVTEPAdmitter_FailureDuringAdmissionWithdrawsIt(t *testing.T) {
+	failed := streamed(deviceverdict.DeviceVerdict{DeviceID: 7, Reason: "quote rejected"}, admissionNow)
+	// admitInFlight starts a first admission of admissionVTEP and returns once
+	// it has passed the hold check and not yet been published.
+	admitInFlight := func(f *admissionFixture, clock *gatedClock) <-chan error {
+		result := make(chan error, 1)
+		f.admitter.now = clock.Now
+		go func() { result <- f.admitter.AdmitVTEP(context.Background(), 10100, admissionVTEP) }()
+		<-clock.entered
+		return result
+	}
+
+	t.Run("failure listed before the admission is published", func(t *testing.T) {
+		ctx := context.Background()
+		f := newAdmissionFixture(t)
+		f.admitter.ipam = overlayReaderOnly{f.ipam}
+		clock := newGatedClock(admissionNow)
+		result := admitInFlight(f, clock)
+
+		deliverVerdict(ctx, f.admitter, failed)
+		close(clock.release)
+
+		requireVerdictDenied(t, <-result, "while the admission was judged")
+		assert.False(t, f.admitter.admittedFor(admissionVTEP, 7))
+		assert.Equal(t, []netip.Addr{admissionVTEP}, f.overlay.revoked)
+	})
+
+	t.Run("failure listed after the admission would have been published", func(t *testing.T) {
+		ctx := context.Background()
+		f := newAdmissionFixture(t)
+		gated := &gatedIPAM{admissionIPAM: f.ipam, listing: make(chan string, 1), release: make(chan struct{})}
+		revoker := signalRevoker{revoked: make(chan netip.Addr, 4)}
+		f.admitter.ipam = overlayReaderOnly{gated}
+		f.admitter.revoker = revoker
+		f.admitter.readTimeout = time.Hour
+		clock := newGatedClock(admissionNow)
+		result := admitInFlight(f, clock)
+
+		f.admitter.OnDeviceVerdict(ctx, failed)
+		assert.Equal(t, "7", <-gated.listing)
+		close(clock.release)
+		requireVerdictDenied(t, <-result, "while the admission was judged")
+
+		close(gated.release)
+		f.admitter.waitListings()
+		assert.Equal(t, []netip.Addr{admissionVTEP}, revoker.drain(),
+			"the listing withdraws the allocation the refused admission would have kept")
+		assert.False(t, f.admitter.admittedFor(admissionVTEP, 7))
+	})
+}
+
+func TestVTEPAdmitter_AdmissionOnANewerPassOutlivesTheFailure(t *testing.T) {
+	ctx := context.Background()
+	f := newAdmissionFixture(t)
+	gated := &gatedIPAM{admissionIPAM: f.ipam, listing: make(chan string, 1), release: make(chan struct{})}
+	revoker := signalRevoker{revoked: make(chan netip.Addr, 4)}
+	f.admitter.ipam = gated
+	f.admitter.revoker = revoker
+	f.admitter.readTimeout = time.Hour
+
+	f.admitter.OnDeviceVerdict(ctx, streamed(deviceverdict.DeviceVerdict{DeviceID: 7, Reason: "quote rejected"}, admissionNow))
+	assert.Equal(t, "7", <-gated.listing)
+
+	f.verdicts.records[7] = signedVerdict(admissionNow.Add(time.Second))
+	require.NoError(t, f.admitter.AdmitVTEP(ctx, 10100, admissionVTEP))
+
+	close(gated.release)
+	f.admitter.waitListings()
+	assert.Empty(t, revoker.drain(), "an admission on a report attested after the failure is not withdrawn")
+	assert.True(t, f.admitter.admittedFor(admissionVTEP, 7))
+}
+
+func TestVTEPAdmitter_Remember(t *testing.T) {
+	older := AdmittedVTEP{VTEP: admissionVTEP, DeviceID: 7, VerdictAt: admissionNow.Add(-time.Minute)}
+
+	t.Run("publishes an admission judged against the failure still held", func(t *testing.T) {
+		f := newAdmissionFixture(t)
+		f.admitter.holdFailure(7, admissionNow)
+		_, epoch := f.admitter.failureHeld(7, admissionNow)
+
+		require.NoError(t, f.admitter.remember(10100, evaluation{admitted: older, failureEpoch: epoch}))
+		assert.True(t, f.admitter.admittedFor(admissionVTEP, 7))
+	})
+
+	t.Run("publishes an admission newer than the failure that overtook it", func(t *testing.T) {
+		f := newAdmissionFixture(t)
+		f.admitter.holdFailure(7, admissionNow)
+		newer := older
+		newer.VerdictAt = admissionNow.Add(time.Second)
+
+		require.NoError(t, f.admitter.remember(10100, evaluation{admitted: newer}))
+		assert.True(t, f.admitter.admittedFor(admissionVTEP, 7))
+	})
+
+	t.Run("refuses an admission a failure overtook", func(t *testing.T) {
+		f := newAdmissionFixture(t)
+		f.admitter.holdFailure(7, admissionNow)
+
+		err := f.admitter.remember(10100, evaluation{admitted: older})
+		requireVerdictDenied(t, err, "while the admission was judged")
+		var verdictErr ErrOverlayVTEPVerdict
+		require.True(t, errors.As(err, &verdictErr))
+		assert.Equal(t, uint32(10100), verdictErr.VNI)
+		assert.False(t, f.admitter.admittedFor(admissionVTEP, 7))
+	})
+}
+
+func TestVTEPAdmitter_AdmittedSince(t *testing.T) {
+	f := newAdmissionFixture(t)
+	admitted := AdmittedVTEP{VTEP: admissionVTEP, DeviceID: 7, VerdictAt: admissionNow}
+	require.NoError(t, f.admitter.remember(0, evaluation{admitted: admitted}))
+
+	assert.True(t, f.admitter.admittedSince(admissionVTEP, 7, admissionNow.Add(-time.Second)))
+	assert.False(t, f.admitter.admittedSince(admissionVTEP, 7, admissionNow), "a verdict recorded at since is not newer")
+	assert.False(t, f.admitter.admittedSince(admissionVTEP, 8, admissionNow.Add(-time.Second)), "admitted for another device")
+	assert.False(t, f.admitter.admittedSince(admissionVTEP2, 7, admissionNow.Add(-time.Second)), "never admitted")
+}
+
 func TestVTEPAdmitter_OnDeviceVerdict(t *testing.T) {
 	ctx := context.Background()
 	failures := map[string]deviceverdict.RecordedDeviceVerdict{
@@ -764,7 +1363,7 @@ func TestVTEPAdmitter_OnDeviceVerdict(t *testing.T) {
 			f := newAdmissionFixture(t, admissionVTEP, admissionVTEP2)
 			require.NoError(t, f.admitter.AdmitVTEP(ctx, 10100, admissionVTEP))
 
-			f.admitter.OnDeviceVerdict(ctx, failed)
+			deliverVerdict(ctx, f.admitter, failed)
 
 			assert.ElementsMatch(t, []netip.Addr{admissionVTEP, admissionVTEP2}, f.overlay.revoked)
 			assert.Equal(t, []AdmittedVTEP{{VTEP: admissionVTEP}}, f.admitter.Admitted(installed(admissionVTEP)))
@@ -777,7 +1376,7 @@ func TestVTEPAdmitter_OnDeviceVerdict(t *testing.T) {
 		f := newAdmissionFixture(t)
 		require.NoError(t, f.admitter.AdmitVTEP(ctx, 10100, admissionVTEP))
 
-		f.admitter.OnDeviceVerdict(ctx, passed)
+		deliverVerdict(ctx, f.admitter, passed)
 
 		assert.Empty(t, f.overlay.revoked)
 		assert.Empty(t, f.overlay.replayed, "nothing was refused")
@@ -786,11 +1385,11 @@ func TestVTEPAdmitter_OnDeviceVerdict(t *testing.T) {
 	t.Run("a device withdrawn and then passing again is replayed", func(t *testing.T) {
 		f := newAdmissionFixture(t, admissionVTEP, admissionVTEP2)
 		f.verdict().Verdict.Passed = false
-		f.admitter.OnDeviceVerdict(ctx, failures["cryptographic failure"])
+		deliverVerdict(ctx, f.admitter, failures["cryptographic failure"])
 		require.ElementsMatch(t, []netip.Addr{admissionVTEP, admissionVTEP2}, f.overlay.refused)
 
 		f.verdicts.records[7] = signedVerdict(passed.RecordedAt)
-		f.admitter.OnDeviceVerdict(ctx, passed)
+		deliverVerdict(ctx, f.admitter, passed)
 
 		assert.ElementsMatch(t, []netip.Addr{admissionVTEP, admissionVTEP2}, f.overlay.replayed)
 		assert.Empty(t, f.overlay.refused)
@@ -801,7 +1400,7 @@ func TestVTEPAdmitter_OnDeviceVerdict(t *testing.T) {
 		other := netip.MustParseAddr("10.4.100.30")
 		f.overlay.refused = []netip.Addr{admissionVTEP, other}
 
-		f.admitter.OnDeviceVerdict(ctx, passed)
+		deliverVerdict(ctx, f.admitter, passed)
 
 		assert.Equal(t, []netip.Addr{admissionVTEP}, f.overlay.replayed)
 		assert.Equal(t, []netip.Addr{other}, f.overlay.refused)
@@ -812,7 +1411,7 @@ func TestVTEPAdmitter_OnDeviceVerdict(t *testing.T) {
 		f.verdict().Verdict.Passed = false
 		f.overlay.refused = []netip.Addr{admissionVTEP}
 
-		f.admitter.OnDeviceVerdict(ctx, passed)
+		deliverVerdict(ctx, f.admitter, passed)
 
 		assert.Empty(t, f.overlay.replayed)
 		assert.Equal(t, []netip.Addr{admissionVTEP}, f.overlay.refused, "the sweep tries it again")
@@ -823,7 +1422,7 @@ func TestVTEPAdmitter_OnDeviceVerdict(t *testing.T) {
 		f.overlay.refused = []netip.Addr{admissionVTEP}
 		f.ipam.err = errPlatformDown
 
-		f.admitter.OnDeviceVerdict(ctx, passed)
+		deliverVerdict(ctx, f.admitter, passed)
 
 		assert.Empty(t, f.overlay.replayed)
 	})
@@ -832,7 +1431,7 @@ func TestVTEPAdmitter_OnDeviceVerdict(t *testing.T) {
 		f := newAdmissionFixture(t, admissionVTEP, admissionVTEP2)
 		f.overlay.fail = map[netip.Addr]error{admissionVTEP: errPlatformDown}
 
-		f.admitter.OnDeviceVerdict(ctx, failures["cryptographic failure"])
+		deliverVerdict(ctx, f.admitter, failures["cryptographic failure"])
 
 		assert.Equal(t, []netip.Addr{admissionVTEP2}, f.overlay.revoked)
 	})
@@ -848,7 +1447,7 @@ func TestVTEPAdmitter_HoldsAStreamedFailureUntilANewerPass(t *testing.T) {
 
 	f := newAdmissionFixture(t)
 	require.NoError(t, f.admitter.AdmitVTEP(ctx, 10100, admissionVTEP))
-	f.admitter.OnDeviceVerdict(ctx, failed)
+	deliverVerdict(ctx, f.admitter, failed)
 	require.Equal(t, []netip.Addr{admissionVTEP}, f.overlay.revoked)
 
 	err := f.admitter.AdmitVTEP(ctx, 10100, admissionVTEP)
@@ -862,7 +1461,7 @@ func TestVTEPAdmitter_HoldsAStreamedFailureUntilANewerPass(t *testing.T) {
 	requireVerdictDenied(t, f.admitter.AdmitVTEP(ctx, 10100, admissionVTEP), "failed verdict")
 
 	f.verdicts.records[7] = signedVerdict(failedAt.Add(time.Second))
-	f.admitter.OnDeviceVerdict(ctx, streamed(deviceverdict.DeviceVerdict{DeviceID: 7, Passed: true}, failedAt.Add(2*time.Second)))
+	deliverVerdict(ctx, f.admitter, streamed(deviceverdict.DeviceVerdict{DeviceID: 7, Passed: true}, failedAt.Add(2*time.Second)))
 	assert.Equal(t, []netip.Addr{admissionVTEP}, f.overlay.replayed)
 	require.NoError(t, f.admitter.AdmitVTEP(ctx, 10100, admissionVTEP))
 }
@@ -872,30 +1471,42 @@ func TestVTEPAdmitter_HeldFailure(t *testing.T) {
 
 	t.Run("an event without a recording time is held from the gateway's clock", func(t *testing.T) {
 		f := newAdmissionFixture(t)
-		f.admitter.OnDeviceVerdict(ctx, streamed(deviceverdict.DeviceVerdict{DeviceID: 7}, time.Time{}))
+		deliverVerdict(ctx, f.admitter, streamed(deviceverdict.DeviceVerdict{DeviceID: 7}, time.Time{}))
 
 		requireVerdictDenied(t, f.admitter.AdmitVTEP(ctx, 10100, admissionVTEP), "failed verdict")
 	})
 
 	t.Run("a later failure moves the hold forward", func(t *testing.T) {
 		f := newAdmissionFixture(t)
-		f.admitter.OnDeviceVerdict(ctx, streamed(deviceverdict.DeviceVerdict{DeviceID: 7}, admissionNow.Add(-time.Hour)))
-		f.admitter.OnDeviceVerdict(ctx, streamed(deviceverdict.DeviceVerdict{DeviceID: 7}, admissionNow))
-		f.admitter.OnDeviceVerdict(ctx, streamed(deviceverdict.DeviceVerdict{DeviceID: 7}, admissionNow.Add(-2*time.Hour)))
+		deliverVerdict(ctx, f.admitter, streamed(deviceverdict.DeviceVerdict{DeviceID: 7}, admissionNow.Add(-time.Hour)))
+		deliverVerdict(ctx, f.admitter, streamed(deviceverdict.DeviceVerdict{DeviceID: 7}, admissionNow))
+		deliverVerdict(ctx, f.admitter, streamed(deviceverdict.DeviceVerdict{DeviceID: 7}, admissionNow.Add(-2*time.Hour)))
 
 		requireVerdictDenied(t, f.admitter.AdmitVTEP(ctx, 10100, admissionVTEP), "failed verdict")
 	})
 
+	t.Run("every failure takes a new epoch and an older one keeps the hold time", func(t *testing.T) {
+		f := newAdmissionFixture(t)
+		require.Equal(t, admissionNow, f.admitter.holdFailure(7, admissionNow))
+		first := f.admitter.heldFailures[7]
+
+		require.Equal(t, admissionNow.Add(-time.Hour), f.admitter.holdFailure(7, admissionNow.Add(-time.Hour)))
+		second := f.admitter.heldFailures[7]
+
+		assert.Equal(t, admissionNow, second.at, "an older failure does not move the hold back")
+		assert.Greater(t, second.epoch, first.epoch)
+	})
+
 	t.Run("holds only the failed device", func(t *testing.T) {
 		f := newAdmissionFixture(t)
-		f.admitter.OnDeviceVerdict(ctx, streamed(deviceverdict.DeviceVerdict{DeviceID: 8}, admissionNow))
+		deliverVerdict(ctx, f.admitter, streamed(deviceverdict.DeviceVerdict{DeviceID: 8}, admissionNow))
 
 		require.NoError(t, f.admitter.AdmitVTEP(ctx, 10100, admissionVTEP))
 	})
 
 	t.Run("the sweep drops a hold no report could outlast", func(t *testing.T) {
 		f := newAdmissionFixture(t)
-		f.admitter.OnDeviceVerdict(ctx, streamed(deviceverdict.DeviceVerdict{DeviceID: 7}, admissionNow))
+		deliverVerdict(ctx, f.admitter, streamed(deviceverdict.DeviceVerdict{DeviceID: 7}, admissionNow))
 		require.NoError(t, f.admitter.Sweep(ctx, installed()))
 		require.Len(t, f.admitter.heldFailures, 1)
 

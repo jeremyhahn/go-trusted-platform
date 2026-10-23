@@ -36,14 +36,17 @@ import (
 type mockIAMClientForServer struct {
 	mu      sync.RWMutex
 	tenants map[string]*sdkiam.Tenant
-	nextID  int
 }
 
 func newMockIAMClientForServer() *mockIAMClientForServer {
 	return &mockIAMClientForServer{
 		tenants: make(map[string]*sdkiam.Tenant),
-		nextID:  1,
 	}
+}
+
+// Reconcile satisfies tenant.RoleReconciler; these tests do not inspect roles.
+func (m *mockIAMClientForServer) Reconcile(_ context.Context, tenantID string) (*sdkiam.ReconcileRolesResponse, error) {
+	return &sdkiam.ReconcileRolesResponse{TenantID: tenantID}, nil
 }
 
 func (m *mockIAMClientForServer) Create(ctx context.Context, req *sdkiam.CreateTenantRequest) (*sdkiam.Tenant, error) {
@@ -61,7 +64,6 @@ func (m *mockIAMClientForServer) Create(ctx context.Context, req *sdkiam.CreateT
 	}
 
 	m.tenants[t.ID] = t
-	m.nextID++
 	return t, nil
 }
 
@@ -124,6 +126,7 @@ func createTestTenantManagerForServer(t *testing.T) *tenant.Manager {
 
 	mgr, err := tenant.NewManager(&tenant.ManagerConfig{
 		IAMTenantClient: newMockIAMClientForServer(),
+		IAMRoleClient:   newMockIAMClientForServer(),
 		Config:          cfg,
 		Logger:          nil,
 	})
@@ -918,22 +921,39 @@ func TestTenantGRPCServer_UpdateQuotas_PartialUpdate(t *testing.T) {
 	ctx := context.Background()
 	server := createTestTenantGRPCServer(t)
 
-	// Create a tenant
 	createResp, err := server.CreateTenant(ctx, &platformv1.CreateTenantRequest{
 		Name: "partial-quota-test",
 	})
 	require.NoError(t, err)
+	id := createResp.Tenant.Id
 
-	// Update only compute quota
+	// MaxDiskGB has no wire field, so seed it, and the other sections,
+	// through the manager.
+	seed := &tenant.TenantQuotas{
+		Compute: tenant.ComputeQuota{MaxVMs: 10, MaxContainers: 40, MaxVCPUs: 64, MaxMemoryMB: 8192, MaxDiskGB: 500},
+		Network: tenant.NetworkQuota{MaxBridges: 4, MaxPorts: 100, MaxBandwidthMbps: 1000},
+		Storage: tenant.StorageQuota{MaxVolumesGB: 900, MaxSnapshots: 20},
+	}
+	require.NoError(t, server.manager.UpdateQuotas(ctx, id, seed))
+
+	// Change one limit, as `platformctl tenant quotas set --max-vms` does.
 	resp, err := server.UpdateQuotas(ctx, &platformv1.UpdateQuotasRequest{
-		TenantId: createResp.Tenant.Id,
+		TenantId: id,
 		Compute: &platformv1.ComputeQuota{
-			MaxVms: 25,
+			MaxVms:        25,
+			MaxContainers: 40,
+			MaxVcpus:      64,
+			MaxMemoryMb:   8192,
 		},
 	})
-
 	require.NoError(t, err)
 	assert.True(t, resp.Status.Success)
+
+	got, err := server.manager.GetQuotas(ctx, id)
+	require.NoError(t, err)
+	want := *seed
+	want.Compute.MaxVMs = 25
+	assert.Equal(t, want, *got, "only MaxVMs may change; MaxDiskGB and the absent sections are kept")
 }
 
 func TestTenantGRPCServer_UpdateQuotas_InvalidArgument(t *testing.T) {
@@ -967,6 +987,7 @@ func TestTenantGRPCServer_UpdateQuotas_NotFound(t *testing.T) {
 	st, ok := status.FromError(err)
 	require.True(t, ok)
 	assert.Equal(t, codes.NotFound, st.Code())
+	assert.Equal(t, tenant.ErrTenantNotFound{ID: "nonexistent-tenant"}.Error(), st.Message())
 }
 
 // =============================================================================

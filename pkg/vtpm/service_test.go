@@ -31,6 +31,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -196,8 +197,9 @@ func TestService_CreateBundle_InvalidEKAlgorithm(t *testing.T) {
 		EKAlgorithm: EKAlgorithm("invalid"),
 	}
 	_, err = service.CreateBundle(ctx, opts)
-	if err == nil {
-		t.Error("CreateBundle should fail with invalid EK algorithm")
+	var invalidAlg ErrInvalidEKAlgorithm
+	if !errors.As(err, &invalidAlg) || invalidAlg.Algorithm != "invalid" {
+		t.Errorf("CreateBundle err = %v, want ErrInvalidEKAlgorithm{invalid}", err)
 	}
 }
 
@@ -2280,49 +2282,50 @@ func TestService_ValidateBundle_EmptyChecksums(t *testing.T) {
 	}
 }
 
-func TestService_CreateBundleDirectories_PermissionDenied(t *testing.T) {
-	// Skip if running as root (permissions won't work)
-	if os.Getuid() == 0 {
-		t.Skip("Skipping permission test when running as root")
-	}
-
+func TestService_CreateBundleDirectories_PathBlocked(t *testing.T) {
 	config := createTestConfig(t)
 	service, err := NewService(config, nil, &mockCA{})
 	if err != nil {
 		t.Fatalf("NewService failed: %v", err)
 	}
 
-	// Try to create directories in a non-writable location
-	bundlePath := "/root/nonexistent/path/bundle"
-	err = service.createBundleDirectories(bundlePath)
-	if err == nil {
-		t.Error("createBundleDirectories should fail for non-writable path")
+	// A regular file where a directory belongs fails MkdirAll for every
+	// user, root included.
+	blocker := writeBlockingFile(t)
+	err = service.createBundleDirectories(filepath.Join(blocker, "bundle"))
+
+	var cfgErr ErrInvalidConfig
+	if !errors.As(err, &cfgErr) || cfgErr.Field != "bundlePath" {
+		t.Fatalf("createBundleDirectories error = %v, want ErrInvalidConfig for bundlePath", err)
+	}
+	if !strings.Contains(cfgErr.Reason, blocker) {
+		t.Errorf("reason %q does not name the blocked path %s", cfgErr.Reason, blocker)
 	}
 }
 
+// writeBlockingFile writes a regular file and returns its path. Creating a
+// directory beneath it fails with ENOTDIR whatever the caller's privileges.
+func writeBlockingFile(t *testing.T) string {
+	t.Helper()
+	blocker := filepath.Join(t.TempDir(), "blocker")
+	if err := os.WriteFile(blocker, []byte("not a directory"), 0600); err != nil {
+		t.Fatalf("write blocking file: %v", err)
+	}
+	return blocker
+}
+
 func TestService_NewService_DirectoryCreationFails(t *testing.T) {
-	// Skip if running as root
-	if os.Getuid() == 0 {
-		t.Skip("Skipping permission test when running as root")
-	}
-
-	tmpDir := t.TempDir()
-	ovmfCode := filepath.Join(tmpDir, "OVMF_CODE.fd")
-	ovmfVars := filepath.Join(tmpDir, "OVMF_VARS.fd")
-	os.WriteFile(ovmfCode, []byte("test"), 0644)
-	os.WriteFile(ovmfVars, []byte("test"), 0644)
-
-	config := &Config{
-		BaseDir:  "/root/nonexistent/vtpm", // Non-writable path
-		OVMFCode: ovmfCode,
-		OVMFVars: ovmfVars,
-		PCRBanks: []string{"sha256"},
-	}
-	config.ApplyDefaults()
+	config := createTestConfig(t)
+	config.BaseDir = writeBlockingFile(t)
 
 	_, err := NewService(config, nil, &mockCA{})
-	if err == nil {
-		t.Error("NewService should fail when directory creation fails")
+
+	var cfgErr ErrInvalidConfig
+	if !errors.As(err, &cfgErr) || cfgErr.Field != "BaseDir" {
+		t.Fatalf("NewService error = %v, want ErrInvalidConfig for BaseDir", err)
+	}
+	if !strings.Contains(cfgErr.Reason, "failed to create bundles directory") {
+		t.Errorf("reason %q, want the bundles directory failure", cfgErr.Reason)
 	}
 }
 
@@ -4168,7 +4171,7 @@ func TestTPMProvider_CloseAll_Empty(t *testing.T) {
 }
 
 func TestNewTPMOperations_NonexistentSocket(t *testing.T) {
-	_, err := NewTPMOperations("/nonexistent/socket/path.sock", EKAlgorithmRSA, nil)
+	_, err := NewTPMOperations("/nonexistent/socket/path.sock", EKAlgorithmRSA, "vm-01", nil)
 	if err == nil {
 		t.Error("NewTPMOperations should fail for nonexistent socket")
 	}
@@ -4180,7 +4183,7 @@ func TestNewTPMOperations_NonexistentSocket(t *testing.T) {
 }
 
 func TestNewTPMOperations_ECCAlgorithm(t *testing.T) {
-	_, err := NewTPMOperations("/nonexistent/socket/path.sock", EKAlgorithmECC, nil)
+	_, err := NewTPMOperations("/nonexistent/socket/path.sock", EKAlgorithmECC, "vm-01", nil)
 	if err == nil {
 		t.Error("NewTPMOperations should fail for nonexistent socket (even with ECC)")
 	}
@@ -4188,7 +4191,7 @@ func TestNewTPMOperations_ECCAlgorithm(t *testing.T) {
 
 func TestNewTPMOperations_DefaultLogger(t *testing.T) {
 	// Test that nil logger is handled gracefully by checking the error message
-	_, err := NewTPMOperations("/nonexistent/socket/path.sock", EKAlgorithmRSA, nil)
+	_, err := NewTPMOperations("/nonexistent/socket/path.sock", EKAlgorithmRSA, "vm-01", nil)
 	if err == nil {
 		t.Error("NewTPMOperations should fail for nonexistent socket")
 	}
@@ -4630,24 +4633,24 @@ func TestService_CopyDir_WithFileError(t *testing.T) {
 		t.Fatalf("NewService failed: %v", err)
 	}
 
-	// Skip if running as root
-	if os.Getuid() == 0 {
-		t.Skip("Skipping permission test when running as root")
+	srcDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(srcDir, "subdir"), 0700); err != nil {
+		t.Fatalf("mkdir source: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(srcDir, "subdir", "file.txt"), []byte("content"), 0644); err != nil {
+		t.Fatalf("write source file: %v", err)
 	}
 
-	srcDir := t.TempDir()
-	os.MkdirAll(filepath.Join(srcDir, "subdir"), 0700)
-	os.WriteFile(filepath.Join(srcDir, "subdir", "file.txt"), []byte("content"), 0644)
-
-	// Make destination unwritable
-	dstDir := filepath.Join(t.TempDir(), "dest")
-	os.MkdirAll(dstDir, 0700)
-	os.Chmod(dstDir, 0500) // Read-only
-	defer os.Chmod(dstDir, 0700)
+	// The destination's subdir already exists as a regular file, so the
+	// recursive copy cannot create it, for root as for anyone.
+	dstDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dstDir, "subdir"), []byte("not a directory"), 0600); err != nil {
+		t.Fatalf("write blocking file: %v", err)
+	}
 
 	err = service.copyDir(srcDir, dstDir)
-	if err == nil {
-		t.Error("copyDir should fail when destination is not writable")
+	if !errors.Is(err, syscall.ENOTDIR) {
+		t.Errorf("copyDir error = %v, want ENOTDIR", err)
 	}
 }
 
@@ -4884,27 +4887,22 @@ func TestService_GetBundle_WithEKCertInfo(t *testing.T) {
 // Additional Edge Case Tests for Improved Coverage
 // =============================================================================
 
-func TestService_NewService_DirectoryCreationFailure(t *testing.T) {
-	// Skip if running as root
-	if os.Getuid() == 0 {
-		t.Skip("Skipping permission test when running as root")
+func TestService_NewService_TemplatesDirectoryCreationFails(t *testing.T) {
+	config := createTestConfig(t)
+	// The bundles directory is created; a file named "templates" blocks the
+	// templates directory.
+	if err := os.WriteFile(config.TemplatesDir(), []byte("not a directory"), 0600); err != nil {
+		t.Fatalf("write blocking file: %v", err)
 	}
 
-	// Create a read-only parent directory to cause mkdir to fail
-	tmpDir := t.TempDir()
-	readOnlyDir := filepath.Join(tmpDir, "readonly")
-	os.MkdirAll(readOnlyDir, 0500)
-	defer os.Chmod(readOnlyDir, 0700)
+	_, err := NewService(config, nil, &mockCA{})
 
-	config := &Config{
-		BaseDir:  filepath.Join(readOnlyDir, "vtpm"),
-		OVMFCode: "/nonexistent/OVMF_CODE.fd",
-		OVMFVars: "/nonexistent/OVMF_VARS.fd",
+	var cfgErr ErrInvalidConfig
+	if !errors.As(err, &cfgErr) || cfgErr.Field != "BaseDir" {
+		t.Fatalf("NewService error = %v, want ErrInvalidConfig for BaseDir", err)
 	}
-
-	_, err := NewService(config, nil, nil)
-	if err == nil {
-		t.Error("NewService should fail when directory creation fails")
+	if !strings.Contains(cfgErr.Reason, "failed to create templates directory") {
+		t.Errorf("reason %q, want the templates directory failure", cfgErr.Reason)
 	}
 }
 

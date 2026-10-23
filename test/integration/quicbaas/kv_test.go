@@ -17,18 +17,19 @@ package quicbaas_test
 
 import (
 	"context"
+	"fmt"
+	"strconv"
 	"testing"
 	"time"
 
 	quicbaassdk "github.com/jeremyhahn/go-quicbaas/sdk/go"
+	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 // TestKVService_Put tests the KV Put operation.
 func TestKVService_Put(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	tf := newTestFactory(t)
 	defer tf.Cleanup()
 
@@ -41,14 +42,16 @@ func TestKVService_Put(t *testing.T) {
 	t.Run("ValidPut", func(t *testing.T) {
 		entityType := generateTestKey("kv/put/valid")
 		data := []byte(`{"test": "data"}`)
+		id := nextEntityID()
 
 		resp, err := kv.Put(ctx, &quicbaassdk.PutRequest{
 			EntityType: entityType,
+			ID:         id,
 			Data:       data,
 		})
 		require.NoError(t, err)
-		assert.NotNil(t, resp)
-		assert.NotZero(t, resp.ID)
+		require.NotNil(t, resp)
+		assert.Equal(t, id, resp.ID)
 	})
 
 	t.Run("PutWithEmptyValue", func(t *testing.T) {
@@ -105,6 +108,7 @@ func TestKVService_Put(t *testing.T) {
 		// First put
 		resp1, err := kv.Put(ctx, &quicbaassdk.PutRequest{
 			EntityType: entityType,
+			ID:         nextEntityID(),
 			Data:       data1,
 		})
 		require.NoError(t, err)
@@ -112,6 +116,7 @@ func TestKVService_Put(t *testing.T) {
 		// Second put (new entity, not overwrite)
 		resp2, err := kv.Put(ctx, &quicbaassdk.PutRequest{
 			EntityType: entityType,
+			ID:         nextEntityID(),
 			Data:       data2,
 		})
 		require.NoError(t, err)
@@ -140,8 +145,6 @@ func TestKVService_Put(t *testing.T) {
 
 // TestKVService_Get tests the KV Get operation.
 func TestKVService_Get(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	tf := newTestFactory(t)
 	defer tf.Cleanup()
 
@@ -177,16 +180,12 @@ func TestKVService_Get(t *testing.T) {
 			EntityType: entityType,
 			ID:         999999, // Non-existing ID
 		})
-		require.NoError(t, err)
-		assert.False(t, resp.Found)
-		assert.Nil(t, resp.Data)
+		assert.True(t, helpers.KVEntityAbsent(resp, err), "Get of a missing entity must report it absent, got %+v, %v", resp, err)
 	})
 }
 
 // TestKVService_Delete tests the KV Delete operation.
 func TestKVService_Delete(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	tf := newTestFactory(t)
 	defer tf.Cleanup()
 
@@ -220,7 +219,7 @@ func TestKVService_Delete(t *testing.T) {
 				EntityType: entityType,
 				ID:         putResp.ID,
 			})
-			return err == nil && !getResp.Found
+			return helpers.KVEntityAbsent(getResp, err)
 		}, 5*time.Second, 100*time.Millisecond)
 	})
 
@@ -261,7 +260,7 @@ func TestKVService_Delete(t *testing.T) {
 				EntityType: entityType,
 				ID:         putResp.ID,
 			})
-			return err == nil && !getResp.Found
+			return helpers.KVEntityAbsent(getResp, err)
 		}, 5*time.Second, 100*time.Millisecond)
 
 		// Recreate with new value (will get a new ID)
@@ -284,8 +283,6 @@ func TestKVService_Delete(t *testing.T) {
 
 // TestKVService_List tests the KV List operation.
 func TestKVService_List(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	tf := newTestFactory(t)
 	defer tf.Cleanup()
 
@@ -304,6 +301,7 @@ func TestKVService_List(t *testing.T) {
 			data := []byte(`{"index": ` + string(rune('0'+i)) + `}`)
 			_, err := kv.Put(ctx, &quicbaassdk.PutRequest{
 				EntityType: entityType,
+				ID:         nextEntityID(),
 				Data:       data,
 			})
 			require.NoError(t, err)
@@ -326,6 +324,7 @@ func TestKVService_List(t *testing.T) {
 		for i := 0; i < 20; i++ {
 			_, err := kv.Put(ctx, &quicbaassdk.PutRequest{
 				EntityType: entityType,
+				ID:         nextEntityID(),
 				Data:       []byte(`{}`),
 			})
 			require.NoError(t, err)
@@ -338,14 +337,19 @@ func TestKVService_List(t *testing.T) {
 		})
 		require.NoError(t, err)
 		assert.NotNil(t, resp)
+		// Declared gap: go-quicbaas #1534 — flips to the success path on the pin bump that carries the fix.
+		// The embedded KV List merges every page the server streams into one
+		// answer, so a PageSize of 5 over 20 entities answers all 20.
+		if helpers.GapEmbeddedKVListPageSize.Defect(t, "List", len(resp.Entities) == 20,
+			"PageSize 5 ignored: all 20 entities", strconv.Itoa(len(resp.Entities))+" entities") {
+			return
+		}
 		assert.LessOrEqual(t, len(resp.Entities), 5)
 	})
 }
 
 // TestKVService_CRUD tests full CRUD lifecycle.
 func TestKVService_CRUD(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	tf := newTestFactory(t)
 	defer tf.Cleanup()
 
@@ -406,14 +410,12 @@ func TestKVService_CRUD(t *testing.T) {
 			EntityType: entityType,
 			ID:         entityID,
 		})
-		return err == nil && !getResp.Found
+		return helpers.KVEntityAbsent(getResp, err)
 	}, 5*time.Second, 100*time.Millisecond, "Entity should be deleted")
 }
 
 // TestKVService_ConcurrentPuts tests concurrent put operations.
 func TestKVService_ConcurrentPuts(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	tf := newTestFactory(t)
 	defer tf.Cleanup()
 
@@ -452,8 +454,6 @@ func TestKVService_ConcurrentPuts(t *testing.T) {
 
 // TestKVService_ContextCancellation tests that operations respect context cancellation.
 func TestKVService_ContextCancellation(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	tf := newTestFactory(t)
 	defer tf.Cleanup()
 
@@ -472,7 +472,11 @@ func TestKVService_ContextCancellation(t *testing.T) {
 		EntityType: entityType,
 		Data:       data,
 	})
-	assert.Error(t, err, "Put with cancelled context should fail")
+	// Declared gap: the embedded transport does not check the context before it dispatches — flips to the success path on the pin bump that carries the fix.
+	if !helpers.GapEmbeddedKVCancelledContext.Defect(t, "Put", err == nil,
+		"Put on a cancelled context writes", fmt.Sprintf("Put error: %v", err)) {
+		assert.Error(t, err, "Put with cancelled context should fail")
+	}
 
 	_, err = kv.Get(ctx, &quicbaassdk.GetRequest{
 		EntityType: entityType,
@@ -483,8 +487,6 @@ func TestKVService_ContextCancellation(t *testing.T) {
 
 // TestKVService_Batch tests batch operations.
 func TestKVService_Batch(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	tf := newTestFactory(t)
 	defer tf.Cleanup()
 
@@ -510,6 +512,10 @@ func TestKVService_Batch(t *testing.T) {
 		resp, err := batch.Execute(ctx, &quicbaassdk.BatchRequest{
 			Operations: ops,
 		})
+		// Declared gap: go-quicbaas #1533 — flips to the success path on the pin bump that carries the fix.
+		if helpers.GapEmbeddedBatch.Unserved(t, "Execute", err) {
+			return
+		}
 		require.NoError(t, err)
 		assert.NotNil(t, resp)
 	})
@@ -532,6 +538,10 @@ func TestKVService_Batch(t *testing.T) {
 		_, err := batch.Execute(ctx, &quicbaassdk.BatchRequest{
 			Operations: ops,
 		})
+		// Declared gap: go-quicbaas #1533 — flips to the success path on the pin bump that carries the fix.
+		if helpers.GapEmbeddedBatch.Unserved(t, "Execute", err) {
+			return
+		}
 		require.NoError(t, err)
 
 		// Batch delete
@@ -554,14 +564,11 @@ func TestKVService_Batch(t *testing.T) {
 
 // TestKVService_Transaction tests transactional operations.
 func TestKVService_Transaction(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	tf := newTestFactory(t)
 	defer tf.Cleanup()
 
 	sdk := requireSDK(t, tf.Factory)
 	txn := sdk.Transaction()
-	kv := sdk.KV()
 
 	ctx, cancel := testContext()
 	defer cancel()
@@ -572,41 +579,44 @@ func TestKVService_Transaction(t *testing.T) {
 		value1 := []byte(`{"version": 1}`)
 		value2 := []byte(`{"version": 2}`)
 
-		// Create initial value
-		putResp, err := kv.Put(ctx, &quicbaassdk.PutRequest{
-			EntityType: entityType,
-			Data:       value1,
-		})
-		require.NoError(t, err)
-
-		// Get current version
-		getResp, err := kv.Get(ctx, &quicbaassdk.GetRequest{
-			EntityType: entityType,
-			ID:         putResp.ID,
-		})
-		require.NoError(t, err)
-
-		// Transactional update with compare
-		resp, err := txn.Execute(ctx, &quicbaassdk.TxnRequest{
+		// Create the key only if it does not exist: version 0 means absent.
+		createResp, err := txn.Execute(ctx, &quicbaassdk.TxnRequest{
 			Compare: []quicbaassdk.Compare{
-				{
-					Key:      key,
-					Target:   quicbaassdk.CompareVersion,
-					Result:   quicbaassdk.CompareEqual,
-					Revision: getResp.Version,
-				},
+				{Key: key, Target: quicbaassdk.CompareVersion, Result: quicbaassdk.CompareEqual, Revision: 0},
 			},
 			Success: []quicbaassdk.TxnOp{
-				{
-					Type:       quicbaassdk.TxnOpPut,
-					EntityType: entityType,
-					Key:        key,
-					Value:      value2,
-				},
+				{Type: quicbaassdk.TxnOpPut, EntityType: entityType, Key: key, Value: value1},
+			},
+		})
+		// Declared gap: go-quicbaas #1319 — flips to the success path on the pin bump that carries the fix.
+		if helpers.GapEmbeddedTransaction.Mistyped(t, "Execute", err) {
+			return
+		}
+		require.NoError(t, err)
+		assert.True(t, createResp.Succeeded)
+
+		// Swap only while the stored value is still value1.
+		swapResp, err := txn.Execute(ctx, &quicbaassdk.TxnRequest{
+			Compare: []quicbaassdk.Compare{
+				{Key: key, Target: quicbaassdk.CompareValue, Result: quicbaassdk.CompareEqual, Value: value1},
+			},
+			Success: []quicbaassdk.TxnOp{
+				{Type: quicbaassdk.TxnOpPut, EntityType: entityType, Key: key, Value: value2},
 			},
 		})
 		require.NoError(t, err)
-		assert.NotNil(t, resp)
-		assert.True(t, resp.Succeeded)
+		assert.True(t, swapResp.Succeeded)
+
+		// A second create-if-absent loses: the key exists now.
+		recreateResp, err := txn.Execute(ctx, &quicbaassdk.TxnRequest{
+			Compare: []quicbaassdk.Compare{
+				{Key: key, Target: quicbaassdk.CompareVersion, Result: quicbaassdk.CompareEqual, Revision: 0},
+			},
+			Success: []quicbaassdk.TxnOp{
+				{Type: quicbaassdk.TxnOpPut, EntityType: entityType, Key: key, Value: value1},
+			},
+		})
+		require.NoError(t, err)
+		assert.False(t, recreateResp.Succeeded)
 	})
 }

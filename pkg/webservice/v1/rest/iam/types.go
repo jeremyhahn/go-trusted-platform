@@ -31,7 +31,27 @@ type PaginatedResponse struct {
 }
 
 // CreateUserRequest is the request body for creating a user
+// BodyTenant is the tenant a request body names, in either spelling a client
+// sends: the Go SDK's REST transport marshals its proto request (tenant_id),
+// the JS SDK sends its request object (tenantId). Every IAM request body
+// except the tenant records embeds it, so the handler decodes it with the
+// rest of the body and refuses a body naming a tenant other than the one the
+// route acts on (#401).
+type BodyTenant struct {
+	TenantID      string `json:"tenant_id,omitempty"`
+	TenantIDCamel string `json:"tenantId,omitempty"`
+}
+
+// namesOtherThan reports whether the body names, in either spelling, a
+// tenant other than tenant. A body naming no tenant names no other one.
+func (b BodyTenant) namesOtherThan(tenant string) bool {
+	return (b.TenantID != "" && b.TenantID != tenant) ||
+		(b.TenantIDCamel != "" && b.TenantIDCamel != tenant)
+}
+
 type CreateUserRequest struct {
+	BodyTenant
+
 	// Username is the IAM identifier (required by QuicBaaS). The handler
 	// derives a sensible default from Email when callers only supply an
 	// email so the WebUI's name+email form keeps working.
@@ -45,6 +65,8 @@ type CreateUserRequest struct {
 
 // UpdateUserRequest is the request body for updating a user
 type UpdateUserRequest struct {
+	BodyTenant
+
 	Email      string            `json:"email,omitempty"`
 	Name       string            `json:"name,omitempty"`
 	Roles      []string          `json:"roles,omitempty"`
@@ -75,6 +97,8 @@ type ListUsersResponse struct {
 
 // CreateGroupRequest is the request body for creating a group
 type CreateGroupRequest struct {
+	BodyTenant
+
 	ID          string `json:"id"`
 	Name        string `json:"name,omitempty"`
 	Description string `json:"description,omitempty"`
@@ -82,6 +106,8 @@ type CreateGroupRequest struct {
 
 // UpdateGroupRequest is the request body for updating a group
 type UpdateGroupRequest struct {
+	BodyTenant
+
 	Name        string `json:"name,omitempty"`
 	Description string `json:"description,omitempty"`
 }
@@ -105,6 +131,8 @@ type ListGroupsResponse struct {
 
 // CreateRoleRequest is the request body for creating a role
 type CreateRoleRequest struct {
+	BodyTenant
+
 	ID          string   `json:"id"`
 	Name        string   `json:"name,omitempty"`
 	Description string   `json:"description,omitempty"`
@@ -113,6 +141,8 @@ type CreateRoleRequest struct {
 
 // UpdateRoleRequest is the request body for updating a role
 type UpdateRoleRequest struct {
+	BodyTenant
+
 	Name        string   `json:"name,omitempty"`
 	Description string   `json:"description,omitempty"`
 	Permissions []string `json:"permissions,omitempty"`
@@ -171,6 +201,8 @@ type ListTenantsResponse struct {
 
 // CreatePolicyRequest is the request body for creating a policy
 type CreatePolicyRequest struct {
+	BodyTenant
+
 	Name        string            `json:"name"`
 	Description string            `json:"description,omitempty"`
 	Priority    int32             `json:"priority,omitempty"`
@@ -180,6 +212,8 @@ type CreatePolicyRequest struct {
 
 // UpdatePolicyRequest is the request body for updating a policy
 type UpdatePolicyRequest struct {
+	BodyTenant
+
 	Description string            `json:"description,omitempty"`
 	Priority    int32             `json:"priority,omitempty"`
 	SpecYAML    string            `json:"spec_yaml,omitempty"`
@@ -206,6 +240,8 @@ type ListPoliciesResponse struct {
 
 // ValidatePolicyRequest is the request body for validating a policy
 type ValidatePolicyRequest struct {
+	BodyTenant
+
 	SpecYAML string `json:"spec_yaml"`
 }
 
@@ -217,6 +253,8 @@ type ValidatePolicyResponse struct {
 
 // TestPolicyRequest is the request body for testing a policy
 type TestPolicyRequest struct {
+	BodyTenant
+
 	SubjectID  string            `json:"subject_id"`
 	Roles      []string          `json:"roles,omitempty"`
 	Groups     []string          `json:"groups,omitempty"`
@@ -234,11 +272,36 @@ type TestPolicyResponse struct {
 	EvaluationTimeNs int64  `json:"evaluation_time_ns"`
 }
 
+// CheckPermissionRequest asks the policy enforcement point whether a subject
+// may perform an action on a resource. Unlike TestPolicyRequest, which
+// dry-runs the tenant's policy set, this is the live decision the PEP enforces.
+type CheckPermissionRequest struct {
+	BodyTenant
+
+	SubjectID  string            `json:"subject_id"`
+	Roles      []string          `json:"roles,omitempty"`
+	Groups     []string          `json:"groups,omitempty"`
+	Action     string            `json:"action"`
+	Resource   string            `json:"resource"`
+	Context    map[string]string `json:"context,omitempty"`
+	Attributes map[string]string `json:"attributes,omitempty"`
+}
+
+// CheckPermissionResponse is the PEP's decision for a CheckPermissionRequest.
+type CheckPermissionResponse struct {
+	Allowed          bool   `json:"allowed"`
+	MatchedPolicy    string `json:"matched_policy,omitempty"`
+	MatchedRule      string `json:"matched_rule,omitempty"`
+	EvaluationTimeNs int64  `json:"evaluation_time_ns"`
+}
+
 // RegisterAppRequest is the request body for registering an application.
 // Accepts both snake_case (canonical REST) and camelCase (JS SDK) field
 // names so the WebUI's `{grantTypes: [...]}` payload reaches the
 // downstream SDK.
 type RegisterAppRequest struct {
+	BodyTenant
+
 	Name                string   `json:"name"`
 	RedirectURIs        []string `json:"redirect_uris,omitempty"`
 	RedirectURIsCamel   []string `json:"redirectUris,omitempty"`
@@ -248,8 +311,6 @@ type RegisterAppRequest struct {
 	ResponseTypesCamel  []string `json:"responseTypes,omitempty"`
 	ResourcePrefix      string   `json:"resource_prefix,omitempty"`
 	ResourcePrefixCamel string   `json:"resourcePrefix,omitempty"`
-	TenantID            string   `json:"tenant_id,omitempty"`
-	TenantIDCamel       string   `json:"tenantId,omitempty"`
 }
 
 // Resolve normalises camelCase aliases into the canonical snake_case
@@ -274,6 +335,8 @@ func (r *RegisterAppRequest) Resolve() {
 
 // UpdateAppRequest is the request body for updating an application
 type UpdateAppRequest struct {
+	BodyTenant
+
 	Name           string   `json:"name,omitempty"`
 	RedirectURIs   []string `json:"redirect_uris,omitempty"`
 	GrantTypes     []string `json:"grant_types,omitempty"`

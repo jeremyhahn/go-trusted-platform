@@ -35,9 +35,9 @@ the first thing that costs someone a minute.
 | `--no-color` | | `false` | `NO_COLOR` |
 
 **Short-flag shadowing.** `compute list` and `container list` bind `-f` to
-`--filter`, `compute delete` and `container remove` bind `-f` to `--force`, and
-`container remove` binds `-v` to `--volumes` while the root binds `-v` to
-`--verbose`. Cobra resolves the local flag first. **Use long forms in scripts.**
+`--filter`, and `compute delete` and `container remove` bind `-f` to `--force`.
+`container remove --volumes` has no short form: `-v` is the global
+`--verbose`. **Use long forms in scripts.**
 
 ---
 
@@ -50,6 +50,9 @@ the first thing that costs someone a minute.
 | `get` | `<vm-id>` | VM details |
 | `start` | `<vm-id>` | Start a VM |
 | `stop` | `<vm-id>` | Stop a running VM |
+| `reboot` | `<vm-id>` | Reboot a VM (stop, then start) |
+| `suspend` | `<vm-id>` | Pause a running VM in memory |
+| `resume` | `<vm-id>` | Continue a suspended VM |
 | `delete` | `<vm-id>` | Delete a VM |
 | `migrate` | `<vm-id> --destination <host:port>` | Migrate to another host |
 
@@ -58,27 +61,37 @@ the first thing that costs someone a minute.
 | Flag | Short | Type | Default | Meaning |
 |---|---|---|---|---|
 | `--name` | `-n` | string | | VM name (**required**) |
-| `--firmware` | | string | `uefi` | `bios`, `uefi`, `uefi-secure-boot` |
+| `--cpus` | | uint | `2` | vCPU cores |
+| `--memory` | | uint | `2048` | Memory in MB |
+| `--disk-size` | | uint | `20` | Boot disk size in GB |
+| `--firmware` | | string | `uefi` | `uefi`, `uefi-secure-boot`; the daemon refuses `bios` |
 | `--secure-boot` | | bool | `false` | Enable UEFI Secure Boot |
-| `--tpm` | | bool | `false` | Enable a virtual TPM (vTPM) |
+| `--tpm` | | bool | `true` | Attach a virtual TPM 2.0 (vTPM); `--tpm=false` creates the VM without one |
 | `--boot-device` | | string | `disk` | `disk`, `cdrom`, `network` |
 | `--network-bridge` | | string | | Network bridge name |
 | `--label` | `-l` | string array | | Labels (`key=value`), repeatable |
 | `--start` | | bool | `false` | Start immediately after creation |
 
-**`--firmware` defaults to `uefi`, and `--secure-boot` does not.** Secure Boot
-needs UEFI firmware — `--firmware bios --secure-boot` is a contradiction. Use
-`--firmware uefi-secure-boot` when you want it configured as one thing.
+**The daemon applies every flag or refuses the create.** With the `local-qemu`
+provider, `--firmware bios` and `--boot-device cdrom` are refused with
+`code = InvalidArgument` naming the field, and so is a `--network-bridge` other
+than the orchestrator's own; nothing is created. If `--start` cannot start the
+VM, the daemon deletes it and the command fails with the start error. The full
+list of what CreateVM honours and refuses is in
+[api.md §2](api.md#2-vm-lifecycle).
 
-**`--tpm` is what makes a VM attestable.** Without it there is no virtual TPM,
-so the VM cannot produce a quote and `compute attest` has nothing to work with.
-It defaults to off; on a trusted-computing platform you almost always want it
-on.
+**`--firmware` defaults to `uefi`, and `--secure-boot` does not.** Secure Boot
+needs UEFI firmware. Use `--firmware uefi-secure-boot` when you want it
+configured as one thing. Secure Boot also needs `ovmf_code_secure` in the
+daemon's compute configuration.
+
+**`--tpm` is what makes a VM attestable.** Without a virtual TPM the VM cannot
+produce a quote and `compute attest` has nothing to work with. It is on by
+default; `--tpm=false` is the way to leave it off.
 
 ```bash
 platformctl compute create --name web-01 \
-    --firmware uefi-secure-boot --tpm \
-    --network-bridge br-tenant-a \
+    --firmware uefi-secure-boot \
     --label tenant=tenant-a --label role=web \
     --start
 ```
@@ -105,7 +118,32 @@ default, and it is also how storage fills up.
 
 ### `compute stop`
 
-`--force` stops the VM immediately rather than requesting a clean shutdown.
+| Flag | Short | Type | Default | Meaning |
+|---|---|---|---|---|
+| `--force` | | bool | `false` | Kill the VM at once instead of asking the guest to shut down |
+| `--timeout` | `-t` | uint32 | `0` | Seconds the guest gets to shut down before it is terminated; `0` takes the daemon default (30), the maximum is 3600 |
+
+`--force` and `--timeout` together are refused with InvalidArgument: a forced
+stop does not wait.
+
+### `compute reboot`
+
+`--force` turns the VM off immediately instead of shutting it down cleanly;
+the VM then starts again.
+
+### `compute suspend` and `compute resume`
+
+No flags. `suspend` needs a running VM and `resume` a suspended one; a VM in
+the wrong state fails with the daemon's error (FailedPrecondition over gRPC,
+QUIC and MCP; HTTP 400, read back as InvalidArgument, over REST).
+
+### Transports
+
+Every VM verb above reaches the daemon over `grpc`, `unix`, `rest`, `quic` and
+`mcp`, each with its full request (`force`, `timeout_seconds` and
+`delete_disks` included). Over `mcp` the `vm_*` tools take the RPC's full
+request, so `--force`, `--timeout` and `--delete-disks` reach the daemon as
+they do over gRPC.
 
 ### `compute migrate`
 
@@ -185,8 +223,8 @@ suppress one; passing `--stdout` alone changes nothing.
 
 ### `container remove`
 
-`--force` / `-f` removes a running container; `--volumes` / `-v` removes
-associated volumes.
+`--force` / `-f` removes a running container; `--volumes` removes associated
+volumes.
 
 ### `container attest`
 
@@ -200,14 +238,13 @@ This is the **only attestation verb in the entire CLI** — see
 
 | Capability | Reach it with |
 |---|---|
-| Suspend / resume a VM | QUIC, MCP |
-| VM snapshots (create, list, delete, restore) | REST, gRPC, MCP |
+| VM snapshots (create, list, delete, restore) | REST, gRPC, QUIC, MCP |
 | Disk attach / detach / resize | REST, gRPC, QUIC, MCP |
 | VM metrics, container metrics | REST, gRPC, QUIC, MCP |
 | Exec in a container | REST, gRPC, QUIC, MCP |
 | Attest a VM | REST, gRPC, QUIC, MCP |
 | Console attach | gRPC streaming only |
-| Two-phase migration (`Prepare` / `Finalize`) | gRPC only |
+| Two-phase migration (`Prepare` / `Finalize`) | REST, gRPC, QUIC, MCP |
 
 ---
 

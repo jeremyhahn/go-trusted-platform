@@ -26,12 +26,15 @@ import (
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
 
-// iamItemOperations are the seven PlatformIAMService rows #416 repairs. Each
+// iamItemOperations are the PlatformIAMService item rows #416 repairs. Each
 // used to send a COLLECTION path (DELETE /api/v1/iam/users, POST
 // /api/v1/iam/roles/assign, ...) that the server either 404s or, worse,
 // routes to a sibling handler; the server's real route is an ITEM path with
-// the identifiers in it (pkg/webservice/v1/rest/iam/router.go, flat tree).
-// #379's shape on the mutating verbs, found by #400's fixture.
+// the identifiers in it (pkg/webservice/v1/rest/iam/router.go). #379's shape
+// on the mutating verbs, found by #400's fixture. The four updates had no row
+// at all and fell back to a /api/v1/platformiam/... path nothing serves
+// (#401). All but the two tenant records are on the tenant-scoped tree,
+// tenant_id in the path (#401).
 var iamItemOperations = []struct {
 	name       string
 	grpcMethod string
@@ -48,8 +51,8 @@ var iamItemOperations = []struct {
 		req:        &platformv1.DeleteIAMUserRequest{TenantId: "acme", UserId: "u-7"},
 		resp:       &platformv1.DeleteIAMUserResponse{},
 		wantMethod: http.MethodDelete,
-		wantPath:   "/api/v1/iam/users/u-7",
-		stripped:   []string{"user_id"},
+		wantPath:   "/api/v1/iam/tenants/acme/users/u-7",
+		stripped:   []string{"tenant_id", "user_id"},
 		zero:       &platformv1.DeleteIAMUserRequest{TenantId: "acme"},
 	},
 	{
@@ -58,8 +61,8 @@ var iamItemOperations = []struct {
 		req:        &platformv1.DeleteIAMRoleRequest{TenantId: "acme", RoleId: "r-2"},
 		resp:       &platformv1.DeleteIAMRoleResponse{},
 		wantMethod: http.MethodDelete,
-		wantPath:   "/api/v1/iam/roles/r-2",
-		stripped:   []string{"role_id"},
+		wantPath:   "/api/v1/iam/tenants/acme/roles/r-2",
+		stripped:   []string{"tenant_id", "role_id"},
 		zero:       &platformv1.DeleteIAMRoleRequest{TenantId: "acme"},
 	},
 	{
@@ -68,8 +71,8 @@ var iamItemOperations = []struct {
 		req:        &platformv1.DeleteIAMGroupRequest{TenantId: "acme", GroupId: "g-3"},
 		resp:       &platformv1.DeleteIAMGroupResponse{},
 		wantMethod: http.MethodDelete,
-		wantPath:   "/api/v1/iam/groups/g-3",
-		stripped:   []string{"group_id"},
+		wantPath:   "/api/v1/iam/tenants/acme/groups/g-3",
+		stripped:   []string{"tenant_id", "group_id"},
 		zero:       &platformv1.DeleteIAMGroupRequest{TenantId: "acme"},
 	},
 	{
@@ -88,8 +91,8 @@ var iamItemOperations = []struct {
 		req:        &platformv1.AssignIAMRoleRequest{TenantId: "acme", UserId: "u-7", RoleId: "r-2"},
 		resp:       &platformv1.AssignIAMRoleResponse{},
 		wantMethod: http.MethodPost,
-		wantPath:   "/api/v1/iam/users/u-7/roles/r-2",
-		stripped:   []string{"user_id", "role_id"},
+		wantPath:   "/api/v1/iam/tenants/acme/users/u-7/roles/r-2",
+		stripped:   []string{"tenant_id", "user_id", "role_id"},
 		zero:       &platformv1.AssignIAMRoleRequest{TenantId: "acme", UserId: "u-7"},
 	},
 	{
@@ -98,8 +101,8 @@ var iamItemOperations = []struct {
 		req:        &platformv1.RevokeIAMRoleRequest{TenantId: "acme", UserId: "u-7", RoleId: "r-2"},
 		resp:       &platformv1.RevokeIAMRoleResponse{},
 		wantMethod: http.MethodDelete,
-		wantPath:   "/api/v1/iam/users/u-7/roles/r-2",
-		stripped:   []string{"user_id", "role_id"},
+		wantPath:   "/api/v1/iam/tenants/acme/users/u-7/roles/r-2",
+		stripped:   []string{"tenant_id", "user_id", "role_id"},
 		zero:       &platformv1.RevokeIAMRoleRequest{TenantId: "acme", RoleId: "r-2"},
 	},
 	{
@@ -108,9 +111,49 @@ var iamItemOperations = []struct {
 		req:        &platformv1.AddGroupMemberRequest{TenantId: "acme", GroupId: "g-3", UserId: "u-7"},
 		resp:       &platformv1.AddGroupMemberResponse{},
 		wantMethod: http.MethodPost,
-		wantPath:   "/api/v1/iam/groups/g-3/members/u-7",
-		stripped:   []string{"group_id", "user_id"},
+		wantPath:   "/api/v1/iam/tenants/acme/groups/g-3/members/u-7",
+		stripped:   []string{"tenant_id", "group_id", "user_id"},
 		zero:       &platformv1.AddGroupMemberRequest{TenantId: "acme", GroupId: "g-3"},
+	},
+	{
+		name:       "UpdateUser",
+		grpcMethod: "/platform.v1.PlatformIAMService/UpdateUser",
+		req:        &platformv1.UpdateIAMUserRequest{TenantId: "acme", UserId: "u-7", Email: "u7@example.test"},
+		resp:       &platformv1.IAMUserResponse{},
+		wantMethod: http.MethodPut,
+		wantPath:   "/api/v1/iam/tenants/acme/users/u-7",
+		stripped:   []string{"tenant_id", "user_id"},
+		zero:       &platformv1.UpdateIAMUserRequest{TenantId: "acme", Email: "u7@example.test"},
+	},
+	{
+		name:       "UpdateRole",
+		grpcMethod: "/platform.v1.PlatformIAMService/UpdateRole",
+		req:        &platformv1.UpdateIAMRoleRequest{TenantId: "acme", RoleId: "r-2", Description: "ops"},
+		resp:       &platformv1.IAMRoleResponse{},
+		wantMethod: http.MethodPut,
+		wantPath:   "/api/v1/iam/tenants/acme/roles/r-2",
+		stripped:   []string{"tenant_id", "role_id"},
+		zero:       &platformv1.UpdateIAMRoleRequest{TenantId: "acme", Description: "ops"},
+	},
+	{
+		name:       "UpdateGroup",
+		grpcMethod: "/platform.v1.PlatformIAMService/UpdateGroup",
+		req:        &platformv1.UpdateIAMGroupRequest{TenantId: "acme", GroupId: "g-3", Name: "ops"},
+		resp:       &platformv1.IAMGroupResponse{},
+		wantMethod: http.MethodPut,
+		wantPath:   "/api/v1/iam/tenants/acme/groups/g-3",
+		stripped:   []string{"tenant_id", "group_id"},
+		zero:       &platformv1.UpdateIAMGroupRequest{TenantId: "acme", Name: "ops"},
+	},
+	{
+		name:       "UpdateTenant",
+		grpcMethod: "/platform.v1.PlatformIAMService/UpdateTenant",
+		req:        &platformv1.UpdateIAMTenantRequest{TenantId: "acme-prod", Name: "Acme"},
+		resp:       &platformv1.IAMTenantResponse{},
+		wantMethod: http.MethodPut,
+		wantPath:   "/api/v1/iam/tenants/acme-prod",
+		stripped:   []string{"tenant_id"},
+		zero:       &platformv1.UpdateIAMTenantRequest{Name: "Acme"},
 	},
 }
 
@@ -163,7 +206,7 @@ func TestIAMItemOperations_MissingIdentifierRejectedBeforeTheWire(t *testing.T) 
 		t.Run(tc.name, func(t *testing.T) {
 			var apiHits int
 			a, _ := adapterAgainst(t, func(w http.ResponseWriter, r *http.Request) {
-				if r.URL.Path != "/health" {
+				if r.URL.Path != "/health/live" {
 					apiHits++
 				}
 				w.WriteHeader(http.StatusOK)

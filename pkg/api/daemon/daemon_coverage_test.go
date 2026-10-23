@@ -25,18 +25,18 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 )
 
 func init() {
 	// Set the default codec to MsgPack for encoding/decoding QUIC payloads
 	// Fall back to JSON if MsgPack is not available
 	if codec.IsSupported(codec.MsgPack) {
-		_ = quic.SetDefaultCodecType(codec.MsgPack)
+		_ = quicwire.SetDefaultCodecType(codec.MsgPack)
 	} else if codec.IsSupported(codec.JSON) {
-		_ = quic.SetDefaultCodecType(codec.JSON)
+		_ = quicwire.SetDefaultCodecType(codec.JSON)
 	}
 }
 
@@ -411,44 +411,44 @@ func TestService_ServiceState(t *testing.T) {
 func TestQUICServiceHandler_HandleRequest(t *testing.T) {
 	t.Run("health operations", func(t *testing.T) {
 		logger := logging.DefaultLogger()
-		handler := NewQUICServiceHandler(logger)
+		handler := newTestQUICServiceHandler(logger)
 
 		ctx := context.Background()
 
 		// Test health check
-		resp := handler.HandleRequest(ctx, &quic.Request{
-			Opcode:  quic.OpHealth,
+		resp := handler.HandleRequest(ctx, &quicwire.Request{
+			Opcode:  quicwire.OpHealth,
 			Payload: []byte{},
 		})
-		assert.Equal(t, quic.StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 		// Test liveness
-		resp = handler.HandleRequest(ctx, &quic.Request{
-			Opcode:  quic.OpLiveness,
+		resp = handler.HandleRequest(ctx, &quicwire.Request{
+			Opcode:  quicwire.OpLiveness,
 			Payload: []byte{},
 		})
-		assert.Equal(t, quic.StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 		// Test readiness
-		resp = handler.HandleRequest(ctx, &quic.Request{
-			Opcode:  quic.OpReadiness,
+		resp = handler.HandleRequest(ctx, &quicwire.Request{
+			Opcode:  quicwire.OpReadiness,
 			Payload: []byte{},
 		})
-		assert.Equal(t, quic.StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 	})
 
 	t.Run("unknown opcode returns not implemented", func(t *testing.T) {
 		logger := logging.DefaultLogger()
-		handler := NewQUICServiceHandler(logger)
+		handler := newTestQUICServiceHandler(logger)
 
 		ctx := context.Background()
-		resp := handler.HandleRequest(ctx, &quic.Request{
+		resp := handler.HandleRequest(ctx, &quicwire.Request{
 			Opcode:  0xFE, // Container Stop opcode - returns Unavailable when service not configured
 			Payload: []byte{},
 		})
 
 		// 0xFE is now mapped to Container Stop, which returns Unavailable when container service is not configured
-		assert.True(t, resp.Status == quic.StatusUnavailable || resp.Status == quic.StatusNotImplemented)
+		assert.True(t, resp.Status == quicwire.StatusUnavailable || resp.Status == quicwire.StatusNotImplemented)
 	})
 }
 
@@ -456,39 +456,39 @@ func TestQUICServiceHandler_HandleRequest(t *testing.T) {
 
 func TestQUICKMS_ServiceNotAvailable(t *testing.T) {
 	logger := logging.DefaultLogger()
-	handler := NewQUICServiceHandler(logger)
+	handler := newTestQUICServiceHandler(logger)
 	ctx := context.Background()
 
 	testCases := []struct {
 		name   string
 		opcode byte
 	}{
-		{"GenerateKey", quic.OpKMSGenerateKey},
-		{"ImportKey", quic.OpKMSImportKey},
-		{"GetKey", quic.OpKMSGetKey},
-		{"ListKeys", quic.OpKMSListKeys},
-		{"DeleteKey", quic.OpKMSDeleteKey},
-		{"RotateKey", quic.OpKMSRotateKey},
-		{"UpdateKeyStatus", quic.OpKMSUpdateKeyStatus},
-		{"ExportKey", quic.OpKMSExportKey},
-		{"GetKeyVersions", quic.OpKMSGetKeyVersions},
-		{"Encrypt", quic.OpKMSEncrypt},
-		{"Decrypt", quic.OpKMSDecrypt},
-		{"Sign", quic.OpKMSSign},
-		{"Verify", quic.OpKMSVerify},
-		{"GenerateRandom", quic.OpKMSGenerateRandom},
-		{"Hash", quic.OpKMSHash},
+		{"GenerateKey", quicwire.OpKMSGenerateKey},
+		{"ImportKey", quicwire.OpKMSImportKey},
+		{"GetKey", quicwire.OpKMSGetKey},
+		{"ListKeys", quicwire.OpKMSListKeys},
+		{"DeleteKey", quicwire.OpKMSDeleteKey},
+		{"RotateKey", quicwire.OpKMSRotateKey},
+		{"UpdateKeyStatus", quicwire.OpKMSUpdateKeyStatus},
+		{"ExportKey", quicwire.OpKMSExportKey},
+		{"GetKeyVersions", quicwire.OpKMSGetKeyVersions},
+		{"Encrypt", quicwire.OpKMSEncrypt},
+		{"Decrypt", quicwire.OpKMSDecrypt},
+		{"Sign", quicwire.OpKMSSign},
+		{"Verify", quicwire.OpKMSVerify},
+		{"GenerateRandom", quicwire.OpKMSGenerateRandom},
+		{"Hash", quicwire.OpKMSHash},
 	}
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			req := &quic.Request{
+			req := &quicwire.Request{
 				Opcode:  tc.opcode,
 				Payload: []byte{},
 			}
 			resp := handler.HandleRequest(ctx, req)
 
-			assert.Equal(t, quic.StatusUnavailable, resp.Status)
+			assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 			assert.True(t, strings.Contains(strings.ToLower(string(resp.Payload)), "kms"))
 		})
 	}
@@ -513,11 +513,11 @@ func TestQUICKMS_RequestResponse_Encoding(t *testing.T) {
 			Owner:       "test-owner",
 		}
 
-		encoded, err := quic.EncodePayload(original)
+		encoded, err := quicwire.EncodePayload(original)
 		require.NoError(t, err)
 
 		var decoded KMSGenerateKeyRequest
-		err = quic.DecodePayload(encoded, &decoded)
+		err = quicwire.DecodePayload(encoded, &decoded)
 		require.NoError(t, err)
 
 		assert.Equal(t, original.Name, decoded.Name)
@@ -545,11 +545,11 @@ func TestQUICKMS_RequestResponse_Encoding(t *testing.T) {
 			Timestamp: time.Now().Unix(),
 		}
 
-		encoded, err := quic.EncodePayload(original)
+		encoded, err := quicwire.EncodePayload(original)
 		require.NoError(t, err)
 
 		var decoded KMSGenerateKeyResponse
-		err = quic.DecodePayload(encoded, &decoded)
+		err = quicwire.DecodePayload(encoded, &decoded)
 		require.NoError(t, err)
 
 		assert.Equal(t, original.Key.KeyId, decoded.Key.KeyId)
@@ -564,11 +564,11 @@ func TestQUICKMS_RequestResponse_Encoding(t *testing.T) {
 			Nonce:     []byte("nonce"),
 		}
 
-		encoded, err := quic.EncodePayload(original)
+		encoded, err := quicwire.EncodePayload(original)
 		require.NoError(t, err)
 
 		var decoded KMSEncryptRequest
-		err = quic.DecodePayload(encoded, &decoded)
+		err = quicwire.DecodePayload(encoded, &decoded)
 		require.NoError(t, err)
 
 		assert.Equal(t, original.KeyId, decoded.KeyId)
@@ -582,11 +582,11 @@ func TestQUICKMS_RequestResponse_Encoding(t *testing.T) {
 			HashAlgorithm: int32(platformv1.HashAlgorithm_HASH_ALGORITHM_SHA256),
 		}
 
-		encoded, err := quic.EncodePayload(original)
+		encoded, err := quicwire.EncodePayload(original)
 		require.NoError(t, err)
 
 		var decoded KMSSignRequest
-		err = quic.DecodePayload(encoded, &decoded)
+		err = quicwire.DecodePayload(encoded, &decoded)
 		require.NoError(t, err)
 
 		assert.Equal(t, original.KeyId, decoded.KeyId)
@@ -605,11 +605,11 @@ func TestQUICIAM_RequestResponse_Encoding(t *testing.T) {
 			Password: "securepassword",
 		}
 
-		encoded, err := quic.EncodePayload(original)
+		encoded, err := quicwire.EncodePayload(original)
 		require.NoError(t, err)
 
 		var decoded AuthenticateRequest
-		err = quic.DecodePayload(encoded, &decoded)
+		err = quicwire.DecodePayload(encoded, &decoded)
 		require.NoError(t, err)
 
 		assert.Equal(t, original.TenantID, decoded.TenantID)
@@ -621,40 +621,40 @@ func TestQUICIAM_RequestResponse_Encoding(t *testing.T) {
 
 func TestQUICIAM_ServiceNotAvailable(t *testing.T) {
 	logger := logging.DefaultLogger()
-	handler := NewQUICServiceHandler(logger)
+	handler := newTestQUICServiceHandler(logger)
 	ctx := context.Background()
 
 	testCases := []struct {
 		name   string
 		opcode byte
 	}{
-		{"CreateUser", quic.OpIAMUserCreate},
-		{"DeleteUser", quic.OpIAMUserDelete},
-		{"GetUser", quic.OpIAMUserGet},
-		{"ListUsers", quic.OpIAMUserList},
-		{"UpdateUser", quic.OpIAMUserUpdate},
-		{"CreateRole", quic.OpIAMRoleCreate},
-		{"DeleteRole", quic.OpIAMRoleDelete},
-		{"GetRole", quic.OpIAMRoleGet},
-		{"ListRoles", quic.OpIAMRoleList},
-		{"AssignRole", quic.OpIAMRoleAssign},
-		{"RevokeRole", quic.OpIAMRoleRevoke},
-		{"CreateGroup", quic.OpIAMGroupCreate},
-		{"DeleteGroup", quic.OpIAMGroupDelete},
-		{"GetGroup", quic.OpIAMGroupGet},
-		{"ListGroups", quic.OpIAMGroupList},
-		{"AddGroupMember", quic.OpIAMGroupAddMember},
+		{"CreateUser", quicwire.OpIAMUserCreate},
+		{"DeleteUser", quicwire.OpIAMUserDelete},
+		{"GetUser", quicwire.OpIAMUserGet},
+		{"ListUsers", quicwire.OpIAMUserList},
+		{"UpdateUser", quicwire.OpIAMUserUpdate},
+		{"CreateRole", quicwire.OpIAMRoleCreate},
+		{"DeleteRole", quicwire.OpIAMRoleDelete},
+		{"GetRole", quicwire.OpIAMRoleGet},
+		{"ListRoles", quicwire.OpIAMRoleList},
+		{"AssignRole", quicwire.OpIAMRoleAssign},
+		{"RevokeRole", quicwire.OpIAMRoleRevoke},
+		{"CreateGroup", quicwire.OpIAMGroupCreate},
+		{"DeleteGroup", quicwire.OpIAMGroupDelete},
+		{"GetGroup", quicwire.OpIAMGroupGet},
+		{"ListGroups", quicwire.OpIAMGroupList},
+		{"AddGroupMember", quicwire.OpIAMGroupAddMember},
 	}
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			req := &quic.Request{
+			req := &quicwire.Request{
 				Opcode:  tc.opcode,
 				Payload: []byte{},
 			}
 			resp := handler.HandleRequest(ctx, req)
 
-			assert.Equal(t, quic.StatusUnavailable, resp.Status)
+			assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 			assert.True(t, strings.Contains(strings.ToLower(string(resp.Payload)), "iam"))
 		})
 	}
@@ -664,36 +664,36 @@ func TestQUICIAM_ServiceNotAvailable(t *testing.T) {
 
 func TestQUICSDN_ServiceNotAvailable(t *testing.T) {
 	logger := logging.DefaultLogger()
-	handler := NewQUICServiceHandler(logger)
+	handler := newTestQUICServiceHandler(logger)
 	ctx := context.Background()
 
 	testCases := []struct {
 		name   string
 		opcode byte
 	}{
-		{"GetPortState", quic.OpSDNGetPortState},
-		{"SetPortState", quic.OpSDNSetPortState},
-		{"ListPorts", quic.OpSDNListPorts},
-		{"GetFlow", quic.OpSDNGetFlow},
-		{"AddFlow", quic.OpSDNAddFlow},
-		{"DeleteFlow", quic.OpSDNDeleteFlow},
-		{"ListFlows", quic.OpSDNListFlows},
-		{"ApplyPolicy", quic.OpSDNApplyPolicy},
-		{"GetPolicy", quic.OpSDNGetPolicy},
-		{"ListPolicies", quic.OpSDNListPolicies},
-		{"GetBridge", quic.OpSDNGetBridge},
-		{"ListBridges", quic.OpSDNListBridges},
+		{"GetPortState", quicwire.OpSDNGetPortState},
+		{"SetPortState", quicwire.OpSDNSetPortState},
+		{"ListPorts", quicwire.OpSDNListPorts},
+		{"GetFlow", quicwire.OpSDNGetFlow},
+		{"AddFlow", quicwire.OpSDNAddFlow},
+		{"DeleteFlow", quicwire.OpSDNDeleteFlow},
+		{"ListFlows", quicwire.OpSDNListFlows},
+		{"ApplyPolicy", quicwire.OpSDNApplyPolicy},
+		{"GetPolicy", quicwire.OpSDNGetPolicy},
+		{"ListPolicies", quicwire.OpSDNListPolicies},
+		{"GetBridge", quicwire.OpSDNGetBridge},
+		{"ListBridges", quicwire.OpSDNListBridges},
 	}
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			req := &quic.Request{
+			req := &quicwire.Request{
 				Opcode:  tc.opcode,
 				Payload: []byte{},
 			}
 			resp := handler.HandleRequest(ctx, req)
 
-			assert.Equal(t, quic.StatusUnavailable, resp.Status)
+			assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 			assert.True(t, strings.Contains(strings.ToLower(string(resp.Payload)), "sdn"))
 		})
 	}
@@ -703,33 +703,33 @@ func TestQUICSDN_ServiceNotAvailable(t *testing.T) {
 
 func TestQUICDNS_ServiceNotAvailable(t *testing.T) {
 	logger := logging.DefaultLogger()
-	handler := NewQUICServiceHandler(logger)
+	handler := newTestQUICServiceHandler(logger)
 	ctx := context.Background()
 
 	testCases := []struct {
 		name   string
 		opcode byte
 	}{
-		{"AddZone", quic.OpDNSAddZone},
-		{"DeleteZone", quic.OpDNSDeleteZone},
-		{"GetZone", quic.OpDNSGetZone},
-		{"ListZones", quic.OpDNSListZones},
-		{"AddRecord", quic.OpDNSAddRecord},
-		{"DeleteRecord", quic.OpDNSDeleteRecord},
-		{"GetRecord", quic.OpDNSGetRecord},
-		{"ListRecords", quic.OpDNSListRecords},
-		{"Resolve", quic.OpDNSResolve},
+		{"AddZone", quicwire.OpDNSAddZone},
+		{"DeleteZone", quicwire.OpDNSDeleteZone},
+		{"GetZone", quicwire.OpDNSGetZone},
+		{"ListZones", quicwire.OpDNSListZones},
+		{"AddRecord", quicwire.OpDNSAddRecord},
+		{"DeleteRecord", quicwire.OpDNSDeleteRecord},
+		{"GetRecord", quicwire.OpDNSGetRecord},
+		{"ListRecords", quicwire.OpDNSListRecords},
+		{"Resolve", quicwire.OpDNSResolve},
 	}
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			req := &quic.Request{
+			req := &quicwire.Request{
 				Opcode:  tc.opcode,
 				Payload: []byte{},
 			}
 			resp := handler.HandleRequest(ctx, req)
 
-			assert.Equal(t, quic.StatusUnavailable, resp.Status)
+			assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 			assert.True(t, strings.Contains(strings.ToLower(string(resp.Payload)), "dns"))
 		})
 	}

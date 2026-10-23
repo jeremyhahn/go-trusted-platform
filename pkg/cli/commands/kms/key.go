@@ -75,6 +75,7 @@ Supported operations:
 	cmd.AddCommand(newKeyListCommand(getFlags))
 	cmd.AddCommand(newKeyDeleteCommand(getFlags))
 	cmd.AddCommand(newKeyRotateCommand(getFlags))
+	cmd.AddCommand(newKeyCSRCommand(getFlags))
 
 	// Key import/export operations
 	cmd.AddCommand(newKeyImportCommand(getFlags))
@@ -160,7 +161,7 @@ func newKeyGetCommand(getFlags func() *cli.CommonFlags) *cobra.Command {
 		},
 	}
 
-	cmd.Flags().Uint64VarP(&version, "version", "v", 0, "specific key version (0 for latest)")
+	cmd.Flags().Uint64Var(&version, "version", 0, "specific key version (0 for latest)")
 
 	return cmd
 }

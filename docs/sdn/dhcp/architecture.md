@@ -1,8 +1,11 @@
 # DHCP Architecture
 
+> **Status: REFERENCE** · Last verified: 2026-10-15
+> The DHCP server's CoreDHCP plugin architecture.
+
 ## Overview
 
-The DHCP service implements a plugin-based architecture built on CoreDHCP, providing high-performance IP allocation integrated with the platform IPAM system.
+The DHCP engine implements a plugin-based architecture built on CoreDHCP, providing IP allocation integrated with the platform IPAM system. No daemon runs it today (see the [README](README.md)).
 
 ## Component Architecture
 
@@ -244,15 +247,8 @@ type PXEPlugin struct {
 │         │                                                                     │
 │         ▼                                                                     │
 │  ┌─────────────────────────────────────────────────────────────────────────┐ │
-│  │ PXE Plugin (Optional, if client is PXE)                                  │ │
-│  │ - Detect PXE client (option 60)                                          │ │
-│  │ - Extract architecture (option 93)                                       │ │
-│  │ - Add boot options (66, 67)                                              │ │
-│  └─────────────────────────────────────────────────────────────────────────┘ │
-│         │                                                                     │
-│         ▼                                                                     │
-│  ┌─────────────────────────────────────────────────────────────────────────┐ │
 │  │ Response Transmission                                                    │ │
+│  │ - Sent whenever the plugin returns a reply (stop only ends the chain)    │ │
 │  │ - Increment packetsSent                                                  │ │
 │  │ - Record response type stats (OFFER, ACK, NAK)                           │ │
 │  │ - Update active lease count                                              │ │
@@ -261,6 +257,15 @@ type PXEPlugin struct {
 │                                                                               │
 └──────────────────────────────────────────────────────────────────────────────┘
 ```
+
+`createHandlerFunc` (`pkg/sdn/dhcp/coredhcp.go:243`) calls only the IPAM
+plugin; the PXE plugin is not in this pipeline (see
+[PXE Plugin Chain](#pxe-plugin-chain)).
+
+The IPAM plugin is the last handler, so its `stop` flag only ends the chain:
+the wrapper sends whenever the plugin returns a reply (every OFFER, ACK and
+NAK it builds) and sends nothing when it returns `nil` (RELEASE, DECLINE, a
+failed allocation).
 
 ## Plugin Architecture
 
@@ -378,7 +383,9 @@ func (p *IPAMPlugin) Handler4() handler.Handler4 {
 
 ### PXE Plugin Chain
 
-The PXE plugin operates in the handler chain after IPAM:
+The PXE plugin is designed to run in a handler chain after IPAM.
+`CoreDHCPServer` does not build that chain; an embedder that wants PXE
+options must chain `PXEPlugin.Handler4()` itself:
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
@@ -538,7 +545,7 @@ Each network interface operates independently with its own:
 │  │  ]                                                           ││
 │  │                                                              ││
 │  │  servers: map[string]*server4.Server {                       ││
-│  │    "eth0": server4@192.168.1.1:67,                          ││
+│  │    "eth0": server4@192.0.2.1:67,                            ││
 │  │    "eth1": server4@10.0.0.1:67,                             ││
 │  │    "br0":  server4@192.0.2.1:67,                             ││
 │  │  }                                                           ││

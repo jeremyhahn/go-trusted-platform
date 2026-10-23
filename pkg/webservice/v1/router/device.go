@@ -34,7 +34,51 @@ type DeviceRouter struct {
 	configDeliveryHandler configdelivery.RestHandler
 	attestHandler         device.AttestHandler
 	attestCertHandler     device.AttestCertHandler
+	lifecycleHandler      device.LifecycleHandler
+	bootHandler           device.BootHandler
+	scopeAuthorizer       middleware.ScopeAuthorizer
 	WebServiceRouter
+}
+
+// SetLifecycleHandler supplies the handler for the operator Enable/Disable
+// Device flow (#250): POST /devices/{id}/disable and /devices/{id}/enable.
+// Both are operator work on the admin gate: they cut or re-admit a switch
+// port. Nil leaves the routes unregistered.
+func (r *DeviceRouter) SetLifecycleHandler(handler device.LifecycleHandler) {
+	r.lifecycleHandler = handler
+}
+
+// SetBootHandler supplies the handler for a diskless node's per-boot routes,
+// POST /device/boot/certificate and POST /device/boot (#690). Both are
+// machine-facing. Nil leaves them unregistered.
+func (r *DeviceRouter) SetBootHandler(handler device.BootHandler) {
+	r.bootHandler = handler
+}
+
+// The scopes the operator routes require on the transports that carry scopes
+// (gRPC, QUIC, MCP, and REST behind the platform token middleware). Each route
+// takes the scope its gRPC twin takes in pkg/api/grpc/method_permissions.go.
+const (
+	deviceReadScope        = "device:read"
+	deviceWriteScope       = "device:write"
+	deviceDeleteScope      = "device:delete"
+	provisioningReadScope  = "provisioning:read"
+	provisioningWriteScope = "provisioning:write"
+)
+
+// SetScopeAuthorizer supplies the scope check every operator route takes on
+// top of the admin gate. Nil leaves them on the role gate alone, which is the
+// case under the legacy JWT handler: its sessions carry roles, not scopes.
+func (r *DeviceRouter) SetScopeAuthorizer(authorizer middleware.ScopeAuthorizer) {
+	r.scopeAuthorizer = authorizer
+}
+
+// requireScope wraps handler in the scope check when one is configured.
+func (r *DeviceRouter) requireScope(scope string, handler http.HandlerFunc) http.Handler {
+	if r.scopeAuthorizer == nil {
+		return handler
+	}
+	return r.scopeAuthorizer.RequireScope(scope)(handler)
 }
 
 // SetAttestCertHandler supplies the handler for
@@ -46,8 +90,28 @@ func (r *DeviceRouter) SetAttestCertHandler(handler device.AttestCertHandler) {
 	r.attestCertHandler = handler
 }
 
-// NewDeviceRouter creates a DeviceRouter. All handlers except mtlsMiddleware and
-// deviceHandler are optional — pass nil to skip those route groups.
+// ErrDeviceHandlerRequired is returned by NewDeviceRouter when a handler that
+// RegisterRoutes dereferences unconditionally is nil. Handler names the
+// missing handler's interface.
+type ErrDeviceHandlerRequired struct {
+	Handler string
+}
+
+func (e ErrDeviceHandlerRequired) Error() string {
+	return "device router: missing required handler: " + e.Handler
+}
+
+// NewDeviceRouter creates a DeviceRouter.
+//
+// crudHandler and templateHandler are required, and a nil one is an
+// ErrDeviceHandlerRequired. RegisterRoutes mounts the device, profile and
+// template routes unconditionally, so the constructor is what guarantees
+// those routes have a handler (#320). The other handlers are optional, and
+// each one gates a whole capability: deviceHandler the mTLS device routes,
+// configDeliveryHandler the provisioning routes, attestHandler the quote
+// verifier. An absent capability is not registered, rather than registered
+// broken.
+//
 // It returns the concrete *DeviceRouter rather than WebServiceRouter because
 // the device surface is split by principal (#165): the caller mounts
 // RegisterRoutes on a gated router and RegisterMachineFacingRoutes on the
@@ -60,7 +124,13 @@ func NewDeviceRouter(
 	templateHandler device.TemplateCRUDHandler,
 	configDeliveryHandler configdelivery.RestHandler,
 	attestHandler device.AttestHandler,
-) *DeviceRouter {
+) (*DeviceRouter, error) {
+	if crudHandler == nil {
+		return nil, ErrDeviceHandlerRequired{Handler: "DeviceCRUDHandler"}
+	}
+	if templateHandler == nil {
+		return nil, ErrDeviceHandlerRequired{Handler: "TemplateCRUDHandler"}
+	}
 	return &DeviceRouter{
 		mtlsMiddleware:        mtlsMiddleware,
 		deviceHandler:         deviceHandler,
@@ -68,7 +138,7 @@ func NewDeviceRouter(
 		templateHandler:       templateHandler,
 		configDeliveryHandler: configDeliveryHandler,
 		attestHandler:         attestHandler,
-	}
+	}, nil
 }
 
 // RegisterRoutes registers the OPERATOR half of the device surface on the
@@ -81,17 +151,12 @@ func NewDeviceRouter(
 // session, and several are reached before the device has any platform
 // credential at all.
 func (r *DeviceRouter) RegisterRoutes(router *mux.Router) {
-	// CRUD endpoints (if handler is available)
-	if r.crudHandler != nil {
-		r.registerDeviceCRUD(router)
-		r.registerProfileCRUD(router)
-	}
-
-	// Template endpoints (if handler is available)
-	if r.templateHandler != nil {
-		r.registerTemplateCRUD(router)
-		r.registerConfigDeliveryRoutes(router)
-	}
+	// NewDeviceRouter refuses a nil CRUD or template handler, so these
+	// groups are always complete (#320).
+	r.registerDeviceCRUD(router)
+	r.registerProfileCRUD(router)
+	r.registerTemplateCRUD(router)
+	r.registerConfigDeliveryRoutes(router)
 
 	// The provisioning session views and the fulfilment action. Fulfilment
 	// binds a profile to a device that is waiting for one, which decides
@@ -104,16 +169,30 @@ func (r *DeviceRouter) RegisterRoutes(router *mux.Router) {
 	// Device attestation verification. Operator work on the ADMIN gate: it
 	// reads a device's enrolled attestation key and reports a security
 	// verdict about that machine, so it does not belong on the
-	// machine-facing half.
+	// machine-facing half. Both attestation routes are device writes and
+	// require device:write wherever the authenticator carries scopes.
 	if r.attestHandler != nil {
-		router.HandleFunc("/devices/{id}/attest", r.attestHandler.HandleAttestDevice).Methods("POST")
+		router.Handle("/devices/{id}/attest",
+			r.requireScope(deviceWriteScope, r.attestHandler.HandleAttestDevice)).Methods("POST")
 	}
 
 	// Recording a device's attestation certificate without re-enrolling it
 	// (#473). Admin gate for the same reason as the verifier above: the
 	// recorded certificate is the anchor the verifier chains quotes to.
 	if r.attestCertHandler != nil {
-		router.HandleFunc("/devices/{id:[0-9]+}/attest-cert/record", r.attestCertHandler.HandleRecordAttestCert).Methods("POST")
+		router.Handle("/devices/{id:[0-9]+}/attest-cert/record",
+			r.requireScope(deviceWriteScope, r.attestCertHandler.HandleRecordAttestCert)).Methods("POST")
+	}
+
+	// Operator Enable/Disable Device (#250). A dedicated transition, never
+	// the generic PUT: disable cuts the port, enable re-admits it to the
+	// quarantine zone pending re-attestation. Both take device:write, as on
+	// every other scoped transport.
+	if r.lifecycleHandler != nil {
+		router.Handle("/devices/{id:[0-9]+}/disable",
+			r.requireScope(deviceWriteScope, r.lifecycleHandler.HandleDisable)).Methods("POST")
+		router.Handle("/devices/{id:[0-9]+}/enable",
+			r.requireScope(deviceWriteScope, r.lifecycleHandler.HandleEnable)).Methods("POST")
 	}
 }
 
@@ -130,6 +209,12 @@ func (r *DeviceRouter) RegisterRoutes(router *mux.Router) {
 //   - /provisioning/sessions/{id}/poll is polled by the provisioning client
 //     while it waits for an operator to fulfil its session, so it follows the
 //     device-facing half rather than the session views.
+//   - /device/boot/certificate returns a diskless node's recorded IDevID
+//     chain without a client certificate, because the node needs the chain
+//     to present one; it answers only a signature by the chain's key over
+//     the connection, and refuses everything else alike, so it cannot
+//     enumerate devices. /device/boot is mTLS like the other /device routes,
+//     and additionally demands a quote bound to the connection.
 //
 // Nothing that an operator drives may be added here.
 func (r *DeviceRouter) RegisterMachineFacingRoutes(router *mux.Router) {
@@ -141,6 +226,19 @@ func (r *DeviceRouter) RegisterMachineFacingRoutes(router *mux.Router) {
 	if r.configDeliveryHandler != nil {
 		r.registerProvisioningDeviceRoutes(router)
 	}
+	if r.bootHandler != nil {
+		r.boot(router)
+	}
+}
+
+// POST /api/v1/device/boot/certificate - a diskless node's recorded IDevID chain, for proof of its key
+// POST /api/v1/device/boot - attested, channel-bound per-boot delivery (mTLS)
+func (r *DeviceRouter) boot(router *mux.Router) {
+	router.HandleFunc("/device/boot/certificate", r.bootHandler.HandleBootCertificate).Methods("POST")
+	router.Handle("/device/boot", negroni.New(
+		negroni.HandlerFunc(r.mtlsMiddleware.Verify),
+		negroni.Wrap(http.HandlerFunc(r.bootHandler.HandleBootDelivery)),
+	)).Methods("POST")
 }
 
 // GET /api/v1/device/profile - Get device profile via mTLS
@@ -170,119 +268,138 @@ func (r *DeviceRouter) heartbeat(router *mux.Router) {
 
 // registerDeviceCRUD registers device CRUD endpoints.
 func (r *DeviceRouter) registerDeviceCRUD(router *mux.Router) {
-	// Device CRUD operations
+	// Device CRUD operations. Each takes the scope of its gRPC twin
+	// (CreateDevice, ListDevices, ...) as on QUIC and MCP (#484).
 	// POST /api/v1/devices - Create device
-	router.HandleFunc("/devices", r.crudHandler.CreateDevice).Methods("POST")
+	router.Handle("/devices",
+		r.requireScope(deviceWriteScope, r.crudHandler.CreateDevice)).Methods("POST")
 
 	// GET /api/v1/devices - List devices
-	router.HandleFunc("/devices", r.crudHandler.ListDevices).Methods("GET")
+	router.Handle("/devices",
+		r.requireScope(deviceReadScope, r.crudHandler.ListDevices)).Methods("GET")
 
 	// GET /api/v1/devices/count - Count devices
-	router.HandleFunc("/devices/count", r.crudHandler.CountDevices).Methods("GET")
+	router.Handle("/devices/count",
+		r.requireScope(deviceReadScope, r.crudHandler.CountDevices)).Methods("GET")
 
 	// GET /api/v1/devices/serial/{serial} - Find device by serial
-	router.HandleFunc("/devices/serial/{serial}", r.crudHandler.FindDeviceBySerial).Methods("GET")
+	router.Handle("/devices/serial/{serial}",
+		r.requireScope(deviceReadScope, r.crudHandler.FindDeviceBySerial)).Methods("GET")
 
 	// GET /api/v1/devices/{id} - Get device
-	router.HandleFunc("/devices/{id:[0-9]+}", r.crudHandler.GetDevice).Methods("GET")
+	router.Handle("/devices/{id:[0-9]+}",
+		r.requireScope(deviceReadScope, r.crudHandler.GetDevice)).Methods("GET")
 
 	// PUT /api/v1/devices/{id} - Update device
-	router.HandleFunc("/devices/{id:[0-9]+}", r.crudHandler.UpdateDevice).Methods("PUT")
+	router.Handle("/devices/{id:[0-9]+}",
+		r.requireScope(deviceWriteScope, r.crudHandler.UpdateDevice)).Methods("PUT")
 
 	// DELETE /api/v1/devices/{id} - Delete device
-	router.HandleFunc("/devices/{id:[0-9]+}", r.crudHandler.DeleteDevice).Methods("DELETE")
+	router.Handle("/devices/{id:[0-9]+}",
+		r.requireScope(deviceDeleteScope, r.crudHandler.DeleteDevice)).Methods("DELETE")
 }
 
 // registerProfileCRUD registers device profile CRUD endpoints.
+//
+// Profiles and templates live under the singular `/device/` prefix, and
+// device records under the plural `/devices/`. No path is served under both
+// (#266). The plural profile and template aliases are gone, and
+// TestDeviceRoutesHaveOneName fails if either prefix gains a path the other
+// already serves.
 func (r *DeviceRouter) registerProfileCRUD(router *mux.Router) {
-	// Profile CRUD operations
+	// Profile CRUD operations, scoped like their gRPC twins (#484).
 	// POST /api/v1/device/profiles - Create profile
-	router.HandleFunc("/device/profiles", r.crudHandler.CreateProfile).Methods("POST")
+	router.Handle("/device/profiles",
+		r.requireScope(deviceWriteScope, r.crudHandler.CreateProfile)).Methods("POST")
 
 	// GET /api/v1/device/profiles - List profiles
-	router.HandleFunc("/device/profiles", r.crudHandler.ListProfiles).Methods("GET")
-
-	// /devices/profiles aliases match the WebUI's plural-noun convention
-	// — the dashboard hits `/api/v1/devices/profiles` while the platform
-	// originally exposed singular `/api/v1/device/profiles`. Both forms
-	// must dispatch to the same handler so REST and SDK callers agree.
-	router.HandleFunc("/devices/profiles", r.crudHandler.CreateProfile).Methods("POST")
-	router.HandleFunc("/devices/profiles", r.crudHandler.ListProfiles).Methods("GET")
-	router.HandleFunc("/devices/profiles/{id:[0-9]+}", r.crudHandler.GetProfileByID).Methods("GET")
-	router.HandleFunc("/devices/profiles/{id:[0-9]+}", r.crudHandler.UpdateProfile).Methods("PUT")
-	router.HandleFunc("/devices/profiles/{id:[0-9]+}", r.crudHandler.DeleteProfile).Methods("DELETE")
-	// /devices/templates plural aliases for the same reason — except POST,
-	// which the bootstrap seeder router owns outright
-	// (pkg/webservice/v1/rest/device, `{role, template}` body). One handler
-	// per route: CRUD template creation is singular `/device/templates` only.
-	if r.templateHandler != nil {
-		router.HandleFunc("/devices/templates", r.templateHandler.ListTemplates).Methods("GET")
-		router.HandleFunc("/devices/templates/{id:[0-9]+}", r.templateHandler.GetTemplate).Methods("GET")
-		router.HandleFunc("/devices/templates/{id:[0-9]+}", r.templateHandler.UpdateTemplate).Methods("PUT")
-		router.HandleFunc("/devices/templates/{id:[0-9]+}", r.templateHandler.DeleteTemplate).Methods("DELETE")
-	}
+	router.Handle("/device/profiles",
+		r.requireScope(deviceReadScope, r.crudHandler.ListProfiles)).Methods("GET")
 
 	// GET /api/v1/device/profiles/count - Count profiles
-	router.HandleFunc("/device/profiles/count", r.crudHandler.CountProfiles).Methods("GET")
+	router.Handle("/device/profiles/count",
+		r.requireScope(deviceReadScope, r.crudHandler.CountProfiles)).Methods("GET")
 
-	// POST /api/v1/device/profiles/match - Find matching profile
-	router.HandleFunc("/device/profiles/match", r.crudHandler.FindMatchingProfile).Methods("POST")
+	// POST /api/v1/device/profiles/match - Find matching profile. A read,
+	// although the criteria travel in a POST body.
+	router.Handle("/device/profiles/match",
+		r.requireScope(deviceReadScope, r.crudHandler.FindMatchingProfile)).Methods("POST")
 
 	// GET /api/v1/device/profiles/serial/{serial} - Find profile by serial
-	router.HandleFunc("/device/profiles/serial/{serial}", r.crudHandler.FindProfileBySerial).Methods("GET")
+	router.Handle("/device/profiles/serial/{serial}",
+		r.requireScope(deviceReadScope, r.crudHandler.FindProfileBySerial)).Methods("GET")
 
 	// GET /api/v1/device/profiles/mac/{mac} - Find profile by MAC
-	router.HandleFunc("/device/profiles/mac/{mac}", r.crudHandler.FindProfileByMAC).Methods("GET")
+	router.Handle("/device/profiles/mac/{mac}",
+		r.requireScope(deviceReadScope, r.crudHandler.FindProfileByMAC)).Methods("GET")
 
 	// GET /api/v1/device/profiles/{id} - Get profile
-	router.HandleFunc("/device/profiles/{id:[0-9]+}", r.crudHandler.GetProfileByID).Methods("GET")
+	router.Handle("/device/profiles/{id:[0-9]+}",
+		r.requireScope(deviceReadScope, r.crudHandler.GetProfileByID)).Methods("GET")
 
 	// PUT /api/v1/device/profiles/{id} - Update profile
-	router.HandleFunc("/device/profiles/{id:[0-9]+}", r.crudHandler.UpdateProfile).Methods("PUT")
+	router.Handle("/device/profiles/{id:[0-9]+}",
+		r.requireScope(deviceWriteScope, r.crudHandler.UpdateProfile)).Methods("PUT")
 
 	// DELETE /api/v1/device/profiles/{id} - Delete profile
-	router.HandleFunc("/device/profiles/{id:[0-9]+}", r.crudHandler.DeleteProfile).Methods("DELETE")
+	router.Handle("/device/profiles/{id:[0-9]+}",
+		r.requireScope(deviceDeleteScope, r.crudHandler.DeleteProfile)).Methods("DELETE")
 
 	// POST /api/v1/device/activate-json - Alternative activation endpoint with JSON body
-	router.HandleFunc("/device/activate-json", r.crudHandler.ActivateDevice).Methods("POST")
+	router.Handle("/device/activate-json",
+		r.requireScope(deviceWriteScope, r.crudHandler.ActivateDevice)).Methods("POST")
 }
 
 // registerTemplateCRUD registers device template CRUD endpoints.
 func (r *DeviceRouter) registerTemplateCRUD(router *mux.Router) {
-	// Template CRUD operations
+	// Template CRUD operations. Create and create-profile take device:write,
+	// as CreateTemplate and CreateProfileFromTemplate do on gRPC, QUIC and
+	// MCP (#873). Get, update, delete and list are REST-only; they take the
+	// device resource's read, write and delete scopes so that a token which
+	// cannot create a template cannot rewrite or remove one either (#484).
 	// POST /api/v1/device/templates - Create template
-	router.HandleFunc("/device/templates", r.templateHandler.CreateTemplate).Methods("POST")
+	router.Handle("/device/templates",
+		r.requireScope(deviceWriteScope, r.templateHandler.CreateTemplate)).Methods("POST")
 
 	// GET /api/v1/device/templates - List templates
-	router.HandleFunc("/device/templates", r.templateHandler.ListTemplates).Methods("GET")
+	router.Handle("/device/templates",
+		r.requireScope(deviceReadScope, r.templateHandler.ListTemplates)).Methods("GET")
 
 	// GET /api/v1/device/templates/name/{name} - Find template by name
-	router.HandleFunc("/device/templates/name/{name}", r.templateHandler.FindTemplateByName).Methods("GET")
+	router.Handle("/device/templates/name/{name}",
+		r.requireScope(deviceReadScope, r.templateHandler.FindTemplateByName)).Methods("GET")
 
 	// GET /api/v1/device/templates/{id} - Get template
-	router.HandleFunc("/device/templates/{id:[0-9]+}", r.templateHandler.GetTemplate).Methods("GET")
+	router.Handle("/device/templates/{id:[0-9]+}",
+		r.requireScope(deviceReadScope, r.templateHandler.GetTemplate)).Methods("GET")
 
 	// PUT /api/v1/device/templates/{id} - Update template
-	router.HandleFunc("/device/templates/{id:[0-9]+}", r.templateHandler.UpdateTemplate).Methods("PUT")
+	router.Handle("/device/templates/{id:[0-9]+}",
+		r.requireScope(deviceWriteScope, r.templateHandler.UpdateTemplate)).Methods("PUT")
 
 	// DELETE /api/v1/device/templates/{id} - Delete template
-	router.HandleFunc("/device/templates/{id:[0-9]+}", r.templateHandler.DeleteTemplate).Methods("DELETE")
+	router.Handle("/device/templates/{id:[0-9]+}",
+		r.requireScope(deviceDeleteScope, r.templateHandler.DeleteTemplate)).Methods("DELETE")
 
 	// POST /api/v1/device/templates/{id}/create-profile - Create profile from template
-	router.HandleFunc("/device/templates/{id:[0-9]+}/create-profile", r.templateHandler.CreateProfileFromTemplate).Methods("POST")
+	router.Handle("/device/templates/{id:[0-9]+}/create-profile",
+		r.requireScope(deviceWriteScope, r.templateHandler.CreateProfileFromTemplate)).Methods("POST")
 }
 
 // registerConfigDeliveryRoutes registers config delivery endpoints for profile
 // lookup and assignment. These routes require authentication (mTLS).
 func (r *DeviceRouter) registerConfigDeliveryRoutes(router *mux.Router) {
 	// GET /api/v1/device/profiles/find-config - Find config for device by identity
-	router.HandleFunc("/device/profiles/find-config", r.templateHandler.FindConfigForDevice).Methods("GET")
+	router.Handle("/device/profiles/find-config",
+		r.requireScope(deviceReadScope, r.templateHandler.FindConfigForDevice)).Methods("GET")
 
 	// POST /api/v1/device/profiles/{id}/assign - Assign profile to device
-	router.HandleFunc("/device/profiles/{id:[0-9]+}/assign", r.templateHandler.AssignProfileToDevice).Methods("POST")
+	router.Handle("/device/profiles/{id:[0-9]+}/assign",
+		r.requireScope(deviceWriteScope, r.templateHandler.AssignProfileToDevice)).Methods("POST")
 
 	// POST /api/v1/device/profiles/{id}/unassign - Clear profile's device binding
-	router.HandleFunc("/device/profiles/{id:[0-9]+}/unassign", r.templateHandler.UnassignProfileFromDevice).Methods("POST")
+	router.Handle("/device/profiles/{id:[0-9]+}/unassign",
+		r.requireScope(deviceWriteScope, r.templateHandler.UnassignProfileFromDevice)).Methods("POST")
 }
 
 // registerProvisioningDeviceRoutes registers the config-delivery endpoints a
@@ -312,12 +429,17 @@ func (r *DeviceRouter) registerProvisioningDeviceRoutes(router *mux.Router) {
 // for one, which decides what configuration that machine boots with. Before
 // #165 an anonymous caller could choose that for any pending session.
 func (r *DeviceRouter) registerProvisioningOperatorRoutes(router *mux.Router) {
+	// The session views take the provisioning scopes, as ListSessions,
+	// GetSession and FulfillSession do on gRPC (#484).
 	// POST /api/v1/provisioning/sessions/{sessionID}/fulfill - Fulfill pending session
-	router.HandleFunc("/provisioning/sessions/{sessionID}/fulfill", r.configDeliveryHandler.FulfillSession).Methods("POST")
+	router.Handle("/provisioning/sessions/{sessionID}/fulfill",
+		r.requireScope(provisioningWriteScope, r.configDeliveryHandler.FulfillSession)).Methods("POST")
 
 	// GET /api/v1/provisioning/sessions - List active sessions
-	router.HandleFunc("/provisioning/sessions", r.configDeliveryHandler.ListSessions).Methods("GET")
+	router.Handle("/provisioning/sessions",
+		r.requireScope(provisioningReadScope, r.configDeliveryHandler.ListSessions)).Methods("GET")
 
 	// GET /api/v1/provisioning/sessions/{sessionID} - Get session by ID
-	router.HandleFunc("/provisioning/sessions/{sessionID}", r.configDeliveryHandler.GetSession).Methods("GET")
+	router.Handle("/provisioning/sessions/{sessionID}",
+		r.requireScope(provisioningReadScope, r.configDeliveryHandler.GetSession)).Methods("GET")
 }

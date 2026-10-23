@@ -47,6 +47,10 @@ type TenantUserServicer interface {
 	// GetUserTenant returns the tenant for a user.
 	GetUserTenant(ctx context.Context, userID uint64) (*tenant.TenantEntity, error)
 
+	// Workspace returns the ID of the workspace the user with the given
+	// email owns or joined. A browser login's session lands there.
+	Workspace(ctx context.Context, email string) (string, error)
+
 	// IsTenantOwner checks if user owns the tenant.
 	IsTenantOwner(ctx context.Context, userID uint64) (bool, error)
 
@@ -209,13 +213,30 @@ func (s *TenantUserService) RegisterNewUser(
 		s.logger.Error(err, "failed to save user, rolling back tenant creation",
 			"tenant_id", tenantID,
 		)
-		// Rollback: attempt to clean up the tenant
-		if cleanupErr := s.tenantManager.DeleteTenant(ctx, tenantID); cleanupErr != nil {
-			s.logger.Error(cleanupErr, "failed to cleanup tenant after user save failure",
+		s.rollbackTenant(ctx, tenantID)
+		return nil, ErrUserSaveFailed{Cause: err}
+	}
+
+	// Mirror the owner into the QuicBaaS IAM tenant so /api/v1/iam/users
+	// surfaces them and the per-user role / group / policy paths have an
+	// entity to operate on. The owner's mirror is part of registration, not
+	// best-effort: an owner the IAM surface cannot see is rolled back the
+	// same way the tenant is (#641).
+	if s.iamMirror != nil {
+		if err := s.iamMirror.MirrorUser(ctx, tenantID, user.Email, user.DisplayName, iamMirrorRoles(user)); err != nil {
+			s.logger.Error(err, "failed to mirror new owner into IAM tenant, rolling back registration",
+				"user_id", user.ID,
+				"email", user.Email,
 				"tenant_id", tenantID,
 			)
+			if delErr := s.userService.Delete(ctx, user.ID); delErr != nil {
+				s.logger.Error(delErr, "failed to delete user after IAM mirror failure",
+					"user_id", user.ID,
+				)
+			}
+			s.rollbackTenant(ctx, tenantID)
+			return nil, ErrIAMMirrorFailed{Email: user.Email, TenantID: tenantID, Cause: err}
 		}
-		return nil, ErrUserSaveFailed{Cause: err}
 	}
 
 	s.logger.Info("new user registered with tenant",
@@ -226,28 +247,31 @@ func (s *TenantUserService) RegisterNewUser(
 		"role", DefaultTenantOwnerRole,
 	)
 
-	// Mirror the user into the QuicBaaS IAM tenant so /api/v1/iam/users
-	// surfaces them and the per-user role / group / policy paths have
-	// an entity to operate on. Failure is non-fatal — the platform
-	// registration already succeeded — but loud-log so operators can
-	// reconcile manually if the mirror is misconfigured.
-	if s.iamMirror != nil {
-		mirrorRoles := []string{DefaultTenantOwnerRole}
-		if err := s.iamMirror.MirrorUser(ctx, tenantID, user.Email, user.DisplayName, mirrorRoles); err != nil {
-			s.logger.Warn("failed to mirror user into IAM tenant",
-				"user_id", user.ID,
-				"email", user.Email,
-				"tenant_id", tenantID,
-				"error", err,
-			)
-		}
-	}
-
 	return &RegisterResult{
 		User:        user,
 		Tenant:      tenantEntity,
 		IsNewTenant: true,
 	}, nil
+}
+
+// rollbackTenant deletes a tenant created by a registration that then failed.
+// A cleanup failure is logged, not returned: the caller is already returning
+// the error that caused the rollback.
+func (s *TenantUserService) rollbackTenant(ctx context.Context, tenantID string) {
+	if err := s.tenantManager.DeleteTenant(ctx, tenantID); err != nil {
+		s.logger.Error(err, "failed to clean up tenant after failed registration",
+			"tenant_id", tenantID,
+		)
+	}
+}
+
+// iamMirrorRoles is the IAM role set a platform user is mirrored with: the
+// tenant owner gets DefaultTenantOwnerRole, every other user none.
+func iamMirrorRoles(user *entities.User) []string {
+	if user.IsTenantOwner {
+		return []string{DefaultTenantOwnerRole}
+	}
+	return nil
 }
 
 // DefaultTenantOwnerRole is the role granted automatically to the
@@ -320,8 +344,12 @@ func (s *TenantUserService) RegisterInvitedUser(
 		}
 	}
 
+	// One reading of the clock decides expiry and stamps the user, so the
+	// two can never disagree about when the redemption happened.
+	now := time.Now().UTC()
+
 	// Verify invitation is not expired
-	if invitation.IsExpired() {
+	if invitation.IsExpired(now) {
 		return nil, ErrInvitationExpired{Token: invitationToken}
 	}
 
@@ -344,7 +372,6 @@ func (s *TenantUserService) RegisterInvitedUser(
 	// what keeps a redeemer from asking to be the owner — the same reasoning
 	// that made #171 read the tenant from the verified session rather than
 	// from a caller-supplied field.
-	now := time.Now().UTC()
 	user.TenantID = invitation.TenantID
 	user.IsTenantOwner = invitation.InitialAdmin
 	user.CreatedAt = now
@@ -422,6 +449,32 @@ func (s *TenantUserService) GetUserTenant(ctx context.Context, userID uint64) (*
 	}
 
 	return tenantEntity, nil
+}
+
+// Workspace returns the ID of the user's workspace: the tenant
+// RegisterNewUser created for them or RegisterInvitedUser joined them to.
+// A browser login lands its session there (#662).
+//
+// The user is found by email because that is what the backbone names an
+// authenticated principal by. The workspace must still exist in the
+// tenant manager (the go-quicbaas IAM tenant service on the daemon), so a
+// deleted workspace is refused rather than handed to a session.
+func (s *TenantUserService) Workspace(ctx context.Context, email string) (string, error) {
+	if email == "" {
+		return "", ErrInvalidEmail{Email: email}
+	}
+	user, err := s.userService.GetByEmail(ctx, email)
+	if err != nil || user == nil {
+		return "", ErrUserNotFound{Email: email}
+	}
+	if user.TenantID == "" {
+		return "", ErrUserNotInTenant{UserID: user.ID}
+	}
+	workspace, err := s.tenantManager.GetTenant(ctx, user.TenantID)
+	if err != nil || workspace == nil {
+		return "", ErrTenantNotFound{ID: user.TenantID}
+	}
+	return workspace.ID, nil
 }
 
 // IsTenantOwner checks if a user owns the tenant.

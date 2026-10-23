@@ -15,10 +15,14 @@ package iso
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
 
+	"github.com/fatih/color"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -291,6 +295,70 @@ func TestCalculateFileSHA256_EmptyFile(t *testing.T) {
 	assert.NotEmpty(t, checksum)
 	// SHA256 of empty content is a known value
 	assert.Equal(t, "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", checksum)
+}
+
+// captureProgress points the iso progress helpers at a buffer for the test.
+func captureProgress(t *testing.T) *bytes.Buffer {
+	t.Helper()
+	var buf bytes.Buffer
+	orig := progressOut
+	progressOut = &buf
+	t.Cleanup(func() { progressOut = orig })
+	return &buf
+}
+
+func TestProgressHelpers_WriteToProgressOutNotStdout(t *testing.T) {
+	assert.Equal(t, color.Error, progressOut, "progress defaults to stderr")
+
+	progress := captureProgress(t)
+	printHeader("header line")
+	printInfo("info line")
+	printSuccess("success line")
+	printWarn("warn line")
+	printError("error line")
+
+	for _, line := range []string{"header line", "info line", "success line", "warn line", "error line"} {
+		assert.Contains(t, progress.String(), line)
+	}
+}
+
+func TestPrintCreateResult_ReportsTheISODigest(t *testing.T) {
+	content := []byte("created iso bytes")
+	isoPath := filepath.Join(t.TempDir(), "trusted.iso")
+	require.NoError(t, os.WriteFile(isoPath, content, 0o600))
+
+	var out bytes.Buffer
+	require.NoError(t, printCreateResult(&out, getJSONTestFlags(), isoPath, "3.22.2"))
+
+	var result createResult
+	require.NoError(t, json.Unmarshal(out.Bytes(), &result), out.String())
+	digest := sha256.Sum256(content)
+	assert.True(t, result.Success)
+	assert.Equal(t, isoPath, result.OutputISO)
+	assert.Equal(t, hex.EncodeToString(digest[:]), result.SHA256)
+	assert.Equal(t, int64(len(content)), result.SizeBytes)
+	assert.Contains(t, result.Message, "3.22.2")
+}
+
+func TestPrintCreateResult_MissingISOPrintsNothing(t *testing.T) {
+	var out bytes.Buffer
+	err := printCreateResult(&out, getJSONTestFlags(), filepath.Join(t.TempDir(), "absent.iso"), "3.22.2")
+
+	var wrapped *WrappedError
+	require.ErrorAs(t, err, &wrapped)
+	assert.Empty(t, out.String(), "a failed create prints no result object")
+}
+
+func TestRunCreate_RefusedVerbKeepsStdoutClean(t *testing.T) {
+	progress := captureProgress(t)
+
+	var out bytes.Buffer
+	err := runCreate(getJSONTestFlags(), &createFlags{arch: "sparc", platformType: "server"}, &out)
+
+	var archErr ErrInvalidArchitecture
+	require.ErrorAs(t, err, &archErr)
+	assert.Empty(t, out.String(), "progress must not reach the result stream")
+	assert.Contains(t, progress.String(), "Creating Trusted Platform ISO")
 }
 
 func TestMergeConfigs_BasicMerge(t *testing.T) {

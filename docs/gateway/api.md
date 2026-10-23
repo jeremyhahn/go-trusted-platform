@@ -15,8 +15,11 @@ over a Unix domain socket**, so gRPC and Unix share a column.
 `ServiceRegistry.Gateway` and `ServiceRegistry.Proxy` carry both services
 in-process.
 
-Two gRPC services: `GatewayService` (26 RPCs, `gateway.proto`) and
+Two gRPC services: `GatewayService` (29 RPCs, `gateway.proto`) and
 `ProxyService` (14 RPCs, `proxy.proto`).
+
+**MCP is served over stdio / HTTPS on port 9445.** The tool definitions are in
+`pkg/api/mcp/gateway_tools.go`, with the LB and perf tools registered alongside.
 
 **QUIC reaches both through the gateway category opcode `0x2F`.** Sub-opcodes
 `0x20`–`0x2D` under that category are routed to the **proxy** handler; the rest
@@ -53,9 +56,7 @@ nothing. The document's sections and their provenance are in
 The overlay section of the snapshot includes the local VTEP, underlay bridge,
 OpenFlow table ids, admitted VTEPs, and the neighbor-discovery counters the
 gatewayd overlay handler maintains: punted, answered, meter-dropped,
-queue-dropped, and fell-through. It also counts the routes refused for
-claiming the anycast gateway's address (`refused_bindings`) and the replays of
-a refused VTEP's routes that failed (`refused_replays`). The admitted-VTEP read/list verbs are backed
+queue-dropped, and fell-through. The admitted-VTEP read/list verbs are backed
 by the same service layer and are exposed on REST, gRPC, QUIC, MCP, Unix and
 the SDK/CLI; they return `NotFound` for an address that is not currently
 admitted, and `Unavailable` (REST 503) on a gateway with no overlay section.
@@ -64,6 +65,28 @@ above (daemon REST stack only), QUIC translates to and from the
 `Gateway*AdmittedVTEP*` wire structs (whose field names differ from the pb
 messages, with `verdict_at` as Unix seconds), and REST and MCP wrap the bare
 single-VTEP record into `GetGatewayAdmittedVTEPResponse.vtep`.
+
+When the daemon has no snapshot reader wired, the snapshot and admitted-VTEP
+reads answer "not configured", never "not implemented": `StatusUnavailable`
+on QUIC, 503 on the two admitted-VTEP REST routes, and "service not
+available: gateway" from MCP, which carries the `Unavailable` class (#65).
+
+**Every transport answers status and mode from the one gateway gRPC service
+(#65).** QUIC, MCP and the `/api/v1/sdn/gateway/{status,mode}` REST routes
+bind to it in `pkg/api/daemon/gateway_status_bindings.go`; gRPC, Unix and the
+embedded SDK call it directly, and `/api/v1/gateway/*` proxies gRPC. The
+service reads the gateway that runs in the same process. `platformd` runs
+none (`gatewayd` constructs it), so on a live control plane both verbs answer
+"not configured" everywhere: `Unavailable` on gRPC and Unix, 503 on REST,
+`StatusUnavailable` on QUIC, and the service error from MCP.
+
+The mode is a bitmask: overlay `1`, edge `2`, transit `4`. Every transport
+refuses an empty set or an undefined bit before it asks the gateway:
+`InvalidArgument` on gRPC and Unix, 400 on REST, `StatusInvalidArgument` on
+QUIC.
+MCP's `gateway_mode_set` takes names (`overlay`, `edge`, `transit`) and
+refuses any other name; its result spells the active modes out beside the
+bitmask.
 
 **`SetGatewayMode` is the deprecated compatibility surface.** `GatewayMode`
 carries a deprecation notice in `pkg/sdn/gateway/compat.go` and maps only three
@@ -75,18 +98,15 @@ callable, not because it is the way to configure a gateway — see
 
 ## 3. BGP
 
-| Capability | REST | gRPC / Unix | QUIC (under `0x2F`) | MCP | Embedded |
-|---|---|---|---|---|---|
-| BGP status | `GET /api/v1/gateway/bgp/status` | `GetBGPStatus` | `OpGatewayBGPStatus` (`0x03`) | `gateway_bgp_status` | ✅ |
-| List peers | `GET /api/v1/gateway/bgp/peers` | `ListBGPPeers` | `OpGatewayBGPPeers` (`0x04`) | `gateway_bgp_peers` | ✅ |
-| List announced prefixes | `GET /api/v1/gateway/bgp/prefixes` | `ListAnnouncedPrefixes` | `OpGatewayListPrefixes` (`0x07`) | `gateway_bgp_prefixes` | ✅ |
-| Announce prefix | `POST /api/v1/gateway/bgp/prefixes` | `AnnouncePrefix` | `OpGatewayAnnouncePrefix` (`0x05`) | `gateway_bgp_announce` | ✅ |
-| Withdraw prefix | `DELETE /api/v1/gateway/bgp/prefixes` | `WithdrawPrefix` | `OpGatewayWithdrawPrefix` (`0x06`) | `gateway_bgp_withdraw` | ✅ |
-
-BGP is complete on all five reachable transports. Announce and withdraw share
-the `/bgp/prefixes` path and are distinguished by method; the prefix travels in
-the body, which is why withdraw is a `DELETE` with a payload rather than a path
-parameter.
+The five BGP methods (status, peers, announce, withdraw, announced prefixes)
+are routed on every transport but not backed: `platformd` holds no BGP
+speaker, so each answers the typed "not configured" (§11). Backing them needs
+the same control-plane link to gatewayd-resident services as §5a.
+REST withdraw carries the prefix as the `prefix` query parameter, URL-encoded
+(`DELETE /api/v1/gateway/bgp/prefixes?prefix=203.0.113.0%2F24`), and a
+`DELETE` body is ignored. A missing or malformed prefix is refused with 400
+and the same reason gRPC returns (`prefix is required`, `invalid prefix`). The
+per-transport table and the validation order are in [BGP API](../bgp/api.md).
 
 ---
 
@@ -114,21 +134,62 @@ The `/sdn/gateway/ipam` surface wraps the documented snake_case objects in
 the standard platform response envelope (`{code, error, success, payload}`);
 the reduced `/gateway/ipam` surface keeps its protojson payloads.
 
+**Every IPAM verb is served from the allocator `platformd` owns**, on every
+transport; the MCP tools live in `pkg/api/daemon/gateway_ipam_tools.go`.
+A pool update changes only what it names on REST, QUIC and MCP. The gRPC
+`UpdateIPAMPool` replaces `zone` and `description` outright, and either
+duration whenever it is not negative: send `-1` to keep a duration, and the
+current zone and description to keep those. `platformctl sdn ipam pool
+update` does that for every flag it was not given.
+
+**The Go SDK client carries status, mode and every IPAM verb on every
+transport.** Over REST it uses the full `/api/v1/sdn/gateway/ipam` surface
+(`sdk/go/transport/rest/gateway_ipam.go`). Over QUIC it uses the `0x2F`
+sub-opcodes (`sdk/go/transport/quic/gateway_status_ipam.go`), and over MCP
+the `gateway_*` tools (`sdk/go/transport/mcp/gateway_status_ipam.go`). gRPC,
+Unix and embedded call the service directly. The client maps the gRPC
+`UpdateIPAMPool` onto the REST, QUIC and MCP updates, which change only what
+they name:
+
+- A `-1` duration is omitted, and a positive one is sent.
+- `update_window` sends the whole window, so an empty bound or reserved list
+  clears it, as on gRPC.
+
+Before anything is sent, the client refuses with `InvalidArgument` what a
+transport cannot carry:
+
+- On REST, QUIC and MCP: a zero duration, because those updates keep a
+  duration they are not given.
+- On MCP only:
+  - an inactivity timeout;
+  - a caller-chosen pool ID on create;
+  - a duration that is not a whole number of seconds.
+
+An empty zone or description is kept on those three transports, not cleared.
+
 ---
 
 ## 5. Load balancer
 
 | Capability | REST | gRPC / Unix | QUIC (under `0x2F`) | MCP | Embedded |
 |---|---|---|---|---|---|
-| LB status | `MISSING — docs/13 G7` | `GetLBStatus` | sub-opcode range (`pkg/api/daemon/gateway_lb_quic.go`) | `gateway_lb_status` | ✅ |
-| Add VIP | `MISSING — docs/13 G7` | `AddVIP` | as above | `gateway_lb_vip_add` | ✅ |
-| Get VIP | `MISSING — docs/13 G7` | `GetVIP` | as above | `gateway_lb_vip_get` | ✅ |
-| List VIPs | `MISSING — docs/13 G7` | `ListVIPs` | as above | `gateway_lb_vip_list` | ✅ |
-| Remove VIP | `MISSING — docs/13 G7` | `RemoveVIP` | as above | `gateway_lb_vip_remove` | ✅ |
-| Set VIP backends | `MISSING — docs/13 G7` | `SetVIPBackends` | as above | `gateway_lb_vip_set_backends` | ✅ |
+| LB status | `GET /api/v1/sdn/gateway/lb/status` | `GetLBStatus` | `OpGatewayLBStatus` (`0x35`) | `gateway_lb_status` | ✅ |
+| Add VIP | `POST /api/v1/sdn/gateway/lb/vips` | `AddVIP` | `OpGatewayLBAddVIP` (`0x30`) | `gateway_lb_vip_add` | ✅ |
+| Get VIP | `GET /api/v1/sdn/gateway/lb/vips/{protocol}/{address}/{port}` | `GetVIP` | `OpGatewayLBGetVIP` (`0x32`) | `gateway_lb_vip_get` | ✅ |
+| List VIPs | `GET /api/v1/sdn/gateway/lb/vips` | `ListVIPs` | `OpGatewayLBListVIPs` (`0x33`) | `gateway_lb_vip_list` | ✅ |
+| Remove VIP | `DELETE /api/v1/sdn/gateway/lb/vips/{protocol}/{address}/{port}` | `RemoveVIP` | `OpGatewayLBRemoveVIP` (`0x31`) | `gateway_lb_vip_remove` | ✅ |
+| Set VIP backends | `PUT /api/v1/sdn/gateway/lb/vips/{protocol}/{address}/{port}/backends` | `SetVIPBackends` | `OpGatewayLBSetVIPBackends` (`0x34`) | `gateway_lb_vip_set_backends` | ✅ |
 
-A production `platformd` does not wire the load balancer backend yet (#660,
-see §5a), so these verbs answer "not configured" on a live platform.
+The REST routes are registered by `GatewayHandlers.registerLBRoutes`
+(`pkg/api/rest/gateway_lb_handlers.go`); QUIC sub-opcodes are in
+`pkg/api/quic/gateway_lb_handlers.go`. A VIP is keyed by protocol, address
+and port on every transport. The add body is
+`{address, port, protocol, algorithm?, backends: [{address, port, weight?}]}`;
+set-backends takes `{backends: [...]}` and replaces the whole set. A VIP read
+returns its `ct_zone`, `group_id` and per-backend `healthy` flag.
+
+On a live platform these verbs reach the load balancer in `gatewayd` over
+live IPC (see §5a); without a datapath socket they answer "not configured".
 
 ---
 
@@ -136,23 +197,31 @@ see §5a), so these verbs answer "not configured" on a live platform.
 
 | Capability | REST | gRPC / Unix | QUIC | MCP | Embedded |
 |---|---|---|---|---|---|
-| NAT64 status | `GET /api/v1/sdn/gateway/nat64/status` | `GetNAT64Status` | `0x39` (`pkg/api/quic/gateway_nat64_handlers.go`) | `gateway_nat64_status` | ✅ |
+| NAT64 status | `GET /api/v1/sdn/gateway/nat64/status` | `GetNAT64Status` | `0x39` (`sdk/go/wire/quicwire/gateway_nat64.go`) | `gateway_nat64_status` | ✅ |
 
-> **Production status: routed, not yet backed.** The translator runs in
-> `gatewayd`. Today `platformd` does not reach it: it builds the gateway
-> service with no NAT64 backend on any transport. On a live platform every
-> transport answers "not configured": `Unavailable` on gRPC and Unix, 503 on
-> REST, `StatusUnavailable` on QUIC, and "service not available" from MCP.
-> That holds even while the `nat64:` section is running and healthy.
+> **Production status: served over live IPC (#660).** The translator, the
+> load balancer (§5) and perf (§6) run in `gatewayd`'s datapath child.
+> `platformd` reaches them by dialling that child's control socket directly,
+> `sdn.gateway.datapath-socket` in platformd's configuration (normally
+> gatewayd's `<process.runtime-dir>/datapath.sock`; see [user.md](user.md)), and builds the gateway service on an IPC client
+> (`pkg/api/daemon/gateway_backends.go`). Every read and control action is a
+> live call to `GatewayServicesService` (`pkg/sdn/gateway/ipc/proto/ipc.proto`);
+> nothing is served from the telemetry snapshot, which stays telemetry.
 >
-> Connecting the control plane to gatewayd-resident services is #660. It is
-> blocked on an owner ruling: live IPC over the #557 seam, or the #594
-> telemetry snapshot. The load balancer (§5) and perf (§6) verbs share the
-> same gap. Until #660 lands, read translator health from `gatewayd` itself
-> or from the telemetry snapshot's `nat64` section.
+> - **Child unreachable.** The dial is lazy, so `platformd` starts before
+>   `gatewayd`. A call that cannot reach the child answers "not configured"
+>   on every transport: `Unavailable` on gRPC and Unix, 503 on REST,
+>   `StatusUnavailable` on QUIC, and "service not available" from MCP.
+> - **No datapath socket (single-process mode).** The load balancer and
+>   NAT64 answer "not configured"; perf falls back to `platformd`'s local OVS
+>   perf service.
+> - **Access.** The child admits `platformd`'s uid to these methods only
+>   through `process.platform-uids` (`pkg/sdn/gateway/ipc/policy.go`).
 >
-> What is proven today:
+> What is proven:
 > - The verb is routed on every transport (`TestNAT64StatusMultiProtocol`).
+> - The production wiring serves all three backends from a real IPC server
+>   (`TestNew_ServesGatewayBackendsOverIPC`).
 > - The translator itself works end to end (`make integration-test-nat64`).
 
 Read-only by design: the translator has no runtime verbs. Its `pool6`,
@@ -204,25 +273,28 @@ QUIC has no failed-precondition byte. It carries this case as
 `FailedPrecondition`. The Go SDK reads that byte as `InvalidArgument`. The
 kernel's reason is in the message on every transport.
 
-**The load balancer has no REST surface at all.** Six capabilities on gRPC,
-Unix, QUIC, MCP and embedded; zero on REST. A REST-only client cannot see or
-manage a VIP.
-
 ---
 
 ## 6. Performance and datapath statistics
 
-| Capability | REST | gRPC / Unix | QUIC (under `0x2F`, `0x36`–`0x38`) | MCP | Embedded |
+| Capability | REST | gRPC / Unix | QUIC (under `0x2F`) | MCP | Embedded |
 |---|---|---|---|---|---|
-| Flow statistics | `MISSING — docs/13 G7` | `GetPerfFlows` | ✅ | `gateway_perf_flows` | ✅ |
-| Datapath statistics | `MISSING — docs/13 G7` | `GetPerfDatapath` | ✅ | `gateway_perf_datapath` | ✅ |
-| Conntrack statistics | `MISSING — docs/13 G7` | `GetPerfConntrack` | ✅ | `gateway_perf_conntrack` | ✅ |
+| Flow-programming measurement | `POST /api/v1/sdn/gateway/perf/flows` | `GetPerfFlows` | `OpGatewayPerfFlows` (`0x36`) | `gateway_perf_flows` | ✅ |
+| Datapath statistics | `GET /api/v1/sdn/gateway/perf/datapath` | `GetPerfDatapath` | `OpGatewayPerfDatapath` (`0x37`) | `gateway_perf_datapath` | ✅ |
+| Conntrack statistics | `GET /api/v1/sdn/gateway/perf/conntrack` | `GetPerfConntrack` | `OpGatewayPerfConntrack` (`0x38`) | `gateway_perf_conntrack` | ✅ |
 
-The perf sub-opcodes `0x36`–`0x38` are served by the same shared perf service
-as the other transports; when the perf backend is not wired, they return
-`StatusUnavailable` rather than failing as unknown opcodes. A production
-`platformd` does not wire the perf backend yet (#660, see §5a), so on a live
-platform that is what every transport answers.
+**Flow measurement mutates the bridge.** It installs ephemeral flows into the
+dedicated perf table 250 under cookie `0xF1BE00FF00000000`, times the install,
+and removes them with one cookie-scoped delete
+(`pkg/sdn/gateway/services/perf/service.go`). That is why it is a REST `POST`
+and why its MCP tool needs `sdn:write` while the two read verbs need
+`sdn:read` (`pkg/api/mcp/authz.go`).
+
+The perf sub-opcodes are served by the same shared perf service as the other
+transports; when the perf backend is not wired, they return
+`StatusUnavailable` rather than failing as unknown opcodes. On a live
+platform perf is measured by `gatewayd`'s datapath child over live IPC (see
+§5a); in single-process mode it is `platformd`'s local OVS perf service.
 
 ---
 
@@ -262,6 +334,8 @@ consumed by gateways:
 | DELETE | `/api/v1/gateway/state/{id}` | Forget a gateway's state | operator surface (see below) |
 | POST | `/api/v1/gateway/telemetry` | Gateway pushes telemetry | body `gateway_id` **must equal** the client certificate CN |
 | GET | `/api/v1/gateway/desired-config/{id}` | Gateway fetches its desired configuration | `{id}` **must equal** the client certificate CN |
+| PUT | `/api/v1/gateway/vpn-leases/{id}` | Gateway records a management VPN lease it admitted or renewed ([docs/vpn/api.md](../vpn/api.md) §6) | `{id}` **must equal** the client certificate CN |
+| DELETE | `/api/v1/gateway/vpn-leases/{id}/{tenant}/{lease}` | Gateway releases a lease it revoked | `{id}` **must equal** the client certificate CN |
 
 `desired-config` is the direction of authority made explicit: the control plane
 decides, the gateway fetches. A gateway does not author its own configuration.
@@ -342,17 +416,28 @@ configured twice.
 ## 10. Authorization
 
 Platform tokens carry an `scp` claim as `"<resource>:<action>"`.
-**`GatewayService` (9 methods) and `ProxyService` (14 methods) are both in the
-gRPC scope catalog** (`pkg/api/grpc/method_permissions.go`), so gateway and
-proxy operations do require a scope — unlike registry, attestation, overlay and
-switch, which are absent from the catalog and therefore require only a validated
-token.
+The gRPC scope catalog (`pkg/api/grpc/method_permissions.go`) is
+**default-deny**: a method absent from it is refused with `PermissionDenied`.
 
-Nine of `GatewayService`'s 24 RPCs are mapped. The unmapped fifteen — which
-include the IPAM pool CRUD and the LB VIP operations — carry no required scope,
-because a method absent from the map is allowed once the token validates. That
-asymmetry within a single service is raised as an owner question in the
-migration report.
+**`GatewayService` is fully scoped** under resource `sdn`: the VIP, snapshot,
+perf, IPAM, BGP, status and mode RPCs all carry `sdn:read`, `sdn:write` or
+`sdn:delete`. `GetPerfFlows` needs `sdn:write` because it installs and removes
+ephemeral flows. **`ProxyService` is fully scoped** under `proxy`
+([`docs/proxy/api.md`](../proxy/api.md) §7).
+
+On MCP, the `gateway_ipam_*`, `gateway_lb_*`, `gateway_nat64_status`,
+`gateway_zone_*`, `gateway_snapshot*`, `gateway_perf_*`, `gateway_status` and
+`gateway_mode_set` tools carry the same `sdn:*` permissions as their gRPC twins:
+`gateway_status` needs `sdn:read` like `GetGatewayStatus`, and
+`gateway_mode_set` needs `sdn:write` like `SetGatewayMode` (#65). The
+`gateway_bgp_*` tools do the same: `gateway_bgp_status`, `gateway_bgp_peers`
+and `gateway_bgp_prefixes` need `sdn:read`, and `gateway_bgp_announce` and
+`gateway_bgp_withdraw` need `sdn:write`, because changing what the fabric
+advertises is a write (#65).
+
+`TestGRPCMethodCatalog_CoversEveryRegisteredMethod` enumerates `GatewayService`
+from its registered descriptor, so an RPC added to `gateway.proto` without a
+catalog entry fails `make test`.
 
 The admitted-VTEP reads (`GetGatewayAdmittedVTEP`, `ListGatewayAdmittedVTEPs`
 and the `gateway_admitted_vtep(s)` MCP tools) require `sdn:read`, the same
@@ -371,8 +456,9 @@ surface (`/gateway/status`, `/gateway/mode`, `/gateway/bgp/**`,
 announce is a route hijack; an anonymous IPAM allocation is address exhaustion.
 
 **gatewayd-facing half — NOT role-gated, because it is already
-authenticated:** `POST /gateway/telemetry` and `GET
-/gateway/desired-config/{id}` require a **verified mTLS client certificate**
+authenticated:** `POST /gateway/telemetry`, `GET
+/gateway/desired-config/{id}`, `PUT /gateway/vpn-leases/{id}` and `DELETE
+/gateway/vpn-leases/{id}/{tenant}/{lease}` require a **verified mTLS client certificate**
 and bind the request's `gateway_id` to that certificate's Common Name — 401
 without a certificate, 403 when the id names another gateway
 (`ControlPlane.authenticatedGateway`). Their caller is gatewayd, whose
@@ -386,9 +472,8 @@ and it is enforced by `ControlPlane.RegisterRoutes` versus
 `ControlPlane.RegisterGatewayFacingRoutes`, asserted exactly and for
 disjointness in that package's tests.
 
-Which operator authorization the `/gateway/state` routes should carry was
-previously left open in the code as an owner decision. #165 answers it with the
-same RBAC role guard #159 established for the rest of the API.
+The `/gateway/state` routes carry the same RBAC role guard as the rest of the
+API (#159, #165).
 
 This changes the REST position only. The gRPC, Unix, MCP and embedded
 positions described above are unchanged. See

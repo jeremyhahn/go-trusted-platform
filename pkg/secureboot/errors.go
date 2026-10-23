@@ -71,6 +71,16 @@ func (e *KMSKeyRefError) Error() string {
 	return "secureboot: key-uri " + strconv.Quote(e.KeyURI) + " is not a usable kms:// reference"
 }
 
+// KMSPublicKeyError is a KMS-held key signer built without the key's
+// public key.
+type KMSPublicKeyError struct {
+	KeyID string
+}
+
+func (e *KMSPublicKeyError) Error() string {
+	return "secureboot: no public key for KMS key " + strconv.Quote(e.KeyID)
+}
+
 // KMSCertificateError is a KMS-held key's certificate that could not be
 // fetched from the platform CA or parsed.
 type KMSCertificateError struct {
@@ -83,6 +93,30 @@ func (e *KMSCertificateError) Error() string {
 }
 
 func (e *KMSCertificateError) Unwrap() error { return e.Err }
+
+// CertPinError is a certificate whose SHA-256 fingerprint is not the one its
+// reference was pinned to: the CA holds a different certificate under it.
+type CertPinError struct {
+	Ref  string
+	Want string
+	Got  string
+}
+
+func (e *CertPinError) Error() string {
+	return "secureboot: certificate " + strconv.Quote(e.Ref) + " has SHA-256 fingerprint " + e.Got +
+		", but it is pinned to " + e.Want
+}
+
+// CertPinFormatError is a cert-uri whose #sha256= pin is not a reference
+// followed by a 32-byte hex SHA-256 fingerprint.
+type CertPinFormatError struct {
+	CertURI string
+}
+
+func (e *CertPinFormatError) Error() string {
+	return "secureboot: cert-uri " + strconv.Quote(e.CertURI) +
+		" must be <kms://ref>#sha256=<SHA-256 fingerprint of the certificate, in hex>"
+}
 
 // KMSSignError is a KMS Sign call that failed or returned no signature.
 type KMSSignError struct {

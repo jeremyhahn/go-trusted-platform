@@ -17,6 +17,8 @@ import (
 	"context"
 	"strings"
 	"testing"
+
+	"github.com/jeremyhahn/go-trusted-platform/pkg/vtpm"
 )
 
 func TestNewResourceRegistry(t *testing.T) {
@@ -226,7 +228,7 @@ func TestResourceRegistry_ReadVTPMResource(t *testing.T) {
 
 	t.Run("handles vtpm list error", func(t *testing.T) {
 		svc := newMockServiceProvider()
-		svc.vtpmListFunc = func(ctx context.Context) ([]interface{}, error) {
+		svc.vtpmListFunc = func(ctx context.Context, opts *vtpm.ListOptions) ([]interface{}, error) {
 			return nil, ErrMockServiceError
 		}
 		registry := NewResourceRegistry(svc, log)
@@ -466,7 +468,7 @@ func TestResourceRegistry_ReadSDNResource(t *testing.T) {
 
 	t.Run("handles sdn list policies error", func(t *testing.T) {
 		svc := newMockServiceProvider()
-		svc.sdnListPoliciesFunc = func(ctx context.Context) ([]interface{}, error) {
+		svc.sdnListPoliciesFunc = func(ctx context.Context, policyType, targetID string) ([]interface{}, error) {
 			return nil, ErrMockServiceError
 		}
 		registry := NewResourceRegistry(svc, log)
@@ -539,7 +541,7 @@ func TestResourceRegistry_ReadStatusResource(t *testing.T) {
 		svc.healthFunc = func(ctx context.Context) (interface{}, error) {
 			return nil, ErrMockServiceError
 		}
-		svc.vtpmListFunc = func(ctx context.Context) ([]interface{}, error) {
+		svc.vtpmListFunc = func(ctx context.Context, opts *vtpm.ListOptions) ([]interface{}, error) {
 			return nil, ErrMockServiceError
 		}
 		registry := NewResourceRegistry(svc, log)

@@ -134,11 +134,6 @@ const (
 // it via this share name.
 const virtualMediaShareName = "boot"
 
-// cpWebservicePort is the HTTPS port on which the control-plane webservice
-// is expected to listen. It is a variable rather than a constant so tests
-// can override it with the httptest.Server ephemeral port.
-var cpWebservicePort = "8443"
-
 // NodeRegistration is the JSON payload that platformd uploads to the
 // bootstrap server at /installs/<hostname>/registration.json after it
 // starts on a freshly-installed node. The IP field is the address
@@ -949,7 +944,9 @@ func (o *Orchestrator) waitForHealthAny(ctx context.Context, addresses []string,
 		seen[a] = struct{}{}
 	}
 
-	var lastProbe error
+	// lastProbe holds each candidate's latest failure, so the report names
+	// the address that answered rather than whichever was probed last.
+	lastProbe := make(map[string]error, len(addresses))
 	for {
 		// Re-read registration.json on each tick to pick up new IP.
 		// MAC-keyed path is tried before hostname to tolerate shared
@@ -972,16 +969,40 @@ func (o *Orchestrator) waitForHealthAny(ctx context.Context, addresses []string,
 					slog.String("address", addr))
 				return nil
 			}
-			lastProbe = err
+			// A probe cut off by the deadline says nothing new about the
+			// node; keep the failure the previous round observed.
+			if _, seenBefore := lastProbe[addr]; !seenBefore || ctx.Err() == nil {
+				lastProbe[addr] = err
+			}
 		}
 		if tick == nil {
 			tick, stop = o.newTicker(defaultHealthInterval)
 		}
 		select {
 		case <-ctx.Done():
-			return HealthWaitTimeoutError{Cause: ctx.Err(), LastProbe: lastProbe}
+			return HealthWaitTimeoutError{Cause: ctx.Err(), LastProbe: candidateFailures(addresses, lastProbe)}
 		case <-tick:
 		}
+	}
+}
+
+// candidateFailures returns the last failure of each probed address in
+// probe order: the lone error when only one address was probed, else a
+// HealthProbeFailures naming every one.
+func candidateFailures(addresses []string, lastProbe map[string]error) error {
+	failures := make(HealthProbeFailures, 0, len(lastProbe))
+	for _, addr := range addresses {
+		if err := lastProbe[addr]; err != nil {
+			failures = append(failures, err)
+		}
+	}
+	switch len(failures) {
+	case 0:
+		return nil
+	case 1:
+		return failures[0]
+	default:
+		return failures
 	}
 }
 
@@ -1179,7 +1200,7 @@ func installLogBaseURL(dep *DeployerConfig) (string, error) {
 // This implements the orchestrator side of the dynamic config-delivery
 // architecture documented in:
 //   - docs/architecture/bootstrap-flow.md §6 (per-MAC keying)
-//   - docs/bootstrap/config-delivery.md §5 (what the orchestrator publishes)
+//   - docs/bootstrap/architecture.md Phase 3 (what the orchestrator publishes)
 //   - docs/ipxe/architecture.md (HTTP endpoint contract)
 //
 // For each MAC in union(node.MACs, BMC-discovered MACs):
@@ -1589,7 +1610,7 @@ func (o *Orchestrator) fetchControlPlaneCABundle(ctx context.Context) (string, e
 // host, verifying the served chain against the fetched bundle for
 // tlsName. It returns the bundle body and the pool built from it.
 func (o *Orchestrator) fetchCABundleFrom(ctx context.Context, host, tlsName string) ([]byte, *x509.CertPool, error) {
-	endpoint := net.JoinHostPort(host, cpWebservicePort)
+	endpoint := net.JoinHostPort(host, o.controlPlanePort())
 	url := "https://" + endpoint + "/api/v1/acme/ca-bundle"
 
 	// Capture-then-verify: the CP's CA was just self-provisioned, so no
@@ -1723,7 +1744,7 @@ func (o *Orchestrator) fetchControlPlaneSPKIPin(ctx context.Context) (string, er
 		return "", ControlPlaneStaticIPRequiredError{Hostname: cpNode.Hostname}
 	}
 
-	endpoint := net.JoinHostPort(cpIPs[0], cpWebservicePort)
+	endpoint := net.JoinHostPort(cpIPs[0], o.controlPlanePort())
 	dialer := &net.Dialer{Timeout: 10 * time.Second}
 	tlsCfg := &tls.Config{
 		MinVersion: tls.VersionTLS13,

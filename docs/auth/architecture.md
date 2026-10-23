@@ -1,6 +1,6 @@
 # Platform Authentication — Architecture
 
-> **Status: NORMATIVE** · Scope: `pkg/auth/` · Last verified: 2026-08-18
+> **Status: NORMATIVE** · Scope: `pkg/auth/` · Last verified: 2026-10-09
 > Conflicts with this document are defects. Fix them here first.
 > The feature folder is: [architecture.md](architecture.md) · [engineering.md](engineering.md) · [cli.md](cli.md) · [api.md](api.md) · [user.md](user.md).
 
@@ -100,7 +100,7 @@ is this" so downstream authorization has one input.
 | gRPC mTLS interceptors | `pkg/api/daemon/mtls_interceptor.go` | this repo |
 | gRPC platform-token / OIDC interceptors | `pkg/api/grpc/oidc_interceptor.go` | this repo |
 | Unix `SO_PEERCRED` credentials and interceptors | `pkg/util/peercred/peercred.go` | this repo |
-| QUIC auth middleware and opcode→permission map | `pkg/api/quic/auth.go` | this repo |
+| QUIC auth middleware and operation catalog (opcode / sub-opcode → permission) | `pkg/api/quic/auth.go`, `opcode_permissions.go` | this repo |
 | MCP OAuth 2.1 metadata and tool authorization | `pkg/api/mcp/oauth_metadata.go`, `authz.go` | this repo |
 | REST login / refresh / WebAuthn routers | `pkg/webservice/v1/router/authentication.go`, `webauthn.go` | this repo |
 | IDevID/IAK attestation middleware | `pkg/webservice/v1/middleware/iam/attestation.go` | this repo |
@@ -111,7 +111,7 @@ is this" so downstream authorization has one input.
 | **Identity model, users, groups, roles, policies, the single RBAC PDP** | go-qrdb, composed by go-quicbaas | **not this repo** — [`docs/iam/`](../iam/) |
 | **N-factor enrolment and login** | go-quicbaas `Security().Auth().Factors()` (M10) over go-qrdb's User N-AuthFactor service (M14) | **not this repo** |
 | **Platform token minting** | The broker | **not this repo** |
-| **Invitations** | `InvitationService` — [`docs/iam/api-reference-invitations.md`](../iam/api-reference-invitations.md) | this repo, **different feature** |
+| **Invitations** | `InvitationService` — [`docs/tenant/architecture.md`](../tenant/architecture.md) | this repo, **different feature** |
 
 The §R capability row is part of *"Re-export frontage of the composed stack (CA,
 KMS, IAM, FIDO2/PIV, barrier, ceremony, LUKS, auth, data services)"*, Tier 1 —
@@ -167,6 +167,18 @@ and the backbone resolves the principal from the credential id the assertion
 carries — the same base64url encoding the registration write-through enrolled
 the factor under. No username is collected and no directory is searched, which
 is why an account on a public email domain is not a special case.
+
+**Registration therefore requires a resident key.** A credential the
+authenticator cannot discover would enrol and then never sign in, so the
+platform sets the embedded server's `iam.webauthn.resident_key_requirement` to
+`required` (`pkg/storage/quicbaas/config.go`, `ToQuicBaaSConfig`) instead of
+taking the upstream `preferred` default. The registration options then carry
+`authenticatorSelection.residentKey: "required"`, and an authenticator that
+cannot store a discoverable credential refuses the ceremony in the browser. The
+setting is the embedded server's; a platform on a remote quicbaas transport gets
+whatever that server's own `iam.webauthn` section says. A credential enrolled
+before this rule under `preferred` keeps working only if the authenticator made
+it discoverable anyway; one that did not must be registered again.
 
 `begin` answers with the `PublicKeyCredentialRequestOptions` the browser passes
 to `navigator.credentials.get()`, plus the `session_id` the client echoes back on
@@ -246,13 +258,23 @@ backbone returned a bearer (the evidence the ceremony succeeded) *and* an
 identity (who it succeeded for); a bearer with no identity is refused 401
 rather than minted into an anonymous session, and a mint that fails is a 500 —
 a platform fault — never a rejected login. The claims are a projection of the
-backbone's identity: `sub`/`user_id`/`email` from its subject, `tenant_id` and
-`roles` from its tenant and roles. `uid` is deliberately left unset: it keys the
-platform user store and the backbone's subject keys a different one, so copying
-one into the other could resolve an unrelated platform user on a numeric
-collision. The routes that re-read the platform user from it (`/login/refresh`)
-therefore refuse a backbone-issued session, which is the correct fail-closed
-answer until the two stores converge.
+backbone's identity: `sub`/`user_id`/`email` from its subject and `roles` from
+its roles; `tenant_id` is the tenant the factor's binder names, which for a
+browser login is the user's workspace (below). `uid` is deliberately omitted:
+it keys the platform user store and the backbone's subject keys a different
+one, so copying one into the other could resolve an unrelated platform user on
+a numeric collision. Every site that needs the platform user id therefore
+refuses a backbone-issued session — the correct fail-closed answer until the
+two stores converge (phase 3 of #644):
+
+| Site | Backbone-issued session |
+|------|-------------------------|
+| `/login/refresh` — `jwt.RestHandler.RefreshToken` | `401 ErrInvalidToken`; the user store is not consulted. A refresh mints from the *current* authorization, and copying the old token's roles and tenant forward would roll a revoked privilege forward, so the client renews by running the login ceremony again. Test: `TestHandlerRefreshToken_RefusesABackboneSession` |
+| Session creation — `jwt.RestHandler.CreateSession` | `400 ErrInvalidUserClaim`, no session. Test: `TestCreateSession_RefusesABackboneSession` |
+| `POST /api/v1/invitations` — `rest/invitation` `resolveUserID` | Resolves no inviter (0) when the body names none; `InvitationService.Create` refuses it (`ErrInvalidInvitation`, "inviter ID is required") rather than recording an invitation from nobody. The tenant is the session's, which is now the workspace |
+| Tenant middleware — `middleware/tenant` `ExtractTenantContext` | `401 ErrMissingUserClaim`. Nothing constructs it (`NewMiddleware`) outside its tests today |
+| Legacy invitation handler — `webservice/v1/invitation` | `401` "missing user context". Nothing outside its tests imports the package today |
+| `InvitationService.Accept`, MCP `platform_invitation_accept` | Not session-derived: the redeemer's platform user id comes from registration (`RegisterInvitedUser`) or the tool's `user_id` argument, and 0 is refused |
 
 No renewal credential reaches the client while this holds. The backbone mints
 one alongside its own bearer, but it renews the backbone's session, and the
@@ -276,7 +298,77 @@ Neither seam is taught to accept both token types; converging them is #202.
 
 One driver serves every factor because there is one ceremony. A factor
 contributes a *binder* — the translation between its HTTP shape and the two
-ceremony requests — never a second copy of the Begin/Finish sequence.
+ceremony requests, and the tenant its session lands in — never a second copy of
+the Begin/Finish sequence.
+
+#### Which tenant a login lands in
+
+A browser login authenticates into the **user's own workspace**, never into the
+operating or system tenant (#662). The workspace is the tenant registration
+created for the user (`TenantUserService.RegisterNewUser`) or an invitation
+joined them to (`RegisterInvitedUser`); on the daemon both are go-quicbaas IAM
+tenants.
+
+The WebAuthn ceremony itself has to run in the operating tenant — that is where
+the relying party and the enrolled credential live — so the identity the
+backbone returns names the operating tenant. The driver therefore asks the
+binder (`Binder.Tenant`) which tenant the session is for before it mints:
+
+| Factor | `tenant_id` in the session |
+|--------|----------------------------|
+| `fido2` (browser) | The principal's workspace, from `TenantUserService.Workspace`: the platform user with the backbone subject's email, its `TenantID`, confirmed to still exist through the tenant manager. |
+| `mtls` | None: the factor declines every verb until go-quicbaas#857, and which tenant a certificate login lands in is decided then. |
+
+A browser login whose principal has **no workspace** — no platform user, a user
+in no tenant, a deleted workspace, or a workspace that resolves to the operating
+tenant itself — is refused `403` with `login.NoWorkspaceError`. There is no
+fallback to the operating tenant: the proof was good, but there is nowhere of
+the principal's own to land. An operator whose only tenant is the operating one
+signs in to that tenant through the admin claim, not the browser login.
+
+Without a tenant user service (no tenant manager wired) the registry does not
+offer the `fido2` factor at all, and declines the WebAuthn routes, registration
+included, since the only tenant left for their sessions would be the operating
+one.
+
+Registration follows the same rule. The session minted at registration finish
+is for the workspace the registration created or the invitation joined, minted
+by `TenantUserService.IssueToken`; there is no unscoped JWT fallback. An
+invitation into the operating tenant is refused `403` at registration begin,
+before a ceremony opens or an account exists, and a registered user who still
+resolves to no tenant or to the operating tenant is refused `403` at finish
+instead of being issued a session.
+
+**Ownership.** `is_tenant_owner` in a login session is always `false`. Ownership
+has to come from the identity the backbone resolves, and the pinned SDK does not
+carry it: `quicbaas.Identity` is go-qrdb's `transport.Identity` (`Subject`,
+`TenantID`, `Roles`, `Metadata`), filled by go-qrdb's
+`transport/embedded.defaultIdentityHydrator`, which copies the principal's
+username, tenant and roles and sets only `factor_id` and `factor_type` in
+`Metadata`. The platform does not fill the claim from its own user store — #645
+removed that coupling. The claim is mapped once the hydrator emits an ownership
+attribute (for example a `tenant_owner` metadata entry).
+
+**Roles.** The backbone's `roles` are the principal's roles in the ceremony's
+tenant, the operating one, so a session moved into a workspace never carries
+them: an admin of the operating tenant who is a plain member of their workspace
+would otherwise be an admin there. Before minting, the driver asks its
+`login.RoleResolver` for the principal's roles in the workspace and the session
+carries those, and only those. On the daemon the resolver is
+`restiam.WorkspaceRoleResolver`, which reads the workspace's go-quicbaas IAM user
+by the backbone subject's email through the SDK
+(`IAM().User().GetByEmail(ctx, workspace, email)`) and takes its `Roles`, the
+names the user mirror and IAM role assignments store and the session guards
+check.
+
+| Lookup | Session roles |
+|--------|---------------|
+| The workspace holds the user | That user's roles in the workspace |
+| The workspace does not hold the user (`NotFound`: an invited member is mirrored only by the startup reconcile) | None |
+| No IAM client wired, so no resolver | None |
+| Any other failure | No session: `500` with `login.WorkspaceRolesError`, nothing is minted |
+
+A session that stays in the ceremony's tenant keeps the backbone's roles.
 
 ### A local CLI over the Unix socket
 
@@ -332,17 +424,42 @@ GID}` land on the context. `RequireRoot` / `RequireUID` / `RequireGID` /
    unauthenticated.
 
 7. **Token validation is per transport, and the scope catalogs default to
-   allow.** gRPC covers 185 of 461 RPCs; MCP covers 71 of 449 tools; an entry
-   absent from either catalog is permitted once the token validates
-   ([`docs/daemon/api.md`](../daemon/api.md) §5). Authentication is enforced;
-   *authorization* is only enforced where a catalog entry exists.
+   deny.** The gRPC catalog maps every registered RPC (#768), and the OIDC
+   interceptor answers `PermissionDenied` for any method that has no entry.
+   The only exception is the commented pre-auth list in
+   `pkg/api/grpc/method_permissions.go`: the health probe,
+   invitation redemption, pre-enrollment config delivery and
+   the diskless boot calls (`DeviceService/BootCertificate`, `BootDelivery`).
+   MCP (since #300) and QUIC (since #767) refuse an unmapped operation too. A contract test generated from the
+   service descriptors fails when a new RPC ships without an entry
+   ([`docs/daemon/api.md`](../daemon/api.md) §5). A token without scope
+   claims (platform tokens off, the default) is authorized against the same
+   catalog by the IAM PEP; without a PEP the gRPC TCP transport does not start.
+   The embedded quicbaas SDK has a PEP client that answers every `Check` with
+   `ServiceNotConfigured` (go-quicbaas `sdk/go/transport/embedded/handlers_iam.go`,
+   `handleIAMPEPCheck`), so `daemon.New` refuses gRPC TCP with
+   `ErrEmbeddedPEPUnavailable` when that is the only decision path — embedded
+   quicbaas, mTLS off, platform tokens off (#770). The operator enables mTLS
+   or platform tokens instead
+   ([daemon configuration](../daemon/configuration.md#grpc-tcp-needs-mtls-or-platform-tokens-under-embedded-quicbaas)).
+   There is no local policy engine and no fallback to allow.
+   The mTLS path authenticates the client certificate and does not apply the
+   per-method scope catalog.
 
-8. **QUIC `AuthMiddleware` fails closed when `requireAuth` is set and no
-   validator is configured** (`StatusUnavailable`), and **fails open when
-   `requireAuth` is false** — no validator means no check.
-   `AuthorizationChecker.AuthorizeTool` on MCP likewise returns success when
-   both `authService` and `authManager` are nil, which is the test-mode
-   (`SkipIAMValidation`) and standalone path.
+8. **QUIC authorizes every frame before dispatch, and fails closed (#767).**
+   `QUICServiceHandler` cannot be built without an `AuthMiddleware`
+   (`ErrQUICAuthMiddlewareRequired`). `GuardRequest` admits the documented
+   pre-auth list (health, liveness, readiness, IAM authenticate) without a
+   credential. Every other frame is authenticated and then classified by the
+   operation catalog in `pkg/api/quic/opcode_permissions.go`: the opcode, or
+   for a category opcode its sub-opcode. The frame is authorized against the
+   resulting resource/action pair. An unclassified operation is
+   `StatusPermissionDenied`. With `requireAuth` set and no validator the
+   middleware answers `StatusUnavailable`. Under mTLS the verified peer
+   certificate authenticates a tokenless frame. `SkipIAMValidation` disables
+   authentication only, and the catalog still refuses unclassified
+   operations. MCP likewise refuses permissioned tools when no authorization
+   backend exists (#440).
 
 9. **Unix socket credentials are kernel-verified and unforgeable** — the
    strongest authentication in the platform — **and carry no tenant.** A local
@@ -479,6 +596,18 @@ that identity rather than to any ClientAuth certificate the anchor ever
 issued with `CN=admin`. The path is matched **segment-wise**, so a trust
 domain, tenant or user crafted to end in `user/admin` does not satisfy it.
 
+The `/init` admin bundle carries the same identity. When the platform CA is
+loaded, the bundle's certificate is signed with the CA's SPIFFE sign options:
+trust domain `quicbaas.spiffe-trust-domain`, tenant `system`, name `admin`. The
+CA builds the SAN `spiffe://<trust-domain>/tenant/system/user/admin` with its
+canonical SPIFFE helper. The platform hands it the identity as
+`pkg/app/backends.AdminIdentity`. Without a trust
+domain, `/init` refuses to mint the bundle (`ErrAdminIdentityIncomplete`)
+rather than hand out a certificate that admin-claim would reject. With no
+local CA, the bundle is issued through the SDK Certificate service, whose
+request has no identity field; that path depends on the server's CA adapter
+to stamp the SAN.
+
 **The tenant segment is compared**, against the platform's adopted operating
 tenant. The same deployment CA also issues certificates for tenant users, so
 accepting any tenant would let a tenant whose administrator happens to be
@@ -513,7 +642,11 @@ identity and signature checks before it touches the SDK.
   failure than a re-claim, which still demands the node's root-only
   bootstrap private key, and which can only be reached by first removing the
   factor through an authenticated admin session. *(Raised in review; recorded
-  here as a deliberate trade-off rather than settled silently.)*
+  here as a deliberate trade-off rather than settled silently.)* What makes
+  the trade-off acceptable is that a re-claim is **detected, not denied**: a
+  claim completing over a revoked `fido2` factor raises a high-severity
+  security event of its own type (#169) — see
+  [engineering.md invariant 8a](engineering.md).
 - A **multi-instance deployment is refused, not unregistered** — and that
   asymmetry with the bullet above is deliberate. The four conditions there
   mean the node cannot *verify* a certificate, so publishing the ceremony
@@ -707,7 +840,7 @@ gated. In every case the giveaway was reading the **handler**, not the prefix.
 | Surface | The half a prefix gate would have broken | What that caller actually presents |
 |---|---|---|
 | `/ca` | `/ca/bootstrap`, `/ca/crl` | Nothing, by design — a client that does not trust the platform yet, and a relying party fetching a CRL |
-| `/gateway` | `/gateway/telemetry`, `/gateway/desired-config/{id}` | A **verified mTLS client certificate**, bound to `gateway_id` |
+| `/gateway` | `/gateway/telemetry`, `/gateway/desired-config/{id}`, `/gateway/vpn-leases/**` | A **verified mTLS client certificate**, bound to `gateway_id` |
 | `/provisioning` | `/provisioning/{config,config/nonce,sign}` | **EAB**, plus the EK for the signing route |
 | `/invitations` | `/invitations/{accept,token/{token}}` | The **invitation token itself** — an invitee has no session by construction |
 | `/pxe` | `/pxe/webhook/complete` | **Nothing, and nothing is checked** — see #238 |
@@ -800,11 +933,13 @@ protocol reports.
 
 Unlike `/ca` this needs no public half. Every `/platform` caller in the tree is
 the console, which authenticates, and the health feature's documented
-load-balancer integration points at the unversioned `/health` on the daemon's
-own listener (`docs/health/user.md`), not at anything under `/api/v1/platform`.
+load-balancer integration points at the unversioned `/health`, `/health/live`
+and `/health/ready` probes, served on both listeners without a credential
+(`docs/health/user.md`), not at anything under `/api/v1/platform`.
 The component-by-component health breakdown is gated **with** the rest
 deliberately: which subsystem is degraded is useful to somebody choosing where
-to push, and a caller that needs only liveness has `/api/v1/status`.
+to push, and a caller that needs only liveness or readiness has the probes,
+which carry the overall status and never a component name.
 
 **`/platform/service-registry` is not part of it.** It is registered separately
 on the ungated router under its own earlier decision, so the console can show
@@ -853,11 +988,11 @@ bearer token when its context carries one.
 |---|---|---|
 | `GatewayService` — `/gateway/{status,mode}`, `/gateway/bgp/**`, `/gateway/ipam/**` | **gated**, `admin` | Operator controls over routing and addressing. An anonymous BGP announce is a route hijack. |
 | Control plane, operator — `GET /gateway/state`, `GET\|DELETE /gateway/state/{id}` | **gated**, `admin` | The fleet-wide read and admin surface. Not cert-bound on purpose: a fleet-wide list is exactly what no single gateway's certificate should authorise. |
-| Control plane, gatewayd-facing — `POST /gateway/telemetry`, `GET /gateway/desired-config/{id}` | **not role-gated — already authenticated** | Requires a **verified mTLS client certificate** and binds the request's `gateway_id` to its Common Name: 401 without a certificate, 403 when the id names another gateway (`ControlPlane.authenticatedGateway`). |
+| Control plane, gatewayd-facing — `POST /gateway/telemetry`, `GET /gateway/desired-config/{id}`, `PUT /gateway/vpn-leases/{id}`, `DELETE /gateway/vpn-leases/{id}/{tenant}/{lease}` | **not role-gated — already authenticated** | Requires a **verified mTLS client certificate** and binds the request's `gateway_id` to its Common Name: 401 without a certificate, 403 when the id names another gateway (`ControlPlane.authenticatedGateway`). |
 
 The last row is the point of #165 scope item 2, and the reading that matters is
 **"authenticates differently", not "unauthenticated"**. gatewayd's credential is
-a certificate; a role guard in front of those two routes would demand a bearer
+a certificate; a role guard in front of those routes would demand a bearer
 token from it and stop every gateway in the fleet reporting. The split is
 `ControlPlane.RegisterRoutes` versus `ControlPlane.RegisterGatewayFacingRoutes`,
 asserted exactly and for disjointness.
@@ -870,10 +1005,8 @@ refusal directly, and `TestGatewayFacingRoutes_AreNotBehindTheRoleGate` asserts
 the converse: a gateway presenting a valid certificate and no bearer token is
 still served.
 
-Which operator authorization the `/gateway/state` routes should carry was
-previously left open in the code as an owner decision. This answers it with the
-same RBAC role guard §6c establishes for the rest of the API; if the owner
-wants a different answer, this is the paragraph to overrule.
+The `/gateway/state` routes carry the same RBAC role guard §6c establishes for
+the rest of the API.
 
 #### `/api/v1/tenants` carries a within-tenant boundary the role cannot express (#234)
 
@@ -886,7 +1019,8 @@ unseal the barrier of tenant B by changing a path segment.
 | Routes | Guard | Why |
 |---|---|---|
 | `/tenants/{id}` and every `/{id}/**` | **`RequireOwnTenantOrSystem`** | The caller's own tenant, **or** the system tenant acting as the control plane. |
-| `GET /tenants`, `POST /tenants`, `POST /tenants/sync`, `GET /tenants/by-name/{name}` | **`RequireSystemTenant`** | Inherently cross-tenant. A tenant admin must not enumerate or create tenants with the role they hold inside their own — the decision #159 already made for `/api/v1/iam/tenants`. |
+| `GET /tenants`, `POST /tenants`, `POST /tenants/sync` | **`RequireSystemTenant`** | Inherently cross-tenant. A tenant admin must not enumerate or create tenants with the role they hold inside their own — the decision #159 already made for `/api/v1/iam/tenants`. |
+| `GET /tenants/by-name/{name}` | **`RequireOwnTenantNameOrSystem`** | The caller's own tenant's name, **or** any name for the system tenant (#304). |
 
 **Neither existing guard was usable alone, and the naive fix would have caused
 an outage.** `RequireOwnTenant` — which is what this issue originally
@@ -901,7 +1035,10 @@ third case, which is the defect.
 **`by-name` could not take the `{id}` guard even in principle.** Tenant ids are
 UUIDs (`pkg/tenant/manager.go` generates `uuid.New()`), so comparing a *name*
 against the session's tenant *id* would deny every caller including a tenant
-looking up its own. It is control-plane only.
+looking up its own. Its guard resolves the name first, then applies
+`tenant.AuthorizeNameLookup` — the rule gRPC, QUIC, MCP and Unix apply — to
+the session's tenant claim. Another tenant's name and an unknown name get the
+same `403` (#304; `docs/tenant/api.md` §7).
 
 **On severity: this was latent, not live.** Nothing in the tree provisions a
 tenant-scoped administrator today — tenant creation does not create an admin
@@ -940,6 +1077,7 @@ must:
 | Route | Why |
 |---|---|
 | `GET /api/v1/status` | Bootstrap liveness, and it is load-bearing: `pkg/bootstrap/orchestrator.go`'s `httpHealthChecker` probes `https://<node>:{8443,9443,443}/api/v1/status` to decide a node has finished booting, from a machine with no credential that may not yet trust the node's CA, and `platformctl bootstrap status` probes it across the fleet. **Its response is now the liveness core only** — status, uptime, timestamp. It previously returned SMBIOS product/board/chassis including serial numbers, kernel version, hostname, network interfaces and addresses, CPU, TPM and CA state to any caller that could open a connection; that was an information-disclosure defect a gate could not fix, and it was fixed by narrowing the body instead (#236). |
+| `GET /health`, `GET /health/live`, `GET /health/ready` | The load-balancer and orchestrator probes, mounted on the root router outside the `/api/v1` chain (#452). Each body is the overall status only — never a component name, message or detail; the breakdown stays `admin`-gated on `/api/v1/platform/health` (`docs/health/api.md` §7). |
 | `GET /api/v1/pubkey`, `GET /api/v1/certificate` | The server's own public key and certificate, which it presents on every TLS handshake. |
 | `/api/v1/login`, `/api/v1/login/refresh` | Credential issuance. Gating the endpoint that mints the credential is a deadlock. Registered with no method matcher, so they answer every verb. |
 | `/api/v1/admin/claim/**` | The one-time admin-claim ceremony, pre-auth by necessity and protected instead by the firstboot certificate proof (§Admin claim). |
@@ -1004,15 +1142,24 @@ a different carrier.
 ### What is NOT gated yet, and why
 
 Measured from the built route table on 2026-09-05 (#165, #420) rather than
-from this section's earlier prose, which had gone stale twice: **eight routes
-answer a request carrying no credential**, and every one is either blocked on
-a decision that is not a lane's or authenticated in its handler by design.
+from this section's earlier prose, which had gone stale twice: **seven routes
+answer a request carrying no credential** when every optional route is mounted
+(eight until #177 took `GET /devices/config` off the table), and six by
+default, because the PXE webhook is mounted only when enabled (#238). Every
+one is either blocked on a decision that is not a lane's or authenticated in
+its handler by design.
 
 | Routes | Why they are open | Blocker / mechanism |
 |---|---|---|
-| `GET /devices/config`, `POST /devices/templates`, `POST /devices/templates/{id}/create-profile` | bootstrap seeder (`pkg/webservice/v1/rest/device`); ruled to present `admin@system` over **mTLS** (#121/#176) | go-quicbaas#376 → #28 (SDK bump), then #176 |
-| `POST /pxe/webhook/complete` | authenticates nobody; identifies the device by a MAC from the request body | #238 — what a booting node presents is an architecture decision |
+| `POST /devices/templates`, `POST /devices/templates/{id}/create-profile` | bootstrap seeder (`pkg/webservice/v1/rest/device`); presents `admin@system` over **mTLS** (#121/#176) | go-quicbaas#376 → #28 (SDK bump), then #176 |
+| `POST /pxe/webhook/complete` | authenticates nobody; identifies the device by a MAC from the request body; registered only when `pxe.ServiceConfig.WebhookEnabled` is true (default false) | #238 — what a booting node presents is an architecture decision |
 | `POST /provisioning/config`, `GET /provisioning/config/nonce`, `POST /provisioning/sign`, `GET /provisioning/sessions/{sessionID}/poll` | a machine at boot has no operator session; EAB + single-use nonce (+ EK for signing) are verified **in the handler** (`configdelivery/service.go` `verifyNonceAndEAB`, `verifyEKBinding`; `sign.go`) | by design; what is missing is a direct assertion that the handler refuses without a valid EAB, which the deny audit cannot see |
+
+`GET /devices/config` is not in this table because no general listener mounts
+it. It is the unauthenticated boot-time config fetch. Only a webservice with
+`surface: provisioning`, bound inside the provisioning zone, serves it (#177). That listener serves nothing else. An EK-bound challenge is
+the planned follow-up ([`docs/device/architecture.md`](../device/architecture.md)
+§4.2).
 
 **`/api/v1/attestation` is gated (#387).** The earlier hold here — "the split
 axis depends on what a node presents" — was resolved by the #226 design:
@@ -1073,7 +1220,7 @@ webservice serves **no** `/bmc` route. `pkg/webservice/v1/router/bmc.go`
 exists, but `NewBMCRouter` has no non-test caller, and the live BMC surface
 belongs to the second REST server tracked on #232.
 
-Tracked on #165 (the eight routes) and #420 (the audit's reach) — do not read
+Tracked on #165 (the seven routes) and #420 (the audit's reach) — do not read
 this section as a claim that the platform is fully gated.
 
 ## 7. What this feature deliberately does not do
@@ -1096,9 +1243,9 @@ this section as a claim that the platform is fully gated.
   one — an unscoped call fails closed in the SDK with `tenant is required`.
 - **It does not manage invitations** despite invitations being an
   authentication-adjacent flow — see
-  [`docs/iam/api-reference-invitations.md`](../iam/api-reference-invitations.md).
-  The legacy `docs/auth/invitation-flow.md` in this folder predates the IAM
-  conversion and is superseded by it.
+  [`docs/tenant/architecture.md`](../tenant/architecture.md).
+  The legacy `invitation-flow.md` this folder held predated the IAM
+  conversion and is deleted; the tenant architecture holds the flow.
 - **It does not enforce IDevID inside `Authenticate`.** See §6.3.
 - **It has no API surface of its own.** `pkg/auth` is a library; there is no
   `AuthService` on any transport. [api.md](api.md).
@@ -1110,9 +1257,9 @@ Recorded per `conventions/feature-docs.md` §7 — the code wins.
 | Stale statement | Where | Reality (2026-08-18) |
 |---|---|---|
 | *"designed to work with the go-trusted-ca `CertificateAuthority` interface"* | `pkg/auth/doc.go` | `NewMTLSAdapter` takes `quicbaasca.CACertificateAuthority` from `go-quicbaas/sdk/go/xkms/ca`. `go-trusted-ca` was decommissioned; its CA rolled into go-xkms. |
-| *"IAM Module (`pkg/iam/`)"* with a tenant manager, identity store, WebAuthn and an ABAC engine | legacy `docs/auth/README.md` diagram (and `docs/iam/architecture.md`, which already flags it) | **There is no `pkg/iam` in this repository.** Those components live in go-qrdb / go-quicbaas. |
-| *"QuicBaaS IAM — ABAC for all permission decisions"* as this repo's design | legacy `docs/auth/README.md` | Correct as a *statement about the stack*; it is not a description of `pkg/auth`, which makes no permission decisions. |
-| Port table (`8443/9443`, `10443`, `11443`, `8000`) presented as configuration | legacy `docs/auth/README.md` | Those are defaults in deployment examples, not constants in `pkg/auth`. Ports are configured per deployment; do not treat the table as normative. |
+| *"IAM Module (`pkg/iam/`)"* with a tenant manager, identity store, WebAuthn and an ABAC engine | deleted legacy `docs/auth/README.md` diagram (and `docs/iam/architecture.md`, which already flags it) | **There is no `pkg/iam` in this repository.** Those components live in go-qrdb / go-quicbaas. |
+| *"QuicBaaS IAM — ABAC for all permission decisions"* as this repo's design | deleted legacy `docs/auth/README.md` | Correct as a *statement about the stack*; it is not a description of `pkg/auth`, which makes no permission decisions. |
+| Port table (`8443/9443`, `10443`, `9444`, `8000`) presented as configuration | deleted legacy `docs/auth/README.md` | Those are defaults in deployment examples, not constants in `pkg/auth`. Ports are configured per deployment; do not treat the table as normative. |
 
 ## 9. Related
 

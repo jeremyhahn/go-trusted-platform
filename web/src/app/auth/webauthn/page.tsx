@@ -159,7 +159,7 @@ const CONTEXT_ERROR_MESSAGES: Record<ErrorCode, { login: string; register: strin
   },
   USER_EXISTS: {
     login: "Please enter your passkey to log in.",
-    register: "An account with this username already exists. Please log in instead.",
+    register: "An account with this email already exists. Please log in instead.",
   },
   INVALID_CREDENTIALS: {
     login: "Invalid credentials. Please try again.",
@@ -179,7 +179,7 @@ const CONTEXT_ERROR_MESSAGES: Record<ErrorCode, { login: string; register: strin
   },
   VALIDATION_ERROR: {
     login: "The login request was rejected. Please try your passkey again.",
-    register: "Invalid input. Please check your username and try again.",
+    register: "Invalid input. Please check your email address and try again.",
   },
   INTERNAL_ERROR: {
     login: "Something went wrong. Please try again later.",
@@ -216,7 +216,7 @@ function getErrorMessage(result: ApiErrorResult, context: "login" | "register"):
   if (result.status === 409) {
     return context === "login"
       ? "Please enter your passkey to log in."
-      : "An account with this username already exists. Please log in instead.";
+      : "An account with this email already exists. Please log in instead.";
   }
 
   if (result.status === 429) {
@@ -275,7 +275,7 @@ function AuthStatusChecker({
 
 export default function WebAuthnUI() {
   const [status, setStatus] = useState<AuthStatus>("registered");
-  const [username, setUsername] = useState("");
+  const [email, setEmail] = useState("");
   const [errorMessage, setErrorMessage] = useState("");
   const [successMessage, setSuccessMessage] = useState("");
   const [loading, setLoading] = useState(false);
@@ -285,8 +285,8 @@ export default function WebAuthnUI() {
   const router = useRouter();
 
   const handleRegister = async () => {
-    if (!username) {
-      setErrorMessage("Please enter a username.");
+    if (!email) {
+      setErrorMessage("Please enter your email address.");
       return;
     }
 
@@ -296,7 +296,9 @@ export default function WebAuthnUI() {
     setSuccessMessage("");
 
     try {
-      const requestBody: { username: string; invitation_token?: string } = { username };
+      // The server reads the account address from "email"; it becomes the
+      // user's login key and IAM identity (#643).
+      const requestBody: { email: string; invitation_token?: string } = { email };
       if (invitationToken) {
         requestBody.invitation_token = invitationToken;
       }
@@ -488,10 +490,12 @@ export default function WebAuthnUI() {
                 <p className={styles.successMessage}>{successMessage}</p>
               )}
               <input
-                type="text"
-                placeholder="Enter your username"
-                value={username}
-                onChange={(e) => setUsername(e.target.value)}
+                type="email"
+                autoComplete="email"
+                aria-label="Email"
+                placeholder="Enter your email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
                 className={styles.inputField}
               />
               <button

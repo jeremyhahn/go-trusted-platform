@@ -9,14 +9,13 @@
 ## Start here: what you can and cannot do today
 
 **The platform's cluster management API is not usable yet.** Verified against
-the code on 2026-08-18:
+the code on 2026-10-15:
 
 - `platformctl cluster …` **is not a command.** The command tree exists in the
   source and is registered on no root command, so the binary does not have it.
 - Every cluster REST route returns **503**.
-- Every cluster gRPC call returns **unimplemented**.
-- Every cluster MCP tool returns **"cluster: service provider not configured"**.
-- There is no cluster operation on QUIC at all.
+- Every cluster gRPC, QUIC and MCP call returns **`Unavailable`** with
+  "cluster service not configured".
 
 None of that is a bug in your deployment. The lifecycle verbs, the status
 projection and the transports are all written; the piece that connects them to
@@ -80,25 +79,52 @@ quicbaas:
   data-dir: /var/lib/trusted-platform/quicbaas
   wal-dir: /var/lib/trusted-platform/quicbaas/wal
   node-id: 1                              # unique per node, never reused
+  deployment-id: 100                      # the same on every member
   raft-address: node-a.example.com:7000   # this node's Raft address
-  join-addresses:                         # peers; empty on the first node
-    - node-b.example.com:7000
-    - node-c.example.com:7000
+  join-addresses:                         # every member, this node included
+    - "1=node-a.example.com:7000"
+    - "2=node-b.example.com:7000"
+    - "3=node-c.example.com:7000"
+  raft-tls-cert-file: /etc/trusted-platform/raft/tls.crt
+  raft-tls-key-file: /etc/trusted-platform/raft/tls.key
+  raft-tls-ca-file: /etc/trusted-platform/raft/ca.crt
   consistency-level: linearizable
 ```
 
-On the second and third nodes, change `node-id` and `raft-address` and list the
-other members in `join-addresses`.
+On the second and third nodes, change `node-id`, `raft-address` and the TLS
+certificate and key. Keep `deployment-id`, `join-addresses` and the CA file
+identical on every member: the members bootstrap the cluster together from that
+one list.
+
+A non-empty `join-addresses` is what makes a node clustered. Startup refuses a
+clustered config when:
+
+- an entry is not `id=host:port` (a bare `host:port` seed is refused);
+- two entries carry the same node ID;
+- the list does not name this node as `node-id=raft-address`;
+- `node-id` or `deployment-id` is zero (each member would otherwise derive a
+  different deployment ID from its own node ID);
+- any of the three `raft-tls-*-file` keys is empty.
+
+### Raft TLS between peers is required
+
+Raft traffic between members is always mutual TLS. A clustered config without
+all three files is refused with *"Raft TLS between peers is required with
+join-addresses"*; there is no plaintext mode. The files are read when the store
+starts, so a path that does not exist fails startup there.
+
+Every member's certificate must chain to `raft-tls-ca-file`. Who issues those
+peer certificates, and whether the Raft key can be held in the TPM, is not
+decided yet; until it is, the key is a file you provision.
 
 ### The setting people get wrong
 
 **`storage-backend: raft` is not valid.** The accepted values are `memory`,
 `file` and `pebble`, and anything else is rejected at startup with
 *"invalid storage backend: must be 'memory', 'file', or 'pebble'"*. Raft is
-enabled by the server mode plus `raft-address` and `join-addresses`, **not** by
-the storage backend — clustered nodes still use `pebble` for storage.
+enabled by a non-empty `join-addresses`, **not** by the storage backend — clustered nodes still use `pebble` for storage.
 
-The legacy [`configuration.md`](configuration.md) in this folder says otherwise.
+The deleted legacy `configuration.md` said otherwise.
 It is wrong; the validator is right.
 
 **`node-id` must be unique and must never be reused.** If you replace a node,
@@ -223,11 +249,10 @@ may see the same snapshot twice.
 **Status refreshes on a five-second ticker** as well as on demand, so a cluster
 that loses quorum is noticed within about five seconds even if nobody asks.
 
-**Cluster membership is not scope-checked.** No `cluster:*` permission exists in
-this repository, and neither the gRPC nor the MCP authorization catalog lists
-the cluster operations — both default to allow. If you are planning to expose
-these routes, treat that as a gate on the work, not a detail
-([api.md](api.md) §7).
+**Cluster membership needs `cluster:write`.** On gRPC, `Bootstrap`, `Join` and
+`Leave` need `cluster:write`, and status and the node list need
+`cluster:read`. The QUIC `0x90` sub-opcodes and the `platform_cluster_*` MCP
+tools require the same scopes ([api.md](api.md) §7).
 
 ---
 
@@ -240,12 +265,10 @@ file.
 **Every cluster REST call returns 503 with "cluster service not configured".**
 Expected. No coordinator is wired into the daemon.
 
-**Cluster gRPC calls return "cluster: Bootstrap not implemented".**
-Expected — that is the registered stub answering.
-
-**MCP `platform_cluster_status` returns "cluster: service provider not
-configured".**
-Expected, same cause.
+**Cluster gRPC, QUIC or MCP calls return `Unavailable` with "cluster service
+not configured".**
+Expected, same cause: the registered service has no cluster servicer behind it,
+and QUIC and MCP call that same service.
 
 **Startup fails with "cluster service not enabled (build with -tags cluster)".**
 The binary was built without the `cluster` tag. It is in the default tag set, so

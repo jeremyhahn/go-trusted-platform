@@ -21,6 +21,10 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
+
+	platform "github.com/jeremyhahn/go-trusted-platform/sdk/go"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/transport"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/transport/pollstream"
 )
 
 // handlerFunc is the signature for all unary gRPC service method handlers.
@@ -30,6 +34,7 @@ type handlerFunc func(ctx context.Context, req interface{}) (interface{}, error)
 // gRPC method strings to in-process service handlers using O(1) map lookup.
 type embeddedClientConn struct {
 	handlers map[string]handlerFunc
+	caller   func(context.Context) context.Context
 }
 
 // newEmbeddedClientConn creates a new embedded client connection from a
@@ -37,17 +42,32 @@ type embeddedClientConn struct {
 func newEmbeddedClientConn(registry *ServiceRegistry) *embeddedClientConn {
 	return &embeddedClientConn{
 		handlers: buildHandlerMap(registry),
+		caller:   registry.CallerContext,
 	}
 }
 
 // Invoke implements grpc.ClientConnInterface.Invoke by dispatching the gRPC
 // method to the corresponding in-process service handler. The response is
 // copied into reply via protobuf marshal/unmarshal to maintain the same
-// serialization semantics as a real gRPC transport.
+// serialization semantics as a real gRPC transport. The registry's
+// CallerContext, if set, supplies the caller's identity first.
 func (c *embeddedClientConn) Invoke(ctx context.Context, method string, args, reply interface{}, opts ...grpc.CallOption) error {
+	// An in-process call has no connection at all, so a call that must be
+	// bound to its connection's channel is refused before dispatch.
+	if _, bound := transport.ChannelBindingFrom(opts); bound {
+		return &transport.ErrChannelBindingUnavailable{
+			Transport: platform.ProtocolEmbedded.String(),
+			Reason:    "an in-process call has no TLS connection to bind to",
+		}
+	}
+
 	handler, ok := c.handlers[method]
 	if !ok {
 		return status.Errorf(codes.Unimplemented, "embedded: method %s not registered", method)
+	}
+
+	if c.caller != nil {
+		ctx = c.caller(ctx)
 	}
 
 	resp, err := handler(ctx, args)
@@ -62,10 +82,13 @@ func (c *embeddedClientConn) Invoke(ctx context.Context, method string, args, re
 	return copyProtoMessage(resp, reply)
 }
 
-// NewStream implements grpc.ClientConnInterface.NewStream.
-// Server streaming is not supported over the embedded transport.
-func (c *embeddedClientConn) NewStream(ctx context.Context, desc *grpc.StreamDesc, method string, opts ...grpc.CallOption) (grpc.ClientStream, error) {
-	return nil, status.Error(codes.Unimplemented, "embedded: streaming not supported over embedded transport")
+// NewStream implements grpc.ClientConnInterface.NewStream. The streams the
+// pollstream package knows are followed by long-polling their unary poll
+// method in process; no transport timeout bounds an in-process call, so each
+// poll waits the longest the service allows. Any other stream is
+// Unimplemented.
+func (c *embeddedClientConn) NewStream(ctx context.Context, _ *grpc.StreamDesc, method string, opts ...grpc.CallOption) (grpc.ClientStream, error) {
+	return pollstream.NewStream(ctx, c, method, 0, opts...)
 }
 
 // copyProtoMessage copies a protobuf message from src to dst via marshal/unmarshal.

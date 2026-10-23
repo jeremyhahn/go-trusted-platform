@@ -1,5 +1,8 @@
 # Vendor Quirks Architecture
 
+> **Status: REFERENCE** · Last verified: 2026-10-13
+> The vendor-specific behaviour audit and the `pkg/quirks` isolation layer; [../bmc/](../bmc/) is normative.
+
 This document is the authoritative audit of hardware vendor-specific behaviour
 in the go-trusted-platform codebase and describes how it is isolated via the
 `pkg/quirks` abstraction layer.

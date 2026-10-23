@@ -24,7 +24,8 @@ import (
 	"time"
 
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 )
 
 // =============================================================================
@@ -82,12 +83,6 @@ type IDevIDCertificateQUIC struct {
 
 // IDevIDDeleteRequest represents an IDevID deletion request.
 type IDevIDDeleteRequest struct{}
-
-// IDevIDDeleteResponse represents an IDevID deletion response.
-type IDevIDDeleteResponse struct {
-	Deleted   bool  `codec:"deleted"`
-	Timestamp int64 `codec:"timestamp"`
-}
 
 // IDevIDCSRRequest represents an IDevID CSR generation request.
 type IDevIDCSRRequest struct {
@@ -200,12 +195,6 @@ type IAKInfoResponse struct {
 // IAKDeleteRequest represents an IAK deletion request.
 type IAKDeleteRequest struct{}
 
-// IAKDeleteResponse represents an IAK deletion response.
-type IAKDeleteResponse struct {
-	Deleted   bool  `codec:"deleted"`
-	Timestamp int64 `codec:"timestamp"`
-}
-
 // IAKCSRRequest represents an IAK CSR generation request.
 type IAKCSRRequest struct {
 	CommonName         string   `codec:"common_name"`
@@ -282,59 +271,65 @@ type ActivateCredentialQUICResponse struct {
 // =============================================================================
 
 // handleIDevIDOperation routes IDevID/IAK opcodes to their respective handlers.
-func (h *QUICServiceHandler) handleIDevIDOperation(ctx context.Context, req *quic.Request) *quic.Response {
+func (h *QUICServiceHandler) handleIDevIDOperation(ctx context.Context, req *quicwire.Request) *quicwire.Response {
+	// Key deletes are refused whatever the TPM state, as on gRPC, and the
+	// certificate deletes go to the shared IDevID service, which answers a
+	// missing TPM as gRPC does.
+	switch req.Opcode {
+	case quicwire.OpIDevIDDelete:
+		return h.handleIDevIDDelete(ctx, req)
+	case quicwire.OpIAKDelete:
+		return h.handleIAKDelete(ctx, req)
+	case quicwire.OpIDevIDDeleteCert:
+		return h.handleIDevIDDeleteCert(ctx, req)
+	case quicwire.OpIAKDeleteCert:
+		return h.handleIAKDeleteCert(ctx, req)
+	}
+
 	if h.tpm2Service == nil {
-		return h.errorResponse(quic.StatusUnavailable, ErrQUICServiceUnavailable{Service: "tpm2"})
+		return h.errorResponse(quicwire.StatusUnavailable, ErrQUICServiceUnavailable{Service: "tpm2"})
 	}
 
 	switch req.Opcode {
-	case quic.OpIDevIDGenerate:
+	case quicwire.OpIDevIDGenerate:
 		return h.handleIDevIDGenerate(ctx, req)
-	case quic.OpIDevIDInfo:
+	case quicwire.OpIDevIDInfo:
 		return h.handleIDevIDInfo(ctx, req)
-	case quic.OpIDevIDDelete:
-		return h.handleIDevIDDelete(ctx, req)
-	case quic.OpIDevIDCSR:
+	case quicwire.OpIDevIDCSR:
 		return h.handleIDevIDCSR(ctx, req)
-	case quic.OpIDevIDInstallCert:
+	case quicwire.OpIDevIDInstallCert:
 		return h.handleIDevIDInstallCert(ctx, req)
-	case quic.OpIDevIDGetCert:
+	case quicwire.OpIDevIDGetCert:
 		return h.handleIDevIDGetCert(ctx, req)
-	case quic.OpIAKGenerate:
+	case quicwire.OpIAKGenerate:
 		return h.handleIAKGenerate(ctx, req)
-	case quic.OpIAKInfo:
+	case quicwire.OpIAKInfo:
 		return h.handleIAKInfo(ctx, req)
-	case quic.OpIAKDelete:
-		return h.handleIAKDelete(ctx, req)
-	case quic.OpIAKCSR:
+	case quicwire.OpIAKCSR:
 		return h.handleIAKCSR(ctx, req)
-	case quic.OpIAKInstallCert:
+	case quicwire.OpIAKInstallCert:
 		return h.handleIAKInstallCert(ctx, req)
-	case quic.OpIAKGetCert:
+	case quicwire.OpIAKGetCert:
 		return h.handleIAKGetCert(ctx, req)
-	case quic.OpDeviceAttributes:
+	case quicwire.OpDeviceAttributes:
 		return h.handleDeviceAttributes(ctx, req)
-	case quic.OpActivateCredential:
+	case quicwire.OpActivateCredential:
 		return h.handleActivateCredential(ctx, req)
-	case quic.OpHasIDevID:
+	case quicwire.OpHasIDevID:
 		return h.handleHasIDevID(ctx, req)
-	case quic.OpHasIAK:
+	case quicwire.OpHasIAK:
 		return h.handleHasIAK(ctx, req)
-	case quic.OpIDevIDDeleteCert:
-		return h.handleIDevIDDeleteCert(ctx, req)
-	case quic.OpIAKDeleteCert:
-		return h.handleIAKDeleteCert(ctx, req)
 	default:
-		return h.errorResponse(quic.StatusNotImplemented, ErrQUICUnknownOpcode{Opcode: req.Opcode})
+		return h.errorResponse(quicwire.StatusNotImplemented, ErrQUICUnknownOpcode{Opcode: req.Opcode})
 	}
 }
 
 // handleIDevIDGenerate generates a new IDevID key using TPM2 directly.
-func (h *QUICServiceHandler) handleIDevIDGenerate(ctx context.Context, req *quic.Request) *quic.Response {
+func (h *QUICServiceHandler) handleIDevIDGenerate(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	var genReq IDevIDGenerateRequest
 	if len(req.Payload) > 0 {
-		if err := quic.DecodePayload(req.Payload, &genReq); err != nil {
-			return h.errorResponse(quic.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
+		if err := quicwire.DecodePayload(req.Payload, &genReq); err != nil {
+			return h.errorResponse(quicwire.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
 		}
 	}
 
@@ -363,7 +358,7 @@ func (h *QUICServiceHandler) handleIDevIDGenerate(ctx context.Context, req *quic
 	pubKeyPEM, err := encodePublicKeyPEM(idevidAttrs.TPMAttributes.Public)
 	if err != nil {
 		h.logger.Error(err, "failed to encode public key")
-		return h.errorResponse(quic.StatusInternalError, ErrQUICEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrQUICEncodingFailed{Cause: err})
 	}
 
 	resp := &IDevIDGenerateResponse{
@@ -373,21 +368,21 @@ func (h *QUICServiceHandler) handleIDevIDGenerate(ctx context.Context, req *quic
 		Timestamp: time.Now().UnixMilli(),
 	}
 
-	payload, err := quic.EncodePayload(resp)
+	payload, err := quicwire.EncodePayload(resp)
 	if err != nil {
-		return h.errorResponse(quic.StatusInternalError, ErrQUICEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrQUICEncodingFailed{Cause: err})
 	}
 
 	h.logger.Info("IDevID key generated", "handle", idevidAttrs.TPMAttributes.Handle)
 
-	return &quic.Response{
-		Status:  quic.StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
 
 // handleIDevIDInfo retrieves IDevID key information using TPM2 directly.
-func (h *QUICServiceHandler) handleIDevIDInfo(ctx context.Context, req *quic.Request) *quic.Response {
+func (h *QUICServiceHandler) handleIDevIDInfo(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	attrs, err := h.tpm2Service.IDevIDAttributes()
 	if err != nil {
 		// Key doesn't exist
@@ -395,12 +390,12 @@ func (h *QUICServiceHandler) handleIDevIDInfo(ctx context.Context, req *quic.Req
 			Exists:    false,
 			Timestamp: time.Now().UnixMilli(),
 		}
-		payload, encErr := quic.EncodePayload(resp)
+		payload, encErr := quicwire.EncodePayload(resp)
 		if encErr != nil {
-			return h.errorResponse(quic.StatusInternalError, ErrQUICEncodingFailed{Cause: encErr})
+			return h.errorResponse(quicwire.StatusInternalError, ErrQUICEncodingFailed{Cause: encErr})
 		}
-		return &quic.Response{
-			Status:  quic.StatusOK,
+		return &quicwire.Response{
+			Status:  quicwire.StatusOK,
 			Payload: payload,
 		}
 	}
@@ -408,7 +403,7 @@ func (h *QUICServiceHandler) handleIDevIDInfo(ctx context.Context, req *quic.Req
 	pubKeyPEM, err := encodePublicKeyPEM(attrs.TPMAttributes.Public)
 	if err != nil {
 		h.logger.Error(err, "failed to encode public key")
-		return h.errorResponse(quic.StatusInternalError, ErrQUICEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrQUICEncodingFailed{Cause: err})
 	}
 
 	resp := &IDevIDInfoResponse{
@@ -426,52 +421,31 @@ func (h *QUICServiceHandler) handleIDevIDInfo(ctx context.Context, req *quic.Req
 		resp.Certificate = certToQUIC(cert)
 	}
 
-	payload, err := quic.EncodePayload(resp)
+	payload, err := quicwire.EncodePayload(resp)
 	if err != nil {
-		return h.errorResponse(quic.StatusInternalError, ErrQUICEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrQUICEncodingFailed{Cause: err})
 	}
 
-	return &quic.Response{
-		Status:  quic.StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
 
-// handleIDevIDDelete deletes the IDevID key.
-func (h *QUICServiceHandler) handleIDevIDDelete(ctx context.Context, req *quic.Request) *quic.Response {
-	// Delete the IDevID certificate first
-	if err := h.tpm2Service.DeleteIDevIDCertificate(); err != nil {
-		// Log but continue - certificate might not exist
-		h.logger.Debug("IDevID certificate deletion skipped", "error", err)
-	}
-
-	// Note: TPM2 doesn't have a direct DeleteIDevID - keys are typically persistent
-	// This would require evicting the key from the TPM
-
-	resp := &IDevIDDeleteResponse{
-		Deleted:   true,
-		Timestamp: time.Now().UnixMilli(),
-	}
-
-	payload, err := quic.EncodePayload(resp)
-	if err != nil {
-		return h.errorResponse(quic.StatusInternalError, ErrQUICEncodingFailed{Cause: err})
-	}
-
-	h.logger.Info("IDevID key deleted")
-
-	return &quic.Response{
-		Status:  quic.StatusOK,
-		Payload: payload,
-	}
+// handleIDevIDDelete refuses the IDevID key delete. The persistent key is not
+// evicted, so it answers as the gRPC service does and touches nothing; the
+// certificate has OpIDevIDDeleteCert.
+func (h *QUICServiceHandler) handleIDevIDDelete(ctx context.Context, req *quicwire.Request) *quicwire.Response {
+	refused := ErrDeviceIdentityKeyNotDeletable{Key: "IDevID"}
+	return h.errorResponse(idevidGRPCToQUICStatus(refused), refused)
 }
 
 // handleIDevIDCSR generates a CSR for the IDevID key.
-func (h *QUICServiceHandler) handleIDevIDCSR(ctx context.Context, req *quic.Request) *quic.Response {
+func (h *QUICServiceHandler) handleIDevIDCSR(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	var csrReq IDevIDCSRRequest
 	if len(req.Payload) > 0 {
-		if err := quic.DecodePayload(req.Payload, &csrReq); err != nil {
-			return h.errorResponse(quic.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
+		if err := quicwire.DecodePayload(req.Payload, &csrReq); err != nil {
+			return h.errorResponse(quicwire.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
 		}
 	}
 
@@ -500,7 +474,7 @@ func (h *QUICServiceHandler) handleIDevIDCSR(ctx context.Context, req *quic.Requ
 	csrBytes, err := tcgCSR.Marshal()
 	if err != nil {
 		h.logger.Error(err, "failed to marshal TCG CSR")
-		return h.errorResponse(quic.StatusInternalError, ErrQUICEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrQUICEncodingFailed{Cause: err})
 	}
 
 	resp := &IDevIDCSRResponse{
@@ -508,39 +482,39 @@ func (h *QUICServiceHandler) handleIDevIDCSR(ctx context.Context, req *quic.Requ
 		Timestamp: time.Now().UnixMilli(),
 	}
 
-	payload, err := quic.EncodePayload(resp)
+	payload, err := quicwire.EncodePayload(resp)
 	if err != nil {
-		return h.errorResponse(quic.StatusInternalError, ErrQUICEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrQUICEncodingFailed{Cause: err})
 	}
 
 	h.logger.Info("IDevID CSR generated")
 
-	return &quic.Response{
-		Status:  quic.StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
 
 // handleIDevIDInstallCert installs an IDevID certificate.
-func (h *QUICServiceHandler) handleIDevIDInstallCert(ctx context.Context, req *quic.Request) *quic.Response {
+func (h *QUICServiceHandler) handleIDevIDInstallCert(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	var installReq IDevIDInstallCertRequest
-	if err := quic.DecodePayload(req.Payload, &installReq); err != nil {
-		return h.errorResponse(quic.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &installReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
 	}
 
 	if installReq.CertificatePEM == "" {
-		return h.errorResponse(quic.StatusInvalidArgument, ErrQUICMissingField{Field: "certificate_pem"})
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrQUICMissingField{Field: "certificate_pem"})
 	}
 
 	// Parse PEM certificate
 	block, _ := pem.Decode([]byte(installReq.CertificatePEM))
 	if block == nil {
-		return h.errorResponse(quic.StatusInvalidArgument, ErrQUICOperationFailed{Op: "parse certificate PEM", Cause: ErrInvalidCertificatePEM{}})
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrQUICOperationFailed{Op: "parse certificate PEM", Cause: ErrInvalidCertificatePEM{}})
 	}
 
 	cert, err := x509.ParseCertificate(block.Bytes)
 	if err != nil {
-		return h.errorResponse(quic.StatusInvalidArgument, ErrQUICOperationFailed{Op: "parse certificate", Cause: err})
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrQUICOperationFailed{Op: "parse certificate", Cause: err})
 	}
 
 	// Install using TPM2
@@ -560,25 +534,25 @@ func (h *QUICServiceHandler) handleIDevIDInstallCert(ctx context.Context, req *q
 		Timestamp:   time.Now().UnixMilli(),
 	}
 
-	payload, err := quic.EncodePayload(resp)
+	payload, err := quicwire.EncodePayload(resp)
 	if err != nil {
-		return h.errorResponse(quic.StatusInternalError, ErrQUICEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrQUICEncodingFailed{Cause: err})
 	}
 
 	h.logger.Info("IDevID certificate installed", "subject", cert.Subject.CommonName)
 
-	return &quic.Response{
-		Status:  quic.StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
 
 // handleIDevIDGetCert retrieves the IDevID certificate.
-func (h *QUICServiceHandler) handleIDevIDGetCert(ctx context.Context, req *quic.Request) *quic.Response {
+func (h *QUICServiceHandler) handleIDevIDGetCert(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	var getCertReq IDevIDGetCertRequest
 	if len(req.Payload) > 0 {
-		if err := quic.DecodePayload(req.Payload, &getCertReq); err != nil {
-			return h.errorResponse(quic.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
+		if err := quicwire.DecodePayload(req.Payload, &getCertReq); err != nil {
+			return h.errorResponse(quicwire.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
 		}
 	}
 
@@ -598,19 +572,19 @@ func (h *QUICServiceHandler) handleIDevIDGetCert(ctx context.Context, req *quic.
 		Timestamp:   time.Now().UnixMilli(),
 	}
 
-	payload, err := quic.EncodePayload(resp)
+	payload, err := quicwire.EncodePayload(resp)
 	if err != nil {
-		return h.errorResponse(quic.StatusInternalError, ErrQUICEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrQUICEncodingFailed{Cause: err})
 	}
 
-	return &quic.Response{
-		Status:  quic.StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
 
 // handleHasIDevID checks if an IDevID key exists in the TPM.
-func (h *QUICServiceHandler) handleHasIDevID(ctx context.Context, req *quic.Request) *quic.Response {
+func (h *QUICServiceHandler) handleHasIDevID(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	_, err := h.tpm2Service.IDevIDAttributes()
 	exists := err == nil
 
@@ -619,19 +593,19 @@ func (h *QUICServiceHandler) handleHasIDevID(ctx context.Context, req *quic.Requ
 		Timestamp: time.Now().UnixMilli(),
 	}
 
-	payload, err := quic.EncodePayload(resp)
+	payload, err := quicwire.EncodePayload(resp)
 	if err != nil {
-		return h.errorResponse(quic.StatusInternalError, ErrQUICEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrQUICEncodingFailed{Cause: err})
 	}
 
-	return &quic.Response{
-		Status:  quic.StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
 
 // handleHasIAK checks if an IAK key exists in the TPM.
-func (h *QUICServiceHandler) handleHasIAK(ctx context.Context, req *quic.Request) *quic.Response {
+func (h *QUICServiceHandler) handleHasIAK(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	_, err := h.tpm2Service.IAKAttributes()
 	exists := err == nil
 
@@ -640,22 +614,29 @@ func (h *QUICServiceHandler) handleHasIAK(ctx context.Context, req *quic.Request
 		Timestamp: time.Now().UnixMilli(),
 	}
 
-	payload, err := quic.EncodePayload(resp)
+	payload, err := quicwire.EncodePayload(resp)
 	if err != nil {
-		return h.errorResponse(quic.StatusInternalError, ErrQUICEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrQUICEncodingFailed{Cause: err})
 	}
 
-	return &quic.Response{
-		Status:  quic.StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
 
 // handleIDevIDDeleteCert deletes the IDevID certificate.
-func (h *QUICServiceHandler) handleIDevIDDeleteCert(ctx context.Context, req *quic.Request) *quic.Response {
-	if err := h.tpm2Service.DeleteIDevIDCertificate(); err != nil {
+func (h *QUICServiceHandler) handleIDevIDDeleteCert(ctx context.Context, req *quicwire.Request) *quicwire.Response {
+	// Delegate to the shared IDevID service so the delete answers in the
+	// classes gRPC, REST and MCP answer in.
+	if h.idevidService == nil {
+		return h.errorResponse(quicwire.StatusUnavailable, ErrIDevIDServiceNotConfigured{})
+	}
+
+	if _, err := h.idevidService.DeleteIDevIDCertificate(ctx, &platformv1.DeleteIDevIDCertificateRequest{}); err != nil {
 		h.logger.Error(err, "failed to delete IDevID certificate")
-		return h.mapTPM2Error(err)
+		return h.errorResponse(idevidGRPCToQUICStatus(err),
+			ErrQUICOperationFailed{Op: "delete IDevID certificate", Cause: err})
 	}
 
 	resp := &IDevIDDeleteCertResponse{
@@ -663,24 +644,31 @@ func (h *QUICServiceHandler) handleIDevIDDeleteCert(ctx context.Context, req *qu
 		Timestamp: time.Now().UnixMilli(),
 	}
 
-	payload, err := quic.EncodePayload(resp)
+	payload, err := quicwire.EncodePayload(resp)
 	if err != nil {
-		return h.errorResponse(quic.StatusInternalError, ErrQUICEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrQUICEncodingFailed{Cause: err})
 	}
 
 	h.logger.Info("IDevID certificate deleted")
 
-	return &quic.Response{
-		Status:  quic.StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
 
 // handleIAKDeleteCert deletes the IAK certificate.
-func (h *QUICServiceHandler) handleIAKDeleteCert(ctx context.Context, req *quic.Request) *quic.Response {
-	if err := h.tpm2Service.DeleteIAKCertificate(); err != nil {
+func (h *QUICServiceHandler) handleIAKDeleteCert(ctx context.Context, req *quicwire.Request) *quicwire.Response {
+	// Delegate to the shared IDevID service so the delete answers in the
+	// classes gRPC, REST and MCP answer in.
+	if h.idevidService == nil {
+		return h.errorResponse(quicwire.StatusUnavailable, ErrIDevIDServiceNotConfigured{})
+	}
+
+	if _, err := h.idevidService.DeleteIAKCertificate(ctx, &platformv1.DeleteIAKCertificateRequest{}); err != nil {
 		h.logger.Error(err, "failed to delete IAK certificate")
-		return h.mapTPM2Error(err)
+		return h.errorResponse(idevidGRPCToQUICStatus(err),
+			ErrQUICOperationFailed{Op: "delete IAK certificate", Cause: err})
 	}
 
 	resp := &IAKDeleteCertResponse{
@@ -688,25 +676,25 @@ func (h *QUICServiceHandler) handleIAKDeleteCert(ctx context.Context, req *quic.
 		Timestamp: time.Now().UnixMilli(),
 	}
 
-	payload, err := quic.EncodePayload(resp)
+	payload, err := quicwire.EncodePayload(resp)
 	if err != nil {
-		return h.errorResponse(quic.StatusInternalError, ErrQUICEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrQUICEncodingFailed{Cause: err})
 	}
 
 	h.logger.Info("IAK certificate deleted")
 
-	return &quic.Response{
-		Status:  quic.StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
 
 // handleIAKGenerate generates a new IAK key.
-func (h *QUICServiceHandler) handleIAKGenerate(ctx context.Context, req *quic.Request) *quic.Response {
+func (h *QUICServiceHandler) handleIAKGenerate(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	var genReq IAKGenerateRequest
 	if len(req.Payload) > 0 {
-		if err := quic.DecodePayload(req.Payload, &genReq); err != nil {
-			return h.errorResponse(quic.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
+		if err := quicwire.DecodePayload(req.Payload, &genReq); err != nil {
+			return h.errorResponse(quicwire.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
 		}
 	}
 
@@ -727,7 +715,7 @@ func (h *QUICServiceHandler) handleIAKGenerate(ctx context.Context, req *quic.Re
 	pubKeyPEM, err := encodePublicKeyPEM(iakAttrs.TPMAttributes.Public)
 	if err != nil {
 		h.logger.Error(err, "failed to encode public key")
-		return h.errorResponse(quic.StatusInternalError, ErrQUICEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrQUICEncodingFailed{Cause: err})
 	}
 
 	resp := &IAKGenerateResponse{
@@ -737,21 +725,21 @@ func (h *QUICServiceHandler) handleIAKGenerate(ctx context.Context, req *quic.Re
 		Timestamp: time.Now().UnixMilli(),
 	}
 
-	payload, err := quic.EncodePayload(resp)
+	payload, err := quicwire.EncodePayload(resp)
 	if err != nil {
-		return h.errorResponse(quic.StatusInternalError, ErrQUICEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrQUICEncodingFailed{Cause: err})
 	}
 
 	h.logger.Info("IAK key generated", "handle", iakAttrs.TPMAttributes.Handle)
 
-	return &quic.Response{
-		Status:  quic.StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
 
 // handleIAKInfo retrieves IAK key information.
-func (h *QUICServiceHandler) handleIAKInfo(ctx context.Context, req *quic.Request) *quic.Response {
+func (h *QUICServiceHandler) handleIAKInfo(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	attrs, err := h.tpm2Service.IAKAttributes()
 	if err != nil {
 		// Key doesn't exist
@@ -759,12 +747,12 @@ func (h *QUICServiceHandler) handleIAKInfo(ctx context.Context, req *quic.Reques
 			Exists:    false,
 			Timestamp: time.Now().UnixMilli(),
 		}
-		payload, encErr := quic.EncodePayload(resp)
+		payload, encErr := quicwire.EncodePayload(resp)
 		if encErr != nil {
-			return h.errorResponse(quic.StatusInternalError, ErrQUICEncodingFailed{Cause: encErr})
+			return h.errorResponse(quicwire.StatusInternalError, ErrQUICEncodingFailed{Cause: encErr})
 		}
-		return &quic.Response{
-			Status:  quic.StatusOK,
+		return &quicwire.Response{
+			Status:  quicwire.StatusOK,
 			Payload: payload,
 		}
 	}
@@ -772,7 +760,7 @@ func (h *QUICServiceHandler) handleIAKInfo(ctx context.Context, req *quic.Reques
 	pubKeyPEM, err := encodePublicKeyPEM(attrs.TPMAttributes.Public)
 	if err != nil {
 		h.logger.Error(err, "failed to encode public key")
-		return h.errorResponse(quic.StatusInternalError, ErrQUICEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrQUICEncodingFailed{Cause: err})
 	}
 
 	resp := &IAKInfoResponse{
@@ -790,48 +778,31 @@ func (h *QUICServiceHandler) handleIAKInfo(ctx context.Context, req *quic.Reques
 		resp.Certificate = certToQUIC(cert)
 	}
 
-	payload, err := quic.EncodePayload(resp)
+	payload, err := quicwire.EncodePayload(resp)
 	if err != nil {
-		return h.errorResponse(quic.StatusInternalError, ErrQUICEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrQUICEncodingFailed{Cause: err})
 	}
 
-	return &quic.Response{
-		Status:  quic.StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
 
-// handleIAKDelete deletes the IAK key.
-func (h *QUICServiceHandler) handleIAKDelete(ctx context.Context, req *quic.Request) *quic.Response {
-	// Delete the IAK certificate first
-	if err := h.tpm2Service.DeleteIAKCertificate(); err != nil {
-		h.logger.Debug("IAK certificate deletion skipped", "error", err)
-	}
-
-	resp := &IAKDeleteResponse{
-		Deleted:   true,
-		Timestamp: time.Now().UnixMilli(),
-	}
-
-	payload, err := quic.EncodePayload(resp)
-	if err != nil {
-		return h.errorResponse(quic.StatusInternalError, ErrQUICEncodingFailed{Cause: err})
-	}
-
-	h.logger.Info("IAK key deleted")
-
-	return &quic.Response{
-		Status:  quic.StatusOK,
-		Payload: payload,
-	}
+// handleIAKDelete refuses the IAK key delete. The persistent key is not
+// evicted, so it answers as the gRPC service does and touches nothing; the
+// certificate has OpIAKDeleteCert.
+func (h *QUICServiceHandler) handleIAKDelete(ctx context.Context, req *quicwire.Request) *quicwire.Response {
+	refused := ErrDeviceIdentityKeyNotDeletable{Key: "IAK"}
+	return h.errorResponse(idevidGRPCToQUICStatus(refused), refused)
 }
 
 // handleIAKCSR generates a CSR for the IAK key.
-func (h *QUICServiceHandler) handleIAKCSR(ctx context.Context, req *quic.Request) *quic.Response {
+func (h *QUICServiceHandler) handleIAKCSR(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	var csrReq IAKCSRRequest
 	if len(req.Payload) > 0 {
-		if err := quic.DecodePayload(req.Payload, &csrReq); err != nil {
-			return h.errorResponse(quic.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
+		if err := quicwire.DecodePayload(req.Payload, &csrReq); err != nil {
+			return h.errorResponse(quicwire.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
 		}
 	}
 
@@ -852,7 +823,7 @@ func (h *QUICServiceHandler) handleIAKCSR(ctx context.Context, req *quic.Request
 	csrBytes, err := tcgCSR.Marshal()
 	if err != nil {
 		h.logger.Error(err, "failed to marshal TCG CSR")
-		return h.errorResponse(quic.StatusInternalError, ErrQUICEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrQUICEncodingFailed{Cause: err})
 	}
 
 	resp := &IAKCSRResponse{
@@ -860,39 +831,39 @@ func (h *QUICServiceHandler) handleIAKCSR(ctx context.Context, req *quic.Request
 		Timestamp: time.Now().UnixMilli(),
 	}
 
-	payload, err := quic.EncodePayload(resp)
+	payload, err := quicwire.EncodePayload(resp)
 	if err != nil {
-		return h.errorResponse(quic.StatusInternalError, ErrQUICEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrQUICEncodingFailed{Cause: err})
 	}
 
 	h.logger.Info("IAK CSR generated")
 
-	return &quic.Response{
-		Status:  quic.StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
 
 // handleIAKInstallCert installs an IAK certificate.
-func (h *QUICServiceHandler) handleIAKInstallCert(ctx context.Context, req *quic.Request) *quic.Response {
+func (h *QUICServiceHandler) handleIAKInstallCert(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	var installReq IAKInstallCertRequest
-	if err := quic.DecodePayload(req.Payload, &installReq); err != nil {
-		return h.errorResponse(quic.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &installReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
 	}
 
 	if installReq.CertificatePEM == "" {
-		return h.errorResponse(quic.StatusInvalidArgument, ErrQUICMissingField{Field: "certificate_pem"})
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrQUICMissingField{Field: "certificate_pem"})
 	}
 
 	// Parse PEM certificate
 	block, _ := pem.Decode([]byte(installReq.CertificatePEM))
 	if block == nil {
-		return h.errorResponse(quic.StatusInvalidArgument, ErrQUICOperationFailed{Op: "parse certificate PEM", Cause: ErrInvalidCertificatePEM{}})
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrQUICOperationFailed{Op: "parse certificate PEM", Cause: ErrInvalidCertificatePEM{}})
 	}
 
 	cert, err := x509.ParseCertificate(block.Bytes)
 	if err != nil {
-		return h.errorResponse(quic.StatusInvalidArgument, ErrQUICOperationFailed{Op: "parse certificate", Cause: err})
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrQUICOperationFailed{Op: "parse certificate", Cause: err})
 	}
 
 	// Install using TPM2
@@ -911,25 +882,25 @@ func (h *QUICServiceHandler) handleIAKInstallCert(ctx context.Context, req *quic
 		Timestamp:   time.Now().UnixMilli(),
 	}
 
-	payload, err := quic.EncodePayload(resp)
+	payload, err := quicwire.EncodePayload(resp)
 	if err != nil {
-		return h.errorResponse(quic.StatusInternalError, ErrQUICEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrQUICEncodingFailed{Cause: err})
 	}
 
 	h.logger.Info("IAK certificate installed", "subject", cert.Subject.CommonName)
 
-	return &quic.Response{
-		Status:  quic.StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
 
 // handleIAKGetCert retrieves the IAK certificate.
-func (h *QUICServiceHandler) handleIAKGetCert(ctx context.Context, req *quic.Request) *quic.Response {
+func (h *QUICServiceHandler) handleIAKGetCert(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	var getCertReq IAKGetCertRequest
 	if len(req.Payload) > 0 {
-		if err := quic.DecodePayload(req.Payload, &getCertReq); err != nil {
-			return h.errorResponse(quic.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
+		if err := quicwire.DecodePayload(req.Payload, &getCertReq); err != nil {
+			return h.errorResponse(quicwire.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
 		}
 	}
 
@@ -949,19 +920,19 @@ func (h *QUICServiceHandler) handleIAKGetCert(ctx context.Context, req *quic.Req
 		Timestamp:   time.Now().UnixMilli(),
 	}
 
-	payload, err := quic.EncodePayload(resp)
+	payload, err := quicwire.EncodePayload(resp)
 	if err != nil {
-		return h.errorResponse(quic.StatusInternalError, ErrQUICEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrQUICEncodingFailed{Cause: err})
 	}
 
-	return &quic.Response{
-		Status:  quic.StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
 
 // handleDeviceAttributes retrieves TCG device attributes.
-func (h *QUICServiceHandler) handleDeviceAttributes(ctx context.Context, req *quic.Request) *quic.Response {
+func (h *QUICServiceHandler) handleDeviceAttributes(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	// Use go-xkms's platform discovery
 	platformAttrs := xkmssdk.DiscoverPlatformAttributes()
 
@@ -985,40 +956,40 @@ func (h *QUICServiceHandler) handleDeviceAttributes(ctx context.Context, req *qu
 		Timestamp:            time.Now().UnixMilli(),
 	}
 
-	payload, err := quic.EncodePayload(resp)
+	payload, err := quicwire.EncodePayload(resp)
 	if err != nil {
-		return h.errorResponse(quic.StatusInternalError, ErrQUICEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrQUICEncodingFailed{Cause: err})
 	}
 
-	return &quic.Response{
-		Status:  quic.StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
 
 // handleActivateCredential performs TPM credential activation.
-func (h *QUICServiceHandler) handleActivateCredential(ctx context.Context, req *quic.Request) *quic.Response {
+func (h *QUICServiceHandler) handleActivateCredential(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	var activateReq ActivateCredentialQUICRequest
-	if err := quic.DecodePayload(req.Payload, &activateReq); err != nil {
-		return h.errorResponse(quic.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &activateReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
 	}
 
 	if activateReq.CredentialBlob == "" {
-		return h.errorResponse(quic.StatusInvalidArgument, ErrQUICMissingField{Field: "credential_blob"})
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrQUICMissingField{Field: "credential_blob"})
 	}
 	if activateReq.Secret == "" {
-		return h.errorResponse(quic.StatusInvalidArgument, ErrQUICMissingField{Field: "secret"})
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrQUICMissingField{Field: "secret"})
 	}
 
 	// Decode base64 credential blob and secret
 	credentialBlob, err := base64.StdEncoding.DecodeString(activateReq.CredentialBlob)
 	if err != nil {
-		return h.errorResponse(quic.StatusInvalidArgument, ErrQUICOperationFailed{Op: "decode credential_blob", Cause: err})
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrQUICOperationFailed{Op: "decode credential_blob", Cause: err})
 	}
 
 	secret, err := base64.StdEncoding.DecodeString(activateReq.Secret)
 	if err != nil {
-		return h.errorResponse(quic.StatusInvalidArgument, ErrQUICOperationFailed{Op: "decode secret", Cause: err})
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrQUICOperationFailed{Op: "decode secret", Cause: err})
 	}
 
 	// Delegate through the shared activateCredential path.
@@ -1033,15 +1004,15 @@ func (h *QUICServiceHandler) handleActivateCredential(ctx context.Context, req *
 		Timestamp: time.Now().UnixMilli(),
 	}
 
-	payload, err := quic.EncodePayload(resp)
+	payload, err := quicwire.EncodePayload(resp)
 	if err != nil {
-		return h.errorResponse(quic.StatusInternalError, ErrQUICEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrQUICEncodingFailed{Cause: err})
 	}
 
 	h.logger.Info("Credential activated successfully")
 
-	return &quic.Response{
-		Status:  quic.StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
@@ -1051,7 +1022,7 @@ func (h *QUICServiceHandler) handleActivateCredential(ctx context.Context, req *
 // =============================================================================
 
 // mapTPM2Error maps TPM2 errors to appropriate QUIC status codes.
-func (h *QUICServiceHandler) mapTPM2Error(err error) *quic.Response {
+func (h *QUICServiceHandler) mapTPM2Error(err error) *quicwire.Response {
 	if err == nil {
 		return nil
 	}
@@ -1060,26 +1031,26 @@ func (h *QUICServiceHandler) mapTPM2Error(err error) *quic.Response {
 
 	// Check for not found errors
 	if containsIDevIDErrorPattern(errMsg, "not found", "does not exist") {
-		return h.errorResponse(quic.StatusNotFound, ErrQUICOperationFailed{Op: "tpm2", Cause: err})
+		return h.errorResponse(quicwire.StatusNotFound, ErrQUICOperationFailed{Op: "tpm2", Cause: err})
 	}
 
 	// Check for already exists errors
 	if containsIDevIDErrorPattern(errMsg, "already exists") {
-		return h.errorResponse(quic.StatusAlreadyExists, ErrQUICOperationFailed{Op: "tpm2", Cause: err})
+		return h.errorResponse(quicwire.StatusAlreadyExists, ErrQUICOperationFailed{Op: "tpm2", Cause: err})
 	}
 
 	// Check for invalid argument errors
 	if containsIDevIDErrorPattern(errMsg, "invalid", "required", "must be", "cannot be", "mismatch") {
-		return h.errorResponse(quic.StatusInvalidArgument, ErrQUICOperationFailed{Op: "tpm2", Cause: err})
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrQUICOperationFailed{Op: "tpm2", Cause: err})
 	}
 
 	// Check for unavailable errors
 	if containsIDevIDErrorPattern(errMsg, "not available", "unavailable", "not configured") {
-		return h.errorResponse(quic.StatusUnavailable, ErrQUICOperationFailed{Op: "tpm2", Cause: err})
+		return h.errorResponse(quicwire.StatusUnavailable, ErrQUICOperationFailed{Op: "tpm2", Cause: err})
 	}
 
 	// Default to internal error
-	return h.errorResponse(quic.StatusInternalError, ErrQUICOperationFailed{Op: "tpm2", Cause: err})
+	return h.errorResponse(quicwire.StatusInternalError, ErrQUICOperationFailed{Op: "tpm2", Cause: err})
 }
 
 // containsIDevIDErrorPattern checks if the error message contains any of the patterns.

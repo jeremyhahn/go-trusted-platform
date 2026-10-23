@@ -69,7 +69,10 @@ func runEnrollTPM(commonFlags *cli.CommonFlags, f *enrollTPMFlags) error {
 	}
 	defer base.Close()
 
-	client := lukssvc.NewClient()
+	client, err := newService(base.Client())
+	if err != nil {
+		return err
+	}
 	resp, err := client.EnrollTPM(base.Context(), &lukssvc.EnrollTPMRequest{
 		Device:             device,
 		ExistingPassphrase: f.existingPassphrase,

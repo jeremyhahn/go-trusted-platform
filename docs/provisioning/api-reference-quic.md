@@ -1,5 +1,9 @@
 # Config Delivery QUIC API Reference
 
+> **Status: REFERENCE** · Last verified: 2026-10-15
+> The config-delivery sub-opcodes under QUIC category `0xCF`: wire structs,
+> scopes and status bytes.
+
 | Property | Value |
 |----------|-------|
 | Endpoint | `host:9444` (UDP, QUIC + TLS 1.3) |
@@ -41,6 +45,17 @@ Request:                          Response:
 | (0xCF) | (1B)   | (codec) |     | (1B)   | (codec) |
 +--------+--------+---------+     +--------+---------+
 ```
+
+## Authorization
+
+Each sub-opcode needs the scope of its gRPC twin
+(`pkg/api/quic/opcode_permissions.go`):
+
+| Sub-opcode | Scope |
+|-----------|-------|
+| `0x06` ListSessions, `0x07` GetSession | `provisioning:read` |
+| `0x05` FulfillSession | `provisioning:write` |
+| `0x01` GetNonce, `0x02` FetchConfig, `0x03` SignDigest, `0x04` PollSession | open — `preAuthSubOpcodes`, as on gRPC and MCP; fetch and sign check the single-use nonce, EAB HMAC and EK binding, and poll needs the random session ID |
 
 ## Wire Structs
 
@@ -95,7 +110,9 @@ bytes:
 
 An unknown sub-opcode (outside both the config delivery and EAB
 families) returns `StatusNotImplemented`; a missing `session_id`
-returns `StatusInvalidArgument` before dispatch.
+returns `StatusInvalidArgument` before dispatch. FulfillSession with
+`profile_id` 0 returns `StatusInvalidArgument` from the service's
+`configdelivery.ErrProfileIDRequired`, as on every other transport.
 
 ## SDK Usage
 

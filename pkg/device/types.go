@@ -68,7 +68,9 @@ type DeviceProfileService interface {
 	Delete(ctx context.Context, profile *entities.DeviceProfile) error
 
 	// Update modifies an existing device profile. The profile must exist.
-	Update(ctx context.Context, profile *entities.DeviceProfile) error
+	// An empty TLSServerName keeps the stored name unless opts carries
+	// ClearTLSServerName.
+	Update(ctx context.Context, profile *entities.DeviceProfile, opts ...ProfileUpdateOption) error
 
 	// Count returns the total number of device profiles.
 	Count(ctx context.Context) (int, error)
@@ -105,6 +107,14 @@ type DeviceProfileService interface {
 	// MAC address, prestaged EK certificate, and assignment state are all
 	// reset. It is the symmetric inverse of AssignToDeviceWithEK.
 	UnassignFromDevice(ctx context.Context, profileID uint64) error
+}
+
+// ConfigForDeviceFinder resolves the profile a booting machine should receive
+// from its EK serial or MAC address. *ProfileService implements it; it is
+// kept off DeviceProfileService, so a transport holding that interface
+// asserts this one (see ProfileService.FindConfigForDevice for the order).
+type ConfigForDeviceFinder interface {
+	FindConfigForDevice(ctx context.Context, ekSerial, mac string) (*entities.DeviceProfile, error)
 }
 
 // DeviceTemplateService provides device template management operations.

@@ -13,7 +13,11 @@
 
 package mcp
 
-import "context"
+import (
+	"context"
+
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/mcpwire"
+)
 
 // =============================================================================
 // LDevID (IEEE 802.1AR) Request Types
@@ -72,7 +76,7 @@ var ErrLDevIDNotSupported = &IDevIDError{
 // permanent IDevID birth identity; issuance is refused unless the device has
 // a proven IDevID.
 func (r *ToolRegistry) registerLDevIDTools() {
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name: "idevid_create_ldevid",
 		Description: "Provision an LDevID (Local Device Identifier, IEEE 802.1AR): " +
 			"create a TPM-resident LDevID signing key distinct from the IDevID/IAK " +

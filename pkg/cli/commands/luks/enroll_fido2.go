@@ -39,6 +39,9 @@ func newEnrollFIDO2Command(getFlags func() *cli.CommonFlags) *cobra.Command {
 		Short: "Enroll a FIDO2 keyslot",
 		Long: `Add a FIDO2 keyslot to a LUKS device using the hmac-secret extension.
 
+--require-pin is refused by the daemon until the SDK ships a PIN-capable
+fido2 handler (SDK seam #584); use --require-uv for user verification.
+
 Replaces the legacy "platformctl fido2 enroll" command.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runEnrollFIDO2(getFlags(), f)
@@ -48,7 +51,7 @@ Replaces the legacy "platformctl fido2 enroll" command.`,
 	cmd.Flags().StringVar(&f.device, "device", "", "LUKS device path (auto-detected if empty)")
 	cmd.Flags().StringVar(&f.existingPassphrase, "existing-passphrase", "", "existing passphrase")
 	cmd.Flags().StringVar(&f.credentialID, "credential-id", "", "FIDO2 credential id")
-	cmd.Flags().BoolVar(&f.requirePIN, "require-pin", false, "require PIN during the ceremony")
+	cmd.Flags().BoolVar(&f.requirePIN, "require-pin", false, "require PIN during the ceremony (refused until SDK seam #584 ships)")
 	cmd.Flags().BoolVar(&f.requireUV, "require-uv", false, "require user verification (biometric / PIN)")
 
 	return cmd
@@ -76,7 +79,10 @@ func runEnrollFIDO2(commonFlags *cli.CommonFlags, f *enrollFIDO2Flags) error {
 	}
 	defer base.Close()
 
-	client := lukssvc.NewClient()
+	client, err := newService(base.Client())
+	if err != nil {
+		return err
+	}
 	resp, err := client.EnrollFIDO2(base.Context(), &lukssvc.EnrollFIDO2Request{
 		Device:             device,
 		ExistingPassphrase: f.existingPassphrase,

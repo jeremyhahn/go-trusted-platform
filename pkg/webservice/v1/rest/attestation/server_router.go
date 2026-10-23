@@ -18,6 +18,7 @@ import (
 
 	"github.com/gorilla/mux"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/channelbind"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/internal/protorest"
@@ -193,7 +194,10 @@ func (r *AttestationServerRouter) getQuote(w http.ResponseWriter, req *http.Requ
 		r.respWriter.Error400(w, req, err)
 		return
 	}
-	resp, err := r.server.GetAttestationQuote(req.Context(), pbReq)
+	// The node binds its quote to the connection this request arrived on
+	// (#482), as collect-host does.
+	ctx := channelbind.WithConnectionTLS(req.Context(), channelbind.TransportREST, req.TLS)
+	resp, err := r.server.GetAttestationQuote(ctx, pbReq)
 	if err != nil {
 		protorest.WriteError(w, req, r.respWriter, err)
 		return
@@ -227,7 +231,11 @@ func (r *AttestationServerRouter) collectHost(w http.ResponseWriter, req *http.R
 		r.respWriter.Error400(w, req, err)
 		return
 	}
-	resp, err := r.server.CollectHostAttestation(req.Context(), pbReq)
+	// The node binds its quote to the connection this request arrived on
+	// (#482), so the server needs that connection's TLS state; nil records a
+	// plain-HTTP request, which it refuses.
+	ctx := channelbind.WithConnectionTLS(req.Context(), channelbind.TransportREST, req.TLS)
+	resp, err := r.server.CollectHostAttestation(ctx, pbReq)
 	if err != nil {
 		protorest.WriteError(w, req, r.respWriter, err)
 		return

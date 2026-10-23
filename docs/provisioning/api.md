@@ -26,8 +26,11 @@ Three gRPC services are in scope:
 | `ProvisioningGateway` | 4 | `pkg/api/grpc/proto/provisioning.proto` |
 
 QUIC uses a **provisioning category opcode `0xCF`**
-(`pkg/api/quic/provisioning_opcodes.go`, which notes it follows "the same
-pattern as OpSwitchCategory (0xCC)"), plus PXE extended opcodes `0xFC`–`0xFF`.
+(`sdk/go/wire/quicwire/provisioning_opcodes.go`, which notes it follows "the same
+pattern as OpSwitchCategory (0xCC)"), plus eight direct PXE opcodes, `0xEC`–`0xEF`
+and `0xFC`–`0xFF` (`sdk/go/wire/quicwire/protocol.go`). The seven `PXEService`
+methods without a direct opcode ride `0xCF` subs `0x30`–`0x36`
+(`sdk/go/wire/quicwire/pxe_opcodes.go`).
 
 ---
 
@@ -37,21 +40,21 @@ REST base path `/api/v1/pxe` (`pkg/webservice/v1/rest/pxe/router.go`).
 
 | Capability | REST | gRPC / Unix | QUIC | MCP | Embedded |
 |---|---|---|---|---|---|
-| Register device | `POST /api/v1/pxe/devices` | `RegisterDevice` | `0xFC`–`0xFF` | `pxe_register_device` | ✅ |
-| List devices | `GET /api/v1/pxe/devices` | `ListDevices` | as above | `pxe_list_devices` | ✅ |
-| Get device | `GET /api/v1/pxe/devices/{id}` | `GetDevice` | as above | `pxe_get_device` | ✅ |
-| Get device by MAC | `GET /api/v1/pxe/devices/mac/{mac}` | `GetDeviceByMAC` | as above | `pxe_get_device_by_mac` | ✅ |
-| Remove device | `DELETE /api/v1/pxe/devices/{id}` | `RemoveDevice` | as above | `pxe_remove_device` | ✅ |
-| Update state | `PUT /api/v1/pxe/devices/{id}/state` | `UpdateState` | as above | `pxe_update_state` | ✅ |
-| Set enrolled | `POST /api/v1/pxe/devices/{id}/enrolled` | `SetDeviceEnrolled` | as above | `pxe_set_device_enrolled` | ✅ |
-| **Authorize** | `POST /api/v1/pxe/devices/{id}/authorize` | `Authorize` | as above | `pxe_authorize_device` | ✅ |
-| **Quarantine** | `POST /api/v1/pxe/devices/{id}/quarantine` | `Quarantine` | as above | `pxe_quarantine_device` | ✅ |
-| Retry | `POST /api/v1/pxe/devices/{id}/retry` | `Retry` | as above | `pxe_retry_device` | ✅ |
-| Device events | `GET /api/v1/pxe/devices/{id}/events` | `GetEvents` | as above | `pxe_get_device_events` | ✅ |
-| Service status | `GET /api/v1/pxe/status` | `GetStatus` | as above | `pxe_service_status` | ✅ |
-| Start service | `POST /api/v1/pxe/start` | `StartService` | as above | `pxe_start_service` | ✅ |
-| Stop service | `POST /api/v1/pxe/stop` | `StopService` | as above | `pxe_stop_service` | ✅ |
-| Install-complete webhook | `POST /api/v1/pxe/webhook/complete` | `WebhookComplete` | as above | `pxe_webhook_complete` | ✅ |
+| Register device | `POST /api/v1/pxe/devices` | `RegisterDevice` | `0xEE` | `pxe_register_device` | ✅ |
+| List devices | `GET /api/v1/pxe/devices` | `ListDevices` | `0xEC` | `pxe_list_devices` | ✅ |
+| Get device | `GET /api/v1/pxe/devices/{id}` | `GetDevice` | `0xED` | `pxe_get_device` | ✅ |
+| Get device by MAC | `GET /api/v1/pxe/devices/mac/{mac}` | `GetDeviceByMAC` | `0xCF` / `0x30` | `pxe_get_device_by_mac` | ✅ |
+| Remove device | `DELETE /api/v1/pxe/devices/{id}` | `RemoveDevice` | `0xFF` | `pxe_remove_device` | ✅ |
+| Update state | `PUT /api/v1/pxe/devices/{id}/state` | `UpdateState` | `0xEF` | `pxe_update_state` | ✅ |
+| Set enrolled | `POST /api/v1/pxe/devices/{id}/enrolled` | `SetDeviceEnrolled` | `0xCF` / `0x31` | `pxe_set_device_enrolled` | ✅ |
+| **Authorize** | `POST /api/v1/pxe/devices/{id}/authorize` | `Authorize` | `0xFC` | `pxe_authorize_device` | ✅ |
+| **Quarantine** | `POST /api/v1/pxe/devices/{id}/quarantine` | `Quarantine` | `0xFD` | `pxe_quarantine_device` | ✅ |
+| Retry | `POST /api/v1/pxe/devices/{id}/retry` | `Retry` | `0xFE` | `pxe_retry_device` | ✅ |
+| Device events | `GET /api/v1/pxe/devices/{id}/events` | `GetEvents` | `0xCF` / `0x32` | `pxe_get_device_events` | ✅ |
+| Service status | `GET /api/v1/pxe/status` | `GetStatus` | `0xCF` / `0x33` | `pxe_service_status` | ✅ |
+| Start service | `POST /api/v1/pxe/start` | `StartService` | `0xCF` / `0x34` | `pxe_start_service` | ✅ |
+| Stop service | `POST /api/v1/pxe/stop` | `StopService` | `0xCF` / `0x35` | `pxe_stop_service` | ✅ |
+| Install-complete webhook | `POST /api/v1/pxe/webhook/complete` | `WebhookComplete` | `0xCF` / `0x36` | `pxe_webhook_complete` | ✅ |
 
 **This is the most complete capability set in the platform** — fifteen
 capabilities, all fifteen on five transports.
@@ -62,7 +65,10 @@ isolated state rather than being left in an ambiguous one. `Retry` is how it
 comes back.
 
 **`WebhookComplete` is an input, not a truth.** It is the machine reporting that
-installation finished; the state machine decides what that means.
+installation finished; the state machine decides what that means. Its REST route
+is registered only when `pxe.ServiceConfig.WebhookEnabled` is true (default
+false), and is then unauthenticated — see [`docs/ipxe/api.md`](../ipxe/api.md)
+§4 and #238.
 
 ---
 
@@ -87,7 +93,7 @@ routes were registered and the web console was calling them, so the table
 was corrected against the router (#418). The four device-facing routes carry
 no role gate — a machine at boot has no certificate or session — and
 authenticate by EAB (SignDigest also by the EK); the three operator routes
-sit behind the gated router.
+sit behind the gated router and take the gRPC scopes (§6).
 
 `FulfillSession` is the **authorisation step**: a provisioning session stays
 pending until something with authority links a device profile to it. There is no
@@ -118,6 +124,12 @@ does not read, so every console fulfil ran with profile id 0 and answered
 `404 profile not found`. The `Session` body's `profile_id` is still emitted as a
 JSON number; that row is #425.
 
+A missing or zero `profile_id` names no profile. `configdelivery.Service`
+refuses it with `ErrProfileIDRequired`
+(`configdelivery: profile_id is required and must be non-zero`) before it looks
+the session up, so every transport answers it the same way: REST `400`, gRPC and
+Unix `InvalidArgument`, QUIC `StatusInvalidArgument`, MCP `InvalidParams` (#304).
+
 `SignDigest` signs a Secure Boot digest **on the platform**, so the signing key
 never travels to the machine being provisioned.
 
@@ -136,7 +148,29 @@ gateway-side view — four RPCs:
 | `NotifyInstallComplete` | Report completion upward |
 
 These are consumed by gatewayd in its `pxe` service section
-([`docs/gateway/`](../gateway/)) and are gRPC-only.
+([`docs/gateway/`](../gateway/)).
+
+Over REST (#452) the device's MAC is the path segment and the rest of the
+request is the body. The webservice routes
+(`pkg/webservice/v1/rest/pxe/gateway.go`) translate each report onto the
+`PXEService` the gRPC server runs:
+
+| RPC | REST route | Credential | Served by |
+|---|---|---|---|
+| `RegisterPXEDevice` | `POST /api/v1/provisioning/devices/{mac}/register` | admin role + `provisioning:write` | `PXEService.RegisterDevice`; a known MAC answers `200` with its ID and `already_registered`, a new one `201` |
+| `ReportDeviceState` | `POST /api/v1/provisioning/devices/{mac}/state` | admin role + `provisioning:write` | `PXEService.GetDeviceByMAC`, then `UpdateState`; `state` is a `ProvisioningState` name without its prefix (`booting`) |
+| `NotifyInstallComplete` | `POST /api/v1/provisioning/devices/{mac}/install-complete` | admin role + `provisioning:write` | `PXEService.WebhookComplete`; `status` is `success` or `failure` |
+| `GetBootConfig` | none | — | no per-MAC boot configuration exists in platformd to answer it from; the SDK's `GET /api/v1/provisioning/devices/{mac}/boot-config` claim stays in the route ledger |
+
+An unknown MAC answers `404`, a bad `state` or `status` `400`, and a token
+without `provisioning:write` `403`. Under the legacy JWT handler the role gate
+alone applies.
+
+`NotifyInstallComplete` is the same operation as the booting node's
+`POST /api/v1/pxe/webhook/complete`. That webhook presents no credential
+(#238). The gateway route is not a second open path: it takes the admin gate
+and the scope. The EAB check was not used, because it authenticates a device
+on its own first contact, not a gateway reporting on a device.
 
 **Note the near-duplicate naming.** `ProvisioningGateway.RegisterPXEDevice` and
 `PXEService.RegisterDevice` are different RPCs on different services with
@@ -149,9 +183,10 @@ different request messages (`RegisterProvisioningDeviceRequest` versus
 
 `BMCService` (`pkg/api/grpc/proto/bmc.proto`) carries 23 RPCs — power control,
 boot device, virtual media, sensors, system info, provisioning, web certificate
-management, enrollment, factory restore and user management. QUIC reaches BMC
-enrollment through the **BMC category opcode `0x9F`**, and there are 16
-`platform_bmc_*` MCP tools.
+management, enrollment, factory restore and user management. QUIC reaches every
+RPC through the **BMC category opcode `0x9F`**, one sub-opcode per RPC; there
+are 23 `platform_bmc_*` MCP tools, one per RPC; and the embedded transport
+carries all 23 through `ServiceRegistry.BMC`.
 
 **BMC internals are not documented in this pass** — see
 [engineering.md](engineering.md) §1. The transport shape is recorded here so the
@@ -163,24 +198,65 @@ matrix is not silently incomplete; `docs/bmc/` remains unconverted.
 
 Platform tokens carry an `scp` claim as `"<resource>:<action>"`.
 
-**None of `PXEService`, `ConfigDeliveryService`, `ProvisioningGateway` or
-`BMCService` is in the gRPC scope catalog.** `pkg/api/grpc/method_permissions.go`
-maps 185 methods across eleven services; none of these four is among them, and a
-method absent from the map carries no required scope.
+Both catalogs are **default-deny**
+([`docs/auth/architecture.md`](../auth/architecture.md)). Every RPC of the four
+services is classified in the gRPC catalog (`pkg/api/grpc/method_permissions.go`):
 
-**No provisioning MCP tool is in the MCP authorization map either** — 71 of 449
-tool names carry a permission, and neither the 22 `pxe_*`/`provision_*` tools
-nor the 16 BMC tools are among them.
+| Service | Requirement |
+|---|---|
+| `PXEService` | `pxe:read` for the five reads; `pxe:write` for `Authorize`, `Quarantine` and the other mutators; `pxe:delete` for `RemoveDevice` ([`docs/ipxe/api.md`](../ipxe/api.md) §5) |
+| `ConfigDeliveryService` | `ListSessions` and `GetSession` need `provisioning:read`; `FulfillSession` needs `provisioning:write`. `GetNonce`, `FetchConfig`, `SignDigest` and `PollSession` are **pre-auth**: the machine authenticates inside the request (single-use nonce, EAB HMAC, EK-certificate binding) before it holds any platform credential |
+| `ProvisioningGateway` | `GetBootConfig` needs `provisioning:read`; `RegisterPXEDevice`, `ReportDeviceState` and `NotifyInstallComplete` need `provisioning:write` |
+| `BMCService` | `bmc:read` / `bmc:write` / `bmc:power` / `bmc:media` / `bmc:admin` ([`docs/bmc/api.md`](../bmc/api.md) §8) |
 
-So **any validated token can authorize a PXE device, quarantine one, fulfil a
-provisioning session, or ask the platform to sign a Secure Boot digest.**
+**QUIC requires per-operation scopes (#767)**
+(`pkg/api/quic/opcode_permissions.go`):
+
+| Scope | QUIC operations |
+|---|---|
+| `pxe:read` | `OpPXEListDevices`, `OpPXEGetDevice`; `0xCF` subs `PXESubGetDeviceByMAC`, `PXESubGetEvents`, `PXESubGetStatus` |
+| `pxe:write` | `OpPXERegisterDevice`, `OpPXEUpdateState`, `OpPXEAuthorize`, `OpPXEQuarantine`, `OpPXERetry`; `0xCF` subs `PXESubSetDeviceEnrolled`, `PXESubStartService`, `PXESubStopService`, `PXESubWebhookComplete` |
+| `pxe:delete` | `OpPXERemoveDevice` |
+| `provisioning:read` | `OpProvisioningCategory` (`0xCF`) subs `ListSessions`, `GetSession` |
+| `provisioning:write` | sub `FulfillSession` |
+| open (pre-auth) | subs `GetNonce`, `FetchConfig`, `SignDigest`, `PollSession`, as on gRPC (#317) |
+| `device:write` | subs `DeviceProfileSubAssign`, `DeviceProfileSubUnassign`, `DeviceSubRecordAttestCert`, `DeviceSubDisable`, `DeviceSubEnable` |
+
+The EAB sub-opcodes of the same category carry the `eab` scopes
+([`docs/eab/api.md`](../eab/api.md) §5); BMC enrollment carries `bmc:admin`
+([`docs/bmc/api.md`](../bmc/api.md) §8).
+
 `FulfillSession` is the authorisation gate for bringing a new machine onto the
-platform, and `SignDigest` produces a Secure Boot signature. Raised as an owner
-question in the migration report.
+platform, so `provisioning:write` is the grant to guard.
+
+**The webservice REST operator routes take the same scopes (#484).** Behind the
+platform-token middleware, `GET /api/v1/provisioning/sessions` and
+`GET /api/v1/provisioning/sessions/{sessionID}` require `provisioning:read`
+and `POST /api/v1/provisioning/sessions/{sessionID}/fulfill` requires
+`provisioning:write`, on top of the admin role gate; a token without the scope
+gets `403`. Under the legacy JWT handler the role gate alone applies. The
+device-facing routes take no scope (§3). The gateway's device reports under
+`/api/v1/provisioning/devices/{mac}` require `provisioning:write` the same way
+(§4).
+
+On MCP, the fifteen `pxe_*` tools take the scopes of their gRPC twin
+(`pkg/api/mcp/pxe_tools.go`), and the 23 BMC tools are mapped ([`docs/bmc/api.md`](../bmc/api.md) §8).
+The `provision_*` tools take the scopes of their gRPC twin (#304):
+`provision_list_sessions` and `provision_get_session` need `provisioning:read`,
+`provision_fulfill_session` needs `provisioning:write`, and
+`provision_get_nonce`, `provision_fetch_config`, `provision_sign_digest` and
+`provision_poll_session` are open, as the gRPC methods are pre-auth. The open
+tools reach the same `configdelivery.Service`, which checks the nonce, EAB HMAC
+and EK binding before it answers. QUIC serves the same four open, through
+its pre-auth sub-opcode list (#317); before #317 it required
+`provisioning:read` or `provisioning:write` for them, so a device without a
+token could not provision over QUIC. No transport binds a caller to a
+session's tenant, so `provisioning:read` lists every tenant's sessions.
 
 Note that the config-delivery path is *separately* protected: a device presents
 an EAB credential and a nonce, and `RateLimitConfig` bounds the endpoint. That
-protects against unidentified machines; it does not scope an operator's token.
+protects against unidentified machines; the operator half is the scoped
+`ListSessions` / `GetSession` / `FulfillSession` above.
 
 ---
 

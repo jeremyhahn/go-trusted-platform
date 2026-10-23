@@ -1,5 +1,8 @@
 # Build Tags Reference
 
+> **Status: REFERENCE** · Last verified: 2026-10-18
+> The `WITH_*` Makefile variables and the Go build tags each one adds to `BUILD_TAGS`.
+
 This document describes all build tags used in go-trusted-platform for conditional compilation and feature selection.
 
 ## Overview
@@ -8,22 +11,48 @@ go-trusted-platform uses build tags to control which features are included in th
 
 - Optimizing binary size by excluding unused features
 - Building for specific deployment scenarios (edge, cloud, enterprise)
-- Controlling protocol support (REST, QUIC, MCP)
 - Including optional integrations (cloud providers, HSM, post-quantum crypto)
+
+The `WITH_*` names below are **Makefile variables**, not Go build tags. The
+Makefile turns them into the Go tags in `BUILD_TAGS`. Set them on the `make`
+command line, and print the resulting list with `make -s print-build-tags`.
+The default list is:
+
+```
+iam rest quic mcp cluster gms_pure_go raft timeseries qrdb_ts pkcs8 frost local objstore codec_json codec_msgpack codec_cbor
+```
+
+### `GO_BUILD_TAGS`
+
+ci-template v1.21 passes the repository's tag set to `make lint`, `build`,
+`coverage`, `security` and `integration-test` as `GO_BUILD_TAGS`, space
+separated (handbook `software/conventions/devcontainer.md` §6). The Makefile
+appends it to `BUILD_TAGS` after every `WITH_*` append, so every `go build`,
+`go test`, `go vet`, `TEST_BUILD_TAGS`, the integration runner and
+`print-build-tags` see it. golangci-lint, gosec and govulncheck, which do not
+read `BUILD_TAGS`, receive `GO_BUILD_TAGS` alone as `--build-tags`/`-tags`,
+comma separated. Empty or unset, it changes nothing.
+
+```
+make -s print-build-tags GO_BUILD_TAGS='probe_a probe_b'
+# ... codec_cbor probe_a probe_b
+```
+
+`make check-go-build-tags`, a prerequisite of `make test`, dry-runs (`make -n`)
+each of those targets plus `test` with a probe tag and fails if the tag does
+not reach a command.
 
 **Important**: Native go-trusted-platform services (TPM, vTPM, attestation, device, SDN, DNS, etc.) have NO build tags. They are CORE features and are ALWAYS compiled into every build.
 
-## Protocol Tags
+## Always-On Tags
 
-Protocol tags control which communication protocols are included. These tags are shared with go-quicbaas for unified builds.
+`iam rest quic mcp cluster gms_pure_go` are in `BUILD_TAGS` unconditionally.
+The platform needs them at runtime: a build without `iam` fails at startup with
+"IAM service not enabled". `gms_pure_go` keeps go-mysql-server CGO-free.
 
-| Build Tag | Default | Effect |
-|-----------|---------|--------|
-| `WITH_REST` | 1 | Include REST API (HTTP/HTTPS endpoints) |
-| `WITH_QUIC` | 1 | Include QUIC transport (low-latency UDP) |
-| `WITH_MCP` | 1 | Include MCP (Model Context Protocol for AI/LLM) |
-
-**Note**: Building with `WITH_MCP=0` excludes MCP code from BOTH go-trusted-platform AND go-quicbaas.
+`WITH_REST`, `WITH_QUIC`, `WITH_MCP` and `WITH_IAM` are still declared (default
+1), but nothing reads them, so setting them to 0 changes nothing. Dropping one
+of these tags means building with `-tags` directly.
 
 ## Feature Tags
 
@@ -34,13 +63,23 @@ than qrdb's feature-disabled stub: `WITH_TIMESERIES` adds
 `timeseries qrdb_ts`, `WITH_VECTOR` adds `vector qrdb_vector`, and
 `WITH_RAG` adds `rag qrdb_vector`.
 
-| Build Tag | Default | Effect |
+| Variable | Default | Effect |
 |-----------|---------|--------|
-| `WITH_RAFT` | 1 | Include Raft consensus for clustering |
-| `WITH_IAM` | 1 | Include IAM service (always core, tag for embedded DB) |
-| `WITH_VECTOR` | 1 | Include Vector database service (`vector` + `qrdb_vector`) |
-| `WITH_TIMESERIES` | 1 | Include TimeSeries service (`timeseries` + `qrdb_ts`) |
-| `WITH_RAG` | 1 | Include RAG service (`rag` + `qrdb_vector`; requires `WITH_VECTOR=1`) |
+| `WITH_RAFT` | 1 | Raft consensus for clustering (`raft`) |
+| `WITH_TIMESERIES` | 1 | TimeSeries service (`timeseries` + `qrdb_ts`) |
+| `WITH_VECTOR` | 0 | Vector database service (`vector` + `qrdb_vector`) |
+| `WITH_RAG` | 0 | RAG service (`rag` + `qrdb_vector`; requires `WITH_VECTOR=1`, or make stops with an error) |
+
+A build with the vector tags also needs `quicbaas.vector.enabled: true` before
+the embedded server serves the Vector service. Validate refuses that setting in
+a build without the tags. Without the service, every call on the platform's SDK
+client `Vector()` fails at once with `ErrVectorUnavailable`, whose reason names
+the missing build or the disabled setting.
+
+Integration builds (`TEST_BUILD_TAGS`, used by `make integration-test` and every
+`make integration-test-<suite>`) always carry `vector qrdb_vector`, and
+`quicbaas.TestConfig` enables the service in such a build. That way the
+quicbaas and sdk suites' Vector assertions run against a real vector store.
 
 ## qrdb Optional Feature Tags
 
@@ -51,7 +90,7 @@ PostgreSQL frontends are engines over qrdb's SQL layer, so enabling
 either implies `qrdb_sql`. SQL builds stay CGO-free via the always-on
 `gms_pure_go` tag.
 
-| Build Tag | Default | Effect |
+| Variable | Default | Effect |
 |-----------|---------|--------|
 | `WITH_QRDB_SQL` | 0 | qrdb SQL query engine (`qrdb_sql`; pkg/sql over go-mysql-server) |
 | `WITH_QRDB_MYSQL` | 0 | MySQL wire frontend (`qrdb_mysql`, implies `qrdb_sql`) |
@@ -62,62 +101,69 @@ either implies `qrdb_sql`. SQL builds stay CGO-free via the always-on
 
 Cloud provider tags enable integration with external cloud services. Disabled by default to minimize dependencies.
 
-| Build Tag | Default | Effect |
+The three group variables switch on every per-service variable for their cloud:
+
+| Variable | Default | Turns on |
 |-----------|---------|--------|
-| `WITH_AWS` | 0 | Include AWS integrations (S3, KMS, Secrets Manager) |
-| `WITH_GCP` | 0 | Include GCP integrations (Cloud KMS, Secret Manager) |
-| `WITH_AZURE` | 0 | Include Azure integrations (Key Vault, Blob Storage) |
-| `WITH_VAULT` | 0 | Include HashiCorp Vault integration |
+| `WITH_AWS` | unset | `WITH_AWS_KMS` (`awskms`), `WITH_OBJSTORE_S3` (`awss3`), `WITH_AWS_COMPUTE` (`awscompute`) |
+| `WITH_GCP` | unset | `WITH_GCP_KMS` (`gcpkms`), `WITH_OBJSTORE_GCS` (`gcpstorage`), `WITH_GCP_COMPUTE` (`gcpcompute`) |
+| `WITH_AZURE` | unset | `WITH_AZURE_KV` (`azurekv`), `WITH_OBJSTORE_AZURE` (`azureblob`), `WITH_AZURE_COMPUTE` (`azurecompute`) |
+| `WITH_VAULT` | 0 | HashiCorp Vault (`vault`) |
+
+Each per-service variable defaults to 0 and can be set on its own.
+`WITH_OBJSTORE_MINIO` (`minio`) is the one storage backend outside the groups.
+`WITH_OBJSTORE_LOCAL` defaults to 1 (`local`), and `objstore` is added whenever
+any storage backend is on.
 
 ## Security/Crypto Tags
 
 Security tags enable advanced cryptographic features.
 
-| Build Tag | Default | Effect |
+| Variable | Default | Effect |
 |-----------|---------|--------|
-| `WITH_PKCS11` | 0 | Include PKCS#11 HSM support |
-| `WITH_QUANTUM` | 0 | Include post-quantum cryptography algorithms |
+| `WITH_PKCS8` | 1 | PKCS#8 software key storage (`pkcs8`) |
+| `WITH_TPM2` | 0 | TPM 2.0 key support (`tpm2`) |
+| `WITH_PKCS11` | 0 | PKCS#11 HSM support (`pkcs11`, requires CGO) |
+| `WITH_QUANTUM` | 0 | Post-quantum cryptography algorithms (`quantum`) |
+| `WITH_FROST` | 1 | FROST threshold signatures, RFC 9591 (`frost`) |
+| `WITH_FIPS` | 0 | FIPS 140-3 crypto implementations (`fips`; pair with `GODEBUG=fips140=only`). See [FIPS mode](../fips/engineering.md) |
 
 ## Messaging Protocol Tags
 
 Messaging tags control which message broker protocols are included.
 
-| Build Tag | Default | Effect |
+| Variable | Default | Effect |
 |-----------|---------|--------|
-| `WITH_MQTT` | 1 | Include MQTT messaging support |
-| `WITH_AMQP` | 1 | Include AMQP messaging support |
-| `WITH_STOMP` | 1 | Include STOMP messaging support |
+| `WITH_MQTT` | 0 | MQTT over WebSocket (`quicbaas_mqtt`) |
+| `WITH_AMQP` | 0 | AMQP over WebSocket (`quicbaas_amqp`) |
+| `WITH_STOMP` | 0 | STOMP over WebSocket (`quicbaas_stomp`) |
 
-## Service Embedding Tags
+## Service Embedding
 
-Embedding tags control whether services run in-process or connect to remote endpoints.
-
-| Build Tag | Default | Effect |
-|-----------|---------|--------|
-| `WITH_QUICBAAS_EMBEDDED` | 1 | Embed QuicBaaS services in-process |
-| `WITH_XKMS_EMBEDDED` | 1 | Embed go-xkms services (including CA/ACME) in-process |
+There are no `WITH_QUICBAAS_EMBEDDED` or `WITH_XKMS_EMBEDDED` variables.
+Nothing in the Makefile selects embedded or remote services.
 
 ## Codec Tags
 
 Codec tags control which serialization formats are included.
 
-| Build Tag | Default | Effect |
+| Variable | Default | Effect |
 |-----------|---------|--------|
-| `WITH_CODEC_JSON` | 1 | JSON codec |
-| `WITH_CODEC_YAML` | 1 | YAML codec |
-| `WITH_CODEC_TOML` | 1 | TOML codec |
-| `WITH_CODEC_MSGPACK` | 1 | MessagePack codec |
-| `WITH_CODEC_BSON` | 1 | BSON codec |
-| `WITH_CODEC_CBOR` | 1 | CBOR codec |
-| `WITH_CODEC_PROTOBUF` | 1 | Protocol Buffers codec |
+| `WITH_CODEC_JSON` | 1 | JSON codec (`codec_json`) |
+| `WITH_CODEC_MSGPACK` | 1 | MessagePack codec (`codec_msgpack`) |
+| `WITH_CODEC_CBOR` | 1 | CBOR codec (`codec_cbor`) |
+| `WITH_CODEC_YAML` | 0 | YAML codec (`codec_yaml`) |
+| `WITH_CODEC_TOML` | 0 | TOML codec (`codec_toml`) |
+| `WITH_CODEC_BSON` | 0 | BSON codec (`codec_bson`) |
+| `WITH_CODEC_PROTOBUF` | 0 | Protocol Buffers codec (`codec_protobuf`) |
 
 ## Cache Tags
 
 Cache tags control additional caching layers.
 
-| Build Tag | Default | Effect |
+| Variable | Default | Effect |
 |-----------|---------|--------|
-| `WITH_L2_REDIS` | 0 | Include Redis L2 cache |
+| `WITH_L2_REDIS` | 0 | Redis L2 cache (`l2_redis`) |
 
 ## Platform-Specific Tags
 
@@ -126,34 +172,34 @@ Platform-specific build tags used by the Makefile.
 | Build Tag | Usage | Effect |
 |-----------|-------|--------|
 | `platform_web` | `WITH_WEB=1` | Embed web frontend into binary |
+| `desktop` | `WITH_DESKTOP=1` | Build the desktop GUI (requires Wails v2) |
 | `platform_p2p` | `WITH_P2P=1` | Include P2P/libp2p networking support |
 
 ## Build Examples
 
-### Full Feature Build (Development)
-
-Build with all features enabled for development and testing:
+### Default Build (Development)
 
 ```bash
 make build
-# Or explicitly:
-go build -tags "iam codec_msgpack codec_cbor codec_json local objstore raft timeseries" ./cmd/platformd
+# Or, outside make, with the same tag list:
+go build -tags "$(make -s print-build-tags)" ./cmd/platformd
 ```
+
+Never type the tag list by hand: a hand-written list drops the codec tags, and
+the binary then fails with `no codec available for encoding`.
 
 ### Minimal Build
 
-Build without optional protocols or features for minimal binary size:
+Turn off the optional features that are on by default:
 
 ```bash
-go build -tags "WITH_RAFT=0,WITH_TIMESERIES=0,WITH_VECTOR=0,WITH_RAG=0,WITH_REST=0,WITH_QUIC=0,WITH_MCP=0" ./cmd/platformd
+make build WITH_RAFT=0 WITH_TIMESERIES=0 WITH_FROST=0
 ```
 
 ### Cloud Deployment (AWS Backend)
 
-Build for AWS deployment with remote QuicBaaS services:
-
 ```bash
-go build -tags "WITH_AWS=1,WITH_QUICBAAS_EMBEDDED=0" ./cmd/platformd
+make build WITH_AWS=1
 ```
 
 ### Enterprise Build
@@ -161,16 +207,12 @@ go build -tags "WITH_AWS=1,WITH_QUICBAAS_EMBEDDED=0" ./cmd/platformd
 Build with all enterprise features including cloud providers and HSM support:
 
 ```bash
-go build -tags "WITH_AWS=1,WITH_GCP=1,WITH_AZURE=1,WITH_VAULT=1,WITH_PKCS11=1,WITH_QUANTUM=1,WITH_L2_REDIS=1" ./cmd/platformd
+make build WITH_AWS=1 WITH_GCP=1 WITH_AZURE=1 WITH_VAULT=1 WITH_PKCS11=1 WITH_QUANTUM=1 WITH_L2_REDIS=1
 ```
 
 ### Without MCP (Non-AI Deployments)
 
-Build without Model Context Protocol for deployments not using AI/LLM features:
-
-```bash
-go build -tags "WITH_MCP=0" ./cmd/platformd
-```
+The Makefile cannot drop MCP: `mcp` is an always-on tag (see Always-On Tags).
 
 ### With Embedded Web Frontend
 
@@ -190,7 +232,8 @@ make build-gatewayd WITH_P2P=1
 
 ## Docker Build Arguments
 
-When building Docker images, build tags can be controlled via build arguments:
+The builder images in `build/docker/trusted-platform-builder/` take `WITH_WEB`
+as a build argument:
 
 ```dockerfile
 ARG WITH_WEB=false
@@ -199,11 +242,11 @@ ARG WITH_WEB=false
 Usage:
 
 ```bash
-docker build --build-arg WITH_WEB=true -t trusted-platform:latest .
+docker build --build-arg WITH_WEB=true -f build/docker/trusted-platform-builder/Dockerfile-alpine -t trusted-platform:latest .
 ```
 
 ## Related Documentation
 
-- [Service Endpoints Configuration](service-endpoints.md) - Configure service connections
-- [Deployment Modes](../operations/deployment-modes.md) - Standalone, cluster, and mixed deployments
-- [SDK Integration](../architecture/sdk-integration.md) - Multi-transport support
+- [Service Endpoints Configuration](../daemon/configuration.md) - Configure service connections
+- [Deployment Modes](../cluster/user.md) - Standalone, cluster, and mixed deployments
+- [SDK Integration](../sdk/architecture.md) - Multi-transport support

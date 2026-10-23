@@ -16,202 +16,145 @@ package mcp
 import (
 	"context"
 	"errors"
+	"maps"
+	"slices"
+
+	"google.golang.org/protobuf/proto"
+
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/mcpwire"
 )
 
 // =============================================================================
 // Cluster tool wiring
 // =============================================================================
 //
-// These tools mirror the gRPC ClusterService surface so AI/LLM clients can
-// drive the same cluster lifecycle workflows over MCP. Tool names follow
-// the project convention `platform_cluster_<verb>` and are routed through
-// a map-based dispatcher (O(1) lookup per project conventions).
-//
-// The MCP server stays decoupled from the daemon: the underlying daemon
-// service is exposed via the optional ClusterProvider interface, satisfied
-// by the daemon's MCPServiceProvider when a cluster service is wired in.
-// When a provider is not wired, every cluster tool returns
-// ErrClusterNotConfigured so clients get a clear, structured failure
-// rather than a generic "unknown tool" error.
+// Every gRPC ClusterService method has one platform_cluster_<verb> tool. A
+// tool's arguments are the gRPC request in protojson form (proto field names,
+// enums by name, 64-bit integers and bytes as JSON strings) and its result is
+// the gRPC response in the same form. Each tool calls the gRPC ClusterService
+// servicer, so it validates, answers and fails exactly as gRPC does. The
+// scope each tool requires is in authz.go.
 
 // ErrClusterNotConfigured indicates the cluster backend is not wired into
-// the MCP tool registry. Clients see this when the daemon was started
-// without cluster support (e.g., built without -tags cluster, or
-// QuicBaaS does not expose a coordinator).
+// the MCP tool registry: the service provider serves no gRPC ClusterService.
 var ErrClusterNotConfigured = errors.New("cluster: service provider not configured")
 
-// ErrClusterSeedAddressRequired indicates the `seed_addresses` argument
-// was missing or empty for a join operation.
-var ErrClusterSeedAddressRequired = errors.New("cluster: seed_addresses is required and must contain at least one address")
-
-// ClusterProvider is the optional interface a ServiceProvider can satisfy
-// to unlock cluster MCP tools. Implementations are expected to delegate to
-// the platform's ClusterServicer (the same backing service that powers
-// the gRPC ClusterService) so the MCP and gRPC surfaces remain in
-// lockstep.
-//
-// Method names map to MCP tools: platform_cluster_bootstrap, etc.
+// ClusterProvider is implemented by a ServiceProvider that serves the gRPC
+// ClusterService. The platform_cluster_* tools call that servicer.
 type ClusterProvider interface {
-	// Lifecycle
-	ClusterBootstrap(ctx context.Context, clusterName string) (interface{}, error)
-	ClusterJoin(ctx context.Context, seedAddresses []string) (interface{}, error)
-	ClusterLeave(ctx context.Context) (interface{}, error)
-
-	// Status / inspection
-	ClusterStatus(ctx context.Context, includeNodes bool) (interface{}, error)
-	ClusterListNodes(ctx context.Context) (interface{}, error)
+	// ClusterServiceServer returns the gRPC ClusterService servicer, or nil
+	// while no cluster service is wired.
+	ClusterServiceServer() platformv1.ClusterServiceServer
 }
 
-// clusterProvider returns the ClusterProvider interface if the
-// ServiceProvider implements it, else nil.
-func (r *ToolRegistry) clusterProvider() ClusterProvider {
-	if p, ok := r.service.(ClusterProvider); ok {
-		return p
+// clusterToolCall runs one cluster tool against the gRPC ClusterService
+// servicer.
+type clusterToolCall func(server platformv1.ClusterServiceServer, ctx context.Context, args map[string]interface{}) (interface{}, error)
+
+// clusterToolBinding is how a cluster tool reaches the servicer: the schema
+// it advertises and the call that serves it.
+type clusterToolBinding struct {
+	schema func() map[string]interface{}
+	call   clusterToolCall
+}
+
+// clusterTool is one cluster tool and the gRPC method it serves.
+type clusterTool struct {
+	method      string
+	description string
+	binding     clusterToolBinding
+}
+
+// clusterTools are the cluster tools bound to the gRPC ClusterService.
+var clusterTools = map[string]clusterTool{
+	"platform_cluster_bootstrap": {
+		method:      platformv1.ClusterService_Bootstrap_FullMethodName,
+		description: "Initialize a new cluster with this node as the initial leader",
+		binding:     clusterToolMethod(platformv1.ClusterServiceServer.Bootstrap, "cluster_name", "node_name"),
+	},
+	"platform_cluster_join": {
+		method:      platformv1.ClusterService_Join_FullMethodName,
+		description: "Join this node to an existing cluster by dialing one or more seed addresses (host:port)",
+		binding:     clusterToolMethod(platformv1.ClusterServiceServer.Join, "node_name", "seed_addresses"),
+	},
+	"platform_cluster_leave": {
+		method:      platformv1.ClusterService_Leave_FullMethodName,
+		description: "Gracefully remove this node from the cluster, transferring leadership if necessary; node_id, when set, must be this node",
+		binding:     clusterToolMethod(platformv1.ClusterServiceServer.Leave),
+	},
+	"platform_cluster_status": {
+		method:      platformv1.ClusterService_GetStatus_FullMethodName,
+		description: "Return the current cluster status (state, leader, term, quorum). Set include_nodes=true to also enumerate members.",
+		binding:     clusterToolMethod(platformv1.ClusterServiceServer.GetStatus),
+	},
+	"platform_cluster_list_nodes": {
+		method:      platformv1.ClusterService_ListNodes_FullMethodName,
+		description: "List the cluster nodes, filtered by role, state and labels, sorted and paginated",
+		binding:     clusterToolMethod(platformv1.ClusterServiceServer.ListNodes),
+	},
+}
+
+// clusterToolMethod binds a cluster tool to one ClusterService method: the
+// arguments decode into its request and its response is the tool result.
+func clusterToolMethod[Req any, PReq interface {
+	*Req
+	proto.Message
+}, Resp proto.Message](
+	call func(platformv1.ClusterServiceServer, context.Context, PReq) (Resp, error),
+	required ...string,
+) clusterToolBinding {
+	descriptor := PReq(new(Req)).ProtoReflect().Descriptor()
+	return clusterToolBinding{
+		schema: func() map[string]interface{} {
+			return appToolSchema(descriptor, required...)
+		},
+		call: func(server platformv1.ClusterServiceServer, ctx context.Context, args map[string]interface{}) (interface{}, error) {
+			request := PReq(new(Req))
+			if err := decodeAppToolArgs(args, request); err != nil {
+				return nil, err
+			}
+			response, err := call(server, ctx, request)
+			if err != nil {
+				return nil, err
+			}
+			return encodeAppToolResult(response)
+		},
+	}
+}
+
+// registerClusterTools registers the platform_cluster_* tools.
+func (r *ToolRegistry) registerClusterTools() {
+	for _, name := range slices.Sorted(maps.Keys(clusterTools)) {
+		tool := clusterTools[name]
+		r.addTool(mcpwire.ToolDefinition{
+			Name:        name,
+			Description: tool.description,
+			InputSchema: tool.binding.schema(),
+		})
+	}
+}
+
+// clusterServiceServer is the gRPC ClusterService servicer the cluster tools
+// call, or nil while the service provider serves none.
+func (r *ToolRegistry) clusterServiceServer() platformv1.ClusterServiceServer {
+	if provider, ok := r.service.(ClusterProvider); ok {
+		return provider.ClusterServiceServer()
 	}
 	return nil
 }
 
-// registerClusterTools registers the platform_cluster_* MCP tools. Each
-// tool definition mirrors the equivalent gRPC RPC so AI/LLM clients can
-// issue the same calls they would over gRPC.
-func (r *ToolRegistry) registerClusterTools() {
-	r.addTool(ToolDefinition{
-		Name:        "platform_cluster_bootstrap",
-		Description: "Initialize a new cluster with this node as the initial leader",
-		InputSchema: map[string]interface{}{
-			"type": "object",
-			"properties": map[string]interface{}{
-				"cluster_name": map[string]interface{}{
-					"type":        "string",
-					"description": "Optional human-friendly cluster name surfaced in metadata",
-				},
-			},
-		},
-	})
-
-	r.addTool(ToolDefinition{
-		Name:        "platform_cluster_join",
-		Description: "Join this node to an existing cluster by dialing one or more seed addresses",
-		InputSchema: map[string]interface{}{
-			"type": "object",
-			"properties": map[string]interface{}{
-				"seed_addresses": map[string]interface{}{
-					"type":        "array",
-					"items":       map[string]interface{}{"type": "string"},
-					"description": "Existing cluster member addresses to dial (host:port)",
-				},
-			},
-			"required": []string{"seed_addresses"},
-		},
-	})
-
-	r.addTool(ToolDefinition{
-		Name:        "platform_cluster_leave",
-		Description: "Gracefully remove this node from the cluster, transferring leadership if necessary",
-		InputSchema: map[string]interface{}{
-			"type":       "object",
-			"properties": map[string]interface{}{},
-		},
-	})
-
-	r.addTool(ToolDefinition{
-		Name:        "platform_cluster_status",
-		Description: "Return the current cluster status (state, leader, term, quorum). Set include_nodes=true to also enumerate members.",
-		InputSchema: map[string]interface{}{
-			"type": "object",
-			"properties": map[string]interface{}{
-				"include_nodes": map[string]interface{}{
-					"type":        "boolean",
-					"description": "When true, include the full node list and leader in the response",
-				},
-			},
-		},
-	})
-
-	r.addTool(ToolDefinition{
-		Name:        "platform_cluster_list_nodes",
-		Description: "List all nodes in the cluster with their state, role, and last-seen timestamp",
-		InputSchema: map[string]interface{}{
-			"type":       "object",
-			"properties": map[string]interface{}{},
-		},
-	})
-}
-
-// =============================================================================
-// Map-based dispatch
-// =============================================================================
-
-// clusterToolHandler dispatches a cluster tool by name. Map-based dispatch
-// keeps routing O(1) per project conventions.
-type clusterToolHandler func(*ToolRegistry, context.Context, map[string]interface{}) (interface{}, error)
-
-var clusterToolDispatch = map[string]clusterToolHandler{
-	"platform_cluster_bootstrap":  (*ToolRegistry).executeClusterBootstrap,
-	"platform_cluster_join":       (*ToolRegistry).executeClusterJoin,
-	"platform_cluster_leave":      (*ToolRegistry).executeClusterLeave,
-	"platform_cluster_status":     (*ToolRegistry).executeClusterStatus,
-	"platform_cluster_list_nodes": (*ToolRegistry).executeClusterListNodes,
-}
-
-// dispatchClusterTool looks up a cluster tool and invokes it. Returns
-// (result, handled, err) so the caller can fall through when handled is
-// false (tool name doesn't belong to cluster).
+// dispatchClusterTool runs a platform_cluster_* tool. handled is false when
+// name is not a cluster tool, so the caller tries the next dispatcher.
 func (r *ToolRegistry) dispatchClusterTool(ctx context.Context, name string, args map[string]interface{}) (interface{}, bool, error) {
-	fn, ok := clusterToolDispatch[name]
+	tool, ok := clusterTools[name]
 	if !ok {
 		return nil, false, nil
 	}
-	result, err := fn(r, ctx, args)
+	server := r.clusterServiceServer()
+	if server == nil {
+		return nil, true, ErrClusterNotConfigured
+	}
+	result, err := tool.binding.call(server, ctx, args)
 	return result, true, err
-}
-
-// =============================================================================
-// Executors
-// =============================================================================
-
-func (r *ToolRegistry) executeClusterBootstrap(ctx context.Context, args map[string]interface{}) (interface{}, error) {
-	p := r.clusterProvider()
-	if p == nil {
-		return nil, ErrClusterNotConfigured
-	}
-	clusterName := getString(args, "cluster_name")
-	return p.ClusterBootstrap(ctx, clusterName)
-}
-
-func (r *ToolRegistry) executeClusterJoin(ctx context.Context, args map[string]interface{}) (interface{}, error) {
-	p := r.clusterProvider()
-	if p == nil {
-		return nil, ErrClusterNotConfigured
-	}
-	addresses := getStringSlice(args, "seed_addresses")
-	if len(addresses) == 0 {
-		return nil, ErrClusterSeedAddressRequired
-	}
-	return p.ClusterJoin(ctx, addresses)
-}
-
-func (r *ToolRegistry) executeClusterLeave(ctx context.Context, _ map[string]interface{}) (interface{}, error) {
-	p := r.clusterProvider()
-	if p == nil {
-		return nil, ErrClusterNotConfigured
-	}
-	return p.ClusterLeave(ctx)
-}
-
-func (r *ToolRegistry) executeClusterStatus(ctx context.Context, args map[string]interface{}) (interface{}, error) {
-	p := r.clusterProvider()
-	if p == nil {
-		return nil, ErrClusterNotConfigured
-	}
-	includeNodes := getBool(args, "include_nodes")
-	return p.ClusterStatus(ctx, includeNodes)
-}
-
-func (r *ToolRegistry) executeClusterListNodes(ctx context.Context, _ map[string]interface{}) (interface{}, error) {
-	p := r.clusterProvider()
-	if p == nil {
-		return nil, ErrClusterNotConfigured
-	}
-	return p.ClusterListNodes(ctx)
 }

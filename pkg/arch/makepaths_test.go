@@ -60,8 +60,9 @@ var (
 	// the devcontainer recipes set the directory `go test` runs from.
 	makeWorkdirRe = regexp.MustCompile(`-w\s+/workspace(?:/([^\s\\]*))?`)
 
-	// makeGoTestRe detects a `go test` invocation on a logical line.
-	makeGoTestRe = regexp.MustCompile(`\bgo\s+test\b`)
+	// makeGoCmdRe detects a `go test` or `go build` invocation on a logical
+	// line.
+	makeGoCmdRe = regexp.MustCompile(`\bgo\s+(?:test|build)\b`)
 )
 
 // makeLogicalLine is one Makefile line with its backslash continuations
@@ -167,7 +168,7 @@ func scanMakefilePaths(makefile string, exists func(rel string) bool) []MissingM
 				report(l.physicalLine(m[0]), l.Target, full)
 			}
 		}
-		if !makeGoTestRe.MatchString(l.Text) {
+		if !makeGoCmdRe.MatchString(l.Text) {
 			continue
 		}
 		for _, m := range makeCdRe.FindAllStringSubmatchIndex(l.Text, -1) {
@@ -184,7 +185,7 @@ func scanMakefilePaths(makefile string, exists func(rel string) bool) []MissingM
 }
 
 // TestMakefileTestPathsExist asserts that every `./<path>/...` pattern in the
-// Makefile, and every directory a `go test` recipe `cd`s into, names a
+// Makefile, and every directory a `go test` or `go build` recipe `cd`s into, names a
 // directory that exists.
 //
 // A recipe pointing at a missing directory fails loudly (`[setup failed]`,
@@ -193,13 +194,8 @@ func scanMakefilePaths(makefile string, exists func(rel string) bool) []MissingM
 // repository sat red unnoticed because no workflow referenced them (#397).
 // This is the check that would have caught them the day they were written.
 //
-// SCOPE — what this guard does NOT check: build paths. A `cd <dir>` on a
-// line that runs `go build` (not `go test`) is ignored, so the dead
-// `build-api` family (`cd cmd/platform-api`, with `build-all`, `run-api` and
-// `integration-test-api` behind it) is invisible here on purpose: what
-// `make build-all` should build is an owner decision, tracked as #411.
-// Extend makeGoTestRe there once that is decided; do not assume a green run
-// means every path in the Makefile resolves.
+// A `cd <dir>` on a `go build` line is checked the same way: the `build-api`
+// family `cd`'d into a `cmd/platform-api` that never existed (#411).
 func TestMakefileTestPathsExist(t *testing.T) {
 	root := repoRoot(t)
 	data, err := os.ReadFile(filepath.Join(root, "Makefile"))
@@ -250,9 +246,9 @@ test-var:
 	go test ./$(PKG)/...
 	cd $(DIR) && go test ./...
 
-build-api:
-	cd cmd/platform-api; \
-	go build -o ../../platform-api
+build-gone:
+	cd cmd/gone; \
+	go build -o ../../gone
 `
 
 // makepathsFixtureTree is the set of directories the fixture may reference
@@ -266,7 +262,8 @@ var makepathsFixtureTree = map[string]bool{
 }
 
 // TestScanMakefilePathsFindsMissing is the positive control: the scanner must
-// report a missing `./<path>/...` and a missing `go test` cd, at the right
+// report a missing `./<path>/...`, a missing `go test` cd and a missing
+// `go build` cd, at the right
 // physical line and target, and nothing else.
 func TestScanMakefilePathsFindsMissing(t *testing.T) {
 	exists := func(rel string) bool { return makepathsFixtureTree[rel] }
@@ -275,6 +272,7 @@ func TestScanMakefilePathsFindsMissing(t *testing.T) {
 	require.Equal(t, []MissingMakePathError{
 		{Line: 6, Target: "test-gone", Path: "pkg/gone"},
 		{Line: 21, Target: "test-tpm-cli", Path: "pkg/cmd/tpm"},
+		{Line: 28, Target: "build-gone", Path: "cmd/gone"},
 	}, findings)
 	require.Equal(t, "Makefile:6: target test-gone: pkg/gone does not exist", findings[0].Error())
 }
@@ -282,7 +280,7 @@ func TestScanMakefilePathsFindsMissing(t *testing.T) {
 // TestScanMakefilePathsResolvesBases is the negative control: when every
 // directory exists, the `-w /workspace/<dir>` base across continuations, the
 // `cd <dir> &&` base, and the second command after a continuation all
-// resolve without a finding, and variables, comments and non-test `cd`s are
+// resolve without a finding, and variables, comments and `cd`s without go test/build are
 // ignored.
 func TestScanMakefilePathsResolvesBases(t *testing.T) {
 	var asked []string
@@ -300,16 +298,17 @@ func TestScanMakefilePathsResolvesBases(t *testing.T) {
 		"sdk/go/transport",
 		"sdk/go",
 		"pkg/cmd/tpm",
+		"cmd/gone",
 	}, asked)
 }
 
 // TestScanMakefilePathsRejectsInvalidInput covers the degenerate inputs: an
 // empty Makefile, a Makefile with no recipes, and a `cd` that is not followed
-// by `go test` produce no findings.
+// by `go test` or `go build` produce no findings.
 func TestScanMakefilePathsRejectsInvalidInput(t *testing.T) {
 	never := func(string) bool { return false }
 	require.Empty(t, scanMakefilePaths("", never))
 	require.Empty(t, scanMakefilePaths("VAR := 1\n# only ./pkg/x/... in a comment\n", never))
-	require.Empty(t, scanMakefilePaths("build:\n\tcd cmd/gone && go build ./...\n", never),
-		"a build cd is not a test path")
+	require.Empty(t, scanMakefilePaths("clean:\n\tcd cmd/gone && rm -f out\n", never),
+		"a cd that runs neither go test nor go build is not checked")
 }

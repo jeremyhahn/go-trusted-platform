@@ -1,0 +1,12 @@
+{
+	"Path": "example.com/current",
+	"Version": "v1.4.0",
+	"Versions": ["v1.4.0"]
+}
+{
+	"Path": "github.com/jeremyhahn/go-private",
+	"Version": "v0.2.0-alpha",
+	"Error": {
+		"Err": "git ls-remote -q origin: exit status 128"
+	}
+}

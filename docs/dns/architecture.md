@@ -190,7 +190,8 @@ The Parser (`pkg/dns/parser.go`) handles DNS record parsing and validation:
 - Owner-name matching against the query name (`pkg/dns/owner.go`): a record
   answers only the name it owns, resolved from either the relative (`www`, `@`)
   or fully qualified (`www.example.com.`) stored form. There is no wildcard
-  synthesis, and the SOA and RRSIG sets answer at the zone apex only.
+  synthesis, and the SOA answers at the zone apex only. An RRSIG answers at
+  the owner of the RRset it signs.
 - Query validation per RFC 1035
 - Domain name parsing via publicsuffix
 - Hostname, subdomain, and TLD extraction

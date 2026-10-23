@@ -247,6 +247,21 @@ func TestErrInvalidStoreType(t *testing.T) {
 	})
 }
 
+func TestErrSignCSRScopeRequired(t *testing.T) {
+	t.Run("without a platform token", func(t *testing.T) {
+		err := ErrSignCSRScopeRequired{}
+		assert.Contains(t, err.Error(), "platform token with the ca:sign-csr scope")
+		assert.Nil(t, errors.Unwrap(err))
+	})
+
+	t.Run("with a scope refusal", func(t *testing.T) {
+		cause := errors.New("scope ca:sign-csr not granted")
+		err := ErrSignCSRScopeRequired{Cause: cause}
+		assert.Contains(t, err.Error(), "requires the ca:sign-csr scope")
+		assert.ErrorIs(t, err, cause)
+	})
+}
+
 func TestErrInvalidPaginationParams(t *testing.T) {
 	t.Run("with reason", func(t *testing.T) {
 		err := ErrInvalidPaginationParams{Reason: "limit must be between 1 and 1000"}

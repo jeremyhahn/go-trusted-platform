@@ -75,6 +75,12 @@ os:
     - openvswitch-openrc
     - chrony
     - chrony-openrc
+    # The NAT64 kernel translator gateway.nat64 drives (#603). The module
+    # follows linux-lts: a kernel upgrade that outruns jool-modules-lts
+    # leaves it unloadable, and gatewayd refuses the nat64: section.
+    - jool-modules-lts
+    - jool-tools
+    - jool-tools-openrc
   filesystem-type: lvm
   fips: false
   lockdown: true
@@ -287,8 +293,8 @@ acme:
 # =============================================================================
 
 # The platform CA bundle, delivered by provisioning. Every platform service
-# gatewayd talks to -- the platform secret store behind every kms:// and
-# secret:// reference in this file, platformd over grpc, the proxy's mTLS
+# gatewayd talks to -- the platform secret store behind every kms://
+# reference in this file, platformd over grpc, the proxy's mTLS
 # callers, the control-plane reporter -- presents a certificate the platform
 # CA issued and is verified against this bundle. gatewayd runs no CA of its
 # own, so this file is its whole platform trust: not a strategy choice, and
@@ -395,6 +401,12 @@ sdn:
   overlay:
     enabled: true
     vxlan-port: 4789
+    # The VTEP sits on the fabric zone (VLAN 401): its host address is the
+    # zone401 internal port platformd creates on br-fabric for the bond0
+    # fabric entry above. Without IPsec both keys are required; an overlay
+    # missing either refuses to start (#93).
+    underlay-interface: zone401
+    vtep-address: 10.4.1.2
   gateway:
     enabled: true
 
@@ -478,7 +490,7 @@ certificate-authority:
           platform-policy: true
         tpm2:
           srk-handle: 0x81000003
-          srk-auth: "kms://certificate-authority/identity/keystores/tpm2/srk-auth?ensure=true&len=32&enc=raw"
+          srk-auth: "kms://ca/root/tpm2/srk-auth?ensure=true&len=32&enc=raw"
           platform-policy: true
       keys:
         - algorithm: RSA
@@ -487,7 +499,7 @@ certificate-authority:
           signature-algorithm: SHA256-RSA
           hash: SHA-256
           store: software
-          password: "kms://certificate-authority/identity/keys/password?ensure=true&len=32&enc=base64"
+          password: "kms://ca/root/keys/0/password?ensure=true&len=32&enc=base64"
           platform-policy: true
           debug: true
 
@@ -497,7 +509,7 @@ certificate-authority:
           signature-algorithm: ECDSA-SHA256
           hash: SHA-256
           store: software
-          password: "kms://certificate-authority/identity/keys/password/1?ensure=true&len=32&enc=base64"
+          password: "kms://ca/root/keys/1/password?ensure=true&len=32&enc=base64"
           platform-policy: true
           debug: true
 
@@ -525,7 +537,7 @@ certificate-authority:
           platform-policy: true
         tpm2:
           srk-handle: 0x81000004
-          srk-auth: "kms://certificate-authority/identity/keystores/tpm2/srk-auth/1?ensure=true&len=32&enc=raw"
+          srk-auth: "kms://ca/issuing/tpm2/srk-auth?ensure=true&len=32&enc=raw"
           platform-policy: true
       keys:
         - algorithm: RSA
@@ -534,7 +546,7 @@ certificate-authority:
           signature-algorithm: SHA256-RSA
           hash: SHA-256
           store: software
-          password: "kms://certificate-authority/identity/keys/password/2?ensure=true&len=32&enc=base64"
+          password: "kms://ca/issuing/keys/0/password?ensure=true&len=32&enc=base64"
           platform-policy: true
           debug: true
 
@@ -544,7 +556,7 @@ certificate-authority:
           signature-algorithm: ECDSA-SHA256
           hash: SHA-256
           store: software
-          password: "kms://certificate-authority/identity/keys/password/3?ensure=true&len=32&enc=base64"
+          password: "kms://ca/issuing/keys/1/password?ensure=true&len=32&enc=base64"
           platform-policy: true
           debug: true
       valid: 10
@@ -626,7 +638,7 @@ control-plane:
 # =============================================================================
 # platformd does not decode this section; firstboot projects it into
 # /etc/gatewayd/config.yaml with the sections above. It says where the
-# platform secret store is, and it is what makes every kms:// and secret://
+# platform secret store is, and it is what makes every kms://
 # reference in this file resolvable — the gateway's BGP passwords and
 # TCP-AO master keys, and its ipsec/wireguard tunnel keys. Configuration
 # carries references; the values live in the store and are fetched at
@@ -636,7 +648,10 @@ control-plane:
 # switchboard. The session is verified against the platform anchor, so a
 # secret-store: without platform-ca-file: (set above) is refused
 # (secrets.ErrTrustRequired) and the gateway does not start; if you remove
-# platform-ca-file:, comment this section out too.
+# platform-ca-file:, comment this section out too. The session is mutual:
+# the gateway presents its node mTLS identity, the control-plane: cert-file
+# and key-file pair (set above), and this section has no credential of its
+# own; without that pair it is refused (secrets.ErrClientIdentityRequired).
 # Without this section a service that references a secret fails closed at
 # start rather than running with a reference where a key belongs.
 
@@ -695,7 +710,7 @@ webservices:
       signature-algorithm: ECDSA-SHA256
       hash: SHA-256
       store: software
-      password: "kms://webservices/key/password?ensure=true&len=32&enc=raw"
+      password: "kms://webservices/0/key/password?ensure=true&len=32&enc=raw"
       platform-policy: true
       debug: true
     certificate:
@@ -761,10 +776,24 @@ webservices:
       signature-algorithm: ECDSA-SHA256
       hash: SHA-256
       store: software
-      password: "kms://webservices/key/password/1?ensure=true&len=32&enc=raw"
+      password: "kms://webservices/1/key/password?ensure=true&len=32&enc=raw"
       platform-policy: true
       debug: true
     certificate:
+      # The internal listener serves the node's CP-ISSUED identity, not a
+      # certificate this node's own CA minted. A gateway is enrolled by the
+      # control-plane CA (the enterprise/privacy CA) and already proves that
+      # enrolment with its IDevID, so device-attest-01 is what issues this
+      # listener's operational certificate — deployment-reference.md,
+      # "auto-enroll with control-plane CA via custom ACME extensions
+      # (enroll-01, device-attest-01)".
+      #
+      # The reporting collector and the bootstrap orchestrator's post-install
+      # health probe both verify this listener against the platform anchor
+      # (the control-plane CA) by the name below. A locally-issued certificate
+      # cannot chain there, so without this the node fails both (#655).
+      acme:
+        challenge: device-attest-01
       subject:
         cn: gw.example.internal
         organization: Trusted Platform

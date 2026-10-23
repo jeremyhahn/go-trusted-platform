@@ -15,19 +15,11 @@
 
 package cold_start
 
-import (
-	"fmt"
-	"os"
-	"testing"
-)
+import "fmt"
 
 // Environment variables consumed by the cold-start harness and adapters.
 // Kept in a single block so the runner script and adapters share names.
 const (
-	// EnvIntegration is the standard "integration tests are running"
-	// gate, matching the pattern in test/integration/helpers/skip.go.
-	EnvIntegration = "INTEGRATION_TEST"
-
 	// EnvColdStartBinary points to the platformd binary used to launch
 	// the dedicated cold-start instance (NOT the shared daemon).
 	EnvColdStartBinary = "PLATFORM_COLD_START_BIN"
@@ -39,16 +31,6 @@ const (
 	// adapters and the harness IssueAdminBundle helper.
 	EnvPlatformCTLPath = "PLATFORMCTL_PATH"
 )
-
-// SkipIfNotIntegration skips the test when the integration gate is not
-// set. The cold-start suite requires the devcontainer runner to seed the
-// PLATFORM_COLD_START_* env vars; the suite cannot run on a host shell.
-func SkipIfNotIntegration(t *testing.T) {
-	t.Helper()
-	if os.Getenv(EnvIntegration) == "" {
-		t.Skip("Skipping cold-start integration test: INTEGRATION_TEST not set")
-	}
-}
 
 // ServiceEndpoints returns the host:port pairs for every transport the
 // cold-start harness binds. The values mirror DefaultHarnessConfig and
@@ -69,7 +51,7 @@ func GetServiceEndpoints(cfg HarnessConfig) ServiceEndpoints {
 		REST: fmt.Sprintf("https://127.0.0.1:%d", cfg.RESTPort),
 		GRPC: fmt.Sprintf("127.0.0.1:%d", cfg.GRPCPort),
 		QUIC: fmt.Sprintf("127.0.0.1:%d", cfg.QUICPort),
-		MCP:  fmt.Sprintf("http://127.0.0.1:%d", cfg.MCPPort),
+		MCP:  fmt.Sprintf("https://127.0.0.1:%d", cfg.MCPPort),
 		Unix: cfg.SocketPath,
 	}
 }

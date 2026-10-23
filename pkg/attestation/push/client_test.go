@@ -32,8 +32,26 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 )
+
+// statusTransport answers every request in memory with its status code. With
+// no socket involved, a test can run the client inside a synctest bubble and
+// let retry backoffs and push intervals pass on the bubble clock (#284).
+type statusTransport int
+
+func (s statusTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	return &http.Response{
+		StatusCode: int(s),
+		Body:       io.NopCloser(strings.NewReader("")),
+		Request:    req,
+	}, nil
+}
+
+// inMemoryEndpoint is a target endpoint for clients on a statusTransport;
+// it is never resolved or dialed.
+const inMemoryEndpoint = "http://push.invalid/attest"
 
 func TestNewClient(t *testing.T) {
 	t.Run("valid config", func(t *testing.T) {
@@ -625,8 +643,9 @@ func TestClientPushHTTP(t *testing.T) {
 
 	t.Run("context cancellation", func(t *testing.T) {
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			time.Sleep(100 * time.Millisecond)
-			w.WriteHeader(http.StatusOK)
+			// A server that never answers: only the client giving up
+			// ends this request.
+			<-r.Context().Done()
 		}))
 		defer server.Close()
 
@@ -665,52 +684,51 @@ func TestClientPushHTTP(t *testing.T) {
 	})
 
 	t.Run("context cancellation during retry backoff", func(t *testing.T) {
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			w.WriteHeader(http.StatusServiceUnavailable)
-		}))
-		defer server.Close()
+		// The 100ms context and the 1s backoff run on synctest time (#284).
+		synctest.Test(t, func(t *testing.T) {
+			cfg := &ClientConfig{
+				DefaultTimeout: 5 * time.Second,
+				Retry: &RetryConfig{
+					MaxAttempts:          5,
+					InitialBackoff:       1 * time.Second, // Long backoff
+					MaxBackoff:           5 * time.Second,
+					BackoffMultiplier:    2.0,
+					RetryableStatusCodes: []int{503},
+				},
+			}
 
-		cfg := &ClientConfig{
-			DefaultTimeout: 5 * time.Second,
-			Retry: &RetryConfig{
-				MaxAttempts:          5,
-				InitialBackoff:       1 * time.Second, // Long backoff
-				MaxBackoff:           5 * time.Second,
-				BackoffMultiplier:    2.0,
-				RetryableStatusCodes: []int{503},
-			},
-		}
+			httpClient := &http.Client{Transport: statusTransport(http.StatusServiceUnavailable)}
+			client, err := NewClient(cfg, WithHTTPClient(httpClient))
+			if err != nil {
+				t.Fatalf("expected no error, got %v", err)
+			}
+			defer client.Close()
 
-		client, err := NewClient(cfg)
-		if err != nil {
-			t.Fatalf("expected no error, got %v", err)
-		}
-		defer client.Close()
+			target := &PushTarget{
+				ID:        "cancel-during-retry-target",
+				Endpoint:  inMemoryEndpoint,
+				Transport: TransportHTTP,
+				Enabled:   true,
+			}
 
-		target := &PushTarget{
-			ID:        "cancel-during-retry-target",
-			Endpoint:  server.URL,
-			Transport: TransportHTTP,
-			Enabled:   true,
-		}
+			request := &PushRequest{
+				ManifestID:  "manifest-1",
+				Payload:     []byte(`test`),
+				ContentType: "text/plain",
+			}
 
-		request := &PushRequest{
-			ManifestID:  "manifest-1",
-			Payload:     []byte(`test`),
-			ContentType: "text/plain",
-		}
+			ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+			defer cancel()
 
-		ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
-		defer cancel()
+			result, err := client.Push(ctx, target, request)
+			if err == nil {
+				t.Error("expected error for canceled context")
+			}
 
-		result, err := client.Push(ctx, target, request)
-		if err == nil {
-			t.Error("expected error for canceled context")
-		}
-
-		if result.Status != PushStatusCanceled {
-			t.Errorf("expected canceled status, got %s", result.Status)
-		}
+			if result.Status != PushStatusCanceled {
+				t.Errorf("expected canceled status, got %s", result.Status)
+			}
+		})
 	})
 
 	t.Run("closed client", func(t *testing.T) {

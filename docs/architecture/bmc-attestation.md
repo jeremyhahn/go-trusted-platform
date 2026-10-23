@@ -1,5 +1,8 @@
 # BMC Remote Attestation Architecture
 
+> **Status: REFERENCE** · Last verified: 2026-10-13
+> The `pkg/bmc/attestation` design; the integration and CLI sections are future work. [../bmc/](../bmc/) is normative.
+
 Status: Draft (Phase 1 scaffolding)
 Owner: pkg/bmc/attestation
 

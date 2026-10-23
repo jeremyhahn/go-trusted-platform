@@ -48,11 +48,6 @@ var ErrGatewayDisabled = errors.New("gatewayd: gateway section disabled; the pro
 // verifies platformd's certificate.
 var ErrPlatformAnchorRequiredForGRPC = errors.New("gatewayd: platformd grpc protocol requires platform-ca-file: (the platform CA bundle that verifies platformd)")
 
-// ErrPlatformIdentityRequiredForGRPC is returned when gatewayd is configured
-// to reach platformd over gRPC without the existing gateway platform identity
-// certificate used by the control-plane reporter.
-var ErrPlatformIdentityRequiredForGRPC = errors.New("gatewayd: platformd grpc protocol requires control-plane.cert-file and control-plane.key-file (the gateway platform identity)")
-
 // ErrConfigSection wraps a configuration-section unmarshal failure.
 type ErrConfigSection struct {
 	// Section is the top-level configuration key.
@@ -266,3 +261,80 @@ func (e *ErrOverlayPlatformRecordMissing) Error() string {
 func (e *ErrOverlayPlatformRecordMissing) Unwrap() []error {
 	return []error{gateway.ErrOverlayRecordNotFound, e.Cause}
 }
+
+// ErrOverlayIPAMAllocation reports a fabric allocation platformd listed that
+// overlay admission cannot index: its address does not parse or its status is
+// missing or unknown. The status is never assumed active, because an
+// allocation IPAM expired for inactivity is told apart only by it.
+type ErrOverlayIPAMAllocation struct {
+	// IP is the allocation address as platformd listed it.
+	IP string
+	// Reason says what is wrong with the allocation.
+	Reason string
+	// Cause is the underlying parse error, if any.
+	Cause error
+}
+
+// Error implements the error interface.
+func (e *ErrOverlayIPAMAllocation) Error() string {
+	msg := "gatewayd: platformd listed fabric allocation " + strconv.Quote(e.IP) + ": " + e.Reason
+	if e.Cause != nil {
+		msg += ": " + e.Cause.Error()
+	}
+	return msg
+}
+
+// Unwrap returns the underlying parse error.
+func (e *ErrOverlayIPAMAllocation) Unwrap() error {
+	return e.Cause
+}
+
+// ErrServiceConfigUnreadable is returned when a supervised child cannot read
+// the gatewayd configuration as its service account. The child reads it only
+// after dropping its privileges, so the file must be readable by that
+// account.
+type ErrServiceConfigUnreadable struct {
+	// Process is the supervised process that could not read it.
+	Process string
+	// Cause is the read error.
+	Cause error
+}
+
+// Error implements the error interface.
+func (e *ErrServiceConfigUnreadable) Error() string {
+	return "gatewayd service " + e.Process + ": reading the configuration as the service account: " + e.Cause.Error()
+}
+
+// Unwrap returns the underlying error.
+func (e *ErrServiceConfigUnreadable) Unwrap() error { return e.Cause }
+
+// ErrProcessHostsNothing is returned when a supervised child's configuration
+// enables none of the services its process hosts, so there is nothing for it
+// to run.
+type ErrProcessHostsNothing struct {
+	// Process is the supervised process.
+	Process string
+}
+
+// Error implements the error interface.
+func (e *ErrProcessHostsNothing) Error() string {
+	return "gatewayd service " + e.Process + ": the configuration enables none of its services"
+}
+
+// ErrServiceIPCFailed is returned when a supervised child's control service
+// stops serving while the child runs; without it the supervisor can neither
+// read the child's health nor reach its services.
+type ErrServiceIPCFailed struct {
+	// Process is the supervised process.
+	Process string
+	// Cause is the serve error.
+	Cause error
+}
+
+// Error implements the error interface.
+func (e *ErrServiceIPCFailed) Error() string {
+	return "gatewayd service " + e.Process + ": control service stopped: " + e.Cause.Error()
+}
+
+// Unwrap returns the underlying error.
+func (e *ErrServiceIPCFailed) Unwrap() error { return e.Cause }

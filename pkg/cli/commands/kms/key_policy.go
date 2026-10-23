@@ -195,7 +195,7 @@ Examples:
 		},
 	}
 
-	cmd.Flags().StringArrayVarP(&operations, "operation", "o", nil, "allowed operation (encrypt, decrypt, sign, verify, wrap-key, derive-key)")
+	cmd.Flags().StringArrayVar(&operations, "operation", nil, "allowed operation (encrypt, decrypt, sign, verify, wrap-key, derive-key)")
 	cmd.Flags().StringArrayVar(&allowPrincipals, "allow-principal", nil, "allowed principal (e.g., user:alice, role:admin)")
 	cmd.Flags().StringArrayVar(&denyPrincipals, "deny-principal", nil, "denied principal")
 	cmd.Flags().StringVar(&expiresIn, "expires-in", "", "policy expiration duration (e.g., 24h, 7d)")

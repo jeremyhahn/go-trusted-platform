@@ -161,51 +161,6 @@ func TestErrServiceNotActive(t *testing.T) {
 	}
 }
 
-func TestErrReputationTooLow(t *testing.T) {
-	err := &ErrReputationTooLow{Required: 0.85, Actual: 0.70}
-	errStr := err.Error()
-
-	if !strings.Contains(errStr, "reputation too low") {
-		t.Errorf("error %q does not contain 'reputation too low'", errStr)
-	}
-	if !strings.Contains(errStr, "0.85") {
-		t.Errorf("error %q does not contain required value '0.85'", errStr)
-	}
-	if !strings.Contains(errStr, "0.70") {
-		t.Errorf("error %q does not contain actual value '0.70'", errStr)
-	}
-}
-
-func TestErrAgeTooYoung(t *testing.T) {
-	err := &ErrAgeTooYoung{RequiredDays: 175, ActualDays: 100}
-	errStr := err.Error()
-
-	if !strings.Contains(errStr, "age too young") {
-		t.Errorf("error %q does not contain 'age too young'", errStr)
-	}
-	if !strings.Contains(errStr, "175") {
-		t.Errorf("error %q does not contain required days '175'", errStr)
-	}
-	if !strings.Contains(errStr, "100") {
-		t.Errorf("error %q does not contain actual days '100'", errStr)
-	}
-}
-
-func TestErrUptimeTooLow(t *testing.T) {
-	err := &ErrUptimeTooLow{RequiredPct: 95.0, ActualPct: 80.0}
-	errStr := err.Error()
-
-	if !strings.Contains(errStr, "uptime too low") {
-		t.Errorf("error %q does not contain 'uptime too low'", errStr)
-	}
-	if !strings.Contains(errStr, "95") {
-		t.Errorf("error %q does not contain required percentage", errStr)
-	}
-	if !strings.Contains(errStr, "80") {
-		t.Errorf("error %q does not contain actual percentage", errStr)
-	}
-}
-
 func TestErrOnboardingFailed(t *testing.T) {
 	cause := errors.New("onboarding cause")
 

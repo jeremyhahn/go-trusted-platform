@@ -20,6 +20,8 @@ import (
 	"errors"
 	"os"
 	"testing"
+
+	"github.com/jeremyhahn/go-trusted-platform/pkg/crypto/aesgcm"
 )
 
 // plantKey writes a caller-chosen key straight into the key store, so a test
@@ -90,7 +92,8 @@ func TestLocalKMS_EncryptDecryptRoundTrip(t *testing.T) {
 
 // TestLocalKMS_WireFormatUnchanged is the point of the #209 change: moving to
 // cipher.NewGCMWithRandomNonce must not alter a single byte of the on-disk
-// layout, so blobs sealed by the pre-#209 code stay readable.
+// layout, so blobs sealed by the pre-#209 code stay readable. It holds the
+// same line for #248, which moved the cipher into pkg/crypto/aesgcm.
 //
 // The vector below was produced by that pre-#209 code — cipher.NewGCM with an
 // explicit 12-byte nonce, the nonce prepended by hand — and is checked in as a
@@ -98,6 +101,53 @@ func TestLocalKMS_EncryptDecryptRoundTrip(t *testing.T) {
 // build refuses, so the test would have had to skip in exactly the build whose
 // compatibility it exists to prove. As a constant it runs identically in both
 // builds and cannot rot with the code it is pinning.
+// TestLocalKMS_GenerateKeySameNameDistinctKeys pins #284: key IDs were hashed
+// from the name and the time, so two same-name keys made within one clock
+// tick collided and the second overwrote the first key file, stranding
+// everything sealed under it.
+func TestLocalKMS_GenerateKeySameNameDistinctKeys(t *testing.T) {
+	kms, firstID := newTestKMS(t)
+	ctx := context.Background()
+
+	plaintext := []byte("sealed under the first key")
+	aad := []byte("sha256:layer1")
+	sealed, _, err := kms.Encrypt(ctx, firstID, plaintext, aad)
+	if err != nil {
+		t.Fatalf("Encrypt: %v", err)
+	}
+
+	secondID, err := kms.GenerateKey(ctx, "test-key", "AES-256-GCM", []string{"encrypt", "decrypt"})
+	if err != nil {
+		t.Fatalf("GenerateKey: %v", err)
+	}
+	if secondID == firstID {
+		t.Fatalf("two keys named %q share ID %s", "test-key", firstID)
+	}
+
+	got, err := kms.Decrypt(ctx, firstID, sealed, aad)
+	if err != nil {
+		t.Fatalf("the first key must survive a second same-name key: %v", err)
+	}
+	if !bytes.Equal(got, plaintext) {
+		t.Errorf("round trip = %q, want %q", got, plaintext)
+	}
+}
+
+// TestLocalKMS_GenerateKeyCancelledContext covers GenerateKey's error path: a
+// cancelled context mints no key.
+func TestLocalKMS_GenerateKeyCancelledContext(t *testing.T) {
+	kms, err := NewLocalKMSClient(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewLocalKMSClient: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	if _, err := kms.GenerateKey(ctx, "test-key", "AES-256-GCM", nil); !errors.Is(err, context.Canceled) {
+		t.Fatalf("GenerateKey on a cancelled context = %v, want context.Canceled", err)
+	}
+}
+
 func TestLocalKMS_WireFormatUnchanged(t *testing.T) {
 	const (
 		legacyKeyHex    = "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"
@@ -171,9 +221,9 @@ func TestLocalKMS_DecryptRejectsTampering(t *testing.T) {
 		if err == nil {
 			t.Fatal("a blob shorter than nonce+tag must not open")
 		}
-		var msgErr *MessageError
-		if !errors.As(err, &msgErr) {
-			t.Errorf("want *MessageError for a truncated blob, got %T: %v", err, err)
+		var tooShort aesgcm.ErrCiphertextTooShort
+		if !errors.As(err, &tooShort) {
+			t.Errorf("want aesgcm.ErrCiphertextTooShort for a truncated blob, got %T: %v", err, err)
 		}
 	})
 

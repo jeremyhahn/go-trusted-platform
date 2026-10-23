@@ -1,6 +1,6 @@
 # Trusted Registry — API
 
-> **Status: NORMATIVE** · Scope: registry routes on every transport · Last verified: 2026-08-18
+> **Status: NORMATIVE** · Scope: registry routes on every transport · Last verified: 2026-10-16
 > Conflicts with this document are defects. Fix them here first.
 > One row per capability, showing its form on each of the six transports. A
 > transport that does not carry a capability is written `MISSING`, never
@@ -128,7 +128,9 @@ session, so a client restarts rather than keeping a rejected buffer pinned.
 an oversight (`pkg/api/mcp/registry_tools.go`): binary blob transfer over
 JSON-RPC is a poor fit, and both are already served by gRPC and REST. An LLM
 client that needs image bytes calls those transports. Do not "complete" the MCP
-surface by adding them.
+surface by adding them. The SDK MCP transport follows suit: it maps the four
+unary methods onto the four tools and no tool for `Push` or `Pull`
+(`sdk/go/transport/mcp/registry.go`).
 
 ---
 
@@ -140,14 +142,17 @@ subject's resolved permissions. Each transport enforces it per operation: gRPC
 through the interceptor's `RequireScope`, QUIC through `AuthorizeRequest`, MCP
 through `AuthorizeTool`.
 
-**No registry method carries a required scope.** The gRPC catalog
-(`pkg/api/grpc/method_permissions.go`) maps 185 methods across 11 services —
-`CAService`, `DeviceService`, `DNSService`, `GatewayService`,
-`KeyManagementService`, `NTPService`, `PlatformIAMService`, `ProxyService`,
-`SDNService`, `VTPMService` and one daemon method. `RegistryService` is not
-among them, and the catalog's own doc comment states that **a method absent from
-the map carries no required scope**: the interceptor allows it once the token is
-validated.
+Both catalogs are **default-deny**
+([`docs/auth/architecture.md`](../auth/architecture.md)). **Every
+`RegistryService` RPC carries a required scope** in the gRPC catalog
+(`pkg/api/grpc/method_permissions.go`): `Inspect`, `List`, `Status` and `Pull`
+need `registry:read`, `Push` needs `registry:write`, and `Delete` needs
+`registry:delete`. The four `platform_registry_*` MCP tools carry their gRPC
+twin's scope (#304, `pkg/api/mcp/authz.go`): `platform_registry_status`,
+`platform_registry_list` and `platform_registry_inspect` need `registry:read`,
+`platform_registry_delete` needs `registry:delete`. A caller without the scope
+gets `PermissionDenied` (`-32003`) and the tool never runs. Registry artifacts
+are platform-level: no transport scopes them to a tenant.
 
 `VerifyClient` ([engineering.md](engineering.md) §2) is the platform-curated
 API's attestation control. It does **not** run on the `/v2` path: the
@@ -156,9 +161,7 @@ checks, and until #549 nothing on that path verified anything — the earlier
 revision of this section, which said `/v2` "authenticates by TPM attestation",
 was wrong. Scope-based authorization and attestation are different controls,
 and a reader must not assume the `scp` claim constrains what an attested client
-may do to the registry. **Whether `RegistryService` should join the scope
-catalog is an open question for the owner**, recorded in the migration report;
-it is not decided here.
+may do to the registry.
 
 ### The two surfaces are gated differently, and deliberately (#165, #549)
 
@@ -179,7 +182,7 @@ and remains an open question for the owner.
 
 ## 6. Status and error mapping
 
-QUIC status bytes (`pkg/api/quic/protocol.go`) are the platform's canonical
+QUIC status bytes (`sdk/go/wire/quicwire/protocol.go`) are the platform's canonical
 status vocabulary and the other transports map onto the same set:
 
 | Byte | Name | REST | Registry cause |
@@ -204,6 +207,13 @@ Payloads are capped at `MaxPayloadSize` (16 MiB) and auth tokens at
 REST route returns 503 with a structured "not configured" envelope rather than
 404 or 500, so an operator can distinguish a disabled feature from a broken one.
 
+**MCP answers with the REST and QUIC classes** (`pkg/api/daemon/mcp_registry.go`,
+#304): an unwired registry is `Unavailable` (`ErrRegistryNotConfigured`; gRPC
+says `FailedPrecondition`), a missing `repository` or `reference` is
+`InvalidArgument`, and a service error, wrapped in `ErrRegistryServiceFailed`,
+takes the code `grpcapi.RegistryErrorStatus` gives it on gRPC — an unknown
+artifact is `NotFound`.
+
 **A `/v2` path no route claims returns a JSON 404, not the web console.** The
 SPA catch-all declines the whole `/v2/` namespace along with the other API
 namespaces (`webserver_v1.go` `apiPathPrefixes`; see
@@ -220,6 +230,12 @@ signature is
 `List(ctx, repository string, limit int32, cursor, sortBy string, ascending bool)`
 (`sdk/go/services/registry/client.go:64`), and the CLI surfaces the same
 parameters as `--repository`, `--cursor`, `--sort-by` and `--sort-desc`.
+
+`platform_registry_list` carries the whole `ListArtifactsRequest`:
+`repository`, `artifact_type`, `limit`, `offset`, `cursor`, `sort_by`,
+`ascending`, and the label selector as `match_labels` (object) and
+`match_expressions` (array). The SDK MCP transport sends each of them, so a
+cursor page over MCP is the same page as over gRPC.
 
 The OCI `_catalog` and `tags/list` routes follow the distribution spec's own
 `n`/`last` pagination, which is a different scheme; do not conflate them.

@@ -1,7 +1,7 @@
 # Barrier-Gate Integration Test Configuration
 #
 # Minimal production-style config for the M6 barrier-gate integration tests.
-# Drives platformd with seal_strategy=software and auto_unseal=false so the
+# Drives platformd with seal_strategy=software so the
 # init-only gate listener (127.0.0.1:9446) stays bound until the test calls
 # POST /init or POST /unseal.
 
@@ -26,7 +26,6 @@ domain: localhost
 
 barrier:
   seal_strategy: software
-  auto_unseal: false
 
 # =============================================================================
 # QUICBAAS CONFIGURATION (Embedded, PebbleDB backend)
@@ -148,10 +147,13 @@ certificate-authority:
 # TPM 2.0 CONFIGURATION
 # =============================================================================
 # Required for CA identities that set platform-policy: true. Integration tests
-# run against swtpm started by the devcontainer harness.
+# run against swtpm started by the devcontainer harness: device is the socket
+# start_swtpm in run-integration-tests.sh serves. The integration container is
+# privileged and sees the host's /dev/tpmrm0, so a hardware path here would
+# provision the CI host's own TPM.
 
 tpm:
-  device: /dev/tpmrm0
+  device: /tmp/swtpm/swtpm.sock
   simulator: false
   encrypt-sessions: false
   entropy: false

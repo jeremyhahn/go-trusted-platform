@@ -17,6 +17,9 @@ import (
 	"errors"
 	"fmt"
 
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/zone"
 )
 
@@ -206,6 +209,36 @@ type ErrZoneEnforcementUnavailable struct {
 // Error implements the error interface.
 func (e ErrZoneEnforcementUnavailable) Error() string {
 	return fmt.Sprintf("sdn/policy: zone %q on port %q requires zone flow enforcement but no zone flow manager is configured; refusing to authorize", e.Zone, e.PortID)
+}
+
+// ErrPortAuthNotEnforced refuses port authentication and its revocation on
+// every transport (#304). Answering "authenticated" or "revoked" would claim
+// the switch admits or blocks a port when nothing enforces it. Two pieces
+// are missing before the engine can enforce it:
+//
+//   - The Engine is not reachable from the API's SDN service: the daemon
+//     builds it for quarantine and enrollment only (initSDNPolicy in
+//     pkg/daemon/commands/quarantine_init.go).
+//   - That engine has no CertificateValidator, so Engine.AuthenticatePort
+//     would admit any certificate. DefaultCertificateValidator checks a chain
+//     to the roots it is given and the client-auth usage, but nothing hands
+//     it the platform anchor (pkg/trust), and it does not check that the
+//     certificate is an IDevID.
+//
+// It is FailedPrecondition on every transport.
+type ErrPortAuthNotEnforced struct {
+	// Operation names the refused call or tool.
+	Operation string
+}
+
+// Error implements the error interface.
+func (e ErrPortAuthNotEnforced) Error() string {
+	return "sdn/policy: " + e.Operation + " is refused: port authentication is not enforced on the switch"
+}
+
+// GRPCStatus classes the error FailedPrecondition.
+func (e ErrPortAuthNotEnforced) GRPCStatus() *status.Status {
+	return status.New(codes.FailedPrecondition, e.Error())
 }
 
 // ErrNoPendingActivation is returned by ActivateDevice when no pending

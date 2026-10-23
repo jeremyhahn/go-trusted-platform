@@ -20,6 +20,8 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
+	platform "github.com/jeremyhahn/go-trusted-platform/sdk/go"
+	ceremonysvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/ceremony"
 )
 
 // NewCommand creates the ceremony root command.
@@ -69,4 +71,17 @@ Examples:
 	cmd.AddCommand(newSignCSRCommand(getFlags))
 
 	return cmd
+}
+
+const ceremonysvcName = "ceremony"
+
+// NewService returns the ceremony service backed by the client's active
+// transport, or ErrServiceUnavailable when the client exposes no ceremony
+// service.
+func NewService(client platform.Client) (ceremonysvc.Service, error) {
+	rpc := client.Ceremony()
+	if rpc == nil {
+		return nil, platform.ErrServiceUnavailable{Service: ceremonysvcName}
+	}
+	return ceremonysvc.NewGRPCClientFromClient(rpc), nil
 }

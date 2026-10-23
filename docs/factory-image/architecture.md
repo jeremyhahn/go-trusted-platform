@@ -40,10 +40,17 @@ the device.**
   install media exactly as `platformctl iso create` does (`pkg/iso`'s
   `StageMedia`: pre-fetched apk repository for the target architecture,
   platform binaries, the baked platform config, Secure Boot keys, CA bundle),
-  adds the target's boot firmware, then starts an arm64 Alpine container
-  (`build/docker/diskimage-builder`) with `--privileged` but its own private
-  `/dev`, the media read-only at `/media/cdrom` and the output directory at
-  `/work`. Inside it, the target-architecture `platformctl-static diskimage
+  adds the target's boot firmware, then starts an Alpine container
+  (`build/docker/diskimage-builder`) **at the host platform** (`linux/<host
+  GOARCH>`, not the target's) with `--privileged` but its own private
+  `/dev`, the media at `/media/cdrom` and the output directory at `/work`.
+  Under qemu-user there are no keyring syscalls, so go-luks2 cannot open the
+  LUKS volume in a foreign-architecture container (#802): partitioning, LUKS
+  and mkfs therefore run natively, and only the target-chroot steps (apk,
+  dracut, depmod) run under binfmt. For a foreign target the installer is the
+  host-architecture `platformctl-static` (`BuildConfig.HostInstallerBinary`,
+  copied in at `/installer`; the media's target-architecture one is what the
+  image carries); for a native target it is the media's. Inside it, `platformctl-static diskimage
   assemble --platform-config /media/cdrom/configs/installer.yaml` creates a
   sparse image, takes a free loop device from `/dev/loop-control` (creating
   its node when the private `/dev` lacks it), attaches the image with
@@ -69,7 +76,8 @@ exercised under a software TPM before it touches a Pi).
 ### The boot chain on the Raspberry Pi
 
 ```
-VideoCore firmware (start4.elf / fixup4.dat; bootcode.bin on older boards)
+VideoCore firmware (start4.elf / fixup4.dat; bootcode.bin on older boards;
+                    the Pi 5 bootloader EEPROM loads kernel8.img directly)
   └─ config.txt: kernel=kernel8.img, dtoverlay=tpm-soft-spi, dtoverlay=disable-bt
        └─ U-Boot (kernel8.img) — EFI_TCG2_PROTOCOL measured boot, EFI Secure Boot
             └─ EFI boot manager finds EFI/BOOT/BOOTAA64.EFI on the first FAT partition
@@ -139,23 +147,73 @@ Alpine package. QEMU's only TPM front-end for the virt machine is the
 memory-mapped `tpm-tis-device`, and no Alpine aarch64 kernel carries the
 memory-mapped TIS driver (`CONFIG_TCG_TIS` is unset in `linux-lts` and
 `linux-rpi`; `linux-virt` has no TPM support), so a stock kernel would boot
-to platform-initrd and find no `/dev/tpm0` (measured 2026-09-20). The built
+to platform-initrd and find no `/dev/tpm0`. The built
 kernel is Alpine's `linux-lts` version with the TIS and CRB drivers built
 in, signed modules and the lockdown LSM; it is installed from the media
 (`os.kernel-artifacts-dir`, verified against its `SHA256SUMS`) under the
 `linux-virt` flavour name, so `vmlinuz-virt` and `/lib/modules/<release>`
 look like a packaged kernel to everything downstream. The Raspberry Pi
 image keeps Alpine's `linux-rpi`, whose SPI transport is what the SLB9670
-needs. Owner ruling 2026-09-21: a platform-built kernel over an out-of-tree
-module (which would have needed lockdown off) or hardware-only firstboot
-testing.
+needs. The stand-in uses a platform-built kernel, not an out-of-tree module
+(which would need lockdown off) and not hardware-only firstboot testing.
+
+### The diskless root image
+
+A diskless node boots the same operating system a disk install writes, so
+the diskless root is that install: `diskimage netboot --diskless` runs the
+installer onto a scratch image inside the builder container
+(`pkg/diskimage/runner.Container`, the staged media copied in, the artifacts
+copied out, no bind mounts), and packs the installed root partition into
+`rootfs.squashfs` plus its dm-verity hash tree `rootfs.verity`. Both are
+served over HTTP beside the set's kernel; neither is trusted for what it is.
+
+The root is public — every node that boots the set fetches it, and so can
+anyone who can reach the boot server — so it must hold no private key and no
+reusable credential. The build locks every shadow entry (the installer writes a
+root password) and refuses a root with a usable hash; `--debug` is rejected for
+a diskless build because it would enable SSH root login in the shared root.
+The installer also copies the platform config to
+`/etc/trusted-platform/config.yaml`, and the build refuses the root, naming
+each field, if any field the config schema tags `secret:"true"` (root
+password, BMC password and IPMI key, PKCS#11 SO and user PINs, switch and disk
+encryption passwords, …) holds a literal instead of a secret reference
+(`kms://`, `env://`, `file://`, …). It refuses rather than strips: a stripped
+config would ship a node that fails later, far from the cause, while the
+reference is already the supported way to write the field.
+Per-node credentials come after attestation, from the TPM-resident identity,
+never from the image. The
+in-container install runs with Secure Boot off: it signs nothing the root
+carries (the UKI is on the ESP, which is not packed), and with Secure Boot on
+the installer would generate a DB key onto the very root it publishes. Before
+`mksquashfs` the build walks the installed tree and refuses, naming the path,
+any `*.key` file, any PEM block of a `PRIVATE KEY` type anywhere in a file,
+and any small file that parses as a DER PKCS#8, PKCS#1 or SEC 1 key. A node's
+own keys live in its TPM and in the tmpfs overlay, never in the image.
+
+The root's identity — root hash, salt and the two sizes — is a manifest
+(`cdrom/diskless/manifest.json`) signed with the Secure Boot DB key, carried
+to the installer in the install media. The installer verifies it against a
+pinned anchor — the platform's DB certificate enrolled in the node's UEFI `db` (not any other `db` entry) or the KMS-held
+DB certificate, never a key pair staged on the media (see
+[installer architecture](../installer/architecture.md) for the first-netboot
+trust gap) — and writes the root parameters into the UKI command line it
+signs; nothing on the network-supplied command line or iPXE script can name
+a root. `platform-initrd` fetches both artifacts into bounded RAM, opens
+dm-verity with the pinned parameters before any mount, mounts the verified
+squashfs read-only under a tmpfs overlay, and fails before mounting root on
+any mismatch.
+
+The build is reproducible: `mksquashfs -reproducible` with every timestamp
+set to `SOURCE_DATE_EPOCH`, and the verity salt derived from
+`SOURCE_DATE_EPOCH` and the platform version, so the same inputs give the
+same root hash.
 
 ## 3. Rejected alternatives
 
 | Alternative | Why it was rejected |
 |---|---|
 | **A separate image-building installer** | It would duplicate partitioning, LUKS, the OS install and the UKI, and drift. The installer gained two seams instead — a boot-firmware dispatch (`uefi` / `uboot`) and an install target (`disk` / `image`) that skips the host-only steps — and the image builder runs the same code the ISO runs. |
-| **Cross-install from the x86-64 host without a container** | apk, dracut and the UKI build have to run in the target chroot; that needs the target architecture's userspace, which binfmt gives a container. The container also confines `--privileged` and the loop-device work to one process. |
+| **Cross-install from the x86-64 host without a container** | apk, dracut and the UKI build have to run in the target chroot; that needs the target architecture's userspace, which binfmt gives a chroot inside a container. The container also confines `--privileged` and the loop-device work to one process. |
 | **Load U-Boot's Secure Boot keys from the ESP** | U-Boot will not: authenticated variables restored from a plain file would let anyone with the card replace the root of trust. Preseeding the keys into the binary is the only path U-Boot accepts, at the cost of one U-Boot build per key set. |
 | **Use the kernel's `tpm-slb9670` overlay** | It enables the hardware SPI0 controller U-Boot cannot drive, so U-Boot would boot without a TPM and measure nothing. The bit-banged overlay costs bus speed and buys a TPM that is present from the first instruction U-Boot executes. |
 | **One LUKS passphrase for every image built** | Every copy of an image would open with it. The keyslot-0 passphrase is 32 random bytes per build and exists only until firstboot replaces it with the TPM-sealed key. |
@@ -186,7 +244,7 @@ platformctl diskimage create --target rpi --model rpi4
   ├─ uboot.Build          reuse output/ when manifest.json carries the cache key, else build
   ├─ StageMedia           <work>/media: apks-prefetch/aarch64, platformd-bin/, configs/installer.yaml, keys, ...
   ├─ StageBootFirmware    <work>/media/boot-firmware: kernel8.img, config.txt, DTBs, overlays, blobs
-  └─ docker run --privileged -v media:/media/cdrom:ro -v out:/work  (linux/arm64, private /dev)
+  └─ docker run --privileged -v media:/media/cdrom:ro -v out:/work  (linux/<host arch>, private /dev; host-arch installer at /installer when the target is foreign)
        platformctl-static diskimage assemble --platform-config /media/cdrom/configs/installer.yaml
          ├─ sparse image → LOOP_CTL_GET_FREE, mknod /dev/loopN if missing, losetup --partscan
          ├─ installer.Install with Target=image, Boot.Firmware=uboot, Disk.Device=/dev/loopN
@@ -246,6 +304,19 @@ What persists: the image, the staged media directory, the U-Boot output
   ([`docs/ima/`](../ima/)) is unavailable on that kernel.
 - **It does not flash cards from the CLI.** Writing a device is a Makefile
   target with explicit guards ([user.md](user.md)), the only `sudo` step.
-- **It does not ship a Raspberry Pi platform template yet.** The default
-  single-node template is used with the target's overrides; `--overrides`
-  adjusts anything else, including `seal-pcrs`.
+- **It does not build every role on every Pi.** `rpi4` ships the
+  single-node template (the default) and, through `--role compute`, the
+  dedicated-profile compute node; `rpi5` ships the same compute node as an
+  experimental template (next item). A Pi gateway or control plane has no
+  template ([`dedicated/raspberrypi/README.md`](../../configs/platform/templates/dedicated/raspberrypi/README.md)
+  says why), and other models fall back to the x86 single-node template with
+  the target's overrides; `--overrides` adjusts anything else, including
+  `seal-pcrs`.
+- **It does not validate the Pi 5.** `--model rpi5` builds an image with no
+  VideoCore firmware on the boot partition (the bootloader EEPROM loads
+  `kernel8.img`), but no Pi 5 has booted it. The 40-pin header's GPIO and SPI
+  belong to the RP1 I/O chip behind PCIe, and the U-Boot build bit-bangs the
+  SLB9670 over BCM2835 GPIO, so whether U-Boot reaches the TPM — and so
+  whether PCRs 0, 4, 7 and 9 are measured — is unknown; the console and the
+  RP1 Ethernet are unvalidated too. The detail is in
+  [`dedicated/raspberrypi/README.md`](../../configs/platform/templates/dedicated/raspberrypi/README.md).

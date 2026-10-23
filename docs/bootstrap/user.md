@@ -1,6 +1,6 @@
 # Bootstrap — Using It
 
-> **Status: NORMATIVE** · Scope: operating `platformctl bootstrap`, `platformctl firstboot` and the day-zero flow · Last verified: 2026-08-18
+> **Status: NORMATIVE** · Scope: operating `platformctl bootstrap`, `platformctl firstboot` and the day-zero flow · Last verified: 2026-10-19
 > Conflicts with this document are defects. Fix them here first.
 > The feature folder is: [architecture.md](architecture.md) · [engineering.md](engineering.md) · [cli.md](cli.md) · [api.md](api.md) · [user.md](user.md).
 >
@@ -132,6 +132,16 @@ names the file and the line — delete the duplicate rather than reconciling it.
 **Secrets belong behind a URI.** `bmc_password` accepts a `kms://` reference. Do
 not commit a plaintext password into a file you will paste into a ticket.
 
+If your control-plane template moves its webservice off `8443`, set
+`platform.control_plane_port` to the template's `tls-port`. Bootstrap reaches
+the control plane on that port to capture its CA, seed it and check its health,
+and `bootstrap status` probes it there; a mismatch shows up as a control plane
+that never answers. A value outside 1-65535 is refused when the file loads.
+
+Moving the control plane's internal DNS zone needs no bootstrap setting: set
+`dns.internal.port` in the control-plane template (or its `overrides:`) and
+every node's DNS forwarder follows it. Unset, it is `9053`.
+
 ---
 
 ## Step 2 — Check what will happen, before it happens
@@ -178,10 +188,73 @@ in order:
 6. **Remaining nodes** — gateways and workers install.
 7. **Enrollment** — management-controller enrollment for nodes that asked for it.
 8. **Health gate, then teardown** — the temporary boot server is removed only
-   after every control-plane node is confirmed serving.
+   after every control-plane node is confirmed serving. With
+   `deployer.boot_node: true` this step is skipped and the boot server stays up
+   (see below).
 
 The output ends with a result block and a per-node table. If the run fails, that
 block is printed anyway and the `Phase:` line tells you where it stopped.
+
+**A boot server that stays up.** When the deployer host should keep serving a
+segment's netboot after the run — a boot node such as the VLAN 405 Pi segment —
+set `deployer.boot_node: true`. The container then runs with
+`--restart unless-stopped`, and pxeboot's iPXE firmware cache is kept on the
+host in `deployer.firmware_cache_dir` (default `<data_dir>-firmware`), so a
+restart does not download it again. The run skips step 8: neither the container
+nor `data_dir` is removed. Running `bootstrap run` again, when it redeploys
+(see `deployer.redeploy_mode`), replaces only the container and keeps both
+directories. The default, `if-stale`, does not notice a changed `BOOTSTRAP_*`
+setting such as `bootstrap_no_router` or `proxy_dhcp`, so after changing one set
+`redeploy_mode: always` for that run to replace the container.
+`platformctl bootstrap teardown` still removes the container and `data_dir`,
+and leaves the firmware cache. Because the server is
+meant to outlive reboots, `data_dir` and the cache must be absolute paths outside
+`/tmp`, `/run` and `/dev/shm`, and must not contain one another. The file is
+refused at load otherwise. The image, its ports and volumes are described in
+[`build/docker/bootstrap/README.md`](../../build/docker/bootstrap/README.md).
+
+**A segment with no router.** On an isolated provisioning VLAN whose boot
+server does not route, set `deployer.bootstrap_no_router: true`: DHCP then
+advertises no gateway at all, instead of the default `192.0.2.1`. It cannot be
+combined with `deployer.bootstrap_gateway`; the file is refused at load if both
+are set.
+
+**Example: tgw-01 serving the Pi rack on VLAN 405.**
+[`configs/bootstrap/tgw01-vlan405.example.yaml`](../../configs/bootstrap/tgw01-vlan405.example.yaml)
+puts both settings together: a boot node on `bond0.405` (`192.0.2.1`), DHCP
+`192.0.2.100`–`192.0.2.200` with no router, and the rack Pis netbooted diskless
+as workers from the rpi4 compute template, so the netboot media build needs a
+diskless root for the Pi set. Until the CM4 control plane is proven, the control
+plane is tgw-01 itself: platformd standalone at `192.0.2.1` from
+[`standalone-cp.example.yaml`](../../configs/platform/templates/single-node/standalone-cp.example.yaml)
+(`templates.control-plane`), listed with `skip_install: true` because this run
+does not install it. The CM4 entry is kept commented out; it replaces tgw-01
+when it takes over, since a deployment has one control plane or an odd number
+of three or more. The Pis share
+[`tgw01-vlan405-pi.overrides.yaml`](../../configs/bootstrap/tgw01-vlan405-pi.overrides.yaml),
+which points the template's DNS at `192.0.2.1` and sets `install-target: disk`,
+because the template is the factory SD image and its `image` target would
+ignore the boot server's `platform_boot_model=diskless`. Bootstrap refuses a
+diskless node (`boot_model: diskless` or `diskless-nbd`) whose merged config
+still says `install-target: image`. Each Pi also has inline `overrides:`
+giving it its own addresses, `.20`/`.21`/`.22` in the platform VRF
+(`10.4.144.0/20`) and in each zone VLAN (fabric 401, hypervisor 403, storage
+407). The template carries one Pi's set, and `vlans` is a list, so an
+override repeats all three entries. The Pis hold no VLAN 405 address once
+installed: the compute role addresses only its zones (see
+[Host addressing](../architecture/reference-network.md#host-addressing)), so `eth0` stays
+`manual`. A fourth Pi takes the next host number, `.23`, in the platform VRF
+and in each zone VLAN. The Pis need no `tpm.idevid.serial` of their own: all
+three keep the template's `rpi4-compute-01`, and platformd on a diskless node
+replaces it at every boot with the name it derives from the Pi's TPM EK
+(`ek-<32 hex>`, see [docs/tpm/architecture.md](../tpm/architecture.md)), so
+each Pi's IDevID certificate names that Pi. The nodes' `serial:` field is a
+different value, the Pi bootloader's `/proc/cpuinfo` serial that selects its
+boot directory. The orchestrator
+fetches the control plane's CA bundle from `192.0.2.1:8443`, so run
+`platformctl bootstrap` on tgw-01 or a host on VLAN 405. Values marked
+`PLACEHOLDER` (SSH access, DNS, APK mirror, domains, Pi serials) must be
+replaced first.
 
 **Adding nodes later is not automatic.** Adding an entry and re-running will
 reprovision the existing nodes too, unless you mark them `skip_install: true`.
@@ -246,8 +319,11 @@ platformctl firstboot
 
 It reads the disk key out of the encrypted container the installer left behind,
 seals it into the machine's TPM against the boot measurements, unlocks the disk,
-copies the platform state onto it, and — only once sealing worked — securely
-erases the container.
+and copies the platform state onto it. It keeps the container. The next boot
+that unlocks the disk with the TPM seal (`TPM-PCR`) proves the seal, and only
+then is the container securely erased
+([architecture](architecture.md#phase-3a--node-first-boot-on-the-node-concurrent-with-the-wait-above),
+seal confirmation).
 
 **There is no default set of measurements.** Without a configured or supplied
 PCR list the command refuses to run rather than sealing against a guess.
@@ -278,6 +354,15 @@ reboots it into the installed system on its own, and the tooling watches the
 install log. Asking for `virtual-media` on such a machine is a configuration
 error, because there is nothing to mount the media with.
 
+When it provisions such a machine, the orchestrator logs, at info, with the
+node's `hostname` and `boot_method` (`pxe` unless set):
+
+```
+bootstrap: provisioning unmanaged node — no board management, no hardware operations; ISO self-boots via after-install=reboot
+  hostname=edge-01
+  boot_method=pxe
+```
+
 ---
 
 ## Choosing how to trust a management controller
@@ -290,6 +375,7 @@ Controllers almost always present self-signed, frequently expired certificates.
 | `spki` | You obtained the certificate fingerprint out of band — put it in `bmc_spki_pin` |
 | `ca-file` | Your controllers were issued certificates by a CA whose bundle you have |
 | `dane` | You publish TLSA records for your controllers |
+| `tofu` | Neither of the above: the controller's own certificate is pinned on first contact |
 
 **Captured pins do not survive the run.** They live in memory for one
 `bootstrap run` and are gone afterwards. That means a controller certificate that
@@ -319,6 +405,27 @@ file, the line, the key and the field that owns it. Delete the override.
 
 **"duplicate MAC" or "duplicate bmc_address".**
 Two nodes claim the same hardware. Usually a copy-paste in the node list.
+
+**"address … is on node … and on node …".**
+Two nodes' merged configs give the same address, usually because both take it
+from one role template. Give each node its own in `nodes[].overrides` (for a
+list such as `network.vlans`, repeat every entry). Checked before discovery,
+so nothing has been touched.
+
+**"IDevID serial … is on node … and on node …".**
+Two nodes' merged configs give the same `tpm.idevid.serial` under the same
+`tpm.idevid.model`, usually the role template's, so their IDevID certificates
+would name one device. Give each node its own serial in `nodes[].overrides`,
+for example its `/proc/cpuinfo` or DMI serial. Two nodes of different models
+may share a serial. A `boot_model: diskless` node is not checked: platformd
+names it after its TPM's EK and replaces the config's serial with that name.
+A `diskless-nbd`, SD or disk node keeps its config's serial. Checked before
+discovery, so nothing has been touched.
+
+**"boots diskless but its config sets install-target: image".**
+A diskless node's installer runs on the node, so it needs `install-target:
+disk`; set it in that node's overrides. The Raspberry Pi templates default to
+`image`, the factory SD image.
 
 **Discovery fails for one node.**
 Credentials or reachability for that controller. `discover` names the host. If
@@ -363,14 +470,11 @@ tooling or the remote console, then re-run with
 `--skip-virtual-media-mount` — boot device, power cycle, health wait and unmount
 still run.
 
-**"deploy" fails immediately with a manifest-path error.**
-`platformctl bootstrap deploy` cannot currently deploy to a Linux target on its
-own. Use `platformctl bootstrap run`, which performs the same phase correctly.
-
 **The bootstrap container is still running after a successful-looking run.**
 The health gate did not pass, so teardown was skipped on purpose — that container
 may be the only DHCP and DNS on the provisioning network. Confirm the platform's
-own services are serving, then run `bootstrap teardown`.
+own services are serving, then run `bootstrap teardown`. If the file sets
+`deployer.boot_node: true`, the container staying up is the point of the mode.
 
 **Node enrollment shows failures but the run succeeded.**
 Enrollment is deliberately non-fatal. The result block lists each attempt; retry
@@ -395,9 +499,10 @@ it.
 **The encrypted installer container is key material.** It holds the disk key in
 plaintext, protected by a well-known password whose only purpose is to stop a
 discarded disk from yielding a key to a casual reader. It is not access control.
-It is erased once sealing succeeds — and preserved when sealing fails, so a
-machine left in that state is a machine whose disk key is recoverable by anyone
-holding the disk. Resolve a failed seal; do not live with one.
+It is erased only once a later boot unlocks the disk with the TPM seal, and
+kept until then, so a machine whose seal never works is a machine whose disk
+key is recoverable by anyone holding the disk. Resolve a failed seal; do not
+live with one.
 
 ---
 
@@ -409,4 +514,4 @@ holding the disk. Resolve a failed seal; do not live with one.
 - [`docs/provisioning/`](../provisioning/) — the ISO, the network boot server and the installer this drives
 - [`docs/bmc/`](../bmc/) — management controllers and enrollment
 - [`docs/ca/`](../ca/) · [`docs/dns/dane.md`](../dns/dane.md) — where the trust material comes from
-- Older narrative kept in place: [day-zero.md](day-zero.md), [pxe-bootstrap.md](pxe-bootstrap.md), [config-reference.md](config-reference.md), [manual-nodes.md](manual-nodes.md), [switch-management.md](switch-management.md)
+- The older narrative files (day-zero.md, pxe-bootstrap.md, config-reference.md, manual-nodes.md, switch-management.md) are deleted. These five files hold their content; the `bootstrap.yaml` reference is [engineering.md](engineering.md) §5.

@@ -1,5 +1,9 @@
 # Config Delivery gRPC API Reference
 
+> **Status: REFERENCE** · Last verified: 2026-10-15
+> `platform.v1.ConfigDeliveryService`: messages, status codes and the SDK
+> client.
+
 | Property | Value |
 |----------|-------|
 | Service | `platform.v1.ConfigDeliveryService` |
@@ -92,12 +96,13 @@ Typed service errors map to gRPC status codes via ordered matcher tables in
 |-----------|------|
 | Malformed request, missing fields, spent/expired nonce, unparseable EK cert | `InvalidArgument` |
 | EAB validation failure (FetchConfig) | `Unauthenticated` |
-| EAB validation failure (SignDigest), EK cert required/mismatch | `PermissionDenied` |
+| EAB validation failure (SignDigest), EK cert required/mismatch, EAB key bound to another profile | `PermissionDenied` |
 | Unknown session or profile | `NotFound` |
 | Expired or already-fulfilled session | `InvalidArgument` |
+| `FulfillSession` with `profile_id` missing or 0 (`configdelivery.ErrProfileIDRequired`) | `InvalidArgument` |
 | Profile not provisioned for remote signing | `FailedPrecondition` |
 | Session fulfilled without a resolved profile (PollSession) | `Internal` |
-| No DB key signer / no profile service | `Unavailable` |
+| SignDigest with no DB key signer or no profile service | `Unavailable` |
 | Service not constructed (missing daemon deps) | `Unavailable` |
 | Anything else | `Internal` |
 

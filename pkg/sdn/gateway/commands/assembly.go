@@ -20,6 +20,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/spf13/viper"
@@ -35,8 +36,12 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/bgp"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/controlplane"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/modes"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/process"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/proxysvc"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/secrets"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ipsec"
+	ipsecconfig "github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ipsec/config"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/trust"
 	platform "github.com/jeremyhahn/go-trusted-platform/sdk/go"
 	sdkattestation "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/attestation"
@@ -91,7 +96,7 @@ type ServeConfig struct {
 	ControlPlane *controlplane.Config
 
 	// Secrets is the `secret-store:` section (where the platform secret
-	// store is). It backs every kms:// and secret:// reference the gateway
+	// store is). It backs every kms:// reference the gateway
 	// configuration carries; without it those references fail closed. The
 	// name is not `secrets:` because that key is platformd's resolver
 	// switchboard (pkg/app.SecretsConfig) and the same file carries both.
@@ -100,6 +105,10 @@ type ServeConfig struct {
 	// Metrics is the `metrics:` section (the Prometheus endpoint exporting
 	// the same telemetry snapshot the control plane receives).
 	Metrics *MetricsConfig
+
+	// Process is the `process:` section (the supervised process model,
+	// #557). Absent or disabled, every service runs in this process.
+	Process *process.Settings
 
 	// DataDir is gatewayd's state directory (--data-dir). It is a flag
 	// rather than a configuration section, so it is carried here to reach
@@ -130,7 +139,9 @@ func LoadServeConfig(v *viper.Viper) (*ServeConfig, error) {
 	}
 	if v.IsSet("proxy") {
 		pc := &proxysvc.Config{}
-		if err := v.UnmarshalKey("proxy", pc, serveDecodeHook); err != nil {
+		// Strict, like sdn below: a removed proxy key (a route's
+		// required-roles, #926) fails the load instead of being ignored.
+		if err := config.CheckViperSection(v, "proxy", pc); err != nil {
 			return nil, &ErrConfigSection{Section: "proxy", Cause: err}
 		}
 		cfg.Proxy = pc
@@ -181,7 +192,52 @@ func LoadServeConfig(v *viper.Viper) (*ServeConfig, error) {
 		}
 		cfg.Metrics = mc
 	}
+	if v.IsSet("process") {
+		pc := &process.Settings{}
+		if err := v.UnmarshalKey("process", pc, serveDecodeHook); err != nil {
+			return nil, &ErrConfigSection{Section: "process", Cause: err}
+		}
+		cfg.Process = pc
+	}
 	return cfg, nil
+}
+
+// BuildSupervisor assembles the process supervisor the `process:` section
+// enables (#557) and attaches it to the gateway configuration, so
+// BuildGateway hands every supervised service to a child process. It
+// returns nil when the section is absent or disabled, or when there is no
+// `gateway:` section whose services could move. The children are started
+// with inherited, the part of this process's command line they resolve the
+// same way (see childInheritance).
+func BuildSupervisor(cfg *ServeConfig, inherited process.Inherited, logger *slog.Logger) (*process.Supervisor, error) {
+	if cfg == nil {
+		return nil, ErrConfigLoadFailed
+	}
+	if cfg.Process == nil || !cfg.Process.Enabled || cfg.Gateway == nil {
+		return nil, nil
+	}
+	processCfg, err := cfg.Process.Config(inherited, logger)
+	if err != nil {
+		return nil, &ErrConfigSection{Section: "process", Cause: err}
+	}
+	supervisor := process.New(processCfg)
+	cfg.Gateway.Supervisor = supervisor
+	return supervisor, nil
+}
+
+// enabledServices are the services this gatewayd configuration runs: the
+// gateway's enabled sections, then the proxy, whose section is gatewayd's
+// own rather than the gateway's. A supervised child picks its own process's
+// services out of this list.
+func enabledServices(cfg *ServeConfig) []string {
+	var out []string
+	if cfg.Gateway != nil {
+		out = cfg.Gateway.EnabledServices()
+	}
+	if cfg.Proxy != nil && cfg.Proxy.Enabled {
+		out = append(out, gateway.ServiceProxy)
+	}
+	return out
 }
 
 // BuildGateway assembles the gateway node from the parsed configuration:
@@ -217,12 +273,12 @@ func BuildGateway(ctx context.Context, cfg *ServeConfig, logger *slog.Logger) (*
 
 	// The OVS runtime is assembled only when a datapath service needs it;
 	// a proxy-only gatewayd never dials OVSDB even with an sdn: section
-	// present. The runtime owns a live OVSDB connection, so every error
+	// present, and neither does a supervisor: the datapath child holds the
+	// runtime and this process relays to it (#557). The runtime owns a live OVSDB connection, so every error
 	// path below must release it — the deferred close runs unless
 	// assembly reaches the success return.
 	if service := datapathService(gwCfg); service != "" {
-		needsOverlay := gwCfg.Overlay != nil && gwCfg.Overlay.Enabled
-		runtime, err := buildGatewayRuntime(ctx, cfg.SDN, zoneMatrixService(gwCfg), needsOverlay, logger)
+		runtime, err := buildGatewayRuntime(ctx, cfg.SDN, zoneMatrixService(gwCfg), runsOverlay(gwCfg), logger)
 		if err != nil {
 			return nil, err
 		}
@@ -245,9 +301,19 @@ func BuildGateway(ctx context.Context, cfg *ServeConfig, logger *slog.Logger) (*
 	// platformd dials, the secret store's session; the resolver verifies
 	// what the platform did not issue (BMC backends). Building each once
 	// here keeps every consumer on the same trust.
-	trustResolver, err := buildTrustResolver(cfg.Trust, cfg.DataDir, logger)
-	if err != nil {
-		return nil, err
+	// The resolver serves the proxy alone, so a supervised child that does
+	// not host the proxy neither builds it nor touches its pin directory,
+	// and neither does a supervisor whose proxy runs in its own child.
+	proxyEnabled := cfg.Proxy != nil && cfg.Proxy.Enabled
+	proxySupervised := supervised(gwCfg, gateway.ServiceProxy)
+	runsProxy := runs(gwCfg, proxyEnabled, gateway.ServiceProxy)
+	var trustResolver trust.Resolver
+	if runsProxy {
+		resolver, err := buildTrustResolver(cfg.Trust, cfg.DataDir, logger)
+		if err != nil {
+			return nil, err
+		}
+		trustResolver = resolver
 	}
 	anchor, err := buildPlatformAnchor(cfg)
 	if err != nil {
@@ -285,7 +351,14 @@ func BuildGateway(ctx context.Context, cfg *ServeConfig, logger *slog.Logger) (*
 		gwCfg.MinUptimePct,
 	)
 
-	if cfg.Proxy != nil && cfg.Proxy.Enabled {
+	switch {
+	case proxyEnabled && proxySupervised:
+		// The proxy parses untrusted TLS from the internet; it runs in its
+		// own unprivileged child and this process only relays to it (#557).
+		if err := gw.RegisterSupervisedService(gateway.ServiceProxy); err != nil {
+			return nil, err
+		}
+	case runsProxy:
 		handler, err := BuildProxyHandler(cfg.Proxy, trustResolver, anchor, logger)
 		if err != nil {
 			return nil, err
@@ -468,17 +541,6 @@ func buildPlatformAnchor(cfg *ServeConfig) (*trust.Anchor, error) {
 	return trust.NewAnchor(trust.NewFileAnchorSource(cfg.PlatformCAFile))
 }
 
-func platformIdentityCertificate(cfg *ServeConfig) (*tls.Certificate, error) {
-	if cfg == nil || cfg.ControlPlane == nil || cfg.ControlPlane.CertFile == "" || cfg.ControlPlane.KeyFile == "" {
-		return nil, nil
-	}
-	cert, err := tls.LoadX509KeyPair(cfg.ControlPlane.CertFile, cfg.ControlPlane.KeyFile)
-	if err != nil {
-		return nil, &proxysvc.ErrCertificateLoadFailed{CertFile: cfg.ControlPlane.CertFile, Cause: err}
-	}
-	return &cert, nil
-}
-
 // loadClientCAs resolves the client-certificate verification pool: an
 // explicit client-ca-file wins; otherwise the platform anchor is used when
 // authentication is needed, since the proxy's callers are platform-issued.
@@ -649,50 +711,84 @@ func buildAuthChain(clientCAs *x509.CertPool, matrixProvider *proxysvc.ZoneMatri
 // configured transport. Control-plane interactions go through sdk/go
 // exclusively (see cmd/gatewayd/CLAUDE.md); connections live for the
 // process lifetime.
-func dialPlatformd(ctx context.Context, pcfg proxysvc.PlatformdConfig, anchor *trust.Anchor, platformIdentity *tls.Certificate) (platform.Client, error) {
-	var opts []platform.Option
-	switch pcfg.Protocol {
-	case proxysvc.PlatformdProtocolUnix:
-		opts = append(opts,
-			platform.WithOnlyProtocol(platform.ProtocolUnix),
-			platform.WithUnixSocket(pcfg.Socket),
-		)
-	case proxysvc.PlatformdProtocolGRPC:
-		if anchor == nil {
-			return nil, ErrPlatformAnchorRequiredForGRPC
-		}
-		tlsCfg, err := platformdTLSConfig(ctx, anchor, platformIdentity)
-		if err != nil {
-			return nil, err
-		}
-		opts = append(opts,
-			platform.WithOnlyProtocol(platform.ProtocolGRPC),
-			platform.WithGRPCAddr(pcfg.GRPCAddr),
-			platform.WithTLSConfig(tlsCfg),
-		)
-	default:
-		return nil, &proxysvc.ErrConfigInvalid{Field: "platformd.protocol", Reason: "must be unix or grpc"}
-	}
-	return platform.Connect(ctx, platform.NewOptions(opts...))
-}
-
-func platformdTLSConfig(ctx context.Context, anchor *trust.Anchor, platformIdentity *tls.Certificate) (*tls.Config, error) {
-	tlsCfg, err := anchor.TLSConfig(ctx)
+func dialPlatformd(ctx context.Context, pcfg proxysvc.PlatformdConfig, anchor *trust.Anchor) (platform.Client, error) {
+	opts, err := platformdOptions(ctx, pcfg, anchor)
 	if err != nil {
 		return nil, err
 	}
-	if platformIdentity != nil {
-		tlsCfg = tlsCfg.Clone()
-		tlsCfg.Certificates = []tls.Certificate{*platformIdentity}
+	return platform.Connect(ctx, opts)
+}
+
+// platformdOptions builds the sdk/go connection options for the configured
+// transport. Over grpc the connection verifies platformd against the
+// platform anchor and presents gatewayd's client identity, because
+// platformd's gRPC listener refuses callers without an mTLS certificate or
+// a bearer token. The identity files are read on every dial, so a rotated
+// credential is used once the connection is re-established.
+func platformdOptions(ctx context.Context, pcfg proxysvc.PlatformdConfig, anchor *trust.Anchor) (*platform.Options, error) {
+	switch pcfg.Protocol {
+	case proxysvc.PlatformdProtocolUnix:
+		return platform.NewOptions(
+			platform.WithOnlyProtocol(platform.ProtocolUnix),
+			platform.WithUnixSocket(pcfg.Socket),
+		), nil
+	case proxysvc.PlatformdProtocolGRPC:
+	default:
+		return nil, &proxysvc.ErrConfigInvalid{Field: "platformd.protocol", Reason: "must be unix or grpc"}
 	}
-	return tlsCfg, nil
+	if anchor == nil {
+		return nil, ErrPlatformAnchorRequiredForGRPC
+	}
+	anchorTLS, err := anchor.TLSConfig(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if err := pcfg.Validate(); err != nil {
+		return nil, err
+	}
+	tlsCfg := anchorTLS.Clone()
+	opts := []platform.Option{
+		platform.WithOnlyProtocol(platform.ProtocolGRPC),
+		platform.WithGRPCAddr(pcfg.GRPCAddr),
+	}
+	if pcfg.CertFile != "" {
+		cert, err := tls.LoadX509KeyPair(pcfg.CertFile, pcfg.KeyFile)
+		if err != nil {
+			return nil, &proxysvc.ErrPlatformdIdentityLoadFailed{Path: pcfg.CertFile, Cause: err}
+		}
+		tlsCfg.Certificates = []tls.Certificate{cert}
+	}
+	if pcfg.TokenFile != "" {
+		token, err := readPlatformdToken(pcfg.TokenFile)
+		if err != nil {
+			return nil, err
+		}
+		opts = append(opts, platform.WithBearerToken(token))
+	}
+	opts = append(opts, platform.WithTLSConfig(tlsCfg))
+	return platform.NewOptions(opts...), nil
+}
+
+// readPlatformdToken reads the bearer token gatewayd presents to platformd.
+// Surrounding whitespace, such as the trailing newline of a token written
+// by a provisioning tool, is not part of the token.
+func readPlatformdToken(path string) (string, error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return "", &proxysvc.ErrPlatformdIdentityLoadFailed{Path: path, Cause: err}
+	}
+	token := strings.TrimSpace(string(raw))
+	if token == "" {
+		return "", &proxysvc.ErrPlatformdIdentityLoadFailed{Path: path}
+	}
+	return token, nil
 }
 
 // platformdDial returns the lazy dial function the sync loop uses to reach
 // the platformd proxy control-plane service.
 func platformdDial(pcfg proxysvc.PlatformdConfig, anchor *trust.Anchor) proxysvc.DialFunc {
 	return func(ctx context.Context) (proxysvc.ControlPlaneClient, error) {
-		client, err := dialPlatformd(ctx, pcfg, anchor, nil)
+		client, err := dialPlatformd(ctx, pcfg, anchor)
 		if err != nil {
 			return nil, err
 		}
@@ -704,7 +800,7 @@ func platformdDial(pcfg proxysvc.PlatformdConfig, anchor *trust.Anchor) proxysvc
 // gate uses to reach the platformd attestation service.
 func platformdAttestationDial(pcfg proxysvc.PlatformdConfig, anchor *trust.Anchor) proxysvc.AttestationDialFunc {
 	return func(ctx context.Context) (proxysvc.AttestationClient, error) {
-		client, err := dialPlatformd(ctx, pcfg, anchor, nil)
+		client, err := dialPlatformd(ctx, pcfg, anchor)
 		if err != nil {
 			return nil, err
 		}
@@ -712,24 +808,32 @@ func platformdAttestationDial(pcfg proxysvc.PlatformdConfig, anchor *trust.Ancho
 	}
 }
 
+// wireOverlayRuntime dials platformd for the overlay's admission inputs,
+// only in the gatewayd that runs the overlay: a supervised child whose
+// shared configuration enables the overlay but which hosts another service
+// dials nothing.
 func wireOverlayRuntime(ctx context.Context, cfg *ServeConfig, anchor *trust.Anchor, runtime *gateway.GatewayRuntime) error {
-	if runtime == nil || cfg == nil || cfg.Gateway == nil || cfg.Gateway.Overlay == nil || !cfg.Gateway.Overlay.Enabled {
+	if runtime == nil || cfg == nil || cfg.Gateway == nil || !runsOverlay(cfg.Gateway) {
 		return nil
 	}
 	pcfg := overlayPlatformdConfig(cfg)
-	platformIdentity, err := platformIdentityCertificate(cfg)
-	if err != nil {
-		return err
-	}
-	if pcfg.Protocol == proxysvc.PlatformdProtocolGRPC && platformIdentity == nil {
-		return ErrPlatformIdentityRequiredForGRPC
-	}
-	client, err := dialPlatformd(ctx, pcfg, anchor, platformIdentity)
+	client, err := dialPlatformd(ctx, pcfg, anchor)
 	if err != nil {
 		return err
 	}
 	WireOverlayPlatform(runtime, client)
+	runtime.OverlayIPsec = newOverlayIPsec
 	return nil
+}
+
+// newOverlayIPsec builds the overlay's IPsec: an ipsec.Service that follows
+// the overlay's flood lists, as platformd's follows its static peers.
+func newOverlayIPsec(cfg *ipsecconfig.Config, admitter modes.VTEPAdmitter, logger *slog.Logger) (gateway.OverlayIPsec, error) {
+	svc, err := ipsec.NewEVPNService(cfg, admitter, logger)
+	if err != nil {
+		return nil, err
+	}
+	return svc, nil
 }
 
 // WireOverlayPlatform points the overlay admission inputs of runtime at
@@ -793,21 +897,23 @@ func buildHostRuntime(cfg *ServeConfig, anchor *trust.Anchor, logger *slog.Logge
 // service that references a secret fails closed at start rather than
 // running with a reference where a key belongs.
 //
-// The store session is verified against the platform anchor, so the
-// gateway reads a peer the platform CA vouches for; a `secret-store:`
-// section without `platform-ca-file:` is a configuration error. The anchor
-// is the one BuildGateway assembled, shared with every other consumer. The
-// session presents no client certificate of its own (see secrets.TLSFunc
-// and #658).
+// The store session is mutually authenticated (#658). The gateway verifies
+// the store against the platform anchor, so it reads a peer the platform CA
+// vouches for; a `secret-store:` section without `platform-ca-file:` is a
+// configuration error. The anchor is the one BuildGateway assembled, shared
+// with every other consumer. The store authenticates the gateway by its
+// provisioned node identity — the `control-plane:` cert-file/key-file pair
+// the telemetry reporter presents, loaded through the same loadNodeIdentity
+// and, like the reporter's, once at start. There is no second credential: a
+// `secret-store:` section without that pair is a configuration error, never
+// a one-way session.
 func buildSecretResolver(cfg *ServeConfig, anchor *trust.Anchor, logger *slog.Logger) (bgp.SecretResolver, error) {
 	if cfg.Secrets == nil {
 		return nil, nil
 	}
-	if anchor == nil {
-		return nil, &ErrConfigSection{Section: "secret-store", Cause: &secrets.ErrTrustRequired{}}
-	}
-	tlsFn := func(ctx context.Context, _ string) (*tls.Config, error) {
-		return anchor.TLSConfig(ctx)
+	tlsFn, err := secretStoreTLS(cfg, anchor)
+	if err != nil {
+		return nil, &ErrConfigSection{Section: "secret-store", Cause: err}
 	}
 	store, err := secrets.NewStore(
 		secrets.QuicBaaSDial(*cfg.Secrets, tlsFn),
@@ -820,9 +926,59 @@ func buildSecretResolver(cfg *ServeConfig, anchor *trust.Anchor, logger *slog.Lo
 	return store.Resolve, nil
 }
 
+// secretStoreTLS builds the TLS configuration the secret-store session is
+// dialled with: the platform anchor's roots to verify the store, and the
+// node identity to present to it. A missing anchor or identity, or an
+// identity that does not load, fails here, at service start.
+func secretStoreTLS(cfg *ServeConfig, anchor *trust.Anchor) (secrets.TLSFunc, error) {
+	if anchor == nil {
+		return nil, &secrets.ErrTrustRequired{}
+	}
+	cp := cfg.ControlPlane
+	if cp == nil || cp.CertFile == "" || cp.KeyFile == "" {
+		return nil, &secrets.ErrClientIdentityRequired{}
+	}
+	identity, err := loadNodeIdentity(cp)
+	if err != nil {
+		return nil, err
+	}
+	server := func(ctx context.Context, _ string) (*tls.Config, error) {
+		return anchor.TLSConfig(ctx)
+	}
+	return secrets.WithClientIdentity(server, identity), nil
+}
+
+// loadNodeIdentity loads the gateway's provisioned mTLS node identity, the
+// `control-plane:` cert-file/key-file pair (/etc/gatewayd/client.pem and
+// client-key.pem as provisioned). It is the one place the pair is read: the
+// telemetry reporter presents it to the control plane and the secret store
+// session presents it to the store.
+func loadNodeIdentity(cp *controlplane.Config) (tls.Certificate, error) {
+	cert, err := tls.LoadX509KeyPair(cp.CertFile, cp.KeyFile)
+	if err != nil {
+		return tls.Certificate{}, &proxysvc.ErrCertificateLoadFailed{CertFile: cp.CertFile, Cause: err}
+	}
+	return cert, nil
+}
+
 // gatewayTOFUPinDir is where gatewayd keeps its TOFU pin records, relative to
 // --data-dir.
 const gatewayTOFUPinDir = "trust/tofu-pins"
+
+// gatewayVPNRevocationJournal is where gatewayd journals the management
+// VPN's revocations the control plane has not yet taken, relative to
+// --data-dir.
+const gatewayVPNRevocationJournal = "vpn/pending-revocations.json"
+
+// vpnRevocationJournal is the revocation journal under dataDir. Without a
+// data directory it is nil, and a gateway hosting the management VPN refuses
+// to build it rather than run without one.
+func vpnRevocationJournal(dataDir string) *gateway.RevocationJournal {
+	if dataDir == "" {
+		return nil
+	}
+	return gateway.NewRevocationJournal(filepath.Join(dataDir, gatewayVPNRevocationJournal))
+}
 
 // tofuScopes reports whether any configured class lists the tofu strategy.
 // The resolver refuses to construct when one does and no pin store was

@@ -97,8 +97,18 @@ func (f *vipTargetFlags) register(cmd *cobra.Command) {
 	cmd.Flags().StringVar(&f.protocol, "protocol", "tcp", "VIP protocol: tcp or udp")
 	cmd.Flags().StringVar(&f.address, "address", "", "Virtual IPv4 address (required)")
 	cmd.Flags().Uint16Var(&f.port, "port", 0, "Virtual L4 port (required)")
-	cmd.MarkFlagRequired("address")
-	cmd.MarkFlagRequired("port")
+	requireFlag(cmd, "address")
+	requireFlag(cmd, "port")
+}
+
+// requireFlag marks a flag the command just registered as required. Cobra
+// fails only when no flag of that name exists, which is a programming error
+// in the command tree, so it panics while the tree is being built rather
+// than shipping a command whose required flag is silently optional.
+func requireFlag(cmd *cobra.Command, name string) {
+	if err := cmd.MarkFlagRequired(name); err != nil {
+		panic(fmt.Sprintf("failed to mark %s flag required on %q: %v", name, cmd.Name(), err))
+	}
 }
 
 // newGatewayLBVIPCommand creates the "lb vip" command tree.
@@ -133,7 +143,7 @@ Examples:
 	addTarget.register(addCmd)
 	addCmd.Flags().StringVar(&algorithm, "algorithm", "", "Balancing algorithm: hash or round-robin (default: service algorithm)")
 	addCmd.Flags().StringArrayVar(&addBackends, "backend", nil, "Backend as address:port[:weight]; repeatable (required)")
-	addCmd.MarkFlagRequired("backend")
+	requireFlag(addCmd, "backend")
 
 	// vip remove
 	removeTarget := &vipTargetFlags{}
@@ -196,7 +206,7 @@ Examples:
 	}
 	setTarget.register(setCmd)
 	setCmd.Flags().StringArrayVar(&setBackends, "backend", nil, "Backend as address:port[:weight]; repeatable (required)")
-	setCmd.MarkFlagRequired("backend")
+	requireFlag(setCmd, "backend")
 
 	cmd.AddCommand(addCmd, removeCmd, getCmd, listCmd, setCmd)
 	return cmd

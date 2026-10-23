@@ -20,9 +20,13 @@ import (
 	"strings"
 	"time"
 
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+
 	quicbaas "github.com/jeremyhahn/go-quicbaas/sdk/go"
 	sdkcrypto "github.com/jeremyhahn/go-quicbaas/sdk/go/client/crypto"
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/client/kms"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/api/errclass"
 	grpcapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
@@ -41,6 +45,11 @@ func (e ErrKMSClientUnavailable) Error() string {
 	return "KMS " + e.Client + " client unavailable"
 }
 
+// GRPCStatus classifies the error as Unavailable.
+func (e ErrKMSClientUnavailable) GRPCStatus() *status.Status {
+	return status.New(codes.Unavailable, e.Error())
+}
+
 // ErrKMSUnsupportedValue is returned when a platform.v1 enum value has no
 // QuicBaaS SDK equivalent.
 type ErrKMSUnsupportedValue struct {
@@ -52,6 +61,29 @@ func (e ErrKMSUnsupportedValue) Error() string {
 	return "unsupported " + e.Kind + ": " + strconv.Itoa(int(e.Value))
 }
 
+// GRPCStatus classifies the error as InvalidArgument.
+func (e ErrKMSUnsupportedValue) GRPCStatus() *status.Status {
+	return status.New(codes.InvalidArgument, e.Error())
+}
+
+// ErrKMSRewrapSourceVersionUnsupported is returned when a rewrap names the
+// key version the ciphertext was sealed under. The go-quicbaas SDK
+// RewrapRequest has no source version field, so the version cannot be
+// passed on; refusing keeps a caller from believing it was honoured.
+type ErrKMSRewrapSourceVersionUnsupported struct {
+	SourceVersion uint64
+}
+
+func (e ErrKMSRewrapSourceVersionUnsupported) Error() string {
+	return "rewrap source_version " + strconv.FormatUint(e.SourceVersion, 10) +
+		" is not supported: the SDK rewrap request has no source version; omit it or send 0"
+}
+
+// GRPCStatus classifies the error as InvalidArgument.
+func (e ErrKMSRewrapSourceVersionUnsupported) GRPCStatus() *status.Status {
+	return status.New(codes.InvalidArgument, e.Error())
+}
+
 // ErrKMSInvalidCursor is returned when a pagination cursor cannot be parsed.
 type ErrKMSInvalidCursor struct {
 	Cursor string
@@ -59,6 +91,11 @@ type ErrKMSInvalidCursor struct {
 
 func (e ErrKMSInvalidCursor) Error() string {
 	return "invalid pagination cursor: " + e.Cursor
+}
+
+// GRPCStatus classifies the error as InvalidArgument.
+func (e ErrKMSInvalidCursor) GRPCStatus() *status.Status {
+	return status.New(codes.InvalidArgument, e.Error())
 }
 
 // ErrKMSUnsupportedFilter is returned when a list filter key is not supported.
@@ -70,6 +107,11 @@ func (e ErrKMSUnsupportedFilter) Error() string {
 	return "unsupported list filter: " + e.Key
 }
 
+// GRPCStatus classifies the error as InvalidArgument.
+func (e ErrKMSUnsupportedFilter) GRPCStatus() *status.Status {
+	return status.New(codes.InvalidArgument, e.Error())
+}
+
 // ErrKMSMissingRequest is returned when a required request is nil.
 type ErrKMSMissingRequest struct {
 	Operation string
@@ -79,6 +121,11 @@ func (e ErrKMSMissingRequest) Error() string {
 	return "KMS " + e.Operation + " request is required"
 }
 
+// GRPCStatus classifies the error as InvalidArgument.
+func (e ErrKMSMissingRequest) GRPCStatus() *status.Status {
+	return status.New(codes.InvalidArgument, e.Error())
+}
+
 // ErrKMSMissingKeySpec is returned when a required key specification is nil.
 type ErrKMSMissingKeySpec struct {
 	Operation string
@@ -86,6 +133,45 @@ type ErrKMSMissingKeySpec struct {
 
 func (e ErrKMSMissingKeySpec) Error() string {
 	return "KMS " + e.Operation + " key specification is required"
+}
+
+// GRPCStatus classifies the error as InvalidArgument.
+func (e ErrKMSMissingKeySpec) GRPCStatus() *status.Status {
+	return status.New(codes.InvalidArgument, e.Error())
+}
+
+// ErrKMSNilMetadata is returned when the KMS answers a metadata call with
+// no metadata.
+type ErrKMSNilMetadata struct{}
+
+func (e ErrKMSNilMetadata) Error() string {
+	return "KMS returned no key metadata"
+}
+
+// GRPCStatus classifies the error as Internal.
+func (e ErrKMSNilMetadata) GRPCStatus() *status.Status {
+	return status.New(codes.Internal, e.Error())
+}
+
+// ErrKMSGeneratedKeyMetadata is returned when a key was generated but the
+// description and tags of the request could not be recorded on it, or its
+// metadata could not be read back.
+type ErrKMSGeneratedKeyMetadata struct {
+	KeyID string
+	Err   error
+}
+
+func (e ErrKMSGeneratedKeyMetadata) Error() string {
+	return "KMS key " + e.KeyID + " was generated but its metadata could not be recorded: " + e.Err.Error()
+}
+
+func (e ErrKMSGeneratedKeyMetadata) Unwrap() error {
+	return e.Err
+}
+
+// GRPCStatus classifies the error by its cause.
+func (e ErrKMSGeneratedKeyMetadata) GRPCStatus() *status.Status {
+	return status.New(errclass.Code(e.Err), e.Error())
 }
 
 // =============================================================================
@@ -183,32 +269,16 @@ func (b *PlatformKMSBackend) GenerateKey(
 		return nil, err
 	}
 
-	now := unixNow()
-	algorithmPb := sdkAlgorithmToPlatformKMS(resp.Algorithm)
+	meta, err := recordGeneratedKeyMetadata(ctx, client, resp.KeyID, req.Description, req.Tags)
+	if err != nil {
+		return nil, err
+	}
+
+	handle, metadata := sdkKeyMetadataToPlatformKMS(meta)
 	return &grpcapi.KMSGenerateKeyResponse{
-		Key: &grpcapi.KMSKeyHandle{
-			KeyID:     resp.KeyID,
-			Version:   uint64(resp.Version),
-			Algorithm: algorithmPb,
-			Status:    int32(platformv1.KeyStatus_KEY_STATUS_ENABLED),
-			CreatedAt: now,
-		},
-		Metadata: &grpcapi.KMSKeyMetadata{
-			KeyID:              resp.KeyID,
-			Name:               req.Name,
-			Description:        req.Description,
-			Algorithm:          algorithmPb,
-			Status:             int32(platformv1.KeyStatus_KEY_STATUS_ENABLED),
-			Usage:              req.KeySpec.Usage,
-			Version:            uint64(resp.Version),
-			Exportable:         resp.Exportable,
-			DeletionProtection: resp.DeletionProtection,
-			CreatedAt:          now,
-			UpdatedAt:          now,
-			Tags:               req.Tags,
-			Owner:              req.Owner,
-		},
-		Timestamp: now,
+		Key:       handle,
+		Metadata:  metadata,
+		Timestamp: unixNow(),
 	}, nil
 }
 
@@ -293,35 +363,47 @@ func (b *PlatformKMSBackend) GetKey(
 	if err != nil {
 		return nil, err
 	}
+	if meta == nil {
+		return nil, ErrKMSNilMetadata{}
+	}
 
-	algorithmPb := sdkAlgorithmToPlatformKMS(meta.Algorithm)
-	statusPb := sdkStatusToPlatformKMS(meta.Status)
+	handle, metadata := sdkKeyMetadataToPlatformKMS(meta)
 	return &grpcapi.KMSGetKeyResponse{
-		Key: &grpcapi.KMSKeyHandle{
-			KeyID:     meta.KeyID,
-			Version:   uint64(meta.Version),
-			Algorithm: algorithmPb,
-			Status:    statusPb,
-			CreatedAt: unixOrZero(meta.CreatedAt),
-		},
-		Metadata: &grpcapi.KMSKeyMetadata{
-			KeyID:              meta.KeyID,
-			Name:               meta.Name,
-			Description:        meta.Description,
-			Algorithm:          algorithmPb,
-			Status:             statusPb,
-			Usage:              sdkUsagesToPlatformKMS(meta.Usage),
-			Version:            uint64(meta.Version),
-			Exportable:         meta.Exportable,
-			DeletionProtection: meta.DeletionProtection,
-			CreatedAt:          unixOrZero(meta.CreatedAt),
-			UpdatedAt:          unixOrZero(meta.UpdatedAt),
-			LastUsedAt:         unixOrZero(meta.LastUsedAt),
-			Tags:               meta.Tags,
-			Owner:              meta.Owner,
-		},
+		Key:       handle,
+		Metadata:  metadata,
 		Timestamp: unixNow(),
 	}, nil
+}
+
+// sdkKeyMetadataToPlatformKMS converts the metadata the KMS recorded for a key
+// into the platform key handle and key metadata.
+func sdkKeyMetadataToPlatformKMS(meta *kms.KeyMetadataResponse) (*grpcapi.KMSKeyHandle, *grpcapi.KMSKeyMetadata) {
+	algorithmPb := sdkAlgorithmToPlatformKMS(meta.Algorithm)
+	statusPb := sdkStatusToPlatformKMS(meta.Status)
+	handle := &grpcapi.KMSKeyHandle{
+		KeyID:     meta.KeyID,
+		Version:   uint64(meta.Version),
+		Algorithm: algorithmPb,
+		Status:    statusPb,
+		CreatedAt: unixOrZero(meta.CreatedAt),
+	}
+	metadata := &grpcapi.KMSKeyMetadata{
+		KeyID:              meta.KeyID,
+		Name:               meta.Name,
+		Description:        meta.Description,
+		Algorithm:          algorithmPb,
+		Status:             statusPb,
+		Usage:              sdkUsagesToPlatformKMS(meta.Usage),
+		Version:            uint64(meta.Version),
+		Exportable:         meta.Exportable,
+		DeletionProtection: meta.DeletionProtection,
+		CreatedAt:          unixOrZero(meta.CreatedAt),
+		UpdatedAt:          unixOrZero(meta.UpdatedAt),
+		LastUsedAt:         unixOrZero(meta.LastUsedAt),
+		Tags:               meta.Tags,
+		Owner:              meta.Owner,
+	}
+	return handle, metadata
 }
 
 // ListKeys lists keys via the SDK KMS client with offset-cursor pagination
@@ -752,6 +834,9 @@ func (b *PlatformKMSBackend) Rewrap(
 	}
 	if req == nil {
 		return nil, ErrKMSMissingRequest{Operation: "Rewrap"}
+	}
+	if req.SourceVersion != 0 {
+		return nil, ErrKMSRewrapSourceVersionUnsupported{SourceVersion: req.SourceVersion}
 	}
 
 	resp, err := client.Rewrap(ctx, &quicbaas.RewrapRequest{

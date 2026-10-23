@@ -795,12 +795,12 @@ func TestService_PublishEvent(t *testing.T) {
 		}
 		svc.PublishEvent(event)
 
-		// Verify event was not sent
+		// PublishEvent sends synchronously, so an event it sent is already
+		// buffered; nothing needs to be waited out (#284).
 		select {
 		case <-eventCh:
 			t.Error("event should not be published when events disabled")
-		case <-time.After(100 * time.Millisecond):
-			// Expected - no event received
+		default:
 		}
 	})
 
@@ -1026,12 +1026,12 @@ func TestService_PublishMetric(t *testing.T) {
 		}
 		svc.PublishMetric(metric)
 
-		// Verify metric was not sent
+		// PublishMetric sends synchronously, so a metric it sent is already
+		// buffered; nothing needs to be waited out (#284).
 		select {
 		case <-metricCh:
 			t.Error("metric should not be published when metrics disabled")
-		case <-time.After(100 * time.Millisecond):
-			// Expected - no metric received
+		default:
 		}
 	})
 

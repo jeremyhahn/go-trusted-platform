@@ -20,6 +20,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/jeremyhahn/go-trusted-platform/pkg/device"
 )
 
 // aboveFloat64Precision is 2^53 + 1 — the smallest integer a JavaScript number
@@ -114,7 +116,7 @@ func TestOmitEmptyStillElidesAZeroID(t *testing.T) {
 	assert.NotContains(t, string(withZero), `"id"`,
 		"omitempty must still elide a zero id")
 
-	withValue, err := json.Marshal(DeviceRequest{ID: ID(aboveFloat64Precision)})
+	withValue, err := json.Marshal(DeviceRequest{RequestFields: device.RequestFields{ID: ID(aboveFloat64Precision)}})
 	require.NoError(t, err)
 	assert.Contains(t, string(withValue), `"id":"9007199254740993"`)
 }
@@ -135,8 +137,8 @@ func TestEveryDeviceIDFieldSpeaksTheSameEncoding(t *testing.T) {
 		"DeviceResponse":        DeviceResponse{ID: id},
 		"ProfileFullResponse":   ProfileFullResponse{ID: id},
 		"TemplateResponse":      TemplateResponse{ID: id},
-		"DeviceRequest":         DeviceRequest{ID: id},
-		"DeviceRequestPayload":  DeviceRequestPayload{ID: id},
+		"DeviceRequest":         DeviceRequest{RequestFields: device.RequestFields{ID: id}},
+		"DeviceRequestEnvelope": DeviceRequest{Device: &device.RequestFields{ID: id}},
 		"ProfileRequest":        ProfileRequest{ID: id},
 		"TemplateRequest":       TemplateRequest{ID: id},
 		"TemplateRequestNested": TemplateRequestNested{ID: id},

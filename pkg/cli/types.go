@@ -168,6 +168,14 @@ type LocalContext struct {
 	// quicbaasd. One of: unix, grpc, rest, quic, mcp, embedded.
 	// Defaults to "unix" for local contexts.
 	QuicBaaSTransport string `yaml:"quicbaas_transport,omitempty" json:"quicbaas_transport,omitempty"`
+	// QuicBaaSCACert, QuicBaaSClientCert and QuicBaaSClientKey are the
+	// TLS files of the quicbaas connection. The quicbaas SDK refuses every
+	// connection without TLS, its Unix transport included, so a verb that
+	// opens the quicbaas client fails without them. platformd's own Unix
+	// socket authenticates by peer credentials and needs none.
+	QuicBaaSCACert     string `yaml:"quicbaas_ca_cert,omitempty" json:"quicbaas_ca_cert,omitempty"`
+	QuicBaaSClientCert string `yaml:"quicbaas_client_cert,omitempty" json:"quicbaas_client_cert,omitempty"`
+	QuicBaaSClientKey  string `yaml:"quicbaas_client_key,omitempty" json:"quicbaas_client_key,omitempty"`
 }
 
 // RemoteContext contains configuration for remote HTTPS connections

@@ -19,6 +19,7 @@ import (
 	"io"
 	"net"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -35,6 +36,10 @@ const (
 	// binds the real 67 depends on host state it does not control.
 	DefaultDHCPPort = 67
 
+	// DefaultBindHost is the address the HTTP and TFTP servers bind: empty
+	// is the unspecified address, every interface (#93).
+	DefaultBindHost = ""
+
 	// DefaultLeaseTime is the default DHCP lease time (1 hour).
 	DefaultLeaseTime = 1 * time.Hour
 
@@ -46,6 +51,16 @@ const (
 type ServerConfig struct {
 	// Interface is the network interface to bind to.
 	Interface string
+
+	// BindHost is the IP address the HTTP and TFTP servers bind (#93).
+	// Empty, the default, is the unspecified address: every interface.
+	//
+	// The DHCP server does not bind it. A UDP socket bound to a unicast
+	// address never receives a datagram sent to 255.255.255.255, and a
+	// PXE client with no address can only broadcast, so the DHCP socket
+	// keeps the unspecified address and is scoped to its segment by
+	// SO_BINDTODEVICE on DHCPInterface (or Interface) instead.
+	BindHost string
 
 	// HTTPPort is the HTTP server port (default: 8080).
 	HTTPPort int
@@ -126,8 +141,9 @@ type ServerConfig struct {
 	// DHCPGateway is the default gateway (optional).
 	DHCPGateway string
 
-	// DHCPDNS is the DNS server (optional).
-	DHCPDNS string
+	// DHCPDNS lists the DNS servers advertised in option 6, in order
+	// (optional). Each is an IPv4 address.
+	DHCPDNS []string
 
 	// DHCPLeaseTime is the lease duration (default: 1 hour).
 	DHCPLeaseTime time.Duration
@@ -232,6 +248,7 @@ type BootEntry struct {
 func DefaultServerConfig() *ServerConfig {
 	return &ServerConfig{
 		Interface:          "",
+		BindHost:           DefaultBindHost,
 		HTTPPort:           DefaultHTTPPort,
 		TFTPPort:           DefaultTFTPPort,
 		DHCPPort:           DefaultDHCPPort,
@@ -244,7 +261,7 @@ func DefaultServerConfig() *ServerConfig {
 		DHCPRangeEnd:       "",
 		DHCPSubnetMask:     DefaultSubnetMask,
 		DHCPGateway:        "",
-		DHCPDNS:            "",
+		DHCPDNS:            nil,
 		DHCPLeaseTime:      DefaultLeaseTime,
 		DHCPServerIP:       "",
 		TFTPServerName:     "",
@@ -277,6 +294,12 @@ func (c *ServerConfig) Validate() error {
 	// every ServerConfig literal predating this field keeps working.
 	if c.DHCPPort < 0 || c.DHCPPort > 65535 {
 		return &SentinelCauseError{Sentinel: ErrInvalidPort, Cause: &MessageError{Msg: "DHCP port must be between 1 and 65535"}}
+	}
+
+	// Validate bind host: an IP literal, so a typo fails here rather than
+	// at bind time, and a hostname never binds whatever it resolves to.
+	if c.BindHost != "" && net.ParseIP(c.BindHost) == nil {
+		return &SentinelCauseError{Sentinel: ErrInvalidBindHost, Cause: &MessageError{Msg: c.BindHost + " is not an IP address"}}
 	}
 
 	// Validate interface if specified
@@ -346,20 +369,8 @@ func (c *ServerConfig) validateDHCP() error {
 		}
 	}
 
-	// Validate gateway if specified
-	if c.DHCPGateway != "" {
-		gw := net.ParseIP(c.DHCPGateway)
-		if gw == nil {
-			return &SentinelCauseError{Sentinel: ErrInvalidConfig, Cause: &MessageError{Msg: fmt.Sprintf("invalid gateway IP %s", c.DHCPGateway)}}
-		}
-	}
-
-	// Validate DNS if specified
-	if c.DHCPDNS != "" {
-		dns := net.ParseIP(c.DHCPDNS)
-		if dns == nil {
-			return &SentinelCauseError{Sentinel: ErrInvalidConfig, Cause: &MessageError{Msg: fmt.Sprintf("invalid DNS IP %s", c.DHCPDNS)}}
-		}
+	if _, _, err := c.dhcpRouterAndDNS(); err != nil {
+		return err
 	}
 
 	// Validate lease time
@@ -370,82 +381,40 @@ func (c *ServerConfig) validateDHCP() error {
 	return nil
 }
 
-// ToDHCPConfig converts the ServerConfig to a DHCPConfig for the DHCP server.
-//
-//	func (c *ServerConfig) ToDHCPConfig() (*DHCPConfig, error) {
-//		if !c.EnableDHCP {
-//			return nil, nil
-//		}
-//
-//		// Determine interface
-//		dhcpInterface := c.DHCPInterface
-//		if dhcpInterface == "" {
-//			dhcpInterface = c.Interface
-//		}
-//
-//		// Parse IPs
-//		rangeStart := net.ParseIP(c.DHCPRangeStart)
-//		if rangeStart == nil {
-//			return nil, &SentinelCauseError{Sentinel: ErrInvalidIPRange, Cause: &MessageError{Msg: fmt.Sprintf("invalid range start IP %s", c.DHCPRangeStart)}}
-//		}
-//
-//		rangeEnd := net.ParseIP(c.DHCPRangeEnd)
-//		if rangeEnd == nil {
-//			return nil, &SentinelCauseError{Sentinel: ErrInvalidIPRange, Cause: &MessageError{Msg: fmt.Sprintf("invalid range end IP %s", c.DHCPRangeEnd)}}
-//		}
-//
-//		subnetMask := net.ParseIP(c.DHCPSubnetMask)
-//		if subnetMask == nil {
-//			return nil, &SentinelCauseError{Sentinel: ErrInvalidConfig, Cause: &MessageError{Msg: fmt.Sprintf("invalid subnet mask %s", c.DHCPSubnetMask)}}
-//		}
-//
-//		// Determine server IP
-//		var serverIP net.IP
-//		if c.DHCPServerIP != "" {
-//			serverIP = net.ParseIP(c.DHCPServerIP)
-//			if serverIP == nil {
-//				return nil, &SentinelCauseError{Sentinel: ErrInvalidConfig, Cause: &MessageError{Msg: fmt.Sprintf("invalid server IP %s", c.DHCPServerIP)}}
-//			}
-//		} else {
-//			// Auto-detect server IP from interface
-//			ipStr, err := getInterfaceIP(dhcpInterface)
-//			if err != nil {
-//				return nil, &WrappedError{Msg: "failed to auto-detect server IP", Err: err}
-//			}
-//			serverIP = net.ParseIP(ipStr)
-//		}
-//
-//		// Calculate broadcast IP
-//		broadcastIP := calculateBroadcastIP(serverIP, subnetMask)
-//
-//		dhcpConfig := &DHCPConfig{
-//			Interface:      dhcpInterface,
-//			ServerIP:       serverIP,
-//			BroadcastIP:    broadcastIP,
-//			SubnetMask:     subnetMask.To4(),
-//			RangeStart:     rangeStart.To4(),
-//			RangeEnd:       rangeEnd.To4(),
-//			LeaseTime:      c.DHCPLeaseTime,
-//			TFTPServerName: c.TFTPServerName,
-//			TFTPServerIP:   serverIP, // Use same IP for TFTP
-//			BootFilename:   c.BootFilename,
-//			IPXEScript:     c.IPXEScript,
-//			UseRawSocket:   false,
-//		}
-//
-//		// Optional fields
-//		if c.DHCPGateway != "" {
-//			dhcpConfig.Router = net.ParseIP(c.DHCPGateway).To4()
-//		}
-//
-//		if c.DHCPDNS != "" {
-//			dhcpConfig.DNSServers = []net.IP{net.ParseIP(c.DHCPDNS).To4()}
-//		}
-//
-//		return dhcpConfig, nil
-//	}
-//
-// // GetServerIP returns the server IP address, auto-detecting if necessary.
+// ParseDHCPv4 parses value as the address a DHCPv4 option carries. Options
+// 3 (router) and 6 (DNS) hold four-byte addresses only, so anything that is
+// not IPv4 is refused here rather than dropped from the offer.
+func ParseDHCPv4(option, value string) (net.IP, error) {
+	ip := net.ParseIP(value).To4()
+	if ip == nil {
+		return nil, &DHCPAddressError{Option: option, Value: value}
+	}
+	return ip, nil
+}
+
+// dhcpRouterAndDNS parses the optional gateway and DNS servers. No gateway
+// is a nil router: the server then sends no option 3.
+func (c *ServerConfig) dhcpRouterAndDNS() (net.IP, []net.IP, error) {
+	var router net.IP
+	if c.DHCPGateway != "" {
+		ip, err := ParseDHCPv4("gateway", c.DHCPGateway)
+		if err != nil {
+			return nil, nil, err
+		}
+		router = ip
+	}
+	var dns []net.IP
+	for _, server := range c.DHCPDNS {
+		ip, err := ParseDHCPv4("dns", server)
+		if err != nil {
+			return nil, nil, err
+		}
+		dns = append(dns, ip)
+	}
+	return router, dns, nil
+}
+
+// GetServerIP returns the server IP address, auto-detecting if necessary.
 func (c *ServerConfig) GetServerIP() (string, error) {
 	// If external URL is set, try to extract IP
 	if c.ExternalURL != "" {
@@ -457,6 +426,11 @@ func (c *ServerConfig) GetServerIP() (string, error) {
 	// If DHCP server IP is set, use that
 	if c.DHCPServerIP != "" {
 		return c.DHCPServerIP, nil
+	}
+
+	// Servers bound to one address are reachable only there
+	if ip := net.ParseIP(c.BindHost); ip != nil && !ip.IsUnspecified() {
+		return c.BindHost, nil
 	}
 
 	// Auto-detect from interface
@@ -475,6 +449,12 @@ func (c *ServerConfig) GetServerIP() (string, error) {
 	}
 
 	return ip, nil
+}
+
+// listenAddr returns the address a server listening on port binds: the
+// configured BindHost, or every interface when it is empty.
+func (c *ServerConfig) listenAddr(port int) string {
+	return net.JoinHostPort(c.BindHost, strconv.Itoa(port))
 }
 
 // Validate validates the boot entry.

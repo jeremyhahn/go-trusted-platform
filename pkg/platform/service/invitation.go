@@ -73,7 +73,26 @@ type InvitationService struct {
 	invitationDAO datastore.InvitationDAO
 	userDAO       datastore.UserDAO
 	defaultExpiry time.Duration
+
+	// clk is the service's view of time. entities.Invitation takes time as a
+	// parameter (#311), so this is where the clock is read: once per
+	// operation, and the same instant is passed to every entity method that
+	// operation calls. Fixed at construction; production always gets
+	// realInvitationClock.
+	clk invitationClock
 }
+
+// invitationClock is the invitation service's entire view of time — one
+// method, the same shape as the quota and dampening clocks (#284).
+type invitationClock interface {
+	Now() time.Time
+}
+
+// realInvitationClock is the production clock: the standard library, unmodified.
+type realInvitationClock struct{}
+
+// Now returns the current wall-clock time.
+func (realInvitationClock) Now() time.Time { return time.Now() }
 
 // NewInvitationService creates a new InvitationService.
 //
@@ -87,12 +106,7 @@ func NewInvitationService(
 	invitationDAO datastore.InvitationDAO,
 	userDAO datastore.UserDAO,
 ) *InvitationService {
-	return &InvitationService{
-		logger:        logger,
-		invitationDAO: invitationDAO,
-		userDAO:       userDAO,
-		defaultExpiry: DefaultInvitationExpiry,
-	}
+	return NewInvitationServiceWithExpiry(logger, invitationDAO, userDAO, DefaultInvitationExpiry)
 }
 
 // NewInvitationServiceWithExpiry creates a new InvitationService with custom default expiry.
@@ -110,6 +124,7 @@ func NewInvitationServiceWithExpiry(
 		invitationDAO: invitationDAO,
 		userDAO:       userDAO,
 		defaultExpiry: defaultExpiry,
+		clk:           realInvitationClock{},
 	}
 }
 
@@ -127,7 +142,8 @@ var _ InvitationServicer = (*InvitationService)(nil)
 type invitationFactory func(
 	tenantID, email, role string,
 	invitedByID uint64,
-	expiresDuration time.Duration) (*entities.Invitation, error)
+	expiresDuration time.Duration,
+	now time.Time) (*entities.Invitation, error)
 
 // Create creates a new invitation for the specified email address.
 // The invitation will expire after the specified duration or the default expiry.
@@ -191,7 +207,7 @@ func (s *InvitationService) create(
 		expiry = s.defaultExpiry
 	}
 
-	invitation, err := newInvitation(req.TenantID, req.Email, req.Role, req.InvitedByID, expiry)
+	invitation, err := newInvitation(req.TenantID, req.Email, req.Role, req.InvitedByID, expiry, s.clk.Now())
 	if err != nil {
 		s.logger.Error(err, "failed to create invitation entity")
 		return nil, ErrInvitationSaveFailed{Cause: err}
@@ -267,7 +283,7 @@ func (s *InvitationService) GetByToken(ctx context.Context, token string) (*enti
 	}
 
 	// Check expiration for pending invitations
-	if invitation.Status == entities.InvitationStatusPending && invitation.IsExpired() {
+	if invitation.Status == entities.InvitationStatusPending && invitation.IsExpired(s.clk.Now()) {
 		return nil, ErrInvitationExpired{Token: token}
 	}
 
@@ -326,9 +342,9 @@ func (s *InvitationService) Accept(ctx context.Context, token string, userID uin
 	}
 
 	// Check if invitation is expired
-	if invitation.IsExpired() {
-		// Update status to expired
-		invitation.Status = entities.InvitationStatusExpired
+	now := s.clk.Now()
+	if invitation.IsExpired(now) {
+		invitation.Expire(now)
 		if saveErr := s.invitationDAO.Save(ctx, invitation); saveErr != nil {
 			s.logger.Error(saveErr, "failed to update expired invitation")
 		}
@@ -336,7 +352,7 @@ func (s *InvitationService) Accept(ctx context.Context, token string, userID uin
 	}
 
 	// Mark as accepted
-	invitation.Accept()
+	invitation.Accept(now)
 
 	if err := s.invitationDAO.Save(ctx, invitation); err != nil {
 		s.logger.Error(err, "failed to save accepted invitation")
@@ -386,7 +402,7 @@ func (s *InvitationService) Revoke(ctx context.Context, id uint64, revokerID uin
 		return ErrInvalidInvitationStatus{Status: string(invitation.Status)}
 	}
 
-	invitation.Status = entities.InvitationStatusRevoked
+	invitation.Revoke(s.clk.Now())
 
 	if err := s.invitationDAO.Save(ctx, invitation); err != nil {
 		s.logger.Error(err, "failed to save revoked invitation")
@@ -444,6 +460,10 @@ func (s *InvitationService) CleanupExpired(ctx context.Context) (int, error) {
 
 	expiredCount := 0
 
+	// One instant for the whole sweep, so every page is judged against the
+	// same cutoff however long the iteration takes.
+	now := s.clk.Now()
+
 	err := s.invitationDAO.ForEachPage(ctx, pageQuery, func(result datastore.PageResult[*entities.Invitation]) error {
 		for _, invitation := range result.Entities {
 			// Only process pending invitations
@@ -452,8 +472,8 @@ func (s *InvitationService) CleanupExpired(ctx context.Context) (int, error) {
 			}
 
 			// Check if expired
-			if invitation.IsExpired() {
-				invitation.Status = entities.InvitationStatusExpired
+			if invitation.IsExpired(now) {
+				invitation.Expire(now)
 				if saveErr := s.invitationDAO.Save(ctx, invitation); saveErr != nil {
 					s.logger.Error(saveErr, "failed to mark invitation as expired",
 						"invitation_id", invitation.ID)

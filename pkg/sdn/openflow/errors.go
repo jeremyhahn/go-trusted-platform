@@ -92,6 +92,8 @@ func formatOFError(errType, errCode uint16) string {
 		return formatBadMatchError(errCode)
 	case OFPETFlowModFailed:
 		return formatFlowModFailedError(errCode)
+	case OFPETMeterModFailed:
+		return formatMeterModFailedError(errCode)
 	default:
 		return "unknown OpenFlow error"
 	}
@@ -344,4 +346,109 @@ func (e *SentinelCauseError) Error() string {
 // Unwrap returns the sentinel and the cause for errors.Is / errors.As.
 func (e *SentinelCauseError) Unwrap() []error {
 	return []error{e.Sentinel, e.Cause}
+}
+
+// meterModFailedText describes the OFPET_METER_MOD_FAILED codes.
+var meterModFailedText = map[uint16]string{
+	0:                   "meter mod failed: unknown",
+	OFPMMFCMeterExists:  "meter mod failed: meter exists",
+	OFPMMFCInvalidMeter: "meter mod failed: invalid meter",
+	OFPMMFCUnknownMeter: "meter mod failed: unknown meter",
+	4:                   "meter mod failed: bad command",
+	5:                   "meter mod failed: bad flags",
+	6:                   "meter mod failed: bad rate",
+	7:                   "meter mod failed: bad burst",
+	8:                   "meter mod failed: bad band",
+	9:                   "meter mod failed: bad band value",
+	OFPMMFCOutOfMeters:  "meter mod failed: out of meters",
+	11:                  "meter mod failed: out of bands",
+}
+
+func formatMeterModFailedError(code uint16) string {
+	if text, ok := meterModFailedText[code]; ok {
+		return text
+	}
+	return "meter mod failed: unknown error"
+}
+
+// ErrMeterUnsupported reports that the datapath refused a meter because it
+// has no meter support or no free meter slot. Nothing that references the
+// meter can be installed.
+type ErrMeterUnsupported struct {
+	MeterID uint32
+	Cause   error
+}
+
+// Error implements the error interface.
+func (e *ErrMeterUnsupported) Error() string {
+	return "meter " + strconv.FormatUint(uint64(e.MeterID), 10) + " unsupported by the datapath: " + e.Cause.Error()
+}
+
+// Unwrap returns the switch-reported cause.
+func (e *ErrMeterUnsupported) Unwrap() error {
+	return e.Cause
+}
+
+// ErrMeterNotFound reports a meter statistics reply that did not carry the
+// requested meter.
+type ErrMeterNotFound struct {
+	MeterID uint32
+}
+
+// Error implements the error interface.
+func (e *ErrMeterNotFound) Error() string {
+	return "meter " + strconv.FormatUint(uint64(e.MeterID), 10) + " not found"
+}
+
+// ErrMessageLengthOverflow reports a message whose encoding does not fit
+// the 16-bit OpenFlow length field. It matches ErrMessageTooLong.
+type ErrMessageLengthOverflow struct {
+	MessageType uint8
+	Length      int
+}
+
+// Error implements the error interface.
+func (e *ErrMessageLengthOverflow) Error() string {
+	return "openflow message type " + strconv.Itoa(int(e.MessageType)) + " is " + strconv.Itoa(e.Length) +
+		" bytes, over the " + strconv.Itoa(MaxMessageSize) + "-byte limit"
+}
+
+// Is matches ErrMessageTooLong.
+func (e *ErrMessageLengthOverflow) Is(target error) bool {
+	return target == ErrMessageTooLong
+}
+
+// ErrPacketInDisabled reports a switch that kept miss_send_len at zero
+// after the client asked for packet-ins, so no packet-in would arrive.
+type ErrPacketInDisabled struct {
+	MissSendLen uint16
+}
+
+// Error implements the error interface.
+func (e *ErrPacketInDisabled) Error() string {
+	return "switch kept packet-ins disabled: miss_send_len " + strconv.Itoa(int(e.MissSendLen))
+}
+
+// ErrInvalidPacketInConfig reports an unusable packet-in controller or
+// subscription argument.
+type ErrInvalidPacketInConfig struct {
+	Field  string
+	Reason string
+}
+
+// Error implements the error interface.
+func (e *ErrInvalidPacketInConfig) Error() string {
+	return "invalid packet-in config: " + e.Field + " " + e.Reason
+}
+
+// ErrDuplicatePacketInRoute reports two packet-in routes registered for
+// the same reason and cookie; dispatch would be ambiguous.
+type ErrDuplicatePacketInRoute struct {
+	Key PacketInKey
+}
+
+// Error implements the error interface.
+func (e *ErrDuplicatePacketInRoute) Error() string {
+	return "duplicate packet-in route: reason " + strconv.Itoa(int(e.Key.Reason)) +
+		" cookie 0x" + strconv.FormatUint(e.Key.Cookie, 16)
 }

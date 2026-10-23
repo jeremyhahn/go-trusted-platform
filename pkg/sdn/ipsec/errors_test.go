@@ -26,6 +26,8 @@ func TestErrorMessages(t *testing.T) {
 	}{
 		{&PeerError{Peer: addr(peer4), Op: "load-conn", Err: cause}, "ipsec: load-conn 10.20.0.30: boom"},
 		{&OpError{Op: "xfrm install", Err: cause}, "ipsec: xfrm install: boom"},
+		{&CommandError{Command: "load-conn", Err: cause}, "vici load-conn: boom"},
+		{&CommandError{Command: "load-token", Reason: "no such key", Err: cause}, "vici load-token: boom: no such key"},
 	} {
 		if got := tt.err.Error(); got != tt.want {
 			t.Errorf("Error() = %q, want %q", got, tt.want)

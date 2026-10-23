@@ -6,14 +6,22 @@ rather than an installer ISO: `platformctl diskimage create --target rpi
 (`make image-rpi` builds the `rpi4` one). The feature is documented in
 [docs/factory-image/](../../../../../docs/factory-image/); the hardware
 runbook is its [user.md](../../../../../docs/factory-image/user.md).
+A Pi as a compute node of the dedicated profile is built with `--role
+compute`, and a CM4 or Pi 4 as a standalone control plane with `--role
+control-plane`, from [`dedicated/raspberrypi/`](../../dedicated/raspberrypi/README.md);
+the hardware prerequisites below apply to them too (to the Pi 4 and CM4 — the
+experimental Pi 5 compute template lists what differs there).
 
 | Model directory | Board | Device tree | Status |
 |---|---|---|---|
 | `rpi4/` | Raspberry Pi 4 Model B | `bcm2711-rpi-4-b.dtb` | Image builds and boots on the QEMU virt stand-in; hardware validation per the runbook |
 
-Other boards the image builder knows (`--model rpi400`, `cm4`, `rpi3b+`,
-`rpi5`) fall back to `single-node/default.yaml` until they get a directory
-here; copy `rpi4/default.yaml` and change `hardware-model` and `os.hostname`.
+Without `--role`, the other boards the image builder knows (`--model rpi400`,
+`cm4`, `rpi3b+`, `rpi5`) fall back to `single-node/default.yaml` until they
+get a directory here; copy `rpi4/default.yaml` and change `hardware-model` and
+`os.hostname`. With `--role` nothing falls back: `--model cm4 --role
+control-plane` builds the dedicated CM4 control plane, and the Pi 5 has only
+the experimental dedicated compute template.
 
 ## Hardware prerequisites
 
@@ -22,10 +30,12 @@ here; copy `rpi4/default.yaml` and change `hardware-model` and `os.hostname`.
   (Infineon Iridium 9670, LetsTrust TPM and compatibles). U-Boot and Linux
   both drive it as a GPIO bit-banged bus (`dtoverlay=tpm-soft-spi`), so the
   HAT must be on SPI0's pins (SCLK 11, MOSI 10, MISO 9, CE1 7).
-- Serial console on GPIO 14/15 at 115200 8N1 (a USB-TTL adapter): the
-  boot milestones, the first-boot provisioning log and the recovery prompts
-  are only there. Bluetooth is moved off the PL011 so the console is
-  `ttyAMA0`.
+- An HDMI display and a serial console on GPIO 14/15 at 115200 8N1 (a
+  USB-TTL adapter). Bluetooth is moved off the PL011 so the serial console
+  is `ttyAMA0` (`console=ttyAMA0,115200`); it carries the firmware log,
+  U-Boot and the kernel log. The kernel command line ends in
+  `console=tty1`, so HDMI is `/dev/console`: `platform-initrd`, firstboot
+  and `platformd` print to the display, not to the serial line.
 - Ethernet on `eth0` (DHCP by default).
 
 ## What the template changes against `single-node/default.yaml`

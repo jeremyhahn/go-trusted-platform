@@ -93,8 +93,7 @@ and the check happens locally before anything is sent. A malformed certificate
 fails fast with `EK certificate is not a valid PEM x509 certificate`.
 
 **`--role` is the device role vocabulary** ([api.md](api.md) §4.2): the node
-roles `control-plane`, `gateway`, `worker` — the same three `device register
---role` takes — plus `server`, `client`, `workstation`, `edge`, `iot`,
+roles `control-plane`, `gateway`, `worker` plus `server`, `client`, `workstation`, `edge`, `iot`,
 `load-balancer` (and `unknown`). The same list is accepted over REST and by the
 bootstrap seeder and is stored verbatim; any other string is rejected, never
 silently `unknown`.
@@ -157,28 +156,28 @@ public key truncated in table form; use `--output json` to get the full values.
 
 ---
 
-## Task 4 — Register a node against a control plane it has no context for
+## Task 4 — Register a device record by hand
 
-This is the bootstrap case: a fresh machine, no saved `platformctl` context.
+Machines that enroll through bootstrap create their own device record. To add
+one by hand — a machine enrolled out of band, or a record you want before the
+machine first boots — register it through your usual context:
 
 ```bash
 platformctl device register \
-    --hostname gw-01 \
-    --mac 00:25:90:FF:AA:01 \
-    --role gateway \
-    --template gateway-default \
-    --server https://cp.example.com:8443 \
-    --ca-cert /etc/platform/ca.pem
+    --serial SRV-2024-001 \
+    --model r640 \
+    --ek-cert /etc/platform/ek-certs/node-02.pem \
+    --hash-algo 11
 ```
 
-Three things about this command that surprise people:
+It prints the stored device, including the id the control plane assigned — the
+id `device profile assign --device` takes (Task 2).
 
-- **It creates a profile, not a device.** The name is historical.
-- **`--role` here is `control-plane` | `gateway` | `worker`.** See Task 1.
-- **`--override-file` contents go into the profile's `event_log` field**, not
-  into a config field, and are not delivered as configuration. If you want a
-  platform config delivered, use
-  `device profile create --config-file` instead.
+- **It creates a device, not a profile.** Use `device profile create` (Task 1)
+  for a profile.
+- **The serial is required and must be unused.** A second device with the same
+  serial is refused, on every transport, rather than written beside the first
+  ([api.md](api.md) §2).
 
 ---
 
@@ -216,9 +215,10 @@ with no identity to key on. The daemon log names which.
 
 ## Task 5 — Templates
 
-Templates are **REST-only**. There is no CLI verb and no gRPC RPC for template
-CRUD; that is a recorded design decision, not an oversight
-([api.md](api.md) §4).
+Template create, get, list, update and delete reach every transport: the
+`platformctl device template` verbs ([cli.md](cli.md) §2.8), the gRPC, Unix and
+QUIC `DeviceService` RPCs, the `device_template_*` MCP tools and the REST routes
+below ([api.md](api.md) §4). Only the lookup by name is REST-only.
 
 ```bash
 # Upload a template
@@ -251,10 +251,19 @@ Resolution is priority-ordered:
 
 The first hit wins. Nothing after it is consulted.
 
+Ask the same question the machine will, as an operator:
+
 ```bash
-curl 'https://cp.example.com:8443/api/v1/devices/config?ek_serial=1234567890'
-curl 'https://cp.example.com:8443/api/v1/devices/config?mac=00:25:90:ff:aa:02'
+curl 'https://cp.example.com:8443/api/v1/device/profiles/find-config?ek_serial=1234567890'
+curl 'https://cp.example.com:8443/api/v1/device/profiles/find-config?mac=00:25:90:ff:aa:02'
 ```
+
+The booting machine itself fetches `GET /api/v1/devices/config?mac=…` (or
+`?serial=…`) and gets the config back as YAML. That route needs no credentials,
+so **only the provisioning listener serves it**: a webservice with
+`surface: provisioning`, bound to an address in the provisioning VLAN. Every
+other listener answers it with a 404 (#177). See
+[`docs/web/user.md`](../web/user.md) to configure that listener.
 
 If nothing matches, you get an error, **not a default profile**. A machine with
 no record gets nothing — that is the point.
@@ -283,23 +292,59 @@ unknown → registered → installing → installed → activated → attested
   step.
 - `quarantined` means a non-severe compliance failure: the machine is on the
   quarantine network, the port is still up, and re-attestation restores it.
-- `suspended` means a severe failure or a revoked certificate: the port is set
-  admin-down. Only an operator restores it.
+- `suspended` means a severe failure, a revoked certificate or an operator's
+  Disable: the port is set admin-down. Only an operator's Enable lifts it, and
+  only as far as quarantine.
 - **`revoked` is terminal.** There is no transition out of it. Plan for that
   before you revoke.
 
 Quarantine and suspension record where the device came from (`prior_state`,
 `prior_zone`) so remediation puts it back where it was rather than guessing.
 
-**These transitions are driven by the platform, not by hand.** Quarantine and
-suspension come from the SDN quarantine loop reacting to a violation, and the
-restore comes from a successful re-attestation — both program the port as well
-as the record. There is no operator "disable this device" verb: the generic
-device update deliberately refuses to carry a lifecycle state, because a
-transition that changed the record without programming the port would report a
-machine as cut off while it was still on the network. The console's
-Enable/Disable Device control is disabled and says so for that reason; it is
-tracked in issue #250.
+**Most transitions are driven by the platform.** Quarantine and suspension
+come from the SDN quarantine loop reacting to a violation, and the restore
+comes from a successful re-attestation — both program the port as well as the
+record. The generic device update deliberately refuses to carry a lifecycle
+state, because a transition that changed the record without programming the
+port would report a machine as cut off while it was still on the network.
+
+**Disable and Enable are the operator's two transitions (#250).** Each is its
+own verb, and each programs the switch port before it records anything:
+
+```bash
+platformctl device disable 42 --reason "decommissioning rack 3"
+platformctl device enable 42
+```
+
+In the console, the device table's row menu and the device page carry the
+same control. A `suspended` device offers **Enable**; a `revoked` device offers
+nothing (revocation is terminal); every other state offers **Disable**, and the
+control plane decides whether the transition is allowed.
+
+- **Disable** blocks the machine's switch port and records the device
+  `suspended`, with the state reason `operator: <your reason>` (or
+  `operator: disabled` when you give none). The badge reads *Disabled*.
+- **Enable does not put the machine back in service.** It re-admits the port
+  to the quarantine zone, records the device `quarantined` and asks the
+  attestation collector to quote it now. Only a passing verdict restores the
+  state and network placement it had before it was disabled. A machine that
+  fails attestation stays quarantined. The response's
+  `reattestation_requested: false` means no collector took the request, and
+  the machine waits for the next scheduled attestation cycle.
+
+The control plane refuses rather than record a state nothing enforces, and the
+console shows the refusal as an error toast:
+
+| Refusal | Cause |
+|---|---|
+| `device lifecycle: this control plane has no SDN policy engine ...` | The daemon runs without the attestation quarantine observer on SDN-OVS. No transport can disable or enable a device on it. |
+| `device lifecycle: device 42 has no switch port on the SDN fabric to enforce` | The record has no `network_port_id`, so there is no port to block. |
+| `device: invalid state transition suspended → suspended` | Disable on a device that is already suspended or revoked. |
+| `... device 42 is not suspended (state=attested); only a disabled device can be re-enabled` | Enable on a device that is not suspended. |
+| `... no zone carries lifecycle role quarantine` | Enable needs a zone with the quarantine role to re-admit the port into. |
+
+Each refusal is a `400` on REST and `FAILED_PRECONDITION` on gRPC and the Unix
+socket. Nothing is recorded and the port is not touched.
 
 ---
 
@@ -328,7 +373,7 @@ enrol the machine so the certificate is recorded, or pass `--ek-serial` /
 
 **"invalid state transition X → Y".**
 The lifecycle table refused it. `revoked` has no exits; `suspended` can only go
-to `attested` or `revoked`.
+to `attested`, `revoked`, or — through an operator's Enable — `quarantined`.
 
 **A profile write returns 503.**
 The daemon has no profile service wired. That is a deployment problem, not a
@@ -341,17 +386,28 @@ when the request context carries no switch name and port. "Activated" means the
 device record and SDN policy were updated; it does not by itself mean a
 physical port changed VLAN. See [`docs/switch/`](../switch/).
 
-**An MCP client says `unknown tool: device_create`.**
-That tool is advertised and has no implementation. Use `device_register`,
-`device_get`, `device_list`, `device_update`, `device_delete` — the older
-family — and the `profile_*` tools, which are all live
-([api.md](api.md) §6).
+**`device boot certificate` or `device boot delivery` fails at once with "channel binding unavailable" or "diskless boot needs a TLS 1.3 connection".**
+Unix sockets and MCP are not valid channels for boot proofs. The proof is bound
+to the TLS session of the connection that carries it, and neither transport has
+one, so the call is refused before anything is sent. Use `--protocol grpc`,
+`quic` or `rest` ([cli.md](cli.md) §2.7).
 
-**`platformctl profile list` says "daemon connection required" no matter what.**
-That group is a stub; all four of its verbs return that error unconditionally,
-including under `--transport embedded`. Use
-`platformctl device profile …` for writes and REST for reads
-([cli.md](cli.md) §6).
+**An MCP client says `unknown tool: device_create`.**
+That tool no longer exists; it was advertised without an implementation and
+was removed in #533. Use `device_register`, `device_get`,
+`device_find_by_serial`, `device_list`, `device_update`, `device_delete`, and
+the `profile_*` tools ([api.md](api.md) §6). `device_register` takes `serial`
+and `model`, not `name` and `device_type`.
+
+**An MCP client's `initialize` fails with `invalid character 'p' after top-level value`.**
+The client posted to the bare endpoint, which answers the HTTP mux's plain-text
+`404 page not found`. JSON-RPC is served only on the `/mcp` path — use
+`https://<host>:9445/mcp`.
+
+**`platformctl profile get` or `match` fails with "not found" / "no profile matches".**
+Both exit non-zero on purpose: the id does not exist, or no profile's match
+rules fit the MAC, serial or model given. `platformctl profile list` shows
+what exists ([cli.md](cli.md) §3.0a).
 
 ---
 

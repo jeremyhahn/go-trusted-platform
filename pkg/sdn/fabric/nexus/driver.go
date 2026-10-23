@@ -389,7 +389,8 @@ func loadSSHKey(ctx context.Context, path string) (*keys.Key, error) {
 // the directory containing the configured KnownHostsPath. The legacy
 // flat OpenSSH known_hosts file is not consumed by the new
 // known_hosts API (which expects per-pin envelopes); operators must
-// pre-populate the directory with pin envelopes via the xkms tooling.
+// pre-populate the directory with pin envelopes via deployer-pin
+// --owner <switch id> (docs/sdn/fabric/configuration.md).
 func newKnownHostsStore(path string) (knownhosts.Store, error) {
 	dir := filepath.Dir(path)
 	if dir == "" {

@@ -1,5 +1,8 @@
 # VXLAN Overlay Networking
 
+> **Status: REFERENCE** · Last verified: 2026-10-15
+> Overview of the EVPN/VXLAN overlay.
+
 Multi-host overlay networking for east-west VM and container traffic.
 
 ## Overview
@@ -15,11 +18,11 @@ single flow-based VXLAN port.
 | Feature | Description |
 |---------|-------------|
 | **VXLAN Encapsulation** | RFC 7348, 24-bit VNI, one `remote_ip=flow` port per host |
-| **EVPN Control Plane** | Type-2 MAC/IP, Type-3 IMET and Type-5 prefix routes ([../bgp/evpn.md](../bgp/evpn.md)) |
+| **EVPN Control Plane** | Type-2 MAC/IP, Type-3 IMET and Type-5 prefix routes ([BGP EVPN](../../bgp/engineering.md#7-evpn)) |
 | **Decap Authorisation** | a tunnelled frame is accepted only from a VTEP EVPN places on its VNI |
 | **BUM Handling** | ingress replication to the VTEPs of the VNI, from Type-3 routes |
-| **ARP Suppression** | ARP for known bindings answered by a flow, with no packet-in |
-| **Symmetric IRB** | anycast gateway on every VTEP; routed traffic crosses the L3VNI |
+| **ARP/ND Suppression** | A flow answers ARP for known IPv4 bindings. An IPv6 NS for a known target is punted to a packet-in controller, answered with a proxy NA and not flooded (RFC 9161). Unknown targets and DAD probes flood. Fail mode: the punts expire 12 s after a crash, are removed on stop, and are withdrawn on any meter or queue drop, so the NS floods ([ND fail mode](../../gateway/engineering.md#fail-mode)) |
+| **Symmetric IRB** | anycast gateway on every VTEP; routed traffic crosses the L3VNI. In gatewayd, a VNI with a `subnet` is routed (its gateway is the subnet's first host address, answered for with `anycast-gateway-mac`), and `l3vni` routes between VTEPs over EVPN, originating each routed subnet as a Type-5 route; a VNI without a subnet is bridged only ([In gatewayd](../../gateway/engineering.md#in-gatewayd)) |
 | **VNI Numbering** | overlay network n of environment E is VNI E·100000+n ([reference network](../../architecture/reference-network.md)) |
 
 ## Architecture Overview
@@ -46,7 +49,7 @@ Host A                                              Host B
 
 Each host's flows pick the destination VTEP and VNI per frame; adding a
 host changes flows, not ports. The pipeline is specified in
-[../gateway/overlay-mode.md](../gateway/overlay-mode.md) and the
+[the overlay handler](../../gateway/engineering.md#the-overlay-handler-overlaymodehandler) and the
 components in [architecture.md](architecture.md).
 
 ## VTEP Discovery
@@ -73,8 +76,10 @@ sdn:
     underlay-interface: "eth0"
 ```
 
-The VTEP IP is derived from the node's public IPv4 address; MTU and
-bridge name use applied defaults (see [Configuration](configuration.md)).
+`underlay-interface` is required without IPsec; there is no default. The
+VTEP IP is `overlay.vtep-address`, else the node's detected public IPv4
+address; with overlay IPsec it is always `overlay.ipsec.local-address`. MTU
+and bridge name use applied defaults (see [Configuration](configuration.md)).
 
 ### Verify VTEP Status
 
@@ -103,7 +108,7 @@ nc -zuv 10.0.0.2 4789
 | Document | Description |
 |----------|-------------|
 | [Architecture](architecture.md) | Components, the VXLAN port, encapsulation and MTU |
-| [Overlay mode](../gateway/overlay-mode.md) | The OpenFlow data plane |
+| [Overlay handler](../../gateway/engineering.md#the-overlay-handler-overlaymodehandler) | The OpenFlow data plane |
 | [Configuration](configuration.md) | Complete configuration reference |
 | [API Reference](api-reference.md) | Multi-protocol API documentation |
 
@@ -121,9 +126,19 @@ nc -zuv 10.0.0.2 4789
 - A VTEP can inject frames only into the VNIs its EVPN routes place it
   on; everything else from the VXLAN port is dropped in table 10.
 - Before a route is installed, the handler's `VTEPAdmitter` vets the
-  VTEP; EVPN without one is a config error (`ErrAdmitterNil`). Nothing
-  backs it in gatewayd yet (#709), so encryption and
-  admission of VTEP-to-VTEP traffic are still the underlay's to provide.
+  VTEP; EVPN without one is a config error (`ErrAdmitterNil`). In gatewayd
+  it is `gateway.VTEPAdmitter` (`pkg/sdn/gateway/vtep_admission.go`): a VTEP
+  is admitted only while the device holding its IPAM fabric address has a
+  passed, signed and fresh attestation verdict, and a periodic sweep
+  withdraws it when that stops being true
+  ([VTEP admission](../../gateway/engineering.md#vtep-admission)).
+- platformd's overlay IPsec (`overlay.ipsec`, [architecture](architecture.md#overlay-ipsec))
+  carries every packet between two VTEPs in a transport-mode ESP SA behind
+  a fail-closed floor; its peers are the static peers. gatewayd's overlay
+  runs the same service from `gateway.overlay.ipsec`; its peers are the
+  static peers plus every admitted VTEP on one of its flood lists, and a
+  revoked VTEP is evicted with its routes
+  ([Overlay IPsec in gatewayd](../../gateway/engineering.md#overlay-ipsec-in-gatewayd)).
 - VNI isolation keeps segments apart; routing between them crosses the
   anycast gateway.
 
@@ -132,7 +147,7 @@ nc -zuv 10.0.0.2 4789
 | Issue | Check |
 |-------|-------|
 | No overlay connectivity | underlay MTU is at least 9050 on every hop |
-| Remote MAC unreachable | the remote host's Type-2 route is received (`../bgp/evpn.md`) |
+| Remote MAC unreachable | the remote host's Type-2 route is received ([BGP EVPN](../../bgp/engineering.md#7-evpn)) |
 | Frames from a VTEP dropped | its Type-3 route for the VNI is received; table 10 has a `tun_src` flow for it |
 | Dropped packets | `ovs-ofctl -O OpenFlow13 dump-flows br-int` |
 
@@ -140,4 +155,4 @@ nc -zuv 10.0.0.2 4789
 
 - [SDN Architecture](../architecture.md)
 - [SDN Configuration](../configuration.md)
-- [BGP EVPN](../bgp/evpn.md)
+- [BGP EVPN](../../bgp/engineering.md#7-evpn)

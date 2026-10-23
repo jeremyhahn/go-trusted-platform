@@ -289,16 +289,18 @@ var recordParserFuncs = map[uint16]RecordParserFunc{
 		}
 		return recs
 	},
-	// RRSIGRecord carries no owner name, so the zone's signatures are owned
-	// by the apex — the same assumption BuildZoneTransfer makes when it emits
-	// them for an AXFR. Answering them at every name in the zone leaked the
-	// whole signature set to any query.
+	// Each signature answers at the owner of the RRset it covers. A signature
+	// persisted without an owner resolves to the apex, as it did before the
+	// owner was recorded.
 	dns.TypeRRSIG: func(qname string, zone *entities.Zone) []dns.RR {
-		if zone.RecordSet.RRSIGRecords == nil || !isZoneApex(qname, zone.Name) {
+		if zone.RecordSet.RRSIGRecords == nil {
 			return nil
 		}
 		recs := make([]dns.RR, 0, len(zone.RecordSet.RRSIGRecords))
 		for _, r := range zone.RecordSet.RRSIGRecords {
+			if !ownerMatchesQuery(r.Name, qname, zone.Name) {
+				continue
+			}
 			typeCovered := dns.StringToType[strings.ToUpper(r.TypeCovered)]
 			expiration := parseRRSIGTimestamp(r.Expiration)
 			inception := parseRRSIGTimestamp(r.Inception)

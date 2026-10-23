@@ -208,6 +208,8 @@ func renderServer(b *strings.Builder, cfg *Config, paths Paths) {
 		b.WriteString(paths.NTSKeyFile())
 		b.WriteString("\nntsdumpdir ")
 		b.WriteString(paths.NTSDumpDir)
+		b.WriteString("\nntsport ")
+		b.WriteString(strconv.Itoa(cfg.NTSKEPort()))
 		b.WriteString("\n\n")
 	}
 }

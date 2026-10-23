@@ -20,7 +20,7 @@
 # environment's tunnel point-to-point range (10.4.128.0/22; its first /31,
 # 10.4.128.0/31, is the reserved gateway HA sync link). A deployment
 # replaces them; nothing here is a default. Secrets are references only —
-# `kms://` and `secret://` resolve through the platform key store at start
+# `kms://` references resolve through the platform key store at start
 # (handbook conventions/configuration.md §4).
 
 gateway:
@@ -64,7 +64,7 @@ gateway:
   # One tunnel per uplink to the upstream relay. `type: gre` is what a relay
   # typically speaks. A relay that terminates ESP takes `transport: ipsec` with
   # an `ipsec:` section whose `key-ref` names the key in the platform secret
-  # store (kms:// or secret://), never the key itself; see docs/gateway/user.md.
+  # store (kms://), never the key itself; see docs/gateway/user.md.
   tunnels:
     - name: gre-relay-ispa
       type: gre
@@ -181,12 +181,23 @@ gateway:
     overlay-asn: 65000
     vxlan-port: 4789
     # The L2VNIs joined at start, each on its own access-port VLAN. The
-    # overlay is healthy only while it carries every one of them.
+    # overlay is healthy only while it carries every one of them. A VNI
+    # with a `subnet` is routed: every VTEP answers for the subnet's first
+    # host (here 10.4.192.1) as its distributed anycast gateway. A VNI
+    # without one is bridged only.
     vnis:
       - vni: 40100
         vlan: 401
+        subnet: 10.4.192.0/24
     default-vni: 40100
     max-vnis: 16384
+    # Symmetric IRB (RFC 9135). The anycast gateway MAC is shared by every
+    # routed VNI and every VTEP; 02:00:xx:xx:xx:xx is reserved for the
+    # router MACs, which each VTEP derives from local-vtep. Routed traffic
+    # to another VTEP crosses the L3VNI, which needs rr-peers and must not
+    # be one of vnis. Drop all three keys to bridge only.
+    anycast-gateway-mac: "02:aa:aa:00:00:01"
+    l3vni: 40999
     verdict-max-age: 15m
     verdict-clock-skew: 30s
     admission-sweep-interval: 30s
@@ -217,6 +228,28 @@ gateway:
     icmp:
       rate: 10
       burst: 20
+
+  # IPv6-only clients: a Jool NAT64 translator (docs/gateway/user.md). To
+  # enable it, uncomment the block below. gatewayd's init script then loads
+  # the jool kernel module, which gateway.yaml installs (jool-modules-lts).
+  # The module is built for one linux-lts release: a kernel upgrade that
+  # outruns jool-modules-lts leaves the module unloadable, and gatewayd then
+  # refuses this section. translator-port is an OVS internal port you create
+  # on br-fabric (there is no default); pool4 is the uplink's own address on
+  # ports the host does not use. client-zones names the zones that get
+  # translation (here the `lab` zone from the sdn example below, VLAN 409);
+  # an empty list translates for every zone.
+  # nat64:
+  #   enabled: true
+  #   prefix: "64:ff9b::/96"
+  #   translator-port: nat640
+  #   pool4:
+  #     addresses: ["198.51.100.6"]
+  #     port-range-start: 61001
+  #     port-range-end: 65535
+  #   client-zones:
+  #     - name: lab
+  #       vlan: 409
 
 # The OVS runtime the datapath services attach to. The environment and the
 # bridge match the platformd config on the same node (x10/gateway.yaml).

@@ -42,6 +42,7 @@ func TestLinuxDeployerAdapter_DeployConfig(t *testing.T) {
 		NetbootMediaDir:    "/srv/netboot-media",
 		ProxyDHCP:          true,
 		BootstrapHTTPPort:  9000,
+		BootstrapBindHost:  "10.0.0.1",
 	}
 	a := newLinuxDeployerAdapter(cfg, nil, nil)
 
@@ -55,6 +56,7 @@ func TestLinuxDeployerAdapter_DeployConfig(t *testing.T) {
 	assert.True(t, dc.BootstrapProxyDHCP)
 	assert.Equal(t, "http://mirror", dc.BootstrapAPKMirror)
 	assert.Equal(t, 9000, dc.BootstrapHTTPPort)
+	assert.Equal(t, "10.0.0.1", dc.BootstrapBindHost)
 	assert.Equal(t, 9001, dc.BootstrapDeviceScriptPort, "the device script port follows the HTTP port")
 	assert.Equal(t, 22, dc.Port, "defaults applied")
 	require.NoError(t, dc.Validate())
@@ -64,4 +66,33 @@ func TestLinuxDeployerAdapter_DeployConfig(t *testing.T) {
 	assert.Equal(t, deployer.DefaultRemoteDataDir, teardown.DataDir)
 	var invalid deployer.ErrInvalidDeployConfig
 	assert.ErrorAs(t, teardown.Validate(), &invalid, "an incomplete section fails the deployer's validation")
+}
+
+// TestLinuxDeployerAdapter_DeployConfig_BootNode: boot_node and
+// firmware_cache_dir reach the deployer, and the cache defaults beside
+// data_dir when unset.
+func TestLinuxDeployerAdapter_DeployConfig_BootNode(t *testing.T) {
+	cfg := &DeployerConfig{Host: "10.0.0.1", DataDir: "/srv/pxeboot", BootNode: true}
+	dc := newLinuxDeployerAdapter(cfg, nil, nil).deployConfig("/tmp/manifest.yaml")
+	assert.True(t, dc.BootNode)
+	assert.Equal(t, "/srv/pxeboot-firmware", dc.FirmwareCacheDir)
+
+	cfg.FirmwareCacheDir = "/var/lib/pxe-firmware"
+	dc = newLinuxDeployerAdapter(cfg, nil, nil).deployConfig("/tmp/manifest.yaml")
+	assert.Equal(t, "/var/lib/pxe-firmware", dc.FirmwareCacheDir)
+
+	dc = newLinuxDeployerAdapter(&DeployerConfig{Host: "10.0.0.1"}, nil, nil).deployConfig("")
+	assert.False(t, dc.BootNode)
+	assert.Empty(t, dc.FirmwareCacheDir, "default mode mounts no firmware cache")
+}
+
+// TestLinuxDeployerAdapter_DeployConfig_NoRouter: bootstrap_no_router
+// reaches the deployer, and off it stays off.
+func TestLinuxDeployerAdapter_DeployConfig_NoRouter(t *testing.T) {
+	dc := newLinuxDeployerAdapter(&DeployerConfig{Host: "10.0.0.1", BootstrapNoRouter: true}, nil, nil).deployConfig("")
+	assert.True(t, dc.BootstrapNoRouter)
+
+	dc = newLinuxDeployerAdapter(&DeployerConfig{Host: "10.0.0.1", BootstrapGateway: "192.0.2.1"}, nil, nil).deployConfig("")
+	assert.False(t, dc.BootstrapNoRouter)
+	assert.Equal(t, "192.0.2.1", dc.BootstrapGateway)
 }

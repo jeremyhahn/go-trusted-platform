@@ -124,12 +124,27 @@ func (c *Cache) Now() time.Time { return c.clk.Now() }
 // verdict that never existed. A partial write here leaves the PREVIOUS report
 // intact, which is the correct failure: stale and true beats fresh and
 // incoherent.
+//
+// A report never replaces one from a later verification: the collector's
+// report and a verdict recorded from another path (OnDeviceVerdict) can race,
+// and the older one must not win. Reports of the same verification carry the
+// same AttestedAt, so the collector's full report still replaces the one
+// derived from its own verdict.
 func (c *Cache) Store(r *Report) {
 	if r == nil || r.DeviceID == "" {
 		return
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	c.storeLocked(r)
+}
+
+// storeLocked records r unless the held report is from a later verification.
+// The caller holds c.mu.
+func (c *Cache) storeLocked(r *Report) {
+	if held := c.reports[r.DeviceID]; held != nil && held.AttestedAt.After(r.AttestedAt) {
+		return
+	}
 	c.reports[r.DeviceID] = r
 	c.persist(r)
 }

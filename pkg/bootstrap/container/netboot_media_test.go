@@ -84,3 +84,44 @@ func TestLoadNetbootMedia_Rejections(t *testing.T) {
 	_, err = LoadNetbootMedia(t.TempDir())
 	require.ErrorAs(t, err, &mediaErr, "no index")
 }
+
+func TestLoadNetbootMedia_HTTPBoot(t *testing.T) {
+	root := writeNetbootMedia(t, "media_sets: [aarch64-rpi]\nhttp_boot: http-boot\n")
+	for _, name := range []string{HTTPBootImage, HTTPBootSignature, HTTPBootPublicKey} {
+		require.NoError(t, os.MkdirAll(filepath.Join(root, "http-boot"), 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(root, "http-boot", name), []byte(name), 0o644))
+	}
+
+	media, err := LoadNetbootMedia(root)
+	require.NoError(t, err)
+	assert.Equal(t, "http-boot", media.HTTPBoot)
+	assert.Equal(t, "data/http-boot", media.HTTPBootPath(), "the EEPROM's HTTP_PATH: the data directory is served at /data")
+	assert.Empty(t, (&NetbootMedia{}).HTTPBootPath())
+}
+
+func TestLoadNetbootMedia_HTTPBootRejections(t *testing.T) {
+	for name, remove := range map[string]string{
+		"no boot.img":   HTTPBootImage,
+		"no boot.sig":   HTTPBootSignature,
+		"no public key": HTTPBootPublicKey,
+	} {
+		t.Run(name, func(t *testing.T) {
+			root := writeNetbootMedia(t, "media_sets: [aarch64-rpi]\nhttp_boot: http-boot\n")
+			for _, f := range []string{HTTPBootImage, HTTPBootSignature, HTTPBootPublicKey} {
+				if f == remove {
+					continue
+				}
+				require.NoError(t, os.MkdirAll(filepath.Join(root, "http-boot"), 0o755))
+				require.NoError(t, os.WriteFile(filepath.Join(root, "http-boot", f), []byte(f), 0o644))
+			}
+			_, err := LoadNetbootMedia(root)
+			var mediaErr ErrNetbootMedia
+			require.ErrorAs(t, err, &mediaErr)
+			assert.Contains(t, mediaErr.Error(), remove)
+		})
+	}
+
+	_, err := LoadNetbootMedia(writeNetbootMedia(t, "media_sets: [aarch64-rpi]\nhttp_boot: ../elsewhere\n"))
+	var mediaErr ErrNetbootMedia
+	require.ErrorAs(t, err, &mediaErr, "the directory must be inside the build")
+}

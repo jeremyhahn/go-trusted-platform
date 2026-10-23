@@ -18,6 +18,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -765,6 +767,32 @@ func TestHandleCreateVNI(t *testing.T) {
 
 		assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
 	})
+
+	// 65636 would wrap to VLAN 100 in the uint16 VNIConfig.
+	for _, vlan := range []uint32{4095, 65636} {
+		t.Run(fmt.Sprintf("refuses VLAN %d with 400", vlan), func(t *testing.T) {
+			t.Parallel()
+			svc := newMockOverlayService()
+			_, router := setupOverlayTestHandler(svc)
+
+			body, err := json.Marshal(VNIConfigRequest{VNI: 100, VLAN: vlan})
+			require.NoError(t, err)
+
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/sdn/overlay/vnis", bytes.NewReader(body))
+			req.Header.Set("Content-Type", "application/json")
+			w := httptest.NewRecorder()
+
+			router.ServeHTTP(w, req)
+
+			resp := w.Result()
+			defer resp.Body.Close()
+
+			assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+			respBody, err := io.ReadAll(resp.Body)
+			require.NoError(t, err)
+			assert.Contains(t, string(respBody), ErrInvalidVLAN{VLAN: vlan}.Error())
+		})
+	}
 
 	t.Run("returns error when VNI already exists", func(t *testing.T) {
 		t.Parallel()

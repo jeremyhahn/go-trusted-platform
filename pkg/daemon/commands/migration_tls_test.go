@@ -48,11 +48,9 @@ type fakeCAIssuer struct {
 	issueErr  error
 	bundleErr error
 	lastReq   *quicbaasca.CACertificateRequest
-	calls     int
 }
 
 func (f *fakeCAIssuer) IssueCertificate(_ context.Context, req *quicbaasca.CACertificateRequest) (*quicbaasca.IssuedCertificate, error) {
-	f.calls++
 	f.lastReq = req
 	if f.issueErr != nil {
 		return nil, f.issueErr
@@ -162,8 +160,10 @@ func TestCAMigrationTLS_EnsureTLSCreds(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, credsID, "migtls-client-")
 
-	// The client credential object is installed on the source session.
+	// The client credential object is installed on the source session,
+	// under the ID handed back for the migrate call to reference.
 	assert.Equal(t, "tls-creds-x509", sess.objectType)
+	assert.Equal(t, credsID, sess.objectID)
 	assert.Equal(t, "client", sess.objectEP)
 	assert.True(t, sess.verifyPeer)
 	require.NotEmpty(t, sess.objectDir)

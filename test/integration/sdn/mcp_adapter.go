@@ -23,7 +23,6 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"strings"
 	"sync/atomic"
 	"time"
 
@@ -112,15 +111,6 @@ type ErrMCPSDNClientClosed struct{}
 
 func (e ErrMCPSDNClientClosed) Error() string {
 	return "MCP client is closed"
-}
-
-// ErrMCPSDNNotImplemented indicates a method is not yet implemented.
-type ErrMCPSDNNotImplemented struct {
-	Method string
-}
-
-func (e ErrMCPSDNNotImplemented) Error() string {
-	return fmt.Sprintf("MCP method %s not implemented", e.Method)
 }
 
 // ErrMCPSDNRequestFailed indicates an MCP request failed.
@@ -416,43 +406,6 @@ type mcpSDNVLANInfo struct {
 	CreatedAt   interface{} `json:"created_at"`
 }
 
-// mcpSDNPolicyResponse represents policy information from sdn_get_policy.
-type mcpSDNPolicyResponse struct {
-	PolicyID    string                   `json:"policy_id"`
-	Name        string                   `json:"name"`
-	Description string                   `json:"description"`
-	Type        string                   `json:"type"`
-	Priority    int32                    `json:"priority"`
-	Enabled     bool                     `json:"enabled"`
-	Status      string                   `json:"status"`
-	Rules       []map[string]interface{} `json:"rules"`
-	Targets     []map[string]interface{} `json:"targets"`
-	Schedule    map[string]interface{}   `json:"schedule"`
-	HitCount    uint64                   `json:"hit_count"`
-	ByteCount   uint64                   `json:"byte_count"`
-	CreatedAt   interface{}              `json:"created_at"`
-	UpdatedAt   interface{}              `json:"updated_at"`
-}
-
-// mcpSDNPolicyListResponse represents the response from sdn_list_policies.
-type mcpSDNPolicyListResponse struct {
-	Policies []mcpSDNPolicySummary `json:"policies"`
-}
-
-// mcpSDNPolicySummary represents policy summary in MCP list responses.
-type mcpSDNPolicySummary struct {
-	PolicyID    string      `json:"policy_id"`
-	Name        string      `json:"name"`
-	Type        string      `json:"type"`
-	Priority    int32       `json:"priority"`
-	Enabled     bool        `json:"enabled"`
-	Status      string      `json:"status"`
-	RuleCount   int32       `json:"rule_count"`
-	TargetCount int32       `json:"target_count"`
-	HitCount    uint64      `json:"hit_count"`
-	CreatedAt   interface{} `json:"created_at"`
-}
-
 // =============================================================================
 // MCP Adapter
 // =============================================================================
@@ -474,11 +427,9 @@ func NewMCPAdapter() *MCPAdapter {
 	if endpoint == "" {
 		endpoint = DefaultPlatformMCPEndpoint
 	}
-	// The harness sets PLATFORM_MCP_ENDPOINT with its scheme
-	// (http://localhost:9445); the request URL below adds one, and
-	// "http://http://..." resolved the host "http" and failed every run.
-	endpoint = strings.TrimPrefix(strings.TrimPrefix(endpoint, "http://"), "https://")
 
+	// helpers.MCPEndpointURL keeps the harness scheme and defaults to
+	// https://; MCP serves TLS 1.3 only (#844).
 	return &MCPAdapter{
 		endpoint:   endpoint,
 		httpClient: helpers.NewHTTPClient(DefaultMCPTimeoutSDN),
@@ -715,120 +666,6 @@ func mcpSDNParseTimestamp(v interface{}) time.Time {
 	default:
 		return time.Time{}
 	}
-}
-
-// mcpSDNParsePolicyRules converts raw rule maps into PolicyRule slices.
-func mcpSDNParsePolicyRules(raw []map[string]interface{}) []PolicyRule {
-	rules := make([]PolicyRule, 0, len(raw))
-	for _, r := range raw {
-		rule := PolicyRule{}
-		if v, ok := r["rule_id"].(string); ok {
-			rule.RuleID = v
-		}
-		if v, ok := r["priority"].(float64); ok {
-			rule.Priority = int32(v)
-		}
-		if v, ok := r["action"].(string); ok {
-			rule.Action = v
-		}
-		if v, ok := r["action_value"].(string); ok {
-			rule.ActionValue = v
-		}
-		if v, ok := r["log"].(bool); ok {
-			rule.Log = v
-		}
-		if v, ok := r["counter"].(bool); ok {
-			rule.Counter = v
-		}
-		if m, ok := r["match"].(map[string]interface{}); ok {
-			rule.Match = mcpSDNParsePolicyMatch(m)
-		}
-		rules = append(rules, rule)
-	}
-	return rules
-}
-
-// mcpSDNParsePolicyMatch converts a raw match map into a PolicyMatch.
-func mcpSDNParsePolicyMatch(m map[string]interface{}) PolicyMatch {
-	pm := PolicyMatch{}
-	if v, ok := m["source_ip"].(string); ok {
-		pm.SourceIP = v
-	}
-	if v, ok := m["destination_ip"].(string); ok {
-		pm.DestinationIP = v
-	}
-	if v, ok := m["source_port"].(float64); ok {
-		pm.SourcePort = int32(v)
-	}
-	if v, ok := m["destination_port"].(float64); ok {
-		pm.DestinationPort = int32(v)
-	}
-	if v, ok := m["protocol"].(string); ok {
-		pm.Protocol = v
-	}
-	if v, ok := m["direction"].(string); ok {
-		pm.Direction = v
-	}
-	if v, ok := m["interface"].(string); ok {
-		pm.Interface = v
-	}
-	if v, ok := m["vlan_id"].(float64); ok {
-		pm.VLANID = int32(v)
-	}
-	if v, ok := m["dscp"].(float64); ok {
-		pm.DSCP = int32(v)
-	}
-	if v, ok := m["application"].(string); ok {
-		pm.Application = v
-	}
-	return pm
-}
-
-// mcpSDNParsePolicyTargets converts raw target maps into PolicyTarget slices.
-func mcpSDNParsePolicyTargets(raw []map[string]interface{}) []PolicyTarget {
-	targets := make([]PolicyTarget, 0, len(raw))
-	for _, t := range raw {
-		target := PolicyTarget{}
-		if v, ok := t["type"].(string); ok {
-			target.Type = v
-		}
-		if v, ok := t["id"].(string); ok {
-			target.ID = v
-		}
-		if v, ok := t["direction"].(string); ok {
-			target.Direction = v
-		}
-		targets = append(targets, target)
-	}
-	return targets
-}
-
-// mcpSDNParsePolicySchedule converts a raw schedule map into a PolicySchedule.
-func mcpSDNParsePolicySchedule(m map[string]interface{}) *PolicySchedule {
-	if m == nil {
-		return nil
-	}
-	schedule := &PolicySchedule{}
-	if v, ok := m["start_time"].(string); ok {
-		schedule.StartTime = v
-	}
-	if v, ok := m["end_time"].(string); ok {
-		schedule.EndTime = v
-	}
-	if v, ok := m["timezone"].(string); ok {
-		schedule.Timezone = v
-	}
-	if v, ok := m["enabled"].(bool); ok {
-		schedule.Enabled = v
-	}
-	if days, ok := m["days"].([]interface{}); ok {
-		for _, d := range days {
-			if s, ok := d.(string); ok {
-				schedule.Days = append(schedule.Days, s)
-			}
-		}
-	}
-	return schedule
 }
 
 // mcpSDNParseFlowMatch converts a raw match map into a FlowMatch.
@@ -1153,6 +990,14 @@ func (m *MCPAdapter) PortSetState(ctx context.Context, bridgeID, portID string, 
 		"bridge_name": bridgeID,
 		"port_name":   portID,
 		"state":       opts.AdminState,
+	}
+	if opts.IngressRate > 0 {
+		args["ingress_rate"] = opts.IngressRate
+		args["ingress_burst"] = opts.IngressBurst
+	}
+	if opts.EgressRate > 0 {
+		args["egress_rate"] = opts.EgressRate
+		args["egress_burst"] = opts.EgressBurst
 	}
 
 	var resp mcpSDNSuccessResponse
@@ -1490,37 +1335,11 @@ func (m *MCPAdapter) VLANList(ctx context.Context, opts VLANListOptions) (*VLANL
 
 // PolicyApply applies a network policy via MCP.
 func (m *MCPAdapter) PolicyApply(ctx context.Context, opts PolicyApplyOptions) (*PolicyApplyResult, error) {
-	// The MCP tool requires a bridge_name. Use opts.BridgeID directly,
-	// falling back to the first target of type "bridge" if present.
-	bridgeName := opts.BridgeID
-	if bridgeName == "" {
-		for _, t := range opts.Targets {
-			if t.Type == "bridge" {
-				bridgeName = t.ID
-				break
-			}
-		}
-	}
-
-	args := map[string]interface{}{
-		"policy_id":   opts.PolicyID,
-		"bridge_name": bridgeName,
-	}
-
-	var resp mcpSDNSuccessResponse
-	if err := m.callTool(ctx, "sdn_apply_policy", args, &resp); err != nil {
+	var resp restPolicy
+	if err := m.callTool(ctx, "sdn_apply_policy", newRESTPolicyBody(opts), &resp); err != nil {
 		return nil, err
 	}
-
-	return &PolicyApplyResult{
-		PolicyID:    opts.PolicyID,
-		Name:        opts.Name,
-		Type:        opts.Type,
-		Status:      "applied",
-		RuleCount:   int32(len(opts.Rules)),
-		TargetCount: int32(len(opts.Targets)),
-		AppliedAt:   time.Now(),
-	}, nil
+	return resp.applyResult(), nil
 }
 
 // PolicyGet retrieves a policy by ID via MCP.
@@ -1529,59 +1348,34 @@ func (m *MCPAdapter) PolicyGet(ctx context.Context, policyID string) (*PolicyGet
 		"policy_id": policyID,
 	}
 
-	var resp mcpSDNPolicyResponse
+	var resp restPolicy
 	if err := m.callTool(ctx, "sdn_get_policy", args, &resp); err != nil {
 		return nil, err
 	}
-
-	return &PolicyGetResult{
-		PolicyID:    resp.PolicyID,
-		Name:        resp.Name,
-		Description: resp.Description,
-		Type:        resp.Type,
-		Priority:    resp.Priority,
-		Enabled:     resp.Enabled,
-		Status:      resp.Status,
-		Rules:       mcpSDNParsePolicyRules(resp.Rules),
-		Targets:     mcpSDNParsePolicyTargets(resp.Targets),
-		Schedule:    mcpSDNParsePolicySchedule(resp.Schedule),
-		HitCount:    resp.HitCount,
-		ByteCount:   resp.ByteCount,
-		CreatedAt:   mcpSDNParseTimestamp(resp.CreatedAt),
-		UpdatedAt:   mcpSDNParseTimestamp(resp.UpdatedAt),
-	}, nil
+	return resp.getResult(), nil
 }
 
 // PolicyList lists policies via MCP.
 func (m *MCPAdapter) PolicyList(ctx context.Context, opts PolicyListOptions) (*PolicyListResult, error) {
-	var resp mcpSDNPolicyListResponse
-	if err := m.callTool(ctx, "sdn_list_policies", nil, &resp); err != nil {
+	args := map[string]interface{}{
+		"type":      opts.Type,
+		"target_id": opts.TargetID,
+	}
+
+	var resp struct {
+		Policies []restPolicy `json:"policies"`
+	}
+	if err := m.callTool(ctx, "sdn_list_policies", args, &resp); err != nil {
 		return nil, err
 	}
 
 	policies := make([]PolicySummary, 0, len(resp.Policies))
 	for _, p := range resp.Policies {
-		// Apply client-side filtering for type.
-		if opts.Type != "" && p.Type != opts.Type {
-			continue
-		}
-		// Apply client-side filtering for enabled status.
+		// The tool has no enabled filter; apply it client-side.
 		if opts.Enabled != nil && p.Enabled != *opts.Enabled {
 			continue
 		}
-
-		policies = append(policies, PolicySummary{
-			PolicyID:    p.PolicyID,
-			Name:        p.Name,
-			Type:        p.Type,
-			Priority:    p.Priority,
-			Enabled:     p.Enabled,
-			Status:      p.Status,
-			RuleCount:   p.RuleCount,
-			TargetCount: p.TargetCount,
-			HitCount:    p.HitCount,
-			CreatedAt:   mcpSDNParseTimestamp(p.CreatedAt),
-		})
+		policies = append(policies, p.summary())
 	}
 
 	totalCount := int32(len(policies))

@@ -1,5 +1,8 @@
 # IPAM Unix Socket API Reference
 
+> **Status: REFERENCE** · Last verified: 2026-10-15
+> How to reach IPAM over the local socket.
+
 Socket: `/run/platformd.sock`
 
 The Unix transport is **gRPC over a Unix domain socket** — IPAM
@@ -13,7 +16,7 @@ socket file permissions gate access.
 ```bash
 # Force the unix transport explicitly (or PLATFORMCTL_TRANSPORT=unix)
 platformctl --transport unix sdn ipam pool list
-platformctl --transport unix sdn ipam pool create --name prod-v4 --cidr 10.0.0.0/24
+platformctl --transport unix sdn ipam pool create --id prod-v4 --name prod-v4 --cidr 10.0.0.0/24
 platformctl --transport unix sdn ipam allocate --pool-id prod-v4 --device-id vm-001
 platformctl --transport unix sdn ipam release --ip 10.0.0.50
 platformctl --transport unix sdn ipam allocations
@@ -22,4 +25,4 @@ platformctl --transport unix sdn ipam allocations
 ## See Also
 
 - [IPAM gRPC API Reference](api-reference-grpc.md)
-- [Gateway Unix API Reference](../gateway/api-reference-unix.md)
+- [Gateway Unix API Reference](../../gateway/api.md)

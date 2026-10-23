@@ -37,8 +37,8 @@ package quic
 // Aaaa, Cname, Mx, Ns, Txt, Srv, Caa, Tlsa).
 
 import (
-	quicapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 )
 
 // dnsSimpleRecordWire mirrors the {name, value, ttl} record messages (A, AAAA,
@@ -172,7 +172,7 @@ func decodeDNSListRecordsReply(payload []byte, reply interface{}) error {
 		return ErrInvalidReplyType{Method: platformv1.DNSService_ListRecords_FullMethodName}
 	}
 	var wire dnsListRecordsWire
-	if err := quicapi.DecodePayload(payload, &wire); err != nil {
+	if err := quicwire.DecodePayload(payload, &wire); err != nil {
 		return ErrDecodingFailed{Err: err}
 	}
 	out.Records = out.Records[:0]
@@ -190,7 +190,7 @@ func decodeDNSResolveReply(payload []byte, reply interface{}) error {
 		return ErrInvalidReplyType{Method: platformv1.DNSService_Resolve_FullMethodName}
 	}
 	var wire dnsResolveWire
-	if err := quicapi.DecodePayload(payload, &wire); err != nil {
+	if err := quicwire.DecodePayload(payload, &wire); err != nil {
 		return ErrDecodingFailed{Err: err}
 	}
 	out.Records = out.Records[:0]

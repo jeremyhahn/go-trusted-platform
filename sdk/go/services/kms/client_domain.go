@@ -25,6 +25,9 @@ import (
 // enabling callers to avoid importing platformv1 directly.
 
 // GenerateKeyDomain creates a new cryptographic key using domain types.
+// The request's name is the key ID (docs/kms/api.md §2), so it carries
+// params.KeyID; params.Name is a display name the caller sets afterwards
+// as key metadata.
 func (c *Client) GenerateKeyDomain(ctx context.Context, params *GenerateKeyParams) (*GenerateKeyResult, error) {
 	keySpec := &platformv1.KMSKeySpec{
 		Algorithm:          keyAlgorithmToProto(params.Algorithm),
@@ -34,7 +37,7 @@ func (c *Client) GenerateKeyDomain(ctx context.Context, params *GenerateKeyParam
 	}
 	req := &platformv1.GenerateKeyRequest{
 		KeySpec:     keySpec,
-		Name:        params.Name,
+		Name:        params.KeyID,
 		Description: params.Description,
 		Owner:       params.Owner,
 	}

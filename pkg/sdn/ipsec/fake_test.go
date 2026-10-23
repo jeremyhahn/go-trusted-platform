@@ -30,12 +30,25 @@ import (
 	"time"
 
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/secure"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ipsec/config"
 )
 
 var (
 	errInjected = errors.New("injected failure")
 	errNotFound = errors.New("configuration not found")
 )
+
+// validConfig is an enabled, valid overlay.ipsec section with two static
+// peers.
+func validConfig() *config.Config {
+	return &config.Config{
+		Enabled:         true,
+		FabricInterface: "bond0",
+		LocalAddress:    "10.20.0.11",
+		StaticPeers:     []string{"10.20.0.1", "10.20.0.2"},
+		Token:           config.TokenConfig{Handle: "6970736563"},
+	}
+}
 
 // fakeSession models the part of charon a command session drives: the
 // loaded connections, the IKE_SAs of each, and the credentials.

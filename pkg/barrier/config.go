@@ -13,6 +13,12 @@
 
 package barrier
 
+import (
+	"slices"
+	"strconv"
+	"strings"
+)
+
 const (
 	// SealStrategyNone disables encryption; the barrier is always open.
 	SealStrategyNone = "none"
@@ -37,14 +43,37 @@ const (
 
 	// DefaultSealStrategy is the default seal strategy when none is specified.
 	DefaultSealStrategy = SealStrategySoftware
+
+	// MinShamirThreshold is the smallest M accepted for an M-of-N Shamir
+	// split. With M = 1 every share is the whole key: copies, not a split.
+	MinShamirThreshold = 2
 )
+
+// sealStrategies lists every accepted seal strategy, in the order the
+// validation message names them.
+var sealStrategies = []string{
+	SealStrategyNone,
+	SealStrategyPassphrase,
+	SealStrategySoftware,
+	SealStrategyShamir,
+	SealStrategyTPM2,
+	SealStrategyPKCS11,
+}
+
+// ValidateShamirSplit returns ErrInvalidThreshold unless
+// MinShamirThreshold <= threshold <= shares. It is the one Shamir rule the
+// configuration, the Manager and platformctl apply.
+func ValidateShamirSplit(threshold, shares int) error {
+	if threshold < MinShamirThreshold || threshold > shares {
+		return ErrInvalidThreshold
+	}
+	return nil
+}
 
 // Config holds barrier manager configuration.
 type Config struct {
-	// AutoUnseal enables automatic unsealing via TPM at startup.
-	AutoUnseal bool `yaml:"auto_unseal" json:"auto_unseal" mapstructure:"auto_unseal"`
-
-	// SealStrategy is the preferred sealing strategy (none, software, shamir, tpm2, pkcs11).
+	// SealStrategy is the preferred sealing strategy (none, passphrase,
+	// software, shamir, tpm2, pkcs11). Empty selects DefaultSealStrategy.
 	SealStrategy string `yaml:"seal_strategy" json:"seal_strategy" mapstructure:"seal_strategy"`
 
 	// ShamirThreshold is the M in M-of-N Shamir splitting (0 = single key).
@@ -63,13 +92,10 @@ func DefaultConfig() *Config {
 
 // Validate checks configuration values for correctness.
 func (c *Config) Validate() error {
-	switch c.SealStrategy {
-	case SealStrategyNone, SealStrategyPassphrase, SealStrategySoftware, SealStrategyShamir, SealStrategyTPM2, SealStrategyPKCS11, "":
-		// valid
-	default:
+	if c.SealStrategy != "" && !slices.Contains(sealStrategies, c.SealStrategy) {
 		return &ConfigError{
 			Field:   "SealStrategy",
-			Message: "must be one of: none, software, shamir, tpm2, pkcs11",
+			Message: "must be one of: " + strings.Join(sealStrategies, ", "),
 		}
 	}
 	if c.ShamirThreshold < 0 {
@@ -96,10 +122,10 @@ func (c *Config) Validate() error {
 			Message: "must be set when ShamirShares is set",
 		}
 	}
-	if c.ShamirThreshold > c.ShamirShares {
+	if c.ShamirThreshold > 0 && ValidateShamirSplit(c.ShamirThreshold, c.ShamirShares) != nil {
 		return &ConfigError{
 			Field:   "ShamirThreshold",
-			Message: "must not exceed ShamirShares",
+			Message: "must be at least " + strconv.Itoa(MinShamirThreshold) + " and must not exceed ShamirShares",
 		}
 	}
 	return nil
@@ -111,10 +137,18 @@ func (c *Config) IsShamir() bool {
 }
 
 // RequiresCeremony returns true when the seal strategy requires an M-of-N
-// officer enrollment ceremony before the barrier can be used.
+// officer enrollment ceremony before the barrier can be used: always for
+// shamir, and for a passphrase strategy (passphrase, its alias software, or
+// the empty default) that is split into Shamir shares.
 func (c *Config) RequiresCeremony() bool {
-	return c.SealStrategy == SealStrategyShamir ||
-		(c.SealStrategy == SealStrategySoftware && c.ShamirThreshold >= 2)
+	switch c.SealStrategy {
+	case SealStrategyShamir:
+		return true
+	case SealStrategyPassphrase, SealStrategySoftware, "":
+		return c.ShamirThreshold >= MinShamirThreshold
+	default:
+		return false
+	}
 }
 
 // CeremonyConfig holds the parameters for initiating a barrier ceremony.

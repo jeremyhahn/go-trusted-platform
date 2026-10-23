@@ -1,5 +1,8 @@
 # SDN CLI Usage
 
+> **Status: REFERENCE** · Last verified: 2026-10-15
+> The `platformctl sdn` commands, by example.
+
 ## Overview
 
 The `platformctl sdn` command provides command-line management of the SDN
@@ -18,7 +21,8 @@ Subcommands:
   vlan      Manage VLANs
   policy    Manage network policies
   overlay   Manage VXLAN overlay network (VTEPs, VNIs, tunnels, MACs)
-  gateway   Manage multi-mode gateway (modes, BGP, load balancer, perf)
+  gateway   Manage gateway nodes (status, snapshot, overlay, modes, BGP,
+            load balancer, NAT64, perf)
   ipam      Manage IP address pools and allocations
   zone      Manage underlay zones
 ```
@@ -26,11 +30,15 @@ Subcommands:
 Global flags apply to every command:
 
 ```
--o, --output      Output format: table, json, yaml (env PLATFORMCTL_OUTPUT)
-    --transport   SDK transport override: unix, grpc, rest, quic, mcp, embedded
-    --server      Server address override
--c, --config      Config file (env PLATFORMCTL_CONFIG)
--v, --verbose     Verbose output
+-o, --output       Output format: table, json, yaml (env PLATFORMCTL_OUTPUT)
+    --transport    SDK transport override: unix, grpc, rest, quic, mcp, embedded
+                   (env PLATFORMCTL_TRANSPORT)
+    --server       Server address override (env PLATFORMCTL_SERVER)
+    --server-name  TLS SNI / verification hostname override (env PLATFORMCTL_SERVER_NAME)
+    --context      Context to use (env PLATFORMCTL_CONTEXT)
+-c, --config       Config file (env PLATFORMCTL_CONFIG)
+-v, --verbose      Verbose output
+    --no-color     Disable colored output (env NO_COLOR)
 ```
 
 ## Bridge Commands
@@ -133,13 +141,16 @@ platformctl sdn port state <port-id> --bridge <bridge-id>
 platformctl sdn port set-state <port-id> --bridge <bridge-id> [options]
 
 Options:
-  --admin-state    Administrative state: up, down
-  --ingress-rate   Ingress rate limit in bps
-  --egress-rate    Egress rate limit in bps
+  --admin-state    Administrative state: up, down (required)
+  --ingress-rate   Ingress policing rate in bps, a whole multiple of 1000 (0 leaves policing unchanged)
+  --ingress-burst  Ingress policing burst in bits, a whole multiple of 1000 (needs --ingress-rate)
+  --egress-rate    Egress shaping rate in bps (0 leaves shaping unchanged)
+  --egress-burst   Egress shaping burst in bits (needs --egress-rate)
 
 Examples:
   platformctl sdn port set-state eth0 --bridge br0 --admin-state down
-  platformctl sdn port set-state eth0 --bridge br0 --admin-state up
+  platformctl sdn port set-state eth0 --bridge br0 --admin-state up --ingress-rate 10000000 --ingress-burst 1000000
+  platformctl sdn port set-state eth0 --bridge br0 --admin-state up --egress-rate 20000000 --egress-burst 2000000
 ```
 
 ### Port Statistics
@@ -157,7 +168,8 @@ platformctl sdn flow add --bridge <bridge-id> --id <flow-id> --table <n> --prior
 
 Options:
   --bridge       Bridge ID (required)
-  --id           Flow ID (required)
+  --id           Required; kept in the flow's metadata only (the flow's
+                 ID is the flow-0x<cookie> the add answers)
   --table        Flow table number (required)
   --priority     Flow priority (required)
   --in-port      Match on input port
@@ -181,7 +193,13 @@ Examples:
 
 ```bash
 platformctl sdn flow delete <flow-id> --bridge <bridge-id>
+
+Examples:
+  platformctl sdn flow delete flow-0x1a2b3c --bridge br0
 ```
+
+`<flow-id>` is the `flow-0x<cookie>` ID that `flow add` answers and
+`flow list` shows.
 
 ### List Flows
 
@@ -291,6 +309,7 @@ platformctl sdn overlay vni list
 
 # Create VNI
 platformctl sdn overlay vni create --vni <VNI> --vlan <VLAN> [--name <NAME>]
+# (--name is accepted and not stored)
 
 # Delete VNI
 platformctl sdn overlay vni delete <vni>
@@ -302,6 +321,13 @@ Examples:
 ```
 
 ### Tunnel Commands
+
+On platformd the overlay controller holds the local VTEP and the VNIs
+only, so `tunnel list` and `mac list` print nothing and `mac forget`
+answers not found; see [overlay/operations.md](overlay/operations.md).
+The remote VTEPs a gateway admitted are listed with
+`platformctl sdn gateway overlay vteps`.
+
 
 ```bash
 platformctl sdn overlay tunnel list [--vni <VNI>]
@@ -328,8 +354,9 @@ Examples:
 
 ## Gateway Commands
 
-The gateway commands manage multi-mode gateway nodes (overlay, edge, transit).
-See the [Gateway Operations Guide](gateway/operations.md) for full details.
+The gateway commands manage gateway nodes, which run the service sections
+their configuration enables. See the [gateway CLI reference](../gateway/cli.md)
+for full details.
 
 ### Get Gateway Status
 
@@ -386,7 +413,8 @@ Examples:
 # Load balancer health
 platformctl sdn gateway lb status
 
-# VIP management (backends as address:port[:weight])
+# VIP management (IPv4 VIP; --protocol tcp or udp, default tcp;
+# backends as address:port[:weight])
 platformctl sdn gateway lb vip add --protocol tcp --address <VIP> --port <PORT> \
   --backend <ADDR:PORT[:WEIGHT]> [--backend ...] [--algorithm hash|round-robin]
 platformctl sdn gateway lb vip list
@@ -429,9 +457,13 @@ Options:
   --zone           Underlay zone, e.g. 'control-plane' or 'provisioning'
   --description    Description of the pool's purpose
   --lease-seconds  Default lease duration in seconds (0 = never expire)
+  --reserved       Prefixes (CIDR) that are never allocatable (repeatable)
+  --range-start    First address of the dynamic allocation window
+  --range-end      Last address of the dynamic allocation window
 
 # Update pool
 platformctl sdn ipam pool update --id <pool-id> [--name ...] [--gateway ...] [--zone ...]
+  [--description ...] [--lease-seconds ...] [--reserved ...] [--range-start ...] [--range-end ...]
 
 # Delete pool
 platformctl sdn ipam pool delete --id <pool-id>
@@ -442,6 +474,9 @@ Examples:
   platformctl sdn ipam pool create --name prod-v6 --cidr 2001:DB8:1234::/64 --gateway 2001:DB8:1234::1
   platformctl sdn ipam pool delete --id prod-v4
 ```
+
+The `/64` pool needs the `quicbaas` IPAM backend; the default `memory` backend
+refuses pools of more than 2^24 addresses ([Pool Size](ipam/configuration.md#pool-size)).
 
 ### Allocation Commands
 

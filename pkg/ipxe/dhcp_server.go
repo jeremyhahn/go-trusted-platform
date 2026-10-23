@@ -17,7 +17,6 @@ import (
 	"context"
 	"fmt"
 	"net"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -154,8 +153,14 @@ func (f *DefaultPacketConnFactory) CreateConn(iface string, serverIP net.IP, use
 	// an error, and it is bound to every interface, so a multi-homed
 	// host may route the broadcast out the wrong one. Both are set by
 	// dhcpServerSocketControl before bind (#649).
+	//
+	// The socket binds the unspecified address, never ServerConfig.BindHost
+	// or serverIP (#93): Linux delivers a datagram sent to 255.255.255.255
+	// only to sockets bound to INADDR_ANY, and a client with no address
+	// can only broadcast. SO_BINDTODEVICE on iface is what scopes it.
 	lc := net.ListenConfig{Control: dhcpServerSocketControl(iface)}
-	conn, err := lc.ListenPacket(context.Background(), "udp4", net.JoinHostPort("0.0.0.0", strconv.Itoa(port)))
+	unspecified := &net.UDPAddr{IP: net.IPv4zero, Port: port}
+	conn, err := lc.ListenPacket(context.Background(), "udp4", unspecified.String())
 	if err != nil {
 		return nil, err
 	}
@@ -320,6 +325,12 @@ func (s *DHCPServer) handleDHCP(conn net.PacketConn, peer net.Addr, req *dhcpv4.
 		"mac", req.ClientHWAddr.String(),
 		"xid", fmt.Sprintf("0x%x", req.TransactionID))
 
+	if !hasClientHWAddr(req.ClientHWAddr) {
+		s.logger.Debug("Ignoring DHCP packet without a client hardware address",
+			"xid", fmt.Sprintf("0x%x", req.TransactionID))
+		return
+	}
+
 	switch req.MessageType() {
 	case dhcpv4.MessageTypeDiscover:
 		s.handleDiscover(conn, peer, req)
@@ -330,6 +341,18 @@ func (s *DHCPServer) handleDHCP(conn net.PacketConn, peer net.Addr, req *dhcpv4.
 	default:
 		s.logger.Debug("Ignoring DHCP message type", "type", req.MessageType().String())
 	}
+}
+
+// hasClientHWAddr reports whether chaddr names a client. Leases are keyed
+// on it, so an empty or all-zero chaddr would give every such packet the
+// same lease, and the broadcast reply is addressed to no one.
+func hasClientHWAddr(mac net.HardwareAddr) bool {
+	for _, b := range mac {
+		if b != 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // handleDiscover handles DHCP Discover messages.

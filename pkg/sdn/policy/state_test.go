@@ -15,7 +15,6 @@ package policy
 
 import (
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -589,42 +588,55 @@ func TestPortStateMachine_Concurrency(t *testing.T) {
 	// Initialize port
 	require.NoError(t, sm.SetState(portID, PortStateProvisioning))
 
-	done := make(chan bool)
+	// Both goroutines are released together by closing start, so their
+	// operations run concurrently; the race detector checks the locking by
+	// happens-before, which needs no pacing between operations.
+	start := make(chan struct{})
+	errs := make(chan error, 2)
 
-	// Concurrent state changes.
-	//
-	// KNOWN GAP: the 1ms paces the two goroutines so their operations
-	// interleave rather than one running to completion first. It is a stress
-	// fixture, not a wait for work — there is nothing to wait for, so it does
-	// not flake. It is banned anyway (go-style.md §No time.Sleep, owner ruling
-	// 2026-09-04): the interleaving should be driven by a channel the two
-	// goroutines hand off on, which forces the interleaving instead of making
-	// it likely. Tracked in #260.
+	// Concurrent state changes: Authenticating <-> Unauthorized is valid in
+	// both directions, so every write must succeed.
 	go func() {
+		<-start
+		next := PortStateAuthenticating
 		for i := 0; i < 100; i++ {
-			_ = sm.SetState(portID, PortStateAuthenticating)
-			time.Sleep(time.Millisecond)
+			if err := sm.SetState(portID, next); err != nil {
+				errs <- err
+				return
+			}
+			if next == PortStateAuthenticating {
+				next = PortStateUnauthorized
+			} else {
+				next = PortStateAuthenticating
+			}
 		}
-		done <- true
+		errs <- nil
 	}()
 
-	// Concurrent reads — paced for the same reason as the writer above (#262).
+	// Concurrent reads
 	go func() {
+		<-start
 		for i := 0; i < 100; i++ {
-			_, _ = sm.GetState(portID)
-			_, _ = sm.GetInfo(portID)
-			time.Sleep(time.Millisecond)
+			if _, err := sm.GetState(portID); err != nil {
+				errs <- err
+				return
+			}
+			if _, err := sm.GetInfo(portID); err != nil {
+				errs <- err
+				return
+			}
 		}
-		done <- true
+		errs <- nil
 	}()
 
-	// Wait for completion
-	<-done
-	<-done
+	close(start)
+	require.NoError(t, <-errs)
+	require.NoError(t, <-errs)
 
-	// Verify port still exists
-	_, err := sm.GetState(portID)
-	assert.NoError(t, err)
+	// The 100th write leaves the port Unauthorized
+	state, err := sm.GetState(portID)
+	require.NoError(t, err)
+	assert.Equal(t, PortStateUnauthorized, state)
 }
 
 // setupPortState sets up a port to reach the target state through valid transitions

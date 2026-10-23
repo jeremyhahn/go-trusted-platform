@@ -43,6 +43,16 @@ func Connect(ctx context.Context, opts *platform.Options) (transport.Adapter, er
 		return nil, platform.ErrNilOptions
 	}
 
+	// The daemon authenticates socket callers by their peer credentials, so
+	// a token or TLS setting would be silently dropped. Refuse it instead.
+	if names := opts.CredentialOptions(); len(names) > 0 {
+		return nil, platform.ErrUnsupportedOption{
+			Protocol: platform.ProtocolUnix,
+			Option:   names[0],
+			Reason:   "the Unix socket authenticates by peer credentials (SO_PEERCRED)",
+		}
+	}
+
 	socketPath := opts.UnixSocket
 	if socketPath == "" {
 		socketPath = platform.DefaultUnixSocket
@@ -65,6 +75,7 @@ func Connect(ctx context.Context, opts *platform.Options) (transport.Adapter, er
 
 	conn, err := grpc.NewClient(target,
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithChainUnaryInterceptor(refuseChannelBinding),
 		grpc.WithDefaultCallOptions(
 			grpc.MaxCallRecvMsgSize(maxMsgSize),
 			grpc.MaxCallSendMsgSize(maxMsgSize),

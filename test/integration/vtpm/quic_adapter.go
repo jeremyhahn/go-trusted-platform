@@ -30,8 +30,8 @@ import (
 
 	"github.com/jeremyhahn/go-codec"
 	"github.com/jeremyhahn/go-codec/pkg/factory"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/vtpm"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
 	quicgo "github.com/quic-go/quic-go"
 )
@@ -62,15 +62,6 @@ const (
 // =============================================================================
 // Error Types
 // =============================================================================
-
-// ErrQUICVTPMNotImplemented indicates a method is not yet implemented.
-type ErrQUICVTPMNotImplemented struct {
-	Method string
-}
-
-func (e ErrQUICVTPMNotImplemented) Error() string {
-	return fmt.Sprintf("QUIC vTPM method %s not implemented", e.Method)
-}
 
 // ErrQUICVTPMConnectionFailed indicates a QUIC connection failure.
 type ErrQUICVTPMConnectionFailed struct {
@@ -722,53 +713,53 @@ func decodeVTPMPayload(data []byte, entity interface{}) error {
 // vtpmOpcodeToString returns a human-readable name for an opcode.
 func vtpmOpcodeToString(opcode byte) string {
 	switch opcode {
-	case quic.OpVTPMCreate:
+	case quicwire.OpVTPMCreate:
 		return "VTPMCreate"
-	case quic.OpVTPMDelete:
+	case quicwire.OpVTPMDelete:
 		return "VTPMDelete"
-	case quic.OpVTPMStart:
+	case quicwire.OpVTPMStart:
 		return "VTPMStart"
-	case quic.OpVTPMStop:
+	case quicwire.OpVTPMStop:
 		return "VTPMStop"
-	case quic.OpVTPMGetState:
+	case quicwire.OpVTPMGetState:
 		return "VTPMGetState"
-	case quic.OpVTPMList:
+	case quicwire.OpVTPMList:
 		return "VTPMList"
-	case quic.OpVTPMQuote:
+	case quicwire.OpVTPMQuote:
 		return "VTPMQuote"
-	case quic.OpVTPMSeal:
+	case quicwire.OpVTPMSeal:
 		return "VTPMSeal"
-	case quic.OpVTPMUnseal:
+	case quicwire.OpVTPMUnseal:
 		return "VTPMUnseal"
-	case quic.OpVTPMExtendPCR:
+	case quicwire.OpVTPMExtendPCR:
 		return "VTPMExtendPCR"
-	case quic.OpVTPMReadPCR:
+	case quicwire.OpVTPMReadPCR:
 		return "VTPMReadPCR"
-	case quic.OpVTPMCreateTemplate:
+	case quicwire.OpVTPMCreateTemplate:
 		return "VTPMCreateTemplate"
-	case quic.OpVTPMGetTemplate:
+	case quicwire.OpVTPMGetTemplate:
 		return "VTPMGetTemplate"
-	case quic.OpVTPMDeleteTemplate:
+	case quicwire.OpVTPMDeleteTemplate:
 		return "VTPMDeleteTemplate"
-	case quic.OpVTPMListTemplates:
+	case quicwire.OpVTPMListTemplates:
 		return "VTPMListTemplates"
-	case quic.OpVTPMCloneTemplate:
+	case quicwire.OpVTPMCloneTemplate:
 		return "VTPMCloneTemplate"
-	case quic.OpVTPMExportBundle:
+	case quicwire.OpVTPMExportBundle:
 		return "VTPMExportBundle"
-	case quic.OpVTPMImportBundle:
+	case quicwire.OpVTPMImportBundle:
 		return "VTPMImportBundle"
-	case quic.OpVTPMValidateBundle:
+	case quicwire.OpVTPMValidateBundle:
 		return "VTPMValidateBundle"
-	case quic.OpVTPMGetBundlePath:
+	case quicwire.OpVTPMGetBundlePath:
 		return "VTPMGetBundlePath"
-	case quic.OpVTPMGetSocketPath:
+	case quicwire.OpVTPMGetSocketPath:
 		return "VTPMGetSocketPath"
-	case quic.OpVTPMGetNVRAMPath:
+	case quicwire.OpVTPMGetNVRAMPath:
 		return "VTPMGetNVRAMPath"
-	case quic.OpVTPMGetBundle:
+	case quicwire.OpVTPMGetBundle:
 		return "VTPMGetBundle"
-	case quic.OpVTPMIsRunning:
+	case quicwire.OpVTPMIsRunning:
 		return "VTPMIsRunning"
 	default:
 		return fmt.Sprintf("Unknown(0x%02X)", opcode)
@@ -788,7 +779,7 @@ func (q *QUICAdapter) CreateBundle(ctx context.Context, opts CreateBundleOptions
 		Labels:            opts.Labels,
 	}
 
-	resp, err := q.sendRequest(ctx, quic.OpVTPMCreate, req)
+	resp, err := q.sendRequest(ctx, quicwire.OpVTPMCreate, req)
 	if err != nil {
 		return nil, err
 	}
@@ -814,7 +805,7 @@ func (q *QUICAdapter) CreateBundle(ctx context.Context, opts CreateBundleOptions
 func (q *QUICAdapter) GetBundle(ctx context.Context, opts GetBundleOptions) (*GetBundleResult, error) {
 	req := &quicVTPMGetBundleReq{ID: opts.ID}
 
-	resp, err := q.sendRequest(ctx, quic.OpVTPMGetBundle, req)
+	resp, err := q.sendRequest(ctx, quicwire.OpVTPMGetBundle, req)
 	if err != nil {
 		return nil, err
 	}
@@ -845,7 +836,7 @@ func (q *QUICAdapter) GetBundle(ctx context.Context, opts GetBundleOptions) (*Ge
 func (q *QUICAdapter) DeleteBundle(ctx context.Context, opts DeleteBundleOptions) (*DeleteBundleResult, error) {
 	req := &quicVTPMDeleteBundleReq{BundleID: opts.ID}
 
-	resp, err := q.sendRequest(ctx, quic.OpVTPMDelete, req)
+	resp, err := q.sendRequest(ctx, quicwire.OpVTPMDelete, req)
 	if err != nil {
 		return nil, err
 	}
@@ -866,7 +857,7 @@ func (q *QUICAdapter) ListBundles(ctx context.Context, opts ListBundlesOptions) 
 		Mode: string(opts.Mode),
 	}
 
-	resp, err := q.sendRequest(ctx, quic.OpVTPMList, req)
+	resp, err := q.sendRequest(ctx, quicwire.OpVTPMList, req)
 	if err != nil {
 		return nil, err
 	}
@@ -924,7 +915,7 @@ func (q *QUICAdapter) CreateTemplate(ctx context.Context, opts CreateTemplateOpt
 		SecureBootEnabled: opts.SecureBootEnabled,
 	}
 
-	resp, err := q.sendRequest(ctx, quic.OpVTPMCreateTemplate, req)
+	resp, err := q.sendRequest(ctx, quicwire.OpVTPMCreateTemplate, req)
 	if err != nil {
 		return nil, err
 	}
@@ -949,7 +940,7 @@ func (q *QUICAdapter) CreateTemplate(ctx context.Context, opts CreateTemplateOpt
 func (q *QUICAdapter) GetTemplate(ctx context.Context, opts GetTemplateOptions) (*GetTemplateResult, error) {
 	req := &quicVTPMGetTemplateReq{ID: opts.ID}
 
-	resp, err := q.sendRequest(ctx, quic.OpVTPMGetTemplate, req)
+	resp, err := q.sendRequest(ctx, quicwire.OpVTPMGetTemplate, req)
 	if err != nil {
 		return nil, err
 	}
@@ -977,7 +968,7 @@ func (q *QUICAdapter) GetTemplate(ctx context.Context, opts GetTemplateOptions) 
 func (q *QUICAdapter) DeleteTemplate(ctx context.Context, opts DeleteTemplateOptions) (*DeleteTemplateResult, error) {
 	req := &quicVTPMDeleteTemplateReq{ID: opts.ID}
 
-	resp, err := q.sendRequest(ctx, quic.OpVTPMDeleteTemplate, req)
+	resp, err := q.sendRequest(ctx, quicwire.OpVTPMDeleteTemplate, req)
 	if err != nil {
 		return nil, err
 	}
@@ -992,7 +983,7 @@ func (q *QUICAdapter) DeleteTemplate(ctx context.Context, opts DeleteTemplateOpt
 
 // ListTemplates lists templates via QUIC.
 func (q *QUICAdapter) ListTemplates(ctx context.Context, opts ListTemplatesOptions) (*ListTemplatesResult, error) {
-	resp, err := q.sendRequest(ctx, quic.OpVTPMListTemplates, nil)
+	resp, err := q.sendRequest(ctx, quicwire.OpVTPMListTemplates, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -1029,7 +1020,7 @@ func (q *QUICAdapter) CloneTemplate(ctx context.Context, opts CloneTemplateOptio
 		Labels:     opts.Labels,
 	}
 
-	resp, err := q.sendRequest(ctx, quic.OpVTPMCloneTemplate, req)
+	resp, err := q.sendRequest(ctx, quicwire.OpVTPMCloneTemplate, req)
 	if err != nil {
 		return nil, err
 	}
@@ -1065,7 +1056,7 @@ func (q *QUICAdapter) CloneTemplate(ctx context.Context, opts CloneTemplateOptio
 func (q *QUICAdapter) ExportBundle(ctx context.Context, opts ExportBundleOptions) (*ExportBundleResult, error) {
 	req := &quicVTPMExportBundleReq{ID: opts.ID}
 
-	resp, err := q.sendRequest(ctx, quic.OpVTPMExportBundle, req)
+	resp, err := q.sendRequest(ctx, quicwire.OpVTPMExportBundle, req)
 	if err != nil {
 		return nil, err
 	}
@@ -1118,7 +1109,7 @@ func (q *QUICAdapter) ImportBundle(ctx context.Context, opts ImportBundleOptions
 
 	req := &quicVTPMImportBundleReq{Data: data}
 
-	resp, err := q.sendRequest(ctx, quic.OpVTPMImportBundle, req)
+	resp, err := q.sendRequest(ctx, quicwire.OpVTPMImportBundle, req)
 	if err != nil {
 		return nil, err
 	}
@@ -1151,7 +1142,7 @@ func (q *QUICAdapter) ImportBundle(ctx context.Context, opts ImportBundleOptions
 func (q *QUICAdapter) ValidateBundle(ctx context.Context, opts ValidateBundleOptions) (*ValidateBundleResult, error) {
 	req := &quicVTPMValidateBundleReq{ID: opts.ID}
 
-	resp, err := q.sendRequest(ctx, quic.OpVTPMValidateBundle, req)
+	resp, err := q.sendRequest(ctx, quicwire.OpVTPMValidateBundle, req)
 	if err != nil {
 		return nil, err
 	}
@@ -1187,7 +1178,7 @@ func (q *QUICAdapter) ValidateBundle(ctx context.Context, opts ValidateBundleOpt
 func (q *QUICAdapter) GetBundlePath(ctx context.Context, opts GetBundlePathOptions) (*GetBundlePathResult, error) {
 	req := &quicVTPMGetPathReq{ID: opts.ID}
 
-	resp, err := q.sendRequest(ctx, quic.OpVTPMGetBundlePath, req)
+	resp, err := q.sendRequest(ctx, quicwire.OpVTPMGetBundlePath, req)
 	if err != nil {
 		return nil, err
 	}
@@ -1204,7 +1195,7 @@ func (q *QUICAdapter) GetBundlePath(ctx context.Context, opts GetBundlePathOptio
 func (q *QUICAdapter) GetTPMSocketPath(ctx context.Context, opts GetTPMSocketPathOptions) (*GetTPMSocketPathResult, error) {
 	req := &quicVTPMGetPathReq{ID: opts.ID}
 
-	resp, err := q.sendRequest(ctx, quic.OpVTPMGetSocketPath, req)
+	resp, err := q.sendRequest(ctx, quicwire.OpVTPMGetSocketPath, req)
 	if err != nil {
 		return nil, err
 	}
@@ -1221,7 +1212,7 @@ func (q *QUICAdapter) GetTPMSocketPath(ctx context.Context, opts GetTPMSocketPat
 func (q *QUICAdapter) GetNVRAMPath(ctx context.Context, opts GetNVRAMPathOptions) (*GetNVRAMPathResult, error) {
 	req := &quicVTPMGetPathReq{ID: opts.ID}
 
-	resp, err := q.sendRequest(ctx, quic.OpVTPMGetNVRAMPath, req)
+	resp, err := q.sendRequest(ctx, quicwire.OpVTPMGetNVRAMPath, req)
 	if err != nil {
 		return nil, err
 	}
@@ -1242,7 +1233,7 @@ func (q *QUICAdapter) GetNVRAMPath(ctx context.Context, opts GetNVRAMPathOptions
 func (q *QUICAdapter) Start(ctx context.Context, opts StartOptions) (*StartResult, error) {
 	req := &quicVTPMStartReq{BundleID: opts.BundleID}
 
-	resp, err := q.sendRequest(ctx, quic.OpVTPMStart, req)
+	resp, err := q.sendRequest(ctx, quicwire.OpVTPMStart, req)
 	if err != nil {
 		return nil, err
 	}
@@ -1263,7 +1254,7 @@ func (q *QUICAdapter) Start(ctx context.Context, opts StartOptions) (*StartResul
 func (q *QUICAdapter) Stop(ctx context.Context, opts StopOptions) (*StopResult, error) {
 	req := &quicVTPMStopReq{BundleID: opts.BundleID}
 
-	resp, err := q.sendRequest(ctx, quic.OpVTPMStop, req)
+	resp, err := q.sendRequest(ctx, quicwire.OpVTPMStop, req)
 	if err != nil {
 		return nil, err
 	}
@@ -1283,7 +1274,7 @@ func (q *QUICAdapter) Stop(ctx context.Context, opts StopOptions) (*StopResult, 
 func (q *QUICAdapter) IsRunning(ctx context.Context, opts IsRunningOptions) (*IsRunningResult, error) {
 	req := &quicVTPMIsRunningReq{BundleID: opts.BundleID}
 
-	resp, err := q.sendRequest(ctx, quic.OpVTPMIsRunning, req)
+	resp, err := q.sendRequest(ctx, quicwire.OpVTPMIsRunning, req)
 	if err != nil {
 		return nil, err
 	}
@@ -1307,7 +1298,7 @@ func (q *QUICAdapter) Quote(ctx context.Context, opts QuoteOptions) (*QuoteResul
 		PCRs:     opts.PCRs,
 	}
 
-	resp, err := q.sendRequest(ctx, quic.OpVTPMQuote, req)
+	resp, err := q.sendRequest(ctx, quicwire.OpVTPMQuote, req)
 	if err != nil {
 		return nil, err
 	}
@@ -1335,7 +1326,7 @@ func (q *QUICAdapter) Seal(ctx context.Context, opts SealOptions) (*SealResult, 
 		AuthValue: opts.AuthValue,
 	}
 
-	resp, err := q.sendRequest(ctx, quic.OpVTPMSeal, req)
+	resp, err := q.sendRequest(ctx, quicwire.OpVTPMSeal, req)
 	if err != nil {
 		return nil, err
 	}
@@ -1359,7 +1350,7 @@ func (q *QUICAdapter) Unseal(ctx context.Context, opts UnsealOptions) (*UnsealRe
 		AuthValue:  opts.AuthValue,
 	}
 
-	resp, err := q.sendRequest(ctx, quic.OpVTPMUnseal, req)
+	resp, err := q.sendRequest(ctx, quicwire.OpVTPMUnseal, req)
 	if err != nil {
 		return nil, err
 	}
@@ -1383,7 +1374,7 @@ func (q *QUICAdapter) ExtendPCR(ctx context.Context, opts ExtendPCROptions) (*Ex
 		Data:     opts.Data,
 	}
 
-	resp, err := q.sendRequest(ctx, quic.OpVTPMExtendPCR, req)
+	resp, err := q.sendRequest(ctx, quicwire.OpVTPMExtendPCR, req)
 	if err != nil {
 		return nil, err
 	}
@@ -1407,7 +1398,7 @@ func (q *QUICAdapter) ReadPCR(ctx context.Context, opts ReadPCROptions) (*ReadPC
 		PCRIndex: opts.PCRIndex,
 	}
 
-	resp, err := q.sendRequest(ctx, quic.OpVTPMReadPCR, req)
+	resp, err := q.sendRequest(ctx, quicwire.OpVTPMReadPCR, req)
 	if err != nil {
 		return nil, err
 	}

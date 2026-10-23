@@ -20,7 +20,6 @@ import (
 	"os"
 	"strings"
 	"sync/atomic"
-	"testing"
 	"time"
 )
 
@@ -33,7 +32,6 @@ const (
 	EnvPlatformMCPEndpoint  = "PLATFORM_MCP_ENDPOINT"
 	EnvPlatformUnixSocket   = "PLATFORM_UNIX_SOCKET"
 	EnvPlatformCTL          = "PLATFORMCTL_PATH"
-	EnvIntegrationTest      = "INTEGRATION_TEST"
 )
 
 // envOrDefault returns the environment variable value or the default.
@@ -53,8 +51,8 @@ func restEndpoint() string { return envOrDefault(EnvPlatformRESTEndpoint, "https
 // quicEndpoint returns the platformd QUIC endpoint.
 func quicEndpoint() string { return envOrDefault(EnvPlatformQUICEndpoint, "localhost:9444") }
 
-// mcpEndpoint returns the platformd MCP base URL (always plain HTTP).
-func mcpEndpoint() string { return envOrDefault(EnvPlatformMCPEndpoint, "http://localhost:9445") }
+// mcpEndpoint returns the platformd MCP base URL (TLS 1.3 only, #844).
+func mcpEndpoint() string { return envOrDefault(EnvPlatformMCPEndpoint, "https://localhost:9445") }
 
 // unixSocket returns the platformd Unix socket path.
 func unixSocket() string {
@@ -63,14 +61,6 @@ func unixSocket() string {
 
 // platformctlPath returns the platformctl binary path.
 func platformctlPath() string { return envOrDefault(EnvPlatformCTL, "platformctl") }
-
-// SkipIfNotIntegration skips the test when INTEGRATION_TEST is not set.
-func SkipIfNotIntegration(t *testing.T) {
-	t.Helper()
-	if os.Getenv(EnvIntegrationTest) == "" {
-		t.Skip("Skipping integration test: INTEGRATION_TEST not set")
-	}
-}
 
 // uniqueCounter disambiguates identities generated within the same
 // nanosecond across parallel adapters.
@@ -167,6 +157,14 @@ func isEKBindingRejected(err error) bool {
 		"ek certificate required",
 		"ek certificate public key mismatch",
 	)
+}
+
+// isEABProfileMismatch reports whether err corresponds to a valid EAB
+// credential presented by a device that does not resolve to the credential's
+// profile (typed configdelivery ErrEABProfileMismatch; REST 403, gRPC
+// PermissionDenied, QUIC StatusPermissionDenied).
+func isEABProfileMismatch(err error) bool {
+	return containsAny(err, "eab credential is not bound to this device's profile")
 }
 
 // isSignerUnavailable reports whether err corresponds to the control plane

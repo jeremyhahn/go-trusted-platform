@@ -17,17 +17,10 @@ package compute_test
 
 import (
 	"os"
-	"strings"
-	"testing"
 
+	pb "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
 )
-
-// SkipIfNotIntegration skips the test if not running in integration mode.
-func SkipIfNotIntegration(t *testing.T) {
-	t.Helper()
-	helpers.SkipIfNotIntegration(t)
-}
 
 // GetCLIPath returns the path to the platformctl binary.
 func GetCLIPath() string {
@@ -62,38 +55,69 @@ func GetSocketPath() string {
 	return helpers.GetSocketPath()
 }
 
-// skipIfNotImplemented skips the test if the error indicates the method
-// is not implemented for the current protocol adapter.
-func skipIfNotImplemented(t *testing.T, err error) {
-	t.Helper()
-	if err == nil {
-		return
-	}
-
-	errMsg := strings.ToLower(err.Error())
-	notImplementedPatterns := []string{
-		"not implemented",
-		"unimplemented",
-		"not supported",
-		"service unavailable",
-		"not available",
-		"unknown service",
-		"connection required",
-		"404 page not found",
-		"status: 404",
-		"unknown flag",
-		"context canceled",
-		"context deadline exceeded",
-	}
-
-	for _, pattern := range notImplementedPatterns {
-		if strings.Contains(errMsg, pattern) {
-			t.Skipf("Not implemented: %v", err)
-		}
-	}
-}
-
 // generateTestVMName generates a unique VM name for testing.
 func generateTestVMName(suffix string) string {
 	return "test-vm-" + helpers.GenerateUniqueID(suffix)
+}
+
+// fullSnapshotConfig builds the memory-and-disk snapshot configuration the
+// compute service requires.
+func fullSnapshotConfig(opts CreateSnapshotOptions) *pb.SnapshotConfig {
+	return &pb.SnapshotConfig{
+		Name:           opts.Name,
+		Description:    opts.Description,
+		MemorySnapshot: true,
+		DiskSnapshot:   true,
+	}
+}
+
+// snapshotSummary converts an SDK snapshot into its test summary.
+func snapshotSummary(snapshot *pb.Snapshot) SnapshotSummary {
+	return SnapshotSummary{ID: snapshot.GetId(), VMID: snapshot.GetVmId()}
+}
+
+func prepareMigrationRequest(opts PrepareMigrationOptions) *pb.PrepareMigrationRequest {
+	req := &pb.PrepareMigrationRequest{VmName: opts.VMName, Mode: opts.Mode}
+	if opts.Guest != nil {
+		req.Spec = &pb.VMMigrationSpec{MemoryMb: opts.Guest.MemoryMB, Cpus: opts.Guest.CPUs}
+	}
+	return req
+}
+
+func migrationReceiverSummary(resp *pb.PrepareMigrationResponse) *MigrationReceiverSummary {
+	return &MigrationReceiverSummary{
+		ReceiverID:  resp.GetReceiverId(),
+		Port:        resp.GetPort(),
+		TLSHostname: resp.GetTlsHostname(),
+	}
+}
+
+// snapshotSummaries converts SDK snapshots into their test summaries.
+func snapshotSummaries(snapshots []*pb.Snapshot) []SnapshotSummary {
+	summaries := make([]SnapshotSummary, 0, len(snapshots))
+	for _, snapshot := range snapshots {
+		summaries = append(summaries, snapshotSummary(snapshot))
+	}
+	return summaries
+}
+
+// vmQuote maps an SDK attestation response to the adapter quote.
+func vmQuote(resp *pb.AttestVMResponse) *VMQuote {
+	return &VMQuote{
+		Quote:              resp.GetQuote(),
+		Signature:          resp.GetSignature(),
+		SignatureAlgorithm: resp.GetSignatureAlgorithm(),
+	}
+}
+
+// verifyVMAttestationRequest builds the SDK verification request from the
+// adapter options.
+func verifyVMAttestationRequest(opts VerifyVMAttestationOptions) *pb.VerifyVMAttestationRequest {
+	return &pb.VerifyVMAttestationRequest{
+		VmId:               opts.VMID,
+		Quote:              opts.Quote,
+		Signature:          opts.Signature,
+		SignatureAlgorithm: opts.SignatureAlgorithm,
+		Nonce:              opts.Nonce,
+	}
 }

@@ -15,169 +15,17 @@ package daemon
 
 import (
 	"context"
-	"crypto/x509"
 	"errors"
 	"testing"
-	"time"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/api/mcp"
 	deviceentities "github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/policy"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/vtpm"
 )
 
 // =============================================================================
 // Mock Policy Engine for coverage tests
 // =============================================================================
-
-type mcpCoverageMockPolicyEngine struct {
-	portStates  map[string]policy.PortState
-	policies    map[string]*policy.PortPolicy
-	portInfos   map[string]*policy.PortInfo
-	portVLANs   map[string]uint16
-	ofPorts     map[string]int32
-	shouldError bool
-	errorMsg    string
-}
-
-func newMCPCoverageMockPolicyEngine() *mcpCoverageMockPolicyEngine {
-	return &mcpCoverageMockPolicyEngine{
-		portStates: make(map[string]policy.PortState),
-		policies:   make(map[string]*policy.PortPolicy),
-		portInfos:  make(map[string]*policy.PortInfo),
-		portVLANs:  make(map[string]uint16),
-		ofPorts:    make(map[string]int32),
-	}
-}
-
-func (m *mcpCoverageMockPolicyEngine) SetPortState(portID string, state policy.PortState) error {
-	if m.shouldError {
-		return errors.New(m.errorMsg)
-	}
-	m.portStates[portID] = state
-	return nil
-}
-
-func (m *mcpCoverageMockPolicyEngine) GetPortState(portID string) (policy.PortState, error) {
-	if m.shouldError {
-		return policy.PortStateUnconnected, errors.New(m.errorMsg)
-	}
-	if state, ok := m.portStates[portID]; ok {
-		return state, nil
-	}
-	return policy.PortStateUnconnected, nil
-}
-
-func (m *mcpCoverageMockPolicyEngine) GetPortInfo(portID string) (*policy.PortInfo, error) {
-	if m.shouldError {
-		return nil, errors.New(m.errorMsg)
-	}
-	if info, ok := m.portInfos[portID]; ok {
-		return info, nil
-	}
-	return &policy.PortInfo{
-		PortID:          portID,
-		State:           policy.PortStateUnconnected,
-		LastStateChange: time.Now(),
-	}, nil
-}
-
-func (m *mcpCoverageMockPolicyEngine) ApplyPolicy(portID string, pol *policy.PortPolicy) error {
-	if m.shouldError {
-		return errors.New(m.errorMsg)
-	}
-	m.policies[portID] = pol
-	return nil
-}
-
-func (m *mcpCoverageMockPolicyEngine) RemovePolicy(portID string) error {
-	if m.shouldError {
-		return errors.New(m.errorMsg)
-	}
-	delete(m.policies, portID)
-	return nil
-}
-
-func (m *mcpCoverageMockPolicyEngine) GetPolicy(portID string) (*policy.PortPolicy, error) {
-	if m.shouldError {
-		return nil, errors.New(m.errorMsg)
-	}
-	if pol, ok := m.policies[portID]; ok {
-		return pol, nil
-	}
-	return nil, errors.New("policy not found")
-}
-
-func (m *mcpCoverageMockPolicyEngine) SetPortVLAN(portID string, vlan uint16) error {
-	if m.shouldError {
-		return errors.New(m.errorMsg)
-	}
-	m.portVLANs[portID] = vlan
-	return nil
-}
-
-func (m *mcpCoverageMockPolicyEngine) GetPortVLAN(portID string) (uint16, error) {
-	if m.shouldError {
-		return 0, errors.New(m.errorMsg)
-	}
-	if vlan, ok := m.portVLANs[portID]; ok {
-		return vlan, nil
-	}
-	return 0, nil
-}
-
-func (m *mcpCoverageMockPolicyEngine) BlockPort(portID string) error {
-	if m.shouldError {
-		return errors.New(m.errorMsg)
-	}
-	m.portStates[portID] = policy.PortStateBlocked
-	return nil
-}
-
-func (m *mcpCoverageMockPolicyEngine) UnblockPort(portID string) error {
-	if m.shouldError {
-		return errors.New(m.errorMsg)
-	}
-	m.portStates[portID] = policy.PortStateAuthorized
-	return nil
-}
-
-func (m *mcpCoverageMockPolicyEngine) GetOFPort(portID string) (int32, error) {
-	if m.shouldError {
-		return 0, errors.New(m.errorMsg)
-	}
-	if ofp, ok := m.ofPorts[portID]; ok {
-		return ofp, nil
-	}
-	return 0, nil
-}
-
-func (m *mcpCoverageMockPolicyEngine) AuthenticatePort(portID string, cert *x509.Certificate) error {
-	if m.shouldError {
-		return errors.New(m.errorMsg)
-	}
-	m.portStates[portID] = policy.PortStateAuthorized
-	return nil
-}
-
-func (m *mcpCoverageMockPolicyEngine) OnCertificateExpired(portID string) error {
-	if m.shouldError {
-		return errors.New(m.errorMsg)
-	}
-	m.portStates[portID] = policy.PortStateUnauthorized
-	return nil
-}
-
-func (m *mcpCoverageMockPolicyEngine) OnCertificateRevoked(portID string) error {
-	if m.shouldError {
-		return errors.New(m.errorMsg)
-	}
-	m.portStates[portID] = policy.PortStateBlocked
-	return nil
-}
-
-func (m *mcpCoverageMockPolicyEngine) GetMonitor() *policy.CertificateMonitor {
-	return nil
-}
 
 // =============================================================================
 // VTPMCreate Coverage Tests
@@ -190,7 +38,7 @@ func TestMCPServiceProvider_VTPMCreate_Success(t *testing.T) {
 		VTPMService: mockSvc,
 	})
 
-	result, err := provider.VTPMCreate(ctx, "test-vtpm", "RSA2048")
+	result, err := provider.VTPMCreate(ctx, "test-vtpm", "rsa", false, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -199,11 +47,30 @@ func TestMCPServiceProvider_VTPMCreate_Success(t *testing.T) {
 	}
 }
 
+func TestMCPServiceProvider_VTPMCreate_RejectsUndocumentedAlgorithm(t *testing.T) {
+	ctx := context.Background()
+	provider := NewMCPServiceProvider(&MCPServiceProviderConfig{
+		VTPMService: newMCPMockVTPMService(),
+	})
+
+	for _, algorithm := range []string{"RSA2048", "ECDSA"} {
+		_, err := provider.VTPMCreate(ctx, "test-vtpm", algorithm, false, nil)
+		var invalid vtpm.ErrInvalidEKAlgorithm
+		if !errors.As(err, &invalid) {
+			t.Errorf("VTPMCreate(%q): err = %v, want vtpm.ErrInvalidEKAlgorithm", algorithm, err)
+		}
+		_, err = provider.VTPMCreateTemplate(ctx, "tpl", "desc", algorithm, false)
+		if !errors.As(err, &invalid) {
+			t.Errorf("VTPMCreateTemplate(%q): err = %v, want vtpm.ErrInvalidEKAlgorithm", algorithm, err)
+		}
+	}
+}
+
 func TestMCPServiceProvider_VTPMCreate_NilServiceReturnsError(t *testing.T) {
 	ctx := context.Background()
 	provider := NewMCPServiceProvider(&MCPServiceProviderConfig{})
 
-	_, err := provider.VTPMCreate(ctx, "test", "RSA")
+	_, err := provider.VTPMCreate(ctx, "test", "RSA", false, nil)
 	if err == nil {
 		t.Error("expected error for nil service")
 	}
@@ -228,7 +95,7 @@ func TestMCPServiceProvider_VTPMList_Success(t *testing.T) {
 		VTPMService: mockSvc,
 	})
 
-	result, err := provider.VTPMList(ctx)
+	result, err := provider.VTPMList(ctx, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -241,7 +108,7 @@ func TestMCPServiceProvider_VTPMList_NilServiceReturnsError(t *testing.T) {
 	ctx := context.Background()
 	provider := NewMCPServiceProvider(&MCPServiceProviderConfig{})
 
-	_, err := provider.VTPMList(ctx)
+	_, err := provider.VTPMList(ctx, nil)
 	if err == nil {
 		t.Error("expected error for nil service")
 	}
@@ -257,7 +124,7 @@ func TestMCPServiceProvider_VTPMList_EmptyList(t *testing.T) {
 		VTPMService: mockSvc,
 	})
 
-	result, err := provider.VTPMList(ctx)
+	result, err := provider.VTPMList(ctx, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -441,7 +308,7 @@ func TestMCPServiceProvider_DeviceRegister_NilServiceReturnsError(t *testing.T) 
 	ctx := context.Background()
 	provider := NewMCPServiceProvider(&MCPServiceProviderConfig{})
 
-	_, err := provider.DeviceRegister(ctx, "device1", "server", nil)
+	_, err := provider.DeviceRegister(ctx, &mcp.DeviceRegisterRequest{Model: "device1", Serial: "server"})
 	if err == nil {
 		t.Error("expected error for nil service")
 	}
@@ -457,7 +324,7 @@ func TestMCPServiceProvider_DeviceRegister_Success(t *testing.T) {
 		DeviceService: mockSvc,
 	})
 
-	result, err := provider.DeviceRegister(ctx, "device1", "server", nil)
+	result, err := provider.DeviceRegister(ctx, &mcp.DeviceRegisterRequest{Model: "device1", Serial: "server"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -479,7 +346,7 @@ func TestMCPServiceProvider_DeviceRegister_AssignsAnID(t *testing.T) {
 		DeviceService: mockSvc,
 	})
 
-	result, err := provider.DeviceRegister(ctx, "model-525", "SN-525", nil)
+	result, err := provider.DeviceRegister(ctx, &mcp.DeviceRegisterRequest{Model: "model-525", Serial: "SN-525"})
 	if err != nil {
 		t.Fatalf("DeviceRegister returned an error: %v", err)
 	}
@@ -510,9 +377,97 @@ func TestMCPServiceProvider_DeviceRegister_SaveErrorSurfaces(t *testing.T) {
 		DeviceService: &failingDeviceCreateService{mcpMockDeviceService: newMCPMockDeviceService()},
 	})
 
-	if _, err := provider.DeviceRegister(ctx, "model-525", "SN-525", nil); err == nil {
+	if _, err := provider.DeviceRegister(ctx, &mcp.DeviceRegisterRequest{Model: "model-525", Serial: "SN-525"}); err == nil {
 		t.Fatal("expected the storage failure to surface from DeviceRegister")
 	}
+}
+
+// TestMCPServiceProvider_DeviceRegister_MapsEveryField is the #533
+// regression: device_register once stored its name argument as the model
+// and its device_type argument as the serial, so a device registered with
+// a serial could not be found by it. Every request field must land on the
+// stored device under its own name.
+func TestMCPServiceProvider_DeviceRegister_MapsEveryField(t *testing.T) {
+	ctx := context.Background()
+	provider := NewMCPServiceProvider(&MCPServiceProviderConfig{
+		DeviceService: newMCPMockDeviceService(),
+	})
+
+	req := &mcp.DeviceRegisterRequest{
+		Serial:     "SN-533",
+		Model:      "model-533",
+		EKCert:     "ek-pem",
+		AttestPub:  "ak-pub",
+		AttestCert: "ak-cert",
+		SigningPub: "signing-pub",
+		HashAlgoID: 11,
+	}
+	result, err := provider.DeviceRegister(ctx, req)
+	if err != nil {
+		t.Fatalf("DeviceRegister: %v", err)
+	}
+
+	found, err := provider.DeviceFindBySerial(ctx, "SN-533")
+	if err != nil {
+		t.Fatalf("DeviceFindBySerial after register: %v", err)
+	}
+	dev, ok := found.(*deviceentities.Device)
+	if !ok {
+		t.Fatalf("expected *deviceentities.Device, got %T", found)
+	}
+	if dev != result {
+		t.Error("find_by_serial returned a different device than the one registered")
+	}
+
+	if dev.Serial != req.Serial || dev.Model != req.Model || dev.EKCert != req.EKCert ||
+		dev.AttestPub != req.AttestPub || dev.AttestCert != req.AttestCert ||
+		dev.SigningPub != req.SigningPub || dev.HashAlgoId != req.HashAlgoID {
+		t.Errorf("stored device = %+v, want the fields of request %+v", *dev, *req)
+	}
+}
+
+func TestMCPServiceProvider_DeviceRegister_SerialRequired(t *testing.T) {
+	ctx := context.Background()
+	provider := NewMCPServiceProvider(&MCPServiceProviderConfig{
+		DeviceService: newMCPMockDeviceService(),
+	})
+
+	for name, req := range map[string]*mcp.DeviceRegisterRequest{
+		"nil request":  nil,
+		"empty serial": {Model: "model-only"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := provider.DeviceRegister(ctx, req)
+			var missing ErrMissingRequiredField
+			if !errors.As(err, &missing) || missing.Field != "serial" {
+				t.Fatalf("error = %v, want ErrMissingRequiredField{serial}", err)
+			}
+		})
+	}
+}
+
+func TestMCPServiceProvider_DeviceFindBySerial_Errors(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("no device service", func(t *testing.T) {
+		provider := NewMCPServiceProvider(&MCPServiceProviderConfig{})
+		_, err := provider.DeviceFindBySerial(ctx, "SN-533")
+		var notAvailable ErrServiceNotAvailable
+		if !errors.As(err, &notAvailable) {
+			t.Fatalf("error = %v, want ErrServiceNotAvailable", err)
+		}
+	})
+
+	t.Run("unknown serial", func(t *testing.T) {
+		provider := NewMCPServiceProvider(&MCPServiceProviderConfig{
+			DeviceService: newMCPMockDeviceService(),
+		})
+		_, err := provider.DeviceFindBySerial(ctx, "SN-missing")
+		var notFound ErrDeviceNotFound
+		if !errors.As(err, &notFound) {
+			t.Fatalf("error = %v, want ErrDeviceNotFound", err)
+		}
+	})
 }
 
 // failingDeviceCreateService fails only the create verb so the error
@@ -537,7 +492,9 @@ func TestMCPServiceProvider_DeviceGet_Success(t *testing.T) {
 	})
 
 	// Register a device first
-	_, _ = provider.DeviceRegister(ctx, "device1", "server", nil)
+	if _, err := provider.DeviceRegister(ctx, &mcp.DeviceRegisterRequest{Model: "device1", Serial: "server"}); err != nil {
+		t.Fatalf("register device: %v", err)
+	}
 
 	result, err := provider.DeviceGet(ctx, "1")
 	if err != nil {
@@ -591,335 +548,17 @@ func TestMCPServiceProvider_DeviceGet_NotFound(t *testing.T) {
 // SDNGetPolicy Coverage Tests
 // =============================================================================
 
-func TestMCPServiceProvider_SDNGetPolicy_NilPolicyEngine(t *testing.T) {
-	ctx := context.Background()
-	provider := NewMCPServiceProvider(&MCPServiceProviderConfig{})
-
-	_, err := provider.SDNGetPolicy(ctx, "port1")
-	if err == nil {
-		t.Error("expected error for nil policy engine")
-	}
-	if _, ok := err.(ErrSDNPolicyEngineNotConfigured); !ok {
-		t.Errorf("expected ErrSDNPolicyEngineNotConfigured, got %T", err)
-	}
-}
-
-func TestMCPServiceProvider_SDNGetPolicy_EmptyPolicyID(t *testing.T) {
-	ctx := context.Background()
-	mockEngine := newMCPCoverageMockPolicyEngine()
-	provider := NewMCPServiceProvider(&MCPServiceProviderConfig{
-		PolicyEngine: mockEngine,
-	})
-
-	_, err := provider.SDNGetPolicy(ctx, "")
-	if err == nil {
-		t.Error("expected error for empty policy ID")
-	}
-	if _, ok := err.(ErrSDNMissingParameter); !ok {
-		t.Errorf("expected ErrSDNMissingParameter, got %T", err)
-	}
-}
-
-func TestMCPServiceProvider_SDNGetPolicy_PolicyNotFound(t *testing.T) {
-	ctx := context.Background()
-	mockEngine := newMCPCoverageMockPolicyEngine()
-	provider := NewMCPServiceProvider(&MCPServiceProviderConfig{
-		PolicyEngine: mockEngine,
-	})
-
-	_, err := provider.SDNGetPolicy(ctx, "nonexistent")
-	if err == nil {
-		t.Error("expected error for nonexistent policy")
-	}
-	if _, ok := err.(ErrSDNPolicyNotFound); !ok {
-		t.Errorf("expected ErrSDNPolicyNotFound, got %T", err)
-	}
-}
-
-func TestMCPServiceProvider_SDNGetPolicy_Success(t *testing.T) {
-	ctx := context.Background()
-	mockEngine := newMCPCoverageMockPolicyEngine()
-
-	// Add a policy
-	mockEngine.policies["port1"] = &policy.PortPolicy{
-		TenantID:  "tenant1",
-		VLAN:      100,
-		IssuedAt:  time.Now(),
-		ExpiresAt: time.Now().Add(24 * time.Hour),
-	}
-
-	provider := NewMCPServiceProvider(&MCPServiceProviderConfig{
-		PolicyEngine: mockEngine,
-	})
-
-	result, err := provider.SDNGetPolicy(ctx, "port1")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if result == nil {
-		t.Error("expected non-nil result")
-	}
-
-	resultMap, ok := result.(map[string]interface{})
-	if !ok {
-		t.Fatalf("expected map[string]interface{}, got %T", result)
-	}
-	if resultMap["tenant_id"] != "tenant1" {
-		t.Errorf("expected tenant_id=tenant1, got %v", resultMap["tenant_id"])
-	}
-	if resultMap["vlan"] != uint16(100) {
-		t.Errorf("expected vlan=100, got %v", resultMap["vlan"])
-	}
-}
-
-func TestMCPServiceProvider_SDNGetPolicy_WithExpiration(t *testing.T) {
-	ctx := context.Background()
-	mockEngine := newMCPCoverageMockPolicyEngine()
-
-	expiry := time.Now().Add(24 * time.Hour)
-	mockEngine.policies["port1"] = &policy.PortPolicy{
-		TenantID:  "tenant1",
-		VLAN:      100,
-		IssuedAt:  time.Now(),
-		ExpiresAt: expiry,
-	}
-
-	provider := NewMCPServiceProvider(&MCPServiceProviderConfig{
-		PolicyEngine: mockEngine,
-	})
-
-	result, err := provider.SDNGetPolicy(ctx, "port1")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	resultMap, ok := result.(map[string]interface{})
-	if !ok {
-		t.Fatalf("expected map[string]interface{}, got %T", result)
-	}
-	if _, exists := resultMap["expires_at"]; !exists {
-		t.Error("expected expires_at field in response")
-	}
-}
-
-func TestMCPServiceProvider_SDNGetPolicy_WithMetadata(t *testing.T) {
-	ctx := context.Background()
-	mockEngine := newMCPCoverageMockPolicyEngine()
-
-	mockEngine.policies["port1"] = &policy.PortPolicy{
-		TenantID: "tenant1",
-		VLAN:     100,
-		IssuedAt: time.Now(),
-		Metadata: map[string]string{
-			"department": "engineering",
-			"owner":      "admin",
-		},
-	}
-
-	provider := NewMCPServiceProvider(&MCPServiceProviderConfig{
-		PolicyEngine: mockEngine,
-	})
-
-	result, err := provider.SDNGetPolicy(ctx, "port1")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	resultMap, ok := result.(map[string]interface{})
-	if !ok {
-		t.Fatalf("expected map[string]interface{}, got %T", result)
-	}
-	if _, exists := resultMap["metadata"]; !exists {
-		t.Error("expected metadata field in response")
-	}
-}
-
-func TestMCPServiceProvider_SDNGetPolicy_WithACLs(t *testing.T) {
-	ctx := context.Background()
-	mockEngine := newMCPCoverageMockPolicyEngine()
-
-	mockEngine.policies["port1"] = &policy.PortPolicy{
-		TenantID: "tenant1",
-		VLAN:     100,
-		IssuedAt: time.Now(),
-		ACLs: []policy.ACLRule{
-			{
-				Priority:    100,
-				Description: "Allow HTTP",
-				Action:      policy.FlowAction{Type: policy.FlowActionAllow},
-			},
-		},
-	}
-
-	provider := NewMCPServiceProvider(&MCPServiceProviderConfig{
-		PolicyEngine: mockEngine,
-	})
-
-	result, err := provider.SDNGetPolicy(ctx, "port1")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	resultMap, ok := result.(map[string]interface{})
-	if !ok {
-		t.Fatalf("expected map[string]interface{}, got %T", result)
-	}
-	if resultMap["acl_count"] != 1 {
-		t.Errorf("expected acl_count=1, got %v", resultMap["acl_count"])
-	}
-	if _, exists := resultMap["acls"]; !exists {
-		t.Error("expected acls field in response")
-	}
-}
-
-func TestMCPServiceProvider_SDNGetPolicy_WithPortInfo(t *testing.T) {
-	ctx := context.Background()
-	mockEngine := newMCPCoverageMockPolicyEngine()
-
-	mockEngine.policies["port1"] = &policy.PortPolicy{
-		TenantID: "tenant1",
-		VLAN:     100,
-		IssuedAt: time.Now(),
-	}
-	mockEngine.portInfos["port1"] = &policy.PortInfo{
-		PortID:          "port1",
-		State:           policy.PortStateAuthorized,
-		LastStateChange: time.Now(),
-		AuthAttempts:    3,
-		ErrorCount:      1,
-		LastError:       "previous timeout",
-	}
-
-	provider := NewMCPServiceProvider(&MCPServiceProviderConfig{
-		PolicyEngine: mockEngine,
-	})
-
-	result, err := provider.SDNGetPolicy(ctx, "port1")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	resultMap, ok := result.(map[string]interface{})
-	if !ok {
-		t.Fatalf("expected map[string]interface{}, got %T", result)
-	}
-	if resultMap["state"] != "authorized" {
-		t.Errorf("expected state=authorized, got %v", resultMap["state"])
-	}
-	if resultMap["auth_attempts"] != 3 {
-		t.Errorf("expected auth_attempts=3, got %v", resultMap["auth_attempts"])
-	}
-	if resultMap["last_error"] != "previous timeout" {
-		t.Errorf("expected last_error='previous timeout', got %v", resultMap["last_error"])
-	}
-}
-
 // =============================================================================
 // SDNListPolicies Coverage Tests
 // =============================================================================
-
-func TestMCPServiceProvider_SDNListPolicies_NilPolicyEngine(t *testing.T) {
-	ctx := context.Background()
-	provider := NewMCPServiceProvider(&MCPServiceProviderConfig{})
-
-	_, err := provider.SDNListPolicies(ctx)
-	if err == nil {
-		t.Error("expected error for nil policy engine")
-	}
-	if _, ok := err.(ErrSDNPolicyEngineNotConfigured); !ok {
-		t.Errorf("expected ErrSDNPolicyEngineNotConfigured, got %T", err)
-	}
-}
-
-func TestMCPServiceProvider_SDNListPolicies_EmptyList(t *testing.T) {
-	ctx := context.Background()
-	mockEngine := newMCPCoverageMockPolicyEngine()
-	provider := NewMCPServiceProvider(&MCPServiceProviderConfig{
-		PolicyEngine: mockEngine,
-	})
-
-	result, err := provider.SDNListPolicies(ctx)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	// The method returns an empty list, not nil
-	if result == nil {
-		t.Error("expected non-nil result")
-	}
-}
 
 // =============================================================================
 // SDNSetPortState Coverage Tests
 // =============================================================================
 
-func TestMCPServiceProvider_SDNSetPortState_MissingBridgeName(t *testing.T) {
-	ctx := context.Background()
-	provider := NewMCPServiceProvider(&MCPServiceProviderConfig{})
-
-	err := provider.SDNSetPortState(ctx, "", "port1", "authorized")
-	if err == nil {
-		t.Error("expected error for missing bridge name")
-	}
-	if _, ok := err.(ErrSDNMissingParameter); !ok {
-		t.Errorf("expected ErrSDNMissingParameter, got %T", err)
-	}
-}
-
-func TestMCPServiceProvider_SDNSetPortState_MissingPortName(t *testing.T) {
-	ctx := context.Background()
-	provider := NewMCPServiceProvider(&MCPServiceProviderConfig{})
-
-	err := provider.SDNSetPortState(ctx, "br0", "", "authorized")
-	if err == nil {
-		t.Error("expected error for missing port name")
-	}
-	if _, ok := err.(ErrSDNMissingParameter); !ok {
-		t.Errorf("expected ErrSDNMissingParameter, got %T", err)
-	}
-}
-
-func TestMCPServiceProvider_SDNSetPortState_MissingState(t *testing.T) {
-	ctx := context.Background()
-	provider := NewMCPServiceProvider(&MCPServiceProviderConfig{})
-
-	err := provider.SDNSetPortState(ctx, "br0", "port1", "")
-	if err == nil {
-		t.Error("expected error for missing state")
-	}
-	if _, ok := err.(ErrSDNMissingParameter); !ok {
-		t.Errorf("expected ErrSDNMissingParameter, got %T", err)
-	}
-}
-
-func TestMCPServiceProvider_SDNSetPortState_NilSDNService(t *testing.T) {
-	ctx := context.Background()
-	provider := NewMCPServiceProvider(&MCPServiceProviderConfig{})
-
-	err := provider.SDNSetPortState(ctx, "br0", "port1", "authorized")
-	if err == nil {
-		t.Error("expected error for nil SDN service")
-	}
-	if _, ok := err.(ErrServiceNotAvailable); !ok {
-		t.Errorf("expected ErrServiceNotAvailable, got %T", err)
-	}
-}
-
 // =============================================================================
 // SDNApplyPolicy Coverage Tests
 // =============================================================================
-
-func TestMCPServiceProvider_SDNApplyPolicy_NilSDNService(t *testing.T) {
-	ctx := context.Background()
-	provider := NewMCPServiceProvider(&MCPServiceProviderConfig{})
-
-	err := provider.SDNApplyPolicy(ctx, "policy1", "br0")
-	if err == nil {
-		t.Error("expected error for nil SDN service")
-	}
-	if _, ok := err.(ErrServiceNotAvailable); !ok {
-		t.Errorf("expected ErrServiceNotAvailable, got %T", err)
-	}
-}
 
 // =============================================================================
 // Health, Liveness, Readiness Coverage Tests
@@ -1016,23 +655,6 @@ func TestMCPServiceProvider_SDNListVLANs_NilServiceReturnsError(t *testing.T) {
 }
 
 // =============================================================================
-// SDNAuthenticatePort Coverage Tests
-// =============================================================================
-
-func TestMCPServiceProvider_SDNAuthenticatePort_NilServiceReturnsError(t *testing.T) {
-	ctx := context.Background()
-	provider := NewMCPServiceProvider(&MCPServiceProviderConfig{})
-
-	err := provider.SDNAuthenticatePort(ctx, "br0", "port1", nil)
-	if err == nil {
-		t.Error("expected error for nil SDN service")
-	}
-	if _, ok := err.(ErrServiceNotAvailable); !ok {
-		t.Errorf("expected ErrServiceNotAvailable, got %T", err)
-	}
-}
-
-// =============================================================================
 // SDNGetPortState Coverage Tests
 // =============================================================================
 
@@ -1074,7 +696,7 @@ func TestMCPServiceProvider_SDNGetFlowStats_NilServiceReturnsError(t *testing.T)
 	ctx := context.Background()
 	provider := NewMCPServiceProvider(&MCPServiceProviderConfig{})
 
-	_, err := provider.SDNGetFlowStats(ctx, "br0")
+	_, err := provider.SDNGetFlowStats(ctx, "br0", "0x1")
 	if err == nil {
 		t.Error("expected error for nil SDN service")
 	}

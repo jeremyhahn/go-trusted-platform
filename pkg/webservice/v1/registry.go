@@ -39,6 +39,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/health"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/platform/service"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/provisioning"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/provisioning/configdelivery"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/policy"
@@ -63,6 +64,7 @@ import (
 	dnsentities "github.com/jeremyhahn/go-trusted-platform/pkg/dns/entities"
 
 	grpcapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc"
+	restapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/rest"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
 
@@ -234,11 +236,22 @@ func NewDeviceRegistrationHook(deviceService DeviceRegistrar, logger *slog.Logge
 		// the one registration implementation. The control plane writes its
 		// own record through the same function from its own TPM (#472), so an
 		// enrolled node and the control plane are the same kind of record.
+		//
+		// The issued certificate is the IDevID. Its chain and Common Name are
+		// recorded so a diskless node, which keeps neither across a reboot,
+		// can fetch the chain back by that name and present it over mTLS
+		// with its TPM-resident key (#690).
+		idevidChain, err := issuedChainPEM(ctx.CertificatePEM, ctx.Certificate)
+		if err != nil {
+			return err
+		}
 		result, err := devicepkg.Register(ctx.Context, deviceService, devicepkg.Registration{
 			Model:         ctx.TCGData.ProductModel,
 			Serial:        serial,
+			Hostname:      issuedCommonName(ctx.Certificate),
 			EKCertPEM:     devicepkg.EncodeCertificatePEM(ctx.TCGData.EKCertificate),
 			AttestCertPEM: devicepkg.EncodeCertificateDERPEM(ctx.TCGData.IAKCertificateDER),
+			IDevIDCertPEM: idevidChain,
 			AttestPub:     ctx.TCGData.AttestationPublicKey,
 			SigningPub:    ctx.TCGData.SigningPublicKey,
 			EventLog:      ctx.TCGData.EventLog,
@@ -268,6 +281,55 @@ func NewDeviceRegistrationHook(deviceService DeviceRegistrar, logger *slog.Logge
 		return nil
 	}
 }
+
+// issuedCommonName returns the issued certificate's Common Name, or "" when
+// the finalize carried no parsed certificate.
+func issuedCommonName(cert *x509.Certificate) string {
+	if cert == nil {
+		return ""
+	}
+	return strings.TrimSpace(cert.Subject.CommonName)
+}
+
+// issuedChainPEM returns the IDevID chain to record: the issued IDevID leaf
+// first, then the CA certificates of the issuing chain.
+//
+// It does not trust the order of the finalize PEM. enroll-01 delivers two
+// end-entity certificates before the chain, the IAK and then the IDevID, so
+// the PEM's first certificate is the IAK. A diskless node presents the
+// recorded chain as its mTLS identity and proves the key of its first
+// certificate (BootService.Certificate), so only the IDevID may lead it.
+// Every end-entity certificate in the PEM, the IAK and the IDevID itself
+// included, is therefore dropped and the leaf put back in front.
+func issuedChainPEM(chainPEM []byte, leaf *x509.Certificate) (string, error) {
+	recorded := devicepkg.EncodeCertificatePEM(leaf)
+	if recorded == "" || len(chainPEM) == 0 {
+		return recorded, nil
+	}
+	chain, err := provisioning.ParseCertificateChain(chainPEM)
+	if err != nil {
+		return "", ErrIssuedChainInvalid{Cause: err}
+	}
+	for _, cert := range chain {
+		if cert.IsCA {
+			recorded += devicepkg.EncodeCertificatePEM(cert)
+		}
+	}
+	return recorded, nil
+}
+
+// ErrIssuedChainInvalid is returned by the device registration hook when the
+// certificate chain the CA issued does not parse. Recording it anyway would
+// leave a diskless node with an identity it cannot present.
+type ErrIssuedChainInvalid struct {
+	Cause error
+}
+
+func (e ErrIssuedChainInvalid) Error() string {
+	return "device registration: issued certificate chain does not parse: " + e.Cause.Error()
+}
+
+func (e ErrIssuedChainInvalid) Unwrap() error { return e.Cause }
 
 // NewDNSRegistrationHook creates an order finalization hook that registers
 // DNS records for enrolled devices. This hook is called by go-trusted-ca's
@@ -725,9 +787,11 @@ type XKMSSigner interface {
 type RestHandlerRegistry interface {
 	ACMERestService() trustedca.ACMERestServicer
 	AttestationServiceServer() platformv1.AttestationServiceServer
+	CAServiceServer() platformv1.CAServiceServer
 	ComputeServiceServer() platformv1.ComputeServiceServer
 	DeviceServiceServer() platformv1.DeviceServiceServer
 	DeviceRestHandler() device.RestHandler
+	DeviceBootHandler() device.BootHandler
 	ConfigDeliveryHandler() configdelivery.RestHandler
 	DeviceService() devicepkg.DeviceService
 	DNSService() dns.DNSService
@@ -744,12 +808,18 @@ type RestHandlerRegistry interface {
 	OverlayServiceServer() platformv1.OverlayServiceServer
 	PlatformRestRouter() *platform.PlatformRouter
 	PXEServiceServer() platformv1.PXEServiceServer
+	PXEWebhookEnabled() bool
 	NTPServiceServer() platformv1.NTPServiceServer
+	VPNServiceServer() platformv1.VPNServiceServer
+	AppServiceServers() restapi.AppServiceServers
 	RegistryService() grpcapi.RegistryService
 	OCIDistBackend() restregistry.OCIDistBackend
+	HealthRegistry() health.Registry
 	AttestationEventReader() restattestation.EventReader
 	AttestationReporting() *restattestation.Reporting
+	AttestationVerdicts() restattestation.VerdictPoller
 	GatewayControlPlane() (restgateway.GatewayStateStore, restgateway.DesiredConfigSource)
+	GatewayVPNLeases() restgateway.VPNLeaseSink
 	ResponseWriter() response.HttpWriter
 	SDNService() platformv1.SDNServiceServer
 	TenantServiceServer() platformv1.TenantServiceServer
@@ -950,6 +1020,7 @@ type RegistryParams struct {
 	Logger                   *logging.Logger
 	PEPClient                restiam.PEPClient
 	AttestationServiceServer platformv1.AttestationServiceServer
+	CAServiceServer          platformv1.CAServiceServer
 	ComputeServiceServer     platformv1.ComputeServiceServer
 	DeviceServiceServer      platformv1.DeviceServiceServer
 	EABServiceServer         platformv1.EABServiceServer
@@ -959,8 +1030,16 @@ type RegistryParams struct {
 	InvitationServiceServer  platformv1.InvitationServiceServer
 	OverlayServiceServer     platformv1.OverlayServiceServer
 	PXEServiceServer         platformv1.PXEServiceServer
-	NTPServiceServer         platformv1.NTPServiceServer
-	SDNEnrollmentHook        *policy.SDNEnrollmentHook
+	// PXEWebhookEnabled is pxe.ServiceConfig.WebhookEnabled: it mounts the
+	// unauthenticated POST /pxe/webhook/complete (#238). Nothing in the
+	// daemon sets it today, so the route is not served.
+	PXEWebhookEnabled bool
+	NTPServiceServer  platformv1.NTPServiceServer
+	VPNServiceServer  platformv1.VPNServiceServer
+	// AppServiceServers are the daemon's Cache, Scheduler, Messaging and
+	// ObjectStorage servers, the instances behind every other transport.
+	AppServiceServers restapi.AppServiceServers
+	SDNEnrollmentHook *policy.SDNEnrollmentHook
 	// SDNIdentityConfig is sourced from app.SDNConfig.Identity. When present and
 	// encode_zone_in_cert is true, the ACME pre-sign hook embeds the device's
 	// network zone into every issued DEVICE certificate via OIDTPNetworkZone.
@@ -1016,10 +1095,16 @@ type RegistryParams struct {
 	// the quote-producing attestation routes (#226). Nil on a node with
 	// none, which leaves those routes operator-only.
 	AttestationReporting *restattestation.Reporting
+	// AttestationVerdicts backs /api/v1/attestation/verdicts, the device
+	// verdict long-poll (#709). When nil the route answers 503.
+	AttestationVerdicts restattestation.VerdictPoller
 	// GatewayStateStore + GatewayDesiredConfig back /api/v1/gateway/*.
 	// When both nil, control-plane routes are not registered.
 	GatewayStateStore    restgateway.GatewayStateStore
 	GatewayDesiredConfig restgateway.DesiredConfigSource
+	// GatewayVPNLeases backs /api/v1/gateway/vpn-leases/*. When nil those
+	// routes answer 500 ErrGatewayControlNotConfigured.
+	GatewayVPNLeases restgateway.VPNLeaseSink
 	// OCIDistBackend wires the spec-compliant /v2/ distribution
 	// surface so `crane` / `skopeo` / `oras` can push and pull
 	// against the registry directly. Set by the daemon boot path
@@ -1126,18 +1211,33 @@ func (registry *HandlerRegistry) LoginDriver() *login.Driver {
 	// The WebAuthn binder is tenant-scoped: an assertion is only valid
 	// against the relying party of the tenant owning the credential, so
 	// without an operating tenant the fido2 factor is simply not offered
-	// rather than offered and broken.
-	if registry.params.TenantID != "" {
-		fido2, err := login.NewFIDO2Binder(registry.params.TenantID)
+	// rather than offered and broken. Its session lands in the user's own
+	// workspace, which the tenant user service resolves (#662); without
+	// that service the only tenant left is the operating one, which a
+	// browser login never lands in, so the factor is not offered either.
+	if tus := registry.tenantUserService(); registry.params.TenantID != "" && tus != nil {
+		fido2, err := login.NewFIDO2Binder(registry.params.TenantID, tus)
 		if err != nil {
 			registry.params.Logger.FatalError(err)
 		}
 		binders = append(binders, fido2)
 	}
+	// A session landed in a workspace carries the principal's roles in
+	// that workspace, read from its IAM tenant. Without an IAM client it
+	// carries none (#662).
+	var roles login.RoleResolver
+	if registry.params.IAMClient != nil {
+		resolver, err := restiam.NewWorkspaceRoleResolver(registry.params.IAMClient)
+		if err != nil {
+			registry.params.Logger.FatalError(err)
+		}
+		roles = resolver
+	}
 	driver, err := login.NewDriver(login.DriverParams{
 		Client:         registry.params.AuthSDKClient,
 		Binders:        binders,
 		SessionIssuer:  registry.jwtService,
+		Roles:          roles,
 		Logger:         registry.params.Logger,
 		ResponseWriter: registry.params.HTTPWriter,
 	})
@@ -1146,6 +1246,42 @@ func (registry *HandlerRegistry) LoginDriver() *login.Driver {
 	}
 	registry.loginDriver = driver
 	return driver
+}
+
+// tenantUserService returns the platform's tenant user service, building
+// it on first use.
+//
+// The platform service registry is built before the tenant manager exists
+// (NewRegistry passes TenantManager: nil), so on the daemon path the
+// registry holds none even though tenant orchestration is fully available.
+// It is materialized here: the JWT service signs the tenant-scoped token
+// through the UserTokenIssuer adapter, and the service is pushed back into
+// the platform registry so every other consumer observes the same
+// instance. It returns nil when a dependency is missing.
+func (registry *HandlerRegistry) tenantUserService() service.TenantUserServicer {
+	tus := registry.params.ServiceRegistry.TenantUserService()
+	if tus != nil || registry.params.TenantManager == nil {
+		return tus
+	}
+	userSvc := registry.params.ServiceRegistry.UserService()
+	invitationSvc := registry.params.ServiceRegistry.InvitationService()
+	if userSvc == nil || invitationSvc == nil || registry.jwtService == nil {
+		return nil
+	}
+	issuer, err := jwt.NewUserTokenIssuer(userSvc, registry.jwtService)
+	if err != nil {
+		registry.params.Logger.FatalError(err)
+	}
+	tus = service.NewTenantUserService(&service.TenantUserServiceConfig{
+		Logger:            registry.params.Logger,
+		UserService:       userSvc,
+		InvitationService: invitationSvc,
+		TenantManager:     registry.params.TenantManager,
+		TokenIssuer:       issuer,
+	})
+	registry.params.ServiceRegistry.SetTenantUserService(tus)
+	registry.params.Logger.Info("tenant user service wired for WebAuthn registration and login")
+	return tus
 }
 
 // JWTService returns the underlying JWT service so callers (notably the
@@ -1294,8 +1430,8 @@ func (registry *HandlerRegistry) SDNService() platformv1.SDNServiceServer {
 }
 
 // WebAuthnRestService returns the WebAuthn REST handler, or nil if
-// WebAuthn is not configured or no SDK client is wired. Callers must
-// check for nil before using the handler.
+// WebAuthn is not configured or no SDK client or tenant user service is
+// wired. Callers must check for nil before using the handler.
 func (registry *HandlerRegistry) WebAuthnRestService() webauthn.RestHandler {
 	if !webauthn.IsConfigured(registry.params.WebAuthnConfig) {
 		registry.params.Logger.Warn("WebAuthn not configured, WebAuthn routes will not be registered")
@@ -1314,32 +1450,15 @@ func (registry *HandlerRegistry) WebAuthnRestService() webauthn.RestHandler {
 		registry.params.Logger.Warn("unified login driver not wired, WebAuthn routes will not be registered")
 		return nil
 	}
-	tus := registry.params.ServiceRegistry.TenantUserService()
-	// The platform service registry is built before the tenant manager
-	// exists (NewRegistry passes TenantManager: nil), so on the daemon
-	// path tus is nil here even though tenant orchestration is fully
-	// available. Materialize it now: the JWT service signs the
-	// tenant-scoped token through the UserTokenIssuer adapter, and the
-	// service is pushed back into the platform registry so every other
-	// consumer observes the same instance.
-	if tus == nil && registry.params.TenantManager != nil {
-		userSvc := registry.params.ServiceRegistry.UserService()
-		invitationSvc := registry.params.ServiceRegistry.InvitationService()
-		if userSvc != nil && invitationSvc != nil && registry.jwtService != nil {
-			issuer, err := jwt.NewUserTokenIssuer(userSvc, registry.jwtService)
-			if err != nil {
-				registry.params.Logger.FatalError(err)
-			}
-			tus = service.NewTenantUserService(&service.TenantUserServiceConfig{
-				Logger:            registry.params.Logger,
-				UserService:       userSvc,
-				InvitationService: invitationSvc,
-				TenantManager:     registry.params.TenantManager,
-				TokenIssuer:       issuer,
-			})
-			registry.params.ServiceRegistry.SetTenantUserService(tus)
-			registry.params.Logger.Info("tenant user service wired for WebAuthn registration")
-		}
+	// Registration creates the user's workspace and mints its session
+	// there through the tenant user service. Without one the only tenant
+	// left for that session is the operating one, which a browser session
+	// never lands in (#662), so the surface is declined — as the login
+	// driver declines its fido2 factor for the same reason.
+	tus := registry.tenantUserService()
+	if tus == nil {
+		registry.params.Logger.Warn("tenant user service not wired, WebAuthn routes will not be registered")
+		return nil
 	}
 	// Wire the QuicBaaS IAM mirror so RegisterNewUser surfaces the
 	// freshly-registered user into /api/v1/iam/users. The mirror is
@@ -1347,13 +1466,14 @@ func (registry *HandlerRegistry) WebAuthnRestService() webauthn.RestHandler {
 	// service-registry construction time, before the IAM client is
 	// available, and the cleanest decoupling is "the IAM REST adapter
 	// owns the mirror; the platform service receives it via setter."
-	if tus != nil && registry.params.IAMClient != nil {
-		tus.SetIAMMirror(restiam.NewQuicBaaSUserMirror(registry.params.IAMClient))
+	if registry.params.IAMClient != nil {
+		mirror := restiam.NewQuicBaaSUserMirror(registry.params.IAMClient)
+		tus.SetIAMMirror(mirror)
+		registry.startIAMUserReconcile(mirror)
 	}
 	params := webauthn.ServiceParams{
 		Config:                    registry.params.WebAuthnConfig,
 		Debug:                     registry.params.Debug,
-		JWTService:                registry.jwtService,
 		Logger:                    registry.params.Logger,
 		RegistrationService:       registry.params.ServiceRegistry.RegistrationService(),
 		ResponseWriter:            registry.params.HTTPWriter,
@@ -1371,6 +1491,48 @@ func (registry *HandlerRegistry) WebAuthnRestService() webauthn.RestHandler {
 		registry.params.Logger.FatalError(err)
 	}
 	return handler
+}
+
+// iamReconcileTimeout bounds the startup IAM user reconcile.
+const iamReconcileTimeout = 5 * time.Minute
+
+// startIAMUserReconcile mirrors the platform users missing from their IAM
+// tenant (#641) in the background, so a slow IAM backend never delays
+// startup. It returns a channel closed when the run finishes, or nil when the
+// run was not started.
+func (registry *HandlerRegistry) startIAMUserReconcile(mirror *restiam.QuicBaaSUserMirror) <-chan struct{} {
+	if registry.params.TenantManager == nil {
+		registry.params.Logger.Warn("tenant manager not wired, IAM user reconcile not started")
+		return nil
+	}
+	reconciler, err := registry.params.ServiceRegistry.IAMUserReconciler(mirror, mirror, registry.params.TenantManager)
+	if err != nil {
+		registry.params.Logger.Warn("IAM user reconcile not started", "error", err)
+		return nil
+	}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		registry.reconcileIAMUsers(reconciler)
+	}()
+	return done
+}
+
+// reconcileIAMUsers runs one IAM user reconcile and logs its report.
+func (registry *HandlerRegistry) reconcileIAMUsers(reconciler *service.IAMUserReconciler) {
+	ctx, cancel := context.WithTimeout(context.Background(), iamReconcileTimeout)
+	defer cancel()
+	report, err := reconciler.Reconcile(ctx)
+	if err != nil {
+		registry.params.Logger.Warn("IAM user reconcile failed", "error", err)
+		return
+	}
+	registry.params.Logger.Info("IAM user reconcile finished",
+		"scanned", report.Scanned,
+		"skipped", report.Skipped,
+		"present", report.Present,
+		"mirrored", report.Mirrored,
+		"failed", report.Failed)
 }
 
 // AdminClaimRestHandler returns the platform-admin claim ceremony handler,
@@ -1483,6 +1645,25 @@ func (registry *HandlerRegistry) DeviceRestHandler() device.RestHandler {
 		activator,
 		profileService,
 		opts...,
+	)
+}
+
+// DeviceBootHandler returns the handler for a diskless node's per-boot
+// routes (#690), or nil when the device service, profile service, quote
+// verifier or CA is missing — the routes are then not registered.
+func (registry *HandlerRegistry) DeviceBootHandler() device.BootHandler {
+	if registry.params.ServiceRegistry == nil || registry.params.DeviceServiceServer == nil || registry.params.CA == nil {
+		return nil
+	}
+	devices := registry.params.ServiceRegistry.DeviceService()
+	profiles := registry.params.ServiceRegistry.ProfileService()
+	if devices == nil || profiles == nil {
+		return nil
+	}
+	return device.NewBootHandler(
+		registry.params.Logger,
+		registry.params.HTTPWriter,
+		device.NewBootService(devices, profiles, registry.params.DeviceServiceServer, registry.params.CA),
 	)
 }
 
@@ -1838,6 +2019,13 @@ func (registry *HandlerRegistry) OCIDistBackend() restregistry.OCIDistBackend {
 	return registry.params.OCIDistBackend
 }
 
+// HealthRegistry returns the platform health registry, or nil when none is
+// wired. Used by the root-level probe routes (/health, /health/live,
+// /health/ready).
+func (registry *HandlerRegistry) HealthRegistry() health.Registry {
+	return registry.params.HealthRegistry
+}
+
 // AttestationEventReader returns the platform attestation events
 // reader, or nil. Used by /api/v1/attestation/events.
 func (registry *HandlerRegistry) AttestationEventReader() restattestation.EventReader {
@@ -1849,12 +2037,22 @@ func (registry *HandlerRegistry) AttestationReporting() *restattestation.Reporti
 	return registry.params.AttestationReporting
 }
 
+// AttestationVerdicts returns the device verdict feed's poller, or nil.
+func (registry *HandlerRegistry) AttestationVerdicts() restattestation.VerdictPoller {
+	return registry.params.AttestationVerdicts
+}
+
 // GatewayControlPlane returns the gateway state store + the desired-
 // config source backing /api/v1/gateway/*. Either may be nil; the
 // router still mounts the surface so the structured 503 envelope
 // surfaces when components are unwired.
 func (registry *HandlerRegistry) GatewayControlPlane() (restgateway.GatewayStateStore, restgateway.DesiredConfigSource) {
 	return registry.params.GatewayStateStore, registry.params.GatewayDesiredConfig
+}
+
+// GatewayVPNLeases returns the record of the gateways' VPN leases, or nil.
+func (registry *HandlerRegistry) GatewayVPNLeases() restgateway.VPNLeaseSink {
+	return registry.params.GatewayVPNLeases
 }
 
 // EABServiceServer returns the in-process EABService gRPC implementation, or nil.
@@ -1872,6 +2070,11 @@ func (registry *HandlerRegistry) IDevIDServiceServer() platformv1.IDevIDServiceS
 	return registry.params.IDevIDServiceServer
 }
 
+// CAServiceServer returns the in-process CAService gRPC implementation, or nil.
+func (registry *HandlerRegistry) CAServiceServer() platformv1.CAServiceServer {
+	return registry.params.CAServiceServer
+}
+
 // InvitationServiceServer returns the in-process InvitationService gRPC implementation, or nil.
 func (registry *HandlerRegistry) InvitationServiceServer() platformv1.InvitationServiceServer {
 	return registry.params.InvitationServiceServer
@@ -1887,9 +2090,26 @@ func (registry *HandlerRegistry) PXEServiceServer() platformv1.PXEServiceServer 
 	return registry.params.PXEServiceServer
 }
 
+// PXEWebhookEnabled reports whether the operator enabled the PXE
+// install-completion webhook (pxe.ServiceConfig.WebhookEnabled).
+func (registry *HandlerRegistry) PXEWebhookEnabled() bool {
+	return registry.params.PXEWebhookEnabled
+}
+
 // NTPServiceServer returns the in-process NTPService gRPC implementation, or nil.
 func (registry *HandlerRegistry) NTPServiceServer() platformv1.NTPServiceServer {
 	return registry.params.NTPServiceServer
+}
+
+// VPNServiceServer returns the in-process VPNService gRPC implementation, or nil.
+func (registry *HandlerRegistry) VPNServiceServer() platformv1.VPNServiceServer {
+	return registry.params.VPNServiceServer
+}
+
+// AppServiceServers returns the daemon's Cache, Scheduler, Messaging and
+// ObjectStorage servers; a service the daemon does not wire is a nil interface.
+func (registry *HandlerRegistry) AppServiceServers() restapi.AppServiceServers {
+	return registry.params.AppServiceServers
 }
 
 // TenantServiceServer returns the in-process TenantService gRPC implementation, or nil.

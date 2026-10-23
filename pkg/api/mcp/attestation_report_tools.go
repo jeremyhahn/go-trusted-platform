@@ -13,7 +13,13 @@
 
 package mcp
 
-import "context"
+import (
+	"context"
+
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/mcpwire"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+)
 
 // AttestationReportProvider is the optional MCP provider for the attestation
 // reporting service (#226): cached device verdicts with their age, the
@@ -58,6 +64,12 @@ func (e ErrNoDeviceReport) Error() string {
 	return "attestation: no report has been collected for device " + e.DeviceID
 }
 
+// GRPCStatus classifies a never-collected device as NotFound, the class the
+// gRPC and REST transports answer the same state with.
+func (e ErrNoDeviceReport) GRPCStatus() *status.Status {
+	return status.New(codes.NotFound, e.Error())
+}
+
 func (r *ToolRegistry) attestationReportProvider() AttestationReportProvider {
 	if p, ok := r.service.(AttestationReportProvider); ok {
 		return p
@@ -66,7 +78,7 @@ func (r *ToolRegistry) attestationReportProvider() AttestationReportProvider {
 }
 
 func (r *ToolRegistry) registerAttestationReportTools() {
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "attestation_device_report",
 		Description: "Get a device's most recent verified attestation report from the reporting cache, with its age. Never triggers a quote.",
 		InputSchema: map[string]interface{}{
@@ -77,7 +89,7 @@ func (r *ToolRegistry) registerAttestationReportTools() {
 			"required": []string{"device_id"},
 		},
 	})
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "attestation_device_reports",
 		Description: "List every cached device attestation report with its age and freshness. Never triggers a quote.",
 		InputSchema: map[string]interface{}{
@@ -85,7 +97,7 @@ func (r *ToolRegistry) registerAttestationReportTools() {
 			"properties": map[string]interface{}{},
 		},
 	})
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "attestation_device_refresh",
 		Description: "Ask the reporting collector to refresh a device's attestation out of cycle. Enqueues only; read the report for the verdict.",
 		InputSchema: map[string]interface{}{
@@ -96,7 +108,7 @@ func (r *ToolRegistry) registerAttestationReportTools() {
 			"required": []string{"device_id"},
 		},
 	})
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "attestation_caller_policy",
 		Description: "Describe this node's compiled caller-admission policy for the quote-producing attestation endpoints.",
 		InputSchema: map[string]interface{}{
@@ -113,6 +125,8 @@ var attestationReportToolDispatch = map[string]attestationReportToolFunc{
 	"attestation_device_reports": (*ToolRegistry).executeAttestationDeviceReports,
 	"attestation_device_refresh": (*ToolRegistry).executeAttestationDeviceRefresh,
 	"attestation_caller_policy":  (*ToolRegistry).executeAttestationCallerPolicy,
+	// The verdict feed's tool: attestation_verdict_tools.go.
+	"attestation_device_verdicts_poll": (*ToolRegistry).executeAttestationVerdictsPoll,
 }
 
 func (r *ToolRegistry) dispatchAttestationReportTool(ctx context.Context, name string, args map[string]interface{}) (interface{}, bool, error) {

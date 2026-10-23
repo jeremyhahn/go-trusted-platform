@@ -25,6 +25,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway"
+	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers/boundedexec"
 )
 
 // The NAT64 datapath end to end (#601): an IPv6-only client on an OVS
@@ -150,7 +151,7 @@ func n64Diagnose(t *testing.T) {
 		{"ip", "-6", "neigh"},
 		{"jool", "--instance", "tp-nat64-e2e", "stats", "display", "--csv"},
 	} {
-		out, err := exec.Command(args[0], args[1:]...).CombinedOutput()
+		out, err := boundedexec.Command(args[0], args[1:]...).CombinedOutput()
 		t.Logf("$ %v (err=%v)\n%s", args, err, out)
 	}
 }

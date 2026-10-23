@@ -54,10 +54,6 @@ type IAMService interface {
 
 	// Authorization operations (passwordless)
 	CheckPermission(ctx context.Context, req *IAMCheckPermissionRequest) (*IAMCheckPermissionResponse, error)
-	IssueToken(ctx context.Context, req *IAMIssueTokenRequest) (*IAMIssueTokenResponse, error)
-	RevokeToken(ctx context.Context, req *IAMRevokeTokenRequest) error
-	ValidateToken(ctx context.Context, req *IAMValidateTokenRequest) (*IAMValidateTokenResponse, error)
-	RefreshToken(ctx context.Context, req *IAMRefreshTokenRequest) (*IAMIssueTokenResponse, error)
 }
 
 // =============================================================================
@@ -306,49 +302,6 @@ type IAMCheckPermissionRequest struct {
 type IAMCheckPermissionResponse struct {
 	Allowed bool
 	Reason  string
-}
-
-// IAMIssueTokenRequest represents a token issue request.
-type IAMIssueTokenRequest struct {
-	TenantID  string
-	UserID    string
-	Scopes    []string
-	ExpiresIn int64
-}
-
-// IAMIssueTokenResponse represents a token issue response.
-type IAMIssueTokenResponse struct {
-	TokenID      string
-	AccessToken  string
-	RefreshToken string
-	ExpiresIn    int64
-	TokenType    string
-}
-
-// IAMRevokeTokenRequest represents a token revocation request.
-type IAMRevokeTokenRequest struct {
-	TokenID string
-	Token   string
-}
-
-// IAMValidateTokenRequest represents a token validation request.
-type IAMValidateTokenRequest struct {
-	Token string
-}
-
-// IAMValidateTokenResponse represents a token validation response.
-type IAMValidateTokenResponse struct {
-	Valid     bool
-	UserID    string
-	TenantID  string
-	Scopes    []string
-	ExpiresAt int64
-}
-
-// IAMRefreshTokenRequest represents a token refresh request.
-type IAMRefreshTokenRequest struct {
-	TenantID     string
-	RefreshToken string
 }
 
 // =============================================================================

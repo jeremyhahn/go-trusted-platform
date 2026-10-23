@@ -20,10 +20,10 @@ import (
 	"os"
 
 	"github.com/spf13/cobra"
-	"gopkg.in/yaml.v3"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/app"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/config"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/installer"
 	_ "github.com/jeremyhahn/go-trusted-platform/pkg/installer/alpine" // Register Alpine FIPS installer
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
@@ -269,7 +269,7 @@ func loadUnifiedConfig(logger *logging.Logger, configPath string) (*installer.Co
 		return nil, err
 	}
 	var appConfig app.App
-	if err := yaml.Unmarshal(data, &appConfig); err != nil {
+	if err := config.DecodeYAML(data, &appConfig); err != nil {
 		return nil, err
 	}
 

@@ -20,20 +20,13 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/services/perf"
 )
 
-// SetGatewayPerf wires the gateway perf backend into the MCP service
-// provider. A nil backend leaves every gateway_perf_* tool returning
-// ErrServiceNotAvailable.
-func (m *MCPServiceProvider) SetGatewayPerf(p GatewayPerfInterface) {
-	m.gatewayPerf = p
-}
-
 // requireGatewayPerf returns the perf backend or the typed
 // service-unavailable error.
 func (m *MCPServiceProvider) requireGatewayPerf() (GatewayPerfInterface, error) {
-	if m.gatewayPerf == nil {
+	if m.gatewayBackends == nil || m.gatewayBackends.Perf() == nil {
 		return nil, ErrServiceNotAvailable{Service: "gateway-perf"}
 	}
-	return m.gatewayPerf, nil
+	return m.gatewayBackends.Perf(), nil
 }
 
 // GatewayPerfFlows measures a real flow install/teardown cycle.
@@ -114,50 +107,4 @@ func gatewayPerfConntrack(ctx context.Context, backend GatewayPerfInterface, zon
 		TotalEntries: uint64(result.TotalEntries),
 		PerZone:      perZone,
 	}, nil
-}
-
-// =============================================================================
-// PlatformServiceProvider — gateway perf operations
-// =============================================================================
-
-// SetGatewayPerf wires the gateway perf backend into the platform
-// service provider.
-func (p *PlatformServiceProvider) SetGatewayPerf(backend GatewayPerfInterface) {
-	p.gatewayPerf = backend
-}
-
-// requireGatewayPerf returns the perf backend or the typed
-// service-unavailable error.
-func (p *PlatformServiceProvider) requireGatewayPerf() (GatewayPerfInterface, error) {
-	if p.gatewayPerf == nil {
-		return nil, ErrServiceNotAvailable{Service: "gateway-perf"}
-	}
-	return p.gatewayPerf, nil
-}
-
-// GatewayPerfFlows measures a real flow install/teardown cycle.
-func (p *PlatformServiceProvider) GatewayPerfFlows(ctx context.Context, bridge string, count int, batch bool) (interface{}, error) {
-	backend, err := p.requireGatewayPerf()
-	if err != nil {
-		return nil, err
-	}
-	return gatewayPerfFlows(ctx, backend, bridge, count, batch)
-}
-
-// GatewayPerfDatapath reads live datapath counters.
-func (p *PlatformServiceProvider) GatewayPerfDatapath(ctx context.Context, bridge string) (interface{}, error) {
-	backend, err := p.requireGatewayPerf()
-	if err != nil {
-		return nil, err
-	}
-	return gatewayPerfDatapath(ctx, backend, bridge)
-}
-
-// GatewayPerfConntrack summarizes the conntrack table.
-func (p *PlatformServiceProvider) GatewayPerfConntrack(ctx context.Context, zone int) (interface{}, error) {
-	backend, err := p.requireGatewayPerf()
-	if err != nil {
-		return nil, err
-	}
-	return gatewayPerfConntrack(ctx, backend, zone)
 }

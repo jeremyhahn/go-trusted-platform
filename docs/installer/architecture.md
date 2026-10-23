@@ -1,6 +1,6 @@
 # Installer — Architecture
 
-> **Status: NORMATIVE** · Scope: `pkg/installer/`, `pkg/initrd/`, `pkg/iso/`, `pkg/qemu/`, `cmd/platform-initrd` · Last verified: 2026-09-16
+> **Status: NORMATIVE** · Scope: `pkg/installer/`, `pkg/initrd/`, `pkg/iso/`, `pkg/qemu/`, `cmd/platform-initrd` · Last verified: 2026-10-13
 > Conflicts with this document are defects. Fix them here first.
 > The feature folder is: [architecture.md](architecture.md) · [engineering.md](engineering.md) · [cli.md](cli.md) · [api.md](api.md) · [user.md](user.md).
 
@@ -34,7 +34,9 @@ Two facts make this hard, and both of them shape every decision below.
   — plus the platform config — inside a 100 MB LUKS2 container written to the
   EFI System Partition at `/boot/efi/tpm2/installer.luks`. **The TPM is not
   sealed to in this phase.** The only TPM operation the installer performs is a
-  `TPM2_Clear` to remove stale hierarchy state from a previous install.
+  `TPM2_Clear` to remove stale hierarchy state from a previous install, and it
+  skips that on a `diskless-nbd` node, whose TPM holds the IDevID its export
+  attaches with.
 - **Phase B — first production boot** (`pkg/firstboot`, running inside
   `platform-initrd` under the production UKI). Opens the carrier, provisions the
   TPM, seals the LUKS key against **live** production PCRs, unlocks the root,
@@ -49,6 +51,118 @@ Two facts make this hard, and both of them shape every decision below.
 every boot after that; `pkg/iso` builds the media that carries Phase A;
 `pkg/qemu` is the harness that exercises all of it under a software TPM before
 any of it touches hardware.
+
+For diskless image boots, `platform-initrd` has a second early-boot root path.
+A node is diskless because its `boot_model: diskless` says so: the bootstrap
+server puts `platform_boot_model=diskless` on that node's installer command
+line and on no other. The installer then takes the root — hash, salt, sizes —
+from the media set's signed `diskless/manifest.json` and writes it into the
+UKI's `.cmdline` as `platform_roothash=`, `platform_rootfs_url=` and the rest
+([kernel-cmdline.md](../reference/kernel-cmdline.md#diskless-root-parameters)).
+Nothing on the live command line can name the root.
+
+The manifest is verified only against a **pinned anchor**, never against the
+key the installer is about to sign with:
+
+- the **platform's DB certificate** where it is enrolled in the node's UEFI
+  `db`, read from efivarfs (`uefi.ReadDBCertificates`) and picked by subject
+  common name: the configured `secure-boot.db.cn` (default `Trusted Platform
+  Secure Boot DB`), alone or followed by ` - <hostname>`. The rest of `db` — the
+  vendor's and Microsoft's certificates the firmware also trusts to run boot
+  code — is not an anchor; or
+- the KMS-held DB certificate, fetched over the SDK when
+  `secure-boot.resign-mode: remote`.
+
+Any one anchor verifying the signature suffices. Key pairs staged on the media
+(`secure-boot-keys/DB.{key,crt}`), a `file://` `secure-boot.db.key-uri`, and a
+locally generated key are **never** anchors on the diskless path, so blanking
+`key-uri` cannot swap in a media-staged signer. With no anchor at all — no
+efivarfs, an empty `db`, and no reachable KMS — the install fails closed.
+
+**Remaining gap: netboot trust on first use.** A node in Secure Boot setup mode
+has nothing of the platform's in `db` yet, so its only anchor is the KMS
+certificate. That fetch is authenticated by the CA bundle inside the installer
+image, and on a netboot first install that image itself arrived over the
+network before any platform key was enrolled — the firmware did not verify it
+against a platform anchor. The first install of a fresh node therefore trusts
+whatever the network delivered; every boot after `db` enrolment is anchored in
+the firmware. Closing the gap needs the platform DB certificate enrolled before
+the first netboot (factory provisioning, or HTTPS boot with a pre-enrolled TLS
+CA). At boot `platform-initrd`
+fetches the squashfs root and dm-verity hash tree into RAM, verifies before
+mount under the pinned parameters, then overlays the read-only root with tmpfs
+at `/sysroot`. This path does not unlock local LUKS root storage; mutable state
+lives in platform services after `switch_root`.
+
+**Diskless over NBD (`boot_model: diskless-nbd`, #689).** A second diskless
+model, separate from `diskless` and leaving it unchanged: the node has no local
+disk, and its root is a **persistent, per-device block device** that the boot
+server exports over NBD on the provisioning segment (VLAN 405, `192.0.2.0/24`,
+pure L2 with no gateway — [sdn configuration](../sdn/configuration.md)). The root
+is NBD + LUKS + TPM (#685): the node LUKS2-encrypts its export
+and seals the key to its own TPM, so the boot server stores ciphertext only.
+The root is never NFS. The export is reached only over TLS 1.3 after
+`NBD_OPT_STARTTLS`, and the node authenticates with its IDevID certificate,
+which chains to the platform anchor. The server picks the export from that
+verified identity and from nothing the client names. The server side is built
+([bootstrap architecture](../bootstrap/architecture.md#nbd-export-server-diskless-nbd)).
+The node side is partly built; the attach is **Planned**:
+
+- **Built:** `bootstrap.yaml` accepts `boot_model: diskless-nbd` on a
+  Raspberry Pi, and the bootstrap server puts `platform_boot_model=diskless-nbd`
+  on that node's installer command line. The installer accepts that value only
+  with exactly one well-formed `platform_nbd_server`; any other unknown model is
+  still refused as its first step, before it clears the TPM or touches a disk.
+- **Built:** the node's half of the negotiation, `nbd.Attach`: STARTTLS
+  first, TLS 1.3 with the IDevID as the client certificate, `NBD_OPT_GO`, and a
+  refusal is final ([installer engineering](engineering.md)). Nothing calls it
+  yet.
+- **Built:** the bootstrap server puts `platform_nbd_server`, the export
+  server's address on the provisioning segment, on that node's installer
+  command line. The node reads the address only from the signed UKI
+  `.cmdline` (`nbd.ServerFromCmdline`), and builds its client configuration
+  from it, the platform anchor and its IDevID (`nbd.NewClientConfig`). The
+  installer reads the address; nothing calls `nbd.NewClientConfig` yet.
+- **Built:** the installer target `nbd`. A `diskless-nbd` install runs Phase A
+  against `/dev/nbd0` instead of the configured disk, with the same partition,
+  LUKS2 and LVM steps a disk install uses. It refuses, before the TPM clear or
+  any format, an `nbd0` that is missing or not attached to an export, and a
+  configuration without `disk.encryption`. Partition 1 of the export is the
+  **metadata area** that holds the sealed key and the PCR banks
+  ([installer engineering](engineering.md#the-nbd-metadata-area)). The UKI it
+  builds signs `platform_boot_model=diskless-nbd` and `platform_nbd_server`
+  and no local root, LUKS or LVM device. The installer always writes the export
+  as GPT, whatever the profile's local-disk table, because the boot server
+  reads it. The live environment's `autoinstall.sh` targets `/dev/nbd0` on this
+  model and scans no local disk, and the install leaves the TPM alone: a
+  TPM2_Clear would evict the IDevID key the export attaches with.
+- **Built:** the installer enrols, then attaches (#883 Q2). Every node except
+  the first enrols the same way on every architecture and boot model: ACME
+  `enroll-01` or `endorse-01` through the go-quicbaas SDK client that
+  `platformd` runs on a disk node's first boot. There is no second path. A
+  `diskless-nbd` install calls that client through one seam before the TPM
+  clear, before it uses the export and before any disk. A failed enrollment is
+  its own refusal and changes no disk
+  ([installer engineering](engineering.md#enrolling-before-the-attach)).
+- **Planned:** the live environment supplying that enrollment client. It runs
+  inside `platformd`'s first-boot provisioning, whose TPM PINs and datastore
+  belong on the export the node cannot attach until it enrols. Until then a
+  `diskless-nbd` install is refused at enrollment.
+- **Built:** the boot after the install. Once the export's metadata area holds
+  the UKI, the node's device script boots that UKI instead of the installer;
+  the bootstrap server reads it from the volume file and serves it
+  ([bootstrap engineering](../bootstrap/engineering.md#the-diskless-nbd-runtime-path)).
+  The UKI then needs the `platform-initrd` attach below.
+- **Planned:** where the node takes the platform anchor from before the export
+  is attached; the image's CA bundle lives on the root filesystem, which for
+  this model is the export. The IDevID is the one its enrollment put in its
+  TPM.
+- **Planned:** `platform-initrd` attaches the export before the unlock chain
+  runs, then unlocks it like a local LUKS root. The live environment needs the
+  same attach before `platformctl install system` runs, from the same code,
+  after the node enrols; the installer reads the attachment and never makes
+  it. Until then the installer refuses the install, before anything destructive
+  ([installer engineering](engineering.md#attaching-before-the-install)).
 
 ## 3. Rejected alternatives
 
@@ -89,6 +203,7 @@ any of it touches hardware.
 | **FIDO2 / CTAP2** | reached through `go-quicbaas/sdk/go/xkms/fido2` | **not this repo** |
 | **Vendor quirks** (serial console, earlycon, kernel modules) | `pkg/quirks` | this repo, separate feature |
 | **Network boot / PXE** | `pkg/ipxe/` — [`docs/ipxe/`](../ipxe/) | this repo, separate feature |
+| **NBD export server for `diskless-nbd` roots** | `pkg/bootstrap/nbd/` — [`docs/bootstrap/`](../bootstrap/) | this repo, separate feature |
 | **Provisioning state machine, config delivery, remote digest signing service** | `pkg/compute/pxe/`, config-delivery — [`docs/provisioning/`](../provisioning/) | this repo, separate feature |
 
 **SDK edge.** Every cryptographic operation the installer performs against a
@@ -181,14 +296,62 @@ UEFI → signed UKI → dracut hook → platform-initrd boot --device ...
    ⇒ switch_root
 ```
 
+**First provision, the EK and recovery.** This is the
+contract; the implementation is tracked by #951, and until it lands the code
+still behaves as the superseded text in
+[docs/bootstrap/architecture.md](../bootstrap/architecture.md) (rejected
+designs) and [factory-reset.md](factory-reset.md) (Phase B) describes.
+
+- **First provision.** A fresh TPM with a valid EK and no sealed object on the
+  ESP (no `seal-platform.pub`) is first provision: firstboot provisions the TPM
+  and seals, and only then does the node serve.
+- **EK certificate.** A TPM without an EK certificate is refused unless the
+  admin relaxed the EK requirement. No firstboot setting for that exists today
+  (`RequireEKMatch` in `pkg/provisioning/configdelivery` governs only the
+  control plane's match against a prestaged EK certificate, and is a Go
+  parameter with no YAML key); the setting is to be added under #951.
+- **Recovery** means a seal that existed and broke. A TPM that never held a
+  seal is first provision, never recovery.
+- **SO PIN.** firstboot sets the owner hierarchy auth to the SO PIN with
+  `TPM2_HierarchyChangeAuth` (TPM 2.0 Part 3 §24.8) and hands the PIN to
+  `platformd` over the firstboot tmpfs handoff
+  (`/run/platform/firstboot-handoff/`), at the kms path the config names for it
+  (`platform.so-pin`, [docs/device-templates.md](../device-templates.md)
+  "Platform PINs"). The hierarchy auth is no longer left empty.
+
+A diskless node takes neither path. Its signed command line carries
+`platform_boot_model=diskless` and no `root=` or `rd.luks.*`, so the dracut
+cmdline hook gives dracut a root that names no device, the unlock hook runs
+`platform-initrd boot --diskless` instead of `--device`, and the finished and
+mount hooks wait only for the verified overlay at `/sysroot`. After
+`switch_root` nothing is sealed: the `tpm-firstboot-seal` service reads the
+same selector and exits before its LUKS lookup, and `platformd` adopts a
+TPM that holds the node's identity or provisions an empty one once. On every
+boot after the first, `platformd` recovers the identity certificates the
+tmpfs lost from the control plane, over an mTLS connection authenticated by
+the TPM-resident IDevID and an IAK quote bound to that connection
+([docs/tpm/architecture.md §4d](../tpm/architecture.md)). The image therefore
+carries the control plane's address (`acme.client.directory-url`) and, unless
+the OS trust store already anchors it, its CA as `ca-bundle.pem`.
+
+A `diskless-nbd` node takes the disk path once its export is attached; the
+attach is **Planned**. Before the unlock chain runs, `platform-initrd` reaches the boot server's NBD listener on the
+provisioning segment and negotiates fixed newstyle. Its first option is
+`NBD_OPT_STARTTLS`; it completes TLS 1.3 with its TPM-resident IDevID as the
+client certificate and verifies the server against the platform anchor. It then
+asks for the default export with `NBD_OPT_GO` and attaches the result as a
+block device. From there the unlock chain treats the device as the LUKS root:
+`/dev/nbd0p2` is the LUKS2 root and `/dev/nbd0p1`, the metadata area, holds
+`tpm2/installer.luks` for the first boot and the seal afterwards.
+
 ### Steady state
 
 ```
 UEFI → signed UKI → platform-initrd boot
    └─ StrategyChain.Execute()
         TPM-PCR (1)      unseal under the Platform KeyStore SRK, PCR policy
-        TPM-Upgrade (2)  unseal under the SSRK after a kernel change,
-                         then delete the upgrade seals immediately
+        TPM-Upgrade (2)  looks for seal-upgrade.* on the ESP; nothing
+                         writes them in production, so it declines
         FIDO2 (3)        user touches the key
         Password (100)   operator types the LUKS passphrase
 ```
@@ -196,16 +359,23 @@ UEFI → signed UKI → platform-initrd boot
 **What is persisted, and where.** The installed root filesystem holds the OS
 and, after Phase B, the platform state. The **ESP holds every artefact the
 machine needs before the root is readable**: the UKI, `tpm2/pcr-banks`,
-`tpm2/seal-platform.pub` / `.priv`, `tpm2/seal-upgrade.pub` / `.priv` when a
-kernel change is in flight, and — for one boot only — `tpm2/installer.luks`.
-Nothing crosses a host boundary during Phase A or B except the Secure Boot
+`tpm2/seal-platform.pub` / `.priv`, and — for one boot only —
+`tpm2/installer.luks`. No upgrade seal (`tpm2/seal-upgrade.*`) is
+written: its only writer, `pkg/firstboot/executor.go:763-774`, is reached
+only from `Executor.Run`, which nothing calls.
+A `diskless-nbd` node keeps the same artefacts in the same layout on
+partition 1 of its NBD export, the metadata area, which it mounts at
+`/boot/efi` by path (`/dev/nbd0p1`), never by the `EFI` label; the boot server
+stores that partition and the LUKS2 ciphertext beside it, and holds no key.
+Apart from those export blocks, nothing crosses a host boundary during Phase A
+or B except the Secure Boot
 digest under `resign-mode: remote`, which travels to the control plane and
 returns as a signature.
 
 ## 6. Trust boundaries
 
 The installer is where a machine decides what it will trust for the rest of its
-life. Five boundaries, in the order they are crossed.
+life. Six boundaries, in the order they are crossed.
 
 1. **Install media → machine.** The ISO carries the platform binary, the
    platform config, the Secure Boot keys or key references, and the autoinstall
@@ -231,13 +401,32 @@ life. Five boundaries, in the order they are crossed.
 4. **PCR policy.** After Phase B the LUKS key is sealed under a PCR policy. Any
    change to firmware, Secure Boot state, kernel command line, or IMA
    measurements invalidates the seal — that is the control working, and it is
-   also why a firmware update looks like a break-in. `TPM-Upgrade` exists to
-   carry a *planned* kernel change across, and its seals have **no policy at
-   all**, which is why they are deleted the moment they are used.
+   also why a firmware update looks like a break-in. Nothing carries a kernel
+   change across today. `TPM-Upgrade` reads a non-PCR upgrade seal, but no
+   production path writes one (§5, *Steady state*), so it declines
+   (`pkg/initrd/strategy_tpm_upgrade.go:117-118`). The kernel-update hook
+   rebuilds and re-signs the UKI (`pkg/installer/uki_rebuild.go:269-273`)
+   and does not re-seal. A change that moves the bound PCRs
+   therefore ends at the `Password` prompt, and after it platformd refuses to
+   start with `ErrTPMSealPolicyDrift` (`pkg/app/tpm_seal_guard.go:214`); see
+   [engineering.md §5](engineering.md#5-unlock-strategy-table--as-the-code-registers-it).
+   *Planned, not implemented (go-xkms #1443):* `TPM-Upgrade` stays; upgraded
+   images are built and signed centrally and staged, and the on-device dracut
+   rebuild is not the upgrade path; the bound PCR set becomes configurable per
+   board, default 7 and 11; the upgrade seal gets a named policy approved for
+   the predicted PCR values.
 5. **The recovery passphrase.** `escrow` moves it into the tenant secret store
    at `tenants/{tenant}/nodes/{node}/secrets/luks/recovery`, where an ACL
    governs it; `destroy` removes the keyslot and makes the TPM seal the only
    unlock path. Choosing `destroy` is choosing to have no break-glass.
+6. **The NBD root (`diskless-nbd`).** The root's ciphertext lives on the boot
+   server and crosses the provisioning segment on every read and write. TLS
+   protects it on the wire. The IDevID decides which export a node can open:
+   with no certificate, an untrusted one, or a request for another device's
+   export, the server refuses before any data is served. LUKS, with its key
+   sealed to the node's TPM, protects it at rest from the boot server itself.
+   Whoever holds the boot server holds every node's ciphertext and can deny
+   service, but cannot read a root.
 
 ## 7. What this feature deliberately does not do
 
@@ -265,12 +454,13 @@ life. Five boundaries, in the order they are crossed.
 - [engineering.md](engineering.md) · [cli.md](cli.md) · [api.md](api.md) · [user.md](user.md)
 - [factory-reset.md](factory-reset.md) — the `TPM2_Clear` and recovery-key
   decision, with the full wire path. Verified accurate against code.
-- [SECURITY_MODEL.md](SECURITY_MODEL.md), [UNLOCK_STRATEGIES.md](UNLOCK_STRATEGIES.md),
-  [initrd-overview.md](initrd-overview.md), [initrd-architecture.md](initrd-architecture.md),
-  [autoinstall.md](autoinstall.md), [iso-building.md](iso-building.md),
-  [provisioning-client.md](provisioning-client.md), [qemu-testing.md](qemu-testing.md),
-  [README.md](README.md) — pre-convention documents kept for their detail.
+- [autoinstall.md](autoinstall.md), [iso-building.md](iso-building.md),
+  [provisioning-client.md](provisioning-client.md), [qemu-testing.md](qemu-testing.md)
+  — pre-convention documents kept for their detail.
   **Where they disagree with the five files, the five files win**; the specific
   corrections are listed in [engineering.md](engineering.md) §10.
+- SECURITY_MODEL.md, UNLOCK_STRATEGIES.md, initrd-overview.md,
+  initrd-architecture.md and README.md are deleted. These five files hold their
+  content.
 - [`docs/ipxe/`](../ipxe/) · [`docs/provisioning/`](../provisioning/) ·
   [`docs/daemon/api.md`](../daemon/api.md)

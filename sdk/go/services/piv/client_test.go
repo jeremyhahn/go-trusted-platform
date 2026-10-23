@@ -14,46 +14,9 @@
 package piv
 
 import (
-	"context"
 	"errors"
 	"testing"
 )
-
-func TestNewClient_NotNil(t *testing.T) {
-	if NewClient() == nil {
-		t.Fatal("expected non-nil client")
-	}
-}
-
-func TestClient_AllMethodsReturnNotYetWired(t *testing.T) {
-	ctx := context.Background()
-	c := NewClient()
-
-	if _, err := c.ListDevices(ctx, &ListDevicesRequest{}); err == nil || !errors.Is(err, ErrNotYetWired) {
-		t.Errorf("ListDevices: expected ErrNotYetWired, got %v", err)
-	}
-	if _, err := c.ListSlots(ctx, &ListSlotsRequest{}); err == nil || !errors.Is(err, ErrNotYetWired) {
-		t.Errorf("ListSlots: expected ErrNotYetWired, got %v", err)
-	}
-	if _, err := c.SlotInfo(ctx, &SlotInfoRequest{}); err == nil || !errors.Is(err, ErrNotYetWired) {
-		t.Errorf("SlotInfo: expected ErrNotYetWired, got %v", err)
-	}
-	if _, err := c.Generate(ctx, &GenerateRequest{}); err == nil || !errors.Is(err, ErrNotYetWired) {
-		t.Errorf("Generate: expected ErrNotYetWired, got %v", err)
-	}
-	if _, err := c.Import(ctx, &ImportRequest{}); err == nil || !errors.Is(err, ErrNotYetWired) {
-		t.Errorf("Import: expected ErrNotYetWired, got %v", err)
-	}
-	if _, err := c.Sign(ctx, &SignRequest{}); err == nil || !errors.Is(err, ErrNotYetWired) {
-		t.Errorf("Sign: expected ErrNotYetWired, got %v", err)
-	}
-	if _, err := c.Attest(ctx, &AttestRequest{}); err == nil || !errors.Is(err, ErrNotYetWired) {
-		t.Errorf("Attest: expected ErrNotYetWired, got %v", err)
-	}
-	if _, err := c.Reset(ctx, &ResetRequest{}); err == nil || !errors.Is(err, ErrNotYetWired) {
-		t.Errorf("Reset: expected ErrNotYetWired, got %v", err)
-	}
-}
 
 func TestErrors_UnwrapToCause(t *testing.T) {
 	cause := errors.New("underlying")
@@ -84,6 +47,6 @@ func TestErrors_UnwrapToCause(t *testing.T) {
 	}
 }
 
-func TestClientImplementsService(t *testing.T) {
-	var _ Service = (*Client)(nil)
+func TestGRPCClientImplementsService(t *testing.T) {
+	var _ Service = (*GRPCClient)(nil)
 }

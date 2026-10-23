@@ -1,5 +1,8 @@
 # Device Provisioning
 
+> **Status: REFERENCE** · Last verified: 2026-10-15
+> Device enrollment, network configuration and production activation: an index of this folder.
+
 Automated device enrollment, network configuration, and production activation.
 
 ## Overview
@@ -14,7 +17,7 @@ For greenfield deployments (no existing infrastructure), use the PXE bootstrap s
 platformctl bootstrap run --config bootstrap.yaml
 ```
 
-See the [Bootstrap Documentation](../bootstrap/pxe-bootstrap.md) for the complete guide.
+See the [Bootstrap Documentation](../bootstrap/user.md) for the complete guide.
 
 ## Full Provisioning Lifecycle
 
@@ -37,7 +40,7 @@ ISO Boot --> Trust Bootstrap --> Fetch Config --> Install OS
 ```
 +------------------+     +------------------+     +------------------+
 |   Device Boot    |     |  Provisioning    |     |   Production     |
-|  (VLAN 998)      |---->|    Network       |---->|    Network       |
+|                  |---->|    Network       |---->|    Network       |
 |                  |     |                  |     |                  |
 +------------------+     +------------------+     +------------------+
         |                       |                       |
@@ -55,44 +58,42 @@ ISO Boot --> Trust Bootstrap --> Fetch Config --> Install OS
 | **Config Delivery API** | Multi-protocol API reference (REST/gRPC/QUIC/MCP/Unix/CLI) | [api-reference.md](api-reference.md) |
 | **Interactive QR** | Operator-at-console provisioning via QR code | [interactive.md](interactive.md) |
 | **ISO Configuration** | Building ISOs with embedded or server-fetched config | [iso.md](iso.md) |
-| **Network Setup** | systemd service for network configuration | [network-setup.md](network-setup.md) |
 | **Provisioning Client** | mTLS client for profile fetch & activation | [client.md](client.md) |
-| **Bare Metal** | IPMI-based bare metal provisioning | [bare-metal.md](bare-metal.md) |
+| **Bare Metal** | BMC-driven (IPMI/Redfish) bare metal provisioning | [bare-metal.md](bare-metal.md) |
 | **BMC Management** | Power, boot, virtual media, sensors | [../bmc/](../bmc/) |
-| **PXE Bootstrap** | Single-command greenfield deployment | [../bootstrap/pxe-bootstrap.md](../bootstrap/pxe-bootstrap.md) |
+| **PXE Bootstrap** | Single-command greenfield deployment | [../bootstrap/user.md](../bootstrap/user.md) |
 
 ## Quick Start
 
 ### Client-Side Setup
 
-1. Ensure IDevID certificate is present:
-```bash
-/etc/trusted-platform/certs/idevidcert.pem
-/etc/trusted-platform/certs/idevidkey.pem
-/etc/trusted-platform/certs/ca.pem
-```
-
-2. Enable the network setup service:
-```bash
-systemctl enable trusted-platform-network.service
-```
-
-3. Reboot - the service runs automatically on boot
+Nothing to install. Once ACME enrollment stores the IDevID certificate in the
+TPM, platformd fetches the device profile and activates the device over mTLS,
+presenting the TPM-resident IDevID; the IDevID private key never leaves the
+TPM and no key file is involved
+([device architecture §4.4](../device/architecture.md#44-activation-identity-becomes-network-access)).
 
 ### Server-Side Configuration
 
-Configure device profiles with network settings:
+The network settings a device receives come from its device profile: the
+post-enrollment network config is served as `admittedNetwork` (with its ACLs)
+and the enrollment network config as `provisioningNetwork`
+(`ProfileFromDeviceProfile`, `pkg/webservice/v1/device/profile_service.go`).
+`GET /api/v1/device/profile` answers:
 
-```yaml
-# Device profile
-device:
-  serial_number: DEVICE-001
-  production_network:
-    vlan: 100
-    use_dhcp: true
-    gateway: 192.168.100.1
-    dns:
-      - 10.99.99.2
+```json
+{
+  "serialNumber": "DEVICE-001",
+  "admittedNetwork": {
+    "vlan": 100,
+    "useDHCP": true,
+    "gateway": "198.51.100.1",
+    "dns": ["10.99.99.2"]
+  },
+  "acls": [
+    {"name": "acl-0", "priority": 100, "match": {"dst_port": "443"}, "action": "allow"}
+  ]
+}
 ```
 
 ## API Endpoints
@@ -106,12 +107,12 @@ device:
 
 - **mTLS Authentication**: All API calls use IDevID certificates
 - **Certificate Validation**: Server and client certificates verified against CA
-- **Secure Transport**: TLS 1.2+ enforced
-- **No Shared Secrets**: Identity derived from certificate CN/serial
+- **Secure Transport**: the provisioning client requires TLS 1.3
+- **No Shared Secrets**: the device serial comes from the verified client certificate, never the request body
 
 ## Related Documentation
 
 - [Compute Orchestration](../compute/) - VM/container management
 - [Certificate Authority](../ca/) - Certificate issuance
 - [ACME](../ca/acme.md) - Automated certificate enrollment
-- [PXE Bootstrap](../bootstrap/pxe-bootstrap.md) - Greenfield deployment
+- [PXE Bootstrap](../bootstrap/user.md) - Greenfield deployment

@@ -19,6 +19,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/bootstrap"
@@ -74,25 +75,27 @@ func TestWatchdogDoesNotFireWhenRunUnwindsWithinGrace(t *testing.T) {
 }
 
 func TestWatchdogReportsStuckShutdown(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	// Never released while the watchdog is deciding: this run ignores
-	// cancellation entirely, which is #135's behaviour. The grace here is an
-	// upper bound that must EXPIRE, and load can only delay that, never
-	// prevent it — so the outcome is load-independent in the safe direction.
-	blocked := make(chan struct{})
-	defer close(blocked) // release the goroutine when the test ends
-	got := runWatchdog(ctx, 50*time.Millisecond, func(context.Context) error {
-		<-blocked
-		return nil
+	// The grace runs on synctest time (#284).
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		// Never released while the watchdog is deciding: this run ignores
+		// cancellation entirely, which is #135's behaviour. The grace here
+		// is an upper bound that must EXPIRE.
+		blocked := make(chan struct{})
+		defer close(blocked) // release the goroutine when the test ends
+		got := runWatchdog(ctx, 50*time.Millisecond, func(context.Context) error {
+			<-blocked
+			return nil
+		})
+		var stuck ErrBootstrapShutdownStuck
+		if !errors.As(got, &stuck) {
+			t.Fatalf("got %v, want ErrBootstrapShutdownStuck", got)
+		}
+		if stuck.Grace != 50*time.Millisecond {
+			t.Errorf("grace = %v, want it reported so the operator knows what was waited on", stuck.Grace)
+		}
 	})
-	var stuck ErrBootstrapShutdownStuck
-	if !errors.As(got, &stuck) {
-		t.Fatalf("got %v, want ErrBootstrapShutdownStuck", got)
-	}
-	if stuck.Grace != 50*time.Millisecond {
-		t.Errorf("grace = %v, want it reported so the operator knows what was waited on", stuck.Grace)
-	}
 }
 
 // TestWatchdogPropagatesResult pins that the production path returns the
@@ -114,42 +117,49 @@ func TestWatchdogPropagatesResult(t *testing.T) {
 // of #135: without it a hang costs a SIGKILL and yields nothing. Asserting the
 // error alone would pass even if the dump were silently dropped.
 func TestWatchdogEmitsGoroutineDump(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	blocked := make(chan struct{})
-	defer close(blocked)
+	// The grace runs on synctest time (#284).
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		blocked := make(chan struct{})
+		defer close(blocked)
 
-	var sink bytes.Buffer
-	_, err := runWithShutdownWatchdog(ctx, 50*time.Millisecond, &sink,
-		func(context.Context) (*bootstrap.BootstrapResult, error) { <-blocked; return nil, nil })
+		var sink bytes.Buffer
+		_, err := runWithShutdownWatchdog(ctx, 50*time.Millisecond, &sink,
+			func(context.Context) (*bootstrap.BootstrapResult, error) { <-blocked; return nil, nil })
 
-	var stuck ErrBootstrapShutdownStuck
-	if !errors.As(err, &stuck) {
-		t.Fatalf("got %v, want ErrBootstrapShutdownStuck", err)
-	}
-	out := sink.String()
-	if !strings.Contains(out, "dumping goroutines") {
-		t.Errorf("dump banner missing; operator gets no diagnostic:\n%s", out)
-	}
-	// A real stack dump names goroutines and this test's own frame.
-	if !strings.Contains(out, "goroutine ") {
-		t.Errorf("no goroutine stacks in dump:\n%s", out)
-	}
-	if !strings.Contains(out, "TestWatchdogEmitsGoroutineDump") {
-		t.Errorf("dump does not include the live stack that is actually stuck:\n%s", out)
-	}
+		var stuck ErrBootstrapShutdownStuck
+		if !errors.As(err, &stuck) {
+			t.Fatalf("got %v, want ErrBootstrapShutdownStuck", err)
+		}
+		out := sink.String()
+		if !strings.Contains(out, "dumping goroutines") {
+			t.Errorf("dump banner missing; operator gets no diagnostic:\n%s", out)
+		}
+		// A real stack dump names goroutines and this test's own frame.
+		if !strings.Contains(out, "goroutine ") {
+			t.Errorf("no goroutine stacks in dump:\n%s", out)
+		}
+		if !strings.Contains(out, "TestWatchdogEmitsGoroutineDump") {
+			t.Errorf("dump does not include the live stack that is actually stuck:\n%s", out)
+		}
+	})
 }
 
 // blockingWriter never returns from Write, modelling stderr whose reader has
 // stopped consuming: a full pipe, or a terminal that went away.
-type blockingWriter struct{ entered chan struct{} }
+type blockingWriter struct {
+	entered chan struct{}
+	release chan struct{}
+}
 
 func (b *blockingWriter) Write(p []byte) (int, error) {
 	select {
 	case b.entered <- struct{}{}:
 	default:
 	}
-	select {} // block forever
+	<-b.release // block until the test ends
+	return len(p), nil
 }
 
 // TestWatchdogReturnsWhenDiagnosticWriteBlocks is the reason dumpGoroutines
@@ -160,38 +170,46 @@ func (b *blockingWriter) Write(p []byte) (int, error) {
 // then been consumed by signal.NotifyContext, so the command would need SIGKILL
 // and print nothing — #135 reproduced by the code written to diagnose #135.
 func TestWatchdogReturnsWhenDiagnosticWriteBlocks(t *testing.T) {
-	// Keep the bound short so a regression fails fast rather than stalling
-	// the package until the go test timeout.
-	restore := diagnosticWriteTimeoutForTest(200 * time.Millisecond)
-	defer restore()
+	// The grace and the diagnostic-write bound run on synctest time (#284).
+	synctest.Test(t, func(t *testing.T) {
+		// Keep the bound short so a regression fails fast rather than
+		// stalling the package until the go test timeout.
+		restore := diagnosticWriteTimeoutForTest(200 * time.Millisecond)
+		defer restore()
 
-	w := &blockingWriter{entered: make(chan struct{}, 1)}
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
+		// Released when the test ends, so the stuck run and the blocked
+		// diagnostic write can exit and the bubble can finish.
+		release := make(chan struct{})
+		defer close(release)
 
-	done := make(chan error, 1)
-	go func() {
-		_, err := runWithShutdownWatchdog(ctx, 10*time.Millisecond, w,
-			func(context.Context) (*bootstrap.BootstrapResult, error) {
-				<-make(chan struct{}) // never unwinds, so the watchdog fires
-				return nil, nil
-			})
-		done <- err
-	}()
+		w := &blockingWriter{entered: make(chan struct{}, 1), release: release}
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
 
-	select {
-	case <-w.entered:
-	case <-time.After(5 * time.Second):
-		t.Fatal("watchdog never attempted to write its diagnostic")
-	}
+		done := make(chan error, 1)
+		go func() {
+			_, err := runWithShutdownWatchdog(ctx, 10*time.Millisecond, w,
+				func(context.Context) (*bootstrap.BootstrapResult, error) {
+					<-release // ignores cancellation, so the watchdog fires
+					return nil, nil
+				})
+			done <- err
+		}()
 
-	select {
-	case err := <-done:
-		var stuck ErrBootstrapShutdownStuck
-		if !errors.As(err, &stuck) {
-			t.Fatalf("err = %v, want ErrBootstrapShutdownStuck", err)
+		select {
+		case <-w.entered:
+		case <-time.After(5 * time.Second):
+			t.Fatal("watchdog never attempted to write its diagnostic")
 		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("watchdog blocked on its own diagnostic write and never returned")
-	}
+
+		select {
+		case err := <-done:
+			var stuck ErrBootstrapShutdownStuck
+			if !errors.As(err, &stuck) {
+				t.Fatalf("err = %v, want ErrBootstrapShutdownStuck", err)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("watchdog blocked on its own diagnostic write and never returned")
+		}
+	})
 }

@@ -150,6 +150,43 @@ func (b *TestTLSBundle) ClientTLSConfig() *tls.Config {
 	}
 }
 
+// ServerConnectionState completes a real TLS 1.3 handshake over an in-memory
+// pipe and returns the server end's connection state: the state a handler
+// sees for the request it is serving, with a working keying-material
+// exporter. Each call is a new connection with its own exporter secret.
+func ServerConnectionState(t *testing.T) *tls.ConnectionState {
+	t.Helper()
+	bundle := GenerateTestTLSBundle(t)
+	clientConn, serverConn := net.Pipe()
+	t.Cleanup(func() {
+		if err := clientConn.Close(); err != nil {
+			t.Errorf("testutil: failed to close client pipe: %v", err)
+		}
+		if err := serverConn.Close(); err != nil {
+			t.Errorf("testutil: failed to close server pipe: %v", err)
+		}
+	})
+	server := tls.Server(serverConn, &tls.Config{
+		Certificates: []tls.Certificate{bundle.ServerCert},
+		MinVersion:   tls.VersionTLS13,
+	})
+	client := tls.Client(clientConn, &tls.Config{
+		RootCAs:    bundle.CAPool,
+		ServerName: "localhost",
+		MinVersion: tls.VersionTLS13,
+	})
+	done := make(chan error, 1)
+	go func() { done <- server.Handshake() }()
+	if err := client.Handshake(); err != nil {
+		t.Fatalf("testutil: client handshake failed: %v", err)
+	}
+	if err := <-done; err != nil {
+		t.Fatalf("testutil: server handshake failed: %v", err)
+	}
+	state := server.ConnectionState()
+	return &state
+}
+
 // generateLeafCert creates a leaf certificate signed by the given CA and
 // returns it as a tls.Certificate with the private key attached.
 func generateLeafCert(

@@ -1,5 +1,8 @@
 # Bootstrap Flow — End-to-End Architecture
 
+> **Status: REFERENCE** · Last verified: 2026-10-13
+> The end-to-end bootstrap path across BMC, installer, firstboot and daemon; [../bootstrap/](../bootstrap/) is normative.
+
 Master reference for how `platformctl bootstrap run` produces a working
 Trusted Platform deployment — from BMC discovery through
 virtual-media install to `platformd` serving requests.
@@ -33,34 +36,34 @@ processes even when collocated on a single box.
 │  │  platformd           │      │  gatewayd              │       │
 │  │  (control plane)     │      │  (data plane)          │       │
 │  │                      │      │                        │       │
-│  │  Master (root):      │◀─────│  BGP, DHCP server      │       │
-│  │   • OVS master       │ IPC  │  Firewall, NAT         │       │
-│  │   • TPM/vTPM         │ via  │  Load-balancer         │       │
-│  │   • QEMU/KVM         │ unix │  Tunnels (GRE/VXLAN)   │       │
-│  │   • LUKS             │ sock │  Edge onboarding       │       │
-│  │                      │      │  Overlay (EVPN)        │       │
-│  │  Workers:            │      │                        │       │
-│  │   • CA, ACME         │      │  CAP_NET_ADMIN         │       │
-│  │   • DNS authoritative│      │  CAP_NET_BIND_SERVICE  │       │
+│  │  Host services:      │      │  BGP, DHCP server      │       │
+│  │   • TPM/vTPM         │      │  Firewall, NAT         │       │
+│  │   • QEMU/KVM         │      │  Load-balancer         │       │
+│  │   • LUKS             │      │  Tunnels (GRE/VXLAN)   │       │
+│  │                      │      │  Edge onboarding       │       │
+│  │  Services:           │      │  Overlay (EVPN)        │       │
+│  │   • CA, ACME         │      │  OVS bridge (own       │       │
+│  │   • DNS authoritative│      │   OVSDB connection)    │       │
 │  │   • IAM, KMS         │      │                        │       │
-│  │   • QuicBaaS         │      │  8080 REST             │       │
-│  │   • REST 8443/9443   │      │  10444 gRPC            │       │
+│  │   • QuicBaaS         │      │  metrics               │       │
+│  │   • REST 8443        │      │   127.0.0.1:9169       │       │
 │  │   • gRPC 10443       │      │                        │       │
-│  │   • QUIC 11443       │      │                        │       │
-│  │   • MCP 8000         │      │                        │       │
+│  │   • QUIC 9444        │      │                        │       │
+│  │   • MCP 9445         │      │                        │       │
 │  │   • Unix /run/       │      │                        │       │
 │  │     platformd.sock   │      │                        │       │
 │  └──────────────────────┘      └────────────────────────┘       │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-**Privilege boundary**: `platformd master` holds root for TPM + OVS +
-KVM ops. `gatewayd` holds only `CAP_NET_ADMIN` and
-`CAP_NET_BIND_SERVICE`. When `gatewayd` needs an OVS bridge or flow
-installed, it calls `platformd`'s master over the Unix socket — it
-never directly manipulates OVS.
+**Privilege boundary**: `platformd` is one process; after start-up it
+can drop to the user named by `--setuid` (`pkg/app/privileges.go`).
+`gatewayd` owns its OVS bridge through its own OVSDB connection, and can
+run sections in privilege-dropped child processes
+(`gatewayd service run <process>`, `pkg/sdn/gateway/process/`).
 
-See `architecture/binary-separation.md` for the full privilege model.
+See [`../daemon/`](../daemon/) and [`../gateway/architecture.md`](../gateway/architecture.md)
+for the full process model.
 
 ### Why not one process?
 
@@ -215,7 +218,7 @@ AND its per-node hostname, both keyed by MAC.
 ### The factory image is the baked mode without a live installer
 
 `platformctl diskimage create` (`pkg/diskimage`, [docs/factory-image/](../factory-image/))
-stages the same media `iso create` does (`pkg/iso.StageMedia`: prefetched
+stages the same media `iso create` does (`(*iso.Customizer).StageMedia` in `pkg/iso`: prefetched
 apks for the target architecture, the platform binaries, the merged
 platform config, Secure Boot keys, CA bundle) and then runs Phase A itself,
 on the build host, inside an arm64 container against a loop-mounted image
@@ -225,6 +228,47 @@ the device to fetch a dynamic config — and the device's first boot is the
 unchanged Phase B (platform-initrd unlock, firstboot provisioning and
 sealing, platformd). The Raspberry Pi is the first target; the QEMU virt
 stand-in exists so the chain is tested without the hardware.
+
+### Diskless image boot is the stateless sibling of the factory image
+
+The diskless image path reuses the media pipeline but serves the root over the
+boot server instead of writing it to local block storage. A media set built
+with `diskimage netboot --diskless` carries a squashfs of the installed root,
+a separate dm-verity hash tree, and a manifest of the root hash, salt and
+sizes signed with the Secure Boot DB key. Diskless is chosen per node:
+`boot_model: diskless` in `bootstrap.yaml` reaches the container manifest, and
+only that node's device script adds `platform_boot_model=diskless`. The root
+hash is never served as mutable metadata or taken from a command line the
+network supplies: the installer verifies the signed manifest against the DB
+certificate and writes `platform_roothash=` (not systemd's `roothash=`, which
+dracut's systemd-veritysetup generator would also act on), the salt, the sizes
+and `platform_rootfs_url=` / `platform_verity_url=` into the UKI command line
+it signs, so Secure Boot and measured boot bind the fetched root to the
+verified UKI.
+
+During early boot the dracut hooks read `platform_boot_model=diskless` from the
+signed command line and take the diskless branch: they wait on and unlock no
+local root, bring the network up, and run `platform-initrd boot --diskless`. A
+disk node's command line carries no diskless parameter and its hooks unlock
+LUKS exactly as before. `platform-initrd` fetches both files into bounded
+tmpfs, opens the root as a device-mapper verity table with the signed root
+hash and pinned parameters, mounts the squashfs read-only, and overlays it
+with tmpfs at `/sysroot`. dm-verity checks every block as it is read, so a
+substituted image panics the node at the squashfs mount instead of booting.
+After `switch_root` the node is stateless. There is no LUKS root to seal, so
+the `tpm-firstboot-seal` service exits before its LUKS lookup. `platformd` reads the boot model from the
+kernel command line and decides provisioning from the TPM alone: a TPM holding
+the EK, SSRK, Platform SRK, IAK and IDevID at their persistent handles is
+adopted untouched on every boot, and an unprovisioned one runs first
+provisioning once ([docs/tpm/architecture.md §4d](../tpm/architecture.md)).
+On every later boot the identity certificates are gone with the tmpfs, so
+`platformd` fetches them back from the control plane rather than re-mint them.
+It presents its recorded IDevID over mTLS with the TPM-resident key and
+answers an IAK quote bound to that TLS connection. The control plane runs the
+device quote verifier and returns that device's IDevID chain, IAK
+certificate, the platform CA bundle and its profile
+([docs/device/api.md §4.6](../device/api.md)). Any refusal stops startup at
+`ErrDisklessIdentityUnavailable`.
 
 ---
 
@@ -304,7 +348,7 @@ stand-in exists so the chain is tested without the hardware.
 ```
 
 Phase numbering matches `pkg/bootstrap/orchestrator.go` internal states
-and `docs/bootstrap/pxe-bootstrap.md`.
+and `docs/bootstrap/architecture.md` (Data flow — day zero through first boot).
 
 ---
 
@@ -389,15 +433,15 @@ name but are otherwise independent code paths. Do not confuse them.
 
 | Concern | File | Doc |
 |---------|------|-----|
-| Orchestrator phases | `pkg/bootstrap/orchestrator.go` | `docs/bootstrap/pxe-bootstrap.md` |
-| Template merge | `pkg/config/DeepMergeYAMLFiles` | `docs/device-templates.md` |
-| Per-MAC publishing | `pkg/bootstrap/virtual_media.go::stagePerMACConfig` | `docs/bootstrap/config-delivery.md` |
+| Orchestrator phases | `pkg/bootstrap/orchestrator.go` | `docs/bootstrap/architecture.md` (Data flow) |
+| Template merge | `pkg/config.DeepMergeYAMLFiles` | `docs/device-templates.md` |
+| Per-MAC publishing | `pkg/bootstrap/virtual_media.go::stagePerMACConfig` | `docs/bootstrap/architecture.md` (Phase 3 · Control plane) |
 | HTTP config server | `pkg/ipxe/http_server.go` | `docs/ipxe/architecture.md` |
 | ISO build (baked mode) | `pkg/iso/customize.go`, `pkg/cli/commands/iso/create.go` | `docs/installer/iso-building.md` |
 | autoinstall priority chain | `pkg/iso/customize.go` (embedded shell) | `docs/installer/autoinstall.md` |
 | Kernel cmdline params | `pkg/iso/customize.go::buildDynamicConfigParams` | `docs/reference/kernel-cmdline.md` |
 | cmdline → trust: YAML mapping | `pkg/trust/config.go`, `pkg/iso/customize.go` lines 3342-3351 | `docs/reference/kernel-cmdline.md` §3a |
-| BMC enroll phase (Phase 5a) | `pkg/bootstrap/orchestrator.go` | `docs/bmc/configuration.md` |
+| BMC enroll phase (Phase 5a) | `pkg/bootstrap/orchestrator.go` | `docs/bmc/engineering.md` §3.3 |
 | Single-node template | `configs/platform/templates/single-node/default.yaml` | `configs/platform/templates/single-node/README.md`, `docs/device-templates.md` |
 | Dedicated templates | `configs/platform/templates/dedicated/<vendor>/<model>/` | `configs/platform/templates/dedicated/README.md`, `docs/device-templates.md` |
 | OVS bond creation (native OVSDB) | `pkg/app/sdn.go::initOVSBonds`, `pkg/sdn/ovs/port.go::AddBond` | `configs/platform/templates/dedicated/README.md` §Network Architecture |

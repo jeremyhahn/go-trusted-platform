@@ -12,15 +12,16 @@ import type { KeyAlgorithm } from './ca.js';
 // =============================================================================
 
 /**
- * TPM version
+ * TPM version, spelled as the server serialises the proto `TPMVersion` enum.
  */
 export type TPMVersion =
-  | 'UNSPECIFIED'
-  | 'TPM_1_2'
-  | 'TPM_2_0';
+  | 'TPM_VERSION_UNSPECIFIED'
+  | 'TPM_VERSION_1_2'
+  | 'TPM_VERSION_2_0';
 
 /**
- * PCR bank (hash algorithm)
+ * PCR bank (hash algorithm), in the short form the SDK accepts on requests.
+ * Request methods translate it to the proto name; see `PCRBankName`.
  */
 export type PCRBank =
   | 'UNSPECIFIED'
@@ -29,6 +30,11 @@ export type PCRBank =
   | 'SHA384'
   | 'SHA512'
   | 'SM3_256';
+
+/**
+ * PCR bank as the server serialises the proto `PCRBank` enum in responses.
+ */
+export type PCRBankName = `PCR_BANK_${PCRBank}`;
 
 // =============================================================================
 // Data Types
@@ -112,8 +118,8 @@ export interface EventLogEntry {
 export interface PCRValue {
   /** PCR index (0-23) */
   index: number;
-  /** PCR bank */
-  bank: PCRBank;
+  /** PCR bank, by the proto name the server writes and reads (`PCR_BANK_SHA256`) */
+  bank: PCRBankName;
   /** PCR value (base64) */
   value: string;
 }
@@ -367,12 +373,24 @@ export interface VerifyQuoteRequest {
   /**
    * AK public key (base64). Optional: proto3 `bytes ak_public` has no
    * presence, and both the REST and gRPC servers verify against the
-   * platform IAK when it is absent (tpm_handlers.go handleVerifyQuote,
-   * tpm_grpc_service.go resolveVerifyKeyMaterial).
+   * platform IAK when it is absent (tpm_grpc_service.go
+   * resolveVerifyAKPublic).
    */
   akPublic?: string;
+  /**
+   * Signature scheme the quote declared (QuoteResponse.signatureAlgorithm,
+   * e.g. "SHA256-RSAPSS"). The signature is checked under it; a request
+   * without it does not verify.
+   */
+  signatureAlgorithm?: string;
   /** Nonce (base64) */
   nonce: string;
+  /**
+   * Channel binding the quote was bound to (base64), as returned with it.
+   * The node quoted SHA-256(nonce || channelBinding), so a bound quote
+   * verifies only when this is sent with the nonce.
+   */
+  channelBinding?: string;
   /** Expected PCR values */
   expectedPcrs?: PCRValue[];
 }
@@ -478,17 +496,21 @@ export interface TPMStatus {
 }
 
 /**
- * TPM info response
+ * TPM info response: the proto `TPMInfoResponse` served flat by
+ * `GET /api/v1/tpm/info`. Every field is always present.
+ *
+ * There is no `available` flag. A TPM is available when the call succeeds;
+ * the server answers an unsuccessful response when it has none.
  */
 export interface TPMInfoResponse {
   /** TPM version */
   version: TPMVersion;
-  /** Manufacturer info */
-  manufacturer: TPMManufacturer;
+  /** Manufacturer info; null when the server could not identify it */
+  manufacturer: TPMManufacturer | null;
   /** Capabilities */
   capabilities: TPMCapability[];
   /** Available PCR banks */
-  pcrBanks: PCRBank[];
+  pcrBanks: PCRBankName[];
   /** Max NVRAM size */
   maxNvramSize: number;
   /** Is simulator */
@@ -496,9 +518,9 @@ export interface TPMInfoResponse {
   /** FIPS mode enabled */
   fipsMode: boolean;
   /** Additional properties */
-  properties?: Record<string, string>;
-  /** Defined NV indexes (proto nv_indexes; absent when none) */
-  nvIndexes?: NVIndex[];
+  properties: Record<string, string>;
+  /** Defined NV indexes */
+  nvIndexes: NVIndex[];
 }
 
 /**
@@ -675,10 +697,21 @@ export interface QuoteResponse {
   quote?: string;
   /** Signature (base64) */
   signature?: string;
+  /**
+   * Signature scheme the quote is signed under, e.g. "SHA256-RSAPSS".
+   * Send it back as VerifyQuoteRequest.signatureAlgorithm.
+   */
+  signatureAlgorithm?: string;
   /** PCR values */
   pcrValues?: PCRValue[];
   /** Event log (base64) */
   eventLog?: string;
+  /**
+   * TLS exporter binding of the connection the request arrived on (base64).
+   * The quote's qualifying data is SHA-256(nonce || channelBinding); see
+   * checkQuoteBinding.
+   */
+  channelBinding?: string;
 }
 
 /**

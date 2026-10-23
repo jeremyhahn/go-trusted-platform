@@ -39,6 +39,7 @@ type ServiceHealthChecker struct {
 }
 
 // NewServiceHealthChecker creates a new health checker for a managed service.
+// Kept with no caller: docs/health/engineering.md names it as the generic checker for any ManagedService.
 func NewServiceHealthChecker(service ManagedService) *ServiceHealthChecker {
 	if service == nil {
 		return nil

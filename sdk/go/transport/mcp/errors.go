@@ -14,7 +14,12 @@
 // Package mcp provides the MCP transport adapter for the platform SDK.
 package mcp
 
-import "fmt"
+import (
+	"fmt"
+
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+)
 
 // ErrClientClosed indicates the MCP client has been closed.
 type ErrClientClosed struct{}
@@ -131,4 +136,104 @@ type ErrUnexpectedReplyType struct {
 // Error implements the error interface.
 func (e ErrUnexpectedReplyType) Error() string {
 	return fmt.Sprintf("unexpected reply message type for gRPC method %s", e.Method)
+}
+
+// ErrUnknownGatewayModes indicates a gateway mode bitmask carrying bits
+// that name no gateway mode. The MCP tool takes mode names, so an unknown
+// bit cannot be sent and would otherwise be dropped silently.
+type ErrUnknownGatewayModes struct {
+	Modes uint32
+}
+
+// Error implements the error interface.
+func (e ErrUnknownGatewayModes) Error() string {
+	return fmt.Sprintf("gateway mode bitmask %#x names an unknown mode (overlay=1, edge=2, transit=4)", e.Modes)
+}
+
+// ErrUnknownTenantState indicates a tenant tool result naming a state the
+// adapter cannot map onto platformv1.TenantState.
+type ErrUnknownTenantState struct {
+	State string
+}
+
+// Error implements the error interface.
+func (e ErrUnknownTenantState) Error() string {
+	return fmt.Sprintf("tenant tool result names an unknown tenant state %q", e.State)
+}
+
+// ErrUnknownRegistryEnum indicates a registry tool result naming an enum
+// value the adapter cannot map onto its platformv1 enum.
+type ErrUnknownRegistryEnum struct {
+	Field string
+	Value string
+}
+
+// Error implements the error interface.
+func (e ErrUnknownRegistryEnum) Error() string {
+	return fmt.Sprintf("registry tool result names an unknown %s %q", e.Field, e.Value)
+}
+
+// ErrFieldNotSupported indicates a request field the MCP tool has no
+// argument for. The adapter refuses it rather than dropping it.
+type ErrFieldNotSupported struct {
+	Method string
+	Field  string
+}
+
+// Error implements the error interface.
+func (e ErrFieldNotSupported) Error() string {
+	return fmt.Sprintf("MCP cannot carry %s for gRPC method %s", e.Field, e.Method)
+}
+
+// ErrDurationNotWholeSeconds indicates a nanosecond duration the MCP tool
+// cannot carry because its argument counts whole seconds.
+type ErrDurationNotWholeSeconds struct {
+	Field string
+	Nanos int64
+}
+
+// Error implements the error interface.
+func (e ErrDurationNotWholeSeconds) Error() string {
+	return fmt.Sprintf("MCP carries %s in whole seconds; %dns is not a whole number of seconds", e.Field, e.Nanos)
+}
+
+// ErrDurationClearNotSupported indicates an update that sets a duration to
+// zero. The MCP pool update reads a zero duration as "keep", so the clear
+// cannot be expressed.
+type ErrDurationClearNotSupported struct {
+	Field string
+}
+
+// Error implements the error interface.
+func (e ErrDurationClearNotSupported) Error() string {
+	return fmt.Sprintf("MCP cannot set %s to zero: the MCP pool update keeps a zero duration (send -1 to keep it)", e.Field)
+}
+
+// ErrValueOutOfRange indicates a request value wider than the MCP tool's
+// argument; the tool would truncate it rather than refuse it.
+type ErrValueOutOfRange struct {
+	Field string
+	Value uint64
+	Max   uint64
+}
+
+// Error implements the error interface.
+func (e ErrValueOutOfRange) Error() string {
+	return fmt.Sprintf("MCP cannot carry %s=%d: the tool argument holds at most %d", e.Field, e.Value, e.Max)
+}
+
+// ErrBridgeNotFound indicates a GetBridge whose bridge is not in the
+// sdn_list_bridges result.
+type ErrBridgeNotFound struct {
+	ID string
+}
+
+// Error implements the error interface.
+func (e ErrBridgeNotFound) Error() string {
+	return fmt.Sprintf("bridge %q not found", e.ID)
+}
+
+// GRPCStatus reports the error as NotFound, as the gRPC GetBridge does.
+func (e ErrBridgeNotFound) GRPCStatus() *status.Status {
+	return status.New(codes.NotFound, e.Error())
 }

@@ -25,6 +25,7 @@ import (
 	quicgo "github.com/quic-go/quic-go"
 
 	quicapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
 )
 
@@ -82,8 +83,6 @@ func newConnectedQUICAdapter(t *testing.T, ctx context.Context) *QUICAdapter {
 // the server's own TLS configuration rather than typed here, so the two
 // cannot drift.
 func TestQUICAdapterALPNMatchesTheServer(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	// The server's own TLS configuration, built the way the daemon builds
 	// it, is the reference. Reading it here rather than retyping the string
 	// is what keeps the two from drifting.
@@ -91,9 +90,9 @@ func TestQUICAdapterALPNMatchesTheServer(t *testing.T) {
 	if err != nil {
 		t.Fatalf("build the server TLS configuration: %v", err)
 	}
-	if len(serverTLS.NextProtos) != 1 || serverTLS.NextProtos[0] != quicapi.ALPNProtocol {
+	if len(serverTLS.NextProtos) != 1 || serverTLS.NextProtos[0] != quicwire.ALPNProtocol {
 		t.Fatalf("the server's TLS configuration advertises %v, not [%s]; the constant and the "+
-			"configuration have drifted", serverTLS.NextProtos, quicapi.ALPNProtocol)
+			"configuration have drifted", serverTLS.NextProtos, quicwire.ALPNProtocol)
 	}
 
 	adapter := NewQUICAdapter()
@@ -115,8 +114,6 @@ func TestQUICAdapterALPNMatchesTheServer(t *testing.T) {
 // makes the bug unconstructible must not also make the test for it
 // unwritable.
 func TestQUICWrongALPNFailsTheHandshake(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	ctx, cancel := context.WithTimeout(context.Background(), quicNegativeTimeout)
 	defer cancel()
 
@@ -133,8 +130,6 @@ func TestQUICWrongALPNFailsTheHandshake(t *testing.T) {
 // TestQUICDeviceOperationsReachTheDaemon drives one negative case per
 // implemented opcode. Each asserts a refusal that ONLY a daemon can send.
 func TestQUICDeviceOperationsReachTheDaemon(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	ctx, cancel := context.WithTimeout(context.Background(), quicNegativeTimeout)
 	defer cancel()
 	adapter := newConnectedQUICAdapter(t, ctx)
@@ -145,9 +140,9 @@ func TestQUICDeviceOperationsReachTheDaemon(t *testing.T) {
 	t.Run("GetDevice/unknown id", func(t *testing.T) {
 		_, err := adapter.GetDevice(ctx, GetDeviceOptions{DeviceID: absentID})
 		status := requireDaemonAnswered(t, "GetDevice", err)
-		if status.Status != quicapi.StatusNotFound {
+		if status.Status != quicwire.StatusNotFound {
 			t.Errorf("expected StatusNotFound (0x%02X), got 0x%02X: %s",
-				quicapi.StatusNotFound, status.Status, status.Message)
+				quicwire.StatusNotFound, status.Status, status.Message)
 		}
 	})
 
@@ -259,8 +254,6 @@ func TestQUICDeviceOperationsReachTheDaemon(t *testing.T) {
 // evidence comes from the same forgedQuoteEvidence helper the other
 // transports use, so all six assert against one payload shape.
 func TestQUICDeviceAttestRefusesUnsignedEvidence(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	ctx, cancel := context.WithTimeout(context.Background(), quicNegativeTimeout)
 	defer cancel()
 	adapter := newConnectedQUICAdapter(t, ctx)

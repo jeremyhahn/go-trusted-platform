@@ -101,6 +101,7 @@ func NewMCPAdapter() *SDKAdapter {
 			return platform.NewOptions(
 				platform.WithOnlyProtocol(platform.ProtocolMCP),
 				platform.WithMCPAddr(endpoints.PlatformMCP),
+				platform.WithTLSConfig(helpers.TLSConfigOrInsecure()),
 			), nil
 		},
 	}

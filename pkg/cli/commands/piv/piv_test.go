@@ -14,13 +14,19 @@
 package piv
 
 import (
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"google.golang.org/grpc"
+
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
+	platform "github.com/jeremyhahn/go-trusted-platform/sdk/go"
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
+	pivsvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/piv"
 )
 
 func testFlags() func() *cli.CommonFlags {
@@ -356,5 +362,52 @@ func TestAlgorithmsMap(t *testing.T) {
 		if _, ok := algorithms[name]; !ok {
 			t.Errorf("algorithms missing %q", name)
 		}
+	}
+}
+
+type pivOnlyClient struct {
+	platform.Client
+	rpc platformv1.PIVServiceClient
+}
+
+func (c pivOnlyClient) PIV() platformv1.PIVServiceClient { return c.rpc }
+
+type listDevicesRPC struct {
+	platformv1.PIVServiceClient
+	called bool
+}
+
+func (s *listDevicesRPC) ListDevices(_ context.Context, _ *platformv1.PIVListDevicesRequest, _ ...grpc.CallOption) (*platformv1.PIVListDevicesResponse, error) {
+	s.called = true
+	return &platformv1.PIVListDevicesResponse{}, nil
+}
+
+func TestNewService_DispatchesOverTheSDKClient(t *testing.T) {
+	rpc := &listDevicesRPC{}
+
+	svc, err := newService(pivOnlyClient{rpc: rpc})
+	if err != nil {
+		t.Fatalf("newService() error = %v", err)
+	}
+	if _, err := svc.ListDevices(context.Background(), &pivsvc.ListDevicesRequest{}); err != nil {
+		t.Fatalf("ListDevices() error = %v", err)
+	}
+	if !rpc.called {
+		t.Error("expected ListDevices to reach the SDK PIV client")
+	}
+}
+
+func TestNewService_RefusesAClientWithoutThePIVService(t *testing.T) {
+	svc, err := newService(pivOnlyClient{})
+	if svc != nil {
+		t.Errorf("expected no service, got %v", svc)
+	}
+
+	var unavailable platform.ErrServiceUnavailable
+	if !errors.As(err, &unavailable) {
+		t.Fatalf("expected platform.ErrServiceUnavailable, got %v", err)
+	}
+	if unavailable.Service != pivsvcName {
+		t.Errorf("ErrServiceUnavailable.Service = %q, want %q", unavailable.Service, pivsvcName)
 	}
 }

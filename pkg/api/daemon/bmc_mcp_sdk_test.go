@@ -1,0 +1,51 @@
+// Copyright (c) 2025 Jeremy Hahn
+// Copyright (c) 2025 Automate The Things, LLC
+//
+// This file is part of go-trusted-platform.
+//
+// go-trusted-platform is dual-licensed:
+//
+// 1. GNU Affero General Public License v3.0 (AGPL-3.0)
+//    See LICENSE file or visit https://www.gnu.org/licenses/agpl-3.0.html
+//
+// 2. Commercial License
+//    Contact licensing@automatethethings.com for commercial licensing options.
+
+package daemon
+
+import (
+	"testing"
+
+	"github.com/jeremyhahn/go-quicbaas/sdk/go/platformtoken"
+	"google.golang.org/grpc"
+
+	"github.com/jeremyhahn/go-trusted-platform/pkg/api/mcp"
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
+)
+
+// connectBMCMCP serves server through the daemon's MCP server and connects
+// the SDK's MCP adapter as a caller holding scopes.
+func connectBMCMCP(t *testing.T, server platformv1.BMCServiceServer, scopes ...string) grpc.ClientConnInterface {
+	t.Helper()
+	provider := &MCPServiceProvider{}
+	provider.SetBMCServer(server)
+	config := mcp.DefaultConfig()
+	config.AuthManager = tenantMCPTokens{tokenContexts{phase35MCPToken: &platformtoken.AuthorizedContext{
+		Subject: "operator",
+		Scopes:  scopes,
+	}}}
+	return serveMCPConfig(t, provider, config).Connection()
+}
+
+// TestSDKMCP_BMCMethods drives every BMCService method through the SDK's MCP
+// adapter and the daemon's MCP server.
+func TestSDKMCP_BMCMethods(t *testing.T) {
+	testSDKBMCMethods(t, "MCP", connectBMCMCP)
+}
+
+// TestSDKMCP_BMCMethodsRefuse checks the MCP path refuses a missing scope and
+// a missing profile with the codes gRPC gives.
+func TestSDKMCP_BMCMethodsRefuse(t *testing.T) {
+	testSDKBMCRefusesScope(t, "MCP", connectBMCMCP)
+	testSDKBMCRefusesNotFound(t, "MCP", connectBMCMCP)
+}

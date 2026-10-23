@@ -529,6 +529,113 @@ func TestBuildStatusReport_PlatformSRKHandleFlag(t *testing.T) {
 	assert.NotContains(t, psrk.Note, "default")
 }
 
+// platformHandleProbe wires the fixture so Info reports the given
+// properties and GetSRK records every handle it is asked about.
+func platformHandleProbe(fx *statusFixture, props map[string]string) *[]uint32 {
+	probed := &[]uint32{}
+	fx.tpm.infoFunc = func(ctx context.Context, req *platformv1.TPMInfoRequest, opts ...grpc.CallOption) (*platformv1.TPMInfoResponse, error) {
+		return &platformv1.TPMInfoResponse{Properties: props}, nil
+	}
+	fx.tpm.getSRKFunc = func(ctx context.Context, req *platformv1.GetSRKRequest, opts ...grpc.CallOption) (*platformv1.GetSRKResponse, error) {
+		*probed = append(*probed, req.GetHandle())
+		handle := req.GetHandle()
+		if handle == 0 {
+			handle = statusTestSSRKHandle
+		}
+		return &platformv1.GetSRKResponse{Handle: handle}, nil
+	}
+	return probed
+}
+
+// TestBuildStatusReport_PlatformSRKHandleFromDaemon is the regression for
+// #477: a node configured with a non-default handle is probed at that
+// handle without any flag, and the note names the daemon as the source.
+func TestBuildStatusReport_PlatformSRKHandleFromDaemon(t *testing.T) {
+	fx := newAllPresentFixture(t, oidTCGPolicy3)
+	probed := platformHandleProbe(fx, map[string]string{"platform_srk_handle": "0x81000005"})
+
+	report := buildStatusReport(context.Background(), fx.clients(), defaultStatusOptions())
+
+	assert.Equal(t, []uint32{0, 0x81000005}, *probed)
+	psrk := objectByName(t, report, "PlatformSRK")
+	assert.True(t, psrk.HandlePresent)
+	assert.Equal(t, "0x81000005", psrk.Handle)
+	assert.Equal(t, "handle from daemon config", psrk.Note)
+}
+
+// TestBuildStatusReport_PlatformSRKFlagBeatsDaemon: the explicit flag stays
+// the operator's override even when the daemon reports a handle.
+func TestBuildStatusReport_PlatformSRKFlagBeatsDaemon(t *testing.T) {
+	fx := newAllPresentFixture(t, oidTCGPolicy3)
+	probed := platformHandleProbe(fx, map[string]string{"platform_srk_handle": "0x81000005"})
+	opts := statusOptions{PlatformSRKHandle: 0x81000009, PlatformSRKHandleExplicit: true}
+
+	report := buildStatusReport(context.Background(), fx.clients(), opts)
+
+	assert.Equal(t, []uint32{0, 0x81000009}, *probed)
+	psrk := objectByName(t, report, "PlatformSRK")
+	assert.Equal(t, "0x81000009", psrk.Handle)
+	assert.Equal(t, "handle from --platform-srk-handle", psrk.Note)
+}
+
+// TestBuildStatusReport_PlatformSRKDefaultWhenDaemonSilent: an older daemon
+// reports no handle, so the default is probed with the assumption note.
+func TestBuildStatusReport_PlatformSRKDefaultWhenDaemonSilent(t *testing.T) {
+	fx := newAllPresentFixture(t, oidTCGPolicy3)
+	probed := platformHandleProbe(fx, map[string]string{"manufacturer": "IFX"})
+
+	report := buildStatusReport(context.Background(), fx.clients(), defaultStatusOptions())
+
+	assert.Equal(t, []uint32{0, defaultPlatformSRKHandle}, *probed)
+	assert.Contains(t, objectByName(t, report, "PlatformSRK").Note, "default handle assumed")
+}
+
+func TestResolvePlatformSRKHandle(t *testing.T) {
+	def := statusOptions{PlatformSRKHandle: defaultPlatformSRKHandle}
+	explicit := statusOptions{PlatformSRKHandle: 0x81000009, PlatformSRKHandleExplicit: true}
+
+	cases := map[string]struct {
+		opts       statusOptions
+		props      map[string]string
+		wantHandle uint32
+		wantNote   string
+	}{
+		"daemon handle": {
+			opts: def, props: map[string]string{"platform_srk_handle": "0x8100000A"},
+			wantHandle: 0x8100000A, wantNote: "handle from daemon config",
+		},
+		"flag wins": {
+			opts: explicit, props: map[string]string{"platform_srk_handle": "0x8100000A"},
+			wantHandle: 0x81000009, wantNote: "handle from --platform-srk-handle",
+		},
+		"no properties at all": {
+			opts: def, props: nil,
+			wantHandle: defaultPlatformSRKHandle, wantNote: platformSRKHandleNote(def),
+		},
+		"unparseable property": {
+			opts: def, props: map[string]string{"platform_srk_handle": "not-a-handle"},
+			wantHandle: defaultPlatformSRKHandle, wantNote: platformSRKHandleNote(def),
+		},
+		"zero property": {
+			opts: def, props: map[string]string{"platform_srk_handle": "0x00000000"},
+			wantHandle: defaultPlatformSRKHandle, wantNote: platformSRKHandleNote(def),
+		},
+		"out of range property": {
+			opts: def, props: map[string]string{"platform_srk_handle": "0x1FFFFFFFF"},
+			wantHandle: defaultPlatformSRKHandle, wantNote: platformSRKHandleNote(def),
+		},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			handle, note := resolvePlatformSRKHandle(tc.opts, tc.props)
+
+			assert.Equal(t, tc.wantHandle, handle)
+			assert.Equal(t, tc.wantNote, note)
+		})
+	}
+}
+
 // TestBuildStatusReport_EKNotFound: the EK row honours the same positive
 // not-found rule as the others.
 func TestBuildStatusReport_EKNotFound(t *testing.T) {

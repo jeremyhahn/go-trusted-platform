@@ -30,28 +30,34 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
+	restapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/rest"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/policy"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/restwire"
 )
 
 // mockSDNService implements platformv1.SDNServiceServer for testing
 type mockSDNService struct {
 	platformv1.UnimplementedSDNServiceServer
 
-	createBridgeFunc func(ctx context.Context, req *platformv1.CreateBridgeRequest) (*platformv1.CreateBridgeResponse, error)
-	deleteBridgeFunc func(ctx context.Context, req *platformv1.DeleteBridgeRequest) (*platformv1.DeleteBridgeResponse, error)
-	getBridgeFunc    func(ctx context.Context, req *platformv1.GetBridgeRequest) (*platformv1.GetBridgeResponse, error)
-	listBridgesFunc  func(ctx context.Context, req *platformv1.ListBridgesRequest) (*platformv1.ListBridgesResponse, error)
-	addPortFunc      func(ctx context.Context, req *platformv1.AddPortRequest) (*platformv1.AddPortResponse, error)
-	deletePortFunc   func(ctx context.Context, req *platformv1.DeletePortRequest) (*platformv1.DeletePortResponse, error)
-	getPortFunc      func(ctx context.Context, req *platformv1.GetPortRequest) (*platformv1.GetPortResponse, error)
-	addFlowFunc      func(ctx context.Context, req *platformv1.AddFlowRequest) (*platformv1.AddFlowResponse, error)
-	deleteFlowFunc   func(ctx context.Context, req *platformv1.DeleteFlowRequest) (*platformv1.DeleteFlowResponse, error)
-	listFlowsFunc    func(ctx context.Context, req *platformv1.ListFlowsRequest) (*platformv1.ListFlowsResponse, error)
-	createVLANFunc   func(ctx context.Context, req *platformv1.CreateVLANRequest) (*platformv1.CreateVLANResponse, error)
-	listVLANsFunc    func(ctx context.Context, req *platformv1.ListVLANsRequest) (*platformv1.ListVLANsResponse, error)
-	getPortStatsFunc func(ctx context.Context, req *platformv1.GetPortStatsRequest) (*platformv1.GetPortStatsResponse, error)
+	createBridgeFunc     func(ctx context.Context, req *platformv1.CreateBridgeRequest) (*platformv1.CreateBridgeResponse, error)
+	deleteBridgeFunc     func(ctx context.Context, req *platformv1.DeleteBridgeRequest) (*platformv1.DeleteBridgeResponse, error)
+	getBridgeFunc        func(ctx context.Context, req *platformv1.GetBridgeRequest) (*platformv1.GetBridgeResponse, error)
+	listBridgesFunc      func(ctx context.Context, req *platformv1.ListBridgesRequest) (*platformv1.ListBridgesResponse, error)
+	addPortFunc          func(ctx context.Context, req *platformv1.AddPortRequest) (*platformv1.AddPortResponse, error)
+	deletePortFunc       func(ctx context.Context, req *platformv1.DeletePortRequest) (*platformv1.DeletePortResponse, error)
+	getPortFunc          func(ctx context.Context, req *platformv1.GetPortRequest) (*platformv1.GetPortResponse, error)
+	setPortStateFunc     func(ctx context.Context, req *platformv1.SetPortStateRequest) (*platformv1.SetPortStateResponse, error)
+	addFlowFunc          func(ctx context.Context, req *platformv1.AddFlowRequest) (*platformv1.AddFlowResponse, error)
+	deleteFlowFunc       func(ctx context.Context, req *platformv1.DeleteFlowRequest) (*platformv1.DeleteFlowResponse, error)
+	listFlowsFunc        func(ctx context.Context, req *platformv1.ListFlowsRequest) (*platformv1.ListFlowsResponse, error)
+	createVLANFunc       func(ctx context.Context, req *platformv1.CreateVLANRequest) (*platformv1.CreateVLANResponse, error)
+	listVLANsFunc        func(ctx context.Context, req *platformv1.ListVLANsRequest) (*platformv1.ListVLANsResponse, error)
+	getPortStatsFunc     func(ctx context.Context, req *platformv1.GetPortStatsRequest) (*platformv1.GetPortStatsResponse, error)
+	applyPolicyFunc      func(ctx context.Context, req *platformv1.ApplyPolicyRequest) (*platformv1.ApplyPolicyResponse, error)
+	authenticatePortFunc func(ctx context.Context, req *platformv1.AuthenticatePortRequest) (*platformv1.AuthenticatePortResponse, error)
+	revokePortAuthFunc   func(ctx context.Context, req *platformv1.RevokePortAuthRequest) (*platformv1.RevokePortAuthResponse, error)
 }
 
 func (m *mockSDNService) CreateBridge(ctx context.Context, req *platformv1.CreateBridgeRequest) (*platformv1.CreateBridgeResponse, error) {
@@ -96,9 +102,30 @@ func (m *mockSDNService) DeletePort(ctx context.Context, req *platformv1.DeleteP
 	return nil, status.Error(codes.Unimplemented, "not implemented")
 }
 
+func (m *mockSDNService) AuthenticatePort(ctx context.Context, req *platformv1.AuthenticatePortRequest) (*platformv1.AuthenticatePortResponse, error) {
+	if m.authenticatePortFunc != nil {
+		return m.authenticatePortFunc(ctx, req)
+	}
+	return nil, status.Error(codes.Unimplemented, "not implemented")
+}
+
+func (m *mockSDNService) RevokePortAuth(ctx context.Context, req *platformv1.RevokePortAuthRequest) (*platformv1.RevokePortAuthResponse, error) {
+	if m.revokePortAuthFunc != nil {
+		return m.revokePortAuthFunc(ctx, req)
+	}
+	return nil, status.Error(codes.Unimplemented, "not implemented")
+}
+
 func (m *mockSDNService) GetPort(ctx context.Context, req *platformv1.GetPortRequest) (*platformv1.GetPortResponse, error) {
 	if m.getPortFunc != nil {
 		return m.getPortFunc(ctx, req)
+	}
+	return nil, status.Error(codes.Unimplemented, "not implemented")
+}
+
+func (m *mockSDNService) SetPortState(ctx context.Context, req *platformv1.SetPortStateRequest) (*platformv1.SetPortStateResponse, error) {
+	if m.setPortStateFunc != nil {
+		return m.setPortStateFunc(ctx, req)
 	}
 	return nil, status.Error(codes.Unimplemented, "not implemented")
 }
@@ -145,6 +172,13 @@ func (m *mockSDNService) GetPortStats(ctx context.Context, req *platformv1.GetPo
 	return nil, status.Error(codes.Unimplemented, "not implemented")
 }
 
+func (m *mockSDNService) ApplyPolicy(ctx context.Context, req *platformv1.ApplyPolicyRequest) (*platformv1.ApplyPolicyResponse, error) {
+	if m.applyPolicyFunc != nil {
+		return m.applyPolicyFunc(ctx, req)
+	}
+	return nil, status.Error(codes.Unimplemented, "not implemented")
+}
+
 // mockResponseWriter implements response.HttpWriter for testing
 type mockResponseWriter struct {
 	lastStatus  int
@@ -175,14 +209,14 @@ func (m *mockResponseWriter) WriteJson(w http.ResponseWriter, status int, resp i
 func (m *mockResponseWriter) Success200(w http.ResponseWriter, r *http.Request, payload interface{}) {
 	m.lastStatus = http.StatusOK
 	m.lastPayload = payload
-	resp := response.WebServiceResponse{Code: http.StatusOK, Success: true, Payload: payload}
+	resp := restwire.WebServiceResponse{Code: http.StatusOK, Success: true, Payload: payload}
 	m.Write(w, r, http.StatusOK, resp)
 }
 
 func (m *mockResponseWriter) Success201(w http.ResponseWriter, r *http.Request, payload interface{}) {
 	m.lastStatus = http.StatusCreated
 	m.lastPayload = payload
-	resp := response.WebServiceResponse{Code: http.StatusCreated, Success: true, Payload: payload}
+	resp := restwire.WebServiceResponse{Code: http.StatusCreated, Success: true, Payload: payload}
 	m.Write(w, r, http.StatusCreated, resp)
 }
 
@@ -200,21 +234,21 @@ func (m *mockResponseWriter) Error200(w http.ResponseWriter, r *http.Request, er
 func (m *mockResponseWriter) Error401(w http.ResponseWriter, r *http.Request, err error) {
 	m.lastStatus = http.StatusUnauthorized
 	m.lastError = err
-	resp := response.WebServiceResponse{Code: http.StatusUnauthorized, Success: false, Error: err.Error()}
+	resp := restwire.WebServiceResponse{Code: http.StatusUnauthorized, Success: false, Error: err.Error()}
 	m.Write(w, r, http.StatusUnauthorized, resp)
 }
 
 func (m *mockResponseWriter) Error400(w http.ResponseWriter, r *http.Request, err error) {
 	m.lastStatus = http.StatusBadRequest
 	m.lastError = err
-	resp := response.WebServiceResponse{Code: http.StatusBadRequest, Success: false, Error: err.Error()}
+	resp := restwire.WebServiceResponse{Code: http.StatusBadRequest, Success: false, Error: err.Error()}
 	m.Write(w, r, http.StatusBadRequest, resp)
 }
 
 func (m *mockResponseWriter) Error404(w http.ResponseWriter, r *http.Request, err error) {
 	m.lastStatus = http.StatusNotFound
 	m.lastError = err
-	resp := response.WebServiceResponse{Code: http.StatusNotFound, Success: false, Error: err.Error()}
+	resp := restwire.WebServiceResponse{Code: http.StatusNotFound, Success: false, Error: err.Error()}
 	m.Write(w, r, http.StatusNotFound, resp)
 }
 
@@ -227,8 +261,15 @@ func (m *mockResponseWriter) Error403(w http.ResponseWriter, r *http.Request, er
 func (m *mockResponseWriter) Error500(w http.ResponseWriter, r *http.Request, err error) {
 	m.lastStatus = http.StatusInternalServerError
 	m.lastError = err
-	resp := response.WebServiceResponse{Code: http.StatusInternalServerError, Success: false, Error: err.Error()}
+	resp := restwire.WebServiceResponse{Code: http.StatusInternalServerError, Success: false, Error: err.Error()}
 	m.Write(w, r, http.StatusInternalServerError, resp)
+}
+
+func (m *mockResponseWriter) Error503(w http.ResponseWriter, r *http.Request, err error) {
+	m.lastStatus = http.StatusServiceUnavailable
+	m.lastError = err
+	resp := restwire.WebServiceResponse{Code: http.StatusServiceUnavailable, Success: false, Error: err.Error()}
+	m.Write(w, r, http.StatusServiceUnavailable, resp)
 }
 
 func createTestHandlers(mock *mockSDNService) (*SDNHandlers, *mockResponseWriter) {
@@ -633,6 +674,205 @@ func TestDeletePort_GRPCError(t *testing.T) {
 	assert.Equal(t, http.StatusNotFound, respWriter.lastStatus)
 }
 
+func TestAuthenticatePort_Success(t *testing.T) {
+	cert := []byte("-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n")
+	authenticatedAt := timestamppb.Now()
+	var got *platformv1.AuthenticatePortRequest
+	mock := &mockSDNService{
+		authenticatePortFunc: func(ctx context.Context, req *platformv1.AuthenticatePortRequest) (*platformv1.AuthenticatePortResponse, error) {
+			got = req
+			return &platformv1.AuthenticatePortResponse{
+				Status: &platformv1.Status{Success: true},
+				Auth: &platformv1.PortAuth{
+					Authenticated:   true,
+					CertificateCn:   "device-01",
+					AuthenticatedAt: authenticatedAt,
+					AuthorizedVlans: []uint32{10, 20},
+				},
+			}, nil
+		},
+	}
+	handlers, respWriter := createTestHandlers(mock)
+
+	body, err := json.Marshal(AuthenticatePortRequest{Certificate: cert, Format: "PEM"})
+	require.NoError(t, err)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/sdn/bridges/br0/ports/port0/auth", bytes.NewReader(body))
+	req = mux.SetURLVars(req, map[string]string{"name": "br0", "port": "port0"})
+	w := httptest.NewRecorder()
+
+	handlers.AuthenticatePort(w, req)
+
+	require.Equal(t, http.StatusOK, respWriter.lastStatus)
+	require.NotNil(t, got)
+	assert.Equal(t, "br0", got.BridgeId)
+	assert.Equal(t, "port0", got.PortId)
+	assert.Equal(t, cert, got.Certificate)
+	assert.Equal(t, "PEM", got.Format)
+
+	resp, ok := respWriter.lastPayload.(PortAuthResponse)
+	require.True(t, ok, "payload is %T", respWriter.lastPayload)
+	assert.Equal(t, "br0", resp.BridgeID)
+	assert.Equal(t, "port0", resp.PortID)
+	assert.True(t, resp.Authenticated)
+	assert.Equal(t, "device-01", resp.CertificateCN)
+	assert.Equal(t, []uint32{10, 20}, resp.AuthorizedVLANs)
+	require.NotNil(t, resp.AuthenticatedAt)
+	assert.True(t, authenticatedAt.AsTime().Equal(*resp.AuthenticatedAt))
+	assert.Nil(t, resp.ExpiresAt)
+}
+
+func TestAuthenticatePort_MissingPathParam(t *testing.T) {
+	tests := []struct {
+		name string
+		vars map[string]string
+	}{
+		{name: "bridge", vars: map[string]string{"port": "port0"}},
+		{name: "port", vars: map[string]string{"name": "br0"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			handlers, respWriter := createTestHandlers(&mockSDNService{})
+
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/sdn/bridges/br0/ports/port0/auth", bytes.NewReader([]byte(`{}`)))
+			req = mux.SetURLVars(req, tt.vars)
+			w := httptest.NewRecorder()
+
+			handlers.AuthenticatePort(w, req)
+
+			assert.Equal(t, http.StatusBadRequest, respWriter.lastStatus)
+		})
+	}
+}
+
+func TestAuthenticatePort_InvalidBody(t *testing.T) {
+	handlers, respWriter := createTestHandlers(&mockSDNService{})
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/sdn/bridges/br0/ports/port0/auth", bytes.NewReader([]byte(`{"certificate":"not base64!"}`)))
+	req = mux.SetURLVars(req, map[string]string{"name": "br0", "port": "port0"})
+	w := httptest.NewRecorder()
+
+	handlers.AuthenticatePort(w, req)
+
+	assert.Equal(t, http.StatusBadRequest, respWriter.lastStatus)
+	assert.IsType(t, ErrInvalidRequestBody{}, respWriter.lastError)
+}
+
+func TestAuthenticatePort_PortNotFound(t *testing.T) {
+	mock := &mockSDNService{
+		authenticatePortFunc: func(ctx context.Context, req *platformv1.AuthenticatePortRequest) (*platformv1.AuthenticatePortResponse, error) {
+			return nil, status.Error(codes.NotFound, "port not found")
+		},
+	}
+	handlers, respWriter := createTestHandlers(mock)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/sdn/bridges/br0/ports/missing/auth", bytes.NewReader([]byte(`{"certificate":"TUlJQg=="}`)))
+	req = mux.SetURLVars(req, map[string]string{"name": "br0", "port": "missing"})
+	w := httptest.NewRecorder()
+
+	handlers.AuthenticatePort(w, req)
+
+	assert.Equal(t, http.StatusNotFound, respWriter.lastStatus)
+}
+
+func TestRevokePortAuth_Success(t *testing.T) {
+	var got *platformv1.RevokePortAuthRequest
+	mock := &mockSDNService{
+		revokePortAuthFunc: func(ctx context.Context, req *platformv1.RevokePortAuthRequest) (*platformv1.RevokePortAuthResponse, error) {
+			got = req
+			return &platformv1.RevokePortAuthResponse{
+				Status: &platformv1.Status{Success: true, Message: "port authentication revoked"},
+			}, nil
+		},
+	}
+	handlers, respWriter := createTestHandlers(mock)
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/sdn/bridges/br0/ports/port0/auth", nil)
+	req = mux.SetURLVars(req, map[string]string{"name": "br0", "port": "port0"})
+	w := httptest.NewRecorder()
+
+	handlers.RevokePortAuth(w, req)
+
+	require.Equal(t, http.StatusOK, respWriter.lastStatus)
+	require.NotNil(t, got)
+	assert.Equal(t, "br0", got.BridgeId)
+	assert.Equal(t, "port0", got.PortId)
+	assert.Equal(t, SuccessResponse{Success: true, Message: "port authentication revoked"}, respWriter.lastPayload)
+}
+
+// The service refuses port authentication with FailedPrecondition while the
+// switch does not enforce it (#304); REST answers 400, the platform's status
+// for that class, not 500.
+func TestPortAuth_RefusalIsBadRequest(t *testing.T) {
+	mock := &mockSDNService{
+		authenticatePortFunc: func(ctx context.Context, req *platformv1.AuthenticatePortRequest) (*platformv1.AuthenticatePortResponse, error) {
+			return nil, policy.ErrPortAuthNotEnforced{Operation: "AuthenticatePort"}
+		},
+		revokePortAuthFunc: func(ctx context.Context, req *platformv1.RevokePortAuthRequest) (*platformv1.RevokePortAuthResponse, error) {
+			return nil, policy.ErrPortAuthNotEnforced{Operation: "RevokePortAuth"}
+		},
+	}
+	handlers, respWriter := createTestHandlers(mock)
+	body, err := json.Marshal(AuthenticatePortRequest{Certificate: []byte("self-signed"), Format: "PEM"})
+	require.NoError(t, err)
+
+	calls := map[string]func(http.ResponseWriter, *http.Request){
+		http.MethodPost:   handlers.AuthenticatePort,
+		http.MethodDelete: handlers.RevokePortAuth,
+	}
+	for method, handle := range calls {
+		t.Run(method, func(t *testing.T) {
+			req := httptest.NewRequest(method, "/api/v1/sdn/bridges/br0/ports/port0/auth", bytes.NewReader(body))
+			req = mux.SetURLVars(req, map[string]string{"name": "br0", "port": "port0"})
+
+			handle(httptest.NewRecorder(), req)
+
+			assert.Equal(t, http.StatusBadRequest, respWriter.lastStatus)
+			var refusal policy.ErrPortAuthNotEnforced
+			assert.ErrorAs(t, respWriter.lastError, &refusal)
+		})
+	}
+}
+
+func TestRevokePortAuth_MissingPathParam(t *testing.T) {
+	tests := []struct {
+		name string
+		vars map[string]string
+	}{
+		{name: "bridge", vars: map[string]string{"port": "port0"}},
+		{name: "port", vars: map[string]string{"name": "br0"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			handlers, respWriter := createTestHandlers(&mockSDNService{})
+
+			req := httptest.NewRequest(http.MethodDelete, "/api/v1/sdn/bridges/br0/ports/port0/auth", nil)
+			req = mux.SetURLVars(req, tt.vars)
+			w := httptest.NewRecorder()
+
+			handlers.RevokePortAuth(w, req)
+
+			assert.Equal(t, http.StatusBadRequest, respWriter.lastStatus)
+		})
+	}
+}
+
+func TestRevokePortAuth_PortNotFound(t *testing.T) {
+	mock := &mockSDNService{
+		revokePortAuthFunc: func(ctx context.Context, req *platformv1.RevokePortAuthRequest) (*platformv1.RevokePortAuthResponse, error) {
+			return nil, status.Error(codes.NotFound, "port not found")
+		},
+	}
+	handlers, respWriter := createTestHandlers(mock)
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/sdn/bridges/br0/ports/missing/auth", nil)
+	req = mux.SetURLVars(req, map[string]string{"name": "br0", "port": "missing"})
+	w := httptest.NewRecorder()
+
+	handlers.RevokePortAuth(w, req)
+
+	assert.Equal(t, http.StatusNotFound, respWriter.lastStatus)
+}
+
 func TestGetPortState_Success(t *testing.T) {
 	mock := &mockSDNService{
 		getPortFunc: func(ctx context.Context, req *platformv1.GetPortRequest) (*platformv1.GetPortResponse, error) {
@@ -722,44 +962,62 @@ func TestGetPortState_NilPort(t *testing.T) {
 	assert.Equal(t, http.StatusOK, respWriter.lastStatus)
 	payload, ok := respWriter.lastPayload.(PortStateResponse)
 	require.True(t, ok)
-	assert.Equal(t, "unknown", payload.State)
+	assert.Equal(t, "unknown", payload.AdminState)
+}
+
+// putPortState sends body to the set-state handler for port0 on br0.
+func putPortState(handlers *SDNHandlers, body string) {
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/sdn/bridges/br0/ports/port0/state", bytes.NewBufferString(body))
+	req = mux.SetURLVars(req, map[string]string{"name": "br0", "port": "port0"})
+	req.Header.Set("Content-Type", "application/json")
+	handlers.SetPortState(httptest.NewRecorder(), req)
 }
 
 func TestSetPortState_Success(t *testing.T) {
-	mock := &mockSDNService{}
+	var got *platformv1.SetPortStateRequest
+	mock := &mockSDNService{
+		setPortStateFunc: func(_ context.Context, req *platformv1.SetPortStateRequest) (*platformv1.SetPortStateResponse, error) {
+			got = req
+			return &platformv1.SetPortStateResponse{
+				Port: &platformv1.Port{Status: platformv1.PortStatus_PORT_STATUS_DOWN},
+			}, nil
+		},
+	}
 	handlers, respWriter := createTestHandlers(mock)
 
-	body := `{"state": "up"}`
-	req := httptest.NewRequest(http.MethodPut, "/api/v1/sdn/bridges/br0/ports/port0/state", bytes.NewBufferString(body))
-	req = mux.SetURLVars(req, map[string]string{"name": "br0", "port": "port0"})
-	req.Header.Set("Content-Type", "application/json")
-	w := httptest.NewRecorder()
+	putPortState(handlers, `{"admin_state": "DOWN", "ingress_rate": 10000000, "ingress_burst": 1000000,
+		"egress_rate": 20000000, "egress_burst": 2000000}`)
 
-	handlers.SetPortState(w, req)
-
-	assert.Equal(t, http.StatusOK, respWriter.lastStatus)
+	require.Equal(t, http.StatusOK, respWriter.lastStatus)
+	require.NotNil(t, got, "the handler answered without calling the SDN service")
+	assert.Equal(t, "br0", got.GetBridgeId())
+	assert.Equal(t, "port0", got.GetPortId())
+	assert.Equal(t, "down", got.GetAdminState())
+	assert.Equal(t, uint64(10_000_000), got.GetIngressRate())
+	assert.Equal(t, uint64(1_000_000), got.GetIngressBurst())
+	assert.Equal(t, uint64(20_000_000), got.GetEgressRate())
+	assert.Equal(t, uint64(2_000_000), got.GetEgressBurst())
+	assert.Equal(t, PortStateResponse{BridgeID: "br0", PortID: "port0", AdminState: "down"}, respWriter.lastPayload)
 }
 
-func TestSetPortState_Down(t *testing.T) {
-	mock := &mockSDNService{}
+func TestSetPortState_ServiceError(t *testing.T) {
+	mock := &mockSDNService{
+		setPortStateFunc: func(context.Context, *platformv1.SetPortStateRequest) (*platformv1.SetPortStateResponse, error) {
+			return nil, status.Error(codes.NotFound, "port not found")
+		},
+	}
 	handlers, respWriter := createTestHandlers(mock)
 
-	body := `{"state": "down"}`
-	req := httptest.NewRequest(http.MethodPut, "/api/v1/sdn/bridges/br0/ports/port0/state", bytes.NewBufferString(body))
-	req = mux.SetURLVars(req, map[string]string{"name": "br0", "port": "port0"})
-	req.Header.Set("Content-Type", "application/json")
-	w := httptest.NewRecorder()
+	putPortState(handlers, `{"admin_state": "up"}`)
 
-	handlers.SetPortState(w, req)
-
-	assert.Equal(t, http.StatusOK, respWriter.lastStatus)
+	assert.Equal(t, http.StatusNotFound, respWriter.lastStatus)
 }
 
 func TestSetPortState_InvalidState(t *testing.T) {
 	mock := &mockSDNService{}
 	handlers, respWriter := createTestHandlers(mock)
 
-	body := `{"state": "invalid"}`
+	body := `{"admin_state": "invalid"}`
 	req := httptest.NewRequest(http.MethodPut, "/api/v1/sdn/bridges/br0/ports/port0/state", bytes.NewBufferString(body))
 	req = mux.SetURLVars(req, map[string]string{"name": "br0", "port": "port0"})
 	req.Header.Set("Content-Type", "application/json")
@@ -774,7 +1032,7 @@ func TestSetPortState_MissingBridgeName(t *testing.T) {
 	mock := &mockSDNService{}
 	handlers, respWriter := createTestHandlers(mock)
 
-	body := `{"state": "up"}`
+	body := `{"admin_state": "up"}`
 	req := httptest.NewRequest(http.MethodPut, "/api/v1/sdn/bridges//ports/port0/state", bytes.NewBufferString(body))
 	req = mux.SetURLVars(req, map[string]string{"port": "port0"})
 	req.Header.Set("Content-Type", "application/json")
@@ -789,7 +1047,7 @@ func TestSetPortState_MissingPortName(t *testing.T) {
 	mock := &mockSDNService{}
 	handlers, respWriter := createTestHandlers(mock)
 
-	body := `{"state": "up"}`
+	body := `{"admin_state": "up"}`
 	req := httptest.NewRequest(http.MethodPut, "/api/v1/sdn/bridges/br0/ports//state", bytes.NewBufferString(body))
 	req = mux.SetURLVars(req, map[string]string{"name": "br0"})
 	req.Header.Set("Content-Type", "application/json")
@@ -1085,25 +1343,69 @@ func TestListFlows_GRPCError(t *testing.T) {
 // Policy Handler Tests
 
 func TestApplyPolicy_Success(t *testing.T) {
-	mock := &mockSDNService{}
+	var got *platformv1.ApplyPolicyRequest
+	mock := &mockSDNService{
+		applyPolicyFunc: func(_ context.Context, req *platformv1.ApplyPolicyRequest) (*platformv1.ApplyPolicyResponse, error) {
+			got = req
+			return &platformv1.ApplyPolicyResponse{Policy: &platformv1.Policy{
+				Id:     "p1",
+				Config: req.GetConfig(),
+				Status: platformv1.PolicyStatus_POLICY_STATUS_ACTIVE,
+			}}, nil
+		},
+	}
 	handlers, respWriter := createTestHandlers(mock)
 
-	body := `{"name": "test-policy", "description": "test", "rules": [], "bridge_ids": ["br0"]}`
+	body := `{"id": "p1", "name": "web", "type": "qos",
+		"rules": [{"rule_id": "r1", "vlan_id": 20, "action": "rate-limit", "action_value": "1mbit"}]}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/sdn/policies", bytes.NewBufferString(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 
 	handlers.ApplyPolicy(w, req)
 
-	assert.Equal(t, http.StatusOK, respWriter.lastStatus)
+	require.Equal(t, http.StatusCreated, respWriter.lastStatus)
+	require.NotNil(t, got)
+	assert.Equal(t, "p1", got.GetPolicyId())
+	assert.Equal(t, "web", got.GetConfig().GetName())
+	assert.Equal(t, platformv1.PolicyType_POLICY_TYPE_QOS, got.GetConfig().GetType())
+	assert.Equal(t, uint32(20), got.GetConfig().GetRules()[0].GetMatch().GetVlanId())
+	assert.Equal(t, platformv1.PolicyRuleAction_POLICY_RULE_ACTION_RATE_LIMIT, got.GetConfig().GetRules()[0].GetAction())
+
+	policy, ok := respWriter.lastPayload.(restapi.PolicyResponse)
+	require.True(t, ok, "payload = %T", respWriter.lastPayload)
+	assert.Equal(t, "p1", policy.ID)
+	assert.Equal(t, "qos", policy.Type)
+	assert.Equal(t, "active", policy.Status)
 }
 
-func TestApplyPolicy_MissingName(t *testing.T) {
-	mock := &mockSDNService{}
+func TestApplyPolicy_UnknownEnumNameIsBadRequest(t *testing.T) {
+	mock := &mockSDNService{
+		applyPolicyFunc: func(context.Context, *platformv1.ApplyPolicyRequest) (*platformv1.ApplyPolicyResponse, error) {
+			t.Fatal("a policy with an unknown type reached the service")
+			return nil, nil
+		},
+	}
 	handlers, respWriter := createTestHandlers(mock)
 
-	body := `{"description": "test"}`
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/sdn/policies", bytes.NewBufferString(body))
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/sdn/policies", bytes.NewBufferString(`{"name": "web", "type": "bogus"}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	handlers.ApplyPolicy(w, req)
+
+	assert.Equal(t, http.StatusBadRequest, respWriter.lastStatus)
+}
+
+func TestApplyPolicy_ServiceRefusalIsBadRequest(t *testing.T) {
+	mock := &mockSDNService{
+		applyPolicyFunc: func(context.Context, *platformv1.ApplyPolicyRequest) (*platformv1.ApplyPolicyResponse, error) {
+			return nil, status.Error(codes.InvalidArgument, "policy name is required")
+		},
+	}
+	handlers, respWriter := createTestHandlers(mock)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/sdn/policies", bytes.NewBufferString(`{"description": "test"}`))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 

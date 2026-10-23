@@ -40,6 +40,21 @@ type VMSnapshot struct {
 	Description string `json:"description,omitempty"`
 }
 
+// VMSuspender is implemented by orchestrators that can pause a running VM
+// in memory and continue it later. The QEMU orchestrator does it over the
+// QMP monitor (stop / cont). Protocol surfaces type-assert this interface on
+// the compute Orchestrator and reject the operation with a typed error when
+// the capability is absent.
+type VMSuspender interface {
+	// Suspend pauses a running VM. It returns ErrInstanceNotRunning when
+	// the VM is not running.
+	Suspend(ctx context.Context, instanceID string) error
+
+	// Resume continues a suspended VM. It returns ErrInstanceNotSuspended
+	// when the VM is not suspended.
+	Resume(ctx context.Context, instanceID string) error
+}
+
 // VMSnapshotter is the capability interface for internal (qcow2) VM
 // snapshots. Orchestrators that manage QEMU virtual machines implement it;
 // container orchestrators do not. Protocol surfaces type-assert this
@@ -92,6 +107,11 @@ type VMAttestationReport struct {
 	// Signature is the AK signature over the quote.
 	Signature []byte `json:"signature,omitempty"`
 
+	// SignatureAlgorithm is the x509.SignatureAlgorithm name of the scheme
+	// the AK signed the quote under (for example "SHA256-RSAPSS"). The
+	// signature is bare bytes, so a verifier needs it to check the quote.
+	SignatureAlgorithm string `json:"signature_algorithm,omitempty"`
+
 	// EventLog is the measurement log, when available.
 	EventLog []byte `json:"event_log,omitempty"`
 
@@ -107,6 +127,11 @@ type VMAttestationEvidence struct {
 
 	// Signature is the AK signature over the quote.
 	Signature []byte
+
+	// SignatureAlgorithm is the scheme the quote declares it was signed
+	// under, as reported by AttestVM. The quote is verified under it alone;
+	// an absent or unknown scheme fails verification.
+	SignatureAlgorithm string
 
 	// Nonce is the expected anti-replay nonce.
 	Nonce []byte

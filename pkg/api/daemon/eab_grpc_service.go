@@ -16,7 +16,6 @@ package daemon
 import (
 	"context"
 	"encoding/base64"
-	"sort"
 	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/eab"
@@ -99,6 +98,11 @@ var eabErrorMatchers = []configDeliveryErrorMatcher{
 	matchConfigDeliveryError[eab.ErrQRCodeGenerationFailed](codes.Internal),
 }
 
+// errEABNegativeExpiry refuses a create request whose expires_in_seconds
+// is negative; a negative duration must never yield a non-expiring
+// credential.
+var errEABNegativeExpiry = eab.ErrInvalidExpiresAt{Reason: "expiration duration cannot be negative"}
+
 // eabErrorToStatus maps a typed eab error to a gRPC status error using
 // the eabErrorMatchers table.
 func eabErrorToStatus(err error) error {
@@ -180,8 +184,7 @@ func (s *EABGRPCService) CreateCredential(
 	if secs := req.GetExpiresInSeconds(); secs > 0 {
 		params.ExpiresIn = time.Duration(secs) * time.Second
 	} else if secs < 0 {
-		return nil, status.Error(codes.InvalidArgument,
-			eab.ErrInvalidExpiresAt{Reason: "expiration duration cannot be negative"}.Error())
+		return nil, status.Error(codes.InvalidArgument, errEABNegativeExpiry.Error())
 	}
 
 	cred, err := s.service.Generate(ctx, params)
@@ -251,16 +254,21 @@ func (s *EABGRPCService) ListCredentials(
 		return nil, err
 	}
 
-	creds, err := s.collectCredentials(ctx, req)
+	creds, err := collectEABCredentials(ctx, s.service, req.GetProfileId(), req.GetTenantId())
 	if err != nil {
 		return nil, eabErrorToStatus(err)
 	}
 
-	filtered := filterEABCredentials(creds, req)
+	statusFilter, hasStatusFilter := pbStatusToEAB[req.GetStatusFilter()]
+	filtered := filterEABCredentials(creds, eabCredentialFilter{
+		status:     statusFilter,
+		byStatus:   hasStatusFilter,
+		activeOnly: req.GetActiveOnly(),
+	})
 	if err := sortEABCredentials(filtered, req.GetPagination()); err != nil {
 		return nil, err
 	}
-	pageCreds, pagination := paginateEABCredentials(filtered, req.GetPagination())
+	pageCreds, pagination := paginatePage(filtered, req.GetPagination())
 
 	pbCreds := make([]*platformv1.EABCredential, 0, len(pageCreds))
 	for _, cred := range pageCreds {
@@ -275,21 +283,24 @@ func (s *EABGRPCService) ListCredentials(
 	}, nil
 }
 
-// collectCredentials resolves the base credential set for a list request
-// using the narrowest available index.
-func (s *EABGRPCService) collectCredentials(
+// collectEABCredentials resolves the base credential set for a list
+// request using the narrowest available index. The gRPC and MCP surfaces
+// share it so both list the same credentials for the same filters.
+func collectEABCredentials(
 	ctx context.Context,
-	req *platformv1.ListEABCredentialsRequest,
+	svc EABServicer,
+	profileID uint64,
+	tenantID string,
 ) ([]*eab.Credential, error) {
 	switch {
-	case req.GetProfileId() > 0:
-		creds, err := s.service.ListByProfile(ctx, req.GetProfileId())
+	case profileID > 0:
+		creds, err := svc.ListByProfile(ctx, profileID)
 		if err != nil {
 			return nil, err
 		}
 		// A tenant filter on top of a profile listing must never leak
 		// another tenant's credentials.
-		if tenantID := req.GetTenantId(); tenantID != "" {
+		if tenantID != "" {
 			scoped := make([]*eab.Credential, 0, len(creds))
 			for _, cred := range creds {
 				if cred.TenantID == tenantID {
@@ -300,27 +311,34 @@ func (s *EABGRPCService) collectCredentials(
 		}
 		return creds, nil
 
-	case req.GetTenantId() != "":
-		return s.service.ListByTenant(ctx, req.GetTenantId())
+	case tenantID != "":
+		return svc.ListByTenant(ctx, tenantID)
 
 	default:
-		return eabCollectAll(ctx, s.service)
+		return eabCollectAll(ctx, svc)
 	}
 }
 
-// filterEABCredentials applies the status_filter and active_only
-// refinements to a credential set.
-func filterEABCredentials(creds []*eab.Credential, req *platformv1.ListEABCredentialsRequest) []*eab.Credential {
-	statusFilter, hasStatusFilter := pbStatusToEAB[req.GetStatusFilter()]
-	if !hasStatusFilter && !req.GetActiveOnly() {
+// eabCredentialFilter is the status and active-only refinement of a list
+// request, decoded from the pb enum (gRPC) or the status name (MCP).
+type eabCredentialFilter struct {
+	status     eab.Status
+	byStatus   bool
+	activeOnly bool
+}
+
+// filterEABCredentials applies the status and active-only refinements to
+// a credential set.
+func filterEABCredentials(creds []*eab.Credential, filter eabCredentialFilter) []*eab.Credential {
+	if !filter.byStatus && !filter.activeOnly {
 		return creds
 	}
 	filtered := make([]*eab.Credential, 0, len(creds))
 	for _, cred := range creds {
-		if hasStatusFilter && cred.Status != statusFilter {
+		if filter.byStatus && cred.Status != filter.status {
 			continue
 		}
-		if req.GetActiveOnly() && !cred.IsValid() {
+		if filter.activeOnly && !cred.IsValid() {
 			continue
 		}
 		filtered = append(filtered, cred)
@@ -328,87 +346,34 @@ func filterEABCredentials(creds []*eab.Credential, req *platformv1.ListEABCreden
 	return filtered
 }
 
-// sortEABCredentials orders a credential set deterministically. When
-// sort_by is empty the set is ordered by id ascending (stable default;
-// the ascending flag is only meaningful alongside an explicit sort_by
-// because the pb bool defaults to false). Supported sort_by fields are
-// "id" and "created_at"; anything else is rejected as InvalidArgument so
-// callers get a clear contract instead of silently unsorted results.
-func sortEABCredentials(creds []*eab.Credential, pagination *platformv1.PaginationRequest) error {
-	sortBy := pagination.GetSortBy()
-	ascending := true
-	if sortBy != "" {
-		ascending = pagination.GetAscending()
-	}
-
-	var less func(a, b *eab.Credential) bool
-	switch sortBy {
-	case "", "id":
-		less = func(a, b *eab.Credential) bool { return a.ID < b.ID }
-	case "created_at":
-		less = func(a, b *eab.Credential) bool {
-			if a.CreatedAt.Equal(b.CreatedAt) {
-				return a.ID < b.ID
-			}
-			return a.CreatedAt.Before(b.CreatedAt)
+// eabCredentialOrders are the sort_by fields an EAB list accepts. When
+// sort_by is empty the set is ordered by id ascending (stable default; the
+// ascending flag is only meaningful alongside an explicit sort_by because the
+// pb bool defaults to false).
+var eabCredentialOrders = pageOrder[*eab.Credential]{
+	"":   eabCredentialByID,
+	"id": eabCredentialByID,
+	"created_at": func(a, b *eab.Credential) bool {
+		if a.CreatedAt.Equal(b.CreatedAt) {
+			return a.ID < b.ID
 		}
-	default:
-		return status.Error(codes.InvalidArgument,
-			ErrEABUnsupportedSortField{Field: sortBy}.Error())
-	}
-
-	sort.SliceStable(creds, func(i, j int) bool {
-		if ascending {
-			return less(creds[i], creds[j])
-		}
-		return less(creds[j], creds[i])
-	})
-	return nil
+		return a.CreatedAt.Before(b.CreatedAt)
+	},
 }
 
-// paginateEABCredentials slices a filtered credential set according to
-// the request pagination and builds the matching PaginationResponse. A
-// zero page_size returns the entire set as a single page.
-func paginateEABCredentials(
-	creds []*eab.Credential,
-	pagination *platformv1.PaginationRequest,
-) ([]*eab.Credential, *platformv1.PaginationResponse) {
-	total := uint64(len(creds))
-	pageSize := pagination.GetPageSize()
-	if pageSize == 0 {
-		return creds, &platformv1.PaginationResponse{
-			Page:       1,
-			PageSize:   uint32(len(creds)),
-			TotalPages: 1,
-			TotalItems: total,
-		}
-	}
+// eabCredentialByID orders credentials by id.
+func eabCredentialByID(a, b *eab.Credential) bool { return a.ID < b.ID }
 
-	page := pagination.GetPage()
-	if page == 0 {
-		page = 1
+// sortEABCredentials orders a credential set deterministically by the
+// request's sort_by field. A field not in eabCredentialOrders is rejected as
+// InvalidArgument so callers get a clear contract instead of silently
+// unsorted results.
+func sortEABCredentials(creds []*eab.Credential, pagination *platformv1.PaginationRequest) error {
+	if !sortPage(creds, pagination, eabCredentialOrders) {
+		return status.Error(codes.InvalidArgument,
+			ErrEABUnsupportedSortField{Field: pagination.GetSortBy()}.Error())
 	}
-	totalPages := uint32((total + uint64(pageSize) - 1) / uint64(pageSize))
-
-	start := uint64(page-1) * uint64(pageSize)
-	if start >= total {
-		return nil, &platformv1.PaginationResponse{
-			Page:       page,
-			PageSize:   pageSize,
-			TotalPages: totalPages,
-			TotalItems: total,
-		}
-	}
-	end := start + uint64(pageSize)
-	if end > total {
-		end = total
-	}
-	return creds[start:end], &platformv1.PaginationResponse{
-		Page:       page,
-		PageSize:   pageSize,
-		TotalPages: totalPages,
-		TotalItems: total,
-	}
+	return nil
 }
 
 // RevokeCredential marks an EAB credential as revoked. The revoker_id is
@@ -502,7 +467,7 @@ func (s *EABGRPCService) GetCredentialQRCode(
 	}
 	if req.GetSize() < 0 {
 		return nil, status.Error(codes.InvalidArgument,
-			ErrEABInvalidQRCodeSize{Size: req.GetSize()}.Error())
+			ErrEABInvalidQRCodeSize{Size: int(req.GetSize())}.Error())
 	}
 
 	cred, err := s.service.Get(ctx, req.GetCredentialId())
@@ -591,27 +556,9 @@ func (s *EABGRPCService) CleanupExpiredCredentials(
 		return nil, err
 	}
 
-	var deleted int
-	if tenantID := req.GetTenantId(); tenantID != "" {
-		creds, err := s.service.ListByTenant(ctx, tenantID)
-		if err != nil {
-			return nil, eabErrorToStatus(err)
-		}
-		for _, cred := range creds {
-			if cred.Status != eab.StatusExpired && !cred.IsExpired() {
-				continue
-			}
-			if err := s.service.Delete(ctx, cred.ID); err != nil {
-				return nil, eabErrorToStatus(err)
-			}
-			deleted++
-		}
-	} else {
-		var err error
-		deleted, err = s.service.CleanupExpired(ctx)
-		if err != nil {
-			return nil, eabErrorToStatus(err)
-		}
+	deleted, err := cleanupExpiredEABCredentials(ctx, s.service, req.GetTenantId())
+	if err != nil {
+		return nil, eabErrorToStatus(err)
 	}
 
 	return &platformv1.CleanupExpiredEABCredentialsResponse{
@@ -619,6 +566,31 @@ func (s *EABGRPCService) CleanupExpiredCredentials(
 		Status:       &platformv1.Status{Success: true, Message: "expired credentials removed"},
 		Timestamp:    timestamppb.Now(),
 	}, nil
+}
+
+// cleanupExpiredEABCredentials deletes the expired credentials of one
+// tenant, or of every tenant when tenantID is empty, and returns how many
+// it deleted. The gRPC and MCP surfaces share it so a tenant-scoped
+// cleanup never touches another tenant's credentials on either.
+func cleanupExpiredEABCredentials(ctx context.Context, svc EABServicer, tenantID string) (int, error) {
+	if tenantID == "" {
+		return svc.CleanupExpired(ctx)
+	}
+	creds, err := svc.ListByTenant(ctx, tenantID)
+	if err != nil {
+		return 0, err
+	}
+	deleted := 0
+	for _, cred := range creds {
+		if cred.Status != eab.StatusExpired && !cred.IsExpired() {
+			continue
+		}
+		if err := svc.Delete(ctx, cred.ID); err != nil {
+			return deleted, err
+		}
+		deleted++
+	}
+	return deleted, nil
 }
 
 // Ensure EABGRPCService implements the generated server interface.

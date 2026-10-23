@@ -146,4 +146,4 @@ A server-side EAB rejection surfaces as `ErrEABValidationFailed` wrapping the
 ## 7. Related
 
 - [architecture.md](architecture.md) · [engineering.md](engineering.md) · [api.md](api.md) · [user.md](user.md)
-- [`docs/cli/global-flags.md`](../cli/global-flags.md) — persistent `platformctl` flags
+- [`docs/daemon/cli.md`](../daemon/cli.md) §2 — persistent `platformctl` flags

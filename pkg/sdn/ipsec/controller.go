@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/bgp"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ipsec/config"
 )
 
 // Admitter decides whether a remote VTEP may carry a VNI. It is the
@@ -93,8 +94,8 @@ type crlIssuer struct {
 }
 
 // NewController builds the controller for an enabled configuration.
-func NewController(cfg *Config, admitter Admitter, dropper Dropper, identity IdentityProvider) (*Controller, error) {
-	local, err := enabledLocal(cfg)
+func NewController(cfg *config.Config, admitter Admitter, dropper Dropper, identity IdentityProvider) (*Controller, error) {
+	local, err := config.EnabledLocal(cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -407,10 +408,6 @@ type Status struct {
 	// PendingCRLs is how many issuers' CRLs wait for a tunnel identity to
 	// be verified against; the next Attach verifies them.
 	PendingCRLs int
-	// UnpeeredVTEPs are overlay VTEPs missing from static-peers, in address
-	// order. The fail-closed floor drops their VXLAN until configuration is
-	// corrected.
-	UnpeeredVTEPs []netip.Addr
 	// Certificate is the renewal state of the tunnel certificate last
 	// loaded; nil before the first attach.
 	Certificate *CertificateStatus
@@ -500,7 +497,7 @@ func (c *Controller) candidate(vtep netip.Addr) bool {
 func (c *Controller) Evict(ctx context.Context, peer netip.Addr) error {
 	peer = peer.Unmap()
 	if !c.candidate(peer) {
-		return &PeerError{Peer: peer, Op: "evict", Err: ErrInvalidAddress}
+		return &PeerError{Peer: peer, Op: "evict", Err: config.ErrInvalidAddress}
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()

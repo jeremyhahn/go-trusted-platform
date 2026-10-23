@@ -21,56 +21,23 @@ import (
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/compute/container"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 )
-
-// Container operation codes (0xFC-0xFF range)
-const (
-	// OpContainerCreate creates a new container
-	OpContainerCreate byte = 0xFC
-
-	// OpContainerStart starts a stopped container
-	OpContainerStart byte = 0xFD
-
-	// OpContainerStop stops a running container
-	OpContainerStop byte = 0xFE
-
-	// OpContainerRemove removes a container
-	OpContainerRemove byte = 0xFF
-
-	// Using previously unused codes from the reserved space
-	// OpContainerGet retrieves a container by ID (reusing reserved 0x6F)
-	OpContainerGet byte = 0x6F
-
-	// OpContainerList lists containers
-	OpContainerList byte = 0xAE
-
-	// OpContainerLogs retrieves container logs
-	OpContainerLogs byte = 0xAF
-
-	// OpContainerAttest performs TPM attestation for a container
-	OpContainerAttest byte = 0xEC
-)
-
-// NOTE: several container opcodes above collide with other opcode ranges at
-// the top level of the daemon dispatcher (0xEC falls in the PXE range,
-// 0xFC-0xFF in the PXE extended range), so remote transports reach them as
-// sub-opcodes carried in payload[0] under the compute extended category
-// opcode (quic.OpVMExtendedCategory, 0x69) — the same category framing the
-// extended VM operations use. The ContainerHandler accepts both framings:
-// direct opcodes (in-process callers, tests) and the category framing (wire
-// traffic, unwrapped by the daemon dispatcher).
 
 // containerSubOpcodes is the set of container opcodes accepted as compute
 // extended category sub-opcodes.
 var containerSubOpcodes = map[byte]bool{
-	OpContainerCreate: true,
-	OpContainerStart:  true,
-	OpContainerStop:   true,
-	OpContainerRemove: true,
-	OpContainerGet:    true,
-	OpContainerList:   true,
-	OpContainerLogs:   true,
-	OpContainerAttest: true,
+	quicwire.OpContainerCreate: true,
+	quicwire.OpContainerStart:  true,
+	quicwire.OpContainerStop:   true,
+	quicwire.OpContainerRemove: true,
+	quicwire.OpContainerGet:    true,
+	quicwire.OpContainerList:   true,
+	quicwire.OpContainerLogs:   true,
+	quicwire.OpContainerAttest: true,
+
+	quicwire.OpContainerExec:    true,
+	quicwire.OpContainerMetrics: true,
 }
 
 // IsContainerSubOpcode reports whether op is a container operation that may
@@ -116,34 +83,34 @@ func NewContainerHandler(logger *logging.Logger, orchestrator container.Containe
 }
 
 // HandleRequest processes a container request and returns a response
-func (h *ContainerHandler) HandleRequest(ctx context.Context, req *Request) *Response {
+func (h *ContainerHandler) HandleRequest(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if req == nil {
-		return &Response{
-			Status:  StatusInvalidRequest,
-			Payload: []byte(ErrNilRequest.Error()),
+		return &quicwire.Response{
+			Status:  quicwire.StatusInvalidRequest,
+			Payload: []byte(quicwire.ErrNilRequest.Error()),
 		}
 	}
 
 	switch req.Opcode {
-	case OpContainerCreate:
+	case quicwire.OpContainerCreate:
 		return h.handleCreate(ctx, req)
-	case OpContainerStart:
+	case quicwire.OpContainerStart:
 		return h.handleStart(ctx, req)
-	case OpContainerStop:
+	case quicwire.OpContainerStop:
 		return h.handleStop(ctx, req)
-	case OpContainerRemove:
+	case quicwire.OpContainerRemove:
 		return h.handleRemove(ctx, req)
-	case OpContainerGet:
+	case quicwire.OpContainerGet:
 		return h.handleGet(ctx, req)
-	case OpContainerList:
+	case quicwire.OpContainerList:
 		return h.handleList(ctx, req)
-	case OpContainerLogs:
+	case quicwire.OpContainerLogs:
 		return h.handleLogs(ctx, req)
-	case OpContainerAttest:
+	case quicwire.OpContainerAttest:
 		return h.handleAttest(ctx, req)
 	default:
-		return &Response{
-			Status:  StatusInvalidRequest,
+		return &quicwire.Response{
+			Status:  quicwire.StatusInvalidRequest,
 			Payload: []byte("unknown container operation"),
 		}
 	}
@@ -341,22 +308,22 @@ type ContainerAttestResponse struct {
 // =============================================================================
 
 // handleCreate creates a new container
-func (h *ContainerHandler) handleCreate(ctx context.Context, req *Request) *Response {
+func (h *ContainerHandler) handleCreate(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.orchestrator == nil {
-		return h.errorResponse(StatusUnavailable, ErrContainerOrchestratorNotAvailable)
+		return h.errorResponse(quicwire.StatusUnavailable, ErrContainerOrchestratorNotAvailable)
 	}
 
 	var createReq ContainerCreateRequest
-	if err := DecodePayload(req.Payload, &createReq); err != nil {
-		return h.errorResponse(StatusInvalidRequest, ErrContainerDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &createReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrContainerDecodingFailed{Cause: err})
 	}
 
 	if createReq.Name == "" {
-		return h.errorResponse(StatusInvalidArgument, ErrContainerMissingName)
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrContainerMissingName)
 	}
 
 	if createReq.Image == "" {
-		return h.errorResponse(StatusInvalidArgument, ErrContainerMissingImage)
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrContainerMissingImage)
 	}
 
 	// Build container spec from request
@@ -374,30 +341,30 @@ func (h *ContainerHandler) handleCreate(ctx context.Context, req *Request) *Resp
 		Timestamp: time.Now().Unix(),
 	}
 
-	payload, err := EncodePayload(resp)
+	payload, err := quicwire.EncodePayload(resp)
 	if err != nil {
-		return h.errorResponse(StatusInternalError, ErrContainerEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrContainerEncodingFailed{Cause: err})
 	}
 
-	return &Response{
-		Status:  StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
 
 // handleStart starts a stopped container
-func (h *ContainerHandler) handleStart(ctx context.Context, req *Request) *Response {
+func (h *ContainerHandler) handleStart(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.orchestrator == nil {
-		return h.errorResponse(StatusUnavailable, ErrContainerOrchestratorNotAvailable)
+		return h.errorResponse(quicwire.StatusUnavailable, ErrContainerOrchestratorNotAvailable)
 	}
 
 	var startReq ContainerStartRequest
-	if err := DecodePayload(req.Payload, &startReq); err != nil {
-		return h.errorResponse(StatusInvalidRequest, ErrContainerDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &startReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrContainerDecodingFailed{Cause: err})
 	}
 
 	if startReq.ID == "" {
-		return h.errorResponse(StatusInvalidArgument, ErrContainerMissingID)
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrContainerMissingID)
 	}
 
 	if err := h.orchestrator.Start(ctx, startReq.ID); err != nil {
@@ -411,30 +378,30 @@ func (h *ContainerHandler) handleStart(ctx context.Context, req *Request) *Respo
 		Timestamp: time.Now().Unix(),
 	}
 
-	payload, err := EncodePayload(resp)
+	payload, err := quicwire.EncodePayload(resp)
 	if err != nil {
-		return h.errorResponse(StatusInternalError, ErrContainerEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrContainerEncodingFailed{Cause: err})
 	}
 
-	return &Response{
-		Status:  StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
 
 // handleStop stops a running container
-func (h *ContainerHandler) handleStop(ctx context.Context, req *Request) *Response {
+func (h *ContainerHandler) handleStop(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.orchestrator == nil {
-		return h.errorResponse(StatusUnavailable, ErrContainerOrchestratorNotAvailable)
+		return h.errorResponse(quicwire.StatusUnavailable, ErrContainerOrchestratorNotAvailable)
 	}
 
 	var stopReq ContainerStopRequest
-	if err := DecodePayload(req.Payload, &stopReq); err != nil {
-		return h.errorResponse(StatusInvalidRequest, ErrContainerDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &stopReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrContainerDecodingFailed{Cause: err})
 	}
 
 	if stopReq.ID == "" {
-		return h.errorResponse(StatusInvalidArgument, ErrContainerMissingID)
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrContainerMissingID)
 	}
 
 	// Convert timeout from seconds to duration
@@ -454,30 +421,30 @@ func (h *ContainerHandler) handleStop(ctx context.Context, req *Request) *Respon
 		Timestamp: time.Now().Unix(),
 	}
 
-	payload, err := EncodePayload(resp)
+	payload, err := quicwire.EncodePayload(resp)
 	if err != nil {
-		return h.errorResponse(StatusInternalError, ErrContainerEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrContainerEncodingFailed{Cause: err})
 	}
 
-	return &Response{
-		Status:  StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
 
 // handleRemove removes a container
-func (h *ContainerHandler) handleRemove(ctx context.Context, req *Request) *Response {
+func (h *ContainerHandler) handleRemove(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.orchestrator == nil {
-		return h.errorResponse(StatusUnavailable, ErrContainerOrchestratorNotAvailable)
+		return h.errorResponse(quicwire.StatusUnavailable, ErrContainerOrchestratorNotAvailable)
 	}
 
 	var removeReq ContainerRemoveRequest
-	if err := DecodePayload(req.Payload, &removeReq); err != nil {
-		return h.errorResponse(StatusInvalidRequest, ErrContainerDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &removeReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrContainerDecodingFailed{Cause: err})
 	}
 
 	if removeReq.ID == "" {
-		return h.errorResponse(StatusInvalidArgument, ErrContainerMissingID)
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrContainerMissingID)
 	}
 
 	if err := h.orchestrator.Remove(ctx, removeReq.ID, removeReq.Force); err != nil {
@@ -491,30 +458,30 @@ func (h *ContainerHandler) handleRemove(ctx context.Context, req *Request) *Resp
 		Timestamp: time.Now().Unix(),
 	}
 
-	payload, err := EncodePayload(resp)
+	payload, err := quicwire.EncodePayload(resp)
 	if err != nil {
-		return h.errorResponse(StatusInternalError, ErrContainerEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrContainerEncodingFailed{Cause: err})
 	}
 
-	return &Response{
-		Status:  StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
 
 // handleGet retrieves a container by ID
-func (h *ContainerHandler) handleGet(ctx context.Context, req *Request) *Response {
+func (h *ContainerHandler) handleGet(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.orchestrator == nil {
-		return h.errorResponse(StatusUnavailable, ErrContainerOrchestratorNotAvailable)
+		return h.errorResponse(quicwire.StatusUnavailable, ErrContainerOrchestratorNotAvailable)
 	}
 
 	var getReq ContainerGetRequest
-	if err := DecodePayload(req.Payload, &getReq); err != nil {
-		return h.errorResponse(StatusInvalidRequest, ErrContainerDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &getReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrContainerDecodingFailed{Cause: err})
 	}
 
 	if getReq.ID == "" {
-		return h.errorResponse(StatusInvalidArgument, ErrContainerMissingID)
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrContainerMissingID)
 	}
 
 	containerObj, err := h.orchestrator.Get(ctx, getReq.ID)
@@ -528,26 +495,26 @@ func (h *ContainerHandler) handleGet(ctx context.Context, req *Request) *Respons
 		Timestamp: time.Now().Unix(),
 	}
 
-	payload, err := EncodePayload(resp)
+	payload, err := quicwire.EncodePayload(resp)
 	if err != nil {
-		return h.errorResponse(StatusInternalError, ErrContainerEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrContainerEncodingFailed{Cause: err})
 	}
 
-	return &Response{
-		Status:  StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
 
 // handleList lists containers
-func (h *ContainerHandler) handleList(ctx context.Context, req *Request) *Response {
+func (h *ContainerHandler) handleList(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.orchestrator == nil {
-		return h.errorResponse(StatusUnavailable, ErrContainerOrchestratorNotAvailable)
+		return h.errorResponse(quicwire.StatusUnavailable, ErrContainerOrchestratorNotAvailable)
 	}
 
 	var listReq ContainerListRequest
-	if err := DecodePayload(req.Payload, &listReq); err != nil {
-		return h.errorResponse(StatusInvalidRequest, ErrContainerDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &listReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrContainerDecodingFailed{Cause: err})
 	}
 
 	// Build list options
@@ -590,30 +557,30 @@ func (h *ContainerHandler) handleList(ctx context.Context, req *Request) *Respon
 		Timestamp:  time.Now().Unix(),
 	}
 
-	payload, err := EncodePayload(resp)
+	payload, err := quicwire.EncodePayload(resp)
 	if err != nil {
-		return h.errorResponse(StatusInternalError, ErrContainerEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrContainerEncodingFailed{Cause: err})
 	}
 
-	return &Response{
-		Status:  StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
 
 // handleLogs retrieves container logs
-func (h *ContainerHandler) handleLogs(ctx context.Context, req *Request) *Response {
+func (h *ContainerHandler) handleLogs(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.orchestrator == nil {
-		return h.errorResponse(StatusUnavailable, ErrContainerOrchestratorNotAvailable)
+		return h.errorResponse(quicwire.StatusUnavailable, ErrContainerOrchestratorNotAvailable)
 	}
 
 	var logsReq ContainerLogsRequest
-	if err := DecodePayload(req.Payload, &logsReq); err != nil {
-		return h.errorResponse(StatusInvalidRequest, ErrContainerDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &logsReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrContainerDecodingFailed{Cause: err})
 	}
 
 	if logsReq.ID == "" {
-		return h.errorResponse(StatusInvalidArgument, ErrContainerMissingID)
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrContainerMissingID)
 	}
 
 	// Build log options
@@ -658,30 +625,30 @@ func (h *ContainerHandler) handleLogs(ctx context.Context, req *Request) *Respon
 		Timestamp: time.Now().Unix(),
 	}
 
-	payload, err := EncodePayload(resp)
+	payload, err := quicwire.EncodePayload(resp)
 	if err != nil {
-		return h.errorResponse(StatusInternalError, ErrContainerEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrContainerEncodingFailed{Cause: err})
 	}
 
-	return &Response{
-		Status:  StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
 
 // handleAttest performs TPM attestation for a container
-func (h *ContainerHandler) handleAttest(ctx context.Context, req *Request) *Response {
+func (h *ContainerHandler) handleAttest(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.orchestrator == nil {
-		return h.errorResponse(StatusUnavailable, ErrContainerOrchestratorNotAvailable)
+		return h.errorResponse(quicwire.StatusUnavailable, ErrContainerOrchestratorNotAvailable)
 	}
 
 	var attestReq ContainerAttestRequest
-	if err := DecodePayload(req.Payload, &attestReq); err != nil {
-		return h.errorResponse(StatusInvalidRequest, ErrContainerDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &attestReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrContainerDecodingFailed{Cause: err})
 	}
 
 	if attestReq.ID == "" {
-		return h.errorResponse(StatusInvalidArgument, ErrContainerMissingID)
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrContainerMissingID)
 	}
 
 	report, err := h.orchestrator.Attest(ctx, attestReq.ID)
@@ -705,13 +672,13 @@ func (h *ContainerHandler) handleAttest(ctx context.Context, req *Request) *Resp
 		PCRValues:    report.PCRValues,
 	}
 
-	payload, err := EncodePayload(resp)
+	payload, err := quicwire.EncodePayload(resp)
 	if err != nil {
-		return h.errorResponse(StatusInternalError, ErrContainerEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrContainerEncodingFailed{Cause: err})
 	}
 
-	return &Response{
-		Status:  StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
@@ -856,52 +823,52 @@ func (h *ContainerHandler) containerToInfo(c *container.Container) *ContainerInf
 }
 
 // errorResponse creates an error response with the given status and error
-func (h *ContainerHandler) errorResponse(status byte, err error) *Response {
-	return &Response{
+func (h *ContainerHandler) errorResponse(status byte, err error) *quicwire.Response {
+	return &quicwire.Response{
 		Status:  status,
 		Payload: []byte(err.Error()),
 	}
 }
 
 // containerErrorResponse maps container errors to appropriate status codes
-func (h *ContainerHandler) containerErrorResponse(err error) *Response {
+func (h *ContainerHandler) containerErrorResponse(err error) *quicwire.Response {
 	var status byte
 
 	switch {
 	case errors.Is(err, container.ErrContainerNotFound):
-		status = StatusNotFound
+		status = quicwire.StatusNotFound
 	case errors.Is(err, container.ErrContainerExists):
-		status = StatusAlreadyExists
+		status = quicwire.StatusAlreadyExists
 	case errors.Is(err, container.ErrContainerRunning):
-		status = StatusInvalidRequest
+		status = quicwire.StatusInvalidRequest
 	case errors.Is(err, container.ErrContainerStopped):
-		status = StatusInvalidRequest
+		status = quicwire.StatusInvalidRequest
 	case errors.Is(err, container.ErrInvalidSpec):
-		status = StatusInvalidArgument
+		status = quicwire.StatusInvalidArgument
 	case errors.Is(err, container.ErrInvalidName):
-		status = StatusInvalidArgument
+		status = quicwire.StatusInvalidArgument
 	case errors.Is(err, container.ErrInvalidImage):
-		status = StatusInvalidArgument
+		status = quicwire.StatusInvalidArgument
 	case errors.Is(err, container.ErrInvalidContainerID):
-		status = StatusInvalidArgument
+		status = quicwire.StatusInvalidArgument
 	case errors.Is(err, container.ErrAttestationFailed):
-		status = StatusInternalError
+		status = quicwire.StatusInternalError
 	case errors.Is(err, container.ErrPolicyDenied):
-		status = StatusPermissionDenied
+		status = quicwire.StatusPermissionDenied
 	case errors.Is(err, container.ErrOrchestratorNotInitialized):
-		status = StatusUnavailable
+		status = quicwire.StatusUnavailable
 	case errors.Is(err, container.ErrOrchestratorClosed):
-		status = StatusUnavailable
+		status = quicwire.StatusUnavailable
 	case errors.Is(err, container.ErrOperationTimeout):
-		status = StatusTimeout
+		status = quicwire.StatusTimeout
 	case errors.Is(err, container.ErrImageNotFound):
-		status = StatusNotFound
+		status = quicwire.StatusNotFound
 	case errors.Is(err, container.ErrImageVerificationFailed):
-		status = StatusPermissionDenied
+		status = quicwire.StatusPermissionDenied
 	case errors.Is(err, container.ErrImagePullFailed):
-		status = StatusInternalError
+		status = quicwire.StatusInternalError
 	default:
-		status = StatusInternalError
+		status = quicwire.StatusInternalError
 	}
 
 	return h.errorResponse(status, err)

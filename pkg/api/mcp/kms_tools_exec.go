@@ -57,6 +57,18 @@ var kmsToolDispatch = map[string]kmsToolHandler{
 	"kms_decrypt": (*ToolRegistry).executeKMSDecrypt,
 	"kms_verify":  (*ToolRegistry).executeKMSVerify,
 
+	// Hash, HMAC and rewrap
+	"kms_hash":        (*ToolRegistry).executeKMSHash,
+	"kms_hmac":        (*ToolRegistry).executeKMSHMAC,
+	"kms_verify_hmac": (*ToolRegistry).executeKMSVerifyHMAC,
+	"kms_rewrap":      (*ToolRegistry).executeKMSRewrap,
+
+	"kms_import_key":        (*ToolRegistry).executeKMSImportKey,
+	"kms_update_key_status": (*ToolRegistry).executeKMSUpdateKeyStatus,
+	"kms_list_key_versions": (*ToolRegistry).executeKMSListKeyVersions,
+	"kms_batch_encrypt":     (*ToolRegistry).executeKMSBatchEncrypt,
+	"kms_batch_decrypt":     (*ToolRegistry).executeKMSBatchDecrypt,
+
 	// Secrets
 	"secret_store":               (*ToolRegistry).executeSecretStore,
 	"secret_get":                 (*ToolRegistry).executeSecretGet,
@@ -64,6 +76,17 @@ var kmsToolDispatch = map[string]kmsToolHandler{
 	"secret_delete":              (*ToolRegistry).executeSecretDelete,
 	"secret_set_rotation_policy": (*ToolRegistry).executeSecretSetRotationPolicy,
 	"secret_get_rotation_policy": (*ToolRegistry).executeSecretGetRotationPolicy,
+	"secret_get_version":         (*ToolRegistry).executeSecretGetVersion,
+	"secret_list_versions":       (*ToolRegistry).executeSecretListVersions,
+	"secret_rotate":              (*ToolRegistry).executeSecretRotate,
+	"secret_rollback":            (*ToolRegistry).executeSecretRollback,
+	"secret_update_status":       (*ToolRegistry).executeSecretUpdateStatus,
+	"dek_create":                 (*ToolRegistry).executeDEKCreate,
+	"dek_list":                   (*ToolRegistry).executeDEKList,
+	"dek_get":                    (*ToolRegistry).executeDEKGet,
+	"dek_status":                 (*ToolRegistry).executeDEKStatus,
+	"dek_rotate":                 (*ToolRegistry).executeDEKRotate,
+	"dek_delete":                 (*ToolRegistry).executeDEKDelete,
 }
 
 // dispatchKMSTool routes a KMS or secrets tool by name. It returns
@@ -603,6 +626,94 @@ func (r *ToolRegistry) executeSecretGetRotationPolicy(ctx context.Context, args 
 	return marshalResult(result)
 }
 
+func (r *ToolRegistry) executeSecretGetVersion(ctx context.Context, args map[string]interface{}) (interface{}, error) {
+	secretID := getString(args, "secret_id")
+	if secretID == "" {
+		return nil, ErrSecretIDRequired
+	}
+	version := getInt64(args, "version")
+	if version <= 0 {
+		return nil, ErrSecretVersionRequired
+	}
+
+	result, err := r.service.SecretGetVersion(ctx, secretID, uint64(version))
+	if err != nil {
+		return nil, err
+	}
+	return marshalResult(result)
+}
+
+func (r *ToolRegistry) executeSecretListVersions(ctx context.Context, args map[string]interface{}) (interface{}, error) {
+	secretID := getString(args, "secret_id")
+	if secretID == "" {
+		return nil, ErrSecretIDRequired
+	}
+
+	result, err := r.service.SecretListVersions(ctx, secretID, int(getInt64(args, "limit")))
+	if err != nil {
+		return nil, err
+	}
+	return marshalResult(result)
+}
+
+func (r *ToolRegistry) executeSecretRotate(ctx context.Context, args map[string]interface{}) (interface{}, error) {
+	secretID := getString(args, "secret_id")
+	if secretID == "" {
+		return nil, ErrSecretIDRequired
+	}
+	newData, err := decodeBase64Arg(args, "new_data")
+	if err != nil {
+		return nil, err
+	}
+	if len(newData) == 0 {
+		return nil, ErrSecretDataRequired
+	}
+
+	result, err := r.service.SecretRotate(ctx, &SecretRotateRequest{
+		SecretID: secretID,
+		NewData:  newData,
+		Metadata: getStringMap(args, "metadata"),
+	})
+	if err != nil {
+		return nil, err
+	}
+	return marshalResult(result)
+}
+
+func (r *ToolRegistry) executeSecretRollback(ctx context.Context, args map[string]interface{}) (interface{}, error) {
+	secretID := getString(args, "secret_id")
+	if secretID == "" {
+		return nil, ErrSecretIDRequired
+	}
+	targetVersion := getInt64(args, "target_version")
+	if targetVersion <= 0 {
+		return nil, ErrSecretVersionRequired
+	}
+
+	result, err := r.service.SecretRollback(ctx, secretID, uint64(targetVersion))
+	if err != nil {
+		return nil, err
+	}
+	return marshalResult(result)
+}
+
+func (r *ToolRegistry) executeSecretUpdateStatus(ctx context.Context, args map[string]interface{}) (interface{}, error) {
+	secretID := getString(args, "secret_id")
+	if secretID == "" {
+		return nil, ErrSecretIDRequired
+	}
+	status := getString(args, "status")
+	if status == "" {
+		return nil, ErrSecretStatusRequired
+	}
+
+	result, err := r.service.SecretUpdateStatus(ctx, secretID, status)
+	if err != nil {
+		return nil, err
+	}
+	return marshalResult(result)
+}
+
 // decodeBase64Arg decodes an optional base64 string argument. An absent or
 // empty argument yields (nil, nil).
 func decodeBase64Arg(args map[string]interface{}, key string) ([]byte, error) {
@@ -618,4 +729,311 @@ func decodeBase64Arg(args map[string]interface{}, key string) ([]byte, error) {
 		}
 	}
 	return data, nil
+}
+
+// versionArg reads an optional key version argument; zero means absent.
+func versionArg(args map[string]interface{}, key string) (uint64, error) {
+	v := getInt64(args, key)
+	if v < 0 {
+		return 0, ErrKMSVersionNegative
+	}
+	return uint64(v), nil
+}
+
+func (r *ToolRegistry) executeKMSHash(ctx context.Context, args map[string]interface{}) (interface{}, error) {
+	data, err := decodeBase64Arg(args, "data")
+	if err != nil {
+		return nil, err
+	}
+	if len(data) == 0 {
+		return nil, ErrKMSDataRequired
+	}
+
+	result, err := r.service.KMSHash(ctx, &KMSHashRequest{
+		Data:          data,
+		HashAlgorithm: int32(getInt(args, "algorithm")),
+	})
+	if err != nil {
+		return nil, err
+	}
+	return marshalResult(result)
+}
+
+func (r *ToolRegistry) executeKMSHMAC(ctx context.Context, args map[string]interface{}) (interface{}, error) {
+	keyID := getString(args, "key_id")
+	if keyID == "" {
+		return nil, ErrKMSKeyIDRequired
+	}
+	message, err := decodeBase64Arg(args, "message")
+	if err != nil {
+		return nil, err
+	}
+	if len(message) == 0 {
+		return nil, ErrKMSMessageRequired
+	}
+
+	result, err := r.service.KMSHMAC(ctx, &KMSHMACRequest{
+		KeyID:         keyID,
+		Message:       message,
+		HashAlgorithm: int32(getInt(args, "hash_algorithm")),
+	})
+	if err != nil {
+		return nil, err
+	}
+	return marshalResult(result)
+}
+
+func (r *ToolRegistry) executeKMSVerifyHMAC(ctx context.Context, args map[string]interface{}) (interface{}, error) {
+	keyID := getString(args, "key_id")
+	if keyID == "" {
+		return nil, ErrKMSKeyIDRequired
+	}
+	message, err := decodeBase64Arg(args, "message")
+	if err != nil {
+		return nil, err
+	}
+	if len(message) == 0 {
+		return nil, ErrKMSMessageRequired
+	}
+	mac, err := decodeBase64Arg(args, "hmac")
+	if err != nil {
+		return nil, err
+	}
+	if len(mac) == 0 {
+		return nil, ErrKMSHMACRequired
+	}
+	keyVersion, err := versionArg(args, "key_version")
+	if err != nil {
+		return nil, err
+	}
+
+	result, err := r.service.KMSVerifyHMAC(ctx, &KMSVerifyHMACRequest{
+		KeyID:         keyID,
+		Message:       message,
+		HMAC:          mac,
+		HashAlgorithm: int32(getInt(args, "hash_algorithm")),
+		KeyVersion:    keyVersion,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return marshalResult(result)
+}
+
+func (r *ToolRegistry) executeKMSRewrap(ctx context.Context, args map[string]interface{}) (interface{}, error) {
+	keyID := getString(args, "key_id")
+	if keyID == "" {
+		return nil, ErrKMSKeyIDRequired
+	}
+	ciphertext, err := decodeBase64Arg(args, "ciphertext")
+	if err != nil {
+		return nil, err
+	}
+	if len(ciphertext) == 0 {
+		return nil, ErrKMSCiphertextRequired
+	}
+	aad, err := decodeBase64Arg(args, "context")
+	if err != nil {
+		return nil, err
+	}
+	nonce, err := decodeBase64Arg(args, "nonce")
+	if err != nil {
+		return nil, err
+	}
+	sourceVersion, err := versionArg(args, "source_version")
+	if err != nil {
+		return nil, err
+	}
+
+	// A non-zero source_version is passed on so the shared backend refuses
+	// it with the same typed error gRPC, QUIC and REST return.
+	result, err := r.service.KMSRewrap(ctx, &KMSRewrapRequest{
+		KeyID:         keyID,
+		Ciphertext:    ciphertext,
+		Context:       aad,
+		Nonce:         nonce,
+		SourceVersion: sourceVersion,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return marshalResult(result)
+}
+
+func (r *ToolRegistry) executeKMSImportKey(ctx context.Context, args map[string]interface{}) (interface{}, error) {
+	material, err := decodeBase64Arg(args, "key_material")
+	if err != nil {
+		return nil, err
+	}
+	if len(material) == 0 {
+		return nil, ErrKMSKeyMaterialRequired
+	}
+	spec := getMap(args, "key_spec")
+	if spec == nil {
+		return nil, ErrKMSKeySpecRequired
+	}
+
+	usageNumbers := getIntSlice(spec, "usage")
+	usage := make([]int32, len(usageNumbers))
+	for i, u := range usageNumbers {
+		usage[i] = int32(u)
+	}
+
+	result, err := r.service.KMSImportKey(ctx, &KMSImportKeyRequest{
+		Name:               getString(args, "name"),
+		Description:        getString(args, "description"),
+		KeyMaterial:        material,
+		WrappingKeyID:      getString(args, "wrapping_key_id"),
+		Algorithm:          int32(getInt(spec, "algorithm")),
+		KeySize:            int32(getInt(spec, "key_size")),
+		Usage:              usage,
+		Exportable:         getBool(spec, "exportable"),
+		DeletionProtection: getBool(spec, "deletion_protection"),
+		Tags:               getStringMap(args, "tags"),
+	})
+	if err != nil {
+		return nil, err
+	}
+	return marshalResult(result)
+}
+
+func (r *ToolRegistry) executeKMSUpdateKeyStatus(ctx context.Context, args map[string]interface{}) (interface{}, error) {
+	keyID := getString(args, "key_id")
+	if keyID == "" {
+		return nil, ErrKMSKeyIDRequired
+	}
+	version, err := versionArg(args, "version")
+	if err != nil {
+		return nil, err
+	}
+
+	// An unknown status number is passed on so the shared backend refuses
+	// it with the same typed error gRPC returns.
+	result, err := r.service.KMSUpdateKeyStatus(ctx, &KMSUpdateKeyStatusRequest{
+		KeyID:   keyID,
+		Version: version,
+		Status:  int32(getInt(args, "status")),
+	})
+	if err != nil {
+		return nil, err
+	}
+	return marshalResult(result)
+}
+
+func (r *ToolRegistry) executeKMSListKeyVersions(ctx context.Context, args map[string]interface{}) (interface{}, error) {
+	keyID := getString(args, "key_id")
+	if keyID == "" {
+		return nil, ErrKMSKeyIDRequired
+	}
+
+	result, err := r.service.KMSListKeyVersions(ctx, &KMSListKeyVersionsRequest{
+		KeyID:  keyID,
+		Limit:  int32(getInt(args, "limit")),
+		Cursor: getString(args, "cursor"),
+	})
+	if err != nil {
+		return nil, err
+	}
+	return marshalResult(result)
+}
+
+func (r *ToolRegistry) executeKMSBatchEncrypt(ctx context.Context, args map[string]interface{}) (interface{}, error) {
+	keyID, rawItems, err := batchArgs(args)
+	if err != nil {
+		return nil, err
+	}
+
+	items := make([]KMSBatchEncryptItem, len(rawItems))
+	for i, raw := range rawItems {
+		plaintext, err := decodeBase64Arg(raw, "plaintext")
+		if err != nil {
+			return nil, err
+		}
+		aad, err := decodeBase64Arg(raw, "context")
+		if err != nil {
+			return nil, err
+		}
+		nonce, err := decodeBase64Arg(raw, "nonce")
+		if err != nil {
+			return nil, err
+		}
+		items[i] = KMSBatchEncryptItem{
+			ItemID:    getString(raw, "item_id"),
+			Plaintext: plaintext,
+			Context:   aad,
+			Nonce:     nonce,
+		}
+	}
+
+	result, err := r.service.KMSBatchEncrypt(ctx, &KMSBatchEncryptRequest{KeyID: keyID, Items: items})
+	if err != nil {
+		return nil, err
+	}
+	return marshalResult(result)
+}
+
+func (r *ToolRegistry) executeKMSBatchDecrypt(ctx context.Context, args map[string]interface{}) (interface{}, error) {
+	keyID, rawItems, err := batchArgs(args)
+	if err != nil {
+		return nil, err
+	}
+
+	items := make([]KMSBatchDecryptItem, len(rawItems))
+	for i, raw := range rawItems {
+		ciphertext, err := decodeBase64Arg(raw, "ciphertext")
+		if err != nil {
+			return nil, err
+		}
+		aad, err := decodeBase64Arg(raw, "context")
+		if err != nil {
+			return nil, err
+		}
+		nonce, err := decodeBase64Arg(raw, "nonce")
+		if err != nil {
+			return nil, err
+		}
+		keyVersion, err := versionArg(raw, "key_version")
+		if err != nil {
+			return nil, err
+		}
+		items[i] = KMSBatchDecryptItem{
+			ItemID:     getString(raw, "item_id"),
+			Ciphertext: ciphertext,
+			Context:    aad,
+			Nonce:      nonce,
+			KeyVersion: keyVersion,
+		}
+	}
+
+	result, err := r.service.KMSBatchDecrypt(ctx, &KMSBatchDecryptRequest{KeyID: keyID, Items: items})
+	if err != nil {
+		return nil, err
+	}
+	return marshalResult(result)
+}
+
+// batchArgs reads the key_id and items arguments the batch tools share and
+// applies the gRPC limits: a key ID, one to kmsMaxBatchItems items, and every
+// item an object.
+func batchArgs(args map[string]interface{}) (string, []map[string]interface{}, error) {
+	keyID := getString(args, "key_id")
+	if keyID == "" {
+		return "", nil, ErrKMSKeyIDRequired
+	}
+	rawItems, _ := args["items"].([]interface{})
+	if len(rawItems) == 0 {
+		return "", nil, ErrKMSBatchItemsRequired
+	}
+	if len(rawItems) > kmsMaxBatchItems {
+		return "", nil, ErrKMSBatchTooLarge
+	}
+	items := make([]map[string]interface{}, len(rawItems))
+	for i, raw := range rawItems {
+		item, ok := raw.(map[string]interface{})
+		if !ok {
+			return "", nil, ErrKMSBatchItemInvalid
+		}
+		items[i] = item
+	}
+	return keyID, items, nil
 }

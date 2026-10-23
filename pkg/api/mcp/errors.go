@@ -13,18 +13,6 @@
 
 package mcp
 
-// MessageError is a typed error carrying a fully formatted message with no
-// underlying cause. It replaces inline formatted-error constructions that do not wrap
-// another error.
-type MessageError struct {
-	Msg string
-}
-
-// Error implements the error interface.
-func (e *MessageError) Error() string {
-	return e.Msg
-}
-
 // SentinelCauseError attaches an underlying cause to a package sentinel
 // error so errors.Is matches both the sentinel and the cause.
 type SentinelCauseError struct {
@@ -42,20 +30,31 @@ func (e *SentinelCauseError) Unwrap() []error {
 	return []error{e.Sentinel, e.Cause}
 }
 
-// WrappedError wraps an underlying cause with a contextual message while
-// preserving errors.Is / errors.As matching through Unwrap. It replaces
-// inline formatted-error constructions that wrap another error.
-type WrappedError struct {
-	Msg string
-	Err error
+// HTTPTLSRequiredError is returned by Start when the HTTP transport has no
+// usable server certificate. The HTTP transport serves TLS 1.3 only and
+// never falls back to plaintext.
+type HTTPTLSRequiredError struct {
+	Addr string
 }
 
 // Error implements the error interface.
-func (e *WrappedError) Error() string {
-	return e.Msg + ": " + e.Err.Error()
+func (e *HTTPTLSRequiredError) Error() string {
+	return "mcp: HTTP transport on " + e.Addr + " requires a TLS server certificate; plaintext is not served"
 }
 
-// Unwrap returns the wrapped cause.
-func (e *WrappedError) Unwrap() error {
+// HTTPListenError is returned by Start when the HTTP transport cannot bind
+// its listen address.
+type HTTPListenError struct {
+	Addr string
+	Err  error
+}
+
+// Error implements the error interface.
+func (e *HTTPListenError) Error() string {
+	return "mcp: listen on " + e.Addr + ": " + e.Err.Error()
+}
+
+// Unwrap returns the bind failure.
+func (e *HTTPListenError) Unwrap() error {
 	return e.Err
 }

@@ -14,19 +14,15 @@ import (
 	"crypto/x509/pkix"
 	"errors"
 	"math/big"
-	"net"
 	"testing"
 	"time"
 
 	pb "github.com/jeremyhahn/go-quicbaas/api/proto"
-	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/compute/pxe"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
 	dnsentities "github.com/jeremyhahn/go-trusted-platform/pkg/dns/entities"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/health"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -68,12 +64,9 @@ func TestCoverageFinalUncoveredErrors(t *testing.T) {
 
 		// Overlay/Gateway errors
 		{"ErrOverlayServiceNotAvailable", ErrOverlayServiceNotAvailable{}, "overlay network service not available"},
-		{"ErrOverlayOperationNotImplemented", ErrOverlayOperationNotImplemented{Operation: "create"}, "overlay operation not implemented: create"},
 		{"ErrGatewayServiceNotAvailable", ErrGatewayServiceNotAvailable{}, "gateway service not available"},
-		{"ErrGatewayOperationNotImplemented", ErrGatewayOperationNotImplemented{Operation: "delete"}, "gateway operation not implemented: delete"},
 
 		// TPM errors
-		{"ErrTPMOperationNotImplemented", ErrTPMOperationNotImplemented{Operation: "seal"}, "TPM operation not implemented: seal"},
 		{"ErrTPMInvalidSize", ErrTPMInvalidSize{Max: 64, Requested: 128}, "requested size 128 exceeds maximum 64 bytes"},
 
 		// mTLS errors
@@ -81,8 +74,7 @@ func TestCoverageFinalUncoveredErrors(t *testing.T) {
 		{"ErrMTLSNoTLSInfo", ErrMTLSNoTLSInfo{}, ""},
 		{"ErrMTLSNoCertificates", ErrMTLSNoCertificates{}, ""},
 
-		// IAM adapter errors
-		{"ErrStreamingNotSupported", ErrStreamingNotSupported{}, "streaming RPCs are not supported"},
+		// IAM authorizer errors
 		{"ErrPEPClientNotAvailable", ErrPEPClientNotAvailable{}, ""},
 
 		// TPM2/IDevID errors
@@ -103,6 +95,8 @@ func TestCoverageFinalUncoveredErrors(t *testing.T) {
 		// Device errors
 		{"ErrDeviceOperationFailed", ErrDeviceOperationFailed{Operation: "provision", Cause: sentinel}, "device operation provision failed"},
 		{"ErrDeviceProfileServiceNotAvailable", ErrDeviceProfileServiceNotAvailable{}, "device: profile service not available"},
+		{"ErrDeviceProfileLookupFailed", ErrDeviceProfileLookupFailed{DeviceID: "7", Cause: sentinel}, "device profile lookup failed for device 7"},
+		{"ErrAttestationFailed with cause", ErrAttestationFailed{Reason: "peer verification did not complete", Err: sentinel}, "attestation failed: peer verification did not complete: "},
 
 		// TLS config
 		{"ErrTLSConfigFailed", ErrTLSConfigFailed{Reason: "missing cert"}, "tls config failed: missing cert"},
@@ -112,17 +106,6 @@ func TestCoverageFinalUncoveredErrors(t *testing.T) {
 		{"ErrTenantDEKDeprovision", ErrTenantDEKDeprovision{TenantID: "t2", Cause: sentinel}, "failed to deprovision DEK for tenant t2"},
 
 		// PXE errors
-		{"ErrPXEDeviceNotFound_by_id", ErrPXEDeviceNotFound{DeviceID: "d1"}, "PXE device not found: d1"},
-		{"ErrPXEDeviceNotFound_by_mac", ErrPXEDeviceNotFound{MACAddress: "aa:bb:cc:dd:ee:ff"}, "PXE device not found with MAC: aa:bb:cc:dd:ee:ff"},
-		{"ErrPXERegistrationFailed", ErrPXERegistrationFailed{MACAddress: "00:11:22:33:44:55", Cause: sentinel}, "PXE device registration failed"},
-		{"ErrPXEInvalidState", ErrPXEInvalidState{State: "bad"}, "invalid PXE provisioning state: bad"},
-		{"ErrPXEStateTransitionFailed", ErrPXEStateTransitionFailed{DeviceID: "d1", FromState: "new", ToState: "enrolled", Cause: sentinel}, "PXE state transition failed"},
-		{"ErrPXEEnrollmentFailed", ErrPXEEnrollmentFailed{DeviceID: "d1", Cause: sentinel}, "PXE device enrollment failed"},
-		{"ErrPXEAuthorizationFailed", ErrPXEAuthorizationFailed{DeviceID: "d1", Cause: sentinel}, "PXE device authorization failed"},
-		{"ErrPXEQuarantineFailed", ErrPXEQuarantineFailed{DeviceID: "d1", Cause: sentinel}, "PXE device quarantine failed"},
-		{"ErrPXERetryFailed", ErrPXERetryFailed{DeviceID: "d1", Cause: sentinel}, "PXE device retry failed"},
-		{"ErrPXEServiceStartFailed", ErrPXEServiceStartFailed{Cause: sentinel}, "PXE service failed to start"},
-		{"ErrPXEServiceStopFailed", ErrPXEServiceStopFailed{Cause: sentinel}, "PXE service failed to stop"},
 	}
 
 	for _, tc := range tests {
@@ -153,16 +136,10 @@ func TestCoverageFinalUnwrapMethods(t *testing.T) {
 		{"ErrTPM2OperationFailed", ErrTPM2OperationFailed{Operation: "x", Cause: sentinel}, sentinel},
 		{"ErrContainerOperationFailed", ErrContainerOperationFailed{Operation: "x", Cause: sentinel}, sentinel},
 		{"ErrDeviceOperationFailed", ErrDeviceOperationFailed{Operation: "x", Cause: sentinel}, sentinel},
+		{"ErrDeviceProfileLookupFailed", ErrDeviceProfileLookupFailed{DeviceID: "x", Cause: sentinel}, sentinel},
+		{"ErrAttestationFailed", ErrAttestationFailed{Reason: "x", Err: sentinel}, sentinel},
 		{"ErrTenantDEKProvision", ErrTenantDEKProvision{TenantID: "t", Cause: sentinel}, sentinel},
 		{"ErrTenantDEKDeprovision", ErrTenantDEKDeprovision{TenantID: "t", Cause: sentinel}, sentinel},
-		{"ErrPXERegistrationFailed", ErrPXERegistrationFailed{MACAddress: "m", Cause: sentinel}, sentinel},
-		{"ErrPXEStateTransitionFailed", ErrPXEStateTransitionFailed{DeviceID: "d", FromState: "a", ToState: "b", Cause: sentinel}, sentinel},
-		{"ErrPXEEnrollmentFailed", ErrPXEEnrollmentFailed{DeviceID: "d", Cause: sentinel}, sentinel},
-		{"ErrPXEAuthorizationFailed", ErrPXEAuthorizationFailed{DeviceID: "d", Cause: sentinel}, sentinel},
-		{"ErrPXEQuarantineFailed", ErrPXEQuarantineFailed{DeviceID: "d", Cause: sentinel}, sentinel},
-		{"ErrPXERetryFailed", ErrPXERetryFailed{DeviceID: "d", Cause: sentinel}, sentinel},
-		{"ErrPXEServiceStartFailed", ErrPXEServiceStartFailed{Cause: sentinel}, sentinel},
-		{"ErrPXEServiceStopFailed", ErrPXEServiceStopFailed{Cause: sentinel}, sentinel},
 	}
 
 	for _, tc := range unwrapCases {
@@ -409,18 +386,19 @@ func TestCoverageFinalBuildDataKeySpecForQUIC(t *testing.T) {
 		name      string
 		algorithm platformv1.KMSKeyAlgorithm
 		expected  pb.KeyAlgorithm
+		bits      int32
 	}{
-		{"unspecified_defaults_aes256", platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_UNSPECIFIED, pb.KeyAlgorithm_KEY_ALG_AES_256_GCM},
-		{"aes128", platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_AES_128, pb.KeyAlgorithm_KEY_ALG_AES_128_GCM},
-		{"aes192", platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_AES_192, pb.KeyAlgorithm_KEY_ALG_AES_192_GCM},
-		{"aes256", platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_AES_256, pb.KeyAlgorithm_KEY_ALG_AES_256_GCM},
-		{"chacha20", platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_CHACHA20_POLY1305, pb.KeyAlgorithm_KEY_ALG_CHACHA20_POLY1305},
+		{"unspecified_defaults_aes256", platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_UNSPECIFIED, pb.KeyAlgorithm_KEY_ALG_AES_256_GCM, 256},
+		{"aes128", platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_AES_128, pb.KeyAlgorithm_KEY_ALG_AES_128_GCM, 128},
+		{"aes192", platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_AES_192, pb.KeyAlgorithm_KEY_ALG_AES_192_GCM, 192},
+		{"aes256", platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_AES_256, pb.KeyAlgorithm_KEY_ALG_AES_256_GCM, 256},
+		{"chacha20", platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_CHACHA20_POLY1305, pb.KeyAlgorithm_KEY_ALG_CHACHA20_POLY1305, 256},
 	}
 
 	for _, tc := range valid {
 		t.Run("valid_"+tc.name, func(t *testing.T) {
 			t.Parallel()
-			spec, err := buildDataKeySpecForQUIC(int32(tc.algorithm), 256)
+			spec, err := buildDataKeySpecForQUIC(int32(tc.algorithm), 0)
 			if err != nil {
 				t.Fatalf("buildDataKeySpecForQUIC(%v) error: %v", tc.algorithm, err)
 			}
@@ -430,8 +408,8 @@ func TestCoverageFinalBuildDataKeySpecForQUIC(t *testing.T) {
 			if spec.Algorithm != tc.expected {
 				t.Errorf("Algorithm = %v, want %v", spec.Algorithm, tc.expected)
 			}
-			if spec.KeySize != 256 {
-				t.Errorf("KeySize = %d, want 256", spec.KeySize)
+			if spec.KeySize != tc.bits {
+				t.Errorf("KeySize = %d, want %d", spec.KeySize, tc.bits)
 			}
 		})
 	}
@@ -526,137 +504,6 @@ func TestCoverageFinalConvertKeyMetadataToQUIC(t *testing.T) {
 // =============================================================================
 // SDN Conversion Helpers
 // =============================================================================
-
-func TestCoverageFinalConvertPbPolicyToSDNPolicy(t *testing.T) {
-	t.Parallel()
-
-	t.Run("nil", func(t *testing.T) {
-		t.Parallel()
-		if convertPbPolicyToSDNPolicy("port1", nil) != nil {
-			t.Error("expected nil for nil input")
-		}
-	})
-
-	t.Run("with_rules", func(t *testing.T) {
-		t.Parallel()
-		now := timestamppb.Now()
-		p := &platformv1.Policy{
-			CreatedAt: now,
-			Config: &platformv1.PolicyConfig{
-				Rules: []*platformv1.PolicyRule{
-					{
-						Priority: 10,
-						Action:   platformv1.PolicyRuleAction_POLICY_RULE_ACTION_ALLOW,
-						Match: &platformv1.PolicyRuleMatch{
-							SourceIp: "10.0.0.0/8",
-						},
-					},
-				},
-			},
-		}
-		result := convertPbPolicyToSDNPolicy("port-1", p)
-		if result.PortID != "port-1" {
-			t.Errorf("PortID = %q", result.PortID)
-		}
-		if result.IssuedAt == 0 {
-			t.Error("IssuedAt should not be 0")
-		}
-		if len(result.ACLs) != 1 {
-			t.Errorf("expected 1 ACL, got %d", len(result.ACLs))
-		}
-	})
-}
-
-func TestCoverageFinalConvertSDNACLsToPbRules(t *testing.T) {
-	t.Parallel()
-
-	t.Run("nil_input", func(t *testing.T) {
-		t.Parallel()
-		if convertSDNACLsToPbRules(nil) != nil {
-			t.Error("expected nil for nil input")
-		}
-	})
-
-	t.Run("various_actions", func(t *testing.T) {
-		t.Parallel()
-		acls := []*SDNACLRule{
-			{Priority: 10, Action: "allow", Match: &SDNFlowMatch{IPv4Src: "10.0.0.0/8", IPv4Dst: "192.168.0.0/16", TCPSrc: 8080, TCPDst: 443, VLANVid: 100}},
-			{Priority: 20, Action: "deny"},
-			{Priority: 30, Action: "something"},
-		}
-		rules := convertSDNACLsToPbRules(acls)
-		if len(rules) != 3 {
-			t.Fatalf("expected 3 rules, got %d", len(rules))
-		}
-		if rules[0].Action != platformv1.PolicyRuleAction_POLICY_RULE_ACTION_ALLOW {
-			t.Error("first rule should be ALLOW")
-		}
-		if rules[1].Action != platformv1.PolicyRuleAction_POLICY_RULE_ACTION_DENY {
-			t.Error("second rule should be DENY")
-		}
-		if rules[2].Action != platformv1.PolicyRuleAction_POLICY_RULE_ACTION_UNSPECIFIED {
-			t.Error("third rule should be UNSPECIFIED")
-		}
-		if rules[0].Match.SourceIp != "10.0.0.0/8" {
-			t.Errorf("SourceIp = %q", rules[0].Match.SourceIp)
-		}
-		if rules[0].Match.SourcePort != 8080 {
-			t.Errorf("SourcePort = %d", rules[0].Match.SourcePort)
-		}
-		if rules[0].Match.VlanId != 100 {
-			t.Errorf("VlanId = %d", rules[0].Match.VlanId)
-		}
-	})
-}
-
-func TestCoverageFinalConvertPbRulesToSDNACLs(t *testing.T) {
-	t.Parallel()
-
-	t.Run("nil_input", func(t *testing.T) {
-		t.Parallel()
-		if convertPbRulesToSDNACLs(nil) != nil {
-			t.Error("expected nil for nil input")
-		}
-	})
-
-	t.Run("various_actions", func(t *testing.T) {
-		t.Parallel()
-		rules := []*platformv1.PolicyRule{
-			{
-				Priority: 10,
-				Action:   platformv1.PolicyRuleAction_POLICY_RULE_ACTION_ALLOW,
-				Match: &platformv1.PolicyRuleMatch{
-					SourceIp:        "10.0.0.0/8",
-					DestinationIp:   "192.168.0.0/16",
-					SourcePort:      8080,
-					DestinationPort: 443,
-					VlanId:          100,
-				},
-			},
-			{Priority: 20, Action: platformv1.PolicyRuleAction_POLICY_RULE_ACTION_DENY},
-			{Priority: 30, Action: platformv1.PolicyRuleAction_POLICY_RULE_ACTION_UNSPECIFIED},
-		}
-		acls := convertPbRulesToSDNACLs(rules)
-		if len(acls) != 3 {
-			t.Fatalf("expected 3 ACLs, got %d", len(acls))
-		}
-		if acls[0].Action != "allow" {
-			t.Errorf("first ACL action = %q, want allow", acls[0].Action)
-		}
-		if acls[1].Action != "deny" {
-			t.Errorf("second ACL action = %q, want deny", acls[1].Action)
-		}
-		if acls[2].Action != "unspecified" {
-			t.Errorf("third ACL action = %q, want unspecified", acls[2].Action)
-		}
-		if acls[0].Match == nil {
-			t.Fatal("first ACL match should not be nil")
-		}
-		if acls[0].Match.IPv4Src != "10.0.0.0/8" {
-			t.Errorf("IPv4Src = %q", acls[0].Match.IPv4Src)
-		}
-	})
-}
 
 // =============================================================================
 // DNS Conversion Helpers
@@ -933,157 +780,6 @@ func TestCoverageFinalEncodePublicKeyPEM(t *testing.T) {
 }
 
 // =============================================================================
-// formatKeyAttributesMap / formatX509CertificateInfo
-// =============================================================================
-
-func TestCoverageFinalFormatKeyAttributesMap(t *testing.T) {
-	t.Parallel()
-
-	t.Run("nil", func(t *testing.T) {
-		t.Parallel()
-		result := formatKeyAttributesMap(nil)
-		if len(result) != 0 {
-			t.Errorf("expected empty map for nil, got %d entries", len(result))
-		}
-	})
-
-	t.Run("with_algorithm", func(t *testing.T) {
-		t.Parallel()
-		attrs := &xkmssdk.KeyAttributes{
-			KeyAlgorithm: x509.ECDSA,
-		}
-		result := formatKeyAttributesMap(attrs)
-		if _, ok := result["algorithm"]; !ok {
-			t.Error("expected algorithm key")
-		}
-		if _, ok := result["created_at"]; !ok {
-			t.Error("expected created_at key")
-		}
-	})
-}
-
-func TestCoverageFinalFormatX509CertificateInfo(t *testing.T) {
-	t.Parallel()
-
-	t.Run("nil", func(t *testing.T) {
-		t.Parallel()
-		result := formatX509CertificateInfo(nil)
-		if len(result) != 0 {
-			t.Errorf("expected empty map for nil, got %d entries", len(result))
-		}
-	})
-
-	t.Run("valid_cert", func(t *testing.T) {
-		t.Parallel()
-		key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-		if err != nil {
-			t.Fatal(err)
-		}
-		template := &x509.Certificate{
-			SerialNumber: big.NewInt(42),
-			Subject:      pkix.Name{CommonName: "test-cn"},
-			Issuer:       pkix.Name{CommonName: "test-issuer"},
-			NotBefore:    time.Now().Add(-time.Hour),
-			NotAfter:     time.Now().Add(time.Hour),
-		}
-		certDER, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
-		if err != nil {
-			t.Fatal(err)
-		}
-		cert, err := x509.ParseCertificate(certDER)
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		result := formatX509CertificateInfo(cert)
-		if result["subject_cn"] != "test-cn" {
-			t.Errorf("subject_cn = %v", result["subject_cn"])
-		}
-		if result["fingerprint"] == "" {
-			t.Error("fingerprint should not be empty")
-		}
-	})
-}
-
-// =============================================================================
-// PXE Conversion Helpers
-// =============================================================================
-
-func TestCoverageFinalConvertDeviceInfoToPXEDevice(t *testing.T) {
-	t.Parallel()
-
-	t.Run("nil", func(t *testing.T) {
-		t.Parallel()
-		if convertDeviceInfoToPXEDevice(nil) != nil {
-			t.Error("expected nil for nil input")
-		}
-	})
-
-	t.Run("without_profile", func(t *testing.T) {
-		t.Parallel()
-		mac, _ := net.ParseMAC("aa:bb:cc:dd:ee:ff")
-		now := time.Now()
-		info := &pxe.DeviceInfo{
-			ID:                "dev-1",
-			MACAddress:        mac,
-			PortID:            "port-1",
-			State:             "discovered",
-			StateReason:       "new device",
-			CertificateSerial: "serial-123",
-			CurrentVLAN:       100,
-			TargetVLAN:        200,
-			CreatedAt:         now,
-			UpdatedAt:         now,
-			StateChangedAt:    now,
-			RetryCount:        3,
-		}
-		result := convertDeviceInfoToPXEDevice(info)
-		if result == nil {
-			t.Fatal("expected non-nil result")
-		}
-		if result.ID != "dev-1" {
-			t.Errorf("ID = %q", result.ID)
-		}
-		if result.MACAddress != "aa:bb:cc:dd:ee:ff" {
-			t.Errorf("MACAddress = %q", result.MACAddress)
-		}
-		if result.CurrentVLAN != 100 {
-			t.Errorf("CurrentVLAN = %d", result.CurrentVLAN)
-		}
-		if result.RetryCount != 3 {
-			t.Errorf("RetryCount = %d", result.RetryCount)
-		}
-		if result.ProfileID != "" {
-			t.Errorf("ProfileID should be empty, got %q", result.ProfileID)
-		}
-	})
-
-	t.Run("with_profile", func(t *testing.T) {
-		t.Parallel()
-		mac, _ := net.ParseMAC("11:22:33:44:55:66")
-		info := &pxe.DeviceInfo{
-			ID:             "dev-2",
-			MACAddress:     mac,
-			State:          "enrolled",
-			CreatedAt:      time.Now(),
-			UpdatedAt:      time.Now(),
-			StateChangedAt: time.Now(),
-			Profile: &entities.DeviceProfile{
-				ID:   42,
-				Name: "default-profile",
-			},
-		}
-		result := convertDeviceInfoToPXEDevice(info)
-		if result.ProfileID != "42" {
-			t.Errorf("ProfileID = %q, want 42", result.ProfileID)
-		}
-		if result.ProfileName != "default-profile" {
-			t.Errorf("ProfileName = %q", result.ProfileName)
-		}
-	})
-}
-
-// =============================================================================
 // Service helper functions
 // =============================================================================
 
@@ -1197,52 +893,19 @@ func TestCoverageFinalHealthStatusFromHealthStatus(t *testing.T) {
 // QUIC Handler Construction and Routing
 // =============================================================================
 
-func TestCoverageFinalNewQUICServiceHandler(t *testing.T) {
-	t.Parallel()
-
-	t.Run("nil_logger", func(t *testing.T) {
-		t.Parallel()
-		h := NewQUICServiceHandler(nil)
-		if h == nil {
-			t.Fatal("handler should not be nil")
-		}
-	})
-
-	t.Run("with_options", func(t *testing.T) {
-		t.Parallel()
-		logger := logging.DefaultLogger()
-		h := NewQUICServiceHandler(logger,
-			WithQUICDNSService(nil),
-			WithQUICHealthRegistry(nil),
-			WithQUICAuthMiddleware(nil),
-			WithQUICSDNService(nil),
-			WithQUICIAMService(nil),
-			WithQUICKMSService(nil),
-			WithQUICCryptoService(nil),
-			WithQUICTPM2Service(nil),
-			WithQUICDaemonService(nil),
-			WithQUICOverlayHandler(nil),
-			WithQUICGatewayHandler(nil),
-		)
-		if h == nil {
-			t.Fatal("handler should not be nil")
-		}
-	})
-}
-
 func TestCoverageFinalHandleRequestNilRequest(t *testing.T) {
 	t.Parallel()
-	h := NewQUICServiceHandler(logging.DefaultLogger())
+	h := newTestQUICServiceHandler(logging.DefaultLogger())
 	resp := h.HandleRequest(context.Background(), nil)
-	if resp.Status != quic.StatusInvalidRequest {
-		t.Errorf("Status = 0x%02X, want 0x%02X", resp.Status, quic.StatusInvalidRequest)
+	if resp.Status != quicwire.StatusInvalidRequest {
+		t.Errorf("Status = 0x%02X, want 0x%02X", resp.Status, quicwire.StatusInvalidRequest)
 	}
 }
 
 func TestCoverageFinalHandleRequestUnknownOpcode(t *testing.T) {
 	t.Parallel()
-	h := NewQUICServiceHandler(logging.DefaultLogger())
-	req := &quic.Request{Opcode: 0xFE} // Unlikely to be assigned
+	h := newTestQUICServiceHandler(logging.DefaultLogger())
+	req := &quicwire.Request{Opcode: 0xFE} // Unlikely to be assigned
 	resp := h.HandleRequest(context.Background(), req)
 	// Might hit a PXE extended range; if so it returns unavailable. Either way, not panic.
 	if resp == nil {
@@ -1253,7 +916,7 @@ func TestCoverageFinalHandleRequestUnknownOpcode(t *testing.T) {
 func TestCoverageFinalQUICHandlerSetters(t *testing.T) {
 	t.Parallel()
 
-	h := NewQUICServiceHandler(logging.DefaultLogger())
+	h := newTestQUICServiceHandler(logging.DefaultLogger())
 
 	// Test all setters don't panic
 	h.SetCAHandler(nil)
@@ -1269,8 +932,6 @@ func TestCoverageFinalQUICHandlerSetters(t *testing.T) {
 	h.SetContainerOrchestrator(nil)
 	h.SetAttestationHandler(nil)
 	h.SetAttestationService(nil)
-	h.SetVMHandler(nil)
-	h.SetVMOrchestrator(nil)
 	h.SetDaemonService(nil)
 	h.SetOverlayHandler(nil)
 	h.SetGatewayHandler(nil)
@@ -1278,9 +939,9 @@ func TestCoverageFinalQUICHandlerSetters(t *testing.T) {
 
 func TestCoverageFinalQUICHandlerErrorResponse(t *testing.T) {
 	t.Parallel()
-	h := NewQUICServiceHandler(logging.DefaultLogger())
-	resp := h.errorResponse(quic.StatusInternalError, ErrQUICNilRequest{})
-	if resp.Status != quic.StatusInternalError {
+	h := newTestQUICServiceHandler(logging.DefaultLogger())
+	resp := h.errorResponse(quicwire.StatusInternalError, ErrQUICNilRequest{})
+	if resp.Status != quicwire.StatusInternalError {
 		t.Errorf("Status = 0x%02X", resp.Status)
 	}
 	if string(resp.Payload) != "QUIC request cannot be nil" {
@@ -1295,7 +956,7 @@ func TestCoverageFinalQUICHandlerErrorResponse(t *testing.T) {
 func TestCoverageFinalQUICHandlerRouting(t *testing.T) {
 	t.Parallel()
 
-	h := NewQUICServiceHandler(logging.DefaultLogger())
+	h := newTestQUICServiceHandler(logging.DefaultLogger())
 	ctx := context.Background()
 
 	// Test that requests to various opcodes return unavailable when services are nil
@@ -1303,19 +964,19 @@ func TestCoverageFinalQUICHandlerRouting(t *testing.T) {
 		name   string
 		opcode byte
 	}{
-		{"health_check", quic.OpHealth},
-		{"liveness", quic.OpLiveness},
-		{"readiness", quic.OpReadiness},
-		{"device_nil", quic.OpDeviceRegister},
-		{"cert_nil", quic.OpCertIssue},
-		{"ca_nil", quic.OpCAInfo},
-		{"daemon_nil", quic.OpDaemonStatus},
+		{"health_check", quicwire.OpHealth},
+		{"liveness", quicwire.OpLiveness},
+		{"readiness", quicwire.OpReadiness},
+		{"device_nil", quicwire.OpDeviceRegister},
+		{"cert_nil", quicwire.OpCertIssue},
+		{"ca_nil", quicwire.OpCAInfo},
+		{"daemon_nil", quicwire.OpDaemonStatus},
 	}
 
 	for _, tc := range routeTests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			resp := h.HandleRequest(ctx, &quic.Request{Opcode: tc.opcode})
+			resp := h.HandleRequest(ctx, &quicwire.Request{Opcode: tc.opcode})
 			if resp == nil {
 				t.Fatal("response should not be nil")
 			}
@@ -1326,24 +987,24 @@ func TestCoverageFinalQUICHandlerRouting(t *testing.T) {
 func TestCoverageFinalQUICHandlerOverlayCategory(t *testing.T) {
 	t.Parallel()
 
-	h := NewQUICServiceHandler(logging.DefaultLogger())
+	h := newTestQUICServiceHandler(logging.DefaultLogger())
 	ctx := context.Background()
 
 	t.Run("nil_handler", func(t *testing.T) {
 		t.Parallel()
-		resp := h.HandleRequest(ctx, &quic.Request{Opcode: quic.OpOverlayCategory, Payload: []byte{0x01}})
-		if resp.Status != quic.StatusUnavailable {
+		resp := h.HandleRequest(ctx, &quicwire.Request{Opcode: quicwire.OpOverlayCategory, Payload: []byte{0x01}})
+		if resp.Status != quicwire.StatusUnavailable {
 			t.Errorf("Status = 0x%02X, want StatusUnavailable", resp.Status)
 		}
 	})
 
 	t.Run("empty_payload", func(t *testing.T) {
 		t.Parallel()
-		// Need a non-nil overlay handler to test empty payload case
-		// Since we can't easily create one without dependencies, test nil handler path
-		resp := h.HandleRequest(ctx, &quic.Request{Opcode: quic.OpOverlayCategory})
-		if resp.Status != quic.StatusUnavailable {
-			t.Errorf("Status = 0x%02X", resp.Status)
+		// A category request without a sub-opcode cannot be classified, so
+		// the authorization guard rejects it before any dispatch.
+		resp := h.HandleRequest(ctx, &quicwire.Request{Opcode: quicwire.OpOverlayCategory})
+		if resp.Status != quicwire.StatusInvalidRequest {
+			t.Errorf("Status = 0x%02X, want StatusInvalidRequest", resp.Status)
 		}
 	})
 }
@@ -1351,11 +1012,11 @@ func TestCoverageFinalQUICHandlerOverlayCategory(t *testing.T) {
 func TestCoverageFinalQUICHandlerGatewayCategory(t *testing.T) {
 	t.Parallel()
 
-	h := NewQUICServiceHandler(logging.DefaultLogger())
+	h := newTestQUICServiceHandler(logging.DefaultLogger())
 	ctx := context.Background()
 
-	resp := h.HandleRequest(ctx, &quic.Request{Opcode: quic.OpGatewayCategory, Payload: []byte{0x01}})
-	if resp.Status != quic.StatusUnavailable {
+	resp := h.HandleRequest(ctx, &quicwire.Request{Opcode: quicwire.OpGatewayCategory, Payload: []byte{0x01}})
+	if resp.Status != quicwire.StatusUnavailable {
 		t.Errorf("Status = 0x%02X, want StatusUnavailable", resp.Status)
 	}
 }
@@ -1363,11 +1024,11 @@ func TestCoverageFinalQUICHandlerGatewayCategory(t *testing.T) {
 func TestCoverageFinalQUICHandlerIPAMCategory(t *testing.T) {
 	t.Parallel()
 
-	h := NewQUICServiceHandler(logging.DefaultLogger())
+	h := newTestQUICServiceHandler(logging.DefaultLogger())
 	ctx := context.Background()
 
-	resp := h.HandleRequest(ctx, &quic.Request{Opcode: quic.OpIPAMCategory, Payload: []byte{0x01}})
-	if resp.Status != quic.StatusUnavailable {
+	resp := h.HandleRequest(ctx, &quicwire.Request{Opcode: quicwire.OpIPAMCategory, Payload: []byte{quicwire.OpGatewayListIPAMPools}})
+	if resp.Status != quicwire.StatusUnavailable {
 		t.Errorf("Status = 0x%02X, want StatusUnavailable", resp.Status)
 	}
 }
@@ -1379,20 +1040,20 @@ func TestCoverageFinalQUICHandlerIPAMCategory(t *testing.T) {
 // StatusInternalError. Tests must tolerate both so they pass under plain
 // `go test` and under tagged builds like `make test`.
 func expectedHealthHandlerStatus() byte {
-	if len(quic.SupportedCodecs()) == 0 {
-		return quic.StatusInternalError
+	if len(quicwire.SupportedCodecs()) == 0 {
+		return quicwire.StatusInternalError
 	}
-	return quic.StatusOK
+	return quicwire.StatusOK
 }
 
 func TestCoverageFinalQUICHandlerHealthCheck(t *testing.T) {
 	t.Parallel()
 
-	h := NewQUICServiceHandler(logging.DefaultLogger())
+	h := newTestQUICServiceHandler(logging.DefaultLogger())
 	ctx := context.Background()
 
 	// Health check without registry
-	resp := h.HandleRequest(ctx, &quic.Request{Opcode: quic.OpHealth})
+	resp := h.HandleRequest(ctx, &quicwire.Request{Opcode: quicwire.OpHealth})
 	want := expectedHealthHandlerStatus()
 	if resp.Status != want {
 		t.Errorf("Health check without registry: Status = 0x%02X, want 0x%02X", resp.Status, want)
@@ -1402,8 +1063,8 @@ func TestCoverageFinalQUICHandlerHealthCheck(t *testing.T) {
 func TestCoverageFinalQUICHandlerLiveness(t *testing.T) {
 	t.Parallel()
 
-	h := NewQUICServiceHandler(logging.DefaultLogger())
-	resp := h.HandleRequest(context.Background(), &quic.Request{Opcode: quic.OpLiveness})
+	h := newTestQUICServiceHandler(logging.DefaultLogger())
+	resp := h.HandleRequest(context.Background(), &quicwire.Request{Opcode: quicwire.OpLiveness})
 	want := expectedHealthHandlerStatus()
 	if resp.Status != want {
 		t.Errorf("Liveness: Status = 0x%02X, want 0x%02X", resp.Status, want)
@@ -1413,8 +1074,8 @@ func TestCoverageFinalQUICHandlerLiveness(t *testing.T) {
 func TestCoverageFinalQUICHandlerReadiness(t *testing.T) {
 	t.Parallel()
 
-	h := NewQUICServiceHandler(logging.DefaultLogger())
-	resp := h.HandleRequest(context.Background(), &quic.Request{Opcode: quic.OpReadiness})
+	h := newTestQUICServiceHandler(logging.DefaultLogger())
+	resp := h.HandleRequest(context.Background(), &quicwire.Request{Opcode: quicwire.OpReadiness})
 	want := expectedHealthHandlerStatus()
 	if resp.Status != want {
 		t.Errorf("Readiness: Status = 0x%02X, want 0x%02X", resp.Status, want)

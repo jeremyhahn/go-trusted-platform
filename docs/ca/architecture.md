@@ -95,7 +95,9 @@ through `services/ca`.
 ## What this feature deliberately does not do
 
 - **It does not implement certificate issuance, parsing or the ACME protocol.**
-  Adapters and frontage only.
+  Adapters and frontage only. One recorded gap: Sign CSR still parses the CSR
+  for its pre-sign checks until the CA's template-validator seam is adopted
+  ([engineering.md](engineering.md) §1).
 - **It does not implement the TPM challenge handlers.** `endorse-01`,
   `enroll-01` and `device-attest-01` are the stack's.
 - **It does not hold CA private keys.**
@@ -288,7 +290,7 @@ certificate-authority:
       keystores:
         tpm2:
           srk-handle: 0x81000001
-          srk-auth: "123456"
+          srk-auth: "kms://ca/root/tpm2/srk-auth?ensure=true&len=32&enc=raw"
           platform-policy: true
       keys:
         - algorithm: ECDSA
@@ -297,7 +299,7 @@ certificate-authority:
           signature-algorithm: ECDSA-SHA384
           hash: SHA-384
           store: tpm2
-          password: "123456"
+          password: "kms://ca/root/keys/0/password?ensure=true&len=32&enc=base64"
           platform-policy: true
       valid: 20
       subject:
@@ -317,7 +319,7 @@ certificate-authority:
           library: /usr/lib/softhsm/libsofthsm2.so
           slot: 0
           label: TLS-CA-Key
-          pin: "123456"
+          pin: "kms://ca/tls/pkcs11/pin"
           platform-policy: true
       keys:
         - algorithm: RSA
@@ -326,7 +328,7 @@ certificate-authority:
           signature-algorithm: SHA256-RSA
           hash: SHA-256
           store: pkcs11
-          password: "123456"
+          password: "kms://ca/tls/keys/0/password?ensure=true&len=32&enc=base64"
           platform-policy: true
       valid: 10
       subject:
@@ -344,7 +346,7 @@ certificate-authority:
       keystores:
         tpm2:
           srk-handle: 0x81000001
-          srk-auth: "123456"
+          srk-auth: "kms://ca/device/tpm2/srk-auth?ensure=true&len=32&enc=raw"
           platform-policy: true
       keys:
         - algorithm: ECDSA
@@ -353,7 +355,7 @@ certificate-authority:
           signature-algorithm: ECDSA-SHA256
           hash: SHA-256
           store: tpm2
-          password: "123456"
+          password: "kms://ca/device/keys/0/password?ensure=true&len=32&enc=base64"
           platform-policy: true
       valid: 10
       subject:
@@ -550,9 +552,9 @@ abstracts all backend operations:
 
 ## Related Documentation
 
-- [README](README.md) - CA module overview
+- [README](user.md) - CA module overview
 - [ACME](acme.md) - ACME server documentation
 - [Configuration](configuration.md) - Configuration reference
-- [API Reference](api-reference.md) - Certificate management API
+- [API Reference](api.md) - Certificate management API
 - [TPM Architecture](../tpm/architecture.md) - TPM key storage
 - [KMS Architecture](../kms/architecture.md) - Key management service

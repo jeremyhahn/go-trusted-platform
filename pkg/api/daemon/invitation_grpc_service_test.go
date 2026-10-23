@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	platformservice "github.com/jeremyhahn/go-trusted-platform/pkg/platform/service"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore/entities"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 
@@ -227,9 +228,7 @@ func TestInvitationGRPCService_WithService_GetByID_Error(t *testing.T) {
 	svc := NewInvitationGRPCService(logging.DefaultLogger(), fake)
 
 	_, err := svc.GetInvitation(context.Background(), &platformv1.GetInvitationRequest{InvitationId: 1})
-	if !errors.Is(err, sentinel) {
-		t.Fatalf("expected sentinel, got %v", err)
-	}
+	assertInvitationStatus(t, err, codes.Internal, sentinel.Error())
 }
 
 func TestInvitationGRPCService_WithService_GetByToken(t *testing.T) {
@@ -251,9 +250,7 @@ func TestInvitationGRPCService_WithService_GetByToken_Error(t *testing.T) {
 	svc := NewInvitationGRPCService(logging.DefaultLogger(), fake)
 
 	_, err := svc.GetInvitationByToken(context.Background(), &platformv1.GetInvitationByTokenRequest{Token: "x"})
-	if !errors.Is(err, sentinel) {
-		t.Fatalf("expected sentinel, got %v", err)
-	}
+	assertInvitationStatus(t, err, codes.Internal, sentinel.Error())
 }
 
 func TestInvitationGRPCService_WithService_List(t *testing.T) {
@@ -318,9 +315,7 @@ func TestInvitationGRPCService_WithService_List_Error(t *testing.T) {
 	svc := NewInvitationGRPCService(logging.DefaultLogger(), fake)
 
 	_, err := svc.ListInvitations(context.Background(), &platformv1.ListInvitationsRequest{TenantId: "t"})
-	if !errors.Is(err, sentinel) {
-		t.Fatalf("expected sentinel, got %v", err)
-	}
+	assertInvitationStatus(t, err, codes.Internal, sentinel.Error())
 }
 
 func TestInvitationGRPCService_WithService_Revoke(t *testing.T) {
@@ -345,9 +340,7 @@ func TestInvitationGRPCService_WithService_Revoke_Error(t *testing.T) {
 	svc := NewInvitationGRPCService(logging.DefaultLogger(), fake)
 
 	_, err := svc.RevokeInvitation(context.Background(), &platformv1.RevokeInvitationRequest{InvitationId: 1, RevokerId: 2})
-	if !errors.Is(err, sentinel) {
-		t.Fatalf("expected sentinel, got %v", err)
-	}
+	assertInvitationStatus(t, err, codes.Internal, sentinel.Error())
 }
 
 func TestInvitationGRPCService_WithService_Accept(t *testing.T) {
@@ -376,9 +369,7 @@ func TestInvitationGRPCService_WithService_Accept_Error(t *testing.T) {
 	svc := NewInvitationGRPCService(logging.DefaultLogger(), fake)
 
 	_, err := svc.AcceptInvitation(context.Background(), &platformv1.AcceptInvitationRequest{Token: "t", UserId: 1})
-	if !errors.Is(err, sentinel) {
-		t.Fatalf("expected sentinel, got %v", err)
-	}
+	assertInvitationStatus(t, err, codes.Internal, sentinel.Error())
 }
 
 func TestInvitationGRPCService_WithService_Accept_ReadbackFailure(t *testing.T) {
@@ -419,9 +410,7 @@ func TestInvitationGRPCService_WithService_Delete_Error(t *testing.T) {
 	svc := NewInvitationGRPCService(logging.DefaultLogger(), fake)
 
 	_, err := svc.DeleteInvitation(context.Background(), &platformv1.DeleteInvitationRequest{InvitationId: 1})
-	if !errors.Is(err, sentinel) {
-		t.Fatalf("expected sentinel, got %v", err)
-	}
+	assertInvitationStatus(t, err, codes.Internal, sentinel.Error())
 }
 
 func TestInvitationGRPCService_SetService(t *testing.T) {
@@ -475,5 +464,49 @@ func TestContainsFold(t *testing.T) {
 		if got := containsFold(c.hay, c.needle); got != c.want {
 			t.Errorf("containsFold(%q,%q) = %v, want %v", c.hay, c.needle, got, c.want)
 		}
+	}
+}
+
+// assertInvitationStatus checks err is a gRPC status with the given code and
+// the service error's message.
+func assertInvitationStatus(t *testing.T, err error, want codes.Code, message string) {
+	t.Helper()
+	st, ok := status.FromError(err)
+	if !ok {
+		t.Fatalf("error %v is not a gRPC status", err)
+	}
+	if st.Code() != want || st.Message() != message {
+		t.Fatalf("status = %v %q, want %v %q", st.Code(), st.Message(), want, message)
+	}
+}
+
+// TestInvitationGRPCService_ServiceErrorsKeepTheirClass pins the code each
+// typed invitation error is answered with. Without the mapping a missing
+// invitation reached gRPC, QUIC and the SDK as Unknown.
+func TestInvitationGRPCService_ServiceErrorsKeepTheirClass(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		want codes.Code
+	}{
+		{"not found by id", platformservice.ErrInvitationNotFound{ID: 7}, codes.NotFound},
+		{"not found by token", platformservice.ErrInvitationNotFound{Token: "gone"}, codes.NotFound},
+		{"invalid", platformservice.ErrInvalidInvitation{Reason: "email is required"}, codes.InvalidArgument},
+		{"email registered", platformservice.ErrEmailAlreadyRegistered{Email: "a@b.c", TenantID: "t"}, codes.AlreadyExists},
+		{"expired", platformservice.ErrInvitationExpired{Token: "t"}, codes.FailedPrecondition},
+		{"already accepted", platformservice.ErrInvitationAlreadyAccepted{Token: "t"}, codes.FailedPrecondition},
+		{"revoked", platformservice.ErrInvitationRevoked{Token: "t"}, codes.FailedPrecondition},
+		{"already revoked", platformservice.ErrInvitationAlreadyRevoked{ID: 7}, codes.FailedPrecondition},
+		{"bad status", platformservice.ErrInvalidInvitationStatus{Status: "garbage"}, codes.FailedPrecondition},
+		{"save failed", platformservice.ErrInvitationSaveFailed{Cause: errors.New("disk")}, codes.Internal},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			fake := &fakeInvitationServicer{getByIDErr: c.err}
+			svc := NewInvitationGRPCService(logging.DefaultLogger(), fake)
+
+			_, err := svc.GetInvitation(context.Background(), &platformv1.GetInvitationRequest{InvitationId: 7})
+			assertInvitationStatus(t, err, c.want, c.err.Error())
+		})
 	}
 }

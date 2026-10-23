@@ -1,5 +1,8 @@
 # VM Attestation
 
+> **Status: REFERENCE** · Last verified: 2026-10-13
+> The `pkg/attestation/vm` attestor and verifier API; [architecture.md](architecture.md) is normative.
+
 VM attestation extends the platform's hardware root of trust into virtual machines using vTPM (virtual TPM) technology. Each VM receives a vTPM with an EK certificate that cryptographically binds it to its host.
 
 ## Overview
@@ -317,4 +320,4 @@ type VerifierConfig struct {
 
 - [Workload Attestation](workload-attestation.md) - WorkloadPCR workload chain
 - [Manifest](manifest.md) - Aggregating attestations
-- [API Reference](api-reference.md) - REST/gRPC APIs
+- [API Reference](api.md) - REST/gRPC APIs

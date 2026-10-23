@@ -31,9 +31,9 @@ import (
 
 const defaultRESTTimeout = 30 * time.Second
 
-// RESTAdapter drives PIV operations over HTTPS REST. Phase 3.5 REST routes
-// are not yet wired; calls therefore return 404 which the test treats as
-// "backend not configured" — identical to Unavailable on other transports.
+// RESTAdapter drives PIV operations over HTTPS REST through the SDK REST
+// transport. A daemon without a PIV backend answers 503 with
+// ErrPIVNotConfigured, the same surface as Unavailable on other transports.
 type RESTAdapter struct {
 	baseURL    string
 	httpClient *http.Client

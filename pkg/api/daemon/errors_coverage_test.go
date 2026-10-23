@@ -59,8 +59,6 @@ func TestAllErrorTypes_ErrorMethod(t *testing.T) {
 		{"ErrUnsupportedRecordType", ErrUnsupportedRecordType{}, "unsupported DNS record type"},
 		{"ErrDNSServiceNotAvailable", ErrDNSServiceNotAvailable{}, "DNS service not available"},
 		{"ErrDNSInvalidParameter", ErrDNSInvalidParameter{Parameter: "ttl", Reason: "must be positive"}, "invalid DNS parameter ttl: must be positive"},
-		{"ErrDNSConfigUpdateNotSupported", ErrDNSConfigUpdateNotSupported{}, "DNS configuration updates are not supported at runtime"},
-		{"ErrDNSCacheFlushNotSupported", ErrDNSCacheFlushNotSupported{}, "DNS cache flushing is not supported"},
 		{"ErrDNSZoneNotFound", ErrDNSZoneNotFound{Zone: "example.com"}, "DNS zone not found: example.com"},
 		{"ErrDNSRecordNotFound", ErrDNSRecordNotFound{Name: "www.example.com", RecordType: "A"}, "DNS record not found: www.example.com A"},
 		{"ErrDNSOperationFailed", ErrDNSOperationFailed{Operation: "add", Cause: errors.New("zone locked")}, "DNS operation add failed: zone locked"},
@@ -102,7 +100,6 @@ func TestAllErrorTypes_ErrorMethod(t *testing.T) {
 		{"ErrVTPMOperationNotImplemented", ErrVTPMOperationNotImplemented{Operation: "seal"}, "vTPM operation not implemented: seal"},
 
 		// Device errors
-		{"ErrDeviceOperationNotImplemented", ErrDeviceOperationNotImplemented{Operation: "provision"}, "device operation not implemented: provision"},
 		{"ErrInvalidDeviceID", ErrInvalidDeviceID{ID: "bad-id"}, "invalid device ID: bad-id"},
 		{"ErrAttestationFailed", ErrAttestationFailed{Reason: "quote verification failed"}, "attestation failed: quote verification failed"},
 		{"ErrDeviceNotFound", ErrDeviceNotFound{DeviceID: "device-123"}, "device not found: device-123"},
@@ -112,8 +109,6 @@ func TestAllErrorTypes_ErrorMethod(t *testing.T) {
 
 		// SDN errors
 		{"ErrSDNOperationNotImplemented", ErrSDNOperationNotImplemented{Operation: "create-vlan"}, "SDN operation not implemented: create-vlan"},
-		{"ErrSDNPolicyEngineNotConfigured", ErrSDNPolicyEngineNotConfigured{}, "SDN policy engine not configured"},
-		{"ErrSDNInvalidPortState", ErrSDNInvalidPortState{State: "invalid"}, "invalid port state: invalid"},
 		{"ErrSDNPolicyNotFound", ErrSDNPolicyNotFound{PolicyID: "policy-1"}, "SDN policy not found: policy-1"},
 		{"ErrSDNInvalidPolicy", ErrSDNInvalidPolicy{Reason: "missing action"}, "invalid SDN policy: missing action"},
 		{"ErrSDNSetPortStateFailed", ErrSDNSetPortStateFailed{PortID: "eth0", Cause: errors.New("permission denied")}, "failed to set port state for eth0: permission denied"},
@@ -138,9 +133,8 @@ func TestAllErrorTypes_ErrorMethod(t *testing.T) {
 		{"ErrIAMPolicyValidationFailed", ErrIAMPolicyValidationFailed{Reason: "invalid statement"}, "IAM policy validation failed: invalid statement"},
 		{"ErrIAMAppNotFound", ErrIAMAppNotFound{TenantID: "tenant-1", ClientID: "client-123"}, "IAM application not found: client-123 in tenant tenant-1"},
 		{"ErrIAMAppAlreadyExists", ErrIAMAppAlreadyExists{TenantID: "tenant-1", Name: "my-app"}, "IAM application already exists: my-app in tenant tenant-1"},
-		{"ErrIAMAuthenticationFailed", ErrIAMAuthenticationFailed{Reason: "invalid password"}, "IAM authentication failed: invalid password"},
+		{"ErrIAMAuthenticationViaOIDC", ErrIAMAuthenticationViaOIDC{}, "iam authentication is handled via OIDC flows, not the IAM service"},
 		{"ErrIAMPermissionDenied", ErrIAMPermissionDenied{Subject: "user-1", Resource: "bucket/data", Action: "write"}, "IAM permission denied: subject user-1 cannot perform write on bucket/data"},
-		{"ErrIAMOperationFailed", ErrIAMOperationFailed{Operation: "create-user", Cause: errors.New("database error")}, "IAM operation create-user failed: database error"},
 		{"ErrIAMInvalidCredentials", ErrIAMInvalidCredentials{}, "IAM invalid credentials"},
 		{"ErrIAMRoleAssignmentFailed", ErrIAMRoleAssignmentFailed{UserID: "user-1", RoleID: "admin", Reason: "role limit exceeded"}, "IAM failed to assign role admin to user user-1: role limit exceeded"},
 		{"ErrIAMRoleRevocationFailed", ErrIAMRoleRevocationFailed{UserID: "user-1", RoleID: "admin", Reason: "role not assigned"}, "IAM failed to revoke role admin from user user-1: role not assigned"},
@@ -201,7 +195,6 @@ func TestErrorsWithUnwrap(t *testing.T) {
 		{"ErrDNSOperationFailed", ErrDNSOperationFailed{Operation: "test", Cause: causeErr}, causeErr},
 		{"ErrSDNSetPortStateFailed", ErrSDNSetPortStateFailed{PortID: "eth0", Cause: causeErr}, causeErr},
 		{"ErrSDNApplyPolicyFailed", ErrSDNApplyPolicyFailed{PolicyID: "pol-1", Cause: causeErr}, causeErr},
-		{"ErrIAMOperationFailed", ErrIAMOperationFailed{Operation: "test", Cause: causeErr}, causeErr},
 		{"ErrKMSOperationFailed", ErrKMSOperationFailed{Operation: "test", Cause: causeErr}, causeErr},
 		{"ErrKMSEncryptionFailed", ErrKMSEncryptionFailed{KeyID: "key-1", Cause: causeErr}, causeErr},
 		{"ErrKMSDecryptionFailed", ErrKMSDecryptionFailed{KeyID: "key-1", Cause: causeErr}, causeErr},
@@ -247,7 +240,6 @@ func TestErrorsWithNilCause(t *testing.T) {
 		{"ErrDNSOperationFailed_NilCause", ErrDNSOperationFailed{Operation: "test", Cause: nil}},
 		{"ErrSDNSetPortStateFailed_NilCause", ErrSDNSetPortStateFailed{PortID: "eth0", Cause: nil}},
 		{"ErrSDNApplyPolicyFailed_NilCause", ErrSDNApplyPolicyFailed{PolicyID: "pol-1", Cause: nil}},
-		{"ErrIAMOperationFailed_NilCause", ErrIAMOperationFailed{Operation: "test", Cause: nil}},
 		{"ErrKMSOperationFailed_NilCause", ErrKMSOperationFailed{Operation: "test", Cause: nil}},
 		{"ErrKMSEncryptionFailed_NilCause", ErrKMSEncryptionFailed{KeyID: "key-1", Cause: nil}},
 		{"ErrKMSDecryptionFailed_NilCause", ErrKMSDecryptionFailed{KeyID: "key-1", Cause: nil}},
@@ -321,7 +313,6 @@ func TestErrorsImplementErrorInterface(t *testing.T) {
 	var _ error = ErrMCPServerStopFailed{}
 	var _ error = ErrMCPServerNotConfigured{}
 	var _ error = ErrVTPMOperationNotImplemented{}
-	var _ error = ErrDeviceOperationNotImplemented{}
 	var _ error = ErrInvalidDeviceID{}
 	var _ error = ErrAttestationFailed{}
 	var _ error = ErrDeviceNotFound{}
@@ -329,8 +320,6 @@ func TestErrorsImplementErrorInterface(t *testing.T) {
 	var _ error = ErrProfileNotFound{}
 	var _ error = ErrInvalidAttestationEvidence{}
 	var _ error = ErrSDNOperationNotImplemented{}
-	var _ error = ErrSDNPolicyEngineNotConfigured{}
-	var _ error = ErrSDNInvalidPortState{}
 	var _ error = ErrSDNPolicyNotFound{}
 	var _ error = ErrSDNInvalidPolicy{}
 	var _ error = ErrSDNSetPortStateFailed{}
@@ -338,8 +327,6 @@ func TestErrorsImplementErrorInterface(t *testing.T) {
 	var _ error = ErrSDNBridgeNotFound{}
 	var _ error = ErrSDNPortNotFound{}
 	var _ error = ErrSDNMissingParameter{}
-	var _ error = ErrDNSConfigUpdateNotSupported{}
-	var _ error = ErrDNSCacheFlushNotSupported{}
 	var _ error = ErrDNSZoneNotFound{}
 	var _ error = ErrDNSRecordNotFound{}
 	var _ error = ErrDNSOperationFailed{}
@@ -358,9 +345,8 @@ func TestErrorsImplementErrorInterface(t *testing.T) {
 	var _ error = ErrIAMPolicyValidationFailed{}
 	var _ error = ErrIAMAppNotFound{}
 	var _ error = ErrIAMAppAlreadyExists{}
-	var _ error = ErrIAMAuthenticationFailed{}
+	var _ error = ErrIAMAuthenticationViaOIDC{}
 	var _ error = ErrIAMPermissionDenied{}
-	var _ error = ErrIAMOperationFailed{}
 	var _ error = ErrIAMInvalidCredentials{}
 	var _ error = ErrIAMRoleAssignmentFailed{}
 	var _ error = ErrIAMRoleRevocationFailed{}

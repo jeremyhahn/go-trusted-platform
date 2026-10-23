@@ -19,6 +19,8 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
+	platform "github.com/jeremyhahn/go-trusted-platform/sdk/go"
+	lukssvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/luks"
 )
 
 // NewCommand creates the luks root command.
@@ -86,4 +88,17 @@ func validateSlot(slot int32) error {
 		return ErrInvalidSlot{Slot: slot}
 	}
 	return nil
+}
+
+// lukssvcName names the service in ErrServiceUnavailable.
+const lukssvcName = "luks"
+
+// newService returns the LUKS service backed by the client's active
+// transport, or ErrServiceUnavailable when the client exposes no LUKS service.
+func newService(client platform.Client) (lukssvc.Service, error) {
+	rpc := client.LUKS()
+	if rpc == nil {
+		return nil, platform.ErrServiceUnavailable{Service: lukssvcName}
+	}
+	return lukssvc.NewGRPCClientFromClient(rpc), nil
 }

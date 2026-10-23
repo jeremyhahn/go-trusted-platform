@@ -15,1014 +15,550 @@ package mcp
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"testing"
 	"time"
 
-	"github.com/jeremyhahn/go-trusted-platform/pkg/tenant"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/tenant/quota"
+	"github.com/jeremyhahn/go-quicbaas/sdk/go/platformtoken"
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/mcpwire"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-// createTestTenantEntity creates a test tenant entity.
-func createTestTenantEntity(id, name string) *tenant.TenantEntity {
-	return &tenant.TenantEntity{
-		ID:          id,
-		Name:        name,
-		DisplayName: name + " Display",
-		State:       tenant.StateActive,
-		DEKPath:     "/tenant/12345/default",
-		ComputeQuota: tenant.ComputeQuota{
-			MaxVMs:        10,
-			MaxContainers: 50,
-			MaxVCPUs:      32,
-			MaxMemoryMB:   65536,
-			MaxDiskGB:     1024,
-		},
-		NetworkQuota: tenant.NetworkQuota{
-			MaxBridges:       5,
-			MaxPorts:         100,
-			MaxBandwidthMbps: 10000,
-		},
-		StorageQuota: tenant.StorageQuota{
-			MaxVolumesGB: 2048,
-			MaxSnapshots: 100,
-		},
-		Labels: map[string]string{
-			"env": "test",
-		},
-		Annotations: map[string]string{
-			"note": "test tenant",
-		},
-		CreatedAt: time.Now().Add(-24 * time.Hour),
-		UpdatedAt: time.Now(),
+// recordingTenantServer is a TenantService that records each request it is
+// sent, under its method name, and answers a fixed response or err.
+type recordingTenantServer struct {
+	platformv1.UnimplementedTenantServiceServer
+
+	requests map[string]interface{}
+	calls    []string
+	err      error
+	quotas   *platformv1.GetQuotasResponse
+}
+
+func newRecordingTenantServer() *recordingTenantServer {
+	return &recordingTenantServer{requests: make(map[string]interface{})}
+}
+
+func (s *recordingTenantServer) record(method string, req interface{}) error {
+	s.calls = append(s.calls, method)
+	s.requests[method] = req
+	return s.err
+}
+
+func okStatus() *platformv1.Status {
+	return &platformv1.Status{Success: true, Message: "ok"}
+}
+
+func testTenant(id string) *platformv1.Tenant {
+	return &platformv1.Tenant{Id: id, Name: id + "-name", State: platformv1.TenantState_TENANT_STATE_ACTIVE}
+}
+
+func (s *recordingTenantServer) ListTenants(_ context.Context, req *platformv1.ListTenantsRequest) (*platformv1.ListTenantsResponse, error) {
+	if err := s.record("ListTenants", req); err != nil {
+		return nil, err
+	}
+	return &platformv1.ListTenantsResponse{Tenants: []*platformv1.Tenant{testTenant("t1")}, Total: 1}, nil
+}
+
+func (s *recordingTenantServer) GetTenant(_ context.Context, req *platformv1.GetTenantRequest) (*platformv1.GetTenantResponse, error) {
+	if err := s.record("GetTenant", req); err != nil {
+		return nil, err
+	}
+	return &platformv1.GetTenantResponse{Tenant: testTenant(req.GetTenantId())}, nil
+}
+
+func (s *recordingTenantServer) GetTenantByName(_ context.Context, req *platformv1.GetTenantByNameRequest) (*platformv1.GetTenantByNameResponse, error) {
+	if err := s.record("GetTenantByName", req); err != nil {
+		return nil, err
+	}
+	return &platformv1.GetTenantByNameResponse{Tenant: testTenant("t1")}, nil
+}
+
+func (s *recordingTenantServer) CreateTenant(_ context.Context, req *platformv1.CreateTenantRequest) (*platformv1.CreateTenantResponse, error) {
+	if err := s.record("CreateTenant", req); err != nil {
+		return nil, err
+	}
+	return &platformv1.CreateTenantResponse{Status: okStatus(), Tenant: testTenant("t1")}, nil
+}
+
+func (s *recordingTenantServer) UpdateTenant(_ context.Context, req *platformv1.UpdateTenantRequest) (*platformv1.UpdateTenantResponse, error) {
+	if err := s.record("UpdateTenant", req); err != nil {
+		return nil, err
+	}
+	return &platformv1.UpdateTenantResponse{Status: okStatus(), Tenant: testTenant(req.GetTenantId())}, nil
+}
+
+func (s *recordingTenantServer) DeleteTenant(_ context.Context, req *platformv1.DeleteTenantRequest) (*platformv1.DeleteTenantResponse, error) {
+	if err := s.record("DeleteTenant", req); err != nil {
+		return nil, err
+	}
+	return &platformv1.DeleteTenantResponse{Status: okStatus()}, nil
+}
+
+func (s *recordingTenantServer) SuspendTenant(_ context.Context, req *platformv1.SuspendTenantRequest) (*platformv1.SuspendTenantResponse, error) {
+	if err := s.record("SuspendTenant", req); err != nil {
+		return nil, err
+	}
+	return &platformv1.SuspendTenantResponse{Status: okStatus()}, nil
+}
+
+func (s *recordingTenantServer) ResumeTenant(_ context.Context, req *platformv1.ResumeTenantRequest) (*platformv1.ResumeTenantResponse, error) {
+	if err := s.record("ResumeTenant", req); err != nil {
+		return nil, err
+	}
+	return &platformv1.ResumeTenantResponse{Status: okStatus()}, nil
+}
+
+func (s *recordingTenantServer) GetQuotas(_ context.Context, req *platformv1.GetQuotasRequest) (*platformv1.GetQuotasResponse, error) {
+	if err := s.record("GetQuotas", req); err != nil {
+		return nil, err
+	}
+	if s.quotas != nil {
+		return s.quotas, nil
+	}
+	return &platformv1.GetQuotasResponse{TenantId: req.GetTenantId()}, nil
+}
+
+func (s *recordingTenantServer) UpdateQuotas(_ context.Context, req *platformv1.UpdateQuotasRequest) (*platformv1.UpdateQuotasResponse, error) {
+	if err := s.record("UpdateQuotas", req); err != nil {
+		return nil, err
+	}
+	return &platformv1.UpdateQuotasResponse{Status: okStatus()}, nil
+}
+
+func (s *recordingTenantServer) GetUsage(_ context.Context, req *platformv1.GetUsageRequest) (*platformv1.GetUsageResponse, error) {
+	if err := s.record("GetUsage", req); err != nil {
+		return nil, err
+	}
+	return &platformv1.GetUsageResponse{Usage: &platformv1.TenantUsage{TenantId: req.GetTenantId(), Vms: 2}}, nil
+}
+
+func (s *recordingTenantServer) CheckQuota(_ context.Context, req *platformv1.CheckQuotaRequest) (*platformv1.CheckQuotaResponse, error) {
+	if err := s.record("CheckQuota", req); err != nil {
+		return nil, err
+	}
+	return &platformv1.CheckQuotaResponse{
+		TenantId:  req.GetTenantId(),
+		Resource:  req.GetResource(),
+		Amount:    req.GetAmount(),
+		Available: false,
+		Message:   "over quota",
+	}, nil
+}
+
+func (s *recordingTenantServer) Sync(_ context.Context, req *platformv1.SyncTenantsRequest) (*platformv1.SyncTenantsResponse, error) {
+	if err := s.record("Sync", req); err != nil {
+		return nil, err
+	}
+	return &platformv1.SyncTenantsResponse{Status: okStatus()}, nil
+}
+
+func (s *recordingTenantServer) RotateTenantDEK(_ context.Context, req *platformv1.RotateTenantDEKRequest) (*platformv1.RotateTenantDEKResponse, error) {
+	if err := s.record("RotateTenantDEK", req); err != nil {
+		return nil, err
+	}
+	return &platformv1.RotateTenantDEKResponse{TenantId: req.GetTenantId(), OldVersion: 1, NewVersion: 2}, nil
+}
+
+func (s *recordingTenantServer) GetTenantDEKStatus(_ context.Context, req *platformv1.GetTenantDEKStatusRequest) (*platformv1.GetTenantDEKStatusResponse, error) {
+	if err := s.record("GetTenantDEKStatus", req); err != nil {
+		return nil, err
+	}
+	return &platformv1.GetTenantDEKStatusResponse{DekStatus: &platformv1.TenantDEKStatus{
+		TenantId:          req.GetTenantId(),
+		Version:           3,
+		ReencryptProgress: &platformv1.DEKReencryptionProgress{InProgress: true, TotalKeys: 10},
+	}}, nil
+}
+
+func (s *recordingTenantServer) InitTenantBarrier(_ context.Context, req *platformv1.InitTenantBarrierRequest) (*platformv1.InitTenantBarrierResponse, error) {
+	if err := s.record("InitTenantBarrier", req); err != nil {
+		return nil, err
+	}
+	return &platformv1.InitTenantBarrierResponse{Status: okStatus()}, nil
+}
+
+func (s *recordingTenantServer) UnsealTenantBarrier(_ context.Context, req *platformv1.UnsealTenantBarrierRequest) (*platformv1.UnsealTenantBarrierResponse, error) {
+	if err := s.record("UnsealTenantBarrier", req); err != nil {
+		return nil, err
+	}
+	return &platformv1.UnsealTenantBarrierResponse{Status: okStatus()}, nil
+}
+
+func (s *recordingTenantServer) SealTenantBarrier(_ context.Context, req *platformv1.SealTenantBarrierRequest) (*platformv1.SealTenantBarrierResponse, error) {
+	if err := s.record("SealTenantBarrier", req); err != nil {
+		return nil, err
+	}
+	return &platformv1.SealTenantBarrierResponse{Status: okStatus()}, nil
+}
+
+func (s *recordingTenantServer) GetTenantBarrierStatus(_ context.Context, req *platformv1.GetTenantBarrierStatusRequest) (*platformv1.GetTenantBarrierStatusResponse, error) {
+	if err := s.record("GetTenantBarrierStatus", req); err != nil {
+		return nil, err
+	}
+	return &platformv1.GetTenantBarrierStatusResponse{BarrierStatus: &platformv1.TenantBarrierStatus{
+		TenantId:    req.GetTenantId(),
+		Sealed:      true,
+		Initialized: true,
+		Strategy:    "software",
+	}}, nil
+}
+
+// tenantServiceProvider is a ServiceProvider that serves a TenantService.
+type tenantServiceProvider struct {
+	*mockServiceProvider
+	server platformv1.TenantServiceServer
+}
+
+func (p *tenantServiceProvider) TenantService() platformv1.TenantServiceServer {
+	return p.server
+}
+
+// newTenantToolRegistry is a registry whose tenant tools call server.
+func newTenantToolRegistry(server platformv1.TenantServiceServer) *ToolRegistry {
+	provider := &tenantServiceProvider{mockServiceProvider: newMockServiceProvider(), server: server}
+	return NewToolRegistry(provider, newTestLogger())
+}
+
+// boundContext is the context the claims path hands a tool for a caller
+// bound to tenantID.
+func boundContext(tenantID string) context.Context {
+	return ContextWithAuthorizedContext(context.Background(), &platformtoken.AuthorizedContext{
+		Subject:  "user",
+		TenantID: tenantID,
+	})
+}
+
+// tenantToolCase is one tenant tool: the arguments that make it succeed, the
+// scope it requires and the TenantService method it reaches.
+type tenantToolCase struct {
+	tool   string
+	args   map[string]interface{}
+	scope  string
+	method string
+}
+
+var tenantToolCases = []tenantToolCase{
+	{"tenant_list", map[string]interface{}{}, "tenant:read", "ListTenants"},
+	{"tenant_get", map[string]interface{}{"tenant_id": "t1"}, "tenant:read", "GetTenant"},
+	{"tenant_get_by_name", map[string]interface{}{"name": "n"}, "tenant:read", "GetTenantByName"},
+	{"tenant_get_quotas", map[string]interface{}{"tenant_id": "t1"}, "tenant:read", "GetQuotas"},
+	{"tenant_get_usage", map[string]interface{}{"tenant_id": "t1"}, "tenant:read", "GetUsage"},
+	{"tenant_check_quota", map[string]interface{}{"tenant_id": "t1", "resource_type": "vms", "amount": float64(1)}, "tenant:read", "CheckQuota"},
+	{"tenant_get_dek_status", map[string]interface{}{"tenant_id": "t1"}, "tenant:read", "GetTenantDEKStatus"},
+	{"platform_tenant_barrier_status", map[string]interface{}{"tenant_id": "t1"}, "tenant:read", "GetTenantBarrierStatus"},
+	{"tenant_create", map[string]interface{}{"name": "n"}, "tenant:write", "CreateTenant"},
+	{"tenant_update", map[string]interface{}{"tenant_id": "t1", "display_name": "d"}, "tenant:write", "UpdateTenant"},
+	{"tenant_update_quotas", map[string]interface{}{"tenant_id": "t1", "max_vms": float64(4)}, "tenant:write", "UpdateQuotas"},
+	{"tenant_suspend", map[string]interface{}{"tenant_id": "t1"}, "tenant:write", "SuspendTenant"},
+	{"tenant_resume", map[string]interface{}{"tenant_id": "t1"}, "tenant:write", "ResumeTenant"},
+	{"tenant_sync", map[string]interface{}{}, "tenant:write", "Sync"},
+	{"tenant_rotate_dek", map[string]interface{}{"tenant_id": "t1"}, "tenant:write", "RotateTenantDEK"},
+	{"platform_tenant_barrier_init", map[string]interface{}{"tenant_id": "t1"}, "tenant:write", "InitTenantBarrier"},
+	{"platform_tenant_barrier_seal", map[string]interface{}{"tenant_id": "t1"}, "tenant:write", "SealTenantBarrier"},
+	{"platform_tenant_barrier_unseal", map[string]interface{}{"tenant_id": "t1", "key": base64.StdEncoding.EncodeToString([]byte("k"))}, "tenant:write", "UnsealTenantBarrier"},
+	{"tenant_delete", map[string]interface{}{"tenant_id": "t1"}, "tenant:delete", "DeleteTenant"},
+}
+
+// lackingScopes are scopes that do not grant scope: the same action on
+// another resource, and the tenant actions below it.
+var lackingScopes = map[string][]string{
+	"tenant:read":   {"iam:read"},
+	"tenant:write":  {"iam:write", "tenant:read"},
+	"tenant:delete": {"iam:delete", "tenant:read", "tenant:write"},
+}
+
+// TestTenantToolsAreRegistered: all 19 tenant tools are served.
+func TestTenantToolsAreRegistered(t *testing.T) {
+	registered := make(map[string]bool)
+	for _, tool := range newTenantToolRegistry(nil).ListTools() {
+		registered[tool.Name] = true
+	}
+	for _, tc := range tenantToolCases {
+		assert.True(t, registered[tc.tool], "%s must be registered", tc.tool)
+	}
+	assert.Len(t, tenantToolCases, 19)
+}
+
+// TestTenantToolsAreClassified pins each tenant tool to the scope of its
+// TenantService method (pkg/api/grpc/method_permissions.go).
+func TestTenantToolsAreClassified(t *testing.T) {
+	checker := NewAuthorizationChecker(nil, nil)
+	for _, tc := range tenantToolCases {
+		got, ok := checker.toolPermissions[tc.tool]
+		require.True(t, ok, "%s must have an explicit permission entry", tc.tool)
+		assert.Equal(t, tc.scope, got, "%s", tc.tool)
 	}
 }
 
-// TestTenantToolsRegistration tests that all 15 tenant tools are registered.
-func TestTenantToolsRegistration(t *testing.T) {
-	logger := newTestLogger()
-	mockSvc := newMockServiceProvider()
-	registry := NewToolRegistry(mockSvc, logger)
+// TestTenantToolsAuthorizeByScope runs every tenant tool through the MCP
+// server: a token holding the tool's scope gets the TenantService's answer;
+// a token lacking it is refused and the TenantService is never reached.
+func TestTenantToolsAuthorizeByScope(t *testing.T) {
+	for _, tc := range tenantToolCases {
+		t.Run(tc.tool, func(t *testing.T) {
+			call := func(scopes []string) (*mcpwire.JSONRPCResponse, *recordingTenantServer) {
+				server := newRecordingTenantServer()
+				provider := &tenantServiceProvider{mockServiceProvider: newMockServiceProvider(), server: server}
+				mcpServer := NewServer(provider, nil, newTestLogger())
+				mcpServer.SetAuthorizationService(nil, &claimsAuthManagerStub{authCtx: &platformtoken.AuthorizedContext{
+					Subject:  "user",
+					TenantID: "t1",
+					Scopes:   scopes,
+				}})
+				resp := mcpServer.handleRequest(context.Background(), &mcpwire.JSONRPCRequest{
+					JSONRPC: "2.0",
+					ID:      1,
+					Method:  "tools/call",
+					Params:  map[string]interface{}{"name": tc.tool, "arguments": tc.args, "_token": "tok"},
+				})
+				return resp, server
+			}
 
-	expectedTools := []string{
-		"tenant_list",
-		"tenant_get",
-		"tenant_get_by_name",
-		"tenant_create",
-		"tenant_update",
-		"tenant_delete",
-		"tenant_suspend",
-		"tenant_resume",
-		"tenant_get_quotas",
-		"tenant_update_quotas",
-		"tenant_get_usage",
-		"tenant_check_quota",
-		"tenant_sync",
-		"tenant_rotate_dek",
-		"tenant_get_dek_status",
-	}
+			resp, server := call([]string{tc.scope})
+			require.Nil(t, resp.Error, "a token granting %s must reach %s", tc.scope, tc.tool)
+			assert.NotNil(t, resp.Result)
+			assert.Contains(t, server.calls, tc.method)
 
-	tools := registry.ListTools()
-	registeredTools := make(map[string]bool)
-	for _, tool := range tools {
-		registeredTools[tool.Name] = true
-	}
-
-	for _, expectedTool := range expectedTools {
-		if !registeredTools[expectedTool] {
-			t.Errorf("expected tool %q to be registered but it was not found", expectedTool)
-		}
-	}
-
-	// Retired with the per-tenant VLAN range and OVS bridge (#708).
-	for _, retired := range []string{"tenant_validate_vlan", "tenant_get_bridge"} {
-		if registeredTools[retired] {
-			t.Errorf("retired tool %q is still registered", retired)
-		}
+			resp, server = call(lackingScopes[tc.scope])
+			require.NotNil(t, resp.Error, "a token lacking %s must be refused %s", tc.scope, tc.tool)
+			assert.Equal(t, authErrorCodes[AuthErrorPermissionDenied], resp.Error.Code)
+			assert.Empty(t, server.calls, "the TenantService must not run for a refused caller")
+		})
 	}
 }
 
-// TestTenantError tests the TenantError type.
-func TestTenantError(t *testing.T) {
-	err := &TenantError{
-		Code:    "TEST_ERROR",
-		Message: "test error message",
-	}
+// TestTenantToolsRefuseUnboundCaller: a caller whose identity carries no
+// tenant (the legacy adapter stashes no AuthorizedContext) is refused every
+// tenant tool PermissionDenied, before the TenantService is reached.
+func TestTenantToolsRefuseUnboundCaller(t *testing.T) {
+	server := newRecordingTenantServer()
+	registry := newTenantToolRegistry(server)
 
-	expected := "TEST_ERROR: test error message"
-	if err.Error() != expected {
-		t.Errorf("expected error %q, got %q", expected, err.Error())
+	for _, tc := range tenantToolCases {
+		_, err := registry.ExecuteTool(context.Background(), tc.tool, tc.args)
+		require.ErrorAs(t, err, &ErrTenantCallerUnbound{}, "%s", tc.tool)
+		assert.Equal(t, codes.PermissionDenied, status.Code(err), "%s", tc.tool)
 	}
+	assert.Empty(t, server.calls)
 }
 
-// TestTenantServiceUnavailableError tests error handling when service is unavailable.
-func TestTenantServiceUnavailableError(t *testing.T) {
-	logger := newTestLogger()
-	mockSvc := newMockServiceProvider()
-	registry := NewToolRegistry(mockSvc, logger)
-
-	ctx := context.Background()
-
-	// All tenant tools should return service unavailable error when no manager is set
-	testCases := []struct {
-		name string
-		args map[string]interface{}
-	}{
-		{"tenant_list", map[string]interface{}{}},
-		{"tenant_get", map[string]interface{}{"tenant_id": "test-id"}},
-		{"tenant_get_by_name", map[string]interface{}{"name": "test-name"}},
-		{"tenant_create", map[string]interface{}{"name": "test-name"}},
-		{"tenant_update", map[string]interface{}{"tenant_id": "test-id"}},
-		{"tenant_delete", map[string]interface{}{"tenant_id": "test-id"}},
-		{"tenant_suspend", map[string]interface{}{"tenant_id": "test-id"}},
-		{"tenant_resume", map[string]interface{}{"tenant_id": "test-id"}},
-		{"tenant_get_quotas", map[string]interface{}{"tenant_id": "test-id"}},
-		{"tenant_update_quotas", map[string]interface{}{"tenant_id": "test-id"}},
-		{"tenant_get_usage", map[string]interface{}{"tenant_id": "test-id"}},
-		{"tenant_check_quota", map[string]interface{}{"tenant_id": "test-id", "resource_type": "vms", "amount": 1}},
-		{"tenant_sync", map[string]interface{}{}},
-		{"tenant_rotate_dek", map[string]interface{}{"tenant_id": "test-id"}},
-		{"tenant_get_dek_status", map[string]interface{}{"tenant_id": "test-id"}},
+// TestTenantToolsWithoutTenantService: a bound caller on a daemon that
+// serves no TenantService is told the service is unavailable.
+func TestTenantToolsWithoutTenantService(t *testing.T) {
+	registries := map[string]*ToolRegistry{
+		"provider without TenantService": NewToolRegistry(newMockServiceProvider(), newTestLogger()),
+		"nil TenantService":              newTenantToolRegistry(nil),
 	}
-
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			_, err := registry.ExecuteTool(ctx, tc.name, tc.args)
-			if err != ErrTenantServiceUnavailable {
-				t.Errorf("expected ErrTenantServiceUnavailable, got %v", err)
+	for name, registry := range registries {
+		t.Run(name, func(t *testing.T) {
+			for _, tc := range tenantToolCases {
+				_, err := registry.ExecuteTool(boundContext("t1"), tc.tool, tc.args)
+				assert.Equal(t, ErrTenantServiceUnavailable, err, "%s", tc.tool)
 			}
 		})
 	}
 }
 
-// TestTenantIDRequired tests validation for required tenant ID.
-func TestTenantIDRequired(t *testing.T) {
-	testCases := []struct {
-		name     string
-		toolName string
-		args     map[string]interface{}
-	}{
-		{"tenant_get without ID", "tenant_get", map[string]interface{}{}},
-		{"tenant_get with empty ID", "tenant_get", map[string]interface{}{"tenant_id": ""}},
-		{"tenant_update without ID", "tenant_update", map[string]interface{}{}},
-		{"tenant_delete without ID", "tenant_delete", map[string]interface{}{}},
-		{"tenant_suspend without ID", "tenant_suspend", map[string]interface{}{}},
-		{"tenant_resume without ID", "tenant_resume", map[string]interface{}{}},
-		{"tenant_get_quotas without ID", "tenant_get_quotas", map[string]interface{}{}},
-		{"tenant_update_quotas without ID", "tenant_update_quotas", map[string]interface{}{}},
-		{"tenant_get_usage without ID", "tenant_get_usage", map[string]interface{}{}},
-		{"tenant_check_quota without ID", "tenant_check_quota", map[string]interface{}{"resource_type": "vms", "amount": 1}},
-		{"tenant_rotate_dek without ID", "tenant_rotate_dek", map[string]interface{}{}},
-		{"tenant_get_dek_status without ID", "tenant_get_dek_status", map[string]interface{}{}},
-	}
-
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			// Create a registry with a mock service provider
-			logger := newTestLogger()
-			mockSvc := newMockServiceProvider()
-			registry := NewToolRegistry(mockSvc, logger)
-
-			ctx := context.Background()
-			_, err := registry.ExecuteTool(ctx, tc.toolName, tc.args)
-
-			// Since service unavailable is returned first (mock doesn't implement TenantServiceProvider),
-			// we verify that the execution at least attempts to run
-			if err == nil {
-				t.Errorf("expected error for missing tenant_id")
-			}
-		})
-	}
-}
-
-// TestTenantNameRequired tests validation for required tenant name.
-func TestTenantNameRequired(t *testing.T) {
-	testCases := []struct {
-		name string
-		args map[string]interface{}
-	}{
-		{"tenant_get_by_name without name", map[string]interface{}{}},
-		{"tenant_get_by_name with empty name", map[string]interface{}{"name": ""}},
-		{"tenant_create without name", map[string]interface{}{}},
-		{"tenant_create with empty name", map[string]interface{}{"name": ""}},
-	}
-
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			logger := newTestLogger()
-			mockSvc := newMockServiceProvider()
-			registry := NewToolRegistry(mockSvc, logger)
-
-			ctx := context.Background()
-			_, err := registry.ExecuteTool(ctx, "tenant_get_by_name", tc.args)
-
-			// Service unavailable takes precedence, but if service were available,
-			// name validation would occur
-			if err == nil {
-				t.Errorf("expected error for missing name")
-			}
-		})
-	}
-}
-
-// TestFormatTenantEntity tests the formatTenantEntity function.
-func TestFormatTenantEntity(t *testing.T) {
-	t.Run("nil entity returns nil", func(t *testing.T) {
-		result := formatTenantEntity(nil)
-		if result != nil {
-			t.Errorf("expected nil, got %v", result)
-		}
-	})
-
-	t.Run("valid entity is formatted correctly", func(t *testing.T) {
-		entity := createTestTenantEntity("test-id", "test-tenant")
-
-		result := formatTenantEntity(entity)
-
-		if result["id"] != "test-id" {
-			t.Errorf("expected id 'test-id', got %v", result["id"])
-		}
-
-		if result["name"] != "test-tenant" {
-			t.Errorf("expected name 'test-tenant', got %v", result["name"])
-		}
-
-		if result["display_name"] != "test-tenant Display" {
-			t.Errorf("expected display_name 'test-tenant Display', got %v", result["display_name"])
-		}
-
-		if result["state"] != "active" {
-			t.Errorf("expected state 'active', got %v", result["state"])
-		}
-
-		// The per-tenant OVS bridge and VLAN range were retired (#708).
-		for _, retired := range []string{"ovs_bridge", "vlan_range"} {
-			if _, exists := result[retired]; exists {
-				t.Errorf("expected %s to be absent, got %v", retired, result[retired])
-			}
-		}
-
-		// Check DEK handle
-		if result["dek_handle"] != uint32(12345) {
-			t.Errorf("expected dek_handle 12345, got %v", result["dek_handle"])
-		}
-
-		// Check compute quota
-		computeQuota, ok := result["compute_quota"].(map[string]interface{})
-		if !ok {
-			t.Fatal("expected compute_quota to be a map")
-		}
-		if computeQuota["max_vms"] != int64(10) {
-			t.Errorf("expected max_vms 10, got %v", computeQuota["max_vms"])
-		}
-
-		// Check labels
-		labels, ok := result["labels"].(map[string]string)
-		if !ok {
-			t.Fatal("expected labels to be a map")
-		}
-		if labels["env"] != "test" {
-			t.Errorf("expected label env='test', got %v", labels["env"])
-		}
-	})
-
-	t.Run("zero DEK handle is not included", func(t *testing.T) {
-		entity := createTestTenantEntity("test-id", "test-tenant")
-		entity.DEKPath = "" // Empty DEKPath results in zero DEKHandle
-
-		result := formatTenantEntity(entity)
-
-		if _, exists := result["dek_handle"]; exists {
-			t.Error("expected dek_handle to not be present for zero value")
-		}
-	})
-
-	t.Run("deleted_at is included when set", func(t *testing.T) {
-		entity := createTestTenantEntity("test-id", "test-tenant")
-		deletedAt := time.Now()
-		entity.DeletedAt = &deletedAt
-
-		result := formatTenantEntity(entity)
-
-		if _, exists := result["deleted_at"]; !exists {
-			t.Error("expected deleted_at to be present")
-		}
-	})
-
-	t.Run("empty labels not included", func(t *testing.T) {
-		entity := createTestTenantEntity("test-id", "test-tenant")
-		entity.Labels = nil
-
-		result := formatTenantEntity(entity)
-
-		if _, exists := result["labels"]; exists {
-			t.Error("expected labels to not be present when empty")
-		}
-	})
-
-	t.Run("empty annotations not included", func(t *testing.T) {
-		entity := createTestTenantEntity("test-id", "test-tenant")
-		entity.Annotations = nil
-
-		result := formatTenantEntity(entity)
-
-		if _, exists := result["annotations"]; exists {
-			t.Error("expected annotations to not be present when empty")
-		}
-	})
-}
-
-// TestFormatTenantList tests the formatTenantList function.
-func TestFormatTenantList(t *testing.T) {
-	t.Run("empty list returns empty slice", func(t *testing.T) {
-		result := formatTenantList(nil)
-		if len(result) != 0 {
-			t.Errorf("expected empty slice, got %d elements", len(result))
-		}
-	})
-
-	t.Run("multiple entities are formatted correctly", func(t *testing.T) {
-		entities := []*tenant.TenantEntity{
-			createTestTenantEntity("id-1", "tenant-1"),
-			createTestTenantEntity("id-2", "tenant-2"),
-		}
-
-		result := formatTenantList(entities)
-
-		if len(result) != 2 {
-			t.Errorf("expected 2 elements, got %d", len(result))
-		}
-
-		if result[0]["id"] != "id-1" {
-			t.Errorf("expected first id 'id-1', got %v", result[0]["id"])
-		}
-
-		if result[1]["id"] != "id-2" {
-			t.Errorf("expected second id 'id-2', got %v", result[1]["id"])
-		}
-	})
-
-	t.Run("empty slice input returns empty slice", func(t *testing.T) {
-		result := formatTenantList([]*tenant.TenantEntity{})
-		if len(result) != 0 {
-			t.Errorf("expected empty slice, got %d elements", len(result))
-		}
-	})
-}
-
-// TestHasQuotaArgs tests the has*QuotaArgs helper functions.
-func TestHasQuotaArgs(t *testing.T) {
-	t.Run("hasComputeQuotaArgs", func(t *testing.T) {
-		testCases := []struct {
-			name     string
-			args     map[string]interface{}
-			expected bool
-		}{
-			{"empty args", map[string]interface{}{}, false},
-			{"max_vms present", map[string]interface{}{"max_vms": 10}, true},
-			{"max_containers present", map[string]interface{}{"max_containers": 50}, true},
-			{"max_vcpus present", map[string]interface{}{"max_vcpus": 32}, true},
-			{"max_memory_mb present", map[string]interface{}{"max_memory_mb": 65536}, true},
-			{"max_disk_gb present", map[string]interface{}{"max_disk_gb": 1024}, true},
-			{"unrelated args", map[string]interface{}{"name": "test"}, false},
-			{"nil value", map[string]interface{}{"max_vms": nil}, true},
-		}
-
-		for _, tc := range testCases {
-			t.Run(tc.name, func(t *testing.T) {
-				result := hasComputeQuotaArgs(tc.args)
-				if result != tc.expected {
-					t.Errorf("expected %v, got %v", tc.expected, result)
-				}
-			})
-		}
-	})
-
-	t.Run("hasNetworkQuotaArgs", func(t *testing.T) {
-		testCases := []struct {
-			name     string
-			args     map[string]interface{}
-			expected bool
-		}{
-			{"empty args", map[string]interface{}{}, false},
-			{"max_bridges present", map[string]interface{}{"max_bridges": 5}, true},
-			{"max_ports present", map[string]interface{}{"max_ports": 100}, true},
-			{"max_bandwidth_mbps present", map[string]interface{}{"max_bandwidth_mbps": 10000}, true},
-			{"unrelated args", map[string]interface{}{"name": "test"}, false},
-		}
-
-		for _, tc := range testCases {
-			t.Run(tc.name, func(t *testing.T) {
-				result := hasNetworkQuotaArgs(tc.args)
-				if result != tc.expected {
-					t.Errorf("expected %v, got %v", tc.expected, result)
-				}
-			})
-		}
-	})
-
-	t.Run("hasStorageQuotaArgs", func(t *testing.T) {
-		testCases := []struct {
-			name     string
-			args     map[string]interface{}
-			expected bool
-		}{
-			{"empty args", map[string]interface{}{}, false},
-			{"max_volumes_gb present", map[string]interface{}{"max_volumes_gb": 2048}, true},
-			{"max_snapshots present", map[string]interface{}{"max_snapshots": 100}, true},
-			{"unrelated args", map[string]interface{}{"name": "test"}, false},
-		}
-
-		for _, tc := range testCases {
-			t.Run(tc.name, func(t *testing.T) {
-				result := hasStorageQuotaArgs(tc.args)
-				if result != tc.expected {
-					t.Errorf("expected %v, got %v", tc.expected, result)
-				}
-			})
-		}
-	})
-}
-
-// TestTenantToolInputSchemas tests that tool input schemas are properly defined.
-func TestTenantToolInputSchemas(t *testing.T) {
-	logger := newTestLogger()
-	mockSvc := newMockServiceProvider()
-	registry := NewToolRegistry(mockSvc, logger)
-
-	tools := registry.ListTools()
-	tenantTools := make(map[string]ToolDefinition)
-	for _, tool := range tools {
-		if len(tool.Name) > 7 && tool.Name[:7] == "tenant_" {
-			tenantTools[tool.Name] = tool
-		}
-	}
-
-	// Verify tool count: 15 since the VLAN and bridge tools were retired (#708)
-	if len(tenantTools) != 15 {
-		t.Errorf("expected 15 tenant tools, got %d", len(tenantTools))
-	}
-
-	// Test specific tool schemas
-	t.Run("tenant_create has required name field", func(t *testing.T) {
-		tool := tenantTools["tenant_create"]
-		schema := tool.InputSchema
-		required, ok := schema["required"].([]string)
-		if !ok {
-			t.Fatal("expected required to be a string slice")
-		}
-
-		found := false
-		for _, r := range required {
-			if r == "name" {
-				found = true
-				break
-			}
-		}
-		if !found {
-			t.Error("expected 'name' to be in required fields")
-		}
-	})
-
-	t.Run("tenant_get has required tenant_id field", func(t *testing.T) {
-		tool := tenantTools["tenant_get"]
-		schema := tool.InputSchema
-		required, ok := schema["required"].([]string)
-		if !ok {
-			t.Fatal("expected required to be a string slice")
-		}
-
-		found := false
-		for _, r := range required {
-			if r == "tenant_id" {
-				found = true
-				break
-			}
-		}
-		if !found {
-			t.Error("expected 'tenant_id' to be in required fields")
-		}
-	})
-
-	t.Run("tenant_check_quota has required fields", func(t *testing.T) {
-		tool := tenantTools["tenant_check_quota"]
-		schema := tool.InputSchema
-		required, ok := schema["required"].([]string)
-		if !ok {
-			t.Fatal("expected required to be a string slice")
-		}
-
-		expectedFields := map[string]bool{
-			"tenant_id":     false,
-			"resource_type": false,
-			"amount":        false,
-		}
-
-		for _, r := range required {
-			if _, exists := expectedFields[r]; exists {
-				expectedFields[r] = true
-			}
-		}
-
-		for field, found := range expectedFields {
-			if !found {
-				t.Errorf("expected '%s' to be in required fields", field)
-			}
-		}
-	})
-
-	t.Run("tenant_list has optional pagination fields", func(t *testing.T) {
-		tool := tenantTools["tenant_list"]
-		schema := tool.InputSchema
-		props, ok := schema["properties"].(map[string]interface{})
-		if !ok {
-			t.Fatal("expected properties to be a map")
-		}
-
-		if _, exists := props["limit"]; !exists {
-			t.Error("expected limit property")
-		}
-		if _, exists := props["offset"]; !exists {
-			t.Error("expected offset property")
-		}
-	})
-
-	t.Run("tenant_sync has empty properties", func(t *testing.T) {
-		tool := tenantTools["tenant_sync"]
-		schema := tool.InputSchema
-		props, ok := schema["properties"].(map[string]interface{})
-		if !ok {
-			t.Fatal("expected properties to be a map")
-		}
-
-		if len(props) != 0 {
-			t.Error("expected empty properties for tenant_sync")
-		}
-	})
-
-	t.Run("tenant_rotate_dek has required tenant_id field", func(t *testing.T) {
-		tool := tenantTools["tenant_rotate_dek"]
-		schema := tool.InputSchema
-		required, ok := schema["required"].([]string)
-		if !ok {
-			t.Fatal("expected required to be a string slice")
-		}
-
-		found := false
-		for _, r := range required {
-			if r == "tenant_id" {
-				found = true
-				break
-			}
-		}
-		if !found {
-			t.Error("expected 'tenant_id' to be in required fields")
-		}
-
-		// Check that background is an optional parameter
-		props, ok := schema["properties"].(map[string]interface{})
-		if !ok {
-			t.Fatal("expected properties to be a map")
-		}
-		if _, exists := props["background"]; !exists {
-			t.Error("expected background property to be defined")
-		}
-	})
-
-	t.Run("tenant_get_dek_status has required tenant_id field", func(t *testing.T) {
-		tool := tenantTools["tenant_get_dek_status"]
-		schema := tool.InputSchema
-		required, ok := schema["required"].([]string)
-		if !ok {
-			t.Fatal("expected required to be a string slice")
-		}
-
-		found := false
-		for _, r := range required {
-			if r == "tenant_id" {
-				found = true
-				break
-			}
-		}
-		if !found {
-			t.Error("expected 'tenant_id' to be in required fields")
-		}
-	})
-}
-
-// TestTenantErrorTypes tests the predefined tenant error types.
-func TestTenantErrorTypes(t *testing.T) {
-	testCases := []struct {
-		name     string
-		err      error
-		contains string
-	}{
-		{"service unavailable", ErrTenantServiceUnavailable, "TENANT_SERVICE_UNAVAILABLE"},
-		{"ID required", ErrTenantIDRequired, "TENANT_ID_REQUIRED"},
-		{"name required", ErrTenantNameRequired, "TENANT_NAME_REQUIRED"},
-		{"resource type required", ErrTenantResourceTypeRequired, "TENANT_RESOURCE_TYPE_REQUIRED"},
-		{"amount required", ErrTenantAmountRequired, "TENANT_AMOUNT_REQUIRED"},
-		{"invalid resource type", ErrTenantInvalidResourceType, "TENANT_INVALID_RESOURCE_TYPE"},
-	}
-
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			errStr := tc.err.Error()
-			if len(errStr) == 0 {
-				t.Error("error message should not be empty")
-			}
-
-			tenantErr, ok := tc.err.(*TenantError)
-			if !ok {
-				t.Fatal("expected TenantError type")
-			}
-
-			if tenantErr.Code != tc.contains {
-				t.Errorf("expected code %s, got %s", tc.contains, tenantErr.Code)
-			}
-		})
-	}
-}
-
-// TestResourceTypeValidation tests validation of resource types.
-func TestResourceTypeValidation(t *testing.T) {
-	validTypes := []string{
-		"vms", "containers", "vcpus", "memory", "disk",
-		"bridges", "ports", "bandwidth", "volumes", "snapshots",
-	}
-
-	for _, rt := range validTypes {
-		t.Run(rt+" is valid", func(t *testing.T) {
-			resourceType := quota.ResourceType(rt)
-			if !resourceType.IsValid() {
-				t.Errorf("expected %s to be valid", rt)
-			}
-		})
-	}
-
-	t.Run("invalid type", func(t *testing.T) {
-		resourceType := quota.ResourceType("invalid")
-		if resourceType.IsValid() {
-			t.Error("expected 'invalid' to be invalid resource type")
-		}
-	})
-}
-
-// TestTenantToolDescriptions tests that all tools have descriptions.
-func TestTenantToolDescriptions(t *testing.T) {
-	logger := newTestLogger()
-	mockSvc := newMockServiceProvider()
-	registry := NewToolRegistry(mockSvc, logger)
-
-	tools := registry.ListTools()
-	for _, tool := range tools {
-		if len(tool.Name) > 7 && tool.Name[:7] == "tenant_" {
-			if tool.Description == "" {
-				t.Errorf("tool %s has empty description", tool.Name)
-			}
+// TestTenantToolsReturnServiceErrorsUnchanged: the tools answer the
+// TenantService's error as it is, so MCP carries gRPC's error class.
+func TestTenantToolsReturnServiceErrorsUnchanged(t *testing.T) {
+	for _, code := range []codes.Code{codes.NotFound, codes.InvalidArgument, codes.PermissionDenied} {
+		server := newRecordingTenantServer()
+		server.err = status.Error(code, "from the service")
+		registry := newTenantToolRegistry(server)
+
+		for _, tc := range tenantToolCases {
+			_, err := registry.ExecuteTool(boundContext("t1"), tc.tool, tc.args)
+			assert.Equal(t, code, status.Code(err), "%s", tc.tool)
 		}
 	}
 }
 
-// TestGetTenantManagerNilProvider tests getTenantManager with nil provider.
-func TestGetTenantManagerNilProvider(t *testing.T) {
-	logger := newTestLogger()
-	mockSvc := newMockServiceProvider()
-	registry := NewToolRegistry(mockSvc, logger)
+// TestTenantRotateDEKPassesBackground: the background argument reaches the
+// RPC. Before #304 the tool dropped it.
+func TestTenantRotateDEKPassesBackground(t *testing.T) {
+	for _, background := range []bool{true, false} {
+		server := newRecordingTenantServer()
+		result, err := newTenantToolRegistry(server).ExecuteTool(boundContext("t1"), "tenant_rotate_dek",
+			map[string]interface{}{"tenant_id": "t1", "background": background})
+		require.NoError(t, err)
 
-	mgr := registry.getTenantManager()
-	if mgr != nil {
-		t.Error("expected nil manager when provider doesn't implement TenantServiceProvider")
+		req := server.requests["RotateTenantDEK"].(*platformv1.RotateTenantDEKRequest)
+		assert.Equal(t, background, req.GetBackground())
+		assert.Equal(t, "t1", req.GetTenantId())
+		out := result.(map[string]interface{})
+		assert.Equal(t, uint32(1), out["old_version"])
+		assert.Equal(t, uint32(2), out["new_version"])
 	}
 }
 
-// TestTenantSyncNoManager tests tenant_sync with unavailable manager.
-func TestTenantSyncNoManager(t *testing.T) {
-	logger := newTestLogger()
-	mockSvc := newMockServiceProvider()
-	registry := NewToolRegistry(mockSvc, logger)
-
-	ctx := context.Background()
-	_, err := registry.ExecuteTool(ctx, "tenant_sync", map[string]interface{}{})
-
-	if err != ErrTenantServiceUnavailable {
-		t.Errorf("expected ErrTenantServiceUnavailable, got %v", err)
+// TestTenantUpdateQuotasKeepsLimitsNotGiven: UpdateQuotas replaces every
+// limit, so a limit the caller left out is sent at its current value.
+func TestTenantUpdateQuotasKeepsLimitsNotGiven(t *testing.T) {
+	server := newRecordingTenantServer()
+	server.quotas = &platformv1.GetQuotasResponse{
+		TenantId: "t1",
+		Compute:  &platformv1.ComputeQuota{MaxVms: 10, MaxContainers: 20, MaxVcpus: 8, MaxMemoryMb: 4096},
+		Network:  &platformv1.NetworkQuota{MaxBridges: 2, MaxPorts: 30, MaxBandwidthMbps: 100},
+		Storage:  &platformv1.StorageQuota{MaxVolumesGb: 50, MaxSnapshots: 5},
 	}
+
+	_, err := newTenantToolRegistry(server).ExecuteTool(boundContext("t1"), "tenant_update_quotas",
+		map[string]interface{}{"tenant_id": "t1", "max_vms": float64(12), "max_snapshots": float64(9)})
+	require.NoError(t, err)
+
+	assert.Equal(t, []string{"GetQuotas", "UpdateQuotas"}, server.calls)
+	req := server.requests["UpdateQuotas"].(*platformv1.UpdateQuotasRequest)
+	assert.Equal(t, int64(12), req.GetCompute().GetMaxVms())
+	assert.Equal(t, int64(20), req.GetCompute().GetMaxContainers())
+	assert.Equal(t, int64(4096), req.GetCompute().GetMaxMemoryMb())
+	assert.Equal(t, int64(30), req.GetNetwork().GetMaxPorts())
+	assert.Equal(t, int64(50), req.GetStorage().GetMaxVolumesGb())
+	assert.Equal(t, int64(9), req.GetStorage().GetMaxSnapshots())
 }
 
-// TestQuotaResourceCategories tests quota resource type categories.
-func TestQuotaResourceCategories(t *testing.T) {
-	testCases := []struct {
-		resource quota.ResourceType
-		category string
-	}{
-		{quota.ResourceVMs, "compute"},
-		{quota.ResourceContainers, "compute"},
-		{quota.ResourceVCPUs, "compute"},
-		{quota.ResourceMemory, "compute"},
-		{quota.ResourceBridges, "network"},
-		{quota.ResourcePorts, "network"},
-		{quota.ResourceBandwidth, "network"},
-		{quota.ResourceDisk, "storage"},
-		{quota.ResourceVolumes, "storage"},
-		{quota.ResourceSnapshots, "storage"},
-	}
+// TestTenantUpdateQuotasStopsOnReadError: when the current quotas cannot be
+// read, nothing is written.
+func TestTenantUpdateQuotasStopsOnReadError(t *testing.T) {
+	server := newRecordingTenantServer()
+	server.err = status.Error(codes.NotFound, "tenant not found")
 
-	for _, tc := range testCases {
-		t.Run(string(tc.resource), func(t *testing.T) {
-			if tc.resource.Category() != tc.category {
-				t.Errorf("expected category %s, got %s", tc.category, tc.resource.Category())
-			}
-		})
-	}
+	_, err := newTenantToolRegistry(server).ExecuteTool(boundContext("t1"), "tenant_update_quotas",
+		map[string]interface{}{"tenant_id": "t1", "max_vms": float64(12)})
+
+	assert.Equal(t, codes.NotFound, status.Code(err))
+	assert.Equal(t, []string{"GetQuotas"}, server.calls)
 }
 
-// TestTenantToolExecutionErrorHandling tests error handling in tool execution.
-func TestTenantToolExecutionErrorHandling(t *testing.T) {
-	ctx := context.Background()
-	logger := newTestLogger()
-	mockSvc := newMockServiceProvider()
-	registry := NewToolRegistry(mockSvc, logger)
+// TestTenantBarrierInitPassesShamirParameters: threshold and shares reach
+// the RPC, which decides whether they are acceptable.
+func TestTenantBarrierInitPassesShamirParameters(t *testing.T) {
+	server := newRecordingTenantServer()
+	_, err := newTenantToolRegistry(server).ExecuteTool(boundContext("t1"), "platform_tenant_barrier_init",
+		map[string]interface{}{"tenant_id": "t1", "threshold": float64(2), "shares": float64(3)})
+	require.NoError(t, err)
 
-	// Test that execution with invalid tool name returns error
-	t.Run("unknown tool returns error", func(t *testing.T) {
-		_, err := registry.ExecuteTool(ctx, "tenant_unknown", map[string]interface{}{})
-		if err == nil {
-			t.Error("expected error for unknown tool")
-		}
+	req := server.requests["InitTenantBarrier"].(*platformv1.InitTenantBarrierRequest)
+	assert.Equal(t, int32(2), req.GetThreshold())
+	assert.Equal(t, int32(3), req.GetShares())
+}
+
+// TestTenantBarrierUnsealDecodesKey: the base64 key reaches the RPC decoded;
+// a key that is not base64 is refused before the RPC.
+func TestTenantBarrierUnsealDecodesKey(t *testing.T) {
+	server := newRecordingTenantServer()
+	registry := newTenantToolRegistry(server)
+
+	_, err := registry.ExecuteTool(boundContext("t1"), "platform_tenant_barrier_unseal",
+		map[string]interface{}{"tenant_id": "t1", "key": base64.StdEncoding.EncodeToString([]byte("secret"))})
+	require.NoError(t, err)
+	req := server.requests["UnsealTenantBarrier"].(*platformv1.UnsealTenantBarrierRequest)
+	assert.Equal(t, []byte("secret"), req.GetKey())
+
+	server.calls = nil
+	_, err = registry.ExecuteTool(boundContext("t1"), "platform_tenant_barrier_unseal",
+		map[string]interface{}{"tenant_id": "t1", "key": "!not base64!"})
+	assert.Equal(t, ErrTenantBarrierUnsealKeyDecode, err)
+	assert.Empty(t, server.calls)
+}
+
+// TestTenantCheckQuotaTranslatesArguments: resource_type and amount reach
+// the RPC, and an over-quota answer is a result, not an error.
+func TestTenantCheckQuotaTranslatesArguments(t *testing.T) {
+	server := newRecordingTenantServer()
+	result, err := newTenantToolRegistry(server).ExecuteTool(boundContext("t1"), "tenant_check_quota",
+		map[string]interface{}{"tenant_id": "t1", "resource_type": "vcpus", "amount": float64(7)})
+	require.NoError(t, err)
+
+	req := server.requests["CheckQuota"].(*platformv1.CheckQuotaRequest)
+	assert.Equal(t, "vcpus", req.GetResource())
+	assert.Equal(t, int64(7), req.GetAmount())
+	out := result.(map[string]interface{})
+	assert.Equal(t, false, out["available"])
+	assert.Equal(t, "over quota", out["message"])
+}
+
+// TestTenantCreateSendsQuotasOnlyWhenGiven: a quota group the caller gave no
+// limit for is left nil, so the tenant default applies.
+func TestTenantCreateSendsQuotasOnlyWhenGiven(t *testing.T) {
+	server := newRecordingTenantServer()
+	_, err := newTenantToolRegistry(server).ExecuteTool(boundContext("t1"), "tenant_create",
+		map[string]interface{}{"name": "n", "max_vms": float64(3), "labels": map[string]interface{}{"env": "test"}})
+	require.NoError(t, err)
+
+	req := server.requests["CreateTenant"].(*platformv1.CreateTenantRequest)
+	assert.Equal(t, "n", req.GetName())
+	assert.Equal(t, int64(3), req.GetComputeQuota().GetMaxVms())
+	assert.Nil(t, req.GetNetworkQuota())
+	assert.Nil(t, req.GetStorageQuota())
+	assert.Equal(t, map[string]string{"env": "test"}, req.GetLabels())
+}
+
+// TestTenantListPassesPagination: limit and offset reach the RPC.
+func TestTenantListPassesPagination(t *testing.T) {
+	server := newRecordingTenantServer()
+	result, err := newTenantToolRegistry(server).ExecuteTool(boundContext("t1"), "tenant_list",
+		map[string]interface{}{"limit": float64(5), "offset": float64(10)})
+	require.NoError(t, err)
+
+	req := server.requests["ListTenants"].(*platformv1.ListTenantsRequest)
+	assert.Equal(t, int32(5), req.GetLimit())
+	assert.Equal(t, int32(10), req.GetOffset())
+	out := result.(map[string]interface{})
+	assert.Equal(t, 1, out["count"])
+	assert.Equal(t, int32(1), out["total"])
+}
+
+// TestTenantDEKStatusIncludesProgress: re-encryption progress is answered
+// when the RPC reports it.
+func TestTenantDEKStatusIncludesProgress(t *testing.T) {
+	result, err := newTenantToolRegistry(newRecordingTenantServer()).ExecuteTool(boundContext("t1"),
+		"tenant_get_dek_status", map[string]interface{}{"tenant_id": "t1"})
+	require.NoError(t, err)
+
+	out := result.(map[string]interface{})
+	assert.Equal(t, uint64(3), out["version"])
+	progress := out["reencrypt_progress"].(map[string]interface{})
+	assert.Equal(t, true, progress["in_progress"])
+}
+
+func TestFormatTenant(t *testing.T) {
+	assert.Nil(t, formatTenant(nil))
+
+	created := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	out := formatTenant(&platformv1.Tenant{
+		Id:           "t1",
+		Name:         "n",
+		State:        platformv1.TenantState_TENANT_STATE_SUSPENDED,
+		CreatedAt:    timestamppb.New(created),
+		DekPath:      "/tenant/t1/default",
+		Labels:       map[string]string{"env": "test"},
+		ComputeQuota: &platformv1.ComputeQuota{MaxVms: 4},
 	})
-
-	// Test all tenant tools return appropriate errors when service unavailable
-	tenantTools := []string{
-		"tenant_list", "tenant_get", "tenant_get_by_name", "tenant_create",
-		"tenant_update", "tenant_delete", "tenant_suspend", "tenant_resume",
-		"tenant_get_quotas", "tenant_update_quotas", "tenant_get_usage",
-		"tenant_check_quota", "tenant_sync",
-		"tenant_rotate_dek", "tenant_get_dek_status",
-	}
-
-	for _, toolName := range tenantTools {
-		t.Run(toolName+" handles missing service", func(t *testing.T) {
-			args := map[string]interface{}{
-				"tenant_id":     "test-id",
-				"name":          "test-name",
-				"resource_type": "vms",
-				"amount":        int64(1),
-			}
-			_, err := registry.ExecuteTool(ctx, toolName, args)
-			if !errors.Is(err, ErrTenantServiceUnavailable) {
-				if _, ok := err.(*TenantError); !ok {
-					t.Errorf("expected TenantError for %s, got %T: %v", toolName, err, err)
-				}
-			}
-		})
-	}
+	assert.Equal(t, "suspended", out["state"])
+	assert.Equal(t, "2026-01-02T03:04:05Z", out["created_at"])
+	assert.Equal(t, "", out["updated_at"])
+	assert.Equal(t, "/tenant/t1/default", out["dek_path"])
+	assert.Equal(t, map[string]string{"env": "test"}, out["labels"])
+	assert.NotContains(t, out, "annotations")
+	assert.Equal(t, int64(4), out["compute_quota"].(map[string]interface{})["max_vms"])
 }
 
-// TestTenantToolsSchemaTypes tests schema type definitions.
-func TestTenantToolsSchemaTypes(t *testing.T) {
-	logger := newTestLogger()
-	mockSvc := newMockServiceProvider()
-	registry := NewToolRegistry(mockSvc, logger)
-
-	tools := registry.ListTools()
-	tenantTools := make(map[string]ToolDefinition)
-	for _, tool := range tools {
-		if len(tool.Name) > 7 && tool.Name[:7] == "tenant_" {
-			tenantTools[tool.Name] = tool
-		}
-	}
-
-	t.Run("tenant_create has correct property types", func(t *testing.T) {
-		tool := tenantTools["tenant_create"]
-		props := tool.InputSchema["properties"].(map[string]interface{})
-
-		// Verify name is string type
-		nameProp := props["name"].(map[string]interface{})
-		if nameProp["type"] != "string" {
-			t.Error("expected name to be string type")
-		}
-
-		// The VLAN range arguments were retired (#708).
-		for _, retired := range []string{"vlan_start", "vlan_end"} {
-			if _, exists := props[retired]; exists {
-				t.Errorf("tenant_create still declares %s", retired)
-			}
-		}
-
-		// Verify labels is object type
-		labelsProp := props["labels"].(map[string]interface{})
-		if labelsProp["type"] != "object" {
-			t.Error("expected labels to be object type")
-		}
-	})
-
-	t.Run("tenant_check_quota has correct property types", func(t *testing.T) {
-		tool := tenantTools["tenant_check_quota"]
-		props := tool.InputSchema["properties"].(map[string]interface{})
-
-		amountProp := props["amount"].(map[string]interface{})
-		if amountProp["type"] != "integer" {
-			t.Error("expected amount to be integer type")
-		}
-
-		resourceProp := props["resource_type"].(map[string]interface{})
-		if resourceProp["type"] != "string" {
-			t.Error("expected resource_type to be string type")
-		}
-	})
-
-	t.Run("tenant_rotate_dek has correct property types", func(t *testing.T) {
-		tool := tenantTools["tenant_rotate_dek"]
-		props := tool.InputSchema["properties"].(map[string]interface{})
-
-		// Verify tenant_id is string type
-		tenantIDProp := props["tenant_id"].(map[string]interface{})
-		if tenantIDProp["type"] != "string" {
-			t.Error("expected tenant_id to be string type")
-		}
-
-		// Verify background is boolean type
-		backgroundProp := props["background"].(map[string]interface{})
-		if backgroundProp["type"] != "boolean" {
-			t.Error("expected background to be boolean type")
-		}
-	})
-
-	t.Run("tenant_get_dek_status has correct property types", func(t *testing.T) {
-		tool := tenantTools["tenant_get_dek_status"]
-		props := tool.InputSchema["properties"].(map[string]interface{})
-
-		// Verify tenant_id is string type
-		tenantIDProp := props["tenant_id"].(map[string]interface{})
-		if tenantIDProp["type"] != "string" {
-			t.Error("expected tenant_id to be string type")
-		}
-	})
+func TestTenantStateName(t *testing.T) {
+	assert.Equal(t, "active", tenantStateName(platformv1.TenantState_TENANT_STATE_ACTIVE))
+	assert.Equal(t, "TENANT_STATE_UNSPECIFIED", tenantStateName(platformv1.TenantState_TENANT_STATE_UNSPECIFIED))
 }
 
-// TestTenantErrorMessageFormat tests error message formatting.
-func TestTenantErrorMessageFormat(t *testing.T) {
-	err := &TenantError{
-		Code:    "TEST_CODE",
-		Message: "test message",
-	}
-
-	errStr := err.Error()
-	if errStr != "TEST_CODE: test message" {
-		t.Errorf("unexpected error format: %s", errStr)
-	}
-}
-
-// TestDefaultPaginationValues tests default pagination behavior.
-func TestDefaultPaginationValues(t *testing.T) {
-	// Test that getInt returns 0 for missing keys
-	args := map[string]interface{}{}
-	limit := getInt(args, "limit")
-	if limit != 0 {
-		t.Errorf("expected default limit 0, got %d", limit)
-	}
-
-	// Test that present values are returned
-	args["limit"] = 50
-	limit = getInt(args, "limit")
-	if limit != 50 {
-		t.Errorf("expected limit 50, got %d", limit)
-	}
-}
-
-// TestTenantEntityStateFormatting tests state formatting in entity.
-func TestTenantEntityStateFormatting(t *testing.T) {
-	states := []tenant.State{
-		tenant.StateCreated,
-		tenant.StateActive,
-		tenant.StateSuspended,
-		tenant.StateDeleting,
-		tenant.StateDeleted,
-	}
-
-	for _, state := range states {
-		t.Run(string(state), func(t *testing.T) {
-			entity := &tenant.TenantEntity{
-				ID:        "test",
-				Name:      "test",
-				State:     state,
-				CreatedAt: time.Now(),
-				UpdatedAt: time.Now(),
-			}
-			result := formatTenantEntity(entity)
-			if result["state"] != string(state) {
-				t.Errorf("expected state %s, got %v", state, result["state"])
-			}
-		})
-	}
-}
-
-// TestQuotaArgsMultipleKeys tests quota args detection with multiple keys.
-func TestQuotaArgsMultipleKeys(t *testing.T) {
-	t.Run("multiple compute args", func(t *testing.T) {
-		args := map[string]interface{}{
-			"max_vms":        10,
-			"max_containers": 20,
-			"max_vcpus":      32,
-		}
-		if !hasComputeQuotaArgs(args) {
-			t.Error("expected true for multiple compute args")
-		}
-	})
-
-	t.Run("mixed args with compute", func(t *testing.T) {
-		args := map[string]interface{}{
-			"name":     "test",
-			"max_vms":  10,
-			"max_disk": 100,
-		}
-		if !hasComputeQuotaArgs(args) {
-			t.Error("expected true for mixed args with compute")
-		}
-	})
-
-	t.Run("all quota types present", func(t *testing.T) {
-		args := map[string]interface{}{
-			"max_vms":        10,
-			"max_bridges":    5,
-			"max_volumes_gb": 100,
-		}
-		if !hasComputeQuotaArgs(args) {
-			t.Error("expected true for compute")
-		}
-		if !hasNetworkQuotaArgs(args) {
-			t.Error("expected true for network")
-		}
-		if !hasStorageQuotaArgs(args) {
-			t.Error("expected true for storage")
-		}
-	})
-}
-
-// TestTenantRotateDEKNoManager tests tenant_rotate_dek with unavailable manager.
-func TestTenantRotateDEKNoManager(t *testing.T) {
-	logger := newTestLogger()
-	mockSvc := newMockServiceProvider()
-	registry := NewToolRegistry(mockSvc, logger)
-
-	ctx := context.Background()
-	_, err := registry.ExecuteTool(ctx, "tenant_rotate_dek", map[string]interface{}{"tenant_id": "test-id"})
-
-	if err != ErrTenantServiceUnavailable {
-		t.Errorf("expected ErrTenantServiceUnavailable, got %v", err)
-	}
-}
-
-// TestTenantGetDEKStatusNoManager tests tenant_get_dek_status with unavailable manager.
-func TestTenantGetDEKStatusNoManager(t *testing.T) {
-	logger := newTestLogger()
-	mockSvc := newMockServiceProvider()
-	registry := NewToolRegistry(mockSvc, logger)
-
-	ctx := context.Background()
-	_, err := registry.ExecuteTool(ctx, "tenant_get_dek_status", map[string]interface{}{"tenant_id": "test-id"})
-
-	if err != ErrTenantServiceUnavailable {
-		t.Errorf("expected ErrTenantServiceUnavailable, got %v", err)
-	}
-}
-
-// TestTenantDEKToolsDescription tests that DEK tools have proper descriptions.
-func TestTenantDEKToolsDescription(t *testing.T) {
-	logger := newTestLogger()
-	mockSvc := newMockServiceProvider()
-	registry := NewToolRegistry(mockSvc, logger)
-
-	tools := registry.ListTools()
-	toolsByName := make(map[string]ToolDefinition)
-	for _, tool := range tools {
-		toolsByName[tool.Name] = tool
-	}
-
-	t.Run("tenant_rotate_dek has description", func(t *testing.T) {
-		tool, ok := toolsByName["tenant_rotate_dek"]
-		if !ok {
-			t.Fatal("tenant_rotate_dek tool not found")
-		}
-		if tool.Description == "" {
-			t.Error("tenant_rotate_dek should have a description")
-		}
-		if tool.Description != "Rotate the Data Encryption Key for a tenant" {
-			t.Errorf("unexpected description: %s", tool.Description)
-		}
-	})
-
-	t.Run("tenant_get_dek_status has description", func(t *testing.T) {
-		tool, ok := toolsByName["tenant_get_dek_status"]
-		if !ok {
-			t.Fatal("tenant_get_dek_status tool not found")
-		}
-		if tool.Description == "" {
-			t.Error("tenant_get_dek_status should have a description")
-		}
-		if tool.Description != "Get DEK status including usage and rotation progress" {
-			t.Errorf("unexpected description: %s", tool.Description)
-		}
-	})
+func TestErrTenantCallerUnbound(t *testing.T) {
+	err := ErrTenantCallerUnbound{}
+	assert.Contains(t, err.Error(), "no tenant")
+	assert.Equal(t, codes.PermissionDenied, status.Code(err))
+	assert.False(t, errors.Is(err, ErrTenantServiceUnavailable))
 }

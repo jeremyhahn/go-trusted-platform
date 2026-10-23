@@ -39,7 +39,7 @@ import (
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	xkmsca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/ca"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/restwire"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -288,50 +288,43 @@ func (m *mockCertStore) Close() error {
 // =============================================================================
 
 type mockHttpWriter struct {
-	lastStatus  int
-	lastPayload interface{}
-	lastError   error
+	lastStatus int
+	lastError  error
 }
 
 func (m *mockHttpWriter) Write(w http.ResponseWriter, r *http.Request, status int, resp interface{}) {
 	m.lastStatus = status
-	m.lastPayload = resp
 	w.WriteHeader(status)
 	json.NewEncoder(w).Encode(resp)
 }
 
 func (m *mockHttpWriter) WriteYaml(w http.ResponseWriter, status int, resp interface{}) {
 	m.lastStatus = status
-	m.lastPayload = resp
 	w.WriteHeader(status)
 }
 
 func (m *mockHttpWriter) WriteJson(w http.ResponseWriter, status int, resp interface{}) {
 	m.lastStatus = status
-	m.lastPayload = resp
 	w.WriteHeader(status)
 	json.NewEncoder(w).Encode(resp)
 }
 
 func (m *mockHttpWriter) Success200(w http.ResponseWriter, r *http.Request, payload interface{}) {
 	m.lastStatus = http.StatusOK
-	m.lastPayload = payload
 	w.WriteHeader(http.StatusOK)
-	resp := response.WebServiceResponse{Code: 200, Success: true, Payload: payload}
+	resp := restwire.WebServiceResponse{Code: 200, Success: true, Payload: payload}
 	json.NewEncoder(w).Encode(resp)
 }
 
 func (m *mockHttpWriter) Success201(w http.ResponseWriter, r *http.Request, payload interface{}) {
 	m.lastStatus = http.StatusCreated
-	m.lastPayload = payload
 	w.WriteHeader(http.StatusCreated)
-	resp := response.WebServiceResponse{Code: 201, Success: true, Payload: payload}
+	resp := restwire.WebServiceResponse{Code: 201, Success: true, Payload: payload}
 	json.NewEncoder(w).Encode(resp)
 }
 
 func (m *mockHttpWriter) Success404(w http.ResponseWriter, r *http.Request, payload interface{}, err error) {
 	m.lastStatus = http.StatusNotFound
-	m.lastPayload = payload
 	m.lastError = err
 	w.WriteHeader(http.StatusNotFound)
 }
@@ -346,7 +339,7 @@ func (m *mockHttpWriter) Error400(w http.ResponseWriter, r *http.Request, err er
 	m.lastStatus = http.StatusBadRequest
 	m.lastError = err
 	w.WriteHeader(http.StatusBadRequest)
-	resp := response.WebServiceResponse{Code: 400, Success: false, Error: err.Error()}
+	resp := restwire.WebServiceResponse{Code: 400, Success: false, Error: err.Error()}
 	json.NewEncoder(w).Encode(resp)
 }
 
@@ -359,7 +352,6 @@ func (m *mockHttpWriter) Error401(w http.ResponseWriter, r *http.Request, err er
 func (m *mockHttpWriter) Error403(w http.ResponseWriter, r *http.Request, err error, payload interface{}) {
 	m.lastStatus = http.StatusForbidden
 	m.lastError = err
-	m.lastPayload = payload
 	w.WriteHeader(http.StatusForbidden)
 }
 
@@ -367,7 +359,7 @@ func (m *mockHttpWriter) Error404(w http.ResponseWriter, r *http.Request, err er
 	m.lastStatus = http.StatusNotFound
 	m.lastError = err
 	w.WriteHeader(http.StatusNotFound)
-	resp := response.WebServiceResponse{Code: 404, Success: false, Error: err.Error()}
+	resp := restwire.WebServiceResponse{Code: 404, Success: false, Error: err.Error()}
 	json.NewEncoder(w).Encode(resp)
 }
 
@@ -375,7 +367,15 @@ func (m *mockHttpWriter) Error500(w http.ResponseWriter, r *http.Request, err er
 	m.lastStatus = http.StatusInternalServerError
 	m.lastError = err
 	w.WriteHeader(http.StatusInternalServerError)
-	resp := response.WebServiceResponse{Code: 500, Success: false, Error: err.Error()}
+	resp := restwire.WebServiceResponse{Code: 500, Success: false, Error: err.Error()}
+	json.NewEncoder(w).Encode(resp)
+}
+
+func (m *mockHttpWriter) Error503(w http.ResponseWriter, r *http.Request, err error) {
+	m.lastStatus = http.StatusServiceUnavailable
+	m.lastError = err
+	w.WriteHeader(http.StatusServiceUnavailable)
+	resp := restwire.WebServiceResponse{Code: 503, Success: false, Error: err.Error()}
 	json.NewEncoder(w).Encode(resp)
 }
 
@@ -1214,13 +1214,36 @@ func TestRevokeCertificate_Error(t *testing.T) {
 		}
 		handlers, writer := newTestHandlers(mockCA)
 
-		req := httptest.NewRequest(http.MethodDelete, "/api/v1/ca/certificates/nonexistent", nil)
-		req = mux.SetURLVars(req, map[string]string{"serial": "nonexistent"})
+		req := httptest.NewRequest(http.MethodDelete, "/api/v1/ca/certificates/dead0001", nil)
+		req = mux.SetURLVars(req, map[string]string{"serial": "dead0001"})
 		rec := httptest.NewRecorder()
 
 		handlers.RevokeCertificate(rec, req)
 
 		assert.Equal(t, http.StatusNotFound, writer.lastStatus)
+	})
+
+	t.Run("returns 400 for a serial that is not hex", func(t *testing.T) {
+		var looked bool
+		mockCA := &mockCertificateAuthority{
+			initialized: true,
+			certStore: &mockCertStore{
+				getCertificateFn: func(string) (*x509.Certificate, error) {
+					looked = true
+					return nil, errors.New("not found")
+				},
+			},
+		}
+		handlers, writer := newTestHandlers(mockCA)
+
+		req := httptest.NewRequest(http.MethodDelete, "/api/v1/ca/certificates/not-a-serial", nil)
+		req = mux.SetURLVars(req, map[string]string{"serial": "not-a-serial"})
+		rec := httptest.NewRecorder()
+
+		handlers.RevokeCertificate(rec, req)
+
+		assert.Equal(t, http.StatusBadRequest, writer.lastStatus)
+		assert.False(t, looked, "a malformed serial must be refused before the store lookup")
 	})
 
 	t.Run("returns error for invalid request body", func(t *testing.T) {

@@ -19,7 +19,6 @@ import (
 	quicbaassdk "github.com/jeremyhahn/go-quicbaas/sdk/go"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/platform/service"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/jwt"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/login"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/middleware"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
@@ -82,7 +81,6 @@ func IsConfigured(config *Config) bool {
 type ServiceParams struct {
 	Config              *Config
 	Debug               bool
-	JWTService          *jwt.Service
 	Logger              *logging.Logger
 	RegistrationService service.RegistrationServicer
 	ResponseWriter      response.HttpWriter
@@ -116,7 +114,6 @@ type ServiceParams struct {
 // WebAuthnRestHandler binds the REST endpoints to the SDK relying party.
 type WebAuthnRestHandler struct {
 	logger              *logging.Logger
-	jwtService          *jwt.Service
 	userService         service.UserServicer
 	registrationService service.RegistrationServicer
 	tenantUserService   service.TenantUserServicer

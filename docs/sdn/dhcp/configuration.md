@@ -1,16 +1,18 @@
 # DHCP Configuration Reference
 
+> **Status: REFERENCE** · Last verified: 2026-10-15
+> The `sdn.dhcp` configuration and where each daemon reads it.
+
 ## Overview
 
-The DHCP server is configured in two places, depending on which daemon
-hosts it:
+Two daemon configuration sections name DHCP, and **neither serves DHCP
+today**:
 
-- **platformd**: the `sdn.dhcp` section (minimal bind config)
-- **gateway node**: the `gateway.dhcp` service section (pool selection
-  and lease settings)
-
-Per the platform's explicit-config rule, the service starts only when
-its config section is present with `enabled: true`.
+- **platformd**: the `sdn.dhcp` section (minimal bind config). It only logs
+  the zones the node would serve (`pkg/app/sdn.go:655`).
+- **gatewayd**: the `dhcp:` section (`DHCPServiceConfig`,
+  `pkg/sdn/gateway/types.go:717`). gatewayd refuses it at start as planned,
+  not implemented (`pkg/sdn/gateway/handlers.go:80`).
 
 ## platformd: `sdn.dhcp`
 
@@ -24,45 +26,44 @@ sdn:
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
-| enabled | bool | Enable the DHCP server |
+| enabled | bool | Report the zones this node would serve |
 | interface | string | Network interface to bind |
 
-Pool selection, options, and lease tracking come from the platform IPAM
-system: each zone's pool is derived from `sdn.environment` (DHCP range `.50`
-to the last usable address), and explicit pools come from `sdn.ipam.pools`.
+The zones it reports come from the platform IPAM system: each zone's pool is
+derived from `sdn.environment` (DHCP range `.50` to the last usable address),
+and explicit pools come from `sdn.ipam.pools`.
 
-## Gateway node: `gateway.dhcp`
+## gatewayd: `dhcp:`
+
+The section parses, and gatewayd then refuses to start with it
+(`ErrServiceUnavailable`: it needs an IPAM allocator gatewayd does not have).
 
 ```yaml
-gateway:
+dhcp:
   enabled: true
-  dhcp:
-    enabled: true
-    interface: "eth0"
-    zone: "provisioning"          # resolve pool by zone (preferred)
-    # pool-start: "10.0.0.100"    # explicit range (overrides zone)
-    # pool-end:   "10.0.0.200"
-    lease-duration: 24h
+  interface: "eth0"
+  zone: "provisioning"          # resolve pool by zone
+  # pool-start: "10.0.0.100"    # explicit range (overrides zone)
+  # pool-end:   "10.0.0.200"
+  lease-duration: 24h
 ```
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
 | enabled | bool | Enable the DHCP service |
-| interface | string | Network interface to bind (required) |
+| interface | string | Network interface to bind |
 | zone | string | Zone name used to resolve the IPAM pool |
-| segment | string | Deprecated; provisioning subnet name (Zone takes precedence) |
-| pool-start / pool-end | string | Explicit address range (overrides zone/segment) |
+| pool-start / pool-end | string | Explicit address range (overrides zone) |
 | lease-duration | duration | DHCP lease duration |
 
-Precedence for pool selection (highest first):
-`pool-start`+`pool-end` → `zone` → `segment`.
-
-PXE boot is configured separately in the `gateway.pxe` service section.
+Precedence for pool selection (highest first): `pool-start`+`pool-end` →
+`zone`. gatewayd's `pxe:` section is refused the same way
+(`pkg/sdn/gateway/handlers.go:82`).
 
 ## Go Configuration API
 
-The DHCP engine (`pkg/sdn/dhcp`) is configured programmatically by the
-daemon with these types:
+The DHCP engine (`pkg/sdn/dhcp`) is configured programmatically by its
+embedder with these types:
 
 ```go
 type ServerConfig struct {
@@ -91,20 +92,22 @@ type DHCPOptions struct {
     NTPServers  []netip.Addr
     MTU         uint16
     Hostname    string
+    NextServer   net.IP // PXE next-server (siaddr)
+    BootFileName string // PXE boot file
 }
 ```
 
 ```go
-allocator := ipam.NewMemoryAllocator()
+allocator := backends.NewMemoryBackend() // pkg/sdn/ipam/backends
 
 server, err := dhcp.NewCoreDHCPServer(&dhcp.ServerConfig{
     Interfaces: []dhcp.InterfaceConfig{{
         Name:    "eth0",
         Network: dhcp.NetworkPrivate,
-        Address: netip.MustParseAddr("192.168.1.1"),
+        Address: netip.MustParseAddr("192.0.2.1"),
         PoolID:  "internal-pool",
         Options: dhcp.DHCPOptions{
-            Router:    netip.MustParseAddr("192.168.1.1"),
+            Router:    netip.MustParseAddr("192.0.2.1"),
             DNS:       []netip.Addr{netip.MustParseAddr("8.8.8.8")},
             LeaseTime: 24 * time.Hour,
         },
@@ -118,9 +121,9 @@ See [Plugins](plugins.md) for the IPAM and PXE plugin configuration
 
 ## Validation
 
-- `sdn.dhcp` / `gateway.dhcp` require `interface` when enabled.
-- The referenced IPAM pool (by zone, segment, or explicit range) must
-  exist; the gateway resolves it at service start.
+- `NewCoreDHCPServer` validates the `ServerConfig` it is given.
+- `ResolvePoolForZone` (`pkg/sdn/dhcp/zone_pool.go:77`) picks the pool: an
+  explicit pool ID wins, otherwise the zone's pool, which must exist.
 
 ## See Also
 

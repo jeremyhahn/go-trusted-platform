@@ -14,9 +14,14 @@
 package alpine
 
 import (
+	"archive/tar"
+	"bytes"
+	"compress/gzip"
 	"context"
 	"io"
 	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
@@ -676,6 +681,15 @@ func TestFIPSInstaller_installOpenSSLFIPS(t *testing.T) {
 	})
 }
 
+// closedMirror returns the URL of a mirror that has stopped listening, so
+// a download fails at connect on loopback instead of in a host DNS lookup.
+func closedMirror(t *testing.T) string {
+	t.Helper()
+	srv := httptest.NewServer(http.NotFoundHandler())
+	srv.Close()
+	return srv.URL
+}
+
 func TestFIPSInstaller_installPackage(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 
@@ -685,7 +699,7 @@ func TestFIPSInstaller_installPackage(t *testing.T) {
 			OS:         "alpine",
 			Version:    "3.20",
 			Arch:       "x86_64",
-			Mirror:     "http://invalid-mirror.example.com",
+			Mirror:     closedMirror(t),
 			WorkDir:    tmpDir,
 			MountPoint: tmpDir,
 			Logger:     logger,
@@ -725,6 +739,198 @@ func containsStringHelper(s, substr string) bool {
 		}
 	}
 	return false
+}
+
+// TestFIPSInstaller_installPackage_Success installs a package from a local
+// mirror and checks that it lands in the target root.
+func TestFIPSInstaller_installPackage_Success(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	tmpDir := t.TempDir()
+
+	// Lay out a local mirror the way APKManager addresses it:
+	// <mirror>/v<version>/<repo>/<arch>/{APKINDEX.tar.gz,<name>-<version>.apk}
+	repoDir := filepath.Join(tmpDir, "mirror", "v3.20", "main", "x86_64")
+	if err := os.MkdirAll(repoDir, 0755); err != nil {
+		t.Fatalf("failed to create mirror repo dir: %v", err)
+	}
+	index := "P:openssl-fips\nV:3.1.2-r0\nA:x86_64\nC:Q1testchecksum\n\n"
+	if err := createTestAPKINDEX(filepath.Join(repoDir, "APKINDEX.tar.gz"), index); err != nil {
+		t.Fatalf("failed to create APKINDEX: %v", err)
+	}
+	pkg := map[string]testEntry{
+		"usr/":                      {isDir: true},
+		"usr/lib/":                  {isDir: true},
+		"usr/lib/ossl-modules/":     {isDir: true},
+		"usr/lib/ossl-modules/x.so": {content: "provider"},
+	}
+	if err := createTestAPK(filepath.Join(repoDir, "openssl-fips-3.1.2-r0.apk"), pkg); err != nil {
+		t.Fatalf("failed to create apk: %v", err)
+	}
+	server := httptest.NewServer(http.FileServer(http.Dir(filepath.Join(tmpDir, "mirror"))))
+	defer server.Close()
+
+	workDir := filepath.Join(tmpDir, "work")
+	mountPoint := filepath.Join(tmpDir, "mnt")
+	for _, dir := range []string{workDir, mountPoint} {
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			t.Fatalf("failed to create %s: %v", dir, err)
+		}
+	}
+	installer, err := NewFIPSInstaller(&fips.Config{
+		OS:         "alpine",
+		Version:    "3.20",
+		Arch:       "x86_64",
+		Mirror:     server.URL,
+		WorkDir:    workDir,
+		MountPoint: mountPoint,
+		Logger:     logger,
+	})
+	if err != nil {
+		t.Fatalf("failed to create installer: %v", err)
+	}
+
+	if err := installer.(*FIPSInstaller).installPackage(context.Background(), "openssl-fips"); err != nil {
+		t.Fatalf("installPackage: %v", err)
+	}
+
+	// The package must land in the target root, not the work directory.
+	got, err := os.ReadFile(filepath.Join(mountPoint, "usr", "lib", "ossl-modules", "x.so"))
+	if err != nil {
+		t.Fatalf("package file not installed into mount point: %v", err)
+	}
+	if string(got) != "provider" {
+		t.Errorf("installed file content = %q, want %q", got, "provider")
+	}
+}
+
+// TestFIPSInstaller_installFIPSKernel_ReadDirFailure covers a modules archive
+// without lib/modules: nothing to run depmod against, so the install still
+// succeeds and the skipped depmod is logged.
+func TestFIPSInstaller_installFIPSKernel_ReadDirFailure(t *testing.T) {
+	installer, mountPoint, logs := newKernelTestInstaller(t, func(path string) error {
+		return createTestAPK(path, map[string]testEntry{"boot/": {isDir: true}})
+	})
+
+	if err := installer.installFIPSKernel(context.Background()); err != nil {
+		t.Fatalf("installFIPSKernel: %v", err)
+	}
+
+	if _, err := os.Stat(filepath.Join(mountPoint, "boot", "vmlinuz-fips")); err != nil {
+		t.Errorf("kernel not copied into boot directory: %v", err)
+	}
+	if !containsString(logs.String(), "Could not read modules directory to run depmod") {
+		t.Errorf("expected a ReadDir warning in the log, got: %s", logs.String())
+	}
+}
+
+// TestFIPSInstaller_installFIPSKernel_DepmodWarning covers a failed depmod.
+// The extracted root has lib/modules/6.1.0-fips but no depmod binary, so
+// `chroot <root> depmod` fails for any user. depmod is not fatal: the install
+// succeeds and the failure is logged.
+func TestFIPSInstaller_installFIPSKernel_DepmodWarning(t *testing.T) {
+	installer, mountPoint, logs := newKernelTestInstaller(t, createMockModulesArchive)
+
+	if err := installer.installFIPSKernel(context.Background()); err != nil {
+		t.Fatalf("installFIPSKernel: %v", err)
+	}
+
+	module := filepath.Join(mountPoint, "lib", "modules", "6.1.0-fips", "kernel", "crypto", "sha256.ko")
+	if _, err := os.Stat(module); err != nil {
+		t.Errorf("kernel modules not extracted: %v", err)
+	}
+	if !containsString(logs.String(), "depmod failed (may not be critical)") {
+		t.Errorf("expected a depmod warning in the log, got: %s", logs.String())
+	}
+}
+
+// newKernelTestInstaller returns an installer whose FIPS artifacts directory
+// holds a kernel and a modules archive written by writeModules, the mount
+// point it installs into, and the buffer its log is written to.
+func newKernelTestInstaller(t *testing.T, writeModules func(path string) error) (*FIPSInstaller, string, *bytes.Buffer) {
+	t.Helper()
+	tmpDir := t.TempDir()
+
+	artifactsDir := filepath.Join(tmpDir, "fips-artifacts")
+	if err := os.MkdirAll(artifactsDir, 0755); err != nil {
+		t.Fatalf("failed to create artifacts dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(artifactsDir, "vmlinuz-fips"), []byte("mock kernel"), 0644); err != nil {
+		t.Fatalf("failed to create mock kernel: %v", err)
+	}
+	if err := writeModules(filepath.Join(artifactsDir, "modules-fips.tar.gz")); err != nil {
+		t.Fatalf("failed to create modules archive: %v", err)
+	}
+
+	mountPoint := filepath.Join(tmpDir, "mnt")
+	if err := os.MkdirAll(mountPoint, 0755); err != nil {
+		t.Fatalf("failed to create mount point: %v", err)
+	}
+
+	logs := &bytes.Buffer{}
+	installer, err := NewFIPSInstaller(&fips.Config{
+		OS:         "alpine",
+		Version:    "3.20",
+		Arch:       "x86_64",
+		WorkDir:    tmpDir,
+		MountPoint: mountPoint,
+		Logger:     slog.New(slog.NewTextHandler(logs, nil)),
+	})
+	if err != nil {
+		t.Fatalf("failed to create installer: %v", err)
+	}
+	fipsInstaller := installer.(*FIPSInstaller)
+	fipsInstaller.artifactsDir = artifactsDir
+	return fipsInstaller, mountPoint, logs
+}
+
+// createMockModulesArchive writes a modules-fips.tar.gz holding one module
+// under lib/modules/6.1.0-fips.
+func createMockModulesArchive(path string) error {
+	f, err := os.Create(path)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = f.Close() }()
+
+	gzw := gzip.NewWriter(f)
+	defer func() { _ = gzw.Close() }()
+
+	tw := tar.NewWriter(gzw)
+	defer func() { _ = tw.Close() }()
+
+	entries := []struct {
+		name    string
+		isDir   bool
+		content string
+	}{
+		{"lib/", true, ""},
+		{"lib/modules/", true, ""},
+		{"lib/modules/6.1.0-fips/", true, ""},
+		{"lib/modules/6.1.0-fips/kernel/", true, ""},
+		{"lib/modules/6.1.0-fips/kernel/crypto/", true, ""},
+		{"lib/modules/6.1.0-fips/kernel/crypto/sha256.ko", false, "mock kernel module"},
+	}
+
+	for _, entry := range entries {
+		hdr := &tar.Header{
+			Name:     entry.name,
+			Mode:     0644,
+			Size:     int64(len(entry.content)),
+			Typeflag: tar.TypeReg,
+		}
+		if entry.isDir {
+			hdr.Mode = 0755
+			hdr.Typeflag = tar.TypeDir
+		}
+		if err := tw.WriteHeader(hdr); err != nil {
+			return err
+		}
+		if _, err := tw.Write([]byte(entry.content)); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 func TestFIPSConfig_Fields(t *testing.T) {

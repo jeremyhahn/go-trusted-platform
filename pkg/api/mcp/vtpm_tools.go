@@ -15,6 +15,9 @@ package mcp
 
 import (
 	"fmt"
+
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/mcpwire"
+	"google.golang.org/grpc/status"
 )
 
 // =============================================================================
@@ -29,6 +32,12 @@ type VTPMError struct {
 
 func (e *VTPMError) Error() string {
 	return fmt.Sprintf("%s: %s", e.Code, e.Message)
+}
+
+// GRPCStatus classifies the error by its Code (codeClass), so the MCP
+// server answers it with the matching JSON-RPC code.
+func (e *VTPMError) GRPCStatus() *status.Status {
+	return codeStatus(e.Code, e.Error())
 }
 
 // ErrVTPMServiceUnavailable indicates the vTPM service extension is not available.
@@ -105,7 +114,7 @@ var ErrVTPMInvalidPCRIndex = &VTPMError{
 // This replaces the basic vTPM tools with full bundle/template API support.
 func (r *ToolRegistry) registerVTPMBundleTools() {
 	// Bundle CRUD operations
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "vtpm_bundle_create",
 		Description: "Create a new vTPM bundle with EK certificate and optional Secure Boot keys",
 		InputSchema: map[string]interface{}{
@@ -135,7 +144,7 @@ func (r *ToolRegistry) registerVTPMBundleTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "vtpm_bundle_get",
 		Description: "Get detailed information about a vTPM bundle",
 		InputSchema: map[string]interface{}{
@@ -150,7 +159,7 @@ func (r *ToolRegistry) registerVTPMBundleTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "vtpm_bundle_list",
 		Description: "List all vTPM bundles with optional filters",
 		InputSchema: map[string]interface{}{
@@ -166,8 +175,7 @@ func (r *ToolRegistry) registerVTPMBundleTools() {
 				},
 				"limit": map[string]interface{}{
 					"type":        "integer",
-					"description": "Maximum number of bundles to return",
-					"default":     50,
+					"description": "Maximum number of bundles to return (omit for all)",
 				},
 				"offset": map[string]interface{}{
 					"type":        "integer",
@@ -178,7 +186,7 @@ func (r *ToolRegistry) registerVTPMBundleTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "vtpm_bundle_delete",
 		Description: "Delete a vTPM bundle and all associated state",
 		InputSchema: map[string]interface{}{
@@ -193,53 +201,54 @@ func (r *ToolRegistry) registerVTPMBundleTools() {
 		},
 	})
 
-	// Template operations
-	r.addTool(ToolDefinition{
+	// Template operations. Each schema names the arguments its executor in
+	// vtpm_tools_exec.go reads.
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "vtpm_template_create",
 		Description: "Create a reusable vTPM template (identity assigned at clone time)",
 		InputSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
-				"template_id": map[string]interface{}{
+				"id": map[string]interface{}{
 					"type":        "string",
-					"description": "Unique template identifier (required)",
+					"description": "Unique template identifier",
 				},
 				"description": map[string]interface{}{
 					"type":        "string",
 					"description": "Template description",
 				},
-				"ek_algorithm": map[string]interface{}{
+				"algorithm": map[string]interface{}{
 					"type":        "string",
-					"description": "EK algorithm (RSA or ECC, default: RSA)",
+					"description": "EK algorithm (RSA or ECC; omit for the configured default)",
 					"enum":        []string{"RSA", "ECC"},
 					"default":     "RSA",
 				},
-				"secure_boot_enabled": map[string]interface{}{
+				"secure_boot": map[string]interface{}{
 					"type":        "boolean",
-					"description": "Enable Secure Boot key generation and enrollment",
+					"description": "Enable Secure Boot",
 					"default":     false,
 				},
 			},
-			"required": []string{"template_id"},
+			"required": []string{"id"},
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "vtpm_template_get",
 		Description: "Get detailed information about a vTPM template",
 		InputSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
-				"template_id": map[string]interface{}{
+				"id": map[string]interface{}{
 					"type":        "string",
 					"description": "Template ID",
 				},
 			},
-			"required": []string{"template_id"},
+			"required": []string{"id"},
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "vtpm_template_list",
 		Description: "List all vTPM templates",
 		InputSchema: map[string]interface{}{
@@ -248,23 +257,46 @@ func (r *ToolRegistry) registerVTPMBundleTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "vtpm_template_delete",
 		Description: "Delete a vTPM template",
 		InputSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
-				"template_id": map[string]interface{}{
+				"id": map[string]interface{}{
 					"type":        "string",
 					"description": "Template ID to delete",
 				},
 			},
-			"required": []string{"template_id"},
+			"required": []string{"id"},
+		},
+	})
+
+	r.addTool(mcpwire.ToolDefinition{
+		Name:        "vtpm_template_clone",
+		Description: "Clone a template to create a new bundle with identity",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"template_id": map[string]interface{}{
+					"type":        "string",
+					"description": "Template ID to clone",
+				},
+				"hostname": map[string]interface{}{
+					"type":        "string",
+					"description": "Hostname for the new bundle",
+				},
+				"labels": map[string]interface{}{
+					"type":        "object",
+					"description": "Custom metadata labels",
+				},
+			},
+			"required": []string{"template_id", "hostname"},
 		},
 	})
 
 	// TPM operations
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "vtpm_bundle_quote",
 		Description: "Generate a TPM quote for attestation from a running vTPM bundle",
 		InputSchema: map[string]interface{}{
@@ -288,7 +320,7 @@ func (r *ToolRegistry) registerVTPMBundleTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "vtpm_bundle_pcr_read",
 		Description: "Read a PCR value from a running vTPM bundle",
 		InputSchema: map[string]interface{}{
@@ -307,7 +339,7 @@ func (r *ToolRegistry) registerVTPMBundleTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "vtpm_bundle_pcr_extend",
 		Description: "Extend a PCR with measurement data on a running vTPM bundle",
 		InputSchema: map[string]interface{}{
@@ -330,7 +362,7 @@ func (r *ToolRegistry) registerVTPMBundleTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "vtpm_bundle_seal",
 		Description: "Seal data to the TPM state, optionally binding to PCR values",
 		InputSchema: map[string]interface{}{
@@ -358,7 +390,7 @@ func (r *ToolRegistry) registerVTPMBundleTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "vtpm_bundle_unseal",
 		Description: "Unseal data from the TPM (requires matching PCR state)",
 		InputSchema: map[string]interface{}{

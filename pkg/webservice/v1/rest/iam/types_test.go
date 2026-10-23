@@ -727,7 +727,7 @@ func TestRegisterAppRequest_Resolve(t *testing.T) {
 			GrantTypesCamel:     []string{"authorization_code"},
 			ResponseTypesCamel:  []string{"code"},
 			ResourcePrefixCamel: "prefix",
-			TenantIDCamel:       "tenant-1",
+			BodyTenant:          BodyTenant{TenantIDCamel: "tenant-1"},
 		}
 
 		req.Resolve()
@@ -749,8 +749,10 @@ func TestRegisterAppRequest_Resolve(t *testing.T) {
 			ResponseTypesCamel:  []string{"code"},
 			ResourcePrefix:      "canonical",
 			ResourcePrefixCamel: "alias",
-			TenantID:            "canonical-tenant",
-			TenantIDCamel:       "alias-tenant",
+			BodyTenant: BodyTenant{
+				TenantID:      "canonical-tenant",
+				TenantIDCamel: "alias-tenant",
+			},
 		}
 
 		req.Resolve()
@@ -798,4 +800,38 @@ func TestRegisterAppRequest_BothSpellingsUnmarshal(t *testing.T) {
 			assert.Equal(t, []string{"authorization_code"}, req.GrantTypes)
 		})
 	}
+}
+
+// TestBodyTenant_NamesOtherThan covers both spellings: a body naming no
+// tenant, or only the tenant the route acts on, names no other one; a foreign
+// tenant in either spelling does.
+func TestBodyTenant_NamesOtherThan(t *testing.T) {
+	cases := []struct {
+		name string
+		body BodyTenant
+		want bool
+	}{
+		{name: "names no tenant", body: BodyTenant{}, want: false},
+		{name: "own tenant, snake_case", body: BodyTenant{TenantID: "tenant-a"}, want: false},
+		{name: "own tenant, camelCase", body: BodyTenant{TenantIDCamel: "tenant-a"}, want: false},
+		{name: "own tenant, both spellings", body: BodyTenant{TenantID: "tenant-a", TenantIDCamel: "tenant-a"}, want: false},
+		{name: "foreign tenant, snake_case", body: BodyTenant{TenantID: "tenant-b"}, want: true},
+		{name: "foreign tenant, camelCase", body: BodyTenant{TenantIDCamel: "tenant-b"}, want: true},
+		{name: "spellings disagree", body: BodyTenant{TenantID: "tenant-a", TenantIDCamel: "tenant-b"}, want: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, tc.body.namesOtherThan("tenant-a"))
+		})
+	}
+}
+
+// TestBodyTenant_EmbeddedUnmarshal pins the wire half: the embedded fields
+// decode with the rest of a request body, in one pass.
+func TestBodyTenant_EmbeddedUnmarshal(t *testing.T) {
+	var req CreateUserRequest
+	require.NoError(t, json.Unmarshal([]byte(`{"email":"u@example.test","tenant_id":"tenant-b"}`), &req))
+
+	assert.Equal(t, "u@example.test", req.Email)
+	assert.True(t, req.namesOtherThan("tenant-a"))
 }

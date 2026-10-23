@@ -23,6 +23,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 )
 
 // SubOpTPM2GetSRK discarded its payload, so it answered every request
@@ -33,24 +34,24 @@ import (
 // handle and defaulting to the SSRK give the same answer. These cases
 // use inputs that can, and assert on WHICH key came back.
 
-func getSRKResponse(t *testing.T, req *TPM2GetSRKRequest) *Response {
+func getSRKResponse(t *testing.T, req *TPM2GetSRKRequest) *quicwire.Response {
 	t.Helper()
 	h := NewTPM2Handler(logging.DefaultLogger())
 	h.SetTPM2Service(newMockTPM())
 
-	payload := []byte{SubOpTPM2GetSRK}
+	payload := []byte{quicwire.SubOpTPM2GetSRK}
 	if req != nil {
-		encoded, err := EncodePayload(*req)
+		encoded, err := quicwire.EncodePayload(*req)
 		require.NoError(t, err)
 		payload = append(payload, encoded...)
 	}
-	return h.HandleMessage(context.Background(), &Request{Payload: payload})
+	return h.HandleMessage(context.Background(), &quicwire.Request{Payload: payload})
 }
 
-func decodeKeyResponse(t *testing.T, resp *Response) TPM2KeyResponse {
+func decodeKeyResponse(t *testing.T, resp *quicwire.Response) TPM2KeyResponse {
 	t.Helper()
 	var key TPM2KeyResponse
-	require.NoError(t, DecodePayload(resp.Payload, &key))
+	require.NoError(t, quicwire.DecodePayload(resp.Payload, &key))
 	return key
 }
 
@@ -58,7 +59,7 @@ func decodeKeyResponse(t *testing.T, resp *Response) TPM2KeyResponse {
 // platform SRK must return the platform key, not the SSRK.
 func TestGetSRKResolvesThePlatformHandle(t *testing.T) {
 	resp := getSRKResponse(t, &TPM2GetSRKRequest{Handle: 0x81000002})
-	require.Equal(t, StatusOK, resp.Status)
+	require.Equal(t, quicwire.StatusOK, resp.Status)
 
 	key := decodeKeyResponse(t, resp)
 	assert.Equal(t, uint32(0x81000002), key.Handle,
@@ -71,7 +72,7 @@ func TestGetSRKResolvesThePlatformHandle(t *testing.T) {
 // an error, never a fall-through to a key the caller did not name.
 func TestGetSRKRejectsUnknownHandle(t *testing.T) {
 	resp := getSRKResponse(t, &TPM2GetSRKRequest{Handle: 0x81000099})
-	assert.Equal(t, StatusNotFound, resp.Status,
+	assert.Equal(t, quicwire.StatusNotFound, resp.Status,
 		"an unknown SRK handle must be StatusNotFound, not StatusOK with a key")
 }
 
@@ -86,7 +87,7 @@ func TestGetSRKWithoutHandleStillReturnsSSRK(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			resp := getSRKResponse(t, req)
-			require.Equal(t, StatusOK, resp.Status)
+			require.Equal(t, quicwire.StatusOK, resp.Status)
 			key := decodeKeyResponse(t, resp)
 			assert.Equal(t, uint32(0x81000001), key.Handle)
 			assert.Equal(t, []byte("ssrk-public-key"), key.PublicKey)

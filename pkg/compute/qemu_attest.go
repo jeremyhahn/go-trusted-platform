@@ -154,15 +154,16 @@ func (o *QEMUOrchestrator) AttestVM(ctx context.Context, instanceID string, nonc
 	}
 
 	report := &VMAttestationReport{
-		VMID:        instanceID,
-		VMName:      qemuInst.instance.Name,
-		Timestamp:   quote.Timestamp,
-		Verified:    false,
-		Nonce:       nonce,
-		PCRValues:   pcrValues,
-		Quote:       quote.QuoteData,
-		Signature:   quote.Signature,
-		AKPublicKey: quote.AIKPublicKey,
+		VMID:               instanceID,
+		VMName:             qemuInst.instance.Name,
+		Timestamp:          quote.Timestamp,
+		Verified:           false,
+		Nonce:              nonce,
+		PCRValues:          pcrValues,
+		Quote:              quote.QuoteData,
+		Signature:          quote.Signature,
+		SignatureAlgorithm: quote.SignatureAlgorithm,
+		AKPublicKey:        quote.AIKPublicKey,
 	}
 
 	o.logger.Infof("Generated vTPM quote for VM instance %s (%d PCRs)", instanceID, len(pcrValues))
@@ -218,7 +219,8 @@ func (o *QEMUOrchestrator) VerifyVMAttestation(ctx context.Context, instanceID s
 	result := &VMVerificationResult{}
 	var failures []string
 
-	if err := vm.VerifyQuoteSignature(akPublicKey, evidence.Quote, evidence.Signature); err != nil {
+	err = vm.VerifyQuoteSignatureWithAlgorithm(akPublicKey, evidence.Quote, evidence.Signature, evidence.SignatureAlgorithm)
+	if err != nil {
 		failures = append(failures, err.Error())
 	} else {
 		result.SignatureValid = true

@@ -16,857 +16,20 @@ package mcp
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"math"
-	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/jeremyhahn/go-trusted-platform/pkg/tenant"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/tenant/quota"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/vtpm"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/mcpwire"
 )
-
-// =============================================================================
-// Mock Tenant Manager for Coverage Tests
-// =============================================================================
-
-// mockTenantManager implements tenant manager methods for testing.
-type mockTenantManager struct {
-	listTenantsFunc     func(ctx context.Context, limit, offset int) ([]*tenant.TenantEntity, int, error)
-	getTenantFunc       func(ctx context.Context, id string) (*tenant.TenantEntity, error)
-	getTenantByNameFunc func(ctx context.Context, name string) (*tenant.TenantEntity, error)
-	createTenantFunc    func(ctx context.Context, req *tenant.CreateTenantRequest) (*tenant.TenantEntity, error)
-	updateTenantFunc    func(ctx context.Context, id string, req *tenant.UpdateTenantRequest) (*tenant.TenantEntity, error)
-	deleteTenantFunc    func(ctx context.Context, id string) error
-	suspendTenantFunc   func(ctx context.Context, id string) error
-	resumeTenantFunc    func(ctx context.Context, id string) error
-	getQuotasFunc       func(ctx context.Context, id string) (*tenant.TenantQuotas, error)
-	updateQuotasFunc    func(ctx context.Context, id string, quotas *tenant.TenantQuotas) error
-	getUsageFunc        func(ctx context.Context, id string) (*quota.TenantUsage, error)
-	checkQuotaFunc      func(ctx context.Context, id string, rt quota.ResourceType, amount int64) error
-	syncFunc            func(ctx context.Context) error
-	rotateDEKFunc       func(ctx context.Context, id string) error
-	getDEKStatusFunc    func(ctx context.Context, id string) (*tenant.DEKStatus, error)
-}
-
-func newMockTenantManager() *mockTenantManager {
-	now := time.Now()
-	testEntity := &tenant.TenantEntity{
-		ID:          "tenant-123",
-		Name:        "test-tenant",
-		DisplayName: "Test Tenant",
-		State:       tenant.StateActive,
-		DEKPath:     "/tenant/123/default",
-		ComputeQuota: tenant.ComputeQuota{
-			MaxVMs:        10,
-			MaxContainers: 50,
-			MaxVCPUs:      32,
-			MaxMemoryMB:   65536,
-			MaxDiskGB:     1024,
-		},
-		NetworkQuota: tenant.NetworkQuota{
-			MaxBridges:       5,
-			MaxPorts:         100,
-			MaxBandwidthMbps: 10000,
-		},
-		StorageQuota: tenant.StorageQuota{
-			MaxVolumesGB: 2048,
-			MaxSnapshots: 100,
-		},
-		Labels:      map[string]string{"env": "test"},
-		Annotations: map[string]string{"note": "test tenant"},
-		CreatedAt:   now.Add(-24 * time.Hour),
-		UpdatedAt:   now,
-	}
-
-	return &mockTenantManager{
-		listTenantsFunc: func(ctx context.Context, limit, offset int) ([]*tenant.TenantEntity, int, error) {
-			return []*tenant.TenantEntity{testEntity}, 1, nil
-		},
-		getTenantFunc: func(ctx context.Context, id string) (*tenant.TenantEntity, error) {
-			if id == "tenant-123" {
-				return testEntity, nil
-			}
-			return nil, errors.New("tenant not found")
-		},
-		getTenantByNameFunc: func(ctx context.Context, name string) (*tenant.TenantEntity, error) {
-			if name == "test-tenant" {
-				return testEntity, nil
-			}
-			return nil, errors.New("tenant not found")
-		},
-		createTenantFunc: func(ctx context.Context, req *tenant.CreateTenantRequest) (*tenant.TenantEntity, error) {
-			return &tenant.TenantEntity{
-				ID:           "tenant-new",
-				Name:         req.Name,
-				DisplayName:  req.DisplayName,
-				State:        tenant.StateActive,
-				ComputeQuota: tenant.ComputeQuota{MaxVMs: 10},
-				NetworkQuota: tenant.NetworkQuota{MaxBridges: 5},
-				StorageQuota: tenant.StorageQuota{MaxVolumesGB: 100},
-				CreatedAt:    now,
-				UpdatedAt:    now,
-			}, nil
-		},
-		updateTenantFunc: func(ctx context.Context, id string, req *tenant.UpdateTenantRequest) (*tenant.TenantEntity, error) {
-			if id != "tenant-123" {
-				return nil, errors.New("tenant not found")
-			}
-			return testEntity, nil
-		},
-		deleteTenantFunc: func(ctx context.Context, id string) error {
-			if id != "tenant-123" {
-				return errors.New("tenant not found")
-			}
-			return nil
-		},
-		suspendTenantFunc: func(ctx context.Context, id string) error {
-			if id != "tenant-123" {
-				return errors.New("tenant not found")
-			}
-			return nil
-		},
-		resumeTenantFunc: func(ctx context.Context, id string) error {
-			if id != "tenant-123" {
-				return errors.New("tenant not found")
-			}
-			return nil
-		},
-		getQuotasFunc: func(ctx context.Context, id string) (*tenant.TenantQuotas, error) {
-			if id != "tenant-123" {
-				return nil, errors.New("tenant not found")
-			}
-			return &tenant.TenantQuotas{
-				Compute: tenant.ComputeQuota{MaxVMs: 10, MaxContainers: 50},
-				Network: tenant.NetworkQuota{MaxBridges: 5, MaxPorts: 100},
-				Storage: tenant.StorageQuota{MaxVolumesGB: 2048},
-			}, nil
-		},
-		updateQuotasFunc: func(ctx context.Context, id string, quotas *tenant.TenantQuotas) error {
-			if id != "tenant-123" {
-				return errors.New("tenant not found")
-			}
-			return nil
-		},
-		getUsageFunc: func(ctx context.Context, id string) (*quota.TenantUsage, error) {
-			if id != "tenant-123" {
-				return nil, errors.New("tenant not found")
-			}
-			return &quota.TenantUsage{
-				VMs:        2,
-				Containers: 10,
-				VCPUs:      8,
-				MemoryMB:   16384,
-				DiskGB:     200,
-				Bridges:    1,
-				Ports:      20,
-				Volumes:    5,
-				Timestamp:  now,
-			}, nil
-		},
-		checkQuotaFunc: func(ctx context.Context, id string, rt quota.ResourceType, amount int64) error {
-			if id != "tenant-123" {
-				return errors.New("tenant not found")
-			}
-			return nil
-		},
-		syncFunc: func(ctx context.Context) error {
-			return nil
-		},
-		rotateDEKFunc: func(ctx context.Context, id string) error {
-			if id != "tenant-123" {
-				return errors.New("tenant not found")
-			}
-			return nil
-		},
-		getDEKStatusFunc: func(ctx context.Context, id string) (*tenant.DEKStatus, error) {
-			if id != "tenant-123" {
-				return nil, errors.New("tenant not found")
-			}
-			return &tenant.DEKStatus{
-				Path:           "/tenant/123/default",
-				Version:        1,
-				Algorithm:      "AES-256-GCM",
-				Status:         "active",
-				IsDefault:      true,
-				CreatedAt:      now.Add(-24 * time.Hour),
-				RotatedAt:      now,
-				UsageCount:     1000,
-				BytesUsed:      1024 * 1024,
-				MaxUsageCount:  1000000,
-				MaxBytesUsed:   1024 * 1024 * 1024,
-				WarningPercent: 80,
-				UsagePercent:   5.0,
-				NeedsRotation:  false,
-			}, nil
-		},
-	}
-}
-
-// Implement tenant manager interface methods
-func (m *mockTenantManager) ListTenants(ctx context.Context, limit, offset int) ([]*tenant.TenantEntity, int, error) {
-	return m.listTenantsFunc(ctx, limit, offset)
-}
-
-func (m *mockTenantManager) GetTenant(ctx context.Context, id string) (*tenant.TenantEntity, error) {
-	return m.getTenantFunc(ctx, id)
-}
-
-func (m *mockTenantManager) GetTenantByName(ctx context.Context, name string) (*tenant.TenantEntity, error) {
-	return m.getTenantByNameFunc(ctx, name)
-}
-
-func (m *mockTenantManager) CreateTenant(ctx context.Context, req *tenant.CreateTenantRequest) (*tenant.TenantEntity, error) {
-	return m.createTenantFunc(ctx, req)
-}
-
-func (m *mockTenantManager) UpdateTenant(ctx context.Context, id string, req *tenant.UpdateTenantRequest) (*tenant.TenantEntity, error) {
-	return m.updateTenantFunc(ctx, id, req)
-}
-
-func (m *mockTenantManager) DeleteTenant(ctx context.Context, id string) error {
-	return m.deleteTenantFunc(ctx, id)
-}
-
-func (m *mockTenantManager) SuspendTenant(ctx context.Context, id string) error {
-	return m.suspendTenantFunc(ctx, id)
-}
-
-func (m *mockTenantManager) ResumeTenant(ctx context.Context, id string) error {
-	return m.resumeTenantFunc(ctx, id)
-}
-
-func (m *mockTenantManager) GetTenantQuotas(ctx context.Context, id string) (*tenant.TenantQuotas, error) {
-	return m.getQuotasFunc(ctx, id)
-}
-
-func (m *mockTenantManager) UpdateTenantQuotas(ctx context.Context, id string, quotas *tenant.TenantQuotas) error {
-	return m.updateQuotasFunc(ctx, id, quotas)
-}
-
-func (m *mockTenantManager) GetTenantUsage(ctx context.Context, id string) (*quota.TenantUsage, error) {
-	return m.getUsageFunc(ctx, id)
-}
-
-func (m *mockTenantManager) CheckTenantQuota(ctx context.Context, id string, rt quota.ResourceType, amount int64) error {
-	return m.checkQuotaFunc(ctx, id, rt, amount)
-}
-
-func (m *mockTenantManager) Sync(ctx context.Context) error {
-	return m.syncFunc(ctx)
-}
-
-func (m *mockTenantManager) RotateTenantDEK(ctx context.Context, id string) error {
-	return m.rotateDEKFunc(ctx, id)
-}
-
-func (m *mockTenantManager) GetTenantDEKStatus(ctx context.Context, id string) (*tenant.DEKStatus, error) {
-	return m.getDEKStatusFunc(ctx, id)
-}
-
-// =============================================================================
-// Mock Tenant Service Provider
-// =============================================================================
-
-// mockTenantServiceProvider wraps mockServiceProvider and adds tenant support.
-type mockTenantServiceProvider struct {
-	*mockServiceProvider
-	tenantMgr *tenant.Manager
-}
-
-func (m *mockTenantServiceProvider) TenantManager() *tenant.Manager {
-	return m.tenantMgr
-}
-
-// newTenantTestRegistry creates a ToolRegistry with a mock tenant manager.
-func newTenantTestRegistry(mgr *tenant.Manager) *ToolRegistry {
-	mockSvc := newMockServiceProvider()
-	tenantProvider := &mockTenantServiceProvider{
-		mockServiceProvider: mockSvc,
-		tenantMgr:           mgr,
-	}
-
-	registry := &ToolRegistry{
-		service: tenantProvider,
-		logger:  newTestLogger(),
-		tools:   make([]ToolDefinition, 0),
-	}
-	registry.registerTenantTools()
-	return registry
-}
-
-// =============================================================================
-// Tenant Tool Execution Tests with Mock Manager
-// =============================================================================
-
-func TestExecuteTenantList_WithMockManager(t *testing.T) {
-	mockMgr := newMockTenantManager()
-	registry := newTenantTestRegistry(nil)
-
-	ctx := context.Background()
-
-	// Test that without manager returns service unavailable
-	_, err := registry.executeTenantList(ctx, map[string]interface{}{})
-	if err != ErrTenantServiceUnavailable {
-		t.Errorf("expected ErrTenantServiceUnavailable, got %v", err)
-	}
-
-	// Test list with mock
-	result, _, listErr := mockMgr.ListTenants(ctx, 100, 0)
-	if listErr != nil {
-		t.Fatalf("mock list failed: %v", listErr)
-	}
-	if len(result) != 1 {
-		t.Errorf("expected 1 tenant, got %d", len(result))
-	}
-}
-
-func TestExecuteTenantGet_WithMockManager(t *testing.T) {
-	mockMgr := newMockTenantManager()
-	ctx := context.Background()
-
-	entity, err := mockMgr.GetTenant(ctx, "tenant-123")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if entity.ID != "tenant-123" {
-		t.Errorf("expected tenant ID 'tenant-123', got %s", entity.ID)
-	}
-
-	_, err = mockMgr.GetTenant(ctx, "nonexistent")
-	if err == nil {
-		t.Error("expected error for nonexistent tenant")
-	}
-}
-
-func TestExecuteTenantGetByName_WithMockManager(t *testing.T) {
-	mockMgr := newMockTenantManager()
-	ctx := context.Background()
-
-	entity, err := mockMgr.GetTenantByName(ctx, "test-tenant")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if entity.Name != "test-tenant" {
-		t.Errorf("expected name 'test-tenant', got %s", entity.Name)
-	}
-
-	_, err = mockMgr.GetTenantByName(ctx, "nonexistent")
-	if err == nil {
-		t.Error("expected error for nonexistent tenant")
-	}
-}
-
-func TestExecuteTenantCreate_WithMockManager(t *testing.T) {
-	mockMgr := newMockTenantManager()
-	ctx := context.Background()
-
-	req := &tenant.CreateTenantRequest{
-		Name:        "new-tenant",
-		DisplayName: "New Tenant",
-	}
-
-	entity, err := mockMgr.CreateTenant(ctx, req)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if entity.Name != "new-tenant" {
-		t.Errorf("expected name 'new-tenant', got %s", entity.Name)
-	}
-}
-
-func TestExecuteTenantUpdate_WithMockManager(t *testing.T) {
-	mockMgr := newMockTenantManager()
-	ctx := context.Background()
-
-	displayName := "Updated Tenant"
-	req := &tenant.UpdateTenantRequest{
-		DisplayName: &displayName,
-	}
-
-	entity, err := mockMgr.UpdateTenant(ctx, "tenant-123", req)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if entity == nil {
-		t.Fatal("expected non-nil entity")
-	}
-
-	_, err = mockMgr.UpdateTenant(ctx, "nonexistent", req)
-	if err == nil {
-		t.Error("expected error for nonexistent tenant")
-	}
-}
-
-func TestExecuteTenantDelete_WithMockManager(t *testing.T) {
-	mockMgr := newMockTenantManager()
-	ctx := context.Background()
-
-	err := mockMgr.DeleteTenant(ctx, "tenant-123")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	err = mockMgr.DeleteTenant(ctx, "nonexistent")
-	if err == nil {
-		t.Error("expected error for nonexistent tenant")
-	}
-}
-
-func TestExecuteTenantSuspend_WithMockManager(t *testing.T) {
-	mockMgr := newMockTenantManager()
-	ctx := context.Background()
-
-	err := mockMgr.SuspendTenant(ctx, "tenant-123")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	err = mockMgr.SuspendTenant(ctx, "nonexistent")
-	if err == nil {
-		t.Error("expected error for nonexistent tenant")
-	}
-}
-
-func TestExecuteTenantResume_WithMockManager(t *testing.T) {
-	mockMgr := newMockTenantManager()
-	ctx := context.Background()
-
-	err := mockMgr.ResumeTenant(ctx, "tenant-123")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	err = mockMgr.ResumeTenant(ctx, "nonexistent")
-	if err == nil {
-		t.Error("expected error for nonexistent tenant")
-	}
-}
-
-func TestExecuteTenantGetQuotas_WithMockManager(t *testing.T) {
-	mockMgr := newMockTenantManager()
-	ctx := context.Background()
-
-	quotas, err := mockMgr.GetTenantQuotas(ctx, "tenant-123")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if quotas.Compute.MaxVMs != 10 {
-		t.Errorf("expected MaxVMs 10, got %d", quotas.Compute.MaxVMs)
-	}
-
-	_, err = mockMgr.GetTenantQuotas(ctx, "nonexistent")
-	if err == nil {
-		t.Error("expected error for nonexistent tenant")
-	}
-}
-
-func TestExecuteTenantUpdateQuotas_WithMockManager(t *testing.T) {
-	mockMgr := newMockTenantManager()
-	ctx := context.Background()
-
-	quotas := &tenant.TenantQuotas{
-		Compute: tenant.ComputeQuota{MaxVMs: 20},
-	}
-
-	err := mockMgr.UpdateTenantQuotas(ctx, "tenant-123", quotas)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	err = mockMgr.UpdateTenantQuotas(ctx, "nonexistent", quotas)
-	if err == nil {
-		t.Error("expected error for nonexistent tenant")
-	}
-}
-
-func TestExecuteTenantGetUsage_WithMockManager(t *testing.T) {
-	mockMgr := newMockTenantManager()
-	ctx := context.Background()
-
-	usage, err := mockMgr.GetTenantUsage(ctx, "tenant-123")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if usage.VMs != 2 {
-		t.Errorf("expected VMs 2, got %d", usage.VMs)
-	}
-
-	_, err = mockMgr.GetTenantUsage(ctx, "nonexistent")
-	if err == nil {
-		t.Error("expected error for nonexistent tenant")
-	}
-}
-
-func TestExecuteTenantCheckQuota_WithMockManager(t *testing.T) {
-	mockMgr := newMockTenantManager()
-	ctx := context.Background()
-
-	err := mockMgr.CheckTenantQuota(ctx, "tenant-123", quota.ResourceVMs, 1)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	err = mockMgr.CheckTenantQuota(ctx, "nonexistent", quota.ResourceVMs, 1)
-	if err == nil {
-		t.Error("expected error for nonexistent tenant")
-	}
-}
-
-func TestExecuteTenantSync_WithMockManager(t *testing.T) {
-	mockMgr := newMockTenantManager()
-	ctx := context.Background()
-
-	err := mockMgr.Sync(ctx)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-}
-
-func TestExecuteTenantRotateDEK_WithMockManager(t *testing.T) {
-	mockMgr := newMockTenantManager()
-	ctx := context.Background()
-
-	err := mockMgr.RotateTenantDEK(ctx, "tenant-123")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	err = mockMgr.RotateTenantDEK(ctx, "nonexistent")
-	if err == nil {
-		t.Error("expected error for nonexistent tenant")
-	}
-}
-
-func TestExecuteTenantGetDEKStatus_WithMockManager(t *testing.T) {
-	mockMgr := newMockTenantManager()
-	ctx := context.Background()
-
-	status, err := mockMgr.GetTenantDEKStatus(ctx, "tenant-123")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if status.Algorithm != "AES-256-GCM" {
-		t.Errorf("expected algorithm 'AES-256-GCM', got %s", status.Algorithm)
-	}
-
-	_, err = mockMgr.GetTenantDEKStatus(ctx, "nonexistent")
-	if err == nil {
-		t.Error("expected error for nonexistent tenant")
-	}
-}
 
 // =============================================================================
 // Client Coverage Tests
 // =============================================================================
-
-func TestClient_InitializeResult(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var req JSONRPCRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
-		}
-
-		if req.Method == "initialize" {
-			resp := JSONRPCResponse{
-				JSONRPC: "2.0",
-				ID:      req.ID,
-				Result: map[string]interface{}{
-					"serverInfo": map[string]interface{}{
-						"name":    "Test Server",
-						"version": "1.0.0",
-					},
-					"capabilities": map[string]interface{}{
-						"tools":     true,
-						"resources": true,
-					},
-				},
-			}
-			json.NewEncoder(w).Encode(resp)
-			return
-		}
-
-		http.Error(w, "unknown method", http.StatusBadRequest)
-	}))
-	defer server.Close()
-
-	config := &ClientConfig{
-		ServerAddr: server.URL,
-		Timeout:    5 * time.Second,
-		MaxRetries: 1,
-		RetryDelay: 100 * time.Millisecond,
-	}
-
-	client, err := NewClient(config)
-	if err != nil {
-		t.Fatalf("failed to create client: %v", err)
-	}
-	defer client.Close()
-
-	_, err = client.Initialize(context.Background())
-	if err != nil {
-		t.Errorf("Initialize failed: %v", err)
-	}
-}
-
-func TestClient_ListToolsInvalidFormat(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var req JSONRPCRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
-		}
-
-		resp := JSONRPCResponse{
-			JSONRPC: "2.0",
-			ID:      req.ID,
-			Result:  "not a map",
-		}
-		json.NewEncoder(w).Encode(resp)
-	}))
-	defer server.Close()
-
-	config := &ClientConfig{
-		ServerAddr: server.URL,
-		Timeout:    5 * time.Second,
-		MaxRetries: 1,
-	}
-
-	client, _ := NewClient(config)
-	defer client.Close()
-
-	_, err := client.ListTools(context.Background())
-	if err == nil {
-		t.Error("expected error for invalid format")
-	}
-}
-
-func TestClient_ListToolsMissingTools(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var req JSONRPCRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
-		}
-
-		resp := JSONRPCResponse{
-			JSONRPC: "2.0",
-			ID:      req.ID,
-			Result:  map[string]interface{}{},
-		}
-		json.NewEncoder(w).Encode(resp)
-	}))
-	defer server.Close()
-
-	config := &ClientConfig{
-		ServerAddr: server.URL,
-		Timeout:    5 * time.Second,
-		MaxRetries: 1,
-	}
-
-	client, _ := NewClient(config)
-	defer client.Close()
-
-	_, err := client.ListTools(context.Background())
-	if err == nil {
-		t.Error("expected error for missing tools field")
-	}
-}
-
-func TestClient_ListResourcesInvalidFormat(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var req JSONRPCRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
-		}
-
-		resp := JSONRPCResponse{
-			JSONRPC: "2.0",
-			ID:      req.ID,
-			Result:  "not a map",
-		}
-		json.NewEncoder(w).Encode(resp)
-	}))
-	defer server.Close()
-
-	config := &ClientConfig{
-		ServerAddr: server.URL,
-		Timeout:    5 * time.Second,
-		MaxRetries: 1,
-	}
-
-	client, _ := NewClient(config)
-	defer client.Close()
-
-	_, err := client.ListResources(context.Background())
-	if err == nil {
-		t.Error("expected error for invalid format")
-	}
-}
-
-func TestClient_ListResourcesMissingResources(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var req JSONRPCRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
-		}
-
-		resp := JSONRPCResponse{
-			JSONRPC: "2.0",
-			ID:      req.ID,
-			Result:  map[string]interface{}{},
-		}
-		json.NewEncoder(w).Encode(resp)
-	}))
-	defer server.Close()
-
-	config := &ClientConfig{
-		ServerAddr: server.URL,
-		Timeout:    5 * time.Second,
-		MaxRetries: 1,
-	}
-
-	client, _ := NewClient(config)
-	defer client.Close()
-
-	_, err := client.ListResources(context.Background())
-	if err == nil {
-		t.Error("expected error for missing resources field")
-	}
-}
-
-func TestClient_doRequestWithToken(t *testing.T) {
-	tokenReceived := ""
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		tokenReceived = r.Header.Get("Authorization")
-
-		var req JSONRPCRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
-		}
-
-		resp := JSONRPCResponse{
-			JSONRPC: "2.0",
-			ID:      req.ID,
-			Result:  map[string]interface{}{"status": "ok"},
-		}
-		json.NewEncoder(w).Encode(resp)
-	}))
-	defer server.Close()
-
-	config := &ClientConfig{
-		ServerAddr: server.URL,
-		Timeout:    5 * time.Second,
-		MaxRetries: 1,
-	}
-
-	client, _ := NewClient(config)
-	defer client.Close()
-
-	client.SetToken("test-bearer-token")
-
-	err := client.Ping(context.Background())
-	if err != nil {
-		t.Errorf("unexpected error: %v", err)
-	}
-
-	if tokenReceived != "Bearer test-bearer-token" {
-		t.Errorf("expected Authorization header 'Bearer test-bearer-token', got %q", tokenReceived)
-	}
-}
-
-func TestClient_doRequestError(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var req JSONRPCRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
-		}
-
-		resp := JSONRPCResponse{
-			JSONRPC: "2.0",
-			ID:      req.ID,
-			Error: &JSONRPCError{
-				Code:    -32600,
-				Message: "Invalid Request",
-			},
-		}
-		json.NewEncoder(w).Encode(resp)
-	}))
-	defer server.Close()
-
-	config := &ClientConfig{
-		ServerAddr: server.URL,
-		Timeout:    5 * time.Second,
-		MaxRetries: 1,
-	}
-
-	client, _ := NewClient(config)
-	defer client.Close()
-
-	err := client.Ping(context.Background())
-	if err == nil {
-		t.Error("expected error for RPC error response")
-	}
-}
-
-func TestClient_ClosedClientOperations(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		http.Error(w, "should not reach", http.StatusInternalServerError)
-	}))
-	defer server.Close()
-
-	config := &ClientConfig{
-		ServerAddr: server.URL,
-		Timeout:    5 * time.Second,
-		MaxRetries: 1,
-	}
-
-	client, _ := NewClient(config)
-	client.Close()
-
-	err := client.Ping(context.Background())
-	if err == nil {
-		t.Error("expected error for closed client")
-	}
-
-	_, err = client.ListTools(context.Background())
-	if err == nil {
-		t.Error("expected error for closed client")
-	}
-}
-
-func TestMapToStructSlice(t *testing.T) {
-	type Item struct {
-		Name  string `json:"name"`
-		Value int    `json:"value"`
-	}
-
-	input := []interface{}{
-		map[string]interface{}{"name": "item1", "value": 1},
-		map[string]interface{}{"name": "item2", "value": 2},
-	}
-
-	var result []Item
-	err := mapToStruct(input, &result)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	if len(result) != 2 {
-		t.Errorf("expected 2 items, got %d", len(result))
-	}
-	if result[0].Name != "item1" {
-		t.Errorf("expected name 'item1', got %s", result[0].Name)
-	}
-}
 
 func TestMarshalResultSlice(t *testing.T) {
 	input := []string{"a", "b", "c"}
@@ -883,52 +46,6 @@ func TestMarshalResultSlice(t *testing.T) {
 	if len(arr) != 3 {
 		t.Errorf("expected 3 items, got %d", len(arr))
 	}
-}
-func TestMCPError_ErrorCoverage(t *testing.T) {
-	err := &MCPError{
-		Code:    -32600,
-		Message: "Invalid Request",
-		Data:    map[string]string{"detail": "missing required field"},
-	}
-
-	expected := "MCP error -32600: Invalid Request"
-	if err.Error() != expected {
-		t.Errorf("expected %q, got %q", expected, err.Error())
-	}
-}
-
-func TestClientOptionsCoverage(t *testing.T) {
-	config := &ClientConfig{
-		ServerAddr: "http://localhost:8080",
-		Timeout:    10 * time.Second,
-		MaxRetries: 5,
-		RetryDelay: 200 * time.Millisecond,
-	}
-
-	if config.ServerAddr != "http://localhost:8080" {
-		t.Errorf("unexpected ServerAddr: %s", config.ServerAddr)
-	}
-	if config.Timeout != 10*time.Second {
-		t.Errorf("unexpected Timeout: %v", config.Timeout)
-	}
-	if config.MaxRetries != 5 {
-		t.Errorf("unexpected MaxRetries: %d", config.MaxRetries)
-	}
-	if config.RetryDelay != 200*time.Millisecond {
-		t.Errorf("unexpected RetryDelay: %v", config.RetryDelay)
-	}
-}
-
-func TestNewClient_ValidationCoverage(t *testing.T) {
-	// Test with empty server address
-	_, err := NewClient(&ClientConfig{
-		ServerAddr: "",
-		Timeout:    5 * time.Second,
-	})
-	if err == nil {
-		t.Error("expected error for empty server address")
-	}
-
 }
 
 func TestGetStringMapCoverage(t *testing.T) {
@@ -1007,6 +124,7 @@ func TestServer_StartAlreadyRunning(t *testing.T) {
 		ServerVersion: "1.0.0",
 		Transport:     "http",
 		HTTPAddr:      "127.0.0.1:0",
+		TLSConfig:     newTestTLSConfig(t),
 	}
 	server := NewServer(mockSvc, config, newTestLogger())
 
@@ -1124,7 +242,7 @@ func TestExecuteVTPMQuote_ServiceError(t *testing.T) {
 func TestExecuteVTPMUnseal_ServiceError(t *testing.T) {
 	ctx := context.Background()
 	svc := newMockServiceProvider()
-	svc.vtpmUnsealFunc = func(ctx context.Context, name string, sealed []byte) ([]byte, error) {
+	svc.vtpmUnsealFunc = func(ctx context.Context, name string, sealed []byte, authValue string) ([]byte, error) {
 		return nil, ErrMockServiceError
 	}
 	registry := NewToolRegistry(svc, newTestLogger())
@@ -1214,54 +332,13 @@ func TestExecuteTool_UnknownTool(t *testing.T) {
 }
 
 // =============================================================================
-// HTTP Transport Coverage Tests
-// =============================================================================
-
-func TestServer_HTTPTransportWithFreePort(t *testing.T) {
-	mockSvc := newMockServiceProvider()
-
-	// Get a free port
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("failed to get free port: %v", err)
-	}
-	addr := listener.Addr().String()
-	listener.Close()
-
-	config := &Config{
-		ServerName:    "Test Server",
-		ServerVersion: "1.0.0",
-		Transport:     "http",
-		HTTPAddr:      addr,
-	}
-	server := NewServer(mockSvc, config, newTestLogger())
-
-	err = server.Start()
-	if err != nil {
-		t.Fatalf("failed to start server: %v", err)
-	}
-	defer server.Stop()
-
-	// Give the server time to start
-	time.Sleep(50 * time.Millisecond)
-
-	// Make a simple request
-	resp, err := http.Post("http://"+addr+"/mcp", "application/json", nil)
-	if err != nil {
-		t.Logf("request error (expected for empty body): %v", err)
-	} else {
-		resp.Body.Close()
-	}
-}
-
-// =============================================================================
 // Additional Service Error Coverage Tests
 // =============================================================================
 
 func TestExecuteVTPMCreate_ServiceError(t *testing.T) {
 	ctx := context.Background()
 	svc := newMockServiceProvider()
-	svc.vtpmCreateFunc = func(ctx context.Context, name, algorithm string) (interface{}, error) {
+	svc.vtpmCreateFunc = func(ctx context.Context, name, algorithm string, secureBoot bool, labels map[string]string) (interface{}, error) {
 		return nil, ErrMockServiceError
 	}
 	registry := NewToolRegistry(svc, newTestLogger())
@@ -1334,7 +411,7 @@ func TestExecuteVTPMStop_ServiceError(t *testing.T) {
 func TestExecuteVTPMList_ServiceError(t *testing.T) {
 	ctx := context.Background()
 	svc := newMockServiceProvider()
-	svc.vtpmListFunc = func(ctx context.Context) ([]interface{}, error) {
+	svc.vtpmListFunc = func(ctx context.Context, opts *vtpm.ListOptions) ([]interface{}, error) {
 		return nil, ErrMockServiceError
 	}
 	registry := NewToolRegistry(svc, newTestLogger())
@@ -1348,7 +425,7 @@ func TestExecuteVTPMList_ServiceError(t *testing.T) {
 func TestExecuteVTPMSeal_ServiceError(t *testing.T) {
 	ctx := context.Background()
 	svc := newMockServiceProvider()
-	svc.vtpmSealFunc = func(ctx context.Context, name string, data []byte, pcrs []int) ([]byte, error) {
+	svc.vtpmSealFunc = func(ctx context.Context, name string, data []byte, pcrs []int, authValue string) ([]byte, error) {
 		return nil, ErrMockServiceError
 	}
 	registry := NewToolRegistry(svc, newTestLogger())
@@ -1519,26 +596,6 @@ func TestExecuteDNSListZones_ServiceError(t *testing.T) {
 // Device Service Error Coverage Tests
 // =============================================================================
 
-func TestExecuteDeviceRegister_ServiceError(t *testing.T) {
-	ctx := context.Background()
-	svc := newMockServiceProvider()
-	svc.deviceRegisterFunc = func(ctx context.Context, name, deviceType string, publicKey []byte) (interface{}, error) {
-		return nil, ErrMockServiceError
-	}
-	registry := NewToolRegistry(svc, newTestLogger())
-
-	args := map[string]interface{}{
-		"name":        "test-device",
-		"device_type": "server",
-		"public_key":  "cHVibGljLWtleQ==", // "public-key" base64 encoded
-	}
-
-	_, err := registry.ExecuteTool(ctx, "device_register", args)
-	if err == nil {
-		t.Error("expected error from service")
-	}
-}
-
 func TestExecuteDeviceGet_ServiceError(t *testing.T) {
 	ctx := context.Background()
 	svc := newMockServiceProvider()
@@ -1584,27 +641,6 @@ func TestExecuteDeviceDelete_ServiceError(t *testing.T) {
 	}
 
 	_, err := registry.ExecuteTool(ctx, "device_delete", args)
-	if err == nil {
-		t.Error("expected error from service")
-	}
-}
-
-func TestExecuteDeviceUpdate_ServiceError(t *testing.T) {
-	ctx := context.Background()
-	svc := newMockServiceProvider()
-	svc.deviceUpdateFunc = func(ctx context.Context, deviceID string, updates map[string]interface{}) error {
-		return ErrMockServiceError
-	}
-	registry := NewToolRegistry(svc, newTestLogger())
-
-	args := map[string]interface{}{
-		"device_id": "device-123",
-		"updates": map[string]interface{}{
-			"name": "updated-device",
-		},
-	}
-
-	_, err := registry.ExecuteTool(ctx, "device_update", args)
 	if err == nil {
 		t.Error("expected error from service")
 	}
@@ -1766,10 +802,72 @@ func TestExecuteCAIssue_ServiceError(t *testing.T) {
 	}
 }
 
+// A key request gets the default algorithm, store and validity.
+func TestExecuteCAIssue_KeyDefaults(t *testing.T) {
+	var got *CAIssueRequest
+	svc := newMockServiceProvider()
+	svc.caIssueFunc = func(ctx context.Context, req *CAIssueRequest) (interface{}, error) {
+		got = req
+		return map[string]string{}, nil
+	}
+	registry := NewToolRegistry(svc, newTestLogger())
+	if _, err := registry.ExecuteTool(context.Background(), "ca_issue", map[string]interface{}{"common_name": "a"}); err != nil {
+		t.Fatalf("ca_issue: %v", err)
+	}
+	if got.Algorithm != "ECDSA" || got.StoreType != "software" || got.ValidDays != 365 {
+		t.Errorf("request = %+v", got)
+	}
+}
+
+// ca_sign_csr is its own tool: the CSR goes to CASignCSR, never CAIssue.
+func TestExecuteCASignCSR(t *testing.T) {
+	cases := []struct {
+		name string
+		args map[string]interface{}
+		days int
+	}{
+		{"unset validity is left to the CA default", map[string]interface{}{"csr_pem": "PEM"}, 0},
+		{"explicit validity", map[string]interface{}{"csr_pem": "PEM", "valid_days": 30}, 30},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var got *CASignCSRRequest
+			svc := newMockServiceProvider()
+			svc.caSignCSRFunc = func(ctx context.Context, req *CASignCSRRequest) (interface{}, error) {
+				got = req
+				return map[string]string{}, nil
+			}
+			svc.caIssueFunc = func(ctx context.Context, req *CAIssueRequest) (interface{}, error) {
+				t.Error("ca_sign_csr reached CAIssue")
+				return nil, nil
+			}
+			registry := NewToolRegistry(svc, newTestLogger())
+			if _, err := registry.ExecuteTool(context.Background(), "ca_sign_csr", tc.args); err != nil {
+				t.Fatalf("ca_sign_csr: %v", err)
+			}
+			if got.CSRPEM != "PEM" || got.ValidDays != tc.days {
+				t.Errorf("request = %+v", got)
+			}
+		})
+	}
+}
+
+func TestExecuteCASignCSR_ServiceError(t *testing.T) {
+	svc := newMockServiceProvider()
+	svc.caSignCSRFunc = func(ctx context.Context, req *CASignCSRRequest) (interface{}, error) {
+		return nil, ErrMockServiceError
+	}
+	registry := NewToolRegistry(svc, newTestLogger())
+
+	if _, err := registry.ExecuteTool(context.Background(), "ca_sign_csr", map[string]interface{}{"csr_pem": "PEM"}); err == nil {
+		t.Error("expected error from service")
+	}
+}
+
 func TestExecuteCAGet_ServiceError(t *testing.T) {
 	ctx := context.Background()
 	svc := newMockServiceProvider()
-	svc.caGetFunc = func(ctx context.Context, serial string, includePEM bool) (interface{}, error) {
+	svc.caGetFunc = func(ctx context.Context, serial string, includePEM, includeDER bool) (interface{}, error) {
 		return nil, ErrMockServiceError
 	}
 	registry := NewToolRegistry(svc, newTestLogger())
@@ -1908,8 +1006,8 @@ func TestExecuteIAMCreateUser_ServiceError(t *testing.T) {
 func TestExecuteIAMDeleteUser_ServiceError(t *testing.T) {
 	ctx := context.Background()
 	svc := newMockServiceProvider()
-	svc.iamDeleteUserFunc = func(ctx context.Context, tenantID, userID string) error {
-		return ErrMockServiceError
+	svc.iamDeleteUserFunc = func(ctx context.Context, tenantID, userID string) (interface{}, error) {
+		return nil, ErrMockServiceError
 	}
 	registry := NewToolRegistry(svc, newTestLogger())
 
@@ -1946,7 +1044,7 @@ func TestExecuteIAMGetUser_ServiceError(t *testing.T) {
 func TestExecuteIAMListUsers_ServiceError(t *testing.T) {
 	ctx := context.Background()
 	svc := newMockServiceProvider()
-	svc.iamListUsersFunc = func(ctx context.Context, tenantID string, limit, offset int) (interface{}, error) {
+	svc.iamListUsersFunc = func(ctx context.Context, req *IAMListUsersRequest) (interface{}, error) {
 		return nil, ErrMockServiceError
 	}
 	registry := NewToolRegistry(svc, newTestLogger())
@@ -1989,8 +1087,8 @@ func TestExecuteIAMCreateRole_ServiceError(t *testing.T) {
 func TestExecuteIAMDeleteRole_ServiceError(t *testing.T) {
 	ctx := context.Background()
 	svc := newMockServiceProvider()
-	svc.iamDeleteRoleFunc = func(ctx context.Context, tenantID, roleID string) error {
-		return ErrMockServiceError
+	svc.iamDeleteRoleFunc = func(ctx context.Context, tenantID, roleID string) (interface{}, error) {
+		return nil, ErrMockServiceError
 	}
 	registry := NewToolRegistry(svc, newTestLogger())
 
@@ -2027,7 +1125,7 @@ func TestExecuteIAMGetRole_ServiceError(t *testing.T) {
 func TestExecuteIAMListRoles_ServiceError(t *testing.T) {
 	ctx := context.Background()
 	svc := newMockServiceProvider()
-	svc.iamListRolesFunc = func(ctx context.Context, tenantID string, limit, offset int) (interface{}, error) {
+	svc.iamListRolesFunc = func(ctx context.Context, tenantID string, page IAMPagination) (interface{}, error) {
 		return nil, ErrMockServiceError
 	}
 	registry := NewToolRegistry(svc, newTestLogger())
@@ -2045,15 +1143,15 @@ func TestExecuteIAMListRoles_ServiceError(t *testing.T) {
 func TestExecuteIAMAssignRole_ServiceError(t *testing.T) {
 	ctx := context.Background()
 	svc := newMockServiceProvider()
-	svc.iamAssignRoleFunc = func(ctx context.Context, tenantID, userID, role string) error {
-		return ErrMockServiceError
+	svc.iamAssignRoleFunc = func(ctx context.Context, tenantID, userID, roleID string) (interface{}, error) {
+		return nil, ErrMockServiceError
 	}
 	registry := NewToolRegistry(svc, newTestLogger())
 
 	args := map[string]interface{}{
 		"tenant_id": "tenant-123",
 		"user_id":   "user-456",
-		"role":      "admin",
+		"role_id":   "admin",
 	}
 
 	_, err := registry.ExecuteTool(ctx, "iam_assign_role", args)
@@ -2065,15 +1163,15 @@ func TestExecuteIAMAssignRole_ServiceError(t *testing.T) {
 func TestExecuteIAMRevokeRole_ServiceError(t *testing.T) {
 	ctx := context.Background()
 	svc := newMockServiceProvider()
-	svc.iamRevokeRoleFunc = func(ctx context.Context, tenantID, userID, role string) error {
-		return ErrMockServiceError
+	svc.iamRevokeRoleFunc = func(ctx context.Context, tenantID, userID, roleID string) (interface{}, error) {
+		return nil, ErrMockServiceError
 	}
 	registry := NewToolRegistry(svc, newTestLogger())
 
 	args := map[string]interface{}{
 		"tenant_id": "tenant-123",
 		"user_id":   "user-456",
-		"role":      "admin",
+		"role_id":   "admin",
 	}
 
 	_, err := registry.ExecuteTool(ctx, "iam_revoke_role", args)
@@ -2085,16 +1183,16 @@ func TestExecuteIAMRevokeRole_ServiceError(t *testing.T) {
 func TestExecuteIAMCheckPermission_ServiceError(t *testing.T) {
 	ctx := context.Background()
 	svc := newMockServiceProvider()
-	svc.iamCheckPermissionFunc = func(ctx context.Context, tenantID, userID, resource, action string) (bool, error) {
-		return false, ErrMockServiceError
+	svc.iamCheckPermissionFunc = func(ctx context.Context, req *IAMCheckPermissionRequest) (interface{}, error) {
+		return nil, ErrMockServiceError
 	}
 	registry := NewToolRegistry(svc, newTestLogger())
 
 	args := map[string]interface{}{
-		"tenant_id": "tenant-123",
-		"user_id":   "user-456",
-		"resource":  "containers",
-		"action":    "create",
+		"tenant_id":  "tenant-123",
+		"subject_id": "user-456",
+		"resource":   "containers",
+		"action":     "create",
 	}
 
 	_, err := registry.ExecuteTool(ctx, "iam_check_permission", args)
@@ -2396,8 +1494,8 @@ func TestExecuteIAMCreateGroup_ServiceError(t *testing.T) {
 func TestExecuteIAMDeleteGroup_ServiceError(t *testing.T) {
 	ctx := context.Background()
 	svc := newMockServiceProvider()
-	svc.iamDeleteGroupFunc = func(ctx context.Context, tenantID, groupID string) error {
-		return ErrMockServiceError
+	svc.iamDeleteGroupFunc = func(ctx context.Context, tenantID, groupID string) (interface{}, error) {
+		return nil, ErrMockServiceError
 	}
 	registry := NewToolRegistry(svc, newTestLogger())
 
@@ -2434,7 +1532,7 @@ func TestExecuteIAMGetGroup_ServiceError(t *testing.T) {
 func TestExecuteIAMListGroups_ServiceError(t *testing.T) {
 	ctx := context.Background()
 	svc := newMockServiceProvider()
-	svc.iamListGroupsFunc = func(ctx context.Context, tenantID string, limit, offset int) (interface{}, error) {
+	svc.iamListGroupsFunc = func(ctx context.Context, tenantID string, page IAMPagination) (interface{}, error) {
 		return nil, ErrMockServiceError
 	}
 	registry := NewToolRegistry(svc, newTestLogger())
@@ -2452,8 +1550,8 @@ func TestExecuteIAMListGroups_ServiceError(t *testing.T) {
 func TestExecuteIAMAddGroupMember_ServiceError(t *testing.T) {
 	ctx := context.Background()
 	svc := newMockServiceProvider()
-	svc.iamAddGroupMemberFunc = func(ctx context.Context, tenantID, groupID, userID string) error {
-		return ErrMockServiceError
+	svc.iamAddGroupMemberFunc = func(ctx context.Context, tenantID, groupID, userID string) (interface{}, error) {
+		return nil, ErrMockServiceError
 	}
 	registry := NewToolRegistry(svc, newTestLogger())
 
@@ -2472,8 +1570,8 @@ func TestExecuteIAMAddGroupMember_ServiceError(t *testing.T) {
 func TestExecuteIAMRemoveGroupMember_ServiceError(t *testing.T) {
 	ctx := context.Background()
 	svc := newMockServiceProvider()
-	svc.iamRemoveGroupMemberFunc = func(ctx context.Context, tenantID, groupID, userID string) error {
-		return ErrMockServiceError
+	svc.iamRemoveGroupMemberFunc = func(ctx context.Context, tenantID, groupID, userID string) (interface{}, error) {
+		return nil, ErrMockServiceError
 	}
 	registry := NewToolRegistry(svc, newTestLogger())
 
@@ -2515,8 +1613,8 @@ func TestExecuteIAMCreateTenant_ServiceError(t *testing.T) {
 func TestExecuteIAMDeleteTenant_ServiceError(t *testing.T) {
 	ctx := context.Background()
 	svc := newMockServiceProvider()
-	svc.iamDeleteTenantFunc = func(ctx context.Context, tenantID string) error {
-		return ErrMockServiceError
+	svc.iamDeleteTenantFunc = func(ctx context.Context, tenantID string) (interface{}, error) {
+		return nil, ErrMockServiceError
 	}
 	registry := NewToolRegistry(svc, newTestLogger())
 
@@ -2551,7 +1649,7 @@ func TestExecuteIAMGetTenant_ServiceError(t *testing.T) {
 func TestExecuteIAMListTenants_ServiceError(t *testing.T) {
 	ctx := context.Background()
 	svc := newMockServiceProvider()
-	svc.iamListTenantsFunc = func(ctx context.Context, limit, offset int) (interface{}, error) {
+	svc.iamListTenantsFunc = func(ctx context.Context, page IAMPagination) (interface{}, error) {
 		return nil, ErrMockServiceError
 	}
 	registry := NewToolRegistry(svc, newTestLogger())
@@ -2988,24 +2086,6 @@ func TestMarshalResultEdgeCases(t *testing.T) {
 	}
 }
 
-// TestHTTPTransportEdgeCases tests additional HTTP transport scenarios
-func TestHTTPTransportEdgeCases(t *testing.T) {
-	// Test with invalid address to cover error paths
-	server := &Server{
-		config: &Config{
-			Transport: "http",
-			HTTPAddr:  "invalid-addr-no-port",
-		},
-		shutdown: make(chan struct{}),
-	}
-
-	// This should fail but exercise the code path
-	err := server.Start()
-	if err == nil {
-		server.Stop()
-	}
-}
-
 // TestServerStartWithSSE tests server with SSE transport
 func TestServerStartWithSSE(t *testing.T) {
 	server := &Server{
@@ -3019,25 +2099,6 @@ func TestServerStartWithSSE(t *testing.T) {
 	err := server.Start()
 	if err == nil {
 		server.Stop()
-	}
-}
-
-// TestClientInitializeEdgeCases tests client initialization edge cases
-func TestClientInitializeEdgeCases(t *testing.T) {
-	// Test context cancellation
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel() // Cancel immediately
-
-	client := &Client{
-		config: &ClientConfig{
-			ServerAddr: "http://localhost:9999",
-		},
-		httpClient: &http.Client{Timeout: time.Millisecond},
-	}
-
-	_, err := client.Initialize(ctx)
-	if err == nil {
-		t.Log("Initialize may or may not fail with cancelled context depending on timing")
 	}
 }
 
@@ -3112,39 +2173,6 @@ func TestServerStopNotRunning(t *testing.T) {
 	server.Stop()
 }
 
-// TestDoRequestContextDeadline tests request with deadline
-func TestDoRequestContextDeadline(t *testing.T) {
-	// Create a server that delays
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		time.Sleep(100 * time.Millisecond)
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(`{"result": "ok"}`))
-	}))
-	defer ts.Close()
-
-	client := &Client{
-		config: &ClientConfig{
-			ServerAddr: ts.URL,
-			Timeout:    10 * time.Millisecond,
-		},
-		httpClient: &http.Client{Timeout: 10 * time.Millisecond},
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
-	defer cancel()
-
-	req := &JSONRPCRequest{
-		JSONRPC: "2.0",
-		ID:      1,
-		Method:  "initialize",
-	}
-
-	_, err := client.doRequest(ctx, req, "")
-	if err == nil {
-		t.Log("Request may or may not timeout depending on timing")
-	}
-}
-
 // TestServerHandleHTTPRequestInvalidJSON tests HTTP handler with invalid JSON
 func TestServerHandleHTTPRequestInvalidJSON(t *testing.T) {
 	server := &Server{
@@ -3166,7 +2194,7 @@ func TestServerHandleHTTPRequestInvalidJSON(t *testing.T) {
 	}
 
 	// Verify error response
-	var resp JSONRPCResponse
+	var resp mcpwire.JSONRPCResponse
 	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
 		t.Fatalf("failed to decode response: %v", err)
 	}
@@ -3174,8 +2202,8 @@ func TestServerHandleHTTPRequestInvalidJSON(t *testing.T) {
 	if resp.Error == nil {
 		t.Error("expected error response for invalid JSON")
 	}
-	if resp.Error != nil && resp.Error.Code != ParseError {
-		t.Errorf("expected parse error code %d, got %d", ParseError, resp.Error.Code)
+	if resp.Error != nil && resp.Error.Code != mcpwire.ParseError {
+		t.Errorf("expected parse error code %d, got %d", mcpwire.ParseError, resp.Error.Code)
 	}
 }
 
@@ -3196,63 +2224,6 @@ func TestServerHandleHTTPRequestMethodNotAllowed(t *testing.T) {
 
 	if w.Code != http.StatusMethodNotAllowed {
 		t.Errorf("expected status 405, got %d", w.Code)
-	}
-}
-
-// TestDoRequestServerError tests doRequest with server error
-func TestDoRequestServerError(t *testing.T) {
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusInternalServerError)
-	}))
-	defer ts.Close()
-
-	client := &Client{
-		config: &ClientConfig{
-			ServerAddr: ts.URL,
-			MaxRetries: 1,
-		},
-		httpClient: &http.Client{},
-	}
-
-	ctx := context.Background()
-	req := &JSONRPCRequest{
-		JSONRPC: "2.0",
-		ID:      1,
-		Method:  "test",
-	}
-
-	_, err := client.doRequest(ctx, req, "")
-	if err == nil {
-		t.Error("expected error for server error")
-	}
-}
-
-// TestDoRequestInvalidJSON tests doRequest with invalid JSON response
-func TestDoRequestInvalidJSON(t *testing.T) {
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("not-valid-json"))
-	}))
-	defer ts.Close()
-
-	client := &Client{
-		config: &ClientConfig{
-			ServerAddr: ts.URL,
-			MaxRetries: 1,
-		},
-		httpClient: &http.Client{},
-	}
-
-	ctx := context.Background()
-	req := &JSONRPCRequest{
-		JSONRPC: "2.0",
-		ID:      1,
-		Method:  "test",
-	}
-
-	_, err := client.doRequest(ctx, req, "")
-	if err == nil {
-		t.Error("expected error for invalid JSON response")
 	}
 }
 
@@ -3347,92 +2318,6 @@ func (m *mockAuthService) CheckPermission(ctx context.Context, subject, resource
 	return true, nil
 }
 
-// TestDoRequestWithToken tests doRequest with authorization token
-func TestDoRequestWithToken(t *testing.T) {
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Verify token was sent
-		auth := r.Header.Get("Authorization")
-		if auth != "Bearer test-token" {
-			t.Errorf("expected 'Bearer test-token', got '%s'", auth)
-		}
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":{}}`))
-	}))
-	defer ts.Close()
-
-	client := &Client{
-		config: &ClientConfig{
-			ServerAddr: ts.URL,
-			MaxRetries: 1,
-		},
-		httpClient: &http.Client{},
-	}
-
-	ctx := context.Background()
-	req := &JSONRPCRequest{
-		JSONRPC: "2.0",
-		ID:      1,
-		Method:  "test",
-	}
-
-	_, err := client.doRequest(ctx, req, "test-token")
-	if err != nil {
-		t.Errorf("unexpected error: %v", err)
-	}
-}
-
-// TestDoRequestEmptyResponse tests doRequest with empty response body
-func TestDoRequestEmptyResponse(t *testing.T) {
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		// Empty body
-	}))
-	defer ts.Close()
-
-	client := &Client{
-		config: &ClientConfig{
-			ServerAddr: ts.URL,
-			MaxRetries: 1,
-		},
-		httpClient: &http.Client{},
-	}
-
-	ctx := context.Background()
-	req := &JSONRPCRequest{
-		JSONRPC: "2.0",
-		ID:      1,
-		Method:  "test",
-	}
-
-	_, err := client.doRequest(ctx, req, "")
-	if err == nil {
-		t.Error("expected error for empty response")
-	}
-}
-
-// TestDoRequestNetworkError tests doRequest with network failure
-func TestDoRequestNetworkError(t *testing.T) {
-	client := &Client{
-		config: &ClientConfig{
-			ServerAddr: "http://localhost:1", // Invalid port that won't be listening
-			MaxRetries: 1,
-		},
-		httpClient: &http.Client{Timeout: 100 * time.Millisecond},
-	}
-
-	ctx := context.Background()
-	req := &JSONRPCRequest{
-		JSONRPC: "2.0",
-		ID:      1,
-		Method:  "test",
-	}
-
-	_, err := client.doRequest(ctx, req, "")
-	if err == nil {
-		t.Error("expected error for network failure")
-	}
-}
-
 // TestServerInitializeTools tests initialize returning tools
 func TestServerInitializeTools(t *testing.T) {
 	server := &Server{
@@ -3451,46 +2336,13 @@ func TestServerInitializeTools(t *testing.T) {
 
 	server.handleHTTPRequest(w, req)
 
-	var resp JSONRPCResponse
+	var resp mcpwire.JSONRPCResponse
 	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
 		t.Fatalf("failed to decode response: %v", err)
 	}
 
 	if resp.Error != nil {
 		t.Errorf("unexpected error: %v", resp.Error.Message)
-	}
-}
-
-// TestDoRequestReadBodyError tests doRequest when reading body fails
-func TestDoRequestReadBodyError(t *testing.T) {
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Send a response but close connection mid-stream (simulating read error)
-		w.Header().Set("Content-Length", "1000") // Claim large body
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(`{`)) // Write partial body
-		// Connection will close without sending full body
-	}))
-	defer ts.Close()
-
-	client := &Client{
-		config: &ClientConfig{
-			ServerAddr: ts.URL,
-			MaxRetries: 1,
-		},
-		httpClient: &http.Client{},
-	}
-
-	ctx := context.Background()
-	req := &JSONRPCRequest{
-		JSONRPC: "2.0",
-		ID:      1,
-		Method:  "test",
-	}
-
-	_, err := client.doRequest(ctx, req, "")
-	// This might result in either read error or JSON parse error
-	if err == nil {
-		t.Log("Expected error but may vary based on timing")
 	}
 }
 
@@ -3513,7 +2365,7 @@ func TestServerHandleRequestVersionMismatch(t *testing.T) {
 
 	server.handleHTTPRequest(w, req)
 
-	var resp JSONRPCResponse
+	var resp mcpwire.JSONRPCResponse
 	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
 		t.Fatalf("failed to decode response: %v", err)
 	}
@@ -3541,7 +2393,7 @@ func TestServerHandleRequestUnknownMethod(t *testing.T) {
 
 	server.handleHTTPRequest(w, req)
 
-	var resp JSONRPCResponse
+	var resp mcpwire.JSONRPCResponse
 	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
 		t.Fatalf("failed to decode response: %v", err)
 	}
@@ -3551,71 +2403,19 @@ func TestServerHandleRequestUnknownMethod(t *testing.T) {
 	}
 }
 
-// TestMCPErrorFormatting tests MCPError formatting
-func TestMCPErrorFormatting(t *testing.T) {
-	err := &MCPError{
-		Code:    -32600,
-		Message: "Invalid Request",
-		Data:    "test data",
-	}
-
-	errStr := err.Error()
-	if !strings.Contains(errStr, "-32600") {
-		t.Error("error should contain code")
-	}
-	if !strings.Contains(errStr, "Invalid Request") {
-		t.Error("error should contain message")
-	}
-}
-
-// TestIsConnected tests client connection status
-func TestIsConnected(t *testing.T) {
-	client := &Client{
-		config: &ClientConfig{
-			ServerAddr: "http://localhost:9999",
-		},
-		httpClient: &http.Client{},
-	}
-
-	// Should be connected initially
-	if !client.IsConnected() {
-		t.Error("expected connected initially")
-	}
-
-	// Close and check
-	client.Close()
-
-	if client.IsConnected() {
-		t.Error("expected disconnected after close")
-	}
-}
-
-// TestServerAddr tests ServerAddr getter
-func TestServerAddr(t *testing.T) {
-	client := &Client{
-		config: &ClientConfig{
-			ServerAddr: "http://test:8000",
-		},
-	}
-
-	if client.ServerAddr() != "http://test:8000" {
-		t.Errorf("expected 'http://test:8000', got '%s'", client.ServerAddr())
-	}
-}
-
 // TestMakeErrorResponse tests makeErrorResponse function
 func TestMakeErrorResponse(t *testing.T) {
 	server := &Server{
 		config: &Config{},
 	}
 
-	resp := server.makeErrorResponse(1, InvalidRequest, "test message", "test data")
+	resp := server.makeErrorResponse(1, mcpwire.InvalidRequest, "test message", "test data")
 
 	if resp.Error == nil {
 		t.Error("expected error in response")
 	}
-	if resp.Error.Code != InvalidRequest {
-		t.Errorf("expected code %d, got %d", InvalidRequest, resp.Error.Code)
+	if resp.Error.Code != mcpwire.InvalidRequest {
+		t.Errorf("expected code %d, got %d", mcpwire.InvalidRequest, resp.Error.Code)
 	}
 	if resp.Error.Message != "test message" {
 		t.Errorf("expected message 'test message', got '%s'", resp.Error.Message)
@@ -3699,35 +2499,6 @@ func TestAuthorizationCheckerNoService(t *testing.T) {
 	}
 }
 
-// TestClientDoRequestWithContextTimeout tests client doRequest with cancellation
-func TestClientDoRequestWithContextTimeout(t *testing.T) {
-	// Create a server that delays response
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		time.Sleep(10 * time.Second)
-	}))
-	defer server.Close()
-
-	config := &ClientConfig{
-		ServerAddr: server.URL,
-		Timeout:    100 * time.Millisecond,
-	}
-
-	client, err := NewClient(config)
-	if err != nil {
-		t.Fatalf("failed to create client: %v", err)
-	}
-
-	// Create context with short timeout
-	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
-	defer cancel()
-
-	// Request should timeout
-	_, err = client.ListTools(ctx)
-	if err == nil {
-		t.Error("expected timeout error")
-	}
-}
-
 // TestReadResourceEmptyURI tests ReadResource with empty URI
 func TestReadResourceEmptyURI(t *testing.T) {
 	logger := newTestLogger()
@@ -3781,91 +2552,6 @@ func TestOAuthDefaultOAuthMetadataConfigCreation(t *testing.T) {
 	// Default config should have empty ResourceURL (to be set later)
 	if config.ResourceURL != "" {
 		t.Error("expected empty default ResourceURL")
-	}
-}
-
-// TestListResourcesInvalidResponse tests ListResources with invalid response format
-func TestListResourcesInvalidResponse(t *testing.T) {
-	// Create server that returns non-map response
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		resp := map[string]interface{}{
-			"jsonrpc": "2.0",
-			"id":      1,
-			"result":  "not_a_map", // Invalid - should be a map
-		}
-		json.NewEncoder(w).Encode(resp)
-	}))
-	defer server.Close()
-
-	client, err := NewClient(&ClientConfig{ServerAddr: server.URL})
-	if err != nil {
-		t.Fatalf("failed to create client: %v", err)
-	}
-
-	_, err = client.ListResources(context.Background())
-	if err == nil {
-		t.Error("expected error for invalid response format")
-	}
-}
-
-// TestListResourcesMissingResources tests ListResources with missing resources field
-func TestListResourcesMissingResources(t *testing.T) {
-	// Create server that returns map without resources field
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		resp := map[string]interface{}{
-			"jsonrpc": "2.0",
-			"id":      1,
-			"result":  map[string]interface{}{"other": "data"}, // Missing resources field
-		}
-		json.NewEncoder(w).Encode(resp)
-	}))
-	defer server.Close()
-
-	client, err := NewClient(&ClientConfig{ServerAddr: server.URL})
-	if err != nil {
-		t.Fatalf("failed to create client: %v", err)
-	}
-
-	_, err = client.ListResources(context.Background())
-	if err == nil {
-		t.Error("expected error for missing resources field")
-	}
-}
-
-// TestDoRequestWithRPCErrorData tests doRequest when server returns JSON-RPC error with data
-func TestDoRequestWithRPCErrorData(t *testing.T) {
-	// Create server that returns JSON-RPC error
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		resp := map[string]interface{}{
-			"jsonrpc": "2.0",
-			"id":      1,
-			"error": map[string]interface{}{
-				"code":    -32600,
-				"message": "Invalid Request",
-				"data":    "test error data",
-			},
-		}
-		json.NewEncoder(w).Encode(resp)
-	}))
-	defer server.Close()
-
-	client, err := NewClient(&ClientConfig{ServerAddr: server.URL})
-	if err != nil {
-		t.Fatalf("failed to create client: %v", err)
-	}
-
-	_, err = client.ListTools(context.Background())
-	if err == nil {
-		t.Error("expected error for RPC error response")
-	}
-
-	// Should be MCPError
-	var mcpErr *MCPError
-	if !errors.As(err, &mcpErr) {
-		t.Errorf("expected MCPError, got %T", err)
 	}
 }
 

@@ -42,7 +42,10 @@ import (
 // sessionWait bounds every wait on the session. The session comes up in about
 // two seconds (GoBGP's minimum connect retry); the bound only stops a broken
 // session from hanging the run.
-const sessionWait = 30 * time.Second
+// sessionWait bounds a failing run only: every wait returns the moment its
+// condition holds. It is sized for the thousand-route convergences, which a
+// loaded -race host stretches well past 30 s.
+const sessionWait = 2 * time.Minute
 
 // remotePortServer is the real GoBGP adapter with one change: the session it
 // opens dials port instead of 179. Two speakers sharing one loopback address

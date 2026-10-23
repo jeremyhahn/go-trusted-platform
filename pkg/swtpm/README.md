@@ -224,7 +224,10 @@ make coverage-swtpm
 go test -v ./pkg/swtpm/...
 ```
 
-Note: Some tests require `swtpm` and `swtpm_setup` to be installed. Tests will be skipped if these tools are not available.
+The unit tests need neither `swtpm` nor `swtpm_setup`: they replace both
+binaries with an in-memory fake and never skip. The tests that drive the real
+daemon live in `test/integration/vtpm/swtpm_test.go` and run in the
+devcontainer with `make integration-test-vtpm`; a missing binary fails them.
 
 ## Architecture
 

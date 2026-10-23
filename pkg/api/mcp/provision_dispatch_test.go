@@ -441,6 +441,43 @@ func TestExecuteProvisionFulfillSession_ProfileIDForms(t *testing.T) {
 	}
 }
 
+// TestExecuteProvisionFulfillSession_ZeroProfileIDReachesService asserts a
+// missing or zero profile_id is handed to the service as 0: the service
+// owns the profile_id rule so MCP refuses it with the same typed error as
+// every other transport (#304).
+func TestExecuteProvisionFulfillSession_ZeroProfileIDReachesService(t *testing.T) {
+	ctx := context.Background()
+	registry, stub := newProvisionRegistry()
+	called := false
+	capturedProfile := uint64(1)
+	stub.fulfillFunc = func(ctx context.Context, sessionID string, profileID uint64) (interface{}, error) {
+		called = true
+		capturedProfile = profileID
+		return map[string]interface{}{"status": "fulfilled"}, nil
+	}
+
+	for name, profileID := range map[string]interface{}{
+		"missing": nil,
+		"number":  float64(0),
+		"string":  "0",
+		"empty":   "",
+	} {
+		t.Run(name, func(t *testing.T) {
+			called, capturedProfile = false, 1
+			args := map[string]interface{}{"session_id": "sess-1"}
+			if profileID != nil {
+				args["profile_id"] = profileID
+			}
+			if _, err := registry.ExecuteTool(ctx, "provision_fulfill_session", args); err != nil {
+				t.Fatalf("err = %v, want the call to reach the service", err)
+			}
+			if !called || capturedProfile != 0 {
+				t.Errorf("called = %v, profile_id = %d; want the service called with 0", called, capturedProfile)
+			}
+		})
+	}
+}
+
 func TestExecuteProvisionFulfillSession_InvalidInputs(t *testing.T) {
 	ctx := context.Background()
 	registry, _ := newProvisionRegistry()
@@ -449,19 +486,6 @@ func TestExecuteProvisionFulfillSession_InvalidInputs(t *testing.T) {
 		"profile_id": float64(7),
 	}); !errors.Is(err, ErrProvisionSessionIDRequired) {
 		t.Errorf("missing session_id: err = %v, want ErrProvisionSessionIDRequired", err)
-	}
-
-	if _, err := registry.ExecuteTool(ctx, "provision_fulfill_session", map[string]interface{}{
-		"session_id": "sess-1",
-	}); !errors.Is(err, ErrProvisionProfileIDRequired) {
-		t.Errorf("missing profile_id: err = %v, want ErrProvisionProfileIDRequired", err)
-	}
-
-	if _, err := registry.ExecuteTool(ctx, "provision_fulfill_session", map[string]interface{}{
-		"session_id": "sess-1",
-		"profile_id": float64(0),
-	}); !errors.Is(err, ErrProvisionProfileIDRequired) {
-		t.Errorf("zero profile_id: err = %v, want ErrProvisionProfileIDRequired", err)
 	}
 
 	var invalidID ErrProvisionInvalidProfileID

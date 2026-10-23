@@ -81,6 +81,38 @@ const (
 	oidTPMAttestationQuote = "2.23.133.11.2"
 )
 
+// ErrMissingPrerequisite reports an environment prerequisite the enrollment
+// test needs and the environment lacks.
+type ErrMissingPrerequisite struct {
+	Prerequisite string
+	Err          error
+}
+
+func (e ErrMissingPrerequisite) Error() string {
+	const remedy = "run in the devcontainer, which runs as root and installs qemu-system-x86"
+	if e.Err != nil {
+		return fmt.Sprintf("%s: %v: %s", e.Prerequisite, e.Err, remedy)
+	}
+	return fmt.Sprintf("%s: %s", e.Prerequisite, remedy)
+}
+
+func (e ErrMissingPrerequisite) Unwrap() error {
+	return e.Err
+}
+
+// checkEnrollmentPrerequisites returns ErrMissingPrerequisite for the first
+// prerequisite the environment lacks: root for the isolated bridge and TAP
+// network, and QEMU for the server and client VMs.
+func checkEnrollmentPrerequisites() error {
+	if euid := os.Geteuid(); euid != 0 {
+		return ErrMissingPrerequisite{Prerequisite: fmt.Sprintf("root privileges for network setup (running as euid %d)", euid)}
+	}
+	if _, err := exec.LookPath("qemu-system-x86_64"); err != nil {
+		return ErrMissingPrerequisite{Prerequisite: "QEMU binary qemu-system-x86_64", Err: err}
+	}
+	return nil
+}
+
 // TestEnrollmentIntegration tests the full ACME enrollment flow between server and client VMs.
 // This test has two modes:
 // 1. Framework validation mode (default): Validates the test infrastructure works
@@ -89,14 +121,8 @@ const (
 // 2. Full integration mode: Requires pre-built ISOs with the platform installed
 //   - Set INTEGRATION_TEST_SERVER_ISO and INTEGRATION_TEST_CLIENT_ISO env vars
 func TestEnrollmentIntegration(t *testing.T) {
-	// Skip if not running as root (required for network setup)
-	if os.Geteuid() != 0 {
-		t.Skip("Integration test requires root privileges for network setup")
-	}
-
-	// Check QEMU availability
-	if _, err := exec.LookPath("qemu-system-x86_64"); err != nil {
-		t.Skip("QEMU not available, skipping integration test")
+	if err := checkEnrollmentPrerequisites(); err != nil {
+		t.Fatalf("missing prerequisite: %v", err)
 	}
 
 	// Check for pre-built ISOs to determine test mode
@@ -197,8 +223,8 @@ func testFrameworkValidation(ctx context.Context, t *testing.T, logger *logging.
 
 	defer vm.Stop()
 
-	// Give it a moment to start
-	time.Sleep(2 * time.Second)
+	// Give it a moment to start; nothing observable marks the end, so this is elapsed time
+	require.NoError(t, testenv.Elapse(ctx, 2*time.Second))
 
 	logger.Info("VM started successfully (framework validation passed)",
 		"pid", vm.GetPID())
@@ -456,16 +482,10 @@ func waitForServerReady(ctx context.Context, t *testing.T, logger *logging.Logge
 		"ip", serverIP,
 		"timeout", serverBootTimeout)
 
-	deadline := time.Now().Add(serverBootTimeout)
+	start := time.Now()
 	attempts := 0
 
-	for time.Now().Before(deadline) {
-		select {
-		case <-ctx.Done():
-			t.Fatal("Context cancelled while waiting for server")
-		default:
-		}
-
+	serverReady := func() bool {
 		attempts++
 
 		// Check if ping reachable
@@ -478,8 +498,7 @@ func waitForServerReady(ctx context.Context, t *testing.T, logger *logging.Logge
 			logger.Debug("Server not reachable via ping",
 				"attempt", attempts,
 				"ip", serverIP)
-			time.Sleep(healthCheckInterval)
-			continue
+			return false
 		}
 
 		// Check if platformd DNS service is running
@@ -488,8 +507,7 @@ func waitForServerReady(ctx context.Context, t *testing.T, logger *logging.Logge
 			logger.Debug("Platformd DNS not ready yet",
 				"attempt", attempts,
 				"port", serverDNSPort)
-			time.Sleep(healthCheckInterval)
-			continue
+			return false
 		}
 
 		// Check if HTTPS service is running
@@ -498,18 +516,20 @@ func waitForServerReady(ctx context.Context, t *testing.T, logger *logging.Logge
 			logger.Debug("Platformd HTTPS not ready yet",
 				"attempt", attempts,
 				"port", serverHTTPSPort)
-			time.Sleep(healthCheckInterval)
-			continue
+			return false
 		}
-
-		logger.Info("Server is fully ready",
-			"ip", serverIP,
-			"attempts", attempts,
-			"elapsed", time.Since(deadline.Add(-serverBootTimeout)))
-		return
+		return true
 	}
 
-	t.Fatalf("Server did not become ready within timeout: %v", serverBootTimeout)
+	err := testenv.WaitUntilEvery(ctx, serverBootTimeout, healthCheckInterval, "server "+serverIP+" ping, DNS and HTTPS", serverReady)
+	if err != nil {
+		t.Fatalf("Server did not become ready within timeout %v: %v", serverBootTimeout, err)
+	}
+
+	logger.Info("Server is fully ready",
+		"ip", serverIP,
+		"attempts", attempts,
+		"elapsed", time.Since(start))
 }
 
 // waitForClientEnrollment waits for the client to complete ACME enrollment
@@ -521,16 +541,10 @@ func waitForClientEnrollment(ctx context.Context, t *testing.T, logger *logging.
 		"server_ip", serverIP,
 		"timeout", clientBootTimeout)
 
-	deadline := time.Now().Add(clientBootTimeout)
+	start := time.Now()
 	attempts := 0
 
-	for time.Now().Before(deadline) {
-		select {
-		case <-ctx.Done():
-			t.Fatal("Context cancelled while waiting for client enrollment")
-		default:
-		}
-
+	clientEnrolled := func() bool {
 		attempts++
 
 		// Check if ping reachable
@@ -543,28 +557,30 @@ func waitForClientEnrollment(ctx context.Context, t *testing.T, logger *logging.
 			logger.Debug("Client not reachable via ping",
 				"attempt", attempts,
 				"ip", clientIP)
-			time.Sleep(healthCheckInterval)
-			continue
+			return false
 		}
 
 		// Check if enrollment completed by verifying the client's platformd service is running
 		// and has successfully obtained a certificate
-		enrolled := checkEnrollmentStatus(ctx, logger, serverIP, clientIP)
-		if enrolled {
-			logger.Info("Client enrollment completed successfully",
-				"client_ip", clientIP,
-				"attempts", attempts,
-				"elapsed", time.Since(deadline.Add(-clientBootTimeout)))
-			return
+		if checkEnrollmentStatus(ctx, logger, serverIP, clientIP) {
+			return true
 		}
 
 		logger.Debug("Client enrollment not complete yet",
 			"attempt", attempts,
 			"client_ip", clientIP)
-		time.Sleep(healthCheckInterval)
+		return false
 	}
 
-	t.Fatalf("Client enrollment did not complete within timeout: %v", clientBootTimeout)
+	err := testenv.WaitUntilEvery(ctx, clientBootTimeout, healthCheckInterval, "client "+clientIP+" enrollment", clientEnrolled)
+	if err != nil {
+		t.Fatalf("Client enrollment did not complete within timeout %v: %v", clientBootTimeout, err)
+	}
+
+	logger.Info("Client enrollment completed successfully",
+		"client_ip", clientIP,
+		"attempts", attempts,
+		"elapsed", time.Since(start))
 }
 
 // verifyEnrollmentSuccess verifies that the client successfully obtained its IDevID certificate

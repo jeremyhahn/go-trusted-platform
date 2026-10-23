@@ -16,17 +16,21 @@ package bootstrap
 import (
 	"fmt"
 	"log/slog"
+	"strconv"
 	"strings"
 
 	"gopkg.in/yaml.v3"
 )
 
-// cpWebserviceTLSPort is the TLS port of the control plane's public
-// webservice as the device template declares it (webservices[].tls-port).
-// It selects which webservice entry's certificate identity the
-// orchestrator verifies against. cpWebservicePort, the port actually
-// dialed, defaults to it; tests redirect only the dial.
-const cpWebserviceTLSPort = 8443
+// nodeWebserviceTLSPort is the TLS port of the platform listener a gateway or
+// worker serves (webservice[s].tls-port). Its certificate is issued by the
+// control-plane CA through device-attest-01, so the post-install probe
+// verifies it against the platform anchor under the name declared here.
+const nodeWebserviceTLSPort = 9443
+
+// gatewayWebserviceTLSPort is the HTTPS port a gateway's public listener
+// serves. Health probes try it after the control-plane and node ports.
+const gatewayWebserviceTLSPort = 443
 
 // controlPlaneTLSNameFallbackSource names the source recorded when the
 // merged control-plane config carries no webservice certificate identity
@@ -44,6 +48,13 @@ func (o *Orchestrator) firstControlPlaneNode() *DiscoveredNode {
 	return nil
 }
 
+// controlPlanePort is the control plane's webservice port as the dial
+// address wants it: platform.control_plane_port, else
+// DefaultControlPlanePort.
+func (o *Orchestrator) controlPlanePort() string {
+	return strconv.Itoa(o.config.EffectiveControlPlanePort())
+}
+
 // controlPlaneTLSName returns the DNS name every orchestrator TLS client
 // verifies the control plane's certificate against, resolved once per
 // orchestrator and logged once.
@@ -55,7 +66,7 @@ func (o *Orchestrator) firstControlPlaneNode() *DiscoveredNode {
 // has to come from configuration: the merged control-plane config the
 // orchestrator itself stages is the single source of truth (the subject CN,
 // or failing that the first DNS SAN, of the webservices entry on
-// cpWebserviceTLSPort). Only when that config carries no such name does the
+// platform.control_plane_port). Only when that config carries no such name does the
 // "cp." role alias under the platform domain stand in, logged at WARN. The
 // node's hostname is never used: it is not what the certificate says.
 func (o *Orchestrator) controlPlaneTLSName() (string, error) {
@@ -72,7 +83,11 @@ func (o *Orchestrator) resolveControlPlaneTLSName() (string, error) {
 			o.logger.Warn("bootstrap: control-plane TLS name: merged control-plane config unavailable, falling back to the cp role alias",
 				slog.String("hostname", cpNode.Hostname),
 				slog.String("error", err.Error()))
-		} else if name, source := webserviceTLSNameFromConfig(merged, cpWebserviceTLSPort); name != "" {
+		} else if name, source, err := webserviceTLSNameFromConfig(merged, o.config.EffectiveControlPlanePort()); err != nil {
+			o.logger.Warn("bootstrap: control-plane TLS name: merged control-plane config is not YAML, falling back to the cp role alias",
+				slog.String("hostname", cpNode.Hostname),
+				slog.String("error", err.Error()))
+		} else if name != "" {
 			o.logger.Info("bootstrap: control-plane TLS name",
 				slog.String("name", name),
 				slog.String("source", source))
@@ -80,7 +95,7 @@ func (o *Orchestrator) resolveControlPlaneTLSName() (string, error) {
 		} else {
 			o.logger.Warn("bootstrap: control-plane TLS name: merged control-plane config carries no webservice certificate name, falling back to the cp role alias",
 				slog.String("hostname", cpNode.Hostname),
-				slog.Int("tls_port", cpWebserviceTLSPort))
+				slog.Int("tls_port", o.config.EffectiveControlPlanePort()))
 		}
 	}
 	domain := ""
@@ -98,40 +113,98 @@ func (o *Orchestrator) resolveControlPlaneTLSName() (string, error) {
 }
 
 // webserviceTLSNameFromConfig reads the certificate identity of the
-// webservices entry listening on tlsPort out of a merged device config: the
-// subject CN first, else the first DNS SAN. It returns the name and the
-// config key it came from, or empty strings when the config carries none.
-func webserviceTLSNameFromConfig(mergedYAML string, tlsPort int) (name, source string) {
+// webservice listening on tlsPort out of a merged device config — a
+// `webservices:` list entry or the singular `webservice:` block: the subject
+// CN first, else the first DNS SAN. It returns the name and the config key it
+// came from, or empty strings when the config carries none; err is set only
+// when the config is not YAML.
+func webserviceTLSNameFromConfig(mergedYAML string, tlsPort int) (name, source string, err error) {
 	var cfg struct {
-		Webservices []struct {
-			TLSPort     int `yaml:"tls-port"`
-			Certificate struct {
-				Subject struct {
-					CN string `yaml:"cn"`
-				} `yaml:"subject"`
-				SANs struct {
-					DNS []string `yaml:"dns"`
-				} `yaml:"sans"`
-			} `yaml:"certificate"`
-		} `yaml:"webservices"`
+		Webservices []webserviceIdentity `yaml:"webservices"`
+		Webservice  *webserviceIdentity  `yaml:"webservice"`
 	}
 	if err := yaml.Unmarshal([]byte(mergedYAML), &cfg); err != nil {
-		return "", ""
+		return "", "", err
 	}
 	for i, ws := range cfg.Webservices {
-		if ws.TLSPort != tlsPort {
-			continue
+		if name, field := ws.tlsName(tlsPort); name != "" {
+			return name, fmt.Sprintf("webservices[%d].%s", i, field), nil
 		}
-		if cn := strings.TrimSpace(ws.Certificate.Subject.CN); cn != "" {
-			return cn, fmt.Sprintf("webservices[%d].certificate.subject.cn", i)
+	}
+	if cfg.Webservice != nil {
+		if name, field := cfg.Webservice.tlsName(tlsPort); name != "" {
+			return name, "webservice." + field, nil
 		}
-		for j, san := range ws.Certificate.SANs.DNS {
-			if san = strings.TrimSpace(san); san != "" {
-				return san, fmt.Sprintf("webservices[%d].certificate.sans.dns[%d]", i, j)
-			}
+	}
+	return "", "", nil
+}
+
+// webserviceIdentity is the part of a template's webservice entry that names
+// the certificate it serves.
+type webserviceIdentity struct {
+	TLSPort     int `yaml:"tls-port"`
+	Certificate struct {
+		Subject struct {
+			CN string `yaml:"cn"`
+		} `yaml:"subject"`
+		SANs struct {
+			DNS []string `yaml:"dns"`
+		} `yaml:"sans"`
+	} `yaml:"certificate"`
+}
+
+// tlsName returns the subject CN, else the first non-blank DNS SAN, of a
+// webservice listening on tlsPort, with the field it was read from.
+func (ws webserviceIdentity) tlsName(tlsPort int) (name, field string) {
+	if ws.TLSPort != tlsPort {
+		return "", ""
+	}
+	if cn := strings.TrimSpace(ws.Certificate.Subject.CN); cn != "" {
+		return cn, "certificate.subject.cn"
+	}
+	for i, san := range ws.Certificate.SANs.DNS {
+		if san = strings.TrimSpace(san); san != "" {
+			return san, fmt.Sprintf("certificate.sans.dns[%d]", i)
 		}
 	}
 	return "", ""
+}
+
+// postInstallTLSName returns the name the post-install probe verifies node's
+// certificate under: the control plane's public webservice name for the
+// control plane, the platform listener's name for every other role.
+func (o *Orchestrator) postInstallTLSName(node *DiscoveredNode) (string, error) {
+	if node.Role == RoleControlPlane {
+		return o.controlPlaneTLSName()
+	}
+	return o.nodeTLSName(node)
+}
+
+// nodeTLSName reads the name a gateway or worker serves on its platform
+// listener (nodeWebserviceTLSPort) out of the node's merged role template.
+// There is no fallback: a name invented here could only match a certificate
+// by accident, so a template that declares none is a NodeTLSNameUnknownError.
+func (o *Orchestrator) nodeTLSName(node *DiscoveredNode) (string, error) {
+	unknown := NodeTLSNameUnknownError{Hostname: node.Hostname, Role: node.Role, TLSPort: nodeWebserviceTLSPort}
+	merged, err := o.resolveNodeConfig(node.Hostname, node.Role, node.HardwareIdentity)
+	if err != nil {
+		unknown.Cause = err
+		return "", unknown
+	}
+	name, source, err := webserviceTLSNameFromConfig(merged, nodeWebserviceTLSPort)
+	if err != nil {
+		unknown.Cause = err
+		return "", unknown
+	}
+	if name == "" {
+		return "", unknown
+	}
+	o.logger.Info("bootstrap: node TLS name",
+		slog.String("hostname", node.Hostname),
+		slog.String("role", node.Role),
+		slog.String("name", name),
+		slog.String("source", source))
+	return name, nil
 }
 
 // controlPlaneDialCandidates lists the addresses at which to reach the

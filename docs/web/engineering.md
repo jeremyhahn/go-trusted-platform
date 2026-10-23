@@ -16,8 +16,8 @@
 | File | Build tag | Contents |
 |---|---|---|
 | `embed.go` | `!platform_web` | `var WebFS fs.FS` = nil; `IsEmbedded() bool` = false |
-| `embed_web.go` | `platform_web` | `//go:embed all:dist`; `init()` sets `WebFS = fs.Sub(webDist, "dist")`; `IsEmbedded()` = true |
-| `embed_test.go` | — | |
+| `embed_web.go` | `platform_web` | `//go:embed all:dist`; `init()` sets `WebFS = fs.Sub(webDist, "dist")`; `IsEmbedded()` = true only when `dist` holds an entry other than `.gitkeep` (#323) |
+| `embed_test.go`, `embed_stub_test.go`, `embed_web_test.go` | —, `!platform_web`, `platform_web` | |
 
 `init()` **panics** if `fs.Sub` fails. That is correct: a binary built with the
 tag and a broken `dist/` must not start.
@@ -57,8 +57,8 @@ web/
 │   │       ├── iam/ tenant/ ca/ kms/ devices/ attestation/ tpm/
 │   │       ├── compute/ networking/ storage/ provisioning/ platform/
 │   ├── components/{ui,layout,features,security,brand}/, theme-*.tsx
-│   ├── contexts/AuthContext.tsx
-│   ├── hooks/{index.ts,use-auth.tsx,use-toast.ts}
+│   ├── contexts/AuthContext.tsx    # the only auth implementation
+│   ├── hooks/{index.ts,use-toast.ts,...}   # index.ts re-exports AuthContext
 │   ├── lib/utils.ts
 │   ├── types/*.ts
 │   └── utils/{cookie.ts,jwt.ts,getBaseUrl.ts,dynamic-route.ts,auth-factors-api.ts}
@@ -146,6 +146,10 @@ to run longer than 30s cannot, on this server.
 9. **Embedded serving wins whenever it is available.** `serveStaticFiles`
    checks `embed.IsEmbedded() && embed.WebFS != nil` first, so in a
    `platform_web` binary the configured `home` directory is **never read**.
+   `IsEmbedded()` is false for a `platform_web` build whose `dist` holds only the
+   tracked `.gitkeep` (a `go build -tags platform_web` that skipped
+   `_web-embed-prepare`, #323), so such a binary serves from `home` like a
+   `!platform_web` one rather than claiming a console it does not have.
 10. **The plaintext port carries a redirect, or nothing (#535).** With
     `tls-port > 0` the listener on `port` answers every request with a
     permanent redirect to the same path and query on the TLS port
@@ -223,7 +227,8 @@ services it hosts):
 | Virtual-host proxy backend unreachable | 502 | `Proxy error` |
 | Service registry with no response writer | 500 | `registry: response writer not configured` |
 
-Everything under `/api/v1` uses the `pkg/webservice/v1/response` envelope; that
+Everything under `/api/v1` uses the `WebServiceResponse` envelope
+(`sdk/go/wire/restwire`, written by `pkg/webservice/v1/response`); that
 contract belongs to the services, not to this document.
 
 ## 6. Configuration
@@ -249,7 +254,7 @@ The schema is `pkg/webservice/v1.Config`. It is bound to **two** platform keys
 | `tls-port` | int | `8443` | `0` disables HTTPS and HTTP/3; follows `bind-host` |
 | `certificate` | `common.Identity` | `www.example.com`, 365 days, SANs `www.example.com` / `localhost` / `localhost.localdomain` / `127.0.0.1` | Server identity |
 | `certificate.acme.cross-sign.directory` | URL | — | Enables `TLSConfigWithXSigner`; must parse as an FQDN |
-| `key` | `common.KeyConfig` | per profile | `DefaultConfigRSA`: RSA-2048, SHA-256, PSS, `StoreTPM2`, platform policy. `DefaultConfigECDSA`: P-256, SHA-256, `StoreTPM2`. `DefaultConfigEd25519`: Ed25519, **software store** |
+| `key` | `common.KeyConfig` | per profile | `DefaultConfigRSA`: RSA-2048, SHA-256, PSS, `StoreTPM2`, platform policy. `DefaultConfigECDSA`: P-256, SHA-256, `StoreTPM2`. `DefaultConfigEd25519`: Ed25519, **software store**. A YAML entry without `key` gets none, and startup refuses it with `app.ErrWebServiceKeyRequired` unless its certificate CN equals `tpm.idevid.cn` and the TPM IDevID is provisioned |
 | `jwt.expiration` | int | `60` | **Minutes** (`time.Minute * Duration(Expiration)`) |
 | `jwt.issuer` | string | — | |
 | `jwt.platform-token.enabled` | bool | `false` | Broker platform-token validator |
@@ -266,11 +271,11 @@ The schema is `pkg/webservice/v1.Config`. It is bound to **two** platform keys
 | `acme.enabled` / `.directory` / `.terms-of-service` / `.challenges` / `.external-account-required` | — | — | Per-webservice ACME server |
 | `cors.allowed-origins` / `.allowed-methods` / `.allowed-headers` / `.allow-credentials` | lists / bool | — | Global CORS |
 | `rewrite[].pattern` / `.target` | regexp / path | — | First match wins |
-| `surface` | `full` \| `edge` | `full` | What the listener mounts (#571). `edge`: virtual hosts, ACME when an ACME server exists, the TLS redirect; nothing else; unknown Host is 421. Any other value refuses to start |
-| `max-header-bytes` | int | Go default (1 MiB); `65536` on `edge` | Request header cap on both listeners |
+| `surface` | `full` \| `edge` \| `provisioning` | `full` | What the listener mounts (#571). `edge`: virtual hosts, ACME when an ACME server exists, the TLS redirect; nothing else; unknown Host is 421. `provisioning` (#177): `GET /api/v1/devices/config` and the TLS redirect; nothing else, and no other surface mounts that route. Startup (`webservice.ValidateProvisioningSurface`, wrapped in `app.ErrWebServiceValidation`) refuses it unless `bind-host` is an IP literal inside the provisioning zone of the node's network plan, `tls-port` is set and `virtual-hosts` is empty. Any other value refuses to start |
+| `max-header-bytes` | int | Go default (1 MiB); `65536` on `edge` and `provisioning` | Request header cap on both listeners |
 | `read-timeout` / `write-timeout` / `idle-timeout` | duration | `5s` / `30s` / `120s` | Per-listener `http.Server` timeouts |
-| `max-connections` | int | unlimited; `4096` on `edge` | Concurrent TCP connections per listener (`netutil.LimitListener`; HTTP/3 over UDP is not counted) |
-| `rate-limit.requests-per-second` / `.burst` | float / int | none; `50` / `100` on `edge` | Per-source token bucket (`pkg/security/ratelimit`, idle buckets evicted after 5 min); `0` disables |
+| `max-connections` | int | unlimited; `4096` on `edge` and `provisioning` | Concurrent TCP connections per listener (`netutil.LimitListener`; HTTP/3 over UDP is not counted) |
+| `rate-limit.requests-per-second` / `.burst` | float / int | none; `50` / `100` on `edge` and `provisioning` | Per-source token bucket (`pkg/security/ratelimit`, idle buckets evicted after 5 min); `0` disables |
 | `virtual-hosts[].hosts` | list | — | `Host` names this virtual host owns: exact, or `*.suffix` matching exactly one extra label. Virtual hosts match before every path route (#571) |
 | `virtual-hosts[].home` | path | — | Joined onto the top-level `home` |
 | `virtual-hosts[].index` | string | falls back to top-level `index` | |
@@ -358,7 +363,23 @@ linked local SDK (`"trusted-platform-sdk": "file:../sdk/javascript"`) resolves
 more reliably under it; `next.config.mjs` carries a webpack `resolve.alias` for
 the SDK's subpath exports and `transpilePackages: ["trusted-platform-sdk"]`.
 `playwright.config.ts` explicitly starts `npm run dev:webpack` for the same
-reason.
+reason. `vitest.config.ts` does the test-side equivalent: it inlines
+`trusted-platform-sdk` and dedupes `react`/`react-dom`, because the linked SDK
+carries its own dev copy of React and an externalized SDK hook (`useApi`)
+otherwise fails with "Invalid hook call".
+
+Console pages load server data through the SDK's `useApi`, never through a
+local `useState` + `useEffect` pair. The account security page
+(`account/security/page.tsx`) reads factors this way: `toApiResponse`
+(`src/utils/auth-factors-api.ts`) adapts the factor client's result to the
+SDK's `ApiResponse`, and local edits go through `useApi`'s `mutate` (#435).
+
+Form schemas declare numeric fields as `z.number()`, never `z.coerce.number()`:
+coercion makes the schema's input type `unknown`, which no longer matches the
+form values and forces an `as any` on `zodResolver`. A number field binds to
+`<Input type="number">` through `numberFieldProps(field)`
+(`src/lib/number-field.ts`), which reads the input's `valueAsNumber` and turns
+a blank into `undefined` (#451).
 
 ## 9. Test strategy
 

@@ -46,9 +46,6 @@ func (tc *testCluster) getRunningFollowers() []*testNode {
 
 // TestLeaderFailover tests that a new leader is elected when the leader dies.
 func TestLeaderFailover(t *testing.T) {
-	skipIfNoRaftCluster(t)
-	skipIfNotIntegration(t)
-
 	tc := newTestCluster(t, 3)
 	defer tc.stop()
 
@@ -91,16 +88,11 @@ func TestLeaderFailover(t *testing.T) {
 		mockOp.incrementTerm()
 	}
 
-	// Wait for new leader status to propagate through the leader check loop
-	time.Sleep(2 * time.Second)
-
-	// Verify a new leader is elected from the running followers
-	var newLeader *testNode
-	for _, follower := range runningFollowers {
-		if follower.coordinator.IsLeader() {
-			newLeader = follower
-			break
-		}
+	// Wait for new leader status to propagate through the leader check loop,
+	// then verify a new leader is elected from the running followers
+	newLeader, err := waitForNewLeader(ctx, defaultLeaderTimeout, runningFollowers)
+	if err != nil {
+		t.Logf("%v", err)
 	}
 
 	require.NotNil(t, newLeader, "A new leader should be elected")
@@ -112,9 +104,6 @@ func TestLeaderFailover(t *testing.T) {
 
 // TestLeaderFailover_QuorumMaintained tests quorum is maintained after failover.
 func TestLeaderFailover_QuorumMaintained(t *testing.T) {
-	skipIfNoRaftCluster(t)
-	skipIfNotIntegration(t)
-
 	tc := newTestCluster(t, 3)
 	defer tc.stop()
 
@@ -141,9 +130,6 @@ func TestLeaderFailover_QuorumMaintained(t *testing.T) {
 
 // TestFollowerFailure tests the cluster survives follower loss.
 func TestFollowerFailure(t *testing.T) {
-	skipIfNoRaftCluster(t)
-	skipIfNotIntegration(t)
-
 	tc := newTestCluster(t, 3)
 	defer tc.stop()
 
@@ -170,7 +156,7 @@ func TestFollowerFailure(t *testing.T) {
 	require.NoError(t, err)
 
 	// Wait for cluster to adjust
-	time.Sleep(2 * time.Second)
+	waitForNodeCount(ctx, t, leader, len(followers))
 
 	// Cluster should still function
 	assert.True(t, leader.coordinator.IsRunning(), "Leader should still be running")
@@ -186,9 +172,6 @@ func TestFollowerFailure(t *testing.T) {
 
 // TestFollowerFailure_DataIntegrity tests data integrity during follower failure.
 func TestFollowerFailure_DataIntegrity(t *testing.T) {
-	skipIfNoRaftCluster(t)
-	skipIfNotIntegration(t)
-
 	tc := newTestCluster(t, 3)
 	defer tc.stop()
 
@@ -210,11 +193,11 @@ func TestFollowerFailure_DataIntegrity(t *testing.T) {
 	err = leader.storage.Put(ctx, "IntegrityTest", preFailureKey, preFailureData, defaultShardID)
 	require.NoError(t, err)
 
-	// Wait for replication
-	time.Sleep(1 * time.Second)
-
 	followers := tc.getFollowers()
 	require.NotEmpty(t, followers)
+
+	// Wait for replication
+	waitForReplication(ctx, t, followers, "IntegrityTest", map[uint64][]byte{preFailureKey: preFailureData})
 
 	// Stop one follower
 	failedFollower := followers[0]
@@ -229,7 +212,10 @@ func TestFollowerFailure_DataIntegrity(t *testing.T) {
 
 	// Remaining follower should have both pieces of data
 	remainingFollower := followers[1]
-	time.Sleep(2 * time.Second)
+	waitForReplication(ctx, t, []*testNode{remainingFollower}, "IntegrityTest", map[uint64][]byte{
+		preFailureKey:    preFailureData,
+		duringFailureKey: duringFailureData,
+	})
 
 	data, found, err := remainingFollower.storage.Get(ctx, "IntegrityTest", preFailureKey, defaultShardID)
 	assert.NoError(t, err)
@@ -241,9 +227,6 @@ func TestFollowerFailure_DataIntegrity(t *testing.T) {
 
 // TestNodeRestart tests that a restarted node rejoins the cluster.
 func TestNodeRestart(t *testing.T) {
-	skipIfNoRaftCluster(t)
-	skipIfNotIntegration(t)
-
 	tc := newTestCluster(t, 3)
 	defer tc.stop()
 
@@ -271,7 +254,7 @@ func TestNodeRestart(t *testing.T) {
 	require.NoError(t, err)
 
 	t.Log("Node stopped, waiting before restart...")
-	time.Sleep(2 * time.Second)
+	waitForNodeCount(ctx, t, leader, len(followers))
 
 	// Restart the coordinator
 	err = restartNode.coordinator.Start(ctx)
@@ -285,7 +268,7 @@ func TestNodeRestart(t *testing.T) {
 	t.Log("Node restarted and rejoined")
 
 	// Wait for stabilization
-	time.Sleep(2 * time.Second)
+	waitForNodeCount(ctx, t, leader, len(followers)+1)
 
 	// Verify node is running
 	assert.True(t, restartNode.coordinator.IsRunning(),
@@ -302,9 +285,6 @@ func TestNodeRestart(t *testing.T) {
 
 // TestNodeRestart_DataRecovery tests data recovery after node restart.
 func TestNodeRestart_DataRecovery(t *testing.T) {
-	skipIfNoRaftCluster(t)
-	skipIfNotIntegration(t)
-
 	tc := newTestCluster(t, 3)
 	defer tc.stop()
 
@@ -326,11 +306,11 @@ func TestNodeRestart_DataRecovery(t *testing.T) {
 	err = leader.storage.Put(ctx, "RecoveryTest", testKey, testData, defaultShardID)
 	require.NoError(t, err)
 
-	// Wait for replication
-	time.Sleep(2 * time.Second)
-
 	followers := tc.getFollowers()
 	require.NotEmpty(t, followers)
+
+	// Wait for replication
+	waitForReplication(ctx, t, followers, "RecoveryTest", map[uint64][]byte{testKey: testData})
 
 	restartNode := followers[0]
 
@@ -348,9 +328,6 @@ func TestNodeRestart_DataRecovery(t *testing.T) {
 
 // TestNetworkPartition tests that the majority continues operating.
 func TestNetworkPartition(t *testing.T) {
-	skipIfNoRaftCluster(t)
-	skipIfNotIntegration(t)
-
 	tc := newTestCluster(t, 3)
 	defer tc.stop()
 
@@ -378,7 +355,7 @@ func TestNetworkPartition(t *testing.T) {
 	require.NoError(t, err)
 
 	// Wait for detection
-	time.Sleep(2 * time.Second)
+	waitForNodeCount(ctx, t, leader, len(followers))
 
 	// Majority partition (leader + 1 follower) should continue
 	assert.True(t, leader.coordinator.IsRunning(), "Leader should still be running")
@@ -394,9 +371,6 @@ func TestNetworkPartition(t *testing.T) {
 
 // TestNetworkPartition_MinorityBlocked tests minority partition cannot write.
 func TestNetworkPartition_MinorityBlocked(t *testing.T) {
-	skipIfNoRaftCluster(t)
-	skipIfNotIntegration(t)
-
 	tc := newTestCluster(t, 3)
 	defer tc.stop()
 
@@ -421,9 +395,6 @@ func TestNetworkPartition_MinorityBlocked(t *testing.T) {
 
 // TestPartitionRecovery tests the cluster heals after partition.
 func TestPartitionRecovery(t *testing.T) {
-	skipIfNoRaftCluster(t)
-	skipIfNotIntegration(t)
-
 	tc := newTestCluster(t, 3)
 	defer tc.stop()
 
@@ -441,13 +412,13 @@ func TestPartitionRecovery(t *testing.T) {
 
 	// Write data before partition
 	prePartitionKey := hashString("pre-partition-data")
-	err = leader.storage.Put(ctx, "PartitionRecoveryTest", prePartitionKey, []byte(`{"phase": "pre"}`), defaultShardID)
+	prePartitionData := []byte(`{"phase": "pre"}`)
+	err = leader.storage.Put(ctx, "PartitionRecoveryTest", prePartitionKey, prePartitionData, defaultShardID)
 	require.NoError(t, err)
-
-	time.Sleep(1 * time.Second)
 
 	followers := tc.getFollowers()
 	require.NotEmpty(t, followers)
+	waitForReplication(ctx, t, followers, "PartitionRecoveryTest", map[uint64][]byte{prePartitionKey: prePartitionData})
 
 	partitionedNode := followers[0]
 	t.Logf("Partitioning node %d", partitionedNode.id)
@@ -458,10 +429,11 @@ func TestPartitionRecovery(t *testing.T) {
 
 	// Write during partition
 	duringPartitionKey := hashString("during-partition-data")
-	err = leader.storage.Put(ctx, "PartitionRecoveryTest", duringPartitionKey, []byte(`{"phase": "during"}`), defaultShardID)
+	duringPartitionData := []byte(`{"phase": "during"}`)
+	err = leader.storage.Put(ctx, "PartitionRecoveryTest", duringPartitionKey, duringPartitionData, defaultShardID)
 	require.NoError(t, err)
 
-	time.Sleep(2 * time.Second)
+	waitForReplication(ctx, t, tc.getRunningFollowers(), "PartitionRecoveryTest", map[uint64][]byte{duringPartitionKey: duringPartitionData})
 
 	// Heal partition - restart node
 	t.Log("Healing partition...")
@@ -473,7 +445,7 @@ func TestPartitionRecovery(t *testing.T) {
 	require.NoError(t, err)
 
 	// Wait for recovery
-	time.Sleep(3 * time.Second)
+	waitForNodeCount(ctx, t, leader, len(followers)+1)
 
 	// Verify node has caught up with data written during partition
 	data, found, err := partitionedNode.storage.Get(ctx, "PartitionRecoveryTest", duringPartitionKey, defaultShardID)
@@ -492,9 +464,6 @@ func TestPartitionRecovery(t *testing.T) {
 
 // TestFailoverTime tests that leader election completes within 10 seconds.
 func TestFailoverTime(t *testing.T) {
-	skipIfNoRaftCluster(t)
-	skipIfNotIntegration(t)
-
 	tc := newTestCluster(t, 3)
 	defer tc.stop()
 
@@ -533,30 +502,9 @@ func TestFailoverTime(t *testing.T) {
 	}
 
 	// Wait for new leader to be detected
-	failoverCtx, failoverCancel := context.WithTimeout(ctx, 10*time.Second)
-	defer failoverCancel()
-
-	var newLeader *testNode
-	for {
-		select {
-		case <-failoverCtx.Done():
-			t.Fatal("Leader election did not complete within 10 seconds")
-		default:
-			// Check running followers for new leader
-			for _, follower := range runningFollowers {
-				if follower.coordinator.IsLeader() {
-					newLeader = follower
-					break
-				}
-			}
-			if newLeader != nil {
-				break
-			}
-			time.Sleep(100 * time.Millisecond)
-		}
-		if newLeader != nil {
-			break
-		}
+	newLeader, err := waitForNewLeader(ctx, 10*time.Second, runningFollowers)
+	if err != nil {
+		t.Fatalf("Leader election did not complete within 10 seconds: %v", err)
 	}
 
 	electionDuration := time.Since(startTime)
@@ -573,9 +521,6 @@ func TestFailoverTime(t *testing.T) {
 
 // TestFailover_WritesDuringElection tests handling of writes during election.
 func TestFailover_WritesDuringElection(t *testing.T) {
-	skipIfNoRaftCluster(t)
-	skipIfNotIntegration(t)
-
 	tc := newTestCluster(t, 3)
 	defer tc.stop()
 
@@ -599,9 +544,6 @@ func TestFailover_WritesDuringElection(t *testing.T) {
 
 // TestFailover_MultipleFollowerLoss tests cluster survives multiple follower loss.
 func TestFailover_MultipleFollowerLoss(t *testing.T) {
-	skipIfNoRaftCluster(t)
-	skipIfNotIntegration(t)
-
 	// Use 5 nodes so we can lose 2 and still have quorum
 	tc := newTestCluster(t, 5)
 	defer tc.stop()
@@ -629,7 +571,7 @@ func TestFailover_MultipleFollowerLoss(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	time.Sleep(2 * time.Second)
+	waitForNodeCount(ctx, t, leader, len(followers)-1)
 
 	// Cluster should still function
 	assert.True(t, leader.coordinator.IsRunning())

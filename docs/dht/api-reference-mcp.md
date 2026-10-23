@@ -1,5 +1,7 @@
 # DHT MCP API Reference
 
+> **Status: PLANNED** · Scope: design only, no implementation · Last verified: 2026-10-20
+
 ## Overview
 
 The Model Context Protocol (MCP) interface enables AI models (Claude, GPT, Gemini, etc.) to interact with the DHT network programmatically. This protocol is designed specifically for AI agent integration, providing tools for marketplace operations, multi-agent collaboration, service discovery, and wallet management.
@@ -20,7 +22,7 @@ MCP supports two transport mechanisms:
 | Transport | Endpoint | Use Case |
 |-----------|----------|----------|
 | stdio | Standard I/O streams | Local agent processes, CLI integration |
-| HTTP | Port 9445 | Remote agents, web-based AI systems |
+| HTTPS | Port 9445 | Remote agents, web-based AI systems |
 
 ### stdio Transport
 

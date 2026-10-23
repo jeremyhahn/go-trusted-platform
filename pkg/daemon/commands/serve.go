@@ -28,6 +28,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -39,6 +40,7 @@ import (
 	noiseapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/noise"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/app"
+	appbackends "github.com/jeremyhahn/go-trusted-platform/pkg/app/backends"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/bootstrap"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/compute"
 	_ "github.com/jeremyhahn/go-trusted-platform/pkg/compute/container" // registers the local-container orchestrator factory
@@ -57,7 +59,6 @@ import (
 	"github.com/spf13/viper"
 
 	quicbaassdk "github.com/jeremyhahn/go-quicbaas/sdk/go"
-	certclient "github.com/jeremyhahn/go-quicbaas/sdk/go/client/certificate"
 	acmequicbaas "github.com/jeremyhahn/go-trusted-platform/pkg/acme/storage/quicbaas"
 	tpconfig "github.com/jeremyhahn/go-trusted-platform/pkg/config"
 	platformquicbaas "github.com/jeremyhahn/go-trusted-platform/pkg/storage/quicbaas"
@@ -84,6 +85,13 @@ func init() {
 	if err := tpconfig.BindDaemonListenerFlags(viper.GetViper(), serveCmd.Flags()); err != nil {
 		log.Fatal(err)
 	}
+	// The Raft advertise and listen addresses take the same three paths
+	// (quicbaas.raft-address / raft-listen-address, PLATFORMD_QUICBAAS_RAFT_*,
+	// --raft-address / --raft-listen-address); quicbaas.Config.Validate
+	// refuses a joining node without a routable advertise address.
+	if err := tpconfig.BindRaftAddressFlags(viper.GetViper(), serveCmd.Flags()); err != nil {
+		log.Fatal(err)
+	}
 	serveCmd.Flags().BoolVar(&serveEnableREST, "enable-rest", true, "Enable REST API (daemon-only mode: requires --enable-mtls, its only authentication; refused otherwise)")
 	serveCmd.Flags().BoolVar(&serveEnableGRPC, "enable-grpc", true, "Enable gRPC")
 	serveCmd.Flags().BoolVar(&serveEnableQUIC, "enable-quic", true, "Enable QUIC")
@@ -103,6 +111,28 @@ func resolveDaemonListeners(cmd *cobra.Command) (tpconfig.DaemonListeners, error
 		return tpconfig.DaemonListeners{}, ErrServeStartup{Phase: "daemon listener configuration", Cause: err}
 	}
 	return listeners, nil
+}
+
+// applyDaemonListeners writes the resolved listener addresses into cfg. It
+// is the one place either serve path sets a transport address, so the
+// `daemon:` section (file, env, flag) always reaches the listeners and no
+// path can pin a literal over it (#93). REST is written only when the
+// daemon serves it: in webservice mode the webservice owns REST and its
+// own bind host. Call it after cfg.QUICConfig is built so the QUIC
+// server's own address matches.
+func applyDaemonListeners(cfg *daemon.Config, listeners tpconfig.DaemonListeners) {
+	if cfg.EnableREST {
+		cfg.RESTListenAddr = listeners.REST.Address()
+	}
+	cfg.GRPCListenAddr = listeners.GRPC.Address()
+	cfg.QUICListenAddr = listeners.QUIC.Address()
+	if cfg.QUICConfig != nil {
+		cfg.QUICConfig.ListenAddr = listeners.QUIC.Address()
+	}
+	if cfg.MCPConfig == nil {
+		cfg.MCPConfig = daemon.DefaultMCPConfig()
+	}
+	cfg.MCPConfig.HTTPAddr = listeners.MCP.Address()
 }
 
 // =============================================================================
@@ -288,35 +318,11 @@ func newComputeOrchestrator(logger *logging.Logger, a *app.App, ovsSocketPath st
 	// orchestrator requires. This is config-gated (default stays container, so
 	// nothing breaks) per the explicit-config rule.
 	if computeConfig.Provider.IsVM() {
-		computeConfig.ApplyLocalQEMUDefaults()
 		if a != nil && a.ComputeConfig != nil {
-			if a.ComputeConfig.QEMUBinary != "" {
-				computeConfig.QEMUBinary = a.ComputeConfig.QEMUBinary
-			}
-			if a.ComputeConfig.OVMFCode != "" {
-				computeConfig.OVMFCode = a.ComputeConfig.OVMFCode
-			}
-			if a.ComputeConfig.OVMFCodeSecure != "" {
-				computeConfig.OVMFCodeSecure = a.ComputeConfig.OVMFCodeSecure
-			}
-			if a.ComputeConfig.OVMFVars != "" {
-				computeConfig.OVMFVars = a.ComputeConfig.OVMFVars
-			}
-			if a.ComputeConfig.WorkDir != "" {
-				computeConfig.WorkDir = a.ComputeConfig.WorkDir
-			}
-			if a.ComputeConfig.NetworkBridge != "" {
-				computeConfig.NetworkBridge = a.ComputeConfig.NetworkBridge
-			}
-			if a.ComputeConfig.EnableKVM {
-				computeConfig.EnableKVM = true
-			}
-			if a.ComputeConfig.DefaultMemory > 0 {
-				computeConfig.DefaultMemory = a.ComputeConfig.DefaultMemory
-			}
-			if a.ComputeConfig.DefaultCPUs > 0 {
-				computeConfig.DefaultCPUs = a.ComputeConfig.DefaultCPUs
-			}
+			applyLocalQEMUSettings(computeConfig, a.ComputeConfig)
+		}
+		if err := computeConfig.ApplyLocalQEMUDefaults(); err != nil {
+			return nil, err
 		}
 
 		// Wire the inter-daemon VM migration seams for the local QEMU provider.
@@ -350,6 +356,46 @@ func newComputeOrchestrator(logger *logging.Logger, a *app.App, ovsSocketPath st
 	}
 
 	return compute.NewOrchestratorForConfig(context.Background(), computeConfig, deps)
+}
+
+// applyLocalQEMUSettings copies the operator's `compute:` settings for the
+// local QEMU provider over dst. ApplyLocalQEMUDefaults runs after it, so an
+// unset field gets its default and the defaults follow the operator's arch.
+func applyLocalQEMUSettings(dst, src *compute.OrchestratorConfig) {
+	if src.Arch != "" {
+		dst.Arch = src.Arch
+	}
+	if src.QEMUBinary != "" {
+		dst.QEMUBinary = src.QEMUBinary
+	}
+	if src.OVMFCode != "" {
+		dst.OVMFCode = src.OVMFCode
+	}
+	if src.OVMFCodeSecure != "" {
+		dst.OVMFCodeSecure = src.OVMFCodeSecure
+	}
+	if src.OVMFVars != "" {
+		dst.OVMFVars = src.OVMFVars
+	}
+	if src.WorkDir != "" {
+		dst.WorkDir = src.WorkDir
+	}
+	if src.NetworkBridge != "" {
+		dst.NetworkBridge = src.NetworkBridge
+	}
+	if src.EnableKVM {
+		dst.EnableKVM = true
+	}
+	if src.DefaultMemory > 0 {
+		dst.DefaultMemory = src.DefaultMemory
+	}
+	if src.DefaultCPUs > 0 {
+		dst.DefaultCPUs = src.DefaultCPUs
+	}
+	if src.MigrationListenAddress != "" {
+		dst.MigrationListenAddress = src.MigrationListenAddress
+	}
+	dst.SharedStorage = src.SharedStorage
 }
 
 // seedSDNVLANsFromConfig walks the zones of the network plan and calls
@@ -455,9 +501,21 @@ func initVTPMServiceOnConfig(logger *logging.Logger, a *app.App, cfg *daemon.Con
 		"ek_ca_wired", vtpmCA != nil)
 }
 
+// wireDaemonDNSService hands the platform DNS service to the daemon's gRPC,
+// QUIC, MCP and Unix transports. App.ServiceRegistry() is what creates
+// App.DNSService, so this must follow that call: read before it, the field is
+// still nil and every daemon DNS handler answers "DNS service not available".
+func wireDaemonDNSService(logger *logging.Logger, a *app.App, cfg *daemon.Config) {
+	if a == nil || cfg == nil || a.DNSService == nil {
+		return
+	}
+	cfg.DNSService = a.DNSService
+	logger.Info("DNS service configured for daemon")
+}
+
 // applyDaemonTLSIdentity provisions the daemon's mTLS material via the
 // quicbaas SDK CertificateService and binds it to the supplied
-// daemon.Config so that gRPC TCP, QUIC and REST listeners present a
+// daemon.Config so that gRPC TCP, QUIC, REST and MCP HTTP listeners present a
 // CA-signed server certificate (and optionally require client mTLS).
 //
 // Both runDaemonOnly and runWithWebservices call this helper so the gRPC
@@ -472,7 +530,8 @@ func applyDaemonTLSIdentity(ctx context.Context, logger *logging.Logger, a *app.
 	// transport either gets a provisioned identity or refuses to start.
 	// The one carve-out is Unix-domain-socket-only mode — filesystem-
 	// permission-scoped, not network-exposed — which needs no identity.
-	if cfg != nil && !cfg.EnableGRPCTCP && !cfg.EnableQUIC && !cfg.EnableREST {
+	// MCP over HTTP terminates TLS too (#844); MCP over stdio does not.
+	if cfg != nil && !cfg.EnableGRPCTCP && !cfg.EnableQUIC && !cfg.EnableREST && !cfg.MCPServesHTTP() {
 		logger.Info("Daemon TLS identity skipped: no TLS-terminating transport enabled (UDS-only mode)")
 		return nil
 	}
@@ -481,24 +540,19 @@ func applyDaemonTLSIdentity(ctx context.Context, logger *logging.Logger, a *app.
 		return ErrTLSIdentityRequiresApp{}
 	case cfg == nil:
 		return ErrTLSIdentityRequiresConfig{}
+	case a.PlatformDir == "":
+		return ErrTLSIdentityRequiresPlatformDir{}
 	case a.CA == nil:
 		return ErrProvisionMissingCA{}
 	}
-	mtlsDir := "/tmp/platformd-integration/tls"
-	if mkErr := os.MkdirAll(mtlsDir, 0700); mkErr != nil {
-		return ErrProvisionPersist{Path: mtlsDir, Cause: mkErr}
+	// The server key lives in the CA keystore (#33). Only the public CA
+	// bundle is written, under <platform-dir>/tls.
+	tlsDir := daemonTLSDir(a.PlatformDir)
+	if mkErr := os.MkdirAll(tlsDir, 0700); mkErr != nil {
+		return ErrProvisionPersist{Path: tlsDir, Cause: mkErr}
 	}
-	// Prefer the SDK-based issuer (matches the documented architecture
-	// where all cert issuance flows through QuicBaaS), but fall back to
-	// the local CA when the embedded transport doesn't register a
-	// Certificate service. This keeps daemon TLS bootstrap working in
-	// the current stack where the platform CA is loaded in-process but
-	// QuicBaaS Certificate is not yet wired into embedded.
-	var issuer = newSDKCertIssuer(a.QuicBaaSSDKClient())
-	if localIssuer := newLocalCACertIssuer(a.CA); localIssuer != nil {
-		issuer = localIssuer
-	}
-	identity, mtlsErr := provisionDaemonIdentity(ctx, logger, issuer, a.CA, mtlsDir, daemonServerSANs(a))
+	sans := daemonServerSANs(a)
+	identity, mtlsErr := provisionDaemonIdentity(ctx, logger, a.CA, tlsDir, sans)
 	if mtlsErr != nil {
 		return mtlsErr
 	}
@@ -507,16 +561,42 @@ func applyDaemonTLSIdentity(ctx context.Context, logger *logging.Logger, a *app.
 		// contract violation; treat it as a missing identity, not success.
 		return ErrProvisionIssue{Role: "server", Cause: ErrTLSIdentityNotProvisioned{}}
 	}
-	cfg.TLSCertificate = &identity.ServerCert
+	// Only a binary built with the integration tag sets this hook: the
+	// devcontainer harness has no /init step, so it takes its admin
+	// credential from here. A production binary mints no admin key.
+	if harnessAdminBundle != nil {
+		issuer := appbackends.PlatformCertIssuer(a.CA, a.QuicBaaSSDKClient())
+		if harnessErr := harnessAdminBundle(ctx, logger, issuer, tlsDir); harnessErr != nil {
+			return harnessErr
+		}
+	}
+	// Every TLS listener reads the identity through serving at handshake
+	// time, so the renewal sweep can replace it while they run (#36).
+	serving, servingErr := daemon.NewServingCertificate(identity.ServerCert)
+	if servingErr != nil {
+		return ErrProvisionIssue{Role: "server", Cause: servingErr}
+	}
+	cfg.TLSIdentity = serving
 	cfg.MTLSClientCAPool = identity.AdminTrustPool
 	cfg.MTLSClientCAFile = identity.CABundlePath
 	if cfg.QUICConfig != nil && cfg.QUICConfig.TLSConfig != nil {
-		cfg.QUICConfig.TLSConfig.Certificates = []tls.Certificate{identity.ServerCert}
+		// Certificates stays empty: crypto/tls prefers it over
+		// GetCertificate when a client sends no SNI.
+		cfg.QUICConfig.TLSConfig.Certificates = nil
+		cfg.QUICConfig.TLSConfig.GetCertificate = serving.GetCertificate
 	}
 	cfg.EnableMTLS = requireClientCert
+	dnsNames, ipStrings := daemonCertSANs(sans)
+	target := daemonIdentityCertTarget(logger, a.CA, serving, dnsNames, ipStrings)
+	if regErr := a.RegisterCertTarget(target); regErr != nil {
+		// Not fatal: the identity serves; it just renews at the next
+		// restart instead of while running.
+		logger.Warn("cert renewal: cannot register the daemon TLS identity cert target; "+
+			"it will not renew while running, only at the next restart",
+			"target", daemonIdentityCertTargetName, "error", regErr.Error())
+	}
 	logger.Info("Daemon TLS identity provisioned",
-		"server_bundle", identity.ServerBundlePath,
-		"admin_bundle", identity.AdminBundlePath,
+		"server_key", "ca-keystore:"+identity.ServerCert.Leaf.Subject.CommonName,
 		"ca_bundle", identity.CABundlePath,
 		"client_cert_required", requireClientCert,
 		"reused", identity.Reused,
@@ -574,10 +654,15 @@ The daemon provides:
 When webservices are configured in the platform config, the full webservice
 stack is started with ACME, WebAuthn, and JWT authentication support.
 
+gRPC TCP needs --enable-mtls unless platform tokens are enabled (webservice
+jwt.platform-token) or quicbaas runs remotely: the embedded SDK cannot answer
+the IAM policy checks plain tokens rely on, so the daemon refuses to start.
+
 Example:
-  platformd serve
-  platformd serve --socket-path=/run/platformd.sock --rest-port=8443
-  platformd serve --enable-quic=false --enable-mcp=false
+  platformd serve --enable-mtls
+  platformd serve --enable-mtls --socket-path=/run/platformd.sock --rest-port=8443
+  platformd serve --enable-mtls --enable-quic=false --enable-mcp=false
+  platformd serve --enable-grpc=false --enable-rest=false
 `,
 	// A startup failure is not a usage error. Without this, cobra prints the
 	// full usage block after the error, which buries the actual cause in a
@@ -626,8 +711,10 @@ Example:
 		// stderr/file logger via MultiHandler so nothing about the
 		// existing logging story changes — every record continues to
 		// land where it always did, plus a structured copy lands in
-		// <LogDir>/jsonl/.
-		jsonlQuerier := installJSONLLogging(logger)
+		// <LogDir>/jsonl/. Everything built from here on takes the teed
+		// logger, or its records never reach the console Logs page.
+		var jsonlQuerier *jsonfile.Querier
+		logger, jsonlQuerier = installJSONLLogging(App, logger)
 
 		// First-run escrow consumer.
 		if App != nil && appErr == nil {
@@ -677,28 +764,10 @@ Example:
 func runWithWebservices(cmd *cobra.Command, ctx context.Context, sigChan chan os.Signal, logger *logging.Logger, jsonlQuerier *jsonfile.Querier) error {
 	logger.Info("runWithWebservices: starting CA initialization")
 
-	if App.CA == nil {
-		logger.Info("runWithWebservices: CA is nil, parsing PINs")
-		soPIN, userPIN, err := App.ParsePINs(InitParams.SOPin, InitParams.Pin)
-		if err != nil {
-			logger.Error(err, "runWithWebservices: PIN parsing failed")
-			cmd.PrintErrln(err)
-			return ErrServeStartup{Phase: "PIN parsing", Cause: err}
-		}
-		logger.Info("runWithWebservices: loading CA")
-		if err := App.LoadCA(ctx, soPIN, userPIN); err != nil {
-			logger.Warn("CA not found, attempting to initialize", "error", err)
-			if _, initErr := App.InitCA(ctx, soPIN, userPIN, InitParams); initErr != nil {
-				logger.Error(initErr)
-				cmd.PrintErrln(fmt.Sprintf("Failed to load or initialize CA: load error: %v, init error: %v", err, initErr))
-				return ErrServeStartup{Phase: "CA initialization", Cause: initErr}
-			}
-			logger.Info("CA initialized successfully")
-		} else {
-			logger.Info("runWithWebservices: CA loaded successfully")
-		}
-	} else {
-		logger.Info("runWithWebservices: CA already initialized")
+	if err := App.LoadOrInitCA(ctx, InitParams); err != nil {
+		logger.Error(err, "runWithWebservices: CA unavailable")
+		cmd.PrintErrln(err)
+		return ErrServeStartup{Phase: "CA initialization", Cause: err}
 	}
 
 	logger.Info("runWithWebservices: initializing web server")
@@ -751,12 +820,11 @@ func runWithWebservices(cmd *cobra.Command, ctx context.Context, sigChan chan os
 		return err
 	}
 
+	// The webservice serves REST in this mode, on its own bind host.
 	daemonConfig.EnableREST = false
 	daemonConfig.EnableGRPCTCP = serveEnableGRPC
-	daemonConfig.GRPCListenAddr = listeners.GRPC.Address()
-
 	daemonConfig.EnableQUIC = serveEnableQUIC
-	daemonConfig.QUICListenAddr = listeners.QUIC.Address()
+	daemonConfig.EnableMCP = serveEnableMCP
 	if serveEnableQUIC {
 		quicConfig, quicErr := quic.DefaultServerConfigWithTLS()
 		if quicErr != nil {
@@ -764,16 +832,11 @@ func runWithWebservices(cmd *cobra.Command, ctx context.Context, sigChan chan os
 			cmd.PrintErrln(fmt.Sprintf("Failed to generate QUIC TLS configuration: %v", quicErr))
 			return ErrServeStartup{Phase: "QUIC TLS configuration", Cause: quicErr}
 		}
-		quicConfig.ListenAddr = listeners.QUIC.Address()
 		daemonConfig.QUICConfig = quicConfig
 		logger.Debug("QUIC TLS configuration generated with self-signed certificate")
 	}
 
-	daemonConfig.EnableMCP = serveEnableMCP
-	if daemonConfig.MCPConfig == nil {
-		daemonConfig.MCPConfig = daemon.DefaultMCPConfig()
-	}
-	daemonConfig.MCPConfig.HTTPAddr = listeners.MCP.Address()
+	applyDaemonListeners(daemonConfig, listeners)
 
 	ovsSocketPathWS := "/var/run/openvswitch/db.sock"
 	if envPath := os.Getenv("SDN_OVS_SOCKET"); envPath != "" {
@@ -784,6 +847,9 @@ func runWithWebservices(cmd *cobra.Command, ctx context.Context, sigChan chan os
 		logger.Info("OVS socket detected, SDN service will be enabled", "path", ovsSocketPathWS)
 	} else {
 		logger.Info("OVS socket not found, SDN service will not be available", "path", ovsSocketPathWS)
+	}
+	if App != nil {
+		daemonConfig.GatewayDatapathSocket = App.SDNConfig.GatewayDatapathSocket()
 	}
 
 	// vTPM service must exist before compute so the QEMU orchestrator can be
@@ -797,11 +863,6 @@ func runWithWebservices(cmd *cobra.Command, ctx context.Context, sigChan chan os
 	} else {
 		daemonConfig.ComputeOrchestrator = computeOrchestrator
 		logger.Info("Compute orchestrator initialized successfully")
-	}
-
-	if App != nil && App.DNSService != nil {
-		daemonConfig.DNSService = App.DNSService
-		logger.Info("DNS service configured for daemon")
 	}
 
 	// Surface platform services into the daemon config so each gRPC
@@ -822,10 +883,15 @@ func runWithWebservices(cmd *cobra.Command, ctx context.Context, sigChan chan os
 			daemonConfig.DeviceProfileService = profileSvc
 			logger.Info("device profile service wired for daemon gRPC")
 		}
+		if templateSvc := reg.TemplateService(); templateSvc != nil {
+			daemonConfig.DeviceTemplateService = templateSvc
+			logger.Info("device template service wired for daemon gRPC")
+		}
 		if App.CA != nil {
 			daemonConfig.CAService = App.CA
 			logger.Info("CA service wired for daemon gRPC")
 		}
+		wireDaemonDNSService(logger, App, daemonConfig)
 	}
 
 	// A BMC configured for ACME needs a client before cert management runs.
@@ -848,6 +914,7 @@ func runWithWebservices(cmd *cobra.Command, ctx context.Context, sigChan chan os
 	// dashboard's GET /api/v1/tenants/{id}, which otherwise renders 400
 	// "tenant manager not initialized" on every page load).
 	daemonConfig.PlatformTenantManager = platformTenantManager(logger, App)
+	daemonConfig.PlatformTenantID = platformTenantID(App)
 
 	// Provision daemon mTLS identity for the gRPC TCP / QUIC listeners. In
 	// webservices mode this used to be skipped, leaving the gRPC TCP server
@@ -888,48 +955,15 @@ func runWithWebservices(cmd *cobra.Command, ctx context.Context, sigChan chan os
 	snapshotStore := initSnapshotStore(logger, App)
 	_ = snapshotStore // installed onto the daemon Service below
 
-	// Attestation store + service backs /api/v1/attestation/manifests
-	// and the per-enrollment capture hook below. When no attestation
-	// backend is configured this is a no-op and the REST surface
-	// returns 503 via the service registry.
-	attestationSvcs := initAttestationServices(logger, App)
-	attachAttestationServiceToDaemonConfig(daemonConfig, attestationSvcs)
-
-	// Build the shared SDN flow-policy machinery (engine + zone flow manager)
-	// once; the quarantine observer and the SDN enrollment hook below both
-	// consume it so port-policy state lives in a single engine. Nil when SDN
-	// or OVS is unavailable.
-	sdnPolicy := initSDNPolicy(App, logger.Slog())
-
-	// Wire the quarantine observer: when both attestation and SDN-OVS are
-	// available, failed attestations move devices to the quarantine zone and
-	// successful re-attestations restore them. No-op when either subsystem is
-	// absent so boot behavior is unchanged on nodes without OVS.
-	wireQuarantineObserver(attestationSvcs, sdnPolicy, daemonConfig.DeviceService, logger)
-
-	// Attestation reporting (#226): the collector on a control plane, and
-	// on every node the caller policy for the quote routes. The policy is
-	// built after the collector so the any-attested strategy can consult
-	// this node's own report cache. One surface, shared by every listener
-	// and by the gRPC/Unix and MCP transports.
-	// The control plane is a device in its own registry (#472): it writes
-	// its own record from its own TPM through the same registration the
-	// ACME finalize hook uses, so the collector below attests it exactly
-	// like a node. Runs before the collector because the collector needs
-	// the resulting device id to resolve the control plane's own endpoint.
-	controlPlaneDevice := initControlPlaneDevice(ctx, logger.Slog(), App, daemonConfig)
-
-	reportingRest := initCallerPolicy(logger.Slog(), App, attestationSvcs)
-	if rep := initReportingCollector(ctx, logger.Slog(), App, daemonConfig, attestationSvcs, controlPlaneDevice); rep != nil {
-		defer rep.Stop()
-		reportingRest = withCollectorSurface(logger.Slog(), reportingRest, rep, App, attestationSvcs)
-		daemonConfig.AttestationReporting = rep.Handles
-		if reportingRest != nil && reportingRest.Policy != nil {
-			rep.Handles.Policy = reportingRest.Policy
-		}
-	} else if reportingRest != nil && reportingRest.Policy != nil {
-		daemonConfig.AttestationReporting = &daemon.ReportingHandles{Policy: reportingRest.Policy}
-	}
+	// Attestation backend, quarantine observer, caller policy and reporting
+	// collector: built by the one helper both run paths call (#544). The
+	// REST-only consumers below read the services, the SDN policy and the
+	// REST reporting surface back out of it.
+	attestation := wireAttestationOnConfig(ctx, logger, App, daemonConfig)
+	defer attestation.Stop()
+	attestationSvcs := attestation.Services
+	sdnPolicy := attestation.SDNPolicy
+	reportingRest := attestation.ReportingRest
 
 	// Construct the SDN enrollment hook on the same engine. The webservice
 	// registry registers it as an ACME order-finalization hook; on device
@@ -986,6 +1020,11 @@ func runWithWebservices(cmd *cobra.Command, ctx context.Context, sigChan chan os
 		cmd.PrintErrln(fmt.Sprintf("Failed to create platform daemon: %v", err))
 		return ErrServeStartup{Phase: "platform daemon creation", Cause: err}
 	}
+	if err := appbackends.WireSDKBackends(platformDaemon, platformSDKBackendSources(App), logger); err != nil {
+		logger.Error(err, "Failed to wire the SDK backends")
+		cmd.PrintErrln(fmt.Sprintf("Failed to wire the SDK backends: %v", err))
+		return ErrServeStartup{Phase: "SDK backends", Cause: err}
+	}
 
 	// The gateway telemetry store backs the snapshot RPCs on every
 	// transport, so the control plane answers `GetGatewaySnapshot` from the
@@ -993,6 +1032,15 @@ func runWithWebservices(cmd *cobra.Command, ctx context.Context, sigChan chan os
 	if gwControl != nil && gwControl.Store != nil {
 		if svc := platformDaemon.GatewayGRPCService(); svc != nil {
 			svc.SetGatewaySnapshotStore(gwControl.Store)
+		}
+		// VPN session status reads the vpn section of the same reports.
+		// The enrolment set and the posture policies reach the gateways as
+		// the vpn section of their desired configuration.
+		if vpnControl := platformDaemon.VPNControlPlane(); vpnControl != nil {
+			vpnControl.SetGatewaySnapshotStore(gwControl.Store)
+			if gwControl.DesiredCfg != nil {
+				gwControl.DesiredCfg.SetVPNSource(vpnControl)
+			}
 		}
 	}
 
@@ -1011,6 +1059,18 @@ func runWithWebservices(cmd *cobra.Command, ctx context.Context, sigChan chan os
 		return ErrServeStartup{Phase: "platform daemon start", Cause: err}
 	}
 	logger.Info("Platform daemon started", "socket", platformDaemon.SocketPath())
+
+	// The web services, and the ACME server some of them carry, run here
+	// rather than in the daemon. Count the ones serving so the daemon's
+	// service status reports them as they are. A listener failure is fatal
+	// to the process, so a web service is serving for as long as Run blocks.
+	var webServing, acmeServing atomic.Int32
+	platformDaemon.SetSubsystemProbe(platformv1.ServiceType_SERVICE_TYPE_WEBSERVICE, func() bool {
+		return webServing.Load() > 0
+	})
+	platformDaemon.SetSubsystemProbe(platformv1.ServiceType_SERVICE_TYPE_ACME, func() bool {
+		return acmeServing.Load() > 0
+	})
 
 	var wg sync.WaitGroup
 	for _, wsConfig := range App.WebServices {
@@ -1241,6 +1301,7 @@ func runWithWebservices(cmd *cobra.Command, ctx context.Context, sigChan chan os
 			// the routers register only when the server is non-nil.
 			if svc := platformDaemon.AttestationGRPCService(); svc != nil {
 				params.AttestationServiceServer = svc
+				params.AttestationVerdicts = svc
 			}
 			// Bridge the daemon's control-plane DB signer to the webservice
 			// config delivery handler (POST /api/v1/provisioning/sign).
@@ -1265,6 +1326,9 @@ func runWithWebservices(cmd *cobra.Command, ctx context.Context, sigChan chan os
 			if svc := platformDaemon.InvitationGRPCService(); svc != nil {
 				params.InvitationServiceServer = svc
 			}
+			if svc := platformDaemon.CAGRPCService(); svc != nil {
+				params.CAServiceServer = svc
+			}
 			if svc := platformDaemon.OverlayGRPCService(); svc != nil {
 				params.OverlayServiceServer = svc
 			}
@@ -1274,6 +1338,10 @@ func runWithWebservices(cmd *cobra.Command, ctx context.Context, sigChan chan os
 			if svc := platformDaemon.NTPGRPCServiceServer(); svc != nil {
 				params.NTPServiceServer = svc
 			}
+			if svc := platformDaemon.VPNGRPCServiceServer(); svc != nil {
+				params.VPNServiceServer = svc
+			}
+			params.AppServiceServers = platformDaemon.AppServiceRESTServers()
 			if svc := platformDaemon.TenantGRPCServer(); svc != nil {
 				params.TenantServiceServer = svc
 			}
@@ -1379,6 +1447,11 @@ func runWithWebservices(cmd *cobra.Command, ctx context.Context, sigChan chan os
 			if gwControl.DesiredCfg != nil {
 				params.GatewayDesiredConfig = gwControl.DesiredCfg
 			}
+			// The gateways write their VPN leases through to the same
+			// service that renders them back in the desired configuration.
+			if vpnControl := platformDaemon.VPNControlPlane(); vpnControl != nil {
+				params.GatewayVPNLeases = vpnControl
+			}
 		}
 		restHandlerRegistry := v1.NewHandlerRegistry(ctx, params)
 
@@ -1411,9 +1484,18 @@ func runWithWebservices(cmd *cobra.Command, ctx context.Context, sigChan chan os
 		// serves, and TLS breaks when the one it IS serving expires.
 		App.RegisterWebServiceCertInstaller(wsName, webserver.ReloadCertificate)
 
+		servesACME := acmeServerConfig != nil
+		webServing.Add(1)
+		if servesACME {
+			acmeServing.Add(1)
+		}
 		go func(ws *webservice.WebServerV1) {
 			defer wg.Done()
 			ws.Run()
+			webServing.Add(-1)
+			if servesACME {
+				acmeServing.Add(-1)
+			}
 		}(webserver)
 	}
 
@@ -1497,13 +1579,9 @@ func runDaemonOnly(cmd *cobra.Command, ctx context.Context, sigChan chan os.Sign
 	}
 
 	config.EnableREST = serveEnableREST
-	config.RESTListenAddr = listeners.REST.Address()
-
 	config.EnableGRPCTCP = serveEnableGRPC
-	config.GRPCListenAddr = listeners.GRPC.Address()
-
 	config.EnableQUIC = serveEnableQUIC
-	config.QUICListenAddr = listeners.QUIC.Address()
+	config.EnableMCP = serveEnableMCP
 	if serveEnableQUIC {
 		quicConfig, quicErr := quic.DefaultServerConfigWithTLS()
 		if quicErr != nil {
@@ -1511,37 +1589,15 @@ func runDaemonOnly(cmd *cobra.Command, ctx context.Context, sigChan chan os.Sign
 			cmd.PrintErrln(fmt.Sprintf("Failed to generate QUIC TLS configuration: %v", quicErr))
 			return ErrServeStartup{Phase: "QUIC TLS configuration", Cause: quicErr}
 		}
-		quicConfig.ListenAddr = listeners.QUIC.Address()
 		config.QUICConfig = quicConfig
 		logger.Debug("QUIC TLS configuration generated with self-signed certificate")
 	}
 
-	config.EnableMCP = serveEnableMCP
-	if config.MCPConfig == nil {
-		config.MCPConfig = daemon.DefaultMCPConfig()
-	}
-	config.MCPConfig.HTTPAddr = listeners.MCP.Address()
+	applyDaemonListeners(config, listeners)
 
-	if App != nil && App.CAConfig != nil && App.CA == nil {
-		soPIN, userPIN, pinErr := App.ParsePINs(InitParams.SOPin, InitParams.Pin)
-		if pinErr != nil {
-			logger.Warn("CA PIN parsing failed (CA will not be available)", "error", pinErr)
-		} else {
-			if loadErr := App.LoadCA(ctx, soPIN, userPIN); loadErr != nil {
-				logger.Warn("CA not found, attempting to initialize", "error", loadErr)
-				if _, initErr := App.InitCA(ctx, soPIN, userPIN, InitParams); initErr != nil {
-					logger.Warn("CA initialization failed (CA will not be available)",
-						"load_error", loadErr, "init_error", initErr)
-				} else {
-					logger.Info("CA initialized successfully")
-				}
-			} else {
-				logger.Info("CA loaded successfully")
-			}
-		}
-	}
-	if App != nil && App.CA != nil {
-		config.CAService = App.CA
+	if err := daemon.AttachNodeCA(ctx, config, InitParams); err != nil {
+		logger.Warn("CA will not be available", "error", err)
+	} else {
 		logger.Info("CA service configured for daemon")
 	}
 
@@ -1583,11 +1639,7 @@ func runDaemonOnly(cmd *cobra.Command, ctx context.Context, sigChan chan os.Sign
 	// The same platform tenant.Manager the webservices path wires: without
 	// it a daemon-only node registers TenantService but cannot serve it.
 	config.PlatformTenantManager = platformTenantManager(logger, App)
-
-	if App != nil && App.DNSService != nil {
-		config.DNSService = App.DNSService
-		logger.Info("DNS service configured for daemon")
-	}
+	config.PlatformTenantID = platformTenantID(App)
 
 	// Surface device + profile services into the daemon config so the BMC,
 	// Device, and PXE gRPC services can resolve profile-backed configuration.
@@ -1607,6 +1659,11 @@ func runDaemonOnly(cmd *cobra.Command, ctx context.Context, sigChan chan os.Sign
 			config.DeviceProfileService = profileSvc
 			logger.Info("device profile service wired for daemon gRPC")
 		}
+		if templateSvc := reg.TemplateService(); templateSvc != nil {
+			config.DeviceTemplateService = templateSvc
+			logger.Info("device template service wired for daemon gRPC")
+		}
+		wireDaemonDNSService(logger, App, config)
 	}
 
 	// A BMC configured for ACME needs a client before cert management runs.
@@ -1628,6 +1685,9 @@ func runDaemonOnly(cmd *cobra.Command, ctx context.Context, sigChan chan os.Sign
 	} else {
 		logger.Info("OVS socket not found, SDN service will not be available", "path", ovsSocketPath)
 	}
+	if App != nil {
+		config.GatewayDatapathSocket = App.SDNConfig.GatewayDatapathSocket()
+	}
 
 	computeOrchestrator, computeErr := newComputeOrchestrator(logger, App, config.OVSSocketPath, config.VTPMService)
 	if computeErr != nil {
@@ -1637,6 +1697,14 @@ func runDaemonOnly(cmd *cobra.Command, ctx context.Context, sigChan chan os.Sign
 		config.ComputeOrchestrator = computeOrchestrator
 		logger.Info("Compute orchestrator initialized successfully")
 	}
+
+	// The OCI registry and the attestation backend are served over gRPC,
+	// Unix and MCP on this path too. Without them daemon.New registers a
+	// dark registry and the attestation stub, whose every RPC answers
+	// FailedPrecondition (#544). Same helpers as runWithWebservices.
+	initRegistryServiceOnConfig(logger, App, config)
+	attestation := wireAttestationOnConfig(ctx, logger, App, config)
+	defer attestation.Stop()
 
 	// M6 barrier-unseal gate: bind only the Unix socket + a loopback
 	// /healthz + /init + /unseal HTTP listener and block until the
@@ -1654,6 +1722,11 @@ func runDaemonOnly(cmd *cobra.Command, ctx context.Context, sigChan chan os.Sign
 		logger.Error(err, "Failed to create daemon")
 		cmd.PrintErrln(fmt.Sprintf("Failed to create daemon: %v", err))
 		return ErrServeStartup{Phase: "daemon creation", Cause: err}
+	}
+	if err := appbackends.WireSDKBackends(d, platformSDKBackendSources(App), logger); err != nil {
+		logger.Error(err, "Failed to wire the SDK backends")
+		cmd.PrintErrln(fmt.Sprintf("Failed to wire the SDK backends: %v", err))
+		return ErrServeStartup{Phase: "SDK backends", Cause: err}
 	}
 
 	if App != nil && App.TPM != nil {
@@ -1708,18 +1781,35 @@ func runDaemonOnly(cmd *cobra.Command, ctx context.Context, sigChan chan os.Sign
 // =============================================================================
 
 // ProvisionedIdentity describes the TLS material the daemon needs to bind
-// remote transports. ServerCert is the in-memory cert+key for the daemon's
-// gRPC TCP / QUIC / REST listeners; AdminTrustPool gates incoming mTLS
-// client certificates; the *Path fields point at on-disk PEM bundles for
-// operator pickup (admin-bundle.pem, server-bundle.pem, ca-bundle.crt).
+// remote transports. ServerCert is the daemon's gRPC TCP / QUIC / REST / MCP
+// HTTP server certificate; its PrivateKey is the CA keystore's crypto.Signer,
+// so the server key never leaves the keystore (#33). AdminTrustPool gates
+// incoming mTLS client certificates. CABundlePath points at the public CA
+// bundle under <platform-dir>/tls for operator pickup. There is no admin
+// bundle: the one-shot /init reply is the only admin credential. Reused
+// reports that the keystore already held a current server certificate.
 type ProvisionedIdentity struct {
-	ServerCert       tls.Certificate
-	AdminTrustPool   *x509.CertPool
-	ServerBundlePath string
-	AdminBundlePath  string
-	CABundlePath     string
-	Reused           bool
+	ServerCert     tls.Certificate
+	AdminTrustPool *x509.CertPool
+	CABundlePath   string
+	Reused         bool
 }
+
+// daemonTLSDirName is the directory, under the platform directory, that
+// holds the public CA bundle. The server key stays in the CA keystore.
+const daemonTLSDirName = "tls"
+
+// daemonTLSDir returns where the daemon persists its TLS bundles.
+func daemonTLSDir(platformDir string) string {
+	return filepath.Join(platformDir, daemonTLSDirName)
+}
+
+// harnessAdminBundleFunc mints an admin client bundle into dir.
+type harnessAdminBundleFunc func(ctx context.Context, logger *logging.Logger, issuer appbackends.CertIssuer, dir string) error
+
+// harnessAdminBundle is nil in every production build. Only the
+// integration build tag sets it (harness_admin_bundle_integration.go).
+var harnessAdminBundle harnessAdminBundleFunc
 
 // renewalThreshold is the minimum time-to-expiry below which a persisted
 // daemon certificate is considered stale and re-issued. 30 days matches
@@ -1738,6 +1828,15 @@ type ErrProvisionMissingSDK struct{}
 // Error returns a human-readable description of the error.
 func (ErrProvisionMissingSDK) Error() string {
 	return "provisionDaemonIdentity: quicbaas SDK client is required"
+}
+
+// ErrTLSIdentityRequiresPlatformDir is returned when the app has no
+// platform directory to hold the public CA bundle.
+type ErrTLSIdentityRequiresPlatformDir struct{}
+
+// Error returns a human-readable description of the error.
+func (ErrTLSIdentityRequiresPlatformDir) Error() string {
+	return "daemon TLS identity requires a platform directory"
 }
 
 // ErrProvisionMissingCA is returned when no CA trust-pool provider is
@@ -1793,6 +1892,22 @@ func (ErrTLSIdentityNotProvisioned) Error() string {
 	return "daemon TLS identity was not provisioned"
 }
 
+// ErrTLSIdentityKeystore is returned when the CA keystore that holds the
+// daemon's server key cannot issue, supersede or load the server identity.
+// The daemon starts no TLS listener without it.
+type ErrTLSIdentityKeystore struct {
+	Op    string
+	Cause error
+}
+
+// Error returns a human-readable description of the error.
+func (e ErrTLSIdentityKeystore) Error() string {
+	return fmt.Sprintf("daemon TLS identity: keystore %s failed: %v", e.Op, e.Cause)
+}
+
+// Unwrap returns the underlying cause.
+func (e ErrTLSIdentityKeystore) Unwrap() error { return e.Cause }
+
 // ErrProvisionPersist wraps a disk-write failure for one of the on-disk
 // bundles produced by the provisioner.
 type ErrProvisionPersist struct {
@@ -1808,268 +1923,11 @@ func (e ErrProvisionPersist) Error() string {
 // Unwrap returns the underlying cause.
 func (e ErrProvisionPersist) Unwrap() error { return e.Cause }
 
-// =============================================================================
-// provisionDaemonIdentity
-// =============================================================================
-
-// provisionDaemonIdentity returns the daemon's TLS material, reusing a
-// persisted bundle when valid (§8 #7) and otherwise issuing a fresh pair
-// via the quicbaas SDK CertificateService (§5d / §7). The function never
-// imports go-xkms directly: the platform CA is consumed via local
-// interfaces (caTrustPoolProvider for the admin trust pool) and the SDK
-// transport is provided by the caller.
-//
-// On success it writes:
-//   - <dir>/server-bundle.pem  (cert + key, mode 0600)
-//   - <dir>/client-bundle.pem  (admin cert + key, mode 0600)
-//   - <dir>/ca-bundle.crt      (CA trust bundle, mode 0644)
-//
-// and populates ProvisionedIdentity. The daemon caller wires ServerCert
-// into config.TLSCertificate / QUICConfig.TLSConfig.Certificates and
-// AdminTrustPool into config.MTLSClientCAPool.
-func provisionDaemonIdentity(
-	ctx context.Context,
-	logger *logging.Logger,
-	issuer daemonCertIssuer,
-	ca caTrustPoolProvider,
-	outputDir string,
-	sans daemonSANs,
-) (*ProvisionedIdentity, error) {
-
-	if ca == nil {
-		return nil, ErrProvisionMissingCA{}
-	}
-
-	trustPool, err := ca.CABundleCertPool()
-	if err != nil {
-		return nil, ErrProvisionIssue{Role: "trust-pool", Cause: err}
-	}
-
-	serverBundlePath := filepath.Join(outputDir, "server-bundle.pem")
-	adminBundlePath := filepath.Join(outputDir, "client-bundle.pem")
-	caBundlePath := filepath.Join(outputDir, "ca-bundle.crt")
-
-	dnsNames, ipStrings := daemonCertSANs(sans)
-
-	// Reuse existing on-disk bundles when both are valid. The CA trust
-	// pool is the single source of truth for chain verification.
-	if reused, ok := loadPersistedIdentity(logger, serverBundlePath, adminBundlePath, caBundlePath, trustPool, dnsNames); ok {
-		reused.AdminTrustPool = trustPool
-		logger.Info("provisionDaemonIdentity: reusing persisted daemon identity",
-			"server_bundle", serverBundlePath,
-			"admin_bundle", adminBundlePath,
-			"server_not_after", reused.ServerCert.Leaf.NotAfter.Format(time.RFC3339),
-		)
-		return reused, nil
-	}
-
-	if issuer == nil {
-		return nil, ErrProvisionMissingSDK{}
-	}
-
-	// --- Server certificate (gRPC TCP / QUIC / REST listeners) ---------------
-	serverReq := &certclient.IssueCertificateRequest{
-		CommonName:   "platformd.localhost",
-		Organization: "Trusted Platform",
-		DNSNames:     dnsNames,
-		IPAddresses:  ipStrings,
-		Usage:        "server",
-		KeyAlgorithm: "ecdsa",
-		ValidityDays: 365,
-	}
-	serverResp, err := issuer.IssueCertificate(ctx, serverReq)
-	if err != nil {
-		return nil, ErrProvisionIssue{Role: "server", Cause: err}
-	}
-
-	serverCert, err := tlsCertificateFromPEM(serverResp.CertificatePEM, serverResp.PrivateKeyPEM)
-	if err != nil {
-		return nil, ErrProvisionIssue{Role: "server", Cause: err}
-	}
-
-	if err := writeBundle(serverBundlePath, serverResp.CertificatePEM, serverResp.PrivateKeyPEM, 0600); err != nil {
-		return nil, ErrProvisionPersist{Path: serverBundlePath, Cause: err}
-	}
-
-	// --- Admin client certificate (one-shot per init: §8 #7) -----------------
-	adminReq := &certclient.IssueCertificateRequest{
-		CommonName:   "admin",
-		Organization: "Trusted Platform",
-		Usage:        "client",
-		KeyAlgorithm: "ecdsa",
-		ValidityDays: 365,
-	}
-	adminResp, err := issuer.IssueCertificate(ctx, adminReq)
-	if err != nil {
-		return nil, ErrProvisionIssue{Role: "admin", Cause: err}
-	}
-
-	if err := writeBundle(adminBundlePath, adminResp.CertificatePEM, adminResp.PrivateKeyPEM, 0600); err != nil {
-		return nil, ErrProvisionPersist{Path: adminBundlePath, Cause: err}
-	}
-
-	// --- CA bundle (operator pickup) ----------------------------------------
-	caResp, err := issuer.GetCABundle(ctx, &certclient.GetCABundleRequest{})
-	if err != nil {
-		return nil, ErrProvisionIssue{Role: "ca-bundle", Cause: err}
-	}
-	if err := os.WriteFile(caBundlePath, []byte(caResp.BundlePEM), 0644); err != nil {
-		return nil, ErrProvisionPersist{Path: caBundlePath, Cause: err}
-	}
-
-	logger.Info("provisionDaemonIdentity: issued fresh daemon identity",
-		"server_serial", serverResp.SerialNumber,
-		"admin_serial", adminResp.SerialNumber,
-		"server_not_after", serverResp.NotAfter.Format(time.RFC3339),
-	)
-
-	return &ProvisionedIdentity{
-		ServerCert:       serverCert,
-		AdminTrustPool:   trustPool,
-		ServerBundlePath: serverBundlePath,
-		AdminBundlePath:  adminBundlePath,
-		CABundlePath:     caBundlePath,
-		Reused:           false,
-	}, nil
-}
-
-// daemonCertSANs composes the loopback + caller-supplied SAN sets into the
-// SDK request shape (DNS names and string-form IP addresses).
-func daemonCertSANs(extra daemonSANs) (dnsNames []string, ipStrings []string) {
-	dnsNames = append(dnsNames, "localhost", "platformd.localhost")
-	dnsNames = append(dnsNames, extra.DNS...)
-	ipStrings = append(ipStrings, "127.0.0.1", "::1")
-	ipStrings = append(ipStrings, extra.IPs...)
-	return
-}
-
-// loadPersistedIdentity attempts to reuse an existing daemon identity from
-// disk. The bundles must exist, be parseable, contain a non-expired cert
-// (with renewalThreshold headroom), and the server cert's SAN set must
-// still cover the supplied dnsNames. The chain is verified against the
-// supplied trust pool.
-func loadPersistedIdentity(
-	logger *logging.Logger,
-	serverBundlePath, adminBundlePath, caBundlePath string,
-	trustPool *x509.CertPool,
-	dnsNames []string,
-) (*ProvisionedIdentity, bool) {
-
-	serverCert, err := tlsCertificateFromFile(serverBundlePath)
-	if err != nil {
-		if !os.IsNotExist(err) {
-			logger.Debug("provisionDaemonIdentity: server bundle invalid, will reissue",
-				"path", serverBundlePath, "error", err.Error())
-		}
-		return nil, false
-	}
-	if !certWithinRenewalWindow(serverCert.Leaf, renewalThreshold) {
-		logger.Debug("provisionDaemonIdentity: server bundle expired or near-expiry, will reissue",
-			"path", serverBundlePath,
-			"not_after", serverCert.Leaf.NotAfter.Format(time.RFC3339))
-		return nil, false
-	}
-	if !certCoversDNSNames(serverCert.Leaf, dnsNames) {
-		logger.Debug("provisionDaemonIdentity: server bundle SANs no longer cover required hostnames, will reissue",
-			"path", serverBundlePath,
-			"required", dnsNames,
-			"present", serverCert.Leaf.DNSNames)
-		return nil, false
-	}
-	if err := verifyChain(serverCert.Leaf, trustPool); err != nil {
-		logger.Debug("provisionDaemonIdentity: server bundle chain invalid, will reissue",
-			"path", serverBundlePath, "error", err.Error())
-		return nil, false
-	}
-
-	adminCert, err := tlsCertificateFromFile(adminBundlePath)
-	if err != nil {
-		if !os.IsNotExist(err) {
-			logger.Debug("provisionDaemonIdentity: admin bundle invalid, will reissue",
-				"path", adminBundlePath, "error", err.Error())
-		}
-		return nil, false
-	}
-	if !certWithinRenewalWindow(adminCert.Leaf, renewalThreshold) {
-		logger.Debug("provisionDaemonIdentity: admin bundle expired or near-expiry, will reissue",
-			"path", adminBundlePath,
-			"not_after", adminCert.Leaf.NotAfter.Format(time.RFC3339))
-		return nil, false
-	}
-	if err := verifyChain(adminCert.Leaf, trustPool); err != nil {
-		logger.Debug("provisionDaemonIdentity: admin bundle chain invalid, will reissue",
-			"path", adminBundlePath, "error", err.Error())
-		return nil, false
-	}
-
-	if _, err := os.Stat(caBundlePath); err != nil {
-		// CA bundle is operator-facing; if missing we still reuse the
-		// in-memory material but the caller will see an empty path.
-		caBundlePath = ""
-	}
-
-	return &ProvisionedIdentity{
-		ServerCert:       serverCert,
-		ServerBundlePath: serverBundlePath,
-		AdminBundlePath:  adminBundlePath,
-		CABundlePath:     caBundlePath,
-		Reused:           true,
-	}, true
-}
-
-// tlsCertificateFromFile loads a PEM cert+key bundle (concatenated) from
-// disk and returns the parsed tls.Certificate with Leaf populated.
-func tlsCertificateFromFile(path string) (tls.Certificate, error) {
-	pemBytes, err := os.ReadFile(path)
-	if err != nil {
-		return tls.Certificate{}, err
-	}
-	return tlsCertificateFromBundle(pemBytes)
-}
-
-// tlsCertificateFromPEM parses PEM cert and key strings into a populated
-// tls.Certificate. The Leaf is parsed for downstream callers.
-func tlsCertificateFromPEM(certPEM, keyPEM string) (tls.Certificate, error) {
-	bundle := append([]byte(certPEM), []byte(keyPEM)...)
-	return tlsCertificateFromBundle(bundle)
-}
-
-// tlsCertificateFromBundle parses a single PEM blob containing one or more
-// CERTIFICATE blocks followed by a key block.
-func tlsCertificateFromBundle(pemBytes []byte) (tls.Certificate, error) {
-	cert, err := tls.X509KeyPair(pemBytes, pemBytes)
-	if err != nil {
-		return tls.Certificate{}, err
-	}
-	if len(cert.Certificate) == 0 {
-		return tls.Certificate{}, errors.New("provisionDaemonIdentity: bundle contained no certificates")
-	}
-	leaf, err := x509.ParseCertificate(cert.Certificate[0])
-	if err != nil {
-		return tls.Certificate{}, err
-	}
-	cert.Leaf = leaf
-	return cert, nil
-}
-
 // writeBundle persists a single PEM cert+key bundle file with the given
 // mode. The format (CERTIFICATE block(s) followed by an EC PRIVATE KEY
 // block) is compatible with tls.LoadX509KeyPair(bundle, bundle).
-func writeBundle(path, certPEM, keyPEM string, mode os.FileMode) error {
-	bundle := bytesJoin(certPEM, keyPEM)
-	return os.WriteFile(path, bundle, mode)
-}
-
 // bytesJoin concatenates two PEM strings, ensuring exactly one newline
 // separator between them.
-func bytesJoin(a, b string) []byte {
-	out := []byte(a)
-	if len(out) > 0 && out[len(out)-1] != '\n' {
-		out = append(out, '\n')
-	}
-	return append(out, []byte(b)...)
-}
-
 // certWithinRenewalWindow returns true when the certificate's NotAfter is
 // at least `headroom` away from now (i.e., not expired and not due for
 // renewal yet).
@@ -2130,13 +1988,13 @@ func verifyChain(leaf *x509.Certificate, roots *x509.CertPool) error {
 // this gate exists to avoid causing.
 //
 // What actually distinguishes the two shapes is reachability by peers:
-//   - join-addresses set  -> this node joins peers; multi-instance.
+//   - join-addresses set  -> a clustered member; every member lists the
+//     whole cluster there, itself included (quicbaas.Config.IsClustered).
 //   - raft-address that is ROUTABLE (not loopback/unspecified) -> this
-//     node advertises itself to peers, which is how the cluster
-//     bootstrap member is configured (it has an EMPTY join-addresses
-//     list, per configs/platform/cluster/README.md §Raft Bootstrap, so
-//     join-addresses alone would miss exactly the node an operator
-//     claims from).
+//     node advertises itself to peers. Validate refuses a clustered config
+//     without one, so this adds nothing for a valid cluster member; it
+//     keeps the refusal on a node that advertises a routable Raft address
+//     but has not been given its member list.
 //   - loopback/empty raft-address and no join-addresses -> single node.
 func isMultiInstanceDeployment(cfg *platformquicbaas.Config) bool {
 	if cfg == nil {
@@ -2145,31 +2003,5 @@ func isMultiInstanceDeployment(cfg *platformquicbaas.Config) bool {
 	if len(cfg.JoinAddresses) > 0 {
 		return true
 	}
-	return isRoutableRaftAddress(cfg.RaftAddress)
-}
-
-// isRoutableRaftAddress reports whether addr advertises this node to
-// peers on the network, as opposed to the loopback/unspecified defaults
-// a single-node deployment carries. A host that cannot be parsed is
-// treated as routable: an unparseable advertise address is not evidence
-// of a single-node deployment, and this gate fails closed.
-func isRoutableRaftAddress(addr string) bool {
-	if strings.TrimSpace(addr) == "" {
-		return false
-	}
-	host := addr
-	if h, _, err := net.SplitHostPort(addr); err == nil {
-		host = h
-	}
-	host = strings.Trim(strings.TrimSpace(host), "[]")
-	if host == "" {
-		return false
-	}
-	if strings.EqualFold(host, "localhost") {
-		return false
-	}
-	if ip := net.ParseIP(host); ip != nil {
-		return !ip.IsLoopback() && !ip.IsUnspecified()
-	}
-	return true
+	return platformquicbaas.IsRoutableRaftAddress(cfg.RaftAddress)
 }

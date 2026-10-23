@@ -186,6 +186,19 @@ func buildTestObserver(t *testing.T, initialDevices ...*entities.Device) (*quara
 	t.Helper()
 
 	store := newMemDeviceStore(initialDevices...)
+	obs := &quarantineObserver{
+		manager:     buildTestQuarantineManager(t, store),
+		deviceStore: store,
+		logger:      slog.Default(),
+	}
+	return obs, store
+}
+
+// buildTestQuarantineManager builds a QuarantineManager over the default
+// zones whose engine and OVS controllers accept every operation.
+func buildTestQuarantineManager(t *testing.T, store policy.DeviceStateStore) *policy.QuarantineManager {
+	t.Helper()
+
 	resolvedZones := zone.Defaults()
 	plan, err := netplan.New(netplan.Environment{ID: 4}, resolvedZones)
 	if err != nil {
@@ -211,13 +224,7 @@ func buildTestObserver(t *testing.T, initialDevices ...*entities.Device) (*quara
 	if err != nil {
 		t.Fatalf("NewQuarantineManager: %v", err)
 	}
-
-	obs := &quarantineObserver{
-		manager:     mgr,
-		deviceStore: store,
-		logger:      slog.Default(),
-	}
-	return obs, store
+	return mgr
 }
 
 // ---------------------------------------------------------------------------
@@ -521,14 +528,18 @@ func buildRealAttestationService(t *testing.T) *attestationsvc.Service {
 
 func TestWireQuarantineObserver(t *testing.T) {
 	t.Run("nil svcs is no-op", func(t *testing.T) {
-		wireQuarantineObserver(nil, nil, nil, nil)
+		if got := wireQuarantineObserver(nil, nil, nil, nil); got != nil {
+			t.Errorf("wireQuarantineObserver = %v, want no manager", got)
+		}
 	})
 
 	t.Run("nil sdn policy is no-op", func(t *testing.T) {
 		svcs := &attestationServices{
 			Service: buildRealAttestationService(t),
 		}
-		wireQuarantineObserver(svcs, nil, nil, nil)
+		if got := wireQuarantineObserver(svcs, nil, nil, nil); got != nil {
+			t.Errorf("wireQuarantineObserver = %v, want no manager", got)
+		}
 	})
 
 	t.Run("sdn policy without engine is no-op", func(t *testing.T) {
@@ -536,14 +547,18 @@ func TestWireQuarantineObserver(t *testing.T) {
 			Service: buildRealAttestationService(t),
 		}
 		stub := &stubSaveGetSvc{devices: make(map[uint64]*entities.Device)}
-		wireQuarantineObserver(svcs, &sdnPolicyComponents{}, stub, nil)
+		if got := wireQuarantineObserver(svcs, &sdnPolicyComponents{}, stub, nil); got != nil {
+			t.Errorf("wireQuarantineObserver = %v, want no manager", got)
+		}
 	})
 
 	t.Run("nil device service is no-op", func(t *testing.T) {
 		svcs := &attestationServices{
 			Service: buildRealAttestationService(t),
 		}
-		wireQuarantineObserver(svcs, &sdnPolicyComponents{}, nil, nil)
+		if got := wireQuarantineObserver(svcs, &sdnPolicyComponents{}, nil, nil); got != nil {
+			t.Errorf("wireQuarantineObserver = %v, want no manager", got)
+		}
 	})
 }
 

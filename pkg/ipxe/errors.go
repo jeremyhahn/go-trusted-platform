@@ -48,6 +48,9 @@ var (
 	// ErrInvalidPort indicates an invalid port number.
 	ErrInvalidPort = errors.New("invalid port number")
 
+	// ErrInvalidBindHost indicates a bind host that is not an IP address.
+	ErrInvalidBindHost = errors.New("invalid bind host")
+
 	// ErrNoBootEntries indicates no boot entries are configured.
 	ErrNoBootEntries = errors.New("no boot entries configured")
 
@@ -181,6 +184,25 @@ func (e *SocketOptionError) Error() string {
 // Unwrap returns the underlying cause.
 func (e *SocketOptionError) Unwrap() error {
 	return e.Err
+}
+
+// DHCPAddressError reports a DHCP option address that is not IPv4. It
+// matches ErrInvalidConfig, the sentinel the rest of config validation
+// reports.
+type DHCPAddressError struct {
+	// Option names the setting, "gateway" or "dns".
+	Option string
+	Value  string
+}
+
+// Error implements the error interface.
+func (e *DHCPAddressError) Error() string {
+	return fmt.Sprintf("DHCP %s %q is not an IPv4 address", e.Option, e.Value)
+}
+
+// Is reports whether target is ErrInvalidConfig.
+func (e *DHCPAddressError) Is(target error) bool {
+	return target == ErrInvalidConfig
 }
 
 // SentinelCauseError attaches an underlying cause to a package sentinel

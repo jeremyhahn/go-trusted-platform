@@ -306,9 +306,17 @@ func TestAddBearerToken(t *testing.T) {
 // Unary Interceptor Tests
 // =============================================================================
 
+// Real catalog methods the interceptor tests call. Default deny refuses any
+// method the catalog does not classify, so an invented name would only ever
+// exercise the deny branch.
+const (
+	testUnaryMethod  = "/platform.v1.DNSService/ListRecords"      // dns:read
+	testStreamMethod = "/platform.v1.PlatformDaemon/StreamEvents" // platform:read
+)
+
 func TestOIDCUnaryInterceptor_SkipMethod(t *testing.T) {
 	interceptor := OIDCUnaryInterceptor(
-		WithSkipMethods("/health.Service/Check"),
+		WithSkipMethods(testUnaryMethod),
 	)
 
 	ctx := context.Background()
@@ -319,7 +327,7 @@ func TestOIDCUnaryInterceptor_SkipMethod(t *testing.T) {
 		return "response", nil
 	}
 
-	info := &grpc.UnaryServerInfo{FullMethod: "/health.Service/Check"}
+	info := &grpc.UnaryServerInfo{FullMethod: testUnaryMethod}
 	resp, err := interceptor(ctx, "request", info, handler)
 
 	if err != nil {
@@ -346,7 +354,7 @@ func TestOIDCUnaryInterceptor_NoValidator_RequireAuth(t *testing.T) {
 		return "response", nil
 	}
 
-	info := &grpc.UnaryServerInfo{FullMethod: "/test.Service/Method"}
+	info := &grpc.UnaryServerInfo{FullMethod: testUnaryMethod}
 	_, err := interceptor(ctx, "request", info, handler)
 
 	if err == nil {
@@ -376,7 +384,7 @@ func TestOIDCUnaryInterceptor_NoValidator_AuthNotRequired(t *testing.T) {
 		return "response", nil
 	}
 
-	info := &grpc.UnaryServerInfo{FullMethod: "/test.Service/Method"}
+	info := &grpc.UnaryServerInfo{FullMethod: testUnaryMethod}
 	resp, err := interceptor(ctx, "request", info, handler)
 
 	if err != nil {
@@ -404,7 +412,7 @@ func TestOIDCUnaryInterceptor_MissingToken(t *testing.T) {
 		return "response", nil
 	}
 
-	info := &grpc.UnaryServerInfo{FullMethod: "/test.Service/Method"}
+	info := &grpc.UnaryServerInfo{FullMethod: testUnaryMethod}
 	_, err := interceptor(ctx, "request", info, handler)
 
 	if err == nil {
@@ -434,7 +442,7 @@ func TestOIDCUnaryInterceptor_ValidationFails(t *testing.T) {
 		return "response", nil
 	}
 
-	info := &grpc.UnaryServerInfo{FullMethod: "/test.Service/Method"}
+	info := &grpc.UnaryServerInfo{FullMethod: testUnaryMethod}
 	_, err := interceptor(ctx, "request", info, handler)
 
 	if err == nil {
@@ -464,7 +472,7 @@ func TestOIDCUnaryInterceptor_InvalidToken(t *testing.T) {
 		return "response", nil
 	}
 
-	info := &grpc.UnaryServerInfo{FullMethod: "/test.Service/Method"}
+	info := &grpc.UnaryServerInfo{FullMethod: testUnaryMethod}
 	_, err := interceptor(ctx, "request", info, handler)
 
 	if err == nil {
@@ -485,6 +493,7 @@ func TestOIDCUnaryInterceptor_ValidToken(t *testing.T) {
 	validator := &mockTokenValidator{valid: true}
 	interceptor := OIDCUnaryInterceptor(
 		WithTokenValidator(validator),
+		WithAuthorizationChecker(&mockAuthorizationChecker{allowed: true}),
 	)
 
 	md := metadata.Pairs("authorization", "Bearer valid-token")
@@ -496,7 +505,7 @@ func TestOIDCUnaryInterceptor_ValidToken(t *testing.T) {
 		return "response", nil
 	}
 
-	info := &grpc.UnaryServerInfo{FullMethod: "/test.Service/Method"}
+	info := &grpc.UnaryServerInfo{FullMethod: testUnaryMethod}
 	resp, err := interceptor(ctx, "request", info, handler)
 
 	if err != nil {
@@ -534,7 +543,7 @@ func (m *mockOIDCServerStream) Context() context.Context {
 
 func TestOIDCStreamInterceptor_SkipMethod(t *testing.T) {
 	interceptor := OIDCStreamInterceptor(
-		WithSkipMethods("/health.Service/Watch"),
+		WithSkipMethods(testStreamMethod),
 	)
 
 	ctx := context.Background()
@@ -546,7 +555,7 @@ func TestOIDCStreamInterceptor_SkipMethod(t *testing.T) {
 		return nil
 	}
 
-	info := &grpc.StreamServerInfo{FullMethod: "/health.Service/Watch"}
+	info := &grpc.StreamServerInfo{FullMethod: testStreamMethod}
 	err := interceptor(nil, stream, info, handler)
 
 	if err != nil {
@@ -570,7 +579,7 @@ func TestOIDCStreamInterceptor_NoValidator_RequireAuth(t *testing.T) {
 		return nil
 	}
 
-	info := &grpc.StreamServerInfo{FullMethod: "/test.Service/StreamMethod"}
+	info := &grpc.StreamServerInfo{FullMethod: testStreamMethod}
 	err := interceptor(nil, stream, info, handler)
 
 	if err == nil {
@@ -601,7 +610,7 @@ func TestOIDCStreamInterceptor_NoValidator_AuthNotRequired(t *testing.T) {
 		return nil
 	}
 
-	info := &grpc.StreamServerInfo{FullMethod: "/test.Service/StreamMethod"}
+	info := &grpc.StreamServerInfo{FullMethod: testStreamMethod}
 	err := interceptor(nil, stream, info, handler)
 
 	if err != nil {
@@ -626,7 +635,7 @@ func TestOIDCStreamInterceptor_MissingToken(t *testing.T) {
 		return nil
 	}
 
-	info := &grpc.StreamServerInfo{FullMethod: "/test.Service/StreamMethod"}
+	info := &grpc.StreamServerInfo{FullMethod: testStreamMethod}
 	err := interceptor(nil, stream, info, handler)
 
 	if err == nil {
@@ -657,7 +666,7 @@ func TestOIDCStreamInterceptor_ValidationFails(t *testing.T) {
 		return nil
 	}
 
-	info := &grpc.StreamServerInfo{FullMethod: "/test.Service/StreamMethod"}
+	info := &grpc.StreamServerInfo{FullMethod: testStreamMethod}
 	err := interceptor(nil, stream, info, handler)
 
 	if err == nil {
@@ -688,7 +697,7 @@ func TestOIDCStreamInterceptor_InvalidToken(t *testing.T) {
 		return nil
 	}
 
-	info := &grpc.StreamServerInfo{FullMethod: "/test.Service/StreamMethod"}
+	info := &grpc.StreamServerInfo{FullMethod: testStreamMethod}
 	err := interceptor(nil, stream, info, handler)
 
 	if err == nil {
@@ -709,6 +718,7 @@ func TestOIDCStreamInterceptor_ValidToken(t *testing.T) {
 	validator := &mockTokenValidator{valid: true}
 	interceptor := OIDCStreamInterceptor(
 		WithTokenValidator(validator),
+		WithAuthorizationChecker(&mockAuthorizationChecker{allowed: true}),
 	)
 
 	md := metadata.Pairs("authorization", "Bearer valid-stream-token")
@@ -721,7 +731,7 @@ func TestOIDCStreamInterceptor_ValidToken(t *testing.T) {
 		return nil
 	}
 
-	info := &grpc.StreamServerInfo{FullMethod: "/test.Service/StreamMethod"}
+	info := &grpc.StreamServerInfo{FullMethod: testStreamMethod}
 	err := interceptor(nil, stream, info, handler)
 
 	if err != nil {
@@ -736,6 +746,69 @@ func TestOIDCStreamInterceptor_ValidToken(t *testing.T) {
 
 	if token != "valid-stream-token" {
 		t.Errorf("token in context = %q, want %q", token, "valid-stream-token")
+	}
+}
+
+// claimsOnlyMethods are scoped methods of the hardware and bootstrap services.
+// A bool-only validator proves a token is valid but carries no scopes, so
+// without an AuthorizationChecker each one is denied. Ceremony Init and Status
+// are among them: they are scoped on TCP, not pre-auth (#766).
+var claimsOnlyMethods = []string{
+	"/platform.v1.PIVService/Sign",
+	"/platform.v1.PIVService/ListSlots",
+	"/platform.v1.FIDO2Service/Register",
+	"/platform.v1.FIDO2Service/ListDevices",
+	"/platform.v1.CeremonyService/Init",
+	"/platform.v1.CeremonyService/Status",
+}
+
+func TestOIDCUnaryInterceptor_BoolOnlyValidatorDeniesClaimsOnlyMethods(t *testing.T) {
+	interceptor := OIDCUnaryInterceptor(WithTokenValidator(&mockTokenValidator{valid: true}))
+	md := metadata.Pairs("authorization", "Bearer legacy-token")
+	ctx := metadata.NewIncomingContext(context.Background(), md)
+
+	for _, method := range claimsOnlyMethods {
+		t.Run(method, func(t *testing.T) {
+			handlerCalled := false
+			handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+				handlerCalled = true
+				return "response", nil
+			}
+
+			_, err := interceptor(ctx, "request", &grpc.UnaryServerInfo{FullMethod: method}, handler)
+
+			if status.Code(err) != codes.PermissionDenied {
+				t.Fatalf("code = %v, want %v (err %v)", status.Code(err), codes.PermissionDenied, err)
+			}
+			if handlerCalled {
+				t.Fatal("handler ran for a scoped method the validator cannot authorize")
+			}
+		})
+	}
+}
+
+func TestOIDCStreamInterceptor_BoolOnlyValidatorDeniesClaimsOnlyMethods(t *testing.T) {
+	interceptor := OIDCStreamInterceptor(WithTokenValidator(&mockTokenValidator{valid: true}))
+	md := metadata.Pairs("authorization", "Bearer legacy-token")
+	stream := &mockOIDCServerStream{ctx: metadata.NewIncomingContext(context.Background(), md)}
+
+	for _, method := range claimsOnlyMethods {
+		t.Run(method, func(t *testing.T) {
+			handlerCalled := false
+			handler := func(srv interface{}, ss grpc.ServerStream) error {
+				handlerCalled = true
+				return nil
+			}
+
+			err := interceptor(nil, stream, &grpc.StreamServerInfo{FullMethod: method}, handler)
+
+			if status.Code(err) != codes.PermissionDenied {
+				t.Fatalf("code = %v, want %v (err %v)", status.Code(err), codes.PermissionDenied, err)
+			}
+			if handlerCalled {
+				t.Fatal("handler ran for a scoped method the validator cannot authorize")
+			}
+		})
 	}
 }
 
@@ -763,9 +836,9 @@ func TestWrappedServerStream_Context_OIDC(t *testing.T) {
 
 func TestOIDCUnaryInterceptor_MultipleSkipMethods(t *testing.T) {
 	skipMethods := []string{
-		"/health.Service/Check",
-		"/grpc.health.v1.Health/Check",
-		"/reflection.ServerReflection/ServerReflectionInfo",
+		"/platform.v1.DNSService/ListRecords",
+		"/platform.v1.PlatformDaemon/GetStatus",
+		"/platform.v1.TPMService/Info",
 	}
 
 	interceptor := OIDCUnaryInterceptor(
@@ -810,7 +883,7 @@ func TestOIDCUnaryInterceptor_DefaultRequireAuth(t *testing.T) {
 		return "response", nil
 	}
 
-	info := &grpc.UnaryServerInfo{FullMethod: "/test.Service/Method"}
+	info := &grpc.UnaryServerInfo{FullMethod: testUnaryMethod}
 	_, err := interceptor(ctx, "request", info, handler)
 
 	if err == nil {
@@ -838,7 +911,7 @@ func TestOIDCStreamInterceptor_DefaultRequireAuth(t *testing.T) {
 		return nil
 	}
 
-	info := &grpc.StreamServerInfo{FullMethod: "/test.Service/StreamMethod"}
+	info := &grpc.StreamServerInfo{FullMethod: testStreamMethod}
 	err := interceptor(nil, stream, info, handler)
 
 	if err == nil {
@@ -852,5 +925,145 @@ func TestOIDCStreamInterceptor_DefaultRequireAuth(t *testing.T) {
 
 	if st.Code() != codes.Unavailable {
 		t.Errorf("error code = %v, want %v", st.Code(), codes.Unavailable)
+	}
+}
+
+// mockAuthorizationChecker records the permission check it was asked and
+// answers with allowed / err.
+type mockAuthorizationChecker struct {
+	allowed  bool
+	err      error
+	calls    int
+	subject  string
+	resource string
+	action   string
+}
+
+func (m *mockAuthorizationChecker) CheckPermission(ctx context.Context, subject, resource, action string) (bool, error) {
+	m.calls++
+	m.subject, m.resource, m.action = subject, resource, action
+	return m.allowed, m.err
+}
+
+// shutdownMethod is a platform:admin method: a valid token alone must not
+// reach it (#768).
+const shutdownMethod = "/platform.v1.PlatformDaemon/Shutdown"
+
+// TestOIDCUnaryInterceptor_LegacyValidatorAuthorization covers the bool-only
+// validator path: the token is valid, but it carries no scope claims, so the
+// method's catalog permission must be decided by an AuthorizationChecker, and
+// without one the call is denied.
+func TestOIDCUnaryInterceptor_LegacyValidatorAuthorization(t *testing.T) {
+	tests := []struct {
+		name     string
+		checker  *mockAuthorizationChecker
+		wantCode codes.Code
+	}{
+		{name: "no checker denies", checker: nil, wantCode: codes.PermissionDenied},
+		{name: "checker denies", checker: &mockAuthorizationChecker{allowed: false}, wantCode: codes.PermissionDenied},
+		{name: "checker error denies", checker: &mockAuthorizationChecker{err: errors.New("pep down")}, wantCode: codes.Unavailable},
+		{name: "checker allows", checker: &mockAuthorizationChecker{allowed: true}, wantCode: codes.OK},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			opts := []OIDCInterceptorOption{WithTokenValidator(&mockTokenValidator{valid: true})}
+			if tt.checker != nil {
+				opts = append(opts, WithAuthorizationChecker(tt.checker))
+			}
+			interceptor := OIDCUnaryInterceptor(opts...)
+
+			handlerCalled := false
+			handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+				handlerCalled = true
+				return "response", nil
+			}
+			info := &grpc.UnaryServerInfo{FullMethod: shutdownMethod}
+			_, err := interceptor(bearerCtx("legacy-token"), "request", info, handler)
+
+			if got := status.Code(err); got != tt.wantCode {
+				t.Fatalf("code = %v, want %v (err %v)", got, tt.wantCode, err)
+			}
+			if handlerCalled != (tt.wantCode == codes.OK) {
+				t.Errorf("handler called = %v, want %v", handlerCalled, tt.wantCode == codes.OK)
+			}
+			if tt.checker != nil {
+				if tt.checker.calls != 1 {
+					t.Fatalf("checker calls = %d, want 1", tt.checker.calls)
+				}
+				if tt.checker.subject != "legacy-token" || tt.checker.resource != "platform" || tt.checker.action != "admin" {
+					t.Errorf("checker asked (%q, %q, %q), want (legacy-token, platform, admin)",
+						tt.checker.subject, tt.checker.resource, tt.checker.action)
+				}
+			}
+		})
+	}
+}
+
+// TestOIDCUnaryInterceptor_LegacyValidatorInvalidTokenSkipsChecker verifies an
+// invalid token is refused as unauthenticated before any permission check.
+func TestOIDCUnaryInterceptor_LegacyValidatorInvalidTokenSkipsChecker(t *testing.T) {
+	checker := &mockAuthorizationChecker{allowed: true}
+	interceptor := OIDCUnaryInterceptor(
+		WithTokenValidator(&mockTokenValidator{valid: false}),
+		WithAuthorizationChecker(checker),
+	)
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		t.Fatal("handler must not be called")
+		return nil, nil
+	}
+	info := &grpc.UnaryServerInfo{FullMethod: shutdownMethod}
+	_, err := interceptor(bearerCtx("bad-token"), "request", info, handler)
+	if got := status.Code(err); got != codes.Unauthenticated {
+		t.Fatalf("code = %v, want Unauthenticated", got)
+	}
+	if checker.calls != 0 {
+		t.Errorf("checker calls = %d, want 0", checker.calls)
+	}
+}
+
+// TestOIDCStreamInterceptor_LegacyValidatorAuthorization is the stream
+// counterpart of TestOIDCUnaryInterceptor_LegacyValidatorAuthorization.
+func TestOIDCStreamInterceptor_LegacyValidatorAuthorization(t *testing.T) {
+	tests := []struct {
+		name     string
+		checker  *mockAuthorizationChecker
+		wantCode codes.Code
+	}{
+		{name: "no checker denies", checker: nil, wantCode: codes.PermissionDenied},
+		{name: "checker denies", checker: &mockAuthorizationChecker{allowed: false}, wantCode: codes.PermissionDenied},
+		{name: "checker error denies", checker: &mockAuthorizationChecker{err: errors.New("pep down")}, wantCode: codes.Unavailable},
+		{name: "checker allows", checker: &mockAuthorizationChecker{allowed: true}, wantCode: codes.OK},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			opts := []OIDCInterceptorOption{WithTokenValidator(&mockTokenValidator{valid: true})}
+			if tt.checker != nil {
+				opts = append(opts, WithAuthorizationChecker(tt.checker))
+			}
+			interceptor := OIDCStreamInterceptor(opts...)
+
+			var captured grpc.ServerStream
+			handler := func(srv interface{}, ss grpc.ServerStream) error {
+				captured = ss
+				return nil
+			}
+			info := &grpc.StreamServerInfo{FullMethod: testStreamMethod}
+			err := interceptor(nil, &mockOIDCServerStream{ctx: bearerCtx("legacy-stream-token")}, info, handler)
+
+			if got := status.Code(err); got != tt.wantCode {
+				t.Fatalf("code = %v, want %v (err %v)", got, tt.wantCode, err)
+			}
+			if (captured != nil) != (tt.wantCode == codes.OK) {
+				t.Fatalf("handler called = %v, want %v", captured != nil, tt.wantCode == codes.OK)
+			}
+			if captured != nil {
+				if token, ok := TokenFromContext(captured.Context()); !ok || token != "legacy-stream-token" {
+					t.Errorf("token in stream context = %q, %v", token, ok)
+				}
+			}
+			if tt.checker != nil && (tt.checker.resource != "platform" || tt.checker.action != "read") {
+				t.Errorf("checker asked (%q, %q), want (platform, read)", tt.checker.resource, tt.checker.action)
+			}
+		})
 	}
 }

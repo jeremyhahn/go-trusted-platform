@@ -44,8 +44,6 @@ type InitParams struct {
 type InitResult struct {
 	// Strategy is the unseal strategy used.
 	Strategy Strategy `json:"strategy" yaml:"strategy"`
-	// RootToken is the root token (single-key mode only).
-	RootToken string `json:"root_token,omitempty" yaml:"root_token,omitempty"`
 	// Threshold is the minimum number of shares required to unseal (Shamir mode).
 	Threshold int32 `json:"threshold,omitempty" yaml:"threshold,omitempty"`
 	// SharesTotal is the total number of Shamir shares generated.
@@ -68,8 +66,6 @@ type StatusResult struct {
 	Threshold int32 `json:"threshold,omitempty" yaml:"threshold,omitempty"`
 	// SharesTotal is the total number of Shamir shares.
 	SharesTotal int32 `json:"shares_total,omitempty" yaml:"shares_total,omitempty"`
-	// SharesProvided is the number of shares provided so far.
-	SharesProvided int32 `json:"shares_provided,omitempty" yaml:"shares_provided,omitempty"`
 	// InitializedAt is when the barrier was initialized.
 	InitializedAt *time.Time `json:"initialized_at,omitempty" yaml:"initialized_at,omitempty"`
 }

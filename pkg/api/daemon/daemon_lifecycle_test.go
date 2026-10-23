@@ -248,7 +248,8 @@ func TestNewDaemon_ServiceConfiguration(t *testing.T) {
 func TestStartDaemon_BasicStartup(t *testing.T) {
 	config := testConfig("/tmp/test-lifecycle-start-basic.sock")
 
-	d, err := New(config)
+	autoStarted := make(chan struct{}, 1)
+	d, err := New(config, withAutoStartObserver(func() { autoStarted <- struct{}{} }))
 	if err != nil {
 		t.Fatalf("New() failed: %v", err)
 	}
@@ -264,11 +265,11 @@ func TestStartDaemon_BasicStartup(t *testing.T) {
 		t.Error("daemon should be running after Start()")
 	}
 
-	// Give time for autostart goroutine
-	time.Sleep(50 * time.Millisecond)
+	<-autoStarted
 
-	// Stop cleanly
-	_ = d.Stop(ctx)
+	if err := d.Stop(ctx); err != nil {
+		t.Fatalf("Stop() failed: %v", err)
+	}
 }
 
 func TestStartDaemon_AlreadyRunningError(t *testing.T) {
@@ -545,7 +546,7 @@ func TestStopDaemon_StopsGRPCServer(t *testing.T) {
 
 	// Verify gRPC is set up
 	if d.grpcServer == nil {
-		t.Skip("gRPC server not available - skipping")
+		t.Error("gRPC server should exist after Start() with gRPC TCP enabled")
 	}
 
 	err = d.Stop(ctx)
@@ -568,7 +569,8 @@ func TestStopDaemon_StopsRegisteredServices(t *testing.T) {
 		},
 	}
 
-	d, err := New(config)
+	autoStarted := make(chan struct{}, 1)
+	d, err := New(config, withAutoStartObserver(func() { autoStarted <- struct{}{} }))
 	if err != nil {
 		t.Fatalf("New() failed: %v", err)
 	}
@@ -585,8 +587,7 @@ func TestStopDaemon_StopsRegisteredServices(t *testing.T) {
 		t.Fatalf("Start() failed: %v", err)
 	}
 
-	// Wait for autostart
-	time.Sleep(100 * time.Millisecond)
+	<-autoStarted
 
 	err = d.Stop(ctx)
 	if err != nil {
@@ -676,8 +677,7 @@ func TestForceStopDaemon_BasicForceStop(t *testing.T) {
 	}
 
 	err = d.ForceStop()
-	// May return "server is not running" if shutdown handler already stopped it
-	if err != nil && err.Error() != "server is not running" {
+	if err != nil {
 		t.Errorf("ForceStop() failed: %v", err)
 	}
 }
@@ -718,8 +718,7 @@ func TestForceStopDaemon_ClosesHealthRegistry(t *testing.T) {
 	registry := d.healthRegistry
 
 	err = d.ForceStop()
-	// May return server error
-	if err != nil && err.Error() != "server is not running" {
+	if err != nil {
 		t.Errorf("ForceStop() failed: %v", err)
 	}
 
@@ -757,12 +756,12 @@ func TestForceStopDaemon_HandlesNilServices(t *testing.T) {
 
 	// ForceStop should not panic with nil services
 	err = d.ForceStop()
-	if err != nil && err.Error() != "server is not running" {
+	if err != nil {
 		t.Errorf("ForceStop() with nil services failed: %v", err)
 	}
 }
 
-func TestForceStopDaemon_QuickerThanGracefulStop(t *testing.T) {
+func TestForceStopDaemon_BoundsEachServiceStop(t *testing.T) {
 	config := testConfig("/tmp/test-lifecycle-forcestop-fast.sock")
 	config.Services = map[string]ServiceConfig{
 		"tpm": {
@@ -773,14 +772,18 @@ func TestForceStopDaemon_QuickerThanGracefulStop(t *testing.T) {
 		},
 	}
 
-	d, err := New(config)
+	autoStarted := make(chan struct{}, 1)
+	d, err := New(config, withAutoStartObserver(func() { autoStarted <- struct{}{} }))
 	if err != nil {
 		t.Fatalf("New() failed: %v", err)
 	}
 
-	// Register a slow service
+	// A service that fails to stop. It records the deadline it was handed
+	// rather than waiting it out (#284): the old form slept a 2s stop and
+	// asserted ForceStop took under 3s, which held only because 2s is
+	// inside the force timeout.
 	svc := newMockService("tpm")
-	svc.stopDelay = 2 * time.Second
+	svc.stopErr = ErrServiceNotRunning{ServiceName: "tpm"}
 	err = d.RegisterService(svc)
 	if err != nil {
 		t.Fatalf("RegisterService() failed: %v", err)
@@ -792,21 +795,27 @@ func TestForceStopDaemon_QuickerThanGracefulStop(t *testing.T) {
 		t.Fatalf("Start() failed: %v", err)
 	}
 
-	// Wait for autostart
-	time.Sleep(100 * time.Millisecond)
+	<-autoStarted
 
-	start := time.Now()
+	forceTimeout := forceStopTimeoutSeconds * time.Second
+	before := time.Now()
 	err = d.ForceStop()
-	elapsed := time.Since(start)
+	after := time.Now()
 
-	// May return server error
-	if err != nil && err.Error() != "server is not running" {
-		t.Errorf("ForceStop() failed: %v", err)
+	if err != nil {
+		t.Errorf("ForceStop() failed despite the service's stop error: %v", err)
+	}
+	if d.IsRunning() {
+		t.Error("daemon still running after ForceStop()")
 	}
 
-	// ForceStop should complete faster than the slow service would take
-	if elapsed > 3*time.Second {
-		t.Errorf("ForceStop() took too long: %v", elapsed)
+	deadline := svc.stopDeadline.Load()
+	if deadline == nil {
+		t.Fatal("ForceStop() handed the service's Stop no deadline")
+	}
+	if deadline.Before(before.Add(forceTimeout)) || deadline.After(after.Add(forceTimeout)) {
+		t.Errorf("Stop deadline %v is not %v after ForceStop() began (between %v and %v)",
+			*deadline, forceTimeout, before.Add(forceTimeout), after.Add(forceTimeout))
 	}
 }
 
@@ -903,7 +912,7 @@ func TestSetTPM2ServiceDaemon_WithNilRESTServer(t *testing.T) {
 
 	// Ensure REST server is nil
 	if d.restServer != nil {
-		t.Skip("REST server should be nil for this test")
+		t.Fatal("REST server should be nil when REST is disabled")
 	}
 
 	// SetTPM2Service should not panic with nil REST server
@@ -923,7 +932,7 @@ func TestSetTPM2ServiceDaemon_WithNilQUICHandler(t *testing.T) {
 
 	// Ensure QUIC handler is nil
 	if d.quicHandler != nil {
-		t.Skip("QUIC handler should be nil for this test")
+		t.Fatal("QUIC handler should be nil when QUIC is disabled")
 	}
 
 	// SetTPM2Service should not panic with nil QUIC handler
@@ -941,7 +950,7 @@ func TestSetTPM2ServiceDaemon_WithNilMCPProvider(t *testing.T) {
 
 	// Ensure MCP provider is nil
 	if d.mcpProvider != nil {
-		t.Skip("MCP provider should be nil for this test")
+		t.Fatal("MCP provider should be nil when MCP is disabled")
 	}
 
 	// SetTPM2Service should not panic with nil MCP provider

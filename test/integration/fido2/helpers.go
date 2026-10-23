@@ -16,12 +16,8 @@
 package fido2
 
 import (
-	"errors"
-	"os"
-	"strings"
-
 	daemonpkg "github.com/jeremyhahn/go-trusted-platform/pkg/api/daemon"
-	fido2sdk "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/fido2"
+	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers/surface"
 )
 
 // Environment variable names for service endpoints.
@@ -56,45 +52,11 @@ func GetServiceEndpoints() *ServiceEndpoints {
 	}
 }
 
-// isBackendUnavailable returns true when the supplied error indicates the
-// FIDO2 backend is not configured or no authenticator is attached.
+// isBackendUnavailable reports whether err is a declared gap: a typed
+// not-implemented declaration or the daemon's typed ErrFIDO2NotConfigured,
+// which every transport carries to the client. Any other error, a missing
+// authenticator included, fails the test (#487).
 func isBackendUnavailable(err error) bool {
-	if err == nil {
-		return false
-	}
-	if errors.Is(err, daemonpkg.ErrFIDO2NotConfigured) {
-		return true
-	}
-	if errors.Is(err, fido2sdk.ErrNotYetWired) {
-		return true
-	}
-	msg := strings.ToLower(err.Error())
-	needles := []string{
-		"backend not configured",
-		"not yet wired",
-		"unavailable",
-		"not implemented",
-		"501",
-		"503",
-		"phase35: service provider not configured",
-		"fido2: ",
-		"no device",
-		"no such device",
-		"permission denied",
-	}
-	for _, n := range needles {
-		if strings.Contains(msg, n) {
-			return true
-		}
-	}
-	return false
-}
-
-// SkipIfNotIntegration skips when INTEGRATION_TEST is not set.
-func SkipIfNotIntegration(t interface {
-	Skip(args ...any)
-}) {
-	if os.Getenv("INTEGRATION_TEST") == "" {
-		t.Skip("Skipping integration test: INTEGRATION_TEST not set")
-	}
+	return surface.IsNotImplemented(err) ||
+		surface.IsDeclaredRefusal(err, daemonpkg.ErrFIDO2NotConfigured)
 }

@@ -78,6 +78,35 @@ func (e *ErrRevokeInvitationFailed) Error() string {
 
 func (e *ErrRevokeInvitationFailed) Unwrap() error { return e.Cause }
 
+// ErrUnexpectedStatus is returned when the server answers with a non-success
+// HTTP status. Message is the server's error text, empty when it sent none.
+type ErrUnexpectedStatus struct {
+	Operation  string
+	StatusCode int
+	Message    string
+}
+
+func (e *ErrUnexpectedStatus) Error() string {
+	if e.Message != "" {
+		return fmt.Sprintf("%s failed: %s (status %d)", e.Operation, e.Message, e.StatusCode)
+	}
+	return fmt.Sprintf("%s failed: status %d", e.Operation, e.StatusCode)
+}
+
+// ErrResponseReadFailed is returned when the body of a non-success response
+// cannot be read.
+type ErrResponseReadFailed struct {
+	Operation  string
+	StatusCode int
+	Cause      error
+}
+
+func (e *ErrResponseReadFailed) Error() string {
+	return fmt.Sprintf("%s failed: status %d, failed to read response body: %v", e.Operation, e.StatusCode, e.Cause)
+}
+
+func (e *ErrResponseReadFailed) Unwrap() error { return e.Cause }
+
 // ErrInvitationNotFound is returned when an invitation is not found.
 type ErrInvitationNotFound struct {
 	ID    uint64

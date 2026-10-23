@@ -1,6 +1,6 @@
 # SDN — API
 
-> **Status: NORMATIVE** · Scope: SDN, overlay and switch routes on every transport · Last verified: 2026-08-18
+> **Status: NORMATIVE** · Scope: SDN, overlay and switch routes on every transport · Last verified: 2026-10-15
 > Conflicts with this document are defects. Fix them here first.
 > One row per capability across all six transports. A transport that does not
 > carry a capability is written `MISSING`, never omitted.
@@ -15,7 +15,7 @@ over a Unix domain socket**, so gRPC and Unix share a column.
 `ServiceRegistry.SDN` and `ServiceRegistry.Overlay`
 (`sdk/go/transport/embedded/adapter.go`) carry the services in-process.
 
-Three gRPC services are in scope here: `SDNService` (30 RPCs, `sdn.proto`),
+Three gRPC services are in scope here: `SDNService` (29 RPCs, `sdn.proto`),
 `OverlayService` (10 RPCs, `overlay.proto`) and `SwitchService` (5 RPCs,
 `switch.proto`). The edge gateway's `GatewayService` and `ProxyService` are a
 separate feature — [`docs/gateway/`](../gateway/).
@@ -30,11 +30,11 @@ REST base path `/api/v1/sdn` (`pkg/webservice/v1/rest/sdn/router.go`).
 |---|---|---|---|---|---|
 | Create bridge | `POST /api/v1/sdn/bridges` | `CreateBridge` | `OpSDNCreateBridge` (`0xB0`) | `sdn_create_bridge` | ✅ |
 | List bridges | `GET /api/v1/sdn/bridges` | `ListBridges` | `OpSDNListBridges` (`0x4B`) | `sdn_list_bridges` | ✅ |
-| Get bridge | `GET /api/v1/sdn/bridges/{name}` | `GetBridge` | `OpSDNGetBridge` (`0x4A`) | `MISSING — docs/13 G7` | ✅ |
+| Get bridge | `GET /api/v1/sdn/bridges/{name}` | `GetBridge` | `OpSDNGetBridge` (`0x4A`) | `sdn_list_bridges`, filtered by the SDK on the bridge's UUID or name | ✅ |
 | Delete bridge | `DELETE /api/v1/sdn/bridges/{name}` | `DeleteBridge` | `OpSDNDeleteBridge` (`0xB1`) | `sdn_delete_bridge` | ✅ |
 | Add port | `POST /api/v1/sdn/bridges/{name}/ports` | `AddPort` | `OpSDNCreatePort` (`0xB2`) | `sdn_add_port` | ✅ |
 | List ports | `GET /api/v1/sdn/bridges/{name}/ports` | `ListPorts` | `OpSDNListPorts` (`0x42`) | `MISSING — docs/13 G7` | ✅ |
-| Get port | `MISSING — docs/13 G7` | `GetPort` | `OpSDNGetPort` (`0x4F`) | `MISSING — docs/13 G7` | ✅ |
+| Get port | `MISSING — docs/13 G7` | `GetPort` | `OpSDNGetPort` (`0x4F`) | `sdn_get_port_state` | ✅ |
 | Delete port | `DELETE /api/v1/sdn/bridges/{name}/ports/{port}` | `DeletePort` | `OpSDNDeletePort` (`0xB3`) | `sdn_delete_port` | ✅ |
 | Get port state | `GET /api/v1/sdn/bridges/{name}/ports/{port}/state` | (via `GetPort`) | `OpSDNGetPortState` (`0x40`) | `sdn_get_port_state` | ✅ |
 | Set port state | `PUT /api/v1/sdn/bridges/{name}/ports/{port}/state` | `SetPortState` | `OpSDNSetPortState` (`0x41`) | `sdn_set_port_state` | ✅ |
@@ -62,6 +62,48 @@ stats act on exactly the flow carrying that cookie (`ovs.ParseFlowID`,
 string, which the flow encoder emptied, so "delete this flow" removed every
 flow on the bridge.
 
+**Set port state applies ingress policing and egress shaping, on every
+transport.** `ingress_rate`
+(bps) and `ingress_burst` (bits) set the interface's Open vSwitch ingress
+policing (`ovs.Client.SetIngressPolicing`); a zero rate leaves it unchanged.
+Each must be 0 or a whole multiple of 1000 and a burst needs a rate, otherwise
+the request is refused before anything changes (`400` / `InvalidArgument`,
+`ovs.ErrInvalidPolicing`). REST validates and applies through the OVS client;
+gRPC, Unix, QUIC and MCP go through `SDNService.SetPortState`, and the CLI's
+`--ingress-rate`/`--ingress-burst` call that RPC. Until #730 every transport
+accepted `ingress_rate` and dropped it, MCP handed `up`/`down` to the 802.1X
+engine (which refused both), and `platformctl sdn port set-state` changed
+nothing.
+
+`egress_rate` (bps) and `egress_burst` (bits) set the port's egress shaping
+(`ovs.Client.SetEgressShaping`): a `linux-htb` QoS whose queue 0 carries the
+rate and burst. A zero rate leaves it unchanged; a burst without a rate is
+refused before anything changes (`400` / `InvalidArgument`,
+`ovs.ErrInvalidShaping`). Every transport takes the same path as ingress
+policing, and the CLI's `--egress-rate`/`--egress-burst` call the same RPC.
+Until #730 every transport accepted `egress_rate` and dropped it.
+
+**Every SDN call the CLI makes reaches MCP.** The SDK's MCP transport
+(`sdk/go/transport/mcp/sdn.go`, `sdn_policy.go`, `sdn_zone.go`) maps each of
+the 23 `SDNService` methods behind `platformctl sdn` to the tool in the
+tables above and builds the tool's own arguments: `bridge_name`, `port_name`
+and `state` for the port tools, the four rates as decimal strings,
+`port_type` as the short type name (`internal`, `tap`, …), the REST policy
+document for the policy tools and the zone fields for the zone tools.
+`sdn_set_port_state` answers with the refreshed port, and `sdn_add_port`
+refuses a `port_type` it does not know instead of adding an unspecified port.
+`AddFlow` sends the whole `FlowConfig` under its proto field names, which
+`sdn_add_flow` decodes as strictly as gRPC does (#304).
+A request field the tool cannot carry is refused before the call
+(`InvalidArgument`, `ErrFieldNotSupported` naming the field), never dropped:
+on MCP, `CreateBridge` takes only the name and type
+`ovs`, `DeleteBridge` no `force`, `AddPort` no VLAN, trunk, MAC,
+MTU, promiscuous flag, options or zone, `CreateVLAN` no ports, `FlushFlows`
+no table, and the list calls no selector or pagination. Labels pass,
+since the daemon ignores them on every transport. Until #730 the SDK
+mapped six of these methods, sent the gRPC field names the tools do not
+read, and `platformctl sdn port set-state` over MCP failed `Unimplemented`.
+
 ---
 
 ## 3. VLANs
@@ -70,10 +112,20 @@ flow on the bridge.
 |---|---|---|---|---|---|
 | Create VLAN | `POST /api/v1/sdn/vlans`, `POST /api/v1/sdn/bridges/{bridge_id}/vlans` | `CreateVLAN` | `OpSDNSetVLAN` (`0x4D`) | `sdn_create_vlan` | ✅ |
 | List VLANs | `GET /api/v1/sdn/vlans`, `GET /api/v1/sdn/bridges/{bridge_id}/vlans` | `ListVLANs` | `OpSDNGetVLAN` (`0x4E`) | `sdn_list_vlans` | ✅ |
-| Delete VLAN | `MISSING — docs/13 G7` | `DeleteVLAN` | `MISSING — docs/13 G7` | `sdn_delete_vlan` | ✅ |
+| Delete VLAN | `DELETE /api/v1/sdn/vlans/{id}?bridge_id=` (daemon REST only) | `DeleteVLAN` | `MISSING — docs/13 G7` | `sdn_delete_vlan` | ✅ |
 
-**VLAN delete has no REST route.** A VLAN can be created over REST and not
-removed over REST — an asymmetry worth closing.
+**The daemon's REST VLAN routes are the gRPC operations.** The daemon's
+standalone REST server (`pkg/api/rest/sdn_handlers.go`) hands `POST`, `GET` and
+`DELETE` on `/api/v1/sdn/vlans` to the same `SDNService` instance the gRPC
+transport serves (`pkg/api/daemon/rest_sdn.go`), so a VLAN created on one
+transport is listed and deleted on the other, and both enforce the same rules:
+`vlan_id` 1–4095 and `bridge_id` required (`400`), unknown bridge or VLAN
+(`404`), a VLAN ID already on the bridge (`409`), a port that refuses the tag
+(`500`). The gRPC status maps to HTTP through the table in
+`pkg/api/rest/proxy_handlers.go`; with no SDN service wired the routes answer
+`503`. Until #730 these routes echoed the request, listed nothing and reported
+every delete as done without touching any state. The webservice still has no
+VLAN delete route.
 
 Note the path-parameter inconsistency: bridge-scoped port and flow routes use
 `{name}`, bridge-scoped VLAN routes use `{bridge_id}`. Same identifier, two
@@ -85,20 +137,91 @@ spellings.
 
 | Capability | REST | gRPC / Unix | QUIC | MCP | Embedded |
 |---|---|---|---|---|---|
-| Authenticate port | `MISSING — docs/13 G7` | `AuthenticatePort` | `MISSING — docs/13 G7` | `sdn_authenticate_port` | ✅ |
-| Revoke port auth | `MISSING — docs/13 G7` | `RevokePortAuth` | `MISSING — docs/13 G7` | `sdn_revoke_port_auth` | ✅ |
+| Authenticate port | `POST /api/v1/sdn/bridges/{name}/ports/{port}/auth` (webservice only; refused, `400`) | `AuthenticatePort` (refused) | `MISSING — docs/13 G7` | `sdn_authenticate_port` (refused) | refused |
+| Revoke port auth | `DELETE /api/v1/sdn/bridges/{name}/ports/{port}/auth` (webservice only; refused, `400`) | `RevokePortAuth` (refused) | `MISSING — docs/13 G7` | `sdn_revoke_port_auth` (refused) | refused |
 | Apply policy | `POST /api/v1/sdn/policies` | `ApplyPolicy` | `OpSDNApplyPolicy` (`0x47`) | `sdn_apply_policy` | ✅ |
 | List policies | `GET /api/v1/sdn/policies` | `ListPolicies` | `OpSDNListPolicies` (`0x49`) | `sdn_list_policies` | ✅ |
 | Get policy | `GET /api/v1/sdn/policies/{id}` | `GetPolicy` | `OpSDNGetPolicy` (`0x48`) | `sdn_get_policy` | ✅ |
-| Delete policy | `MISSING — docs/13 G7` | `DeletePolicy` | `OpSDNDeletePolicy` (`0xB4`) | `MISSING — docs/13 G7` | ✅ |
+| Delete policy | `DELETE /api/v1/sdn/policies/{id}` (daemon REST only) | `DeletePolicy` | `OpSDNDeletePolicy` (`0xB4`) | `sdn_delete_policy` | ✅ |
 
-**Port authentication has no REST and no QUIC route.** It is reachable over
-gRPC, Unix, MCP and embedded only. Given that port authentication is the SDN
-feature's security core — see [engineering.md](engineering.md) §2 — this is the
-most consequential hole in the matrix.
+**The daemon's REST policy routes are the gRPC operations.** Like the VLAN
+routes (§3), the daemon's standalone REST server hands the four policy routes to
+the shared `SDNService`, so a policy applied on one transport is read, listed
+and deleted on the other under the same rules: a name is required (`400`), an
+unknown `type`, rule `action` or target `type` is refused (`400`), a second
+policy with the same name conflicts (`409`), and get or delete of an unknown ID
+or name is `404`. Until #730 these routes kept their own in-process map that no
+other transport saw. The REST policy object no longer carries `labels` — the
+gRPC `Policy` has no such field. The webservice still has no policy delete
+route.
+
+The webservice's apply route takes the same body, calls the same
+`ApplyPolicy` and answers `201` with the same policy object; it reports a
+duplicate name as `400`, not `409`. The SDK's REST client sends `ApplyPolicy`
+there in this form, through the policy codec its MCP client uses
+(`sdk/go/services/sdn/policy_wire.go`). Until #452 it posted the gRPC request
+to `/api/v1/sdn/policies/apply`, which no server serves, and the webservice
+route answered a made-up policy without calling the service.
+
+**The MCP policy tools are the same operations.** `sdn_apply_policy`,
+`sdn_get_policy`, `sdn_list_policies` and `sdn_delete_policy` call the same
+`SDNService` on both MCP providers and speak the REST policy document, so a
+policy created over MCP is seen over REST and gRPC and the other way round.
+Until #730 the MCP tools kept their own policy-engine path and their own
+argument shape.
+
+**Port authentication is on the webservice REST router, not on QUIC or the
+daemon's standalone REST server.** `POST` and `DELETE` on
+`/api/v1/sdn/bridges/{name}/ports/{port}/auth` call `SDNService.AuthenticatePort`
+and `RevokePortAuth` behind the webservice's admin gate. Authenticate takes
+`{"certificate": <base64 PEM or DER>, "format": "DER"}` (`format` defaults to
+PEM); a missing bridge, port or certificate is `400` before the service is
+called. The service then refuses both calls (below). The SDK's QUIC and MCP
+transports map neither call and answer `Unimplemented` without sending
+anything.
+
+**The SDK's REST transport puts every bridge and port ID in the path.**
+`DeleteBridge`, `AddPort`, `DeletePort`, `AuthenticatePort` and
+`RevokePortAuth` call the templated routes in the tables above
+(`sdk/go/transport/rest/sdn.go`); the body carries only the remaining fields,
+and an empty bridge or port ID is refused before the call (`InvalidArgument`).
+`AddPort` sends the REST port document (`type` as the short type name) and
+refuses a port type it does not know. Until #452 these five calls went to flat
+routes no server registers.
 
 **This is IDevID-certificate authentication, not EAP/RADIUS.** `AuthenticatePort`
 validates a device certificate; there is no RADIUS exchange behind it.
+
+**Port authentication is refused on every transport until the switch enforces
+it (#304).** `SDNService.AuthenticatePort` and `RevokePortAuth` return
+`policy.ErrPortAuthNotEnforced` (`pkg/sdn/policy/errors.go`), class
+`FailedPrecondition`, before reading the request, and record nothing. The
+service keeps no port-authentication state. Two pieces are missing before the
+policy engine (`pkg/sdn/policy.Engine`) can enforce it:
+
+- **The engine is not reachable from the API's SDN service.** The daemon builds
+  it for quarantine and enrollment only (`initSDNPolicy`,
+  `pkg/daemon/commands/quarantine_init.go`).
+- **No certificate validator checks the platform anchor or the IDevID.** The
+  engine has no `CertificateValidator`, so `Engine.AuthenticatePort` would admit
+  any certificate. `DefaultCertificateValidator` checks a chain to the roots it
+  is given, but nothing hands it the platform anchor (`pkg/trust`), and it does
+  not check that the certificate is an IDevID.
+
+What each transport answers:
+
+| Transport | Answer |
+|---|---|
+| gRPC, Unix, Embedded | `FailedPrecondition` |
+| REST (webservice) | `400`, the platform's status for `FailedPrecondition`; the SDK's REST transport reads it as `InvalidArgument` and keeps the message |
+| MCP tools | JSON-RPC error with the `FailedPrecondition` code, for a caller holding `sdn:write`; without it, `PermissionDenied` |
+| QUIC | no opcode; the SDK answers `Unimplemented` |
+
+Until #304, REST, gRPC, Unix and Embedded answered success for any
+certificate inside its validity window, a self-signed one included, and
+recorded the port in a map no other code read; the switch never admitted or
+blocked the port. The MCP tools carried no scope and were refused as
+unclassified.
 
 ---
 
@@ -158,6 +281,10 @@ envelope, when `EnableREST` is set. The QUIC zone operations are
 sub-opcodes multiplexed under the **gateway category opcode `0x2F`**, not
 first-class opcodes — see §8.
 
+The MCP zone tools hold the offset in a byte and take no `omit`, so the
+SDK refuses an offset above 255 (`ErrValueOutOfRange`) and an omit
+(`ErrFieldNotSupported`) with `InvalidArgument` instead of sending them.
+
 ---
 
 ## 6. VXLAN/EVPN overlay
@@ -168,50 +295,57 @@ gRPC `OverlayService`. QUIC overlay operations are sub-opcodes under the
 
 | Capability | REST | gRPC / Unix | QUIC (under `0x2E`) | MCP | Embedded |
 |---|---|---|---|---|---|
-| Overlay status | `GET /api/v1/overlay/status` | `GetOverlayStatus` | `OpOverlayStatus` (`0x01`) | `overlay_status` | ✅; includes IPsec `unpeered_vteps` |
+| Overlay status | `GET /api/v1/overlay/status` | `GetOverlayStatus` | `OpOverlayStatus` (`0x01`) | `overlay_status` | ✅ |
 | List VTEPs | `GET /api/v1/overlay/vteps` | `ListVTEPs` | `OpOverlayListVTEPs` (`0x02`) | `overlay_vtep_list` | ✅ |
 | Get VTEP | `GET /api/v1/overlay/vteps/{nodeId}` | `GetVTEP` | `OpOverlayGetVTEP` (`0x03`) | `overlay_vtep_get` | ✅ |
 | List VNIs | `GET /api/v1/overlay/vnis` | `ListVNIs` | `OpOverlayListVNIs` (`0x04`) | `overlay_vni_list` | ✅ |
 | Create VNI | `POST /api/v1/overlay/vnis` | `CreateVNI` | `OpOverlayCreateVNI` (`0x05`) | `overlay_vni_create` | ✅ |
 | Delete VNI | `DELETE /api/v1/overlay/vnis/{vni}` | `DeleteVNI` | `OpOverlayDeleteVNI` (`0x06`) | `overlay_vni_delete` | ✅ |
 | List tunnels | `GET /api/v1/overlay/tunnels` | `ListTunnels` | `OpOverlayListTunns` (`0x07`) | `overlay_tunnel_list` | ✅ |
-| Tunnel statistics | `GET /api/v1/overlay/tunnels/stats` | `GetTunnelStats` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | ✅ |
+| Tunnel statistics | `GET /api/v1/overlay/tunnels/stats` | `GetTunnelStats` | `OpOverlayTunnelStats` (`0x0A`) | `overlay_tunnel_stats` | ✅ |
 | List remote MACs | `GET /api/v1/overlay/macs` | `ListRemoteMACs` | `OpOverlayListMACs` (`0x08`) | `overlay_mac_list` | ✅ |
-| Forget MAC | `DELETE /api/v1/overlay/macs` | `ForgetMAC` | `OpOverlayForgetMAC` (`0x09`) | `overlay_mac_forget` | ✅ |
+| Forget MAC | `DELETE /api/v1/overlay/macs?mac=<mac>&vni=<vni>` | `ForgetMAC` | `OpOverlayForgetMAC` (`0x09`) | `overlay_mac_forget` | ✅ |
 
-The overlay is the most complete surface in this feature: only tunnel statistics
-is missing on QUIC and MCP, and everything else is present on five transports.
+The overlay is served on every transport: every capability is present on all
+six, each answering from the one overlay controller.
 
 `{vni:[0-9]+}` is numerically constrained in the route; a non-numeric VNI 404s
 rather than reaching the handler.
+
+Forget MAC reads the MAC and VNI from the query only; a `DELETE` body is
+ignored. A missing MAC, a zero VNI or a malformed MAC is refused with 400 and
+the same reason gRPC returns.
 
 ---
 
 ## 7. Physical switches
 
 REST base path `/api/v1/switches`
-(`pkg/webservice/v1/rest/switch/handlers.go`); gRPC `SwitchService`.
+(`pkg/webservice/v1/rest/switch/router.go`); gRPC `SwitchService`.
 
 QUIC reaches the switch service through the **switch category opcode `0xCC`**,
-whose five sub-opcodes are declared in `pkg/api/quic/switch_opcodes.go` and
-dispatched by `pkg/api/daemon/quic_switch.go::handleSwitchCategory`.
+whose five sub-opcodes are declared in `sdk/go/wire/quicwire/switch_opcodes.go` and
+routed by `pkg/api/daemon/quic_switch.go::switchQUICHandlers` to the
+`SwitchService` servicer gRPC serves.
 
 | Capability | REST | gRPC / Unix | QUIC (under `0xCC`) | MCP | Embedded |
 |---|---|---|---|---|---|
-| List switch ports | `GET /api/v1/switches/{switch}/ports` | `ListPorts` | `SwitchSubListPorts` (`0x01`) | `switch_list_ports` | `MISSING` — no `Switch` field in `ServiceRegistry` |
-| Get port status | `GET /api/v1/switches/{switch}/ports/{port}` | `GetPortStatus` | `SwitchSubGetPortStatus` (`0x02`) | `switch_port_status` | `MISSING` |
-| Set port VLAN | `POST /api/v1/switches/{switch}/ports/{port}/vlan` | `SetPortVLAN` | `SwitchSubSetPortVLAN` (`0x03`) | `switch_set_vlan` | `MISSING` |
-| Enable port | `POST /api/v1/switches/{switch}/ports/{port}/enable` | `EnablePort` | `SwitchSubEnablePort` (`0x04`) | `switch_enable_port` | `MISSING` |
-| Disable port | `POST /api/v1/switches/{switch}/ports/{port}/disable` | `DisablePort` | `SwitchSubDisablePort` (`0x05`) | `switch_disable_port` | `MISSING` |
+| List switch ports | `GET /api/v1/switches/{switch}/ports` | `ListPorts` | `SwitchSubListPorts` (`0x01`) | `switch_list_ports` | `ServiceRegistry.Switch` |
+| Get port status | `GET /api/v1/switches/{switch}/ports/{port}` | `GetPortStatus` | `SwitchSubGetPortStatus` (`0x02`) | `switch_port_status` | `ServiceRegistry.Switch` |
+| Set port VLAN | `POST /api/v1/switches/{switch}/ports/{port}/vlan` | `SetPortVLAN` | `SwitchSubSetPortVLAN` (`0x03`) | `switch_set_vlan` | `ServiceRegistry.Switch` |
+| Enable port | `POST /api/v1/switches/{switch}/ports/{port}/enable` | `EnablePort` | `SwitchSubEnablePort` (`0x04`) | `switch_enable_port` | `ServiceRegistry.Switch` |
+| Disable port | `POST /api/v1/switches/{switch}/ports/{port}/disable` | `DisablePort` | `SwitchSubDisablePort` (`0x05`) | `switch_disable_port` | `ServiceRegistry.Switch` |
 
 Sub-opcode names use the `SwitchSub*` prefix rather than `Op*`, because they are
 not top-level opcodes. Do not send them at top level — `0x01` at top level is
 `OpLiveness`.
 
-`ServiceRegistry` (`sdk/go/transport/embedded/adapter.go:32`) has 22 fields and
-**`Switch` is not one of them**, so the embedded transport cannot reach physical
-switch management. That is a genuine embedded-mode hole, distinct from the REST
-and QUIC gaps above.
+The MCP tools and the embedded transport's `ServiceRegistry.Switch`
+(`sdk/go/transport/embedded/adapter.go`, `registerSwitchHandlers` in
+`dispatch.go`) both call the daemon's `SwitchGRPCService`, the servicer gRPC
+serves (#704). The SDK reaches every column through `Client.Switch()`; the
+per-transport mapping files are listed in [`docs/sdk/api.md`](../sdk/api.md)
+§1, and the switch surface itself in [`docs/switch/api.md`](../switch/api.md).
 
 ---
 
@@ -220,17 +354,19 @@ and QUIC gaps above.
 The QUIC protocol is a **flat byte opcode with a two-level extension**: certain
 opcodes are *category* opcodes whose sub-opcode comes from the payload, and the
 daemon routes them to a dedicated handler
-(`pkg/api/daemon/quic_service.go`).
+(`pkg/api/daemon/quic_service.go`). Among them:
 
 | Category opcode | Routes to |
 |---|---|
 | `0x2E` | Overlay handler |
 | `0x2F` | Gateway handler; sub-opcodes `0x20`–`0x2D` are further routed to the **proxy** handler |
 | `0x3F` | IPAM handler |
+| `0x90` | Cluster; sub-opcodes `0x01`–`0x05`, one per `ClusterService` RPC |
 | `0x99` | Physical TPM2 handler |
 | `0x9A`–`0x9D` | Ceremony, PIV, LUKS, FIDO2 |
 | `0x9E` | Per-tenant barrier |
-| `0x9F` | BMC enrollment |
+| `0x9F` | BMC; sub-opcodes `0x01`–`0x17`, one per `BMCService` RPC |
+| `0xCC` | Switch; sub-opcodes `0x01`–`0x05`, one per `SwitchService` RPC (§7) |
 
 **This is why opcode values collide.** `OpOverlayStatus`, `OpGatewayStatus` and
 `OpLiveness` are all `0x01`, but the first two are *sub*-opcodes inside their
@@ -247,17 +383,18 @@ indirection.
 
 ## 9. Authorization
 
-Platform tokens carry an `scp` claim as `"<resource>:<action>"`. **`SDNService`
-is one of the eleven services in the gRPC scope catalog**
-(`pkg/api/grpc/method_permissions.go`), with 25 of its methods mapped —
-resource `sdn`, actions `read`, `write`, `delete`. QUIC projects the same
-mapping through `DefaultOpcodePermissions`; MCP through `AuthorizeTool`.
+Platform tokens carry an `scp` claim as `"<resource>:<action>"`. The gRPC scope
+catalog (`pkg/api/grpc/method_permissions.go`) is **default-deny**: a method
+absent from it is refused with `PermissionDenied`.
 
-`OverlayService` and `SwitchService` are **not** in the catalog, and the
-catalog's doc comment states that a method absent from the map carries no
-required scope. So overlay and switch operations require only a validated
-token, while the equivalent SDN operations require `sdn:write`. That asymmetry
-is raised as an owner question in the migration report.
+**`SDNService` and `OverlayService` are fully scoped** under resource `sdn`,
+actions `read`, `write`, `delete`. `SwitchService` is scoped under its own
+resource, `switch` ([`docs/switch/api.md`](../switch/api.md) §7). On MCP, every `sdn_*` and `overlay_*`
+tool carries the `sdn:*` permission of its gRPC twin, and every `switch_*` tool
+a `switch:*` one (`pkg/api/mcp/authz.go`). The port-auth tools take
+`sdn:write` and then refuse with `FailedPrecondition` (§4). QUIC classifies
+every operation (#767) in `pkg/api/quic/opcode_permissions.go`: overlay
+sub-opcodes need `sdn:*` and switch sub-opcodes `switch:read` / `switch:write`.
 
 ### REST is gated on the `admin` role (#165)
 
@@ -298,4 +435,4 @@ misconfigured SDN subsystem does not start.
 ## 11. Versioning
 
 REST under `/api/v1`; gRPC package `platform.v1`. Nothing in the SDN, overlay
-or switch surface is deprecated as of 2026-08-18.
+or switch surface is deprecated as of 2026-10-15.

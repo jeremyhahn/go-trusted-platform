@@ -31,6 +31,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ipam"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ovs"
 	sdnzone "github.com/jeremyhahn/go-trusted-platform/pkg/sdn/zone"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/storage/quicbaas"
 	"github.com/vishvananda/netlink"
 	"golang.org/x/sys/unix"
 )
@@ -63,6 +64,11 @@ func (c *sdkIPAMClient) Get(ctx context.Context, entityType string, id uint64) (
 		ID:         id,
 	})
 	if err != nil {
+		// A KV Get answers a miss with a typed not-found error, never
+		// Found=false; the IPAM backend expects found=false.
+		if quicbaas.IsNotFound(err) {
+			return nil, false, nil
+		}
 		return nil, false, err
 	}
 	if resp == nil || len(resp.Data) == 0 {

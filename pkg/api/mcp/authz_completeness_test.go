@@ -27,351 +27,6 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 )
 
-// knownUnclassified names every registered MCP tool that has no entry in
-// AuthorizationChecker.toolPermissions.
-//
-// These tools are NOT safe. Until #300 they were served unauthorized by a
-// default-allow in AuthorizeTool; that default is now deny, so each of these
-// is refused with AuthErrorToolNotClassified rather than executed. The list
-// exists so the gap is visible in the tree to anyone reading, instead of
-// being discoverable only by running the registry diff.
-//
-// THIS LIST MAY ONLY SHRINK. The test below fails if:
-//
-//   - a registered tool appears in neither the permission map nor this list —
-//     so a newly registered tool cannot silently join the unauthorized set;
-//   - a name here also has a permission entry — a stale line to delete once
-//     the tool is classified;
-//   - a name here is not registered at all — a stale line for a tool that no
-//     longer exists.
-//
-// Classifying these is #304, ordered worst-first: BMC, then KMS and IAM, then
-// TPM/vTPM, then tenant. Note some tenant tools cannot be correctly authorized
-// until MCP can express RequireSystemTenant (#299) — for those, leaving the
-// tool unregistered is better than granting a scope weaker than its own REST
-// route.
-var knownUnclassified = []string{
-	"activate_credential",
-	"attestation_attest_workload",
-	"attestation_create_manifest",
-	"attestation_create_policy",
-	"attestation_create_report",
-	"attestation_delete_manifest",
-	"attestation_delete_policy",
-	"attestation_evaluate_policy",
-	"attestation_get_manifest",
-	"attestation_get_policy",
-	"attestation_get_report",
-	"attestation_list_manifests",
-	"attestation_list_policies",
-	"attestation_list_reports",
-	"attestation_verify_manifest",
-	"attestation_verify_workload",
-	"ca_bundle",
-	"ca_crl",
-	"ca_get",
-	"ca_info",
-	"ca_issue",
-	"ca_list",
-	"ca_renew",
-	"ca_revoke",
-	"ca_verify",
-	"container_attest",
-	"container_create",
-	"container_exec",
-	"container_get",
-	"container_list",
-	"container_logs",
-	"container_metrics",
-	"container_remove",
-	"container_start",
-	"container_stop",
-	"device_attributes",
-	"device_create",
-	"device_delete_by_id",
-	"device_get_by_id",
-	"device_get_by_serial",
-	"device_get_status",
-	"device_list_all",
-	"device_update_by_id",
-	"dns_lookup",
-	"dns_record_create",
-	"dns_record_delete",
-	"dns_record_get",
-	"dns_record_list",
-	"dns_record_update",
-	"dns_reverse_lookup",
-	"dns_zone_create",
-	"dns_zone_delete",
-	"dns_zone_get",
-	"dns_zone_list",
-	"dns_zone_update",
-	"gateway_bgp_announce",
-	"gateway_bgp_peers",
-	"gateway_bgp_prefixes",
-	"gateway_bgp_status",
-	"gateway_bgp_withdraw",
-	"gateway_mode_set",
-	"gateway_status",
-	"iak_csr",
-	"iak_delete",
-	"iak_delete_cert",
-	"iak_exists",
-	"iak_generate",
-	"iak_get_cert",
-	"iak_info",
-	"iak_install_cert",
-	"iam_add_group_member",
-	"iam_assign_role",
-	"iam_authenticate",
-	"iam_check_permission",
-	"iam_create_group",
-	"iam_create_role",
-	"iam_create_tenant",
-	"iam_create_token",
-	"iam_create_user",
-	"iam_delete_group",
-	"iam_delete_role",
-	"iam_delete_tenant",
-	"iam_delete_user",
-	"iam_get_group",
-	"iam_get_role",
-	"iam_get_tenant",
-	"iam_get_user",
-	"iam_list_groups",
-	"iam_list_roles",
-	"iam_list_tenants",
-	"iam_list_users",
-	"iam_remove_group_member",
-	"iam_revoke_role",
-	"iam_revoke_token",
-	"iam_verify_token",
-	"idevid_create_ldevid",
-	"idevid_csr",
-	"idevid_delete",
-	"idevid_delete_cert",
-	"idevid_exists",
-	"idevid_generate",
-	"idevid_get_cert",
-	"idevid_info",
-	"idevid_install_cert",
-	"kms_backend_status",
-	"kms_decrypt",
-	"kms_delete_key",
-	"kms_encrypt",
-	"kms_export_public_key",
-	"kms_generate_data_key",
-	"kms_generate_key",
-	"kms_generate_wrapped_data_key",
-	"kms_get_key",
-	"kms_get_key_metadata",
-	"kms_get_key_policy",
-	"kms_list_keys",
-	"kms_random",
-	"kms_revoke_key",
-	"kms_rotate_key",
-	"kms_set_key_policy",
-	"kms_sign",
-	"kms_supported_algorithms",
-	"kms_update_key_metadata",
-	"kms_verify",
-	"overlay_mac_forget",
-	"overlay_mac_list",
-	"overlay_status",
-	"overlay_tunnel_list",
-	"overlay_vni_create",
-	"overlay_vni_delete",
-	"overlay_vni_list",
-	"overlay_vtep_get",
-	"overlay_vtep_list",
-	"platform_ceremony_claim_cert_begin",
-	"platform_ceremony_claim_cert_complete",
-	"platform_ceremony_claim_share_begin",
-	"platform_ceremony_claim_share_complete",
-	"platform_ceremony_init",
-	"platform_ceremony_sign_csr",
-	"platform_ceremony_status",
-	"platform_cluster_bootstrap",
-	"platform_cluster_join",
-	"platform_cluster_leave",
-	"platform_cluster_list_nodes",
-	"platform_cluster_status",
-	"platform_daemon_get_service",
-	"platform_daemon_list_protocols",
-	"platform_daemon_list_services",
-	"platform_daemon_restart_service",
-	"platform_daemon_start_service",
-	"platform_daemon_status",
-	"platform_daemon_stop_service",
-	"platform_daemon_version",
-	"platform_eab_cleanup_expired_credentials",
-	"platform_eab_create_credential",
-	"platform_eab_delete_credential",
-	"platform_eab_get_credential",
-	"platform_eab_get_credential_by_key_id",
-	"platform_eab_get_credential_qr_code",
-	"platform_eab_get_enrollment_url",
-	"platform_eab_list_credentials",
-	"platform_eab_mark_credential_used",
-	"platform_eab_revoke_credential",
-	"platform_eab_validate_credential",
-	"platform_fido2_authenticate",
-	"platform_fido2_info",
-	"platform_fido2_list_devices",
-	"platform_fido2_register",
-	"platform_fido2_wait_device",
-	"platform_luks_change_passphrase",
-	"platform_luks_enroll_fido2",
-	"platform_luks_enroll_passphrase",
-	"platform_luks_enroll_recovery",
-	"platform_luks_enroll_tpm",
-	"platform_luks_info",
-	"platform_luks_list_slots",
-	"platform_luks_remove_key",
-	"platform_luks_status",
-	"platform_luks_test_unlock",
-	"platform_piv_attest",
-	"platform_piv_generate",
-	"platform_piv_import",
-	"platform_piv_list_devices",
-	"platform_piv_list_slots",
-	"platform_piv_reset",
-	"platform_piv_sign",
-	"platform_piv_slot_info",
-	"platform_registry_delete",
-	"platform_registry_inspect",
-	"platform_registry_list",
-	"platform_registry_status",
-	"platform_tenant_barrier_init",
-	"platform_tenant_barrier_seal",
-	"platform_tenant_barrier_status",
-	"platform_tenant_barrier_unseal",
-	"platform_tpm_activate_credential",
-	"platform_tpm_capabilities",
-	"platform_tpm_certify",
-	"platform_tpm_clear",
-	"platform_tpm_ek",
-	"platform_tpm_ek_cert",
-	"platform_tpm_ek_create",
-	"platform_tpm_ek_delete",
-	"platform_tpm_ek_import_cert",
-	"platform_tpm_eventlog",
-	"platform_tpm_iak",
-	"platform_tpm_iak_create",
-	"platform_tpm_iak_delete",
-	"platform_tpm_info",
-	"platform_tpm_make_credential",
-	"platform_tpm_nv_delete",
-	"platform_tpm_nv_list",
-	"platform_tpm_nv_read",
-	"platform_tpm_nv_write",
-	"platform_tpm_pcr_extend",
-	"platform_tpm_pcrs",
-	"platform_tpm_platform",
-	"platform_tpm_provision",
-	"platform_tpm_quote",
-	"platform_tpm_random",
-	"platform_tpm_seal",
-	"platform_tpm_srk",
-	"platform_tpm_srk_create",
-	"platform_tpm_srk_delete",
-	"platform_tpm_unseal",
-	"platform_tpm_verify_quote",
-	"provision_fetch_config",
-	"provision_fulfill_session",
-	"provision_get_nonce",
-	"provision_get_session",
-	"provision_list_sessions",
-	"provision_poll_session",
-	"provision_sign_digest",
-	"sdn_add_flow",
-	"sdn_authenticate_port",
-	"sdn_create_vlan",
-	"sdn_delete_flow",
-	"sdn_delete_vlan",
-	"sdn_flush_flows",
-	"sdn_get_flow_stats",
-	"sdn_get_port_stats",
-	"sdn_list_flows",
-	"sdn_list_vlans",
-	"sdn_revoke_port_auth",
-	"secret_delete",
-	"secret_get",
-	"secret_get_rotation_policy",
-	"secret_list",
-	"secret_set_rotation_policy",
-	"secret_store",
-	"switch_disable_port",
-	"switch_enable_port",
-	"switch_list_ports",
-	"switch_port_status",
-	"switch_set_vlan",
-	"tenant_check_quota",
-	"tenant_create",
-	"tenant_delete",
-	"tenant_get",
-	"tenant_get_by_name",
-	"tenant_get_dek_status",
-	"tenant_get_quotas",
-	"tenant_get_usage",
-	"tenant_list",
-	"tenant_resume",
-	"tenant_rotate_dek",
-	"tenant_suspend",
-	"tenant_sync",
-	"tenant_update",
-	"tenant_update_quotas",
-	"vm_attest",
-	"vm_attest_verify",
-	"vm_create",
-	"vm_delete",
-	"vm_disk_attach",
-	"vm_disk_detach",
-	"vm_disk_resize",
-	"vm_get",
-	"vm_list",
-	"vm_logs",
-	"vm_metrics",
-	"vm_migrate",
-	"vm_reboot",
-	"vm_resume",
-	"vm_snapshot_create",
-	"vm_snapshot_delete",
-	"vm_snapshot_get",
-	"vm_snapshot_list",
-	"vm_snapshot_restore",
-	"vm_start",
-	"vm_stop",
-	"vm_suspend",
-	"vm_update",
-	"vtpm_bundle_create",
-	"vtpm_bundle_delete",
-	"vtpm_bundle_get",
-	"vtpm_bundle_list",
-	"vtpm_bundle_pcr_extend",
-	"vtpm_bundle_pcr_read",
-	"vtpm_bundle_quote",
-	"vtpm_bundle_seal",
-	"vtpm_bundle_unseal",
-	"vtpm_export",
-	"vtpm_get",
-	"vtpm_get_bundle_path",
-	"vtpm_get_nvram_path",
-	"vtpm_get_tpm_socket_path",
-	"vtpm_import",
-	"vtpm_is_running",
-	"vtpm_template_clone",
-	"vtpm_template_create",
-	"vtpm_template_create",
-	"vtpm_template_delete",
-	"vtpm_template_delete",
-	"vtpm_template_get",
-	"vtpm_template_get",
-	"vtpm_template_list",
-	"vtpm_template_list",
-	"vtpm_validate",
-}
-
 // TestEveryRegisteredToolIsClassified walks the tool registry the server
 // actually builds, rather than scanning source for tool definitions. A source
 // scan encodes an assumption about how tools get registered; ListTools()
@@ -382,60 +37,19 @@ func TestEveryRegisteredToolIsClassified(t *testing.T) {
 	registry := NewToolRegistry(nil, log)
 	checker := NewAuthorizationChecker(nil, nil)
 
-	unclassified := make(map[string]bool, len(knownUnclassified))
-	for _, name := range knownUnclassified {
-		unclassified[name] = true
-	}
-
-	registered := make(map[string]bool)
-	var undeclared []string
+	var unclassified []string
 	for _, tool := range registry.ListTools() {
-		registered[tool.Name] = true
-		_, hasPermission := checker.toolPermissions[tool.Name]
-		if !hasPermission && !unclassified[tool.Name] {
-			undeclared = append(undeclared, tool.Name)
+		if _, ok := checker.toolPermissions[tool.Name]; !ok {
+			unclassified = append(unclassified, tool.Name)
 		}
 	}
 
-	sort.Strings(undeclared)
-	assert.Empty(t, undeclared,
-		"these tools are registered with no permission entry and are not in "+
-			"knownUnclassified. Give each a resource:action entry in "+
-			"initToolPermissions, or an explicit \"\" if it genuinely needs none. "+
-			"Do not add them to knownUnclassified — that list may only shrink.")
-}
-
-// TestKnownUnclassifiedHasNoStaleEntries is the ratchet. Once a tool is given
-// a permission, its line here must go, so the list cannot quietly stop
-// shrinking while #304 reports progress.
-func TestKnownUnclassifiedHasNoStaleEntries(t *testing.T) {
-	log := logging.NewLogger(slog.LevelError, io.Discard)
-	registry := NewToolRegistry(nil, log)
-	checker := NewAuthorizationChecker(nil, nil)
-
-	registered := make(map[string]bool)
-	for _, tool := range registry.ListTools() {
-		registered[tool.Name] = true
-	}
-
-	var nowClassified, noLongerRegistered []string
-	for _, name := range knownUnclassified {
-		if _, ok := checker.toolPermissions[name]; ok {
-			nowClassified = append(nowClassified, name)
-		}
-		if !registered[name] {
-			noLongerRegistered = append(noLongerRegistered, name)
-		}
-	}
-
-	sort.Strings(nowClassified)
-	sort.Strings(noLongerRegistered)
-	assert.Empty(t, nowClassified,
-		"these tools now have a permission entry — delete their lines from "+
-			"knownUnclassified")
-	assert.Empty(t, noLongerRegistered,
-		"these tools are no longer registered — delete their lines from "+
-			"knownUnclassified")
+	sort.Strings(unclassified)
+	assert.Empty(t, unclassified,
+		"these tools are registered with no permission entry, so AuthorizeTool "+
+			"refuses them. Give each the resource:action scope of its gRPC, QUIC or "+
+			"REST twin in toolPermissionCatalog, or an explicit \"\" if it genuinely "+
+			"needs none.")
 }
 
 // TestInvitationToolsAreClassified pins the #300 fix specifically: the seven
@@ -490,19 +104,6 @@ func TestUnclassifiedToolIsDenied(t *testing.T) {
 			"that is in the platform's configuration")
 }
 
-// TestUnclassifiedRegisteredToolIsDenied uses a real registered tool that is
-// still on knownUnclassified, so the assertion tracks the actual gap rather
-// than an invented name.
-func TestUnclassifiedRegisteredToolIsDenied(t *testing.T) {
-	require.NotEmpty(t, knownUnclassified, "nothing left to assert once #304 completes; delete this test then")
-	checker := NewAuthorizationChecker(allowAllAuthService{}, nil)
-
-	_, err := checker.AuthorizeTool(context.Background(), knownUnclassified[0], "any-token")
-
-	require.NotNil(t, err, "%s is registered with no permission mapping and must be refused", knownUnclassified[0])
-	assert.Equal(t, AuthErrorToolNotClassified, err.Type)
-}
-
 // TestClassifiedToolWithEmptyPermissionIsAllowed guards the other direction:
 // an explicit "" means "no permission required" and must still be served, or
 // the two invitee invitation tools break.
@@ -516,7 +117,7 @@ func TestClassifiedToolWithEmptyPermissionIsAllowed(t *testing.T) {
 
 // TestBMCToolsAreClassified pins #304's first tranche. Every BMC tool is
 // asserted by name and scope, so a later edit that loosens one — or drops a
-// tool back into knownUnclassified — fails here rather than silently widening
+// tool's entry from the map — fails here rather than silently widening
 // what a single grant confers.
 //
 // Read/write is drawn on EFFECT, not on the REST shape: docs/bmc/api.md:64
@@ -534,21 +135,299 @@ func TestBMCToolsAreClassified(t *testing.T) {
 		"platform_bmc_get_system_info":      "bmc:read",
 		"platform_bmc_list_users":           "bmc:read",
 		"platform_bmc_get_web_certificate":  "bmc:read",
+		"platform_bmc_provision_status":     "bmc:read",
 		// Changes the machine's state or its credentials.
-		"platform_bmc_power_on":        "bmc:write",
-		"platform_bmc_power_off":       "bmc:power",
-		"platform_bmc_power_reset":     "bmc:power",
-		"platform_bmc_power_cycle":     "bmc:power",
-		"platform_bmc_set_boot_device": "bmc:write",
-		"platform_bmc_mount_iso":       "bmc:media",
-		"platform_bmc_unmount_iso":     "bmc:media",
-		"platform_bmc_enroll":          "bmc:admin",
-		"platform_bmc_cert_restore":    "bmc:admin",
+		"platform_bmc_power_on":                "bmc:write",
+		"platform_bmc_power_off":               "bmc:power",
+		"platform_bmc_power_reset":             "bmc:power",
+		"platform_bmc_power_cycle":             "bmc:power",
+		"platform_bmc_set_boot_device":         "bmc:write",
+		"platform_bmc_mount_iso":               "bmc:media",
+		"platform_bmc_unmount_iso":             "bmc:media",
+		"platform_bmc_enroll":                  "bmc:admin",
+		"platform_bmc_cert_restore":            "bmc:admin",
+		"platform_bmc_provision":               "bmc:admin",
+		"platform_bmc_replace_web_certificate": "bmc:admin",
+		"platform_bmc_create_user":             "bmc:admin",
+		"platform_bmc_delete_user":             "bmc:admin",
+		"platform_bmc_set_user_password":       "bmc:admin",
+		"platform_bmc_set_user_privilege":      "bmc:admin",
 	} {
 		got, ok := checker.toolPermissions[tool]
 		require.True(t, ok, "%s must have an explicit permission entry", tool)
 		assert.Equal(t, want, got, "%s", tool)
 	}
+}
+
+// TestPXEToolsAreClassified pins every PXE tool to the scope of its gRPC
+// PXEService method by name (#704), so a later edit that loosens one fails
+// here rather than silently widening what a single grant confers.
+func TestPXEToolsAreClassified(t *testing.T) {
+	checker := NewAuthorizationChecker(nil, nil)
+
+	for tool, want := range map[string]string{
+		// Observation only.
+		"pxe_list_devices":      "pxe:read",
+		"pxe_get_device":        "pxe:read",
+		"pxe_get_device_by_mac": "pxe:read",
+		"pxe_get_device_events": "pxe:read",
+		"pxe_service_status":    "pxe:read",
+		// Moves a device through the workflow, or starts and stops the service.
+		"pxe_register_device":     "pxe:write",
+		"pxe_update_state":        "pxe:write",
+		"pxe_set_device_enrolled": "pxe:write",
+		"pxe_authorize_device":    "pxe:write",
+		"pxe_quarantine_device":   "pxe:write",
+		"pxe_retry_device":        "pxe:write",
+		"pxe_start_service":       "pxe:write",
+		"pxe_stop_service":        "pxe:write",
+		"pxe_webhook_complete":    "pxe:write",
+		// Removes a device.
+		"pxe_remove_device": "pxe:delete",
+	} {
+		got, ok := checker.toolPermissions[tool]
+		require.True(t, ok, "%s must have an explicit permission entry", tool)
+		assert.Equal(t, want, got, "%s", tool)
+	}
+}
+
+// TestTPMQuoteToolsAreClassified: the quote and certify tools carry the scope
+// of their gRPC TPMService twin, so an MCP caller reaches the same service
+// (#482, #317).
+func TestTPMQuoteToolsAreClassified(t *testing.T) {
+	checker := NewAuthorizationChecker(nil, nil)
+
+	for _, tool := range []string{"platform_tpm_quote", "platform_tpm_verify_quote", "platform_tpm_certify"} {
+		got, ok := checker.toolPermissions[tool]
+		require.True(t, ok, "%s must have an explicit permission entry", tool)
+		assert.Equal(t, "tpm:read", got, "%s", tool)
+	}
+}
+
+// TestTPMNVToolsAreClassified pins each NV tool to the scope its gRPC
+// TPMService twin requires (pkg/api/grpc/method_permissions.go), and
+// pcr_extend to the scope of QUIC's SubOpTPM2ExtendPCR.
+func TestTPMNVToolsAreClassified(t *testing.T) {
+	checker := NewAuthorizationChecker(nil, nil)
+
+	want := map[string]string{
+		"platform_tpm_nv_list":    "tpm:read",
+		"platform_tpm_nv_read":    "tpm:read",
+		"platform_tpm_nv_write":   "tpm:write",
+		"platform_tpm_nv_delete":  "tpm:delete",
+		"platform_tpm_pcr_extend": "tpm:write",
+	}
+	for tool, scope := range want {
+		got, ok := checker.toolPermissions[tool]
+		require.True(t, ok, "%s must have an explicit permission entry", tool)
+		assert.Equal(t, scope, got, "%s", tool)
+	}
+}
+
+// TestIAMToolClassification pins every IAM tool to the scope of its gRPC twin;
+// iam_authenticate is open, as its QUIC twin is pre-auth.
+func TestIAMToolClassification(t *testing.T) {
+	checker := NewAuthorizationChecker(nil, nil)
+
+	// Each scope is the one pkg/api/grpc/method_permissions.go gives the
+	// PlatformIAMService method the tool answers through.
+	want := map[string]string{
+		"iam_create_user":         "iam:write",
+		"iam_get_user":            "iam:read",
+		"iam_list_users":          "iam:read",
+		"iam_delete_user":         "iam:delete",
+		"iam_create_role":         "iam:write",
+		"iam_get_role":            "iam:read",
+		"iam_list_roles":          "iam:read",
+		"iam_delete_role":         "iam:delete",
+		"iam_assign_role":         "iam:write",
+		"iam_revoke_role":         "iam:write",
+		"iam_create_group":        "iam:write",
+		"iam_get_group":           "iam:read",
+		"iam_list_groups":         "iam:read",
+		"iam_delete_group":        "iam:delete",
+		"iam_add_group_member":    "iam:write",
+		"iam_remove_group_member": "iam:write",
+		"iam_check_permission":    "iam:read",
+		"iam_create_tenant":       "iam:write",
+		"iam_get_tenant":          "iam:read",
+		"iam_list_tenants":        "iam:read",
+		"iam_delete_tenant":       "iam:delete",
+		"iam_verify_token":        "iam:read",
+		"iam_create_token":        "iam:write",
+		"iam_revoke_token":        "iam:write",
+		// The credential exchange is open, as QUIC's preAuthOpcodes records.
+		"iam_authenticate": "",
+	}
+	for tool, scope := range want {
+		got, ok := checker.toolPermissions[tool]
+		require.True(t, ok, "%s must have an explicit permission entry", tool)
+		assert.Equal(t, scope, got, "%s", tool)
+	}
+}
+
+// TestIAMToolsAuthorizeByScope shows the IAM entries decide access: a caller
+// holding only iam:read reaches iam_list_users and is refused iam_create_user
+// (iam:write) and iam_delete_user (iam:delete).
+func TestIAMToolsAuthorizeByScope(t *testing.T) {
+	readOnly := &mockAuthorizationService{
+		checkFunc: func(_ context.Context, _, resource, action string) (bool, error) {
+			return resource == "iam" && action == "read", nil
+		},
+	}
+	checker := NewAuthorizationChecker(readOnly, nil)
+
+	assert.Nil(t, checker.CheckToolAuthorization(context.Background(), "iam_list_users", "token"))
+
+	for tool, action := range map[string]string{"iam_create_user": "write", "iam_delete_user": "delete"} {
+		err := checker.CheckToolAuthorization(context.Background(), tool, "token")
+		require.NotNil(t, err, "%s needs iam:%s", tool, action)
+		assert.Equal(t, AuthErrorPermissionDenied, err.Type, "%s", tool)
+		assert.Equal(t, action, readOnly.lastAction, "%s", tool)
+	}
+}
+
+// TestLastClassifiedToolsAuthorizeByScope pins the tools #304 classified last
+// to the scope their twin carries on the other transports: a caller holding
+// that scope is admitted, and a caller holding every other action on the same
+// resource is refused.
+func TestLastClassifiedToolsAuthorizeByScope(t *testing.T) {
+	cases := []struct {
+		tool     string
+		resource string
+		action   string
+	}{
+		// gRPC TPMService DeleteEK and DeleteSRK; REST tpmScopeDelete.
+		{"platform_tpm_ek_delete", "tpm", "delete"},
+		{"platform_tpm_srk_delete", "tpm", "delete"},
+		// QUIC SubOpTPM2DeleteIAK.
+		{"platform_tpm_iak_delete", "tpm", "delete"},
+		// gRPC LUKSService TestUnlock.
+		{"platform_luks_test_unlock", "luks", "read"},
+		// gRPC PlatformIAMService CreateToken and RevokeToken.
+		{"iam_create_token", "iam", "write"},
+		{"iam_revoke_token", "iam", "write"},
+		// QUIC OpDaemonListProtocols.
+		{"platform_daemon_list_protocols", "platform", "read"},
+		// gRPC ComputeService ListSnapshots.
+		{"vm_snapshot_get", "vm", "read"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.tool+"/admitted", func(t *testing.T) {
+			exact := &mockAuthorizationService{
+				checkFunc: func(_ context.Context, _, resource, action string) (bool, error) {
+					return resource == tc.resource && action == tc.action, nil
+				},
+			}
+			checker := NewAuthorizationChecker(exact, nil)
+
+			assert.Nil(t, checker.CheckToolAuthorization(context.Background(), tc.tool, "token"))
+		})
+
+		t.Run(tc.tool+"/denied", func(t *testing.T) {
+			otherActions := &mockAuthorizationService{
+				checkFunc: func(_ context.Context, _, resource, action string) (bool, error) {
+					return resource == tc.resource && action != tc.action, nil
+				},
+			}
+			checker := NewAuthorizationChecker(otherActions, nil)
+
+			err := checker.CheckToolAuthorization(context.Background(), tc.tool, "token")
+			require.NotNil(t, err, "%s needs %s:%s", tc.tool, tc.resource, tc.action)
+			assert.Equal(t, AuthErrorPermissionDenied, err.Type)
+			assert.Equal(t, tc.action, otherActions.lastAction)
+		})
+	}
+}
+
+// TestIAMAuthenticateIsOpen: iam_authenticate is the credential exchange that
+// mints a token, so it is admitted without one even by a backend that grants
+// nothing, as QUIC's preAuthOpcodes admits OpIAMAuthenticate.
+func TestIAMAuthenticateIsOpen(t *testing.T) {
+	denyAll := &mockAuthorizationService{
+		checkFunc: func(context.Context, string, string, string) (bool, error) {
+			return false, nil
+		},
+	}
+	checker := NewAuthorizationChecker(denyAll, nil)
+
+	_, err := checker.AuthorizeTool(context.Background(), "iam_authenticate", "")
+
+	assert.Nil(t, err, "the credential exchange cannot require the token it issues")
+}
+
+// TestOverlayToolsAreClassified pins each overlay tool to the scope its gRPC
+// OverlayService twin requires (pkg/api/grpc/method_permissions.go).
+func TestOverlayToolsAreClassified(t *testing.T) {
+	checker := NewAuthorizationChecker(nil, nil)
+
+	want := map[string]string{
+		"overlay_status":       "sdn:read",
+		"overlay_vtep_list":    "sdn:read",
+		"overlay_vtep_get":     "sdn:read",
+		"overlay_vni_list":     "sdn:read",
+		"overlay_vni_create":   "sdn:write",
+		"overlay_vni_delete":   "sdn:delete",
+		"overlay_tunnel_list":  "sdn:read",
+		"overlay_tunnel_stats": "sdn:read",
+		"overlay_mac_list":     "sdn:read",
+		"overlay_mac_forget":   "sdn:write",
+	}
+	for tool, scope := range want {
+		got, ok := checker.toolPermissions[tool]
+		require.True(t, ok, "%s must have an explicit permission entry", tool)
+		assert.Equal(t, scope, got, "%s", tool)
+	}
+}
+
+// TestSwitchClusterRegistryToolsAreClassified pins each switch, cluster and
+// registry tool (#304) to the scope its gRPC twin requires in
+// method_permissions.go.
+func TestSwitchClusterRegistryToolsAreClassified(t *testing.T) {
+	checker := NewAuthorizationChecker(nil, nil)
+
+	want := map[string]string{
+		"switch_list_ports":   "switch:read",
+		"switch_port_status":  "switch:read",
+		"switch_enable_port":  "switch:write",
+		"switch_disable_port": "switch:write",
+		"switch_set_vlan":     "switch:write",
+
+		"platform_cluster_status":     "cluster:read",
+		"platform_cluster_list_nodes": "cluster:read",
+		"platform_cluster_bootstrap":  "cluster:write",
+		"platform_cluster_join":       "cluster:write",
+		"platform_cluster_leave":      "cluster:write",
+
+		"platform_registry_status":  "registry:read",
+		"platform_registry_list":    "registry:read",
+		"platform_registry_inspect": "registry:read",
+		"platform_registry_delete":  "registry:delete",
+	}
+	for tool, scope := range want {
+		got, ok := checker.toolPermissions[tool]
+		require.True(t, ok, "%s must have an explicit permission entry", tool)
+		assert.Equal(t, scope, got, "%s", tool)
+	}
+}
+
+// TestOverlayToolsAuthorizeByScope shows the overlay entries decide access: a
+// caller holding only sdn:read reaches overlay_tunnel_stats and is refused
+// overlay_vni_delete, which needs sdn:delete.
+func TestOverlayToolsAuthorizeByScope(t *testing.T) {
+	readOnly := &mockAuthorizationService{
+		checkFunc: func(_ context.Context, _, resource, action string) (bool, error) {
+			return resource == "sdn" && action == "read", nil
+		},
+	}
+	checker := NewAuthorizationChecker(readOnly, nil)
+
+	assert.Nil(t, checker.CheckToolAuthorization(context.Background(), "overlay_tunnel_stats", "token"))
+
+	err := checker.CheckToolAuthorization(context.Background(), "overlay_vni_delete", "token")
+	require.NotNil(t, err, "overlay_vni_delete needs sdn:delete")
+	assert.Equal(t, AuthErrorPermissionDenied, err.Type)
+	assert.Equal(t, "delete", readOnly.lastAction)
 }
 
 // TestNoBMCToolIsUnauthenticated is the one that matters if someone later adds

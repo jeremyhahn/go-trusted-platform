@@ -14,215 +14,116 @@
 package attestation
 
 import (
-	"bufio"
 	"context"
-	"crypto/tls"
-	"crypto/x509"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
-	"time"
 
 	"github.com/gorilla/mux"
+	iamsdk "github.com/jeremyhahn/go-quicbaas/sdk/go/client/iam"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
-	iamsdk "github.com/jeremyhahn/go-quicbaas/sdk/go/client/iam"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/verdict"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/verdict/feed"
 	iammw "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/middleware/iam"
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
 
-// fakeVerdictOpener hands out one scripted subscription and records who asked.
-type fakeVerdictOpener struct {
-	err          error
-	principal    verdict.StreamPrincipal
-	subscription *fakeVerdictSubscription
+// verdictPoller records each poll and answers page, or err when set.
+type verdictPoller struct {
+	page      *platformv1.PollDeviceVerdictsResponse
+	err       error
+	audiences []feed.Audience
+	requests  []*platformv1.PollDeviceVerdictsRequest
 }
 
-func (o *fakeVerdictOpener) OpenVerdictStream(p verdict.StreamPrincipal) (verdict.StreamSubscription, error) {
-	o.principal = p
-	if o.err != nil {
-		return nil, o.err
-	}
-	return o.subscription, nil
+func (p *verdictPoller) PollDeviceVerdictsFor(_ context.Context, audience feed.Audience, req *platformv1.PollDeviceVerdictsRequest) (*platformv1.PollDeviceVerdictsResponse, error) {
+	p.audiences = append(p.audiences, audience)
+	p.requests = append(p.requests, req)
+	return p.page, p.err
 }
 
-// fakeVerdictSubscription sends its verdicts, beats once when asked to, then
-// returns end (or waits for the client to go away when end is nil).
-type fakeVerdictSubscription struct {
-	verdicts []verdict.RecordedDeviceVerdict
-	beat     bool
-	end      error
-	closed   chan struct{}
-}
-
-func newFakeSubscription(end error, verdicts ...verdict.RecordedDeviceVerdict) *fakeVerdictSubscription {
-	return &fakeVerdictSubscription{verdicts: verdicts, end: end, closed: make(chan struct{})}
-}
-
-func (s *fakeVerdictSubscription) Serve(ctx context.Context, send func(verdict.RecordedDeviceVerdict) error, hb verdict.StreamHeartbeat) error {
-	if s.beat {
-		if err := hb.Beat(); err != nil {
-			return err
-		}
-	}
-	for _, v := range s.verdicts {
-		if err := send(v); err != nil {
-			return err
-		}
-	}
-	if s.end != nil {
-		return s.end
-	}
-	<-ctx.Done()
-	return ctx.Err()
-}
-
-func (s *fakeVerdictSubscription) Close() { close(s.closed) }
-
-func verdictFor(tenant, event string) verdict.RecordedDeviceVerdict {
-	return verdict.RecordedDeviceVerdict{EventID: event, Verdict: verdict.DeviceVerdict{DeviceID: 7, TenantID: tenant, Reason: "bad quote"}}
-}
-
-// mountVerdicts mounts the router behind a stand-in for the authentication
-// chain that publishes a session of tenantID, or none when it is empty.
-func mountVerdicts(opener verdict.StreamOpener, tenantID string) http.Handler {
+func mountVerdicts(poller VerdictPoller) *mux.Router {
 	root := mux.NewRouter()
-	api := root.PathPrefix("/api/v1").Subrouter()
-	api.Use(func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if tenantID != "" {
-				session := iammw.NewIAMSession(&iamsdk.User{ID: "1", TenantID: tenantID})
-				r = r.WithContext(iammw.SetSessionInContext(r.Context(), session))
-			}
-			next.ServeHTTP(w, r)
-		})
-	})
-	router := NewVerdictsRouter(opener, testWriter())
-	router.heartbeat = time.Millisecond
-	router.RegisterRoutes(api)
+	NewVerdictsRouter(poller, testWriter()).RegisterRoutes(root.PathPrefix("/api/v1").Subrouter())
 	return root
 }
 
-func TestVerdictsRouter_NilOpenerAnswers503(t *testing.T) {
+// pollVerdicts sends GET /api/v1/attestation/verdicts?query as a caller whose
+// verified session names tenantID; an empty tenantID sends no session.
+func pollVerdicts(router *mux.Router, tenantID, query string) *httptest.ResponseRecorder {
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/attestation/verdicts?"+query, nil)
+	if tenantID != "" {
+		session := iammw.NewIAMSession(&iamsdk.User{ID: "u1", TenantID: tenantID})
+		req = req.WithContext(iammw.SetSessionInContext(req.Context(), session))
+	}
 	w := httptest.NewRecorder()
-	mountVerdicts(nil, "t1").ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/v1/attestation/verdicts/stream", nil))
-	assert.Equal(t, http.StatusServiceUnavailable, w.Code)
+	router.ServeHTTP(w, req)
+	return w
 }
 
-func TestVerdictsRouter_OpenFailuresMapToStatus(t *testing.T) {
+// TestVerdictsRouter_PollsForTheSessionTenant pins the REST long-poll: the
+// cursor and wait reach the feed as given, the session's tenant decides what
+// the caller sees, and the page is the pb reply as protojson in the envelope.
+func TestVerdictsRouter_PollsForTheSessionTenant(t *testing.T) {
+	poller := &verdictPoller{page: &platformv1.PollDeviceVerdictsResponse{
+		Cursor:   "18f.4",
+		Verdicts: []*platformv1.DeviceVerdictEvent{{EventId: "ev-1", DeviceId: 7, TenantId: "tenant-a"}},
+	}}
+	w := pollVerdicts(mountVerdicts(poller), "tenant-a", "cursor=18f.3&wait_ms=2500")
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+
+	require.Len(t, poller.requests, 1)
+	assert.Equal(t, "18f.3", poller.requests[0].GetCursor())
+	assert.Equal(t, uint32(2500), poller.requests[0].GetWaitMs())
+	assert.True(t, poller.audiences[0].Admits("tenant-a"))
+	assert.False(t, poller.audiences[0].Admits("tenant-b"), "a tenant session must not see another tenant's verdicts")
+
+	payload := decodeEnvelope(t, w)["payload"].(map[string]any)
+	assert.Equal(t, "18f.4", payload["cursor"])
+	verdicts := payload["verdicts"].([]any)
+	require.Len(t, verdicts, 1)
+	assert.Equal(t, "ev-1", verdicts[0].(map[string]any)["eventId"])
+}
+
+func TestVerdictsRouter_PlatformSessionSeesEveryTenant(t *testing.T) {
+	poller := &verdictPoller{page: &platformv1.PollDeviceVerdictsResponse{Cursor: "18f.0"}}
+	w := pollVerdicts(mountVerdicts(poller), feed.PlatformTenantID, "")
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	assert.True(t, poller.audiences[0].Admits("tenant-b"))
+}
+
+func TestVerdictsRouter_Refusals(t *testing.T) {
 	tests := []struct {
-		name string
-		err  error
-		want int
+		name   string
+		poller VerdictPoller
+		tenant string
+		query  string
+		want   int
 	}{
-		{"forbidden", verdict.ErrStreamForbidden{Reason: "no tenant"}, http.StatusForbidden},
-		{"unavailable", verdict.ErrStreamUnavailable{}, http.StatusServiceUnavailable},
-		{"closed", verdict.ErrStreamClosed{}, http.StatusServiceUnavailable},
-		{"unknown", assert.AnError, http.StatusInternalServerError},
+		{name: "no feed on this node", poller: nil, tenant: "tenant-a", want: http.StatusServiceUnavailable},
+		{name: "no session tenant", poller: &verdictPoller{}, tenant: "", want: http.StatusForbidden},
+		{name: "malformed wait", poller: &verdictPoller{}, tenant: "tenant-a", query: "wait_ms=soon", want: http.StatusBadRequest},
+		{name: "missed verdicts", poller: &verdictPoller{err: status.Error(codes.ResourceExhausted, "missed")},
+			tenant: "tenant-a", want: http.StatusTooManyRequests},
+		{name: "malformed cursor", poller: &verdictPoller{err: status.Error(codes.InvalidArgument, "cursor")},
+			tenant: "tenant-a", want: http.StatusBadRequest},
+		{name: "feed closed", poller: &verdictPoller{err: status.Error(codes.Unavailable, "closed")},
+			tenant: "tenant-a", want: http.StatusServiceUnavailable},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			w := httptest.NewRecorder()
-			mountVerdicts(&fakeVerdictOpener{err: tt.err}, "t1").ServeHTTP(w,
-				httptest.NewRequest(http.MethodGet, "/api/v1/attestation/verdicts/stream", nil))
+			w := pollVerdicts(mountVerdicts(tt.poller), tt.tenant, tt.query)
 			assert.Equal(t, tt.want, w.Code, w.Body.String())
-			assert.NotContains(t, w.Header().Get("Content-Type"), "text/event-stream",
-				"a refusal must not start the event stream")
 		})
 	}
 }
 
-func TestVerdictsRouter_TellsTheStreamServiceWhoIsCalling(t *testing.T) {
-	cert := &tls.ConnectionState{PeerCertificates: []*x509.Certificate{{}}}
-	tests := []struct {
-		name     string
-		tenantID string
-		tls      *tls.ConnectionState
-		want     verdict.StreamPrincipal
-	}{
-		{"session tenant", "t1", nil, verdict.StreamPrincipal{TenantID: "t1"}},
-		{"certificate and no session", "", cert, verdict.StreamPrincipal{HasCertificate: true}},
-		{"no credential", "", nil, verdict.StreamPrincipal{}},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			opener := &fakeVerdictOpener{err: verdict.ErrStreamForbidden{Reason: "inspect only"}}
-			req := httptest.NewRequest(http.MethodGet, "/api/v1/attestation/verdicts/stream", nil)
-			req.TLS = tt.tls
-			mountVerdicts(opener, tt.tenantID).ServeHTTP(httptest.NewRecorder(), req)
-			assert.Equal(t, tt.want, opener.principal)
-			assert.False(t, opener.principal.UnixPeer, "REST has no Unix peer-credential caller")
-		})
-	}
-}
-
-func readSSELine(t *testing.T, r *bufio.Reader) string {
-	t.Helper()
-	line, err := r.ReadString('\n')
-	require.NoError(t, err)
-	return strings.TrimRight(line, "\n")
-}
-
-// TestVerdictsRouter_StreamsVerdictsAndReleasesOnDisconnect follows over a real
-// connection, reads a verdict, and disconnects: the subscription is closed.
-func TestVerdictsRouter_StreamsVerdictsAndReleasesOnDisconnect(t *testing.T) {
-	sub := newFakeSubscription(nil, verdictFor("t1", "ev-1"))
-	server := httptest.NewServer(mountVerdicts(&fakeVerdictOpener{subscription: sub}, "t1"))
-	defer server.Close()
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, server.URL+"/api/v1/attestation/verdicts/stream", nil)
-	require.NoError(t, err)
-	resp, err := http.DefaultClient.Do(req)
-	require.NoError(t, err)
-	defer resp.Body.Close()
-	require.Equal(t, http.StatusOK, resp.StatusCode)
-	assert.Equal(t, "text/event-stream", resp.Header.Get("Content-Type"))
-
-	reader := bufio.NewReader(resp.Body)
-	assert.Equal(t, ": subscribed", readSSELine(t, reader))
-	readSSELine(t, reader)
-	assert.Equal(t, "id: ev-1", readSSELine(t, reader))
-	assert.Equal(t, "event: verdict", readSSELine(t, reader))
-	data := readSSELine(t, reader)
-	assert.True(t, strings.HasPrefix(data, "data: {"), data)
-	assert.Contains(t, data, `"tenantId":"t1"`)
-	assert.Contains(t, data, `"reason":"bad quote"`)
-
-	cancel()
-	select {
-	case <-sub.closed:
-	case <-time.After(5 * time.Second):
-		t.Fatal("the subscription was not closed after the client disconnected")
-	}
-}
-
-func TestVerdictsRouter_SendsHeartbeatWhileIdle(t *testing.T) {
-	sub := newFakeSubscription(verdict.ErrStreamClosed{})
-	sub.beat = true
-	w := httptest.NewRecorder()
-	mountVerdicts(&fakeVerdictOpener{subscription: sub}, "t1").ServeHTTP(w,
-		httptest.NewRequest(http.MethodGet, "/api/v1/attestation/verdicts/stream", nil))
-	assert.Contains(t, w.Body.String(), ": heartbeat\n\n")
-}
-
-// TestVerdictsRouter_AnnouncesAnEndTheClientMustFollowAgain covers the two
-// ways the service ends a healthy stream: shutdown and a subscriber that fell
-// behind.
-func TestVerdictsRouter_AnnouncesAnEndTheClientMustFollowAgain(t *testing.T) {
-	for _, end := range []error{verdict.ErrStreamClosed{}, verdict.ErrSubscriberBehind{}} {
-		sub := newFakeSubscription(end)
-		w := httptest.NewRecorder()
-		mountVerdicts(&fakeVerdictOpener{subscription: sub}, "t1").ServeHTTP(w,
-			httptest.NewRequest(http.MethodGet, "/api/v1/attestation/verdicts/stream", nil))
-		assert.Contains(t, w.Body.String(), "event: error\n", end.Error())
-		select {
-		case <-sub.closed:
-		default:
-			t.Errorf("%v: the subscription was left open", end)
-		}
-	}
+func TestVerdictsRouter_RefusesBeforePolling(t *testing.T) {
+	poller := &verdictPoller{}
+	pollVerdicts(mountVerdicts(poller), "", "")
+	pollVerdicts(mountVerdicts(poller), "tenant-a", "wait_ms=-1")
+	assert.Empty(t, poller.requests, "a refused caller must not reach the feed")
 }

@@ -52,8 +52,9 @@ func newRekeyCommand(getFlags func() *cli.CommonFlags) *cobra.Command {
   --total       Optional. New Shamir total (paired with --threshold).
 
 Rekey is a Shamir-only operation. The server generates the new key and share
-material itself. New shares are sealed to enrolled Security Officers and must
-be claimed via the 'barrier share claim' flow.
+material itself. The new shares are not printed: they are sealed to enrolled
+Security Officers, and each officer claims theirs with
+'platformctl ceremony claim-share begin' and 'complete'.
 
 When --threshold / --total are omitted the existing share layout is preserved.`,
 		Args: cobra.NoArgs,
@@ -79,12 +80,7 @@ func validateRekeyFlags(f *rekeyFlags) error {
 		return ErrRekeyPartialFlags{}
 	}
 	if thresholdSet {
-		if f.total < 2 {
-			return ErrInvalidTotal{Total: f.total}
-		}
-		if f.threshold < 2 || f.threshold > f.total {
-			return ErrInvalidThreshold{Threshold: f.threshold, Total: f.total}
-		}
+		return validateShamirSplit(f.threshold, f.total)
 	}
 	return nil
 }

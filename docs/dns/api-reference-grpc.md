@@ -1,393 +1,131 @@
 # DNS gRPC API Reference
 
-gRPC service definition for the DNS service.
+> **Status: REFERENCE** · Last verified: 2026-10-15
+> The `DNSService` gRPC surface as declared in
+> `pkg/api/grpc/proto/platform_dns.proto`. The cross-transport matrix is
+> [api.md](api.md).
 
 | Property | Value |
 |----------|-------|
-| Service | `dns.DNSService` |
-| Port | 9443 |
-| Transport | TCP with TLS |
+| Service | `platform.v1.DNSService` |
+| Port | 10443 |
+| Transport | TCP with TLS (the Unix socket carries the same service, see [api-reference-unix.md](api-reference-unix.md)) |
+| Go package | `github.com/jeremyhahn/go-trusted-platform/sdk/go/gen` (`platformv1`) |
 
 ## Service Definition
 
 ```protobuf
-syntax = "proto3";
-package dns;
-
 service DNSService {
   // Zone operations
-  rpc CreateZone(CreateZoneRequest) returns (Zone);
-  rpc GetZone(GetZoneRequest) returns (Zone);
-  rpc UpdateZone(UpdateZoneRequest) returns (Zone);
+  rpc CreateZone(CreateZoneRequest) returns (CreateZoneResponse);
+  rpc GetZone(GetZoneRequest) returns (GetZoneResponse);
+  rpc UpdateZone(UpdateZoneRequest) returns (UpdateZoneResponse);
   rpc DeleteZone(DeleteZoneRequest) returns (DeleteZoneResponse);
   rpc ListZones(ListZonesRequest) returns (ListZonesResponse);
 
   // Record operations
-  rpc AddRecord(AddRecordRequest) returns (Record);
-  rpc GetRecord(GetRecordRequest) returns (Record);
-  rpc UpdateRecord(UpdateRecordRequest) returns (Record);
+  rpc AddRecord(AddRecordRequest) returns (AddRecordResponse);
   rpc DeleteRecord(DeleteRecordRequest) returns (DeleteRecordResponse);
+  rpc UpdateRecord(UpdateRecordRequest) returns (UpdateRecordResponse);
   rpc ListRecords(ListRecordsRequest) returns (ListRecordsResponse);
 
-  // TLSA/DANE
-  rpc AddTLSARecord(AddTLSARecordRequest) returns (TLSARecord);
+  // DNSSEC operations
+  rpc SignZone(SignZoneRequest) returns (SignZoneResponse);
+  rpc GetDNSSECStatus(GetDNSSECStatusRequest) returns (GetDNSSECStatusResponse);
 
   // Resolution
   rpc Resolve(ResolveRequest) returns (ResolveResponse);
+
+  // Registration
+  rpc Register(RegisterRequest) returns (RegisterResponse);
 }
 ```
 
-## Zone Operations
+There is no `GetRecord` rpc: list the zone's records with a `type` and pick
+the name ([api.md](api.md) §2). There is no separate TLSA rpc: add a `Record`
+of type `RECORD_TYPE_TLSA`.
 
-### CreateZone
+## Requests and Responses
+
+| RPC | Request fields | Response fields |
+|-----|----------------|-----------------|
+| `CreateZone` | `name`, `ttl`, `description`, `internal`, `soa`, `ns_records` | `status`, `zone` |
+| `GetZone` | `name` | `zone` |
+| `UpdateZone` | `name`, `ttl`, `description` | `status`, `zone` |
+| `DeleteZone` | `name` | `status` |
+| `ListZones` | `internal_only`, `public_only`, `pagination` | `zones`, `pagination` |
+| `AddRecord` | `zone_name`, `record` | `status`, `zone` |
+| `DeleteRecord` | `zone_name`, `type`, `name` | `status`, `zone` |
+| `UpdateRecord` | `zone_name`, `old_record`, `new_record` | `status`, `zone` |
+| `ListRecords` | `zone_name`, `type` | `records` |
+| `SignZone` | `zone_name` | `status`, `zone` |
+| `GetDNSSECStatus` | `zone_name` | `status` (`enabled`, `zone_signed`, `keys`, `ds_records`, `algorithm`, `key_size`) |
+| `Resolve` | `fqdn`, `type` | `records`, `authoritative` |
+| `Register` | `fqdn`, `ip` | `status`, `zone` |
+
+## Records
+
+A `Record` is a `RecordType` plus a `oneof` body:
 
 ```protobuf
-message CreateZoneRequest {
-  string name = 1;
-  uint32 ttl = 2;
-  string description = 3;
-  bool internal = 4;
-  RecordSet records = 5;
-}
-
-message Zone {
-  uint64 id = 1;
-  string name = 2;
-  uint32 ttl = 3;
-  string description = 4;
-  bool internal = 5;
-  RecordSet records = 6;
+message Record {
+  RecordType type = 1;
+  oneof record {
+    ARecord a = 2;
+    AAAARecord aaaa = 3;
+    CNAMERecord cname = 4;
+    MXRecord mx = 5;
+    NSRecord ns = 6;
+    TXTRecord txt = 7;
+    SRVRecord srv = 8;
+    CAARecord caa = 9;
+    TLSARecord tlsa = 10;
+  }
 }
 ```
 
-**Go Example:**
+`RecordType` runs from `RECORD_TYPE_A` (1) to `RECORD_TYPE_NSEC3PARAM` (16).
+A zone's `RecordSet` carries `soa` and one repeated field per type
+(`a_records`, `aaaa_records`, `tlsa_records`, …), including the DNSSEC types a
+signed zone holds.
+
+## Example
+
 ```go
-resp, err := client.CreateZone(ctx, &dns.CreateZoneRequest{
-    Name:        "myzone.internal.",
-    Ttl:         3600,
-    Description: "My zone",
-    Internal:    true,
-    Records: &dns.RecordSet{
-        Soa: &dns.SOARecord{
-            Name:   "myzone.internal.",
-            Mname:  "ns1.myzone.internal.",
-            Rname:  "hostmaster.myzone.internal.",
-            Serial: 1,
+import (
+    "crypto/tls"
+
+    platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
+    "google.golang.org/grpc"
+    "google.golang.org/grpc/credentials"
+)
+
+conn, err := grpc.NewClient("localhost:10443",
+    grpc.WithTransportCredentials(credentials.NewTLS(tlsConfig)))
+if err != nil {
+    return err
+}
+client := platformv1.NewDNSServiceClient(conn)
+
+_, err = client.AddRecord(ctx, &platformv1.AddRecordRequest{
+    ZoneName: "example.internal.",
+    Record: &platformv1.Record{
+        Type: platformv1.RecordType_RECORD_TYPE_A,
+        Record: &platformv1.Record_A{
+            A: &platformv1.ARecord{Name: "server01", Value: "192.0.2.10", Ttl: 300},
         },
     },
 })
 ```
 
-### GetZone
+## Errors
 
-```protobuf
-message GetZoneRequest {
-  string name = 1;
-}
-```
+Status codes follow [api.md](api.md) §5: `NOT_FOUND` for an unknown zone or
+record (including a zone of another tenant), `ALREADY_EXISTS` for a taken zone
+name, `INVALID_ARGUMENT` for a malformed request or unsupported record type,
+`PERMISSION_DENIED` for a missing `dns:*` scope.
 
-**Go Example:**
-```go
-zone, err := client.GetZone(ctx, &dns.GetZoneRequest{
-    Name: "myzone.internal.",
-})
-```
-
-### UpdateZone
-
-```protobuf
-message UpdateZoneRequest {
-  string name = 1;
-  uint32 ttl = 2;
-  string description = 3;
-  RecordSet records = 4;
-}
-```
-
-### DeleteZone
-
-```protobuf
-message DeleteZoneRequest {
-  string name = 1;
-}
-
-message DeleteZoneResponse {
-  bool deleted = 1;
-  string zone_name = 2;
-}
-```
-
-### ListZones
-
-```protobuf
-message ListZonesRequest {
-  bool internal = 1;
-  uint32 limit = 2;
-  uint32 offset = 3;
-}
-
-message ListZonesResponse {
-  repeated Zone zones = 1;
-  uint32 total = 2;
-  uint32 limit = 3;
-  uint32 offset = 4;
-}
-```
-
-## Record Operations
-
-### AddRecord
-
-```protobuf
-message AddRecordRequest {
-  string zone_name = 1;
-  string type = 2;
-  string name = 3;
-  string value = 4;
-  uint32 ttl = 5;
-  uint32 priority = 6;  // MX, SRV
-  uint32 weight = 7;    // SRV
-  uint32 port = 8;      // SRV
-  string target = 9;    // SRV
-}
-
-message Record {
-  string type = 1;
-  string name = 2;
-  string value = 3;
-  uint32 ttl = 4;
-  uint32 priority = 5;
-  uint32 weight = 6;
-  uint32 port = 7;
-  string target = 8;
-}
-```
-
-**Go Example:**
-```go
-record, err := client.AddRecord(ctx, &dns.AddRecordRequest{
-    ZoneName: "myzone.internal.",
-    Type:     "A",
-    Name:     "server01",
-    Value:    "192.168.1.100",
-    Ttl:      3600,
-})
-```
-
-### GetRecord
-
-```protobuf
-message GetRecordRequest {
-  string zone_name = 1;
-  string type = 2;
-  string name = 3;
-}
-```
-
-### UpdateRecord
-
-```protobuf
-message UpdateRecordRequest {
-  string zone_name = 1;
-  string type = 2;
-  string name = 3;
-  string value = 4;
-  uint32 ttl = 5;
-}
-```
-
-### DeleteRecord
-
-```protobuf
-message DeleteRecordRequest {
-  string zone_name = 1;
-  string type = 2;
-  string name = 3;
-}
-
-message DeleteRecordResponse {
-  bool deleted = 1;
-  string type = 2;
-  string name = 3;
-}
-```
-
-### ListRecords
-
-```protobuf
-message ListRecordsRequest {
-  string zone_name = 1;
-  string type = 2;  // optional filter
-}
-
-message ListRecordsResponse {
-  string zone_name = 1;
-  RecordSet records = 2;
-}
-```
-
-## TLSA/DANE
-
-### AddTLSARecord
-
-```protobuf
-message AddTLSARecordRequest {
-  string zone_name = 1;
-  string name = 2;
-  uint32 usage = 3;
-  uint32 selector = 4;
-  uint32 matching_type = 5;
-  bytes certificate = 6;
-  uint32 ttl = 7;
-}
-
-message TLSARecord {
-  string name = 1;
-  uint32 usage = 2;
-  uint32 selector = 3;
-  uint32 matching_type = 4;
-  string certificate_data = 5;
-  uint32 ttl = 6;
-}
-```
-
-**Go Example:**
-```go
-tlsa, err := client.AddTLSARecord(ctx, &dns.AddTLSARecordRequest{
-    ZoneName:     "example.com.",
-    Name:         "_443._tcp.www",
-    Usage:        3,
-    Selector:     1,
-    MatchingType: 1,
-    Certificate:  certData,
-    Ttl:          3600,
-})
-```
-
-## Resolution
-
-### Resolve
-
-```protobuf
-message ResolveRequest {
-  string name = 1;
-  string type = 2;
-}
-
-message ResolveResponse {
-  string name = 1;
-  string type = 2;
-  uint32 ttl = 3;
-  repeated Answer answers = 4;
-}
-
-message Answer {
-  string value = 1;
-}
-```
-
-**Go Example:**
-```go
-resp, err := client.Resolve(ctx, &dns.ResolveRequest{
-    Name: "ns1.example.internal.",
-    Type: "A",
-})
-```
-
-## Message Types
-
-```protobuf
-message RecordSet {
-  SOARecord soa = 1;
-  repeated ARecord a = 2;
-  repeated AAAARecord aaaa = 3;
-  repeated CNAMERecord cname = 4;
-  repeated MXRecord mx = 5;
-  repeated NSRecord ns = 6;
-  repeated SRVRecord srv = 7;
-  repeated TXTRecord txt = 8;
-  repeated TLSARecord tlsa = 9;
-}
-
-message SOARecord {
-  string name = 1;
-  string mname = 2;
-  string rname = 3;
-  uint32 serial = 4;
-  uint32 refresh = 5;
-  uint32 retry = 6;
-  uint32 expire = 7;
-  uint32 min_ttl = 8;
-  uint32 ttl = 9;
-}
-
-message ARecord {
-  string name = 1;
-  string value = 2;
-  uint32 ttl = 3;
-}
-
-message AAAARecord {
-  string name = 1;
-  string value = 2;
-  uint32 ttl = 3;
-}
-
-message MXRecord {
-  string name = 1;
-  string value = 2;
-  uint32 priority = 3;
-  uint32 ttl = 4;
-}
-
-message SRVRecord {
-  string name = 1;
-  string target = 2;
-  uint32 port = 3;
-  uint32 priority = 4;
-  uint32 weight = 5;
-  uint32 ttl = 6;
-}
-```
-
-## Error Handling
-
-gRPC status codes map to DNS errors:
-
-| gRPC Code | DNS Error |
-|-----------|-----------|
-| `NOT_FOUND` | zone_not_found, record_not_found |
-| `ALREADY_EXISTS` | zone_already_exists, record_already_exists |
-| `INVALID_ARGUMENT` | invalid_zone_name, invalid_ip_address |
-| `UNAUTHENTICATED` | unauthorized |
-| `PERMISSION_DENIED` | forbidden |
-
-**Go Example:**
-```go
-zone, err := client.GetZone(ctx, req)
-if err != nil {
-    if status.Code(err) == codes.NotFound {
-        // Handle zone not found
-    }
-}
-```
-
-## Client Setup
-
-```go
-import (
-    "crypto/tls"
-    "google.golang.org/grpc"
-    "google.golang.org/grpc/credentials"
-    dns "github.com/trusted-platform/api/dns/v1"
-)
-
-func NewDNSClient(addr string, tlsConfig *tls.Config) (dns.DNSServiceClient, error) {
-    creds := credentials.NewTLS(tlsConfig)
-    conn, err := grpc.Dial(addr, grpc.WithTransportCredentials(creds))
-    if err != nil {
-        return nil, err
-    }
-    return dns.NewDNSServiceClient(conn), nil
-}
-```
+With no `dns:` section the answer is `UNAVAILABLE` with an `ErrorInfo` detail,
+reason `SERVICE_NOT_CONFIGURED` and metadata `service=dns`. Every method checks
+for the backend before it reads the request, so an empty request answers
+`UNAVAILABLE` too, not `INVALID_ARGUMENT`.

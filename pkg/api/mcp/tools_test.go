@@ -15,7 +15,12 @@ package mcp
 
 import (
 	"context"
+	"errors"
+	"reflect"
+	"slices"
 	"testing"
+
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/mcpwire"
 )
 
 func TestNewToolRegistry(t *testing.T) {
@@ -79,10 +84,11 @@ func TestToolRegistry_ListTools(t *testing.T) {
 			// Device
 			"device_register", "device_get", "device_list", "device_delete",
 			"device_update", "device_attest", "device_record_attest_cert", "device_provision",
+			"device_disable", "device_enable",
 			// SDN
 			"sdn_get_port_state", "sdn_set_port_state", "sdn_list_bridges",
 			"sdn_create_bridge", "sdn_delete_bridge", "sdn_add_port", "sdn_delete_port",
-			"sdn_apply_policy", "sdn_get_policy", "sdn_list_policies",
+			"sdn_apply_policy", "sdn_get_policy", "sdn_list_policies", "sdn_delete_policy",
 			// Health
 			"platform_health", "platform_liveness", "platform_readiness",
 		}
@@ -129,6 +135,89 @@ func TestToolRegistry_ListTools(t *testing.T) {
 			}
 		}
 	})
+}
+
+// duplicateToolNames returns each tool name that appears more than once in
+// tools, once, in the order its second registration appears.
+func duplicateToolNames(tools []mcpwire.ToolDefinition) []string {
+	seen := make(map[string]int, len(tools))
+	var duplicates []string
+	for _, tool := range tools {
+		seen[tool.Name]++
+		if seen[tool.Name] == 2 {
+			duplicates = append(duplicates, tool.Name)
+		}
+	}
+	return duplicates
+}
+
+// TestToolRegistry_EachToolNameRegisteredOnce is the #250 regression: the
+// vtpm_template_{create,get,list,delete} tools were registered twice, once
+// with the schema their executor reads and once with argument names it
+// ignores, and tools/list advertised both.
+func TestToolRegistry_EachToolNameRegisteredOnce(t *testing.T) {
+	registry := NewToolRegistry(newMockServiceProvider(), newTestLogger())
+
+	if duplicates := duplicateToolNames(registry.ListTools()); len(duplicates) > 0 {
+		t.Errorf("tools registered more than once: %v", duplicates)
+	}
+}
+
+func TestDuplicateToolNames_ReportsReRegisteredTool(t *testing.T) {
+	registry := NewToolRegistry(newMockServiceProvider(), newTestLogger())
+	first := registry.ListTools()[0]
+	registry.addTool(first)
+	registry.addTool(first)
+
+	duplicates := duplicateToolNames(registry.ListTools())
+	if len(duplicates) != 1 || duplicates[0] != first.Name {
+		t.Errorf("duplicateToolNames = %v, want [%s] reported once", duplicates, first.Name)
+	}
+}
+
+// toolProperty returns the named input-schema property of the named tool,
+// or nil when the tool or the property is absent.
+func toolProperty(tools []mcpwire.ToolDefinition, toolName, property string) map[string]interface{} {
+	for _, tool := range tools {
+		if tool.Name != toolName {
+			continue
+		}
+		properties, _ := tool.InputSchema["properties"].(map[string]interface{})
+		prop, _ := properties[property].(map[string]interface{})
+		return prop
+	}
+	return nil
+}
+
+// TestVTPMTemplateCreate_AlgorithmEnum is the #401 regression: the
+// vtpm_template_create schema advertised a free-form algorithm, while
+// VTPMCreateTemplate understands only RSA and ECC and reads anything else
+// as RSA.
+func TestVTPMTemplateCreate_AlgorithmEnum(t *testing.T) {
+	registry := NewToolRegistry(newMockServiceProvider(), newTestLogger())
+
+	algorithm := toolProperty(registry.ListTools(), "vtpm_template_create", "algorithm")
+	if algorithm == nil {
+		t.Fatal("vtpm_template_create has no algorithm property")
+	}
+	enum, _ := algorithm["enum"].([]string)
+	if !reflect.DeepEqual(enum, []string{"RSA", "ECC"}) {
+		t.Errorf("algorithm enum = %v, want [RSA ECC]", algorithm["enum"])
+	}
+	if !slices.Contains(enum, algorithm["default"].(string)) {
+		t.Errorf("algorithm default %v is not in enum %v", algorithm["default"], enum)
+	}
+}
+
+func TestToolProperty_MissingToolOrProperty(t *testing.T) {
+	tools := NewToolRegistry(newMockServiceProvider(), newTestLogger()).ListTools()
+
+	if prop := toolProperty(tools, "no_such_tool", "algorithm"); prop != nil {
+		t.Errorf("toolProperty(no_such_tool) = %v, want nil", prop)
+	}
+	if prop := toolProperty(tools, "vtpm_template_create", "no_such_property"); prop != nil {
+		t.Errorf("toolProperty(no_such_property) = %v, want nil", prop)
+	}
 }
 
 func TestToolRegistry_SetAuthorizationChecker(t *testing.T) {
@@ -230,7 +319,7 @@ func TestToolRegistry_VTPMTools(t *testing.T) {
 
 	t.Run("vtpm_create error", func(t *testing.T) {
 		svc := newMockServiceProvider()
-		svc.vtpmCreateFunc = func(ctx context.Context, name, algorithm string) (interface{}, error) {
+		svc.vtpmCreateFunc = func(ctx context.Context, name, algorithm string, secureBoot bool, labels map[string]string) (interface{}, error) {
 			return nil, ErrMockServiceError
 		}
 		registry := NewToolRegistry(svc, log)
@@ -478,30 +567,29 @@ func TestToolRegistry_DeviceTools(t *testing.T) {
 
 	t.Run("device_register success", func(t *testing.T) {
 		args := map[string]interface{}{
-			"name":        "test-device",
-			"device_type": "iot",
-			"public_key":  "dGVzdC1rZXk=", // base64 "test-key"
+			"serial": "SN-533",
+			"model":  "model-533",
 		}
 
 		result, err := registry.ExecuteTool(ctx, "device_register", args)
 		if err != nil {
-			t.Errorf("unexpected error: %v", err)
+			t.Fatalf("unexpected error: %v", err)
 		}
-		if result == nil {
-			t.Error("result should not be nil")
+		resultMap, ok := result.(map[string]interface{})
+		if !ok {
+			t.Fatalf("result is %T, want a map", result)
+		}
+		if resultMap["serial"] != "SN-533" || resultMap["model"] != "model-533" {
+			t.Errorf("result = %v, want serial SN-533 and model model-533", resultMap)
 		}
 	})
 
-	t.Run("device_register with invalid base64", func(t *testing.T) {
-		args := map[string]interface{}{
-			"name":        "test-device",
-			"device_type": "iot",
-			"public_key":  "not-valid-base64!!!",
-		}
+	t.Run("device_register without serial", func(t *testing.T) {
+		args := map[string]interface{}{"model": "model-533"}
 
 		_, err := registry.ExecuteTool(ctx, "device_register", args)
-		if err == nil {
-			t.Error("expected error for invalid base64")
+		if !errors.Is(err, ErrDeviceSerialRequired) {
+			t.Errorf("err = %v, want ErrDeviceSerialRequired", err)
 		}
 	})
 
@@ -559,21 +647,19 @@ func TestToolRegistry_DeviceTools(t *testing.T) {
 	t.Run("device_update success", func(t *testing.T) {
 		args := map[string]interface{}{
 			"device_id": "device-123",
-			"updates": map[string]interface{}{
-				"status": "inactive",
-			},
+			"model":     "model-updated",
 		}
 
 		result, err := registry.ExecuteTool(ctx, "device_update", args)
 		if err != nil {
-			t.Errorf("unexpected error: %v", err)
+			t.Fatalf("unexpected error: %v", err)
 		}
 		resultMap, ok := result.(map[string]interface{})
 		if !ok {
 			t.Fatal("result is not a map")
 		}
-		if success, ok := resultMap["success"].(bool); !ok || !success {
-			t.Error("expected success: true")
+		if resultMap["id"] != "device-123" {
+			t.Errorf("result = %v, want the stored device-123", resultMap)
 		}
 	})
 
@@ -755,14 +841,27 @@ func TestToolRegistry_SDNTools(t *testing.T) {
 	})
 
 	t.Run("sdn_apply_policy success", func(t *testing.T) {
-		args := map[string]interface{}{
-			"policy_id":   "policy-1",
-			"bridge_name": "br0",
-		}
+		args := map[string]interface{}{"name": "test-policy", "type": "acl"}
 
 		result, err := registry.ExecuteTool(ctx, "sdn_apply_policy", args)
 		if err != nil {
 			t.Errorf("unexpected error: %v", err)
+		}
+		resultMap, ok := result.(map[string]interface{})
+		if !ok {
+			t.Fatal("result is not a map")
+		}
+		if resultMap["id"] != "policy-1" || resultMap["name"] != "test-policy" {
+			t.Errorf("applied policy = %v, want id policy-1 name test-policy", resultMap)
+		}
+	})
+
+	t.Run("sdn_delete_policy success", func(t *testing.T) {
+		args := map[string]interface{}{"policy_id": "policy-1"}
+
+		result, err := registry.ExecuteTool(ctx, "sdn_delete_policy", args)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
 		}
 		resultMap, ok := result.(map[string]interface{})
 		if !ok {
@@ -809,16 +908,37 @@ func TestToolRegistry_SDNFlowTools(t *testing.T) {
 	registry := NewToolRegistry(svc, log)
 
 	t.Run("sdn_add_flow success", func(t *testing.T) {
+		var gotBridge string
+		var gotFlow map[string]interface{}
+		flowSvc := newMockServiceProvider()
+		flowSvc.sdnAddFlowFunc = func(_ context.Context, bridgeName string, flow map[string]interface{}) (interface{}, error) {
+			gotBridge, gotFlow = bridgeName, flow
+			return flow, nil
+		}
 		args := map[string]interface{}{
 			"bridge_name": "br0",
-			"flow": map[string]interface{}{
-				"priority": 100,
-				"match":    map[string]interface{}{"in_port": 1},
-				"actions":  []string{"output:2"},
-			},
+			"_token":      "token",
+			"priority":    100,
+			"match":       map[string]interface{}{"in_port": "1"},
+			"actions":     []interface{}{map[string]interface{}{"type": "FLOW_ACTION_OUTPUT", "port": "2"}},
+			"mtch":        "typo",
 		}
 
-		result, err := registry.ExecuteTool(ctx, "sdn_add_flow", args)
+		result, err := NewToolRegistry(flowSvc, log).ExecuteTool(ctx, "sdn_add_flow", args)
+		if gotBridge != "br0" {
+			t.Errorf("bridge = %q, want br0", gotBridge)
+		}
+		// The body is every argument but the bridge and the token, so the
+		// service's strict decode sees the typo instead of a flow without it.
+		wantFlow := map[string]interface{}{
+			"priority": 100,
+			"match":    args["match"],
+			"actions":  args["actions"],
+			"mtch":     "typo",
+		}
+		if !reflect.DeepEqual(gotFlow, wantFlow) {
+			t.Errorf("flow body = %v, want %v", gotFlow, wantFlow)
+		}
 		if err != nil {
 			t.Errorf("unexpected error: %v", err)
 		}
@@ -947,55 +1067,6 @@ func TestToolRegistry_SDNVLANTools(t *testing.T) {
 		}
 		if _, ok := resultMap["vlans"]; !ok {
 			t.Error("expected 'vlans' key in result")
-		}
-	})
-}
-
-func TestToolRegistry_SDNPortAuthTools(t *testing.T) {
-	ctx := context.Background()
-	svc := newMockServiceProvider()
-	log := newTestLogger()
-	registry := NewToolRegistry(svc, log)
-
-	t.Run("sdn_authenticate_port success", func(t *testing.T) {
-		args := map[string]interface{}{
-			"bridge_name": "br0",
-			"port_name":   "eth0",
-			"credentials": map[string]interface{}{
-				"username": "user",
-				"password": "pass",
-			},
-		}
-
-		result, err := registry.ExecuteTool(ctx, "sdn_authenticate_port", args)
-		if err != nil {
-			t.Errorf("unexpected error: %v", err)
-		}
-		resultMap, ok := result.(map[string]interface{})
-		if !ok {
-			t.Fatal("result is not a map")
-		}
-		if success, ok := resultMap["success"].(bool); !ok || !success {
-			t.Error("expected success: true")
-		}
-	})
-
-	t.Run("sdn_revoke_port_auth success", func(t *testing.T) {
-		args := map[string]interface{}{
-			"bridge_name": "br0",
-			"port_name":   "eth0",
-		}
-
-		result, err := registry.ExecuteTool(ctx, "sdn_revoke_port_auth", args)
-		if err != nil {
-			t.Errorf("unexpected error: %v", err)
-		}
-		resultMap, ok := result.(map[string]interface{})
-		if !ok {
-			t.Fatal("result is not a map")
-		}
-		if success, ok := resultMap["success"].(bool); !ok || !success {
-			t.Error("expected success: true")
 		}
 	})
 }

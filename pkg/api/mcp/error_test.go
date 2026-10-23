@@ -41,7 +41,6 @@ func TestVMError_PredefinedErrors(t *testing.T) {
 		expected string
 	}{
 		{"ErrVMServiceUnavailable", ErrVMServiceUnavailable, "VM_SERVICE_UNAVAILABLE: VM service is not available"},
-		{"ErrVMNameRequired", ErrVMNameRequired, "VM_NAME_REQUIRED: VM name is required"},
 		{"ErrVMIDRequired", ErrVMIDRequired, "VM_ID_REQUIRED: VM ID is required"},
 		{"ErrVMNotFound", ErrVMNotFound, "VM_NOT_FOUND: VM not found"},
 		{"ErrSnapshotNameRequired", ErrSnapshotNameRequired, "SNAPSHOT_NAME_REQUIRED: snapshot name is required"},
@@ -129,14 +128,6 @@ func TestAttestationError_PredefinedErrors(t *testing.T) {
 	}{
 		{"ErrAttestationServiceUnavailable", ErrAttestationServiceUnavailable, "ATTESTATION_SERVICE_UNAVAILABLE: attestation service is not available"},
 		{"ErrManifestIDRequired", ErrManifestIDRequired, "MANIFEST_ID_REQUIRED: manifest ID is required"},
-		{"ErrReportIDRequired", ErrReportIDRequired, "REPORT_ID_REQUIRED: report ID is required"},
-		{"ErrPolicyIDRequired", ErrPolicyIDRequired, "POLICY_ID_REQUIRED: policy ID is required"},
-		{"ErrPolicyNameRequired", ErrPolicyNameRequired, "POLICY_NAME_REQUIRED: policy name is required"},
-		{"ErrHostIDRequired", ErrHostIDRequired, "HOST_ID_REQUIRED: host ID is required"},
-		{"ErrWorkloadIDRequired", ErrWorkloadIDRequired, "WORKLOAD_ID_REQUIRED: workload ID is required"},
-		{"ErrWorkloadTypeRequired", ErrWorkloadTypeRequired, "WORKLOAD_TYPE_REQUIRED: workload type is required"},
-		{"ErrEvidenceRequired", ErrEvidenceRequired, "EVIDENCE_REQUIRED: attestation evidence is required"},
-		{"ErrAttestationDataRequired", ErrAttestationDataRequired, "ATTESTATION_DATA_REQUIRED: attestation data is required"},
 	}
 
 	for _, tt := range tests {
@@ -385,47 +376,7 @@ func TestTenantError_PredefinedErrors(t *testing.T) {
 		expected string
 	}{
 		{"ErrTenantServiceUnavailable", ErrTenantServiceUnavailable, "TENANT_SERVICE_UNAVAILABLE: tenant management service is not available"},
-		{"ErrTenantIDRequired", ErrTenantIDRequired, "TENANT_ID_REQUIRED: tenant ID is required"},
-		{"ErrTenantNameRequired", ErrTenantNameRequired, "TENANT_NAME_REQUIRED: tenant name is required"},
-		{"ErrTenantResourceTypeRequired", ErrTenantResourceTypeRequired, "TENANT_RESOURCE_TYPE_REQUIRED: resource type is required"},
-		{"ErrTenantAmountRequired", ErrTenantAmountRequired, "TENANT_AMOUNT_REQUIRED: amount is required"},
-		{"ErrTenantInvalidResourceType", ErrTenantInvalidResourceType, "TENANT_INVALID_RESOURCE_TYPE: invalid resource type"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if tt.err.Error() != tt.expected {
-				t.Errorf("expected %q, got %q", tt.expected, tt.err.Error())
-			}
-		})
-	}
-}
-
-func TestPXEErrorCoverage(t *testing.T) {
-	err := &PXEError{
-		Code:    "PXE_TEST",
-		Message: "test PXE error",
-	}
-
-	expected := "PXE_TEST: test PXE error"
-	if err.Error() != expected {
-		t.Errorf("expected %q, got %q", expected, err.Error())
-	}
-}
-
-func TestPXEError_PredefinedErrors(t *testing.T) {
-	tests := []struct {
-		name     string
-		err      error
-		expected string
-	}{
-		{"ErrPXEServiceUnavailable", ErrPXEServiceUnavailable, "PXE_SERVICE_UNAVAILABLE: PXE provisioning service is not available"},
-		{"ErrPXEDeviceIDRequired", ErrPXEDeviceIDRequired, "PXE_DEVICE_ID_REQUIRED: device ID is required"},
-		{"ErrPXEMACAddressRequired", ErrPXEMACAddressRequired, "PXE_MAC_ADDRESS_REQUIRED: MAC address is required"},
-		{"ErrPXEPortIDRequired", ErrPXEPortIDRequired, "PXE_PORT_ID_REQUIRED: port ID is required"},
-		{"ErrPXEStateRequired", ErrPXEStateRequired, "PXE_STATE_REQUIRED: state is required"},
-		{"ErrPXEDeviceNotFound", ErrPXEDeviceNotFound, "PXE_DEVICE_NOT_FOUND: device not found"},
-		{"ErrPXEInvalidState", ErrPXEInvalidState, "PXE_INVALID_STATE: invalid provisioning state"},
+		{"ErrTenantBarrierUnsealKeyDecode", ErrTenantBarrierUnsealKeyDecode, "TENANT_BARRIER_UNSEAL_KEY_DECODE: failed to base64-decode barrier unseal key"},
 	}
 
 	for _, tt := range tests {

@@ -13,7 +13,11 @@
 
 package mcp
 
-import "context"
+import (
+	"context"
+
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/mcpwire"
+)
 
 // ContainerOpsServiceProvider is the optional capability a ServiceProvider
 // implements to serve the operational container tools (container_exec,
@@ -34,7 +38,7 @@ type ContainerOpsServiceProvider interface {
 // streaming session that has no single-response MCP tool model; it is exposed
 // on the gRPC (server-streaming) and REST transports instead.
 func (r *ToolRegistry) registerContainerOpsTools() {
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "container_exec",
 		Description: "Execute a command inside a running container and return its stdout, stderr, and exit code",
 		InputSchema: map[string]interface{}{
@@ -67,7 +71,7 @@ func (r *ToolRegistry) registerContainerOpsTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "container_metrics",
 		Description: "Get resource-usage metrics (CPU, memory, disk I/O, network) for a running container",
 		InputSchema: map[string]interface{}{

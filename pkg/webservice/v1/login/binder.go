@@ -14,6 +14,7 @@
 package login
 
 import (
+	"context"
 	"net/http"
 
 	quicbaas "github.com/jeremyhahn/go-quicbaas/sdk/go"
@@ -55,6 +56,13 @@ type Binder interface {
 	// share one request; a challenge binder reads the session its client
 	// echoed back and ignores this argument.
 	Finish(r *http.Request, sessionID string) (quicbaas.FinishLoginRequest, error)
+
+	// Tenant names the tenant the session minted for identity lands in.
+	// The backbone reports the tenant the ceremony ran in, which is not
+	// always the tenant the login is for: a browser login lands in the
+	// principal's own workspace (#662). A binder that cannot name the
+	// tenant fails rather than falling back to the ceremony's.
+	Tenant(ctx context.Context, identity *quicbaas.Identity) (string, error)
 }
 
 // binders indexes the registered binders by factor type for O(1)

@@ -270,8 +270,10 @@ func TestMCPServiceProvider_DaemonOps_NilService(t *testing.T) {
 	}
 }
 
-// TestMCPServiceProvider_OverlayStubs verifies overlay stub methods.
-func TestMCPServiceProvider_OverlayStubs(t *testing.T) {
+// TestMCPServiceProvider_OverlayWithoutController verifies every overlay
+// verb answers that the overlay service is unavailable when no overlay
+// controller is wired.
+func TestMCPServiceProvider_OverlayWithoutController(t *testing.T) {
 	ctx := context.Background()
 	p := newMCPProvider()
 
@@ -293,14 +295,15 @@ func TestMCPServiceProvider_OverlayStubs(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			err := tt.fn()
-			if err == nil {
-				t.Fatal("expected error")
+			if !errors.Is(err, mcp.ErrOverlayServiceUnavailable) {
+				t.Fatalf("err = %v, want %v", err, mcp.ErrOverlayServiceUnavailable)
 			}
 		})
 	}
 }
 
-// TestMCPServiceProvider_GatewayStubs verifies gateway stub methods.
+// TestMCPServiceProvider_GatewayStubs verifies the gateway tools fail on a
+// provider with no gateway service, allocator or BGP speaker wired.
 func TestMCPServiceProvider_GatewayStubs(t *testing.T) {
 	ctx := context.Background()
 	p := newMCPProvider()
@@ -356,21 +359,25 @@ func TestMCPServiceProvider_TPMStubs(t *testing.T) {
 		{"TPMDeleteSRK", func() error { _, err := p.TPMDeleteSRK(ctx); return err }},
 		{"TPMGetIAK", func() error { _, err := p.TPMGetIAK(ctx); return err }},
 		{"TPMCreateIAK", func() error { _, err := p.TPMCreateIAK(ctx); return err }},
-		{"TPMDeleteIAK", func() error { _, err := p.TPMDeleteIAK(ctx); return err }},
 		{"TPMQuote", func() error { _, err := p.TPMQuote(ctx, []byte("n"), []int{0}); return err }},
-		{"TPMVerifyQuote", func() error { _, err := p.TPMVerifyQuote(ctx, []byte("q"), []byte("s"), []byte("n")); return err }},
+		{"TPMVerifyQuote", func() error {
+			_, err := p.TPMVerifyQuote(ctx, &mcp.TPMVerifyQuoteRequest{
+				Quote: []byte("q"), Signature: []byte("s"), Nonce: []byte("n"), SignatureAlgorithm: "SHA256-RSAPSS",
+			})
+			return err
+		}},
 		{"TPMReadPCRs", func() error { _, err := p.TPMReadPCRs(ctx, []int{0}); return err }},
-		{"TPMExtendPCR", func() error { _, err := p.TPMExtendPCR(ctx, 0, []byte("d")); return err }},
+		{"TPMExtendPCR", func() error { _, err := p.TPMExtendPCR(ctx, 0, "", []byte("d")); return err }},
 		{"TPMEventLog", func() error { _, err := p.TPMEventLog(ctx); return err }},
 		{"TPMCapabilities", func() error { _, err := p.TPMCapabilities(ctx); return err }},
 		{"TPMRandom", func() error { _, err := p.TPMRandom(ctx, 32); return err }},
-		{"TPMSeal", func() error { _, err := p.TPMSeal(ctx, []byte("d"), []int{0}); return err }},
-		{"TPMUnseal", func() error { _, err := p.TPMUnseal(ctx, "cn"); return err }},
-		{"TPMCertify", func() error { _, err := p.TPMCertify(ctx, 1); return err }},
+		{"TPMSeal", func() error { _, err := p.TPMSeal(ctx, []byte("d"), []uint32{0}, "cn", ""); return err }},
+		{"TPMUnseal", func() error { _, err := p.TPMUnseal(ctx, "cn", ""); return err }},
+		{"TPMCertify", func() error { _, err := p.TPMCertify(ctx, 0x81000001, "", nil); return err }},
 		{"TPMNVList", func() error { _, err := p.TPMNVList(ctx); return err }},
-		{"TPMNVRead", func() error { _, err := p.TPMNVRead(ctx, 1, 32); return err }},
-		{"TPMNVWrite", func() error { _, err := p.TPMNVWrite(ctx, 1, []byte("d")); return err }},
-		{"TPMNVDelete", func() error { _, err := p.TPMNVDelete(ctx, 1); return err }},
+		{"TPMNVRead", func() error { _, err := p.TPMNVRead(ctx, 1, 32, 0, ""); return err }},
+		{"TPMNVWrite", func() error { _, err := p.TPMNVWrite(ctx, 1, []byte("d"), 0, ""); return err }},
+		{"TPMNVDelete", func() error { _, err := p.TPMNVDelete(ctx, 1, ""); return err }},
 		{"TPMPlatform", func() error { _, err := p.TPMPlatform(ctx); return err }},
 	}
 

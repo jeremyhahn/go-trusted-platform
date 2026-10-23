@@ -16,11 +16,12 @@
 // NVUndefineSpace) shared by every daemon transport (gRPC, QUIC, …).
 //
 // The TrustedPlatformModule interface does not expose NV operations
-// directly, so both the gRPC TPMService and the QUIC TPM2 handler reach
-// them through the module's raw go-tpm transport (TrustedPlatformModule.
-// Transport()). Keeping the command construction here guarantees exactly
-// one wire implementation and identical auth-hierarchy dispatch across
-// protocols. Every function is device-agnostic: it behaves identically
+// directly, so the gRPC TPMService, the QUIC TPM2 handler and the MCP
+// provider reach them through the module's raw go-tpm transport
+// (TrustedPlatformModule.Transport()). Keeping the command construction
+// and argument validation here guarantees exactly one wire
+// implementation, identical auth-hierarchy dispatch and the same typed
+// errors across protocols. Every function is device-agnostic: it behaves identically
 // against a hardware TPM (/dev/tpmrm0) and swtpm because the transport
 // abstraction hides the underlying device.
 package tpmnv
@@ -41,8 +42,13 @@ const maxNVChunk = 512
 // authorization. The auth hierarchy is chosen from the index's public
 // attributes: AUTHREAD authorizes against the index's own AuthValue,
 // OWNERREAD routes through the owner hierarchy, PPREAD through the
-// platform hierarchy. Reads larger than maxNVChunk are chunked.
+// platform hierarchy. Reads larger than maxNVChunk are chunked. The read
+// is clamped to the index's DataSize, so it needs no CheckSpan: a size
+// past the end reads to the end.
 func Read(tr transport.TPM, index uint32, size, offset uint16, password []byte) ([]byte, error) {
+	if err := checkTarget(tr, index); err != nil {
+		return nil, err
+	}
 	nvHandle := tpmgo.TPMHandle(index)
 	pubRsp, err := tpmgo.NVReadPublic{NVIndex: nvHandle}.Execute(tr)
 	if err != nil {
@@ -88,8 +94,21 @@ func Read(tr transport.TPM, index uint32, size, offset uint16, password []byte) 
 // Write writes data to the NV index starting at offset, using password
 // for authorization. The auth hierarchy is chosen from the index's
 // public attributes (AUTHWRITE / OWNERWRITE / PPWRITE). Writes larger
-// than maxNVChunk are chunked.
+// than maxNVChunk are chunked. Empty data is rejected, and so is data
+// that would run past MaxSpan, before any chunk is written.
 func Write(tr transport.TPM, index uint32, data []byte, offset uint16, password []byte) error {
+	if index == 0 {
+		return ErrIndexRequired{}
+	}
+	if len(data) == 0 {
+		return ErrDataRequired{}
+	}
+	if err := CheckSpan(uint32(offset), uint64(len(data))); err != nil {
+		return err
+	}
+	if err := checkTarget(tr, index); err != nil {
+		return err
+	}
 	nvHandle := tpmgo.TPMHandle(index)
 	pubRsp, err := tpmgo.NVReadPublic{NVIndex: nvHandle}.Execute(tr)
 	if err != nil {
@@ -150,6 +169,9 @@ func Define(tr transport.TPM, index uint32, size uint16, attrNames []string, nvA
 // Undefine frees an owner-hierarchy NV index. ownerAuth authorizes the
 // owner hierarchy.
 func Undefine(tr transport.TPM, index uint32, ownerAuth []byte) error {
+	if err := checkTarget(tr, index); err != nil {
+		return err
+	}
 	nvHandle := tpmgo.TPMHandle(index)
 	pubRsp, err := tpmgo.NVReadPublic{NVIndex: nvHandle}.Execute(tr)
 	if err != nil {
@@ -171,6 +193,31 @@ func Undefine(tr transport.TPM, index uint32, ownerAuth []byte) error {
 // readAuthHandle selects the read auth hierarchy from the index's public
 // attributes. AUTHREAD is the common case (index-self auth); OWNERREAD
 // and PPREAD route through the owner / platform hierarchy respectively.
+// Password converts a request password to the auth value go-tpm sends.
+// An empty password becomes nil so no transport has to repeat the
+// conversion.
+func Password(s string) []byte {
+	if s == "" {
+		return nil
+	}
+	return []byte(s)
+}
+
+// checkTarget rejects index 0, a handle outside the NV index range and a
+// TPM without a raw transport before any command is framed.
+func checkTarget(tr transport.TPM, index uint32) error {
+	if index == 0 {
+		return ErrIndexRequired{}
+	}
+	if err := CheckIndex(index); err != nil {
+		return err
+	}
+	if tr == nil {
+		return ErrTransportUnavailable{}
+	}
+	return nil
+}
+
 func readAuthHandle(pub *tpmgo.TPMSNVPublic, nvHandle tpmgo.TPMHandle, name tpmgo.TPM2BName, password []byte) tpmgo.AuthHandle {
 	switch {
 	case pub.Attributes.OwnerRead && !pub.Attributes.AuthRead:

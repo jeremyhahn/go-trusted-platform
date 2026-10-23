@@ -34,7 +34,6 @@ type routeFlags struct {
 	backendZone       string
 	requireAttest     bool
 	attestationMaxAge time.Duration
-	requiredRoles     []string
 	requiredScopes    []string
 	opaPolicy         string
 	stripPrefix       bool
@@ -53,7 +52,6 @@ func (f *routeFlags) register(cmd *cobra.Command) {
 	cmd.Flags().StringVar(&f.backendZone, "backend-zone", "", "SDN zone the backend pool lives in")
 	cmd.Flags().BoolVar(&f.requireAttest, "require-attestation", false, "Require fresh workload attestation")
 	cmd.Flags().DurationVar(&f.attestationMaxAge, "attestation-max-age", 0, "Maximum accepted attestation age (e.g. 5m)")
-	cmd.Flags().StringSliceVar(&f.requiredRoles, "required-role", nil, "Role required on the caller (repeatable)")
 	cmd.Flags().StringSliceVar(&f.requiredScopes, "required-scope", nil, "Token scope required on the caller (repeatable)")
 	cmd.Flags().StringVar(&f.opaPolicy, "opa-policy", "", "OPA policy reference evaluated for this route")
 	cmd.Flags().BoolVar(&f.stripPrefix, "strip-prefix", false, "Strip the matched path prefix before forwarding")
@@ -74,7 +72,6 @@ func (f *routeFlags) toProto() *platformv1.ProxyRoute {
 			BackendZone:            f.backendZone,
 			RequireAttestation:     f.requireAttest,
 			AttestationMaxAgeNanos: int64(f.attestationMaxAge),
-			RequiredRoles:          f.requiredRoles,
 			RequiredScopes:         f.requiredScopes,
 			OpaPolicy:              f.opaPolicy,
 		},

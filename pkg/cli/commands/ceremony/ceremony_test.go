@@ -14,13 +14,18 @@
 package ceremony
 
 import (
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"google.golang.org/grpc"
+
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
+	platform "github.com/jeremyhahn/go-trusted-platform/sdk/go"
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
 
 func testFlags() func() *cli.CommonFlags {
@@ -377,9 +382,8 @@ func TestRunSignCSR_MissingFile(t *testing.T) {
 }
 
 func TestRunSignCSR_ReadsFile(t *testing.T) {
-	// We cannot actually drive the full runSignCSR successfully (the SDK returns
-	// ErrNotYetWired and BaseCommand creation will fail without a real context),
-	// but we can still exercise the file read path.
+	// We cannot actually drive the full runSignCSR successfully without a real
+	// context, but we can still exercise the file read path.
 	tmp := t.TempDir()
 	path := filepath.Join(tmp, "csr.pem")
 	if err := os.WriteFile(path, []byte("-----BEGIN CERTIFICATE REQUEST-----\nxx\n-----END CERTIFICATE REQUEST-----\n"), 0o600); err != nil {
@@ -392,9 +396,8 @@ func TestRunSignCSR_ReadsFile(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
-	// Expect the error came from NewBaseCommand (no context) or from the stub
-	// ceremony SDK returning ErrNotYetWired. In either case we should NOT get
-	// ErrCSRFileRead here.
+	// Expect the error came from NewBaseCommand (no context) or the ceremony
+	// service call. In either case we should NOT get ErrCSRFileRead here.
 	var readErr ErrCSRFileRead
 	if errors.As(err, &readErr) {
 		t.Errorf("unexpected ErrCSRFileRead: %v", err)
@@ -437,5 +440,52 @@ func TestOfficerRoles_Map(t *testing.T) {
 		if _, ok := officerRoles[name]; !ok {
 			t.Errorf("officerRoles missing %q", name)
 		}
+	}
+}
+
+type ceremonyOnlyClient struct {
+	platform.Client
+	rpc platformv1.CeremonyServiceClient
+}
+
+func (c ceremonyOnlyClient) Ceremony() platformv1.CeremonyServiceClient { return c.rpc }
+
+type statusRPC struct {
+	platformv1.CeremonyServiceClient
+	called bool
+}
+
+func (s *statusRPC) Status(_ context.Context, _ *platformv1.CeremonyStatusRequest, _ ...grpc.CallOption) (*platformv1.CeremonyStatusResponse, error) {
+	s.called = true
+	return &platformv1.CeremonyStatusResponse{}, nil
+}
+
+func TestNewService_DispatchesOverTheSDKClient(t *testing.T) {
+	rpc := &statusRPC{}
+
+	svc, err := NewService(ceremonyOnlyClient{rpc: rpc})
+	if err != nil {
+		t.Fatalf("newService() error = %v", err)
+	}
+	if _, err := svc.Status(context.Background()); err != nil {
+		t.Fatalf("Status() error = %v", err)
+	}
+	if !rpc.called {
+		t.Error("expected Status to reach the SDK ceremony client")
+	}
+}
+
+func TestNewService_RefusesAClientWithoutTheCeremonyService(t *testing.T) {
+	svc, err := NewService(ceremonyOnlyClient{})
+	if svc != nil {
+		t.Errorf("expected no service, got %v", svc)
+	}
+
+	var unavailable platform.ErrServiceUnavailable
+	if !errors.As(err, &unavailable) {
+		t.Fatalf("expected platform.ErrServiceUnavailable, got %v", err)
+	}
+	if unavailable.Service != ceremonysvcName {
+		t.Errorf("ErrServiceUnavailable.Service = %q, want %q", unavailable.Service, ceremonysvcName)
 	}
 }

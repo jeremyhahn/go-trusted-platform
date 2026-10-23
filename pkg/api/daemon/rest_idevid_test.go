@@ -33,6 +33,7 @@ import (
 
 	"github.com/gorilla/mux"
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"log/slog"
@@ -167,6 +168,7 @@ func (m *mockTPM2RESTService) DeleteIDevIDCertificate() error {
 	if m.deleteIDevIDCertErr != nil {
 		return m.deleteIDevIDCertErr
 	}
+	m.hasIDevIDCert = false
 	return nil
 }
 
@@ -174,6 +176,7 @@ func (m *mockTPM2RESTService) DeleteIAKCertificate() error {
 	if m.deleteIAKCertErr != nil {
 		return m.deleteIAKCertErr
 	}
+	m.hasIAKCert = false
 	return nil
 }
 
@@ -259,9 +262,14 @@ func createTestRESTServer(t *testing.T, mockTPM *mockTPM2RESTService) *RESTServe
 	server, err := NewRESTServer(config, service, slog.Default())
 	require.NoError(t, err)
 
+	// The daemon always gives REST the shared IDevID service, over the same
+	// TPM; the certificate deletes are served through it.
+	idevid := NewIDevIDGRPCService(logging.DefaultLogger())
 	if mockTPM != nil {
 		server.SetTPM2Service(mockTPM)
+		idevid.SetTPM2Service(mockTPM)
 	}
+	server.SetIDevIDService(idevid)
 
 	return server
 }
@@ -450,26 +458,35 @@ func TestRESTHasIDevID_ServiceNotAvailable(t *testing.T) {
 	assert.Equal(t, http.StatusServiceUnavailable, rr.Code)
 }
 
-func TestRESTIDevIDDelete_Success(t *testing.T) {
-	mockTPM := &mockTPM2RESTService{hasIDevID: true}
+// TestRESTIDevIDDelete_RefusedKeyAndCertRemain pins #304: the REST key delete
+// is refused with 412 (the FailedPrecondition class) and touches nothing, so
+// the key and its certificate are both still there afterwards.
+func TestRESTIDevIDDelete_RefusedKeyAndCertRemain(t *testing.T) {
+	mockTPM := &mockTPM2RESTService{hasIDevID: true, hasIDevIDCert: true}
 	server := createTestRESTServer(t, mockTPM)
 
 	rr := executeRESTRequest(t, server, http.MethodDelete, "/api/v1/tpm/idevid", nil)
 
-	assert.Equal(t, http.StatusOK, rr.Code)
+	assert.Equal(t, http.StatusPreconditionFailed, rr.Code)
+	var errResp ErrorResponse
+	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &errResp))
+	assert.Equal(t, ErrDeviceIdentityKeyNotDeletable{Key: "IDevID"}.Error(), errResp.Error)
+	assert.NotContains(t, rr.Body.String(), `"deleted"`)
 
-	var resp IDevIDDeleteRESTResponse
-	err := json.Unmarshal(rr.Body.Bytes(), &resp)
-	require.NoError(t, err)
-	assert.True(t, resp.Deleted)
+	assert.True(t, mockTPM.hasIDevID, "IDevID key must remain")
+	assert.True(t, mockTPM.hasIDevIDCert, "IDevID certificate must remain")
+	rr = executeRESTRequest(t, server, http.MethodGet, "/api/v1/tpm/idevid/cert", nil)
+	assert.Equal(t, http.StatusOK, rr.Code)
 }
 
-func TestRESTIDevIDDelete_ServiceNotAvailable(t *testing.T) {
+// TestRESTIDevIDDelete_RefusedWithoutTPMService checks the refusal does not
+// depend on TPM availability, matching the gRPC service.
+func TestRESTIDevIDDelete_RefusedWithoutTPMService(t *testing.T) {
 	server := createTestRESTServer(t, nil)
 
 	rr := executeRESTRequest(t, server, http.MethodDelete, "/api/v1/tpm/idevid", nil)
 
-	assert.Equal(t, http.StatusServiceUnavailable, rr.Code)
+	assert.Equal(t, http.StatusPreconditionFailed, rr.Code)
 }
 
 func TestRESTIDevIDCSR_Success(t *testing.T) {
@@ -653,8 +670,17 @@ func TestRESTIDevIDDeleteCert_Success(t *testing.T) {
 	assert.True(t, resp.Deleted)
 }
 
-func TestRESTIDevIDDeleteCert_ServiceNotAvailable(t *testing.T) {
+func TestRESTIDevIDDeleteCert_NoTPMIsPreconditionFailed(t *testing.T) {
 	server := createTestRESTServer(t, nil)
+
+	rr := executeRESTRequest(t, server, http.MethodDelete, "/api/v1/tpm/idevid/cert", nil)
+
+	assert.Equal(t, http.StatusPreconditionFailed, rr.Code)
+}
+
+func TestRESTIDevIDDeleteCert_ServiceNotConfigured(t *testing.T) {
+	server := createTestRESTServer(t, &mockTPM2RESTService{hasIDevID: true, hasIDevIDCert: true})
+	server.SetIDevIDService(nil)
 
 	rr := executeRESTRequest(t, server, http.MethodDelete, "/api/v1/tpm/idevid/cert", nil)
 
@@ -802,26 +828,34 @@ func TestRESTHasIAK_NotExists(t *testing.T) {
 	assert.False(t, resp.Exists)
 }
 
-func TestRESTIAKDelete_Success(t *testing.T) {
-	mockTPM := &mockTPM2RESTService{hasIAK: true}
+// TestRESTIAKDelete_RefusedKeyAndCertRemain pins #304 for the IAK: refused
+// with 412 and nothing touched.
+func TestRESTIAKDelete_RefusedKeyAndCertRemain(t *testing.T) {
+	mockTPM := &mockTPM2RESTService{hasIAK: true, hasIAKCert: true}
 	server := createTestRESTServer(t, mockTPM)
 
 	rr := executeRESTRequest(t, server, http.MethodDelete, "/api/v1/tpm/iak", nil)
 
-	assert.Equal(t, http.StatusOK, rr.Code)
+	assert.Equal(t, http.StatusPreconditionFailed, rr.Code)
+	var errResp ErrorResponse
+	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &errResp))
+	assert.Equal(t, ErrDeviceIdentityKeyNotDeletable{Key: "IAK"}.Error(), errResp.Error)
+	assert.NotContains(t, rr.Body.String(), `"deleted"`)
 
-	var resp IAKDeleteRESTResponse
-	err := json.Unmarshal(rr.Body.Bytes(), &resp)
-	require.NoError(t, err)
-	assert.True(t, resp.Deleted)
+	assert.True(t, mockTPM.hasIAK, "IAK must remain")
+	assert.True(t, mockTPM.hasIAKCert, "IAK certificate must remain")
+	rr = executeRESTRequest(t, server, http.MethodGet, "/api/v1/tpm/iak/cert", nil)
+	assert.Equal(t, http.StatusOK, rr.Code)
 }
 
-func TestRESTIAKDelete_ServiceNotAvailable(t *testing.T) {
+// TestRESTIAKDelete_RefusedWithoutTPMService checks the refusal does not
+// depend on TPM availability, matching the gRPC service.
+func TestRESTIAKDelete_RefusedWithoutTPMService(t *testing.T) {
 	server := createTestRESTServer(t, nil)
 
 	rr := executeRESTRequest(t, server, http.MethodDelete, "/api/v1/tpm/iak", nil)
 
-	assert.Equal(t, http.StatusServiceUnavailable, rr.Code)
+	assert.Equal(t, http.StatusPreconditionFailed, rr.Code)
 }
 
 func TestRESTIAKCSR_Success(t *testing.T) {
@@ -991,8 +1025,17 @@ func TestRESTIAKDeleteCert_Success(t *testing.T) {
 	assert.True(t, resp.Deleted)
 }
 
-func TestRESTIAKDeleteCert_ServiceNotAvailable(t *testing.T) {
+func TestRESTIAKDeleteCert_NoTPMIsPreconditionFailed(t *testing.T) {
 	server := createTestRESTServer(t, nil)
+
+	rr := executeRESTRequest(t, server, http.MethodDelete, "/api/v1/tpm/iak/cert", nil)
+
+	assert.Equal(t, http.StatusPreconditionFailed, rr.Code)
+}
+
+func TestRESTIAKDeleteCert_ServiceNotConfigured(t *testing.T) {
+	server := createTestRESTServer(t, &mockTPM2RESTService{hasIAK: true, hasIAKCert: true})
+	server.SetIDevIDService(nil)
 
 	rr := executeRESTRequest(t, server, http.MethodDelete, "/api/v1/tpm/iak/cert", nil)
 
@@ -1054,110 +1097,6 @@ func TestRESTDeviceAttributes_FixedPropsError(t *testing.T) {
 	assert.Empty(t, resp.TPMManufacturer)
 }
 
-func TestRESTActivateCredential_Success(t *testing.T) {
-	mockTPM := &mockTPM2RESTService{}
-	server := createTestRESTServer(t, mockTPM)
-
-	body := ActivateCredentialRESTRequest{
-		CredentialBlob: "dGVzdC1jcmVkZW50aWFsLWJsb2I=", // "test-credential-blob" base64
-		Secret:         "dGVzdC1zZWNyZXQ=",             // "test-secret" base64
-	}
-
-	rr := executeRESTRequest(t, server, http.MethodPost, "/api/v1/tpm/activate-credential", body)
-
-	assert.Equal(t, http.StatusOK, rr.Code)
-
-	var resp ActivateCredentialRESTResponse
-	err := json.Unmarshal(rr.Body.Bytes(), &resp)
-	require.NoError(t, err)
-	assert.NotEmpty(t, resp.Decrypted)
-}
-
-func TestRESTActivateCredential_ServiceNotAvailable(t *testing.T) {
-	server := createTestRESTServer(t, nil)
-
-	body := ActivateCredentialRESTRequest{
-		CredentialBlob: "dGVzdC1jcmVkZW50aWFs",
-		Secret:         "dGVzdC1zZWNyZXQ=",
-	}
-
-	rr := executeRESTRequest(t, server, http.MethodPost, "/api/v1/tpm/activate-credential", body)
-
-	assert.Equal(t, http.StatusServiceUnavailable, rr.Code)
-}
-
-func TestRESTActivateCredential_MissingCredentialBlob(t *testing.T) {
-	mockTPM := &mockTPM2RESTService{}
-	server := createTestRESTServer(t, mockTPM)
-
-	body := ActivateCredentialRESTRequest{
-		CredentialBlob: "",
-		Secret:         "dGVzdC1zZWNyZXQ=",
-	}
-
-	rr := executeRESTRequest(t, server, http.MethodPost, "/api/v1/tpm/activate-credential", body)
-
-	assert.Equal(t, http.StatusBadRequest, rr.Code)
-}
-
-func TestRESTActivateCredential_MissingSecret(t *testing.T) {
-	mockTPM := &mockTPM2RESTService{}
-	server := createTestRESTServer(t, mockTPM)
-
-	body := ActivateCredentialRESTRequest{
-		CredentialBlob: "dGVzdC1jcmVkZW50aWFsLWJsb2I=",
-		Secret:         "",
-	}
-
-	rr := executeRESTRequest(t, server, http.MethodPost, "/api/v1/tpm/activate-credential", body)
-
-	assert.Equal(t, http.StatusBadRequest, rr.Code)
-}
-
-func TestRESTActivateCredential_InvalidBase64Credential(t *testing.T) {
-	mockTPM := &mockTPM2RESTService{}
-	server := createTestRESTServer(t, mockTPM)
-
-	body := ActivateCredentialRESTRequest{
-		CredentialBlob: "not-valid-base64!!!",
-		Secret:         "dGVzdC1zZWNyZXQ=",
-	}
-
-	rr := executeRESTRequest(t, server, http.MethodPost, "/api/v1/tpm/activate-credential", body)
-
-	assert.Equal(t, http.StatusBadRequest, rr.Code)
-}
-
-func TestRESTActivateCredential_InvalidBase64Secret(t *testing.T) {
-	mockTPM := &mockTPM2RESTService{}
-	server := createTestRESTServer(t, mockTPM)
-
-	body := ActivateCredentialRESTRequest{
-		CredentialBlob: "dGVzdC1jcmVkZW50aWFsLWJsb2I=",
-		Secret:         "not-valid-base64!!!",
-	}
-
-	rr := executeRESTRequest(t, server, http.MethodPost, "/api/v1/tpm/activate-credential", body)
-
-	assert.Equal(t, http.StatusBadRequest, rr.Code)
-}
-
-func TestRESTActivateCredential_TPMError(t *testing.T) {
-	mockTPM := &mockTPM2RESTService{
-		activateCredentialErr: errors.New("TPM activation failed"),
-	}
-	server := createTestRESTServer(t, mockTPM)
-
-	body := ActivateCredentialRESTRequest{
-		CredentialBlob: "dGVzdC1jcmVkZW50aWFsLWJsb2I=",
-		Secret:         "dGVzdC1zZWNyZXQ=",
-	}
-
-	rr := executeRESTRequest(t, server, http.MethodPost, "/api/v1/tpm/activate-credential", body)
-
-	assert.Equal(t, http.StatusInternalServerError, rr.Code)
-}
-
 // =============================================================================
 // Route Registration Test
 // =============================================================================
@@ -1188,7 +1127,6 @@ func TestRESTIDevIDRouteRegistration(t *testing.T) {
 		{http.MethodPost, "/api/v1/tpm/iak/install"},
 		{http.MethodDelete, "/api/v1/tpm/iak/cert"},
 		{http.MethodGet, "/api/v1/tpm/device/attributes"},
-		{http.MethodPost, "/api/v1/tpm/activate-credential"},
 	}
 
 	for _, route := range routes {

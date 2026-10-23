@@ -23,6 +23,7 @@ import (
 	"net"
 	"os"
 	"sync/atomic"
+	"syscall"
 
 	"google.golang.org/grpc"
 
@@ -42,6 +43,25 @@ type Node interface {
 	DesiredConfigState() gwstate.DesiredConfigState
 }
 
+// VPNPlanes is the VPN data plane host the datapath child serves the peer
+// RPCs from; *vpn.PlaneHost satisfies it. A refusal travels in the
+// response.
+type VPNPlanes interface {
+	InstallVPNPeer(ctx context.Context, req *ipcv1.InstallVPNPeerRequest) *ipcv1.InstallVPNPeerResponse
+	RemoveVPNPeer(ctx context.Context, req *ipcv1.RemoveVPNPeerRequest) *ipcv1.RemoveVPNPeerResponse
+}
+
+// vpnPlanes boxes a VPNPlanes for Server's atomic pointer.
+type vpnPlanes struct{ host VPNPlanes }
+
+// noVPNPlanes is the refusal of a process that hosts no VPN data plane.
+func noVPNPlanes() *ipcv1.VPNPeerRefusal {
+	return &ipcv1.VPNPeerRefusal{
+		Class:  ipcv1.VPNPeerRefusalClass_VPN_PEER_REFUSAL_CLASS_UNAVAILABLE,
+		Reason: "this process hosts no VPN data plane",
+	}
+}
+
 // stateToProto maps the gateway state machine onto the wire enum.
 var stateToProto = map[gateway.GatewayState]ipcv1.ProcessState{
 	gateway.GatewayStateUnknown:      ipcv1.ProcessState_PROCESS_STATE_UNSPECIFIED,
@@ -58,18 +78,24 @@ var stateToProto = map[gateway.GatewayState]ipcv1.ProcessState{
 type Server struct {
 	ipcv1.UnimplementedProcessControlServiceServer
 	ipcv1.UnimplementedDatapathServiceServer
+	ipcv1.UnimplementedGatewayServicesServiceServer
 
 	node     Node
 	policy   Policy
 	grpc     *grpc.Server
 	listener net.Listener
 	startErr atomic.Pointer[string]
+	vpn      atomic.Pointer[vpnPlanes]
+	services atomic.Pointer[Services]
+	// chown is os.Chown; a test replaces it to stand for a process that
+	// holds neither CAP_CHOWN nor membership of the socket group.
+	chown func(name string, uid, gid int) error
 }
 
 // NewServer builds a server for node under policy. Nothing listens until
 // Listen.
 func NewServer(node Node, policy Policy) *Server {
-	s := &Server{node: node, policy: policy}
+	s := &Server{node: node, policy: policy, chown: os.Chown}
 	s.grpc = grpc.NewServer(
 		grpc.Creds(peercred.NewUnixTransportCredentials(peercred.WithRequireCredentials(true))),
 		grpc.ChainUnaryInterceptor(
@@ -79,6 +105,7 @@ func NewServer(node Node, policy Policy) *Server {
 	)
 	ipcv1.RegisterProcessControlServiceServer(s.grpc, s)
 	ipcv1.RegisterDatapathServiceServer(s.grpc, s)
+	ipcv1.RegisterGatewayServicesServiceServer(s.grpc, s)
 	return s
 }
 
@@ -93,9 +120,21 @@ func (s *Server) SetStartError(err error) {
 	s.startErr.Store(&text)
 }
 
+// SetVPNPlanes makes the server answer the VPN peer RPCs from host; nil
+// withdraws it. Until it is set, every peer RPC is refused UNAVAILABLE.
+func (s *Server) SetVPNPlanes(host VPNPlanes) {
+	if host == nil {
+		s.vpn.Store(nil)
+		return
+	}
+	s.vpn.Store(&vpnPlanes{host: host})
+}
+
 // Listen binds the Unix socket at path with the given mode and group. A
 // stale socket file from a previous instance is removed first; any other
-// file at the path is an error. gid < 0 leaves the group as created.
+// file at the path is an error. gid < 0 leaves the group as created; a socket
+// that already has group gid — every socket bound in the supervisor's setgid
+// control-socket directory — is not chowned.
 func (s *Server) Listen(path string, mode os.FileMode, gid int) error {
 	if info, err := os.Lstat(path); err == nil {
 		if info.Mode()&os.ModeSocket == 0 {
@@ -112,9 +151,9 @@ func (s *Server) Listen(path string, mode os.FileMode, gid int) error {
 		return &ErrSocketPath{Path: path, Op: "listen", Cause: err}
 	}
 	if gid >= 0 {
-		if err := os.Chown(path, -1, gid); err != nil {
+		if err := s.ensureSocketGroup(path, gid); err != nil {
 			_ = listener.Close()
-			return &ErrSocketPath{Path: path, Op: "chown", Cause: err}
+			return err
 		}
 	}
 	if err := os.Chmod(path, mode); err != nil {
@@ -122,6 +161,28 @@ func (s *Server) Listen(path string, mode os.FileMode, gid int) error {
 		return &ErrSocketPath{Path: path, Op: "chmod", Cause: err}
 	}
 	s.listener = listener
+	return nil
+}
+
+// ensureSocketGroup gives the bound socket at path the group gid. A socket
+// bound in a setgid directory owned by gid has it from the kernel already,
+// and the chown is skipped: the datapath child stays uid 0 but keeps no
+// CAP_CHOWN and is not in the service group, so it could not make it.
+func (s *Server) ensureSocketGroup(path string, gid int) error {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return &ErrSocketPath{Path: path, Op: "stat", Cause: err}
+	}
+	got := -1
+	if stat, ok := info.Sys().(*syscall.Stat_t); ok {
+		got = int(stat.Gid)
+	}
+	if got == gid {
+		return nil
+	}
+	if err := s.chown(path, -1, gid); err != nil {
+		return &ErrSocketGroup{Path: path, Want: gid, Got: got, Cause: err}
+	}
 	return nil
 }
 
@@ -196,4 +257,22 @@ func (s *Server) ApplyDesired(ctx context.Context, req *ipcv1.ApplyDesiredReques
 		resp.ApplyError = applyErr.Error()
 	}
 	return resp, nil
+}
+
+// InstallVPNPeer implements DatapathService through the hosted VPN planes.
+func (s *Server) InstallVPNPeer(ctx context.Context, req *ipcv1.InstallVPNPeerRequest) (*ipcv1.InstallVPNPeerResponse, error) {
+	planes := s.vpn.Load()
+	if planes == nil {
+		return &ipcv1.InstallVPNPeerResponse{Refusal: noVPNPlanes()}, nil
+	}
+	return planes.host.InstallVPNPeer(ctx, req), nil
+}
+
+// RemoveVPNPeer implements DatapathService through the hosted VPN planes.
+func (s *Server) RemoveVPNPeer(ctx context.Context, req *ipcv1.RemoveVPNPeerRequest) (*ipcv1.RemoveVPNPeerResponse, error) {
+	planes := s.vpn.Load()
+	if planes == nil {
+		return &ipcv1.RemoveVPNPeerResponse{Refusal: noVPNPlanes()}, nil
+	}
+	return planes.host.RemoveVPNPeer(ctx, req), nil
 }

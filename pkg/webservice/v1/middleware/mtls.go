@@ -86,7 +86,7 @@ func (m *mtlsMiddleware) Verify(w http.ResponseWriter, r *http.Request, next htt
 	}
 
 	// Extract serial number from certificate CN or SAN
-	serial := extractSerialFromCert(clientCert)
+	serial := DeviceSerialFromCert(clientCert)
 	if serial == "" {
 		m.responseWriter.Error401(w, r, ErrNoDeviceSerial)
 		return
@@ -98,7 +98,7 @@ func (m *mtlsMiddleware) Verify(w http.ResponseWriter, r *http.Request, next htt
 	next(w, r.WithContext(ctx))
 }
 
-func extractSerialFromCert(cert *x509.Certificate) string {
+func DeviceSerialFromCert(cert *x509.Certificate) string {
 	// First check Common Name
 	if cert.Subject.CommonName != "" {
 		return cert.Subject.CommonName

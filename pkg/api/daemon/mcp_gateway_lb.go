@@ -22,20 +22,13 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/services/loadbalancer"
 )
 
-// SetGatewayLoadBalancer wires the gateway load balancer backend into the
-// MCP service provider. A nil backend leaves every gateway_lb_* tool
-// returning ErrServiceNotAvailable.
-func (m *MCPServiceProvider) SetGatewayLoadBalancer(lb GatewayLoadBalancerInterface) {
-	m.gatewayLB = lb
-}
-
 // requireGatewayLB returns the load balancer backend or the typed
 // service-unavailable error.
 func (m *MCPServiceProvider) requireGatewayLB() (GatewayLoadBalancerInterface, error) {
-	if m.gatewayLB == nil {
+	if m.gatewayBackends == nil || m.gatewayBackends.LoadBalancer() == nil {
 		return nil, ErrServiceNotAvailable{Service: "load-balancer"}
 	}
-	return m.gatewayLB, nil
+	return m.gatewayBackends.LoadBalancer(), nil
 }
 
 // mcpLBTarget parses the protocol/address/port triple of keyed VIP tools.
@@ -221,77 +214,4 @@ func gatewayLBStatus(ctx context.Context, lb GatewayLoadBalancerInterface) (inte
 		TotalBackends:   health.TotalBackends,
 		LastReconcile:   health.LastReconcile,
 	}, nil
-}
-
-// =============================================================================
-// PlatformServiceProvider — gateway load balancer operations
-// =============================================================================
-
-// SetGatewayLoadBalancer wires the gateway load balancer backend into the
-// platform service provider.
-func (p *PlatformServiceProvider) SetGatewayLoadBalancer(lb GatewayLoadBalancerInterface) {
-	p.gatewayLB = lb
-}
-
-// requireGatewayLB returns the load balancer backend or the typed
-// service-unavailable error.
-func (p *PlatformServiceProvider) requireGatewayLB() (GatewayLoadBalancerInterface, error) {
-	if p.gatewayLB == nil {
-		return nil, ErrServiceNotAvailable{Service: "load-balancer"}
-	}
-	return p.gatewayLB, nil
-}
-
-// GatewayLBVIPAdd installs a load-balanced virtual IP.
-func (p *PlatformServiceProvider) GatewayLBVIPAdd(ctx context.Context, req *mcp.LBVIPAddRequest) (interface{}, error) {
-	lb, err := p.requireGatewayLB()
-	if err != nil {
-		return nil, err
-	}
-	return gatewayLBVIPAdd(ctx, lb, req)
-}
-
-// GatewayLBVIPRemove tears down a load-balanced virtual IP.
-func (p *PlatformServiceProvider) GatewayLBVIPRemove(ctx context.Context, protocol, address string, port uint16) error {
-	lb, err := p.requireGatewayLB()
-	if err != nil {
-		return err
-	}
-	return gatewayLBVIPRemove(ctx, lb, protocol, address, port)
-}
-
-// GatewayLBVIPGet returns one VIP's status.
-func (p *PlatformServiceProvider) GatewayLBVIPGet(ctx context.Context, protocol, address string, port uint16) (interface{}, error) {
-	lb, err := p.requireGatewayLB()
-	if err != nil {
-		return nil, err
-	}
-	return gatewayLBVIPGet(ctx, lb, protocol, address, port)
-}
-
-// GatewayLBVIPList returns every VIP's status.
-func (p *PlatformServiceProvider) GatewayLBVIPList(ctx context.Context) ([]interface{}, error) {
-	lb, err := p.requireGatewayLB()
-	if err != nil {
-		return nil, err
-	}
-	return gatewayLBVIPList(ctx, lb)
-}
-
-// GatewayLBVIPSetBackends replaces a VIP's backend set.
-func (p *PlatformServiceProvider) GatewayLBVIPSetBackends(ctx context.Context, protocol, address string, port uint16, backends []*mcp.LBBackendRequest) (interface{}, error) {
-	lb, err := p.requireGatewayLB()
-	if err != nil {
-		return nil, err
-	}
-	return gatewayLBVIPSetBackends(ctx, lb, protocol, address, port, backends)
-}
-
-// GatewayLBStatus returns the load balancer service health snapshot.
-func (p *PlatformServiceProvider) GatewayLBStatus(ctx context.Context) (interface{}, error) {
-	lb, err := p.requireGatewayLB()
-	if err != nil {
-		return nil, err
-	}
-	return gatewayLBStatus(ctx, lb)
 }

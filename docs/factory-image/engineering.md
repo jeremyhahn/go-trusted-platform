@@ -1,6 +1,6 @@
 # Factory Image — Engineering Contract
 
-> **Status: NORMATIVE** · Scope: `pkg/diskimage/` (`rpi`, `qemuvirt`, `uboot`, `runner`), `pkg/cli/commands/diskimage/`, `pkg/qemu` (aarch64 profile), `pkg/qemu/harness/`, `build/docker/uboot-builder/`, `build/docker/diskimage-builder/`, `test/integration/diskimage/` · Last verified: 2026-09-20
+> **Status: NORMATIVE** · Scope: `pkg/diskimage/` (`rpi`, `qemuvirt`, `uboot`, `runner`), `pkg/cli/commands/diskimage/`, `pkg/qemu` (aarch64 profile), `pkg/qemu/harness/`, `build/docker/uboot-builder/`, `build/docker/diskimage-builder/`, `test/integration/diskimage/` · Last verified: 2026-10-09
 > Conflicts with this document are defects. Fix them here first.
 > The feature folder is: [architecture.md](architecture.md) · [engineering.md](engineering.md) · [cli.md](cli.md) · [api.md](api.md) · [user.md](user.md).
 >
@@ -18,7 +18,7 @@
 | `pkg/diskimage/assemble.go` | `Assemble`, `AssembleOptions`, `AssembleResult` — the in-container step |
 | `pkg/diskimage/inspect.go` | `Inspect`, `Report`, `Partition`, `ParseMBR` |
 | `pkg/diskimage/boot.go` | `Boot`, `BootOptions`, `BootResult`, `DefaultBootWorkDir`, `DefaultBootMemory` — the emulated boot (QEMU virt + swtpm) behind `diskimage test boot` and the integration suite |
-| `pkg/diskimage/errors.go` | `UnknownTargetError`, `PreflightError`, `StageError`, `AssembleError`, `LoopDeviceError`, `InspectError`, `BootError` |
+| `pkg/diskimage/errors.go` | `UnknownTargetError`, `PreflightError`, `StageError`, `AssembleError`, `HostInstallerMissingError`, `LoopDeviceError`, `InspectError`, `BootError` |
 | `pkg/diskimage/rpi/` | `Name`, `KernelPackage`, `DefaultModel`, `Model`, `Models`, `LookupModel`, `New`, `Target`, `ConfigTxt`; `apk.go` (apk extraction); `errors.go` |
 | `pkg/diskimage/qemuvirt/` | `Name`, `KernelPackage`, `New`, `Target` |
 | `pkg/diskimage/uboot/` | `Board`, `Boards`, `Manifest`, `Artifacts`, `Options`, `CacheKey`, `Build`, `ReadManifest`, `Locate`; `errors.go` |
@@ -34,13 +34,20 @@
 | `pkg/installer/release.go` | `releaseOnFailure`, `afterFailedInstall`, `releaseDisk`, `diskRelease`, `luksMappedName`; `ErrDiskRelease` (installer engineering.md invariant 16) |
 | `pkg/authenticode/pe.go` | `embedSignature`: `WIN_CERTIFICATE.dwLength` is header + DER and the 8-byte padding stays outside it (what `sbsign` writes; mbedTLS rejects the alternative, see §10) |
 | `configs/platform/templates/single-node/raspberrypi/rpi4/default.yaml` | the Raspberry Pi 4 template `create --target rpi` picks up (`raspberrypi/README.md` lists what differs from the x86 template) |
+| `configs/platform/templates/dedicated/raspberrypi/rpi4/compute.yaml` | the Raspberry Pi 4 compute node of the dedicated profile, built with `create --target rpi --role compute` (`dedicated/raspberrypi/README.md` lists what differs from the x10 compute template) |
+| `configs/platform/templates/dedicated/raspberrypi/rpi5/compute.yaml` | the same compute node on a Raspberry Pi 5, **experimental** (`create --target rpi --model rpi5 --role compute`); its header and `dedicated/raspberrypi/README.md` list what is unvalidated |
 | `test/integration/diskimage/` | `suite_test.go` (inputs from `DISKIMAGE_IMAGE`, `DISKIMAGE_RPI_IMAGE`, `DISKIMAGE_UBOOT`, `DISKIMAGE_WORK_DIR`; `MissingInputError`), `image_test.go`, `uboot_test.go`, `firstboot_test.go`; `userspace/` (the arm64 container suite) |
 | `pkg/installer/boot_firmware.go` | `InstallTarget`, `BootFirmwareType`, `BootConfig`, `bootFirmwares`, `imageTargetSkips` (contract in [installer engineering.md](../installer/engineering.md) §2, invariant 3) |
 | `pkg/iso/types.go` | `InstallerOverrides` |
 | `build/docker/uboot-builder/` | `Dockerfile`, `Makefile`, `build-uboot.sh`, `mkesl.py`, `configs/{common-efi.config,rpi_arm64-tpm.config,qemu_arm64-tpm.config,tpm-soft-spi.dts}`, `patches/0001-mbedtls-glue-return-errno-for-parse-failures.patch`, `README.md` — every file but the README is a cache-key input |
 | `build/docker/trusted-platform/Dockerfile-alpine-swtpm-arm64` | arm64 Alpine + swtpm for the userspace suite; the platform binaries are bind-mounted from `bin/aarch64` |
-| `build/docker/diskimage-builder/Dockerfile` | the arm64 Alpine assemble container (apk-tools, parted, dosfstools, e2fsprogs, lvm2, util-linux, kmod, cpio, xz, mkinitfs, squashfs-tools — no platform binaries, no keys); it also runs `diskimage netboot-initfs` |
+| `build/docker/diskimage-builder/Dockerfile` | the arm64 Alpine assemble container (apk-tools, parted, dosfstools, e2fsprogs, lvm2, util-linux, kmod, cpio, xz, mkinitfs, squashfs-tools, cryptsetup — no platform binaries, no keys); it also runs `diskimage netboot-initfs` and `diskimage diskless-root`. One image per platform: `BuildConfig.builderImageFor(arch)` tags `<BuilderImage>:<arch>` — host arch for assemble, target arch for netboot-initfs and diskless-root — so no step can run another platform's image |
 | `pkg/diskimage/netboot_initfs.go` | `GenerateNetbootInitfs` (in-container), `StagedMedia.BuildNetbootInitfs` (host side), `NetbootInitfsOptions`, `NetbootInitfs`, `NetbootInitfsFeatures` |
+| `pkg/diskimage/diskless_root.go` | `GenerateDisklessRoot` (in-container), `StagedMedia.BuildDisklessRoot` (host side through `runner.Container`), `DisklessRootOptions`, `DisklessRoot`, `DisklessRootFSFile`, `DisklessVerityFile`, `DisklessRootHashFile` |
+| `pkg/diskimage/diskless_secrets.go` | `refuseRootPrivateKeys`, the pre-`mksquashfs` walk that refuses a root carrying private key material, and its `DisklessRootPrivateKeyError` |
+| `pkg/diskimage/diskless_credentials.go` | `lockRootAccounts` (locks usable shadow hashes before packing), `refuseRootCredentials` and its `DisklessRootCredentialError` |
+| `pkg/diskimage/diskless_config.go` | `refuseRootConfigSecrets` (refuses an installed platform config holding a plaintext `secret:"true"` field, found by `bootstrap.PlaintextSecretFields` against `app.App`) and its `DisklessRootConfigSecretError` |
+| `pkg/initrd/diskless_root.go` | the initramfs-side diskless root path: fetch squashfs plus dm-verity hash tree, open with the signed `platform_roothash=` and pinned verity parameters, mount read-only squashfs and tmpfs overlay |
 
 ## 2. Exported surface
 
@@ -61,6 +68,8 @@ func NewTarget(name, model string) (Target, error)   // UnknownTargetError
 
 func Create(ctx context.Context, cfg *BuildConfig) (*Result, error)
 func Assemble(ctx context.Context, opts AssembleOptions) (*AssembleResult, error)
+func GenerateDisklessRoot(ctx context.Context, opts DisklessRootOptions) (*DisklessRoot, error)
+func (s *StagedMedia) BuildDisklessRoot(ctx context.Context, outDir, manifestDir string, sourceDateEpoch int64, version string) (*DisklessRoot, error)
 func Inspect(ctx context.Context, path string, run runner.Runner) (*Report, error)
 func Boot(ctx context.Context, opts BootOptions) (*BootResult, error)
 func Preflight(ctx context.Context, run runnerFunc, containerRuntime, arch string) error
@@ -94,7 +103,11 @@ stops it; the swtpm is stopped on every return.
 "rpi4"`; models `rpi4` (`bcm2711-rpi-4-b.dtb`), `rpi400`
 (`bcm2711-rpi-400.dtb`), `cm4` (`bcm2711-rpi-cm4.dtb`), `rpi3b+`
 (`bcm2710-rpi-3-b-plus.dtb`), `rpi5` (`bcm2712-rpi-5-b.dtb`,
-`Experimental: true`). `ConfigTxt(m)` yields `arm_64bit=1`, `enable_uart=1`,
+`Experimental: true`). `Model.Description` is the board name and becomes the
+image's `hardware-model`. `Model.Firmware` is the GPU firmware the board loads
+before U-Boot: `start4.elf`, `fixup4.dat` on the BCM2711 boards;
+`bootcode.bin`, `start.elf`, `fixup.dat` on the 3B+; none on the Pi 5, whose
+bootloader EEPROM reads `config.txt` and loads `kernel8.img` itself. `ConfigTxt(m)` yields `arm_64bit=1`, `enable_uart=1`,
 `uart_2ndstage=1`, `dtoverlay=disable-bt`, `dtoverlay=tpm-soft-spi`,
 `kernel=kernel8.img`.
 
@@ -135,15 +148,28 @@ release and are held equal to `build/docker/uboot-builder/Makefile` by
    no firmware fallback that could find the UKI.
 5. **The Pi target verifies its own output.** `StageBootFirmware` fails with
    `FirmwareMissingError` unless `kernel8.img`, `config.txt`, the model's
-   DTB, `overlays/tpm-soft-spi.dtbo`, `overlays/disable-bt.dtbo`,
-   `start4.elf` and `fixup4.dat` all exist after staging. Files come only
+   DTB, `overlays/tpm-soft-spi.dtbo`, `overlays/disable-bt.dtbo`
+   and the model's `Firmware` all exist after staging. Files come only
    from the prefetched apks and the verified U-Boot output, so the image is
    built offline from the packages the node has installed.
 6. **Nothing unverified reaches the ESP.** `uboot.Locate` requires every
    board directory, checks every file against its `SHA256SUMS`
    (`ChecksumMismatchError` for a bad digest *or* a file with no entry), and
    requires `overlays/tpm-soft-spi.dtbo` for `rpi_arm64`.
-7. **The cache key is one value in two implementations, over every input
+7. **Diskless image boot fails closed.** The builder refuses a root without
+   `/sbin/init` or `/usr/bin/platformd` (`DisklessRootContentError`), checked
+   in the installed tree and again in the squashfs listing, before any verity
+   tree is made. The root hash is published only inside the DB-signed
+   manifest. `platform-initrd` accepts a diskless root only when the signed
+   UKI's `platform_roothash=`, `platform_verity_salt=`, sizes and URLs are all
+   present and valid; it fetches the squashfs and hash tree into bounded
+   tmpfs, and opens dm-verity before any mount with a device-mapper table
+   (`dmsetup create --readonly`) whose every parameter is pinned or signed —
+   there is no superblock to read them from, and no cryptsetup in the
+   initramfs. dm-verity checks each block as it is read, starting with the
+   squashfs superblock at mount; one that does not hash up to the signed root
+   panics the node (`panic_on_corruption`) rather than serve it.
+8. **The cache key is one value in two implementations, over every input
    that shapes the binary.** `uboot.CacheKey` and `make cache-key` hash
    `uboot:<version>`, `owner:<GUID>` (the SignatureOwner written into every
    preseeded list), then the sha256 of each config input — the fragments,
@@ -157,31 +183,44 @@ release and are held equal to `build/docker/uboot-builder/Makefile` by
    the ESL writer therefore misses the cache; before this (review finding
    on #680) it could stage an old `u-boot.bin` into a new image under a
    manifest reporting a matching key.
-8. **The baked config makes the node self-describing.** `applyInstallerOverrides`
+9. **The baked config makes the node self-describing.** `applyInstallerOverrides`
    (`pkg/iso/customize.go`) always writes `os.architecture`, and writes
    `os.kernel-package`, `disk.device`, `disk.partition-table`,
    `hardware-manufacturer`, `hardware-model`, `install-target` and
    `boot.firmware` when the target sets them. The node's own config therefore
    says `aarch64` / `uboot`, so `platformctl install uki-rebuild` on the
    node produces `BOOTAA64.EFI`.
-9. **The loop device comes from `/dev/loop-control`**, not `losetup --find`:
+10. **The loop device comes from `/dev/loop-control`**, not `losetup --find`:
    `allocateLoopDevice` issues `LOOP_CTL_GET_FREE` and creates `/dev/loopN`
    with `mknod` when the container's private `/dev` has no node for it
    (`LoopDeviceError` otherwise), then `losetup --partscan` attaches the
    image. Detach runs whether or not the install succeeded; a detach failure
    after a failed install is logged, not raised.
-10. **The host's `/dev` is never bind-mounted into the container.** The
+11. **The host's `/dev` is never bind-mounted into the container.** The
     installer's `mdev -s` resets the mode of every device node it walks;
     `TestCreateStagesMediaAndRunsTheContainer` fails if the `docker create` argv ever names a
     `/dev` path again. The private `/dev` is static, so the installer's
     partition-node refresh (installer engineering invariant 15) is what keeps
     `/dev/loopNp1` usable after the second partition-table re-read.
-11. **The size floor is 2048 MB** (default 4096); `Create` and `Assemble`
+12. **The size floor is 2048 MB** (default 4096); `Create` and `Assemble`
     fail below it before touching anything.
-12. **`Preflight` runs before any work** unless `SkipPreflight`: the runtime
-    answers `version`; on a foreign architecture
-    `/proc/sys/fs/binfmt_misc/qemu-<goarch>` exists with `F` in its
-    `flags:`; `/sys/module/loop` and `/sys/module/dm_crypt` exist.
+13. **`Preflight` runs before any work** unless `SkipPreflight`: the runtime
+    answers `version`; on a foreign architecture a short-lived privileged
+    `alpine:3.22` container started through the runtime (so the answer is the
+    runtime host's, not the caller's `/proc`) reads
+    `/proc/sys/fs/binfmt_misc/qemu-<arch>` and it carries `F` in its
+    `flags:`; native builds run no probe; `/sys/module/loop` and `/sys/module/dm_crypt` exist.
+14. **The assemble container runs at the host platform** (`BuildConfig.HostArch`,
+    default `runtime.GOARCH`), never the target's: qemu-user has no keyring
+    syscalls, so go-luks2 cannot open the volume under emulation (#802). A
+    foreign target runs the installer from `BuildConfig.HostInstallerBinary`
+    (a host-architecture `platformctl-static`, copied to `/installer`; the CLI
+    takes the one beside the running `platformctl`), and `Create` fails with
+    `HostInstallerMissingError` when there is none. The target architecture
+    reaches the installer through the baked config (`os.architecture`); the
+    installer never derives it from its own GOARCH (the UKI builder is set to
+    the install target). Native: partitioning, LUKS, mkfs, losetup. Emulated
+    (binfmt, in the target chroot): apk, dracut, depmod.
 
 ## 4. Error semantics
 
@@ -199,7 +238,7 @@ All errors are typed; none is `fmt.Errorf`. Every wrapping type implements
 | `ArtifactMissingError{Path, Hint}`; `ChecksumMismatchError{Path, Reason}`; `ManifestError{Path, Err}` | `uboot` | `u-boot.bin`, `SHA256SUMS` or the overlay absent; a digest mismatch, a file with no entry or a malformed sums line; `manifest.json` unreadable, incomplete or carrying the wrong cache key |
 | `InputError{Path, Err}`; `BuildError{Step, Err}` | `uboot` | a fragment, overlay source or certificate unreadable; the builder image build or run failed |
 | `CommandError{Name, Args, Output, Err}` | `runner` | any external command exited non-zero; carries the combined output |
-| `ErrBuildFailed{Reason}`, `ErrConfigRequired{}`, `ErrConfigLoadFailed{Path, Err}`, `ErrBinariesNotFound{Dir}` | `cli/commands/diskimage` | the CLI wrappers; `ErrBinariesNotFound` names `make rpi-binaries` |
+| `ErrBuildFailed{Reason}`, `ErrConfigRequired{}`, `ErrConfigLoadFailed{Path, Err}`, `ErrBinariesNotFound{Dir}`, `ErrRoleTemplate{Target, Model, Role, Reason}` | `cli/commands/diskimage` | the CLI wrappers; `ErrBinariesNotFound` names `make rpi-binaries`; `ErrRoleTemplate` is a `--role` with no dedicated template to build |
 | `ErrUnknownInstallTarget`, `ErrUnknownBootFirmware`, `ErrBootFirmwareStage` | `installer` | an unknown `install-target` / `boot.firmware` spelling; a failed firmware copy |
 
 **Fail-closed paths**: preflight; the size floor; U-Boot checksum
@@ -217,9 +256,12 @@ default > `iso.DefaultISOBuildConfig()`.
 
 The platform config baked into the image is `--platform-config`
 (auto-detected: `configs/platform/templates/single-node/raspberrypi/<model>/default.yaml`
-when it exists — it does not ship yet — else
-`configs/platform/templates/single-node/default.yaml`), deep-merged with
-`--overrides`. The target's `InstallerOverrides` are then applied on top:
+when it exists — `rpi4` ships one — else
+`configs/platform/templates/single-node/default.yaml`), or, with `--role
+<role>`, `configs/platform/templates/dedicated/raspberrypi/<model>/<role>.yaml`
+(`rpi4/compute.yaml` and the experimental `rpi5/compute.yaml` ship; a model
+the builder does not know or a missing file is `ErrRoleTemplate`, never a
+fallback to single-node). It is deep-merged with `--overrides`. The target's `InstallerOverrides` are then applied on top:
 
 | Target | `disk.device` | `disk.partition-table` | `os.kernel-package` | `hardware-manufacturer` / `hardware-model` | `install-target` | `boot.firmware` |
 |---|---|---|---|---|---|---|
@@ -237,7 +279,23 @@ is what the integration suite reads — with `tty1` last, everything after
 quirk entry (`pkg/quirks`: `console=ttyAMA0,115200 console=tty1 rootwait
 loglevel=7`, no earlycon), because the virt machine's PL011 is `ttyAMA0` too.
 The `rpi` target adds `raspberrypi-bootloader` and
-`raspberrypi-bootloader-common` to the prefetch.
+`raspberrypi-bootloader-common` to the prefetch, then the smart-card token
+stack every Pi image carries, for every model and role: `pcsc-lite`,
+`pcsc-lite-openrc`, `ccid`, `opensc` and `yubico-piv-tool-libs`. Those are
+the PC/SC daemon and its init script, the USB CCID reader driver, and the two
+PKCS#11 modules, `opensc-pkcs11.so` (Nitrokey HSM) and `libykcs11.so`
+(YubiKey PIV). The lists live in `pkg/diskimage/rpi/target.go`
+(`bootloaderPackages`, `tokenPackages`, `tokenServices`) and reach the media
+as `InstallerOverrides.ExtraPackages` and `ExtraServices`. Staging bakes them
+into the media's `configs/installer.yaml`, the file the installer installs
+from: every package the media prefetches for the installed system
+(`PreFetchConfig.installedPackages`, `pkg/iso/prefetch.go`) is appended to
+`os.packages` and every `ExtraServices` entry to `os.services`, after the
+template's own entries and without repeating one (`applyInstallerOverrides`,
+`pkg/iso/customize.go`). So the installed Pi carries the bootloader packages
+and the token stack, and starts pcscd in the default runlevel. The
+installer's own service list does not name pcscd, so x86 and `qemu-virt`
+images do not start it.
 
 `seal-pcrs` comes from the template (`[0, 7, 9]` in the single-node default).
 On the Pi, PCR 0 is only U-Boot's version string, so `[0, 4, 7, 9]` — adding
@@ -309,6 +367,11 @@ served by the bootstrap container instead of written to a card.
   (`iso.StageInstallMedia` with the x86 binaries: no U-Boot, no boot
   firmware, the machine's own UEFI) and boots Alpine's `lts` flavour.
   `DefaultSets` = `X86_64Set` + `RaspberryPiSet` + `ARM64VirtSet`.
+  `Config.SetsToBuild` is the one answer to "which sets": the named `Sets`,
+  else `DefaultSets`, less every set with no diskless image when `Diskless`
+  is set. `platformctl diskimage netboot` passes no sets when `--sets` is
+  absent and asks `SetsToBuild` before resolving per-set binaries, so a
+  default `--diskless` build never needs the x86_64 binaries.
 - Every set's `initramfs-<flavour>` is rewritten as the installer's
   (`iso.InstallMedia.InstallerInitramfs` → `Customizer.InstallerInitramfs`):
   the autoinstall overlay generated from the set's own media configuration,
@@ -321,6 +384,8 @@ served by the bootstrap container instead of written to a card.
 - `rpi-tftp/` (the Pi set: `Stage` from the set's own packages and U-Boot)
   and `firmware/snponly-aarch64.efi` (the ipxe-builder's arm64 iPXE, verified
   against its `SHA256SUMS`, then db-signed).
+- `http-boot/{boot.img,boot.sig,pubkey.bin}` when `Config.HTTPBoot` is set (the
+  Pi's signed HTTP boot, below); indexed as `http_boot`.
 - `netboot-media.yaml`, `SHA256SUMS` (relative paths, `sha256sum -c`
   format). `Build` loads the result back through `LoadNetbootMedia` and
   `LoadMediaSets`, so a build the container would refuse fails the build.
@@ -333,10 +398,72 @@ served by the bootstrap container instead of written to a card.
   `<output>.cache/alpine`) and verified against the digests pinned in
   `alpine.go`; an unpinned Alpine release is an `UnpinnedReleaseError`.
 
+**Signed HTTP boot** (`netboot.StageHTTPBoot`, `pkg/rpibootsig`,
+`pkg/diskimage/fatimage`): the Pi's first stage over HTTP. The bootloader EEPROM
+fetches `boot.img` and `boot.sig` from `HTTP_HOST`/`HTTP_PATH`; with
+`SIGNED_BOOT=1` it runs the image only if `boot.sig` verifies against the public
+key whose SHA-256 is in OTP.
+
+- `boot.img` is `fatimage.Build` of the staged Pi tree: a FAT16 ramdisk,
+  written in pure Go (no loop device, no `mkfs`), reproducible for a tree
+  (a fixed FAT epoch). The writer uses lowercase 8.3 short names with NT case
+  flags when a name fits, emits VFAT long-name entries only when needed, and
+  the reader rejects malformed geometry, cluster cycles, and cross-linked
+  directory chains before walking files.
+- `boot.sig` is `rpibootsig.Sign`, byte-compatible with upstream's
+  `rpi-eeprom-digest`: `<sha256 of boot.img>\nts: <epoch>\n[target-soc: 2711|2712\n]rsa2048: <hex>`,
+  the signature RSA-2048 PKCS#1 v1.5 over SHA-256 of the image. `target-soc`
+  is optional and omitted by default for `boot.img`; `platformctl diskimage
+  netboot --target-soc 2711|2712` writes it explicitly for hardware validation.
+  `--model` still selects the Pi tree to stage, and 3B+ has no EEPROM and is a
+  `NoEEPROMError`. Golden tests pin the format against vectors made with
+  upstream's script.
+- `pubkey.bin` is the modulus (256 bytes) and exponent (8 bytes), both
+  little-endian: `rpibootsig.KeyBlob`. Its SHA-256 (`KeyHash`) is the OTP
+  customer key hash; `ParseKeyBlob` reads it back. Raspberry Pi's
+  `rpi-eeprom-config --pubkey` takes the fleet certificate/public key as PEM,
+  so operators export that PEM separately through `platformctl ca certificate`.
+- **The private key never leaves the KMS.** The signer is
+  `secureboot.NewKMSSigner` on the build's platform client: the KMS is sent the
+  prehashed SHA-256 digest (`PreHashed=true`). `FleetKey` must be a `kms://`
+  reference (`FleetKeyRefError`), an RSA-2048 key - the only size the
+  bootloader verifies - and `rpibootsig.Sign` verifies its own signature before
+  emitting it, so a KMS that signs with the wrong key or scheme fails the
+  build. The same signer backs `platformctl diskimage rpi-eeprom-hsm`, whose
+  stdout contract matches upstream `rpi-eeprom-digest -H` for signing the
+  EEPROM config without exporting the private key. Signing the 2712 (Pi 5/CM5)
+  first-stage `bootcode.bin` is not this flow and is unsupported until Phase 6
+  hardware validation (#692).
+- The build reads the staged files back (`VerifyHTTPBoot`: the key against its
+  hash, the digest, the signature) before it
+  returns, and `container.LoadNetbootMedia` refuses an index whose `http_boot`
+  directory lacks any of the three files.
+- Serving: the deployer owns `http-boot/` (it is cleared and replaced with the
+  rest of the build) and the container serves it from the data directory at
+  `/data/http-boot/`, so `HTTP_PATH` is `container.NetbootMedia.HTTPBootPath()`
+  (`data/http-boot`). The HTTP server's read/write timeout is 30 s.
+- The emulator side, `rpinetboot.HTTPBoot`, is the EEPROM's: fetch both
+  files, require the public key to hash to the OTP value
+  (`KeyHashMismatchError`), verify `boot.sig` over `boot.img`
+  (`DigestMismatchError`, `SignatureError`, `MalformedError`), then mount the
+  image (`RamdiskError`). A refusal is an `HTTPBootRefusedError`. It is
+  exposed as `platformctl bootstrap probe rpi-http` ([bootstrap cli.md](../bootstrap/cli.md))
+  and driven end to end by `test/integration/netboot/rpi_httpboot_test.go`,
+  which signs with an in-process RSA key: the integration suite has no KMS
+  service, and the KMS path is covered by the builder's unit tests against the
+  platform-client fake.
+
+What only hardware can confirm (OTP programming, signed EEPROM config,
+explicit `target-soc` behaviour, the EEPROM FAT reader, `HTTP_HOST`/`HTTP_PORT`
+syntax, the image size limit, HTTPS and a custom CA on the Pi 5 and CM5) is
+listed in [user.md](user.md#what-hardware-must-still-confirm).
+
 ## 7. Test strategy
 
-Four layers, cheapest first; each one is a `make` target and the nightly
-`rpi-image` job runs the first three.
+Four layers, cheapest first; each one is a `make` target and the
+`rpi-image` job in `nightly.yml` runs the first three. That workflow has no
+schedule since #852: dispatch it by hand (`workflow_dispatch`), and every
+dispatch also runs the emulated first boot.
 
 - **Unit** (`make test-diskimage`, `test-qemu`, `coverage-diskimage`,
   `bench-diskimage`; `make test` covers the rest): every external command
@@ -348,7 +475,10 @@ Four layers, cheapest first; each one is a `make` target and the nightly
   is asserted argument by argument; `pkg/qemu/harness` fakes the swtpm
   behind its `TPM` interface and drives `Console` against an in-process
   unix socket; the installer's release-on-failure and embedded-kernel signing
-  run against recorders and a `authenticodetest.MinimalPE`.
+  run against recorders and a `authenticodetest.MinimalPE`. That package
+  (`pkg/authenticode/authenticodetest`) is the one home for hand-built PE
+  fixtures: `MinimalPE` for tests that sign, `SectionedPE(sections, padding)`
+  for tests that rewrite the section table (`pkg/uki`). Do not add a local copy.
   `TestCacheKeyMatchesMakeCacheKey` runs `make -s cache-key` in the builder
   directory (needs `make`, no container).
 - **Image layout** (`test/integration/diskimage/image_test.go`, part of

@@ -15,6 +15,7 @@ package compute
 
 import (
 	"testing"
+	"testing/synctest"
 	"time"
 )
 
@@ -53,6 +54,7 @@ func TestInstanceState_IsValid(t *testing.T) {
 		{"Valid Creating", StateCreating, true},
 		{"Valid Stopped", StateStopped, true},
 		{"Valid Running", StateRunning, true},
+		{"Valid Suspended", StateSuspended, true},
 		{"Invalid", InstanceState("invalid"), false},
 		{"Empty", InstanceState(""), false},
 	}
@@ -102,9 +104,17 @@ func TestInstanceState_CanTransitionTo(t *testing.T) {
 		{"Stopping to Stopped", StateStopping, StateStopped, true},
 		{"Stopped to Deleting", StateStopped, StateDeleting, true},
 		{"Any to Error", StateRunning, StateError, true},
-		{"Error to anything is invalid", StateError, StateRunning, false},
+		{"Error to anything but Deleting is invalid", StateError, StateRunning, false},
+		{"Error to Deleting", StateError, StateDeleting, true},
+		{"Error to Stopped is invalid", StateError, StateStopped, false},
 		{"Deleting to anything is invalid", StateDeleting, StateStopped, false},
 		{"Running to Stopped is invalid", StateRunning, StateStopped, false},
+		{"Running to Suspended", StateRunning, StateSuspended, true},
+		{"Suspended to Running", StateSuspended, StateRunning, true},
+		{"Suspended to Stopping", StateSuspended, StateStopping, true},
+		{"Suspended to Error", StateSuspended, StateError, true},
+		{"Stopped to Suspended is invalid", StateStopped, StateSuspended, false},
+		{"Suspended to Deleting is invalid", StateSuspended, StateDeleting, false},
 	}
 
 	for _, tt := range tests {
@@ -270,48 +280,66 @@ func TestLifecycleManager_ListInstances(t *testing.T) {
 }
 
 func TestLifecycleManager_WaitForState(t *testing.T) {
-	lm := NewLifecycleManager()
-	instanceID := "test-instance"
+	// WaitForState polls on a ticker. Inside a synctest bubble the ticker and
+	// the timeout read the bubble's fake clock, so no case waits on the wall
+	// clock and none depends on scheduling.
+	synctest.Test(t, func(t *testing.T) {
+		lm := NewLifecycleManager()
 
-	// Test timeout
-	lm.SetState(instanceID, StateStarting)
-	err := lm.WaitForState(instanceID, StateRunning, 100*time.Millisecond)
-	if err != ErrTimeout {
-		t.Errorf("Expected ErrTimeout, got: %v", err)
-	}
+		// Test timeout
+		mustSetState(t, lm, "timeout", StateStarting)
+		err := lm.WaitForState("timeout", StateRunning, 100*time.Millisecond)
+		if err != ErrTimeout {
+			t.Errorf("Expected ErrTimeout, got: %v", err)
+		}
 
-	// Test successful wait
-	lm.SetState(instanceID, StateStarting)
+		// Test successful wait
+		mustSetState(t, lm, "success", StateStarting)
+		done := startWaitForState(lm, "success", StateRunning, 200*time.Millisecond)
+		mustSetState(t, lm, "success", StateRunning)
+		if err := <-done; err != nil {
+			t.Errorf("WaitForState failed: %v", err)
+		}
+
+		// Test error state
+		mustSetState(t, lm, "error", StateStarting)
+		done = startWaitForState(lm, "error", StateRunning, 200*time.Millisecond)
+		mustSetState(t, lm, "error", StateError)
+		if err := <-done; err == nil {
+			t.Error("Expected error when instance enters error state")
+		}
+
+		// Test invalid instance ID
+		err = lm.WaitForState("", StateRunning, 100*time.Millisecond)
+		if err != ErrInvalidInstanceID {
+			t.Errorf("Expected ErrInvalidInstanceID, got: %v", err)
+		}
+
+		// Test invalid target state
+		err = lm.WaitForState("timeout", InstanceState("invalid"), 100*time.Millisecond)
+		if err == nil {
+			t.Error("Expected error for invalid target state")
+		}
+	})
+}
+
+// startWaitForState runs WaitForState on its own goroutine and returns once
+// the waiter is blocked on its poll, so the caller's next transition is one
+// the waiter has to observe. It must run inside a synctest bubble.
+func startWaitForState(lm *LifecycleManager, instanceID string, target InstanceState, timeout time.Duration) <-chan error {
+	done := make(chan error, 1)
 	go func() {
-		time.Sleep(50 * time.Millisecond)
-		lm.SetState(instanceID, StateRunning)
+		done <- lm.WaitForState(instanceID, target, timeout)
 	}()
-	err = lm.WaitForState(instanceID, StateRunning, 200*time.Millisecond)
-	if err != nil {
-		t.Errorf("WaitForState failed: %v", err)
-	}
+	synctest.Wait()
+	return done
+}
 
-	// Test error state
-	lm.SetState(instanceID, StateStarting)
-	go func() {
-		time.Sleep(50 * time.Millisecond)
-		lm.SetState(instanceID, StateError)
-	}()
-	err = lm.WaitForState(instanceID, StateRunning, 200*time.Millisecond)
-	if err == nil {
-		t.Error("Expected error when instance enters error state")
-	}
-
-	// Test invalid instance ID
-	err = lm.WaitForState("", StateRunning, 100*time.Millisecond)
-	if err != ErrInvalidInstanceID {
-		t.Errorf("Expected ErrInvalidInstanceID, got: %v", err)
-	}
-
-	// Test invalid target state
-	err = lm.WaitForState(instanceID, InstanceState("invalid"), 100*time.Millisecond)
-	if err == nil {
-		t.Error("Expected error for invalid target state")
+// mustSetState applies a state transition and fails the test if it is rejected.
+func mustSetState(t *testing.T, lm *LifecycleManager, instanceID string, state InstanceState) {
+	t.Helper()
+	if err := lm.SetState(instanceID, state); err != nil {
+		t.Fatalf("SetState(%s, %s) error = %v", instanceID, state, err)
 	}
 }
 

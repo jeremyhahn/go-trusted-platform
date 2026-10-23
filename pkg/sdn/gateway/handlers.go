@@ -59,14 +59,15 @@ type serviceBuilder func(g *Gateway) (backedService, error)
 // GatewayConfig but absent here is refused at Start with the reason in
 // serviceRefusals — never silently reported running.
 var serviceBuilders = map[string]serviceBuilder{
-	ServiceFirewall:     buildFirewall,
-	ServiceLoadBalancer: buildLoadBalancer,
-	ServiceNAT:          buildNAT,
-	ServiceNAT64:        buildNAT64,
-	ServiceHostFW:       buildHostFW,
-	ServiceTunnels:      buildTunnels,
-	ServiceOverlay:      buildOverlay,
-	ServiceTransit:      buildTransit,
+	ServiceFirewall:      buildFirewall,
+	ServiceLoadBalancer:  buildLoadBalancer,
+	ServiceNAT:           buildNAT,
+	ServiceNAT64:         buildNAT64,
+	ServiceHostFW:        buildHostFW,
+	ServiceTunnels:       buildTunnels,
+	ServiceOverlay:       buildOverlay,
+	ServiceTransit:       buildTransit,
+	ServiceManagementVPN: buildManagementVPN,
 }
 
 // serviceRefusals names, per unbuildable section, the blocker that stands
@@ -74,15 +75,12 @@ var serviceBuilders = map[string]serviceBuilder{
 // operator reads in ErrServiceUnavailable; it names the missing piece, not
 // a promise.
 var serviceRefusals = map[string]string{
-	ServiceEdge: "the edge service constructor (modes.NewEdgeModeHandler) needs an IPv6 pool, ACME endorse/enroll " +
-		"toggles and a FROST pool the gateway runtime does not inject; tracked under epic #553",
-	ServiceDHCP: "the DHCP service needs an IPAM allocator gatewayd does not have (GatewayRuntime carries none, " +
-		"pkg/sdn/gateway/runtime.go); tracked under epic #553",
-	ServicePXE: "the PXE controller (modes.NewPXEController) needs a serving interface, server address and DHCP " +
-		"range the gateway PXE section does not carry; provisioning is served by platformd's iPXE server today; " +
-		"tracked under epic #553",
-	ServiceManagementVPN: "the management VPN is a design (docs/vpn/, #558) with no implementation; " +
-		"WireGuard is non-FIPS and the MASQUE data plane is unbuilt",
+	ServiceEdge: "the edge service is planned, not implemented: device onboarding needs TPM EK, quote and " +
+		"IDevID verification through the platform SDK, and gatewayd admits no device without it",
+	ServiceDHCP: "the DHCP service is planned, not implemented: it needs an IPAM allocator gatewayd does not " +
+		"have (GatewayRuntime carries none)",
+	ServicePXE: "the gateway PXE service is planned, not implemented; provisioning is served by platformd's " +
+		"iPXE server today",
 }
 
 // backedServiceHandler is the one ServiceHandler shape for every
@@ -186,15 +184,19 @@ func (h *refusedServiceHandler) Health() error {
 	return &ErrServiceUnavailable{Service: h.name, Reason: h.reason}
 }
 
-// registerConfiguredServices registers one handler per enabled section: a
-// supervisedServiceHandler for every section when a ServiceSupervisor is
-// injected (#557), otherwise a backedServiceHandler when the builder table
-// has the section and a refusedServiceHandler when it does not. The order is the declared order of
-// enabledServices, so start order is deterministic for the datapath
-// services even though the registry itself is a map.
+// registerConfiguredServices registers one handler per enabled section this
+// gateway hosts: a supervisedServiceHandler for every section the injected
+// ServiceSupervisor supervises (#557), otherwise a backedServiceHandler when
+// the builder table has the section and a refusedServiceHandler when it does
+// not. The order is the declared order of enabledServices, so start order is
+// deterministic for the datapath services even though the registry itself
+// is a map.
 func (g *Gateway) registerConfiguredServices() {
 	for _, name := range g.config.EnabledServices() {
-		if g.config.Supervisor != nil {
+		if !g.config.Hosts(name) {
+			continue
+		}
+		if g.supervises(name) {
 			g.serviceHandlers[name] = newSupervisedServiceHandler(name, g.config.Supervisor)
 			g.serviceOrder = append(g.serviceOrder, name)
 			continue
@@ -210,6 +212,12 @@ func (g *Gateway) registerConfiguredServices() {
 		}
 		g.serviceOrder = append(g.serviceOrder, name)
 	}
+}
+
+// supervises reports whether the service runs in a supervised child rather
+// than in this process.
+func (g *Gateway) supervises(service string) bool {
+	return g.config.Supervisor != nil && g.config.Supervisor.Supervises(service)
 }
 
 // backend returns the running backend behind a config-driven service, or
@@ -679,13 +687,15 @@ type overlayBackend struct {
 	server   bgp.BGPServerInterface
 	logger   *slog.Logger
 	bridge   string
+	newIPsec OverlayIPsecFactory
 
 	mu      sync.Mutex
 	handler *modes.OverlayModeHandler
 	admit   *VTEPAdmitter
 	speaker *bgp.Speaker
-	// stopLoops ends the admission sweep and the verdict follower; loopsDone
-	// closes once both have returned.
+	ipsec   OverlayIPsec
+	// stopLoops ends the admission sweep, the verdict follower and the
+	// IPsec service; loopsDone closes once all have returned.
 	stopLoops context.CancelFunc
 	loopsDone chan struct{}
 }
@@ -720,8 +730,10 @@ const overlayVerdictFollowRetry = 5 * time.Second
 // VTEPs of every device whose verdict passed. A broken stream is followed
 // again after retry; a verdict recorded while it was down is caught by the
 // admission sweep, which re-reads the latest verdict of every installed and
-// every refused VTEP.
+// every refused VTEP. It returns only once the IPAM listings its failed
+// verdicts started have ended.
 func runVerdictFollower(ctx context.Context, stream OverlayVerdictStream, admitter *VTEPAdmitter, retry time.Duration, logger *slog.Logger) {
+	defer admitter.waitListings()
 	for {
 		err := stream.Follow(ctx, admitter.OnDeviceVerdict)
 		if ctx.Err() != nil {
@@ -748,39 +760,59 @@ type overlayVTEPControl interface {
 
 // overlayHandlerProxy hands the admitter's revocations and replays to the
 // overlay handler once it is built, and refuses them before then: the admitter
-// is built first, because the handler is configured with it.
+// is built first, because the handler is configured with it. With overlay
+// IPsec it also evicts a revoked VTEP from IPsec and lifts that eviction
+// before a replay.
 type overlayHandlerProxy struct {
 	mu      sync.RWMutex
 	handler overlayVTEPControl
+	ipsec   OverlayIPsec
 }
 
-func (p *overlayHandlerProxy) set(handler overlayVTEPControl) {
+// set hands the proxy the handler, and the overlay's IPsec or nil for none.
+func (p *overlayHandlerProxy) set(handler overlayVTEPControl, ipsec OverlayIPsec) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.handler = handler
+	p.ipsec = ipsec
 }
 
-func (p *overlayHandlerProxy) get() (overlayVTEPControl, error) {
+func (p *overlayHandlerProxy) get() (overlayVTEPControl, OverlayIPsec, error) {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 	if p.handler == nil {
-		return nil, &ErrServiceUnavailable{Service: ServiceOverlay, Reason: "overlay handler is not ready"}
+		return nil, nil, &ErrServiceUnavailable{Service: ServiceOverlay, Reason: "overlay handler is not ready"}
 	}
-	return p.handler, nil
+	return p.handler, p.ipsec, nil
 }
 
+// RevokeVTEP withdraws the VTEP's routes, then evicts it from IPsec: its SAs
+// end and its packets drop until a replay readmits it. The eviction follows
+// the withdrawal, so no admission the handler took before the revocation can
+// lift it, and it runs whether or not the withdrawal failed.
 func (p *overlayHandlerProxy) RevokeVTEP(ctx context.Context, vtep netip.Addr) error {
-	handler, err := p.get()
+	handler, ipsec, err := p.get()
 	if err != nil {
 		return err
 	}
-	return handler.RevokeVTEP(ctx, vtep)
+	err = handler.RevokeVTEP(ctx, vtep)
+	if ipsec == nil {
+		return err
+	}
+	return errors.Join(err, ipsec.Evict(ctx, vtep))
 }
 
+// ReplayVTEP lifts the VTEP's IPsec eviction, then replays its routes,
+// which bring its SA back up.
 func (p *overlayHandlerProxy) ReplayVTEP(ctx context.Context, vtep netip.Addr) error {
-	handler, err := p.get()
+	handler, ipsec, err := p.get()
 	if err != nil {
 		return err
+	}
+	if ipsec != nil {
+		if err := ipsec.Readmit(ctx, vtep); err != nil {
+			return err
+		}
 	}
 	return handler.ReplayVTEP(ctx, vtep)
 }
@@ -788,7 +820,7 @@ func (p *overlayHandlerProxy) ReplayVTEP(ctx context.Context, vtep netip.Addr) e
 // RefusedVTEPs reports nothing before the handler is built: it has refused
 // nothing yet.
 func (p *overlayHandlerProxy) RefusedVTEPs() []netip.Addr {
-	handler, err := p.get()
+	handler, _, err := p.get()
 	if err != nil {
 		return nil
 	}
@@ -805,6 +837,11 @@ func (b *overlayBackend) Start(ctx context.Context) error {
 	if logger == nil {
 		logger = slog.Default()
 	}
+	// Symmetric IRB is on for the VNIs with a subnet; none bridges only.
+	gateways, anycastMAC, err := b.config.anycastGateways()
+	if err != nil {
+		return err
+	}
 	proxy := &overlayHandlerProxy{}
 	admitter, err := NewVTEPAdmitter(VTEPAdmissionConfig{
 		IPAM:             b.ipam,
@@ -814,7 +851,10 @@ func (b *overlayBackend) Start(ctx context.Context) error {
 		Replayer:         proxy,
 		MaxVerdictAge:    b.config.VerdictMaxAge,
 		VerdictClockSkew: b.config.VerdictClockSkew,
-		Logger:           logger,
+		// Half the interval, so a sweep whose reads hang ends before the
+		// next tick and the following sweep still runs on time.
+		ReadTimeout: b.config.admissionSweepInterval() / 2,
+		Logger:      logger,
 	})
 	if err != nil {
 		return err
@@ -826,10 +866,32 @@ func (b *overlayBackend) Start(ctx context.Context) error {
 			UnderlayMTU:   b.config.UnderlayMTU,
 			VXLANPort:     b.config.VXLANPort,
 		},
-		BridgeName: b.bridge,
-		AccessPort: b.config.AccessPort,
-		Admitter:   admitter,
-		Logger:     logger,
+		BridgeName:        b.bridge,
+		AccessPort:        b.config.AccessPort,
+		AnycastGateways:   gateways,
+		Subnets:           b.config.routedSubnets(),
+		AnycastGatewayMAC: anycastMAC,
+		L3VNI:             b.config.L3VNI,
+		Admitter:          admitter,
+		Logger:            logger,
+	}
+
+	// The floor goes in before the speaker dials, so nothing crosses the
+	// fabric unprotected while the overlay comes up. A start that fails
+	// releases the IPsec service but leaves the floor: the fabric stays
+	// closed, not open.
+	var ipsec OverlayIPsec
+	started := false
+	defer func() {
+		if !started && ipsec != nil {
+			ipsec.Close()
+		}
+	}()
+	if b.config.IPsecEnabled() {
+		if ipsec, err = b.startIPsec(ctx, admitter, logger); err != nil {
+			return err
+		}
+		modeCfg.FloodPeers = overlayIPsecPeers(ipsec)
 	}
 
 	speaker, evpnCfg, err := b.overlayEVPN(ctx, logger)
@@ -841,7 +903,7 @@ func (b *overlayBackend) Start(ctx context.Context) error {
 	if err != nil {
 		return errors.Join(err, stopOverlaySpeaker(ctx, speaker))
 	}
-	proxy.set(handler)
+	proxy.set(handler, ipsec)
 	if err := handler.Start(ctx); err != nil {
 		return errors.Join(err, stopOverlaySpeaker(ctx, speaker))
 	}
@@ -855,16 +917,16 @@ func (b *overlayBackend) Start(ctx context.Context) error {
 	loopsCtx, stopLoops := context.WithCancel(context.WithoutCancel(ctx))
 	var loops sync.WaitGroup
 	ticker := time.NewTicker(b.config.admissionSweepInterval())
-	loops.Add(2)
-	go func() {
-		defer loops.Done()
+	loops.Go(func() {
 		defer ticker.Stop()
 		runAdmissionSweep(loopsCtx, ticker.C, handler, admitter, logger)
-	}()
-	go func() {
-		defer loops.Done()
+	})
+	loops.Go(func() {
 		runVerdictFollower(loopsCtx, b.stream, admitter, overlayVerdictFollowRetry, logger)
-	}()
+	})
+	if ipsec != nil {
+		loops.Go(func() { ipsec.Run(loopsCtx) })
+	}
 	loopsDone := make(chan struct{})
 	go func() {
 		loops.Wait()
@@ -874,9 +936,26 @@ func (b *overlayBackend) Start(ctx context.Context) error {
 	b.handler = handler
 	b.admit = admitter
 	b.speaker = speaker
+	b.ipsec = ipsec
 	b.stopLoops = stopLoops
 	b.loopsDone = loopsDone
+	started = true
 	return nil
+}
+
+// startIPsec builds the overlay's IPsec and installs its fail-closed floor.
+// Its controller asks the admitter's remembered admissions, not the platform:
+// the overlay judged each VTEP before it put it on a flood list.
+func (b *overlayBackend) startIPsec(ctx context.Context, admitter *VTEPAdmitter, logger *slog.Logger) (OverlayIPsec, error) {
+	ipsec, err := b.newIPsec(b.config.IPsec, admittedVTEPs{admitter: admitter}, logger)
+	if err != nil {
+		return nil, &ErrOverlayIPsec{Operation: "build", Cause: err}
+	}
+	if err := ipsec.Install(ctx); err != nil {
+		ipsec.Close()
+		return nil, &ErrOverlayIPsec{Operation: "install floor", Cause: err}
+	}
+	return ipsec, nil
 }
 
 // joinOverlayVNIs joins each configured L2VNI on its access VLAN. With EVPN a
@@ -910,9 +989,14 @@ func (b *overlayBackend) Stop(ctx context.Context) error {
 	if b.speaker != nil {
 		errs = append(errs, b.speaker.Stop(ctx))
 	}
+	// The floor stays installed: a stopped overlay leaves the fabric closed.
+	if b.ipsec != nil {
+		b.ipsec.Close()
+	}
 	b.handler = nil
 	b.admit = nil
 	b.speaker = nil
+	b.ipsec = nil
 	b.stopLoops = nil
 	b.loopsDone = nil
 	return errors.Join(errs...)
@@ -963,7 +1047,7 @@ func (b *overlayBackend) overlayEVPN(ctx context.Context, logger *slog.Logger) (
 	if b.config.OverlayASN > 65535 {
 		return nil, nil, &ErrServiceUnavailable{Service: ServiceOverlay, Reason: "overlay EVPN route targets require a 2-byte overlay ASN"}
 	}
-	neighbors, err := overlayRRPeersWithDefaultPolicy(b.config)
+	peers, err := overlayRRPeers(b.config)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -977,7 +1061,7 @@ func (b *overlayBackend) overlayEVPN(ctx context.Context, logger *slog.Logger) (
 		SessionSource:   b.config.LocalVTEP,
 		Capabilities:    bgp.BGPCapabilities{EVPN: true},
 		EnabledFamilies: []bgp.AddressFamily{bgp.AFamilyEVPN},
-		Neighbors:       neighbors,
+		Neighbors:       peers,
 	}
 	defer zeroizeBGPSecrets(speakerCfg)
 	if err := speakerCfg.ResolveSecrets(ctx, b.resolver); err != nil {
@@ -1007,46 +1091,48 @@ func (b *overlayBackend) overlayEVPN(ctx context.Context, logger *slog.Logger) (
 		Logger:     logger,
 		LocalVTEP:  b.config.LocalVTEP,
 		OverlayASN: uint16(b.config.OverlayASN),
+		RouterMAC:  b.config.routerMAC(),
 	}, nil
 }
 
-func overlayRRPeersWithDefaultPolicy(config *OverlayServiceConfig) ([]bgp.NeighborConfig, error) {
-	neighbors := append([]bgp.NeighborConfig(nil), config.RRPeers...)
-	rts, err := overlayRouteTargets(config)
-	if err != nil {
-		return nil, err
+// overlayRRPeers copies the route-reflector peers for the overlay speaker and
+// fills each empty route-target allowlist with the route targets of the
+// configured VNIs and, with an L3VNI, the route target of its IP-VRF. The
+// speaker's RFC 8212 policy rejects every EVPN route an allowlist does not
+// name, so a peer configured without one would establish and then carry no
+// Type-2, Type-3 or Type-5 route in that direction. Every VTEP derives the
+// same route target for a VNI (RFC 8365 §5.1.2.1), so the default is the
+// overlay's own; an allowlist the operator wrote is kept as written.
+func overlayRRPeers(cfg *OverlayServiceConfig) ([]bgp.NeighborConfig, error) {
+	if len(cfg.RRPeers) == 0 {
+		return nil, nil
 	}
-	for i := range neighbors {
-		if !overlayPeerPolicyEmpty(neighbors[i].Policy) {
-			continue
-		}
-		neighbors[i].Policy.ImportRouteTargets = append([]string(nil), rts...)
-		neighbors[i].Policy.ExportRouteTargets = append([]string(nil), rts...)
+	vnis := make([]uint32, 0, len(cfg.VNIs)+1)
+	for _, v := range cfg.VNIs {
+		vnis = append(vnis, v.VNI)
 	}
-	return neighbors, nil
-}
-
-func overlayRouteTargets(config *OverlayServiceConfig) ([]string, error) {
-	rts := make([]string, 0, len(config.VNIs))
-	for _, vni := range config.VNIs {
-		rt, err := bgp.AutoRouteTarget(uint16(config.OverlayASN), 0, vni.VNI)
+	if cfg.L3VNI != 0 {
+		vnis = append(vnis, cfg.L3VNI)
+	}
+	routeTargets := make([]string, 0, len(vnis))
+	for _, vni := range vnis {
+		rt, err := bgp.AutoRouteTarget(uint16(cfg.OverlayASN), 0, vni)
 		if err != nil {
 			return nil, err
 		}
-		rts = append(rts, rt.String())
+		routeTargets = append(routeTargets, rt.String())
 	}
-	return rts, nil
-}
-
-func overlayPeerPolicyEmpty(policy bgp.PeerPolicyConfig) bool {
-	return len(policy.ImportAllow) == 0 &&
-		len(policy.ExportAllow) == 0 &&
-		len(policy.ImportRouteTargets) == 0 &&
-		len(policy.ExportRouteTargets) == 0 &&
-		!policy.ImportDefaultAccept &&
-		!policy.ExportDefaultAccept &&
-		policy.Import == nil &&
-		policy.Export == nil
+	peers := append([]bgp.NeighborConfig(nil), cfg.RRPeers...)
+	for i := range peers {
+		policy := &peers[i].Policy
+		if len(policy.ImportRouteTargets) == 0 {
+			policy.ImportRouteTargets = append([]string(nil), routeTargets...)
+		}
+		if len(policy.ExportRouteTargets) == 0 {
+			policy.ExportRouteTargets = append([]string(nil), routeTargets...)
+		}
+	}
+	return peers, nil
 }
 
 func buildOverlay(g *Gateway) (backedService, error) {
@@ -1057,8 +1143,12 @@ func buildOverlay(g *Gateway) (backedService, error) {
 	if g.config.Overlay == nil {
 		return nil, &ErrServiceUnavailable{Service: ServiceOverlay, Reason: "the overlay service needs a gateway.overlay section"}
 	}
+	if g.config.Overlay.IPsecEnabled() && runtime.OverlayIPsec == nil {
+		return nil, &ErrRuntimeMissing{Service: ServiceOverlay}
+	}
 	host := g.config.hostRuntime()
 	return &overlayBackend{
+		newIPsec: runtime.OverlayIPsec,
 		config:   g.config.Overlay,
 		ovs:      runtime.OVS,
 		of:       runtime.OverlayOpenFlow,

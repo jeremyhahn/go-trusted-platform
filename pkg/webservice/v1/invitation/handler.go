@@ -17,19 +17,18 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
-	"regexp"
 	"strconv"
+	"time"
 
 	"github.com/gorilla/mux"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/platform/service"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore/entities"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/middleware/tenant"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/restwire"
 )
-
-// emailRegex is a simple email validation pattern.
-var emailRegex = regexp.MustCompile(`^[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}$`)
 
 // HandlerParams contains the dependencies for creating an invitation handler.
 type HandlerParams struct {
@@ -110,7 +109,7 @@ func (h *handler) Create(w http.ResponseWriter, r *http.Request) {
 		h.responseWriter.Error400(w, r, ErrMissingEmail{})
 		return
 	}
-	if !emailRegex.MatchString(req.Email) {
+	if err := service.ValidateEmail(req.Email); err != nil {
 		h.responseWriter.Error400(w, r, ErrInvalidEmail{Email: req.Email})
 		return
 	}
@@ -203,7 +202,7 @@ func (h *handler) GetByToken(w http.ResponseWriter, r *http.Request) {
 		h.responseWriter.Error400(w, r, ErrInvitationAlreadyAccepted{Token: tokenValue})
 		return
 	}
-	if invitation.IsExpired() {
+	if invitation.IsExpired(time.Now()) {
 		h.responseWriter.Error400(w, r, ErrInvitationExpired{Token: tokenValue})
 		return
 	}
@@ -339,7 +338,7 @@ func (h *handler) Revoke(w http.ResponseWriter, r *http.Request) {
 
 	// Check if invitation can be revoked
 	if invitation.Status == entities.InvitationStatusRevoked {
-		h.responseWriter.Write(w, r, http.StatusConflict, response.WebServiceResponse{
+		h.responseWriter.Write(w, r, http.StatusConflict, restwire.WebServiceResponse{
 			Code:    http.StatusConflict,
 			Error:   ErrInvitationAlreadyRevoked{ID: invitationID}.Error(),
 			Success: false,
@@ -347,7 +346,7 @@ func (h *handler) Revoke(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if invitation.Status == entities.InvitationStatusAccepted {
-		h.responseWriter.Write(w, r, http.StatusConflict, response.WebServiceResponse{
+		h.responseWriter.Write(w, r, http.StatusConflict, restwire.WebServiceResponse{
 			Code:    http.StatusConflict,
 			Error:   ErrInvitationAlreadyAccepted{Token: ""}.Error(),
 			Success: false,
@@ -379,13 +378,13 @@ func (h *handler) writeServiceError(w http.ResponseWriter, r *http.Request, oper
 
 	switch e := err.(type) {
 	case ErrDuplicateInvitation:
-		h.responseWriter.Write(w, r, http.StatusConflict, response.WebServiceResponse{
+		h.responseWriter.Write(w, r, http.StatusConflict, restwire.WebServiceResponse{
 			Code:    http.StatusConflict,
 			Error:   e.Error(),
 			Success: false,
 		})
 	case ErrEmailAlreadyRegistered:
-		h.responseWriter.Write(w, r, http.StatusConflict, response.WebServiceResponse{
+		h.responseWriter.Write(w, r, http.StatusConflict, restwire.WebServiceResponse{
 			Code:    http.StatusConflict,
 			Error:   e.Error(),
 			Success: false,

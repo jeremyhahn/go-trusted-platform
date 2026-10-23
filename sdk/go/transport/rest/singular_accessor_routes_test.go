@@ -53,12 +53,10 @@ import (
 // their way into this map on that evidence. A fixture that builds no route is
 // not a server that serves none: check the registration, not the snapshot.
 var singularAccessorsWithNoServerRoute = map[string]string{
-	// The webservice router serves DNS records only under
-	// /api/v1/dns/zones/{zone}/records; there is no singular record route.
-	// platform_dns.proto has no GetRecord rpc either, and docs/dns/api.md's
-	// "Get record" row reads MISSING in both the REST and gRPC columns -- so
-	// this table row names a method no generated client can even call.
-	"/platform.v1.DNSService/GetRecord": "no singular DNS record route; no GetRecord rpc (docs/dns/api.md, Get record)",
+	// DNSService/GetRecord was exempted here while the webservice served no
+	// singular record route. It does now (#452), but platform_dns.proto has
+	// no GetRecord rpc, so the claim named a method no generated client can
+	// call and #452 deleted it rather than template it.
 
 	// GetPermission was exempted here for being fictional in both halves --
 	// no /api/v1/iam/permissions route and no GetPermission rpc. #333 deleted
@@ -187,8 +185,8 @@ func TestTemplatedRouteTable_PathParamsResolveOnTheRequestMessage(t *testing.T) 
 			seen := map[string]int{}
 			for _, p := range route.pathParams {
 				seen[p.placeholder]++
-				fd := input.Fields().ByName(p.field)
-				require.NotNilf(t, fd,
+				_, ok := fieldPathDescriptor(input, p.field)
+				require.Truef(t, ok,
 					"pathParam %q names proto field %q, which does not exist on %s. "+
 						"buildTemplatedRequest returns codes.Internal for this at runtime.",
 					p.placeholder, p.field, input.FullName())

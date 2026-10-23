@@ -33,6 +33,7 @@ type ClusterGRPCService struct {
 }
 
 // NewClusterGRPCService creates a new ClusterGRPCService instance.
+// Kept with no caller: docs/cluster names it as the real service that replaces the registered daemon stub.
 func NewClusterGRPCService(
 	logger *logging.Logger,
 	service ClusterService,
@@ -311,9 +312,25 @@ func (s *ClusterGRPCService) mapError(operation string, err error) error {
 	}
 
 	s.logger.Error(err, "cluster operation failed", "operation", operation)
+	return ClusterErrorStatus(err)
+}
+
+// ClusterErrorStatus is the gRPC status error a ClusterService failure is
+// answered with. Every cluster transport classifies servicer errors through
+// it, so the same failure carries the same class on gRPC, Unix, REST and MCP.
+func ClusterErrorStatus(err error) error {
+	if err == nil {
+		return nil
+	}
 
 	// Check for specific cluster error types
 	switch e := err.(type) {
+	case ErrClusterServiceUnavailable:
+		return status.Error(codes.Unavailable, e.Error())
+	case ErrLeaveNodeNotLocal:
+		return status.Error(codes.InvalidArgument, e.Error())
+	case ErrUnsupportedNodeSortField:
+		return status.Error(codes.InvalidArgument, e.Error())
 	case ErrClusterNotInitialized:
 		return status.Error(codes.FailedPrecondition, e.Error())
 	case ErrClusterAlreadyInitialized:

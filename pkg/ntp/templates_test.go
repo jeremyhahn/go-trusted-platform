@@ -110,13 +110,53 @@ func isGatewaydTemplate(t *testing.T, path string) bool {
 	return true
 }
 
+// overrideExamples are the --overrides files shipped beside the templates,
+// relative to templateDir. An override is merged onto its template, not
+// loaded on its own, so it carries no `ntp:` section and no package list of
+// its own: the template's are the node's. Named explicitly, and confirmed by
+// isOverrideExample below.
+var overrideExamples = map[string]bool{
+	"dedicated/raspberrypi/cm4/desk-overrides.yaml": true,
+}
+
+// isOverrideExample confirms the file at path is an override example that
+// leaves the template's time synchronization alone: an override that set
+// `ntp:` or `os:` would change what these tests check on the template, so it
+// must not skip them.
+func isOverrideExample(t *testing.T, path string) bool {
+	t.Helper()
+	rel, err := filepath.Rel(templateDir, path)
+	if err != nil {
+		t.Fatalf("%s is outside %s: %v", path, templateDir, err)
+	}
+	if !overrideExamples[filepath.ToSlash(rel)] {
+		return false
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	var doc map[string]any
+	if err := yaml.Unmarshal(raw, &doc); err != nil {
+		t.Fatalf("parse %s: %v", path, err)
+	}
+	for _, key := range []string{"ntp", "os"} {
+		if _, ok := doc[key]; ok {
+			t.Fatalf("%s is exempted as an override example but sets `%s:`; "+
+				"remove it from overrideExamples so it is checked", path, key)
+		}
+	}
+	return true
+}
+
 // templatePaths returns every shipped platformd device template, excluding the
-// edge-daemon configurations that live alongside them.
+// edge-daemon configurations and the override examples that live alongside
+// them.
 func templatePaths(t *testing.T) []string {
 	t.Helper()
 
 	var paths []string
-	seenGatewayd := 0
+	seenGatewayd, seenOverrides := 0, 0
 	walkErr := filepath.WalkDir(templateDir, func(path string, entry fs.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -128,12 +168,20 @@ func templatePaths(t *testing.T) []string {
 			seenGatewayd++
 			return nil
 		}
+		if isOverrideExample(t, path) {
+			seenOverrides++
+			return nil
+		}
 		paths = append(paths, path)
 		return nil
 	})
 	if seenGatewayd != len(gatewaydTemplates) {
 		t.Errorf("expected to see %d exempted gatewayd configurations, saw %d — the exempt list names a file that no longer exists",
 			len(gatewaydTemplates), seenGatewayd)
+	}
+	if seenOverrides != len(overrideExamples) {
+		t.Errorf("expected to see %d exempted override examples, saw %d — the exempt list names a file that no longer exists",
+			len(overrideExamples), seenOverrides)
 	}
 	if walkErr != nil {
 		t.Fatalf("walk %s: %v", templateDir, walkErr)
@@ -270,46 +318,78 @@ func TestShippedTemplatesNameTheirNTSUpstream(t *testing.T) {
 // wrong produces a fleet that never synchronises, which is the state #509
 // measured.
 func TestShippedControlPlanesServeEveryNTSNameTheirNodesDial(t *testing.T) {
-	// Group the templates by profile directory: a profile's node templates
-	// are served by that profile's control-plane template.
-	byDir := map[string][]string{}
+	// Group the templates by board directory: a board's node templates are
+	// served by that board's control-plane template. A board directory with
+	// no time server of its own (dedicated/raspberrypi/rpi5, whose nodes
+	// join a control plane on another board) is served by any control plane of its
+	// profile, so every one of them must list the names its nodes dial.
+	hasServer := map[string]bool{}
+	served := map[string]map[string]struct{}{}
+	dialed := map[string][]struct{ path, name string }{}
 	for _, path := range templatePaths(t) {
 		dir := filepath.Dir(path)
-		byDir[dir] = append(byDir[dir], path)
+		config, present := decodeTemplateNTP(t, path)
+		if !present {
+			continue
+		}
+		if config.Serve != nil {
+			hasServer[dir] = true
+		}
+		for _, name := range config.NTSServerNames() {
+			if served[dir] == nil {
+				served[dir] = map[string]struct{}{}
+			}
+			served[dir][name] = struct{}{}
+		}
+		if config.Consume == nil {
+			continue
+		}
+		for _, source := range config.Consume.Upstream {
+			if source.NTS {
+				dialed[dir] = append(dialed[dir], struct{ path, name string }{path, strings.TrimSpace(source.Address)})
+			}
+		}
 	}
 
-	for dir, paths := range byDir {
+	for dir, nodes := range dialed {
 		t.Run(filepath.Base(filepath.Dir(dir))+"/"+filepath.Base(dir), func(t *testing.T) {
-			served := map[string]struct{}{}
-			var dialed []struct{ path, name string }
-
-			for _, path := range paths {
-				config, present := decodeTemplateNTP(t, path)
-				if !present {
-					continue
-				}
-				for _, name := range config.NTSServerNames() {
-					served[name] = struct{}{}
-				}
-				if config.Consume == nil {
-					continue
-				}
-				for _, source := range config.Consume.Upstream {
-					if !source.NTS {
-						continue
-					}
-					dialed = append(dialed, struct{ path, name string }{path, strings.TrimSpace(source.Address)})
-				}
+			servers := []string{dir}
+			if !hasServer[dir] {
+				servers = profileServers(t, dir, hasServer)
 			}
-
-			for _, d := range dialed {
-				if _, ok := served[d.name]; !ok {
-					t.Fatalf("%s dials %s over NTS, but no template in %s lists that name in "+
-						"ntp.serve.nts.server-names; the certificate the control plane serves "+
-						"would not carry it and every handshake would fail (#509)",
-						d.path, d.name, dir)
+			for _, d := range nodes {
+				for _, server := range servers {
+					if _, ok := served[server][d.name]; !ok {
+						t.Fatalf("%s dials %s over NTS, but no template in %s lists that name in "+
+							"ntp.serve.nts.server-names; the certificate the control plane serves "+
+							"would not carry it and every handshake would fail (#509)",
+							d.path, d.name, server)
+					}
 				}
 			}
 		})
 	}
+}
+
+// profileServers returns the board directories of dir's deployment profile
+// (dedicated/, single-node/, ...) that carry a time server.
+func profileServers(t *testing.T, dir string, hasServer map[string]bool) []string {
+	t.Helper()
+	profile := func(d string) string {
+		rel, err := filepath.Rel(templateDir, d)
+		if err != nil {
+			t.Fatalf("%s is outside %s: %v", d, templateDir, err)
+		}
+		return strings.Split(filepath.ToSlash(rel), "/")[0]
+	}
+	var servers []string
+	for server := range hasServer {
+		if profile(server) == profile(dir) {
+			servers = append(servers, server)
+		}
+	}
+	if len(servers) == 0 {
+		t.Fatalf("%s: its nodes dial NTS, but no template in its profile serves time", dir)
+	}
+	return servers
 }

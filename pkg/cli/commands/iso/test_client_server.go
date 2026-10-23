@@ -26,6 +26,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -36,6 +37,7 @@ import (
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
 	deviceentities "github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/dns"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/qemu"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/qemu/harness"
@@ -224,8 +226,8 @@ Examples:
 		"Use user-mode networking with port forwarding (no root required, --server-only only)")
 	cmd.Flags().IntVar(&flags.serverHostPort, "server-host-port", 8443,
 		"Host port to forward to guest HTTPS (8443) when using --user-network")
-	cmd.Flags().IntVar(&flags.dnsHostPort, "dns-host-port", 8053,
-		"Host port to forward to guest DNS (8053) when using --user-network")
+	cmd.Flags().IntVar(&flags.dnsHostPort, "dns-host-port", dns.DefaultPublicPort,
+		fmt.Sprintf("Host port to forward to guest DNS (%d) when using --user-network", dns.DefaultPublicPort))
 
 	// OVS networking flag (SDN features)
 	cmd.Flags().BoolVar(&flags.useOVS, "use-ovs", false,
@@ -732,6 +734,9 @@ func stopCSServerVM(logger *logging.Logger) {
 // waitForCSServerReady waits for the server to be reachable via ping and DNS
 // The server may reboot during firstboot provisioning, so this function handles
 // the server going down and coming back up.
+// csReadyPollInterval is the pause between readiness probes of the server VM.
+const csReadyPollInterval = 2 * time.Second
+
 func waitForCSServerReady(ctx context.Context, logger *logging.Logger, serverIP string, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 
@@ -771,30 +776,31 @@ func waitForCSServerReady(ctx context.Context, logger *logging.Logger, serverIP 
 		}
 
 		// Check platformd service (only after ping succeeds)
-		// NOTE: The platform's DNS runs on port 8053 (public) and 9053 (internal),
-		// NOT port 53. ACME challenges use a custom resolver that explicitly
-		// points to the platform's DNS server, so we don't need system-level DNS.
-		// We check port 8053 to verify platformd is running.
+		// NOTE: The platform's DNS runs on dns.DefaultPublicPort (public) and
+		// dns.DefaultInternalPort (internal), NOT port 53. ACME challenges use a
+		// custom resolver that explicitly points to the platform's DNS server,
+		// so we don't need system-level DNS.
 		if pingReachable && !dnsReady {
-			// Check if platformd's public DNS port (8053) is open
-			portCmd := exec.CommandContext(ctx, "nc", "-z", "-w", "2", serverIP, "8053")
-			port8053Open := portCmd.Run() == nil
+			publicPort := strconv.Itoa(dns.DefaultPublicPort)
+			internalPort := strconv.Itoa(dns.DefaultInternalPort)
 
-			// Also check internal DNS port (9053)
-			portCmd2 := exec.CommandContext(ctx, "nc", "-z", "-w", "2", serverIP, "9053")
-			port9053Open := portCmd2.Run() == nil
+			portCmd := exec.CommandContext(ctx, "nc", "-z", "-w", "2", serverIP, publicPort)
+			publicOpen := portCmd.Run() == nil
 
-			if !port8053Open && !port9053Open {
-				logger.Debug("Platformd DNS ports (8053/9053) not open yet, waiting...")
+			portCmd2 := exec.CommandContext(ctx, "nc", "-z", "-w", "2", serverIP, internalPort)
+			internalOpen := portCmd2.Run() == nil
+
+			if !publicOpen && !internalOpen {
+				logger.Debugf("Platformd DNS ports (%s/%s) not open yet, waiting...", publicPort, internalPort)
 			} else {
 				// At least one DNS port is open, try a query on the internal port
 				cmd := exec.CommandContext(ctx, "dig", "+short", "+timeout=2", "+tries=1",
-					fmt.Sprintf("@%s", serverIP), "-p", "9053", "localhost", "A")
+					fmt.Sprintf("@%s", serverIP), "-p", internalPort, "localhost", "A")
 				output, err := cmd.CombinedOutput()
 				// Even if the query returns empty, the port being open means platformd is running
-				if port8053Open || port9053Open {
-					logger.Infof("Server %s platformd DNS service is running (ports: 8053=%v, 9053=%v)",
-						serverIP, port8053Open, port9053Open)
+				if publicOpen || internalOpen {
+					logger.Infof("Server %s platformd DNS service is running (ports: %s=%v, %s=%v)",
+						serverIP, publicPort, publicOpen, internalPort, internalOpen)
 					dnsReady = true
 				} else if err != nil {
 					logger.Debug("DNS ports open but query failed", "error", err, "output", string(output))
@@ -824,15 +830,19 @@ func waitForCSServerReady(ctx context.Context, logger *logging.Logger, serverIP 
 			return nil
 		}
 
-		time.Sleep(2 * time.Second)
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(csReadyPollInterval):
+		}
 	}
 
 	if !pingReachable {
 		return &MessageError{Msg: fmt.Sprintf("server %s did not become reachable via ping within %v", serverIP, timeout)}
 	}
 	if !dnsReady {
-		return &MessageError{Msg: fmt.Sprintf("server %s platformd DNS service did not become ready within %v (ping OK but ports 8053/9053 not responding). "+
-			"Check if platformd service is running on the server with: rc-service platformd status", serverIP, timeout)}
+		return &MessageError{Msg: fmt.Sprintf("server %s platformd DNS service did not become ready within %v (ping OK but ports %d/%d not responding). "+
+			"Check if platformd service is running on the server with: rc-service platformd status", serverIP, timeout, dns.DefaultPublicPort, dns.DefaultInternalPort)}
 	}
 	return &MessageError{Msg: fmt.Sprintf("server %s platformd HTTPS service did not become ready within %v (ping and DNS OK but port 8443 not responding). "+
 		"Check if platformd is running on the server", serverIP, timeout)}
@@ -847,7 +857,7 @@ func checkCSPortsAvailable(ctx context.Context, logger *logging.Logger, flags *c
 	}{
 		{flags.serverHostPort, "HTTPS"},
 		{flags.dnsHostPort, "DNS"},
-		{9053, "Internal DNS"},
+		{dns.DefaultInternalPort, "Internal DNS"},
 	}
 
 	var conflicts []string
@@ -924,7 +934,11 @@ func waitForCSServerReadyUserNetwork(ctx context.Context, logger *logging.Logger
 			return nil
 		}
 
-		time.Sleep(2 * time.Second)
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(csReadyPollInterval):
+		}
 	}
 
 	if !httpsReady {
@@ -1307,7 +1321,7 @@ func runCSServerVMUserNetwork(ctx context.Context, logger *logging.Logger, flags
 	printInfo(fmt.Sprintf("Memory: %d MB, CPUs: %d", flags.memory, flags.cpus))
 	printInfo("Network: user-mode NAT with port forwarding")
 	printInfo(fmt.Sprintf("  HTTPS forwarding: localhost:%d -> guest:8443", flags.serverHostPort))
-	printInfo(fmt.Sprintf("  DNS forwarding: localhost:%d -> guest:8053", flags.dnsHostPort))
+	printInfo(fmt.Sprintf("  DNS forwarding: localhost:%d -> guest:%d", flags.dnsHostPort, dns.DefaultPublicPort))
 
 	// Create working directory
 	if err := os.MkdirAll(flags.serverWorkDir, 0755); err != nil {
@@ -1490,11 +1504,11 @@ func createCSUserNetworkQEMUConfig(diskPath, workDir string, flags *clientServer
 		{HostPort: 8080, GuestPort: 8080, Protocol: "tcp"},
 		{HostPort: flags.serverHostPort, GuestPort: 8443, Protocol: "tcp"},
 		// DNS (both TCP and UDP)
-		{HostPort: flags.dnsHostPort, GuestPort: 8053, Protocol: "tcp"},
-		{HostPort: flags.dnsHostPort, GuestPort: 8053, Protocol: "udp"},
+		{HostPort: flags.dnsHostPort, GuestPort: dns.DefaultPublicPort, Protocol: "tcp"},
+		{HostPort: flags.dnsHostPort, GuestPort: dns.DefaultPublicPort, Protocol: "udp"},
 		// Internal DNS
-		{HostPort: 9053, GuestPort: 9053, Protocol: "tcp"},
-		{HostPort: 9053, GuestPort: 9053, Protocol: "udp"},
+		{HostPort: dns.DefaultInternalPort, GuestPort: dns.DefaultInternalPort, Protocol: "tcp"},
+		{HostPort: dns.DefaultInternalPort, GuestPort: dns.DefaultInternalPort, Protocol: "udp"},
 		// SSH for debugging
 		{HostPort: 2222, GuestPort: 22, Protocol: "tcp"},
 	}

@@ -15,6 +15,7 @@ package unix
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"net"
 	"os"
@@ -30,6 +31,43 @@ func TestConnect_NilOptions(t *testing.T) {
 	_, err := Connect(ctx, nil)
 	if !errors.Is(err, platform.ErrNilOptions) {
 		t.Errorf("Connect(nil) error = %v, want %v", err, platform.ErrNilOptions)
+	}
+}
+
+func TestConnect_RefusesCredentialOptions(t *testing.T) {
+	// A listening socket, so the refusal is not masked by a missing one.
+	socketPath := filepath.Join(t.TempDir(), "test.sock")
+	listener, err := net.Listen("unix", socketPath)
+	if err != nil {
+		t.Fatalf("failed to create Unix socket: %v", err)
+	}
+	defer listener.Close()
+
+	tests := []struct {
+		name   string
+		option platform.Option
+	}{
+		{"BearerToken", platform.WithBearerToken("secret")},
+		{"TLSConfig", platform.WithTLSConfig(&tls.Config{})},
+		{"TLSServerName", platform.WithTLSServerName("example.com")},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			adapter, err := Connect(context.Background(), platform.NewOptions(
+				platform.WithUnixSocket(socketPath),
+				tt.option,
+			))
+			if adapter != nil {
+				t.Error("Connect() returned an adapter, want nil")
+			}
+			var unsupported platform.ErrUnsupportedOption
+			if !errors.As(err, &unsupported) {
+				t.Fatalf("Connect() error = %v, want ErrUnsupportedOption", err)
+			}
+			if unsupported.Protocol != platform.ProtocolUnix || unsupported.Option != tt.name {
+				t.Errorf("ErrUnsupportedOption = %+v, want protocol Unix and option %s", unsupported, tt.name)
+			}
+		})
 	}
 }
 
@@ -246,10 +284,12 @@ func TestConnect_FileExistsButNotSocket(t *testing.T) {
 		}
 		return
 	}
-	defer adapter.Close()
 
 	// If we get here, dial succeeded (non-blocking), but the connection
 	// won't actually work - this is okay for this test
+	if err := adapter.Close(); err != nil {
+		t.Errorf("Close() returned error: %v", err)
+	}
 }
 
 func TestConnect_UsesDefaults(t *testing.T) {

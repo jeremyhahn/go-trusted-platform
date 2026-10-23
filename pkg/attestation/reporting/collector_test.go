@@ -99,13 +99,13 @@ func TestCollector_RunRefreshesOnTheInterval(t *testing.T) {
 
 	// Run collects once at startup, so an empty cache is not left reporting
 	// every device as never-collected for a full interval.
-	waitFor(t, func() bool { return src.count() == 2 }, "startup collection")
+	waitFor(t, src.changed, func() bool { return src.count() == 2 }, "startup collection")
 
 	// The loop is now parked on the interval. Waiting for the timer to exist
 	// before advancing is what makes this deterministic rather than a race.
-	waitFor(t, func() bool { return clk.waiters_() > 0 }, "loop reached its wait")
+	waitFor(t, clk.changed, func() bool { return clk.waiters_() > 0 }, "loop reached its wait")
 	clk.advance(15 * time.Minute)
-	waitFor(t, func() bool { return src.count() == 4 }, "second cycle")
+	waitFor(t, src.changed, func() bool { return src.count() == 4 }, "second cycle")
 
 	cancel()
 	select {
@@ -179,10 +179,10 @@ func TestCollector_EnqueueGoesThroughTheCollector(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go func() { _ = c.Run(ctx) }()
-	waitFor(t, func() bool { return clk.waiters_() > 0 }, "loop running")
+	waitFor(t, clk.changed, func() bool { return clk.waiters_() > 0 }, "loop running")
 
 	require.NoError(t, c.Enqueue("dev-1"))
-	waitFor(t, func() bool { return src.count() >= 1 }, "enqueued collection ran")
+	waitFor(t, src.changed, func() bool { return src.count() >= 1 }, "enqueued collection ran")
 }
 
 // TestCollector_VerifierErrorIsNotAVerdict covers the other unevaluable
@@ -233,19 +233,20 @@ func mustReport(t *testing.T, c *Collector, id string) *Report {
 	return r
 }
 
-// waitFor polls a condition with a bounded deadline. It exists because the
-// collector runs in a goroutine; it is a synchronisation bound, not a sleep
-// standing in for one — the condition is the signal.
-func waitFor(t *testing.T, cond func() bool, what string) {
+// waitFor blocks until cond holds, re-checking it each time the fake that
+// owns the state signals a change. The collector runs in a goroutine; the
+// deadline only bounds a test that would otherwise hang.
+func waitFor(t *testing.T, changed <-chan struct{}, cond func() bool, what string) {
 	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		if cond() {
-			return
+	deadline := time.NewTimer(5 * time.Second)
+	defer deadline.Stop()
+	for !cond() {
+		select {
+		case <-changed:
+		case <-deadline.C:
+			t.Fatalf("timed out waiting for %s", what)
 		}
-		time.Sleep(time.Millisecond)
 	}
-	t.Fatalf("timed out waiting for %s", what)
 }
 
 func waitForClose(t *testing.T, ch <-chan struct{}, what string) {

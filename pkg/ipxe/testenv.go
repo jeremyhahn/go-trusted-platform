@@ -104,6 +104,11 @@ type TestEnvConfig struct {
 	// firmware (ServerConfig.TFTPDir): the Raspberry Pi boot files.
 	TFTPDir string
 
+	// DataDir is the directory the HTTP server serves under /data/
+	// (ServerConfig.DataDir): the netboot media a container serves, the
+	// Raspberry Pi's HTTP boot files among them.
+	DataDir string
+
 	// ProxyDHCP runs the DHCP server as a proxy (DHCPConfig.ProxyOnly):
 	// boot options only, no leases, as on a segment that already has a
 	// DHCP server.
@@ -239,7 +244,7 @@ func NewTestEnv(cfg *TestEnvConfig, logger *logging.Logger) (*TestEnv, error) {
 		DHCPRangeEnd:      cfg.DHCPEnd.String(),
 		DHCPSubnetMask:    net.IP(cfg.Subnet.Mask).String(),
 		DHCPGateway:       cfg.Gateway.String(),
-		DHCPDNS:           cfg.DNS,
+		DHCPDNS:           testEnvDNS(cfg.DNS),
 		DHCPLeaseTime:     DefaultLeaseTime,
 		DHCPServerIP:      cfg.ServerIP.String(),
 		TFTPServerName:    "",
@@ -249,6 +254,7 @@ func NewTestEnv(cfg *TestEnvConfig, logger *logging.Logger) (*TestEnv, error) {
 		FirmwareSigner:    cfg.FirmwareSigner,
 		FirmwareOverrides: cfg.FirmwareOverrides,
 		TFTPDir:           cfg.TFTPDir,
+		DataDir:           cfg.DataDir,
 		DHCPProxyOnly:     cfg.ProxyDHCP,
 	}
 
@@ -318,6 +324,14 @@ func (t *TestEnv) dhcpConfig() *DHCPConfig {
 		dhcpCfg.DNSServers = []net.IP{net.ParseIP(t.config.DNS).To4()}
 	}
 	return dhcpCfg
+}
+
+// testEnvDNS is the server's DNS list for the environment's one DNS server.
+func testEnvDNS(dns string) []string {
+	if dns == "" {
+		return nil
+	}
+	return []string{dns}
 }
 
 // Start starts the PXE server components (HTTP, TFTP, DHCP) on the isolated network.

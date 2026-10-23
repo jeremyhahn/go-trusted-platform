@@ -17,6 +17,8 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"testing"
 
@@ -30,6 +32,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/tenant"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/jwt"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
+	restiam "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/iam"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/webauthn"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -116,6 +119,12 @@ func (s stubTenantClient) List(ctx context.Context, req *quicbaasiam.ListTenants
 	return &quicbaasiam.ListTenantsResponse{}, nil
 }
 
+type stubRoleClient struct{}
+
+func (stubRoleClient) Reconcile(ctx context.Context, tenantID string) (*quicbaasiam.ReconcileRolesResponse, error) {
+	return &quicbaasiam.ReconcileRolesResponse{TenantID: tenantID}, nil
+}
+
 type stubWiringFIDO2Client struct{}
 
 func (s stubWiringFIDO2Client) BeginRegistration(ctx context.Context, req *quicbaassdk.FIDO2BeginRegistrationRequest) (*quicbaassdk.FIDO2BeginRegistrationResponse, error) {
@@ -137,6 +146,7 @@ func newWiringTenantManager(t *testing.T) *tenant.Manager {
 	cfg.EnableDEKIsolation = false
 	mgr, err := tenant.NewManager(&tenant.ManagerConfig{
 		IAMTenantClient: stubTenantClient{},
+		IAMRoleClient:   stubRoleClient{},
 		Config:          cfg,
 		Logger:          slog.Default(),
 	})
@@ -197,14 +207,34 @@ func TestWebAuthnRestService_WiresTenantUserService(t *testing.T) {
 		"tenant user service must be materialized and pushed into the platform registry")
 }
 
-// TestWebAuthnRestService_NoTenantManager_LeavesServiceUnwired proves
-// the dependency-missing case stays exactly as before: the handler is
-// still built (registration works tenant-less) and nothing is wired.
-func TestWebAuthnRestService_NoTenantManager_LeavesServiceUnwired(t *testing.T) {
+func TestStartIAMUserReconcile_RunsInTheBackground(t *testing.T) {
+	registry, _ := newWiringRegistry(t, newWiringTenantManager(t), &jwt.Service{})
+
+	done := registry.startIAMUserReconcile(restiam.NewQuicBaaSUserMirror(nil))
+
+	require.NotNil(t, done, "a wired registry starts the reconcile")
+	<-done
+}
+
+func TestStartIAMUserReconcile_NotStartedWithoutDependencies(t *testing.T) {
+	mirror := restiam.NewQuicBaaSUserMirror(nil)
+
+	noTenantManager, _ := newWiringRegistry(t, nil, &jwt.Service{})
+	assert.Nil(t, noTenantManager.startIAMUserReconcile(mirror))
+
+	noUserStore, _ := newWiringRegistry(t, newWiringTenantManager(t), &jwt.Service{})
+	noUserStore.params.ServiceRegistry = &service.Registry{}
+	assert.Nil(t, noUserStore.startIAMUserReconcile(mirror))
+}
+
+// TestWebAuthnRestService_NoTenantManager_DeclinesRoutes pins #662:
+// without a tenant user service a registration has no workspace to land
+// in, so the WebAuthn routes are declined rather than minting a session
+// in the operating tenant, and nothing is wired.
+func TestWebAuthnRestService_NoTenantManager_DeclinesRoutes(t *testing.T) {
 	registry, svcReg := newWiringRegistry(t, nil, &jwt.Service{})
 
-	handler := registry.WebAuthnRestService()
-	require.NotNil(t, handler)
+	assert.Nil(t, registry.WebAuthnRestService())
 	assert.Nil(t, svcReg.TenantUserService())
 }
 
@@ -272,4 +302,40 @@ func TestLoginDriver_BuiltOnTheDefaultSeam(t *testing.T) {
 
 	assert.NotNil(t, registry.LoginDriver(),
 		"the default seam validates exactly what a login issues")
+}
+
+// beginFIDO2Status opens a browser login on the driver and returns the
+// status: a 500 means no FIDO2 binder was wired, anything else means the
+// ceremony reached the (stub) backbone.
+func beginFIDO2Status(t *testing.T, registry *HandlerRegistry) int {
+	t.Helper()
+	driver := registry.LoginDriver()
+	require.NotNil(t, driver)
+	recorder := httptest.NewRecorder()
+	driver.Begin(recorder, httptest.NewRequest(http.MethodPost, "/login/begin", nil), quicbaassdk.FactorTypeFIDO2)
+	return recorder.Code
+}
+
+// TestLoginDriver_OffersFIDO2WithAWorkspaceResolver proves the login
+// driver builds the tenant user service itself, so the browser login can
+// land in the user's workspace even when the WebAuthn routes have not
+// been built yet (#662).
+func TestLoginDriver_OffersFIDO2WithAWorkspaceResolver(t *testing.T) {
+	registry, svcReg := newWiringRegistry(t, newWiringTenantManager(t), &jwt.Service{})
+	require.Nil(t, svcReg.TenantUserService(), "precondition: registry starts without a tenant user service")
+
+	assert.NotEqual(t, http.StatusInternalServerError, beginFIDO2Status(t, registry),
+		"the fido2 factor must be offered")
+	assert.NotNil(t, svcReg.TenantUserService(),
+		"the workspace resolver is the shared tenant user service")
+}
+
+// TestLoginDriver_WithholdsFIDO2WithoutAWorkspaceResolver proves a
+// deployment that cannot resolve workspaces does not offer a browser
+// login, which could otherwise only land in the operating tenant.
+func TestLoginDriver_WithholdsFIDO2WithoutAWorkspaceResolver(t *testing.T) {
+	registry, _ := newWiringRegistry(t, nil, &jwt.Service{})
+
+	assert.Equal(t, http.StatusInternalServerError, beginFIDO2Status(t, registry),
+		"without a workspace resolver the fido2 factor must not be offered")
 }

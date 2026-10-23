@@ -39,8 +39,8 @@ type Entry struct {
 // Filter narrows the result set for Query and Subscribe.
 //
 // Empty fields mean "no constraint". MinLevel is matched
-// case-insensitively against the canonical slog level strings (DEBUG,
-// INFO, WARN, ERROR). MaxAge caps how far back Query walks files; older
+// case-insensitively against the level strings the handler writes (DEBUG,
+// INFO, WARN, ERROR, FATAL, SECURITY). MaxAge caps how far back Query walks files; older
 // rotated files are skipped without parsing.
 type Filter struct {
 	Services []string
@@ -90,9 +90,10 @@ func (f Filter) matches(e Entry) bool {
 	return true
 }
 
-// levelRank returns an ordered rank for the canonical slog level
-// strings. Unknown values rank as INFO so a typo doesn't accidentally
-// hide everything.
+// levelRank returns an ordered rank for the level strings the handler
+// writes. SECURITY ranks above FATAL, matching logging.LevelSecurity, so a
+// security record survives every level filter. Unknown values rank as
+// INFO so a typo doesn't accidentally hide everything.
 func levelRank(s string) int {
 	switch strings.ToUpper(strings.TrimSpace(s)) {
 	case "DEBUG":
@@ -105,6 +106,8 @@ func levelRank(s string) int {
 		return 3
 	case "FATAL", "CRITICAL":
 		return 4
+	case "SECURITY":
+		return 5
 	default:
 		return 1
 	}

@@ -129,6 +129,17 @@ type NVIndex struct {
 	AuthWrite bool `json:"auth_write"`
 }
 
+// Keys under InfoResponse.Properties in which the daemon publishes the SRK
+// handles it is configured with, as 0x%08X strings.
+const (
+	// InfoPropertyPlatformSRKHandle is the Platform KeyStore SRK handle
+	// (tpm.platform-srk.handle).
+	InfoPropertyPlatformSRKHandle = "platform_srk_handle"
+	// InfoPropertySSRKHandle is the storage-hierarchy SRK handle
+	// (tpm.ssrk.handle).
+	InfoPropertySSRKHandle = "ssrk_handle"
+)
+
 // InfoResponse holds TPM device information.
 type InfoResponse struct {
 	// Version is the TPM specification version.

@@ -1,10 +1,11 @@
 # DNSSEC Signing
 
-Hardware-backed DNSSEC signing integrated with the Trusted Platform.
+> **Status: REFERENCE** · Last verified: 2026-10-15
+> DNSSEC zone signing in `pkg/dns`, with keys held in the go-quicbaas KMS.
 
 ## Overview
 
-DNSSEC (Domain Name System Security Extensions) provides cryptographic authentication for DNS data, protecting against cache poisoning, man-in-the-middle attacks, and DNS spoofing. The Trusted Platform integrates DNSSEC signing with hardware-backed key storage via TPM, HSMs, and cloud key management services through go-quicbaas.
+DNSSEC (Domain Name System Security Extensions) provides cryptographic authentication for DNS data, protecting against cache poisoning, man-in-the-middle attacks, and DNS spoofing. The Trusted Platform signs zones in `pkg/dns`; the private keys are generated and held by the go-quicbaas KMS (`dns.NewQuicBaaSKMSKeyStore`, wired at `pkg/app/app.go:1179`).
 
 ### Why DNSSEC Matters
 
@@ -15,14 +16,11 @@ DNSSEC (Domain Name System Security Extensions) provides cryptographic authentic
 | **Man-in-the-Middle** | Tampered responses fail signature verification |
 | **Zone Enumeration** | NSEC3 hashes prevent walking the zone |
 
-### Trusted Computing Integration
+### Key Custody
 
-The Trusted Platform provides hardware-backed DNSSEC keys using TPM 2.0:
-
-- **Key Protection** - Private keys never leave the TPM
-- **Attestation** - Prove keys were generated and stored in hardware
-- **Audit Trail** - All signing operations logged with TPM-signed timestamps
-- **Key Hierarchy** - DNSSEC keys derived from platform primary keys
+- **Generation and storage** - the KSK and ZSK are generated through the go-quicbaas SDK KMS on the first signing of a zone, then loaded from it
+- **Store** - the SDK keystore creates DNSSEC keys in the software store (`xkmssdk.StoreSoftware`, `pkg/dns/dnssec_keystore_sdk.go:202`); `pkg/dns` does not read the `store:` field of a key configuration
+- **Tenant scope** - every key ID carries the zone's tenant (see [Tenant-Scoped Key IDs](#tenant-scoped-key-ids))
 
 ## Key Types
 
@@ -34,8 +32,7 @@ The Key Signing Key signs the DNSKEY RRset and establishes the chain of trust.
 |----------|-------|
 | **Purpose** | Signs the DNSKEY RRset |
 | **Flags** | 257 (SEP bit set) |
-| **Lifetime** | 365 days (configurable) |
-| **TPM Handle** | 0x81010010 |
+| **Lifetime** | `ksk.lifetime` must be a positive duration (`365d`, `720h`), else startup fails with `ErrInvalidKeyLifetime`; nothing acts on it: there is no automatic rollover |
 | **Key Usage** | Critical - requires parent DS record update on rollover |
 
 The KSK is published to the parent zone as a DS (Delegation Signer) record.
@@ -48,8 +45,7 @@ The Zone Signing Key signs all resource records in the zone.
 |----------|-------|
 | **Purpose** | Signs all other RRsets |
 | **Flags** | 256 |
-| **Lifetime** | 30 days (configurable) |
-| **TPM Handle** | 0x81010011 |
+| **Lifetime** | `zsk.lifetime` must be a positive duration (`365d`, `720h`), else startup fails with `ErrInvalidKeyLifetime`; nothing acts on it: there is no automatic rollover |
 | **Key Usage** | Frequent rotation - transparent to parent zone |
 
 The ZSK can be rotated frequently without updating the parent zone.
@@ -65,11 +61,23 @@ The following algorithms are supported via go-quicbaas key management:
 | RSASHA256 | 8 | Supported | Legacy compatibility, larger signatures |
 | RSASHA512 | 10 | Supported | Legacy compatibility, larger key sizes |
 | ED25519 | 15 | Supported | Modern, compact signatures |
-| ED448 | 16 | Supported | Highest security, larger signatures |
+| ED448 | 16 | Not supported | An unrecognised algorithm falls back to ECDSAP256SHA256 |
 
 ### Algorithm Selection
 
-The DNSSEC configuration uses the platform's standard KeyConfig pattern:
+The DNSSEC configuration uses the platform's standard KeyConfig pattern. The
+algorithm number is derived from it (`keyConfigToDNSSECAlgorithm`,
+`pkg/dns/dnssec.go:883`):
+
+| KeyConfig | DNSSEC algorithm |
+|-----------|------------------|
+| `RSA`, `signature-algorithm` containing SHA512 | RSASHA512 (10) |
+| `RSA`, any other `signature-algorithm` | RSASHA256 (8) |
+| `ECDSA`, curve P-384 | ECDSAP384SHA384 (14) |
+| `ECDSA`, any other curve | ECDSAP256SHA256 (13) |
+| `Ed25519` | ED25519 (15) |
+| anything else, or no key configured | ECDSAP256SHA256 (13) |
+
 
 ```yaml
 # Recommended for most deployments (ECDSAP256SHA256)
@@ -81,7 +89,6 @@ dnssec:
       curve: P-256
     signature-algorithm: ECDSA-SHA256
     hash: SHA-256
-    store: tpm2
 
 # High security environments (ECDSAP384SHA384)
 dnssec:
@@ -92,7 +99,6 @@ dnssec:
       curve: P-384
     signature-algorithm: ECDSA-SHA384
     hash: SHA-384
-    store: tpm2
 
 # Modern deployments (ED25519)
 dnssec:
@@ -101,75 +107,53 @@ dnssec:
     algorithm: Ed25519
     signature-algorithm: Ed25519
     hash: SHA-256
-    store: tpm2
 ```
 
-## Key Storage Backends
+## Key Storage
 
-Keys can be stored in various backends based on security requirements:
+DNSSEC keys are created through the go-quicbaas SDK KMS in its software
+store (see [Key Custody](#key-custody)). The backend is not selectable from
+the `dnssec:` configuration.
 
-| Backend | Use Case | Security Level |
-|---------|----------|----------------|
-| **Software** | Development, testing | Low |
-| **TPM 2.0** | Production (recommended) | High |
-| **PKCS#11** | HSMs, smart cards | High |
-| **AWS KMS** | AWS deployments | High |
-| **Azure Key Vault** | Azure deployments | High |
-| **GCP Cloud KMS** | GCP deployments | High |
-| **HashiCorp Vault** | Multi-cloud, on-premises | High |
+### Tenant-Scoped Key IDs
 
-### Tenant-Scoped Key Paths
-
-DNSSEC keys are stored in tenant-scoped paths within the KMS to provide multi-tenant isolation:
+DNSSEC keys are stored under tenant-scoped IDs within the KMS to provide multi-tenant isolation (`pkg/dns/dnssec_keystore.go:108`):
 
 ```
-dnssec/{tenant_id}/{zone_name}/{key_type}
+dnssec_{tenant_id}_{zone_name}_{key_type}
 ```
 
 | Component | Description | Example |
 |-----------|-------------|---------|
 | `tenant_id` | Platform or user tenant identifier | `platform`, `tenant-abc123` |
-| `zone_name` | Zone name with dots replaced by hyphens | `example-com` |
+| `zone_name` | Zone name, trailing dot trimmed, dots replaced by hyphens | `example-com` |
 | `key_type` | Key type identifier | `ksk`, `zsk` |
 
-**Example key paths:**
-- `dnssec/platform/example-com/ksk` - KSK for platform's example.com zone
-- `dnssec/tenant-abc/internal-local/zsk` - ZSK for tenant-abc's internal.local zone
+**Example key IDs:**
+- `dnssec_platform_example-com_ksk` - KSK for platform's example.com zone
+- `dnssec_tenant-abc_internal-local_zsk` - ZSK for tenant-abc's internal.local zone
 
 This ensures:
 - **Isolation**: Each tenant's DNSSEC keys are stored separately
 - **Authorization**: Only the owning tenant can access their zone's keys
 - **Audit**: Key operations are logged with tenant context
 
-### Backend Configuration
+### Key Configuration
 
 ```yaml
 dnssec:
   enabled: true
-  # Default key uses TPM2
   default-key:
     algorithm: ECDSA
     ecc:
       curve: P-256
     signature-algorithm: ECDSA-SHA256
     hash: SHA-256
-    store: tpm2
 
   ksk:
-    # Inherits default-key, or override with different store
-    lifetime: 365d
-    ttl: 86400
+    ttl: 86400      # DNSKEY TTL
 
   zsk:
-    # Override: Use PKCS#11 for ZSK
-    key:
-      algorithm: ECDSA
-      ecc:
-        curve: P-256
-      signature-algorithm: ECDSA-SHA256
-      hash: SHA-256
-      store: pkcs11
-    lifetime: 30d
     ttl: 3600
 ```
 
@@ -208,25 +192,30 @@ The zone signing process follows these steps:
                                  └──────────────────┘
                                           │
                                           ▼
-                              6. Store Signed Zone
+                              6. Generate DS (SHA-256)
                                  ┌──────────────────┐
-                                 │ Complete zone    │
-                                 │ with all RRSIG   │
+                                 │ DS for the KSK,  │
+                                 │ stored in zone   │
                                  └──────────────────┘
 ```
 
+Each run clears the zone's DNSKEY, RRSIG, NSEC, NSEC3, NSEC3PARAM and DS
+records and regenerates them (`DNSSECService.SignZone`, `pkg/dns/dnssec.go:294`).
+Keys are generated on first use and reused afterwards. With `dnssec.enabled`,
+every zone save signs the zone (`Service.Save`, `pkg/dns/service.go:195`).
+
 ### Signing Example
 
+There is no `platformctl dns` command group ([CLI](cli.md)). Sign through the
+REST or gRPC API:
+
 ```bash
-# Sign a zone
-platformctl dns zone sign example.com
-
-# Force re-sign with new signatures
-platformctl dns zone sign example.com --force
-
-# Sign with specific algorithm
-platformctl dns zone sign example.com --algorithm ECDSAP384SHA384
+# Sign a zone and save it; the response is the signed zone
+curl -X POST https://<host>:8443/api/v1/dns/zones/example.com/sign
 ```
+
+The gRPC equivalent is `DNSService.SignZone`. Signing with DNSSEC disabled
+fails with `ErrDNSSECNotEnabled`.
 
 ## Denial of Existence
 
@@ -260,16 +249,16 @@ NSEC3 uses hashed names to prevent zone enumeration:
 |----------|-------------|
 | **Hash Algorithm** | SHA-1 (mandatory per RFC 5155) |
 | **Iterations** | Additional hash rounds (recommend 0-1) |
-| **Salt** | Random value to prevent rainbow tables |
-| **Opt-Out** | Skip unsigned delegations (large zones) |
+| **Salt** | The `nsec3-salt` value as configured; empty means no salt (`pkg/dns/dnssec.go:712`) |
+| **Opt-Out** | Not used: the NSEC3 flags are 0, so every name is covered |
 | **FIPS** | **Unavailable.** A FIPS-activated node refuses to start — see below |
 
 #### NSEC3 is unavailable under FIPS activation
 
 **Plan for this before designing a zone, not after.** A node started with
-`GODEBUG=fips140=only` (or with the kernel in FIPS mode, per the standard
-activation trigger) and `nsec-mode: nsec3` **fails to start**, with
-`ErrFIPSNSEC3Unsupported`.
+`GODEBUG=fips140=only` and `nsec-mode: nsec3` **fails to start**, with
+`ErrFIPSNSEC3Unsupported`. The kernel's FIPS mode alone does not set
+`GODEBUG` ([FIPS mode](../fips/architecture.md)), so it does not trigger this.
 
 This is a property of the protocol, not a gap in this implementation. RFC 5155
 registers exactly one NSEC3 hash algorithm — 1, SHA-1 — so there is nothing
@@ -301,10 +290,9 @@ dnssec:
       curve: P-256
     signature-algorithm: ECDSA-SHA256
     hash: SHA-256
-    store: tpm2
   nsec-mode: nsec3
   nsec3-iterations: 1
-  nsec3-salt: ""          # Empty for random salt
+  nsec3-salt: ""          # Empty means no salt
 ```
 
 ### NSEC3 vs NSEC
@@ -321,29 +309,24 @@ dnssec:
 
 The DS (Delegation Signer) record links the child zone to the parent.
 
-### Digest Types
+### Digest Type
 
-| Digest Type | Algorithm | Status |
-|-------------|-----------|--------|
-| 1 | SHA-1 | Deprecated |
-| 2 | SHA-256 | Recommended |
-| 4 | SHA-384 | Supported |
+Each signing run generates one DS record for the KSK with digest type 2,
+SHA-256 (`GenerateDS`, `pkg/dns/dnssec.go:426`), and stores it in the zone.
 
-### Generating DS Records
+### Reading DS Records
 
 ```bash
-# Generate DS record for submission to parent
-platformctl dns dnssec show-ds example.com
-
-# Output example:
-# example.com. IN DS 12345 13 2 (
-#     A1B2C3D4E5F6...  ; SHA-256 digest
-# )
+# The ds_records field holds the DS record(s) for submission to the parent
+curl https://<host>:8443/api/v1/dns/zones/example.com/dnssec
 ```
+
+The response carries `enabled`, `zone_signed`, `keys` (DNSKEY) and
+`ds_records`. The gRPC equivalent is `DNSService.GetDNSSECStatus`.
 
 ### Parent Zone Submission
 
-1. Generate DS record using `platformctl dns dnssec show-ds`
+1. Read the DS record from `GET /api/v1/dns/zones/{zone}/dnssec`
 2. Submit DS record to registrar or parent zone operator
 3. Wait for propagation (check with `dig DS example.com @parent-ns`)
 4. Verify chain of trust with `dig +dnssec example.com`
@@ -365,7 +348,6 @@ dnssec:
       curve: P-256             # P-256 or P-384 for ECDSA
     signature-algorithm: ECDSA-SHA256
     hash: SHA-256
-    store: tpm2                # software, tpm2, pkcs11, aws-kms, azure-kv, gcp-kms, vault
 
   # Signature expiry configuration
   signature-expiry: 30d
@@ -373,7 +355,7 @@ dnssec:
   # Denial of existence configuration
   nsec-mode: nsec3             # nsec or nsec3
   nsec3-iterations: 1          # 0-1 recommended per RFC 9276
-  nsec3-salt: ""               # Empty for random salt
+  nsec3-salt: ""               # Empty means no salt
 
   # Key Signing Key configuration
   ksk:
@@ -384,9 +366,8 @@ dnssec:
     #     curve: P-384
     #   signature-algorithm: ECDSA-SHA384
     #   hash: SHA-384
-    #   store: tpm2
 
-    # Key lifetime before rollover
+    # Parsed but not read: there is no automatic rollover
     lifetime: 365d
 
     # DNSKEY record TTL
@@ -401,7 +382,6 @@ dnssec:
     #     curve: P-256
     #   signature-algorithm: ECDSA-SHA256
     #   hash: SHA-256
-    #   store: software
 
     lifetime: 30d
     ttl: 3600
@@ -418,147 +398,62 @@ dnssec:
       curve: P-256
     signature-algorithm: ECDSA-SHA256
     hash: SHA-256
-    store: tpm2
   signature-expiry: 30d
   nsec-mode: nsec3
   nsec3-iterations: 1
-  ksk:
-    lifetime: 365d
-    ttl: 86400
-  zsk:
-    lifetime: 30d
-    ttl: 3600
 ```
 
-### Per-Key Override Example
+### Algorithm Precedence
 
-You can use different key configurations for KSK and ZSK:
+A zone uses one algorithm for both keys. It is taken from the first of: the
+zone's own KSK key config, its ZSK key config, the global `ksk.key`, the
+global `zsk.key`, then `default-key` (`getAlgorithmForZone`,
+`pkg/dns/dnssec.go:961`). Setting `ksk.key` to P-384, as below, makes **both**
+keys ECDSAP384SHA384:
 
 ```yaml
 dnssec:
   enabled: true
-  # Default for all keys
   default-key:
     algorithm: ECDSA
     ecc:
       curve: P-256
     signature-algorithm: ECDSA-SHA256
     hash: SHA-256
-    store: tpm2
 
   ksk:
-    # Override: Use stronger P-384 curve for KSK
     key:
       algorithm: ECDSA
       ecc:
         curve: P-384
       signature-algorithm: ECDSA-SHA384
       hash: SHA-384
-      store: tpm2
-    lifetime: 365d
     ttl: 86400
 
   zsk:
-    # Inherits default-key (P-256)
-    lifetime: 30d
     ttl: 3600
 ```
 
-## CLI Commands
+## Signing and Status Without a CLI
 
-### Enable DNSSEC
+DNSSEC is switched on for the whole server by `dnssec.enabled`; there is no
+per-zone enable or disable. The API surface is:
 
-```bash
-# Enable DNSSEC for a zone
-platformctl dns dnssec enable example.com
+| Operation | REST | gRPC |
+|-----------|------|------|
+| Sign a zone | `POST /api/v1/dns/zones/{zone}/sign` | `DNSService.SignZone` |
+| DNSSEC status, DNSKEY and DS records | `GET /api/v1/dns/zones/{zone}/dnssec` | `DNSService.GetDNSSECStatus` |
 
-# Enable with specific algorithm
-platformctl dns dnssec enable example.com --algorithm ECDSAP384SHA384
-```
-
-### Check DNSSEC Status
-
-```bash
-# Show DNSSEC status for a zone
-platformctl dns dnssec status example.com
-
-# Example output:
-# Zone: example.com
-# Status: SIGNED
-# Algorithm: ECDSAP256SHA256 (13)
-# KSK:
-#   Key Tag: 12345
-#   Created: 2024-01-15T00:00:00Z
-#   Expires: 2025-01-15T00:00:00Z
-#   Store: tpm2
-# ZSK:
-#   Key Tag: 54321
-#   Created: 2024-06-01T00:00:00Z
-#   Expires: 2024-07-01T00:00:00Z
-#   Store: tpm2
-# Signatures:
-#   Valid Until: 2024-06-15T00:00:00Z
-#   Next Refresh: 2024-06-08T00:00:00Z
-```
-
-### Key Management
-
-```bash
-# Generate new KSK
-platformctl dns dnssec generate-ksk example.com
-
-# Generate new ZSK
-platformctl dns dnssec generate-zsk example.com
-
-# List all DNSSEC keys
-platformctl dns dnssec keys example.com
-
-# Export public key (DNSKEY record)
-platformctl dns dnssec export-key example.com --key-tag 12345
-```
-
-### DS Record
-
-```bash
-# Show DS record for parent zone submission
-platformctl dns dnssec show-ds example.com
-
-# Show DS record with specific digest type
-platformctl dns dnssec show-ds example.com --digest-type 2
-```
-
-### Zone Signing
-
-```bash
-# Sign zone (or re-sign if already signed)
-platformctl dns zone sign example.com
-
-# Force complete re-sign
-platformctl dns zone sign example.com --force
-
-# Sign with fresh timestamps
-platformctl dns zone sign example.com --refresh
-```
-
-### Disable DNSSEC
-
-```bash
-# Disable DNSSEC (removes signatures, keeps keys)
-platformctl dns dnssec disable example.com
-
-# Disable and remove keys
-platformctl dns dnssec disable example.com --remove-keys
-```
+See [api-reference-rest.md](api-reference-rest.md).
 
 ## Integration with Platform Components
 
 | Component | Integration |
 |-----------|-------------|
-| **KMS** | Key storage, rotation policies |
-| **TPM** | Hardware-backed key protection |
+| **KMS** | Key generation and storage through the go-quicbaas SDK |
 | **CA** | DANE/TLSA record generation |
 | **IAM** | Access control for zone signing |
-| **Audit** | Signing operation logging |
+| **Logging** | Signing logged with tenant and zone |
 
 ## Troubleshooting
 
@@ -567,9 +462,9 @@ platformctl dns dnssec disable example.com --remove-keys
 | Issue | Cause | Solution |
 |-------|-------|----------|
 | Chain of trust broken | DS record missing/wrong | Re-submit DS to parent |
-| Signatures expired | Auto-sign failed | Check logs, manual re-sign |
+| Signatures expired | Zone not re-signed within `signature-expiry` (default 30d) | Save the zone or `POST .../sign` |
 | SERVFAIL responses | Invalid signatures | Verify zone is properly signed |
-| Key not found | TPM handle mismatch | Check handle configuration |
+| `KSK validation failed (stale keys from previous install? ...)` | Keys left from an earlier install | Clean the data directory and retry |
 
 ### Verification Commands
 
@@ -604,5 +499,4 @@ delv @ns1.example.com example.com
 - [RFC 4035 - Protocol Modifications for DNSSEC](https://datatracker.ietf.org/doc/html/rfc4035)
 - [RFC 5155 - NSEC3](https://datatracker.ietf.org/doc/html/rfc5155)
 - [RFC 9276 - NSEC3 Guidance](https://datatracker.ietf.org/doc/html/rfc9276)
-- [KMS Documentation](../kms/README.md)
-- [TPM Documentation](../tpm/README.md)
+- [KMS Documentation](../kms/architecture.md)

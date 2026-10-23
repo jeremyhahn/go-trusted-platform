@@ -95,6 +95,12 @@ func (m *mockIPAMAllocator) Allocate(ctx context.Context, req *ipam.AllocationRe
 		return nil, m.allocateErr
 	}
 
+	// Only the configured pool exists: an allocation asked of any other
+	// pool would hand the device an address from the wrong subnet.
+	if req.PoolID != m.poolID {
+		return nil, ipam.ErrPoolNotFound
+	}
+
 	if m.exhausted {
 		return nil, ipam.ErrPoolExhausted
 	}

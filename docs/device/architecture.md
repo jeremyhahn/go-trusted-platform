@@ -77,7 +77,7 @@ it misses.
 | REST CRUD + mTLS profile/activate handlers | `pkg/webservice/v1/device/`, `pkg/webservice/v1/router/device.go` | this repo |
 | Bootstrap-seeder REST handlers | `pkg/webservice/v1/rest/device/` | this repo |
 | gRPC `DeviceService` | `pkg/api/grpc/proto/device.proto` | this repo |
-| QUIC device opcodes and handlers | `pkg/api/quic/protocol.go`, `pkg/api/daemon/quic_device_handlers.go` | this repo |
+| QUIC device opcodes and handlers | `sdk/go/wire/quicwire/protocol.go`, `pkg/api/daemon/quic_device_handlers.go` | this repo |
 | MCP device and profile tools | `pkg/api/mcp/device_tools.go`, `device_profile_tools.go`, `tools.go` | this repo |
 | SDK client | `sdk/go/services/device/client.go` | this repo |
 | **The storage engine underneath** | `quicbaas.Storage` | **go-quicbaas** — consumed through its SDK |
@@ -119,19 +119,42 @@ Nothing here touches the machine. The profile is durable operator intent.
 ### 4.2 Boot: the machine asks who it is
 
 ```
-booting machine ──▶ GET /api/v1/devices/config?mac=…&ek_serial=…
-                       │
-                       └─ ProfileService.FindConfigForDevice
-                            1. FindByEKSerial   (EqualFold, exact)
-                            2. FindByExactMAC   (EqualFold, exact)
-                            3. FindMatchingProfile (prefix rules, MAC only)
-                            └─ miss ⇒ ErrNoMatchingConfig
+booting machine ──▶ provisioning listener (bind-host in the provisioning zone)
+  on the           GET /api/v1/devices/config?mac=…  or  ?serial=…
+  provisioning        │
+  VLAN                └─ HandleGetConfig
+                           1. FindByMACAddress
+                           2. FindBySerial
+                           3. FindMatchingProfile (prefix / model rules)
+                           └─ hit ⇒ the profile's config as YAML; miss ⇒ 404
 ```
 
-The resolver searches **across all tenants** — a machine at boot does not know
-its tenant, which is stated in the `FindConfigForDevice` doc comment. That is a
-deliberate widening and it is why EK-serial precedence matters: the first
-lookup is the one that cannot be spoofed.
+The operator's query for the same answer is `FindConfigForDevice`
+(`DeviceService.FindConfigForDevice` on gRPC/QUIC/MCP/Unix/embedded,
+`GET /api/v1/device/profiles/find-config` on REST): scope-gated
+`device:read`, EK serial first, then exact MAC, then the prefix rules. Both
+resolvers search **across all tenants** — a machine at boot does not know its
+tenant, which is stated in the `FindConfigForDevice` doc comment. That is a
+deliberate widening and it is why EK-serial precedence matters in the operator
+query: the first lookup is the one that cannot be spoofed.
+
+**The boot fetch is unauthenticated by design, and its listener is its trust
+boundary (#177).** Its caller is a machine still booting, with no credential
+yet. So the route is mounted only on a webservice whose `surface` is
+`provisioning` — never on the `full` or `edge` surface, and on no other
+transport. A general listener answers it with the same 404 as a route that
+does not exist. The provisioning listener refuses to start unless its
+`bind-host` is a literal address inside the provisioning zone that
+`sdn.environment` numbers (`ValidateProvisioningSurface`), so the only
+machines that can reach it are on the isolated provisioning VLAN, where the
+provisioning-zone flows admit them. Binding an address is not by itself
+isolation — Linux answers for a local address on any interface — so the
+zone's flows are the other half of the boundary. Whoever is on that VLAN can
+still read any profile's config by MAC or serial; binding the fetch to the
+caller's EK with a challenge is planned
+([`docs/provisioning/engineering.md`](../provisioning/engineering.md) §3,
+*Planned*), not shipped. The listener's configuration is in
+[`docs/web/user.md`](../web/user.md).
 
 ### 4.3 Enrollment: the device record appears
 
@@ -187,6 +210,25 @@ See [`docs/attestation/architecture.md`](../attestation/architecture.md),
 
 `POST /api/v1/device/activate` is mTLS-authenticated; the device serial comes
 from the client certificate, never from the body.
+
+The device side is platformd's `FetchProfileAndActivate`: it presents the
+node's IDevID certificate and signs the TLS 1.3 handshake with the IDevID key
+inside the TPM — the same client the heartbeat uses (`App.newIDevIDClient`,
+[api.md](api.md) §Device heartbeat). No device private key leaves the TPM.
+platformd calls it once enrollment has stored the IDevID certificate in the
+TPM (`pkg/app/app.go`, the ACME enrollment path), trusting the control plane
+through the platform anchor. It is the only activation an installed image
+performs: the ISO's `trusted-platform-network` script, which repeated it with
+curl and a PEM IDevID key file nothing writes, was removed (#149), and
+`TestImageConfigsLeaveDeviceIdentityToPlatformd` (`pkg/arch`) fails if a
+`configs/os` file calls the activation or heartbeat endpoint again.
+
+`TestDeviceActivation_IDevIDOverMTLS` drives a simulator IDevID through this
+whole chain and asserts the port moves from enrolled to authorized.
+`TestFetchProfileAndActivate_IDevIDOverMTLS` drives the same chain through
+`App.FetchProfileAndActivate` — profile fetch, then activation — and asserts a
+control plane whose certificate the platform anchor does not cover is refused
+with the port left enrolled.
 
 ```
 POST /api/v1/device/activate  (mTLS, serial from client cert)
@@ -311,6 +353,101 @@ Two details the legacy documentation had wrong and that matter operationally:
 partition named by `device.DatastorePartition` (`"devices"`), sharded by
 `Config.ShardID`. Nothing in this feature writes to the local filesystem.
 
+### 4.5 Diskless boot: a proof is made on the connection that carries it (#690)
+
+A diskless node proves two things on every boot ([api.md §4.6](api.md#46-diskless-boot-delivery-690)):
+that it holds its IDevID key (`BootCertificate`) and that its TPM quote is
+fresh (`BootDelivery`). Both proofs cover the TLS 1.3 exporter of the
+connection they travel on (`provisioning.BootChannelNonce`), so a proof
+relayed onto another connection fails. The derivation itself — label, size,
+the TLS 1.3 requirement — is defined once, in the SDK
+(`transport.ExportChannelBinding`), and `pkg/provisioning` delegates to it, so
+the client and the daemon cannot disagree and the SDK never imports platform
+packages (gatewayd links the SDK; [docs/gateway/](../gateway/)). That exporter exists only once the
+connection is open, so the proof cannot be an input to the call. The SDK takes
+a callback, `device.BootProofFunc`. Each transport connects, reads its own
+connection's exporter, runs the callback, and sends the result on that same
+connection. Transport-level plumbing is one SDK primitive,
+`transport.WithChannelBinding`: a call option that carries the callback and
+that each adapter honours or refuses.
+
+| Transport | How the binding is the carrying connection's | Without a channel |
+|---|---|---|
+| REST | The bound call dials a dedicated TLS 1.3 connection (HTTP/1.1, no keep-alive), reads its exporter, and sends exactly one request on it. A second dial of that connection is refused (`ErrBoundConnectionReused`), so the request cannot leave on a pooled connection. | Not https: the SDK refuses. The daemon answers `400`. |
+| gRPC (TCP) | The adapter's credentials record each completed handshake; the binding interceptor waits until the client connection is `Ready` and binds to that handshake. If gRPC reconnects between binding and send, the daemon sees a different exporter and refuses the proof — the race fails closed (`PermissionDenied`), never open. | The daemon answers `FailedPrecondition`. |
+| QUIC | One QUIC connection per client: the bound request is sent on it after its exporter is read. | The daemon answers `StatusInvalidRequest`. |
+| Unix socket | No TLS. The SDK refuses with `*transport.ErrChannelBindingUnavailable` before anything is sent. | The daemon recognises the `unix` peer and answers `FailedPrecondition`. |
+| MCP | Served over plain HTTP or stdio, so there is no TLS. The SDK refuses the same way. | Both MCP service providers answer `ErrBootChannelRequired` without calling the boot service. |
+| Embedded | In-process, so there is no TLS. The SDK refuses the same way. | — |
+
+On the daemon, every transport derives the nonce with
+`restdevice.BootChannel(state, transport)` before it calls `BootService`. A
+connection with no TLS 1.3 exporter is refused there with the typed
+`ErrBootChannelRequired{Transport}`, so **an empty nonce never reaches
+`BootService`**. `BootService` then checks the certificate proof against that
+nonce and requires the quote's nonce to equal it. A proof made for another
+connection is the same `403` / `PermissionDenied` as any proof that does not
+verify.
+
+Rejected alternatives:
+
+| Alternative | Why it was rejected |
+|---|---|
+| **Accept proof bytes from the caller** (`--signature`, `--evidence`) | Bytes computed before the call cannot cover the exporter of a connection that did not exist yet, so the daemon could only refuse them. The flags were removed; the CLI takes a key (`--key`) and a quote program (`--quote-command`) and the transport runs them once connected. |
+| **A nonce endpoint** | It adds a round trip, and the nonce still has to be tied to one connection; the exporter already is, with no server state to keep. |
+| **Serving boot over Unix or MCP with some other nonce** | Neither transport has a TLS session, so there is nothing to bind to. Refusing explicitly, with a typed error on both sides, is preferable to a weaker binding that looks equivalent. |
+
+### 4.6 Operator Disable and Enable (#250)
+
+An operator can cut a machine off and let it back on, but only through two
+dedicated verbs — never by writing `state` through the generic update, which
+refuses a lifecycle state for the reason §5 item 7 gives. Both verbs are
+served by one `device.LifecycleService` behind every transport, and both
+program the switch port **before** the record changes:
+
+```
+Disable(id, reason)                     Enable(id)
+  device has a NetworkPortID? ─ no ⇒      device has a NetworkPortID? ─ no ⇒
+    ErrDeviceNotOnFabric                    ErrDeviceNotOnFabric
+  CanTransitionTo(suspended)? ─ no ⇒      state == suspended? ─ no ⇒
+    ErrInvalidTransition                    ErrDeviceNotSuspended
+  BlockPort (admin-down, DROP all)        quarantine-role zone? ─ no ⇒
+  state = suspended                         ErrNoQuarantineZone
+  reason = "operator: <reason>"           UnblockPort + quarantine zone flows
+                                          state = quarantined
+                                          reason = "operator: re-enabled;
+                                                    awaiting re-attestation"
+                                          collector.Refresh(id)  (best effort)
+```
+
+The SDN half is `PortEnforcer`, implemented by `policy.QuarantineManager`
+(`OperatorSuspend`, `OperatorReadmit`); the device package only orchestrates.
+Three rulings shape it:
+
+1. **Disable is enforced or refused.** It reuses the severe-violation path:
+   the port is blocked and the device recorded `suspended`. On a control plane
+   with no SDN policy engine, or for a device with no `network_port_id`, the
+   call is refused (`ErrLifecycleUnenforced`, `ErrDeviceNotOnFabric`) rather
+   than recording a state nothing enforces.
+2. **Enable never vouches for the machine.** It re-admits the port to the
+   quarantine zone and records `quarantined`; only a passing re-attestation
+   restores the `PriorState`/`PriorZone` recorded at suspension, through the
+   same `HandleRestoreAttestation` that lifts any quarantine. If anything fails
+   after the port is unblocked, the port is blocked again. The re-attestation
+   request is best effort: a failed `Refresh` is logged, the response reports
+   `reattestation_requested: false`, and the collector's scheduled cycle
+   re-attests the machine.
+3. **An operator disable shares `suspended`** with a severe violation. There is
+   no separate `disabled` state; the `operator: ` prefix on `StateReason` is
+   what tells the two apart, and the console's *Disabled* badge reads the
+   state, not the prefix.
+
+The daemon configures the service only when the attestation quarantine
+observer runs on SDN-OVS (`wireDeviceLifecycle`,
+`pkg/daemon/commands/device_lifecycle_init.go`), because that observer's
+manager is the one that restores a re-enabled device after it re-attests. On
+any other control plane every transport answers `ErrLifecycleUnenforced`.
+
 ## 5. Trust boundaries
 
 **Device identity is a trust boundary.** Specifically:
@@ -334,8 +471,9 @@ partition named by `device.DatastorePartition` (`"devices"`), sharded by
    A caller that cannot present an IDevID cannot reach either route. IDevID
    issuance itself is a separate feature.
 4. **Boot-time config lookup is cross-tenant by design.** `FindConfigForDevice`
-   searches every tenant. Tenant isolation for this one path is provided by the
-   uniqueness of the EK serial / MAC, not by a tenant filter.
+   and the boot fetch (`GET /api/v1/devices/config`) search every tenant.
+   Tenant isolation for this one path is provided by the uniqueness of the
+   EK serial / MAC, not by a tenant filter.
 5. **The provisioning config-fetch routes are unauthenticated at the transport
    layer.** `pkg/webservice/v1/router/device.go` registers
    `/api/v1/provisioning/*` with the comment *"These routes are UNPROTECTED (no
@@ -343,7 +481,10 @@ partition named by `device.DatastorePartition` (`"devices"`), sharded by
    EK-authenticated at the application layer instead. Those routes belong to
    the config-delivery feature; they are named here because they sit on the
    same router and an operator reading firewall rules will see them adjacent to
-   device routes.
+   device routes. The device feature's own unauthenticated route,
+   `GET /api/v1/devices/config`, is not on that router at all: only the
+   provisioning listener serves it (§4.2, #177), and its only authentication
+   is where that listener is reachable from.
 6. **BMC credentials live inside the profile.** `DeviceProfile.BMC` carries
    `Username` and `Password`; the password field is tagged `secret:"true"` and
    the config-snapshot redactor (`pkg/config/snapshot.go`) hides keys
@@ -353,7 +494,10 @@ partition named by `device.DatastorePartition` (`"devices"`), sharded by
    port admin-down and the device in `suspended`; `ViolationSeverityWarning`
    moves it to the quarantine zone in `quarantined`. `ViolationEvent.Validate`
    rejects an unrecognised severity or source rather than defaulting to the
-   lenient branch.
+   lenient branch. An operator's Disable takes the severe branch and Enable
+   only the quarantine one (§4.6); no path writes a lifecycle state the port
+   does not already enforce, which is why the generic device update refuses
+   `state`.
 
 ## 6. Failure posture
 
@@ -366,6 +510,10 @@ partition named by `device.DatastorePartition` (`"devices"`), sharded by
 - Lifecycle transitions **fail closed on the table**: `CanTransitionTo` returns
   `ErrInvalidTransition` for any pair not in `allowedTransitions`, and
   `revoked` is terminal with no outgoing edges.
+- Operator Disable and Enable **fail closed on enforcement**: with no SDN
+  policy engine or no switch port they are refused, and a refused call leaves
+  both the record and the port untouched. An Enable that fails after
+  unblocking the port blocks it again.
 - The activation switch move **fails the request**, not just the log: a
   non-nil error from `prepareSwitchTransition` produces a 500 before the SDN
   policy step runs, and a non-nil error from `commitSwitchTransition` (which
@@ -380,7 +528,9 @@ partition named by `device.DatastorePartition` (`"devices"`), sharded by
   a network controller. The device package contains **no implementation** of
   that interface. Bridges, ports, flows, VLANs and 802.1X port authentication
   are [`docs/sdn/`](../sdn/); physical switch ports are
-  [`docs/switch/`](../switch/).
+  [`docs/switch/`](../switch/). The operator lifecycle (§4.6) reaches the
+  network only through the `PortEnforcer` interface the SDN policy package
+  implements.
 - **It does not verify attestation.** It stores `AttestPub`, `AttestCert`,
   `EKCert` and `EventLog` and it consumes a `ViolationEvent`. Deciding whether a quote is
   acceptable is [`docs/attestation/`](../attestation/).

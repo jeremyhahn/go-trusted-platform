@@ -84,6 +84,15 @@ var mcpReplyDecoders = map[string]mcpReplyDecoder{
 	"/platform.v1.GatewayService/GetNAT64Status":      decodeGatewayNAT64StatusResult,
 }
 
+// mcpRequestReplyDecoder decodes an MCP tool result into the caller's pb
+// reply when the decoding depends on the request, e.g. picking one entry
+// out of a list tool's result.
+type mcpRequestReplyDecoder func(args interface{}, result interface{}, reply interface{}) error
+
+// mcpRequestReplyDecoders routes gRPC methods whose decoding needs the
+// request. They take precedence over mcpReplyDecoders.
+var mcpRequestReplyDecoders = map[string]mcpRequestReplyDecoder{}
+
 // decodeGatewayNAT64StatusResult wraps the bare status object the
 // gateway_nat64_status tool returns into the gRPC reply.
 func decodeGatewayNAT64StatusResult(result interface{}, reply interface{}) error {

@@ -36,6 +36,7 @@ type fakeVMQuoteTPM struct {
 	quoteFunc    func(pcrs []uint, nonce []byte) (xkmssdk.Quote, error)
 	readPCRsFunc func(pcrList []uint) ([]xkmssdk.PCRBank, error)
 	iakFunc      func() (crypto.PublicKey, error)
+	iakAttrsFunc func() (*xkmssdk.KeyAttributes, error)
 	ekCertFunc   func() (*x509.Certificate, error)
 
 	lastQuotePCRs  []uint
@@ -75,6 +76,13 @@ func (f *fakeVMQuoteTPM) IAK() (crypto.PublicKey, error) {
 		return nil, err
 	}
 	return &key.PublicKey, nil
+}
+
+func (f *fakeVMQuoteTPM) IAKAttributes() (*xkmssdk.KeyAttributes, error) {
+	if f.iakAttrsFunc != nil {
+		return f.iakAttrsFunc()
+	}
+	return &xkmssdk.KeyAttributes{SignatureAlgorithm: x509.SHA256WithRSA}, nil
 }
 
 func (f *fakeVMQuoteTPM) EKCertificate() (*x509.Certificate, error) {
@@ -253,6 +261,58 @@ func TestVMAttestorDevice_GetAIKPublicKey_Error(t *testing.T) {
 	assert.True(t, errors.As(err, &aikErr))
 }
 
+func TestVMAttestorDevice_GetAIKSignatureAlgorithm(t *testing.T) {
+	fake := &fakeVMQuoteTPM{
+		iakAttrsFunc: func() (*xkmssdk.KeyAttributes, error) {
+			return &xkmssdk.KeyAttributes{SignatureAlgorithm: x509.SHA256WithRSAPSS}, nil
+		},
+	}
+	device, err := NewVMAttestorDevice(fake, nil)
+	require.NoError(t, err)
+
+	algorithm, err := device.GetAIKSignatureAlgorithm(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, x509.SHA256WithRSAPSS.String(), algorithm)
+}
+
+func TestVMAttestorDevice_GetAIKSignatureAlgorithm_Errors(t *testing.T) {
+	cases := map[string]struct {
+		attrs func() (*xkmssdk.KeyAttributes, error)
+		ctx   func() context.Context
+	}{
+		"attributes unavailable": {
+			attrs: func() (*xkmssdk.KeyAttributes, error) { return nil, errors.New("no IAK") },
+		},
+		"nil attributes": {
+			attrs: func() (*xkmssdk.KeyAttributes, error) { return nil, nil },
+		},
+		"no scheme declared": {
+			attrs: func() (*xkmssdk.KeyAttributes, error) { return &xkmssdk.KeyAttributes{}, nil },
+		},
+		"canceled context": {
+			ctx: func() context.Context {
+				ctx, cancel := context.WithCancel(context.Background())
+				cancel()
+				return ctx
+			},
+		},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			device, err := NewVMAttestorDevice(&fakeVMQuoteTPM{iakAttrsFunc: tc.attrs}, nil)
+			require.NoError(t, err)
+			ctx := context.Background()
+			if tc.ctx != nil {
+				ctx = tc.ctx()
+			}
+
+			_, err = device.GetAIKSignatureAlgorithm(ctx)
+			var unavailable ErrAIKSignatureAlgorithmUnavailable
+			assert.True(t, errors.As(err, &unavailable), "got %v", err)
+		})
+	}
+}
+
 func TestVMAttestorDevice_GetEKCertificate(t *testing.T) {
 	device, err := NewVMAttestorDevice(&fakeVMQuoteTPM{}, nil)
 	require.NoError(t, err)
@@ -343,5 +403,6 @@ func TestVMAttestorDevice_WorksWithVMAttestor(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, []byte("quoted-data"), quote.QuoteData)
 	assert.Equal(t, []byte("signature-data"), quote.Signature)
+	assert.Equal(t, x509.SHA256WithRSA.String(), quote.SignatureAlgorithm)
 	assert.Len(t, quote.PCRs, 2) // PCRs 0 and 7 (workload PCR not enabled)
 }

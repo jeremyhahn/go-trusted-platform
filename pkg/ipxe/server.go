@@ -441,14 +441,12 @@ func (s *Server) buildDHCPConfig() (*DHCPConfig, error) {
 		Port:                s.config.DHCPPort,
 	}
 
-	// Optional fields
-	if s.config.DHCPGateway != "" {
-		dhcpConfig.Router = net.ParseIP(s.config.DHCPGateway).To4()
+	router, dns, err := s.config.dhcpRouterAndDNS()
+	if err != nil {
+		return nil, err
 	}
-
-	if s.config.DHCPDNS != "" {
-		dhcpConfig.DNSServers = []net.IP{net.ParseIP(s.config.DHCPDNS).To4()}
-	}
+	dhcpConfig.Router = router
+	dhcpConfig.DNSServers = dns
 
 	return dhcpConfig, nil
 }

@@ -37,6 +37,9 @@ type TUNConfig struct {
 	// Addresses are the prefixes configured on the interface; the kernel
 	// routes the covered addresses into the device.
 	Addresses []netip.Prefix
+	// Routes are further prefixes routed into the device. The kernel drops
+	// them with the device.
+	Routes []netip.Prefix
 	// MTU is the link MTU; zero selects defaultTUNMTU.
 	MTU int
 }
@@ -58,6 +61,11 @@ func (c TUNConfig) validate() error {
 	for _, p := range c.Addresses {
 		if !p.IsValid() {
 			return &ErrInvalidTunnelConfig{Name: c.Name, Reason: "address prefix is not valid"}
+		}
+	}
+	for _, p := range c.Routes {
+		if !p.IsValid() {
+			return &ErrInvalidTunnelConfig{Name: c.Name, Reason: "route prefix is not valid"}
 		}
 	}
 	if c.MTU != 0 && (c.MTU < MinMTU || c.MTU > MaxMTU) {
@@ -126,7 +134,16 @@ func (t *TUN) bringUp(cfg TUNConfig) error {
 			return err
 		}
 	}
-	return t.nl.LinkSetUp(created)
+	if err := t.nl.LinkSetUp(created); err != nil {
+		return err
+	}
+	for _, p := range cfg.Routes {
+		route := &vnl.Route{LinkIndex: created.Attrs().Index, Dst: prefixToIPNet(p.Masked()), Scope: vnl.SCOPE_LINK}
+		if err := t.nl.RouteReplace(route); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // Name returns the interface name the kernel assigned.

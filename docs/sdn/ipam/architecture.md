@@ -1,5 +1,8 @@
 # IPAM Architecture
 
+> **Status: REFERENCE** · Last verified: 2026-10-15
+> The IPAM package's pools, allocators and storage.
+
 ## Overview
 
 The IPAM package implements a pool-based IP address management system with pluggable storage backends, lock-free allocation tracking, and support for distributed environments. The architecture prioritizes consistency, performance, and operational flexibility.
@@ -329,6 +332,7 @@ func (b *Bitmap) NextClear(start uint64) (uint64, bool) {
             if offset < b.size {
                 return offset, true
             }
+            return 0, false  // the first clear bit is past the end
         }
     }
 
@@ -372,10 +376,10 @@ var ipamBackendFactory = map[string]func(ctx context.Context, app *App) (ipam.Al
 | Config value | Factory registered in | Availability |
 |-------------|----------------------|--------------|
 | `memory` | `sdn_ipam_backends.go` | Always |
-| `quicbaas` | `sdn_ipam_backends.go` | Requires QuicBaaS SDK client |
-| `dht` | `sdn_ipam_backends_p2p.go` | Requires `platform_p2p` build tag |
+| `quicbaas` | `sdn_ipam_backends.go` | Requires a QuicBaaS SDK client; not registered in `platform_p2p` builds |
+| `dht` | `sdn_ipam_backends_p2p.go` | Requires the `platform_p2p` build tag, and a p2p node passed to `RegisterDHTIPAMBackend` — nothing calls it yet, so the placeholder entry (`sdn_ipam_backends_p2p.go:37`) refuses |
 
-An unknown backend returns `ErrIPAMBackendUnknown`. Requesting `dht` without the build tag returns `ErrIPAMBackendP2PRequired`. Requesting `quicbaas` without a configured SDK client returns `ErrIPAMBackendUnconfigured`.
+`memory` is registered in both builds. An unknown backend returns `ErrIPAMBackendUnknown`. Requesting `dht` without the build tag returns `ErrIPAMBackendP2PRequired`. Requesting `quicbaas` without a configured SDK client returns `ErrIPAMBackendUnconfigured`.
 
 ### Memory Backend
 
@@ -422,11 +426,11 @@ An unknown backend returns `ErrIPAMBackendUnknown`. Requesting `dht` without the
 |  | Key: "cidr:CIDR"   |  -> Pool ID                                |
 |  +--------------------+                                            |
 |                                                                    |
-|  Operations:                                                       |
-|  - Put: Store with Raft consensus                                  |
-|  - Get: Read from local replica                                    |
-|  - List: Paginated scan                                            |
-|  - Query: Secondary index lookup                                   |
+|  QuicBaaSClient operations (by entity type + uint64 ID):           |
+|  - Put / Get / Delete                                              |
+|  - List: paginated scan                                            |
+|  - Query: secondary-index lookup                                   |
+|  No compare-and-swap: Allocate is read-then-Put                    |
 |                                                                    |
 +------------------------------------------------------------------+
 ```
@@ -478,13 +482,16 @@ An unknown backend returns `ErrIPAMBackendUnknown`. Requesting `dht` without the
 |                                                                    |
 |  2. Find Available IP (Pool.NextDynamic)                           |
 |     - window = DynamicOffsets() (RangeStart..RangeEnd)             |
-|     - NextClear(first) -> offset; past last -> exhausted           |
+|     - memory: bitmap.NextClear(first); quicbaas: scan the set of   |
+|       stored allocations; past last -> exhausted                   |
 |     - reserved address -> skip past its reserved prefix            |
 |     - OffsetToIP(cidr, offset) -> IP                               |
 |                                                                    |
-|  3. Atomic Allocation                                              |
-|     - bitmap.Set(offset) with CAS                                  |
-|     - If CAS fails, another thread allocated; retry                |
+|  3. Claim                                                          |
+|     - memory: bitmap.Set(offset), all under the backend's write    |
+|       lock (memory.go:401)                                         |
+|     - quicbaas: no conditional write; the last writer wins         |
+|       (see Concurrency Model)                                      |
 |                                                                    |
 |  4. Create Allocation Record                                       |
 |     - Generate UUID                                                |
@@ -492,8 +499,9 @@ An unknown backend returns `ErrIPAMBackendUnknown`. Requesting `dht` without the
 |     - Calculate expiration                                         |
 |                                                                    |
 |  5. Persist                                                        |
+|     - QuicBaaS: write the pool first; a failed write returns       |
+|       ErrPoolOperationFailed and stores no allocation              |
 |     - Store allocation                                             |
-|     - Update pool stats                                            |
 |                                                                    |
 |  6. Return Allocation                                              |
 |                                                                    |
@@ -564,53 +572,64 @@ func (m *MemoryBackend) Allocate(ctx context.Context, req *AllocationRequest) (*
 }
 ```
 
-### QuicBaaS Optimistic Concurrency
+### QuicBaaS Concurrency
+
+The QuicBaaS backend has no conditional write. `Allocate`, `AllocateSpecific`
+and `Release` read the pool and its allocations, choose the address, then write
+the pool and the allocation with plain `Put` calls:
 
 ```go
-// QuicBaaS uses optimistic concurrency with CAS
+// No version check and no retry: the last writer wins.
 func (d *QuicBaaSBackend) Allocate(ctx context.Context, req *AllocationRequest) (*Allocation, error) {
-    for retry := 0; retry < d.maxRetries; retry++ {
-        // 1. Read current state
-        pool, allocations := d.readPoolState(ctx, req.PoolID)
+    pool, err := d.GetPool(ctx, req.PoolID)
+    allocations, err := d.GetAllocationsByPool(ctx, req.PoolID)
+    ip := pool.NextDynamic(...) // lowest address not in allocations
 
-        // 2. Find available IP
-        ip := findAvailableIP(pool, allocations)
-
-        // 3. Attempt atomic write
-        err := d.client.Put(ctx, entityTypeAllocation, ipID, data)
-        if err == nil {
-            return alloc, nil
-        }
-
-        // 4. Retry on conflict
-        if errors.Is(err, quicbaas.ErrCASConflict) {
-            continue
-        }
-        return nil, err
+    if err := d.UpdatePool(ctx, pool); err != nil {
+        return nil, &ErrPoolOperationFailed{PoolID: pool.ID, Operation: "allocate", Cause: err}
     }
-    return nil, ErrMaxRetriesExceeded
+    if err := d.client.Put(ctx, entityTypeAllocation, ipID, data); err != nil {
+        return nil, &ErrStorageOperation{Operation: "put", Key: ip.String(), Cause: err}
+    }
+    return alloc, nil
 }
 ```
+
+- Two allocators that read the same pool state can pick the same address.
+  Both writes succeed and the last one wins; neither caller sees an error.
+- A pool write that fails is returned as `ErrPoolOperationFailed` and no
+  allocation is stored (on `Release`, the allocation stays active).
+- `MaxRetries`, `ErrCASConflict` and `ErrMaxRetriesExceeded` exist, but nothing
+  in the backend uses them.
+
+**Known limitation:** atomic allocation needs a conditional put (write only if
+the stored version is unchanged) in the go-quicbaas SDK. The SDK has none: the
+KV `PutRequest` carries no expected version, and its transaction compare always
+checks version 1. The gap is reported upstream.
 
 ### DHT Eventual Consistency
 
 ```go
 // DHT uses claim-verify pattern for eventual consistency
 func (d *DHTBackend) tryClaim(ctx context.Context, pool *Pool, ip netip.Addr, req *AllocationRequest) (*Allocation, error) {
-    // 1. Check existing
-    existing, err := d.dht.GetValue(ctx, key)
-    if err == nil && len(existing) > 0 {
-        return nil, ErrIPAlreadyAllocated
+    // 1. Check existing: an active allocation at this address wins
+    existing, err := d.dht.GetValue(opCtx, key)
+    // ... unmarshal; Status == Active -> return nil, ErrIPAlreadyAllocated
+
+    // 2. Write claim (and the device index, best effort)
+    if err := d.dht.PutValue(opCtx, key, data); err != nil {
+        return nil, &ErrAllocationFailed{PoolID: pool.ID, Reason: "DHT put failed", Cause: err}
     }
 
-    // 2. Write claim
-    d.dht.PutValue(ctx, key, data)
-
     // 3. Propagation delay
-    time.Sleep(claimPropagationDelay)
+    select {
+    case <-time.After(claimPropagationDelay):
+    case <-ctx.Done():
+        return nil, ctx.Err()
+    }
 
-    // 4. Verify our claim won
-    verified, _ := d.dht.GetValue(ctx, key)
+    // 4. Verify our claim won (read and unmarshal errors are ErrAllocationFailed)
+    verified, err := d.dht.GetValue(verifyCtx, key)
     var verifiedAlloc Allocation
     json.Unmarshal(verified, &verifiedAlloc)
 
@@ -642,15 +661,11 @@ func (d *DHTBackend) tryClaim(ctx context.Context, pool *Pool, ip netip.Addr, re
 |      |  Renew()         |                                          |
 |      +------------------+                                          |
 |      |                                                             |
-|      |  ExpiresAt reached                                          |
+|      |  ExpireInactive(): LastSeen older than InactivityTimeout   |
 |      v                                                             |
 |  +---------+                                                       |
-|  | Expired |                                                       |
+|  | Expired |  (IP returned to pool)                                |
 |  +---------+                                                       |
-|      |                                                             |
-|      |  ExpireInactive() called                                    |
-|      v                                                             |
-|  Available (IP returned to pool)                                   |
 |                                                                    |
 +------------------------------------------------------------------+
 ```
@@ -680,9 +695,16 @@ func (m *MemoryBackend) ExpireInactive(ctx context.Context, poolID string) ([]*A
             alloc.ReleasedAt = time.Now()
             expired = append(expired, alloc.Clone())
 
-            // Clear bitmap
-            offset, _ := IPToOffset(pool.CIDR, ip)
-            m.bitmaps[poolID].Clear(offset)
+            // Clear bitmap (IPv4 below /31 skips the network address)
+            offset, err := IPToOffset(pool.CIDR, ip)
+            if err != nil {
+                continue
+            }
+            bitmapOffset := offset
+            if pool.CIDR.Addr().Is4() && pool.CIDR.Bits() < 31 {
+                bitmapOffset = offset - 1
+            }
+            m.bitmaps[poolID].Clear(bitmapOffset)
 
             // Update stats
             pool.AllocatedIPs--
@@ -746,11 +768,5 @@ type PoolStats struct {
 
 ### Observable Metrics
 
-| Metric | Type | Description |
-|--------|------|-------------|
-| `ipam_pools_total` | Gauge | Total number of pools |
-| `ipam_allocations_total` | Counter | Total allocations made |
-| `ipam_releases_total` | Counter | Total IPs released |
-| `ipam_pool_utilization` | Gauge | Per-pool utilization percentage |
-| `ipam_allocation_duration` | Histogram | Allocation operation latency |
-| `ipam_backend_errors` | Counter | Backend operation errors |
+IPAM exports no metrics today: `pkg/sdn/ipam` registers no instruments.
+`GetPoolStats` (above) is the only view of pool usage.

@@ -25,6 +25,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ipsec/config"
 	"github.com/vishvananda/netlink"
 )
 
@@ -40,14 +41,19 @@ type serviceHarness struct {
 	pki      *testPKI
 }
 
-func newTestService(t *testing.T, cfg *Config, attempts ...attempt) *serviceHarness {
+func newTestService(t *testing.T, cfg *config.Config, attempts ...attempt) *serviceHarness {
+	t.Helper()
+	return newTestEVPNService(t, cfg, staticPeersOnly{}, attempts...)
+}
+
+func newTestEVPNService(t *testing.T, cfg *config.Config, admitter Admitter, attempts ...attempt) *serviceHarness {
 	t.Helper()
 	root := newTestPKI(t)
 	pki := root.intermediate(t, "tunnel intermediate")
 	filter, nft := newTestFilter(t, cfg)
 	block, x := testBlockPolicy(t, cfg)
 	identity := &fakeIdentity{id: pki.identity(nil)}
-	svc, err := newService(cfg, filter, block, identity, &fakeDialer{attempts: attempts}, nil)
+	svc, err := newService(cfg, admitter, filter, block, identity, &fakeDialer{attempts: attempts}, nil)
 	if err != nil {
 		t.Fatalf("newService: %v", err)
 	}
@@ -56,7 +62,7 @@ func newTestService(t *testing.T, cfg *Config, attempts ...attempt) *serviceHarn
 }
 
 // serviceConfig is validConfig with CRL files in a fresh directory.
-func serviceConfig(t *testing.T, names ...string) *Config {
+func serviceConfig(t *testing.T, names ...string) *config.Config {
 	t.Helper()
 	cfg := validConfig()
 	dir := t.TempDir()
@@ -85,14 +91,14 @@ func TestNewServiceRejects(t *testing.T) {
 	noCertificate.CRLFiles = []string{"/etc/platform/ipsec/tunnel.crl"}
 	tests := []struct {
 		name  string
-		cfg   *Config
+		cfg   *config.Config
 		want  error
 		field string
 	}{
-		{"absent section", nil, ErrNotEnabled, ""},
-		{"disabled section", &Config{}, ErrNotEnabled, ""},
-		{"no CRL files", noCRLs, ErrRequired, "crl-files"},
-		{"no certificate file", noCertificate, ErrRequired, "certificate-file"},
+		{"absent section", nil, config.ErrNotEnabled, ""},
+		{"disabled section", &config.Config{}, config.ErrNotEnabled, ""},
+		{"no CRL files", noCRLs, config.ErrRequired, "crl-files"},
+		{"no certificate file", noCertificate, config.ErrRequired, "certificate-file"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -100,7 +106,7 @@ func TestNewServiceRejects(t *testing.T) {
 			if svc != nil || !errors.Is(err, tt.want) {
 				t.Fatalf("NewService = %v, %v; want %v", svc, err, tt.want)
 			}
-			var cfgErr *ConfigError
+			var cfgErr *config.ConfigError
 			if tt.field != "" && (!errors.As(err, &cfgErr) || cfgErr.Field != tt.field) {
 				t.Fatalf("err = %v, want a ConfigError on %s", err, tt.field)
 			}
@@ -172,7 +178,7 @@ func TestServicePushCRLsGoesOnPastABadFile(t *testing.T) {
 	putFile(t, cfg.CRLFiles[2], pemCRL(h.pki.crl(t, 1, h.pki.issued)))
 
 	err := h.svc.pushCRLs(context.Background())
-	var cfgErr *ConfigError
+	var cfgErr *config.ConfigError
 	if !errors.As(err, &cfgErr) || cfgErr.Field != "crl-files[0]" || !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("err = %v, want the missing file named", err)
 	}
@@ -182,30 +188,6 @@ func TestServicePushCRLsGoesOnPastABadFile(t *testing.T) {
 	}
 	if got := h.svc.ctl.Status().CRLs; got != 1 {
 		t.Fatalf("held CRLs %d, want the good file's", got)
-	}
-}
-
-func TestServiceValidateVTEPsRefusesMissingStaticPeers(t *testing.T) {
-	h := newTestService(t, serviceConfig(t, "root.crl"))
-	missing := netip.MustParseAddr("10.20.0.42")
-	err := h.svc.ValidateVTEPs([]netip.Addr{h.svc.local, missing})
-	var missingErr *MissingStaticPeersError
-	if !errors.As(err, &missingErr) || !errors.Is(err, ErrMissingStaticPeer) {
-		t.Fatalf("ValidateVTEPs err = %v, want MissingStaticPeersError", err)
-	}
-	if !slices.Equal(missingErr.VTEPs, []netip.Addr{missing}) {
-		t.Fatalf("missing VTEPs = %v, want %v", missingErr.VTEPs, []netip.Addr{missing})
-	}
-}
-
-func TestServiceObserveVTEPCountsUnpeeredVTEPs(t *testing.T) {
-	h := newTestService(t, serviceConfig(t, "root.crl"))
-	missing := netip.MustParseAddr("10.20.0.42")
-	h.svc.ObserveVTEP(context.Background(), missing)
-	h.svc.ObserveVTEP(context.Background(), missing)
-	status := h.svc.Status()
-	if !slices.Equal(status.UnpeeredVTEPs, []netip.Addr{missing}) {
-		t.Fatalf("unpeered VTEPs = %v, want %v", status.UnpeeredVTEPs, []netip.Addr{missing})
 	}
 }
 
@@ -363,5 +345,50 @@ func TestStaticPeersOnlyAdmitsNoRoutedVTEP(t *testing.T) {
 	}
 	if got := h.svc.ctl.Peers(); slices.Contains(got, addr("10.20.0.30")) {
 		t.Fatalf("peers %v include a VTEP no admitter vouched for", got)
+	}
+}
+
+func TestNewEVPNServiceRejectsNoAdmitter(t *testing.T) {
+	svc, err := NewEVPNService(serviceConfig(t, "tunnel.crl"), nil, nil)
+	if svc != nil || !errors.Is(err, ErrMissingDependency) {
+		t.Fatalf("NewEVPNService = %v, %v; want %v", svc, err, ErrMissingDependency)
+	}
+}
+
+func TestEVPNServiceFollowsRoutesAndEvictions(t *testing.T) {
+	admitter := &fakeAdmitter{refuse: map[netip.Addr]error{addr("10.20.0.31"): errInjected}}
+	h := newTestEVPNService(t, serviceConfig(t, "tunnel.crl"), admitter)
+	ctx := context.Background()
+	vtep := addr("10.20.0.30")
+	holds := func() bool { return slices.Contains(h.svc.ctl.Peers(), vtep) }
+
+	if err := h.svc.HandleEVPNRoute(ctx, imet(100, "10.20.0.30", false)); err != nil || !holds() {
+		t.Fatalf("an admitted route: err %v, peer held %v", err, holds())
+	}
+	if err := h.svc.HandleEVPNRoute(ctx, imet(100, "10.20.0.31", false)); !errors.Is(err, errInjected) {
+		t.Fatalf("a refused route: err %v, want the admitter's refusal", err)
+	}
+	if err := h.svc.Evict(ctx, vtep); err != nil || holds() {
+		t.Fatalf("Evict: err %v, peer held %v", err, holds())
+	}
+	if _, dropped := h.svc.filter.evicted[vtep]; !dropped {
+		t.Fatal("Evict left the peer's traffic undropped")
+	}
+	if err := h.svc.Readmit(ctx, vtep); err != nil || !holds() {
+		t.Fatalf("Readmit: err %v, peer held %v", err, holds())
+	}
+	if err := h.svc.Readmit(ctx, vtep); err != nil {
+		t.Fatalf("Readmit of a peer never evicted: %v, want nil", err)
+	}
+	if err := h.svc.HandleEVPNRoute(ctx, imet(100, "10.20.0.30", true)); err != nil || holds() {
+		t.Fatalf("a withdrawal: err %v, peer held %v", err, holds())
+	}
+}
+
+func TestEVPNServiceEvictRejectsANonPeer(t *testing.T) {
+	h := newTestEVPNService(t, serviceConfig(t, "tunnel.crl"), &fakeAdmitter{})
+	err := h.svc.Evict(context.Background(), netip.Addr{})
+	if !errors.Is(err, config.ErrInvalidAddress) {
+		t.Fatalf("Evict of no address = %v, want %v", err, config.ErrInvalidAddress)
 	}
 }

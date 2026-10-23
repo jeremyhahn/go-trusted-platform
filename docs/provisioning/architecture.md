@@ -93,6 +93,13 @@ iPXE/network boot, installer"*, Tier 1, reached through `services/bmc`,
    with the IDevID the machine obtained during provisioning
    ([`docs/sdn/`](../sdn/)).
 5. **Install-complete report.** Untrusted. Attestation is what follows.
+6. **Booting machine → its profile's config (`GET /api/v1/devices/config`).**
+   Unauthenticated by design, because the caller has no credential yet. It is
+   reachable only from the isolated provisioning VLAN (#177). Only a
+   `surface: provisioning` listener bound inside the provisioning zone serves
+   it, and every other listener answers `404`. The zone's flows keep everyone
+   else off that address. An EK-bound challenge is planned
+   ([engineering.md](engineering.md) §3, *Planned*).
 
 ## Data flow — a machine joining
 

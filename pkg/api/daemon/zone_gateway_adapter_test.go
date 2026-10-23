@@ -24,6 +24,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway"
 	ipamBackends "github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ipam/backends"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -60,14 +61,14 @@ func TestQUICGatewayListNetworkZones_Reproduction(t *testing.T) {
 	ipamAlloc := ipamBackends.NewMemoryBackend()
 
 	// Wire fullGatewayQUICAdapter exactly as newFullGatewayQUICAdapter does in the daemon.
-	adapter := newFullGatewayQUICAdapter(ipamAlloc, zoneSvc, nil)
+	adapter := newFullGatewayQUICAdapter(ipamAlloc, zoneSvc, nil, nil, nil, nil)
 
 	// Build the GatewayHandler exactly as the daemon does.
 	logger := logging.DefaultLogger()
 	gatewayHandler := quic.NewGatewayHandler(logger, adapter)
 
 	// Build the QUICServiceHandler with only the gateway handler wired.
-	h := NewQUICServiceHandler(logger,
+	h := newTestQUICServiceHandler(logger,
 		WithQUICGatewayHandler(gatewayHandler),
 	)
 
@@ -77,14 +78,14 @@ func TestQUICGatewayListNetworkZones_Reproduction(t *testing.T) {
 		LifecycleRole string `codec:"lifecycle_role,omitempty"`
 	}{LifecycleRole: ""}
 
-	bodyBytes, err := quic.EncodePayload(listReq)
+	bodyBytes, err := quicwire.EncodePayload(listReq)
 	require.NoError(t, err, "encoding list request must not fail")
 
 	payload := make([]byte, 1+len(bodyBytes))
 	payload[0] = 0x10 // OpGatewayListNetworkZones sub-opcode
 	copy(payload[1:], bodyBytes)
 
-	req := &quic.Request{
+	req := &quicwire.Request{
 		Opcode:  0x2F, // OpGatewayCategory
 		Token:   "",
 		Payload: payload,
@@ -92,13 +93,13 @@ func TestQUICGatewayListNetworkZones_Reproduction(t *testing.T) {
 
 	resp := h.HandleRequest(ctx, req)
 	require.NotNil(t, resp, "response must not be nil")
-	assert.Equal(t, quic.StatusOK, resp.Status,
+	assert.Equal(t, quicwire.StatusOK, resp.Status,
 		"ListNetworkZones over QUIC must succeed; got status 0x%02x payload: %s",
 		resp.Status, string(resp.Payload))
 
 	// Decode the response exactly as the integration adapter decodes it.
 	var listResp quic.GatewayListNetworkZonesResponse
-	err = quic.DecodePayload(resp.Payload, &listResp)
+	err = quicwire.DecodePayload(resp.Payload, &listResp)
 	require.NoError(t, err, "decoding list response must not fail")
 
 	// zone.Resolve(nil) returns the 9 built-in zones.
@@ -119,29 +120,29 @@ func TestQUICGatewayListNetworkZones_FilterByRole(t *testing.T) {
 	require.NoError(t, err)
 
 	ipamAlloc := ipamBackends.NewMemoryBackend()
-	adapter := newFullGatewayQUICAdapter(ipamAlloc, zoneSvc, nil)
+	adapter := newFullGatewayQUICAdapter(ipamAlloc, zoneSvc, nil, nil, nil, nil)
 	logger := logging.DefaultLogger()
 	gatewayHandler := quic.NewGatewayHandler(logger, adapter)
-	h := NewQUICServiceHandler(logger, WithQUICGatewayHandler(gatewayHandler))
+	h := newTestQUICServiceHandler(logger, WithQUICGatewayHandler(gatewayHandler))
 
 	t.Run("provisioning role returns exactly one zone", func(t *testing.T) {
 		listReq := struct {
 			LifecycleRole string `codec:"lifecycle_role,omitempty"`
 		}{LifecycleRole: "provisioning"}
 
-		bodyBytes, err := quic.EncodePayload(listReq)
+		bodyBytes, err := quicwire.EncodePayload(listReq)
 		require.NoError(t, err)
 
 		payload := make([]byte, 1+len(bodyBytes))
 		payload[0] = 0x10
 		copy(payload[1:], bodyBytes)
 
-		resp := h.HandleRequest(ctx, &quic.Request{Opcode: 0x2F, Payload: payload})
+		resp := h.HandleRequest(ctx, &quicwire.Request{Opcode: 0x2F, Payload: payload})
 		require.NotNil(t, resp)
-		assert.Equal(t, quic.StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 		var listResp quic.GatewayListNetworkZonesResponse
-		require.NoError(t, quic.DecodePayload(resp.Payload, &listResp))
+		require.NoError(t, quicwire.DecodePayload(resp.Payload, &listResp))
 		require.Len(t, listResp.Zones, 1)
 		assert.Equal(t, "provisioning", listResp.Zones[0].LifecycleRole)
 	})
@@ -151,19 +152,19 @@ func TestQUICGatewayListNetworkZones_FilterByRole(t *testing.T) {
 			LifecycleRole string `codec:"lifecycle_role,omitempty"`
 		}{LifecycleRole: "nonexistent"}
 
-		bodyBytes, err := quic.EncodePayload(listReq)
+		bodyBytes, err := quicwire.EncodePayload(listReq)
 		require.NoError(t, err)
 
 		payload := make([]byte, 1+len(bodyBytes))
 		payload[0] = 0x10
 		copy(payload[1:], bodyBytes)
 
-		resp := h.HandleRequest(ctx, &quic.Request{Opcode: 0x2F, Payload: payload})
+		resp := h.HandleRequest(ctx, &quicwire.Request{Opcode: 0x2F, Payload: payload})
 		require.NotNil(t, resp)
-		assert.Equal(t, quic.StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 		var listResp quic.GatewayListNetworkZonesResponse
-		require.NoError(t, quic.DecodePayload(resp.Payload, &listResp))
+		require.NoError(t, quicwire.DecodePayload(resp.Payload, &listResp))
 		assert.Empty(t, listResp.Zones)
 	})
 }
@@ -175,12 +176,12 @@ func TestQUICGatewayListNetworkZones_NilZoneSvc(t *testing.T) {
 
 	ipamAlloc := ipamBackends.NewMemoryBackend()
 	// zoneSvc is nil — simulates daemon started without sdn config.
-	adapter := newFullGatewayQUICAdapter(ipamAlloc, nil, nil)
+	adapter := newFullGatewayQUICAdapter(ipamAlloc, nil, nil, nil, nil, nil)
 	logger := logging.DefaultLogger()
 	gatewayHandler := quic.NewGatewayHandler(logger, adapter)
-	h := NewQUICServiceHandler(logger, WithQUICGatewayHandler(gatewayHandler))
+	h := newTestQUICServiceHandler(logger, WithQUICGatewayHandler(gatewayHandler))
 
-	bodyBytes, err := quic.EncodePayload(struct {
+	bodyBytes, err := quicwire.EncodePayload(struct {
 		LifecycleRole string `codec:"lifecycle_role,omitempty"`
 	}{})
 	require.NoError(t, err)
@@ -189,9 +190,9 @@ func TestQUICGatewayListNetworkZones_NilZoneSvc(t *testing.T) {
 	payload[0] = 0x10
 	copy(payload[1:], bodyBytes)
 
-	resp := h.HandleRequest(ctx, &quic.Request{Opcode: 0x2F, Payload: payload})
+	resp := h.HandleRequest(ctx, &quicwire.Request{Opcode: 0x2F, Payload: payload})
 	require.NotNil(t, resp)
-	assert.Equal(t, quic.StatusUnavailable, resp.Status,
+	assert.Equal(t, quicwire.StatusUnavailable, resp.Status,
 		"nil zone service must return StatusUnavailable, not a panic")
 }
 
@@ -208,7 +209,7 @@ func TestQUICGatewayCategory_FramingRoundTrip(t *testing.T) {
 		LifecycleRole string `codec:"lifecycle_role,omitempty"`
 	}{LifecycleRole: ""}
 
-	bodyBytes, err := quic.EncodePayload(listReq)
+	bodyBytes, err := quicwire.EncodePayload(listReq)
 	require.NoError(t, err)
 
 	// payload = [sub_opcode] + [msgpack body]
@@ -216,7 +217,7 @@ func TestQUICGatewayCategory_FramingRoundTrip(t *testing.T) {
 	payload[0] = 0x10
 	copy(payload[1:], bodyBytes)
 
-	wireReq := &quic.Request{
+	wireReq := &quicwire.Request{
 		Opcode:  0x2F,
 		Token:   "",
 		Payload: payload,
@@ -224,9 +225,9 @@ func TestQUICGatewayCategory_FramingRoundTrip(t *testing.T) {
 
 	// Write to a bytes.Buffer, then read back.
 	var buf bytes.Buffer
-	require.NoError(t, quic.WriteRequest(&buf, wireReq))
+	require.NoError(t, quicwire.WriteRequest(&buf, wireReq))
 
-	decoded, err := quic.ReadRequest(&buf)
+	decoded, err := quicwire.ReadRequest(&buf)
 	require.NoError(t, err)
 
 	assert.Equal(t, byte(0x2F), decoded.Opcode)
@@ -256,15 +257,15 @@ func (p *panicGatewayService) ListSnapshots(_ context.Context) ([]*quic.GatewayS
 	return nil, quic.ErrGatewayFeatureNotConfigured
 }
 
-func (p *panicGatewayService) GetAdmittedVTEP(_ context.Context, _, _ string) (*quic.GatewayAdmittedVTEPInfo, error) {
+func (p *panicGatewayService) GetAdmittedVTEP(_ context.Context, _, _ string) (*quicwire.GatewayAdmittedVTEPInfo, error) {
 	return nil, quic.ErrGatewayFeatureNotConfigured
 }
 
-func (p *panicGatewayService) ListAdmittedVTEPs(_ context.Context, _ string) ([]*quic.GatewayAdmittedVTEPInfo, error) {
+func (p *panicGatewayService) ListAdmittedVTEPs(_ context.Context, _ string) ([]*quicwire.GatewayAdmittedVTEPInfo, error) {
 	return nil, quic.ErrGatewayFeatureNotConfigured
 }
-func (p *panicGatewayService) SetMode(_ context.Context, _ string) error {
-	return quic.ErrGatewayFeatureNotConfigured
+func (p *panicGatewayService) SetModes(_ context.Context, _ uint32) (*quic.GatewayStatusInfo, error) {
+	return nil, quic.ErrGatewayFeatureNotConfigured
 }
 func (p *panicGatewayService) BGPStatus(_ context.Context) (*quic.BGPStatusInfo, error) {
 	return nil, quic.ErrGatewayFeatureNotConfigured
@@ -336,7 +337,7 @@ func (p *panicGatewayService) LBStatus(_ context.Context) (*quic.LBStatusInfo, e
 	return nil, quic.ErrGatewayFeatureNotConfigured
 }
 
-func (p *panicGatewayService) NAT64Status(_ context.Context) (*quic.NAT64StatusInfo, error) {
+func (p *panicGatewayService) NAT64Status(_ context.Context) (*quicwire.NAT64StatusInfo, error) {
 	return nil, quic.ErrGatewayFeatureNotConfigured
 }
 
@@ -348,9 +349,9 @@ func TestQUICHandler_RecoverGuard_PanicInHandler(t *testing.T) {
 
 	logger := logging.DefaultLogger()
 	gatewayHandler := quic.NewGatewayHandler(logger, &panicGatewayService{})
-	h := NewQUICServiceHandler(logger, WithQUICGatewayHandler(gatewayHandler))
+	h := newTestQUICServiceHandler(logger, WithQUICGatewayHandler(gatewayHandler))
 
-	bodyBytes, err := quic.EncodePayload(struct {
+	bodyBytes, err := quicwire.EncodePayload(struct {
 		LifecycleRole string `codec:"lifecycle_role,omitempty"`
 	}{})
 	require.NoError(t, err)
@@ -360,12 +361,12 @@ func TestQUICHandler_RecoverGuard_PanicInHandler(t *testing.T) {
 	copy(payload[1:], bodyBytes)
 
 	// Must not panic — the recover guard must catch the panic.
-	var resp *quic.Response
+	var resp *quicwire.Response
 	require.NotPanics(t, func() {
-		resp = h.HandleRequest(ctx, &quic.Request{Opcode: 0x2F, Payload: payload})
+		resp = h.HandleRequest(ctx, &quicwire.Request{Opcode: 0x2F, Payload: payload})
 	})
 
 	require.NotNil(t, resp)
-	assert.Equal(t, quic.StatusInternalError, resp.Status,
+	assert.Equal(t, quicwire.StatusInternalError, resp.Status,
 		"a panicking handler must produce StatusInternalError, not a nil response or panic")
 }

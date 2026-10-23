@@ -671,8 +671,14 @@ func (c *CLIAdapter) PortSetState(ctx context.Context, bridgeID, portID string, 
 	if opts.IngressRate > 0 {
 		args = append(args, "--ingress-rate", strconv.FormatUint(opts.IngressRate, 10))
 	}
+	if opts.IngressBurst > 0 {
+		args = append(args, "--ingress-burst", strconv.FormatUint(opts.IngressBurst, 10))
+	}
 	if opts.EgressRate > 0 {
 		args = append(args, "--egress-rate", strconv.FormatUint(opts.EgressRate, 10))
+	}
+	if opts.EgressBurst > 0 {
+		args = append(args, "--egress-burst", strconv.FormatUint(opts.EgressBurst, 10))
 	}
 
 	output, err := c.runCommand(ctx, args...)

@@ -9,13 +9,13 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
-import type { LogEntry as LogEntryType } from "@/types/platform";
+import type { LogEntry as LogEntryType, LogLevel } from "@/types/platform";
 
 interface LogEntryProps {
   entry: LogEntryType;
 }
 
-const levelConfig = {
+const levelConfig: Record<LogLevel, { className: string }> = {
   DEBUG: {
     className: "bg-gray-100 text-gray-800 dark:bg-gray-800 dark:text-gray-300",
   },
@@ -27,6 +27,12 @@ const levelConfig = {
   },
   ERROR: {
     className: "bg-red-100 text-red-800 dark:bg-red-900/20 dark:text-red-400",
+  },
+  FATAL: {
+    className: "bg-red-200 text-red-900 dark:bg-red-900/40 dark:text-red-300",
+  },
+  SECURITY: {
+    className: "bg-purple-100 text-purple-800 dark:bg-purple-900/20 dark:text-purple-400",
   },
 };
 
@@ -52,7 +58,7 @@ const levelConfig = {
 export function LogEntry({ entry }: LogEntryProps) {
   const [isOpen, setIsOpen] = React.useState(false);
   const hasDetails = entry.metadata || entry.stackTrace;
-  const levelClass = levelConfig[entry.level].className;
+  const levelClass = (levelConfig[entry.level] ?? levelConfig.INFO).className;
 
   return (
     <Collapsible open={isOpen} onOpenChange={setIsOpen}>

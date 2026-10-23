@@ -84,6 +84,14 @@ type GatewayRuntime struct {
 	// OverlayPlatform is the SDK connection backing overlay admission reads.
 	OverlayPlatform interface{ Close() error }
 
+	// OverlayIPsec builds the overlay's VTEP-to-VTEP IPsec. It is required
+	// only when gateway.overlay.ipsec is enabled.
+	OverlayIPsec OverlayIPsecFactory
+
+	// VPN carries what the management VPN service needs from the assembly.
+	// Nil refuses the service with ErrRuntimeMissing.
+	VPN *VPNRuntime
+
 	// Logger receives service lifecycle logs.
 	Logger *slog.Logger
 
@@ -153,8 +161,8 @@ type HostRuntime struct {
 	// carries — the bgp: section's neighbor passwords and keychain master
 	// keys, and the tunnels: section's ipsec/wireguard keys (the tunnel
 	// manager built here adapts it as its KeyProvider). The daemon supplies
-	// pkg/sdn/gateway/secrets.Store.Resolve (kms:// and secret:// through
-	// the SDK secret store). Nil means a service that references a secret
+	// pkg/sdn/gateway/secrets.Store.Resolve (kms:// through the SDK secret
+	// SPI and the SDK secret store). Nil means a service that references a secret
 	// cannot start.
 	SecretResolver bgp.SecretResolver
 	// Logger receives service lifecycle logs.

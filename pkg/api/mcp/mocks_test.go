@@ -15,12 +15,14 @@ package mcp
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"log/slog"
 	"sync"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/vtpm"
 )
 
 // ErrMockServiceError is a standard mock service error for testing.
@@ -37,16 +39,19 @@ type mockServiceProvider struct {
 	lastZoneUpdateName string
 
 	// vTPM
-	vtpmCreateFunc    func(ctx context.Context, name, algorithm string) (interface{}, error)
+	vtpmCreateFunc    func(ctx context.Context, name, algorithm string, secureBoot bool, labels map[string]string) (interface{}, error)
 	vtpmDeleteFunc    func(ctx context.Context, name string) error
-	vtpmListFunc      func(ctx context.Context) ([]interface{}, error)
+	vtpmListFunc      func(ctx context.Context, opts *vtpm.ListOptions) ([]interface{}, error)
 	vtpmStartFunc     func(ctx context.Context, name string) error
 	vtpmStopFunc      func(ctx context.Context, name string) error
 	vtpmQuoteFunc     func(ctx context.Context, name string, nonce []byte, pcrs []int) (interface{}, error)
-	vtpmSealFunc      func(ctx context.Context, name string, data []byte, pcrs []int) ([]byte, error)
-	vtpmUnsealFunc    func(ctx context.Context, name string, sealed []byte) ([]byte, error)
+	vtpmSealFunc      func(ctx context.Context, name string, data []byte, pcrs []int, authValue string) ([]byte, error)
+	vtpmUnsealFunc    func(ctx context.Context, name string, sealed []byte, authValue string) ([]byte, error)
 	vtpmExtendPCRFunc func(ctx context.Context, name string, pcr int, data []byte) error
 	vtpmReadPCRFunc   func(ctx context.Context, name string, pcr int) ([]byte, error)
+
+	// tpmCall records the arguments of the last TPM PCR extend or NV call.
+	tpmCall tpmCall
 
 	// vTPM extended operations
 	vtpmGetFunc              func(ctx context.Context, name string) (interface{}, error)
@@ -74,37 +79,41 @@ type mockServiceProvider struct {
 	dnsListZonesFunc    func(ctx context.Context) ([]string, error)
 
 	// Device
-	deviceRegisterFunc         func(ctx context.Context, name, deviceType string, publicKey []byte) (interface{}, error)
+	deviceRegisterFunc         func(ctx context.Context, req *DeviceRegisterRequest) (interface{}, error)
 	deviceGetFunc              func(ctx context.Context, deviceID string) (interface{}, error)
+	deviceFindBySerialFunc     func(ctx context.Context, serial string) (interface{}, error)
 	deviceListFunc             func(ctx context.Context, filter map[string]string) ([]interface{}, error)
 	deviceDeleteFunc           func(ctx context.Context, deviceID string) error
 	deviceUpdateFunc           func(ctx context.Context, deviceID string, updates map[string]interface{}) error
 	deviceAttestFunc           func(ctx context.Context, deviceID string, evidence []byte) (interface{}, error)
-	deviceRecordAttestCertFunc func(ctx context.Context, deviceID string, reissue bool) (interface{}, error)
+	deviceRecordAttestCertFunc func(ctx context.Context, deviceID string, reissue, clearOnRefusal bool) (interface{}, error)
+	deviceBootCertificateFunc  func(ctx context.Context, identity string, signature []byte) (interface{}, error)
+	deviceBootDeliveryFunc     func(ctx context.Context, evidence []byte) (interface{}, error)
 	deviceProvisionFunc        func(ctx context.Context, deviceID, profile string) error
+	deviceDisableFunc          func(ctx context.Context, deviceID, reason string) (interface{}, error)
+	deviceEnableFunc           func(ctx context.Context, deviceID string) (interface{}, error)
 
 	// SDN Bridge
-	sdnGetPortStateFunc     func(ctx context.Context, bridgeName, portName string) (interface{}, error)
-	sdnSetPortStateFunc     func(ctx context.Context, bridgeName, portName, state string) error
-	sdnListBridgesFunc      func(ctx context.Context) ([]interface{}, error)
-	sdnCreateBridgeFunc     func(ctx context.Context, bridgeName string) error
-	sdnDeleteBridgeFunc     func(ctx context.Context, bridgeName string) error
-	sdnAddPortFunc          func(ctx context.Context, bridgeName, portName, portType string) error
-	sdnDeletePortFunc       func(ctx context.Context, bridgeName, portName string) error
-	sdnApplyPolicyFunc      func(ctx context.Context, policyID, bridgeName string) error
-	sdnGetPolicyFunc        func(ctx context.Context, policyID string) (interface{}, error)
-	sdnListPoliciesFunc     func(ctx context.Context) ([]interface{}, error)
-	sdnAddFlowFunc          func(ctx context.Context, bridgeName string, flow map[string]interface{}) error
-	sdnDeleteFlowFunc       func(ctx context.Context, bridgeName, flowID string) error
-	sdnListFlowsFunc        func(ctx context.Context, bridgeName string) ([]interface{}, error)
-	sdnFlushFlowsFunc       func(ctx context.Context, bridgeName string) error
-	sdnCreateVLANFunc       func(ctx context.Context, bridgeName string, vlanID int, name string) error
-	sdnDeleteVLANFunc       func(ctx context.Context, bridgeName string, vlanID int) error
-	sdnListVLANsFunc        func(ctx context.Context, bridgeName string) ([]interface{}, error)
-	sdnAuthenticatePortFunc func(ctx context.Context, bridgeName, portName string, credentials map[string]string) error
-	sdnRevokePortAuthFunc   func(ctx context.Context, bridgeName, portName string) error
-	sdnGetPortStatsFunc     func(ctx context.Context, bridgeName, portName string) (interface{}, error)
-	sdnGetFlowStatsFunc     func(ctx context.Context, bridgeName string) (interface{}, error)
+	sdnGetPortStateFunc func(ctx context.Context, bridgeName, portName string) (interface{}, error)
+	sdnSetPortStateFunc func(ctx context.Context, bridgeName, portName, state string, rates PortRates) (interface{}, error)
+	sdnListBridgesFunc  func(ctx context.Context) ([]interface{}, error)
+	sdnCreateBridgeFunc func(ctx context.Context, bridgeName string) error
+	sdnDeleteBridgeFunc func(ctx context.Context, bridgeName string) error
+	sdnAddPortFunc      func(ctx context.Context, bridgeName, portName, portType string) error
+	sdnDeletePortFunc   func(ctx context.Context, bridgeName, portName string) error
+	sdnApplyPolicyFunc  func(ctx context.Context, policy json.RawMessage) (interface{}, error)
+	sdnGetPolicyFunc    func(ctx context.Context, policyID string) (interface{}, error)
+	sdnListPoliciesFunc func(ctx context.Context, policyType, targetID string) ([]interface{}, error)
+	sdnDeletePolicyFunc func(ctx context.Context, policyID string) error
+	sdnAddFlowFunc      func(ctx context.Context, bridgeName string, flow map[string]interface{}) (interface{}, error)
+	sdnDeleteFlowFunc   func(ctx context.Context, bridgeName, flowID string) error
+	sdnListFlowsFunc    func(ctx context.Context, bridgeName string) ([]interface{}, error)
+	sdnFlushFlowsFunc   func(ctx context.Context, bridgeName string) (uint32, error)
+	sdnCreateVLANFunc   func(ctx context.Context, bridgeName string, vlanID int, name string) (interface{}, error)
+	sdnDeleteVLANFunc   func(ctx context.Context, bridgeName string, vlanID int) error
+	sdnListVLANsFunc    func(ctx context.Context, bridgeName string) ([]interface{}, error)
+	sdnGetPortStatsFunc func(ctx context.Context, bridgeName, portName string) (interface{}, error)
+	sdnGetFlowStatsFunc func(ctx context.Context, bridgeName, flowID string) (interface{}, error)
 
 	// Health
 	healthFunc    func(ctx context.Context) (interface{}, error)
@@ -122,28 +131,29 @@ type mockServiceProvider struct {
 	daemonListProtocolsFunc  func(ctx context.Context) (interface{}, error)
 
 	// CA
-	caInfoFunc   func(ctx context.Context) (interface{}, error)
-	caIssueFunc  func(ctx context.Context, req *CAIssueRequest) (interface{}, error)
-	caGetFunc    func(ctx context.Context, serial string, includePEM bool) (interface{}, error)
-	caListFunc   func(ctx context.Context, limit int, cursor string, status string) (interface{}, error)
-	caRevokeFunc func(ctx context.Context, serial string, reason int, deleteKeys bool) (interface{}, error)
-	caRenewFunc  func(ctx context.Context, serial string, extendDays int, preserveAttrs bool) (interface{}, error)
-	caVerifyFunc func(ctx context.Context, certificatePEM string, certificateDER []byte, checkRevoked bool) (interface{}, error)
-	caCRLFunc    func(ctx context.Context) (interface{}, error)
-	caBundleFunc func(ctx context.Context, storeType string, algorithm string) (interface{}, error)
+	caInfoFunc    func(ctx context.Context) (interface{}, error)
+	caIssueFunc   func(ctx context.Context, req *CAIssueRequest) (interface{}, error)
+	caSignCSRFunc func(ctx context.Context, req *CASignCSRRequest) (interface{}, error)
+	caGetFunc     func(ctx context.Context, serial string, includePEM, includeDER bool) (interface{}, error)
+	caListFunc    func(ctx context.Context, limit int, cursor string, status string) (interface{}, error)
+	caRevokeFunc  func(ctx context.Context, serial string, reason int, deleteKeys bool) (interface{}, error)
+	caRenewFunc   func(ctx context.Context, serial string, extendDays int, preserveAttrs bool) (interface{}, error)
+	caVerifyFunc  func(ctx context.Context, certificatePEM string, certificateDER []byte, checkRevoked bool) (interface{}, error)
+	caCRLFunc     func(ctx context.Context) (interface{}, error)
+	caBundleFunc  func(ctx context.Context, storeType string, algorithm string) (interface{}, error)
 
 	// IAM
 	iamCreateUserFunc      func(ctx context.Context, req *IAMCreateUserRequest) (interface{}, error)
-	iamDeleteUserFunc      func(ctx context.Context, tenantID, userID string) error
+	iamDeleteUserFunc      func(ctx context.Context, tenantID, userID string) (interface{}, error)
 	iamGetUserFunc         func(ctx context.Context, tenantID, userID string) (interface{}, error)
-	iamListUsersFunc       func(ctx context.Context, tenantID string, limit, offset int) (interface{}, error)
+	iamListUsersFunc       func(ctx context.Context, req *IAMListUsersRequest) (interface{}, error)
 	iamCreateRoleFunc      func(ctx context.Context, req *IAMCreateRoleRequest) (interface{}, error)
-	iamDeleteRoleFunc      func(ctx context.Context, tenantID, roleID string) error
+	iamDeleteRoleFunc      func(ctx context.Context, tenantID, roleID string) (interface{}, error)
 	iamGetRoleFunc         func(ctx context.Context, tenantID, roleID string) (interface{}, error)
-	iamListRolesFunc       func(ctx context.Context, tenantID string, limit, offset int) (interface{}, error)
-	iamAssignRoleFunc      func(ctx context.Context, tenantID, userID, role string) error
-	iamRevokeRoleFunc      func(ctx context.Context, tenantID, userID, role string) error
-	iamCheckPermissionFunc func(ctx context.Context, tenantID, userID, resource, action string) (bool, error)
+	iamListRolesFunc       func(ctx context.Context, tenantID string, page IAMPagination) (interface{}, error)
+	iamAssignRoleFunc      func(ctx context.Context, tenantID, userID, roleID string) (interface{}, error)
+	iamRevokeRoleFunc      func(ctx context.Context, tenantID, userID, roleID string) (interface{}, error)
+	iamCheckPermissionFunc func(ctx context.Context, req *IAMCheckPermissionRequest) (interface{}, error)
 	iamAuthenticateFunc    func(ctx context.Context, req *IAMAuthenticateRequest) (interface{}, error)
 
 	// KMS
@@ -157,6 +167,15 @@ type mockServiceProvider struct {
 	kmsDecryptFunc         func(ctx context.Context, req *KMSDecryptRequest) (interface{}, error)
 	kmsSignFunc            func(ctx context.Context, req *KMSSignRequest) (interface{}, error)
 	kmsVerifyFunc          func(ctx context.Context, req *KMSVerifyRequest) (interface{}, error)
+	kmsHashFunc            func(ctx context.Context, req *KMSHashRequest) (interface{}, error)
+	kmsHMACFunc            func(ctx context.Context, req *KMSHMACRequest) (interface{}, error)
+	kmsVerifyHMACFunc      func(ctx context.Context, req *KMSVerifyHMACRequest) (interface{}, error)
+	kmsRewrapFunc          func(ctx context.Context, req *KMSRewrapRequest) (interface{}, error)
+	kmsImportKeyFunc       func(ctx context.Context, req *KMSImportKeyRequest) (interface{}, error)
+	kmsUpdateKeyStatusFunc func(ctx context.Context, req *KMSUpdateKeyStatusRequest) (interface{}, error)
+	kmsListKeyVersionsFunc func(ctx context.Context, req *KMSListKeyVersionsRequest) (interface{}, error)
+	kmsBatchEncryptFunc    func(ctx context.Context, req *KMSBatchEncryptRequest) (interface{}, error)
+	kmsBatchDecryptFunc    func(ctx context.Context, req *KMSBatchDecryptRequest) (interface{}, error)
 	kmsGenerateRandomFunc  func(ctx context.Context, numBytes int) ([]byte, error)
 
 	// KMS lifecycle
@@ -175,6 +194,19 @@ type mockServiceProvider struct {
 	secretDeleteFunc            func(ctx context.Context, secretID string) error
 	secretSetRotationPolicyFunc func(ctx context.Context, req *SecretSetRotationPolicyRequest) (interface{}, error)
 	secretGetRotationPolicyFunc func(ctx context.Context, secretID string) (interface{}, error)
+	secretGetVersionFunc        func(ctx context.Context, secretID string, version uint64) (interface{}, error)
+	secretListVersionsFunc      func(ctx context.Context, secretID string, limit int) (interface{}, error)
+	secretRotateFunc            func(ctx context.Context, req *SecretRotateRequest) (interface{}, error)
+	secretRollbackFunc          func(ctx context.Context, secretID string, targetVersion uint64) (interface{}, error)
+	secretUpdateStatusFunc      func(ctx context.Context, secretID, status string) (interface{}, error)
+
+	// DEK
+	dekCreateFunc func(ctx context.Context, req *DEKCreateRequest) (interface{}, error)
+	dekListFunc   func(ctx context.Context, req *DEKListRequest) (interface{}, error)
+	dekGetFunc    func(ctx context.Context, path string) (interface{}, error)
+	dekStatusFunc func(ctx context.Context, path string) (interface{}, error)
+	dekRotateFunc func(ctx context.Context, path string, background bool) (interface{}, error)
+	dekDeleteFunc func(ctx context.Context, req *DEKDeleteRequest) (interface{}, error)
 
 	// IDevID/IAK
 	idevidGenerateFunc     func(ctx context.Context, req *IDevIDGenerateMCPRequest) (interface{}, error)
@@ -197,17 +229,17 @@ type mockServiceProvider struct {
 	activateCredentialFunc func(ctx context.Context, credentialBlob []byte, secret []byte) ([]byte, error)
 	// IAM Group
 	iamCreateGroupFunc       func(ctx context.Context, req *IAMCreateGroupRequest) (interface{}, error)
-	iamDeleteGroupFunc       func(ctx context.Context, tenantID, groupID string) error
+	iamDeleteGroupFunc       func(ctx context.Context, tenantID, groupID string) (interface{}, error)
 	iamGetGroupFunc          func(ctx context.Context, tenantID, groupID string) (interface{}, error)
-	iamListGroupsFunc        func(ctx context.Context, tenantID string, limit, offset int) (interface{}, error)
-	iamAddGroupMemberFunc    func(ctx context.Context, tenantID, groupID, userID string) error
-	iamRemoveGroupMemberFunc func(ctx context.Context, tenantID, groupID, userID string) error
+	iamListGroupsFunc        func(ctx context.Context, tenantID string, page IAMPagination) (interface{}, error)
+	iamAddGroupMemberFunc    func(ctx context.Context, tenantID, groupID, userID string) (interface{}, error)
+	iamRemoveGroupMemberFunc func(ctx context.Context, tenantID, groupID, userID string) (interface{}, error)
 
 	// IAM Tenant
 	iamCreateTenantFunc func(ctx context.Context, req *IAMCreateTenantRequest) (interface{}, error)
-	iamDeleteTenantFunc func(ctx context.Context, tenantID string) error
+	iamDeleteTenantFunc func(ctx context.Context, tenantID string) (interface{}, error)
 	iamGetTenantFunc    func(ctx context.Context, tenantID string) (interface{}, error)
-	iamListTenantsFunc  func(ctx context.Context, limit, offset int) (interface{}, error)
+	iamListTenantsFunc  func(ctx context.Context, page IAMPagination) (interface{}, error)
 
 	// IAM Token
 	iamCreateTokenFunc func(ctx context.Context, req *IAMCreateTokenRequest) (interface{}, error)
@@ -233,6 +265,8 @@ type mockServiceProvider struct {
 	perfErr            error
 	ntpErr             error
 	ntpStepCalls       int
+	vpnErr             error
+	vpnCalls           []mockVPNCall
 	perfFlowsCalls     []perfFlowsCall
 	perfConntrackZones []int
 }
@@ -248,13 +282,13 @@ type perfFlowsCall struct {
 func newMockServiceProvider() *mockServiceProvider {
 	return &mockServiceProvider{
 		// vTPM defaults
-		vtpmCreateFunc: func(ctx context.Context, name, algorithm string) (interface{}, error) {
+		vtpmCreateFunc: func(ctx context.Context, name, algorithm string, secureBoot bool, labels map[string]string) (interface{}, error) {
 			return map[string]interface{}{"name": name, "algorithm": algorithm, "status": "created"}, nil
 		},
 		vtpmDeleteFunc: func(ctx context.Context, name string) error {
 			return nil
 		},
-		vtpmListFunc: func(ctx context.Context) ([]interface{}, error) {
+		vtpmListFunc: func(ctx context.Context, opts *vtpm.ListOptions) ([]interface{}, error) {
 			return []interface{}{
 				map[string]interface{}{"name": "vtpm-1", "status": "running"},
 				map[string]interface{}{"name": "vtpm-2", "status": "stopped"},
@@ -269,10 +303,10 @@ func newMockServiceProvider() *mockServiceProvider {
 		vtpmQuoteFunc: func(ctx context.Context, name string, nonce []byte, pcrs []int) (interface{}, error) {
 			return map[string]interface{}{"quote": "base64-quote-data", "signature": "base64-sig"}, nil
 		},
-		vtpmSealFunc: func(ctx context.Context, name string, data []byte, pcrs []int) ([]byte, error) {
+		vtpmSealFunc: func(ctx context.Context, name string, data []byte, pcrs []int, authValue string) ([]byte, error) {
 			return []byte("sealed-data"), nil
 		},
-		vtpmUnsealFunc: func(ctx context.Context, name string, sealed []byte) ([]byte, error) {
+		vtpmUnsealFunc: func(ctx context.Context, name string, sealed []byte, authValue string) ([]byte, error) {
 			return []byte("unsealed-data"), nil
 		},
 		vtpmExtendPCRFunc: func(ctx context.Context, name string, pcr int, data []byte) error {
@@ -353,8 +387,8 @@ func newMockServiceProvider() *mockServiceProvider {
 		},
 
 		// Device defaults
-		deviceRegisterFunc: func(ctx context.Context, name, deviceType string, publicKey []byte) (interface{}, error) {
-			return map[string]interface{}{"id": "device-123", "name": name, "type": deviceType}, nil
+		deviceRegisterFunc: func(ctx context.Context, req *DeviceRegisterRequest) (interface{}, error) {
+			return map[string]interface{}{"id": "device-123", "serial": req.Serial, "model": req.Model}, nil
 		},
 		deviceGetFunc: func(ctx context.Context, deviceID string) (interface{}, error) {
 			return map[string]interface{}{"id": deviceID, "name": "test-device", "status": "active"}, nil
@@ -382,8 +416,8 @@ func newMockServiceProvider() *mockServiceProvider {
 		sdnGetPortStateFunc: func(ctx context.Context, bridgeName, portName string) (interface{}, error) {
 			return map[string]interface{}{"bridge": bridgeName, "port": portName, "state": "up"}, nil
 		},
-		sdnSetPortStateFunc: func(ctx context.Context, bridgeName, portName, state string) error {
-			return nil
+		sdnSetPortStateFunc: func(ctx context.Context, bridgeName, portName, state string, rates PortRates) (interface{}, error) {
+			return nil, nil
 		},
 		sdnListBridgesFunc: func(ctx context.Context) ([]interface{}, error) {
 			return []interface{}{
@@ -403,19 +437,19 @@ func newMockServiceProvider() *mockServiceProvider {
 		sdnDeletePortFunc: func(ctx context.Context, bridgeName, portName string) error {
 			return nil
 		},
-		sdnApplyPolicyFunc: func(ctx context.Context, policyID, bridgeName string) error {
-			return nil
+		sdnApplyPolicyFunc: func(ctx context.Context, policy json.RawMessage) (interface{}, error) {
+			return map[string]interface{}{"id": "policy-1", "name": "test-policy"}, nil
 		},
 		sdnGetPolicyFunc: func(ctx context.Context, policyID string) (interface{}, error) {
 			return map[string]interface{}{"id": policyID, "name": "test-policy"}, nil
 		},
-		sdnListPoliciesFunc: func(ctx context.Context) ([]interface{}, error) {
+		sdnListPoliciesFunc: func(ctx context.Context, policyType, targetID string) ([]interface{}, error) {
 			return []interface{}{
 				map[string]interface{}{"id": "policy-1", "name": "Policy 1"},
 			}, nil
 		},
-		sdnAddFlowFunc: func(ctx context.Context, bridgeName string, flow map[string]interface{}) error {
-			return nil
+		sdnAddFlowFunc: func(ctx context.Context, bridgeName string, flow map[string]interface{}) (interface{}, error) {
+			return map[string]interface{}{"id": "0x1"}, nil
 		},
 		sdnDeleteFlowFunc: func(ctx context.Context, bridgeName, flowID string) error {
 			return nil
@@ -425,11 +459,11 @@ func newMockServiceProvider() *mockServiceProvider {
 				map[string]interface{}{"id": "flow-1", "priority": 100},
 			}, nil
 		},
-		sdnFlushFlowsFunc: func(ctx context.Context, bridgeName string) error {
-			return nil
+		sdnFlushFlowsFunc: func(ctx context.Context, bridgeName string) (uint32, error) {
+			return 0, nil
 		},
-		sdnCreateVLANFunc: func(ctx context.Context, bridgeName string, vlanID int, name string) error {
-			return nil
+		sdnCreateVLANFunc: func(ctx context.Context, bridgeName string, vlanID int, name string) (interface{}, error) {
+			return map[string]interface{}{"vlan_id": vlanID, "name": name}, nil
 		},
 		sdnDeleteVLANFunc: func(ctx context.Context, bridgeName string, vlanID int) error {
 			return nil
@@ -439,16 +473,10 @@ func newMockServiceProvider() *mockServiceProvider {
 				map[string]interface{}{"id": 100, "name": "vlan-100"},
 			}, nil
 		},
-		sdnAuthenticatePortFunc: func(ctx context.Context, bridgeName, portName string, credentials map[string]string) error {
-			return nil
-		},
-		sdnRevokePortAuthFunc: func(ctx context.Context, bridgeName, portName string) error {
-			return nil
-		},
 		sdnGetPortStatsFunc: func(ctx context.Context, bridgeName, portName string) (interface{}, error) {
 			return map[string]interface{}{"rx_packets": 1000, "tx_packets": 500}, nil
 		},
-		sdnGetFlowStatsFunc: func(ctx context.Context, bridgeName string) (interface{}, error) {
+		sdnGetFlowStatsFunc: func(ctx context.Context, bridgeName, flowID string) (interface{}, error) {
 			return map[string]interface{}{"flows": 10, "packets": 5000}, nil
 		},
 
@@ -508,7 +536,7 @@ func newMockServiceProvider() *mockServiceProvider {
 				"key_algorithm": req.Algorithm,
 			}, nil
 		},
-		caGetFunc: func(ctx context.Context, serial string, includePEM bool) (interface{}, error) {
+		caGetFunc: func(ctx context.Context, serial string, includePEM, includeDER bool) (interface{}, error) {
 			result := map[string]interface{}{
 				"serial":        serial,
 				"common_name":   "test.example.com",
@@ -591,9 +619,6 @@ func newMockServiceProvider() *mockServiceProvider {
 				"roles":     req.Roles,
 			}, nil
 		},
-		iamDeleteUserFunc: func(ctx context.Context, tenantID, userID string) error {
-			return nil
-		},
 		iamGetUserFunc: func(ctx context.Context, tenantID, userID string) (interface{}, error) {
 			return map[string]interface{}{
 				"id":        userID,
@@ -602,15 +627,13 @@ func newMockServiceProvider() *mockServiceProvider {
 				"name":      "Test User",
 			}, nil
 		},
-		iamListUsersFunc: func(ctx context.Context, tenantID string, limit, offset int) (interface{}, error) {
+		iamListUsersFunc: func(ctx context.Context, req *IAMListUsersRequest) (interface{}, error) {
 			return map[string]interface{}{
 				"users": []map[string]interface{}{
 					{"id": "user-1", "email": "user1@example.com"},
 					{"id": "user-2", "email": "user2@example.com"},
 				},
-				"total":  2,
-				"limit":  limit,
-				"offset": offset,
+				"pagination": map[string]interface{}{"total_count": 2, "page": req.Pagination.Page, "page_size": req.Pagination.PageSize},
 			}, nil
 		},
 		iamCreateRoleFunc: func(ctx context.Context, req *IAMCreateRoleRequest) (interface{}, error) {
@@ -622,9 +645,6 @@ func newMockServiceProvider() *mockServiceProvider {
 				"permissions": req.Permissions,
 			}, nil
 		},
-		iamDeleteRoleFunc: func(ctx context.Context, tenantID, roleID string) error {
-			return nil
-		},
 		iamGetRoleFunc: func(ctx context.Context, tenantID, roleID string) (interface{}, error) {
 			return map[string]interface{}{
 				"id":          roleID,
@@ -634,25 +654,17 @@ func newMockServiceProvider() *mockServiceProvider {
 				"permissions": []string{"read", "write"},
 			}, nil
 		},
-		iamListRolesFunc: func(ctx context.Context, tenantID string, limit, offset int) (interface{}, error) {
+		iamListRolesFunc: func(ctx context.Context, tenantID string, page IAMPagination) (interface{}, error) {
 			return map[string]interface{}{
 				"roles": []map[string]interface{}{
 					{"id": "role-1", "name": "Admin"},
 					{"id": "role-2", "name": "User"},
 				},
-				"total":  2,
-				"limit":  limit,
-				"offset": offset,
+				"pagination": map[string]interface{}{"total_count": 2, "page": page.Page, "page_size": page.PageSize},
 			}, nil
 		},
-		iamAssignRoleFunc: func(ctx context.Context, tenantID, userID, role string) error {
-			return nil
-		},
-		iamRevokeRoleFunc: func(ctx context.Context, tenantID, userID, role string) error {
-			return nil
-		},
-		iamCheckPermissionFunc: func(ctx context.Context, tenantID, userID, resource, action string) (bool, error) {
-			return true, nil
+		iamCheckPermissionFunc: func(ctx context.Context, req *IAMCheckPermissionRequest) (interface{}, error) {
+			return map[string]interface{}{"allowed": true}, nil
 		},
 		iamAuthenticateFunc: func(ctx context.Context, req *IAMAuthenticateRequest) (interface{}, error) {
 			return map[string]interface{}{
@@ -852,9 +864,9 @@ func newMockServiceProvider() *mockServiceProvider {
 }
 
 // vTPM implementations
-func (m *mockServiceProvider) VTPMCreate(ctx context.Context, name, algorithm string) (interface{}, error) {
+func (m *mockServiceProvider) VTPMCreate(ctx context.Context, name, algorithm string, secureBoot bool, labels map[string]string) (interface{}, error) {
 	if m.vtpmCreateFunc != nil {
-		return m.vtpmCreateFunc(ctx, name, algorithm)
+		return m.vtpmCreateFunc(ctx, name, algorithm, secureBoot, labels)
 	}
 	return nil, nil
 }
@@ -866,9 +878,9 @@ func (m *mockServiceProvider) VTPMDelete(ctx context.Context, name string) error
 	return nil
 }
 
-func (m *mockServiceProvider) VTPMList(ctx context.Context) ([]interface{}, error) {
+func (m *mockServiceProvider) VTPMList(ctx context.Context, opts *vtpm.ListOptions) ([]interface{}, error) {
 	if m.vtpmListFunc != nil {
-		return m.vtpmListFunc(ctx)
+		return m.vtpmListFunc(ctx, opts)
 	}
 	return nil, nil
 }
@@ -894,16 +906,16 @@ func (m *mockServiceProvider) VTPMQuote(ctx context.Context, name string, nonce 
 	return nil, nil
 }
 
-func (m *mockServiceProvider) VTPMSeal(ctx context.Context, name string, data []byte, pcrs []int) ([]byte, error) {
+func (m *mockServiceProvider) VTPMSeal(ctx context.Context, name string, data []byte, pcrs []int, authValue string) ([]byte, error) {
 	if m.vtpmSealFunc != nil {
-		return m.vtpmSealFunc(ctx, name, data, pcrs)
+		return m.vtpmSealFunc(ctx, name, data, pcrs, authValue)
 	}
 	return nil, nil
 }
 
-func (m *mockServiceProvider) VTPMUnseal(ctx context.Context, name string, sealed []byte) ([]byte, error) {
+func (m *mockServiceProvider) VTPMUnseal(ctx context.Context, name string, sealed []byte, authValue string) ([]byte, error) {
 	if m.vtpmUnsealFunc != nil {
-		return m.vtpmUnsealFunc(ctx, name, sealed)
+		return m.vtpmUnsealFunc(ctx, name, sealed, authValue)
 	}
 	return nil, nil
 }
@@ -1071,9 +1083,16 @@ func (m *mockServiceProvider) DNSListZones(ctx context.Context) ([]string, error
 }
 
 // Device implementations
-func (m *mockServiceProvider) DeviceRegister(ctx context.Context, name, deviceType string, publicKey []byte) (interface{}, error) {
+func (m *mockServiceProvider) DeviceRegister(ctx context.Context, req *DeviceRegisterRequest) (interface{}, error) {
 	if m.deviceRegisterFunc != nil {
-		return m.deviceRegisterFunc(ctx, name, deviceType, publicKey)
+		return m.deviceRegisterFunc(ctx, req)
+	}
+	return nil, nil
+}
+
+func (m *mockServiceProvider) DeviceFindBySerial(ctx context.Context, serial string) (interface{}, error) {
+	if m.deviceFindBySerialFunc != nil {
+		return m.deviceFindBySerialFunc(ctx, serial)
 	}
 	return nil, nil
 }
@@ -1113,9 +1132,37 @@ func (m *mockServiceProvider) DeviceAttest(ctx context.Context, deviceID string,
 	return nil, nil
 }
 
-func (m *mockServiceProvider) DeviceRecordAttestCert(ctx context.Context, deviceID string, reissue bool) (interface{}, error) {
+func (m *mockServiceProvider) DeviceRecordAttestCert(ctx context.Context, deviceID string, reissue, clearOnRefusal bool) (interface{}, error) {
 	if m.deviceRecordAttestCertFunc != nil {
-		return m.deviceRecordAttestCertFunc(ctx, deviceID, reissue)
+		return m.deviceRecordAttestCertFunc(ctx, deviceID, reissue, clearOnRefusal)
+	}
+	return nil, nil
+}
+
+func (m *mockServiceProvider) DeviceDisable(ctx context.Context, deviceID, reason string) (interface{}, error) {
+	if m.deviceDisableFunc != nil {
+		return m.deviceDisableFunc(ctx, deviceID, reason)
+	}
+	return nil, nil
+}
+
+func (m *mockServiceProvider) DeviceBootCertificate(ctx context.Context, identity string, signature []byte) (interface{}, error) {
+	if m.deviceBootCertificateFunc != nil {
+		return m.deviceBootCertificateFunc(ctx, identity, signature)
+	}
+	return nil, nil
+}
+
+func (m *mockServiceProvider) DeviceEnable(ctx context.Context, deviceID string) (interface{}, error) {
+	if m.deviceEnableFunc != nil {
+		return m.deviceEnableFunc(ctx, deviceID)
+	}
+	return nil, nil
+}
+
+func (m *mockServiceProvider) DeviceBootDelivery(ctx context.Context, evidence []byte) (interface{}, error) {
+	if m.deviceBootDeliveryFunc != nil {
+		return m.deviceBootDeliveryFunc(ctx, evidence)
 	}
 	return nil, nil
 }
@@ -1135,11 +1182,11 @@ func (m *mockServiceProvider) SDNGetPortState(ctx context.Context, bridgeName, p
 	return nil, nil
 }
 
-func (m *mockServiceProvider) SDNSetPortState(ctx context.Context, bridgeName, portName, state string) error {
+func (m *mockServiceProvider) SDNSetPortState(ctx context.Context, bridgeName, portName, state string, rates PortRates) (interface{}, error) {
 	if m.sdnSetPortStateFunc != nil {
-		return m.sdnSetPortStateFunc(ctx, bridgeName, portName, state)
+		return m.sdnSetPortStateFunc(ctx, bridgeName, portName, state, rates)
 	}
-	return nil
+	return nil, nil
 }
 
 func (m *mockServiceProvider) SDNListBridges(ctx context.Context) ([]interface{}, error) {
@@ -1177,11 +1224,11 @@ func (m *mockServiceProvider) SDNDeletePort(ctx context.Context, bridgeName, por
 	return nil
 }
 
-func (m *mockServiceProvider) SDNApplyPolicy(ctx context.Context, policyID, bridgeName string) error {
+func (m *mockServiceProvider) SDNApplyPolicy(ctx context.Context, policy json.RawMessage) (interface{}, error) {
 	if m.sdnApplyPolicyFunc != nil {
-		return m.sdnApplyPolicyFunc(ctx, policyID, bridgeName)
+		return m.sdnApplyPolicyFunc(ctx, policy)
 	}
-	return nil
+	return nil, nil
 }
 
 func (m *mockServiceProvider) SDNGetPolicy(ctx context.Context, policyID string) (interface{}, error) {
@@ -1191,18 +1238,25 @@ func (m *mockServiceProvider) SDNGetPolicy(ctx context.Context, policyID string)
 	return nil, nil
 }
 
-func (m *mockServiceProvider) SDNListPolicies(ctx context.Context) ([]interface{}, error) {
+func (m *mockServiceProvider) SDNListPolicies(ctx context.Context, policyType, targetID string) ([]interface{}, error) {
 	if m.sdnListPoliciesFunc != nil {
-		return m.sdnListPoliciesFunc(ctx)
+		return m.sdnListPoliciesFunc(ctx, policyType, targetID)
 	}
 	return nil, nil
 }
 
-func (m *mockServiceProvider) SDNAddFlow(ctx context.Context, bridgeName string, flow map[string]interface{}) error {
+func (m *mockServiceProvider) SDNDeletePolicy(ctx context.Context, policyID string) error {
+	if m.sdnDeletePolicyFunc != nil {
+		return m.sdnDeletePolicyFunc(ctx, policyID)
+	}
+	return nil
+}
+
+func (m *mockServiceProvider) SDNAddFlow(ctx context.Context, bridgeName string, flow map[string]interface{}) (interface{}, error) {
 	if m.sdnAddFlowFunc != nil {
 		return m.sdnAddFlowFunc(ctx, bridgeName, flow)
 	}
-	return nil
+	return nil, nil
 }
 
 func (m *mockServiceProvider) SDNDeleteFlow(ctx context.Context, bridgeName, flowID string) error {
@@ -1219,18 +1273,18 @@ func (m *mockServiceProvider) SDNListFlows(ctx context.Context, bridgeName strin
 	return nil, nil
 }
 
-func (m *mockServiceProvider) SDNFlushFlows(ctx context.Context, bridgeName string) error {
+func (m *mockServiceProvider) SDNFlushFlows(ctx context.Context, bridgeName string) (uint32, error) {
 	if m.sdnFlushFlowsFunc != nil {
 		return m.sdnFlushFlowsFunc(ctx, bridgeName)
 	}
-	return nil
+	return 0, nil
 }
 
-func (m *mockServiceProvider) SDNCreateVLAN(ctx context.Context, bridgeName string, vlanID int, name string) error {
+func (m *mockServiceProvider) SDNCreateVLAN(ctx context.Context, bridgeName string, vlanID int, name string) (interface{}, error) {
 	if m.sdnCreateVLANFunc != nil {
 		return m.sdnCreateVLANFunc(ctx, bridgeName, vlanID, name)
 	}
-	return nil
+	return nil, nil
 }
 
 func (m *mockServiceProvider) SDNDeleteVLAN(ctx context.Context, bridgeName string, vlanID int) error {
@@ -1247,20 +1301,6 @@ func (m *mockServiceProvider) SDNListVLANs(ctx context.Context, bridgeName strin
 	return nil, nil
 }
 
-func (m *mockServiceProvider) SDNAuthenticatePort(ctx context.Context, bridgeName, portName string, credentials map[string]string) error {
-	if m.sdnAuthenticatePortFunc != nil {
-		return m.sdnAuthenticatePortFunc(ctx, bridgeName, portName, credentials)
-	}
-	return nil
-}
-
-func (m *mockServiceProvider) SDNRevokePortAuth(ctx context.Context, bridgeName, portName string) error {
-	if m.sdnRevokePortAuthFunc != nil {
-		return m.sdnRevokePortAuthFunc(ctx, bridgeName, portName)
-	}
-	return nil
-}
-
 func (m *mockServiceProvider) SDNGetPortStats(ctx context.Context, bridgeName, portName string) (interface{}, error) {
 	if m.sdnGetPortStatsFunc != nil {
 		return m.sdnGetPortStatsFunc(ctx, bridgeName, portName)
@@ -1268,9 +1308,9 @@ func (m *mockServiceProvider) SDNGetPortStats(ctx context.Context, bridgeName, p
 	return nil, nil
 }
 
-func (m *mockServiceProvider) SDNGetFlowStats(ctx context.Context, bridgeName string) (interface{}, error) {
+func (m *mockServiceProvider) SDNGetFlowStats(ctx context.Context, bridgeName, flowID string) (interface{}, error) {
 	if m.sdnGetFlowStatsFunc != nil {
-		return m.sdnGetFlowStatsFunc(ctx, bridgeName)
+		return m.sdnGetFlowStatsFunc(ctx, bridgeName, flowID)
 	}
 	return nil, nil
 }
@@ -1369,9 +1409,16 @@ func (m *mockServiceProvider) CAIssue(ctx context.Context, req *CAIssueRequest) 
 	return nil, nil
 }
 
-func (m *mockServiceProvider) CAGet(ctx context.Context, serial string, includePEM bool) (interface{}, error) {
+func (m *mockServiceProvider) CASignCSR(ctx context.Context, req *CASignCSRRequest) (interface{}, error) {
+	if m.caSignCSRFunc != nil {
+		return m.caSignCSRFunc(ctx, req)
+	}
+	return nil, nil
+}
+
+func (m *mockServiceProvider) CAGet(ctx context.Context, serial string, includePEM, includeDER bool) (interface{}, error) {
 	if m.caGetFunc != nil {
-		return m.caGetFunc(ctx, serial, includePEM)
+		return m.caGetFunc(ctx, serial, includePEM, includeDER)
 	}
 	return nil, nil
 }
@@ -1426,11 +1473,17 @@ func (m *mockServiceProvider) IAMCreateUser(ctx context.Context, req *IAMCreateU
 	return nil, nil
 }
 
-func (m *mockServiceProvider) IAMDeleteUser(ctx context.Context, tenantID, userID string) error {
+// mockIAMSuccess is the answer a mutating IAM mock gives by default, the
+// shape of the gRPC Delete/Assign/Revoke/Add/Remove responses.
+func mockIAMSuccess() map[string]interface{} {
+	return map[string]interface{}{"success": true}
+}
+
+func (m *mockServiceProvider) IAMDeleteUser(ctx context.Context, tenantID, userID string) (interface{}, error) {
 	if m.iamDeleteUserFunc != nil {
 		return m.iamDeleteUserFunc(ctx, tenantID, userID)
 	}
-	return nil
+	return mockIAMSuccess(), nil
 }
 
 func (m *mockServiceProvider) IAMGetUser(ctx context.Context, tenantID, userID string) (interface{}, error) {
@@ -1440,9 +1493,9 @@ func (m *mockServiceProvider) IAMGetUser(ctx context.Context, tenantID, userID s
 	return nil, nil
 }
 
-func (m *mockServiceProvider) IAMListUsers(ctx context.Context, tenantID string, limit, offset int) (interface{}, error) {
+func (m *mockServiceProvider) IAMListUsers(ctx context.Context, req *IAMListUsersRequest) (interface{}, error) {
 	if m.iamListUsersFunc != nil {
-		return m.iamListUsersFunc(ctx, tenantID, limit, offset)
+		return m.iamListUsersFunc(ctx, req)
 	}
 	return nil, nil
 }
@@ -1454,11 +1507,11 @@ func (m *mockServiceProvider) IAMCreateRole(ctx context.Context, req *IAMCreateR
 	return nil, nil
 }
 
-func (m *mockServiceProvider) IAMDeleteRole(ctx context.Context, tenantID, roleID string) error {
+func (m *mockServiceProvider) IAMDeleteRole(ctx context.Context, tenantID, roleID string) (interface{}, error) {
 	if m.iamDeleteRoleFunc != nil {
 		return m.iamDeleteRoleFunc(ctx, tenantID, roleID)
 	}
-	return nil
+	return mockIAMSuccess(), nil
 }
 
 func (m *mockServiceProvider) IAMGetRole(ctx context.Context, tenantID, roleID string) (interface{}, error) {
@@ -1468,32 +1521,32 @@ func (m *mockServiceProvider) IAMGetRole(ctx context.Context, tenantID, roleID s
 	return nil, nil
 }
 
-func (m *mockServiceProvider) IAMListRoles(ctx context.Context, tenantID string, limit, offset int) (interface{}, error) {
+func (m *mockServiceProvider) IAMListRoles(ctx context.Context, tenantID string, page IAMPagination) (interface{}, error) {
 	if m.iamListRolesFunc != nil {
-		return m.iamListRolesFunc(ctx, tenantID, limit, offset)
+		return m.iamListRolesFunc(ctx, tenantID, page)
 	}
 	return nil, nil
 }
 
-func (m *mockServiceProvider) IAMAssignRole(ctx context.Context, tenantID, userID, role string) error {
+func (m *mockServiceProvider) IAMAssignRole(ctx context.Context, tenantID, userID, roleID string) (interface{}, error) {
 	if m.iamAssignRoleFunc != nil {
-		return m.iamAssignRoleFunc(ctx, tenantID, userID, role)
+		return m.iamAssignRoleFunc(ctx, tenantID, userID, roleID)
 	}
-	return nil
+	return mockIAMSuccess(), nil
 }
 
-func (m *mockServiceProvider) IAMRevokeRole(ctx context.Context, tenantID, userID, role string) error {
+func (m *mockServiceProvider) IAMRevokeRole(ctx context.Context, tenantID, userID, roleID string) (interface{}, error) {
 	if m.iamRevokeRoleFunc != nil {
-		return m.iamRevokeRoleFunc(ctx, tenantID, userID, role)
+		return m.iamRevokeRoleFunc(ctx, tenantID, userID, roleID)
 	}
-	return nil
+	return mockIAMSuccess(), nil
 }
 
-func (m *mockServiceProvider) IAMCheckPermission(ctx context.Context, tenantID, userID, resource, action string) (bool, error) {
+func (m *mockServiceProvider) IAMCheckPermission(ctx context.Context, req *IAMCheckPermissionRequest) (interface{}, error) {
 	if m.iamCheckPermissionFunc != nil {
-		return m.iamCheckPermissionFunc(ctx, tenantID, userID, resource, action)
+		return m.iamCheckPermissionFunc(ctx, req)
 	}
-	return false, nil
+	return map[string]interface{}{"allowed": false}, nil
 }
 
 func (m *mockServiceProvider) IAMAuthenticate(ctx context.Context, req *IAMAuthenticateRequest) (interface{}, error) {
@@ -1516,11 +1569,11 @@ func (m *mockServiceProvider) IAMCreateGroup(ctx context.Context, req *IAMCreate
 	}, nil
 }
 
-func (m *mockServiceProvider) IAMDeleteGroup(ctx context.Context, tenantID, groupID string) error {
+func (m *mockServiceProvider) IAMDeleteGroup(ctx context.Context, tenantID, groupID string) (interface{}, error) {
 	if m.iamDeleteGroupFunc != nil {
 		return m.iamDeleteGroupFunc(ctx, tenantID, groupID)
 	}
-	return nil
+	return mockIAMSuccess(), nil
 }
 
 func (m *mockServiceProvider) IAMGetGroup(ctx context.Context, tenantID, groupID string) (interface{}, error) {
@@ -1534,32 +1587,30 @@ func (m *mockServiceProvider) IAMGetGroup(ctx context.Context, tenantID, groupID
 	}, nil
 }
 
-func (m *mockServiceProvider) IAMListGroups(ctx context.Context, tenantID string, limit, offset int) (interface{}, error) {
+func (m *mockServiceProvider) IAMListGroups(ctx context.Context, tenantID string, page IAMPagination) (interface{}, error) {
 	if m.iamListGroupsFunc != nil {
-		return m.iamListGroupsFunc(ctx, tenantID, limit, offset)
+		return m.iamListGroupsFunc(ctx, tenantID, page)
 	}
 	return map[string]interface{}{
 		"groups": []map[string]interface{}{
 			{"id": "group-1", "tenant_id": tenantID, "name": "group-1"},
 		},
-		"total":  1,
-		"limit":  limit,
-		"offset": offset,
+		"pagination": map[string]interface{}{"total_count": 1, "page": page.Page, "page_size": page.PageSize},
 	}, nil
 }
 
-func (m *mockServiceProvider) IAMAddGroupMember(ctx context.Context, tenantID, groupID, userID string) error {
+func (m *mockServiceProvider) IAMAddGroupMember(ctx context.Context, tenantID, groupID, userID string) (interface{}, error) {
 	if m.iamAddGroupMemberFunc != nil {
 		return m.iamAddGroupMemberFunc(ctx, tenantID, groupID, userID)
 	}
-	return nil
+	return mockIAMSuccess(), nil
 }
 
-func (m *mockServiceProvider) IAMRemoveGroupMember(ctx context.Context, tenantID, groupID, userID string) error {
+func (m *mockServiceProvider) IAMRemoveGroupMember(ctx context.Context, tenantID, groupID, userID string) (interface{}, error) {
 	if m.iamRemoveGroupMemberFunc != nil {
 		return m.iamRemoveGroupMemberFunc(ctx, tenantID, groupID, userID)
 	}
-	return nil
+	return mockIAMSuccess(), nil
 }
 
 // IAM Tenant implementations
@@ -1573,11 +1624,11 @@ func (m *mockServiceProvider) IAMCreateTenant(ctx context.Context, req *IAMCreat
 	}, nil
 }
 
-func (m *mockServiceProvider) IAMDeleteTenant(ctx context.Context, tenantID string) error {
+func (m *mockServiceProvider) IAMDeleteTenant(ctx context.Context, tenantID string) (interface{}, error) {
 	if m.iamDeleteTenantFunc != nil {
 		return m.iamDeleteTenantFunc(ctx, tenantID)
 	}
-	return nil
+	return mockIAMSuccess(), nil
 }
 
 func (m *mockServiceProvider) IAMGetTenant(ctx context.Context, tenantID string) (interface{}, error) {
@@ -1590,38 +1641,41 @@ func (m *mockServiceProvider) IAMGetTenant(ctx context.Context, tenantID string)
 	}, nil
 }
 
-func (m *mockServiceProvider) IAMListTenants(ctx context.Context, limit, offset int) (interface{}, error) {
+func (m *mockServiceProvider) IAMListTenants(ctx context.Context, page IAMPagination) (interface{}, error) {
 	if m.iamListTenantsFunc != nil {
-		return m.iamListTenantsFunc(ctx, limit, offset)
+		return m.iamListTenantsFunc(ctx, page)
 	}
 	return map[string]interface{}{
 		"tenants": []map[string]interface{}{
 			{"id": "tenant-1", "name": "tenant-1"},
 		},
-		"total":  1,
-		"limit":  limit,
-		"offset": offset,
+		"pagination": map[string]interface{}{"total_count": 1, "page": page.Page, "page_size": page.PageSize},
 	}, nil
 }
 
 // IAM Token implementations
+// errMockTokenRefused mirrors the daemon's refusal of token issue and
+// revocation, so no test can lean on a token operation that "succeeded".
+type errMockTokenRefused struct {
+	op string
+}
+
+func (e errMockTokenRefused) Error() string {
+	return "iam token " + e.op + " is handled via OIDC flows, not the IAM service"
+}
+
 func (m *mockServiceProvider) IAMCreateToken(ctx context.Context, req *IAMCreateTokenRequest) (interface{}, error) {
 	if m.iamCreateTokenFunc != nil {
 		return m.iamCreateTokenFunc(ctx, req)
 	}
-	return map[string]interface{}{
-		"token_id":   "test-token-id",
-		"tenant_id":  req.TenantID,
-		"user_id":    req.UserID,
-		"expires_at": "2025-12-31T23:59:59Z",
-	}, nil
+	return nil, errMockTokenRefused{op: "create"}
 }
 
 func (m *mockServiceProvider) IAMRevokeToken(ctx context.Context, tokenID string) error {
 	if m.iamRevokeTokenFunc != nil {
 		return m.iamRevokeTokenFunc(ctx, tokenID)
 	}
-	return nil
+	return errMockTokenRefused{op: "revoke"}
 }
 
 func (m *mockServiceProvider) IAMVerifyToken(ctx context.Context, token string) (interface{}, error) {
@@ -1629,8 +1683,8 @@ func (m *mockServiceProvider) IAMVerifyToken(ctx context.Context, token string) 
 		return m.iamVerifyTokenFunc(ctx, token)
 	}
 	return map[string]interface{}{
-		"valid":       true,
-		"verified_at": "2025-01-05T12:00:00Z",
+		"valid":  false,
+		"reason": "malformed",
 	}, nil
 }
 
@@ -1701,6 +1755,69 @@ func (m *mockServiceProvider) KMSSign(ctx context.Context, req *KMSSignRequest) 
 func (m *mockServiceProvider) KMSVerify(ctx context.Context, req *KMSVerifyRequest) (interface{}, error) {
 	if m.kmsVerifyFunc != nil {
 		return m.kmsVerifyFunc(ctx, req)
+	}
+	return nil, nil
+}
+
+func (m *mockServiceProvider) KMSHash(ctx context.Context, req *KMSHashRequest) (interface{}, error) {
+	if m.kmsHashFunc != nil {
+		return m.kmsHashFunc(ctx, req)
+	}
+	return nil, nil
+}
+
+func (m *mockServiceProvider) KMSHMAC(ctx context.Context, req *KMSHMACRequest) (interface{}, error) {
+	if m.kmsHMACFunc != nil {
+		return m.kmsHMACFunc(ctx, req)
+	}
+	return nil, nil
+}
+
+func (m *mockServiceProvider) KMSVerifyHMAC(ctx context.Context, req *KMSVerifyHMACRequest) (interface{}, error) {
+	if m.kmsVerifyHMACFunc != nil {
+		return m.kmsVerifyHMACFunc(ctx, req)
+	}
+	return nil, nil
+}
+
+func (m *mockServiceProvider) KMSRewrap(ctx context.Context, req *KMSRewrapRequest) (interface{}, error) {
+	if m.kmsRewrapFunc != nil {
+		return m.kmsRewrapFunc(ctx, req)
+	}
+	return nil, nil
+}
+
+func (m *mockServiceProvider) KMSImportKey(ctx context.Context, req *KMSImportKeyRequest) (interface{}, error) {
+	if m.kmsImportKeyFunc != nil {
+		return m.kmsImportKeyFunc(ctx, req)
+	}
+	return nil, nil
+}
+
+func (m *mockServiceProvider) KMSUpdateKeyStatus(ctx context.Context, req *KMSUpdateKeyStatusRequest) (interface{}, error) {
+	if m.kmsUpdateKeyStatusFunc != nil {
+		return m.kmsUpdateKeyStatusFunc(ctx, req)
+	}
+	return nil, nil
+}
+
+func (m *mockServiceProvider) KMSListKeyVersions(ctx context.Context, req *KMSListKeyVersionsRequest) (interface{}, error) {
+	if m.kmsListKeyVersionsFunc != nil {
+		return m.kmsListKeyVersionsFunc(ctx, req)
+	}
+	return nil, nil
+}
+
+func (m *mockServiceProvider) KMSBatchEncrypt(ctx context.Context, req *KMSBatchEncryptRequest) (interface{}, error) {
+	if m.kmsBatchEncryptFunc != nil {
+		return m.kmsBatchEncryptFunc(ctx, req)
+	}
+	return nil, nil
+}
+
+func (m *mockServiceProvider) KMSBatchDecrypt(ctx context.Context, req *KMSBatchDecryptRequest) (interface{}, error) {
+	if m.kmsBatchDecryptFunc != nil {
+		return m.kmsBatchDecryptFunc(ctx, req)
 	}
 	return nil, nil
 }
@@ -1803,6 +1920,83 @@ func (m *mockServiceProvider) SecretGetRotationPolicy(ctx context.Context, secre
 		return m.secretGetRotationPolicyFunc(ctx, secretID)
 	}
 	return map[string]interface{}{"secret_id": secretID}, nil
+}
+
+func (m *mockServiceProvider) SecretGetVersion(ctx context.Context, secretID string, version uint64) (interface{}, error) {
+	if m.secretGetVersionFunc != nil {
+		return m.secretGetVersionFunc(ctx, secretID, version)
+	}
+	return map[string]interface{}{"secret_id": secretID, "version": version}, nil
+}
+
+func (m *mockServiceProvider) SecretListVersions(ctx context.Context, secretID string, limit int) (interface{}, error) {
+	if m.secretListVersionsFunc != nil {
+		return m.secretListVersionsFunc(ctx, secretID, limit)
+	}
+	return map[string]interface{}{"secret_id": secretID}, nil
+}
+
+func (m *mockServiceProvider) SecretRotate(ctx context.Context, req *SecretRotateRequest) (interface{}, error) {
+	if m.secretRotateFunc != nil {
+		return m.secretRotateFunc(ctx, req)
+	}
+	return map[string]interface{}{"secret_id": req.SecretID}, nil
+}
+
+func (m *mockServiceProvider) SecretRollback(ctx context.Context, secretID string, targetVersion uint64) (interface{}, error) {
+	if m.secretRollbackFunc != nil {
+		return m.secretRollbackFunc(ctx, secretID, targetVersion)
+	}
+	return map[string]interface{}{"secret_id": secretID}, nil
+}
+
+func (m *mockServiceProvider) SecretUpdateStatus(ctx context.Context, secretID, status string) (interface{}, error) {
+	if m.secretUpdateStatusFunc != nil {
+		return m.secretUpdateStatusFunc(ctx, secretID, status)
+	}
+	return map[string]interface{}{"secret_id": secretID, "status": status}, nil
+}
+
+func (m *mockServiceProvider) DEKCreate(ctx context.Context, req *DEKCreateRequest) (interface{}, error) {
+	if m.dekCreateFunc != nil {
+		return m.dekCreateFunc(ctx, req)
+	}
+	return map[string]interface{}{"path": req.Path}, nil
+}
+
+func (m *mockServiceProvider) DEKList(ctx context.Context, req *DEKListRequest) (interface{}, error) {
+	if m.dekListFunc != nil {
+		return m.dekListFunc(ctx, req)
+	}
+	return map[string]interface{}{"deks": []interface{}{}}, nil
+}
+
+func (m *mockServiceProvider) DEKGet(ctx context.Context, path string) (interface{}, error) {
+	if m.dekGetFunc != nil {
+		return m.dekGetFunc(ctx, path)
+	}
+	return map[string]interface{}{"path": path}, nil
+}
+
+func (m *mockServiceProvider) DEKStatus(ctx context.Context, path string) (interface{}, error) {
+	if m.dekStatusFunc != nil {
+		return m.dekStatusFunc(ctx, path)
+	}
+	return map[string]interface{}{"path": path}, nil
+}
+
+func (m *mockServiceProvider) DEKRotate(ctx context.Context, path string, background bool) (interface{}, error) {
+	if m.dekRotateFunc != nil {
+		return m.dekRotateFunc(ctx, path, background)
+	}
+	return map[string]interface{}{"path": path}, nil
+}
+
+func (m *mockServiceProvider) DEKDelete(ctx context.Context, req *DEKDeleteRequest) (interface{}, error) {
+	if m.dekDeleteFunc != nil {
+		return m.dekDeleteFunc(ctx, req)
+	}
+	return map[string]interface{}{"success": true}, nil
 }
 
 // newTestLogger creates a logger that discards output for testing.
@@ -2066,6 +2260,10 @@ func (m *mockServiceProvider) OverlayTunnelList(ctx context.Context, vni uint32)
 	return []interface{}{}, nil
 }
 
+func (m *mockServiceProvider) OverlayTunnelStats(ctx context.Context, remoteVTEP string, vni uint32) (interface{}, error) {
+	return map[string]interface{}{"remote_vtep": remoteVTEP, "vni": vni, "bytes_sent": uint64(10), "bytes_recv": uint64(20)}, nil
+}
+
 func (m *mockServiceProvider) OverlayMACList(ctx context.Context, vni uint32) ([]interface{}, error) {
 	return []interface{}{}, nil
 }
@@ -2204,6 +2402,78 @@ func (m *mockServiceProvider) NTPStep(ctx context.Context) (interface{}, error) 
 	return map[string]interface{}{"synced": true, "stratum": 3}, nil
 }
 
+// mockVPNCall records one VPN provider call for the dispatch tests.
+type mockVPNCall struct {
+	op   string
+	args []interface{}
+}
+
+// VPN control-plane operations. Each call records the operation and its
+// arguments so the dispatch tests can assert the routing.
+
+func (m *mockServiceProvider) recordVPNCall(op string, args ...interface{}) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.vpnCalls = append(m.vpnCalls, mockVPNCall{op: op, args: args})
+	return m.vpnErr
+}
+
+func (m *mockServiceProvider) VPNEnrolPeer(ctx context.Context, tenantID, deviceID string, zones []string) (interface{}, error) {
+	if err := m.recordVPNCall("enrol", tenantID, deviceID, zones); err != nil {
+		return nil, err
+	}
+	return map[string]interface{}{"peer": map[string]interface{}{"tenantId": tenantID, "deviceId": deviceID}}, nil
+}
+
+func (m *mockServiceProvider) VPNListPeers(ctx context.Context, tenantID string) (interface{}, error) {
+	if err := m.recordVPNCall("list-peers", tenantID); err != nil {
+		return nil, err
+	}
+	return map[string]interface{}{"peers": []interface{}{}}, nil
+}
+
+func (m *mockServiceProvider) VPNRevokePeer(ctx context.Context, tenantID, deviceID string) (interface{}, error) {
+	if err := m.recordVPNCall("revoke", tenantID, deviceID); err != nil {
+		return nil, err
+	}
+	return map[string]interface{}{}, nil
+}
+
+func (m *mockServiceProvider) VPNStatus(ctx context.Context, gatewayID string) (interface{}, error) {
+	if err := m.recordVPNCall("status", gatewayID); err != nil {
+		return nil, err
+	}
+	return map[string]interface{}{"gateways": []interface{}{}}, nil
+}
+
+func (m *mockServiceProvider) VPNPosturePolicyGet(ctx context.Context, tenantID, name string) (interface{}, error) {
+	if err := m.recordVPNCall("policy-get", tenantID, name); err != nil {
+		return nil, err
+	}
+	return map[string]interface{}{"policy": map[string]interface{}{"name": name}}, nil
+}
+
+func (m *mockServiceProvider) VPNPosturePolicySet(ctx context.Context, tenantID, name, module string) (interface{}, error) {
+	if err := m.recordVPNCall("policy-set", tenantID, name, module); err != nil {
+		return nil, err
+	}
+	return map[string]interface{}{"policy": map[string]interface{}{"name": name}}, nil
+}
+
+func (m *mockServiceProvider) VPNPosturePolicyDelete(ctx context.Context, tenantID, name string) (interface{}, error) {
+	if err := m.recordVPNCall("policy-delete", tenantID, name); err != nil {
+		return nil, err
+	}
+	return map[string]interface{}{}, nil
+}
+
+func (m *mockServiceProvider) VPNPosturePolicyList(ctx context.Context, tenantID string) (interface{}, error) {
+	if err := m.recordVPNCall("policy-list", tenantID); err != nil {
+		return nil, err
+	}
+	return map[string]interface{}{"policies": []interface{}{}}, nil
+}
+
 // Gateway IPAM operations
 func (m *mockServiceProvider) GatewayIPAMPools(ctx context.Context, zone string) ([]interface{}, error) {
 	return []interface{}{}, nil
@@ -2328,23 +2598,39 @@ func (m *mockServiceProvider) TPMCreateIAK(ctx context.Context) (interface{}, er
 	return map[string]interface{}{"success": true}, nil
 }
 
-func (m *mockServiceProvider) TPMDeleteIAK(ctx context.Context) (interface{}, error) {
-	return map[string]interface{}{"success": true}, nil
-}
-
 func (m *mockServiceProvider) TPMQuote(ctx context.Context, nonce []byte, pcrs []int) (interface{}, error) {
 	return map[string]interface{}{"quote": "base64quote"}, nil
 }
 
-func (m *mockServiceProvider) TPMVerifyQuote(ctx context.Context, quote []byte, signature []byte, nonce []byte) (interface{}, error) {
-	return map[string]interface{}{"valid": true}, nil
+// TPMVerifyQuote echoes the scheme and attestation key it received so a tool
+// test can see the signature_algorithm and ak_public arguments arrive.
+func (m *mockServiceProvider) TPMVerifyQuote(ctx context.Context, req *TPMVerifyQuoteRequest) (interface{}, error) {
+	return map[string]interface{}{
+		"valid":               true,
+		"signature_algorithm": req.SignatureAlgorithm,
+		"ak_public":           string(req.AKPublic),
+	}, nil
 }
 
 func (m *mockServiceProvider) TPMReadPCRs(ctx context.Context, indices []int) (interface{}, error) {
 	return map[string]interface{}{"banks": []interface{}{}}, nil
 }
 
-func (m *mockServiceProvider) TPMExtendPCR(ctx context.Context, pcrIndex int, data []byte) (interface{}, error) {
+// tpmCall is the argument set a TPM PCR extend or NV call received.
+type tpmCall struct {
+	pcr      int
+	hashAlg  string
+	index    uint32
+	size     uint16
+	offset   uint16
+	data     []byte
+	password string
+	cn       string
+	pcrs     []uint32
+}
+
+func (m *mockServiceProvider) TPMExtendPCR(ctx context.Context, pcrIndex int, hashAlg string, data []byte) (interface{}, error) {
+	m.tpmCall = tpmCall{pcr: pcrIndex, hashAlg: hashAlg, data: data}
 	return map[string]interface{}{"success": true}, nil
 }
 
@@ -2360,31 +2646,37 @@ func (m *mockServiceProvider) TPMRandom(ctx context.Context, numBytes int) ([]by
 	return make([]byte, numBytes), nil
 }
 
-func (m *mockServiceProvider) TPMSeal(ctx context.Context, data []byte, pcrs []int) ([]byte, error) {
+func (m *mockServiceProvider) TPMSeal(ctx context.Context, data []byte, pcrs []uint32, cn, password string) ([]byte, error) {
+	m.tpmCall = tpmCall{data: data, pcrs: pcrs, cn: cn, password: password}
 	return []byte("sealed"), nil
 }
 
-func (m *mockServiceProvider) TPMUnseal(ctx context.Context, cn string) ([]byte, error) {
+func (m *mockServiceProvider) TPMUnseal(ctx context.Context, cn, password string) ([]byte, error) {
+	m.tpmCall = tpmCall{cn: cn, password: password}
 	return []byte("unsealed"), nil
 }
 
-func (m *mockServiceProvider) TPMCertify(ctx context.Context, keyHandle int) (interface{}, error) {
-	return map[string]interface{}{"certify_info": "base64info"}, nil
+func (m *mockServiceProvider) TPMCertify(ctx context.Context, keyHandle uint32, keyPassword string, nonce []byte) (interface{}, error) {
+	m.tpmCall = tpmCall{index: keyHandle, password: keyPassword, data: nonce}
+	return map[string]interface{}{"certify_info": []byte("attest")}, nil
 }
 
 func (m *mockServiceProvider) TPMNVList(ctx context.Context) (interface{}, error) {
 	return map[string]interface{}{"indices": []interface{}{}}, nil
 }
 
-func (m *mockServiceProvider) TPMNVRead(ctx context.Context, index int, size int) ([]byte, error) {
+func (m *mockServiceProvider) TPMNVRead(ctx context.Context, index uint32, size, offset uint16, password string) ([]byte, error) {
+	m.tpmCall = tpmCall{index: index, size: size, offset: offset, password: password}
 	return []byte("nvdata"), nil
 }
 
-func (m *mockServiceProvider) TPMNVWrite(ctx context.Context, index int, data []byte) (interface{}, error) {
+func (m *mockServiceProvider) TPMNVWrite(ctx context.Context, index uint32, data []byte, offset uint16, password string) (interface{}, error) {
+	m.tpmCall = tpmCall{index: index, data: data, offset: offset, password: password}
 	return map[string]interface{}{"success": true}, nil
 }
 
-func (m *mockServiceProvider) TPMNVDelete(ctx context.Context, index int) (interface{}, error) {
+func (m *mockServiceProvider) TPMNVDelete(ctx context.Context, index uint32, parentPassword string) (interface{}, error) {
+	m.tpmCall = tpmCall{index: index, password: parentPassword}
 	return map[string]interface{}{"success": true}, nil
 }
 

@@ -13,7 +13,10 @@
 
 package tunnel
 
-import "fmt"
+import (
+	"fmt"
+	"strconv"
+)
 
 // ErrTunnelCreateFailed is returned when tunnel creation fails.
 type ErrTunnelCreateFailed struct {
@@ -138,6 +141,26 @@ func (e *ErrKeyMaterial) Error() string {
 }
 
 func (e *ErrKeyMaterial) Unwrap() error {
+	return e.Cause
+}
+
+// ErrXfrmReply is returned when the kernel's answer to an SA read cannot be
+// decoded, so the installed SA cannot be compared with the wanted one.
+type ErrXfrmReply struct {
+	Spi    int
+	Reason string
+	Cause  error
+}
+
+func (e *ErrXfrmReply) Error() string {
+	msg := "xfrm state spi 0x" + strconv.FormatUint(uint64(uint32(e.Spi)), 16) + ": " + e.Reason
+	if e.Cause != nil {
+		msg += ": " + e.Cause.Error()
+	}
+	return msg
+}
+
+func (e *ErrXfrmReply) Unwrap() error {
 	return e.Cause
 }
 

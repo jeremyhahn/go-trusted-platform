@@ -17,10 +17,12 @@ import (
 	"context"
 	"errors"
 	"io"
+	"reflect"
 	"testing"
 	"time"
 
 	grpcapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/api/mcp"
 )
 
 // =============================================================================
@@ -109,7 +111,7 @@ func TestMCPServiceProvider_Registry_NotConfigured(t *testing.T) {
 	ctx := context.Background()
 
 	t.Run("List", func(t *testing.T) {
-		_, err := p.RegistryList(ctx, "", 0, 0, 0)
+		_, err := p.RegistryList(ctx, mcp.RegistryListQuery{})
 		var want ErrRegistryNotConfigured
 		if !errors.As(err, &want) {
 			t.Errorf("expected ErrRegistryNotConfigured, got %v", err)
@@ -237,21 +239,36 @@ func TestMCPServiceProvider_RegistryList_Success(t *testing.T) {
 	p := newProviderWithRegistry(svc)
 	ctx := context.Background()
 
-	out, err := p.RegistryList(ctx, "platform/gateway", int32(grpcapi.ArtifactTypeContainerImage), 25, 0)
+	out, err := p.RegistryList(ctx, mcp.RegistryListQuery{
+		Repository:       "platform/gateway",
+		ArtifactType:     int32(grpcapi.ArtifactTypeContainerImage),
+		Limit:            25,
+		Cursor:           "cursor-a",
+		SortBy:           "created_at",
+		Ascending:        true,
+		MatchLabels:      map[string]string{"env": "prod"},
+		MatchExpressions: []string{"tier in (edge)"},
+	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if svc.lastList == nil {
 		t.Fatal("List was not invoked")
 	}
-	if svc.lastList.Repository != "platform/gateway" {
-		t.Errorf("repository = %q, want platform/gateway", svc.lastList.Repository)
+	wantReq := &grpcapi.RegistryListRequest{
+		Repository: "platform/gateway",
+		Type:       grpcapi.ArtifactTypeContainerImage,
+		Limit:      25,
+		Cursor:     "cursor-a",
+		SortBy:     "created_at",
+		Ascending:  true,
+		Selector: &grpcapi.RegistryLabelSelector{
+			MatchLabels:      map[string]string{"env": "prod"},
+			MatchExpressions: []string{"tier in (edge)"},
+		},
 	}
-	if svc.lastList.Type != grpcapi.ArtifactTypeContainerImage {
-		t.Errorf("type = %v, want ContainerImage", svc.lastList.Type)
-	}
-	if svc.lastList.Limit != 25 {
-		t.Errorf("limit = %d, want 25", svc.lastList.Limit)
+	if !reflect.DeepEqual(svc.lastList, wantReq) {
+		t.Errorf("list request = %+v, want %+v", svc.lastList, wantReq)
 	}
 
 	m, ok := out.(map[string]interface{})
@@ -300,7 +317,7 @@ func TestMCPServiceProvider_RegistryList_EmptyOptional(t *testing.T) {
 	p := newProviderWithRegistry(svc)
 	ctx := context.Background()
 
-	out, err := p.RegistryList(ctx, "", 0, 0, 0)
+	out, err := p.RegistryList(ctx, mcp.RegistryListQuery{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -311,6 +328,9 @@ func TestMCPServiceProvider_RegistryList_EmptyOptional(t *testing.T) {
 	if svc.lastList.Repository != "" {
 		t.Errorf("repository should be forwarded as empty, got %q", svc.lastList.Repository)
 	}
+	if svc.lastList.Selector != nil {
+		t.Errorf("an empty label selector should forward as nil, got %+v", svc.lastList.Selector)
+	}
 }
 
 // TestMCPServiceProvider_RegistryList_Error confirms upstream errors
@@ -319,7 +339,7 @@ func TestMCPServiceProvider_RegistryList_Error(t *testing.T) {
 	want := errors.New("upstream boom")
 	svc := &fakeRegistryService{listErr: want}
 	p := newProviderWithRegistry(svc)
-	if _, err := p.RegistryList(context.Background(), "", 0, 0, 0); !errors.Is(err, want) {
+	if _, err := p.RegistryList(context.Background(), mcp.RegistryListQuery{}); !errors.Is(err, want) {
 		t.Errorf("expected upstream error, got %v", err)
 	}
 }

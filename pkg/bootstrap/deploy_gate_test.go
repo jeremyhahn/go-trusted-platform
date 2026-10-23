@@ -22,10 +22,25 @@ import (
 	"strconv"
 	"strings"
 	"testing"
-	"time"
+	"testing/synctest"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/bmc"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/bootstrap/deployer"
 )
+
+// oneShotServer starts a real HTTP server that closes every connection
+// after its response. The probe's poll ticks run on a synctest bubble's
+// clock (#284), and a kept-alive client connection would sit in network
+// I/O inside the bubble, which is not durable blocking, so the clock
+// would never reach the next tick.
+func oneShotServer(t *testing.T, handler http.HandlerFunc) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewUnstartedServer(handler)
+	srv.Config.SetKeepAlivesEnabled(false)
+	srv.Start()
+	t.Cleanup(srv.Close)
+	return srv
+}
 
 // gateOrchestrator builds the smallest Orchestrator that can run the
 // deploy phase, with the config-server probe supplied by the caller.
@@ -116,8 +131,8 @@ func TestDeployContainer_SucceedsWhenConfigServerServes(t *testing.T) {
 
 // TestDeployContainer_FailsAgainstDeadPort drives the real probe against
 // a port nothing is listening on, which is the observed failure on the
-// jumpbox. Bounded by the caller's context so the test does not sit out
-// the probe's own 30s.
+// jumpbox. The probe's own 30s deadline and its poll ticks run on the
+// synctest bubble's clock (#284), so the test sits out neither.
 func TestDeployContainer_FailsAgainstDeadPort(t *testing.T) {
 	// A listener opened and immediately closed yields a port that is
 	// almost certainly free, without guessing one.
@@ -129,13 +144,12 @@ func TestDeployContainer_FailsAgainstDeadPort(t *testing.T) {
 		DeployerConfig{Host: host, BootstrapHTTPPort: port},
 		httpConfigServerReadiness{})
 
-	ctx, cancel := context.WithTimeout(context.Background(), 750*time.Millisecond)
-	defer cancel()
-
-	var notServing ErrContainerServiceNotServing
-	if err := o.deployContainer(ctx); !errors.As(err, &notServing) {
-		t.Fatalf("deployContainer = %v, want ErrContainerServiceNotServing", err)
-	}
+	synctest.Test(t, func(t *testing.T) {
+		var notServing ErrContainerServiceNotServing
+		if err := o.deployContainer(context.Background()); !errors.As(err, &notServing) {
+			t.Fatalf("deployContainer = %v, want ErrContainerServiceNotServing", err)
+		}
+	})
 }
 
 // TestInstallLogBaseURL_HonoursConfiguredPort pins the other half of the
@@ -199,21 +213,19 @@ func TestRun_NoDeployer_StillVerifiesContainer(t *testing.T) {
 // device-script port it ACCEPTS the connection: a liveness check would
 // call that serving while pxeboot's own listener never bound.
 func TestDeployContainer_FailsWhenDeviceScriptPortIsSquatted(t *testing.T) {
-	cfgSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	cfgSrv := oneShotServer(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/boot.ipxe" {
 			_, _ = w.Write([]byte("#!ipxe\nchain menu.ipxe\n"))
 			return
 		}
 		w.WriteHeader(http.StatusNotFound)
-	}))
-	defer cfgSrv.Close()
+	})
 
 	// Stands in for the sysmon-server that owned 8081: alive, answering,
 	// and not the device-script server.
-	squatter := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	squatter := oneShotServer(t, func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte("sysmon-server ok\n"))
-	}))
-	defer squatter.Close()
+	})
 
 	host, cfgPort := hostAndPort(t, cfgSrv.URL)
 	_, squatPort := hostAndPort(t, squatter.URL)
@@ -222,17 +234,18 @@ func TestDeployContainer_FailsWhenDeviceScriptPortIsSquatted(t *testing.T) {
 		DeployerConfig{Host: host, BootstrapHTTPPort: cfgPort, BootstrapDeviceScriptPort: squatPort},
 		httpConfigServerReadiness{})
 
-	ctx, cancel := context.WithTimeout(context.Background(), 750*time.Millisecond)
-	defer cancel()
-
-	var notServing ErrContainerServiceNotServing
-	err := o.deployContainer(ctx)
-	if !errors.As(err, &notServing) {
-		t.Fatalf("deployContainer = %v, want ErrContainerServiceNotServing — a squatting service is not our server", err)
-	}
-	if notServing.Listener != "device-script server" {
-		t.Errorf("Listener = %q, want device-script server", notServing.Listener)
-	}
+	// The servers listen outside the bubble; the probe's deadline and
+	// poll ticks run on its clock (#284).
+	synctest.Test(t, func(t *testing.T) {
+		var notServing ErrContainerServiceNotServing
+		err := o.deployContainer(context.Background())
+		if !errors.As(err, &notServing) {
+			t.Fatalf("deployContainer = %v, want ErrContainerServiceNotServing — a squatting service is not our server", err)
+		}
+		if notServing.Listener != "device-script server" {
+			t.Errorf("Listener = %q, want device-script server", notServing.Listener)
+		}
+	})
 }
 
 // TestDeployContainer_FailsWhenConfigPortIsSquatted is the config-server
@@ -242,28 +255,28 @@ func TestDeployContainer_FailsWhenDeviceScriptPortIsSquatted(t *testing.T) {
 // SOMETHING is on the port — which under --net=host is exactly what a
 // squatter gives you. The probe asks /boot.ipxe instead.
 func TestDeployContainer_FailsWhenConfigPortIsSquatted(t *testing.T) {
-	squatter := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	squatter := oneShotServer(t, func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"status":"healthy"}`))
-	}))
-	defer squatter.Close()
+	})
 
 	host, port := hostAndPort(t, squatter.URL)
 	o := gateOrchestrator(t,
 		DeployerConfig{Host: host, BootstrapHTTPPort: port},
 		httpConfigServerReadiness{})
 
-	ctx, cancel := context.WithTimeout(context.Background(), 750*time.Millisecond)
-	defer cancel()
-
-	var notServing ErrContainerServiceNotServing
-	err := o.deployContainer(ctx)
-	if !errors.As(err, &notServing) {
-		t.Fatalf("deployContainer = %v, want ErrContainerServiceNotServing — a healthy-looking squatter is not our server", err)
-	}
-	if notServing.Listener != "config server" {
-		t.Errorf("Listener = %q, want config server", notServing.Listener)
-	}
+	// The squatter listens outside the bubble; the probe's deadline and
+	// poll ticks run on its clock (#284).
+	synctest.Test(t, func(t *testing.T) {
+		var notServing ErrContainerServiceNotServing
+		err := o.deployContainer(context.Background())
+		if !errors.As(err, &notServing) {
+			t.Fatalf("deployContainer = %v, want ErrContainerServiceNotServing — a healthy-looking squatter is not our server", err)
+		}
+		if notServing.Listener != "config server" {
+			t.Errorf("Listener = %q, want config server", notServing.Listener)
+		}
+	})
 }
 
 func TestInstallLogBaseURL_HonoursConfiguredPort(t *testing.T) {
@@ -393,6 +406,43 @@ func TestBootstrapConfig_Validate_Ports(t *testing.T) {
 	}
 }
 
+// TestBootstrapConfig_Validate_BindHost pins deployer.bootstrap_bind_host
+// (#93): empty or an IP address validates, anything else names the field.
+func TestBootstrapConfig_Validate_BindHost(t *testing.T) {
+	cases := []struct {
+		name     string
+		bindHost string
+		wantErr  bool
+	}{
+		{"unset is every interface", "", false},
+		{"IPv4", "192.0.2.1", false},
+		{"IPv6", "fd00::1", false},
+		{"hostname", "pxe.example.com", true},
+		{"host and port", "192.0.2.1:8080", true},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dep := DeployerConfig{BootstrapBindHost: tc.bindHost}
+			err := dep.validateBindHost()
+
+			if !tc.wantErr {
+				if err != nil {
+					t.Fatalf("validateBindHost = %v, want nil", err)
+				}
+				return
+			}
+			var invalid ErrInvalidConfig
+			if !errors.As(err, &invalid) {
+				t.Fatalf("validateBindHost = %v, want ErrInvalidConfig", err)
+			}
+			if invalid.Field != "deployer.bootstrap_bind_host" {
+				t.Fatalf("Field = %q, want deployer.bootstrap_bind_host", invalid.Field)
+			}
+		})
+	}
+}
+
 // TestBootstrapConfig_Validate_RejectsBadPorts proves the check is
 // actually reached from BootstrapConfig.Validate, not merely present.
 func TestBootstrapConfig_Validate_RejectsBadPorts(t *testing.T) {
@@ -402,5 +452,83 @@ func TestBootstrapConfig_Validate_RejectsBadPorts(t *testing.T) {
 	var invalid ErrInvalidPort
 	if err := cfg.Validate(); !errors.As(err, &invalid) {
 		t.Fatalf("Validate = %v, want ErrInvalidPort", err)
+	}
+}
+
+// TestBootstrapConfig_Validate_NoRouter proves bootstrap_no_router with a
+// bootstrap_gateway is refused at config load, and that either alone loads.
+func TestBootstrapConfig_Validate_NoRouter(t *testing.T) {
+	cases := []struct {
+		name     string
+		noRouter bool
+		gateway  string
+		wantErr  bool
+	}{
+		{"neither", false, "", false},
+		{"gateway only", false, "192.0.2.1", false},
+		{"no-router only", true, "", false},
+		{"no-router with a gateway", true, "192.0.2.1", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := minimalConfig()
+			cfg.Deployer.BootstrapNoRouter = tc.noRouter
+			cfg.Deployer.BootstrapGateway = tc.gateway
+
+			err := cfg.ValidateDefinition()
+			if !tc.wantErr {
+				if err != nil {
+					t.Fatalf("ValidateDefinition = %v, want nil", err)
+				}
+				return
+			}
+			var invalid deployer.ErrNoRouterWithGateway
+			if !errors.As(err, &invalid) {
+				t.Fatalf("ValidateDefinition = %v (%T), want ErrNoRouterWithGateway", err, err)
+			}
+		})
+	}
+}
+
+// TestBootstrapConfig_Validate_BootNode proves the deployer's boot-node
+// rules are reached from BootstrapConfig.Validate, so a boot node on a
+// volatile data_dir is refused at config load rather than over SSH.
+func TestBootstrapConfig_Validate_BootNode(t *testing.T) {
+	cases := []struct {
+		name      string
+		dataDir   string
+		cacheDir  string
+		bootNode  bool
+		wantField string // "" = valid
+	}{
+		{"default mode on the /tmp default", "", "", false, ""},
+		{"boot node on a persistent data_dir", "/srv/pxeboot", "", true, ""},
+		{"boot node on the /tmp default", "", "", true, "data_dir"},
+		{"boot node with data_dir under /tmp", "/tmp/pxeboot", "", true, "data_dir"},
+		{"boot node with the cache inside data_dir", "/srv/pxeboot", "/srv/pxeboot/firmware", true, "firmware_cache_dir"},
+		{"firmware cache without boot node", "/srv/pxeboot", "/srv/pxeboot-firmware", false, "firmware_cache_dir"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := minimalConfig()
+			cfg.Deployer.DataDir = tc.dataDir
+			cfg.Deployer.FirmwareCacheDir = tc.cacheDir
+			cfg.Deployer.BootNode = tc.bootNode
+
+			err := cfg.ValidateDefinition()
+			if tc.wantField == "" {
+				if err != nil {
+					t.Fatalf("ValidateDefinition = %v, want nil", err)
+				}
+				return
+			}
+			var invalid deployer.ErrInvalidBootNodeConfig
+			if !errors.As(err, &invalid) {
+				t.Fatalf("ValidateDefinition = %v (%T), want ErrInvalidBootNodeConfig", err, err)
+			}
+			if invalid.Field != tc.wantField {
+				t.Fatalf("Field = %q, want %q", invalid.Field, tc.wantField)
+			}
+		})
 	}
 }

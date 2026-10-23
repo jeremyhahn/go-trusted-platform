@@ -290,6 +290,12 @@ func (m *mockResponseWriter) Error500(w http.ResponseWriter, r *http.Request, er
 	w.WriteHeader(http.StatusInternalServerError)
 }
 
+func (m *mockResponseWriter) Error503(w http.ResponseWriter, r *http.Request, err error) {
+	m.lastStatus = http.StatusServiceUnavailable
+	m.lastErr = err
+	w.WriteHeader(http.StatusServiceUnavailable)
+}
+
 // newTestRouter creates a mux router with the given handler registered at the
 // specified method and path.
 func newTestRouter(method, path string, handlerFunc http.HandlerFunc) *mux.Router {
@@ -970,8 +976,11 @@ func TestProvision(t *testing.T) {
 		router := newTestRouter("POST", "/bmc/{profileID}/provision", h.Provision)
 		router.ServeHTTP(rec, req)
 
-		if rw.lastStatus != http.StatusInternalServerError {
-			t.Errorf("expected status 500, got %d", rw.lastStatus)
+		if rw.lastStatus != http.StatusServiceUnavailable {
+			t.Errorf("expected status 503, got %d", rw.lastStatus)
+		}
+		if _, ok := rw.lastErr.(ErrBaremetalServiceNotAvailable); !ok {
+			t.Errorf("err = %T, want ErrBaremetalServiceNotAvailable", rw.lastErr)
 		}
 	})
 
@@ -1103,8 +1112,11 @@ func TestProvisionStatus(t *testing.T) {
 		router := newTestRouter("GET", "/bmc/{profileID}/provision", h.ProvisionStatus)
 		router.ServeHTTP(rec, req)
 
-		if rw.lastStatus != http.StatusInternalServerError {
-			t.Errorf("expected status 500, got %d", rw.lastStatus)
+		if rw.lastStatus != http.StatusServiceUnavailable {
+			t.Errorf("expected status 503, got %d", rw.lastStatus)
+		}
+		if _, ok := rw.lastErr.(ErrBaremetalServiceNotAvailable); !ok {
+			t.Errorf("err = %T, want ErrBaremetalServiceNotAvailable", rw.lastErr)
 		}
 	})
 }

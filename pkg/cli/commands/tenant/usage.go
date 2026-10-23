@@ -28,14 +28,14 @@ func NewUsageCommand(getFlags func() *cli.CommonFlags) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "usage <tenant-name>",
 		Short: "Show tenant resource usage",
-		Long: `Display current resource usage for a tenant.
+		Long: `Display current resource usage for a tenant beside its quotas.
 
-Shows quota limits for:
+Shows what is used and the limit for:
   - Compute: VMs, containers, vCPUs, memory
-  - Network: bridges, ports
-  - Storage: volumes, snapshots
+  - Network: bridges, ports, bandwidth
+  - Storage: volume space, snapshots
 
-Note: Actual usage tracking requires querying tenant usage metrics separately.
+A limit of 0 is shown as unlimited.
 
 Examples:
   # Show usage for a tenant
@@ -74,65 +74,49 @@ func runTenantUsage(flags *cli.CommonFlags, tenantName string) error {
 		return ErrTenantNotFound{Name: tenantName}
 	}
 
+	usage, err := tenantClient.GetUsage(ctx, t.ID)
+	if err != nil {
+		return ErrUsageRetrievalFailed{TenantID: t.ID, Err: err}
+	}
+
+	summary := toUsageSummary(t, usage)
 	printer := base.Printer()
 
 	switch flags.OutputFormat {
 	case cli.OutputFormatJSON, cli.OutputFormatYAML:
-		return printer.Print(toUsageSummary(t.ID, t))
+		return printer.Print(summary)
 
 	case cli.OutputFormatTable:
-		fmt.Printf("Resource quotas for tenant: %s\n\n", tenantName)
-		if t.ComputeQuota != nil {
-			printComputeQuotaTable(printer, t.ComputeQuota)
-		}
-		fmt.Println()
-		if t.NetworkQuota != nil {
-			printNetworkQuotaTable(printer, t.NetworkQuota)
-		}
-		fmt.Println()
-		if t.StorageQuota != nil {
-			printStorageQuotaTable(printer, t.StorageQuota)
-		}
-		return nil
+		fmt.Printf("Resource usage for tenant: %s\n\n", tenantName)
+		return printUsageTable(printer, summary)
 
 	default:
 		return cli.ErrInvalidOutputFormat{Format: string(flags.OutputFormat)}
 	}
 }
 
-// printComputeQuotaTable prints compute quota as a table from domain types.
-func printComputeQuotaTable(printer *cli.Printer, quota *sdktenant.ComputeQuota) {
-	fmt.Println("Compute Quotas:")
+// printUsageTable prints one row per resource: what is used beside its quota.
+func printUsageTable(printer *cli.Printer, s *UsageSummary) error {
+	rows := []struct {
+		label string
+		item  UsageItem
+	}{
+		{"VMs", s.Compute.VMs},
+		{"Containers", s.Compute.Containers},
+		{"vCPUs", s.Compute.VCPUs},
+		{"Memory (MB)", s.Compute.MemoryMB},
+		{"Bridges", s.Network.Bridges},
+		{"Ports", s.Network.Ports},
+		{"Bandwidth (Mbps)", s.Network.BandwidthMbps},
+		{"Volumes (GB)", s.Storage.VolumesGB},
+		{"Snapshots", s.Storage.Snapshots},
+	}
 
-	table := cli.NewTableData("RESOURCE", "MAX")
-	table.AddRow("VMs", formatQuotaLimit(quota.MaxVMs))
-	table.AddRow("Containers", formatQuotaLimit(quota.MaxContainers))
-	table.AddRow("vCPUs", formatQuotaLimit(quota.MaxVCPUs))
-	table.AddRow("Memory (MB)", formatQuotaLimit(quota.MaxMemoryMB))
-
-	printer.Print(*table)
-}
-
-// printNetworkQuotaTable prints network quota as a table from domain types.
-func printNetworkQuotaTable(printer *cli.Printer, quota *sdktenant.NetworkQuota) {
-	fmt.Println("Network Quotas:")
-
-	table := cli.NewTableData("RESOURCE", "MAX")
-	table.AddRow("Bridges", formatQuotaLimit(quota.MaxBridges))
-	table.AddRow("Ports", formatQuotaLimit(quota.MaxPorts))
-
-	printer.Print(*table)
-}
-
-// printStorageQuotaTable prints storage quota as a table from domain types.
-func printStorageQuotaTable(printer *cli.Printer, quota *sdktenant.StorageQuota) {
-	fmt.Println("Storage Quotas:")
-
-	table := cli.NewTableData("RESOURCE", "MAX")
-	table.AddRow("Volumes (GB)", formatQuotaLimit(quota.MaxVolumesGB))
-	table.AddRow("Snapshots", formatQuotaLimit(quota.MaxSnapshots))
-
-	printer.Print(*table)
+	table := cli.NewTableData("RESOURCE", "USED", "MAX")
+	for _, row := range rows {
+		table.AddRow(row.label, fmt.Sprintf("%d", row.item.Used), formatQuotaLimit(row.item.Max))
+	}
+	return printer.Print(*table)
 }
 
 // formatQuotaLimit formats a quota limit value

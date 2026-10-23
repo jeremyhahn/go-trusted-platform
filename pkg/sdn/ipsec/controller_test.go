@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/bgp"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ipsec/config"
 )
 
 type fakeAdmitter struct {
@@ -113,18 +114,18 @@ func TestNewControllerRejects(t *testing.T) {
 	invalid.Token.Handle = ""
 	tests := []struct {
 		name     string
-		cfg      *Config
+		cfg      *config.Config
 		admitter Admitter
 		dropper  Dropper
 		identity IdentityProvider
 		want     error
 	}{
-		{"absent section", nil, admitter, dropper, identity, ErrNotEnabled},
-		{"disabled section", &Config{}, admitter, dropper, identity, ErrNotEnabled},
+		{"absent section", nil, admitter, dropper, identity, config.ErrNotEnabled},
+		{"disabled section", &config.Config{}, admitter, dropper, identity, config.ErrNotEnabled},
 		{"no admitter", validConfig(), nil, dropper, identity, ErrMissingDependency},
 		{"no dropper", validConfig(), admitter, nil, identity, ErrMissingDependency},
 		{"no identity", validConfig(), admitter, dropper, nil, ErrMissingDependency},
-		{"invalid section", invalid, admitter, dropper, identity, ErrRequired},
+		{"invalid section", invalid, admitter, dropper, identity, config.ErrRequired},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -821,7 +822,7 @@ func TestEvictAndReadmitFailures(t *testing.T) {
 	ctx := context.Background()
 	var peerErr *PeerError
 
-	if err := h.ctl.Evict(ctx, addr("10.20.0.11")); !errors.Is(err, ErrInvalidAddress) {
+	if err := h.ctl.Evict(ctx, addr("10.20.0.11")); !errors.Is(err, config.ErrInvalidAddress) {
 		t.Fatalf("evicting the local VTEP: err = %v", err)
 	}
 	if err := h.ctl.Readmit(ctx, addr("10.20.0.1")); !errors.Is(err, ErrNotEvicted) {

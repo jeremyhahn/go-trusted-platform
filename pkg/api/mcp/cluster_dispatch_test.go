@@ -15,324 +15,155 @@ package mcp
 
 import (
 	"context"
-	"errors"
-	"strings"
+	"path"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+
+	grpcapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
 
-// =============================================================================
-// Test fixtures
-// =============================================================================
-
-// clusterStubProvider is a minimal ClusterProvider that records the last
-// invoked method so tests can assert dispatch.
-type clusterStubProvider struct {
-	lastCall string
-	failWith error
-}
-
-func (s *clusterStubProvider) ClusterBootstrap(_ context.Context, clusterName string) (interface{}, error) {
-	s.lastCall = "bootstrap:" + clusterName
-	if s.failWith != nil {
-		return nil, s.failWith
-	}
-	return map[string]interface{}{"cluster_name": clusterName, "bootstrap": true}, nil
-}
-
-func (s *clusterStubProvider) ClusterJoin(_ context.Context, addresses []string) (interface{}, error) {
-	s.lastCall = "join:" + strings.Join(addresses, ",")
-	if s.failWith != nil {
-		return nil, s.failWith
-	}
-	return map[string]interface{}{"seed_addresses": addresses, "joined": true}, nil
-}
-
-func (s *clusterStubProvider) ClusterLeave(_ context.Context) (interface{}, error) {
-	s.lastCall = "leave"
-	if s.failWith != nil {
-		return nil, s.failWith
-	}
-	return map[string]interface{}{"left": true}, nil
-}
-
-func (s *clusterStubProvider) ClusterStatus(_ context.Context, includeNodes bool) (interface{}, error) {
-	if includeNodes {
-		s.lastCall = "status:nodes"
-	} else {
-		s.lastCall = "status"
-	}
-	if s.failWith != nil {
-		return nil, s.failWith
-	}
-	return map[string]interface{}{"include_nodes": includeNodes}, nil
-}
-
-func (s *clusterStubProvider) ClusterListNodes(_ context.Context) (interface{}, error) {
-	s.lastCall = "list_nodes"
-	if s.failWith != nil {
-		return nil, s.failWith
-	}
-	return map[string]interface{}{"nodes": []map[string]interface{}{}}, nil
-}
-
-// clusterCombinedProvider satisfies both ServiceProvider (via
-// mockServiceProvider) and ClusterProvider (via clusterStubProvider).
-// The two types contribute disjoint method sets so embedding is
-// collision-free.
-type clusterCombinedProvider struct {
+// clusterTestProvider serves a ClusterService servicer to the cluster tools.
+type clusterTestProvider struct {
 	*mockServiceProvider
-	*clusterStubProvider
+	server platformv1.ClusterServiceServer
 }
 
-// Compile-time assertions: combined provider satisfies both interfaces.
-var (
-	_ ServiceProvider = (*clusterCombinedProvider)(nil)
-	_ ClusterProvider = (*clusterCombinedProvider)(nil)
-)
-
-// =============================================================================
-// Tests: dispatch
-// =============================================================================
-
-// TestToolRegistry_ExecuteTool_Cluster_RoutesToProvider verifies that the
-// ExecuteTool dispatcher routes platform_cluster_* tools through the
-// optional ClusterProvider interface.
-func TestToolRegistry_ExecuteTool_Cluster_RoutesToProvider(t *testing.T) {
-	stub := &clusterStubProvider{}
-	svc := &clusterCombinedProvider{
-		mockServiceProvider: newMockServiceProvider(),
-		clusterStubProvider: stub,
-	}
-	registry := NewToolRegistry(svc, logging.DefaultLogger())
-	ctx := context.Background()
-
-	cases := []struct {
-		name     string
-		args     map[string]interface{}
-		wantCall string
-	}{
-		{
-			name:     "platform_cluster_bootstrap",
-			args:     map[string]interface{}{"cluster_name": "alpha"},
-			wantCall: "bootstrap:alpha",
-		},
-		{
-			name:     "platform_cluster_bootstrap_no_name",
-			args:     map[string]interface{}{},
-			wantCall: "bootstrap:",
-		},
-		{
-			name:     "platform_cluster_join",
-			args:     map[string]interface{}{"seed_addresses": []interface{}{"10.0.0.1:7001", "10.0.0.2:7001"}},
-			wantCall: "join:10.0.0.1:7001,10.0.0.2:7001",
-		},
-		{
-			name:     "platform_cluster_leave",
-			args:     map[string]interface{}{},
-			wantCall: "leave",
-		},
-		{
-			name:     "platform_cluster_status",
-			args:     map[string]interface{}{},
-			wantCall: "status",
-		},
-		{
-			name:     "platform_cluster_status_include_nodes",
-			args:     map[string]interface{}{"include_nodes": true},
-			wantCall: "status:nodes",
-		},
-		{
-			name:     "platform_cluster_list_nodes",
-			args:     map[string]interface{}{},
-			wantCall: "list_nodes",
-		},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			toolName := tc.name
-			// Strip suffix-only test labels back to the canonical tool name.
-			switch toolName {
-			case "platform_cluster_bootstrap_no_name":
-				toolName = "platform_cluster_bootstrap"
-			case "platform_cluster_status_include_nodes":
-				toolName = "platform_cluster_status"
-			}
-			result, err := registry.ExecuteTool(ctx, toolName, tc.args)
-			if err != nil {
-				t.Fatalf("%s: unexpected error: %v", tc.name, err)
-			}
-			if result == nil {
-				t.Errorf("%s: result should not be nil", tc.name)
-			}
-			if stub.lastCall != tc.wantCall {
-				t.Errorf("%s: lastCall = %q, want %q", tc.name, stub.lastCall, tc.wantCall)
-			}
-		})
-	}
+func (p clusterTestProvider) ClusterServiceServer() platformv1.ClusterServiceServer {
+	return p.server
 }
 
-// TestToolRegistry_ExecuteTool_Cluster_NoProvider verifies that cluster
-// tools return ErrClusterNotConfigured when the ServiceProvider does
-// not also satisfy ClusterProvider.
-func TestToolRegistry_ExecuteTool_Cluster_NoProvider(t *testing.T) {
-	// Plain mockServiceProvider does NOT satisfy ClusterProvider.
-	svc := newMockServiceProvider()
-	registry := NewToolRegistry(svc, logging.DefaultLogger())
-	ctx := context.Background()
-
-	cases := []struct {
-		name string
-		args map[string]interface{}
-	}{
-		{"platform_cluster_bootstrap", map[string]interface{}{}},
-		{"platform_cluster_join", map[string]interface{}{"seed_addresses": []interface{}{"x:1"}}},
-		{"platform_cluster_leave", map[string]interface{}{}},
-		{"platform_cluster_status", map[string]interface{}{}},
-		{"platform_cluster_list_nodes", map[string]interface{}{}},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			_, err := registry.ExecuteTool(ctx, tc.name, tc.args)
-			if err == nil {
-				t.Fatalf("%s: expected error, got nil", tc.name)
-			}
-			if !errors.Is(err, ErrClusterNotConfigured) {
-				t.Errorf("%s: expected ErrClusterNotConfigured, got %v", tc.name, err)
-			}
-		})
-	}
+// fakeMCPCluster answers GetStatus and records the request it was given; it
+// refuses Join as unreachable seeds do, and every other method answers
+// Unimplemented.
+type fakeMCPCluster struct {
+	platformv1.UnimplementedClusterServiceServer
+	got *platformv1.GetClusterStatusRequest
 }
 
-// TestToolRegistry_ExecuteTool_Cluster_JoinWithoutAddresses verifies that
-// platform_cluster_join surfaces ErrClusterSeedAddressRequired when no
-// seed addresses are supplied.
-func TestToolRegistry_ExecuteTool_Cluster_JoinWithoutAddresses(t *testing.T) {
-	stub := &clusterStubProvider{}
-	svc := &clusterCombinedProvider{
-		mockServiceProvider: newMockServiceProvider(),
-		clusterStubProvider: stub,
-	}
-	registry := NewToolRegistry(svc, logging.DefaultLogger())
-	ctx := context.Background()
-
-	// Empty args -> seed_addresses missing.
-	_, err := registry.ExecuteTool(ctx, "platform_cluster_join", map[string]interface{}{})
-	if err == nil {
-		t.Fatal("expected error for missing seed_addresses, got nil")
-	}
-	if !errors.Is(err, ErrClusterSeedAddressRequired) {
-		t.Errorf("expected ErrClusterSeedAddressRequired, got %v", err)
-	}
-
-	// Empty slice -> still missing.
-	_, err = registry.ExecuteTool(ctx, "platform_cluster_join", map[string]interface{}{
-		"seed_addresses": []interface{}{},
-	})
-	if err == nil {
-		t.Fatal("expected error for empty seed_addresses, got nil")
-	}
-	if !errors.Is(err, ErrClusterSeedAddressRequired) {
-		t.Errorf("expected ErrClusterSeedAddressRequired, got %v", err)
-	}
-
-	// Provider should never have been called.
-	if stub.lastCall != "" {
-		t.Errorf("provider should not have been invoked; lastCall = %q", stub.lastCall)
-	}
+func (f *fakeMCPCluster) GetStatus(_ context.Context, req *platformv1.GetClusterStatusRequest) (*platformv1.GetClusterStatusResponse, error) {
+	f.got = req
+	return &platformv1.GetClusterStatusResponse{
+		Cluster: &platformv1.ClusterInfo{Name: "edge", State: platformv1.ClusterState_CLUSTER_STATE_HEALTHY},
+	}, nil
 }
 
-// TestToolRegistry_ExecuteTool_Cluster_PropagatesError verifies that
-// errors returned by the ClusterProvider propagate unchanged through
-// ExecuteTool (no error wrapping that would break errors.Is).
-func TestToolRegistry_ExecuteTool_Cluster_PropagatesError(t *testing.T) {
-	sentinel := errors.New("cluster: boom")
-	stub := &clusterStubProvider{failWith: sentinel}
-	svc := &clusterCombinedProvider{
-		mockServiceProvider: newMockServiceProvider(),
-		clusterStubProvider: stub,
-	}
-	registry := NewToolRegistry(svc, logging.DefaultLogger())
-	ctx := context.Background()
-
-	cases := []struct {
-		name string
-		args map[string]interface{}
-	}{
-		{"platform_cluster_bootstrap", map[string]interface{}{}},
-		{"platform_cluster_join", map[string]interface{}{"seed_addresses": []interface{}{"x:1"}}},
-		{"platform_cluster_leave", map[string]interface{}{}},
-		{"platform_cluster_status", map[string]interface{}{}},
-		{"platform_cluster_list_nodes", map[string]interface{}{}},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			_, err := registry.ExecuteTool(ctx, tc.name, tc.args)
-			if !errors.Is(err, sentinel) {
-				t.Errorf("%s: expected sentinel error, got %v", tc.name, err)
-			}
-		})
-	}
+func (f *fakeMCPCluster) Join(context.Context, *platformv1.JoinClusterRequest) (*platformv1.JoinClusterResponse, error) {
+	return nil, status.Error(codes.Unavailable, "no seed addresses are reachable")
 }
 
-// TestToolRegistry_ClusterToolsRegistered verifies all platform_cluster_*
-// tool definitions are registered and listable.
-func TestToolRegistry_ClusterToolsRegistered(t *testing.T) {
-	svc := newMockServiceProvider()
-	registry := NewToolRegistry(svc, logging.DefaultLogger())
+func newClusterTestRegistry(server platformv1.ClusterServiceServer) *ToolRegistry {
+	provider := clusterTestProvider{mockServiceProvider: newMockServiceProvider(), server: server}
+	return NewToolRegistry(provider, logging.DefaultLogger())
+}
 
-	expected := []string{
-		"platform_cluster_bootstrap",
-		"platform_cluster_join",
-		"platform_cluster_leave",
-		"platform_cluster_status",
-		"platform_cluster_list_nodes",
+// Every ClusterService method has one tool, and the tool requires the scope
+// its gRPC method requires.
+func TestClusterTools_CoverEveryMethodWithItsGRPCScope(t *testing.T) {
+	permissions := toolPermissionCatalog()
+	byMethod := make(map[string]string, len(clusterTools))
+	for name, tool := range clusterTools {
+		byMethod[tool.method] = name
 	}
-	tools := registry.ListTools()
-	got := make(map[string]struct{}, len(tools))
-	for _, td := range tools {
-		got[td.Name] = struct{}{}
+
+	for _, desc := range platformv1.ClusterService_ServiceDesc.Methods {
+		method := path.Join("/", platformv1.ClusterService_ServiceDesc.ServiceName, desc.MethodName)
+		name, ok := byMethod[method]
+		require.True(t, ok, "%s has no tool", method)
+		scope := grpcapi.ScopeForMethod(method)
+		require.NotEmpty(t, scope, "%s has no gRPC scope", method)
+		assert.Equal(t, scope, permissions[name], name)
 	}
-	for _, name := range expected {
-		if _, ok := got[name]; !ok {
-			t.Errorf("missing registered tool: %s", name)
+	assert.Len(t, clusterTools, len(platformv1.ClusterService_ServiceDesc.Methods))
+}
+
+// Every tool is advertised with a schema, and Bootstrap and Join require the
+// fields gRPC refuses to go without.
+func TestClusterTools_AreRegisteredWithTheirSchema(t *testing.T) {
+	registered := make(map[string]map[string]interface{})
+	for _, def := range newClusterTestRegistry(nil).ListTools() {
+		registered[def.Name] = def.InputSchema
+	}
+
+	for name := range clusterTools {
+		_, ok := registered[name]
+		require.True(t, ok, "%s is not registered", name)
+	}
+	assert.ElementsMatch(t, []string{"cluster_name", "node_name"}, registered["platform_cluster_bootstrap"]["required"])
+	assert.ElementsMatch(t, []string{"node_name", "seed_addresses"}, registered["platform_cluster_join"]["required"])
+}
+
+// The tool decodes its arguments into the gRPC request and answers the gRPC
+// response under the proto field names, enums by name.
+func TestClusterTools_CallTheServicer(t *testing.T) {
+	fake := &fakeMCPCluster{}
+	registry := newClusterTestRegistry(fake)
+
+	result, err := registry.ExecuteTool(context.Background(), "platform_cluster_status",
+		map[string]interface{}{"include_nodes": true})
+
+	require.NoError(t, err)
+	require.NotNil(t, fake.got)
+	assert.True(t, fake.got.GetIncludeNodes())
+	assert.Equal(t, map[string]interface{}{
+		"cluster": map[string]interface{}{"name": "edge", "state": "CLUSTER_STATE_HEALTHY"},
+	}, result)
+}
+
+// A servicer refusal reaches the caller with its gRPC status unchanged.
+func TestClusterTools_PassTheServicerStatusThrough(t *testing.T) {
+	registry := newClusterTestRegistry(&fakeMCPCluster{})
+
+	_, err := registry.ExecuteTool(context.Background(), "platform_cluster_join",
+		map[string]interface{}{"node_name": "node-2", "seed_addresses": []interface{}{"10.0.0.1:7000"}})
+	assert.Equal(t, codes.Unavailable, status.Code(err), "err = %v", err)
+
+	_, err = registry.ExecuteTool(context.Background(), "platform_cluster_leave", map[string]interface{}{})
+	assert.Equal(t, codes.Unimplemented, status.Code(err), "err = %v", err)
+}
+
+// Without a ClusterService servicer every tool refuses with
+// ErrClusterNotConfigured.
+func TestClusterTools_RefuseWhenTheClusterServiceIsNotWired(t *testing.T) {
+	for _, provider := range []ServiceProvider{
+		newMockServiceProvider(),
+		clusterTestProvider{mockServiceProvider: newMockServiceProvider()},
+	} {
+		registry := NewToolRegistry(provider, logging.DefaultLogger())
+		for name := range clusterTools {
+			_, err := registry.ExecuteTool(context.Background(), name, map[string]interface{}{})
+			require.ErrorIs(t, err, ErrClusterNotConfigured, name)
 		}
 	}
 }
 
-// TestDispatchClusterTool_UnknownReturnsHandledFalse verifies that the
-// cluster dispatcher returns handled=false for tool names that are not
-// platform_cluster_*. This lets the central ExecuteTool fall through to
-// other dispatchers and ultimately the unknown-tool error.
-func TestDispatchClusterTool_UnknownReturnsHandledFalse(t *testing.T) {
-	stub := &clusterStubProvider{}
-	svc := &clusterCombinedProvider{
-		mockServiceProvider: newMockServiceProvider(),
-		clusterStubProvider: stub,
-	}
-	registry := NewToolRegistry(svc, logging.DefaultLogger())
-	ctx := context.Background()
+// An argument the request does not declare is refused before the servicer
+// runs.
+func TestClusterTools_RejectArgumentsTheRequestDoesNotHave(t *testing.T) {
+	fake := &fakeMCPCluster{}
+	registry := newClusterTestRegistry(fake)
 
-	result, handled, err := registry.dispatchClusterTool(ctx, "platform_bmc_power_on", map[string]interface{}{})
-	if handled {
-		t.Errorf("expected handled=false for non-cluster tool, got true")
-	}
-	if err != nil {
-		t.Errorf("expected nil error for non-cluster tool, got %v", err)
-	}
-	if result != nil {
-		t.Errorf("expected nil result for non-cluster tool, got %v", result)
-	}
+	_, err := registry.ExecuteTool(context.Background(), "platform_cluster_status",
+		map[string]interface{}{"include_nodes": true, "seed_addresses": []interface{}{"x:1"}})
+
+	var invalid ErrInvalidArgument
+	require.ErrorAs(t, err, &invalid)
+	assert.Nil(t, fake.got, "the servicer ran for a malformed call")
 }
 
-// TestClusterProvider_NilFromRegistry verifies that the clusterProvider()
-// helper returns nil when the wrapped ServiceProvider does not satisfy
-// ClusterProvider. The downstream effect is ErrClusterNotConfigured.
-func TestClusterProvider_NilFromRegistry(t *testing.T) {
-	svc := newMockServiceProvider()
-	registry := NewToolRegistry(svc, logging.DefaultLogger())
-	if p := registry.clusterProvider(); p != nil {
-		t.Fatalf("expected nil ClusterProvider, got %T", p)
-	}
+// The cluster dispatcher leaves a tool that is not platform_cluster_* to the
+// next dispatcher.
+func TestDispatchClusterTool_UnknownReturnsHandledFalse(t *testing.T) {
+	registry := newClusterTestRegistry(&fakeMCPCluster{})
+
+	result, handled, err := registry.dispatchClusterTool(context.Background(), "platform_bmc_power_on", map[string]interface{}{})
+
+	assert.False(t, handled)
+	assert.NoError(t, err)
+	assert.Nil(t, result)
 }

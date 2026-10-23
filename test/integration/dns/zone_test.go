@@ -15,14 +15,13 @@
 
 // Package dns provides integration tests for DNS zone CRUD operations.
 // These tests verify end-to-end DNS zone functionality with real in-memory datastore.
-// Run via: make integration-test-dns or INTEGRATION_TEST=1 go test ./test/integration/dns/...
+// Run via: make integration-test-dns
 package dns
 
 import (
 	"context"
-	"os"
+	"fmt"
 	"testing"
-	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/dns"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/dns/entities"
@@ -32,13 +31,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
-
-// skipIfNotIntegration skips the test if the INTEGRATION_TEST env var is not set.
-func skipIfNotIntegration(t *testing.T) {
-	if os.Getenv("INTEGRATION_TEST") == "" {
-		t.Skip("Skipping integration test. Set INTEGRATION_TEST=1 to run.")
-	}
-}
 
 // createTestDatastore creates a mock QuicBaaS-backed datastore for integration testing.
 func createTestDatastore(t *testing.T) *dns.Datastore {
@@ -108,8 +100,6 @@ func createTestZone(name string, internal bool) *entities.Zone {
 
 // TestZone_Create_Success tests successful zone creation.
 func TestZone_Create_Success(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	svc := createTestService(t)
 	ctx := context.Background()
 
@@ -132,8 +122,6 @@ func TestZone_Create_Success(t *testing.T) {
 
 // TestZone_Create_InternalZone tests creating an internal zone.
 func TestZone_Create_InternalZone(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	svc := createTestService(t)
 	ctx := context.Background()
 
@@ -151,8 +139,6 @@ func TestZone_Create_InternalZone(t *testing.T) {
 
 // TestZone_Update_Success tests successful zone update.
 func TestZone_Update_Success(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	svc := createTestService(t)
 	ctx := context.Background()
 
@@ -177,8 +163,6 @@ func TestZone_Update_Success(t *testing.T) {
 
 // TestZone_Update_AddRecords tests adding records to an existing zone.
 func TestZone_Update_AddRecords(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	svc := createTestService(t)
 	ctx := context.Background()
 
@@ -212,8 +196,6 @@ func TestZone_Update_AddRecords(t *testing.T) {
 
 // TestZone_Update_RemoveRecords tests removing records from an existing zone.
 func TestZone_Update_RemoveRecords(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	svc := createTestService(t)
 	ctx := context.Background()
 
@@ -235,8 +217,6 @@ func TestZone_Update_RemoveRecords(t *testing.T) {
 
 // TestZone_Delete_Success tests successful zone deletion.
 func TestZone_Delete_Success(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	svc := createTestService(t)
 	ctx := context.Background()
 
@@ -258,8 +238,6 @@ func TestZone_Delete_Success(t *testing.T) {
 
 // TestZone_Get_NotFound tests retrieving a non-existent zone.
 func TestZone_Get_NotFound(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	svc := createTestService(t)
 	ctx := context.Background()
 
@@ -269,8 +247,6 @@ func TestZone_Get_NotFound(t *testing.T) {
 
 // TestZone_Get_NormalizesName tests that zone retrieval normalizes names.
 func TestZone_Get_NormalizesName(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	svc := createTestService(t)
 	ctx := context.Background()
 
@@ -285,8 +261,6 @@ func TestZone_Get_NormalizesName(t *testing.T) {
 
 // TestZone_MultipleZones tests managing multiple zones concurrently.
 func TestZone_MultipleZones(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	svc := createTestService(t)
 	ctx := context.Background()
 
@@ -315,8 +289,6 @@ func TestZone_MultipleZones(t *testing.T) {
 
 // TestZone_RecordSetPersistence tests that all record types persist correctly.
 func TestZone_RecordSetPersistence(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	svc := createTestService(t)
 	ctx := context.Background()
 
@@ -386,8 +358,6 @@ func TestZone_RecordSetPersistence(t *testing.T) {
 
 // TestZone_ConcurrentOperations tests concurrent zone operations.
 func TestZone_ConcurrentOperations(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	svc := createTestService(t)
 	ctx := context.Background()
 
@@ -397,7 +367,7 @@ func TestZone_ConcurrentOperations(t *testing.T) {
 
 	for i := 0; i < numGoroutines; i++ {
 		go func(idx int) {
-			zoneName := "concurrent-" + time.Now().Format("150405.000000000") + ".com."
+			zoneName := fmt.Sprintf("concurrent-%d.com.", idx)
 			zone := createTestZone(zoneName, idx%2 == 0)
 			if err := svc.Save(ctx, zone); err != nil {
 				errChan <- err
@@ -409,7 +379,6 @@ func TestZone_ConcurrentOperations(t *testing.T) {
 			}
 			done <- true
 		}(i)
-		time.Sleep(time.Microsecond) // Small delay for unique timestamps
 	}
 
 	// Wait for all goroutines
@@ -427,8 +396,6 @@ func TestZone_ConcurrentOperations(t *testing.T) {
 
 // TestZone_SOARecordUpdate tests updating SOA record fields.
 func TestZone_SOARecordUpdate(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	svc := createTestService(t)
 	ctx := context.Background()
 

@@ -24,7 +24,26 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 )
+
+// levelNames spells the platform's custom slog levels the way Filter and
+// the console Logs page read them. slog names an unregistered level as an
+// offset from the nearest standard one ("ERROR+12"), which would rank as
+// INFO under a level filter and render as an unknown level.
+var levelNames = map[slog.Level]string{
+	logging.LevelFatal:    "FATAL",
+	logging.LevelSecurity: "SECURITY",
+}
+
+// levelName returns the on-disk name of a record level.
+func levelName(level slog.Level) string {
+	if name, ok := levelNames[level]; ok {
+		return name
+	}
+	return level.String()
+}
 
 // Options configures a JSON-lines file handler.
 type Options struct {
@@ -389,7 +408,7 @@ func encodeRecord(buf *bytes.Buffer, r slog.Record, service string, baseAttrs []
 
 	obj := map[string]any{
 		"time":    r.Time.UTC().Format(time.RFC3339Nano),
-		"level":   r.Level.String(),
+		"level":   levelName(r.Level),
 		"msg":     r.Message,
 		"service": effectiveService,
 	}

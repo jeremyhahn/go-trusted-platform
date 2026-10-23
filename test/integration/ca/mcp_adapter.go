@@ -25,8 +25,8 @@ import (
 	"net/http"
 
 	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
+	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers/surface"
 	"os"
-	"strings"
 	"sync/atomic"
 	"time"
 )
@@ -53,15 +53,16 @@ const (
 
 // MCP Tool names for CA operations.
 const (
-	MCPToolCAInfo   = "ca_info"
-	MCPToolCAIssue  = "ca_issue"
-	MCPToolCAGet    = "ca_get"
-	MCPToolCAList   = "ca_list"
-	MCPToolCARevoke = "ca_revoke"
-	MCPToolCARenew  = "ca_renew"
-	MCPToolCAVerify = "ca_verify"
-	MCPToolCACRL    = "ca_crl"
-	MCPToolCABundle = "ca_bundle"
+	MCPToolCAInfo    = "ca_info"
+	MCPToolCAIssue   = "ca_issue"
+	MCPToolCASignCSR = "ca_sign_csr"
+	MCPToolCAGet     = "ca_get"
+	MCPToolCAList    = "ca_list"
+	MCPToolCARevoke  = "ca_revoke"
+	MCPToolCARenew   = "ca_renew"
+	MCPToolCAVerify  = "ca_verify"
+	MCPToolCACRL     = "ca_crl"
+	MCPToolCABundle  = "ca_bundle"
 )
 
 // =============================================================================
@@ -210,14 +211,8 @@ func (m *MCPAdapter) Setup(ctx context.Context) error {
 	if endpoint == "" {
 		endpoint = GetServiceEndpoints().PlatformMCP
 	}
-	// The env var may already carry a scheme (run-integration-tests.sh exports
-	// http://localhost:9445); prepending unconditionally yields http://http//...
-	if !strings.HasPrefix(endpoint, "http://") && !strings.HasPrefix(endpoint, "https://") {
-		endpoint = "http://" + endpoint
-	}
-	m.endpoint = endpoint
-
-	m.httpClient = helpers.NewPlainHTTPClient(DefaultMCPTimeoutCA)
+	m.endpoint = helpers.MCPBaseURL(endpoint)
+	m.httpClient = helpers.NewHTTPClient(DefaultMCPTimeoutCA)
 
 	initReq := mcpCAInitializeRequest{
 		ProtocolVersion: mcpCAProtocolVersion,
@@ -440,6 +435,7 @@ type mcpCACRLResp struct {
 			RevocationTime *protoTimestamp `json:"revocation_time"`
 			Reason         int32           `json:"reason"`
 		} `json:"revoked_certs"`
+		Data []byte `json:"data"`
 	} `json:"crl"`
 }
 
@@ -518,7 +514,7 @@ func (m *MCPAdapter) Info(ctx context.Context) (*InfoResult, error) {
 // Init initializes the CA via MCP.
 // Note: CA initialization is done during daemon startup, not via MCP.
 func (m *MCPAdapter) Init(ctx context.Context, opts InitOptions) (*InitResult, error) {
-	return nil, ErrNotImplemented{Feature: "CA init via MCP"}
+	return nil, surface.ErrNoSurface{Transport: "MCP", Operation: "CA init"}
 }
 
 // =============================================================================
@@ -562,6 +558,33 @@ func (m *MCPAdapter) IssueCertificate(ctx context.Context, opts IssueCertificate
 		return nil, err
 	}
 
+	return mcpIssueResult(&resp), nil
+}
+
+// SignCSR certifies a KMS key's CSR via the ca_sign_csr tool.
+func (m *MCPAdapter) SignCSR(ctx context.Context, opts SignCSROptions) (*IssueCertificateResult, error) {
+	args := map[string]interface{}{
+		"csr_pem": opts.CSRPEM,
+	}
+	if opts.ValidDays > 0 {
+		args["valid_days"] = opts.ValidDays
+	}
+
+	result, err := m.callTool(ctx, MCPToolCASignCSR, args)
+	if err != nil {
+		return nil, ErrCallFailed{Protocol: "MCP", Method: MCPToolCASignCSR, Err: err}
+	}
+
+	var resp mcpCACertResp
+	if err := m.parseToolResult(result, MCPToolCASignCSR, &resp); err != nil {
+		return nil, err
+	}
+
+	return mcpIssueResult(&resp), nil
+}
+
+// mcpIssueResult converts an issued-certificate response into the shared result.
+func mcpIssueResult(resp *mcpCACertResp) *IssueCertificateResult {
 	issueResult := &IssueCertificateResult{}
 
 	if resp.Status != nil {
@@ -575,7 +598,7 @@ func (m *MCPAdapter) IssueCertificate(ctx context.Context, opts IssueCertificate
 		}
 	}
 
-	return issueResult, nil
+	return issueResult
 }
 
 // =============================================================================
@@ -809,6 +832,7 @@ func (m *MCPAdapter) GetCRL(ctx context.Context, opts GetCRLOptions) (*GetCRLRes
 	crlResult := &GetCRLResult{}
 
 	if resp.CRL != nil {
+		crlResult.Data = resp.CRL.Data
 		crlResult.RevokedCount = resp.CRL.RevokedCount
 		if resp.CRL.LastUpdate != nil {
 			crlResult.ThisUpdate = resp.CRL.LastUpdate.toTime()
@@ -827,6 +851,10 @@ func (m *MCPAdapter) GetCRL(ctx context.Context, opts GetCRLOptions) (*GetCRLRes
 			}
 			crlResult.RevokedCerts = append(crlResult.RevokedCerts, rce)
 		}
+	}
+
+	if err := crlResult.setIssuerFromData("MCP"); err != nil {
+		return nil, err
 	}
 
 	return crlResult, nil
@@ -860,7 +888,7 @@ func (m *MCPAdapter) GenerateCRL(ctx context.Context) (*GenerateCRLResult, error
 // ExportCRL exports the CRL via MCP.
 // Note: CRL export to file is a CLI operation, not exposed via MCP.
 func (m *MCPAdapter) ExportCRL(ctx context.Context, output string) (*ExportCRLResult, error) {
-	return nil, ErrNotImplemented{Feature: "CRL export via MCP"}
+	return nil, surface.ErrNoSurface{Transport: "MCP", Operation: "CRL export"}
 }
 
 // =============================================================================
@@ -909,13 +937,13 @@ func (m *MCPAdapter) ExportBundle(ctx context.Context, output string) (*ExportBu
 // InstallCACertificates installs CA certificates via MCP.
 // Note: CA certificate installation is a local OS operation, not exposed via MCP.
 func (m *MCPAdapter) InstallCACertificates(ctx context.Context) (*InstallCACertificatesResult, error) {
-	return nil, ErrNotImplemented{Feature: "install CA certificates via MCP"}
+	return nil, surface.ErrNoSurface{Transport: "MCP", Operation: "install CA certificates"}
 }
 
 // UninstallCACertificates uninstalls CA certificates via MCP.
 // Note: CA certificate uninstallation is a local OS operation, not exposed via MCP.
 func (m *MCPAdapter) UninstallCACertificates(ctx context.Context) (*UninstallCACertificatesResult, error) {
-	return nil, ErrNotImplemented{Feature: "uninstall CA certificates via MCP"}
+	return nil, surface.ErrNoSurface{Transport: "MCP", Operation: "uninstall CA certificates"}
 }
 
 // Ensure MCPAdapter implements CACommands interface.

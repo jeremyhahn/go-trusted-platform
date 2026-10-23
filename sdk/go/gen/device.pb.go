@@ -919,7 +919,8 @@ type DeviceProfile struct {
 	// Set it for fleets whose node webservice certificates carry a role name
 	// rather than the device name (the shipped worker templates issue
 	// compute.<domain>.internal to every worker). Writable on create and
-	// update; an update that omits it keeps the stored value.
+	// update; an update that omits it keeps the stored value. To clear it,
+	// set UpdateProfileRequest.clear_tls_server_name.
 	TlsServerName string `protobuf:"bytes,26,opt,name=tls_server_name,json=tlsServerName,proto3" json:"tls_server_name,omitempty"`
 	// pcr_baseline is the expected measured state devices on this profile are
 	// verified against (#373). It is READ-ONLY on every transport: the
@@ -2150,10 +2151,16 @@ func (x *GetProfileResponse) GetProfile() *DeviceProfile {
 }
 
 type UpdateProfileRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Profile       *DeviceProfile         `protobuf:"bytes,1,opt,name=profile,proto3" json:"profile,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state   protoimpl.MessageState `protogen:"open.v1"`
+	Profile *DeviceProfile         `protobuf:"bytes,1,opt,name=profile,proto3" json:"profile,omitempty"`
+	// clear_tls_server_name blanks the stored tls_server_name. proto3 cannot
+	// tell an unset string from an empty one, so an empty
+	// profile.tls_server_name keeps the stored name; this flag is the
+	// deliberate clear (#462). Setting it together with a non-empty
+	// profile.tls_server_name is rejected with InvalidArgument.
+	ClearTlsServerName bool `protobuf:"varint,2,opt,name=clear_tls_server_name,json=clearTlsServerName,proto3" json:"clear_tls_server_name,omitempty"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
 }
 
 func (x *UpdateProfileRequest) Reset() {
@@ -2191,6 +2198,13 @@ func (x *UpdateProfileRequest) GetProfile() *DeviceProfile {
 		return x.Profile
 	}
 	return nil
+}
+
+func (x *UpdateProfileRequest) GetClearTlsServerName() bool {
+	if x != nil {
+		return x.ClearTlsServerName
+	}
+	return false
 }
 
 type UpdateProfileResponse struct {
@@ -3153,11 +3167,14 @@ func (x *AttestDeviceResponse) GetPcrBaselineCaptured() bool {
 // device's enrolled attestation public key when no stored certificate passes
 // the preflight.
 type RecordAttestationCertificateRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	DeviceId      string                 `protobuf:"bytes,1,opt,name=device_id,json=deviceId,proto3" json:"device_id,omitempty"`
-	Reissue       bool                   `protobuf:"varint,2,opt,name=reissue,proto3" json:"reissue,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state    protoimpl.MessageState `protogen:"open.v1"`
+	DeviceId string                 `protobuf:"bytes,1,opt,name=device_id,json=deviceId,proto3" json:"device_id,omitempty"`
+	Reissue  bool                   `protobuf:"varint,2,opt,name=reissue,proto3" json:"reissue,omitempty"`
+	// clear_on_refusal removes the certificate the record holds when every
+	// candidate, that certificate included, is refused. Off by default.
+	ClearOnRefusal bool `protobuf:"varint,3,opt,name=clear_on_refusal,json=clearOnRefusal,proto3" json:"clear_on_refusal,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *RecordAttestationCertificateRequest) Reset() {
@@ -3204,9 +3221,16 @@ func (x *RecordAttestationCertificateRequest) GetReissue() bool {
 	return false
 }
 
-// RecordAttestationCertificateResponse reports what was recorded. It is only
-// returned on success; a refusal is a FAILED_PRECONDITION error whose message
-// names every candidate and why it was refused.
+func (x *RecordAttestationCertificateRequest) GetClearOnRefusal() bool {
+	if x != nil {
+		return x.ClearOnRefusal
+	}
+	return false
+}
+
+// RecordAttestationCertificateResponse reports what was recorded, or what was
+// cleared. It is only returned on success; a refusal is a FAILED_PRECONDITION
+// error whose message names every candidate and why it was refused.
 type RecordAttestationCertificateResponse struct {
 	state    protoimpl.MessageState `protogen:"open.v1"`
 	Status   *Status                `protobuf:"bytes,1,opt,name=status,proto3" json:"status,omitempty"`
@@ -3227,8 +3251,14 @@ type RecordAttestationCertificateResponse struct {
 	Subject           string                 `protobuf:"bytes,9,opt,name=subject,proto3" json:"subject,omitempty"`
 	CertificateSerial string                 `protobuf:"bytes,10,opt,name=certificate_serial,json=certificateSerial,proto3" json:"certificate_serial,omitempty"`
 	NotAfter          *timestamppb.Timestamp `protobuf:"bytes,11,opt,name=not_after,json=notAfter,proto3" json:"not_after,omitempty"`
-	// attest_cert is the recorded certificate, PEM encoded.
-	AttestCert    string `protobuf:"bytes,12,opt,name=attest_cert,json=attestCert,proto3" json:"attest_cert,omitempty"`
+	// attest_cert is the recorded certificate, PEM encoded; empty when cleared.
+	AttestCert string `protobuf:"bytes,12,opt,name=attest_cert,json=attestCert,proto3" json:"attest_cert,omitempty"`
+	// cleared is true when clear_on_refusal removed a refused certificate.
+	// source and attest_cert are then empty, subject, certificate_serial and
+	// not_after describe the removed certificate when it parsed, and refusal
+	// names every candidate and why it was refused.
+	Cleared       bool   `protobuf:"varint,13,opt,name=cleared,proto3" json:"cleared,omitempty"`
+	Refusal       string `protobuf:"bytes,14,opt,name=refusal,proto3" json:"refusal,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -3347,6 +3377,678 @@ func (x *RecordAttestationCertificateResponse) GetAttestCert() string {
 	return ""
 }
 
+func (x *RecordAttestationCertificateResponse) GetCleared() bool {
+	if x != nil {
+		return x.Cleared
+	}
+	return false
+}
+
+func (x *RecordAttestationCertificateResponse) GetRefusal() string {
+	if x != nil {
+		return x.Refusal
+	}
+	return ""
+}
+
+// DisableDeviceRequest names the device to disable and why. reason is
+// trimmed, at most 256 bytes, and defaults to "disabled".
+type DisableDeviceRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	DeviceId      string                 `protobuf:"bytes,1,opt,name=device_id,json=deviceId,proto3" json:"device_id,omitempty"`
+	Reason        string                 `protobuf:"bytes,2,opt,name=reason,proto3" json:"reason,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DisableDeviceRequest) Reset() {
+	*x = DisableDeviceRequest{}
+	mi := &file_device_proto_msgTypes[48]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DisableDeviceRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DisableDeviceRequest) ProtoMessage() {}
+
+func (x *DisableDeviceRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_device_proto_msgTypes[48]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DisableDeviceRequest.ProtoReflect.Descriptor instead.
+func (*DisableDeviceRequest) Descriptor() ([]byte, []int) {
+	return file_device_proto_rawDescGZIP(), []int{48}
+}
+
+func (x *DisableDeviceRequest) GetDeviceId() string {
+	if x != nil {
+		return x.DeviceId
+	}
+	return ""
+}
+
+func (x *DisableDeviceRequest) GetReason() string {
+	if x != nil {
+		return x.Reason
+	}
+	return ""
+}
+
+// EnableDeviceRequest names the disabled device to re-enable.
+type EnableDeviceRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	DeviceId      string                 `protobuf:"bytes,1,opt,name=device_id,json=deviceId,proto3" json:"device_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *EnableDeviceRequest) Reset() {
+	*x = EnableDeviceRequest{}
+	mi := &file_device_proto_msgTypes[49]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *EnableDeviceRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*EnableDeviceRequest) ProtoMessage() {}
+
+func (x *EnableDeviceRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_device_proto_msgTypes[49]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use EnableDeviceRequest.ProtoReflect.Descriptor instead.
+func (*EnableDeviceRequest) Descriptor() ([]byte, []int) {
+	return file_device_proto_rawDescGZIP(), []int{49}
+}
+
+func (x *EnableDeviceRequest) GetDeviceId() string {
+	if x != nil {
+		return x.DeviceId
+	}
+	return ""
+}
+
+// DeviceLifecycleResponse reports the state an operator Enable or Disable
+// left the device in.
+type DeviceLifecycleResponse struct {
+	state    protoimpl.MessageState `protogen:"open.v1"`
+	Status   *Status                `protobuf:"bytes,1,opt,name=status,proto3" json:"status,omitempty"`
+	DeviceId uint64                 `protobuf:"varint,2,opt,name=device_id,json=deviceId,proto3" json:"device_id,omitempty"`
+	// state is the device's state after the call: "suspended" after a
+	// disable, "quarantined" after an enable.
+	State         string `protobuf:"bytes,3,opt,name=state,proto3" json:"state,omitempty"`
+	PreviousState string `protobuf:"bytes,4,opt,name=previous_state,json=previousState,proto3" json:"previous_state,omitempty"`
+	StateReason   string `protobuf:"bytes,5,opt,name=state_reason,json=stateReason,proto3" json:"state_reason,omitempty"`
+	// reattestation_requested is true when an enable queued an immediate
+	// re-attestation; otherwise the collector's scheduled cycle re-attests
+	// the device.
+	ReattestationRequested bool `protobuf:"varint,6,opt,name=reattestation_requested,json=reattestationRequested,proto3" json:"reattestation_requested,omitempty"`
+	unknownFields          protoimpl.UnknownFields
+	sizeCache              protoimpl.SizeCache
+}
+
+func (x *DeviceLifecycleResponse) Reset() {
+	*x = DeviceLifecycleResponse{}
+	mi := &file_device_proto_msgTypes[50]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DeviceLifecycleResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DeviceLifecycleResponse) ProtoMessage() {}
+
+func (x *DeviceLifecycleResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_device_proto_msgTypes[50]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DeviceLifecycleResponse.ProtoReflect.Descriptor instead.
+func (*DeviceLifecycleResponse) Descriptor() ([]byte, []int) {
+	return file_device_proto_rawDescGZIP(), []int{50}
+}
+
+func (x *DeviceLifecycleResponse) GetStatus() *Status {
+	if x != nil {
+		return x.Status
+	}
+	return nil
+}
+
+func (x *DeviceLifecycleResponse) GetDeviceId() uint64 {
+	if x != nil {
+		return x.DeviceId
+	}
+	return 0
+}
+
+func (x *DeviceLifecycleResponse) GetState() string {
+	if x != nil {
+		return x.State
+	}
+	return ""
+}
+
+func (x *DeviceLifecycleResponse) GetPreviousState() string {
+	if x != nil {
+		return x.PreviousState
+	}
+	return ""
+}
+
+func (x *DeviceLifecycleResponse) GetStateReason() string {
+	if x != nil {
+		return x.StateReason
+	}
+	return ""
+}
+
+func (x *DeviceLifecycleResponse) GetReattestationRequested() bool {
+	if x != nil {
+		return x.ReattestationRequested
+	}
+	return false
+}
+
+// DeviceTemplateCreateRequest carries the template to store. A zero id is
+// assigned by the server; name is required.
+type DeviceTemplateCreateRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Template      *DeviceTemplate        `protobuf:"bytes,1,opt,name=template,proto3" json:"template,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DeviceTemplateCreateRequest) Reset() {
+	*x = DeviceTemplateCreateRequest{}
+	mi := &file_device_proto_msgTypes[51]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DeviceTemplateCreateRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DeviceTemplateCreateRequest) ProtoMessage() {}
+
+func (x *DeviceTemplateCreateRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_device_proto_msgTypes[51]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DeviceTemplateCreateRequest.ProtoReflect.Descriptor instead.
+func (*DeviceTemplateCreateRequest) Descriptor() ([]byte, []int) {
+	return file_device_proto_rawDescGZIP(), []int{51}
+}
+
+func (x *DeviceTemplateCreateRequest) GetTemplate() *DeviceTemplate {
+	if x != nil {
+		return x.Template
+	}
+	return nil
+}
+
+type DeviceTemplateCreateResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Status        *Status                `protobuf:"bytes,1,opt,name=status,proto3" json:"status,omitempty"`
+	Template      *DeviceTemplate        `protobuf:"bytes,2,opt,name=template,proto3" json:"template,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DeviceTemplateCreateResponse) Reset() {
+	*x = DeviceTemplateCreateResponse{}
+	mi := &file_device_proto_msgTypes[52]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DeviceTemplateCreateResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DeviceTemplateCreateResponse) ProtoMessage() {}
+
+func (x *DeviceTemplateCreateResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_device_proto_msgTypes[52]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DeviceTemplateCreateResponse.ProtoReflect.Descriptor instead.
+func (*DeviceTemplateCreateResponse) Descriptor() ([]byte, []int) {
+	return file_device_proto_rawDescGZIP(), []int{52}
+}
+
+func (x *DeviceTemplateCreateResponse) GetStatus() *Status {
+	if x != nil {
+		return x.Status
+	}
+	return nil
+}
+
+func (x *DeviceTemplateCreateResponse) GetTemplate() *DeviceTemplate {
+	if x != nil {
+		return x.Template
+	}
+	return nil
+}
+
+type DeviceTemplateGetRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Id            uint64                 `protobuf:"varint,1,opt,name=id,proto3" json:"id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DeviceTemplateGetRequest) Reset() {
+	*x = DeviceTemplateGetRequest{}
+	mi := &file_device_proto_msgTypes[53]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DeviceTemplateGetRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DeviceTemplateGetRequest) ProtoMessage() {}
+
+func (x *DeviceTemplateGetRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_device_proto_msgTypes[53]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DeviceTemplateGetRequest.ProtoReflect.Descriptor instead.
+func (*DeviceTemplateGetRequest) Descriptor() ([]byte, []int) {
+	return file_device_proto_rawDescGZIP(), []int{53}
+}
+
+func (x *DeviceTemplateGetRequest) GetId() uint64 {
+	if x != nil {
+		return x.Id
+	}
+	return 0
+}
+
+type DeviceTemplateGetResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Template      *DeviceTemplate        `protobuf:"bytes,1,opt,name=template,proto3" json:"template,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DeviceTemplateGetResponse) Reset() {
+	*x = DeviceTemplateGetResponse{}
+	mi := &file_device_proto_msgTypes[54]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DeviceTemplateGetResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DeviceTemplateGetResponse) ProtoMessage() {}
+
+func (x *DeviceTemplateGetResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_device_proto_msgTypes[54]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DeviceTemplateGetResponse.ProtoReflect.Descriptor instead.
+func (*DeviceTemplateGetResponse) Descriptor() ([]byte, []int) {
+	return file_device_proto_rawDescGZIP(), []int{54}
+}
+
+func (x *DeviceTemplateGetResponse) GetTemplate() *DeviceTemplate {
+	if x != nil {
+		return x.Template
+	}
+	return nil
+}
+
+type DeviceTemplateListRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Pagination    *PaginationRequest     `protobuf:"bytes,1,opt,name=pagination,proto3" json:"pagination,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DeviceTemplateListRequest) Reset() {
+	*x = DeviceTemplateListRequest{}
+	mi := &file_device_proto_msgTypes[55]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DeviceTemplateListRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DeviceTemplateListRequest) ProtoMessage() {}
+
+func (x *DeviceTemplateListRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_device_proto_msgTypes[55]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DeviceTemplateListRequest.ProtoReflect.Descriptor instead.
+func (*DeviceTemplateListRequest) Descriptor() ([]byte, []int) {
+	return file_device_proto_rawDescGZIP(), []int{55}
+}
+
+func (x *DeviceTemplateListRequest) GetPagination() *PaginationRequest {
+	if x != nil {
+		return x.Pagination
+	}
+	return nil
+}
+
+type DeviceTemplateListResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Templates     []*DeviceTemplate      `protobuf:"bytes,1,rep,name=templates,proto3" json:"templates,omitempty"`
+	Pagination    *PaginationResponse    `protobuf:"bytes,2,opt,name=pagination,proto3" json:"pagination,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DeviceTemplateListResponse) Reset() {
+	*x = DeviceTemplateListResponse{}
+	mi := &file_device_proto_msgTypes[56]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DeviceTemplateListResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DeviceTemplateListResponse) ProtoMessage() {}
+
+func (x *DeviceTemplateListResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_device_proto_msgTypes[56]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DeviceTemplateListResponse.ProtoReflect.Descriptor instead.
+func (*DeviceTemplateListResponse) Descriptor() ([]byte, []int) {
+	return file_device_proto_rawDescGZIP(), []int{56}
+}
+
+func (x *DeviceTemplateListResponse) GetTemplates() []*DeviceTemplate {
+	if x != nil {
+		return x.Templates
+	}
+	return nil
+}
+
+func (x *DeviceTemplateListResponse) GetPagination() *PaginationResponse {
+	if x != nil {
+		return x.Pagination
+	}
+	return nil
+}
+
+// DeviceTemplateUpdateRequest carries the template to store; its id names
+// the template to replace and is required.
+type DeviceTemplateUpdateRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Template      *DeviceTemplate        `protobuf:"bytes,1,opt,name=template,proto3" json:"template,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DeviceTemplateUpdateRequest) Reset() {
+	*x = DeviceTemplateUpdateRequest{}
+	mi := &file_device_proto_msgTypes[57]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DeviceTemplateUpdateRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DeviceTemplateUpdateRequest) ProtoMessage() {}
+
+func (x *DeviceTemplateUpdateRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_device_proto_msgTypes[57]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DeviceTemplateUpdateRequest.ProtoReflect.Descriptor instead.
+func (*DeviceTemplateUpdateRequest) Descriptor() ([]byte, []int) {
+	return file_device_proto_rawDescGZIP(), []int{57}
+}
+
+func (x *DeviceTemplateUpdateRequest) GetTemplate() *DeviceTemplate {
+	if x != nil {
+		return x.Template
+	}
+	return nil
+}
+
+type DeviceTemplateUpdateResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Status        *Status                `protobuf:"bytes,1,opt,name=status,proto3" json:"status,omitempty"`
+	Template      *DeviceTemplate        `protobuf:"bytes,2,opt,name=template,proto3" json:"template,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DeviceTemplateUpdateResponse) Reset() {
+	*x = DeviceTemplateUpdateResponse{}
+	mi := &file_device_proto_msgTypes[58]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DeviceTemplateUpdateResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DeviceTemplateUpdateResponse) ProtoMessage() {}
+
+func (x *DeviceTemplateUpdateResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_device_proto_msgTypes[58]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DeviceTemplateUpdateResponse.ProtoReflect.Descriptor instead.
+func (*DeviceTemplateUpdateResponse) Descriptor() ([]byte, []int) {
+	return file_device_proto_rawDescGZIP(), []int{58}
+}
+
+func (x *DeviceTemplateUpdateResponse) GetStatus() *Status {
+	if x != nil {
+		return x.Status
+	}
+	return nil
+}
+
+func (x *DeviceTemplateUpdateResponse) GetTemplate() *DeviceTemplate {
+	if x != nil {
+		return x.Template
+	}
+	return nil
+}
+
+type DeviceTemplateDeleteRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Id            uint64                 `protobuf:"varint,1,opt,name=id,proto3" json:"id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DeviceTemplateDeleteRequest) Reset() {
+	*x = DeviceTemplateDeleteRequest{}
+	mi := &file_device_proto_msgTypes[59]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DeviceTemplateDeleteRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DeviceTemplateDeleteRequest) ProtoMessage() {}
+
+func (x *DeviceTemplateDeleteRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_device_proto_msgTypes[59]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DeviceTemplateDeleteRequest.ProtoReflect.Descriptor instead.
+func (*DeviceTemplateDeleteRequest) Descriptor() ([]byte, []int) {
+	return file_device_proto_rawDescGZIP(), []int{59}
+}
+
+func (x *DeviceTemplateDeleteRequest) GetId() uint64 {
+	if x != nil {
+		return x.Id
+	}
+	return 0
+}
+
+type DeviceTemplateDeleteResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Status        *Status                `protobuf:"bytes,1,opt,name=status,proto3" json:"status,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DeviceTemplateDeleteResponse) Reset() {
+	*x = DeviceTemplateDeleteResponse{}
+	mi := &file_device_proto_msgTypes[60]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DeviceTemplateDeleteResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DeviceTemplateDeleteResponse) ProtoMessage() {}
+
+func (x *DeviceTemplateDeleteResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_device_proto_msgTypes[60]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DeviceTemplateDeleteResponse.ProtoReflect.Descriptor instead.
+func (*DeviceTemplateDeleteResponse) Descriptor() ([]byte, []int) {
+	return file_device_proto_rawDescGZIP(), []int{60}
+}
+
+func (x *DeviceTemplateDeleteResponse) GetStatus() *Status {
+	if x != nil {
+		return x.Status
+	}
+	return nil
+}
+
 type CreateProfileFromTemplateRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	TemplateId    uint64                 `protobuf:"varint,1,opt,name=template_id,json=templateId,proto3" json:"template_id,omitempty"`
@@ -3357,7 +4059,7 @@ type CreateProfileFromTemplateRequest struct {
 
 func (x *CreateProfileFromTemplateRequest) Reset() {
 	*x = CreateProfileFromTemplateRequest{}
-	mi := &file_device_proto_msgTypes[48]
+	mi := &file_device_proto_msgTypes[61]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3369,7 +4071,7 @@ func (x *CreateProfileFromTemplateRequest) String() string {
 func (*CreateProfileFromTemplateRequest) ProtoMessage() {}
 
 func (x *CreateProfileFromTemplateRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_device_proto_msgTypes[48]
+	mi := &file_device_proto_msgTypes[61]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3382,7 +4084,7 @@ func (x *CreateProfileFromTemplateRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateProfileFromTemplateRequest.ProtoReflect.Descriptor instead.
 func (*CreateProfileFromTemplateRequest) Descriptor() ([]byte, []int) {
-	return file_device_proto_rawDescGZIP(), []int{48}
+	return file_device_proto_rawDescGZIP(), []int{61}
 }
 
 func (x *CreateProfileFromTemplateRequest) GetTemplateId() uint64 {
@@ -3409,7 +4111,7 @@ type FindConfigForDeviceRequest struct {
 
 func (x *FindConfigForDeviceRequest) Reset() {
 	*x = FindConfigForDeviceRequest{}
-	mi := &file_device_proto_msgTypes[49]
+	mi := &file_device_proto_msgTypes[62]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3421,7 +4123,7 @@ func (x *FindConfigForDeviceRequest) String() string {
 func (*FindConfigForDeviceRequest) ProtoMessage() {}
 
 func (x *FindConfigForDeviceRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_device_proto_msgTypes[49]
+	mi := &file_device_proto_msgTypes[62]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3434,7 +4136,7 @@ func (x *FindConfigForDeviceRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FindConfigForDeviceRequest.ProtoReflect.Descriptor instead.
 func (*FindConfigForDeviceRequest) Descriptor() ([]byte, []int) {
-	return file_device_proto_rawDescGZIP(), []int{49}
+	return file_device_proto_rawDescGZIP(), []int{62}
 }
 
 func (x *FindConfigForDeviceRequest) GetEkSerial() string {
@@ -3460,7 +4162,7 @@ type FindConfigForDeviceResponse struct {
 
 func (x *FindConfigForDeviceResponse) Reset() {
 	*x = FindConfigForDeviceResponse{}
-	mi := &file_device_proto_msgTypes[50]
+	mi := &file_device_proto_msgTypes[63]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3472,7 +4174,7 @@ func (x *FindConfigForDeviceResponse) String() string {
 func (*FindConfigForDeviceResponse) ProtoMessage() {}
 
 func (x *FindConfigForDeviceResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_device_proto_msgTypes[50]
+	mi := &file_device_proto_msgTypes[63]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3485,7 +4187,7 @@ func (x *FindConfigForDeviceResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FindConfigForDeviceResponse.ProtoReflect.Descriptor instead.
 func (*FindConfigForDeviceResponse) Descriptor() ([]byte, []int) {
-	return file_device_proto_rawDescGZIP(), []int{50}
+	return file_device_proto_rawDescGZIP(), []int{63}
 }
 
 func (x *FindConfigForDeviceResponse) GetProfile() *DeviceProfile {
@@ -3493,6 +4195,525 @@ func (x *FindConfigForDeviceResponse) GetProfile() *DeviceProfile {
 		return x.Profile
 	}
 	return nil
+}
+
+type BootCertificateRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// identity is the serial or IDevID common name the node claims.
+	Identity string `protobuf:"bytes,1,opt,name=identity,proto3" json:"identity,omitempty"`
+	// signature is the node's IDevID signature over the identity and the
+	// connection's exporter value (provisioning.VerifyBootCertificateProof).
+	Signature     []byte `protobuf:"bytes,2,opt,name=signature,proto3" json:"signature,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *BootCertificateRequest) Reset() {
+	*x = BootCertificateRequest{}
+	mi := &file_device_proto_msgTypes[64]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *BootCertificateRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*BootCertificateRequest) ProtoMessage() {}
+
+func (x *BootCertificateRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_device_proto_msgTypes[64]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use BootCertificateRequest.ProtoReflect.Descriptor instead.
+func (*BootCertificateRequest) Descriptor() ([]byte, []int) {
+	return file_device_proto_rawDescGZIP(), []int{64}
+}
+
+func (x *BootCertificateRequest) GetIdentity() string {
+	if x != nil {
+		return x.Identity
+	}
+	return ""
+}
+
+func (x *BootCertificateRequest) GetSignature() []byte {
+	if x != nil {
+		return x.Signature
+	}
+	return nil
+}
+
+type BootCertificateResponse struct {
+	state    protoimpl.MessageState `protogen:"open.v1"`
+	Identity string                 `protobuf:"bytes,1,opt,name=identity,proto3" json:"identity,omitempty"`
+	// idevid_chain is the recorded IDevID chain, PEM.
+	IdevidChain   string `protobuf:"bytes,2,opt,name=idevid_chain,json=idevidChain,proto3" json:"idevid_chain,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *BootCertificateResponse) Reset() {
+	*x = BootCertificateResponse{}
+	mi := &file_device_proto_msgTypes[65]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *BootCertificateResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*BootCertificateResponse) ProtoMessage() {}
+
+func (x *BootCertificateResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_device_proto_msgTypes[65]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use BootCertificateResponse.ProtoReflect.Descriptor instead.
+func (*BootCertificateResponse) Descriptor() ([]byte, []int) {
+	return file_device_proto_rawDescGZIP(), []int{65}
+}
+
+func (x *BootCertificateResponse) GetIdentity() string {
+	if x != nil {
+		return x.Identity
+	}
+	return ""
+}
+
+func (x *BootCertificateResponse) GetIdevidChain() string {
+	if x != nil {
+		return x.IdevidChain
+	}
+	return ""
+}
+
+type BootDeliveryRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// evidence is the JSON-encoded quote evidence, made over the connection's
+	// exporter value.
+	Evidence      []byte `protobuf:"bytes,1,opt,name=evidence,proto3" json:"evidence,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *BootDeliveryRequest) Reset() {
+	*x = BootDeliveryRequest{}
+	mi := &file_device_proto_msgTypes[66]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *BootDeliveryRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*BootDeliveryRequest) ProtoMessage() {}
+
+func (x *BootDeliveryRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_device_proto_msgTypes[66]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use BootDeliveryRequest.ProtoReflect.Descriptor instead.
+func (*BootDeliveryRequest) Descriptor() ([]byte, []int) {
+	return file_device_proto_rawDescGZIP(), []int{66}
+}
+
+func (x *BootDeliveryRequest) GetEvidence() []byte {
+	if x != nil {
+		return x.Evidence
+	}
+	return nil
+}
+
+type BootNetworkConfig struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Vlan          uint32                 `protobuf:"varint,1,opt,name=vlan,proto3" json:"vlan,omitempty"`
+	UseDhcp       bool                   `protobuf:"varint,2,opt,name=use_dhcp,json=useDhcp,proto3" json:"use_dhcp,omitempty"`
+	StaticIp      string                 `protobuf:"bytes,3,opt,name=static_ip,json=staticIp,proto3" json:"static_ip,omitempty"`
+	Gateway       string                 `protobuf:"bytes,4,opt,name=gateway,proto3" json:"gateway,omitempty"`
+	Dns           []string               `protobuf:"bytes,5,rep,name=dns,proto3" json:"dns,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *BootNetworkConfig) Reset() {
+	*x = BootNetworkConfig{}
+	mi := &file_device_proto_msgTypes[67]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *BootNetworkConfig) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*BootNetworkConfig) ProtoMessage() {}
+
+func (x *BootNetworkConfig) ProtoReflect() protoreflect.Message {
+	mi := &file_device_proto_msgTypes[67]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use BootNetworkConfig.ProtoReflect.Descriptor instead.
+func (*BootNetworkConfig) Descriptor() ([]byte, []int) {
+	return file_device_proto_rawDescGZIP(), []int{67}
+}
+
+func (x *BootNetworkConfig) GetVlan() uint32 {
+	if x != nil {
+		return x.Vlan
+	}
+	return 0
+}
+
+func (x *BootNetworkConfig) GetUseDhcp() bool {
+	if x != nil {
+		return x.UseDhcp
+	}
+	return false
+}
+
+func (x *BootNetworkConfig) GetStaticIp() string {
+	if x != nil {
+		return x.StaticIp
+	}
+	return ""
+}
+
+func (x *BootNetworkConfig) GetGateway() string {
+	if x != nil {
+		return x.Gateway
+	}
+	return ""
+}
+
+func (x *BootNetworkConfig) GetDns() []string {
+	if x != nil {
+		return x.Dns
+	}
+	return nil
+}
+
+type BootACL struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	Priority      int32                  `protobuf:"varint,2,opt,name=priority,proto3" json:"priority,omitempty"`
+	Match         map[string]string      `protobuf:"bytes,3,rep,name=match,proto3" json:"match,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	Action        string                 `protobuf:"bytes,4,opt,name=action,proto3" json:"action,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *BootACL) Reset() {
+	*x = BootACL{}
+	mi := &file_device_proto_msgTypes[68]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *BootACL) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*BootACL) ProtoMessage() {}
+
+func (x *BootACL) ProtoReflect() protoreflect.Message {
+	mi := &file_device_proto_msgTypes[68]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use BootACL.ProtoReflect.Descriptor instead.
+func (*BootACL) Descriptor() ([]byte, []int) {
+	return file_device_proto_rawDescGZIP(), []int{68}
+}
+
+func (x *BootACL) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *BootACL) GetPriority() int32 {
+	if x != nil {
+		return x.Priority
+	}
+	return 0
+}
+
+func (x *BootACL) GetMatch() map[string]string {
+	if x != nil {
+		return x.Match
+	}
+	return nil
+}
+
+func (x *BootACL) GetAction() string {
+	if x != nil {
+		return x.Action
+	}
+	return ""
+}
+
+type BootRateLimit struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	IngressMbps   int32                  `protobuf:"varint,1,opt,name=ingress_mbps,json=ingressMbps,proto3" json:"ingress_mbps,omitempty"`
+	EgressMbps    int32                  `protobuf:"varint,2,opt,name=egress_mbps,json=egressMbps,proto3" json:"egress_mbps,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *BootRateLimit) Reset() {
+	*x = BootRateLimit{}
+	mi := &file_device_proto_msgTypes[69]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *BootRateLimit) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*BootRateLimit) ProtoMessage() {}
+
+func (x *BootRateLimit) ProtoReflect() protoreflect.Message {
+	mi := &file_device_proto_msgTypes[69]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use BootRateLimit.ProtoReflect.Descriptor instead.
+func (*BootRateLimit) Descriptor() ([]byte, []int) {
+	return file_device_proto_rawDescGZIP(), []int{69}
+}
+
+func (x *BootRateLimit) GetIngressMbps() int32 {
+	if x != nil {
+		return x.IngressMbps
+	}
+	return 0
+}
+
+func (x *BootRateLimit) GetEgressMbps() int32 {
+	if x != nil {
+		return x.EgressMbps
+	}
+	return 0
+}
+
+type BootProfile struct {
+	state               protoimpl.MessageState `protogen:"open.v1"`
+	SerialNumber        string                 `protobuf:"bytes,1,opt,name=serial_number,json=serialNumber,proto3" json:"serial_number,omitempty"`
+	AdmittedNetwork     *BootNetworkConfig     `protobuf:"bytes,2,opt,name=admitted_network,json=admittedNetwork,proto3" json:"admitted_network,omitempty"`
+	ProvisioningNetwork *BootNetworkConfig     `protobuf:"bytes,3,opt,name=provisioning_network,json=provisioningNetwork,proto3" json:"provisioning_network,omitempty"`
+	Acls                []*BootACL             `protobuf:"bytes,4,rep,name=acls,proto3" json:"acls,omitempty"`
+	RateLimit           *BootRateLimit         `protobuf:"bytes,5,opt,name=rate_limit,json=rateLimit,proto3" json:"rate_limit,omitempty"`
+	unknownFields       protoimpl.UnknownFields
+	sizeCache           protoimpl.SizeCache
+}
+
+func (x *BootProfile) Reset() {
+	*x = BootProfile{}
+	mi := &file_device_proto_msgTypes[70]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *BootProfile) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*BootProfile) ProtoMessage() {}
+
+func (x *BootProfile) ProtoReflect() protoreflect.Message {
+	mi := &file_device_proto_msgTypes[70]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use BootProfile.ProtoReflect.Descriptor instead.
+func (*BootProfile) Descriptor() ([]byte, []int) {
+	return file_device_proto_rawDescGZIP(), []int{70}
+}
+
+func (x *BootProfile) GetSerialNumber() string {
+	if x != nil {
+		return x.SerialNumber
+	}
+	return ""
+}
+
+func (x *BootProfile) GetAdmittedNetwork() *BootNetworkConfig {
+	if x != nil {
+		return x.AdmittedNetwork
+	}
+	return nil
+}
+
+func (x *BootProfile) GetProvisioningNetwork() *BootNetworkConfig {
+	if x != nil {
+		return x.ProvisioningNetwork
+	}
+	return nil
+}
+
+func (x *BootProfile) GetAcls() []*BootACL {
+	if x != nil {
+		return x.Acls
+	}
+	return nil
+}
+
+func (x *BootProfile) GetRateLimit() *BootRateLimit {
+	if x != nil {
+		return x.RateLimit
+	}
+	return nil
+}
+
+type BootDeliveryResponse struct {
+	state       protoimpl.MessageState `protogen:"open.v1"`
+	Serial      string                 `protobuf:"bytes,1,opt,name=serial,proto3" json:"serial,omitempty"`
+	IdevidChain string                 `protobuf:"bytes,2,opt,name=idevid_chain,json=idevidChain,proto3" json:"idevid_chain,omitempty"`
+	AttestCert  string                 `protobuf:"bytes,3,opt,name=attest_cert,json=attestCert,proto3" json:"attest_cert,omitempty"`
+	CaBundle    string                 `protobuf:"bytes,4,opt,name=ca_bundle,json=caBundle,proto3" json:"ca_bundle,omitempty"`
+	Profile     *BootProfile           `protobuf:"bytes,5,opt,name=profile,proto3" json:"profile,omitempty"`
+	// pcr_baseline_source is "signed" or "tofu".
+	PcrBaselineSource   string `protobuf:"bytes,6,opt,name=pcr_baseline_source,json=pcrBaselineSource,proto3" json:"pcr_baseline_source,omitempty"`
+	PcrBaselineCaptured bool   `protobuf:"varint,7,opt,name=pcr_baseline_captured,json=pcrBaselineCaptured,proto3" json:"pcr_baseline_captured,omitempty"`
+	unknownFields       protoimpl.UnknownFields
+	sizeCache           protoimpl.SizeCache
+}
+
+func (x *BootDeliveryResponse) Reset() {
+	*x = BootDeliveryResponse{}
+	mi := &file_device_proto_msgTypes[71]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *BootDeliveryResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*BootDeliveryResponse) ProtoMessage() {}
+
+func (x *BootDeliveryResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_device_proto_msgTypes[71]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use BootDeliveryResponse.ProtoReflect.Descriptor instead.
+func (*BootDeliveryResponse) Descriptor() ([]byte, []int) {
+	return file_device_proto_rawDescGZIP(), []int{71}
+}
+
+func (x *BootDeliveryResponse) GetSerial() string {
+	if x != nil {
+		return x.Serial
+	}
+	return ""
+}
+
+func (x *BootDeliveryResponse) GetIdevidChain() string {
+	if x != nil {
+		return x.IdevidChain
+	}
+	return ""
+}
+
+func (x *BootDeliveryResponse) GetAttestCert() string {
+	if x != nil {
+		return x.AttestCert
+	}
+	return ""
+}
+
+func (x *BootDeliveryResponse) GetCaBundle() string {
+	if x != nil {
+		return x.CaBundle
+	}
+	return ""
+}
+
+func (x *BootDeliveryResponse) GetProfile() *BootProfile {
+	if x != nil {
+		return x.Profile
+	}
+	return nil
+}
+
+func (x *BootDeliveryResponse) GetPcrBaselineSource() string {
+	if x != nil {
+		return x.PcrBaselineSource
+	}
+	return ""
+}
+
+func (x *BootDeliveryResponse) GetPcrBaselineCaptured() bool {
+	if x != nil {
+		return x.PcrBaselineCaptured
+	}
+	return false
 }
 
 type AssignProfileToDeviceRequest struct {
@@ -3518,7 +4739,7 @@ type AssignProfileToDeviceRequest struct {
 
 func (x *AssignProfileToDeviceRequest) Reset() {
 	*x = AssignProfileToDeviceRequest{}
-	mi := &file_device_proto_msgTypes[51]
+	mi := &file_device_proto_msgTypes[72]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3530,7 +4751,7 @@ func (x *AssignProfileToDeviceRequest) String() string {
 func (*AssignProfileToDeviceRequest) ProtoMessage() {}
 
 func (x *AssignProfileToDeviceRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_device_proto_msgTypes[51]
+	mi := &file_device_proto_msgTypes[72]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3543,7 +4764,7 @@ func (x *AssignProfileToDeviceRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AssignProfileToDeviceRequest.ProtoReflect.Descriptor instead.
 func (*AssignProfileToDeviceRequest) Descriptor() ([]byte, []int) {
-	return file_device_proto_rawDescGZIP(), []int{51}
+	return file_device_proto_rawDescGZIP(), []int{72}
 }
 
 func (x *AssignProfileToDeviceRequest) GetProfileId() uint64 {
@@ -3590,7 +4811,7 @@ type AssignProfileToDeviceResponse struct {
 
 func (x *AssignProfileToDeviceResponse) Reset() {
 	*x = AssignProfileToDeviceResponse{}
-	mi := &file_device_proto_msgTypes[52]
+	mi := &file_device_proto_msgTypes[73]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3602,7 +4823,7 @@ func (x *AssignProfileToDeviceResponse) String() string {
 func (*AssignProfileToDeviceResponse) ProtoMessage() {}
 
 func (x *AssignProfileToDeviceResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_device_proto_msgTypes[52]
+	mi := &file_device_proto_msgTypes[73]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3615,7 +4836,7 @@ func (x *AssignProfileToDeviceResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AssignProfileToDeviceResponse.ProtoReflect.Descriptor instead.
 func (*AssignProfileToDeviceResponse) Descriptor() ([]byte, []int) {
-	return file_device_proto_rawDescGZIP(), []int{52}
+	return file_device_proto_rawDescGZIP(), []int{73}
 }
 
 func (x *AssignProfileToDeviceResponse) GetProfile() *DeviceProfile {
@@ -3634,7 +4855,7 @@ type UnassignProfileFromDeviceRequest struct {
 
 func (x *UnassignProfileFromDeviceRequest) Reset() {
 	*x = UnassignProfileFromDeviceRequest{}
-	mi := &file_device_proto_msgTypes[53]
+	mi := &file_device_proto_msgTypes[74]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3646,7 +4867,7 @@ func (x *UnassignProfileFromDeviceRequest) String() string {
 func (*UnassignProfileFromDeviceRequest) ProtoMessage() {}
 
 func (x *UnassignProfileFromDeviceRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_device_proto_msgTypes[53]
+	mi := &file_device_proto_msgTypes[74]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3659,7 +4880,7 @@ func (x *UnassignProfileFromDeviceRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UnassignProfileFromDeviceRequest.ProtoReflect.Descriptor instead.
 func (*UnassignProfileFromDeviceRequest) Descriptor() ([]byte, []int) {
-	return file_device_proto_rawDescGZIP(), []int{53}
+	return file_device_proto_rawDescGZIP(), []int{74}
 }
 
 func (x *UnassignProfileFromDeviceRequest) GetProfileId() uint64 {
@@ -3678,7 +4899,7 @@ type UnassignProfileFromDeviceResponse struct {
 
 func (x *UnassignProfileFromDeviceResponse) Reset() {
 	*x = UnassignProfileFromDeviceResponse{}
-	mi := &file_device_proto_msgTypes[54]
+	mi := &file_device_proto_msgTypes[75]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3690,7 +4911,7 @@ func (x *UnassignProfileFromDeviceResponse) String() string {
 func (*UnassignProfileFromDeviceResponse) ProtoMessage() {}
 
 func (x *UnassignProfileFromDeviceResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_device_proto_msgTypes[54]
+	mi := &file_device_proto_msgTypes[75]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3703,7 +4924,7 @@ func (x *UnassignProfileFromDeviceResponse) ProtoReflect() protoreflect.Message 
 
 // Deprecated: Use UnassignProfileFromDeviceResponse.ProtoReflect.Descriptor instead.
 func (*UnassignProfileFromDeviceResponse) Descriptor() ([]byte, []int) {
-	return file_device_proto_rawDescGZIP(), []int{54}
+	return file_device_proto_rawDescGZIP(), []int{75}
 }
 
 func (x *UnassignProfileFromDeviceResponse) GetProfile() *DeviceProfile {
@@ -3904,9 +5125,10 @@ const file_device_proto_rawDesc = "" +
 	"\x11GetProfileRequest\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\x04R\x02id\"J\n" +
 	"\x12GetProfileResponse\x124\n" +
-	"\aprofile\x18\x01 \x01(\v2\x1a.platform.v1.DeviceProfileR\aprofile\"L\n" +
+	"\aprofile\x18\x01 \x01(\v2\x1a.platform.v1.DeviceProfileR\aprofile\"\x7f\n" +
 	"\x14UpdateProfileRequest\x124\n" +
-	"\aprofile\x18\x01 \x01(\v2\x1a.platform.v1.DeviceProfileR\aprofile\"z\n" +
+	"\aprofile\x18\x01 \x01(\v2\x1a.platform.v1.DeviceProfileR\aprofile\x121\n" +
+	"\x15clear_tls_server_name\x18\x02 \x01(\bR\x12clearTlsServerName\"z\n" +
 	"\x15UpdateProfileResponse\x12+\n" +
 	"\x06status\x18\x01 \x01(\v2\x13.platform.v1.StatusR\x06status\x124\n" +
 	"\aprofile\x18\x02 \x01(\v2\x1a.platform.v1.DeviceProfileR\aprofile\"&\n" +
@@ -3974,10 +5196,11 @@ const file_device_proto_rawDesc = "" +
 	"\x17ak_certificate_verified\x18\f \x01(\bR\x15akCertificateVerified\x12.\n" +
 	"\x13pcr_baseline_source\x18\r \x01(\tR\x11pcrBaselineSource\x12S\n" +
 	"\x18pcr_baseline_recorded_at\x18\x0e \x01(\v2\x1a.google.protobuf.TimestampR\x15pcrBaselineRecordedAt\x122\n" +
-	"\x15pcr_baseline_captured\x18\x0f \x01(\bR\x13pcrBaselineCaptured\"\\\n" +
+	"\x15pcr_baseline_captured\x18\x0f \x01(\bR\x13pcrBaselineCaptured\"\x86\x01\n" +
 	"#RecordAttestationCertificateRequest\x12\x1b\n" +
 	"\tdevice_id\x18\x01 \x01(\tR\bdeviceId\x12\x18\n" +
-	"\areissue\x18\x02 \x01(\bR\areissue\"\xb4\x03\n" +
+	"\areissue\x18\x02 \x01(\bR\areissue\x12(\n" +
+	"\x10clear_on_refusal\x18\x03 \x01(\bR\x0eclearOnRefusal\"\xe8\x03\n" +
 	"$RecordAttestationCertificateResponse\x12+\n" +
 	"\x06status\x18\x01 \x01(\v2\x13.platform.v1.StatusR\x06status\x12\x1b\n" +
 	"\tdevice_id\x18\x02 \x01(\x04R\bdeviceId\x12\x16\n" +
@@ -3992,7 +5215,48 @@ const file_device_proto_rawDesc = "" +
 	" \x01(\tR\x11certificateSerial\x127\n" +
 	"\tnot_after\x18\v \x01(\v2\x1a.google.protobuf.TimestampR\bnotAfter\x12\x1f\n" +
 	"\vattest_cert\x18\f \x01(\tR\n" +
-	"attestCert\"}\n" +
+	"attestCert\x12\x18\n" +
+	"\acleared\x18\r \x01(\bR\acleared\x12\x18\n" +
+	"\arefusal\x18\x0e \x01(\tR\arefusal\"K\n" +
+	"\x14DisableDeviceRequest\x12\x1b\n" +
+	"\tdevice_id\x18\x01 \x01(\tR\bdeviceId\x12\x16\n" +
+	"\x06reason\x18\x02 \x01(\tR\x06reason\"2\n" +
+	"\x13EnableDeviceRequest\x12\x1b\n" +
+	"\tdevice_id\x18\x01 \x01(\tR\bdeviceId\"\xfc\x01\n" +
+	"\x17DeviceLifecycleResponse\x12+\n" +
+	"\x06status\x18\x01 \x01(\v2\x13.platform.v1.StatusR\x06status\x12\x1b\n" +
+	"\tdevice_id\x18\x02 \x01(\x04R\bdeviceId\x12\x14\n" +
+	"\x05state\x18\x03 \x01(\tR\x05state\x12%\n" +
+	"\x0eprevious_state\x18\x04 \x01(\tR\rpreviousState\x12!\n" +
+	"\fstate_reason\x18\x05 \x01(\tR\vstateReason\x127\n" +
+	"\x17reattestation_requested\x18\x06 \x01(\bR\x16reattestationRequested\"V\n" +
+	"\x1bDeviceTemplateCreateRequest\x127\n" +
+	"\btemplate\x18\x01 \x01(\v2\x1b.platform.v1.DeviceTemplateR\btemplate\"\x84\x01\n" +
+	"\x1cDeviceTemplateCreateResponse\x12+\n" +
+	"\x06status\x18\x01 \x01(\v2\x13.platform.v1.StatusR\x06status\x127\n" +
+	"\btemplate\x18\x02 \x01(\v2\x1b.platform.v1.DeviceTemplateR\btemplate\"*\n" +
+	"\x18DeviceTemplateGetRequest\x12\x0e\n" +
+	"\x02id\x18\x01 \x01(\x04R\x02id\"T\n" +
+	"\x19DeviceTemplateGetResponse\x127\n" +
+	"\btemplate\x18\x01 \x01(\v2\x1b.platform.v1.DeviceTemplateR\btemplate\"[\n" +
+	"\x19DeviceTemplateListRequest\x12>\n" +
+	"\n" +
+	"pagination\x18\x01 \x01(\v2\x1e.platform.v1.PaginationRequestR\n" +
+	"pagination\"\x98\x01\n" +
+	"\x1aDeviceTemplateListResponse\x129\n" +
+	"\ttemplates\x18\x01 \x03(\v2\x1b.platform.v1.DeviceTemplateR\ttemplates\x12?\n" +
+	"\n" +
+	"pagination\x18\x02 \x01(\v2\x1f.platform.v1.PaginationResponseR\n" +
+	"pagination\"V\n" +
+	"\x1bDeviceTemplateUpdateRequest\x127\n" +
+	"\btemplate\x18\x01 \x01(\v2\x1b.platform.v1.DeviceTemplateR\btemplate\"\x84\x01\n" +
+	"\x1cDeviceTemplateUpdateResponse\x12+\n" +
+	"\x06status\x18\x01 \x01(\v2\x13.platform.v1.StatusR\x06status\x127\n" +
+	"\btemplate\x18\x02 \x01(\v2\x1b.platform.v1.DeviceTemplateR\btemplate\"-\n" +
+	"\x1bDeviceTemplateDeleteRequest\x12\x0e\n" +
+	"\x02id\x18\x01 \x01(\x04R\x02id\"K\n" +
+	"\x1cDeviceTemplateDeleteResponse\x12+\n" +
+	"\x06status\x18\x01 \x01(\v2\x13.platform.v1.StatusR\x06status\"}\n" +
 	" CreateProfileFromTemplateRequest\x12\x1f\n" +
 	"\vtemplate_id\x18\x01 \x01(\x04R\n" +
 	"templateId\x128\n" +
@@ -4002,7 +5266,50 @@ const file_device_proto_rawDesc = "" +
 	"\vmac_address\x18\x02 \x01(\tR\n" +
 	"macAddress\"S\n" +
 	"\x1bFindConfigForDeviceResponse\x124\n" +
-	"\aprofile\x18\x01 \x01(\v2\x1a.platform.v1.DeviceProfileR\aprofile\"\xb1\x01\n" +
+	"\aprofile\x18\x01 \x01(\v2\x1a.platform.v1.DeviceProfileR\aprofile\"R\n" +
+	"\x16BootCertificateRequest\x12\x1a\n" +
+	"\bidentity\x18\x01 \x01(\tR\bidentity\x12\x1c\n" +
+	"\tsignature\x18\x02 \x01(\fR\tsignature\"X\n" +
+	"\x17BootCertificateResponse\x12\x1a\n" +
+	"\bidentity\x18\x01 \x01(\tR\bidentity\x12!\n" +
+	"\fidevid_chain\x18\x02 \x01(\tR\videvidChain\"1\n" +
+	"\x13BootDeliveryRequest\x12\x1a\n" +
+	"\bevidence\x18\x01 \x01(\fR\bevidence\"\x8b\x01\n" +
+	"\x11BootNetworkConfig\x12\x12\n" +
+	"\x04vlan\x18\x01 \x01(\rR\x04vlan\x12\x19\n" +
+	"\buse_dhcp\x18\x02 \x01(\bR\auseDhcp\x12\x1b\n" +
+	"\tstatic_ip\x18\x03 \x01(\tR\bstaticIp\x12\x18\n" +
+	"\agateway\x18\x04 \x01(\tR\agateway\x12\x10\n" +
+	"\x03dns\x18\x05 \x03(\tR\x03dns\"\xc2\x01\n" +
+	"\aBootACL\x12\x12\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\x12\x1a\n" +
+	"\bpriority\x18\x02 \x01(\x05R\bpriority\x125\n" +
+	"\x05match\x18\x03 \x03(\v2\x1f.platform.v1.BootACL.MatchEntryR\x05match\x12\x16\n" +
+	"\x06action\x18\x04 \x01(\tR\x06action\x1a8\n" +
+	"\n" +
+	"MatchEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"S\n" +
+	"\rBootRateLimit\x12!\n" +
+	"\fingress_mbps\x18\x01 \x01(\x05R\vingressMbps\x12\x1f\n" +
+	"\vegress_mbps\x18\x02 \x01(\x05R\n" +
+	"egressMbps\"\xb5\x02\n" +
+	"\vBootProfile\x12#\n" +
+	"\rserial_number\x18\x01 \x01(\tR\fserialNumber\x12I\n" +
+	"\x10admitted_network\x18\x02 \x01(\v2\x1e.platform.v1.BootNetworkConfigR\x0fadmittedNetwork\x12Q\n" +
+	"\x14provisioning_network\x18\x03 \x01(\v2\x1e.platform.v1.BootNetworkConfigR\x13provisioningNetwork\x12(\n" +
+	"\x04acls\x18\x04 \x03(\v2\x14.platform.v1.BootACLR\x04acls\x129\n" +
+	"\n" +
+	"rate_limit\x18\x05 \x01(\v2\x1a.platform.v1.BootRateLimitR\trateLimit\"\xa7\x02\n" +
+	"\x14BootDeliveryResponse\x12\x16\n" +
+	"\x06serial\x18\x01 \x01(\tR\x06serial\x12!\n" +
+	"\fidevid_chain\x18\x02 \x01(\tR\videvidChain\x12\x1f\n" +
+	"\vattest_cert\x18\x03 \x01(\tR\n" +
+	"attestCert\x12\x1b\n" +
+	"\tca_bundle\x18\x04 \x01(\tR\bcaBundle\x122\n" +
+	"\aprofile\x18\x05 \x01(\v2\x18.platform.v1.BootProfileR\aprofile\x12.\n" +
+	"\x13pcr_baseline_source\x18\x06 \x01(\tR\x11pcrBaselineSource\x122\n" +
+	"\x15pcr_baseline_captured\x18\a \x01(\bR\x13pcrBaselineCaptured\"\xb1\x01\n" +
 	"\x1cAssignProfileToDeviceRequest\x12\x1d\n" +
 	"\n" +
 	"profile_id\x18\x01 \x01(\x04R\tprofileId\x12\x1b\n" +
@@ -4036,7 +5343,7 @@ const file_device_proto_rawDesc = "" +
 	"AuthMethod\x12\x1b\n" +
 	"\x17AUTH_METHOD_UNSPECIFIED\x10\x00\x12\x14\n" +
 	"\x10AUTH_METHOD_NONE\x10\x01\x12\x16\n" +
-	"\x12AUTH_METHOD_802_1X\x10\x022\xb2\x11\n" +
+	"\x12AUTH_METHOD_802_1X\x10\x022\x8c\x18\n" +
 	"\rDeviceService\x12S\n" +
 	"\fCreateDevice\x12 .platform.v1.CreateDeviceRequest\x1a!.platform.v1.CreateDeviceResponse\x12J\n" +
 	"\tGetDevice\x12\x1d.platform.v1.GetDeviceRequest\x1a\x1e.platform.v1.GetDeviceResponse\x12S\n" +
@@ -4057,7 +5364,16 @@ const file_device_proto_rawDesc = "" +
 	"\rCountProfiles\x12!.platform.v1.CountProfilesRequest\x1a\".platform.v1.CountProfilesResponse\x12Y\n" +
 	"\x0eActivateDevice\x12\".platform.v1.ActivateDeviceRequest\x1a#.platform.v1.ActivateDeviceResponse\x12S\n" +
 	"\fAttestDevice\x12 .platform.v1.AttestDeviceRequest\x1a!.platform.v1.AttestDeviceResponse\x12\x83\x01\n" +
-	"\x1cRecordAttestationCertificate\x120.platform.v1.RecordAttestationCertificateRequest\x1a1.platform.v1.RecordAttestationCertificateResponse\x12n\n" +
+	"\x1cRecordAttestationCertificate\x120.platform.v1.RecordAttestationCertificateRequest\x1a1.platform.v1.RecordAttestationCertificateResponse\x12X\n" +
+	"\rDisableDevice\x12!.platform.v1.DisableDeviceRequest\x1a$.platform.v1.DeviceLifecycleResponse\x12V\n" +
+	"\fEnableDevice\x12 .platform.v1.EnableDeviceRequest\x1a$.platform.v1.DeviceLifecycleResponse\x12\\\n" +
+	"\x0fBootCertificate\x12#.platform.v1.BootCertificateRequest\x1a$.platform.v1.BootCertificateResponse\x12S\n" +
+	"\fBootDelivery\x12 .platform.v1.BootDeliveryRequest\x1a!.platform.v1.BootDeliveryResponse\x12e\n" +
+	"\x0eCreateTemplate\x12(.platform.v1.DeviceTemplateCreateRequest\x1a).platform.v1.DeviceTemplateCreateResponse\x12\\\n" +
+	"\vGetTemplate\x12%.platform.v1.DeviceTemplateGetRequest\x1a&.platform.v1.DeviceTemplateGetResponse\x12`\n" +
+	"\rListTemplates\x12&.platform.v1.DeviceTemplateListRequest\x1a'.platform.v1.DeviceTemplateListResponse\x12e\n" +
+	"\x0eUpdateTemplate\x12(.platform.v1.DeviceTemplateUpdateRequest\x1a).platform.v1.DeviceTemplateUpdateResponse\x12e\n" +
+	"\x0eDeleteTemplate\x12(.platform.v1.DeviceTemplateDeleteRequest\x1a).platform.v1.DeviceTemplateDeleteResponse\x12n\n" +
 	"\x19CreateProfileFromTemplate\x12-.platform.v1.CreateProfileFromTemplateRequest\x1a\".platform.v1.CreateProfileResponse\x12h\n" +
 	"\x13FindConfigForDevice\x12'.platform.v1.FindConfigForDeviceRequest\x1a(.platform.v1.FindConfigForDeviceResponse\x12n\n" +
 	"\x15AssignProfileToDevice\x12).platform.v1.AssignProfileToDeviceRequest\x1a*.platform.v1.AssignProfileToDeviceResponse\x12z\n" +
@@ -4076,7 +5392,7 @@ func file_device_proto_rawDescGZIP() []byte {
 }
 
 var file_device_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
-var file_device_proto_msgTypes = make([]protoimpl.MessageInfo, 58)
+var file_device_proto_msgTypes = make([]protoimpl.MessageInfo, 80)
 var file_device_proto_goTypes = []any{
 	(DeviceRole)(0),                              // 0: platform.v1.DeviceRole
 	(AuthMethod)(0),                              // 1: platform.v1.AuthMethod
@@ -4128,136 +5444,194 @@ var file_device_proto_goTypes = []any{
 	(*AttestDeviceResponse)(nil),                 // 47: platform.v1.AttestDeviceResponse
 	(*RecordAttestationCertificateRequest)(nil),  // 48: platform.v1.RecordAttestationCertificateRequest
 	(*RecordAttestationCertificateResponse)(nil), // 49: platform.v1.RecordAttestationCertificateResponse
-	(*CreateProfileFromTemplateRequest)(nil),     // 50: platform.v1.CreateProfileFromTemplateRequest
-	(*FindConfigForDeviceRequest)(nil),           // 51: platform.v1.FindConfigForDeviceRequest
-	(*FindConfigForDeviceResponse)(nil),          // 52: platform.v1.FindConfigForDeviceResponse
-	(*AssignProfileToDeviceRequest)(nil),         // 53: platform.v1.AssignProfileToDeviceRequest
-	(*AssignProfileToDeviceResponse)(nil),        // 54: platform.v1.AssignProfileToDeviceResponse
-	(*UnassignProfileFromDeviceRequest)(nil),     // 55: platform.v1.UnassignProfileFromDeviceRequest
-	(*UnassignProfileFromDeviceResponse)(nil),    // 56: platform.v1.UnassignProfileFromDeviceResponse
-	nil,                           // 57: platform.v1.ProfileMatchRules.CustomAttributesEntry
-	nil,                           // 58: platform.v1.DeviceProfile.NetworksEntry
-	nil,                           // 59: platform.v1.PCRBaseline.ValuesEntry
-	(*timestamppb.Timestamp)(nil), // 60: google.protobuf.Timestamp
-	(*Status)(nil),                // 61: platform.v1.Status
-	(*PaginationRequest)(nil),     // 62: platform.v1.PaginationRequest
-	(*LabelSelector)(nil),         // 63: platform.v1.LabelSelector
-	(*PaginationResponse)(nil),    // 64: platform.v1.PaginationResponse
+	(*DisableDeviceRequest)(nil),                 // 50: platform.v1.DisableDeviceRequest
+	(*EnableDeviceRequest)(nil),                  // 51: platform.v1.EnableDeviceRequest
+	(*DeviceLifecycleResponse)(nil),              // 52: platform.v1.DeviceLifecycleResponse
+	(*DeviceTemplateCreateRequest)(nil),          // 53: platform.v1.DeviceTemplateCreateRequest
+	(*DeviceTemplateCreateResponse)(nil),         // 54: platform.v1.DeviceTemplateCreateResponse
+	(*DeviceTemplateGetRequest)(nil),             // 55: platform.v1.DeviceTemplateGetRequest
+	(*DeviceTemplateGetResponse)(nil),            // 56: platform.v1.DeviceTemplateGetResponse
+	(*DeviceTemplateListRequest)(nil),            // 57: platform.v1.DeviceTemplateListRequest
+	(*DeviceTemplateListResponse)(nil),           // 58: platform.v1.DeviceTemplateListResponse
+	(*DeviceTemplateUpdateRequest)(nil),          // 59: platform.v1.DeviceTemplateUpdateRequest
+	(*DeviceTemplateUpdateResponse)(nil),         // 60: platform.v1.DeviceTemplateUpdateResponse
+	(*DeviceTemplateDeleteRequest)(nil),          // 61: platform.v1.DeviceTemplateDeleteRequest
+	(*DeviceTemplateDeleteResponse)(nil),         // 62: platform.v1.DeviceTemplateDeleteResponse
+	(*CreateProfileFromTemplateRequest)(nil),     // 63: platform.v1.CreateProfileFromTemplateRequest
+	(*FindConfigForDeviceRequest)(nil),           // 64: platform.v1.FindConfigForDeviceRequest
+	(*FindConfigForDeviceResponse)(nil),          // 65: platform.v1.FindConfigForDeviceResponse
+	(*BootCertificateRequest)(nil),               // 66: platform.v1.BootCertificateRequest
+	(*BootCertificateResponse)(nil),              // 67: platform.v1.BootCertificateResponse
+	(*BootDeliveryRequest)(nil),                  // 68: platform.v1.BootDeliveryRequest
+	(*BootNetworkConfig)(nil),                    // 69: platform.v1.BootNetworkConfig
+	(*BootACL)(nil),                              // 70: platform.v1.BootACL
+	(*BootRateLimit)(nil),                        // 71: platform.v1.BootRateLimit
+	(*BootProfile)(nil),                          // 72: platform.v1.BootProfile
+	(*BootDeliveryResponse)(nil),                 // 73: platform.v1.BootDeliveryResponse
+	(*AssignProfileToDeviceRequest)(nil),         // 74: platform.v1.AssignProfileToDeviceRequest
+	(*AssignProfileToDeviceResponse)(nil),        // 75: platform.v1.AssignProfileToDeviceResponse
+	(*UnassignProfileFromDeviceRequest)(nil),     // 76: platform.v1.UnassignProfileFromDeviceRequest
+	(*UnassignProfileFromDeviceResponse)(nil),    // 77: platform.v1.UnassignProfileFromDeviceResponse
+	nil,                           // 78: platform.v1.ProfileMatchRules.CustomAttributesEntry
+	nil,                           // 79: platform.v1.DeviceProfile.NetworksEntry
+	nil,                           // 80: platform.v1.PCRBaseline.ValuesEntry
+	nil,                           // 81: platform.v1.BootACL.MatchEntry
+	(*timestamppb.Timestamp)(nil), // 82: google.protobuf.Timestamp
+	(*Status)(nil),                // 83: platform.v1.Status
+	(*PaginationRequest)(nil),     // 84: platform.v1.PaginationRequest
+	(*LabelSelector)(nil),         // 85: platform.v1.LabelSelector
+	(*PaginationResponse)(nil),    // 86: platform.v1.PaginationResponse
 }
 var file_device_proto_depIdxs = []int32{
-	60, // 0: platform.v1.Device.created_at:type_name -> google.protobuf.Timestamp
-	60, // 1: platform.v1.Device.updated_at:type_name -> google.protobuf.Timestamp
-	3,  // 2: platform.v1.NetworkPhaseConfig.dhcp_pool:type_name -> platform.v1.DHCPPoolConfig
-	1,  // 3: platform.v1.NetworkPhaseConfig.auth_method:type_name -> platform.v1.AuthMethod
-	4,  // 4: platform.v1.NetworkPhaseConfig.acls:type_name -> platform.v1.ACLConfig
-	57, // 5: platform.v1.ProfileMatchRules.custom_attributes:type_name -> platform.v1.ProfileMatchRules.CustomAttributesEntry
-	0,  // 6: platform.v1.DeviceProfile.role:type_name -> platform.v1.DeviceRole
-	6,  // 7: platform.v1.DeviceProfile.platformd_config:type_name -> platform.v1.PlatformdConfigRef
-	7,  // 8: platform.v1.DeviceProfile.match_rules:type_name -> platform.v1.ProfileMatchRules
-	60, // 9: platform.v1.DeviceProfile.created_at:type_name -> google.protobuf.Timestamp
-	60, // 10: platform.v1.DeviceProfile.updated_at:type_name -> google.protobuf.Timestamp
-	60, // 11: platform.v1.DeviceProfile.assigned_at:type_name -> google.protobuf.Timestamp
-	8,  // 12: platform.v1.DeviceProfile.bmc:type_name -> platform.v1.BMCConfig
-	58, // 13: platform.v1.DeviceProfile.networks:type_name -> platform.v1.DeviceProfile.NetworksEntry
-	10, // 14: platform.v1.DeviceProfile.pcr_baseline:type_name -> platform.v1.PCRBaseline
-	59, // 15: platform.v1.PCRBaseline.values:type_name -> platform.v1.PCRBaseline.ValuesEntry
-	60, // 16: platform.v1.PCRBaseline.recorded_at:type_name -> google.protobuf.Timestamp
-	0,  // 17: platform.v1.DeviceTemplate.role:type_name -> platform.v1.DeviceRole
-	7,  // 18: platform.v1.DeviceTemplate.match_rules:type_name -> platform.v1.ProfileMatchRules
-	60, // 19: platform.v1.DeviceTemplate.created_at:type_name -> google.protobuf.Timestamp
-	60, // 20: platform.v1.DeviceTemplate.updated_at:type_name -> google.protobuf.Timestamp
-	8,  // 21: platform.v1.DeviceTemplate.bmc:type_name -> platform.v1.BMCConfig
-	2,  // 22: platform.v1.CreateDeviceRequest.device:type_name -> platform.v1.Device
-	61, // 23: platform.v1.CreateDeviceResponse.status:type_name -> platform.v1.Status
-	2,  // 24: platform.v1.CreateDeviceResponse.device:type_name -> platform.v1.Device
-	2,  // 25: platform.v1.GetDeviceResponse.device:type_name -> platform.v1.Device
-	2,  // 26: platform.v1.UpdateDeviceRequest.device:type_name -> platform.v1.Device
-	61, // 27: platform.v1.UpdateDeviceResponse.status:type_name -> platform.v1.Status
-	2,  // 28: platform.v1.UpdateDeviceResponse.device:type_name -> platform.v1.Device
-	61, // 29: platform.v1.DeleteDeviceResponse.status:type_name -> platform.v1.Status
-	62, // 30: platform.v1.ListDevicesRequest.pagination:type_name -> platform.v1.PaginationRequest
-	63, // 31: platform.v1.ListDevicesRequest.selector:type_name -> platform.v1.LabelSelector
-	2,  // 32: platform.v1.ListDevicesResponse.devices:type_name -> platform.v1.Device
-	64, // 33: platform.v1.ListDevicesResponse.pagination:type_name -> platform.v1.PaginationResponse
-	2,  // 34: platform.v1.FindDeviceBySerialResponse.device:type_name -> platform.v1.Device
-	9,  // 35: platform.v1.CreateProfileRequest.profile:type_name -> platform.v1.DeviceProfile
-	61, // 36: platform.v1.CreateProfileResponse.status:type_name -> platform.v1.Status
-	9,  // 37: platform.v1.CreateProfileResponse.profile:type_name -> platform.v1.DeviceProfile
-	9,  // 38: platform.v1.GetProfileResponse.profile:type_name -> platform.v1.DeviceProfile
-	9,  // 39: platform.v1.UpdateProfileRequest.profile:type_name -> platform.v1.DeviceProfile
-	61, // 40: platform.v1.UpdateProfileResponse.status:type_name -> platform.v1.Status
-	9,  // 41: platform.v1.UpdateProfileResponse.profile:type_name -> platform.v1.DeviceProfile
-	61, // 42: platform.v1.DeleteProfileResponse.status:type_name -> platform.v1.Status
-	62, // 43: platform.v1.ListProfilesRequest.pagination:type_name -> platform.v1.PaginationRequest
-	63, // 44: platform.v1.ListProfilesRequest.selector:type_name -> platform.v1.LabelSelector
-	9,  // 45: platform.v1.ListProfilesResponse.profiles:type_name -> platform.v1.DeviceProfile
-	64, // 46: platform.v1.ListProfilesResponse.pagination:type_name -> platform.v1.PaginationResponse
-	9,  // 47: platform.v1.FindProfileByMACAddressResponse.profile:type_name -> platform.v1.DeviceProfile
-	9,  // 48: platform.v1.FindProfileBySerialResponse.profile:type_name -> platform.v1.DeviceProfile
-	9,  // 49: platform.v1.FindMatchingProfileResponse.profile:type_name -> platform.v1.DeviceProfile
-	61, // 50: platform.v1.ActivateDeviceResponse.status:type_name -> platform.v1.Status
-	60, // 51: platform.v1.ActivateDeviceResponse.transitioned_at:type_name -> google.protobuf.Timestamp
-	61, // 52: platform.v1.AttestDeviceResponse.status:type_name -> platform.v1.Status
-	60, // 53: platform.v1.AttestDeviceResponse.attested_at:type_name -> google.protobuf.Timestamp
-	60, // 54: platform.v1.AttestDeviceResponse.pcr_baseline_recorded_at:type_name -> google.protobuf.Timestamp
-	61, // 55: platform.v1.RecordAttestationCertificateResponse.status:type_name -> platform.v1.Status
-	60, // 56: platform.v1.RecordAttestationCertificateResponse.not_after:type_name -> google.protobuf.Timestamp
-	9,  // 57: platform.v1.CreateProfileFromTemplateRequest.overrides:type_name -> platform.v1.DeviceProfile
-	9,  // 58: platform.v1.FindConfigForDeviceResponse.profile:type_name -> platform.v1.DeviceProfile
-	9,  // 59: platform.v1.AssignProfileToDeviceResponse.profile:type_name -> platform.v1.DeviceProfile
-	9,  // 60: platform.v1.UnassignProfileFromDeviceResponse.profile:type_name -> platform.v1.DeviceProfile
-	5,  // 61: platform.v1.DeviceProfile.NetworksEntry.value:type_name -> platform.v1.NetworkPhaseConfig
-	12, // 62: platform.v1.DeviceService.CreateDevice:input_type -> platform.v1.CreateDeviceRequest
-	14, // 63: platform.v1.DeviceService.GetDevice:input_type -> platform.v1.GetDeviceRequest
-	16, // 64: platform.v1.DeviceService.UpdateDevice:input_type -> platform.v1.UpdateDeviceRequest
-	18, // 65: platform.v1.DeviceService.DeleteDevice:input_type -> platform.v1.DeleteDeviceRequest
-	20, // 66: platform.v1.DeviceService.ListDevices:input_type -> platform.v1.ListDevicesRequest
-	22, // 67: platform.v1.DeviceService.FindDeviceBySerial:input_type -> platform.v1.FindDeviceBySerialRequest
-	24, // 68: platform.v1.DeviceService.CountDevices:input_type -> platform.v1.CountDevicesRequest
-	26, // 69: platform.v1.DeviceService.CreateProfile:input_type -> platform.v1.CreateProfileRequest
-	28, // 70: platform.v1.DeviceService.GetProfile:input_type -> platform.v1.GetProfileRequest
-	30, // 71: platform.v1.DeviceService.UpdateProfile:input_type -> platform.v1.UpdateProfileRequest
-	32, // 72: platform.v1.DeviceService.DeleteProfile:input_type -> platform.v1.DeleteProfileRequest
-	34, // 73: platform.v1.DeviceService.ListProfiles:input_type -> platform.v1.ListProfilesRequest
-	36, // 74: platform.v1.DeviceService.FindProfileByMACAddress:input_type -> platform.v1.FindProfileByMACAddressRequest
-	38, // 75: platform.v1.DeviceService.FindProfileBySerial:input_type -> platform.v1.FindProfileBySerialRequest
-	40, // 76: platform.v1.DeviceService.FindMatchingProfile:input_type -> platform.v1.FindMatchingProfileRequest
-	42, // 77: platform.v1.DeviceService.CountProfiles:input_type -> platform.v1.CountProfilesRequest
-	44, // 78: platform.v1.DeviceService.ActivateDevice:input_type -> platform.v1.ActivateDeviceRequest
-	46, // 79: platform.v1.DeviceService.AttestDevice:input_type -> platform.v1.AttestDeviceRequest
-	48, // 80: platform.v1.DeviceService.RecordAttestationCertificate:input_type -> platform.v1.RecordAttestationCertificateRequest
-	50, // 81: platform.v1.DeviceService.CreateProfileFromTemplate:input_type -> platform.v1.CreateProfileFromTemplateRequest
-	51, // 82: platform.v1.DeviceService.FindConfigForDevice:input_type -> platform.v1.FindConfigForDeviceRequest
-	53, // 83: platform.v1.DeviceService.AssignProfileToDevice:input_type -> platform.v1.AssignProfileToDeviceRequest
-	55, // 84: platform.v1.DeviceService.UnassignProfileFromDevice:input_type -> platform.v1.UnassignProfileFromDeviceRequest
-	13, // 85: platform.v1.DeviceService.CreateDevice:output_type -> platform.v1.CreateDeviceResponse
-	15, // 86: platform.v1.DeviceService.GetDevice:output_type -> platform.v1.GetDeviceResponse
-	17, // 87: platform.v1.DeviceService.UpdateDevice:output_type -> platform.v1.UpdateDeviceResponse
-	19, // 88: platform.v1.DeviceService.DeleteDevice:output_type -> platform.v1.DeleteDeviceResponse
-	21, // 89: platform.v1.DeviceService.ListDevices:output_type -> platform.v1.ListDevicesResponse
-	23, // 90: platform.v1.DeviceService.FindDeviceBySerial:output_type -> platform.v1.FindDeviceBySerialResponse
-	25, // 91: platform.v1.DeviceService.CountDevices:output_type -> platform.v1.CountDevicesResponse
-	27, // 92: platform.v1.DeviceService.CreateProfile:output_type -> platform.v1.CreateProfileResponse
-	29, // 93: platform.v1.DeviceService.GetProfile:output_type -> platform.v1.GetProfileResponse
-	31, // 94: platform.v1.DeviceService.UpdateProfile:output_type -> platform.v1.UpdateProfileResponse
-	33, // 95: platform.v1.DeviceService.DeleteProfile:output_type -> platform.v1.DeleteProfileResponse
-	35, // 96: platform.v1.DeviceService.ListProfiles:output_type -> platform.v1.ListProfilesResponse
-	37, // 97: platform.v1.DeviceService.FindProfileByMACAddress:output_type -> platform.v1.FindProfileByMACAddressResponse
-	39, // 98: platform.v1.DeviceService.FindProfileBySerial:output_type -> platform.v1.FindProfileBySerialResponse
-	41, // 99: platform.v1.DeviceService.FindMatchingProfile:output_type -> platform.v1.FindMatchingProfileResponse
-	43, // 100: platform.v1.DeviceService.CountProfiles:output_type -> platform.v1.CountProfilesResponse
-	45, // 101: platform.v1.DeviceService.ActivateDevice:output_type -> platform.v1.ActivateDeviceResponse
-	47, // 102: platform.v1.DeviceService.AttestDevice:output_type -> platform.v1.AttestDeviceResponse
-	49, // 103: platform.v1.DeviceService.RecordAttestationCertificate:output_type -> platform.v1.RecordAttestationCertificateResponse
-	27, // 104: platform.v1.DeviceService.CreateProfileFromTemplate:output_type -> platform.v1.CreateProfileResponse
-	52, // 105: platform.v1.DeviceService.FindConfigForDevice:output_type -> platform.v1.FindConfigForDeviceResponse
-	54, // 106: platform.v1.DeviceService.AssignProfileToDevice:output_type -> platform.v1.AssignProfileToDeviceResponse
-	56, // 107: platform.v1.DeviceService.UnassignProfileFromDevice:output_type -> platform.v1.UnassignProfileFromDeviceResponse
-	85, // [85:108] is the sub-list for method output_type
-	62, // [62:85] is the sub-list for method input_type
-	62, // [62:62] is the sub-list for extension type_name
-	62, // [62:62] is the sub-list for extension extendee
-	0,  // [0:62] is the sub-list for field type_name
+	82,  // 0: platform.v1.Device.created_at:type_name -> google.protobuf.Timestamp
+	82,  // 1: platform.v1.Device.updated_at:type_name -> google.protobuf.Timestamp
+	3,   // 2: platform.v1.NetworkPhaseConfig.dhcp_pool:type_name -> platform.v1.DHCPPoolConfig
+	1,   // 3: platform.v1.NetworkPhaseConfig.auth_method:type_name -> platform.v1.AuthMethod
+	4,   // 4: platform.v1.NetworkPhaseConfig.acls:type_name -> platform.v1.ACLConfig
+	78,  // 5: platform.v1.ProfileMatchRules.custom_attributes:type_name -> platform.v1.ProfileMatchRules.CustomAttributesEntry
+	0,   // 6: platform.v1.DeviceProfile.role:type_name -> platform.v1.DeviceRole
+	6,   // 7: platform.v1.DeviceProfile.platformd_config:type_name -> platform.v1.PlatformdConfigRef
+	7,   // 8: platform.v1.DeviceProfile.match_rules:type_name -> platform.v1.ProfileMatchRules
+	82,  // 9: platform.v1.DeviceProfile.created_at:type_name -> google.protobuf.Timestamp
+	82,  // 10: platform.v1.DeviceProfile.updated_at:type_name -> google.protobuf.Timestamp
+	82,  // 11: platform.v1.DeviceProfile.assigned_at:type_name -> google.protobuf.Timestamp
+	8,   // 12: platform.v1.DeviceProfile.bmc:type_name -> platform.v1.BMCConfig
+	79,  // 13: platform.v1.DeviceProfile.networks:type_name -> platform.v1.DeviceProfile.NetworksEntry
+	10,  // 14: platform.v1.DeviceProfile.pcr_baseline:type_name -> platform.v1.PCRBaseline
+	80,  // 15: platform.v1.PCRBaseline.values:type_name -> platform.v1.PCRBaseline.ValuesEntry
+	82,  // 16: platform.v1.PCRBaseline.recorded_at:type_name -> google.protobuf.Timestamp
+	0,   // 17: platform.v1.DeviceTemplate.role:type_name -> platform.v1.DeviceRole
+	7,   // 18: platform.v1.DeviceTemplate.match_rules:type_name -> platform.v1.ProfileMatchRules
+	82,  // 19: platform.v1.DeviceTemplate.created_at:type_name -> google.protobuf.Timestamp
+	82,  // 20: platform.v1.DeviceTemplate.updated_at:type_name -> google.protobuf.Timestamp
+	8,   // 21: platform.v1.DeviceTemplate.bmc:type_name -> platform.v1.BMCConfig
+	2,   // 22: platform.v1.CreateDeviceRequest.device:type_name -> platform.v1.Device
+	83,  // 23: platform.v1.CreateDeviceResponse.status:type_name -> platform.v1.Status
+	2,   // 24: platform.v1.CreateDeviceResponse.device:type_name -> platform.v1.Device
+	2,   // 25: platform.v1.GetDeviceResponse.device:type_name -> platform.v1.Device
+	2,   // 26: platform.v1.UpdateDeviceRequest.device:type_name -> platform.v1.Device
+	83,  // 27: platform.v1.UpdateDeviceResponse.status:type_name -> platform.v1.Status
+	2,   // 28: platform.v1.UpdateDeviceResponse.device:type_name -> platform.v1.Device
+	83,  // 29: platform.v1.DeleteDeviceResponse.status:type_name -> platform.v1.Status
+	84,  // 30: platform.v1.ListDevicesRequest.pagination:type_name -> platform.v1.PaginationRequest
+	85,  // 31: platform.v1.ListDevicesRequest.selector:type_name -> platform.v1.LabelSelector
+	2,   // 32: platform.v1.ListDevicesResponse.devices:type_name -> platform.v1.Device
+	86,  // 33: platform.v1.ListDevicesResponse.pagination:type_name -> platform.v1.PaginationResponse
+	2,   // 34: platform.v1.FindDeviceBySerialResponse.device:type_name -> platform.v1.Device
+	9,   // 35: platform.v1.CreateProfileRequest.profile:type_name -> platform.v1.DeviceProfile
+	83,  // 36: platform.v1.CreateProfileResponse.status:type_name -> platform.v1.Status
+	9,   // 37: platform.v1.CreateProfileResponse.profile:type_name -> platform.v1.DeviceProfile
+	9,   // 38: platform.v1.GetProfileResponse.profile:type_name -> platform.v1.DeviceProfile
+	9,   // 39: platform.v1.UpdateProfileRequest.profile:type_name -> platform.v1.DeviceProfile
+	83,  // 40: platform.v1.UpdateProfileResponse.status:type_name -> platform.v1.Status
+	9,   // 41: platform.v1.UpdateProfileResponse.profile:type_name -> platform.v1.DeviceProfile
+	83,  // 42: platform.v1.DeleteProfileResponse.status:type_name -> platform.v1.Status
+	84,  // 43: platform.v1.ListProfilesRequest.pagination:type_name -> platform.v1.PaginationRequest
+	85,  // 44: platform.v1.ListProfilesRequest.selector:type_name -> platform.v1.LabelSelector
+	9,   // 45: platform.v1.ListProfilesResponse.profiles:type_name -> platform.v1.DeviceProfile
+	86,  // 46: platform.v1.ListProfilesResponse.pagination:type_name -> platform.v1.PaginationResponse
+	9,   // 47: platform.v1.FindProfileByMACAddressResponse.profile:type_name -> platform.v1.DeviceProfile
+	9,   // 48: platform.v1.FindProfileBySerialResponse.profile:type_name -> platform.v1.DeviceProfile
+	9,   // 49: platform.v1.FindMatchingProfileResponse.profile:type_name -> platform.v1.DeviceProfile
+	83,  // 50: platform.v1.ActivateDeviceResponse.status:type_name -> platform.v1.Status
+	82,  // 51: platform.v1.ActivateDeviceResponse.transitioned_at:type_name -> google.protobuf.Timestamp
+	83,  // 52: platform.v1.AttestDeviceResponse.status:type_name -> platform.v1.Status
+	82,  // 53: platform.v1.AttestDeviceResponse.attested_at:type_name -> google.protobuf.Timestamp
+	82,  // 54: platform.v1.AttestDeviceResponse.pcr_baseline_recorded_at:type_name -> google.protobuf.Timestamp
+	83,  // 55: platform.v1.RecordAttestationCertificateResponse.status:type_name -> platform.v1.Status
+	82,  // 56: platform.v1.RecordAttestationCertificateResponse.not_after:type_name -> google.protobuf.Timestamp
+	83,  // 57: platform.v1.DeviceLifecycleResponse.status:type_name -> platform.v1.Status
+	11,  // 58: platform.v1.DeviceTemplateCreateRequest.template:type_name -> platform.v1.DeviceTemplate
+	83,  // 59: platform.v1.DeviceTemplateCreateResponse.status:type_name -> platform.v1.Status
+	11,  // 60: platform.v1.DeviceTemplateCreateResponse.template:type_name -> platform.v1.DeviceTemplate
+	11,  // 61: platform.v1.DeviceTemplateGetResponse.template:type_name -> platform.v1.DeviceTemplate
+	84,  // 62: platform.v1.DeviceTemplateListRequest.pagination:type_name -> platform.v1.PaginationRequest
+	11,  // 63: platform.v1.DeviceTemplateListResponse.templates:type_name -> platform.v1.DeviceTemplate
+	86,  // 64: platform.v1.DeviceTemplateListResponse.pagination:type_name -> platform.v1.PaginationResponse
+	11,  // 65: platform.v1.DeviceTemplateUpdateRequest.template:type_name -> platform.v1.DeviceTemplate
+	83,  // 66: platform.v1.DeviceTemplateUpdateResponse.status:type_name -> platform.v1.Status
+	11,  // 67: platform.v1.DeviceTemplateUpdateResponse.template:type_name -> platform.v1.DeviceTemplate
+	83,  // 68: platform.v1.DeviceTemplateDeleteResponse.status:type_name -> platform.v1.Status
+	9,   // 69: platform.v1.CreateProfileFromTemplateRequest.overrides:type_name -> platform.v1.DeviceProfile
+	9,   // 70: platform.v1.FindConfigForDeviceResponse.profile:type_name -> platform.v1.DeviceProfile
+	81,  // 71: platform.v1.BootACL.match:type_name -> platform.v1.BootACL.MatchEntry
+	69,  // 72: platform.v1.BootProfile.admitted_network:type_name -> platform.v1.BootNetworkConfig
+	69,  // 73: platform.v1.BootProfile.provisioning_network:type_name -> platform.v1.BootNetworkConfig
+	70,  // 74: platform.v1.BootProfile.acls:type_name -> platform.v1.BootACL
+	71,  // 75: platform.v1.BootProfile.rate_limit:type_name -> platform.v1.BootRateLimit
+	72,  // 76: platform.v1.BootDeliveryResponse.profile:type_name -> platform.v1.BootProfile
+	9,   // 77: platform.v1.AssignProfileToDeviceResponse.profile:type_name -> platform.v1.DeviceProfile
+	9,   // 78: platform.v1.UnassignProfileFromDeviceResponse.profile:type_name -> platform.v1.DeviceProfile
+	5,   // 79: platform.v1.DeviceProfile.NetworksEntry.value:type_name -> platform.v1.NetworkPhaseConfig
+	12,  // 80: platform.v1.DeviceService.CreateDevice:input_type -> platform.v1.CreateDeviceRequest
+	14,  // 81: platform.v1.DeviceService.GetDevice:input_type -> platform.v1.GetDeviceRequest
+	16,  // 82: platform.v1.DeviceService.UpdateDevice:input_type -> platform.v1.UpdateDeviceRequest
+	18,  // 83: platform.v1.DeviceService.DeleteDevice:input_type -> platform.v1.DeleteDeviceRequest
+	20,  // 84: platform.v1.DeviceService.ListDevices:input_type -> platform.v1.ListDevicesRequest
+	22,  // 85: platform.v1.DeviceService.FindDeviceBySerial:input_type -> platform.v1.FindDeviceBySerialRequest
+	24,  // 86: platform.v1.DeviceService.CountDevices:input_type -> platform.v1.CountDevicesRequest
+	26,  // 87: platform.v1.DeviceService.CreateProfile:input_type -> platform.v1.CreateProfileRequest
+	28,  // 88: platform.v1.DeviceService.GetProfile:input_type -> platform.v1.GetProfileRequest
+	30,  // 89: platform.v1.DeviceService.UpdateProfile:input_type -> platform.v1.UpdateProfileRequest
+	32,  // 90: platform.v1.DeviceService.DeleteProfile:input_type -> platform.v1.DeleteProfileRequest
+	34,  // 91: platform.v1.DeviceService.ListProfiles:input_type -> platform.v1.ListProfilesRequest
+	36,  // 92: platform.v1.DeviceService.FindProfileByMACAddress:input_type -> platform.v1.FindProfileByMACAddressRequest
+	38,  // 93: platform.v1.DeviceService.FindProfileBySerial:input_type -> platform.v1.FindProfileBySerialRequest
+	40,  // 94: platform.v1.DeviceService.FindMatchingProfile:input_type -> platform.v1.FindMatchingProfileRequest
+	42,  // 95: platform.v1.DeviceService.CountProfiles:input_type -> platform.v1.CountProfilesRequest
+	44,  // 96: platform.v1.DeviceService.ActivateDevice:input_type -> platform.v1.ActivateDeviceRequest
+	46,  // 97: platform.v1.DeviceService.AttestDevice:input_type -> platform.v1.AttestDeviceRequest
+	48,  // 98: platform.v1.DeviceService.RecordAttestationCertificate:input_type -> platform.v1.RecordAttestationCertificateRequest
+	50,  // 99: platform.v1.DeviceService.DisableDevice:input_type -> platform.v1.DisableDeviceRequest
+	51,  // 100: platform.v1.DeviceService.EnableDevice:input_type -> platform.v1.EnableDeviceRequest
+	66,  // 101: platform.v1.DeviceService.BootCertificate:input_type -> platform.v1.BootCertificateRequest
+	68,  // 102: platform.v1.DeviceService.BootDelivery:input_type -> platform.v1.BootDeliveryRequest
+	53,  // 103: platform.v1.DeviceService.CreateTemplate:input_type -> platform.v1.DeviceTemplateCreateRequest
+	55,  // 104: platform.v1.DeviceService.GetTemplate:input_type -> platform.v1.DeviceTemplateGetRequest
+	57,  // 105: platform.v1.DeviceService.ListTemplates:input_type -> platform.v1.DeviceTemplateListRequest
+	59,  // 106: platform.v1.DeviceService.UpdateTemplate:input_type -> platform.v1.DeviceTemplateUpdateRequest
+	61,  // 107: platform.v1.DeviceService.DeleteTemplate:input_type -> platform.v1.DeviceTemplateDeleteRequest
+	63,  // 108: platform.v1.DeviceService.CreateProfileFromTemplate:input_type -> platform.v1.CreateProfileFromTemplateRequest
+	64,  // 109: platform.v1.DeviceService.FindConfigForDevice:input_type -> platform.v1.FindConfigForDeviceRequest
+	74,  // 110: platform.v1.DeviceService.AssignProfileToDevice:input_type -> platform.v1.AssignProfileToDeviceRequest
+	76,  // 111: platform.v1.DeviceService.UnassignProfileFromDevice:input_type -> platform.v1.UnassignProfileFromDeviceRequest
+	13,  // 112: platform.v1.DeviceService.CreateDevice:output_type -> platform.v1.CreateDeviceResponse
+	15,  // 113: platform.v1.DeviceService.GetDevice:output_type -> platform.v1.GetDeviceResponse
+	17,  // 114: platform.v1.DeviceService.UpdateDevice:output_type -> platform.v1.UpdateDeviceResponse
+	19,  // 115: platform.v1.DeviceService.DeleteDevice:output_type -> platform.v1.DeleteDeviceResponse
+	21,  // 116: platform.v1.DeviceService.ListDevices:output_type -> platform.v1.ListDevicesResponse
+	23,  // 117: platform.v1.DeviceService.FindDeviceBySerial:output_type -> platform.v1.FindDeviceBySerialResponse
+	25,  // 118: platform.v1.DeviceService.CountDevices:output_type -> platform.v1.CountDevicesResponse
+	27,  // 119: platform.v1.DeviceService.CreateProfile:output_type -> platform.v1.CreateProfileResponse
+	29,  // 120: platform.v1.DeviceService.GetProfile:output_type -> platform.v1.GetProfileResponse
+	31,  // 121: platform.v1.DeviceService.UpdateProfile:output_type -> platform.v1.UpdateProfileResponse
+	33,  // 122: platform.v1.DeviceService.DeleteProfile:output_type -> platform.v1.DeleteProfileResponse
+	35,  // 123: platform.v1.DeviceService.ListProfiles:output_type -> platform.v1.ListProfilesResponse
+	37,  // 124: platform.v1.DeviceService.FindProfileByMACAddress:output_type -> platform.v1.FindProfileByMACAddressResponse
+	39,  // 125: platform.v1.DeviceService.FindProfileBySerial:output_type -> platform.v1.FindProfileBySerialResponse
+	41,  // 126: platform.v1.DeviceService.FindMatchingProfile:output_type -> platform.v1.FindMatchingProfileResponse
+	43,  // 127: platform.v1.DeviceService.CountProfiles:output_type -> platform.v1.CountProfilesResponse
+	45,  // 128: platform.v1.DeviceService.ActivateDevice:output_type -> platform.v1.ActivateDeviceResponse
+	47,  // 129: platform.v1.DeviceService.AttestDevice:output_type -> platform.v1.AttestDeviceResponse
+	49,  // 130: platform.v1.DeviceService.RecordAttestationCertificate:output_type -> platform.v1.RecordAttestationCertificateResponse
+	52,  // 131: platform.v1.DeviceService.DisableDevice:output_type -> platform.v1.DeviceLifecycleResponse
+	52,  // 132: platform.v1.DeviceService.EnableDevice:output_type -> platform.v1.DeviceLifecycleResponse
+	67,  // 133: platform.v1.DeviceService.BootCertificate:output_type -> platform.v1.BootCertificateResponse
+	73,  // 134: platform.v1.DeviceService.BootDelivery:output_type -> platform.v1.BootDeliveryResponse
+	54,  // 135: platform.v1.DeviceService.CreateTemplate:output_type -> platform.v1.DeviceTemplateCreateResponse
+	56,  // 136: platform.v1.DeviceService.GetTemplate:output_type -> platform.v1.DeviceTemplateGetResponse
+	58,  // 137: platform.v1.DeviceService.ListTemplates:output_type -> platform.v1.DeviceTemplateListResponse
+	60,  // 138: platform.v1.DeviceService.UpdateTemplate:output_type -> platform.v1.DeviceTemplateUpdateResponse
+	62,  // 139: platform.v1.DeviceService.DeleteTemplate:output_type -> platform.v1.DeviceTemplateDeleteResponse
+	27,  // 140: platform.v1.DeviceService.CreateProfileFromTemplate:output_type -> platform.v1.CreateProfileResponse
+	65,  // 141: platform.v1.DeviceService.FindConfigForDevice:output_type -> platform.v1.FindConfigForDeviceResponse
+	75,  // 142: platform.v1.DeviceService.AssignProfileToDevice:output_type -> platform.v1.AssignProfileToDeviceResponse
+	77,  // 143: platform.v1.DeviceService.UnassignProfileFromDevice:output_type -> platform.v1.UnassignProfileFromDeviceResponse
+	112, // [112:144] is the sub-list for method output_type
+	80,  // [80:112] is the sub-list for method input_type
+	80,  // [80:80] is the sub-list for extension type_name
+	80,  // [80:80] is the sub-list for extension extendee
+	0,   // [0:80] is the sub-list for field type_name
 }
 
 func init() { file_device_proto_init() }
@@ -4272,7 +5646,7 @@ func file_device_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_device_proto_rawDesc), len(file_device_proto_rawDesc)),
 			NumEnums:      2,
-			NumMessages:   58,
+			NumMessages:   80,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

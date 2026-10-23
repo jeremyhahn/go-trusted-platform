@@ -11,14 +11,9 @@ services:
     container_name: trusted-platform-devcontainer
     hostname: trusted-platform-devcontainer
 
-    # Build configuration
-    build:
-      context: .
-      dockerfile: Dockerfile
-      args:
-        - NVM_VERSION=v0.39.5
-        - NODE_VERSION=21.1.0
-        - QEMU_VERSION=8.2.0
+    # Built by `make build-devcontainer` (the Dockerfile's integration stage,
+    # repository-root context, GO_IMAGE from scripts/tool-pins.sh), never here.
+    pull_policy: never
 
     # Privileged mode required for OVS and QEMU
     privileged: true
@@ -93,9 +88,6 @@ services:
       GOMODCACHE: /go/pkg/mod
       CGO_ENABLED: "1"
 
-      # Integration test flags
-      INTEGRATION_TEST: "1"
-
       # Networking configuration
       OVS_MANAGER: "tcp:127.0.0.1:6640"
 
@@ -110,7 +102,7 @@ services:
       NEXT_PUBLIC_API_URL: "https://localhost:8443"
       NEXT_PUBLIC_GRPC_URL: "https://localhost:10443"
       NEXT_PUBLIC_QUIC_URL: "https://localhost:9444"
-      NEXT_PUBLIC_MCP_URL: "http://localhost:9445"
+      NEXT_PUBLIC_MCP_URL: "https://localhost:9445"
 
       # Playwright configuration
       PLAYWRIGHT_BROWSERS_PATH: /ms-playwright
@@ -218,7 +210,6 @@ services:
 
     environment:
       AUTO_START_OVS: "true"
-      INTEGRATION_TEST: "1"
       QEMU_ENABLE_KVM: "true"
 
     ulimits:

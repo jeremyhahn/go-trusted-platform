@@ -52,12 +52,23 @@ type StateManager struct {
 	byMAC      sync.Map       // map[string]string (MAC address string -> device ID)
 	handlers   []EventHandler // Registered event handlers
 	handlersMu sync.RWMutex   // Protects handlers slice
+
+	// now is the time source for every timestamp the state machine stamps.
+	// time.Now in production; tests inject a clock they step by hand (#284).
+	now func() time.Time
 }
 
 // NewStateManager creates a new StateManager instance.
 func NewStateManager() *StateManager {
+	return newStateManager(time.Now)
+}
+
+// newStateManager creates a state manager that stamps devices and events with
+// the time from now, so tests can drive the clock.
+func newStateManager(now func() time.Time) *StateManager {
 	return &StateManager{
 		handlers: make([]EventHandler, 0),
+		now:      now,
 	}
 }
 
@@ -106,7 +117,7 @@ func (sm *StateManager) Register(device *DeviceInfo) error {
 	}
 
 	// Set timestamps if not already set
-	now := time.Now()
+	now := sm.now()
 	if device.CreatedAt.IsZero() {
 		device.CreatedAt = now
 	}
@@ -272,7 +283,7 @@ func (sm *StateManager) Transition(deviceID string, newState ProvisioningState, 
 		currentVersion := currentEntry.version
 
 		// Create updated device
-		now := time.Now()
+		now := sm.now()
 		updatedDevice := copyDeviceInfo(currentEntry.device)
 		updatedDevice.State = newState
 		updatedDevice.StateReason = reason
@@ -347,7 +358,7 @@ func (sm *StateManager) UpdateDevice(deviceID string, fn func(*DeviceInfo) error
 		}
 
 		// Update timestamp
-		updatedDevice.UpdatedAt = time.Now()
+		updatedDevice.UpdatedAt = sm.now()
 
 		// Create new entry with incremented version
 		newEntry := &deviceEntry{
@@ -428,7 +439,7 @@ func (sm *StateManager) createTransitionEvent(deviceID string, fromState, toStat
 	event := &ProvisioningEvent{
 		ID:        uuid.New().String(),
 		DeviceID:  deviceID,
-		Timestamp: time.Now(),
+		Timestamp: sm.now(),
 		EventType: eventType,
 		FromState: fromState,
 		ToState:   toState,

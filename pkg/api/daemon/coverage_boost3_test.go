@@ -151,6 +151,12 @@ func TestBoost_TPMGRPCService_MapError_NilError(t *testing.T) {
 	}
 }
 
+// untypedTPMError carries no gRPC status, so mapError classifies it by
+// its message.
+type untypedTPMError string
+
+func (e untypedTPMError) Error() string { return string(e) }
+
 func TestBoost_TPMGRPCService_MapError_Patterns(t *testing.T) {
 	logger := logging.NewLogger(slog.LevelError, io.Discard)
 	svc := NewTPMGRPCService(logger)
@@ -182,7 +188,7 @@ func TestBoost_TPMGRPCService_MapError_Patterns(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			err := svc.mapError(ErrServiceNotAvailable{Service: tc.errMsg})
+			err := svc.mapError(untypedTPMError(tc.errMsg))
 			if err == nil {
 				t.Fatal("expected non-nil error")
 			}

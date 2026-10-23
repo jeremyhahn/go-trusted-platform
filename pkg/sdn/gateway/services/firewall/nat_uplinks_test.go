@@ -269,7 +269,10 @@ func TestNAT_StartDualUplinkInstallsPoolsAndStatics(t *testing.T) {
 	if len(rules) != 6+5+12 {
 		t.Fatalf("expected 23 rules, got %d", len(rules))
 	}
-	wantCookie := fmt.Sprintf("0x%x", CookieNAT)
+	wantCookie := rules[0].Cookie
+	if c := cookieOf(wantCookie); c&CookieMask != CookieNAT || c == CookieNAT {
+		t.Fatalf("cookie %q is not the NAT owner with a generation", wantCookie)
+	}
 	for i, r := range rules {
 		if r.Cookie != wantCookie {
 			t.Fatalf("rule %d not cookie-scoped: %+v", i, r)

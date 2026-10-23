@@ -19,9 +19,13 @@ import (
 	"strconv"
 	"time"
 
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/mcp"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/eab"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore"
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
 
 // =============================================================================
@@ -69,6 +73,62 @@ func (e ErrEABInvalidHMACKey) Unwrap() error {
 	return e.Cause
 }
 
+// ErrEABToolFailure carries an EAB failure to the MCP surface with the
+// gRPC class EABGRPCService answers the same failure with, so the MCP
+// error code a caller sees (NotFound, InvalidArgument, FailedPrecondition,
+// Unavailable, Internal) matches the gRPC one. The message and the wrapped
+// error are the original's.
+type ErrEABToolFailure struct {
+	Class codes.Code
+	Cause error
+}
+
+// Error returns the message of the underlying failure.
+func (e ErrEABToolFailure) Error() string {
+	return e.Cause.Error()
+}
+
+// Unwrap exposes the underlying failure for errors.Is/As.
+func (e ErrEABToolFailure) Unwrap() error {
+	return e.Cause
+}
+
+// GRPCStatus reports the failure's class to the MCP error classifier.
+func (e ErrEABToolFailure) GRPCStatus() *status.Status {
+	return status.New(e.Class, e.Cause.Error())
+}
+
+// eabServiceFailure classifies an eab.Service error exactly as
+// eabErrorToStatus does for the gRPC surface.
+func eabServiceFailure(err error) error {
+	return ErrEABToolFailure{Class: status.Code(eabErrorToStatus(err)), Cause: err}
+}
+
+// requireEABService mirrors EABGRPCService.requireService.
+func (p *MCPServiceProvider) requireEABService() error {
+	if p.eabService == nil {
+		return ErrEABToolFailure{Class: codes.Unavailable, Cause: ErrEABNotConfigured{}}
+	}
+	return nil
+}
+
+// requireEABDelivery mirrors EABGRPCService.requireDelivery.
+func (p *MCPServiceProvider) requireEABDelivery() error {
+	if p.eabDelivery == nil {
+		return ErrEABToolFailure{Class: codes.Unavailable, Cause: ErrEABDeliveryNotConfigured{}}
+	}
+	return nil
+}
+
+// eabStatusByName maps the status names platform_eab_list_credentials
+// accepts onto the domain status, as pbStatusToEAB does for the pb enum.
+var eabStatusByName = map[string]eab.Status{
+	eab.StatusActive.String():  eab.StatusActive,
+	eab.StatusRevoked.String(): eab.StatusRevoked,
+	eab.StatusExpired.String(): eab.StatusExpired,
+	eab.StatusUsed.String():    eab.StatusUsed,
+}
+
 // EABServicer is the canonical EAB service interface shared by the gRPC,
 // QUIC, MCP and REST surfaces. It is a type alias of the domain
 // eab.Service interface (pkg/eab/types.go) so there is exactly ONE EAB
@@ -113,8 +173,8 @@ func (p *MCPServiceProvider) EABCreateCredential(
 	expiresInSeconds int64,
 	hmacKeyLength int,
 ) (interface{}, error) {
-	if p.eabService == nil {
-		return nil, ErrEABNotConfigured{}
+	if err := p.requireEABService(); err != nil {
+		return nil, err
 	}
 	params := eab.GenerateParams{
 		ProfileID:  profileID,
@@ -123,10 +183,12 @@ func (p *MCPServiceProvider) EABCreateCredential(
 	}
 	if expiresInSeconds > 0 {
 		params.ExpiresIn = time.Duration(expiresInSeconds) * time.Second
+	} else if expiresInSeconds < 0 {
+		return nil, eabServiceFailure(errEABNegativeExpiry)
 	}
 	cred, err := p.eabService.Generate(ctx, params)
 	if err != nil {
-		return nil, err
+		return nil, eabServiceFailure(err)
 	}
 	// Include HMAC key only on create per RFC 8555.
 	return eabCredentialJSON(cred, true), nil
@@ -135,12 +197,12 @@ func (p *MCPServiceProvider) EABCreateCredential(
 // EABGetCredential retrieves a credential by its numeric ID. The HMAC
 // key is omitted from the response.
 func (p *MCPServiceProvider) EABGetCredential(ctx context.Context, credentialID uint64) (interface{}, error) {
-	if p.eabService == nil {
-		return nil, ErrEABNotConfigured{}
+	if err := p.requireEABService(); err != nil {
+		return nil, err
 	}
 	cred, err := p.eabService.Get(ctx, credentialID)
 	if err != nil {
-		return nil, err
+		return nil, eabServiceFailure(err)
 	}
 	return eabCredentialJSON(cred, false), nil
 }
@@ -148,12 +210,12 @@ func (p *MCPServiceProvider) EABGetCredential(ctx context.Context, credentialID 
 // EABGetCredentialByKeyID retrieves a credential by its KeyID. The HMAC
 // key is omitted from the response.
 func (p *MCPServiceProvider) EABGetCredentialByKeyID(ctx context.Context, keyID string) (interface{}, error) {
-	if p.eabService == nil {
-		return nil, ErrEABNotConfigured{}
+	if err := p.requireEABService(); err != nil {
+		return nil, err
 	}
 	cred, err := p.eabService.GetByKeyID(ctx, keyID)
 	if err != nil {
-		return nil, err
+		return nil, eabServiceFailure(err)
 	}
 	return eabCredentialJSON(cred, false), nil
 }
@@ -161,65 +223,42 @@ func (p *MCPServiceProvider) EABGetCredentialByKeyID(ctx context.Context, keyID 
 // EABListCredentials lists credentials with the same filter cascade as
 // the gRPC ListCredentials RPC: profile_id (tenant_id refines),
 // tenant_id, or the full store when both are empty. status and
-// active_only refine the result; pagination is applied last so the
-// reported total reflects the filtered set.
+// active_only refine the result, which is ordered by id; pagination is
+// applied last so the reported total reflects the filtered set. An
+// unknown status name is refused rather than matching nothing.
 func (p *MCPServiceProvider) EABListCredentials(
 	ctx context.Context,
 	params mcp.EABListParams,
 ) (interface{}, error) {
-	if p.eabService == nil {
-		return nil, ErrEABNotConfigured{}
-	}
-
-	var (
-		creds []*eab.Credential
-		err   error
-	)
-	switch {
-	case params.ProfileID > 0:
-		creds, err = p.eabService.ListByProfile(ctx, params.ProfileID)
-	case params.TenantID != "":
-		creds, err = p.eabService.ListByTenant(ctx, params.TenantID)
-	default:
-		creds, err = eabCollectAll(ctx, p.eabService)
-	}
-	if err != nil {
+	if err := p.requireEABService(); err != nil {
 		return nil, err
 	}
-
-	filtered := make([]*eab.Credential, 0, len(creds))
-	for _, c := range creds {
-		// When ListByProfile is used, an additional tenant filter must
-		// never leak another tenant's credentials.
-		if params.ProfileID > 0 && params.TenantID != "" && c.TenantID != params.TenantID {
-			continue
-		}
-		if params.Status != "" && c.Status.String() != params.Status {
-			continue
-		}
-		if params.ActiveOnly && !c.IsValid() {
-			continue
-		}
-		filtered = append(filtered, c)
-	}
-
-	pageCreds := filtered
-	if params.PageSize > 0 {
-		page := params.Page
-		if page == 0 {
-			page = 1
-		}
-		start := uint64(page-1) * uint64(params.PageSize)
-		if start >= uint64(len(filtered)) {
-			pageCreds = nil
-		} else {
-			end := start + uint64(params.PageSize)
-			if end > uint64(len(filtered)) {
-				end = uint64(len(filtered))
+	filter := eabCredentialFilter{activeOnly: params.ActiveOnly}
+	if params.Status != "" {
+		statusFilter, known := eabStatusByName[params.Status]
+		if !known {
+			return nil, ErrEABToolFailure{
+				Class: codes.InvalidArgument,
+				Cause: ErrEABUnsupportedStatusFilter{Status: params.Status},
 			}
-			pageCreds = filtered[start:end]
 		}
+		filter.status, filter.byStatus = statusFilter, true
 	}
+
+	creds, err := collectEABCredentials(ctx, p.eabService, params.ProfileID, params.TenantID)
+	if err != nil {
+		return nil, eabServiceFailure(err)
+	}
+
+	filtered := filterEABCredentials(creds, filter)
+	// The tool takes no sort field, so it lists in gRPC's default order.
+	if err := sortEABCredentials(filtered, nil); err != nil {
+		return nil, err
+	}
+	pageCreds, _ := paginatePage(filtered, &platformv1.PaginationRequest{
+		Page:     params.Page,
+		PageSize: params.PageSize,
+	})
 
 	out := make([]map[string]interface{}, 0, len(pageCreds))
 	for _, c := range pageCreds {
@@ -261,11 +300,11 @@ func (p *MCPServiceProvider) EABRevokeCredential(
 	credentialID uint64,
 	revokerID uint64,
 ) (interface{}, error) {
-	if p.eabService == nil {
-		return nil, ErrEABNotConfigured{}
+	if err := p.requireEABService(); err != nil {
+		return nil, err
 	}
 	if err := p.eabService.Revoke(ctx, credentialID); err != nil {
-		return nil, err
+		return nil, eabServiceFailure(err)
 	}
 	return map[string]interface{}{
 		"credential_id": strconv.FormatUint(credentialID, 10),
@@ -282,12 +321,12 @@ func (p *MCPServiceProvider) EABValidateCredential(
 	keyID string,
 	hmacKey string,
 ) (interface{}, error) {
-	if p.eabService == nil {
-		return nil, ErrEABNotConfigured{}
+	if err := p.requireEABService(); err != nil {
+		return nil, err
 	}
 	decoded, err := decodeEABHMACKey(hmacKey)
 	if err != nil {
-		return nil, err
+		return nil, ErrEABToolFailure{Class: codes.InvalidArgument, Cause: err}
 	}
 	cred, err := p.eabService.Validate(ctx, keyID, decoded)
 	if err != nil {
@@ -305,11 +344,11 @@ func (p *MCPServiceProvider) EABValidateCredential(
 
 // EABDeleteCredential permanently removes a credential.
 func (p *MCPServiceProvider) EABDeleteCredential(ctx context.Context, credentialID uint64) (interface{}, error) {
-	if p.eabService == nil {
-		return nil, ErrEABNotConfigured{}
+	if err := p.requireEABService(); err != nil {
+		return nil, err
 	}
 	if err := p.eabService.Delete(ctx, credentialID); err != nil {
-		return nil, err
+		return nil, eabServiceFailure(err)
 	}
 	return map[string]interface{}{
 		"credential_id": strconv.FormatUint(credentialID, 10),
@@ -320,11 +359,11 @@ func (p *MCPServiceProvider) EABDeleteCredential(ctx context.Context, credential
 // EABMarkCredentialUsed marks a credential as used after successful
 // ACME enrollment.
 func (p *MCPServiceProvider) EABMarkCredentialUsed(ctx context.Context, credentialID uint64) (interface{}, error) {
-	if p.eabService == nil {
-		return nil, ErrEABNotConfigured{}
+	if err := p.requireEABService(); err != nil {
+		return nil, err
 	}
 	if err := p.eabService.MarkUsed(ctx, credentialID); err != nil {
-		return nil, err
+		return nil, eabServiceFailure(err)
 	}
 	return map[string]interface{}{
 		"credential_id": strconv.FormatUint(credentialID, 10),
@@ -332,16 +371,16 @@ func (p *MCPServiceProvider) EABMarkCredentialUsed(ctx context.Context, credenti
 	}, nil
 }
 
-// EABCleanupExpiredCredentials removes all expired credentials. The
-// underlying service does not currently support per-tenant cleanup; we
-// echo the requested filter back so callers can confirm intent.
+// EABCleanupExpiredCredentials removes the expired credentials of
+// tenantID, or of every tenant when it is empty, exactly as the gRPC
+// CleanupExpiredCredentials RPC does.
 func (p *MCPServiceProvider) EABCleanupExpiredCredentials(ctx context.Context, tenantID string) (interface{}, error) {
-	if p.eabService == nil {
-		return nil, ErrEABNotConfigured{}
-	}
-	deleted, err := p.eabService.CleanupExpired(ctx)
-	if err != nil {
+	if err := p.requireEABService(); err != nil {
 		return nil, err
+	}
+	deleted, err := cleanupExpiredEABCredentials(ctx, p.eabService, tenantID)
+	if err != nil {
+		return nil, eabServiceFailure(err)
 	}
 	return map[string]interface{}{
 		"deleted_count": deleted,
@@ -361,19 +400,22 @@ func (p *MCPServiceProvider) EABGetCredentialQRCode(
 	credentialID uint64,
 	size int,
 ) (interface{}, error) {
-	if p.eabService == nil {
-		return nil, ErrEABNotConfigured{}
+	if err := p.requireEABService(); err != nil {
+		return nil, err
 	}
-	if p.eabDelivery == nil {
-		return nil, ErrEABDeliveryNotConfigured{}
+	if err := p.requireEABDelivery(); err != nil {
+		return nil, err
+	}
+	if size < 0 {
+		return nil, ErrEABToolFailure{Class: codes.InvalidArgument, Cause: ErrEABInvalidQRCodeSize{Size: size}}
 	}
 	cred, err := p.eabService.Get(ctx, credentialID)
 	if err != nil {
-		return nil, err
+		return nil, eabServiceFailure(err)
 	}
 	png, err := p.eabDelivery.ToQRCodeSized(cred, size)
 	if err != nil {
-		return nil, err
+		return nil, eabServiceFailure(err)
 	}
 	return map[string]interface{}{
 		"credential_id": strconv.FormatUint(credentialID, 10),
@@ -390,15 +432,15 @@ func (p *MCPServiceProvider) EABGetEnrollmentURL(
 	credentialID uint64,
 	path string,
 ) (interface{}, error) {
-	if p.eabService == nil {
-		return nil, ErrEABNotConfigured{}
+	if err := p.requireEABService(); err != nil {
+		return nil, err
 	}
-	if p.eabDelivery == nil {
-		return nil, ErrEABDeliveryNotConfigured{}
+	if err := p.requireEABDelivery(); err != nil {
+		return nil, err
 	}
 	cred, err := p.eabService.Get(ctx, credentialID)
 	if err != nil {
-		return nil, err
+		return nil, eabServiceFailure(err)
 	}
 	var url string
 	if path != "" {
@@ -407,7 +449,7 @@ func (p *MCPServiceProvider) EABGetEnrollmentURL(
 		url, err = p.eabDelivery.ToURL(cred)
 	}
 	if err != nil {
-		return nil, err
+		return nil, eabServiceFailure(err)
 	}
 	return map[string]interface{}{
 		"credential_id": strconv.FormatUint(credentialID, 10),

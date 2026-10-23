@@ -16,9 +16,11 @@ package mcp
 import (
 	"context"
 	"errors"
+	"slices"
 	"testing"
 	"time"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/device"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
 )
 
@@ -89,6 +91,42 @@ func TestDeviceProfileCreateUpdate_TLSServerName(t *testing.T) {
 	}
 	if stub.profiles[id].TLSServerName != "gw.example.internal" {
 		t.Fatal("a caller that names tls_server_name must win")
+	}
+}
+
+// TestDeviceProfileUpdate_ClearTLSServerName is the MCP #462 round trip: set
+// → clear with "" → get shows none, and the clear reaches the provider as
+// the explicit device.ClearTLSServerName option the service honours. An
+// omitted or null tls_server_name must not ask for a clear.
+func TestDeviceProfileUpdate_ClearTLSServerName(t *testing.T) {
+	registry, stub := newDeviceProfileRegistry()
+	ctx := context.Background()
+	stub.profiles[46] = &entities.DeviceProfile{ID: 46, Name: "compute", TLSServerName: testTLSServerName}
+
+	for _, args := range []map[string]interface{}{
+		{"id": 46, "model": "X10SDV"},
+		{"id": 46, "tls_server_name": nil},
+	} {
+		if _, err := registry.ExecuteTool(ctx, "profile_update_by_id", args); err != nil {
+			t.Fatalf("profile_update_by_id %v: %v", args, err)
+		}
+		if slices.Contains(stub.lastUpdateOpts, device.ClearTLSServerName) || stub.profiles[46].TLSServerName != testTLSServerName {
+			t.Fatalf("update %v must keep the name: opts=%v stored=%q", args, stub.lastUpdateOpts, stub.profiles[46].TLSServerName)
+		}
+	}
+
+	if _, err := registry.ExecuteTool(ctx, "profile_update_by_id", map[string]interface{}{"id": 46, "tls_server_name": ""}); err != nil {
+		t.Fatalf("profile_update_by_id (clear): %v", err)
+	}
+	if !slices.Contains(stub.lastUpdateOpts, device.ClearTLSServerName) {
+		t.Fatal("an explicit empty tls_server_name must pass device.ClearTLSServerName to the service")
+	}
+	got, err := registry.ExecuteTool(ctx, "profile_get_by_id", map[string]interface{}{"id": 46})
+	if err != nil {
+		t.Fatalf("profile_get_by_id: %v", err)
+	}
+	if name, _ := got.(map[string]interface{})["tls_server_name"].(string); name != "" {
+		t.Fatalf("get after clear still reports tls_server_name %q", name)
 	}
 }
 

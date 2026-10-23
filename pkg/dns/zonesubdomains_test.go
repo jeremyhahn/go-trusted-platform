@@ -385,6 +385,44 @@ func TestService_RegisterWithNetworkZone_Idempotent(t *testing.T) {
 	assert.Equal(t, 1, count, "duplicate registration must be de-duped")
 }
 
+// TestService_RegisterWithNetworkZone_GetFails: a sub-zone that is absent is
+// skipped, but any other failure reading it is returned, not swallowed.
+func TestService_RegisterWithNetworkZone_GetFails(t *testing.T) {
+	cases := map[string]struct {
+		getErr  error
+		wantErr error
+	}{
+		"not found":   {getErr: mocks.ErrZoneNotFound},
+		"read failed": {getErr: mocks.ErrMockGet, wantErr: mocks.ErrMockGet},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			mockDAO := mocks.NewMockZoneDAO()
+			mockDAO.GetFunc = func(context.Context, uint64) (*entities.Zone, error) {
+				return nil, tc.getErr
+			}
+			svc := &Service{
+				params: &Params{TenantID: "platform", Config: &Config{
+					ZoneSubdomains: true,
+					InternalServer: &InternalServer{Zone: entities.Zone{Name: "example.internal."}},
+				}},
+				zoneDAO: mockDAO,
+			}
+
+			err := svc.RegisterWithNetworkZone(context.Background(), "node-01", "control-plane", "10.0.0.1")
+			if tc.wantErr == nil {
+				require.NoError(t, err)
+				return
+			}
+			require.ErrorIs(t, err, tc.wantErr)
+			var zoneErr *ZoneError
+			require.ErrorAs(t, err, &zoneErr)
+			assert.Equal(t, "control-plane.example.internal.", zoneErr.Zone)
+		})
+	}
+}
+
 // TestIsBMCName validates the helper.
 func TestIsBMCName(t *testing.T) {
 	tests := []struct {

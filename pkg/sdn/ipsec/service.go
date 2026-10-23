@@ -18,13 +18,14 @@ import (
 	"encoding/pem"
 	"errors"
 	"log/slog"
-	"maps"
 	"net/netip"
 	"os"
 	"slices"
 	"sync"
 	"time"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/bgp"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ipsec/config"
 	"github.com/vishvananda/netns"
 )
 
@@ -47,8 +48,10 @@ const (
 // context ends. The floor is never taken out: it stays after Run returns
 // and after Close, so a node whose platformd stops keeps the fabric dark.
 //
-// The node has no EVPN route source, so no VTEP is admitted from a route
-// (ErrNoVTEPAdmission): the peers are the static peers.
+// A service from NewService has no EVPN route source, so no VTEP is
+// admitted from a route (ErrNoVTEPAdmission): the peers are the static
+// peers. One from NewEVPNService also follows the Type-3 routes handed to
+// HandleEVPNRoute, holding an SA to every remote VTEP its admitter admits.
 type Service struct {
 	filter   *Filter
 	block    *BlockPolicy
@@ -58,10 +61,6 @@ type Service struct {
 	crlFiles []string
 	logger   *slog.Logger
 	after    func(time.Duration) <-chan time.Time
-	local    netip.Addr
-	static   map[netip.Addr]struct{}
-	mu       sync.Mutex
-	unpeered map[netip.Addr]struct{}
 }
 
 // closingIdentity is an IdentityProvider holding a secret it releases on
@@ -84,12 +83,22 @@ func (staticPeersOnly) AdmitVTEP(context.Context, uint32, netip.Addr) error {
 // certificate-file and crl-files. It opens netlink connections to
 // nf_tables and XFRM in the current network namespace; installing the
 // floor needs CAP_NET_ADMIN. A nil logger discards.
-func NewService(cfg *Config, logger *slog.Logger) (*Service, error) {
-	if _, err := enabledLocal(cfg); err != nil {
+func NewService(cfg *config.Config, logger *slog.Logger) (*Service, error) {
+	return NewEVPNService(cfg, staticPeersOnly{}, logger)
+}
+
+// NewEVPNService is NewService for a node whose overlay runs EVPN: the
+// controller asks admitter before it brings an SA up to a VTEP a route
+// names. A nil admitter is ErrMissingDependency.
+func NewEVPNService(cfg *config.Config, admitter Admitter, logger *slog.Logger) (*Service, error) {
+	if admitter == nil {
+		return nil, ErrMissingDependency
+	}
+	if _, err := config.EnabledLocal(cfg); err != nil {
 		return nil, err
 	}
 	if len(cfg.CRLFiles) == 0 {
-		return nil, &ConfigError{Field: "crl-files", Err: ErrRequired}
+		return nil, &config.ConfigError{Field: "crl-files", Err: config.ErrRequired}
 	}
 	identity, err := NewFileIdentity(cfg)
 	if err != nil {
@@ -105,7 +114,7 @@ func NewService(cfg *Config, logger *slog.Logger) (*Service, error) {
 		identity.Close()
 		return nil, err
 	}
-	s, err := newService(cfg, filter, block, identity, NewVICIDialer(cfg.EffectiveVICISocket(), charonUID), logger)
+	s, err := newService(cfg, admitter, filter, block, identity, NewVICIDialer(cfg.EffectiveVICISocket(), charonUID), logger)
 	if err != nil {
 		block.Close()
 		identity.Close()
@@ -114,29 +123,17 @@ func NewService(cfg *Config, logger *slog.Logger) (*Service, error) {
 	return s, nil
 }
 
-func newService(cfg *Config, filter *Filter, block *BlockPolicy, identity closingIdentity, dialer Dialer, logger *slog.Logger) (*Service, error) {
+func newService(cfg *config.Config, admitter Admitter, filter *Filter, block *BlockPolicy, identity closingIdentity, dialer Dialer, logger *slog.Logger) (*Service, error) {
 	if logger == nil {
 		logger = slog.New(slog.DiscardHandler)
 	}
-	local, err := enabledLocal(cfg)
-	if err != nil {
-		return nil, err
-	}
-	peers, err := cfg.Peers()
-	if err != nil {
-		return nil, err
-	}
-	ctl, err := NewController(cfg, staticPeersOnly{}, filter, identity)
+	ctl, err := NewController(cfg, admitter, filter, identity)
 	if err != nil {
 		return nil, err
 	}
 	runner, err := NewRunner(ctl, dialer, logger)
 	if err != nil {
 		return nil, err
-	}
-	static := make(map[netip.Addr]struct{}, len(peers))
-	for _, peer := range peers {
-		static[peer.Unmap()] = struct{}{}
 	}
 	return &Service{
 		filter:   filter,
@@ -147,66 +144,7 @@ func newService(cfg *Config, filter *Filter, block *BlockPolicy, identity closin
 		crlFiles: slices.Clone(cfg.CRLFiles),
 		logger:   logger,
 		after:    time.After,
-		local:    local.Unmap(),
-		static:   static,
-		unpeered: make(map[netip.Addr]struct{}),
 	}, nil
-}
-
-// ValidateVTEPs refuses startup when the overlay already knows remote VTEPs
-// that are missing from static-peers.
-func (s *Service) ValidateVTEPs(vteps []netip.Addr) error {
-	missing := s.missingStaticPeers(vteps)
-	if len(missing) == 0 {
-		return nil
-	}
-	return &MissingStaticPeersError{VTEPs: missing}
-}
-
-// ObserveVTEP records and warns about a remote VTEP that overlay learned but
-// IPsec cannot peer with because static-peers omits it.
-func (s *Service) ObserveVTEP(ctx context.Context, vtep netip.Addr) {
-	_ = ctx
-	missing := s.missingStaticPeers([]netip.Addr{vtep})
-	if len(missing) == 0 {
-		return
-	}
-	peer := missing[0]
-	s.mu.Lock()
-	_, logged := s.unpeered[peer]
-	s.unpeered[peer] = struct{}{}
-	s.mu.Unlock()
-	if !logged {
-		s.logger.Warn("overlay VTEP missing from IPsec static-peers", "vtep", peer)
-	}
-}
-
-// Status returns the IPsec controller state plus daemon-level peer checks.
-func (s *Service) Status() Status {
-	st := s.ctl.Status()
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	st.UnpeeredVTEPs = slices.SortedFunc(maps.Keys(s.unpeered), netip.Addr.Compare)
-	return st
-}
-
-func (s *Service) missingStaticPeers(vteps []netip.Addr) []netip.Addr {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	missing := make(map[netip.Addr]struct{})
-	for _, vtep := range vteps {
-		peer := vtep.Unmap()
-		if !peer.IsValid() || peer == s.local {
-			continue
-		}
-		if _, ok := s.static[peer]; ok {
-			delete(s.unpeered, peer)
-			continue
-		}
-		missing[peer] = struct{}{}
-		s.unpeered[peer] = struct{}{}
-	}
-	return slices.SortedFunc(maps.Keys(missing), netip.Addr.Compare)
 }
 
 // Install puts the fail-closed floor in: the nftables table, then the XFRM
@@ -236,6 +174,29 @@ func (s *Service) Run(ctx context.Context) {
 func (s *Service) Close() {
 	s.block.Close()
 	s.identity.Close()
+}
+
+// HandleEVPNRoute hands a Type-3 route to the controller: the SA to its
+// VTEP is brought up while a route places the VTEP on a VNI, and taken
+// down when the last such route is withdrawn.
+func (s *Service) HandleEVPNRoute(ctx context.Context, route *bgp.EVPNRouteData) error {
+	return s.ctl.HandleEVPNRoute(ctx, route)
+}
+
+// Evict cuts a peer off until Readmit: its traffic is dropped in the
+// kernel and its SAs are torn down, whatever its routes say.
+func (s *Service) Evict(ctx context.Context, peer netip.Addr) error {
+	return s.ctl.Evict(ctx, peer)
+}
+
+// Readmit lifts an eviction, so the peer's routes bring its SA back. A
+// peer that was never evicted is left as it is.
+func (s *Service) Readmit(ctx context.Context, peer netip.Addr) error {
+	err := s.ctl.Readmit(ctx, peer)
+	if errors.Is(err, ErrNotEvicted) {
+		return nil
+	}
+	return err
 }
 
 // watch runs BlockPolicy.Watch until ctx ends, and again after each
@@ -281,7 +242,7 @@ func (s *Service) pushCRLs(ctx context.Context) error {
 	for i, path := range s.crlFiles {
 		ders, err := readCRLs(path)
 		if err != nil {
-			errs = append(errs, &ConfigError{Field: crlFileField(i), Err: err})
+			errs = append(errs, &config.ConfigError{Field: config.CRLFileField(i), Err: err})
 			continue
 		}
 		for _, der := range ders {

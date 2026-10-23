@@ -680,6 +680,16 @@ func TestErrTPMConnectionFailed_Unwrap(t *testing.T) {
 	}
 }
 
+func TestErrInvalidEKAlgorithm_Error(t *testing.T) {
+	errMsg := ErrInvalidEKAlgorithm{Algorithm: "ECDSA"}.Error()
+
+	for _, want := range []string{`"ECDSA"`, "RSA or ECC"} {
+		if !strings.Contains(errMsg, want) {
+			t.Errorf("Error() = %q, want it to contain %q", errMsg, want)
+		}
+	}
+}
+
 // =============================================================================
 // Error Type Assertions Tests
 // =============================================================================

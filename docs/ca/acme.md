@@ -1,5 +1,8 @@
 # ACME Server
 
+> **Status: REFERENCE** · Last verified: 2026-10-13
+> Deep dive on the stack's ACME server and the `webservices[].acme` configuration; the challenge handlers are go-xkms's ([architecture.md](architecture.md)).
+
 This document describes the ACME (Automated Certificate Management Environment)
 server implementation, including the enroll-01 challenge for TPM attestation.
 
@@ -282,7 +285,7 @@ webservices:
       signature-algorithm: ECDSA-SHA256
       hash: SHA-256
       store: software
-      password: "123456"
+      password: "kms://webservices/0/key/password?ensure=true&len=32&enc=raw"
       platform-policy: true
 
     # TLS certificate configuration
@@ -376,7 +379,7 @@ acme:
         cn: acme-account
         debug: true
         hash: SHA-256
-        password: "123456"
+        password: "kms://acme/account-key/password?ensure=true&len=32&enc=raw"
         platform-policy: true
         ecc:
           curve: P-256
@@ -386,7 +389,7 @@ acme:
         # algorithm: RSA
         # cn: acme-account
         # hash: SHA-256
-        # password: "123456"
+        # password: "kms://acme/account-key/password?ensure=true&len=32&enc=raw"
         # platform-policy: true
         # rsa:
         #   size: 2048
@@ -397,7 +400,7 @@ acme:
 
 ## Related Documentation
 
-- [README](README.md) - CA module overview
+- [README](user.md) - CA module overview
 - [Architecture](architecture.md) - CA hierarchy
 - [Configuration](configuration.md) - Full configuration reference
 - [TPM Attestation](../tpm/attestation.md) - Attestation details

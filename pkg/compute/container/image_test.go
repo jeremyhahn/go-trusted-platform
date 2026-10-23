@@ -964,33 +964,39 @@ func TestImageManagerConfigValidate(t *testing.T) {
 func TestVerificationCacheExpiry(t *testing.T) {
 	config := ImageManagerConfig{
 		Logger:   testImageLogger(),
-		CacheTTL: 10 * time.Millisecond, // Very short TTL for testing
+		CacheTTL: time.Minute,
 	}
 	verifier := NewMockImageVerifier(true)
 	manager, _ := newImageManagerWithImages(t, config,
 		[]ImageManagerOption{WithImageVerifier(verifier)}, "alpine:latest")
 	defer manager.Close()
 
-	// First call populates cache
-	manager.VerifyImage(context.Background(), "alpine:latest")
-	if verifier.verifyCalls != 1 {
-		t.Fatalf("expected verifyCalls=1, got %d", verifier.verifyCalls)
+	current := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	manager.now = func() time.Time { return current }
+
+	verify := func(wantCalls int, why string) {
+		t.Helper()
+		if _, err := manager.VerifyImage(context.Background(), "alpine:latest"); err != nil {
+			t.Fatalf("VerifyImage: %v", err)
+		}
+		if verifier.verifyCalls != wantCalls {
+			t.Errorf("expected verifyCalls=%d (%s), got %d", wantCalls, why, verifier.verifyCalls)
+		}
 	}
+
+	// First call populates cache
+	verify(1, "first call")
 
 	// Immediate second call uses cache
-	manager.VerifyImage(context.Background(), "alpine:latest")
-	if verifier.verifyCalls != 1 {
-		t.Errorf("expected verifyCalls=1 (cached), got %d", verifier.verifyCalls)
-	}
+	verify(1, "cached")
 
-	// Wait for cache to expire
-	time.Sleep(20 * time.Millisecond)
+	// Still cached at exactly the TTL
+	current = current.Add(time.Minute)
+	verify(1, "cached at TTL")
 
-	// Third call should re-verify
-	manager.VerifyImage(context.Background(), "alpine:latest")
-	if verifier.verifyCalls != 2 {
-		t.Errorf("expected verifyCalls=2 (expired), got %d", verifier.verifyCalls)
-	}
+	// Expired one nanosecond past the TTL: re-verify
+	current = current.Add(time.Nanosecond)
+	verify(2, "expired")
 }
 
 // TestImageManagerRemoveImage tests image removal.

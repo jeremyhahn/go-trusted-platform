@@ -1,5 +1,9 @@
 # Unified Architecture: Dependency Stack
 
+> **Status: REFERENCE** · Last verified: 2026-10-13
+> The module dependency stack and the barrier call path, as built. Identifiers in
+> go-qrdb, go-xkms and go-quicbaas belong to those repositories.
+
 This document describes the dependency chain across the go-trusted-platform ecosystem, detailing which capabilities originate from which layer and how barrier, ceremony, and algorithm operations flow through the stack.
 
 ## Dependency Chain
@@ -24,15 +28,18 @@ The four-layer chain understates what the module actually declares. The full set
 
 | Module | In go.mod as | Reached how |
 |--------|--------------|-------------|
-| `go-quicbaas/sdk/go` | direct | Imported directly; the single sanctioned runtime path (~570 import sites) |
-| `go-quicbaas/api/proto` | direct | Imported directly for protobuf types in the daemon services |
+| `go-quicbaas/sdk/go` | direct | Imported directly; the single sanctioned runtime path |
+| `go-quicbaas` | direct | Imported directly for the `api/proto` protobuf types in the daemon services |
+| `go-trusted-platform/sdk/go` | direct (`replace` → `./sdk/go`) | This repository's own Go SDK |
+| `trusted-firmware/sdk/go` | direct | Imported directly for AVR attestation (`pkg/firmware/avr/attestation`) |
 | `go-codec` | direct | Imported directly (`pkg/api/daemon/daemon.go` and the QUIC/REST services) |
-| `go-luks2` | direct | Imported directly (`pkg/firstboot`, `pkg/boot/commands`, `pkg/installer`, `pkg/app/backends`) |
-| `go-xkms`, `go-xkms/sdk/go` | direct | **Never imported.** Present because the `quicbaas/sdk/go/xkms/*` type-alias re-exports resolve into them |
-| `go-qrdb`, `go-qrdb/sdk/go` | indirect / direct | **Never imported.** Reached only through the SDK |
+| `go-luks2` | direct | Imported directly (`pkg/firstboot`, `pkg/boot/commands`, `pkg/installer`, `pkg/app/backends`, `pkg/storage`, `pkg/cli/commands`) |
+| `go-xkms`, `go-xkms/sdk/go` | indirect | **Never imported.** Present because the `quicbaas/sdk/go/xkms/*` type-alias re-exports resolve into them |
+| `go-qrdb`, `go-qrdb/sdk/go` | indirect | **Never imported.** Reached only through the SDK |
 | `go-quicraft` | indirect | **Never imported.** Consensus is reached through the SDK |
-| `go-truststrap` | direct | **Never imported.** Trust bootstrap goes through `quicbaas/sdk/go/xkms/trust/bootstrap`; the module is a leftover `require` |
-| `go-objstore` | direct | **Never imported.** Object storage is reached through the quicbaas SDK object-storage client; the module is a leftover `require` |
+| `go-truststrap` | indirect | **Never imported.** Trust bootstrap goes through `quicbaas/sdk/go/xkms/trust/bootstrap` |
+| `go-objstore` | indirect | **Never imported.** Object storage is reached through the quicbaas SDK object-storage client |
+| `go-enclave` | indirect | Pulled in transitively; no platform import site |
 | `go-frost` | indirect | Pulled in transitively; no platform import site |
 | `go-auth` | indirect | Pulled in transitively; no platform import site |
 

@@ -59,7 +59,10 @@ func runInfo(commonFlags *cli.CommonFlags, f *infoFlags) error {
 	}
 	defer base.Close()
 
-	client := lukssvc.NewClient()
+	client, err := newService(base.Client())
+	if err != nil {
+		return err
+	}
 	resp, err := client.Info(base.Context(), &lukssvc.InfoRequest{Device: device})
 	if err != nil {
 		return err

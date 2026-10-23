@@ -1,6 +1,6 @@
 # DNS — API
 
-> **Status: NORMATIVE** · Scope: DNS routes on every transport · Last verified: 2026-08-18
+> **Status: NORMATIVE** · Scope: DNS routes on every transport · Last verified: 2026-10-15
 > Conflicts with this document are defects. Fix them here first.
 > One row per capability across all six transports. A transport that does not
 > carry a capability is written `MISSING`, never omitted.
@@ -14,9 +14,16 @@
 over a Unix domain socket**, so gRPC and Unix share a column.
 `ServiceRegistry.DNS` carries the service in-process.
 
+**One backend serves every transport.** platformd starts one DNS service from
+the `dns:` section. gRPC, Unix and embedded share one `DNSServiceServer` over
+it (`Daemon.DNSGRPCServiceServer`, `pkg/api/daemon/daemon.go`); QUIC, MCP and
+REST hold the same `*dns.Service`. With no `dns:` section there is no backend,
+and every transport answers the not-configured error (§5).
+
 gRPC: `DNSService`, 13 RPCs (`pkg/api/grpc/proto/platform_dns.proto`).
 REST: base path `/api/v1/dns` (`pkg/webservice/v1/rest/dns/router.go`).
-QUIC: top-level opcodes `0x20`–`0x2D` — no category indirection.
+QUIC: top-level opcodes `0x20`–`0x2C` — no category indirection. `0x2B` and
+`0x2D` are retired (#317) — see §2.
 MCP: **two parallel tool families** — see §3.
 
 ---
@@ -32,39 +39,62 @@ MCP: **two parallel tool families** — see §3.
 | Delete zone | `DELETE /api/v1/dns/zones/{zone}` | `DeleteZone` | `OpDNSDeleteZone` (`0x26`) | `dns_delete_zone`, `dns_zone_delete` | ✅ |
 | Add record | `POST /api/v1/dns/zones/{zone}/records` | `AddRecord` | `OpDNSAddRecord` (`0x20`) | `dns_add_record`, `dns_record_create` | ✅ |
 | List records | `GET /api/v1/dns/zones/{zone}/records` | `ListRecords` | `OpDNSListRecords` (`0x24`) | `dns_list_records`, `dns_record_list` | ✅ |
-| Get record | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `OpDNSGetRecord` (`0x23`) | `dns_get_record`, `dns_record_get` | — |
+| Get record | `GET /api/v1/dns/zones/{zone}/records/{type}/{name}` | `MISSING — docs/13 G7` | `OpDNSGetRecord` (`0x23`) | `dns_get_record`, `dns_record_get` | — |
 | Update record | `MISSING — docs/13 G7` | `UpdateRecord` | `OpDNSUpdateRecord` (`0x22`) | `dns_record_update` | ✅ |
 | Delete record | `DELETE /api/v1/dns/zones/{zone}/records/{type}/{name}` | `DeleteRecord` | `OpDNSDeleteRecord` (`0x21`) | `dns_delete_record`, `dns_record_delete` | ✅ |
-| Sign zone | `POST /api/v1/dns/zones/{zone}/sign` | `SignZone` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | ✅ |
-| DNSSEC status | `GET /api/v1/dns/zones/{zone}/dnssec` | `GetDNSSECStatus` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | ✅ |
-| Resolve | `MISSING — docs/13 G7` | `Resolve` | `OpDNSResolve` (`0x29`) | `dns_resolve`, `dns_lookup` | ✅ |
-| Reverse lookup | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `dns_reverse_lookup` | — |
-| Register | `POST /api/v1/dns/register` | `Register` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | ✅ |
+| Sign zone | `POST /api/v1/dns/zones/{zone}/sign` | `SignZone` | `MISSING — docs/13 G7` | `dns_zone_sign` | ✅ |
+| DNSSEC status | `GET /api/v1/dns/zones/{zone}/dnssec` | `GetDNSSECStatus` | `MISSING — docs/13 G7` | `dns_zone_dnssec_status` | ✅ |
+| Resolve | `GET /api/v1/dns/resolve?fqdn={fqdn}&type={type}` | `Resolve` | `OpDNSResolve` (`0x29`) | `dns_resolve`, `dns_lookup` | ✅ |
+| Reverse lookup | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | — |
+| Register | `POST /api/v1/dns/register` | `Register` | `MISSING — docs/13 G7` | `dns_register` | ✅ |
 | Get DNS config | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `OpDNSGetConfig` (`0x2A`) | `MISSING — docs/13 G7` | — |
-| Update DNS config | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `OpDNSUpdateConfig` (`0x2B`) | `MISSING — docs/13 G7` | — |
 | DNS metrics | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `OpDNSGetMetrics` (`0x2C`) | `MISSING — docs/13 G7` | — |
-| Flush cache | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `OpDNSFlushCache` (`0x2D`) | `MISSING — docs/13 G7` | — |
 
 Two shapes stand out:
 
-- **DNSSEC — signing and status — exists only on REST, gRPC and embedded.** No
-  QUIC, no MCP. Signing a zone is the operation that matters most and is
-  reachable on the fewest transports.
-- **Four operational verbs are QUIC-only**: get config, update config, metrics,
-  flush cache. An operator on REST cannot flush the DNS cache or read DNS
-  metrics.
+- **DNSSEC — signing and status — has no QUIC opcode.** REST, gRPC, MCP
+  (`dns_zone_sign`, `dns_zone_dnssec_status`) and embedded carry it.
+- **Two operational reads are QUIC-only**: get config and metrics. An operator
+  on REST cannot read DNS metrics.
+- **There is no update-config or flush-cache verb on any transport.**
+  `OpDNSUpdateConfig` (`0x2B`) and `OpDNSFlushCache` (`0x2D`) only ever
+  answered `StatusNotImplemented`: `DNSService` has no runtime config setter,
+  and the platform's DNS server keeps no cache. The only cache is the dnsmasq
+  local forwarder's (`cache-size`, `pkg/dns/resolver.go`), which no platform
+  API controls. #317 retired both bytes; the wire refuses them as unclassified
+  (`StatusPermissionDenied`). Do not reuse them. A flush verb needs a dnsmasq
+  control path in the DNS service layer, served on every transport.
 
 `DELETE /api/v1/dns/zones/{zone}/records/{type}/{name}` keys a record by type
 and name in the path, so a record with the same name in two types is deleted
-independently — that is the intended granularity.
+independently — that is the intended granularity. `GET` on the same path
+returns that one record (404 when the zone holds no record of that type and
+name); `GET /api/v1/dns/zones/{zone}/records` lists the zone, optionally
+filtered by `?type=`. The two are distinct routes with distinct answers.
+
+The SDK REST client (`sdk/go/transport/rest/dns.go`) calls these routes with
+the zone, record type and record name in the path, never in the body; the type
+travels as its mnemonic (`A`, `AAAA`, `MX`), and a record call without a type
+is refused before it is sent. Get record is served on REST, and on MCP by
+`dns_record_get` from `ListRecords` (§3). The SDK cannot call it, because
+`DNSService` declares no `GetRecord` rpc (docs/13 G7).
+
+`GET /api/v1/dns/resolve` answers from managed zones only, exactly as gRPC
+`Resolve` does — both call `dns.ResolveName`: `fqdn` is required (400 without
+it) and the longest managed zone suffix answers with only the records the name
+owns, filtered by `type`. A name with no managed zone is a 200 with no records
+and `authoritative: false`; a name inside one with no such records is a 200
+with no records and `authoritative: true`. A `type` resolution does not serve
+is a 400 (gRPC `InvalidArgument`). See
+[resolution.md](resolution.md#api-resolve).
 
 ---
 
-## 3. The MCP surface is duplicated — and the two halves authorize differently
+## 3. The MCP surface is duplicated
 
-**This is the finding to read before writing an MCP client.**
+**Read this before writing an MCP client.**
 
-Twenty DNS tool names exist for roughly ten capabilities, in two families:
+Twenty-two DNS tool names exist for fourteen capabilities, in two families:
 
 | Older family (`pkg/api/mcp/tools.go`) | Newer family (`pkg/api/mcp/dns_tools.go`) |
 |---|---|
@@ -77,44 +107,68 @@ Twenty DNS tool names exist for roughly ten capabilities, in two families:
 | `dns_get_record` | `dns_record_get` |
 | `dns_delete_record` | `dns_record_delete` |
 | — | `dns_record_update` |
-| `dns_resolve` | `dns_lookup`, `dns_reverse_lookup` |
+| `dns_resolve` | `dns_lookup` |
+| — | `dns_zone_sign`, `dns_zone_dnssec_status` |
+| — | `dns_register` |
 
-**Only the older family is in the authorization map.**
-`pkg/api/mcp/authz.go` sets `toolPermissions` for `dns_add_record` →
+**Both families are in the authorization map, under `dns:*` scopes.** The older
+family's permissions are listed in `pkg/api/mcp/authz.go` (`dns_add_record` →
 `dns:write`, `dns_create_zone` → `dns:write`, `dns_delete_zone` →
-`dns:delete`, `dns_resolve` → `dns:read`, and the other four older names.
-`dns_zone_create`, `dns_record_create`, `dns_zone_update`, `dns_record_update`,
-`dns_lookup` and `dns_reverse_lookup` are **absent**.
+`dns:delete`, `dns_resolve` → `dns:read`, and four more).
 
-`AuthorizeTool` (`pkg/api/mcp/authz.go:157`) returns no error when a tool is
-absent from the map — the comment reads *"Unknown tool - let the tool registry
-handle the error"* — so the tool proceeds once the token validates.
+The newer family is bound to the gRPC `DNSService` servicer (#304). Each tool
+decodes its arguments into the RPC's request message and calls the RPC over the
+daemon's DNS service. It returns the response with proto field names and
+requires the RPC's scope (`dnsTools`, `pkg/api/mcp/dns_tools.go`). The tool
+therefore answers and fails as gRPC does: the gRPC status passes through, so
+`NotFound` and `InvalidArgument` keep their class on the wire.
 
-**Net effect: `dns_create_zone` requires `dns:write`, and `dns_zone_create`
-requires nothing.** Same operation, two names, two authorization outcomes, and
-the unguarded one is the newer name a client is more likely to discover.
+- **Arguments.** The arguments are the request message in its JSON form.
+  `dns_record_create` takes `zone_name` and a `record` such as
+  `{"type": "RECORD_TYPE_A", "a": {"name": "www", "value": "10.0.0.1", "ttl": 300}}`.
+  An argument the request does not have is `InvalidArgument`.
+- **`dns_record_get` has no RPC**, because `DNSService` declares no `GetRecord`.
+  It lists the zone's records of `type` and returns the one named `name`, as
+  REST's `GET …/records/{type}/{name}` does. When none matches it returns
+  `NotFound` (`ErrDNSRecordNotFound`). It requires `dns:read`, the scope of
+  `ListRecords`.
+- **There is no reverse lookup tool.** No transport serves a reverse lookup and
+  the record set has no PTR type, so #304 deleted the backendless
+  `dns_reverse_lookup`.
+- **No DNS service.** With no `dns:` section, every tool in both families
+  returns `Unavailable` (§5).
 
-This is raised as an owner question in the migration report — which family is
-canonical, whether the other is removed or aliased, and whether the map should
-default to deny rather than allow.
+`dns_create_zone` and `dns_zone_create` now need the same scope.
+
+**The Go SDK's MCP transport calls the newer family.** Its route table
+(`dnsToolMap`, `sdk/go/transport/mcp/dns.go`) sends each of the 13
+`DNSService` methods to its newer tool, with the request and the reply in
+their proto JSON form — `CreateZone` to `dns_zone_create`, `Resolve` to
+`dns_lookup`, `SignZone` to `dns_zone_sign`. The older tools take FQDN-shaped
+arguments no request message carries, so the SDK never calls them.
+
+Which family is canonical, and whether the other is removed or aliased, is
+still open.
 
 ---
 
 ## 4. Authorization
 
-Platform tokens carry an `scp` claim as `"<resource>:<action>"`.
-**`DNSService` is in the gRPC scope catalog** with 13 methods mapped, resource
-`dns`, actions `read`/`write`/`delete` — one of only eleven services in the
-catalog.
+Platform tokens carry an `scp` claim as `"<resource>:<action>"`. Both catalogs
+are **default-deny** ([`docs/auth/architecture.md`](../auth/architecture.md)).
 
-On MCP the picture is different and much weaker: **71 of the 449 declared tool
-names carry a required permission**; the remaining 378 are allowed once the
-token validates. Eight of the 71 are DNS tools, and §3 explains which eight.
+**`DNSService` is fully scoped on gRPC** with 13 methods mapped, resource
+`dns`, actions `read`/`write`/`delete`.
 
-The asymmetry is structural, not DNS-specific: gRPC's catalog covers 185 of 461
-RPCs, and MCP's covers 71 of 449 tools. Both default to allow. **Whether the
-default should invert is an owner decision** and is the single largest
-authorization question this migration surfaced.
+On MCP, the eight older-family tools in §3 carry a permission. So do all eleven
+newer-family tools, each with its gRPC method's scope.
+
+The tenant is the DNS service's own. `DNSService` carries no caller tenant on
+gRPC: it acts in the tenant the daemon configured the DNS service with, and a
+zone of another tenant is `NotFound`. The MCP tools call the same servicer, so
+they behave identically and add no tenant binding of their own. Platform-wide
+catalog totals are in
+[`docs/daemon/api.md`](../daemon/api.md) §5.
 
 ### REST is gated on the `admin` role (#165)
 
@@ -138,10 +192,17 @@ positions described above are unchanged. See
 | `0x02` | `StatusNotFound` | 404 | Unknown zone or record |
 | `0x03` | `StatusUnauthorized` | 401 | Token invalid |
 | `0x04` | `StatusInternalError` | 500 | Resolver or key-store failure |
-| `0x06` | `StatusAlreadyExists` | 409 | `ErrZoneAlreadyExists` |
+| `0x06` | `StatusAlreadyExists` | 500 | `ErrZoneAlreadyExists` (REST `Register` only; REST `CreateZone` saves over an existing zone) |
 | `0x07` | `StatusPermissionDenied` | 403 | Missing `dns:*` scope |
 | `0x09` | `StatusInvalidArgument` | 400 | `ErrRecordTypeNotSupported`, `ErrInvalidResolverAddress`, `ErrInvalidResolverPort` |
-| `0x0A` | `StatusUnavailable` | 503 | DNS service not wired into the daemon |
+| `0x0A` | `StatusUnavailable` | 503 | No DNS backend: the daemon has no `dns:` section |
+
+With no backend, every DNS call answers the not-configured error before it
+reads its input, so an empty request is `Unavailable`, not `InvalidArgument`.
+gRPC, Unix and embedded answer `Unavailable` with an `ErrorInfo` reason
+`SERVICE_NOT_CONFIGURED`, metadata `service=dns` (`ErrDNSServiceNotAvailable`,
+`pkg/api/daemon/errors.go`); REST answers 503 with code
+`SERVICE_NOT_CONFIGURED`; QUIC answers `0x0A`; MCP answers `Unavailable`.
 
 `ErrNoResolverServers`, `ErrZoneSubdomainsNoInternalServer` and
 `ErrZoneSubdomainsNoNetworkZones` are **load-time** errors — the service does not

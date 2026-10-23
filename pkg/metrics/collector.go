@@ -16,14 +16,13 @@ package metrics
 import (
 	"context"
 	"fmt"
+	"net"
 	"net/http"
 	"runtime"
 	"sync"
 	"sync/atomic"
 	"time"
 
-	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/collectors"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
@@ -38,6 +37,9 @@ type Collector struct {
 	stopChan         chan struct{}
 	stoppedChan      chan struct{}
 	collectionActive bool
+	// tick, when set before Start, replaces the CollectInterval ticker so a
+	// test drives each collection instead of waiting out real intervals.
+	tick <-chan time.Time
 }
 
 // NewCollector creates a new metrics collector
@@ -81,7 +83,7 @@ func (c *Collector) Start(ctx context.Context) error {
 
 	// Create HTTP server for metrics endpoint
 	mux := http.NewServeMux()
-	mux.Handle(c.config.Path, promhttp.Handler())
+	mux.Handle(c.config.Path, c.Handler())
 
 	// Add health check endpoint
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
@@ -98,9 +100,18 @@ func (c *Collector) Start(ctx context.Context) error {
 		IdleTimeout:  60 * time.Second,
 	}
 
-	// Start HTTP server in goroutine
+	// Bind synchronously so the endpoint is reachable as soon as Start
+	// returns, and a bind failure (address in use) is Start's error rather
+	// than a message printed from a goroutine.
+	listener, err := net.Listen("tcp", addr)
+	if err != nil {
+		c.running.Store(false)
+		return &WrappedError{Msg: "failed to bind metrics server on " + addr, Err: err}
+	}
+
+	// Serve in a goroutine
 	go func() {
-		if err := c.server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		if err := c.server.Serve(listener); err != nil && err != http.ErrServerClosed {
 			// Log error but don't crash
 			fmt.Printf("metrics server error: %v\n", err)
 		}
@@ -124,13 +135,22 @@ func (c *Collector) Stop(ctx context.Context) error {
 		return &MessageError{Msg: "metrics collector not running"}
 	}
 
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
 	// Signal collection loop to stop (if it's running)
-	if c.collectionActive {
+	c.mu.Lock()
+	loopActive := c.collectionActive
+	if loopActive {
 		close(c.stopChan)
 	}
+	c.mu.Unlock()
+
+	// A collection already in flight holds the read lock, so wait for the
+	// loop before taking the write lock again.
+	if loopActive {
+		<-c.stoppedChan
+	}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
 
 	// Shutdown HTTP server
 	if c.server != nil {
@@ -140,11 +160,6 @@ func (c *Collector) Stop(ctx context.Context) error {
 		if err := c.server.Shutdown(shutdownCtx); err != nil {
 			return &WrappedError{Msg: "failed to shutdown metrics server", Err: err}
 		}
-	}
-
-	// Wait for collection loop to stop (if it was started)
-	if c.collectionActive {
-		<-c.stoppedChan
 	}
 
 	c.running.Store(false)
@@ -165,14 +180,18 @@ func (c *Collector) Metrics() *Metrics {
 func (c *Collector) collectLoop() {
 	defer close(c.stoppedChan)
 
-	ticker := time.NewTicker(c.config.CollectInterval)
-	defer ticker.Stop()
+	tick := c.tick
+	if tick == nil {
+		ticker := time.NewTicker(c.config.CollectInterval)
+		defer ticker.Stop()
+		tick = ticker.C
+	}
 
 	for {
 		select {
 		case <-c.stopChan:
 			return
-		case <-ticker.C:
+		case <-tick:
 			c.collectMetrics()
 		}
 	}
@@ -228,41 +247,10 @@ func (c *Collector) collectProcessMetrics() {
 	// to track CPU time deltas
 }
 
-// RegisterRuntimeCollector registers the collector with the default registry
-func (c *Collector) RegisterRuntimeCollector() error {
-	if !c.config.EnableRuntimeMetrics {
-		return nil
-	}
-
-	collector := collectors.NewGoCollector()
-	if err := prometheus.Register(collector); err != nil {
-		if _, ok := err.(prometheus.AlreadyRegisteredError); !ok {
-			return ErrCollectorRegistration{Name: "go_collector", Err: err}
-		}
-	}
-
-	return nil
-}
-
-// RegisterProcessCollector registers the process collector
-func (c *Collector) RegisterProcessCollector() error {
-	if !c.config.EnableProcessMetrics {
-		return nil
-	}
-
-	collector := collectors.NewProcessCollector(collectors.ProcessCollectorOpts{})
-	if err := prometheus.Register(collector); err != nil {
-		if _, ok := err.(prometheus.AlreadyRegisteredError); !ok {
-			return ErrCollectorRegistration{Name: "process_collector", Err: err}
-		}
-	}
-
-	return nil
-}
-
-// Handler returns the HTTP handler for the metrics endpoint
+// Handler returns the HTTP handler for the metrics endpoint. It serves only
+// this collector's registry, never the process-global one.
 func (c *Collector) Handler() http.Handler {
-	return promhttp.Handler()
+	return promhttp.HandlerFor(c.metrics.Registry(), promhttp.HandlerOpts{})
 }
 
 // Address returns the metrics server address

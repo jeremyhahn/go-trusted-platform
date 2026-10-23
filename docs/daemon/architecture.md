@@ -68,6 +68,15 @@ the four lower-layer modules, `_test.go` files included;
 terminating untrusted traffic does not acquire the whole platform's dependency
 tree. A guard failure is an architecture violation, not a flaky test.
 
+**Two run paths, one wiring.** `platformd serve` composes `daemon.Config` on
+one of two paths: `runWithWebservices` when a `webservices:` section exists,
+`runDaemonOnly` otherwise (`pkg/daemon/commands/serve.go`). Both serve gRPC,
+Unix and MCP, so every service those transports register is built by a helper
+**both** paths call — never inline in one of them. A service the daemon-only
+path skips is registered as its stub and answers every RPC with an error on a
+node that is otherwise configured for it (#544: attestation and the OCI
+registry). Only REST-only consumers belong to `runWithWebservices` alone.
+
 ## Trust boundaries
 
 1. **Client → daemon.** Crossed by mTLS (`mtls_interceptor.go`), a broker token
@@ -76,7 +85,8 @@ tree. A guard failure is an architecture violation, not a flaky test.
 2. **Token → authorization.** The platform **validates** tokens; it does not run
    a token-authorization engine. RBAC decisions belong to the stack.
 3. **Scope enforcement.** Per operation on gRPC, QUIC and MCP — and **both
-   catalogs default to allow** ([api.md](api.md) §5).
+   catalogs default to deny**: an unclassified gRPC method or MCP tool is
+   refused ([api.md](api.md) §5).
 4. **Embedded mode has no transport boundary at all.** In-process callers are
    inside the trust boundary by construction; that is what makes embedded mode
    fast and what makes it unsuitable for anything untrusted.
@@ -169,7 +179,13 @@ REST Server
     +-- /api/v1/services/{service}/stop   POST - Stop service
     +-- /api/v1/services/{service}/restart POST - Restart service
     +-- /api/v1/protocols   GET  - Protocol status
+    +-- /api/v1/tpm/...     TPM routes (restapi.TPMHandlers, SetTPMHandlers)
 ```
+
+Each TPM route needs a platform bearer token granting `tpm:read`, `tpm:write`
+or `tpm:delete`, checked by the shared platform-token validator, and quote and
+verify run on the daemon's `TPMService` ([`docs/tpm/api.md`](../tpm/api.md)
+§1, §9).
 
 **Middleware Stack:**
 - Request ID generation
@@ -197,7 +213,7 @@ The QUIC server (`quic_service.go`) provides low-latency UDP transport:
 | 0x00-0x02 | Health operations |
 | 0x10-0x1F | vTPM operations |
 | 0x20-0x2F | DNS operations |
-| 0x30-0x3F | Device operations |
+| 0x30-0x3D | Device operations (0x3C retired) |
 | 0x80-0x8F | Certificate operations |
 | 0xA0-0xAF | CA operations |
 
@@ -216,6 +232,11 @@ The MCP server (`mcp_service.go`) enables AI/LLM integration via the Model Conte
 ## Startup Sequence
 
 ```
+0. platformd serve: applyDaemonTLSIdentity()
+   |
+   +-- Load or issue the server identity in the CA keystore
+   +-- Write the public CA bundle to <platform-dir>/tls
+
 1. Create()
    |
    +-- Validate configuration
@@ -281,6 +302,23 @@ Stop()
    +-- Close gRPC listener
    +-- Shutdown via service
 ```
+
+`ForceStop()` follows the same order without waiting for in-flight work.
+
+### Lifecycle guarantees
+
+- `Start`, `Stop` and `ForceStop` each take effect once, even when called
+  concurrently. Exactly one `Start` succeeds and the others return
+  `ErrDaemonAlreadyRunning`. Exactly one `Stop` or `ForceStop` succeeds and
+  the others return `ErrDaemonNotRunning`.
+- The service's shutdown handler stops only the gRPC servers. The QUIC server
+  is stopped by `Stop` or `ForceStop` alone, so a successful stop never returns
+  a QUIC "server is not running" error.
+- QUIC `Server.Stop` claims the stop atomically: one caller tears the server
+  down and the rest get `ErrServerNotRunning`.
+- The auto-start pass runs in a goroutine launched by `Start`. If `Stop` wins
+  the lock first, the pass starts nothing, so no service is left running on a
+  stopped daemon.
 
 ## Health Checking
 
@@ -365,6 +403,12 @@ type ManagedService interface {
 }
 ```
 
+The services configured under `services:` are owned by the process, not by
+this state machine: they are registered as `subsystemService`, whose `Start`
+and `Stop` refuse with `ErrServiceNotControllable` (`FailedPrecondition`) and
+whose `IsRunning` reads the subsystem itself. A refused verb leaves the
+recorded state untouched ([api.md](api.md) §2).
+
 ## Protocol Feature Matrix
 
 | Feature | REST | gRPC | QUIC | MCP | Unix |
@@ -379,14 +423,37 @@ type ManagedService interface {
 | Streaming | No | Yes | No | No | Yes |
 | Binary Protocol | No | Yes | Yes | No | Yes |
 
+**An enabled transport that cannot be constructed or started stops the
+daemon (#444).** There is no degraded mode: `New` returns
+`ErrTransportConstructionFailed` (naming the transport and wrapping the
+cause) when the QUIC, REST or MCP server cannot be built, `Start` returns the
+transport's typed start error (`ErrQUICServerStartFailed`,
+`ErrRESTServerStartFailed`, `MCPServerStartError`, `ErrTLSConfigFailed`), and
+`platformd` exits non-zero through `ErrServeStartup`. gRPC TCP and Unix obey
+the same rule through their own errors. A transport that is not enabled is
+never constructed and never fails the daemon; a `With*Server` replacement
+stands in for the built-in server it replaces.
+
 Network transports fail closed (#32): absent TLS material, REST, gRPC TCP
-and QUIC refuse to start with a typed error and bind no listener, and
-`Daemon.Start` propagates the failure instead of degrading. A daemon with
-`EnableQUIC` set whose QUIC server could not be created also refuses to
-start. The Unix-domain-socket transport is the single sanctioned non-TLS
-carve-out (filesystem-permission-scoped); MCP binds loopback only. With no
-TLS-terminating transport enabled (UDS-only mode), startup proceeds without
-provisioning a TLS identity.
+and QUIC refuse to start with a typed error and bind no listener; QUIC
+without TLS material cannot even be constructed, and MCP over HTTP without
+the daemon's certificate is refused by `New` (#844). The
+Unix-domain-socket transport is the single sanctioned non-TLS carve-out
+(filesystem-permission-scoped); MCP binds loopback only. With no
+TLS-terminating transport enabled (UDS-only mode), startup proceeds without provisioning a TLS identity.
+
+The server key and certificate live in the platform CA keystore; the only
+TLS file on disk is `ca-bundle.crt`, the public CA trust bundle (`0644`), in
+`<platform-dir>/tls/` (mode `0700`). `provisionDaemonIdentity`
+(`pkg/daemon/commands/provision_identity.go`) reuses the keystore identity
+across restarts while the server certificate verifies, covers the required
+SANs and is more than 30 days from expiry, and otherwise issues a new one
+(§Daemon TLS identity and key custody). A running daemon renews the same
+identity in the platform renewal sweep (§Daemon TLS identity renewal while
+running). A daemon with no platform directory
+refuses to start (`ErrTLSIdentityRequiresPlatformDir`). Provisioning issues
+**no** admin client certificate: the one-shot `/init` bundle is the platform's
+only admin credential ([`../bootstrap/cli.md`](../bootstrap/cli.md) §1a).
 
 Network transports also fail closed on **authentication** (#550, #312). With
 `SkipIAMValidation` off, gRPC TCP and QUIC refuse to be constructed — `New`
@@ -398,7 +465,11 @@ installed with `WithRequireAuth(true)` unconditionally. mTLS is enforced the
 same way: `EnableMTLS` with no CA service (gRPC) or no resolvable client CA
 pool (gRPC, QUIC, REST) is a typed error, never a listener that merely does
 not ask for a client certificate. The daemon REST server has no token
-middleware — mTLS at the TLS layer is its only authentication — so
+middleware — mTLS at the TLS layer is its only listener-wide authentication;
+the CA sign-csr and `/api/v1/tpm` routes check a platform token per route, and
+the scope-guarded VPN, NTP, application service, compute and tenant routes
+take a `Bearer` token or the client certificate
+([`api.md`](api.md) §5), over a connection that has already passed mTLS — so
 `EnableREST` without `EnableMTLS` is refused by both `New` and
 `RESTServer.Start`; in daemon-only mode `platformd serve --enable-rest`
 therefore requires `--enable-mtls`. `SkipIAMValidation` (testing only) is the
@@ -406,6 +477,105 @@ single explicit opt-out, mirroring MCP (#440); before #550 the interceptors
 were installed with `WithRequireAuth(tokenValidator != nil)` and the whole
 daemon API was served anonymously in that state. The Unix-domain-socket
 transport is unaffected: peer-credential authentication is unconditional.
+
+### Daemon TLS identity and key custody (#33)
+
+`platformd serve` provisions the daemon identity in `applyDaemonTLSIdentity`
+(`pkg/daemon/commands/serve.go`), before `Create()`. The work is done by
+`provisionDaemonIdentity` (`pkg/daemon/commands/provision_identity.go`).
+
+| Material | Where it lives | Notes |
+|----------|----------------|-------|
+| Server key (slot `platformd.localhost` or `platformd-alt.localhost`, ECDSA P-256) | Platform CA keystore | Never written to disk. The listeners get a `tls.Certificate` whose `PrivateKey` is the keystore's `crypto.Signer`, from `CA.TLSCertificate` via the `sdk/go/xkms/ca` re-export. |
+| Server certificate | Platform CA certificate store | Issued by `CA.IssueCertificate` with `KeyAttributes`, so the CA generates the key in its keystore. |
+| Admin client credential | Not on disk | The one-shot `/init` reply. See below. |
+| CA bundle | `<platform-dir>/tls/ca-bundle.crt`, mode 0644 | Public. Rewritten from `CA.CABundle()` on every boot. |
+
+The identity occupies one of two keystore slots, `platformd.localhost` and
+`platformd-alt.localhost`, with the same DNS SANs. On each boot both slots are
+loaded from the keystore and the latest one is the held identity. It is reused
+when it chains to the CA, covers the required DNS SANs and is outside the
+30-day renewal window. Otherwise a fresh key and certificate are issued into
+the other slot, under their own key ID. Only after that identity is loaded is
+the old slot retired: its certificate is looked up on its own (`CA.Certificate`,
+which does not need the key), revoked, and its key and certificate deleted. The
+certificate lookup is what lets an installation upgrade from the pre-#33
+PEM-backed identity, whose certificate is in the CA store but whose key never
+was in the keystore ([engineering.md](engineering.md) §7).
+
+**No admin key on disk.** The daemon mints no admin client certificate. The
+operator's first credential is the one-shot `/init` reply
+([`../bootstrap/cli.md`](../bootstrap/cli.md) §1a). Only a binary built with the
+`integration` tag writes a test `client-bundle.pem` into `<platform-dir>/tls`
+for the devcontainer harness (`harnessAdminBundle`).
+
+**Fail closed.** The server identity is resolved before any file is written:
+
+- A keystore that cannot clear the slot being issued into, issue or load the
+  key returns `ErrTLSIdentityKeystore{Op}`. `Op` is `retire`, `issue` or `load`.
+- With no platform directory, `ErrTLSIdentityRequiresPlatformDir` is returned.
+
+In both cases no TLS material is installed in the daemon config, so no TLS
+listener starts.
+
+### Daemon TLS identity renewal while running (#36)
+
+The boot-time check above renews an identity only when the daemon restarts.
+A long-running daemon renews it in the platform certificate-renewal sweep
+([`../operations/cert-lifecycle.md`](../operations/cert-lifecycle.md)). The
+daemon does not run a sweep of its own.
+
+**When it renews.** `applyDaemonTLSIdentity` registers a cert target named
+`daemon.platformd`, of kind `daemon` (`daemonIdentityCertTarget`,
+`pkg/daemon/commands/daemon_identity_renewal.go`). The node's
+`platform.cert-renewal.<nodeID>` job runs daily at 02:00. It reissues the
+target once the served certificate is within 30 days of `NotAfter`.
+Reissue takes the same keystore path as boot (`issueDaemonServerIdentity`):
+
+1. Clear any leftover in the slot that is not serving.
+2. `CA.IssueCertificate` into that slot, under its own key ID.
+3. `CA.TLSCertificate`.
+4. Swap the served identity (`ServingCertificate.Store`).
+5. Retire the old slot: revoke its certificate, then delete its key and
+   certificate.
+
+The key stays in the CA keystore, and nothing is written to disk.
+
+**How the listeners pick it up.** The served identity is a
+`daemon.ServingCertificate` (`pkg/api/daemon/serving_certificate.go`): an
+`atomic.Pointer[tls.Certificate]` set through `Config.TLSIdentity`.
+
+- gRPC TCP, REST, MCP over HTTP and QUIC build their `tls.Config` with
+  `Certificates` empty and `GetCertificate` reading that pointer.
+- A successful reissue swaps the pointer, so the next handshake presents the
+  new certificate. No listener restarts, and the handshake path takes no lock.
+- Connections already open keep the certificate they negotiated.
+- The Unix socket carries no TLS and is unaffected.
+- `Certificates` must stay empty. A handshake without SNI (a dial by IP
+  address) takes `Certificates[0]` ahead of `GetCertificate`.
+
+**Client role.** The daemon identity is a single certificate carrying both
+the ServerAuth and ClientAuth EKUs (`daemonServerCertRequest`). Renewing it
+renews the client role too, so the client role has no separate target.
+
+**Failure.**
+
+- A reissue that fails before the swap returns `ErrTLSIdentityKeystore{Op}` to
+  the sweep. The old certificate and key keep serving, untouched. The sweep
+  records the target `failed` and logs it, then retries at its next run.
+- `ServingCertificate.Store` refuses an unusable certificate
+  (`ErrUnusableServingCertificate`). The current certificate keeps serving, and
+  the next sweep's `Current` retires the slot that was not swapped in.
+- A failure to retire the old slot after the swap is logged as a warning. The
+  new identity serves, and every sweep's `Current` retries the retirement of
+  the slot that is not serving.
+- If the target cannot be registered, boot does not fail. The identity
+  serves and renews at the next restart.
+
+The renewal never deletes a key that is serving. `IssueCertificate` refuses an
+existing common name and no CA call replaces a certificate atomically, so the
+new identity is issued under the other slot's common name and key ID, and the
+old one is deleted only after the swap ([engineering.md](engineering.md) §7).
 
 ## Configuration Files
 

@@ -5,8 +5,12 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 
+	"gopkg.in/yaml.v2"
+
+	tpconfig "github.com/jeremyhahn/go-trusted-platform/pkg/config"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 )
 
@@ -159,6 +163,147 @@ func TestApplyInstallerOverridesBakesTargetSettings(t *testing.T) {
 	if err != nil && !errors.As(err, &wrapped) {
 		t.Errorf("error type %T", err)
 	}
+}
+
+// bakedOSLists reads os.packages and os.services back out of a baked
+// installer.yaml: the lists the installer installs and enables.
+func bakedOSLists(t *testing.T, out []byte) (packages, services []string) {
+	t.Helper()
+	var doc struct {
+		OS struct {
+			Packages []string `yaml:"packages"`
+			Services []string `yaml:"services"`
+		} `yaml:"os"`
+	}
+	if err := yaml.Unmarshal(out, &doc); err != nil {
+		t.Fatalf("baked config does not parse: %v\n%s", err, out)
+	}
+	return doc.OS.Packages, doc.OS.Services
+}
+
+// TestApplyInstallerOverridesInstallsWhatTheMediaPrefetches pins the baked
+// installer.yaml, the file the installer installs from on the ISO and the
+// factory-image paths alike, to what the media prefetches for the installed
+// system. A package that is prefetched but missing from os.packages never
+// reaches the node: the Raspberry Pi token stack and pcscd (#689), the
+// gateway's Jool translator (#603).
+func TestApplyInstallerOverridesInstallsWhatTheMediaPrefetches(t *testing.T) {
+	bake := func(t *testing.T, cfg *PlatformISOConfig, template string) []byte {
+		t.Helper()
+		out, err := NewCustomizer(cfg, logging.DefaultLogger()).applyInstallerOverrides([]byte(template))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return out
+	}
+
+	t.Run("raspberry pi token stack", func(t *testing.T) {
+		cfg := validPlatformISOConfig()
+		cfg.Alpine.Architecture = "arm64"
+		cfg.SetDefaults()
+		cfg.Installer = InstallerOverrides{
+			KernelPackage: "linux-rpi",
+			ExtraPackages: []string{"raspberrypi-bootloader", "pcsc-lite", "pcsc-lite-openrc", "ccid", "opensc", "yubico-piv-tool-libs"},
+			ExtraServices: []string{"pcscd"},
+		}
+		template := "os:\n  packages: [tpm2-tools, ccid]\n  services: [chronyd]\nseal-pcrs: [0, 7, 9]\n"
+		packages, services := bakedOSLists(t, bake(t, cfg, template))
+		// The template's own entries keep their place; ccid is not repeated.
+		want := []string{"tpm2-tools", "ccid", "raspberrypi-bootloader", "pcsc-lite", "pcsc-lite-openrc", "opensc", "yubico-piv-tool-libs"}
+		if !slices.Equal(packages, want) {
+			t.Errorf("os.packages = %v, want %v", packages, want)
+		}
+		if !slices.Equal(services, []string{"chronyd", "pcscd"}) {
+			t.Errorf("os.services = %v, want [chronyd pcscd]", services)
+		}
+	})
+
+	t.Run("platform apk dir", func(t *testing.T) {
+		cfg := validPlatformISOConfig()
+		cfg.SetDefaults()
+		cfg.Installer = InstallerOverrides{PlatformAPKDir: "/builder/output"}
+		packages, _ := bakedOSLists(t, bake(t, cfg, "seal-pcrs: [0]\n"))
+		if !slices.Equal(packages, PlatformPackages()) {
+			t.Errorf("os.packages = %v, want the IPsec transport %v", packages, PlatformPackages())
+		}
+	})
+
+	gateway := writePlatformConfig(t, "gateway:\n  enabled: true\n")
+	for _, tc := range []struct {
+		name          string
+		fips          bool
+		kernel        string
+		kernelBuiltAt string
+		jool          bool
+	}{
+		{name: "gateway on the stock kernel", jool: true},
+		{name: "gateway on a FIPS kernel", fips: true},
+		{name: "gateway on another kernel", kernel: "linux-virt"},
+		{name: "gateway on a platform-built kernel", kernelBuiltAt: "/media/cdrom/kernel-artifacts/lts"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := validPlatformISOConfig()
+			cfg.SetDefaults()
+			cfg.Platform.ConfigFile = gateway
+			cfg.Security.FIPS = tc.fips
+			cfg.Installer = InstallerOverrides{KernelPackage: tc.kernel, KernelArtifactsDir: tc.kernelBuiltAt}
+			packages, _ := bakedOSLists(t, bake(t, cfg, "seal-pcrs: [0]\n"))
+
+			prefetch, err := NewCustomizer(cfg, logging.DefaultLogger()).preFetchConfig()
+			if err != nil {
+				t.Fatal(err)
+			}
+			prefetched := CollectRequiredPackages(prefetch)
+			for _, pkg := range tpconfig.GatewaydPackages {
+				if got := slices.Contains(packages, pkg); got != tc.jool {
+					t.Errorf("%s installed = %v, want %v: %v", pkg, got, tc.jool, packages)
+				}
+				if got := slices.Contains(prefetched, pkg); got != tc.jool {
+					t.Errorf("%s prefetched = %v, want %v", pkg, got, tc.jool)
+				}
+			}
+		})
+	}
+
+	t.Run("a gateway template that lists jool keeps one entry", func(t *testing.T) {
+		cfg := validPlatformISOConfig()
+		cfg.SetDefaults()
+		cfg.Platform.ConfigFile = gateway
+		packages, _ := bakedOSLists(t, bake(t, cfg, "os:\n  packages: [jool-tools, vim]\n"))
+		want := []string{"jool-tools", "vim", "jool-modules-lts", "jool-tools-openrc"}
+		if !slices.Equal(packages, want) {
+			t.Errorf("os.packages = %v, want %v", packages, want)
+		}
+	})
+
+	t.Run("nothing to install leaves the template alone", func(t *testing.T) {
+		cfg := validPlatformISOConfig()
+		cfg.SetDefaults()
+		out := bake(t, cfg, "os:\n  hostname: node\n")
+		if contains1(string(out), "packages:") || contains1(string(out), "services:") {
+			t.Errorf("empty lists were added:\n%s", out)
+		}
+	})
+
+	t.Run("os.packages that is not a list is refused", func(t *testing.T) {
+		cfg := validPlatformISOConfig()
+		cfg.SetDefaults()
+		cfg.Installer = InstallerOverrides{ExtraPackages: []string{"pcsc-lite"}}
+		_, err := NewCustomizer(cfg, logging.DefaultLogger()).applyInstallerOverrides([]byte("os:\n  packages: pcsc-lite\n"))
+		var notList *InstallerListError
+		if !errors.As(err, &notList) || notList.Key != "packages" {
+			t.Errorf("error = %v (%T), want *InstallerListError for packages", err, err)
+		}
+	})
+
+	t.Run("an unreadable bundled config fails the bake", func(t *testing.T) {
+		cfg := validPlatformISOConfig()
+		cfg.SetDefaults()
+		cfg.Platform.ConfigFile = filepath.Join(t.TempDir(), "missing.yaml")
+		if _, err := NewCustomizer(cfg, logging.DefaultLogger()).applyInstallerOverrides([]byte("seal-pcrs: [0]\n")); err == nil {
+			t.Error("a bundled config that cannot be read was baked without its gateway decision")
+		}
+	})
 }
 
 func contains1(s, sub string) bool {

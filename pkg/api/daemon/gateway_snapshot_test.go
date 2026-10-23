@@ -120,7 +120,6 @@ func reportedOverlaySnapshot(id string) *gwstate.Snapshot {
 		RemoteMACCount:           1,
 		PrefixCount:              1,
 		RefusedBindings:          3,
-		RefusedReplays:           4,
 		L3VNI:                    50100,
 		ARPSuppressionEnabled:    true,
 		AnycastGatewayConfigured: true,
@@ -274,25 +273,8 @@ func TestGatewaySnapshotToProto_OverlayStatus(t *testing.T) {
 	assert.True(t, overlay.GetRunning())
 	assert.Equal(t, "192.0.2.10", overlay.GetLocalVtep())
 	assert.Equal(t, uint64(11), overlay.GetNdCounters().GetPunted())
-	assert.Equal(t, uint64(3), overlay.GetRefusedBindings())
-	assert.Equal(t, uint64(4), overlay.GetRefusedReplays())
 	require.Len(t, overlay.GetAdmittedVteps(), 1)
 	assert.Equal(t, "198.51.100.10", overlay.GetAdmittedVteps()[0].GetVtep())
-}
-
-// TestGatewaySnapshotQUICAdapter_OverlayCounters carries the overlay's
-// refusal counters onto the QUIC wire, so a VTEP the sweep keeps failing to
-// replay shows on QUIC as it does on the other transports.
-func TestGatewaySnapshotQUICAdapter_OverlayCounters(t *testing.T) {
-	store := &memorySnapshotStore{}
-	require.NoError(t, store.Put(reportedOverlaySnapshot("node-01-gateway")))
-	adapter := gatewaySnapshotQUICAdapter{reader: NewGatewayService(WithGatewaySnapshotStore(store))}
-
-	info, err := adapter.Snapshot(context.Background(), "node-01-gateway")
-	require.NoError(t, err)
-	require.NotNil(t, info.Overlay)
-	assert.Equal(t, uint64(3), info.Overlay.RefusedBindings)
-	assert.Equal(t, uint64(4), info.Overlay.RefusedReplays)
 }
 
 func TestGatewaySnapshotToProto_AbsentSectionsStayNil(t *testing.T) {
@@ -351,7 +333,7 @@ func TestGatewaySnapshotQUICAdapter(t *testing.T) {
 
 func TestGatewaySnapshotTools_MCP(t *testing.T) {
 	store := &memorySnapshotStore{}
-	require.NoError(t, store.Put(reportedSnapshot("node-01-gateway")))
+	require.NoError(t, store.Put(reportedOverlaySnapshot("node-01-gateway")))
 	tools := gatewaySnapshotTools{reader: NewGatewayService(WithGatewaySnapshotStore(store))}
 
 	snap, err := tools.GatewaySnapshot(context.Background(), "node-01-gateway")
@@ -362,12 +344,31 @@ func TestGatewaySnapshotTools_MCP(t *testing.T) {
 	require.NoError(t, err)
 	assert.Len(t, list, 1)
 
+	vtep, err := tools.GatewayAdmittedVTEP(context.Background(), "node-01-gateway", "198.51.100.10")
+	require.NoError(t, err)
+	admitted, ok := vtep.(*platformv1.GatewayAdmittedVTEP)
+	require.True(t, ok, "got %T", vtep)
+	assert.Equal(t, "alloc-42", admitted.GetAllocationId())
+
+	vteps, err := tools.GatewayAdmittedVTEPs(context.Background(), "node-01-gateway")
+	require.NoError(t, err)
+	assert.Len(t, vteps, 1)
+
 	t.Run("no snapshot surface configured", func(t *testing.T) {
 		var empty gatewaySnapshotTools
-		_, err := empty.GatewaySnapshot(context.Background(), "")
-		var notImplemented ErrGatewayOperationNotImplemented
-		require.True(t, errors.As(err, &notImplemented), "got %v", err)
-		_, err = empty.GatewaySnapshots(context.Background())
-		require.True(t, errors.As(err, &notImplemented), "got %v", err)
+		ctx := context.Background()
+		calls := map[string]func() error{
+			"gateway_snapshot":       func() error { _, err := empty.GatewaySnapshot(ctx, ""); return err },
+			"gateway_snapshots":      func() error { _, err := empty.GatewaySnapshots(ctx); return err },
+			"gateway_admitted_vtep":  func() error { _, err := empty.GatewayAdmittedVTEP(ctx, "", "198.51.100.10"); return err },
+			"gateway_admitted_vteps": func() error { _, err := empty.GatewayAdmittedVTEPs(ctx, ""); return err },
+		}
+		for name, call := range calls {
+			err := call()
+			var notAvailable ErrServiceNotAvailable
+			require.True(t, errors.As(err, &notAvailable), "%s: got %v", name, err)
+			assert.Equal(t, "gateway", notAvailable.Service, name)
+			assert.Equal(t, codes.Unavailable, status.Code(err), name)
+		}
 	})
 }

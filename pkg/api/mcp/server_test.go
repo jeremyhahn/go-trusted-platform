@@ -21,6 +21,8 @@ import (
 	"net/http/httptest"
 	"testing"
 	"time"
+
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/mcpwire"
 )
 
 func TestDefaultConfig(t *testing.T) {
@@ -159,6 +161,7 @@ func TestServer_Start(t *testing.T) {
 		svc := newMockServiceProvider()
 		config := DefaultConfig()
 		config.HTTPAddr = "127.0.0.1:0" // Use random port
+		config.TLSConfig = newTestTLSConfig(t)
 		server := NewServer(svc, config, newTestLogger())
 
 		err := server.Start()
@@ -197,6 +200,7 @@ func TestServer_Stop(t *testing.T) {
 		svc := newMockServiceProvider()
 		config := DefaultConfig()
 		config.HTTPAddr = "127.0.0.1:0"
+		config.TLSConfig = newTestTLSConfig(t)
 		server := NewServer(svc, config, newTestLogger())
 
 		err := server.Start()
@@ -251,19 +255,19 @@ func TestServer_handleHTTPRequest(t *testing.T) {
 			t.Errorf("status = %d, want %d", w.Code, http.StatusOK)
 		}
 
-		var resp JSONRPCResponse
+		var resp mcpwire.JSONRPCResponse
 		json.NewDecoder(w.Body).Decode(&resp)
 
 		if resp.Error == nil {
 			t.Error("expected error in response")
 		}
-		if resp.Error.Code != ParseError {
-			t.Errorf("error code = %d, want %d", resp.Error.Code, ParseError)
+		if resp.Error.Code != mcpwire.ParseError {
+			t.Errorf("error code = %d, want %d", resp.Error.Code, mcpwire.ParseError)
 		}
 	})
 
 	t.Run("extracts token from Authorization header", func(t *testing.T) {
-		rpcReq := JSONRPCRequest{
+		rpcReq := mcpwire.JSONRPCRequest{
 			JSONRPC: "2.0",
 			ID:      1,
 			Method:  "ping",
@@ -303,10 +307,37 @@ func TestServer_handleHealthCheck(t *testing.T) {
 		if result["status"] != "healthy" {
 			t.Errorf("status = %v, want healthy", result["status"])
 		}
-		if result["mcp"] != MCPVersion {
-			t.Errorf("mcp = %v, want %s", result["mcp"], MCPVersion)
+		if result["mcp"] != mcpwire.MCPVersion {
+			t.Errorf("mcp = %v, want %s", result["mcp"], mcpwire.MCPVersion)
 		}
 	})
+}
+
+// TestServer_Handler proves the exported routes are the ones the HTTP
+// transport serves, so a caller mounting Handler gets the same surface.
+func TestServer_Handler(t *testing.T) {
+	server := NewServer(newMockServiceProvider(), DefaultConfig(), newTestLogger())
+	h := server.Handler()
+
+	tests := []struct {
+		name   string
+		method string
+		path   string
+		want   int
+	}{
+		{"health is served", http.MethodGet, "/health", http.StatusOK},
+		{"mcp refuses GET", http.MethodGet, "/mcp", http.StatusMethodNotAllowed},
+		{"unknown path is not routed", http.MethodGet, "/nope", http.StatusNotFound},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			w := httptest.NewRecorder()
+			h.ServeHTTP(w, httptest.NewRequest(tt.method, tt.path, nil))
+			if w.Code != tt.want {
+				t.Errorf("%s %s = %d, want %d", tt.method, tt.path, w.Code, tt.want)
+			}
+		})
+	}
 }
 
 func TestServer_handleRequest(t *testing.T) {
@@ -316,7 +347,7 @@ func TestServer_handleRequest(t *testing.T) {
 	ctx := context.Background()
 
 	t.Run("rejects invalid JSON-RPC version", func(t *testing.T) {
-		req := &JSONRPCRequest{
+		req := &mcpwire.JSONRPCRequest{
 			JSONRPC: "1.0",
 			ID:      1,
 			Method:  "ping",
@@ -327,13 +358,13 @@ func TestServer_handleRequest(t *testing.T) {
 		if resp.Error == nil {
 			t.Error("expected error")
 		}
-		if resp.Error.Code != InvalidRequest {
-			t.Errorf("error code = %d, want %d", resp.Error.Code, InvalidRequest)
+		if resp.Error.Code != mcpwire.InvalidRequest {
+			t.Errorf("error code = %d, want %d", resp.Error.Code, mcpwire.InvalidRequest)
 		}
 	})
 
 	t.Run("returns error for unknown method", func(t *testing.T) {
-		req := &JSONRPCRequest{
+		req := &mcpwire.JSONRPCRequest{
 			JSONRPC: "2.0",
 			ID:      1,
 			Method:  "unknown_method",
@@ -344,8 +375,8 @@ func TestServer_handleRequest(t *testing.T) {
 		if resp.Error == nil {
 			t.Error("expected error")
 		}
-		if resp.Error.Code != MethodNotFound {
-			t.Errorf("error code = %d, want %d", resp.Error.Code, MethodNotFound)
+		if resp.Error.Code != mcpwire.MethodNotFound {
+			t.Errorf("error code = %d, want %d", resp.Error.Code, mcpwire.MethodNotFound)
 		}
 	})
 }
@@ -357,7 +388,7 @@ func TestServer_handleInitialize(t *testing.T) {
 	ctx := context.Background()
 
 	t.Run("returns server info", func(t *testing.T) {
-		req := &JSONRPCRequest{
+		req := &mcpwire.JSONRPCRequest{
 			JSONRPC: "2.0",
 			ID:      1,
 			Method:  "initialize",
@@ -374,8 +405,8 @@ func TestServer_handleInitialize(t *testing.T) {
 			t.Fatal("result is not a map")
 		}
 
-		if result["protocolVersion"] != MCPVersion {
-			t.Errorf("protocolVersion = %v, want %s", result["protocolVersion"], MCPVersion)
+		if result["protocolVersion"] != mcpwire.MCPVersion {
+			t.Errorf("protocolVersion = %v, want %s", result["protocolVersion"], mcpwire.MCPVersion)
 		}
 
 		serverInfo, ok := result["serverInfo"].(map[string]interface{})
@@ -396,7 +427,7 @@ func TestServer_handleToolsList(t *testing.T) {
 	ctx := context.Background()
 
 	t.Run("returns list of tools", func(t *testing.T) {
-		req := &JSONRPCRequest{
+		req := &mcpwire.JSONRPCRequest{
 			JSONRPC: "2.0",
 			ID:      1,
 			Method:  "tools/list",
@@ -413,7 +444,7 @@ func TestServer_handleToolsList(t *testing.T) {
 			t.Fatal("result is not a map")
 		}
 
-		tools, ok := result["tools"].([]ToolDefinition)
+		tools, ok := result["tools"].([]mcpwire.ToolDefinition)
 		if !ok {
 			t.Fatal("tools is not a slice")
 		}
@@ -432,7 +463,7 @@ func TestServer_handleToolsCall(t *testing.T) {
 		svc := newMockServiceProvider()
 		server := NewServer(svc, nil, log)
 
-		req := &JSONRPCRequest{
+		req := &mcpwire.JSONRPCRequest{
 			JSONRPC: "2.0",
 			ID:      1,
 			Method:  "tools/call",
@@ -444,8 +475,8 @@ func TestServer_handleToolsCall(t *testing.T) {
 		if resp.Error == nil {
 			t.Error("expected error")
 		}
-		if resp.Error.Code != InvalidParams {
-			t.Errorf("error code = %d, want %d", resp.Error.Code, InvalidParams)
+		if resp.Error.Code != mcpwire.InvalidParams {
+			t.Errorf("error code = %d, want %d", resp.Error.Code, mcpwire.InvalidParams)
 		}
 	})
 
@@ -453,7 +484,7 @@ func TestServer_handleToolsCall(t *testing.T) {
 		svc := newMockServiceProvider()
 		server := NewServer(svc, nil, log)
 
-		req := &JSONRPCRequest{
+		req := &mcpwire.JSONRPCRequest{
 			JSONRPC: "2.0",
 			ID:      1,
 			Method:  "tools/call",
@@ -467,8 +498,8 @@ func TestServer_handleToolsCall(t *testing.T) {
 		if resp.Error == nil {
 			t.Error("expected error")
 		}
-		if resp.Error.Code != InvalidParams {
-			t.Errorf("error code = %d, want %d", resp.Error.Code, InvalidParams)
+		if resp.Error.Code != mcpwire.InvalidParams {
+			t.Errorf("error code = %d, want %d", resp.Error.Code, mcpwire.InvalidParams)
 		}
 	})
 
@@ -476,7 +507,7 @@ func TestServer_handleToolsCall(t *testing.T) {
 		svc := newMockServiceProvider()
 		server := NewServer(svc, nil, log)
 
-		req := &JSONRPCRequest{
+		req := &mcpwire.JSONRPCRequest{
 			JSONRPC: "2.0",
 			ID:      1,
 			Method:  "tools/call",
@@ -500,7 +531,7 @@ func TestServer_handleToolsCall(t *testing.T) {
 		}
 		server := NewServer(svc, nil, log)
 
-		req := &JSONRPCRequest{
+		req := &mcpwire.JSONRPCRequest{
 			JSONRPC: "2.0",
 			ID:      1,
 			Method:  "tools/call",
@@ -515,8 +546,8 @@ func TestServer_handleToolsCall(t *testing.T) {
 		if resp.Error == nil {
 			t.Error("expected error")
 		}
-		if resp.Error.Code != InternalError {
-			t.Errorf("error code = %d, want %d", resp.Error.Code, InternalError)
+		if resp.Error.Code != mcpwire.InternalError {
+			t.Errorf("error code = %d, want %d", resp.Error.Code, mcpwire.InternalError)
 		}
 	})
 
@@ -533,7 +564,7 @@ func TestServer_handleToolsCall(t *testing.T) {
 		server := NewServer(svc, config, log)
 
 		// Without token
-		req := &JSONRPCRequest{
+		req := &mcpwire.JSONRPCRequest{
 			JSONRPC: "2.0",
 			ID:      1,
 			Method:  "tools/call",
@@ -548,8 +579,8 @@ func TestServer_handleToolsCall(t *testing.T) {
 		if resp.Error == nil {
 			t.Error("expected error for missing token")
 		}
-		if resp.Error.Code != AuthenticationRequired {
-			t.Errorf("error code = %d, want %d", resp.Error.Code, AuthenticationRequired)
+		if resp.Error.Code != mcpwire.AuthenticationRequired {
+			t.Errorf("error code = %d, want %d", resp.Error.Code, mcpwire.AuthenticationRequired)
 		}
 	})
 
@@ -565,7 +596,7 @@ func TestServer_handleToolsCall(t *testing.T) {
 		}
 		server := NewServer(svc, config, log)
 
-		req := &JSONRPCRequest{
+		req := &mcpwire.JSONRPCRequest{
 			JSONRPC: "2.0",
 			ID:      1,
 			Method:  "tools/call",
@@ -599,7 +630,7 @@ func TestServer_handleToolsCall(t *testing.T) {
 
 		ctx := ContextWithToken(context.Background(), "context-token")
 
-		req := &JSONRPCRequest{
+		req := &mcpwire.JSONRPCRequest{
 			JSONRPC: "2.0",
 			ID:      1,
 			Method:  "tools/call",
@@ -623,7 +654,7 @@ func TestServer_handleResourcesList(t *testing.T) {
 	ctx := context.Background()
 
 	t.Run("returns list of resources", func(t *testing.T) {
-		req := &JSONRPCRequest{
+		req := &mcpwire.JSONRPCRequest{
 			JSONRPC: "2.0",
 			ID:      1,
 			Method:  "resources/list",
@@ -640,7 +671,7 @@ func TestServer_handleResourcesList(t *testing.T) {
 			t.Fatal("result is not a map")
 		}
 
-		resources, ok := result["resources"].([]ResourceDefinition)
+		resources, ok := result["resources"].([]mcpwire.ResourceDefinition)
 		if !ok {
 			t.Fatal("resources is not a slice")
 		}
@@ -659,7 +690,7 @@ func TestServer_handleResourcesRead(t *testing.T) {
 		svc := newMockServiceProvider()
 		server := NewServer(svc, nil, log)
 
-		req := &JSONRPCRequest{
+		req := &mcpwire.JSONRPCRequest{
 			JSONRPC: "2.0",
 			ID:      1,
 			Method:  "resources/read",
@@ -671,8 +702,8 @@ func TestServer_handleResourcesRead(t *testing.T) {
 		if resp.Error == nil {
 			t.Error("expected error")
 		}
-		if resp.Error.Code != InvalidParams {
-			t.Errorf("error code = %d, want %d", resp.Error.Code, InvalidParams)
+		if resp.Error.Code != mcpwire.InvalidParams {
+			t.Errorf("error code = %d, want %d", resp.Error.Code, mcpwire.InvalidParams)
 		}
 	})
 
@@ -680,7 +711,7 @@ func TestServer_handleResourcesRead(t *testing.T) {
 		svc := newMockServiceProvider()
 		server := NewServer(svc, nil, log)
 
-		req := &JSONRPCRequest{
+		req := &mcpwire.JSONRPCRequest{
 			JSONRPC: "2.0",
 			ID:      1,
 			Method:  "resources/read",
@@ -692,8 +723,8 @@ func TestServer_handleResourcesRead(t *testing.T) {
 		if resp.Error == nil {
 			t.Error("expected error")
 		}
-		if resp.Error.Code != InvalidParams {
-			t.Errorf("error code = %d, want %d", resp.Error.Code, InvalidParams)
+		if resp.Error.Code != mcpwire.InvalidParams {
+			t.Errorf("error code = %d, want %d", resp.Error.Code, mcpwire.InvalidParams)
 		}
 	})
 
@@ -701,7 +732,7 @@ func TestServer_handleResourcesRead(t *testing.T) {
 		svc := newMockServiceProvider()
 		server := NewServer(svc, nil, log)
 
-		req := &JSONRPCRequest{
+		req := &mcpwire.JSONRPCRequest{
 			JSONRPC: "2.0",
 			ID:      1,
 			Method:  "resources/read",
@@ -721,7 +752,7 @@ func TestServer_handleResourcesRead(t *testing.T) {
 		svc := newMockServiceProvider()
 		server := NewServer(svc, nil, log)
 
-		req := &JSONRPCRequest{
+		req := &mcpwire.JSONRPCRequest{
 			JSONRPC: "2.0",
 			ID:      1,
 			Method:  "resources/read",
@@ -735,8 +766,9 @@ func TestServer_handleResourcesRead(t *testing.T) {
 		if resp.Error == nil {
 			t.Error("expected error")
 		}
-		if resp.Error.Code != InternalError {
-			t.Errorf("error code = %d, want %d", resp.Error.Code, InternalError)
+		// A malformed URI is the caller's error, not the server's.
+		if resp.Error.Code != mcpwire.InvalidParams {
+			t.Errorf("error code = %d, want %d", resp.Error.Code, mcpwire.InvalidParams)
 		}
 	})
 }
@@ -747,7 +779,7 @@ func TestServer_handlePing(t *testing.T) {
 	ctx := context.Background()
 
 	t.Run("returns pong", func(t *testing.T) {
-		req := &JSONRPCRequest{
+		req := &mcpwire.JSONRPCRequest{
 			JSONRPC: "2.0",
 			ID:      1,
 			Method:  "ping",
@@ -785,7 +817,7 @@ func TestServer_handleAuthError(t *testing.T) {
 				Type:    AuthErrorMissingToken,
 				Message: "Token required",
 			},
-			expectedCode: AuthenticationRequired,
+			expectedCode: mcpwire.AuthenticationRequired,
 		},
 		{
 			name: "invalid token",
@@ -793,7 +825,7 @@ func TestServer_handleAuthError(t *testing.T) {
 				Type:    AuthErrorInvalidToken,
 				Message: "Invalid token",
 			},
-			expectedCode: InvalidToken,
+			expectedCode: mcpwire.InvalidToken,
 		},
 		{
 			name: "permission denied",
@@ -801,7 +833,15 @@ func TestServer_handleAuthError(t *testing.T) {
 				Type:    AuthErrorPermissionDenied,
 				Message: "Access denied",
 			},
-			expectedCode: PermissionDenied,
+			expectedCode: mcpwire.PermissionDenied,
+		},
+		{
+			name: "authorization service unavailable",
+			authErr: &AuthorizationError{
+				Type:    AuthErrorServiceUnavailable,
+				Message: "IAM unavailable",
+			},
+			expectedCode: mcpwire.ServiceUnavailable,
 		},
 		{
 			name: "unknown error type",
@@ -809,7 +849,7 @@ func TestServer_handleAuthError(t *testing.T) {
 				Type:    AuthErrorType(99),
 				Message: "Unknown error",
 			},
-			expectedCode: InternalError,
+			expectedCode: mcpwire.InternalError,
 		},
 	}
 
@@ -832,7 +872,7 @@ func TestServer_makeErrorResponse(t *testing.T) {
 	server := NewServer(svc, nil, newTestLogger())
 
 	t.Run("creates error response with data", func(t *testing.T) {
-		resp := server.makeErrorResponse(1, InvalidParams, "Invalid params", "details here")
+		resp := server.makeErrorResponse(1, mcpwire.InvalidParams, "Invalid params", "details here")
 
 		if resp.JSONRPC != "2.0" {
 			t.Errorf("JSONRPC = %s, want 2.0", resp.JSONRPC)
@@ -843,8 +883,8 @@ func TestServer_makeErrorResponse(t *testing.T) {
 		if resp.Error == nil {
 			t.Fatal("Error should not be nil")
 		}
-		if resp.Error.Code != InvalidParams {
-			t.Errorf("Error.Code = %d, want %d", resp.Error.Code, InvalidParams)
+		if resp.Error.Code != mcpwire.InvalidParams {
+			t.Errorf("Error.Code = %d, want %d", resp.Error.Code, mcpwire.InvalidParams)
 		}
 		if resp.Error.Message != "Invalid params" {
 			t.Errorf("Error.Message = %s, want Invalid params", resp.Error.Message)
@@ -855,7 +895,7 @@ func TestServer_makeErrorResponse(t *testing.T) {
 	})
 
 	t.Run("creates error response without data", func(t *testing.T) {
-		resp := server.makeErrorResponse(1, ParseError, "Parse error", "")
+		resp := server.makeErrorResponse(1, mcpwire.ParseError, "Parse error", "")
 
 		if resp.Error.Data != nil {
 			t.Errorf("Error.Data = %v, want nil", resp.Error.Data)
@@ -1057,6 +1097,7 @@ func TestServer_OAuthMetadataEndpoint(t *testing.T) {
 			ServerVersion: "1.0.0",
 			Transport:     "http",
 			HTTPAddr:      "127.0.0.1:0",
+			TLSConfig:     newTestTLSConfig(t),
 			OAuthMetadata: &OAuthMetadataConfig{
 				ResourceURL:             "https://mcp.example.com:8000",
 				AuthorizationServerURLs: []string{"https://auth.example.com"},

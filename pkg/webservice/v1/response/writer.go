@@ -21,6 +21,7 @@ import (
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/platform/service"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/restwire"
 	"gopkg.in/yaml.v2"
 )
 
@@ -37,14 +38,7 @@ type HttpWriter interface {
 	Error404(w http.ResponseWriter, r *http.Request, err error)
 	Error403(w http.ResponseWriter, r *http.Request, err error, payload interface{})
 	Error500(w http.ResponseWriter, r *http.Request, err error)
-}
-
-type WebServiceResponse struct {
-	Code       int         `yaml:"code" json:"code"`
-	Error      string      `yaml:"error" json:"error"`
-	Success    bool        `yaml:"success" json:"success"`
-	Payload    interface{} `yaml:"payload" json:"payload"`
-	HttpWriter `yaml:"-" json:"-"`
+	Error503(w http.ResponseWriter, r *http.Request, err error)
 }
 
 type ResponseWriter struct {
@@ -87,10 +81,10 @@ func (writer *ResponseWriter) Write(w http.ResponseWriter, r *http.Request, stat
 func (writer *ResponseWriter) WriteYaml(w http.ResponseWriter, status int, response interface{}) {
 	yamlResponse, err := yaml.Marshal(response)
 	if err != nil {
-		errResponse := WebServiceResponse{Error: fmt.Sprintf("YamlWriter failed to marshal response entity %s %+v", reflect.TypeOf(response), response)}
+		errResponse := restwire.WebServiceResponse{Error: fmt.Sprintf("YamlWriter failed to marshal response entity %s %+v", reflect.TypeOf(response), response)}
 		errBytes, err := yaml.Marshal(errResponse)
 		if err != nil {
-			errResponse := WebServiceResponse{Error: fmt.Sprintf("YamlWriter internal server error: %s", err.Error())}
+			errResponse := restwire.WebServiceResponse{Error: fmt.Sprintf("YamlWriter internal server error: %s", err.Error())}
 			errBytes, _ := yaml.Marshal(errResponse)
 			http.Error(w, string(errBytes), http.StatusInternalServerError)
 			return
@@ -109,10 +103,10 @@ func (writer *ResponseWriter) WriteYaml(w http.ResponseWriter, status int, respo
 func (writer *ResponseWriter) WriteJson(w http.ResponseWriter, status int, response interface{}) {
 	jsonResponse, err := json.Marshal(response)
 	if err != nil {
-		errResponse := WebServiceResponse{Error: fmt.Sprintf("ResponseWriter failed to marshal response entity %s %+v", reflect.TypeOf(response), response)}
+		errResponse := restwire.WebServiceResponse{Error: fmt.Sprintf("ResponseWriter failed to marshal response entity %s %+v", reflect.TypeOf(response), response)}
 		errBytes, err := json.Marshal(errResponse)
 		if err != nil {
-			errResponse := WebServiceResponse{Error: fmt.Sprintf("ResponseWriter internal server error: %s", err.Error())}
+			errResponse := restwire.WebServiceResponse{Error: fmt.Sprintf("ResponseWriter internal server error: %s", err.Error())}
 			errBytes, _ := json.Marshal(errResponse)
 			http.Error(w, string(errBytes), http.StatusInternalServerError)
 			return
@@ -129,7 +123,7 @@ func (writer *ResponseWriter) WriteJson(w http.ResponseWriter, status int, respo
 
 func (writer *ResponseWriter) Success200(w http.ResponseWriter, r *http.Request, payload interface{}) {
 	writer.logRequest(r)
-	writer.Write(w, r, http.StatusOK, WebServiceResponse{
+	writer.Write(w, r, http.StatusOK, restwire.WebServiceResponse{
 		Code:    http.StatusOK,
 		Success: true,
 		Payload: payload})
@@ -137,7 +131,7 @@ func (writer *ResponseWriter) Success200(w http.ResponseWriter, r *http.Request,
 
 func (writer *ResponseWriter) Success201(w http.ResponseWriter, r *http.Request, payload interface{}) {
 	writer.logRequest(r)
-	writer.Write(w, r, http.StatusCreated, WebServiceResponse{
+	writer.Write(w, r, http.StatusCreated, restwire.WebServiceResponse{
 		Code:    http.StatusCreated,
 		Success: true,
 		Payload: payload})
@@ -145,7 +139,7 @@ func (writer *ResponseWriter) Success201(w http.ResponseWriter, r *http.Request,
 
 func (writer *ResponseWriter) Success404(w http.ResponseWriter, r *http.Request, payload interface{}, err error) {
 	writer.logRequest(r)
-	writer.Write(w, r, http.StatusNotFound, WebServiceResponse{
+	writer.Write(w, r, http.StatusNotFound, restwire.WebServiceResponse{
 		Code:    http.StatusNotFound,
 		Success: true,
 		Error:   err.Error(),
@@ -154,7 +148,7 @@ func (writer *ResponseWriter) Success404(w http.ResponseWriter, r *http.Request,
 
 func (writer *ResponseWriter) Error200(w http.ResponseWriter, r *http.Request, err error) {
 	writer.logError(r, err)
-	writer.Write(w, r, http.StatusOK, WebServiceResponse{
+	writer.Write(w, r, http.StatusOK, restwire.WebServiceResponse{
 		Code:    http.StatusOK,
 		Success: false,
 		Payload: err.Error()})
@@ -162,7 +156,7 @@ func (writer *ResponseWriter) Error200(w http.ResponseWriter, r *http.Request, e
 
 func (writer *ResponseWriter) Error401(w http.ResponseWriter, r *http.Request, err error) {
 	writer.logError(r, err)
-	writer.Write(w, r, http.StatusUnauthorized, WebServiceResponse{
+	writer.Write(w, r, http.StatusUnauthorized, restwire.WebServiceResponse{
 		Code:    http.StatusUnauthorized,
 		Error:   err.Error(),
 		Success: false,
@@ -171,7 +165,7 @@ func (writer *ResponseWriter) Error401(w http.ResponseWriter, r *http.Request, e
 
 func (writer *ResponseWriter) Error400(w http.ResponseWriter, r *http.Request, err error) {
 	writer.logError(r, err)
-	writer.Write(w, r, http.StatusBadRequest, WebServiceResponse{
+	writer.Write(w, r, http.StatusBadRequest, restwire.WebServiceResponse{
 		Code:    http.StatusBadRequest,
 		Error:   err.Error(),
 		Success: false,
@@ -180,7 +174,7 @@ func (writer *ResponseWriter) Error400(w http.ResponseWriter, r *http.Request, e
 
 func (writer *ResponseWriter) Error404(w http.ResponseWriter, r *http.Request, err error) {
 	writer.logError(r, err)
-	writer.Write(w, r, http.StatusNotFound, WebServiceResponse{
+	writer.Write(w, r, http.StatusNotFound, restwire.WebServiceResponse{
 		Code:    http.StatusNotFound,
 		Error:   err.Error(),
 		Success: false,
@@ -189,7 +183,7 @@ func (writer *ResponseWriter) Error404(w http.ResponseWriter, r *http.Request, e
 
 func (writer *ResponseWriter) Error403(w http.ResponseWriter, r *http.Request, err error, payload interface{}) {
 	writer.logError(r, err)
-	writer.Write(w, r, http.StatusForbidden, WebServiceResponse{
+	writer.Write(w, r, http.StatusForbidden, restwire.WebServiceResponse{
 		Code:    http.StatusForbidden,
 		Error:   err.Error(),
 		Success: false,
@@ -198,8 +192,19 @@ func (writer *ResponseWriter) Error403(w http.ResponseWriter, r *http.Request, e
 
 func (writer *ResponseWriter) Error500(w http.ResponseWriter, r *http.Request, err error) {
 	writer.logError(r, err)
-	writer.Write(w, r, http.StatusInternalServerError, WebServiceResponse{
+	writer.Write(w, r, http.StatusInternalServerError, restwire.WebServiceResponse{
 		Code:    http.StatusInternalServerError,
+		Error:   err.Error(),
+		Success: false,
+		Payload: nil})
+}
+
+// Error503 answers a request whose backing service is not wired into the
+// daemon. The caller may retry once the service is configured.
+func (writer *ResponseWriter) Error503(w http.ResponseWriter, r *http.Request, err error) {
+	writer.logError(r, err)
+	writer.Write(w, r, http.StatusServiceUnavailable, restwire.WebServiceResponse{
+		Code:    http.StatusServiceUnavailable,
 		Error:   err.Error(),
 		Success: false,
 		Payload: nil})

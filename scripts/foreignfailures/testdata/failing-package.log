@@ -1,0 +1,33 @@
+
+--- Testing ./test/integration/ffdemo/... (ffdemo) ---
+=== RUN   TestCLI
+=== RUN   TestCLI/Create
+    a_test.go:4: upstream gap
+=== RUN   TestCLI/Get
+    a_test.go:5: upstream gap
+=== RUN   TestCLI/List
+--- FAIL: TestCLI (0.00s)
+    --- FAIL: TestCLI/Create (0.00s)
+    --- FAIL: TestCLI/Get (0.00s)
+    --- PASS: TestCLI/List (0.00s)
+=== RUN   TestOther
+--- PASS: TestOther (0.00s)
+FAIL
+FAIL	github.com/jeremyhahn/go-trusted-platform/test/integration/ffdemo	0.001s
+FAIL
+--- FAIL: ./test/integration/ffdemo/... ---
+
+--- Testing ./test/integration/passes/... (passes) ---
+=== RUN   TestOK
+--- PASS: TestOK (0.00s)
+PASS
+ok  	github.com/jeremyhahn/go-trusted-platform/test/integration/passes	0.001s
+--- PASS: ./test/integration/passes/... ---
+=== end platformd diagnostics ===
+
+=============================================
+  FAIL  ffdemo
+  PASS  passes
+---------------------------------------------
+  SOME INTEGRATION TESTS FAILED
+=============================================

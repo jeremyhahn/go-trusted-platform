@@ -17,6 +17,9 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
+
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/mcpwire"
+	"google.golang.org/grpc/status"
 )
 
 // =============================================================================
@@ -31,6 +34,12 @@ type IDevIDError struct {
 
 func (e *IDevIDError) Error() string {
 	return fmt.Sprintf("%s: %s", e.Code, e.Message)
+}
+
+// GRPCStatus classifies the error by its Code (codeClass), so the MCP
+// server answers it with the matching JSON-RPC code.
+func (e *IDevIDError) GRPCStatus() *status.Status {
+	return codeStatus(e.Code, e.Error())
 }
 
 // IDevID/IAK error instances.
@@ -137,7 +146,7 @@ type ActivateCredentialMCPRequest struct {
 // registerIDevIDTools registers IDevID/IAK-related MCP tools.
 func (r *ToolRegistry) registerIDevIDTools() {
 	// IDevID operations
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "idevid_generate",
 		Description: "Generate an IDevID (Initial Device Identifier) key in the TPM. IDevID is a long-term device identity key per IEEE 802.1AR.",
 		InputSchema: map[string]interface{}{
@@ -158,7 +167,7 @@ func (r *ToolRegistry) registerIDevIDTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "idevid_info",
 		Description: "Get information about the IDevID key including handle, algorithm, and certificate if installed",
 		InputSchema: map[string]interface{}{
@@ -167,16 +176,16 @@ func (r *ToolRegistry) registerIDevIDTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "idevid_delete",
-		Description: "Delete the IDevID key and associated certificate from the TPM",
+		Description: "Refused: the IDevID key is TPM-resident and is not deleted (FailedPrecondition); delete its certificate with idevid_delete_cert",
 		InputSchema: map[string]interface{}{
 			"type":       "object",
 			"properties": map[string]interface{}{},
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "idevid_csr",
 		Description: "Generate a Certificate Signing Request (CSR) for the IDevID key using TCG format",
 		InputSchema: map[string]interface{}{
@@ -225,7 +234,7 @@ func (r *ToolRegistry) registerIDevIDTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "idevid_install_cert",
 		Description: "Install an IDevID certificate issued by a CA",
 		InputSchema: map[string]interface{}{
@@ -240,7 +249,7 @@ func (r *ToolRegistry) registerIDevIDTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "idevid_get_cert",
 		Description: "Get the installed IDevID certificate",
 		InputSchema: map[string]interface{}{
@@ -255,7 +264,7 @@ func (r *ToolRegistry) registerIDevIDTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "idevid_delete_cert",
 		Description: "Delete the IDevID certificate",
 		InputSchema: map[string]interface{}{
@@ -264,7 +273,7 @@ func (r *ToolRegistry) registerIDevIDTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "idevid_exists",
 		Description: "Check if an IDevID key exists in the TPM",
 		InputSchema: map[string]interface{}{
@@ -274,7 +283,7 @@ func (r *ToolRegistry) registerIDevIDTools() {
 	})
 
 	// IAK operations
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "iak_generate",
 		Description: "Generate an IAK (Initial Attestation Key) in the TPM. IAK is used for device attestation per IEEE 802.1AR.",
 		InputSchema: map[string]interface{}{
@@ -295,7 +304,7 @@ func (r *ToolRegistry) registerIDevIDTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "iak_info",
 		Description: "Get information about the IAK key including handle, algorithm, and certificate if installed",
 		InputSchema: map[string]interface{}{
@@ -304,16 +313,16 @@ func (r *ToolRegistry) registerIDevIDTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "iak_delete",
-		Description: "Delete the IAK key and associated certificate from the TPM",
+		Description: "Refused: the IAK is TPM-resident and is not deleted (FailedPrecondition); delete its certificate with iak_delete_cert",
 		InputSchema: map[string]interface{}{
 			"type":       "object",
 			"properties": map[string]interface{}{},
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "iak_csr",
 		Description: "Generate a Certificate Signing Request (CSR) for the IAK key using TCG format",
 		InputSchema: map[string]interface{}{
@@ -362,7 +371,7 @@ func (r *ToolRegistry) registerIDevIDTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "iak_install_cert",
 		Description: "Install an IAK certificate issued by a CA",
 		InputSchema: map[string]interface{}{
@@ -377,7 +386,7 @@ func (r *ToolRegistry) registerIDevIDTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "iak_get_cert",
 		Description: "Get the installed IAK certificate",
 		InputSchema: map[string]interface{}{
@@ -392,7 +401,7 @@ func (r *ToolRegistry) registerIDevIDTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "iak_delete_cert",
 		Description: "Delete the IAK certificate",
 		InputSchema: map[string]interface{}{
@@ -401,7 +410,7 @@ func (r *ToolRegistry) registerIDevIDTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "iak_exists",
 		Description: "Check if an IAK key exists in the TPM",
 		InputSchema: map[string]interface{}{
@@ -411,7 +420,7 @@ func (r *ToolRegistry) registerIDevIDTools() {
 	})
 
 	// Device attributes and credential activation
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "device_attributes",
 		Description: "Get TCG device attributes including TPM manufacturer, model, version, and platform information",
 		InputSchema: map[string]interface{}{
@@ -420,7 +429,7 @@ func (r *ToolRegistry) registerIDevIDTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "activate_credential",
 		Description: "Activate a TPM credential challenge. Used in device enrollment to prove possession of the EK and IAK.",
 		InputSchema: map[string]interface{}{
@@ -673,12 +682,12 @@ func (r *ToolRegistry) executeActivateCredential(ctx context.Context, args map[s
 
 	credentialBlob, err := base64.StdEncoding.DecodeString(credentialBlobB64)
 	if err != nil {
-		return nil, &SentinelCauseError{Sentinel: ErrIDevIDInvalidBase64, Cause: &MessageError{Msg: fmt.Sprintf("credential_blob: %v", err)}}
+		return nil, &SentinelCauseError{Sentinel: ErrIDevIDInvalidBase64, Cause: &mcpwire.MessageError{Msg: fmt.Sprintf("credential_blob: %v", err)}}
 	}
 
 	secret, err := base64.StdEncoding.DecodeString(secretB64)
 	if err != nil {
-		return nil, &SentinelCauseError{Sentinel: ErrIDevIDInvalidBase64, Cause: &MessageError{Msg: fmt.Sprintf("secret: %v", err)}}
+		return nil, &SentinelCauseError{Sentinel: ErrIDevIDInvalidBase64, Cause: &mcpwire.MessageError{Msg: fmt.Sprintf("secret: %v", err)}}
 	}
 
 	decrypted, err := r.service.ActivateCredential(ctx, credentialBlob, secret)

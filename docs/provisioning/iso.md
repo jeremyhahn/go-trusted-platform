@@ -1,22 +1,31 @@
 # ISO Configuration
 
-The platform ISO supports three modes of configuration delivery: embedded config, server-fetched config, and interactive provisioning.
+> **Status: REFERENCE** · Last verified: 2026-10-15
+> How the platform ISO receives its installer config: embedded or server-fetched.
+
+The platform ISO gets its installer config one of two ways: embedded in the ISO
+at build time, or fetched from a server at boot.
 
 ## Build Modes
 
-### Embedded Config (Traditional)
+### Embedded Config
 
 Build an ISO with the platform config baked in:
 
 ```bash
-platformctl iso create --config platform-config.yaml
+platformctl iso create --platform-config platform-config.yaml
 ```
 
-The config is embedded at `/media/cdrom/configs/config.yaml` and used as a fallback when server-based delivery is unavailable.
+The config is embedded at `/media/cdrom/configs/installer.yaml` and must
+contain `seal-pcrs:`. Without `--platform-config`, `iso create` looks for a
+default under `configs/platform/` relative to the working directory
+(`configs/platform/templates/single-node/default.yaml` first, then a
+`--platform-type`-specific example). `--config` is a different flag: the ISO
+*build* configuration file.
 
 ### Server-Fetched Config
 
-Build an ISO that fetches config from a server at boot time:
+Build an ISO that fetches its config from a server at boot time:
 
 ```bash
 platformctl iso create \
@@ -25,70 +34,45 @@ platformctl iso create \
   --bootstrap-dns 8.8.8.8
 ```
 
-This injects kernel command line parameters so the device bootstraps trust and fetches its config automatically.
+`--config-server` adds `platform_config=<url>` to the kernel command line,
+plus `bootstrap_strategy` (only when not `auto`, the default), `bootstrap_dns`,
+`bootstrap_noise_key` and `bootstrap_spki_pin` when set
+(`buildDynamicConfigParams`, `pkg/iso/customize.go`). When no platform config
+file is given or found, nothing is embedded and the device depends on the
+server; without either, the build fails with
+`platform config path is required`.
 
-### Hybrid (Recommended)
+### Hybrid
 
-Embed a default config AND point to a server. The device tries the server first and falls back to the embedded config:
+Embed a config AND point to a server. The device tries the server first and
+falls back to the embedded config:
 
 ```bash
 platformctl iso create \
-  --config platform-config.yaml \
-  --config-server https://platform.example.com:8443 \
-  --bootstrap-strategy dane
+  --platform-config platform-config.yaml \
+  --config-server https://platform.example.com:8443
 ```
-
-### Minimal (Interactive Only)
-
-Build an ISO with no config — devices must be provisioned interactively via QR code:
-
-```bash
-platformctl iso create
-```
-
-At boot, the device enters interactive QR mode if `platform_server` is set in the kernel cmdline.
 
 ## Config Resolution at Boot
 
-The `autoinstall.sh` script resolves config in this order:
+The generated `autoinstall.sh` (`pkg/iso/customize.go`) resolves the installer
+config in this order:
 
 | Priority | Source | How |
 |----------|--------|-----|
-| 1 | Server | Kernel param `platform_config=<url>` triggers trust bootstrap + HTTPS fetch |
-| 2 | USB | Scans removable media for `/platform/config.yaml` |
-| 3 | Embedded | `/media/cdrom/configs/config.yaml` or `installer.yaml` (legacy) |
-| 4 | Interactive | QR code displayed, operator provisions via web UI |
-| 5 | Error | Fatal with diagnostic message listing all sources tried |
+| 1 | Server | Kernel param `platform_config=<base_url>`: for each local NIC, GET `<base>/<mac-dashed>/installer.yaml`, then `<base>?mac=<mac-colons>` |
+| 1b | Debug sink | Per-MAC fetch from the `platform_debug_sink` host |
+| 2 | Embedded | `/media/cdrom/configs/installer.yaml` |
+| 3 | Defaults | Built-in installer defaults |
 
-## USB Provisioning
-
-Place a config file on a USB drive:
-
-```
-/platform/
-  config.yaml    # Full app.App platform configuration
-```
-
-Insert the USB before booting the ISO. The config is detected automatically.
+The server fetch uses the ISO's `/media/cdrom/configs/ca-bundle.pem` when
+present (`--ca-bundle`). It is a plain HTTPS GET: `autoinstall.sh` does not run
+`platformctl bootstrap trust` or the config delivery API; see
+[Config Delivery](config-delivery.md) for those.
 
 ## Kernel Parameters
 
-| Parameter | Default | Description |
-|-----------|---------|-------------|
-| `platform_config` | — | Server URL for automatic config fetch |
-| `platform_server` | — | Server URL for interactive mode only |
-| `bootstrap_strategy` | `auto` | DANE, Noise, SPKI, or auto |
-| `bootstrap_dns` | — | DNS server for DANE TLSA lookups |
-| `bootstrap_noise_key` | — | Noise_NK server public key (hex) |
-| `bootstrap_spki_pin` | — | SPKI certificate pin (SHA-256) |
-| `eab_kid` | — | EAB key ID for authentication |
-| `eab_hmac` | — | EAB HMAC key (base64) |
-
-## Single Universal ISO
-
-A single ISO image works for any device and any configuration. The config is NOT baked into the ISO — it comes from the server, USB, or interactive provisioning. This enables:
-
-- One ISO for an entire fleet
-- Per-device configs managed server-side
-- Operator-provisioned systems via QR code
-- Air-gapped deployments via USB
+`platform_config` is described in
+[`docs/reference/kernel-cmdline.md`](../reference/kernel-cmdline.md) §2. The
+`bootstrap_*` parameters `iso create` bakes are listed there in §3; no code
+reads them.

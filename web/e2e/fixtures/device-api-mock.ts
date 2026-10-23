@@ -217,7 +217,7 @@ export function createMockProfile(overrides: Partial<DeviceProfile> = {}): Devic
     id,
     name: `Profile-${id}`,
     model: `Model-${id}`,
-    role: 'SERVER' as DeviceRole,
+    role: 'server',
     networks: {
       provisioning: {
         vlan: 100,
@@ -538,9 +538,9 @@ interface ProfileApiState {
  * Mock the device profiles API endpoints.
  *
  * Handles:
- * - GET /api/v1/devices/profiles - List profiles
- * - POST /api/v1/devices/profiles - Create profile
- * - DELETE /api/v1/devices/profiles/:id - Delete profile
+ * - GET /api/v1/device/profiles - List profiles
+ * - POST /api/v1/device/profiles - Create profile
+ * - DELETE /api/v1/device/profiles/:id - Delete profile
  */
 export async function mockProfileApi(
   page: Page,
@@ -562,8 +562,8 @@ export async function mockProfileApi(
     },
   };
 
-  // Route handler for profiles list (matches /api/v1/devices/profiles with or without query params)
-  await page.route('**/api/v1/devices/profiles', async (route: Route, request: Request) => {
+  // Route handler for profiles list (matches /api/v1/device/profiles with or without query params)
+  await page.route('**/api/v1/device/profiles', async (route: Route, request: Request) => {
     const method = request.method();
 
     if (method === 'GET') {
@@ -610,7 +610,7 @@ export async function mockProfileApi(
         const newProfile = createMockProfile({
           name: profileData.name,
           model: profileData.model,
-          role: profileData.role || 'SERVER',
+          role: profileData.role || 'server',
         });
 
         state.profiles.unshift(newProfile);
@@ -634,7 +634,7 @@ export async function mockProfileApi(
   });
 
   // Route handler for individual profile operations
-  await page.route('**/api/v1/devices/profiles/*', async (route: Route, request: Request) => {
+  await page.route('**/api/v1/device/profiles/*', async (route: Route, request: Request) => {
     const method = request.method();
     const url = request.url();
 

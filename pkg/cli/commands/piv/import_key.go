@@ -74,7 +74,10 @@ func runImport(commonFlags *cli.CommonFlags, f *importFlags) error {
 	}
 	defer base.Close()
 
-	client := pivsvc.NewClient()
+	client, err := newService(base.Client())
+	if err != nil {
+		return err
+	}
 	resp, err := client.Import(base.Context(), &pivsvc.ImportRequest{
 		Slot:          f.slot,
 		PrivateKeyPEM: string(key),

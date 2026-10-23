@@ -16,7 +16,7 @@ package daemon
 import (
 	"net/http"
 
-	"github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -31,10 +31,11 @@ func (ErrLDevIDServiceNotConfigured) Error() string {
 	return "idevid: LDevID service not configured for this transport"
 }
 
-// ldevidGRPCToHTTPStatus maps a gRPC status error returned by
-// IDevIDGRPCService.CreateLDevID to the closest HTTP status code so the REST
-// transport reports the same failure class the gRPC transport does.
-func ldevidGRPCToHTTPStatus(err error) int {
+// idevidGRPCToHTTPStatus maps a gRPC status error returned by
+// IDevIDGRPCService (LDevID issuance, and the IDevID and IAK key-delete
+// refusal) to the closest HTTP status code so the REST transport reports the
+// same failure class the gRPC transport does.
+func idevidGRPCToHTTPStatus(err error) int {
 	switch status.Code(err) {
 	case codes.OK:
 		return http.StatusOK
@@ -57,26 +58,29 @@ func ldevidGRPCToHTTPStatus(err error) int {
 	}
 }
 
-// ldevidGRPCToQUICStatus maps a gRPC status error returned by
-// IDevIDGRPCService.CreateLDevID to the closest QUIC status byte so the QUIC
-// transport reports the same failure class the gRPC transport does.
-func ldevidGRPCToQUICStatus(err error) byte {
+// idevidGRPCToQUICStatus maps a gRPC status error returned by
+// IDevIDGRPCService (LDevID issuance, and the IDevID and IAK key-delete
+// refusal) to the closest QUIC status byte so the QUIC transport reports the
+// same failure class the gRPC transport does.
+func idevidGRPCToQUICStatus(err error) byte {
 	switch status.Code(err) {
 	case codes.OK:
-		return quic.StatusOK
-	case codes.InvalidArgument, codes.FailedPrecondition:
-		return quic.StatusInvalidArgument
+		return quicwire.StatusOK
+	case codes.InvalidArgument:
+		return quicwire.StatusInvalidArgument
+	case codes.FailedPrecondition:
+		return quicwire.StatusFailedPrecondition
 	case codes.NotFound:
-		return quic.StatusNotFound
+		return quicwire.StatusNotFound
 	case codes.AlreadyExists:
-		return quic.StatusAlreadyExists
+		return quicwire.StatusAlreadyExists
 	case codes.PermissionDenied:
-		return quic.StatusPermissionDenied
+		return quicwire.StatusPermissionDenied
 	case codes.Unauthenticated:
-		return quic.StatusUnauthorized
+		return quicwire.StatusUnauthorized
 	case codes.Unavailable:
-		return quic.StatusUnavailable
+		return quicwire.StatusUnavailable
 	default:
-		return quic.StatusInternalError
+		return quicwire.StatusInternalError
 	}
 }

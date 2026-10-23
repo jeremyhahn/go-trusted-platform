@@ -21,7 +21,7 @@ import (
 // forwards to it, so the domain must NOT be declared local — local=
 // would stop forwarding even to loopback.
 func TestBuildDNSMasqConf_LoopbackUpstreamForwards(t *testing.T) {
-	conf := buildDNSMasqConf(&DNSMasqConfig{
+	conf := BuildDNSMasqConf(&DNSMasqConfig{
 		Enabled:         true,
 		UpstreamServers: []string{"127.0.0.1#9053"},
 		LocalDomain:     "example.internal",
@@ -38,7 +38,7 @@ func TestBuildDNSMasqConf_LoopbackUpstreamForwards(t *testing.T) {
 // or cp.<domain> resolves NXDOMAIN and platformd cannot reach the ACME
 // directory.
 func TestBuildDNSMasqConf_RemoteUpstreamForwardsInternalDomain(t *testing.T) {
-	conf := buildDNSMasqConf(&DNSMasqConfig{
+	conf := BuildDNSMasqConf(&DNSMasqConfig{
 		Enabled:         true,
 		UpstreamServers: []string{"10.4.2.140#9053"},
 		LocalDomain:     "example.internal",
@@ -54,7 +54,7 @@ func TestBuildDNSMasqConf_RemoteUpstreamForwardsInternalDomain(t *testing.T) {
 // everything else to a second upstream — the shape the unconditional
 // local= used to defeat.
 func TestBuildDNSMasqConf_DomainScopedUpstreamPreserved(t *testing.T) {
-	conf := buildDNSMasqConf(&DNSMasqConfig{
+	conf := BuildDNSMasqConf(&DNSMasqConfig{
 		Enabled: true,
 		UpstreamServers: []string{
 			"/example.internal/10.4.200.10#9053",
@@ -74,7 +74,7 @@ func TestBuildDNSMasqConf_DomainScopedUpstreamPreserved(t *testing.T) {
 // /etc/hosts, so declaring the domain local is correct and preserves the
 // standalone shape.
 func TestBuildDNSMasqConf_NoUpstreamsKeepsLocal(t *testing.T) {
-	conf := buildDNSMasqConf(&DNSMasqConfig{
+	conf := BuildDNSMasqConf(&DNSMasqConfig{
 		Enabled:     true,
 		LocalDomain: "example.internal",
 	})
@@ -88,7 +88,7 @@ func TestBuildDNSMasqConf_NoUpstreamsKeepsLocal(t *testing.T) {
 // only upstream is scoped to a different zone: nothing routes the local
 // domain, so it is answered from /etc/hosts and declared local.
 func TestBuildDNSMasqConf_UncoveredDomainStaysLocal(t *testing.T) {
-	conf := buildDNSMasqConf(&DNSMasqConfig{
+	conf := BuildDNSMasqConf(&DNSMasqConfig{
 		Enabled:         true,
 		UpstreamServers: []string{"/other.zone/10.0.0.1#9053"},
 		LocalDomain:     "example.internal",
@@ -103,7 +103,7 @@ func TestBuildDNSMasqConf_UncoveredDomainStaysLocal(t *testing.T) {
 // appears when no local domain is configured.
 func TestBuildDNSMasqConf_NoLocalDomain(t *testing.T) {
 	for _, upstream := range []string{"127.0.0.1#9053", "10.0.1.1#9053"} {
-		conf := buildDNSMasqConf(&DNSMasqConfig{
+		conf := BuildDNSMasqConf(&DNSMasqConfig{
 			Enabled:         true,
 			UpstreamServers: []string{upstream},
 		})
@@ -122,7 +122,7 @@ func TestBuildDNSMasqConf_BaseDirectivesAlwaysPresent(t *testing.T) {
 		{"10.4.2.140#9053"},
 		nil,
 	} {
-		conf := buildDNSMasqConf(&DNSMasqConfig{
+		conf := BuildDNSMasqConf(&DNSMasqConfig{
 			Enabled:         true,
 			UpstreamServers: upstreams,
 			LocalDomain:     "example.internal",
@@ -139,7 +139,7 @@ func TestBuildDNSMasqConf_BaseDirectivesAlwaysPresent(t *testing.T) {
 // shorthand never reaches dnsmasq.conf verbatim — dnsmasq accepts only
 // `#` before the port and fails to start on `server=ip:port` lines.
 func TestBuildDNSMasqConf_NormalizesPortSeparator(t *testing.T) {
-	conf := buildDNSMasqConf(&DNSMasqConfig{
+	conf := BuildDNSMasqConf(&DNSMasqConfig{
 		Enabled: true,
 		UpstreamServers: []string{
 			"10.0.1.1:9053",
@@ -158,7 +158,7 @@ func TestBuildDNSMasqConf_NormalizesPortSeparator(t *testing.T) {
 // are emitted in dnsmasq syntax — dnsmasq has no bracket form and
 // rejects `server=[::1]#9053` at startup.
 func TestBuildDNSMasqConf_NormalizesIPv6(t *testing.T) {
-	conf := buildDNSMasqConf(&DNSMasqConfig{
+	conf := BuildDNSMasqConf(&DNSMasqConfig{
 		Enabled: true,
 		UpstreamServers: []string{
 			"[::1]:9053",
@@ -180,7 +180,7 @@ func TestBuildDNSMasqConf_NormalizesIPv6(t *testing.T) {
 // config (dnsmasq rejects the line at startup) and counted as unscoped
 // routes, so the local= blackhole is never emitted on a typo.
 func TestBuildDNSMasqConf_MalformedEntryWrittenVerbatim(t *testing.T) {
-	conf := buildDNSMasqConf(&DNSMasqConfig{
+	conf := BuildDNSMasqConf(&DNSMasqConfig{
 		Enabled: true,
 		UpstreamServers: []string{
 			"/unterminated-scope",

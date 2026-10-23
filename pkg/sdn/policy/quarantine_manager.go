@@ -81,6 +81,22 @@ func (e ErrUnknownDevicePort) Error() string {
 	return fmt.Sprintf("policy: quarantine manager: no port registered for device %d", e.DeviceID)
 }
 
+// ErrDeviceNotSuspended is returned when an operator re-enable targets a
+// device that is not suspended: only a disabled device can be re-enabled.
+type ErrDeviceNotSuspended struct {
+	DeviceID uint64
+	State    entities.DeviceState
+}
+
+// Error implements the error interface.
+func (e ErrDeviceNotSuspended) Error() string {
+	return fmt.Sprintf("policy: quarantine manager: device %d is not suspended (state=%s); only a disabled device can be re-enabled", e.DeviceID, e.State)
+}
+
+// operatorReasonPrefix marks a StateReason written by an operator action, so
+// it reads differently from an attestation verdict.
+const operatorReasonPrefix = "operator: "
+
 // DeviceStateStore is the minimal write surface the QuarantineManager needs to
 // persist device state changes. Callers supply a concrete implementation backed
 // by the datastore layer.
@@ -221,8 +237,11 @@ func (qm *QuarantineManager) HandleRestoreAttestation(ctx context.Context, devic
 
 	restoreZone := zone.Zone(device.PriorZone)
 	restoreClass := zone.PortClass(device.PriorPortClass)
+	// A passing re-attestation proves the device attested. A recorded state
+	// quarantine cannot return to (one from before the device first
+	// attested) restores to attested rather than failing the restore.
 	restoreState := device.PriorState
-	if restoreState == "" {
+	if restoreState == "" || device.State.CanTransitionTo(restoreState) != nil {
 		restoreState = entities.DeviceStateAttested
 	}
 
@@ -285,6 +304,16 @@ func (qm *QuarantineManager) HandleRestoreAttestation(ctx context.Context, devic
 //
 // Compliance: SC-7 (boundary transition to quarantine), AC-4 (flow enforcement).
 func (qm *QuarantineManager) quarantineDevice(ctx context.Context, device *entities.Device, portID, detail string) error {
+	// A suspended device's port is already blocked; a lesser violation must
+	// not move it to the quarantine zone.
+	if device.State == entities.DeviceStateSuspended {
+		qm.logger.Info("warning violation for suspended device; it stays suspended",
+			slog.Uint64("device_id", device.ID),
+			slog.String("port_id", portID),
+			slog.String("reason", detail))
+		return nil
+	}
+
 	// Resolve the quarantine zone from the lifecycle role.
 	quarantineZone, err := zone.ZoneForRole(qm.resolvedZones, zone.LifecycleRoleQuarantine)
 	if err != nil {
@@ -336,11 +365,16 @@ func (qm *QuarantineManager) quarantineDevice(ctx context.Context, device *entit
 	return nil
 }
 
-// suspendDevice handles a severe violation or certificate revocation: blocks
-// the port admin-down and records DeviceStateSuspended.
+// suspendDevice handles a severe violation, a certificate revocation or an
+// operator disable: blocks the port admin-down and records
+// DeviceStateSuspended. The state and placement the device had before are
+// recorded, so a re-enable followed by a passing re-attestation can restore
+// them.
 //
 // Compliance: SC-7 (hard boundary — port blocked), AC-4 (flow enforcement — DROP all).
 func (qm *QuarantineManager) suspendDevice(ctx context.Context, device *entities.Device, portID, detail string) error {
+	qm.recordPrior(device, portID)
+
 	// BlockPort calls installBlockedFlows (DROP rules) and SetPortState admin-down
 	// via OVSDB — the existing semantics in Engine.BlockPort are unchanged.
 	if err := qm.engine.BlockPort(portID); err != nil {
@@ -357,7 +391,7 @@ func (qm *QuarantineManager) suspendDevice(ctx context.Context, device *entities
 	}
 
 	// Hard port block: SC-7 (boundary protection), AC-4 (information flow — DROP all).
-	qm.logger.Warn("device suspended (severe violation)",
+	qm.logger.Warn("device suspended",
 		slog.Uint64("device_id", device.ID),
 		slog.String("port_id", portID),
 		slog.String("zone", string(zone.ZoneQuarantine)),
@@ -365,6 +399,109 @@ func (qm *QuarantineManager) suspendDevice(ctx context.Context, device *entities
 		complianceAttr(complianceSC7, complianceAC4))
 
 	return nil
+}
+
+// recordPrior records the device's state and port placement before an
+// enforcement action replaces them. A quarantined device already carries the
+// record of what it was before quarantine; that record is kept.
+func (qm *QuarantineManager) recordPrior(device *entities.Device, portID string) {
+	if device.State != entities.DeviceStateQuarantined {
+		device.PriorState = device.State
+	}
+	if qm.zoneFlowManager == nil {
+		return
+	}
+	device.PriorZone, device.PriorPortClass = qm.currentPlacement(device, portID)
+}
+
+// OperatorSuspend disables a device on an operator's request: its port is
+// blocked admin-down and the device recorded suspended, with reason prefixed
+// "operator: ". The state is checked before the port is touched, so a device
+// that cannot be suspended (already suspended, revoked) keeps its port as is.
+//
+// Compliance: SC-7 (hard boundary — port blocked), AC-4 (flow enforcement — DROP all).
+func (qm *QuarantineManager) OperatorSuspend(ctx context.Context, deviceID uint64, portID, reason string) (*entities.Device, error) {
+	if portID == "" {
+		return nil, ErrUnknownDevicePort{DeviceID: deviceID}
+	}
+	device, err := qm.store.GetDevice(ctx, deviceID)
+	if err != nil {
+		return nil, &WrappedError{Msg: fmt.Sprintf("policy: quarantine manager: get device %d", deviceID), Err: err}
+	}
+	if err := device.State.CanTransitionTo(entities.DeviceStateSuspended); err != nil {
+		return nil, err
+	}
+	if reason == "" {
+		reason = "disabled"
+	}
+	if err := qm.suspendDevice(ctx, device, portID, operatorReasonPrefix+reason); err != nil {
+		return nil, err
+	}
+	return device, nil
+}
+
+// OperatorReadmit re-enables a suspended device on an operator's request. It
+// never vouches for the device: the port is unblocked into the quarantine
+// zone and the device recorded quarantined, so only a passing re-attestation
+// (HandleRestoreAttestation) restores the state and placement recorded at
+// suspension. Any failure after the port is unblocked blocks it again.
+//
+// Compliance: SC-7 (boundary transition to quarantine), AC-4 (flow enforcement).
+func (qm *QuarantineManager) OperatorReadmit(ctx context.Context, deviceID uint64, portID string) (*entities.Device, error) {
+	if portID == "" {
+		return nil, ErrUnknownDevicePort{DeviceID: deviceID}
+	}
+	device, err := qm.store.GetDevice(ctx, deviceID)
+	if err != nil {
+		return nil, &WrappedError{Msg: fmt.Sprintf("policy: quarantine manager: get device %d", deviceID), Err: err}
+	}
+	if device.State != entities.DeviceStateSuspended {
+		return nil, ErrDeviceNotSuspended{DeviceID: deviceID, State: device.State}
+	}
+	quarantineZone, err := zone.ZoneForRole(qm.resolvedZones, zone.LifecycleRoleQuarantine)
+	if err != nil {
+		return nil, ErrNoQuarantineZone{}
+	}
+	if qm.zoneFlowManager == nil {
+		return nil, &MessageError{Msg: "policy: quarantine manager: zone flow manager is required for re-enable"}
+	}
+
+	// UnblockPort deletes every flow on the port, so the quarantine zone
+	// flows go on after it.
+	if err := qm.engine.UnblockPort(portID); err != nil {
+		return nil, &WrappedError{Msg: fmt.Sprintf("policy: quarantine manager: unblock port %s", portID), Err: err}
+	}
+	if err := qm.zoneFlowManager.ApplyZoneFlows(ctx, portID, quarantineZone); err != nil {
+		qm.reblock(portID)
+		return nil, &WrappedError{Msg: "policy: quarantine manager: apply quarantine zone flows", Err: err}
+	}
+	if err := device.Transition(entities.DeviceStateQuarantined); err != nil {
+		qm.reblock(portID)
+		return nil, &WrappedError{Msg: "policy: quarantine manager: device state transition", Err: err}
+	}
+	device.StateReason = operatorReasonPrefix + "re-enabled; awaiting re-attestation"
+	if err := qm.store.SaveDevice(ctx, device); err != nil {
+		qm.reblock(portID)
+		return nil, &WrappedError{Msg: fmt.Sprintf("policy: quarantine manager: save device %d", deviceID), Err: err}
+	}
+
+	qm.logger.Info("device re-enabled into quarantine",
+		slog.Uint64("device_id", deviceID),
+		slog.String("port_id", portID),
+		slog.String("zone", string(quarantineZone)),
+		complianceAttr(complianceSC7, complianceAC4))
+	return device, nil
+}
+
+// reblock puts a port back to blocked after a failed re-enable, so the
+// failure leaves the device's network cut rather than half-admitted.
+func (qm *QuarantineManager) reblock(portID string) {
+	if err := qm.engine.BlockPort(portID); err != nil {
+		qm.logger.Error("failed to re-block port after a failed re-enable",
+			slog.String("port_id", portID),
+			slog.String("error", err.Error()),
+			complianceAttr(complianceSC7))
+	}
 }
 
 // currentPlacement returns what the device's port carries now: a single

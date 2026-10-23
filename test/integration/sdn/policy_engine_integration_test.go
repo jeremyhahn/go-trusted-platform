@@ -20,7 +20,6 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"fmt"
-	"os/exec"
 	"testing"
 	"time"
 
@@ -30,6 +29,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ovs"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/policy"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/policy/zoneflows"
+	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers/boundedexec"
 )
 
 // OVSFlowController implements FlowController using real OVS client
@@ -159,17 +159,17 @@ func TestPolicyEngineIntegration(t *testing.T) {
 
 	err = client.Connect(ctx)
 	if err != nil {
-		t.Skipf("Skipping test: cannot connect to OVSDB: %v", err)
+		t.Fatal(missing("a connection to OVSDB", err))
 	}
 
 	// Setup test bridge
 	bridgeName := "br-policy-test"
 	// Cleanup any existing bridge
-	exec.Command("ovs-vsctl", "--if-exists", "del-br", bridgeName).Run()
-	defer exec.Command("ovs-vsctl", "--if-exists", "del-br", bridgeName).Run()
+	boundedexec.Command("ovs-vsctl", "--if-exists", "del-br", bridgeName).Run()
+	defer boundedexec.Command("ovs-vsctl", "--if-exists", "del-br", bridgeName).Run()
 
 	// Create bridge via ovs-vsctl which properly creates management socket
-	cmd := exec.Command("ovs-vsctl", "add-br", bridgeName)
+	cmd := boundedexec.Command("ovs-vsctl", "add-br", bridgeName)
 	output, err := cmd.CombinedOutput()
 	require.NoError(t, err, "Failed to create bridge: %s", output)
 
@@ -178,7 +178,7 @@ func TestPolicyEngineIntegration(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, bridgeName, bridge.Name)
 
-	cmd = exec.Command("ovs-vsctl", "set", "bridge", bridgeName, "protocols=OpenFlow13")
+	cmd = boundedexec.Command("ovs-vsctl", "set", "bridge", bridgeName, "protocols=OpenFlow13")
 	output, err = cmd.CombinedOutput()
 	require.NoError(t, err, "Failed to set protocols: %s", output)
 
@@ -434,20 +434,20 @@ func TestPolicyEngineWithCertificate(t *testing.T) {
 
 	err = client.Connect(ctx)
 	if err != nil {
-		t.Skipf("Skipping test: cannot connect to OVSDB: %v", err)
+		t.Fatal(missing("a connection to OVSDB", err))
 	}
 
 	bridgeName := "br-cert-test"
 	// Cleanup any existing bridge
-	exec.Command("ovs-vsctl", "--if-exists", "del-br", bridgeName).Run()
-	defer exec.Command("ovs-vsctl", "--if-exists", "del-br", bridgeName).Run()
+	boundedexec.Command("ovs-vsctl", "--if-exists", "del-br", bridgeName).Run()
+	defer boundedexec.Command("ovs-vsctl", "--if-exists", "del-br", bridgeName).Run()
 
 	// Create bridge via ovs-vsctl
-	cmd := exec.Command("ovs-vsctl", "add-br", bridgeName)
+	cmd := boundedexec.Command("ovs-vsctl", "add-br", bridgeName)
 	output, err := cmd.CombinedOutput()
 	require.NoError(t, err, "Failed to create bridge: %s", output)
 
-	cmd = exec.Command("ovs-vsctl", "set", "bridge", bridgeName, "protocols=OpenFlow13")
+	cmd = boundedexec.Command("ovs-vsctl", "set", "bridge", bridgeName, "protocols=OpenFlow13")
 	output, err = cmd.CombinedOutput()
 	require.NoError(t, err, "Failed to set protocols: %s", output)
 

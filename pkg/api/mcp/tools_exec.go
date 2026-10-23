@@ -16,18 +16,24 @@ package mcp
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
+	"math"
+
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/policy"
 )
 
 // vTPM tool execution handlers
 
 func (r *ToolRegistry) executeVTPMCreate(ctx context.Context, args map[string]interface{}) (interface{}, error) {
 	name := getString(args, "name")
-	algorithm := getString(args, "algorithm")
-	if algorithm == "" {
-		algorithm = "RSA"
+	algorithm, err := ekAlgorithmArg(args)
+	if err != nil {
+		return nil, err
 	}
+	secureBoot := getBool(args, "secure_boot_enabled")
+	labels := getStringMap(args, "labels")
 
-	result, err := r.service.VTPMCreate(ctx, name, algorithm)
+	result, err := r.service.VTPMCreate(ctx, name, algorithm, secureBoot, labels)
 	if err != nil {
 		return nil, err
 	}
@@ -43,7 +49,11 @@ func (r *ToolRegistry) executeVTPMDelete(ctx context.Context, args map[string]in
 }
 
 func (r *ToolRegistry) executeVTPMList(ctx context.Context, args map[string]interface{}) (interface{}, error) {
-	instances, err := r.service.VTPMList(ctx)
+	opts, err := vtpmListOptionsArg(args)
+	if err != nil {
+		return nil, err
+	}
+	instances, err := r.service.VTPMList(ctx, opts)
 	if err != nil {
 		return nil, err
 	}
@@ -73,7 +83,7 @@ func (r *ToolRegistry) executeVTPMQuote(ctx context.Context, args map[string]int
 
 	nonce, err := base64.StdEncoding.DecodeString(nonceB64)
 	if err != nil {
-		return nil, &WrappedError{Msg: "invalid nonce encoding", Err: err}
+		return nil, ErrInvalidArgument{Msg: "invalid nonce encoding", Cause: err}
 	}
 
 	quote, err := r.service.VTPMQuote(ctx, name, nonce, pcrs)
@@ -90,10 +100,10 @@ func (r *ToolRegistry) executeVTPMSeal(ctx context.Context, args map[string]inte
 
 	data, err := base64.StdEncoding.DecodeString(dataB64)
 	if err != nil {
-		return nil, &WrappedError{Msg: "invalid data encoding", Err: err}
+		return nil, ErrInvalidArgument{Msg: "invalid data encoding", Cause: err}
 	}
 
-	sealed, err := r.service.VTPMSeal(ctx, name, data, pcrs)
+	sealed, err := r.service.VTPMSeal(ctx, name, data, pcrs, getString(args, "auth_value"))
 	if err != nil {
 		return nil, err
 	}
@@ -108,10 +118,10 @@ func (r *ToolRegistry) executeVTPMUnseal(ctx context.Context, args map[string]in
 
 	sealed, err := base64.StdEncoding.DecodeString(sealedB64)
 	if err != nil {
-		return nil, &WrappedError{Msg: "invalid sealed data encoding", Err: err}
+		return nil, ErrInvalidArgument{Msg: "invalid sealed data encoding", Cause: err}
 	}
 
-	data, err := r.service.VTPMUnseal(ctx, name, sealed)
+	data, err := r.service.VTPMUnseal(ctx, name, sealed, getString(args, "auth_value"))
 	if err != nil {
 		return nil, err
 	}
@@ -127,7 +137,7 @@ func (r *ToolRegistry) executeVTPMExtendPCR(ctx context.Context, args map[string
 
 	data, err := base64.StdEncoding.DecodeString(dataB64)
 	if err != nil {
-		return nil, &WrappedError{Msg: "invalid data encoding", Err: err}
+		return nil, ErrInvalidArgument{Msg: "invalid data encoding", Cause: err}
 	}
 
 	if err := r.service.VTPMExtendPCR(ctx, name, pcr, data); err != nil {
@@ -240,16 +250,24 @@ func (r *ToolRegistry) executeDNSListZones(ctx context.Context, args map[string]
 // Device tool execution handlers
 
 func (r *ToolRegistry) executeDeviceRegister(ctx context.Context, args map[string]interface{}) (interface{}, error) {
-	name := getString(args, "name")
-	deviceType := getString(args, "device_type")
-	publicKeyB64 := getString(args, "public_key")
-
-	publicKey, err := base64.StdEncoding.DecodeString(publicKeyB64)
-	if err != nil {
-		return nil, &WrappedError{Msg: "invalid public key encoding", Err: err}
+	req := &DeviceRegisterRequest{
+		Serial:     getString(args, "serial"),
+		Model:      getString(args, "model"),
+		EKCert:     getString(args, "ek_cert"),
+		AttestPub:  getString(args, "attest_pub"),
+		AttestCert: getString(args, "attest_cert"),
+		SigningPub: getString(args, "signing_pub"),
 	}
+	if req.Serial == "" {
+		return nil, ErrDeviceSerialRequired
+	}
+	hashAlgoID := getInt64(args, "hash_algo_id")
+	if hashAlgoID < 0 || hashAlgoID > math.MaxUint32 {
+		return nil, ErrDeviceHashAlgoInvalid
+	}
+	req.HashAlgoID = uint32(hashAlgoID)
 
-	device, err := r.service.DeviceRegister(ctx, name, deviceType, publicKey)
+	device, err := r.service.DeviceRegister(ctx, req)
 	if err != nil {
 		return nil, err
 	}
@@ -260,6 +278,19 @@ func (r *ToolRegistry) executeDeviceGet(ctx context.Context, args map[string]int
 	deviceID := getString(args, "device_id")
 
 	device, err := r.service.DeviceGet(ctx, deviceID)
+	if err != nil {
+		return nil, err
+	}
+	return marshalResult(device)
+}
+
+func (r *ToolRegistry) executeDeviceFindBySerial(ctx context.Context, args map[string]interface{}) (interface{}, error) {
+	serial := getString(args, "serial")
+	if serial == "" {
+		return nil, ErrDeviceSerialRequired
+	}
+
+	device, err := r.service.DeviceFindBySerial(ctx, serial)
 	if err != nil {
 		return nil, err
 	}
@@ -294,15 +325,35 @@ func (r *ToolRegistry) executeDeviceDelete(ctx context.Context, args map[string]
 	return map[string]interface{}{"success": true}, nil
 }
 
+// executeDeviceUpdate applies the editable fields the caller sent and answers
+// with the device as stored, like the update verb on every other transport.
 func (r *ToolRegistry) executeDeviceUpdate(ctx context.Context, args map[string]interface{}) (interface{}, error) {
 	deviceID := getString(args, "device_id")
-	updates := getMap(args, "updates")
+	if deviceID == "" {
+		return nil, ErrDeviceIDRequired
+	}
+
+	updates := make(map[string]interface{}, len(deviceUpdateFields))
+	for _, field := range deviceUpdateFields {
+		if value := getString(args, field); value != "" {
+			updates[field] = value
+		}
+	}
 
 	if err := r.service.DeviceUpdate(ctx, deviceID, updates); err != nil {
 		return nil, err
 	}
-	return map[string]interface{}{"success": true}, nil
+	device, err := r.service.DeviceGet(ctx, deviceID)
+	if err != nil {
+		return nil, err
+	}
+	return marshalResult(device)
 }
+
+// deviceUpdateFields are the device_update arguments a caller may change.
+// The identity and enrollment set (ek_cert, attest_pub, attest_cert,
+// signing_pub) is server-owned on update — docs/device/api.md §3.3.
+var deviceUpdateFields = []string{"model", "serial"}
 
 func (r *ToolRegistry) executeDeviceAttest(ctx context.Context, args map[string]interface{}) (interface{}, error) {
 	deviceID := getString(args, "device_id")
@@ -310,7 +361,7 @@ func (r *ToolRegistry) executeDeviceAttest(ctx context.Context, args map[string]
 
 	evidence, err := base64.StdEncoding.DecodeString(evidenceB64)
 	if err != nil {
-		return nil, &WrappedError{Msg: "invalid evidence encoding", Err: err}
+		return nil, ErrInvalidArgument{Msg: "invalid evidence encoding", Cause: err}
 	}
 
 	result, err := r.service.DeviceAttest(ctx, deviceID, evidence)
@@ -326,8 +377,59 @@ func (r *ToolRegistry) executeDeviceRecordAttestCert(ctx context.Context, args m
 		return nil, ErrDeviceIDRequired
 	}
 	reissue := getBool(args, "reissue")
+	clearOnRefusal := getBool(args, "clear_on_refusal")
 
-	result, err := r.service.DeviceRecordAttestCert(ctx, deviceID, reissue)
+	result, err := r.service.DeviceRecordAttestCert(ctx, deviceID, reissue, clearOnRefusal)
+	if err != nil {
+		return nil, err
+	}
+	return marshalResult(result)
+}
+
+func (r *ToolRegistry) executeDeviceDisable(ctx context.Context, args map[string]interface{}) (interface{}, error) {
+	deviceID := getString(args, "device_id")
+	if deviceID == "" {
+		return nil, ErrDeviceIDRequired
+	}
+	result, err := r.service.DeviceDisable(ctx, deviceID, getString(args, "reason"))
+	if err != nil {
+		return nil, err
+	}
+	return marshalResult(result)
+}
+
+func (r *ToolRegistry) executeDeviceBootCertificate(ctx context.Context, args map[string]interface{}) (interface{}, error) {
+	signature, err := base64.StdEncoding.DecodeString(getString(args, "signature"))
+	if err != nil {
+		return nil, ErrInvalidArgument{Msg: "invalid signature encoding", Cause: err}
+	}
+
+	result, err := r.service.DeviceBootCertificate(ctx, getString(args, "identity"), signature)
+	if err != nil {
+		return nil, err
+	}
+	return marshalResult(result)
+}
+
+func (r *ToolRegistry) executeDeviceEnable(ctx context.Context, args map[string]interface{}) (interface{}, error) {
+	deviceID := getString(args, "device_id")
+	if deviceID == "" {
+		return nil, ErrDeviceIDRequired
+	}
+	result, err := r.service.DeviceEnable(ctx, deviceID)
+	if err != nil {
+		return nil, err
+	}
+	return marshalResult(result)
+}
+
+func (r *ToolRegistry) executeDeviceBootDelivery(ctx context.Context, args map[string]interface{}) (interface{}, error) {
+	evidence, err := base64.StdEncoding.DecodeString(getString(args, "evidence"))
+	if err != nil {
+		return nil, ErrInvalidArgument{Msg: "invalid evidence encoding", Cause: err}
+	}
+
+	result, err := r.service.DeviceBootDelivery(ctx, evidence)
 	if err != nil {
 		return nil, err
 	}
@@ -361,11 +463,39 @@ func (r *ToolRegistry) executeSDNSetPortState(ctx context.Context, args map[stri
 	bridgeName := getString(args, "bridge_name")
 	portName := getString(args, "port_name")
 	state := getString(args, "state")
-
-	if err := r.service.SDNSetPortState(ctx, bridgeName, portName, state); err != nil {
+	rates, err := portRatesArgs(args)
+	if err != nil {
 		return nil, err
 	}
-	return map[string]interface{}{"success": true}, nil
+
+	port, err := r.service.SDNSetPortState(ctx, bridgeName, portName, state, rates)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]interface{}{"success": true, "port": port}, nil
+}
+
+// portRatesArgs reads the optional ingress_rate, ingress_burst, egress_rate
+// and egress_burst arguments of sdn_set_port_state.
+func portRatesArgs(args map[string]interface{}) (PortRates, error) {
+	var rates PortRates
+	fields := []struct {
+		key string
+		dst *uint64
+	}{
+		{"ingress_rate", &rates.IngressRate},
+		{"ingress_burst", &rates.IngressBurst},
+		{"egress_rate", &rates.EgressRate},
+		{"egress_burst", &rates.EgressBurst},
+	}
+	for _, f := range fields {
+		v, err := optionalUint64Arg(args, f.key)
+		if err != nil {
+			return PortRates{}, err
+		}
+		*f.dst = v
+	}
+	return rates, nil
 }
 
 func (r *ToolRegistry) executeSDNListBridges(ctx context.Context, args map[string]interface{}) (interface{}, error) {
@@ -415,14 +545,19 @@ func (r *ToolRegistry) executeSDNDeletePort(ctx context.Context, args map[string
 	return map[string]interface{}{"success": true}, nil
 }
 
+// executeSDNApplyPolicy hands the tool arguments to the service as the REST
+// create-policy body, so MCP accepts exactly the policy document REST does.
 func (r *ToolRegistry) executeSDNApplyPolicy(ctx context.Context, args map[string]interface{}) (interface{}, error) {
-	policyID := getString(args, "policy_id")
-	bridgeName := getString(args, "bridge_name")
+	body, err := json.Marshal(args)
+	if err != nil {
+		return nil, ErrInvalidArgument{Msg: "policy arguments are not a JSON object", Cause: err}
+	}
 
-	if err := r.service.SDNApplyPolicy(ctx, policyID, bridgeName); err != nil {
+	policy, err := r.service.SDNApplyPolicy(ctx, body)
+	if err != nil {
 		return nil, err
 	}
-	return map[string]interface{}{"success": true}, nil
+	return marshalResult(policy)
 }
 
 func (r *ToolRegistry) executeSDNGetPolicy(ctx context.Context, args map[string]interface{}) (interface{}, error) {
@@ -436,23 +571,42 @@ func (r *ToolRegistry) executeSDNGetPolicy(ctx context.Context, args map[string]
 }
 
 func (r *ToolRegistry) executeSDNListPolicies(ctx context.Context, args map[string]interface{}) (interface{}, error) {
-	policies, err := r.service.SDNListPolicies(ctx)
+	policies, err := r.service.SDNListPolicies(ctx, getString(args, "type"), getString(args, "target_id"))
 	if err != nil {
 		return nil, err
 	}
 	return map[string]interface{}{"policies": policies}, nil
 }
 
-// SDN Flow execution handlers
-
-func (r *ToolRegistry) executeSDNAddFlow(ctx context.Context, args map[string]interface{}) (interface{}, error) {
-	bridgeName := getString(args, "bridge_name")
-	flow := getMap(args, "flow")
-
-	if err := r.service.SDNAddFlow(ctx, bridgeName, flow); err != nil {
+func (r *ToolRegistry) executeSDNDeletePolicy(ctx context.Context, args map[string]interface{}) (interface{}, error) {
+	if err := r.service.SDNDeletePolicy(ctx, getString(args, "policy_id")); err != nil {
 		return nil, err
 	}
 	return map[string]interface{}{"success": true}, nil
+}
+
+// SDN Flow execution handlers
+
+// sdnAddFlowCallArgs are the sdn_add_flow arguments outside the flow body:
+// the bridge, and the token the server authorizes the call with. Every other
+// argument is a FlowConfig field, and the service decodes the body strictly,
+// so an argument FlowConfig does not declare is refused rather than dropped.
+var sdnAddFlowCallArgs = map[string]bool{"bridge_name": true, "_token": true, "accessToken": true}
+
+func (r *ToolRegistry) executeSDNAddFlow(ctx context.Context, args map[string]interface{}) (interface{}, error) {
+	bridgeName := getString(args, "bridge_name")
+	flow := make(map[string]interface{}, len(args))
+	for field, value := range args {
+		if !sdnAddFlowCallArgs[field] {
+			flow[field] = value
+		}
+	}
+
+	added, err := r.service.SDNAddFlow(ctx, bridgeName, flow)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]interface{}{"success": true, "flow": added}, nil
 }
 
 func (r *ToolRegistry) executeSDNDeleteFlow(ctx context.Context, args map[string]interface{}) (interface{}, error) {
@@ -478,10 +632,11 @@ func (r *ToolRegistry) executeSDNListFlows(ctx context.Context, args map[string]
 func (r *ToolRegistry) executeSDNFlushFlows(ctx context.Context, args map[string]interface{}) (interface{}, error) {
 	bridgeName := getString(args, "bridge_name")
 
-	if err := r.service.SDNFlushFlows(ctx, bridgeName); err != nil {
+	deleted, err := r.service.SDNFlushFlows(ctx, bridgeName)
+	if err != nil {
 		return nil, err
 	}
-	return map[string]interface{}{"success": true}, nil
+	return map[string]interface{}{"success": true, "deleted_count": deleted}, nil
 }
 
 // SDN VLAN execution handlers
@@ -491,10 +646,11 @@ func (r *ToolRegistry) executeSDNCreateVLAN(ctx context.Context, args map[string
 	vlanID := getInt(args, "vlan_id")
 	name := getString(args, "name")
 
-	if err := r.service.SDNCreateVLAN(ctx, bridgeName, vlanID, name); err != nil {
+	vlan, err := r.service.SDNCreateVLAN(ctx, bridgeName, vlanID, name)
+	if err != nil {
 		return nil, err
 	}
-	return map[string]interface{}{"success": true}, nil
+	return map[string]interface{}{"success": true, "vlan": vlan}, nil
 }
 
 func (r *ToolRegistry) executeSDNDeleteVLAN(ctx context.Context, args map[string]interface{}) (interface{}, error) {
@@ -519,25 +675,16 @@ func (r *ToolRegistry) executeSDNListVLANs(ctx context.Context, args map[string]
 
 // SDN Port authentication execution handlers
 
-func (r *ToolRegistry) executeSDNAuthenticatePort(ctx context.Context, args map[string]interface{}) (interface{}, error) {
-	bridgeName := getString(args, "bridge_name")
-	portName := getString(args, "port_name")
-	credentials := getStringMap(args, "credentials")
+// The port-authentication tools refuse with policy.ErrPortAuthNotEnforced
+// (FailedPrecondition), the error the SDN service returns on every other
+// transport: the switch does not enforce port authentication (#304).
 
-	if err := r.service.SDNAuthenticatePort(ctx, bridgeName, portName, credentials); err != nil {
-		return nil, err
-	}
-	return map[string]interface{}{"success": true}, nil
+func (r *ToolRegistry) executeSDNAuthenticatePort(_ context.Context, _ map[string]interface{}) (interface{}, error) {
+	return nil, policy.ErrPortAuthNotEnforced{Operation: "sdn_authenticate_port"}
 }
 
-func (r *ToolRegistry) executeSDNRevokePortAuth(ctx context.Context, args map[string]interface{}) (interface{}, error) {
-	bridgeName := getString(args, "bridge_name")
-	portName := getString(args, "port_name")
-
-	if err := r.service.SDNRevokePortAuth(ctx, bridgeName, portName); err != nil {
-		return nil, err
-	}
-	return map[string]interface{}{"success": true}, nil
+func (r *ToolRegistry) executeSDNRevokePortAuth(_ context.Context, _ map[string]interface{}) (interface{}, error) {
+	return nil, policy.ErrPortAuthNotEnforced{Operation: "sdn_revoke_port_auth"}
 }
 
 // SDN Statistics execution handlers
@@ -555,8 +702,9 @@ func (r *ToolRegistry) executeSDNGetPortStats(ctx context.Context, args map[stri
 
 func (r *ToolRegistry) executeSDNGetFlowStats(ctx context.Context, args map[string]interface{}) (interface{}, error) {
 	bridgeName := getString(args, "bridge_name")
+	flowID := getString(args, "flow_id")
 
-	stats, err := r.service.SDNGetFlowStats(ctx, bridgeName)
+	stats, err := r.service.SDNGetFlowStats(ctx, bridgeName, flowID)
 	if err != nil {
 		return nil, err
 	}
@@ -607,6 +755,8 @@ func (r *ToolRegistry) executeCAIssue(ctx context.Context, args map[string]inter
 		Country:            getString(args, "country"),
 		Province:           getString(args, "province"),
 		Locality:           getString(args, "locality"),
+		Address:            getString(args, "address"),
+		PostalCode:         getString(args, "postal_code"),
 		DNSNames:           getStringSlice(args, "dns_names"),
 		IPAddresses:        getStringSlice(args, "ip_addresses"),
 		EmailAddresses:     getStringSlice(args, "email_addresses"),
@@ -638,11 +788,25 @@ func (r *ToolRegistry) executeCAIssue(ctx context.Context, args map[string]inter
 	return marshalResult(cert)
 }
 
+func (r *ToolRegistry) executeCASignCSR(ctx context.Context, args map[string]interface{}) (interface{}, error) {
+	req := &CASignCSRRequest{
+		CSRPEM:    getString(args, "csr_pem"),
+		ValidDays: getInt(args, "valid_days"),
+	}
+
+	cert, err := r.service.CASignCSR(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	return marshalResult(cert)
+}
+
 func (r *ToolRegistry) executeCAGet(ctx context.Context, args map[string]interface{}) (interface{}, error) {
 	serial := getString(args, "serial")
 	includePEM := getBool(args, "include_pem")
+	includeDER := getBool(args, "include_der")
 
-	cert, err := r.service.CAGet(ctx, serial, includePEM)
+	cert, err := r.service.CAGet(ctx, serial, includePEM, includeDER)
 	if err != nil {
 		return nil, err
 	}
@@ -714,7 +878,7 @@ func (r *ToolRegistry) executeCAVerify(ctx context.Context, args map[string]inte
 		var err error
 		certificateDER, err = base64.StdEncoding.DecodeString(certificateDERB64)
 		if err != nil {
-			return nil, &WrappedError{Msg: "invalid certificate_der encoding", Err: err}
+			return nil, ErrInvalidArgument{Msg: "invalid certificate_der encoding", Cause: err}
 		}
 	}
 
@@ -764,20 +928,15 @@ func (r *ToolRegistry) executeIAMCreateUser(ctx context.Context, args map[string
 }
 
 func (r *ToolRegistry) executeIAMDeleteUser(ctx context.Context, args map[string]interface{}) (interface{}, error) {
-	tenantID := getString(args, "tenant_id")
-	userID := getString(args, "user_id")
-
-	if err := r.service.IAMDeleteUser(ctx, tenantID, userID); err != nil {
+	result, err := r.service.IAMDeleteUser(ctx, getString(args, "tenant_id"), getString(args, "user_id"))
+	if err != nil {
 		return nil, err
 	}
-	return map[string]interface{}{"success": true}, nil
+	return marshalResult(result)
 }
 
 func (r *ToolRegistry) executeIAMGetUser(ctx context.Context, args map[string]interface{}) (interface{}, error) {
-	tenantID := getString(args, "tenant_id")
-	userID := getString(args, "user_id")
-
-	user, err := r.service.IAMGetUser(ctx, tenantID, userID)
+	user, err := r.service.IAMGetUser(ctx, getString(args, "tenant_id"), getString(args, "user_id"))
 	if err != nil {
 		return nil, err
 	}
@@ -785,19 +944,41 @@ func (r *ToolRegistry) executeIAMGetUser(ctx context.Context, args map[string]in
 }
 
 func (r *ToolRegistry) executeIAMListUsers(ctx context.Context, args map[string]interface{}) (interface{}, error) {
-	tenantID := getString(args, "tenant_id")
-	limit := getInt(args, "limit")
-	offset := getInt(args, "offset")
-
-	if limit == 0 {
-		limit = 50
+	req := &IAMListUsersRequest{
+		TenantID:    getString(args, "tenant_id"),
+		Pagination:  getIAMPagination(args),
+		EmailFilter: getString(args, "email_filter"),
+		RoleFilter:  getString(args, "role_filter"),
+		GroupFilter: getString(args, "group_filter"),
 	}
 
-	users, err := r.service.IAMListUsers(ctx, tenantID, limit, offset)
+	users, err := r.service.IAMListUsers(ctx, req)
 	if err != nil {
 		return nil, err
 	}
 	return marshalResult(users)
+}
+
+// getIAMPagination reads the "pagination" object of an IAM list tool, the
+// gRPC PaginationRequest. A negative page or page size reads as unset.
+func getIAMPagination(args map[string]interface{}) IAMPagination {
+	page := getMap(args, "pagination")
+	return IAMPagination{
+		Page:     nonNegativeUint32(getInt64(page, "page")),
+		PageSize: nonNegativeUint32(getInt64(page, "page_size")),
+	}
+}
+
+// nonNegativeUint32 narrows v to a uint32, reading a negative value as 0 and
+// capping one beyond the uint32 range.
+func nonNegativeUint32(v int64) uint32 {
+	if v <= 0 {
+		return 0
+	}
+	if v > math.MaxUint32 {
+		return math.MaxUint32
+	}
+	return uint32(v)
 }
 
 // IAM Role tool execution handlers
@@ -819,20 +1000,15 @@ func (r *ToolRegistry) executeIAMCreateRole(ctx context.Context, args map[string
 }
 
 func (r *ToolRegistry) executeIAMDeleteRole(ctx context.Context, args map[string]interface{}) (interface{}, error) {
-	tenantID := getString(args, "tenant_id")
-	roleID := getString(args, "role_id")
-
-	if err := r.service.IAMDeleteRole(ctx, tenantID, roleID); err != nil {
+	result, err := r.service.IAMDeleteRole(ctx, getString(args, "tenant_id"), getString(args, "role_id"))
+	if err != nil {
 		return nil, err
 	}
-	return map[string]interface{}{"success": true}, nil
+	return marshalResult(result)
 }
 
 func (r *ToolRegistry) executeIAMGetRole(ctx context.Context, args map[string]interface{}) (interface{}, error) {
-	tenantID := getString(args, "tenant_id")
-	roleID := getString(args, "role_id")
-
-	role, err := r.service.IAMGetRole(ctx, tenantID, roleID)
+	role, err := r.service.IAMGetRole(ctx, getString(args, "tenant_id"), getString(args, "role_id"))
 	if err != nil {
 		return nil, err
 	}
@@ -840,15 +1016,7 @@ func (r *ToolRegistry) executeIAMGetRole(ctx context.Context, args map[string]in
 }
 
 func (r *ToolRegistry) executeIAMListRoles(ctx context.Context, args map[string]interface{}) (interface{}, error) {
-	tenantID := getString(args, "tenant_id")
-	limit := getInt(args, "limit")
-	offset := getInt(args, "offset")
-
-	if limit == 0 {
-		limit = 50
-	}
-
-	roles, err := r.service.IAMListRoles(ctx, tenantID, limit, offset)
+	roles, err := r.service.IAMListRoles(ctx, getString(args, "tenant_id"), getIAMPagination(args))
 	if err != nil {
 		return nil, err
 	}
@@ -856,44 +1024,40 @@ func (r *ToolRegistry) executeIAMListRoles(ctx context.Context, args map[string]
 }
 
 func (r *ToolRegistry) executeIAMAssignRole(ctx context.Context, args map[string]interface{}) (interface{}, error) {
-	tenantID := getString(args, "tenant_id")
-	userID := getString(args, "user_id")
-	role := getString(args, "role")
-
-	if err := r.service.IAMAssignRole(ctx, tenantID, userID, role); err != nil {
-		return nil, err
-	}
-	return map[string]interface{}{"success": true}, nil
-}
-
-func (r *ToolRegistry) executeIAMRevokeRole(ctx context.Context, args map[string]interface{}) (interface{}, error) {
-	tenantID := getString(args, "tenant_id")
-	userID := getString(args, "user_id")
-	role := getString(args, "role")
-
-	if err := r.service.IAMRevokeRole(ctx, tenantID, userID, role); err != nil {
-		return nil, err
-	}
-	return map[string]interface{}{"success": true}, nil
-}
-
-func (r *ToolRegistry) executeIAMCheckPermission(ctx context.Context, args map[string]interface{}) (interface{}, error) {
-	tenantID := getString(args, "tenant_id")
-	userID := getString(args, "user_id")
-	resource := getString(args, "resource")
-	action := getString(args, "action")
-
-	allowed, err := r.service.IAMCheckPermission(ctx, tenantID, userID, resource, action)
+	result, err := r.service.IAMAssignRole(ctx,
+		getString(args, "tenant_id"), getString(args, "user_id"), getString(args, "role_id"))
 	if err != nil {
 		return nil, err
 	}
-	return map[string]interface{}{
-		"allowed":   allowed,
-		"tenant_id": tenantID,
-		"user_id":   userID,
-		"resource":  resource,
-		"action":    action,
-	}, nil
+	return marshalResult(result)
+}
+
+func (r *ToolRegistry) executeIAMRevokeRole(ctx context.Context, args map[string]interface{}) (interface{}, error) {
+	result, err := r.service.IAMRevokeRole(ctx,
+		getString(args, "tenant_id"), getString(args, "user_id"), getString(args, "role_id"))
+	if err != nil {
+		return nil, err
+	}
+	return marshalResult(result)
+}
+
+func (r *ToolRegistry) executeIAMCheckPermission(ctx context.Context, args map[string]interface{}) (interface{}, error) {
+	req := &IAMCheckPermissionRequest{
+		TenantID:   getString(args, "tenant_id"),
+		SubjectID:  getString(args, "subject_id"),
+		Roles:      getStringSlice(args, "roles"),
+		Groups:     getStringSlice(args, "groups"),
+		Action:     getString(args, "action"),
+		Resource:   getString(args, "resource"),
+		Context:    getStringMap(args, "context"),
+		Attributes: getStringMap(args, "attributes"),
+	}
+
+	decision, err := r.service.IAMCheckPermission(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	return marshalResult(decision)
 }
 
 func (r *ToolRegistry) executeIAMAuthenticate(ctx context.Context, args map[string]interface{}) (interface{}, error) {
@@ -930,20 +1094,15 @@ func (r *ToolRegistry) executeIAMCreateGroup(ctx context.Context, args map[strin
 }
 
 func (r *ToolRegistry) executeIAMDeleteGroup(ctx context.Context, args map[string]interface{}) (interface{}, error) {
-	tenantID := getString(args, "tenant_id")
-	groupID := getString(args, "group_id")
-
-	if err := r.service.IAMDeleteGroup(ctx, tenantID, groupID); err != nil {
+	result, err := r.service.IAMDeleteGroup(ctx, getString(args, "tenant_id"), getString(args, "group_id"))
+	if err != nil {
 		return nil, err
 	}
-	return map[string]interface{}{"success": true}, nil
+	return marshalResult(result)
 }
 
 func (r *ToolRegistry) executeIAMGetGroup(ctx context.Context, args map[string]interface{}) (interface{}, error) {
-	tenantID := getString(args, "tenant_id")
-	groupID := getString(args, "group_id")
-
-	group, err := r.service.IAMGetGroup(ctx, tenantID, groupID)
+	group, err := r.service.IAMGetGroup(ctx, getString(args, "tenant_id"), getString(args, "group_id"))
 	if err != nil {
 		return nil, err
 	}
@@ -951,15 +1110,7 @@ func (r *ToolRegistry) executeIAMGetGroup(ctx context.Context, args map[string]i
 }
 
 func (r *ToolRegistry) executeIAMListGroups(ctx context.Context, args map[string]interface{}) (interface{}, error) {
-	tenantID := getString(args, "tenant_id")
-	limit := getInt(args, "limit")
-	offset := getInt(args, "offset")
-
-	if limit == 0 {
-		limit = 50
-	}
-
-	groups, err := r.service.IAMListGroups(ctx, tenantID, limit, offset)
+	groups, err := r.service.IAMListGroups(ctx, getString(args, "tenant_id"), getIAMPagination(args))
 	if err != nil {
 		return nil, err
 	}
@@ -967,25 +1118,21 @@ func (r *ToolRegistry) executeIAMListGroups(ctx context.Context, args map[string
 }
 
 func (r *ToolRegistry) executeIAMAddGroupMember(ctx context.Context, args map[string]interface{}) (interface{}, error) {
-	tenantID := getString(args, "tenant_id")
-	groupID := getString(args, "group_id")
-	userID := getString(args, "user_id")
-
-	if err := r.service.IAMAddGroupMember(ctx, tenantID, groupID, userID); err != nil {
+	result, err := r.service.IAMAddGroupMember(ctx,
+		getString(args, "tenant_id"), getString(args, "group_id"), getString(args, "user_id"))
+	if err != nil {
 		return nil, err
 	}
-	return map[string]interface{}{"success": true}, nil
+	return marshalResult(result)
 }
 
 func (r *ToolRegistry) executeIAMRemoveGroupMember(ctx context.Context, args map[string]interface{}) (interface{}, error) {
-	tenantID := getString(args, "tenant_id")
-	groupID := getString(args, "group_id")
-	userID := getString(args, "user_id")
-
-	if err := r.service.IAMRemoveGroupMember(ctx, tenantID, groupID, userID); err != nil {
+	result, err := r.service.IAMRemoveGroupMember(ctx,
+		getString(args, "tenant_id"), getString(args, "group_id"), getString(args, "user_id"))
+	if err != nil {
 		return nil, err
 	}
-	return map[string]interface{}{"success": true}, nil
+	return marshalResult(result)
 }
 
 // IAM Tenant tool execution handlers
@@ -995,14 +1142,10 @@ func (r *ToolRegistry) executeIAMCreateTenant(ctx context.Context, args map[stri
 		ID:   getString(args, "id"),
 		Name: getString(args, "name"),
 	}
-
-	// Handle settings
-	maxUsers := getInt(args, "max_users")
-	mfaRequired := getBool(args, "mfa_required")
-	if maxUsers > 0 || mfaRequired {
+	if settings := getMap(args, "settings"); settings != nil {
 		req.Settings = &IAMTenantSettings{
-			MaxUsers:    int32(maxUsers),
-			MFARequired: mfaRequired,
+			MaxUsers:    int32(getInt(settings, "max_users")),
+			MFARequired: getBool(settings, "mfa_required"),
 		}
 	}
 
@@ -1014,18 +1157,15 @@ func (r *ToolRegistry) executeIAMCreateTenant(ctx context.Context, args map[stri
 }
 
 func (r *ToolRegistry) executeIAMDeleteTenant(ctx context.Context, args map[string]interface{}) (interface{}, error) {
-	tenantID := getString(args, "tenant_id")
-
-	if err := r.service.IAMDeleteTenant(ctx, tenantID); err != nil {
+	result, err := r.service.IAMDeleteTenant(ctx, getString(args, "tenant_id"))
+	if err != nil {
 		return nil, err
 	}
-	return map[string]interface{}{"success": true}, nil
+	return marshalResult(result)
 }
 
 func (r *ToolRegistry) executeIAMGetTenant(ctx context.Context, args map[string]interface{}) (interface{}, error) {
-	tenantID := getString(args, "tenant_id")
-
-	tenant, err := r.service.IAMGetTenant(ctx, tenantID)
+	tenant, err := r.service.IAMGetTenant(ctx, getString(args, "tenant_id"))
 	if err != nil {
 		return nil, err
 	}
@@ -1033,14 +1173,7 @@ func (r *ToolRegistry) executeIAMGetTenant(ctx context.Context, args map[string]
 }
 
 func (r *ToolRegistry) executeIAMListTenants(ctx context.Context, args map[string]interface{}) (interface{}, error) {
-	limit := getInt(args, "limit")
-	offset := getInt(args, "offset")
-
-	if limit == 0 {
-		limit = 50
-	}
-
-	tenants, err := r.service.IAMListTenants(ctx, limit, offset)
+	tenants, err := r.service.IAMListTenants(ctx, getIAMPagination(args))
 	if err != nil {
 		return nil, err
 	}
@@ -1096,11 +1229,11 @@ func (r *ToolRegistry) executeIAMVerifyToken(ctx context.Context, args map[strin
 func (r *ToolRegistry) executeKMSSign(ctx context.Context, args map[string]interface{}) (interface{}, error) {
 	messageB64 := getString(args, "message")
 	if messageB64 == "" {
-		return nil, &MessageError{Msg: "message is required"}
+		return nil, ErrInvalidArgument{Msg: "message is required"}
 	}
 	message, err := base64.StdEncoding.DecodeString(messageB64)
 	if err != nil {
-		return nil, &WrappedError{Msg: "message must be base64 encoded", Err: err}
+		return nil, ErrInvalidArgument{Msg: "message must be base64 encoded", Cause: err}
 	}
 
 	req := &KMSSignRequest{
@@ -1111,7 +1244,7 @@ func (r *ToolRegistry) executeKMSSign(ctx context.Context, args map[string]inter
 	}
 
 	if req.KeyID == "" {
-		return nil, &MessageError{Msg: "key_id is required"}
+		return nil, ErrInvalidArgument{Msg: "key_id is required"}
 	}
 
 	result, err := r.service.KMSSign(ctx, req)
@@ -1147,7 +1280,7 @@ func (r *ToolRegistry) executeKMSGenerateDataKey(ctx context.Context, args map[s
 	}
 
 	if req.KeyID == "" {
-		return nil, &MessageError{Msg: "key_id is required"}
+		return nil, ErrInvalidArgument{Msg: "key_id is required"}
 	}
 
 	result, err := r.service.KMSGenerateDataKey(ctx, req)
@@ -1165,7 +1298,7 @@ func (r *ToolRegistry) executeKMSGenerateWrappedDataKey(ctx context.Context, arg
 	}
 
 	if req.KeyID == "" {
-		return nil, &MessageError{Msg: "key_id is required"}
+		return nil, ErrInvalidArgument{Msg: "key_id is required"}
 	}
 
 	result, err := r.service.KMSGenerateWrappedDataKey(ctx, req)

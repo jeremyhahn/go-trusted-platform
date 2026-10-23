@@ -20,29 +20,24 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/services/nat64"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 )
 
 // NAT64Status on the zone-only adapter reports that no translator is wired.
 // This adapter serves a daemon with zone services but no gateway
 // controller, so the honest answer is "not configured", not a zero health
 // snapshot that would read as a translator holding no sessions.
-func (a *zoneGatewayAdapter) NAT64Status(_ context.Context) (*quic.NAT64StatusInfo, error) {
+func (a *zoneGatewayAdapter) NAT64Status(_ context.Context) (*quicwire.NAT64StatusInfo, error) {
 	return nil, errGatewayFeatureNotConfigured
 }
 
-// SetNAT64 wires the NAT64 backend into the QUIC gateway adapter. A nil
-// backend leaves the status operation returning
-// errGatewayFeatureNotConfigured (StatusUnavailable on the wire).
-func (a *fullGatewayQUICAdapter) SetNAT64(n GatewayNAT64Interface) {
-	a.nat64 = n
-}
-
-// requireNAT64 resolves the translator backend or reports it unconfigured.
+// requireNAT64 resolves the shared service's translator backend, or
+// reports errGatewayFeatureNotConfigured (StatusUnavailable on the wire).
 func (a *fullGatewayQUICAdapter) requireNAT64() (GatewayNAT64Interface, error) {
-	if a.nat64 == nil {
+	if a.backends == nil || a.backends.NAT64() == nil {
 		return nil, errGatewayFeatureNotConfigured
 	}
-	return a.nat64, nil
+	return a.backends.NAT64(), nil
 }
 
 // mapNAT64ToQUICError converts NAT64 errors to the QUIC adapter's
@@ -68,8 +63,8 @@ func mapNAT64ToQUICError(err error) error {
 
 // nat64HealthToQUICInfo converts the service health snapshot to the QUIC
 // wire shape.
-func nat64HealthToQUICInfo(health nat64.Health) *quic.NAT64StatusInfo {
-	out := &quic.NAT64StatusInfo{
+func nat64HealthToQUICInfo(health nat64.Health) *quicwire.NAT64StatusInfo {
+	out := &quicwire.NAT64StatusInfo{
 		Active:          health.Active,
 		InstancePresent: health.InstancePresent,
 		Prefix:          health.Prefix,
@@ -89,7 +84,7 @@ func nat64HealthToQUICInfo(health nat64.Health) *quic.NAT64StatusInfo {
 }
 
 // NAT64Status returns the NAT64 translator's health snapshot.
-func (a *fullGatewayQUICAdapter) NAT64Status(ctx context.Context) (*quic.NAT64StatusInfo, error) {
+func (a *fullGatewayQUICAdapter) NAT64Status(ctx context.Context) (*quicwire.NAT64StatusInfo, error) {
 	backend, err := a.requireNAT64()
 	if err != nil {
 		return nil, err

@@ -29,8 +29,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jeremyhahn/go-quicbaas/sdk/go/platformtoken"
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	xkmsca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/ca"
+	grpcapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/ca/issuance/issuancetest"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/util/peercred"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -269,6 +273,155 @@ func TestCAGRPCService_IssueCertificate_Error(t *testing.T) {
 		t.Error("expected nil response")
 	}
 	assertGRPCError(t, err, codes.Internal)
+}
+
+// "kms" names no key store. It used to fall back to a new software key and
+// certify that, which is not the key the caller meant.
+func TestCAGRPCService_IssueCertificate_UnknownStoreType(t *testing.T) {
+	t.Parallel()
+
+	svc := &CAGRPCService{ca: &configurableMockCA{issuedCert: createTestCertificate(t)}}
+	resp, err := svc.IssueCertificate(context.Background(), &platformv1.IssueCertificateRequest{
+		Request: &platformv1.CertificateRequest{
+			Subject:   &platformv1.Subject{CommonName: "rpi/fleet"},
+			StoreType: "kms",
+		},
+	})
+	if resp != nil {
+		t.Error("expected nil response")
+	}
+	assertGRPCError(t, err, codes.InvalidArgument)
+}
+
+// csrMockCA certifies CSRs for real, so a test can check whose key the
+// certificate holds.
+type csrMockCA struct {
+	mockCA
+	signer *issuancetest.CA
+}
+
+func (m *csrMockCA) SignCSR(ctx context.Context, csrPEM []byte, opts *xkmsca.SignOptions) (*x509.Certificate, error) {
+	return m.signer.SignCSR(ctx, csrPEM, opts)
+}
+
+// rootSocketCtx is the context of root calling over the daemon's Unix
+// socket: the platform admin.
+func rootSocketCtx() context.Context {
+	return peercred.ContextWithUnixCredentials(context.Background(), peercred.UnixCredentials{UID: 0})
+}
+
+// The daemon's CA service, on TCP and the Unix socket alike, certifies a
+// code-signing key for the platform admin only; ca:write and mTLS-only
+// callers are refused before the CA sees the request.
+func TestCAGRPCService_SignCSR_OnlyThePlatformAdmin(t *testing.T) {
+	t.Parallel()
+
+	key := issuancetest.RSAKey(t)
+	csr := string(issuancetest.CSR(t, key, "rpi/fleet"))
+	cases := []struct {
+		name string
+		ctx  context.Context
+		code codes.Code
+	}{
+		{"mTLS, no platform token", context.Background(), codes.PermissionDenied},
+		{"ca:write", grpcapi.ContextWithAuthorizedContext(context.Background(), &platformtoken.AuthorizedContext{Scopes: []string{"ca:write"}}), codes.PermissionDenied},
+		{"Unix socket, not root", peercred.ContextWithUnixCredentials(context.Background(), peercred.UnixCredentials{UID: 1000}), codes.PermissionDenied},
+		{"ca:sign-csr", grpcapi.ContextWithAuthorizedContext(context.Background(), &platformtoken.AuthorizedContext{Scopes: []string{"ca:sign-csr"}}), codes.OK},
+		{"Unix socket, root", rootSocketCtx(), codes.OK},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ca := &csrMockCA{signer: issuancetest.NewCA(t)}
+			svc := NewCAGRPCService(nil, ca, nil).WithKMS(issuancetest.NewKMS(t, "rpi/fleet", &key.PublicKey))
+
+			_, err := svc.SignCSR(tc.ctx, &platformv1.SignCSRRequest{CsrPem: csr})
+			if status.Code(err) != tc.code {
+				t.Fatalf("code = %v (%v), want %v", status.Code(err), err, tc.code)
+			}
+			if reached := ca.signer.Opts != nil; reached != (tc.code == codes.OK) {
+				t.Errorf("reached the CA = %v", reached)
+			}
+		})
+	}
+}
+
+func TestCAGRPCService_SignCSR_CertifiesTheKMSKeyForCodeSigning(t *testing.T) {
+	t.Parallel()
+
+	ca := &csrMockCA{signer: issuancetest.NewCA(t)}
+	key := issuancetest.RSAKey(t)
+	svc := NewCAGRPCService(nil, ca, nil).WithKMS(issuancetest.NewKMS(t, "rpi/fleet", &key.PublicKey))
+
+	resp, err := svc.SignCSR(rootSocketCtx(), &platformv1.SignCSRRequest{
+		CsrPem:    string(issuancetest.CSR(t, key, "rpi/fleet")),
+		ValidDays: 30,
+	})
+	if err != nil {
+		t.Fatalf("SignCSR: %v", err)
+	}
+	block, _ := pem.Decode(resp.GetCertificate().GetPem())
+	if block == nil {
+		t.Fatal("no certificate PEM in the response")
+	}
+	cert, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if !key.PublicKey.Equal(cert.PublicKey) {
+		t.Fatal("the certificate does not certify the CSR's key")
+	}
+	if len(cert.ExtKeyUsage) != 1 || cert.ExtKeyUsage[0] != x509.ExtKeyUsageCodeSigning {
+		t.Errorf("EKU = %v, want codeSigning only", cert.ExtKeyUsage)
+	}
+	if ca.signer.Opts.ValidityDays != 30 {
+		t.Errorf("sign options = %+v", ca.signer.Opts)
+	}
+}
+
+func TestCAGRPCService_SignCSR_Errors(t *testing.T) {
+	t.Parallel()
+
+	key := issuancetest.RSAKey(t)
+	csr := string(issuancetest.CSR(t, key, "rpi/fleet"))
+	cases := []struct {
+		name    string
+		csr     string
+		noKMS   bool
+		caErr   error
+		code    codes.Code
+		reached bool
+	}{
+		{"malformed CSR", "not a csr", false, nil, codes.InvalidArgument, false},
+		{"names no KMS key", string(issuancetest.CSR(t, key, "admin")), false, nil, codes.InvalidArgument, false},
+		{"key is not the KMS key", string(issuancetest.CSR(t, issuancetest.RSAKey(t), "rpi/fleet")), false, nil, codes.InvalidArgument, false},
+		{"no KMS", csr, true, nil, codes.Internal, false},
+		{"CA failure", csr, false, errors.New("sealed"), codes.Internal, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ca := &csrMockCA{signer: issuancetest.NewCA(t)}
+			ca.signer.Err = tc.caErr
+			svc := NewCAGRPCService(nil, ca, nil)
+			if !tc.noKMS {
+				svc.WithKMS(issuancetest.NewKMS(t, "rpi/fleet", &key.PublicKey))
+			}
+			resp, err := svc.SignCSR(rootSocketCtx(), &platformv1.SignCSRRequest{CsrPem: tc.csr})
+			if resp != nil {
+				t.Error("expected nil response")
+			}
+			assertGRPCError(t, err, tc.code)
+			if reached := ca.signer.Opts != nil; reached != tc.reached {
+				t.Errorf("reached the CA = %v, want %v", reached, tc.reached)
+			}
+		})
+	}
+}
+
+func TestCAGRPCService_SignCSR_WithoutACA(t *testing.T) {
+	t.Parallel()
+
+	_, err := NewCAGRPCService(nil, nil, nil).SignCSR(rootSocketCtx(), &platformv1.SignCSRRequest{CsrPem: "x"})
+	assertGRPCError(t, err, codes.FailedPrecondition)
 }
 
 func TestCAGRPCService_GetCertificate_NilCA(t *testing.T) {
@@ -1588,33 +1741,6 @@ func TestCAGRPCService_RevocationReasonToProto(t *testing.T) {
 		if result != tc.expected {
 			t.Errorf("revocationReasonToProto(%d) = %v, want %v", tc.input, result, tc.expected)
 		}
-	}
-}
-
-func TestCAGRPCService_ParseStoreType(t *testing.T) {
-	t.Parallel()
-
-	svc := &CAGRPCService{}
-
-	tests := []struct {
-		name     string
-		input    string
-		expected xkmssdk.StoreType
-	}{
-		{"software", "software", xkmssdk.StoreSoftware},
-		{"pkcs11", "pkcs11", xkmssdk.StorePKCS11},
-		{"tpm2", "tpm2", xkmssdk.StoreTPM2},
-		{"empty", "", xkmssdk.StoreUnknown},
-		{"unknown", "invalid", xkmssdk.StoreUnknown},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			result := svc.parseStoreType(tc.input)
-			if result != tc.expected {
-				t.Errorf("parseStoreType(%q) = %v, want %v", tc.input, result, tc.expected)
-			}
-		})
 	}
 }
 

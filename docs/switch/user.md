@@ -188,10 +188,9 @@ platformctl switch disable-port --server-url https://… --switch core-01 --port
 ```
 
 `disable-port` is `shutdown`. **There is no confirmation, no `--force` and no
-dry-run.** It is also, today, reachable by any caller with a validated token
-and no switch-specific permission on gRPC, Unix, QUIC and MCP
-([api.md](api.md) §7). Treat access to those transports as access to your
-fabric until that is fixed.
+dry-run.** On every transport it needs `switch:write`: gRPC
+and Unix, QUIC (#767) and the `switch_disable_port` MCP tool (#304)
+([api.md](api.md) §7).
 
 ---
 

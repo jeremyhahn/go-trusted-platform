@@ -212,14 +212,21 @@ because recomputing it would need the very API a FIPS build refuses, which would
 have forced the test to skip in exactly the build whose compatibility it exists
 to prove.
 
+**Both sites call `pkg/crypto/aesgcm` since #248.** `encryptContent`,
+`decryptContent` and `LocalKMSClient.Encrypt`/`Decrypt` hold no cipher of their
+own: they call `aesgcm.Seal`/`Open`, which produce the same framing, so no stored
+byte changed — `TestLocalKMS_WireFormatUnchanged` now opens its pre-#209 vector
+through `aesgcm.Open`. `registry.NonceSize` and `TagSize` are the package's
+constants. A blob shorter than nonce + tag is refused with
+`aesgcm.ErrCiphertextTooShort` (inside `ErrDecryptionFailed` on the layer path)
+before any decryption is attempted.
+
 **The envelope changed format, and there is deliberately no migration.** The
 nonce field is gone and `encryptedLayerEnvelopeVersion` is `2`; there is no v1
 decoder and no refusal path beyond the version check that already existed.
 
-That is not an oversight, and it is worth stating plainly because the absence of
-a migration looks exactly like one. **No registry had been deployed when the
-format changed** (owner ruling, 2026-09-03), so no v1 envelope has ever existed
-outside a test. "A FIPS build cannot read v1" is therefore not a compatibility
+**No registry had been deployed when the format changed**, so no v1 envelope
+has ever existed outside a test. "A FIPS build cannot read v1" is therefore not a compatibility
 risk that was accepted — it is a property of a format that never shipped.
 
 The version was bumped rather than v1 being redefined in place, for one
@@ -299,5 +306,5 @@ storage client to force `ErrBlobNotFound` and `ErrOperationTimeout`.
 - [api.md](api.md) — the capability × transport matrix
 - [cli.md](cli.md) — `platformctl registry`
 - [user.md](user.md) — task-oriented usage
-- [configuration.md](configuration.md) — long-form configuration reference
-  (pre-migration document; not re-verified against code in this pass)
+- The pre-migration configuration.md is deleted; §4 holds the configuration
+  reference

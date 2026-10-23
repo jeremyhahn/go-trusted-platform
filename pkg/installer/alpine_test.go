@@ -14,8 +14,6 @@
 package installer
 
 import (
-	"context"
-	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -45,46 +43,29 @@ func TestInstalledServices_EnablesTheIPsecServices(t *testing.T) {
 		{name: "networking", runlevel: "default"},
 		{name: "xkms-p11-kit", runlevel: "default"},
 		{name: "charon", runlevel: "default"},
-	}, installedServices(root, true))
+	}, installedServices(root, nil))
 }
 
-func TestInstalledServices_SkipsTheIPsecServicesWhenDisabled(t *testing.T) {
+// TestInstalledServices_EnablesConfiguredServices: a target that names extra
+// services (the Pi's pcscd) gets them in the default runlevel after the
+// installer's own set; a node without them configured never enables them,
+// even when the init script is present.
+func TestInstalledServices_EnablesConfiguredServices(t *testing.T) {
 	root := t.TempDir()
-	installInitScripts(t, root, "charon", "xkms-p11-kit", "ovsdb-server", "networking")
+	installInitScripts(t, root, "networking", "pcscd")
 
 	assert.Equal(t, []openRCService{
-		{name: "ovsdb-server", runlevel: "boot"},
 		{name: "networking", runlevel: "default"},
-	}, installedServices(root, false))
-}
+		{name: "pcscd", runlevel: "default"},
+	}, installedServices(root, []string{"pcscd"}))
 
-func TestAlpineEnableServices_FailsWhenIPsecServiceEnableFails(t *testing.T) {
-	root := t.TempDir()
-	installInitScripts(t, root, "charon", "xkms-p11-kit")
-	bin := t.TempDir()
-	chroot := filepath.Join(bin, "chroot")
-	require.NoError(t, os.WriteFile(chroot, []byte("#!/bin/sh\nif [ \"$4\" = charon ] || [ \"$4\" = xkms-p11-kit ]; then echo boom; exit 7; fi\nexit 0\n"), 0o755))
-	oldPath := os.Getenv("PATH")
-	t.Setenv("PATH", bin+string(os.PathListSeparator)+oldPath)
+	assert.Equal(t, []openRCService{
+		{name: "networking", runlevel: "default"},
+	}, installedServices(root, nil), "pcscd is enabled only where configured")
 
-	ai := &alpineInstaller{logger: createTestLogger(), config: &OSConfig{OS: OSAlpine, OverlayIPsecEnabled: true}}
-	err := ai.EnableServices(context.Background(), root)
-	var openRCErr *ErrOpenRCServiceEnable
-	require.True(t, errors.As(err, &openRCErr), "got %v", err)
-	assert.Equal(t, "xkms-p11-kit", openRCErr.Service)
-}
-
-func TestAlpineEnableServices_SkipsIPsecServicesWhenDisabled(t *testing.T) {
-	root := t.TempDir()
-	installInitScripts(t, root, "charon", "xkms-p11-kit")
-	bin := t.TempDir()
-	chroot := filepath.Join(bin, "chroot")
-	require.NoError(t, os.WriteFile(chroot, []byte("#!/bin/sh\necho should-not-run; exit 7\n"), 0o755))
-	oldPath := os.Getenv("PATH")
-	t.Setenv("PATH", bin+string(os.PathListSeparator)+oldPath)
-
-	ai := &alpineInstaller{logger: createTestLogger(), config: &OSConfig{OS: OSAlpine}}
-	require.NoError(t, ai.EnableServices(context.Background(), root))
+	assert.Equal(t, []openRCService{
+		{name: "networking", runlevel: "default"},
+	}, installedServices(root, []string{"missing"}), "a configured service without an init script is skipped")
 }
 
 // TestInstalledServices_SkipsServicesNotInstalled: a node without the
@@ -96,9 +77,9 @@ func TestInstalledServices_SkipsServicesNotInstalled(t *testing.T) {
 		assert.Equal(t, []openRCService{
 			{name: "networking", runlevel: "default"},
 			{name: "sshd", runlevel: "default"},
-		}, installedServices(root, true))
+		}, installedServices(root, nil))
 	})
 	t.Run("no init.d", func(t *testing.T) {
-		assert.Empty(t, installedServices(t.TempDir(), true))
+		assert.Empty(t, installedServices(t.TempDir(), []string{"pcscd"}))
 	})
 }

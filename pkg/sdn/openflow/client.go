@@ -15,6 +15,7 @@ package openflow
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -32,9 +33,14 @@ const DefaultTimeout = 30 * time.Second
 type Client struct {
 	bridgeName string
 	socketDir  string
-	conn       net.Conn
 	connected  atomic.Bool
-	closed     atomic.Bool
+
+	// session is the current connection. Connect replaces it only once the
+	// previous connection's reader has exited, under connMu, which
+	// serialises Connect and Disconnect.
+	session    atomic.Pointer[session]
+	generation atomic.Uint64
+	connMu     sync.Mutex
 
 	// Datapath info from FeaturesReply
 	datapathID uint64
@@ -48,21 +54,21 @@ type Client struct {
 	xid atomic.Uint32
 
 	// Request tracking
-	pending   map[uint32]chan *response
+	pending   map[uint32]pendingRequest
 	pendingMu sync.Mutex
 
 	// Batch flow mod tracking (xid of each batch member)
 	batches map[uint32]*batchMember
 	batchMu sync.Mutex
 
-	// HELLO reception channel for handshake
-	helloCh   chan *response
-	helloOnce sync.Once
+	// Asynchronous packet-in subscribers. Each subscriber owns its bounded
+	// queue; a full queue drops the packet rather than blocking the reader.
+	packetInMu     sync.RWMutex
+	packetInSinks  map[uint64]*PacketInSubscription
+	packetInNextID atomic.Uint64
 
-	// Shutdown
-	done   chan struct{}
-	doneMu sync.Mutex
-	wg     sync.WaitGroup
+	// wg tracks the reader of the current connection.
+	wg sync.WaitGroup
 
 	// Configuration
 	timeout time.Duration
@@ -73,6 +79,43 @@ type response struct {
 	header Header
 	data   []byte
 	err    error
+}
+
+// session is one connection to the switch and the state that lives and dies
+// with it. Its reader owns it: a reader only ever reads, answers and closes
+// its own connection, so a connection that died cannot touch the next one.
+type session struct {
+	conn       net.Conn
+	generation uint64
+	done       chan struct{}
+	stopOnce   sync.Once
+	helloCh    chan *response
+	helloOnce  sync.Once
+}
+
+// newSession wraps a freshly dialled connection.
+func newSession(conn net.Conn, generation uint64) *session {
+	return &session{
+		conn:       conn,
+		generation: generation,
+		done:       make(chan struct{}),
+		helloCh:    make(chan *response, 1),
+	}
+}
+
+// stop ends the session: its reader exits and its connection closes.
+func (s *session) stop() {
+	s.stopOnce.Do(func() {
+		close(s.done)
+		_ = s.conn.Close()
+	})
+}
+
+// pendingRequest is a caller waiting for a reply, tagged with the
+// generation of the connection the request went out on.
+type pendingRequest struct {
+	ch         chan *response
+	generation uint64
 }
 
 // flowBatch collects switch-reported errors for a batch of flow mods
@@ -127,13 +170,12 @@ func NewClient(bridgeName string, opts ...ClientOption) (*Client, error) {
 	}
 
 	c := &Client{
-		bridgeName: bridgeName,
-		socketDir:  "/var/run/openvswitch",
-		pending:    make(map[uint32]chan *response),
-		batches:    make(map[uint32]*batchMember),
-		helloCh:    make(chan *response, 1),
-		done:       make(chan struct{}),
-		timeout:    DefaultTimeout,
+		bridgeName:    bridgeName,
+		socketDir:     "/var/run/openvswitch",
+		pending:       make(map[uint32]pendingRequest),
+		batches:       make(map[uint32]*batchMember),
+		packetInSinks: make(map[uint64]*PacketInSubscription),
+		timeout:       DefaultTimeout,
 	}
 
 	for _, opt := range opts {
@@ -145,6 +187,8 @@ func NewClient(bridgeName string, opts ...ClientOption) (*Client, error) {
 
 // Connect establishes a connection to the OVS bridge's OpenFlow socket
 func (c *Client) Connect(ctx context.Context) error {
+	c.connMu.Lock()
+	defer c.connMu.Unlock()
 	if c.connected.Load() {
 		return nil
 	}
@@ -157,26 +201,19 @@ func (c *Client) Connect(ctx context.Context) error {
 		return &SentinelCauseError{Sentinel: ErrConnectionFailed, Cause: err}
 	}
 
-	c.conn = conn
+	// The reader of a connection the switch closed may still be failing
+	// that connection's requests; the new connection starts once it is gone.
+	c.wg.Wait()
+
+	s := newSession(conn, c.generation.Add(1))
+	c.session.Store(s)
 	c.connected.Store(true)
-	c.closed.Store(false)
 
-	// Reset done channel and hello handling for new connection
-	c.doneMu.Lock()
-	c.done = make(chan struct{})
-	c.doneMu.Unlock()
-
-	// Reset hello channel and sync.Once for new connection
-	c.helloCh = make(chan *response, 1)
-	c.helloOnce = sync.Once{}
-
-	// Start reader goroutine
 	c.wg.Add(1)
-	go c.reader()
+	go c.reader(s)
 
-	// Perform handshake
-	if err := c.handshake(ctx); err != nil {
-		_ = c.Disconnect()
+	if err := c.handshake(ctx, s); err != nil {
+		c.disconnect()
 		return err
 	}
 
@@ -185,40 +222,67 @@ func (c *Client) Connect(ctx context.Context) error {
 
 // Disconnect closes the connection
 func (c *Client) Disconnect() error {
-	if !c.connected.Load() {
-		return nil
-	}
-
-	c.connected.Store(false)
-	c.closed.Store(true)
-
-	// Signal shutdown
-	c.doneMu.Lock()
-	select {
-	case <-c.done:
-		// Already closed
-	default:
-		close(c.done)
-	}
-	c.doneMu.Unlock()
-
-	// Close connection
-	if c.conn != nil {
-		_ = c.conn.Close()
-	}
-
-	// Wait for reader to exit
-	c.wg.Wait()
-
-	// Clean up pending requests
-	c.pendingMu.Lock()
-	for xid, ch := range c.pending {
-		close(ch)
-		delete(c.pending, xid)
-	}
-	c.pendingMu.Unlock()
-
+	c.connMu.Lock()
+	defer c.connMu.Unlock()
+	c.disconnect()
 	return nil
+}
+
+// disconnect stops the current connection, waits for its reader to exit
+// and fails its waiting requests. Caller holds connMu.
+func (c *Client) disconnect() {
+	c.connected.Store(false)
+	s := c.session.Load()
+	if s == nil {
+		return
+	}
+	s.stop()
+	c.wg.Wait()
+	c.failPending(s.generation)
+}
+
+// connectionLost records that the switch closed the connection under its
+// reader: the client stops reporting connected, so a later Connect redials
+// rather than returning early, and every request waiting on that connection
+// fails at once instead of running out its timeout. Only the reader of s
+// calls it, and Connect starts no new connection until that reader is gone.
+func (c *Client) connectionLost(s *session) {
+	c.connected.Store(false)
+	s.stop()
+	c.failPending(s.generation)
+}
+
+// failPending wakes every request waiting on the connection of this
+// generation with a closed channel, which sendAndWait reports as
+// ErrConnectionClosed.
+func (c *Client) failPending(generation uint64) {
+	c.pendingMu.Lock()
+	defer c.pendingMu.Unlock()
+	for xid, request := range c.pending {
+		if request.generation == generation {
+			close(request.ch)
+			delete(c.pending, xid)
+		}
+	}
+}
+
+// addPending registers a request waiting for the reply to xid on the
+// connection of this generation.
+func (c *Client) addPending(xid uint32, generation uint64) chan *response {
+	respCh := make(chan *response, 1)
+	c.pendingMu.Lock()
+	c.pending[xid] = pendingRequest{ch: respCh, generation: generation}
+	c.pendingMu.Unlock()
+	return respCh
+}
+
+// write sends data on the current connection.
+func (c *Client) write(data []byte) (int, error) {
+	s := c.session.Load()
+	if s == nil {
+		return 0, ErrNotConnected
+	}
+	return s.conn.Write(data)
 }
 
 // Close is an alias for Disconnect
@@ -246,7 +310,7 @@ func (c *Client) nextXid() uint32 {
 // - Both sides send HELLO independently as soon as connection is established
 // - Both sides read their peer's HELLO
 // - The negotiated version is the minimum of the two versions
-func (c *Client) handshake(ctx context.Context) error {
+func (c *Client) handshake(ctx context.Context, s *session) error {
 	// Send our Hello first
 	xid := c.nextXid()
 	hello := NewHello(xid)
@@ -254,7 +318,7 @@ func (c *Client) handshake(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if _, err := c.conn.Write(helloData); err != nil {
+	if _, err := s.conn.Write(helloData); err != nil {
 		return &WrappedError{Msg: "failed to send hello", Err: err}
 	}
 
@@ -263,7 +327,7 @@ func (c *Client) handshake(ctx context.Context) error {
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
-	case resp := <-c.helloCh:
+	case resp := <-s.helloCh:
 		if resp == nil {
 			return ErrConnectionClosed
 		}
@@ -294,12 +358,9 @@ func (c *Client) handshake(ctx context.Context) error {
 		return err
 	}
 
-	respCh := make(chan *response, 1)
-	c.pendingMu.Lock()
-	c.pending[xid] = respCh
-	c.pendingMu.Unlock()
+	respCh := c.addPending(xid, s.generation)
 
-	if _, err := c.conn.Write(featReqData); err != nil {
+	if _, err := s.conn.Write(featReqData); err != nil {
 		return &WrappedError{Msg: "failed to send features request", Err: err}
 	}
 
@@ -330,44 +391,95 @@ func (c *Client) handshake(ctx context.Context) error {
 		return ErrTimeout
 	}
 
+	return c.enablePacketIn(ctx)
+}
+
+// enablePacketIn asks the switch to send packet-ins on this connection.
+// Open vSwitch serves bridge.mgmt as a service connection whose
+// miss_send_len starts at 0, and it sends a service connection no
+// asynchronous message, packet-ins included, until that is raised. The
+// GET_CONFIG round trip confirms the switch applied it.
+func (c *Client) enablePacketIn(ctx context.Context) error {
+	// SET_CONFIG replaces the switch-wide fragment policy too, so read it
+	// first and send it back unchanged: only miss_send_len is ours to set.
+	current, err := c.getConfig(ctx)
+	if err != nil {
+		return err
+	}
+	set := NewSetConfig(c.nextXid(), current.Flags, OFPCMLNoBuffer)
+	setData, err := set.MarshalBinary()
+	if err != nil {
+		return err
+	}
+	if _, err := c.write(setData); err != nil {
+		return &WrappedError{Msg: "failed to send set config", Err: err}
+	}
+
+	config, err := c.getConfig(ctx)
+	if err != nil {
+		return err
+	}
+	if config.MissSendLen == 0 {
+		return &ErrPacketInDisabled{MissSendLen: config.MissSendLen}
+	}
 	return nil
 }
 
-// reader reads messages from the connection
-func (c *Client) reader() {
+// getConfig reads the switch configuration. The reply to a request sent
+// after a SET_CONFIG reflects it, because the switch handles messages in order.
+func (c *Client) getConfig(ctx context.Context) (*SwitchConfig, error) {
+	xid := c.nextXid()
+	getData, err := NewGetConfigRequest(xid).MarshalBinary()
+	if err != nil {
+		return nil, err
+	}
+	resp, err := c.sendAndWait(ctx, xid, getData, OFPTGetConfigReply)
+	if err != nil {
+		return nil, err
+	}
+	if resp.header.Type != OFPTGetConfigReply {
+		return nil, ErrInvalidMessage
+	}
+	var config SwitchConfig
+	if err := config.UnmarshalBinary(resp.data); err != nil {
+		return nil, err
+	}
+	return &config, nil
+}
+
+// reader reads the messages of one connection until the switch closes it or
+// the session stops.
+func (c *Client) reader(s *session) {
 	defer c.wg.Done()
 
 	headerBuf := make([]byte, HeaderSize)
 
 	for {
 		select {
-		case <-c.done:
+		case <-s.done:
 			return
 		default:
 		}
 
-		// Set read deadline
-		if c.conn != nil {
-			_ = c.conn.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
-		}
+		_ = s.conn.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
 
 		// Read header
-		n, err := io.ReadFull(c.conn, headerBuf)
+		n, err := io.ReadFull(s.conn, headerBuf)
 		if err != nil {
 			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
 				continue
 			}
 
 			select {
-			case <-c.done:
+			case <-s.done:
 				return
 			default:
 			}
 
-			if err == io.EOF || !c.connected.Load() {
-				return
-			}
-			continue
+			// The switch closed the socket or it failed for good: nothing
+			// more will be read, so the client is no longer connected.
+			c.connectionLost(s)
+			return
 		}
 
 		if n < HeaderSize {
@@ -385,22 +497,22 @@ func (c *Client) reader() {
 		var body []byte
 		if bodyLen > 0 {
 			body = make([]byte, bodyLen)
-			_ = c.conn.SetReadDeadline(time.Now().Add(c.timeout))
-			if _, err := io.ReadFull(c.conn, body); err != nil {
+			_ = s.conn.SetReadDeadline(time.Now().Add(c.timeout))
+			if _, err := io.ReadFull(s.conn, body); err != nil {
 				continue
 			}
 		}
 
 		// Clear deadline
-		_ = c.conn.SetReadDeadline(time.Time{})
+		_ = s.conn.SetReadDeadline(time.Time{})
 
 		// Handle message
-		c.handleMessage(&header, body)
+		c.handleMessage(s, &header, body)
 	}
 }
 
-// handleMessage processes a received message
-func (c *Client) handleMessage(header *Header, body []byte) {
+// handleMessage processes a message received on the connection of s
+func (c *Client) handleMessage(s *session, header *Header, body []byte) {
 	// Combine header and body for full message
 	fullData := make([]byte, int(header.Length))
 	headerData, _ := header.MarshalBinary()
@@ -414,9 +526,9 @@ func (c *Client) handleMessage(header *Header, body []byte) {
 	case OFPTHello:
 		// HELLO messages are handled specially during handshake
 		// They have their own XID and are not request/response pairs
-		c.helloOnce.Do(func() {
+		s.helloOnce.Do(func() {
 			select {
-			case c.helloCh <- &response{header: *header, data: fullData}:
+			case s.helloCh <- &response{header: *header, data: fullData}:
 			default:
 			}
 		})
@@ -426,8 +538,15 @@ func (c *Client) handleMessage(header *Header, body []byte) {
 		// Auto-reply to echo requests
 		reply := NewEchoReply(header.Xid, body)
 		data, err := reply.MarshalBinary()
-		if err == nil && c.conn != nil {
-			_, _ = c.conn.Write(data)
+		if err == nil {
+			_, _ = s.conn.Write(data)
+		}
+		return
+
+	case OFPTPacketIn:
+		packet, err := ParsePacketIn(body)
+		if err == nil {
+			c.dispatchPacketIn(packet)
 		}
 		return
 
@@ -452,8 +571,8 @@ func (c *Client) handleMessage(header *Header, body []byte) {
 			c.batchMu.Unlock()
 
 			c.pendingMu.Lock()
-			if ch, ok := c.pending[header.Xid]; ok {
-				ch <- &response{header: *header, data: fullData, err: ofErr}
+			if request, ok := c.pending[header.Xid]; ok {
+				request.ch <- &response{header: *header, data: fullData, err: ofErr}
 				delete(c.pending, header.Xid)
 			}
 			c.pendingMu.Unlock()
@@ -463,9 +582,9 @@ func (c *Client) handleMessage(header *Header, body []byte) {
 
 	// Dispatch to waiting caller
 	c.pendingMu.Lock()
-	if ch, ok := c.pending[header.Xid]; ok {
+	if request, ok := c.pending[header.Xid]; ok {
 		select {
-		case ch <- &response{header: *header, data: fullData}:
+		case request.ch <- &response{header: *header, data: fullData}:
 		default:
 		}
 		delete(c.pending, header.Xid)
@@ -473,16 +592,49 @@ func (c *Client) handleMessage(header *Header, body []byte) {
 	c.pendingMu.Unlock()
 }
 
+func (c *Client) dispatchPacketIn(packet PacketIn) {
+	c.packetInMu.RLock()
+	defer c.packetInMu.RUnlock()
+	for _, subscription := range c.packetInSinks {
+		subscription.Deliver(packet)
+	}
+}
+
+// SubscribePacketIn registers a bounded queue for asynchronous packet-in
+// messages. A full queue drops the packet and counts it on the
+// subscription; Cancel unregisters the queue and closes it.
+func (c *Client) SubscribePacketIn(queueSize int) (*PacketInSubscription, error) {
+	id := c.packetInNextID.Add(1)
+	subscription, err := NewPacketInSubscription(queueSize, func() {
+		c.packetInMu.Lock()
+		delete(c.packetInSinks, id)
+		c.packetInMu.Unlock()
+	})
+	if err != nil {
+		return nil, err
+	}
+	c.packetInMu.Lock()
+	c.packetInSinks[id] = subscription
+	c.packetInMu.Unlock()
+	return subscription, nil
+}
+
 // sendAndWait sends a message and waits for a response
 func (c *Client) sendAndWait(ctx context.Context, xid uint32, data []byte, expectedType uint8) (*response, error) {
-	if !c.connected.Load() {
+	s := c.session.Load()
+	if !c.connected.Load() || s == nil {
 		return nil, ErrNotConnected
 	}
+	return c.sendAndWaitOn(ctx, s, xid, data, expectedType)
+}
 
-	respCh := make(chan *response, 1)
-	c.pendingMu.Lock()
-	c.pending[xid] = respCh
-	c.pendingMu.Unlock()
+// sendAndWaitOn is sendAndWait on a connection the caller already chose. A
+// caller that wrote to s earlier must wait on s as well: loading the current
+// connection again could pick a reconnect's, and a reply from that one says
+// nothing about what the switch did with the write. It fails with
+// ErrConnectionClosed when s is no longer the client's connection.
+func (c *Client) sendAndWaitOn(ctx context.Context, s *session, xid uint32, data []byte, expectedType uint8) (*response, error) {
+	respCh := c.addPending(xid, s.generation)
 
 	defer func() {
 		c.pendingMu.Lock()
@@ -490,7 +642,13 @@ func (c *Client) sendAndWait(ctx context.Context, xid uint32, data []byte, expec
 		c.pendingMu.Unlock()
 	}()
 
-	if _, err := c.conn.Write(data); err != nil {
+	// Registered before the check: a connection lost after it fails the
+	// request through failPending, one lost before it is caught here.
+	if c.session.Load() != s {
+		return nil, ErrConnectionClosed
+	}
+
+	if _, err := s.conn.Write(data); err != nil {
 		return nil, &WrappedError{Msg: "failed to send message", Err: err}
 	}
 
@@ -525,13 +683,8 @@ func (c *Client) AddFlow(ctx context.Context, flow *FlowMod) error {
 		return err
 	}
 
-	// Send flow mod (no response expected, use barrier to confirm)
-	if _, err := c.conn.Write(data); err != nil {
-		return &WrappedError{Msg: "failed to send flow mod", Err: err}
-	}
-
-	// Send barrier to ensure processing
-	return c.barrier(ctx)
+	// No response is expected: the barrier confirms the switch processed it
+	return c.writeConfirmed(ctx, data, "failed to send flow mod")
 }
 
 // DeleteFlow deletes flows matching the criteria
@@ -549,11 +702,7 @@ func (c *Client) DeleteFlow(ctx context.Context, flow *FlowMod) error {
 		return err
 	}
 
-	if _, err := c.conn.Write(data); err != nil {
-		return &WrappedError{Msg: "failed to send flow mod", Err: err}
-	}
-
-	return c.barrier(ctx)
+	return c.writeConfirmed(ctx, data, "failed to send flow mod")
 }
 
 // DeleteFlowStrict deletes the single flow whose match, priority, and table
@@ -574,11 +723,7 @@ func (c *Client) DeleteFlowStrict(ctx context.Context, flow *FlowMod) error {
 		return err
 	}
 
-	if _, err := c.conn.Write(data); err != nil {
-		return &WrappedError{Msg: "failed to send flow mod", Err: err}
-	}
-
-	return c.barrier(ctx)
+	return c.writeConfirmed(ctx, data, "failed to send flow mod")
 }
 
 // DeleteAllFlows deletes all flows from the bridge
@@ -605,11 +750,7 @@ func (c *Client) ModifyFlow(ctx context.Context, flow *FlowMod) error {
 		return err
 	}
 
-	if _, err := c.conn.Write(data); err != nil {
-		return &WrappedError{Msg: "failed to send flow mod", Err: err}
-	}
-
-	return c.barrier(ctx)
+	return c.writeConfirmed(ctx, data, "failed to send flow mod")
 }
 
 // GetFlowStats retrieves flow statistics from every table.
@@ -679,6 +820,15 @@ func (c *Client) QueryFlowStats(ctx context.Context, filter FlowStatsFilter) ([]
 
 // barrier sends a barrier request and waits for reply
 func (c *Client) barrier(ctx context.Context) error {
+	s := c.session.Load()
+	if !c.connected.Load() || s == nil {
+		return ErrNotConnected
+	}
+	return c.barrierOn(ctx, s)
+}
+
+// barrierOn sends a barrier on s, the connection the caller's writes went to.
+func (c *Client) barrierOn(ctx context.Context, s *session) error {
 	xid := c.nextXid()
 	req := NewBarrierRequest(xid)
 	data, err := req.MarshalBinary()
@@ -686,8 +836,23 @@ func (c *Client) barrier(ctx context.Context) error {
 		return err
 	}
 
-	_, err = c.sendAndWait(ctx, xid, data, OFPTBarrierReply)
+	_, err = c.sendAndWaitOn(ctx, s, xid, data, OFPTBarrierReply)
 	return err
+}
+
+// writeConfirmed writes data to the current connection and returns once the
+// switch has processed it. The write and its barrier share one connection:
+// a reconnect in between fails the call instead of confirming a write the
+// new connection never saw. failure labels a write error.
+func (c *Client) writeConfirmed(ctx context.Context, data []byte, failure string) error {
+	s := c.session.Load()
+	if !c.connected.Load() || s == nil {
+		return ErrNotConnected
+	}
+	if _, err := s.conn.Write(data); err != nil {
+		return &WrappedError{Msg: failure, Err: err}
+	}
+	return c.barrierOn(ctx, s)
 }
 
 // Echo sends an echo request
@@ -708,6 +873,127 @@ func (c *Client) Echo(ctx context.Context, data []byte) ([]byte, error) {
 		return resp.data[HeaderSize:], nil
 	}
 	return nil, nil
+}
+
+// SendPacketOut emits a packet through the connected switch. A context
+// already done sends nothing; once the write starts it completes, because
+// abandoning a message half-written would corrupt the OpenFlow stream.
+//
+// The switch can reject a packet-out after accepting the write, for example
+// when its output port is gone. A barrier follows the packet-out, so the
+// rejection is returned rather than lost.
+func (c *Client) SendPacketOut(ctx context.Context, packet *PacketOut) error {
+	if packet == nil {
+		return ErrInvalidMessage
+	}
+	if !c.connected.Load() {
+		return ErrNotConnected
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	packet.Header.Xid = c.nextXid()
+	data, err := packet.MarshalBinary()
+	if err != nil {
+		return err
+	}
+	return c.sendConfirmed(ctx, packet.Header.Xid, data)
+}
+
+// SetMeter installs a drop meter, or updates it when it already exists:
+// an ADD the switch refuses with METER_EXISTS (a meter left by an earlier
+// run) is retried as a MODIFY, so the requested rate always applies. A
+// datapath without meter support is reported as *ErrMeterUnsupported.
+func (c *Client) SetMeter(ctx context.Context, meterID uint32, rateKbps uint32, burstKbps uint32) error {
+	bands := []MeterBand{NewMeterBandDrop(rateKbps, burstKbps)}
+	err := c.sendMeterMod(ctx, NewMeterMod(OFPMCAdd, OFPMFKbps|OFPMFBurst, meterID, bands))
+	if isMeterModError(err, OFPMMFCMeterExists) {
+		err = c.sendMeterMod(ctx, NewMeterMod(OFPMCModify, OFPMFKbps|OFPMFBurst, meterID, bands))
+	}
+	if isMeterModError(err, OFPMMFCInvalidMeter) || isMeterModError(err, OFPMMFCOutOfMeters) {
+		return &ErrMeterUnsupported{MeterID: meterID, Cause: err}
+	}
+	return err
+}
+
+// DeleteMeter removes a meter from the connected switch.
+func (c *Client) DeleteMeter(ctx context.Context, meterID uint32) error {
+	return c.sendMeterMod(ctx, NewMeterMod(OFPMCDelete, 0, meterID, nil))
+}
+
+// GetMeterStats returns the OFPMP_METER statistics of one meter.
+func (c *Client) GetMeterStats(ctx context.Context, meterID uint32) (MeterStats, error) {
+	if !c.connected.Load() {
+		return MeterStats{}, ErrNotConnected
+	}
+	xid := c.nextXid()
+	data, err := NewMultipartRequest(xid, OFPMPMeter, meterStatsRequestBody(meterID)).MarshalBinary()
+	if err != nil {
+		return MeterStats{}, err
+	}
+	resp, err := c.sendAndWait(ctx, xid, data, OFPTMultipartReply)
+	if err != nil {
+		return MeterStats{}, err
+	}
+	// Header (8) + type (2) + flags (2) + pad (4)
+	if len(resp.data) < 16 {
+		return MeterStats{}, ErrMessageTooShort
+	}
+	stats, err := ParseMeterStats(resp.data[16:])
+	if err != nil {
+		return MeterStats{}, err
+	}
+	for _, entry := range stats {
+		if entry.MeterID == meterID {
+			return entry, nil
+		}
+	}
+	return MeterStats{}, &ErrMeterNotFound{MeterID: meterID}
+}
+
+func isMeterModError(err error, code uint16) bool {
+	var ofErr *OFError
+	return errors.As(err, &ofErr) && ofErr.Type == OFPETMeterModFailed && ofErr.Code == code
+}
+
+// sendMeterMod sends one meter mod and returns the error the switch
+// reported for it, if any.
+func (c *Client) sendMeterMod(ctx context.Context, mod *MeterMod) error {
+	if mod == nil {
+		return ErrInvalidMessage
+	}
+	if !c.connected.Load() {
+		return ErrNotConnected
+	}
+	mod.Header.Xid = c.nextXid()
+	data, err := mod.MarshalBinary()
+	if err != nil {
+		return err
+	}
+	return c.sendConfirmed(ctx, mod.Header.Xid, data)
+}
+
+// sendConfirmed writes one message that has no reply of its own, followed
+// by a barrier. The barrier reply guarantees the switch processed the
+// message, so an error it raised has arrived by then and is returned.
+func (c *Client) sendConfirmed(ctx context.Context, xid uint32, data []byte) error {
+	batch := &flowBatch{}
+	c.batchMu.Lock()
+	c.batches[xid] = &batchMember{batch: batch}
+	c.batchMu.Unlock()
+	defer func() {
+		c.batchMu.Lock()
+		delete(c.batches, xid)
+		c.batchMu.Unlock()
+	}()
+
+	if err := c.writeConfirmed(ctx, data, "failed to send message"); err != nil {
+		return err
+	}
+	if failed := batch.failures(); len(failed) > 0 {
+		return failed[0].Err
+	}
+	return nil
 }
 
 // SendFlowMods sends a batch of FlowMod messages back-to-back followed by a
@@ -758,14 +1044,10 @@ func (c *Client) SendFlowMods(ctx context.Context, flows []*FlowMod) error {
 		c.batchMu.Unlock()
 	}()
 
-	// Write the whole batch in a single call to keep it contiguous on the wire
-	if _, err := c.conn.Write(buf); err != nil {
-		return &WrappedError{Msg: "failed to send flow mod batch", Err: err}
-	}
-
-	// The barrier reply guarantees every flow mod (and any error it produced)
-	// has been processed by the switch.
-	if err := c.barrier(ctx); err != nil {
+	// The whole batch goes out in a single write to keep it contiguous on the
+	// wire. The barrier reply guarantees every flow mod (and any error it
+	// produced) has been processed by the switch.
+	if err := c.writeConfirmed(ctx, buf, "failed to send flow mod batch"); err != nil {
 		return err
 	}
 
@@ -792,11 +1074,7 @@ func (c *Client) sendGroupMod(ctx context.Context, group *GroupMod) error {
 		return err
 	}
 
-	if _, err := c.conn.Write(data); err != nil {
-		return &WrappedError{Msg: "failed to send group mod", Err: err}
-	}
-
-	return c.barrier(ctx)
+	return c.writeConfirmed(ctx, data, "failed to send group mod")
 }
 
 // AddGroup adds a group entry to the bridge

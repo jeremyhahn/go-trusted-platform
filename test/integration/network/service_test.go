@@ -38,8 +38,6 @@ import (
 
 // TestNetworkAuthServiceIntegration tests the full authentication flow.
 func TestNetworkAuthServiceIntegration(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
@@ -124,8 +122,6 @@ func TestNetworkAuthServiceIntegration(t *testing.T) {
 
 // TestNetworkAuthServicePolicyDenied tests authentication when policy denies access.
 func TestNetworkAuthServicePolicyDenied(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
 
@@ -168,8 +164,6 @@ func TestNetworkAuthServicePolicyDenied(t *testing.T) {
 
 // TestNetworkAuthServiceAttestationFailed tests authentication when attestation fails.
 func TestNetworkAuthServiceAttestationFailed(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
 
@@ -211,8 +205,6 @@ func TestNetworkAuthServiceAttestationFailed(t *testing.T) {
 
 // TestNetworkAuthServiceCertificateExpired tests authentication with expired certificate.
 func TestNetworkAuthServiceCertificateExpired(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
 
@@ -250,8 +242,6 @@ func TestNetworkAuthServiceCertificateExpired(t *testing.T) {
 
 // TestNetworkAuthServiceConcurrentAuthentication tests concurrent authentication requests.
 func TestNetworkAuthServiceConcurrentAuthentication(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
@@ -329,8 +319,6 @@ func TestNetworkAuthServiceConcurrentAuthentication(t *testing.T) {
 
 // TestNetworkAuthServiceVLANTransitions tests VLAN transitions through lifecycle.
 func TestNetworkAuthServiceVLANTransitions(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
 

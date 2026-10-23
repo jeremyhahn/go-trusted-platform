@@ -22,9 +22,12 @@
 package compute
 
 import (
+	"net/http"
+
 	"github.com/gorilla/mux"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/middleware"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/router"
 
@@ -34,11 +37,16 @@ import (
 const (
 	// basePath is mounted under the parent /api/v1 subrouter.
 	basePath = "/compute"
+
+	// scopeContainerRead is the scope container attestation requires, the
+	// one the gRPC method enforces.
+	scopeContainerRead = "container:read"
 )
 
 // ComputeRouter wires REST endpoints onto a ComputeServiceServer.
 type ComputeRouter struct {
-	handlers *Handlers
+	handlers        *Handlers
+	scopeAuthorizer middleware.ScopeAuthorizer
 	router.WebServiceRouter
 }
 
@@ -52,6 +60,22 @@ func NewComputeRouter(
 	return &ComputeRouter{
 		handlers: NewHandlers(logger, server, respWriter),
 	}
+}
+
+// SetScopeAuthorizer supplies the scope check container attestation takes
+// on top of the admin gate. Nil leaves the route on the role gate alone,
+// which is the case under the legacy JWT handler: its sessions carry roles,
+// not scopes.
+func (r *ComputeRouter) SetScopeAuthorizer(authorizer middleware.ScopeAuthorizer) {
+	r.scopeAuthorizer = authorizer
+}
+
+// requireScope wraps handler in the scope check when an authorizer is set.
+func (r *ComputeRouter) requireScope(scope string, handler http.HandlerFunc) http.Handler {
+	if r.scopeAuthorizer == nil {
+		return handler
+	}
+	return r.scopeAuthorizer.RequireScope(scope)(handler)
 }
 
 // RegisterRoutes attaches all compute REST routes on the parent router.
@@ -73,8 +97,12 @@ func (r *ComputeRouter) RegisterRoutes(parent *mux.Router) {
 //	POST   /api/v1/compute/vms/{id}/start            - StartVM
 //	POST   /api/v1/compute/vms/{id}/stop             - StopVM
 //	POST   /api/v1/compute/vms/{id}/reboot           - RebootVM
+//	POST   /api/v1/compute/vms/{id}/suspend          - SuspendVM
+//	POST   /api/v1/compute/vms/{id}/resume           - ResumeVM
 //	GET    /api/v1/compute/vms/{id}/metrics          - GetVMMetrics
 //	POST   /api/v1/compute/vms/{id}/migrate          - MigrateVM
+//	POST   /api/v1/compute/migrations/prepare        - PrepareMigration
+//	POST   /api/v1/compute/migrations/{receiverId}/finalize - FinalizeMigration
 func (r *ComputeRouter) registerVMRoutes(sr *mux.Router) {
 	sr.HandleFunc("/vms", r.handlers.CreateVM).Methods("POST")
 	sr.HandleFunc("/vms", r.handlers.ListVMs).Methods("GET")
@@ -83,8 +111,12 @@ func (r *ComputeRouter) registerVMRoutes(sr *mux.Router) {
 	sr.HandleFunc("/vms/{id}/start", r.handlers.StartVM).Methods("POST")
 	sr.HandleFunc("/vms/{id}/stop", r.handlers.StopVM).Methods("POST")
 	sr.HandleFunc("/vms/{id}/reboot", r.handlers.RebootVM).Methods("POST")
+	sr.HandleFunc("/vms/{id}/suspend", r.handlers.SuspendVM).Methods("POST")
+	sr.HandleFunc("/vms/{id}/resume", r.handlers.ResumeVM).Methods("POST")
 	sr.HandleFunc("/vms/{id}/metrics", r.handlers.GetVMMetrics).Methods("GET")
 	sr.HandleFunc("/vms/{id}/migrate", r.handlers.MigrateVM).Methods("POST")
+	sr.HandleFunc("/migrations/prepare", r.handlers.PrepareMigration).Methods("POST")
+	sr.HandleFunc("/migrations/{receiverId}/finalize", r.handlers.FinalizeMigration).Methods("POST")
 }
 
 // registerDiskRoutes registers VM disk attachment endpoints.
@@ -102,11 +134,13 @@ func (r *ComputeRouter) registerDiskRoutes(sr *mux.Router) {
 //
 //	POST   /api/v1/compute/vms/{id}/snapshots                       - CreateSnapshot
 //	GET    /api/v1/compute/vms/{id}/snapshots                       - ListSnapshots
+//	GET    /api/v1/compute/vms/{id}/snapshots/{snapshotId}          - GetSnapshot
 //	DELETE /api/v1/compute/vms/{id}/snapshots/{snapshotId}          - DeleteSnapshot
 //	POST   /api/v1/compute/vms/{id}/snapshots/{snapshotId}/restore  - RestoreSnapshot
 func (r *ComputeRouter) registerSnapshotRoutes(sr *mux.Router) {
 	sr.HandleFunc("/vms/{id}/snapshots", r.handlers.CreateSnapshot).Methods("POST")
 	sr.HandleFunc("/vms/{id}/snapshots", r.handlers.ListSnapshots).Methods("GET")
+	sr.HandleFunc("/vms/{id}/snapshots/{snapshotId}", r.handlers.GetSnapshot).Methods("GET")
 	sr.HandleFunc("/vms/{id}/snapshots/{snapshotId}", r.handlers.DeleteSnapshot).Methods("DELETE")
 	sr.HandleFunc("/vms/{id}/snapshots/{snapshotId}/restore", r.handlers.RestoreSnapshot).Methods("POST")
 }
@@ -132,11 +166,15 @@ func (r *ComputeRouter) registerContainerRoutes(sr *mux.Router) {
 	sr.HandleFunc("/containers/{id}/metrics", r.handlers.GetContainerMetrics).Methods("GET")
 }
 
-// registerAttestationRoutes registers VM attestation endpoints.
+// registerAttestationRoutes registers VM and container attestation
+// endpoints. Container attestation also requires container:read when a
+// scope authorizer is set.
 //
 //	POST   /api/v1/compute/vms/{id}/attest          - AttestVM
 //	POST   /api/v1/compute/vms/{id}/attest/verify   - VerifyVMAttestation
+//	POST   /api/v1/compute/containers/{id}/attest   - AttestContainer
 func (r *ComputeRouter) registerAttestationRoutes(sr *mux.Router) {
 	sr.HandleFunc("/vms/{id}/attest", r.handlers.AttestVM).Methods("POST")
 	sr.HandleFunc("/vms/{id}/attest/verify", r.handlers.VerifyVMAttestation).Methods("POST")
+	sr.Handle("/containers/{id}/attest", r.requireScope(scopeContainerRead, r.handlers.AttestContainer)).Methods("POST")
 }

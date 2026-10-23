@@ -18,5 +18,5 @@ if [ ! -f /opt/trusted-platform/trusted-data/.initialized ]; then
     touch /opt/trusted-platform/trusted-data/.initialized
 else
     echo "Platform already initialized, starting..."
-    /usr/local/bin/platformd serve
+    /usr/local/bin/platformd serve --enable-mtls
 fi

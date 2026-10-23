@@ -40,7 +40,10 @@ func runListDevices(commonFlags *cli.CommonFlags) error {
 	}
 	defer base.Close()
 
-	client := pivsvc.NewClient()
+	client, err := newService(base.Client())
+	if err != nil {
+		return err
+	}
 	resp, err := client.ListDevices(base.Context(), &pivsvc.ListDevicesRequest{})
 	if err != nil {
 		return err

@@ -17,22 +17,26 @@ package quic
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"log/slog"
 	"testing"
 	"time"
 
 	"github.com/jeremyhahn/go-codec"
+	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/manifest"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/verdict"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/testutil"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 func init() {
 	// Set the default codec to MsgPack for encoding/decoding payloads
-	_ = SetDefaultCodecType(codec.MsgPack)
+	_ = quicwire.SetDefaultCodecType(codec.MsgPack)
 }
 
 // =============================================================================
@@ -404,20 +408,20 @@ func TestAttestationHandleRequest(t *testing.T) {
 
 		resp := handler.HandleRequest(context.Background(), nil)
 
-		assert.Equal(t, StatusInvalidRequest, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidRequest, resp.Status)
 		assert.Contains(t, string(resp.Payload), "nil")
 	})
 
 	t.Run("returns error for unknown opcode", func(t *testing.T) {
 		handler, _ := createTestAttestationHandler()
 
-		req := &Request{
+		req := &quicwire.Request{
 			Opcode: 0x00, // Unknown opcode for attestation handler
 		}
 
 		resp := handler.HandleRequest(context.Background(), req)
 
-		assert.Equal(t, StatusInvalidRequest, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidRequest, resp.Status)
 		assert.Contains(t, string(resp.Payload), "unknown attestation operation")
 	})
 }
@@ -437,20 +441,20 @@ func TestHandleGetManifest(t *testing.T) {
 			ID: "manifest-1",
 		}
 
-		payload, err := EncodePayload(getReq)
+		payload, err := quicwire.EncodePayload(getReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpAttestGetManifest,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpAttestGetManifest,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 		var getResp GetManifestResponse
-		err = DecodePayload(resp.Payload, &getResp)
+		err = quicwire.DecodePayload(resp.Payload, &getResp)
 		require.NoError(t, err)
 
 		assert.NotNil(t, getResp.Manifest)
@@ -466,47 +470,47 @@ func TestHandleGetManifest(t *testing.T) {
 			ID: "nonexistent",
 		}
 
-		payload, err := EncodePayload(getReq)
+		payload, err := quicwire.EncodePayload(getReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpAttestGetManifest,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpAttestGetManifest,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusNotFound, resp.Status)
+		assert.Equal(t, quicwire.StatusNotFound, resp.Status)
 	})
 
 	t.Run("returns error when service unavailable", func(t *testing.T) {
 		handler := NewAttestationHandler(newAttestTestLogger(), nil)
 
 		getReq := &GetManifestRequest{ID: "manifest-1"}
-		payload, err := EncodePayload(getReq)
+		payload, err := quicwire.EncodePayload(getReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpAttestGetManifest,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpAttestGetManifest,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 
 	t.Run("returns error for invalid payload", func(t *testing.T) {
 		handler, _ := createTestAttestationHandler()
 
-		req := &Request{
-			Opcode:  OpAttestGetManifest,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpAttestGetManifest,
 			Payload: []byte("invalid"),
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidRequest, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidRequest, resp.Status)
 	})
 
 	t.Run("returns error when service fails", func(t *testing.T) {
@@ -514,17 +518,17 @@ func TestHandleGetManifest(t *testing.T) {
 		service.getManifestErr = errors.New("service error")
 
 		getReq := &GetManifestRequest{ID: "manifest-1"}
-		payload, err := EncodePayload(getReq)
+		payload, err := quicwire.EncodePayload(getReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpAttestGetManifest,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpAttestGetManifest,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInternalError, resp.Status)
+		assert.Equal(t, quicwire.StatusInternalError, resp.Status)
 	})
 }
 
@@ -548,20 +552,20 @@ func TestHandleBuildManifest(t *testing.T) {
 			Sign:              true,
 		}
 
-		payload, err := EncodePayload(buildReq)
+		payload, err := quicwire.EncodePayload(buildReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpAttestBuildManifest,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpAttestBuildManifest,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 		var buildResp BuildManifestResponse
-		err = DecodePayload(resp.Payload, &buildResp)
+		err = quicwire.DecodePayload(resp.Payload, &buildResp)
 		require.NoError(t, err)
 
 		assert.NotNil(t, buildResp.Manifest)
@@ -576,17 +580,17 @@ func TestHandleBuildManifest(t *testing.T) {
 			HostID: "test-host",
 		}
 
-		payload, err := EncodePayload(buildReq)
+		payload, err := quicwire.EncodePayload(buildReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpAttestBuildManifest,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpAttestBuildManifest,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 	})
 
 	t.Run("returns error for invalid nonce", func(t *testing.T) {
@@ -597,17 +601,17 @@ func TestHandleBuildManifest(t *testing.T) {
 			Nonce:  []byte("short"), // Less than 16 bytes
 		}
 
-		payload, err := EncodePayload(buildReq)
+		payload, err := quicwire.EncodePayload(buildReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpAttestBuildManifest,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpAttestBuildManifest,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 
 	t.Run("returns error for invalid hash algorithm", func(t *testing.T) {
@@ -618,17 +622,17 @@ func TestHandleBuildManifest(t *testing.T) {
 			HashAlgorithm: "md5", // Invalid algorithm
 		}
 
-		payload, err := EncodePayload(buildReq)
+		payload, err := quicwire.EncodePayload(buildReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpAttestBuildManifest,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpAttestBuildManifest,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 
 	t.Run("returns error for invalid PCR index", func(t *testing.T) {
@@ -639,34 +643,34 @@ func TestHandleBuildManifest(t *testing.T) {
 			PCRIndices: []int{0, 7, 25}, // 25 is invalid
 		}
 
-		payload, err := EncodePayload(buildReq)
+		payload, err := quicwire.EncodePayload(buildReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpAttestBuildManifest,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpAttestBuildManifest,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 
 	t.Run("returns error when service unavailable", func(t *testing.T) {
 		handler := NewAttestationHandler(newAttestTestLogger(), nil)
 
 		buildReq := &BuildManifestRequest{HostID: "test-host"}
-		payload, err := EncodePayload(buildReq)
+		payload, err := quicwire.EncodePayload(buildReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpAttestBuildManifest,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpAttestBuildManifest,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 
 	t.Run("returns error when build fails", func(t *testing.T) {
@@ -674,30 +678,30 @@ func TestHandleBuildManifest(t *testing.T) {
 		service.buildManifestErr = errors.New("build failed")
 
 		buildReq := &BuildManifestRequest{HostID: "test-host"}
-		payload, err := EncodePayload(buildReq)
+		payload, err := quicwire.EncodePayload(buildReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpAttestBuildManifest,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpAttestBuildManifest,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInternalError, resp.Status)
+		assert.Equal(t, quicwire.StatusInternalError, resp.Status)
 	})
 
 	t.Run("returns error for invalid payload", func(t *testing.T) {
 		handler, _ := createTestAttestationHandler()
 
-		req := &Request{
-			Opcode:  OpAttestBuildManifest,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpAttestBuildManifest,
 			Payload: []byte("invalid payload"),
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidRequest, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidRequest, resp.Status)
 	})
 }
 
@@ -733,20 +737,20 @@ func TestHandleVerifyManifest(t *testing.T) {
 			ExpectedNonce: []byte("test-nonce-12345678"),
 		}
 
-		payload, err := EncodePayload(verifyReq)
+		payload, err := quicwire.EncodePayload(verifyReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpAttestVerifyManifest,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpAttestVerifyManifest,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 		var verifyResp VerifyManifestResponse
-		err = DecodePayload(resp.Payload, &verifyResp)
+		err = quicwire.DecodePayload(resp.Payload, &verifyResp)
 		require.NoError(t, err)
 
 		assert.True(t, verifyResp.Valid)
@@ -760,17 +764,17 @@ func TestHandleVerifyManifest(t *testing.T) {
 
 		verifyReq := &VerifyManifestRequest{}
 
-		payload, err := EncodePayload(verifyReq)
+		payload, err := quicwire.EncodePayload(verifyReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpAttestVerifyManifest,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpAttestVerifyManifest,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 
 	t.Run("returns error when service unavailable", func(t *testing.T) {
@@ -779,17 +783,17 @@ func TestHandleVerifyManifest(t *testing.T) {
 		verifyReq := &VerifyManifestRequest{
 			Manifest: &ManifestData{ID: "test"},
 		}
-		payload, err := EncodePayload(verifyReq)
+		payload, err := quicwire.EncodePayload(verifyReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpAttestVerifyManifest,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpAttestVerifyManifest,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 
 	t.Run("returns error when verification fails", func(t *testing.T) {
@@ -803,30 +807,30 @@ func TestHandleVerifyManifest(t *testing.T) {
 				Nonce:      []byte("nonce"),
 			},
 		}
-		payload, err := EncodePayload(verifyReq)
+		payload, err := quicwire.EncodePayload(verifyReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpAttestVerifyManifest,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpAttestVerifyManifest,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInternalError, resp.Status)
+		assert.Equal(t, quicwire.StatusInternalError, resp.Status)
 	})
 
 	t.Run("returns error for invalid payload", func(t *testing.T) {
 		handler, _ := createTestAttestationHandler()
 
-		req := &Request{
-			Opcode:  OpAttestVerifyManifest,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpAttestVerifyManifest,
 			Payload: []byte("invalid payload"),
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidRequest, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidRequest, resp.Status)
 	})
 }
 
@@ -835,7 +839,47 @@ func TestHandleVerifyManifest(t *testing.T) {
 // =============================================================================
 
 func TestHandleCollectHostAttestation(t *testing.T) {
-	ctx := context.Background()
+	state := testutil.ServerConnectionState(t)
+	ctx := WithConnectionTLS(context.Background(), state)
+
+	t.Run("quotes the nonce bound to its own connection", func(t *testing.T) {
+		handler, _ := createTestAttestationHandler()
+		nonce := []byte("test-nonce-12345678")
+
+		payload, err := quicwire.EncodePayload(&CollectHostAttestationRequest{Nonce: nonce})
+		require.NoError(t, err)
+
+		resp := handler.HandleRequest(ctx, &quicwire.Request{Opcode: quicwire.OpAttestHost, Payload: payload})
+		require.Equal(t, quicwire.StatusOK, resp.Status)
+
+		var collectResp CollectHostAttestationResponse
+		require.NoError(t, quicwire.DecodePayload(resp.Payload, &collectResp))
+		binding, err := state.ExportKeyingMaterial(xkmssdk.PeerChannelBindingExporterLabel, nil, xkmssdk.PeerChannelBindingLength)
+		require.NoError(t, err)
+		assert.Equal(t, xkmssdk.PeerQualifyingData(nonce, binding), collectResp.Attestation.Nonce,
+			"the service quotes the connection-bound value, never the nonce as sent (#482)")
+	})
+
+	t.Run("refuses a connection with no channel binding", func(t *testing.T) {
+		contexts := map[string]context.Context{
+			"no TLS state":     context.Background(),
+			"exporter refused": WithConnectionTLS(context.Background(), &tls.ConnectionState{Version: tls.VersionTLS12}),
+		}
+		for name, unbound := range contexts {
+			t.Run(name, func(t *testing.T) {
+				handler, service := createTestAttestationHandler()
+				service.collectHostErr = errors.New("the TPM must not be reached")
+
+				payload, err := quicwire.EncodePayload(&CollectHostAttestationRequest{Nonce: []byte("test-nonce-12345678")})
+				require.NoError(t, err)
+
+				resp := handler.HandleRequest(unbound, &quicwire.Request{Opcode: quicwire.OpAttestHost, Payload: payload})
+
+				assert.Equal(t, quicwire.StatusInvalidRequest, resp.Status)
+				assert.Contains(t, string(resp.Payload), "bound to the TLS connection")
+			})
+		}
+	})
 
 	t.Run("collects host attestation successfully", func(t *testing.T) {
 		handler, _ := createTestAttestationHandler()
@@ -847,20 +891,20 @@ func TestHandleCollectHostAttestation(t *testing.T) {
 			IncludeEventLog: true,
 		}
 
-		payload, err := EncodePayload(collectReq)
+		payload, err := quicwire.EncodePayload(collectReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpAttestHost,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpAttestHost,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 		var collectResp CollectHostAttestationResponse
-		err = DecodePayload(resp.Payload, &collectResp)
+		err = quicwire.DecodePayload(resp.Payload, &collectResp)
 		require.NoError(t, err)
 
 		assert.NotNil(t, collectResp.Attestation)
@@ -874,17 +918,17 @@ func TestHandleCollectHostAttestation(t *testing.T) {
 
 		collectReq := &CollectHostAttestationRequest{}
 
-		payload, err := EncodePayload(collectReq)
+		payload, err := quicwire.EncodePayload(collectReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpAttestHost,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpAttestHost,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 	})
 
 	t.Run("returns error for invalid nonce", func(t *testing.T) {
@@ -894,17 +938,17 @@ func TestHandleCollectHostAttestation(t *testing.T) {
 			Nonce: []byte("short"),
 		}
 
-		payload, err := EncodePayload(collectReq)
+		payload, err := quicwire.EncodePayload(collectReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpAttestHost,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpAttestHost,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 
 	t.Run("returns error for invalid hash algorithm", func(t *testing.T) {
@@ -914,17 +958,17 @@ func TestHandleCollectHostAttestation(t *testing.T) {
 			HashAlgorithm: "md5", // Invalid algorithm
 		}
 
-		payload, err := EncodePayload(collectReq)
+		payload, err := quicwire.EncodePayload(collectReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpAttestHost,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpAttestHost,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 		assert.Contains(t, string(resp.Payload), "hash")
 	})
 
@@ -935,34 +979,34 @@ func TestHandleCollectHostAttestation(t *testing.T) {
 			PCRIndices: []int{-1}, // Invalid negative index
 		}
 
-		payload, err := EncodePayload(collectReq)
+		payload, err := quicwire.EncodePayload(collectReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpAttestHost,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpAttestHost,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 
 	t.Run("returns error when service unavailable", func(t *testing.T) {
 		handler := NewAttestationHandler(newAttestTestLogger(), nil)
 
 		collectReq := &CollectHostAttestationRequest{}
-		payload, err := EncodePayload(collectReq)
+		payload, err := quicwire.EncodePayload(collectReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpAttestHost,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpAttestHost,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 
 	t.Run("returns error when collection fails", func(t *testing.T) {
@@ -970,30 +1014,30 @@ func TestHandleCollectHostAttestation(t *testing.T) {
 		service.collectHostErr = errors.New("TPM not available")
 
 		collectReq := &CollectHostAttestationRequest{}
-		payload, err := EncodePayload(collectReq)
+		payload, err := quicwire.EncodePayload(collectReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpAttestHost,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpAttestHost,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 
 	t.Run("returns error for invalid payload", func(t *testing.T) {
 		handler, _ := createTestAttestationHandler()
 
-		req := &Request{
-			Opcode:  OpAttestHost,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpAttestHost,
 			Payload: []byte("invalid payload"),
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidRequest, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidRequest, resp.Status)
 	})
 }
 
@@ -1014,20 +1058,20 @@ func TestHandleAttestVM(t *testing.T) {
 			HashAlgorithm: "sha256",
 		}
 
-		payload, err := EncodePayload(attestReq)
+		payload, err := quicwire.EncodePayload(attestReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpAttestVMWorkload,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpAttestVMWorkload,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 		var attestResp AttestVMResponse
-		err = DecodePayload(resp.Payload, &attestResp)
+		err = quicwire.DecodePayload(resp.Payload, &attestResp)
 		require.NoError(t, err)
 
 		assert.NotNil(t, attestResp.Attestation)
@@ -1048,17 +1092,17 @@ func TestHandleAttestVM(t *testing.T) {
 
 		attestReq := &AttestVMRequest{}
 
-		payload, err := EncodePayload(attestReq)
+		payload, err := quicwire.EncodePayload(attestReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpAttestVMWorkload,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpAttestVMWorkload,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 		assert.Contains(t, string(resp.Payload), "VM ID")
 	})
 
@@ -1066,17 +1110,17 @@ func TestHandleAttestVM(t *testing.T) {
 		handler := NewAttestationHandler(newAttestTestLogger(), nil)
 
 		attestReq := &AttestVMRequest{VMID: "vm-123"}
-		payload, err := EncodePayload(attestReq)
+		payload, err := quicwire.EncodePayload(attestReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpAttestVMWorkload,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpAttestVMWorkload,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 
 	t.Run("returns error when attestation fails", func(t *testing.T) {
@@ -1084,17 +1128,17 @@ func TestHandleAttestVM(t *testing.T) {
 		service.attestVMErr = errors.New("VM not found")
 
 		attestReq := &AttestVMRequest{VMID: "vm-123"}
-		payload, err := EncodePayload(attestReq)
+		payload, err := quicwire.EncodePayload(attestReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpAttestVMWorkload,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpAttestVMWorkload,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusNotFound, resp.Status)
+		assert.Equal(t, quicwire.StatusNotFound, resp.Status)
 	})
 
 	t.Run("returns error for short nonce", func(t *testing.T) {
@@ -1105,17 +1149,17 @@ func TestHandleAttestVM(t *testing.T) {
 			Nonce: []byte("short"), // Less than 16 bytes
 		}
 
-		payload, err := EncodePayload(attestReq)
+		payload, err := quicwire.EncodePayload(attestReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpAttestVMWorkload,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpAttestVMWorkload,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 		assert.Contains(t, string(resp.Payload), "nonce")
 	})
 
@@ -1128,17 +1172,17 @@ func TestHandleAttestVM(t *testing.T) {
 			HashAlgorithm: "invalid-hash",
 		}
 
-		payload, err := EncodePayload(attestReq)
+		payload, err := quicwire.EncodePayload(attestReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpAttestVMWorkload,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpAttestVMWorkload,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 		assert.Contains(t, string(resp.Payload), "hash")
 	})
 
@@ -1151,17 +1195,17 @@ func TestHandleAttestVM(t *testing.T) {
 			PCRIndices: []int{0, 1, 7},
 		}
 
-		payload, err := EncodePayload(attestReq)
+		payload, err := quicwire.EncodePayload(attestReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpAttestVMWorkload,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpAttestVMWorkload,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 	})
 
 	t.Run("returns error for invalid PCR index", func(t *testing.T) {
@@ -1173,30 +1217,30 @@ func TestHandleAttestVM(t *testing.T) {
 			PCRIndices: []int{-1}, // Invalid negative index
 		}
 
-		payload, err := EncodePayload(attestReq)
+		payload, err := quicwire.EncodePayload(attestReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpAttestVMWorkload,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpAttestVMWorkload,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 
 	t.Run("returns error for invalid payload", func(t *testing.T) {
 		handler, _ := createTestAttestationHandler()
 
-		req := &Request{
-			Opcode:  OpAttestVMWorkload,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpAttestVMWorkload,
 			Payload: []byte("invalid payload"),
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidRequest, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidRequest, resp.Status)
 	})
 }
 
@@ -1217,20 +1261,20 @@ func TestHandleAttestContainer(t *testing.T) {
 			HashAlgorithm: "sha256",
 		}
 
-		payload, err := EncodePayload(attestReq)
+		payload, err := quicwire.EncodePayload(attestReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpAttestContainerWorkload,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpAttestContainerWorkload,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 		var attestResp AttestContainerResponse
-		err = DecodePayload(resp.Payload, &attestResp)
+		err = quicwire.DecodePayload(resp.Payload, &attestResp)
 		require.NoError(t, err)
 
 		assert.NotNil(t, attestResp.Attestation)
@@ -1249,17 +1293,17 @@ func TestHandleAttestContainer(t *testing.T) {
 
 		attestReq := &AttestContainerRequest{}
 
-		payload, err := EncodePayload(attestReq)
+		payload, err := quicwire.EncodePayload(attestReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpAttestContainerWorkload,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpAttestContainerWorkload,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 		assert.Contains(t, string(resp.Payload), "container ID")
 	})
 
@@ -1267,17 +1311,17 @@ func TestHandleAttestContainer(t *testing.T) {
 		handler := NewAttestationHandler(newAttestTestLogger(), nil)
 
 		attestReq := &AttestContainerRequest{ContainerID: "container-123"}
-		payload, err := EncodePayload(attestReq)
+		payload, err := quicwire.EncodePayload(attestReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpAttestContainerWorkload,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpAttestContainerWorkload,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 
 	t.Run("returns error when attestation fails", func(t *testing.T) {
@@ -1285,17 +1329,17 @@ func TestHandleAttestContainer(t *testing.T) {
 		service.attestContainerErr = errors.New("container not found")
 
 		attestReq := &AttestContainerRequest{ContainerID: "container-123"}
-		payload, err := EncodePayload(attestReq)
+		payload, err := quicwire.EncodePayload(attestReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpAttestContainerWorkload,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpAttestContainerWorkload,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusNotFound, resp.Status)
+		assert.Equal(t, quicwire.StatusNotFound, resp.Status)
 	})
 
 	t.Run("returns error for short nonce", func(t *testing.T) {
@@ -1306,17 +1350,17 @@ func TestHandleAttestContainer(t *testing.T) {
 			Nonce:       []byte("short"), // Less than 16 bytes
 		}
 
-		payload, err := EncodePayload(attestReq)
+		payload, err := quicwire.EncodePayload(attestReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpAttestContainerWorkload,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpAttestContainerWorkload,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 		assert.Contains(t, string(resp.Payload), "nonce")
 	})
 
@@ -1329,31 +1373,31 @@ func TestHandleAttestContainer(t *testing.T) {
 			HashAlgorithm: "invalid-hash",
 		}
 
-		payload, err := EncodePayload(attestReq)
+		payload, err := quicwire.EncodePayload(attestReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpAttestContainerWorkload,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpAttestContainerWorkload,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 		assert.Contains(t, string(resp.Payload), "hash")
 	})
 
 	t.Run("returns error for invalid payload", func(t *testing.T) {
 		handler, _ := createTestAttestationHandler()
 
-		req := &Request{
-			Opcode:  OpAttestContainerWorkload,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpAttestContainerWorkload,
 			Payload: []byte("invalid payload"),
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidRequest, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidRequest, resp.Status)
 	})
 }
 
@@ -1375,20 +1419,20 @@ func TestHandleAttestDevice(t *testing.T) {
 			PolicyID:      "policy-1",
 		}
 
-		payload, err := EncodePayload(attestReq)
+		payload, err := quicwire.EncodePayload(attestReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpAttestDeviceWorkload,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpAttestDeviceWorkload,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 		var attestResp AttestDeviceResponse
-		err = DecodePayload(resp.Payload, &attestResp)
+		err = quicwire.DecodePayload(resp.Payload, &attestResp)
 		require.NoError(t, err)
 
 		assert.Equal(t, "device-123", attestResp.DeviceID)
@@ -1401,17 +1445,17 @@ func TestHandleAttestDevice(t *testing.T) {
 
 		attestReq := &AttestDeviceRequest{}
 
-		payload, err := EncodePayload(attestReq)
+		payload, err := quicwire.EncodePayload(attestReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpAttestDeviceWorkload,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpAttestDeviceWorkload,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 		assert.Contains(t, string(resp.Payload), "device ID")
 	})
 
@@ -1419,17 +1463,17 @@ func TestHandleAttestDevice(t *testing.T) {
 		handler := NewAttestationHandler(newAttestTestLogger(), nil)
 
 		attestReq := &AttestDeviceRequest{DeviceID: "device-123"}
-		payload, err := EncodePayload(attestReq)
+		payload, err := quicwire.EncodePayload(attestReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpAttestDeviceWorkload,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpAttestDeviceWorkload,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 
 	t.Run("returns device with policy result", func(t *testing.T) {
@@ -1449,20 +1493,20 @@ func TestHandleAttestDevice(t *testing.T) {
 		}
 
 		attestReq := &AttestDeviceRequest{DeviceID: "device-123", PolicyID: "policy-1"}
-		payload, err := EncodePayload(attestReq)
+		payload, err := quicwire.EncodePayload(attestReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpAttestDeviceWorkload,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpAttestDeviceWorkload,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 		var attestResp AttestDeviceResponse
-		err = DecodePayload(resp.Payload, &attestResp)
+		err = quicwire.DecodePayload(resp.Payload, &attestResp)
 		require.NoError(t, err)
 
 		assert.NotNil(t, attestResp.PolicyResult)
@@ -1478,17 +1522,17 @@ func TestHandleAttestDevice(t *testing.T) {
 			Nonce:    []byte("short"), // Less than 16 bytes
 		}
 
-		payload, err := EncodePayload(attestReq)
+		payload, err := quicwire.EncodePayload(attestReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpAttestDeviceWorkload,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpAttestDeviceWorkload,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 		assert.Contains(t, string(resp.Payload), "nonce")
 	})
 
@@ -1501,31 +1545,31 @@ func TestHandleAttestDevice(t *testing.T) {
 			HashAlgorithm: "invalid-hash",
 		}
 
-		payload, err := EncodePayload(attestReq)
+		payload, err := quicwire.EncodePayload(attestReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpAttestDeviceWorkload,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpAttestDeviceWorkload,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 		assert.Contains(t, string(resp.Payload), "hash")
 	})
 
 	t.Run("returns error for invalid payload", func(t *testing.T) {
 		handler, _ := createTestAttestationHandler()
 
-		req := &Request{
-			Opcode:  OpAttestDeviceWorkload,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpAttestDeviceWorkload,
 			Payload: []byte("invalid payload"),
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidRequest, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidRequest, resp.Status)
 	})
 }
 
@@ -1546,20 +1590,20 @@ func TestHandleListReports(t *testing.T) {
 			Limit:  10,
 		}
 
-		payload, err := EncodePayload(listReq)
+		payload, err := quicwire.EncodePayload(listReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpAttestListReports,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpAttestListReports,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 		var listResp ListReportsResponse
-		err = DecodePayload(resp.Payload, &listResp)
+		err = quicwire.DecodePayload(resp.Payload, &listResp)
 		require.NoError(t, err)
 
 		assert.Equal(t, int32(2), listResp.Count)
@@ -1572,17 +1616,17 @@ func TestHandleListReports(t *testing.T) {
 
 		listReq := &ListReportsRequest{}
 
-		payload, err := EncodePayload(listReq)
+		payload, err := quicwire.EncodePayload(listReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpAttestListReports,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpAttestListReports,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 	})
 
 	t.Run("caps limit at max", func(t *testing.T) {
@@ -1592,34 +1636,34 @@ func TestHandleListReports(t *testing.T) {
 			Limit: 5000, // exceeds max
 		}
 
-		payload, err := EncodePayload(listReq)
+		payload, err := quicwire.EncodePayload(listReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpAttestListReports,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpAttestListReports,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 	})
 
 	t.Run("returns error when service unavailable", func(t *testing.T) {
 		handler := NewAttestationHandler(newAttestTestLogger(), nil)
 
 		listReq := &ListReportsRequest{}
-		payload, err := EncodePayload(listReq)
+		payload, err := quicwire.EncodePayload(listReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpAttestListReports,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpAttestListReports,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 
 	t.Run("returns error when list fails", func(t *testing.T) {
@@ -1627,17 +1671,17 @@ func TestHandleListReports(t *testing.T) {
 		service.listReportsErr = errors.New("database error")
 
 		listReq := &ListReportsRequest{}
-		payload, err := EncodePayload(listReq)
+		payload, err := quicwire.EncodePayload(listReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpAttestListReports,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpAttestListReports,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInternalError, resp.Status)
+		assert.Equal(t, quicwire.StatusInternalError, resp.Status)
 	})
 
 	t.Run("filters by time range", func(t *testing.T) {
@@ -1650,29 +1694,29 @@ func TestHandleListReports(t *testing.T) {
 			Limit:     10,
 		}
 
-		payload, err := EncodePayload(listReq)
+		payload, err := quicwire.EncodePayload(listReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpAttestListReports,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpAttestListReports,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 	})
 	t.Run("returns error for invalid payload", func(t *testing.T) {
 		handler, _ := createTestAttestationHandler()
 
-		req := &Request{
-			Opcode:  OpAttestListReports,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpAttestListReports,
 			Payload: []byte("invalid payload"),
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidRequest, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidRequest, resp.Status)
 	})
 }
 
@@ -1691,20 +1735,20 @@ func TestHandleGetReport(t *testing.T) {
 			ID: "report-1",
 		}
 
-		payload, err := EncodePayload(getReq)
+		payload, err := quicwire.EncodePayload(getReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpAttestGetReportByID,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpAttestGetReportByID,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 		var getResp GetReportResponse
-		err = DecodePayload(resp.Payload, &getResp)
+		err = quicwire.DecodePayload(resp.Payload, &getResp)
 		require.NoError(t, err)
 
 		assert.NotNil(t, getResp.Report)
@@ -1716,17 +1760,17 @@ func TestHandleGetReport(t *testing.T) {
 
 		getReq := &GetReportRequest{}
 
-		payload, err := EncodePayload(getReq)
+		payload, err := quicwire.EncodePayload(getReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpAttestGetReportByID,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpAttestGetReportByID,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 
 	t.Run("returns not found for missing report", func(t *testing.T) {
@@ -1734,47 +1778,47 @@ func TestHandleGetReport(t *testing.T) {
 
 		getReq := &GetReportRequest{ID: "nonexistent"}
 
-		payload, err := EncodePayload(getReq)
+		payload, err := quicwire.EncodePayload(getReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpAttestGetReportByID,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpAttestGetReportByID,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusNotFound, resp.Status)
+		assert.Equal(t, quicwire.StatusNotFound, resp.Status)
 	})
 
 	t.Run("returns error when service unavailable", func(t *testing.T) {
 		handler := NewAttestationHandler(newAttestTestLogger(), nil)
 
 		getReq := &GetReportRequest{ID: "report-1"}
-		payload, err := EncodePayload(getReq)
+		payload, err := quicwire.EncodePayload(getReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpAttestGetReportByID,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpAttestGetReportByID,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 
 	t.Run("returns error for invalid payload", func(t *testing.T) {
 		handler, _ := createTestAttestationHandler()
 
-		req := &Request{
-			Opcode:  OpAttestGetReportByID,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpAttestGetReportByID,
 			Payload: []byte("invalid payload"),
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidRequest, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidRequest, resp.Status)
 	})
 }
 
@@ -1803,20 +1847,20 @@ func TestHandleCreatePolicy(t *testing.T) {
 			},
 		}
 
-		payload, err := EncodePayload(createReq)
+		payload, err := quicwire.EncodePayload(createReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpAttestCreatePolicy,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpAttestCreatePolicy,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 		var createResp CreatePolicyResponse
-		err = DecodePayload(resp.Payload, &createResp)
+		err = quicwire.DecodePayload(resp.Payload, &createResp)
 		require.NoError(t, err)
 
 		assert.NotNil(t, createResp.Policy)
@@ -1832,17 +1876,17 @@ func TestHandleCreatePolicy(t *testing.T) {
 			Description: "A test policy",
 		}
 
-		payload, err := EncodePayload(createReq)
+		payload, err := quicwire.EncodePayload(createReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpAttestCreatePolicy,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpAttestCreatePolicy,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 		assert.Contains(t, string(resp.Payload), "policy name")
 	})
 
@@ -1850,17 +1894,17 @@ func TestHandleCreatePolicy(t *testing.T) {
 		handler := NewAttestationHandler(newAttestTestLogger(), nil)
 
 		createReq := &CreatePolicyRequest{Name: "test-policy"}
-		payload, err := EncodePayload(createReq)
+		payload, err := quicwire.EncodePayload(createReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpAttestCreatePolicy,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpAttestCreatePolicy,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 
 	t.Run("returns error when creation fails", func(t *testing.T) {
@@ -1868,30 +1912,30 @@ func TestHandleCreatePolicy(t *testing.T) {
 		service.createPolicyErr = errors.New("policy already exists")
 
 		createReq := &CreatePolicyRequest{Name: "test-policy"}
-		payload, err := EncodePayload(createReq)
+		payload, err := quicwire.EncodePayload(createReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpAttestCreatePolicy,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpAttestCreatePolicy,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusAlreadyExists, resp.Status)
+		assert.Equal(t, quicwire.StatusAlreadyExists, resp.Status)
 	})
 
 	t.Run("returns error for invalid payload", func(t *testing.T) {
 		handler, _ := createTestAttestationHandler()
 
-		req := &Request{
-			Opcode:  OpAttestCreatePolicy,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpAttestCreatePolicy,
 			Payload: []byte("invalid payload"),
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidRequest, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidRequest, resp.Status)
 	})
 }
 
@@ -1912,20 +1956,20 @@ func TestHandleListPolicies(t *testing.T) {
 			Active: true,
 		}
 
-		payload, err := EncodePayload(listReq)
+		payload, err := quicwire.EncodePayload(listReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpAttestListPolicies,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpAttestListPolicies,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 		var listResp ListPoliciesResponse
-		err = DecodePayload(resp.Payload, &listResp)
+		err = quicwire.DecodePayload(resp.Payload, &listResp)
 		require.NoError(t, err)
 
 		assert.Equal(t, int32(2), listResp.Count)
@@ -1936,17 +1980,17 @@ func TestHandleListPolicies(t *testing.T) {
 		handler := NewAttestationHandler(newAttestTestLogger(), nil)
 
 		listReq := &ListPoliciesRequest{}
-		payload, err := EncodePayload(listReq)
+		payload, err := quicwire.EncodePayload(listReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpAttestListPolicies,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpAttestListPolicies,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 
 	t.Run("returns error when list fails", func(t *testing.T) {
@@ -1954,17 +1998,17 @@ func TestHandleListPolicies(t *testing.T) {
 		service.listPoliciesErr = errors.New("database error")
 
 		listReq := &ListPoliciesRequest{}
-		payload, err := EncodePayload(listReq)
+		payload, err := quicwire.EncodePayload(listReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpAttestListPolicies,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpAttestListPolicies,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInternalError, resp.Status)
+		assert.Equal(t, quicwire.StatusInternalError, resp.Status)
 	})
 
 	t.Run("uses default limit", func(t *testing.T) {
@@ -1974,17 +2018,17 @@ func TestHandleListPolicies(t *testing.T) {
 			Limit: 0, // zero limit should use default
 		}
 
-		payload, err := EncodePayload(listReq)
+		payload, err := quicwire.EncodePayload(listReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpAttestListPolicies,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpAttestListPolicies,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 	})
 
 	t.Run("caps limit at max", func(t *testing.T) {
@@ -1994,17 +2038,17 @@ func TestHandleListPolicies(t *testing.T) {
 			Limit: 5000, // exceeds max
 		}
 
-		payload, err := EncodePayload(listReq)
+		payload, err := quicwire.EncodePayload(listReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpAttestListPolicies,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpAttestListPolicies,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 	})
 
 	t.Run("filters by name", func(t *testing.T) {
@@ -2016,17 +2060,17 @@ func TestHandleListPolicies(t *testing.T) {
 			Limit: 10,
 		}
 
-		payload, err := EncodePayload(listReq)
+		payload, err := quicwire.EncodePayload(listReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpAttestListPolicies,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpAttestListPolicies,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 	})
 }
 
@@ -2106,18 +2150,18 @@ func TestAttestationErrorResponse(t *testing.T) {
 		err            error
 		expectedStatus byte
 	}{
-		{"builder not initialized", manifest.ErrBuilderNotInitialized{}, StatusUnavailable},
-		{"verifier not initialized", manifest.ErrVerifierNotInitialized{}, StatusUnavailable},
-		{"signer not initialized", manifest.ErrSignerNotInitialized{}, StatusUnavailable},
-		{"host not attested", manifest.ErrHostNotAttested{}, StatusNotFound},
-		{"empty manifest", manifest.ErrEmptyManifest{}, StatusInvalidArgument},
-		{"not found error", errors.New("manifest not found"), StatusNotFound},
-		{"invalid error", errors.New("invalid request"), StatusInvalidArgument},
-		{"expired error", errors.New("manifest expired"), StatusTimeout},
-		{"unavailable error", errors.New("TPM not available"), StatusUnavailable},
-		{"permission denied", errors.New("permission denied"), StatusPermissionDenied},
-		{"already exists", errors.New("policy already exists"), StatusAlreadyExists},
-		{"generic error", errors.New("unknown error"), StatusInternalError},
+		{"builder not initialized", manifest.ErrBuilderNotInitialized{}, quicwire.StatusUnavailable},
+		{"verifier not initialized", manifest.ErrVerifierNotInitialized{}, quicwire.StatusUnavailable},
+		{"signer not initialized", manifest.ErrSignerNotInitialized{}, quicwire.StatusUnavailable},
+		{"host not attested", manifest.ErrHostNotAttested{}, quicwire.StatusNotFound},
+		{"empty manifest", manifest.ErrEmptyManifest{}, quicwire.StatusInvalidArgument},
+		{"not found error", errors.New("manifest not found"), quicwire.StatusNotFound},
+		{"invalid error", errors.New("invalid request"), quicwire.StatusInvalidArgument},
+		{"expired error", errors.New("manifest expired"), quicwire.StatusTimeout},
+		{"unavailable error", errors.New("TPM not available"), quicwire.StatusUnavailable},
+		{"permission denied", errors.New("permission denied"), quicwire.StatusPermissionDenied},
+		{"already exists", errors.New("policy already exists"), quicwire.StatusAlreadyExists},
+		{"generic error", errors.New("unknown error"), quicwire.StatusInternalError},
 	}
 
 	for _, tc := range testCases {
@@ -2422,17 +2466,17 @@ func TestAttestationOpcodeConstants(t *testing.T) {
 		name   string
 		opcode byte
 	}{
-		{"OpAttestGetManifest", OpAttestGetManifest},
-		{"OpAttestBuildManifest", OpAttestBuildManifest},
-		{"OpAttestVerifyManifest", OpAttestVerifyManifest},
-		{"OpAttestHost", OpAttestHost},
-		{"OpAttestVMWorkload", OpAttestVMWorkload},
-		{"OpAttestContainerWorkload", OpAttestContainerWorkload},
-		{"OpAttestDeviceWorkload", OpAttestDeviceWorkload},
-		{"OpAttestListReports", OpAttestListReports},
-		{"OpAttestGetReportByID", OpAttestGetReportByID},
-		{"OpAttestCreatePolicy", OpAttestCreatePolicy},
-		{"OpAttestListPolicies", OpAttestListPolicies},
+		{"OpAttestGetManifest", quicwire.OpAttestGetManifest},
+		{"OpAttestBuildManifest", quicwire.OpAttestBuildManifest},
+		{"OpAttestVerifyManifest", quicwire.OpAttestVerifyManifest},
+		{"OpAttestHost", quicwire.OpAttestHost},
+		{"OpAttestVMWorkload", quicwire.OpAttestVMWorkload},
+		{"OpAttestContainerWorkload", quicwire.OpAttestContainerWorkload},
+		{"OpAttestDeviceWorkload", quicwire.OpAttestDeviceWorkload},
+		{"OpAttestListReports", quicwire.OpAttestListReports},
+		{"OpAttestGetReportByID", quicwire.OpAttestGetReportByID},
+		{"OpAttestCreatePolicy", quicwire.OpAttestCreatePolicy},
+		{"OpAttestListPolicies", quicwire.OpAttestListPolicies},
 	}
 
 	seen := make(map[byte]string)
@@ -2758,17 +2802,17 @@ func TestHandleAttestDeviceAdditionalErrors(t *testing.T) {
 			Nonce:    []byte("test-nonce"),
 		}
 
-		payload, err := EncodePayload(attestReq)
+		payload, err := quicwire.EncodePayload(attestReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpAttestDeviceWorkload,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpAttestDeviceWorkload,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 
 	t.Run("returns error when attestation fails", func(t *testing.T) {
@@ -2780,17 +2824,17 @@ func TestHandleAttestDeviceAdditionalErrors(t *testing.T) {
 			Nonce:    []byte("test-nonce-123456"), // Must be at least 16 bytes
 		}
 
-		payload, err := EncodePayload(attestReq)
+		payload, err := quicwire.EncodePayload(attestReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpAttestDeviceWorkload,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpAttestDeviceWorkload,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInternalError, resp.Status)
+		assert.Equal(t, quicwire.StatusInternalError, resp.Status)
 	})
 }
 
@@ -2809,16 +2853,16 @@ func TestHandleGetReportAdditionalErrors(t *testing.T) {
 			ID: "report-1",
 		}
 
-		payload, err := EncodePayload(getReq)
+		payload, err := quicwire.EncodePayload(getReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpAttestGetReportByID,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpAttestGetReportByID,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInternalError, resp.Status)
+		assert.Equal(t, quicwire.StatusInternalError, resp.Status)
 	})
 }

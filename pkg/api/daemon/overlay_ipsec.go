@@ -15,11 +15,11 @@ package daemon
 
 import (
 	"context"
-	"net/netip"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ipsec"
+	ipsecconfig "github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ipsec/config"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/overlay"
 )
 
@@ -28,38 +28,42 @@ type overlayIPsec interface {
 	Install(ctx context.Context) error
 	Run(ctx context.Context)
 	Close()
-	Status() ipsec.Status
-	ValidateVTEPs(vteps []netip.Addr) error
-	ObserveVTEP(ctx context.Context, vtep netip.Addr)
 }
 
-// overlayStarters build the two halves of the overlay that startOverlay
-// brings up in order.
+// overlayStarters build the overlay's parts that startOverlay brings up in
+// order: the IPsec service, the local VTEP, and the controller on that VTEP.
 type overlayStarters struct {
-	ipsec      func(cfg *ipsec.Config) (overlayIPsec, error)
-	controller func(ctx context.Context, observer overlay.VTEPObserver) (*overlay.Controller, error)
+	ipsec      func(cfg *ipsecconfig.Config) (overlayIPsec, error)
+	vtep       func(cfg *sdn.OverlayConfig) (overlayVTEP, error)
+	controller func(ctx context.Context, vtep overlayVTEP) (*overlay.Controller, error)
 }
 
-// newOverlayStarters are the production starters: ipsec.Service and
-// buildOverlayController.
+// newOverlayStarters are the production starters: ipsec.Service,
+// resolveOverlayVTEP on the host's interfaces, and buildOverlayController.
 func newOverlayStarters(config *Config, logger *logging.Logger) overlayStarters {
 	return overlayStarters{
-		ipsec: func(cfg *ipsec.Config) (overlayIPsec, error) {
+		ipsec: func(cfg *ipsecconfig.Config) (overlayIPsec, error) {
 			return ipsec.NewService(cfg, logger.Slog())
 		},
-		controller: func(ctx context.Context, observer overlay.VTEPObserver) (*overlay.Controller, error) {
-			return buildOverlayController(ctx, config.App, config.OVSSocketPath, logger, observer)
+		vtep: func(cfg *sdn.OverlayConfig) (overlayVTEP, error) {
+			return resolveOverlayVTEP(config.App.PublicIPv4, cfg, interfaceAddrs)
+		},
+		controller: func(ctx context.Context, vtep overlayVTEP) (*overlay.Controller, error) {
+			return buildOverlayController(ctx, config.App, vtep, config.OVSSocketPath, logger)
 		},
 	}
 }
 
 // startOverlay brings up the overlay in order. With overlay.ipsec enabled,
-// the IPsec fail-closed floor goes in first; a floor that cannot be built
-// or installed is returned and nothing after it starts, so platformd never
-// runs a VTEP with the fabric open to cleartext. Then, with the overlay
-// enabled, the overlay controller registers the local VTEP. A controller
-// that fails to start is logged, and the overlay endpoints report it
-// unavailable.
+// the IPsec service is built first. With the overlay enabled, the local VTEP
+// is resolved next (resolveOverlayVTEP): with IPsec it is the IPsec local
+// endpoint on the fabric interface, and a VTEP the floor would not protect
+// is refused. Then the fail-closed floor goes in. A service, VTEP or floor
+// that cannot be had is returned and nothing after it starts, so platformd
+// never runs a VTEP with the fabric open to cleartext, or one whose VXLAN
+// the floor drops. Last, the overlay controller registers the local VTEP. A
+// controller that fails to start is logged, and the overlay endpoints
+// report it unavailable.
 func startOverlay(ctx context.Context, cfg *sdn.OverlayConfig, start overlayStarters, logger *logging.Logger) (overlayIPsec, *overlay.Controller, error) {
 	if cfg == nil {
 		return nil, nil, nil
@@ -70,36 +74,36 @@ func startOverlay(ctx context.Context, cfg *sdn.OverlayConfig, start overlayStar
 		if err != nil {
 			return nil, nil, err
 		}
-		if err := s.Install(ctx); err != nil {
-			s.Close()
+		sec = s
+	}
+	var vtep overlayVTEP
+	if cfg.Enabled {
+		v, err := start.vtep(cfg)
+		if err != nil {
+			if sec != nil {
+				sec.Close()
+			}
+			return nil, nil, err
+		}
+		vtep = v
+	}
+	if sec != nil {
+		if err := sec.Install(ctx); err != nil {
+			sec.Close()
 			return nil, nil, err
 		}
 		logger.Info("overlay IPsec fail-closed floor installed",
 			"fabric_interface", cfg.IPsec.FabricInterface,
 			"local_address", cfg.IPsec.LocalAddress)
-		sec = s
 	}
 	if !cfg.Enabled {
 		return sec, nil, nil
 	}
-	ctrl, err := start.controller(ctx, sec)
+	ctrl, err := start.controller(ctx, vtep)
 	if err != nil {
 		logger.Warn("overlay controller init failed; overlay endpoints will return unavailable",
 			"error", err)
 		return sec, nil, nil
-	}
-	if sec != nil {
-		state := ctrl.GetState()
-		if state != nil {
-			vteps := make([]netip.Addr, 0, len(state.VTEPs))
-			for _, vtep := range state.VTEPs {
-				vteps = append(vteps, vtep.IP)
-			}
-			if err := sec.ValidateVTEPs(vteps); err != nil {
-				sec.Close()
-				return nil, nil, err
-			}
-		}
 	}
 	return sec, ctrl, nil
 }
@@ -134,6 +138,5 @@ func (r *overlayIPsecRun) stop() {
 	}
 	r.cancel()
 	<-r.done
-	r.svc.Close()
 	r.cancel, r.done = nil, nil
 }

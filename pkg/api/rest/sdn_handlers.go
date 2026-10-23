@@ -22,12 +22,15 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gorilla/mux"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ovs"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/zone"
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
+	"google.golang.org/grpc/status"
 )
 
 // =============================================================================
@@ -78,16 +81,33 @@ func (e ErrInvalidFlowID) Error() string {
 	return fmt.Sprintf("invalid flow ID: %s", e.ID)
 }
 
-// ErrInvalidSDNPolicyID is returned when a policy ID is invalid or empty.
-type ErrInvalidSDNPolicyID struct {
-	ID string
+// ErrInvalidVLANID is returned when a VLAN ID in a path is not a number.
+type ErrInvalidVLANID struct {
+	Value string
 }
 
-func (e ErrInvalidSDNPolicyID) Error() string {
-	if e.ID == "" {
-		return "policy ID is required"
-	}
-	return fmt.Sprintf("invalid policy ID: %s", e.ID)
+func (e ErrInvalidVLANID) Error() string {
+	return fmt.Sprintf("invalid VLAN ID: %q", e.Value)
+}
+
+// ErrInvalidPortState is returned when a port's admin_state is not "up" or "down".
+type ErrInvalidPortState struct {
+	Value string
+}
+
+func (e ErrInvalidPortState) Error() string {
+	return fmt.Sprintf("invalid admin_state %q: must be 'up' or 'down'", e.Value)
+}
+
+// ErrInvalidPolicyField is returned when a policy request names a type,
+// rule action or target type the SDN service does not define.
+type ErrInvalidPolicyField struct {
+	Field string
+	Value string
+}
+
+func (e ErrInvalidPolicyField) Error() string {
+	return fmt.Sprintf("invalid policy %s %q", e.Field, e.Value)
 }
 
 // ErrSDNOperationFailed is returned when an SDN operation fails.
@@ -131,15 +151,6 @@ func (e ErrFlowNotFound) Error() string {
 	return fmt.Sprintf("flow not found: %s", e.ID)
 }
 
-// ErrSDNPolicyNotFound is returned when a policy is not found.
-type ErrSDNPolicyNotFound struct {
-	ID string
-}
-
-func (e ErrSDNPolicyNotFound) Error() string {
-	return fmt.Sprintf("policy not found: %s", e.ID)
-}
-
 // ErrBridgeAlreadyExists is returned when attempting to create a bridge that
 // already exists.
 type ErrBridgeAlreadyExists struct {
@@ -148,16 +159,6 @@ type ErrBridgeAlreadyExists struct {
 
 func (e ErrBridgeAlreadyExists) Error() string {
 	return fmt.Sprintf("bridge already exists: %s", e.Name)
-}
-
-// ErrPolicyAlreadyExists is returned when attempting to create a policy that
-// already exists.
-type ErrPolicyAlreadyExists struct {
-	Name string
-}
-
-func (e ErrPolicyAlreadyExists) Error() string {
-	return fmt.Sprintf("policy already exists: %s", e.Name)
 }
 
 // ErrZoneNotFound is returned when a zone is not found.
@@ -281,36 +282,73 @@ type FlowListResponse struct {
 	Timestamp time.Time      `json:"timestamp"`
 }
 
-// CreatePolicyRequest represents a network policy creation request.
+// CreatePolicyRequest is the REST form of the gRPC ApplyPolicyRequest. With an
+// ID it re-applies (replaces) that policy; without one the service assigns it.
 type CreatePolicyRequest struct {
-	Name        string            `json:"name"`
-	Description string            `json:"description,omitempty"`
-	Priority    int               `json:"priority,omitempty"`
-	Rules       []PolicyRule      `json:"rules"`
-	Labels      map[string]string `json:"labels,omitempty"`
+	ID          string          `json:"id,omitempty"`
+	Name        string          `json:"name"`
+	Description string          `json:"description,omitempty"`
+	Type        string          `json:"type,omitempty"` // acl, qos, nat, firewall, routing
+	Priority    int32           `json:"priority,omitempty"`
+	Enabled     bool            `json:"enabled"`
+	Rules       []PolicyRule    `json:"rules,omitempty"`
+	Targets     []PolicyTarget  `json:"targets,omitempty"`
+	Schedule    *PolicySchedule `json:"schedule,omitempty"`
 }
 
-// PolicyRule represents a rule within a network policy.
+// PolicyRule is the gRPC PolicyRule with its match fields inlined.
 type PolicyRule struct {
-	Direction string `json:"direction"` // ingress, egress
-	Protocol  string `json:"protocol,omitempty"`
-	PortRange string `json:"port_range,omitempty"`
-	Source    string `json:"source,omitempty"`
-	Dest      string `json:"dest,omitempty"`
-	Action    string `json:"action"` // allow, deny
+	RuleID          string `json:"rule_id,omitempty"`
+	Priority        int32  `json:"priority,omitempty"`
+	SourceIP        string `json:"source_ip,omitempty"`
+	DestinationIP   string `json:"destination_ip,omitempty"`
+	SourcePort      uint32 `json:"source_port,omitempty"`
+	DestinationPort uint32 `json:"destination_port,omitempty"`
+	Protocol        string `json:"protocol,omitempty"`
+	Direction       string `json:"direction,omitempty"` // ingress, egress, both
+	Interface       string `json:"interface,omitempty"`
+	VLANID          uint32 `json:"vlan_id,omitempty"`
+	DSCP            uint32 `json:"dscp,omitempty"`
+	Application     string `json:"application,omitempty"`
+	Action          string `json:"action,omitempty"` // allow, deny, rate-limit, redirect, mirror, log
+	ActionValue     string `json:"action_value,omitempty"`
+	Log             bool   `json:"log,omitempty"`
+	Counter         bool   `json:"counter,omitempty"`
 }
 
-// PolicyResponse represents a network policy in API responses.
+// PolicyTarget names what a policy applies to.
+type PolicyTarget struct {
+	Type      string `json:"type"` // bridge, port, vlan, interface
+	ID        string `json:"id"`
+	Direction string `json:"direction,omitempty"`
+	Zone      string `json:"zone,omitempty"`
+}
+
+// PolicySchedule limits when a policy is in force.
+type PolicySchedule struct {
+	StartTime string   `json:"start_time,omitempty"`
+	EndTime   string   `json:"end_time,omitempty"`
+	Days      []string `json:"days,omitempty"`
+	Timezone  string   `json:"timezone,omitempty"`
+	Enabled   bool     `json:"enabled"`
+}
+
+// PolicyResponse is a network policy as the SDN service holds it.
 type PolicyResponse struct {
-	ID          string            `json:"id"`
-	Name        string            `json:"name"`
-	Description string            `json:"description,omitempty"`
-	Priority    int               `json:"priority"`
-	Rules       []PolicyRule      `json:"rules"`
-	Labels      map[string]string `json:"labels,omitempty"`
-	Status      string            `json:"status"`
-	CreatedAt   time.Time         `json:"created_at"`
-	UpdatedAt   time.Time         `json:"updated_at"`
+	ID          string          `json:"id"`
+	Name        string          `json:"name"`
+	Description string          `json:"description,omitempty"`
+	Type        string          `json:"type,omitempty"`
+	Priority    int32           `json:"priority"`
+	Enabled     bool            `json:"enabled"`
+	Status      string          `json:"status"`
+	Rules       []PolicyRule    `json:"rules"`
+	Targets     []PolicyTarget  `json:"targets"`
+	Schedule    *PolicySchedule `json:"schedule,omitempty"`
+	HitCount    uint64          `json:"hit_count"`
+	ByteCount   uint64          `json:"byte_count"`
+	CreatedAt   time.Time       `json:"created_at"`
+	UpdatedAt   time.Time       `json:"updated_at"`
 }
 
 // SDNPolicyListResponse represents a list of policies.
@@ -353,6 +391,80 @@ type SDNActionResponse struct {
 	Action       string `json:"action"`
 	Success      bool   `json:"success"`
 	Message      string `json:"message,omitempty"`
+}
+
+// CreateVLANRequest is the request body for POST /api/v1/sdn/vlans.
+type CreateVLANRequest struct {
+	VLANID   uint32            `json:"vlan_id"`
+	Name     string            `json:"name,omitempty"`
+	BridgeID string            `json:"bridge_id"`
+	Ports    []string          `json:"ports,omitempty"`
+	Labels   map[string]string `json:"labels,omitempty"`
+}
+
+// VLANResponse represents a VLAN in API responses.
+type VLANResponse struct {
+	ID        string            `json:"id"`
+	VLANID    uint32            `json:"vlan_id"`
+	Name      string            `json:"name,omitempty"`
+	BridgeID  string            `json:"bridge_id"`
+	Ports     []string          `json:"ports,omitempty"`
+	Labels    map[string]string `json:"labels,omitempty"`
+	PortCount uint32            `json:"port_count"`
+	CreatedAt time.Time         `json:"created_at"`
+}
+
+// VLANListResponse represents a list of VLANs on one bridge.
+type VLANListResponse struct {
+	VLANs     []VLANResponse `json:"vlans"`
+	Count     int            `json:"count"`
+	Timestamp time.Time      `json:"timestamp"`
+}
+
+// SetPortStateRequest represents a request to set a port's admin state and,
+// when IngressRate is non-zero, its ingress policing (rate in bps, burst in
+// bits; see ovs.ValidateIngressPolicing) and, when EgressRate is non-zero, its
+// egress shaping (see ovs.ValidateEgressShaping).
+type SetPortStateRequest struct {
+	AdminState   string `json:"admin_state"`
+	IngressRate  uint64 `json:"ingress_rate,omitempty"`
+	IngressBurst uint64 `json:"ingress_burst,omitempty"`
+	EgressRate   uint64 `json:"egress_rate,omitempty"`
+	EgressBurst  uint64 `json:"egress_burst,omitempty"`
+}
+
+// PortStateResponse represents a port's state as Open vSwitch reports it.
+type PortStateResponse struct {
+	BridgeID   string    `json:"bridge_id"`
+	PortID     string    `json:"port_id"`
+	PortNumber int32     `json:"port_number"`
+	AdminState string    `json:"admin_state"`
+	OperState  string    `json:"oper_state"`
+	LinkState  string    `json:"link_state"`
+	Speed      int64     `json:"speed"`
+	Duplex     string    `json:"duplex"`
+	UpdatedAt  time.Time `json:"updated_at"`
+}
+
+// PortStatsResponse represents a port's interface counters as Open vSwitch
+// reports them.
+type PortStatsResponse struct {
+	BridgeID    string    `json:"bridge_id"`
+	PortID      string    `json:"port_id"`
+	PortNumber  int32     `json:"port_number"`
+	RxPackets   int64     `json:"rx_packets"`
+	TxPackets   int64     `json:"tx_packets"`
+	RxBytes     int64     `json:"rx_bytes"`
+	TxBytes     int64     `json:"tx_bytes"`
+	RxDropped   int64     `json:"rx_dropped"`
+	TxDropped   int64     `json:"tx_dropped"`
+	RxErrors    int64     `json:"rx_errors"`
+	TxErrors    int64     `json:"tx_errors"`
+	RxFrameErr  int64     `json:"rx_frame_err"`
+	RxOverErr   int64     `json:"rx_over_err"`
+	RxCRCErr    int64     `json:"rx_crc_err"`
+	Collisions  int64     `json:"collisions"`
+	RetrievedAt time.Time `json:"retrieved_at"`
 }
 
 // SDNErrorResponse represents an SDN error response.
@@ -401,6 +513,10 @@ type SDNServiceInterface interface {
 	ListPorts(ctx context.Context, bridgeName string) ([]*ovs.Port, error)
 	SetPortVLAN(ctx context.Context, portName string, tag int64) error
 	SetPortTrunks(ctx context.Context, portName string, trunks []int64) error
+	SetPortState(ctx context.Context, portName string, state ovs.PortState) error
+	SetIngressPolicing(ctx context.Context, name string, rateBps, burstBits uint64) error
+	SetEgressShaping(ctx context.Context, name string, rateBps, burstBits uint64) error
+	GetInterface(ctx context.Context, name string) (*ovs.Interface, error)
 
 	// Flow operations
 	AddFlow(ctx context.Context, bridgeName string, flow *ovs.FlowMod) error
@@ -410,12 +526,18 @@ type SDNServiceInterface interface {
 	DeleteAllFlows(ctx context.Context, bridgeName string) error
 }
 
-// PolicyServiceInterface defines the interface for network policy operations.
-type PolicyServiceInterface interface {
-	CreatePolicy(ctx context.Context, policy *PolicyResponse) (*PolicyResponse, error)
-	DeletePolicy(ctx context.Context, id string) error
-	GetPolicy(ctx context.Context, id string) (*PolicyResponse, error)
-	ListPolicies(ctx context.Context) ([]*PolicyResponse, error)
+// SDNControlServiceInterface is the daemon's shared SDN service, the one the
+// gRPC, QUIC, MCP and Unix transports serve. REST routes whose state that
+// service owns (VLANs and policies) call it, so every transport sees the same state and
+// applies the same validation.
+type SDNControlServiceInterface interface {
+	CreateVLAN(ctx context.Context, req *platformv1.CreateVLANRequest) (*platformv1.CreateVLANResponse, error)
+	ListVLANs(ctx context.Context, req *platformv1.ListVLANsRequest) (*platformv1.ListVLANsResponse, error)
+	DeleteVLAN(ctx context.Context, req *platformv1.DeleteVLANRequest) (*platformv1.DeleteVLANResponse, error)
+	ApplyPolicy(ctx context.Context, req *platformv1.ApplyPolicyRequest) (*platformv1.ApplyPolicyResponse, error)
+	GetPolicy(ctx context.Context, req *platformv1.GetPolicyRequest) (*platformv1.GetPolicyResponse, error)
+	ListPolicies(ctx context.Context, req *platformv1.ListPoliciesRequest) (*platformv1.ListPoliciesResponse, error)
+	DeletePolicy(ctx context.Context, req *platformv1.DeletePolicyRequest) (*platformv1.DeletePolicyResponse, error)
 }
 
 // =============================================================================
@@ -424,11 +546,10 @@ type PolicyServiceInterface interface {
 
 // SDNHandlers provides REST API handlers for SDN operations.
 type SDNHandlers struct {
-	sdnService    SDNServiceInterface
-	policyService PolicyServiceInterface
-	zoneService   gateway.ZoneService
-	policies      map[string]*PolicyResponse
-	logger        *slog.Logger
+	sdnService     SDNServiceInterface
+	controlService SDNControlServiceInterface
+	zoneService    gateway.ZoneService
+	logger         *slog.Logger
 }
 
 // NewSDNHandlers creates a new SDNHandlers instance.
@@ -438,19 +559,19 @@ func NewSDNHandlers(sdnService SDNServiceInterface, logger *slog.Logger) *SDNHan
 	}
 	return &SDNHandlers{
 		sdnService: sdnService,
-		policies:   make(map[string]*PolicyResponse),
 		logger:     logger,
 	}
-}
-
-// SetPolicyService sets the policy service for the handlers.
-func (h *SDNHandlers) SetPolicyService(policyService PolicyServiceInterface) {
-	h.policyService = policyService
 }
 
 // SetZoneService sets the zone service for the handlers.
 func (h *SDNHandlers) SetZoneService(svc gateway.ZoneService) {
 	h.zoneService = svc
+}
+
+// SetControlService wires the daemon's shared SDN service into the routes
+// whose state it owns. Until it is set, those routes answer 503.
+func (h *SDNHandlers) SetControlService(svc SDNControlServiceInterface) {
+	h.controlService = svc
 }
 
 // RegisterRoutes registers all SDN routes on the provided router.
@@ -933,7 +1054,7 @@ func (h *SDNHandlers) handleDeleteFlow(w http.ResponseWriter, r *http.Request) {
 
 // handleCreatePolicy handles POST /api/v1/sdn/policies
 func (h *SDNHandlers) handleCreatePolicy(w http.ResponseWriter, r *http.Request) {
-	if h.sdnService == nil {
+	if h.controlService == nil {
 		h.writeError(w, http.StatusServiceUnavailable, ErrSDNServiceNotAvailable{})
 		return
 	}
@@ -944,116 +1065,93 @@ func (h *SDNHandlers) handleCreatePolicy(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	if req.Name == "" {
-		h.writeError(w, http.StatusBadRequest, ErrMissingRequiredField{Field: "name"})
+	applyReq, err := PolicyRequestToProto(req)
+	if err != nil {
+		h.writeError(w, http.StatusBadRequest, err)
 		return
 	}
 
-	// Check if policy already exists by name
-	for _, existingPolicy := range h.policies {
-		if existingPolicy.Name == req.Name {
-			h.writeError(w, http.StatusConflict, ErrPolicyAlreadyExists{Name: req.Name})
-			return
-		}
+	resp, err := h.controlService.ApplyPolicy(r.Context(), applyReq)
+	if err != nil {
+		h.writeControlError(w, "apply_policy", err)
+		return
 	}
 
-	// Generate policy ID
-	policyID := fmt.Sprintf("policy-%d", time.Now().UnixNano())
-	now := time.Now().UTC()
-
-	policy := &PolicyResponse{
-		ID:          policyID,
-		Name:        req.Name,
-		Description: req.Description,
-		Priority:    req.Priority,
-		Rules:       req.Rules,
-		Labels:      req.Labels,
-		Status:      "active",
-		CreatedAt:   now,
-		UpdatedAt:   now,
-	}
-
-	h.policies[policyID] = policy
-
-	h.logger.Info("Policy created", "id", policyID, "name", req.Name)
-	h.writeJSON(w, http.StatusCreated, policy)
+	h.logger.Info("Policy applied", "id", resp.GetPolicy().GetId(), "name", req.Name)
+	h.writeJSON(w, http.StatusCreated, PolicyToResponse(resp.GetPolicy()))
 }
 
 // handleListPolicies handles GET /api/v1/sdn/policies
 func (h *SDNHandlers) handleListPolicies(w http.ResponseWriter, r *http.Request) {
-	if h.sdnService == nil {
+	if h.controlService == nil {
 		h.writeError(w, http.StatusServiceUnavailable, ErrSDNServiceNotAvailable{})
 		return
 	}
 
-	policies := make([]PolicyResponse, 0, len(h.policies))
-	for _, policy := range h.policies {
-		policies = append(policies, *policy)
+	query := r.URL.Query()
+	resp, err := h.controlService.ListPolicies(r.Context(), &platformv1.ListPoliciesRequest{
+		Type:     query.Get("type"),
+		TargetId: query.Get("target_id"),
+	})
+	if err != nil {
+		h.writeControlError(w, "list_policies", err)
+		return
 	}
 
-	resp := SDNPolicyListResponse{
+	policies := make([]PolicyResponse, 0, len(resp.GetPolicies()))
+	for _, policy := range resp.GetPolicies() {
+		policies = append(policies, PolicyToResponse(policy))
+	}
+
+	h.writeJSON(w, http.StatusOK, SDNPolicyListResponse{
 		Policies:  policies,
 		Count:     len(policies),
 		Timestamp: time.Now().UTC(),
-	}
-
-	h.writeJSON(w, http.StatusOK, resp)
+	})
 }
 
 // handleGetPolicy handles GET /api/v1/sdn/policies/{id}
 func (h *SDNHandlers) handleGetPolicy(w http.ResponseWriter, r *http.Request) {
-	if h.sdnService == nil {
+	if h.controlService == nil {
 		h.writeError(w, http.StatusServiceUnavailable, ErrSDNServiceNotAvailable{})
 		return
 	}
 
-	vars := mux.Vars(r)
-	policyID := vars["id"]
-	if policyID == "" {
-		h.writeError(w, http.StatusBadRequest, ErrInvalidSDNPolicyID{})
+	resp, err := h.controlService.GetPolicy(r.Context(), &platformv1.GetPolicyRequest{
+		PolicyId: mux.Vars(r)["id"],
+	})
+	if err != nil {
+		h.writeControlError(w, "get_policy", err)
 		return
 	}
 
-	policy, exists := h.policies[policyID]
-	if !exists {
-		h.writeError(w, http.StatusNotFound, ErrSDNPolicyNotFound{ID: policyID})
-		return
-	}
-
-	h.writeJSON(w, http.StatusOK, policy)
+	h.writeJSON(w, http.StatusOK, PolicyToResponse(resp.GetPolicy()))
 }
 
 // handleDeletePolicy handles DELETE /api/v1/sdn/policies/{id}
 func (h *SDNHandlers) handleDeletePolicy(w http.ResponseWriter, r *http.Request) {
-	if h.sdnService == nil {
+	if h.controlService == nil {
 		h.writeError(w, http.StatusServiceUnavailable, ErrSDNServiceNotAvailable{})
 		return
 	}
 
-	vars := mux.Vars(r)
-	policyID := vars["id"]
-	if policyID == "" {
-		h.writeError(w, http.StatusBadRequest, ErrInvalidSDNPolicyID{})
+	policyID := mux.Vars(r)["id"]
+	resp, err := h.controlService.DeletePolicy(r.Context(), &platformv1.DeletePolicyRequest{
+		PolicyId: policyID,
+	})
+	if err != nil {
+		h.writeControlError(w, "delete_policy", err)
 		return
-	}
-
-	if _, exists := h.policies[policyID]; !exists {
-		h.writeError(w, http.StatusNotFound, ErrSDNPolicyNotFound{ID: policyID})
-		return
-	}
-
-	delete(h.policies, policyID)
-
-	resp := SDNActionResponse{
-		ResourceID:   policyID,
-		ResourceType: "policy",
-		Action:       "delete",
-		Success:      true,
-		Message:      "policy deleted successfully",
 	}
 
 	h.logger.Info("Policy deleted", "id", policyID)
-	h.writeJSON(w, http.StatusOK, resp)
+	h.writeJSON(w, http.StatusOK, SDNActionResponse{
+		ResourceID:   policyID,
+		ResourceType: "policy",
+		Action:       "delete",
+		Success:      resp.GetStatus().GetSuccess(),
+		Message:      resp.GetStatus().GetMessage(),
+	})
 }
 
 // =============================================================================
@@ -1198,8 +1296,16 @@ func (h *SDNHandlers) writeError(w http.ResponseWriter, status int, err error) {
 // writeSDNError maps SDN errors to appropriate HTTP status codes.
 func (h *SDNHandlers) writeSDNError(w http.ResponseWriter, operation string, err error) {
 	var status int
+	var invalidPolicing *ovs.ErrInvalidPolicing
+	var invalidShaping *ovs.ErrInvalidShaping
 
 	switch {
+	case errors.As(err, &invalidPolicing):
+		status = http.StatusBadRequest
+	case errors.As(err, &invalidShaping):
+		status = http.StatusBadRequest
+	case errors.Is(err, ovs.ErrInterfaceNotFound):
+		status = http.StatusNotFound
 	case errors.Is(err, ovs.ErrBridgeNotFound):
 		status = http.StatusNotFound
 	case errors.Is(err, ovs.ErrBridgeExists):
@@ -1234,6 +1340,224 @@ func (h *SDNHandlers) writeSDNError(w http.ResponseWriter, operation string, err
 	})
 }
 
+// writeControlError translates a gRPC status error from the shared SDN
+// service into an HTTP error response, with the same code mapping as the
+// other REST adapters over a gRPC service.
+func (h *SDNHandlers) writeControlError(w http.ResponseWriter, operation string, err error) {
+	httpStatus := http.StatusInternalServerError
+	if mapped, ok := grpcCodeToHTTPStatus[status.Code(err)]; ok {
+		httpStatus = mapped
+	}
+	h.logger.Error("SDN operation failed", "operation", operation, "error", err)
+	h.writeError(w, httpStatus, ErrSDNOperationFailed{
+		Operation: operation,
+		Cause:     err,
+	})
+}
+
+// vlanToResponse converts a VLAN from the shared SDN service to its REST form.
+func vlanToResponse(vlan *platformv1.VLAN) VLANResponse {
+	config := vlan.GetConfig()
+	resp := VLANResponse{
+		ID:        vlan.GetId(),
+		VLANID:    config.GetVlanId(),
+		Name:      config.GetName(),
+		BridgeID:  config.GetBridgeId(),
+		Ports:     config.GetPorts(),
+		Labels:    config.GetLabels(),
+		PortCount: vlan.GetStats().GetPortCount(),
+	}
+	if vlan.GetCreatedAt() != nil {
+		resp.CreatedAt = vlan.GetCreatedAt().AsTime().UTC()
+	}
+	return resp
+}
+
+// Proto enum value-name prefixes; REST spells the rest of the name in lower
+// case with dashes, e.g. POLICY_RULE_ACTION_RATE_LIMIT is "rate-limit".
+const (
+	policyTypePrefix       = "POLICY_TYPE_"
+	policyStatusPrefix     = "POLICY_STATUS_"
+	policyRuleActionPrefix = "POLICY_RULE_ACTION_"
+	policyTargetTypePrefix = "POLICY_TARGET_TYPE_"
+)
+
+// protoEnumValue resolves a REST enum name to its proto value. An empty name
+// is the unspecified value, as an omitted gRPC field is.
+func protoEnumValue(values map[string]int32, prefix, field, name string) (int32, error) {
+	if name == "" {
+		return 0, nil
+	}
+	value, ok := values[prefix+strings.ToUpper(strings.ReplaceAll(name, "-", "_"))]
+	if !ok {
+		return 0, ErrInvalidPolicyField{Field: field, Value: name}
+	}
+	return value, nil
+}
+
+// protoEnumName is the inverse of protoEnumValue; the unspecified value is "".
+func protoEnumName(name, prefix string) string {
+	name = strings.TrimPrefix(name, prefix)
+	if name == "UNSPECIFIED" {
+		return ""
+	}
+	return strings.ToLower(strings.ReplaceAll(name, "_", "-"))
+}
+
+// PolicyRequestToProto converts a REST policy body into the gRPC
+// ApplyPolicyRequest, rejecting enum names the proto does not define.
+func PolicyRequestToProto(req CreatePolicyRequest) (*platformv1.ApplyPolicyRequest, error) {
+	policyType, err := protoEnumValue(platformv1.PolicyType_value, policyTypePrefix, "type", req.Type)
+	if err != nil {
+		return nil, err
+	}
+
+	rules := make([]*platformv1.PolicyRule, 0, len(req.Rules))
+	for _, rule := range req.Rules {
+		protoRule, err := policyRuleToProto(rule)
+		if err != nil {
+			return nil, err
+		}
+		rules = append(rules, protoRule)
+	}
+
+	targets := make([]*platformv1.PolicyTarget, 0, len(req.Targets))
+	for _, target := range req.Targets {
+		targetType, err := protoEnumValue(platformv1.PolicyTargetType_value, policyTargetTypePrefix, "target type", target.Type)
+		if err != nil {
+			return nil, err
+		}
+		targets = append(targets, &platformv1.PolicyTarget{
+			Type:      platformv1.PolicyTargetType(targetType),
+			Id:        target.ID,
+			Direction: target.Direction,
+			Zone:      target.Zone,
+		})
+	}
+
+	return &platformv1.ApplyPolicyRequest{
+		PolicyId: req.ID,
+		Config: &platformv1.PolicyConfig{
+			Name:        req.Name,
+			Description: req.Description,
+			Type:        platformv1.PolicyType(policyType),
+			Priority:    req.Priority,
+			Enabled:     req.Enabled,
+			Rules:       rules,
+			Targets:     targets,
+			Schedule:    policyScheduleToProto(req.Schedule),
+		},
+	}, nil
+}
+
+func policyRuleToProto(rule PolicyRule) (*platformv1.PolicyRule, error) {
+	action, err := protoEnumValue(platformv1.PolicyRuleAction_value, policyRuleActionPrefix, "rule action", rule.Action)
+	if err != nil {
+		return nil, err
+	}
+	return &platformv1.PolicyRule{
+		RuleId:   rule.RuleID,
+		Priority: rule.Priority,
+		Match: &platformv1.PolicyRuleMatch{
+			SourceIp:        rule.SourceIP,
+			DestinationIp:   rule.DestinationIP,
+			SourcePort:      rule.SourcePort,
+			DestinationPort: rule.DestinationPort,
+			Protocol:        rule.Protocol,
+			Direction:       rule.Direction,
+			Interface:       rule.Interface,
+			VlanId:          rule.VLANID,
+			Dscp:            rule.DSCP,
+			Application:     rule.Application,
+		},
+		Action:      platformv1.PolicyRuleAction(action),
+		ActionValue: rule.ActionValue,
+		Log:         rule.Log,
+		Counter:     rule.Counter,
+	}, nil
+}
+
+func policyScheduleToProto(schedule *PolicySchedule) *platformv1.PolicySchedule {
+	if schedule == nil {
+		return nil
+	}
+	return &platformv1.PolicySchedule{
+		StartTime: schedule.StartTime,
+		EndTime:   schedule.EndTime,
+		Days:      schedule.Days,
+		Timezone:  schedule.Timezone,
+		Enabled:   schedule.Enabled,
+	}
+}
+
+// PolicyToResponse converts a policy held by the SDN service into its REST form.
+func PolicyToResponse(policy *platformv1.Policy) PolicyResponse {
+	config := policy.GetConfig()
+
+	rules := make([]PolicyRule, 0, len(config.GetRules()))
+	for _, rule := range config.GetRules() {
+		match := rule.GetMatch()
+		rules = append(rules, PolicyRule{
+			RuleID:          rule.GetRuleId(),
+			Priority:        rule.GetPriority(),
+			SourceIP:        match.GetSourceIp(),
+			DestinationIP:   match.GetDestinationIp(),
+			SourcePort:      match.GetSourcePort(),
+			DestinationPort: match.GetDestinationPort(),
+			Protocol:        match.GetProtocol(),
+			Direction:       match.GetDirection(),
+			Interface:       match.GetInterface(),
+			VLANID:          match.GetVlanId(),
+			DSCP:            match.GetDscp(),
+			Application:     match.GetApplication(),
+			Action:          protoEnumName(rule.GetAction().String(), policyRuleActionPrefix),
+			ActionValue:     rule.GetActionValue(),
+			Log:             rule.GetLog(),
+			Counter:         rule.GetCounter(),
+		})
+	}
+
+	targets := make([]PolicyTarget, 0, len(config.GetTargets()))
+	for _, target := range config.GetTargets() {
+		targets = append(targets, PolicyTarget{
+			Type:      protoEnumName(target.GetType().String(), policyTargetTypePrefix),
+			ID:        target.GetId(),
+			Direction: target.GetDirection(),
+			Zone:      target.GetZone(),
+		})
+	}
+
+	resp := PolicyResponse{
+		ID:          policy.GetId(),
+		Name:        config.GetName(),
+		Description: config.GetDescription(),
+		Type:        protoEnumName(config.GetType().String(), policyTypePrefix),
+		Priority:    config.GetPriority(),
+		Enabled:     config.GetEnabled(),
+		Status:      protoEnumName(policy.GetStatus().String(), policyStatusPrefix),
+		Rules:       rules,
+		Targets:     targets,
+		HitCount:    policy.GetHitCount(),
+		ByteCount:   policy.GetByteCount(),
+	}
+	if schedule := config.GetSchedule(); schedule != nil {
+		resp.Schedule = &PolicySchedule{
+			StartTime: schedule.GetStartTime(),
+			EndTime:   schedule.GetEndTime(),
+			Days:      schedule.GetDays(),
+			Timezone:  schedule.GetTimezone(),
+			Enabled:   schedule.GetEnabled(),
+		}
+	}
+	if policy.GetCreatedAt() != nil {
+		resp.CreatedAt = policy.GetCreatedAt().AsTime().UTC()
+	}
+	if policy.GetUpdatedAt() != nil {
+		resp.UpdatedAt = policy.GetUpdatedAt().AsTime().UTC()
+	}
+	return resp
+}
+
 // =============================================================================
 // Port State and Stats Handlers
 // =============================================================================
@@ -1256,22 +1580,14 @@ func (h *SDNHandlers) handleGetPortState(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	port, err := h.sdnService.GetPort(ctx, portID)
+	iface, err := h.sdnService.GetInterface(ctx, portID)
 	if err != nil {
 		h.logger.Error("Failed to get port state", "error", err, "bridge", bridgeID, "port", portID)
 		h.writeSDNError(w, "get_port_state", err)
 		return
 	}
 
-	resp := map[string]interface{}{
-		"bridge_id":   bridgeID,
-		"port_id":     port.UUID,
-		"admin_state": "up",
-		"oper_state":  "up",
-		"updated_at":  time.Now().UTC().Format(time.RFC3339),
-	}
-
-	h.writeJSON(w, http.StatusOK, resp)
+	h.writeJSON(w, http.StatusOK, interfaceToPortState(bridgeID, portID, iface))
 }
 
 // handleSetPortState handles PUT /api/v1/sdn/bridges/{id}/ports/{port}/state
@@ -1290,23 +1606,57 @@ func (h *SDNHandlers) handleSetPortState(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	var req struct {
-		AdminState string `json:"admin_state"`
-	}
+	var req SetPortStateRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		h.writeError(w, http.StatusBadRequest, ErrInvalidRequestBody{Reason: err.Error()})
 		return
 	}
 
-	resp := map[string]interface{}{
-		"bridge_id":   bridgeID,
-		"port_id":     portID,
-		"admin_state": req.AdminState,
-		"oper_state":  "up",
-		"updated_at":  time.Now().UTC().Format(time.RFC3339),
+	state, ok := portStates[strings.ToLower(req.AdminState)]
+	if !ok {
+		h.writeError(w, http.StatusBadRequest, ErrInvalidPortState{Value: req.AdminState})
+		return
+	}
+	if err := ovs.ValidateIngressPolicing(req.IngressRate, req.IngressBurst); err != nil {
+		h.writeSDNError(w, "set_port_state", err)
+		return
+	}
+	if err := ovs.ValidateEgressShaping(req.EgressRate, req.EgressBurst); err != nil {
+		h.writeSDNError(w, "set_port_state", err)
+		return
 	}
 
-	h.writeJSON(w, http.StatusOK, resp)
+	ctx := r.Context()
+	if err := h.sdnService.SetPortState(ctx, portID, state); err != nil {
+		h.logger.Error("Failed to set port state", "error", err, "bridge", bridgeID, "port", portID)
+		h.writeSDNError(w, "set_port_state", err)
+		return
+	}
+	// A zero ingress rate leaves the port's policing as it is.
+	if req.IngressRate > 0 {
+		if err := h.sdnService.SetIngressPolicing(ctx, portID, req.IngressRate, req.IngressBurst); err != nil {
+			h.logger.Error("Failed to set ingress policing", "error", err, "bridge", bridgeID, "port", portID)
+			h.writeSDNError(w, "set_ingress_policing", err)
+			return
+		}
+	}
+	// A zero egress rate leaves the port's shaping as it is.
+	if req.EgressRate > 0 {
+		if err := h.sdnService.SetEgressShaping(ctx, portID, req.EgressRate, req.EgressBurst); err != nil {
+			h.logger.Error("Failed to set egress shaping", "error", err, "bridge", bridgeID, "port", portID)
+			h.writeSDNError(w, "set_egress_shaping", err)
+			return
+		}
+	}
+
+	iface, err := h.sdnService.GetInterface(ctx, portID)
+	if err != nil {
+		h.logger.Error("Failed to get port state", "error", err, "bridge", bridgeID, "port", portID)
+		h.writeSDNError(w, "get_port_state", err)
+		return
+	}
+
+	h.writeJSON(w, http.StatusOK, interfaceToPortState(bridgeID, portID, iface))
 }
 
 // handleGetPortStats handles GET /api/v1/sdn/bridges/{id}/ports/{port}/stats
@@ -1325,21 +1675,54 @@ func (h *SDNHandlers) handleGetPortStats(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	resp := map[string]interface{}{
-		"bridge_id":    bridgeID,
-		"port_id":      portID,
-		"rx_packets":   uint64(0),
-		"tx_packets":   uint64(0),
-		"rx_bytes":     uint64(0),
-		"tx_bytes":     uint64(0),
-		"rx_dropped":   uint64(0),
-		"tx_dropped":   uint64(0),
-		"rx_errors":    uint64(0),
-		"tx_errors":    uint64(0),
-		"retrieved_at": time.Now().UTC().Format(time.RFC3339),
+	iface, err := h.sdnService.GetInterface(r.Context(), portID)
+	if err != nil {
+		h.logger.Error("Failed to get port stats", "error", err, "bridge", bridgeID, "port", portID)
+		h.writeSDNError(w, "get_port_stats", err)
+		return
 	}
 
-	h.writeJSON(w, http.StatusOK, resp)
+	stats := iface.Statistics
+	h.writeJSON(w, http.StatusOK, PortStatsResponse{
+		BridgeID:    bridgeID,
+		PortID:      portID,
+		PortNumber:  iface.OFPort,
+		RxPackets:   stats["rx_packets"],
+		TxPackets:   stats["tx_packets"],
+		RxBytes:     stats["rx_bytes"],
+		TxBytes:     stats["tx_bytes"],
+		RxDropped:   stats["rx_dropped"],
+		TxDropped:   stats["tx_dropped"],
+		RxErrors:    stats["rx_errors"],
+		TxErrors:    stats["tx_errors"],
+		RxFrameErr:  stats["rx_frame_err"],
+		RxOverErr:   stats["rx_over_err"],
+		RxCRCErr:    stats["rx_crc_err"],
+		Collisions:  stats["collisions"],
+		RetrievedAt: time.Now().UTC(),
+	})
+}
+
+// portStates maps the admin_state values the port-state route accepts to
+// their Open vSwitch states.
+var portStates = map[string]ovs.PortState{
+	string(ovs.PortStateUp):   ovs.PortStateUp,
+	string(ovs.PortStateDown): ovs.PortStateDown,
+}
+
+// interfaceToPortState reports an Open vSwitch interface's state.
+func interfaceToPortState(bridgeID, portID string, iface *ovs.Interface) PortStateResponse {
+	return PortStateResponse{
+		BridgeID:   bridgeID,
+		PortID:     portID,
+		PortNumber: iface.OFPort,
+		AdminState: iface.AdminState,
+		OperState:  iface.LinkState,
+		LinkState:  iface.LinkState,
+		Speed:      iface.Speed,
+		Duplex:     iface.Duplex,
+		UpdatedAt:  time.Now().UTC(),
+	}
 }
 
 // =============================================================================
@@ -1490,73 +1873,94 @@ func (h *SDNHandlers) handleDeleteFlowForBridge(w http.ResponseWriter, r *http.R
 
 // handleCreateVLAN handles POST /api/v1/sdn/vlans
 func (h *SDNHandlers) handleCreateVLAN(w http.ResponseWriter, r *http.Request) {
-	if h.sdnService == nil {
+	if h.controlService == nil {
 		h.writeError(w, http.StatusServiceUnavailable, ErrSDNServiceNotAvailable{})
 		return
 	}
 
-	var req struct {
-		VLANID      int32    `json:"vlan_id"`
-		Name        string   `json:"name"`
-		Description string   `json:"description"`
-		BridgeIDs   []string `json:"bridge_ids"`
-	}
+	var req CreateVLANRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		h.writeError(w, http.StatusBadRequest, ErrInvalidRequestBody{Reason: err.Error()})
 		return
 	}
 
-	resp := map[string]interface{}{
-		"vlan_id":      req.VLANID,
-		"name":         req.Name,
-		"description":  req.Description,
-		"status":       "active",
-		"bridge_count": int32(len(req.BridgeIDs)),
-		"port_count":   int32(0),
-		"created_at":   time.Now().UTC().Format(time.RFC3339),
-	}
-
-	h.writeJSON(w, http.StatusCreated, resp)
-}
-
-// handleListVLANs handles GET /api/v1/sdn/vlans
-func (h *SDNHandlers) handleListVLANs(w http.ResponseWriter, r *http.Request) {
-	if h.sdnService == nil {
-		h.writeError(w, http.StatusServiceUnavailable, ErrSDNServiceNotAvailable{})
-		return
-	}
-
-	resp := map[string]interface{}{
-		"vlans":       []interface{}{},
-		"total_count": int32(0),
-		"has_more":    false,
-	}
-
-	h.writeJSON(w, http.StatusOK, resp)
-}
-
-// handleDeleteVLAN handles DELETE /api/v1/sdn/vlans/{id}
-func (h *SDNHandlers) handleDeleteVLAN(w http.ResponseWriter, r *http.Request) {
-	if h.sdnService == nil {
-		h.writeError(w, http.StatusServiceUnavailable, ErrSDNServiceNotAvailable{})
-		return
-	}
-
-	vars := mux.Vars(r)
-	vlanIDStr := vars["id"]
-
-	vlanID, err := strconv.Atoi(vlanIDStr)
+	resp, err := h.controlService.CreateVLAN(r.Context(), &platformv1.CreateVLANRequest{
+		Config: &platformv1.VLANConfig{
+			VlanId:   req.VLANID,
+			Name:     req.Name,
+			BridgeId: req.BridgeID,
+			Ports:    req.Ports,
+			Labels:   req.Labels,
+		},
+	})
 	if err != nil {
-		h.writeError(w, http.StatusBadRequest, ErrMissingRequiredField{Field: "vlan_id"})
+		h.writeControlError(w, "create_vlan", err)
 		return
 	}
 
-	resp := map[string]interface{}{
-		"vlan_id": int32(vlanID),
-		"deleted": true,
+	h.logger.Info("VLAN created", "vlan_id", req.VLANID, "bridge", req.BridgeID)
+	h.writeJSON(w, http.StatusCreated, vlanToResponse(resp.GetVlan()))
+}
+
+// handleListVLANs handles GET /api/v1/sdn/vlans?bridge_id={bridge}
+func (h *SDNHandlers) handleListVLANs(w http.ResponseWriter, r *http.Request) {
+	if h.controlService == nil {
+		h.writeError(w, http.StatusServiceUnavailable, ErrSDNServiceNotAvailable{})
+		return
 	}
 
-	h.writeJSON(w, http.StatusOK, resp)
+	resp, err := h.controlService.ListVLANs(r.Context(), &platformv1.ListVLANsRequest{
+		BridgeId: r.URL.Query().Get("bridge_id"),
+	})
+	if err != nil {
+		h.writeControlError(w, "list_vlans", err)
+		return
+	}
+
+	vlans := make([]VLANResponse, 0, len(resp.GetVlans()))
+	for _, vlan := range resp.GetVlans() {
+		vlans = append(vlans, vlanToResponse(vlan))
+	}
+
+	h.writeJSON(w, http.StatusOK, VLANListResponse{
+		VLANs:     vlans,
+		Count:     len(vlans),
+		Timestamp: time.Now().UTC(),
+	})
+}
+
+// handleDeleteVLAN handles DELETE /api/v1/sdn/vlans/{id}?bridge_id={bridge}
+func (h *SDNHandlers) handleDeleteVLAN(w http.ResponseWriter, r *http.Request) {
+	if h.controlService == nil {
+		h.writeError(w, http.StatusServiceUnavailable, ErrSDNServiceNotAvailable{})
+		return
+	}
+
+	vlanIDStr := mux.Vars(r)["id"]
+	vlanID, err := strconv.ParseUint(vlanIDStr, 10, 32)
+	if err != nil {
+		h.writeError(w, http.StatusBadRequest, ErrInvalidVLANID{Value: vlanIDStr})
+		return
+	}
+	bridgeID := r.URL.Query().Get("bridge_id")
+
+	_, err = h.controlService.DeleteVLAN(r.Context(), &platformv1.DeleteVLANRequest{
+		BridgeId: bridgeID,
+		VlanId:   uint32(vlanID),
+	})
+	if err != nil {
+		h.writeControlError(w, "delete_vlan", err)
+		return
+	}
+
+	h.logger.Info("VLAN deleted", "vlan_id", vlanID, "bridge", bridgeID)
+	h.writeJSON(w, http.StatusOK, SDNActionResponse{
+		ResourceID:   vlanIDStr,
+		ResourceType: "vlan",
+		Action:       "deleted",
+		Success:      true,
+		Message:      "VLAN deleted successfully",
+	})
 }
 
 // =============================================================================

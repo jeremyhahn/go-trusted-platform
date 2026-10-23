@@ -19,6 +19,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
@@ -45,10 +46,9 @@ type mockRaftOperator struct {
 	nodes      []RaftMemberInfo
 
 	// Tracking
-	bootstrapCalled   int
-	addVoterCalled    int
-	addNonvoterCalled int
-	removeCalled      int
+	bootstrapCalled int
+	addVoterCalled  int
+	removeCalled    int
 }
 
 func newMockRaftOperator() *mockRaftOperator {
@@ -87,7 +87,6 @@ func (m *mockRaftOperator) AddVoter(ctx context.Context, id uint64, address stri
 func (m *mockRaftOperator) AddNonvoter(ctx context.Context, id uint64, address string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.addNonvoterCalled++
 	if m.addNonvoterError != nil {
 		return m.addNonvoterError
 	}
@@ -805,59 +804,74 @@ func TestMembershipManager_WaitForLeader(t *testing.T) {
 	})
 
 	t.Run("waits for leader to be elected", func(t *testing.T) {
-		mm, raftOp := createTestMembershipManager(t)
-		defer func() { _ = mm.Close() }()
-		ctx := context.Background()
+		// The leader check loop runs on a ticker; inside a synctest bubble it
+		// reads the fake clock, which advances only when every goroutine is
+		// blocked, so the test never waits on the wall clock.
+		synctest.Test(t, func(t *testing.T) {
+			mm, raftOp := createTestMembershipManager(t)
+			defer func() {
+				if err := mm.Close(); err != nil {
+					t.Errorf("Close() error = %v", err)
+				}
+			}()
+			ctx := context.Background()
 
-		_ = mm.Bootstrap(ctx)
-		raftOp.setLeader(0, "") // No leader initially
+			if err := mm.Bootstrap(ctx); err != nil {
+				t.Fatalf("Bootstrap() error = %v", err)
+			}
+			raftOp.setLeader(0, "") // No leader initially
 
-		done := make(chan struct{})
-		var leader *Node
-		var waitErr error
+			done := make(chan struct{})
+			var leader *Node
+			var waitErr error
 
-		go func() {
-			leader, waitErr = mm.WaitForLeader(ctx)
-			close(done)
-		}()
+			go func() {
+				leader, waitErr = mm.WaitForLeader(ctx)
+				close(done)
+			}()
 
-		// Give time for waiter to register
-		time.Sleep(50 * time.Millisecond)
+			// Wait until the waiter is registered and blocked
+			synctest.Wait()
+			select {
+			case <-done:
+				t.Fatalf("WaitForLeader() returned (%v, %v) before a leader was elected", leader, waitErr)
+			default:
+			}
 
-		// Elect a leader
-		raftOp.setLeader(1, "127.0.0.1:7000")
+			// Elect a leader; the next leader check tick wakes the waiter
+			raftOp.setLeader(1, "127.0.0.1:7000")
+			<-done
 
-		select {
-		case <-done:
 			if waitErr != nil {
-				t.Errorf("WaitForLeader() error = %v", waitErr)
+				t.Fatalf("WaitForLeader() error = %v", waitErr)
 			}
-			if leader != nil && leader.ID != 1 {
-				t.Errorf("leader ID = %d, want 1", leader.ID)
+			if leader == nil || leader.ID != 1 {
+				t.Errorf("leader = %+v, want ID 1", leader)
 			}
-		case <-time.After(2 * time.Second):
-			t.Error("WaitForLeader() timed out")
-		}
+		})
 	})
 
 	t.Run("returns error on context cancellation", func(t *testing.T) {
-		mm, raftOp := createTestMembershipManager(t)
-		defer func() { _ = mm.Close() }()
-		ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
-		defer cancel()
+		// The deadline and the leader check ticks run on synctest time (#284).
+		synctest.Test(t, func(t *testing.T) {
+			mm, raftOp := createTestMembershipManager(t)
+			defer func() { _ = mm.Close() }()
+			ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+			defer cancel()
 
-		_ = mm.Bootstrap(ctx)
-		raftOp.setLeader(0, "") // No leader
+			_ = mm.Bootstrap(ctx)
+			raftOp.setLeader(0, "") // No leader
 
-		_, err := mm.WaitForLeader(ctx)
-		if err == nil {
-			t.Error("WaitForLeader() should return error on context cancellation")
-		}
+			_, err := mm.WaitForLeader(ctx)
+			if err == nil {
+				t.Error("WaitForLeader() should return error on context cancellation")
+			}
 
-		_, ok := err.(ErrLeadershipTimeout)
-		if !ok {
-			t.Errorf("expected ErrLeadershipTimeout, got %T", err)
-		}
+			_, ok := err.(ErrLeadershipTimeout)
+			if !ok {
+				t.Errorf("expected ErrLeadershipTimeout, got %T", err)
+			}
+		})
 	})
 
 	t.Run("returns error when closed", func(t *testing.T) {

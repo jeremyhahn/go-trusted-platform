@@ -30,6 +30,8 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	switchmgmt "github.com/jeremyhahn/go-trusted-platform/pkg/switch"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/restwire"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/switchwire"
 )
 
 // mockSwitchService implements device.SwitchServiceProvider for testing.
@@ -47,22 +49,22 @@ func (m *mockSwitchService) Manager(name string) (switchmgmt.Manager, error) {
 
 // mockManager implements switchmgmt.Manager for testing.
 type mockManager struct {
-	listPortsFunc     func(ctx context.Context) ([]*switchmgmt.PortStatus, error)
-	getPortStatusFunc func(ctx context.Context, port string) (*switchmgmt.PortStatus, error)
+	listPortsFunc     func(ctx context.Context) ([]*switchwire.PortStatus, error)
+	getPortStatusFunc func(ctx context.Context, port string) (*switchwire.PortStatus, error)
 	setPortVLANFunc   func(ctx context.Context, port string, vlanID uint16) error
 	enablePortFunc    func(ctx context.Context, port string) error
 	disablePortFunc   func(ctx context.Context, port string) error
 	getPortVLANFunc   func(ctx context.Context, port string) (uint16, error)
 }
 
-func (m *mockManager) ListPorts(ctx context.Context) ([]*switchmgmt.PortStatus, error) {
+func (m *mockManager) ListPorts(ctx context.Context) ([]*switchwire.PortStatus, error) {
 	if m.listPortsFunc != nil {
 		return m.listPortsFunc(ctx)
 	}
 	return nil, nil
 }
 
-func (m *mockManager) GetPortStatus(ctx context.Context, port string) (*switchmgmt.PortStatus, error) {
+func (m *mockManager) GetPortStatus(ctx context.Context, port string) (*switchwire.PortStatus, error) {
 	if m.getPortStatusFunc != nil {
 		return m.getPortStatusFunc(ctx, port)
 	}
@@ -126,10 +128,10 @@ func newTestRouter(handlers *Handlers) *mux.Router {
 
 func TestListPorts_Success(t *testing.T) {
 	mgr := &mockManager{
-		listPortsFunc: func(ctx context.Context) ([]*switchmgmt.PortStatus, error) {
-			return []*switchmgmt.PortStatus{
-				{Port: "Eth1/1", Mode: switchmgmt.PortModeAccess, AccessVLAN: 100, Enabled: true, LinkUp: true},
-				{Port: "Eth1/2", Mode: switchmgmt.PortModeTrunk, TrunkVLANs: []uint16{100, 200}, Enabled: true, LinkUp: false},
+		listPortsFunc: func(ctx context.Context) ([]*switchwire.PortStatus, error) {
+			return []*switchwire.PortStatus{
+				{Port: "Eth1/1", Mode: switchwire.PortModeAccess, AccessVLAN: 100, Enabled: true, LinkUp: true},
+				{Port: "Eth1/2", Mode: switchwire.PortModeTrunk, TrunkVLANs: []uint16{100, 200}, Enabled: true, LinkUp: false},
 			}, nil
 		},
 	}
@@ -144,7 +146,7 @@ func TestListPorts_Success(t *testing.T) {
 
 	assert.Equal(t, http.StatusOK, rec.Code)
 
-	var resp response.WebServiceResponse
+	var resp restwire.WebServiceResponse
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
 	assert.True(t, resp.Success)
 }
@@ -163,7 +165,7 @@ func TestListPorts_SwitchNotFound(t *testing.T) {
 
 func TestListPorts_ManagerError(t *testing.T) {
 	mgr := &mockManager{
-		listPortsFunc: func(ctx context.Context) ([]*switchmgmt.PortStatus, error) {
+		listPortsFunc: func(ctx context.Context) ([]*switchwire.PortStatus, error) {
 			return nil, switchmgmt.ErrSSHCommandFailed{Command: "show interface brief", Output: "timeout"}
 		},
 	}
@@ -181,10 +183,10 @@ func TestListPorts_ManagerError(t *testing.T) {
 
 func TestGetPortStatus_Success(t *testing.T) {
 	mgr := &mockManager{
-		getPortStatusFunc: func(ctx context.Context, port string) (*switchmgmt.PortStatus, error) {
-			return &switchmgmt.PortStatus{
+		getPortStatusFunc: func(ctx context.Context, port string) (*switchwire.PortStatus, error) {
+			return &switchwire.PortStatus{
 				Port:        "Eth1/3",
-				Mode:        switchmgmt.PortModeAccess,
+				Mode:        switchwire.PortModeAccess,
 				AccessVLAN:  200,
 				Enabled:     true,
 				LinkUp:      true,
@@ -206,7 +208,7 @@ func TestGetPortStatus_Success(t *testing.T) {
 
 func TestGetPortStatus_PortNotFound(t *testing.T) {
 	mgr := &mockManager{
-		getPortStatusFunc: func(ctx context.Context, port string) (*switchmgmt.PortStatus, error) {
+		getPortStatusFunc: func(ctx context.Context, port string) (*switchwire.PortStatus, error) {
 			return nil, switchmgmt.ErrPortNotFound{Port: port}
 		},
 	}
@@ -405,4 +407,39 @@ func TestDisablePort_OperationFails(t *testing.T) {
 	router.ServeHTTP(rec, req)
 
 	assert.Equal(t, http.StatusInternalServerError, rec.Code)
+}
+
+// A port the switch does not have is 404 on the mutators too, as it is on
+// GetPortStatus, so the SDK sees NotFound rather than Internal (#452) — also
+// when the manager wraps the error.
+func TestPortMutators_PortNotFound(t *testing.T) {
+	notFound := func(port string) error { return switchmgmt.ErrPortNotFound{Port: port} }
+	wrapped := func(port string) error {
+		return switchmgmt.ErrSSHCommandFailed{Command: "interface " + port, Cause: notFound(port)}
+	}
+	for _, missing := range []struct {
+		name string
+		err  func(string) error
+	}{
+		{"bare", notFound},
+		{"wrapped", wrapped},
+	} {
+		mgr := &mockManager{
+			setPortVLANFunc: func(_ context.Context, port string, _ uint16) error { return missing.err(port) },
+			enablePortFunc:  func(_ context.Context, port string) error { return missing.err(port) },
+			disablePortFunc: func(_ context.Context, port string) error { return missing.err(port) },
+		}
+		router := newTestRouter(newTestHandlers(&mockSwitchService{managers: map[string]switchmgmt.Manager{"core-01": mgr}}))
+
+		for _, path := range []string{"/vlan", "/enable", "/disable"} {
+			t.Run(missing.name+path, func(t *testing.T) {
+				req := httptest.NewRequest(http.MethodPost, "/api/v1/switches/core-01/ports/Eth9%2F9"+path,
+					bytes.NewReader([]byte(`{"vlan_id":200}`)))
+				rec := httptest.NewRecorder()
+				router.ServeHTTP(rec, req)
+
+				assert.Equal(t, http.StatusNotFound, rec.Code)
+			})
+		}
+	}
 }

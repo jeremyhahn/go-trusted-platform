@@ -110,7 +110,7 @@ Visible in three places, and #509 is what happens when only the first exists:
 | Bring-up policy (`StartNTP`, gate timeout handling) | `pkg/app/ntp.go` | this repo |
 | `NTPBackend`, proto projection, gRPC→wire error mapping | `pkg/api/daemon/ntp_service.go` | this repo |
 | gRPC `platform.v1.NTPService` | `pkg/api/daemon/ntp_grpc_service.go` | this repo |
-| QUIC category dispatch | `pkg/api/daemon/quic_ntp.go`, `pkg/api/quic/ntp_opcodes.go` | this repo |
+| QUIC category dispatch | `pkg/api/daemon/quic_ntp.go`, `sdk/go/wire/quicwire/ntp_opcodes.go` | this repo |
 | MCP tools | `pkg/api/mcp/ntp_tools.go` | this repo |
 | REST routers (two listeners) | `pkg/webservice/v1/rest/ntp/router.go`, `pkg/api/rest/ntp_handlers.go` | this repo |
 | CLI | `pkg/cli/commands/ntp/` | this repo |
@@ -258,8 +258,8 @@ Hand edits are overwritten on the next `Apply`.
 
 3. **NTS key material and the served identity.** The NTS-KE server key is platform-CA-issued and
    referenced as a `kms://` URI resolved by the secrets engine before chronyd
-   starts. If a value still looks like a secret reference (`kms://`,
-   `secret://`, `file://`) when chronyd needs it on disk,
+   starts. If a value still looks like a secret reference (any RFC 3986
+   `<scheme>://`, e.g. `kms://` or `file://`) when chronyd needs it on disk,
    `ErrUnresolvedNTSMaterial` **fails the NTP service** rather than serving
    unauthenticated time. The key is written mode `0600`; the certificate `0644`.
    Both files are staged as a fresh temp file in the destination directory
@@ -279,7 +279,8 @@ Hand edits are overwritten on the next `Apply`.
    the one `InsecureSkipVerify` in this feature and is on the Makefile's
    `check-insecure-tls` allowlist. It is the same **capture-only** pattern
    the platform already permits for `captureAndConfirmSPKI` and
-   `fetchControlPlaneCABundle`: it connects to `127.0.0.1:4460`, exchanges
+   `fetchControlPlaneCABundle`: it connects to loopback on `ntp.serve.nts.port`
+   (default `4460`, the same port rendered into chrony.conf as `ntsport`), exchanges
    **no application data**, and exists solely to read the leaf chronyd is
    serving. Verification cannot run at handshake time precisely because
    the served certificate may still legitimately be the self-signed

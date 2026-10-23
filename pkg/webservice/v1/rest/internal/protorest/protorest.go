@@ -33,6 +33,7 @@ import (
 	"google.golang.org/protobuf/reflect/protoreflect"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/restwire"
 )
 
 // MarshalOptions configures how protobuf messages are marshalled to JSON.
@@ -98,7 +99,7 @@ func WriteSuccessStatus(w http.ResponseWriter, r *http.Request, writer response.
 	}
 	// Wrap the protojson bytes in json.RawMessage so the response writer
 	// embeds them directly inside the standard envelope without re-encoding.
-	writer.Write(w, r, status, response.WebServiceResponse{
+	writer.Write(w, r, status, restwire.WebServiceResponse{
 		Code:    status,
 		Success: status >= 200 && status < 300,
 		Payload: json.RawMessage(payload),
@@ -195,19 +196,19 @@ func WriteError(w http.ResponseWriter, r *http.Request, writer response.HttpWrit
 	case codes.NotFound:
 		writer.Error404(w, r, err)
 	case codes.AlreadyExists, codes.Aborted:
-		writer.Write(w, r, http.StatusConflict, response.WebServiceResponse{
+		writer.Write(w, r, http.StatusConflict, restwire.WebServiceResponse{
 			Code:    http.StatusConflict,
 			Error:   err.Error(),
 			Success: false,
 		})
 	case codes.ResourceExhausted:
-		writer.Write(w, r, http.StatusTooManyRequests, response.WebServiceResponse{
+		writer.Write(w, r, http.StatusTooManyRequests, restwire.WebServiceResponse{
 			Code:    http.StatusTooManyRequests,
 			Error:   err.Error(),
 			Success: false,
 		})
 	case codes.Unimplemented:
-		writer.Write(w, r, http.StatusNotImplemented, response.WebServiceResponse{
+		writer.Write(w, r, http.StatusNotImplemented, restwire.WebServiceResponse{
 			Code:    http.StatusNotImplemented,
 			Error:   err.Error(),
 			Success: false,
@@ -217,13 +218,13 @@ func WriteError(w http.ResponseWriter, r *http.Request, writer response.HttpWrit
 			writeServiceNotConfigured(w, r, writer, service, err.Error())
 			return
 		}
-		writer.Write(w, r, http.StatusServiceUnavailable, response.WebServiceResponse{
+		writer.Write(w, r, http.StatusServiceUnavailable, restwire.WebServiceResponse{
 			Code:    http.StatusServiceUnavailable,
 			Error:   err.Error(),
 			Success: false,
 		})
 	case codes.DeadlineExceeded:
-		writer.Write(w, r, http.StatusGatewayTimeout, response.WebServiceResponse{
+		writer.Write(w, r, http.StatusGatewayTimeout, restwire.WebServiceResponse{
 			Code:    http.StatusGatewayTimeout,
 			Error:   err.Error(),
 			Success: false,
@@ -231,6 +232,25 @@ func WriteError(w http.ResponseWriter, r *http.Request, writer response.HttpWrit
 	default:
 		writer.Error500(w, r, err)
 	}
+}
+
+// WriteIdentityDeleteError answers a failed device-identity delete: the key
+// deletes (IDevID DeleteIDevID / DeleteIAK, TPM DeleteAK) and the certificate
+// deletes (DeleteIDevIDCertificate / DeleteIAKCertificate). FailedPrecondition
+// — the key refusal ErrDeviceIdentityKeyNotDeletable, or no TPM — is 412, as on
+// the daemon listener: the SDK's REST transport reads 412 back as
+// FailedPrecondition, the gRPC class, where WriteError's shared 400 (#665)
+// would read as InvalidArgument. Every other error takes the shared mapping.
+func WriteIdentityDeleteError(w http.ResponseWriter, r *http.Request, writer response.HttpWriter, err error) {
+	if status.Code(err) != codes.FailedPrecondition {
+		WriteError(w, r, writer, err)
+		return
+	}
+	writer.Write(w, r, http.StatusPreconditionFailed, restwire.WebServiceResponse{
+		Code:    http.StatusPreconditionFailed,
+		Error:   err.Error(),
+		Success: false,
+	})
 }
 
 // QueryUint32 reads a query parameter and parses it as a uint32. Returns 0

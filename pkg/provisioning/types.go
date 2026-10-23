@@ -70,6 +70,48 @@ type HeartbeatResponse struct {
 	ReceivedAt time.Time `json:"received_at"`
 }
 
+// BootCertificateRequest is the body of POST /device/boot/certificate.
+// Signature is the node's BootCertificateProofDigest over the identity and
+// the connection's BootChannelNonce, made with its TPM-resident IDevID key.
+type BootCertificateRequest struct {
+	Identity  string `json:"identity"`
+	Signature []byte `json:"signature"`
+}
+
+// BootCertificateResponse mirrors the server's response for
+// POST /device/boot/certificate: the IDevID chain recorded for an identity
+// at enrollment, which a diskless node fetches back each boot to present its
+// TPM-resident IDevID key over mTLS. The control plane answers only a node
+// that proved it holds the key the chain certifies.
+type BootCertificateResponse struct {
+	Identity    string `json:"identity"`
+	IDevIDChain string `json:"idevidChain"`
+}
+
+// BootDeliveryRequest is the body of POST /device/boot. Evidence is the
+// JSON-encoded quote evidence (base64 in JSON) every attestation transport
+// carries, made over the connection's BootChannelNonce.
+type BootDeliveryRequest struct {
+	Evidence []byte `json:"evidence"`
+}
+
+// BootDeliveryResponse mirrors the server's response for POST /device/boot:
+// the material a verified diskless node needs to run, all PEM.
+type BootDeliveryResponse struct {
+	Serial      string `json:"serial"`
+	IDevIDChain string `json:"idevidChain"`
+	// AttestCert is the IAK certificate recorded at enrollment.
+	AttestCert string `json:"attestCert"`
+	// CABundle is the platform CA chain (root and intermediates).
+	CABundle string          `json:"caBundle"`
+	Profile  ProfileResponse `json:"profile"`
+	// PCRBaselineSource is "signed" or "tofu": what the boot quote was
+	// compared against. PCRBaselineCaptured is true when this boot's quote
+	// recorded the trust-on-first-use baseline.
+	PCRBaselineSource   string `json:"pcrBaselineSource"`
+	PCRBaselineCaptured bool   `json:"pcrBaselineCaptured"`
+}
+
 // ClientConfig holds configuration for the provisioning client.
 // TLS 1.3 with certificate verification is always enforced.
 type ClientConfig struct {

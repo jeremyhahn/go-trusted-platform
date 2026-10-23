@@ -127,6 +127,50 @@ func TestOpenTUN_CustomMTU(t *testing.T) {
 	}
 }
 
+func TestOpenTUN_RoutesThePrefixesIntoTheDevice(t *testing.T) {
+	nl := newMockNetlinkOps()
+	tunPipe(t, nl)
+	cfg := tunConfig()
+	cfg.Routes = []netip.Prefix{netip.MustParsePrefix("10.20.1.1/16"), netip.MustParsePrefix("fd00:20::/48")}
+
+	dev, err := openTUN(nl, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer dev.Close()
+
+	index := nl.links["masque0"].Attrs().Index
+	var got []string
+	for _, r := range nl.routes {
+		if r.LinkIndex != index || r.Scope != vnl.SCOPE_LINK {
+			t.Fatalf("route %s not a link route through the device", r.Dst)
+		}
+		got = append(got, r.Dst.String())
+	}
+	if strings.Join(got, ",") != "10.20.0.0/16,fd00:20::/48" {
+		t.Fatalf("routes = %v", got)
+	}
+}
+
+func TestOpenTUN_ARouteThatFailsRemovesTheDevice(t *testing.T) {
+	boom := errors.New("boom")
+	nl := newMockNetlinkOps()
+	tunPipe(t, nl)
+	nl.routeReplaceFn = func(*vnl.Route) error { return boom }
+	cfg := tunConfig()
+	cfg.Routes = []netip.Prefix{netip.MustParsePrefix("10.20.0.0/16")}
+
+	_, err := openTUN(nl, cfg)
+
+	var cf *ErrTunnelCreateFailed
+	if !errors.As(err, &cf) || !errors.Is(err, boom) {
+		t.Fatalf("err = %v, want ErrTunnelCreateFailed wrapping boom", err)
+	}
+	if _, ok := nl.links["masque0"]; ok {
+		t.Fatal("link not rolled back")
+	}
+}
+
 func TestTUNConfig_Validate(t *testing.T) {
 	cases := map[string]struct {
 		mutate func(*TUNConfig)
@@ -137,6 +181,7 @@ func TestTUNConfig_Validate(t *testing.T) {
 		"no addresses":  {func(c *TUNConfig) { c.Addresses = nil }, "address"},
 		"zero prefix":   {func(c *TUNConfig) { c.Addresses = []netip.Prefix{{}} }, "not valid"},
 		"mtu too small": {func(c *TUNConfig) { c.MTU = 10 }, "MTU"},
+		"zero route":    {func(c *TUNConfig) { c.Routes = []netip.Prefix{{}} }, "route"},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {

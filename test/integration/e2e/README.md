@@ -41,10 +41,14 @@ Runs complete provisioning workflow with actual platform ISOs:
 
 **Run with:**
 ```bash
-export INTEGRATION_TEST_SERVER_ISO=/path/to/server.iso
-export INTEGRATION_TEST_CLIENT_ISO=/path/to/client.iso
+export INTEGRATION_TEST_SERVER_ISO=build/iso/server.iso
+export INTEGRATION_TEST_CLIENT_ISO=build/iso/client.iso
 make integration-test-e2e
 ```
+
+The target passes both variables into the devcontainer when they are set.
+Give paths under the repository, which the container mounts at `/workspace`;
+a host path outside it does not exist in the container.
 
 ## Requirements
 
@@ -280,12 +284,17 @@ ovs-vsctl list port tap-client
 
 ### Inspect TPM State
 
-```bash
-# Server TPM
-swtpm_ioctl --unix test-integration-e2e/server/tpm/swtpm.sock -s
+The work dirs are relative, so swtpm serves each TPM from a `/tmp/swtpm-*`
+directory and copies the state back to `test-integration-e2e/{server,client}/tpm`
+when it stops. The `Server TPM started` and `Client TPM started` log lines name
+the live socket:
 
-# Client TPM
-swtpm_ioctl --unix test-integration-e2e/client/tpm/swtpm.sock -s
+```bash
+# Server TPM (socket from the "Server TPM started" log line)
+swtpm_ioctl --unix /tmp/swtpm-<server>/swtpm.sock -s
+
+# Client TPM (socket from the "Client TPM started" log line)
+swtpm_ioctl --unix /tmp/swtpm-<client>/swtpm.sock -s
 ```
 
 ### Manual Cleanup (inside container)

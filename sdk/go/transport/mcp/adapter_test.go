@@ -15,17 +15,23 @@ package mcp
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
-	mcpapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/mcp"
 	platform "github.com/jeremyhahn/go-trusted-platform/sdk/go"
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/mcpwire"
 )
 
 func TestConnect_NilOptions(t *testing.T) {
@@ -51,7 +57,7 @@ func TestConnect_EmptyAddress(t *testing.T) {
 func TestConnect_WithMCPServer(t *testing.T) {
 	// Create a test MCP server
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var req mcpapi.JSONRPCRequest
+		var req mcpwire.JSONRPCRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			w.WriteHeader(http.StatusBadRequest)
 			return
@@ -59,7 +65,7 @@ func TestConnect_WithMCPServer(t *testing.T) {
 
 		// Respond to initialize
 		if req.Method == "initialize" {
-			resp := mcpapi.JSONRPCResponse{
+			resp := mcpwire.JSONRPCResponse{
 				JSONRPC: "2.0",
 				ID:      req.ID,
 				Result: map[string]interface{}{
@@ -99,27 +105,58 @@ func TestConnect_WithMCPServer(t *testing.T) {
 	}
 }
 
-func TestConnect_AddsHTTPPrefix(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Return valid MCP response
-		resp := mcpapi.JSONRPCResponse{
-			JSONRPC: "2.0",
-			ID:      1,
-			Result:  map[string]interface{}{},
+// initializeHandler answers the MCP initialize handshake and records the
+// Authorization header of every request it receives.
+func initializeHandler(authHeaders chan<- string) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case authHeaders <- r.Header.Get("Authorization"):
+		default:
 		}
-		json.NewEncoder(w).Encode(resp)
-	}))
+		var req mcpwire.JSONRPCRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		json.NewEncoder(w).Encode(mcpwire.JSONRPCResponse{
+			JSONRPC: "2.0",
+			ID:      req.ID,
+			Result:  map[string]interface{}{"protocolVersion": "2024-11-05"},
+		})
+	})
+}
+
+// trustServer returns the option that makes the adapter trust the TLS test
+// server's self-signed certificate.
+func trustServer(server *httptest.Server) platform.Option {
+	return platform.WithTLSConfig(server.Client().Transport.(*http.Transport).TLSClientConfig.Clone())
+}
+
+// failFast bounds the MCP client's retries of a failed initialize, so a
+// test that expects the failure does not wait out the full backoff.
+var failFast = platform.WithTimeout(250 * time.Millisecond)
+
+func assertConnectionFailed(t *testing.T, err error, target string) {
+	t.Helper()
+	var connErr platform.ErrConnectionFailed
+	if !errors.As(err, &connErr) {
+		t.Fatalf("Connect() error = %v, want ErrConnectionFailed", err)
+	}
+	if connErr.Protocol != platform.ProtocolMCP || connErr.Target != target {
+		t.Errorf("ErrConnectionFailed = %+v, want protocol MCP and target %q", connErr, target)
+	}
+}
+
+func TestConnect_AddsHTTPSPrefix(t *testing.T) {
+	server := httptest.NewTLSServer(initializeHandler(make(chan string, 1)))
 	defer server.Close()
 
-	// Extract host:port without scheme
-	addrWithoutScheme := server.URL[7:] // Remove "http://"
+	addrWithoutScheme := strings.TrimPrefix(server.URL, "https://")
 
-	ctx := context.Background()
-	opts := platform.NewOptions(
+	adapter, err := Connect(context.Background(), platform.NewOptions(
 		platform.WithMCPAddr(addrWithoutScheme),
-	)
-
-	adapter, err := Connect(ctx, opts)
+		trustServer(server),
+	))
 	if err != nil {
 		t.Fatalf("Connect() returned error: %v", err)
 	}
@@ -128,6 +165,125 @@ func TestConnect_AddsHTTPPrefix(t *testing.T) {
 	// Target should still be original address
 	if adapter.Target() != addrWithoutScheme {
 		t.Errorf("Target() = %q, want %q", adapter.Target(), addrWithoutScheme)
+	}
+}
+
+func TestConnect_SendsBearerTokenOverTLS(t *testing.T) {
+	authHeaders := make(chan string, 1)
+	server := httptest.NewTLSServer(initializeHandler(authHeaders))
+	defer server.Close()
+
+	adapter, err := Connect(context.Background(), platform.NewOptions(
+		platform.WithMCPAddr(server.URL),
+		trustServer(server),
+		platform.WithBearerToken("secret"),
+	))
+	if err != nil {
+		t.Fatalf("Connect() returned error: %v", err)
+	}
+	defer adapter.Close()
+
+	// The handler records the header before it answers initialize, so it
+	// is already buffered once Connect returns.
+	select {
+	case got := <-authHeaders:
+		if got != "Bearer secret" {
+			t.Errorf("Authorization = %q, want %q", got, "Bearer secret")
+		}
+	default:
+		t.Fatal("server received no request")
+	}
+}
+
+func TestConnect_HonoursTLSServerName(t *testing.T) {
+	server := httptest.NewTLSServer(initializeHandler(make(chan string, 2)))
+	defer server.Close()
+
+	// The httptest certificate is valid for example.com.
+	adapter, err := Connect(context.Background(), platform.NewOptions(
+		platform.WithMCPAddr(server.URL),
+		trustServer(server),
+		platform.WithTLSServerName("example.com"),
+	))
+	if err != nil {
+		t.Fatalf("Connect() with a matching server name returned error: %v", err)
+	}
+	adapter.Close()
+
+	_, err = Connect(context.Background(), platform.NewOptions(
+		platform.WithMCPAddr(server.URL),
+		trustServer(server),
+		platform.WithTLSServerName("wrong.example"),
+		failFast,
+	))
+	assertConnectionFailed(t, err, server.URL)
+}
+
+func TestConnect_UntrustedCertificate(t *testing.T) {
+	server := httptest.NewTLSServer(initializeHandler(make(chan string, 1)))
+	defer server.Close()
+
+	_, err := Connect(context.Background(), platform.NewOptions(platform.WithMCPAddr(server.URL), failFast))
+	assertConnectionFailed(t, err, server.URL)
+}
+
+func TestConnect_InitializeFails(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	defer server.Close()
+
+	adapter, err := Connect(context.Background(), platform.NewOptions(platform.WithMCPAddr(server.URL), failFast))
+	assertConnectionFailed(t, err, server.URL)
+	if adapter != nil {
+		t.Errorf("Connect() adapter = %v, want nil on failure", adapter)
+	}
+}
+
+func TestConnect_ServerUnreachable(t *testing.T) {
+	server := httptest.NewServer(initializeHandler(make(chan string, 1)))
+	server.Close()
+
+	_, err := Connect(context.Background(), platform.NewOptions(platform.WithMCPAddr(server.URL), failFast))
+	assertConnectionFailed(t, err, server.URL)
+}
+
+func TestConnect_RefusesCredentialsOverPlaintext(t *testing.T) {
+	tests := []struct {
+		name   string
+		option platform.Option
+		want   string
+	}{
+		{"BearerToken", platform.WithBearerToken("secret"), "BearerToken"},
+		{"TLSConfig", platform.WithTLSConfig(&tls.Config{}), "TLSConfig"},
+		{"TLSServerName", platform.WithTLSServerName("example.com"), "TLSServerName"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var requests atomic.Int32
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				requests.Add(1)
+			}))
+			defer server.Close()
+
+			_, err := Connect(context.Background(), platform.NewOptions(
+				platform.WithMCPAddr(server.URL),
+				tt.option,
+			))
+			var insecure platform.ErrInsecureTransport
+			if !errors.As(err, &insecure) {
+				t.Fatalf("Connect() error = %v, want ErrInsecureTransport", err)
+			}
+			if insecure.Protocol != platform.ProtocolMCP || insecure.Target != server.URL {
+				t.Errorf("ErrInsecureTransport = %+v, want protocol MCP and target %q", insecure, server.URL)
+			}
+			if !strings.Contains(insecure.Reason, tt.want) {
+				t.Errorf("Reason = %q, want it to name %s", insecure.Reason, tt.want)
+			}
+			if n := requests.Load(); n != 0 {
+				t.Errorf("server received %d requests, want none", n)
+			}
+		})
 	}
 }
 
@@ -285,12 +441,12 @@ func TestMCPClientConn_Invoke_NilClient(t *testing.T) {
 func TestMCPClientConn_Invoke_UnmappedMethod(t *testing.T) {
 	// Create a minimal MCP client
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		resp := mcpapi.JSONRPCResponse{JSONRPC: "2.0", ID: 1, Result: map[string]interface{}{}}
+		resp := mcpwire.JSONRPCResponse{JSONRPC: "2.0", ID: 1, Result: map[string]interface{}{}}
 		json.NewEncoder(w).Encode(resp)
 	}))
 	defer server.Close()
 
-	client, err := mcpapi.NewClient(mcpapi.DefaultClientConfig(server.URL))
+	client, err := mcpwire.NewClient(mcpwire.DefaultClientConfig(server.URL))
 	if err != nil {
 		t.Fatalf("failed to create MCP client: %v", err)
 	}
@@ -366,6 +522,7 @@ func TestGRPCMethodToMCPToolMap_CA(t *testing.T) {
 	}{
 		{"/platform.v1.CAService/GetCAInfo", "ca_info"},
 		{"/platform.v1.CAService/IssueCertificate", "ca_issue"},
+		{"/platform.v1.CAService/SignCSR", "ca_sign_csr"},
 		{"/platform.v1.CAService/RevokeCertificate", "ca_revoke"},
 		{"/platform.v1.CAService/RenewCertificate", "ca_renew"},
 		{"/platform.v1.CAService/VerifyCertificate", "ca_verify"},
@@ -396,6 +553,15 @@ func TestGRPCMethodToMCPToolMap_KMS(t *testing.T) {
 		{"/platform.v1.KeyManagementService/Decrypt", "kms_decrypt"},
 		{"/platform.v1.KeyManagementService/Sign", "kms_sign"},
 		{"/platform.v1.KeyManagementService/Verify", "kms_verify"},
+		{"/platform.v1.KeyManagementService/Hash", "kms_hash"},
+		{"/platform.v1.KeyManagementService/HMAC", "kms_hmac"},
+		{"/platform.v1.KeyManagementService/VerifyHMAC", "kms_verify_hmac"},
+		{"/platform.v1.KeyManagementService/Rewrap", "kms_rewrap"},
+		{"/platform.v1.KeyManagementService/ImportKey", "kms_import_key"},
+		{"/platform.v1.KeyManagementService/UpdateKeyStatus", "kms_update_key_status"},
+		{"/platform.v1.KeyManagementService/GetKeyVersions", "kms_list_key_versions"},
+		{"/platform.v1.KeyManagementService/BatchEncrypt", "kms_batch_encrypt"},
+		{"/platform.v1.KeyManagementService/BatchDecrypt", "kms_batch_decrypt"},
 	}
 
 	for _, tt := range tests {
@@ -447,52 +613,92 @@ func TestTranslateMCPErrorToGRPC(t *testing.T) {
 		},
 		{
 			name:         "parse error",
-			err:          &mcpapi.MCPError{Code: mcpapi.ParseError, Message: "parse error"},
+			err:          &mcpwire.MCPError{Code: mcpwire.ParseError, Message: "parse error"},
 			expectedCode: codes.InvalidArgument,
 		},
 		{
 			name:         "invalid request",
-			err:          &mcpapi.MCPError{Code: mcpapi.InvalidRequest, Message: "invalid request"},
+			err:          &mcpwire.MCPError{Code: mcpwire.InvalidRequest, Message: "invalid request"},
 			expectedCode: codes.InvalidArgument,
 		},
 		{
 			name:         "method not found",
-			err:          &mcpapi.MCPError{Code: mcpapi.MethodNotFound, Message: "method not found"},
+			err:          &mcpwire.MCPError{Code: mcpwire.MethodNotFound, Message: "method not found"},
 			expectedCode: codes.Unimplemented,
 		},
 		{
 			name:         "invalid params",
-			err:          &mcpapi.MCPError{Code: mcpapi.InvalidParams, Message: "invalid params"},
+			err:          &mcpwire.MCPError{Code: mcpwire.InvalidParams, Message: "invalid params"},
 			expectedCode: codes.InvalidArgument,
 		},
 		{
 			name:         "internal error",
-			err:          &mcpapi.MCPError{Code: mcpapi.InternalError, Message: "internal error"},
+			err:          &mcpwire.MCPError{Code: mcpwire.InternalError, Message: "internal error"},
 			expectedCode: codes.Internal,
 		},
 		{
 			name:         "authentication required",
-			err:          &mcpapi.MCPError{Code: mcpapi.AuthenticationRequired, Message: "authentication required"},
+			err:          &mcpwire.MCPError{Code: mcpwire.AuthenticationRequired, Message: "authentication required"},
 			expectedCode: codes.Unauthenticated,
 		},
 		{
 			name:         "invalid token",
-			err:          &mcpapi.MCPError{Code: mcpapi.InvalidToken, Message: "invalid token"},
+			err:          &mcpwire.MCPError{Code: mcpwire.InvalidToken, Message: "invalid token"},
 			expectedCode: codes.Unauthenticated,
 		},
 		{
 			name:         "permission denied",
-			err:          &mcpapi.MCPError{Code: mcpapi.PermissionDenied, Message: "permission denied"},
+			err:          &mcpwire.MCPError{Code: mcpwire.PermissionDenied, Message: "permission denied"},
 			expectedCode: codes.PermissionDenied,
 		},
 		{
 			name:         "service unavailable",
-			err:          &mcpapi.MCPError{Code: mcpapi.ServiceUnavailable, Message: "service unavailable"},
+			err:          &mcpwire.MCPError{Code: mcpwire.ServiceUnavailable, Message: "service unavailable"},
 			expectedCode: codes.Unavailable,
 		},
 		{
+			name:         "not found",
+			err:          &mcpwire.MCPError{Code: mcpwire.NotFound, Message: "not found"},
+			expectedCode: codes.NotFound,
+		},
+		{
+			name:         "already exists",
+			err:          &mcpwire.MCPError{Code: mcpwire.AlreadyExists, Message: "already exists"},
+			expectedCode: codes.AlreadyExists,
+		},
+		{
+			name:         "failed precondition",
+			err:          &mcpwire.MCPError{Code: mcpwire.FailedPrecondition, Message: "failed precondition"},
+			expectedCode: codes.FailedPrecondition,
+		},
+		{
+			name:         "wrapped MCP error",
+			err:          fmt.Errorf("call: %w", &mcpwire.MCPError{Code: mcpwire.NotFound, Message: "not found"}),
+			expectedCode: codes.NotFound,
+		},
+		{
 			name:         "unknown MCP error",
-			err:          &mcpapi.MCPError{Code: -99999, Message: "unknown"},
+			err:          &mcpwire.MCPError{Code: -99999, Message: "unknown"},
+			expectedCode: codes.Unknown,
+		},
+		{
+			name:         "HTTP 401",
+			err:          &mcpwire.HTTPStatusError{StatusCode: http.StatusUnauthorized},
+			expectedCode: codes.Unauthenticated,
+		},
+		{
+			name:         "HTTP 403",
+			err:          &mcpwire.HTTPStatusError{StatusCode: http.StatusForbidden},
+			expectedCode: codes.PermissionDenied,
+		},
+		{
+			name:         "HTTP 503",
+			err:          &mcpwire.HTTPStatusError{StatusCode: http.StatusServiceUnavailable},
+			expectedCode: codes.Unavailable,
+		},
+		{
+			name:         "unlisted HTTP status",
+			err:          &mcpwire.HTTPStatusError{StatusCode: http.StatusTeapot},
 			expectedCode: codes.Unknown,
 		},
 		{
@@ -540,6 +746,18 @@ func TestStructToMap(t *testing.T) {
 	}
 	if result["value"].(float64) != 42 {
 		t.Errorf("result[value] = %v, want 42", result["value"])
+	}
+}
+
+// The ca_sign_csr tool takes csr_pem and valid_days; the SDK request must
+// reach it under those names or the server sees an empty CSR.
+func TestStructToMap_SignCSRRequestMatchesTheTool(t *testing.T) {
+	result, err := structToMap(&platformv1.SignCSRRequest{CsrPem: "csr", ValidDays: 30})
+	if err != nil {
+		t.Fatalf("structToMap() returned error: %v", err)
+	}
+	if result["csr_pem"] != "csr" || result["valid_days"] != float64(30) {
+		t.Errorf("arguments = %v, want csr_pem and valid_days", result)
 	}
 }
 
@@ -712,26 +930,5 @@ func TestErrUnmarshalFailed_Unwrap(t *testing.T) {
 
 	if !errors.Is(err, innerErr) {
 		t.Error("Unwrap() should return the inner error")
-	}
-}
-
-func TestMCPErrorCodeToGRPCMap_Coverage(t *testing.T) {
-	// Verify all expected MCP error codes are mapped
-	expectedCodes := []int{
-		mcpapi.ParseError,
-		mcpapi.InvalidRequest,
-		mcpapi.MethodNotFound,
-		mcpapi.InvalidParams,
-		mcpapi.InternalError,
-		mcpapi.AuthenticationRequired,
-		mcpapi.InvalidToken,
-		mcpapi.PermissionDenied,
-		mcpapi.ServiceUnavailable,
-	}
-
-	for _, code := range expectedCodes {
-		if _, ok := mcpErrorCodeToGRPCMap[code]; !ok {
-			t.Errorf("MCP error code %d not mapped to gRPC code", code)
-		}
 	}
 }

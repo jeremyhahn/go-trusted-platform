@@ -28,10 +28,12 @@ import (
 	"log/slog"
 	"math/big"
 	"net"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 )
 
 // generateTestTLSConfig creates a self-signed TLS configuration for testing.
@@ -103,7 +105,7 @@ func TestNewServerNilConfig(t *testing.T) {
 	}
 
 	// Verify it's a config validation error
-	var invalidConfigErr ErrInvalidConfig
+	var invalidConfigErr quicwire.ErrInvalidConfig
 	if !errors.As(err, &invalidConfigErr) {
 		t.Errorf("expected ErrInvalidConfig, got %T", err)
 	}
@@ -164,7 +166,7 @@ func TestNewServerInvalidConfig(t *testing.T) {
 				return
 			}
 
-			var invalidConfigErr ErrInvalidConfig
+			var invalidConfigErr quicwire.ErrInvalidConfig
 			if !errors.As(err, &invalidConfigErr) {
 				t.Errorf("expected ErrInvalidConfig, got %T: %v", err, err)
 				return
@@ -198,15 +200,15 @@ func TestNewServerWithOptions(t *testing.T) {
 
 // mockHandler implements Handler for testing
 type mockHandler struct {
-	response *Response
+	response *quicwire.Response
 }
 
-func (h *mockHandler) HandleRequest(ctx context.Context, req *Request) *Response {
+func (h *mockHandler) HandleRequest(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.response != nil {
 		return h.response
 	}
-	return &Response{
-		Status:  StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: []byte("mock response"),
 	}
 }
@@ -219,8 +221,8 @@ func TestNewServerWithHandler(t *testing.T) {
 	}
 
 	handler := &mockHandler{
-		response: &Response{
-			Status:  StatusOK,
+		response: &quicwire.Response{
+			Status:  quicwire.StatusOK,
 			Payload: []byte("test"),
 		},
 	}
@@ -253,6 +255,47 @@ func TestServerListenAddr(t *testing.T) {
 
 	if server.ListenAddr() != "127.0.0.1:9444" {
 		t.Errorf("expected listen address '127.0.0.1:9444', got '%s'", server.ListenAddr())
+	}
+}
+
+// A server configured on port 0 reports the port it bound while it runs,
+// so a caller can dial it, and the configured address once it stops.
+func TestServerListenAddr_ReportsTheBoundPortWhileRunning(t *testing.T) {
+	server, err := NewServer(&ServerConfig{ListenAddr: "127.0.0.1:0", TLSConfig: generateTestTLSConfig()})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if err := server.Start(); err != nil {
+		t.Fatalf("failed to start server: %v", err)
+	}
+
+	host, port, err := net.SplitHostPort(server.ListenAddr())
+	if err != nil {
+		t.Fatalf("ListenAddr() = %q: %v", server.ListenAddr(), err)
+	}
+	if host != "127.0.0.1" || port == "0" {
+		t.Errorf("ListenAddr() = %q, want 127.0.0.1 with the bound port", server.ListenAddr())
+	}
+
+	if err := server.Stop(); err != nil {
+		t.Fatalf("failed to stop server: %v", err)
+	}
+	if server.ListenAddr() != "127.0.0.1:0" {
+		t.Errorf("ListenAddr() after Stop = %q, want the configured 127.0.0.1:0", server.ListenAddr())
+	}
+}
+
+// A server marked running before it has a listener (the health checker's
+// tests do this) reports the configured address instead of panicking.
+func TestServerListenAddr_RunningWithoutListenerReportsConfiguredAddr(t *testing.T) {
+	server, err := NewServer(&ServerConfig{ListenAddr: "127.0.0.1:9999", TLSConfig: generateTestTLSConfig()})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	server.running.Store(true)
+
+	if got := server.ListenAddr(); got != "127.0.0.1:9999" {
+		t.Errorf("ListenAddr() = %q, want the configured 127.0.0.1:9999", got)
 	}
 }
 
@@ -448,6 +491,56 @@ func TestServerMultipleStopCalls(t *testing.T) {
 	err = server.Stop()
 	if !errors.Is(err, ErrServerNotRunning) {
 		t.Errorf("expected ErrServerNotRunning, got %v", err)
+	}
+}
+
+// TestServerConcurrentStopCalls pins Stop as an atomic claim (#336): when
+// several callers race to stop one running server, exactly one performs the
+// teardown and every other caller gets ErrServerNotRunning. A check-then-set
+// Stop let more than one caller pass the check and tear down twice.
+func TestServerConcurrentStopCalls(t *testing.T) {
+	const callers = 16
+
+	server, err := NewServer(&ServerConfig{
+		ListenAddr: "127.0.0.1:0",
+		TLSConfig:  generateTestTLSConfig(),
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if err := server.Start(); err != nil {
+		t.Fatalf("failed to start server: %v", err)
+	}
+
+	release := make(chan struct{})
+	results := make(chan error, callers)
+	var wg sync.WaitGroup
+	for range callers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-release
+			results <- server.Stop()
+		}()
+	}
+	close(release)
+	wg.Wait()
+	close(results)
+
+	stopped := 0
+	for err := range results {
+		switch {
+		case err == nil:
+			stopped++
+		case !errors.Is(err, ErrServerNotRunning):
+			t.Errorf("expected nil or ErrServerNotRunning, got %v", err)
+		}
+	}
+	if stopped != 1 {
+		t.Errorf("expected exactly one caller to stop the server, got %d", stopped)
+	}
+	if server.IsRunning() {
+		t.Error("expected server to not be running after Stop")
 	}
 }
 
@@ -735,7 +828,7 @@ func TestServerConfigValidationNegativeMaxIdleTimeout(t *testing.T) {
 func TestDefaultServerConfigValues(t *testing.T) {
 	config := DefaultServerConfig()
 
-	if config.ListenAddr != "0.0.0.0:9444" {
+	if config.ListenAddr != "127.0.0.1:9444" {
 		t.Errorf("expected ListenAddr '0.0.0.0:9444', got '%s'", config.ListenAddr)
 	}
 

@@ -82,6 +82,17 @@ func TestHandleServiceErr_VLANsNotDistinct(t *testing.T) {
 	}
 }
 
+// TestHandleServiceErr_TemplateNameRequired pins the client-error arm for
+// the template service's name check (#497), which would otherwise surface
+// from POST /device/templates as a 500.
+func TestHandleServiceErr_TemplateNameRequired(t *testing.T) {
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/devices/templates", nil)
+
+	handleServiceErr(&mockResponseWriter{}, rec, req, platformdevice.ErrTemplateNameRequired{})
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+}
+
 // TestHandleServiceErr_UnrelatedStaysInternal is its error-direction
 // counterpart.
 func TestHandleServiceErr_UnrelatedStaysInternal(t *testing.T) {

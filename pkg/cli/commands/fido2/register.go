@@ -78,7 +78,10 @@ func runRegister(commonFlags *cli.CommonFlags, f *registerFlags) error {
 	}
 	defer base.Close()
 
-	client := fido2svc.NewClient()
+	client, err := newService(base.Client())
+	if err != nil {
+		return err
+	}
 	resp, err := client.Register(base.Context(), &fido2svc.RegisterRequest{
 		Username:   f.username,
 		Role:       role,

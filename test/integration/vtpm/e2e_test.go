@@ -32,7 +32,9 @@ import (
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/qemu"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/swtpm"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/testenv"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/vtpm"
+	vtpmit "github.com/jeremyhahn/go-trusted-platform/test/integration/vtpm"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -221,8 +223,9 @@ func TestEKCertificatePersistence_AcrossTPMRestarts(t *testing.T) {
 	require.NoError(t, err)
 	t.Logf("TPM stopped after initial provisioning")
 
-	// Step 3: Wait a moment, then restart the TPM (simulating system reboot)
-	time.Sleep(500 * time.Millisecond)
+	// Step 3: Wait a moment, then restart the TPM (simulating system reboot).
+	// Stop already waited for swtpm to exit, so the pause is elapsed time.
+	require.NoError(t, testenv.Elapse(ctx, 500*time.Millisecond))
 
 	sw2, err := swtpm.NewSWTPM(config, nil)
 	require.NoError(t, err)
@@ -256,16 +259,9 @@ func TestEKCertificatePersistence_AcrossTPMRestarts(t *testing.T) {
 // vTPM and verifying the EK certificate is detected.
 // NOTE: This test requires QEMU and OVMF to be installed.
 func TestQEMUWithVTPM_BootAndDetectEK(t *testing.T) {
-	// Skip if QEMU is not available
-	if _, err := exec.LookPath("qemu-system-x86_64"); err != nil {
-		t.Skip("QEMU not available, skipping VM boot test")
-	}
-
-	// Skip if OVMF is not available
-	ovmfCode := findOVMFCode(t)
-	ovmfVars := findOVMFVars(t)
-	if ovmfCode == "" || ovmfVars == "" {
-		t.Skip("OVMF firmware not available, skipping VM boot test")
+	ovmfCode, ovmfVars, firmwareErr := vmFirmware(t)
+	if firmwareErr != nil {
+		t.Fatal(firmwareErr)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
@@ -348,14 +344,16 @@ func TestQEMUWithVTPM_BootAndDetectEK(t *testing.T) {
 		t.Logf("VM start returned (expected for empty disk): %v", err)
 	}
 
-	// Give it a moment to initialize
-	time.Sleep(2 * time.Second)
+	// Give it a moment to initialize; nothing observable marks the end, so this is elapsed time
+	require.NoError(t, testenv.Elapse(ctx, 2*time.Second))
 
 	// Stop VM
 	vm.Stop()
 
-	// Wait for VM to stop
-	time.Sleep(1 * time.Second)
+	// Wait for the QEMU process to exit and release the vTPM socket
+	if err := testenv.WaitFor(ctx, vmExitTimeout, "QEMU process exit", vm.Wait); err != nil {
+		t.Logf("VM exit: %v", err)
+	}
 
 	// Step 5: Verify EK certificate is still intact after VM boot
 	t.Logf("Verifying EK certificate after QEMU boot...")
@@ -512,20 +510,51 @@ func certFingerprint(cert *x509.Certificate) string {
 	return hex.EncodeToString(hash[:])
 }
 
+const (
+	// socketTimeout bounds the wait for a started swtpm's socket file.
+	socketTimeout = 5 * time.Second
+
+	// vmExitTimeout bounds the wait for a stopped QEMU process to exit.
+	vmExitTimeout = 10 * time.Second
+)
+
 func waitForSocket(t *testing.T, socketPath string) {
 	t.Helper()
-	for i := 0; i < 50; i++ {
-		if _, err := os.Stat(socketPath); err == nil {
-			return
-		}
-		time.Sleep(100 * time.Millisecond)
+	exists := func() bool {
+		_, err := os.Stat(socketPath)
+		return err == nil
 	}
-	t.Fatalf("Socket not created: %s", socketPath)
+	if err := testenv.WaitUntil(t.Context(), socketTimeout, "socket "+socketPath+" created", exists); err != nil {
+		t.Fatalf("Socket not created: %v", err)
+	}
+}
+
+// vmFirmware returns the OVMF code and vars images the VM boot test uses,
+// or ErrMissingPrerequisite when QEMU or OVMF is absent. The devcontainer
+// installs both (build/docker/devcontainer/Dockerfile: qemu-system-x86, ovmf).
+func vmFirmware(t *testing.T) (string, string, error) {
+	t.Helper()
+	if _, err := exec.LookPath("qemu-system-x86_64"); err != nil {
+		return "", "", vtpmit.ErrMissingPrerequisite{
+			Name:    "qemu-system-x86_64",
+			Provide: "run the suite in the devcontainer, which installs qemu-system-x86",
+		}
+	}
+	ovmfCode := findOVMFCode(t)
+	ovmfVars := findOVMFVars(t)
+	if ovmfCode == "" || ovmfVars == "" {
+		return "", "", vtpmit.ErrMissingPrerequisite{
+			Name:    "OVMF firmware (OVMF_CODE and OVMF_VARS)",
+			Provide: "run the suite in the devcontainer, which installs ovmf",
+		}
+	}
+	return ovmfCode, ovmfVars, nil
 }
 
 func findOVMFCode(t *testing.T) string {
 	t.Helper()
 	paths := []string{
+		"/usr/share/OVMF/OVMF_CODE_4M.fd",
 		"/usr/share/OVMF/OVMF_CODE.fd",
 		"/usr/share/edk2-ovmf/x64/OVMF_CODE.fd",
 		"/usr/share/edk2/ovmf/OVMF_CODE.fd",
@@ -542,6 +571,7 @@ func findOVMFCode(t *testing.T) string {
 func findOVMFVars(t *testing.T) string {
 	t.Helper()
 	paths := []string{
+		"/usr/share/OVMF/OVMF_VARS_4M.fd",
 		"/usr/share/OVMF/OVMF_VARS.fd",
 		"/usr/share/edk2-ovmf/x64/OVMF_VARS.fd",
 		"/usr/share/edk2/ovmf/OVMF_VARS.fd",

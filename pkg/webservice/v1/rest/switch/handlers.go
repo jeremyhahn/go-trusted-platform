@@ -16,6 +16,7 @@ package switchapi
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/url"
 	"time"
@@ -147,12 +148,7 @@ func (h *Handlers) SetPortVLAN(w http.ResponseWriter, r *http.Request) {
 	if err := mgr.SetPortVLAN(ctx, portName, req.VLANID); err != nil {
 		h.logger.Errorf("switchapi: set port vlan failed: switch=%s port=%s vlan=%d error=%v",
 			switchName, portName, req.VLANID, err)
-		h.responseWriter.Error500(w, r, ErrPortOperationFailed{
-			Operation: "set vlan",
-			Switch:    switchName,
-			Port:      portName,
-			Cause:     err,
-		})
+		h.handlePortError(w, r, switchName, portName, "set vlan", err)
 		return
 	}
 
@@ -205,12 +201,7 @@ func (h *Handlers) portAdminAction(
 	if err := fn(mgr, ctx, portName); err != nil {
 		h.logger.Errorf("switchapi: %s port failed: switch=%s port=%s error=%v",
 			action, switchName, portName, err)
-		h.responseWriter.Error500(w, r, ErrPortOperationFailed{
-			Operation: action,
-			Switch:    switchName,
-			Port:      portName,
-			Cause:     err,
-		})
+		h.handlePortError(w, r, switchName, portName, action, err)
 		return
 	}
 
@@ -253,9 +244,12 @@ func decodeVar(raw string) string {
 	return decoded
 }
 
-// handlePortError translates switchmgmt errors to appropriate HTTP responses.
+// handlePortError translates switchmgmt errors to appropriate HTTP responses:
+// a port the switch does not have is 404 for every port operation, so the
+// SDK sees NotFound whether it reads or changes the port (#452).
 func (h *Handlers) handlePortError(w http.ResponseWriter, r *http.Request, switchName, portName, operation string, err error) {
-	if _, ok := err.(switchmgmt.ErrPortNotFound); ok {
+	var notFound switchmgmt.ErrPortNotFound
+	if errors.As(err, &notFound) {
 		h.responseWriter.Error404(w, r, ErrPortOperationFailed{
 			Operation: operation,
 			Switch:    switchName,

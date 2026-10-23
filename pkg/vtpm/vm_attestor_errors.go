@@ -94,6 +94,22 @@ func (e ErrAIKPublicKeyUnavailable) Unwrap() error {
 	return e.Cause
 }
 
+// ErrAIKSignatureAlgorithmUnavailable indicates the scheme the vTPM IAK signs
+// quotes under could not be read from its attributes.
+type ErrAIKSignatureAlgorithmUnavailable struct {
+	Cause error
+}
+
+// Error implements the error interface.
+func (e ErrAIKSignatureAlgorithmUnavailable) Error() string {
+	return fmt.Sprintf("vtpm: AIK signature algorithm unavailable: %v", e.Cause)
+}
+
+// Unwrap exposes the underlying cause for errors.Is / errors.As.
+func (e ErrAIKSignatureAlgorithmUnavailable) Unwrap() error {
+	return e.Cause
+}
+
 // ErrEKCertificateUnavailable indicates the vTPM EK certificate could not be
 // retrieved.
 type ErrEKCertificateUnavailable struct {

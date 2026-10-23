@@ -54,10 +54,10 @@ message BarrierInitResponse {
   Status status = 1;
   // strategy is the unseal strategy that was configured.
   BarrierStrategy strategy = 2;
-  reserved 3;
-  reserved "unseal_keys";
-  // root_token is the initial root token for platform authentication.
-  string root_token = 4;
+  // unseal_keys (3) was removed: shares are never returned. root_token (4)
+  // was never set: the SDK barrier initialize returns no root token.
+  reserved 3, 4;
+  reserved "unseal_keys", "root_token";
   google.protobuf.Timestamp initialized_at = 5;
   // threshold is the minimum number of shares required to unseal (Shamir mode).
   int32 threshold = 6;
@@ -83,8 +83,10 @@ message BarrierStatusResponse {
   int32 threshold = 5;
   // shares_total is the total number of shares (Shamir mode).
   int32 shares_total = 6;
-  // shares_provided is the number of shares provided so far in the current unseal attempt.
-  int32 shares_provided = 7;
+  // shares_provided was never set: the SDK barrier status carries no share
+  // progress. BarrierUnsealResponse reports it after each share.
+  reserved 7;
+  reserved "shares_provided";
   google.protobuf.Timestamp initialized_at = 8;
 }
 

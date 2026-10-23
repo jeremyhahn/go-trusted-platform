@@ -49,8 +49,6 @@ func createAdapters() []BMCCommands {
 // TestBMCMultiProtocol runs the full BMC test suite against all protocols.
 // This is the main entry point for BMC integration testing.
 func TestBMCMultiProtocol(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	ctx, cancel := DefaultTestContext()
 	t.Cleanup(cancel)
 
@@ -59,18 +57,7 @@ func TestBMCMultiProtocol(t *testing.T) {
 	for _, adapter := range adapters {
 		adapter := adapter
 		t.Run(adapter.Name(), func(t *testing.T) {
-			if err := adapter.Setup(ctx); err != nil {
-				if isNotImplementedError(err) {
-					t.Skipf("Skipping %s: %v", adapter.Name(), err)
-					return
-				}
-				t.Fatalf("Setup failed: %v", err)
-			}
-			t.Cleanup(func() {
-				if err := adapter.Teardown(); err != nil {
-					t.Errorf("Teardown failed: %v", err)
-				}
-			})
+			setUpAdapter(t, ctx, adapter)
 
 			t.Run("PowerStatus", func(t *testing.T) {
 				testPowerStatus(t, ctx, adapter)
@@ -109,38 +96,46 @@ func TestBMCMultiProtocol(t *testing.T) {
 
 // TestBMCCLI tests BMC operations via CLI protocol only.
 func TestBMCCLI(t *testing.T) {
-	SkipIfNotIntegration(t)
 	testSingleProtocol(t, NewCLIAdapter())
 }
 
 // TestBMCREST tests BMC operations via REST protocol only.
 func TestBMCREST(t *testing.T) {
-	SkipIfNotIntegration(t)
 	testSingleProtocol(t, NewRESTAdapter())
 }
 
 // TestBMCGRPC tests BMC operations via gRPC protocol only.
 func TestBMCGRPC(t *testing.T) {
-	SkipIfNotIntegration(t)
 	testSingleProtocol(t, NewGRPCAdapter())
 }
 
 // TestBMCQUIC tests BMC operations via QUIC protocol only.
 func TestBMCQUIC(t *testing.T) {
-	SkipIfNotIntegration(t)
 	testSingleProtocol(t, NewQUICAdapter())
 }
 
 // TestBMCMCP tests BMC operations via MCP protocol only.
 func TestBMCMCP(t *testing.T) {
-	SkipIfNotIntegration(t)
 	testSingleProtocol(t, NewMCPAdapter())
 }
 
 // TestBMCUnix tests BMC operations via Unix socket protocol only.
 func TestBMCUnix(t *testing.T) {
-	SkipIfNotIntegration(t)
 	testSingleProtocol(t, NewUnixAdapter())
+}
+
+// setUpAdapter connects adapter and closes it when the test ends. Every
+// transport carries every BMCService method, so a Setup failure is fatal.
+func setUpAdapter(t *testing.T, ctx context.Context, adapter BMCCommands) {
+	t.Helper()
+	if err := adapter.Setup(ctx); err != nil {
+		t.Fatalf("%s: Setup failed: %v", adapter.Name(), err)
+	}
+	t.Cleanup(func() {
+		if err := adapter.Teardown(); err != nil {
+			t.Errorf("%s: Teardown failed: %v", adapter.Name(), err)
+		}
+	})
 }
 
 // testSingleProtocol runs the full test suite for a single protocol adapter.
@@ -148,18 +143,7 @@ func testSingleProtocol(t *testing.T, adapter BMCCommands) {
 	ctx, cancel := DefaultTestContext()
 	t.Cleanup(cancel)
 
-	if err := adapter.Setup(ctx); err != nil {
-		if isNotImplementedError(err) {
-			t.Skipf("Skipping %s: %v", adapter.Name(), err)
-			return
-		}
-		t.Fatalf("Setup failed: %v", err)
-	}
-	t.Cleanup(func() {
-		if err := adapter.Teardown(); err != nil {
-			t.Errorf("Teardown failed: %v", err)
-		}
-	})
+	setUpAdapter(t, ctx, adapter)
 
 	t.Run("PowerStatus", func(t *testing.T) {
 		testPowerStatus(t, ctx, adapter)
@@ -408,13 +392,8 @@ func testListUsers(t *testing.T, ctx context.Context, adapter BMCCommands) {
 // =============================================================================
 
 // TestBMCEnrollMultiProtocol runs the EnrollBMC test against all protocol
-// adapters. QUIC and MCP skip the general Setup() path (their adapters return
-// ErrQUICNotImplemented / ErrMCPNotImplemented there) and connect independently
-// for the enrollment sub-operation, so this test drives enrollment directly
-// rather than going through the common testSingleProtocol helper.
+// adapters.
 func TestBMCEnrollMultiProtocol(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	ctx, cancel := DefaultTestContext()
 	t.Cleanup(cancel)
 
@@ -430,11 +409,6 @@ func TestBMCEnrollMultiProtocol(t *testing.T) {
 
 // testEnrollBMC exercises the EnrollBMC method on a single adapter.
 //
-// Adapters for which the general Setup path returns ErrQUICNotImplemented /
-// ErrMCPNotImplemented are not set up here — EnrollBMC establishes its own
-// connection internally. Adapters that do require Setup (CLI, REST, gRPC, Unix)
-// are set up and torn down around the call.
-//
 // Tolerated outcomes:
 //   - A structured EnrollResult with at least one step (success path against a
 //     vBMC or real BMC that supports enrollment).
@@ -449,33 +423,14 @@ func TestBMCEnrollMultiProtocol(t *testing.T) {
 func testEnrollBMC(t *testing.T, ctx context.Context, adapter BMCCommands) {
 	t.Helper()
 
-	// Set up adapters that require it. QUIC and MCP skip setup (they return
-	// not-implemented there) and connect lazily inside EnrollBMC.
-	needsTeardown := false
-	if err := adapter.Setup(ctx); err != nil {
-		if isNotImplementedError(err) {
-			// QUIC / MCP: skip setup, proceed directly to EnrollBMC.
-		} else {
-			t.Fatalf("%s: Setup failed: %v", adapter.Name(), err)
-		}
-	} else {
-		needsTeardown = true
-	}
-	if needsTeardown {
-		t.Cleanup(func() {
-			if err := adapter.Teardown(); err != nil {
-				t.Errorf("%s: Teardown failed: %v", adapter.Name(), err)
-			}
-		})
-	}
+	setUpAdapter(t, ctx, adapter)
 
 	result, err := adapter.EnrollBMC(ctx, DefaultTestProfileID, nil)
 	if err != nil {
 		if isEnrollServiceUnavailable(err) {
-			// The daemon is up but the enroller is not wired — tolerated on the
-			// vBMC harness. Log and skip rather than fail.
-			t.Skipf("%s: enrollment service not available (deployment-config gap): %v", adapter.Name(), err)
-			return
+			// platformd serve wires the enroller (pkg/api/daemon/daemon.go
+			// SetEnroller); an unwired enroller is a daemon regression.
+			t.Fatalf("%s: enrollment service not wired in platformd; start platformd with the vBMC config (run-integration-tests.sh bmc): %v", adapter.Name(), err)
 		}
 		t.Fatalf("%s: EnrollBMC failed: %v", adapter.Name(), err)
 	}
@@ -505,8 +460,6 @@ func testEnrollBMC(t *testing.T, ctx context.Context, adapter BMCCommands) {
 // service layer across all protocols. It runs with explicit opts to exercise
 // the option-marshalling code paths in each adapter.
 func TestBMCEnrollWithOptions(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	ctx, cancel := DefaultTestContext()
 	t.Cleanup(cancel)
 
@@ -523,29 +476,12 @@ func TestBMCEnrollWithOptions(t *testing.T) {
 	for _, adapter := range adapters {
 		adapter := adapter
 		t.Run(adapter.Name(), func(t *testing.T) {
-			needsTeardown := false
-			if err := adapter.Setup(ctx); err != nil {
-				if isNotImplementedError(err) {
-					// QUIC / MCP connect lazily — proceed.
-				} else {
-					t.Fatalf("%s: Setup failed: %v", adapter.Name(), err)
-				}
-			} else {
-				needsTeardown = true
-			}
-			if needsTeardown {
-				t.Cleanup(func() {
-					if err := adapter.Teardown(); err != nil {
-						t.Errorf("%s: Teardown failed: %v", adapter.Name(), err)
-					}
-				})
-			}
+			setUpAdapter(t, ctx, adapter)
 
 			result, err := adapter.EnrollBMC(ctx, DefaultTestProfileID, opts)
 			if err != nil {
 				if isEnrollServiceUnavailable(err) {
-					t.Skipf("%s: enrollment service not available (deployment-config gap): %v", adapter.Name(), err)
-					return
+					t.Fatalf("%s: enrollment service not wired in platformd; start platformd with the vBMC config (run-integration-tests.sh bmc): %v", adapter.Name(), err)
 				}
 				t.Fatalf("%s: EnrollBMC with options failed: %v", adapter.Name(), err)
 			}
@@ -562,8 +498,6 @@ func TestBMCEnrollWithOptions(t *testing.T) {
 
 // TestBMCErrorHandling tests error handling across all protocols.
 func TestBMCErrorHandling(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	ctx, cancel := DefaultTestContext()
 	t.Cleanup(cancel)
 
@@ -572,18 +506,7 @@ func TestBMCErrorHandling(t *testing.T) {
 	for _, adapter := range adapters {
 		adapter := adapter
 		t.Run(adapter.Name(), func(t *testing.T) {
-			if err := adapter.Setup(ctx); err != nil {
-				if isNotImplementedError(err) {
-					t.Skipf("Skipping %s: %v", adapter.Name(), err)
-					return
-				}
-				t.Fatalf("Setup failed: %v", err)
-			}
-			t.Cleanup(func() {
-				if err := adapter.Teardown(); err != nil {
-					t.Errorf("Teardown failed: %v", err)
-				}
-			})
+			setUpAdapter(t, ctx, adapter)
 
 			t.Run("InvalidProfilePowerStatus", func(t *testing.T) {
 				testInvalidProfilePowerStatus(t, ctx, adapter)
@@ -627,13 +550,8 @@ func testInvalidProfileEnroll(t *testing.T, ctx context.Context, adapter BMCComm
 // =============================================================================
 
 // TestBMCRestoreMultiProtocol runs the RestoreBMC test against all protocol
-// adapters. QUIC and MCP skip the general Setup() path (their adapters return
-// ErrQUICNotImplemented / ErrMCPNotImplemented there) and connect independently
-// for the restore sub-operation, so this test drives restore directly rather
-// than going through the common testSingleProtocol helper.
+// adapters.
 func TestBMCRestoreMultiProtocol(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	ctx, cancel := DefaultTestContext()
 	t.Cleanup(cancel)
 
@@ -649,11 +567,6 @@ func TestBMCRestoreMultiProtocol(t *testing.T) {
 
 // testRestoreBMC exercises the RestoreBMC method on a single adapter.
 //
-// Adapters for which the general Setup path returns ErrQUICNotImplemented /
-// ErrMCPNotImplemented are not set up here — RestoreBMC establishes its own
-// connection internally. Adapters that do require Setup (CLI, REST, gRPC, Unix)
-// are set up and torn down around the call.
-//
 // Tolerated outcomes:
 //   - A structured RestoreResult with at least one step (success path against a
 //     vBMC or real BMC that supports the restore ceremony).
@@ -667,33 +580,14 @@ func TestBMCRestoreMultiProtocol(t *testing.T) {
 func testRestoreBMC(t *testing.T, ctx context.Context, adapter BMCCommands) {
 	t.Helper()
 
-	// Set up adapters that require it. QUIC and MCP skip setup (they return
-	// not-implemented there) and connect lazily inside RestoreBMC.
-	needsTeardown := false
-	if err := adapter.Setup(ctx); err != nil {
-		if isNotImplementedError(err) {
-			// QUIC / MCP: skip setup, proceed directly to RestoreBMC.
-		} else {
-			t.Fatalf("%s: Setup failed: %v", adapter.Name(), err)
-		}
-	} else {
-		needsTeardown = true
-	}
-	if needsTeardown {
-		t.Cleanup(func() {
-			if err := adapter.Teardown(); err != nil {
-				t.Errorf("%s: Teardown failed: %v", adapter.Name(), err)
-			}
-		})
-	}
+	setUpAdapter(t, ctx, adapter)
 
 	result, err := adapter.RestoreBMC(ctx, DefaultTestProfileID)
 	if err != nil {
 		if isRestoreServiceUnavailable(err) {
-			// The daemon is up but the restorer is not wired — tolerated on the
-			// vBMC harness. Log and skip rather than fail.
-			t.Skipf("%s: restore service not available (deployment-config gap): %v", adapter.Name(), err)
-			return
+			// platformd serve wires the restorer (pkg/api/daemon/daemon.go
+			// SetRestorer); an unwired restorer is a daemon regression.
+			t.Fatalf("%s: restore service not wired in platformd; start platformd with the vBMC config (run-integration-tests.sh bmc): %v", adapter.Name(), err)
 		}
 		t.Fatalf("%s: RestoreBMC failed: %v", adapter.Name(), err)
 	}
@@ -728,8 +622,6 @@ func testRestoreBMC(t *testing.T, ctx context.Context, adapter BMCCommands) {
 // profile either returns a typed error or a tolerated service-unavailable
 // response — it must never panic or return (nil, nil).
 func TestBMCRestoreInvalidProfile(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	ctx, cancel := DefaultTestContext()
 	t.Cleanup(cancel)
 
@@ -738,23 +630,7 @@ func TestBMCRestoreInvalidProfile(t *testing.T) {
 	for _, adapter := range adapters {
 		adapter := adapter
 		t.Run(adapter.Name(), func(t *testing.T) {
-			needsTeardown := false
-			if err := adapter.Setup(ctx); err != nil {
-				if isNotImplementedError(err) {
-					// QUIC / MCP connect lazily — proceed.
-				} else {
-					t.Fatalf("%s: Setup failed: %v", adapter.Name(), err)
-				}
-			} else {
-				needsTeardown = true
-			}
-			if needsTeardown {
-				t.Cleanup(func() {
-					if err := adapter.Teardown(); err != nil {
-						t.Errorf("%s: Teardown failed: %v", adapter.Name(), err)
-					}
-				})
-			}
+			setUpAdapter(t, ctx, adapter)
 
 			result, err := adapter.RestoreBMC(ctx, 999999)
 			if err != nil {

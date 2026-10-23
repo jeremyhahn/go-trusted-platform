@@ -26,65 +26,11 @@ package mcp
 
 import (
 	"context"
+	"encoding/json"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/zone"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/vtpm"
 )
-
-const (
-	// MCPVersion is the supported MCP protocol version.
-	MCPVersion = "2024-11-05"
-
-	// JSON-RPC 2.0 error codes.
-	ParseError     = -32700
-	InvalidRequest = -32600
-	MethodNotFound = -32601
-	InvalidParams  = -32602
-	InternalError  = -32603
-
-	// Custom error codes for authorization.
-	AuthenticationRequired = -32001
-	InvalidToken           = -32002
-	PermissionDenied       = -32003
-	ServiceUnavailable     = -32004
-)
-
-// JSONRPCRequest represents a JSON-RPC 2.0 request.
-type JSONRPCRequest struct {
-	JSONRPC string      `json:"jsonrpc"`
-	ID      interface{} `json:"id,omitempty"`
-	Method  string      `json:"method"`
-	Params  interface{} `json:"params,omitempty"`
-}
-
-// JSONRPCResponse represents a JSON-RPC 2.0 response.
-type JSONRPCResponse struct {
-	JSONRPC string        `json:"jsonrpc"`
-	ID      interface{}   `json:"id,omitempty"`
-	Result  interface{}   `json:"result,omitempty"`
-	Error   *JSONRPCError `json:"error,omitempty"`
-}
-
-// JSONRPCError represents a JSON-RPC 2.0 error.
-type JSONRPCError struct {
-	Code    int         `json:"code"`
-	Message string      `json:"message"`
-	Data    interface{} `json:"data,omitempty"`
-}
-
-// ToolDefinition describes an MCP tool.
-type ToolDefinition struct {
-	Name        string                 `json:"name"`
-	Description string                 `json:"description"`
-	InputSchema map[string]interface{} `json:"inputSchema"`
-}
-
-// ResourceDefinition describes an MCP resource.
-type ResourceDefinition struct {
-	URI         string `json:"uri"`
-	Name        string `json:"name"`
-	Description string `json:"description"`
-	MimeType    string `json:"mimeType,omitempty"`
-}
 
 // AuthErrorType categorizes authorization errors.
 type AuthErrorType int
@@ -127,6 +73,8 @@ type CAIssueRequest struct {
 	Country            string   `json:"country,omitempty"`
 	Province           string   `json:"province,omitempty"`
 	Locality           string   `json:"locality,omitempty"`
+	Address            string   `json:"address,omitempty"`
+	PostalCode         string   `json:"postal_code,omitempty"`
 	DNSNames           []string `json:"dns_names,omitempty"`
 	IPAddresses        []string `json:"ip_addresses,omitempty"`
 	EmailAddresses     []string `json:"email_addresses,omitempty"`
@@ -138,6 +86,26 @@ type CAIssueRequest struct {
 	ExtKeyUsage        []string `json:"ext_key_usage,omitempty"`
 	IsCA               bool     `json:"is_ca,omitempty"`
 	MaxPathLen         int      `json:"max_path_len,omitempty"`
+}
+
+// CASignCSRRequest certifies a KMS key for code signing from a CSR the KMS
+// signed; the CSR's common name is the key ID.
+type CASignCSRRequest struct {
+	CSRPEM    string `json:"csr_pem"`
+	ValidDays int    `json:"valid_days,omitempty"`
+}
+
+// DeviceRegisterRequest carries the device_register tool arguments. The
+// fields match the device record every other transport creates: Serial is
+// required, the server assigns the id.
+type DeviceRegisterRequest struct {
+	Serial     string `json:"serial"`
+	Model      string `json:"model,omitempty"`
+	EKCert     string `json:"ek_cert,omitempty"`
+	AttestPub  string `json:"attest_pub,omitempty"`
+	AttestCert string `json:"attest_cert,omitempty"`
+	SigningPub string `json:"signing_pub,omitempty"`
+	HashAlgoID uint32 `json:"hash_algo_id,omitempty"`
 }
 
 // IAMCreateUserRequest represents a user creation request for MCP.
@@ -198,6 +166,37 @@ type IAMCreateTokenRequest struct {
 	Description string   `json:"description,omitempty"`
 }
 
+// IAMPagination is the page an IAM list tool asks for, the gRPC
+// PaginationRequest: Page counts from 1, and a zero PageSize takes the
+// service default.
+type IAMPagination struct {
+	Page     uint32 `json:"page,omitempty"`
+	PageSize uint32 `json:"page_size,omitempty"`
+}
+
+// IAMListUsersRequest represents a user listing request for MCP, with the
+// same fields as the gRPC ListIAMUsersRequest.
+type IAMListUsersRequest struct {
+	TenantID    string        `json:"tenant_id"`
+	Pagination  IAMPagination `json:"pagination,omitempty"`
+	EmailFilter string        `json:"email_filter,omitempty"`
+	RoleFilter  string        `json:"role_filter,omitempty"`
+	GroupFilter string        `json:"group_filter,omitempty"`
+}
+
+// IAMCheckPermissionRequest represents a policy decision request for MCP,
+// with the same fields as the gRPC CheckIAMPermissionRequest.
+type IAMCheckPermissionRequest struct {
+	TenantID   string            `json:"tenant_id"`
+	SubjectID  string            `json:"subject_id"`
+	Roles      []string          `json:"roles,omitempty"`
+	Groups     []string          `json:"groups,omitempty"`
+	Action     string            `json:"action"`
+	Resource   string            `json:"resource"`
+	Context    map[string]string `json:"context,omitempty"`
+	Attributes map[string]string `json:"attributes,omitempty"`
+}
+
 // KMSCreateKeyRequest represents a key creation request for MCP.
 type KMSCreateKeyRequest struct {
 	Name               string            `json:"name"`
@@ -256,6 +255,41 @@ type SecretSetRotationPolicyRequest struct {
 	RetainVersions  int    `json:"retain_versions,omitempty"`
 }
 
+// SecretRotateRequest is the decoded input of the secret_rotate tool.
+type SecretRotateRequest struct {
+	SecretID string            `json:"secret_id"`
+	NewData  []byte            `json:"new_data"`
+	Metadata map[string]string `json:"metadata,omitempty"`
+}
+
+// DEKCreateRequest is the decoded input of the dek_create tool. Its fields
+// are the quicbaas.kms.v1 CreateDEKRequest fields; Algorithm is the
+// quicbaas.kms.v1 KeyAlgorithm number.
+type DEKCreateRequest struct {
+	Path           string            `json:"path"`
+	Algorithm      int32             `json:"algorithm,omitempty"`
+	Description    string            `json:"description,omitempty"`
+	MaxOperations  uint64            `json:"max_operations,omitempty"`
+	MaxBytes       uint64            `json:"max_bytes,omitempty"`
+	WarningPercent int32             `json:"warning_percent,omitempty"`
+	Tags           map[string]string `json:"tags,omitempty"`
+}
+
+// DEKListRequest is the decoded input of the dek_list tool.
+type DEKListRequest struct {
+	Prefix    string `json:"prefix,omitempty"`
+	Recursive bool   `json:"recursive,omitempty"`
+	Limit     int32  `json:"limit,omitempty"`
+	Cursor    string `json:"cursor,omitempty"`
+}
+
+// DEKDeleteRequest is the decoded input of the dek_delete tool.
+type DEKDeleteRequest struct {
+	Path      string `json:"path"`
+	Force     bool   `json:"force,omitempty"`
+	MigrateTo string `json:"migrate_to,omitempty"`
+}
+
 // KMSEncryptRequest represents an encryption request for MCP.
 type KMSEncryptRequest struct {
 	KeyID     string `json:"key_id"`
@@ -290,6 +324,114 @@ type KMSVerifyRequest struct {
 	KeyVersion    int    `json:"key_version,omitempty"`
 }
 
+// KMSHashRequest represents a keyless hash request for MCP. HashAlgorithm
+// is a platform.v1 HashAlgorithm value; zero selects SHA-256.
+type KMSHashRequest struct {
+	Data          []byte `json:"data"`
+	HashAlgorithm int32  `json:"algorithm,omitempty"`
+}
+
+// KMSHMACRequest represents an HMAC generation request for MCP.
+type KMSHMACRequest struct {
+	KeyID         string `json:"key_id"`
+	Message       []byte `json:"message"`
+	HashAlgorithm int32  `json:"hash_algorithm,omitempty"`
+}
+
+// KMSVerifyHMACRequest represents an HMAC verification request for MCP.
+type KMSVerifyHMACRequest struct {
+	KeyID         string `json:"key_id"`
+	Message       []byte `json:"message"`
+	HMAC          []byte `json:"hmac"`
+	HashAlgorithm int32  `json:"hash_algorithm,omitempty"`
+	KeyVersion    uint64 `json:"key_version,omitempty"`
+}
+
+// KMSRewrapRequest represents a rewrap request for MCP. SourceVersion must
+// be zero: the SDK rewrap request has no source version, so a non-zero value
+// is refused rather than ignored.
+type KMSRewrapRequest struct {
+	KeyID         string `json:"key_id"`
+	Ciphertext    []byte `json:"ciphertext"`
+	Context       []byte `json:"context,omitempty"`
+	Nonce         []byte `json:"nonce,omitempty"`
+	SourceVersion uint64 `json:"source_version,omitempty"`
+}
+
+// KMSImportKeyRequest imports existing key material. Algorithm and Usage carry
+// the platform.v1 KMSKeyAlgorithm and KeyUsage numbers, as in the gRPC
+// ImportKeyRequest key_spec.
+type KMSImportKeyRequest struct {
+	Name               string            `json:"name,omitempty"`
+	Description        string            `json:"description,omitempty"`
+	KeyMaterial        []byte            `json:"key_material"`
+	WrappingKeyID      string            `json:"wrapping_key_id,omitempty"`
+	Algorithm          int32             `json:"algorithm,omitempty"`
+	KeySize            int32             `json:"key_size,omitempty"`
+	Usage              []int32           `json:"usage,omitempty"`
+	Exportable         bool              `json:"exportable,omitempty"`
+	DeletionProtection bool              `json:"deletion_protection,omitempty"`
+	Tags               map[string]string `json:"tags,omitempty"`
+}
+
+// KMSUpdateKeyStatusRequest sets the platform.v1 KeyStatus of a key, or of
+// one key version when Version is non-zero.
+type KMSUpdateKeyStatusRequest struct {
+	KeyID   string `json:"key_id"`
+	Version uint64 `json:"version,omitempty"`
+	Status  int32  `json:"status"`
+}
+
+// KMSListKeyVersionsRequest lists a key's versions with offset-cursor
+// pagination.
+type KMSListKeyVersionsRequest struct {
+	KeyID  string `json:"key_id"`
+	Limit  int32  `json:"limit,omitempty"`
+	Cursor string `json:"cursor,omitempty"`
+}
+
+// KMSBatchEncryptItem is one plaintext of a batch encrypt request.
+type KMSBatchEncryptItem struct {
+	ItemID    string `json:"item_id,omitempty"`
+	Plaintext []byte `json:"plaintext"`
+	Context   []byte `json:"context,omitempty"`
+	Nonce     []byte `json:"nonce,omitempty"`
+}
+
+// KMSBatchEncryptRequest encrypts every item under one key.
+type KMSBatchEncryptRequest struct {
+	KeyID string                `json:"key_id"`
+	Items []KMSBatchEncryptItem `json:"items"`
+}
+
+// KMSBatchDecryptItem is one ciphertext of a batch decrypt request.
+type KMSBatchDecryptItem struct {
+	ItemID     string `json:"item_id,omitempty"`
+	Ciphertext []byte `json:"ciphertext"`
+	Context    []byte `json:"context,omitempty"`
+	Nonce      []byte `json:"nonce,omitempty"`
+	KeyVersion uint64 `json:"key_version,omitempty"`
+}
+
+// KMSBatchDecryptRequest decrypts every item under one key.
+type KMSBatchDecryptRequest struct {
+	KeyID string                `json:"key_id"`
+	Items []KMSBatchDecryptItem `json:"items"`
+}
+
+// TPMVerifyQuoteRequest represents a TPM quote verification request for MCP,
+// with the same fields as the gRPC VerifyQuoteRequest. AKPublic is the
+// attestation key's PKIX DER; when it is empty the platform IAK verifies.
+// SignatureAlgorithm is the scheme the quote declares (#482).
+type TPMVerifyQuoteRequest struct {
+	Quote              []byte `json:"quote"`
+	Signature          []byte `json:"signature"`
+	Nonce              []byte `json:"nonce"`
+	ChannelBinding     []byte `json:"channel_binding,omitempty"`
+	AKPublic           []byte `json:"ak_public,omitempty"`
+	SignatureAlgorithm string `json:"signature_algorithm"`
+}
+
 // KMSGenerateDataKeyRequest represents a data key generation request for MCP.
 // Data keys are used for envelope encryption where:
 // 1. A data encryption key (DEK) is generated
@@ -317,6 +459,17 @@ type KMSGenerateWrappedDataKeyRequest struct {
 }
 
 // IPAMPoolCreateRequest represents an IPAM pool creation request for MCP.
+// PortRates are the rate limits SDNSetPortState applies to a port: ingress
+// policing on what it receives and egress shaping on what it sends, each a
+// rate in bits per second and a burst in bits. A zero rate leaves that
+// direction as it is; a zero burst lets Open vSwitch pick its default.
+type PortRates struct {
+	IngressRate  uint64
+	IngressBurst uint64
+	EgressRate   uint64
+	EgressBurst  uint64
+}
+
 type IPAMPoolCreateRequest struct {
 	Name                 string `json:"name"`
 	CIDR                 string `json:"cidr"`
@@ -442,9 +595,9 @@ func buildMCPZoneConfig(name string, offset uint8, portClasses []string, interne
 // This allows the MCP server to call platform operations.
 type ServiceProvider interface {
 	// vTPM bundle CRUD operations
-	VTPMCreate(ctx context.Context, name string, algorithm string) (interface{}, error)
+	VTPMCreate(ctx context.Context, name string, algorithm string, secureBoot bool, labels map[string]string) (interface{}, error)
 	VTPMDelete(ctx context.Context, name string) error
-	VTPMList(ctx context.Context) ([]interface{}, error)
+	VTPMList(ctx context.Context, opts *vtpm.ListOptions) ([]interface{}, error)
 	VTPMGet(ctx context.Context, name string) (interface{}, error)
 	VTPMValidate(ctx context.Context, name string) (interface{}, error)
 	VTPMExport(ctx context.Context, name string) (interface{}, error)
@@ -467,8 +620,8 @@ type ServiceProvider interface {
 	VTPMStop(ctx context.Context, name string) error
 	VTPMIsRunning(ctx context.Context, name string) (interface{}, error)
 	VTPMQuote(ctx context.Context, name string, nonce []byte, pcrs []int) (interface{}, error)
-	VTPMSeal(ctx context.Context, name string, data []byte, pcrs []int) ([]byte, error)
-	VTPMUnseal(ctx context.Context, name string, sealed []byte) ([]byte, error)
+	VTPMSeal(ctx context.Context, name string, data []byte, pcrs []int, authValue string) ([]byte, error)
+	VTPMUnseal(ctx context.Context, name string, sealed []byte, authValue string) ([]byte, error)
 	VTPMExtendPCR(ctx context.Context, name string, pcr int, data []byte) error
 	VTPMReadPCR(ctx context.Context, name string, pcr int) ([]byte, error)
 
@@ -483,8 +636,9 @@ type ServiceProvider interface {
 	DNSListZones(ctx context.Context) ([]string, error)
 
 	// Device operations
-	DeviceRegister(ctx context.Context, name string, deviceType string, publicKey []byte) (interface{}, error)
+	DeviceRegister(ctx context.Context, req *DeviceRegisterRequest) (interface{}, error)
 	DeviceGet(ctx context.Context, deviceID string) (interface{}, error)
+	DeviceFindBySerial(ctx context.Context, serial string) (interface{}, error)
 	DeviceList(ctx context.Context, filter map[string]string) ([]interface{}, error)
 	DeviceDelete(ctx context.Context, deviceID string) error
 	DeviceUpdate(ctx context.Context, deviceID string, updates map[string]interface{}) error
@@ -492,40 +646,56 @@ type ServiceProvider interface {
 	// DeviceRecordAttestCert records the device's attestation certificate on
 	// its platform record without re-enrolling it (fail-closed; see
 	// device.AttestCertRecorder). reissue lets the CA issue a fresh
-	// certificate over the enrolled attestation key.
-	DeviceRecordAttestCert(ctx context.Context, deviceID string, reissue bool) (interface{}, error)
+	// certificate over the enrolled attestation key. clearOnRefusal clears
+	// the stored certificate when every candidate is refused, so the
+	// device reads as absent instead of quarantined.
+	DeviceRecordAttestCert(ctx context.Context, deviceID string, reissue, clearOnRefusal bool) (interface{}, error)
+	// DeviceDisable blocks the device's switch port and records it
+	// suspended (see device.LifecycleService).
+	DeviceDisable(ctx context.Context, deviceID, reason string) (interface{}, error)
+	// DeviceEnable re-admits a disabled device to the quarantine zone
+	// pending a re-attestation.
+	DeviceEnable(ctx context.Context, deviceID string) (interface{}, error)
+	// DeviceBootCertificate and DeviceBootDelivery serve a diskless node's
+	// boot requests through the shared boot service, which enforces the
+	// proof of possession and the channel binding. A transport with no TLS
+	// connection (MCP) cannot satisfy that binding and is refused.
+	DeviceBootCertificate(ctx context.Context, identity string, signature []byte) (interface{}, error)
+	DeviceBootDelivery(ctx context.Context, evidence []byte) (interface{}, error)
 	DeviceProvision(ctx context.Context, deviceID string, profile string) error
 
 	// SDN Bridge operations
 	SDNGetPortState(ctx context.Context, bridgeName string, portName string) (interface{}, error)
-	SDNSetPortState(ctx context.Context, bridgeName string, portName string, state string) error
+	// SDNSetPortState sets a port's admin state (up or down) and the rate
+	// limits in rates, and returns the updated port.
+	SDNSetPortState(ctx context.Context, bridgeName string, portName string, state string, rates PortRates) (interface{}, error)
 	SDNListBridges(ctx context.Context) ([]interface{}, error)
 	SDNCreateBridge(ctx context.Context, bridgeName string) error
 	SDNDeleteBridge(ctx context.Context, bridgeName string) error
 	SDNAddPort(ctx context.Context, bridgeName string, portName string, portType string) error
 	SDNDeletePort(ctx context.Context, bridgeName string, portName string) error
-	SDNApplyPolicy(ctx context.Context, policyID string, bridgeName string) error
+	// SDNApplyPolicy creates or replaces a policy. The document is the REST
+	// create-policy body (docs/sdn/api-reference-rest.md), so a policy has one
+	// shape on every transport.
+	SDNApplyPolicy(ctx context.Context, policy json.RawMessage) (interface{}, error)
 	SDNGetPolicy(ctx context.Context, policyID string) (interface{}, error)
-	SDNListPolicies(ctx context.Context) ([]interface{}, error)
+	SDNListPolicies(ctx context.Context, policyType string, targetID string) ([]interface{}, error)
+	SDNDeletePolicy(ctx context.Context, policyID string) error
 
 	// SDN Flow operations
-	SDNAddFlow(ctx context.Context, bridgeName string, flow map[string]interface{}) error
+	SDNAddFlow(ctx context.Context, bridgeName string, flow map[string]interface{}) (interface{}, error)
 	SDNDeleteFlow(ctx context.Context, bridgeName string, flowID string) error
 	SDNListFlows(ctx context.Context, bridgeName string) ([]interface{}, error)
-	SDNFlushFlows(ctx context.Context, bridgeName string) error
+	SDNFlushFlows(ctx context.Context, bridgeName string) (uint32, error)
 
 	// SDN VLAN operations
-	SDNCreateVLAN(ctx context.Context, bridgeName string, vlanID int, name string) error
+	SDNCreateVLAN(ctx context.Context, bridgeName string, vlanID int, name string) (interface{}, error)
 	SDNDeleteVLAN(ctx context.Context, bridgeName string, vlanID int) error
 	SDNListVLANs(ctx context.Context, bridgeName string) ([]interface{}, error)
 
-	// SDN Port authentication
-	SDNAuthenticatePort(ctx context.Context, bridgeName string, portName string, credentials map[string]string) error
-	SDNRevokePortAuth(ctx context.Context, bridgeName string, portName string) error
-
 	// SDN Statistics
 	SDNGetPortStats(ctx context.Context, bridgeName string, portName string) (interface{}, error)
-	SDNGetFlowStats(ctx context.Context, bridgeName string) (interface{}, error)
+	SDNGetFlowStats(ctx context.Context, bridgeName string, flowID string) (interface{}, error)
 
 	// Overlay network operations
 	OverlayStatus(ctx context.Context) (interface{}, error)
@@ -535,6 +705,7 @@ type ServiceProvider interface {
 	OverlayVNICreate(ctx context.Context, vni uint32, vlan uint16, name string) (interface{}, error)
 	OverlayVNIDelete(ctx context.Context, vni uint32) error
 	OverlayTunnelList(ctx context.Context, vni uint32) ([]interface{}, error)
+	OverlayTunnelStats(ctx context.Context, remoteVTEP string, vni uint32) (interface{}, error)
 	OverlayMACList(ctx context.Context, vni uint32) ([]interface{}, error)
 	OverlayMACForget(ctx context.Context, mac string, vni uint32) error
 
@@ -597,6 +768,18 @@ type ServiceProvider interface {
 	NTPSources(ctx context.Context) (interface{}, error)
 	NTPStep(ctx context.Context) (interface{}, error)
 
+	// VPN control-plane operations: peer enrolment, session status from
+	// gateway telemetry, and tenant posture policies. An empty tenantID or
+	// gatewayID on a list or status call means every tenant or gateway.
+	VPNEnrolPeer(ctx context.Context, tenantID, deviceID string, zones []string) (interface{}, error)
+	VPNListPeers(ctx context.Context, tenantID string) (interface{}, error)
+	VPNRevokePeer(ctx context.Context, tenantID, deviceID string) (interface{}, error)
+	VPNStatus(ctx context.Context, gatewayID string) (interface{}, error)
+	VPNPosturePolicyGet(ctx context.Context, tenantID, name string) (interface{}, error)
+	VPNPosturePolicySet(ctx context.Context, tenantID, name, module string) (interface{}, error)
+	VPNPosturePolicyDelete(ctx context.Context, tenantID, name string) (interface{}, error)
+	VPNPosturePolicyList(ctx context.Context, tenantID string) (interface{}, error)
+
 	// Health operations
 	Health(ctx context.Context) (interface{}, error)
 	Liveness(ctx context.Context) (interface{}, error)
@@ -615,7 +798,8 @@ type ServiceProvider interface {
 	// CA operations
 	CAInfo(ctx context.Context) (interface{}, error)
 	CAIssue(ctx context.Context, req *CAIssueRequest) (interface{}, error)
-	CAGet(ctx context.Context, serial string, includePEM bool) (interface{}, error)
+	CASignCSR(ctx context.Context, req *CASignCSRRequest) (interface{}, error)
+	CAGet(ctx context.Context, serial string, includePEM, includeDER bool) (interface{}, error)
 	CAList(ctx context.Context, limit int, cursor string, status string) (interface{}, error)
 	CARevoke(ctx context.Context, serial string, reason int, deleteKeys bool) (interface{}, error)
 	CARenew(ctx context.Context, serial string, extendDays int, preserveAttrs bool) (interface{}, error)
@@ -623,39 +807,40 @@ type ServiceProvider interface {
 	CACRL(ctx context.Context) (interface{}, error)
 	CABundle(ctx context.Context, storeType string, algorithm string) (interface{}, error)
 
-	// IAM User operations
+	// IAM operations. Each answers what its gRPC PlatformIAMService method
+	// answers, the same response message and the same error class.
 	IAMCreateUser(ctx context.Context, req *IAMCreateUserRequest) (interface{}, error)
-	IAMDeleteUser(ctx context.Context, tenantID string, userID string) error
+	IAMDeleteUser(ctx context.Context, tenantID string, userID string) (interface{}, error)
 	IAMGetUser(ctx context.Context, tenantID string, userID string) (interface{}, error)
-	IAMListUsers(ctx context.Context, tenantID string, limit int, offset int) (interface{}, error)
+	IAMListUsers(ctx context.Context, req *IAMListUsersRequest) (interface{}, error)
 
 	// IAM Role operations
 	IAMCreateRole(ctx context.Context, req *IAMCreateRoleRequest) (interface{}, error)
-	IAMDeleteRole(ctx context.Context, tenantID string, roleID string) error
+	IAMDeleteRole(ctx context.Context, tenantID string, roleID string) (interface{}, error)
 	IAMGetRole(ctx context.Context, tenantID string, roleID string) (interface{}, error)
-	IAMListRoles(ctx context.Context, tenantID string, limit int, offset int) (interface{}, error)
+	IAMListRoles(ctx context.Context, tenantID string, page IAMPagination) (interface{}, error)
 
 	// IAM Role assignment operations
-	IAMAssignRole(ctx context.Context, tenantID string, userID string, role string) error
-	IAMRevokeRole(ctx context.Context, tenantID string, userID string, role string) error
+	IAMAssignRole(ctx context.Context, tenantID string, userID string, roleID string) (interface{}, error)
+	IAMRevokeRole(ctx context.Context, tenantID string, userID string, roleID string) (interface{}, error)
 
 	// IAM Authorization operations
-	IAMCheckPermission(ctx context.Context, tenantID string, userID string, resource string, action string) (bool, error)
+	IAMCheckPermission(ctx context.Context, req *IAMCheckPermissionRequest) (interface{}, error)
 	IAMAuthenticate(ctx context.Context, req *IAMAuthenticateRequest) (interface{}, error)
 
 	// IAM Group operations
 	IAMCreateGroup(ctx context.Context, req *IAMCreateGroupRequest) (interface{}, error)
-	IAMDeleteGroup(ctx context.Context, tenantID string, groupID string) error
+	IAMDeleteGroup(ctx context.Context, tenantID string, groupID string) (interface{}, error)
 	IAMGetGroup(ctx context.Context, tenantID string, groupID string) (interface{}, error)
-	IAMListGroups(ctx context.Context, tenantID string, limit int, offset int) (interface{}, error)
-	IAMAddGroupMember(ctx context.Context, tenantID string, groupID string, userID string) error
-	IAMRemoveGroupMember(ctx context.Context, tenantID string, groupID string, userID string) error
+	IAMListGroups(ctx context.Context, tenantID string, page IAMPagination) (interface{}, error)
+	IAMAddGroupMember(ctx context.Context, tenantID string, groupID string, userID string) (interface{}, error)
+	IAMRemoveGroupMember(ctx context.Context, tenantID string, groupID string, userID string) (interface{}, error)
 
 	// IAM Tenant operations
 	IAMCreateTenant(ctx context.Context, req *IAMCreateTenantRequest) (interface{}, error)
-	IAMDeleteTenant(ctx context.Context, tenantID string) error
+	IAMDeleteTenant(ctx context.Context, tenantID string) (interface{}, error)
 	IAMGetTenant(ctx context.Context, tenantID string) (interface{}, error)
-	IAMListTenants(ctx context.Context, limit int, offset int) (interface{}, error)
+	IAMListTenants(ctx context.Context, page IAMPagination) (interface{}, error)
 
 	// IAM Token operations
 	IAMCreateToken(ctx context.Context, req *IAMCreateTokenRequest) (interface{}, error)
@@ -686,12 +871,34 @@ type ServiceProvider interface {
 	SecretDelete(ctx context.Context, secretID string) error
 	SecretSetRotationPolicy(ctx context.Context, req *SecretSetRotationPolicyRequest) (interface{}, error)
 	SecretGetRotationPolicy(ctx context.Context, secretID string) (interface{}, error)
+	SecretGetVersion(ctx context.Context, secretID string, version uint64) (interface{}, error)
+	SecretListVersions(ctx context.Context, secretID string, limit int) (interface{}, error)
+	SecretRotate(ctx context.Context, req *SecretRotateRequest) (interface{}, error)
+	SecretRollback(ctx context.Context, secretID string, targetVersion uint64) (interface{}, error)
+	SecretUpdateStatus(ctx context.Context, secretID, status string) (interface{}, error)
+
+	// DEK operations
+	DEKCreate(ctx context.Context, req *DEKCreateRequest) (interface{}, error)
+	DEKList(ctx context.Context, req *DEKListRequest) (interface{}, error)
+	DEKGet(ctx context.Context, path string) (interface{}, error)
+	DEKStatus(ctx context.Context, path string) (interface{}, error)
+	DEKRotate(ctx context.Context, path string, background bool) (interface{}, error)
+	DEKDelete(ctx context.Context, req *DEKDeleteRequest) (interface{}, error)
 
 	// KMS Cryptographic operations
 	KMSEncrypt(ctx context.Context, req *KMSEncryptRequest) (interface{}, error)
 	KMSDecrypt(ctx context.Context, req *KMSDecryptRequest) (interface{}, error)
 	KMSSign(ctx context.Context, req *KMSSignRequest) (interface{}, error)
 	KMSVerify(ctx context.Context, req *KMSVerifyRequest) (interface{}, error)
+	KMSHash(ctx context.Context, req *KMSHashRequest) (interface{}, error)
+	KMSHMAC(ctx context.Context, req *KMSHMACRequest) (interface{}, error)
+	KMSVerifyHMAC(ctx context.Context, req *KMSVerifyHMACRequest) (interface{}, error)
+	KMSRewrap(ctx context.Context, req *KMSRewrapRequest) (interface{}, error)
+	KMSImportKey(ctx context.Context, req *KMSImportKeyRequest) (interface{}, error)
+	KMSUpdateKeyStatus(ctx context.Context, req *KMSUpdateKeyStatusRequest) (interface{}, error)
+	KMSListKeyVersions(ctx context.Context, req *KMSListKeyVersionsRequest) (interface{}, error)
+	KMSBatchEncrypt(ctx context.Context, req *KMSBatchEncryptRequest) (interface{}, error)
+	KMSBatchDecrypt(ctx context.Context, req *KMSBatchDecryptRequest) (interface{}, error)
 
 	// KMS Random generation
 	KMSGenerateRandom(ctx context.Context, numBytes int) ([]byte, error)
@@ -751,21 +958,20 @@ type ServiceProvider interface {
 	TPMDeleteSRK(ctx context.Context) (interface{}, error)
 	TPMGetIAK(ctx context.Context) (interface{}, error)
 	TPMCreateIAK(ctx context.Context) (interface{}, error)
-	TPMDeleteIAK(ctx context.Context) (interface{}, error)
 	TPMQuote(ctx context.Context, nonce []byte, pcrs []int) (interface{}, error)
-	TPMVerifyQuote(ctx context.Context, quote []byte, signature []byte, nonce []byte) (interface{}, error)
+	TPMVerifyQuote(ctx context.Context, req *TPMVerifyQuoteRequest) (interface{}, error)
 	TPMReadPCRs(ctx context.Context, indices []int) (interface{}, error)
-	TPMExtendPCR(ctx context.Context, pcrIndex int, data []byte) (interface{}, error)
+	TPMExtendPCR(ctx context.Context, pcrIndex int, hashAlg string, data []byte) (interface{}, error)
 	TPMEventLog(ctx context.Context) (interface{}, error)
 	TPMCapabilities(ctx context.Context) (interface{}, error)
 	TPMRandom(ctx context.Context, numBytes int) ([]byte, error)
-	TPMSeal(ctx context.Context, data []byte, pcrs []int) ([]byte, error)
-	TPMUnseal(ctx context.Context, cn string) ([]byte, error)
-	TPMCertify(ctx context.Context, keyHandle int) (interface{}, error)
+	TPMSeal(ctx context.Context, data []byte, pcrs []uint32, cn, password string) ([]byte, error)
+	TPMUnseal(ctx context.Context, cn, password string) ([]byte, error)
+	TPMCertify(ctx context.Context, keyHandle uint32, keyPassword string, nonce []byte) (interface{}, error)
 	TPMNVList(ctx context.Context) (interface{}, error)
-	TPMNVRead(ctx context.Context, index int, size int) ([]byte, error)
-	TPMNVWrite(ctx context.Context, index int, data []byte) (interface{}, error)
-	TPMNVDelete(ctx context.Context, index int) (interface{}, error)
+	TPMNVRead(ctx context.Context, index uint32, size, offset uint16, password string) ([]byte, error)
+	TPMNVWrite(ctx context.Context, index uint32, data []byte, offset uint16, password string) (interface{}, error)
+	TPMNVDelete(ctx context.Context, index uint32, parentPassword string) (interface{}, error)
 	TPMPlatform(ctx context.Context) (interface{}, error)
 	TPMMakeCredential(ctx context.Context, akName, secret, ekCert, iakPub []byte) (interface{}, error)
 	TPMActivateCredential(ctx context.Context, credentialBlob, encryptedSecret []byte) (interface{}, error)

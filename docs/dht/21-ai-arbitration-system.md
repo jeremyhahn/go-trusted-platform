@@ -1,5 +1,7 @@
 # AI-Based Arbitration System
 
+> **Status: PLANNED** · Scope: design only, no implementation · Last verified: 2026-10-20
+
 This document specifies the AI-based arbitration system for ServiceContracts in go-trusted-platform DHT, enabling AI agents with capability certificates to serve as arbitrators alongside human arbiters.
 
 ---

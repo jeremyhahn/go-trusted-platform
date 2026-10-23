@@ -271,6 +271,32 @@ func TestPrinter_Print_NonTableDataFallback(t *testing.T) {
 	assert.Equal(t, "value", result["key"])
 }
 
+// NewTableData returns a pointer, and commands pass it on as is: it must
+// render as a table, not fall back to YAML.
+func TestPrinter_PrintTable_TableDataPointer(t *testing.T) {
+	var buf bytes.Buffer
+	printer := NewPrinterWithWriter(OutputFormatTable, true, &buf)
+
+	data := NewTableData("Name", "Synced")
+	data.AddRow("pool.ntp.org", "yes")
+	require.NoError(t, printer.Print(data))
+
+	lines := strings.Split(strings.TrimSpace(buf.String()), "\n")
+	require.Len(t, lines, 2)
+	assert.Equal(t, []string{"NAME", "SYNCED"}, strings.Fields(lines[0]))
+	assert.Equal(t, []string{"pool.ntp.org", "yes"}, strings.Fields(lines[1]))
+	assert.NotContains(t, buf.String(), "headers:", "a table must not render as YAML")
+}
+
+func TestPrinter_PrintTable_NilTableDataPointerPrintsNothing(t *testing.T) {
+	var buf bytes.Buffer
+	printer := NewPrinterWithWriter(OutputFormatTable, true, &buf)
+
+	var data *TableData
+	require.NoError(t, printer.Print(data))
+	assert.Empty(t, buf.String())
+}
+
 func TestPrinter_PrintSuccess_WithColor(t *testing.T) {
 	printer := NewPrinter(OutputFormatTable, false)
 

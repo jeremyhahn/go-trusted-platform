@@ -79,7 +79,8 @@ func notEvaluated(reason string) WorkloadVerdict {
 // asked for.
 //
 // This is the same pair of checks the TPM verify_quote handlers already run —
-// VerifyQuoteNonce then VerifyQuoteSignature — which is the shape #483 named
+// VerifyQuoteNonce then VerifyQuoteSignatureWithAlgorithm, under the scheme the
+// evidence declares (#482) — which is the shape #483 named
 // as the reference. The difference from those handlers is the third outcome:
 // they are given a quote, a key and a nonce by the caller, whereas here any of
 // the three may be absent from collected evidence, and an absent input must
@@ -97,6 +98,9 @@ func VerifyVMAttestation(a *manifest.VMAttestation, expectedNonce []byte) Worklo
 	if len(a.Signature) == 0 {
 		return notEvaluated("attestation carries no signature")
 	}
+	if a.SignatureAlgorithm == "" {
+		return notEvaluated("attestation carries no signature scheme to verify the signature under")
+	}
 	if len(expectedNonce) == 0 {
 		return notEvaluated("no expected nonce supplied, so freshness cannot be established")
 	}
@@ -104,8 +108,8 @@ func VerifyVMAttestation(a *manifest.VMAttestation, expectedNonce []byte) Worklo
 	if err := attestvm.VerifyQuoteNonce(a.QuoteData, expectedNonce); err != nil {
 		return failed("quote nonce does not match the nonce requested: " + err.Error())
 	}
-	if err := attestvm.VerifyQuoteSignature(a.AIKPublicKey, a.QuoteData, a.Signature); err != nil {
-		return failed("quote signature is not valid for the AIK public key: " + err.Error())
+	if err := attestvm.VerifyQuoteSignatureWithAlgorithm(a.AIKPublicKey, a.QuoteData, a.Signature, a.SignatureAlgorithm); err != nil {
+		return failed("quote signature is not valid for the AIK public key under " + a.SignatureAlgorithm + ": " + err.Error())
 	}
 
 	return verified()

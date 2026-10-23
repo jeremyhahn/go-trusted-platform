@@ -167,3 +167,53 @@ type ErrAuthorizationRequired struct {
 func (e ErrAuthorizationRequired) Error() string {
 	return fmt.Sprintf("rest/iam: authorization guard is required: %s", e.Guard)
 }
+
+// ErrMirrorClientMissing is returned when the user mirror is asked to read the
+// IAM tenant without an IAM client to read it through.
+type ErrMirrorClientMissing struct{}
+
+func (e ErrMirrorClientMissing) Error() string {
+	return "rest/iam: user mirror has no IAM client"
+}
+
+// ErrRoleResolverClientMissing is returned when a workspace role resolver is
+// built without an IAM client to read the workspace's users through.
+type ErrRoleResolverClientMissing struct{}
+
+func (e ErrRoleResolverClientMissing) Error() string {
+	return "rest/iam: workspace role resolver has no IAM client"
+}
+
+// ErrForeignBodyTenant is returned when a request body names a tenant other
+// than the one the route acts on: the path's {tenant}, otherwise the
+// session's. It is refused with 403, as the own-tenant guard refuses the same
+// tenant named in the path or the tenant_id query (#401).
+type ErrForeignBodyTenant struct {
+	Tenant string
+}
+
+func (e ErrForeignBodyTenant) Error() string {
+	return fmt.Sprintf("rest/iam: request body names a tenant other than %q", e.Tenant)
+}
+
+// ErrConflictingQueryTenant is returned when a tenant-scoped route's
+// tenant_id query names a tenant other than the path's {tenant}. The request
+// is ambiguous, so it is refused with 403 rather than served from the path's
+// tenant (#401).
+type ErrConflictingQueryTenant struct {
+	Path  string
+	Query string
+}
+
+func (e ErrConflictingQueryTenant) Error() string {
+	return fmt.Sprintf("rest/iam: tenant_id query %q conflicts with path tenant %q", e.Query, e.Path)
+}
+
+// ErrPEPClientMissing is returned when a permission check reaches a router
+// built without the policy enforcement point the check is evaluated by: the
+// daemon wired no IAM PEP, so the route answers 503 rather than a verdict.
+type ErrPEPClientMissing struct{}
+
+func (e ErrPEPClientMissing) Error() string {
+	return "rest/iam: no policy enforcement point is wired to check permissions"
+}

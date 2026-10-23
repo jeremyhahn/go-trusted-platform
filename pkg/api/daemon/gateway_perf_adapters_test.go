@@ -36,7 +36,7 @@ func TestRESTPerfGetPerfFlows(t *testing.T) {
 		Batched:        true,
 		Bridge:         "br-int",
 	}}
-	svc := newGatewayPerfRESTService(backend)
+	svc := newGatewayPerfRESTService(NewGatewayService(WithPerf(backend)))
 
 	resp, err := svc.GetPerfFlows(context.Background(), &rest.PerfFlowsRequest{Count: 100, Batch: true})
 	if err != nil {
@@ -52,7 +52,7 @@ func TestRESTPerfGetPerfFlows(t *testing.T) {
 
 func TestRESTPerfGetPerfFlowsDefaultsCount(t *testing.T) {
 	backend := &fakeGatewayPerf{}
-	svc := newGatewayPerfRESTService(backend)
+	svc := newGatewayPerfRESTService(NewGatewayService(WithPerf(backend)))
 
 	if _, err := svc.GetPerfFlows(context.Background(), &rest.PerfFlowsRequest{}); err != nil {
 		t.Fatalf("GetPerfFlows: %v", err)
@@ -64,7 +64,7 @@ func TestRESTPerfGetPerfFlowsDefaultsCount(t *testing.T) {
 
 func TestRESTPerfGetPerfFlowsErrors(t *testing.T) {
 	t.Run("nil request", func(t *testing.T) {
-		svc := newGatewayPerfRESTService(&fakeGatewayPerf{})
+		svc := newGatewayPerfRESTService(NewGatewayService(WithPerf(&fakeGatewayPerf{})))
 		_, err := svc.GetPerfFlows(context.Background(), nil)
 		var invalidErr rest.ErrPerfInvalidRequest
 		if !errors.As(err, &invalidErr) {
@@ -74,7 +74,7 @@ func TestRESTPerfGetPerfFlowsErrors(t *testing.T) {
 
 	t.Run("invalid count maps to invalid request", func(t *testing.T) {
 		backend := &fakeGatewayPerf{err: &perf.ErrInvalidFlowCount{Count: -1, Max: perf.MaxFlowCount}}
-		svc := newGatewayPerfRESTService(backend)
+		svc := newGatewayPerfRESTService(NewGatewayService(WithPerf(backend)))
 		_, err := svc.GetPerfFlows(context.Background(), &rest.PerfFlowsRequest{Count: 5})
 		var invalidErr rest.ErrPerfInvalidRequest
 		if !errors.As(err, &invalidErr) {
@@ -84,7 +84,7 @@ func TestRESTPerfGetPerfFlowsErrors(t *testing.T) {
 
 	t.Run("bridge not found", func(t *testing.T) {
 		backend := &fakeGatewayPerf{err: &perf.ErrBridgeUnavailable{Bridge: "br-x", Cause: errors.New("gone")}}
-		svc := newGatewayPerfRESTService(backend)
+		svc := newGatewayPerfRESTService(NewGatewayService(WithPerf(backend)))
 		_, err := svc.GetPerfFlows(context.Background(), &rest.PerfFlowsRequest{Count: 5})
 		var notFoundErr rest.ErrPerfBridgeNotFound
 		if !errors.As(err, &notFoundErr) {
@@ -101,7 +101,7 @@ func TestRESTPerfGetPerfDatapath(t *testing.T) {
 		Hits: 10, Missed: 2, Lost: 1, OffloadedFlowCount: 4,
 		HWOffloadEnabled: true, DatapathType: "netdev", Bridge: "br-a",
 	}}
-	svc := newGatewayPerfRESTService(backend)
+	svc := newGatewayPerfRESTService(NewGatewayService(WithPerf(backend)))
 
 	resp, err := svc.GetPerfDatapath(context.Background(), "br-a")
 	if err != nil {
@@ -117,7 +117,7 @@ func TestRESTPerfGetPerfDatapath(t *testing.T) {
 
 func TestRESTPerfGetPerfDatapathAppCtlUnavailable(t *testing.T) {
 	backend := &fakeGatewayPerf{err: perf.ErrAppCtlUnavailable}
-	svc := newGatewayPerfRESTService(backend)
+	svc := newGatewayPerfRESTService(NewGatewayService(WithPerf(backend)))
 
 	_, err := svc.GetPerfDatapath(context.Background(), "")
 	var notConfigured rest.ErrPerfNotConfigured
@@ -131,7 +131,7 @@ func TestRESTPerfGetPerfConntrack(t *testing.T) {
 		TotalEntries: 3,
 		PerZone:      map[int]int{7: 2, 0: 1},
 	}}
-	svc := newGatewayPerfRESTService(backend)
+	svc := newGatewayPerfRESTService(NewGatewayService(WithPerf(backend)))
 
 	resp, err := svc.GetPerfConntrack(context.Background(), 7)
 	if err != nil {
@@ -147,7 +147,7 @@ func TestRESTPerfGetPerfConntrack(t *testing.T) {
 
 func TestRESTPerfGetPerfConntrackError(t *testing.T) {
 	backend := &fakeGatewayPerf{err: errors.New("boom")}
-	svc := newGatewayPerfRESTService(backend)
+	svc := newGatewayPerfRESTService(NewGatewayService(WithPerf(backend)))
 
 	if _, err := svc.GetPerfConntrack(context.Background(), -1); err == nil {
 		t.Fatal("expected error")
@@ -166,7 +166,7 @@ func TestQUICPerfFlows(t *testing.T) {
 		Batched:        false,
 		Bridge:         "br-int",
 	}}
-	adapter := newGatewayPerfQUICAdapter(backend)
+	adapter := newGatewayPerfQUICAdapter(NewGatewayService(WithPerf(backend)))
 
 	info, err := adapter.PerfFlows(context.Background(), "br-int", 250, false)
 	if err != nil {
@@ -182,7 +182,7 @@ func TestQUICPerfFlows(t *testing.T) {
 
 func TestQUICPerfFlowsDefaultsCount(t *testing.T) {
 	backend := &fakeGatewayPerf{}
-	adapter := newGatewayPerfQUICAdapter(backend)
+	adapter := newGatewayPerfQUICAdapter(NewGatewayService(WithPerf(backend)))
 
 	if _, err := adapter.PerfFlows(context.Background(), "", 0, true); err != nil {
 		t.Fatalf("PerfFlows: %v", err)
@@ -205,7 +205,7 @@ func TestQUICPerfErrorMapping(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			adapter := newGatewayPerfQUICAdapter(&fakeGatewayPerf{err: tc.backend})
+			adapter := newGatewayPerfQUICAdapter(NewGatewayService(WithPerf(&fakeGatewayPerf{err: tc.backend})))
 			_, err := adapter.PerfFlows(context.Background(), "", 5, true)
 			if !errors.Is(err, tc.want) {
 				t.Fatalf("err = %v, want %v", err, tc.want)
@@ -219,7 +219,7 @@ func TestQUICPerfDatapath(t *testing.T) {
 		Hits: 1, Missed: 2, Lost: 3, OffloadedFlowCount: 4,
 		HWOffloadEnabled: true, DatapathType: "system", Bridge: "br-b",
 	}}
-	adapter := newGatewayPerfQUICAdapter(backend)
+	adapter := newGatewayPerfQUICAdapter(NewGatewayService(WithPerf(backend)))
 
 	info, err := adapter.PerfDatapath(context.Background(), "br-b")
 	if err != nil {
@@ -238,7 +238,7 @@ func TestQUICPerfConntrack(t *testing.T) {
 		TotalEntries: 2,
 		PerZone:      map[int]int{5: 2},
 	}}
-	adapter := newGatewayPerfQUICAdapter(backend)
+	adapter := newGatewayPerfQUICAdapter(NewGatewayService(WithPerf(backend)))
 
 	zone := uint32(5)
 	info, err := adapter.PerfConntrack(context.Background(), &zone)
@@ -255,7 +255,7 @@ func TestQUICPerfConntrack(t *testing.T) {
 
 func TestQUICPerfConntrackNilZone(t *testing.T) {
 	backend := &fakeGatewayPerf{}
-	adapter := newGatewayPerfQUICAdapter(backend)
+	adapter := newGatewayPerfQUICAdapter(NewGatewayService(WithPerf(backend)))
 
 	if _, err := adapter.PerfConntrack(context.Background(), nil); err != nil {
 		t.Fatalf("PerfConntrack: %v", err)
@@ -270,11 +270,10 @@ func TestQUICPerfConntrackNilZone(t *testing.T) {
 // =============================================================================
 
 func TestMCPServiceProviderGatewayPerf(t *testing.T) {
-	provider := &MCPServiceProvider{}
-	provider.SetGatewayPerf(&fakeGatewayPerf{
+	provider := &MCPServiceProvider{gatewayBackends: NewGatewayService(WithPerf(&fakeGatewayPerf{
 		flowsResult:     perf.FlowsResult{Installed: 10, Duration: time.Millisecond, Batched: true, Bridge: "br-int"},
 		conntrackResult: perf.ConntrackResult{TotalEntries: 1, PerZone: map[int]int{0: 1}},
-	})
+	}))}
 
 	if result, err := provider.GatewayPerfFlows(context.Background(), "br-int", 10, true); err != nil || result == nil {
 		t.Fatalf("GatewayPerfFlows: result=%v err=%v", result, err)
@@ -297,29 +296,6 @@ func TestMCPServiceProviderGatewayPerfUnavailable(t *testing.T) {
 		t.Fatal("expected ErrServiceNotAvailable")
 	}
 	if _, err := provider.GatewayPerfConntrack(context.Background(), -1); err == nil {
-		t.Fatal("expected ErrServiceNotAvailable")
-	}
-}
-
-func TestPlatformServiceProviderGatewayPerf(t *testing.T) {
-	provider := &PlatformServiceProvider{}
-	provider.SetGatewayPerf(&fakeGatewayPerf{})
-
-	if _, err := provider.GatewayPerfFlows(context.Background(), "", 5, false); err != nil {
-		t.Fatalf("GatewayPerfFlows: %v", err)
-	}
-	if _, err := provider.GatewayPerfDatapath(context.Background(), ""); err != nil {
-		t.Fatalf("GatewayPerfDatapath: %v", err)
-	}
-	if _, err := provider.GatewayPerfConntrack(context.Background(), 3); err != nil {
-		t.Fatalf("GatewayPerfConntrack: %v", err)
-	}
-}
-
-func TestPlatformServiceProviderGatewayPerfUnavailable(t *testing.T) {
-	provider := &PlatformServiceProvider{}
-
-	if _, err := provider.GatewayPerfFlows(context.Background(), "", 5, false); err == nil {
 		t.Fatal("expected ErrServiceNotAvailable")
 	}
 }

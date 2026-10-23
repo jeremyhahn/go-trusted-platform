@@ -32,6 +32,7 @@ import (
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/qemu"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/policy"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/testenv"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -76,12 +77,12 @@ const (
 func TestE2EDeviceProvisioning(t *testing.T) {
 	// Check QEMU availability
 	if _, err := exec.LookPath("qemu-system-x86_64"); err != nil {
-		t.Skip("QEMU not available, skipping E2E test")
+		t.Fatalf("qemu-system-x86_64 not on PATH: %v; run in the devcontainer, which installs qemu-system-x86", err)
 	}
 
 	// Check OVS availability
 	if _, err := exec.LookPath("ovs-vsctl"); err != nil {
-		t.Skip("Open vSwitch not available, skipping E2E test")
+		t.Fatalf("ovs-vsctl not on PATH: %v; run in the devcontainer, which installs openvswitch-switch", err)
 	}
 
 	// Check for pre-built ISOs
@@ -109,9 +110,11 @@ func TestE2EDeviceProvisioning(t *testing.T) {
 		"production_vlan", config.ProductionNetwork.VLAN)
 
 	// Phase 1: Infrastructure Validation
-	t.Run("Phase1_InfrastructureValidation", func(t *testing.T) {
+	if !t.Run("Phase1_InfrastructureValidation", func(t *testing.T) {
 		testInfrastructureValidation(ctx, t, infra)
-	})
+	}) {
+		t.Fatalf("infrastructure validation failed; provisioning needs the validated VMs")
+	}
 
 	// If no pre-built ISOs, stop here
 	if !fullIntegrationMode {
@@ -180,8 +183,9 @@ func testInfrastructureValidation(ctx context.Context, t *testing.T, infra *Test
 			"vars", ovmfVars)
 	})
 
-	// Setup and verify server VM can be created
-	t.Run("SetupServerVM", func(t *testing.T) {
+	// Setup and verify server VM can be created. Every later step drives the
+	// VMs, so a failed setup ends the phase instead of running on nil VMs.
+	setupServer := t.Run("SetupServerVM", func(t *testing.T) {
 		err := infra.SetupServerVM(ctx, t)
 		require.NoError(t, err, "Failed to setup server VM")
 
@@ -193,9 +197,12 @@ func testInfrastructureValidation(ctx context.Context, t *testing.T, infra *Test
 			"tap", infra.ServerTapName,
 			"disk", infra.Config.ServerDiskPath)
 	})
+	if !setupServer {
+		t.Fatalf("server VM setup failed; the remaining infrastructure steps need it")
+	}
 
 	// Setup and verify client VM can be created
-	t.Run("SetupClientVM", func(t *testing.T) {
+	setupClient := t.Run("SetupClientVM", func(t *testing.T) {
 		err := infra.SetupClientVM(ctx, t)
 		require.NoError(t, err, "Failed to setup client VM")
 
@@ -207,6 +214,9 @@ func testInfrastructureValidation(ctx context.Context, t *testing.T, infra *Test
 			"tap", infra.ClientTapName,
 			"disk", infra.Config.ClientDiskPath)
 	})
+	if !setupClient {
+		t.Fatalf("client VM setup failed; the remaining infrastructure steps need it")
+	}
 
 	// Verify policy engine
 	t.Run("VerifyPolicyEngine", func(t *testing.T) {
@@ -260,7 +270,7 @@ func testServerProvisioning(ctx context.Context, t *testing.T, infra *TestInfras
 	// marker is a property of the server ISO and is not known here. Inventing a
 	// pattern would be worse than waiting -- a poll that never matches burns the
 	// whole budget and then claims a verification it did not perform.
-	time.Sleep(serverBootBudget)
+	require.NoError(t, testenv.Elapse(ctx, serverBootBudget))
 
 	// Deliberately NOT "Phase 2 complete: Server provisioned". Nothing here
 	// establishes that the server was provisioned, and a log line that says so
@@ -343,7 +353,7 @@ func testClientProvisioning(ctx context.Context, t *testing.T, infra *TestInfras
 	// NOTHING BELOW VERIFIES ANY OF THE ABOVE (#372) -- same shape as Phase 2:
 	// an unconditional budget, because the enrollment-completion marker is a
 	// property of the client ISO and is not known here.
-	time.Sleep(clientEnrollBudget)
+	require.NoError(t, testenv.Elapse(ctx, clientEnrollBudget))
 
 	// Transition to enrolled state
 	err = infra.PolicyEngine.SetPortState(infra.ClientTapName, policy.PortStateEnrolled)
@@ -412,9 +422,10 @@ func testNetworkTransition(ctx context.Context, t *testing.T, infra *TestInfrast
 	require.NoError(t, err, "Failed to get port state")
 	assert.Equal(t, policy.PortStateAuthorized, state, "Port should be in authorized state")
 
-	// Wait for network transition to settle
+	// Wait for network transition to settle. Nothing observable marks the end
+	// (the flows go to a mock controller), so this is elapsed time.
 	infra.Logger.Info("Waiting for network transition to complete")
-	time.Sleep(NetworkTransitionWait)
+	require.NoError(t, testenv.Elapse(ctx, NetworkTransitionWait))
 
 	infra.Logger.Info("Phase 4 complete: Network transition successful",
 		"from_vlan", infra.Config.ProvisioningNetwork.VLAN,

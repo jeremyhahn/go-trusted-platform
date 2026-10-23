@@ -11,6 +11,7 @@
 | Path | Holds |
 |---|---|
 | `pkg/bootstrap/secrets.go` | Scheme and strategy constants, `SecretStructTag`, `IsSecretURI`, `ExpandShortKMSPath` |
+| `pkg/bootstrap/secret_fields.go` | `PlaintextSecretFields` — the `secret:"true"` walk that finds tagged fields holding literals; the diskless image build refuses a platform config it reports |
 | `pkg/bootstrap/config_writer.go` | `SecretUpdate`, `ConfigWriter` and its atomic YAML rewriting |
 | `pkg/config/secrets/idevid_resolver.go` | `IDevIDResolver` |
 | `pkg/config/secrets/file_resolver.go` | `FileResolver` |
@@ -59,13 +60,15 @@ Every local resolver carries a compile-time assertion, e.g.
 
 ```go
 const (
-    SchemeKMS       = "kms://"
-    SchemeRemoteKMS = "remote-kms://"
-    SchemeEnv       = "env://"
-    SchemeIDevID    = "idevid://"
-    SchemeFile      = "file://"
-    SchemeDynamic   = "dynamic://"
-    SchemeXKMS      = "xkms://"
+    SchemeKMS        = "kms://"
+    SchemeRemoteKMS  = "remote-kms://"
+    SchemeEnv        = "env://"
+    SchemeIDevID     = "idevid://"
+    SchemeFile       = "file://"
+    SchemeDynamic    = "dynamic://"
+    SchemeXKMS       = "xkms://"
+    SchemeCredential = "credential://"
+    SchemeAutoGen    = "autogen://"
 )
 
 const (
@@ -83,9 +86,9 @@ func ExpandShortKMSPath(path, tenantID, nodeID string) string
 
 Two things to note:
 
-- **`IsSecretURI` covers seven schemes and omits `autogen://` and
-  `credential://`**, both of which the go-quicbaas registry can resolve. Code
-  that gates on `IsSecretURI` will not classify those as secrets.
+- **`IsSecretURI` covers all nine schemes**, including `credential://` and
+  `autogen://`, which only the go-quicbaas registry resolves. Its consumer,
+  `PlaintextSecretFields`, treats any of them as a reference, not a literal.
 - **`ExpandShortKMSPath` returns the path unchanged when `tenantID` or `nodeID`
   is empty**, rather than erroring. A short path resolved with an empty tenant
   therefore reaches the store un-namespaced.
@@ -427,8 +430,9 @@ There are **no metrics** for resolution counts, latency or failures.
 ## 12. Related
 
 - [architecture.md](architecture.md) · [cli.md](cli.md) · [api.md](api.md) · [user.md](user.md)
-- Legacy in this folder, still useful and partly superseded:
-  `config-secret-schemes.md` (scheme reference, accurate),
-  `bootstrap-secrets.md` and `provisioning-secrets.md` (see
-  [architecture.md](architecture.md) §8), `README.md` (superseded)
+- Legacy in this folder, still useful:
+  `config-secret-schemes.md` (scheme reference, accurate). The legacy
+  `bootstrap-secrets.md`, `provisioning-secrets.md` and `README.md` are
+  deleted; these five files hold their content, and
+  [architecture.md](architecture.md) §8 lists what they got wrong.
 - [`docs/kms/`](../kms/) · [`docs/tpm/`](../tpm/) · [`docs/provisioning/`](../provisioning/) · [`docs/bootstrap/`](../bootstrap/)

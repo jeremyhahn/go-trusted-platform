@@ -720,11 +720,8 @@ type SnapshotOverlay struct {
 	UptimeSeconds            int64                      `protobuf:"varint,13,opt,name=uptime_seconds,json=uptimeSeconds,proto3" json:"uptime_seconds,omitempty"`
 	AdmittedVteps            []*GatewayAdmittedVTEP     `protobuf:"bytes,14,rep,name=admitted_vteps,json=admittedVteps,proto3" json:"admitted_vteps,omitempty"`
 	NdCounters               *SnapshotOverlayNDCounters `protobuf:"bytes,15,opt,name=nd_counters,json=ndCounters,proto3" json:"nd_counters,omitempty"`
-	// refused_replays counts the replays of a refused VTEP's routes that
-	// failed, leaving the VTEP refused for the next sweep.
-	RefusedReplays uint64 `protobuf:"varint,16,opt,name=refused_replays,json=refusedReplays,proto3" json:"refused_replays,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	unknownFields            protoimpl.UnknownFields
+	sizeCache                protoimpl.SizeCache
 }
 
 func (x *SnapshotOverlay) Reset() {
@@ -860,13 +857,6 @@ func (x *SnapshotOverlay) GetNdCounters() *SnapshotOverlayNDCounters {
 		return x.NdCounters
 	}
 	return nil
-}
-
-func (x *SnapshotOverlay) GetRefusedReplays() uint64 {
-	if x != nil {
-		return x.RefusedReplays
-	}
-	return 0
 }
 
 type SnapshotOverlayNDCounters struct {
@@ -2614,13 +2604,17 @@ func (x *IPAMPool) GetRangeEnd() string {
 
 // IP allocation
 type IPAllocation struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Ip            string                 `protobuf:"bytes,1,opt,name=ip,proto3" json:"ip,omitempty"`
-	PoolId        string                 `protobuf:"bytes,2,opt,name=pool_id,json=poolId,proto3" json:"pool_id,omitempty"`
-	DeviceId      string                 `protobuf:"bytes,3,opt,name=device_id,json=deviceId,proto3" json:"device_id,omitempty"`
-	Hostname      string                 `protobuf:"bytes,4,opt,name=hostname,proto3" json:"hostname,omitempty"`
-	AllocatedAt   *timestamppb.Timestamp `protobuf:"bytes,5,opt,name=allocated_at,json=allocatedAt,proto3" json:"allocated_at,omitempty"`
-	ExpiresAt     *timestamppb.Timestamp `protobuf:"bytes,6,opt,name=expires_at,json=expiresAt,proto3" json:"expires_at,omitempty"`
+	state       protoimpl.MessageState `protogen:"open.v1"`
+	Ip          string                 `protobuf:"bytes,1,opt,name=ip,proto3" json:"ip,omitempty"`
+	PoolId      string                 `protobuf:"bytes,2,opt,name=pool_id,json=poolId,proto3" json:"pool_id,omitempty"`
+	DeviceId    string                 `protobuf:"bytes,3,opt,name=device_id,json=deviceId,proto3" json:"device_id,omitempty"`
+	Hostname    string                 `protobuf:"bytes,4,opt,name=hostname,proto3" json:"hostname,omitempty"`
+	AllocatedAt *timestamppb.Timestamp `protobuf:"bytes,5,opt,name=allocated_at,json=allocatedAt,proto3" json:"allocated_at,omitempty"`
+	ExpiresAt   *timestamppb.Timestamp `protobuf:"bytes,6,opt,name=expires_at,json=expiresAt,proto3" json:"expires_at,omitempty"`
+	// IPAM allocation status: "active", "reserved", "expired" or "released".
+	// An allocation IPAM expired for inactivity keeps a zero expires_at, so
+	// only this field says it no longer holds its address.
+	Status        string `protobuf:"bytes,7,opt,name=status,proto3" json:"status,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2695,6 +2689,13 @@ func (x *IPAllocation) GetExpiresAt() *timestamppb.Timestamp {
 		return x.ExpiresAt
 	}
 	return nil
+}
+
+func (x *IPAllocation) GetStatus() string {
+	if x != nil {
+		return x.Status
+	}
+	return ""
 }
 
 type GetGatewayStatusRequest struct {
@@ -5833,7 +5834,7 @@ const file_gateway_proto_rawDesc = "" +
 	"\aoverlay\x18\x10 \x01(\v2\x1c.platform.v1.SnapshotOverlayR\aoverlay\x1a>\n" +
 	"\x10AnnotationsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xdd\x05\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xb4\x05\n" +
 	"\x0fSnapshotOverlay\x12\x18\n" +
 	"\arunning\x18\x01 \x01(\bR\arunning\x12\x1d\n" +
 	"\n" +
@@ -5853,8 +5854,7 @@ const file_gateway_proto_rawDesc = "" +
 	"\x0euptime_seconds\x18\r \x01(\x03R\ruptimeSeconds\x12G\n" +
 	"\x0eadmitted_vteps\x18\x0e \x03(\v2 .platform.v1.GatewayAdmittedVTEPR\radmittedVteps\x12G\n" +
 	"\vnd_counters\x18\x0f \x01(\v2&.platform.v1.SnapshotOverlayNDCountersR\n" +
-	"ndCounters\x12'\n" +
-	"\x0frefused_replays\x18\x10 \x01(\x04R\x0erefusedReplays\"\xbc\x01\n" +
+	"ndCounters\"\xbc\x01\n" +
 	"\x19SnapshotOverlayNDCounters\x12\x16\n" +
 	"\x06punted\x18\x01 \x01(\x04R\x06punted\x12\x1a\n" +
 	"\banswered\x18\x02 \x01(\x04R\banswered\x12#\n" +
@@ -6040,7 +6040,7 @@ const file_gateway_proto_rawDesc = "" +
 	"\breserved\x18\x0e \x03(\tR\breserved\x12\x1f\n" +
 	"\vrange_start\x18\x0f \x01(\tR\n" +
 	"rangeStart\x12\x1b\n" +
-	"\trange_end\x18\x10 \x01(\tR\brangeEnd\"\xea\x01\n" +
+	"\trange_end\x18\x10 \x01(\tR\brangeEnd\"\x82\x02\n" +
 	"\fIPAllocation\x12\x0e\n" +
 	"\x02ip\x18\x01 \x01(\tR\x02ip\x12\x17\n" +
 	"\apool_id\x18\x02 \x01(\tR\x06poolId\x12\x1b\n" +
@@ -6048,7 +6048,8 @@ const file_gateway_proto_rawDesc = "" +
 	"\bhostname\x18\x04 \x01(\tR\bhostname\x12=\n" +
 	"\fallocated_at\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\vallocatedAt\x129\n" +
 	"\n" +
-	"expires_at\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampR\texpiresAt\"\x19\n" +
+	"expires_at\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampR\texpiresAt\x12\x16\n" +
+	"\x06status\x18\a \x01(\tR\x06status\"\x19\n" +
 	"\x17GetGatewayStatusRequest\"N\n" +
 	"\x18GetGatewayStatusResponse\x122\n" +
 	"\x06status\x18\x01 \x01(\v2\x1a.platform.v1.GatewayStatusR\x06status\"-\n" +

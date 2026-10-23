@@ -17,17 +17,21 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/rest"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ipam"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ovs"
 )
 
-// SetSDNService sets the SDN service for REST handlers.
-// This allows SDN bridge, port, flow, and policy operations via REST API.
-// The ovs.ClientInterface satisfies rest.SDNServiceInterface.
-// When svc is nil (no OVS socket configured), handlers are still created so
-// that zone endpoints (registered unconditionally in RegisterRoutes) are
-// available; bridge/port/flow/policy handlers return 503 when svc is nil.
-func (s *RESTServer) SetSDNService(svc ovs.ClientInterface) {
-	sdnHandlers := rest.NewSDNHandlers(svc, s.logger)
+// SetSDNService wires the shared SDN service into the REST handlers.
+// Bridge, port and flow routes drive its OVS client; the routes whose state
+// the service owns (VLANs) call the service itself, the same instance the
+// gRPC, QUIC, MCP and Unix transports serve, so every transport sees one
+// state. When svc is nil, handlers are still created so that zone endpoints
+// (registered unconditionally in RegisterRoutes) are available; the SDN
+// routes return 503.
+func (s *RESTServer) SetSDNService(svc *SDNService) {
+	sdnHandlers := rest.NewSDNHandlers(nil, s.logger)
+	if svc != nil {
+		sdnHandlers = rest.NewSDNHandlers(svc.OVSClient(), s.logger)
+		sdnHandlers.SetControlService(svc)
+	}
 	sdnHandlers.RegisterRoutes(s.router)
 	s.sdnHandlers = sdnHandlers
 }
@@ -35,8 +39,10 @@ func (s *RESTServer) SetSDNService(svc ovs.ClientInterface) {
 // SetGatewayIPAMService wires IPAM and gateway REST handlers using the provided
 // allocator. When allocator is nil, a default in-memory allocator is used so
 // that IPAM pool CRUD endpoints work out-of-the-box without a full SDN controller.
-func (s *RESTServer) SetGatewayIPAMService(allocator ipam.Allocator) {
+// The status and mode routes answer from status; nil reports them not configured.
+func (s *RESTServer) SetGatewayIPAMService(allocator ipam.Allocator, status GatewayStatusController) {
 	svc := newGatewayRESTService(allocator, s.logger)
+	svc.SetGatewayStatusController(status)
 	handlers := rest.NewGatewayHandlers(svc, s.logger)
 	handlers.RegisterRoutes(s.router)
 	s.gatewayService = svc
@@ -51,21 +57,39 @@ func (s *RESTServer) SetGatewaySnapshotService(reader GatewaySnapshotReader) {
 		return
 	}
 	if s.gatewayService == nil {
-		s.SetGatewayIPAMService(nil)
+		s.SetGatewayIPAMService(nil, nil)
 	}
 	s.gatewayService.reader = reader
 	s.logger.Info("Gateway overlay admission REST service wired into gateway handlers")
 }
 
-// SetGatewayPerfService wires the perf backend into the gateway REST
-// handlers. Must be called after SetGatewayIPAMService; a nil backend
-// leaves the perf routes returning 503.
-func (s *RESTServer) SetGatewayPerfService(backend GatewayPerfInterface) {
-	if backend == nil || s.gatewayHandlers == nil {
+// SetGatewayBGPService wires the gateway gRPC service the REST BGP routes
+// answer from, so REST reports BGP not configured exactly when gRPC does
+// (#65).
+func (s *RESTServer) SetGatewayBGPService(controller GatewayBGPController) {
+	if controller == nil {
 		return
 	}
-	s.gatewayHandlers.SetPerfService(newGatewayPerfRESTService(backend))
-	s.logger.Info("Gateway perf REST service wired into gateway handlers")
+	if s.gatewayService == nil {
+		s.SetGatewayIPAMService(nil, nil)
+	}
+	s.gatewayService.SetGatewayBGPController(controller)
+	s.logger.Info("Gateway BGP REST service wired into gateway handlers")
+}
+
+// SetGatewayBackends points the gateway REST load-balancer, NAT64 and perf
+// routes at the shared gateway service (#660). A backend the service lacks
+// leaves its routes returning 503.
+func (s *RESTServer) SetGatewayBackends(backends GatewayBackendSource) {
+	if backends == nil {
+		return
+	}
+	if s.gatewayService == nil {
+		s.SetGatewayIPAMService(nil, nil)
+	}
+	s.gatewayService.backends = backends
+	s.gatewayHandlers.SetPerfService(newGatewayPerfRESTService(backends))
+	s.logger.Info("Gateway LB, NAT64 and perf REST services wired into gateway handlers")
 }
 
 // SetZoneService wires the zone service into the SDN REST handlers.

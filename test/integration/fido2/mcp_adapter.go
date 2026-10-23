@@ -46,7 +46,7 @@ const (
 	mcpToolAuthenticate = "platform_fido2_authenticate"
 )
 
-// MCPAdapter drives FIDO2 operations over MCP (JSON-RPC 2.0 / plain HTTP).
+// MCPAdapter drives FIDO2 operations over MCP (JSON-RPC 2.0 over HTTPS, TLS 1.3).
 type MCPAdapter struct {
 	endpoint   string
 	httpClient *http.Client
@@ -65,8 +65,8 @@ func (m *MCPAdapter) Setup(ctx context.Context) error {
 	if endpoint == "" {
 		endpoint = GetServiceEndpoints().PlatformMCP
 	}
-	m.endpoint = "http://" + endpoint
-	m.httpClient = helpers.NewPlainHTTPClient(defaultMCPTimeout)
+	m.endpoint = helpers.MCPBaseURL(endpoint)
+	m.httpClient = helpers.NewHTTPClient(defaultMCPTimeout)
 	initParams := map[string]interface{}{
 		"protocolVersion": mcpProtocolVersion,
 		"capabilities":    map[string]interface{}{},

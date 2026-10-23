@@ -143,17 +143,6 @@ func TestTestConfig(t *testing.T) {
 	assert.Equal(t, "error", cfg.LogLevel)
 }
 
-func TestClusterConfig(t *testing.T) {
-	peers := []string{"127.0.0.1:63101", "127.0.0.1:63102"}
-	cfg := ClusterConfig(2, 63100, peers)
-
-	require.NotNil(t, cfg)
-	assert.Equal(t, uint64(2), cfg.NodeID)
-	assert.Equal(t, "127.0.0.1:63100", cfg.RaftAddress)
-	assert.Equal(t, peers, cfg.ClusterPeers)
-	assert.True(t, cfg.EnableAutoSync)
-}
-
 func TestConfig_Validate_Success(t *testing.T) {
 	cfg := DefaultConfig()
 

@@ -26,11 +26,14 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-
-	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
 	"os"
 	"sync/atomic"
 	"time"
+
+	baasservice "github.com/jeremyhahn/go-quicbaas/sdk/go/service"
+
+	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
+	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers/surface"
 )
 
 // =============================================================================
@@ -311,7 +314,7 @@ func (m *MCPAdapter) sendRequest(ctx context.Context, method string, params inte
 		return ErrMCPRequestFailed{Err: fmt.Errorf("failed to marshal request: %w", err)}
 	}
 
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://"+m.endpoint+"/mcp", bytes.NewReader(reqBody))
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, helpers.MCPEndpointURL(m.endpoint), bytes.NewReader(reqBody))
 	if err != nil {
 		return ErrMCPRequestFailed{Err: fmt.Errorf("failed to create request: %w", err)}
 	}
@@ -392,449 +395,215 @@ func (m *MCPAdapter) callTool(ctx context.Context, toolName string, args map[str
 }
 
 // =============================================================================
-// Time Conversion Helper
+// Tool Surface
 // =============================================================================
 
-// unixMillisToTime converts Unix milliseconds to time.Time.
-func unixMillisToTime(ms int64) time.Time {
-	if ms == 0 {
-		return time.Time{}
+// The adapter calls the secret_* tools pkg/api/mcp registers
+// (kms_tools_exec.go) with their snake_case arguments, and decodes each
+// result into the go-quicbaas SDK type, or the map shape, that
+// pkg/api/daemon.MCPServiceProvider returns for that tool.
+const (
+	// mcpTransport names this transport in surface.ErrNoSurface declarations.
+	mcpTransport = "MCP"
+
+	// mcpNoSecretLifecycleTool explains why rotate, version listing, rollback
+	// and status leave the MCP matrix.
+	mcpNoSecretLifecycleTool = "the MCP tool registry has no secret rotate, version listing, rollback or status tool (MISSING)"
+
+	// mcpNoSecretPrefixTool explains why Prefix leaves the MCP matrix.
+	mcpNoSecretPrefixTool = "the MCP tool registry has no secret prefix listing tool (MISSING)"
+)
+
+// mcpNoSurface declares an operation the MCP tool registry does not expose.
+func mcpNoSurface(operation, reason string) error {
+	return surface.ErrNoSurface{Transport: mcpTransport, Operation: operation, Reason: reason}
+}
+
+// mcpDeleteResult is the map secret_delete returns.
+type mcpDeleteResult struct {
+	Success  bool   `json:"success"`
+	SecretID string `json:"secret_id"`
+}
+
+// storeMetadata folds the description into the metadata map; secret_store
+// takes no separate description argument.
+func storeMetadata(opts StoreOptions) map[string]string {
+	metadata := make(map[string]string, len(opts.Metadata)+1)
+	for key, value := range opts.Metadata {
+		metadata[key] = value
 	}
-	return time.Unix(ms/1000, (ms%1000)*int64(time.Millisecond))
-}
-
-// =============================================================================
-// MCP Response Types
-// =============================================================================
-
-type mcpSecretsStoreResponse struct {
-	SecretID  string `json:"secretId"`
-	Version   uint64 `json:"version"`
-	Timestamp int64  `json:"timestamp"`
-}
-
-type mcpSecretsGetResponse struct {
-	SecretID      string            `json:"secretId"`
-	Version       uint64            `json:"version"`
-	Data          string            `json:"data"` // base64
-	Metadata      map[string]string `json:"metadata"`
-	Algorithm     string            `json:"algorithm"`
-	KeyIdentifier string            `json:"keyIdentifier"`
-	CreatedAt     int64             `json:"createdAt"`
-	Timestamp     int64             `json:"timestamp"`
-}
-
-type mcpSecretsListResponse struct {
-	Secrets    []mcpSecretSummary `json:"secrets"`
-	TotalCount int32              `json:"totalCount"`
-	HasMore    bool               `json:"hasMore"`
-	NextCursor string             `json:"nextCursor"`
-}
-
-type mcpSecretSummary struct {
-	SecretID       string `json:"secretId"`
-	Name           string `json:"name"`
-	CurrentVersion uint64 `json:"currentVersion"`
-	Description    string `json:"description"`
-	Owner          string `json:"owner"`
-	CreatedAt      int64  `json:"createdAt"`
-	UpdatedAt      int64  `json:"updatedAt"`
-}
-
-type mcpSecretsDeleteResponse struct {
-	SecretID  string `json:"secretId"`
-	Deleted   bool   `json:"deleted"`
-	Timestamp int64  `json:"timestamp"`
-}
-
-type mcpSecretsRotateResponse struct {
-	SecretID   string `json:"secretId"`
-	OldVersion uint64 `json:"oldVersion"`
-	NewVersion uint64 `json:"newVersion"`
-	Timestamp  int64  `json:"timestamp"`
-}
-
-type mcpSecretsVersionsResponse struct {
-	SecretID   string                 `json:"secretId"`
-	Versions   []mcpSecretVersionInfo `json:"versions"`
-	HasMore    bool                   `json:"hasMore"`
-	NextCursor string                 `json:"nextCursor"`
-}
-
-type mcpSecretVersionInfo struct {
-	Version   uint64 `json:"version"`
-	CreatedAt int64  `json:"createdAt"`
-	CreatedBy string `json:"createdBy"`
-	ExpiresAt int64  `json:"expiresAt"`
-	DeletedAt int64  `json:"deletedAt"`
-}
-
-type mcpSecretsVersionResponse struct {
-	SecretID  string            `json:"secretId"`
-	Version   uint64            `json:"version"`
-	Data      string            `json:"data"` // base64
-	Metadata  map[string]string `json:"metadata"`
-	CreatedAt int64             `json:"createdAt"`
-	CreatedBy string            `json:"createdBy"`
-	ExpiresAt int64             `json:"expiresAt"`
-	Timestamp int64             `json:"timestamp"`
-}
-
-type mcpSecretsRollbackResponse struct {
-	SecretID   string `json:"secretId"`
-	NewVersion uint64 `json:"newVersion"`
-	Timestamp  int64  `json:"timestamp"`
-}
-
-type mcpSecretsStatusResponse struct {
-	SecretID  string `json:"secretId"`
-	Status    string `json:"status"`
-	Timestamp int64  `json:"timestamp"`
-}
-
-type mcpSecretsPolicyResponse struct {
-	SecretID        string `json:"secretId"`
-	Enabled         bool   `json:"enabled"`
-	IntervalSeconds int64  `json:"intervalSeconds"`
-	NextRotation    int64  `json:"nextRotation"`
-	RetainVersions  int32  `json:"retainVersions"`
-	RotationLambda  string `json:"rotationLambda"`
-	UpdatedAt       int64  `json:"updatedAt"`
-}
-
-type mcpSecretsPolicySetResponse struct {
-	SecretID  string `json:"secretId"`
-	Timestamp int64  `json:"timestamp"`
-}
-
-type mcpSecretsPrefixResponse struct {
-	Secrets    map[string]mcpPrefixSecretData `json:"secrets"`
-	TotalCount int32                          `json:"totalCount"`
-	HasMore    bool                           `json:"hasMore"`
-	NextCursor string                         `json:"nextCursor"`
-}
-
-type mcpPrefixSecretData struct {
-	Data     string            `json:"data"` // base64
-	Metadata map[string]string `json:"metadata"`
-	Version  int64             `json:"version"`
+	if opts.Description != "" {
+		metadata["description"] = opts.Description
+	}
+	return metadata
 }
 
 // =============================================================================
 // Secrets Management Operations
 // =============================================================================
 
-// Store stores a new secret via MCP tool call.
+// Store calls secret_store. The tool takes no tags, expiry, tenant, key or
+// algorithm argument.
 func (m *MCPAdapter) Store(ctx context.Context, opts StoreOptions) (*StoreResult, error) {
 	args := map[string]interface{}{
-		"name": opts.Name,
-		"data": base64.StdEncoding.EncodeToString(opts.Data),
+		"secret_id": opts.Name,
+		"data":      base64.StdEncoding.EncodeToString(opts.Data),
 	}
-	if opts.Description != "" {
-		args["description"] = opts.Description
-	}
-	if opts.TenantID != "" {
-		args["tenantId"] = opts.TenantID
-	}
-	if opts.KeyID != "" {
-		args["keyId"] = opts.KeyID
-	}
-	if opts.Algorithm != "" {
-		args["algorithm"] = opts.Algorithm
+	if metadata := storeMetadata(opts); len(metadata) > 0 {
+		args["metadata"] = metadata
 	}
 
-	var resp mcpSecretsStoreResponse
-	if err := m.callTool(ctx, "platform.secrets.store", args, &resp); err != nil {
+	var resp baasservice.StoreSecretResponse
+	if err := m.callTool(ctx, "secret_store", args, &resp); err != nil {
 		return nil, err
 	}
 
-	return &StoreResult{
-		SecretID:  resp.SecretID,
-		Version:   resp.Version,
-		Timestamp: unixMillisToTime(resp.Timestamp),
-	}, nil
+	return &StoreResult{SecretID: resp.SecretID, Version: resp.Version, Timestamp: resp.Timestamp}, nil
 }
 
-// Get retrieves a secret via MCP tool call.
+// Get calls secret_get for the current version.
 func (m *MCPAdapter) Get(ctx context.Context, name string) (*GetResult, error) {
-	args := map[string]interface{}{
-		"name": name,
-	}
-
-	var resp mcpSecretsGetResponse
-	if err := m.callTool(ctx, "platform.secrets.get", args, &resp); err != nil {
+	var resp baasservice.GetSecretResponse
+	if err := m.callTool(ctx, "secret_get", map[string]interface{}{"secret_id": name}, &resp); err != nil {
 		return nil, err
-	}
-
-	data, err := base64.StdEncoding.DecodeString(resp.Data)
-	if err != nil {
-		return nil, ErrMCPResponseParseFailed{Operation: "Get", Err: err}
 	}
 
 	return &GetResult{
 		SecretID:      resp.SecretID,
 		Version:       resp.Version,
-		Data:          data,
+		Data:          resp.Data,
 		Metadata:      resp.Metadata,
 		Algorithm:     resp.Algorithm,
 		KeyIdentifier: resp.KeyIdentifier,
-		CreatedAt:     unixMillisToTime(resp.CreatedAt),
-		Timestamp:     unixMillisToTime(resp.Timestamp),
+		CreatedAt:     resp.CreatedAt,
+		Timestamp:     resp.Timestamp,
 	}, nil
 }
 
-// List lists secrets via MCP tool call.
+// List calls secret_list. The tool takes a limit only; it has no cursor.
 func (m *MCPAdapter) List(ctx context.Context, opts ListOptions) (*ListResult, error) {
 	args := map[string]interface{}{}
 	if opts.Limit > 0 {
 		args["limit"] = opts.Limit
 	}
-	if opts.Cursor != "" {
-		args["cursor"] = opts.Cursor
-	}
 
-	var resp mcpSecretsListResponse
-	if err := m.callTool(ctx, "platform.secrets.list", args, &resp); err != nil {
+	var resp baasservice.ListSecretsResponse
+	if err := m.callTool(ctx, "secret_list", args, &resp); err != nil {
 		return nil, err
 	}
 
-	secrets := make([]SecretSummary, len(resp.Secrets))
-	for i, s := range resp.Secrets {
-		secrets[i] = SecretSummary{
-			SecretID:       s.SecretID,
-			Name:           s.Name,
-			CurrentVersion: s.CurrentVersion,
-			Description:    s.Description,
-			Owner:          s.Owner,
-			CreatedAt:      unixMillisToTime(s.CreatedAt),
-			UpdatedAt:      unixMillisToTime(s.UpdatedAt),
+	secrets := make([]SecretSummary, 0, len(resp.Secrets))
+	for _, secret := range resp.Secrets {
+		if secret == nil {
+			continue
 		}
+		secrets = append(secrets, SecretSummary{
+			SecretID:       secret.SecretID,
+			Name:           secret.Name,
+			CurrentVersion: secret.CurrentVersion,
+			Description:    secret.Description,
+			Owner:          secret.Owner,
+			CreatedAt:      secret.CreatedAt,
+			UpdatedAt:      secret.UpdatedAt,
+		})
 	}
 
 	return &ListResult{
 		Secrets:    secrets,
-		TotalCount: resp.TotalCount,
+		TotalCount: int32(resp.TotalCount),
 		HasMore:    resp.HasMore,
 		NextCursor: resp.NextCursor,
 	}, nil
 }
 
-// Delete deletes a secret via MCP tool call.
-func (m *MCPAdapter) Delete(ctx context.Context, name string, permanent bool) (*DeleteResult, error) {
-	args := map[string]interface{}{
-		"name":      name,
-		"permanent": permanent,
-	}
-
-	var resp mcpSecretsDeleteResponse
-	if err := m.callTool(ctx, "platform.secrets.delete", args, &resp); err != nil {
+// Delete calls secret_delete. The tool has no permanent argument.
+func (m *MCPAdapter) Delete(ctx context.Context, name string, _ bool) (*DeleteResult, error) {
+	var resp mcpDeleteResult
+	if err := m.callTool(ctx, "secret_delete", map[string]interface{}{"secret_id": name}, &resp); err != nil {
 		return nil, err
 	}
 
-	return &DeleteResult{
-		SecretID:  resp.SecretID,
-		Deleted:   resp.Deleted,
-		Timestamp: unixMillisToTime(resp.Timestamp),
-	}, nil
+	return &DeleteResult{SecretID: resp.SecretID, Deleted: resp.Success}, nil
 }
 
-// Rotate rotates a secret to a new value via MCP tool call.
-func (m *MCPAdapter) Rotate(ctx context.Context, name string, newData []byte) (*RotateResult, error) {
-	args := map[string]interface{}{
-		"name":    name,
-		"newData": base64.StdEncoding.EncodeToString(newData),
-	}
-
-	var resp mcpSecretsRotateResponse
-	if err := m.callTool(ctx, "platform.secrets.rotate", args, &resp); err != nil {
-		return nil, err
-	}
-
-	return &RotateResult{
-		SecretID:   resp.SecretID,
-		OldVersion: resp.OldVersion,
-		NewVersion: resp.NewVersion,
-		Timestamp:  unixMillisToTime(resp.Timestamp),
-	}, nil
+// Rotate has no MCP surface.
+func (m *MCPAdapter) Rotate(_ context.Context, _ string, _ []byte) (*RotateResult, error) {
+	return nil, mcpNoSurface("Rotate", mcpNoSecretLifecycleTool)
 }
 
-// Versions lists secret versions via MCP tool call.
-func (m *MCPAdapter) Versions(ctx context.Context, name string) (*VersionsResult, error) {
-	args := map[string]interface{}{
-		"name": name,
-	}
-
-	var resp mcpSecretsVersionsResponse
-	if err := m.callTool(ctx, "platform.secrets.versions", args, &resp); err != nil {
-		return nil, err
-	}
-
-	versions := make([]VersionInfo, len(resp.Versions))
-	for i, v := range resp.Versions {
-		versions[i] = VersionInfo{
-			Version:   v.Version,
-			CreatedAt: unixMillisToTime(v.CreatedAt),
-			CreatedBy: v.CreatedBy,
-			ExpiresAt: unixMillisToTime(v.ExpiresAt),
-			DeletedAt: unixMillisToTime(v.DeletedAt),
-		}
-	}
-
-	return &VersionsResult{
-		SecretID:   resp.SecretID,
-		Versions:   versions,
-		HasMore:    resp.HasMore,
-		NextCursor: resp.NextCursor,
-	}, nil
+// Versions has no MCP surface.
+func (m *MCPAdapter) Versions(_ context.Context, _ string) (*VersionsResult, error) {
+	return nil, mcpNoSurface("Versions", mcpNoSecretLifecycleTool)
 }
 
-// Version retrieves a specific secret version via MCP tool call.
+// Version calls secret_get for one version.
 func (m *MCPAdapter) Version(ctx context.Context, name string, version int) (*VersionResult, error) {
-	args := map[string]interface{}{
-		"name":    name,
-		"version": version,
-	}
+	args := map[string]interface{}{"secret_id": name, "version": version}
 
-	var resp mcpSecretsVersionResponse
-	if err := m.callTool(ctx, "platform.secrets.version", args, &resp); err != nil {
+	var resp baasservice.GetSecretResponse
+	if err := m.callTool(ctx, "secret_get", args, &resp); err != nil {
 		return nil, err
-	}
-
-	data, err := base64.StdEncoding.DecodeString(resp.Data)
-	if err != nil {
-		return nil, ErrMCPResponseParseFailed{Operation: "Version", Err: err}
 	}
 
 	return &VersionResult{
 		SecretID:  resp.SecretID,
 		Version:   resp.Version,
-		Data:      data,
+		Data:      resp.Data,
 		Metadata:  resp.Metadata,
-		CreatedAt: unixMillisToTime(resp.CreatedAt),
-		CreatedBy: resp.CreatedBy,
-		ExpiresAt: unixMillisToTime(resp.ExpiresAt),
-		Timestamp: unixMillisToTime(resp.Timestamp),
+		CreatedAt: resp.CreatedAt,
+		Timestamp: resp.Timestamp,
 	}, nil
 }
 
-// Rollback rolls back to a previous secret version via MCP tool call.
-func (m *MCPAdapter) Rollback(ctx context.Context, name string, targetVersion int) (*RollbackResult, error) {
-	args := map[string]interface{}{
-		"name":          name,
-		"targetVersion": targetVersion,
-	}
-
-	var resp mcpSecretsRollbackResponse
-	if err := m.callTool(ctx, "platform.secrets.rollback", args, &resp); err != nil {
-		return nil, err
-	}
-
-	return &RollbackResult{
-		SecretID:   resp.SecretID,
-		NewVersion: resp.NewVersion,
-		Timestamp:  unixMillisToTime(resp.Timestamp),
-	}, nil
+// Rollback has no MCP surface.
+func (m *MCPAdapter) Rollback(_ context.Context, _ string, _ int) (*RollbackResult, error) {
+	return nil, mcpNoSurface("Rollback", mcpNoSecretLifecycleTool)
 }
 
-// Status updates the status of a secret via MCP tool call.
-func (m *MCPAdapter) Status(ctx context.Context, name string, enabled bool) (*StatusResult, error) {
-	args := map[string]interface{}{
-		"name":    name,
-		"enabled": enabled,
-	}
-
-	var resp mcpSecretsStatusResponse
-	if err := m.callTool(ctx, "platform.secrets.status", args, &resp); err != nil {
-		return nil, err
-	}
-
-	return &StatusResult{
-		SecretID:  resp.SecretID,
-		Status:    resp.Status,
-		Timestamp: unixMillisToTime(resp.Timestamp),
-	}, nil
+// Status has no MCP surface.
+func (m *MCPAdapter) Status(_ context.Context, _ string, _ bool) (*StatusResult, error) {
+	return nil, mcpNoSurface("Status", mcpNoSecretLifecycleTool)
 }
 
-// Policy retrieves the rotation policy for a secret via MCP tool call.
+// Policy calls secret_get_rotation_policy.
 func (m *MCPAdapter) Policy(ctx context.Context, name string) (*PolicyResult, error) {
-	args := map[string]interface{}{
-		"name": name,
-	}
-
-	var resp mcpSecretsPolicyResponse
-	if err := m.callTool(ctx, "platform.secrets.policy", args, &resp); err != nil {
+	var resp baasservice.GetRotationPolicyResponse
+	if err := m.callTool(ctx, "secret_get_rotation_policy", map[string]interface{}{"secret_id": name}, &resp); err != nil {
 		return nil, err
 	}
 
-	return &PolicyResult{
-		SecretID:        resp.SecretID,
-		Enabled:         resp.Enabled,
-		IntervalSeconds: resp.IntervalSeconds,
-		NextRotation:    unixMillisToTime(resp.NextRotation),
-		RetainVersions:  resp.RetainVersions,
-		RotationLambda:  resp.RotationLambda,
-		UpdatedAt:       unixMillisToTime(resp.UpdatedAt),
-	}, nil
+	result := &PolicyResult{SecretID: resp.SecretID, UpdatedAt: resp.Timestamp}
+	if policy := resp.Policy; policy != nil {
+		result.Enabled = policy.Enabled
+		result.IntervalSeconds = int64(policy.Interval / time.Second)
+		result.NextRotation = policy.NextRotation
+		result.RetainVersions = int32(policy.RetainVersions)
+		result.RotationLambda = policy.RotationLambda
+	}
+	return result, nil
 }
 
-// PolicySet sets the rotation policy for a secret via MCP tool call.
+// PolicySet calls secret_set_rotation_policy. The tool has no rotation
+// lambda argument.
 func (m *MCPAdapter) PolicySet(ctx context.Context, name string, opts PolicySetOptions) (*PolicySetResult, error) {
 	args := map[string]interface{}{
-		"name":            name,
-		"enabled":         opts.Enabled,
-		"intervalSeconds": opts.IntervalSeconds,
-		"retainVersions":  opts.RetainVersions,
-	}
-	if opts.RotationLambda != "" {
-		args["rotationLambda"] = opts.RotationLambda
+		"secret_id":        name,
+		"enabled":          opts.Enabled,
+		"interval_seconds": opts.IntervalSeconds,
+		"retain_versions":  opts.RetainVersions,
 	}
 
-	var resp mcpSecretsPolicySetResponse
-	if err := m.callTool(ctx, "platform.secrets.policy.set", args, &resp); err != nil {
+	var resp baasservice.SetRotationPolicyResponse
+	if err := m.callTool(ctx, "secret_set_rotation_policy", args, &resp); err != nil {
 		return nil, err
 	}
 
-	return &PolicySetResult{
-		SecretID:  resp.SecretID,
-		Timestamp: unixMillisToTime(resp.Timestamp),
-	}, nil
+	return &PolicySetResult{SecretID: resp.SecretID, Timestamp: resp.Timestamp}, nil
 }
 
-// Prefix searches for secrets by prefix via MCP tool call.
-func (m *MCPAdapter) Prefix(ctx context.Context, prefix string, includeData bool) (*PrefixResult, error) {
-	args := map[string]interface{}{
-		"prefix":      prefix,
-		"includeData": includeData,
-	}
-
-	var resp mcpSecretsPrefixResponse
-	if err := m.callTool(ctx, "platform.secrets.prefix", args, &resp); err != nil {
-		return nil, err
-	}
-
-	secrets := make(map[string]PrefixSecretData, len(resp.Secrets))
-	for name, s := range resp.Secrets {
-		var data []byte
-		var err error
-		if s.Data != "" {
-			data, err = base64.StdEncoding.DecodeString(s.Data)
-			if err != nil {
-				return nil, ErrMCPResponseParseFailed{Operation: "Prefix", Err: err}
-			}
-		}
-		secrets[name] = PrefixSecretData{
-			Data:     data,
-			Metadata: s.Metadata,
-			Version:  s.Version,
-		}
-	}
-
-	return &PrefixResult{
-		Secrets:    secrets,
-		TotalCount: resp.TotalCount,
-		HasMore:    resp.HasMore,
-		NextCursor: resp.NextCursor,
-	}, nil
+// Prefix has no MCP surface.
+func (m *MCPAdapter) Prefix(_ context.Context, _ string, _ bool) (*PrefixResult, error) {
+	return nil, mcpNoSurface("Prefix", mcpNoSecretPrefixTool)
 }
 
 // =============================================================================

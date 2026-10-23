@@ -24,6 +24,35 @@ is invoked with no flags.
 See `docs/architecture/deployment-reference.md` §1 for the topology
 this template implements.
 
+## Standalone control plane (`standalone-cp.example.yaml`)
+
+`standalone-cp.example.yaml` runs `platformd` standalone as the control
+plane on a host that already runs its own network: tgw-01, the VLAN 405
+boot node (`bond0.405`, `192.0.2.1`), serves the rack Raspberry Pi workers
+until the CM4 control plane is proven. The bootstrap config that names it is
+`configs/bootstrap/tgw01-vlan405.example.yaml` (`templates.control-plane`).
+
+It is `default.yaml` made plan-free:
+
+- `network:` carries only `dns`. No role, forwarding, platform VRF,
+  interfaces, bridges, bonds or VLANs: platformd configures no host
+  network, and the gateway configuration keeps owning tgw-01's.
+- `sdn.enabled: false`, so no reference-network plan is built and
+  `NetworkConfig.Validate` runs with none. A role, platform VRF, bond VLAN
+  or zone VLAN added here is refused at load (`ErrNetworkPlanRequired`).
+- Every listener is on `192.0.2.1`: the public webservice serves TLS only
+  (`port: 0`, since `:8080` is the boot node's HTTP server), the internal
+  webservice binds `192.0.2.1`, and a `daemon:` section binds gRPC and QUIC
+  there (REST belongs to the public webservice, MCP stays on loopback).
+- `dns.private-ipv4: 192.0.2.1`, so `cp.<internal-zone>` and the records
+  webservices register answer with the address the Pis reach, not the
+  host's default-route address.
+- Every secret is a `kms://` reference; nothing installs the host, so
+  factory reset is off.
+
+`pkg/app` loads it through platformd's strict check and decode
+(`TestStandaloneCPTemplate`).
+
 ## Use Cases
 
 - Development and demo environments
@@ -63,7 +92,7 @@ Common overrides: `os.hostname`, `domain`, `network.interfaces[].name`,
 | `trusted-platform.target` | (target) | Bundles both services |
 
 Both daemons run on the same host with a Unix-socket IPC boundary
-between them. See `docs/architecture/binary-separation.md` and
+between them. See `docs/gateway/architecture.md` (Component boundaries) and
 `docs/architecture/bootstrap-flow.md` §1 for the architectural
 rationale.
 
@@ -86,7 +115,7 @@ chrony is installed as a mandatory package and managed by platformd;
 removing the `ntp:` section entirely makes platformd leave it alone.
 
 Full schema: `docs/device-templates.md` (Time Synchronization).
-API surface: `docs/ntp/api-reference.md`.
+API surface: `docs/ntp/api.md`.
 
 ## BMC Trust Chain (trust.bmc)
 

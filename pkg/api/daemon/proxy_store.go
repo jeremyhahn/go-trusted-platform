@@ -215,7 +215,6 @@ func cloneRoute(r proxy.RouteConfig) proxy.RouteConfig {
 	out := r
 	out.Hosts = append([]string(nil), r.Hosts...)
 	out.Auth.AllowedZones = append([]string(nil), r.Auth.AllowedZones...)
-	out.Auth.RequiredRoles = append([]string(nil), r.Auth.RequiredRoles...)
 	out.Auth.RequiredScopes = append([]string(nil), r.Auth.RequiredScopes...)
 	return out
 }

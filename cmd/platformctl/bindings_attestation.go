@@ -18,6 +18,7 @@ import (
 
 	platform "github.com/jeremyhahn/go-trusted-platform/sdk/go"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
+	attestationsvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/attestation"
 )
 
 // AttestationBinding exposes attestation service methods to the Wails frontend.
@@ -140,16 +141,18 @@ func (b *AttestationBinding) DeleteManifest(id string) (map[string]interface{}, 
 	return protoToMap(resp)
 }
 
-// GetAttestationQuote generates a TPM quote for the specified PCRs.
-func (b *AttestationBinding) GetAttestationQuote(nonce []byte) (map[string]interface{}, error) {
+// GetAttestationQuote generates a TPM quote of the given PCRs. The node
+// quotes SHA-256(nonce || channel_binding) for this connection (#482); the
+// SDK client refuses a quote that is not bound to it, so a quote returned
+// here was produced for this caller and not relayed.
+func (b *AttestationBinding) GetAttestationQuote(pcrIndices []uint32, nonce []byte) (map[string]interface{}, error) {
 	cl, err := b.getClient()
 	if err != nil {
 		return nil, err
 	}
 
-	resp, err := cl.Attestation().GetAttestationQuote(b.conn.ctx, &platformv1.GetAttestationQuoteRequest{
-		Nonce: nonce,
-	})
+	resp, err := attestationsvc.NewClientFromGRPC(cl.Attestation()).GetAttestationQuote(b.conn.ctx,
+		&platformv1.AttestationQuoteConfig{PcrIndices: pcrIndices}, nonce)
 	if err != nil {
 		return nil, err
 	}
@@ -157,17 +160,29 @@ func (b *AttestationBinding) GetAttestationQuote(nonce []byte) (map[string]inter
 	return protoToMap(resp)
 }
 
-// VerifyAttestationQuote verifies a TPM quote against expected values.
-func (b *AttestationBinding) VerifyAttestationQuote(akPublicKeyPEM []byte, expectedNonce []byte) (map[string]interface{}, error) {
+// VerifyAttestationQuote verifies a TPM quote. channelBinding is the
+// binding GetAttestationQuote returned with the quote; when set, the quote
+// must carry SHA-256(expectedNonce || channelBinding). signatureAlgorithm is
+// the quote's signature_algorithm, also returned by GetAttestationQuote; the
+// daemon checks the signature under that scheme and rejects a quote without
+// one.
+func (b *AttestationBinding) VerifyAttestationQuote(quoteData, signature []byte, signatureAlgorithm string, akPublicKeyPEM, expectedNonce, channelBinding []byte) (map[string]interface{}, error) {
 	cl, err := b.getClient()
 	if err != nil {
 		return nil, err
 	}
 
-	resp, err := cl.Attestation().VerifyAttestationQuote(b.conn.ctx, &platformv1.VerifyAttestationQuoteRequest{
-		AkPublicKeyPem: akPublicKeyPEM,
-		ExpectedNonce:  expectedNonce,
-	})
+	resp, err := attestationsvc.NewClientFromGRPC(cl.Attestation()).VerifyAttestationQuote(b.conn.ctx,
+		&platformv1.VerifyAttestationQuoteRequest{
+			Quote: &platformv1.AttestationQuote{
+				QuoteData:          quoteData,
+				Signature:          signature,
+				SignatureAlgorithm: signatureAlgorithm,
+			},
+			AkPublicKeyPem: akPublicKeyPEM,
+			ExpectedNonce:  expectedNonce,
+			ChannelBinding: channelBinding,
+		})
 	if err != nil {
 		return nil, err
 	}
@@ -175,19 +190,19 @@ func (b *AttestationBinding) VerifyAttestationQuote(akPublicKeyPEM []byte, expec
 	return protoToMap(resp)
 }
 
-// CollectHostAttestation collects attestation data from the host TPM.
+// CollectHostAttestation collects attestation data from the host TPM. Like
+// GetAttestationQuote, the quote is refused unless it is bound to this
+// connection.
 func (b *AttestationBinding) CollectHostAttestation(nonce []byte) (map[string]interface{}, error) {
 	cl, err := b.getClient()
 	if err != nil {
 		return nil, err
 	}
 
-	resp, err := cl.Attestation().CollectHostAttestation(b.conn.ctx, &platformv1.CollectHostAttestationRequest{
-		Nonce: nonce,
-	})
+	attestation, err := attestationsvc.NewClientFromGRPC(cl.Attestation()).CollectHostAttestation(b.conn.ctx, nil, nonce)
 	if err != nil {
 		return nil, err
 	}
 
-	return protoToMap(resp)
+	return protoToMap(attestation)
 }

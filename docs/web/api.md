@@ -31,7 +31,7 @@ REST transport.
 `ProtocolGRPC`, `ProtocolREST`, `ProtocolQUIC`, `ProtocolMCP`.
 
 **Every capability in this feature is HTTP-shaped and REST-only.** There is no
-`WebService` in `ServiceRegistry` (`sdk/go/transport/embedded/adapter.go`'s 22
+`WebService` in `ServiceRegistry` (`sdk/go/transport/embedded/adapter.go`'s 25
 fields do not include one), no `.proto` for it, no QUIC opcode range, and no
 `web_*` MCP tool. Grepped 2026-08-18.
 
@@ -72,9 +72,10 @@ else falls back to the SPA shell with **status 200** — a client that treats
 check, no attestation, no identity headers. The authenticating proxy is a
 different feature ([`docs/proxy/`](../proxy/)).
 
-`Alt-Svc: h3=":443"; ma=86400` is set on **every** response by
-`addAltSvcHeader`, including plain-HTTP ones. The value is hard-coded and does
-not follow `tls-port`.
+`Alt-Svc: h3=":<tls-port>"; ma=86400` is set on **every** response by
+`addAltSvcHeader`, including plain-HTTP ones. It names the configured
+`tls-port`, where HTTP/3 listens on UDP; with `tls-port: 0` the header is not
+sent.
 
 ## 4. Introspection
 
@@ -186,6 +187,15 @@ on an unknown host. `TestEdgeSurface_RouteSetIsAWhitelist` pins the edge
 route set, so a route added to the platform later cannot appear on a public
 listener without failing the build.
 
+`provisioning` (#177) mounts only `GET /api/v1/devices/config`, the
+unauthenticated boot-time config fetch, and the plaintext→TLS redirect. Every
+other path is the JSON `404` an unknown route gets. No other surface mounts the
+route, so a `full` or `edge` listener answers it with that same `404`.
+`TestProvisioningSurface_RouteSetIsTheConfigRouteAlone` pins the route set and
+`TestFullSurface_ConfigRouteIsAnUnknownRoute` pins the refusal on a general
+listener. The route's contract is in
+[`docs/device/api.md`](../device/api.md) §5.
+
 ## 7. Mounted, not owned
 
 | Surface | Where | Documented in |
@@ -214,7 +224,8 @@ Errors this server produces itself (as opposed to the services it hosts):
 | Service registry with no response writer | 500 | `registry: response writer not configured` |
 | An unconfigured service's routes | 503 | the registry stub, with a reason |
 
-`/api/v1` responses use the `pkg/webservice/v1/response` envelope
+`/api/v1` responses use the `WebServiceResponse` envelope
+(`sdk/go/wire/restwire`), written by `pkg/webservice/v1/response`
 (`Success200` and friends); that contract belongs to the services.
 
 ## 9. Pagination

@@ -173,7 +173,7 @@ func TestProxyStoreService_ZoneMatrix_NoZoneService(t *testing.T) {
 
 func TestNewProxyGRPCService_EndToEnd(t *testing.T) {
 	ctx := context.Background()
-	svc := NewProxyGRPCService(nil, newTestZoneService(t))
+	svc := NewProxyGRPCServiceWithStore(nil, NewProxyStore(), newTestZoneService(t))
 
 	// Create a pool then a route through the full gRPC surface.
 	poolResp, err := svc.CreatePool(ctx, &platformv1.CreateProxyPoolRequest{

@@ -84,12 +84,15 @@ is API-only today. [cli.md](cli.md) §5 lists which transport carries what.
 
 ## Working with manifests over the API
 
-A host manifest is the record of what a host measured. The normal cycle:
+A host manifest is the record of what a host measured. The daemon stores the
+manifests the enrollment hook imports; it cannot build one itself yet.
+`POST /api/v1/attestation/manifests/build` answers `ErrTPMSessionNotConfigured`
+on every transport ([engineering](engineering.md) §3a). The cycle over a stored
+manifest:
 
-1. **Build** it: `POST /api/v1/attestation/manifests/build`
-2. **Verify** it: `POST /api/v1/attestation/manifests/verify`
-3. **List** what is stored: `GET /api/v1/attestation/manifests`
-4. **Fetch** one: `GET /api/v1/attestation/manifests/{id}`
+1. **List** what is stored: `GET /api/v1/attestation/manifests`
+2. **Fetch** one: `GET /api/v1/attestation/manifests/{id}`
+3. **Verify** it: `POST /api/v1/attestation/manifests/verify`
 
 Manifests can be pushed to remote verifiers on a schedule rather than pulled.
 That is `attestation.manifest.push-enabled`, with `push-interval` and
@@ -235,6 +238,24 @@ refreshDeviceReport / describeCallers`, and `classifyDeviceReport()` turns a
 report response into the four states above so no page decides on its own
 what a 404 means.
 
+The **Attestation** page summarises the same reports for the fleet: devices
+reporting, `Verified`, `Failed`, `Not verified`, and how many are stale. It
+counts the verifier's verdicts, never manifests. When the fleet needs action it
+shows an **Attestation needs attention** banner naming each state:
+
+| Banner line | Means | Look at |
+|---|---|---|
+| No device has an attestation verdict | the collector has reported on no device | `attestation.reporting.enabled` on the control plane, and whether its devices are dialable |
+| N devices past the collector TTL | the collector has not re-attested on schedule — the over-threshold signal; the threshold is the collector TTL | the collector's log on the control plane |
+| N devices reached no verdict | a check could not run (no AK certificate, CA or PCR baseline) | the device detail page for which check |
+| N devices failed attestation | a check ran and failed | the device detail page |
+| Attestation reporting is not configured on this node | the reports route answered `503` | `attestation.reporting` on this node |
+
+A verification pipeline that has stopped therefore no longer looks like one
+with nothing to do. The manifests and quotes listed under the summary are
+evidence, labelled `Signed` or `Unsigned`; a signature on a manifest is not a
+verdict, and no manifest is shown as verified, failed or pending.
+
 ## The control plane appears in its own fleet
 
 The control plane registers itself as a device in its own registry on every
@@ -308,14 +329,39 @@ platformctl device attest-cert record <device-id>
 platformctl device attest-cert record <device-id> --reissue
 ```
 
+In the web console the same verb is **Record certificate** on the device
+detail page's Attestation Certificate card, which says when no certificate is
+recorded. The dialog records without re-issuing unless you tick **Re-issue
+from the platform CA**; a refusal is shown in the dialog with the control
+plane's reason for every candidate.
+
+A device that already holds a certificate without `.3` (for example, one
+recorded before the preflight existed) is quarantined by every quote. If no
+compliant certificate can be recorded yet, clear the refused one:
+
+```bash
+# when every candidate is refused, clear the stored certificate instead of
+# keeping it; the next quote is then an absence (denied), not a
+# cryptographic failure (quarantine)
+platformctl device attest-cert record <device-id> --clear-on-refusal
+```
+
+The flag is off by default, never clears a compliant certificate, and clears
+nothing on any other error. Record a compliant certificate later the usual
+way.
+The console has no counterpart to `--clear-on-refusal`; clear from the CLI.
+
 Then either wait for the collector's next sweep or enqueue one with
 `platformctl attestation reports refresh <device-id>`, and read the report
 again with `platformctl attestation reports get <device-id>`:
 `ak_certificate_verified` turns true and, with a good quote, the verdict
 passes. The record itself is audited as `device_attest_cert_recorded`
-(or `device_attest_cert_refused`, with the reason) in the attestation event
-log; it is never a verdict, so it never quarantines or clears a device by
-itself. Full semantics and the transport surface:
+(or `device_attest_cert_refused`, with the reason, or
+`device_attest_cert_cleared`, with the refusal that caused the clear) in the
+attestation event log; it is never a verdict, so it never quarantines or
+releases a device by itself. After a clear, the collector's next sweep
+reports the device as having no certificate (denied) instead of a
+cryptographic failure. Full semantics and the transport surface:
 [device/api.md §4.5](../device/api.md#45-recording-the-attestation-certificate-without-re-enrolling-473).
 
 ## Naming the certificate the collector verifies

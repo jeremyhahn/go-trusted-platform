@@ -95,7 +95,7 @@ func createTestQuote(privKey *rsa.PrivateKey, nonce []byte, pcrs []PCRValue) *VM
 	return &VMQuote{
 		QuoteData:          quoteData,
 		Signature:          signature,
-		SignatureAlgorithm: "RSASSA-PKCS1-v1_5-SHA256",
+		SignatureAlgorithm: x509.SHA256WithRSA.String(),
 		PCRs:               pcrs,
 		PCRDigest:          make([]byte, 32),
 		Nonce:              nonce,
@@ -432,6 +432,64 @@ func TestVMVerifier_VerifyQuote(t *testing.T) {
 		}
 		if result.SignatureValid {
 			t.Error("Expected invalid signature")
+		}
+	})
+
+	// verifyDeclaredScheme verifies a quote the AIK signed with RSA-PSS after
+	// declare rewrites the scheme the quote names.
+	verifyDeclaredScheme := func(t *testing.T, declare func(*VMQuote)) *VerificationResult {
+		t.Helper()
+		verifier := setupVerifier()
+
+		aikPrivKey, err := rsa.GenerateKey(rand.Reader, 2048)
+		if err != nil {
+			t.Fatalf("GenerateKey: %v", err)
+		}
+		ekCert, _ := ca.issueEKCertificate("vm-123", "host-456", &aikPrivKey.PublicKey)
+
+		nonce := []byte{0x01, 0x02, 0x03, 0x04}
+		quote := createTestQuote(aikPrivKey, nonce, nil)
+		hashed := sha256.Sum256(quote.QuoteData)
+		quote.Signature, err = rsa.SignPSS(rand.Reader, aikPrivKey, crypto.SHA256, hashed[:],
+			&rsa.PSSOptions{SaltLength: rsa.PSSSaltLengthEqualsHash})
+		if err != nil {
+			t.Fatalf("SignPSS: %v", err)
+		}
+		declare(quote)
+
+		result, err := verifier.VerifyQuote(ctx, &VerifyRequest{
+			Quote:          quote,
+			Identity:       &VMIdentity{VMID: "vm-123", HostID: "host-456", EKCertificate: ekCert},
+			ExpectedNonce:  nonce,
+			PlatformCACert: ca.cert,
+		})
+		if err != nil {
+			t.Fatalf("VerifyQuote() unexpected error: %v", err)
+		}
+		return result
+	}
+
+	t.Run("RSA-PSS quote verifies under its declared scheme", func(t *testing.T) {
+		result := verifyDeclaredScheme(t, func(q *VMQuote) {
+			q.SignatureAlgorithm = x509.SHA256WithRSAPSS.String()
+		})
+		if !result.SignatureValid || result.Status != VerificationStatusVerified {
+			t.Errorf("Expected a verified PSS quote, got %s: %v", result.Status, result.Errors)
+		}
+	})
+
+	t.Run("undeclared or mismatched scheme is refused", func(t *testing.T) {
+		for name, scheme := range map[string]string{
+			"undeclared": "",
+			"PKCS#1 v1.5 declared for a PSS signature": x509.SHA256WithRSA.String(),
+			"ECDSA declared for an RSA AIK":            x509.ECDSAWithSHA256.String(),
+		} {
+			t.Run(name, func(t *testing.T) {
+				result := verifyDeclaredScheme(t, func(q *VMQuote) { q.SignatureAlgorithm = scheme })
+				if result.SignatureValid || result.Status != VerificationStatusFailed {
+					t.Errorf("Expected the signature refused, got %s", result.Status)
+				}
+			})
 		}
 	})
 

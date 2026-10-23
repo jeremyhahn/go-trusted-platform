@@ -22,6 +22,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/api/healthprobe"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/app"
 	tpconfig "github.com/jeremyhahn/go-trusted-platform/pkg/config"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/health"
@@ -74,6 +75,11 @@ type Service struct {
 	onSubscribe func()
 	subIDSeq    atomic.Uint64
 
+	// now, when non-nil, replaces time.Now so tests can advance uptime and
+	// timestamps instead of sleeping (#284). Nil on every production path;
+	// read it through currentTime.
+	now func() time.Time
+
 	shutdownCh chan struct{}
 	shutdownFn func() error
 
@@ -105,6 +111,24 @@ type serviceState struct {
 	stopCount  atomic.Uint64
 }
 
+// observedStatus reports the service's state from the service itself:
+// running whenever IsRunning says so, otherwise the transition or failure the
+// last verb recorded, otherwise stopped. A verb can record that it is
+// starting, stopping or failed; it cannot make a service read as running.
+func (st *serviceState) observedStatus() platformv1.ServiceStatus {
+	if st.service.IsRunning() {
+		return platformv1.ServiceStatus_SERVICE_STATUS_RUNNING
+	}
+	recorded := platformv1.ServiceStatus(st.status.Load())
+	switch recorded {
+	case platformv1.ServiceStatus_SERVICE_STATUS_STARTING,
+		platformv1.ServiceStatus_SERVICE_STATUS_STOPPING,
+		platformv1.ServiceStatus_SERVICE_STATUS_ERROR:
+		return recorded
+	}
+	return platformv1.ServiceStatus_SERVICE_STATUS_STOPPED
+}
+
 // NewService creates a new daemon service
 func NewService(config *Config, opts ...ServiceOption) (*Service, error) {
 	if config == nil {
@@ -133,6 +157,15 @@ func NewService(config *Config, opts ...ServiceOption) (*Service, error) {
 	s.systemStatus.Store(int32(platformv1.SystemStatus_SYSTEM_STATUS_INITIALIZING))
 
 	return s, nil
+}
+
+// currentTime returns the service's time source: time.Now unless a test set
+// s.now.
+func (s *Service) currentTime() time.Time {
+	if s.now == nil {
+		return time.Now()
+	}
+	return s.now()
 }
 
 // RegisterService registers a managed service with the daemon
@@ -184,7 +217,7 @@ func (s *Service) GetStatus(ctx context.Context, req *platformv1.GetStatusReques
 	var services []*platformv1.ServiceInfo
 	for name, state := range s.services {
 		state.mu.RLock()
-		svcStatus := platformv1.ServiceStatus(state.status.Load())
+		svcStatus := state.observedStatus()
 
 		// Store start count, stop count, and last error in metadata
 		metadata := make(map[string]string)
@@ -198,7 +231,7 @@ func (s *Service) GetStatus(ctx context.Context, req *platformv1.GetStatusReques
 		var uptimeSeconds uint64
 		if !state.startedAt.IsZero() {
 			startedAt = timestamppb.New(state.startedAt)
-			uptimeSeconds = uint64(time.Since(state.startedAt).Seconds())
+			uptimeSeconds = uint64(s.currentTime().Sub(state.startedAt).Seconds())
 		}
 
 		info := &platformv1.ServiceInfo{
@@ -225,7 +258,7 @@ func (s *Service) GetStatus(ctx context.Context, req *platformv1.GetStatusReques
 		TotalMemoryMb:     memStats.Sys / 1024 / 1024,
 		AvailableMemoryMb: (memStats.Sys - memStats.Alloc) / 1024 / 1024,
 		BootTime:          timestamppb.New(s.startTime),
-		UptimeSeconds:     uint64(time.Since(s.startTime).Seconds()),
+		UptimeSeconds:     uint64(s.currentTime().Sub(s.startTime).Seconds()),
 	}
 
 	appVersion := app.GetVersion()
@@ -241,7 +274,7 @@ func (s *Service) GetStatus(ctx context.Context, req *platformv1.GetStatusReques
 		Status:    systemStatus,
 		Info:      platformInfo,
 		Services:  services,
-		Timestamp: timestamppb.New(time.Now()),
+		Timestamp: timestamppb.New(s.currentTime()),
 	}, nil
 }
 
@@ -249,9 +282,7 @@ func (s *Service) GetStatus(ctx context.Context, req *platformv1.GetStatusReques
 // If a health registry is configured, it performs deep health checks on all
 // registered components. Otherwise, it returns basic status based on service state.
 func (s *Service) GetHealth(ctx context.Context, req *platformv1.GetHealthRequest) (*platformv1.GetHealthResponse, error) {
-	s.mu.RLock()
-	registry := s.healthRegistry
-	s.mu.RUnlock()
+	registry := s.currentHealthRegistry()
 
 	// If health registry is available, use it for comprehensive health checks
 	if registry != nil {
@@ -285,7 +316,7 @@ func (s *Service) GetHealth(ctx context.Context, req *platformv1.GetHealthReques
 	var componentHealth []*platformv1.ComponentHealth
 	for name, state := range s.services {
 		state.mu.RLock()
-		svcStatus := platformv1.ServiceStatus(state.status.Load())
+		svcStatus := state.observedStatus()
 		lastError := state.lastError
 		state.mu.RUnlock()
 
@@ -293,7 +324,7 @@ func (s *Service) GetHealth(ctx context.Context, req *platformv1.GetHealthReques
 			Name:      name,
 			Status:    healthStatusFromServiceStatus(svcStatus),
 			Message:   lastError,
-			LastCheck: timestamppb.New(time.Now()),
+			LastCheck: timestamppb.New(s.currentTime()),
 		}
 
 		if compHealth.Status != platformv1.HealthStatus_HEALTH_STATUS_HEALTHY {
@@ -306,8 +337,27 @@ func (s *Service) GetHealth(ctx context.Context, req *platformv1.GetHealthReques
 	return &platformv1.GetHealthResponse{
 		Status:     overallHealth,
 		Components: componentHealth,
-		Timestamp:  timestamppb.New(time.Now()),
+		Timestamp:  timestamppb.New(s.currentTime()),
 	}, nil
+}
+
+// Liveness answers the liveness probe. It is served without a token.
+func (s *Service) Liveness(ctx context.Context, req *platformv1.LivenessRequest) (*platformv1.LivenessResponse, error) {
+	return healthprobe.LivenessResponse(health.Liveness()), nil
+}
+
+// Readiness answers the readiness probe from the health registry: ready when
+// no registered checker is unhealthy. It is served without a token, so it
+// names no component; GetHealth carries the breakdown.
+func (s *Service) Readiness(ctx context.Context, req *platformv1.ReadinessRequest) (*platformv1.ReadinessResponse, error) {
+	return healthprobe.ReadinessResponse(health.Readiness(ctx, s.currentHealthRegistry())), nil
+}
+
+// currentHealthRegistry returns the wired health registry, or nil.
+func (s *Service) currentHealthRegistry() health.Registry {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.healthRegistry
 }
 
 // GetVersion returns version, build time, and git commit
@@ -345,9 +395,14 @@ func (s *Service) Shutdown(ctx context.Context, req *platformv1.ShutdownRequest)
 	defer cancel()
 
 	// Stop all services
+	// Process-owned subsystems are left out: they go down with the process,
+	// and stopping them here would only collect their refusals.
 	s.mu.RLock()
 	serviceNames := make([]string, 0, len(s.services))
-	for name := range s.services {
+	for name, state := range s.services {
+		if _, owned := processOwned(state.service); owned {
+			continue
+		}
 		serviceNames = append(serviceNames, name)
 	}
 	s.mu.RUnlock()
@@ -514,10 +569,14 @@ func (s *Service) StartService(ctx context.Context, req *platformv1.StartService
 		return nil, status.Error(codes.NotFound, ErrServiceNotFound{ServiceName: serviceName}.Error())
 	}
 
+	if refusal, owned := processOwned(state.service); owned {
+		return nil, refusal
+	}
+
 	state.mu.Lock()
 	defer state.mu.Unlock()
 
-	currentStatus := platformv1.ServiceStatus(state.status.Load())
+	currentStatus := state.observedStatus()
 	if currentStatus == platformv1.ServiceStatus_SERVICE_STATUS_RUNNING {
 		return nil, status.Error(codes.AlreadyExists, ErrServiceAlreadyRunning{ServiceName: serviceName}.Error())
 	}
@@ -532,7 +591,7 @@ func (s *Service) StartService(ctx context.Context, req *platformv1.StartService
 	}
 
 	state.status.Store(int32(platformv1.ServiceStatus_SERVICE_STATUS_RUNNING))
-	state.startedAt = time.Now()
+	state.startedAt = s.currentTime()
 	state.startCount.Add(1)
 
 	// Build service info for response
@@ -571,10 +630,14 @@ func (s *Service) StopService(ctx context.Context, req *platformv1.StopServiceRe
 		return nil, status.Error(codes.NotFound, ErrServiceNotFound{ServiceName: serviceName}.Error())
 	}
 
+	if refusal, owned := processOwned(state.service); owned {
+		return nil, refusal
+	}
+
 	state.mu.Lock()
 	defer state.mu.Unlock()
 
-	currentStatus := platformv1.ServiceStatus(state.status.Load())
+	currentStatus := state.observedStatus()
 	if currentStatus == platformv1.ServiceStatus_SERVICE_STATUS_STOPPED {
 		return nil, status.Error(codes.FailedPrecondition, ErrServiceNotRunning{ServiceName: serviceName}.Error())
 	}
@@ -658,16 +721,17 @@ func (s *Service) GetServiceStatus(ctx context.Context, req *platformv1.GetServi
 	var uptimeSeconds uint64
 	if !state.startedAt.IsZero() {
 		startedAt = timestamppb.New(state.startedAt)
-		uptimeSeconds = uint64(time.Since(state.startedAt).Seconds())
+		uptimeSeconds = uint64(s.currentTime().Sub(state.startedAt).Seconds())
 	}
 
+	svcStatus := state.observedStatus()
 	serviceInfo := &platformv1.ServiceInfo{
 		Type:          req.GetService(),
 		Name:          serviceName,
-		Status:        platformv1.ServiceStatus(state.status.Load()),
+		Status:        svcStatus,
 		StartedAt:     startedAt,
 		UptimeSeconds: uptimeSeconds,
-		Health:        healthStatusFromServiceStatus(platformv1.ServiceStatus(state.status.Load())),
+		Health:        healthStatusFromServiceStatus(svcStatus),
 		Metadata:      metadata,
 	}
 
@@ -696,16 +760,17 @@ func (s *Service) ListServices(ctx context.Context, req *platformv1.ListServices
 		var uptimeSeconds uint64
 		if !state.startedAt.IsZero() {
 			startedAt = timestamppb.New(state.startedAt)
-			uptimeSeconds = uint64(time.Since(state.startedAt).Seconds())
+			uptimeSeconds = uint64(s.currentTime().Sub(state.startedAt).Seconds())
 		}
 
+		svcStatus := state.observedStatus()
 		info := &platformv1.ServiceInfo{
 			Name:          name,
 			Type:          serviceTypeFromName(name),
-			Status:        platformv1.ServiceStatus(state.status.Load()),
+			Status:        svcStatus,
 			StartedAt:     startedAt,
 			UptimeSeconds: uptimeSeconds,
-			Health:        healthStatusFromServiceStatus(platformv1.ServiceStatus(state.status.Load())),
+			Health:        healthStatusFromServiceStatus(svcStatus),
 			Metadata:      metadata,
 		}
 		state.mu.RUnlock()
@@ -1053,7 +1118,7 @@ func (s *Service) getQuicBaaSClient() (quicbaas.ClientInterface, string, error) 
 // exactly the behaviour it warns about.
 func (s *Service) generateSubscriptionID() string {
 	id := s.subIDSeq.Add(1)
-	return time.Now().Format("20060102150405") + "-" + strconv.FormatUint(id, 10)
+	return s.currentTime().Format("20060102150405") + "-" + strconv.FormatUint(id, 10)
 }
 
 func serviceTypeFromName(name string) platformv1.ServiceType {
@@ -1113,18 +1178,7 @@ func healthStatusFromServiceStatus(svcStatus platformv1.ServiceStatus) platformv
 }
 
 func healthStatusFromHealthStatus(status health.HealthStatus) platformv1.HealthStatus {
-	switch status {
-	case health.StatusHealthy:
-		return platformv1.HealthStatus_HEALTH_STATUS_HEALTHY
-	case health.StatusDegraded:
-		return platformv1.HealthStatus_HEALTH_STATUS_DEGRADED
-	case health.StatusUnhealthy:
-		return platformv1.HealthStatus_HEALTH_STATUS_UNHEALTHY
-	case health.StatusUnknown:
-		return platformv1.HealthStatus_HEALTH_STATUS_UNSPECIFIED
-	default:
-		return platformv1.HealthStatus_HEALTH_STATUS_UNSPECIFIED
-	}
+	return healthprobe.StatusToProto(status)
 }
 
 func getHostname() string {

@@ -31,11 +31,11 @@ Key capabilities include:
 These are designed but not yet implemented. They are documented here so the design is discoverable, not because the code ships today:
 
 - **DHT Network** (roadmap) - Decentralized operations with cryptocurrency and content sharing. The design lives in [docs/dht/](docs/dht/); there is no `pkg/dht`. The only P2P code today is libp2p peer discovery in `pkg/sdn/gateway/p2p/`, compiled only under the `platform_p2p` build tag.
-- **Firmware Support** (roadmap) - AVR, Raspberry Pi, and Android with secure OTA updates. See [docs/firmware/ROADMAP.md](docs/firmware/ROADMAP.md), which is at Phase 0 - Planned. There is no `pkg/firmware`.
+- **Firmware Support** (roadmap) - AVR, Raspberry Pi, and Android with secure OTA updates. See [docs/firmware/](docs/firmware/) and [ROADMAP.md](ROADMAP.md); it is at Phase 0 - Planned. There is no `pkg/firmware`.
 
-For a complete list of features, see [docs/FEATURES.md](docs/FEATURES.md).
+For what is complete and what remains, see [ROADMAP.md](ROADMAP.md).
 
-For development progress and planned features, see [docs/ROADMAP.md](docs/ROADMAP.md).
+Feature documentation is in [docs/](docs/README.md).
 
 
 ## Multi-Protocol API
@@ -50,7 +50,7 @@ All platform services are exposed via multiple protocols for seamless integratio
 | MCP | HTTP | 9445 | AI/LLM tool integration |
 | Unix | Socket | /run/platformd.sock | Local IPC, CLI |
 
-These are the defaults of `platformd serve`, overridable with `--rest-port`, `--grpc-port`, `--quic-port`, and `--mcp-port`. REST, gRPC, and QUIC bind `0.0.0.0`; MCP binds `127.0.0.1` only.
+These are the defaults of `platformd serve`, overridable with `--rest-port`, `--grpc-port`, `--quic-port`, and `--mcp-port`. Every listener binds `127.0.0.1` unless its `--<transport>-bind-host` flag or `daemon.<transport>.bind-host` key names another address (see [docs/daemon/cli.md](docs/daemon/cli.md)).
 
 Each protocol provides full feature parity with the others, allowing you to choose the best fit for your integration. The platform daemon starts all protocol servers automatically based on your configuration.
 
@@ -76,8 +76,7 @@ For detailed documentation on architecture and components, see:
 
 - [Documentation Hub](docs/README.md) - Complete documentation index
 - [Architecture](docs/architecture/) - System design and security model
-- [Features](docs/FEATURES.md) - Complete feature list
-- [Roadmap](docs/ROADMAP.md) - Development progress
+- [Roadmap](ROADMAP.md) - Complete vs remaining to the release candidate
 
 
 ## Build
@@ -95,6 +94,10 @@ The included [Makefile](Makefile) provides automated builds on 64-bit x86 Debian
 
     # Build platform binaries, docker images, and ISOs
     make release-local
+
+    # Cut an internal alpha from main: signed, annotated vX.Y.Z-alpha and
+    # sdk/go/vX.Y.Z-alpha tags (docs/sdk/engineering.md §1)
+    make release-alpha VERSION=v0.2.0-alpha
 
 #### Core Dependencies
 
@@ -129,20 +132,20 @@ See the [Reference Architecture](docs/architecture/reference.md) for details on 
 
 #### Configuration
 
-Copy a [config file](configs/platform/) to `./config.yaml` (where you will run the `platformd` binary). Edit the configuration file according to your environment and requirements.
+Copy a deployment profile (single-node, dedicated, high-availability) from [`configs/platform/templates/`](configs/platform/templates/README.md) to `./config.yaml` (where you will run the `platformd` binary). Edit the configuration file according to your environment and requirements.
 
-The development and example attestation configs use a TPM simulator which is reset every time the platform starts. Be sure to set the simulator to false in the platform configuration file to start using your real TPM device.
+For local web console work, [`configs/platform/standalone/web-test.example.yaml`](configs/platform/standalone/web-test.example.yaml) starts platformd on a swtpm socket (`/tmp/swtpm/swtpm.sock`) with in-memory quicbaas and REST on 8443. `make config` copies it to `pkg/config.yaml`.
 
 #### Quick Start
 
-Generate a configuration and start the platform:
+Copy a configuration and start the platform:
 
 ```bash
-# Generate config and initialize the platform
-./platformd config gen --init --domain=example.test --platform-dir trusted-data
+# Copy the single-node profile
+cp configs/platform/templates/single-node/default.yaml config.yaml
 
-# Start the platform daemon (all protocol servers auto-start)
-sudo ./platformd serve --config config.yaml
+# Initialize the platform and start the daemon (all protocol servers auto-start)
+sudo ./platformd --config config.yaml --init serve --enable-mtls
 
 # Use the CLI to manage the platform
 platformctl daemon status
@@ -151,13 +154,6 @@ platformctl tpm info
 
 # Browse REST API documentation
 xdg-open https://localhost:8443/swagger/
-```
-
-Alternatively, use an existing configuration:
-
-```bash
-cp configs/platform/config.prod.yaml config.yaml
-sudo ./platformd serve --config config.yaml
 ```
 
 
@@ -184,7 +180,7 @@ if err != nil {
 }
 ```
 
-For detailed SDK documentation, see [docs/api/sdk-overview.md](docs/api/sdk-overview.md) and [docs/api/sdk-go.md](docs/api/sdk-go.md).
+For detailed SDK documentation, see [docs/sdk/](docs/sdk/architecture.md).
 
 
 ## Algorithm Safety

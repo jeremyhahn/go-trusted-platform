@@ -30,20 +30,26 @@ import (
 	"github.com/osrg/gobgp/v4/pkg/server"
 	"github.com/stretchr/testify/require"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/deviceverdict"
+	deviceentities "github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/bgp"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway"
+	gwcommands "github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/commands"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/modes"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/vxlan"
+	platform "github.com/jeremyhahn/go-trusted-platform/sdk/go"
+	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
 )
 
 // The overlay withdrawal fabric: the gateway and one remote VTEP, each a real
-// GoBGP speaker, peered over loopback. Their tunnel addresses are not
-// configured anywhere; the decap flows only match on them.
+// GoBGP speaker, peered over loopback. The remote VTEP's address is its
+// device's platformd fabric allocation; neither tunnel address is configured
+// anywhere, the decap flows only match on them.
 var (
 	overlayGatewaySession = netip.MustParseAddr("127.0.0.1")
 	overlayRemoteSession  = netip.MustParseAddr("127.0.0.2")
 
 	overlayGatewayVTEP = netip.MustParseAddr("192.0.2.10")
-	overlayRemoteVTEP  = netip.MustParseAddr("198.51.100.21")
 )
 
 const (
@@ -68,16 +74,47 @@ const (
 
 // TestGatewayOverlayWithdrawalRemovesDecapFlows proves on a real OVS bridge
 // that a remote VTEP loses its VXLAN decap authorisation when it stops being
-// a member of a segment. The remote VTEP's Type-3 routes reach the gateway
-// over a real BGP session and install a decap flow per VNI in the decap
-// table. Withdrawing one VNI's route removes that VNI's flow and leaves the
-// other's, and revoking the VTEP removes every flow it still has.
+// a member of a segment or its device fails attestation. gatewayd's own VTEP
+// admitter judges the remote VTEP's routes against platformd, wired as the
+// serve command wires it: the VTEP is a platformd fabric allocation of an
+// enrolled device whose latest verdict passed against a signed baseline. The
+// remote VTEP's Type-3 routes reach the gateway over a real BGP session and
+// install a decap flow per VNI in the decap table. Withdrawing one VNI's
+// route removes that VNI's flow and leaves the other's, and a failed verdict
+// for the device removes every flow it still has.
 func TestGatewayOverlayWithdrawalRemovesDecapFlows(t *testing.T) {
 	ctx, cancel := LongRunningTestContext()
 	t.Cleanup(cancel)
 	logger := slog.Default()
-	client := connectGatewayOverlayAdmissionClient(t, ctx)
-	admitter, remoteVTEP := newSignedOverlayAdmitter(t, ctx, client)
+
+	client, err := platform.Connect(ctx, platform.NewOptions(
+		platform.WithOnlyProtocol(platform.ProtocolGRPC),
+		platform.WithGRPCAddr(helpers.GetGRPCEndpoint()),
+		platform.WithTLSConfig(helpers.TLSConfigOrInsecure()),
+	))
+	require.NoError(t, err, "connect to platformd over gRPC as gatewayd does")
+	t.Cleanup(func() {
+		if err := client.Close(); err != nil {
+			t.Errorf("close platformd client: %v", err)
+		}
+	})
+	deviceID, remoteVTEP := enrollFabricDevice(t, ctx, client)
+
+	runtime := &gateway.GatewayRuntime{}
+	gwcommands.WireOverlayPlatform(runtime, client)
+	device, err := runtime.OverlayDevices.Get(ctx, deviceID)
+	require.NoError(t, err, "read the enrolled device through gatewayd's reader")
+	require.NotNil(t, device, "platformd does not hold the enrolled device")
+	control := &overlayControl{}
+	admitter, err := gateway.NewVTEPAdmitter(gateway.VTEPAdmissionConfig{
+		IPAM:     runtime.OverlayIPAM,
+		Devices:  runtime.OverlayDevices,
+		Verdicts: newSignedVerdict(deviceID, device.Serial),
+		Revoker:  control,
+		Replayer: control,
+		Logger:   logger,
+	})
+	require.NoError(t, err, "create the VTEP admitter")
 
 	bridge := setupTestBridge(t, overlayWithdrawalBridge)
 	runCmd(t, "ovs-vsctl", "add-port", bridge.name, overlayWithdrawalAccessPort,
@@ -85,7 +122,7 @@ func TestGatewayOverlayWithdrawalRemovesDecapFlows(t *testing.T) {
 	ofClient := bridge.createClient(t)
 	ovsClient := newOVSDBClient(t)
 
-	gatewaySpeaker, remoteSpeaker := startOverlayEVPNPeers(t, ctx, logger)
+	gatewaySpeaker, remoteSpeaker := startOverlayEVPNPeers(t, ctx, logger, remoteVTEP)
 	remote := startOverlayEVPNManager(t, ctx, &bgp.EVPNManagerConfig{
 		Speaker:    remoteSpeaker,
 		Logger:     logger,
@@ -112,6 +149,7 @@ func TestGatewayOverlayWithdrawalRemovesDecapFlows(t *testing.T) {
 		Logger:     logger,
 	}, ovsClient, ofClient)
 	require.NoError(t, err, "create overlay handler")
+	control.handler = handler
 	require.NoError(t, handler.Start(ctx), "start overlay handler")
 	t.Cleanup(func() {
 		if err := handler.Stop(context.Background()); err != nil {
@@ -129,6 +167,10 @@ func TestGatewayOverlayWithdrawalRemovesDecapFlows(t *testing.T) {
 		return decapFlowCount(t, bridge.name, overlayWithdrawnVNI, remoteVTEP) == 1 &&
 			decapFlowCount(t, bridge.name, overlayKeptVNI, remoteVTEP) == 1
 	})
+	admitted := admitter.Admitted(handler.InstalledVTEPs())
+	require.Len(t, admitted, 1, "the installed VTEP must carry the admission that let it in")
+	require.Equal(t, deviceID, admitted[0].DeviceID)
+	require.Equal(t, string(deviceentities.BaselineSourceSigned), admitted[0].BaselineSource)
 
 	t.Run("RouteWithdrawalRemovesThatVNIsDecapFlow", func(t *testing.T) {
 		require.NoError(t, remote.LeaveVNI(ctx, overlayWithdrawnVNI))
@@ -141,13 +183,79 @@ func TestGatewayOverlayWithdrawalRemovesDecapFlows(t *testing.T) {
 		require.Equal(t, []modes.InstalledVTEP{{VTEP: remoteVTEP, VNIs: []uint32{overlayKeptVNI}}}, handler.InstalledVTEPs())
 	})
 
-	t.Run("RevocationRemovesEveryDecapFlow", func(t *testing.T) {
-		require.NoError(t, handler.RevokeVTEP(ctx, remoteVTEP))
+	t.Run("FailedVerdictRemovesEveryDecapFlow", func(t *testing.T) {
+		admitter.OnDeviceVerdict(ctx, deviceverdict.RecordedDeviceVerdict{
+			Verdict: deviceverdict.DeviceVerdict{
+				DeviceID:      deviceID,
+				Serial:        device.Serial,
+				Cryptographic: true,
+				Reason:        "quote signature does not verify",
+			},
+			EventID:    "overlay-withdrawal-failed",
+			RecordedAt: time.Now().UTC(),
+		})
 
 		require.Zero(t, decapFlowCount(t, bridge.name, overlayKeptVNI, remoteVTEP),
-			"a revoked VTEP must not keep a decap flow")
+			"a VTEP whose device failed attestation must not keep a decap flow")
 		require.Empty(t, handler.InstalledVTEPs())
+
+		var refused gateway.ErrOverlayVTEPVerdict
+		require.ErrorAs(t, admitter.AdmitVTEP(ctx, overlayKeptVNI, remoteVTEP), &refused,
+			"a signed verdict attested before the failure must not readmit the VTEP")
 	})
+}
+
+// signedVerdict serves the one admission input platformd cannot produce: a
+// passing verdict against a signed PCR baseline. platformd's quote verifier
+// records only a trust-on-first-use baseline (DeviceQuoteVerifier.
+// evaluateBaseline), the profile baseline is read-only on every transport
+// (DeviceProfile.pcr_baseline in device.proto), and gatewayd admits only a
+// signed one. Every other input is platformd's.
+type signedVerdict struct {
+	recorded deviceverdict.RecordedDeviceVerdict
+}
+
+// newSignedVerdict returns the passing verdict of deviceID, attested now.
+func newSignedVerdict(deviceID uint64, serial string) *signedVerdict {
+	return &signedVerdict{recorded: deviceverdict.RecordedDeviceVerdict{
+		Verdict: deviceverdict.DeviceVerdict{
+			DeviceID:       deviceID,
+			Serial:         serial,
+			Passed:         true,
+			BaselineSource: string(deviceentities.BaselineSourceSigned),
+		},
+		EventID:    "overlay-withdrawal-signed",
+		RecordedAt: time.Now().UTC(),
+	}}
+}
+
+// LatestDeviceVerdict implements gateway.OverlayVerdictReader.
+func (s *signedVerdict) LatestDeviceVerdict(_ context.Context, deviceID uint64) (*deviceverdict.RecordedDeviceVerdict, error) {
+	if deviceID != s.recorded.Verdict.DeviceID {
+		return nil, gateway.ErrOverlayRecordNotFound
+	}
+	recorded := s.recorded
+	return &recorded, nil
+}
+
+// overlayControl hands the admitter's revocations and replays to the overlay
+// handler, as gatewayd's own proxy does: the admitter is built first, because
+// the handler is configured with it. The handler is set before it starts, so
+// before any route reaches the admitter.
+type overlayControl struct {
+	handler *modes.OverlayModeHandler
+}
+
+func (c *overlayControl) RevokeVTEP(ctx context.Context, vtep netip.Addr) error {
+	return c.handler.RevokeVTEP(ctx, vtep)
+}
+
+func (c *overlayControl) ReplayVTEP(ctx context.Context, vtep netip.Addr) error {
+	return c.handler.ReplayVTEP(ctx, vtep)
+}
+
+func (c *overlayControl) RefusedVTEPs() []netip.Addr {
+	return c.handler.RefusedVTEPs()
 }
 
 // decapFlowCount counts the decap table's flows admitting frames tunnelled
@@ -171,7 +279,7 @@ func decapFlowCount(t *testing.T, bridge string, vni uint32, vtep netip.Addr) in
 // startOverlayEVPNPeers starts the gateway's overlay speaker the way gatewayd
 // runs it, outbound-only and dialling from its session address, and a remote
 // VTEP speaker it peers with, and waits for the session.
-func startOverlayEVPNPeers(t *testing.T, ctx context.Context, logger *slog.Logger) (gateway, remote *bgp.Speaker) {
+func startOverlayEVPNPeers(t *testing.T, ctx context.Context, logger *slog.Logger, remoteVTEP netip.Addr) (gatewaySpeaker, remote *bgp.Speaker) {
 	t.Helper()
 	families := []bgp.AddressFamily{bgp.AFamilyEVPN}
 	var rts []string
@@ -184,7 +292,7 @@ func startOverlayEVPNPeers(t *testing.T, ctx context.Context, logger *slog.Logge
 	remotePort := freeLoopbackPort(t)
 
 	remote = startOverlaySpeaker(t, ctx, logger, &bgp.BGPConfig{
-		RouterID:        overlayRemoteVTEP,
+		RouterID:        remoteVTEP,
 		ASN:             overlayWithdrawalASN,
 		ListenAddresses: []netip.Addr{overlayRemoteSession},
 		ListenPort:      remotePort,
@@ -199,7 +307,7 @@ func startOverlayEVPNPeers(t *testing.T, ctx context.Context, logger *slog.Logge
 		Policy:          policy,
 	}))
 
-	gateway = startOverlaySpeaker(t, ctx, logger, &bgp.BGPConfig{
+	gatewaySpeaker = startOverlaySpeaker(t, ctx, logger, &bgp.BGPConfig{
 		RouterID:        overlayGatewayVTEP,
 		ASN:             overlayWithdrawalASN,
 		OutboundOnly:    true,
@@ -210,7 +318,7 @@ func startOverlayEVPNPeers(t *testing.T, ctx context.Context, logger *slog.Logge
 		BGPServerInterface: bgp.NewGoBGPServerAdapter(server.NewBgpServer()),
 		port:               uint32(remotePort),
 	}))
-	require.NoError(t, gateway.AddPeer(ctx, &bgp.NeighborConfig{
+	require.NoError(t, gatewaySpeaker.AddPeer(ctx, &bgp.NeighborConfig{
 		Name:            "remote-vtep",
 		Address:         overlayRemoteSession,
 		ASN:             overlayWithdrawalASN,
@@ -219,10 +327,10 @@ func startOverlayEVPNPeers(t *testing.T, ctx context.Context, logger *slog.Logge
 	}))
 
 	waitFor(ctx, t, "the overlay BGP session", 100*time.Millisecond, overlayWithdrawalWait, func() bool {
-		state, err := gateway.GetPeerState(ctx, overlayRemoteSession)
+		state, err := gatewaySpeaker.GetPeerState(ctx, overlayRemoteSession)
 		return err == nil && state == bgp.PeerStateEstablished
 	})
-	return gateway, remote
+	return gatewaySpeaker, remote
 }
 
 // startOverlaySpeaker starts a speaker and stops it when the test ends.

@@ -23,6 +23,7 @@ import (
 	"time"
 
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
 
 // =============================================================================
@@ -71,12 +72,6 @@ type IDevIDCertificateRESTInfo struct {
 	NotAfter     time.Time `json:"not_after"`
 	Fingerprint  string    `json:"fingerprint"`
 	PEM          string    `json:"pem,omitempty"`
-}
-
-// IDevIDDeleteRESTResponse represents an IDevID deletion response.
-type IDevIDDeleteRESTResponse struct {
-	Deleted bool   `json:"deleted"`
-	Message string `json:"message,omitempty"`
 }
 
 // IDevIDCSRRESTRequest represents an IDevID CSR generation request.
@@ -147,12 +142,6 @@ type IAKInfoRESTResponse struct {
 	CreatedAt    int64  `json:"created_at,omitempty"`
 }
 
-// IAKDeleteRESTResponse represents an IAK deletion response.
-type IAKDeleteRESTResponse struct {
-	Deleted bool   `json:"deleted"`
-	Message string `json:"message,omitempty"`
-}
-
 // IAKCSRRESTRequest represents an IAK CSR generation request.
 type IAKCSRRESTRequest struct {
 	CommonName         string   `json:"common_name"`
@@ -209,17 +198,6 @@ type DeviceAttributesRESTResponse struct {
 	PlatformSerial       string `json:"platform_serial"`
 }
 
-// ActivateCredentialRESTRequest represents an activate credential request.
-type ActivateCredentialRESTRequest struct {
-	CredentialBlob string `json:"credential_blob"`
-	Secret         string `json:"secret" secret:"true"`
-}
-
-// ActivateCredentialRESTResponse represents an activate credential response.
-type ActivateCredentialRESTResponse struct {
-	Decrypted string `json:"decrypted"`
-}
-
 // =============================================================================
 // IDevID REST Route Registration
 // =============================================================================
@@ -248,9 +226,9 @@ func (s *RESTServer) registerIDevIDRoutes() {
 	api.HandleFunc("/tpm/iak/install", s.handleIAKInstallCert).Methods(http.MethodPost)
 	api.HandleFunc("/tpm/iak/cert", s.handleIAKDeleteCert).Methods(http.MethodDelete)
 
-	// Device attributes and credential activation
+	// Device attributes. POST /tpm/activate-credential is the TPMService
+	// route in pkg/api/rest/tpm_handlers.go.
 	api.HandleFunc("/tpm/device/attributes", s.handleDeviceAttributes).Methods(http.MethodGet)
-	api.HandleFunc("/tpm/activate-credential", s.handleActivateCredential).Methods(http.MethodPost)
 
 	s.logger.Info("IDevID/IAK REST routes registered")
 
@@ -355,23 +333,10 @@ func (s *RESTServer) handleHasIDevID(w http.ResponseWriter, r *http.Request) {
 
 // handleIDevIDDelete handles DELETE /api/v1/tpm/idevid
 func (s *RESTServer) handleIDevIDDelete(w http.ResponseWriter, r *http.Request) {
-	if s.tpm2Service == nil {
-		s.writeError(w, http.StatusServiceUnavailable, ErrTPM2ServiceNotAvailable{})
-		return
-	}
-
-	// Delete the IDevID certificate first
-	if err := s.tpm2Service.DeleteIDevIDCertificate(); err != nil {
-		s.logger.Debug("IDevID certificate deletion skipped", "error", err)
-	}
-
-	resp := &IDevIDDeleteRESTResponse{
-		Deleted: true,
-		Message: "IDevID key deleted successfully",
-	}
-
-	s.logger.Info("IDevID key deleted")
-	s.writeJSON(w, http.StatusOK, resp)
+	// The persistent IDevID key is not evicted, so refuse as the gRPC
+	// service does and touch nothing; the certificate has DELETE .../cert.
+	refused := ErrDeviceIdentityKeyNotDeletable{Key: "IDevID"}
+	s.writeError(w, idevidGRPCToHTTPStatus(refused), refused)
 }
 
 // handleIDevIDCSR handles POST /api/v1/tpm/idevid/csr
@@ -505,14 +470,16 @@ func (s *RESTServer) handleIDevIDGetCert(w http.ResponseWriter, r *http.Request)
 
 // handleIDevIDDeleteCert handles DELETE /api/v1/tpm/idevid/cert
 func (s *RESTServer) handleIDevIDDeleteCert(w http.ResponseWriter, r *http.Request) {
-	if s.tpm2Service == nil {
-		s.writeError(w, http.StatusServiceUnavailable, ErrTPM2ServiceNotAvailable{})
+	// Delegate to the shared IDevID service so the delete answers in the
+	// classes gRPC, QUIC and MCP answer in.
+	if s.idevidService == nil {
+		s.writeError(w, http.StatusServiceUnavailable, ErrIDevIDServiceNotConfigured{})
 		return
 	}
 
-	if err := s.tpm2Service.DeleteIDevIDCertificate(); err != nil {
+	if _, err := s.idevidService.DeleteIDevIDCertificate(r.Context(), &platformv1.DeleteIDevIDCertificateRequest{}); err != nil {
 		s.logger.Error("Failed to delete IDevID certificate", "error", err)
-		s.writeError(w, http.StatusInternalServerError, ErrTPM2OperationFailed{Operation: "DeleteIDevIDCertificate", Cause: err})
+		s.writeError(w, idevidGRPCToHTTPStatus(err), err)
 		return
 	}
 
@@ -614,23 +581,10 @@ func (s *RESTServer) handleHasIAK(w http.ResponseWriter, r *http.Request) {
 
 // handleIAKDelete handles DELETE /api/v1/tpm/iak
 func (s *RESTServer) handleIAKDelete(w http.ResponseWriter, r *http.Request) {
-	if s.tpm2Service == nil {
-		s.writeError(w, http.StatusServiceUnavailable, ErrTPM2ServiceNotAvailable{})
-		return
-	}
-
-	// Delete the IAK certificate first
-	if err := s.tpm2Service.DeleteIAKCertificate(); err != nil {
-		s.logger.Debug("IAK certificate deletion skipped", "error", err)
-	}
-
-	resp := &IAKDeleteRESTResponse{
-		Deleted: true,
-		Message: "IAK key deleted successfully",
-	}
-
-	s.logger.Info("IAK key deleted")
-	s.writeJSON(w, http.StatusOK, resp)
+	// The persistent IAK is not evicted, so refuse as the gRPC service does
+	// and touch nothing; the certificate has DELETE .../cert.
+	refused := ErrDeviceIdentityKeyNotDeletable{Key: "IAK"}
+	s.writeError(w, idevidGRPCToHTTPStatus(refused), refused)
 }
 
 // handleIAKCSR handles POST /api/v1/tpm/iak/csr
@@ -756,14 +710,16 @@ func (s *RESTServer) handleIAKGetCert(w http.ResponseWriter, r *http.Request) {
 
 // handleIAKDeleteCert handles DELETE /api/v1/tpm/iak/cert
 func (s *RESTServer) handleIAKDeleteCert(w http.ResponseWriter, r *http.Request) {
-	if s.tpm2Service == nil {
-		s.writeError(w, http.StatusServiceUnavailable, ErrTPM2ServiceNotAvailable{})
+	// Delegate to the shared IDevID service so the delete answers in the
+	// classes gRPC, QUIC and MCP answer in.
+	if s.idevidService == nil {
+		s.writeError(w, http.StatusServiceUnavailable, ErrIDevIDServiceNotConfigured{})
 		return
 	}
 
-	if err := s.tpm2Service.DeleteIAKCertificate(); err != nil {
+	if _, err := s.idevidService.DeleteIAKCertificate(r.Context(), &platformv1.DeleteIAKCertificateRequest{}); err != nil {
 		s.logger.Error("Failed to delete IAK certificate", "error", err)
-		s.writeError(w, http.StatusInternalServerError, ErrTPM2OperationFailed{Operation: "DeleteIAKCertificate", Cause: err})
+		s.writeError(w, idevidGRPCToHTTPStatus(err), err)
 		return
 	}
 
@@ -809,55 +765,5 @@ func (s *RESTServer) handleDeviceAttributes(w http.ResponseWriter, r *http.Reque
 		PlatformSerial:       platformAttrs.Serial,
 	}
 
-	s.writeJSON(w, http.StatusOK, resp)
-}
-
-// handleActivateCredential handles POST /api/v1/tpm/activate-credential
-func (s *RESTServer) handleActivateCredential(w http.ResponseWriter, r *http.Request) {
-	if s.tpm2Service == nil {
-		s.writeError(w, http.StatusServiceUnavailable, ErrTPM2ServiceNotAvailable{})
-		return
-	}
-
-	var req ActivateCredentialRESTRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		s.writeError(w, http.StatusBadRequest, ErrInvalidRequestBody{Reason: err.Error()})
-		return
-	}
-
-	if req.CredentialBlob == "" {
-		s.writeError(w, http.StatusBadRequest, ErrMissingRequiredField{Field: "credential_blob"})
-		return
-	}
-	if req.Secret == "" {
-		s.writeError(w, http.StatusBadRequest, ErrMissingRequiredField{Field: "secret"})
-		return
-	}
-
-	// Decode base64 credential blob and secret
-	credentialBlob, err := base64.StdEncoding.DecodeString(req.CredentialBlob)
-	if err != nil {
-		s.writeError(w, http.StatusBadRequest, ErrInvalidRequestBody{Reason: "invalid base64 credential_blob"})
-		return
-	}
-
-	secret, err := base64.StdEncoding.DecodeString(req.Secret)
-	if err != nil {
-		s.writeError(w, http.StatusBadRequest, ErrInvalidRequestBody{Reason: "invalid base64 secret"})
-		return
-	}
-
-	decrypted, err := activateCredential(s.tpm2Service, credentialBlob, secret)
-	if err != nil {
-		s.logger.Error("Failed to activate credential", "error", err)
-		s.writeError(w, http.StatusInternalServerError, ErrTPM2OperationFailed{Operation: "ActivateCredential", Cause: err})
-		return
-	}
-
-	resp := &ActivateCredentialRESTResponse{
-		Decrypted: base64.StdEncoding.EncodeToString(decrypted),
-	}
-
-	s.logger.Info("Credential activated successfully")
 	s.writeJSON(w, http.StatusOK, resp)
 }

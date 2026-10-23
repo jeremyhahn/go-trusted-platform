@@ -20,11 +20,11 @@ The rest of this file exists so nobody has to re-derive that.
 
 | Legacy verb | Where it is claimed | Status |
 |---|---|---|
-| `platformctl ima status` | [tpm-integration.md](tpm-integration.md) | **Does not exist** |
-| `platformctl ima verify` | [tpm-integration.md](tpm-integration.md) | **Does not exist** |
-| `platformctl ima export --format json` | [tpm-integration.md](tpm-integration.md) | **Does not exist** |
-| `platformctl ima policy generate --output …` | [troubleshooting.md](troubleshooting.md) | **Does not exist** |
-| `platformctl tpm pcr read --pcr 10 --bank sha256` | [tpm-integration.md](tpm-integration.md) | **Does not exist.** `platformctl tpm` has `extend`, `policy`, `eventlog`, `nvram`, `seal`, `unseal`, `ek`, `srk`, `idevid`, `iak`, `provision`, `clear`, `info`, `status` and others — but no `pcr` subcommand |
+| `platformctl ima status` | tpm-integration.md | **Does not exist** |
+| `platformctl ima verify` | tpm-integration.md | **Does not exist** |
+| `platformctl ima export --format json` | tpm-integration.md | **Does not exist** |
+| `platformctl ima policy generate --output …` | troubleshooting.md | **Does not exist** |
+| `platformctl tpm pcr read --pcr 10 --bank sha256` | tpm-integration.md | **Does not exist.** `platformctl tpm` has `extend`, `policy`, `eventlog`, `nvram`, `seal`, `unseal`, `ek`, `srk`, `idevid`, `iak`, `provision`, `clear`, `info`, `status` and others — but no `pcr` subcommand |
 
 Each is recorded in [architecture.md](architecture.md) §9.
 
@@ -135,6 +135,5 @@ the shape signed off rather than treating this list as approved scope.
 `conventions/feature-docs.md` §4 requires every verb here to have a matching
 `CommandDefinition` in the integration parity suite. There are no verbs, so the
 requirement is vacuously satisfied for this feature. Separately, **this
-repository defines no `CommandDefinition` type at all** (grepped repo-wide,
-2026-08-18), so the requirement is unmet repo-wide and is raised as an owner
-question.
+repository defines no `CommandDefinition` type at all**, so the requirement is
+unmet repo-wide and is an open owner question.

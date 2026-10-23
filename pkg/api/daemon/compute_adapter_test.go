@@ -909,6 +909,7 @@ func TestInstanceStateToContainerState(t *testing.T) {
 		{"stopping", compute.StateStopping, container.StateStopped},
 		{"error", compute.StateError, container.StateDead},
 		{"deleting", compute.StateDeleting, container.StateRemoving},
+		{"suspended", compute.StateSuspended, container.StatePaused},
 		{"invalid", compute.InstanceState("invalid"), container.StateCreated},
 	}
 

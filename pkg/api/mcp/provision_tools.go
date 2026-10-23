@@ -19,6 +19,10 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/mcpwire"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // =============================================================================
@@ -47,10 +51,6 @@ var ErrProvisionNotConfigured = errors.New("provision: config delivery service n
 // missing or empty.
 var ErrProvisionSessionIDRequired = errors.New("provision: session_id is required")
 
-// ErrProvisionProfileIDRequired indicates the profile_id argument is
-// missing or zero.
-var ErrProvisionProfileIDRequired = errors.New("provision: profile_id is required and must be non-zero")
-
 // ErrProvisionDigestRequired indicates the digest argument is missing or
 // empty.
 var ErrProvisionDigestRequired = errors.New("provision: digest is required")
@@ -67,6 +67,11 @@ func (e ErrProvisionInvalidProfileID) Error() string {
 	return fmt.Sprintf("provision: profile_id %q is not a valid uint64: %v", e.Value, e.Cause)
 }
 
+// GRPCStatus classifies the error as InvalidArgument.
+func (e ErrProvisionInvalidProfileID) GRPCStatus() *status.Status {
+	return status.New(codes.InvalidArgument, e.Error())
+}
+
 // Unwrap exposes the underlying parse error for errors.Is/As.
 func (e ErrProvisionInvalidProfileID) Unwrap() error {
 	return e.Cause
@@ -81,6 +86,11 @@ type ErrProvisionInvalidDigest struct {
 // Error returns a human-readable description of the error.
 func (e ErrProvisionInvalidDigest) Error() string {
 	return fmt.Sprintf("provision: digest must be base64 encoded: %v", e.Cause)
+}
+
+// GRPCStatus classifies the error as InvalidArgument.
+func (e ErrProvisionInvalidDigest) GRPCStatus() *status.Status {
+	return status.New(codes.InvalidArgument, e.Error())
 }
 
 // Unwrap exposes the underlying decode error for errors.Is/As.
@@ -205,7 +215,7 @@ func (r *ToolRegistry) registerProvisionTools() {
 		}
 	}
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "provision_get_nonce",
 		Description: "Issue a single-use nonce for authenticating a config delivery or digest signing request",
 		InputSchema: map[string]interface{}{
@@ -214,7 +224,7 @@ func (r *ToolRegistry) registerProvisionTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "provision_fetch_config",
 		Description: "Authenticate a device (EAB HMAC + nonce, optional EK certificate) and resolve its platform configuration; returns the delivered config or a pending interactive provisioning session",
 		InputSchema: map[string]interface{}{
@@ -233,7 +243,7 @@ func (r *ToolRegistry) registerProvisionTools() {
 		"type":        "string",
 		"description": "Secure Boot key selector (default: db)",
 	}
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "provision_sign_digest",
 		Description: "Sign a UKI or kernel-module digest with the control-plane Secure Boot DB key; the private key never leaves the control plane",
 		InputSchema: map[string]interface{}{
@@ -243,13 +253,13 @@ func (r *ToolRegistry) registerProvisionTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "provision_poll_session",
 		Description: "Poll a pending provisioning session; returns the delivered config once fulfilled or a pending status",
 		InputSchema: sessionIDSchema,
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "provision_fulfill_session",
 		Description: "Link a device profile to a pending provisioning session so the polling device receives its configuration",
 		InputSchema: map[string]interface{}{
@@ -268,7 +278,7 @@ func (r *ToolRegistry) registerProvisionTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "provision_list_sessions",
 		Description: "List all active (non-expired) provisioning sessions awaiting operator fulfillment",
 		InputSchema: map[string]interface{}{
@@ -277,7 +287,7 @@ func (r *ToolRegistry) registerProvisionTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "provision_get_session",
 		Description: "Get a provisioning session by ID",
 		InputSchema: sessionIDSchema,
@@ -331,21 +341,20 @@ func provisionSessionID(args map[string]interface{}) (string, error) {
 // provisionProfileID extracts the required profile_id argument as a uint64.
 // It accepts JSON numbers and decimal strings; uint64 IDs SHOULD be passed
 // as strings to avoid precision loss past 2^53 (repo convention for uint64
-// IDs on the wire). Returns ErrProvisionProfileIDRequired when missing or
-// zero and ErrProvisionInvalidProfileID when unparseable.
+// IDs on the wire). A missing or empty profile_id reads as 0, which the
+// config delivery service refuses with configdelivery.ErrProfileIDRequired
+// like every other transport; ErrProvisionInvalidProfileID is returned when
+// the value is negative or unparseable.
 func provisionProfileID(args map[string]interface{}) (uint64, error) {
 	switch v := args["profile_id"].(type) {
 	case nil:
-		return 0, ErrProvisionProfileIDRequired
+		return 0, nil
 	case float64:
 		if v < 0 {
 			return 0, ErrProvisionInvalidProfileID{
 				Value: strconv.FormatFloat(v, 'f', -1, 64),
 				Cause: errors.New("negative value"),
 			}
-		}
-		if v == 0 {
-			return 0, ErrProvisionProfileIDRequired
 		}
 		return uint64(v), nil
 	case int:
@@ -355,9 +364,6 @@ func provisionProfileID(args map[string]interface{}) (uint64, error) {
 				Cause: errors.New("negative value"),
 			}
 		}
-		if v == 0 {
-			return 0, ErrProvisionProfileIDRequired
-		}
 		return uint64(v), nil
 	case int64:
 		if v < 0 {
@@ -366,25 +372,16 @@ func provisionProfileID(args map[string]interface{}) (uint64, error) {
 				Cause: errors.New("negative value"),
 			}
 		}
-		if v == 0 {
-			return 0, ErrProvisionProfileIDRequired
-		}
 		return uint64(v), nil
 	case uint64:
-		if v == 0 {
-			return 0, ErrProvisionProfileIDRequired
-		}
 		return v, nil
 	case string:
 		if v == "" {
-			return 0, ErrProvisionProfileIDRequired
+			return 0, nil
 		}
 		id, err := strconv.ParseUint(v, 10, 64)
 		if err != nil {
 			return 0, ErrProvisionInvalidProfileID{Value: v, Cause: err}
-		}
-		if id == 0 {
-			return 0, ErrProvisionProfileIDRequired
 		}
 		return id, nil
 	default:

@@ -149,39 +149,11 @@ func ReadSecureBootStatusFromDir(dir string) (*SecureBootStatus, error) {
 func readSignatureDatabaseFile(path, name string) (*SignatureDatabase, error) {
 	summary := &SignatureDatabase{Name: name}
 
-	data, err := os.ReadFile(path)
+	present, lists, err := readSignatureLists(path, name)
 	if err != nil {
-		if os.IsNotExist(err) {
-			return summary, nil
-		}
-		return nil, &ErrEfivarRead{Var: name, Cause: err}
+		return nil, err
 	}
-
-	// efivarfs prepends a 4-byte little-endian attribute word.
-	if len(data) < 4 {
-		return nil, &ErrEfivarRead{Var: name, Cause: ErrInvalidFormat}
-	}
-	summary.Present = true
-
-	payload := data[4:]
-	if len(payload) == 0 {
-		// Present but empty (possible after a variable delete-write race).
-		return summary, nil
-	}
-
-	// A real efivarfs read returns only the stored EFI_SIGNATURE_LIST data —
-	// the firmware consumes the EFI_VARIABLE_AUTHENTICATION_2 descriptor at
-	// SetVariable time. Fixture directories written by EnrollKeysToEfivarsDir
-	// (CLI dry-run rehearsal, unit tests) still carry that descriptor, so it
-	// is detected structurally and skipped before ESL parsing.
-	if rest, ok := skipAuthDescriptor(payload); ok {
-		payload = rest
-	}
-
-	lists, err := ParseSignatureLists(payload)
-	if err != nil {
-		return nil, &ErrEfivarRead{Var: name, Cause: err}
-	}
+	summary.Present = present
 	for _, list := range lists {
 		switch {
 		case list.IsX509():
@@ -203,6 +175,80 @@ func readSignatureDatabaseFile(path, name string) (*SignatureDatabase, error) {
 		}
 	}
 	return summary, nil
+}
+
+// readSignatureLists reads one signature database variable file and parses
+// its EFI_SIGNATURE_LIST contents. A missing file is not present and holds no
+// lists; malformed content is an error.
+func readSignatureLists(path, name string) (bool, []*SignatureList, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return false, nil, nil
+		}
+		return false, nil, &ErrEfivarRead{Var: name, Cause: err}
+	}
+
+	// efivarfs prepends a 4-byte little-endian attribute word.
+	if len(data) < 4 {
+		return false, nil, &ErrEfivarRead{Var: name, Cause: ErrInvalidFormat}
+	}
+
+	payload := data[4:]
+	if len(payload) == 0 {
+		// Present but empty (possible after a variable delete-write race).
+		return true, nil, nil
+	}
+
+	// A real efivarfs read returns only the stored EFI_SIGNATURE_LIST data —
+	// the firmware consumes the EFI_VARIABLE_AUTHENTICATION_2 descriptor at
+	// SetVariable time. Fixture directories written by EnrollKeysToEfivarsDir
+	// (CLI dry-run rehearsal, unit tests) still carry that descriptor, so it
+	// is detected structurally and skipped before ESL parsing.
+	if rest, ok := skipAuthDescriptor(payload); ok {
+		payload = rest
+	}
+
+	lists, err := ParseSignatureLists(payload)
+	if err != nil {
+		return false, nil, &ErrEfivarRead{Var: name, Cause: err}
+	}
+	return true, lists, nil
+}
+
+// ReadDBCertificates returns the X.509 certificates enrolled in the firmware's
+// authorized signature database (db), read from the standard efivarfs mount
+// point. See ReadDBCertificatesFromDir.
+func ReadDBCertificates() ([]*x509.Certificate, error) {
+	return ReadDBCertificatesFromDir(EfivarsPath)
+}
+
+// ReadDBCertificatesFromDir returns the X.509 certificates in the db variable
+// of an efivarfs-layout directory: the certificates the firmware accepts boot
+// code from. It returns ErrEfivarsUnavailable without the directory and no
+// certificates without a db. Hash entries, and certificate entries Go cannot
+// parse, are not returned: neither can verify a signature.
+func ReadDBCertificatesFromDir(dir string) ([]*x509.Certificate, error) {
+	info, err := os.Stat(dir)
+	if err != nil || !info.IsDir() {
+		return nil, ErrEfivarsUnavailable
+	}
+	_, lists, err := readSignatureLists(filepath.Join(dir, efivarFileName("db", EFIImageSecurityDatabase)), "db")
+	if err != nil {
+		return nil, err
+	}
+	var certs []*x509.Certificate
+	for _, list := range lists {
+		if !list.IsX509() {
+			continue
+		}
+		for _, sig := range list.Signatures {
+			if cert, certErr := x509.ParseCertificate(sig.Data); certErr == nil {
+				certs = append(certs, cert)
+			}
+		}
+	}
+	return certs, nil
 }
 
 // skipAuthDescriptor structurally detects an EFI_VARIABLE_AUTHENTICATION_2

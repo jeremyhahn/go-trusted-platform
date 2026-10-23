@@ -21,6 +21,7 @@ import (
 	"golang.org/x/sys/unix"
 
 	sdnipsec "github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ipsec"
+	ipsecconfig "github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ipsec/config"
 )
 
 // The fail-closed floor on a real kernel: the nftables filter and the XFRM
@@ -162,13 +163,13 @@ func newFloorNet(t *testing.T, ctx context.Context) *floorNet {
 }
 
 // floorConfig is the node's overlay.ipsec section.
-func floorConfig() *sdnipsec.Config {
-	return &sdnipsec.Config{
+func floorConfig() *ipsecconfig.Config {
+	return &ipsecconfig.Config{
 		Enabled:         true,
 		FabricInterface: floorFabric,
 		LocalAddress:    floorNodeAddr,
 		StaticPeers:     []string{floorPeerAddr},
-		Token:           sdnipsec.TokenConfig{Handle: "6970736563"},
+		Token:           ipsecconfig.TokenConfig{Handle: "6970736563"},
 	}
 }
 

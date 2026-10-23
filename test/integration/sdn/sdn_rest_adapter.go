@@ -36,7 +36,7 @@ import (
 // REST Adapter Implementation
 // =============================================================================
 
-// SDNRESTAdapter implements SDNTestAdapter using HTTP/REST calls to platform-api.
+// SDNRESTAdapter implements SDNTestAdapter using HTTP/REST calls to platformd.
 type SDNRESTAdapter struct {
 	baseURL    string
 	httpClient *http.Client

@@ -22,6 +22,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/process"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 )
@@ -29,14 +30,6 @@ import (
 // shutdownTimeout bounds the graceful drain of in-flight work during
 // shutdown.
 const shutdownTimeout = 30 * time.Second
-
-var (
-	serveListenAddr  string
-	serveBGPASN      uint32
-	serveBGPRouterID string
-	serveAPIPort     int
-	serveGRPCPort    int
-)
 
 var serveCmd = &cobra.Command{
 	Use:   "serve",
@@ -71,20 +64,6 @@ Examples:
 	RunE: runServe,
 }
 
-func init() {
-	serveCmd.Flags().StringVar(&serveListenAddr, "listen", ":8080", "API listen address")
-	serveCmd.Flags().Uint32Var(&serveBGPASN, "bgp-asn", 0, "BGP AS number")
-	serveCmd.Flags().StringVar(&serveBGPRouterID, "bgp-router-id", "", "BGP router ID")
-	serveCmd.Flags().IntVar(&serveAPIPort, "api-port", 8080, "REST API port")
-	serveCmd.Flags().IntVar(&serveGRPCPort, "grpc-port", 10444, "gRPC port")
-
-	viper.BindPFlag("listen", serveCmd.Flags().Lookup("listen"))
-	viper.BindPFlag("bgp.asn", serveCmd.Flags().Lookup("bgp-asn"))
-	viper.BindPFlag("bgp.router_id", serveCmd.Flags().Lookup("bgp-router-id"))
-	viper.BindPFlag("api.port", serveCmd.Flags().Lookup("api-port"))
-	viper.BindPFlag("grpc.port", serveCmd.Flags().Lookup("grpc-port"))
-}
-
 // buildServeLogger constructs the daemon logger from the persistent flags.
 func buildServeLogger() *slog.Logger {
 	level := slog.LevelInfo
@@ -103,6 +82,19 @@ func buildServeLogger() *slog.Logger {
 	return logger
 }
 
+// childInheritance is the part of this invocation's command line a
+// supervised child is started with: the configuration file this process
+// loaded, the state directory it resolved (the proxy's TOFU pins live under
+// it) and the log settings buildServeLogger read.
+func childInheritance(cfg *ServeConfig, configFile string) process.Inherited {
+	return process.Inherited{
+		ConfigFile: configFile,
+		DataDir:    cfg.DataDir,
+		LogFormat:  logFormat,
+		Debug:      debugMode,
+	}
+}
+
 func runServe(cmd *cobra.Command, args []string) error {
 	logger := buildServeLogger()
 
@@ -114,6 +106,17 @@ func runServe(cmd *cobra.Command, args []string) error {
 	cfg, err := LoadServeConfig(viper.GetViper())
 	if err != nil {
 		return err
+	}
+
+	// With the `process:` section enabled, the supervised services run in
+	// child processes. The children outlive gw.Stop, which stops the
+	// services they host, so they are shut down after it on every exit path.
+	supervisor, err := BuildSupervisor(cfg, childInheritance(cfg, viper.ConfigFileUsed()), logger)
+	if err != nil {
+		return err
+	}
+	if supervisor != nil {
+		defer shutdownSupervisor(supervisor, logger)
 	}
 
 	startCtx, startCancel := context.WithCancel(context.Background())
@@ -130,13 +133,7 @@ func runServe(cmd *cobra.Command, args []string) error {
 	}
 	// The OVS runtime (when assembled) holds a live OVSDB connection;
 	// release it on every exit path, after gw.Stop has removed flows.
-	defer func() {
-		if rt := gw.GetConfig().Runtime; rt != nil {
-			if err := rt.Close(); err != nil {
-				logger.Warn("OVS runtime close failed", slog.Any("error", err))
-			}
-		}
-	}()
+	defer closeGatewayRuntime(gw, logger)
 
 	// Assemble the control-plane telemetry reporter before starting
 	// services so configuration errors surface before the datapath is
@@ -144,6 +141,13 @@ func runServe(cmd *cobra.Command, args []string) error {
 	reporter, err := BuildReporter(startCtx, cfg, gw, logger)
 	if err != nil {
 		return err
+	}
+	// The control plane keeps the record of the management VPN's leases,
+	// so a restart reinstates the clients admitted before it; the journal
+	// under --data-dir keeps a revocation it has not yet taken from being
+	// reinstated too.
+	if reporter != nil {
+		gw.SetVPNLeaseControl(reporter, vpnRevocationJournal(cfg.DataDir))
 	}
 
 	// The metrics endpoint is prepared before the datapath starts so a
@@ -233,4 +237,20 @@ func runServe(cmd *cobra.Command, args []string) error {
 
 	logger.Info("Gateway daemon stopped")
 	return nil
+}
+
+// processShutdowner is the part of the process supervisor runServe stops.
+type processShutdowner interface {
+	Shutdown(ctx context.Context) error
+}
+
+// shutdownSupervisor stops every child within shutdownTimeout. A failure is
+// logged rather than returned: it runs on exit paths that already carry
+// their own result.
+func shutdownSupervisor(supervisor processShutdowner, logger *slog.Logger) {
+	ctx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
+	defer cancel()
+	if err := supervisor.Shutdown(ctx); err != nil {
+		logger.Warn("Process supervisor shutdown failed", slog.Any("error", err))
+	}
 }

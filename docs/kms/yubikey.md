@@ -1,5 +1,8 @@
 # YubiKey
 
+> **Status: REFERENCE** · Last verified: 2026-10-13
+> YubiKey defaults, PIV slots, the YKCS11 PKCS#11 slot mapping and the OTP API key.
+
 This document provides helpful information on YubiKey features, limits, and how it's used within the Trusted Platform.
 
 
@@ -36,7 +39,7 @@ This document provides helpful information on YubiKey features, limits, and how 
 | 1         | 9a    |
 | 2         | 9c    |
 | 3         | 9d    |
-| 4         | 9c    |
+| 4         | 9e    |
 | 5-24      | 82-95 |
 | 25        | f9    |
 

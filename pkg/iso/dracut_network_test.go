@@ -2,6 +2,7 @@ package iso
 
 import (
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -116,4 +117,97 @@ func TestCopyDracutModule_UnlockHookNetwork(t *testing.T) {
 		assert.NotContains(t, content, "network for ACME enrollment")
 		assert.Contains(t, content, "enrollment runs after switch_root")
 	})
+}
+
+// busyboxBuildRoot is a build root holding what Alpine's busybox package
+// installs for udhcpc: its lease script and its config.
+func busyboxBuildRoot(t *testing.T) string {
+	t.Helper()
+	root := t.TempDir()
+	for _, rel := range []string{"usr/share/udhcpc/default.script", "etc/udhcpc/udhcpc.conf"} {
+		path := filepath.Join(root, rel)
+		require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+		require.NoError(t, os.WriteFile(path, []byte("#!/bin/sh\n"), 0o755))
+	}
+	return root
+}
+
+// runInstallNetwork runs platformd_install_network against root with dracut's
+// install helpers stubbed to record what they install; inst_multiple reports
+// the tools named in missing as absent. It returns the recorded installs and
+// the function's exit status.
+func runInstallNetwork(t *testing.T, root, cmdline string, missing ...string) ([]string, int) {
+	t.Helper()
+	dir := t.TempDir()
+	helper := filepath.Join(dir, "install-network.sh")
+	require.NoError(t, os.WriteFile(helper, []byte(platformdInstallNetworkShell), 0o600))
+	cmdlineFile := filepath.Join(dir, "cmdline")
+	require.NoError(t, os.WriteFile(cmdlineFile, []byte(cmdline+"\n"), 0o600))
+	installed := filepath.Join(dir, "installed")
+
+	script := `inst_multiple() { case " $MISSING " in *" $1 "*) return 1 ;; esac; echo "bin $1" >> "$INSTALLED"; }
+inst_simple() { echo "file $1 -> $2" >> "$INSTALLED"; }
+dinfo() { :; }; dwarn() { :; }; derror() { :; }
+. "$0" && platformd_install_network "$1" "$2"`
+	cmd := exec.Command("/bin/sh", "-c", script, helper, root, cmdlineFile)
+	cmd.Env = append(os.Environ(), "INSTALLED="+installed, "MISSING="+strings.Join(missing, " "))
+	out, err := cmd.CombinedOutput()
+	status := 0
+	if err != nil {
+		var exitErr *exec.ExitError
+		require.True(t, errors.As(err, &exitErr), "shell did not run: %v: %s", err, out)
+		status = exitErr.ExitCode()
+	}
+
+	raw, err := os.ReadFile(installed)
+	if os.IsNotExist(err) {
+		return nil, status
+	}
+	require.NoError(t, err)
+	return strings.Split(strings.TrimSpace(string(raw)), "\n"), status
+}
+
+func TestPlatformdInstallNetworkShell_InstallsTheDHCPClientAndItsScript(t *testing.T) {
+	root := busyboxBuildRoot(t)
+	installed, status := runInstallNetwork(t, root, disklessCmdline)
+
+	require.Equal(t, 0, status)
+	for _, want := range []string{
+		"bin udhcpc", "bin ip", "bin cut", "bin chmod", "bin mv", "bin ping", "bin hostname",
+		"file " + root + "/usr/share/udhcpc/default.script -> /usr/share/udhcpc/default.script",
+		"file " + root + "/etc/udhcpc/udhcpc.conf -> /etc/udhcpc/udhcpc.conf",
+	} {
+		assert.Contains(t, installed, want)
+	}
+}
+
+func TestPlatformdInstallNetworkShell_MissingPieces(t *testing.T) {
+	scriptless := t.TempDir()
+	tests := []struct {
+		name       string
+		root       string
+		cmdline    string
+		missing    []string
+		wantStatus int
+	}{
+		{name: "a diskless node without the lease script", root: scriptless, cmdline: disklessCmdline, wantStatus: 1},
+		{name: "a diskless node without udhcpc", cmdline: disklessCmdline, missing: []string{"udhcpc"}, wantStatus: 1},
+		{name: "a diskless node without ip", cmdline: disklessCmdline, missing: []string{"ip"}, wantStatus: 1},
+		{name: "a diskless node without the optional ping", cmdline: disklessCmdline, missing: []string{"ping"}, wantStatus: 0},
+		{name: "a disk install only warns", root: scriptless, cmdline: diskCmdline, missing: []string{"udhcpc"}, wantStatus: 0},
+		{name: "a diskless-nbd node without udhcpc", cmdline: nbdCmdline, missing: []string{"udhcpc"}, wantStatus: 1},
+		{name: "a diskless-nbd node without the lease script", root: scriptless, cmdline: nbdCmdline, wantStatus: 1},
+		{name: "a diskless-nbd node without the optional ping", cmdline: nbdCmdline, missing: []string{"ping"}, wantStatus: 0},
+		{name: "a parameter that only contains the diskless-nbd model only warns", root: scriptless, cmdline: "x" + nbdCmdline, missing: []string{"udhcpc"}, wantStatus: 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := tt.root
+			if root == "" {
+				root = busyboxBuildRoot(t)
+			}
+			_, status := runInstallNetwork(t, root, tt.cmdline, tt.missing...)
+			assert.Equal(t, tt.wantStatus, status)
+		})
+	}
 }

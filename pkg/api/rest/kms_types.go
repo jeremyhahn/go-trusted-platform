@@ -14,7 +14,12 @@
 // Package rest provides REST API handlers for the trusted platform services.
 package rest
 
-import "context"
+import (
+	"context"
+
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+)
 
 // =============================================================================
 // KMS Service Interface
@@ -337,6 +342,7 @@ type KMSDecryptServiceResponse struct {
 
 // KMSBatchEncryptItem represents a single item in a batch encryption request.
 type KMSBatchEncryptItem struct {
+	ItemID    string
 	Plaintext []byte
 	Context   []byte
 	Nonce     []byte
@@ -350,6 +356,7 @@ type KMSBatchEncryptServiceRequest struct {
 
 // KMSBatchEncryptResultItem represents a single result in a batch encryption response.
 type KMSBatchEncryptResultItem struct {
+	ItemID     string
 	Ciphertext []byte
 	Nonce      []byte
 	Error      string
@@ -371,6 +378,7 @@ type KMSBatchEncryptServiceResponse struct {
 
 // KMSBatchDecryptItem represents a single item in a batch decryption request.
 type KMSBatchDecryptItem struct {
+	ItemID     string
 	Ciphertext []byte
 	Context    []byte
 	Nonce      []byte
@@ -385,6 +393,7 @@ type KMSBatchDecryptServiceRequest struct {
 
 // KMSBatchDecryptResultItem represents a single result in a batch decryption response.
 type KMSBatchDecryptResultItem struct {
+	ItemID     string
 	Plaintext  []byte
 	KeyVersion uint64
 	Error      string
@@ -562,6 +571,11 @@ func (e ErrKMSKeyNotFound) Error() string {
 	return "key not found: " + e.KeyID
 }
 
+// GRPCStatus classifies the error as NotFound.
+func (e ErrKMSKeyNotFound) GRPCStatus() *status.Status {
+	return status.New(codes.NotFound, e.Error())
+}
+
 // ErrKMSKeyAlreadyExists is returned when a key already exists.
 type ErrKMSKeyAlreadyExists struct {
 	KeyID string
@@ -569,6 +583,11 @@ type ErrKMSKeyAlreadyExists struct {
 
 func (e ErrKMSKeyAlreadyExists) Error() string {
 	return "key already exists: " + e.KeyID
+}
+
+// GRPCStatus classifies the error as AlreadyExists.
+func (e ErrKMSKeyAlreadyExists) GRPCStatus() *status.Status {
+	return status.New(codes.AlreadyExists, e.Error())
 }
 
 // ErrKMSInvalidKeySpec is returned when a key spec is invalid.
@@ -580,6 +599,11 @@ func (e ErrKMSInvalidKeySpec) Error() string {
 	return "invalid key spec: " + e.Reason
 }
 
+// GRPCStatus classifies the error as InvalidArgument.
+func (e ErrKMSInvalidKeySpec) GRPCStatus() *status.Status {
+	return status.New(codes.InvalidArgument, e.Error())
+}
+
 // ErrKMSKeyNotExportable is returned when a key is not exportable.
 type ErrKMSKeyNotExportable struct {
 	KeyID string
@@ -587,6 +611,11 @@ type ErrKMSKeyNotExportable struct {
 
 func (e ErrKMSKeyNotExportable) Error() string {
 	return "key not exportable: " + e.KeyID
+}
+
+// GRPCStatus classifies the error as PermissionDenied.
+func (e ErrKMSKeyNotExportable) GRPCStatus() *status.Status {
+	return status.New(codes.PermissionDenied, e.Error())
 }
 
 // ErrKMSKeyDisabled is returned when a key is disabled.
@@ -598,6 +627,11 @@ func (e ErrKMSKeyDisabled) Error() string {
 	return "key disabled: " + e.KeyID
 }
 
+// GRPCStatus classifies the error as PermissionDenied.
+func (e ErrKMSKeyDisabled) GRPCStatus() *status.Status {
+	return status.New(codes.PermissionDenied, e.Error())
+}
+
 // ErrKMSKeyPendingDeletion is returned when a key is pending deletion.
 type ErrKMSKeyPendingDeletion struct {
 	KeyID string
@@ -605,6 +639,11 @@ type ErrKMSKeyPendingDeletion struct {
 
 func (e ErrKMSKeyPendingDeletion) Error() string {
 	return "key pending deletion: " + e.KeyID
+}
+
+// GRPCStatus classifies the error as PermissionDenied.
+func (e ErrKMSKeyPendingDeletion) GRPCStatus() *status.Status {
+	return status.New(codes.PermissionDenied, e.Error())
 }
 
 // ErrKMSEncryptionFailed is returned when encryption fails.
@@ -652,6 +691,11 @@ func (e ErrKMSInvalidAlgorithm) Error() string {
 	return "invalid algorithm: " + e.Algorithm
 }
 
+// GRPCStatus classifies the error as InvalidArgument.
+func (e ErrKMSInvalidAlgorithm) GRPCStatus() *status.Status {
+	return status.New(codes.InvalidArgument, e.Error())
+}
+
 // ErrKMSServiceUnavailable is returned when the KMS service is unavailable.
 type ErrKMSServiceUnavailable struct {
 	Reason string
@@ -662,6 +706,11 @@ func (e ErrKMSServiceUnavailable) Error() string {
 		return "KMS service unavailable"
 	}
 	return "KMS service unavailable: " + e.Reason
+}
+
+// GRPCStatus classifies the error as Unavailable.
+func (e ErrKMSServiceUnavailable) GRPCStatus() *status.Status {
+	return status.New(codes.Unavailable, e.Error())
 }
 
 // ErrKMSBatchOperationFailed is returned when a batch operation fails.
@@ -691,6 +740,11 @@ func (e ErrKMSBatchItemsEmpty) Error() string {
 	return "batch items cannot be empty"
 }
 
+// GRPCStatus classifies the error as InvalidArgument.
+func (e ErrKMSBatchItemsEmpty) GRPCStatus() *status.Status {
+	return status.New(codes.InvalidArgument, e.Error())
+}
+
 // ErrKMSBatchItemsTooMany is returned when there are too many batch items.
 type ErrKMSBatchItemsTooMany struct {
 	Count int
@@ -699,4 +753,9 @@ type ErrKMSBatchItemsTooMany struct {
 
 func (e ErrKMSBatchItemsTooMany) Error() string {
 	return "batch items exceed maximum allowed"
+}
+
+// GRPCStatus classifies the error as InvalidArgument.
+func (e ErrKMSBatchItemsTooMany) GRPCStatus() *status.Status {
+	return status.New(codes.InvalidArgument, e.Error())
 }

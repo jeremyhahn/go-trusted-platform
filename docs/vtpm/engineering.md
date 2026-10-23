@@ -76,6 +76,15 @@ otherwise surface as an unreadable open error. The type-check happens first.
 have an EK and no certificate, which is a bundle that will fail attestation for
 a reason that has nothing to do with its keys.
 
+**The certificate is written in `TPM_PT_NV_BUFFER_MAX` chunks.** TPM2_NV_Write
+and TPM2_NV_Read move at most `TPM_PT_NV_BUFFER_MAX` bytes per command (TPM 2.0
+Part 3 §31.7, §31.13); swtpm reports 1024 and answers a larger write with
+`TPM_RC_SIZE`, and an EK certificate is usually larger. `EKCertInjector` reads
+the property from the TPM and writes at increasing offsets, on the transport the
+provisioning step already holds — swtpm serves one client at a time. The
+platform-hierarchy index carries the TCG EK Credential Profile attributes.
+`ErrNVBufferMaxUnavailable` names a TPM that does not report the property.
+
 Secure Boot enrollment happens at bundle generation — the enrolled keys are part
 of the vTPM's initial state, not something applied later to a running instance.
 

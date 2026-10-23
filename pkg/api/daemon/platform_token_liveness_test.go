@@ -38,7 +38,7 @@ func TestNewPlatformTokenValidator_AuthzModeConfig(t *testing.T) {
 	t.Run("hybrid without introspection URL fails closed", func(t *testing.T) {
 		_, err := newPlatformTokenValidator(PlatformTokenConfig{
 			Enabled: true, Issuer: issuer, JWKSURL: jwksURL, AuthzMode: "hybrid",
-		}, nil)
+		}, nil, nil)
 		var cfgErr ErrPlatformTokenConfig
 		if !errors.As(err, &cfgErr) || cfgErr.Field != "introspection-url" {
 			t.Fatalf("expected introspection-url config error, got %v", err)
@@ -48,7 +48,7 @@ func TestNewPlatformTokenValidator_AuthzModeConfig(t *testing.T) {
 	t.Run("online without introspection URL fails closed", func(t *testing.T) {
 		_, err := newPlatformTokenValidator(PlatformTokenConfig{
 			Enabled: true, Issuer: issuer, JWKSURL: jwksURL, AuthzMode: "online",
-		}, nil)
+		}, nil, nil)
 		var cfgErr ErrPlatformTokenConfig
 		if !errors.As(err, &cfgErr) || cfgErr.Field != "introspection-url" {
 			t.Fatalf("expected introspection-url config error, got %v", err)
@@ -58,7 +58,7 @@ func TestNewPlatformTokenValidator_AuthzModeConfig(t *testing.T) {
 	t.Run("empty mode defaults to hybrid and also requires URL", func(t *testing.T) {
 		_, err := newPlatformTokenValidator(PlatformTokenConfig{
 			Enabled: true, Issuer: issuer, JWKSURL: jwksURL,
-		}, nil)
+		}, nil, nil)
 		var cfgErr ErrPlatformTokenConfig
 		if !errors.As(err, &cfgErr) || cfgErr.Field != "introspection-url" {
 			t.Fatalf("empty mode should default to hybrid and require URL, got %v", err)
@@ -68,7 +68,7 @@ func TestNewPlatformTokenValidator_AuthzModeConfig(t *testing.T) {
 	t.Run("offline without introspection URL succeeds", func(t *testing.T) {
 		v, err := newPlatformTokenValidator(PlatformTokenConfig{
 			Enabled: true, Issuer: issuer, JWKSURL: jwksURL, AuthzMode: "offline",
-		}, nil)
+		}, nil, nil)
 		if err != nil {
 			t.Fatalf("offline mode must not require an introspection URL: %v", err)
 		}
@@ -81,7 +81,7 @@ func TestNewPlatformTokenValidator_AuthzModeConfig(t *testing.T) {
 		v, err := newPlatformTokenValidator(PlatformTokenConfig{
 			Enabled: true, Issuer: issuer, JWKSURL: jwksURL,
 			AuthzMode: "hybrid", IntrospectionURL: introsp,
-		}, nil)
+		}, nil, nil)
 		if err != nil {
 			t.Fatalf("hybrid with URL must succeed: %v", err)
 		}
@@ -94,7 +94,7 @@ func TestNewPlatformTokenValidator_AuthzModeConfig(t *testing.T) {
 		_, err := newPlatformTokenValidator(PlatformTokenConfig{
 			Enabled: true, Issuer: issuer, JWKSURL: jwksURL,
 			AuthzMode: "sometimes", IntrospectionURL: introsp,
-		}, nil)
+		}, nil, nil)
 		var modeErr ErrInvalidAuthzMode
 		if !errors.As(err, &modeErr) {
 			t.Fatalf("expected ErrInvalidAuthzMode, got %T: %v", err, err)
@@ -119,7 +119,7 @@ func newLivenessValidator(t *testing.T, jwksURL, introspectionURL, mode string) 
 		AllowBearer:      true,
 		AuthzMode:        mode,
 		IntrospectionURL: introspectionURL,
-	}, nil)
+	}, nil, nil)
 	if err != nil {
 		t.Fatalf("newPlatformTokenValidator: %v", err)
 	}
@@ -172,7 +172,7 @@ func TestIntrospectionChecker_AuthVariants(t *testing.T) {
 			Enabled: true, Issuer: testPTIssuer, JWKSURL: jwks.URL, Audience: testPTAudience,
 			AllowBearer: true, AuthzMode: "online", IntrospectionURL: srv.URL,
 			IntrospectionBearerToken: "introspect-secret",
-		}, nil)
+		}, nil, nil)
 		if err != nil {
 			t.Fatalf("construct: %v", err)
 		}
@@ -197,7 +197,7 @@ func TestIntrospectionChecker_AuthVariants(t *testing.T) {
 			Enabled: true, Issuer: testPTIssuer, JWKSURL: jwks.URL, Audience: testPTAudience,
 			AllowBearer: true, AuthzMode: "online", IntrospectionURL: srv.URL,
 			IntrospectionClientID: "rs-client", IntrospectionClientSecret: "rs-pw",
-		}, nil)
+		}, nil, nil)
 		if err != nil {
 			t.Fatalf("construct: %v", err)
 		}

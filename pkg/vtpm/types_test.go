@@ -14,6 +14,7 @@
 package vtpm
 
 import (
+	"errors"
 	"testing"
 	"time"
 )
@@ -91,6 +92,51 @@ func TestEKAlgorithm_IsValid(t *testing.T) {
 		t.Run(string(tt.algo), func(t *testing.T) {
 			if got := tt.algo.IsValid(); got != tt.expected {
 				t.Errorf("EKAlgorithm.IsValid() = %v, want %v", got, tt.expected)
+			}
+		})
+	}
+}
+
+func TestParseEKAlgorithm(t *testing.T) {
+	tests := []struct {
+		input string
+		want  EKAlgorithm
+	}{
+		{"RSA", EKAlgorithmRSA},
+		{"ECC", EKAlgorithmECC},
+		{"ecc", EKAlgorithmECC},
+		{" Rsa ", EKAlgorithmRSA},
+		{"", ""},
+		{"   ", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			got, err := ParseEKAlgorithm(tt.input)
+			if err != nil {
+				t.Fatalf("ParseEKAlgorithm(%q) err = %v", tt.input, err)
+			}
+			if got != tt.want {
+				t.Errorf("ParseEKAlgorithm(%q) = %q, want %q", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestParseEKAlgorithm_RejectsUndocumentedValues guards the coercion bug:
+// every value other than RSA or ECC was silently treated as RSA.
+func TestParseEKAlgorithm_RejectsUndocumentedValues(t *testing.T) {
+	for _, input := range []string{"ECDSA", "DSA", "RSA-2048", "P256", "rsa ecc"} {
+		t.Run(input, func(t *testing.T) {
+			got, err := ParseEKAlgorithm(input)
+			var invalid ErrInvalidEKAlgorithm
+			if !errors.As(err, &invalid) {
+				t.Fatalf("ParseEKAlgorithm(%q) err = %v, want ErrInvalidEKAlgorithm", input, err)
+			}
+			if invalid.Algorithm != input {
+				t.Errorf("ErrInvalidEKAlgorithm.Algorithm = %q, want %q", invalid.Algorithm, input)
+			}
+			if got != "" {
+				t.Errorf("ParseEKAlgorithm(%q) = %q on error, want empty", input, got)
 			}
 		})
 	}

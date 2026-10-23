@@ -365,6 +365,6 @@ and cleans up after itself on stop.
 | Gap | Effect on bring-up | Issue |
 |---|---|---|
 | Nothing drives `Rekey` on a timer for `ipsec` tunnels | Keys rotate by service restart | follow-up to #606 |
-| Gateway BGP operator verbs are stubs | Announce/withdraw is config plus restart | #65 |
+| Gateway BGP operator verbs reach no speaker: every transport answers "not configured" until the platformd→gatewayd link exists ([`docs/gateway/api.md`](../gateway/api.md) §3, §5a) | Announce/withdraw is config plus restart | #65 |
 | TCP-AO cannot bind a keychain to a session | MD5 compat path; non-FIPS build for bring-up | upstream GoBGP |
 | Transit starts whenever `bgp:` exists | `transit.enabled: false` does not gate it; the section must be absent to keep the speaker out of a start | #620 |

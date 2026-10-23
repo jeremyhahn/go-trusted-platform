@@ -19,12 +19,13 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"strings"
 	"testing"
 	"time"
 
-	"github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/vtpm"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 )
 
 // =============================================================================
@@ -39,23 +40,23 @@ func TestVTPMIsRunning_Success_Running(t *testing.T) {
 	mockSvc.running["test-001"] = true
 
 	checkReq := VTPMIsRunningRequest{BundleID: "test-001"}
-	payload, err := quic.EncodePayload(&checkReq)
+	payload, err := quicwire.EncodePayload(&checkReq)
 	if err != nil {
 		t.Fatalf("failed to encode payload: %v", err)
 	}
 
-	req := &quic.Request{
-		Opcode:  quic.OpVTPMIsRunning,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpVTPMIsRunning,
 		Payload: payload,
 	}
 
 	resp := handler.HandleRequest(ctx, req)
-	if resp.Status != quic.StatusOK {
-		t.Errorf("expected status OK, got %s", quic.StatusToString(resp.Status))
+	if resp.Status != quicwire.StatusOK {
+		t.Errorf("expected status OK, got %s", quicwire.StatusToString(resp.Status))
 	}
 
 	var isRunningResp VTPMIsRunningResponse
-	if err := quic.DecodePayload(resp.Payload, &isRunningResp); err != nil {
+	if err := quicwire.DecodePayload(resp.Payload, &isRunningResp); err != nil {
 		t.Fatalf("failed to decode response: %v", err)
 	}
 
@@ -74,23 +75,23 @@ func TestVTPMIsRunning_Success_NotRunning(t *testing.T) {
 	mockSvc.bundles["test-001"] = &vtpm.Bundle{ID: "test-001"}
 
 	checkReq := VTPMIsRunningRequest{BundleID: "test-001"}
-	payload, err := quic.EncodePayload(&checkReq)
+	payload, err := quicwire.EncodePayload(&checkReq)
 	if err != nil {
 		t.Fatalf("failed to encode payload: %v", err)
 	}
 
-	req := &quic.Request{
-		Opcode:  quic.OpVTPMIsRunning,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpVTPMIsRunning,
 		Payload: payload,
 	}
 
 	resp := handler.HandleRequest(ctx, req)
-	if resp.Status != quic.StatusOK {
-		t.Errorf("expected status OK, got %s", quic.StatusToString(resp.Status))
+	if resp.Status != quicwire.StatusOK {
+		t.Errorf("expected status OK, got %s", quicwire.StatusToString(resp.Status))
 	}
 
 	var isRunningResp VTPMIsRunningResponse
-	if err := quic.DecodePayload(resp.Payload, &isRunningResp); err != nil {
+	if err := quicwire.DecodePayload(resp.Payload, &isRunningResp); err != nil {
 		t.Fatalf("failed to decode response: %v", err)
 	}
 
@@ -104,19 +105,19 @@ func TestVTPMIsRunning_MissingBundleID(t *testing.T) {
 	ctx := context.Background()
 
 	checkReq := VTPMIsRunningRequest{BundleID: ""}
-	payload, err := quic.EncodePayload(&checkReq)
+	payload, err := quicwire.EncodePayload(&checkReq)
 	if err != nil {
 		t.Fatalf("failed to encode payload: %v", err)
 	}
 
-	req := &quic.Request{
-		Opcode:  quic.OpVTPMIsRunning,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpVTPMIsRunning,
 		Payload: payload,
 	}
 
 	resp := handler.HandleRequest(ctx, req)
-	if resp.Status != quic.StatusInvalidArgument {
-		t.Errorf("expected status InvalidArgument, got %s", quic.StatusToString(resp.Status))
+	if resp.Status != quicwire.StatusInvalidArgument {
+		t.Errorf("expected status InvalidArgument, got %s", quicwire.StatusToString(resp.Status))
 	}
 }
 
@@ -124,36 +125,36 @@ func TestVTPMIsRunning_InvalidPayload(t *testing.T) {
 	handler, _ := createQUICTestHandler()
 	ctx := context.Background()
 
-	req := &quic.Request{
-		Opcode:  quic.OpVTPMIsRunning,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpVTPMIsRunning,
 		Payload: []byte{0xFF, 0xFF, 0xFF},
 	}
 
 	resp := handler.HandleRequest(ctx, req)
-	if resp.Status != quic.StatusInvalidRequest {
-		t.Errorf("expected status InvalidRequest, got %s", quic.StatusToString(resp.Status))
+	if resp.Status != quicwire.StatusInvalidRequest {
+		t.Errorf("expected status InvalidRequest, got %s", quicwire.StatusToString(resp.Status))
 	}
 }
 
 func TestVTPMIsRunning_NilService(t *testing.T) {
 	logger := logging.NewLogger(slog.LevelDebug, nil)
-	handler := NewQUICServiceHandler(logger)
+	handler := newTestQUICServiceHandler(logger)
 	ctx := context.Background()
 
 	checkReq := VTPMIsRunningRequest{BundleID: "test-001"}
-	payload, err := quic.EncodePayload(&checkReq)
+	payload, err := quicwire.EncodePayload(&checkReq)
 	if err != nil {
 		t.Fatalf("failed to encode payload: %v", err)
 	}
 
-	req := &quic.Request{
-		Opcode:  quic.OpVTPMIsRunning,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpVTPMIsRunning,
 		Payload: payload,
 	}
 
 	resp := handler.HandleRequest(ctx, req)
-	if resp.Status != quic.StatusUnavailable {
-		t.Errorf("expected status Unavailable, got %s", quic.StatusToString(resp.Status))
+	if resp.Status != quicwire.StatusUnavailable {
+		t.Errorf("expected status Unavailable, got %s", quicwire.StatusToString(resp.Status))
 	}
 }
 
@@ -168,23 +169,23 @@ func TestVTPMDeleteTemplate_Success(t *testing.T) {
 	mockSvc.templates["test-template"] = &vtpm.Template{ID: "test-template"}
 
 	deleteReq := VTPMDeleteTemplateRequest{ID: "test-template"}
-	payload, err := quic.EncodePayload(&deleteReq)
+	payload, err := quicwire.EncodePayload(&deleteReq)
 	if err != nil {
 		t.Fatalf("failed to encode payload: %v", err)
 	}
 
-	req := &quic.Request{
-		Opcode:  quic.OpVTPMDeleteTemplate,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpVTPMDeleteTemplate,
 		Payload: payload,
 	}
 
 	resp := handler.HandleRequest(ctx, req)
-	if resp.Status != quic.StatusOK {
-		t.Errorf("expected status OK, got %s", quic.StatusToString(resp.Status))
+	if resp.Status != quicwire.StatusOK {
+		t.Errorf("expected status OK, got %s", quicwire.StatusToString(resp.Status))
 	}
 
 	var deleteResp VTPMDeleteTemplateResponse
-	if err := quic.DecodePayload(resp.Payload, &deleteResp); err != nil {
+	if err := quicwire.DecodePayload(resp.Payload, &deleteResp); err != nil {
 		t.Fatalf("failed to decode response: %v", err)
 	}
 
@@ -201,19 +202,19 @@ func TestVTPMDeleteTemplate_NotFound(t *testing.T) {
 	ctx := context.Background()
 
 	deleteReq := VTPMDeleteTemplateRequest{ID: "nonexistent"}
-	payload, err := quic.EncodePayload(&deleteReq)
+	payload, err := quicwire.EncodePayload(&deleteReq)
 	if err != nil {
 		t.Fatalf("failed to encode payload: %v", err)
 	}
 
-	req := &quic.Request{
-		Opcode:  quic.OpVTPMDeleteTemplate,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpVTPMDeleteTemplate,
 		Payload: payload,
 	}
 
 	resp := handler.HandleRequest(ctx, req)
-	if resp.Status != quic.StatusNotFound {
-		t.Errorf("expected status NotFound, got %s", quic.StatusToString(resp.Status))
+	if resp.Status != quicwire.StatusNotFound {
+		t.Errorf("expected status NotFound, got %s", quicwire.StatusToString(resp.Status))
 	}
 }
 
@@ -222,19 +223,19 @@ func TestVTPMDeleteTemplate_MissingID(t *testing.T) {
 	ctx := context.Background()
 
 	deleteReq := VTPMDeleteTemplateRequest{ID: ""}
-	payload, err := quic.EncodePayload(&deleteReq)
+	payload, err := quicwire.EncodePayload(&deleteReq)
 	if err != nil {
 		t.Fatalf("failed to encode payload: %v", err)
 	}
 
-	req := &quic.Request{
-		Opcode:  quic.OpVTPMDeleteTemplate,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpVTPMDeleteTemplate,
 		Payload: payload,
 	}
 
 	resp := handler.HandleRequest(ctx, req)
-	if resp.Status != quic.StatusInvalidArgument {
-		t.Errorf("expected status InvalidArgument, got %s", quic.StatusToString(resp.Status))
+	if resp.Status != quicwire.StatusInvalidArgument {
+		t.Errorf("expected status InvalidArgument, got %s", quicwire.StatusToString(resp.Status))
 	}
 }
 
@@ -242,14 +243,14 @@ func TestVTPMDeleteTemplate_InvalidPayload(t *testing.T) {
 	handler, _ := createQUICTestHandler()
 	ctx := context.Background()
 
-	req := &quic.Request{
-		Opcode:  quic.OpVTPMDeleteTemplate,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpVTPMDeleteTemplate,
 		Payload: []byte{0xFF, 0xFF, 0xFF},
 	}
 
 	resp := handler.HandleRequest(ctx, req)
-	if resp.Status != quic.StatusInvalidRequest {
-		t.Errorf("expected status InvalidRequest, got %s", quic.StatusToString(resp.Status))
+	if resp.Status != quicwire.StatusInvalidRequest {
+		t.Errorf("expected status InvalidRequest, got %s", quicwire.StatusToString(resp.Status))
 	}
 }
 
@@ -264,23 +265,23 @@ func TestVTPMExportBundle_Success(t *testing.T) {
 	mockSvc.bundles["test-001"] = &vtpm.Bundle{ID: "test-001"}
 
 	exportReq := VTPMExportBundleRequest{ID: "test-001"}
-	payload, err := quic.EncodePayload(&exportReq)
+	payload, err := quicwire.EncodePayload(&exportReq)
 	if err != nil {
 		t.Fatalf("failed to encode payload: %v", err)
 	}
 
-	req := &quic.Request{
-		Opcode:  quic.OpVTPMExportBundle,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpVTPMExportBundle,
 		Payload: payload,
 	}
 
 	resp := handler.HandleRequest(ctx, req)
-	if resp.Status != quic.StatusOK {
-		t.Errorf("expected status OK, got %s", quic.StatusToString(resp.Status))
+	if resp.Status != quicwire.StatusOK {
+		t.Errorf("expected status OK, got %s", quicwire.StatusToString(resp.Status))
 	}
 
 	var exportResp VTPMExportBundleResponse
-	if err := quic.DecodePayload(resp.Payload, &exportResp); err != nil {
+	if err := quicwire.DecodePayload(resp.Payload, &exportResp); err != nil {
 		t.Fatalf("failed to decode response: %v", err)
 	}
 
@@ -300,19 +301,19 @@ func TestVTPMExportBundle_NotFound(t *testing.T) {
 	ctx := context.Background()
 
 	exportReq := VTPMExportBundleRequest{ID: "nonexistent"}
-	payload, err := quic.EncodePayload(&exportReq)
+	payload, err := quicwire.EncodePayload(&exportReq)
 	if err != nil {
 		t.Fatalf("failed to encode payload: %v", err)
 	}
 
-	req := &quic.Request{
-		Opcode:  quic.OpVTPMExportBundle,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpVTPMExportBundle,
 		Payload: payload,
 	}
 
 	resp := handler.HandleRequest(ctx, req)
-	if resp.Status != quic.StatusNotFound {
-		t.Errorf("expected status NotFound, got %s", quic.StatusToString(resp.Status))
+	if resp.Status != quicwire.StatusNotFound {
+		t.Errorf("expected status NotFound, got %s", quicwire.StatusToString(resp.Status))
 	}
 }
 
@@ -321,19 +322,19 @@ func TestVTPMExportBundle_MissingID(t *testing.T) {
 	ctx := context.Background()
 
 	exportReq := VTPMExportBundleRequest{ID: ""}
-	payload, err := quic.EncodePayload(&exportReq)
+	payload, err := quicwire.EncodePayload(&exportReq)
 	if err != nil {
 		t.Fatalf("failed to encode payload: %v", err)
 	}
 
-	req := &quic.Request{
-		Opcode:  quic.OpVTPMExportBundle,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpVTPMExportBundle,
 		Payload: payload,
 	}
 
 	resp := handler.HandleRequest(ctx, req)
-	if resp.Status != quic.StatusInvalidArgument {
-		t.Errorf("expected status InvalidArgument, got %s", quic.StatusToString(resp.Status))
+	if resp.Status != quicwire.StatusInvalidArgument {
+		t.Errorf("expected status InvalidArgument, got %s", quicwire.StatusToString(resp.Status))
 	}
 }
 
@@ -341,14 +342,14 @@ func TestVTPMExportBundle_InvalidPayload(t *testing.T) {
 	handler, _ := createQUICTestHandler()
 	ctx := context.Background()
 
-	req := &quic.Request{
-		Opcode:  quic.OpVTPMExportBundle,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpVTPMExportBundle,
 		Payload: []byte{0xFF, 0xFF, 0xFF},
 	}
 
 	resp := handler.HandleRequest(ctx, req)
-	if resp.Status != quic.StatusInvalidRequest {
-		t.Errorf("expected status InvalidRequest, got %s", quic.StatusToString(resp.Status))
+	if resp.Status != quicwire.StatusInvalidRequest {
+		t.Errorf("expected status InvalidRequest, got %s", quicwire.StatusToString(resp.Status))
 	}
 }
 
@@ -361,23 +362,23 @@ func TestVTPMImportBundle_Success(t *testing.T) {
 	ctx := context.Background()
 
 	importReq := VTPMImportBundleRequest{Data: []byte("mock-bundle-data")}
-	payload, err := quic.EncodePayload(&importReq)
+	payload, err := quicwire.EncodePayload(&importReq)
 	if err != nil {
 		t.Fatalf("failed to encode payload: %v", err)
 	}
 
-	req := &quic.Request{
-		Opcode:  quic.OpVTPMImportBundle,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpVTPMImportBundle,
 		Payload: payload,
 	}
 
 	resp := handler.HandleRequest(ctx, req)
-	if resp.Status != quic.StatusOK {
-		t.Errorf("expected status OK, got %s", quic.StatusToString(resp.Status))
+	if resp.Status != quicwire.StatusOK {
+		t.Errorf("expected status OK, got %s", quicwire.StatusToString(resp.Status))
 	}
 
 	var importResp VTPMImportBundleResponse
-	if err := quic.DecodePayload(resp.Payload, &importResp); err != nil {
+	if err := quicwire.DecodePayload(resp.Payload, &importResp); err != nil {
 		t.Fatalf("failed to decode response: %v", err)
 	}
 
@@ -391,19 +392,19 @@ func TestVTPMImportBundle_MissingData(t *testing.T) {
 	ctx := context.Background()
 
 	importReq := VTPMImportBundleRequest{Data: nil}
-	payload, err := quic.EncodePayload(&importReq)
+	payload, err := quicwire.EncodePayload(&importReq)
 	if err != nil {
 		t.Fatalf("failed to encode payload: %v", err)
 	}
 
-	req := &quic.Request{
-		Opcode:  quic.OpVTPMImportBundle,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpVTPMImportBundle,
 		Payload: payload,
 	}
 
 	resp := handler.HandleRequest(ctx, req)
-	if resp.Status != quic.StatusInvalidArgument {
-		t.Errorf("expected status InvalidArgument, got %s", quic.StatusToString(resp.Status))
+	if resp.Status != quicwire.StatusInvalidArgument {
+		t.Errorf("expected status InvalidArgument, got %s", quicwire.StatusToString(resp.Status))
 	}
 }
 
@@ -412,19 +413,19 @@ func TestVTPMImportBundle_EmptyData(t *testing.T) {
 	ctx := context.Background()
 
 	importReq := VTPMImportBundleRequest{Data: []byte{}}
-	payload, err := quic.EncodePayload(&importReq)
+	payload, err := quicwire.EncodePayload(&importReq)
 	if err != nil {
 		t.Fatalf("failed to encode payload: %v", err)
 	}
 
-	req := &quic.Request{
-		Opcode:  quic.OpVTPMImportBundle,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpVTPMImportBundle,
 		Payload: payload,
 	}
 
 	resp := handler.HandleRequest(ctx, req)
-	if resp.Status != quic.StatusInvalidArgument {
-		t.Errorf("expected status InvalidArgument, got %s", quic.StatusToString(resp.Status))
+	if resp.Status != quicwire.StatusInvalidArgument {
+		t.Errorf("expected status InvalidArgument, got %s", quicwire.StatusToString(resp.Status))
 	}
 }
 
@@ -432,14 +433,14 @@ func TestVTPMImportBundle_InvalidPayload(t *testing.T) {
 	handler, _ := createQUICTestHandler()
 	ctx := context.Background()
 
-	req := &quic.Request{
-		Opcode:  quic.OpVTPMImportBundle,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpVTPMImportBundle,
 		Payload: []byte{0xFF, 0xFF, 0xFF},
 	}
 
 	resp := handler.HandleRequest(ctx, req)
-	if resp.Status != quic.StatusInvalidRequest {
-		t.Errorf("expected status InvalidRequest, got %s", quic.StatusToString(resp.Status))
+	if resp.Status != quicwire.StatusInvalidRequest {
+		t.Errorf("expected status InvalidRequest, got %s", quicwire.StatusToString(resp.Status))
 	}
 }
 
@@ -457,23 +458,23 @@ func TestVTPMCreate_Success(t *testing.T) {
 		SecureBootEnabled: true,
 		Labels:            map[string]string{"env": "test"},
 	}
-	payload, err := quic.EncodePayload(&createReq)
+	payload, err := quicwire.EncodePayload(&createReq)
 	if err != nil {
 		t.Fatalf("failed to encode payload: %v", err)
 	}
 
-	req := &quic.Request{
-		Opcode:  quic.OpVTPMCreate,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpVTPMCreate,
 		Payload: payload,
 	}
 
 	resp := handler.HandleRequest(ctx, req)
-	if resp.Status != quic.StatusOK {
-		t.Errorf("expected status OK, got %s", quic.StatusToString(resp.Status))
+	if resp.Status != quicwire.StatusOK {
+		t.Errorf("expected status OK, got %s", quicwire.StatusToString(resp.Status))
 	}
 
 	var createResp VTPMCreateResponse
-	if err := quic.DecodePayload(resp.Payload, &createResp); err != nil {
+	if err := quicwire.DecodePayload(resp.Payload, &createResp); err != nil {
 		t.Fatalf("failed to decode response: %v", err)
 	}
 
@@ -493,43 +494,54 @@ func TestVTPMCreate_WithECCAlgorithm(t *testing.T) {
 		Hostname:    "test-vm-ecc",
 		EKAlgorithm: "ECC",
 	}
-	payload, err := quic.EncodePayload(&createReq)
+	payload, err := quicwire.EncodePayload(&createReq)
 	if err != nil {
 		t.Fatalf("failed to encode payload: %v", err)
 	}
 
-	req := &quic.Request{
-		Opcode:  quic.OpVTPMCreate,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpVTPMCreate,
 		Payload: payload,
 	}
 
 	resp := handler.HandleRequest(ctx, req)
-	if resp.Status != quic.StatusOK {
-		t.Errorf("expected status OK, got %s", quic.StatusToString(resp.Status))
+	if resp.Status != quicwire.StatusOK {
+		t.Errorf("expected status OK, got %s", quicwire.StatusToString(resp.Status))
 	}
 }
 
-func TestVTPMCreate_WithECDSAAlgorithm(t *testing.T) {
-	handler, _ := createQUICTestHandler()
-	ctx := context.Background()
-
-	createReq := VTPMCreateRequest{
-		Hostname:    "test-vm-ecdsa",
-		EKAlgorithm: "ECDSA",
+// TestVTPMCreate_EKAlgorithm guards the coercion bug: "ECDSA" (and any other
+// undocumented value) used to be accepted, and anything not ECC became RSA.
+// Only RSA and ECC are accepted, in any case.
+func TestVTPMCreate_EKAlgorithm(t *testing.T) {
+	tests := []struct {
+		algorithm string
+		want      byte
+	}{
+		{"ecc", quicwire.StatusOK},
+		{"ECDSA", quicwire.StatusInvalidArgument},
+		{"DSA", quicwire.StatusInvalidArgument},
 	}
-	payload, err := quic.EncodePayload(&createReq)
-	if err != nil {
-		t.Fatalf("failed to encode payload: %v", err)
-	}
+	for _, tt := range tests {
+		t.Run(tt.algorithm, func(t *testing.T) {
+			handler, _ := createQUICTestHandler()
 
-	req := &quic.Request{
-		Opcode:  quic.OpVTPMCreate,
-		Payload: payload,
-	}
+			payload, err := quicwire.EncodePayload(&VTPMCreateRequest{
+				Hostname:    "test-vm-" + strings.ToLower(tt.algorithm),
+				EKAlgorithm: tt.algorithm,
+			})
+			if err != nil {
+				t.Fatalf("failed to encode payload: %v", err)
+			}
 
-	resp := handler.HandleRequest(ctx, req)
-	if resp.Status != quic.StatusOK {
-		t.Errorf("expected status OK, got %s", quic.StatusToString(resp.Status))
+			resp := handler.HandleRequest(context.Background(), &quicwire.Request{
+				Opcode:  quicwire.OpVTPMCreate,
+				Payload: payload,
+			})
+			if resp.Status != tt.want {
+				t.Errorf("status = %s, want %s", quicwire.StatusToString(resp.Status), quicwire.StatusToString(tt.want))
+			}
+		})
 	}
 }
 
@@ -540,19 +552,19 @@ func TestVTPMCreate_MissingHostname(t *testing.T) {
 	createReq := VTPMCreateRequest{
 		Hostname: "",
 	}
-	payload, err := quic.EncodePayload(&createReq)
+	payload, err := quicwire.EncodePayload(&createReq)
 	if err != nil {
 		t.Fatalf("failed to encode payload: %v", err)
 	}
 
-	req := &quic.Request{
-		Opcode:  quic.OpVTPMCreate,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpVTPMCreate,
 		Payload: payload,
 	}
 
 	resp := handler.HandleRequest(ctx, req)
-	if resp.Status != quic.StatusInvalidArgument {
-		t.Errorf("expected status InvalidArgument, got %s", quic.StatusToString(resp.Status))
+	if resp.Status != quicwire.StatusInvalidArgument {
+		t.Errorf("expected status InvalidArgument, got %s", quicwire.StatusToString(resp.Status))
 	}
 }
 
@@ -560,14 +572,14 @@ func TestVTPMCreate_InvalidPayload(t *testing.T) {
 	handler, _ := createQUICTestHandler()
 	ctx := context.Background()
 
-	req := &quic.Request{
-		Opcode:  quic.OpVTPMCreate,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpVTPMCreate,
 		Payload: []byte{0xFF, 0xFF, 0xFF},
 	}
 
 	resp := handler.HandleRequest(ctx, req)
-	if resp.Status != quic.StatusInvalidRequest {
-		t.Errorf("expected status InvalidRequest, got %s", quic.StatusToString(resp.Status))
+	if resp.Status != quicwire.StatusInvalidRequest {
+		t.Errorf("expected status InvalidRequest, got %s", quicwire.StatusToString(resp.Status))
 	}
 }
 
@@ -582,23 +594,23 @@ func TestVTPMDelete_Success(t *testing.T) {
 	mockSvc.bundles["test-001"] = &vtpm.Bundle{ID: "test-001"}
 
 	deleteReq := VTPMDeleteRequest{BundleID: "test-001"}
-	payload, err := quic.EncodePayload(&deleteReq)
+	payload, err := quicwire.EncodePayload(&deleteReq)
 	if err != nil {
 		t.Fatalf("failed to encode payload: %v", err)
 	}
 
-	req := &quic.Request{
-		Opcode:  quic.OpVTPMDelete,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpVTPMDelete,
 		Payload: payload,
 	}
 
 	resp := handler.HandleRequest(ctx, req)
-	if resp.Status != quic.StatusOK {
-		t.Errorf("expected status OK, got %s", quic.StatusToString(resp.Status))
+	if resp.Status != quicwire.StatusOK {
+		t.Errorf("expected status OK, got %s", quicwire.StatusToString(resp.Status))
 	}
 
 	var deleteResp VTPMDeleteResponse
-	if err := quic.DecodePayload(resp.Payload, &deleteResp); err != nil {
+	if err := quicwire.DecodePayload(resp.Payload, &deleteResp); err != nil {
 		t.Fatalf("failed to decode response: %v", err)
 	}
 
@@ -615,19 +627,19 @@ func TestVTPMDelete_NotFound(t *testing.T) {
 	ctx := context.Background()
 
 	deleteReq := VTPMDeleteRequest{BundleID: "nonexistent"}
-	payload, err := quic.EncodePayload(&deleteReq)
+	payload, err := quicwire.EncodePayload(&deleteReq)
 	if err != nil {
 		t.Fatalf("failed to encode payload: %v", err)
 	}
 
-	req := &quic.Request{
-		Opcode:  quic.OpVTPMDelete,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpVTPMDelete,
 		Payload: payload,
 	}
 
 	resp := handler.HandleRequest(ctx, req)
-	if resp.Status != quic.StatusNotFound {
-		t.Errorf("expected status NotFound, got %s", quic.StatusToString(resp.Status))
+	if resp.Status != quicwire.StatusNotFound {
+		t.Errorf("expected status NotFound, got %s", quicwire.StatusToString(resp.Status))
 	}
 }
 
@@ -636,19 +648,19 @@ func TestVTPMDelete_MissingBundleID(t *testing.T) {
 	ctx := context.Background()
 
 	deleteReq := VTPMDeleteRequest{BundleID: ""}
-	payload, err := quic.EncodePayload(&deleteReq)
+	payload, err := quicwire.EncodePayload(&deleteReq)
 	if err != nil {
 		t.Fatalf("failed to encode payload: %v", err)
 	}
 
-	req := &quic.Request{
-		Opcode:  quic.OpVTPMDelete,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpVTPMDelete,
 		Payload: payload,
 	}
 
 	resp := handler.HandleRequest(ctx, req)
-	if resp.Status != quic.StatusInvalidArgument {
-		t.Errorf("expected status InvalidArgument, got %s", quic.StatusToString(resp.Status))
+	if resp.Status != quicwire.StatusInvalidArgument {
+		t.Errorf("expected status InvalidArgument, got %s", quicwire.StatusToString(resp.Status))
 	}
 }
 
@@ -656,14 +668,14 @@ func TestVTPMDelete_InvalidPayload(t *testing.T) {
 	handler, _ := createQUICTestHandler()
 	ctx := context.Background()
 
-	req := &quic.Request{
-		Opcode:  quic.OpVTPMDelete,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpVTPMDelete,
 		Payload: []byte{0xFF, 0xFF, 0xFF},
 	}
 
 	resp := handler.HandleRequest(ctx, req)
-	if resp.Status != quic.StatusInvalidRequest {
-		t.Errorf("expected status InvalidRequest, got %s", quic.StatusToString(resp.Status))
+	if resp.Status != quicwire.StatusInvalidRequest {
+		t.Errorf("expected status InvalidRequest, got %s", quicwire.StatusToString(resp.Status))
 	}
 }
 
@@ -697,18 +709,18 @@ func TestVTPMList_Success(t *testing.T) {
 	}
 	mockSvc.running["bundle-1"] = true
 
-	req := &quic.Request{
-		Opcode:  quic.OpVTPMList,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpVTPMList,
 		Payload: nil,
 	}
 
 	resp := handler.HandleRequest(ctx, req)
-	if resp.Status != quic.StatusOK {
-		t.Errorf("expected status OK, got %s", quic.StatusToString(resp.Status))
+	if resp.Status != quicwire.StatusOK {
+		t.Errorf("expected status OK, got %s", quicwire.StatusToString(resp.Status))
 	}
 
 	var listResp VTPMListResponse
-	if err := quic.DecodePayload(resp.Payload, &listResp); err != nil {
+	if err := quicwire.DecodePayload(resp.Payload, &listResp); err != nil {
 		t.Fatalf("failed to decode response: %v", err)
 	}
 
@@ -731,23 +743,23 @@ func TestVTPMList_WithModeFilter(t *testing.T) {
 	}
 
 	listReq := VTPMListRequest{Mode: string(vtpm.BundleModePreAssigned)}
-	payload, err := quic.EncodePayload(&listReq)
+	payload, err := quicwire.EncodePayload(&listReq)
 	if err != nil {
 		t.Fatalf("failed to encode payload: %v", err)
 	}
 
-	req := &quic.Request{
-		Opcode:  quic.OpVTPMList,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpVTPMList,
 		Payload: payload,
 	}
 
 	resp := handler.HandleRequest(ctx, req)
-	if resp.Status != quic.StatusOK {
-		t.Errorf("expected status OK, got %s", quic.StatusToString(resp.Status))
+	if resp.Status != quicwire.StatusOK {
+		t.Errorf("expected status OK, got %s", quicwire.StatusToString(resp.Status))
 	}
 
 	var listResp VTPMListResponse
-	if err := quic.DecodePayload(resp.Payload, &listResp); err != nil {
+	if err := quicwire.DecodePayload(resp.Payload, &listResp); err != nil {
 		t.Fatalf("failed to decode response: %v", err)
 	}
 
@@ -760,18 +772,18 @@ func TestVTPMList_EmptyResult(t *testing.T) {
 	handler, _ := createQUICTestHandler()
 	ctx := context.Background()
 
-	req := &quic.Request{
-		Opcode:  quic.OpVTPMList,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpVTPMList,
 		Payload: nil,
 	}
 
 	resp := handler.HandleRequest(ctx, req)
-	if resp.Status != quic.StatusOK {
-		t.Errorf("expected status OK, got %s", quic.StatusToString(resp.Status))
+	if resp.Status != quicwire.StatusOK {
+		t.Errorf("expected status OK, got %s", quicwire.StatusToString(resp.Status))
 	}
 
 	var listResp VTPMListResponse
-	if err := quic.DecodePayload(resp.Payload, &listResp); err != nil {
+	if err := quicwire.DecodePayload(resp.Payload, &listResp); err != nil {
 		t.Fatalf("failed to decode response: %v", err)
 	}
 
@@ -784,14 +796,14 @@ func TestVTPMList_InvalidPayload(t *testing.T) {
 	handler, _ := createQUICTestHandler()
 	ctx := context.Background()
 
-	req := &quic.Request{
-		Opcode:  quic.OpVTPMList,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpVTPMList,
 		Payload: []byte{0xFF, 0xFF, 0xFF},
 	}
 
 	resp := handler.HandleRequest(ctx, req)
-	if resp.Status != quic.StatusInvalidRequest {
-		t.Errorf("expected status InvalidRequest, got %s", quic.StatusToString(resp.Status))
+	if resp.Status != quicwire.StatusInvalidRequest {
+		t.Errorf("expected status InvalidRequest, got %s", quicwire.StatusToString(resp.Status))
 	}
 }
 
@@ -804,23 +816,23 @@ func TestVTPMGetTPMSocketPath_Success(t *testing.T) {
 	ctx := context.Background()
 
 	pathReq := VTPMGetPathRequest{ID: "test-001"}
-	payload, err := quic.EncodePayload(&pathReq)
+	payload, err := quicwire.EncodePayload(&pathReq)
 	if err != nil {
 		t.Fatalf("failed to encode payload: %v", err)
 	}
 
-	req := &quic.Request{
-		Opcode:  quic.OpVTPMGetSocketPath,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpVTPMGetSocketPath,
 		Payload: payload,
 	}
 
 	resp := handler.HandleRequest(ctx, req)
-	if resp.Status != quic.StatusOK {
-		t.Errorf("expected status OK, got %s", quic.StatusToString(resp.Status))
+	if resp.Status != quicwire.StatusOK {
+		t.Errorf("expected status OK, got %s", quicwire.StatusToString(resp.Status))
 	}
 
 	var pathResp VTPMGetPathResponse
-	if err := quic.DecodePayload(resp.Payload, &pathResp); err != nil {
+	if err := quicwire.DecodePayload(resp.Payload, &pathResp); err != nil {
 		t.Fatalf("failed to decode response: %v", err)
 	}
 
@@ -837,19 +849,19 @@ func TestVTPMGetTPMSocketPath_MissingID(t *testing.T) {
 	ctx := context.Background()
 
 	pathReq := VTPMGetPathRequest{ID: ""}
-	payload, err := quic.EncodePayload(&pathReq)
+	payload, err := quicwire.EncodePayload(&pathReq)
 	if err != nil {
 		t.Fatalf("failed to encode payload: %v", err)
 	}
 
-	req := &quic.Request{
-		Opcode:  quic.OpVTPMGetSocketPath,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpVTPMGetSocketPath,
 		Payload: payload,
 	}
 
 	resp := handler.HandleRequest(ctx, req)
-	if resp.Status != quic.StatusInvalidArgument {
-		t.Errorf("expected status InvalidArgument, got %s", quic.StatusToString(resp.Status))
+	if resp.Status != quicwire.StatusInvalidArgument {
+		t.Errorf("expected status InvalidArgument, got %s", quicwire.StatusToString(resp.Status))
 	}
 }
 
@@ -857,14 +869,14 @@ func TestVTPMGetTPMSocketPath_InvalidPayload(t *testing.T) {
 	handler, _ := createQUICTestHandler()
 	ctx := context.Background()
 
-	req := &quic.Request{
-		Opcode:  quic.OpVTPMGetSocketPath,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpVTPMGetSocketPath,
 		Payload: []byte{0xFF, 0xFF, 0xFF},
 	}
 
 	resp := handler.HandleRequest(ctx, req)
-	if resp.Status != quic.StatusInvalidRequest {
-		t.Errorf("expected status InvalidRequest, got %s", quic.StatusToString(resp.Status))
+	if resp.Status != quicwire.StatusInvalidRequest {
+		t.Errorf("expected status InvalidRequest, got %s", quicwire.StatusToString(resp.Status))
 	}
 }
 
@@ -877,23 +889,23 @@ func TestVTPMGetNVRAMPath_Success(t *testing.T) {
 	ctx := context.Background()
 
 	pathReq := VTPMGetPathRequest{ID: "test-001"}
-	payload, err := quic.EncodePayload(&pathReq)
+	payload, err := quicwire.EncodePayload(&pathReq)
 	if err != nil {
 		t.Fatalf("failed to encode payload: %v", err)
 	}
 
-	req := &quic.Request{
-		Opcode:  quic.OpVTPMGetNVRAMPath,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpVTPMGetNVRAMPath,
 		Payload: payload,
 	}
 
 	resp := handler.HandleRequest(ctx, req)
-	if resp.Status != quic.StatusOK {
-		t.Errorf("expected status OK, got %s", quic.StatusToString(resp.Status))
+	if resp.Status != quicwire.StatusOK {
+		t.Errorf("expected status OK, got %s", quicwire.StatusToString(resp.Status))
 	}
 
 	var pathResp VTPMGetPathResponse
-	if err := quic.DecodePayload(resp.Payload, &pathResp); err != nil {
+	if err := quicwire.DecodePayload(resp.Payload, &pathResp); err != nil {
 		t.Fatalf("failed to decode response: %v", err)
 	}
 
@@ -910,19 +922,19 @@ func TestVTPMGetNVRAMPath_MissingID(t *testing.T) {
 	ctx := context.Background()
 
 	pathReq := VTPMGetPathRequest{ID: ""}
-	payload, err := quic.EncodePayload(&pathReq)
+	payload, err := quicwire.EncodePayload(&pathReq)
 	if err != nil {
 		t.Fatalf("failed to encode payload: %v", err)
 	}
 
-	req := &quic.Request{
-		Opcode:  quic.OpVTPMGetNVRAMPath,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpVTPMGetNVRAMPath,
 		Payload: payload,
 	}
 
 	resp := handler.HandleRequest(ctx, req)
-	if resp.Status != quic.StatusInvalidArgument {
-		t.Errorf("expected status InvalidArgument, got %s", quic.StatusToString(resp.Status))
+	if resp.Status != quicwire.StatusInvalidArgument {
+		t.Errorf("expected status InvalidArgument, got %s", quicwire.StatusToString(resp.Status))
 	}
 }
 
@@ -930,14 +942,14 @@ func TestVTPMGetNVRAMPath_InvalidPayload(t *testing.T) {
 	handler, _ := createQUICTestHandler()
 	ctx := context.Background()
 
-	req := &quic.Request{
-		Opcode:  quic.OpVTPMGetNVRAMPath,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpVTPMGetNVRAMPath,
 		Payload: []byte{0xFF, 0xFF, 0xFF},
 	}
 
 	resp := handler.HandleRequest(ctx, req)
-	if resp.Status != quic.StatusInvalidRequest {
-		t.Errorf("expected status InvalidRequest, got %s", quic.StatusToString(resp.Status))
+	if resp.Status != quicwire.StatusInvalidRequest {
+		t.Errorf("expected status InvalidRequest, got %s", quicwire.StatusToString(resp.Status))
 	}
 }
 
@@ -949,60 +961,60 @@ func TestVTPMOperation_UnknownOpcode(t *testing.T) {
 	handler, _ := createQUICTestHandler()
 	ctx := context.Background()
 
-	req := &quic.Request{
+	req := &quicwire.Request{
 		Opcode:  0xFE, // Container Stop opcode - returns Unavailable without container service
 		Payload: nil,
 	}
 
 	resp := handler.HandleRequest(ctx, req)
 	// Without container service configured, container opcodes return Unavailable
-	if resp.Status != quic.StatusUnavailable && resp.Status != quic.StatusNotImplemented {
-		t.Errorf("expected status Unavailable or NotImplemented, got %s", quic.StatusToString(resp.Status))
+	if resp.Status != quicwire.StatusUnavailable && resp.Status != quicwire.StatusNotImplemented {
+		t.Errorf("expected status Unavailable or NotImplemented, got %s", quicwire.StatusToString(resp.Status))
 	}
 }
 
 func TestVTPMOperation_AllOpcodes_NilService(t *testing.T) {
 	logger := logging.NewLogger(slog.LevelDebug, nil)
-	handler := NewQUICServiceHandler(logger)
+	handler := newTestQUICServiceHandler(logger)
 	ctx := context.Background()
 
 	opcodes := []byte{
-		quic.OpVTPMCreateTemplate,
-		quic.OpVTPMGetTemplate,
-		quic.OpVTPMDeleteTemplate,
-		quic.OpVTPMListTemplates,
-		quic.OpVTPMCloneTemplate,
-		quic.OpVTPMExportBundle,
-		quic.OpVTPMImportBundle,
-		quic.OpVTPMValidateBundle,
-		quic.OpVTPMGetBundlePath,
-		quic.OpVTPMGetSocketPath,
-		quic.OpVTPMGetNVRAMPath,
-		quic.OpVTPMGetBundle,
-		quic.OpVTPMIsRunning,
-		quic.OpVTPMCreate,
-		quic.OpVTPMDelete,
-		quic.OpVTPMStart,
-		quic.OpVTPMStop,
-		quic.OpVTPMGetState,
-		quic.OpVTPMList,
-		quic.OpVTPMQuote,
-		quic.OpVTPMSeal,
-		quic.OpVTPMUnseal,
-		quic.OpVTPMExtendPCR,
-		quic.OpVTPMReadPCR,
+		quicwire.OpVTPMCreateTemplate,
+		quicwire.OpVTPMGetTemplate,
+		quicwire.OpVTPMDeleteTemplate,
+		quicwire.OpVTPMListTemplates,
+		quicwire.OpVTPMCloneTemplate,
+		quicwire.OpVTPMExportBundle,
+		quicwire.OpVTPMImportBundle,
+		quicwire.OpVTPMValidateBundle,
+		quicwire.OpVTPMGetBundlePath,
+		quicwire.OpVTPMGetSocketPath,
+		quicwire.OpVTPMGetNVRAMPath,
+		quicwire.OpVTPMGetBundle,
+		quicwire.OpVTPMIsRunning,
+		quicwire.OpVTPMCreate,
+		quicwire.OpVTPMDelete,
+		quicwire.OpVTPMStart,
+		quicwire.OpVTPMStop,
+		quicwire.OpVTPMGetState,
+		quicwire.OpVTPMList,
+		quicwire.OpVTPMQuote,
+		quicwire.OpVTPMSeal,
+		quicwire.OpVTPMUnseal,
+		quicwire.OpVTPMExtendPCR,
+		quicwire.OpVTPMReadPCR,
 	}
 
 	for _, opcode := range opcodes {
-		req := &quic.Request{
+		req := &quicwire.Request{
 			Opcode:  opcode,
 			Payload: nil,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
-		if resp.Status != quic.StatusUnavailable {
+		if resp.Status != quicwire.StatusUnavailable {
 			t.Errorf("opcode 0x%02X: expected status Unavailable when service is nil, got %s",
-				opcode, quic.StatusToString(resp.Status))
+				opcode, quicwire.StatusToString(resp.Status))
 		}
 	}
 }
@@ -1036,8 +1048,8 @@ func TestMapVTPMError_NotFound(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			resp := handler.mapVTPMError(tc.err)
-			if resp.Status != quic.StatusNotFound {
-				t.Errorf("expected status NotFound, got %s", quic.StatusToString(resp.Status))
+			if resp.Status != quicwire.StatusNotFound {
+				t.Errorf("expected status NotFound, got %s", quicwire.StatusToString(resp.Status))
 			}
 		})
 	}
@@ -1057,8 +1069,8 @@ func TestMapVTPMError_AlreadyExists(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			resp := handler.mapVTPMError(tc.err)
-			if resp.Status != quic.StatusAlreadyExists {
-				t.Errorf("expected status AlreadyExists, got %s", quic.StatusToString(resp.Status))
+			if resp.Status != quicwire.StatusAlreadyExists {
+				t.Errorf("expected status AlreadyExists, got %s", quicwire.StatusToString(resp.Status))
 			}
 		})
 	}
@@ -1080,8 +1092,8 @@ func TestMapVTPMError_InvalidArgument(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			resp := handler.mapVTPMError(tc.err)
-			if resp.Status != quic.StatusInvalidArgument {
-				t.Errorf("expected status InvalidArgument, got %s", quic.StatusToString(resp.Status))
+			if resp.Status != quicwire.StatusInvalidArgument {
+				t.Errorf("expected status InvalidArgument, got %s", quicwire.StatusToString(resp.Status))
 			}
 		})
 	}
@@ -1101,8 +1113,8 @@ func TestMapVTPMError_Unavailable(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			resp := handler.mapVTPMError(tc.err)
-			if resp.Status != quic.StatusUnavailable {
-				t.Errorf("expected status Unavailable, got %s", quic.StatusToString(resp.Status))
+			if resp.Status != quicwire.StatusUnavailable {
+				t.Errorf("expected status Unavailable, got %s", quicwire.StatusToString(resp.Status))
 			}
 		})
 	}
@@ -1112,8 +1124,8 @@ func TestMapVTPMError_InternalError(t *testing.T) {
 	handler, _ := createQUICTestHandler()
 
 	resp := handler.mapVTPMError(errors.New("some unexpected error"))
-	if resp.Status != quic.StatusInternalError {
-		t.Errorf("expected status InternalError, got %s", quic.StatusToString(resp.Status))
+	if resp.Status != quicwire.StatusInternalError {
+		t.Errorf("expected status InternalError, got %s", quicwire.StatusToString(resp.Status))
 	}
 }
 
@@ -1326,7 +1338,7 @@ func TestVTPMRequestResponse_RoundTrip(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			encoded, err := quic.EncodePayload(tc.request)
+			encoded, err := quicwire.EncodePayload(tc.request)
 			if err != nil {
 				t.Fatalf("failed to encode %s: %v", tc.name, err)
 			}
@@ -1350,19 +1362,19 @@ func TestVTPMCloneTemplate_MissingTemplateID(t *testing.T) {
 		TemplateID: "",
 		Hostname:   "new-vm",
 	}
-	payload, err := quic.EncodePayload(&cloneReq)
+	payload, err := quicwire.EncodePayload(&cloneReq)
 	if err != nil {
 		t.Fatalf("failed to encode payload: %v", err)
 	}
 
-	req := &quic.Request{
-		Opcode:  quic.OpVTPMCloneTemplate,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpVTPMCloneTemplate,
 		Payload: payload,
 	}
 
 	resp := handler.HandleRequest(ctx, req)
-	if resp.Status != quic.StatusInvalidArgument {
-		t.Errorf("expected status InvalidArgument, got %s", quic.StatusToString(resp.Status))
+	if resp.Status != quicwire.StatusInvalidArgument {
+		t.Errorf("expected status InvalidArgument, got %s", quicwire.StatusToString(resp.Status))
 	}
 }
 
@@ -1376,19 +1388,19 @@ func TestVTPMCloneTemplate_MissingHostname(t *testing.T) {
 		TemplateID: "base-template",
 		Hostname:   "",
 	}
-	payload, err := quic.EncodePayload(&cloneReq)
+	payload, err := quicwire.EncodePayload(&cloneReq)
 	if err != nil {
 		t.Fatalf("failed to encode payload: %v", err)
 	}
 
-	req := &quic.Request{
-		Opcode:  quic.OpVTPMCloneTemplate,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpVTPMCloneTemplate,
 		Payload: payload,
 	}
 
 	resp := handler.HandleRequest(ctx, req)
-	if resp.Status != quic.StatusInvalidArgument {
-		t.Errorf("expected status InvalidArgument, got %s", quic.StatusToString(resp.Status))
+	if resp.Status != quicwire.StatusInvalidArgument {
+		t.Errorf("expected status InvalidArgument, got %s", quicwire.StatusToString(resp.Status))
 	}
 }
 
@@ -1401,19 +1413,19 @@ func TestVTPMQuote_MissingBundleID(t *testing.T) {
 		Nonce:    []byte("nonce"),
 		PCRs:     []int{0},
 	}
-	payload, err := quic.EncodePayload(&quoteReq)
+	payload, err := quicwire.EncodePayload(&quoteReq)
 	if err != nil {
 		t.Fatalf("failed to encode payload: %v", err)
 	}
 
-	req := &quic.Request{
-		Opcode:  quic.OpVTPMQuote,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpVTPMQuote,
 		Payload: payload,
 	}
 
 	resp := handler.HandleRequest(ctx, req)
-	if resp.Status != quic.StatusInvalidArgument {
-		t.Errorf("expected status InvalidArgument, got %s", quic.StatusToString(resp.Status))
+	if resp.Status != quicwire.StatusInvalidArgument {
+		t.Errorf("expected status InvalidArgument, got %s", quicwire.StatusToString(resp.Status))
 	}
 }
 
@@ -1429,19 +1441,19 @@ func TestVTPMQuote_MissingNonce(t *testing.T) {
 		Nonce:    nil,
 		PCRs:     []int{0},
 	}
-	payload, err := quic.EncodePayload(&quoteReq)
+	payload, err := quicwire.EncodePayload(&quoteReq)
 	if err != nil {
 		t.Fatalf("failed to encode payload: %v", err)
 	}
 
-	req := &quic.Request{
-		Opcode:  quic.OpVTPMQuote,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpVTPMQuote,
 		Payload: payload,
 	}
 
 	resp := handler.HandleRequest(ctx, req)
-	if resp.Status != quic.StatusInvalidArgument {
-		t.Errorf("expected status InvalidArgument, got %s", quic.StatusToString(resp.Status))
+	if resp.Status != quicwire.StatusInvalidArgument {
+		t.Errorf("expected status InvalidArgument, got %s", quicwire.StatusToString(resp.Status))
 	}
 }
 
@@ -1453,19 +1465,19 @@ func TestVTPMSeal_MissingBundleID(t *testing.T) {
 		BundleID: "",
 		Data:     []byte("data"),
 	}
-	payload, err := quic.EncodePayload(&sealReq)
+	payload, err := quicwire.EncodePayload(&sealReq)
 	if err != nil {
 		t.Fatalf("failed to encode payload: %v", err)
 	}
 
-	req := &quic.Request{
-		Opcode:  quic.OpVTPMSeal,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpVTPMSeal,
 		Payload: payload,
 	}
 
 	resp := handler.HandleRequest(ctx, req)
-	if resp.Status != quic.StatusInvalidArgument {
-		t.Errorf("expected status InvalidArgument, got %s", quic.StatusToString(resp.Status))
+	if resp.Status != quicwire.StatusInvalidArgument {
+		t.Errorf("expected status InvalidArgument, got %s", quicwire.StatusToString(resp.Status))
 	}
 }
 
@@ -1477,19 +1489,19 @@ func TestVTPMUnseal_MissingBundleID(t *testing.T) {
 		BundleID:   "",
 		SealedData: []byte("sealed"),
 	}
-	payload, err := quic.EncodePayload(&unsealReq)
+	payload, err := quicwire.EncodePayload(&unsealReq)
 	if err != nil {
 		t.Fatalf("failed to encode payload: %v", err)
 	}
 
-	req := &quic.Request{
-		Opcode:  quic.OpVTPMUnseal,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpVTPMUnseal,
 		Payload: payload,
 	}
 
 	resp := handler.HandleRequest(ctx, req)
-	if resp.Status != quic.StatusInvalidArgument {
-		t.Errorf("expected status InvalidArgument, got %s", quic.StatusToString(resp.Status))
+	if resp.Status != quicwire.StatusInvalidArgument {
+		t.Errorf("expected status InvalidArgument, got %s", quicwire.StatusToString(resp.Status))
 	}
 }
 
@@ -1504,19 +1516,19 @@ func TestVTPMUnseal_MissingSealedData(t *testing.T) {
 		BundleID:   "test-001",
 		SealedData: nil,
 	}
-	payload, err := quic.EncodePayload(&unsealReq)
+	payload, err := quicwire.EncodePayload(&unsealReq)
 	if err != nil {
 		t.Fatalf("failed to encode payload: %v", err)
 	}
 
-	req := &quic.Request{
-		Opcode:  quic.OpVTPMUnseal,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpVTPMUnseal,
 		Payload: payload,
 	}
 
 	resp := handler.HandleRequest(ctx, req)
-	if resp.Status != quic.StatusInvalidArgument {
-		t.Errorf("expected status InvalidArgument, got %s", quic.StatusToString(resp.Status))
+	if resp.Status != quicwire.StatusInvalidArgument {
+		t.Errorf("expected status InvalidArgument, got %s", quicwire.StatusToString(resp.Status))
 	}
 }
 
@@ -1529,19 +1541,19 @@ func TestVTPMExtendPCR_MissingBundleID(t *testing.T) {
 		PCRIndex: 7,
 		Data:     []byte("data"),
 	}
-	payload, err := quic.EncodePayload(&extendReq)
+	payload, err := quicwire.EncodePayload(&extendReq)
 	if err != nil {
 		t.Fatalf("failed to encode payload: %v", err)
 	}
 
-	req := &quic.Request{
-		Opcode:  quic.OpVTPMExtendPCR,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpVTPMExtendPCR,
 		Payload: payload,
 	}
 
 	resp := handler.HandleRequest(ctx, req)
-	if resp.Status != quic.StatusInvalidArgument {
-		t.Errorf("expected status InvalidArgument, got %s", quic.StatusToString(resp.Status))
+	if resp.Status != quicwire.StatusInvalidArgument {
+		t.Errorf("expected status InvalidArgument, got %s", quicwire.StatusToString(resp.Status))
 	}
 }
 
@@ -1557,19 +1569,19 @@ func TestVTPMExtendPCR_MissingData(t *testing.T) {
 		PCRIndex: 7,
 		Data:     nil,
 	}
-	payload, err := quic.EncodePayload(&extendReq)
+	payload, err := quicwire.EncodePayload(&extendReq)
 	if err != nil {
 		t.Fatalf("failed to encode payload: %v", err)
 	}
 
-	req := &quic.Request{
-		Opcode:  quic.OpVTPMExtendPCR,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpVTPMExtendPCR,
 		Payload: payload,
 	}
 
 	resp := handler.HandleRequest(ctx, req)
-	if resp.Status != quic.StatusInvalidArgument {
-		t.Errorf("expected status InvalidArgument, got %s", quic.StatusToString(resp.Status))
+	if resp.Status != quicwire.StatusInvalidArgument {
+		t.Errorf("expected status InvalidArgument, got %s", quicwire.StatusToString(resp.Status))
 	}
 }
 
@@ -1581,19 +1593,19 @@ func TestVTPMReadPCR_MissingBundleID(t *testing.T) {
 		BundleID: "",
 		PCRIndex: 0,
 	}
-	payload, err := quic.EncodePayload(&readReq)
+	payload, err := quicwire.EncodePayload(&readReq)
 	if err != nil {
 		t.Fatalf("failed to encode payload: %v", err)
 	}
 
-	req := &quic.Request{
-		Opcode:  quic.OpVTPMReadPCR,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpVTPMReadPCR,
 		Payload: payload,
 	}
 
 	resp := handler.HandleRequest(ctx, req)
-	if resp.Status != quic.StatusInvalidArgument {
-		t.Errorf("expected status InvalidArgument, got %s", quic.StatusToString(resp.Status))
+	if resp.Status != quicwire.StatusInvalidArgument {
+		t.Errorf("expected status InvalidArgument, got %s", quicwire.StatusToString(resp.Status))
 	}
 }
 
@@ -1602,19 +1614,19 @@ func TestVTPMStart_MissingBundleID(t *testing.T) {
 	ctx := context.Background()
 
 	startReq := VTPMStartRequest{BundleID: ""}
-	payload, err := quic.EncodePayload(&startReq)
+	payload, err := quicwire.EncodePayload(&startReq)
 	if err != nil {
 		t.Fatalf("failed to encode payload: %v", err)
 	}
 
-	req := &quic.Request{
-		Opcode:  quic.OpVTPMStart,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpVTPMStart,
 		Payload: payload,
 	}
 
 	resp := handler.HandleRequest(ctx, req)
-	if resp.Status != quic.StatusInvalidArgument {
-		t.Errorf("expected status InvalidArgument, got %s", quic.StatusToString(resp.Status))
+	if resp.Status != quicwire.StatusInvalidArgument {
+		t.Errorf("expected status InvalidArgument, got %s", quicwire.StatusToString(resp.Status))
 	}
 }
 
@@ -1623,19 +1635,19 @@ func TestVTPMStop_MissingBundleID(t *testing.T) {
 	ctx := context.Background()
 
 	stopReq := VTPMStopRequest{BundleID: ""}
-	payload, err := quic.EncodePayload(&stopReq)
+	payload, err := quicwire.EncodePayload(&stopReq)
 	if err != nil {
 		t.Fatalf("failed to encode payload: %v", err)
 	}
 
-	req := &quic.Request{
-		Opcode:  quic.OpVTPMStop,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpVTPMStop,
 		Payload: payload,
 	}
 
 	resp := handler.HandleRequest(ctx, req)
-	if resp.Status != quic.StatusInvalidArgument {
-		t.Errorf("expected status InvalidArgument, got %s", quic.StatusToString(resp.Status))
+	if resp.Status != quicwire.StatusInvalidArgument {
+		t.Errorf("expected status InvalidArgument, got %s", quicwire.StatusToString(resp.Status))
 	}
 }
 
@@ -1644,19 +1656,19 @@ func TestVTPMValidateBundle_MissingID(t *testing.T) {
 	ctx := context.Background()
 
 	validateReq := VTPMValidateBundleRequest{ID: ""}
-	payload, err := quic.EncodePayload(&validateReq)
+	payload, err := quicwire.EncodePayload(&validateReq)
 	if err != nil {
 		t.Fatalf("failed to encode payload: %v", err)
 	}
 
-	req := &quic.Request{
-		Opcode:  quic.OpVTPMValidateBundle,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpVTPMValidateBundle,
 		Payload: payload,
 	}
 
 	resp := handler.HandleRequest(ctx, req)
-	if resp.Status != quic.StatusInvalidArgument {
-		t.Errorf("expected status InvalidArgument, got %s", quic.StatusToString(resp.Status))
+	if resp.Status != quicwire.StatusInvalidArgument {
+		t.Errorf("expected status InvalidArgument, got %s", quicwire.StatusToString(resp.Status))
 	}
 }
 
@@ -1665,23 +1677,23 @@ func TestVTPMValidateBundle_Invalid(t *testing.T) {
 	ctx := context.Background()
 
 	validateReq := VTPMValidateBundleRequest{ID: "nonexistent"}
-	payload, err := quic.EncodePayload(&validateReq)
+	payload, err := quicwire.EncodePayload(&validateReq)
 	if err != nil {
 		t.Fatalf("failed to encode payload: %v", err)
 	}
 
-	req := &quic.Request{
-		Opcode:  quic.OpVTPMValidateBundle,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpVTPMValidateBundle,
 		Payload: payload,
 	}
 
 	resp := handler.HandleRequest(ctx, req)
-	if resp.Status != quic.StatusOK {
-		t.Errorf("expected status OK, got %s", quic.StatusToString(resp.Status))
+	if resp.Status != quicwire.StatusOK {
+		t.Errorf("expected status OK, got %s", quicwire.StatusToString(resp.Status))
 	}
 
 	var validateResp VTPMValidateBundleResponse
-	if err := quic.DecodePayload(resp.Payload, &validateResp); err != nil {
+	if err := quicwire.DecodePayload(resp.Payload, &validateResp); err != nil {
 		t.Fatalf("failed to decode response: %v", err)
 	}
 
@@ -1698,19 +1710,19 @@ func TestVTPMGetBundlePath_MissingID(t *testing.T) {
 	ctx := context.Background()
 
 	pathReq := VTPMGetPathRequest{ID: ""}
-	payload, err := quic.EncodePayload(&pathReq)
+	payload, err := quicwire.EncodePayload(&pathReq)
 	if err != nil {
 		t.Fatalf("failed to encode payload: %v", err)
 	}
 
-	req := &quic.Request{
-		Opcode:  quic.OpVTPMGetBundlePath,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpVTPMGetBundlePath,
 		Payload: payload,
 	}
 
 	resp := handler.HandleRequest(ctx, req)
-	if resp.Status != quic.StatusInvalidArgument {
-		t.Errorf("expected status InvalidArgument, got %s", quic.StatusToString(resp.Status))
+	if resp.Status != quicwire.StatusInvalidArgument {
+		t.Errorf("expected status InvalidArgument, got %s", quicwire.StatusToString(resp.Status))
 	}
 }
 
@@ -1719,19 +1731,19 @@ func TestVTPMGetTemplate_MissingID(t *testing.T) {
 	ctx := context.Background()
 
 	getReq := VTPMGetTemplateRequest{ID: ""}
-	payload, err := quic.EncodePayload(&getReq)
+	payload, err := quicwire.EncodePayload(&getReq)
 	if err != nil {
 		t.Fatalf("failed to encode payload: %v", err)
 	}
 
-	req := &quic.Request{
-		Opcode:  quic.OpVTPMGetTemplate,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpVTPMGetTemplate,
 		Payload: payload,
 	}
 
 	resp := handler.HandleRequest(ctx, req)
-	if resp.Status != quic.StatusInvalidArgument {
-		t.Errorf("expected status InvalidArgument, got %s", quic.StatusToString(resp.Status))
+	if resp.Status != quicwire.StatusInvalidArgument {
+		t.Errorf("expected status InvalidArgument, got %s", quicwire.StatusToString(resp.Status))
 	}
 }
 
@@ -1744,43 +1756,52 @@ func TestVTPMCreateTemplate_WithECCAlgorithm(t *testing.T) {
 		Description: "Test ECC template",
 		EKAlgorithm: "ECC",
 	}
-	payload, err := quic.EncodePayload(&createReq)
+	payload, err := quicwire.EncodePayload(&createReq)
 	if err != nil {
 		t.Fatalf("failed to encode payload: %v", err)
 	}
 
-	req := &quic.Request{
-		Opcode:  quic.OpVTPMCreateTemplate,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpVTPMCreateTemplate,
 		Payload: payload,
 	}
 
 	resp := handler.HandleRequest(ctx, req)
-	if resp.Status != quic.StatusOK {
-		t.Errorf("expected status OK, got %s", quic.StatusToString(resp.Status))
+	if resp.Status != quicwire.StatusOK {
+		t.Errorf("expected status OK, got %s", quicwire.StatusToString(resp.Status))
 	}
 }
 
-func TestVTPMCreateTemplate_WithECDSAAlgorithm(t *testing.T) {
-	handler, _ := createQUICTestHandler()
-	ctx := context.Background()
-
-	createReq := VTPMCreateTemplateRequest{
-		ID:          "test-template-ecdsa",
-		Description: "Test ECDSA template",
-		EKAlgorithm: "ECDSA",
+// TestVTPMCreateTemplate_EKAlgorithm is TestVTPMCreate_EKAlgorithm for
+// templates.
+func TestVTPMCreateTemplate_EKAlgorithm(t *testing.T) {
+	tests := []struct {
+		algorithm string
+		want      byte
+	}{
+		{"ecc", quicwire.StatusOK},
+		{"ECDSA", quicwire.StatusInvalidArgument},
+		{"DSA", quicwire.StatusInvalidArgument},
 	}
-	payload, err := quic.EncodePayload(&createReq)
-	if err != nil {
-		t.Fatalf("failed to encode payload: %v", err)
-	}
+	for _, tt := range tests {
+		t.Run(tt.algorithm, func(t *testing.T) {
+			handler, _ := createQUICTestHandler()
 
-	req := &quic.Request{
-		Opcode:  quic.OpVTPMCreateTemplate,
-		Payload: payload,
-	}
+			payload, err := quicwire.EncodePayload(&VTPMCreateTemplateRequest{
+				ID:          "test-template-" + strings.ToLower(tt.algorithm),
+				EKAlgorithm: tt.algorithm,
+			})
+			if err != nil {
+				t.Fatalf("failed to encode payload: %v", err)
+			}
 
-	resp := handler.HandleRequest(ctx, req)
-	if resp.Status != quic.StatusOK {
-		t.Errorf("expected status OK, got %s", quic.StatusToString(resp.Status))
+			resp := handler.HandleRequest(context.Background(), &quicwire.Request{
+				Opcode:  quicwire.OpVTPMCreateTemplate,
+				Payload: payload,
+			})
+			if resp.Status != tt.want {
+				t.Errorf("status = %s, want %s", quicwire.StatusToString(resp.Status), quicwire.StatusToString(tt.want))
+			}
+		})
 	}
 }

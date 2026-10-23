@@ -314,3 +314,14 @@ type BinaryArchMismatchError struct {
 func (e *BinaryArchMismatchError) Error() string {
 	return "iso: binary " + e.Path + " is built for " + e.Got.String() + ", the media targets " + e.Want.String()
 }
+
+// InstallerListError reports a platform config whose os.packages or
+// os.services is not a list, so the media cannot add what it installs.
+type InstallerListError struct {
+	Key string
+}
+
+// Error implements error.
+func (e *InstallerListError) Error() string {
+	return "iso: platform config os." + e.Key + " must be a list"
+}

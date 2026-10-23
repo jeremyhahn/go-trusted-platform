@@ -18,8 +18,8 @@ import (
 
 	"google.golang.org/protobuf/proto"
 
-	quicapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 )
 
 // addReqMirror mirrors platformv1.AddRecordRequest field-for-field. The SDK
@@ -56,14 +56,14 @@ func TestDNSAddRecordRequestMirrorRoundTrip(t *testing.T) {
 			req := &platformv1.AddRecordRequest{ZoneName: "example.com.", Record: rec}
 
 			// The SDK encodes the raw pb request directly.
-			payload, err := quicapi.EncodePayload(req)
+			payload, err := quicwire.EncodePayload(req)
 			if err != nil {
 				t.Fatalf("encode pb request: %v", err)
 			}
 
 			// The daemon decodes into the mirror — this MUST NOT panic.
 			var got addReqMirror
-			if err := quicapi.DecodePayload(payload, &got); err != nil {
+			if err := quicwire.DecodePayload(payload, &got); err != nil {
 				t.Fatalf("decode into mirror: %v", err)
 			}
 			if got.ZoneName != "example.com." {
@@ -84,7 +84,7 @@ func TestDNSRawPBDecodePanics(t *testing.T) {
 		ZoneName: "example.com.",
 		Record:   &platformv1.Record{Type: platformv1.RecordType_RECORD_TYPE_A, Record: &platformv1.Record_A{A: &platformv1.ARecord{Name: "www", Value: "1.2.3.4", Ttl: 300}}},
 	}
-	payload, err := quicapi.EncodePayload(req)
+	payload, err := quicwire.EncodePayload(req)
 	if err != nil {
 		t.Fatalf("encode: %v", err)
 	}
@@ -95,7 +95,7 @@ func TestDNSRawPBDecodePanics(t *testing.T) {
 		}
 	}()
 	var raw platformv1.AddRecordRequest
-	_ = quicapi.DecodePayload(payload, &raw)
+	_ = quicwire.DecodePayload(payload, &raw)
 	t.Fatal("decode into raw pb did not panic")
 }
 
@@ -107,7 +107,7 @@ func TestDNSListRecordsReplyDecoder(t *testing.T) {
 	// The daemon-side mirror encoding is byte-identical to encoding the pb
 	// response directly (verified empirically), so encode the pb form as the
 	// wire fixture.
-	payload, err := quicapi.EncodePayload(&platformv1.ListRecordsResponse{Records: records})
+	payload, err := quicwire.EncodePayload(&platformv1.ListRecordsResponse{Records: records})
 	if err != nil {
 		t.Fatalf("encode fixture: %v", err)
 	}
@@ -130,7 +130,7 @@ func TestDNSListRecordsReplyDecoder(t *testing.T) {
 // reconstructs pb Records and the authoritative flag.
 func TestDNSResolveReplyDecoder(t *testing.T) {
 	records := allRecordArms()
-	payload, err := quicapi.EncodePayload(&platformv1.ResolveResponse{Records: records, Authoritative: true})
+	payload, err := quicwire.EncodePayload(&platformv1.ResolveResponse{Records: records, Authoritative: true})
 	if err != nil {
 		t.Fatalf("encode fixture: %v", err)
 	}

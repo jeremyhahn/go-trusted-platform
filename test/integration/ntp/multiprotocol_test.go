@@ -35,8 +35,6 @@ import (
 
 // TestNTPMultiProtocol runs the shared scenario against every protocol.
 func TestNTPMultiProtocol(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	t.Cleanup(cancel)
 
@@ -74,8 +72,7 @@ func runNTPScenario(t *testing.T, ctx context.Context, cmd NTPCommands) {
 		status, err := cmd.Status(cctx)
 		if err != nil {
 			if IsNotConfigured(err) {
-				t.Skipf("%s: platformd has no ntp: section: %v", cmd.Name(), err)
-				return
+				t.Fatalf("missing prerequisite: %v", ErrNTPNotConfigured{Transport: cmd.Name(), Err: err})
 			}
 			t.Fatalf("%s Status: %v", cmd.Name(), err)
 		}
@@ -89,8 +86,7 @@ func runNTPScenario(t *testing.T, ctx context.Context, cmd NTPCommands) {
 		sources, err := cmd.Sources(cctx)
 		if err != nil {
 			if IsNotConfigured(err) {
-				t.Skipf("%s: platformd has no ntp: section: %v", cmd.Name(), err)
-				return
+				t.Fatalf("missing prerequisite: %v", ErrNTPNotConfigured{Transport: cmd.Name(), Err: err})
 			}
 			t.Fatalf("%s Sources: %v", cmd.Name(), err)
 		}
@@ -116,7 +112,7 @@ func runNTPScenario(t *testing.T, ctx context.Context, cmd NTPCommands) {
 		case err == nil:
 			assertStatusIsCoherent(t, cmd.Name(), status)
 		case IsNotConfigured(err):
-			t.Skipf("%s: platformd has no ntp: section: %v", cmd.Name(), err)
+			t.Fatalf("missing prerequisite: %v", ErrNTPNotConfigured{Transport: cmd.Name(), Err: err})
 		case IsNoReachableSource(err):
 			// The documented conflict contract: a step with nothing to
 			// step towards is refused rather than moving the clock on

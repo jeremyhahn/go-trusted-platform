@@ -64,7 +64,7 @@ const (
 )
 
 // QUIC Operation codes for SDN operations.
-// These MUST match the server-side opcodes defined in pkg/api/quic/protocol.go.
+// These MUST match the server-side opcodes defined in sdk/go/wire/quicwire/protocol.go.
 const (
 	// SDN Read Operations (0x40-0x4F)
 	OpQUICSDNPortGetState byte = 0x40
@@ -156,23 +156,30 @@ func (e ErrQUICSDNClientClosed) Error() string {
 	return "QUIC client is closed"
 }
 
-// ErrQUICSDNNotImplemented indicates a method is not yet implemented. Cause,
-// when set, carries the underlying transport/server error so skip messages
-// stay diagnosable instead of masking the real failure.
-type ErrQUICSDNNotImplemented struct {
-	Method string
-	Cause  error
+// ErrQUICSDNUnavailable reports that a QUIC SDN call could not be served: the
+// adapter has no connection, or the server answered StatusUnavailable. It is
+// a failure, not a declared gap; adapters declare a missing surface with
+// surface.ErrNoSurface. Cause, when set, carries the underlying error.
+type ErrQUICSDNUnavailable struct {
+	Operation string
+	Cause     error
 }
 
-func (e ErrQUICSDNNotImplemented) Error() string {
+func (e ErrQUICSDNUnavailable) Error() string {
 	if e.Cause != nil {
-		return fmt.Sprintf("QUIC method %s not implemented: %v", e.Method, e.Cause)
+		return fmt.Sprintf("QUIC %s unavailable: %v", e.Operation, e.Cause)
 	}
-	return fmt.Sprintf("QUIC method %s not implemented", e.Method)
+	return fmt.Sprintf("QUIC %s unavailable", e.Operation)
 }
 
 // Unwrap returns the underlying cause.
-func (e ErrQUICSDNNotImplemented) Unwrap() error { return e.Cause }
+func (e ErrQUICSDNUnavailable) Unwrap() error { return e.Cause }
+
+// ErrQUICSDNNotConnected reports a call on an adapter that has no open
+// QUIC connection.
+type ErrQUICSDNNotConnected struct{}
+
+func (ErrQUICSDNNotConnected) Error() string { return "no open QUIC connection" }
 
 // =============================================================================
 // Wire Protocol Types
@@ -239,122 +246,40 @@ type sdnGetVLANResponse struct {
 
 // Flow wire types
 
-// Policy wire types — must match server-side SDN handler structs in
-// pkg/api/quic/sdn_handlers.go exactly.
+// Policy wire types. The server, pkg/api/daemon/quic_sdn.go, carries the policy
+// shape REST, gRPC and MCP use, and the wire codec keys struct fields by their
+// Go names: apply sends sdnPolicyBody, apply and get answer a restPolicy, and
+// list answers an sdnListPoliciesResponse.
 
-// sdnApplyACLRule matches the server's SDNACLRule wire format.
-type sdnApplyACLRule struct {
-	Priority    int               `codec:"priority"`
-	Match       *sdnFlowMatchWire `codec:"match"`
-	Action      string            `codec:"action"`
-	Description string            `codec:"description,omitempty"`
-}
-
-// sdnFlowMatchWire matches the server's SDNFlowMatch wire format exactly.
-type sdnFlowMatchWire struct {
-	InPort  string `codec:"in_port"`
-	EthSrc  string `codec:"eth_src"`
-	EthDst  string `codec:"eth_dst"`
-	EthType uint16 `codec:"eth_type"`
-	VLANVid uint16 `codec:"vlan_vid"`
-	IPProto uint8  `codec:"ip_proto"`
-	IPv4Src string `codec:"ipv4_src"`
-	IPv4Dst string `codec:"ipv4_dst"`
-	TCPSrc  uint16 `codec:"tcp_src"`
-	TCPDst  uint16 `codec:"tcp_dst"`
-	UDPSrc  uint16 `codec:"udp_src"`
-	UDPDst  uint16 `codec:"udp_dst"`
-}
-
-// sdnApplyPolicyRequest matches SDNApplyPolicyRequest on the server.
-type sdnApplyPolicyRequest struct {
-	PortID   string             `codec:"port_id"`
-	TenantID string             `codec:"tenant_id"`
-	VLAN     uint16             `codec:"vlan"`
-	ACLs     []*sdnApplyACLRule `codec:"acls"`
-	Metadata map[string]string  `codec:"metadata"`
-}
-
-// sdnApplyPolicyResponse matches SDNApplyPolicyResponse on the server.
-type sdnApplyPolicyResponse struct {
-	PortID    string `codec:"port_id"`
-	Success   bool   `codec:"success"`
-	Timestamp int64  `codec:"timestamp"`
-}
-
-// sdnDeletePolicyRequest matches SDNDeletePolicyRequest on the server.
-type sdnDeletePolicyRequest struct {
-	PortID string `codec:"port_id"`
-}
-
-// sdnDeletePolicyResponse matches SDNDeletePolicyResponse on the server.
-type sdnDeletePolicyResponse struct {
-	PortID    string `codec:"port_id"`
-	Success   bool   `codec:"success"`
-	Timestamp int64  `codec:"timestamp"`
+// sdnPolicyBody matches rest.CreatePolicyRequest on the server.
+type sdnPolicyBody struct {
+	ID          string
+	Name        string
+	Description string
+	Type        string
+	Priority    int32
+	Enabled     bool
+	Rules       []restPolicyRule
+	Targets     []restPolicyTarget
+	Schedule    *restPolicySchedule
 }
 
 // sdnGetPolicyRequest matches SDNGetPolicyRequest on the server.
 type sdnGetPolicyRequest struct {
-	PortID string `codec:"port_id"`
+	PolicyID string `codec:"policy_id"`
 }
 
-// sdnPolicyInfo matches the server-side SDNPolicyInfo wire format.
-type sdnPolicyInfo struct {
-	ID          string            `codec:"id"`
-	Name        string            `codec:"name"`
-	Description string            `codec:"description,omitempty"`
-	Priority    int               `codec:"priority"`
-	Rules       []sdnPolicyRule   `codec:"rules"`
-	Labels      map[string]string `codec:"labels,omitempty"`
-	Status      string            `codec:"status"`
-	CreatedAt   int64             `codec:"created_at"`
-	UpdatedAt   int64             `codec:"updated_at"`
+// sdnListPoliciesRequest matches SDNListPoliciesRequest on the server.
+type sdnListPoliciesRequest struct {
+	Type     string `codec:"type"`
+	TargetID string `codec:"target_id"`
 }
 
-// sdnPolicyRule matches the server-side SDNPolicyRule wire format.
-type sdnPolicyRule struct {
-	Direction string `codec:"direction"`
-	Protocol  string `codec:"protocol,omitempty"`
-	PortRange string `codec:"port_range,omitempty"`
-	Source    string `codec:"source,omitempty"`
-	Dest      string `codec:"dest,omitempty"`
-	Action    string `codec:"action"`
-}
-
-// sdnGetPolicyResponse matches SDNGetPolicyResponse on the server.
-// sdnPolicyWire matches the server's SDNPolicy wire format.
-type sdnPolicyWire struct {
-	PortID    string            `codec:"port_id"`
-	TenantID  string            `codec:"tenant_id"`
-	VLAN      uint16            `codec:"vlan"`
-	ACLs      []*sdnACLRuleWire `codec:"acls"`
-	ExpiresAt int64             `codec:"expires_at"`
-	IssuedAt  int64             `codec:"issued_at"`
-	Metadata  map[string]string `codec:"metadata"`
-}
-
-// sdnACLRuleWire matches the server's SDNACLRule wire format.
-type sdnACLRuleWire struct {
-	Direction string `codec:"direction"`
-	Protocol  string `codec:"protocol"`
-	SrcIP     string `codec:"src_ip"`
-	DstIP     string `codec:"dst_ip"`
-	SrcPort   uint16 `codec:"src_port"`
-	DstPort   uint16 `codec:"dst_port"`
-	Action    string `codec:"action"`
-}
-
-type sdnGetPolicyResponse struct {
-	Policy    *sdnPolicyWire `codec:"policy"`
-	Timestamp int64          `codec:"timestamp"`
-}
-
-// sdnListPoliciesResponse matches SDNListPoliciesResponse on the server.
+// sdnListPoliciesResponse matches rest.SDNPolicyListResponse on the server.
 type sdnListPoliciesResponse struct {
-	Policies  []*sdnPolicyWire `codec:"policies"`
-	Total     int              `codec:"total"`
-	Timestamp int64            `codec:"timestamp"`
+	Policies  []restPolicy
+	Count     int
+	Timestamp time.Time
 }
 
 // =============================================================================
@@ -939,9 +864,13 @@ func (q *QUICAdapter) PortGetState(ctx context.Context, bridgeID, portID string)
 // PortSetState sets the state of a port via QUIC.
 func (q *QUICAdapter) PortSetState(ctx context.Context, bridgeID, portID string, opts PortSetStateOptions) (*PortStateResult, error) {
 	req := &platformv1.SetPortStateRequest{
-		BridgeId:   bridgeID,
-		PortId:     portID,
-		AdminState: opts.AdminState,
+		BridgeId:     bridgeID,
+		PortId:       portID,
+		AdminState:   opts.AdminState,
+		IngressRate:  opts.IngressRate,
+		EgressRate:   opts.EgressRate,
+		IngressBurst: opts.IngressBurst,
+		EgressBurst:  opts.EgressBurst,
 	}
 
 	resp, err := q.sendRequest(ctx, OpQUICSDNPortSetState, req)
@@ -1198,191 +1127,54 @@ func (q *QUICAdapter) VLANList(ctx context.Context, opts VLANListOptions) (*VLAN
 
 // PolicyApply applies a network policy via QUIC.
 func (q *QUICAdapter) PolicyApply(ctx context.Context, opts PolicyApplyOptions) (*PolicyApplyResult, error) {
-	// Convert test PolicyRules to server-side SDNACLRule format.
-	rules := make([]*sdnApplyACLRule, 0, len(opts.Rules))
-	for _, rule := range opts.Rules {
-		rules = append(rules, &sdnApplyACLRule{
-			Priority: int(rule.Priority),
-			Match: &sdnFlowMatchWire{
-				IPv4Src: rule.Match.SourceIP,
-				IPv4Dst: rule.Match.DestinationIP,
-			},
-			Action: rule.Action,
-		})
-	}
-
-	// Encode targets and policy type in labels so PolicyGet can reconstruct them.
-	labels := make(map[string]string)
-	for i, target := range opts.Targets {
-		labels[fmt.Sprintf("target_%d_type", i)] = target.Type
-		labels[fmt.Sprintf("target_%d_id", i)] = target.ID
-		labels[fmt.Sprintf("target_%d_direction", i)] = target.Direction
-	}
-	labels["policy_type"] = opts.Type
-
-	req := &sdnApplyPolicyRequest{
-		PortID:   opts.PolicyID,
-		TenantID: "integration-test",
-		ACLs:     rules,
-		Metadata: labels,
-	}
-
-	resp, err := q.sendRequest(ctx, OpQUICSDNPolicyApply, req)
+	resp, err := q.sendRequest(ctx, OpQUICSDNPolicyApply, newPolicyBody(opts))
 	if err != nil {
 		return nil, err
 	}
 
-	var wireResp sdnApplyPolicyResponse
-	if err := decodeSDNPayload(resp.Payload, &wireResp); err != nil {
+	var policy restPolicy
+	if err := decodeSDNPayload(resp.Payload, &policy); err != nil {
 		return nil, ErrQUICSDNDecodeFailed{Operation: "PolicyApply", Err: err}
 	}
-
-	policyID := wireResp.PortID
-	if policyID == "" {
-		policyID = opts.PolicyID
-	}
-
-	return &PolicyApplyResult{
-		PolicyID:    policyID,
-		Name:        opts.Name,
-		Type:        opts.Type,
-		Status:      "applied",
-		RuleCount:   int32(len(opts.Rules)),
-		TargetCount: int32(len(opts.Targets)),
-		AppliedAt:   time.Unix(wireResp.Timestamp, 0),
-	}, nil
+	return policy.applyResult(), nil
 }
 
-// PolicyGet retrieves a policy by ID via QUIC.
+// PolicyGet retrieves a policy by ID or name via QUIC.
 func (q *QUICAdapter) PolicyGet(ctx context.Context, policyID string) (*PolicyGetResult, error) {
-	req := &sdnGetPolicyRequest{
-		PortID: policyID,
-	}
-
-	resp, err := q.sendRequest(ctx, OpQUICSDNPolicyGet, req)
+	resp, err := q.sendRequest(ctx, OpQUICSDNPolicyGet, &sdnGetPolicyRequest{PolicyID: policyID})
 	if err != nil {
 		return nil, err
 	}
 
-	var wireResp sdnGetPolicyResponse
-	if err := decodeSDNPayload(resp.Payload, &wireResp); err != nil {
+	var policy restPolicy
+	if err := decodeSDNPayload(resp.Payload, &policy); err != nil {
 		return nil, ErrQUICSDNDecodeFailed{Operation: "PolicyGet", Err: err}
 	}
-
-	if wireResp.Policy == nil {
-		return nil, ErrQUICSDNRequestFailed{
-			Operation: "PolicyGet",
-			Status:    QUICStatusNotFoundSDN,
-			Message:   "policy not found",
-		}
-	}
-
-	p := wireResp.Policy
-
-	// Convert server-side ACL rules to integration test PolicyRule format
-	rules := make([]PolicyRule, 0, len(p.ACLs))
-	for _, r := range p.ACLs {
-		rule := PolicyRule{
-			RuleID: r.Direction + "-" + r.Protocol,
-			Action: r.Action,
-			Match: PolicyMatch{
-				Protocol:      r.Protocol,
-				Direction:     r.Direction,
-				SourceIP:      r.SrcIP,
-				DestinationIP: r.DstIP,
-			},
-		}
-		rules = append(rules, rule)
-	}
-
-	targets := reconstructTargetsFromMetadata(p.Metadata)
-	policyType := p.Metadata["policy_type"]
-	if policyType == "" {
-		policyType = "acl" // Default — SDN policies are ACL-based
-	}
-
-	policyName := p.Metadata["name"]
-	if policyName == "" {
-		policyName = p.PortID
-	}
-
-	return &PolicyGetResult{
-		PolicyID:    policyID,
-		Name:        policyName,
-		Description: p.Metadata["description"],
-		Type:        policyType,
-		Enabled:     true,
-		Status:      "active",
-		Rules:       rules,
-		Targets:     targets,
-		CreatedAt:   time.Unix(p.IssuedAt, 0),
-		UpdatedAt:   time.Unix(p.IssuedAt, 0),
-	}, nil
+	return policy.getResult(), nil
 }
 
-// PolicyList lists policies via QUIC.
+// PolicyList lists policies via QUIC, filtered by type and target the way the
+// REST route's query parameters filter them.
 func (q *QUICAdapter) PolicyList(ctx context.Context, opts PolicyListOptions) (*PolicyListResult, error) {
-	resp, err := q.sendRequest(ctx, OpQUICSDNPolicyList, nil)
+	req := &sdnListPoliciesRequest{Type: opts.Type, TargetID: opts.TargetID}
+	resp, err := q.sendRequest(ctx, OpQUICSDNPolicyList, req)
 	if err != nil {
 		return nil, err
 	}
 
-	var wireResp sdnListPoliciesResponse
-	if err := decodeSDNPayload(resp.Payload, &wireResp); err != nil {
+	var list sdnListPoliciesResponse
+	if err := decodeSDNPayload(resp.Payload, &list); err != nil {
 		return nil, ErrQUICSDNDecodeFailed{Operation: "PolicyList", Err: err}
 	}
 
-	policies := make([]PolicySummary, 0, len(wireResp.Policies))
-	for _, p := range wireResp.Policies {
-		policyType := p.Metadata["policy_type"]
-
-		policies = append(policies, PolicySummary{
-			PolicyID:  p.PortID,
-			Name:      p.Metadata["name"],
-			Type:      policyType,
-			Enabled:   true,
-			Status:    "active",
-			RuleCount: int32(len(p.ACLs)),
-			CreatedAt: time.Unix(p.IssuedAt, 0),
-		})
+	policies := make([]PolicySummary, len(list.Policies))
+	for i, p := range list.Policies {
+		policies[i] = p.summary()
 	}
-
 	return &PolicyListResult{
 		Policies:   policies,
-		TotalCount: int32(wireResp.Total),
+		TotalCount: int32(list.Count),
 	}, nil
-}
-
-// =============================================================================
-// Helper Functions
-// =============================================================================
-
-// reconstructTargetsFromMetadata extracts policy targets from metadata map.
-func reconstructTargetsFromMetadata(metadata map[string]string) []PolicyTarget {
-	if metadata == nil {
-		return nil
-	}
-
-	targets := make([]PolicyTarget, 0)
-	for i := 0; ; i++ {
-		typeKey := fmt.Sprintf("target_%d_type", i)
-		idKey := fmt.Sprintf("target_%d_id", i)
-		dirKey := fmt.Sprintf("target_%d_direction", i)
-
-		targetType, hasType := metadata[typeKey]
-		targetID, hasID := metadata[idKey]
-		if !hasType || !hasID {
-			break
-		}
-
-		targets = append(targets, PolicyTarget{
-			Type:      targetType,
-			ID:        targetID,
-			Direction: metadata[dirKey],
-		})
-		_ = dirKey
-	}
-	return targets
 }
 
 // =============================================================================

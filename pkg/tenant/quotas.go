@@ -112,6 +112,16 @@ func (q *ComputeQuota) Release(vms, containers, vcpus, memoryMB, diskGB int64) {
 	q.UsedDiskGB = max(0, q.UsedDiskGB-diskGB)
 }
 
+// SetLimits copies the limits of l into q and leaves q's usage counters
+// alone: usage changes only through Reserve and Release.
+func (q *ComputeQuota) SetLimits(l ComputeQuota) {
+	q.MaxVMs = l.MaxVMs
+	q.MaxContainers = l.MaxContainers
+	q.MaxVCPUs = l.MaxVCPUs
+	q.MaxMemoryMB = l.MaxMemoryMB
+	q.MaxDiskGB = l.MaxDiskGB
+}
+
 // GetUtilization returns the utilization percentage for each resource type.
 func (q *ComputeQuota) GetUtilization() map[string]float64 {
 	utilization := make(map[string]float64)
@@ -205,6 +215,14 @@ func (q *NetworkQuota) Release(bridges, ports int64) {
 	q.UsedPorts = max(0, q.UsedPorts-ports)
 }
 
+// SetLimits copies the limits of l into q and leaves q's usage counters
+// alone: usage changes only through Reserve and Release.
+func (q *NetworkQuota) SetLimits(l NetworkQuota) {
+	q.MaxBridges = l.MaxBridges
+	q.MaxPorts = l.MaxPorts
+	q.MaxBandwidthMbps = l.MaxBandwidthMbps
+}
+
 // GetUtilization returns the utilization percentage for each resource type.
 func (q *NetworkQuota) GetUtilization() map[string]float64 {
 	utilization := make(map[string]float64)
@@ -277,6 +295,13 @@ func (q *StorageQuota) Reserve(tenantID string, volumesGB, snapshots int64) erro
 func (q *StorageQuota) Release(volumesGB, snapshots int64) {
 	q.UsedVolumesGB = max(0, q.UsedVolumesGB-volumesGB)
 	q.UsedSnapshots = max(0, q.UsedSnapshots-snapshots)
+}
+
+// SetLimits copies the limits of l into q and leaves q's usage counters
+// alone: usage changes only through Reserve and Release.
+func (q *StorageQuota) SetLimits(l StorageQuota) {
+	q.MaxVolumesGB = l.MaxVolumesGB
+	q.MaxSnapshots = l.MaxSnapshots
 }
 
 // GetUtilization returns the utilization percentage for each resource type.

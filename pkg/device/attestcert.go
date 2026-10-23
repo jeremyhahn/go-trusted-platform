@@ -65,6 +65,15 @@ type IAKCertificateReader interface {
 	IAKCertificate(ctx context.Context, model, serial string) (*x509.Certificate, error)
 }
 
+// AttestCertClearer is the device-service write behind a clear. A generic
+// Update cannot express it: Update keeps the stored certificate when the
+// incoming one is empty (#252). ClearAttestCert removes the certificate only
+// while the record still holds expected, and otherwise returns
+// ErrAttestCertClearConflict. device.Service implements it.
+type AttestCertClearer interface {
+	ClearAttestCert(ctx context.Context, id uint64, expected string) error
+}
+
 // revocationReasonSuperseded is the RFC 5280 CRLReason for a certificate
 // that is being replaced: a re-issued attestation certificate the preflight
 // refused will be superseded by a compliant one once the CA stamps the
@@ -99,11 +108,31 @@ type AttestCertRecord struct {
 	// certificate and nothing was written.
 	Changed bool
 	// Reissued is true when the CA was asked to issue a new certificate.
-	Reissued          bool
+	Reissued bool
+	// Cleared is true when every candidate was refused and, as the caller
+	// asked with ClearOnRefusal, the certificate the record held was
+	// removed. Source and CertificatePEM are then empty, Subject and
+	// CertificateSerial name the removed certificate when it parsed, and
+	// Refusal carries the refusal that justified the clear.
+	Cleared           bool
+	Refusal           string
 	Subject           string
 	CertificateSerial string
 	NotAfter          time.Time
 	CertificatePEM    string
+}
+
+// AttestCertRecordOptions are the caller's choices for one Record call.
+type AttestCertRecordOptions struct {
+	// Reissue lets the CA issue a fresh certificate over the enrolled
+	// attestation public key when no stored candidate passes.
+	Reissue bool
+	// ClearOnRefusal removes the certificate the record holds when every
+	// candidate — that certificate included — is refused. A record holding
+	// a certificate that fails to verify is quarantined on every quote; one
+	// holding none is only denied service. Off by default: a refusal writes
+	// nothing.
+	ClearOnRefusal bool
 }
 
 // AttestCertAttempt is one candidate the recorder evaluated and refused.
@@ -151,9 +180,12 @@ func WithAttestCertClock(now func() time.Time) AttestCertRecorderOption {
 // than the device's attestation key fails every quote signature the same
 // way. The recorder therefore fails closed: it writes only a certificate
 // that parses, chains to the platform CA, carries the attribute and
-// certifies the device's enrolled attestation public key — the same
-// vm.VerifyAKCertificate the verifier runs, so the two agree by
-// construction. There is no override.
+// certifies the device's enrolled attestation public key — the chain and
+// the 2.23.133.11.1.3 attribute the verifier's attested-peer check demands.
+// It runs them through vm.VerifyAKCertificate rather than that check itself:
+// the standalone certificate check (go-xkms PeerVerifyIAK) is not yet
+// re-exported by go-quicbaas, and the verdict carries no typed refusal for
+// the recorder to report (#482). There is no override.
 type AttestCertRecorder struct {
 	devices DeviceService
 	ca      AttestationCertificateAuthority
@@ -188,7 +220,7 @@ func NewAttestCertRecorder(devices DeviceService, ca AttestationCertificateAutho
 // Candidates are evaluated in order and the first that passes the preflight
 // is recorded: the certificate already on the device record; the platform
 // CA's certificate store under the device's identity names; and, only when
-// reissue is set, a certificate the CA issues over the device's enrolled
+// opts.Reissue is set, a certificate the CA issues over the device's enrolled
 // attestation public key. Re-issuance does not involve the device: the
 // enrollment already proved the key TPM-resident, and the recorder
 // re-establishes from the recorded public area that it is a Restricted
@@ -197,8 +229,14 @@ func NewAttestCertRecorder(devices DeviceService, ca AttestationCertificateAutho
 // certificate without it is refused like any other.
 //
 // When no candidate passes, Record returns ErrAttestCertRefused naming every
-// attempt and its reason, and the device record is untouched.
-func (r *AttestCertRecorder) Record(ctx context.Context, deviceID uint64, reissue bool) (*AttestCertRecord, error) {
+// attempt and its reason, and the device record is untouched — unless
+// opts.ClearOnRefusal is set and the record held a certificate. That
+// certificate was then refused too, and keeping it quarantines the device on
+// every quote, so it is removed and the returned record is Cleared: the
+// device moves to an absent certificate and is denied service instead. Only a
+// plain refusal clears; a CA failure, a missing enrolled key or a refused
+// re-issue the CA could not revoke leaves the record untouched.
+func (r *AttestCertRecorder) Record(ctx context.Context, deviceID uint64, opts AttestCertRecordOptions) (*AttestCertRecord, error) {
 	if deviceID == 0 {
 		return nil, ErrInvalidDeviceID
 	}
@@ -207,14 +245,45 @@ func (r *AttestCertRecorder) Record(ctx context.Context, deviceID uint64, reissu
 		return nil, err
 	}
 
-	rec, err := r.record(ctx, dev, reissue)
+	rec, err := r.record(ctx, dev, opts.Reissue)
+	if err != nil && opts.ClearOnRefusal {
+		rec, err = clearRefused(dev, err)
+	}
 	if err == nil {
 		if commitErr := r.commit(ctx, dev, rec); commitErr != nil {
 			rec, err = nil, ErrAttestCertWriteFailed{DeviceID: dev.ID, Cause: commitErr}
 		}
 	}
-	r.auditAttempt(ctx, dev, rec, reissue, err)
+	r.auditAttempt(ctx, dev, rec, opts.Reissue, err)
 	return rec, err
+}
+
+// clearRefused turns a refusal into a clear of the certificate the record
+// holds. It returns recErr unchanged when there is nothing to clear or when
+// recErr is not a plain refusal. The type assertion is deliberate:
+// ErrAttestCertReissuedRevokeFailed wraps a refusal, and errors.As would let
+// a re-issue the CA could not withdraw clear the record.
+func clearRefused(dev *entities.Device, recErr error) (*AttestCertRecord, error) {
+	refused, ok := recErr.(ErrAttestCertRefused)
+	existing := strings.TrimSpace(dev.AttestCert)
+	if !ok || existing == "" {
+		return nil, recErr
+	}
+	rec := &AttestCertRecord{
+		DeviceID: dev.ID,
+		Serial:   dev.Serial,
+		Model:    dev.Model,
+		Changed:  true,
+		Reissued: refused.Reissued,
+		Cleared:  true,
+		Refusal:  refused.Error(),
+	}
+	if cert := parseFirstCertificate([]byte(existing)); cert != nil {
+		rec.Subject = cert.Subject.String()
+		rec.CertificateSerial = cert.SerialNumber.String()
+		rec.NotAfter = cert.NotAfter
+	}
+	return rec, nil
 }
 
 func (r *AttestCertRecorder) record(ctx context.Context, dev *entities.Device, reissue bool) (*AttestCertRecord, error) {
@@ -314,8 +383,8 @@ func (r *AttestCertRecorder) record(ctx context.Context, dev *entities.Device, r
 }
 
 // preflight is the fail-closed gate: parse, chain, tcg-cap-verifiedTPMRestricted
-// (all three via the verifier's own VerifyAKCertificate) and then that the
-// certified key is the device's enrolled attestation key.
+// (all three via vm.VerifyAKCertificate) and then that the certified key is
+// the device's enrolled attestation key.
 func (r *AttestCertRecorder) preflight(certPEM []byte, roots, intermediates *x509.CertPool, expected crypto.PublicKey) (*x509.Certificate, error) {
 	certified, err := vm.VerifyAKCertificate(certPEM, roots, intermediates, r.now())
 	if err != nil {
@@ -351,10 +420,19 @@ func (r *AttestCertRecorder) describe(dev *entities.Device, cert *x509.Certifica
 }
 
 // commit is the write half. Only Record calls it, and only after record
-// returned without error, so a refusal never reaches the device DAO.
+// returned without error, so a refusal never reaches the device DAO. A
+// cleared record — the one refusal the caller asked to act on — goes through
+// the compare-and-clear write, never through Update.
 func (r *AttestCertRecorder) commit(ctx context.Context, dev *entities.Device, rec *AttestCertRecord) error {
 	if !rec.Changed {
 		return nil
+	}
+	if rec.Cleared {
+		clearer, ok := r.devices.(AttestCertClearer)
+		if !ok {
+			return ErrAttestCertClearUnsupported{}
+		}
+		return clearer.ClearAttestCert(ctx, dev.ID, dev.AttestCert)
 	}
 	dev.AttestCert = rec.CertificatePEM
 	return r.devices.Update(ctx, dev)
@@ -373,17 +451,23 @@ func (r *AttestCertRecorder) auditAttempt(ctx context.Context, dev *entities.Dev
 		Serial:   dev.Serial,
 		Reissued: reissue && reissueWasAttempted(rec, recErr),
 	}
-	if recErr == nil && rec != nil {
+	switch {
+	case recErr == nil && rec != nil && rec.Cleared:
+		ev.Cleared = true
+		ev.Subject = rec.Subject
+		ev.Reason = rec.Refusal
+	case recErr == nil && rec != nil:
 		ev.Recorded = true
 		ev.Source = string(rec.Source)
 		ev.Subject = rec.Subject
-	} else if recErr != nil {
+	case recErr != nil:
 		ev.Reason = recErr.Error()
 	}
 	if err := r.audit.RecordAttestCert(ctx, ev); err != nil {
 		r.logger.Error("attestation certificate record event could not be written",
 			"device_id", dev.ID,
 			"recorded", ev.Recorded,
+			"cleared", ev.Cleared,
 			"error", err,
 		)
 	}

@@ -17,13 +17,14 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
-	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gorilla/mux"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
+	restapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/rest"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
@@ -86,7 +87,7 @@ func (h *SDNHandlers) handleGRPCError(w http.ResponseWriter, r *http.Request, er
 	switch st.Code() {
 	case codes.NotFound:
 		h.respWriter.Error404(w, r, err)
-	case codes.InvalidArgument:
+	case codes.InvalidArgument, codes.FailedPrecondition:
 		h.respWriter.Error400(w, r, err)
 	case codes.PermissionDenied, codes.Unauthenticated:
 		h.respWriter.Error401(w, r, err)
@@ -360,6 +361,98 @@ func (h *SDNHandlers) DeletePort(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// AuthenticatePort authenticates a port with a client certificate
+func (h *SDNHandlers) AuthenticatePort(w http.ResponseWriter, r *http.Request) {
+	bridgeName := h.getBridgeName(r)
+	portName := h.getPortName(r)
+
+	if bridgeName == "" {
+		h.respWriter.Error400(w, r, ErrMissingBridgeName{})
+		return
+	}
+	if portName == "" {
+		h.respWriter.Error400(w, r, ErrMissingPortName{})
+		return
+	}
+
+	var req AuthenticatePortRequest
+	if err := h.decodeJSON(r, &req); err != nil {
+		h.respWriter.Error400(w, r, ErrInvalidRequestBody{Reason: err.Error()})
+		return
+	}
+
+	ctx, cancel := h.createContext()
+	defer cancel()
+
+	grpcReq := &platformv1.AuthenticatePortRequest{
+		BridgeId:    bridgeName,
+		PortId:      portName,
+		Certificate: req.Certificate,
+		Format:      req.Format,
+	}
+
+	resp, err := h.sdnService.AuthenticatePort(ctx, grpcReq)
+	if err != nil {
+		h.handleGRPCError(w, r, err)
+		return
+	}
+
+	h.respWriter.Success200(w, r, portAuthToResponse(bridgeName, portName, resp.Auth))
+}
+
+// RevokePortAuth revokes a port's certificate authentication
+func (h *SDNHandlers) RevokePortAuth(w http.ResponseWriter, r *http.Request) {
+	bridgeName := h.getBridgeName(r)
+	portName := h.getPortName(r)
+
+	if bridgeName == "" {
+		h.respWriter.Error400(w, r, ErrMissingBridgeName{})
+		return
+	}
+	if portName == "" {
+		h.respWriter.Error400(w, r, ErrMissingPortName{})
+		return
+	}
+
+	ctx, cancel := h.createContext()
+	defer cancel()
+
+	grpcReq := &platformv1.RevokePortAuthRequest{
+		BridgeId: bridgeName,
+		PortId:   portName,
+	}
+
+	resp, err := h.sdnService.RevokePortAuth(ctx, grpcReq)
+	if err != nil {
+		h.handleGRPCError(w, r, err)
+		return
+	}
+
+	h.respWriter.Success200(w, r, SuccessResponse{
+		Success: resp.Status.Success,
+		Message: resp.Status.Message,
+	})
+}
+
+// portAuthToResponse converts a port's gRPC authentication state to its REST
+// answer. A nil auth answers an unauthenticated port.
+func portAuthToResponse(bridgeName, portName string, auth *platformv1.PortAuth) PortAuthResponse {
+	resp := PortAuthResponse{BridgeID: bridgeName, PortID: portName}
+	if auth == nil {
+		return resp
+	}
+	resp.Authenticated = auth.Authenticated
+	resp.CertificateCN = auth.CertificateCn
+	resp.AuthorizedVLANs = auth.AuthorizedVlans
+	if auth.AuthenticatedAt != nil {
+		resp.AuthenticatedAt = timeFromTimestamp(auth.AuthenticatedAt)
+	}
+	if auth.ExpiresAt != nil {
+		resp.ExpiresAt = timeFromTimestamp(auth.ExpiresAt)
+	}
+	return resp
+}
+
 // GetPortState handles GET /api/v1/sdn/bridges/{name}/ports/{port}/state
 func (h *SDNHandlers) GetPortState(w http.ResponseWriter, r *http.Request) {
 	bridgeName := h.getBridgeName(r)
@@ -394,8 +487,9 @@ func (h *SDNHandlers) GetPortState(w http.ResponseWriter, r *http.Request) {
 	}
 
 	h.respWriter.Success200(w, r, PortStateResponse{
-		PortID: portName,
-		State:  state,
+		BridgeID:   bridgeName,
+		PortID:     portName,
+		AdminState: state,
 	})
 }
 
@@ -419,17 +513,33 @@ func (h *SDNHandlers) SetPortState(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if req.State != "up" && req.State != "down" {
-		h.respWriter.Error400(w, r, ErrInvalidPortState(req))
+	adminState := strings.ToLower(req.AdminState)
+	if adminState != "up" && adminState != "down" {
+		h.respWriter.Error400(w, r, ErrInvalidPortState{State: req.AdminState})
 		return
 	}
 
-	// Note: The gRPC service doesn't have a SetPortState method exposed
-	// This would need to be added or we call the OVS client directly through the service
-	// For now, we'll return success as the service layer would handle this
+	ctx, cancel := h.createContext()
+	defer cancel()
+
+	resp, err := h.sdnService.SetPortState(ctx, &platformv1.SetPortStateRequest{
+		BridgeId:     bridgeName,
+		PortId:       portName,
+		AdminState:   adminState,
+		IngressRate:  req.IngressRate,
+		IngressBurst: req.IngressBurst,
+		EgressRate:   req.EgressRate,
+		EgressBurst:  req.EgressBurst,
+	})
+	if err != nil {
+		h.handleGRPCError(w, r, err)
+		return
+	}
+
 	h.respWriter.Success200(w, r, PortStateResponse{
-		PortID: portName,
-		State:  req.State,
+		BridgeID:   bridgeName,
+		PortID:     portName,
+		AdminState: h.portStatusToString(resp.GetPort().GetStatus()),
 	})
 }
 
@@ -823,34 +933,33 @@ func (h *SDNHandlers) flowActionTypeToString(t platformv1.FlowActionType) string
 
 // Policy Handlers
 
-// ApplyPolicy handles POST /api/v1/sdn/policies
+// ApplyPolicy handles POST /api/v1/sdn/policies. The body is the daemon REST
+// policy contract (pkg/api/rest CreatePolicyRequest) the SDK sends: the config
+// flattened, policy_id as id, the enums as lowercase names. It answers 201
+// with the applied policy in the same form. The service owns validation.
 func (h *SDNHandlers) ApplyPolicy(w http.ResponseWriter, r *http.Request) {
-	var req ApplyPolicyRequest
+	var req restapi.CreatePolicyRequest
 	if err := h.decodeJSON(r, &req); err != nil {
 		h.respWriter.Error400(w, r, ErrInvalidRequestBody{Reason: err.Error()})
 		return
 	}
 
-	if req.Name == "" {
-		h.respWriter.Error400(w, r, ErrInvalidRequestBody{Reason: "policy name is required"})
+	grpcReq, err := restapi.PolicyRequestToProto(req)
+	if err != nil {
+		h.respWriter.Error400(w, r, err)
 		return
 	}
 
-	// Policy management would be implemented through flows
-	// For now, we create a policy response with a generated ID
-	policyID := "policy-" + strconv.FormatInt(time.Now().UnixNano(), 16)
-	now := time.Now()
+	ctx, cancel := h.createContext()
+	defer cancel()
 
-	h.respWriter.Success200(w, r, PolicyResponse{
-		ID:          policyID,
-		Name:        req.Name,
-		Description: req.Description,
-		Rules:       req.Rules,
-		BridgeIDs:   req.BridgeIDs,
-		Priority:    req.Priority,
-		CreatedAt:   &now,
-		UpdatedAt:   &now,
-	})
+	resp, err := h.sdnService.ApplyPolicy(ctx, grpcReq)
+	if err != nil {
+		h.handleGRPCError(w, r, err)
+		return
+	}
+
+	h.respWriter.Success201(w, r, restapi.PolicyToResponse(resp.GetPolicy()))
 }
 
 // ListPolicies handles GET /api/v1/sdn/policies

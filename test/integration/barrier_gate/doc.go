@@ -29,7 +29,7 @@
 // Test cases:
 //
 //  1. TestM6_SealedDaemonRefusesRemotePorts — a fresh daemon configured
-//     with seal_strategy=software and auto_unseal=false comes up in the
+//     with seal_strategy=software comes up in the
 //     uninitialized state; gate /healthz answers; production REST/gRPC/QUIC
 //     ports refuse connections.
 //
@@ -41,17 +41,12 @@
 //
 //  3. TestM6_WarmBoot_UnsealThenTransitions — a warm-boot variant.
 //     The originally-specified "already-unsealed daemon skips gate
-//     entirely on restart" cannot be exercised against the current code:
-//     software seal-strategy auto-unseal is a no-op (see
-//     pkg/app/barrier.go:autoUnsealBarrier, the software branch returns
-//     nil without unsealing) and the only auto-unseal paths that DO open
-//     the barrier on restart are TPM2 and PKCS11, both of which are
-//     marked DEFERRED. This test therefore proves the same M6 transition
-//     contract (gate → production handoff) via the warm-boot /unseal
-//     path: initialize cold → stop → restart (gate binds in sealed
-//     state) → POST /unseal → assert production transports come up.
-//     The strict "skip gate entirely" assertion is intentionally out of
-//     scope until TPM2/PKCS11 auto-unseal is implemented.
+//     entirely on restart" cannot be exercised: the platform has no
+//     automatic unseal, so the restarted daemon comes up sealed.
+//     This test therefore proves the same M6 transition contract
+//     (gate → production handoff) via the warm-boot /unseal path:
+//     initialize cold → stop → restart (gate binds in sealed state) →
+//     POST /unseal → assert production transports come up.
 //
 // Run via: make integration-test-barrier-gate
 package barrier_gate

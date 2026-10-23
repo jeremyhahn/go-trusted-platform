@@ -31,6 +31,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore/entities"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/middleware/tenant"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/restwire"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -139,6 +140,10 @@ func (m *MockHttpWriter) Error403(w http.ResponseWriter, r *http.Request, err er
 }
 
 func (m *MockHttpWriter) Error500(w http.ResponseWriter, r *http.Request, err error) {
+	m.Called(w, r, err)
+}
+
+func (m *MockHttpWriter) Error503(w http.ResponseWriter, r *http.Request, err error) {
 	m.Called(w, r, err)
 }
 
@@ -283,7 +288,7 @@ func TestHandler_Create_Success(t *testing.T) {
 	assert.Equal(t, http.StatusCreated, w.Code)
 	assert.Equal(t, "application/json", w.Header().Get("Content-Type"))
 
-	var resp response.WebServiceResponse
+	var resp restwire.WebServiceResponse
 	err = json.NewDecoder(w.Body).Decode(&resp)
 	require.NoError(t, err)
 	assert.True(t, resp.Success)
@@ -782,7 +787,7 @@ func TestHandler_List_Success(t *testing.T) {
 
 	assert.Equal(t, http.StatusOK, w.Code)
 
-	var resp response.WebServiceResponse
+	var resp restwire.WebServiceResponse
 	err = json.NewDecoder(w.Body).Decode(&resp)
 	require.NoError(t, err)
 	assert.True(t, resp.Success)
@@ -872,7 +877,7 @@ func TestHandler_List_EmptyResult(t *testing.T) {
 
 	assert.Equal(t, http.StatusOK, w.Code)
 
-	var resp response.WebServiceResponse
+	var resp restwire.WebServiceResponse
 	err = json.NewDecoder(w.Body).Decode(&resp)
 	require.NoError(t, err)
 	assert.True(t, resp.Success)
@@ -904,7 +909,7 @@ func TestHandler_GetByToken_Success(t *testing.T) {
 
 	assert.Equal(t, http.StatusOK, w.Code)
 
-	var resp response.WebServiceResponse
+	var resp restwire.WebServiceResponse
 	err = json.NewDecoder(w.Body).Decode(&resp)
 	require.NoError(t, err)
 	assert.True(t, resp.Success)
@@ -1115,7 +1120,7 @@ func TestHandler_Get_Success(t *testing.T) {
 
 	assert.Equal(t, http.StatusOK, w.Code)
 
-	var resp response.WebServiceResponse
+	var resp restwire.WebServiceResponse
 	err = json.NewDecoder(w.Body).Decode(&resp)
 	require.NoError(t, err)
 	assert.True(t, resp.Success)
@@ -1339,7 +1344,7 @@ func TestHandler_Revoke_Success(t *testing.T) {
 
 	assert.Equal(t, http.StatusOK, w.Code)
 
-	var resp response.WebServiceResponse
+	var resp restwire.WebServiceResponse
 	err = json.NewDecoder(w.Body).Decode(&resp)
 	require.NoError(t, err)
 	assert.True(t, resp.Success)

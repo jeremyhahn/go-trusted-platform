@@ -84,9 +84,9 @@ func TestCollectorRefresh_EnqueuesWhenRunning(t *testing.T) {
 		_ = c.Run(ctx)
 		close(done)
 	}()
-	waitFor(t, func() bool { return clk.waiters_() > 0 }, "loop running")
+	waitFor(t, clk.changed, func() bool { return clk.waiters_() > 0 }, "loop running")
 	require.NoError(t, c.Refresh("dev-1"))
-	waitFor(t, func() bool { return src.count() == 1 }, "refresh collected")
+	waitFor(t, src.changed, func() bool { return src.count() == 1 }, "refresh collected")
 	cancel()
 	<-done
 	_, ok := c.Cache().Report("dev-1")

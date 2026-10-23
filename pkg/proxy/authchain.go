@@ -39,9 +39,6 @@ const (
 	// ReasonZoneMatrixDenied denies requests whose client zone has no
 	// allowed path to the route's BackendZone in the zone matrix.
 	ReasonZoneMatrixDenied = "zone_matrix_denied"
-	// ReasonRoleRequired denies requests whose identity lacks a required
-	// role.
-	ReasonRoleRequired = "role_required"
 	// ReasonTokenMissing denies token-path requests without a Bearer
 	// Authorization header.
 	ReasonTokenMissing = "token_missing"
@@ -258,10 +255,6 @@ func (c *Chain) authenticateMTLS(ctx context.Context, leaf *x509.Certificate, ro
 	}
 
 	roles := rolesFromIdentity(ident)
-	if !hasAllRoles(roles, req.RequiredRoles) {
-		return nil, deny(ReasonRoleRequired)
-	}
-
 	return &ClientIdentity{
 		ID:              ident.ID,
 		DeviceID:        ident.SerialNumber,
@@ -342,16 +335,6 @@ func rolesFromIdentity(ident *auth.Identity) []string {
 		return []string{ou}
 	}
 	return nil
-}
-
-// hasAllRoles reports whether every required role is held.
-func hasAllRoles(held, required []string) bool {
-	for _, want := range required {
-		if !containsString(held, want) {
-			return false
-		}
-	}
-	return true
 }
 
 func containsString(list []string, v string) bool {

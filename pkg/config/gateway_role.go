@@ -22,7 +22,7 @@ import (
 // LoadServeConfig): the SDN node services, the authenticating reverse
 // proxy, the trust resolver classes, the platform CA bundle that is
 // gatewayd's platform anchor (`platform-ca-file`, a key rather than a
-// section), the secret store backing `kms://` and `secret://` references,
+// section), the secret store backing `kms://` references,
 // the OVS runtime, and the control-plane reporter. A
 // gateway-role node's /etc/gatewayd/config.yaml is exactly these sections of
 // its platform config and nothing else.
@@ -37,6 +37,15 @@ import (
 var GatewaydConfigSections = []string{
 	"gateway", "proxy", "trust", "platform-ca-file", "secret-store", "sdn", "control-plane",
 }
+
+// GatewaydPackages are the Alpine packages a gateway-role node needs beyond
+// the gatewayd binary: the Jool NAT64 kernel translator that the `nat64:`
+// section drives (ruling R6, #603). jool-modules-lts is built against one
+// exact linux-lts version, so the module follows the kernel package; a kernel
+// upgrade that outruns it leaves the module unloadable and gatewayd refuses
+// the section. The gateway templates list these in os.packages, and an ISO
+// whose bundled config enables the gateway role prefetches them.
+var GatewaydPackages = []string{"jool-modules-lts", "jool-tools", "jool-tools-openrc"}
 
 // gatewayRoleProbe is the minimal shape of the `gateway:` section a role
 // decision needs. The rest of the section belongs to gatewayd.

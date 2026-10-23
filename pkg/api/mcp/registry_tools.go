@@ -16,6 +16,8 @@ package mcp
 import (
 	"context"
 	"errors"
+
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/mcpwire"
 )
 
 // =============================================================================
@@ -46,6 +48,22 @@ import (
 // service is disabled in config).
 var ErrRegistryNotConfigured = errors.New("registry: service provider not configured")
 
+// RegistryListQuery carries the platform_registry_list arguments. Every
+// field is optional: an empty Repository lists all repositories, a zero
+// ArtifactType (the gRPC ArtifactType enum value) matches every type, and
+// Cursor, when set, takes precedence over Offset.
+type RegistryListQuery struct {
+	Repository       string
+	ArtifactType     int32
+	Limit            int32
+	Offset           int32
+	Cursor           string
+	SortBy           string
+	Ascending        bool
+	MatchLabels      map[string]string
+	MatchExpressions []string
+}
+
 // ErrRegistryRepositoryRequired indicates the `repository` argument is
 // missing. Repository is the primary key for every artifact-scoped RPC.
 var ErrRegistryRepositoryRequired = errors.New("registry: repository is required")
@@ -63,11 +81,8 @@ var ErrRegistryReferenceRequired = errors.New("registry: reference (tag) or dige
 //
 // Method names map to MCP tools: platform_registry_list, etc.
 type RegistryProvider interface {
-	// RegistryList returns a paginated set of artifacts. The `repository`
-	// filter is optional — when empty, artifacts across all repositories
-	// are returned. `artifact_type` is also optional and matches the
-	// gRPC ArtifactType enum value.
-	RegistryList(ctx context.Context, repository string, artifactType int32, limit, offset int32) (interface{}, error)
+	// RegistryList returns a paginated set of artifacts matching query.
+	RegistryList(ctx context.Context, query RegistryListQuery) (interface{}, error)
 
 	// RegistryInspect returns detailed metadata for a single artifact
 	// identified by (repository, reference) or (repository, digest).
@@ -95,7 +110,7 @@ func (r *ToolRegistry) registryProvider() RegistryProvider {
 // Each tool definition mirrors the equivalent gRPC RPC so AI/LLM clients
 // can issue the same calls they would over gRPC.
 func (r *ToolRegistry) registerRegistryTools() {
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "platform_registry_list",
 		Description: "List artifacts in the container/artifact registry, optionally filtered by repository and type",
 		InputSchema: map[string]interface{}{
@@ -116,14 +131,36 @@ func (r *ToolRegistry) registerRegistryTools() {
 				},
 				"offset": map[string]interface{}{
 					"type":        "integer",
-					"description": "Pagination offset (default 0)",
+					"description": "Pagination offset (default 0); ignored when cursor is set",
 					"default":     0,
+				},
+				"cursor": map[string]interface{}{
+					"type":        "string",
+					"description": "Opaque cursor from a previous page's next_cursor",
+				},
+				"sort_by": map[string]interface{}{
+					"type":        "string",
+					"description": "Field to sort by (e.g. 'created_at', 'size', 'repository')",
+				},
+				"ascending": map[string]interface{}{
+					"type":        "boolean",
+					"description": "Sort ascending instead of descending",
+				},
+				"match_labels": map[string]interface{}{
+					"type":                 "object",
+					"description":          "Label selector: every key/value pair must match",
+					"additionalProperties": map[string]interface{}{"type": "string"},
+				},
+				"match_expressions": map[string]interface{}{
+					"type":        "array",
+					"description": "Label selector expressions (e.g. 'env in (prod,staging)')",
+					"items":       map[string]interface{}{"type": "string"},
 				},
 			},
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "platform_registry_inspect",
 		Description: "Inspect a registry artifact and return its manifest, signatures, and scan result",
 		InputSchema: map[string]interface{}{
@@ -156,7 +193,7 @@ func (r *ToolRegistry) registerRegistryTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "platform_registry_delete",
 		Description: "Delete an artifact from the registry by tag or digest",
 		InputSchema: map[string]interface{}{
@@ -184,7 +221,7 @@ func (r *ToolRegistry) registerRegistryTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "platform_registry_status",
 		Description: "Return registry health, version, storage stats, and component health",
 		InputSchema: map[string]interface{}{
@@ -255,11 +292,17 @@ func (r *ToolRegistry) executeRegistryList(ctx context.Context, args map[string]
 	if p == nil {
 		return nil, ErrRegistryNotConfigured
 	}
-	repo := getString(args, "repository") // optional
-	artifactType := int32(getInt(args, "artifact_type"))
-	limit := int32(getInt(args, "limit"))
-	offset := int32(getInt(args, "offset"))
-	return p.RegistryList(ctx, repo, artifactType, limit, offset)
+	return p.RegistryList(ctx, RegistryListQuery{
+		Repository:       getString(args, "repository"),
+		ArtifactType:     int32(getInt(args, "artifact_type")),
+		Limit:            int32(getInt(args, "limit")),
+		Offset:           int32(getInt(args, "offset")),
+		Cursor:           getString(args, "cursor"),
+		SortBy:           getString(args, "sort_by"),
+		Ascending:        getBool(args, "ascending"),
+		MatchLabels:      getStringMap(args, "match_labels"),
+		MatchExpressions: getStringSlice(args, "match_expressions"),
+	})
 }
 
 func (r *ToolRegistry) executeRegistryInspect(ctx context.Context, args map[string]interface{}) (interface{}, error) {

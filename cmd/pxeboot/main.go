@@ -29,12 +29,16 @@ import (
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/app"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/bootstrap/container"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/ipxe"
 )
 
 func main() {
 	manifest := flag.String("manifest", "", "path to manifest.yaml (required)")
 	configDir := flag.String("config-dir", "/data/configs", "directory with per-device configs")
 	iface := flag.String("interface", "eth0", "network interface to bind")
+	// DHCP does not bind it: it must receive broadcasts, so it keeps the
+	// unspecified address on --interface (#93).
+	bindHost := flag.String("bind-host", ipxe.DefaultBindHost, "address the HTTP and TFTP servers bind (default: every interface)")
 	httpPort := flag.Int("http-port", 8080, "HTTP server port")
 	// Zero derives http-port+1, which is where this listener lived when
 	// the offset was hardcoded. It is settable because the deployer is
@@ -57,9 +61,21 @@ func main() {
 	dataDir := flag.String("data-dir", container.DefaultDataDir, "directory served over HTTP at /data/ (the media dir must be inside it)")
 	mediaDir := flag.String("media-dir", container.DefaultDataDir+"/"+container.NetbootMediaSetsDir, "directory of the media sets served, one per subdirectory with a media-set.yaml (the netboot media build's media/, under --data-dir)")
 	tftpDir := flag.String("tftp-dir", "", "Raspberry Pi boot tree served over TFTP (start4.elf, config.txt, kernel8.img, ...)")
+	// The bootstrap image passes its cache path explicitly: left empty, a
+	// root process with HOME set caches under ~/.cache, which is not the
+	// directory a boot-node deployment mounts from the host.
+	firmwareDir := flag.String("firmware-dir", "", "directory iPXE firmware is loaded from and cached into (default: the user, else system, cache directory)")
 	overrides := firmwareOverrides{}
 	flag.Var(overrides, "firmware-override", "serve a prebuilt firmware file in place of the upstream download, as name=path (repeatable), e.g. snponly-aarch64.efi=/data/firmware/snponly-aarch64.efi")
 	proxyDHCP := flag.Bool("dhcp-proxy", false, "answer PXE clients with boot options and no lease (the segment has its own DHCP server)")
+	// The NBD export server runs only when the manifest names a
+	// diskless-nbd node; these flags are ignored otherwise.
+	nbdListen := flag.String("nbd-listen", "", "NBD-over-TLS listen address (default: dhcp-server-ip:10809)")
+	nbdVolumeDir := flag.String("nbd-volume-dir", "", "directory holding one NBD root volume per diskless-nbd node (default: data-dir/nbd)")
+	nbdVolumeSize := flag.Int64("nbd-volume-size", 0, "size in bytes of a new NBD root volume, a multiple of 512 (required for diskless-nbd nodes)")
+	nbdCAFile := flag.String("nbd-ca-file", "", "platform CA bundle that verifies NBD client IDevIDs (required for diskless-nbd nodes)")
+	nbdCert := flag.String("nbd-cert", "", "NBD server TLS certificate (required for diskless-nbd nodes)")
+	nbdKey := flag.String("nbd-key", "", "NBD server TLS private key (required for diskless-nbd nodes)")
 
 	flag.Parse()
 
@@ -80,13 +96,15 @@ func main() {
 		os.Exit(1)
 	}
 
-	var dnsServers []string
-	if *dhcpDNS != "" {
-		dnsServers = strings.Split(*dhcpDNS, ",")
+	gateway, dnsServers, err := parseDHCPOptionFlags(*dhcpGateway, *dhcpDNS)
+	if err != nil {
+		logger.Error("invalid DHCP option flag", slog.String("error", err.Error()))
+		os.Exit(1)
 	}
 
 	config := &container.ServerConfig{
 		Interface:         *iface,
+		BindHost:          *bindHost,
 		HTTPPort:          *httpPort,
 		DeviceScriptPort:  *deviceScriptPort,
 		TFTPPort:          *tftpPort,
@@ -97,14 +115,23 @@ func main() {
 		DataDir:           *dataDir,
 		MediaDir:          *mediaDir,
 		TFTPDir:           *tftpDir,
+		FirmwareDir:       *firmwareDir,
 		FirmwareOverrides: overrides,
 		DHCPProxyOnly:     *proxyDHCP,
 		DHCPConfig: container.DHCPConfig{
 			ServerIP:   *dhcpServerIP,
 			RangeStart: *dhcpRangeStart,
 			RangeEnd:   *dhcpRangeEnd,
-			Gateway:    *dhcpGateway,
+			Gateway:    gateway,
 			DNS:        dnsServers,
+		},
+		NBD: container.NBDConfig{
+			ListenAddr: *nbdListen,
+			VolumeDir:  *nbdVolumeDir,
+			VolumeSize: *nbdVolumeSize,
+			CAFile:     *nbdCAFile,
+			CertFile:   *nbdCert,
+			KeyFile:    *nbdKey,
 		},
 	}
 
@@ -127,6 +154,7 @@ func main() {
 
 	logger.Info("starting PXE bootstrap server",
 		slog.String("interface", *iface),
+		slog.String("bind_host", *bindHost),
 		slog.Int("http_port", *httpPort),
 		slog.Int("tftp_port", *tftpPort),
 		slog.String("dhcp_server_ip", *dhcpServerIP),
@@ -160,6 +188,30 @@ func validateRequiredFlags(manifest, mediaDir, serverIP, rangeStart, rangeEnd st
 		return &MessageError{Msg: fmt.Sprintf("required flags not set: %s", strings.Join(missing, ", "))}
 	}
 	return nil
+}
+
+// parseDHCPOptionFlags checks --dhcp-gateway and --dhcp-dns before anything
+// starts. No gateway advertises no router (option 3): that is how the
+// bootstrap image's BOOTSTRAP_NO_ROUTER reaches the DHCP server. Every
+// comma-separated DNS server is advertised in option 6, in order; spaces
+// around an entry are dropped and an empty entry is refused.
+func parseDHCPOptionFlags(gateway, dns string) (string, []string, error) {
+	if gateway != "" {
+		if _, err := ipxe.ParseDHCPv4("gateway", gateway); err != nil {
+			return "", nil, &FlagError{Flag: "dhcp-gateway", Err: err}
+		}
+	}
+	if dns == "" {
+		return gateway, nil, nil
+	}
+	servers := strings.Split(dns, ",")
+	for i, server := range servers {
+		servers[i] = strings.TrimSpace(server)
+		if _, err := ipxe.ParseDHCPv4("dns", servers[i]); err != nil {
+			return "", nil, &FlagError{Flag: "dhcp-dns", Err: err}
+		}
+	}
+	return gateway, servers, nil
 }
 
 // firmwareOverrides is the repeatable --firmware-override name=path flag.

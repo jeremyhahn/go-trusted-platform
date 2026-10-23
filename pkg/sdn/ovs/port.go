@@ -350,6 +350,51 @@ func (c *Client) SetPortState(ctx context.Context, portName string, state PortSt
 	return nil
 }
 
+// SetIngressPolicing polices the named interface's ingress to rateBps with a
+// burst of burstBits (see ValidateIngressPolicing). A rate of 0 disables
+// policing; a burst of 0 lets Open vSwitch pick its default. An unknown
+// interface is ErrInterfaceNotFound.
+func (c *Client) SetIngressPolicing(ctx context.Context, name string, rateBps, burstBits uint64) error {
+	if name == "" {
+		return ErrInvalidPortName
+	}
+	if err := ValidateIngressPolicing(rateBps, burstBits); err != nil {
+		return err
+	}
+
+	// bps / 1000 is at most 1.8e16, so the kbps value always fits the
+	// signed OVSDB integer column.
+	updateOp := NewUpdateOperation(
+		interfaceTable,
+		[]Condition{NewCondition("name", "==", name)},
+		map[string]interface{}{
+			"ingress_policing_rate":  int64(rateBps / 1000),
+			"ingress_policing_burst": int64(burstBits / 1000),
+		},
+	)
+
+	results, err := c.Transact(ctx, updateOp)
+	if err != nil {
+		return &WrappedError{Msg: "failed to set interface ingress policing", Err: err}
+	}
+	if len(results) == 0 || results[0].Count == nil || *results[0].Count == 0 {
+		return ErrInterfaceNotFound
+	}
+
+	return nil
+}
+
+// ValidateIngressPolicing checks an ingress policing rate (bps) and burst
+// (bits) before anything is applied. Open vSwitch polices in kbps and kb, so
+// each must be 0 or a whole multiple of 1000; a burst without a rate has
+// nothing to shape. An invalid pair is *ErrInvalidPolicing.
+func ValidateIngressPolicing(rateBps, burstBits uint64) error {
+	if rateBps%1000 != 0 || burstBits%1000 != 0 || (rateBps == 0 && burstBits != 0) {
+		return &ErrInvalidPolicing{RateBps: rateBps, BurstBits: burstBits}
+	}
+	return nil
+}
+
 // GetInterface retrieves an interface by name
 func (c *Client) GetInterface(ctx context.Context, name string) (*Interface, error) {
 	if name == "" {

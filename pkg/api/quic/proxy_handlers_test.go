@@ -18,6 +18,7 @@ import (
 	"testing"
 
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -107,17 +108,17 @@ func (f *fakeProxyQUICService) GetZoneMatrix(ctx context.Context, req *platformv
 
 // proxySubRequest builds a proxy sub-request as the gateway category
 // dispatcher would deliver it (sub-opcode in Opcode, body in Payload).
-func proxySubRequest(t *testing.T, sub byte, msg interface{}) *Request {
+func proxySubRequest(t *testing.T, sub byte, msg interface{}) *quicwire.Request {
 	t.Helper()
 	var payload []byte
 	if msg != nil {
-		encoded, err := EncodePayload(msg)
+		encoded, err := quicwire.EncodePayload(msg)
 		if err != nil {
 			t.Fatalf("EncodePayload: %v", err)
 		}
 		payload = encoded
 	}
-	return &Request{Opcode: sub, Payload: payload}
+	return &quicwire.Request{Opcode: sub, Payload: payload}
 }
 
 func TestProxyHandler_RouteLifecycle(t *testing.T) {
@@ -143,14 +144,14 @@ func TestProxyHandler_RouteLifecycle(t *testing.T) {
 	ctx := context.Background()
 
 	// Create
-	resp := h.HandleRequest(ctx, proxySubRequest(t, ProxySubRouteCreate, &platformv1.CreateProxyRouteRequest{
+	resp := h.HandleRequest(ctx, proxySubRequest(t, quicwire.ProxySubRouteCreate, &platformv1.CreateProxyRouteRequest{
 		Route: &platformv1.ProxyRoute{Id: "web", PoolId: "pool-1", PathPrefix: "/"},
 	}))
-	if resp.Status != StatusOK {
+	if resp.Status != quicwire.StatusOK {
 		t.Fatalf("create status = 0x%02x payload %s", resp.Status, resp.Payload)
 	}
 	var created platformv1.CreateProxyRouteResponse
-	if err := DecodePayload(resp.Payload, &created); err != nil {
+	if err := quicwire.DecodePayload(resp.Payload, &created); err != nil {
 		t.Fatalf("decode create response: %v", err)
 	}
 	if created.GetRoute().GetId() != "web" || created.GetVersion() != 2 {
@@ -158,8 +159,8 @@ func TestProxyHandler_RouteLifecycle(t *testing.T) {
 	}
 
 	// Get
-	resp = h.HandleRequest(ctx, proxySubRequest(t, ProxySubRouteGet, &platformv1.GetProxyRouteRequest{Id: "web"}))
-	if resp.Status != StatusOK {
+	resp = h.HandleRequest(ctx, proxySubRequest(t, quicwire.ProxySubRouteGet, &platformv1.GetProxyRouteRequest{Id: "web"}))
+	if resp.Status != quicwire.StatusOK {
 		t.Fatalf("get status = 0x%02x payload %s", resp.Status, resp.Payload)
 	}
 	if fake.lastRouteID != "web" {
@@ -167,27 +168,27 @@ func TestProxyHandler_RouteLifecycle(t *testing.T) {
 	}
 
 	// Update
-	resp = h.HandleRequest(ctx, proxySubRequest(t, ProxySubRouteUpdate, &platformv1.UpdateProxyRouteRequest{
+	resp = h.HandleRequest(ctx, proxySubRequest(t, quicwire.ProxySubRouteUpdate, &platformv1.UpdateProxyRouteRequest{
 		Id:    "web",
 		Route: &platformv1.ProxyRoute{Id: "web", PoolId: "pool-2", PathPrefix: "/"},
 	}))
-	if resp.Status != StatusOK {
+	if resp.Status != quicwire.StatusOK {
 		t.Fatalf("update status = 0x%02x payload %s", resp.Status, resp.Payload)
 	}
 
 	// Delete
-	resp = h.HandleRequest(ctx, proxySubRequest(t, ProxySubRouteDelete, &platformv1.DeleteProxyRouteRequest{Id: "web"}))
-	if resp.Status != StatusOK {
+	resp = h.HandleRequest(ctx, proxySubRequest(t, quicwire.ProxySubRouteDelete, &platformv1.DeleteProxyRouteRequest{Id: "web"}))
+	if resp.Status != quicwire.StatusOK {
 		t.Fatalf("delete status = 0x%02x payload %s", resp.Status, resp.Payload)
 	}
 
 	// List
-	resp = h.HandleRequest(ctx, proxySubRequest(t, ProxySubRouteList, &platformv1.ListProxyRoutesRequest{}))
-	if resp.Status != StatusOK {
+	resp = h.HandleRequest(ctx, proxySubRequest(t, quicwire.ProxySubRouteList, &platformv1.ListProxyRoutesRequest{}))
+	if resp.Status != quicwire.StatusOK {
 		t.Fatalf("list status = 0x%02x payload %s", resp.Status, resp.Payload)
 	}
 	var list platformv1.ListProxyRoutesResponse
-	if err := DecodePayload(resp.Payload, &list); err != nil {
+	if err := quicwire.DecodePayload(resp.Payload, &list); err != nil {
 		t.Fatalf("decode list response: %v", err)
 	}
 	if len(list.GetRoutes()) != 1 || list.GetVersion() != 4 {
@@ -222,14 +223,14 @@ func TestProxyHandler_PoolLifecycle(t *testing.T) {
 		sub  byte
 		msg  interface{}
 	}{
-		{"create", ProxySubPoolCreate, &platformv1.CreateProxyPoolRequest{Pool: &platformv1.ProxyPool{Id: "pool-1"}}},
-		{"get", ProxySubPoolGet, &platformv1.GetProxyPoolRequest{Id: "pool-1"}},
-		{"update", ProxySubPoolUpdate, &platformv1.UpdateProxyPoolRequest{Id: "pool-1", Pool: &platformv1.ProxyPool{Id: "pool-1"}}},
-		{"delete", ProxySubPoolDelete, &platformv1.DeleteProxyPoolRequest{Id: "pool-1"}},
-		{"list", ProxySubPoolList, &platformv1.ListProxyPoolsRequest{}},
+		{"create", quicwire.ProxySubPoolCreate, &platformv1.CreateProxyPoolRequest{Pool: &platformv1.ProxyPool{Id: "pool-1"}}},
+		{"get", quicwire.ProxySubPoolGet, &platformv1.GetProxyPoolRequest{Id: "pool-1"}},
+		{"update", quicwire.ProxySubPoolUpdate, &platformv1.UpdateProxyPoolRequest{Id: "pool-1", Pool: &platformv1.ProxyPool{Id: "pool-1"}}},
+		{"delete", quicwire.ProxySubPoolDelete, &platformv1.DeleteProxyPoolRequest{Id: "pool-1"}},
+		{"list", quicwire.ProxySubPoolList, &platformv1.ListProxyPoolsRequest{}},
 	} {
 		resp := h.HandleRequest(ctx, proxySubRequest(t, tc.sub, tc.msg))
-		if resp.Status != StatusOK {
+		if resp.Status != quicwire.StatusOK {
 			t.Errorf("%s status = 0x%02x payload %s", tc.name, resp.Status, resp.Payload)
 		}
 	}
@@ -251,41 +252,41 @@ func TestProxyHandler_ConfigStatusReloadMatrix(t *testing.T) {
 	h := NewProxyHandler(nil, fake)
 	ctx := context.Background()
 
-	resp := h.HandleRequest(ctx, proxySubRequest(t, ProxySubConfigGet, &platformv1.GetProxyConfigRequest{}))
-	if resp.Status != StatusOK {
+	resp := h.HandleRequest(ctx, proxySubRequest(t, quicwire.ProxySubConfigGet, &platformv1.GetProxyConfigRequest{}))
+	if resp.Status != quicwire.StatusOK {
 		t.Fatalf("config status = 0x%02x payload %s", resp.Status, resp.Payload)
 	}
 	var cfg platformv1.GetProxyConfigResponse
-	if err := DecodePayload(resp.Payload, &cfg); err != nil {
+	if err := quicwire.DecodePayload(resp.Payload, &cfg); err != nil {
 		t.Fatalf("decode config: %v", err)
 	}
 	if cfg.GetVersion() != 5 {
 		t.Errorf("config version = %d, want 5", cfg.GetVersion())
 	}
 
-	resp = h.HandleRequest(ctx, proxySubRequest(t, ProxySubStatusGet, &platformv1.GetProxyStatusRequest{}))
-	if resp.Status != StatusOK {
+	resp = h.HandleRequest(ctx, proxySubRequest(t, quicwire.ProxySubStatusGet, &platformv1.GetProxyStatusRequest{}))
+	if resp.Status != quicwire.StatusOK {
 		t.Fatalf("status status = 0x%02x payload %s", resp.Status, resp.Payload)
 	}
 	var st platformv1.GetProxyStatusResponse
-	if err := DecodePayload(resp.Payload, &st); err != nil {
+	if err := quicwire.DecodePayload(resp.Payload, &st); err != nil {
 		t.Fatalf("decode status: %v", err)
 	}
 	if st.GetPoolCount() != 2 {
 		t.Errorf("pool count = %d, want 2", st.GetPoolCount())
 	}
 
-	resp = h.HandleRequest(ctx, proxySubRequest(t, ProxySubReload, &platformv1.ReloadProxyConfigRequest{}))
-	if resp.Status != StatusOK {
+	resp = h.HandleRequest(ctx, proxySubRequest(t, quicwire.ProxySubReload, &platformv1.ReloadProxyConfigRequest{}))
+	if resp.Status != quicwire.StatusOK {
 		t.Fatalf("reload status = 0x%02x payload %s", resp.Status, resp.Payload)
 	}
 
-	resp = h.HandleRequest(ctx, proxySubRequest(t, ProxySubZoneMatrix, &platformv1.GetProxyZoneMatrixRequest{}))
-	if resp.Status != StatusOK {
+	resp = h.HandleRequest(ctx, proxySubRequest(t, quicwire.ProxySubZoneMatrix, &platformv1.GetProxyZoneMatrixRequest{}))
+	if resp.Status != quicwire.StatusOK {
 		t.Fatalf("matrix status = 0x%02x payload %s", resp.Status, resp.Payload)
 	}
 	var matrix platformv1.GetProxyZoneMatrixResponse
-	if err := DecodePayload(resp.Payload, &matrix); err != nil {
+	if err := quicwire.DecodePayload(resp.Payload, &matrix); err != nil {
 		t.Fatalf("decode matrix: %v", err)
 	}
 	if len(matrix.GetZones()) != 2 || len(matrix.GetPairs()) != 1 {
@@ -300,18 +301,18 @@ func TestProxyHandler_ErrorStatusMapping(t *testing.T) {
 		err        error
 		wantStatus byte
 	}{
-		{"not found", status.Error(codes.NotFound, "route not found"), StatusNotFound},
-		{"already exists", status.Error(codes.AlreadyExists, "route exists"), StatusAlreadyExists},
-		{"invalid argument", status.Error(codes.InvalidArgument, "bad route"), StatusInvalidArgument},
-		{"failed precondition", status.Error(codes.FailedPrecondition, "pool in use"), StatusInvalidRequest},
-		{"unavailable", status.Error(codes.Unavailable, "zone service missing"), StatusUnavailable},
-		{"internal", status.Error(codes.Internal, "boom"), StatusInternalError},
-		{"unmapped code", status.Error(codes.DataLoss, "weird"), StatusInternalError},
+		{"not found", status.Error(codes.NotFound, "route not found"), quicwire.StatusNotFound},
+		{"already exists", status.Error(codes.AlreadyExists, "route exists"), quicwire.StatusAlreadyExists},
+		{"invalid argument", status.Error(codes.InvalidArgument, "bad route"), quicwire.StatusInvalidArgument},
+		{"failed precondition", status.Error(codes.FailedPrecondition, "pool in use"), quicwire.StatusInvalidRequest},
+		{"unavailable", status.Error(codes.Unavailable, "zone service missing"), quicwire.StatusUnavailable},
+		{"internal", status.Error(codes.Internal, "boom"), quicwire.StatusInternalError},
+		{"unmapped code", status.Error(codes.DataLoss, "weird"), quicwire.StatusInternalError},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			h := NewProxyHandler(nil, &fakeProxyQUICService{err: tc.err})
-			resp := h.HandleRequest(ctx, proxySubRequest(t, ProxySubRouteGet, &platformv1.GetProxyRouteRequest{Id: "x"}))
+			resp := h.HandleRequest(ctx, proxySubRequest(t, quicwire.ProxySubRouteGet, &platformv1.GetProxyRouteRequest{Id: "x"}))
 			if resp.Status != tc.wantStatus {
 				t.Errorf("status = 0x%02x, want 0x%02x", resp.Status, tc.wantStatus)
 			}
@@ -324,43 +325,43 @@ func TestProxyHandler_NilServiceAndRequestGuards(t *testing.T) {
 
 	// Nil service yields Unavailable for a valid sub-opcode.
 	h := NewProxyHandler(nil, nil)
-	resp := h.HandleRequest(ctx, proxySubRequest(t, ProxySubRouteList, &platformv1.ListProxyRoutesRequest{}))
-	if resp.Status != StatusUnavailable {
+	resp := h.HandleRequest(ctx, proxySubRequest(t, quicwire.ProxySubRouteList, &platformv1.ListProxyRoutesRequest{}))
+	if resp.Status != quicwire.StatusUnavailable {
 		t.Errorf("nil service status = 0x%02x, want StatusUnavailable", resp.Status)
 	}
 
 	// Nil request is rejected.
 	resp = h.HandleRequest(ctx, nil)
-	if resp.Status != StatusInvalidRequest {
+	if resp.Status != quicwire.StatusInvalidRequest {
 		t.Errorf("nil request status = 0x%02x, want StatusInvalidRequest", resp.Status)
 	}
 
 	// Unknown sub-opcode is NotImplemented.
-	resp = h.HandleRequest(ctx, &Request{Opcode: 0xEE})
-	if resp.Status != StatusNotImplemented {
+	resp = h.HandleRequest(ctx, &quicwire.Request{Opcode: 0xEE})
+	if resp.Status != quicwire.StatusNotImplemented {
 		t.Errorf("unknown sub-opcode status = 0x%02x, want StatusNotImplemented", resp.Status)
 	}
 }
 
 func TestProxyHandler_DecodeFailure(t *testing.T) {
 	h := NewProxyHandler(nil, &fakeProxyQUICService{})
-	resp := h.HandleRequest(context.Background(), &Request{
-		Opcode:  ProxySubRouteGet,
+	resp := h.HandleRequest(context.Background(), &quicwire.Request{
+		Opcode:  quicwire.ProxySubRouteGet,
 		Payload: []byte{0xFF, 0x00, 0x01}, // not a valid codec payload
 	})
-	if resp.Status != StatusInvalidRequest {
+	if resp.Status != quicwire.StatusInvalidRequest {
 		t.Errorf("decode failure status = 0x%02x payload %s, want StatusInvalidRequest", resp.Status, resp.Payload)
 	}
 }
 
 func TestIsProxySubOpcode(t *testing.T) {
-	for sub := ProxySubRouteCreate; sub <= ProxySubZoneMatrix; sub++ {
+	for sub := quicwire.ProxySubRouteCreate; sub <= quicwire.ProxySubZoneMatrix; sub++ {
 		if !IsProxySubOpcode(sub) {
 			t.Errorf("IsProxySubOpcode(0x%02x) = false, want true", sub)
 		}
 	}
 	// Gateway's own sub-opcodes must not be claimed by the proxy range.
-	for _, sub := range []byte{OpGatewayStatus, OpGatewayListNetworkZones, OpGatewayDeleteNetworkZone, 0x14, 0x2E, 0xFF} {
+	for _, sub := range []byte{quicwire.OpGatewayStatus, quicwire.OpGatewayListNetworkZones, quicwire.OpGatewayDeleteNetworkZone, 0x14, 0x2E, 0xFF} {
 		if IsProxySubOpcode(sub) {
 			t.Errorf("IsProxySubOpcode(0x%02x) = true, want false", sub)
 		}

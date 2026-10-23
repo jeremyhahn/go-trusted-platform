@@ -17,12 +17,14 @@ package sdn
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os/exec"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers/boundedexec"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -175,7 +177,7 @@ func createBridge(name string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, "ovs-vsctl", "add-br", name)
+	cmd := boundedexec.CommandContext(ctx, "ovs-vsctl", "add-br", name)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("failed to create bridge: %v, output: %s", err, output)
@@ -187,7 +189,7 @@ func deleteBridge(name string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, "ovs-vsctl", "del-br", name)
+	cmd := boundedexec.CommandContext(ctx, "ovs-vsctl", "del-br", name)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("failed to delete bridge: %v, output: %s", err, output)
@@ -199,11 +201,12 @@ func bridgeExists(name string) (bool, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, "ovs-vsctl", "br-exists", name)
+	cmd := boundedexec.CommandContext(ctx, "ovs-vsctl", "br-exists", name)
 	err := cmd.Run()
 	if err != nil {
 		// Exit code 2 means bridge doesn't exist
-		if exitError, ok := err.(*exec.ExitError); ok {
+		var exitError *exec.ExitError
+		if errors.As(err, &exitError) {
 			if exitError.ExitCode() == 2 {
 				return false, nil
 			}
@@ -217,7 +220,7 @@ func getBridgeInfo(name string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, "ovs-vsctl", "list", "bridge", name)
+	cmd := boundedexec.CommandContext(ctx, "ovs-vsctl", "list", "bridge", name)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return "", fmt.Errorf("failed to get bridge info: %v, output: %s", err, output)
@@ -234,7 +237,7 @@ func setBridgeSTP(name string, enable bool) error {
 		value = "true"
 	}
 
-	cmd := exec.CommandContext(ctx, "ovs-vsctl", "set", "bridge", name, fmt.Sprintf("stp_enable=%s", value))
+	cmd := boundedexec.CommandContext(ctx, "ovs-vsctl", "set", "bridge", name, fmt.Sprintf("stp_enable=%s", value))
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("failed to set STP: %v, output: %s", err, output)
@@ -251,7 +254,7 @@ func setBridgeRSTP(name string, enable bool) error {
 		value = "true"
 	}
 
-	cmd := exec.CommandContext(ctx, "ovs-vsctl", "set", "bridge", name, fmt.Sprintf("rstp_enable=%s", value))
+	cmd := boundedexec.CommandContext(ctx, "ovs-vsctl", "set", "bridge", name, fmt.Sprintf("rstp_enable=%s", value))
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("failed to set RSTP: %v, output: %s", err, output)
@@ -263,7 +266,7 @@ func setBridgeFailMode(name string, mode string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, "ovs-vsctl", "set-fail-mode", name, mode)
+	cmd := boundedexec.CommandContext(ctx, "ovs-vsctl", "set-fail-mode", name, mode)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("failed to set fail mode: %v, output: %s", err, output)
@@ -275,7 +278,7 @@ func setBridgeExternalID(name, key, value string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, "ovs-vsctl", "set", "bridge", name,
+	cmd := boundedexec.CommandContext(ctx, "ovs-vsctl", "set", "bridge", name,
 		fmt.Sprintf("external-ids:%s=%s", key, value))
 	output, err := cmd.CombinedOutput()
 	if err != nil {
@@ -288,7 +291,7 @@ func getBridgeExternalID(name, key string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, "ovs-vsctl", "get", "bridge", name,
+	cmd := boundedexec.CommandContext(ctx, "ovs-vsctl", "get", "bridge", name,
 		fmt.Sprintf("external-ids:%s", key))
 	output, err := cmd.CombinedOutput()
 	if err != nil {
@@ -301,7 +304,7 @@ func listBridges() ([]string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, "ovs-vsctl", "list-br")
+	cmd := boundedexec.CommandContext(ctx, "ovs-vsctl", "list-br")
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return nil, fmt.Errorf("failed to list bridges: %v, output: %s", err, output)

@@ -57,7 +57,7 @@ func buildProxyStore(config *Config, logger *logging.Logger) (*ProxyStore, error
 // selectProxyStore returns the persistent store when a quicbaas storage
 // client is available and the in-memory one otherwise.
 func selectProxyStore(ctx context.Context, config *Config, logger *logging.Logger) (*ProxyStore, error) {
-	storage := proxyStorage(config)
+	storage := platformStorage(config)
 	if storage == nil {
 		logger.Warn("proxy store is in-memory: no quicbaas DAO factory; routes and pools authored over the API do not survive a restart")
 		return NewProxyStore(), nil
@@ -70,9 +70,9 @@ func selectProxyStore(ctx context.Context, config *Config, logger *logging.Logge
 	return store, nil
 }
 
-// proxyStorage returns the quicbaas storage client behind the App's DAO
+// platformStorage returns the quicbaas storage client behind the App's DAO
 // factory, or nil when the daemon runs without one.
-func proxyStorage(config *Config) quicbaas.Storage {
+func platformStorage(config *Config) quicbaas.Storage {
 	if config == nil || config.App == nil {
 		return nil
 	}

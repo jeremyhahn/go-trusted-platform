@@ -18,7 +18,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -202,7 +201,7 @@ func (m *mockProfileService) Delete(ctx context.Context, profile *entities.Devic
 	return nil
 }
 
-func (m *mockProfileService) Update(ctx context.Context, profile *entities.DeviceProfile) error {
+func (m *mockProfileService) Update(ctx context.Context, profile *entities.DeviceProfile, _ ...devicepkg.ProfileUpdateOption) error {
 	if m.updateErr != nil {
 		return m.updateErr
 	}
@@ -347,6 +346,11 @@ func (m *mockResponseWriter) Error500(w http.ResponseWriter, r *http.Request, er
 	json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
 }
 
+func (m *mockResponseWriter) Error503(w http.ResponseWriter, r *http.Request, err error) {
+	w.WriteHeader(http.StatusServiceUnavailable)
+	json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+}
+
 func (m *mockResponseWriter) Write(w http.ResponseWriter, r *http.Request, status int, resp interface{}) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
@@ -447,13 +451,11 @@ func TestCRUDHandler_CreateDevice_MissingID(t *testing.T) {
 	}
 }
 
-// TestCRUDHandler_CreateDevice_NoSerialGetsPlaceholderFromTheAssignedID
-// pins the ordering the #525 refactor had to preserve. The dashboard
-// list page cannot render a row without a serial, so a create that
-// carries none gets dev-<id> — which needs the ID before the write, not
-// after it. Moving identity assignment into DeviceService.Create would
-// have produced "dev-0" had this branch not kept assigning first.
-func TestCRUDHandler_CreateDevice_NoSerialGetsPlaceholderFromTheAssignedID(t *testing.T) {
+// TestCRUDHandler_CreateDevice_NoSerialIsRefused pins the create contract
+// both REST listeners share (#484): a serial the platform invented could
+// never match a TPM at enrollment, so a create without one is a 400 and
+// nothing is written.
+func TestCRUDHandler_CreateDevice_NoSerialIsRefused(t *testing.T) {
 	handler, deviceSvc, _ := newTestHandler()
 
 	body := `{"model": "TestTPM"}`
@@ -463,12 +465,10 @@ func TestCRUDHandler_CreateDevice_NoSerialGetsPlaceholderFromTheAssignedID(t *te
 
 	handler.CreateDevice(w, req)
 
-	assert.Equal(t, http.StatusCreated, w.Code)
-	require.Len(t, deviceSvc.devices, 1)
-	for id, dev := range deviceSvc.devices {
-		require.NotZero(t, id)
-		assert.Equal(t, fmt.Sprintf("dev-%d", id), dev.Serial)
-	}
+	assert.Equal(t, http.StatusBadRequest, w.Code,
+		"a create without a serial is refused; no dev-<id> serial is synthesised (#484)")
+	assert.Contains(t, w.Body.String(), devicepkg.ErrDeviceSerialRequired{}.Error())
+	assert.Empty(t, deviceSvc.devices)
 }
 
 // TestCRUDHandler_CreateDevice_StorageFailureIsNotA201 is the failure
@@ -1041,6 +1041,15 @@ func TestCRUDHandler_HandleServiceError(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, "/test", nil)
 		handler.handleServiceError(w, req, errors.New("invalid device ID"))
 		assert.Equal(t, http.StatusBadRequest, w.Code)
+	})
+
+	t.Run("taken serial is a conflict", func(t *testing.T) {
+		w := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, "/test", nil)
+		err := &devicepkg.WrappedError{Msg: "create", Err: devicepkg.ErrDeviceSerialExists{Serial: "SN1"}}
+		handler.handleServiceError(w, req, err)
+		assert.Equal(t, http.StatusConflict, w.Code)
+		assert.Contains(t, w.Body.String(), "device already exists with serial: SN1")
 	})
 
 	t.Run("generic error", func(t *testing.T) {

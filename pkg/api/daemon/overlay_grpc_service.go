@@ -58,7 +58,6 @@ type OverlayService struct {
 	platformv1.UnimplementedOverlayServiceServer
 
 	controller OverlayControllerInterface
-	ipsec      overlayIPsec
 	mu         sync.RWMutex
 }
 
@@ -91,12 +90,6 @@ func (s *OverlayService) SetController(ctrl OverlayControllerInterface) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.controller = ctrl
-}
-
-func (s *OverlayService) SetIPsec(sec overlayIPsec) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.ipsec = sec
 }
 
 // ListVTEPs returns all known VTEP endpoints.
@@ -200,6 +193,10 @@ func (s *OverlayService) CreateVNI(ctx context.Context, req *platformv1.CreateVN
 
 	if config.GetVni() > overlay.MaxVNI {
 		return nil, status.Errorf(codes.InvalidArgument, "vni must not exceed %d", overlay.MaxVNI)
+	}
+
+	if config.GetVlan() > overlay.MaxVLAN {
+		return nil, status.Errorf(codes.InvalidArgument, "vlan must not exceed %d", overlay.MaxVLAN)
 	}
 
 	s.mu.Lock()
@@ -361,19 +358,30 @@ func (s *OverlayService) GetTunnelStats(ctx context.Context, req *platformv1.Get
 		return nil, status.Errorf(codes.InvalidArgument, "invalid remote_vtep address: %v", err)
 	}
 
-	for i := range state.Tunnels {
-		tunnel := &state.Tunnels[i]
-		// Match by remote VTEP and optionally VNI
-		if tunnel.RemoteVTEP == remoteVTEP {
-			if req.GetVni() == 0 || tunnel.VNI == req.GetVni() {
-				return &platformv1.GetTunnelStatsResponse{
-					Tunnel: tunnelInfoToProto(tunnel),
-				}, nil
-			}
-		}
+	tunnel := findOverlayTunnel(state, remoteVTEP, req.GetVni())
+	if tunnel == nil {
+		return nil, status.Error(codes.NotFound, "tunnel not found")
 	}
 
-	return nil, status.Error(codes.NotFound, "tunnel not found")
+	return &platformv1.GetTunnelStatsResponse{
+		Tunnel: tunnelInfoToProto(tunnel),
+	}, nil
+}
+
+// findOverlayTunnel returns the first tunnel to remote that carries vni, or
+// the first tunnel to remote when vni is 0. Every transport's tunnel
+// statistics verb selects its tunnel here, so they all answer alike.
+func findOverlayTunnel(state *overlay.State, remote netip.Addr, vni uint32) *overlay.TunnelInfo {
+	if state == nil {
+		return nil
+	}
+	for i := range state.Tunnels {
+		tunnel := &state.Tunnels[i]
+		if tunnel.RemoteVTEP == remote && (vni == 0 || tunnel.VNI == vni) {
+			return tunnel
+		}
+	}
+	return nil
 }
 
 // ListRemoteMACs returns learned remote MAC addresses, optionally filtered by VNI.
@@ -479,10 +487,6 @@ func (s *OverlayService) GetOverlayStatus(ctx context.Context, req *platformv1.G
 		tunnelCount = uint32(len(state.Tunnels))
 		remoteMACCount = uint32(len(state.RemoteMACs))
 	}
-	var unpeeredVTEPs uint32
-	if s.ipsec != nil {
-		unpeeredVTEPs = uint32(len(s.ipsec.Status().UnpeeredVTEPs))
-	}
 
 	return &platformv1.GetOverlayStatusResponse{
 		Status: &platformv1.OverlayStatus{
@@ -495,7 +499,6 @@ func (s *OverlayService) GetOverlayStatus(ctx context.Context, req *platformv1.G
 			Healthy:        healthy,
 			VxlanPort:      vxlanPort,
 			UnderlayMtu:    underlayMTU,
-			UnpeeredVteps:  unpeeredVTEPs,
 		},
 	}, nil
 }

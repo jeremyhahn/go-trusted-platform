@@ -23,6 +23,7 @@ import (
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	sdncluster "github.com/jeremyhahn/go-trusted-platform/pkg/sdn/cluster"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/testenv"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -86,11 +87,34 @@ func (stc *sdnTestCluster) getLeaderStateManager() *sdncluster.QuicBaaSStateMana
 	return nil
 }
 
+// waitForState waits until present holds on every node's state manager. A
+// timeout is only logged: the caller's own reads assert on the state.
+func (stc *sdnTestCluster) waitForState(ctx context.Context, t *testing.T, condition string, present func(sm *sdncluster.QuicBaaSStateManager) bool) {
+	t.Helper()
+	everywhere := func() bool {
+		for _, sm := range stc.stateManagers {
+			if !present(sm) {
+				return false
+			}
+		}
+		return true
+	}
+	if err := testenv.WaitUntil(ctx, defaultOperationTimeout, condition+" on every node", everywhere); err != nil {
+		t.Logf("%v", err)
+	}
+}
+
+// waitForBridge waits until every node's state manager reads the bridge.
+func (stc *sdnTestCluster) waitForBridge(ctx context.Context, t *testing.T, bridgeID string) {
+	t.Helper()
+	stc.waitForState(ctx, t, "bridge "+bridgeID, func(sm *sdncluster.QuicBaaSStateManager) bool {
+		_, err := sm.GetBridge(ctx, bridgeID)
+		return err == nil
+	})
+}
+
 // TestSDNBridgeReplication tests that bridge state replicates across nodes.
 func TestSDNBridgeReplication(t *testing.T) {
-	skipIfNoRaftCluster(t)
-	skipIfNotIntegration(t)
-
 	stc := newSDNTestCluster(t, 3)
 	defer stc.stop()
 
@@ -127,7 +151,7 @@ func TestSDNBridgeReplication(t *testing.T) {
 	t.Logf("Bridge %s created on leader", bridge.ID)
 
 	// Wait for replication
-	time.Sleep(3 * time.Second)
+	stc.waitForBridge(ctx, t, bridge.ID)
 
 	// Verify bridge is visible from all nodes
 	for i := 0; i < stc.nodeCount(); i++ {
@@ -151,9 +175,6 @@ func TestSDNBridgeReplication(t *testing.T) {
 
 // TestSDNBridgeReplication_Update tests bridge update replication.
 func TestSDNBridgeReplication_Update(t *testing.T) {
-	skipIfNoRaftCluster(t)
-	skipIfNotIntegration(t)
-
 	stc := newSDNTestCluster(t, 3)
 	defer stc.stop()
 
@@ -183,7 +204,7 @@ func TestSDNBridgeReplication_Update(t *testing.T) {
 	err = leaderSM.CreateBridge(ctx, bridge)
 	require.NoError(t, err)
 
-	time.Sleep(2 * time.Second)
+	stc.waitForBridge(ctx, t, bridge.ID)
 
 	// Update the bridge
 	bridge.STPEnabled = true
@@ -192,7 +213,10 @@ func TestSDNBridgeReplication_Update(t *testing.T) {
 	require.NoError(t, err)
 
 	// Wait for update to replicate
-	time.Sleep(2 * time.Second)
+	stc.waitForState(ctx, t, "bridge "+bridge.ID+" update", func(sm *sdncluster.QuicBaaSStateManager) bool {
+		retrieved, err := sm.GetBridge(ctx, bridge.ID)
+		return err == nil && retrieved.STPEnabled && retrieved.FailMode == "standalone"
+	})
 
 	// Verify update on followers
 	followers := stc.getFollowers()
@@ -228,9 +252,6 @@ func TestSDNBridgeReplication_Update(t *testing.T) {
 
 // TestSDNPortReplication tests that port state replicates across nodes.
 func TestSDNPortReplication(t *testing.T) {
-	skipIfNoRaftCluster(t)
-	skipIfNotIntegration(t)
-
 	stc := newSDNTestCluster(t, 3)
 	defer stc.stop()
 
@@ -260,7 +281,7 @@ func TestSDNPortReplication(t *testing.T) {
 	err = leaderSM.CreateBridge(ctx, bridge)
 	require.NoError(t, err)
 
-	time.Sleep(1 * time.Second)
+	stc.waitForBridge(ctx, t, bridgeID)
 
 	// Create a port
 	port := &sdncluster.PortState{
@@ -282,7 +303,10 @@ func TestSDNPortReplication(t *testing.T) {
 	t.Logf("Port %s created on bridge %s", port.ID, bridgeID)
 
 	// Wait for replication
-	time.Sleep(3 * time.Second)
+	stc.waitForState(ctx, t, "port "+port.ID, func(sm *sdncluster.QuicBaaSStateManager) bool {
+		_, err := sm.GetPort(ctx, port.ID)
+		return err == nil
+	})
 
 	// Verify port is visible from all nodes
 	for i := 0; i < stc.nodeCount(); i++ {
@@ -309,9 +333,6 @@ func TestSDNPortReplication(t *testing.T) {
 
 // TestSDNFlowReplication tests that flow rules replicate across nodes.
 func TestSDNFlowReplication(t *testing.T) {
-	skipIfNoRaftCluster(t)
-	skipIfNotIntegration(t)
-
 	stc := newSDNTestCluster(t, 3)
 	defer stc.stop()
 
@@ -340,7 +361,7 @@ func TestSDNFlowReplication(t *testing.T) {
 	err = leaderSM.CreateBridge(ctx, bridge)
 	require.NoError(t, err)
 
-	time.Sleep(1 * time.Second)
+	stc.waitForBridge(ctx, t, bridgeID)
 
 	// Create a flow rule
 	inPort := uint32(1)
@@ -371,7 +392,10 @@ func TestSDNFlowReplication(t *testing.T) {
 	t.Logf("Flow %s created on bridge %s", flow.ID, bridgeID)
 
 	// Wait for replication
-	time.Sleep(3 * time.Second)
+	stc.waitForState(ctx, t, "flow "+flow.ID, func(sm *sdncluster.QuicBaaSStateManager) bool {
+		_, err := sm.GetFlow(ctx, bridgeID, flow.ID)
+		return err == nil
+	})
 
 	// Verify flow is visible from all nodes
 	for i := 0; i < stc.nodeCount(); i++ {
@@ -398,9 +422,6 @@ func TestSDNFlowReplication(t *testing.T) {
 
 // TestSDNFlowReplication_MultipleFlows tests multiple flow replication.
 func TestSDNFlowReplication_MultipleFlows(t *testing.T) {
-	skipIfNoRaftCluster(t)
-	skipIfNotIntegration(t)
-
 	stc := newSDNTestCluster(t, 3)
 	defer stc.stop()
 
@@ -429,7 +450,7 @@ func TestSDNFlowReplication_MultipleFlows(t *testing.T) {
 	err = leaderSM.CreateBridge(ctx, bridge)
 	require.NoError(t, err)
 
-	time.Sleep(1 * time.Second)
+	stc.waitForBridge(ctx, t, bridgeID)
 
 	// Create multiple flows
 	const flowCount = 5
@@ -458,7 +479,10 @@ func TestSDNFlowReplication_MultipleFlows(t *testing.T) {
 	t.Logf("Created %d flows", flowCount)
 
 	// Wait for replication
-	time.Sleep(3 * time.Second)
+	stc.waitForState(ctx, t, fmt.Sprintf("%d flows on bridge %s", flowCount, bridgeID), func(sm *sdncluster.QuicBaaSStateManager) bool {
+		flows, err := sm.ListFlows(ctx, bridgeID)
+		return err == nil && len(flows) == flowCount
+	})
 
 	// Verify flows on followers
 	followers := stc.getFollowers()
@@ -495,9 +519,6 @@ func TestSDNFlowReplication_MultipleFlows(t *testing.T) {
 
 // TestSDNStateConsistency tests read-after-write consistency.
 func TestSDNStateConsistency(t *testing.T) {
-	skipIfNoRaftCluster(t)
-	skipIfNotIntegration(t)
-
 	stc := newSDNTestCluster(t, 3)
 	defer stc.stop()
 
@@ -534,7 +555,7 @@ func TestSDNStateConsistency(t *testing.T) {
 	t.Log("Read-after-write consistency verified on leader")
 
 	// Wait for replication to followers
-	time.Sleep(3 * time.Second)
+	stc.waitForBridge(ctx, t, bridge.ID)
 
 	// All followers should now have consistent state
 	for i := 0; i < stc.nodeCount(); i++ {
@@ -557,9 +578,6 @@ func TestSDNStateConsistency(t *testing.T) {
 
 // TestSDNStateConsistency_ConcurrentReads tests concurrent read consistency.
 func TestSDNStateConsistency_ConcurrentReads(t *testing.T) {
-	skipIfNoRaftCluster(t)
-	skipIfNotIntegration(t)
-
 	stc := newSDNTestCluster(t, 3)
 	defer stc.stop()
 
@@ -589,7 +607,7 @@ func TestSDNStateConsistency_ConcurrentReads(t *testing.T) {
 	require.NoError(t, err)
 
 	// Wait for replication
-	time.Sleep(3 * time.Second)
+	stc.waitForBridge(ctx, t, bridge.ID)
 
 	// Concurrent reads from all nodes
 	results := make(chan *sdncluster.BridgeState, stc.nodeCount())
@@ -640,9 +658,6 @@ func TestSDNStateConsistency_ConcurrentReads(t *testing.T) {
 
 // TestSDNFailoverPersistence tests that state survives leader change.
 func TestSDNFailoverPersistence(t *testing.T) {
-	skipIfNoRaftCluster(t)
-	skipIfNotIntegration(t)
-
 	stc := newSDNTestCluster(t, 3)
 	defer stc.stop()
 
@@ -689,7 +704,11 @@ func TestSDNFailoverPersistence(t *testing.T) {
 	t.Logf("Created bridge %s and port %s before failover", bridge.ID, port.ID)
 
 	// Wait for replication
-	time.Sleep(3 * time.Second)
+	stc.waitForState(ctx, t, "bridge "+bridge.ID+" and port "+port.ID, func(sm *sdncluster.QuicBaaSStateManager) bool {
+		_, bridgeErr := sm.GetBridge(ctx, bridge.ID)
+		_, portErr := sm.GetPort(ctx, port.ID)
+		return bridgeErr == nil && portErr == nil
+	})
 
 	// Simulate leader failover
 	originalLeader := stc.getLeader()
@@ -711,7 +730,9 @@ func TestSDNFailoverPersistence(t *testing.T) {
 		mockOp.setLeader(newLeaderNode.id)
 	}
 
-	time.Sleep(2 * time.Second)
+	if _, err := waitForNewLeader(ctx, defaultLeaderTimeout, []*testNode{newLeaderNode}); err != nil {
+		t.Logf("%v", err)
+	}
 
 	// Find the new leader's state manager
 	var newLeaderSM *sdncluster.QuicBaaSStateManager
@@ -741,9 +762,6 @@ func TestSDNFailoverPersistence(t *testing.T) {
 
 // TestSDNFailoverPersistence_WriteAfterFailover tests writes work after failover.
 func TestSDNFailoverPersistence_WriteAfterFailover(t *testing.T) {
-	skipIfNoRaftCluster(t)
-	skipIfNotIntegration(t)
-
 	stc := newSDNTestCluster(t, 3)
 	defer stc.stop()
 
@@ -771,7 +789,7 @@ func TestSDNFailoverPersistence_WriteAfterFailover(t *testing.T) {
 	err = leaderSM.CreateBridge(ctx, initialBridge)
 	require.NoError(t, err)
 
-	time.Sleep(2 * time.Second)
+	stc.waitForBridge(ctx, t, initialBridge.ID)
 
 	// Simulate failover
 	originalLeader := stc.getLeader()
@@ -792,7 +810,9 @@ func TestSDNFailoverPersistence_WriteAfterFailover(t *testing.T) {
 		mockOp.setLeader(newLeaderNode.id)
 	}
 
-	time.Sleep(2 * time.Second)
+	if _, err := waitForNewLeader(ctx, defaultLeaderTimeout, []*testNode{newLeaderNode}); err != nil {
+		t.Logf("%v", err)
+	}
 
 	// Get new leader's state manager
 	var newLeaderSM *sdncluster.QuicBaaSStateManager

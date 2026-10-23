@@ -23,7 +23,7 @@ EnvironmentFile=-/etc/trusted-platform/platformd.env
 
 # Service execution
 # Listens on Unix socket at /var/run/platformd.sock for gRPC IPC
-ExecStart=/usr/local/bin/platformd --config=/etc/trusted-platform/config.yaml --socket=/var/run/platformd.sock --log-dir=/var/log/trusted-platform ${PLATFORMD_DEBUG}
+ExecStart=/usr/local/bin/platformd serve --config=/etc/trusted-platform/config.yaml --socket-path=/var/run/platformd.sock --log-dir=/var/log/trusted-platform --enable-mtls ${PLATFORMD_DEBUG}
 
 # Process management
 Restart=on-failure

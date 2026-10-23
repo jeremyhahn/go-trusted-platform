@@ -245,6 +245,7 @@ type Orchestrator struct {
 	configServerReady ConfigServerReadiness
 	bmcTLSProvider    bmc.TLSProvider // run-scoped TLS provider for BMC connections; nil ⇒ system roots
 	trustConfig       *trust.Config   // base trust config; merged with per-node bmc_spki_pin/bmc_trust for node-scoped BMC TLS
+	discoverMACs      macDiscoverer   // nil ⇒ bmc.DiscoverMACs
 
 	// cpCAPool is populated after the control-plane CA bundle is successfully
 	// fetched via fetchControlPlaneCABundle (capture-then-verify). Once set,
@@ -333,7 +334,7 @@ func NewOrchestrator(params OrchestratorParams) (*Orchestrator, error) {
 	}
 	healthChk := params.HealthChecker
 	if healthChk == nil {
-		hc := newHTTPHealthChecker(logger, nil)
+		hc := newHTTPHealthChecker(logger, nil, params.Config.HealthProbePorts())
 		// Wire the pxeboot base URL so the checker can consult the
 		// node-uploaded registration.json as the authoritative signal
 		// that platformd is actually running, instead of guessing at
@@ -417,8 +418,17 @@ func (o *Orchestrator) Run(ctx context.Context) (*BootstrapResult, error) {
 		o.logger.Debug("bootstrap: skipping bmc-enroll phase (no nodes with bmc_enroll: true)")
 	}
 
-	// Phase 7: Auto-teardown bootstrap container (non-fatal).
-	if o.deployer != nil {
+	// Phase 7: Auto-teardown bootstrap container (non-fatal). A boot node
+	// is the segment's long-running netboot server, so it keeps serving:
+	// neither the container nor data_dir is removed, and only an explicit
+	// Teardown takes it down.
+	switch {
+	case o.deployer == nil:
+	case o.config.Deployer.BootNode:
+		o.logger.Info("bootstrap: boot-node mode, keeping the bootstrap container serving",
+			slog.String("host", o.config.Deployer.Host),
+			slog.String("data_dir", o.config.Deployer.EffectiveDataDir()))
+	default:
 		// Health gate: verify all control-plane nodes are serving before
 		// tearing down the bootstrap container. The container typically
 		// provides DHCP/DNS -- removing it before the control-plane takes
@@ -473,8 +483,12 @@ func (o *Orchestrator) Teardown(ctx context.Context) error {
 // configuration, and the bootstrap container — deployed when there is a
 // deployer, otherwise verified as the one the operator runs.
 func (o *Orchestrator) bringUpContainer(ctx context.Context, result *BootstrapResult) error {
-	// Phase 0: Discovery.
+	// Phase 0: Discovery. A node config the network cannot take is
+	// refused before anything is touched.
 	result.Phase = phaseDiscovery
+	if err := o.checkNodeConfigs(); err != nil {
+		return ErrBootstrapFailed{Phase: phaseDiscovery, Cause: err}
+	}
 	discovered, err := o.discover(ctx)
 	if err != nil {
 		return ErrBootstrapFailed{Phase: phaseDiscovery, Cause: err}
@@ -530,7 +544,9 @@ func (o *Orchestrator) discover(ctx context.Context) ([]DiscoveredNode, error) {
 	o.logger.Info("bootstrap: starting node discovery",
 		slog.Int("node_count", len(o.config.Nodes)))
 	discovered, err := DiscoverNodes(ctx, o.config.Nodes, o.logger, DiscoveryOptions{
-		TLSProvider: o.bmcTLSProvider,
+		TLSProvider:   o.bmcTLSProvider,
+		ClientFactory: o.bmcFactory,
+		discoverMACs:  o.discoverMACs,
 	})
 	if err != nil {
 		return nil, err
@@ -661,29 +677,7 @@ func (o *Orchestrator) provisionControlPlane(ctx context.Context, result *Bootst
 	o.logger.Info("bootstrap: provisioning control plane nodes",
 		slog.Int("count", len(cpNodes)))
 
-	errCh := make(chan error, len(cpNodes))
-	var wg sync.WaitGroup
-
-	for i := range cpNodes {
-		node := &cpNodes[i]
-		wg.Add(1)
-		go func(n *DiscoveredNode) {
-			defer wg.Done()
-			errCh <- o.provisionNode(ctx, n, result)
-		}(node)
-	}
-
-	go func() {
-		wg.Wait()
-		close(errCh)
-	}()
-
-	for err := range errCh {
-		if err != nil {
-			return err
-		}
-	}
-	return nil
+	return o.provisionNodes(ctx, cpNodes, result)
 }
 
 // provisionRemainingNodes provisions gateway and worker nodes.
@@ -703,29 +697,33 @@ func (o *Orchestrator) provisionRemainingNodes(ctx context.Context, result *Boot
 	o.logger.Info("bootstrap: provisioning remaining nodes",
 		slog.Int("count", len(remaining)))
 
-	errCh := make(chan error, len(remaining))
+	return o.provisionNodes(ctx, remaining, result)
+}
+
+// provisionNodes provisions nodes in parallel and returns only once every
+// one has finished, so a node that fails early never ends the phase — and
+// with it the PXE and registration servers — under a sibling that is still
+// installing. One failure is returned as is; several are returned together
+// as ErrNodesProvisionFailed, in node order.
+func (o *Orchestrator) provisionNodes(ctx context.Context, nodes []DiscoveredNode, result *BootstrapResult) error {
+	errs := make([]error, len(nodes))
 	var wg sync.WaitGroup
-
-	for i := range remaining {
-		node := &remaining[i]
-		wg.Add(1)
-		go func(n *DiscoveredNode) {
-			defer wg.Done()
-			errCh <- o.provisionNode(ctx, n, result)
-		}(node)
+	for i := range nodes {
+		wg.Go(func() {
+			errs[i] = o.provisionNode(ctx, &nodes[i], result)
+		})
 	}
+	wg.Wait()
 
-	go func() {
-		wg.Wait()
-		close(errCh)
-	}()
-
-	for err := range errCh {
-		if err != nil {
-			return err
-		}
+	failures := nonNilErrors(errs...)
+	switch len(failures) {
+	case 0:
+		return nil
+	case 1:
+		return failures[0]
+	default:
+		return ErrNodesProvisionFailed{Failures: failures}
 	}
-	return nil
 }
 
 // provisionNode handles a single node: BMC boot setup + health wait. The
@@ -1050,7 +1048,7 @@ func (o *Orchestrator) seedTemplatesWithSeeder(ctx context.Context) (*Seeder, er
 				slog.String("ip", controlHost))
 		}
 	}
-	controlAddr := controlHost + ":8443"
+	controlAddr := net.JoinHostPort(controlHost, o.controlPlanePort())
 	o.logger.Info("bootstrap: seeding templates to control plane",
 		slog.String("address", controlAddr))
 
@@ -1431,23 +1429,27 @@ func (o *Orchestrator) newTicker(interval time.Duration) (<-chan time.Time, func
 
 // awaitPostInstallHealth is the post-install health wait shared by the
 // PXE, virtual-media and unmanaged paths. It runs under
-// defaultPostInstallHealthTimeout and, for a control-plane node whose
-// probes the built-in checker verifies, captures the node's CA bundle
-// first so the probe has the trust anchor it verifies against, and
-// probes with the control plane's TLS name so a certificate issued for
-// that name verifies while the node is dialed by address.
+// defaultPostInstallHealthTimeout and, when the built-in checker owns
+// probe trust, verifies every role against the platform anchor: it
+// captures the control plane's CA bundle first so the probe has the
+// anchor, and probes with the name the node's certificate carries — the
+// control plane's public webservice name, or a gateway's or worker's
+// platform-listener name from its role template — so a DNS-only leaf
+// verifies while the node is dialed by address.
 //
 // The ordering is the whole point (#107): a control plane self-provisions
 // its CA seconds before it starts serving, so probing before the bundle is
 // captured verifies its leaf against the system pool and fails for the
-// entire window, however healthy the node is.
+// entire window, however healthy the node is. Every other node's platform
+// listener serves a leaf the control plane issued (device-attest-01), so
+// the same bundle, already cached by then, verifies it (#655).
 func (o *Orchestrator) awaitPostInstallHealth(ctx context.Context, node *DiscoveredNode, healthAddrs []string, installURL string) error {
 	healthCtx, healthCancel := context.WithTimeout(ctx, o.config.EffectivePostInstallHealthTimeout())
 	defer healthCancel()
 	joined := strings.Join(healthAddrs, ",")
 	serverName := ""
-	if node.Role == RoleControlPlane && o.ownsHealthCheckerTrust() {
-		tlsName, err := o.controlPlaneTLSName()
+	if o.ownsHealthCheckerTrust() {
+		tlsName, err := o.postInstallTLSName(node)
 		if err != nil {
 			return ErrHealthCheckFailed{Address: joined, Cause: err}
 		}
@@ -1628,6 +1630,7 @@ func toDiscoveredNodeInfos(nodes []DiscoveredNode) []container.DiscoveredNodeInf
 			Hostname:     nodes[i].Hostname,
 			Architecture: nodes[i].IPXEArchitecture(),
 			MediaSet:     nodes[i].MediaSet(),
+			BootModel:    nodes[i].EffectiveBootModel(),
 		}
 	}
 	return infos
@@ -1640,8 +1643,8 @@ func toDiscoveredNodeInfos(nodes []DiscoveredNode) []container.DiscoveredNodeInf
 // The registration.json path is authoritative: the node self-reports
 // `{"services":{"platformd":"running","sshd":"running"}}` after it has
 // fully booted and all services are listening. Polling that artifact
-// avoids having to guess the correct webservice port (CP uses 8443,
-// gateway uses 443/9443) and avoids the need for InsecureSkipVerify
+// avoids having to guess the correct webservice port (CP uses
+// platform.control_plane_port, gateway uses 443/9443) and avoids the need for InsecureSkipVerify
 // against a not-yet-trusted CA.
 type httpHealthChecker struct {
 	// client probes without an expected server name; namedClients hold
@@ -1658,17 +1661,15 @@ type httpHealthChecker struct {
 
 // newHTTPHealthChecker creates a health checker that first probes the
 // pxeboot-hosted registration.json (plain HTTP, known-trusted) and
-// falls back to HTTPS /api/v1/status across the candidate platformd
-// ports. When caPool is non-nil it is used to verify the server's TLS
+// falls back to HTTPS /api/v1/status across httpsPorts, the candidate
+// platformd ports (BootstrapConfig.HealthProbePorts). When caPool is non-nil it is used to verify the server's TLS
 // certificate; when nil the system certificate pool is used.
-func newHTTPHealthChecker(logger *slog.Logger, caPool *x509.CertPool) *httpHealthChecker {
-	// Force the pure-Go DNS resolver to avoid SIGFPE in CGO's getaddrinfo
-	// when running as a statically linked binary with glibc.
+func newHTTPHealthChecker(logger *slog.Logger, caPool *x509.CertPool, httpsPorts []int) *httpHealthChecker {
 	return &httpHealthChecker{
 		client:     newHealthHTTPClient(caPool, ""),
 		caPool:     caPool,
 		logger:     logger,
-		httpsPorts: []int{8443, 9443, 443},
+		httpsPorts: httpsPorts,
 	}
 }
 
@@ -1760,7 +1761,7 @@ type regStatus struct {
 // target IP when the hostname wouldn't resolve, but it is never
 // authoritative on its own — the file is written by the forensic
 // uploader early in firstboot, BEFORE platformd reaches listening
-// state, so trusting it would let health return true while :8443 is
+// state, so trusting it would let health return true while the webservice is
 // still down and subsequent seed/gRPC calls fail with "connection
 // refused".
 func (h *httpHealthChecker) Check(ctx context.Context, address string) error {
@@ -1796,7 +1797,7 @@ func (h *httpHealthChecker) CheckServerName(ctx context.Context, address, server
 
 	var lastErr error
 	for _, port := range h.httpsPorts {
-		url := fmt.Sprintf("https://%s:%d/api/v1/status", probeAddr, port)
+		url := "https://" + net.JoinHostPort(probeAddr, strconv.Itoa(port)) + "/api/v1/status"
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 		if err != nil {
 			lastErr = err
@@ -1804,7 +1805,7 @@ func (h *httpHealthChecker) CheckServerName(ctx context.Context, address, server
 		}
 		resp, err := client.Do(req)
 		if err != nil {
-			lastErr = err
+			lastErr = probeFailure(lastErr, err)
 			continue
 		}
 		resp.Body.Close()
@@ -1817,4 +1818,21 @@ func (h *httpHealthChecker) CheckServerName(ctx context.Context, address, server
 		return ErrHealthCheckFailed{Address: probeAddr, Cause: lastErr}
 	}
 	return ErrHealthCheckFailed{Address: probeAddr}
+}
+
+// probeFailure keeps the more telling of two port failures. A port that
+// answered — and then failed TLS verification or returned a bad status —
+// says more about the node than a port that refused the dial, so a dial
+// failure never replaces it.
+func probeFailure(kept, next error) error {
+	if kept != nil && !isDialError(kept) && isDialError(next) {
+		return kept
+	}
+	return next
+}
+
+// isDialError reports whether err is a failure to open the connection.
+func isDialError(err error) bool {
+	var opErr *net.OpError
+	return errors.As(err, &opErr) && opErr.Op == "dial"
 }

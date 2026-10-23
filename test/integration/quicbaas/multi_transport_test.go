@@ -22,6 +22,7 @@ import (
 	quicbaassdk "github.com/jeremyhahn/go-quicbaas/sdk/go"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/storage/quicbaas"
+	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -29,8 +30,6 @@ import (
 // TestSDKMultiTransport tests the QuicBaaS SDK across different transport modes.
 // This is the primary integration test for verifying multi-transport support.
 func TestSDKMultiTransport(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	// Test embedded transport (in-process) - this is the default and most common mode
 	t.Run("Embedded", func(t *testing.T) {
 		testEmbeddedTransport(t)
@@ -249,7 +248,7 @@ func testSDKKVOperations(t *testing.T, sdk quicbaassdk.Client) {
 			EntityType: entityType,
 			ID:         entityID,
 		})
-		return err == nil && !getResp.Found
+		return helpers.KVEntityAbsent(getResp, err)
 	}, 5*time.Second, 100*time.Millisecond, "Entity should be deleted")
 }
 
@@ -270,8 +269,6 @@ func testSDKHealthCheck(t *testing.T, sdk quicbaassdk.Client) {
 
 // TestFactorySDKClientLifecycle tests the SDK client lifecycle through the factory.
 func TestFactorySDKClientLifecycle(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	cfg := quicbaas.TestConfig(t)
 	cfg.Transport = quicbaas.TransportEmbedded
 	logger := logging.DefaultLogger()
@@ -318,8 +315,6 @@ func TestFactorySDKClientLifecycle(t *testing.T) {
 
 // TestFactoryMultipleStartStop tests that factory can be started and stopped multiple times.
 func TestFactoryMultipleStartStop(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	cfg := quicbaas.TestConfig(t)
 	cfg.Transport = quicbaas.TransportEmbedded
 	logger := logging.DefaultLogger()
@@ -351,8 +346,6 @@ func TestFactoryMultipleStartStop(t *testing.T) {
 
 // TestSDKClientServiceAccessors tests that SDK service accessors return consistent clients.
 func TestSDKClientServiceAccessors(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	tf := newTestFactory(t)
 	defer tf.Cleanup()
 
@@ -378,8 +371,6 @@ func TestSDKClientServiceAccessors(t *testing.T) {
 
 // TestEmbeddedTransportConfig tests embedded transport configuration.
 func TestEmbeddedTransportConfig(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	tests := []struct {
 		name       string
 		configFunc func(t *testing.T) *quicbaas.Config
@@ -444,8 +435,6 @@ func TestEmbeddedTransportConfig(t *testing.T) {
 
 // TestSDKClientConcurrentAccess tests concurrent access to SDK service clients.
 func TestSDKClientConcurrentAccess(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	tf := newTestFactory(t)
 	defer tf.Cleanup()
 
@@ -480,8 +469,6 @@ func TestSDKClientConcurrentAccess(t *testing.T) {
 
 // TestSDKClientKVConcurrentOperations tests concurrent KV operations.
 func TestSDKClientKVConcurrentOperations(t *testing.T) {
-	skipIfNotIntegration(t)
-
 	tf := newTestFactory(t)
 	defer tf.Cleanup()
 

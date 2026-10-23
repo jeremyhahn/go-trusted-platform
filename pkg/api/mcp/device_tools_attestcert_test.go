@@ -37,12 +37,12 @@ func deviceToolProperties(t *testing.T, name string) map[string]interface{} {
 	return nil
 }
 
-// TestDeviceToolsV2_SchemasCarryAttestCert pins that wherever the MCP device
-// schemas carry attest_pub they carry attest_cert beside it (#404). These
-// are the device_create / device_update_by_id schemas; docs/device/api.md §6
-// records that this family is advertised without an executor.
-func TestDeviceToolsV2_SchemasCarryAttestCert(t *testing.T) {
-	for _, name := range []string{"device_create", "device_update_by_id"} {
+// TestDeviceRegister_SchemaCarriesAttestCert pins that wherever the MCP device
+// schemas carry attest_pub they carry attest_cert beside it (#404). Only
+// device_register does: the enrollment set is server-owned on update
+// (docs/device/api.md §3.3).
+func TestDeviceRegister_SchemaCarriesAttestCert(t *testing.T) {
+	for _, name := range []string{"device_register"} {
 		props := deviceToolProperties(t, name)
 		if _, ok := props["attest_pub"]; !ok {
 			t.Fatalf("%s: attest_pub missing; the mirror premise no longer holds", name)
@@ -60,23 +60,26 @@ func TestDeviceToolsV2_SchemasCarryAttestCert(t *testing.T) {
 	}
 }
 
-// TestDeviceToolsV2_AttestCertNotRequired proves the certificate is optional
+// TestDeviceRegister_AttestCertNotRequired proves the certificate is optional
 // on create: the CA issues it at enrollment, and a manual registration
 // without one must still be expressible (it is then denied at attest time,
 // never faked).
-func TestDeviceToolsV2_AttestCertNotRequired(t *testing.T) {
+func TestDeviceRegister_AttestCertNotRequired(t *testing.T) {
 	registry := NewToolRegistry(newMockServiceProvider(), logging.DefaultLogger())
 	for _, tool := range registry.ListTools() {
-		if tool.Name != "device_create" {
+		if tool.Name != "device_register" {
 			continue
 		}
-		required, _ := tool.InputSchema["required"].([]string)
+		required, ok := tool.InputSchema["required"].([]string)
+		if !ok {
+			t.Fatal("device_register: input schema has no required list")
+		}
 		for _, r := range required {
 			if r == "attest_cert" {
-				t.Fatal("attest_cert must not be a required field on device_create")
+				t.Fatal("attest_cert must not be a required field on device_register")
 			}
 		}
 		return
 	}
-	t.Fatal("device_create is not registered")
+	t.Fatal("device_register is not registered")
 }

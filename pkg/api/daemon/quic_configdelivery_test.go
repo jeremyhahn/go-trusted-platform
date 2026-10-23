@@ -24,10 +24,10 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
-	"github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/provisioning/configdelivery"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 )
 
 // =============================================================================
@@ -38,34 +38,34 @@ import (
 // config delivery service (nil allowed to exercise the unavailable guard).
 func newProvisioningQUICHandler(svc ConfigDeliveryQUICService) *QUICServiceHandler {
 	if svc == nil {
-		return NewQUICServiceHandler(nil)
+		return newTestQUICServiceHandler(nil)
 	}
-	return NewQUICServiceHandler(nil, WithQUICConfigDeliveryService(svc))
+	return newTestQUICServiceHandler(nil, WithQUICConfigDeliveryService(svc))
 }
 
 // provisioningQUICRequest builds an OpProvisioningCategory request with
 // the given sub-opcode and optional body, encoding the body exactly as
 // the SDK QUIC transport does (the platformv1 proto struct directly).
-func provisioningQUICRequest(t *testing.T, sub byte, body interface{}) *quic.Request {
+func provisioningQUICRequest(t *testing.T, sub byte, body interface{}) *quicwire.Request {
 	t.Helper()
 	payload := []byte{sub}
 	if body != nil {
-		encoded, err := quic.EncodePayload(body)
+		encoded, err := quicwire.EncodePayload(body)
 		if err != nil {
 			t.Fatalf("encode %T: %v", body, err)
 		}
 		payload = append(payload, encoded...)
 	}
-	return &quic.Request{Opcode: quic.OpProvisioningCategory, Payload: payload}
+	return &quicwire.Request{Opcode: quicwire.OpProvisioningCategory, Payload: payload}
 }
 
 // decodeProvisioningOK asserts StatusOK and decodes the response payload.
-func decodeProvisioningOK(t *testing.T, resp *quic.Response, out interface{}) {
+func decodeProvisioningOK(t *testing.T, resp *quicwire.Response, out interface{}) {
 	t.Helper()
-	if resp.Status != quic.StatusOK {
+	if resp.Status != quicwire.StatusOK {
 		t.Fatalf("expected StatusOK, got 0x%02x (payload: %s)", resp.Status, resp.Payload)
 	}
-	if err := quic.DecodePayload(resp.Payload, out); err != nil {
+	if err := quicwire.DecodePayload(resp.Payload, out); err != nil {
 		t.Fatalf("decode response into %T: %v", out, err)
 	}
 }
@@ -393,8 +393,8 @@ func TestQUICWireCompatProvisioningFlatResponsesRoundTrip(t *testing.T) {
 func TestProvisioningCategory_NilService(t *testing.T) {
 	handler := newProvisioningQUICHandler(nil)
 	resp := handler.HandleRequest(context.Background(),
-		provisioningQUICRequest(t, quic.ProvisioningSubGetNonce, nil))
-	if resp.Status != quic.StatusUnavailable {
+		provisioningQUICRequest(t, quicwire.ProvisioningSubGetNonce, nil))
+	if resp.Status != quicwire.StatusUnavailable {
 		t.Fatalf("expected StatusUnavailable, got 0x%02x", resp.Status)
 	}
 	if !strings.Contains(string(resp.Payload), ErrConfigDeliveryServiceNotAvailable{}.Error()) {
@@ -405,18 +405,25 @@ func TestProvisioningCategory_NilService(t *testing.T) {
 func TestProvisioningCategory_EmptyPayload(t *testing.T) {
 	handler, _ := newProvisioningBackedHandler(t, &cdMockProfileResolver{}, nil)
 	resp := handler.HandleRequest(context.Background(),
-		&quic.Request{Opcode: quic.OpProvisioningCategory})
-	if resp.Status != quic.StatusInvalidRequest {
+		&quicwire.Request{Opcode: quicwire.OpProvisioningCategory})
+	if resp.Status != quicwire.StatusInvalidRequest {
 		t.Fatalf("expected StatusInvalidRequest, got 0x%02x", resp.Status)
 	}
 }
 
 func TestProvisioningCategory_UnknownSubOpcode(t *testing.T) {
 	handler, _ := newProvisioningBackedHandler(t, &cdMockProfileResolver{}, nil)
+	// The authorization guard refuses an unclassified sub-opcode before
+	// dispatch; the category handler still rejects it on its own.
 	resp := handler.HandleRequest(context.Background(),
 		provisioningQUICRequest(t, 0xEE, nil))
-	if resp.Status != quic.StatusNotImplemented {
-		t.Fatalf("expected StatusNotImplemented, got 0x%02x", resp.Status)
+	if resp.Status != quicwire.StatusPermissionDenied {
+		t.Fatalf("expected StatusPermissionDenied, got 0x%02x", resp.Status)
+	}
+	resp = handler.handleProvisioningCategory(context.Background(),
+		provisioningQUICRequest(t, 0xEE, nil))
+	if resp.Status != quicwire.StatusNotImplemented {
+		t.Fatalf("handler: expected StatusNotImplemented, got 0x%02x", resp.Status)
 	}
 }
 
@@ -427,7 +434,7 @@ func TestProvisioningCategory_UnknownSubOpcode(t *testing.T) {
 func TestProvisioningQUIC_GetNonce(t *testing.T) {
 	handler, _ := newProvisioningBackedHandler(t, &cdMockProfileResolver{}, nil)
 	resp := handler.HandleRequest(context.Background(),
-		provisioningQUICRequest(t, quic.ProvisioningSubGetNonce, nil))
+		provisioningQUICRequest(t, quicwire.ProvisioningSubGetNonce, nil))
 
 	var out ConfigDeliveryGetNonceResponse
 	decodeProvisioningOK(t, resp, &out)
@@ -446,7 +453,7 @@ func TestProvisioningQUIC_FetchConfig_Delivered(t *testing.T) {
 	handler, backing := newProvisioningBackedHandler(t, resolver, nil)
 
 	resp := handler.HandleRequest(context.Background(),
-		provisioningQUICRequest(t, quic.ProvisioningSubFetchConfig, &platformv1.FetchConfigRequest{
+		provisioningQUICRequest(t, quicwire.ProvisioningSubFetchConfig, &platformv1.FetchConfigRequest{
 			EkSerial: "ek-123",
 			EabKeyId: "key-1",
 			EabHmac:  cdValidEABHMAC(),
@@ -474,7 +481,7 @@ func TestProvisioningQUIC_FetchConfig_Pending(t *testing.T) {
 	handler, backing := newProvisioningBackedHandler(t, &cdMockProfileResolver{}, nil)
 
 	resp := handler.HandleRequest(context.Background(),
-		provisioningQUICRequest(t, quic.ProvisioningSubFetchConfig, &platformv1.FetchConfigRequest{
+		provisioningQUICRequest(t, quicwire.ProvisioningSubFetchConfig, &platformv1.FetchConfigRequest{
 			EkSerial: "ek-unmatched",
 			EabKeyId: "key-1",
 			EabHmac:  cdValidEABHMAC(),
@@ -501,13 +508,13 @@ func TestProvisioningQUIC_FetchConfig_InvalidNonce(t *testing.T) {
 	handler, _ := newProvisioningBackedHandler(t, &cdMockProfileResolver{}, nil)
 
 	resp := handler.HandleRequest(context.Background(),
-		provisioningQUICRequest(t, quic.ProvisioningSubFetchConfig, &platformv1.FetchConfigRequest{
+		provisioningQUICRequest(t, quicwire.ProvisioningSubFetchConfig, &platformv1.FetchConfigRequest{
 			EkSerial: "ek-123",
 			EabKeyId: "key-1",
 			EabHmac:  cdValidEABHMAC(),
 			Nonce:    "never-issued",
 		}))
-	if resp.Status != quic.StatusInvalidArgument {
+	if resp.Status != quicwire.StatusInvalidArgument {
 		t.Fatalf("expected StatusInvalidArgument, got 0x%02x (payload: %s)", resp.Status, resp.Payload)
 	}
 }
@@ -516,8 +523,8 @@ func TestProvisioningQUIC_FetchConfig_DecodeError(t *testing.T) {
 	handler, _ := newProvisioningBackedHandler(t, &cdMockProfileResolver{}, nil)
 
 	resp := handler.HandleRequest(context.Background(),
-		provisioningQUICRequest(t, quic.ProvisioningSubFetchConfig, []string{"not", "a", "struct"}))
-	if resp.Status != quic.StatusInvalidRequest {
+		provisioningQUICRequest(t, quicwire.ProvisioningSubFetchConfig, []string{"not", "a", "struct"}))
+	if resp.Status != quicwire.StatusInvalidRequest {
 		t.Fatalf("expected StatusInvalidRequest, got 0x%02x", resp.Status)
 	}
 }
@@ -533,7 +540,7 @@ func TestProvisioningQUIC_SignDigest_Success(t *testing.T) {
 	handler, backing := newProvisioningBackedHandler(t, resolver, signer)
 
 	resp := handler.HandleRequest(context.Background(),
-		provisioningQUICRequest(t, quic.ProvisioningSubSignDigest, &platformv1.SignDigestRequest{
+		provisioningQUICRequest(t, quicwire.ProvisioningSubSignDigest, &platformv1.SignDigestRequest{
 			EkSerial: "ek-123",
 			EabKeyId: "key-1",
 			EabHmac:  cdValidEABHMAC(),
@@ -555,14 +562,14 @@ func TestProvisioningQUIC_SignDigest_SignerUnavailable(t *testing.T) {
 	handler, backing := newProvisioningBackedHandler(t, &cdMockProfileResolver{}, nil)
 
 	resp := handler.HandleRequest(context.Background(),
-		provisioningQUICRequest(t, quic.ProvisioningSubSignDigest, &platformv1.SignDigestRequest{
+		provisioningQUICRequest(t, quicwire.ProvisioningSubSignDigest, &platformv1.SignDigestRequest{
 			EkSerial: "ek-123",
 			EabKeyId: "key-1",
 			EabHmac:  cdValidEABHMAC(),
 			Nonce:    cdIssueNonce(t, backing),
 			Digest:   []byte("digest"),
 		}))
-	if resp.Status != quic.StatusUnavailable {
+	if resp.Status != quicwire.StatusUnavailable {
 		t.Fatalf("expected StatusUnavailable, got 0x%02x (payload: %s)", resp.Status, resp.Payload)
 	}
 }
@@ -577,7 +584,7 @@ func TestProvisioningQUIC_SignDigest_NotConfigured(t *testing.T) {
 	handler, backing := newProvisioningBackedHandler(t, resolver, signer)
 
 	resp := handler.HandleRequest(context.Background(),
-		provisioningQUICRequest(t, quic.ProvisioningSubSignDigest, &platformv1.SignDigestRequest{
+		provisioningQUICRequest(t, quicwire.ProvisioningSubSignDigest, &platformv1.SignDigestRequest{
 			EkSerial: "ek-123",
 			EabKeyId: "key-1",
 			EabHmac:  cdValidEABHMAC(),
@@ -585,7 +592,7 @@ func TestProvisioningQUIC_SignDigest_NotConfigured(t *testing.T) {
 			Digest:   []byte("digest"),
 		}))
 	// FailedPrecondition (REST 409) maps to StatusInvalidRequest on QUIC.
-	if resp.Status != quic.StatusInvalidRequest {
+	if resp.Status != quicwire.StatusInvalidRequest {
 		t.Fatalf("expected StatusInvalidRequest, got 0x%02x (payload: %s)", resp.Status, resp.Payload)
 	}
 }
@@ -595,7 +602,7 @@ func TestProvisioningQUIC_PollSession_Pending(t *testing.T) {
 	session := backing.CreateSession("ek-1", "aa:bb:cc:dd:ee:ff")
 
 	resp := handler.HandleRequest(context.Background(),
-		provisioningQUICRequest(t, quic.ProvisioningSubPollSession,
+		provisioningQUICRequest(t, quicwire.ProvisioningSubPollSession,
 			&platformv1.PollSessionRequest{SessionId: session.ID}))
 
 	var out ConfigDeliveryPollSessionResponse
@@ -616,7 +623,7 @@ func TestProvisioningQUIC_PollSession_Delivered(t *testing.T) {
 	}
 
 	resp := handler.HandleRequest(context.Background(),
-		provisioningQUICRequest(t, quic.ProvisioningSubPollSession,
+		provisioningQUICRequest(t, quicwire.ProvisioningSubPollSession,
 			&platformv1.PollSessionRequest{SessionId: session.ID}))
 
 	var out ConfigDeliveryPollSessionResponse
@@ -637,9 +644,9 @@ func TestProvisioningQUIC_PollSession_NotFound(t *testing.T) {
 	handler, _ := newProvisioningBackedHandler(t, &cdMockProfileResolver{}, nil)
 
 	resp := handler.HandleRequest(context.Background(),
-		provisioningQUICRequest(t, quic.ProvisioningSubPollSession,
+		provisioningQUICRequest(t, quicwire.ProvisioningSubPollSession,
 			&platformv1.PollSessionRequest{SessionId: "missing"}))
-	if resp.Status != quic.StatusNotFound {
+	if resp.Status != quicwire.StatusNotFound {
 		t.Fatalf("expected StatusNotFound, got 0x%02x (payload: %s)", resp.Status, resp.Payload)
 	}
 }
@@ -648,9 +655,9 @@ func TestProvisioningQUIC_PollSession_MissingSessionID(t *testing.T) {
 	handler, _ := newProvisioningBackedHandler(t, &cdMockProfileResolver{}, nil)
 
 	resp := handler.HandleRequest(context.Background(),
-		provisioningQUICRequest(t, quic.ProvisioningSubPollSession,
+		provisioningQUICRequest(t, quicwire.ProvisioningSubPollSession,
 			&platformv1.PollSessionRequest{}))
-	if resp.Status != quic.StatusInvalidArgument {
+	if resp.Status != quicwire.StatusInvalidArgument {
 		t.Fatalf("expected StatusInvalidArgument, got 0x%02x", resp.Status)
 	}
 }
@@ -660,7 +667,7 @@ func TestProvisioningQUIC_FulfillSession_Success(t *testing.T) {
 	session := backing.CreateSession("ek-1", "aa:bb:cc:dd:ee:ff")
 
 	resp := handler.HandleRequest(context.Background(),
-		provisioningQUICRequest(t, quic.ProvisioningSubFulfillSession,
+		provisioningQUICRequest(t, quicwire.ProvisioningSubFulfillSession,
 			&platformv1.FulfillSessionRequest{SessionId: session.ID, ProfileId: 42}))
 
 	var out ConfigDeliveryFulfillSessionResponse
@@ -674,9 +681,9 @@ func TestProvisioningQUIC_FulfillSession_NotFound(t *testing.T) {
 	handler, _ := newProvisioningBackedHandler(t, &cdMockProfileResolver{}, nil)
 
 	resp := handler.HandleRequest(context.Background(),
-		provisioningQUICRequest(t, quic.ProvisioningSubFulfillSession,
+		provisioningQUICRequest(t, quicwire.ProvisioningSubFulfillSession,
 			&platformv1.FulfillSessionRequest{SessionId: "missing", ProfileId: 42}))
-	if resp.Status != quic.StatusNotFound {
+	if resp.Status != quicwire.StatusNotFound {
 		t.Fatalf("expected StatusNotFound, got 0x%02x (payload: %s)", resp.Status, resp.Payload)
 	}
 }
@@ -689,9 +696,9 @@ func TestProvisioningQUIC_FulfillSession_AlreadyFulfilled(t *testing.T) {
 	}
 
 	resp := handler.HandleRequest(context.Background(),
-		provisioningQUICRequest(t, quic.ProvisioningSubFulfillSession,
+		provisioningQUICRequest(t, quicwire.ProvisioningSubFulfillSession,
 			&platformv1.FulfillSessionRequest{SessionId: session.ID, ProfileId: 43}))
-	if resp.Status != quic.StatusInvalidArgument {
+	if resp.Status != quicwire.StatusInvalidArgument {
 		t.Fatalf("expected StatusInvalidArgument, got 0x%02x (payload: %s)", resp.Status, resp.Payload)
 	}
 }
@@ -700,9 +707,21 @@ func TestProvisioningQUIC_FulfillSession_MissingSessionID(t *testing.T) {
 	handler, _ := newProvisioningBackedHandler(t, &cdMockProfileResolver{}, nil)
 
 	resp := handler.HandleRequest(context.Background(),
-		provisioningQUICRequest(t, quic.ProvisioningSubFulfillSession,
+		provisioningQUICRequest(t, quicwire.ProvisioningSubFulfillSession,
 			&platformv1.FulfillSessionRequest{ProfileId: 42}))
-	if resp.Status != quic.StatusInvalidArgument {
+	if resp.Status != quicwire.StatusInvalidArgument {
+		t.Fatalf("expected StatusInvalidArgument, got 0x%02x", resp.Status)
+	}
+}
+
+func TestProvisioningQUIC_FulfillSession_ZeroProfileID(t *testing.T) {
+	handler, backing := newProvisioningBackedHandler(t, &cdMockProfileResolver{}, nil)
+	session := backing.CreateSession("ek-1", "aa:bb:cc:dd:ee:ff")
+
+	resp := handler.HandleRequest(context.Background(),
+		provisioningQUICRequest(t, quicwire.ProvisioningSubFulfillSession,
+			&platformv1.FulfillSessionRequest{SessionId: session.ID}))
+	if resp.Status != quicwire.StatusInvalidArgument {
 		t.Fatalf("expected StatusInvalidArgument, got 0x%02x", resp.Status)
 	}
 }
@@ -713,7 +732,7 @@ func TestProvisioningQUIC_ListSessions(t *testing.T) {
 	second := backing.CreateSession("ek-2", "aa:bb:cc:dd:ee:02")
 
 	resp := handler.HandleRequest(context.Background(),
-		provisioningQUICRequest(t, quic.ProvisioningSubListSessions, nil))
+		provisioningQUICRequest(t, quicwire.ProvisioningSubListSessions, nil))
 
 	var out ConfigDeliveryListSessionsResponse
 	decodeProvisioningOK(t, resp, &out)
@@ -734,7 +753,7 @@ func TestProvisioningQUIC_GetSession_Success(t *testing.T) {
 	session := backing.CreateSession("ek-1", "aa:bb:cc:dd:ee:ff")
 
 	resp := handler.HandleRequest(context.Background(),
-		provisioningQUICRequest(t, quic.ProvisioningSubGetSession,
+		provisioningQUICRequest(t, quicwire.ProvisioningSubGetSession,
 			&platformv1.GetSessionRequest{SessionId: session.ID}))
 
 	var out ConfigDeliveryGetSessionResponse
@@ -752,9 +771,9 @@ func TestProvisioningQUIC_GetSession_NotFound(t *testing.T) {
 	handler, _ := newProvisioningBackedHandler(t, &cdMockProfileResolver{}, nil)
 
 	resp := handler.HandleRequest(context.Background(),
-		provisioningQUICRequest(t, quic.ProvisioningSubGetSession,
+		provisioningQUICRequest(t, quicwire.ProvisioningSubGetSession,
 			&platformv1.GetSessionRequest{SessionId: "missing"}))
-	if resp.Status != quic.StatusNotFound {
+	if resp.Status != quicwire.StatusNotFound {
 		t.Fatalf("expected StatusNotFound, got 0x%02x (payload: %s)", resp.Status, resp.Payload)
 	}
 }
@@ -763,9 +782,9 @@ func TestProvisioningQUIC_GetSession_MissingSessionID(t *testing.T) {
 	handler, _ := newProvisioningBackedHandler(t, &cdMockProfileResolver{}, nil)
 
 	resp := handler.HandleRequest(context.Background(),
-		provisioningQUICRequest(t, quic.ProvisioningSubGetSession,
+		provisioningQUICRequest(t, quicwire.ProvisioningSubGetSession,
 			&platformv1.GetSessionRequest{}))
-	if resp.Status != quic.StatusInvalidArgument {
+	if resp.Status != quicwire.StatusInvalidArgument {
 		t.Fatalf("expected StatusInvalidArgument, got 0x%02x", resp.Status)
 	}
 }
@@ -782,15 +801,15 @@ func TestConfigDeliveryErrorToQUICResponse_CodeMapping(t *testing.T) {
 		err  error
 		want byte
 	}{
-		{"InvalidArgument", status.Error(codes.InvalidArgument, "bad"), quic.StatusInvalidArgument},
-		{"Unauthenticated", status.Error(codes.Unauthenticated, "eab"), quic.StatusUnauthorized},
-		{"PermissionDenied", status.Error(codes.PermissionDenied, "ek"), quic.StatusPermissionDenied},
-		{"NotFound", status.Error(codes.NotFound, "session"), quic.StatusNotFound},
-		{"FailedPrecondition", status.Error(codes.FailedPrecondition, "resign"), quic.StatusInvalidRequest},
-		{"Unavailable", status.Error(codes.Unavailable, "signer"), quic.StatusUnavailable},
-		{"Internal", status.Error(codes.Internal, "boom"), quic.StatusInternalError},
-		{"UnknownCode", status.Error(codes.Aborted, "aborted"), quic.StatusInternalError},
-		{"NonStatusError", configdelivery.ErrInvalidRequest{Reason: "raw"}, quic.StatusInternalError},
+		{"InvalidArgument", status.Error(codes.InvalidArgument, "bad"), quicwire.StatusInvalidArgument},
+		{"Unauthenticated", status.Error(codes.Unauthenticated, "eab"), quicwire.StatusUnauthorized},
+		{"PermissionDenied", status.Error(codes.PermissionDenied, "ek"), quicwire.StatusPermissionDenied},
+		{"NotFound", status.Error(codes.NotFound, "session"), quicwire.StatusNotFound},
+		{"FailedPrecondition", status.Error(codes.FailedPrecondition, "resign"), quicwire.StatusInvalidRequest},
+		{"Unavailable", status.Error(codes.Unavailable, "signer"), quicwire.StatusUnavailable},
+		{"Internal", status.Error(codes.Internal, "boom"), quicwire.StatusInternalError},
+		{"UnknownCode", status.Error(codes.Aborted, "aborted"), quicwire.StatusInternalError},
+		{"NonStatusError", configdelivery.ErrInvalidRequest{Reason: "raw"}, quicwire.StatusInternalError},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

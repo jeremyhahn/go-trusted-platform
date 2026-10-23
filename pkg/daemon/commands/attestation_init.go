@@ -14,6 +14,7 @@
 package commands
 
 import (
+	"context"
 	"log/slog"
 	"path/filepath"
 
@@ -37,18 +38,20 @@ type attestationServices struct {
 
 // initAttestationServices stands up the manifest store, the
 // platform Service, and the gRPC wrapper, all sharing a single
-// store handle. Failure is non-fatal — the daemon continues without
-// the attestation surface and REST callers see the structured
-// "service not configured" envelope.
-func initAttestationServices(logger *logging.Logger, a *app.App) *attestationServices {
-	if a == nil {
-		return nil
+// store handle. A store that cannot be opened is an
+// ErrAttestationStoreUnavailable; the caller treats it as non-fatal —
+// the daemon continues without the attestation surface and REST callers
+// see the structured "service not configured" envelope.
+func initAttestationServices(logger *logging.Logger, a *app.App) (*attestationServices, error) {
+	// An unset platform directory would root the store at a relative
+	// "attestation" directory under whatever the working directory is.
+	if a == nil || a.PlatformDir == "" {
+		return nil, ErrAttestationStoreUnavailable{Cause: ErrAttestationPlatformDirUnset{}}
 	}
 	root := filepath.Join(a.PlatformDir, "attestation")
 	store, err := attestationstore.NewFileStore(root)
 	if err != nil {
-		logger.Warnf("attestation: store unavailable: %v", err)
-		return nil
+		return nil, ErrAttestationStoreUnavailable{Root: root, Cause: err}
 	}
 	// The daemon already holds the node's TPM for IDevID/IAK work; the
 	// attestation service needs the same handle to produce quotes. Without
@@ -61,7 +64,7 @@ func initAttestationServices(logger *logging.Logger, a *app.App) *attestationSer
 	svc := attestationsvc.NewService(store, opts...)
 	grpcSvc := daemon.NewAttestationServiceServer(svc, slog.Default())
 	logger.Info("attestation service wired", "root", root, "quote_production", a.TPM != nil)
-	return &attestationServices{GRPC: grpcSvc, Service: svc}
+	return &attestationServices{GRPC: grpcSvc, Service: svc}, nil
 }
 
 // attachAttestationServiceToDaemonConfig sets daemonConfig.AttestationService
@@ -72,6 +75,124 @@ func attachAttestationServiceToDaemonConfig(cfg *daemon.Config, svcs *attestatio
 		return
 	}
 	cfg.AttestationService = svcs.Service
+}
+
+// attestationWiring is everything wireAttestationOnConfig built. The
+// webservices path reads the services, the SDN policy and the REST view
+// of the reporting surface back out for its REST-only consumers; both
+// paths call Stop on shutdown.
+type attestationWiring struct {
+	Services      *attestationServices
+	SDNPolicy     *sdnPolicyComponents
+	ReportingRest *restattestation.Reporting
+	stop          func()
+}
+
+// Stop ends the reporting collector, when one was started.
+func (w *attestationWiring) Stop() {
+	if w == nil || w.stop == nil {
+		return
+	}
+	w.stop()
+}
+
+// wireAttestationOnConfig builds the attestation backend and everything
+// that hangs off it — the quarantine observer, the caller-admission
+// policy and the reporting collector — and sets cfg.AttestationService
+// and cfg.AttestationReporting. It is the one place both run paths build
+// them (#544): the daemon serves the attestation RPCs over gRPC, Unix and
+// MCP whether or not a webservices section exists, and a config left
+// without a backend registers the FailedPrecondition stub.
+//
+// cfg.DeviceService, cfg.DeviceProfileService and cfg.CAService must be
+// set first: the observer, the control-plane device and the collector
+// read them.
+func wireAttestationOnConfig(ctx context.Context, logger *logging.Logger, a *app.App, cfg *daemon.Config) *attestationWiring {
+	w := &attestationWiring{}
+	if a == nil || cfg == nil {
+		return w
+	}
+
+	// Attestation store + service back the attestation RPCs, the REST
+	// /api/v1/attestation/manifests surface and the per-enrollment capture
+	// hook. A store that cannot be opened leaves the surface unconfigured.
+	svcs, err := initAttestationServices(logger, a)
+	if err != nil {
+		logger.Warnf("%v; the attestation surface is not configured", err)
+	}
+	attachAttestationServiceToDaemonConfig(cfg, svcs)
+	w.Services = svcs
+
+	// Build the shared SDN flow-policy machinery (engine + zone flow manager)
+	// once; the quarantine observer and the SDN enrollment hook both consume
+	// it so port-policy state lives in a single engine. Nil when SDN or OVS
+	// is unavailable.
+	w.SDNPolicy = initSDNPolicy(a, logger.Slog())
+
+	// Wire the quarantine observer: when both attestation and SDN-OVS are
+	// available, failed attestations move devices to the quarantine zone and
+	// successful re-attestations restore them. No-op when either subsystem is
+	// absent so boot behavior is unchanged on nodes without OVS.
+	quarantine := wireQuarantineObserver(svcs, w.SDNPolicy, cfg.DeviceService, logger)
+
+	// Attestation reporting (#226): the collector on a control plane, and
+	// on every node the caller policy for the quote routes. The policy is
+	// built after the collector so the any-attested strategy can consult
+	// this node's own report cache. One surface, shared by every listener
+	// and by the gRPC/Unix and MCP transports.
+	// The control plane is a device in its own registry (#472): it writes
+	// its own record from its own TPM through the same registration the
+	// ACME finalize hook uses, so the collector below attests it exactly
+	// like a node. Runs before the collector because the collector needs
+	// the resulting device id to resolve the control plane's own endpoint.
+	controlPlaneDevice := initControlPlaneDevice(ctx, logger.Slog(), a, cfg)
+
+	w.ReportingRest = initCallerPolicy(logger.Slog(), a, svcs)
+	if rep := initReportingCollector(ctx, logger.Slog(), a, cfg, svcs, controlPlaneDevice); rep != nil {
+		w.stop = rep.Stop
+		w.ReportingRest = withCollectorSurface(logger.Slog(), w.ReportingRest, rep, a, svcs)
+		cfg.AttestationReporting = rep.Handles
+		if w.ReportingRest != nil && w.ReportingRest.Policy != nil {
+			rep.Handles.Policy = w.ReportingRest.Policy
+		}
+	} else if w.ReportingRest != nil && w.ReportingRest.Policy != nil {
+		cfg.AttestationReporting = &daemon.ReportingHandles{Policy: w.ReportingRest.Policy}
+	}
+
+	// The platform fleet container attestor (#704) answers AttestContainer
+	// for this host against its profile's golden PCRs, and quarantines and
+	// re-attests through the services above, so it is wired after them.
+	wireContainerAttestor(logger.Slog(), a, cfg, svcs, controlPlaneDevice)
+
+	// Operator Enable/Disable Device (#250) enforces through the quarantine
+	// manager and re-attests through the collector, so it is wired last.
+	wireDeviceLifecycle(cfg, quarantine, reportingRefresher(cfg), logger.Slog())
+	return w
+}
+
+// ErrAttestationStoreUnavailable reports that the attestation manifest
+// store could not be opened. The daemon still starts, without an
+// attestation backend.
+type ErrAttestationStoreUnavailable struct {
+	Root  string
+	Cause error
+}
+
+func (e ErrAttestationStoreUnavailable) Error() string {
+	if e.Root == "" {
+		return "attestation: store unavailable: " + e.Cause.Error()
+	}
+	return "attestation: store " + e.Root + " unavailable: " + e.Cause.Error()
+}
+
+func (e ErrAttestationStoreUnavailable) Unwrap() error { return e.Cause }
+
+// ErrAttestationPlatformDirUnset reports that no platform directory is
+// configured to root the attestation store under.
+type ErrAttestationPlatformDirUnset struct{}
+
+func (ErrAttestationPlatformDirUnset) Error() string {
+	return "attestation: no platform directory is configured"
 }
 
 // captureAdapter bridges the platform Service to the v1.AttestationCaptureSvc

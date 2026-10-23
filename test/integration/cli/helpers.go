@@ -18,7 +18,6 @@ package cli
 import (
 	"fmt"
 	"os"
-	"testing"
 )
 
 // Environment variable names for service endpoints
@@ -29,7 +28,6 @@ const (
 	EnvPlatformMCPEndpoint  = "PLATFORM_MCP_ENDPOINT"
 	EnvPlatformUnixSocket   = "PLATFORM_UNIX_SOCKET"
 	EnvPlatformCTL          = "PLATFORMCTL_PATH"
-	EnvIntegrationTest      = "INTEGRATION_TEST"
 )
 
 // ServiceEndpoints contains default endpoints for all protocols.
@@ -60,13 +58,6 @@ func getEnvOrDefault(key, defaultValue string) string {
 		return value
 	}
 	return defaultValue
-}
-
-// SkipIfNotIntegration skips the test if not running integration tests.
-func SkipIfNotIntegration(t *testing.T) {
-	if os.Getenv(EnvIntegrationTest) == "" {
-		t.Skip("Skipping integration test: INTEGRATION_TEST not set")
-	}
 }
 
 // =============================================================================

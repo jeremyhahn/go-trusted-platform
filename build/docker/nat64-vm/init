@@ -48,5 +48,5 @@ if [ ! -x /nat64-suite.test ]; then
 fi
 
 # shellcheck disable=SC2046 # the args file is a whitespace-separated list
-INTEGRATION_TEST=1 NAT64_VM=1 /nat64-suite.test -test.v -test.count=1 $(cat /nat64-suite.args 2>/dev/null) > /dev/console 2>&1
+NAT64_VM=1 /nat64-suite.test -test.v -test.count=1 $(cat /nat64-suite.args 2>/dev/null) > /dev/console 2>&1
 finish $?

@@ -48,9 +48,9 @@ the flag names in the comment are not.
 **Which verbs work without a server.** All three are client verbs — they go
 through `cli.NewBaseCommand` and need a reachable `platformd`.
 `--transport embedded` runs the services in-process and is the only way to use
-them with no daemon listening. **Note that the embedded transport has no NTP
-route** ([api.md](api.md) §3), so `--transport embedded` will not reach the NTP
-service.
+them with no daemon listening. The embedded host carries the same
+`NTPService` the daemon registers on gRPC ([api.md](api.md) §1), so all three
+verbs work over `--transport embedded`.
 
 **Timeout.** Every verb applies a fixed 30-second context deadline
 (`defaultCLITimeout`). It is not configurable.

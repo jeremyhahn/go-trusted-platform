@@ -37,10 +37,20 @@ nonce. There is no nonce parameter to pair wrongly any more. `GenerateKey` is
 unchanged for callers, though it now honours the entropy reader passed to
 `NewAESGCM`, which it had silently ignored.
 
-**"Used elsewhere in the platform" overstates `aesgcm` today**: `Seal` and
-`Open` have no production caller at all, and `pkg/registry` carries its own
-AES-GCM. Whether that package is intended surface or cruft is filed as #248 and
-is the owner's call, not something to settle in passing.
+**`aesgcm` is the platform's one AES-GCM implementation** (#248). `pkg/registry`
+seals layer content and wraps data-encryption keys through `Seal`/`Open`
+rather than building its own cipher, so the nonce handling and the FIPS-only
+construction live in one place. `pkg/app` uses `GenerateKey` for its random
+PINs. Do not construct a GCM cipher anywhere else in the platform; if a caller
+needs something `aesgcm` lacks, add it to the package.
+
+`Open` refuses a blob shorter than a nonce plus a tag with the typed
+`ErrCiphertextTooShort`. The package exports only errors it can actually
+return: the nonce-length, message-size and buffer-overlap sentinels, and the
+panic guard in `Open` with its `MessageError`, were removed in #248 — with no
+nonce parameter and a nil destination, neither of `crypto/cipher`'s panic
+conditions can arise. `aesgcm` is a platform-internal primitive, not consumer
+API, so it is not re-exported under `sdk/go`.
 
 **Never add key-management logic here.** A missing capability is missing in
 go-xkms or in the quicbaas SDK (docs/00 L8).
@@ -92,9 +102,10 @@ There is no KMS type exported from this repository. The surface is:
   (`pkg/api/grpc/proto/kms.proto`).
 - **REST** — `/api/v1/kms`, the largest REST route set in the platform after
   IAM.
-- **QUIC** — key management `0xC0`–`0xCF`, crypto `0xD0`–`0xDA`, DEK
-  `0xF0`–`0xF5`, plus a **KMS extended category opcode `0xCD`**.
-- **MCP** — 20 `kms_*` tools and 6 `secret_*` tools.
+- **QUIC** — key management `0xC0`–`0xCF`, crypto `0xD0`–`0xDA`, plus a
+  **KMS extended category opcode `0xCD`** whose subs `0x08`–`0x0D` are the DEK
+  calls. The `OpDEK*` bytes `0xF0`–`0xF5` are reserved and unserved.
+- **MCP** — 29 `kms_*` tools, 11 `secret_*` tools and 6 `dek_*` tools.
 - **SDK** — `sdk/go/services/kms`.
 
 ## 4. Invariants
@@ -113,15 +124,17 @@ There is no KMS type exported from this repository. The surface is:
 5. **Hash and HMAC are distinct.** `Hash` is unkeyed; `HMAC` and `VerifyHMAC`
    are keyed by a KMS key. Using `Hash` where an HMAC is required is a real
    defect, not a style choice.
-6. **AEAD safety limits are a correctness control.** `kms safety` exists because
+6. **AEAD safety limits are a correctness control.** They exist because
    AES-GCM has a bound on the number of invocations per key before nonce reuse
    becomes probable. Exceeding it is a break, not a slowdown.
 
-## 5. AEAD safety limits — the part with no API counterpart
+## 5. AEAD safety limits — no surface at all
 
-`platformctl kms safety` has five verbs — `set`, `get`, `clear`, `check`,
-`report` — and **no gRPC RPC, REST route, QUIC opcode or MCP tool**. It is the
-one implemented capability in this feature that exists only on the CLI.
+`pkg/cli/commands/kms/key_safety.go` declares `kms key safety set|get|clear|check|report`
+behind the `key_safety` build tag. The shipped tag set omits it, and under it
+the file does not compile (no `SetKeySafety` / `GetKeySafety` on the SDK
+client); [cli.md](cli.md) §10. There is **no gRPC RPC, REST route, QUIC opcode
+or MCP tool** either.
 
 Given that the limits guard against nonce reuse under a single key, "there is no
 programmatic way to check whether a fleet's keys are approaching their limit" is
@@ -150,13 +163,13 @@ to test for a stub and means the stubs will not silently start half-working.
 **Known repo-wide gap:** no `CommandDefinition` type exists in this repository
 (grepped 2026-08-18), so the CLI parity requirement in
 `conventions/feature-docs.md` §4 is unmet repo-wide. For KMS it would be
-actively misleading if satisfied naively, since 36 verb declarations across
-eight files are stubs.
+actively misleading if satisfied naively, since many verbs are stubs
+([cli.md](cli.md) §8).
 
 ## 8. Observability
 
-`BackendStatus` is the health signal. `kms safety report` and `kms safety check`
-are the operational reports and, per §5, are CLI-only.
+`BackendStatus` is the health signal. There is no AEAD safety report on any
+surface (§5).
 
 **Never log key material, plaintext passed to `Encrypt`, or the output of
 `Decrypt`, `GenerateDataKey` or `Unseal`-style operations.** This repository sits

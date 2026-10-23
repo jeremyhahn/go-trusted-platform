@@ -136,6 +136,10 @@ func (r *KMSRouter) RegisterRoutes(parent *mux.Router) {
 	sr.HandleFunc("/hash", r.handlers.Hash).Methods("POST")
 	sr.HandleFunc("/random", r.handlers.GenerateRandom).Methods("POST")
 
+	// Data keys: minted and returned, never stored (stored DEKs are /deks)
+	sr.HandleFunc("/data-keys", r.handlers.GenerateDataKey).Methods("POST")
+	sr.HandleFunc("/data-keys/wrapped", r.handlers.GenerateWrappedDataKey).Methods("POST")
+
 	// DEKs
 	sr.HandleFunc("/deks", r.handlers.CreateDEK).Methods("POST")
 	sr.HandleFunc("/deks", r.handlers.ListDEKs).Methods("GET")

@@ -16,8 +16,8 @@ package daemon
 import (
 	"context"
 
-	"github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/api/errclass"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 )
 
 // =============================================================================
@@ -25,7 +25,8 @@ import (
 // =============================================================================
 //
 // The operational VM verbs (GetVMMetrics, AttachDisk, DetachDisk, ResizeDisk,
-// MigrateVM) share the same converged wire contract as the unary container
+// MigrateVM, and the destination-side PrepareMigration and FinalizeMigration)
+// share the same converged wire contract as the unary container
 // verbs: the canonical QUIC payload is the platform.v1 ComputeService protobuf
 // request/response message, and the daemon decodes the SAME pb message the SDK
 // QUIC adapter sent and delegates to the shared *ComputeGRPCService — the same
@@ -34,92 +35,94 @@ import (
 // behind decoding into the exact pb message rather than a flat local struct).
 //
 // These verbs collide with other top-level ranges (metrics/disk/migrate reuse
-// the 0xCC-0xD0 bytes that are top-level category opcodes), so remote transports
-// carry them as sub-opcodes in payload[0] under quic.OpVMExtendedCategory
+// the 0xCC-0xD2 bytes that are top-level category opcodes), so remote transports
+// carry them as sub-opcodes in payload[0] under quicwire.OpVMExtendedCategory
 // (0x69); see handleVMServiceOperation. The interactive AttachVMConsole /
 // SendVMConsoleInput and the streaming GetVMLogs RPCs are server-streaming and
 // are NOT carried over the unary QUIC transport — they remain gRPC/daemon-native
 // (mirroring GetContainerLogs / AttachContainer).
+//
+// The CRUD and lifecycle verbs CreateVM, GetVM, ListVMs, StartVM, StopVM,
+// DeleteVM (OpVMCreate..OpVMList, 0x60-0x65), RebootVM, SuspendVM and
+// ResumeVM (OpVMRestart, OpVMSuspend, OpVMResume, 0xB6-0xB8), the snapshot
+// verbs CreateSnapshot, RestoreSnapshot, DeleteSnapshot and ListSnapshots
+// (OpVMSnapshotCreate..OpVMSnapshotList, 0xBB-0xBE) and GetSnapshot
+// (OpVMSnapshotGet, 0xBA), and AttestVM and
+// VerifyVMAttestation (OpVMAttest 0xB9, OpVMVerifyAttest 0xBF) converge the
+// same way, as sub-opcodes under OpVMExtendedCategory. Their errors take the
+// shared errclass QUIC status, so a missing VM answers StatusNotFound and a
+// VM in the wrong state answers StatusFailedPrecondition exactly as gRPC
+// answers NotFound and FailedPrecondition.
 
-// handleVMPB decodes the pb request for a converged unary operational VM
-// opcode and delegates to the shared *ComputeGRPCService, returning
-// handled=true. payload carries the marshalled pb request body (already
-// stripped of the OpVMExtendedCategory sub-opcode prefix). Sub-opcodes that do
-// not converge to pb return (nil, false) so the caller forwards them to the
-// flat VMHandler.
-func (h *QUICServiceHandler) handleVMPB(ctx context.Context, opcode byte, payload []byte) (*quic.Response, bool) {
-	switch opcode {
-	case quic.OpVMMetrics:
-		if h.computeGRPC == nil {
-			return h.errorResponse(quic.StatusUnavailable, ErrQUICServiceUnavailable{Service: "vm"}), true
+// vmPBHandler answers one converged OpVMExtendedCategory sub-opcode.
+// payload carries the marshalled pb request body.
+type vmPBHandler func(h *QUICServiceHandler, ctx context.Context, payload []byte) *quicwire.Response
+
+// vmPBFailure turns a ComputeGRPCService error into a QUIC error response.
+type vmPBFailure func(h *QUICServiceHandler, op string, err error) *quicwire.Response
+
+// vmPBHandlers maps each converged VM sub-opcode to its handler.
+var vmPBHandlers = map[byte]vmPBHandler{
+	quicwire.OpVMCreate:          vmPBUnary("VMCreate", (*ComputeGRPCService).CreateVM, vmPBClassFailure),
+	quicwire.OpVMGet:             vmPBUnary("VMGet", (*ComputeGRPCService).GetVM, vmPBClassFailure),
+	quicwire.OpVMList:            vmPBUnary("VMList", (*ComputeGRPCService).ListVMs, vmPBClassFailure),
+	quicwire.OpVMStart:           vmPBUnary("VMStart", (*ComputeGRPCService).StartVM, vmPBClassFailure),
+	quicwire.OpVMStop:            vmPBUnary("VMStop", (*ComputeGRPCService).StopVM, vmPBClassFailure),
+	quicwire.OpVMDelete:          vmPBUnary("VMDelete", (*ComputeGRPCService).DeleteVM, vmPBClassFailure),
+	quicwire.OpVMRestart:         vmPBUnary("VMRestart", (*ComputeGRPCService).RebootVM, vmPBClassFailure),
+	quicwire.OpVMSuspend:         vmPBUnary("VMSuspend", (*ComputeGRPCService).SuspendVM, vmPBClassFailure),
+	quicwire.OpVMResume:          vmPBUnary("VMResume", (*ComputeGRPCService).ResumeVM, vmPBClassFailure),
+	quicwire.OpVMSnapshotCreate:  vmPBUnary("VMSnapshotCreate", (*ComputeGRPCService).CreateSnapshot, vmPBClassFailure),
+	quicwire.OpVMSnapshotRestore: vmPBUnary("VMSnapshotRestore", (*ComputeGRPCService).RestoreSnapshot, vmPBClassFailure),
+	quicwire.OpVMSnapshotDelete:  vmPBUnary("VMSnapshotDelete", (*ComputeGRPCService).DeleteSnapshot, vmPBClassFailure),
+	quicwire.OpVMSnapshotList:    vmPBUnary("VMSnapshotList", (*ComputeGRPCService).ListSnapshots, vmPBClassFailure),
+	quicwire.OpVMSnapshotGet:     vmPBUnary("VMSnapshotGet", (*ComputeGRPCService).GetSnapshot, vmPBClassFailure),
+	quicwire.OpVMAttest:          vmPBUnary("VMAttest", (*ComputeGRPCService).AttestVM, vmPBClassFailure),
+	quicwire.OpVMVerifyAttest:    vmPBUnary("VMVerifyAttest", (*ComputeGRPCService).VerifyVMAttestation, vmPBClassFailure),
+	quicwire.OpVMMetrics:         vmPBUnary("VMMetrics", (*ComputeGRPCService).GetVMMetrics, (*QUICServiceHandler).grpcStatusToQUICResponse),
+	quicwire.OpVMAttachDisk:      vmPBUnary("VMAttachDisk", (*ComputeGRPCService).AttachDisk, (*QUICServiceHandler).grpcStatusToQUICResponse),
+	quicwire.OpVMDetachDisk:      vmPBUnary("VMDetachDisk", (*ComputeGRPCService).DetachDisk, (*QUICServiceHandler).grpcStatusToQUICResponse),
+	quicwire.OpVMResizeDisk:      vmPBUnary("VMResizeDisk", (*ComputeGRPCService).ResizeDisk, (*QUICServiceHandler).grpcStatusToQUICResponse),
+	quicwire.OpVMMigrate:         vmPBUnary("VMMigrate", (*ComputeGRPCService).MigrateVM, (*QUICServiceHandler).grpcStatusToQUICResponse),
+
+	quicwire.OpVMPrepareMigration:  vmPBUnary("VMPrepareMigration", (*ComputeGRPCService).PrepareMigration, (*QUICServiceHandler).grpcStatusToQUICResponse),
+	quicwire.OpVMFinalizeMigration: vmPBUnary("VMFinalizeMigration", (*ComputeGRPCService).FinalizeMigration, (*QUICServiceHandler).grpcStatusToQUICResponse),
+}
+
+// vmPBUnary builds the handler for one unary ComputeService VM method: it
+// decodes the pb request into Req, calls the method on the shared
+// *ComputeGRPCService and encodes the pb response.
+func vmPBUnary[Req, Resp any](op string, call func(*ComputeGRPCService, context.Context, *Req) (Resp, error), fail vmPBFailure) vmPBHandler {
+	return func(h *QUICServiceHandler, ctx context.Context, payload []byte) *quicwire.Response {
+		var req Req
+		if err := quicwire.DecodePayload(payload, &req); err != nil {
+			return h.errorResponse(quicwire.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
 		}
-		var req platformv1.GetVMMetricsRequest
-		if err := quic.DecodePayload(payload, &req); err != nil {
-			return h.errorResponse(quic.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err}), true
-		}
-		resp, err := h.computeGRPC.GetVMMetrics(ctx, &req)
+		resp, err := call(h.computeGRPC, ctx, &req)
 		if err != nil {
-			return h.grpcStatusToQUICResponse("VMMetrics", err), true
+			return fail(h, op, err)
 		}
-		return h.encodeQUICOK(resp), true
+		return h.encodeQUICOK(resp)
+	}
+}
 
-	case quic.OpVMAttachDisk:
-		if h.computeGRPC == nil {
-			return h.errorResponse(quic.StatusUnavailable, ErrQUICServiceUnavailable{Service: "vm"}), true
-		}
-		var req platformv1.AttachDiskRequest
-		if err := quic.DecodePayload(payload, &req); err != nil {
-			return h.errorResponse(quic.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err}), true
-		}
-		resp, err := h.computeGRPC.AttachDisk(ctx, &req)
-		if err != nil {
-			return h.grpcStatusToQUICResponse("VMAttachDisk", err), true
-		}
-		return h.encodeQUICOK(resp), true
+// vmPBClassFailure answers err with its shared errclass QUIC status.
+func vmPBClassFailure(h *QUICServiceHandler, op string, err error) *quicwire.Response {
+	return h.errorResponse(errclass.QUICStatus(err), ErrQUICOperationFailed{Op: op, Cause: err})
+}
 
-	case quic.OpVMDetachDisk:
-		if h.computeGRPC == nil {
-			return h.errorResponse(quic.StatusUnavailable, ErrQUICServiceUnavailable{Service: "vm"}), true
-		}
-		var req platformv1.DetachDiskRequest
-		if err := quic.DecodePayload(payload, &req); err != nil {
-			return h.errorResponse(quic.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err}), true
-		}
-		resp, err := h.computeGRPC.DetachDisk(ctx, &req)
-		if err != nil {
-			return h.grpcStatusToQUICResponse("VMDetachDisk", err), true
-		}
-		return h.encodeQUICOK(resp), true
-
-	case quic.OpVMResizeDisk:
-		if h.computeGRPC == nil {
-			return h.errorResponse(quic.StatusUnavailable, ErrQUICServiceUnavailable{Service: "vm"}), true
-		}
-		var req platformv1.ResizeDiskRequest
-		if err := quic.DecodePayload(payload, &req); err != nil {
-			return h.errorResponse(quic.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err}), true
-		}
-		resp, err := h.computeGRPC.ResizeDisk(ctx, &req)
-		if err != nil {
-			return h.grpcStatusToQUICResponse("VMResizeDisk", err), true
-		}
-		return h.encodeQUICOK(resp), true
-
-	case quic.OpVMMigrate:
-		if h.computeGRPC == nil {
-			return h.errorResponse(quic.StatusUnavailable, ErrQUICServiceUnavailable{Service: "vm"}), true
-		}
-		var req platformv1.MigrateVMRequest
-		if err := quic.DecodePayload(payload, &req); err != nil {
-			return h.errorResponse(quic.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err}), true
-		}
-		resp, err := h.computeGRPC.MigrateVM(ctx, &req)
-		if err != nil {
-			return h.grpcStatusToQUICResponse("VMMigrate", err), true
-		}
-		return h.encodeQUICOK(resp), true
-
-	default:
+// handleVMPB decodes the pb request for a converged VM sub-opcode and
+// delegates to the shared *ComputeGRPCService, returning handled=true.
+// payload carries the marshalled pb request body (already stripped of the
+// OpVMExtendedCategory sub-opcode prefix). Sub-opcodes that are not VM verbs
+// return (nil, false).
+func (h *QUICServiceHandler) handleVMPB(ctx context.Context, opcode byte, payload []byte) (*quicwire.Response, bool) {
+	handler, ok := vmPBHandlers[opcode]
+	if !ok {
 		return nil, false
 	}
+	if h.computeGRPC == nil {
+		return h.errorResponse(quicwire.StatusUnavailable, ErrQUICServiceUnavailable{Service: "vm"}), true
+	}
+	return handler(h, ctx, payload), true
 }

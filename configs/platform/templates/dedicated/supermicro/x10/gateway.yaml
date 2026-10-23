@@ -60,9 +60,8 @@ platform:
   # a distributed lock in the SecretsService. Paths are short-form —
   # tenant and node identifiers are implicitly prepended at resolution
   # time from platform.tenant_id and the node hostname.
-  # TODO: revert to kms:// once firstboot seeds SecretsService pre-platformd.
-  so-pin: "12345678"
-  user-pin: "123456"
+  so-pin: "kms://platform/so-pin?ensure=true&len=8&enc=numeric"
+  user-pin: "kms://platform/user-pin?ensure=true&len=6&enc=numeric"
 
 
 # =============================================================================
@@ -117,6 +116,12 @@ os:
     - openvswitch-openrc
     - chrony
     - chrony-openrc
+    # The NAT64 kernel translator gateway.nat64 drives (#603). The module
+    # follows linux-lts: a kernel upgrade that outruns jool-modules-lts
+    # leaves it unloadable, and gatewayd refuses the nat64: section.
+    - jool-modules-lts
+    - jool-tools
+    - jool-tools-openrc
   kernel-modules:
     - igb
     - ixgbe
@@ -392,8 +397,8 @@ acme:
 # =============================================================================
 
 # The platform CA bundle, delivered by provisioning. Every platform service
-# gatewayd talks to -- the platform secret store behind every kms:// and
-# secret:// reference in this file, platformd over grpc, the proxy's mTLS
+# gatewayd talks to -- the platform secret store behind every kms://
+# reference in this file, platformd over grpc, the proxy's mTLS
 # callers, the control-plane reporter -- presents a certificate the platform
 # CA issued and is verified against this bundle. gatewayd runs no CA of its
 # own, so this file is its whole platform trust: not a strategy choice, and
@@ -440,9 +445,11 @@ bmc:
   protocol: ipmi
 
 # QuicBaaS runs in STANDALONE EMBEDDED MODE (non-HA reference architecture).
-# storage-backend=file with node-id=1 and no join-addresses means Raft
-# consensus is NOT engaged. For HA, switch to storage-backend=raft and
-# populate join-addresses (see configs/platform/templates/high-availability/).
+# No join-addresses means Raft consensus is NOT engaged. For HA, use
+# storage-backend=pebble (there is no "raft" backend), list every member as
+# "id=host:port" in join-addresses (this node included), and set the same
+# deployment-id on every member plus raft-tls-{cert,key,ca}-file: a clustered
+# node without Raft TLS is refused (see docs/cluster/user.md).
 quicbaas:
   data-dir: /var/lib/trusted-platform/quicbaas
   storage-backend: file
@@ -505,6 +512,12 @@ sdn:
   overlay:
     enabled: true
     vxlan-port: 4789
+    # The VTEP sits on the fabric zone (VLAN 401): its host address is the
+    # zone401 internal port platformd creates on br-fabric for the bond0
+    # fabric entry above. Without IPsec both keys are required; an overlay
+    # missing either refuses to start (#93).
+    underlay-interface: zone401
+    vtep-address: 10.4.1.2
   gateway:
     enabled: true
 
@@ -720,7 +733,7 @@ gateway:
     router-id: 10.4.6.2
     listen-port: 179
     peers:
-      - name: vps-primary
+      - name: relay-ispa
         address: 10.4.128.3
         asn: 64512
         families:
@@ -730,8 +743,8 @@ gateway:
         # the standard (auth-type: tcp-ao with a keychain below); TCP-MD5
         # is a compatibility option that non-FIPS builds accept only:
         #   auth-type: md5
-        #   auth-key-ref: kms://platform/gateway/bgp/vps-primary
-      - name: vps-backup
+        #   auth-key-ref: kms://platform/gateway/bgp/relay-ispa
+      - name: relay-ispb
         address: 10.4.128.5
         asn: 64512
         families:
@@ -758,7 +771,7 @@ gateway:
   # transport is
   # gre (plain), ipsec (the same carrier wrapped in ESP) or wireguard (not
   # available in FIPS builds). An ipsec or wireguard tunnel names its keys
-  # by reference — kms:// or secret:// resolved through the secret-store:
+  # by reference — kms:// resolved through the secret-store:
   # section below — and never carries key material in this file. Key
   # material is fetched at start, given to the kernel, and wiped; a
   # reference that does not resolve refuses the tunnel.
@@ -806,7 +819,11 @@ gateway:
     tftp-port: 69
     kernel-path: /var/lib/trusted-platform/pxe/vmlinuz
     initrd-path: /var/lib/trusted-platform/pxe/initramfs
-    config-server-url: "https://cp.example.internal:8443/api/v1/devices/config"
+    # The control plane's provisioning listener (a webservice with
+    # surface: provisioning, bind-host in the provisioning zone), not its
+    # general :8443 listener: only that listener serves
+    # /api/v1/devices/config (#177, docs/web/user.md).
+    config-server-url: "https://cp-provisioning.example.internal:9443/api/v1/devices/config"
 
   # NAT gateway
   nat:
@@ -852,7 +869,7 @@ control-plane:
 # =============================================================================
 # platformd does not decode this section; firstboot projects it into
 # /etc/gatewayd/config.yaml with the sections above. It says where the
-# platform secret store is, and it is what makes every kms:// and secret://
+# platform secret store is, and it is what makes every kms://
 # reference in this file resolvable — the gateway's BGP passwords and
 # TCP-AO master keys, and its ipsec/wireguard tunnel keys. Configuration
 # carries references; the values live in the store and are fetched at
@@ -862,7 +879,10 @@ control-plane:
 # switchboard. The session is verified against the platform anchor, so a
 # secret-store: without platform-ca-file: (set above) is refused
 # (secrets.ErrTrustRequired) and the gateway does not start; if you remove
-# platform-ca-file:, comment this section out too.
+# platform-ca-file:, comment this section out too. The session is mutual:
+# the gateway presents its node mTLS identity, the control-plane: cert-file
+# and key-file pair (set above), and this section has no credential of its
+# own; without that pair it is refused (secrets.ErrClientIdentityRequired).
 # Without this section a service that references a secret fails closed at
 # start rather than running with a reference where a key belongs.
 

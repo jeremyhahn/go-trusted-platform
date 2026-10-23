@@ -14,9 +14,11 @@
 //go:build integration
 
 // Package quic provides integration tests for the QUIC protocol handlers.
-// These tests require a running QUIC server and are executed via:
+// These tests require the platformd QUIC server that the devcontainer runner
+// (build/docker/devcontainer/run-integration-tests.sh) starts, and are
+// executed via:
 //
-//	make integration-test-quic
+//	make integration-test
 //
 // The tests verify end-to-end functionality of all QUIC service handlers
 // including CA, vTPM, DNS, SDN, KMS, IAM, and Device operations.
@@ -29,9 +31,10 @@ import (
 	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/daemon"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
+	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -45,13 +48,6 @@ const (
 type TestConfig struct {
 	QUICAddr string
 	Token    string
-}
-
-// skipIfNotIntegration skips the test if INTEGRATION_TEST env var is not set.
-func skipIfNotIntegration(t *testing.T) {
-	if os.Getenv("INTEGRATION_TEST") == "" {
-		t.Skip("Skipping integration test. Set INTEGRATION_TEST=1 to run.")
-	}
 }
 
 // getTestConfig returns the test configuration from environment variables.
@@ -70,6 +66,7 @@ func getTestConfig() *TestConfig {
 // newTestClient creates a new test client with the standard configuration.
 // If the server is not available, it skips the test instead of failing.
 func newTestClient(t *testing.T, cfg *TestConfig) (*TestClient, func()) {
+	t.Helper()
 	logger := logging.DefaultLogger()
 
 	opts := []TestClientOption{
@@ -88,7 +85,7 @@ func newTestClient(t *testing.T, cfg *TestConfig) (*TestClient, func()) {
 
 	err := client.Connect(ctx)
 	if err != nil {
-		t.Skipf("QUIC server not available at %s: %v (start platformd with --enable-quic to run these tests)", cfg.QUICAddr, err)
+		t.Fatal(ErrQUICServerRequired{Address: cfg.QUICAddr, Cause: err})
 	}
 
 	cleanup := func() {
@@ -103,7 +100,6 @@ func newTestClient(t *testing.T, cfg *TestConfig) (*TestClient, func()) {
 // =============================================================================
 
 func TestQUICHealth(t *testing.T) {
-	skipIfNotIntegration(t)
 	cfg := getTestConfig()
 	client, cleanup := newTestClient(t, cfg)
 	defer cleanup()
@@ -111,30 +107,30 @@ func TestQUICHealth(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), testTimeout)
 	defer cancel()
 
+	// The probe opcodes are unauthenticated, so they answer the status only.
 	t.Run("Health check succeeds", func(t *testing.T) {
-		var resp daemon.HealthCheckResponse
-		err := client.Send(ctx, quic.OpHealth, nil, &resp)
+		var resp platformv1.GetHealthResponse
+		err := client.Send(ctx, quicwire.OpHealth, nil, &resp)
 		require.NoError(t, err)
-		assert.True(t, resp.Healthy, "Server should report healthy")
-		assert.NotEmpty(t, resp.Status, "Status should not be empty")
-		assert.NotZero(t, resp.Timestamp, "Timestamp should be set")
+		assert.Equal(t, platformv1.HealthStatus_HEALTH_STATUS_HEALTHY, resp.GetStatus(), "Server should report healthy")
+		assert.Empty(t, resp.GetComponents(), "an unauthenticated probe names no component")
+		assert.NotNil(t, resp.GetTimestamp(), "Timestamp should be set")
 	})
 
 	t.Run("Liveness check succeeds", func(t *testing.T) {
-		var resp daemon.HealthCheckResponse
-		err := client.Send(ctx, quic.OpLiveness, nil, &resp)
+		var resp platformv1.LivenessResponse
+		err := client.Send(ctx, quicwire.OpLiveness, nil, &resp)
 		require.NoError(t, err)
-		assert.True(t, resp.Healthy, "Server should report healthy")
-		assert.NotZero(t, resp.Timestamp, "Timestamp should be set")
+		assert.True(t, resp.GetAlive(), "Server should report alive")
+		assert.NotNil(t, resp.GetTimestamp(), "Timestamp should be set")
 	})
 
 	t.Run("Readiness check succeeds", func(t *testing.T) {
-		var resp daemon.HealthCheckResponse
-		err := client.Send(ctx, quic.OpReadiness, nil, &resp)
+		var resp platformv1.ReadinessResponse
+		err := client.Send(ctx, quicwire.OpReadiness, nil, &resp)
 		require.NoError(t, err)
-		assert.True(t, resp.Healthy, "Server should report ready")
-		assert.NotNil(t, resp.Components, "Components map should be present")
-		assert.NotZero(t, resp.Timestamp, "Timestamp should be set")
+		assert.True(t, resp.GetReady(), "Server should report ready")
+		assert.NotNil(t, resp.GetTimestamp(), "Timestamp should be set")
 	})
 }
 
@@ -143,7 +139,6 @@ func TestQUICHealth(t *testing.T) {
 // =============================================================================
 
 func TestQUICCA(t *testing.T) {
-	skipIfNotIntegration(t)
 	cfg := getTestConfig()
 	client, cleanup := newTestClient(t, cfg)
 	defer cleanup()
@@ -152,20 +147,20 @@ func TestQUICCA(t *testing.T) {
 	defer cancel()
 
 	t.Run("CA Info returns certificate authority info", func(t *testing.T) {
-		resp, err := client.SendRequest(ctx, quic.OpCAInfo, nil)
+		resp, err := client.SendRequest(ctx, quicwire.OpCAInfo, nil)
 		if err != nil {
 			var unexpectedStatus ErrUnexpectedStatus
 			if assert.ErrorAs(t, err, &unexpectedStatus) {
-				if unexpectedStatus.Actual == quic.StatusUnavailable {
-					t.Skip("CA service not available")
+				if unexpectedStatus.Actual == quicwire.StatusUnavailable {
+					t.Fatal(ErrServiceUnavailable{Service: "CA"})
 				}
 			}
 			t.Fatalf("CA Info request failed: %v", err)
 		}
-		if resp.Status == quic.StatusUnavailable {
-			t.Skip("CA service not available")
+		if resp.Status == quicwire.StatusUnavailable {
+			t.Fatal(ErrServiceUnavailable{Service: "CA"})
 		}
-		assert.Equal(t, quic.StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 	})
 
 	t.Run("CA Get with missing serial returns error", func(t *testing.T) {
@@ -174,52 +169,52 @@ func TestQUICCA(t *testing.T) {
 			Serial string `codec:"serial"`
 		}
 		req := &CAGetRequest{Serial: ""}
-		resp, err := client.SendExpectStatus(ctx, quic.OpCAGet, req, quic.StatusInvalidArgument)
+		resp, err := client.SendExpectStatus(ctx, quicwire.OpCAGet, req, quicwire.StatusInvalidArgument)
 		if err != nil {
 			var unexpectedStatus ErrUnexpectedStatus
 			if assert.ErrorAs(t, err, &unexpectedStatus) {
-				if unexpectedStatus.Actual == quic.StatusUnavailable {
-					t.Skip("CA service not available")
+				if unexpectedStatus.Actual == quicwire.StatusUnavailable {
+					t.Fatal(ErrServiceUnavailable{Service: "CA"})
 				}
 			}
 		}
 		if resp != nil {
-			assert.Contains(t, []byte{quic.StatusInvalidArgument, quic.StatusInvalidRequest}, resp.Status)
+			assert.Contains(t, []byte{quicwire.StatusInvalidArgument, quicwire.StatusInvalidRequest}, resp.Status)
 		}
 	})
 
 	t.Run("CA List returns certificate list", func(t *testing.T) {
-		resp, err := client.SendRequest(ctx, quic.OpCAList, nil)
+		resp, err := client.SendRequest(ctx, quicwire.OpCAList, nil)
 		if err != nil {
 			var unexpectedStatus ErrUnexpectedStatus
 			if assert.ErrorAs(t, err, &unexpectedStatus) {
-				if unexpectedStatus.Actual == quic.StatusUnavailable {
-					t.Skip("CA service not available")
+				if unexpectedStatus.Actual == quicwire.StatusUnavailable {
+					t.Fatal(ErrServiceUnavailable{Service: "CA"})
 				}
 			}
 			t.Fatalf("CA List request failed: %v", err)
 		}
-		if resp.Status == quic.StatusUnavailable {
-			t.Skip("CA service not available")
+		if resp.Status == quicwire.StatusUnavailable {
+			t.Fatal(ErrServiceUnavailable{Service: "CA"})
 		}
-		assert.Equal(t, quic.StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 	})
 
 	t.Run("CA Bundle returns trust chain", func(t *testing.T) {
-		resp, err := client.SendRequest(ctx, quic.OpCABundle, nil)
+		resp, err := client.SendRequest(ctx, quicwire.OpCABundle, nil)
 		if err != nil {
 			var unexpectedStatus ErrUnexpectedStatus
 			if assert.ErrorAs(t, err, &unexpectedStatus) {
-				if unexpectedStatus.Actual == quic.StatusUnavailable {
-					t.Skip("CA service not available")
+				if unexpectedStatus.Actual == quicwire.StatusUnavailable {
+					t.Fatal(ErrServiceUnavailable{Service: "CA"})
 				}
 			}
 			t.Fatalf("CA Bundle request failed: %v", err)
 		}
-		if resp.Status == quic.StatusUnavailable {
-			t.Skip("CA service not available")
+		if resp.Status == quicwire.StatusUnavailable {
+			t.Fatal(ErrServiceUnavailable{Service: "CA"})
 		}
-		assert.Equal(t, quic.StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 	})
 }
 
@@ -228,7 +223,6 @@ func TestQUICCA(t *testing.T) {
 // =============================================================================
 
 func TestQUICVTPM(t *testing.T) {
-	skipIfNotIntegration(t)
 	cfg := getTestConfig()
 	client, cleanup := newTestClient(t, cfg)
 	defer cleanup()
@@ -238,12 +232,12 @@ func TestQUICVTPM(t *testing.T) {
 
 	t.Run("vTPM List returns bundle list", func(t *testing.T) {
 		var resp daemon.VTPMListResponse
-		err := client.Send(ctx, quic.OpVTPMList, nil, &resp)
+		err := client.Send(ctx, quicwire.OpVTPMList, nil, &resp)
 		if err != nil {
 			var unexpectedStatus ErrUnexpectedStatus
 			if assert.ErrorAs(t, err, &unexpectedStatus) {
-				if unexpectedStatus.Actual == quic.StatusUnavailable {
-					t.Skip("vTPM service not available")
+				if unexpectedStatus.Actual == quicwire.StatusUnavailable {
+					t.Fatal(ErrServiceUnavailable{Service: "vTPM"})
 				}
 			}
 			t.Fatalf("vTPM List request failed: %v", err)
@@ -256,17 +250,17 @@ func TestQUICVTPM(t *testing.T) {
 		req := &daemon.VTPMCreateRequest{
 			Hostname: "",
 		}
-		resp, err := client.SendExpectStatus(ctx, quic.OpVTPMCreate, req, quic.StatusInvalidArgument)
+		resp, err := client.SendExpectStatus(ctx, quicwire.OpVTPMCreate, req, quicwire.StatusInvalidArgument)
 		if err != nil {
 			var unexpectedStatus ErrUnexpectedStatus
 			if assert.ErrorAs(t, err, &unexpectedStatus) {
-				if unexpectedStatus.Actual == quic.StatusUnavailable {
-					t.Skip("vTPM service not available")
+				if unexpectedStatus.Actual == quicwire.StatusUnavailable {
+					t.Fatal(ErrServiceUnavailable{Service: "vTPM"})
 				}
 			}
 		}
 		if resp != nil {
-			assert.Contains(t, []byte{quic.StatusInvalidArgument, quic.StatusInvalidRequest}, resp.Status)
+			assert.Contains(t, []byte{quicwire.StatusInvalidArgument, quicwire.StatusInvalidRequest}, resp.Status)
 		}
 	})
 
@@ -278,17 +272,17 @@ func TestQUICVTPM(t *testing.T) {
 		req := &VTPMGetStateRequest{
 			BundleID: "",
 		}
-		resp, err := client.SendExpectStatus(ctx, quic.OpVTPMGetState, req, quic.StatusInvalidArgument)
+		resp, err := client.SendExpectStatus(ctx, quicwire.OpVTPMGetState, req, quicwire.StatusInvalidArgument)
 		if err != nil {
 			var unexpectedStatus ErrUnexpectedStatus
 			if assert.ErrorAs(t, err, &unexpectedStatus) {
-				if unexpectedStatus.Actual == quic.StatusUnavailable {
-					t.Skip("vTPM service not available")
+				if unexpectedStatus.Actual == quicwire.StatusUnavailable {
+					t.Fatal(ErrServiceUnavailable{Service: "vTPM"})
 				}
 			}
 		}
 		if resp != nil {
-			assert.Contains(t, []byte{quic.StatusInvalidArgument, quic.StatusInvalidRequest}, resp.Status)
+			assert.Contains(t, []byte{quicwire.StatusInvalidArgument, quicwire.StatusInvalidRequest}, resp.Status)
 		}
 	})
 
@@ -296,35 +290,35 @@ func TestQUICVTPM(t *testing.T) {
 		req := &daemon.VTPMDeleteRequest{
 			BundleID: "",
 		}
-		resp, err := client.SendExpectStatus(ctx, quic.OpVTPMDelete, req, quic.StatusInvalidArgument)
+		resp, err := client.SendExpectStatus(ctx, quicwire.OpVTPMDelete, req, quicwire.StatusInvalidArgument)
 		if err != nil {
 			var unexpectedStatus ErrUnexpectedStatus
 			if assert.ErrorAs(t, err, &unexpectedStatus) {
-				if unexpectedStatus.Actual == quic.StatusUnavailable {
-					t.Skip("vTPM service not available")
+				if unexpectedStatus.Actual == quicwire.StatusUnavailable {
+					t.Fatal(ErrServiceUnavailable{Service: "vTPM"})
 				}
 			}
 		}
 		if resp != nil {
-			assert.Contains(t, []byte{quic.StatusInvalidArgument, quic.StatusInvalidRequest}, resp.Status)
+			assert.Contains(t, []byte{quicwire.StatusInvalidArgument, quicwire.StatusInvalidRequest}, resp.Status)
 		}
 	})
 
 	t.Run("vTPM ListTemplates returns templates", func(t *testing.T) {
-		resp, err := client.SendRequest(ctx, quic.OpVTPMListTemplates, nil)
+		resp, err := client.SendRequest(ctx, quicwire.OpVTPMListTemplates, nil)
 		if err != nil {
 			var unexpectedStatus ErrUnexpectedStatus
 			if assert.ErrorAs(t, err, &unexpectedStatus) {
-				if unexpectedStatus.Actual == quic.StatusUnavailable {
-					t.Skip("vTPM service not available")
+				if unexpectedStatus.Actual == quicwire.StatusUnavailable {
+					t.Fatal(ErrServiceUnavailable{Service: "vTPM"})
 				}
 			}
 			t.Fatalf("vTPM ListTemplates request failed: %v", err)
 		}
-		if resp.Status == quic.StatusUnavailable {
-			t.Skip("vTPM service not available")
+		if resp.Status == quicwire.StatusUnavailable {
+			t.Fatal(ErrServiceUnavailable{Service: "vTPM"})
 		}
-		assert.Equal(t, quic.StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 	})
 }
 
@@ -333,7 +327,6 @@ func TestQUICVTPM(t *testing.T) {
 // =============================================================================
 
 func TestQUICDNS(t *testing.T) {
-	skipIfNotIntegration(t)
 	cfg := getTestConfig()
 	client, cleanup := newTestClient(t, cfg)
 	defer cleanup()
@@ -345,12 +338,12 @@ func TestQUICDNS(t *testing.T) {
 		// The ListZones QUIC wire contract is the platform.v1 protobuf
 		// messages (see pkg/api/daemon/quic_dns_delegate.go).
 		var resp platformv1.ListZonesResponse
-		err := client.Send(ctx, quic.OpDNSListZones, &platformv1.ListZonesRequest{}, &resp)
+		err := client.Send(ctx, quicwire.OpDNSListZones, &platformv1.ListZonesRequest{}, &resp)
 		if err != nil {
 			var unexpectedStatus ErrUnexpectedStatus
 			if assert.ErrorAs(t, err, &unexpectedStatus) {
-				if unexpectedStatus.Actual == quic.StatusUnavailable {
-					t.Skip("DNS service not available")
+				if unexpectedStatus.Actual == quicwire.StatusUnavailable {
+					t.Fatal(ErrServiceUnavailable{Service: "DNS"})
 				}
 			}
 			t.Fatalf("DNS ListZones request failed: %v", err)
@@ -362,12 +355,12 @@ func TestQUICDNS(t *testing.T) {
 
 	t.Run("DNS GetConfig returns configuration", func(t *testing.T) {
 		var resp daemon.DNSGetConfigResponse
-		err := client.Send(ctx, quic.OpDNSGetConfig, nil, &resp)
+		err := client.Send(ctx, quicwire.OpDNSGetConfig, nil, &resp)
 		if err != nil {
 			var unexpectedStatus ErrUnexpectedStatus
 			if assert.ErrorAs(t, err, &unexpectedStatus) {
-				if unexpectedStatus.Actual == quic.StatusUnavailable {
-					t.Skip("DNS service not available")
+				if unexpectedStatus.Actual == quicwire.StatusUnavailable {
+					t.Fatal(ErrServiceUnavailable{Service: "DNS"})
 				}
 			}
 			t.Fatalf("DNS GetConfig request failed: %v", err)
@@ -378,12 +371,12 @@ func TestQUICDNS(t *testing.T) {
 
 	t.Run("DNS GetMetrics returns metrics", func(t *testing.T) {
 		var resp daemon.DNSGetMetricsResponse
-		err := client.Send(ctx, quic.OpDNSGetMetrics, nil, &resp)
+		err := client.Send(ctx, quicwire.OpDNSGetMetrics, nil, &resp)
 		if err != nil {
 			var unexpectedStatus ErrUnexpectedStatus
 			if assert.ErrorAs(t, err, &unexpectedStatus) {
-				if unexpectedStatus.Actual == quic.StatusUnavailable {
-					t.Skip("DNS service not available")
+				if unexpectedStatus.Actual == quicwire.StatusUnavailable {
+					t.Fatal(ErrServiceUnavailable{Service: "DNS"})
 				}
 			}
 			t.Fatalf("DNS GetMetrics request failed: %v", err)
@@ -400,17 +393,17 @@ func TestQUICDNS(t *testing.T) {
 				Record: &platformv1.Record_A{A: &platformv1.ARecord{Name: "test", Value: "192.168.1.1", Ttl: 3600}},
 			},
 		}
-		resp, err := client.SendExpectStatus(ctx, quic.OpDNSAddRecord, req, quic.StatusInvalidArgument)
+		resp, err := client.SendExpectStatus(ctx, quicwire.OpDNSAddRecord, req, quicwire.StatusInvalidArgument)
 		if err != nil {
 			var unexpectedStatus ErrUnexpectedStatus
 			if assert.ErrorAs(t, err, &unexpectedStatus) {
-				if unexpectedStatus.Actual == quic.StatusUnavailable {
-					t.Skip("DNS service not available")
+				if unexpectedStatus.Actual == quicwire.StatusUnavailable {
+					t.Fatal(ErrServiceUnavailable{Service: "DNS"})
 				}
 			}
 		}
 		if resp != nil {
-			assert.Contains(t, []byte{quic.StatusInvalidArgument, quic.StatusInvalidRequest}, resp.Status)
+			assert.Contains(t, []byte{quicwire.StatusInvalidArgument, quicwire.StatusInvalidRequest}, resp.Status)
 		}
 	})
 
@@ -420,17 +413,17 @@ func TestQUICDNS(t *testing.T) {
 			Name:       "test",
 			RecordType: "A",
 		}
-		resp, err := client.SendExpectStatus(ctx, quic.OpDNSGetRecord, req, quic.StatusInvalidArgument)
+		resp, err := client.SendExpectStatus(ctx, quicwire.OpDNSGetRecord, req, quicwire.StatusInvalidArgument)
 		if err != nil {
 			var unexpectedStatus ErrUnexpectedStatus
 			if assert.ErrorAs(t, err, &unexpectedStatus) {
-				if unexpectedStatus.Actual == quic.StatusUnavailable {
-					t.Skip("DNS service not available")
+				if unexpectedStatus.Actual == quicwire.StatusUnavailable {
+					t.Fatal(ErrServiceUnavailable{Service: "DNS"})
 				}
 			}
 		}
 		if resp != nil {
-			assert.Contains(t, []byte{quic.StatusInvalidArgument, quic.StatusInvalidRequest}, resp.Status)
+			assert.Contains(t, []byte{quicwire.StatusInvalidArgument, quicwire.StatusInvalidRequest}, resp.Status)
 		}
 	})
 
@@ -438,17 +431,17 @@ func TestQUICDNS(t *testing.T) {
 		req := &platformv1.CreateZoneRequest{
 			Name: "",
 		}
-		resp, err := client.SendExpectStatus(ctx, quic.OpDNSAddZone, req, quic.StatusInvalidArgument)
+		resp, err := client.SendExpectStatus(ctx, quicwire.OpDNSAddZone, req, quicwire.StatusInvalidArgument)
 		if err != nil {
 			var unexpectedStatus ErrUnexpectedStatus
 			if assert.ErrorAs(t, err, &unexpectedStatus) {
-				if unexpectedStatus.Actual == quic.StatusUnavailable {
-					t.Skip("DNS service not available")
+				if unexpectedStatus.Actual == quicwire.StatusUnavailable {
+					t.Fatal(ErrServiceUnavailable{Service: "DNS"})
 				}
 			}
 		}
 		if resp != nil {
-			assert.Contains(t, []byte{quic.StatusInvalidArgument, quic.StatusInvalidRequest}, resp.Status)
+			assert.Contains(t, []byte{quicwire.StatusInvalidArgument, quicwire.StatusInvalidRequest}, resp.Status)
 		}
 	})
 }
@@ -458,7 +451,6 @@ func TestQUICDNS(t *testing.T) {
 // =============================================================================
 
 func TestQUICSDN(t *testing.T) {
-	skipIfNotIntegration(t)
 	cfg := getTestConfig()
 	client, cleanup := newTestClient(t, cfg)
 	defer cleanup()
@@ -471,12 +463,12 @@ func TestQUICSDN(t *testing.T) {
 		// The bridge QUIC wire contract is the platform.v1 protobuf
 		// messages (see pkg/api/daemon/quic_sdn.go).
 		var resp platformv1.ListBridgesResponse
-		err := client.Send(opCtx, quic.OpSDNListBridges, &platformv1.ListBridgesRequest{}, &resp)
+		err := client.Send(opCtx, quicwire.OpSDNListBridges, &platformv1.ListBridgesRequest{}, &resp)
 		if err != nil {
 			var unexpectedStatus ErrUnexpectedStatus
 			if assert.ErrorAs(t, err, &unexpectedStatus) {
-				if unexpectedStatus.Actual == quic.StatusUnavailable {
-					t.Skip("SDN service not available")
+				if unexpectedStatus.Actual == quicwire.StatusUnavailable {
+					t.Fatal(ErrServiceUnavailable{Service: "SDN"})
 				}
 			}
 			t.Fatalf("SDN ListBridges request failed: %v", err)
@@ -492,21 +484,21 @@ func TestQUICSDN(t *testing.T) {
 		t.Cleanup(opCancel)
 
 		t.Log("sending SDN ListPolicies request")
-		resp, err := client.SendRequest(opCtx, quic.OpSDNListPolicies, nil)
+		resp, err := client.SendRequest(opCtx, quicwire.OpSDNListPolicies, nil)
 		if err != nil {
 			var unexpectedStatus ErrUnexpectedStatus
 			if assert.ErrorAs(t, err, &unexpectedStatus) {
-				if unexpectedStatus.Actual == quic.StatusUnavailable {
-					t.Skip("SDN service not available")
+				if unexpectedStatus.Actual == quicwire.StatusUnavailable {
+					t.Fatal(ErrServiceUnavailable{Service: "SDN"})
 				}
 			}
 			t.Fatalf("SDN ListPolicies request failed: %v", err)
 		}
-		if resp.Status == quic.StatusUnavailable {
-			t.Skip("SDN service not available")
+		if resp.Status == quicwire.StatusUnavailable {
+			t.Fatal(ErrServiceUnavailable{Service: "SDN"})
 		}
 		t.Log("SDN ListPolicies completed successfully")
-		assert.Equal(t, quic.StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 	})
 
 	t.Run("SDN GetBridge with missing id returns error", func(t *testing.T) {
@@ -517,17 +509,17 @@ func TestQUICSDN(t *testing.T) {
 		req := &platformv1.GetBridgeRequest{
 			Id: "",
 		}
-		resp, err := client.SendExpectStatus(opCtx, quic.OpSDNGetBridge, req, quic.StatusInvalidArgument)
+		resp, err := client.SendExpectStatus(opCtx, quicwire.OpSDNGetBridge, req, quicwire.StatusInvalidArgument)
 		if err != nil {
 			var unexpectedStatus ErrUnexpectedStatus
 			if assert.ErrorAs(t, err, &unexpectedStatus) {
-				if unexpectedStatus.Actual == quic.StatusUnavailable {
-					t.Skip("SDN service not available")
+				if unexpectedStatus.Actual == quicwire.StatusUnavailable {
+					t.Fatal(ErrServiceUnavailable{Service: "SDN"})
 				}
 			}
 		}
 		if resp != nil {
-			assert.Contains(t, []byte{quic.StatusInvalidArgument, quic.StatusInvalidRequest}, resp.Status)
+			assert.Contains(t, []byte{quicwire.StatusInvalidArgument, quicwire.StatusInvalidRequest}, resp.Status)
 		}
 		t.Log("SDN GetBridge error handling verified")
 	})
@@ -540,17 +532,17 @@ func TestQUICSDN(t *testing.T) {
 		req := &platformv1.CreateBridgeRequest{
 			Config: &platformv1.BridgeConfig{Name: ""},
 		}
-		resp, err := client.SendExpectStatus(opCtx, quic.OpSDNCreateBridge, req, quic.StatusInvalidArgument)
+		resp, err := client.SendExpectStatus(opCtx, quicwire.OpSDNCreateBridge, req, quicwire.StatusInvalidArgument)
 		if err != nil {
 			var unexpectedStatus ErrUnexpectedStatus
 			if assert.ErrorAs(t, err, &unexpectedStatus) {
-				if unexpectedStatus.Actual == quic.StatusUnavailable {
-					t.Skip("SDN service not available")
+				if unexpectedStatus.Actual == quicwire.StatusUnavailable {
+					t.Fatal(ErrServiceUnavailable{Service: "SDN"})
 				}
 			}
 		}
 		if resp != nil {
-			assert.Contains(t, []byte{quic.StatusInvalidArgument, quic.StatusInvalidRequest}, resp.Status)
+			assert.Contains(t, []byte{quicwire.StatusInvalidArgument, quicwire.StatusInvalidRequest}, resp.Status)
 		}
 		t.Log("SDN CreateBridge error handling verified")
 	})
@@ -563,17 +555,17 @@ func TestQUICSDN(t *testing.T) {
 		req := &daemon.SDNGetPortStateRequest{
 			PortName: "",
 		}
-		resp, err := client.SendExpectStatus(opCtx, quic.OpSDNGetPortState, req, quic.StatusInvalidArgument)
+		resp, err := client.SendExpectStatus(opCtx, quicwire.OpSDNGetPortState, req, quicwire.StatusInvalidArgument)
 		if err != nil {
 			var unexpectedStatus ErrUnexpectedStatus
 			if assert.ErrorAs(t, err, &unexpectedStatus) {
-				if unexpectedStatus.Actual == quic.StatusUnavailable {
-					t.Skip("SDN service not available")
+				if unexpectedStatus.Actual == quicwire.StatusUnavailable {
+					t.Fatal(ErrServiceUnavailable{Service: "SDN"})
 				}
 			}
 		}
 		if resp != nil {
-			assert.Contains(t, []byte{quic.StatusInvalidArgument, quic.StatusInvalidRequest}, resp.Status)
+			assert.Contains(t, []byte{quicwire.StatusInvalidArgument, quicwire.StatusInvalidRequest}, resp.Status)
 		}
 		t.Log("SDN GetPortState error handling verified")
 	})
@@ -583,21 +575,21 @@ func TestQUICSDN(t *testing.T) {
 		t.Cleanup(opCancel)
 
 		t.Log("sending SDN GetMetrics request")
-		resp, err := client.SendRequest(opCtx, quic.OpSDNGetMetrics, nil)
+		resp, err := client.SendRequest(opCtx, quicwire.OpSDNGetMetrics, nil)
 		if err != nil {
 			var unexpectedStatus ErrUnexpectedStatus
 			if assert.ErrorAs(t, err, &unexpectedStatus) {
-				if unexpectedStatus.Actual == quic.StatusUnavailable {
-					t.Skip("SDN service not available")
+				if unexpectedStatus.Actual == quicwire.StatusUnavailable {
+					t.Fatal(ErrServiceUnavailable{Service: "SDN"})
 				}
 			}
 			t.Fatalf("SDN GetMetrics request failed: %v", err)
 		}
-		if resp.Status == quic.StatusUnavailable {
-			t.Skip("SDN service not available")
+		if resp.Status == quicwire.StatusUnavailable {
+			t.Fatal(ErrServiceUnavailable{Service: "SDN"})
 		}
 		t.Log("SDN GetMetrics completed successfully")
-		assert.Equal(t, quic.StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 	})
 }
 
@@ -606,7 +598,6 @@ func TestQUICSDN(t *testing.T) {
 // =============================================================================
 
 func TestQUICKMS(t *testing.T) {
-	skipIfNotIntegration(t)
 	cfg := getTestConfig()
 	client, cleanup := newTestClient(t, cfg)
 	defer cleanup()
@@ -616,12 +607,12 @@ func TestQUICKMS(t *testing.T) {
 
 	t.Run("KMS ListKeys returns key list", func(t *testing.T) {
 		var resp daemon.KMSListKeysResponse
-		err := client.Send(ctx, quic.OpKMSListKeys, nil, &resp)
+		err := client.Send(ctx, quicwire.OpKMSListKeys, nil, &resp)
 		if err != nil {
 			var unexpectedStatus ErrUnexpectedStatus
 			if assert.ErrorAs(t, err, &unexpectedStatus) {
-				if unexpectedStatus.Actual == quic.StatusUnavailable {
-					t.Skip("KMS service not available")
+				if unexpectedStatus.Actual == quicwire.StatusUnavailable {
+					t.Fatal(ErrServiceUnavailable{Service: "KMS"})
 				}
 			}
 			t.Fatalf("KMS ListKeys request failed: %v", err)
@@ -632,12 +623,12 @@ func TestQUICKMS(t *testing.T) {
 
 	t.Run("KMS BackendStatus returns status", func(t *testing.T) {
 		var resp daemon.KMSBackendStatusResponse
-		err := client.Send(ctx, quic.OpKMSBackendStatus, nil, &resp)
+		err := client.Send(ctx, quicwire.OpKMSBackendStatus, nil, &resp)
 		if err != nil {
 			var unexpectedStatus ErrUnexpectedStatus
 			if assert.ErrorAs(t, err, &unexpectedStatus) {
-				if unexpectedStatus.Actual == quic.StatusUnavailable {
-					t.Skip("KMS service not available")
+				if unexpectedStatus.Actual == quicwire.StatusUnavailable {
+					t.Fatal(ErrServiceUnavailable{Service: "KMS"})
 				}
 			}
 			t.Fatalf("KMS BackendStatus request failed: %v", err)
@@ -650,17 +641,17 @@ func TestQUICKMS(t *testing.T) {
 		req := &daemon.KMSGetKeyRequest{
 			KeyId: "",
 		}
-		resp, err := client.SendExpectStatus(ctx, quic.OpKMSGetKey, req, quic.StatusInvalidArgument)
+		resp, err := client.SendExpectStatus(ctx, quicwire.OpKMSGetKey, req, quicwire.StatusInvalidArgument)
 		if err != nil {
 			var unexpectedStatus ErrUnexpectedStatus
 			if assert.ErrorAs(t, err, &unexpectedStatus) {
-				if unexpectedStatus.Actual == quic.StatusUnavailable {
-					t.Skip("KMS service not available")
+				if unexpectedStatus.Actual == quicwire.StatusUnavailable {
+					t.Fatal(ErrServiceUnavailable{Service: "KMS"})
 				}
 			}
 		}
 		if resp != nil {
-			assert.Contains(t, []byte{quic.StatusInvalidArgument, quic.StatusInvalidRequest, quic.StatusNotFound}, resp.Status)
+			assert.Contains(t, []byte{quicwire.StatusInvalidArgument, quicwire.StatusInvalidRequest, quicwire.StatusNotFound}, resp.Status)
 		}
 	})
 
@@ -669,17 +660,17 @@ func TestQUICKMS(t *testing.T) {
 			KeySpec: nil,
 			Name:    "test-key",
 		}
-		resp, err := client.SendExpectStatus(ctx, quic.OpKMSGenerateKey, req, quic.StatusInvalidArgument)
+		resp, err := client.SendExpectStatus(ctx, quicwire.OpKMSGenerateKey, req, quicwire.StatusInvalidArgument)
 		if err != nil {
 			var unexpectedStatus ErrUnexpectedStatus
 			if assert.ErrorAs(t, err, &unexpectedStatus) {
-				if unexpectedStatus.Actual == quic.StatusUnavailable {
-					t.Skip("KMS service not available")
+				if unexpectedStatus.Actual == quicwire.StatusUnavailable {
+					t.Fatal(ErrServiceUnavailable{Service: "KMS"})
 				}
 			}
 		}
 		if resp != nil {
-			assert.Contains(t, []byte{quic.StatusInvalidArgument, quic.StatusInvalidRequest}, resp.Status)
+			assert.Contains(t, []byte{quicwire.StatusInvalidArgument, quicwire.StatusInvalidRequest}, resp.Status)
 		}
 	})
 
@@ -688,17 +679,17 @@ func TestQUICKMS(t *testing.T) {
 			KeyId:     "",
 			Plaintext: []byte("test data"),
 		}
-		resp, err := client.SendExpectStatus(ctx, quic.OpKMSEncrypt, req, quic.StatusInvalidArgument)
+		resp, err := client.SendExpectStatus(ctx, quicwire.OpKMSEncrypt, req, quicwire.StatusInvalidArgument)
 		if err != nil {
 			var unexpectedStatus ErrUnexpectedStatus
 			if assert.ErrorAs(t, err, &unexpectedStatus) {
-				if unexpectedStatus.Actual == quic.StatusUnavailable {
-					t.Skip("KMS service not available")
+				if unexpectedStatus.Actual == quicwire.StatusUnavailable {
+					t.Fatal(ErrServiceUnavailable{Service: "KMS"})
 				}
 			}
 		}
 		if resp != nil {
-			assert.Contains(t, []byte{quic.StatusInvalidArgument, quic.StatusInvalidRequest, quic.StatusNotFound}, resp.Status)
+			assert.Contains(t, []byte{quicwire.StatusInvalidArgument, quicwire.StatusInvalidRequest, quicwire.StatusNotFound}, resp.Status)
 		}
 	})
 
@@ -713,12 +704,12 @@ func TestQUICKMS(t *testing.T) {
 
 		req := &GenerateRandomRequest{NumBytes: 32}
 		var resp GenerateRandomResponse
-		err := client.Send(ctx, quic.OpKMSGenerateRandom, req, &resp)
+		err := client.Send(ctx, quicwire.OpKMSGenerateRandom, req, &resp)
 		if err != nil {
 			var unexpectedStatus ErrUnexpectedStatus
 			if assert.ErrorAs(t, err, &unexpectedStatus) {
-				if unexpectedStatus.Actual == quic.StatusUnavailable {
-					t.Skip("KMS service not available")
+				if unexpectedStatus.Actual == quicwire.StatusUnavailable {
+					t.Fatal(ErrServiceUnavailable{Service: "KMS"})
 				}
 			}
 			t.Fatalf("KMS GenerateRandom request failed: %v", err)
@@ -732,7 +723,6 @@ func TestQUICKMS(t *testing.T) {
 // =============================================================================
 
 func TestQUICIAM(t *testing.T) {
-	skipIfNotIntegration(t)
 	cfg := getTestConfig()
 	client, cleanup := newTestClient(t, cfg)
 	defer cleanup()
@@ -746,16 +736,16 @@ func TestQUICIAM(t *testing.T) {
 
 	t.Run("IAM ListUsers returns user list", func(t *testing.T) {
 		req := &platformv1.ListIAMUsersRequest{
-			TenantId:   "default",
+			TenantId:   helpers.HarnessTenantID,
 			Pagination: &platformv1.PaginationRequest{PageSize: 10},
 		}
 		var resp platformv1.ListIAMUsersResponse
-		err := client.Send(ctx, quic.OpIAMUserList, req, &resp)
+		err := client.Send(ctx, quicwire.OpIAMUserList, req, &resp)
 		if err != nil {
 			var unexpectedStatus ErrUnexpectedStatus
 			if assert.ErrorAs(t, err, &unexpectedStatus) {
-				if unexpectedStatus.Actual == quic.StatusUnavailable {
-					t.Skip("IAM service not available")
+				if unexpectedStatus.Actual == quicwire.StatusUnavailable {
+					t.Fatal(ErrServiceUnavailable{Service: "IAM"})
 				}
 			}
 			t.Fatalf("IAM ListUsers request failed: %v", err)
@@ -766,16 +756,16 @@ func TestQUICIAM(t *testing.T) {
 
 	t.Run("IAM ListRoles returns role list", func(t *testing.T) {
 		req := &platformv1.ListIAMRolesRequest{
-			TenantId:   "default",
+			TenantId:   helpers.HarnessTenantID,
 			Pagination: &platformv1.PaginationRequest{PageSize: 10},
 		}
 		var resp platformv1.ListIAMRolesResponse
-		err := client.Send(ctx, quic.OpIAMRoleList, req, &resp)
+		err := client.Send(ctx, quicwire.OpIAMRoleList, req, &resp)
 		if err != nil {
 			var unexpectedStatus ErrUnexpectedStatus
 			if assert.ErrorAs(t, err, &unexpectedStatus) {
-				if unexpectedStatus.Actual == quic.StatusUnavailable {
-					t.Skip("IAM service not available")
+				if unexpectedStatus.Actual == quicwire.StatusUnavailable {
+					t.Fatal(ErrServiceUnavailable{Service: "IAM"})
 				}
 			}
 			t.Fatalf("IAM ListRoles request failed: %v", err)
@@ -786,16 +776,16 @@ func TestQUICIAM(t *testing.T) {
 
 	t.Run("IAM ListGroups returns group list", func(t *testing.T) {
 		req := &platformv1.ListIAMGroupsRequest{
-			TenantId:   "default",
+			TenantId:   helpers.HarnessTenantID,
 			Pagination: &platformv1.PaginationRequest{PageSize: 10},
 		}
 		var resp platformv1.ListIAMGroupsResponse
-		err := client.Send(ctx, quic.OpIAMGroupList, req, &resp)
+		err := client.Send(ctx, quicwire.OpIAMGroupList, req, &resp)
 		if err != nil {
 			var unexpectedStatus ErrUnexpectedStatus
 			if assert.ErrorAs(t, err, &unexpectedStatus) {
-				if unexpectedStatus.Actual == quic.StatusUnavailable {
-					t.Skip("IAM service not available")
+				if unexpectedStatus.Actual == quicwire.StatusUnavailable {
+					t.Fatal(ErrServiceUnavailable{Service: "IAM"})
 				}
 			}
 			t.Fatalf("IAM ListGroups request failed: %v", err)
@@ -810,53 +800,53 @@ func TestQUICIAM(t *testing.T) {
 			Email:    "test@example.com",
 			Name:     "testuser",
 		}
-		resp, err := client.SendExpectStatus(ctx, quic.OpIAMUserCreate, req, quic.StatusInvalidArgument)
+		resp, err := client.SendExpectStatus(ctx, quicwire.OpIAMUserCreate, req, quicwire.StatusInvalidArgument)
 		if err != nil {
 			var unexpectedStatus ErrUnexpectedStatus
 			if assert.ErrorAs(t, err, &unexpectedStatus) {
-				if unexpectedStatus.Actual == quic.StatusUnavailable {
-					t.Skip("IAM service not available")
+				if unexpectedStatus.Actual == quicwire.StatusUnavailable {
+					t.Fatal(ErrServiceUnavailable{Service: "IAM"})
 				}
 			}
 		}
 		if resp != nil {
-			assert.Contains(t, []byte{quic.StatusInvalidArgument, quic.StatusInvalidRequest}, resp.Status)
+			assert.Contains(t, []byte{quicwire.StatusInvalidArgument, quicwire.StatusInvalidRequest}, resp.Status)
 		}
 	})
 
 	t.Run("IAM GetUser with missing user_id returns error", func(t *testing.T) {
 		req := &platformv1.GetIAMUserRequest{
-			TenantId: "default",
+			TenantId: helpers.HarnessTenantID,
 			UserId:   "",
 		}
-		resp, err := client.SendExpectStatus(ctx, quic.OpIAMUserGet, req, quic.StatusInvalidArgument)
+		resp, err := client.SendExpectStatus(ctx, quicwire.OpIAMUserGet, req, quicwire.StatusInvalidArgument)
 		if err != nil {
 			var unexpectedStatus ErrUnexpectedStatus
 			if assert.ErrorAs(t, err, &unexpectedStatus) {
-				if unexpectedStatus.Actual == quic.StatusUnavailable {
-					t.Skip("IAM service not available")
+				if unexpectedStatus.Actual == quicwire.StatusUnavailable {
+					t.Fatal(ErrServiceUnavailable{Service: "IAM"})
 				}
 			}
 		}
 		if resp != nil {
-			assert.Contains(t, []byte{quic.StatusInvalidArgument, quic.StatusInvalidRequest, quic.StatusNotFound}, resp.Status)
+			assert.Contains(t, []byte{quicwire.StatusInvalidArgument, quicwire.StatusInvalidRequest, quicwire.StatusNotFound}, resp.Status)
 		}
 	})
 
 	t.Run("IAM CheckPermission validates access", func(t *testing.T) {
 		req := &platformv1.CheckIAMPermissionRequest{
-			TenantId:  "default",
+			TenantId:  helpers.HarnessTenantID,
 			SubjectId: "test-subject",
 			Resource:  "test-resource",
 			Action:    "read",
 		}
 		var resp platformv1.CheckIAMPermissionResponse
-		err := client.Send(ctx, quic.OpIAMCheckPermission, req, &resp)
+		err := client.Send(ctx, quicwire.OpIAMCheckPermission, req, &resp)
 		if err != nil {
 			var unexpectedStatus ErrUnexpectedStatus
 			if assert.ErrorAs(t, err, &unexpectedStatus) {
-				if unexpectedStatus.Actual == quic.StatusUnavailable {
-					t.Skip("IAM service not available")
+				if unexpectedStatus.Actual == quicwire.StatusUnavailable {
+					t.Fatal(ErrServiceUnavailable{Service: "IAM"})
 				}
 			}
 			t.Fatalf("IAM CheckPermission request failed: %v", err)
@@ -867,17 +857,17 @@ func TestQUICIAM(t *testing.T) {
 	t.Run("IAM VerifyToken is not implemented", func(t *testing.T) {
 		// Token verification is handled via OIDC flows in go-quicbaas; the
 		// daemon returns StatusNotImplemented for gRPC delegate parity.
-		resp, err := client.SendExpectStatus(ctx, quic.OpIAMTokenVerify, nil, quic.StatusNotImplemented)
+		resp, err := client.SendExpectStatus(ctx, quicwire.OpIAMTokenVerify, nil, quicwire.StatusNotImplemented)
 		if err != nil {
 			var unexpectedStatus ErrUnexpectedStatus
 			if assert.ErrorAs(t, err, &unexpectedStatus) {
-				if unexpectedStatus.Actual == quic.StatusUnavailable {
-					t.Skip("IAM service not available")
+				if unexpectedStatus.Actual == quicwire.StatusUnavailable {
+					t.Fatal(ErrServiceUnavailable{Service: "IAM"})
 				}
 			}
 		}
 		if resp != nil {
-			assert.Equal(t, quic.StatusNotImplemented, resp.Status)
+			assert.Equal(t, quicwire.StatusNotImplemented, resp.Status)
 		}
 	})
 }
@@ -887,7 +877,6 @@ func TestQUICIAM(t *testing.T) {
 // =============================================================================
 
 func TestQUICDevice(t *testing.T) {
-	skipIfNotIntegration(t)
 	cfg := getTestConfig()
 	client, cleanup := newTestClient(t, cfg)
 	defer cleanup()
@@ -901,12 +890,12 @@ func TestQUICDevice(t *testing.T) {
 
 	t.Run("Device List returns device list", func(t *testing.T) {
 		var resp platformv1.ListDevicesResponse
-		err := client.Send(ctx, quic.OpDeviceList, &platformv1.ListDevicesRequest{}, &resp)
+		err := client.Send(ctx, quicwire.OpDeviceList, &platformv1.ListDevicesRequest{}, &resp)
 		if err != nil {
 			var unexpectedStatus ErrUnexpectedStatus
 			if assert.ErrorAs(t, err, &unexpectedStatus) {
-				if unexpectedStatus.Actual == quic.StatusUnavailable {
-					t.Skip("Device service not available")
+				if unexpectedStatus.Actual == quicwire.StatusUnavailable {
+					t.Fatal(ErrServiceUnavailable{Service: "Device"})
 				}
 			}
 			t.Fatalf("Device List request failed: %v", err)
@@ -916,12 +905,12 @@ func TestQUICDevice(t *testing.T) {
 
 	t.Run("Device ListProfiles returns profile list", func(t *testing.T) {
 		var resp platformv1.ListProfilesResponse
-		err := client.Send(ctx, quic.OpDeviceListProfiles, &platformv1.ListProfilesRequest{}, &resp)
+		err := client.Send(ctx, quicwire.OpDeviceListProfiles, &platformv1.ListProfilesRequest{}, &resp)
 		if err != nil {
 			var unexpectedStatus ErrUnexpectedStatus
 			if assert.ErrorAs(t, err, &unexpectedStatus) {
-				if unexpectedStatus.Actual == quic.StatusUnavailable {
-					t.Skip("Device profile service not available")
+				if unexpectedStatus.Actual == quicwire.StatusUnavailable {
+					t.Fatal(ErrServiceUnavailable{Service: "Device profile"})
 				}
 			}
 			t.Fatalf("Device ListProfiles request failed: %v", err)
@@ -929,66 +918,59 @@ func TestQUICDevice(t *testing.T) {
 		assert.NotNil(t, resp.GetPagination(), "Pagination should be set")
 	})
 
-	t.Run("Device GetMetrics is not implemented", func(t *testing.T) {
-		resp, err := client.SendExpectStatus(ctx, quic.OpDeviceGetMetrics, nil, quic.StatusNotImplemented)
-		if err != nil {
-			var unexpectedStatus ErrUnexpectedStatus
-			if assert.ErrorAs(t, err, &unexpectedStatus) {
-				if unexpectedStatus.Actual == quic.StatusUnavailable {
-					t.Skip("Device service not available")
-				}
-			}
-		}
-		if resp != nil {
-			assert.Equal(t, quic.StatusNotImplemented, resp.Status)
-		}
+	// 0x3E was OpDeviceGetMetrics, retired unimplemented (#317): the byte has
+	// no permission entry, so the guard refuses it before any dispatch.
+	t.Run("Retired device byte 0x3E is refused as unclassified", func(t *testing.T) {
+		resp, err := client.SendExpectStatus(ctx, 0x3E, nil, quicwire.StatusPermissionDenied)
+		require.NoError(t, err)
+		assert.Equal(t, quicwire.StatusPermissionDenied, resp.Status)
 	})
 
 	t.Run("Device Register without device returns error", func(t *testing.T) {
-		resp, err := client.SendExpectStatus(ctx, quic.OpDeviceRegister,
-			&platformv1.CreateDeviceRequest{}, quic.StatusInvalidArgument)
+		resp, err := client.SendExpectStatus(ctx, quicwire.OpDeviceRegister,
+			&platformv1.CreateDeviceRequest{}, quicwire.StatusInvalidArgument)
 		if err != nil {
 			var unexpectedStatus ErrUnexpectedStatus
 			if assert.ErrorAs(t, err, &unexpectedStatus) {
-				if unexpectedStatus.Actual == quic.StatusUnavailable {
-					t.Skip("Device service not available")
+				if unexpectedStatus.Actual == quicwire.StatusUnavailable {
+					t.Fatal(ErrServiceUnavailable{Service: "Device"})
 				}
 			}
 		}
 		if resp != nil {
-			assert.Contains(t, []byte{quic.StatusInvalidArgument, quic.StatusInvalidRequest}, resp.Status)
+			assert.Contains(t, []byte{quicwire.StatusInvalidArgument, quicwire.StatusInvalidRequest}, resp.Status)
 		}
 	})
 
 	t.Run("Device Get with missing ID returns error", func(t *testing.T) {
-		resp, err := client.SendExpectStatus(ctx, quic.OpDeviceGet,
-			&platformv1.GetDeviceRequest{Id: 0}, quic.StatusInvalidArgument)
+		resp, err := client.SendExpectStatus(ctx, quicwire.OpDeviceGet,
+			&platformv1.GetDeviceRequest{Id: 0}, quicwire.StatusInvalidArgument)
 		if err != nil {
 			var unexpectedStatus ErrUnexpectedStatus
 			if assert.ErrorAs(t, err, &unexpectedStatus) {
-				if unexpectedStatus.Actual == quic.StatusUnavailable {
-					t.Skip("Device service not available")
+				if unexpectedStatus.Actual == quicwire.StatusUnavailable {
+					t.Fatal(ErrServiceUnavailable{Service: "Device"})
 				}
 			}
 		}
 		if resp != nil {
-			assert.Contains(t, []byte{quic.StatusInvalidArgument, quic.StatusInvalidRequest}, resp.Status)
+			assert.Contains(t, []byte{quicwire.StatusInvalidArgument, quicwire.StatusInvalidRequest}, resp.Status)
 		}
 	})
 
 	t.Run("Device GetProfile with missing ID returns error", func(t *testing.T) {
-		resp, err := client.SendExpectStatus(ctx, quic.OpDeviceGetProfile,
-			&platformv1.GetProfileRequest{Id: 0}, quic.StatusInvalidArgument)
+		resp, err := client.SendExpectStatus(ctx, quicwire.OpDeviceGetProfile,
+			&platformv1.GetProfileRequest{Id: 0}, quicwire.StatusInvalidArgument)
 		if err != nil {
 			var unexpectedStatus ErrUnexpectedStatus
 			if assert.ErrorAs(t, err, &unexpectedStatus) {
-				if unexpectedStatus.Actual == quic.StatusUnavailable {
-					t.Skip("Device profile service not available")
+				if unexpectedStatus.Actual == quicwire.StatusUnavailable {
+					t.Fatal(ErrServiceUnavailable{Service: "Device profile"})
 				}
 			}
 		}
 		if resp != nil {
-			assert.Contains(t, []byte{quic.StatusInvalidArgument, quic.StatusInvalidRequest}, resp.Status)
+			assert.Contains(t, []byte{quicwire.StatusInvalidArgument, quicwire.StatusInvalidRequest}, resp.Status)
 		}
 	})
 }
@@ -998,7 +980,6 @@ func TestQUICDevice(t *testing.T) {
 // =============================================================================
 
 func TestQUICErrorHandling(t *testing.T) {
-	skipIfNotIntegration(t)
 	cfg := getTestConfig()
 	client, cleanup := newTestClient(t, cfg)
 	defer cleanup()
@@ -1012,21 +993,21 @@ func TestQUICErrorHandling(t *testing.T) {
 		// the PXE service isn't registered) rather than hitting the default case.
 		resp, err := client.SendRequest(ctx, 0xFF, nil)
 		require.NoError(t, err)
-		assert.Contains(t, []byte{quic.StatusNotImplemented, quic.StatusUnavailable}, resp.Status)
+		assert.Contains(t, []byte{quicwire.StatusNotImplemented, quicwire.StatusUnavailable}, resp.Status)
 	})
 
 	t.Run("Invalid payload returns InvalidRequest", func(t *testing.T) {
 		// Send garbage payload to an opcode that expects structured data
-		resp, err := client.SendRequest(ctx, quic.OpVTPMCreate, []byte("invalid payload"))
+		resp, err := client.SendRequest(ctx, quicwire.OpVTPMCreate, []byte("invalid payload"))
 		require.NoError(t, err)
-		assert.Contains(t, []byte{quic.StatusInvalidRequest, quic.StatusInvalidArgument, quic.StatusUnavailable}, resp.Status)
+		assert.Contains(t, []byte{quicwire.StatusInvalidRequest, quicwire.StatusInvalidArgument, quicwire.StatusUnavailable}, resp.Status)
 	})
 
 	t.Run("Nil request payload handled gracefully", func(t *testing.T) {
 		// Health check should work with nil payload
-		resp, err := client.SendRequest(ctx, quic.OpHealth, nil)
+		resp, err := client.SendRequest(ctx, quicwire.OpHealth, nil)
 		require.NoError(t, err)
-		assert.Equal(t, quic.StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 	})
 }
 
@@ -1035,7 +1016,6 @@ func TestQUICErrorHandling(t *testing.T) {
 // =============================================================================
 
 func TestQUICConnection(t *testing.T) {
-	skipIfNotIntegration(t)
 	cfg := getTestConfig()
 
 	// Check if server is available at the start
@@ -1043,7 +1023,7 @@ func TestQUICConnection(t *testing.T) {
 	checkCtx, checkCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	if err := checkClient.Connect(checkCtx); err != nil {
 		checkCancel()
-		t.Skipf("QUIC server not available at %s: %v (start platformd with --enable-quic to run these tests)", cfg.QUICAddr, err)
+		t.Fatal(ErrQUICServerRequired{Address: cfg.QUICAddr, Cause: err})
 	}
 	checkClient.Close()
 	checkCancel()

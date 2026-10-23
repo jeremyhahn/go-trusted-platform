@@ -24,9 +24,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/policy"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 func TestNewSDNService(t *testing.T) {
@@ -114,11 +117,10 @@ func TestSDNService_CreateBridge_ValidationErrors(t *testing.T) {
 
 func TestSDNService_CreateBridge_AlreadyExists(t *testing.T) {
 	svc := &SDNService{
-		bridges:   make(map[string]*bridgeResource),
-		ports:     make(map[string]*portResource),
-		taps:      make(map[string]*tapResource),
-		vlans:     make(map[string]*vlanResource),
-		portAuths: make(map[string]*portAuthResource),
+		bridges: make(map[string]*bridgeResource),
+		ports:   make(map[string]*portResource),
+		taps:    make(map[string]*tapResource),
+		vlans:   make(map[string]*vlanResource),
 	}
 
 	// Add existing bridge
@@ -322,11 +324,10 @@ func TestSDNService_DeletePort_ValidationErrors(t *testing.T) {
 
 func TestSDNService_DeletePort_PortNotFound(t *testing.T) {
 	svc := &SDNService{
-		bridges:   make(map[string]*bridgeResource),
-		ports:     make(map[string]*portResource),
-		taps:      make(map[string]*tapResource),
-		vlans:     make(map[string]*vlanResource),
-		portAuths: make(map[string]*portAuthResource),
+		bridges: make(map[string]*bridgeResource),
+		ports:   make(map[string]*portResource),
+		taps:    make(map[string]*tapResource),
+		vlans:   make(map[string]*vlanResource),
 	}
 
 	// Add a bridge but no ports
@@ -566,11 +567,10 @@ func TestSDNService_ListFlows_ValidationErrors(t *testing.T) {
 
 func TestSDNService_FlushFlows_ValidationErrors(t *testing.T) {
 	svc := &SDNService{
-		bridges:   make(map[string]*bridgeResource),
-		ports:     make(map[string]*portResource),
-		taps:      make(map[string]*tapResource),
-		vlans:     make(map[string]*vlanResource),
-		portAuths: make(map[string]*portAuthResource),
+		bridges: make(map[string]*bridgeResource),
+		ports:   make(map[string]*portResource),
+		taps:    make(map[string]*tapResource),
+		vlans:   make(map[string]*vlanResource),
 	}
 
 	ctx := context.Background()
@@ -604,11 +604,10 @@ func TestSDNService_FlushFlows_ValidationErrors(t *testing.T) {
 
 func TestSDNService_CreateVLAN_ValidationErrors(t *testing.T) {
 	svc := &SDNService{
-		bridges:   make(map[string]*bridgeResource),
-		ports:     make(map[string]*portResource),
-		taps:      make(map[string]*tapResource),
-		vlans:     make(map[string]*vlanResource),
-		portAuths: make(map[string]*portAuthResource),
+		bridges: make(map[string]*bridgeResource),
+		ports:   make(map[string]*portResource),
+		taps:    make(map[string]*tapResource),
+		vlans:   make(map[string]*vlanResource),
 	}
 
 	ctx := context.Background()
@@ -677,11 +676,10 @@ func TestSDNService_CreateVLAN_ValidationErrors(t *testing.T) {
 
 func TestSDNService_DeleteVLAN_ValidationErrors(t *testing.T) {
 	svc := &SDNService{
-		bridges:   make(map[string]*bridgeResource),
-		ports:     make(map[string]*portResource),
-		taps:      make(map[string]*tapResource),
-		vlans:     make(map[string]*vlanResource),
-		portAuths: make(map[string]*portAuthResource),
+		bridges: make(map[string]*bridgeResource),
+		ports:   make(map[string]*portResource),
+		taps:    make(map[string]*tapResource),
+		vlans:   make(map[string]*vlanResource),
 	}
 
 	ctx := context.Background()
@@ -720,11 +718,10 @@ func TestSDNService_DeleteVLAN_ValidationErrors(t *testing.T) {
 
 func TestSDNService_ListVLANs_ValidationErrors(t *testing.T) {
 	svc := &SDNService{
-		bridges:   make(map[string]*bridgeResource),
-		ports:     make(map[string]*portResource),
-		taps:      make(map[string]*tapResource),
-		vlans:     make(map[string]*vlanResource),
-		portAuths: make(map[string]*portAuthResource),
+		bridges: make(map[string]*bridgeResource),
+		ports:   make(map[string]*portResource),
+		taps:    make(map[string]*tapResource),
+		vlans:   make(map[string]*vlanResource),
 	}
 
 	ctx := context.Background()
@@ -758,11 +755,10 @@ func TestSDNService_ListVLANs_ValidationErrors(t *testing.T) {
 
 func TestSDNService_ListVLANs_Success(t *testing.T) {
 	svc := &SDNService{
-		bridges:   make(map[string]*bridgeResource),
-		ports:     make(map[string]*portResource),
-		taps:      make(map[string]*tapResource),
-		vlans:     make(map[string]*vlanResource),
-		portAuths: make(map[string]*portAuthResource),
+		bridges: make(map[string]*bridgeResource),
+		ports:   make(map[string]*portResource),
+		taps:    make(map[string]*tapResource),
+		vlans:   make(map[string]*vlanResource),
 	}
 
 	// Add a bridge
@@ -802,344 +798,50 @@ func TestSDNService_ListVLANs_Success(t *testing.T) {
 	assert.Len(t, resp.Vlans, 2)
 }
 
-func TestSDNService_AuthenticatePort_ValidationErrors(t *testing.T) {
+// TestSDNService_PortAuthRefused pins port authentication to a typed
+// FailedPrecondition refusal (#304). Before it, a self-signed certificate on a
+// known port answered "port authenticated successfully" and the switch never
+// admitted or blocked the port.
+func TestSDNService_PortAuthRefused(t *testing.T) {
 	svc := &SDNService{
-		bridges:   make(map[string]*bridgeResource),
-		ports:     make(map[string]*portResource),
-		taps:      make(map[string]*tapResource),
-		vlans:     make(map[string]*vlanResource),
-		portAuths: make(map[string]*portAuthResource),
+		bridges: map[string]*bridgeResource{"br0": {id: "uuid-1", name: "br0"}},
+		ports:   map[string]*portResource{"port0": {id: "uuid-2", name: "port0", bridgeID: "br0"}},
+		taps:    make(map[string]*tapResource),
+		vlans:   make(map[string]*vlanResource),
 	}
+	selfSigned := generateTestCertificate(t, time.Now().Add(-24*time.Hour), time.Now().Add(24*time.Hour))
 
-	ctx := context.Background()
-
-	tests := []struct {
-		name          string
-		req           *platformv1.AuthenticatePortRequest
-		errorContains string
-	}{
-		{
-			name:          "empty bridge id",
-			req:           &platformv1.AuthenticatePortRequest{BridgeId: "", PortId: "port0", Certificate: []byte("cert")},
-			errorContains: "bridge_id is required",
+	calls := map[string]func() (interface{}, error){
+		"AuthenticatePort": func() (interface{}, error) {
+			return svc.AuthenticatePort(context.Background(), &platformv1.AuthenticatePortRequest{
+				BridgeId: "br0", PortId: "port0", Certificate: selfSigned,
+			})
 		},
-		{
-			name:          "empty port id",
-			req:           &platformv1.AuthenticatePortRequest{BridgeId: "br0", PortId: "", Certificate: []byte("cert")},
-			errorContains: "port_id is required",
-		},
-		{
-			name:          "empty certificate",
-			req:           &platformv1.AuthenticatePortRequest{BridgeId: "br0", PortId: "port0", Certificate: []byte{}},
-			errorContains: "certificate is required",
-		},
-		{
-			name:          "bridge not found",
-			req:           &platformv1.AuthenticatePortRequest{BridgeId: "nonexistent", PortId: "port0", Certificate: []byte("cert")},
-			errorContains: "bridge not found",
+		"RevokePortAuth": func() (interface{}, error) {
+			return svc.RevokePortAuth(context.Background(), &platformv1.RevokePortAuthRequest{
+				BridgeId: "br0", PortId: "port0",
+			})
 		},
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			resp, err := svc.AuthenticatePort(ctx, tt.req)
-			assert.Error(t, err)
+	for operation, call := range calls {
+		t.Run(operation, func(t *testing.T) {
+			resp, err := call()
+			var refusal policy.ErrPortAuthNotEnforced
+			require.ErrorAs(t, err, &refusal)
+			assert.Equal(t, operation, refusal.Operation)
+			assert.Equal(t, codes.FailedPrecondition, status.Code(err))
 			assert.Nil(t, resp)
-			assert.Contains(t, err.Error(), tt.errorContains)
 		})
 	}
-}
-
-func TestSDNService_AuthenticatePort_PortNotFound(t *testing.T) {
-	svc := &SDNService{
-		bridges:   make(map[string]*bridgeResource),
-		ports:     make(map[string]*portResource),
-		taps:      make(map[string]*tapResource),
-		vlans:     make(map[string]*vlanResource),
-		portAuths: make(map[string]*portAuthResource),
-	}
-
-	// Add bridge without port
-	svc.bridges["br0"] = &bridgeResource{
-		id:         "uuid-1",
-		name:       "br0",
-		bridgeType: platformv1.BridgeType_BRIDGE_TYPE_OVS,
-	}
-
-	ctx := context.Background()
-
-	req := &platformv1.AuthenticatePortRequest{
-		BridgeId:    "br0",
-		PortId:      "nonexistent-port",
-		Certificate: []byte("cert"),
-	}
-
-	resp, err := svc.AuthenticatePort(ctx, req)
-	assert.Error(t, err)
-	assert.Nil(t, resp)
-	assert.Contains(t, err.Error(), "port not found")
-}
-
-func TestSDNService_AuthenticatePort_InvalidCertificate(t *testing.T) {
-	svc := &SDNService{
-		bridges:   make(map[string]*bridgeResource),
-		ports:     make(map[string]*portResource),
-		taps:      make(map[string]*tapResource),
-		vlans:     make(map[string]*vlanResource),
-		portAuths: make(map[string]*portAuthResource),
-	}
-
-	// Add bridge and port
-	svc.bridges["br0"] = &bridgeResource{
-		id:         "uuid-1",
-		name:       "br0",
-		bridgeType: platformv1.BridgeType_BRIDGE_TYPE_OVS,
-	}
-	svc.ports["port0"] = &portResource{
-		id:       "uuid-2",
-		name:     "port0",
-		bridgeID: "br0",
-	}
-
-	ctx := context.Background()
-
-	t.Run("invalid PEM certificate", func(t *testing.T) {
-		req := &platformv1.AuthenticatePortRequest{
-			BridgeId:    "br0",
-			PortId:      "port0",
-			Certificate: []byte("invalid-pem-data"),
-		}
-
-		resp, err := svc.AuthenticatePort(ctx, req)
-		assert.Error(t, err)
-		assert.Nil(t, resp)
-		assert.Contains(t, err.Error(), "failed to decode PEM certificate")
-	})
-
-	t.Run("invalid DER certificate", func(t *testing.T) {
-		req := &platformv1.AuthenticatePortRequest{
-			BridgeId:    "br0",
-			PortId:      "port0",
-			Certificate: []byte{0x01, 0x02, 0x03}, // Invalid DER data
-			Format:      "DER",
-		}
-
-		resp, err := svc.AuthenticatePort(ctx, req)
-		assert.Error(t, err)
-		assert.Nil(t, resp)
-		assert.Contains(t, err.Error(), "failed to parse certificate")
-	})
-}
-
-func TestSDNService_AuthenticatePort_ExpiredCertificate(t *testing.T) {
-	svc := &SDNService{
-		bridges:   make(map[string]*bridgeResource),
-		ports:     make(map[string]*portResource),
-		taps:      make(map[string]*tapResource),
-		vlans:     make(map[string]*vlanResource),
-		portAuths: make(map[string]*portAuthResource),
-	}
-
-	// Add bridge and port
-	svc.bridges["br0"] = &bridgeResource{
-		id:         "uuid-1",
-		name:       "br0",
-		bridgeType: platformv1.BridgeType_BRIDGE_TYPE_OVS,
-	}
-	svc.ports["port0"] = &portResource{
-		id:       "uuid-2",
-		name:     "port0",
-		bridgeID: "br0",
-	}
-
-	// Generate expired certificate
-	expiredCert := generateTestCertificate(t, time.Now().Add(-48*time.Hour), time.Now().Add(-24*time.Hour))
-
-	ctx := context.Background()
-
-	req := &platformv1.AuthenticatePortRequest{
-		BridgeId:    "br0",
-		PortId:      "port0",
-		Certificate: expiredCert,
-	}
-
-	resp, err := svc.AuthenticatePort(ctx, req)
-	assert.Error(t, err)
-	assert.Nil(t, resp)
-	assert.Contains(t, err.Error(), "not valid at current time")
-}
-
-func TestSDNService_AuthenticatePort_Success(t *testing.T) {
-	svc := &SDNService{
-		bridges:   make(map[string]*bridgeResource),
-		ports:     make(map[string]*portResource),
-		taps:      make(map[string]*tapResource),
-		vlans:     make(map[string]*vlanResource),
-		portAuths: make(map[string]*portAuthResource),
-	}
-
-	// Add bridge and port
-	svc.bridges["br0"] = &bridgeResource{
-		id:         "uuid-1",
-		name:       "br0",
-		bridgeType: platformv1.BridgeType_BRIDGE_TYPE_OVS,
-	}
-	svc.ports["port0"] = &portResource{
-		id:       "uuid-2",
-		name:     "port0",
-		bridgeID: "br0",
-	}
-
-	// Generate valid certificate
-	validCert := generateTestCertificate(t, time.Now().Add(-24*time.Hour), time.Now().Add(24*time.Hour))
-
-	ctx := context.Background()
-
-	req := &platformv1.AuthenticatePortRequest{
-		BridgeId:    "br0",
-		PortId:      "port0",
-		Certificate: validCert,
-	}
-
-	resp, err := svc.AuthenticatePort(ctx, req)
-	assert.NoError(t, err)
-	assert.NotNil(t, resp)
-	assert.True(t, resp.Status.Success)
-	assert.True(t, resp.Auth.Authenticated)
-	assert.Equal(t, "test.example.com", resp.Auth.CertificateCn)
-}
-
-func TestSDNService_RevokePortAuth_ValidationErrors(t *testing.T) {
-	svc := &SDNService{
-		bridges:   make(map[string]*bridgeResource),
-		ports:     make(map[string]*portResource),
-		taps:      make(map[string]*tapResource),
-		vlans:     make(map[string]*vlanResource),
-		portAuths: make(map[string]*portAuthResource),
-	}
-
-	ctx := context.Background()
-
-	tests := []struct {
-		name          string
-		req           *platformv1.RevokePortAuthRequest
-		errorContains string
-	}{
-		{
-			name:          "empty bridge id",
-			req:           &platformv1.RevokePortAuthRequest{BridgeId: "", PortId: "port0"},
-			errorContains: "bridge_id is required",
-		},
-		{
-			name:          "empty port id",
-			req:           &platformv1.RevokePortAuthRequest{BridgeId: "br0", PortId: ""},
-			errorContains: "port_id is required",
-		},
-		{
-			name:          "bridge not found",
-			req:           &platformv1.RevokePortAuthRequest{BridgeId: "nonexistent", PortId: "port0"},
-			errorContains: "bridge not found",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			resp, err := svc.RevokePortAuth(ctx, tt.req)
-			assert.Error(t, err)
-			assert.Nil(t, resp)
-			assert.Contains(t, err.Error(), tt.errorContains)
-		})
-	}
-}
-
-func TestSDNService_RevokePortAuth_NotFound(t *testing.T) {
-	svc := &SDNService{
-		bridges:   make(map[string]*bridgeResource),
-		ports:     make(map[string]*portResource),
-		taps:      make(map[string]*tapResource),
-		vlans:     make(map[string]*vlanResource),
-		portAuths: make(map[string]*portAuthResource),
-	}
-
-	// Add a bridge and port
-	svc.bridges["br0"] = &bridgeResource{
-		id:         "uuid-1",
-		name:       "br0",
-		bridgeType: platformv1.BridgeType_BRIDGE_TYPE_OVS,
-	}
-	svc.ports["port0"] = &portResource{
-		id:       "uuid-2",
-		name:     "port0",
-		bridgeID: "br0",
-	}
-
-	ctx := context.Background()
-
-	req := &platformv1.RevokePortAuthRequest{
-		BridgeId: "br0",
-		PortId:   "port0",
-	}
-
-	resp, err := svc.RevokePortAuth(ctx, req)
-	assert.Error(t, err)
-	assert.Nil(t, resp)
-	assert.Contains(t, err.Error(), "port authentication not found")
-}
-
-func TestSDNService_RevokePortAuth_Success(t *testing.T) {
-	svc := &SDNService{
-		bridges:   make(map[string]*bridgeResource),
-		ports:     make(map[string]*portResource),
-		taps:      make(map[string]*tapResource),
-		vlans:     make(map[string]*vlanResource),
-		portAuths: make(map[string]*portAuthResource),
-	}
-
-	// Add a bridge and port
-	svc.bridges["br0"] = &bridgeResource{
-		id:         "uuid-1",
-		name:       "br0",
-		bridgeType: platformv1.BridgeType_BRIDGE_TYPE_OVS,
-	}
-	svc.ports["port0"] = &portResource{
-		id:       "uuid-2",
-		name:     "port0",
-		bridgeID: "br0",
-	}
-
-	// Add port auth
-	svc.portAuths["br0:port0"] = &portAuthResource{
-		portID:          "port0",
-		bridgeID:        "br0",
-		certificateCN:   "test.example.com",
-		authenticatedAt: time.Now(),
-		expiresAt:       time.Now().Add(24 * time.Hour),
-	}
-
-	ctx := context.Background()
-
-	req := &platformv1.RevokePortAuthRequest{
-		BridgeId: "br0",
-		PortId:   "port0",
-	}
-
-	resp, err := svc.RevokePortAuth(ctx, req)
-	assert.NoError(t, err)
-	assert.NotNil(t, resp)
-	assert.True(t, resp.Status.Success)
-
-	// Verify auth was removed
-	_, exists := svc.portAuths["br0:port0"]
-	assert.False(t, exists)
 }
 
 func TestSDNService_GetPortStats_ValidationErrors(t *testing.T) {
 	svc := &SDNService{
-		bridges:   make(map[string]*bridgeResource),
-		ports:     make(map[string]*portResource),
-		taps:      make(map[string]*tapResource),
-		vlans:     make(map[string]*vlanResource),
-		portAuths: make(map[string]*portAuthResource),
+		bridges: make(map[string]*bridgeResource),
+		ports:   make(map[string]*portResource),
+		taps:    make(map[string]*tapResource),
+		vlans:   make(map[string]*vlanResource),
 	}
 
 	ctx := context.Background()
@@ -1178,11 +880,10 @@ func TestSDNService_GetPortStats_ValidationErrors(t *testing.T) {
 
 func TestSDNService_GetFlowStats_ValidationErrors(t *testing.T) {
 	svc := &SDNService{
-		bridges:   make(map[string]*bridgeResource),
-		ports:     make(map[string]*portResource),
-		taps:      make(map[string]*tapResource),
-		vlans:     make(map[string]*vlanResource),
-		portAuths: make(map[string]*portAuthResource),
+		bridges: make(map[string]*bridgeResource),
+		ports:   make(map[string]*portResource),
+		taps:    make(map[string]*tapResource),
+		vlans:   make(map[string]*vlanResource),
 	}
 
 	ctx := context.Background()
@@ -1221,11 +922,10 @@ func TestSDNService_GetFlowStats_ValidationErrors(t *testing.T) {
 
 func TestSDNService_StreamFlowLogs_ValidationErrors(t *testing.T) {
 	svc := &SDNService{
-		bridges:   make(map[string]*bridgeResource),
-		ports:     make(map[string]*portResource),
-		taps:      make(map[string]*tapResource),
-		vlans:     make(map[string]*vlanResource),
-		portAuths: make(map[string]*portAuthResource),
+		bridges: make(map[string]*bridgeResource),
+		ports:   make(map[string]*portResource),
+		taps:    make(map[string]*tapResource),
+		vlans:   make(map[string]*vlanResource),
 	}
 
 	t.Run("empty bridge id", func(t *testing.T) {
@@ -1245,11 +945,10 @@ func TestSDNService_StreamFlowLogs_ValidationErrors(t *testing.T) {
 
 func TestSDNService_VLANAlreadyExists(t *testing.T) {
 	svc := &SDNService{
-		bridges:   make(map[string]*bridgeResource),
-		ports:     make(map[string]*portResource),
-		taps:      make(map[string]*tapResource),
-		vlans:     make(map[string]*vlanResource),
-		portAuths: make(map[string]*portAuthResource),
+		bridges: make(map[string]*bridgeResource),
+		ports:   make(map[string]*portResource),
+		taps:    make(map[string]*tapResource),
+		vlans:   make(map[string]*vlanResource),
 	}
 
 	// Add a bridge
@@ -1283,11 +982,10 @@ func TestSDNService_VLANAlreadyExists(t *testing.T) {
 
 func TestSDNService_DeleteVLAN_NotFound(t *testing.T) {
 	svc := &SDNService{
-		bridges:   make(map[string]*bridgeResource),
-		ports:     make(map[string]*portResource),
-		taps:      make(map[string]*tapResource),
-		vlans:     make(map[string]*vlanResource),
-		portAuths: make(map[string]*portAuthResource),
+		bridges: make(map[string]*bridgeResource),
+		ports:   make(map[string]*portResource),
+		taps:    make(map[string]*tapResource),
+		vlans:   make(map[string]*vlanResource),
 	}
 
 	// Add a bridge

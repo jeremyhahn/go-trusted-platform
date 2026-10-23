@@ -71,7 +71,7 @@ func (VIPConfigSeed) vip() (loadbalancer.VIP, error) {
 
 func TestRESTGatewayLBAdapter(t *testing.T) {
 	svc := newGatewayRESTService(nil, slog.Default())
-	svc.SetLoadBalancer(newFakeGatewayLB())
+	svc.backends = NewGatewayService(WithLoadBalancer(newFakeGatewayLB()))
 	ctx := context.Background()
 
 	vip, err := svc.AddVIP(ctx, &rest.LBVIPRequest{
@@ -138,7 +138,7 @@ func TestRESTGatewayLBAdapterErrors(t *testing.T) {
 
 	t.Run("error mapping", func(t *testing.T) {
 		svc := newGatewayRESTService(nil, slog.Default())
-		svc.SetLoadBalancer(newFakeGatewayLB())
+		svc.backends = NewGatewayService(WithLoadBalancer(newFakeGatewayLB()))
 
 		if _, err := svc.GetVIP(ctx, "tcp", "10.9.9.9", 1); !errors.Is(err, rest.ErrLBVIPNotFound{}) {
 			t.Errorf("GetVIP unknown = %v", err)
@@ -158,7 +158,7 @@ func TestRESTGatewayLBAdapterErrors(t *testing.T) {
 		svc := newGatewayRESTService(nil, slog.Default())
 		lb := newFakeGatewayLB()
 		lb.err = loadbalancer.ErrNotStarted
-		svc.SetLoadBalancer(lb)
+		svc.backends = NewGatewayService(WithLoadBalancer(lb))
 		if _, err := svc.GetLBStatus(ctx); !errors.Is(err, rest.ErrLBNotConfigured{}) {
 			t.Errorf("GetLBStatus = %v", err)
 		}
@@ -170,8 +170,8 @@ func TestRESTGatewayLBAdapterErrors(t *testing.T) {
 // =============================================================================
 
 func TestQUICGatewayLBAdapter(t *testing.T) {
-	adapter := newFullGatewayQUICAdapter(nil, nil, nil)
-	adapter.SetLoadBalancer(newFakeGatewayLB())
+	adapter := newFullGatewayQUICAdapter(nil, nil, nil, nil, nil, nil)
+	adapter.backends = NewGatewayService(WithLoadBalancer(newFakeGatewayLB()))
 	ctx := context.Background()
 
 	vip, err := adapter.AddVIP(ctx, &quic.LBVIPSpec{
@@ -217,15 +217,15 @@ func TestQUICGatewayLBAdapterErrors(t *testing.T) {
 	ctx := context.Background()
 
 	t.Run("not configured", func(t *testing.T) {
-		adapter := newFullGatewayQUICAdapter(nil, nil, nil)
+		adapter := newFullGatewayQUICAdapter(nil, nil, nil, nil, nil, nil)
 		if _, err := adapter.LBStatus(ctx); !errors.Is(err, quic.ErrGatewayFeatureNotConfigured) {
 			t.Errorf("LBStatus = %v", err)
 		}
 	})
 
 	t.Run("error mapping", func(t *testing.T) {
-		adapter := newFullGatewayQUICAdapter(nil, nil, nil)
-		adapter.SetLoadBalancer(newFakeGatewayLB())
+		adapter := newFullGatewayQUICAdapter(nil, nil, nil, nil, nil, nil)
+		adapter.backends = NewGatewayService(WithLoadBalancer(newFakeGatewayLB()))
 
 		if _, err := adapter.GetVIP(ctx, "tcp", "10.9.9.9", 1); !errors.Is(err, quic.ErrGatewayVIPNotFound) {
 			t.Errorf("GetVIP unknown = %v", err)
@@ -272,8 +272,9 @@ func TestQUICGatewayLBAdapterErrors(t *testing.T) {
 // =============================================================================
 
 func TestMCPGatewayLBProvider(t *testing.T) {
-	provider := NewMCPServiceProvider(&MCPServiceProviderConfig{})
-	provider.SetGatewayLoadBalancer(seededLB(t))
+	provider := NewMCPServiceProvider(&MCPServiceProviderConfig{
+		GatewayBackends: NewGatewayService(WithLoadBalancer(seededLB(t))),
+	})
 	ctx := context.Background()
 
 	got, err := provider.GatewayLBVIPGet(ctx, "tcp", "10.100.0.10", 443)
@@ -333,8 +334,9 @@ func TestMCPGatewayLBProviderErrors(t *testing.T) {
 	})
 
 	t.Run("bad target", func(t *testing.T) {
-		provider := NewMCPServiceProvider(&MCPServiceProviderConfig{})
-		provider.SetGatewayLoadBalancer(newFakeGatewayLB())
+		provider := NewMCPServiceProvider(&MCPServiceProviderConfig{
+			GatewayBackends: NewGatewayService(WithLoadBalancer(newFakeGatewayLB())),
+		})
 		if _, err := provider.GatewayLBVIPGet(ctx, "tcp", "bogus", 443); !errors.Is(err, mcp.ErrLBVIPTargetRequired) {
 			t.Errorf("GatewayLBVIPGet = %v", err)
 		}
@@ -346,23 +348,6 @@ func TestMCPGatewayLBProviderErrors(t *testing.T) {
 			Backends: []*mcp.LBBackendRequest{{Address: "bogus", Port: 1}},
 		}); !errors.Is(err, mcp.ErrLBBackendsRequired) {
 			t.Errorf("GatewayLBVIPAdd bad backend = %v", err)
-		}
-	})
-
-	t.Run("platform provider not configured", func(t *testing.T) {
-		provider := &PlatformServiceProvider{}
-		var unavailable ErrServiceNotAvailable
-		if _, err := provider.GatewayLBStatus(ctx); !errors.As(err, &unavailable) {
-			t.Errorf("GatewayLBStatus = %v", err)
-		}
-	})
-
-	t.Run("platform provider configured", func(t *testing.T) {
-		provider := &PlatformServiceProvider{}
-		provider.SetGatewayLoadBalancer(seededLB(t))
-		vips, err := provider.GatewayLBVIPList(ctx)
-		if err != nil || len(vips) != 1 {
-			t.Errorf("GatewayLBVIPList = %v (%v)", vips, err)
 		}
 	})
 }

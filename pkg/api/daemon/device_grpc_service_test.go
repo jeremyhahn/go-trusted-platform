@@ -165,6 +165,7 @@ type mockProfileService struct {
 	findByMACErr           error
 	findBySerialErr        error
 	findMatchingProfileErr error
+	findForDeviceErr       error
 	assignErr              error
 	unassignErr            error
 }
@@ -202,7 +203,7 @@ func (m *mockProfileService) Delete(ctx context.Context, profile *entities.Devic
 	return nil
 }
 
-func (m *mockProfileService) Update(ctx context.Context, profile *entities.DeviceProfile) error {
+func (m *mockProfileService) Update(ctx context.Context, profile *entities.DeviceProfile, _ ...device.ProfileUpdateOption) error {
 	if m.updateErr != nil {
 		return m.updateErr
 	}
@@ -2189,6 +2190,12 @@ func TestDeviceGRPCService_toGRPCError(t *testing.T) {
 		assert.Equal(t, codes.AlreadyExists, st.Code())
 	})
 
+	t.Run("taken serial", func(t *testing.T) {
+		err := &device.WrappedError{Msg: "create", Err: device.ErrDeviceSerialExists{Serial: "SN1"}}
+		result := svc.toGRPCError(err)
+		assert.Equal(t, codes.AlreadyExists, status.Code(result))
+	})
+
 	t.Run("generic error", func(t *testing.T) {
 		err := errors.New("some internal error")
 		result := svc.toGRPCError(err)
@@ -2228,6 +2235,9 @@ func TestContainsAlreadyExists(t *testing.T) {
 func (m *mockProfileService) FindProfileForDevice(ctx context.Context, dev *entities.Device) (*entities.DeviceProfile, error) {
 	if dev == nil {
 		return nil, device.ErrDeviceRequired{}
+	}
+	if m.findForDeviceErr != nil {
+		return nil, m.findForDeviceErr
 	}
 	ekSerial := ""
 	if dev.EKCert != "" {

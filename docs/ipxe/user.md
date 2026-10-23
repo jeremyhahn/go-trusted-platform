@@ -36,7 +36,8 @@ Two things to internalise before you plug anything in:
 - Privilege to bind UDP 67 and UDP 69 — root, or `CAP_NET_BIND_SERVICE` (plus
   `CAP_NET_RAW` if you use the raw-socket DHCP path).
 - Outbound HTTPS to `boot.ipxe.org` **the first time**, so the iPXE firmware can
-  be downloaded. After that it is cached and the server works offline.
+  be downloaded. After that it is cached (see `--firmware-dir` below) and the
+  server works offline.
 - A netboot media build staged under the data directory (`make netboot-media`
   builds one; `bootstrap run` stages it for you), and a `manifest.yaml`
   describing which MAC boots what.
@@ -78,6 +79,21 @@ it can reach, or leave it empty to use the public Alpine mirror — which only
 works if the provisioning network has outbound internet.
 
 `Ctrl-C` or `SIGTERM` shuts it down cleanly. Logs are JSON on stdout.
+
+**`--firmware-dir` is where the iPXE firmware is loaded from and cached into.**
+Unset, it is the user cache directory (`$XDG_CACHE_HOME/go-trusted-platform/firmware/`,
+which for root is `/root/.cache/...`), falling back to
+`/var/cache/go-trusted-platform/firmware/`. The `platform-pxeboot` image sets it
+to `/var/cache/go-trusted-platform/firmware`, so a host volume mounted there keeps
+the firmware across container replacements.
+
+**How long the server lives is the deployer's choice, not the server's.** The
+server runs until it is stopped. `platformctl bootstrap run` starts it in a
+container for one bootstrap and removes the container once the nodes are up;
+with `deployer.boot_node: true` the container is left serving, restarts with the
+host, and keeps its firmware cache on a host volume — see
+[bootstrap user guide](../bootstrap/user.md) and
+[`build/docker/bootstrap/README.md`](../../build/docker/bootstrap/README.md).
 
 ---
 
@@ -196,6 +212,198 @@ mirror.
 
 ---
 
+## Raspberry Pi on hardware
+
+Four steps, in this order: each one proves what the next one stands on. The
+board is a Raspberry Pi 4 Model B with 2 GB of RAM or more, and an Infineon
+SLB9670 TPM on SPI0 chip-select 1. The image seals the disk key to that TPM
+and first boot expects it there
+([prerequisites](../factory-image/user.md#prerequisites)). The Pi 5 is
+experimental and its OTP is never burned. The 3B+ has no EEPROM, so signed
+HTTP boot refuses it; its network boot path is not documented and it has no
+template.
+
+**The console.** Wire a USB serial adapter to the primary UART, GPIO 14/15,
+at 115200 baud. The image moves Bluetooth off that UART
+(`dtoverlay=disable-bt`), so it is `ttyAMA0`, and turns on the firmware's own
+log there (`uart_2ndstage=1`). The serial line carries the firmware, U-Boot
+and the kernel log. The kernel command line ends in `console=tty1`, which
+makes HDMI `/dev/console`: OpenRC, first boot and `platformd` print to the
+display, not to the serial line
+([kernel-cmdline.md §5](../reference/kernel-cmdline.md#5-hardware-specific-parameters)).
+Watch both.
+
+The EEPROM settings below are edited with `rpi-eeprom-config`. `BOOT_ORDER`
+is read right to left, one nibble per boot mode. The platform's code names
+one value, `0xf21` for `boot_model: sd`, where the bootloader tries the card
+(`1`) first. The other nibbles are the Raspberry Pi bootloader's: `2` is the
+network (DHCP and TFTP), `7` HTTP, and `f` starts over. The platform sets no
+`BOOT_ORDER`; every value below is the operator's EEPROM setting.
+
+### Step 1: the SD image
+
+No boot server and no `bootstrap.yaml` node. Build the image, then write the
+card by hand on the build host; `rpi-sdcard` is the only `make` target that
+uses `sudo`:
+
+```sh
+make image-rpi
+make rpi-sdcard RPI_SDCARD=/dev/sdX RPI_SDCARD_CONFIRM=yes
+```
+
+Then follow the factory image's [Flash](../factory-image/user.md#flash),
+[First boot](../factory-image/user.md#first-boot) and
+[Verify on the node](../factory-image/user.md#verify-on-the-node). First boot
+names five milestones, in order: the firmware log and the U-Boot banner,
+`Booting /EFI/BOOT/BOOTAA64.EFI`, the kernel and `platform-initrd`, firstboot,
+and `platformd`. The first two and the kernel are on the serial line; the
+rest are on HDMI.
+
+### Step 2: netboot onto the SD card (`boot_model: sd`)
+
+The node installs to its card over the network once. Afterwards the
+bootloader tries the card first, so an installed node never asks the boot
+server again.
+
+EEPROM:
+
+```ini
+BOOT_ORDER=0xf21          # nibbles read right to left: 1 = SD card, 2 = network, f = start over
+```
+
+A bootable card wins, so start with a blank card.
+
+`bootstrap.yaml` names the Pi as a node
+([`bootstrap.yaml` node fields](../bootstrap/engineering.md#bootstrapyaml--the-day-zero-fleet-description)). The
+`serial` is the low 32 bits of `/proc/cpuinfo` `Serial`; the MAC is
+`cat /sys/class/net/eth0/address` on the Pi:
+
+```yaml
+deployer:
+  # host, user, ssh_key, known_hosts_path as in ../bootstrap/engineering.md §5
+  netboot_media_dir: bin/netboot-media    # relative to this file
+  proxy_dhcp: false        # true when the segment already has a DHCP server
+nodes:
+  - hostname: pi-01
+    role: worker
+    macs: ["dc:a6:32:01:36:c2"]
+    platform: raspberrypi
+    model: rpi4
+    serial: 9ffefdef
+    boot_model: sd
+```
+
+Build the media, start the boot server, then prove the bootloader's side of
+it from a host on the provisioning segment
+([probe rpi](../bootstrap/cli.md#6a-platformctl-bootstrap-probe-rpi)):
+
+```sh
+make netboot-media
+platformctl bootstrap run --config ./bootstrap.yaml --dry-run
+platformctl bootstrap run --config ./bootstrap.yaml
+sudo platformctl bootstrap probe rpi --interface eth1 --serial 9ffefdef --mac dc:a6:32:01:36:c2
+```
+
+A Pi has no BMC: power it on yourself. In order:
+
+1. Serial: the firmware log of the bootloader's network boot, which fetches
+   `start4.elf`, `config.txt`, `fixup4.dat`, `bcm2711-rpi-4-b.dtb`,
+   `overlays/*.dtbo` and `kernel8.img` over TFTP, trying `9ffefdef/` before
+   the root. These are the files the probe listed.
+2. Serial: the U-Boot banner. U-Boot's `bootflow scan` asks DHCP again and
+   loads the db-signed arm64 iPXE, `snponly-aarch64.efi`.
+3. iPXE fetches `/boot.ipxe`, then `/boot/device/<mac>.ipxe`, then the signed
+   kernel and initrd ([§3](#3-boot-the-machine)).
+4. The kernel, then the installer writes the card and posts its log
+   ([§4](#4-read-the-install-log-afterwards)).
+5. From the card: the five first-boot milestones of step 1.
+
+### Step 3: prove signed HTTP boot before any OTP burn
+
+The factory image's
+[Provision a fleet: signed HTTP boot](../factory-image/user.md#provision-a-fleet-signed-http-boot)
+is the runbook: make the fleet key, build the media with `--fleet-key`, serve
+it, prove it, configure the EEPROM. Its step 5 sets:
+
+```ini
+BOOT_ORDER=0xf17          # nibbles read right to left: 7 = HTTP, 1 = SD card, f = start over
+HTTP_HOST=10.99.99.1      # the container address
+HTTP_PORT=8080            # bootstrap_http_port from bootstrap.yaml
+HTTP_PATH=data/http-boot
+SIGNED_BOOT=1
+```
+
+The `bootstrap.yaml` node is the one from step 2; the media in
+`netboot_media_dir` now carries `http-boot/`. From any host on the
+provisioning segment, with the key and hash from the board's provisioning
+record, not from the server
+([probe rpi-http](../bootstrap/cli.md#6a-1-platformctl-bootstrap-probe-rpi-http)):
+
+```sh
+platformctl bootstrap probe rpi-http --http-host 10.99.99.1:8080 \
+  --pubkey bin/netboot-media/http-boot/pubkey.bin --otp-key-hash 3f9a…c1
+```
+
+On the console, in order: the firmware log of the HTTP fetch of `boot.img`
+and `boot.sig`, then the U-Boot banner, which `boot.img` carries as
+`kernel8.img`.
+
+Do not burn the OTP until the probe is green.
+[Step 6](../factory-image/user.md#6-burn-the-otp-hash--irreversible) is
+**irreversible**, it is the owner's call alone, and it is never done on a
+Pi 5 or CM5.
+
+### Step 4: diskless (`boot_model: diskless`)
+
+The node boots stateless from the media set's squashfs root and its
+dm-verity hash tree, held in RAM.
+
+EEPROM:
+
+```ini
+BOOT_ORDER=0xf12          # nibbles read right to left: 2 = network, 1 = SD card, f = start over
+```
+
+This is the operator's setting for network first, then the SD card; the
+platform does not set it.
+
+`bootstrap.yaml`: the step 2 node with `boot_model: diskless`.
+
+The media must carry the diskless root, built with `diskimage netboot
+--diskless` ([cli.md §2a](../factory-image/cli.md#2a-platformctl-diskimage-netboot)).
+That needs Secure Boot with the DB key in the KMS and a fixed build time:
+
+```sh
+SOURCE_DATE_EPOCH=$(git log -1 --format=%ct) make netboot-media NETBOOT_MEDIA_FLAGS=--diskless
+platformctl bootstrap run --config ./bootstrap.yaml
+```
+
+Without it, the node's device script fails with `ErrDisklessUnavailable`:
+`… boots diskless and media set … has no diskless root (rebuild the netboot
+media with --diskless)`.
+
+In order:
+
+1. Serial: the bootloader, U-Boot and iPXE as in step 2. The device script
+   for this node's MAC adds `platform_boot_model=diskless`.
+2. The installer verifies the media set's signed `diskless/manifest.json`
+   against a pinned anchor and writes `platform_roothash=`,
+   `platform_rootfs_url=` and the rest into the UKI's `.cmdline`
+   ([installer architecture](../installer/architecture.md)).
+3. `platform-initrd` fetches `rootfs.squashfs` and `rootfs.verity` into RAM,
+   verifies them, and mounts the root read-only under a tmpfs overlay at
+   `/sysroot`. A failed fetch reads `diskless root: fetch <url>: …`, and a
+   root hash mismatch fails closed before any root mount.
+4. `platformd` logs `Diskless node: TPM identity not resident, running
+   first provisioning` on the first boot, then `Diskless node: TPM-resident
+   identity found, skipping provisioning` on every boot after.
+
+A TPM holding part of an identity, or another node's, is refused, not
+cleared: `tpm: diskless node's TPM holds a partial or foreign identity;
+refusing to clear it` ([tpm architecture](../tpm/architecture.md)).
+
+---
+
 ## Troubleshooting
 
 **Nothing happens. The client loops DISCOVER forever, no error.**
@@ -247,14 +455,16 @@ not `[a-z0-9][a-z0-9._-]{0,64}`. Or the path contains `..`.
 
 **The TFTP server refuses to start.**
 `ipxe.efi` could not be loaded — no cache and no network to `boot.ipxe.org`.
-That one binary is required; the other two are optional. Pre-seed the cache
-under `$XDG_CACHE_HOME/go-trusted-platform/firmware/` (or
-`/var/cache/go-trusted-platform/firmware/` for a root or container process) if
-the host is air-gapped.
+That one binary is required; the other two are optional. Pre-seed the
+`--firmware-dir` directory if the host is air-gapped — in the `platform-pxeboot`
+image that is `/var/cache/go-trusted-platform/firmware/`, which under
+`deployer.boot_node` is the host's `deployer.firmware_cache_dir`.
 
 **Firmware behaves oddly after an upgrade.**
 A cached firmware file is served without revalidation. Delete the cache
-directory and let it re-download.
+directory and let it re-download. A boot node keeps its cache across
+`bootstrap run` and `bootstrap teardown`, so delete the host's
+`deployer.firmware_cache_dir` contents yourself.
 
 **The proxy returns 502.**
 The upstream HTTPS fetch failed. TLS verification is mandatory and the floor is
@@ -271,6 +481,53 @@ for TFTP on 69, so moving that port is not useful in practice.
 Not supported. The DHCP server is DHCPv4 only and server-IP detection returns
 the first non-loopback IPv4 address.
 
+**A Pi gets no DHCP OFFER.**
+The bootloader accepts only a reply whose option 43 carries `Raspberry Pi
+Boot`, and the server recognises a Pi by its vendor class
+`PXEClient:Arch:00000:UNDI:002001` plus option 97 or a Raspberry Pi MAC.
+Check that `BOOT_ORDER` has the network nibble `2`, then run
+`sudo platformctl bootstrap probe rpi --interface <if> --serial <serial> --mac <mac>`
+from a host on the provisioning segment: no offer within the bootloader's
+45 s means the container is not on that segment. On a segment that already
+has a DHCP server, set `proxy_dhcp: true`. A bootloader with its own
+`PXE_OPTION43` needs `--option43` to match it.
+
+**A Pi times out on TFTP.**
+The bootloader waits 30 s per file and retries five times. The probe lists
+each file and the path that served it, and stops at the first file neither
+the device prefix nor the root serves: the same place the Pi stopped. A
+`serial` in `bootstrap.yaml` that is not the board's names the wrong
+per-device directory, and an EEPROM `TFTP_PREFIX` other than the serial
+needs the matching `--prefix`. A media build with no Pi files is refused
+before boot: `the build has no Raspberry Pi TFTP tree or arm64 iPXE`.
+
+**A Pi refuses the signature.**
+With `SIGNED_BOOT=1` the EEPROM runs `boot.img` only if `boot.sig` verifies
+against the key whose hash is in OTP. Run
+[`probe rpi-http`](../bootstrap/cli.md#6a-1-platformctl-bootstrap-probe-rpi-http)
+with the key and hash from the board's provisioning record:
+`DigestMismatchError` is a `boot.img` changed after signing, `SignatureError`
+a signature by another key, `KeyHashMismatchError` a `pubkey.bin` that is not
+the key whose hash the board holds, `TargetSoCError` a `target-soc` other
+than 2711 or 2712. Rebuild the media; never burn another hash to match it.
+
+**A Pi's TPM is not found.**
+First boot cannot seal without it. The image binds the SLB9670 through
+`dtoverlay=tpm-soft-spi` on SPI0 chip-select 1. On the node:
+
+```sh
+ls -l /dev/tpm0 /dev/tpmrm0
+dmesg | grep tpm_tis_spi
+tpm2_pcrread sha256:0,4,7,9
+```
+
+No device nodes and no `tpm_tis_spi` line means the module is not seated on
+chip-select 1, or is not wired as the LetsTrust or Iridium 9670 module is
+([prerequisites](../factory-image/user.md#prerequisites)). Interrupting
+U-Boot's autoboot and running `tpm2 info` shows whether U-Boot can reach it.
+After a good boot PCRs 0, 4, 7 and 9 are all non-zero
+([Verify on the node](../factory-image/user.md#verify-on-the-node)).
+
 ---
 
 ## Where to go next
@@ -280,8 +537,6 @@ the first non-loopback IPv4 address.
   plane actually lives
 - [architecture.md](architecture.md) — the two-stage chainload and its trust
   boundaries
-- [configuration.md](configuration.md) · [testing.md](testing.md) —
-  pre-convention worked examples
 - [`docs/installer/`](../installer/) — what happens once the kernel boots
 - [`docs/provisioning/`](../provisioning/) — authorising a machine, and the API
   for everything the CLI does not cover

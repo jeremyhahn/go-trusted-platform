@@ -15,6 +15,8 @@ package config
 
 import (
 	"errors"
+	"fmt"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -188,6 +190,60 @@ daemon:
 		require.True(t, errors.As(err, &e), "got %v", err)
 		assert.Equal(t, "rest", e.Transport)
 	})
+}
+
+// TestResolveDaemonListeners_PrecedencePerAddress proves, for every
+// transport's bind host and port on its own, that each layer overrides the
+// one below it: defaults < file < env < flag (#93). Every transport is set
+// in every layer so a single key wired to the wrong layer, or pinned to a
+// literal, fails by name.
+func TestResolveDaemonListeners_PrecedencePerAddress(t *testing.T) {
+	transports := []string{TransportREST, TransportGRPC, TransportQUIC, TransportMCP}
+	layers := []struct {
+		name string
+		host string
+		port int
+	}{
+		{"file", "10.0.0.1", 21000},
+		{"env", "10.0.0.2", 22000},
+		{"flag", "10.0.0.3", 23000},
+	}
+
+	for top := range layers {
+		t.Run(layers[top].name+" wins", func(t *testing.T) {
+			v, flags := newDaemonViper(t)
+			var file strings.Builder
+			file.WriteString("daemon:\n")
+			var args []string
+			for i, transport := range transports {
+				for _, layer := range layers[:top+1] {
+					host, port := layer.host, layer.port+i
+					switch layer.name {
+					case "file":
+						fmt.Fprintf(&file, "  %s:\n    bind-host: %s\n    port: %d\n", transport, host, port)
+					case "env":
+						env := "PLATFORMD_DAEMON_" + strings.ToUpper(transport)
+						t.Setenv(env+"_BIND_HOST", host)
+						t.Setenv(env+"_PORT", strconv.Itoa(port))
+					case "flag":
+						args = append(args,
+							"--"+bindHostFlag(transport)+"="+host,
+							"--"+portFlag(transport)+"="+strconv.Itoa(port))
+					}
+				}
+			}
+			v.SetConfigType("yaml")
+			require.NoError(t, v.ReadConfig(strings.NewReader(file.String())))
+			require.NoError(t, flags.Parse(args))
+
+			got, err := ResolveDaemonListeners(v)
+			require.NoError(t, err)
+			for i, item := range got.entries() {
+				want := Listener{BindHost: layers[top].host, Port: layers[top].port + i}
+				assert.Equal(t, want, item.listener, "daemon.%s", item.transport)
+			}
+		})
+	}
 }
 
 func TestBindDaemonListenerFlags_RegistersEveryFlag(t *testing.T) {

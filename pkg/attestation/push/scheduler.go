@@ -67,6 +67,16 @@ type Scheduler struct {
 	// Debounce tracking for on-change
 	lastChangeTime  atomic.Pointer[time.Time]
 	pendingDebounce atomic.Bool
+
+	// onChangeHandled, when non-nil, is invoked by the run loop at the end of
+	// every handleChange, reporting whether the change was suppressed because a
+	// debounce window was already armed. It turns that decision — otherwise
+	// invisible, since a suppressed change and a coalesced one push the same —
+	// into a synchronisation point the package's own tests can wait on. It is
+	// fixed at construction (withChangeObserver) and never mutated afterwards,
+	// so the run loop reads it without synchronisation, and it is nil on every
+	// production construction path.
+	onChangeHandled func(suppressed bool)
 }
 
 // SchedulerOption configures the scheduler.
@@ -75,6 +85,7 @@ type SchedulerOption func(*schedulerOptions)
 type schedulerOptions struct {
 	handler          PushHandler
 	manifestProvider ManifestProvider
+	onChangeHandled  func(suppressed bool)
 }
 
 // WithHandler sets a callback handler for push results.
@@ -88,6 +99,16 @@ func WithHandler(h PushHandler) SchedulerOption {
 func WithManifestProvider(p ManifestProvider) SchedulerOption {
 	return func(o *schedulerOptions) {
 		o.manifestProvider = p
+	}
+}
+
+// withChangeObserver sets the observer the run loop calls after each
+// handleChange. It is unexported on purpose: it exists so this package's tests
+// can see the debounce decision, and no production caller has a reason to
+// supply one. The observer runs on the run loop, so it must not block.
+func withChangeObserver(fn func(suppressed bool)) SchedulerOption {
+	return func(o *schedulerOptions) {
+		o.onChangeHandled = fn
 	}
 }
 
@@ -128,6 +149,7 @@ func NewScheduler(config *SchedulerConfig, client *Client, targets []*PushTarget
 	}
 
 	s.manifestProvider = options.manifestProvider
+	s.onChangeHandled = options.onChangeHandled
 
 	return s, nil
 }
@@ -275,26 +297,47 @@ func (s *Scheduler) run() {
 }
 
 // handleChange handles on-change triggers with debouncing.
+//
+// The first change arms a debounce window; every change the run loop hands
+// over while that window is armed is suppressed, so the window ends in a single
+// push. This is the common case, not a corner: arming returns at once, so the
+// run loop goes straight back to changeCh and sees each later change of the
+// window here — changeCh only coalesces changes that arrive faster than the
+// run loop drains it.
+//
+// The window is disarmed before executePush runs, not after. A change that
+// arrives while that push is in flight may have missed the manifest the push
+// read, so it arms a fresh window rather than being dropped; whether that
+// window pushes again is then decided by the provider's HasChanged.
 func (s *Scheduler) handleChange() {
-	if s.pendingDebounce.Load() {
+	suppressed := s.pendingDebounce.Load()
+	if !suppressed {
+		s.armOrPush()
+	}
+
+	if s.onChangeHandled != nil {
+		s.onChangeHandled(suppressed)
+	}
+}
+
+// armOrPush arms a debounce window that pushes when it elapses, or pushes at
+// once when debouncing is disabled.
+func (s *Scheduler) armOrPush() {
+	if s.config.OnChangeDebounce <= 0 {
+		s.executePush(TriggerOnChange)
 		return
 	}
 
-	if s.config.OnChangeDebounce > 0 {
-		s.pendingDebounce.Store(true)
-		go func() {
-			select {
-			case <-s.ctx.Done():
-				s.pendingDebounce.Store(false)
-				return
-			case <-time.After(s.config.OnChangeDebounce):
-				s.pendingDebounce.Store(false)
-				s.executePush(TriggerOnChange)
-			}
-		}()
-	} else {
-		s.executePush(TriggerOnChange)
-	}
+	s.pendingDebounce.Store(true)
+	go func() {
+		select {
+		case <-s.ctx.Done():
+			s.pendingDebounce.Store(false)
+		case <-time.After(s.config.OnChangeDebounce):
+			s.pendingDebounce.Store(false)
+			s.executePush(TriggerOnChange)
+		}
+	}()
 }
 
 // executePush executes a push operation.

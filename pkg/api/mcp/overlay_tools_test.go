@@ -15,6 +15,7 @@ package mcp
 
 import (
 	"context"
+	"errors"
 	"testing"
 )
 
@@ -129,6 +130,20 @@ func TestOverlayToolExecution(t *testing.T) {
 		}
 	})
 
+	t.Run("executeOverlayVNICreate vlan out of range", func(t *testing.T) {
+		registry := NewToolRegistry(newMockServiceProvider(), log)
+
+		for _, vlan := range []float64{-1, 4095, 70000} {
+			_, err := registry.ExecuteTool(ctx, "overlay_vni_create", map[string]interface{}{
+				"vni":  float64(100),
+				"vlan": vlan,
+			})
+			if err != ErrOverlayInvalidVLAN {
+				t.Fatalf("vlan %v: expected ErrOverlayInvalidVLAN, got %v", vlan, err)
+			}
+		}
+	})
+
 	t.Run("executeOverlayVNIDelete success", func(t *testing.T) {
 		svc := newMockServiceProvider()
 		registry := NewToolRegistry(svc, log)
@@ -177,6 +192,51 @@ func TestOverlayToolExecution(t *testing.T) {
 		}
 		if _, exists := resultMap["tunnels"]; !exists {
 			t.Fatal("result should contain 'tunnels' key")
+		}
+	})
+
+	t.Run("executeOverlayTunnelStats success", func(t *testing.T) {
+		svc := newMockServiceProvider()
+		registry := NewToolRegistry(svc, log)
+
+		result, err := registry.ExecuteTool(ctx, "overlay_tunnel_stats", map[string]interface{}{
+			"remote_vtep": "10.0.0.2",
+			"vni":         float64(100),
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		resultMap, ok := result.(map[string]interface{})
+		if !ok {
+			t.Fatal("result should be a map")
+		}
+		tunnel, ok := resultMap["tunnel"].(map[string]interface{})
+		if !ok {
+			t.Fatalf("result should carry the tunnel under 'tunnel', got %#v", resultMap)
+		}
+		if tunnel["remote_vtep"] != "10.0.0.2" || tunnel["vni"] != uint32(100) {
+			t.Errorf("the tool must pass remote_vtep and vni through, got %#v", tunnel)
+		}
+	})
+
+	t.Run("executeOverlayTunnelStats argument errors", func(t *testing.T) {
+		registry := NewToolRegistry(newMockServiceProvider(), log)
+		tests := []struct {
+			name    string
+			args    map[string]interface{}
+			wantErr error
+		}{
+			{"remote_vtep missing", map[string]interface{}{"vni": float64(100)}, ErrOverlayRemoteVTEPRequired},
+			{"remote_vtep empty", map[string]interface{}{"remote_vtep": ""}, ErrOverlayRemoteVTEPRequired},
+			{"vni negative", map[string]interface{}{"remote_vtep": "10.0.0.2", "vni": float64(-1)}, ErrOverlayInvalidVNI},
+		}
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				_, err := registry.ExecuteTool(ctx, "overlay_tunnel_stats", tt.args)
+				if !errors.Is(err, tt.wantErr) {
+					t.Errorf("expected %v, got %v", tt.wantErr, err)
+				}
+			})
 		}
 	})
 

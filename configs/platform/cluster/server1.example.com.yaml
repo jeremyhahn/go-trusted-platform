@@ -15,6 +15,13 @@ hostmaster: hostmaster@server1.example.com
 tenant-id: platform
 pin-seal-policy: true
 
+# Secret resolution: every secret below is a kms:// reference, resolved
+# (and, with ensure=true, generated on first start) by the embedded
+# quicbaas SecretsService. No literal secret is kept in this file.
+secrets:
+  enabled: true
+  local-kms: true
+
 
 # =============================================================================
 # INSTALLATION CONFIGURATION (System Manifest)
@@ -76,12 +83,16 @@ network:
       - 127.0.0.1
     search-domains:
       - example.com
+  # dnsmasq (127.0.0.1:53) forwards to this server's internal DNS on 9053
+  dnsmasq:
+    enabled: true
+    upstream-servers:
+      - 127.0.0.1:9053
   interfaces:
     - name: eth0
       type: static
-      address: 10.0.1.1
-      netmask: 255.255.255.0
-      gateway: 10.0.1.254
+      ipv4-address: 10.0.1.1/24
+      ipv4-gateway: 10.0.1.254
   bridges: []
   bonds: []
   vlans: []
@@ -132,7 +143,7 @@ acme:
         cn: acme-account
         debug: true
         hash: SHA-256
-        password: 123456
+        password: "kms://acme/account-key/password?ensure=true&len=32&enc=raw"
         platform-policy: true
         ecc:
           curve: P-256
@@ -149,15 +160,9 @@ dns:
   allow-registration: true
   allow-external-registration: true
   allow-internal-registration: true
-  quicbaas:
-    data-dir: /var/lib/trusted-platform/quicbaas/dns
-    storage-backend: raft
-    node-id: 1
-    raft-address: "10.0.1.1:63000"
-    join-addresses: []
-    cache-size: 67108864
-    log-level: warn
-    consistency-level: linearizable
+  # Zones live in the platform's clustered store (the top-level quicbaas
+  # section). A dns.quicbaas section is read only by a standalone DNS
+  # server, never by platformd.
   default-ttl: 3600
   dnssec:
     enabled: true
@@ -178,10 +183,6 @@ dns:
     zsk:
       lifetime: 30d
       ttl: 3600
-  dnsmasq:
-    enabled: true
-    upstream-servers:
-      - 127.0.0.1:9053
   public:
     port: 8053
     forwarders:
@@ -287,10 +288,25 @@ dns:
 
 quicbaas:
   data-dir: /var/lib/trusted-platform/quicbaas
-  storage-backend: raft
+  # Raft consensus is engaged by join-addresses, not by the storage
+  # backend: every member keeps the replicated state in pebble.
+  storage-backend: pebble
   node-id: 1
+  # Every member carries the same deployment-id and the same member list,
+  # itself included, in id=host:port form; the three bootstrap the
+  # cluster together.
+  deployment-id: 100
   raft-address: "10.0.1.1:63000"
-  join-addresses: []
+  join-addresses:
+    - "1=10.0.1.1:63000"
+    - "2=10.0.1.2:63000"
+    - "3=10.0.1.3:63000"
+  # Mutual TLS between Raft peers is required; there is no plaintext
+  # cluster. The operator supplies this node's certificate and key and
+  # the CA that issued every member's certificate.
+  raft-tls-cert-file: /etc/trusted-platform/raft/tls.crt
+  raft-tls-key-file: /etc/trusted-platform/raft/tls.key
+  raft-tls-ca-file: /etc/trusted-platform/raft/ca.crt
   cache-size: 67108864
   log-level: warn
   consistency-level: linearizable
@@ -348,7 +364,7 @@ tpm:
   golden-pcrs: [7, 9]
   platform-srk:
     srk-handle: 0x81000002
-    srk-auth: 123456
+    srk-auth: "kms://tpm/platform-srk/srk-auth?ensure=true&len=32&enc=raw"
     platform-policy: true
 
 
@@ -376,7 +392,7 @@ certificate-authority:
           platform-policy: true
         tpm2:
           srk-handle: 0x81000001
-          srk-auth: 123456
+          srk-auth: "kms://ca/root/tpm2/srk-auth?ensure=true&len=32&enc=raw"
           platform-policy: true
       keys:
         # PKCS #8 RSA w/ PSS
@@ -386,7 +402,7 @@ certificate-authority:
           signature-algorithm: SHA256-RSA
           hash: SHA-256
           store: software
-          password: 123456
+          password: "kms://ca/root/keys/0/password?ensure=true&len=32&enc=base64"
           platform-policy: true
           debug: true
 
@@ -397,7 +413,7 @@ certificate-authority:
           signature-algorithm: SHA256-RSA
           hash: SHA-256
           store: tpm2
-          password: 123456
+          password: "kms://ca/root/keys/1/password?ensure=true&len=32&enc=base64"
           platform-policy: true
           debug: true
 
@@ -408,7 +424,7 @@ certificate-authority:
           signature-algorithm: ECDSA-SHA256
           hash: SHA-256
           store: software
-          password: 123456
+          password: "kms://ca/root/keys/2/password?ensure=true&len=32&enc=base64"
           platform-policy: true
           debug: true
 
@@ -419,7 +435,7 @@ certificate-authority:
           signature-algorithm: ECDSA-SHA256
           hash: SHA-256
           store: tpm2
-          password: 123456
+          password: "kms://ca/root/keys/3/password?ensure=true&len=32&enc=base64"
           platform-policy: true
           debug: true
 
@@ -430,7 +446,7 @@ certificate-authority:
           signature-algorithm: Ed25519
           hash: SHA-256
           store: software
-          password: 123456
+          password: "kms://ca/root/keys/4/password?ensure=true&len=32&enc=base64"
           platform-policy: true
           debug: true
 
@@ -458,7 +474,7 @@ certificate-authority:
           platform-policy: true
         tpm2:
           srk-handle: 0x81000001
-          srk-auth: 123456
+          srk-auth: "kms://ca/issuing/tpm2/srk-auth?ensure=true&len=32&enc=raw"
           platform-policy: true
       keys:
         - # PKCS #8 RSA w/ PSS
@@ -468,7 +484,7 @@ certificate-authority:
           signature-algorithm: SHA256-RSA
           hash: SHA-256
           store: software
-          password: 123456
+          password: "kms://ca/issuing/keys/0/password?ensure=true&len=32&enc=base64"
           platform-policy: true
           debug: true
 
@@ -479,7 +495,7 @@ certificate-authority:
           signature-algorithm: SHA256-RSA
           hash: SHA-256
           store: tpm2
-          password: 123456
+          password: "kms://ca/issuing/keys/1/password?ensure=true&len=32&enc=base64"
           platform-policy: true
           debug: true
 
@@ -490,7 +506,7 @@ certificate-authority:
           signature-algorithm: ECDSA-SHA256
           hash: SHA-256
           store: software
-          password: 123456
+          password: "kms://ca/issuing/keys/2/password?ensure=true&len=32&enc=base64"
           platform-policy: true
           debug: true
 
@@ -501,7 +517,7 @@ certificate-authority:
           signature-algorithm: ECDSA-SHA256
           hash: SHA-256
           store: tpm2
-          password: 123456
+          password: "kms://ca/issuing/keys/3/password?ensure=true&len=32&enc=base64"
           platform-policy: true
           debug: true
 
@@ -512,7 +528,7 @@ certificate-authority:
           signature-algorithm: Ed25519
           hash: SHA-256
           store: software
-          password: 123456
+          password: "kms://ca/issuing/keys/4/password?ensure=true&len=32&enc=base64"
           platform-policy: true
           debug: true
       valid: 10
@@ -591,7 +607,7 @@ webservices:
       signature-algorithm: ECDSA-SHA256
       hash: SHA-256
       store: software
-      password: 123456
+      password: "kms://webservices/0/key/password?ensure=true&len=32&enc=raw"
       platform-policy: true
       debug: true
     certificate:
@@ -656,7 +672,7 @@ webservices:
       signature-algorithm: ECDSA-SHA256
       hash: SHA-256
       store: software
-      password: 123456
+      password: "kms://webservices/1/key/password?ensure=true&len=32&enc=raw"
       platform-policy: true
       debug: true
     certificate:

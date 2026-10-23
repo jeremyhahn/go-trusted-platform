@@ -21,6 +21,7 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/hex"
@@ -37,13 +38,14 @@ import (
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	xkmsca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/ca"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 func init() {
 	// Set the default codec to MsgPack for encoding/decoding payloads
-	_ = SetDefaultCodecType(codec.MsgPack)
+	_ = quicwire.SetDefaultCodecType(codec.MsgPack)
 }
 
 // mockCertStore implements a basic certificate store for testing
@@ -112,7 +114,6 @@ type mockCA struct {
 	defaultSigAlg x509.SignatureAlgorithm
 	validity      int
 	certStore     *mockCertStore
-	issuedCerts   []*x509.Certificate
 	revokedCerts  []*x509.Certificate
 	generateCRL   bool
 	privateKey    *ecdsa.PrivateKey
@@ -132,7 +133,6 @@ func newMockCA() *mockCA {
 		defaultSigAlg: x509.ECDSAWithSHA256,
 		validity:      365,
 		certStore:     newMockCertStore(),
-		issuedCerts:   make([]*x509.Certificate, 0),
 		revokedCerts:  make([]*x509.Certificate, 0),
 		generateCRL:   true,
 		privateKey:    privateKey,
@@ -162,7 +162,6 @@ func (m *mockCA) CASigner(_ context.Context, _ xkmssdk.StoreType, _ x509.PublicK
 }
 func (m *mockCA) IssueCertificate(_ context.Context, req *xkmsca.CACertificateRequest) (*xkmsca.IssuedCertificate, error) {
 	cert := generateTestCertificate(req.Subject.CommonName, req.IsCA, m.intermCert, m.privateKey)
-	m.issuedCerts = append(m.issuedCerts, cert)
 	if m.certStore != nil {
 		m.certStore.StoreCertificate(cert)
 	}
@@ -245,7 +244,7 @@ func TestCAHandler_HandleRequest_NilRequest(t *testing.T) {
 
 	resp := handler.HandleRequest(context.Background(), nil)
 
-	assert.Equal(t, StatusInvalidRequest, resp.Status)
+	assert.Equal(t, quicwire.StatusInvalidRequest, resp.Status)
 	assert.Contains(t, string(resp.Payload), "request cannot be nil")
 }
 
@@ -254,14 +253,14 @@ func TestCAHandler_HandleRequest_UnknownOperation(t *testing.T) {
 	ca := newMockCA()
 	handler := NewCAHandler(logger, ca, nil)
 
-	req := &Request{
+	req := &quicwire.Request{
 		Opcode:  0xFF,
 		Payload: nil,
 	}
 
 	resp := handler.HandleRequest(context.Background(), req)
 
-	assert.Equal(t, StatusInvalidRequest, resp.Status)
+	assert.Equal(t, quicwire.StatusInvalidRequest, resp.Status)
 	assert.Contains(t, string(resp.Payload), "unknown CA operation")
 }
 
@@ -270,17 +269,17 @@ func TestCAHandler_HandleInfo_Success(t *testing.T) {
 	ca := newMockCA()
 	handler := NewCAHandler(logger, ca, nil)
 
-	req := &Request{
-		Opcode:  OpCAInfo,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpCAInfo,
 		Payload: nil,
 	}
 
 	resp := handler.HandleRequest(context.Background(), req)
 
-	require.Equal(t, StatusOK, resp.Status)
+	require.Equal(t, quicwire.StatusOK, resp.Status)
 
 	var infoResp CAInfoResponse
-	err := DecodePayload(resp.Payload, &infoResp)
+	err := quicwire.DecodePayload(resp.Payload, &infoResp)
 	require.NoError(t, err)
 
 	assert.True(t, infoResp.IsInitialized)
@@ -294,14 +293,14 @@ func TestCAHandler_HandleInfo_CANotInitialized(t *testing.T) {
 	logger := logging.DefaultLogger()
 	handler := NewCAHandler(logger, nil, nil)
 
-	req := &Request{
-		Opcode:  OpCAInfo,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpCAInfo,
 		Payload: nil,
 	}
 
 	resp := handler.HandleRequest(context.Background(), req)
 
-	assert.Equal(t, StatusUnavailable, resp.Status)
+	assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	assert.Contains(t, string(resp.Payload), "certificate authority not initialized")
 }
 
@@ -311,17 +310,17 @@ func TestCAHandler_HandleInfo_NotInitializedCA(t *testing.T) {
 	ca.initialized = false
 	handler := NewCAHandler(logger, ca, nil)
 
-	req := &Request{
-		Opcode:  OpCAInfo,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpCAInfo,
 		Payload: nil,
 	}
 
 	resp := handler.HandleRequest(context.Background(), req)
 
-	require.Equal(t, StatusOK, resp.Status)
+	require.Equal(t, quicwire.StatusOK, resp.Status)
 
 	var infoResp CAInfoResponse
-	err := DecodePayload(resp.Payload, &infoResp)
+	err := quicwire.DecodePayload(resp.Payload, &infoResp)
 	require.NoError(t, err)
 
 	assert.False(t, infoResp.IsInitialized)
@@ -335,17 +334,17 @@ func TestCAHandler_HandleInfo_WithoutIntermediate(t *testing.T) {
 	ca.intermCert = nil
 	handler := NewCAHandler(logger, ca, nil)
 
-	req := &Request{
-		Opcode:  OpCAInfo,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpCAInfo,
 		Payload: nil,
 	}
 
 	resp := handler.HandleRequest(context.Background(), req)
 
-	require.Equal(t, StatusOK, resp.Status)
+	require.Equal(t, quicwire.StatusOK, resp.Status)
 
 	var infoResp CAInfoResponse
-	err := DecodePayload(resp.Payload, &infoResp)
+	err := quicwire.DecodePayload(resp.Payload, &infoResp)
 	require.NoError(t, err)
 
 	assert.False(t, infoResp.IsIntermediate)
@@ -366,20 +365,20 @@ func TestCAHandler_HandleIssue_Success(t *testing.T) {
 		KeyAlgorithm: "ECDSA",
 	}
 
-	payload, err := EncodePayload(issueReq)
+	payload, err := quicwire.EncodePayload(issueReq)
 	require.NoError(t, err)
 
-	req := &Request{
-		Opcode:  OpCAIssue,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpCAIssue,
 		Payload: payload,
 	}
 
 	resp := handler.HandleRequest(context.Background(), req)
 
-	require.Equal(t, StatusOK, resp.Status)
+	require.Equal(t, quicwire.StatusOK, resp.Status)
 
 	var issueResp CAIssueResponse
-	err = DecodePayload(resp.Payload, &issueResp)
+	err = quicwire.DecodePayload(resp.Payload, &issueResp)
 	require.NoError(t, err)
 
 	assert.NotNil(t, issueResp.Certificate)
@@ -405,17 +404,17 @@ func TestCAHandler_HandleIssue_WithSANs(t *testing.T) {
 		KeyAlgorithm: "ECDSA",
 	}
 
-	payload, err := EncodePayload(issueReq)
+	payload, err := quicwire.EncodePayload(issueReq)
 	require.NoError(t, err)
 
-	req := &Request{
-		Opcode:  OpCAIssue,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpCAIssue,
 		Payload: payload,
 	}
 
 	resp := handler.HandleRequest(context.Background(), req)
 
-	require.Equal(t, StatusOK, resp.Status)
+	require.Equal(t, quicwire.StatusOK, resp.Status)
 }
 
 func TestCAHandler_HandleIssue_WithKeyUsage(t *testing.T) {
@@ -432,17 +431,17 @@ func TestCAHandler_HandleIssue_WithKeyUsage(t *testing.T) {
 		ValidDays:   365,
 	}
 
-	payload, err := EncodePayload(issueReq)
+	payload, err := quicwire.EncodePayload(issueReq)
 	require.NoError(t, err)
 
-	req := &Request{
-		Opcode:  OpCAIssue,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpCAIssue,
 		Payload: payload,
 	}
 
 	resp := handler.HandleRequest(context.Background(), req)
 
-	require.Equal(t, StatusOK, resp.Status)
+	require.Equal(t, quicwire.StatusOK, resp.Status)
 }
 
 func TestCAHandler_HandleIssue_MissingCommonName(t *testing.T) {
@@ -456,17 +455,17 @@ func TestCAHandler_HandleIssue_MissingCommonName(t *testing.T) {
 		},
 	}
 
-	payload, err := EncodePayload(issueReq)
+	payload, err := quicwire.EncodePayload(issueReq)
 	require.NoError(t, err)
 
-	req := &Request{
-		Opcode:  OpCAIssue,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpCAIssue,
 		Payload: payload,
 	}
 
 	resp := handler.HandleRequest(context.Background(), req)
 
-	assert.Equal(t, StatusInvalidArgument, resp.Status)
+	assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	assert.Contains(t, string(resp.Payload), "common name is required")
 }
 
@@ -482,17 +481,17 @@ func TestCAHandler_HandleIssue_InvalidAlgorithm(t *testing.T) {
 		KeyAlgorithm: "INVALID",
 	}
 
-	payload, err := EncodePayload(issueReq)
+	payload, err := quicwire.EncodePayload(issueReq)
 	require.NoError(t, err)
 
-	req := &Request{
-		Opcode:  OpCAIssue,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpCAIssue,
 		Payload: payload,
 	}
 
 	resp := handler.HandleRequest(context.Background(), req)
 
-	assert.Equal(t, StatusInvalidArgument, resp.Status)
+	assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	assert.Contains(t, string(resp.Payload), "invalid key algorithm")
 }
 
@@ -501,14 +500,14 @@ func TestCAHandler_HandleIssue_InvalidPayload(t *testing.T) {
 	ca := newMockCA()
 	handler := NewCAHandler(logger, ca, nil)
 
-	req := &Request{
-		Opcode:  OpCAIssue,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpCAIssue,
 		Payload: []byte("invalid msgpack data"),
 	}
 
 	resp := handler.HandleRequest(context.Background(), req)
 
-	assert.Equal(t, StatusInvalidRequest, resp.Status)
+	assert.Equal(t, quicwire.StatusInvalidRequest, resp.Status)
 }
 
 func TestCAHandler_HandleIssue_NilSubject(t *testing.T) {
@@ -521,17 +520,17 @@ func TestCAHandler_HandleIssue_NilSubject(t *testing.T) {
 		ValidDays: 365,
 	}
 
-	payload, err := EncodePayload(issueReq)
+	payload, err := quicwire.EncodePayload(issueReq)
 	require.NoError(t, err)
 
-	req := &Request{
-		Opcode:  OpCAIssue,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpCAIssue,
 		Payload: payload,
 	}
 
 	resp := handler.HandleRequest(context.Background(), req)
 
-	assert.Equal(t, StatusInvalidArgument, resp.Status)
+	assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	assert.Contains(t, string(resp.Payload), "common name is required")
 }
 
@@ -549,25 +548,45 @@ func TestCAHandler_HandleGet_Success(t *testing.T) {
 		IncludePem: true,
 	}
 
-	payload, err := EncodePayload(getReq)
+	payload, err := quicwire.EncodePayload(getReq)
 	require.NoError(t, err)
 
-	req := &Request{
-		Opcode:  OpCAGet,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpCAGet,
 		Payload: payload,
 	}
 
 	resp := handler.HandleRequest(context.Background(), req)
 
-	require.Equal(t, StatusOK, resp.Status)
+	require.Equal(t, quicwire.StatusOK, resp.Status)
 
 	var getResp CAGetResponse
-	err = DecodePayload(resp.Payload, &getResp)
+	err = quicwire.DecodePayload(resp.Payload, &getResp)
 	require.NoError(t, err)
 
 	assert.NotNil(t, getResp.Certificate)
 	assert.Equal(t, "test.example.com", getResp.Certificate.Subject.CommonName)
 	assert.NotEmpty(t, getResp.Certificate.Pem)
+	assert.Nil(t, getResp.Certificate.Der, "DER was not asked for")
+}
+
+// A get that asks for DER receives the certificate's raw bytes, as the gRPC
+// service returns them (#691).
+func TestCAHandler_HandleGet_IncludeDer(t *testing.T) {
+	ca := newMockCA()
+	handler := NewCAHandler(logging.DefaultLogger(), ca, nil)
+	cert := generateTestCertificate("der.example.com", false, ca.intermCert, ca.privateKey)
+	require.NoError(t, ca.certStore.StoreCertificate(cert))
+	payload, err := quicwire.EncodePayload(&CAGetRequest{Serial: cert.SerialNumber.String(), IncludeDer: true})
+	require.NoError(t, err)
+
+	resp := handler.HandleRequest(context.Background(), &quicwire.Request{Opcode: quicwire.OpCAGet, Payload: payload})
+
+	require.Equal(t, quicwire.StatusOK, resp.Status)
+	var getResp CAGetResponse
+	require.NoError(t, quicwire.DecodePayload(resp.Payload, &getResp))
+	assert.Equal(t, cert.Raw, getResp.Certificate.Der)
+	assert.Empty(t, getResp.Certificate.Pem, "PEM was not asked for")
 }
 
 func TestCAHandler_HandleGet_MissingSerial(t *testing.T) {
@@ -579,17 +598,17 @@ func TestCAHandler_HandleGet_MissingSerial(t *testing.T) {
 		Serial: "",
 	}
 
-	payload, err := EncodePayload(getReq)
+	payload, err := quicwire.EncodePayload(getReq)
 	require.NoError(t, err)
 
-	req := &Request{
-		Opcode:  OpCAGet,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpCAGet,
 		Payload: payload,
 	}
 
 	resp := handler.HandleRequest(context.Background(), req)
 
-	assert.Equal(t, StatusInvalidArgument, resp.Status)
+	assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	assert.Contains(t, string(resp.Payload), "serial number is required")
 }
 
@@ -602,17 +621,17 @@ func TestCAHandler_HandleGet_NotFound(t *testing.T) {
 		Serial: "nonexistent",
 	}
 
-	payload, err := EncodePayload(getReq)
+	payload, err := quicwire.EncodePayload(getReq)
 	require.NoError(t, err)
 
-	req := &Request{
-		Opcode:  OpCAGet,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpCAGet,
 		Payload: payload,
 	}
 
 	resp := handler.HandleRequest(context.Background(), req)
 
-	assert.Equal(t, StatusNotFound, resp.Status)
+	assert.Equal(t, quicwire.StatusNotFound, resp.Status)
 	assert.Contains(t, string(resp.Payload), "certificate not found")
 }
 
@@ -621,14 +640,14 @@ func TestCAHandler_HandleGet_InvalidPayload(t *testing.T) {
 	ca := newMockCA()
 	handler := NewCAHandler(logger, ca, nil)
 
-	req := &Request{
-		Opcode:  OpCAGet,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpCAGet,
 		Payload: []byte("invalid msgpack data"),
 	}
 
 	resp := handler.HandleRequest(context.Background(), req)
 
-	assert.Equal(t, StatusInvalidRequest, resp.Status)
+	assert.Equal(t, quicwire.StatusInvalidRequest, resp.Status)
 }
 
 func TestCAHandler_HandleList_Success(t *testing.T) {
@@ -640,20 +659,20 @@ func TestCAHandler_HandleList_Success(t *testing.T) {
 		Limit: 10,
 	}
 
-	payload, err := EncodePayload(listReq)
+	payload, err := quicwire.EncodePayload(listReq)
 	require.NoError(t, err)
 
-	req := &Request{
-		Opcode:  OpCAList,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpCAList,
 		Payload: payload,
 	}
 
 	resp := handler.HandleRequest(context.Background(), req)
 
-	require.Equal(t, StatusOK, resp.Status)
+	require.Equal(t, quicwire.StatusOK, resp.Status)
 
 	var listResp CAListResponse
-	err = DecodePayload(resp.Payload, &listResp)
+	err = quicwire.DecodePayload(resp.Payload, &listResp)
 	require.NoError(t, err)
 
 	assert.NotNil(t, listResp.Certificates)
@@ -665,14 +684,14 @@ func TestCAHandler_HandleList_InvalidPayload(t *testing.T) {
 	ca := newMockCA()
 	handler := NewCAHandler(logger, ca, nil)
 
-	req := &Request{
-		Opcode:  OpCAList,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpCAList,
 		Payload: []byte("invalid msgpack data"),
 	}
 
 	resp := handler.HandleRequest(context.Background(), req)
 
-	assert.Equal(t, StatusInvalidRequest, resp.Status)
+	assert.Equal(t, quicwire.StatusInvalidRequest, resp.Status)
 }
 
 func TestCAHandler_HandleList_DefaultLimit(t *testing.T) {
@@ -685,17 +704,17 @@ func TestCAHandler_HandleList_DefaultLimit(t *testing.T) {
 		Limit: 0,
 	}
 
-	payload, err := EncodePayload(listReq)
+	payload, err := quicwire.EncodePayload(listReq)
 	require.NoError(t, err)
 
-	req := &Request{
-		Opcode:  OpCAList,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpCAList,
 		Payload: payload,
 	}
 
 	resp := handler.HandleRequest(context.Background(), req)
 
-	require.Equal(t, StatusOK, resp.Status)
+	require.Equal(t, quicwire.StatusOK, resp.Status)
 }
 
 func TestCAHandler_HandleList_MaxLimit(t *testing.T) {
@@ -708,17 +727,17 @@ func TestCAHandler_HandleList_MaxLimit(t *testing.T) {
 		Limit: 10000,
 	}
 
-	payload, err := EncodePayload(listReq)
+	payload, err := quicwire.EncodePayload(listReq)
 	require.NoError(t, err)
 
-	req := &Request{
-		Opcode:  OpCAList,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpCAList,
 		Payload: payload,
 	}
 
 	resp := handler.HandleRequest(context.Background(), req)
 
-	require.Equal(t, StatusOK, resp.Status)
+	require.Equal(t, quicwire.StatusOK, resp.Status)
 }
 
 func TestCAHandler_HandleList_NilCertStore(t *testing.T) {
@@ -731,17 +750,17 @@ func TestCAHandler_HandleList_NilCertStore(t *testing.T) {
 		Limit: 10,
 	}
 
-	payload, err := EncodePayload(listReq)
+	payload, err := quicwire.EncodePayload(listReq)
 	require.NoError(t, err)
 
-	req := &Request{
-		Opcode:  OpCAList,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpCAList,
 		Payload: payload,
 	}
 
 	resp := handler.HandleRequest(context.Background(), req)
 
-	assert.Equal(t, StatusUnavailable, resp.Status)
+	assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	assert.Contains(t, string(resp.Payload), "certificate store not available")
 }
 
@@ -760,24 +779,26 @@ func TestCAHandler_HandleRevoke_Success(t *testing.T) {
 		DeleteKeys: false,
 	}
 
-	payload, err := EncodePayload(revokeReq)
+	payload, err := quicwire.EncodePayload(revokeReq)
 	require.NoError(t, err)
 
-	req := &Request{
-		Opcode:  OpCARevoke,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpCARevoke,
 		Payload: payload,
 	}
 
 	resp := handler.HandleRequest(context.Background(), req)
 
-	require.Equal(t, StatusOK, resp.Status)
+	require.Equal(t, quicwire.StatusOK, resp.Status)
 
 	var revokeResp CARevokeResponse
-	err = DecodePayload(resp.Payload, &revokeResp)
+	err = quicwire.DecodePayload(resp.Payload, &revokeResp)
 	require.NoError(t, err)
 
 	assert.Equal(t, "REVOKED", revokeResp.Status)
 	assert.Equal(t, int32(1), revokeResp.Reason)
+	require.Len(t, ca.revokedCerts, 1, "a REVOKED reply must mean the CA revoked the certificate")
+	assert.Equal(t, cert.SerialNumber, ca.revokedCerts[0].SerialNumber)
 }
 
 func TestCAHandler_HandleRevoke_WithDeleteKeys(t *testing.T) {
@@ -795,17 +816,17 @@ func TestCAHandler_HandleRevoke_WithDeleteKeys(t *testing.T) {
 		DeleteKeys: true, // Should pass keyAttrs to Revoke
 	}
 
-	payload, err := EncodePayload(revokeReq)
+	payload, err := quicwire.EncodePayload(revokeReq)
 	require.NoError(t, err)
 
-	req := &Request{
-		Opcode:  OpCARevoke,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpCARevoke,
 		Payload: payload,
 	}
 
 	resp := handler.HandleRequest(context.Background(), req)
 
-	require.Equal(t, StatusOK, resp.Status)
+	require.Equal(t, quicwire.StatusOK, resp.Status)
 }
 
 func TestCAHandler_HandleRevoke_MissingSerial(t *testing.T) {
@@ -817,17 +838,17 @@ func TestCAHandler_HandleRevoke_MissingSerial(t *testing.T) {
 		Serial: "",
 	}
 
-	payload, err := EncodePayload(revokeReq)
+	payload, err := quicwire.EncodePayload(revokeReq)
 	require.NoError(t, err)
 
-	req := &Request{
-		Opcode:  OpCARevoke,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpCARevoke,
 		Payload: payload,
 	}
 
 	resp := handler.HandleRequest(context.Background(), req)
 
-	assert.Equal(t, StatusInvalidArgument, resp.Status)
+	assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 }
 
 func TestCAHandler_HandleRevoke_InvalidPayload(t *testing.T) {
@@ -835,14 +856,14 @@ func TestCAHandler_HandleRevoke_InvalidPayload(t *testing.T) {
 	ca := newMockCA()
 	handler := NewCAHandler(logger, ca, nil)
 
-	req := &Request{
-		Opcode:  OpCARevoke,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpCARevoke,
 		Payload: []byte("invalid msgpack data"),
 	}
 
 	resp := handler.HandleRequest(context.Background(), req)
 
-	assert.Equal(t, StatusInvalidRequest, resp.Status)
+	assert.Equal(t, quicwire.StatusInvalidRequest, resp.Status)
 }
 
 func TestCAHandler_HandleRevoke_NotFound(t *testing.T) {
@@ -856,17 +877,18 @@ func TestCAHandler_HandleRevoke_NotFound(t *testing.T) {
 		DeleteKeys: false,
 	}
 
-	payload, err := EncodePayload(revokeReq)
+	payload, err := quicwire.EncodePayload(revokeReq)
 	require.NoError(t, err)
 
-	req := &Request{
-		Opcode:  OpCARevoke,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpCARevoke,
 		Payload: payload,
 	}
 
 	resp := handler.HandleRequest(context.Background(), req)
 
-	assert.Equal(t, StatusNotFound, resp.Status)
+	assert.Equal(t, quicwire.StatusNotFound, resp.Status)
+	assert.Empty(t, ca.revokedCerts, "an unknown serial must revoke nothing")
 }
 
 func TestCAHandler_HandleRevoke_NilCertStore(t *testing.T) {
@@ -880,17 +902,17 @@ func TestCAHandler_HandleRevoke_NilCertStore(t *testing.T) {
 		Reason: 1,
 	}
 
-	payload, err := EncodePayload(revokeReq)
+	payload, err := quicwire.EncodePayload(revokeReq)
 	require.NoError(t, err)
 
-	req := &Request{
-		Opcode:  OpCARevoke,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpCARevoke,
 		Payload: payload,
 	}
 
 	resp := handler.HandleRequest(context.Background(), req)
 
-	assert.Equal(t, StatusNotFound, resp.Status)
+	assert.Equal(t, quicwire.StatusNotFound, resp.Status)
 }
 
 func TestCAHandler_HandleRenew_Success(t *testing.T) {
@@ -907,20 +929,20 @@ func TestCAHandler_HandleRenew_Success(t *testing.T) {
 		ExtendDays: 365,
 	}
 
-	payload, err := EncodePayload(renewReq)
+	payload, err := quicwire.EncodePayload(renewReq)
 	require.NoError(t, err)
 
-	req := &Request{
-		Opcode:  OpCARenew,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpCARenew,
 		Payload: payload,
 	}
 
 	resp := handler.HandleRequest(context.Background(), req)
 
-	require.Equal(t, StatusOK, resp.Status)
+	require.Equal(t, quicwire.StatusOK, resp.Status)
 
 	var renewResp CARenewResponse
-	err = DecodePayload(resp.Payload, &renewResp)
+	err = quicwire.DecodePayload(resp.Payload, &renewResp)
 	require.NoError(t, err)
 
 	assert.Equal(t, cert.SerialNumber.String(), renewResp.OldSerial)
@@ -937,17 +959,17 @@ func TestCAHandler_HandleRenew_InvalidExtendDays(t *testing.T) {
 		ExtendDays: 0,
 	}
 
-	payload, err := EncodePayload(renewReq)
+	payload, err := quicwire.EncodePayload(renewReq)
 	require.NoError(t, err)
 
-	req := &Request{
-		Opcode:  OpCARenew,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpCARenew,
 		Payload: payload,
 	}
 
 	resp := handler.HandleRequest(context.Background(), req)
 
-	assert.Equal(t, StatusInvalidArgument, resp.Status)
+	assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	assert.Contains(t, string(resp.Payload), "extend_days must be positive")
 }
 
@@ -956,14 +978,14 @@ func TestCAHandler_HandleRenew_InvalidPayload(t *testing.T) {
 	ca := newMockCA()
 	handler := NewCAHandler(logger, ca, nil)
 
-	req := &Request{
-		Opcode:  OpCARenew,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpCARenew,
 		Payload: []byte("invalid msgpack data"),
 	}
 
 	resp := handler.HandleRequest(context.Background(), req)
 
-	assert.Equal(t, StatusInvalidRequest, resp.Status)
+	assert.Equal(t, quicwire.StatusInvalidRequest, resp.Status)
 }
 
 func TestCAHandler_HandleRenew_MissingSerial(t *testing.T) {
@@ -976,17 +998,17 @@ func TestCAHandler_HandleRenew_MissingSerial(t *testing.T) {
 		ExtendDays: 365,
 	}
 
-	payload, err := EncodePayload(renewReq)
+	payload, err := quicwire.EncodePayload(renewReq)
 	require.NoError(t, err)
 
-	req := &Request{
-		Opcode:  OpCARenew,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpCARenew,
 		Payload: payload,
 	}
 
 	resp := handler.HandleRequest(context.Background(), req)
 
-	assert.Equal(t, StatusInvalidArgument, resp.Status)
+	assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	assert.Contains(t, string(resp.Payload), "serial number is required")
 }
 
@@ -1000,17 +1022,17 @@ func TestCAHandler_HandleRenew_NotFound(t *testing.T) {
 		ExtendDays: 365,
 	}
 
-	payload, err := EncodePayload(renewReq)
+	payload, err := quicwire.EncodePayload(renewReq)
 	require.NoError(t, err)
 
-	req := &Request{
-		Opcode:  OpCARenew,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpCARenew,
 		Payload: payload,
 	}
 
 	resp := handler.HandleRequest(context.Background(), req)
 
-	assert.Equal(t, StatusNotFound, resp.Status)
+	assert.Equal(t, quicwire.StatusNotFound, resp.Status)
 }
 
 func TestCAHandler_HandleRenew_NilCertStore(t *testing.T) {
@@ -1024,17 +1046,17 @@ func TestCAHandler_HandleRenew_NilCertStore(t *testing.T) {
 		ExtendDays: 365,
 	}
 
-	payload, err := EncodePayload(renewReq)
+	payload, err := quicwire.EncodePayload(renewReq)
 	require.NoError(t, err)
 
-	req := &Request{
-		Opcode:  OpCARenew,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpCARenew,
 		Payload: payload,
 	}
 
 	resp := handler.HandleRequest(context.Background(), req)
 
-	assert.Equal(t, StatusNotFound, resp.Status)
+	assert.Equal(t, quicwire.StatusNotFound, resp.Status)
 }
 
 func TestCAHandler_HandleRenew_WithSANs(t *testing.T) {
@@ -1069,17 +1091,17 @@ func TestCAHandler_HandleRenew_WithSANs(t *testing.T) {
 		PreserveAttrs: true,
 	}
 
-	payload, err := EncodePayload(renewReq)
+	payload, err := quicwire.EncodePayload(renewReq)
 	require.NoError(t, err)
 
-	req := &Request{
-		Opcode:  OpCARenew,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpCARenew,
 		Payload: payload,
 	}
 
 	resp := handler.HandleRequest(context.Background(), req)
 
-	require.Equal(t, StatusOK, resp.Status)
+	require.Equal(t, quicwire.StatusOK, resp.Status)
 }
 
 func TestCAHandler_HandleVerify_ValidCertificate(t *testing.T) {
@@ -1094,20 +1116,20 @@ func TestCAHandler_HandleVerify_ValidCertificate(t *testing.T) {
 		CertificateDer: cert.Raw,
 	}
 
-	payload, err := EncodePayload(verifyReq)
+	payload, err := quicwire.EncodePayload(verifyReq)
 	require.NoError(t, err)
 
-	req := &Request{
-		Opcode:  OpCAVerify,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpCAVerify,
 		Payload: payload,
 	}
 
 	resp := handler.HandleRequest(context.Background(), req)
 
-	require.Equal(t, StatusOK, resp.Status)
+	require.Equal(t, quicwire.StatusOK, resp.Status)
 
 	var verifyResp CAVerifyResponse
-	err = DecodePayload(resp.Payload, &verifyResp)
+	err = quicwire.DecodePayload(resp.Payload, &verifyResp)
 	require.NoError(t, err)
 
 	// Note: verification may fail because our mock certs aren't properly signed
@@ -1122,17 +1144,17 @@ func TestCAHandler_HandleVerify_MissingCertificate(t *testing.T) {
 
 	verifyReq := &CAVerifyRequest{}
 
-	payload, err := EncodePayload(verifyReq)
+	payload, err := quicwire.EncodePayload(verifyReq)
 	require.NoError(t, err)
 
-	req := &Request{
-		Opcode:  OpCAVerify,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpCAVerify,
 		Payload: payload,
 	}
 
 	resp := handler.HandleRequest(context.Background(), req)
 
-	assert.Equal(t, StatusInvalidArgument, resp.Status)
+	assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	assert.Contains(t, string(resp.Payload), "certificate (PEM or DER) is required")
 }
 
@@ -1141,14 +1163,14 @@ func TestCAHandler_HandleVerify_InvalidPayload(t *testing.T) {
 	ca := newMockCA()
 	handler := NewCAHandler(logger, ca, nil)
 
-	req := &Request{
-		Opcode:  OpCAVerify,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpCAVerify,
 		Payload: []byte("invalid msgpack data"),
 	}
 
 	resp := handler.HandleRequest(context.Background(), req)
 
-	assert.Equal(t, StatusInvalidRequest, resp.Status)
+	assert.Equal(t, quicwire.StatusInvalidRequest, resp.Status)
 }
 
 func TestCAHandler_HandleVerify_WithDER(t *testing.T) {
@@ -1163,18 +1185,18 @@ func TestCAHandler_HandleVerify_WithDER(t *testing.T) {
 		CertificateDer: cert.Raw,
 	}
 
-	payload, err := EncodePayload(verifyReq)
+	payload, err := quicwire.EncodePayload(verifyReq)
 	require.NoError(t, err)
 
-	req := &Request{
-		Opcode:  OpCAVerify,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpCAVerify,
 		Payload: payload,
 	}
 
 	resp := handler.HandleRequest(context.Background(), req)
 
 	// Response should be OK with verification details
-	assert.Equal(t, StatusOK, resp.Status)
+	assert.Equal(t, quicwire.StatusOK, resp.Status)
 }
 
 func TestCAHandler_HandleVerify_WithPEM(t *testing.T) {
@@ -1195,17 +1217,17 @@ func TestCAHandler_HandleVerify_WithPEM(t *testing.T) {
 		CertificatePem: string(pemBlock),
 	}
 
-	payload, err := EncodePayload(verifyReq)
+	payload, err := quicwire.EncodePayload(verifyReq)
 	require.NoError(t, err)
 
-	req := &Request{
-		Opcode:  OpCAVerify,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpCAVerify,
 		Payload: payload,
 	}
 
 	resp := handler.HandleRequest(context.Background(), req)
 
-	assert.Equal(t, StatusOK, resp.Status)
+	assert.Equal(t, quicwire.StatusOK, resp.Status)
 }
 
 func TestCAHandler_HandleVerify_InvalidDER(t *testing.T) {
@@ -1217,17 +1239,17 @@ func TestCAHandler_HandleVerify_InvalidDER(t *testing.T) {
 		CertificateDer: []byte("invalid der data"),
 	}
 
-	payload, err := EncodePayload(verifyReq)
+	payload, err := quicwire.EncodePayload(verifyReq)
 	require.NoError(t, err)
 
-	req := &Request{
-		Opcode:  OpCAVerify,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpCAVerify,
 		Payload: payload,
 	}
 
 	resp := handler.HandleRequest(context.Background(), req)
 
-	assert.Equal(t, StatusInvalidArgument, resp.Status)
+	assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 }
 
 func TestCAHandler_HandleVerify_ExpiredCertificate(t *testing.T) {
@@ -1252,20 +1274,20 @@ func TestCAHandler_HandleVerify_ExpiredCertificate(t *testing.T) {
 		CertificateDer: certDER,
 	}
 
-	payload, err := EncodePayload(verifyReq)
+	payload, err := quicwire.EncodePayload(verifyReq)
 	require.NoError(t, err)
 
-	req := &Request{
-		Opcode:  OpCAVerify,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpCAVerify,
 		Payload: payload,
 	}
 
 	resp := handler.HandleRequest(context.Background(), req)
 
-	require.Equal(t, StatusOK, resp.Status)
+	require.Equal(t, quicwire.StatusOK, resp.Status)
 
 	var verifyResp CAVerifyResponse
-	err = DecodePayload(resp.Payload, &verifyResp)
+	err = quicwire.DecodePayload(resp.Payload, &verifyResp)
 	require.NoError(t, err)
 
 	// Should report expired status
@@ -1294,17 +1316,17 @@ func TestCAHandler_HandleVerify_NotYetValidCertificate(t *testing.T) {
 		CertificateDer: certDER,
 	}
 
-	payload, err := EncodePayload(verifyReq)
+	payload, err := quicwire.EncodePayload(verifyReq)
 	require.NoError(t, err)
 
-	req := &Request{
-		Opcode:  OpCAVerify,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpCAVerify,
 		Payload: payload,
 	}
 
 	resp := handler.HandleRequest(context.Background(), req)
 
-	require.Equal(t, StatusOK, resp.Status)
+	require.Equal(t, quicwire.StatusOK, resp.Status)
 }
 
 func TestCAHandler_HandleCRL_Success(t *testing.T) {
@@ -1312,17 +1334,17 @@ func TestCAHandler_HandleCRL_Success(t *testing.T) {
 	ca := newMockCA()
 	handler := NewCAHandler(logger, ca, nil)
 
-	req := &Request{
-		Opcode:  OpCACRL,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpCACRL,
 		Payload: nil,
 	}
 
 	resp := handler.HandleRequest(context.Background(), req)
 
-	require.Equal(t, StatusOK, resp.Status)
+	require.Equal(t, quicwire.StatusOK, resp.Status)
 
 	var crlResp CACRLResponse
-	err := DecodePayload(resp.Payload, &crlResp)
+	err := quicwire.DecodePayload(resp.Payload, &crlResp)
 	require.NoError(t, err)
 
 	assert.NotEmpty(t, crlResp.CRL)
@@ -1333,14 +1355,14 @@ func TestCAHandler_HandleCRL_CANotInitialized(t *testing.T) {
 	logger := logging.DefaultLogger()
 	handler := NewCAHandler(logger, nil, nil)
 
-	req := &Request{
-		Opcode:  OpCACRL,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpCACRL,
 		Payload: nil,
 	}
 
 	resp := handler.HandleRequest(context.Background(), req)
 
-	assert.Equal(t, StatusUnavailable, resp.Status)
+	assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	assert.Contains(t, string(resp.Payload), "certificate authority not initialized")
 }
 
@@ -1350,14 +1372,14 @@ func TestCAHandler_HandleCRL_NotSupported(t *testing.T) {
 	ca.generateCRL = false
 	handler := NewCAHandler(logger, ca, nil)
 
-	req := &Request{
-		Opcode:  OpCACRL,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpCACRL,
 		Payload: nil,
 	}
 
 	resp := handler.HandleRequest(context.Background(), req)
 
-	assert.Equal(t, StatusNotImplemented, resp.Status)
+	assert.Equal(t, quicwire.StatusNotImplemented, resp.Status)
 	assert.Contains(t, string(resp.Payload), "CRL generation not supported")
 }
 
@@ -1368,20 +1390,20 @@ func TestCAHandler_HandleBundle_Success(t *testing.T) {
 
 	bundleReq := &CABundleRequest{}
 
-	payload, err := EncodePayload(bundleReq)
+	payload, err := quicwire.EncodePayload(bundleReq)
 	require.NoError(t, err)
 
-	req := &Request{
-		Opcode:  OpCABundle,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpCABundle,
 		Payload: payload,
 	}
 
 	resp := handler.HandleRequest(context.Background(), req)
 
-	require.Equal(t, StatusOK, resp.Status)
+	require.Equal(t, quicwire.StatusOK, resp.Status)
 
 	var bundleResp CABundleResponse
-	err = DecodePayload(resp.Payload, &bundleResp)
+	err = quicwire.DecodePayload(resp.Payload, &bundleResp)
 	require.NoError(t, err)
 
 	assert.NotEmpty(t, bundleResp.Bundle)
@@ -1393,14 +1415,14 @@ func TestCAHandler_HandleBundle_InvalidPayload(t *testing.T) {
 	ca := newMockCA()
 	handler := NewCAHandler(logger, ca, nil)
 
-	req := &Request{
-		Opcode:  OpCABundle,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpCABundle,
 		Payload: []byte("invalid msgpack data"),
 	}
 
 	resp := handler.HandleRequest(context.Background(), req)
 
-	assert.Equal(t, StatusInvalidRequest, resp.Status)
+	assert.Equal(t, quicwire.StatusInvalidRequest, resp.Status)
 }
 
 func TestCAHandler_HandleBundle_CANotInitialized(t *testing.T) {
@@ -1408,16 +1430,16 @@ func TestCAHandler_HandleBundle_CANotInitialized(t *testing.T) {
 	handler := NewCAHandler(logger, nil, nil)
 
 	bundleReq := &CABundleRequest{}
-	payload, _ := EncodePayload(bundleReq)
+	payload, _ := quicwire.EncodePayload(bundleReq)
 
-	req := &Request{
-		Opcode:  OpCABundle,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpCABundle,
 		Payload: payload,
 	}
 
 	resp := handler.HandleRequest(context.Background(), req)
 
-	assert.Equal(t, StatusUnavailable, resp.Status)
+	assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 }
 
 func TestCAHandler_HandleBundle_WithStoreType(t *testing.T) {
@@ -1430,20 +1452,20 @@ func TestCAHandler_HandleBundle_WithStoreType(t *testing.T) {
 		Algorithm: "ECDSA",
 	}
 
-	payload, err := EncodePayload(bundleReq)
+	payload, err := quicwire.EncodePayload(bundleReq)
 	require.NoError(t, err)
 
-	req := &Request{
-		Opcode:  OpCABundle,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpCABundle,
 		Payload: payload,
 	}
 
 	resp := handler.HandleRequest(context.Background(), req)
 
-	require.Equal(t, StatusOK, resp.Status)
+	require.Equal(t, quicwire.StatusOK, resp.Status)
 
 	var bundleResp CABundleResponse
-	err = DecodePayload(resp.Payload, &bundleResp)
+	err = quicwire.DecodePayload(resp.Payload, &bundleResp)
 	require.NoError(t, err)
 
 	assert.NotEmpty(t, bundleResp.Bundle)
@@ -1458,17 +1480,17 @@ func TestCAHandler_HandleBundle_InvalidAlgorithm(t *testing.T) {
 		Algorithm: "INVALID_ALG",
 	}
 
-	payload, err := EncodePayload(bundleReq)
+	payload, err := quicwire.EncodePayload(bundleReq)
 	require.NoError(t, err)
 
-	req := &Request{
-		Opcode:  OpCABundle,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpCABundle,
 		Payload: payload,
 	}
 
 	resp := handler.HandleRequest(context.Background(), req)
 
-	assert.Equal(t, StatusInvalidArgument, resp.Status)
+	assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	assert.Contains(t, string(resp.Payload), "invalid key algorithm")
 }
 
@@ -1909,6 +1931,47 @@ func TestCAHandler_CertToFull_WithSubjectDetails(t *testing.T) {
 	assert.NotEmpty(t, full.Pem)
 }
 
+// The QUIC certificate carries the usages, path length and fingerprint the
+// gRPC service reports, with the same names (#691).
+func TestCAHandler_CertToFull_ReportsUsagesPathLenAndFingerprint(t *testing.T) {
+	handler := &CAHandler{}
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	require.NoError(t, err)
+	template := &x509.Certificate{
+		SerialNumber:          big.NewInt(42),
+		Subject:               pkix.Name{CommonName: "usages.example"},
+		NotBefore:             time.Now(),
+		NotAfter:              time.Now().Add(time.Hour),
+		BasicConstraintsValid: true,
+		IsCA:                  true,
+		MaxPathLen:            3,
+		KeyUsage:              x509.KeyUsageCRLSign | x509.KeyUsageDigitalSignature | x509.KeyUsageCertSign,
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageOCSPSigning, x509.ExtKeyUsageCodeSigning},
+	}
+	der, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
+	require.NoError(t, err)
+	cert, err := x509.ParseCertificate(der)
+	require.NoError(t, err)
+
+	full := handler.certToFull(cert, false)
+
+	sum := sha256.Sum256(der)
+	assert.Equal(t, int32(3), full.MaxPathLen)
+	assert.Equal(t, []string{"DIGITAL_SIGNATURE", "CERT_SIGN", "CRL_SIGN"}, full.KeyUsage)
+	assert.Equal(t, []string{"OCSP_SIGNING", "CODE_SIGNING"}, full.ExtKeyUsage)
+	assert.Equal(t, hex.EncodeToString(sum[:]), full.FingerprintSHA256)
+	assert.Nil(t, full.Der, "certToFull leaves DER to the caller that asked for it")
+}
+
+// A usage the gRPC service does not name is left out rather than reported
+// under a guessed name, and an empty usage set names nothing.
+func TestUsageNames_LeaveUnnamedUsagesOut(t *testing.T) {
+	assert.Nil(t, keyUsageNames(0))
+	assert.Nil(t, extKeyUsageNames(nil))
+	assert.Equal(t, []string{"SERVER_AUTH"},
+		extKeyUsageNames([]x509.ExtKeyUsage{x509.ExtKeyUsageMicrosoftKernelCodeSigning, x509.ExtKeyUsageServerAuth}))
+}
+
 func TestFirstOrEmpty(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -1932,15 +1995,15 @@ func TestFirstOrEmpty(t *testing.T) {
 // Test CA operations with various opcode constants
 // These values are defined in protocol.go and must match exactly
 func TestCAOperationConstants(t *testing.T) {
-	assert.Equal(t, byte(0xA0), OpCAInfo)
-	assert.Equal(t, byte(0xA1), OpCAIssue)
-	assert.Equal(t, byte(0xA2), OpCARevoke)
-	assert.Equal(t, byte(0xA3), OpCARenew)
-	assert.Equal(t, byte(0xA4), OpCAGet)
-	assert.Equal(t, byte(0xA5), OpCAList)
-	assert.Equal(t, byte(0xA6), OpCAVerify)
-	assert.Equal(t, byte(0xA7), OpCACRL)
-	assert.Equal(t, byte(0xA8), OpCABundle)
+	assert.Equal(t, byte(0xA0), quicwire.OpCAInfo)
+	assert.Equal(t, byte(0xA1), quicwire.OpCAIssue)
+	assert.Equal(t, byte(0xA2), quicwire.OpCARevoke)
+	assert.Equal(t, byte(0xA3), quicwire.OpCARenew)
+	assert.Equal(t, byte(0xA4), quicwire.OpCAGet)
+	assert.Equal(t, byte(0xA5), quicwire.OpCAList)
+	assert.Equal(t, byte(0xA6), quicwire.OpCAVerify)
+	assert.Equal(t, byte(0xA7), quicwire.OpCACRL)
+	assert.Equal(t, byte(0xA8), quicwire.OpCABundle)
 }
 
 func TestCAHandler_HandleGet_RootCertBySerial(t *testing.T) {
@@ -1958,20 +2021,20 @@ func TestCAHandler_HandleGet_RootCertBySerial(t *testing.T) {
 		IncludePem: true,
 	}
 
-	payload, err := EncodePayload(getReq)
+	payload, err := quicwire.EncodePayload(getReq)
 	require.NoError(t, err)
 
-	req := &Request{
-		Opcode:  OpCAGet,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpCAGet,
 		Payload: payload,
 	}
 
 	resp := handler.HandleRequest(context.Background(), req)
 
-	require.Equal(t, StatusOK, resp.Status)
+	require.Equal(t, quicwire.StatusOK, resp.Status)
 
 	var getResp CAGetResponse
-	err = DecodePayload(resp.Payload, &getResp)
+	err = quicwire.DecodePayload(resp.Payload, &getResp)
 	require.NoError(t, err)
 
 	assert.NotNil(t, getResp.Certificate)
@@ -1993,20 +2056,20 @@ func TestCAHandler_HandleGet_IntermediateCertBySerial(t *testing.T) {
 		IncludePem: false,
 	}
 
-	payload, err := EncodePayload(getReq)
+	payload, err := quicwire.EncodePayload(getReq)
 	require.NoError(t, err)
 
-	req := &Request{
-		Opcode:  OpCAGet,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpCAGet,
 		Payload: payload,
 	}
 
 	resp := handler.HandleRequest(context.Background(), req)
 
-	require.Equal(t, StatusOK, resp.Status)
+	require.Equal(t, quicwire.StatusOK, resp.Status)
 
 	var getResp CAGetResponse
-	err = DecodePayload(resp.Payload, &getResp)
+	err = quicwire.DecodePayload(resp.Payload, &getResp)
 	require.NoError(t, err)
 
 	assert.NotNil(t, getResp.Certificate)
@@ -2021,17 +2084,17 @@ func TestCAHandler_HandleGet_CANotInitialized(t *testing.T) {
 		Serial: "12345",
 	}
 
-	payload, err := EncodePayload(getReq)
+	payload, err := quicwire.EncodePayload(getReq)
 	require.NoError(t, err)
 
-	req := &Request{
-		Opcode:  OpCAGet,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpCAGet,
 		Payload: payload,
 	}
 
 	resp := handler.HandleRequest(context.Background(), req)
 
-	assert.Equal(t, StatusUnavailable, resp.Status)
+	assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	assert.Contains(t, string(resp.Payload), "certificate authority not initialized")
 }
 
@@ -2043,17 +2106,17 @@ func TestCAHandler_HandleList_CANotInitialized(t *testing.T) {
 		Limit: 10,
 	}
 
-	payload, err := EncodePayload(listReq)
+	payload, err := quicwire.EncodePayload(listReq)
 	require.NoError(t, err)
 
-	req := &Request{
-		Opcode:  OpCAList,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpCAList,
 		Payload: payload,
 	}
 
 	resp := handler.HandleRequest(context.Background(), req)
 
-	assert.Equal(t, StatusUnavailable, resp.Status)
+	assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 }
 
 func TestCAHandler_HandleRevoke_CANotInitialized(t *testing.T) {
@@ -2065,17 +2128,17 @@ func TestCAHandler_HandleRevoke_CANotInitialized(t *testing.T) {
 		Reason: 1,
 	}
 
-	payload, err := EncodePayload(revokeReq)
+	payload, err := quicwire.EncodePayload(revokeReq)
 	require.NoError(t, err)
 
-	req := &Request{
-		Opcode:  OpCARevoke,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpCARevoke,
 		Payload: payload,
 	}
 
 	resp := handler.HandleRequest(context.Background(), req)
 
-	assert.Equal(t, StatusUnavailable, resp.Status)
+	assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 }
 
 func TestCAHandler_HandleRenew_CANotInitialized(t *testing.T) {
@@ -2087,17 +2150,17 @@ func TestCAHandler_HandleRenew_CANotInitialized(t *testing.T) {
 		ExtendDays: 365,
 	}
 
-	payload, err := EncodePayload(renewReq)
+	payload, err := quicwire.EncodePayload(renewReq)
 	require.NoError(t, err)
 
-	req := &Request{
-		Opcode:  OpCARenew,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpCARenew,
 		Payload: payload,
 	}
 
 	resp := handler.HandleRequest(context.Background(), req)
 
-	assert.Equal(t, StatusUnavailable, resp.Status)
+	assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 }
 
 func TestCAHandler_HandleVerify_CANotInitialized(t *testing.T) {
@@ -2111,17 +2174,17 @@ func TestCAHandler_HandleVerify_CANotInitialized(t *testing.T) {
 		CertificateDer: cert.Raw,
 	}
 
-	payload, err := EncodePayload(verifyReq)
+	payload, err := quicwire.EncodePayload(verifyReq)
 	require.NoError(t, err)
 
-	req := &Request{
-		Opcode:  OpCAVerify,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpCAVerify,
 		Payload: payload,
 	}
 
 	resp := handler.HandleRequest(context.Background(), req)
 
-	assert.Equal(t, StatusUnavailable, resp.Status)
+	assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 }
 
 func TestCAHandler_HandleIssue_CANotInitialized(t *testing.T) {
@@ -2135,17 +2198,17 @@ func TestCAHandler_HandleIssue_CANotInitialized(t *testing.T) {
 		ValidDays: 365,
 	}
 
-	payload, err := EncodePayload(issueReq)
+	payload, err := quicwire.EncodePayload(issueReq)
 	require.NoError(t, err)
 
-	req := &Request{
-		Opcode:  OpCAIssue,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpCAIssue,
 		Payload: payload,
 	}
 
 	resp := handler.HandleRequest(context.Background(), req)
 
-	assert.Equal(t, StatusUnavailable, resp.Status)
+	assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 }
 
 func TestCAHandler_HandleList_WithPagination(t *testing.T) {
@@ -2163,20 +2226,20 @@ func TestCAHandler_HandleList_WithPagination(t *testing.T) {
 		Limit: 2,
 	}
 
-	payload, err := EncodePayload(listReq)
+	payload, err := quicwire.EncodePayload(listReq)
 	require.NoError(t, err)
 
-	req := &Request{
-		Opcode:  OpCAList,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpCAList,
 		Payload: payload,
 	}
 
 	resp := handler.HandleRequest(context.Background(), req)
 
-	require.Equal(t, StatusOK, resp.Status)
+	require.Equal(t, quicwire.StatusOK, resp.Status)
 
 	var listResp CAListResponse
-	err = DecodePayload(resp.Payload, &listResp)
+	err = quicwire.DecodePayload(resp.Payload, &listResp)
 	require.NoError(t, err)
 
 	assert.NotNil(t, listResp.Certificates)
@@ -2191,17 +2254,17 @@ func TestCAHandler_HandleVerify_WithInvalidPEM(t *testing.T) {
 		CertificatePem: "not a valid PEM",
 	}
 
-	payload, err := EncodePayload(verifyReq)
+	payload, err := quicwire.EncodePayload(verifyReq)
 	require.NoError(t, err)
 
-	req := &Request{
-		Opcode:  OpCAVerify,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpCAVerify,
 		Payload: payload,
 	}
 
 	resp := handler.HandleRequest(context.Background(), req)
 
-	assert.Equal(t, StatusInvalidArgument, resp.Status)
+	assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 }
 
 func TestCAHandler_HandleRenew_NegativeExtendDays(t *testing.T) {
@@ -2214,17 +2277,17 @@ func TestCAHandler_HandleRenew_NegativeExtendDays(t *testing.T) {
 		ExtendDays: -10,
 	}
 
-	payload, err := EncodePayload(renewReq)
+	payload, err := quicwire.EncodePayload(renewReq)
 	require.NoError(t, err)
 
-	req := &Request{
-		Opcode:  OpCARenew,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpCARenew,
 		Payload: payload,
 	}
 
 	resp := handler.HandleRequest(context.Background(), req)
 
-	assert.Equal(t, StatusInvalidArgument, resp.Status)
+	assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	assert.Contains(t, string(resp.Payload), "extend_days must be positive")
 }
 
@@ -2243,17 +2306,17 @@ func TestCAHandler_HandleInfo_WithNilRoot(t *testing.T) {
 	ca := &mockCAWithNilRoot{mockCA: baseCa}
 	handler := NewCAHandler(logger, ca, nil)
 
-	req := &Request{
-		Opcode:  OpCAInfo,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpCAInfo,
 		Payload: nil,
 	}
 
 	resp := handler.HandleRequest(context.Background(), req)
 
-	require.Equal(t, StatusOK, resp.Status)
+	require.Equal(t, quicwire.StatusOK, resp.Status)
 
 	var infoResp CAInfoResponse
-	err := DecodePayload(resp.Payload, &infoResp)
+	err := quicwire.DecodePayload(resp.Payload, &infoResp)
 	require.NoError(t, err)
 
 	assert.Nil(t, infoResp.RootCert)
@@ -2274,17 +2337,17 @@ func TestCAHandler_HandleInfo_WithNilIntermediate(t *testing.T) {
 	ca := &mockCAWithNilIntermediate{mockCA: baseCa}
 	handler := NewCAHandler(logger, ca, nil)
 
-	req := &Request{
-		Opcode:  OpCAInfo,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpCAInfo,
 		Payload: nil,
 	}
 
 	resp := handler.HandleRequest(context.Background(), req)
 
-	require.Equal(t, StatusOK, resp.Status)
+	require.Equal(t, quicwire.StatusOK, resp.Status)
 
 	var infoResp CAInfoResponse
-	err := DecodePayload(resp.Payload, &infoResp)
+	err := quicwire.DecodePayload(resp.Payload, &infoResp)
 	require.NoError(t, err)
 
 	assert.False(t, infoResp.IsIntermediate)
@@ -2302,17 +2365,17 @@ func TestCAHandler_HandleGet_WithNilCertStore(t *testing.T) {
 		IncludePem: true,
 	}
 
-	payload, err := EncodePayload(getReq)
+	payload, err := quicwire.EncodePayload(getReq)
 	require.NoError(t, err)
 
-	req := &Request{
-		Opcode:  OpCAGet,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpCAGet,
 		Payload: payload,
 	}
 
 	resp := handler.HandleRequest(context.Background(), req)
 
-	assert.Equal(t, StatusNotFound, resp.Status)
+	assert.Equal(t, quicwire.StatusNotFound, resp.Status)
 }
 
 // Test default store type when empty string is passed
@@ -2329,17 +2392,17 @@ func TestCAHandler_HandleIssue_DefaultStoreType(t *testing.T) {
 		StoreType: "", // Empty should default to Software
 	}
 
-	payload, err := EncodePayload(issueReq)
+	payload, err := quicwire.EncodePayload(issueReq)
 	require.NoError(t, err)
 
-	req := &Request{
-		Opcode:  OpCAIssue,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpCAIssue,
 		Payload: payload,
 	}
 
 	resp := handler.HandleRequest(context.Background(), req)
 
-	require.Equal(t, StatusOK, resp.Status)
+	require.Equal(t, quicwire.StatusOK, resp.Status)
 }
 
 func TestCAHandler_HandleList_WithoutIntermediateCert(t *testing.T) {
@@ -2352,20 +2415,20 @@ func TestCAHandler_HandleList_WithoutIntermediateCert(t *testing.T) {
 		Limit: 10,
 	}
 
-	payload, err := EncodePayload(listReq)
+	payload, err := quicwire.EncodePayload(listReq)
 	require.NoError(t, err)
 
-	req := &Request{
-		Opcode:  OpCAList,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpCAList,
 		Payload: payload,
 	}
 
 	resp := handler.HandleRequest(context.Background(), req)
 
-	require.Equal(t, StatusOK, resp.Status)
+	require.Equal(t, quicwire.StatusOK, resp.Status)
 
 	var listResp CAListResponse
-	err = DecodePayload(resp.Payload, &listResp)
+	err = quicwire.DecodePayload(resp.Payload, &listResp)
 	require.NoError(t, err)
 
 	// Should only have root cert
@@ -2382,20 +2445,20 @@ func TestCAHandler_HandleList_WithoutRootCert(t *testing.T) {
 		Limit: 10,
 	}
 
-	payload, err := EncodePayload(listReq)
+	payload, err := quicwire.EncodePayload(listReq)
 	require.NoError(t, err)
 
-	req := &Request{
-		Opcode:  OpCAList,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpCAList,
 		Payload: payload,
 	}
 
 	resp := handler.HandleRequest(context.Background(), req)
 
-	require.Equal(t, StatusOK, resp.Status)
+	require.Equal(t, quicwire.StatusOK, resp.Status)
 
 	var listResp CAListResponse
-	err = DecodePayload(resp.Payload, &listResp)
+	err = quicwire.DecodePayload(resp.Payload, &listResp)
 	require.NoError(t, err)
 
 	// Should only have intermediate cert
@@ -2438,17 +2501,17 @@ func TestCAHandler_HandleIssue_AllAlgorithms(t *testing.T) {
 				KeyAlgorithm: alg,
 			}
 
-			payload, err := EncodePayload(issueReq)
+			payload, err := quicwire.EncodePayload(issueReq)
 			require.NoError(t, err)
 
-			req := &Request{
-				Opcode:  OpCAIssue,
+			req := &quicwire.Request{
+				Opcode:  quicwire.OpCAIssue,
 				Payload: payload,
 			}
 
 			resp := handler.HandleRequest(context.Background(), req)
 
-			require.Equal(t, StatusOK, resp.Status)
+			require.Equal(t, quicwire.StatusOK, resp.Status)
 		})
 	}
 }
@@ -2473,17 +2536,17 @@ func TestCAHandler_HandleBundle_AllAlgorithms(t *testing.T) {
 				Algorithm: alg,
 			}
 
-			payload, err := EncodePayload(bundleReq)
+			payload, err := quicwire.EncodePayload(bundleReq)
 			require.NoError(t, err)
 
-			req := &Request{
-				Opcode:  OpCABundle,
+			req := &quicwire.Request{
+				Opcode:  quicwire.OpCABundle,
 				Payload: payload,
 			}
 
 			resp := handler.HandleRequest(context.Background(), req)
 
-			require.Equal(t, StatusOK, resp.Status)
+			require.Equal(t, quicwire.StatusOK, resp.Status)
 		})
 	}
 }
@@ -2509,17 +2572,17 @@ func TestCAHandler_HandleBundle_AllStoreTypes(t *testing.T) {
 				StoreType: st,
 			}
 
-			payload, err := EncodePayload(bundleReq)
+			payload, err := quicwire.EncodePayload(bundleReq)
 			require.NoError(t, err)
 
-			req := &Request{
-				Opcode:  OpCABundle,
+			req := &quicwire.Request{
+				Opcode:  quicwire.OpCABundle,
 				Payload: payload,
 			}
 
 			resp := handler.HandleRequest(context.Background(), req)
 
-			require.Equal(t, StatusOK, resp.Status)
+			require.Equal(t, quicwire.StatusOK, resp.Status)
 		})
 	}
 }
@@ -2539,17 +2602,17 @@ func TestCAHandler_HandleIssue_CAFlag(t *testing.T) {
 		MaxPathLen: 1,
 	}
 
-	payload, err := EncodePayload(issueReq)
+	payload, err := quicwire.EncodePayload(issueReq)
 	require.NoError(t, err)
 
-	req := &Request{
-		Opcode:  OpCAIssue,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpCAIssue,
 		Payload: payload,
 	}
 
 	resp := handler.HandleRequest(context.Background(), req)
 
-	require.Equal(t, StatusOK, resp.Status)
+	require.Equal(t, quicwire.StatusOK, resp.Status)
 }
 
 // Test verify with valid chains
@@ -2577,20 +2640,20 @@ func TestCAHandler_HandleVerify_ValidChain(t *testing.T) {
 		CheckRevoked:   true,
 	}
 
-	payload, err := EncodePayload(verifyReq)
+	payload, err := quicwire.EncodePayload(verifyReq)
 	require.NoError(t, err)
 
-	req := &Request{
-		Opcode:  OpCAVerify,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpCAVerify,
 		Payload: payload,
 	}
 
 	resp := handler.HandleRequest(context.Background(), req)
 
-	require.Equal(t, StatusOK, resp.Status)
+	require.Equal(t, quicwire.StatusOK, resp.Status)
 
 	var verifyResp CAVerifyResponse
-	err = DecodePayload(resp.Payload, &verifyResp)
+	err = quicwire.DecodePayload(resp.Payload, &verifyResp)
 	require.NoError(t, err)
 
 	// Should have chain information
@@ -2608,8 +2671,6 @@ type mockCANoCRL struct {
 	defaultSigAlg x509.SignatureAlgorithm
 	validity      int
 	certStore     *mockCertStore
-	issuedCerts   []*x509.Certificate
-	revokedCerts  []*x509.Certificate
 	privateKey    *ecdsa.PrivateKey
 }
 
@@ -2627,8 +2688,6 @@ func newMockCANoCRL() *mockCANoCRL {
 		defaultSigAlg: x509.ECDSAWithSHA256,
 		validity:      365,
 		certStore:     newMockCertStore(),
-		issuedCerts:   make([]*x509.Certificate, 0),
-		revokedCerts:  make([]*x509.Certificate, 0),
 		privateKey:    privateKey,
 	}
 }
@@ -2656,14 +2715,12 @@ func (m *mockCANoCRL) CASigner(_ context.Context, _ xkmssdk.StoreType, _ x509.Pu
 }
 func (m *mockCANoCRL) IssueCertificate(_ context.Context, req *xkmsca.CACertificateRequest) (*xkmsca.IssuedCertificate, error) {
 	cert := generateTestCertificate(req.Subject.CommonName, req.IsCA, m.intermCert, m.privateKey)
-	m.issuedCerts = append(m.issuedCerts, cert)
 	if m.certStore != nil {
 		m.certStore.StoreCertificate(cert)
 	}
 	return &xkmsca.IssuedCertificate{Certificate: cert}, nil
 }
-func (m *mockCANoCRL) RevokeCert(_ context.Context, cert *x509.Certificate, _ xkmsca.RevokeOptions) error {
-	m.revokedCerts = append(m.revokedCerts, cert)
+func (m *mockCANoCRL) RevokeCert(_ context.Context, _ *x509.Certificate, _ xkmsca.RevokeOptions) error {
 	return nil
 }
 func (m *mockCANoCRL) CABundle() ([]byte, error) { return m.rootCert.Raw, nil }
@@ -2689,14 +2746,14 @@ func TestCAHandler_HandleCRL_InterfaceNotImplemented(t *testing.T) {
 	ca := newMockCANoCRL()
 	handler := NewCAHandler(logger, ca, nil)
 
-	req := &Request{
-		Opcode:  OpCACRL,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpCACRL,
 		Payload: nil,
 	}
 
 	resp := handler.HandleRequest(context.Background(), req)
 
-	assert.Equal(t, StatusNotImplemented, resp.Status)
+	assert.Equal(t, quicwire.StatusNotImplemented, resp.Status)
 	assert.Contains(t, string(resp.Payload), "CRL generation not supported")
 }
 
@@ -2722,17 +2779,17 @@ func TestCAHandler_HandleIssue_IssueFails(t *testing.T) {
 		ValidDays: 365,
 	}
 
-	payload, err := EncodePayload(issueReq)
+	payload, err := quicwire.EncodePayload(issueReq)
 	require.NoError(t, err)
 
-	req := &Request{
-		Opcode:  OpCAIssue,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpCAIssue,
 		Payload: payload,
 	}
 
 	resp := handler.HandleRequest(context.Background(), req)
 
-	assert.Equal(t, StatusInternalError, resp.Status)
+	assert.Equal(t, quicwire.StatusInternalError, resp.Status)
 	assert.Contains(t, string(resp.Payload), "failed to issue certificate")
 }
 
@@ -2760,17 +2817,17 @@ func TestCAHandler_HandleRevoke_RevokeFails(t *testing.T) {
 		Reason: 1,
 	}
 
-	payload, err := EncodePayload(revokeReq)
+	payload, err := quicwire.EncodePayload(revokeReq)
 	require.NoError(t, err)
 
-	req := &Request{
-		Opcode:  OpCARevoke,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpCARevoke,
 		Payload: payload,
 	}
 
 	resp := handler.HandleRequest(context.Background(), req)
 
-	assert.Equal(t, StatusInternalError, resp.Status)
+	assert.Equal(t, quicwire.StatusInternalError, resp.Status)
 	assert.Contains(t, string(resp.Payload), "failed to revoke certificate")
 }
 
@@ -2785,7 +2842,6 @@ func (m *mockCARenewFails) IssueCertificate(_ context.Context, req *xkmsca.CACer
 		return nil, errors.New("renewal failed")
 	}
 	cert := generateTestCertificate(req.Subject.CommonName, req.IsCA, m.intermCert, m.privateKey)
-	m.issuedCerts = append(m.issuedCerts, cert)
 	if m.certStore != nil {
 		m.certStore.StoreCertificate(cert)
 	}
@@ -2810,17 +2866,17 @@ func TestCAHandler_HandleRenew_RenewFails(t *testing.T) {
 		ExtendDays: 365,
 	}
 
-	payload, err := EncodePayload(renewReq)
+	payload, err := quicwire.EncodePayload(renewReq)
 	require.NoError(t, err)
 
-	req := &Request{
-		Opcode:  OpCARenew,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpCARenew,
 		Payload: payload,
 	}
 
 	resp := handler.HandleRequest(context.Background(), req)
 
-	assert.Equal(t, StatusInternalError, resp.Status)
+	assert.Equal(t, quicwire.StatusInternalError, resp.Status)
 	assert.Contains(t, string(resp.Payload), "failed to renew certificate")
 }
 
@@ -2844,17 +2900,17 @@ func TestCAHandler_HandleBundle_EmptyBundle(t *testing.T) {
 
 	bundleReq := &CABundleRequest{}
 
-	payload, err := EncodePayload(bundleReq)
+	payload, err := quicwire.EncodePayload(bundleReq)
 	require.NoError(t, err)
 
-	req := &Request{
-		Opcode:  OpCABundle,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpCABundle,
 		Payload: payload,
 	}
 
 	resp := handler.HandleRequest(context.Background(), req)
 
-	assert.Equal(t, StatusNotFound, resp.Status)
+	assert.Equal(t, quicwire.StatusNotFound, resp.Status)
 	assert.Contains(t, string(resp.Payload), "CA bundle not found")
 }
 
@@ -2878,17 +2934,17 @@ func TestCAHandler_HandleBundle_BundleFails(t *testing.T) {
 
 	bundleReq := &CABundleRequest{}
 
-	payload, err := EncodePayload(bundleReq)
+	payload, err := quicwire.EncodePayload(bundleReq)
 	require.NoError(t, err)
 
-	req := &Request{
-		Opcode:  OpCABundle,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpCABundle,
 		Payload: payload,
 	}
 
 	resp := handler.HandleRequest(context.Background(), req)
 
-	assert.Equal(t, StatusInternalError, resp.Status)
+	assert.Equal(t, quicwire.StatusInternalError, resp.Status)
 	assert.Contains(t, string(resp.Payload), "failed to get CA bundle")
 }
 
@@ -2911,53 +2967,26 @@ func TestCAHandler_HandleList_LimitTriggersSlicing(t *testing.T) {
 		Limit: 1,
 	}
 
-	payload, err := EncodePayload(listReq)
+	payload, err := quicwire.EncodePayload(listReq)
 	require.NoError(t, err)
 
-	req := &Request{
-		Opcode:  OpCAList,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpCAList,
 		Payload: payload,
 	}
 
 	resp := handler.HandleRequest(context.Background(), req)
 
-	require.Equal(t, StatusOK, resp.Status)
+	require.Equal(t, quicwire.StatusOK, resp.Status)
 
 	var listResp CAListResponse
-	err = DecodePayload(resp.Payload, &listResp)
+	err = quicwire.DecodePayload(resp.Payload, &listResp)
 	require.NoError(t, err)
 
 	// Should have sliced to 1 cert but total count should be 2 (root + intermediate)
 	assert.Equal(t, 1, len(listResp.Certificates))
 	assert.Equal(t, int32(2), listResp.TotalCount)
 	assert.True(t, listResp.HasMore)
-}
-
-// Test handleCRL with revoked certificates
-func TestCAHandler_HandleCRL_WithRevokedCerts(t *testing.T) {
-	logger := logging.DefaultLogger()
-	ca := newMockCA()
-	handler := NewCAHandler(logger, ca, nil)
-
-	// Add some revoked certificates to the CRL by revoking them first
-	cert := generateTestCertificate("revoked.example.com", false, ca.intermCert, ca.privateKey)
-	ca.certStore.StoreCertificate(cert)
-	ca.revokedCerts = append(ca.revokedCerts, cert)
-
-	req := &Request{
-		Opcode:  OpCACRL,
-		Payload: nil,
-	}
-
-	resp := handler.HandleRequest(context.Background(), req)
-
-	require.Equal(t, StatusOK, resp.Status)
-
-	var crlResp CACRLResponse
-	err := DecodePayload(resp.Payload, &crlResp)
-	require.NoError(t, err)
-
-	assert.NotEmpty(t, crlResp.CRL)
 }
 
 // mockCAWithRevokedCRL is a mock CA that generates CRL with revoked entries
@@ -2991,17 +3020,17 @@ func TestCAHandler_HandleCRL_WithRevokedEntries(t *testing.T) {
 	ca := &mockCAWithRevokedCRL{mockCA: baseCa}
 	handler := NewCAHandler(logger, ca, nil)
 
-	req := &Request{
-		Opcode:  OpCACRL,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpCACRL,
 		Payload: nil,
 	}
 
 	resp := handler.HandleRequest(context.Background(), req)
 
-	require.Equal(t, StatusOK, resp.Status)
+	require.Equal(t, quicwire.StatusOK, resp.Status)
 
 	var crlResp CACRLResponse
-	err := DecodePayload(resp.Payload, &crlResp)
+	err := quicwire.DecodePayload(resp.Payload, &crlResp)
 	require.NoError(t, err)
 
 	assert.NotEmpty(t, crlResp.CRL)
@@ -3024,20 +3053,20 @@ func TestCAHandler_HandleGet_RootCertSuccess(t *testing.T) {
 		IncludePem: false,
 	}
 
-	payload, err := EncodePayload(getReq)
+	payload, err := quicwire.EncodePayload(getReq)
 	require.NoError(t, err)
 
-	req := &Request{
-		Opcode:  OpCAGet,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpCAGet,
 		Payload: payload,
 	}
 
 	resp := handler.HandleRequest(context.Background(), req)
 
-	require.Equal(t, StatusOK, resp.Status)
+	require.Equal(t, quicwire.StatusOK, resp.Status)
 
 	var getResp CAGetResponse
-	err = DecodePayload(resp.Payload, &getResp)
+	err = quicwire.DecodePayload(resp.Payload, &getResp)
 	require.NoError(t, err)
 
 	assert.Equal(t, "Test Root CA", getResp.Certificate.Subject.CommonName)
@@ -3057,20 +3086,20 @@ func TestCAHandler_HandleGet_IntermediateCertSuccess(t *testing.T) {
 		IncludePem: true,
 	}
 
-	payload, err := EncodePayload(getReq)
+	payload, err := quicwire.EncodePayload(getReq)
 	require.NoError(t, err)
 
-	req := &Request{
-		Opcode:  OpCAGet,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpCAGet,
 		Payload: payload,
 	}
 
 	resp := handler.HandleRequest(context.Background(), req)
 
-	require.Equal(t, StatusOK, resp.Status)
+	require.Equal(t, quicwire.StatusOK, resp.Status)
 
 	var getResp CAGetResponse
-	err = DecodePayload(resp.Payload, &getResp)
+	err = quicwire.DecodePayload(resp.Payload, &getResp)
 	require.NoError(t, err)
 
 	assert.Equal(t, "Test Intermediate CA", getResp.Certificate.Subject.CommonName)
@@ -3092,20 +3121,20 @@ func TestCAHandler_HandleGet_FromCertStore(t *testing.T) {
 		IncludePem: true,
 	}
 
-	payload, err := EncodePayload(getReq)
+	payload, err := quicwire.EncodePayload(getReq)
 	require.NoError(t, err)
 
-	req := &Request{
-		Opcode:  OpCAGet,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpCAGet,
 		Payload: payload,
 	}
 
 	resp := handler.HandleRequest(context.Background(), req)
 
-	require.Equal(t, StatusOK, resp.Status)
+	require.Equal(t, quicwire.StatusOK, resp.Status)
 
 	var getResp CAGetResponse
-	err = DecodePayload(resp.Payload, &getResp)
+	err = quicwire.DecodePayload(resp.Payload, &getResp)
 	require.NoError(t, err)
 
 	assert.Equal(t, "stored.example.com", getResp.Certificate.Subject.CommonName)
@@ -3134,11 +3163,11 @@ func TestCAHandler_HandleVerify_ExpiredReturnsValidResponse(t *testing.T) {
 		CertificateDer: certDER,
 	}
 
-	payload, err := EncodePayload(verifyReq)
+	payload, err := quicwire.EncodePayload(verifyReq)
 	require.NoError(t, err)
 
-	req := &Request{
-		Opcode:  OpCAVerify,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpCAVerify,
 		Payload: payload,
 	}
 
@@ -3146,10 +3175,10 @@ func TestCAHandler_HandleVerify_ExpiredReturnsValidResponse(t *testing.T) {
 
 	// Even expired certificates should return a valid response structure
 	// with the verification details (just marked as invalid/expired)
-	require.Equal(t, StatusOK, resp.Status)
+	require.Equal(t, quicwire.StatusOK, resp.Status)
 
 	var verifyResp CAVerifyResponse
-	err = DecodePayload(resp.Payload, &verifyResp)
+	err = quicwire.DecodePayload(resp.Payload, &verifyResp)
 	require.NoError(t, err)
 
 	// The certificate verification will fail because it's expired
@@ -3179,20 +3208,20 @@ func TestCAHandler_HandleVerify_NotYetValidReturnsValidResponse(t *testing.T) {
 		CertificateDer: certDER,
 	}
 
-	payload, err := EncodePayload(verifyReq)
+	payload, err := quicwire.EncodePayload(verifyReq)
 	require.NoError(t, err)
 
-	req := &Request{
-		Opcode:  OpCAVerify,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpCAVerify,
 		Payload: payload,
 	}
 
 	resp := handler.HandleRequest(context.Background(), req)
 
-	require.Equal(t, StatusOK, resp.Status)
+	require.Equal(t, quicwire.StatusOK, resp.Status)
 
 	var verifyResp CAVerifyResponse
-	err = DecodePayload(resp.Payload, &verifyResp)
+	err = quicwire.DecodePayload(resp.Payload, &verifyResp)
 	require.NoError(t, err)
 
 	// The certificate verification will fail because it's not yet valid
@@ -3206,17 +3235,17 @@ func TestCAHandler_HandleCRL_ServiceUnavailable(t *testing.T) {
 
 	crlReq := &CACRLRequest{}
 
-	payload, err := EncodePayload(crlReq)
+	payload, err := quicwire.EncodePayload(crlReq)
 	require.NoError(t, err)
 
-	req := &Request{
-		Opcode:  OpCACRL,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpCACRL,
 		Payload: payload,
 	}
 
 	resp := handler.HandleRequest(context.Background(), req)
 
-	require.Equal(t, StatusUnavailable, resp.Status)
+	require.Equal(t, quicwire.StatusUnavailable, resp.Status)
 }
 
 // Test handleCRL with generate error
@@ -3225,14 +3254,14 @@ func TestCAHandler_HandleCRL_GenerateError(t *testing.T) {
 	ca := &mockCAGenerateCRLFails{mockCA: newMockCA()}
 	handler := NewCAHandler(logger, ca, nil)
 
-	req := &Request{
-		Opcode:  OpCACRL,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpCACRL,
 		Payload: nil,
 	}
 
 	resp := handler.HandleRequest(context.Background(), req)
 
-	require.Equal(t, StatusInternalError, resp.Status)
+	require.Equal(t, quicwire.StatusInternalError, resp.Status)
 	assert.Contains(t, string(resp.Payload), "failed to generate CRL")
 }
 

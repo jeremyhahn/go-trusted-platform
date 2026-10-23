@@ -312,10 +312,10 @@ func TestNewAttestCertRecorder_RequiresDependencies(t *testing.T) {
 func TestAttestCertRecorder_Record_InvalidAndUnknownDevice(t *testing.T) {
 	f := newRecorderFixture(t)
 
-	_, err := f.recorder.Record(f.ctx, 0, false)
+	_, err := f.recorder.Record(f.ctx, 0, AttestCertRecordOptions{})
 	assert.ErrorIs(t, err, ErrInvalidDeviceID)
 
-	_, err = f.recorder.Record(f.ctx, 9999, false)
+	_, err = f.recorder.Record(f.ctx, 9999, AttestCertRecordOptions{})
 	require.Error(t, err)
 	assert.Empty(t, f.audit.events, "no device, no attempt to audit")
 }
@@ -325,7 +325,7 @@ func TestAttestCertRecorder_RecordsCompliantCertificateFromCAStore(t *testing.T)
 	cert := f.ca.issue(t, "SuperMicro X10-SN0042", "Test Org", &f.iak.PublicKey, restrictedPolicies)
 	f.ca.store["SuperMicro X10-SN0042"] = certPEM(cert)
 
-	rec, err := f.recorder.Record(f.ctx, f.device.ID, false)
+	rec, err := f.recorder.Record(f.ctx, f.device.ID, AttestCertRecordOptions{})
 	require.NoError(t, err)
 	assert.Equal(t, AttestCertSourceCA, rec.Source)
 	assert.Equal(t, "SuperMicro X10-SN0042", rec.SourceDetail)
@@ -364,7 +364,7 @@ func TestAttestCertRecorder_ExistingCompliantCertificateIsUnchanged(t *testing.T
 	require.NoError(t, f.devices.Update(f.ctx, f.device))
 	before := f.stored(t).UpdatedAt
 
-	rec, err := f.recorder.Record(f.ctx, f.device.ID, true)
+	rec, err := f.recorder.Record(f.ctx, f.device.ID, AttestCertRecordOptions{Reissue: true})
 	require.NoError(t, err)
 	assert.Equal(t, AttestCertSourceDevice, rec.Source)
 	assert.False(t, rec.Changed)
@@ -383,7 +383,7 @@ func TestAttestCertRecorder_UnrestrictedCertificateIsRefused(t *testing.T) {
 	cert := f.ca.issue(t, "SuperMicro X10-SN0042", "", &f.iak.PublicKey, unrestrictedPolicies)
 	f.ca.store["SuperMicro X10-SN0042"] = certPEM(cert)
 
-	rec, err := f.recorder.Record(f.ctx, f.device.ID, false)
+	rec, err := f.recorder.Record(f.ctx, f.device.ID, AttestCertRecordOptions{})
 	assert.Nil(t, rec)
 	var refused ErrAttestCertRefused
 	require.True(t, errors.As(err, &refused), "got %v", err)
@@ -403,7 +403,7 @@ func TestAttestCertRecorder_UntrustedIssuerIsRefused(t *testing.T) {
 	cert := other.issue(t, "SuperMicro X10-SN0042", "", &f.iak.PublicKey, restrictedPolicies)
 	f.ca.store["SuperMicro X10-SN0042"] = certPEM(cert)
 
-	_, err := f.recorder.Record(f.ctx, f.device.ID, false)
+	_, err := f.recorder.Record(f.ctx, f.device.ID, AttestCertRecordOptions{})
 	var invalid vm.ErrAKCertificateInvalid
 	require.True(t, errors.As(err, &invalid), "got %v", err)
 	assert.Contains(t, invalid.Reason, "does not chain")
@@ -416,7 +416,7 @@ func TestAttestCertRecorder_GarbageCertificateIsRefused(t *testing.T) {
 	f.device.AttestCert = "-----BEGIN CERTIFICATE-----\nnot-a-cert\n-----END CERTIFICATE-----\n"
 	require.NoError(t, f.devices.Update(f.ctx, f.device))
 
-	_, err := f.recorder.Record(f.ctx, f.device.ID, false)
+	_, err := f.recorder.Record(f.ctx, f.device.ID, AttestCertRecordOptions{})
 	var refused ErrAttestCertRefused
 	require.True(t, errors.As(err, &refused), "got %v", err)
 	var invalid vm.ErrAKCertificateInvalid
@@ -434,7 +434,7 @@ func TestAttestCertRecorder_CertificateOverAnotherKeyIsRefused(t *testing.T) {
 	cert := f.ca.issue(t, "SuperMicro X10-SN0042", "", &otherKey.PublicKey, restrictedPolicies)
 	f.ca.store["SuperMicro X10-SN0042"] = certPEM(cert)
 
-	_, err = f.recorder.Record(f.ctx, f.device.ID, false)
+	_, err = f.recorder.Record(f.ctx, f.device.ID, AttestCertRecordOptions{})
 	var mismatch ErrAttestCertKeyMismatch
 	require.True(t, errors.As(err, &mismatch), "got %v", err)
 	assert.Empty(t, f.stored(t).AttestCert)
@@ -451,7 +451,7 @@ func TestAttestCertRecorder_NoAttestPubIsRefused(t *testing.T) {
 	stored.AttestPub = " "
 	require.NoError(t, f.devices.Update(f.ctx, stored))
 
-	_, err := f.recorder.Record(f.ctx, f.device.ID, true)
+	_, err := f.recorder.Record(f.ctx, f.device.ID, AttestCertRecordOptions{Reissue: true})
 	var noPub ErrAttestCertNoAttestPub
 	require.True(t, errors.As(err, &noPub), "got %v", err)
 	assert.Equal(t, uint64(42), noPub.DeviceID)
@@ -466,13 +466,13 @@ func TestAttestCertRecorder_UndecodableAttestPubIsRefused(t *testing.T) {
 	stored.AttestPub = "zz-not-hex"
 	require.NoError(t, f.devices.Update(f.ctx, stored))
 
-	_, err := f.recorder.Record(f.ctx, f.device.ID, false)
+	_, err := f.recorder.Record(f.ctx, f.device.ID, AttestCertRecordOptions{})
 	var bad ErrAttestCertAttestPubInvalid
 	require.True(t, errors.As(err, &bad), "got %v", err)
 
 	stored.AttestPub = hex.EncodeToString([]byte{0x00, 0x01, 0x02})
 	require.NoError(t, f.devices.Update(f.ctx, stored))
-	_, err = f.recorder.Record(f.ctx, f.device.ID, false)
+	_, err = f.recorder.Record(f.ctx, f.device.ID, AttestCertRecordOptions{})
 	require.True(t, errors.As(err, &bad), "got %v", err)
 	var area vm.ErrAKPublicAreaInvalid
 	assert.True(t, errors.As(err, &area))
@@ -484,7 +484,7 @@ func TestAttestCertRecorder_TrustAnchorUnavailableRefusesEverything(t *testing.T
 	f.ca.store["SuperMicro X10-SN0042"] = certPEM(cert)
 	f.ca.rootErr = errors.New("ca sealed")
 
-	_, err := f.recorder.Record(f.ctx, f.device.ID, true)
+	_, err := f.recorder.Record(f.ctx, f.device.ID, AttestCertRecordOptions{Reissue: true})
 	var anchor ErrAttestCertTrustAnchorUnavailable
 	require.True(t, errors.As(err, &anchor), "got %v", err)
 	assert.Empty(t, f.stored(t).AttestCert)
@@ -494,7 +494,7 @@ func TestAttestCertRecorder_TrustAnchorUnavailableRefusesEverything(t *testing.T
 func TestAttestCertRecorder_NoCandidateWithoutReissueIsRefused(t *testing.T) {
 	f := newRecorderFixture(t)
 
-	_, err := f.recorder.Record(f.ctx, f.device.ID, false)
+	_, err := f.recorder.Record(f.ctx, f.device.ID, AttestCertRecordOptions{})
 	var refused ErrAttestCertRefused
 	require.True(t, errors.As(err, &refused), "got %v", err)
 	assert.Len(t, refused.Attempts, 3, "every CA name was tried: %v", err)
@@ -518,7 +518,7 @@ func TestAttestCertRecorder_ReissueRecordsWhenCAStampsRestricted(t *testing.T) {
 	f.ca.store["SuperMicro X10-SN0042"] = certPEM(idevid)
 	f.ca.issuePolicies = restrictedPolicies
 
-	rec, err := f.recorder.Record(f.ctx, f.device.ID, true)
+	rec, err := f.recorder.Record(f.ctx, f.device.ID, AttestCertRecordOptions{Reissue: true})
 	require.NoError(t, err)
 	assert.Equal(t, AttestCertSourceReissued, rec.Source)
 	assert.Equal(t, "iak-SuperMicro X10-SN0042", rec.SourceDetail)
@@ -550,7 +550,7 @@ func TestAttestCertRecorder_ReissueIsRefusedUntilCAStampsRestricted(t *testing.T
 	f := newRecorderFixture(t)
 	f.ca.issuePolicies = unrestrictedPolicies
 
-	_, err := f.recorder.Record(f.ctx, f.device.ID, true)
+	_, err := f.recorder.Record(f.ctx, f.device.ID, AttestCertRecordOptions{Reissue: true})
 	var refused ErrAttestCertRefused
 	require.True(t, errors.As(err, &refused), "got %v", err)
 	assert.True(t, refused.Reissued)
@@ -575,7 +575,7 @@ func TestAttestCertRecorder_ReissueRefusedForUnrestrictedPublicArea(t *testing.T
 	stored.AttestPub = attestPubHex(&f.iak.PublicKey, attrs)
 	require.NoError(t, f.devices.Update(f.ctx, stored))
 
-	_, err := f.recorder.Record(f.ctx, f.device.ID, true)
+	_, err := f.recorder.Record(f.ctx, f.device.ID, AttestCertRecordOptions{Reissue: true})
 	var notRestricted ErrAttestCertPublicAreaNotRestricted
 	require.True(t, errors.As(err, &notRestricted), "got %v", err)
 	var area vm.ErrAKPublicAreaNotRestricted
@@ -589,7 +589,7 @@ func TestAttestCertRecorder_ReissueCAFailureIsReported(t *testing.T) {
 	f := newRecorderFixture(t)
 	f.ca.issueErr = errors.New("issuer key unavailable")
 
-	_, err := f.recorder.Record(f.ctx, f.device.ID, true)
+	_, err := f.recorder.Record(f.ctx, f.device.ID, AttestCertRecordOptions{Reissue: true})
 	var failed ErrAttestCertReissueFailed
 	require.True(t, errors.As(err, &failed), "got %v", err)
 	assert.ErrorIs(t, err, f.ca.issueErr)
@@ -603,7 +603,7 @@ func TestAttestCertRecorder_AuditFailureDoesNotUndoTheRecord(t *testing.T) {
 	cert := f.ca.issue(t, "node-03", "", &f.iak.PublicKey, restrictedPolicies)
 	f.ca.store["node-03"] = certPEM(cert)
 
-	rec, err := f.recorder.Record(f.ctx, f.device.ID, false)
+	rec, err := f.recorder.Record(f.ctx, f.device.ID, AttestCertRecordOptions{})
 	require.NoError(t, err)
 	assert.Equal(t, "node-03", rec.SourceDetail, "the IDevID hostname is tried first")
 	assert.Equal(t, string(certPEM(cert)), f.stored(t).AttestCert)
@@ -617,7 +617,7 @@ func TestAttestCertRecorder_WorksWithoutAuditor(t *testing.T) {
 	cert := f.ca.issue(t, "node-03", "", &f.iak.PublicKey, restrictedPolicies)
 	f.ca.store["node-03"] = certPEM(cert)
 
-	got, err := rec.Record(f.ctx, f.device.ID, false)
+	got, err := rec.Record(f.ctx, f.device.ID, AttestCertRecordOptions{})
 	require.NoError(t, err)
 	assert.True(t, got.Changed)
 }
@@ -659,7 +659,7 @@ func TestAttestCertRecorder_ReissueNeverUsesTheIDevIDCN(t *testing.T) {
 	require.NoError(t, f.devices.Update(f.ctx, stored))
 	f.ca.issuePolicies = restrictedPolicies
 
-	rec, err := f.recorder.Record(f.ctx, f.device.ID, true)
+	rec, err := f.recorder.Record(f.ctx, f.device.ID, AttestCertRecordOptions{Reissue: true})
 	require.NoError(t, err)
 	require.Len(t, f.ca.issued, 1)
 	cn := f.ca.issued[0].Subject.CommonName
@@ -677,7 +677,7 @@ func TestAttestCertRecorder_RefusedReissueIsRevoked(t *testing.T) {
 	f := newRecorderFixture(t)
 	f.ca.issuePolicies = unrestrictedPolicies
 
-	_, err := f.recorder.Record(f.ctx, f.device.ID, true)
+	_, err := f.recorder.Record(f.ctx, f.device.ID, AttestCertRecordOptions{Reissue: true})
 	var refused ErrAttestCertRefused
 	require.True(t, errors.As(err, &refused), "got %v", err)
 	require.Len(t, f.ca.issued, 1)
@@ -693,7 +693,7 @@ func TestAttestCertRecorder_RefusedReissueRevokeFailureIsReported(t *testing.T) 
 	f.ca.issuePolicies = unrestrictedPolicies
 	f.ca.revokeErr = errors.New("crl store sealed")
 
-	_, err := f.recorder.Record(f.ctx, f.device.ID, true)
+	_, err := f.recorder.Record(f.ctx, f.device.ID, AttestCertRecordOptions{Reissue: true})
 	var revokeFailed ErrAttestCertReissuedRevokeFailed
 	require.True(t, errors.As(err, &revokeFailed), "got %v", err)
 	assert.Equal(t, uint64(42), revokeFailed.DeviceID)
@@ -719,7 +719,7 @@ func TestAttestCertRecorder_UnrestrictedPublicAreaRefusalIsTypedAndAudited(t *te
 	stored.AttestPub = attestPubHex(&f.iak.PublicKey, attrs)
 	require.NoError(t, f.devices.Update(f.ctx, stored))
 
-	_, err := f.recorder.Record(f.ctx, f.device.ID, true)
+	_, err := f.recorder.Record(f.ctx, f.device.ID, AttestCertRecordOptions{Reissue: true})
 	var notRestricted ErrAttestCertPublicAreaNotRestricted
 	require.True(t, errors.As(err, &notRestricted), "got %v", err)
 	ev := f.lastEvent(t)
@@ -738,7 +738,7 @@ func TestAttestCertRecorder_PrefersTheIAKReaderWhenTheCAOffersIt(t *testing.T) {
 		WithAttestCertClock(func() time.Time { return attestCertTestNow }))
 	require.NoError(t, err)
 
-	got, err := rec.Record(f.ctx, f.device.ID, false)
+	got, err := rec.Record(f.ctx, f.device.ID, AttestCertRecordOptions{})
 	require.NoError(t, err)
 	assert.Equal(t, AttestCertSourceCA, got.Source)
 	assert.Equal(t, "iak-SuperMicro X10-SN0042", got.SourceDetail)
@@ -754,7 +754,7 @@ func TestAttestCertRecorder_IAKReaderMissFallsBackToCNLookups(t *testing.T) {
 	rec, err := NewAttestCertRecorder(f.devices, rca, WithAttestCertClock(func() time.Time { return attestCertTestNow }))
 	require.NoError(t, err)
 
-	got, err := rec.Record(f.ctx, f.device.ID, false)
+	got, err := rec.Record(f.ctx, f.device.ID, AttestCertRecordOptions{})
 	require.NoError(t, err)
 	assert.Equal(t, "node-03", got.SourceDetail)
 	assert.Len(t, rca.reads, 1)
@@ -769,9 +769,221 @@ func TestAttestCertRecorder_IAKReaderMissFallsBackToCNLookups(t *testing.T) {
 	stored := f.stored(t)
 	stored.AttestCert = " "
 	require.NoError(t, f.devices.Update(f.ctx, stored))
-	_, err = rec2.Record(f.ctx, f.device.ID, false)
+	_, err = rec2.Record(f.ctx, f.device.ID, AttestCertRecordOptions{})
 	var refused ErrAttestCertRefused
 	require.True(t, errors.As(err, &refused), "got %v", err)
 	var mismatch ErrAttestCertKeyMismatch
 	assert.True(t, errors.As(err, &mismatch))
+}
+
+// holdUnrestrictedCertificate puts a certificate on the device record that
+// chains and certifies the enrolled key but lacks
+// tcg-cap-verifiedTPMRestricted: the record a quote verifier quarantines.
+func (f *recorderFixture) holdUnrestrictedCertificate(t *testing.T) *x509.Certificate {
+	t.Helper()
+	cert := f.ca.issue(t, "SuperMicro X10-SN0042", "", &f.iak.PublicKey, unrestrictedPolicies)
+	f.device.AttestCert = string(certPEM(cert))
+	require.NoError(t, f.devices.Update(f.ctx, f.device))
+	return cert
+}
+
+// TestAttestCertRecorder_RefusalWithoutClearKeepsTheCertificate kills the
+// mutant that clears on refusal without the operator's flag (#516): the
+// default stays "a refusal writes nothing".
+func TestAttestCertRecorder_RefusalWithoutClearKeepsTheCertificate(t *testing.T) {
+	f := newRecorderFixture(t)
+	f.holdUnrestrictedCertificate(t)
+	before := f.stored(t)
+
+	rec, err := f.recorder.Record(f.ctx, f.device.ID, AttestCertRecordOptions{})
+	assert.Nil(t, rec)
+	var refused ErrAttestCertRefused
+	require.True(t, errors.As(err, &refused), "got %v", err)
+	after := f.stored(t)
+	assert.Equal(t, before.AttestCert, after.AttestCert, "a refusal never clears without the flag")
+	assert.Equal(t, before.UpdatedAt, after.UpdatedAt, "a refusal writes nothing")
+	ev := f.lastEvent(t)
+	assert.False(t, ev.Cleared)
+	assert.False(t, ev.Recorded)
+}
+
+func TestAttestCertRecorder_ClearOnRefusalRemovesTheRefusedCertificate(t *testing.T) {
+	f := newRecorderFixture(t)
+	held := f.holdUnrestrictedCertificate(t)
+
+	rec, err := f.recorder.Record(f.ctx, f.device.ID, AttestCertRecordOptions{ClearOnRefusal: true})
+	require.NoError(t, err)
+	assert.True(t, rec.Cleared)
+	assert.True(t, rec.Changed)
+	assert.Empty(t, rec.Source)
+	assert.Empty(t, rec.CertificatePEM)
+	assert.Equal(t, held.Subject.String(), rec.Subject, "the record names the removed certificate")
+	assert.Equal(t, held.SerialNumber.String(), rec.CertificateSerial)
+	assert.Contains(t, rec.Refusal, "tcg-cap-verifiedTPMRestricted")
+
+	assert.Empty(t, f.stored(t).AttestCert, "the refused certificate is removed")
+	ev := f.lastEvent(t)
+	require.NoError(t, ev.Validate())
+	assert.True(t, ev.Cleared)
+	assert.False(t, ev.Recorded)
+	assert.Equal(t, held.Subject.String(), ev.Subject)
+	assert.Contains(t, ev.Reason, "tcg-cap-verifiedTPMRestricted")
+}
+
+func TestAttestCertRecorder_ClearOnRefusalRemovesAnUnparseableCertificate(t *testing.T) {
+	f := newRecorderFixture(t)
+	f.device.AttestCert = "-----BEGIN CERTIFICATE-----\nZ2FyYmFnZQ==\n-----END CERTIFICATE-----\n"
+	require.NoError(t, f.devices.Update(f.ctx, f.device))
+
+	rec, err := f.recorder.Record(f.ctx, f.device.ID, AttestCertRecordOptions{ClearOnRefusal: true})
+	require.NoError(t, err)
+	assert.True(t, rec.Cleared)
+	assert.Empty(t, rec.Subject, "an unparseable certificate has no subject to name")
+	assert.Empty(t, f.stored(t).AttestCert)
+	assert.True(t, f.lastEvent(t).Cleared)
+}
+
+func TestAttestCertRecorder_ClearOnRefusalChangesNothingWhenACandidatePasses(t *testing.T) {
+	f := newRecorderFixture(t)
+	cert := f.ca.issue(t, "SuperMicro X10-SN0042", "", &f.iak.PublicKey, restrictedPolicies)
+	f.device.AttestCert = string(certPEM(cert))
+	require.NoError(t, f.devices.Update(f.ctx, f.device))
+	before := f.stored(t)
+
+	rec, err := f.recorder.Record(f.ctx, f.device.ID, AttestCertRecordOptions{ClearOnRefusal: true})
+	require.NoError(t, err)
+	assert.False(t, rec.Cleared)
+	assert.False(t, rec.Changed)
+	assert.Equal(t, AttestCertSourceDevice, rec.Source)
+	assert.Equal(t, before.AttestCert, f.stored(t).AttestCert)
+	assert.Equal(t, before.UpdatedAt, f.stored(t).UpdatedAt)
+	ev := f.lastEvent(t)
+	assert.True(t, ev.Recorded)
+	assert.False(t, ev.Cleared)
+}
+
+func TestAttestCertRecorder_ClearOnRefusalRecordsACompliantReplacement(t *testing.T) {
+	f := newRecorderFixture(t)
+	f.holdUnrestrictedCertificate(t)
+	f.ca.issuePolicies = restrictedPolicies
+
+	rec, err := f.recorder.Record(f.ctx, f.device.ID, AttestCertRecordOptions{Reissue: true, ClearOnRefusal: true})
+	require.NoError(t, err)
+	assert.False(t, rec.Cleared, "a passing candidate is recorded, never raced by a clear")
+	assert.Equal(t, AttestCertSourceReissued, rec.Source)
+	assert.Equal(t, rec.CertificatePEM, f.stored(t).AttestCert)
+	assert.True(t, f.lastEvent(t).Recorded)
+}
+
+func TestAttestCertRecorder_ClearOnRefusalAfterARefusedReissue(t *testing.T) {
+	f := newRecorderFixture(t)
+	f.holdUnrestrictedCertificate(t)
+	f.ca.issuePolicies = unrestrictedPolicies
+
+	rec, err := f.recorder.Record(f.ctx, f.device.ID, AttestCertRecordOptions{Reissue: true, ClearOnRefusal: true})
+	require.NoError(t, err)
+	assert.True(t, rec.Cleared)
+	assert.True(t, rec.Reissued)
+	assert.Empty(t, f.stored(t).AttestCert)
+	assert.Len(t, f.ca.revoked, 1, "the refused re-issue is still withdrawn")
+	ev := f.lastEvent(t)
+	assert.True(t, ev.Cleared)
+	assert.True(t, ev.Reissued)
+}
+
+func TestAttestCertRecorder_ClearOnRefusalWithNothingOnTheRecordIsARefusal(t *testing.T) {
+	f := newRecorderFixture(t)
+
+	rec, err := f.recorder.Record(f.ctx, f.device.ID, AttestCertRecordOptions{ClearOnRefusal: true})
+	assert.Nil(t, rec)
+	var refused ErrAttestCertRefused
+	require.True(t, errors.As(err, &refused), "got %v", err)
+	ev := f.lastEvent(t)
+	assert.False(t, ev.Cleared)
+	assert.False(t, ev.Recorded)
+}
+
+func TestAttestCertRecorder_ClearOnRefusalNeverClearsOnARevokeFailure(t *testing.T) {
+	f := newRecorderFixture(t)
+	f.holdUnrestrictedCertificate(t)
+	before := f.stored(t)
+	f.ca.issuePolicies = unrestrictedPolicies
+	f.ca.revokeErr = errors.New("crl store sealed")
+
+	rec, err := f.recorder.Record(f.ctx, f.device.ID, AttestCertRecordOptions{Reissue: true, ClearOnRefusal: true})
+	assert.Nil(t, rec)
+	var revokeFailed ErrAttestCertReissuedRevokeFailed
+	require.True(t, errors.As(err, &revokeFailed), "got %v", err)
+	assert.Equal(t, before.AttestCert, f.stored(t).AttestCert, "a CA failure is not a plain refusal")
+	assert.False(t, f.lastEvent(t).Cleared)
+}
+
+func TestAttestCertRecorder_ClearOnRefusalNeverClearsOnAReissueFailure(t *testing.T) {
+	f := newRecorderFixture(t)
+	f.holdUnrestrictedCertificate(t)
+	before := f.stored(t)
+	f.ca.issueErr = errors.New("issuer offline")
+
+	_, err := f.recorder.Record(f.ctx, f.device.ID, AttestCertRecordOptions{Reissue: true, ClearOnRefusal: true})
+	var failed ErrAttestCertReissueFailed
+	require.True(t, errors.As(err, &failed), "got %v", err)
+	assert.Equal(t, before.AttestCert, f.stored(t).AttestCert)
+}
+
+// TestService_ClearAttestCert_EmptiesTheField pins why the clear needs its
+// own write: Update keeps a stored certificate when the incoming one is empty.
+func TestService_ClearAttestCert_EmptiesTheField(t *testing.T) {
+	f := newRecorderFixture(t)
+	held := string(certPEM(f.holdUnrestrictedCertificate(t)))
+
+	f.device.AttestCert = ""
+	require.NoError(t, f.devices.Update(f.ctx, f.device))
+	require.Equal(t, held, f.stored(t).AttestCert, "Update must keep the certificate (#252)")
+
+	require.NoError(t, f.devices.ClearAttestCert(f.ctx, f.device.ID, held))
+	stored := f.stored(t)
+	assert.Empty(t, stored.AttestCert)
+	assert.Equal(t, f.device.AttestPub, stored.AttestPub, "only the certificate is cleared")
+}
+
+func TestService_ClearAttestCert_RefusesAChangedCertificate(t *testing.T) {
+	f := newRecorderFixture(t)
+	held := string(certPEM(f.holdUnrestrictedCertificate(t)))
+
+	err := f.devices.ClearAttestCert(f.ctx, f.device.ID, "-----BEGIN CERTIFICATE-----\nother\n-----END CERTIFICATE-----")
+	var conflict ErrAttestCertClearConflict
+	require.True(t, errors.As(err, &conflict), "got %v", err)
+	assert.Equal(t, uint64(42), conflict.DeviceID)
+	assert.Contains(t, err.Error(), "nothing cleared")
+	assert.Equal(t, held, f.stored(t).AttestCert)
+}
+
+func TestService_ClearAttestCert_InvalidAndUnknownDevice(t *testing.T) {
+	f := newRecorderFixture(t)
+	assert.ErrorIs(t, f.devices.ClearAttestCert(f.ctx, 0, ""), ErrInvalidDeviceID)
+	var wrapped *WrappedError
+	assert.True(t, errors.As(f.devices.ClearAttestCert(f.ctx, 9999, ""), &wrapped))
+}
+
+// updateOnlyDevices is a device service without the compare-and-clear write.
+type updateOnlyDevices struct {
+	DeviceService
+}
+
+func TestAttestCertRecorder_ClearNeedsTheCompareAndClearWrite(t *testing.T) {
+	f := newRecorderFixture(t)
+	f.holdUnrestrictedCertificate(t)
+	rec, err := NewAttestCertRecorder(updateOnlyDevices{f.devices}, f.ca, WithAttestCertAuditor(f.audit))
+	require.NoError(t, err)
+
+	got, err := rec.Record(f.ctx, f.device.ID, AttestCertRecordOptions{ClearOnRefusal: true})
+	assert.Nil(t, got)
+	var writeFailed ErrAttestCertWriteFailed
+	require.True(t, errors.As(err, &writeFailed), "got %v", err)
+	assert.ErrorIs(t, err, ErrAttestCertClearUnsupported{})
+	assert.Contains(t, ErrAttestCertClearUnsupported{}.Error(), "cannot clear")
+	assert.NotEmpty(t, f.stored(t).AttestCert)
+	ev := f.lastEvent(t)
+	assert.False(t, ev.Cleared, "a failed clear is audited as a refusal")
+	assert.False(t, ev.Recorded)
 }

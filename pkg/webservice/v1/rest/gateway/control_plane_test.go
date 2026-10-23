@@ -146,16 +146,18 @@ func TestRegisterRoutes_OperatorHalfIsExactlyTheStateSurface(t *testing.T) {
 	}, registeredControlPlanePaths(cp.RegisterRoutes))
 }
 
-// TestRegisterGatewayFacingRoutes_IsExactlyTheSelfAuthenticatingPair pins
+// TestRegisterGatewayFacingRoutes_IsExactlyTheSelfAuthenticatingSet pins
 // the other half. An operator route that drifted in here would be published
 // to anyone holding any gateway certificate — including the fleet-wide list,
 // which is precisely what no single gateway's certificate should authorise.
-func TestRegisterGatewayFacingRoutes_IsExactlyTheSelfAuthenticatingPair(t *testing.T) {
+func TestRegisterGatewayFacingRoutes_IsExactlyTheSelfAuthenticatingSet(t *testing.T) {
 	cp := newControlPlane(nil, nil)
 
 	assert.Equal(t, map[string]bool{
-		"POST /api/v1/gateway/telemetry":          true,
-		"GET /api/v1/gateway/desired-config/{id}": true,
+		"POST /api/v1/gateway/telemetry":                          true,
+		"GET /api/v1/gateway/desired-config/{id}":                 true,
+		"PUT /api/v1/gateway/vpn-leases/{id}":                     true,
+		"DELETE /api/v1/gateway/vpn-leases/{id}/{tenant}/{lease}": true,
 	}, registeredControlPlanePaths(cp.RegisterGatewayFacingRoutes))
 }
 
@@ -172,7 +174,7 @@ func TestControlPlaneHalvesAreDisjointAndCoverTheSurface(t *testing.T) {
 		assert.False(t, gateway[route], "route is in both halves: %s", route)
 	}
 	assert.Len(t, operator, 3)
-	assert.Len(t, gateway, 2)
+	assert.Len(t, gateway, 4)
 }
 
 // withClientCert attaches a verified TLS chain whose leaf carries the

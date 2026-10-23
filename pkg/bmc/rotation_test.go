@@ -27,7 +27,6 @@ import (
 // an error. MaxUsers returns a preset value or error.
 type fakeUM struct {
 	mu             sync.Mutex
-	creds          *Credentials // what this session was opened with
 	setErr         error
 	maxUsersErr    error
 	capturedPasswd []byte
@@ -114,7 +113,6 @@ func (s *stageFactory) factory() UserManagerFactory {
 		if e.err != nil {
 			return nil, e.err
 		}
-		e.mgr.creds = snap
 		return e.mgr, nil
 	}
 }

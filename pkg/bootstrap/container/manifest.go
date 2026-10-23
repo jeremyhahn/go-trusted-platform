@@ -39,6 +39,10 @@ type ManifestEntry struct {
 	// MediaSet names the set the node boots; empty means its
 	// architecture's default.
 	MediaSet string `yaml:"media_set,omitempty" json:"media_set,omitempty"`
+	// BootModel is the node's boot model: disklessroot.BootModel for a node
+	// that boots the set's diskless root, empty for one that installs to its
+	// disk.
+	BootModel string `yaml:"boot_model,omitempty" json:"boot_model,omitempty"`
 }
 
 // DiscoveredNodeInfo holds the minimal fields needed to build manifest
@@ -51,6 +55,7 @@ type DiscoveredNodeInfo struct {
 	Hostname     string
 	Architecture string
 	MediaSet     string
+	BootModel    string
 }
 
 // BuildManifest creates a manifest from discovered node info. One entry is
@@ -70,6 +75,7 @@ func BuildManifest(nodes []DiscoveredNodeInfo) *Manifest {
 				Hostname:     node.Hostname,
 				Architecture: node.Architecture,
 				MediaSet:     node.MediaSet,
+				BootModel:    node.BootModel,
 			})
 		}
 	}

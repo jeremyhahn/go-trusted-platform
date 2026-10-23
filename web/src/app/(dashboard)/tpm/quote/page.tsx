@@ -16,11 +16,19 @@
  *      32-byte random nonce on page load; the operator can override.
  *   3. POST /api/v1/tpm/quote with the PCR selection + nonce.
  *   4. Server returns the quote (signed TPMS_ATTEST blob) + the
- *      signature + the TPM's PCR digest snapshot.
+ *      signature + the TPM's PCR digest snapshot + channelBinding,
+ *      the TLS exporter of the connection the request arrived on.
+ *   5. The node quoted SHA-256(nonce || channelBinding), never the
+ *      nonce as sent (#482). The page refuses a quote whose
+ *      qualifying data is anything else. A browser cannot read the
+ *      TLS exporter, so it cannot prove channelBinding is its own
+ *      connection — only that the quote is bound to the binding the
+ *      node returned with it (docs/attestation/engineering.md).
  *
  * The page also exposes a Verify panel that re-checks a quote's
  * signature against the IAK public key and confirms the PCR
- * digest matches what was signed.
+ * digest matches what was signed. The channel binding travels with
+ * the nonce: a bound quote verifies only against both.
  */
 
 import * as React from "react";
@@ -45,6 +53,7 @@ import {
   ShieldCheck,
 } from "lucide-react";
 import { useApi, useTPM, useToast } from "@/hooks";
+import { checkQuoteBinding } from "trusted-platform-sdk";
 import type { QuoteResponse, VerifyQuoteResponse } from "trusted-platform-sdk";
 import { errorMessage } from "@/utils/errors";
 
@@ -120,6 +129,8 @@ export default function TPMQuotePage() {
   const [verifyQuote, setVerifyQuote] = React.useState("");
   const [verifySignature, setVerifySignature] = React.useState("");
   const [verifyNonce, setVerifyNonce] = React.useState("");
+  const [verifyBinding, setVerifyBinding] = React.useState("");
+  const [verifyScheme, setVerifyScheme] = React.useState("");
   const [verifying, setVerifying] = React.useState(false);
   const [verifyResult, setVerifyResult] = React.useState<VerifyQuoteResponse | null>(null);
   const [verifyError, setVerifyError] = React.useState<string | null>(null);
@@ -141,12 +152,15 @@ export default function TPMQuotePage() {
       // the TPM. Future enhancement: let the operator pick from a
       // dropdown of all attestation-capable handles fetched via
       // /api/v1/tpm/keys.
+      const nonceB64 = hexToBase64(nonce);
       const resp = await tpm.quote({
         akHandle: AK_HANDLE,
         pcrIndices: selectedPCRs,
-        nonce: hexToBase64(nonce),
+        nonce: nonceB64,
       });
       const payload = resp.data ?? null;
+      // Refuse a quote not bound to SHA-256(nonce || channelBinding).
+      await checkQuoteBinding(payload?.quote ?? "", nonceB64, payload?.channelBinding);
       setQuoteResult(payload);
       // Pre-fill verify panel for convenience.
       const q = payload?.quote;
@@ -154,6 +168,8 @@ export default function TPMQuotePage() {
       if (q) setVerifyQuote(q);
       if (s) setVerifySignature(s);
       setVerifyNonce(nonce);
+      setVerifyBinding(payload?.channelBinding ?? "");
+      setVerifyScheme(payload?.signatureAlgorithm ?? "");
       toast({
         title: "Quote generated",
         description: `Attested ${selectedPCRs.length} PCR(s)`,
@@ -184,11 +200,16 @@ export default function TPMQuotePage() {
       // No akPublic: the server verifies against the platform IAK — the
       // key the quote above was produced with — when it is absent. The
       // `pcrIndices` this page used to send is not a VerifyQuoteRequest
-      // field and was dropped by the server.
+      // field and was dropped by the server. The channel binding is
+      // base64 as the quote response returned it; without it a bound
+      // quote does not verify against the nonce alone.
       const resp = await tpm.verifyQuote({
         quote: verifyQuote,
         signature: verifySignature,
         nonce: looksBase64(verifyNonce) ? verifyNonce : hexToBase64(verifyNonce),
+        ...(verifyBinding ? { channelBinding: verifyBinding } : {}),
+        // The signature is checked under the scheme the quote declared.
+        signatureAlgorithm: verifyScheme,
       });
       const payload = resp.data ?? null;
       setVerifyResult(payload);
@@ -391,6 +412,30 @@ export default function TPMQuotePage() {
                 id="vnonce"
                 value={verifyNonce}
                 onChange={(e) => setVerifyNonce(e.target.value)}
+                className="font-mono text-xs mt-1"
+              />
+            </div>
+            <div>
+              <Label htmlFor="vscheme" className="text-sm font-medium">
+                Signature scheme
+              </Label>
+              <Input
+                id="vscheme"
+                value={verifyScheme}
+                onChange={(e) => setVerifyScheme(e.target.value)}
+                placeholder="The signatureAlgorithm returned with the quote, e.g. SHA256-RSAPSS"
+                className="font-mono text-xs mt-1"
+              />
+            </div>
+            <div>
+              <Label htmlFor="vbinding" className="text-sm font-medium">
+                Channel binding (base64)
+              </Label>
+              <Input
+                id="vbinding"
+                value={verifyBinding}
+                onChange={(e) => setVerifyBinding(e.target.value)}
+                placeholder="The channelBinding returned with the quote"
                 className="font-mono text-xs mt-1"
               />
             </div>

@@ -42,7 +42,8 @@ import (
 // The quote is a marshalled TPMS_ATTEST carrying the nonce as ExtraData; the
 // signature is over its SHA-256 digest, made with a freshly generated ECDSA
 // P-256 key whose public half is returned as the AIK in PKIX DER — the shapes
-// attestvm.VerifyQuoteNonce and attestvm.VerifyQuoteSignature expect.
+// attestvm.VerifyQuoteNonce and attestvm.VerifyQuoteSignatureWithAlgorithm
+// expect, with the ECDSA-SHA256 scheme declared beside them.
 func SignedVMAttestation(t *testing.T, vmID string) (*manifest.VMAttestation, []byte) {
 	t.Helper()
 
@@ -77,11 +78,12 @@ func SignedVMAttestation(t *testing.T, vmID string) (*manifest.VMAttestation, []
 	require.NoError(t, err)
 
 	return &manifest.VMAttestation{
-		VMID:         vmID,
-		HostID:       "test-host-id",
-		QuoteData:    quote,
-		AIKPublicKey: aik,
-		Signature:    signature,
-		Nonce:        nonce,
+		VMID:               vmID,
+		HostID:             "test-host-id",
+		QuoteData:          quote,
+		AIKPublicKey:       aik,
+		Signature:          signature,
+		SignatureAlgorithm: x509.ECDSAWithSHA256.String(),
+		Nonce:              nonce,
 	}, nonce
 }

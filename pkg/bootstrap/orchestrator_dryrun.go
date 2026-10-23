@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/bmc"
+	dnsconfig "github.com/jeremyhahn/go-trusted-platform/pkg/dns"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/quirks"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/netplan"
 	"gopkg.in/yaml.v3"
@@ -68,6 +69,7 @@ type DryRunNodeResult struct {
 	BMCProtocol    string   `json:"bmc_protocol,omitempty" yaml:"bmc_protocol,omitempty"`
 	BMCReachable   bool     `json:"bmc_reachable" yaml:"bmc_reachable"`
 	BMCManaged     bool     `json:"bmc_managed" yaml:"bmc_managed"`
+	BootModel      string   `json:"boot_model,omitempty" yaml:"boot_model,omitempty"`
 	MACs           []string `json:"macs,omitempty" yaml:"macs,omitempty"`
 	DiscoveredMACs []string `json:"discovered_macs,omitempty" yaml:"discovered_macs,omitempty"`
 	ResolvedConfig string   `json:"resolved_config,omitempty" yaml:"resolved_config,omitempty"`
@@ -175,6 +177,11 @@ func (o *Orchestrator) DryRun(ctx context.Context) (*DryRunResult, error) {
 		}
 		nodeResult.ResolvedConfig = resolvedYAML
 	}
+	if err := o.checkNodeConfigs(); err != nil {
+		result.Errors = append(result.Errors, err.Error())
+		result.Duration = time.Since(start)
+		return result, err
+	}
 
 	// Collect node-level errors and warnings into the summary.
 	for i := range result.Nodes {
@@ -251,7 +258,7 @@ func (o *Orchestrator) ResolveNodeConfigs(hostnames ...string) ([]ResolvedNodeCo
 	}
 	var resolved []ResolvedNodeConfig
 	for _, n := range o.config.Nodes {
-		if len(wanted) > 0 && !wanted[n.Hostname] {
+		if len(hostnames) > 0 && !wanted[n.Hostname] {
 			continue
 		}
 		delete(wanted, n.Hostname)
@@ -264,6 +271,9 @@ func (o *Orchestrator) ResolveNodeConfigs(hostnames ...string) ([]ResolvedNodeCo
 	for h := range wanted {
 		return nil, ErrUnknownNode{Hostname: h}
 	}
+	if err := o.checkNodeConfigs(); err != nil {
+		return nil, err
+	}
 	return resolved, nil
 }
 
@@ -273,22 +283,38 @@ func (o *Orchestrator) ResolveNodeConfigs(hostnames ...string) ([]ResolvedNodeCo
 // string. hw is the identity the node's BMC client resolved its own quirk
 // entry from; nil for a node with no BMC or a BMC that named nothing.
 func (o *Orchestrator) resolveNodeConfig(hostname, role string, hw *quirks.Identity) (string, error) {
+	templateMap, templatePath, err := o.resolveNodeConfigMap(hostname, role, hw)
+	if err != nil {
+		return "", err
+	}
+
+	resolved, err := yaml.Marshal(templateMap)
+	if err != nil {
+		return "", ErrTemplateReadFailed{Role: role, Path: templatePath, Cause: err}
+	}
+
+	return string(resolved), nil
+}
+
+// resolveNodeConfigMap is resolveNodeConfig before serialisation: the merged
+// config as a map, and the template path it was read from for error reporting.
+func (o *Orchestrator) resolveNodeConfigMap(hostname, role string, hw *quirks.Identity) (map[string]interface{}, string, error) {
 	templatePath, ok := o.config.TemplatePath(role, o.configDir)
 	if !ok {
-		return "", ErrTemplateNotFoundForRole{Role: role}
+		return nil, "", ErrTemplateNotFoundForRole{Role: role}
 	}
 
 	data, err := os.ReadFile(templatePath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return "", ErrTemplateFileNotFound{Role: role, Path: templatePath}
+			return nil, templatePath, ErrTemplateFileNotFound{Role: role, Path: templatePath}
 		}
-		return "", ErrTemplateReadFailed{Role: role, Path: templatePath, Cause: err}
+		return nil, templatePath, ErrTemplateReadFailed{Role: role, Path: templatePath, Cause: err}
 	}
 
 	var templateMap map[string]interface{}
 	if err := yaml.Unmarshal(data, &templateMap); err != nil {
-		return "", ErrTemplateReadFailed{Role: role, Path: templatePath, Cause: err}
+		return nil, templatePath, ErrTemplateReadFailed{Role: role, Path: templatePath, Cause: err}
 	}
 
 	// Find the matching NodeConfig by hostname.
@@ -325,8 +351,11 @@ func (o *Orchestrator) resolveNodeConfig(hostname, role string, hw *quirks.Ident
 	// guarantees overrides never carry these keys.
 	if node != nil {
 		if err := ApplyNodeIdentity(templateMap, node); err != nil {
-			return "", ErrTemplateMergeFailed{Hostname: hostname, Role: role, Cause: err}
+			return nil, templatePath, ErrTemplateMergeFailed{Hostname: hostname, Role: role, Cause: err}
 		}
+	}
+	if err := refuseDisklessImageTarget(templateMap, node); err != nil {
+		return nil, templatePath, err
 	}
 
 	// Point non-CP nodes at the control plane's IP for DNS. The CP
@@ -337,25 +366,24 @@ func (o *Orchestrator) resolveNodeConfig(hostname, role string, hw *quirks.Ident
 	// covers newly-issued services (dynamic zone updates) and keeps
 	// TLS SAN validation aligned with whatever platformd's DNS
 	// service publishes.
+	var dnsErr error
 	if role != RoleControlPlane {
-		o.injectControlPlaneDNS(templateMap)
+		dnsErr = o.injectControlPlaneDNS(templateMap)
 	} else {
 		// CP needs a dnsmasq forwarder too so platformd's own libc
 		// lookups (e.g. ACME http-01 challenge validation — CP dials
 		// the client at http://<gw-fqdn>:80/) resolve through the
-		// authoritative zone that CP itself serves on 127.0.0.1:9053.
-		// Without this, resolv.conf → 127.0.0.1:53 (no listener) →
-		// "connection refused" and the ACME server can't validate
+		// authoritative zone that CP itself serves on its internal DNS
+		// port. Without this, resolv.conf → 127.0.0.1:53 (no listener)
+		// → "connection refused" and the ACME server can't validate
 		// any http-01/tls-alpn challenge.
-		o.injectControlPlaneSelfDNS(templateMap)
+		dnsErr = o.injectControlPlaneSelfDNS(templateMap)
+	}
+	if dnsErr != nil {
+		return nil, templatePath, ErrTemplateMergeFailed{Hostname: hostname, Role: role, Cause: dnsErr}
 	}
 
-	resolved, err := yaml.Marshal(templateMap)
-	if err != nil {
-		return "", ErrTemplateReadFailed{Role: role, Path: templatePath, Cause: err}
-	}
-
-	return string(resolved), nil
+	return templateMap, templatePath, nil
 }
 
 // injectControlPlaneDNS wires non-CP nodes to the control plane's
@@ -363,20 +391,21 @@ func (o *Orchestrator) resolveNodeConfig(hostname, role string, hw *quirks.Ident
 // /etc/resolv.conf straight at the CP's IP?
 //
 //	Because platformd does not run as root — its DNS service binds
-//	to port 9053 (internal zone) and 8053 (public zone), not the
+//	to unprivileged ports (internal and public zone), not the
 //	privileged 53. libc resolvers always query :53, so every client
 //	gets its own local dnsmasq (listening on 127.0.0.1:53) that
-//	forwards upstream to <cp_ip>#9053. Result: resolv.conf stays at
+//	forwards upstream to <cp_ip>#<port>. Result: resolv.conf stays at
 //	localhost, dnsmasq handles the port mapping, and platformd
 //	never needs CAP_NET_BIND_SERVICE.
 //
-// Sets `network.dns.upstream-dns: "<cp_ip>#9053"`. The Alpine
+// Sets `network.dns.upstream-dns: "<cp_ip>#<port>"`, where <port> is the
+// control plane's dns.internal.port (internalDNSPort). The Alpine
 // installer's configureDNSWithDnsmasq (alpine.go) picks this up:
-// installs dnsmasq, writes /etc/dnsmasq.conf with server=<cp_ip>#9053,
+// installs dnsmasq, writes /etc/dnsmasq.conf with server=<cp_ip>#<port>,
 // enables the service at boot, and writes resolv.conf with
 // nameserver 127.0.0.1. Search-domains are populated from the public
 // + internal zones.
-func (o *Orchestrator) injectControlPlaneDNS(templateMap map[string]interface{}) {
+func (o *Orchestrator) injectControlPlaneDNS(templateMap map[string]interface{}) error {
 	var cpNode *NodeConfig
 	for i := range o.config.Nodes {
 		if o.config.Nodes[i].Role == RoleControlPlane {
@@ -385,45 +414,93 @@ func (o *Orchestrator) injectControlPlaneDNS(templateMap map[string]interface{})
 		}
 	}
 	if cpNode == nil {
-		return
+		return nil
 	}
 
 	cpIPs := cpNode.StaticIPv4s()
 	if len(cpIPs) == 0 {
-		return
+		return nil
 	}
 	cpIP := cpIPs[0]
-	// CP internal DNS port — matches dns.internal.port in the CP
-	// template. Kept in sync via the defaultInternalDNSPort constant
-	// so a template change doesn't silently break client resolution.
-	upstream := cpIP + "#" + defaultInternalDNSPort
+	port, err := o.controlPlaneInternalDNSPort(cpNode)
+	if err != nil {
+		return err
+	}
+	dnsSection := networkDNS(templateMap)
+	dnsSection["upstream-dns"] = cpIP + "#" + strconv.Itoa(port)
 
+	// Search-domain list so bare hostnames resolve against the
+	// deployment's zones. dnsmasq doesn't own this — /etc/resolv.conf
+	// does — so the installer writes it from DNS.SearchDomains.
+	o.setSearchDomains(dnsSection, templateMap)
+	return nil
+}
+
+// networkDNS returns the template's network.dns section, creating it and
+// its parent when the template has none.
+func networkDNS(templateMap map[string]interface{}) map[string]interface{} {
 	network, ok := templateMap["network"].(map[string]interface{})
 	if !ok {
 		network = map[string]interface{}{}
 		templateMap["network"] = network
 	}
-	dns, ok := network["dns"].(map[string]interface{})
+	dnsSection, ok := network["dns"].(map[string]interface{})
 	if !ok {
-		dns = map[string]interface{}{}
-		network["dns"] = dns
+		dnsSection = map[string]interface{}{}
+		network["dns"] = dnsSection
 	}
-	dns["upstream-dns"] = upstream
-
-	// Search-domain list so bare hostnames resolve against the
-	// deployment's zones. dnsmasq doesn't own this — /etc/resolv.conf
-	// does — so the installer writes it from DNS.SearchDomains.
-	o.setSearchDomains(dns, templateMap)
+	return dnsSection
 }
 
-// defaultInternalDNSPort is the port platformd's internal DNS zone
-// listens on (non-privileged; see CP template dns.internal.port).
-// Clients forward to it via local dnsmasq.
-const defaultInternalDNSPort = "9053"
+// internalDNSPortField names the merged-config setting platformd's DNS
+// service binds the internal zone to (dns.InternalServer.Port).
+const internalDNSPortField = "dns.internal.port"
+
+// internalDNSPort returns the port a node's platformd serves its internal
+// DNS zone on: dns.internal.port of the node's merged config, the very
+// setting the DNS service listens on. A config that leaves it unset gets
+// dnsconfig.DefaultInternalPort, the DNS service's own default, so the dnsmasq
+// forwarder and the listener cannot disagree. A value that is not a port
+// is an error rather than a silent default: forwarding to the wrong port
+// breaks every name lookup on the node.
+func internalDNSPort(nodeConfig map[string]interface{}) (int, error) {
+	dnsSection, ok := nodeConfig["dns"].(map[string]interface{})
+	if !ok {
+		return dnsconfig.DefaultInternalPort, nil
+	}
+	internal, ok := dnsSection["internal"].(map[string]interface{})
+	if !ok {
+		return dnsconfig.DefaultInternalPort, nil
+	}
+	raw, ok := internal["port"]
+	if !ok || raw == nil {
+		return dnsconfig.DefaultInternalPort, nil
+	}
+	port, ok := raw.(int)
+	if !ok || port < 1 || port > maxPort {
+		return 0, ErrInvalidPort{
+			Field:  internalDNSPortField,
+			Port:   port,
+			Reason: "must be an integer between 1 and " + strconv.Itoa(maxPort),
+		}
+	}
+	return port, nil
+}
+
+// controlPlaneInternalDNSPort resolves the control plane's merged config and
+// returns the port its internal DNS zone listens on.
+func (o *Orchestrator) controlPlaneInternalDNSPort(cpNode *NodeConfig) (int, error) {
+	cpConfig, _, err := o.resolveNodeConfigMap(cpNode.Hostname, RoleControlPlane, nil)
+	if err != nil {
+		return 0, err
+	}
+	return internalDNSPort(cpConfig)
+}
 
 // injectControlPlaneSelfDNS wires the CP to forward libc resolver
 // traffic (resolv.conf → 127.0.0.1:53) to its OWN platformd DNS
-// authoritative zone on 127.0.0.1:9053. Same dnsmasq pattern as
+// authoritative zone on 127.0.0.1, at its own dns.internal.port
+// (internalDNSPort). Same dnsmasq pattern as
 // client nodes, just with the upstream pointing at loopback
 // instead of CP's public IP.
 //
@@ -431,20 +508,16 @@ const defaultInternalDNSPort = "9053"
 // chief among them ACME http-01 challenge validation, where the
 // ACME server dials http://<gw-fqdn>:80/.well-known/acme-challenge/…
 // to verify the client published the expected token.
-func (o *Orchestrator) injectControlPlaneSelfDNS(templateMap map[string]interface{}) {
-	network, ok := templateMap["network"].(map[string]interface{})
-	if !ok {
-		network = map[string]interface{}{}
-		templateMap["network"] = network
+func (o *Orchestrator) injectControlPlaneSelfDNS(templateMap map[string]interface{}) error {
+	port, err := internalDNSPort(templateMap)
+	if err != nil {
+		return err
 	}
-	dns, ok := network["dns"].(map[string]interface{})
-	if !ok {
-		dns = map[string]interface{}{}
-		network["dns"] = dns
-	}
-	dns["upstream-dns"] = "127.0.0.1#" + defaultInternalDNSPort
+	dnsSection := networkDNS(templateMap)
+	dnsSection["upstream-dns"] = "127.0.0.1#" + strconv.Itoa(port)
 
-	o.setSearchDomains(dns, templateMap)
+	o.setSearchDomains(dnsSection, templateMap)
+	return nil
 }
 
 // setSearchDomains writes network.dns.search-domains: the resolv.conf
@@ -591,6 +664,7 @@ func (o *Orchestrator) dryRunSingleNode(ctx context.Context, node *NodeConfig) D
 		Hostname:   node.Hostname,
 		Role:       node.Role,
 		BMCAddress: node.BMCAddress,
+		BootModel:  node.EffectiveBootModel(),
 		MACs:       append([]string(nil), node.MACs...),
 	}
 
@@ -668,7 +742,7 @@ func (o *Orchestrator) dryRunBMCNode(ctx context.Context, node *NodeConfig, nr *
 	nr.Warnings = append(nr.Warnings, o.dryRunEventLog(ctx, client, node.Hostname)...)
 
 	// Best-effort read-only MAC discovery via Redfish EthernetInterfaces.
-	macs, macErr := bmc.DiscoverMACs(ctx, bmcConfig, o.logger)
+	macs, macErr := o.discoverMACs.discover(ctx, bmcConfig, o.logger)
 	if macErr == nil && len(macs) > 0 {
 		nr.DiscoveredMACs = macs
 	} else if macErr != nil {

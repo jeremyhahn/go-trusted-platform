@@ -22,8 +22,8 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
-	quicapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 )
 
 // daemonFetchConfigWire replicates the daemon-side wire struct
@@ -60,13 +60,13 @@ func TestInvoke_CategoryPrefix_AllProvisioningMethods(t *testing.T) {
 		args          interface{}
 		expectedSubOp byte
 	}{
-		{"/platform.v1.ConfigDeliveryService/GetNonce", &platformv1.GetNonceRequest{}, quicapi.ProvisioningSubGetNonce},
-		{"/platform.v1.ConfigDeliveryService/FetchConfig", &platformv1.FetchConfigRequest{EabKeyId: "kid"}, quicapi.ProvisioningSubFetchConfig},
-		{"/platform.v1.ConfigDeliveryService/SignDigest", &platformv1.SignDigestRequest{Digest: []byte{1}}, quicapi.ProvisioningSubSignDigest},
-		{"/platform.v1.ConfigDeliveryService/PollSession", &platformv1.PollSessionRequest{SessionId: "s"}, quicapi.ProvisioningSubPollSession},
-		{"/platform.v1.ConfigDeliveryService/FulfillSession", &platformv1.FulfillSessionRequest{SessionId: "s", ProfileId: 1}, quicapi.ProvisioningSubFulfillSession},
-		{"/platform.v1.ConfigDeliveryService/ListSessions", &platformv1.ListSessionsRequest{}, quicapi.ProvisioningSubListSessions},
-		{"/platform.v1.ConfigDeliveryService/GetSession", &platformv1.GetSessionRequest{SessionId: "s"}, quicapi.ProvisioningSubGetSession},
+		{"/platform.v1.ConfigDeliveryService/GetNonce", &platformv1.GetNonceRequest{}, quicwire.ProvisioningSubGetNonce},
+		{"/platform.v1.ConfigDeliveryService/FetchConfig", &platformv1.FetchConfigRequest{EabKeyId: "kid"}, quicwire.ProvisioningSubFetchConfig},
+		{"/platform.v1.ConfigDeliveryService/SignDigest", &platformv1.SignDigestRequest{Digest: []byte{1}}, quicwire.ProvisioningSubSignDigest},
+		{"/platform.v1.ConfigDeliveryService/PollSession", &platformv1.PollSessionRequest{SessionId: "s"}, quicwire.ProvisioningSubPollSession},
+		{"/platform.v1.ConfigDeliveryService/FulfillSession", &platformv1.FulfillSessionRequest{SessionId: "s", ProfileId: 1}, quicwire.ProvisioningSubFulfillSession},
+		{"/platform.v1.ConfigDeliveryService/ListSessions", &platformv1.ListSessionsRequest{}, quicwire.ProvisioningSubListSessions},
+		{"/platform.v1.ConfigDeliveryService/GetSession", &platformv1.GetSessionRequest{SessionId: "s"}, quicwire.ProvisioningSubGetSession},
 	}
 
 	for _, tt := range tests {
@@ -81,9 +81,9 @@ func TestInvoke_CategoryPrefix_AllProvisioningMethods(t *testing.T) {
 			if sender.rawCalls != 1 {
 				t.Fatalf("expected exactly 1 SendRequest call, got %d", sender.rawCalls)
 			}
-			if sender.rawOpcode != quicapi.OpProvisioningCategory {
+			if sender.rawOpcode != quicwire.OpProvisioningCategory {
 				t.Errorf("opcode = 0x%02X, want 0x%02X (OpProvisioningCategory)",
-					sender.rawOpcode, quicapi.OpProvisioningCategory)
+					sender.rawOpcode, quicwire.OpProvisioningCategory)
 			}
 			if len(sender.rawPayload) == 0 {
 				t.Fatal("payload must contain at least the sub-opcode prefix")
@@ -106,8 +106,8 @@ func TestInvoke_ProvisioningEmptyBodyMethods(t *testing.T) {
 		args          interface{}
 		expectedSubOp byte
 	}{
-		{"/platform.v1.ConfigDeliveryService/GetNonce", &platformv1.GetNonceRequest{}, quicapi.ProvisioningSubGetNonce},
-		{"/platform.v1.ConfigDeliveryService/ListSessions", &platformv1.ListSessionsRequest{}, quicapi.ProvisioningSubListSessions},
+		{"/platform.v1.ConfigDeliveryService/GetNonce", &platformv1.GetNonceRequest{}, quicwire.ProvisioningSubGetNonce},
+		{"/platform.v1.ConfigDeliveryService/ListSessions", &platformv1.ListSessionsRequest{}, quicwire.ProvisioningSubListSessions},
 	}
 
 	for _, tt := range tests {
@@ -160,7 +160,7 @@ func TestInvoke_ProvisioningRequestEncodesPBFieldNames(t *testing.T) {
 		EabHmac    string
 		Nonce      string
 	}
-	if err := quicapi.DecodePayload(sender.rawPayload[1:], &got); err != nil {
+	if err := quicwire.DecodePayload(sender.rawPayload[1:], &got); err != nil {
 		t.Fatalf("payload[1:] decode failed: %v", err)
 	}
 	if got.EkSerial != "EK1" || got.MacAddress != "aa:bb" || got.EkCert != "certb64" ||
@@ -172,7 +172,7 @@ func TestInvoke_ProvisioningRequestEncodesPBFieldNames(t *testing.T) {
 // TestInvoke_ProvisioningFetchConfig_DeliveredRoundTrip pins the SDK mirror
 // struct against a daemon-shaped encoded payload for the delivered arm.
 func TestInvoke_ProvisioningFetchConfig_DeliveredRoundTrip(t *testing.T) {
-	encoded, err := quicapi.EncodePayload(&daemonFetchConfigWire{
+	encoded, err := quicwire.EncodePayload(&daemonFetchConfigWire{
 		Result:     "delivered",
 		ConfigJson: []byte(`{"hostname":"node-02"}`),
 		Status:     "ok",
@@ -209,7 +209,7 @@ func TestInvoke_ProvisioningFetchConfig_DeliveredRoundTrip(t *testing.T) {
 // TestInvoke_ProvisioningFetchConfig_PendingRoundTrip pins the SDK mirror
 // struct against a daemon-shaped encoded payload for the pending arm.
 func TestInvoke_ProvisioningFetchConfig_PendingRoundTrip(t *testing.T) {
-	encoded, err := quicapi.EncodePayload(&daemonFetchConfigWire{
+	encoded, err := quicwire.EncodePayload(&daemonFetchConfigWire{
 		Result:              "pending",
 		SessionId:           "sess-7",
 		ProvisionUrl:        "https://cp:8443/provision/sess-7",
@@ -248,7 +248,7 @@ func TestInvoke_ProvisioningFetchConfig_PendingRoundTrip(t *testing.T) {
 // flattened PollSession response against daemon-shaped encodings.
 func TestInvoke_ProvisioningPollSession_RoundTrips(t *testing.T) {
 	t.Run("delivered", func(t *testing.T) {
-		encoded, err := quicapi.EncodePayload(&daemonPollSessionWire{
+		encoded, err := quicwire.EncodePayload(&daemonPollSessionWire{
 			Result:     "delivered",
 			ConfigJson: []byte(`{"role":"compute"}`),
 			Status:     "ok",
@@ -275,7 +275,7 @@ func TestInvoke_ProvisioningPollSession_RoundTrips(t *testing.T) {
 	})
 
 	t.Run("pending", func(t *testing.T) {
-		encoded, err := quicapi.EncodePayload(&daemonPollSessionWire{
+		encoded, err := quicwire.EncodePayload(&daemonPollSessionWire{
 			Result:        "pending",
 			PendingStatus: "pending",
 		})
@@ -306,7 +306,7 @@ func TestInvoke_ProvisioningPollSession_RoundTrips(t *testing.T) {
 // the default codec path by Go field name.
 func TestInvoke_ProvisioningNonOneofResponsesDecodeDirectly(t *testing.T) {
 	t.Run("GetNonce", func(t *testing.T) {
-		encoded, err := quicapi.EncodePayload(&struct {
+		encoded, err := quicwire.EncodePayload(&struct {
 			Nonce string
 		}{Nonce: "n-42"})
 		if err != nil {
@@ -328,7 +328,7 @@ func TestInvoke_ProvisioningNonOneofResponsesDecodeDirectly(t *testing.T) {
 	})
 
 	t.Run("FulfillSession", func(t *testing.T) {
-		encoded, err := quicapi.EncodePayload(&struct {
+		encoded, err := quicwire.EncodePayload(&struct {
 			Status string
 		}{Status: "fulfilled"})
 		if err != nil {

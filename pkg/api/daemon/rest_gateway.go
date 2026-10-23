@@ -22,7 +22,7 @@ import (
 
 	"github.com/google/uuid"
 	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
+	grpcstatus "google.golang.org/grpc/status"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/rest"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ipam"
@@ -31,18 +31,22 @@ import (
 )
 
 // gatewayRESTService implements rest.GatewayServiceInterface using the
-// daemon's ipam.Allocator directly. Gateway status/BGP/mode methods return
-// rest.ErrGatewayFeatureNotConfigured because those features require a full gateway
-// controller that is only present when an SDN fabric is wired in.
+// daemon's ipam.Allocator directly. Gateway status and mode delegate to the
+// gateway gRPC service, so they report not configured exactly when gRPC
+// does (no in-process gateway). BGP delegates to the same service and
+// reports not configured exactly when gRPC does (no BGP speaker).
 //
 // This service is always registered so that IPAM pool CRUD and IP allocation
 // endpoints work over REST even without an SDN controller.
 type gatewayRESTService struct {
 	ipam   ipam.Allocator
-	lb     GatewayLoadBalancerInterface
-	nat64  GatewayNAT64Interface
-	reader GatewaySnapshotReader
-	logger *slog.Logger
+	status GatewayStatusController
+	bgp    GatewayBGPController
+	// backends is the shared gateway service the LB and NAT64 verbs read
+	// their backend from (#660); nil leaves them not configured.
+	backends GatewayBackendSource
+	reader   GatewaySnapshotReader
+	logger   *slog.Logger
 }
 
 // Compile-time check: gatewayRESTService implements rest.GatewayServiceInterface.
@@ -65,46 +69,210 @@ func newGatewayRESTService(allocator ipam.Allocator, logger *slog.Logger) *gatew
 }
 
 // =============================================================================
-// Gateway status / mode — not available without a hardware gateway
+// Gateway status / mode — served by the gateway gRPC service (#65)
 // =============================================================================
 
-// GetGatewayStatus returns rest.ErrGatewayFeatureNotConfigured; no hardware gateway is wired.
-func (s *gatewayRESTService) GetGatewayStatus(_ context.Context) (*rest.GatewayStatusResponse, error) {
-	return nil, rest.ErrGatewayFeatureNotConfigured{Feature: "gateway status"}
+// SetGatewayStatusController wires the gateway gRPC service the status and
+// mode routes answer from.
+func (s *gatewayRESTService) SetGatewayStatusController(controller GatewayStatusController) {
+	s.status = controller
 }
 
-// SetGatewayMode returns rest.ErrGatewayFeatureNotConfigured; no hardware gateway is wired.
-func (s *gatewayRESTService) SetGatewayMode(_ context.Context, _ uint32) (*rest.SetGatewayModeResponse, error) {
-	return nil, rest.ErrGatewayFeatureNotConfigured{Feature: "gateway mode"}
+// GetGatewayStatus returns the gateway status from the gateway gRPC service.
+func (s *gatewayRESTService) GetGatewayStatus(ctx context.Context) (*rest.GatewayStatusResponse, error) {
+	const feature = "gateway status"
+	if s.status == nil {
+		return nil, rest.ErrGatewayFeatureNotConfigured{Feature: feature}
+	}
+	resp, err := s.status.GetGatewayStatus(ctx, &platformv1.GetGatewayStatusRequest{})
+	if err != nil {
+		return nil, gatewayStatusRESTError(feature, 0, err)
+	}
+	return protoGatewayStatusToREST(resp.GetStatus()), nil
+}
+
+// SetGatewayMode sets the gateway's mode bitmask through the gateway gRPC
+// service and returns its status after the change.
+func (s *gatewayRESTService) SetGatewayMode(ctx context.Context, modes uint32) (*rest.SetGatewayModeResponse, error) {
+	const feature = "gateway mode"
+	if s.status == nil {
+		return nil, rest.ErrGatewayFeatureNotConfigured{Feature: feature}
+	}
+	resp, err := s.status.SetGatewayMode(ctx, &platformv1.SetGatewayModeRequest{Modes: modes})
+	if err != nil {
+		return nil, gatewayStatusRESTError(feature, modes, err)
+	}
+	return &rest.SetGatewayModeResponse{
+		Success:       true,
+		GatewayStatus: protoGatewayStatusToREST(resp.GetGatewayStatus()),
+	}, nil
+}
+
+// gatewayStatusRESTError maps a gateway gRPC status error to the typed REST
+// error its handler turns into an HTTP status: Unavailable (no in-process
+// gateway) is not configured, InvalidArgument is an invalid mode. Any other
+// error passes through.
+func gatewayStatusRESTError(feature string, modes uint32, err error) error {
+	switch grpcstatus.Code(err) {
+	case codes.Unavailable:
+		return rest.ErrGatewayFeatureNotConfigured{Feature: feature}
+	case codes.InvalidArgument:
+		return rest.ErrInvalidGatewayMode{Mode: modes}
+	default:
+		return err
+	}
+}
+
+// protoGatewayStatusToREST converts the gRPC gateway status to its REST
+// shape; nil stays nil.
+func protoGatewayStatusToREST(s *platformv1.GatewayStatus) *rest.GatewayStatusResponse {
+	if s == nil {
+		return nil
+	}
+	resp := &rest.GatewayStatusResponse{
+		ID:            s.GetId(),
+		NodeID:        s.GetNodeId(),
+		Modes:         s.GetModes(),
+		Tier:          s.GetTier(),
+		Reputation:    s.GetReputation(),
+		UptimeSeconds: s.GetUptimeSeconds(),
+		Healthy:       s.GetHealthy(),
+		Timestamp:     time.Now(),
+	}
+	if s.GetStartedAt() != nil {
+		resp.StartedAt = s.GetStartedAt().AsTime()
+	}
+	return resp
 }
 
 // =============================================================================
-// BGP operations — not available without a BGP speaker
+// BGP operations — served by the gateway gRPC service (#65)
 // =============================================================================
 
-// GetBGPStatus returns rest.ErrGatewayFeatureNotConfigured; no BGP speaker is wired.
-func (s *gatewayRESTService) GetBGPStatus(_ context.Context) (*rest.BGPStatusResponse, error) {
-	return nil, rest.ErrGatewayFeatureNotConfigured{Feature: "bgp"}
+// SetGatewayBGPController wires the gateway gRPC service the BGP routes
+// answer from.
+func (s *gatewayRESTService) SetGatewayBGPController(controller GatewayBGPController) {
+	s.bgp = controller
 }
 
-// ListBGPPeers returns rest.ErrGatewayFeatureNotConfigured; no BGP speaker is wired.
-func (s *gatewayRESTService) ListBGPPeers(_ context.Context) ([]rest.BGPPeerResponse, error) {
-	return nil, rest.ErrGatewayFeatureNotConfigured{Feature: "bgp"}
+// GetBGPStatus returns the BGP speaker status from the gateway gRPC service.
+func (s *gatewayRESTService) GetBGPStatus(ctx context.Context) (*rest.BGPStatusResponse, error) {
+	if s.bgp == nil {
+		return nil, rest.ErrGatewayFeatureNotConfigured{Feature: "bgp"}
+	}
+	resp, err := s.bgp.GetBGPStatus(ctx, &platformv1.GetBGPStatusRequest{})
+	if err != nil {
+		return nil, gatewayBGPRESTError("", "", err)
+	}
+	st := resp.GetStatus()
+	return &rest.BGPStatusResponse{
+		LocalASN:          st.GetLocalAsn(),
+		RouterID:          st.GetRouterId(),
+		PeerCount:         st.GetPeerCount(),
+		EstablishedPeers:  st.GetEstablishedPeers(),
+		PrefixesAnnounced: st.GetPrefixesAnnounced(),
+		Running:           st.GetRunning(),
+	}, nil
 }
 
-// AnnouncePrefix returns rest.ErrGatewayFeatureNotConfigured; no BGP speaker is wired.
-func (s *gatewayRESTService) AnnouncePrefix(_ context.Context, _, _ string) error {
-	return rest.ErrGatewayFeatureNotConfigured{Feature: "bgp"}
+// ListBGPPeers returns the BGP speaker's peers from the gateway gRPC
+// service. A peer's uptime is the time its session came up; it is zero
+// while the session is down.
+func (s *gatewayRESTService) ListBGPPeers(ctx context.Context) ([]rest.BGPPeerResponse, error) {
+	if s.bgp == nil {
+		return nil, rest.ErrGatewayFeatureNotConfigured{Feature: "bgp"}
+	}
+	resp, err := s.bgp.ListBGPPeers(ctx, &platformv1.ListBGPPeersRequest{})
+	if err != nil {
+		return nil, gatewayBGPRESTError("", "", err)
+	}
+	peers := make([]rest.BGPPeerResponse, 0, len(resp.GetPeers()))
+	for _, p := range resp.GetPeers() {
+		peer := rest.BGPPeerResponse{
+			Address:          p.GetAddress(),
+			ASN:              p.GetAsn(),
+			State:            p.GetState(),
+			Description:      p.GetDescription(),
+			PrefixesReceived: p.GetPrefixesReceived(),
+			PrefixesSent:     p.GetPrefixesSent(),
+		}
+		if p.GetUptime() != nil {
+			peer.Uptime = p.GetUptime().AsTime()
+		}
+		peers = append(peers, peer)
+	}
+	return peers, nil
 }
 
-// WithdrawPrefix returns rest.ErrGatewayFeatureNotConfigured; no BGP speaker is wired.
-func (s *gatewayRESTService) WithdrawPrefix(_ context.Context, _ string) error {
-	return rest.ErrGatewayFeatureNotConfigured{Feature: "bgp"}
+// AnnouncePrefix announces prefix via nextHop through the gateway gRPC
+// service; an empty nextHop lets the speaker choose.
+func (s *gatewayRESTService) AnnouncePrefix(ctx context.Context, prefix, nextHop string) error {
+	if s.bgp == nil {
+		return rest.ErrGatewayFeatureNotConfigured{Feature: "bgp"}
+	}
+	_, err := s.bgp.AnnouncePrefix(ctx, &platformv1.AnnouncePrefixRequest{Prefix: prefix, NextHop: nextHop})
+	if err != nil {
+		return gatewayBGPRESTError(prefix, nextHop, err)
+	}
+	return nil
 }
 
-// ListAnnouncedPrefixes returns rest.ErrGatewayFeatureNotConfigured; no BGP speaker is wired.
-func (s *gatewayRESTService) ListAnnouncedPrefixes(_ context.Context) ([]rest.AnnouncedPrefixResponse, error) {
-	return nil, rest.ErrGatewayFeatureNotConfigured{Feature: "bgp"}
+// WithdrawPrefix withdraws an announced prefix through the gateway gRPC
+// service.
+func (s *gatewayRESTService) WithdrawPrefix(ctx context.Context, prefix string) error {
+	if s.bgp == nil {
+		return rest.ErrGatewayFeatureNotConfigured{Feature: "bgp"}
+	}
+	_, err := s.bgp.WithdrawPrefix(ctx, &platformv1.WithdrawPrefixRequest{Prefix: prefix})
+	if err != nil {
+		return gatewayBGPRESTError(prefix, "", err)
+	}
+	return nil
+}
+
+// ListAnnouncedPrefixes returns the prefixes the BGP speaker announces,
+// from the gateway gRPC service.
+func (s *gatewayRESTService) ListAnnouncedPrefixes(ctx context.Context) ([]rest.AnnouncedPrefixResponse, error) {
+	if s.bgp == nil {
+		return nil, rest.ErrGatewayFeatureNotConfigured{Feature: "bgp"}
+	}
+	resp, err := s.bgp.ListAnnouncedPrefixes(ctx, &platformv1.ListAnnouncedPrefixesRequest{})
+	if err != nil {
+		return nil, gatewayBGPRESTError("", "", err)
+	}
+	prefixes := make([]rest.AnnouncedPrefixResponse, 0, len(resp.GetPrefixes()))
+	for _, p := range resp.GetPrefixes() {
+		prefix := rest.AnnouncedPrefixResponse{
+			Prefix:  p.GetPrefix(),
+			NextHop: p.GetNextHop(),
+		}
+		if p.GetAnnouncedAt() != nil {
+			prefix.AnnouncedAt = p.GetAnnouncedAt().AsTime()
+		}
+		prefixes = append(prefixes, prefix)
+	}
+	return prefixes, nil
+}
+
+// gatewayBGPRESTError maps a gateway gRPC status error to the typed REST
+// error its handler turns into an HTTP status: Unavailable (no BGP speaker,
+// or one that is not running) is not configured; InvalidArgument is an
+// invalid next hop when nextHop does not parse and an invalid prefix
+// otherwise. Any other error passes through.
+func gatewayBGPRESTError(prefix, nextHop string, err error) error {
+	switch grpcstatus.Code(err) {
+	case codes.Unavailable:
+		return rest.ErrGatewayFeatureNotConfigured{Feature: "bgp"}
+	case codes.InvalidArgument:
+		if nextHop != "" {
+			if _, parseErr := netip.ParseAddr(nextHop); parseErr != nil {
+				return rest.ErrInvalidIPAddress{IP: nextHop}
+			}
+		}
+		return rest.ErrInvalidPrefix{Prefix: prefix}
+	default:
+		return err
+	}
 }
 
 // =============================================================================
@@ -390,6 +558,7 @@ func ipamAllocToRESTResponse(a *ipam.Allocation) *rest.IPAllocationResponse {
 		PoolID:      a.PoolID,
 		DeviceID:    a.DeviceID,
 		Hostname:    a.Hostname,
+		Status:      string(a.Status),
 		AllocatedAt: a.AllocatedAt,
 		ExpiresAt:   a.ExpiresAt,
 	}
@@ -417,7 +586,7 @@ func admittedVTEPToREST(vtep *platformv1.GatewayAdmittedVTEP) *rest.GatewayAdmit
 }
 
 func gatewayAdmissionErrToREST(vtep string, err error) error {
-	switch status.Code(err) {
+	switch grpcstatus.Code(err) {
 	case codes.NotFound:
 		return rest.ErrGatewayAdmittedVTEPNotFound{VTEP: vtep}
 	case codes.Unavailable:

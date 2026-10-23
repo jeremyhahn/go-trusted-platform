@@ -481,7 +481,7 @@ func (d *DHTBackend) tryClaim(ctx context.Context, pool *ipam.Pool, ip netip.Add
 	// Create allocation
 	now := time.Now()
 	alloc := &ipam.Allocation{
-		ID:          d.generateAllocationID(ip),
+		ID:          generateID(),
 		PoolID:      pool.ID,
 		Zone:        pool.Zone,
 		IP:          ip,
@@ -772,12 +772,6 @@ func (d *DHTBackend) allocationKey(ip netip.Addr) string {
 // deviceKey returns the DHT key for a device's allocation.
 func (d *DHTBackend) deviceKey(deviceID string, ip netip.Addr) string {
 	return dhtDevicePrefix + deviceID + "/" + ip.String()
-}
-
-// generateAllocationID generates a unique allocation ID.
-func (d *DHTBackend) generateAllocationID(ip netip.Addr) string {
-	h := sha256.Sum256([]byte(fmt.Sprintf("%s-%s-%d", d.peerID, ip.String(), time.Now().UnixNano())))
-	return fmt.Sprintf("%x", h[:8])
 }
 
 // updatePoolStats updates the pool statistics in the cache.

@@ -9,103 +9,106 @@ import type { TPMVersion, PCRBank, PCRValue } from './tpm.js';
 
 // =============================================================================
 // Enums
+//
+// Each enum is the proto enum's value name, the spelling the daemon writes in
+// every compute response (protojson) and the only one it accepts in a request.
 // =============================================================================
 
 /**
  * VM state
  */
 export type VMState =
-  | 'UNSPECIFIED'
-  | 'STOPPED'
-  | 'STARTING'
-  | 'RUNNING'
-  | 'PAUSED'
-  | 'STOPPING'
-  | 'REBOOTING'
-  | 'MIGRATING'
-  | 'ERROR';
+  | 'VM_STATE_UNSPECIFIED'
+  | 'VM_STATE_STOPPED'
+  | 'VM_STATE_STARTING'
+  | 'VM_STATE_RUNNING'
+  | 'VM_STATE_PAUSED'
+  | 'VM_STATE_STOPPING'
+  | 'VM_STATE_REBOOTING'
+  | 'VM_STATE_MIGRATING'
+  | 'VM_STATE_ERROR';
 
 /**
  * Firmware type
  */
 export type FirmwareType =
-  | 'UNSPECIFIED'
-  | 'BIOS'
-  | 'UEFI'
-  | 'UEFI_SECURE_BOOT';
+  | 'FIRMWARE_TYPE_UNSPECIFIED'
+  | 'FIRMWARE_TYPE_BIOS'
+  | 'FIRMWARE_TYPE_UEFI'
+  | 'FIRMWARE_TYPE_UEFI_SECURE_BOOT';
 
 /**
  * Boot device
  */
 export type BootDevice =
-  | 'UNSPECIFIED'
-  | 'DISK'
-  | 'CDROM'
-  | 'NETWORK';
+  | 'BOOT_DEVICE_UNSPECIFIED'
+  | 'BOOT_DEVICE_DISK'
+  | 'BOOT_DEVICE_CDROM'
+  | 'BOOT_DEVICE_NETWORK';
 
 /**
  * Disk type
  */
 export type DiskType =
-  | 'UNSPECIFIED'
-  | 'RAW'
-  | 'QCOW2'
-  | 'VDI'
-  | 'VMDK';
+  | 'DISK_TYPE_UNSPECIFIED'
+  | 'DISK_TYPE_RAW'
+  | 'DISK_TYPE_QCOW2'
+  | 'DISK_TYPE_VDI'
+  | 'DISK_TYPE_VMDK';
 
 /**
  * Disk bus
  */
 export type DiskBus =
-  | 'UNSPECIFIED'
-  | 'IDE'
-  | 'SATA'
-  | 'SCSI'
-  | 'VIRTIO'
-  | 'NVME';
+  | 'DISK_BUS_UNSPECIFIED'
+  | 'DISK_BUS_IDE'
+  | 'DISK_BUS_SATA'
+  | 'DISK_BUS_SCSI'
+  | 'DISK_BUS_VIRTIO'
+  | 'DISK_BUS_NVME';
 
 /**
  * Network model
  */
 export type NetworkModel =
-  | 'UNSPECIFIED'
-  | 'E1000'
-  | 'VIRTIO'
-  | 'RTL8139';
+  | 'NETWORK_MODEL_UNSPECIFIED'
+  | 'NETWORK_MODEL_E1000'
+  | 'NETWORK_MODEL_VIRTIO'
+  | 'NETWORK_MODEL_RTL8139';
 
 /**
  * Graphics type
  */
 export type GraphicsType =
-  | 'UNSPECIFIED'
-  | 'NONE'
-  | 'VNC'
-  | 'SPICE'
-  | 'SDL';
+  | 'GRAPHICS_TYPE_UNSPECIFIED'
+  | 'GRAPHICS_TYPE_NONE'
+  | 'GRAPHICS_TYPE_VNC'
+  | 'GRAPHICS_TYPE_SPICE'
+  | 'GRAPHICS_TYPE_SDL';
 
 /**
  * Container state
  */
 export type ContainerState =
-  | 'UNSPECIFIED'
-  | 'CREATED'
-  | 'STARTING'
-  | 'RUNNING'
-  | 'PAUSED'
-  | 'STOPPING'
-  | 'STOPPED'
-  | 'EXITED'
-  | 'ERROR';
+  | 'CONTAINER_STATE_UNSPECIFIED'
+  | 'CONTAINER_STATE_CREATED'
+  | 'CONTAINER_STATE_STARTING'
+  | 'CONTAINER_STATE_RUNNING'
+  | 'CONTAINER_STATE_PAUSED'
+  | 'CONTAINER_STATE_STOPPING'
+  | 'CONTAINER_STATE_STOPPED'
+  | 'CONTAINER_STATE_EXITED'
+  | 'CONTAINER_STATE_ERROR';
 
 /**
  * Container restart policy
  */
 export type RestartPolicy =
-  | 'UNSPECIFIED'
-  | 'NO'
-  | 'ON_FAILURE'
-  | 'ALWAYS'
-  | 'UNLESS_STOPPED';
+  | 'RESTART_POLICY_UNSPECIFIED'
+  | 'RESTART_POLICY_NO'
+  | 'RESTART_POLICY_ON_FAILURE'
+  | 'RESTART_POLICY_ALWAYS'
+  | 'RESTART_POLICY_UNLESS_STOPPED';
 
 // =============================================================================
 // Configuration Types
@@ -747,6 +750,12 @@ export interface VerifyVMAttestationRequest {
   nonce: string;
   /** Expected PCR values */
   expectedPcrs?: PCRValue[];
+  /**
+   * Signature scheme the quote declares (AttestVMResponse.signatureAlgorithm,
+   * e.g. "SHA256-RSAPSS"). The quote is verified under it alone; an absent
+   * or unknown scheme fails verification.
+   */
+  signatureAlgorithm: string;
 }
 
 // =============================================================================
@@ -1003,6 +1012,12 @@ export interface AttestVMResponse {
   eventLog?: string;
   /** AK public key (base64) */
   akPublic?: string;
+  /**
+   * x509.SignatureAlgorithm name of the scheme the AK signed the quote under
+   * (e.g. "SHA256-RSAPSS"); the signature itself is bare bytes. Send it back
+   * as VerifyVMAttestationRequest.signatureAlgorithm.
+   */
+  signatureAlgorithm?: string;
 }
 
 /**

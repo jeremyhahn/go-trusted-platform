@@ -122,6 +122,27 @@ func (e *ErrConfigInvalid) Error() string {
 	return fmt.Sprintf("proxysvc: invalid configuration field %s: %s", e.Field, e.Reason)
 }
 
+// ErrPlatformdIdentityLoadFailed is returned when the client identity
+// gatewayd presents to platformd (the cert-file/key-file pair or the
+// token-file) cannot be loaded.
+type ErrPlatformdIdentityLoadFailed struct {
+	// Path is the configured credential file.
+	Path string
+	// Cause is the underlying error; nil when the token file is empty.
+	Cause error
+}
+
+// Error implements the error interface.
+func (e *ErrPlatformdIdentityLoadFailed) Error() string {
+	if e.Cause == nil {
+		return fmt.Sprintf("proxysvc: platformd client identity %s is empty", e.Path)
+	}
+	return fmt.Sprintf("proxysvc: loading platformd client identity %s: %v", e.Path, e.Cause)
+}
+
+// Unwrap returns the underlying error.
+func (e *ErrPlatformdIdentityLoadFailed) Unwrap() error { return e.Cause }
+
 // ErrCertificateLoadFailed is returned when the server TLS keypair cannot be
 // loaded from disk.
 type ErrCertificateLoadFailed struct {

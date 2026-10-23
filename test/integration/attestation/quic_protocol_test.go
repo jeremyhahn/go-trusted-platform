@@ -20,10 +20,12 @@ import (
 	"errors"
 	"testing"
 	"time"
+
+	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers/surface"
 )
 
 // This adapter had both defects: it offered ALPN "attestation-quic" while the
-// daemon advertises only quic.ALPNProtocol, and it wrote a JSON
+// daemon advertises only quicwire.ALPNProtocol, and it wrote a JSON
 // {method, path, body} envelope past a server that reads opcode framing. The
 // handshake failed before a stream was opened, so the framing never ran, and
 // every call failed in a way that looked exactly like a refusal.
@@ -79,7 +81,7 @@ func TestQUICAdapter_DaemonAnswers(t *testing.T) {
 
 // TestQUICAdapter_OperationsWithoutAnOpcodeSaySo asserts the gap is reported
 // rather than skipped. PushAttestation has no opcode in any dispatched range,
-// so it must surface ErrQUICNoSurface -- a named absence, not a timeout and
+// so it must surface surface.ErrNoSurface -- a named absence, not a timeout and
 // not a phrase a skip guard would swallow.
 func TestQUICAdapter_OperationsWithoutAnOpcodeSaySo(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), quicNegativeTimeout)
@@ -92,7 +94,7 @@ func TestQUICAdapter_OperationsWithoutAnOpcodeSaySo(t *testing.T) {
 	defer func() { _ = a.Teardown(ctx) }()
 
 	_, err := a.PushAttestation(ctx, PushAttestationOptions{})
-	var noSurface ErrQUICNoSurface
+	var noSurface surface.ErrNoSurface
 	if !errors.As(err, &noSurface) {
 		t.Fatalf("PushAttestation: expected a named absent surface, got %v", err)
 	}
@@ -142,6 +144,10 @@ func TestQUICAdapter_EveryOperationIsClassified(t *testing.T) {
 		{"GetWorkloadChainHistory", func() error { _, e := a.GetWorkloadChainHistory(ctx, GetWorkloadChainHistoryOptions{}); return e }},
 		{"VerifyWorkloadChain", func() error { _, e := a.VerifyWorkloadChain(ctx, VerifyWorkloadChainOptions{}); return e }},
 		{"GetWorkloadChainStats", func() error { _, e := a.GetWorkloadChainStats(ctx, GetWorkloadChainStatsOptions{}); return e }},
+		{"ListDeviceReports", func() error { _, e := a.ListDeviceReports(ctx); return e }},
+		{"GetDeviceReport", func() error { _, e := a.GetDeviceReport(ctx, DeviceReportOptions{}); return e }},
+		{"RefreshDeviceReport", func() error { _, e := a.RefreshDeviceReport(ctx, DeviceReportOptions{}); return e }},
+		{"DescribeCallerPolicy", func() error { _, e := a.DescribeCallerPolicy(ctx); return e }},
 	}
 
 	var withOpcode, withoutSurface []string
@@ -151,7 +157,7 @@ func TestQUICAdapter_EveryOperationIsClassified(t *testing.T) {
 			t.Errorf("%s: returned success with no connection; it reached neither an opcode nor a declaration", p.name)
 			continue
 		}
-		var noSurface ErrQUICNoSurface
+		var noSurface surface.ErrNoSurface
 		if errors.As(err, &noSurface) {
 			withoutSurface = append(withoutSurface, p.name)
 			continue

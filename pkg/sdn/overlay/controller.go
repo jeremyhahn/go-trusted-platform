@@ -37,14 +37,13 @@ type Controller struct {
 	config *Config
 
 	// Component dependencies
-	ovsClient    *ovs.Client
-	ofClient     *openflow.Client
-	vtepManager  *vxlan.VTEPManager
-	bgpSpeaker   *bgp.Speaker
-	evpnManager  *bgp.EVPNManager
-	gateway      *gateway.Gateway
-	ipam         ipam.Allocator
-	vtepObserver VTEPObserver
+	ovsClient   *ovs.Client
+	ofClient    *openflow.Client
+	vtepManager *vxlan.VTEPManager
+	bgpSpeaker  *bgp.Speaker
+	evpnManager *bgp.EVPNManager
+	gateway     *gateway.Gateway
+	ipam        ipam.Allocator
 
 	// State management
 	state *StateManager
@@ -55,6 +54,7 @@ type Controller struct {
 	// Lifecycle state
 	controllerState atomic.Uint32
 	startedAt       time.Time
+	now             func() time.Time // uptime clock (startedAt, Uptime): time.Now in production; tests replace it (#284)
 	mu              sync.RWMutex
 	// vniMu serialises VNI derivation with the state write, so concurrent
 	// AddVNI calls never derive the same overlay network number.
@@ -64,11 +64,6 @@ type Controller struct {
 	stopCh   chan struct{}
 	stopOnce sync.Once
 	wg       sync.WaitGroup
-}
-
-// VTEPObserver receives VTEPs learned by the overlay controller.
-type VTEPObserver interface {
-	ObserveVTEP(ctx context.Context, vtep netip.Addr)
 }
 
 // New creates a new overlay controller with the given configuration.
@@ -89,6 +84,7 @@ func New(config *Config, opts ...Option) (*Controller, error) {
 		state:  NewStateManager(),
 		logger: slog.Default(),
 		stopCh: make(chan struct{}),
+		now:    time.Now,
 	}
 
 	c.controllerState.Store(uint32(ControllerStateStopped))
@@ -125,7 +121,7 @@ func (c *Controller) Start(ctx context.Context) error {
 	// This prevents a race condition where background tasks try to read
 	// from stopCh before it's initialized
 	c.mu.Lock()
-	c.startedAt = time.Now()
+	c.startedAt = c.now()
 	c.stopCh = make(chan struct{})
 	c.stopOnce = sync.Once{}
 	c.mu.Unlock()
@@ -655,9 +651,6 @@ func (c *Controller) AddVTEP(ctx context.Context, vtep *VTEPInfo) error {
 	if err := c.state.AddVTEP(ctx, vtep); err != nil {
 		return &ErrVTEPOperationFailed{VTEP: vtep.IP, Operation: "add", Cause: err}
 	}
-	if c.vtepObserver != nil {
-		c.vtepObserver.ObserveVTEP(ctx, vtep.IP)
-	}
 
 	c.logger.Info("VTEP added successfully",
 		"node_id", vtep.NodeID,
@@ -749,5 +742,5 @@ func (c *Controller) Uptime() time.Duration {
 	if !c.IsOperational() || c.startedAt.IsZero() {
 		return 0
 	}
-	return time.Since(c.startedAt)
+	return c.now().Sub(c.startedAt)
 }

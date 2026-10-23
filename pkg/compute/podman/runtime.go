@@ -692,22 +692,22 @@ func (r *Runtime) StopContainer(ctx context.Context, id string, timeout uint) er
 	}
 
 	// Wait for graceful shutdown
-	deadline := time.Now().Add(time.Duration(timeout) * time.Second)
-	for time.Now().Before(deadline) {
-		if !r.isContainerRunning(ctx, state.ID) {
-			break
-		}
-		time.Sleep(100 * time.Millisecond)
+	if timeout > 0 {
+		grace := time.NewTimer(time.Duration(timeout) * time.Second)
+		r.waitContainerExit(ctx, state.ID, grace.C)
+		grace.Stop()
 	}
 
 	// Force kill if still running
-	if r.isContainerRunning(ctx, state.ID) {
+	if containerRunning(r, ctx, state.ID) {
 		killCmd := exec.CommandContext(ctx, r.config.OCIRuntime,
 			"kill",
 			state.ID,
 			"SIGKILL",
 		)
-		_ = killCmd.Run()
+		if err := killCmd.Run(); err != nil {
+			r.logger.Warn("SIGKILL failed", "id", id, "error", err)
+		}
 	}
 
 	state.State = ContainerStateStopped
@@ -716,6 +716,38 @@ func (r *Runtime) StopContainer(ctx context.Context, id string, timeout uint) er
 
 	r.logger.Info("stopped container", "id", id)
 	return nil
+}
+
+// containerPollInterval is how often the OCI runtime's state is re-read while
+// waiting for a container to exit.
+const containerPollInterval = 100 * time.Millisecond
+
+// containerRunning is the seam through which the exit waits read the OCI
+// runtime's state; tests replace it to drive a container's lifecycle.
+var containerRunning = (*Runtime).isContainerRunning
+
+// waitContainerExit polls the OCI runtime until the container is no longer
+// running and reports whether it saw the exit. It returns false as soon as
+// ctx ends or expire fires; a nil expire never fires.
+func (r *Runtime) waitContainerExit(ctx context.Context, id string, expire <-chan time.Time) bool {
+	poll := time.NewTicker(containerPollInterval)
+	defer poll.Stop()
+
+	for {
+		if ctx.Err() != nil {
+			return false
+		}
+		if !containerRunning(r, ctx, id) {
+			return true
+		}
+		select {
+		case <-ctx.Done():
+			return false
+		case <-expire:
+			return false
+		case <-poll.C:
+		}
+	}
 }
 
 // isContainerRunning checks if a container is running
@@ -808,22 +840,14 @@ func (r *Runtime) WaitContainer(ctx context.Context, id string) (int32, error) {
 		return -1, err
 	}
 
-	// Poll for container to exit
-	for {
-		select {
-		case <-ctx.Done():
-			return -1, ctx.Err()
-		default:
-			if !r.isContainerRunning(ctx, state.ID) {
-				// Get exit code
-				exitCode := r.getContainerExitCode(ctx, state.ID)
-				state.ExitCode = exitCode
-				state.State = ContainerStateExited
-				return int32(exitCode), nil
-			}
-			time.Sleep(100 * time.Millisecond)
-		}
+	if !r.waitContainerExit(ctx, state.ID, nil) {
+		return -1, ctx.Err()
 	}
+
+	exitCode := r.getContainerExitCode(ctx, state.ID)
+	state.ExitCode = exitCode
+	state.State = ContainerStateExited
+	return int32(exitCode), nil
 }
 
 // getContainerExitCode gets the exit code of a stopped container

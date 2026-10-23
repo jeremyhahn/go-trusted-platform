@@ -14,11 +14,11 @@ import (
 	"strings"
 	"testing"
 
-	aggeneric "github.com/jeremyhahn/arduino-generic/sdk/go"
+	tfw "github.com/jeremyhahn/trusted-firmware/sdk/go"
 )
 
 func TestParseFrame_ReadsEveryFieldAtItsWireOffset(t *testing.T) {
-	// The offsets are a second copy of a definition arduino-generic owns,
+	// The offsets are a second copy of a definition trusted-firmware owns,
 	// so this test pins them against a frame built field by field: a
 	// silently shifted offset would otherwise read a neighbouring field.
 	nonce := attestNonce(0x11)
@@ -79,7 +79,7 @@ func TestParseFrame_RefusesFramesItMustNotGuessAt(t *testing.T) {
 		want error
 	}{
 		{name: "empty", raw: nil, want: ErrEvidenceLength{}},
-		{name: "one byte short", raw: good[:aggeneric.EvidenceLen-1], want: ErrEvidenceLength{}},
+		{name: "one byte short", raw: good[:tfw.EvidenceLen-1], want: ErrEvidenceLength{}},
 		{name: "one byte long", raw: append(append([]byte{}, good...), 0), want: ErrEvidenceLength{}},
 		{
 			name: "a version this host does not parse",
@@ -114,7 +114,7 @@ func TestParseFrame_ReadsAnUnprovisionedDeviceAsUnprovisioned(t *testing.T) {
 		t.Fatalf("fwHash = %x, want all zeroes", f.fwHash)
 	}
 	if f.algorithm != 0 {
-		t.Fatalf("algorithm = %d, want 0 (AG_ALG_NONE)", f.algorithm)
+		t.Fatalf("algorithm = %d, want 0 (TFW_ALG_NONE)", f.algorithm)
 	}
 }
 

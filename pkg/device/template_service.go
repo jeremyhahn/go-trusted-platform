@@ -63,6 +63,10 @@ func (s *TemplateService) Save(ctx context.Context, template *entities.DeviceTem
 		return ErrInvalidTemplateID{}
 	}
 
+	if template.Name == "" {
+		return ErrTemplateNameRequired{}
+	}
+
 	if template.CreatedAt.IsZero() {
 		template.CreatedAt = time.Now()
 	}
@@ -116,12 +120,14 @@ func (s *TemplateService) Update(ctx context.Context, template *entities.DeviceT
 		return ErrInvalidTemplateID{}
 	}
 
-	// Verify template exists before updating
-	_, err := s.templateDAO.Get(ctx, template.ID)
+	// Verify template exists before updating; an update replaces the
+	// template but never its creation time.
+	stored, err := s.templateDAO.Get(ctx, template.ID)
 	if err != nil {
 		return &WrappedError{Msg: "failed to get template for update", Err: err}
 	}
 
+	template.CreatedAt = stored.CreatedAt
 	template.UpdatedAt = time.Now()
 
 	if err := s.templateDAO.Save(ctx, template); err != nil {
@@ -250,7 +256,9 @@ func (s *TemplateService) ToProfileWithConfigOverrides(
 		if overrides.Model != "" {
 			profile.Model = overrides.Model
 		}
-		if overrides.Role != "" {
+		// Every transport decodes an absent role as DeviceRoleUnknown, so
+		// it means "keep the template's role", not "clear it".
+		if overrides.Role != "" && overrides.Role != entities.DeviceRoleUnknown {
 			profile.Role = overrides.Role
 		}
 		// Identity binding and the profile-level zone travel with the same
@@ -258,6 +266,9 @@ func (s *TemplateService) ToProfileWithConfigOverrides(
 		// so a caller that set them saw a 201 and a profile without them.
 		if overrides.EKSerial != "" {
 			profile.EKSerial = overrides.EKSerial
+		}
+		if overrides.EKCert != "" {
+			profile.EKCert = overrides.EKCert
 		}
 		if overrides.MACAddress != "" {
 			profile.MACAddress = overrides.MACAddress
@@ -293,6 +304,42 @@ func (s *TemplateService) ToProfileWithConfigOverrides(
 		}
 	}
 
+	return profile, nil
+}
+
+// CreateProfileFromTemplate builds a profile from a template and stores it.
+// It is the create-from-template path every transport uses: ToProfile copies
+// the template and applies the overrides, an ID is minted unless the
+// overrides name one, and the profile service saves the result.
+func CreateProfileFromTemplate(
+	ctx context.Context,
+	templates DeviceTemplateService,
+	profiles DeviceProfileService,
+	templateID uint64,
+	overrides *entities.DeviceProfile,
+) (*entities.DeviceProfile, error) {
+	if templates == nil {
+		return nil, ErrTemplateProfileDependency{Name: "template service"}
+	}
+	if profiles == nil {
+		return nil, ErrTemplateProfileDependency{Name: "profile service"}
+	}
+	if templateID == 0 {
+		return nil, ErrInvalidTemplateID{}
+	}
+
+	profile, err := templates.ToProfile(ctx, templateID, overrides)
+	if err != nil {
+		return nil, err
+	}
+	// ProfileService.Save requires a non-zero ID because it doubles as the
+	// update primitive; the template itself carries none.
+	if profile.ID == 0 {
+		profile.ID = NewID()
+	}
+	if err := profiles.Save(ctx, profile); err != nil {
+		return nil, err
+	}
 	return profile, nil
 }
 

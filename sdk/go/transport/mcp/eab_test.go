@@ -20,8 +20,6 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
-	mcpapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/mcp"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
 
@@ -40,26 +38,17 @@ func eabWireCredential() map[string]interface{} {
 	}
 }
 
-// TestEABMCP_ToolMappingParity pins the adapter tool names against the
-// server-side ToolRegistry registrations — the kms_sign bug class where
-// a tool is mapped on one side only.
+// TestEABMCP_ToolMappingParity checks the SDK side: every mapped EABService
+// method can build its arguments and decode its reply. That each mapped tool
+// is registered by the server is checked in pkg/api/mcp against MethodTools.
 func TestEABMCP_ToolMappingParity(t *testing.T) {
-	registry := mcpapi.NewToolRegistry(nil, logging.DefaultLogger())
-	registered := map[string]bool{}
-	for _, td := range registry.ListTools() {
-		registered[td.Name] = true
-	}
-
 	count := 0
-	for method, tool := range grpcMethodToMCPToolMap {
+	for method := range grpcMethodToMCPToolMap {
 		if len(method) < len("/platform.v1.EABService/") ||
 			method[:len("/platform.v1.EABService/")] != "/platform.v1.EABService/" {
 			continue
 		}
 		count++
-		if !registered[tool] {
-			t.Errorf("adapter maps %s -> %q but the server does not register that tool", method, tool)
-		}
 		if _, has := mcpArgBuilders[method]; !has {
 			t.Errorf("%s missing argument builder", method)
 		}

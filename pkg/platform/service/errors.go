@@ -121,6 +121,16 @@ func (e ErrUserAlreadyExists) Error() string {
 	return fmt.Sprintf("user already exists: email=%s", e.Email)
 }
 
+// ErrInvalidEmail is returned when an address is not one the IAM identity
+// store accepts, so it cannot become a platform user.
+type ErrInvalidEmail struct {
+	Email string
+}
+
+func (e ErrInvalidEmail) Error() string {
+	return fmt.Sprintf("invalid email address: %q", e.Email)
+}
+
 // ErrInvalidInvitation is returned when an invitation is invalid.
 type ErrInvalidInvitation struct {
 	Reason string
@@ -175,6 +185,48 @@ func (e ErrUserSaveFailed) Error() string {
 }
 
 func (e ErrUserSaveFailed) Unwrap() error {
+	return e.Cause
+}
+
+// ErrIAMMirrorFailed is returned when a newly registered tenant owner could
+// not be mirrored into the IAM tenant. The registration is rolled back: an
+// owner the IAM surface cannot see is not a registered owner (#641).
+type ErrIAMMirrorFailed struct {
+	Email    string
+	TenantID string
+	Cause    error
+}
+
+func (e ErrIAMMirrorFailed) Error() string {
+	return fmt.Sprintf("failed to mirror user %s into IAM tenant %s: %v", e.Email, e.TenantID, e.Cause)
+}
+
+func (e ErrIAMMirrorFailed) Unwrap() error {
+	return e.Cause
+}
+
+// ErrIAMReconcilerConfig is returned by NewIAMUserReconciler when a required
+// dependency is missing.
+type ErrIAMReconcilerConfig struct {
+	Field string
+}
+
+func (e ErrIAMReconcilerConfig) Error() string {
+	return fmt.Sprintf("IAM user reconciler: %s is required", e.Field)
+}
+
+// ErrIAMReconcileFailed is returned when the IAM user reconcile could not read
+// the platform user store at all. Per-user and per-tenant failures are counted
+// in the report instead (#641).
+type ErrIAMReconcileFailed struct {
+	Cause error
+}
+
+func (e ErrIAMReconcileFailed) Error() string {
+	return fmt.Sprintf("IAM user reconcile failed to read platform users: %v", e.Cause)
+}
+
+func (e ErrIAMReconcileFailed) Unwrap() error {
 	return e.Cause
 }
 

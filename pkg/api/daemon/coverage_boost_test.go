@@ -686,28 +686,6 @@ func TestBoost_ComputeGRPCService_InstanceToContainerProto_WithName(t *testing.T
 	}
 }
 
-func TestBoost_ComputeGRPCService_InstanceStateToContainerState(t *testing.T) {
-	logger := boostLogger()
-	svc := NewComputeGRPCService(logger, nil)
-
-	tests := []struct {
-		name  string
-		input compute.InstanceState
-	}{
-		{"creating", compute.StateCreating},
-		{"running", compute.StateRunning},
-		{"stopped", compute.StateStopped},
-		{"unknown", compute.StateUnknown},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			got := svc.instanceStateToContainerState(tc.input)
-			_ = got
-		})
-	}
-}
-
 func TestBoost_ComputeGRPCService_StreamingStubs(t *testing.T) {
 	logger := boostLogger()
 	svc := NewComputeGRPCService(logger, nil)
@@ -1171,99 +1149,6 @@ func TestBoost_IAMServiceStub_CheckAccess_ReturnsError(t *testing.T) {
 // =============================================================================
 // Managed Service Tests
 // =============================================================================
-
-func TestBoost_ConfigManagedService_IsRunning(t *testing.T) {
-	svc := newConfigManagedService("test", ServiceConfig{})
-
-	if svc.IsRunning() {
-		t.Fatal("expected not running initially")
-	}
-
-	if err := svc.Start(context.Background()); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if !svc.IsRunning() {
-		t.Fatal("expected running after Start")
-	}
-
-	if err := svc.Stop(context.Background()); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if svc.IsRunning() {
-		t.Fatal("expected not running after Stop")
-	}
-}
-
-// =============================================================================
-// Service Provider Daemon* Methods - Nil healthService Tests
-// =============================================================================
-
-func TestBoost_PlatformServiceProvider_DaemonStatus_NilHealthService(t *testing.T) {
-	p := NewPlatformServiceProvider(&PlatformServiceProviderConfig{})
-	_, err := p.DaemonStatus(context.Background())
-	if err == nil {
-		t.Fatal("expected error for nil health service")
-	}
-	if _, ok := err.(ErrServiceNotAvailable); !ok {
-		t.Fatalf("expected ErrServiceNotAvailable, got %T", err)
-	}
-}
-
-func TestBoost_PlatformServiceProvider_DaemonVersion_NilHealthService(t *testing.T) {
-	p := NewPlatformServiceProvider(&PlatformServiceProviderConfig{})
-	_, err := p.DaemonVersion(context.Background())
-	if err == nil {
-		t.Fatal("expected error for nil health service")
-	}
-}
-
-func TestBoost_PlatformServiceProvider_DaemonListServices_NilHealthService(t *testing.T) {
-	p := NewPlatformServiceProvider(&PlatformServiceProviderConfig{})
-	_, err := p.DaemonListServices(context.Background())
-	if err == nil {
-		t.Fatal("expected error for nil health service")
-	}
-}
-
-func TestBoost_PlatformServiceProvider_DaemonGetService_NilHealthService(t *testing.T) {
-	p := NewPlatformServiceProvider(&PlatformServiceProviderConfig{})
-	_, err := p.DaemonGetService(context.Background(), "test")
-	if err == nil {
-		t.Fatal("expected error for nil health service")
-	}
-}
-
-func TestBoost_PlatformServiceProvider_DaemonStartService_NilHealthService(t *testing.T) {
-	p := NewPlatformServiceProvider(&PlatformServiceProviderConfig{})
-	_, err := p.DaemonStartService(context.Background(), "test")
-	if err == nil {
-		t.Fatal("expected error for nil health service")
-	}
-}
-
-func TestBoost_PlatformServiceProvider_DaemonStopService_NilHealthService(t *testing.T) {
-	p := NewPlatformServiceProvider(&PlatformServiceProviderConfig{})
-	_, err := p.DaemonStopService(context.Background(), "test")
-	if err == nil {
-		t.Fatal("expected error for nil health service")
-	}
-}
-
-func TestBoost_PlatformServiceProvider_DaemonRestartService_NilHealthService(t *testing.T) {
-	p := NewPlatformServiceProvider(&PlatformServiceProviderConfig{})
-	_, err := p.DaemonRestartService(context.Background(), "test")
-	if err == nil {
-		t.Fatal("expected error for nil health service")
-	}
-}
-
-func TestBoost_PlatformServiceProvider_DaemonListProtocols_NilHealthService(t *testing.T) {
-	p := NewPlatformServiceProvider(&PlatformServiceProviderConfig{})
-	_, err := p.DaemonListProtocols(context.Background())
-	if err == nil {
-		t.Fatal("expected error for nil health service")
-	}
-}
 
 // =============================================================================
 // KMS Algorithm Conversion Helper Tests

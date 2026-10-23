@@ -21,7 +21,8 @@ import (
 	"net/netip"
 	"sync"
 	"testing"
-	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ipam"
 )
@@ -534,22 +535,17 @@ func TestDeviceKeyGeneration(t *testing.T) {
 
 // TestAllocationIDGeneration tests unique allocation ID generation.
 func TestAllocationIDGeneration(t *testing.T) {
-	backend := &DHTBackend{peerID: "test-peer-id"}
-
-	ip := netip.MustParseAddr("192.168.1.100")
-
-	id1 := backend.generateAllocationID(ip)
-	// Brief pause to ensure different timestamps
-	time.Sleep(time.Millisecond)
-	id2 := backend.generateAllocationID(ip)
+	// Allocation IDs are random, not derived from the clock: two IDs
+	// generated back to back, with no time passing, must still differ.
+	id1 := generateID()
+	id2 := generateID()
 
 	if id1 == id2 {
-		t.Error("generateAllocationID() should produce unique IDs")
+		t.Error("generateID() should produce unique IDs")
 	}
 
-	// IDs should be 16 hex characters (8 bytes)
-	if len(id1) != 16 {
-		t.Errorf("generateAllocationID() = %s (len %d), want 16 chars", id1, len(id1))
+	if _, err := uuid.Parse(id1); err != nil {
+		t.Errorf("generateID() = %q, want a UUID: %v", id1, err)
 	}
 }
 

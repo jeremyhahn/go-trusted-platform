@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"net"
 	"net/netip"
+	"slices"
 	"strconv"
 	"time"
 
@@ -28,6 +29,9 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/services/hostfw"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/services/loadbalancer"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/services/nat64"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/services/vpn"
+	ipsecconfig "github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ipsec/config"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/netplan"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/tunnel"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/vxlan"
 )
@@ -447,6 +451,12 @@ const (
 type OverlayVNIConfig struct {
 	VNI  uint32 `yaml:"vni" json:"vni" mapstructure:"vni"`
 	VLAN uint16 `yaml:"vlan" json:"vlan" mapstructure:"vlan"`
+
+	// Subnet is the VNI's IPv4 subnet. When set, the VNI is routed: every
+	// VTEP answers for the subnet's anycast gateway (its first host address,
+	// netplan.AnycastGateway) with the overlay's anycast-gateway-mac. A VNI
+	// without one is bridged only.
+	Subnet netip.Prefix `yaml:"subnet,omitempty" json:"subnet,omitempty" mapstructure:"subnet"`
 }
 
 type OverlayServiceConfig struct {
@@ -488,6 +498,17 @@ type OverlayServiceConfig struct {
 	// MaxVNIs is the maximum number of VNIs.
 	MaxVNIs int `yaml:"max-vnis,omitempty" json:"max_vnis,omitempty" mapstructure:"max-vnis"`
 
+	// AnycastGatewayMAC is the distributed anycast gateway MAC, shared by
+	// every routed VNI and by every VTEP of the overlay. It is required
+	// when a VNI has a subnet, and allowed only then.
+	AnycastGatewayMAC string `yaml:"anycast-gateway-mac,omitempty" json:"anycast_gateway_mac,omitempty" mapstructure:"anycast-gateway-mac"`
+
+	// L3VNI is the IP-VRF of symmetric IRB (RFC 9135): traffic routed to a
+	// host behind another VTEP crosses it, between the two VTEPs' router
+	// MACs. Zero routes between local hosts only. It needs RR peers and a
+	// routed VNI, and must differ from every L2VNI.
+	L3VNI uint32 `yaml:"l3vni,omitempty" json:"l3vni,omitempty" mapstructure:"l3vni"`
+
 	// VerdictMaxAge bounds the age of the latest signed attestation verdict
 	// accepted for remote VTEP admission. Zero defaults to
 	// DefaultOverlayVerdictMaxAge.
@@ -502,6 +523,14 @@ type OverlayServiceConfig struct {
 	// re-judged against the admission policy. Zero defaults to
 	// DefaultOverlayAdmissionSweepInterval.
 	AdmissionSweepInterval time.Duration `yaml:"admission-sweep-interval,omitempty" json:"admission_sweep_interval,omitempty" mapstructure:"admission-sweep-interval"`
+
+	// IPsec, when enabled, carries every packet between this VTEP and a
+	// remote one in a transport-mode ESP SA behind a fail-closed floor
+	// (docs/sdn/overlay/architecture.md#overlay-ipsec). Its peers are its
+	// static peers and every admitted VTEP on a flood list of this overlay.
+	// Its local-address must be LocalVTEP and its fabric-interface
+	// UnderlayInterface.
+	IPsec *ipsecconfig.Config `yaml:"ipsec,omitempty" json:"ipsec,omitempty" mapstructure:"ipsec"`
 }
 
 // Validate checks if the overlay service configuration is valid.
@@ -549,6 +578,9 @@ func (c *OverlayServiceConfig) Validate() error {
 	if err := c.validateVNIs(); err != nil {
 		return err
 	}
+	if err := c.validateIRB(); err != nil {
+		return err
+	}
 	if c.VerdictMaxAge < 0 {
 		return &ErrOverlayConfigInvalid{Field: "verdict-max-age", Reason: "must not be negative"}
 	}
@@ -561,7 +593,35 @@ func (c *OverlayServiceConfig) Validate() error {
 	if c.VerdictMaxAge == 0 {
 		c.VerdictMaxAge = DefaultOverlayVerdictMaxAge
 	}
+	return c.validateIPsec()
+}
+
+// validateIPsec checks an enabled ipsec section, and that it runs on this
+// VTEP: its local address is LocalVTEP and the interface its floor guards
+// is UnderlayInterface.
+func (c *OverlayServiceConfig) validateIPsec() error {
+	if !c.IPsecEnabled() {
+		return nil
+	}
+	if err := c.IPsec.Validate(); err != nil {
+		return &ErrOverlayIPsecConfigInvalid{Cause: err}
+	}
+	local, err := c.IPsec.Local()
+	if err != nil {
+		return &ErrOverlayIPsecConfigInvalid{Cause: err}
+	}
+	if local != c.LocalVTEP {
+		return &ErrOverlayConfigInvalid{Field: "ipsec.local-address", Reason: "must be local-vtep " + c.LocalVTEP.String()}
+	}
+	if c.IPsec.FabricInterface != c.UnderlayInterface {
+		return &ErrOverlayConfigInvalid{Field: "ipsec.fabric-interface", Reason: "must be underlay-interface " + c.UnderlayInterface}
+	}
 	return nil
+}
+
+// IPsecEnabled reports whether the overlay runs IPsec between its VTEPs.
+func (c *OverlayServiceConfig) IPsecEnabled() bool {
+	return c.IPsec != nil && c.IPsec.Enabled
 }
 
 // validateVNIs checks the VNIs the overlay joins at start: at least one, each
@@ -596,6 +656,110 @@ func (c *OverlayServiceConfig) validateVNIs() error {
 		return &ErrOverlayConfigInvalid{Field: "default-vni", Reason: fmt.Sprintf("VNI %d is not one of vnis", c.DefaultVNI)}
 	}
 	return nil
+}
+
+// validateIRB checks the symmetric IRB settings: the subnets of the routed
+// VNIs, the anycast gateway MAC they share, and the L3VNI. With none of them
+// set the overlay bridges only.
+func (c *OverlayServiceConfig) validateIRB() error {
+	gateways, _, err := c.anycastGateways()
+	if err != nil {
+		return err
+	}
+	if c.L3VNI == 0 {
+		return nil
+	}
+	if c.L3VNI > MaxOverlayVNI {
+		return &ErrOverlayConfigInvalid{Field: "l3vni", Reason: fmt.Sprintf("VNI %d is outside 1-%d", c.L3VNI, MaxOverlayVNI)}
+	}
+	if slices.ContainsFunc(c.VNIs, func(v OverlayVNIConfig) bool { return v.VNI == c.L3VNI }) {
+		return &ErrOverlayConfigInvalid{Field: "l3vni", Reason: fmt.Sprintf("VNI %d is also an L2VNI in vnis", c.L3VNI)}
+	}
+	if len(gateways) == 0 {
+		return &ErrOverlayConfigInvalid{Field: "l3vni", Reason: "needs a VNI with a subnet"}
+	}
+	if len(c.RRPeers) == 0 {
+		return &ErrOverlayConfigInvalid{Field: "l3vni", Reason: "needs rr-peers: routes to other VTEPs come from EVPN"}
+	}
+	return nil
+}
+
+// anycastGateways returns the anycast gateway of each routed VNI, the first
+// host address of its subnet, and the anycast gateway MAC they share. Both
+// are empty when no VNI has a subnet.
+func (c *OverlayServiceConfig) anycastGateways() (map[uint32]netip.Addr, net.HardwareAddr, error) {
+	gateways := make(map[uint32]netip.Addr)
+	routed := make([]OverlayVNIConfig, 0, len(c.VNIs))
+	for _, v := range c.VNIs {
+		if !v.Subnet.IsValid() {
+			continue
+		}
+		if !v.Subnet.Addr().Is4() || v.Subnet != v.Subnet.Masked() {
+			return nil, nil, &ErrOverlayConfigInvalid{Field: "vnis", Reason: fmt.Sprintf("VNI %d: subnet %s is not an IPv4 network prefix", v.VNI, v.Subnet)}
+		}
+		gateway, err := netplan.AnycastGateway(v.Subnet)
+		if err != nil {
+			return nil, nil, &ErrOverlayConfigInvalid{Field: "vnis", Reason: fmt.Sprintf("VNI %d: subnet %s has no host address for the anycast gateway", v.VNI, v.Subnet)}
+		}
+		gateways[v.VNI] = gateway
+		routed = append(routed, v)
+	}
+	// Sorted by network address, two of these canonical prefixes overlap
+	// only if one contains the address of the next.
+	slices.SortFunc(routed, func(a, b OverlayVNIConfig) int { return a.Subnet.Addr().Compare(b.Subnet.Addr()) })
+	for i := 1; i < len(routed); i++ {
+		if routed[i-1].Subnet.Contains(routed[i].Subnet.Addr()) {
+			return nil, nil, &ErrOverlayConfigInvalid{
+				Field:  "vnis",
+				Reason: fmt.Sprintf("VNI %d subnet %s overlaps VNI %d subnet %s", routed[i].VNI, routed[i].Subnet, routed[i-1].VNI, routed[i-1].Subnet),
+			}
+		}
+	}
+
+	if c.AnycastGatewayMAC == "" {
+		if len(gateways) > 0 {
+			return nil, nil, &ErrOverlayConfigInvalid{Field: "anycast-gateway-mac", Reason: "is required when a VNI has a subnet"}
+		}
+		return nil, nil, nil
+	}
+	if len(gateways) == 0 {
+		return nil, nil, &ErrOverlayConfigInvalid{Field: "anycast-gateway-mac", Reason: "needs a VNI with a subnet"}
+	}
+	mac, err := net.ParseMAC(c.AnycastGatewayMAC)
+	if err != nil || len(mac) != 6 || mac[0]&0x01 != 0 || slices.Equal(mac, make(net.HardwareAddr, 6)) {
+		return nil, nil, &ErrOverlayConfigInvalid{Field: "anycast-gateway-mac", Reason: fmt.Sprintf("%q is not a non-zero unicast 6-byte MAC", c.AnycastGatewayMAC)}
+	}
+	if mac[0] == overlayRouterMACPrefix[0] && mac[1] == overlayRouterMACPrefix[1] {
+		return nil, nil, &ErrOverlayConfigInvalid{Field: "anycast-gateway-mac", Reason: "02:00:xx:xx:xx:xx is reserved for the VTEPs' router MACs"}
+	}
+	return gateways, mac, nil
+}
+
+// routedSubnets maps each routed VNI to its subnet; with an L3VNI the
+// overlay originates each as a Type-5 route.
+func (c *OverlayServiceConfig) routedSubnets() map[uint32]netip.Prefix {
+	subnets := make(map[uint32]netip.Prefix)
+	for _, v := range c.VNIs {
+		if v.Subnet.IsValid() {
+			subnets[v.VNI] = v.Subnet
+		}
+	}
+	return subnets
+}
+
+// overlayRouterMACPrefix starts every VTEP's EVPN router MAC; the four
+// octets of the VTEP address follow it.
+var overlayRouterMACPrefix = [2]byte{0x02, 0x00}
+
+// routerMAC is this VTEP's EVPN router MAC with symmetric IRB on, and nil
+// with it off: the locally administered 02:00 followed by the four octets of
+// local-vtep, so it is unique wherever the VTEP address is.
+func (c *OverlayServiceConfig) routerMAC() net.HardwareAddr {
+	if c.L3VNI == 0 || !c.LocalVTEP.Is4() {
+		return nil
+	}
+	octets := c.LocalVTEP.As4()
+	return net.HardwareAddr{overlayRouterMACPrefix[0], overlayRouterMACPrefix[1], octets[0], octets[1], octets[2], octets[3]}
 }
 
 // admissionSweepInterval is how often installed VTEPs are re-admitted: the
@@ -1283,9 +1447,9 @@ type GatewayConfig struct {
 	// service for point-to-point link management on the transit VLAN.
 	Transit *TransitServiceConfig `yaml:"transit,omitempty" json:"transit,omitempty" mapstructure:"transit"`
 
-	// ManagementVPN is the WireGuard admin VPN service configuration.
-	// When present and enabled, the gateway exposes the WireGuard endpoint
-	// for authenticated operator access to management zone endpoints.
+	// ManagementVPN is the remote-access VPN service configuration. When
+	// present and enabled, the gateway admits enrolled, attested operator
+	// devices to the management zone endpoints (docs/vpn/).
 	ManagementVPN *ManagementVPNServiceConfig `yaml:"management_vpn,omitempty" json:"management_vpn,omitempty" mapstructure:"management_vpn"`
 
 	// Tunnels are the GRE, IPsec and WireGuard tunnel configurations.
@@ -1311,12 +1475,17 @@ type GatewayConfig struct {
 	// real netlink implementations.
 	Host *HostRuntime `yaml:"-" json:"-" mapstructure:"-"`
 
-	// Supervisor, when set, runs every enabled service in a supervised child
-	// process instead of this one (#557): the handlers registered for the
-	// sections relay start, stop and health to it, Runtime stays nil here
-	// because the datapath child owns the OVS pipeline, and Apply forwards
-	// the desired configuration to it. Never serialized.
+	// Supervisor, when set, runs the enabled services it Supervises in
+	// supervised child processes instead of this one (#557): the handlers
+	// registered for those sections relay start, stop and health to it, and
+	// once it supervises the datapath services Apply forwards the desired
+	// configuration to it. Never serialized.
 	Supervisor ServiceSupervisor `yaml:"-" json:"-" mapstructure:"-"`
+	// HostedServices, when non-empty, restricts this gateway to the listed
+	// enabled services. A supervised child sets it to its own process's
+	// services so it registers nothing another process owns. Never
+	// serialized.
+	HostedServices []string `yaml:"-" json:"-" mapstructure:"-"`
 }
 
 // Validate checks if the gateway configuration is valid.
@@ -1489,6 +1658,13 @@ func (c *GatewayConfig) EnabledServices() []string {
 	return out
 }
 
+// Hosts reports whether this gateway runs the service itself: always when
+// HostedServices is empty, otherwise only for the services it lists. It says
+// nothing about whether the service is enabled.
+func (c *GatewayConfig) Hosts(service string) bool {
+	return len(c.HostedServices) == 0 || slices.Contains(c.HostedServices, service)
+}
+
 // TransitServiceConfig holds gateway transit service configuration.
 // The transit service manages point-to-point BGP/upstream links on the
 // transit VLAN. The VLAN and p2p prefix are typically set at the sdn.transit
@@ -1505,26 +1681,30 @@ func (c *TransitServiceConfig) Validate() error {
 	return nil
 }
 
-// ManagementVPNServiceConfig holds the WireGuard admin VPN gateway service
-// configuration. The platform WireGuard endpoint exposes access to management
-// zone endpoints only; operator workstations authenticate through this tunnel
-// and are never dual-homed onto a data zone.
+// ManagementVPNServiceConfig holds the remote-access VPN gateway service
+// configuration (docs/vpn/engineering.md §5). Operator workstations reach
+// the management zone endpoints named in allow-to only; they are never
+// dual-homed onto a data zone.
 //
-// The runtime-undefined aspects (WireGuard key management, peer enrollment,
-// IP assignment within the admin subnet) are handled by go-xkms WireGuard
-// support reached via the quicbaas SDK; this struct holds only the gateway
-// service activation flag.
-//
-// Doc reference: docs/architecture/reference-network.md §Management access
+// The service settings are the VPN core's own Config, inlined so the keys sit
+// directly under gateway.management_vpn. The data planes, attestation,
+// posture and person-factor verification are injected through
+// GatewayRuntime.VPN; the enrolled peers and tenant posture policies arrive
+// in the control plane's desired configuration.
 type ManagementVPNServiceConfig struct {
 	// Enabled controls whether the management VPN service is active.
-	// Gateways SHOULD expose this by default.
 	Enabled bool `yaml:"enabled" json:"enabled" mapstructure:"enabled"`
+
+	vpn.Config `yaml:",inline" mapstructure:",squash"`
 }
 
-// Validate checks the management VPN service configuration.
+// Validate checks the service settings of an enabled VPN; a disabled section
+// is not read.
 func (c *ManagementVPNServiceConfig) Validate() error {
-	return nil
+	if !c.Enabled {
+		return nil
+	}
+	return c.Config.WithDefaults().Validate()
 }
 
 // GatewayStatus represents the current status of a gateway.

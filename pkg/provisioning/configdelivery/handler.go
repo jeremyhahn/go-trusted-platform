@@ -22,6 +22,7 @@ import (
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/restwire"
 )
 
 // RestHandler defines the config delivery REST endpoint interface.
@@ -295,7 +296,7 @@ func (h *handler) writeSignError(w http.ResponseWriter, r *http.Request, err err
 
 	var notConfigured ErrRemoteSignNotConfigured
 	if errors.As(err, &notConfigured) {
-		h.responseWriter.Write(w, r, http.StatusConflict, response.WebServiceResponse{
+		h.responseWriter.Write(w, r, http.StatusConflict, restwire.WebServiceResponse{
 			Code:    http.StatusConflict,
 			Error:   err.Error(),
 			Success: false,
@@ -305,7 +306,7 @@ func (h *handler) writeSignError(w http.ResponseWriter, r *http.Request, err err
 
 	var unavailable ErrSignerUnavailable
 	if errors.As(err, &unavailable) {
-		h.responseWriter.Write(w, r, http.StatusServiceUnavailable, response.WebServiceResponse{
+		h.responseWriter.Write(w, r, http.StatusServiceUnavailable, restwire.WebServiceResponse{
 			Code:    http.StatusServiceUnavailable,
 			Error:   err.Error(),
 			Success: false,
@@ -327,13 +328,9 @@ func (h *handler) writeSessionError(w http.ResponseWriter, r *http.Request, err 
 	}
 
 	var expired ErrSessionExpired
-	if errors.As(err, &expired) {
-		h.responseWriter.Error400(w, r, err)
-		return
-	}
-
 	var fulfilled ErrSessionAlreadyFulfilled
-	if errors.As(err, &fulfilled) {
+	var profileIDRequired ErrProfileIDRequired
+	if errors.As(err, &expired) || errors.As(err, &fulfilled) || errors.As(err, &profileIDRequired) {
 		h.responseWriter.Error400(w, r, err)
 		return
 	}

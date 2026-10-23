@@ -159,9 +159,6 @@ func TestMCPZoneProviders(t *testing.T) {
 		"mcp": func(zs gateway.ZoneService) provider {
 			return NewMCPServiceProvider(&MCPServiceProviderConfig{ZoneService: zs})
 		},
-		"platform": func(zs gateway.ZoneService) provider {
-			return NewPlatformServiceProvider(&PlatformServiceProviderConfig{ZoneService: zs})
-		},
 	}
 	for name, newProvider := range mk {
 		t.Run(name, func(t *testing.T) {
@@ -234,7 +231,7 @@ func TestQUICZoneAdapters_CRUD(t *testing.T) {
 	ctx := context.Background()
 	adapters := map[string]quic.GatewayServiceInterface{
 		"zone": newZoneGatewayAdapter(envZoneService(t)),
-		"full": newFullGatewayQUICAdapter(ipamBackends.NewMemoryBackend(), envZoneService(t), nil),
+		"full": newFullGatewayQUICAdapter(ipamBackends.NewMemoryBackend(), envZoneService(t), nil, nil, nil, nil),
 	}
 	for name, a := range adapters {
 		t.Run(name, func(t *testing.T) {
@@ -275,7 +272,7 @@ func TestQUICZoneAdapters_CRUD(t *testing.T) {
 		})
 	}
 
-	none := newFullGatewayQUICAdapter(ipamBackends.NewMemoryBackend(), nil, nil)
+	none := newFullGatewayQUICAdapter(ipamBackends.NewMemoryBackend(), nil, nil, nil, nil, nil)
 	_, err := none.ListNetworkZones(ctx, "")
 	assert.ErrorIs(t, err, errGatewayFeatureNotConfigured)
 	_, err = none.CreateNetworkZone(ctx, &quic.CreateNetworkZoneOptions{Name: "lab"})

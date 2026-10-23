@@ -23,6 +23,8 @@ import (
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ovs"
 	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
+	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers/boundedexec"
+	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers/surface"
 )
 
 // =============================================================================
@@ -34,8 +36,7 @@ import (
 // Adapters run sequentially to avoid OVS lock contention when 6 adapters
 // hit the same backend in parallel, which causes cascading timeouts and hangs.
 func TestSDNMultiProtocol(t *testing.T) {
-	SkipIfNotIntegration(t)
-	SkipIfSDNUnavailable(t)
+	requireOVSDB(t)
 
 	adapters := []SDNCommands{
 		NewCLIAdapter(),
@@ -123,7 +124,7 @@ func testBridgeCreate(t *testing.T, ctx context.Context, adapter SDNCommands) {
 
 	result, err := adapter.BridgeCreate(ctx, opts)
 	if err != nil {
-		skipIfNotImplemented(t, err)
+		surface.RequireImplemented(t, err)
 		t.Fatalf("BridgeCreate failed: %v", err)
 	}
 
@@ -148,7 +149,7 @@ func testBridgeGet(t *testing.T, ctx context.Context, adapter SDNCommands) {
 	createOpts := DefaultBridgeOptions("test-get")
 	createResult, err := adapter.BridgeCreate(ctx, createOpts)
 	if err != nil {
-		skipIfNotImplemented(t, err)
+		surface.RequireImplemented(t, err)
 		t.Fatalf("BridgeCreate failed: %v", err)
 	}
 
@@ -157,7 +158,7 @@ func testBridgeGet(t *testing.T, ctx context.Context, adapter SDNCommands) {
 	// Get the bridge
 	result, err := adapter.BridgeGet(ctx, createResult.BridgeID)
 	if err != nil {
-		skipIfNotImplemented(t, err)
+		surface.RequireImplemented(t, err)
 		t.Fatalf("BridgeGet failed: %v", err)
 	}
 
@@ -175,7 +176,7 @@ func testBridgeList(t *testing.T, ctx context.Context, adapter SDNCommands) {
 	bridge1Opts := DefaultBridgeOptions("test-list-1")
 	bridge1, err := adapter.BridgeCreate(ctx, bridge1Opts)
 	if err != nil {
-		skipIfNotImplemented(t, err)
+		surface.RequireImplemented(t, err)
 		t.Fatalf("BridgeCreate failed: %v", err)
 	}
 	defer adapter.BridgeDelete(ctx, bridge1.BridgeID, BridgeDeleteOptions{Force: true})
@@ -190,7 +191,7 @@ func testBridgeList(t *testing.T, ctx context.Context, adapter SDNCommands) {
 	// List bridges
 	result, err := adapter.BridgeList(ctx, BridgeListOptions{Limit: 100})
 	if err != nil {
-		skipIfNotImplemented(t, err)
+		surface.RequireImplemented(t, err)
 		t.Fatalf("BridgeList failed: %v", err)
 	}
 
@@ -204,14 +205,14 @@ func testBridgeDelete(t *testing.T, ctx context.Context, adapter SDNCommands) {
 	createOpts := DefaultBridgeOptions("test-delete")
 	createResult, err := adapter.BridgeCreate(ctx, createOpts)
 	if err != nil {
-		skipIfNotImplemented(t, err)
+		surface.RequireImplemented(t, err)
 		t.Fatalf("BridgeCreate failed: %v", err)
 	}
 
 	// Delete the bridge
 	result, err := adapter.BridgeDelete(ctx, createResult.BridgeID, BridgeDeleteOptions{Force: true})
 	if err != nil {
-		skipIfNotImplemented(t, err)
+		surface.RequireImplemented(t, err)
 		t.Fatalf("BridgeDelete failed: %v", err)
 	}
 
@@ -240,7 +241,7 @@ func testBridgeLifecycle(t *testing.T, ctx context.Context, adapter SDNCommands)
 
 	createResult, err := adapter.BridgeCreate(ctx, createOpts)
 	if err != nil {
-		skipIfNotImplemented(t, err)
+		surface.RequireImplemented(t, err)
 		t.Fatalf("BridgeCreate failed: %v", err)
 	}
 
@@ -297,7 +298,7 @@ func testPortAdd(t *testing.T, ctx context.Context, adapter SDNCommands) {
 	bridgeOpts := DefaultBridgeOptions("port-add-test")
 	bridge, err := adapter.BridgeCreate(ctx, bridgeOpts)
 	if err != nil {
-		skipIfNotImplemented(t, err)
+		surface.RequireImplemented(t, err)
 		t.Fatalf("BridgeCreate failed: %v", err)
 	}
 	defer adapter.BridgeDelete(ctx, bridge.BridgeID, BridgeDeleteOptions{Force: true})
@@ -306,7 +307,7 @@ func testPortAdd(t *testing.T, ctx context.Context, adapter SDNCommands) {
 	portOpts := DefaultPortOptions(bridge.BridgeID, "port1")
 	result, err := adapter.PortAdd(ctx, portOpts)
 	if err != nil {
-		skipIfNotImplemented(t, err)
+		surface.RequireImplemented(t, err)
 		t.Fatalf("PortAdd failed: %v", err)
 	}
 
@@ -320,7 +321,7 @@ func testPortDelete(t *testing.T, ctx context.Context, adapter SDNCommands) {
 	bridgeOpts := DefaultBridgeOptions("port-delete-test")
 	bridge, err := adapter.BridgeCreate(ctx, bridgeOpts)
 	if err != nil {
-		skipIfNotImplemented(t, err)
+		surface.RequireImplemented(t, err)
 		t.Fatalf("BridgeCreate failed: %v", err)
 	}
 	defer adapter.BridgeDelete(ctx, bridge.BridgeID, BridgeDeleteOptions{Force: true})
@@ -328,14 +329,14 @@ func testPortDelete(t *testing.T, ctx context.Context, adapter SDNCommands) {
 	portOpts := DefaultPortOptions(bridge.BridgeID, "port-to-delete")
 	port, err := adapter.PortAdd(ctx, portOpts)
 	if err != nil {
-		skipIfNotImplemented(t, err)
+		surface.RequireImplemented(t, err)
 		t.Fatalf("PortAdd failed: %v", err)
 	}
 
 	// Delete the port
 	result, err := adapter.PortDelete(ctx, bridge.BridgeID, port.PortID)
 	if err != nil {
-		skipIfNotImplemented(t, err)
+		surface.RequireImplemented(t, err)
 		t.Fatalf("PortDelete failed: %v", err)
 	}
 
@@ -349,7 +350,7 @@ func testPortGetState(t *testing.T, ctx context.Context, adapter SDNCommands) {
 	bridgeOpts := DefaultBridgeOptions("port-state-test")
 	bridge, err := adapter.BridgeCreate(ctx, bridgeOpts)
 	if err != nil {
-		skipIfNotImplemented(t, err)
+		surface.RequireImplemented(t, err)
 		t.Fatalf("BridgeCreate failed: %v", err)
 	}
 	defer adapter.BridgeDelete(ctx, bridge.BridgeID, BridgeDeleteOptions{Force: true})
@@ -357,14 +358,14 @@ func testPortGetState(t *testing.T, ctx context.Context, adapter SDNCommands) {
 	portOpts := DefaultPortOptions(bridge.BridgeID, "state-port")
 	port, err := adapter.PortAdd(ctx, portOpts)
 	if err != nil {
-		skipIfNotImplemented(t, err)
+		surface.RequireImplemented(t, err)
 		t.Fatalf("PortAdd failed: %v", err)
 	}
 
 	// Get port state
 	result, err := adapter.PortGetState(ctx, bridge.BridgeID, port.PortID)
 	if err != nil {
-		skipIfNotImplemented(t, err)
+		surface.RequireImplemented(t, err)
 		t.Fatalf("PortGetState failed: %v", err)
 	}
 
@@ -382,7 +383,7 @@ func testPortSetState(t *testing.T, ctx context.Context, adapter SDNCommands) {
 	bridgeOpts := DefaultBridgeOptions("port-setstate-test")
 	bridge, err := adapter.BridgeCreate(ctx, bridgeOpts)
 	if err != nil {
-		skipIfNotImplemented(t, err)
+		surface.RequireImplemented(t, err)
 		t.Fatalf("BridgeCreate failed: %v", err)
 	}
 	defer adapter.BridgeDelete(ctx, bridge.BridgeID, BridgeDeleteOptions{Force: true})
@@ -390,23 +391,55 @@ func testPortSetState(t *testing.T, ctx context.Context, adapter SDNCommands) {
 	portOpts := DefaultPortOptions(bridge.BridgeID, "setstate-port")
 	port, err := adapter.PortAdd(ctx, portOpts)
 	if err != nil {
-		skipIfNotImplemented(t, err)
+		surface.RequireImplemented(t, err)
 		t.Fatalf("PortAdd failed: %v", err)
 	}
 
-	// Set port state
+	// Set port state, ingress policing (10 Mbps, 1 Mbit burst) and egress
+	// shaping (20 Mbps, 2 Mbit burst).
 	stateOpts := PortSetStateOptions{
-		AdminState: "down",
+		AdminState:   "down",
+		IngressRate:  10_000_000,
+		IngressBurst: 1_000_000,
+		EgressRate:   20_000_000,
+		EgressBurst:  2_000_000,
 	}
 
 	result, err := adapter.PortSetState(ctx, bridge.BridgeID, port.PortID, stateOpts)
 	if err != nil {
-		skipIfNotImplemented(t, err)
+		surface.RequireImplemented(t, err)
 		t.Fatalf("PortSetState failed: %v", err)
 	}
 
 	if result.AdminState != "down" {
 		t.Errorf("Expected AdminState 'down', got '%s'", result.AdminState)
+	}
+
+	// Open vSwitch stores policing in kbps and kb.
+	for column, want := range map[string]string{"ingress_policing_rate": "10000", "ingress_policing_burst": "1000"} {
+		out, err := boundedexec.CommandContext(ctx, "ovs-vsctl", "get", "interface", portOpts.Name, column).CombinedOutput()
+		if err != nil {
+			t.Fatalf("ovs-vsctl get %s: %v: %s", column, err, out)
+		}
+		if got := strings.TrimSpace(string(out)); got != want {
+			t.Errorf("%s = %s, want %s", column, got, want)
+		}
+	}
+
+	// Egress shaping is a linux-htb QoS on the port, stored in bps.
+	out, err := boundedexec.CommandContext(ctx, "ovs-vsctl", "get", "port", portOpts.Name, "qos").CombinedOutput()
+	if err != nil {
+		t.Fatalf("ovs-vsctl get port qos: %v: %s", err, out)
+	}
+	qosUUID := strings.TrimSpace(string(out))
+	for column, want := range map[string]string{"type": "linux-htb", "other_config:max-rate": `"20000000"`} {
+		out, err := boundedexec.CommandContext(ctx, "ovs-vsctl", "get", "qos", qosUUID, column).CombinedOutput()
+		if err != nil {
+			t.Fatalf("ovs-vsctl get qos %s: %v: %s", column, err, out)
+		}
+		if got := strings.TrimSpace(string(out)); got != want {
+			t.Errorf("qos %s = %s, want %s", column, got, want)
+		}
 	}
 }
 
@@ -415,7 +448,7 @@ func testPortGetStats(t *testing.T, ctx context.Context, adapter SDNCommands) {
 	bridgeOpts := DefaultBridgeOptions("port-stats-test")
 	bridge, err := adapter.BridgeCreate(ctx, bridgeOpts)
 	if err != nil {
-		skipIfNotImplemented(t, err)
+		surface.RequireImplemented(t, err)
 		t.Fatalf("BridgeCreate failed: %v", err)
 	}
 	defer adapter.BridgeDelete(ctx, bridge.BridgeID, BridgeDeleteOptions{Force: true})
@@ -423,14 +456,14 @@ func testPortGetStats(t *testing.T, ctx context.Context, adapter SDNCommands) {
 	portOpts := DefaultPortOptions(bridge.BridgeID, "stats-port")
 	port, err := adapter.PortAdd(ctx, portOpts)
 	if err != nil {
-		skipIfNotImplemented(t, err)
+		surface.RequireImplemented(t, err)
 		t.Fatalf("PortAdd failed: %v", err)
 	}
 
 	// Get port stats
 	result, err := adapter.PortGetStats(ctx, bridge.BridgeID, port.PortID)
 	if err != nil {
-		skipIfNotImplemented(t, err)
+		surface.RequireImplemented(t, err)
 		t.Fatalf("PortGetStats failed: %v", err)
 	}
 
@@ -468,7 +501,7 @@ func testFlowAdd(t *testing.T, ctx context.Context, adapter SDNCommands) {
 	bridgeOpts := DefaultBridgeOptions("flow-add-test")
 	bridge, err := adapter.BridgeCreate(ctx, bridgeOpts)
 	if err != nil {
-		skipIfNotImplemented(t, err)
+		surface.RequireImplemented(t, err)
 		t.Fatalf("BridgeCreate failed: %v", err)
 	}
 	defer adapter.BridgeDelete(ctx, bridge.BridgeID, BridgeDeleteOptions{Force: true})
@@ -477,7 +510,7 @@ func testFlowAdd(t *testing.T, ctx context.Context, adapter SDNCommands) {
 	flowOpts := DefaultFlowOptions(bridge.BridgeID, "flow1")
 	result, err := adapter.FlowAdd(ctx, flowOpts)
 	if err != nil {
-		skipIfNotImplemented(t, err)
+		surface.RequireImplemented(t, err)
 		t.Fatalf("FlowAdd failed: %v", err)
 	}
 
@@ -494,7 +527,7 @@ func testFlowDelete(t *testing.T, ctx context.Context, adapter SDNCommands) {
 	bridgeOpts := DefaultBridgeOptions("flow-delete-test")
 	bridge, err := adapter.BridgeCreate(ctx, bridgeOpts)
 	if err != nil {
-		skipIfNotImplemented(t, err)
+		surface.RequireImplemented(t, err)
 		t.Fatalf("BridgeCreate failed: %v", err)
 	}
 	defer adapter.BridgeDelete(ctx, bridge.BridgeID, BridgeDeleteOptions{Force: true})
@@ -502,14 +535,14 @@ func testFlowDelete(t *testing.T, ctx context.Context, adapter SDNCommands) {
 	flowOpts := DefaultFlowOptions(bridge.BridgeID, "flow-to-delete")
 	flow, err := adapter.FlowAdd(ctx, flowOpts)
 	if err != nil {
-		skipIfNotImplemented(t, err)
+		surface.RequireImplemented(t, err)
 		t.Fatalf("FlowAdd failed: %v", err)
 	}
 
 	// Delete the flow
 	result, err := adapter.FlowDelete(ctx, bridge.BridgeID, flow.FlowID)
 	if err != nil {
-		skipIfNotImplemented(t, err)
+		surface.RequireImplemented(t, err)
 		t.Fatalf("FlowDelete failed: %v", err)
 	}
 
@@ -523,7 +556,7 @@ func testFlowList(t *testing.T, ctx context.Context, adapter SDNCommands) {
 	bridgeOpts := DefaultBridgeOptions("flow-list-test")
 	bridge, err := adapter.BridgeCreate(ctx, bridgeOpts)
 	if err != nil {
-		skipIfNotImplemented(t, err)
+		surface.RequireImplemented(t, err)
 		t.Fatalf("BridgeCreate failed: %v", err)
 	}
 	defer adapter.BridgeDelete(ctx, bridge.BridgeID, BridgeDeleteOptions{Force: true})
@@ -533,7 +566,7 @@ func testFlowList(t *testing.T, ctx context.Context, adapter SDNCommands) {
 	flow1Opts.Priority = 100
 	flow1, err := adapter.FlowAdd(ctx, flow1Opts)
 	if err != nil {
-		skipIfNotImplemented(t, err)
+		surface.RequireImplemented(t, err)
 		t.Fatalf("FlowAdd failed: %v", err)
 	}
 	defer adapter.FlowDelete(ctx, bridge.BridgeID, flow1.FlowID)
@@ -542,7 +575,7 @@ func testFlowList(t *testing.T, ctx context.Context, adapter SDNCommands) {
 	flow2Opts.Priority = 200
 	flow2, err := adapter.FlowAdd(ctx, flow2Opts)
 	if err != nil {
-		skipIfNotImplemented(t, err)
+		surface.RequireImplemented(t, err)
 		t.Fatalf("FlowAdd failed: %v", err)
 	}
 	defer adapter.FlowDelete(ctx, bridge.BridgeID, flow2.FlowID)
@@ -550,7 +583,7 @@ func testFlowList(t *testing.T, ctx context.Context, adapter SDNCommands) {
 	// List flows
 	result, err := adapter.FlowList(ctx, bridge.BridgeID, FlowListOptions{Limit: 100})
 	if err != nil {
-		skipIfNotImplemented(t, err)
+		surface.RequireImplemented(t, err)
 		t.Fatalf("FlowList failed: %v", err)
 	}
 
@@ -583,7 +616,7 @@ func testVLANCreate(t *testing.T, ctx context.Context, adapter SDNCommands) {
 	bridgeOpts := DefaultBridgeOptions("vlan-create-test")
 	bridge, err := adapter.BridgeCreate(ctx, bridgeOpts)
 	if err != nil {
-		skipIfNotImplemented(t, err)
+		surface.RequireImplemented(t, err)
 		t.Fatalf("BridgeCreate failed: %v", err)
 	}
 	defer adapter.BridgeDelete(ctx, bridge.BridgeID, BridgeDeleteOptions{Force: true})
@@ -593,7 +626,7 @@ func testVLANCreate(t *testing.T, ctx context.Context, adapter SDNCommands) {
 
 	result, err := adapter.VLANCreate(ctx, opts)
 	if err != nil {
-		skipIfNotImplemented(t, err)
+		surface.RequireImplemented(t, err)
 		t.Fatalf("VLANCreate failed: %v", err)
 	}
 
@@ -610,7 +643,7 @@ func testVLANDelete(t *testing.T, ctx context.Context, adapter SDNCommands) {
 	bridgeOpts := DefaultBridgeOptions("vlan-delete-test")
 	bridge, err := adapter.BridgeCreate(ctx, bridgeOpts)
 	if err != nil {
-		skipIfNotImplemented(t, err)
+		surface.RequireImplemented(t, err)
 		t.Fatalf("BridgeCreate failed: %v", err)
 	}
 	defer adapter.BridgeDelete(ctx, bridge.BridgeID, BridgeDeleteOptions{Force: true})
@@ -620,13 +653,13 @@ func testVLANDelete(t *testing.T, ctx context.Context, adapter SDNCommands) {
 
 	vlan, err := adapter.VLANCreate(ctx, opts)
 	if err != nil {
-		skipIfNotImplemented(t, err)
+		surface.RequireImplemented(t, err)
 		t.Fatalf("VLANCreate failed: %v", err)
 	}
 
 	result, err := adapter.VLANDelete(ctx, bridge.BridgeID, vlan.VLANID)
 	if err != nil {
-		skipIfNotImplemented(t, err)
+		surface.RequireImplemented(t, err)
 		t.Fatalf("VLANDelete failed: %v", err)
 	}
 
@@ -640,7 +673,7 @@ func testVLANList(t *testing.T, ctx context.Context, adapter SDNCommands) {
 	bridgeOpts := DefaultBridgeOptions("vlan-list-test")
 	bridge, err := adapter.BridgeCreate(ctx, bridgeOpts)
 	if err != nil {
-		skipIfNotImplemented(t, err)
+		surface.RequireImplemented(t, err)
 		t.Fatalf("BridgeCreate failed: %v", err)
 	}
 	defer adapter.BridgeDelete(ctx, bridge.BridgeID, BridgeDeleteOptions{Force: true})
@@ -648,7 +681,7 @@ func testVLANList(t *testing.T, ctx context.Context, adapter SDNCommands) {
 	// Create some VLANs
 	vlan1, err := adapter.VLANCreate(ctx, DefaultVLANOptions(GenerateUniqueVLANID(), bridge.BridgeID))
 	if err != nil {
-		skipIfNotImplemented(t, err)
+		surface.RequireImplemented(t, err)
 		t.Fatalf("VLANCreate failed: %v", err)
 	}
 	defer adapter.VLANDelete(ctx, bridge.BridgeID, vlan1.VLANID)
@@ -662,7 +695,7 @@ func testVLANList(t *testing.T, ctx context.Context, adapter SDNCommands) {
 	// List VLANs
 	result, err := adapter.VLANList(ctx, VLANListOptions{BridgeID: bridge.BridgeID, Limit: 100})
 	if err != nil {
-		skipIfNotImplemented(t, err)
+		surface.RequireImplemented(t, err)
 		t.Fatalf("VLANList failed: %v", err)
 	}
 
@@ -695,7 +728,7 @@ func testPolicyApply(t *testing.T, ctx context.Context, adapter SDNCommands) {
 	bridgeOpts := DefaultBridgeOptions("policy-apply-test")
 	bridge, err := adapter.BridgeCreate(ctx, bridgeOpts)
 	if err != nil {
-		skipIfNotImplemented(t, err)
+		surface.RequireImplemented(t, err)
 		t.Fatalf("BridgeCreate failed: %v", err)
 	}
 	defer adapter.BridgeDelete(ctx, bridge.BridgeID, BridgeDeleteOptions{Force: true})
@@ -705,7 +738,7 @@ func testPolicyApply(t *testing.T, ctx context.Context, adapter SDNCommands) {
 
 	result, err := adapter.PolicyApply(ctx, opts)
 	if err != nil {
-		skipIfNotImplemented(t, err)
+		surface.RequireImplemented(t, err)
 		t.Fatalf("PolicyApply failed: %v", err)
 	}
 
@@ -723,7 +756,7 @@ func testPolicyGet(t *testing.T, ctx context.Context, adapter SDNCommands) {
 	bridgeOpts := DefaultBridgeOptions("policy-get-test")
 	bridge, err := adapter.BridgeCreate(ctx, bridgeOpts)
 	if err != nil {
-		skipIfNotImplemented(t, err)
+		surface.RequireImplemented(t, err)
 		t.Fatalf("BridgeCreate failed: %v", err)
 	}
 	defer adapter.BridgeDelete(ctx, bridge.BridgeID, BridgeDeleteOptions{Force: true})
@@ -734,14 +767,14 @@ func testPolicyGet(t *testing.T, ctx context.Context, adapter SDNCommands) {
 
 	applied, err := adapter.PolicyApply(ctx, applyOpts)
 	if err != nil {
-		skipIfNotImplemented(t, err)
+		surface.RequireImplemented(t, err)
 		t.Fatalf("PolicyApply failed: %v", err)
 	}
 
 	// Get the policy
 	result, err := adapter.PolicyGet(ctx, applied.PolicyID)
 	if err != nil {
-		skipIfNotImplemented(t, err)
+		surface.RequireImplemented(t, err)
 		t.Fatalf("PolicyGet failed: %v", err)
 	}
 
@@ -759,7 +792,7 @@ func testPolicyList(t *testing.T, ctx context.Context, adapter SDNCommands) {
 	bridgeOpts := DefaultBridgeOptions("policy-list-test")
 	bridge, err := adapter.BridgeCreate(ctx, bridgeOpts)
 	if err != nil {
-		skipIfNotImplemented(t, err)
+		surface.RequireImplemented(t, err)
 		t.Fatalf("BridgeCreate failed: %v", err)
 	}
 	defer adapter.BridgeDelete(ctx, bridge.BridgeID, BridgeDeleteOptions{Force: true})
@@ -767,7 +800,7 @@ func testPolicyList(t *testing.T, ctx context.Context, adapter SDNCommands) {
 	// Apply some policies
 	policy1, err := adapter.PolicyApply(ctx, DefaultPolicyOptions(GenerateUniqueBridgeName("policy-list-1"), bridge.BridgeID))
 	if err != nil {
-		skipIfNotImplemented(t, err)
+		surface.RequireImplemented(t, err)
 		t.Fatalf("PolicyApply failed: %v", err)
 	}
 	_ = policy1 // Keep reference for potential cleanup
@@ -781,7 +814,7 @@ func testPolicyList(t *testing.T, ctx context.Context, adapter SDNCommands) {
 	// List policies
 	result, err := adapter.PolicyList(ctx, PolicyListOptions{Limit: 100})
 	if err != nil {
-		skipIfNotImplemented(t, err)
+		surface.RequireImplemented(t, err)
 		t.Fatalf("PolicyList failed: %v", err)
 	}
 
@@ -794,59 +827,13 @@ func testPolicyList(t *testing.T, ctx context.Context, adapter SDNCommands) {
 // Helper Functions
 // =============================================================================
 
-// skipIfNotImplemented skips the test if the error indicates the method is not implemented.
-func skipIfNotImplemented(t *testing.T, err error) {
-	t.Helper()
-
-	if err == nil {
-		return
-	}
-
-	switch err.(type) {
-	case ErrGRPCNotImplemented:
-		t.Skipf("Not implemented: %v", err)
-	case ErrQUICSDNNotImplemented:
-		t.Skipf("Not implemented: %v", err)
-	case ErrMCPSDNNotImplemented:
-		t.Skipf("Not implemented: %v", err)
-	case ErrUnixSDNNotImplemented:
-		t.Skipf("Not implemented: %v", err)
-	}
-
-	// Also check for service unavailability patterns (daemon test mode
-	// does not register vtpm/sdn service handlers)
-	errMsg := strings.ToLower(err.Error())
-	if strings.Contains(errMsg, "not implemented") ||
-		strings.Contains(errMsg, "unimplemented") ||
-		strings.Contains(errMsg, "service unavailable") ||
-		strings.Contains(errMsg, "not available") ||
-		strings.Contains(errMsg, "unknown service") ||
-		strings.Contains(errMsg, "connection required") ||
-		strings.Contains(errMsg, "404 page not found") ||
-		strings.Contains(errMsg, "status: 404") ||
-		strings.Contains(errMsg, "unknown flag") ||
-		strings.Contains(errMsg, "context canceled") ||
-		strings.Contains(errMsg, "context deadline exceeded") ||
-		strings.Contains(errMsg, "no such file or directory") ||
-		strings.Contains(errMsg, "openflow") ||
-		strings.Contains(errMsg, "connect openflow") ||
-		strings.Contains(errMsg, ".mgmt") ||
-		strings.Contains(errMsg, "policy not found") ||
-		strings.Contains(errMsg, "add_flow failed") ||
-		strings.Contains(errMsg, "sdnaddflow") ||
-		strings.Contains(errMsg, "policy engine not configured") {
-		t.Skipf("Service not available: %v", err)
-	}
-}
-
 // =============================================================================
 // Protocol-Specific Tests
 // =============================================================================
 
 // TestCLISDNOperations tests SDN operations specifically via CLI.
 func TestCLISDNOperations(t *testing.T) {
-	SkipIfNotIntegration(t)
-	SkipIfSDNUnavailable(t)
+	requireOVSDB(t)
 
 	ctx, cancel := DefaultTestContext()
 	defer cancel()
@@ -860,8 +847,7 @@ func TestCLISDNOperations(t *testing.T) {
 
 // TestRESTSDNOperations tests SDN operations specifically via REST.
 func TestRESTSDNOperations(t *testing.T) {
-	SkipIfNotIntegration(t)
-	SkipIfSDNUnavailable(t)
+	requireOVSDB(t)
 
 	ctx, cancel := DefaultTestContext()
 	defer cancel()
@@ -875,8 +861,7 @@ func TestRESTSDNOperations(t *testing.T) {
 
 // TestGRPCSDNOperations tests SDN operations specifically via gRPC.
 func TestGRPCSDNOperations(t *testing.T) {
-	SkipIfNotIntegration(t)
-	SkipIfSDNUnavailable(t)
+	requireOVSDB(t)
 
 	ctx, cancel := DefaultTestContext()
 	defer cancel()
@@ -890,8 +875,7 @@ func TestGRPCSDNOperations(t *testing.T) {
 
 // TestQUICSDNOperations tests SDN operations specifically via QUIC.
 func TestQUICSDNOperations(t *testing.T) {
-	SkipIfNotIntegration(t)
-	SkipIfSDNUnavailable(t)
+	requireOVSDB(t)
 
 	ctx, cancel := DefaultTestContext()
 	defer cancel()
@@ -905,8 +889,7 @@ func TestQUICSDNOperations(t *testing.T) {
 
 // TestMCPSDNOperations tests SDN operations specifically via MCP.
 func TestMCPSDNOperations(t *testing.T) {
-	SkipIfNotIntegration(t)
-	SkipIfSDNUnavailable(t)
+	requireOVSDB(t)
 
 	ctx, cancel := DefaultTestContext()
 	defer cancel()
@@ -920,8 +903,7 @@ func TestMCPSDNOperations(t *testing.T) {
 
 // TestUnixSDNOperations tests SDN operations specifically via Unix socket.
 func TestUnixSDNOperations(t *testing.T) {
-	SkipIfNotIntegration(t)
-	SkipIfSDNUnavailable(t)
+	requireOVSDB(t)
 
 	ctx, cancel := DefaultTestContext()
 	defer cancel()
@@ -939,8 +921,7 @@ func TestUnixSDNOperations(t *testing.T) {
 
 // TestSDNErrorHandling tests error handling across protocols.
 func TestSDNErrorHandling(t *testing.T) {
-	SkipIfNotIntegration(t)
-	SkipIfSDNUnavailable(t)
+	requireOVSDB(t)
 
 	ctx, cancel := DefaultTestContext()
 	defer cancel()
@@ -981,8 +962,7 @@ func TestSDNErrorHandling(t *testing.T) {
 
 // TestSDNStressOperations performs stress testing of SDN operations.
 func TestSDNStressOperations(t *testing.T) {
-	SkipIfNotIntegration(t)
-	SkipIfSDNUnavailable(t)
+	requireOVSDB(t)
 
 	ctx, cancel := LongRunningTestContext()
 	defer cancel()
@@ -1014,15 +994,12 @@ func TestSDNStressOperations(t *testing.T) {
 	// Wait for all creations
 	for i := 0; i < numBridges; i++ {
 		if err := <-errors; err != nil {
-			skipIfNotImplemented(t, err)
+			surface.RequireImplemented(t, err)
 			t.Logf("Bridge creation error: %v", err)
 		}
 	}
 
-	// Wait for things to settle
-	time.Sleep(time.Second)
-
-	// Cleanup
+	// Cleanup: every create has returned above, so nothing is still in flight
 	for _, bridgeID := range bridgeIDs {
 		if bridgeID != "" {
 			adapter.BridgeDelete(ctx, bridgeID, BridgeDeleteOptions{Force: true})

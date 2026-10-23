@@ -63,6 +63,44 @@ func TestClassTable_EveryGatewayServiceIsPlaced(t *testing.T) {
 	require.ErrorAs(t, err, &unplaced)
 }
 
+func TestSupervises_OnlyTheMovedProcessIsSupervised(t *testing.T) {
+	sup := &Supervisor{}
+
+	assert.True(t, sup.Supervises(gateway.ServiceTransit), "routing is the first process moved out (#557)")
+	assert.True(t, sup.Supervises(gateway.ServiceProxy), "proxy is the second process moved out (#557)")
+	for _, service := range []string{gateway.ServiceDHCP, gateway.ServicePXE, gateway.ServiceEdge} {
+		assert.Truef(t, sup.Supervises(service), "%s: provisioning is the third process moved out (#557)", service)
+	}
+	datapath, err := DefinitionByName("datapath")
+	require.NoError(t, err)
+	for _, service := range datapath.Services {
+		assert.Truef(t, sup.Supervises(service), "%s: datapath is the last process moved out (#557, R14)", service)
+	}
+	// vpn moves once it has a backend; until then it runs in the parent.
+	assert.False(t, sup.Supervises(gateway.ServiceManagementVPN), "vpn has no backend yet and has not moved")
+
+	// Every moved parser drops to the service account. The one moved
+	// process that keeps privilege is the kernel class, and it keeps
+	// exactly the two capabilities the kernel needs from it.
+	for _, def := range Definitions() {
+		if !def.Supervised {
+			continue
+		}
+		if def.Class == ClassKernel {
+			assert.Equal(t, "datapath", def.Name, "datapath is the only kernel-class process")
+			assert.False(t, def.Unprivileged, "datapath programs the kernel and cannot drop to the service account")
+			assert.ElementsMatch(t, []uintptr{unix.CAP_NET_ADMIN, unix.CAP_NET_RAW}, def.Capabilities)
+			continue
+		}
+		assert.Equal(t, ClassParser, def.Class, def.Name)
+		assert.True(t, def.Unprivileged, "%s: a moved parser drops to the service account", def.Name)
+	}
+}
+
+func TestSupervises_AnUnplacedServiceIsNotSupervised(t *testing.T) {
+	assert.False(t, (&Supervisor{}).Supervises("not-a-service"))
+}
+
 func TestClassTable_TheTranslatorRunsInTheKernelClass(t *testing.T) {
 	// NAT64 programs OVS flows and drives the Jool kernel module, so it
 	// needs the datapath process's CAP_NET_ADMIN.
@@ -124,6 +162,18 @@ func TestClassTable_OnlyTheKernelClassKeepsNetAdmin(t *testing.T) {
 	assert.Equal(t, 1, kernel, "exactly one process programs the kernel")
 }
 
+func TestClassTable_EveryProcessOpensOnlyServiceFamilies(t *testing.T) {
+	for _, def := range Definitions() {
+		// A process with no families could not reach its own supervisor.
+		assert.Containsf(t, def.AddressFamilies, uint32(unix.AF_UNIX),
+			"process %q needs AF_UNIX for its IPC", def.Name)
+		for _, family := range []uint32{unix.AF_PACKET, unix.AF_ALG, unix.AF_VSOCK, unix.AF_KEY} {
+			assert.NotContainsf(t, def.AddressFamilies, family,
+				"process %q opens no family %d socket", def.Name, family)
+		}
+	}
+}
+
 func TestProcesses_OnlyTheNeededOnesWithOnlyTheEnabledServices(t *testing.T) {
 	defs, err := Processes([]string{gateway.ServiceNAT, gateway.ServiceProxy, gateway.ServiceFirewall})
 	require.NoError(t, err)
@@ -164,13 +214,68 @@ type fakeNode struct {
 	mu       sync.Mutex
 	services []gateway.ServiceReport
 	applied  *gwstate.DesiredConfig
+	// applies are the versions of every document applied, in order. The
+	// node outlives a crash of its child, so this is the history across
+	// relaunches.
+	applies  []string
 	state    gwstate.DesiredConfigState
 	applyErr error
+	// applyFailCount, when positive, is how many more applies fail with
+	// applyErr before it clears.
+	applyFailCount int
+	// holdApply and holdStatus, when set, hold the next Apply or the next
+	// status question mid-flight; each holds one call.
+	holdApply  *heldCall
+	holdStatus *heldCall
+}
+
+// heldCall holds one call to a fake in the child mid-flight, so a test can
+// act while the supervisor waits on it: entered closes when the call
+// arrives, and the call returns once release is closed.
+type heldCall struct {
+	entered chan struct{}
+	release chan struct{}
+}
+
+func newHeldCall() *heldCall {
+	return &heldCall{entered: make(chan struct{}), release: make(chan struct{})}
+}
+
+// hold blocks the calling fake until the test releases it; a nil call
+// holds nothing.
+func (h *heldCall) hold() {
+	if h == nil {
+		return
+	}
+	close(h.entered)
+	<-h.release
+}
+
+// awaitEntered waits for the held call to arrive.
+func (h *heldCall) awaitEntered(t *testing.T, ctx context.Context) {
+	t.Helper()
+	select {
+	case <-h.entered:
+	case <-ctx.Done():
+		t.Fatalf("the held call never arrived: %v", ctx.Err())
+	}
+}
+
+func (f *fakeNode) appliedVersions() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.applies...)
 }
 
 func (f *fakeNode) GetState() gateway.GatewayState { return gateway.GatewayStateRunning }
 
 func (f *fakeNode) ServiceReports() []gateway.ServiceReport {
+	f.mu.Lock()
+	held := f.holdStatus
+	f.holdStatus = nil
+	f.mu.Unlock()
+	held.hold()
+
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return append([]gateway.ServiceReport(nil), f.services...)
@@ -188,14 +293,34 @@ func (f *fakeNode) setHealth(service string, active bool, health error) {
 }
 
 func (f *fakeNode) Snapshot() *gwstate.Snapshot {
-	return &gwstate.Snapshot{GatewayID: "child"}
+	return &gwstate.Snapshot{
+		GatewayID: "child",
+		BGP: gwstate.BGPState{
+			PeerCount: 1,
+			Peers:     []gwstate.BGPPeerState{{Address: "10.255.0.2", State: "established"}},
+		},
+	}
 }
 
 func (f *fakeNode) Apply(_ context.Context, desired *gwstate.DesiredConfig) error {
 	f.mu.Lock()
+	held := f.holdApply
+	f.holdApply = nil
+	f.mu.Unlock()
+	held.hold()
+
+	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.applied = desired
-	return f.applyErr
+	f.applies = append(f.applies, desired.Version)
+	err := f.applyErr
+	if f.applyFailCount > 0 {
+		f.applyFailCount--
+		if f.applyFailCount == 0 {
+			f.applyErr = nil
+		}
+	}
+	return err
 }
 
 func (f *fakeNode) DesiredConfigState() gwstate.DesiredConfigState {
@@ -210,7 +335,6 @@ func (f *fakeNode) DesiredConfigState() gwstate.DesiredConfigState {
 type fakeChild struct {
 	pid    int
 	server *ipc.Server
-	node   *fakeNode
 
 	once sync.Once
 	done chan struct{}
@@ -271,7 +395,12 @@ type fakeLauncher struct {
 	children []*fakeChild
 	nodes    map[string]*fakeNode
 	failWith error
-	nextPID  int
+	// failCount, when positive, is how many more launches fail with
+	// failWith before it clears, so a transient failure ends after a counted
+	// number of launches rather than after a wall-clock wait the restart
+	// loop can outrun (#742).
+	failCount int
+	nextPID   int
 	// gate, when set, blocks inside Launch until it is closed, so a test
 	// can run a stop while a launch is in flight. launched is closed once
 	// Launch has been entered.
@@ -333,6 +462,12 @@ func (l *fakeLauncher) Launch(ctx context.Context, spec Spec) (Child, error) {
 	l.mu.Lock()
 	l.launches = append(l.launches, spec)
 	failure := l.failWith
+	if l.failCount > 0 {
+		l.failCount--
+		if l.failCount == 0 {
+			l.failWith = nil
+		}
+	}
 	l.nextPID++
 	pid := l.nextPID
 	l.mu.Unlock()
@@ -368,7 +503,7 @@ func (l *fakeLauncher) Launch(ctx context.Context, spec Spec) (Child, error) {
 	l.mu.Lock()
 	stubborn := l.stubborn
 	l.mu.Unlock()
-	child := &fakeChild{pid: pid, server: server, node: node, done: make(chan struct{}), stubborn: stubborn, launcher: l}
+	child := &fakeChild{pid: pid, server: server, done: make(chan struct{}), stubborn: stubborn, launcher: l}
 	go func() {
 		if err := server.Serve(); err != nil {
 			l.t.Errorf("child %s serve: %v", spec.Definition.Name, err)
@@ -440,7 +575,8 @@ func awaitRelaunch(t *testing.T, s *Supervisor, l *fakeLauncher, process string,
 // was asked for, so backoff growth is asserted without waiting for it.
 //
 // It collapses the restart backoff and the readiness poll to a millisecond,
-// and only those. stopTimeout is the supervisor's configured StopTimeout, and
+// and only those; each poll also moves Now forward by readyPollInterval, so
+// a ReadyTimeout expires without being waited out. stopTimeout is the supervisor's configured StopTimeout, and
 // that wait runs in real time: it is the window a child gets to exit after
 // SIGTERM before it is killed. Collapsing it too gave every test a 1ms stop
 // window, so a child that took longer than that to exit -- routine under
@@ -451,17 +587,47 @@ type testClock struct {
 	mu          sync.Mutex
 	delays      []time.Duration
 	stopTimeout time.Duration
+	// held, when set, holds the next wait of heldDelay until the test
+	// releases it; see holdDelay.
+	heldDelay time.Duration
+	held      *heldCall
+	// elapsed is how far the readiness polls have moved Now past the wall
+	// clock. Each collapsed poll stands for readyPollInterval, so a
+	// ReadyTimeout runs out after its polls rather than its real duration
+	// (#284).
+	elapsed time.Duration
 }
 
-func (c *testClock) Now() time.Time { return time.Now() }
+func (c *testClock) Now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return time.Now().Add(c.elapsed)
+}
 
 func (c *testClock) After(d time.Duration) <-chan time.Time {
 	c.mu.Lock()
 	c.delays = append(c.delays, d)
+	if d == readyPollInterval {
+		c.elapsed += d
+	}
 	stopTimeout := c.stopTimeout
+	held := c.held
+	if held != nil && d == c.heldDelay {
+		c.held = nil
+	} else {
+		held = nil
+	}
 	c.mu.Unlock()
 	if d == stopTimeout {
 		return time.After(d)
+	}
+	if held != nil {
+		fired := make(chan time.Time, 1)
+		go func() {
+			held.hold()
+			fired <- time.Now()
+		}()
+		return fired
 	}
 	// Restart delays are collapsed so the tests do not sleep; the recorded
 	// value is what the backoff policy chose.
@@ -482,6 +648,34 @@ func (c *testClock) restartDelays(minimum time.Duration) []time.Duration {
 
 // newSupervisor builds a supervisor over the fake launcher with sockets in a
 // short-lived directory (Unix socket paths are length-limited).
+// holdDelay holds the next wait of exactly delay — a restart backoff the test
+// chose a distinct length for — until the returned call is released. Its
+// entered closes when the supervisor starts waiting.
+func (c *testClock) holdDelay(delay time.Duration) *heldCall {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.heldDelay, c.held = delay, newHeldCall()
+	return c.held
+}
+
+// waitingContext closes waiting the first time its Done channel is asked
+// for: the point a call starts selecting on it, as one waiting for the apply
+// slot does.
+type waitingContext struct {
+	context.Context
+	once    sync.Once
+	waiting chan struct{}
+}
+
+func newWaitingContext(ctx context.Context) *waitingContext {
+	return &waitingContext{Context: ctx, waiting: make(chan struct{})}
+}
+
+func (c *waitingContext) Done() <-chan struct{} {
+	c.once.Do(func() { close(c.waiting) })
+	return c.Context.Done()
+}
+
 func newSupervisor(t *testing.T, tune func(*Config)) (*Supervisor, *fakeLauncher, *testClock) {
 	t.Helper()
 	dir, err := os.MkdirTemp("/tmp", "gwsup")
@@ -493,7 +687,7 @@ func newSupervisor(t *testing.T, tune func(*Config)) (*Supervisor, *fakeLauncher
 	cfg := Config{
 		Launcher:      launcher,
 		RuntimeDir:    dir,
-		ConfigFile:    filepath.Join(dir, "config.yaml"),
+		Inherited:     Inherited{ConfigFile: filepath.Join(dir, "config.yaml")},
 		SocketGID:     -1,
 		Clock:         clock,
 		ReadyTimeout:  2 * time.Second,
@@ -559,6 +753,9 @@ func TestStartService_CreatesTheControlSocketDirectory(t *testing.T) {
 			"so the service group needs write; at 0750 every parser gets EACCES from bind")
 	assert.NotZero(t, info.Mode()&os.ModeSticky,
 		"the parsers share one account, so the sticky bit is what stops one unlinking another's socket")
+	assert.NotZero(t, info.Mode()&os.ModeSetgid,
+		"every socket bound here inherits the service group, so the datapath child needs no CAP_CHOWN")
+	assert.Equal(t, uint32(os.Getgid()), info.Sys().(*syscall.Stat_t).Gid, "the directory has the socket group")
 	assert.Zero(t, info.Mode().Perm()&0o007, "and nothing else on the host may do anything")
 
 	// An unusable path is a typed error, not a launch that half-happens.
@@ -609,6 +806,26 @@ func TestBindableByServiceGroup_TheModesAChildCanAndCannotBindIn(t *testing.T) {
 	assert.Contains(t, err.Error(), "bind its control socket")
 }
 
+func TestSocketDirFault_ASocketGroupNeedsTheSetgidBit(t *testing.T) {
+	// The datapath child stays uid 0 but keeps only CAP_NET_ADMIN and
+	// CAP_NET_RAW and is not in the service group: it cannot chown its socket,
+	// so the socket has to inherit the group from a setgid directory.
+	const dir = "/run/gatewayd"
+	assert.NoError(t, socketDirFault(dir, os.ModeDir|runtimeDirMode, true))
+	assert.NoError(t, socketDirFault(dir, os.ModeDir|os.ModeSticky|0o770, false),
+		"without a socket group there is nothing to inherit")
+
+	var notSetgid *ErrSocketDirNotSetgid
+	require.ErrorAs(t, socketDirFault(dir, os.ModeDir|os.ModeSticky|0o770, true), &notSetgid)
+	assert.Equal(t, os.FileMode(0o770), notSetgid.Mode)
+	assert.Contains(t, notSetgid.Error(), "0770")
+	assert.Contains(t, notSetgid.Error(), "setgid")
+
+	var notWritable *ErrSocketDirNotGroupWritable
+	require.ErrorAs(t, socketDirFault(dir, os.ModeDir|os.ModeSetgid|0o750, true), &notWritable,
+		"group write is checked first: without it no child binds at all")
+}
+
 func TestStartService_RefusesAServiceWithNoProcessClass(t *testing.T) {
 	supervisor, launcher, _ := newSupervisor(t, nil)
 	var unplaced *ErrServiceUnplaced
@@ -655,9 +872,9 @@ func TestStartService_ReportsAChildThatDidNotActivateTheService(t *testing.T) {
 	assert.Nil(t, live)
 	assert.Nil(t, client)
 
-	launched := launcher.launchCount()
-	assert.Never(t, func() bool { return launcher.launchCount() > launched }, 500*time.Millisecond, 50*time.Millisecond,
-		"a process nobody wants is not restarted")
+	// The stop waited for the child's watch goroutine, and a restart would
+	// have run inside it, so the count is final once StartService returns.
+	assert.Equal(t, 1, launcher.launchCount(), "a process nobody wants is not restarted")
 }
 
 func TestStartService_AFailedStartLeavesTheProcessAnotherServiceStillWants(t *testing.T) {
@@ -704,6 +921,42 @@ func TestServiceHealth_ReportsAProcessThatWasNeverStarted(t *testing.T) {
 	assert.False(t, supervisor.ServiceActive(gateway.ServiceProxy))
 }
 
+func TestServiceSnapshot_ReadsTheChildOverItsControlSocket(t *testing.T) {
+	supervisor, _, _ := newSupervisor(t, nil)
+	ctx := testContext(t)
+	require.NoError(t, supervisor.StartService(ctx, gateway.ServiceTransit))
+
+	snap, err := supervisor.ServiceSnapshot(ctx, gateway.ServiceTransit)
+	require.NoError(t, err)
+	assert.Equal(t, "child", snap.GatewayID)
+	require.Len(t, snap.BGP.Peers, 1, "the child's BGP peers cross the socket")
+	assert.Equal(t, "10.255.0.2", snap.BGP.Peers[0].Address)
+}
+
+func TestServiceSnapshot_ReportsAChildWhoseSocketIsGone(t *testing.T) {
+	supervisor, launcher, _ := newSupervisor(t, nil)
+	ctx := testContext(t)
+
+	var down *ErrProcessDown
+	_, err := supervisor.ServiceSnapshot(ctx, gateway.ServiceTransit)
+	require.ErrorAs(t, err, &down, "a process never started has no socket to read")
+	var neverStarted *ErrProcessNeverStarted
+	assert.ErrorAs(t, err, &neverStarted)
+
+	require.NoError(t, supervisor.StartService(ctx, gateway.ServiceTransit))
+	// The child's control server goes away while the supervisor still holds
+	// its client, the way a wedged child's socket does.
+	launcher.lastChild().server.Stop()
+
+	_, err = supervisor.ServiceSnapshot(ctx, gateway.ServiceTransit)
+	require.ErrorAs(t, err, &down)
+	assert.Equal(t, "routing", down.Process)
+	assert.Equal(t, gateway.ServiceTransit, down.Service)
+
+	_, err = supervisor.ServiceSnapshot(ctx, "no-such-service")
+	assert.Error(t, err, "a service with no process class has no snapshot")
+}
+
 func TestStopService_StopsTheProcessOnlyWhenItsLastServiceGoes(t *testing.T) {
 	supervisor, launcher, _ := newSupervisor(t, nil)
 	ctx := testContext(t)
@@ -727,8 +980,11 @@ func TestStopService_StopsTheProcessOnlyWhenItsLastServiceGoes(t *testing.T) {
 func TestStopService_KillsAChildThatIgnoresTheGracefulStop(t *testing.T) {
 	// A wedged service must not hold the daemon's shutdown open: SIGTERM
 	// first, and SIGKILL once StopTimeout has passed.
-	supervisor, launcher, _ := newSupervisor(t, func(c *Config) { c.StopTimeout = 50 * time.Millisecond })
+	supervisor, launcher, clock := newSupervisor(t, func(c *Config) { c.StopTimeout = 50 * time.Millisecond })
 	launcher.stubborn = true
+	// The child ignores SIGTERM, so no graceful exit can land inside the stop
+	// window: collapse it like a backoff instead of waiting it out (#284).
+	clock.stopTimeout = 0
 	ctx := testContext(t)
 	require.NoError(t, supervisor.StartService(ctx, gateway.ServiceProxy))
 
@@ -805,18 +1061,16 @@ func TestRestart_KeepsTryingWhileTheBudgetHolds(t *testing.T) {
 
 	launcher.mu.Lock()
 	launcher.failWith = errors.New("fork/exec: resource temporarily unavailable")
+	launcher.failCount = 3
 	launcher.mu.Unlock()
 	launcher.lastChild().exit(errors.New("signal: killed"))
 
-	// The transient failure clears, and the supervisor is still trying.
-	require.Eventually(t, func() bool { return launcher.launchCount() >= 3 }, 5*time.Second, 10*time.Millisecond,
-		"one failed relaunch does not end supervision")
-	launcher.mu.Lock()
-	launcher.failWith = nil
-	launcher.mu.Unlock()
-
-	assert.Eventually(t, func() bool { return supervisor.ServiceActive(gateway.ServiceTransit) },
-		5*time.Second, 20*time.Millisecond, "the service comes back once the launcher recovers")
+	// Three relaunches fail, then the transient failure clears. The recovery
+	// is counted in launches, not timed: the collapsed backoff spends a whole
+	// budget in milliseconds, faster than a poll on a loaded runner (#742).
+	awaitRelaunch(t, supervisor, launcher, "routing", 2)
+	assert.True(t, supervisor.ServiceActive(gateway.ServiceTransit), "the service comes back once the launcher recovers")
+	assert.Equal(t, 5, launcher.launchCount(), "the start, three failed relaunches, then the one that succeeded")
 }
 
 func TestRestart_AFailingLaunchSpendsTheBudgetInsteadOfSpinningForever(t *testing.T) {
@@ -835,12 +1089,14 @@ func TestRestart_AFailingLaunchSpendsTheBudgetInsteadOfSpinningForever(t *testin
 	launcher.lastChild().exit(errors.New("signal: killed"))
 
 	// One launch for the start, then RestartBudget relaunch attempts.
-	require.Eventually(t, func() bool { return launcher.launchCount() == 3 }, 5*time.Second, 10*time.Millisecond)
-	assert.Never(t, func() bool { return launcher.launchCount() > 3 }, time.Second, 50*time.Millisecond,
-		"the budget stops the retry loop the same way it stops the crash loop")
-
+	// The loop records the exhausted budget and returns without launching
+	// again, so once health reports it the count is final.
 	var exhausted *ErrRestartBudgetExhausted
-	require.ErrorAs(t, supervisor.ServiceHealth(gateway.ServiceTransit), &exhausted)
+	require.Eventually(t, func() bool {
+		return errors.As(supervisor.ServiceHealth(gateway.ServiceTransit), &exhausted)
+	}, 5*time.Second, 10*time.Millisecond)
+	assert.Equal(t, 3, launcher.launchCount(),
+		"the budget stops the retry loop the same way it stops the crash loop")
 }
 
 func TestRestart_AChildThatNeverServesIsNotAcceptedAsLive(t *testing.T) {
@@ -927,6 +1183,149 @@ func TestCrashLoop_StopsAtTheRestartBudget(t *testing.T) {
 	assert.Equal(t, 3, launcher.launchCount(), "no fourth launch after the budget is gone")
 }
 
+// provisioningConfig enables the three sections the provisioning process
+// hosts. None of them has a backend yet, so in process each one is a
+// refusal; sup is nil for a gateway with the process model off.
+func provisioningConfig(sup gateway.ServiceSupervisor) *gateway.GatewayConfig {
+	return &gateway.GatewayConfig{
+		Enabled:    true,
+		ID:         "gw-provisioning",
+		Edge:       &gateway.EdgeConfig{Enabled: true, MaxDevices: 16, MaxServices: 16},
+		DHCP:       &gateway.DHCPServiceConfig{Enabled: true, Interface: "eth1"},
+		PXE:        &gateway.PXEServiceConfig{Enabled: true, HTTPPort: 8080},
+		Supervisor: sup,
+	}
+}
+
+func newProvisioningGateway(t *testing.T, cfg *gateway.GatewayConfig) *gateway.Gateway {
+	t.Helper()
+	gw, err := gateway.NewGateway(cfg)
+	require.NoError(t, err)
+	// Admit the node at its own minimums, as BuildGateway does.
+	gwCfg := gw.GetConfig()
+	gw.SetNodeMetrics(gwCfg.MinReputation, time.Duration(gwCfg.MinAgeDays)*24*time.Hour, gwCfg.MinUptimePct)
+	return gw
+}
+
+func TestClassTable_ProvisioningKeepsOnlyNetBindService(t *testing.T) {
+	// DHCP (67), TFTP (69) and PXE over HTTP (80) are privileged ports;
+	// nothing the provisioning services do programs the kernel or needs a
+	// raw socket, so a capability beyond the bind is one a parser of
+	// untrusted devices' requests must not hold.
+	def, err := DefinitionByName("provisioning")
+	require.NoError(t, err)
+	assert.Equal(t, []uintptr{unix.CAP_NET_BIND_SERVICE}, def.Capabilities)
+	assert.Equal(t, ClassParser, def.Class)
+	assert.True(t, def.Unprivileged)
+	assert.True(t, def.Supervised)
+}
+
+func TestProvisioning_TheParentRelaysEverySectionToItsChild(t *testing.T) {
+	supervisor, launcher, _ := newSupervisor(t, nil)
+	ctx := testContext(t)
+	gw := newProvisioningGateway(t, provisioningConfig(supervisor))
+
+	// In process every provisioning section is a refusal that fails the
+	// start, so a start that succeeds is one no in-process handler took
+	// part in: the parent only relays.
+	require.NoError(t, gw.Start(ctx))
+
+	launcher.mu.Lock()
+	launched := make([]string, 0, len(launcher.launches))
+	for _, spec := range launcher.launches {
+		launched = append(launched, spec.Definition.Name)
+	}
+	launcher.mu.Unlock()
+	assert.Equal(t, []string{"provisioning"}, launched, "one child hosts all three sections")
+
+	reports := gw.ServiceReports()
+	require.Len(t, reports, 3)
+	for _, report := range reports {
+		assert.Truef(t, report.Active, "%s: active is the child's verdict", report.Name)
+		assert.NoErrorf(t, report.Health, "%s", report.Name)
+	}
+
+	require.NoError(t, gw.Stop(ctx))
+	assert.False(t, supervisor.ServiceActive(gateway.ServiceDHCP), "the child stops with its last service")
+}
+
+func TestProvisioning_WithoutTheModelTheSectionsAreRefusedInProcess(t *testing.T) {
+	gw := newProvisioningGateway(t, provisioningConfig(nil))
+
+	err := gw.Start(testContext(t))
+
+	var unavailable *gateway.ErrServiceUnavailable
+	require.ErrorAs(t, err, &unavailable, "with the model off the in-process refusal stops the start, as before")
+	assert.Equal(t, gateway.ServiceEdge, unavailable.Service, "the first provisioning section the walk reaches")
+	assert.NotEmpty(t, unavailable.Reason)
+}
+
+func TestProvisioning_ADeadChildIsUnhealthyAndRestartedUntilTheBudgetIsSpent(t *testing.T) {
+	supervisor, launcher, _ := newSupervisor(t, func(c *Config) {
+		c.RestartBackoff = time.Millisecond
+		c.RestartBudget = 2
+	})
+	ctx := testContext(t)
+	gw := newProvisioningGateway(t, provisioningConfig(supervisor))
+	require.NoError(t, gw.Start(ctx))
+
+	// Hold the relaunch at the launcher, so the window between the crash
+	// and its replacement can be observed rather than raced.
+	launcher.mu.Lock()
+	launcher.gate = make(chan struct{})
+	launcher.launched = make(chan struct{})
+	gate, launched := launcher.gate, launcher.launched
+	launcher.mu.Unlock()
+
+	launcher.lastChild().exit(errors.New("signal: killed"))
+	select {
+	case <-launched:
+	case <-time.After(20 * time.Second):
+		t.Fatal("the dead child was never relaunched")
+	}
+	for _, report := range gw.ServiceReports() {
+		assert.Falsef(t, report.Active, "%s: its child is dead", report.Name)
+		var unhealthy *gateway.ErrServiceUnhealthy
+		require.ErrorAsf(t, report.Health, &unhealthy, "%s", report.Name)
+		var down *ErrProcessDown
+		require.ErrorAsf(t, report.Health, &down, "%s", report.Name)
+		assert.Equal(t, "provisioning", down.Process)
+	}
+
+	launcher.mu.Lock()
+	launcher.gate, launcher.launched = nil, nil
+	launcher.mu.Unlock()
+	close(gate)
+	child := awaitRelaunch(t, supervisor, launcher, "provisioning", 2)
+	require.Eventually(t, func() bool {
+		for _, report := range gw.ServiceReports() {
+			if !report.Active || report.Health != nil {
+				return false
+			}
+		}
+		return true
+	}, 20*time.Second, 10*time.Millisecond, "the restarted child serves the same sections")
+
+	// Two more crashes inside the window: the second is the third against
+	// a budget of two, and the supervisor stops relaunching.
+	child.exit(errors.New("signal: killed"))
+	child = awaitRelaunch(t, supervisor, launcher, "provisioning", 3)
+	child.exit(errors.New("signal: killed"))
+
+	var exhausted *ErrRestartBudgetExhausted
+	require.Eventually(t, func() bool {
+		for _, report := range gw.ServiceReports() {
+			if !errors.As(report.Health, &exhausted) {
+				return false
+			}
+		}
+		return true
+	}, 20*time.Second, 10*time.Millisecond, "every provisioning section reports the spent budget")
+	assert.Equal(t, "provisioning", exhausted.Process)
+	assert.Equal(t, 3, launcher.launchCount(), "no launch after the budget is gone")
+	require.NoError(t, gw.Stop(ctx), "a process over its budget still stops cleanly")
+}
+
 func TestLongUptime_ClearsTheCrashHistory(t *testing.T) {
 	// A process that ran longer than the window before dying is not in a
 	// crash loop: its backoff starts over rather than continuing to double.
@@ -998,6 +1397,376 @@ func TestApply_ReportsTheChildFailureWithItsState(t *testing.T) {
 	var remote *ipc.ErrRemoteApply
 	require.ErrorAs(t, err, &remote)
 	assert.Equal(t, "v1", state.Version, "the child's state travels with its failure")
+}
+
+// startDatapath starts the datapath process, optionally applies a document
+// to it, and returns its node; the node outlives the child, so it records
+// what every relaunch of it was sent.
+func startDatapath(t *testing.T, ctx context.Context, supervisor *Supervisor, launcher *fakeLauncher, version string) *fakeNode {
+	t.Helper()
+	require.NoError(t, supervisor.StartService(ctx, gateway.ServiceNAT))
+	if version != "" {
+		_, err := supervisor.Apply(ctx, &gwstate.DesiredConfig{GatewayID: "gw", Version: version})
+		require.NoError(t, err)
+	}
+	return launcher.node("datapath", nil)
+}
+
+func TestRelaunch_ReappliesTheLastDesiredDocument(t *testing.T) {
+	// A crashed child took what it had applied with it, and the new one
+	// sweeps its predecessor's flows on Start. The parent still holds the
+	// document's version and would skip it, so the supervisor re-sends it
+	// (#557).
+	supervisor, launcher, _ := newSupervisor(t, func(c *Config) { c.RestartBackoff = time.Millisecond })
+	ctx := testContext(t)
+	node := startDatapath(t, ctx, supervisor, launcher, "v1")
+
+	launcher.lastChild().exit(errors.New("signal: killed"))
+	awaitRelaunch(t, supervisor, launcher, "datapath", 2)
+
+	assert.Equal(t, []string{"v1", "v1"}, node.appliedVersions(),
+		"the relaunched child is given the document its predecessor held")
+	require.NoError(t, supervisor.ServiceHealth(gateway.ServiceNAT))
+}
+
+func TestRelaunch_AProcessNeverSentADocumentIsSentNothing(t *testing.T) {
+	supervisor, launcher, _ := newSupervisor(t, func(c *Config) { c.RestartBackoff = time.Millisecond })
+	ctx := testContext(t)
+	node := startDatapath(t, ctx, supervisor, launcher, "")
+
+	launcher.lastChild().exit(errors.New("signal: killed"))
+	awaitRelaunch(t, supervisor, launcher, "datapath", 2)
+
+	assert.Empty(t, node.appliedVersions(), "there is no document to re-send")
+	require.NoError(t, supervisor.ServiceHealth(gateway.ServiceNAT))
+}
+
+func TestRelaunch_AFailedReapplySpendsTheBudgetAndIsRetried(t *testing.T) {
+	supervisor, launcher, _ := newSupervisor(t, func(c *Config) {
+		c.RestartBackoff = time.Millisecond
+		c.RestartBudget = 5
+	})
+	ctx := testContext(t)
+	node := startDatapath(t, ctx, supervisor, launcher, "v1")
+
+	// The next two relaunched children refuse the document.
+	node.mu.Lock()
+	node.applyErr = errors.New("ovs refused the flows")
+	node.applyFailCount = 2
+	node.mu.Unlock()
+	launcher.lastChild().exit(errors.New("signal: killed"))
+	awaitRelaunch(t, supervisor, launcher, "datapath", 4)
+
+	assert.Equal(t, []string{"v1", "v1", "v1", "v1"}, node.appliedVersions(),
+		"each relaunch is sent the document until one holds it")
+	for _, child := range launcher.allChildren()[1:3] {
+		assert.Contains(t, child.signalled(), os.Signal(syscall.SIGTERM),
+			"a child that refused its document is stopped, not kept running without it")
+	}
+	supervisor.mu.Lock()
+	spent := len(supervisor.processes["datapath"].restarts)
+	supervisor.mu.Unlock()
+	assert.Equal(t, 3, spent, "the crash and both failed re-applies each spend the restart budget")
+	require.NoError(t, supervisor.ServiceHealth(gateway.ServiceNAT))
+}
+
+func TestRelaunch_AReapplyThatNeverHoldsExhaustsTheBudget(t *testing.T) {
+	supervisor, launcher, _ := newSupervisor(t, func(c *Config) {
+		c.RestartBackoff = time.Millisecond
+		c.RestartBudget = 2
+	})
+	ctx := testContext(t)
+	node := startDatapath(t, ctx, supervisor, launcher, "v1")
+
+	node.mu.Lock()
+	node.applyErr = errors.New("ovs refused the flows")
+	node.mu.Unlock()
+	launcher.lastChild().exit(errors.New("signal: killed"))
+
+	var exhausted *ErrRestartBudgetExhausted
+	require.Eventually(t, func() bool {
+		return errors.As(supervisor.ServiceHealth(gateway.ServiceNAT), &exhausted)
+	}, 10*time.Second, 20*time.Millisecond, "a child that can never be given its document is never reported up")
+	var restore *ErrDesiredRestoreFailed
+	require.ErrorAs(t, exhausted, &restore)
+	assert.Equal(t, "v1", restore.Version)
+	assert.Equal(t, 3, launcher.launchCount())
+}
+
+func TestRelaunch_ADocumentAppliedDuringTheRelaunchIsTheOneReapplied(t *testing.T) {
+	supervisor, launcher, _ := newSupervisor(t, func(c *Config) { c.RestartBackoff = time.Millisecond })
+	ctx := testContext(t)
+	node := startDatapath(t, ctx, supervisor, launcher, "v1")
+
+	// Hold the relaunched child's readiness check: it is published, and
+	// the crashed child's document has not been re-sent yet.
+	ready := newHeldCall()
+	node.mu.Lock()
+	node.holdStatus = ready
+	node.mu.Unlock()
+	launcher.lastChild().exit(errors.New("signal: killed"))
+	ready.awaitEntered(t, ctx)
+
+	var notRestored *ErrDesiredNotRestored
+	require.ErrorAs(t, supervisor.ServiceHealth(gateway.ServiceNAT), &notRestored,
+		"a child not yet given its document is not reported up")
+
+	_, err := supervisor.Apply(ctx, &gwstate.DesiredConfig{GatewayID: "gw", Version: "v2"})
+	require.NoError(t, err)
+	close(ready.release)
+	awaitRelaunch(t, supervisor, launcher, "datapath", 2)
+
+	assert.Equal(t, []string{"v1", "v2", "v2"}, node.appliedVersions(),
+		"the re-send carries the newer document, never the one the crashed child held")
+	require.NoError(t, supervisor.ServiceHealth(gateway.ServiceNAT))
+}
+
+func TestRelaunch_AnApplyDuringTheReapplyWaitsForItAndWins(t *testing.T) {
+	supervisor, launcher, _ := newSupervisor(t, func(c *Config) { c.RestartBackoff = time.Millisecond })
+	ctx := testContext(t)
+	node := startDatapath(t, ctx, supervisor, launcher, "v1")
+
+	// Hold the re-send in the relaunched child.
+	resend := newHeldCall()
+	node.mu.Lock()
+	node.holdApply = resend
+	node.mu.Unlock()
+	launcher.lastChild().exit(errors.New("signal: killed"))
+	resend.awaitEntered(t, ctx)
+
+	applyCtx := newWaitingContext(ctx)
+	done := make(chan error, 1)
+	go func() {
+		_, err := supervisor.Apply(applyCtx, &gwstate.DesiredConfig{GatewayID: "gw", Version: "v2"})
+		done <- err
+	}()
+	select {
+	case <-applyCtx.waiting:
+	case <-ctx.Done():
+		t.Fatalf("Apply never started waiting: %v", ctx.Err())
+	}
+	// Apply is waiting for the slot the held re-send holds. Racing the
+	// re-send into the child would let the older document land after the
+	// newer one.
+	select {
+	case err := <-done:
+		t.Fatalf("Apply returned while the re-send was in flight (err %v)", err)
+	default:
+	}
+	assert.Equal(t, []string{"v1"}, node.appliedVersions(), "nothing reached the child past the held re-send")
+	close(resend.release)
+	require.NoError(t, <-done)
+	awaitRelaunch(t, supervisor, launcher, "datapath", 2)
+
+	assert.Equal(t, []string{"v1", "v1", "v2"}, node.appliedVersions())
+	node.mu.Lock()
+	applied := node.applied.Version
+	node.mu.Unlock()
+	assert.Equal(t, "v2", applied, "the newer document is the one the child holds")
+}
+
+// restartBackoff is a restart delay no other wait in these tests has, so
+// testClock.holdDelay holds the backoff and nothing else.
+const restartBackoff = 7 * time.Second
+
+// crashIntoBackoff kills the datapath child and returns once its restart is
+// waiting out the held backoff, with no child serving.
+func crashIntoBackoff(t *testing.T, ctx context.Context, launcher *fakeLauncher, clock *testClock) *heldCall {
+	t.Helper()
+	backoff := clock.holdDelay(restartBackoff)
+	launcher.lastChild().exit(errors.New("signal: killed"))
+	backoff.awaitEntered(t, ctx)
+	return backoff
+}
+
+func TestRelaunch_AnApplyDuringTheBackoffIsTheDocumentReapplied(t *testing.T) {
+	supervisor, launcher, clock := newSupervisor(t, func(c *Config) { c.RestartBackoff = restartBackoff })
+	ctx := testContext(t)
+	node := startDatapath(t, ctx, supervisor, launcher, "v1")
+	backoff := crashIntoBackoff(t, ctx, launcher, clock)
+
+	_, err := supervisor.Apply(ctx, &gwstate.DesiredConfig{GatewayID: "gw", Version: "v2"})
+	var pending *ErrDesiredPending
+	require.ErrorAs(t, err, &pending, "no child holds the document yet, and the caller is told so")
+	assert.Equal(t, "datapath", pending.Process)
+	assert.Equal(t, "v2", pending.Version)
+
+	close(backoff.release)
+	awaitRelaunch(t, supervisor, launcher, "datapath", 2)
+	assert.Equal(t, []string{"v1", "v2"}, node.appliedVersions(),
+		"the relaunch is given the newer document, never the one the crashed child held")
+	require.NoError(t, supervisor.ServiceHealth(gateway.ServiceNAT))
+}
+
+func TestRelaunch_ADocumentRecordedInTheBackoffIsRetriedWhenItsReapplyFails(t *testing.T) {
+	supervisor, launcher, clock := newSupervisor(t, func(c *Config) {
+		c.RestartBackoff = restartBackoff
+		c.RestartBudget = 5
+	})
+	ctx := testContext(t)
+	node := startDatapath(t, ctx, supervisor, launcher, "v1")
+	backoff := crashIntoBackoff(t, ctx, launcher, clock)
+
+	_, err := supervisor.Apply(ctx, &gwstate.DesiredConfig{GatewayID: "gw", Version: "v2"})
+	var pending *ErrDesiredPending
+	require.ErrorAs(t, err, &pending)
+	// The first relaunched child refuses the document.
+	node.mu.Lock()
+	node.applyErr = errors.New("ovs refused the flows")
+	node.applyFailCount = 1
+	node.mu.Unlock()
+
+	close(backoff.release)
+	awaitRelaunch(t, supervisor, launcher, "datapath", 3)
+	assert.Equal(t, []string{"v1", "v2", "v2"}, node.appliedVersions(),
+		"the failed re-send is retried with the recorded document")
+	assert.Contains(t, launcher.allChildren()[1].signalled(), os.Signal(syscall.SIGTERM),
+		"a child that refused its document is stopped, not kept running without it")
+	require.NoError(t, supervisor.ServiceHealth(gateway.ServiceNAT))
+}
+
+func TestRelaunch_ADocumentRecordedMidLaunchKeepsTheServicesDownUntilItIsGiven(t *testing.T) {
+	supervisor, launcher, _ := newSupervisor(t, func(c *Config) { c.RestartBackoff = time.Millisecond })
+	ctx := testContext(t)
+	// Never sent a document, so the relaunch claims no re-send of its own.
+	node := startDatapath(t, ctx, supervisor, launcher, "")
+
+	launcher.mu.Lock()
+	launcher.gate = make(chan struct{})
+	launcher.launched = make(chan struct{})
+	gate, launched := launcher.gate, launcher.launched
+	launcher.mu.Unlock()
+	launcher.lastChild().exit(errors.New("signal: killed"))
+	select {
+	case <-launched:
+	case <-ctx.Done():
+		t.Fatalf("the dead child was never relaunched: %v", ctx.Err())
+	}
+
+	_, err := supervisor.Apply(ctx, &gwstate.DesiredConfig{GatewayID: "gw", Version: "v1"})
+	var pending *ErrDesiredPending
+	require.ErrorAs(t, err, &pending)
+
+	// Let the child come up, and hold its readiness check.
+	ready := newHeldCall()
+	node.mu.Lock()
+	node.holdStatus = ready
+	node.mu.Unlock()
+	launcher.mu.Lock()
+	launcher.gate, launcher.launched = nil, nil
+	launcher.mu.Unlock()
+	close(gate)
+	ready.awaitEntered(t, ctx)
+
+	var notRestored *ErrDesiredNotRestored
+	require.ErrorAs(t, supervisor.ServiceHealth(gateway.ServiceNAT), &notRestored,
+		"a child answering before it holds the recorded document is not reported up")
+	close(ready.release)
+	awaitRelaunch(t, supervisor, launcher, "datapath", 2)
+	assert.Equal(t, []string{"v1"}, node.appliedVersions())
+	require.NoError(t, supervisor.ServiceHealth(gateway.ServiceNAT))
+}
+
+func TestStartService_AfterAStopGivesTheNewChildTheLastDocument(t *testing.T) {
+	supervisor, launcher, _ := newSupervisor(t, nil)
+	ctx := testContext(t)
+	node := startDatapath(t, ctx, supervisor, launcher, "v1")
+	require.NoError(t, supervisor.StopService(ctx, gateway.ServiceNAT))
+
+	// The parent's version check still holds v1 and will not send it again.
+	require.NoError(t, supervisor.StartService(ctx, gateway.ServiceNAT))
+	assert.Equal(t, []string{"v1", "v1"}, node.appliedVersions(),
+		"the new child holds the document before the service is reported up")
+	require.NoError(t, supervisor.ServiceHealth(gateway.ServiceNAT))
+}
+
+func TestStartService_AfterAStopGivesTheDocumentAppliedWhileStopped(t *testing.T) {
+	supervisor, launcher, _ := newSupervisor(t, nil)
+	ctx := testContext(t)
+	node := startDatapath(t, ctx, supervisor, launcher, "v1")
+	require.NoError(t, supervisor.StopService(ctx, gateway.ServiceNAT))
+
+	_, err := supervisor.Apply(ctx, &gwstate.DesiredConfig{GatewayID: "gw", Version: "v2"})
+	var pending *ErrDesiredPending
+	require.ErrorAs(t, err, &pending, "a stopped process applies nothing, and the caller is told so")
+
+	require.NoError(t, supervisor.StartService(ctx, gateway.ServiceNAT))
+	assert.Equal(t, []string{"v1", "v2"}, node.appliedVersions(),
+		"the new child is given the newest document, not the one the stopped child held")
+}
+
+func TestStartService_AfterAStopIsDownWhenTheDocumentCannotBeGiven(t *testing.T) {
+	supervisor, launcher, _ := newSupervisor(t, nil)
+	ctx := testContext(t)
+	node := startDatapath(t, ctx, supervisor, launcher, "v1")
+	require.NoError(t, supervisor.StopService(ctx, gateway.ServiceNAT))
+	node.mu.Lock()
+	node.applyErr = errors.New("ovs refused the flows")
+	node.applyFailCount = 1
+	node.mu.Unlock()
+
+	err := supervisor.StartService(ctx, gateway.ServiceNAT)
+	var restore *ErrDesiredRestoreFailed
+	require.ErrorAs(t, err, &restore, "a child that could not be given its document is a failed start")
+	assert.Equal(t, "v1", restore.Version)
+	assert.Contains(t, launcher.allChildren()[1].signalled(), os.Signal(syscall.SIGTERM),
+		"the child is stopped, not left running without its document")
+	assert.False(t, supervisor.ServiceActive(gateway.ServiceNAT))
+	require.Error(t, supervisor.ServiceHealth(gateway.ServiceNAT))
+}
+
+// failResend stops NAT and makes the next start's re-send of the desired
+// document fail once; that start reports the restore error.
+func failResend(t *testing.T, ctx context.Context, supervisor *Supervisor, node *fakeNode) {
+	t.Helper()
+	require.NoError(t, supervisor.StopService(ctx, gateway.ServiceNAT))
+	node.mu.Lock()
+	node.applyErr = errors.New("ovs refused the flows")
+	node.applyFailCount = 1
+	node.mu.Unlock()
+	var restore *ErrDesiredRestoreFailed
+	require.ErrorAs(t, supervisor.StartService(ctx, gateway.ServiceNAT), &restore)
+}
+
+func TestServiceHealth_AfterAFailedResendNamesTheRestoreError(t *testing.T) {
+	supervisor, launcher, _ := newSupervisor(t, nil)
+	ctx := testContext(t)
+	node := startDatapath(t, ctx, supervisor, launcher, "v1")
+	failResend(t, ctx, supervisor, node)
+
+	err := supervisor.ServiceHealth(gateway.ServiceNAT)
+	var down *ErrProcessDown
+	require.ErrorAs(t, err, &down)
+	var restore *ErrDesiredRestoreFailed
+	require.ErrorAs(t, err, &restore, "health says why the service is down, not that it never started")
+	assert.Equal(t, "v1", restore.Version)
+	var never *ErrProcessNeverStarted
+	assert.False(t, errors.As(err, &never))
+}
+
+func TestServiceHealth_AFailedResendIsForgottenByALaterStartOrACleanStop(t *testing.T) {
+	supervisor, launcher, _ := newSupervisor(t, nil)
+	ctx := testContext(t)
+	node := startDatapath(t, ctx, supervisor, launcher, "v1")
+	failResend(t, ctx, supervisor, node)
+	var restore *ErrDesiredRestoreFailed
+	require.ErrorAs(t, supervisor.ServiceHealth(gateway.ServiceNAT), &restore)
+
+	// Another process's failure is not this one's: proxy was never started.
+	var never *ErrProcessNeverStarted
+	require.ErrorAs(t, supervisor.ServiceHealth(gateway.ServiceProxy), &never)
+	assert.Equal(t, "proxy", never.Process)
+
+	// A start that gives the document clears the failure.
+	require.NoError(t, supervisor.StartService(ctx, gateway.ServiceNAT))
+	require.NoError(t, supervisor.ServiceHealth(gateway.ServiceNAT))
+
+	// A clean stop after another failed re-send leaves no old error behind.
+	failResend(t, ctx, supervisor, node)
+	require.NoError(t, supervisor.StopService(ctx, gateway.ServiceNAT))
+	err := supervisor.ServiceHealth(gateway.ServiceNAT)
+	assert.False(t, errors.As(err, &restore), "a stopped-on-purpose service reports no old restore error")
+	require.ErrorAs(t, err, &never)
 }
 
 func TestShutdown_StopsEveryProcessAndRefusesLaterStarts(t *testing.T) {
@@ -1073,12 +1842,58 @@ func TestCgroupManager_ReportsAnUnwritableTree(t *testing.T) {
 	assert.Equal(t, "create", cgroupErr.Op)
 }
 
+func TestCgroupManager_DelegatesControllersDownEveryParentDirectory(t *testing.T) {
+	root := t.TempDir()
+	manager := &CgroupManager{Root: root, Parent: "gatewayd.slice/edge"}
+	def, err := DefinitionByName("proxy")
+	require.NoError(t, err)
+
+	leaf, err := manager.Prepare(def)
+	require.NoError(t, err)
+	t.Cleanup(func() { leaf.Close() })
+
+	for _, dir := range []string{"gatewayd.slice", filepath.Join("gatewayd.slice", "edge")} {
+		control, err := os.ReadFile(filepath.Join(root, dir, "cgroup.subtree_control"))
+		require.NoError(t, err, dir)
+		assert.Equal(t, "+memory +cpu", string(control), dir)
+	}
+	_, err = os.Stat(filepath.Join(root, "cgroup.subtree_control"))
+	assert.True(t, os.IsNotExist(err), "the root's subtree_control belongs to the host")
+	_, err = os.Stat(filepath.Join(root, "gatewayd.slice", "edge", "proxy", "cgroup.subtree_control"))
+	assert.True(t, os.IsNotExist(err), "the leaf holds the process and delegates nothing")
+
+	unlimited, err := manager.Prepare(Definition{Name: "plain"})
+	require.NoError(t, err)
+	t.Cleanup(func() { unlimited.Close() })
+	control, err := os.ReadFile(filepath.Join(root, "gatewayd.slice", "cgroup.subtree_control"))
+	require.NoError(t, err)
+	assert.Equal(t, "+memory +cpu", string(control), "a class without limits enables nothing")
+}
+
+func TestCgroupManager_ReportsAControllerItCannotDelegate(t *testing.T) {
+	root := t.TempDir()
+	// A directory where the interface file should be makes the write fail
+	// the way a kernel refusal (EBUSY, EACCES) would.
+	control := filepath.Join(root, "gatewayd", "cgroup.subtree_control")
+	require.NoError(t, os.MkdirAll(control, 0o750))
+
+	manager := &CgroupManager{Root: root, Parent: "gatewayd"}
+	_, err := manager.Prepare(Definition{Name: "routing", MemoryMax: 1 << 20})
+	var cgroupErr *ErrCgroup
+	require.ErrorAs(t, err, &cgroupErr)
+	assert.Equal(t, "write", cgroupErr.Op)
+	assert.Equal(t, control, cgroupErr.Path)
+	_, err = os.Stat(filepath.Join(root, "gatewayd", "routing", "memory.max"))
+	assert.True(t, os.IsNotExist(err), "no limit is written below a parent that refused the controller")
+}
+
 func TestSettings_ResolvesTheServiceAccountAndDefaults(t *testing.T) {
 	// The current account always exists, so it stands in for the packaged
 	// gatewayd account here.
 	name := currentUserName(t)
 
-	cfg, err := Settings{Enabled: true, User: name}.Config("/etc/gatewayd/config.yaml", nil)
+	inherited := Inherited{ConfigFile: "/etc/gatewayd/config.yaml", DataDir: "/srv/gatewayd"}
+	cfg, err := Settings{Enabled: true, User: name}.Config(inherited, nil)
 	require.NoError(t, err)
 	assert.Equal(t, DefaultRuntimeDir, cfg.RuntimeDir)
 	assert.Equal(t, uint32(os.Getuid()), cfg.UID)
@@ -1090,18 +1905,18 @@ func TestSettings_ResolvesTheServiceAccountAndDefaults(t *testing.T) {
 	// An operator who writes an empty parent means it: no placement, no
 	// limits, and the capability separation untouched.
 	off := ""
-	disabled, err := Settings{Enabled: true, User: name, CgroupParent: &off}.Config("", nil)
+	disabled, err := Settings{Enabled: true, User: name, CgroupParent: &off}.Config(Inherited{}, nil)
 	require.NoError(t, err)
 	assert.False(t, disabled.Cgroups.Enabled())
-	assert.Equal(t, "/etc/gatewayd/config.yaml", cfg.ConfigFile)
+	assert.Equal(t, inherited, cfg.Inherited, "the children are started with the supervisor's own flags")
 
-	_, err = Settings{Enabled: true, User: "no-such-account-for-tests"}.Config("", nil)
+	_, err = Settings{Enabled: true, User: "no-such-account-for-tests"}.Config(Inherited{}, nil)
 	var unknown *ErrUserUnknown
 	require.ErrorAs(t, err, &unknown)
 
 	// An explicit group that does not exist is the same refusal: running a
 	// parser under a group nobody defined is not a degraded mode.
-	_, err = Settings{Enabled: true, User: name, Group: "no-such-group-for-tests"}.Config("", nil)
+	_, err = Settings{Enabled: true, User: name, Group: "no-such-group-for-tests"}.Config(Inherited{}, nil)
 	require.ErrorAs(t, err, &unknown)
 	assert.Equal(t, "no-such-group-for-tests", unknown.Name)
 }
@@ -1153,11 +1968,14 @@ func TestErrors_Messages(t *testing.T) {
 		{&ErrUnknownProcess{Process: "p"}, `no process named "p"`},
 		{&ErrProcessLaunch{Process: "p", Cause: errors.New("boom")}, "launching process"},
 		{&ErrProcessUnreachable{Process: "p", Socket: "/s", Waited: time.Second, Cause: errors.New("x")}, "did not answer"},
+		{&ErrDesiredNotRestored{Process: "p"}, "has not been given its desired config"},
+		{&ErrDesiredRestoreFailed{Process: "p", Version: "v1", Cause: errors.New("x")}, `re-applying desired config "v1"`},
 		{&ErrServiceNotActiveInProcess{Service: "s", Process: "p"}, "did not activate"},
 		{&ErrProcessDown{Process: "p", Service: "s"}, "is not running"},
 		{&ErrProcessExited{Process: "p", Cause: errors.New("exit status 1")}, `process "p" exited: exit status 1`},
 		{&ErrRestartBudgetExhausted{Process: "p", Restarts: 3, Window: time.Minute}, "restart budget"},
 		{&ErrNoDatapathProcess{}, "no datapath process"},
+		{&ErrDesiredPending{Process: "p", Version: "v1"}, `desired config "v1" is recorded`},
 		{&ErrSupervisorStopped{}, "stopped"},
 		{&ErrCgroup{Path: "/p", Op: "create", Cause: errors.New("x")}, "cgroup create"},
 		{&ErrHardening{Step: "drop uid", Cause: errors.New("x")}, "drop uid"},
@@ -1165,13 +1983,15 @@ func TestErrors_Messages(t *testing.T) {
 		{&ErrProcessNeverStarted{Process: "p"}, "has not been started"},
 		{&ErrSocketDir{Path: "/run/gatewayd", Op: "create", Cause: errors.New("x")}, "control socket directory create"},
 		{&ErrUserUnknown{Name: "gatewayd", Cause: errors.New("x")}, "does not exist"},
+		{&ErrSeccompUnsupportedArch{Arch: "riscv64"}, "no seccomp syscall table for riscv64"},
+		{&ErrSeccompThreadNotSynced{Thread: 101}, "could not synchronise thread 101"},
 	}
 	for _, c := range cases {
 		assert.Contains(t, c.err.Error(), c.contains)
 	}
 	cause := errors.New("cause")
 	for _, err := range []error{
-		&ErrProcessLaunch{Cause: cause}, &ErrProcessUnreachable{Cause: cause},
+		&ErrProcessLaunch{Cause: cause}, &ErrProcessUnreachable{Cause: cause}, &ErrDesiredRestoreFailed{Cause: cause},
 		&ErrProcessDown{Cause: cause}, &ErrProcessExited{Cause: cause}, &ErrRestartBudgetExhausted{Last: cause},
 		&ErrCgroup{Cause: cause}, &ErrHardening{Cause: cause}, &ErrUserUnknown{Cause: cause},
 		&ErrSocketDir{Cause: cause},
@@ -1199,7 +2019,7 @@ func TestExecLauncher_PassesTheClassPrivilegeAndTheChildArguments(t *testing.T) 
 	spec := Spec{
 		Definition: def,
 		Socket:     "/run/gatewayd/routing.sock",
-		ConfigFile: "/etc/gatewayd/config.yaml",
+		Inherited:  Inherited{ConfigFile: "/etc/gatewayd/config.yaml"},
 		UID:        1001,
 		GID:        1001,
 		SocketGID:  1001,
@@ -1209,8 +2029,9 @@ func TestExecLauncher_PassesTheClassPrivilegeAndTheChildArguments(t *testing.T) 
 	assert.Equal(t, []uintptr{unix.CAP_NET_BIND_SERVICE}, attr.AmbientCaps,
 		"the class's capabilities are granted at clone time")
 	assert.False(t, attr.UseCgroupFD, "a negative descriptor means no cgroup placement")
-	assert.Equal(t, syscall.SIGTERM, attr.Pdeathsig,
-		"a dead supervisor must not leave orphans behind")
+	assert.Equal(t, syscall.SIGKILL, attr.Pdeathsig,
+		"a dead supervisor must not leave orphans behind, and a killed child "+
+			"leaves the datapath's kernel state for the successor to reconcile")
 
 	// Granting an ambient capability needs one to give, so the launch that
 	// actually runs uses the class that asks for none. The capability path
@@ -1231,6 +2052,53 @@ func TestExecLauncher_PassesTheClassPrivilegeAndTheChildArguments(t *testing.T) 
 	assert.Equal(t, "vpn", launchErr.Process)
 }
 
+func TestSpecArgs_CarryEveryInheritedRootFlag(t *testing.T) {
+	// A child is a fresh gatewayd invocation: a root flag the supervisor
+	// was given and the child is not falls back to its default there. For
+	// --data-dir that is a different TOFU pin store (#881 review).
+	def, err := DefinitionByName("proxy")
+	require.NoError(t, err)
+	spec := Spec{
+		Definition:    def,
+		Socket:        "/run/gatewayd/proxy.sock",
+		SocketGID:     1002,
+		SupervisorUID: 0,
+		UID:           1001,
+		GID:           1002,
+		Inherited: Inherited{
+			ConfigFile: "/srv/gw/config.yaml",
+			DataDir:    "/srv/gw/state",
+			LogFormat:  "text",
+			Debug:      true,
+		},
+	}
+	assert.Equal(t, []string{
+		"service", "run", "proxy",
+		"--ipc-socket", "/run/gatewayd/proxy.sock",
+		"--socket-group", "1002",
+		"--supervisor-uid", "0",
+		"--uid", "1001",
+		"--gid", "1002",
+		"--config", "/srv/gw/config.yaml",
+		"--data-dir", "/srv/gw/state",
+		"--log-format", "text",
+		"--debug",
+	}, spec.Args())
+}
+
+func TestSpecArgs_LeaveUnsetInheritedFlagsToTheChildDefault(t *testing.T) {
+	// An empty value is not forwarded as an empty flag: `--data-dir ""`
+	// would point the pin store at the working directory rather than at
+	// the default the supervisor itself resolved.
+	def, err := DefinitionByName("vpn")
+	require.NoError(t, err)
+	args := Spec{Definition: def, Socket: "/s", SocketGID: -1}.Args()
+	for _, flag := range []string{"--config", "--data-dir", "--log-format", "--debug"} {
+		assert.NotContains(t, args, flag)
+	}
+	assert.Equal(t, "-1", args[6], "a negative socket group is passed through unchanged")
+}
+
 // recordingHardenOps records the privilege-dropping syscalls Harden makes
 // instead of making them. The drop is irreversible, so recording is the only
 // way to assert the ordering the kernel requires without the test binary
@@ -1247,6 +2115,10 @@ type recordingHardenOps struct {
 	groups []int
 	// uid and gid are what the child dropped to; -1 means it did not.
 	uid, gid int
+	// filter is the seccomp filter the child installed.
+	filter []unix.SockFilter
+	// deathSignal is the parent-death signal the child re-armed.
+	deathSignal uintptr
 	// ppid is what getppid reports; ppidAfter, when non-zero, is what it
 	// reports from the second call on, so a test can put the supervisor's
 	// death inside the window where the parent-death signal is disarmed.
@@ -1310,6 +2182,8 @@ func (o *recordingHardenOps) prctl(option, arg2, arg3, _, _ uintptr) error {
 		o.ambient = append(o.ambient, arg3)
 	case unix.PR_SET_KEEPCAPS:
 		name = "keepcaps=" + strconv.Itoa(int(arg2))
+	case unix.PR_SET_PDEATHSIG:
+		o.deathSignal = arg2
 	}
 	return o.record(name)
 }
@@ -1332,6 +2206,11 @@ func (o *recordingHardenOps) setresuid(ruid, _, _ int) error {
 func (o *recordingHardenOps) capset(_ *unix.CapUserHeader, data *[2]unix.CapUserData) error {
 	o.sets = *data
 	return o.record("capset")
+}
+
+func (o *recordingHardenOps) seccomp(filter []unix.SockFilter) error {
+	o.filter = filter
+	return o.record("seccomp")
 }
 
 // index returns where a step appears in the recorded sequence, or -1.
@@ -1437,6 +2316,8 @@ func TestHarden_TheKernelClassStaysRootButKeepsOnlyItsOwnCapabilities(t *testing
 	assert.Equal(t, -1, ops.uid, "a kernel-class process does not drop its uid")
 	assert.Equal(t, -1, ops.gid)
 	assert.NotContains(t, ops.calls, "keepcaps=1", "there is no uid change to carry capabilities across")
+	assert.Equal(t, uintptr(syscall.SIGKILL), ops.deathSignal,
+		"a SIGTERM would run the stop path and withdraw the flows the successor is meant to adopt")
 
 	want := uint32(1<<uint(unix.CAP_NET_ADMIN)) | uint32(1<<uint(unix.CAP_NET_RAW))
 	assert.Equal(t, want, ops.sets[0].Permitted, "exactly the class's two capabilities, and no others")
@@ -1485,6 +2366,7 @@ func TestHarden_ReportsTheStepThatFailed(t *testing.T) {
 		{"capset", "set the class capabilities after the uid drop"},
 		{"cap_ambient_raise", "raise ambient capability"},
 		{"keepcaps=0", "clear keepcaps"},
+		{"pdeathsig", "re-arm the parent-death signal"},
 	} {
 		ops := newRecordingHardenOps()
 		ops.failAt, ops.failWith = tc.call, unix.EPERM
@@ -1540,11 +2422,20 @@ func TestStopDuringACrash_DoesNotLeaveARestartedOrphan(t *testing.T) {
 	require.NoError(t, supervisor.StartService(ctx, gateway.ServiceTransit))
 
 	child := launcher.lastChild()
+	// The watch goroutine closes watched only after any restart it started
+	// has finished, so waiting on it replaces waiting out the clock.
+	supervisor.mu.Lock()
+	watched := supervisor.processes["routing"].done
+	supervisor.mu.Unlock()
 	child.exit(errors.New("signal: killed"))
 	require.NoError(t, supervisor.StopService(ctx, gateway.ServiceTransit))
 
-	launched := launcher.launchCount()
-	assert.Never(t, func() bool { return launcher.launchCount() > launched }, time.Second, 50*time.Millisecond,
+	select {
+	case <-watched:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the crashed child's watch never finished")
+	}
+	assert.Equal(t, 1, launcher.launchCount(),
 		"a released process is not relaunched by the crash that raced its stop")
 }
 

@@ -515,7 +515,7 @@ certificate-authority:
           platform-policy: true
         tpm2:
           srk-handle: 0x81000003
-          srk-auth: "kms://certificate-authority/identity/keystores/tpm2/srk-auth?ensure=true&len=32&enc=raw"
+          srk-auth: "kms://ca/root/tpm2/srk-auth?ensure=true&len=32&enc=raw"
           platform-policy: true
       keys:
         # PKCS #8 RSA w/ PSS
@@ -525,7 +525,7 @@ certificate-authority:
           signature-algorithm: SHA256-RSA
           hash: SHA-256
           store: software
-          password: "kms://certificate-authority/identity/keys/password?ensure=true&len=32&enc=base64"
+          password: "kms://ca/root/keys/0/password?ensure=true&len=32&enc=base64"
           platform-policy: true
           debug: true
 
@@ -536,7 +536,7 @@ certificate-authority:
           signature-algorithm: SHA256-RSA
           hash: SHA-256
           store: tpm2
-          password: "kms://certificate-authority/identity/keys/password/1?ensure=true&len=32&enc=base64"
+          password: "kms://ca/root/keys/1/password?ensure=true&len=32&enc=base64"
           platform-policy: true
           debug: true
 
@@ -547,7 +547,7 @@ certificate-authority:
           signature-algorithm: ECDSA-SHA256
           hash: SHA-256
           store: software
-          password: "kms://certificate-authority/identity/keys/password/2?ensure=true&len=32&enc=base64"
+          password: "kms://ca/root/keys/2/password?ensure=true&len=32&enc=base64"
           platform-policy: true
           debug: true
 
@@ -558,7 +558,7 @@ certificate-authority:
           signature-algorithm: ECDSA-SHA256
           hash: SHA-256
           store: tpm2
-          password: "kms://certificate-authority/identity/keys/password/3?ensure=true&len=32&enc=base64"
+          password: "kms://ca/root/keys/3/password?ensure=true&len=32&enc=base64"
           platform-policy: true
           debug: true
 
@@ -569,7 +569,7 @@ certificate-authority:
           signature-algorithm: Ed25519
           hash: SHA-256
           store: software
-          password: "kms://certificate-authority/identity/keys/password/4?ensure=true&len=32&enc=base64"
+          password: "kms://ca/root/keys/4/password?ensure=true&len=32&enc=base64"
           platform-policy: true
           debug: true
 
@@ -597,7 +597,7 @@ certificate-authority:
           platform-policy: true
         tpm2:
           srk-handle: 0x81000004
-          srk-auth: "kms://certificate-authority/identity/keystores/tpm2/srk-auth/1?ensure=true&len=32&enc=raw"
+          srk-auth: "kms://ca/issuing/tpm2/srk-auth?ensure=true&len=32&enc=raw"
           platform-policy: true
       keys:
         - # PKCS #8 RSA
@@ -607,7 +607,7 @@ certificate-authority:
           signature-algorithm: SHA256-RSA
           hash: SHA-256
           store: software
-          password: "kms://certificate-authority/identity/keys/password/5?ensure=true&len=32&enc=base64"
+          password: "kms://ca/issuing/keys/0/password?ensure=true&len=32&enc=base64"
           platform-policy: true
           debug: true
 
@@ -618,7 +618,7 @@ certificate-authority:
           signature-algorithm: SHA256-RSA
           hash: SHA-256
           store: tpm2
-          password: "kms://certificate-authority/identity/keys/password/6?ensure=true&len=32&enc=base64"
+          password: "kms://ca/issuing/keys/1/password?ensure=true&len=32&enc=base64"
           platform-policy: true
           debug: true
 
@@ -629,7 +629,7 @@ certificate-authority:
           signature-algorithm: ECDSA-SHA256
           hash: SHA-256
           store: software
-          password: "kms://certificate-authority/identity/keys/password/7?ensure=true&len=32&enc=base64"
+          password: "kms://ca/issuing/keys/2/password?ensure=true&len=32&enc=base64"
           platform-policy: true
           debug: true
 
@@ -640,7 +640,7 @@ certificate-authority:
           signature-algorithm: ECDSA-SHA256
           hash: SHA-256
           store: tpm2
-          password: "kms://certificate-authority/identity/keys/password/8?ensure=true&len=32&enc=base64"
+          password: "kms://ca/issuing/keys/3/password?ensure=true&len=32&enc=base64"
           platform-policy: true
           debug: true
 
@@ -651,7 +651,7 @@ certificate-authority:
           signature-algorithm: Ed25519
           hash: SHA-256
           store: software
-          password: "kms://certificate-authority/identity/keys/password/9?ensure=true&len=32&enc=base64"
+          password: "kms://ca/issuing/keys/4/password?ensure=true&len=32&enc=base64"
           platform-policy: true
           debug: true
       valid: 10
@@ -716,6 +716,20 @@ webservice:
     platform-policy: true
     debug: true
   certificate:
+    # The listener serves the node's CP-ISSUED identity, not a certificate
+    # this node's own CA minted. A compute node is enrolled by the
+    # control-plane CA (the enterprise/privacy CA) and already proves that
+    # enrolment with its IDevID, so device-attest-01 is what issues this
+    # listener's operational certificate — deployment-reference.md,
+    # "auto-enroll with control-plane CA via custom ACME extensions
+    # (enroll-01, device-attest-01)".
+    #
+    # The reporting collector and the bootstrap orchestrator's post-install
+    # health probe both verify this listener against the platform anchor (the
+    # control-plane CA) by the name below. A locally-issued certificate cannot
+    # chain there, so without this the node fails both (#655).
+    acme:
+      challenge: device-attest-01
     subject:
       cn: client.example.internal
       organization: Trusted Platform

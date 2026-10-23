@@ -404,24 +404,24 @@ func (c *Client) setHeaders(req *http.Request) {
 }
 
 func (c *Client) handleErrorResponse(resp *http.Response, operation string) error {
-	body, _ := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return &ErrResponseReadFailed{Operation: operation, StatusCode: resp.StatusCode, Cause: err}
+	}
 
-	// Try to parse error response
+	// Carry the server's message when the body is a JSON error response
 	var errResp struct {
 		Error   string `json:"error"`
 		Message string `json:"message"`
 	}
-	if err := json.Unmarshal(body, &errResp); err == nil {
-		msg := errResp.Error
-		if msg == "" {
-			msg = errResp.Message
-		}
-		if msg != "" {
-			return fmt.Errorf("%s failed: %s (status %d)", operation, msg, resp.StatusCode)
+	statusErr := &ErrUnexpectedStatus{Operation: operation, StatusCode: resp.StatusCode}
+	if json.Unmarshal(body, &errResp) == nil {
+		statusErr.Message = errResp.Error
+		if statusErr.Message == "" {
+			statusErr.Message = errResp.Message
 		}
 	}
-
-	return fmt.Errorf("%s failed: status %d", operation, resp.StatusCode)
+	return statusErr
 }
 
 // gRPC Transport Implementation

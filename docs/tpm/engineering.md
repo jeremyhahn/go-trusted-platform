@@ -23,21 +23,28 @@ serves:
 | `pkg/api/daemon/tpm_grpc_service.go` | `TPMGRPCService` — the gRPC `TPMService` implementation |
 | `pkg/api/daemon/idevid_grpc_service.go`, `idevid_ldevid.go` | `IDevIDService` — device identity |
 | `pkg/api/daemon/quic_service.go` | opcode dispatch; `handleTPM2Category` |
-| `pkg/api/quic/tpm_handlers.go` | `TPM2Handler`, the `SubOpTPM2*` constants, TPM2 sentinel errors |
+| `pkg/api/quic/tpm_handlers.go` | `TPM2Handler`, TPM2 sentinel errors |
+| `sdk/go/wire/quicwire/tpm_opcodes.go` | the `SubOpTPM2*` constants |
 | `pkg/api/tpmnv/nv.go` | `Read`, `Write`, `Define`, `Undefine`, `BuildAttributes` |
+| `pkg/api/tpmclear/clear.go` | `Clear` — the one TPM2_Clear every transport calls; resets the in-memory hierarchy auth |
 | `pkg/webservice/v1/rest/tpm/` | `TPMRouter`, `Handlers` |
 | `pkg/api/mcp/tpm_tools.go`, `tpm_tools_exec.go` | the 31 `platform_tpm_*` tools |
 | `pkg/cli/commands/tpm/` | the `platformctl tpm` tree |
 | `sdk/go/services/tpm/` | `Client`, the domain types, the converters |
 | `test/integration/tpm/` | the six-transport parity suite |
 
-**Dead code, do not extend:** `pkg/api/rest/tpm_handlers.go` defines a second,
-richer `TPMHandlers` with `RegisterRoutes` on absolute `/api/v1/tpm/...` paths
-(`make-credential`, `activate-credential`, `certify`, `capabilities`,
-`csr/idevid`, `csr/ldevid`, `platform`, `pcrs/extend`, `nv/*`). `NewTPMHandlers`
-is constructed **only in its own tests**. The registered REST surface is
-`pkg/webservice/v1/rest/tpm` (wired at `pkg/webservice/v1/router.go`,
-`tpmRoutes`). Those extra routes are **not served**.
+**Two REST servers.** The web service serves `pkg/webservice/v1/rest/tpm`
+(wired at `pkg/webservice/v1/router.go`, `tpmRoutes`). platformd's own REST
+listener serves `restapi.TPMHandlers` (`pkg/api/rest/tpm_handlers.go`), mounted
+by `RESTServer.SetTPMHandlers` with the daemon's `TPMGRPCService` as its
+`TPMQuoteService` and the listener's shared `ScopeGuard` (built by
+`newRESTScopeGuard`, `pkg/api/daemon/transport_auth.go`). Each route in
+`TPMHandlers.routes` names its scope, and `ScopeGuard.Require` checks it before
+the handler runs: a bearer platform token must grant the scope, otherwise a
+verified operator client certificate is accepted. Quote and verify delegate to
+the `TPMQuoteService`; the handler set has no verifier of its own. Without a
+quote service `SetTPMHandlers` mounts nothing; without a guard every route
+answers `403`.
 
 ## 2. The SDK edge
 
@@ -122,13 +129,37 @@ downgrade is invisible in every downstream artefact.
    platform-sealed secret is unreachable after a power cycle. The failure path
    is a `WrappedError` with `"failed to restore platform policy"`.
 4. **Unresolved secret references fail closed before the TPM is touched.**
-   `assertNoUnresolvedKMSURI` is applied to `TPMConfig.SSRK.HierarchyAuth` and
-   `TPMConfig.EK.HierarchyAuth`. A `kms://` URI submitted as hierarchy auth
-   would be rejected by the TPM as an oversized buffer and could corrupt
-   hierarchy state.
-5. **The SO PIN is mirrored into `TPMConfig.SSRK`/`.EK` `HierarchyAuth`** when
-   those are empty, so a reboot against an already-provisioned TPM presents the
-   same auth it was provisioned with.
+   `assertNoUnresolvedKMSURI` is applied to the SO PIN and the user PIN. A
+   `kms://` URI submitted as hierarchy auth would be rejected by the TPM as an
+   oversized buffer and could corrupt hierarchy state.
+5. **Hierarchy auth comes from the TPM's own record, never from config.**
+   `TPMConfig.SSRK.HierarchyAuth` (owner) and `TPMConfig.EK.HierarchyAuth`
+   (endorsement) are set from `TPMA_PERMANENT.ownerAuthSet` /
+   `.endorsementAuthSet` (TPM 2.0 Part 2 §8.6), read with
+   `TPM2_GetCapability(TPM_CAP_TPM_PROPERTIES, TPM_PT_PERMANENT)` (Part 3
+   §30.2) right after `OpenTPM` in `InitTPM` and again in
+   `InitPlatformKeyStore` (`pkg/app/tpm_ownership.go`). A clear bit means the
+   hierarchy's auth is empty; a set bit means it is the SO PIN. There is no
+   file or datastore flag: the bits survive reboot and only `TPM2_Clear`
+   resets them.
+   - **First start (owner bit clear)** — a fresh TPM, hardware or swtpm, has
+     empty owner auth. The SRK is created under that empty auth, then
+     `TPM2_HierarchyChangeAuth` (Part 3 §24.8) sets the owner auth to the SO
+     PIN, which sets `ownerAuthSet`.
+   - **Every later start (owner bit set)** — the SO PIN is presented. It is
+     checked first with an owner-authorized `TPM2_CreatePrimary` (Part 3
+     §24.1); a wrong SO PIN fails with `OwnerAuthRejectedError`, naming the
+     owner hierarchy, before the Platform KeyStore opens. The owner hierarchy
+     is not dictionary-attack protected, so the check costs no lockout.
+   - The endorsement auth is presented as its bit says and is never changed;
+     the lockout auth is never touched.
+   - **A served `Clear` resets both in memory.** `TPM2_Clear` (Part 3 §24.6)
+     empties the owner, endorsement and lockout auth, so every transport's
+     `Clear` goes through `tpmclear.Clear` (`pkg/api/tpmclear`), which empties
+     `SSRK.HierarchyAuth` and `EK.HierarchyAuth` once the TPM accepts the
+     clear. A refused clear leaves both as they were. Without it the next
+     `CreateSRK`, `CreateEK` or `Provision` fails with `TPM_RC_BAD_AUTH` until
+     the daemon restarts.
 6. **SRK policy drift is detected, not ignored.** `InitTPM` compares the stored
    `srkAttrs.TPMAttributes.Public.AuthPolicy.Buffer` against the live
    `PlatformPolicyDigest`; a mismatch triggers re-provisioning, because
@@ -302,6 +333,7 @@ const (
         SubOpTPM2GetIDevID     byte = 0x1F
         SubOpTPM2MakeCred      byte = 0x20
         SubOpTPM2ActivateCred  byte = 0x21
+        SubOpTPM2Certify       byte = 0x22
 )
 ```
 
@@ -427,7 +459,7 @@ Keys as shipped in `configs/platform/templates/single-node/default.yaml`:
 | `tpm.ek.rsa.size` | `2048` | EK RSA size |
 | `tpm.ssrk.handle` | `0x81000001` | **Shared SRK** persistent handle |
 | `tpm.ssrk.platform-policy` | `false` | Bind the SSRK to the platform policy |
-| `tpm.ssrk.hierarchy-auth` | (empty; filled from the SO PIN) | Storage hierarchy auth |
+| `tpm.ssrk.hierarchy-auth` | (ignored; set from `TPMA_PERMANENT`, §4 item 5) | Storage (owner) hierarchy auth |
 | `tpm.iak.handle` | `0x81010002` | IAK persistent handle |
 | `tpm.iak.signature-algorithm` | `SHA256-RSA` | IAK signing algorithm |
 | `tpm.idevid.handle` | `0x81020000` | IDevID persistent handle |
@@ -467,6 +499,18 @@ unseal fail.
 `NewCLIAdapter`, `NewRESTAdapter`, `NewGRPCAdapter`, `NewQUICAdapter`,
 `NewMCPAdapter`, `NewUnixAdapter`. `TestTPMMultiProtocol` runs one suite against
 all six. Run it with `make integration-test-tpm`.
+
+The six adapters share the daemon's one TPM, so the suite runs in two phases.
+`ReadOnly` runs first for every adapter against the TPM the daemon provisioned:
+`Info`, `EKInfo` at `0x81010001`, `EKCertificate`, `SRKInfo` at the SSRK handle
+`0x81000001`, seal/unseal and the event log. `Lifecycle` then runs per adapter:
+`Clear` with the empty lockout auth, `EKCreate` and `SRKCreate`, `Clear` again
+before each further SRK create (the daemon creates its configured SSRK at the
+one handle), and `Clear` then `Provision`. On the cleared TPM a `Provision`
+presenting an owner password is refused with `TPM_RC_BAD_AUTH`, and one with the
+empty auth succeeds. The suite never sends a wrong lockout auth: one refusal
+puts the lockout hierarchy into lockout and every later `Clear` fails with
+`TPM_RC_LOCKOUT`.
 
 `conventions/feature-docs.md` §4 asks for a `CommandDefinition` per verb. **No
 `CommandDefinition` type exists in this repository** (grepped 2026-08-18); the
@@ -509,19 +553,32 @@ Recorded here so they are debts with a location, not discoveries:
    document flags in their long help (`--so-pin`, `--lockout-password`,
    `--confirm`, `--parent`, `--password`, `--ca`, `--tls`, `--hmac`, …) that are
    not registered, and all return `ErrDaemonConnectionRequired`.
-3. **The physical-TPM QUIC surface is not scope-checked.**
-   `QUICServiceHandler.handleTPM2Category` calls `AuthorizeRequest` nowhere;
-   `pkg/api/daemon/quic_pxe.go` is the only QUIC handler that does. A validated
-   token reaches `SubOpTPM2Clear` and `SubOpTPM2Unseal`.
-4. **`TPMService` and `IDevIDService` are absent from the gRPC scope catalog**
-   (`pkg/api/grpc/method_permissions.go`), which is default-allow. Likewise all
-   31 `platform_tpm_*` and all 17 `idevid_*` / `iak_*` MCP tools are absent from
-   `pkg/api/mcp/authz.go`, which is also default-allow.
-5. **AK and IAK are the same key under two names.** gRPC and REST call it `ak`
+3. **`TPMService` and `IDevIDService` are scoped on gRPC; most of their MCP
+   tools are refused.** Every RPC of both services is in the default-deny gRPC
+   scope catalog (`pkg/api/grpc/method_permissions.go`) under `tpm:*` and
+   `idevid:*`. Of the MCP tools only `platform_tpm_quote` and
+   `platform_tpm_verify_quote` are classified (`tpm:read`, #482); the other
+   `platform_tpm_*`, `idevid_*` and `iak_*` tools are absent from
+   `pkg/api/mcp/authz.go`, which is also default-deny, so every caller is
+   refused until they are classified ([api.md](api.md) §9).
+4. **AK and IAK are the same key under two names.** gRPC and REST call it `ak`
    (`CreateAK`, `/api/v1/tpm/ak`); QUIC and MCP call it IAK (`SubOpTPM2CreateIAK`,
    `platform_tpm_iak_create`). A client author reading one transport will not
    find the other.
-6. **`pkg/api/rest/tpm_handlers.go` is unreachable production code** (§1).
+5. **The daemon REST listener's TPM routes are a thin protojson front for
+   `TPMService`.** Each `TPMHandlers` route decodes the RPC's request message
+   (body, then query and path parameters through `decodeProtoParams`, the
+   decoder the compute routes share in `pkg/api/rest/protorest.go`), calls the
+   RPC on the same `TPMGRPCService` gRPC serves, and writes the response
+   message; it holds no TPM logic. A field the message does not have is `400`,
+   never ignored, so a client and server that disagree on a name fail loudly
+   instead of running with a default ([api.md](api.md) §1). The LDevID CSR is
+   not a `TPMHandlers` route; `POST /tpm/activate-credential` is, calling
+   `TPMService.ActivateCredential` under `tpm:write`.
+6. **The daemon REST listener's device-identity routes carry no scope.**
+   `/api/v1/tpm/idevid*`, `/tpm/iak*` and `/tpm/device/attributes`
+   (`pkg/api/daemon/rest_idevid.go`) rely on mTLS alone, where `TPMHandlers`
+   routes need a scoped platform token.
 
 ## 14. Related
 

@@ -48,8 +48,11 @@ type Config struct {
 	// canonical root routes and the virtual hosts. SurfaceEdge is a public
 	// listener that carries only the ACME routes, the virtual hosts and the
 	// HTTPS redirect — no console, no API, no registry — and answers an
-	// unknown Host with 421 rather than the SPA. Any other value refuses to
-	// start.
+	// unknown Host with 421 rather than the SPA. SurfaceProvisioning is the
+	// listener on the isolated provisioning zone and carries only the
+	// unauthenticated boot-time GET /api/v1/devices/config (#177); its
+	// bind-host must be an address inside the provisioning zone's subnet.
+	// Any other value refuses to start.
 	Surface string `yaml:"surface" json:"surface" mapstructure:"surface"`
 
 	// Listener limits. Zero takes the surface's default (see
@@ -75,6 +78,9 @@ const (
 	SurfaceFull = "full"
 	// SurfaceEdge mounts only ACME, the virtual hosts and the TLS redirect.
 	SurfaceEdge = "edge"
+	// SurfaceProvisioning mounts only GET /api/v1/devices/config and the TLS
+	// redirect, on an address inside the provisioning zone (#177).
+	SurfaceProvisioning = "provisioning"
 )
 
 // RateLimitConfig is a per-source token bucket: RequestsPerSecond sustained,
@@ -176,11 +182,11 @@ type PlatformTokenConfig struct {
 
 	// IntrospectionClientSecret is the RFC 7662 client_secret sent as HTTP
 	// Basic credentials on the introspection request.
-	IntrospectionClientSecret string `yaml:"introspection-client-secret" json:"introspection_client_secret" mapstructure:"introspection-client-secret"`
+	IntrospectionClientSecret string `yaml:"introspection-client-secret" json:"introspection_client_secret" mapstructure:"introspection-client-secret" secret:"true"`
 
 	// IntrospectionBearerToken, when set, is sent as a Bearer Authorization
 	// header on the introspection request instead of Basic credentials.
-	IntrospectionBearerToken string `yaml:"introspection-bearer-token" json:"introspection_bearer_token" mapstructure:"introspection-bearer-token"`
+	IntrospectionBearerToken string `yaml:"introspection-bearer-token" json:"introspection_bearer_token" mapstructure:"introspection-bearer-token" secret:"true"`
 
 	// AuthzMode selects how tokens are authorized: "offline" (signed scopes +
 	// expiry only), "online" (uncached liveness every request), or "hybrid"

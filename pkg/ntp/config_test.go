@@ -186,6 +186,20 @@ func TestConfigValidateRejectsInvalidInput(t *testing.T) {
 			}},
 			want: ErrMissingNTSMaterial{Field: "serve.nts.key-uri"},
 		},
+		"NTS-KE port out of range": {
+			config: &Config{Enabled: true, Mode: ModeServe, Serve: &ServeConfig{
+				ListenNetworks: []string{"10.0.0.0/8"},
+				NTS:            &NTSConfig{Enabled: true, CertURI: "kms://c", KeyURI: "kms://k", Port: 70000},
+			}},
+			want: ErrInvalidNTSKEPort{Port: 70000},
+		},
+		"negative NTS-KE port": {
+			config: &Config{Enabled: true, Mode: ModeServe, Serve: &ServeConfig{
+				ListenNetworks: []string{"10.0.0.0/8"},
+				NTS:            &NTSConfig{Enabled: true, CertURI: "kms://c", KeyURI: "kms://k", Port: -1},
+			}},
+			want: ErrInvalidNTSKEPort{Port: -1},
+		},
 	}
 
 	for name, tc := range cases {
@@ -235,6 +249,9 @@ func TestConfigAccessorsUseApprovedDefaults(t *testing.T) {
 	if got := cfg.LocalStratum(); got != 10 {
 		t.Fatalf("LocalStratum() = %d, want 10", got)
 	}
+	if got := cfg.NTSKEPort(); got != 4460 {
+		t.Fatalf("NTSKEPort() = %d, want 4460", got)
+	}
 	if !cfg.NTSServing() {
 		t.Fatal("NTSServing() = false, want true")
 	}
@@ -263,6 +280,9 @@ func TestConfigAccessorsFallBackWhenUnset(t *testing.T) {
 	}
 	if got := absent.LocalStratum(); got != DefaultLocalStratum {
 		t.Fatalf("nil LocalStratum() = %d, want %d", got, DefaultLocalStratum)
+	}
+	if got := absent.NTSKEPort(); got != DefaultNTSKEPort {
+		t.Fatalf("nil NTSKEPort() = %d, want %d", got, DefaultNTSKEPort)
 	}
 	if absent.NTSServing() {
 		t.Fatal("nil NTSServing() = true, want false")

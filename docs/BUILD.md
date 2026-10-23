@@ -1,14 +1,20 @@
 # Build Docs
 
+> **Status: REFERENCE** · Last verified: 2026-10-13
+> Building the go-trusted-platform binaries and the installer ISO from source.
+
 ## Binary Architecture
 
-go-trusted-platform uses a three-binary architecture for separation of concerns:
+go-trusted-platform builds six binaries, one per directory under `cmd/`:
 
-| Binary | Purpose | Size | Commands |
-|--------|---------|------|----------|
-| `platformd` | Daemon server | ~65MB | serve, version |
-| `platformctl` | CLI operations | ~52MB | firstboot + all operational commands |
-| `platform-initrd` | Initramfs boot | ~22MB | boot, recovery |
+| Binary | Purpose | Commands |
+|--------|---------|----------|
+| `platformd` | Daemon server | serve, version |
+| `gatewayd` | Edge daemon | serve, service, version |
+| `platformctl` | CLI operations | firstboot + all operational commands |
+| `platform-initrd` | Initramfs boot | boot, recovery, version |
+| `pxeboot` | Network boot server | — |
+| `deployer-pin` | Deployer pin management | — |
 
 **Note**: `firstboot` runs via `platformctl` after switch_root (when the real filesystem is mounted), not in platform-initrd. This keeps platform-initrd minimal for initramfs size constraints.
 
@@ -39,11 +45,11 @@ The `Makefile` provides targets for performing optimized and debug builds that p
 
 #### Dynamic Builds
 
-The [trusted-platform-builder](/build/docker/trusted-platform-builder) container provides a [Debian](https://www.debian.org/).
+The [trusted-platform-builder](../build/docker/trusted-platform-builder) container provides a [Debian](https://www.debian.org/).
 
 #### Static Builds
 
-The [trusted-platform-builder](/build/docker/trusted-platform-builder) container provides an [Alpine Linux](https://www.alpinelinux.org/) `(Dockerfile-alpine)` build environment based on [musl libc](https://musl.libc.org/) to facilitate static builds.
+The [trusted-platform-builder](../build/docker/trusted-platform-builder) container provides an [Alpine Linux](https://www.alpinelinux.org/) `(Dockerfile-alpine)` build environment based on [musl libc](https://musl.libc.org/) to facilitate static builds.
 
 
 The following libraries require dynamic linking:
@@ -59,11 +65,45 @@ To perform a container build, use the Makefile `docker-builder-load` and `releas
 
 | Target | Description |
 |--------|-------------|
-| `make build` | Build platformd and platformctl |
-| `make platform-initrd` | Build platform-initrd (~22MB, boot/recovery only) |
+| `make build` | Build platformd, platformctl, gatewayd and deployer-pin |
+| `make platform-initrd` | Build platform-initrd (boot/recovery only) |
 | `make platform-initrd-static` | Build static platform-initrd |
-| `make binaries` | Build all binaries |
+| `make binaries` | Build the `make build` binaries plus platform-initrd |
 | `make build-static` | Build all static binaries |
+
+### CI Stage Targets
+
+CI runs the five stages of the handbook's `ci-standard.md` §1, each a `make`
+target (`devops.md` §4):
+
+| Target | Stage |
+|--------|-------|
+| `make build` | Build every binary |
+| `make test` | Unit tests |
+| `make integration-test` | Integration suites in the devcontainer ([test/integration.md](test/integration.md)) |
+| `make security` | gosec, govulncheck, `go mod verify`, trivy fs (`devops.md` §8) |
+| `make deps-check` | Latest-version check |
+
+`make vuln`, the govulncheck step of `make security`, scans every package of
+each module in `GOVULN_MODULES` (`.` and `sdk/go`). It first runs
+`govulncheck -scan package`, which reports the vulnerable packages the code
+imports. When every one of them is in the `GOVULN_ALLOW` allowlist, the module
+passes: a called vulnerability is always an imported one. Otherwise it runs the
+symbol scan (`-scan symbol`), which builds the call graph and fails the target
+on any called vulnerability outside the allowlist. The symbol scan of module
+`.` needs more than the CI job's 12 GiB of memory, so it runs only in that case
+(#940). If either scan cannot complete, the target fails.
+
+`make deps-check` runs `scripts/depscheck` over `go.mod` and `sdk/go/go.mod`.
+It fails when a direct `require` or a version `replace` is behind its latest
+version and the line has no comment, trailing or directly above, naming the
+reason (`devops.md` §9). A first-party module's latest is its highest tag
+including `-alpha`, the version `make deps-latest` moves to
+(`dependency-resolution.md` §3); a third-party require's is the go command's
+`go list -m -u` update. When that update was released less than 7 days ago
+the lag is reported on stdout as `fresh:` and does not fail; at 7 days, or
+when `go list` prints no release time, it fails as above. It looks versions up through the module proxy and the
+dev Gitea, so under `GOPROXY=off` it exits 2 with that reason rather than pass.
 
 ### Build All Binaries
 
@@ -74,11 +114,6 @@ make binaries
 # Build all binaries (static)
 make binaries-static
 
-# Build with size info
-make binaries
-#   platformd: 65M (daemon)
-#   platformctl: 52M (CLI)
-#   platform-initrd: 44M (initramfs)
 ```
 
 ## Install

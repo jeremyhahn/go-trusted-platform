@@ -137,6 +137,18 @@ func (e ErrConnectionFailed) Error() string {
 	return fmt.Sprintf("failed to connect to %s: %v", e.Target, e.Err)
 }
 
+func (e ErrConnectionFailed) Unwrap() error {
+	return e.Err
+}
+
+// ErrEmbeddedHostUnavailable is returned when a context uses the embedded
+// transport and the command has no way to host platformd in-process.
+type ErrEmbeddedHostUnavailable struct{}
+
+func (e ErrEmbeddedHostUnavailable) Error() string {
+	return "the embedded transport needs platformd hosted in this process, and this command cannot host it"
+}
+
 // ErrInvalidServiceType is returned when an invalid service type is specified
 type ErrInvalidServiceType struct {
 	Type string
@@ -214,6 +226,22 @@ type ErrTLSCACertInvalid struct {
 
 func (e ErrTLSCACertInvalid) Error() string {
 	return fmt.Sprintf("CA certificate file contains no valid PEM data: %s", e.Path)
+}
+
+// ErrFlagSetup is a command-line flag that could not be configured while the
+// command tree was built.
+type ErrFlagSetup struct {
+	Command string
+	Flag    string
+	Err     error
+}
+
+func (e ErrFlagSetup) Error() string {
+	return fmt.Sprintf("command %q: failed to set up flag --%s: %v", e.Command, e.Flag, e.Err)
+}
+
+func (e ErrFlagSetup) Unwrap() error {
+	return e.Err
 }
 
 // MessageError is a typed error carrying a fully formatted message with no

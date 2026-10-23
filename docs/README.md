@@ -1,12 +1,14 @@
 # go-trusted-platform Documentation
 
+> **Status: NORMATIVE** · Scope: go-trusted-platform `docs/` index · Last verified: 2026-10-13
+> Conflicts with this document are defects. Fix them here first.
+
 > Complete documentation for the Zero-Trust Trusted Computing Platform
 
 ## Feature folders — start here
 
-Documentation is migrating to the five-file feature-folder layout defined by
-`../handbook/software/conventions/feature-docs.md` (ratified 2026-08-19). Each converted
-feature has:
+Documentation uses the five-file feature-folder layout defined by
+`../handbook/software/conventions/feature-docs.md`. Each feature has:
 
 ```
 docs/<feature>/
@@ -27,12 +29,14 @@ exposure-gaps register, which lives in the handbook, not in this repository:
 **The folder is the requirements contract**, not commentary. Read it before the
 code, and change it in the same PR as the behavior.
 
-### Converted — every feature (32, 2026-08-18)
+### Converted — every feature (38)
 
 | Feature | What it covers |
 |---|---|
 | [attestation/](attestation/) | TPM attestation of hosts, VMs and containers |
 | [auth/](auth/) | Platform authentication — mTLS identity extraction and the per-transport auth seams |
+| [barrier/](barrier/) | The platform barrier — init, Shamir, unseal, seal, rekey, recovery — and the `platformd` start-up gate |
+| [bgp/](bgp/) | The BGP speaker — gatewayd's transit sessions and the overlay's EVPN control plane |
 | [bmc/](bmc/) | Baseboard management — IPMI, Redfish, vendor quirks |
 | [bootstrap/](bootstrap/) | Trust bootstrap, day-zero orchestration, first boot |
 | [ca/](ca/) | Certificate authority and ACME (re-export frontage) |
@@ -43,7 +47,9 @@ code, and change it in the same PR as the behavior.
 | [dht/](dht/) | **PLANNED** — the P2P/DHT network, design only, no implementation |
 | [dns/](dns/) | Authoritative DNS and DNSSEC |
 | [eab/](eab/) | ACME External Account Binding |
+| [factory-image/](factory-image/) | Factory disk images — Raspberry Pi, QEMU virt, U-Boot (`platformctl diskimage`) |
 | [firmware/](firmware/) | UEFI, Secure Boot, UKI, Authenticode, module signing |
+| [fips/](fips/) | FIPS 140-3 mode — the `fips` build tag, `fips140=only`, the kernel indicator, and what a FIPS build refuses |
 | [gateway/](gateway/) | `gatewayd` edge services and the trusted reverse proxy |
 | [health/](health/) | Liveness, readiness and component health |
 | [iam/](iam/) | Identity and access management (re-export frontage) |
@@ -51,16 +57,19 @@ code, and change it in the same PR as the behavior.
 | [installer/](installer/) | Installer, initrd, ISO building, boot-time unlock |
 | [ipxe/](ipxe/) | The PXE/iPXE boot server |
 | [kms/](kms/) | Key management (re-export frontage) |
+| [luks/](luks/) | Runtime LUKS2 key-slot management (`platformctl luks`) |
 | [ntp/](ntp/) | Time synchronisation |
 | [provisioning/](provisioning/) | Zero-touch provisioning, PXE, installer |
 | [proxy/](proxy/) | The trusted reverse proxy engine and proxy authorization |
 | [registry/](registry/) | Attestation-gated OCI registry |
+| [sdk/](sdk/) | The Go SDK (`sdk/go`) — the client `platformctl` uses to reach `platformd` |
 | [sdn/](sdn/) | Bridges, ports, flows, port authentication, overlay |
 | [secrets/](secrets/) | Secret-reference resolution |
 | [security/](security/) | Rate limiting, input validation, embedded OPA policy |
 | [switch/](switch/) | Managed switch provisioning and vendor drivers |
 | [tenant/](tenant/) | Platform tenancy |
 | [tpm/](tpm/) | This repo's use of TPM 2.0 (the hardware crypto itself is owned below) |
+| [trust/](trust/) | Platform trust anchor (the platform CA) and the `trust.bootstrap` / `trust.bmc` resolver |
 | [vpn/](vpn/) | **DESIGN** — attested remote-access VPN (identity, attestation, posture, MFA gate; WireGuard / MASQUE), not implemented |
 | [vtpm/](vtpm/) | Virtual TPM bundles and templates |
 | [web/](web/) | The web server, embedded assets and the control panel |
@@ -72,7 +81,7 @@ picture. Other feature folders link to it rather than repeating it.
 ### The remaining directories are not features
 
 `api/`, `architecture/`, `archive/`, `assets/`, `cli/`, `configuration/`,
-`man/`, `operations/`, `plans/`, `reference/`, `roadmap/`, `test/` and
+`operations/`, `plans/`, `reference/`, `roadmap/`, `test/` and
 `testing/` are cross-cutting sections and collections, not capabilities, so the
 five-file layout does not apply to them. They still predate the convention and
 their shape is **not a precedent** (feature-docs.md §8): do not add a file in the
@@ -87,8 +96,7 @@ is maintained.
 
 ## Quick Links
 
-- [Features](FEATURES.md) - Complete feature list
-- [Roadmap](ROADMAP.md) - Development progress and planned features
+- [Roadmap](../ROADMAP.md) - What is complete and what remains to the release candidate
 - [Build Guide](BUILD.md) - Building from source
 
 ---
@@ -97,55 +105,40 @@ is maintained.
 
 ### Platform Initialization
 
-Generate a configuration file and initialize the platform:
+Initialize the platform on first start:
 
 ```bash
-# Generate default config and initialize the platform
-./platformd config gen \
-    --init \
-    --debug \
-    --fips=false \
-    --domain=example.test \
-    --platform-dir trusted-data
-
-# Or copy an existing config
-cp configs/platform/config.prod.yaml config.yaml
+# Initialize and provision the platform, then keep running
+sudo ./platformd --init --debug --platform-dir trusted-data
 ```
 
-Configuration options:
+Configuration options (persistent flags of `platformd`, `pkg/daemon/commands/root.go`):
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--domain` | `example.com` | Domain name |
-| `--platform-dir` | `trusted-data` | Platform data directory |
-| `--fips` | `true` | Enable FIPS mode |
-| `--acme-directory-url` | `https://example.com/api/v1/acme/directory` | ACME Directory URL |
-| `--type` | `server` | Configuration type (server or client) |
+| `--init` | `false` | Initialize and provision the platform |
+| `--platform-dir` | `<working dir>/trusted-data` | Platform data directory |
+| `--config-dir` | `/etc/trusted-platform` | Configuration file directory |
+| `--config`, `-c` | — | Path to a specific config file (overrides `--config-dir`) |
+| `--env`, `-e` | `dev` | Runtime environment (dev, staging, prod) |
+| `--debug`, `-d` | `false` | Enable debug mode |
 
 ### Starting Services
 
 ```bash
-# Start the platform daemon (root privileges required)
-# Runs as master (root) + worker (deprivileged) processes
-sudo ./platformd
+# Serve every transport, with mutual TLS on REST
+sudo ./platformd serve --enable-mtls
 
-# Start the platform (web services auto-start if configured)
-./platformd serve
-
-# Navigate to OpenAPI docs
-xdg-open https://localhost:8443/swagger/
+# Check the daemon from the CLI
+platformctl status
 ```
 
-### Quick Example: VM with Network Access
+### Quick Example: VM with a vTPM
 
 ```bash
-# Create and start a VM
-platformctl vm create --name test-vm --cpus 2 --memory 4096 --disk test.qcow2
-platformctl vm start --name test-vm
-
-# Device enrollment via ACME
-platformctl device enroll --bridge br0 --port tap0
-platformctl device activate --port tap0
+# Create a VM with a virtual TPM on a bridge and start it
+platformctl compute create --name test-vm --cpus 2 --memory 4096 --tpm --start
+platformctl compute get test-vm
 ```
 
 ---
@@ -169,7 +162,7 @@ platformctl device activate --port tap0
 |-----------|-------------|
 | [SDN Controller](sdn/) | OVS, OpenFlow, 802.1X port authentication |
 | [DNS Server](dns/) | Authoritative DNS with DNSSEC and DANE |
-| [Security](security/) | Protected memory (`MemoryEnclave`), rate limiting, audit logging, input validation |
+| [Security](security/) | Protected memory (`MemoryEnclave`), rate limiting, input validation, embedded OPA policy |
 
 ### Compute & Orchestration
 
@@ -177,7 +170,7 @@ platformctl device activate --port tap0
 |-----------|-------------|
 | [Compute](compute/) | VM orchestration with QEMU/KVM and vTPM |
 | [Attestation](attestation/) | Workload attestation from bare metal to containers |
-| [Firmware](firmware/) | *Planned* - AVR, Raspberry Pi, Android firmware and OTA |
+| [Firmware](firmware/) | UEFI Secure Boot, UKI, Authenticode, module signing, AVR attestation |
 | [Virtual TPM](vtpm/) | Software TPM for development and testing |
 
 ### Infrastructure
@@ -189,7 +182,7 @@ platformctl device activate --port tap0
 | [Health](health/) | Health checks and Prometheus metrics |
 | [Provisioning](provisioning/) | Device enrollment and configuration |
 | [Device](device/) | Device profiles and network phases |
-| [Barrier Storage](cli/barrier.md) | Encrypted secret storage with multi-tier access. There is no `barrier/` component directory; the canonical 9-verb barrier CLI surface is the documentation that exists |
+| [Barrier](barrier/) | The platform barrier lifecycle, the start-up gate and `platformctl barrier` |
 | [Secrets Management](secrets/) | Credential and key lifecycle management |
 | [Registry](registry/) | Container and artifact registry with attestation |
 
@@ -198,18 +191,14 @@ platformctl device activate --port tap0
 | Component | Description |
 |-----------|-------------|
 | [DHT](dht/) | *Planned* - Distributed hash table, cryptocurrency, content sharing |
-| [Datastore](architecture/quicbaas-integration.md) | QuicBaaS embedded database and service layer (KMS, IAM, secrets, storage) |
 
 ### Developer Resources
 
 | Component | Description |
 |-----------|-------------|
-| [SDK Overview](api/sdk-overview.md) | SDK architecture and design |
-| [Go SDK](api/sdk-go.md) | Go SDK for `platformctl` and service integration |
 | [JavaScript SDK](api/sdk-javascript.md) | TypeScript SDK for web applications |
 | [API Reference](api/) | Multi-protocol API docs: REST, gRPC, QUIC, MCP, Unix Socket |
-| [CLI Reference](cli/) | Command-line interface documentation |
-| [Man Pages](man/) | Unix manual pages |
+| [CLI Reference](daemon/cli.md) | `platformctl` global flags and command tree; the six binaries; each command group's `cli.md` |
 | [Operations](operations/) | Monitoring, troubleshooting, and maintenance |
 | [Web UI](web/) | Platform management dashboard and admin interface |
 
@@ -224,9 +213,6 @@ platformctl device activate --port tap0
 
 ## Key Documents
 
-- [Binary Separation](architecture/binary-separation.md) - Three-binary architecture (platform-initrd, platformd, platformctl)
-- [Security Model](architecture/security-model.md) - Privilege separation and threat model
-- [QuicBaaS Integration](architecture/quicbaas-integration.md) - Service layer architecture
 - [802.1X Authentication](sdn/802.1x.md) - Certificate-based network access
 - [Reference Architecture](architecture/reference.md) - IoT hybrid cloud reference architecture
 
@@ -234,22 +220,20 @@ platformctl device activate --port tap0
 
 ## Documentation Structure
 
-Each component has its own directory under `docs/` with a consistent structure:
+Each feature has its own directory under `docs/` with the five files shown in
+[Feature folders](#feature-folders--start-here):
 
 ```
 docs/
 ├── README.md              # This file - main documentation index
-├── FEATURES.md            # Complete feature list
-├── ROADMAP.md             # Top-level development roadmap
 ├── BUILD.md               # Build instructions
 │
-├── {component}/           # Component documentation
-│   ├── README.md          # Component overview and quick start
-│   ├── architecture.md    # System design and data flows
-│   ├── configuration.md   # Configuration reference
-│   ├── api-reference.md   # REST/gRPC API documentation
-│   ├── cli-usage.md       # Command-line interface
-│   └── ROADMAP.md         # Component roadmap (if incomplete)
+├── {feature}/             # Feature documentation
+│   ├── architecture.md    # Design, boundaries, rejected alternatives
+│   ├── engineering.md     # The implementation contract
+│   ├── cli.md             # Every verb and flag
+│   ├── api.md             # Every capability on all six transports
+│   └── user.md            # Task-oriented usage
 ```
 
 ### Documentation Conventions
@@ -258,22 +242,10 @@ All documentation follows these conventions:
 
 | Convention | Description |
 |------------|-------------|
-| **README.md** | Entry point with overview, quick start, and links to detailed docs |
 | **Tables** | Used for feature lists, configuration options, and API references |
 | **Code blocks** | YAML for config, bash for CLI, Go for API examples |
-| **Status banners** | Planned features marked with `> **STATUS: PLANNED FEATURE**` |
+| **Status banners** | Every document opens with a `NORMATIVE`, `REFERENCE` or `ARCHIVE` banner and a `Last verified:` stamp (handbook `software/conventions/documentation.md` §1-§3) |
 | **Cross-references** | Relative links between related documentation |
-
-### File Naming
-
-| File | Purpose |
-|------|---------|
-| `README.md` | Component overview and navigation |
-| `architecture.md` | Design decisions, diagrams, data flows |
-| `configuration.md` | Complete YAML configuration reference |
-| `api-reference.md` | REST and gRPC endpoint documentation |
-| `cli-usage.md` | Command-line examples and options |
-| `ROADMAP.md` | Development status and planned work |
 
 ---
 
@@ -281,30 +253,26 @@ All documentation follows these conventions:
 
 ### Component Status
 
-Local mode is the only mode with shipping code, and it is roughly 85% complete — see [architecture/platform-modes.md](architecture/platform-modes.md). The per-component statuses below mean the component's core is in place and usable; they do not mean the platform as a whole is finished. Work outstanding across the whole platform:
-
-- **Phase 4, Device Enrollment Strategies** (TCG Spec Section 6) is entirely unchecked in [ROADMAP.md](ROADMAP.md): Full Pre-Provision, EK-Only, EAB, and Attestation enrollment.
-- **Phases 7 and 8** (LAK/LDevID key operations and the certify-01 challenge, both landing in go-xkms) are **deferred**, with Phase 8 blocked on Phase 7.
-- **P2P, P2P Federation, and Hosted** modes are Not Started.
-- **DHT** and **Firmware** are Not Started; both have design docs but no implementation package.
+Local mode is the only mode with shipping code, and it is roughly 85% complete — see [ROADMAP.md](../ROADMAP.md). The per-component statuses below mean the component's core is in place and usable; they do not mean the platform as a whole is finished. What is complete and what remains to the release candidate is in the repository [ROADMAP.md](../ROADMAP.md), the one roadmap.
 
 | Component | Status | Documentation |
 |-----------|--------|---------------|
 | Attestation | Complete | [attestation/](attestation/) |
+| Barrier | Partial (`BarrierService` is gRPC/Unix only) | [barrier/](barrier/) |
 | CA | Complete | [ca/](ca/) |
 | Cluster | Complete | [cluster/](cluster/) |
 | Compute | Complete | [compute/](compute/) |
-| Datastore | Complete | [architecture/quicbaas-integration.md](architecture/quicbaas-integration.md) |
+| Datastore | Complete | [sdk/](sdk/) |
 | Device | Complete | [device/](device/) |
 | IAM | Complete | [iam/](iam/) |
 | KMS | Complete | [kms/](kms/) |
 | SDN | Complete | [sdn/](sdn/) |
 | Tenant | Complete | [tenant/](tenant/) |
 | TPM | Complete | [tpm/](tpm/) |
-| **DHT** | Not Started (design only, no `pkg/dht`) | [dht/ROADMAP.md](dht/ROADMAP.md) |
-| **Firmware** | Not Started (design only, no `pkg/firmware`) | [firmware/ROADMAP.md](firmware/ROADMAP.md) |
+| **DHT** | Not Started (design only, no `pkg/dht`) | [dht/](dht/) |
+| Firmware | Partial (UEFI Secure Boot, UKI, module signing, `pkg/firmware/avr/attestation`; no OTA) | [firmware/](firmware/) |
 
-See [ROADMAP.md](ROADMAP.md) for the full picture, including the unchecked Phase 4 enrollment strategies and the deferred Phases 7-8.
+See [ROADMAP.md](../ROADMAP.md) for the full picture.
 
 ---
 
@@ -314,45 +282,32 @@ We welcome contributions to go-trusted-platform! Here's how you can help:
 
 ### Contributing to Documentation
 
-1. **Find incomplete items** - Check component `ROADMAP.md` files for `- [ ]` items
-2. **Pick a task** - Choose an unchecked item to work on
-3. **Submit a PR** - Include the updated `ROADMAP.md` with your item checked
+1. **Find an issue** - The issue tracker is the backlog; [ROADMAP.md](../ROADMAP.md) orders it
+2. **Pick a task** - Choose an open, unblocked issue
+3. **Submit a PR** - Reference the issue and update the feature folder under `docs/`
 
 ### Contributing to Code
 
-1. **Review the roadmap** - See [ROADMAP.md](ROADMAP.md) for planned features
-2. **Check component roadmaps** - Each component has specific tasks in its `ROADMAP.md`
-3. **Follow conventions** - See [CLAUDE.md](../CLAUDE.md) for coding standards
-4. **Update documentation** - Include doc updates with code changes
-5. **Mark progress** - Update relevant `ROADMAP.md` checkboxes in your PR
+1. **Review the roadmap** - See [ROADMAP.md](../ROADMAP.md) for planned work
+2. **Follow conventions** - See [CLAUDE.md](../CLAUDE.md) for coding standards
+3. **Update documentation** - Include doc updates with code changes
 
 ### PR Checklist
 
 When submitting a PR, ensure you:
 
-- [ ] Update relevant `ROADMAP.md` files to mark completed items as `- [x]`
 - [ ] Add/update documentation for new features
 - [ ] Follow the documentation conventions above
 - [ ] Include tests with 90%+ coverage
-- [ ] Reference the roadmap item in your PR description
+- [ ] Reference the issue in your PR description
 
-### Priority Areas
-
-These components need work:
-
-| Priority | Component | Roadmap | Description |
-|----------|-----------|---------|-------------|
-| Next | Device Enrollment | [ROADMAP.md](ROADMAP.md) | Phase 4 strategies (TCG Section 6), all unchecked |
-| Future | [DHT](dht/) | [ROADMAP.md](dht/ROADMAP.md) | P2P network, FROST-DKG, distributed services |
-| Future | [Firmware](firmware/) | [ROADMAP.md](firmware/ROADMAP.md) | Raspberry Pi, Android, AVR support |
-
-See [ROADMAP.md](ROADMAP.md) for the full development roadmap.
+Priorities are in [ROADMAP.md](../ROADMAP.md).
 
 ---
 
 ## Standards Compliance
 
-This project aims to be FIPS compliant and follows best practices and guidance issued by the TCG and NIST.
+This project aims to be FIPS compliant and follows best practices and guidance issued by the TCG and NIST. What FIPS mode does today is in [fips/](fips/).
 
 ### TCG (Trusted Computing Group)
 

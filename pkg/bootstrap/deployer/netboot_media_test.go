@@ -129,6 +129,86 @@ func TestStageNetbootMedia_ReplacesAChangedBuildWholesale(t *testing.T) {
 	assert.NoError(t, err, "what the build does not own is left alone")
 }
 
+// TestStageNetbootMedia_ReplacesTheHTTPBootFiles: a boot.sig left from an
+// older build next to a new boot.img would be served as the pair the EEPROM
+// refuses, so the build owns its http-boot directory.
+func TestStageNetbootMedia_ReplacesTheHTTPBootFiles(t *testing.T) {
+	httpBoot := func(version string) string {
+		return writeBuild(t, map[string]string{
+			"media/aarch64-rpi/" + container.MediaSetDescriptor: "name: aarch64-rpi\n",
+			"http-boot/boot.img":   "image " + version,
+			"http-boot/boot.sig":   "sig " + version,
+			"http-boot/pubkey.bin": "key",
+		}, "media_sets: [aarch64-rpi]\nhttp_boot: http-boot\n")
+	}
+	remote := t.TempDir()
+	host := &localHost{}
+	_, err := stageNetbootMedia(t.Context(), host, httpBoot("v1"), remote, discard())
+	require.NoError(t, err)
+	stale := filepath.Join(remote, "http-boot", "boot.sig.old")
+	require.NoError(t, os.WriteFile(stale, []byte("old"), 0o644))
+
+	_, err = stageNetbootMedia(t.Context(), host, httpBoot("v2"), remote, discard())
+	require.NoError(t, err)
+	data, err := os.ReadFile(filepath.Join(remote, "http-boot", "boot.img"))
+	require.NoError(t, err)
+	assert.Equal(t, "image v2", string(data))
+	_, err = os.Stat(stale)
+	assert.True(t, os.IsNotExist(err), "nothing of an older http-boot directory survives")
+}
+
+// TestStageNetbootMedia_RemovesHTTPBootWhenTheBuildDropsIt: a build without a
+// fleet key has no signed HTTP boot image, so the directory an earlier signed
+// build left must not stay served.
+func TestStageNetbootMedia_RemovesHTTPBootWhenTheBuildDropsIt(t *testing.T) {
+	signed := writeBuild(t, map[string]string{
+		"media/aarch64-rpi/" + container.MediaSetDescriptor: "name: aarch64-rpi\n",
+		"http-boot/boot.img":   "image",
+		"http-boot/boot.sig":   "sig",
+		"http-boot/pubkey.bin": "key",
+	}, "media_sets: [aarch64-rpi]\nhttp_boot: http-boot\n")
+	remote := t.TempDir()
+	host := &localHost{}
+	_, err := stageNetbootMedia(t.Context(), host, signed, remote, discard())
+	require.NoError(t, err)
+	_, err = os.Stat(filepath.Join(remote, "http-boot", "boot.img"))
+	require.NoError(t, err)
+
+	unsigned := writeBuild(t, map[string]string{
+		"media/aarch64-rpi/" + container.MediaSetDescriptor: "name: aarch64-rpi\n",
+	}, "media_sets: [aarch64-rpi]\n")
+	_, err = stageNetbootMedia(t.Context(), host, unsigned, remote, discard())
+	require.NoError(t, err)
+	_, err = os.Stat(filepath.Join(remote, "http-boot"))
+	assert.True(t, os.IsNotExist(err), "no signed image of an older build is left to be served")
+}
+
+// TestStageNetbootMedia_FileOutsideTheChecksumsIsReplaced: sha256sum -c only
+// checks the files it lists, so a file nobody signed under a directory the
+// build owns has to fail verification and be cleared.
+func TestStageNetbootMedia_FileOutsideTheChecksumsIsReplaced(t *testing.T) {
+	build := piBuild(t, "kernel v1")
+	remote := t.TempDir()
+	host := &localHost{}
+	_, err := stageNetbootMedia(t.Context(), host, build, remote, discard())
+	require.NoError(t, err)
+	for _, extra := range []string{
+		filepath.Join(remote, "http-boot", "boot.img"),
+		filepath.Join(remote, "rpi-tftp", "9ffefdef", "extra.bin"),
+		filepath.Join(remote, "media", "aarch64-rpi", "extra.bin"),
+	} {
+		require.NoError(t, os.MkdirAll(filepath.Dir(extra), 0o755))
+		require.NoError(t, os.WriteFile(extra, []byte("unsigned"), 0o644))
+
+		host.uploads = nil
+		_, err = stageNetbootMedia(t.Context(), host, build, remote, discard())
+		require.NoError(t, err)
+		assert.NotEmpty(t, host.uploads, "%s is not in the checksums, so the copy is re-staged", extra)
+		_, err = os.Stat(extra)
+		assert.True(t, os.IsNotExist(err), "%s is gone", extra)
+	}
+}
+
 func TestStageNetbootMedia_TamperedCopyIsReplaced(t *testing.T) {
 	build := piBuild(t, "kernel v1")
 	remote := t.TempDir()

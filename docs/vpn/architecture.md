@@ -1,9 +1,12 @@
 # Remote-Access VPN Architecture
 
-> **Status: PARTIAL — the admission control plane and both data planes exist (#584 PR 1, PR 2); the multi-protocol surface, CLI and client agent are planned.** · Scope: `pkg/sdn/gateway/services/vpn`, `gatewayd` · Last verified: 2026-09-08
+> **Status: NORMATIVE** · Scope: `pkg/sdn/gateway/services/vpn`, `pkg/vpn`, `gatewayd` · Last verified: 2026-10-16
+> Conflicts with this document are defects. Fix them here first.
+> Partial today: the admission core and both data planes (#584 PR 1, PR 2), the gateway service and the operator control plane on every transport with `platformctl vpn` (#584 PR 3) exist; the gateway's mTLS admission listener (#557) and its wire contract exist, as do the client agent core (`pkg/vpn/agent`) and `platformctl vpn connect [--foreground]|disconnect|lease|posture|renew` with their exit codes, presenting the host's TPM device identity, renewing the lease with fresh evidence and bringing up the leased client data plane (WireGuard, absent under FIPS, or MASQUE CONNECT-IP); the JS SDK client and the web page (#584 PR 4) exist; the datapath child's peer RPCs and the process client that reaches them exist (#584), and the gatewayd assembly that wires them is planned; the client's FIDO2 factor signer exists, while the PIV signer and the gateway's factor verifier wait on the SDK.
 > `pkg/sdn/gateway/services/vpn` ships the lease model, the five-step
 > admission pipeline behind `Deps` interfaces, the typed error vocabulary, the
-> config schema with its FIPS refusal, the in-memory lease store and the
+> config schema with its FIPS refusal, the lease store (in memory, or a
+> projection of the control plane's lease record) and the
 > `vpn_posture` OPA policy. Everything marked *(planned)* below is still a
 > requirement, not a claim. Conflicts between this folder and the code are
 > resolved by fixing the code to this contract or amending this contract in
@@ -31,14 +34,14 @@ A **zero-trust remote-access service** on the gateway with **one admission
 control plane and a pluggable data plane**:
 
 ```
-client agent ──mTLS (IDevID)──▶ vpn-admission (vpn.Service; its own process is planned)
+client agent ──mTLS (IDevID)──▶ AdmissionListener → vpn.Service (its own process is planned)
                                    │ 1. identity      calleradmission.Policy.Evaluate
                                    │ 2. attestation   attestation Service.VerifyQuote → verdict.DeviceVerdict
                                    │ 3. posture       opa.OPAEngine.Evaluate("vpn-posture", report)
                                    │ 4. MFA           SDK Security().Auth().{FIDO2,PIV,Factors}()
                                    │ 5. lease         ipam.Allocator.Allocate (TTL)
                                    ▼
-                             datapath (planned process) installs the peer
+                             datapath child installs the peer (InstallVPNPeer)
                                    │
                     ┌──────────────┴──────────────┐
              WireGuard peer                  MASQUE CONNECT-IP session
@@ -65,18 +68,19 @@ or an expired lease revokes the peer immediately.
 
 | Piece | Package | Status | Owner / capability row |
 |---|---|---|---|
-| Admission service | `pkg/sdn/gateway/services/vpn` — `Service`, `New`, `Admit`, `Renew`, `Revoke`, `Challenge`, `Sweep`, `Deps`, `Config`, `Lease`, `MemoryLeaseStore` | exists (#584 PR 1); the datapath process client and the admission listener are *(planned)* | go-trusted-platform — "Edge gateway" (docs/00 §R) |
+| Operator control plane | `pkg/vpn` — `Service` (peers, posture policies and the gateways' leases as tenant-scoped records, session status from gateway telemetry, `DesiredVPN` for the desired config); `VPNService` on REST, gRPC, QUIC `0x52`, MCP and Unix; `sdk/go/services/vpn`; `platformctl vpn` | exists (#584 PR 3) | go-trusted-platform — daemon |
+| Admission service | `pkg/sdn/gateway/services/vpn` — `Service`, `New`, `Admit`, `Renew`, `Revoke`, `Challenge`, `Sweep`, `Deps`, `Config`, `Lease`, `MemoryLeaseStore`, `Restore`, `AdmissionListener`; the gateway's lease projection of the control-plane record (`pkg/sdn/gateway` — `SetVPNLeaseControl`) | exists (#584 PR 1, the projection #584); the mTLS admission listener (`AdmissionListener`) exists (#557); the datapath process client (`DatapathPlane`) exists (#584) | go-trusted-platform — "Edge gateway" (docs/00 §R) |
 | Device identity | `pkg/attestation/calleradmission` — `Policy`, `New`, `Evaluate`, `PeerFromTLS`, `Decision`, `AttestedPeers`, `Auditor` | exists | go-trusted-platform — attestation |
 | Attestation verdict | `pkg/attestation/service` — `Service.VerifyQuote`, `Service.GetQuote`, `Service.CollectHostAttestation`; `pkg/attestation/verdict` — `DeviceVerdict`, `Sink` | exists | go-trusted-platform — attestation |
 | Scheduled re-attestation | `pkg/attestation/reporting` — `Collector`, `Cache`, `NewDeviceAddressResolver` | exists | go-trusted-platform — attestation |
 | Posture policy | `pkg/policy/opa` — `OPAEngine`, `LoadPolicy`, `Evaluate`, `EvaluationResult`; `pkg/policy/opa/policies/vpn_posture.rego` (package `vpn.posture`, embedded, every violation named by rule) | exists (#584 PR 1) | go-trusted-platform — platform OPA (admission policy) |
-| Posture facts on the client | `pkg/uefi` — `ReadSecureBootStatus`, `SecureBootEnabled`; `pkg/ima` — `NewReader`, `NewVerifier`, `Status`; LUKS2 state through the `go-quicbaas/sdk/go/xkms/luks` re-export | collectors exist, report *(planned)* | go-trusted-platform (uefi, ima); go-luks2 via quicbaas (luks) |
+| Posture facts on the client | `pkg/uefi` — `ReadSecureBootStatus`, `SecureBootEnabled`; `pkg/ima` — `NewReader`, `NewVerifier`, `Status`; LUKS2 state through the `go-quicbaas/sdk/go/xkms/luks` re-export | exist; the client's report is `pkg/vpn/agent` `HostPosture` (`platformctl vpn posture` prints it) | go-trusted-platform (uefi, ima); go-luks2 via quicbaas (luks) |
 | MFA | quicbaas SDK `Security().Auth().FIDO2()` (`FIDO2Client`), `.PIV()` (`XKMSPIVService`), `.Factors()` (`AuthFactorsClient`: `Add`, `List`, `Remove`, `Rotate`, `Relabel`) | exists (see gap below) | go-xkms / go-qrdb via quicbaas |
 | Address lease | `pkg/sdn/ipam` — `Allocator.Allocate`, `AllocateSpecific`, `Release`, `ReleaseByDeviceID` | exists | go-trusted-platform — SDN IPAM |
-| Peer install | WireGuard via netlink and `golang.zx2c4.com/wireguard/wgctrl`; MASQUE CONNECT-IP sessions in-process on `github.com/quic-go/connect-ip-go` over the repository's quic-go. The `datapath` process that will host them is *(planned, gateway process model #557)* | `pkg/sdn/gateway/services/vpn`, `pkg/sdn/tunnel` | go-trusted-platform — edge gateway |
+| Peer install | WireGuard via netlink and `golang.zx2c4.com/wireguard/wgctrl`; MASQUE CONNECT-IP sessions in-process on `github.com/quic-go/connect-ip-go` over the repository's quic-go. The datapath child hosts them (`PlaneHost`) and serves `InstallVPNPeer` / `RemoveVPNPeer` on the gateway socket (gateway process model #557); the gatewayd assembly that builds them there is *(planned)* | `pkg/sdn/gateway/services/vpn`, `pkg/sdn/gateway/ipc`, `pkg/sdn/tunnel` | go-trusted-platform — edge gateway |
 | Keys at rest | quicbaas SDK `Security().KMS()` (`KMSClient`) | exists | go-xkms via quicbaas |
 | Audit | `calleradmission.Auditor` (exists) and the SDK audit surface | exists | go-quicbaas |
-| Configuration | `pkg/sdn/gateway/types.go` `ManagementVPNServiceConfig` (`management_vpn`, today only `Enabled`) and `pkg/sdn/config.go` `ManagementVPNConfig` (`Enabled`, `Type`, `AllowTo`) | exist, to be extended | go-trusted-platform |
+| Configuration | `pkg/sdn/gateway/types.go` `ManagementVPNServiceConfig` (`management_vpn`: `enabled` plus the core `vpn.Config`) and `pkg/sdn/config.go` `ManagementVPNConfig` (`Enabled`, `Type`, `AllowTo`) | exist; the `wireguard.*` and `masque.*` keys are *(planned)* | go-trusted-platform |
 
 The SDK edge is the only way down: the service never imports go-xkms, go-qrdb
 or go-luks2 directly; `pkg/arch/layerguard_test.go` enforces it and gatewayd's
@@ -126,10 +130,18 @@ offered*, never a local implementation.
 
 What crosses a boundary: the mTLS session and the data-plane session cross the
 internet; the admission → datapath request crosses a process boundary on the
-gateway (gRPC over a Unix socket in the planned process model); the verdict,
+gateway (the `DatapathService` peer RPCs, gRPC over the gateway's Unix socket); the verdict,
 posture policy and factors are read from the control plane through the SDK.
-Nothing about the client is persisted on the gateway beyond the lease table;
+Nothing about the client is persisted on the gateway beyond the lease table and
+the lease and tenant IDs of revocations the control plane has not yet taken;
 leases and posture policies are tenant-scoped entities on the control plane.
+The gateway's lease table is a projection of the control plane's record: it is
+rebuilt from the desired-config pull on start, so a restart keeps the admitted
+sessions, and every admission, renewal and revocation is written to the control
+plane first. A gateway that cannot reach the control plane at start does not
+start. A revocation the control plane refuses is journaled under gatewayd's
+`--data-dir` until its DELETE lands, so a restart does not reinstate the
+revoked device either.
 
 ## Trust boundaries
 
@@ -142,6 +154,9 @@ leases and posture policies are tenant-scoped entities on the control plane.
    "no policy means allow").
 3. **Admission → datapath.** The admission process holds no `CAP_NET_ADMIN`; it
    may only ask for a peer with a lease and may only revoke peers it created.
+   A datapath child that does not answer is a refusal (`ErrDataPlaneUnavailable`),
+   never an admission, and the child's refusals come back as the same typed
+   errors.
 4. **Data plane → platform networks.** An admitted client reaches only the
    zones its lease names (`ManagementVPNConfig.AllowTo`), enforced by the
    gateway's zone matrix — the same compiled matrix that programs the OVS flows

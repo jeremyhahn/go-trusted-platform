@@ -36,7 +36,7 @@ and the platform-wide authorization catalogs are defined once in
 | Looking for | Go to |
 |---|---|
 | Users, groups, roles, policies, applications, tokens | [`docs/iam/api.md`](../iam/api.md) |
-| Invitations | [`docs/iam/api-reference-invitations.md`](../iam/api-reference-invitations.md) |
+| Invitations | [`docs/tenant/architecture.md`](../tenant/architecture.md) |
 | Certificate issuance, revocation, CRL | [`docs/ca/`](../ca/) |
 | Transport model, opcodes, status bytes, scope catalogs | [`docs/daemon/api.md`](../daemon/api.md) |
 | Edge-gateway authorization chain | [`docs/proxy/`](../proxy/) |
@@ -61,8 +61,7 @@ finish step returns a platform-local JWT, and that configuration makes the
 broker platform-token validator the inbound seam, which accepts only
 broker-issued bearers — so a completed claim would return a bearer every
 protected route rejects. Converging the two token types is
-#202
-(owner ruling 2026-09-02); until it lands, the flow is offered only where its
+#202; until it lands, the flow is offered only where its
 session works.
 
 Every route is pre-auth. What protects them is the certificate proof, the
@@ -171,6 +170,7 @@ store independently of one another.
 |---|---|---|---|---|---|---|
 | Issue session (mTLS factor) | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `/api/v1/login` (`GenerateToken`) — **declined 403**, see below | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` |
 | Refresh session token | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `/api/v1/login/refresh` (`RefreshToken`) | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` |
+| Revoke session (logout) | `MISSING — #213` | `MISSING — #213` | `MISSING — #213` | `MISSING — #213` (no route; see below) | `MISSING — #213` (`OpAuthLogout` reserved) | `MISSING — #213` |
 | WebAuthn: begin registration | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `/api/v1/webauthn/registration/begin` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` |
 | WebAuthn: finish registration | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `/api/v1/webauthn/registration/finish` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` |
 | WebAuthn: registration status | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `GET /api/v1/webauthn/registration/status` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` |
@@ -181,6 +181,34 @@ store independently of one another.
 | Factor list / add / remove / rotate / relabel | not this repo | not this repo | not this repo | not this repo | not this repo | not this repo |
 | Credential submit / list / rotate | `MISSING` (CLI stub) | `MISSING` | `MISSING` | `MISSING` | `MISSING` | `MISSING` |
 | Certificate → identity (mTLS authentication) | `auth.MTLSAdapter.Authenticate` | see §4 | see §4 | see §4 | see §4 | see §4 |
+
+### Platform session token claims
+
+`jwt.Service` signs the platform session bearer (RS256 with the web
+service's key) with these claims (`jwt.TokenClaims`):
+
+| Claim | JSON type | Meaning |
+|---|---|---|
+| `sub` | string | Session principal (same value as `user_id`) |
+| `user_id` | string | Session principal: the platform user id in a platform-issued token, the backbone subject in a backbone-issued session |
+| `uid` | string, decimal | The platform user-store key. Omitted in a backbone-issued session |
+| `email` | string | Principal's email |
+| `tenant_id` | string | Tenant the session is scoped to. A browser login's is the principal's own workspace, never the operating tenant ([architecture](architecture.md#which-tenant-a-login-lands-in)) |
+| `is_tenant_owner` | bool | Tenant owner flag. Always `false` in a backbone-issued session: the SDK identity carries no ownership attribute |
+| `roles` | string array | RBAC roles. A browser login's are the principal's roles in its workspace, never the operating tenant's |
+| `svcs` | number array | Service references. No issuer sets it, so it is always `null` today; it must become a string array before it carries an id |
+| `iss`, `aud`, `iat`, `nbf`, `exp` | registered claims | Issuer, audience, validity window |
+
+User ids are xxhash64 values, almost all above 2^53, so `uid` is a decimal
+**string**, never a JSON number. A number reaches every schemaless decoder
+(`jwt.MapClaims`, a browser's `JSON.parse`) as a float64 that names a different
+user (#642). Read it with `TokenClaims.PlatformUserID()` or
+`strconv.ParseUint(uid, 10, 64)`. A missing or non-decimal `uid` is refused:
+`/api/v1/login/refresh` answers 401, session creation answers 400, and the
+tenant middleware answers 401 (`ErrMissingUserClaim`). A backbone-issued
+session carries no `uid`, so it is refused the same way and renews by logging
+in again ([every such site](architecture.md#why-the-platform-still-mints-the-bearer)
+is listed in the architecture).
 
 ### Registration model — iam.self_service_registration
 
@@ -202,6 +230,21 @@ The four ceremony endpoints speak the browser's native shapes; all
 ceremony state (challenge / session) lives in the quicbaas SDK and the
 platform persists none of it:
 
+- **`registration/begin` takes `{"email", "invitation_token"?}` and
+  validates the address before anything else is derived from it.** The
+  address becomes the user id, the tenant owner label and the mirrored IAM
+  identity, so an address the IAM identity store would reject
+  (`^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$`) is answered 400
+  (`service.ErrInvalidEmail`) at begin. No ceremony is opened, no
+  registration session is stored and no user or tenant is created (#643).
+  Invitations apply the same rule (`service.ValidateEmail`). The SDK does
+  not export IAM's validator, so the platform holds the one copy.
+- **Registration lands in the user's workspace, never the operating
+  tenant (#662).** An invitation into the operating tenant is answered 403
+  at `registration/begin`, and `registration/finish` answers 403 instead of
+  issuing a session when the registered user resolves to no tenant or to
+  the operating tenant (docs/auth/architecture.md, "Which tenant a login
+  lands in").
 - **Begin** (`registration/begin`, `login/begin`) returns the parsed
   WebAuthn options object: `publicKey` at the top level, plus
   `session_id` — the ceremony session the client must echo back.
@@ -248,6 +291,17 @@ platform persists none of it:
   over a credential no route on this server can redeem. The pair returns
   together in the same change that makes the backbone bearer the session.
 
+  **The session lands in the principal's workspace.** Its `tenant_id` is
+  the tenant registration created for the user or an invitation joined them
+  to, not the operating tenant the ceremony ran in. A principal with no
+  workspace — no platform user, no tenant, a deleted tenant, or one that is
+  the operating tenant — is refused **403** (`login.NoWorkspaceError`) after
+  a good assertion, and no bearer is issued (#662). Its `roles` are the
+  principal's roles in that workspace, read from the workspace's IAM user,
+  never the operating tenant's; a principal the workspace does not hold has
+  none, and a failed lookup is a **500** with no bearer
+  ([architecture](architecture.md#which-tenant-a-login-lands-in)).
+
 **`/api/v1/login` answers 403.** The route exists and its mTLS factor is
 deliberately closed: the platform cannot bind the caller's peer certificate to
 the ceremony through `sdk/go` (jeremyhahn/go-quicbaas#857), and opening one
@@ -256,6 +310,22 @@ own client certificate for an unauthenticated caller. The refusal is in the
 binder, before the backbone is reached, on both ceremony verbs. Rationale and
 failure mode: `docs/auth/architecture.md` §The mTLS factor is declined. WebAuthn
 login is unaffected — it is a different factor on the same driver.
+
+**There is no server-side logout, and the SDK cannot provide one yet (#213).**
+The console's session is the platform JWT that `login.SessionIssuer` mints
+(`jwt.Service.IssueSession`), not the backbone's bearer. The backbone never
+issued it and never sees it: `jwt.Service` verifies it by signature, audience
+and expiry and checks no session state, and it carries no `jti`. The SDK's revocation verb,
+`sdk/go/client/auth` `Logout(ctx, accessToken)`, reaches the backbone's
+`OIDCProvider.RevokeSessionToken`, which revokes only bearers the backbone itself
+issued through `IssueSessionToken`. So passing the platform JWT to it cannot make
+a replay fail. A platform-local deny-list would be a local reimplementation of
+session revocation, which this repository does not build. Logout becomes possible
+when the backbone's bearer *is* the session (#202, phases 3 and 4 of #644). That
+needs an inbound SDK validator, and `ValidateToken` is still broken on the
+embedded transport in `sdk/go` v0.14.0-alpha (jeremyhahn/go-quicbaas#955).
+Until then, the console's sign-out only clears the browser's copy, and the token
+stays valid until it expires.
 
 **"not this repo"** means the capability is served by
 `go-quicbaas/sdk/go`'s `Security().Auth().Factors()` (M10, over go-qrdb's M14
@@ -283,7 +353,7 @@ This is what each transport does to every request, not a capability you call.
 
 | Transport | Mechanism | Implementation | Failure |
 |---|---|---|---|
-| Embedded | **None.** In-process calls are trusted; there is no wire to authenticate. | `sdk/go/transport/embedded/` | — |
+| Embedded | **None on the wire** — there is none. The embedder attaches the caller's identity through `ServiceRegistry.CallerContext`; platformctl's embedded host (GUI standalone mode and CLI `embedded` contexts) attaches its own process's PID/UID/GID (`peercred.ContextWithProcessCredentials`), so its calls hold what a Unix socket peer of that uid holds. No hook, no identity. | `sdk/go/transport/embedded/`, `pkg/api/daemon/embedded_host.go` | Whatever the service refuses an unidentified caller, e.g. sign-csr → `codes.PermissionDenied` (`docs/ca/api.md`) |
 | Unix | `SO_PEERCRED` — kernel-verified PID/UID/GID. No token, no certificate. | `pkg/util/peercred/peercred.go` | `ErrUnixCredentialsUnavailable`, `ErrNotUnixConnection`, `ErrPeerNotAvailable` |
 | gRPC (TCP) | mTLS client certificate → `auth.Authenticator` → `*auth.Identity` on the context | `pkg/api/daemon/mtls_interceptor.go` | `codes.Unauthenticated` |
 | gRPC (TCP) | Bearer platform token in the `authorization` metadata header; claims path projects `scp` → RBAC and `tenant_id` → RLS | `pkg/api/grpc/oidc_interceptor.go` | `codes.Unauthenticated`; scope denial → `codes.PermissionDenied` |
@@ -331,22 +401,37 @@ Response body (`OAuthProtectedResourceMetadata`, RFC 9728):
 | `ResourceEncryptionAlgValuesSupported` | `resource_encryption_alg_values_supported` | Optional; not populated |
 | `ResourceEncryptionEncValuesSupported` | `resource_encryption_enc_values_supported` | Optional; not populated |
 
-`getSupportedScopes` returns a **hard-coded** list, verified 2026-08-18:
+`scopes_supported` is **derived, not maintained** (#315): `getSupportedScopes`
+returns every distinct scope the MCP tool permission catalog
+(`toolPermissionCatalog`, `pkg/api/mcp/authz.go`) requires, sorted. The
+authorization checker enforces the same catalog, so the advertised list is
+exactly the enforced vocabulary — a scope cannot be required by a tool without
+being advertised, or advertised without a tool requiring it. Open tools (empty
+permission) contribute nothing. As of 2026-10-14:
 
 ```
-mcp:tools, mcp:resources,
-vtpm:read|write|delete, device:read|write|delete, dns:read|write|delete,
-sdn:read|write|delete, ca:read|write|delete, kms:read|write|delete,
-iam:read|write|delete, container:read|write|delete,
-attestation:read|write, tenant:read|write|delete,
-platform:admin
+attestation:read|write,
+bmc:read|write|power|media|admin,
+ca:read|write|sign-csr,
+ceremony:read|write,
+device:read|write|delete, dns:read|write|delete,
+fido2:read|write,
+iam:read,
+invitation:read|write|delete,
+ntp:read|write,
+piv:read|write,
+proxy:read|write|delete,
+sdn:read|write|delete,
+vtpm:read|write|delete
 ```
 
-**This list is advertised, not enforced.** It is broader than the MCP
-authorization map (`initToolPermissions` covers only the vtpm, dns, device,
-profile, gateway-lb, gateway-perf, sdn, proxy and ntp families) and narrower
-than the tool set (449 declared tool names). A client that requests `ca:write`
-because the metadata offers it will find no `ca_*` tool checks it.
+Scopes no MCP tool consults — `mcp:tools`, `mcp:resources`, `platform:admin`,
+the `kms:*`, `container:*` and `tenant:*` families, `iam:write`, `iam:delete`
+and `ca:delete` — are no longer advertised. `iam:read` is advertised since
+`iam_verify_token` requires it (#304). A tool family added to the catalog is advertised by
+the same change; `TestOAuthMetadataHandler_getSupportedScopes` fails if the two
+ever disagree, or if a catalog permission is not a well-formed
+`resource:action` scope.
 
 `Validate()` requires a non-empty `Resource` and at least one authorization
 server, returning `OAuthMetadataError` with `OAuthMetadataErrorMissingResource`
@@ -396,21 +481,35 @@ reaches the client as a message, not as a distinguishable code.
 
 ## 7. Authorization
 
-Authentication is enforced on every transport. **Authorization is enforced only
-where a scope-catalog entry exists**, and both catalogs default to allow:
+Authentication is enforced on every transport. All three scope catalogs are
+**default-deny** ([architecture.md](architecture.md)): an operation with no
+catalog entry is refused, not allowed.
 
 | Catalog | Coverage | Default for an unlisted entry |
 |---|---|---|
-| gRPC `pkg/api/grpc/method_permissions.go` | 185 of 461 RPCs, 11 of 31 services | Allowed once the token validates |
-| MCP `pkg/api/mcp/authz.go` | 71 of 449 declared tool names | `AuthorizeTool` returns no error |
+| gRPC `pkg/api/grpc/method_permissions.go` | Every registered RPC; a contract test keeps it that way | Refused with `PermissionDenied` (`ErrMethodNotClassified`) before the token is read, unless the method is on the documented pre-auth list |
+| MCP `pkg/api/mcp/authz.go` | All 487 registered tools (475 scoped, 12 open); a contract test keeps it that way | `AuthorizeTool` refuses it with `AuthErrorToolNotClassified` |
+| QUIC `pkg/api/quic/opcode_permissions.go` | every routable opcode and sub-opcode | Denied (`StatusPermissionDenied`, #767) |
 
-Detail, service lists and the standing owner question are in
+Detail, the pre-auth list and the open MCP tools are in
 [`docs/daemon/api.md`](../daemon/api.md) §5. They are not restated here.
 
-Three MCP tools are explicitly public (empty required permission):
-`platform_health`, `platform_liveness`, `platform_readiness`.
-On QUIC, `OpHealth`, `OpLiveness` and `OpReadiness` map to `nil` in
-`DefaultOpcodePermissions`.
+Eleven MCP tools are explicitly public (empty required permission):
+`platform_health`, `platform_liveness`, `platform_readiness`,
+`platform_invitation_get_by_token`, `platform_invitation_accept`,
+`device_boot_certificate`, `device_boot_delivery`, `provision_get_nonce`,
+`provision_fetch_config`, `provision_sign_digest` and `provision_poll_session`.
+The two boot tools are open because a diskless node holds no token; the boot
+service authenticates the caller itself and refuses on MCP, which carries no
+TLS state. The four provisioning tools are pre-auth on gRPC too; the config
+delivery service checks the nonce, EAB HMAC and EK binding itself, and a poll
+needs the random session ID ([`docs/provisioning/api.md`](../provisioning/api.md) §6).
+On QUIC, `OpHealth`, `OpLiveness`, `OpReadiness` and `OpIAMAuthenticate`
+are the pre-auth list of the operation catalog
+(`pkg/api/quic/opcode_permissions.go`), and `preAuthSubOpcodes` opens the
+boot and pre-enrollment provisioning sub-opcodes and the invitee pair under
+`OpIAMCategory`, `InvitationSubGetByToken` and `InvitationSubAccept` (#704).
+Every other QUIC operation is classified there or refused (#767).
 
 ---
 
@@ -419,7 +518,7 @@ On QUIC, `OpHealth`, `OpLiveness` and `OpReadiness` map to `nil` in
 REST under `/api/v1`; the metadata endpoint is at the HTTP root per RFC 9728 and
 is not versioned by the platform.
 
-Deprecated and **removed**, per the legacy `docs/auth/README.md` security
+Deprecated and **removed**, per the deleted legacy `docs/auth/README.md` security
 principles and confirmed absent from the code: **API-key authentication** and
 **password authentication** on the platform API. Authentication is
 certificate-based (mTLS, IDevID), WebAuthn/FIDO2/PIV, or bearer token.

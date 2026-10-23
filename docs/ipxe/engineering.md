@@ -107,13 +107,25 @@ func (g *ScriptGenerator) GenerateDefaultMenu(entries []BootEntry) string
 ```
 
 `DeviceBootInfo` fields: `MAC`, `Role`, `Hostname`, `KernelURL`, `InitrdURL`,
-`ConfigServerURL`, `BootstrapStrategy`, `ExtraKernelArgs`, `Architecture`.
+`ConfigServerURL`, `BootstrapStrategy`, `ExtraKernelArgs`, `Architecture`,
+`BootImageURL`.
 `GenerateScript` emits `#!ipxe`, the architecture guard when `Architecture` is
 set, then the same bounded-retry boot block `/boot.ipxe` uses (`bootBlock`,
 20 attempts): a `kernel` line carrying `platform_config=`, `platform_role=`,
 `platform_hostname=` and `bootstrap_strategy=` for whichever fields are
 non-empty plus every `ExtraKernelArgs` entry verbatim, then `initrd`, then
-`boot`.
+`boot`. When `BootImageURL` is set the block loads that signed UKI instead:
+`kernel <BootImageURL>` with no arguments and no `initrd` line, then `boot`.
+The UKI runs the command line signed into it; under Secure Boot systemd-stub
+ignores load options in any case. The bootstrap container sets it for an
+installed `diskless-nbd` node
+([bootstrap engineering](../bootstrap/engineering.md#the-diskless-nbd-runtime-path)).
+
+iPXE carries no enrollment of its own, on any architecture or boot model.
+Every node enrols through the same `enroll-01` or `endorse-01` client: a disk
+node in `platformd`'s first boot, a `diskless-nbd` node in the installer,
+before it first attaches its export, so it holds the IDevID the export admits
+([installer engineering](../installer/engineering.md#enrolling-before-the-attach)).
 
 A `DeviceLookup` returns `ErrDeviceNotFound` for a MAC it has no assignment
 for; `/boot/device/<mac>.ipxe` answers that with 404 and any other lookup
@@ -144,8 +156,11 @@ directory holding an extracted ISO.**
 3. **DHCP validation is conditional.** `validateDHCP` runs only when
    `EnableDHCP`; it then requires an interface (falling back to
    `ServerConfig.Interface`), a parseable range start and end, and a positive
-   lease time, and parses `DHCPSubnetMask`, `DHCPGateway` and `DHCPDNS` when
-   non-empty.
+   lease time, and parses `DHCPSubnetMask` when non-empty. `DHCPGateway` and
+   every `DHCPDNS` entry go through `ParseDHCPv4`, which refuses anything that
+   is not IPv4 with `DHCPAddressError` (it matches `ErrInvalidConfig`):
+   `buildDHCPConfig` uses the same parse, so an IPv6 gateway is refused rather
+   than dropped from the offer as a nil `To4()`.
 4. **`Start` is not re-entrant.** A second `Start` on a running server returns
    *"server is already running"*; `running` is an `atomic.Bool` guarded by a
    mutex for the transition.
@@ -184,7 +199,10 @@ directory holding an extracted ISO.**
 13. **The `/data/` and `/files/` routes are conditional** on `DataDir` and
     `LocalFilesDir` being non-empty. Setting `DataDir: ""` disables the endpoint
     entirely — which is why a chainload can succeed and the subsequent
-    kernel fetch 404.
+    kernel fetch 404. The same holds for a Pi's HTTP boot: with no `DataDir` the
+    EEPROM's `boot.img` request is a 404 and the Pi boots nothing from the
+    network. Both `http.Server` timeouts are 30 s, which also bounds how long a
+    large `boot.img` may take to transfer.
 14. **`/config/*` returns 503 when `InstallsDir` is empty**, because values are
     stored under it.
 18. **`/boot.ipxe` has one shape per configuration.** With a `DeviceLookup`
@@ -229,7 +247,8 @@ config-file loader and reads **no environment variables**. Callers construct it:
 | `DHCPInterface` | string | `""` → falls back to `Interface` |
 | `DHCPRangeStart` / `DHCPRangeEnd` | string | `""` (**required when `EnableDHCP`**) |
 | `DHCPSubnetMask` | string | `DefaultSubnetMask` = `255.255.255.0` |
-| `DHCPGateway`, `DHCPDNS` | string | `""` |
+| `DHCPGateway` | string | `""` (no router option) |
+| `DHCPDNS` | `[]string` | `nil` (no option 6) |
 | `DHCPLeaseTime` | `time.Duration` | `DefaultLeaseTime` = 1 h |
 | `DHCPServerIP` | string | `""` → auto-detected |
 | `DHCPRespondToAll` | bool | `false` |
@@ -334,6 +353,7 @@ field.
 | `/installs/…` upload over 16 MiB | Rejected | closed |
 | `/installs/…` upload | Written via `.partial` + atomic rename | closed on partial reads |
 | DHCP request from a non-PXE client | Ignored unless `DHCPRespondToAll` | **closed by default** |
+| DHCP packet with an empty or all-zero `chaddr` | Ignored before dispatch; no lease, no reply | closed |
 | A service goroutine dies | Pushed to `errChan`; the others keep running | **open** |
 
 **The three open rows in the middle are the feature's security posture, not
@@ -361,7 +381,7 @@ both hard-code these shapes, so changing the regex breaks both ends at once.
 | Layer | Location | Covers |
 |---|---|---|
 | Unit | `pkg/ipxe/*_test.go` | Config validation and defaults, DHCP packet construction and option handling, arch→bootfile mapping, raw-conn framing, TFTP handler, every HTTP route, script generation, allocator behaviour, ISO extraction |
-| Integration | `test/integration/ipxe/` | Real bridge, real TAP, real QEMU client |
+| Integration | `test/integration/ipxe/`, `make integration-test-ipxe` (slices `-dhcp`, `-tftp`, `-http`) | The real server in process on `127.0.0.1`, no VM and no outside network: HTTP routes, TFTP downloads, and DHCP DISCOVER/OFFER and REQUEST/ACK over loopback. `TestMain` points `FirmwareUpstream` at a local fixture server (each file is compared byte for byte after TFTP) and `ProxyCACertPool` at a local TLS upstream for `/proxy/https/`. `TestIPXEDHCPToHTTPChain` follows the DHCP answer: the non-iPXE boot file over TFTP, then the iPXE URL → `boot.ipxe` → menu → entry script. The runner sets `IPXE_DHCP_ENABLED=1`, `TestMain` starts DHCP on `lo` at a free UDP port, and a DHCP test fails without it. Nothing in the suite skips; a setup failure fails the run |
 | End to end | `platformctl iso test pxe` | Real network boot of a real ISO, **requires root** |
 | End to end, aarch64 | `test/integration/netboot/`, `make integration-test-netboot` | QEMU virt booted from the platform's U-Boot (`-bios`) on the harness bridge: DHCP arch `0x000b` → signed `snponly-aarch64.efi` → per-architecture script → signed kernel + initrd → Alpine; the stand-in for a Raspberry Pi from U-Boot onward |
 
@@ -419,17 +439,16 @@ silently fixed.
 | `/boot.ipxe` chains `/boot/device/<mac>.ipxe` when a `DeviceLookup` is wired | [architecture.md](architecture.md) §5 data flow, until 2026-09-22 | Nothing chained it: the per-device route was mounted and answered, but no script a node booted ever asked for it, so every device booted the shared entry. `/boot.ipxe` now chains it first (invariant 18). The per-device script also lacked the retry loop `/boot.ipxe` had; both now render the same block. |
 | `platformctl iso test pxe` builds `DefaultTestEnvConfig()` | [cli.md](cli.md) §3, until 2026-09-22 | It built its own copy from `testenv.DefaultNetworkConfig()`, whose bridge subnet is a `/28`, while leasing `.100`–`.200`: every unicast reply to a client (the TFTP data) left through the host's default route, and the command's `qemu.Config` had no disk, which `Validate` refuses. Neither run had ever completed. The command now uses `ipxe.NewTestEnv` — which in turn named its unused second TAP 21 characters long, over the kernel's 15 — and gives the client a disk. Fixed with the aarch64 work (#686). |
 
-**Not a correction, but a divergence worth flagging:**
-[`docs/provisioning/api.md`](../provisioning/api.md) §1 records the PXE QUIC
-opcodes as `0xFC`–`0xFF`. `pkg/api/quic/protocol.go` also defines
-`OpPXEListDevices` `0xEC`, `OpPXEGetDevice` `0xED`, `OpPXERegisterDevice`
-`0xEE` and `OpPXEUpdateState` `0xEF`. Eight opcodes, not four. Raised against
-`docs/provisioning/`, which owns that table.
+**Resolved divergence:** [`docs/provisioning/api.md`](../provisioning/api.md)
+§1 recorded the PXE QUIC opcodes as `0xFC`–`0xFF`, while
+`sdk/go/wire/quicwire/protocol.go` defines eight (`0xEC`–`0xEF` too). Since #704
+that table names the opcode per method, including the seven `0xCF` subs
+`0x30`–`0x36`.
 
 ## 10. Related
 
 - [architecture.md](architecture.md) · [cli.md](cli.md) · [api.md](api.md) · [user.md](user.md)
-- [configuration.md](configuration.md) · [testing.md](testing.md) · [README.md](README.md) — pre-convention detail
+- configuration.md · testing.md · README.md — pre-convention detail, now deleted; these five files hold it
 - [`docs/provisioning/`](../provisioning/) — the PXE control plane and its transport matrix
 - [`docs/installer/`](../installer/) — what the booted kernel does next
 - [`docs/daemon/api.md`](../daemon/api.md) — the platform transport model

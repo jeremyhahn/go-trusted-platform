@@ -16,10 +16,12 @@ package daemon
 import (
 	"context"
 	"log/slog"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
 
 // =============================================================================
@@ -209,7 +211,7 @@ func TestStop_WithRESTServerRunning(t *testing.T) {
 	}
 
 	if d.restServer == nil || !d.restServer.IsRunning() {
-		t.Skip("REST server not running, skipping test")
+		t.Fatal("REST server should be running after Start()")
 	}
 
 	err = d.Stop(ctx)
@@ -241,7 +243,7 @@ func TestStop_WithMCPServerRunning(t *testing.T) {
 	}
 
 	if d.mcpServer == nil {
-		t.Skip("MCP server not created, skipping test")
+		t.Fatal("MCP server should be created when MCP is enabled")
 	}
 
 	ctx := context.Background()
@@ -249,8 +251,6 @@ func TestStop_WithMCPServerRunning(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Start() failed: %v", err)
 	}
-
-	time.Sleep(100 * time.Millisecond)
 
 	err = d.Stop(ctx)
 	if err != nil {
@@ -276,10 +276,10 @@ func TestStop_WithGRPCServerRunning(t *testing.T) {
 
 	// Verify gRPC is set up
 	if d.grpcServer == nil {
-		t.Skip("gRPC server not created, skipping test")
+		t.Error("gRPC server should exist after Start() with gRPC TCP enabled")
 	}
 	if d.grpcListener == nil {
-		t.Skip("gRPC listener not created, skipping test")
+		t.Error("gRPC listener should exist after Start() with gRPC TCP enabled")
 	}
 
 	err = d.Stop(ctx)
@@ -338,8 +338,6 @@ func TestStop_WithAllServersRunning(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Start() failed: %v", err)
 	}
-
-	time.Sleep(50 * time.Millisecond)
 
 	err = d.Stop(ctx)
 	if err != nil {
@@ -539,7 +537,7 @@ func TestSetTPM2Service_WithQUICHandlerSet(t *testing.T) {
 
 	// Manually set a QUIC handler to test that path
 	logger := logging.DefaultLogger()
-	d.quicHandler = NewQUICServiceHandler(logger)
+	d.quicHandler = newTestQUICServiceHandler(logger)
 
 	// SetTPM2Service with nil - exercises QUIC handler path
 	d.SetTPM2Service(nil)
@@ -717,6 +715,243 @@ func TestStop_CallsShutdownHandler(t *testing.T) {
 	}
 }
 
+// TestShutdownHandler_LeavesQUICToStop pins the ordering behind #336. The
+// shutdown handler (Service.Shutdown, reachable as an RPC as well as from
+// Stop) tears down only the gRPC servers; the QUIC server is stopped by
+// Stop/ForceStop alone, behind an IsRunning guard. So no shutdown can make
+// Stop observe the QUIC server's "server is not running", and Stop returns
+// nil after the handler has already run.
+func TestShutdownHandler_LeavesQUICToStop(t *testing.T) {
+	config := testConfig(lifecycleShortSocketPath(t, "shq"))
+	config.EnableQUIC = true
+	config.QUICListenAddr = "127.0.0.1:0"
+
+	d, err := New(config)
+	if err != nil {
+		t.Fatalf("New() failed: %v", err)
+	}
+
+	ctx := context.Background()
+	if err := d.Start(ctx); err != nil {
+		t.Fatalf("Start() failed: %v", err)
+	}
+	if !d.quicServer.IsRunning() {
+		t.Fatal("QUIC server should be running after Start()")
+	}
+
+	if _, err := d.service.Shutdown(ctx, &platformv1.ShutdownRequest{Graceful: true}); err != nil {
+		t.Fatalf("Shutdown() failed: %v", err)
+	}
+	if !d.quicServer.IsRunning() {
+		t.Fatal("the shutdown handler must not stop the QUIC server")
+	}
+
+	if err := d.Stop(ctx); err != nil {
+		t.Fatalf("Stop() after the shutdown handler ran failed: %v", err)
+	}
+	if d.quicServer.IsRunning() {
+		t.Error("QUIC server should not be running after Stop()")
+	}
+}
+
+// TestStop_QUICAlreadyStopped pins that a QUIC server stopped out from under
+// the daemon never surfaces as an error from Stop or ForceStop (#336).
+func TestStop_QUICAlreadyStopped(t *testing.T) {
+	stops := map[string]func(d *Daemon) error{
+		"Stop":      func(d *Daemon) error { return d.Stop(context.Background()) },
+		"ForceStop": func(d *Daemon) error { return d.ForceStop() },
+	}
+	for name, stop := range stops {
+		t.Run(name, func(t *testing.T) {
+			config := testConfig(lifecycleShortSocketPath(t, "qas"))
+			config.EnableQUIC = true
+			config.QUICListenAddr = "127.0.0.1:0"
+
+			d, err := New(config)
+			if err != nil {
+				t.Fatalf("New() failed: %v", err)
+			}
+			if err := d.Start(context.Background()); err != nil {
+				t.Fatalf("Start() failed: %v", err)
+			}
+			if err := d.quicServer.Stop(); err != nil {
+				t.Fatalf("QUIC Stop() failed: %v", err)
+			}
+
+			if err := stop(d); err != nil {
+				t.Fatalf("%s() failed: %v", name, err)
+			}
+			if d.IsRunning() {
+				t.Errorf("daemon should not be running after %s()", name)
+			}
+		})
+	}
+}
+
+// TestStop_ConcurrentCallers pins Stop and ForceStop as one-shot (#336):
+// when callers race to stop a running daemon, exactly one tears it down and
+// every other caller gets ErrDaemonNotRunning. The running check used to sit
+// outside the lock, so every caller that passed it ran the teardown again
+// and reported success.
+func TestStop_ConcurrentCallers(t *testing.T) {
+	const callers = 8
+
+	stops := map[string]func(d *Daemon, i int) error{
+		"Stop":      func(d *Daemon, _ int) error { return d.Stop(context.Background()) },
+		"ForceStop": func(d *Daemon, _ int) error { return d.ForceStop() },
+		"Mixed": func(d *Daemon, i int) error {
+			if i%2 == 0 {
+				return d.Stop(context.Background())
+			}
+			return d.ForceStop()
+		},
+	}
+	for name, stop := range stops {
+		t.Run(name, func(t *testing.T) {
+			config := testConfig(lifecycleShortSocketPath(t, "cc"))
+			config.EnableQUIC = true
+			config.QUICListenAddr = "127.0.0.1:0"
+
+			d, err := New(config)
+			if err != nil {
+				t.Fatalf("New() failed: %v", err)
+			}
+			if err := d.Start(context.Background()); err != nil {
+				t.Fatalf("Start() failed: %v", err)
+			}
+
+			release := make(chan struct{})
+			results := make(chan error, callers)
+			var wg sync.WaitGroup
+			for i := range callers {
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+					<-release
+					results <- stop(d, i)
+				}()
+			}
+			close(release)
+			wg.Wait()
+			close(results)
+
+			stopped := 0
+			for err := range results {
+				if err == nil {
+					stopped++
+					continue
+				}
+				if _, ok := err.(ErrDaemonNotRunning); !ok {
+					t.Errorf("expected nil or ErrDaemonNotRunning, got %T: %v", err, err)
+				}
+			}
+			if stopped != 1 {
+				t.Errorf("expected exactly one caller to stop the daemon, got %d", stopped)
+			}
+			if d.IsRunning() {
+				t.Error("daemon should not be running after Stop()")
+			}
+		})
+	}
+}
+
+// TestAutoStart_AfterStopStartsNothing pins the auto-start pass against a
+// stopped daemon (#336). Start launches the pass in a goroutine, so Stop can
+// take the lock first; the pass must then start nothing, or the services it
+// starts outlive the daemon with nothing left to stop them. The pass is
+// invoked directly after Stop to stand in for that late goroutine.
+func TestAutoStart_AfterStopStartsNothing(t *testing.T) {
+	config := testConfig(lifecycleShortSocketPath(t, "asas"))
+	config.Services = map[string]ServiceConfig{
+		"tpm": {Enabled: true, AutoStart: true, Timeout: 5 * time.Second},
+	}
+
+	passes := make(chan struct{}, 2)
+	d, err := New(config, withAutoStartObserver(func() { passes <- struct{}{} }))
+	if err != nil {
+		t.Fatalf("New() failed: %v", err)
+	}
+	svc := newMockService("tpm")
+	if err := d.RegisterService(svc); err != nil {
+		t.Fatalf("RegisterService() failed: %v", err)
+	}
+
+	ctx := context.Background()
+	if err := d.Start(ctx); err != nil {
+		t.Fatalf("Start() failed: %v", err)
+	}
+	<-passes
+	if got := svc.startCount.Load(); got != 1 {
+		t.Fatalf("startCount after Start() = %d, want 1", got)
+	}
+
+	if err := d.Stop(ctx); err != nil {
+		t.Fatalf("Stop() failed: %v", err)
+	}
+
+	d.autoStartServices(ctx)
+	<-passes
+	if got := svc.startCount.Load(); got != 1 {
+		t.Errorf("startCount after a pass on a stopped daemon = %d, want 1", got)
+	}
+	if svc.running.Load() {
+		t.Error("a pass on a stopped daemon must not start services")
+	}
+}
+
+// TestStart_ConcurrentCallers pins Start as one-shot (#336): exactly one of
+// several racing callers starts the daemon and the rest get
+// ErrDaemonAlreadyRunning. With the running check outside the lock, a loser
+// re-ran startup against the winner's live transports, failed on them, and
+// rolled the winner's servers back.
+func TestStart_ConcurrentCallers(t *testing.T) {
+	const callers = 8
+
+	config := testConfig(lifecycleShortSocketPath(t, "cst"))
+	config.EnableQUIC = true
+	config.QUICListenAddr = "127.0.0.1:0"
+
+	d, err := New(config)
+	if err != nil {
+		t.Fatalf("New() failed: %v", err)
+	}
+
+	release := make(chan struct{})
+	results := make(chan error, callers)
+	var wg sync.WaitGroup
+	for range callers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-release
+			results <- d.Start(context.Background())
+		}()
+	}
+	close(release)
+	wg.Wait()
+	close(results)
+
+	started := 0
+	for err := range results {
+		if err == nil {
+			started++
+			continue
+		}
+		if _, ok := err.(ErrDaemonAlreadyRunning); !ok {
+			t.Errorf("expected nil or ErrDaemonAlreadyRunning, got %T: %v", err, err)
+		}
+	}
+	if started != 1 {
+		t.Errorf("expected exactly one caller to start the daemon, got %d", started)
+	}
+	if !d.quicServer.IsRunning() {
+		t.Error("the winner's QUIC server must still be running")
+	}
+	if err := d.Stop(context.Background()); err != nil {
+		t.Fatalf("Stop() failed: %v", err)
+	}
+}
+
 func TestForceStop_WithAllServersRunning(t *testing.T) {
 	config := testConfig("/tmp/test-forcestop-all.sock")
 	config.EnableREST = true
@@ -735,11 +970,8 @@ func TestForceStop_WithAllServersRunning(t *testing.T) {
 		t.Fatalf("Start() failed: %v", err)
 	}
 
-	time.Sleep(50 * time.Millisecond)
-
 	err = d.ForceStop()
-	// May return "server is not running" if shutdown handler already stopped it
-	if err != nil && err.Error() != "server is not running" {
+	if err != nil {
 		t.Errorf("ForceStop() failed: %v", err)
 	}
 }
@@ -845,7 +1077,7 @@ func TestStop_HandlesNilGRPCListener(t *testing.T) {
 
 	// Verify gRPC listener is nil
 	if d.grpcListener != nil {
-		t.Skip("Expected nil gRPC listener")
+		t.Error("gRPC listener should be nil when gRPC TCP is disabled")
 	}
 
 	// Stop should handle nil gRPC listener gracefully

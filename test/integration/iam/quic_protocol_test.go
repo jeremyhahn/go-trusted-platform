@@ -24,7 +24,7 @@ import (
 
 // This adapter's request framing was already correct and had never once
 // executed. It offered ALPN "iam-quic" while the daemon advertises only
-// quic.ALPNProtocol, so the TLS handshake failed with no_application_protocol
+// quicwire.ALPNProtocol, so the TLS handshake failed with no_application_protocol
 // BEFORE a stream was opened -- the framing code below the handshake was
 // unreachable, and every call returned an error that looked like a refusal.
 //

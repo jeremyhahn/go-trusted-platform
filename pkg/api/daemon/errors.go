@@ -13,7 +13,15 @@
 
 package daemon
 
-import "fmt"
+import (
+	"fmt"
+
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
+	"math"
+
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+)
 
 // ErrDaemonNotRunning is returned when attempting operations on a stopped daemon
 type ErrDaemonNotRunning struct{}
@@ -51,6 +59,41 @@ func (e ErrTransportAuthRequired) Error() string {
 		msg += " (" + e.Reason + ")"
 	}
 	return msg + "; refusing to start the transport without one"
+}
+
+// ErrEmbeddedPEPUnavailable is returned by New when gRPC TCP
+// would authorize every scoped call through the IAM policy enforcement point
+// and that point is the embedded quicbaas SDK, which does not implement it:
+// go-quicbaas sdk/go transport/embedded handleIAMPEPCheck answers every Check
+// with ServiceNotConfigured. The listener would start and then answer every
+// scoped call Unavailable. Platform tokens carry their own scope claims and
+// mTLS authorizes by certificate, so either one keeps the PEP off the path.
+type ErrEmbeddedPEPUnavailable struct {
+	Transport string
+}
+
+func (e ErrEmbeddedPEPUnavailable) Error() string {
+	return e.Transport + ": tokens without scope claims are authorized by the IAM policy enforcement point, " +
+		"which the embedded quicbaas SDK does not implement (IAM.PEP Check is not configured); " +
+		"enable platform tokens (webservice jwt.platform-token.enabled) or enable mTLS (--enable-mtls)"
+}
+
+// ErrTransportConstructionFailed is returned by New when an enabled transport
+// (QUIC, REST or MCP) cannot be constructed. Until #444 New logged a Warn and
+// continued, so a daemon reported healthy without a transport its
+// configuration enabled. A transport that is not enabled is never constructed
+// and never produces this error.
+type ErrTransportConstructionFailed struct {
+	Transport string
+	Cause     error
+}
+
+func (e ErrTransportConstructionFailed) Error() string {
+	return fmt.Sprintf("%s: server could not be constructed: %v; refusing to run without the enabled transport", e.Transport, e.Cause)
+}
+
+func (e ErrTransportConstructionFailed) Unwrap() error {
+	return e.Cause
 }
 
 // ErrDaemonAlreadyRunning is returned when attempting to start an already running daemon
@@ -105,6 +148,26 @@ type ErrServiceStopFailed struct {
 
 func (e ErrServiceStopFailed) Error() string {
 	return fmt.Sprintf("service %s failed to stop: %s", e.ServiceName, e.Reason)
+}
+
+// ErrServiceNotControllable is returned when start, stop or restart names a
+// service whose lifecycle belongs to the platformd process, not to the
+// daemon's service registry: it comes up with the process and goes down with
+// it, and driving it at runtime is refused rather than faked.
+type ErrServiceNotControllable struct {
+	ServiceName string
+	Reason      string
+}
+
+func (e ErrServiceNotControllable) Error() string {
+	return fmt.Sprintf("service %s cannot be started or stopped at runtime: %s", e.ServiceName, e.Reason)
+}
+
+// GRPCStatus classifies the refusal as FailedPrecondition: the RPC is
+// implemented, and the named service's state (owned by the process) does not
+// allow it. Unimplemented would mark a missing capability instead.
+func (e ErrServiceNotControllable) GRPCStatus() *status.Status {
+	return status.New(codes.FailedPrecondition, e.Error())
 }
 
 // ErrConfigNotFound is returned when requested configuration does not exist
@@ -193,6 +256,13 @@ func (e ErrDNSServiceNotAvailable) Error() string {
 	return "DNS service not available"
 }
 
+// GRPCStatus classifies the error as the canonical not-configured answer for
+// service "dns" (codes.Unavailable, SERVICE_NOT_CONFIGURED), so gRPC, Unix,
+// QUIC and MCP agree with REST's 503.
+func (e ErrDNSServiceNotAvailable) GRPCStatus() *status.Status {
+	return ErrServiceNotConfigured{Service: "dns", Detail: e.Error()}.GRPCStatus()
+}
+
 // ErrDNSInvalidParameter is returned when a DNS operation receives an invalid parameter
 type ErrDNSInvalidParameter struct {
 	Parameter string
@@ -224,6 +294,12 @@ func (e ErrServiceNotAvailable) Error() string {
 	return fmt.Sprintf("service not available: %s", e.Service)
 }
 
+// GRPCStatus classifies a missing service as Unavailable, so every
+// transport (MCP included, via its JSON-RPC code) reports the same class.
+func (e ErrServiceNotAvailable) GRPCStatus() *status.Status {
+	return status.New(codes.Unavailable, e.Error())
+}
+
 // ErrServiceUnavailable is returned when a service is temporarily unavailable
 // or not initialized yet. This is used by gRPC service adapters when the
 // underlying SDK client is nil.
@@ -246,6 +322,24 @@ type ErrTLSConfigFailed struct {
 
 func (e ErrTLSConfigFailed) Error() string {
 	return "tls config failed: " + e.Reason
+}
+
+// ErrUnusableServingCertificate is returned when a certificate offered to a
+// ServingCertificate could not complete a handshake: no chain or no private
+// key. The certificate already being served stays in place (#36).
+type ErrUnusableServingCertificate struct{}
+
+func (e ErrUnusableServingCertificate) Error() string {
+	return "serving certificate unusable: it needs a certificate chain and a private key"
+}
+
+// ErrNoServingCertificate is returned by ServingCertificate.GetCertificate
+// when no certificate has been stored, so the handshake fails instead of
+// presenting nothing.
+type ErrNoServingCertificate struct{}
+
+func (e ErrNoServingCertificate) Error() string {
+	return "no serving certificate stored"
 }
 
 // =============================================================================
@@ -284,6 +378,20 @@ type ErrRESTServerStartFailed struct {
 
 func (e ErrRESTServerStartFailed) Error() string {
 	return fmt.Sprintf("REST server failed to start: %s", e.Reason)
+}
+
+// MCPServerStartError is returned when Daemon.Start cannot start the MCP
+// server. Start fails rather than run without the configured transport.
+type MCPServerStartError struct {
+	Err error
+}
+
+func (e *MCPServerStartError) Error() string {
+	return "daemon: MCP server failed to start: " + e.Err.Error()
+}
+
+func (e *MCPServerStartError) Unwrap() error {
+	return e.Err
 }
 
 // ErrRESTServerStopFailed is returned when the REST server fails to stop gracefully
@@ -359,6 +467,17 @@ func (e ErrQUICNilRequest) Error() string {
 	return "QUIC request cannot be nil"
 }
 
+// ErrClientCertRequired is returned when a request needing a verified client
+// certificate arrives on a connection without one. The listener verifies a
+// certificate only if given, so the request is where it is enforced.
+type ErrClientCertRequired struct {
+	Operation string
+}
+
+func (e ErrClientCertRequired) Error() string {
+	return "a verified client certificate is required for " + e.Operation
+}
+
 // ErrQUICHandlerPanic is returned when a handler sub-function panics.
 // The recover() guard in QUICServiceHandler.HandleRequest catches the panic,
 // logs a stack trace, and converts it to a StatusInternalError response so the
@@ -378,6 +497,15 @@ type ErrQUICUnknownOpcode struct {
 
 func (e ErrQUICUnknownOpcode) Error() string {
 	return fmt.Sprintf("unknown QUIC opcode: 0x%02X", e.Opcode)
+}
+
+// ErrQUICAuthMiddlewareRequired is returned by NewQUICServiceHandler when no
+// auth middleware is configured: the QUIC dispatcher authorizes every request,
+// so a handler without one cannot be built.
+type ErrQUICAuthMiddlewareRequired struct{}
+
+func (e ErrQUICAuthMiddlewareRequired) Error() string {
+	return "QUIC service handler requires an auth middleware (WithQUICAuthMiddleware)"
 }
 
 // ErrQUICServiceUnavailable is returned when a required service is not available
@@ -436,6 +564,44 @@ func (e ErrQUICOperationFailed) Error() string {
 
 func (e ErrQUICOperationFailed) Unwrap() error {
 	return e.Cause
+}
+
+// ErrQUICAttestationRefused carries a refusal from the shared attestation
+// gRPC servicer to the daemon-native QUIC attestation handler. QUICStatus
+// gives it the status the daemon's quote opcodes (0x70-0x72) give the same
+// gRPC class, so one refusal reads the same on every attestation opcode.
+type ErrQUICAttestationRefused struct {
+	Op    string
+	Cause error
+}
+
+func (e ErrQUICAttestationRefused) Error() string {
+	return fmt.Sprintf("attestation %s refused: %v", e.Op, e.Cause)
+}
+
+func (e ErrQUICAttestationRefused) Unwrap() error {
+	return e.Cause
+}
+
+// QUICStatus is the QUIC status for the refusal's gRPC class.
+func (e ErrQUICAttestationRefused) QUICStatus() byte {
+	return grpcCodeToQUICStatus(e.Cause)
+}
+
+// ErrQUICAttestationNoService refuses a daemon-native QUIC attestation
+// operation that no transport serves (device workload attestation, reports,
+// policies: docs/attestation/api.md §2, docs/13 G7).
+type ErrQUICAttestationNoService struct {
+	Op string
+}
+
+func (e ErrQUICAttestationNoService) Error() string {
+	return fmt.Sprintf("attestation %s is not served by any transport (docs/13 G7)", e.Op)
+}
+
+// QUICStatus is StatusNotImplemented: the opcode is in range, nothing serves it.
+func (e ErrQUICAttestationNoService) QUICStatus() byte {
+	return quicwire.StatusNotImplemented
 }
 
 // ErrQUICServerNotConfigured is returned when QUIC server is not configured
@@ -539,13 +705,12 @@ func (e ErrVTPMOperationNotImplemented) Error() string {
 // Device Service Errors
 // =============================================================================
 
-// ErrDeviceOperationNotImplemented is returned when a device operation is not yet implemented
-type ErrDeviceOperationNotImplemented struct {
-	Operation string
-}
+// ErrDeviceConfigFinderUnavailable is returned by FindConfigForDevice when the
+// daemon's profile service cannot resolve a booting machine's config.
+type ErrDeviceConfigFinderUnavailable struct{}
 
-func (e ErrDeviceOperationNotImplemented) Error() string {
-	return fmt.Sprintf("device operation not implemented: %s", e.Operation)
+func (ErrDeviceConfigFinderUnavailable) Error() string {
+	return "device config lookup is not available: the profile service does not resolve configs by EK serial or MAC"
 }
 
 // ErrInvalidDeviceID is returned when a device ID is invalid
@@ -557,13 +722,78 @@ func (e ErrInvalidDeviceID) Error() string {
 	return fmt.Sprintf("invalid device ID: %s", e.ID)
 }
 
+// GRPCStatus classifies a malformed device ID as InvalidArgument.
+func (e ErrInvalidDeviceID) GRPCStatus() *status.Status {
+	return status.New(codes.InvalidArgument, e.Error())
+}
+
+// ErrInvalidPortType is returned when an MCP port type names no PortType.
+type ErrInvalidPortType struct {
+	Type string
+}
+
+func (e ErrInvalidPortType) Error() string {
+	return fmt.Sprintf("invalid port type: %s", e.Type)
+}
+
+// GRPCStatus classifies an unknown port type as InvalidArgument.
+func (e ErrInvalidPortType) GRPCStatus() *status.Status {
+	return status.New(codes.InvalidArgument, e.Error())
+}
+
+// ErrInvalidFlowConfig is returned when an MCP flow body does not decode into
+// a FlowConfig: an unknown field, a wrong type or an unknown enum name.
+type ErrInvalidFlowConfig struct {
+	Cause error
+}
+
+func (e ErrInvalidFlowConfig) Error() string {
+	return fmt.Sprintf("invalid flow config: %v", e.Cause)
+}
+
+func (e ErrInvalidFlowConfig) Unwrap() error {
+	return e.Cause
+}
+
+// GRPCStatus classifies an undecodable flow body as InvalidArgument.
+func (e ErrInvalidFlowConfig) GRPCStatus() *status.Status {
+	return status.New(codes.InvalidArgument, e.Error())
+}
+
 // ErrAttestationFailed is returned when device attestation fails
 type ErrAttestationFailed struct {
 	Reason string
+	// Err is the underlying cause, when there is one: a context error or a
+	// typed upstream verifier error stays matchable through errors.Is/As.
+	Err error
 }
 
 func (e ErrAttestationFailed) Error() string {
+	if e.Err != nil {
+		return fmt.Sprintf("attestation failed: %s: %v", e.Reason, e.Err)
+	}
 	return fmt.Sprintf("attestation failed: %s", e.Reason)
+}
+
+func (e ErrAttestationFailed) Unwrap() error {
+	return e.Err
+}
+
+// ErrDeviceProfileLookupFailed is returned when the profile store could not
+// answer which profile holds a device's PCR baseline. It is distinct from a
+// device with no profile (device.ErrNoProfileForDevice), which is a verdict:
+// a lookup failure decides nothing, so the verification fails closed.
+type ErrDeviceProfileLookupFailed struct {
+	DeviceID string
+	Cause    error
+}
+
+func (e ErrDeviceProfileLookupFailed) Error() string {
+	return fmt.Sprintf("device profile lookup failed for device %s: %v", e.DeviceID, e.Cause)
+}
+
+func (e ErrDeviceProfileLookupFailed) Unwrap() error {
+	return e.Cause
 }
 
 // ErrDeviceNotFound is returned when a device is not found
@@ -634,22 +864,6 @@ type ErrSDNOperationNotImplemented struct {
 
 func (e ErrSDNOperationNotImplemented) Error() string {
 	return fmt.Sprintf("SDN operation not implemented: %s", e.Operation)
-}
-
-// ErrSDNPolicyEngineNotConfigured is returned when policy engine is not configured
-type ErrSDNPolicyEngineNotConfigured struct{}
-
-func (e ErrSDNPolicyEngineNotConfigured) Error() string {
-	return "SDN policy engine not configured"
-}
-
-// ErrSDNInvalidPortState is returned when an invalid port state is specified
-type ErrSDNInvalidPortState struct {
-	State string
-}
-
-func (e ErrSDNInvalidPortState) Error() string {
-	return fmt.Sprintf("invalid port state: %s", e.State)
 }
 
 // ErrSDNPolicyNotFound is returned when a policy is not found
@@ -738,20 +952,6 @@ func (ErrOVSNotConfigured) Error() string {
 // DNS Service Errors
 // =============================================================================
 
-// ErrDNSConfigUpdateNotSupported is returned when DNS configuration updates are not supported
-type ErrDNSConfigUpdateNotSupported struct{}
-
-func (e ErrDNSConfigUpdateNotSupported) Error() string {
-	return "DNS configuration updates are not supported at runtime"
-}
-
-// ErrDNSCacheFlushNotSupported is returned when DNS cache flushing is not supported
-type ErrDNSCacheFlushNotSupported struct{}
-
-func (e ErrDNSCacheFlushNotSupported) Error() string {
-	return "DNS cache flushing is not supported"
-}
-
 // ErrDNSZoneNotFound is returned when a DNS zone is not found
 type ErrDNSZoneNotFound struct {
 	Zone string
@@ -794,6 +994,12 @@ type ErrIAMServiceNotAvailable struct{}
 
 func (e ErrIAMServiceNotAvailable) Error() string {
 	return "IAM service not available"
+}
+
+// GRPCStatus classifies the error as FailedPrecondition on every transport:
+// the request is well formed, but this daemon has no IAM backend to serve it.
+func (e ErrIAMServiceNotAvailable) GRPCStatus() *status.Status {
+	return status.New(codes.FailedPrecondition, e.Error())
 }
 
 // ErrIAMMissingParameter is returned when a required IAM parameter is missing
@@ -932,13 +1138,20 @@ func (e ErrIAMAppAlreadyExists) Error() string {
 	return fmt.Sprintf("IAM application already exists: %s in tenant %s", e.Name, e.TenantID)
 }
 
-// ErrIAMAuthenticationFailed is returned when authentication fails
-type ErrIAMAuthenticationFailed struct {
-	Reason string
+// ErrIAMAuthenticationViaOIDC refuses the MCP iam_authenticate tool. The IAM
+// service holds no credentials to check and the platform has no Authenticate
+// RPC: users sign in through the broker's OIDC flows, which issue the
+// platform token.
+type ErrIAMAuthenticationViaOIDC struct{}
+
+func (e ErrIAMAuthenticationViaOIDC) Error() string {
+	return "iam authentication is handled via OIDC flows, not the IAM service"
 }
 
-func (e ErrIAMAuthenticationFailed) Error() string {
-	return fmt.Sprintf("IAM authentication failed: %s", e.Reason)
+// GRPCStatus classifies the refusal as Unimplemented, the class the token
+// create and revoke refusals carry.
+func (e ErrIAMAuthenticationViaOIDC) GRPCStatus() *status.Status {
+	return status.New(codes.Unimplemented, e.Error())
 }
 
 // ErrIAMPermissionDenied is returned when a permission check fails
@@ -952,18 +1165,30 @@ func (e ErrIAMPermissionDenied) Error() string {
 	return fmt.Sprintf("IAM permission denied: subject %s cannot perform %s on %s", e.Subject, e.Action, e.Resource)
 }
 
-// ErrIAMOperationFailed is returned when an IAM operation fails
-type ErrIAMOperationFailed struct {
-	Operation string
-	Cause     error
+// ErrIAMTenantForbidden is returned when an IAM request names a tenant other
+// than the one the authenticated caller is bound to. It is the gRPC twin of
+// the REST guard's 403 "caller may not act on another tenant".
+type ErrIAMTenantForbidden struct {
+	Requested string
 }
 
-func (e ErrIAMOperationFailed) Error() string {
-	return fmt.Sprintf("IAM operation %s failed: %v", e.Operation, e.Cause)
+func (e ErrIAMTenantForbidden) Error() string {
+	return fmt.Sprintf("IAM request names tenant %q: caller may not act on another tenant", e.Requested)
 }
 
-func (e ErrIAMOperationFailed) Unwrap() error {
-	return e.Cause
+// ErrTenantBarrierShamirUnsupported is returned when InitTenantBarrier asks
+// for Shamir sharing. The per-tenant barrier initializes with its
+// deterministic credential only, and the init returns no shares, so
+// honouring the request would leave a barrier nobody could unseal.
+type ErrTenantBarrierShamirUnsupported struct {
+	Threshold int32
+	Shares    int32
+}
+
+func (e ErrTenantBarrierShamirUnsupported) Error() string {
+	return fmt.Sprintf("tenant barrier init with Shamir threshold %d of %d shares is not supported: "+
+		"the per-tenant barrier initializes with its deterministic credential and returns no shares; send threshold and shares 0",
+		e.Threshold, e.Shares)
 }
 
 // ErrIAMInvalidCredentials is returned when credentials are invalid
@@ -1042,6 +1267,38 @@ func (e ErrIAMTokenInvalid) Error() string {
 	return fmt.Sprintf("IAM token invalid: %s", e.Reason)
 }
 
+// ErrIAMTokenVerifierNotConfigured is returned when a token is submitted for
+// verification but the daemon has no token validator wired. It is never an
+// answer about the token: without a validator no token is valid.
+type ErrIAMTokenVerifierNotConfigured struct{}
+
+func (e ErrIAMTokenVerifierNotConfigured) Error() string {
+	return "IAM token verification is not configured: no token validator is wired"
+}
+
+// ErrNoPlatformJWTVerifier is returned when a platform JWT is checked but no
+// platform JWT verifier is attached to the validator.
+type ErrNoPlatformJWTVerifier struct{}
+
+func (e ErrNoPlatformJWTVerifier) Error() string {
+	return "no platform JWT verifier is configured"
+}
+
+// ErrPlatformJWTRejected is returned when every platform JWT verifier
+// rejected a token. Cause joins each verifier's rejection so callers can
+// classify it with errors.Is.
+type ErrPlatformJWTRejected struct {
+	Cause error
+}
+
+func (e ErrPlatformJWTRejected) Error() string {
+	return "platform JWT rejected: " + e.Cause.Error()
+}
+
+func (e ErrPlatformJWTRejected) Unwrap() error {
+	return e.Cause
+}
+
 // =============================================================================
 // KMS Service Errors
 // =============================================================================
@@ -1053,6 +1310,12 @@ type ErrKMSKeyNotFound struct {
 
 func (e ErrKMSKeyNotFound) Error() string {
 	return fmt.Sprintf("KMS key not found: %s", e.KeyID)
+}
+
+// GRPCStatus classifies the error as NotFound, the code the gRPC KMS
+// adapter returns for the same lookup.
+func (e ErrKMSKeyNotFound) GRPCStatus() *status.Status {
+	return status.New(codes.NotFound, e.Error())
 }
 
 // ErrKMSKeyAlreadyExists is returned when attempting to create a key that already exists
@@ -1083,6 +1346,12 @@ func (e ErrKMSInvalidParameter) Error() string {
 	return fmt.Sprintf("invalid KMS parameter %s: %s", e.Parameter, e.Reason)
 }
 
+// GRPCStatus classifies the error as InvalidArgument, the code the gRPC
+// KMS and secrets adapters return for the same bad input.
+func (e ErrKMSInvalidParameter) GRPCStatus() *status.Status {
+	return status.New(codes.InvalidArgument, e.Error())
+}
+
 // ErrKMSInvalidAlgorithm is returned when an unsupported algorithm is specified
 type ErrKMSInvalidAlgorithm struct {
 	Algorithm string
@@ -1090,6 +1359,31 @@ type ErrKMSInvalidAlgorithm struct {
 
 func (e ErrKMSInvalidAlgorithm) Error() string {
 	return fmt.Sprintf("invalid KMS algorithm: %s", e.Algorithm)
+}
+
+// ErrCAInvalidKeyAlgorithm is returned when a certificate request names a
+// key algorithm the CA does not issue.
+type ErrCAInvalidKeyAlgorithm struct {
+	Algorithm string
+}
+
+func (e ErrCAInvalidKeyAlgorithm) Error() string {
+	return fmt.Sprintf("invalid certificate key algorithm: %s", e.Algorithm)
+}
+
+// ErrEmbeddedHostFailed is returned when platformd cannot be hosted inside
+// the calling process for the SDK's embedded transport.
+type ErrEmbeddedHostFailed struct {
+	Op  string
+	Err error
+}
+
+func (e ErrEmbeddedHostFailed) Error() string {
+	return fmt.Sprintf("embedded platformd %s failed: %v", e.Op, e.Err)
+}
+
+func (e ErrEmbeddedHostFailed) Unwrap() error {
+	return e.Err
 }
 
 // ErrKMSInvalidKeyUsage is returned when an invalid key usage is specified
@@ -1378,6 +1672,20 @@ func (e ErrTokenValidationFailed) Unwrap() error {
 	return e.Cause
 }
 
+// ErrIAMPermissionCheckFailed is returned when the IAM policy enforcement
+// point cannot decide a transport's permission check.
+type ErrIAMPermissionCheckFailed struct {
+	Cause error
+}
+
+func (e ErrIAMPermissionCheckFailed) Error() string {
+	return fmt.Sprintf("IAM permission check failed: %v", e.Cause)
+}
+
+func (e ErrIAMPermissionCheckFailed) Unwrap() error {
+	return e.Cause
+}
+
 // =============================================================================
 // Overlay Network Service Errors
 // =============================================================================
@@ -1387,15 +1695,6 @@ type ErrOverlayServiceNotAvailable struct{}
 
 func (e ErrOverlayServiceNotAvailable) Error() string {
 	return "overlay network service not available"
-}
-
-// ErrOverlayOperationNotImplemented is returned when an overlay operation is not yet implemented
-type ErrOverlayOperationNotImplemented struct {
-	Operation string
-}
-
-func (e ErrOverlayOperationNotImplemented) Error() string {
-	return fmt.Sprintf("overlay operation not implemented: %s", e.Operation)
 }
 
 // =============================================================================
@@ -1409,27 +1708,25 @@ func (e ErrGatewayServiceNotAvailable) Error() string {
 	return "gateway service not available"
 }
 
-// ErrGatewayOperationNotImplemented is returned when a gateway operation is not yet implemented
-type ErrGatewayOperationNotImplemented struct {
-	Operation string
+// ErrBGPAttributeUnsupported is returned when a prefix announcement asks
+// for a BGP path attribute the gateway service does not announce with.
+type ErrBGPAttributeUnsupported struct {
+	Attribute string
 }
 
-func (e ErrGatewayOperationNotImplemented) Error() string {
-	return fmt.Sprintf("gateway operation not implemented: %s", e.Operation)
+func (e ErrBGPAttributeUnsupported) Error() string {
+	return fmt.Sprintf("BGP path attribute not supported on announce: %s", e.Attribute)
+}
+
+// GRPCStatus classifies the refused attribute as an invalid argument, so
+// the QUIC handler answers it as one.
+func (e ErrBGPAttributeUnsupported) GRPCStatus() *status.Status {
+	return status.New(codes.InvalidArgument, e.Error())
 }
 
 // =============================================================================
 // TPM Service Errors
 // =============================================================================
-
-// ErrTPMOperationNotImplemented is returned when a TPM operation is not yet implemented.
-type ErrTPMOperationNotImplemented struct {
-	Operation string
-}
-
-func (e ErrTPMOperationNotImplemented) Error() string {
-	return fmt.Sprintf("TPM operation not implemented: %s", e.Operation)
-}
 
 // ErrTPMInvalidSize is returned when a requested size exceeds the maximum.
 type ErrTPMInvalidSize struct {
@@ -1439,6 +1736,42 @@ type ErrTPMInvalidSize struct {
 
 func (e ErrTPMInvalidSize) Error() string {
 	return fmt.Sprintf("requested size %d exceeds maximum %d bytes", e.Requested, e.Max)
+}
+
+// GRPCStatus classes an oversized request as InvalidArgument, the class
+// gRPC GetRandom gives the same request.
+func (e ErrTPMInvalidSize) GRPCStatus() *status.Status {
+	return status.New(codes.InvalidArgument, e.Error())
+}
+
+// ErrVTPMIDRequired is returned when a vTPM call names no bundle or template.
+// Field is the name the gRPC VTPMService uses in the same refusal.
+type ErrVTPMIDRequired struct {
+	Field string
+}
+
+func (e ErrVTPMIDRequired) Error() string {
+	return e.Field + " is required"
+}
+
+// GRPCStatus classes a missing id as InvalidArgument, as gRPC VTPMService does.
+func (e ErrVTPMIDRequired) GRPCStatus() *status.Status {
+	return status.New(codes.InvalidArgument, e.Error())
+}
+
+// ErrNVOffsetOutOfRange is returned when an NV request's offset exceeds
+// the 16-bit offset TPM2_NV_Read / TPM2_NV_Write carry.
+type ErrNVOffsetOutOfRange struct {
+	Offset uint32
+}
+
+func (e ErrNVOffsetOutOfRange) Error() string {
+	return fmt.Sprintf("NV offset %d exceeds maximum %d", e.Offset, math.MaxUint16)
+}
+
+// GRPCStatus classifies the error as InvalidArgument.
+func (e ErrNVOffsetOutOfRange) GRPCStatus() *status.Status {
+	return status.New(codes.InvalidArgument, e.Error())
 }
 
 // ErrTenantDEKProvision is returned when DEK provisioning fails during tenant creation.
@@ -1502,6 +1835,16 @@ func (ErrAttestationManifestIDRequired) Error() string {
 	return "daemon: attestation manifest id is required"
 }
 
+// ErrAttestationManifestSignatureUnchecked is returned by
+// AttestationService.VerifyManifest when the caller supplies a public
+// key: the service cannot check a manifest signature against it, so it
+// refuses rather than report the signature valid unchecked.
+type ErrAttestationManifestSignatureUnchecked struct{}
+
+func (ErrAttestationManifestSignatureUnchecked) Error() string {
+	return "daemon: manifest verification cannot check a signature against a supplied public key"
+}
+
 // MessageError is a typed error carrying a fully formatted message with no
 // underlying cause. It replaces inline formatted-error constructions that do not wrap
 // another error.
@@ -1541,6 +1884,37 @@ func (e ErrConfigDeliveryServiceNotAvailable) Error() string {
 	return "config delivery service is not available"
 }
 
+// GRPCStatus classifies the error as Unavailable, the code the gRPC
+// ConfigDeliveryService answers with when no service is wired, so MCP
+// reports the same error class.
+func (e ErrConfigDeliveryServiceNotAvailable) GRPCStatus() *status.Status {
+	return status.New(codes.Unavailable, e.Error())
+}
+
+// ErrConfigDeliveryClassified carries a config delivery error over MCP with
+// the gRPC code the ConfigDeliveryService answers the same error with, so
+// both transports report one error class. Unwrap keeps the typed cause
+// reachable through errors.As.
+type ErrConfigDeliveryClassified struct {
+	Code codes.Code
+	Err  error
+}
+
+// Error implements the error interface.
+func (e ErrConfigDeliveryClassified) Error() string {
+	return e.Err.Error()
+}
+
+// Unwrap returns the config delivery error.
+func (e ErrConfigDeliveryClassified) Unwrap() error {
+	return e.Err
+}
+
+// GRPCStatus returns the gRPC status for the classified error.
+func (e ErrConfigDeliveryClassified) GRPCStatus() *status.Status {
+	return status.New(e.Code, e.Err.Error())
+}
+
 // ErrConfigSerializationFailed is returned when a resolved device
 // configuration could not be serialized to JSON for wire delivery.
 type ErrConfigSerializationFailed struct {
@@ -1571,12 +1945,86 @@ func (e ErrEABUnsupportedSortField) Error() string {
 // ErrEABInvalidQRCodeSize is returned when an EAB QR code request asks
 // for a negative pixel size.
 type ErrEABInvalidQRCodeSize struct {
-	Size int32
+	Size int
 }
 
 // Error implements the error interface.
 func (e ErrEABInvalidQRCodeSize) Error() string {
 	return fmt.Sprintf("eab: invalid QR code size: %d", e.Size)
+}
+
+// ErrEABUnsupportedStatusFilter is returned when an EAB list request over
+// MCP names a status other than active, revoked, expired or used.
+type ErrEABUnsupportedStatusFilter struct {
+	Status string
+}
+
+// Error implements the error interface.
+func (e ErrEABUnsupportedStatusFilter) Error() string {
+	return "eab: unsupported status filter: " + e.Status
+}
+
+// ErrVMListUnknownState is returned when a ListVMs request filters on a state
+// value the VMState enum does not define.
+type ErrVMListUnknownState struct {
+	State int32
+}
+
+func (e ErrVMListUnknownState) Error() string {
+	return fmt.Sprintf("list VMs: unknown VM state %d", e.State)
+}
+
+// GRPCStatus classifies an unknown state filter as InvalidArgument.
+func (e ErrVMListUnknownState) GRPCStatus() *status.Status {
+	return status.New(codes.InvalidArgument, e.Error())
+}
+
+// ErrVMListSelectorExpression is returned when a ListVMs selector carries a
+// match_expressions entry. The API defines no expression syntax, so the
+// service refuses the entry rather than ignore it.
+type ErrVMListSelectorExpression struct {
+	Expression string
+}
+
+func (e ErrVMListSelectorExpression) Error() string {
+	return fmt.Sprintf("list VMs: selector match_expressions are not supported: %q", e.Expression)
+}
+
+// GRPCStatus classifies a selector expression as InvalidArgument.
+func (e ErrVMListSelectorExpression) GRPCStatus() *status.Status {
+	return status.New(codes.InvalidArgument, e.Error())
+}
+
+// ErrVMCreateUnsupportedField is returned when a CreateVM config sets a
+// field the compute backend cannot honour. The service refuses the request
+// rather than create a VM that differs from it.
+type ErrVMCreateUnsupportedField struct {
+	Field  string
+	Reason string
+}
+
+func (e ErrVMCreateUnsupportedField) Error() string {
+	return "create VM: config." + e.Field + " is not supported: " + e.Reason
+}
+
+// GRPCStatus classifies an unsupported config field as InvalidArgument.
+func (e ErrVMCreateUnsupportedField) GRPCStatus() *status.Status {
+	return status.New(codes.InvalidArgument, e.Error())
+}
+
+// ErrVMListUnsupportedSortField is returned when a ListVMs request asks for a
+// sort_by field the service does not support.
+type ErrVMListUnsupportedSortField struct {
+	Field string
+}
+
+func (e ErrVMListUnsupportedSortField) Error() string {
+	return "list VMs: unsupported sort field: " + e.Field
+}
+
+// GRPCStatus classifies an unsupported sort field as InvalidArgument.
+func (e ErrVMListUnsupportedSortField) GRPCStatus() *status.Status {
+	return status.New(codes.InvalidArgument, e.Error())
 }
 
 // ErrProfileConfigInvalid is returned when a device profile create or

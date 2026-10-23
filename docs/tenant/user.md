@@ -55,6 +55,11 @@ platformctl tenant usage tenant-a      # quota accounting
 
 CLI verbs take the tenant **name**. The API is keyed by **ID**, with a separate
 `by-name` lookup. That difference will bite when you script against both.
+Signed in as a tenant, you can name only your own tenant; any other name is
+refused the same way whether or not that tenant exists. Over `--transport rest`
+the name lookup is still system-only, so a tenant cannot name even its own
+tenant there yet; use gRPC, QUIC or the Unix socket. Over `--transport mcp`
+only `create` and `list` run ([cli.md](cli.md) §1).
 
 ---
 
@@ -94,7 +99,9 @@ platformctl tenant quotas set tenant-a --max-vms 20 --max-vcpus 80 --max-memory-
 
 **Only the flags you pass are changed.** An omitted flag leaves that limit
 alone. This is deliberate: `0` is a real limit meaning "no capacity", so
-omitting a flag cannot be treated as setting it to zero.
+omitting a flag cannot be treated as setting it to zero. Setting a limit never
+resets what the tenant already uses, and it keeps the disk limit, which the CLI
+cannot set.
 
 To set a limit to zero — genuinely blocking a resource — pass it explicitly:
 
@@ -117,7 +124,9 @@ by failure — that is what the quota-check API is for
 ## Per-tenant barriers
 
 A barrier is a cryptographic seal over the tenant's data. Sealed means the data
-is inaccessible until unsealed.
+is inaccessible until unsealed. What a barrier is, and how a tenant's barrier
+differs from the platform barrier that gates `platformd` start-up, is explained
+in [`docs/barrier/`](../barrier/user.md#tenant-barriers).
 
 ```bash
 platformctl tenant barrier init tenant-a
@@ -176,12 +185,11 @@ The tenant service is not wired into the daemon.
 
 ## One thing to be aware of
 
-Tenant operations — including **init, seal and unseal of a per-tenant barrier** —
-currently require only a validated token, not a specific scope, on gRPC, Unix,
-MCP and embedded. Barrier operations are key-custody operations. Until that is
-resolved, treat any credential that can reach the tenant API as a
-tenancy-administrator credential. It is recorded in [api.md](api.md) §7 and
-raised for the owner.
+**Init, seal and unseal of a per-tenant barrier** are key-custody operations. On
+gRPC, QUIC, MCP and Unix they need `tenant:write`, the same grant as tenant
+create and update, so treat a `tenant:write` holder as a tenancy administrator
+of its own tenant; only the system tenant reaches another tenant's barrier.
+See [api.md](api.md) §7.
 
 ---
 

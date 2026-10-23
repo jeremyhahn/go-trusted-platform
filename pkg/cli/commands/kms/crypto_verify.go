@@ -32,6 +32,56 @@ func (e ErrSignatureRequired) Error() string {
 }
 
 // verifyFlags contains flags for the verify command
+// ErrVerificationFailed is returned when the server reports that a signature
+// or HMAC does not verify, so that a failed check exits non-zero.
+type ErrVerificationFailed struct {
+	Operation  string
+	KeyID      string
+	KeyVersion uint64
+}
+
+func (e ErrVerificationFailed) Error() string {
+	return fmt.Sprintf("%s verification failed for key %s (version %d)", e.Operation, e.KeyID, e.KeyVersion)
+}
+
+// verifyResult is the outcome of a signature or HMAC verification.
+type verifyResult struct {
+	KeyID      string `json:"key_id" yaml:"key_id"`
+	KeyVersion uint64 `json:"key_version" yaml:"key_version"`
+	Valid      bool   `json:"valid" yaml:"valid"`
+	Timestamp  string `json:"timestamp" yaml:"timestamp"`
+}
+
+// printVerifyResult prints a verification result in the requested format and
+// returns ErrVerificationFailed when the result is not valid. operation names
+// the check in the output, for example "Signature" or "HMAC".
+func printVerifyResult(printer *cli.Printer, format cli.OutputFormat, operation string, result verifyResult) error {
+	switch format {
+	case cli.OutputFormatJSON, cli.OutputFormatYAML:
+		if err := printer.Print(result); err != nil {
+			return err
+		}
+
+	case cli.OutputFormatTable:
+		if result.Valid {
+			printer.PrintSuccess(operation + " verification PASSED")
+		} else {
+			printer.PrintError(operation + " verification FAILED")
+		}
+		printer.PrintKeyValue("Key ID", result.KeyID)
+		printer.PrintKeyValue("Key Version", fmt.Sprintf("%d", result.KeyVersion))
+		printer.PrintKeyValue("Valid", fmt.Sprintf("%t", result.Valid))
+
+	default:
+		return cli.ErrInvalidOutputFormat{Format: string(format)}
+	}
+
+	if !result.Valid {
+		return ErrVerificationFailed{Operation: operation, KeyID: result.KeyID, KeyVersion: result.KeyVersion}
+	}
+	return nil
+}
+
 type verifyFlags struct {
 	keyID         string
 	inputPath     string
@@ -144,35 +194,10 @@ func runCryptoVerify(flags *cli.CommonFlags, cmdFlags *verifyFlags) error {
 		return ErrCryptoOperationFailed{Operation: "verify", Err: err}
 	}
 
-	printer := base.Printer()
-
-	switch flags.OutputFormat {
-	case cli.OutputFormatJSON, cli.OutputFormatYAML:
-		output := struct {
-			KeyID      string `json:"key_id" yaml:"key_id"`
-			KeyVersion uint64 `json:"key_version" yaml:"key_version"`
-			Valid      bool   `json:"valid" yaml:"valid"`
-			Timestamp  string `json:"timestamp" yaml:"timestamp"`
-		}{
-			KeyID:      resp.KeyID,
-			KeyVersion: resp.KeyVersion,
-			Valid:      resp.Valid,
-			Timestamp:  formatTimestamp(resp.Timestamp),
-		}
-		return printer.Print(output)
-
-	case cli.OutputFormatTable:
-		if resp.Valid {
-			printer.PrintSuccess("Signature verification PASSED")
-		} else {
-			printer.PrintError("Signature verification FAILED")
-		}
-		printer.PrintKeyValue("Key ID", resp.KeyID)
-		printer.PrintKeyValue("Key Version", fmt.Sprintf("%d", resp.KeyVersion))
-		printer.PrintKeyValue("Valid", fmt.Sprintf("%t", resp.Valid))
-		return nil
-
-	default:
-		return cli.ErrInvalidOutputFormat{Format: string(flags.OutputFormat)}
-	}
+	return printVerifyResult(base.Printer(), flags.OutputFormat, "Signature", verifyResult{
+		KeyID:      resp.KeyID,
+		KeyVersion: resp.KeyVersion,
+		Valid:      resp.Valid,
+		Timestamp:  formatTimestamp(resp.Timestamp),
+	})
 }

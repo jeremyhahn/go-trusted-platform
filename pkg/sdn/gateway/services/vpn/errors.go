@@ -150,6 +150,41 @@ func (e *ErrLeaseStoreUnavailable) Error() string {
 
 func (e *ErrLeaseStoreUnavailable) Unwrap() error { return e.Cause }
 
+// ErrRevocationNotRecorded is returned when a lease store could make a
+// revocation durable nowhere: neither its record of pending revocations nor
+// the backing store took it. The store keeps the lease, because a restart
+// would rebuild it from the backing store, and the service refuses the
+// revocation whole: the peer and the address stay with the lease, so the
+// running gateway and a restarted one agree, until a retry is recorded.
+type ErrRevocationNotRecorded struct {
+	LeaseID LeaseID
+	Cause   error
+}
+
+func (e *ErrRevocationNotRecorded) Error() string {
+	return fmt.Sprintf("vpn: revocation of lease %s not recorded: %v", e.LeaseID, e.Cause)
+}
+
+func (e *ErrRevocationNotRecorded) Unwrap() error { return e.Cause }
+
+// ErrLeaseNotRestored is returned for a recorded lease a restarted gateway
+// dropped instead of reinstating: it had expired, or its data plane, zones or
+// address are no longer available here.
+type ErrLeaseNotRestored struct {
+	LeaseID LeaseID
+	Reason  string
+	Cause   error
+}
+
+func (e *ErrLeaseNotRestored) Error() string {
+	if e.Cause != nil {
+		return fmt.Sprintf("vpn: lease %s not restored: %s: %v", e.LeaseID, e.Reason, e.Cause)
+	}
+	return fmt.Sprintf("vpn: lease %s not restored: %s", e.LeaseID, e.Reason)
+}
+
+func (e *ErrLeaseNotRestored) Unwrap() error { return e.Cause }
+
 // ErrLeaseExpired is returned when a renewal arrives after the lease expired.
 type ErrLeaseExpired struct {
 	LeaseID LeaseID
@@ -220,6 +255,42 @@ func (e *ErrZoneNotAllowed) Error() string {
 	return fmt.Sprintf("vpn: zone %q is not reachable through this service", e.Zone)
 }
 
+// ErrPeerNotEnrolled is returned when an identity the caller-admission
+// policy accepted has no operator enrolment for the tenant: an enrolment is
+// what turns a known device into a VPN peer, and its absence is a refusal.
+type ErrPeerNotEnrolled struct {
+	TenantID string
+	DeviceID string
+}
+
+func (e *ErrPeerNotEnrolled) Error() string {
+	return fmt.Sprintf("vpn: device %q is not an enrolled peer of tenant %q", e.DeviceID, e.TenantID)
+}
+
+// ErrInvalidEnrolment is returned when an enrolment set handed to the
+// service is malformed; the previous set stays in force.
+type ErrInvalidEnrolment struct {
+	Index  int
+	Reason string
+}
+
+func (e *ErrInvalidEnrolment) Error() string {
+	return fmt.Sprintf("vpn: enrolment %d: %s", e.Index, e.Reason)
+}
+
+// ErrPosturePolicyInvalid is returned when a tenant posture policy does not
+// parse, does not compile, or declares a package other than the posture
+// package. The service refuses that tenant's admissions until it is fixed.
+type ErrPosturePolicyInvalid struct {
+	TenantID string
+	Name     string
+	Reason   string
+}
+
+func (e *ErrPosturePolicyInvalid) Error() string {
+	return fmt.Sprintf("vpn: posture policy %q of tenant %q is invalid: %s", e.Name, e.TenantID, e.Reason)
+}
+
 // ErrDepsMissing is returned by New when a required dependency is nil.
 type ErrDepsMissing struct {
 	Dep string
@@ -277,3 +348,31 @@ type ErrDataPlaneNotStarted struct {
 func (e *ErrDataPlaneNotStarted) Error() string {
 	return fmt.Sprintf("vpn: data plane %q is not started", e.Kind)
 }
+
+// ErrListenerBind is returned when the admission listener cannot bind its
+// configured address.
+type ErrListenerBind struct {
+	Address string
+	Cause   error
+}
+
+func (e *ErrListenerBind) Error() string {
+	return fmt.Sprintf("vpn: admission listener cannot bind %s: %v", e.Address, e.Cause)
+}
+
+func (e *ErrListenerBind) Unwrap() error { return e.Cause }
+
+// ErrListenerTrust is returned during a handshake when the device-identity
+// anchor cannot be read. The handshake fails: no anchor admits no device.
+type ErrListenerTrust struct {
+	Cause error
+}
+
+func (e *ErrListenerTrust) Error() string {
+	if e.Cause != nil {
+		return fmt.Sprintf("vpn: admission listener has no device-identity anchor: %v", e.Cause)
+	}
+	return "vpn: admission listener has no device-identity anchor"
+}
+
+func (e *ErrListenerTrust) Unwrap() error { return e.Cause }

@@ -81,6 +81,52 @@ func (e ErrScopeDenied) Error() string {
 	return "permission denied: " + e.Method + " requires scope " + e.Scope
 }
 
+// ErrMethodNotClassified is returned for a gRPC method that has no entry in the
+// scope catalog and is not on the pre-auth list. The interceptor maps it to
+// codes.PermissionDenied: a method nobody classified is refused, never served
+// to whoever holds a valid token.
+type ErrMethodNotClassified struct {
+	// Method is the gRPC FullMethod that was refused.
+	Method string
+}
+
+func (e ErrMethodNotClassified) Error() string {
+	return "permission denied: " + e.Method + " has no authorization entry"
+}
+
+// ErrAuthorizationCheckerRequired is returned when a token validated by a
+// TokenValidator without claims reaches a classified method and no
+// AuthorizationChecker is configured. Such a token carries nothing to check
+// the method's scope against, so it is denied rather than served (#768).
+type ErrAuthorizationCheckerRequired struct {
+	// Method is the gRPC FullMethod that was refused.
+	Method string
+}
+
+func (e ErrAuthorizationCheckerRequired) Error() string {
+	return "permission denied: " + e.Method + " needs an authorization checker for tokens without scope claims"
+}
+
+// ErrAuthorizationCheckFailed is returned when the AuthorizationChecker
+// cannot decide a method's permission. The call is refused.
+type ErrAuthorizationCheckFailed struct {
+	// Method is the gRPC FullMethod that was refused.
+	Method string
+	// Cause is the checker's error.
+	Cause error
+}
+
+func (e ErrAuthorizationCheckFailed) Error() string {
+	if e.Cause != nil {
+		return "authorization check failed for " + e.Method + ": " + e.Cause.Error()
+	}
+	return "authorization check failed for " + e.Method
+}
+
+func (e ErrAuthorizationCheckFailed) Unwrap() error {
+	return e.Cause
+}
+
 // =============================================================================
 // Token Validator Interface
 // =============================================================================
@@ -133,6 +179,11 @@ type OIDCInterceptorConfig struct {
 	// RequireAuth determines behavior when no token validator is configured.
 	// If true, unauthenticated requests fail. If false, they're allowed through.
 	RequireAuth bool
+
+	// AuthorizationChecker decides the method's catalog permission for a
+	// token validated by a TokenValidator that yields no claims. Without it
+	// such a token is denied every classified method (#768).
+	AuthorizationChecker AuthorizationChecker
 }
 
 // OIDCInterceptorOption configures the OIDC interceptor.
@@ -156,6 +207,14 @@ func WithSkipMethods(methods ...string) OIDCInterceptorOption {
 func WithRequireAuth(require bool) OIDCInterceptorOption {
 	return func(c *OIDCInterceptorConfig) {
 		c.RequireAuth = require
+	}
+}
+
+// WithAuthorizationChecker sets the checker that authorizes tokens from a
+// validator without claims.
+func WithAuthorizationChecker(c AuthorizationChecker) OIDCInterceptorOption {
+	return func(cfg *OIDCInterceptorConfig) {
+		cfg.AuthorizationChecker = c
 	}
 }
 
@@ -193,9 +252,16 @@ func OIDCUnaryInterceptor(opts ...OIDCInterceptorOption) grpc.UnaryServerInterce
 		info *grpc.UnaryServerInfo,
 		handler grpc.UnaryHandler,
 	) (interface{}, error) {
-		// Check if this method should skip authentication
-		if skipMethodsMap[info.FullMethod] {
+		// Pre-auth and caller-skipped methods are served without a token.
+		if skipMethodsMap[info.FullMethod] || isPreAuthMethod(info.FullMethod) {
 			return handler(ctx, req)
+		}
+
+		// Default deny: a method with no catalog entry is refused before any
+		// token work, whatever the caller presents.
+		scope := ScopeForMethod(info.FullMethod)
+		if scope == "" {
+			return nil, status.Error(codes.PermissionDenied, ErrMethodNotClassified{Method: info.FullMethod}.Error())
 		}
 
 		// If no validator configured, handle based on RequireAuth setting
@@ -218,13 +284,9 @@ func OIDCUnaryInterceptor(opts ...OIDCInterceptorOption) grpc.UnaryServerInterce
 		// (mirroring QUIC AuthorizeRequest and MCP AuthorizeTool). Fall back to
 		// the bool-only path otherwise (legacy QuicBaaS / platform-JWT adapter).
 		//
-		// The method's required scope (if any) is enforced INSIDE the
-		// validator: a mapped method passes its colon "resource:action"
-		// scope, an unmapped one passes "" and is routed through the
-		// scope-free Validate path (preserving the historical passthrough
-		// for unmapped methods) while still enforcing online liveness.
+		// The method's required colon "resource:action" scope is enforced
+		// INSIDE the validator, alongside online liveness.
 		if cv, ok := config.TokenValidator.(ClaimsTokenValidator); ok {
-			scope := scopeForMethod(info.FullMethod)
 			authCtx, aerr := cv.AuthorizeToken(ctx, token, scope, dpopProofFromContext(ctx), info.FullMethod, "")
 			if aerr != nil {
 				return nil, mapClaimsAuthError(info.FullMethod, scope, aerr)
@@ -241,6 +303,9 @@ func OIDCUnaryInterceptor(opts ...OIDCInterceptorOption) grpc.UnaryServerInterce
 		}
 		if !valid {
 			return nil, status.Error(codes.Unauthenticated, "invalid token")
+		}
+		if err := authorizeLegacyToken(ctx, config.AuthorizationChecker, info.FullMethod, scope, token); err != nil {
+			return nil, err
 		}
 
 		// Add validated token to context and continue
@@ -284,9 +349,16 @@ func OIDCStreamInterceptor(opts ...OIDCInterceptorOption) grpc.StreamServerInter
 	) error {
 		ctx := ss.Context()
 
-		// Check if this method should skip authentication
-		if skipMethodsMap[info.FullMethod] {
+		// Pre-auth and caller-skipped methods are served without a token.
+		if skipMethodsMap[info.FullMethod] || isPreAuthMethod(info.FullMethod) {
 			return handler(srv, ss)
+		}
+
+		// Default deny: a method with no catalog entry is refused before any
+		// token work, whatever the caller presents.
+		scope := ScopeForMethod(info.FullMethod)
+		if scope == "" {
+			return status.Error(codes.PermissionDenied, ErrMethodNotClassified{Method: info.FullMethod}.Error())
 		}
 
 		// If no validator configured, handle based on RequireAuth setting
@@ -307,7 +379,6 @@ func OIDCStreamInterceptor(opts ...OIDCInterceptorOption) grpc.StreamServerInter
 		// it: stash the AuthorizedContext in the wrapped stream context and
 		// enforce the method's required scope against it (mirroring QUIC/MCP).
 		if cv, ok := config.TokenValidator.(ClaimsTokenValidator); ok {
-			scope := scopeForMethod(info.FullMethod)
 			authCtx, aerr := cv.AuthorizeToken(ctx, token, scope, dpopProofFromContext(ctx), info.FullMethod, "")
 			if aerr != nil {
 				return mapClaimsAuthError(info.FullMethod, scope, aerr)
@@ -326,6 +397,9 @@ func OIDCStreamInterceptor(opts ...OIDCInterceptorOption) grpc.StreamServerInter
 		}
 		if !valid {
 			return status.Error(codes.Unauthenticated, "invalid token")
+		}
+		if err := authorizeLegacyToken(ctx, config.AuthorizationChecker, info.FullMethod, scope, token); err != nil {
+			return err
 		}
 
 		// Wrap stream with token in context
@@ -361,6 +435,28 @@ func mapClaimsAuthError(method, scope string, err error) error {
 		return status.Error(codes.Internal, ErrTokenValidationFailed{Cause: err}.Error())
 	}
 	return status.Error(codes.Unauthenticated, ErrTokenValidationFailed{Cause: err}.Error())
+}
+
+// authorizeLegacyToken decides scope for a token validated by a TokenValidator
+// without claims. The token names no scopes, so the AuthorizationChecker
+// decides the catalog "resource:action" for it; without a checker, or when
+// the checker cannot decide, the call is refused (#768).
+func authorizeLegacyToken(ctx context.Context, checker AuthorizationChecker, method, scope, token string) error {
+	if checker == nil {
+		return status.Error(codes.PermissionDenied, ErrAuthorizationCheckerRequired{Method: method}.Error())
+	}
+	resource, action, ok := strings.Cut(scope, ":")
+	if !ok {
+		return status.Error(codes.PermissionDenied, ErrMethodNotClassified{Method: method}.Error())
+	}
+	allowed, err := checker.CheckPermission(ctx, token, resource, action)
+	if err != nil {
+		return status.Error(codes.Unavailable, ErrAuthorizationCheckFailed{Method: method, Cause: err}.Error())
+	}
+	if !allowed {
+		return status.Error(codes.PermissionDenied, ErrScopeDenied{Method: method, Scope: scope}.Error())
+	}
+	return nil
 }
 
 // extractBearerToken extracts the Bearer token from the Authorization metadata.

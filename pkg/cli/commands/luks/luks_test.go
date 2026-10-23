@@ -14,12 +14,19 @@
 package luks
 
 import (
+	"context"
 	"errors"
 	"os"
+	"reflect"
 	"strings"
 	"testing"
 
+	"google.golang.org/grpc"
+
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
+	platform "github.com/jeremyhahn/go-trusted-platform/sdk/go"
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
+	lukssvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/luks"
 )
 
 func testFlags() func() *cli.CommonFlags {
@@ -28,7 +35,14 @@ func testFlags() func() *cli.CommonFlags {
 	}
 }
 
-func isRoot() bool { return os.Geteuid() == 0 }
+// asUID makes checkRoot see uid as the effective user ID for one test.
+// The package seam makes these tests unsafe to run in parallel.
+func asUID(t *testing.T, uid int) {
+	t.Helper()
+	saved := geteuid
+	geteuid = func() int { return uid }
+	t.Cleanup(func() { geteuid = saved })
+}
 
 func TestNewCommand_Structure(t *testing.T) {
 	cmd := NewCommand(testFlags())
@@ -110,6 +124,22 @@ func TestEnrollFIDO2_Flags(t *testing.T) {
 	}
 }
 
+// The daemon refuses --require-pin (#934); the help must say so rather than
+// promise a PIN-protected keyslot.
+func TestEnrollFIDO2_RequirePINHelpNamesTheRefusal(t *testing.T) {
+	cmd := NewCommand(testFlags())
+	sub, _, err := cmd.Find([]string{"enroll-fido2"})
+	if err != nil {
+		t.Fatalf("could not find enroll-fido2: %v", err)
+	}
+	if usage := sub.Flags().Lookup("require-pin").Usage; !strings.Contains(usage, "refused") || !strings.Contains(usage, "#584") {
+		t.Errorf("--require-pin usage = %q, want it to name the refusal and SDK seam #584", usage)
+	}
+	if !strings.Contains(sub.Long, "#584") {
+		t.Errorf("enroll-fido2 long help does not name SDK seam #584")
+	}
+}
+
 func TestEnrollTPM_Flags(t *testing.T) {
 	cmd := NewCommand(testFlags())
 	sub, _, err := cmd.Find([]string{"enroll-tpm"})
@@ -176,14 +206,12 @@ func TestChangePassphrase_Flags(t *testing.T) {
 }
 
 // =============================================================================
-// Validation tests. All mutating runXxx helpers bail out on root check when
-// not root, so we structure these to work both as root and non-root.
+// Validation tests. Every mutating runXxx helper checks root first; asUID
+// sets the effective user ID checkRoot sees.
 // =============================================================================
 
 func TestRunStatus_RequiresRoot(t *testing.T) {
-	if isRoot() {
-		t.Skip("running as root; root check is not the error path here")
-	}
+	asUID(t, 1000)
 	err := runStatus(&cli.CommonFlags{OutputFormat: cli.OutputFormatJSON}, &statusFlags{})
 	if err == nil {
 		t.Fatal("expected error, got nil")
@@ -194,13 +222,24 @@ func TestRunStatus_RequiresRoot(t *testing.T) {
 }
 
 func TestRunEnrollPassphrase_Validation(t *testing.T) {
-	if isRoot() {
-		t.Skip("running as root; validation happens after root check")
+	tests := []struct {
+		name  string
+		uid   int
+		flags enrollPassphraseFlags
+		want  error
+	}{
+		{"not root", 1000, enrollPassphraseFlags{existingPassphrase: "old", newPassphrase: "new"}, ErrRootRequired{}},
+		{"no existing passphrase", 0, enrollPassphraseFlags{newPassphrase: "new"}, ErrExistingPassphraseRequired{}},
+		{"no new passphrase", 0, enrollPassphraseFlags{existingPassphrase: "old"}, ErrNewPassphraseRequired{}},
 	}
-	err := runEnrollPassphrase(&cli.CommonFlags{OutputFormat: cli.OutputFormatJSON}, &enrollPassphraseFlags{})
-	var root ErrRootRequired
-	if !errors.As(err, &root) {
-		t.Errorf("expected ErrRootRequired (non-root), got %T", err)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			asUID(t, tt.uid)
+			err := runEnrollPassphrase(&cli.CommonFlags{OutputFormat: cli.OutputFormatJSON}, &tt.flags)
+			if !errors.Is(err, tt.want) {
+				t.Errorf("expected %T, got %T: %v", tt.want, err, err)
+			}
+		})
 	}
 }
 
@@ -224,6 +263,54 @@ func TestValidateSlot(t *testing.T) {
 		if !tc.wantErr && err != nil {
 			t.Errorf("validateSlot(%d): unexpected error %v", tc.slot, err)
 		}
+	}
+}
+
+type luksOnlyClient struct {
+	platform.Client
+	rpc platformv1.LUKSServiceClient
+}
+
+func (c luksOnlyClient) LUKS() platformv1.LUKSServiceClient { return c.rpc }
+
+type statusRPC struct {
+	platformv1.LUKSServiceClient
+	device string
+}
+
+func (s *statusRPC) Status(_ context.Context, req *platformv1.LUKSStatusRequest, _ ...grpc.CallOption) (*platformv1.LUKSStatusResponse, error) {
+	s.device = req.GetDevice()
+	return &platformv1.LUKSStatusResponse{Device: req.GetDevice(), IsLuks: true}, nil
+}
+
+func TestNewService_DispatchesOverTheSDKClient(t *testing.T) {
+	rpc := &statusRPC{}
+
+	svc, err := newService(luksOnlyClient{rpc: rpc})
+	if err != nil {
+		t.Fatalf("newService() error = %v", err)
+	}
+	resp, err := svc.Status(context.Background(), &lukssvc.StatusRequest{Device: "/dev/sda2"})
+	if err != nil {
+		t.Fatalf("Status() error = %v", err)
+	}
+	if rpc.device != "/dev/sda2" || !resp.IsLUKS {
+		t.Errorf("Status() reached device %q with IsLUKS %v; want /dev/sda2 and true", rpc.device, resp.IsLUKS)
+	}
+}
+
+func TestNewService_RefusesAClientWithoutTheLUKSService(t *testing.T) {
+	svc, err := newService(luksOnlyClient{})
+	if svc != nil {
+		t.Errorf("expected no service, got %v", svc)
+	}
+
+	var unavailable platform.ErrServiceUnavailable
+	if !errors.As(err, &unavailable) {
+		t.Fatalf("expected platform.ErrServiceUnavailable, got %v", err)
+	}
+	if unavailable.Service != lukssvcName {
+		t.Errorf("ErrServiceUnavailable.Service = %q, want %q", unavailable.Service, lukssvcName)
 	}
 }
 
@@ -270,18 +357,23 @@ func TestErrors_Messages(t *testing.T) {
 	}
 }
 
-func TestCheckRoot_NonRootPath(t *testing.T) {
-	// Can't force non-root from inside the process; just confirm that the
-	// function returns a specific error type shape when not root.
-	err := checkRoot()
-	if isRoot() {
-		if err != nil {
-			t.Errorf("expected nil error as root, got %v", err)
-		}
-		return
+func TestGeteuidSeamDefault(t *testing.T) {
+	if reflect.ValueOf(geteuid).Pointer() != reflect.ValueOf(os.Geteuid).Pointer() {
+		t.Error("geteuid should default to os.Geteuid")
 	}
+}
+
+func TestCheckRoot(t *testing.T) {
+	asUID(t, 0)
+	if err := checkRoot(); err != nil {
+		t.Errorf("expected nil error as root, got %v", err)
+	}
+}
+
+func TestCheckRoot_NonRootPath(t *testing.T) {
+	asUID(t, 1000)
 	var rootErr ErrRootRequired
-	if !errors.As(err, &rootErr) {
+	if err := checkRoot(); !errors.As(err, &rootErr) {
 		t.Errorf("expected ErrRootRequired, got %T: %v", err, err)
 	}
 }

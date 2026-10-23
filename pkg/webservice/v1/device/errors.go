@@ -13,6 +13,11 @@
 
 package device
 
+import (
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+)
+
 // ErrDeviceServiceNotInitialized indicates the device service is not initialized.
 type ErrDeviceServiceNotInitialized struct{}
 
@@ -282,3 +287,131 @@ func (e ErrAttestEvidenceUnreadable) Error() string {
 }
 
 func (e ErrAttestEvidenceUnreadable) Unwrap() error { return e.Cause }
+
+// ErrBootIdentityRequired reports a diskless boot request that names no
+// identity.
+type ErrBootIdentityRequired struct{}
+
+func (ErrBootIdentityRequired) Error() string {
+	return "device: boot identity is required"
+}
+
+// ErrBootIdentityUnknown reports a boot identity no device record matches.
+type ErrBootIdentityUnknown struct {
+	Identity string
+	Cause    error
+}
+
+func (e ErrBootIdentityUnknown) Error() string {
+	return "device: no device is enrolled as " + e.Identity
+}
+
+func (e ErrBootIdentityUnknown) Unwrap() error { return e.Cause }
+
+// ErrBootCertificateRefused answers every boot-certificate request that does
+// not prove possession of an enrolled IDevID key: an unknown name, a device
+// enrolled before its chain was recorded, and a proof that does not verify.
+// Its message is the same for all of them and names nothing, so the route
+// cannot enumerate devices; Identity and Cause are for the server's log.
+type ErrBootCertificateRefused struct {
+	Identity string
+	Cause    error
+}
+
+func (ErrBootCertificateRefused) Error() string {
+	return "device: boot certificate refused"
+}
+
+func (e ErrBootCertificateRefused) Unwrap() error { return e.Cause }
+
+// ErrBootChannelRequired refuses a boot request that arrived on a connection
+// with no channel binding: a transport with no TLS (the Unix socket, MCP), or
+// a TLS connection whose exporter cannot be read. Both boot proofs are
+// computed over that binding, so the request is refused before the boot
+// service sees it, never checked against an empty nonce.
+type ErrBootChannelRequired struct {
+	Transport string
+	Cause     error
+}
+
+func (e ErrBootChannelRequired) Error() string {
+	return "device: diskless boot needs a TLS 1.3 connection to bind its proof to, and this " +
+		e.Transport + " request has none"
+}
+
+func (e ErrBootChannelRequired) Unwrap() error { return e.Cause }
+
+// GRPCStatus classifies the refusal as FailedPrecondition, the class gRPC
+// answers it with, for a transport that classifies errors by status (MCP).
+func (e ErrBootChannelRequired) GRPCStatus() *status.Status {
+	return status.New(codes.FailedPrecondition, e.Error())
+}
+
+// ErrBootCertificateRequestUnreadable reports a boot-certificate request body
+// that could not be decoded.
+type ErrBootCertificateRequestUnreadable struct{ Cause error }
+
+func (e ErrBootCertificateRequestUnreadable) Error() string {
+	return "device: boot certificate request could not be read: " + e.Cause.Error()
+}
+
+func (e ErrBootCertificateRequestUnreadable) Unwrap() error { return e.Cause }
+
+// ErrBootEvidenceRequired reports a boot delivery request with no quote.
+type ErrBootEvidenceRequired struct{}
+
+func (ErrBootEvidenceRequired) Error() string {
+	return "device: boot attestation evidence is required"
+}
+
+// ErrBootEvidenceUnreadable reports a boot delivery body or quote evidence
+// that could not be decoded.
+type ErrBootEvidenceUnreadable struct{ Cause error }
+
+func (e ErrBootEvidenceUnreadable) Error() string {
+	return "device: boot attestation evidence could not be read: " + e.Cause.Error()
+}
+
+func (e ErrBootEvidenceUnreadable) Unwrap() error { return e.Cause }
+
+// ErrBootRefused reports a node that did not prove it is the enrolled device
+// in a verified state: the wrong certificate, a quote not bound to its
+// connection, a failed attestation, or a revoked or suspended record.
+type ErrBootRefused struct {
+	Serial string
+	Reason string
+	Cause  error
+}
+
+func (e ErrBootRefused) Error() string {
+	msg := "device: boot delivery refused for " + e.Serial + ": " + e.Reason
+	if e.Cause != nil {
+		msg += ": " + e.Cause.Error()
+	}
+	return msg
+}
+
+func (e ErrBootRefused) Unwrap() error { return e.Cause }
+
+// ErrBootProfileUnbound reports an attested node with no profile to deliver.
+type ErrBootProfileUnbound struct{ Serial string }
+
+func (e ErrBootProfileUnbound) Error() string {
+	return "device: no profile is bound to " + e.Serial
+}
+
+// ErrBootUnavailable reports a control-plane fault while answering a boot
+// request; it says nothing about the node.
+type ErrBootUnavailable struct {
+	Reason string
+	Cause  error
+}
+
+func (e ErrBootUnavailable) Error() string {
+	if e.Cause != nil {
+		return "device: boot delivery unavailable: " + e.Reason + ": " + e.Cause.Error()
+	}
+	return "device: boot delivery unavailable: " + e.Reason
+}
+
+func (e ErrBootUnavailable) Unwrap() error { return e.Cause }

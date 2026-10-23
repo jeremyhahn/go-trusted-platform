@@ -18,9 +18,9 @@ import (
 
 	"google.golang.org/protobuf/proto"
 
-	quic "github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
-	switchmgmt "github.com/jeremyhahn/go-trusted-platform/pkg/switch"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/switchwire"
 )
 
 // The tests in this file guard the QUIC wire contract for the Switch surface
@@ -41,11 +41,11 @@ import (
 // into dst, then asserts proto equality.
 func roundTripSwitchWire(t *testing.T, src, dst proto.Message) {
 	t.Helper()
-	payload, err := quic.EncodePayload(src)
+	payload, err := quicwire.EncodePayload(src)
 	if err != nil {
 		t.Fatalf("encode %T: %v", src, err)
 	}
-	if err := quic.DecodePayload(payload, dst); err != nil {
+	if err := quicwire.DecodePayload(payload, dst); err != nil {
 		t.Fatalf("decode %T into %T: %v", src, dst, err)
 	}
 	if !proto.Equal(src, dst) {
@@ -136,13 +136,13 @@ func TestQUICSwitchWireCompatDisablePort(t *testing.T) {
 		&platformv1.DisableSwitchPortResponse{})
 }
 
-// TestQUICSwitchPortStatusToPb guards the native->pb conversion used by the
-// daemon handlers, in particular the uint16->uint32 widening of the access and
-// trunk VLAN fields.
-func TestQUICSwitchPortStatusToPb(t *testing.T) {
-	native := &switchmgmt.PortStatus{
+// TestSwitchPortStatusToProto guards the native->pb conversion the
+// SwitchService servicer (and so every transport) uses, in particular the
+// uint16->uint32 widening of the access and trunk VLAN fields.
+func TestSwitchPortStatusToProto(t *testing.T) {
+	native := &switchwire.PortStatus{
 		Port:        "Eth1/3",
-		Mode:        switchmgmt.PortMode("trunk"),
+		Mode:        switchwire.PortMode("trunk"),
 		AccessVLAN:  100,
 		TrunkVLANs:  []uint16{10, 20, 30},
 		Enabled:     true,
@@ -151,18 +151,10 @@ func TestQUICSwitchPortStatusToPb(t *testing.T) {
 		NativeVLAN:  10,
 	}
 
-	pb := portStatusToPb(native)
-	if !proto.Equal(pb, compatTestSwitchPortStatus()) {
-		t.Fatalf("portStatusToPb mismatch:\n got: %+v\n want: %+v", pb, compatTestSwitchPortStatus())
-	}
 	if grpcPB := portStatusToProto(native); !proto.Equal(grpcPB, compatTestSwitchPortStatus()) {
 		t.Fatalf("portStatusToProto mismatch:\n got: %+v\n want: %+v", grpcPB, compatTestSwitchPortStatus())
 	}
 	if portStatusToProto(nil) != nil {
 		t.Fatal("portStatusToProto(nil) = non-nil, want nil")
-	}
-
-	if portStatusToPb(nil) != nil {
-		t.Fatal("portStatusToPb(nil) = non-nil, want nil")
 	}
 }

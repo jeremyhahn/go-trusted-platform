@@ -182,6 +182,7 @@ ntp:
       key-uri: kms://platform/ntp/nts-server.key
       server-names:                # DNS names clients dial this NTS-KE
         - cp.example.internal      # server as; DNS only, never an address
+      port: 4460                   # NTS-KE TCP port; omitted ⇒ DefaultNTSKEPort
   rtc:
     write-back: true
 ```
@@ -209,6 +210,7 @@ ntp:
 | `ntp.serve.nts.cert-uri` | secret ref | when NTS serving | `ErrMissingNTSMaterial` |
 | `ntp.serve.nts.key-uri` | secret ref | when NTS serving | `ErrMissingNTSMaterial` |
 | `ntp.serve.nts.server-names` | []string | — | empty; DNS names only, `ErrInvalidNTSServerName` |
+| `ntp.serve.nts.port` | int 1–65535 | — | `4460` (IANA NTS-KE); `ErrInvalidNTSKEPort` |
 | `ntp.rtc.write-back` | bool | — | `false` |
 
 **There are no NTP environment variables.** The section is YAML only; there is
@@ -229,6 +231,7 @@ platform config loader applies to the file as a whole
 | `RTCWriteBack()` | `rtc.write-back` |
 | `LocalStratum()` | the configured stratum, or `DefaultLocalStratum` when unset/zero |
 | `NTSServing()` | active **and** serving **and** `serve.nts.enabled` |
+| `NTSKEPort()` | the configured `serve.nts.port`, or `DefaultNTSKEPort` when unset/zero |
 
 ### Validation rules
 
@@ -362,8 +365,10 @@ is due for reissue rather than healthy until expiry.
 4. **Server side**:
    - not serving ⇒ `port 0`, and nothing else.
    - serving ⇒ one `allow <cidr>` per entry; `local stratum <n>` when
-     `orphan-fallback`; `ntsservercert` / `ntsserverkey` / `ntsdumpdir` when
-     NTS serving.
+     `orphan-fallback`; `ntsservercert` / `ntsserverkey` / `ntsdumpdir` /
+     `ntsport <NTSKEPort()>` when NTS serving. No NTS-KE `bindaddress` is
+     rendered, so chronyd accepts NTS-KE on every local address; the renewal
+     sweep reads the served certificate over loopback on the same port.
 5. **Control**: `bindcmdaddress <paths.CommandSocket>`, `cmdport 0`.
 
 `firstBootStepUpdates = 3` and `firstBootStepThresholdSeconds = "1.0"` are the
@@ -400,7 +405,7 @@ fails the rotation closed rather than publishing an empty key file.
 
 ## 5. Error semantics
 
-All 27 are struct types. Match with `errors.As` (or `errors.Is` on a zero-value
+All 29 are struct types. Match with `errors.As` (or `errors.Is` on a zero-value
 struct, which the daemon does for `ErrDisabled{}`). Those wrapping a cause
 implement `Unwrap`.
 
@@ -421,13 +426,14 @@ implement `Unwrap`.
 | `ErrInvalidLocalStratum` | `Stratum` | Outside 1–15 |
 | `ErrMissingNTSMaterial` | `Field` | NTS enabled without cert or key |
 | `ErrInvalidNTSServerName` | `Name`, `Reason` | A `serve.nts.server-names` entry that cannot become a DNS SAN |
+| `ErrInvalidNTSKEPort` | `Port` | `serve.nts.port` outside 1–65535 |
+| `ErrInvalidTimeoutAction` | `Action` | Unknown `on-timeout` |
+| `ErrInvalidGateTimeout` | `Seconds` | Negative gate timeout |
 
 A serve-name/allow-list mismatch is deliberately **not** an error: it is a
 health finding. Failing startup or renewal over it would take a control plane
 offline for a condition an operator must resolve by a policy decision the
 platform does not own.
-| `ErrInvalidTimeoutAction` | `Action` | Unknown `on-timeout` |
-| `ErrInvalidGateTimeout` | `Seconds` | Negative gate timeout |
 
 ### Runtime
 
@@ -436,7 +442,7 @@ platform does not own.
 | `ErrDisabled` | — | Section absent or disabled | `Unavailable` / 503 |
 | `ErrRenderFailed` | `Cause` | Template render failed | `Internal` / 500 |
 | `ErrWriteConfigFailed` | `Path`, `Cause` | `chrony.conf` or NTS material unwritable | `Internal` / 500 |
-| `ErrUnresolvedNTSMaterial` | `Field`, `Value` | Value still a `kms://`/`secret://`/`file://` reference | `Internal` / 500 |
+| `ErrUnresolvedNTSMaterial` | `Field`, `Value` | Value still a `<scheme>://` reference (e.g. `kms://`, `file://`) | `Internal` / 500 |
 | `ErrServiceCommandFailed` | `Service`, `Action`, `Output`, `Cause` | `rc-update` / `rc-service` failed | `Internal` / 500 |
 | `ErrControlUnavailable` | `Command`, `Output`, `Cause` | `chronyc` failed — usually chronyd is down | `Unavailable` / 503 |
 | `ErrMalformedControlOutput` | `Command`, `Line`, `Want`, `Got` | CSV had too few fields | `Internal` / 500 |
@@ -622,7 +628,7 @@ whenever the render output differs.
 | Unit | `pkg/webservice/v1/rest/ntp/*_test.go` | Route registration and status mapping |
 | Unit | `pkg/api/daemon/ntp_health_checker_test.go` | Health projection of each status |
 | Bench | `pkg/ntp/benchmark_test.go` | `make bench-ntp` |
-| Integration | devcontainer, `make integration-test-ntp` | Multi-protocol parity against a real chronyd |
+| Integration | devcontainer, `make integration-test-ntp` | Multi-protocol parity against a real chronyd (see below) |
 
 Make targets (`Makefile`):
 
@@ -635,6 +641,27 @@ make integration-test-ntp  # multi-protocol suite in the devcontainer
 
 `NTP_TAGS` pins the build-tag set the surface needs:
 `iam rest quic mcp cluster codec_json codec_msgpack codec_cbor`.
+
+**The integration chronyd.** `test/integration/config.yaml` carries an `ntp:`
+section (consume mode, one loopback upstream, no startup gate), so the shared
+platformd renders `/etc/chrony/chrony.conf` and serves the NTP surface on every
+transport. The devcontainer is Debian without OpenRC, so platformd's
+`rc-update add chronyd` fails and is logged; the runner
+(`run-integration-tests.sh` `start_chronyd`) then starts `chronyd -x` on the
+rendered file. `-x` keeps chronyd off the system clock, which the container
+shares with the CI host. Before it, `start_ntp_reference` starts a second
+`chronyd -x` that serves the loopback upstream as a `local stratum 8` reference
+with no command socket, and the runner waits (`chronyc waitsync`) until the
+daemon's chronyd has synchronised to it. The reference's config is
+`/etc/chrony/reference.conf` and its pid file `/run/chrony/reference.pid`: the
+chrony AppArmor profile loaded on the CI host also confines chronyd in the
+privileged container and lets it read only `/etc/chrony/` and write only
+`/run/chrony/`, so a config elsewhere fails with `Permission denied` even for
+root. A reference that does not start stops the run (`FATAL`). Without that source the clock never
+converged, the `ntp` component stayed degraded, and every transport's aggregate
+health answered not-healthy (#949). Both chronyds run `-x`, so a `Step` the ntp
+suite issues moves only chronyd's view, never the clock: no suite can move a
+clock.
 
 **Fault-injection seams.** `WithRunner` fakes `chronyc`/`rc-service` output
 (including malformed CSV and non-zero exit), `WithFileSystem` keeps rendering

@@ -41,6 +41,10 @@ type DeviceVerdict struct {
 	// ProfileID is the device profile whose baseline was evaluated or
 	// captured; zero when none was.
 	ProfileID uint64
+	// AttestedAt is the verifier's timestamp for the evaluation; zero when
+	// the producer did not stamp one. A consumer that keeps only the latest
+	// verdict per device orders verifications by it.
+	AttestedAt time.Time
 }
 
 // RecordedDeviceVerdict is a device verdict with the event-log timestamp that

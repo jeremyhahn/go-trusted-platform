@@ -110,6 +110,14 @@ type DEKRotationResult struct {
 	Timestamp  time.Time
 }
 
+// RoleReconciler provisions an IAM tenant's built-in roles. It is satisfied by
+// the quicbaas SDK's iam.RoleClient: Reconcile seeds every absent built-in
+// role, re-permissions drifted ones, never touches custom roles, and writes
+// nothing on a tenant that already matches.
+type RoleReconciler interface {
+	Reconcile(ctx context.Context, tenantID string) (*iam.ReconcileRolesResponse, error)
+}
+
 // Manager coordinates all tenant lifecycle operations.
 // It wraps QuicBaaS IAM operations and adds platform-specific orchestration
 // for quota enforcement, DEK isolation, and per-tenant barrier management.
@@ -120,6 +128,9 @@ type DEKRotationResult struct {
 type Manager struct {
 	// QuicBaaS IAM SDK tenant client for tenant CRUD
 	iamTenantClient iam.TenantClient
+
+	// QuicBaaS IAM SDK role client that provisions each tenant's default roles
+	iamRoleClient RoleReconciler
 
 	// Tenant DEK client for per-tenant DEK isolation
 	dekClient TenantDEKClient
@@ -145,6 +156,7 @@ type Manager struct {
 // ManagerConfig holds manager dependencies.
 type ManagerConfig struct {
 	IAMTenantClient     iam.TenantClient
+	IAMRoleClient       RoleReconciler
 	DEKClient           TenantDEKClient
 	TenantBarrierClient TenantBarrierClient
 	BarrierManager      *barrier.Manager
@@ -191,6 +203,10 @@ func NewManager(cfg *ManagerConfig) (*Manager, error) {
 		return nil, ErrInvalidRequest{Reason: "IAM tenant client is required"}
 	}
 
+	if cfg.IAMRoleClient == nil {
+		return nil, ErrInvalidRequest{Reason: "IAM role client is required"}
+	}
+
 	if cfg.Config == nil {
 		cfg.Config = DefaultConfig()
 	}
@@ -210,6 +226,7 @@ func NewManager(cfg *ManagerConfig) (*Manager, error) {
 
 	m := &Manager{
 		iamTenantClient:     cfg.IAMTenantClient,
+		iamRoleClient:       cfg.IAMRoleClient,
 		dekClient:           cfg.DEKClient,
 		tenantBarrierClient: cfg.TenantBarrierClient,
 		barrierManager:      cfg.BarrierManager,
@@ -281,6 +298,12 @@ func (m *Manager) CreateTenant(ctx context.Context, req *CreateTenantRequest) (*
 			)
 		}
 	})
+
+	// Step 1b: Provision the tenant's default roles. Users are mirrored
+	// into IAM by role name, so a tenant without them cannot hold a user.
+	if err := m.EnsureDefaultRoles(ctx, tenantID); err != nil {
+		return nil, err
+	}
 
 	// Create entity from IAM response
 	entity := FromIAM(iamTenant)
@@ -717,9 +740,11 @@ func (m *Manager) UpdateQuotas(ctx context.Context, tenantID string, quotas *Ten
 		slog.String("tenant_id", tenantID),
 	)
 
-	entity.ComputeQuota = quotas.Compute
-	entity.NetworkQuota = quotas.Network
-	entity.StorageQuota = quotas.Storage
+	// Only limits come from the request; the usage counters are the
+	// tenant's own and survive every update.
+	entity.ComputeQuota.SetLimits(quotas.Compute)
+	entity.NetworkQuota.SetLimits(quotas.Network)
+	entity.StorageQuota.SetLimits(quotas.Storage)
 	entity.UpdatedAt = time.Now()
 
 	// Update cache
@@ -1110,6 +1135,41 @@ func (m *Manager) createInIAM(ctx context.Context, id, name string) (*iam.Tenant
 	}
 
 	return tenant, nil
+}
+
+// EnsureDefaultRoles provisions the IAM tenant's built-in roles through the
+// SDK. It is idempotent: on a tenant that already carries them it writes
+// nothing, and it never alters a custom role. CreateTenant calls it for every
+// new tenant; the startup user reconcile calls it for tenants created before
+// the roles were provisioned.
+func (m *Manager) EnsureDefaultRoles(ctx context.Context, tenantID string) error {
+	if tenantID == "" {
+		return ErrInvalidRequest{Reason: "tenant ID is required"}
+	}
+
+	resp, err := m.iamRoleClient.Reconcile(ctx, tenantID)
+	if err != nil {
+		m.logger.Error("failed to provision default IAM roles",
+			slog.String("tenant_id", tenantID),
+			slog.Any("error", err),
+		)
+		return ErrDefaultRolesFailed{TenantID: tenantID, Err: err}
+	}
+
+	if resp != nil && resp.Changed {
+		created := make([]string, 0, len(resp.Roles))
+		for _, role := range resp.Roles {
+			if role.Created {
+				created = append(created, role.Name)
+			}
+		}
+		m.logger.Info("provisioned default IAM roles",
+			slog.String("tenant_id", tenantID),
+			slog.Any("created", created),
+		)
+	}
+
+	return nil
 }
 
 func (m *Manager) getFromIAM(ctx context.Context, id string) (*iam.Tenant, error) {

@@ -69,26 +69,25 @@ make integration-test-cluster-compose-down
 cd test/integration/cluster
 
 ./run-tests.sh           # Run all tests
-./run-tests.sh setup     # Setup cluster only
-./run-tests.sh status    # Show cluster status
+./run-tests.sh cluster   # Cluster formation tests only
 ./run-tests.sh consensus # Consensus tests only
 ./run-tests.sh failover  # Failover tests only
 ./run-tests.sh sdn       # SDN tests only
 ./run-tests.sh ca        # CA tests only
-./run-tests.sh teardown  # Cleanup cluster
 ./run-tests.sh help      # Show help
 ```
+
+The script derives its build tags from `make print-build-tags`; set
+`BUILD_TAGS` to override them. The suite, replication tests included, runs on
+the integration build tags alone; no environment variable gates it.
 
 ## Environment Variables
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `INTEGRATION_TEST` | - | Must be set to "1" to run tests |
-| `CLUSTER_SIZE` | 3 | Number of cluster nodes |
-| `NODE_TIMEOUT` | 30s | Node startup timeout |
-| `CLUSTER_TIMEOUT` | 60s | Cluster formation timeout |
 | `LOG_LEVEL` | info | Logging level |
 | `TEST_TIMEOUT` | 15m | Test execution timeout |
+| `BUILD_TAGS` | derived | Overrides the derived build tags |
 
 ## Docker Compose Services
 
@@ -141,10 +140,7 @@ The `docker-compose.yml` defines:
 | Code | Meaning |
 |------|---------|
 | 0 | Success |
-| 1 | Setup failed |
-| 2 | Cluster formation failed |
 | 3 | Test failed |
-| 4 | Cleanup failed |
 | 5 | Invalid arguments |
 
 ## Debugging

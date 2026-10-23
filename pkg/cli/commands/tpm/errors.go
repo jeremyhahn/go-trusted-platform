@@ -89,6 +89,19 @@ func (e ErrDeleteIAKFailed) Error() string {
 	return fmt.Sprintf("failed to delete IAK: %s", e.Reason)
 }
 
+// ErrIdentityKeyDeleteRefused is returned when the daemon refuses to delete
+// the IDevID or IAK key. The key stays in the TPM and nothing was changed.
+type ErrIdentityKeyDeleteRefused struct {
+	Key   string // "IDevID" or "IAK"
+	Cause error
+}
+
+func (e ErrIdentityKeyDeleteRefused) Error() string {
+	return fmt.Sprintf("%s key delete refused: the key is TPM-resident and is not evicted; nothing was changed", e.Key)
+}
+
+func (e ErrIdentityKeyDeleteRefused) Unwrap() error { return e.Cause }
+
 // ErrGetIDevIDInfoFailed is returned when getting IDevID info fails
 type ErrGetIDevIDInfoFailed struct {
 	Reason string
@@ -390,6 +403,26 @@ type ErrNVRAMDeleteFailed struct {
 
 func (e ErrNVRAMDeleteFailed) Error() string {
 	return fmt.Sprintf("failed to delete NV index 0x%08X: %s", e.Index, e.Reason)
+}
+
+// ErrCertifyFailed is returned when the daemon refuses or fails to certify
+// a key.
+type ErrCertifyFailed struct {
+	Handle uint32
+	Reason string
+}
+
+func (e ErrCertifyFailed) Error() string {
+	return fmt.Sprintf("failed to certify key 0x%08X: %s", e.Handle, e.Reason)
+}
+
+// ErrInvalidCertifyNonce is returned when the --nonce flag is not hex.
+type ErrInvalidCertifyNonce struct {
+	Nonce string
+}
+
+func (e ErrInvalidCertifyNonce) Error() string {
+	return fmt.Sprintf("invalid certify nonce %q: expected hex", e.Nonce)
 }
 
 // ErrStatusCertificatePEM is returned by `tpm status` when a certificate the

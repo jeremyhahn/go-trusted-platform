@@ -15,15 +15,20 @@ package daemon
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"log/slog"
 	"sync/atomic"
 
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
+	apiquic "github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/channelbind"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/manifest"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/verdict/feed"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
 
@@ -94,6 +99,10 @@ type QuoteResult struct {
 	PCRValues []manifest.PCRValue
 	Nonce     []byte
 	EventLog  []byte
+	// SignatureAlgorithm names the scheme the AK signed QuoteData with, as
+	// x509.SignatureAlgorithm names it; an RSA AK signs either RSASSA or
+	// RSA-PSS, and the raw Signature does not say which.
+	SignatureAlgorithm string
 }
 
 // QuoteVerificationResult contains the result of quote verification.
@@ -116,9 +125,10 @@ type AttestationServiceServer struct {
 	// until then.
 	reporting atomic.Pointer[reportingHandles]
 
-	// verdicts is the hub StreamDeviceVerdicts serves from. Nil until
-	// SetVerdictHub is called; the RPC answers FailedPrecondition until then.
-	verdicts atomic.Pointer[deviceVerdictHub]
+	// verdicts is the feed StreamDeviceVerdicts and PollDeviceVerdicts serve
+	// from. Nil until SetVerdictFeed is called; both answer
+	// FailedPrecondition until then.
+	verdicts atomic.Pointer[feed.Feed]
 }
 
 // NewAttestationServiceServer creates a new AttestationServiceServer.
@@ -350,7 +360,12 @@ func (s *AttestationServiceServer) GetAttestationQuote(
 
 	config := s.protoToAttestationQuoteConfig(req.GetConfig())
 
-	result, err := s.service.GetQuote(ctx, config, req.GetNonce())
+	bound, err := bindQuote(ctx, req.GetNonce())
+	if err != nil {
+		return nil, err
+	}
+
+	result, err := s.service.GetQuote(ctx, config, bound.QualifyingData)
 	if err != nil {
 		s.logger.Error("GetAttestationQuote failed", "error", err)
 		return nil, s.mapError(err)
@@ -361,7 +376,8 @@ func (s *AttestationServiceServer) GetAttestationQuote(
 			Success: true,
 			Message: "quote generated successfully",
 		},
-		Quote: s.quoteResultToProto(result),
+		Quote:          s.quoteResultToProto(result),
+		ChannelBinding: bound.Binding,
 	}, nil
 }
 
@@ -381,7 +397,15 @@ func (s *AttestationServiceServer) VerifyAttestationQuote(
 	quote := s.protoToQuoteResult(req.GetQuote())
 	expectedPCRs := s.protoToPCRValues(req.GetExpectedPcrs())
 
-	result, err := s.service.VerifyQuote(ctx, quote, req.GetAkPublicKeyPem(), req.GetExpectedNonce(), expectedPCRs)
+	// A quote the node produced over a bound connection carries
+	// SHA-256(nonce || binding); the caller passes the binding the node
+	// returned with it.
+	expectedNonce, err := channelbind.ExpectedQualifyingData(req.GetExpectedNonce(), req.GetChannelBinding())
+	if err != nil {
+		return nil, err
+	}
+
+	result, err := s.service.VerifyQuote(ctx, quote, req.GetAkPublicKeyPem(), expectedNonce, expectedPCRs)
 	if err != nil {
 		s.logger.Error("VerifyAttestationQuote failed", "error", err)
 		return nil, s.mapError(err)
@@ -421,7 +445,12 @@ func (s *AttestationServiceServer) CollectHostAttestation(
 	// without gaining anything.
 	config := s.protoToAttestationQuoteConfig(req.GetConfig())
 
-	attestation, err := s.service.CollectHostAttestation(ctx, config, req.GetNonce())
+	bound, err := bindQuote(ctx, req.GetNonce())
+	if err != nil {
+		return nil, err
+	}
+
+	attestation, err := s.service.CollectHostAttestation(ctx, config, bound.QualifyingData)
 	if err != nil {
 		s.logger.Error("CollectHostAttestation failed", "error", err)
 		return nil, s.mapError(err)
@@ -434,6 +463,36 @@ func (s *AttestationServiceServer) CollectHostAttestation(
 		},
 		Attestation: s.hostAttestationToProto(attestation),
 	}, nil
+}
+
+// quoteTransportEmbedded names the transport connectionTLS cannot see and
+// that records nothing in the context: the embedded transport, which has no
+// connection.
+const quoteTransportEmbedded = "embedded"
+
+// quoteChannel returns the TLS state of the connection a quote request
+// arrived on and the transport it arrived over. REST and MCP over HTTP record
+// their request's state in the context; QUIC, gRPC and the Unix socket carry
+// theirs where connectionTLS reads it. A request with neither came through
+// the embedded transport, which has no connection to bind a quote to.
+func quoteChannel(ctx context.Context) (*tls.ConnectionState, string) {
+	if state, transport, ok := channelbind.ConnectionTLS(ctx); ok {
+		return state, transport
+	}
+	if _, ok := peer.FromContext(ctx); !ok && apiquic.ConnectionTLS(ctx) == nil {
+		return nil, quoteTransportEmbedded
+	}
+	return connectionTLS(ctx)
+}
+
+// bindQuote binds nonce to the connection a quote request arrived on (#482).
+// The node quotes the bound value, never the nonce as sent, so a relay that
+// forwards a caller's nonce over a second connection gets a quote bound to
+// that second connection, which the caller refuses. A request with no TLS
+// connection to bind to is refused rather than quoted bare.
+func bindQuote(ctx context.Context, nonce []byte) (channelbind.Bound, error) {
+	state, transport := quoteChannel(ctx)
+	return channelbind.Bind(state, transport, nonce)
 }
 
 // CollectVMAttestation collects attestation data from a VM's vTPM.
@@ -686,11 +745,12 @@ func (s *AttestationServiceServer) protoToQuoteResult(q *platformv1.AttestationQ
 	}
 
 	return &QuoteResult{
-		QuoteData: q.GetQuoteData(),
-		Signature: q.GetSignature(),
-		PCRValues: s.protoToPCRValues(q.GetPcrValues()),
-		Nonce:     q.GetNonce(),
-		EventLog:  q.GetEventLog(),
+		QuoteData:          q.GetQuoteData(),
+		Signature:          q.GetSignature(),
+		PCRValues:          s.protoToPCRValues(q.GetPcrValues()),
+		Nonce:              q.GetNonce(),
+		EventLog:           q.GetEventLog(),
+		SignatureAlgorithm: q.GetSignatureAlgorithm(),
 	}
 }
 
@@ -842,11 +902,12 @@ func (s *AttestationServiceServer) quoteResultToProto(q *QuoteResult) *platformv
 	}
 
 	return &platformv1.AttestationQuote{
-		QuoteData: q.QuoteData,
-		Signature: q.Signature,
-		PcrValues: s.pcrValuesToProto(q.PCRValues),
-		Nonce:     q.Nonce,
-		EventLog:  q.EventLog,
+		QuoteData:          q.QuoteData,
+		Signature:          q.Signature,
+		PcrValues:          s.pcrValuesToProto(q.PCRValues),
+		Nonce:              q.Nonce,
+		EventLog:           q.EventLog,
+		SignatureAlgorithm: q.SignatureAlgorithm,
 	}
 }
 
@@ -923,6 +984,7 @@ func (s *AttestationServiceServer) mapError(err error) error {
 		errManifestBuildFailed  manifest.ErrManifestBuildFailed
 		errManifestSignFailed   manifest.ErrManifestSignFailed
 		errManifestVerifyFailed manifest.ErrManifestVerifyFailed
+		errSignatureUnchecked   ErrAttestationManifestSignatureUnchecked
 	)
 
 	switch {
@@ -954,6 +1016,8 @@ func (s *AttestationServiceServer) mapError(err error) error {
 	case errors.As(err, &errTPMNotAvailable):
 		return status.Error(codes.FailedPrecondition, err.Error())
 	case errors.As(err, &errManifestExpired):
+		return status.Error(codes.FailedPrecondition, err.Error())
+	case errors.As(err, &errSignatureUnchecked):
 		return status.Error(codes.FailedPrecondition, err.Error())
 
 	// Canceled errors

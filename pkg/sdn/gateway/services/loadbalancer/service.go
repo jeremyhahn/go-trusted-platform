@@ -22,7 +22,8 @@
 // the VIP's zone (table 29), which reverses both translations, so the
 // client hears from the VIP it addressed. Selection is hash-based (OVS
 // dp_hash) and per-connection sticky through conntrack. See
-// docs/sdn/gateway/loadbalancer.md for the table design.
+// docs/gateway/engineering.md ("The load balancer datapath") for the
+// table design.
 package loadbalancer
 
 import (
@@ -45,13 +46,14 @@ import (
 
 // Flow cookie identifying load-balancer-owned flows. The high 32 bits are
 // the owner prefix used with CookieMask for bulk deletion, following the
-// firewall (0xF1BE0001) and NAT (0xF1BE0002) conventions.
+// firewall (0xF1BE0001) and NAT (0xF1BE0002) conventions. The low 32 bits
+// carry the flow generation each Start stamps (ovs.NewGenerationCookie).
 const (
 	// CookieLoadBalancer tags every flow installed by the Service.
 	CookieLoadBalancer uint64 = 0xF1BE000300000000
 
 	// CookieMask selects the owner prefix of CookieLoadBalancer.
-	CookieMask uint64 = 0xFFFFFFFF00000000
+	CookieMask = ovs.OwnerCookieMask
 )
 
 // Table-10 gate priority. The firewall gate uses priority 2 and the NAT
@@ -569,6 +571,11 @@ func (s *Service) removeVIPLocked(ctx context.Context, key vipKey) error {
 // VIP flows, and the table 10 gate last so packets never enter the pipeline
 // before it is complete. Stale groups left in the load balancer range by a
 // previous run are removed, and health probing begins.
+//
+// The flows a previous run left are reconciled the same way (#557): every
+// flow this start installs carries a fresh generation under the load
+// balancer owner, and after the gate is in place every load balancer flow
+// of an older generation is swept.
 func (s *Service) Start(ctx context.Context) (err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -576,6 +583,12 @@ func (s *Service) Start(ctx context.Context) (err error) {
 	if s.active {
 		return ErrAlreadyStarted
 	}
+
+	cookie, err := ovs.NewGenerationCookie(CookieLoadBalancer)
+	if err != nil {
+		return &OpError{Op: "generation", Err: err}
+	}
+	s.cookie = fmt.Sprintf("0x%x", cookie)
 
 	// The hairpin zone comes first: every VIP's reply diverts name it.
 	hairpinZone, err := s.deps.Allocator.Allocate(ctx, AllocatorOwnerLB, hairpinZoneKey)
@@ -635,6 +648,9 @@ func (s *Service) Start(ctx context.Context) (err error) {
 	if err := s.deps.Controller.InstallFlows(s.cfg.Bridge, []zoneflows.FlowRule{s.gateRule()}); err != nil {
 		return &OpError{Op: "install", Err: err}
 	}
+	if err := ovs.SweepStaleGenerations(ctx, s.deps.OVS, s.cfg.Bridge, cookie); err != nil {
+		return &OpError{Op: "sweep", Err: err}
+	}
 
 	proberCtx, cancel := context.WithCancel(context.Background())
 	s.cancel = cancel
@@ -656,13 +672,17 @@ func (s *Service) Start(ctx context.Context) (err error) {
 	return nil
 }
 
-// rollbackStartLocked takes back a failed Start: every load-balancer flow
-// (one cookie-masked delete covers the gate, scaffolding and VIP flows),
-// the installed VIPs' groups and conntrack zones, and the hairpin zone. It
-// carries on past a failed step so one refusal does not strand the rest.
-// The caller holds s.mu.
+// rollbackStartLocked takes back a failed Start: the gate first, on its own,
+// so a failed owner-wide delete cannot leave it steering traffic into flows
+// nobody manages; then every load-balancer flow (one cookie-masked delete
+// covers the scaffolding and VIP flows), the installed VIPs' groups and
+// conntrack zones, and the hairpin zone. It carries on past a failed step so
+// one refusal does not strand the rest. The caller holds s.mu.
 func (s *Service) rollbackStartLocked(ctx context.Context) error {
 	var errs []error
+	if err := s.deleteGate(ctx); err != nil {
+		errs = append(errs, err)
+	}
 	if err := s.deps.OVS.DeleteFlowsByCookie(ctx, s.cfg.Bridge, CookieLoadBalancer, CookieMask); err != nil {
 		errs = append(errs, err)
 	}
@@ -685,6 +705,18 @@ func (s *Service) rollbackStartLocked(ctx context.Context) error {
 	return nil
 }
 
+// deleteGate removes the table 10 gate that diverts traffic into the
+// load-balancer tables.
+func (s *Service) deleteGate(ctx context.Context) error {
+	gate := s.gateRule()
+	return s.deps.OVS.DeleteFlowStrict(ctx, s.cfg.Bridge, &ovs.FlowMod{
+		Table:    gate.Table,
+		Priority: gate.Priority,
+		Match:    gate.Match,
+		Cookie:   gate.Cookie,
+	})
+}
+
 // Stop cancels health probing, removes the table 10 gate first (so traffic
 // falls back to the base pipeline), deletes every load-balancer-owned flow
 // by cookie, removes the select groups, and releases the conntrack zones.
@@ -703,13 +735,7 @@ func (s *Service) Stop(ctx context.Context) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	gate := s.gateRule()
-	if err := s.deps.OVS.DeleteFlowStrict(ctx, s.cfg.Bridge, &ovs.FlowMod{
-		Table:    gate.Table,
-		Priority: gate.Priority,
-		Match:    gate.Match,
-		Cookie:   gate.Cookie,
-	}); err != nil {
+	if err := s.deleteGate(ctx); err != nil {
 		return &OpError{Op: "delete", Err: err}
 	}
 

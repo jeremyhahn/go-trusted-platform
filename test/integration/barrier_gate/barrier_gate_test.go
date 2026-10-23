@@ -24,12 +24,10 @@ import (
 )
 
 // TestM6_SealedDaemonRefusesRemotePorts asserts that a freshly-booted
-// platformd configured with seal_strategy=software and auto_unseal=false
+// platformd configured with seal_strategy=software
 // comes up in the uninitialized state, binds the gate /healthz endpoint on
 // 127.0.0.1:9446, and does NOT bind any production transport ports.
 func TestM6_SealedDaemonRefusesRemotePorts(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	t.Cleanup(cancel)
 
@@ -75,8 +73,6 @@ func TestM6_SealedDaemonRefusesRemotePorts(t *testing.T) {
 //  4. Production REST listener begins accepting connections.
 //  5. Production gRPC and QUIC ports accept TCP-probe connections.
 func TestM6_GateAcceptsInitThenTransitions(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	t.Cleanup(cancel)
 
@@ -97,11 +93,10 @@ func TestM6_GateAcceptsInitThenTransitions(t *testing.T) {
 	}
 
 	resp, err := postInitJSON(ctx, cfg, &rest.BarrierInitRequest{
-		SOPIN:           cfg.SOPin,
-		UserPIN:         cfg.UserPin,
-		BarrierStrategy: "software",
-		Hostname:        "cp.test",
-		SANs:            []string{"cp.test", "127.0.0.1"},
+		SOPIN:    cfg.SOPin,
+		UserPIN:  cfg.UserPin,
+		Hostname: "cp.test",
+		SANs:     []string{"cp.test", "127.0.0.1"},
 	})
 	if err != nil {
 		t.Fatalf("POST /init: %v", err)
@@ -135,28 +130,19 @@ func TestM6_GateAcceptsInitThenTransitions(t *testing.T) {
 // TestM6_WarmBoot_UnsealThenTransitions covers the warm-boot path.
 //
 // The originally-specified "already-unsealed daemon skips gate entirely
-// on restart" assertion cannot be exercised against the current code
-// because software seal-strategy auto-unseal is a no-op (see
-// pkg/app/barrier.go:autoUnsealBarrier — the software branch returns
-// nil without unsealing). The only auto-unseal paths that actually
-// reopen the barrier on restart are TPM2 and PKCS11, both currently
-// marked DEFERRED.
+// on restart" assertion cannot be exercised: the platform has no
+// automatic unseal, so the restarted daemon comes up sealed.
 //
 // This test therefore proves the same M6 transition contract (gate →
 // production handoff) via the warm-boot /unseal path:
 //
 //  1. Fresh init (cold path) so the barrier is initialized.
 //  2. Stop platformd, then Start it again.
-//  3. Gate /healthz reports state=sealed (barrier persisted, auto-unseal
-//     no-op).
+//  3. Gate /healthz reports state=sealed (barrier persisted, no
+//     automatic unseal).
 //  4. POST /unseal with the master credentials returns 200.
 //  5. Gate listener shuts down; production REST listener binds.
-//
-// Strict "skip gate entirely on already-unsealed restart" requires
-// TPM2/PKCS11 auto-unseal and is out of scope for this test.
 func TestM6_WarmBoot_UnsealThenTransitions(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
 	t.Cleanup(cancel)
 
@@ -177,11 +163,10 @@ func TestM6_WarmBoot_UnsealThenTransitions(t *testing.T) {
 		t.Fatalf("gate did not report uninitialized: %v", err)
 	}
 	initResp, err := postInitJSON(ctx, cfg, &rest.BarrierInitRequest{
-		SOPIN:           cfg.SOPin,
-		UserPIN:         cfg.UserPin,
-		BarrierStrategy: "software",
-		Hostname:        "cp.test",
-		SANs:            []string{"cp.test", "127.0.0.1"},
+		SOPIN:    cfg.SOPin,
+		UserPIN:  cfg.UserPin,
+		Hostname: "cp.test",
+		SANs:     []string{"cp.test", "127.0.0.1"},
 	})
 	if err != nil {
 		t.Fatalf("POST /init (cold): %v", err)
@@ -202,8 +187,8 @@ func TestM6_WarmBoot_UnsealThenTransitions(t *testing.T) {
 	}
 
 	// The gate must rebind in the sealed state. We tolerate `sealed` and
-	// `unsealing` as valid intermediate states; auto-unseal for software
-	// is a no-op so the steady-state is `sealed`.
+	// `unsealing` as valid intermediate states; there is no automatic
+	// unseal, so the steady state is `sealed`.
 	if err := h.WaitGateReady(ctx, rest.PlatformStateSealed, 60*time.Second); err != nil {
 		t.Fatalf("post-restart gate did not report sealed: %v", err)
 	}

@@ -21,6 +21,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/netip"
+	"os"
 	"strings"
 	"testing"
 
@@ -45,6 +46,9 @@ func (r *recordingWG) ConfigureDevice(_ string, cfg wgtypes.Config) error {
 }
 
 func (r *recordingWG) Close() error { r.closed++; return nil }
+
+// Device finds no device: the hub and client never read one back.
+func (r *recordingWG) Device(string) (*wgtypes.Device, error) { return nil, os.ErrNotExist }
 
 func hubConfig() WireGuardHubConfig {
 	return WireGuardHubConfig{

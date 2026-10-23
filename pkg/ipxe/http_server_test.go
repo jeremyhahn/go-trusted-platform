@@ -14,15 +14,18 @@
 package ipxe
 
 import (
+	"bytes"
 	"context"
 	"crypto/x509"
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -270,11 +273,8 @@ func TestHTTPServer_handleStatic(t *testing.T) {
 	testContent := "test content"
 	require.NoError(t, os.WriteFile(testFile, []byte(testContent), 0644))
 
-	// Change to temp directory for the test
-	oldWd, err := os.Getwd()
-	require.NoError(t, err)
-	defer os.Chdir(oldWd)
-	require.NoError(t, os.Chdir(tmpDir))
+	// handleStatic serves ./static relative to the working directory
+	t.Chdir(tmpDir)
 
 	tests := []struct {
 		name           string
@@ -477,6 +477,48 @@ func TestHTTPServer_handleDataFiles(t *testing.T) {
 			}
 		})
 	}
+}
+
+// The Raspberry Pi bootloader EEPROM fetches http://HTTP_HOST/HTTP_PATH/boot.img
+// and boot.sig; HTTP_PATH is the data directory's http-boot folder under /data/.
+// The bytes must arrive exactly as staged (boot.sig signs them), with a length
+// the client can check.
+func TestHTTPServer_handleDataFiles_ServesTheHTTPBootFiles(t *testing.T) {
+	dataDir := t.TempDir()
+	dir := filepath.Join(dataDir, "http-boot")
+	require.NoError(t, os.MkdirAll(dir, 0o755))
+	files := map[string][]byte{
+		"boot.img":   bytes.Repeat([]byte{0x00, 0xff, 0xeb, 0x3c}, 4096),
+		"boot.sig":   []byte("0123\nts: 1790856000\ntarget-soc: 2711\nrsa2048: ab\n"),
+		"pubkey.bin": bytes.Repeat([]byte{0x80}, 264),
+	}
+	for name, data := range files {
+		require.NoError(t, os.WriteFile(filepath.Join(dir, name), data, 0o644))
+	}
+	cfg := DefaultServerConfig()
+	cfg.DataDir = dataDir
+	server := newTestHTTPServer(t, cfg)
+
+	for name, want := range files {
+		t.Run(name, func(t *testing.T) {
+			w := httptest.NewRecorder()
+			server.handleDataFiles(w, httptest.NewRequest("GET", "/data/http-boot/"+name, nil))
+
+			resp := w.Result()
+			defer resp.Body.Close()
+			require.Equal(t, http.StatusOK, resp.StatusCode)
+			assert.Equal(t, strconv.Itoa(len(want)), resp.Header.Get("Content-Length"))
+			body, err := io.ReadAll(resp.Body)
+			require.NoError(t, err)
+			assert.Equal(t, want, body)
+		})
+	}
+
+	t.Run("a file that was not staged is a 404", func(t *testing.T) {
+		w := httptest.NewRecorder()
+		server.handleDataFiles(w, httptest.NewRequest("GET", "/data/http-boot/boot.img.old", nil))
+		assert.Equal(t, http.StatusNotFound, w.Result().StatusCode)
+	})
 }
 
 func TestHTTPServer_handleProxy(t *testing.T) {
@@ -788,25 +830,24 @@ func TestHTTPServer_Start_GracefulShutdown(t *testing.T) {
 	}
 }
 
+// TestHTTPServer_Start_InvalidConfig gives Start a listen address it cannot
+// bind and expects the bind error back at once, rather than serving until a
+// deadline the test has to wait out (#284).
 func TestHTTPServer_Start_InvalidConfig(t *testing.T) {
+	taken, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	t.Cleanup(func() { assert.NoError(t, taken.Close()) })
+
 	cfg := DefaultServerConfig()
-	// Use a port that's likely to fail (like 0 in some contexts or already bound)
-	// This test verifies error handling during startup
+	cfg.BindHost = "127.0.0.1"
+	cfg.HTTPPort = taken.Addr().(*net.TCPAddr).Port
 
 	server := newTestHTTPServer(t, cfg)
+	err = server.Start(t.Context(), nil)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
-	defer cancel()
-
-	// The server should start successfully in most cases
-	// This test primarily verifies the error handling structure
-	err := server.Start(ctx, nil)
-
-	// We expect either success or a specific error
-	// In a timeout scenario, we get context.DeadlineExceeded
-	if err != nil {
-		assert.Error(t, err)
-	}
+	var bindErr *WrappedError
+	require.ErrorAs(t, err, &bindErr)
+	assert.Contains(t, bindErr.Msg, "failed to bind")
 }
 
 // Additional tests for better coverage
@@ -976,38 +1017,6 @@ func TestHTTPServer_responseWriter_WriteHeader(t *testing.T) {
 
 	assert.Equal(t, http.StatusCreated, rw.status)
 	assert.Equal(t, http.StatusCreated, underlying.Code)
-}
-
-func TestHTTPServer_handleStatic_ValidFile(t *testing.T) {
-	cfg := DefaultServerConfig()
-	server := newTestHTTPServer(t, cfg)
-
-	// Create static directory with a file
-	staticDir := "./static"
-	if err := os.MkdirAll(staticDir, 0755); err != nil {
-		t.Skipf("Could not create static directory: %v", err)
-	}
-	defer os.RemoveAll(staticDir)
-
-	testFile := filepath.Join(staticDir, "test.txt")
-	if err := os.WriteFile(testFile, []byte("static content"), 0644); err != nil {
-		t.Skipf("Could not create test file: %v", err)
-	}
-
-	req := httptest.NewRequest("GET", "/static/test.txt", nil)
-	w := httptest.NewRecorder()
-
-	server.handleStatic(w, req)
-
-	resp := w.Result()
-	defer resp.Body.Close()
-
-	// Check if file was served
-	if resp.StatusCode == http.StatusOK {
-		body, err := io.ReadAll(resp.Body)
-		require.NoError(t, err)
-		assert.Contains(t, string(body), "static content")
-	}
 }
 
 // TestHTTPServer_InstallUploadHappyPath verifies that PUT

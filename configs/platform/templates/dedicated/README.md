@@ -57,6 +57,15 @@ completes a challenge, and receives the production webservice
 certificates. The root CA bundle is baked into the install ISO so the
 first ACME connection can verify TLS before any cert has been issued.
 
+The platform listener (`tls-port: 9443`) of every `gateway.yaml` and
+`compute.yaml` here, Supermicro X10 and Dell R640 alike, sets
+`certificate.acme.challenge: device-attest-01`, so its certificate comes from
+the control-plane CA and not the node's own. The reporting collector and the
+bootstrap orchestrator's post-install health probe verify that listener
+against the platform anchor by its subject CN; a locally-issued certificate
+fails both. [`supermicro/x10/README.md`](./supermicro/x10/README.md#certificate-identity-which-ca-issues-what)
+explains why. `control-plane.yaml` has no challenge: it is the CA.
+
 ---
 
 ## Network Architecture
@@ -77,6 +86,18 @@ first ACME connection can verify TLS before any cert has been issued.
 - NIC member interfaces are brought up as raw manual-configured interfaces
   in `/etc/network/interfaces`. OVS claims them when `ovsdb-server` +
   `ovs-vswitchd` start at boot.
+
+### Overlay Underlay
+
+The gateway templates enable the overlay without IPsec, so they name its
+underlay explicitly: `sdn.overlay.underlay-interface: zone401` (the fabric
+zone's internal port on `br-fabric`, VLAN 401) and `sdn.overlay.vtep-address`
+the gateway's fabric address `10.4.1.2`. Nothing falls back to loopback: an
+overlay without IPsec that lacks the underlay interface refuses to start
+with `OverlayVTEPSettingError` (#93), and an unset `vtep-address` falls back
+only to the node's detected public IPv4. A node that enables the overlay
+uses its own fabric address. The control-plane and compute templates leave
+the overlay disabled. See `docs/sdn/overlay/configuration.md`.
 
 ### Host Addressing by Role
 
@@ -105,13 +126,17 @@ A host holds an address only on the zones it uses (reference network,
 
 Each node runs a **local `dnsmasq`** on `127.0.0.1:53`. dnsmasq's
 upstream (`server=`) is the control plane's internal DNS on
-`<cp_ip>#9053`. Why this pattern?
+`<cp_ip>#<port>`, where `<port>` is the control-plane template's
+`dns.internal.port` (`9053` when unset). Bootstrap reads it from that
+template, so moving the port there moves every node's forwarder with it.
+Why this pattern?
 
 - `platformd` does **not** run as root; its DNS service binds to
-  unprivileged ports (9053 for internal zone, 8053 for public).
+  unprivileged ports (`dns.internal.port`, default 9053, and
+  `dns.public.port`, default 8053).
 - libc resolvers always query port 53, so clients need something
   listening there.
-- Local `dnsmasq` + explicit port forward (`server=<cp_ip>#9053`)
+- Local `dnsmasq` + explicit port forward (`server=<cp_ip>#<port>`)
   lets the kernel-level resolver talk to CP's DNS via a standard
   port without granting `CAP_NET_BIND_SERVICE` to platformd workers.
 
@@ -175,7 +200,7 @@ orchestrator:
    the per-MAC config via the `platform_config=` kernel cmdline URL
    (baked by `platformctl iso create --config-server`), and installs.
 
-See [`docs/bootstrap/config-delivery.md`](../../../../docs/bootstrap/config-delivery.md)
+See [`docs/architecture/bootstrap-flow.md`](../../../../docs/architecture/bootstrap-flow.md)
 for the full flow and [`docs/architecture/bootstrap-flow.md`](../../../../docs/architecture/bootstrap-flow.md)
 for orchestrator phase diagrams.
 
@@ -209,6 +234,8 @@ tenant-id) only *fills* empty template fields — it never overrides.
 | [`supermicro/x10/gateway.yaml`](./supermicro/x10/gateway.yaml) | GW | Enrolls with CP via ACME, BGP, DHCP, firewall |
 | [`supermicro/x10/compute.yaml`](./supermicro/x10/compute.yaml) | Compute | Enrolls with CP via ACME, QEMU/KVM + Podman |
 | [`dell/r640/`](./dell/r640/) | R640 variants | Phase-2 hardware (UNTESTED) |
+| [`raspberrypi/rpi4/compute.yaml`](./raspberrypi/rpi4/compute.yaml) | Compute | Pi 4 factory SD-card image (`diskimage create --target rpi --role compute`); one port, zone VLANs on `eth0`; no gateway or control-plane Pi template — [`raspberrypi/README.md`](./raspberrypi/README.md) says why |
+| [`raspberrypi/rpi5/compute.yaml`](./raspberrypi/rpi5/compute.yaml) | Compute | **Experimental**: the rpi4 compute role on a Pi 5 (`--model rpi5`); TPM, console and Ethernet unvalidated — [`raspberrypi/README.md`](./raspberrypi/README.md) |
 
 ---
 
@@ -370,7 +397,7 @@ what makes the handshake verify with no extra anchor to distribute.
 domain differs; change the edge-router address when yours differs.
 
 Full schema: `docs/device-templates.md` (Time Synchronization).
-API surface: `docs/ntp/api-reference.md`.
+API surface: `docs/ntp/api.md`.
 
 ### `os.kernel-modules`
 
@@ -448,7 +475,7 @@ The two gateway templates set a top-level `platform-ca-file:`. It is the
 platform CA bundle provisioning delivers to the node, and it is gatewayd's
 platform anchor: every platform service the gateway talks to is verified
 against it. That includes the platform secret store (`secret-store:`), so it
-stands behind every `kms://` and `secret://` reference the gateway
+stands behind every `kms://` reference the gateway
 configuration carries — the BGP neighbour passwords, the TCP-AO master keys,
 the ipsec and wireguard keys — as well as platformd over grpc, the proxy's
 mTLS callers and `trust-class: platform` backends, and the telemetry reporter.
@@ -469,6 +496,14 @@ secret reference fails at service start. The file is read at each
 verification, so a rotated bundle needs no restart; a bundle not yet on disk
 fails the verification naming the path.
 
+The anchor is one side of the store session. The other is the gateway's node
+identity: the session presents the `control-plane:` `cert-file`/`key-file`
+pair (`/etc/gatewayd/client.pem`, `client-key.pem`), the same certificate the
+telemetry reporter presents, so a store that requires a client certificate
+accepts the gateway. `secret-store:` carries no credential of its own; without
+the pair a gateway with a `secret-store:` refuses to start
+(`secrets.ErrClientIdentityRequired`). The pair is read once at start.
+
 ---
 
 ## Keeping This Doc Current
@@ -488,9 +523,9 @@ install flow:
 | Concern | Primary doc |
 |---------|-------------|
 | Bootstrap phases + orchestrator flow | [`docs/architecture/bootstrap-flow.md`](../../../../docs/architecture/bootstrap-flow.md) |
-| Dynamic config delivery (per-MAC staging) | [`docs/bootstrap/config-delivery.md`](../../../../docs/bootstrap/config-delivery.md) |
+| Dynamic config delivery (per-MAC staging) | [`docs/architecture/bootstrap-flow.md`](../../../../docs/architecture/bootstrap-flow.md) |
 | ISO build flags + modes | [`docs/installer/iso-building.md`](../../../../docs/installer/iso-building.md) |
 | autoinstall.sh priority chain | [`docs/installer/autoinstall.md`](../../../../docs/installer/autoinstall.md) |
 | Kernel cmdline parameter reference | [`docs/reference/kernel-cmdline.md`](../../../../docs/reference/kernel-cmdline.md) |
 | Templates + overrides | [`docs/device-templates.md`](../../../../docs/device-templates.md) |
-| Binary separation (platformd/gatewayd/platform-initrd) | [`docs/architecture/binary-separation.md`](../../../../docs/architecture/binary-separation.md) |
+| Binary separation (platformd/gatewayd/platform-initrd) | [`docs/daemon/architecture.md`](../../../../docs/daemon/architecture.md) |

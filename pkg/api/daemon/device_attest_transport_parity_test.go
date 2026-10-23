@@ -26,10 +26,10 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	quic "github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
 	restapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/rest"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 )
 
 // These tests exercise the REST and QUIC device-attest surfaces against the
@@ -121,22 +121,30 @@ func TestRESTDeviceAttest_UnknownDeviceIsNotAVerdict(t *testing.T) {
 		"a device that does not exist cannot be evaluated, so it is an error, not verified=false")
 }
 
-// quicAttestHandler builds the pkg/api/quic device handler over the
-// fixture's real DeviceGRPCService.
-func quicAttestHandler(t *testing.T, f *quoteFixture) *quic.DeviceHandler {
+// quicAttestHandler builds the live QUIC dispatcher's device handler over
+// the fixture's real DeviceGRPCService.
+func quicAttestHandler(t *testing.T, f *quoteFixture) *QUICServiceHandler {
 	t.Helper()
-	return quic.NewDeviceHandler(logging.DefaultLogger(), nil, nil,
-		quic.WithDeviceAttestService(f.grpcService(t)))
+	return &QUICServiceHandler{
+		deviceService:  f.devices,
+		profileService: f.profiles,
+		logger:         logging.DefaultLogger(),
+		deviceGRPC:     f.grpcService(t),
+	}
 }
 
-func quicAttest(t *testing.T, h *quic.DeviceHandler, deviceID uint64, evidence []byte) *quic.Response {
+func quicAttest(t *testing.T, h *QUICServiceHandler, deviceID uint64, evidence []byte) *platformv1.AttestDeviceResponse {
 	t.Helper()
-	payload, err := quic.EncodePayload(&quic.DeviceAttestRequest{ID: deviceID, Evidence: evidence})
+	payload, err := quicwire.EncodePayload(&platformv1.AttestDeviceRequest{DeviceId: itoa(deviceID), Evidence: evidence})
 	require.NoError(t, err)
-	return h.HandleRequest(context.Background(), &quic.Request{
-		Opcode:  quic.OpDeviceAttest,
+	resp := h.handleDeviceOperation(context.Background(), &quicwire.Request{
+		Opcode:  quicwire.OpDeviceAttest,
 		Payload: payload,
 	})
+	require.Equal(t, quicwire.StatusOK, resp.Status)
+	var decoded platformv1.AttestDeviceResponse
+	require.NoError(t, quicwire.DecodePayload(resp.Payload, &decoded))
+	return &decoded
 }
 
 func TestQUICDeviceAttest_RefusesForgedQuote(t *testing.T) {
@@ -146,30 +154,24 @@ func TestQUICDeviceAttest_RefusesForgedQuote(t *testing.T) {
 	forger, _ := newAttestTestKey(t)
 	forged := signedEvidence(t, forger, []byte("forged-nonce-0002"), goldenPCRs(), goldenPCRs())
 
-	resp := quicAttest(t, h, f.device.ID, forged)
+	decoded := quicAttest(t, h, f.device.ID, forged)
 
-	require.Equal(t, quic.StatusOK, resp.Status)
-	var decoded quic.DeviceAttestResponse
-	require.NoError(t, quic.DecodePayload(resp.Payload, &decoded))
-	assert.False(t, decoded.Verified,
+	assert.False(t, decoded.GetVerified(),
 		"QUIC must refuse a quote signed by a key the device did not enroll")
-	assert.False(t, decoded.SignatureValid)
-	assert.Equal(t, "failed", decoded.AttestationStatus)
-	assert.NotEmpty(t, decoded.Message)
+	assert.False(t, decoded.GetSignatureValid())
+	assert.Equal(t, "failed", decoded.GetAttestationStatus())
+	assert.NotEmpty(t, decoded.GetMessage())
 }
 
 func TestQUICDeviceAttest_AcceptsGenuineQuote(t *testing.T) {
 	f := newQuoteFixture(t)
 	h := quicAttestHandler(t, f)
 
-	resp := quicAttest(t, h, f.device.ID, f.evidence(t, []byte("genuine-nonce-002"), goldenPCRs()))
+	decoded := quicAttest(t, h, f.device.ID, f.evidence(t, []byte("genuine-nonce-002"), goldenPCRs()))
 
-	require.Equal(t, quic.StatusOK, resp.Status)
-	var decoded quic.DeviceAttestResponse
-	require.NoError(t, quic.DecodePayload(resp.Payload, &decoded))
-	assert.True(t, decoded.Verified)
-	assert.True(t, decoded.AKCertificateVerified)
-	assert.Equal(t, "verified", decoded.AttestationStatus)
+	assert.True(t, decoded.GetVerified())
+	assert.True(t, decoded.GetAkCertificateVerified())
+	assert.Equal(t, "verified", decoded.GetAttestationStatus())
 }
 
 // TestDeviceAttest_TransportsAgreeOnOneVerdict is the property the single
@@ -222,18 +224,16 @@ func TestDeviceAttest_TransportsAgreeOnOneVerdict(t *testing.T) {
 
 			_, restVerdict := postRESTAttest(t, restAttestRouter(t, f), f.device.ID, evidence)
 
-			quicResp := quicAttest(t, quicAttestHandler(t, f), f.device.ID, evidence)
-			var quicVerdict quic.DeviceAttestResponse
-			require.NoError(t, quic.DecodePayload(quicResp.Payload, &quicVerdict))
+			quicVerdict := quicAttest(t, quicAttestHandler(t, f), f.device.ID, evidence)
 
 			assert.Equal(t, grpcResp.GetVerified(), restVerdict["verified"],
 				"REST and gRPC must reach the same verdict")
-			assert.Equal(t, grpcResp.GetVerified(), quicVerdict.Verified,
+			assert.Equal(t, grpcResp.GetVerified(), quicVerdict.GetVerified(),
 				"QUIC and gRPC must reach the same verdict")
 			assert.Equal(t, grpcResp.GetSignatureValid(), restVerdict["signature_valid"])
-			assert.Equal(t, grpcResp.GetSignatureValid(), quicVerdict.SignatureValid)
+			assert.Equal(t, grpcResp.GetSignatureValid(), quicVerdict.GetSignatureValid())
 			assert.Equal(t, grpcResp.GetAttestationStatus(), restVerdict["attestation_status"])
-			assert.Equal(t, grpcResp.GetAttestationStatus(), quicVerdict.AttestationStatus)
+			assert.Equal(t, grpcResp.GetAttestationStatus(), quicVerdict.GetAttestationStatus())
 		})
 	}
 }

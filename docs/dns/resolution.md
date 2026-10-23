@@ -1,6 +1,8 @@
 # DNS Resolution
 
-Query handling and resolution in the Trusted Platform DNS subsystem.
+> **Status: REFERENCE** · Last verified: 2026-10-15
+> How the DNS wire plugin and the resolve API answer queries, as built in
+> `pkg/dns/plugin.go`, `parser.go` and `resolve.go`.
 
 ## Overview
 
@@ -11,35 +13,31 @@ DNS resolution is handled by the custom `TrustedPlatformPlugin` which integrates
 1. **Query Reception**: CoreDNS receives the DNS query and routes it to `TrustedPlatformPlugin.ServeDNS()`
 2. **Port Detection**: The plugin extracts the listening port from `w.LocalAddr()` to determine server type (internal vs public)
 3. **Query Normalization**: The qname is normalized using `dns.Fqdn()` to ensure a trailing dot
-4. **Validation**: The query is validated via `validateQuery()` for RFC 1035 compliance
-5. **Zone Lookup**: Two-phase lookup attempts to locate the zone:
-   - Direct lookup using the full qname as zone ID
-   - If not found, parse qname via `ParseDomainName()` and construct zone name from subdomains + root domain
-6. **Security Check**: If query arrives on public port for an internal zone, silently drop and log security event
-7. **Record Parsing**: `parseQueriedRecord()` dispatches to the appropriate parser function based on query type, which selects the records whose owner name IS the queried name (see [Name matching](#name-matching))
-8. **Response**: `buildResponse()` assembles the reply — matching records as an authoritative answer, or a negative answer distinguishing NXDOMAIN from NODATA (see [Negative answers](#negative-answers))
+4. **Validation**: The query is validated via `validateQuery()` for RFC 1035 compliance; a query that fails goes to the next plugin
+5. **NAT64 discovery**: `ipv4only.arpa` (RFC 7050 prefix discovery) is answered before the zone lookup
+6. **Zone Lookup**: `findZoneForQuery()` tries each suffix of the qname, longest first, and the first stored zone is authoritative; no zone sends the query to the next plugin
+7. **Security Check**: If the query arrives on the public port for an internal zone, the plugin logs a security event and passes the query on without answering from the zone
+8. **Zone transfer**: AXFR and IXFR go to the transfer responder ([zone-transfer.md](zone-transfer.md))
+9. **Record Parsing**: `parseQueriedRecord()` dispatches to the appropriate parser function based on query type, which selects the records whose owner name IS the queried name (see [Name matching](#name-matching))
+10. **Response**: `buildResponse()` assembles the reply — matching records as an authoritative answer, or a negative answer distinguishing NXDOMAIN from NODATA (see [Negative answers](#negative-answers))
 
 ```
 Query: myhost.example.internal A
            │
            ▼
 ┌──────────────────────┐
-│ Validate RFC 1035    │
+│ Validate RFC 1035    │─────▶ invalid: next plugin
 └──────────────────────┘
            │
            ▼
 ┌──────────────────────┐
-│ Zone Lookup (qname)  │─────▶ Not found
-└──────────────────────┘            │
-           │                        ▼
-           │               ┌──────────────────────┐
-           │               │ Parse subdomain/zone │
-           │               │ Retry lookup         │
-           │               └──────────────────────┘
-           │                        │
-           ▼                        ▼
+│ Zone lookup, longest │─────▶ no zone: next plugin (forward)
+│ suffix first         │
+└──────────────────────┘
+           │
+           ▼
 ┌──────────────────────┐
-│ Check internal flag  │
+│ Check internal flag  │─────▶ internal zone on public port: next plugin
 │ vs server port       │
 └──────────────────────┘
            │
@@ -93,12 +91,16 @@ Comparison is case-insensitive and trailing-dot insensitive (RFC 4343 §3), so a
 0x20-case-randomised query matches, and the answer echoes the query's own
 spelling.
 
-Two record types are owned by the zone apex and answer nowhere else:
+The SOA is owned by the zone apex and answers nowhere else: a zone has exactly
+one SOA and it sits at the apex (RFC 1034 §4.2). The SOA entity's `name` field
+is not used for matching.
 
-| Type | Why |
-|---|---|
-| SOA | A zone has exactly one SOA and it sits at the apex (RFC 1034 §4.2). The SOA entity's `name` field is not used for matching. |
-| RRSIG | `RRSIGRecord` carries no owner name, so the zone's signatures are attributed to the apex — the same assumption `BuildZoneTransfer` makes for AXFR. A direct `RRSIG` query for a non-apex owner is therefore NODATA; modelling per-record RRSIG owners is a schema change tracked separately. |
+An RRSIG answers at the owner of the RRset it signs. The signer records that
+owner in `RRSIGRecord.name`, so `RRSIG www.example.com.` returns the signatures
+over the `www` RRsets and `RRSIG example.com.` returns only the apex ones. A
+signature persisted before the owner was recorded has no `name`, which resolves
+to the apex like any other record. Re-signing the zone, which every zone save
+does while DNSSEC is enabled, records the real owners.
 
 **Wildcards are not supported.** A record named `*` is matched literally, as the
 name `*.example.com.`; there is no RFC 4592 synthesis. Nothing in the zone model,
@@ -116,6 +118,13 @@ cannot synthesise wildcard answers without the wildcard RRSIG handling of RFC
 > PERSISTED in the datastore, which `processZone` does not re-seed from the
 > configuration file. See
 > [troubleshooting.md](troubleshooting.md#owner-names-after-the-exact-matching-change).
+
+> **Changed 2026-10-12 (#219).** `RRSIGRecord` now persists its owner (`name`).
+> Before, the signer dropped it: every signature answered at the apex only, and
+> AXFR sent each one under the apex owner, so a secondary received mis-owned
+> signatures for every non-apex RRset. The signer also stored the signature
+> base64-encoded twice, so no served or transferred RRSIG verified. Zones signed
+> before this change keep both defects until they are next saved.
 
 ## Negative answers
 
@@ -197,7 +206,7 @@ Two things disqualify an NS RRset from being a delegation:
 | Not a delegation | Why |
 |---|---|
 | An owner outside the zone (`name: com.` in an `example.com.` zone) | Nothing constrains the stored owner today; honouring it would refer every name in the zone away |
-| An owner that also holds ordinary data — an address, alias, MX, TXT, SRV, CAA or TLSA record | Authoritative data and a cut cannot share an owner (RFC 2181 §6.1). This shape is a zone's own NS RRset stored under a hostname instead of the apex, which resolved before this change because NS matched no owner at all; zones seeded from templates older than 2026-09-02 still carry it, and referring that name would stop a control plane answering its own hostname. |
+| An owner that also holds ordinary data — an address, alias, MX, TXT, SRV, CAA or TLSA record | Authoritative data and a cut cannot share an owner (RFC 2181 §6.1). This shape is a zone's own NS RRset stored under a hostname instead of the apex; zones seeded from older templates carry it, and referring that name would stop a control plane answering its own hostname. |
 
 ### Other response flags
 
@@ -205,6 +214,48 @@ Answers and negative answers set the AA bit, since the platform is
 authoritative for the zones it serves; referrals clear it. Query types outside `recordParserFuncs` are still forwarded to the next
 plugin rather than answered negatively — that is `ErrRecordTypeNotSupported`
 behaviour, unchanged.
+
+## API resolve
+
+The resolve API (`GET /api/v1/dns/resolve`, gRPC `Resolve`, and the QUIC, MCP
+and Unix tools) answers from the managed zones without going over the DNS wire.
+Every transport calls one function, `dns.ResolveName` (`pkg/dns/resolve.go`):
+
+1. **Zone.** The managed zone with the longest suffix of the queried name
+   answers, so `host.sub.example.com.` is answered by `sub.example.com.` when
+   both it and `example.com.` are managed. Each suffix is looked up lower-cased,
+   then as written.
+2. **Owner.** Only records whose owner IS the queried name come back, matched
+   as in [Name matching](#name-matching). One extra stored form is accepted
+   here: an absolute owner without its trailing dot (`www.example.com` in
+   `example.com.`), which is the shape a record added through the API can
+   carry. The DNS wire plugin reads that form as relative.
+3. **Type.** `type` filters by mnemonic, in any case; without it every type
+   below is returned.
+4. **Names** compare case-insensitively, and the trailing dot is optional.
+
+| Case | Answer |
+|---|---|
+| Name under no managed zone | No records, `authoritative: false` |
+| Name inside a zone, with records of the type | Those records, `authoritative: true` |
+| Name inside a zone, with no such records | No records, `authoritative: true` — the zone is authoritative for the name and holds nothing for it |
+| Longest zone is one the caller may not read | No records, `authoritative: false`; a shorter zone the caller does own does not answer instead |
+| `type` outside A, AAAA, CNAME, MX, NS, TXT, SRV, CAA, TLSA | Refused: REST 400, gRPC `InvalidArgument` (`ErrRecordTypeNotSupported`) |
+
+The API answer is the zone's stored data. It does not chase CNAMEs, refer at
+delegations or synthesise SOA authority the way the wire plugin does.
+
+`Service.Resolve`, the value-list form that the MCP `dns_resolve` tool and the
+`pkg/api/quic` and `pkg/api/rest` handlers call (the daemon's QUIC and Unix
+resolve go through gRPC `Resolve`), returns the record values and serves A, AAAA,
+CNAME, MX, NS, TXT, SRV, CAA and TLSA. SRV, CAA and TLSA values are their RDATA in zone-file form, the form
+`Service.AddRecord` takes. An empty answer is an error there (`ErrRecordNotFound`).
+
+> **Changed 2026-10-14 (#452).** The resolve API used to look up the queried
+> name as a zone and return every record of the type in it, whatever its
+> owner: `www.example.com.` found no zone and returned nothing, and
+> `example.com.` returned the `www` records with the apex ones. An unserved
+> `type` used to be an empty answer.
 
 ## Internal vs Public Resolution
 
@@ -219,28 +270,30 @@ The platform runs two separate DNS server instances differentiated by port:
 
 When a query arrives on the public server port for a zone marked `Internal: true`:
 
-1. The query is silently dropped (no response sent)
-2. A security log entry is recorded with severity `HIGH`
-3. The offender's address is captured for audit
-4. `ErrInternalZoneQueryViolation` is logged
+1. `ErrInternalZoneQueryViolation` is logged
+2. A security log entry is recorded with severity `HIGH` and the offender's address
+3. The query goes to the next plugin unanswered by the zone, so with forwarders
+   configured it is forwarded upstream like a name the platform does not serve
 
 ```go
 // Security check in ServeDNS
 if port == strconv.Itoa(Configuration.PublicServer.Port) && zone.Internal {
     // Log violation and drop query silently
-    Configuration.Logger.Security(logging.SecurityLogEntry{
+    Configuration.Logger.Error(ErrInternalZoneQueryViolation)
+    Configuration.Logger.Security(ctx, logging.SecurityLogEntry{
         Category:        logging.CategoryNetworkSecurity,
         Description:     "Ignoring public query for internal zone",
         Details:         qname,
         OffenderAddress: w.RemoteAddr().String(),
         Source:          logging.SourceDNS,
         Severity:        logging.SeverityHigh,
+        Timestamp:       time.Now(),
     })
     return plugin.NextOrFailure(cp.Name(), cp.Next, ctx, w, r)
 }
 ```
 
-No error response is returned to prevent attackers from enumerating internal zone names.
+The platform returns no error of its own, so the public server does not reveal which internal zones exist.
 
 ## Query Validation
 
@@ -248,10 +301,11 @@ All queries pass through `validateQuery()` which enforces RFC 1035 compliance:
 
 | Check | Limit | Error |
 |-------|-------|-------|
-| Domain length | 253 characters max | "DNS query exceeds maximum domain length" |
+| Empty query | Not allowed | "DNS query is empty" |
+| Domain length | 253 characters max | "DNS query exceeds maximum domain length (253 characters)" |
 | Label length | 63 characters max | "DNS query contains a label exceeding 63 characters" |
 | Empty labels | Not allowed | "DNS query contains an empty label" |
-| Label format | `^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?$` | "DNS query contains an invalid label" |
+| Label format | `^[a-zA-Z0-9_]([a-zA-Z0-9_-]{0,61}[a-zA-Z0-9])?$` (underscores allowed for `_acme-challenge`, SRV and TLSA owners) | "DNS query contains an invalid label" |
 | IP addresses | Rejected | "DNS query must not be an IP address" |
 
 These checks protect against DNS injection attacks and malformed inputs. Queries failing validation are passed to the next plugin in the chain.
@@ -270,15 +324,19 @@ Corefiles are dynamically generated based on configuration:
     trustedPlatform
     log
     chaos
+    {dns64 stanza, when DNS64 serves this listener}
     forward . {forwarders}
 }
 ```
+
+`NewCorefileForServer` (`pkg/dns/corefile.go`) writes one block per listener;
+the `forward` line is omitted when the listener has no forwarders.
 
 ### Default Forwarders
 
 | Server Type | Default Forwarders |
 |-------------|-------------------|
-| Internal | `192.168.1.1`, `192.168.2.1`, `192.168.3.1` |
+| Internal | three RFC 1918 gateway addresses (`DefaultConfig`, `pkg/dns/config.go`); set your own |
 | Public | `4.4.4.4`, `8.8.8.8` |
 
 Forwarders are configurable per server in the platform configuration:
@@ -288,7 +346,7 @@ dns:
   internal:
     port: 9053
     forwarders:
-      - "192.168.1.1"
+      - "192.0.2.1"
   public:
     port: 8053
     forwarders:
@@ -314,18 +372,16 @@ The resolver is configured to:
 - Allow resolution of both internal and public zones
 - Forward unknown queries to configured upstream servers
 
-## Future: DNSSEC Validation
+## DNSSEC
 
-Planned DNSSEC support will add cryptographic validation to DNS responses:
+Zone signing is implemented ([dnssec.md](dnssec.md)): a signed zone's DNSKEY,
+DS, RRSIG, NSEC, NSEC3 and NSEC3PARAM records are served when queried by type,
+as in the table above. Two things are not implemented:
 
-| Feature | Description |
-|---------|-------------|
-| DO Flag Handling | Detect DNSSEC OK flag in queries |
-| RRSIG Responses | Include resource record signatures in responses |
-| NSEC/NSEC3 | Authenticated denial of existence |
-| Key Management | TPM-backed DNSSEC signing keys via KMS |
-
-DNSSEC record types are already defined in the zone entity structure (`DNSKEYRecord`, `DSRecord`, `RRSIGRecord`) but signing and validation logic is not yet implemented.
+| Feature | State |
+|---------|-------|
+| DO-bit handling | The plugin does not read the DNSSEC OK flag; RRSIGs are not added to answers for other types |
+| Validation | Answers forwarded upstream are not validated |
 
 ## See Also
 

@@ -52,8 +52,8 @@ func TestCollector_EndToEnd_VerdictReachesDeviceQuoteVerifier(t *testing.T) {
 
 	// The fake node: requires a client certificate from the PKI and
 	// answers POST /api/v1/attestation/host with a quote signed by the
-	// device's enrolled AK over the collector's nonce, in the node's
-	// protojson envelope.
+	// device's enrolled AK over the collector's nonce bound to this
+	// connection (#482), in the node's protojson envelope.
 	signer := f.key
 	node := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		require.Equal(t, http.MethodPost, r.Method)
@@ -67,7 +67,7 @@ func TestCollector_EndToEnd_VerdictReachesDeviceQuoteVerifier(t *testing.T) {
 		nonce, err := base64.StdEncoding.DecodeString(req.Nonce)
 		require.NoError(t, err)
 		w.Header().Set("Content-Type", "application/json")
-		_, err = w.Write(nodeEnvelope(t, signedEvidence(t, signer, nonce, goldenPCRs(), goldenPCRs())))
+		_, err = w.Write(nodeEnvelope(t, signedEvidence(t, signer, boundTo(t, r.TLS, nonce), goldenPCRs(), goldenPCRs())))
 		require.NoError(t, err)
 	}))
 	node.TLS = &tls.Config{

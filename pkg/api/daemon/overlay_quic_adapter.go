@@ -16,6 +16,7 @@ package daemon
 import (
 	"context"
 	"net"
+	"net/netip"
 	"strings"
 	"time"
 
@@ -30,8 +31,7 @@ import (
 // controller.  Controller errors are mapped to the quic sentinel errors so
 // that the QUIC handler's overlayErrorResponse emits the correct status byte.
 type overlayControllerQUICAdapter struct {
-	ctrl  OverlayControllerInterface
-	ipsec overlayIPsec
+	ctrl OverlayControllerInterface
 }
 
 // Compile-time check.
@@ -40,12 +40,8 @@ var _ quic.OverlayServiceInterface = (*overlayControllerQUICAdapter)(nil)
 // newOverlayControllerQUICAdapter wraps a non-nil overlay controller as a
 // quic.OverlayServiceInterface.  Callers must pass nil to quic.NewOverlayHandler
 // directly when no controller is available; they should not wrap nil here.
-func newOverlayControllerQUICAdapter(ctrl OverlayControllerInterface, sec ...overlayIPsec) *overlayControllerQUICAdapter {
-	adapter := &overlayControllerQUICAdapter{ctrl: ctrl}
-	if len(sec) > 0 {
-		adapter.ipsec = sec[0]
-	}
-	return adapter
+func newOverlayControllerQUICAdapter(ctrl OverlayControllerInterface) *overlayControllerQUICAdapter {
+	return &overlayControllerQUICAdapter{ctrl: ctrl}
 }
 
 // =============================================================================
@@ -83,10 +79,6 @@ func (a *overlayControllerQUICAdapter) Status(ctx context.Context) (*quic.Overla
 		tunnelCount = len(state.Tunnels)
 		macCount = len(state.RemoteMACs)
 	}
-	var unpeeredVTEPs int
-	if a.ipsec != nil {
-		unpeeredVTEPs = len(a.ipsec.Status().UnpeeredVTEPs)
-	}
 
 	healthStatus := "degraded"
 	if a.ctrl.IsRunning() {
@@ -94,20 +86,19 @@ func (a *overlayControllerQUICAdapter) Status(ctx context.Context) (*quic.Overla
 	}
 
 	return &quic.OverlayStatusInfo{
-		Enabled:       true,
-		NodeID:        nodeID,
-		Mode:          "vxlan",
-		LocalVTEP:     localVTEP,
-		VXLANPort:     vxlanPort,
-		VTEPCount:     vtepCount,
-		VNICount:      vniCount,
-		TunnelCount:   tunnelCount,
-		MACCount:      macCount,
-		UnpeeredVTEPs: unpeeredVTEPs,
-		UplinkIface:   underlayIface,
-		MTU:           mtu,
-		EncapType:     encapType,
-		HealthStatus:  healthStatus,
+		Enabled:      true,
+		NodeID:       nodeID,
+		Mode:         "vxlan",
+		LocalVTEP:    localVTEP,
+		VXLANPort:    vxlanPort,
+		VTEPCount:    vtepCount,
+		VNICount:     vniCount,
+		TunnelCount:  tunnelCount,
+		MACCount:     macCount,
+		UplinkIface:  underlayIface,
+		MTU:          mtu,
+		EncapType:    encapType,
+		HealthStatus: healthStatus,
 	}, nil
 }
 
@@ -191,7 +182,15 @@ func (a *overlayControllerQUICAdapter) CreateVNI(ctx context.Context, vni uint32
 		return nil, quic.ErrOverlayInvalidVNI
 	}
 
-	cfg := &overlay.VNIConfig{VNI: vni}
+	var vlan uint32
+	if opts != nil {
+		vlan = opts.VLAN
+	}
+	if vlan > overlay.MaxVLAN {
+		return nil, quic.ErrOverlayInvalidVLAN
+	}
+
+	cfg := &overlay.VNIConfig{VNI: vni, VLAN: uint16(vlan)}
 
 	if err := a.ctrl.AddVNI(ctx, cfg); err != nil {
 		return nil, mapOverlayToQUICError(err)
@@ -203,6 +202,7 @@ func (a *overlayControllerQUICAdapter) CreateVNI(ctx context.Context, vni uint32
 		// VNI was created; synthesise a minimal response.
 		return &quic.VNIInfo{
 			VNI:       vni,
+			VLAN:      cfg.VLAN,
 			Status:    "active",
 			CreatedAt: time.Now().Unix(),
 			Learning:  true,
@@ -246,21 +246,30 @@ func (a *overlayControllerQUICAdapter) ListTunnels(ctx context.Context) ([]*quic
 
 	out := make([]*quic.TunnelInfo, 0, len(state.Tunnels))
 	for i := range state.Tunnels {
-		t := &state.Tunnels[i]
-		out = append(out, &quic.TunnelInfo{
-			ID:         t.ID,
-			LocalVTEP:  t.LocalVTEP.String(),
-			RemoteVTEP: t.RemoteVTEP.String(),
-			VNI:        t.VNI,
-			Status:     t.State.String(),
-			EncapType:  "vxlan",
-			TxBytes:    int64(t.BytesTx),
-			RxBytes:    int64(t.BytesRx),
-			CreatedAt:  t.CreatedAt.Unix(),
-		})
+		out = append(out, overlayTunnelToQUIC(&state.Tunnels[i]))
 	}
 
 	return out, nil
+}
+
+// TunnelStats returns the tunnel to remoteVTEP carrying vni (any VNI when
+// vni is 0), selected exactly as gRPC GetTunnelStats selects it.
+func (a *overlayControllerQUICAdapter) TunnelStats(ctx context.Context, remoteVTEP string, vni uint32) (*quic.TunnelInfo, error) {
+	if !a.ctrl.IsRunning() {
+		return nil, quic.ErrOverlayServiceNotAvailable
+	}
+
+	remote, err := netip.ParseAddr(remoteVTEP)
+	if err != nil {
+		return nil, quic.ErrOverlayInvalidRemoteVTEP
+	}
+
+	tunnel := findOverlayTunnel(a.ctrl.GetState(), remote, vni)
+	if tunnel == nil {
+		return nil, quic.ErrOverlayTunnelNotFound
+	}
+
+	return overlayTunnelToQUIC(tunnel), nil
 }
 
 // =============================================================================
@@ -395,10 +404,25 @@ func overlayVTEPToQUIC(v *overlay.VTEPInfo) *quic.VTEPInfo {
 func overlayVNIToQUIC(v *overlay.VNIInfo) *quic.VNIInfo {
 	return &quic.VNIInfo{
 		VNI:       v.VNI,
+		VLAN:      v.VLAN,
 		Status:    "active",
 		Learning:  true,
 		CreatedAt: v.CreatedAt.Unix(),
 		MACCount:  v.MACCount,
 		VTEPCount: v.TunnelCount,
+	}
+}
+
+func overlayTunnelToQUIC(t *overlay.TunnelInfo) *quic.TunnelInfo {
+	return &quic.TunnelInfo{
+		ID:         t.ID,
+		LocalVTEP:  t.LocalVTEP.String(),
+		RemoteVTEP: t.RemoteVTEP.String(),
+		VNI:        t.VNI,
+		Status:     t.State.String(),
+		EncapType:  "vxlan",
+		TxBytes:    int64(t.BytesTx),
+		RxBytes:    int64(t.BytesRx),
+		CreatedAt:  t.CreatedAt.Unix(),
 	}
 }

@@ -32,8 +32,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 )
 
 // mockTPM2IDevIDService implements xkmssdk.TrustedPlatformModule for IDevID/IAK testing
@@ -165,6 +165,7 @@ func (m *mockTPM2IDevIDService) DeleteIDevIDCertificate() error {
 	if m.deleteIDevIDCertErr != nil {
 		return m.deleteIDevIDCertErr
 	}
+	m.hasIDevIDCert = false
 	return nil
 }
 
@@ -172,6 +173,7 @@ func (m *mockTPM2IDevIDService) DeleteIAKCertificate() error {
 	if m.deleteIAKCertErr != nil {
 		return m.deleteIAKCertErr
 	}
+	m.hasIAKCert = false
 	return nil
 }
 
@@ -252,41 +254,37 @@ func createIDevIDTestCertPEM(cn string) (string, error) {
 
 func TestQUICIDevID_ServiceNotAvailable(t *testing.T) {
 	logger := logging.DefaultLogger()
-	handler := NewQUICServiceHandler(logger)
+	handler := newTestQUICServiceHandler(logger)
 	ctx := context.Background()
 
 	testCases := []struct {
 		name   string
 		opcode byte
 	}{
-		{"IDevIDGenerate", quic.OpIDevIDGenerate},
-		{"IDevIDInfo", quic.OpIDevIDInfo},
-		{"IDevIDDelete", quic.OpIDevIDDelete},
-		{"IDevIDCSR", quic.OpIDevIDCSR},
-		{"IDevIDInstallCert", quic.OpIDevIDInstallCert},
-		{"IDevIDGetCert", quic.OpIDevIDGetCert},
-		{"IAKGenerate", quic.OpIAKGenerate},
-		{"IAKInfo", quic.OpIAKInfo},
-		{"IAKDelete", quic.OpIAKDelete},
-		{"IAKCSR", quic.OpIAKCSR},
-		{"IAKInstallCert", quic.OpIAKInstallCert},
-		{"IAKGetCert", quic.OpIAKGetCert},
-		{"DeviceAttributes", quic.OpDeviceAttributes},
-		{"ActivateCredential", quic.OpActivateCredential},
-		{"HasIDevID", quic.OpHasIDevID},
-		{"HasIAK", quic.OpHasIAK},
-		{"IDevIDDeleteCert", quic.OpIDevIDDeleteCert},
-		{"IAKDeleteCert", quic.OpIAKDeleteCert},
+		{"IDevIDGenerate", quicwire.OpIDevIDGenerate},
+		{"IDevIDInfo", quicwire.OpIDevIDInfo},
+		{"IDevIDCSR", quicwire.OpIDevIDCSR},
+		{"IDevIDInstallCert", quicwire.OpIDevIDInstallCert},
+		{"IDevIDGetCert", quicwire.OpIDevIDGetCert},
+		{"IAKGenerate", quicwire.OpIAKGenerate},
+		{"IAKInfo", quicwire.OpIAKInfo},
+		{"IAKCSR", quicwire.OpIAKCSR},
+		{"IAKInstallCert", quicwire.OpIAKInstallCert},
+		{"IAKGetCert", quicwire.OpIAKGetCert},
+		{"DeviceAttributes", quicwire.OpDeviceAttributes},
+		{"ActivateCredential", quicwire.OpActivateCredential},
+		{"HasIDevID", quicwire.OpHasIDevID},
+		{"HasIAK", quicwire.OpHasIAK},
 	}
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			req := &quic.Request{
+			req := &quicwire.Request{
 				Opcode:  tc.opcode,
 				Payload: []byte{},
 			}
 			resp := handler.HandleRequest(ctx, req)
-			assert.Equal(t, quic.StatusUnavailable, resp.Status)
+			assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 		})
 	}
 }
@@ -294,56 +292,56 @@ func TestQUICIDevID_ServiceNotAvailable(t *testing.T) {
 func TestQUICIDevIDOperation_Routing(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockTPM := &mockTPM2IDevIDService{hasIDevID: true, hasIAK: true}
-	handler := NewQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
+	handler := newTestQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
 	ctx := context.Background()
 
 	// Test that various opcodes are routed correctly
 	opcodes := []byte{
-		quic.OpIDevIDGenerate,
-		quic.OpIDevIDInfo,
-		quic.OpIDevIDDelete,
-		quic.OpIAKGenerate,
-		quic.OpIAKInfo,
-		quic.OpIAKDelete,
-		quic.OpHasIDevID,
-		quic.OpHasIAK,
-		quic.OpDeviceAttributes,
+		quicwire.OpIDevIDGenerate,
+		quicwire.OpIDevIDInfo,
+		quicwire.OpIDevIDDelete,
+		quicwire.OpIAKGenerate,
+		quicwire.OpIAKInfo,
+		quicwire.OpIAKDelete,
+		quicwire.OpHasIDevID,
+		quicwire.OpHasIAK,
+		quicwire.OpDeviceAttributes,
 	}
 
 	for _, opcode := range opcodes {
-		req := &quic.Request{
+		req := &quicwire.Request{
 			Opcode:  opcode,
 			Payload: []byte{},
 		}
 		resp := handler.HandleRequest(ctx, req)
 		// Should not return unavailable since TPM2 service is set
-		assert.NotEqual(t, quic.StatusUnavailable, resp.Status, "opcode 0x%02X should be routed", opcode)
+		assert.NotEqual(t, quicwire.StatusUnavailable, resp.Status, "opcode 0x%02X should be routed", opcode)
 	}
 }
 
 func TestQUICIDevIDGenerate_Success(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockTPM := &mockTPM2IDevIDService{}
-	handler := NewQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
+	handler := newTestQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
 	ctx := context.Background()
 
 	genReq := &IDevIDGenerateRequest{
 		Algorithm: "ecdsa-p256",
 		Overwrite: false,
 	}
-	payload, err := quic.EncodePayload(genReq)
+	payload, err := quicwire.EncodePayload(genReq)
 	require.NoError(t, err)
 
-	req := &quic.Request{
-		Opcode:  quic.OpIDevIDGenerate,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpIDevIDGenerate,
 		Payload: payload,
 	}
 
 	resp := handler.HandleRequest(ctx, req)
-	assert.Equal(t, quic.StatusOK, resp.Status)
+	assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 	var genResp IDevIDGenerateResponse
-	err = quic.DecodePayload(resp.Payload, &genResp)
+	err = quicwire.DecodePayload(resp.Payload, &genResp)
 	require.NoError(t, err)
 	assert.NotZero(t, genResp.Handle)
 	assert.NotZero(t, genResp.Timestamp)
@@ -354,16 +352,16 @@ func TestQUICIDevIDGenerate_EKAttributesError(t *testing.T) {
 	mockTPM := &mockTPM2IDevIDService{
 		ekAttrsErr: errors.New("TPM not available"),
 	}
-	handler := NewQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
+	handler := newTestQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
 	ctx := context.Background()
 
-	req := &quic.Request{
-		Opcode:  quic.OpIDevIDGenerate,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpIDevIDGenerate,
 		Payload: []byte{},
 	}
 
 	resp := handler.HandleRequest(ctx, req)
-	assert.NotEqual(t, quic.StatusOK, resp.Status)
+	assert.NotEqual(t, quicwire.StatusOK, resp.Status)
 }
 
 func TestQUICIDevIDGenerate_CreateIAKError(t *testing.T) {
@@ -371,16 +369,16 @@ func TestQUICIDevIDGenerate_CreateIAKError(t *testing.T) {
 	mockTPM := &mockTPM2IDevIDService{
 		createIAKErr: errors.New("failed to create IAK"),
 	}
-	handler := NewQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
+	handler := newTestQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
 	ctx := context.Background()
 
-	req := &quic.Request{
-		Opcode:  quic.OpIDevIDGenerate,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpIDevIDGenerate,
 		Payload: []byte{},
 	}
 
 	resp := handler.HandleRequest(ctx, req)
-	assert.NotEqual(t, quic.StatusOK, resp.Status)
+	assert.NotEqual(t, quicwire.StatusOK, resp.Status)
 }
 
 func TestQUICIDevIDGenerate_CreateIDevIDError(t *testing.T) {
@@ -388,49 +386,49 @@ func TestQUICIDevIDGenerate_CreateIDevIDError(t *testing.T) {
 	mockTPM := &mockTPM2IDevIDService{
 		createIDevIDErr: errors.New("failed to create IDevID"),
 	}
-	handler := NewQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
+	handler := newTestQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
 	ctx := context.Background()
 
-	req := &quic.Request{
-		Opcode:  quic.OpIDevIDGenerate,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpIDevIDGenerate,
 		Payload: []byte{},
 	}
 
 	resp := handler.HandleRequest(ctx, req)
-	assert.NotEqual(t, quic.StatusOK, resp.Status)
+	assert.NotEqual(t, quicwire.StatusOK, resp.Status)
 }
 
 func TestQUICIDevIDGenerate_InvalidPayload(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockTPM := &mockTPM2IDevIDService{}
-	handler := NewQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
+	handler := newTestQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
 	ctx := context.Background()
 
-	req := &quic.Request{
-		Opcode:  quic.OpIDevIDGenerate,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpIDevIDGenerate,
 		Payload: []byte{0xFF, 0xFF, 0xFF}, // Invalid payload
 	}
 
 	resp := handler.HandleRequest(ctx, req)
-	assert.Equal(t, quic.StatusInvalidRequest, resp.Status)
+	assert.Equal(t, quicwire.StatusInvalidRequest, resp.Status)
 }
 
 func TestQUICIDevIDInfo_Exists(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockTPM := &mockTPM2IDevIDService{hasIDevID: true}
-	handler := NewQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
+	handler := newTestQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
 	ctx := context.Background()
 
-	req := &quic.Request{
-		Opcode:  quic.OpIDevIDInfo,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpIDevIDInfo,
 		Payload: []byte{},
 	}
 
 	resp := handler.HandleRequest(ctx, req)
-	assert.Equal(t, quic.StatusOK, resp.Status)
+	assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 	var infoResp IDevIDInfoResponse
-	err := quic.DecodePayload(resp.Payload, &infoResp)
+	err := quicwire.DecodePayload(resp.Payload, &infoResp)
 	require.NoError(t, err)
 	assert.True(t, infoResp.Exists)
 	assert.NotZero(t, infoResp.Handle)
@@ -439,19 +437,19 @@ func TestQUICIDevIDInfo_Exists(t *testing.T) {
 func TestQUICIDevIDInfo_NotExists(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockTPM := &mockTPM2IDevIDService{hasIDevID: false}
-	handler := NewQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
+	handler := newTestQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
 	ctx := context.Background()
 
-	req := &quic.Request{
-		Opcode:  quic.OpIDevIDInfo,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpIDevIDInfo,
 		Payload: []byte{},
 	}
 
 	resp := handler.HandleRequest(ctx, req)
-	assert.Equal(t, quic.StatusOK, resp.Status)
+	assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 	var infoResp IDevIDInfoResponse
-	err := quic.DecodePayload(resp.Payload, &infoResp)
+	err := quicwire.DecodePayload(resp.Payload, &infoResp)
 	require.NoError(t, err)
 	assert.False(t, infoResp.Exists)
 }
@@ -459,68 +457,77 @@ func TestQUICIDevIDInfo_NotExists(t *testing.T) {
 func TestQUICIDevIDInfo_WithCertificate(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockTPM := &mockTPM2IDevIDService{hasIDevID: true, hasIDevIDCert: true}
-	handler := NewQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
+	handler := newTestQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
 	ctx := context.Background()
 
-	req := &quic.Request{
-		Opcode:  quic.OpIDevIDInfo,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpIDevIDInfo,
 		Payload: []byte{},
 	}
 
 	resp := handler.HandleRequest(ctx, req)
-	assert.Equal(t, quic.StatusOK, resp.Status)
+	assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 	var infoResp IDevIDInfoResponse
-	err := quic.DecodePayload(resp.Payload, &infoResp)
+	err := quicwire.DecodePayload(resp.Payload, &infoResp)
 	require.NoError(t, err)
 	assert.True(t, infoResp.Exists)
 	assert.True(t, infoResp.HasCertificate)
 	assert.NotNil(t, infoResp.Certificate)
 }
 
-func TestQUICIDevIDDelete_Success(t *testing.T) {
+// TestQUICIDevIDDelete_RefusedKeyAndCertRemain pins #304: the QUIC key delete
+// answers StatusFailedPrecondition (the gRPC class) and touches nothing.
+func TestQUICIDevIDDelete_RefusedKeyAndCertRemain(t *testing.T) {
 	logger := logging.DefaultLogger()
-	mockTPM := &mockTPM2IDevIDService{hasIDevID: true}
-	handler := NewQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
+	mockTPM := &mockTPM2IDevIDService{hasIDevID: true, hasIDevIDCert: true}
+	handler := newTestQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
 	ctx := context.Background()
 
-	req := &quic.Request{
-		Opcode:  quic.OpIDevIDDelete,
-		Payload: []byte{},
-	}
+	resp := handler.HandleRequest(ctx, &quicwire.Request{Opcode: quicwire.OpIDevIDDelete})
 
-	resp := handler.HandleRequest(ctx, req)
-	assert.Equal(t, quic.StatusOK, resp.Status)
+	assert.Equal(t, quicwire.StatusFailedPrecondition, resp.Status)
+	assert.Equal(t, ErrDeviceIdentityKeyNotDeletable{Key: "IDevID"}.Error(), string(resp.Payload))
+	assert.True(t, mockTPM.hasIDevID, "IDevID key must remain")
+	assert.True(t, mockTPM.hasIDevIDCert, "IDevID certificate must remain")
 
-	var deleteResp IDevIDDeleteResponse
-	err := quic.DecodePayload(resp.Payload, &deleteResp)
-	require.NoError(t, err)
-	assert.True(t, deleteResp.Deleted)
+	resp = handler.HandleRequest(ctx, &quicwire.Request{Opcode: quicwire.OpIDevIDGetCert})
+	assert.Equal(t, quicwire.StatusOK, resp.Status)
+}
+
+// TestQUICIDevIDDelete_RefusedWithoutTPMService checks the refusal does not
+// depend on TPM availability, matching the gRPC service.
+func TestQUICIDevIDDelete_RefusedWithoutTPMService(t *testing.T) {
+	handler := newTestQUICServiceHandler(logging.DefaultLogger())
+
+	resp := handler.HandleRequest(context.Background(), &quicwire.Request{Opcode: quicwire.OpIDevIDDelete})
+
+	assert.Equal(t, quicwire.StatusFailedPrecondition, resp.Status)
 }
 
 func TestQUICIDevIDCSR_Success(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockTPM := &mockTPM2IDevIDService{hasIDevID: true, hasIAK: true}
-	handler := NewQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
+	handler := newTestQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
 	ctx := context.Background()
 
 	csrReq := &IDevIDCSRRequest{
 		CommonName:   "test-device",
 		Organization: "Test Org",
 	}
-	payload, err := quic.EncodePayload(csrReq)
+	payload, err := quicwire.EncodePayload(csrReq)
 	require.NoError(t, err)
 
-	req := &quic.Request{
-		Opcode:  quic.OpIDevIDCSR,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpIDevIDCSR,
 		Payload: payload,
 	}
 
 	resp := handler.HandleRequest(ctx, req)
-	assert.Equal(t, quic.StatusOK, resp.Status)
+	assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 	var csrResp IDevIDCSRResponse
-	err = quic.DecodePayload(resp.Payload, &csrResp)
+	err = quicwire.DecodePayload(resp.Payload, &csrResp)
 	require.NoError(t, err)
 	assert.NotEmpty(t, csrResp.CSR)
 }
@@ -528,31 +535,31 @@ func TestQUICIDevIDCSR_Success(t *testing.T) {
 func TestQUICIDevIDCSR_NoIDevID(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockTPM := &mockTPM2IDevIDService{hasIDevID: false, hasIAK: true}
-	handler := NewQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
+	handler := newTestQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
 	ctx := context.Background()
 
-	req := &quic.Request{
-		Opcode:  quic.OpIDevIDCSR,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpIDevIDCSR,
 		Payload: []byte{},
 	}
 
 	resp := handler.HandleRequest(ctx, req)
-	assert.NotEqual(t, quic.StatusOK, resp.Status)
+	assert.NotEqual(t, quicwire.StatusOK, resp.Status)
 }
 
 func TestQUICIDevIDCSR_NoIAK(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockTPM := &mockTPM2IDevIDService{hasIDevID: true, hasIAK: false}
-	handler := NewQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
+	handler := newTestQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
 	ctx := context.Background()
 
-	req := &quic.Request{
-		Opcode:  quic.OpIDevIDCSR,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpIDevIDCSR,
 		Payload: []byte{},
 	}
 
 	resp := handler.HandleRequest(ctx, req)
-	assert.NotEqual(t, quic.StatusOK, resp.Status)
+	assert.NotEqual(t, quicwire.StatusOK, resp.Status)
 }
 
 func TestQUICIDevIDCSR_CreateCSRError(t *testing.T) {
@@ -562,22 +569,22 @@ func TestQUICIDevIDCSR_CreateCSRError(t *testing.T) {
 		hasIAK:       true,
 		createCSRErr: errors.New("CSR creation failed"),
 	}
-	handler := NewQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
+	handler := newTestQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
 	ctx := context.Background()
 
-	req := &quic.Request{
-		Opcode:  quic.OpIDevIDCSR,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpIDevIDCSR,
 		Payload: []byte{},
 	}
 
 	resp := handler.HandleRequest(ctx, req)
-	assert.NotEqual(t, quic.StatusOK, resp.Status)
+	assert.NotEqual(t, quicwire.StatusOK, resp.Status)
 }
 
 func TestQUICIDevIDInstallCert_Success(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockTPM := &mockTPM2IDevIDService{hasIDevID: true}
-	handler := NewQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
+	handler := newTestQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
 	ctx := context.Background()
 
 	certPEM, err := createIDevIDTestCertPEM("Test IDevID")
@@ -586,19 +593,19 @@ func TestQUICIDevIDInstallCert_Success(t *testing.T) {
 	installReq := &IDevIDInstallCertRequest{
 		CertificatePEM: certPEM,
 	}
-	payload, err := quic.EncodePayload(installReq)
+	payload, err := quicwire.EncodePayload(installReq)
 	require.NoError(t, err)
 
-	req := &quic.Request{
-		Opcode:  quic.OpIDevIDInstallCert,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpIDevIDInstallCert,
 		Payload: payload,
 	}
 
 	resp := handler.HandleRequest(ctx, req)
-	assert.Equal(t, quic.StatusOK, resp.Status)
+	assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 	var installResp IDevIDInstallCertResponse
-	err = quic.DecodePayload(resp.Payload, &installResp)
+	err = quicwire.DecodePayload(resp.Payload, &installResp)
 	require.NoError(t, err)
 	assert.True(t, installResp.Installed)
 }
@@ -606,43 +613,43 @@ func TestQUICIDevIDInstallCert_Success(t *testing.T) {
 func TestQUICIDevIDInstallCert_MissingPEM(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockTPM := &mockTPM2IDevIDService{hasIDevID: true}
-	handler := NewQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
+	handler := newTestQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
 	ctx := context.Background()
 
 	installReq := &IDevIDInstallCertRequest{
 		CertificatePEM: "",
 	}
-	payload, err := quic.EncodePayload(installReq)
+	payload, err := quicwire.EncodePayload(installReq)
 	require.NoError(t, err)
 
-	req := &quic.Request{
-		Opcode:  quic.OpIDevIDInstallCert,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpIDevIDInstallCert,
 		Payload: payload,
 	}
 
 	resp := handler.HandleRequest(ctx, req)
-	assert.Equal(t, quic.StatusInvalidArgument, resp.Status)
+	assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 }
 
 func TestQUICIDevIDInstallCert_InvalidPEM(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockTPM := &mockTPM2IDevIDService{hasIDevID: true}
-	handler := NewQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
+	handler := newTestQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
 	ctx := context.Background()
 
 	installReq := &IDevIDInstallCertRequest{
 		CertificatePEM: "not-a-valid-pem",
 	}
-	payload, err := quic.EncodePayload(installReq)
+	payload, err := quicwire.EncodePayload(installReq)
 	require.NoError(t, err)
 
-	req := &quic.Request{
-		Opcode:  quic.OpIDevIDInstallCert,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpIDevIDInstallCert,
 		Payload: payload,
 	}
 
 	resp := handler.HandleRequest(ctx, req)
-	assert.Equal(t, quic.StatusInvalidArgument, resp.Status)
+	assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 }
 
 func TestQUICIDevIDInstallCert_WriteError(t *testing.T) {
@@ -651,7 +658,7 @@ func TestQUICIDevIDInstallCert_WriteError(t *testing.T) {
 		hasIDevID:          true,
 		writeIDevIDCertErr: errors.New("write failed"),
 	}
-	handler := NewQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
+	handler := newTestQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
 	ctx := context.Background()
 
 	certPEM, err := createIDevIDTestCertPEM("Test IDevID")
@@ -660,40 +667,40 @@ func TestQUICIDevIDInstallCert_WriteError(t *testing.T) {
 	installReq := &IDevIDInstallCertRequest{
 		CertificatePEM: certPEM,
 	}
-	payload, err := quic.EncodePayload(installReq)
+	payload, err := quicwire.EncodePayload(installReq)
 	require.NoError(t, err)
 
-	req := &quic.Request{
-		Opcode:  quic.OpIDevIDInstallCert,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpIDevIDInstallCert,
 		Payload: payload,
 	}
 
 	resp := handler.HandleRequest(ctx, req)
-	assert.NotEqual(t, quic.StatusOK, resp.Status)
+	assert.NotEqual(t, quicwire.StatusOK, resp.Status)
 }
 
 func TestQUICIDevIDGetCert_Success(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockTPM := &mockTPM2IDevIDService{hasIDevID: true, hasIDevIDCert: true}
-	handler := NewQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
+	handler := newTestQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
 	ctx := context.Background()
 
 	getCertReq := &IDevIDGetCertRequest{
 		IncludePEM: true,
 	}
-	payload, err := quic.EncodePayload(getCertReq)
+	payload, err := quicwire.EncodePayload(getCertReq)
 	require.NoError(t, err)
 
-	req := &quic.Request{
-		Opcode:  quic.OpIDevIDGetCert,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpIDevIDGetCert,
 		Payload: payload,
 	}
 
 	resp := handler.HandleRequest(ctx, req)
-	assert.Equal(t, quic.StatusOK, resp.Status)
+	assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 	var certResp IDevIDGetCertResponse
-	err = quic.DecodePayload(resp.Payload, &certResp)
+	err = quicwire.DecodePayload(resp.Payload, &certResp)
 	require.NoError(t, err)
 	assert.NotNil(t, certResp.Certificate)
 	assert.NotEmpty(t, certResp.Certificate.PEM)
@@ -702,25 +709,25 @@ func TestQUICIDevIDGetCert_Success(t *testing.T) {
 func TestQUICIDevIDGetCert_NoPEM(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockTPM := &mockTPM2IDevIDService{hasIDevID: true, hasIDevIDCert: true}
-	handler := NewQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
+	handler := newTestQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
 	ctx := context.Background()
 
 	getCertReq := &IDevIDGetCertRequest{
 		IncludePEM: false,
 	}
-	payload, err := quic.EncodePayload(getCertReq)
+	payload, err := quicwire.EncodePayload(getCertReq)
 	require.NoError(t, err)
 
-	req := &quic.Request{
-		Opcode:  quic.OpIDevIDGetCert,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpIDevIDGetCert,
 		Payload: payload,
 	}
 
 	resp := handler.HandleRequest(ctx, req)
-	assert.Equal(t, quic.StatusOK, resp.Status)
+	assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 	var certResp IDevIDGetCertResponse
-	err = quic.DecodePayload(resp.Payload, &certResp)
+	err = quicwire.DecodePayload(resp.Payload, &certResp)
 	require.NoError(t, err)
 	assert.NotNil(t, certResp.Certificate)
 	assert.Empty(t, certResp.Certificate.PEM)
@@ -729,34 +736,34 @@ func TestQUICIDevIDGetCert_NoPEM(t *testing.T) {
 func TestQUICIDevIDGetCert_NotFound(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockTPM := &mockTPM2IDevIDService{hasIDevID: true, hasIDevIDCert: false}
-	handler := NewQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
+	handler := newTestQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
 	ctx := context.Background()
 
-	req := &quic.Request{
-		Opcode:  quic.OpIDevIDGetCert,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpIDevIDGetCert,
 		Payload: []byte{},
 	}
 
 	resp := handler.HandleRequest(ctx, req)
-	assert.NotEqual(t, quic.StatusOK, resp.Status)
+	assert.NotEqual(t, quicwire.StatusOK, resp.Status)
 }
 
 func TestQUICHasIDevID_Exists(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockTPM := &mockTPM2IDevIDService{hasIDevID: true}
-	handler := NewQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
+	handler := newTestQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
 	ctx := context.Background()
 
-	req := &quic.Request{
-		Opcode:  quic.OpHasIDevID,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpHasIDevID,
 		Payload: []byte{},
 	}
 
 	resp := handler.HandleRequest(ctx, req)
-	assert.Equal(t, quic.StatusOK, resp.Status)
+	assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 	var hasResp HasIDevIDResponse
-	err := quic.DecodePayload(resp.Payload, &hasResp)
+	err := quicwire.DecodePayload(resp.Payload, &hasResp)
 	require.NoError(t, err)
 	assert.True(t, hasResp.Exists)
 }
@@ -764,19 +771,19 @@ func TestQUICHasIDevID_Exists(t *testing.T) {
 func TestQUICHasIDevID_NotExists(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockTPM := &mockTPM2IDevIDService{hasIDevID: false}
-	handler := NewQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
+	handler := newTestQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
 	ctx := context.Background()
 
-	req := &quic.Request{
-		Opcode:  quic.OpHasIDevID,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpHasIDevID,
 		Payload: []byte{},
 	}
 
 	resp := handler.HandleRequest(ctx, req)
-	assert.Equal(t, quic.StatusOK, resp.Status)
+	assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 	var hasResp HasIDevIDResponse
-	err := quic.DecodePayload(resp.Payload, &hasResp)
+	err := quicwire.DecodePayload(resp.Payload, &hasResp)
 	require.NoError(t, err)
 	assert.False(t, hasResp.Exists)
 }
@@ -784,19 +791,19 @@ func TestQUICHasIDevID_NotExists(t *testing.T) {
 func TestQUICHasIAK_Exists(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockTPM := &mockTPM2IDevIDService{hasIAK: true}
-	handler := NewQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
+	handler := newTestQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
 	ctx := context.Background()
 
-	req := &quic.Request{
-		Opcode:  quic.OpHasIAK,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpHasIAK,
 		Payload: []byte{},
 	}
 
 	resp := handler.HandleRequest(ctx, req)
-	assert.Equal(t, quic.StatusOK, resp.Status)
+	assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 	var hasResp HasIAKResponse
-	err := quic.DecodePayload(resp.Payload, &hasResp)
+	err := quicwire.DecodePayload(resp.Payload, &hasResp)
 	require.NoError(t, err)
 	assert.True(t, hasResp.Exists)
 }
@@ -804,97 +811,124 @@ func TestQUICHasIAK_Exists(t *testing.T) {
 func TestQUICHasIAK_NotExists(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockTPM := &mockTPM2IDevIDService{hasIAK: false}
-	handler := NewQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
+	handler := newTestQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
 	ctx := context.Background()
 
-	req := &quic.Request{
-		Opcode:  quic.OpHasIAK,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpHasIAK,
 		Payload: []byte{},
 	}
 
 	resp := handler.HandleRequest(ctx, req)
-	assert.Equal(t, quic.StatusOK, resp.Status)
+	assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 	var hasResp HasIAKResponse
-	err := quic.DecodePayload(resp.Payload, &hasResp)
+	err := quicwire.DecodePayload(resp.Payload, &hasResp)
 	require.NoError(t, err)
 	assert.False(t, hasResp.Exists)
 }
 
+// newCertDeleteQUICHandler wires the QUIC handler as the daemon does: its own
+// TPM plus the shared IDevID service over the same TPM, which serves the
+// certificate deletes. A nil TPM leaves both without one.
+func newCertDeleteQUICHandler(mockTPM *mockTPM2IDevIDService) *QUICServiceHandler {
+	idevid := NewIDevIDGRPCService(logging.DefaultLogger())
+	var opts []QUICServiceHandlerOption
+	if mockTPM != nil {
+		opts = append(opts, WithQUICTPM2Service(mockTPM))
+		idevid.SetTPM2Service(mockTPM)
+	}
+	handler := newTestQUICServiceHandler(logging.DefaultLogger(), opts...)
+	handler.SetIDevIDService(idevid)
+	return handler
+}
+
 func TestQUICIDevIDDeleteCert_Success(t *testing.T) {
-	logger := logging.DefaultLogger()
 	mockTPM := &mockTPM2IDevIDService{hasIDevID: true, hasIDevIDCert: true}
-	handler := NewQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
+	handler := newCertDeleteQUICHandler(mockTPM)
 	ctx := context.Background()
 
-	req := &quic.Request{
-		Opcode:  quic.OpIDevIDDeleteCert,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpIDevIDDeleteCert,
 		Payload: []byte{},
 	}
 
 	resp := handler.HandleRequest(ctx, req)
-	assert.Equal(t, quic.StatusOK, resp.Status)
+	assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 	var deleteResp IDevIDDeleteCertResponse
-	err := quic.DecodePayload(resp.Payload, &deleteResp)
+	err := quicwire.DecodePayload(resp.Payload, &deleteResp)
 	require.NoError(t, err)
 	assert.True(t, deleteResp.Deleted)
 }
 
 func TestQUICIDevIDDeleteCert_Error(t *testing.T) {
-	logger := logging.DefaultLogger()
 	mockTPM := &mockTPM2IDevIDService{
 		hasIDevID:           true,
 		deleteIDevIDCertErr: errors.New("delete failed"),
 	}
-	handler := NewQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
+	handler := newCertDeleteQUICHandler(mockTPM)
 	ctx := context.Background()
 
-	req := &quic.Request{
-		Opcode:  quic.OpIDevIDDeleteCert,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpIDevIDDeleteCert,
 		Payload: []byte{},
 	}
 
 	resp := handler.HandleRequest(ctx, req)
-	assert.NotEqual(t, quic.StatusOK, resp.Status)
+	assert.Equal(t, quicwire.StatusInternalError, resp.Status)
+}
+
+// TestQUICIdentityCertDelete_Unserved covers the two ways the certificate
+// deletes cannot be served: no TPM is the shared service's FailedPrecondition,
+// as on gRPC, and no shared service is Unavailable.
+func TestQUICIdentityCertDelete_Unserved(t *testing.T) {
+	noService := newTestQUICServiceHandler(logging.DefaultLogger(),
+		WithQUICTPM2Service(&mockTPM2IDevIDService{hasIDevID: true, hasIAK: true}))
+
+	for _, opcode := range []byte{quicwire.OpIDevIDDeleteCert, quicwire.OpIAKDeleteCert} {
+		resp := newCertDeleteQUICHandler(nil).HandleRequest(context.Background(), &quicwire.Request{Opcode: opcode})
+		assert.Equal(t, quicwire.StatusFailedPrecondition, resp.Status, "opcode 0x%02X without a TPM", opcode)
+
+		resp = noService.HandleRequest(context.Background(), &quicwire.Request{Opcode: opcode})
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status, "opcode 0x%02X without the IDevID service", opcode)
+	}
 }
 
 func TestQUICIAKDeleteCert_Success(t *testing.T) {
-	logger := logging.DefaultLogger()
 	mockTPM := &mockTPM2IDevIDService{hasIAK: true, hasIAKCert: true}
-	handler := NewQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
+	handler := newCertDeleteQUICHandler(mockTPM)
 	ctx := context.Background()
 
-	req := &quic.Request{
-		Opcode:  quic.OpIAKDeleteCert,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpIAKDeleteCert,
 		Payload: []byte{},
 	}
 
 	resp := handler.HandleRequest(ctx, req)
-	assert.Equal(t, quic.StatusOK, resp.Status)
+	assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 	var deleteResp IAKDeleteCertResponse
-	err := quic.DecodePayload(resp.Payload, &deleteResp)
+	err := quicwire.DecodePayload(resp.Payload, &deleteResp)
 	require.NoError(t, err)
 	assert.True(t, deleteResp.Deleted)
 }
 
 func TestQUICIAKDeleteCert_Error(t *testing.T) {
-	logger := logging.DefaultLogger()
 	mockTPM := &mockTPM2IDevIDService{
 		hasIAK:           true,
 		deleteIAKCertErr: errors.New("delete failed"),
 	}
-	handler := NewQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
+	handler := newCertDeleteQUICHandler(mockTPM)
 	ctx := context.Background()
 
-	req := &quic.Request{
-		Opcode:  quic.OpIAKDeleteCert,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpIAKDeleteCert,
 		Payload: []byte{},
 	}
 
 	resp := handler.HandleRequest(ctx, req)
-	assert.NotEqual(t, quic.StatusOK, resp.Status)
+	assert.Equal(t, quicwire.StatusInternalError, resp.Status)
 }
 
 // =============================================================================
@@ -904,26 +938,26 @@ func TestQUICIAKDeleteCert_Error(t *testing.T) {
 func TestQUICIAKGenerate_Success(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockTPM := &mockTPM2IDevIDService{}
-	handler := NewQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
+	handler := newTestQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
 	ctx := context.Background()
 
 	genReq := &IAKGenerateRequest{
 		Algorithm: "ecdsa-p256",
 		Overwrite: false,
 	}
-	payload, err := quic.EncodePayload(genReq)
+	payload, err := quicwire.EncodePayload(genReq)
 	require.NoError(t, err)
 
-	req := &quic.Request{
-		Opcode:  quic.OpIAKGenerate,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpIAKGenerate,
 		Payload: payload,
 	}
 
 	resp := handler.HandleRequest(ctx, req)
-	assert.Equal(t, quic.StatusOK, resp.Status)
+	assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 	var genResp IAKGenerateResponse
-	err = quic.DecodePayload(resp.Payload, &genResp)
+	err = quicwire.DecodePayload(resp.Payload, &genResp)
 	require.NoError(t, err)
 	assert.NotZero(t, genResp.Handle)
 }
@@ -933,16 +967,16 @@ func TestQUICIAKGenerate_EKError(t *testing.T) {
 	mockTPM := &mockTPM2IDevIDService{
 		ekAttrsErr: errors.New("EK not available"),
 	}
-	handler := NewQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
+	handler := newTestQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
 	ctx := context.Background()
 
-	req := &quic.Request{
-		Opcode:  quic.OpIAKGenerate,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpIAKGenerate,
 		Payload: []byte{},
 	}
 
 	resp := handler.HandleRequest(ctx, req)
-	assert.NotEqual(t, quic.StatusOK, resp.Status)
+	assert.NotEqual(t, quicwire.StatusOK, resp.Status)
 }
 
 func TestQUICIAKGenerate_CreateError(t *testing.T) {
@@ -950,34 +984,34 @@ func TestQUICIAKGenerate_CreateError(t *testing.T) {
 	mockTPM := &mockTPM2IDevIDService{
 		createIAKErr: errors.New("IAK creation failed"),
 	}
-	handler := NewQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
+	handler := newTestQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
 	ctx := context.Background()
 
-	req := &quic.Request{
-		Opcode:  quic.OpIAKGenerate,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpIAKGenerate,
 		Payload: []byte{},
 	}
 
 	resp := handler.HandleRequest(ctx, req)
-	assert.NotEqual(t, quic.StatusOK, resp.Status)
+	assert.NotEqual(t, quicwire.StatusOK, resp.Status)
 }
 
 func TestQUICIAKInfo_Exists(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockTPM := &mockTPM2IDevIDService{hasIAK: true}
-	handler := NewQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
+	handler := newTestQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
 	ctx := context.Background()
 
-	req := &quic.Request{
-		Opcode:  quic.OpIAKInfo,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpIAKInfo,
 		Payload: []byte{},
 	}
 
 	resp := handler.HandleRequest(ctx, req)
-	assert.Equal(t, quic.StatusOK, resp.Status)
+	assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 	var infoResp IAKInfoResponse
-	err := quic.DecodePayload(resp.Payload, &infoResp)
+	err := quicwire.DecodePayload(resp.Payload, &infoResp)
 	require.NoError(t, err)
 	assert.True(t, infoResp.Exists)
 }
@@ -985,19 +1019,19 @@ func TestQUICIAKInfo_Exists(t *testing.T) {
 func TestQUICIAKInfo_NotExists(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockTPM := &mockTPM2IDevIDService{hasIAK: false}
-	handler := NewQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
+	handler := newTestQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
 	ctx := context.Background()
 
-	req := &quic.Request{
-		Opcode:  quic.OpIAKInfo,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpIAKInfo,
 		Payload: []byte{},
 	}
 
 	resp := handler.HandleRequest(ctx, req)
-	assert.Equal(t, quic.StatusOK, resp.Status)
+	assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 	var infoResp IAKInfoResponse
-	err := quic.DecodePayload(resp.Payload, &infoResp)
+	err := quicwire.DecodePayload(resp.Payload, &infoResp)
 	require.NoError(t, err)
 	assert.False(t, infoResp.Exists)
 }
@@ -1005,68 +1039,76 @@ func TestQUICIAKInfo_NotExists(t *testing.T) {
 func TestQUICIAKInfo_WithCertificate(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockTPM := &mockTPM2IDevIDService{hasIAK: true, hasIAKCert: true}
-	handler := NewQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
+	handler := newTestQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
 	ctx := context.Background()
 
-	req := &quic.Request{
-		Opcode:  quic.OpIAKInfo,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpIAKInfo,
 		Payload: []byte{},
 	}
 
 	resp := handler.HandleRequest(ctx, req)
-	assert.Equal(t, quic.StatusOK, resp.Status)
+	assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 	var infoResp IAKInfoResponse
-	err := quic.DecodePayload(resp.Payload, &infoResp)
+	err := quicwire.DecodePayload(resp.Payload, &infoResp)
 	require.NoError(t, err)
 	assert.True(t, infoResp.Exists)
 	assert.True(t, infoResp.HasCertificate)
 	assert.NotNil(t, infoResp.Certificate)
 }
 
-func TestQUICIAKDelete_Success(t *testing.T) {
+// TestQUICIAKDelete_RefusedKeyAndCertRemain pins #304 for the IAK on QUIC.
+func TestQUICIAKDelete_RefusedKeyAndCertRemain(t *testing.T) {
 	logger := logging.DefaultLogger()
-	mockTPM := &mockTPM2IDevIDService{hasIAK: true}
-	handler := NewQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
+	mockTPM := &mockTPM2IDevIDService{hasIAK: true, hasIAKCert: true}
+	handler := newTestQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
 	ctx := context.Background()
 
-	req := &quic.Request{
-		Opcode:  quic.OpIAKDelete,
-		Payload: []byte{},
-	}
+	resp := handler.HandleRequest(ctx, &quicwire.Request{Opcode: quicwire.OpIAKDelete})
 
-	resp := handler.HandleRequest(ctx, req)
-	assert.Equal(t, quic.StatusOK, resp.Status)
+	assert.Equal(t, quicwire.StatusFailedPrecondition, resp.Status)
+	assert.Equal(t, ErrDeviceIdentityKeyNotDeletable{Key: "IAK"}.Error(), string(resp.Payload))
+	assert.True(t, mockTPM.hasIAK, "IAK must remain")
+	assert.True(t, mockTPM.hasIAKCert, "IAK certificate must remain")
 
-	var deleteResp IAKDeleteResponse
-	err := quic.DecodePayload(resp.Payload, &deleteResp)
-	require.NoError(t, err)
-	assert.True(t, deleteResp.Deleted)
+	resp = handler.HandleRequest(ctx, &quicwire.Request{Opcode: quicwire.OpIAKGetCert})
+	assert.Equal(t, quicwire.StatusOK, resp.Status)
+}
+
+// TestQUICIAKDelete_RefusedWithoutTPMService checks the refusal does not
+// depend on TPM availability, matching the gRPC service.
+func TestQUICIAKDelete_RefusedWithoutTPMService(t *testing.T) {
+	handler := newTestQUICServiceHandler(logging.DefaultLogger())
+
+	resp := handler.HandleRequest(context.Background(), &quicwire.Request{Opcode: quicwire.OpIAKDelete})
+
+	assert.Equal(t, quicwire.StatusFailedPrecondition, resp.Status)
 }
 
 func TestQUICIAKCSR_Success(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockTPM := &mockTPM2IDevIDService{hasIAK: true}
-	handler := NewQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
+	handler := newTestQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
 	ctx := context.Background()
 
 	csrReq := &IAKCSRRequest{
 		CommonName:   "test-iak",
 		Organization: "Test Org",
 	}
-	payload, err := quic.EncodePayload(csrReq)
+	payload, err := quicwire.EncodePayload(csrReq)
 	require.NoError(t, err)
 
-	req := &quic.Request{
-		Opcode:  quic.OpIAKCSR,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpIAKCSR,
 		Payload: payload,
 	}
 
 	resp := handler.HandleRequest(ctx, req)
-	assert.Equal(t, quic.StatusOK, resp.Status)
+	assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 	var csrResp IAKCSRResponse
-	err = quic.DecodePayload(resp.Payload, &csrResp)
+	err = quicwire.DecodePayload(resp.Payload, &csrResp)
 	require.NoError(t, err)
 	assert.NotEmpty(t, csrResp.CSR)
 }
@@ -1074,22 +1116,22 @@ func TestQUICIAKCSR_Success(t *testing.T) {
 func TestQUICIAKCSR_NoIAK(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockTPM := &mockTPM2IDevIDService{hasIAK: false}
-	handler := NewQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
+	handler := newTestQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
 	ctx := context.Background()
 
-	req := &quic.Request{
-		Opcode:  quic.OpIAKCSR,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpIAKCSR,
 		Payload: []byte{},
 	}
 
 	resp := handler.HandleRequest(ctx, req)
-	assert.NotEqual(t, quic.StatusOK, resp.Status)
+	assert.NotEqual(t, quicwire.StatusOK, resp.Status)
 }
 
 func TestQUICIAKInstallCert_Success(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockTPM := &mockTPM2IDevIDService{hasIAK: true}
-	handler := NewQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
+	handler := newTestQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
 	ctx := context.Background()
 
 	certPEM, err := createIDevIDTestCertPEM("Test IAK")
@@ -1098,19 +1140,19 @@ func TestQUICIAKInstallCert_Success(t *testing.T) {
 	installReq := &IAKInstallCertRequest{
 		CertificatePEM: certPEM,
 	}
-	payload, err := quic.EncodePayload(installReq)
+	payload, err := quicwire.EncodePayload(installReq)
 	require.NoError(t, err)
 
-	req := &quic.Request{
-		Opcode:  quic.OpIAKInstallCert,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpIAKInstallCert,
 		Payload: payload,
 	}
 
 	resp := handler.HandleRequest(ctx, req)
-	assert.Equal(t, quic.StatusOK, resp.Status)
+	assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 	var installResp IAKInstallCertResponse
-	err = quic.DecodePayload(resp.Payload, &installResp)
+	err = quicwire.DecodePayload(resp.Payload, &installResp)
 	require.NoError(t, err)
 	assert.True(t, installResp.Installed)
 }
@@ -1118,46 +1160,46 @@ func TestQUICIAKInstallCert_Success(t *testing.T) {
 func TestQUICIAKInstallCert_MissingPEM(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockTPM := &mockTPM2IDevIDService{hasIAK: true}
-	handler := NewQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
+	handler := newTestQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
 	ctx := context.Background()
 
 	installReq := &IAKInstallCertRequest{
 		CertificatePEM: "",
 	}
-	payload, err := quic.EncodePayload(installReq)
+	payload, err := quicwire.EncodePayload(installReq)
 	require.NoError(t, err)
 
-	req := &quic.Request{
-		Opcode:  quic.OpIAKInstallCert,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpIAKInstallCert,
 		Payload: payload,
 	}
 
 	resp := handler.HandleRequest(ctx, req)
-	assert.Equal(t, quic.StatusInvalidArgument, resp.Status)
+	assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 }
 
 func TestQUICIAKGetCert_Success(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockTPM := &mockTPM2IDevIDService{hasIAK: true, hasIAKCert: true}
-	handler := NewQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
+	handler := newTestQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
 	ctx := context.Background()
 
 	getCertReq := &IAKGetCertRequest{
 		IncludePEM: true,
 	}
-	payload, err := quic.EncodePayload(getCertReq)
+	payload, err := quicwire.EncodePayload(getCertReq)
 	require.NoError(t, err)
 
-	req := &quic.Request{
-		Opcode:  quic.OpIAKGetCert,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpIAKGetCert,
 		Payload: payload,
 	}
 
 	resp := handler.HandleRequest(ctx, req)
-	assert.Equal(t, quic.StatusOK, resp.Status)
+	assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 	var certResp IAKGetCertResponse
-	err = quic.DecodePayload(resp.Payload, &certResp)
+	err = quicwire.DecodePayload(resp.Payload, &certResp)
 	require.NoError(t, err)
 	assert.NotNil(t, certResp.Certificate)
 	assert.NotEmpty(t, certResp.Certificate.PEM)
@@ -1166,16 +1208,16 @@ func TestQUICIAKGetCert_Success(t *testing.T) {
 func TestQUICIAKGetCert_NotFound(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockTPM := &mockTPM2IDevIDService{hasIAK: true, hasIAKCert: false}
-	handler := NewQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
+	handler := newTestQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
 	ctx := context.Background()
 
-	req := &quic.Request{
-		Opcode:  quic.OpIAKGetCert,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpIAKGetCert,
 		Payload: []byte{},
 	}
 
 	resp := handler.HandleRequest(ctx, req)
-	assert.NotEqual(t, quic.StatusOK, resp.Status)
+	assert.NotEqual(t, quicwire.StatusOK, resp.Status)
 }
 
 // =============================================================================
@@ -1185,19 +1227,19 @@ func TestQUICIAKGetCert_NotFound(t *testing.T) {
 func TestQUICDeviceAttributes_Success(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockTPM := &mockTPM2IDevIDService{}
-	handler := NewQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
+	handler := newTestQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
 	ctx := context.Background()
 
-	req := &quic.Request{
-		Opcode:  quic.OpDeviceAttributes,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpDeviceAttributes,
 		Payload: []byte{},
 	}
 
 	resp := handler.HandleRequest(ctx, req)
-	assert.Equal(t, quic.StatusOK, resp.Status)
+	assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 	var attrsResp DeviceAttributesResponse
-	err := quic.DecodePayload(resp.Payload, &attrsResp)
+	err := quicwire.DecodePayload(resp.Payload, &attrsResp)
 	require.NoError(t, err)
 	assert.Equal(t, "Test Manufacturer", attrsResp.TPMManufacturer)
 	assert.NotZero(t, attrsResp.Timestamp)
@@ -1208,20 +1250,20 @@ func TestQUICDeviceAttributes_FixedPropsError(t *testing.T) {
 	mockTPM := &mockTPM2IDevIDService{
 		fixedPropsErr: errors.New("TPM error"),
 	}
-	handler := NewQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
+	handler := newTestQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
 	ctx := context.Background()
 
-	req := &quic.Request{
-		Opcode:  quic.OpDeviceAttributes,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpDeviceAttributes,
 		Payload: []byte{},
 	}
 
 	// Should still return OK, just with empty TPM info
 	resp := handler.HandleRequest(ctx, req)
-	assert.Equal(t, quic.StatusOK, resp.Status)
+	assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 	var attrsResp DeviceAttributesResponse
-	err := quic.DecodePayload(resp.Payload, &attrsResp)
+	err := quicwire.DecodePayload(resp.Payload, &attrsResp)
 	require.NoError(t, err)
 	assert.Empty(t, attrsResp.TPMManufacturer)
 }
@@ -1229,7 +1271,7 @@ func TestQUICDeviceAttributes_FixedPropsError(t *testing.T) {
 func TestQUICActivateCredential_Success(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockTPM := &mockTPM2IDevIDService{}
-	handler := NewQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
+	handler := newTestQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
 	ctx := context.Background()
 
 	// Use base64 encoded test data
@@ -1237,19 +1279,19 @@ func TestQUICActivateCredential_Success(t *testing.T) {
 		CredentialBlob: "dGVzdC1jcmVkZW50aWFsLWJsb2I=", // "test-credential-blob" base64
 		Secret:         "dGVzdC1zZWNyZXQ=",             // "test-secret" base64
 	}
-	payload, err := quic.EncodePayload(activateReq)
+	payload, err := quicwire.EncodePayload(activateReq)
 	require.NoError(t, err)
 
-	req := &quic.Request{
-		Opcode:  quic.OpActivateCredential,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpActivateCredential,
 		Payload: payload,
 	}
 
 	resp := handler.HandleRequest(ctx, req)
-	assert.Equal(t, quic.StatusOK, resp.Status)
+	assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 	var activateResp ActivateCredentialQUICResponse
-	err = quic.DecodePayload(resp.Payload, &activateResp)
+	err = quicwire.DecodePayload(resp.Payload, &activateResp)
 	require.NoError(t, err)
 	assert.NotEmpty(t, activateResp.Decrypted)
 }
@@ -1257,89 +1299,89 @@ func TestQUICActivateCredential_Success(t *testing.T) {
 func TestQUICActivateCredential_MissingCredentialBlob(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockTPM := &mockTPM2IDevIDService{}
-	handler := NewQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
+	handler := newTestQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
 	ctx := context.Background()
 
 	activateReq := &ActivateCredentialQUICRequest{
 		CredentialBlob: "",
 		Secret:         "dGVzdC1zZWNyZXQ=",
 	}
-	payload, err := quic.EncodePayload(activateReq)
+	payload, err := quicwire.EncodePayload(activateReq)
 	require.NoError(t, err)
 
-	req := &quic.Request{
-		Opcode:  quic.OpActivateCredential,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpActivateCredential,
 		Payload: payload,
 	}
 
 	resp := handler.HandleRequest(ctx, req)
-	assert.Equal(t, quic.StatusInvalidArgument, resp.Status)
+	assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 }
 
 func TestQUICActivateCredential_MissingSecret(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockTPM := &mockTPM2IDevIDService{}
-	handler := NewQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
+	handler := newTestQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
 	ctx := context.Background()
 
 	activateReq := &ActivateCredentialQUICRequest{
 		CredentialBlob: "dGVzdC1jcmVkZW50aWFsLWJsb2I=",
 		Secret:         "",
 	}
-	payload, err := quic.EncodePayload(activateReq)
+	payload, err := quicwire.EncodePayload(activateReq)
 	require.NoError(t, err)
 
-	req := &quic.Request{
-		Opcode:  quic.OpActivateCredential,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpActivateCredential,
 		Payload: payload,
 	}
 
 	resp := handler.HandleRequest(ctx, req)
-	assert.Equal(t, quic.StatusInvalidArgument, resp.Status)
+	assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 }
 
 func TestQUICActivateCredential_InvalidBase64Credential(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockTPM := &mockTPM2IDevIDService{}
-	handler := NewQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
+	handler := newTestQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
 	ctx := context.Background()
 
 	activateReq := &ActivateCredentialQUICRequest{
 		CredentialBlob: "not-valid-base64!!!",
 		Secret:         "dGVzdC1zZWNyZXQ=",
 	}
-	payload, err := quic.EncodePayload(activateReq)
+	payload, err := quicwire.EncodePayload(activateReq)
 	require.NoError(t, err)
 
-	req := &quic.Request{
-		Opcode:  quic.OpActivateCredential,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpActivateCredential,
 		Payload: payload,
 	}
 
 	resp := handler.HandleRequest(ctx, req)
-	assert.Equal(t, quic.StatusInvalidArgument, resp.Status)
+	assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 }
 
 func TestQUICActivateCredential_InvalidBase64Secret(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockTPM := &mockTPM2IDevIDService{}
-	handler := NewQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
+	handler := newTestQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
 	ctx := context.Background()
 
 	activateReq := &ActivateCredentialQUICRequest{
 		CredentialBlob: "dGVzdC1jcmVkZW50aWFsLWJsb2I=",
 		Secret:         "not-valid-base64!!!",
 	}
-	payload, err := quic.EncodePayload(activateReq)
+	payload, err := quicwire.EncodePayload(activateReq)
 	require.NoError(t, err)
 
-	req := &quic.Request{
-		Opcode:  quic.OpActivateCredential,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpActivateCredential,
 		Payload: payload,
 	}
 
 	resp := handler.HandleRequest(ctx, req)
-	assert.Equal(t, quic.StatusInvalidArgument, resp.Status)
+	assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 }
 
 func TestQUICActivateCredential_TPMError(t *testing.T) {
@@ -1347,23 +1389,23 @@ func TestQUICActivateCredential_TPMError(t *testing.T) {
 	mockTPM := &mockTPM2IDevIDService{
 		activateCredentialErr: errors.New("TPM activation failed"),
 	}
-	handler := NewQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
+	handler := newTestQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
 	ctx := context.Background()
 
 	activateReq := &ActivateCredentialQUICRequest{
 		CredentialBlob: "dGVzdC1jcmVkZW50aWFsLWJsb2I=",
 		Secret:         "dGVzdC1zZWNyZXQ=",
 	}
-	payload, err := quic.EncodePayload(activateReq)
+	payload, err := quicwire.EncodePayload(activateReq)
 	require.NoError(t, err)
 
-	req := &quic.Request{
-		Opcode:  quic.OpActivateCredential,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpActivateCredential,
 		Payload: payload,
 	}
 
 	resp := handler.HandleRequest(ctx, req)
-	assert.NotEqual(t, quic.StatusOK, resp.Status)
+	assert.NotEqual(t, quicwire.StatusOK, resp.Status)
 }
 
 // =============================================================================
@@ -1372,25 +1414,25 @@ func TestQUICActivateCredential_TPMError(t *testing.T) {
 
 func TestMapTPM2Error(t *testing.T) {
 	logger := logging.DefaultLogger()
-	handler := NewQUICServiceHandler(logger)
+	handler := newTestQUICServiceHandler(logger)
 
 	testCases := []struct {
 		name           string
 		errorMsg       string
 		expectedStatus byte
 	}{
-		{"not found error", "key not found", quic.StatusNotFound},
-		{"does not exist error", "key does not exist", quic.StatusNotFound},
-		{"already exists error", "key already exists", quic.StatusAlreadyExists},
-		{"invalid error", "invalid key size", quic.StatusInvalidArgument},
-		{"required error", "parameter required", quic.StatusInvalidArgument},
-		{"must be error", "value must be positive", quic.StatusInvalidArgument},
-		{"cannot be error", "value cannot be empty", quic.StatusInvalidArgument},
-		{"mismatch error", "key mismatch", quic.StatusInvalidArgument},
-		{"not available error", "TPM not available", quic.StatusUnavailable},
-		{"unavailable error", "service unavailable", quic.StatusUnavailable},
-		{"not configured error", "TPM not configured", quic.StatusUnavailable},
-		{"generic error", "some random error", quic.StatusInternalError},
+		{"not found error", "key not found", quicwire.StatusNotFound},
+		{"does not exist error", "key does not exist", quicwire.StatusNotFound},
+		{"already exists error", "key already exists", quicwire.StatusAlreadyExists},
+		{"invalid error", "invalid key size", quicwire.StatusInvalidArgument},
+		{"required error", "parameter required", quicwire.StatusInvalidArgument},
+		{"must be error", "value must be positive", quicwire.StatusInvalidArgument},
+		{"cannot be error", "value cannot be empty", quicwire.StatusInvalidArgument},
+		{"mismatch error", "key mismatch", quicwire.StatusInvalidArgument},
+		{"not available error", "TPM not available", quicwire.StatusUnavailable},
+		{"unavailable error", "service unavailable", quicwire.StatusUnavailable},
+		{"not configured error", "TPM not configured", quicwire.StatusUnavailable},
+		{"generic error", "some random error", quicwire.StatusInternalError},
 	}
 
 	for _, tc := range testCases {
@@ -1403,7 +1445,7 @@ func TestMapTPM2Error(t *testing.T) {
 
 func TestMapTPM2Error_NilError(t *testing.T) {
 	logger := logging.DefaultLogger()
-	handler := NewQUICServiceHandler(logger)
+	handler := newTestQUICServiceHandler(logger)
 
 	resp := handler.mapTPM2Error(nil)
 	assert.Nil(t, resp)

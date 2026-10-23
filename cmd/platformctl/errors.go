@@ -133,3 +133,23 @@ type InvalidEKAlgorithmError struct {
 func (e *InvalidEKAlgorithmError) Error() string {
 	return "platformctl: invalid EK algorithm: " + e.Input
 }
+
+// ServiceUnavailableError is returned when the connected daemon does not
+// serve the service a binding method needs.
+type ServiceUnavailableError struct {
+	Service string
+}
+
+// Error returns a human-readable description.
+func (e *ServiceUnavailableError) Error() string {
+	return "platformctl: the " + e.Service + " service is not available on this connection"
+}
+
+// NoCertificateIssuedError is returned when the CA answers a signing
+// request without a certificate.
+type NoCertificateIssuedError struct{}
+
+// Error returns a human-readable description.
+func (e *NoCertificateIssuedError) Error() string {
+	return "platformctl: the CA returned no certificate"
+}

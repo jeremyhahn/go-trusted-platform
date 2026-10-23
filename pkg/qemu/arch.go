@@ -47,9 +47,9 @@ type archProfile struct {
 	tpmDevice string
 	// nvram reports whether the firmware keeps its variables in a pflash
 	// NVRAM file the VM must initialise from a template.
-	nvram bool
+	nvram func(c *Config) bool
 	// machine returns the -machine value.
-	machine func(c *Config) string
+	machine func(c *Config, kvm bool) string
 	// cpu returns the -cpu value.
 	cpu func(c *Config, kvm bool) string
 	// disk returns the root disk's drive and device arguments.
@@ -69,9 +69,9 @@ var archProfiles = map[Arch]archProfile{
 		kvmHostArch: "amd64",
 		diskFormat:  DiskFormatQCOW2,
 		tpmDevice:   "tpm-tis",
-		nvram:       true,
+		nvram:       func(*Config) bool { return true },
 		machine:     x86Machine,
-		cpu:         func(*Config, bool) string { return "host" },
+		cpu:         x86CPU,
 		disk:        x86Disk,
 		boot:        x86Boot,
 		firmware:    x86Firmware,
@@ -81,8 +81,8 @@ var archProfiles = map[Arch]archProfile{
 		kvmHostArch: "arm64",
 		diskFormat:  DiskFormatRaw,
 		tpmDevice:   "tpm-tis-device",
-		nvram:       false,
-		machine:     func(*Config) string { return "virt,gic-version=3" },
+		nvram:       aarch64UEFI,
+		machine:     aarch64Machine,
 		cpu:         aarch64CPU,
 		disk:        aarch64Disk,
 		boot:        aarch64Boot,
@@ -92,10 +92,16 @@ var archProfiles = map[Arch]archProfile{
 
 // arch returns the configured architecture, x86_64 when unset.
 func (c *Config) arch() Arch {
-	if c.Arch == "" {
+	return c.Arch.OrDefault()
+}
+
+// OrDefault returns a, or x86_64 when a is empty: the guest a Config without
+// an Arch builds.
+func (a Arch) OrDefault() Arch {
+	if a == "" {
 		return ArchX86_64
 	}
-	return c.Arch
+	return a
 }
 
 // profile resolves the configured architecture's profile.
@@ -115,11 +121,51 @@ func (c *Config) qemuBinary(p archProfile) string {
 	return p.binary
 }
 
-// kvm reports whether the guest runs under KVM: the caller asked for it
-// and the host can provide it for this guest architecture. Emulating a
-// foreign architecture always runs TCG.
-func (c *Config) kvm(p archProfile) bool {
-	return c.EnableKVM && runtime.GOARCH == p.kvmHostArch
+// kvm reports whether the guest runs under KVM: the caller asked for it,
+// the host can provide it for this guest architecture, and the KVM device
+// opens read-write. Emulating a foreign architecture always runs TCG. When
+// KVM was asked for but the device is unusable, the guest runs TCG and the
+// error says why.
+func (c *Config) kvm(p archProfile) (bool, error) {
+	if !c.EnableKVM || c.hostArch() != p.kvmHostArch {
+		return false, nil
+	}
+	probe := c.KVMProbe
+	if probe == nil {
+		probe = probeKVMDevice
+	}
+	if err := probe(); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// kvmDevice is the KVM device QEMU opens for -enable-kvm.
+const kvmDevice = "/dev/kvm"
+
+// probeKVMDevice opens the KVM device read-write, as QEMU does, and closes
+// it again. A host without the device, or a user without access to it,
+// makes QEMU exit at once with "failed to initialize kvm".
+func probeKVMDevice() error {
+	return probeDeviceRW(kvmDevice)
+}
+
+// probeDeviceRW opens path read-write and closes it again.
+func probeDeviceRW(path string) error {
+	f, err := os.OpenFile(path, os.O_RDWR, 0)
+	if err != nil {
+		return &SentinelCauseError{Sentinel: ErrKVMUnavailable, Cause: err}
+	}
+	return f.Close()
+}
+
+// hostArch is the GOARCH QEMU runs on: Config.HostArch, else the running
+// binary's.
+func (c *Config) hostArch() string {
+	if c.HostArch != "" {
+		return c.HostArch
+	}
+	return runtime.GOARCH
 }
 
 // diskFormat returns the configured disk format or the profile's default.
@@ -141,11 +187,21 @@ func (c *Config) tpmDevice(p archProfile) string {
 // x86Machine selects q35, with SMM only when Secure Boot needs it: SMM is
 // required for a Secure Boot OVMF but can trip KVM emulation
 // (cpu_asidx_from_attrs assertion failures) when it is not.
-func x86Machine(c *Config) string {
+func x86Machine(c *Config, _ bool) string {
 	if c.SecureBoot {
 		return "q35,smm=on"
 	}
 	return "q35"
+}
+
+// x86CPU passes the host CPU through under KVM. TCG cannot take "host"
+// (QEMU: "CPU model 'host' requires KVM or HVF"), so it emulates "max",
+// every feature TCG supports.
+func x86CPU(_ *Config, kvm bool) string {
+	if kvm {
+		return "host"
+	}
+	return "max"
 }
 
 // x86Disk attaches the disk through AHCI, not virtio: Ubuntu's OVMF has
@@ -201,10 +257,7 @@ func x86Display(c *Config) []string {
 // install with a secboot boot leaves NVRAM state that crashes QEMU. With
 // Secure Boot the flash is marked secure so SMM protects it.
 func x86Firmware(c *Config) ([]string, error) {
-	args := []string{
-		"-drive", fmt.Sprintf("if=pflash,unit=0,format=raw,readonly=on,file=%s", c.GetOVMFCodePath()),
-		"-drive", fmt.Sprintf("if=pflash,unit=1,format=raw,file=%s", c.GetNVRAMPath()),
-	}
+	args := pflashArgs(c)
 	if c.SecureBoot {
 		args = append(args, "-global", "driver=cfi.pflash01,property=secure,value=on")
 	}
@@ -213,6 +266,20 @@ func x86Firmware(c *Config) ([]string, error) {
 
 // aarch64CPU is the host CPU under KVM and a Cortex-A72 (the Raspberry Pi
 // 4's core) under TCG.
+// aarch64Machine returns the virt machine with a GIC the accelerator can
+// provide. Under KVM the interrupt controller is the host's own, and a
+// Raspberry Pi 4's GIC-400 is GICv2 only, so a fixed gic-version=3 stops
+// QEMU before the guest boots; gic-version=host takes whatever the host
+// provides (QEMU docs/system/arm/virt.rst, "gic-version": "host: Use the
+// same GIC version the host provides, when using KVM"). TCG emulates the
+// GIC and cannot take "host", so it keeps a fixed GICv3.
+func aarch64Machine(_ *Config, kvm bool) string {
+	if kvm {
+		return "virt,gic-version=host"
+	}
+	return "virt,gic-version=3"
+}
+
 func aarch64CPU(_ *Config, kvm bool) string {
 	if kvm {
 		return "host"
@@ -244,10 +311,31 @@ func aarch64Boot(_ *Config, mode BootMode) ([]string, error) {
 	return nil, ErrInvalidMode
 }
 
-// aarch64Firmware is U-Boot as -bios. U-Boot keeps its EFI variables in
-// ubootefi.var on the ESP (EFI_VARIABLE_FILE_STORE), so there is no NVRAM
-// file to initialise.
+// pflashArgs are the two UEFI pflash drives: the code read-only (the Secure
+// Boot build when Secure Boot is on) and the per-instance NVRAM copied from
+// the vars template.
+func pflashArgs(c *Config) []string {
+	return []string{
+		"-drive", fmt.Sprintf("if=pflash,unit=0,format=raw,readonly=on,file=%s", c.GetOVMFCodePath()),
+		"-drive", fmt.Sprintf("if=pflash,unit=1,format=raw,file=%s", c.GetNVRAMPath()),
+	}
+}
+
+// aarch64UEFI reports whether an aarch64 guest boots UEFI (AAVMF) from
+// pflash instead of U-Boot as -bios: the firmware code path is set and no
+// -bios image is.
+func aarch64UEFI(c *Config) bool {
+	return c.Firmware == "" && c.OVMFCode != ""
+}
+
+// aarch64Firmware is AAVMF in two pflash drives when aarch64UEFI holds,
+// otherwise U-Boot as -bios. The virt machine has no SMM, so the flash is
+// never marked secure. U-Boot keeps its EFI variables in ubootefi.var on
+// the ESP (EFI_VARIABLE_FILE_STORE), so it has no NVRAM file to initialise.
 func aarch64Firmware(c *Config) ([]string, error) {
+	if aarch64UEFI(c) {
+		return pflashArgs(c), nil
+	}
 	if c.Firmware == "" {
 		return nil, &SentinelCauseError{Sentinel: ErrFirmwareMissing, Cause: &MessageError{Msg: "Config.Firmware (u-boot.bin) is required for aarch64"}}
 	}

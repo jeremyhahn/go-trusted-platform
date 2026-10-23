@@ -33,7 +33,6 @@ import (
 
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/service"
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/storage/quicbaas"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -43,10 +42,6 @@ import (
 // =============================================================================
 
 const (
-	// EnvIntegrationTest is the environment variable that must be set to run
-	// integration tests. Set INTEGRATION_TEST=1 to enable.
-	EnvIntegrationTest = "INTEGRATION_TEST"
-
 	// EnvQuicBaaSEndpoint is the environment variable for QuicBaaS service endpoint.
 	// Default: 127.0.0.1:63000
 	EnvQuicBaaSEndpoint = "QUICBAAS_ENDPOINT"
@@ -63,7 +58,7 @@ const (
 	// Default: 127.0.0.1:8443
 	EnvPlatformdGRPCEndpoint = "PLATFORMD_GRPC_ENDPOINT"
 
-	// EnvPlatformAPIEndpoint is the environment variable for platform-api REST endpoint.
+	// EnvPlatformAPIEndpoint is the environment variable for the platformd REST endpoint.
 	// Default: 127.0.0.1:8080
 	EnvPlatformAPIEndpoint = "PLATFORM_API_ENDPOINT"
 )
@@ -85,59 +80,9 @@ const (
 	// DefaultPlatformdGRPCEndpoint is the default platformd gRPC endpoint.
 	DefaultPlatformdGRPCEndpoint = "127.0.0.1:10443"
 
-	// DefaultPlatformAPIEndpoint is the default platform-api REST endpoint.
+	// DefaultPlatformAPIEndpoint is the default platformd REST endpoint.
 	DefaultPlatformAPIEndpoint = "127.0.0.1:8443"
 )
-
-// =============================================================================
-// Skip Helpers
-// =============================================================================
-
-// SkipIfNotIntegration skips the test if the INTEGRATION_TEST environment
-// variable is not set. This ensures integration tests only run when explicitly
-// requested, preventing accidental execution during normal unit testing.
-// This is an exported version for use by other test packages.
-func SkipIfNotIntegration(t *testing.T) {
-	t.Helper()
-	if os.Getenv(EnvIntegrationTest) == "" {
-		t.Skip("Skipping integration test. Set INTEGRATION_TEST=1 to run.")
-	}
-}
-
-// SkipIfKMSUnavailable skips the test if the KMS service is not responding
-// to health checks. This prevents tests from failing due to infrastructure
-// issues rather than actual test failures.
-func SkipIfKMSUnavailable(t *testing.T, client *quicbaas.Client, ctx context.Context) {
-	t.Helper()
-
-	if client == nil || !client.IsStarted() {
-		t.Skip("Skipping test: QuicBaaS client not started")
-		return
-	}
-
-	dbSvc := client.Service()
-	if dbSvc == nil {
-		t.Skip("Skipping test: QuicBaaS service not available")
-		return
-	}
-
-	kms := dbSvc.KMS()
-	if kms == nil {
-		t.Skip("Skipping test: KMS service not available")
-		return
-	}
-
-	// Perform a backend status check to verify KMS is responding
-	status, err := kms.BackendStatus(ctx)
-	if err != nil {
-		t.Skipf("Skipping test: KMS backend not responding: %v", err)
-		return
-	}
-
-	if status == nil || status.Status != "healthy" {
-		t.Skipf("Skipping test: KMS backend not healthy: %v", status)
-	}
-}
 
 // =============================================================================
 // Key Attribute Helpers
@@ -336,6 +281,34 @@ func GenerateUniqueKeyName(prefix string) string {
 	return fmt.Sprintf("%s-%s-%09d", prefix, now.Format("20060102150405"), now.Nanosecond())
 }
 
+// keyName is the name a GenerateKey request carries. The request's one
+// name field is the key ID on every transport (docs/kms/api.md §2), so it
+// is the test's KeyID, never its display Name; an empty KeyID still
+// reaches the server's required-name check.
+func keyName(opts KeyGenerateOptions) string {
+	return opts.KeyID
+}
+
+// applyKeyDisplay sets the test's display Name and Description as key
+// metadata after generation, because the generate request carries only
+// the key ID, and records them on result. A test that sets neither makes
+// no call.
+func applyKeyDisplay(ctx context.Context, cmd KMSCommands, opts KeyGenerateOptions, result *KeyGenerateResult) error {
+	if opts.Name == "" && opts.Description == "" {
+		return nil
+	}
+	updated, err := cmd.KeyMetadataUpdate(ctx, result.KeyID, KeyMetadataUpdateOptions{
+		Name:        opts.Name,
+		Description: opts.Description,
+	})
+	if err != nil {
+		return err
+	}
+	result.Name = updated.Name
+	result.Description = opts.Description
+	return nil
+}
+
 // GenerateTestPlaintext generates deterministic test data of the specified size.
 // The data is derived from a hash of the size, making it reproducible across
 // test runs for the same size parameter.
@@ -424,12 +397,12 @@ func GetGRPCEndpoints() map[string]string {
 	}
 }
 
-// GetRESTEndpoints returns all REST endpoints (platform-api and QuicBaaS REST).
+// GetRESTEndpoints returns all REST endpoints (platformd and QuicBaaS REST).
 func GetRESTEndpoints() map[string]string {
 	endpoints := GetServiceEndpoints()
 	return map[string]string{
-		"platform-api": endpoints.PlatformAPI,
-		"quicbaas":     endpoints.QuicBaaSREST,
+		"platformd": endpoints.PlatformAPI,
+		"quicbaas":  endpoints.QuicBaaSREST,
 	}
 }
 

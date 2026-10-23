@@ -1,17 +1,18 @@
 # Bootstrap — CLI
 
-> **Status: NORMATIVE** · Scope: `platformctl bootstrap`, `platformctl firstboot`, `platform-initrd` · Last verified: 2026-08-18
+> **Status: NORMATIVE** · Scope: `platformctl init`, `platformctl bootstrap`, `platformctl firstboot`, `platform-initrd` · Last verified: 2026-10-19
 > Conflicts with this document are defects. Fix them here first.
 > The feature folder is: [architecture.md](architecture.md) · [engineering.md](engineering.md) · [cli.md](cli.md) · [api.md](api.md) · [user.md](user.md).
 >
 > Every verb and every flag below was read out of `pkg/cli/commands/bootstrap/`,
-> `pkg/cli/commands/firstboot/` and `pkg/boot/commands/` on 2026-08-18.
+> `pkg/cli/commands/firstboot/` and `pkg/boot/commands/` on 2026-10-19.
 
 ---
 
 ## 1. Command groups
 
 ```
+platformctl init                 Initialize a fresh platform (barrier, CA, admin bundle)
 platformctl bootstrap            Platform bootstrap operations
 platformctl bootstrap secrets    Manage bootstrap secrets
 platformctl firstboot            First-boot TPM PCR sealing operations
@@ -19,14 +20,14 @@ platform-initrd boot             Unlock the encrypted root filesystem
 platform-initrd recovery         Recovery mode with re-seal
 ```
 
-`platformctl bootstrap` carries **three unrelated families** under one noun, and
+`platformctl bootstrap` carries **five unrelated families** under one noun, and
 mixing them up is the commonest mistake here:
 
 | Family | Verbs | What it talks to |
 |---|---|---|
 | Day-zero fleet orchestration | `run`, `discover`, `deploy`, `status`, `teardown` | BMCs, the deployer host, the control plane |
 | Config preview | `resolve` | Nothing: the config file and its templates only |
-| Boot-server probing | `probe rpi` | The boot server on a segment, spoken to as a Raspberry Pi's bootloader would |
+| Boot-server probing | `probe rpi`, `probe rpi-http` | The boot server on a segment, spoken to as a Raspberry Pi's bootloader would: DHCP and TFTP, or signed HTTP boot |
 | Trust bootstrap | `trust`, plus the canonical modes `auto`, `dane`, `noise`, `spki`, `direct` | A platform server's CA bundle endpoint |
 | Secret migration | `secrets migrate`, `secrets verify`, `secrets status`, `secrets resolve` | A local configuration file and the KMS |
 
@@ -36,7 +37,7 @@ node fails to boot.
 
 ### Global flags
 
-`platformctl` persistent flags (`pkg/cli/commands/root.go:126`), precedence
+`platformctl` persistent flags (`pkg/cli/commands/root.go:134`), precedence
 **flag > environment > config file > built-in default**:
 
 | Flag | Short | Default | Environment | Meaning |
@@ -61,7 +62,87 @@ thing — the configuration file being rewritten.
 the control plane over plain HTTPS. `--transport` therefore has no effect on
 them. `bootstrap secrets` needs a local KMS. `bootstrap trust` needs only the
 target server's bundle endpoint. `platformctl firstboot` runs on the node itself
-with no server at all.
+with no server at all. `platformctl init` talks to the daemon, but only to its
+pre-unseal mux — see §1a.
+
+---
+
+## 1a. `platformctl init`
+
+Initialize a fresh platform in one call: barrier, CA-issued admin client
+certificate, SPKI pin. It runs **before** the barrier is unsealed, when none of
+the six transports is bound, so it does not use `--transport`, `--server` or a
+context's connection settings. It sends `POST /init` to the barrier gate
+([`../barrier/api.md`](../barrier/api.md#post-init)) through
+`sdk/go/services/gate`. The client accepts only a Unix socket or a literal
+loopback address, uses no proxy, and **never follows a redirect**: the request
+carries the PINs, so a `3xx` is returned as `ErrInitRejected` with its status
+code, and nothing is resent to the `Location` it names.
+
+| Flag | Default | Environment | Meaning |
+|---|---|---|---|
+| `--so-pin` | | `PLATFORMCTL_SO_PIN` | SO PIN; required unless `--barrier-strategy=none` |
+| `--user-pin` | | `PLATFORMCTL_USER_PIN` | User PIN; required unless `--barrier-strategy=none`. It is the barrier secret, so platformd refuses an init without one with `400` before anything is minted |
+| `--barrier-strategy` | `software` | `PLATFORMCTL_BARRIER_STRATEGY` | `software`, `shamir`, `pkcs11`, `tpm2`, `awskms`, `gcpkms`, `azurekv`, `vault`, `none`. Sent as `credential_seal_strategy`, the strategy the ceremony seals credentials with. It does **not** choose the barrier's strategy: platformd initializes the barrier with its configured `barrier.seal_strategy` ([`../barrier/api.md`](../barrier/api.md#post-init)). With `shamir` the `--shares` / `--threshold` quorum is sent too, and a platformd configured for `shamir` splits the barrier with it |
+| `--shares`, `--threshold` | | `PLATFORMCTL_SHARES`, `PLATFORMCTL_THRESHOLD` | Shamir quorum; required for, and only accepted with, `shamir` |
+| `--officer` | | | `username=path/to/csr.pem`, repeated once per share; required for, and only accepted with, `shamir`. Each officer's CSR file is read before `/init` is sent and sent as `officers` ([`../barrier/api.md`](../barrier/api.md#post-init)); the gate refuses a CSR that does not parse or is not self-signed. A count other than `--shares`, a malformed value, a repeated username or an unreadable file fails the command (`ErrOfficerCount`, `ErrInvalidOfficerFlag`, `ErrOfficerCSRUnreadable`) and nothing is sent |
+| `--hostname` | | `PLATFORMCTL_HOSTNAME` | CN for the issued certificate |
+| `--sans` | | `PLATFORMCTL_SANS` | Comma-separated extra DNS / IP SANs |
+| `--admin-bundle` | `-` (stdout) | `PLATFORMCTL_ADMIN_BUNDLE` | Where the admin cert + key + SPKI pin go |
+| `--force` | `false` | | Replace an existing `--admin-bundle` file |
+| `--gate-endpoint` | local context socket, else `unix:///run/platformd.sock` | `PLATFORMCTL_GATE_ENDPOINT` | `unix://<socket>`, or with `--loopback-http` a literal loopback `ip:port` (`127.0.0.1:9446`, `[::1]:9446`); anything else, including the name `localhost`, is refused, because the request carries both PINs |
+| `--loopback-http` | `false` | `PLATFORMCTL_LOOPBACK_HTTP` | Send `/init` over loopback HTTP: to `--gate-endpoint` if it names an `ip:port`, else `127.0.0.1:9446`. **A lost response cannot be replayed over HTTP** (see below), so the one-shot admin bundle is lost with it. Combined with a `unix://` endpoint it is refused |
+
+**The admin bundle is returned once.** The daemon does not keep the key, so:
+
+- A file `--admin-bundle` is created (mode `0600`, as a temporary file beside the
+  target) **before** `/init` is sent. A path that is a directory (even with
+  `--force`), an existing file without `--force`, or a parent directory that
+  cannot be written fails the command and nothing is sent.
+- After a successful `/init` the bundle is renamed into place, and the command
+  prints only a summary: `ceremony_id`, `state`, `initialized_at`, `spki_pin`,
+  `admin_bundle` (the path). The key is never printed.
+- If the bundle was written but the rename fails, the temporary file is kept
+  and the command fails with an error naming it. Move it to the target by hand:
+  the platform will not issue the bundle again.
+- With `--admin-bundle -`, the default, stdout carries **only** the bundle, so it
+  can be redirected to a file, and the summary goes to stderr. The private key
+  is written to stdout exactly once, and whatever captures that stdout (a
+  terminal's scrollback, a CI job log, a `tee`) now holds the platform's root
+  admin key. Unless stdout is redirected straight to a file you protect, pass a
+  path instead.
+- If the response is lost, repeat the identical command as the same user: while
+  the daemon is still pre-unseal it replays the same bundle, but only over the
+  Unix socket ([`../barrier/api.md`](../barrier/api.md#retrying-init)). That is why init
+  uses a Unix socket unless you pass `--loopback-http`: an init sent to the
+  loopback HTTP endpoint is never replayed, and a loopback `--gate-endpoint`
+  without the flag is refused before anything is sent.
+- Attempts are rate limited (5 back to back, then one every 12 seconds); past
+  that the command fails with HTTP `429`.
+
+**There is no second admin credential.** `platformd` keeps its server key in
+the CA keystore and writes only the public CA bundle to `<platform-dir>/tls/`
+([`../daemon/architecture.md`](../daemon/architecture.md)); it mints no admin
+key. Earlier builds also wrote `client-bundle.pem`, a `CN=admin` certificate
+and its private key in clear, to `/tmp/platformd-integration/tls/` on every
+host with a TLS transport enabled. On a host that ran one of them, delete that
+file and revoke its certificate (`platformctl ca revoke <serial>`): it carries the same authority as the `/init`
+bundle and stays valid for 365 days from issue.
+
+The devcontainer integration harness
+(`build/docker/devcontainer/run-integration-tests.sh`) runs `platformd` without
+a barrier, so there is no `/init` to take a bundle from. Its `platformd` is
+built with the `integration` build tag, which compiles in
+`pkg/daemon/commands/harness_admin_bundle_integration.go`: that binary, and
+only that binary, writes a test `client-bundle.pem` beside the CA bundle.
+
+```bash
+platformctl init --so-pin "$SO_PIN" --user-pin "$USER_PIN" \
+  --hostname cp-01.example.com --admin-bundle /root/admin.pem -o json
+```
+
+`platformctl ceremony init` was removed in favour of this command
+([`docs/cli/ceremony.md`](../cli/ceremony.md)).
 
 ---
 
@@ -90,8 +171,11 @@ faults on record …`) — fix or replace the part before provisioning, because 
 failed DIMM halts POST and the install never starts.
 
 **`--skip-virtual-media-mount` is an escape hatch, not a convenience.** It skips
-only the mount step; boot-device selection, power reset, health wait and the
-best-effort unmount still run. Use it on boards whose vendor mount API is behind
+the ISO staging on the deployer (so `iso_path` is not required), the mount, the
+re-mount on each retry and the deferred unmount (`bootNodeVirtualMedia` in
+`pkg/bootstrap/virtual_media.go`). Per-MAC config staging, the one-shot CDROM
+boot device, the power cycle, the install-log wait with its retries, and the
+post-install unmount, disk boot and health wait still run. Use it on boards whose vendor mount API is behind
 a licence the platform's BMC backends cannot drive, after inserting the ISO with
 vendor tooling or the remote console.
 
@@ -174,8 +258,8 @@ authenticated `admin` (see [`docs/auth/architecture.md`](../auth/architecture.md
 §6c); this command holds no credential.
 
 **The probe tries several ports**, because the webservice port depends on the
-node's role: `8443` for control-plane and single-node, `9443` for compute, `443`
-for gateway. They are tried in that order and the first port that *answers*
+node's role: `platform.control_plane_port` (default `8443`) for control-plane and
+single-node, `9443` for compute, `443` for gateway. They are tried in that order and the first port that *answers*
 decides the verdict — an unreachable port says nothing about the others, but a
 port that replies is that node's answer and ends the search.
 
@@ -210,6 +294,11 @@ control-plane node passes the health gate. When the gate fails, teardown is
 skipped deliberately — the container may still be the only DHCP/DNS provider on
 the provisioning network. This verb is how you tear down afterwards, once you
 have confirmed the platform's own services took over.
+
+With `deployer.boot_node: true`, `bootstrap run` never tears the container down,
+and this verb is the only thing that does. It removes the container and
+`data_dir` as in default mode. The firmware cache (`deployer.firmware_cache_dir`)
+is left on the host.
 
 ---
 
@@ -261,6 +350,43 @@ port 68 is tolerated (`SO_REUSEADDR`), but a DHCP client that answers the
 probe's own DISCOVER on that host is not what is being measured; run it from
 a host that is not itself a DHCP client on that interface.
 
+## 6a-1. `platformctl bootstrap probe rpi-http`
+
+The other first stage: boot over HTTP with `SIGNED_BOOT`, the way a Raspberry
+Pi's bootloader does (`pkg/rpinetboot` `HTTPBoot`). It fetches
+`http://<http-host>/<http-path>/boot.img` and `boot.sig`, requires the public key
+the EEPROM carries to hash to the customer key hash in OTP, verifies `boot.sig`
+over `boot.img` with it (RSA-2048 PKCS#1 v1.5 over SHA-256, in the
+`rpi-eeprom-digest` format), and mounts `boot.img` as the FAT ramdisk. It fails
+on whatever the bootloader would refuse: a tampered image
+(`DigestMismatchError`), a signature by another key (`SignatureError`), an OTP
+hash of another key (`KeyHashMismatchError`), a malformed `boot.sig` (including a
+`target-soc` other than 2711 or 2712, `TargetSoCError`), an image
+that is not a FAT ramdisk. It needs no privilege and no DHCP: it is an HTTP
+client.
+
+| Flag | Type | Default | Meaning |
+|---|---|---|---|
+| `--http-host` | string | `""` | The EEPROM's `HTTP_HOST`: the boot server's address, with its port unless 80 (**required**) |
+| `--http-path` | string | `data/http-boot` | The EEPROM's `HTTP_PATH`; the container serves the data directory under `/data/` |
+| `--pubkey` | string | `""` | The public key the EEPROM carries: a `pubkey.bin` file (**required**) |
+| `--otp-key-hash` | string | `""` | The customer key hash in OTP: 64 hex digits (**required**) |
+| `--timeout` | duration | `0` | Overall deadline; none otherwise |
+
+```bash
+platformctl bootstrap probe rpi-http --http-host 10.99.99.1:8080 \
+    --pubkey bin/netboot-media/http-boot/pubkey.bin --otp-key-hash 3f9a…c1
+platformctl bootstrap probe rpi-http --http-host 10.99.99.1:8080 --pubkey pubkey.bin --otp-key-hash 3f9a…c1 -o json
+```
+
+Give `--pubkey` and `--otp-key-hash` from the device's provisioning record,
+**not** from the server being probed: a probe that takes both from the server it
+checks proves only that the server agrees with itself. The report names the URL,
+`boot.img`'s size and SHA-256, `boot.sig`'s `ts` and `target-soc`, and the files
+in the ramdisk. The build that makes these files, and the runbook for the
+EEPROM and the OTP burn (**irreversible**), are in
+[docs/factory-image/](../factory-image/user.md#provision-a-fleet-signed-http-boot).
+
 ## 6b. `platformctl bootstrap resolve`
 
 Print or write each node's resolved platform config: its role template merged
@@ -275,7 +401,7 @@ therefore absent; `run --dry-run` shows them.
 | Flag | Type | Default | Meaning |
 |---|---|---|---|
 | `--config` | string | `""` | Path to `bootstrap.yaml` (**required**) |
-| `--node` | string, repeatable | all nodes | Resolve only these hostnames; an unknown one fails with `ErrUnknownNode` |
+| `--node` | string, repeatable | all nodes | Resolve only these hostnames; an unknown one fails with `ErrUnknownNode`. Every node is still checked for a shared address or a diskless image target |
 | `--dump` | string | `""` | Write `<dir>/<hostname>.yaml` (mode 0600) per node and print each path, instead of printing the configs |
 
 Without `--dump`, the output is one YAML stream: one document per node, in
@@ -445,9 +571,14 @@ parses and then fails at startup.
 your scrollback and possibly your shell history file. Prefer the masked default
 and read the *status*, not the value.
 
-Recognised URI schemes: `kms://`, `remote-kms://`, `env://`, `idevid://`,
-`file://`, `dynamic://`, `xkms://`. A short `kms://` path is expanded into the
-tenant/node keyspace automatically.
+The platform recognises the URI schemes `kms://`, `remote-kms://`, `env://`,
+`idevid://`, `file://`, `dynamic://`, `xkms://`, plus `credential://` and
+`autogen://`, which the go-quicbaas registry resolves (`IsSecretURI`,
+`pkg/bootstrap/secrets.go`). `secrets status`, `verify` and `migrate` count only
+`kms://`, `remote-kms://`, `env://` and `idevid://` values as already migrated
+(`isSecretURI` in `pkg/cli/commands/bootstrap/helpers.go`). A short `kms://`
+path is expanded into `tenants/<tenant>/nodes/<node>/secrets/` when both IDs are
+known (`ExpandShortKMSPath`).
 
 ---
 
@@ -465,7 +596,7 @@ normally invoked by a service unit, not by hand.
 | `--efi-mount` | string | `/boot/efi` | EFI partition mount point |
 | `--pcrs` | uint slice | `nil` | PCRs to seal against; read from configuration when unset |
 | `--config` | string | `""` | Platform configuration file |
-| `--fips` | bool | `false` | Enable FIPS mode |
+| `--fips` | bool | `false` | Parsed but not read ([FIPS mode](../fips/cli.md)) |
 | `--verbose` | `-v` | `false` | Verbose logging |
 | `--debug` | bool | `false` | Debug logging |
 | `--platform-dir` | string | `/var/lib/trusted-platform` | Platform data directory |
@@ -490,8 +621,10 @@ Resolution order is `--pcrs`, then `seal-pcrs` / `tpm.seal-pcrs` /
 `secure-wipe-passes` (top level, same files) sets how many overwrite passes
 destroy `installer.luks` when a `TPM-PCR` unlock has proven the seal: 1 (the
 default, NIST SP 800-88: one random pass plus TRIM), 3 (DoD 5220.22-M) or 7
-(DoD ECE). It is read by `platform-initrd boot` before the container is
-closed, and by firstboot for the failed-seal path.
+(DoD ECE). The wipe is done by `platform-initrd boot`
+(`pkg/boot/commands/sealconfirm.go`). Firstboot reads the value too, but it never
+wipes: it always preserves the container for that boot to destroy
+(`pkg/firstboot/strategy.go`).
 
 **`--tpm-only` removes the password keyslot.** After that the disk unlocks only
 via the TPM. If the PCR policy stops matching — firmware update, bootloader
@@ -524,7 +657,10 @@ platform-initrd version    Print version information
 
 | Flag | Short | Type | Default | Meaning |
 |---|---|---|---|---|
-| `--device` | `-d` | string | | LUKS device path (**required**) |
+| `--device` | `-d` | string | | LUKS device path (**required** unless `--diskless`) |
+| `--diskless` | | bool | `false` | Mount the diskless dm-verity root described by the signed kernel command line instead of unlocking `--device` |
+| `--root-mount` | | string | `/sysroot` | Where the diskless root is mounted |
+| `--diskless-work-dir` | | string | `/run/platform/diskless-root` | tmpfs work directory for the diskless root |
 | `--name` | `-n` | string | `cryptroot` | LUKS mapping name |
 | `--timeout` | | int | `30` | Unlock timeout, seconds |
 | `--pcrs` | | uint slice | `nil` | Expected PCR banks; read from the `pcr-banks` file when unset |
@@ -535,7 +671,7 @@ platform-initrd version    Print version information
 | `--xkms-dir` | | string | `/etc/trusted-platform/xkms` | Key-management storage directory |
 | `--verbose` | `-v` | bool | `false` | Verbose logging |
 | `--debug` | | bool | `false` | Debug logging |
-| `--fips` | | bool | `false` | FIPS mode — PBKDF2 instead of Argon2id |
+| `--fips` | | bool | `false` | Recorded but not read; the kernel's FIPS mode selects the keyslot KDF ([FIPS mode](../fips/cli.md)) |
 
 **`recovery`** takes the same connection flags (`--device`, `--name`,
 `--tpm-path`, `--efi-path`, `--xkms-dir`, `--verbose`, `--debug`, `--fips`) plus:
@@ -553,8 +689,10 @@ platform-initrd recovery --device /dev/sda2 --interactive
 ```
 
 **`--fallback` defaults to true**, which enables the ordered unlock chain
-TPM-PCR → TPM-upgrade → FIDO2 → password. Disabling it makes a PCR mismatch
-fatal.
+TPM-PCR → TPM-Upgrade → FIDO2 (when an authenticator is present) → Password.
+Disabling it registers none of them: only the first-boot `Keyfile` strategy
+remains, so an enrolled node cannot unlock at all (`registerDefaultStrategies`
+in `pkg/initrd/initrd.go`).
 
 **`recovery --reseal-pcrs` defaults to true**, so a successful recovery unlock
 re-seals to whatever the PCRs are *now*. That is what you want after a firmware
@@ -577,8 +715,10 @@ fixed-width tables directly to stdout rather than going through the renderer, so
 `--output json` does **not** change their shape.
 
 `bootstrap run` returns non-zero when a phase fails, having already printed the
-result block. A BMC-enrollment failure does not make the run non-zero — check
-the `BMCEnrollments` entries in the output.
+result block. A BMC-enrollment failure does not make the run non-zero. It is
+logged as a warning (`bmc-enroll: enrollment failed`) and recorded in
+`BootstrapResult.BMCEnrollments`, which the printed result block does not show;
+read the log, then retry with `platformctl bmc enroll`.
 
 ---
 
@@ -586,7 +726,7 @@ the `BMCEnrollments` entries in the output.
 
 | Capability | Reach it with |
 |---|---|
-| Barrier init, unseal, seal, rekey, ceremony | `platformctl barrier` / `platformctl ceremony` — [`docs/cli/barrier.md`](../cli/barrier.md) |
+| Barrier init, unseal, seal, rekey, ceremony | `platformctl barrier` — [`docs/barrier/cli.md`](../barrier/cli.md); `platformctl ceremony` |
 | BMC enrollment outside a bootstrap run | `platformctl bmc` — [`docs/bmc/`](../bmc/) |
 | Building or customising the ISO | `platformctl iso` — [`docs/provisioning/cli.md`](../provisioning/cli.md) |
 | Device templates and profiles outside seeding | `platformctl device` — [`docs/device/`](../device/) |
@@ -599,5 +739,5 @@ the `BMCEnrollments` entries in the output.
 
 `conventions/feature-docs.md` §4 requires every verb here to have a matching
 `CommandDefinition` in the integration parity suite. **This repository defines no
-`CommandDefinition` type** (grepped repo-wide, 2026-08-18), so that requirement
+`CommandDefinition` type** (searched repo-wide, 2026-10-19), so that requirement
 is unmet — repo-wide, not only for bootstrap.

@@ -25,9 +25,12 @@
 package ipxe
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -49,8 +52,6 @@ import (
 // 5. HTTP fetch menu.ipxe
 // 6. HTTP fetch selected boot entry
 func TestIPXEFullBootFlow(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	ctx, cancel := LongRunningTestContext()
 	defer cancel()
 
@@ -72,8 +73,8 @@ func TestIPXEFullBootFlow(t *testing.T) {
 		// Step 3: Download iPXE firmware via TFTP
 		firmware, err := tftpAdapter.TFTPDownload(ctx, "ipxe.efi")
 		require.NoError(t, err, "Should download iPXE firmware")
-		assert.Greater(t, len(firmware.Data), 500*1024,
-			"iPXE firmware should be at least 500KB")
+		assert.True(t, bytes.Equal(FirmwareFixture("ipxe.efi"), firmware.Data),
+			"TFTP should serve the iPXE firmware byte for byte")
 
 		// Step 4: Fetch boot script via HTTP
 		bootScript, err := httpAdapter.HTTPGetBootScript(ctx)
@@ -89,13 +90,12 @@ func TestIPXEFullBootFlow(t *testing.T) {
 		assert.True(t, strings.HasPrefix(menuScript.Script, "#!ipxe"),
 			"Menu script should be valid iPXE")
 
-		// Step 6: Fetch boot entries
+		// Step 6: Fetch every configured boot entry
+		require.ElementsMatch(t, []string{"alpine-test", "test-kernel"}, menuScript.BootEntries,
+			"Menu should list the suite's boot entries")
 		for _, entryName := range menuScript.BootEntries {
 			entry, err := httpAdapter.HTTPGetBootEntry(ctx, entryName)
-			if err != nil {
-				t.Logf("Boot entry %s not available: %v", entryName, err)
-				continue
-			}
+			require.NoError(t, err, "Should fetch boot entry %s", entryName)
 			assert.Equal(t, http.StatusOK, entry.StatusCode,
 				"Boot entry %s should be available", entryName)
 			assert.True(t, strings.HasPrefix(entry.Script, "#!ipxe"),
@@ -104,52 +104,78 @@ func TestIPXEFullBootFlow(t *testing.T) {
 	})
 }
 
-// TestIPXEDHCPToHTTPChain tests the DHCP -> HTTP chainloading flow.
+// TestIPXEDHCPToHTTPChain follows the boot chain a client takes from the
+// DHCP answer: each step fetches what the step before handed out, from the
+// server that answered, so a wrong filename, address or script line breaks
+// the chain here as it would on a real client.
 func TestIPXEDHCPToHTTPChain(t *testing.T) {
-	SkipIfNotIntegration(t)
-	SkipIfNoDHCP(t)
-	SkipIfNoNetworkPrivileges(t)
+	cfg := GetTestServerConfig()
+	RequireDHCPServer(t, cfg)
 
 	ctx, cancel := LongRunningTestContext()
 	defer cancel()
 
-	cfg := GetTestServerConfig()
-
 	t.Run("NonIPXEClientFlow", func(t *testing.T) {
-		// Non-iPXE client should get TFTP boot file
-		clientMAC := GenerateRandomMAC()
-		offer, err := sendDHCPDiscover(ctx, cfg, clientMAC, ArchEFIx64, true, false)
+		// A UEFI PXE ROM is offered the iPXE firmware over TFTP
+		offer, err := sendDHCPDiscover(ctx, cfg, GenerateRandomMAC(), ArchEFIx64, true, false)
 		require.NoError(t, err, "DHCP DISCOVER should succeed")
+		require.Equal(t, "ipxe.efi", offer.BootFileName,
+			"Non-iPXE client should get the iPXE firmware filename")
+		require.Equal(t, cfg.ServerIP.String(), offer.ServerIPAddr.String(),
+			"TFTP server should be the PXE server")
 
-		// Should get TFTP boot filename
-		assert.NotEmpty(t, offer.BootFileName, "Should get boot filename")
-		assert.Contains(t, offer.BootFileName, "ipxe.efi",
-			"Non-iPXE client should get iPXE firmware filename")
-
-		// TFTP server IP should be set
-		assert.Equal(t, cfg.ServerIP.String(), offer.ServerIPAddr.String(),
-			"TFTP server should be set")
+		// Fetch the offered file from the offered server. The suite's TFTP
+		// server listens on a free port, not 69, so the port comes from cfg.
+		tftpCfg := cfg
+		tftpCfg.ServerIP = offer.ServerIPAddr
+		firmware, err := downloadTFTPFile(ctx, tftpCfg, offer.BootFileName)
+		require.NoError(t, err, "TFTP download of the offered boot file should succeed")
+		assert.True(t, bytes.Equal(FirmwareFixture("ipxe.efi"), firmware),
+			"The offered boot file should be the iPXE firmware byte for byte")
 	})
 
 	t.Run("IPXEClientFlow", func(t *testing.T) {
-		// iPXE client should get HTTP script URL
-		clientMAC := GenerateRandomMAC()
-		offer, err := sendDHCPDiscover(ctx, cfg, clientMAC, ArchEFIx64, true, true)
+		// Step 1: iPXE itself is offered the HTTP boot script
+		offer, err := sendDHCPDiscover(ctx, cfg, GenerateRandomMAC(), ArchEFIx64, true, true)
 		require.NoError(t, err, "DHCP DISCOVER should succeed")
+		bootURL := fmt.Sprintf("http://%s:%d/boot.ipxe", cfg.ServerIP, cfg.HTTPPort)
+		require.Equal(t, bootURL, offer.BootFileName,
+			"iPXE client should be chained to the platform's boot script")
 
-		// Should get HTTP script URL
-		assert.NotEmpty(t, offer.BootFileName, "Should get boot filename")
-		assert.True(t,
-			strings.HasPrefix(offer.BootFileName, "http://") ||
-				strings.Contains(offer.BootFileName, "/boot.ipxe"),
-			"iPXE client should get HTTP script URL")
+		// Step 2: the boot script, fetched from the URL DHCP handed out
+		resp, script, err := httpGet(ctx, offer.BootFileName)
+		require.NoError(t, err, "Fetching the offered boot script should succeed")
+		require.Equal(t, http.StatusOK, resp.StatusCode, "Boot script should return 200")
+		require.True(t, strings.HasPrefix(script, "#!ipxe"), "Boot script should be an iPXE script")
+		require.Contains(t, script, "chain menu.ipxe?arch=${buildarch}",
+			"Boot script should chain the menu for the client's architecture")
+
+		// Step 3: the menu, resolved against the boot script's URL as iPXE
+		// resolves a relative chain, with x86_64 for ${buildarch}
+		base, err := url.Parse(offer.BootFileName)
+		require.NoError(t, err, "Boot file name should be a URL")
+		menuURL := base.ResolveReference(&url.URL{Path: "menu.ipxe", RawQuery: "arch=x86_64"})
+		resp, menu, err := httpGet(ctx, menuURL.String())
+		require.NoError(t, err, "Fetching the menu should succeed")
+		require.Equal(t, http.StatusOK, resp.StatusCode, "Menu should return 200")
+		require.Contains(t, menu, "item test-kernel", "Menu should offer the kernel entry")
+		entryURL := base.ResolveReference(&url.URL{Path: "/boot/test-kernel.ipxe"}).String()
+		require.Contains(t, menu, "chain "+entryURL, "Menu should chain the kernel entry's script")
+
+		// Step 4: the entry script the menu chains, which loads the kernel
+		resp, entry, err := httpGet(ctx, entryURL)
+		require.NoError(t, err, "Fetching the entry script should succeed")
+		require.Equal(t, http.StatusOK, resp.StatusCode, "Entry script should return 200")
+		assert.True(t, strings.HasPrefix(entry, "#!ipxe"), "Entry script should be an iPXE script")
+		assert.Contains(t, entry, "kernel http://example.com/vmlinuz console=ttyS0",
+			"Entry script should load the configured kernel with its arguments")
+		assert.Contains(t, entry, "initrd http://example.com/initrd.img",
+			"Entry script should load the configured initrd")
 	})
 }
 
 // TestIPXEMultiClientBoot tests multiple clients booting simultaneously.
 func TestIPXEMultiClientBoot(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
@@ -206,7 +232,7 @@ func TestIPXEMultiClientBoot(t *testing.T) {
 	t.Run("ConcurrentTFTPDownload", func(t *testing.T) {
 		type result struct {
 			clientID int
-			size     int
+			data     []byte
 			err      error
 		}
 
@@ -231,13 +257,13 @@ func TestIPXEMultiClientBoot(t *testing.T) {
 
 				results <- result{
 					clientID: id,
-					size:     len(download.Data),
+					data:     download.Data,
 				}
 			}(i)
 		}
 
 		// Collect results
-		var expectedSize int
+		want := FirmwareFixture("ipxe.efi")
 		for i := 0; i < numClients; i++ {
 			r := <-results
 			if r.err != nil {
@@ -245,12 +271,8 @@ func TestIPXEMultiClientBoot(t *testing.T) {
 				continue
 			}
 
-			if expectedSize == 0 {
-				expectedSize = r.size
-			} else {
-				assert.Equal(t, expectedSize, r.size,
-					"All clients should get same firmware size")
-			}
+			assert.True(t, bytes.Equal(want, r.data),
+				"Client %d should get the served firmware", r.clientID)
 		}
 	})
 }
@@ -261,8 +283,6 @@ func TestIPXEMultiClientBoot(t *testing.T) {
 
 // TestIPXEServerComponents tests that all server components work together.
 func TestIPXEServerComponents(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	ctx, cancel := DefaultTestContext()
 	defer cancel()
 
@@ -289,7 +309,8 @@ func TestIPXEServerComponents(t *testing.T) {
 		// Should be able to download firmware
 		download, err := tftpAdapter.TFTPDownload(ctx, "ipxe.efi")
 		require.NoError(t, err, "TFTP download should succeed")
-		assert.Greater(t, len(download.Data), 0, "Firmware should not be empty")
+		assert.True(t, bytes.Equal(FirmwareFixture("ipxe.efi"), download.Data),
+			"TFTP should serve the iPXE firmware byte for byte")
 	})
 
 	t.Run("ConsistentBootConfiguration", func(t *testing.T) {
@@ -303,11 +324,11 @@ func TestIPXEServerComponents(t *testing.T) {
 		require.NoError(t, err, "Should fetch menu")
 
 		// Each menu entry should have a corresponding boot script
+		require.ElementsMatch(t, []string{"alpine-test", "test-kernel"}, menuScript.BootEntries,
+			"Menu should list the suite's boot entries")
 		for _, entryName := range menuScript.BootEntries {
 			entry, err := httpAdapter.HTTPGetBootEntry(ctx, entryName)
-			if err != nil {
-				continue // Some entries may not be configured
-			}
+			require.NoError(t, err, "Should fetch boot entry %s", entryName)
 
 			assert.Equal(t, http.StatusOK, entry.StatusCode,
 				"Boot entry %s should be available", entryName)
@@ -324,8 +345,6 @@ func TestIPXEServerComponents(t *testing.T) {
 
 // TestIPXEBootScriptChaining tests the boot script chain from boot.ipxe to menu.
 func TestIPXEBootScriptChaining(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	ctx, cancel := HTTPTestContext()
 	defer cancel()
 
@@ -365,8 +384,6 @@ func TestIPXEBootScriptChaining(t *testing.T) {
 
 // TestIPXEBootEntryGeneration tests that boot entries are correctly generated.
 func TestIPXEBootEntryGeneration(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	ctx, cancel := HTTPTestContext()
 	defer cancel()
 
@@ -377,53 +394,30 @@ func TestIPXEBootEntryGeneration(t *testing.T) {
 	defer httpAdapter.Teardown()
 
 	t.Run("ISOBasedEntry", func(t *testing.T) {
-		// If an ISO-based entry exists, verify it has correct structure
-		menuScript, err := httpAdapter.HTTPGetMenuScript(ctx)
-		require.NoError(t, err, "Should fetch menu")
+		// alpine-test is the suite's ISO-based entry
+		entry, err := httpAdapter.HTTPGetBootEntry(ctx, "alpine-test")
+		require.NoError(t, err, "Should fetch the ISO entry")
+		require.Equal(t, http.StatusOK, entry.StatusCode)
 
-		for _, entryName := range menuScript.BootEntries {
-			entry, err := httpAdapter.HTTPGetBootEntry(ctx, entryName)
-			if err != nil {
-				continue
-			}
-
-			// ISO-based entries should have kernel/initrd URLs
-			if strings.Contains(entry.Script, "iso_url") {
-				assert.Contains(t, entry.Script, "kernel",
-					"ISO entry should load kernel")
-				assert.Contains(t, entry.Script, "initrd",
-					"ISO entry should load initrd")
-			}
-		}
+		assert.Contains(t, entry.Script, "set iso_url ", "ISO entry should name the ISO")
+		assert.Contains(t, entry.Script, "kernel ", "ISO entry should load kernel")
+		assert.Contains(t, entry.Script, "initrd ", "ISO entry should load initrd")
 	})
 
 	t.Run("KernelBasedEntry", func(t *testing.T) {
-		// Verify kernel-based entries have correct structure
-		menuScript, err := httpAdapter.HTTPGetMenuScript(ctx)
-		require.NoError(t, err, "Should fetch menu")
+		// test-kernel is the suite's kernel-based entry
+		entry, err := httpAdapter.HTTPGetBootEntry(ctx, "test-kernel")
+		require.NoError(t, err, "Should fetch the kernel entry")
+		require.Equal(t, http.StatusOK, entry.StatusCode)
 
-		for _, entryName := range menuScript.BootEntries {
-			entry, err := httpAdapter.HTTPGetBootEntry(ctx, entryName)
-			if err != nil {
-				continue
-			}
-
-			// If entry loads kernel directly
-			if strings.Contains(entry.Script, "kernel ") {
-				// Should have boot or initrd command
-				hasBoot := strings.Contains(entry.Script, "boot")
-				hasInitrd := strings.Contains(entry.Script, "initrd")
-				assert.True(t, hasBoot || hasInitrd,
-					"Kernel entry should have boot or initrd")
-			}
-		}
+		assert.Contains(t, entry.Script, "kernel http://example.com/vmlinuz console=ttyS0")
+		assert.Contains(t, entry.Script, "initrd http://example.com/initrd.img")
+		assert.Contains(t, entry.Script, "\nboot", "Kernel entry should boot")
 	})
 }
 
 // TestIPXEProxyURLGeneration tests that HTTPS proxy URLs are correctly generated.
 func TestIPXEProxyURLGeneration(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	ctx, cancel := HTTPTestContext()
 	defer cancel()
 
@@ -434,26 +428,19 @@ func TestIPXEProxyURLGeneration(t *testing.T) {
 	defer httpAdapter.Teardown()
 
 	t.Run("HTTPSURLsProxied", func(t *testing.T) {
-		// Boot entries with HTTPS URLs should use proxy
-		menuScript, err := httpAdapter.HTTPGetMenuScript(ctx)
-		require.NoError(t, err, "Should fetch menu")
+		// alpine-test's ISO is on an HTTPS mirror; iPXE cannot fetch HTTPS,
+		// so every URL the script fetches must go through the proxy route
+		entry, err := httpAdapter.HTTPGetBootEntry(ctx, "alpine-test")
+		require.NoError(t, err, "Should fetch the alpine-test entry")
 
-		for _, entryName := range menuScript.BootEntries {
-			entry, err := httpAdapter.HTTPGetBootEntry(ctx, entryName)
-			if err != nil {
-				continue
-			}
-
-			// Check if entry uses HTTPS URLs
-			if strings.Contains(entry.Script, "https://") {
-				t.Logf("Entry %s contains non-proxied HTTPS URL", entryName)
-			}
-
-			// Proxied URLs should use /proxy/ path
-			if strings.Contains(entry.Script, "/proxy/https/") {
-				t.Logf("Entry %s correctly uses proxy for HTTPS", entryName)
-			}
-		}
+		proxyBase := fmt.Sprintf("http://%s:%d/proxy/https/dl-cdn.alpinelinux.org/",
+			cfg.ServerIP, cfg.HTTPPort)
+		assert.Contains(t, entry.Script, "set kernel_url "+proxyBase,
+			"Kernel URL should go through the proxy")
+		assert.Contains(t, entry.Script, "set initrd_url "+proxyBase,
+			"Initrd URL should go through the proxy")
+		assert.Contains(t, entry.Script, "alpine_repo="+proxyBase,
+			"Repository URL in the kernel args should go through the proxy")
 	})
 }
 
@@ -463,8 +450,6 @@ func TestIPXEProxyURLGeneration(t *testing.T) {
 
 // TestIPXEServiceRecovery tests that services recover from errors.
 func TestIPXEServiceRecovery(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
@@ -494,7 +479,8 @@ func TestIPXEServiceRecovery(t *testing.T) {
 		for i := 0; i < 3; i++ {
 			download, err := tftpAdapter.TFTPDownload(ctx, "ipxe.efi")
 			require.NoError(t, err, "Download %d should succeed", i)
-			assert.Greater(t, len(download.Data), 0)
+			assert.True(t, bytes.Equal(FirmwareFixture("ipxe.efi"), download.Data),
+				"TFTP should serve the iPXE firmware byte for byte")
 		}
 	})
 }
@@ -520,12 +506,11 @@ func NewProtocolTestAdapter(cfg TestServerConfig) *ProtocolTestAdapter {
 // Setup initializes all protocol adapters.
 func (p *ProtocolTestAdapter) Setup(ctx context.Context) error {
 	if err := p.HTTP.Setup(ctx); err != nil {
-		return fmt.Errorf("HTTP setup failed: %w", err)
+		return err
 	}
 
 	if err := p.TFTP.Setup(ctx); err != nil {
-		p.HTTP.Teardown()
-		return fmt.Errorf("TFTP setup failed: %w", err)
+		return errors.Join(err, p.HTTP.Teardown())
 	}
 
 	return nil
@@ -548,8 +533,6 @@ func (p *ProtocolTestAdapter) Teardown() error {
 
 // TestProtocolAdapterFactory tests the protocol adapter factory.
 func TestProtocolAdapterFactory(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	ctx, cancel := DefaultTestContext()
 	defer cancel()
 
@@ -570,6 +553,7 @@ func TestProtocolAdapterFactory(t *testing.T) {
 		// Use TFTP adapter
 		download, err := adapter.TFTP.TFTPDownload(ctx, "ipxe.efi")
 		require.NoError(t, err, "TFTP download should succeed")
-		assert.Greater(t, len(download.Data), 0)
+		assert.True(t, bytes.Equal(FirmwareFixture("ipxe.efi"), download.Data),
+			"TFTP should serve the iPXE firmware byte for byte")
 	})
 }

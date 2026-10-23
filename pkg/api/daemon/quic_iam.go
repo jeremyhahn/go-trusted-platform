@@ -47,8 +47,8 @@ package daemon
 import (
 	"context"
 
-	"github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 )
 
 // QUICIAMService defines the daemon-native IAM seam reached over QUIC. Only
@@ -124,74 +124,77 @@ func (e ErrIAMTokenViaOIDC) Error() string {
 // handler. Authentication is served daemon-native; token operations return
 // StatusNotImplemented for OIDC parity; every other operation delegates to the
 // shared *IAMGRPCService (pb wire).
-func (h *QUICServiceHandler) handleIAMOperation(ctx context.Context, req *quic.Request) *quic.Response {
+func (h *QUICServiceHandler) handleIAMOperation(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	switch req.Opcode {
 	// Authentication is not part of the PlatformIAMService gRPC surface.
-	case quic.OpIAMAuthenticate:
+	case quicwire.OpIAMAuthenticate:
 		return h.handleIAMAuthenticate(ctx, req)
 
-	// Token operations are handled via OIDC flows; the gRPC delegate returns
-	// codes.Unimplemented, so QUIC returns StatusNotImplemented for parity.
-	case quic.OpIAMTokenCreate:
-		return h.errorResponse(quic.StatusNotImplemented, ErrIAMTokenViaOIDC{Op: "create"})
-	case quic.OpIAMTokenRevoke:
-		return h.errorResponse(quic.StatusNotImplemented, ErrIAMTokenViaOIDC{Op: "revoke"})
-	case quic.OpIAMTokenVerify:
-		return h.errorResponse(quic.StatusNotImplemented, ErrIAMTokenViaOIDC{Op: "verify"})
+	// Token issue and revocation are handled via OIDC flows; the gRPC delegate
+	// returns codes.Unimplemented, so QUIC returns StatusNotImplemented for
+	// parity whether or not the delegate is wired.
+	case quicwire.OpIAMTokenCreate:
+		return h.errorResponse(quicwire.StatusNotImplemented, ErrIAMTokenViaOIDC{Op: iamTokenOpCreate})
+	case quicwire.OpIAMTokenRevoke:
+		return h.errorResponse(quicwire.StatusNotImplemented, ErrIAMTokenViaOIDC{Op: iamTokenOpRevoke})
 	}
 
 	// All remaining operations delegate to the shared pb gRPC service.
 	if h.iamGRPC == nil {
-		return h.errorResponse(quic.StatusUnavailable, ErrQUICServiceUnavailable{Service: "iam"})
+		return h.errorResponse(quicwire.StatusUnavailable, ErrQUICServiceUnavailable{Service: "iam"})
 	}
 
 	switch req.Opcode {
 	// User operations
-	case quic.OpIAMUserCreate:
+	case quicwire.OpIAMUserCreate:
 		return h.handleIAMUserCreate(ctx, req)
-	case quic.OpIAMUserDelete:
+	case quicwire.OpIAMUserDelete:
 		return h.handleIAMUserDelete(ctx, req)
-	case quic.OpIAMUserGet:
+	case quicwire.OpIAMUserGet:
 		return h.handleIAMUserGet(ctx, req)
-	case quic.OpIAMUserList:
+	case quicwire.OpIAMUserList:
 		return h.handleIAMUserList(ctx, req)
-	case quic.OpIAMUserUpdate:
+	case quicwire.OpIAMUserUpdate:
 		return h.handleIAMUserUpdate(ctx, req)
 
 	// Role operations
-	case quic.OpIAMRoleCreate:
+	case quicwire.OpIAMRoleCreate:
 		return h.handleIAMRoleCreate(ctx, req)
-	case quic.OpIAMRoleDelete:
+	case quicwire.OpIAMRoleDelete:
 		return h.handleIAMRoleDelete(ctx, req)
-	case quic.OpIAMRoleGet:
+	case quicwire.OpIAMRoleGet:
 		return h.handleIAMRoleGet(ctx, req)
-	case quic.OpIAMRoleList:
+	case quicwire.OpIAMRoleList:
 		return h.handleIAMRoleList(ctx, req)
-	case quic.OpIAMRoleAssign:
+	case quicwire.OpIAMRoleAssign:
 		return h.handleIAMRoleAssign(ctx, req)
-	case quic.OpIAMRoleRevoke:
+	case quicwire.OpIAMRoleRevoke:
 		return h.handleIAMRoleRevoke(ctx, req)
 
 	// Group operations
-	case quic.OpIAMGroupCreate:
+	case quicwire.OpIAMGroupCreate:
 		return h.handleIAMGroupCreate(ctx, req)
-	case quic.OpIAMGroupDelete:
+	case quicwire.OpIAMGroupDelete:
 		return h.handleIAMGroupDelete(ctx, req)
-	case quic.OpIAMGroupGet:
+	case quicwire.OpIAMGroupGet:
 		return h.handleIAMGroupGet(ctx, req)
-	case quic.OpIAMGroupList:
+	case quicwire.OpIAMGroupList:
 		return h.handleIAMGroupList(ctx, req)
-	case quic.OpIAMGroupAddMember:
+	case quicwire.OpIAMGroupAddMember:
 		return h.handleIAMGroupAddMember(ctx, req)
-	case quic.OpIAMGroupRemoveMember:
+	case quicwire.OpIAMGroupRemoveMember:
 		return h.handleIAMGroupRemoveMember(ctx, req)
 
 	// Permission operations
-	case quic.OpIAMCheckPermission:
+	case quicwire.OpIAMCheckPermission:
 		return h.handleIAMCheckPermission(ctx, req)
 
+	// Token operations
+	case quicwire.OpIAMTokenVerify:
+		return h.handleIAMTokenVerify(ctx, req)
+
 	default:
-		return h.errorResponse(quic.StatusNotImplemented, ErrQUICUnknownOpcode{Opcode: req.Opcode})
+		return h.errorResponse(quicwire.StatusNotImplemented, ErrQUICUnknownOpcode{Opcode: req.Opcode})
 	}
 }
 
@@ -201,10 +204,10 @@ func (h *QUICServiceHandler) handleIAMOperation(ctx context.Context, req *quic.R
 
 // handleIAMUserCreate creates a new IAM user. The pb request carries Roles,
 // Groups and TenantId that the former flat struct dropped.
-func (h *QUICServiceHandler) handleIAMUserCreate(ctx context.Context, req *quic.Request) *quic.Response {
+func (h *QUICServiceHandler) handleIAMUserCreate(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	var pbReq platformv1.CreateIAMUserRequest
-	if err := quic.DecodePayload(req.Payload, &pbReq); err != nil {
-		return h.errorResponse(quic.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &pbReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
 	}
 
 	resp, err := h.iamGRPC.CreateUser(ctx, &pbReq)
@@ -215,10 +218,10 @@ func (h *QUICServiceHandler) handleIAMUserCreate(ctx context.Context, req *quic.
 }
 
 // handleIAMUserDelete deletes an IAM user.
-func (h *QUICServiceHandler) handleIAMUserDelete(ctx context.Context, req *quic.Request) *quic.Response {
+func (h *QUICServiceHandler) handleIAMUserDelete(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	var pbReq platformv1.DeleteIAMUserRequest
-	if err := quic.DecodePayload(req.Payload, &pbReq); err != nil {
-		return h.errorResponse(quic.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &pbReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
 	}
 
 	resp, err := h.iamGRPC.DeleteUser(ctx, &pbReq)
@@ -229,10 +232,10 @@ func (h *QUICServiceHandler) handleIAMUserDelete(ctx context.Context, req *quic.
 }
 
 // handleIAMUserGet retrieves an IAM user by ID.
-func (h *QUICServiceHandler) handleIAMUserGet(ctx context.Context, req *quic.Request) *quic.Response {
+func (h *QUICServiceHandler) handleIAMUserGet(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	var pbReq platformv1.GetIAMUserRequest
-	if err := quic.DecodePayload(req.Payload, &pbReq); err != nil {
-		return h.errorResponse(quic.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &pbReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
 	}
 
 	resp, err := h.iamGRPC.GetUser(ctx, &pbReq)
@@ -244,11 +247,11 @@ func (h *QUICServiceHandler) handleIAMUserGet(ctx context.Context, req *quic.Req
 
 // handleIAMUserList returns a paginated list of IAM users. The list payload is
 // optional.
-func (h *QUICServiceHandler) handleIAMUserList(ctx context.Context, req *quic.Request) *quic.Response {
+func (h *QUICServiceHandler) handleIAMUserList(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	var pbReq platformv1.ListIAMUsersRequest
 	if len(req.Payload) > 0 {
-		if err := quic.DecodePayload(req.Payload, &pbReq); err != nil {
-			return h.errorResponse(quic.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
+		if err := quicwire.DecodePayload(req.Payload, &pbReq); err != nil {
+			return h.errorResponse(quicwire.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
 		}
 	}
 
@@ -260,10 +263,10 @@ func (h *QUICServiceHandler) handleIAMUserList(ctx context.Context, req *quic.Re
 }
 
 // handleIAMUserUpdate updates an existing IAM user.
-func (h *QUICServiceHandler) handleIAMUserUpdate(ctx context.Context, req *quic.Request) *quic.Response {
+func (h *QUICServiceHandler) handleIAMUserUpdate(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	var pbReq platformv1.UpdateIAMUserRequest
-	if err := quic.DecodePayload(req.Payload, &pbReq); err != nil {
-		return h.errorResponse(quic.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &pbReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
 	}
 
 	resp, err := h.iamGRPC.UpdateUser(ctx, &pbReq)
@@ -278,10 +281,10 @@ func (h *QUICServiceHandler) handleIAMUserUpdate(ctx context.Context, req *quic.
 // =============================================================================
 
 // handleIAMRoleCreate creates a new IAM role.
-func (h *QUICServiceHandler) handleIAMRoleCreate(ctx context.Context, req *quic.Request) *quic.Response {
+func (h *QUICServiceHandler) handleIAMRoleCreate(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	var pbReq platformv1.CreateIAMRoleRequest
-	if err := quic.DecodePayload(req.Payload, &pbReq); err != nil {
-		return h.errorResponse(quic.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &pbReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
 	}
 
 	resp, err := h.iamGRPC.CreateRole(ctx, &pbReq)
@@ -292,10 +295,10 @@ func (h *QUICServiceHandler) handleIAMRoleCreate(ctx context.Context, req *quic.
 }
 
 // handleIAMRoleDelete deletes an IAM role.
-func (h *QUICServiceHandler) handleIAMRoleDelete(ctx context.Context, req *quic.Request) *quic.Response {
+func (h *QUICServiceHandler) handleIAMRoleDelete(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	var pbReq platformv1.DeleteIAMRoleRequest
-	if err := quic.DecodePayload(req.Payload, &pbReq); err != nil {
-		return h.errorResponse(quic.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &pbReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
 	}
 
 	resp, err := h.iamGRPC.DeleteRole(ctx, &pbReq)
@@ -306,10 +309,10 @@ func (h *QUICServiceHandler) handleIAMRoleDelete(ctx context.Context, req *quic.
 }
 
 // handleIAMRoleGet retrieves an IAM role by ID.
-func (h *QUICServiceHandler) handleIAMRoleGet(ctx context.Context, req *quic.Request) *quic.Response {
+func (h *QUICServiceHandler) handleIAMRoleGet(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	var pbReq platformv1.GetIAMRoleRequest
-	if err := quic.DecodePayload(req.Payload, &pbReq); err != nil {
-		return h.errorResponse(quic.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &pbReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
 	}
 
 	resp, err := h.iamGRPC.GetRole(ctx, &pbReq)
@@ -321,11 +324,11 @@ func (h *QUICServiceHandler) handleIAMRoleGet(ctx context.Context, req *quic.Req
 
 // handleIAMRoleList returns a paginated list of IAM roles. The list payload is
 // optional.
-func (h *QUICServiceHandler) handleIAMRoleList(ctx context.Context, req *quic.Request) *quic.Response {
+func (h *QUICServiceHandler) handleIAMRoleList(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	var pbReq platformv1.ListIAMRolesRequest
 	if len(req.Payload) > 0 {
-		if err := quic.DecodePayload(req.Payload, &pbReq); err != nil {
-			return h.errorResponse(quic.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
+		if err := quicwire.DecodePayload(req.Payload, &pbReq); err != nil {
+			return h.errorResponse(quicwire.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
 		}
 	}
 
@@ -337,10 +340,10 @@ func (h *QUICServiceHandler) handleIAMRoleList(ctx context.Context, req *quic.Re
 }
 
 // handleIAMRoleAssign assigns a role to a user.
-func (h *QUICServiceHandler) handleIAMRoleAssign(ctx context.Context, req *quic.Request) *quic.Response {
+func (h *QUICServiceHandler) handleIAMRoleAssign(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	var pbReq platformv1.AssignIAMRoleRequest
-	if err := quic.DecodePayload(req.Payload, &pbReq); err != nil {
-		return h.errorResponse(quic.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &pbReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
 	}
 
 	resp, err := h.iamGRPC.AssignRole(ctx, &pbReq)
@@ -351,10 +354,10 @@ func (h *QUICServiceHandler) handleIAMRoleAssign(ctx context.Context, req *quic.
 }
 
 // handleIAMRoleRevoke revokes a role from a user.
-func (h *QUICServiceHandler) handleIAMRoleRevoke(ctx context.Context, req *quic.Request) *quic.Response {
+func (h *QUICServiceHandler) handleIAMRoleRevoke(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	var pbReq platformv1.RevokeIAMRoleRequest
-	if err := quic.DecodePayload(req.Payload, &pbReq); err != nil {
-		return h.errorResponse(quic.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &pbReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
 	}
 
 	resp, err := h.iamGRPC.RevokeRole(ctx, &pbReq)
@@ -369,10 +372,10 @@ func (h *QUICServiceHandler) handleIAMRoleRevoke(ctx context.Context, req *quic.
 // =============================================================================
 
 // handleIAMGroupCreate creates a new IAM group.
-func (h *QUICServiceHandler) handleIAMGroupCreate(ctx context.Context, req *quic.Request) *quic.Response {
+func (h *QUICServiceHandler) handleIAMGroupCreate(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	var pbReq platformv1.CreateIAMGroupRequest
-	if err := quic.DecodePayload(req.Payload, &pbReq); err != nil {
-		return h.errorResponse(quic.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &pbReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
 	}
 
 	resp, err := h.iamGRPC.CreateGroup(ctx, &pbReq)
@@ -383,10 +386,10 @@ func (h *QUICServiceHandler) handleIAMGroupCreate(ctx context.Context, req *quic
 }
 
 // handleIAMGroupDelete deletes an IAM group.
-func (h *QUICServiceHandler) handleIAMGroupDelete(ctx context.Context, req *quic.Request) *quic.Response {
+func (h *QUICServiceHandler) handleIAMGroupDelete(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	var pbReq platformv1.DeleteIAMGroupRequest
-	if err := quic.DecodePayload(req.Payload, &pbReq); err != nil {
-		return h.errorResponse(quic.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &pbReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
 	}
 
 	resp, err := h.iamGRPC.DeleteGroup(ctx, &pbReq)
@@ -397,10 +400,10 @@ func (h *QUICServiceHandler) handleIAMGroupDelete(ctx context.Context, req *quic
 }
 
 // handleIAMGroupGet retrieves an IAM group by ID.
-func (h *QUICServiceHandler) handleIAMGroupGet(ctx context.Context, req *quic.Request) *quic.Response {
+func (h *QUICServiceHandler) handleIAMGroupGet(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	var pbReq platformv1.GetIAMGroupRequest
-	if err := quic.DecodePayload(req.Payload, &pbReq); err != nil {
-		return h.errorResponse(quic.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &pbReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
 	}
 
 	resp, err := h.iamGRPC.GetGroup(ctx, &pbReq)
@@ -412,11 +415,11 @@ func (h *QUICServiceHandler) handleIAMGroupGet(ctx context.Context, req *quic.Re
 
 // handleIAMGroupList returns a paginated list of IAM groups. The list payload is
 // optional.
-func (h *QUICServiceHandler) handleIAMGroupList(ctx context.Context, req *quic.Request) *quic.Response {
+func (h *QUICServiceHandler) handleIAMGroupList(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	var pbReq platformv1.ListIAMGroupsRequest
 	if len(req.Payload) > 0 {
-		if err := quic.DecodePayload(req.Payload, &pbReq); err != nil {
-			return h.errorResponse(quic.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
+		if err := quicwire.DecodePayload(req.Payload, &pbReq); err != nil {
+			return h.errorResponse(quicwire.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
 		}
 	}
 
@@ -428,10 +431,10 @@ func (h *QUICServiceHandler) handleIAMGroupList(ctx context.Context, req *quic.R
 }
 
 // handleIAMGroupAddMember adds a user to a group.
-func (h *QUICServiceHandler) handleIAMGroupAddMember(ctx context.Context, req *quic.Request) *quic.Response {
+func (h *QUICServiceHandler) handleIAMGroupAddMember(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	var pbReq platformv1.AddGroupMemberRequest
-	if err := quic.DecodePayload(req.Payload, &pbReq); err != nil {
-		return h.errorResponse(quic.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &pbReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
 	}
 
 	resp, err := h.iamGRPC.AddGroupMember(ctx, &pbReq)
@@ -442,10 +445,10 @@ func (h *QUICServiceHandler) handleIAMGroupAddMember(ctx context.Context, req *q
 }
 
 // handleIAMGroupRemoveMember removes a user from a group.
-func (h *QUICServiceHandler) handleIAMGroupRemoveMember(ctx context.Context, req *quic.Request) *quic.Response {
+func (h *QUICServiceHandler) handleIAMGroupRemoveMember(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	var pbReq platformv1.RemoveGroupMemberRequest
-	if err := quic.DecodePayload(req.Payload, &pbReq); err != nil {
-		return h.errorResponse(quic.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &pbReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
 	}
 
 	resp, err := h.iamGRPC.RemoveGroupMember(ctx, &pbReq)
@@ -460,15 +463,30 @@ func (h *QUICServiceHandler) handleIAMGroupRemoveMember(ctx context.Context, req
 // =============================================================================
 
 // handleIAMCheckPermission evaluates an authorization request.
-func (h *QUICServiceHandler) handleIAMCheckPermission(ctx context.Context, req *quic.Request) *quic.Response {
+func (h *QUICServiceHandler) handleIAMCheckPermission(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	var pbReq platformv1.CheckIAMPermissionRequest
-	if err := quic.DecodePayload(req.Payload, &pbReq); err != nil {
-		return h.errorResponse(quic.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &pbReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
 	}
 
 	resp, err := h.iamGRPC.CheckPermission(ctx, &pbReq)
 	if err != nil {
 		return h.grpcDelegateErrorToQUIC("IAMCheckPermission", err)
+	}
+	return h.encodeGRPCDelegateResponse(resp)
+}
+
+// handleIAMTokenVerify delegates to IAMGRPCService.VerifyToken, so QUIC
+// answers a token exactly as gRPC does.
+func (h *QUICServiceHandler) handleIAMTokenVerify(ctx context.Context, req *quicwire.Request) *quicwire.Response {
+	var pbReq platformv1.VerifyIAMTokenRequest
+	if err := quicwire.DecodePayload(req.Payload, &pbReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
+	}
+
+	resp, err := h.iamGRPC.VerifyToken(ctx, &pbReq)
+	if err != nil {
+		return h.grpcDelegateErrorToQUIC("IAMTokenVerify", err)
 	}
 	return h.encodeGRPCDelegateResponse(resp)
 }
@@ -480,36 +498,36 @@ func (h *QUICServiceHandler) handleIAMCheckPermission(ctx context.Context, req *
 // handleIAMAuthenticate authenticates a user with their credentials. This
 // operation is not part of the PlatformIAMService gRPC surface, so it is served
 // through the daemon-native QUICIAMService seam.
-func (h *QUICServiceHandler) handleIAMAuthenticate(ctx context.Context, req *quic.Request) *quic.Response {
+func (h *QUICServiceHandler) handleIAMAuthenticate(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.iamService == nil {
-		return h.errorResponse(quic.StatusUnavailable, ErrQUICServiceUnavailable{Service: "iam"})
+		return h.errorResponse(quicwire.StatusUnavailable, ErrQUICServiceUnavailable{Service: "iam"})
 	}
 
 	var authReq AuthenticateRequest
-	if err := quic.DecodePayload(req.Payload, &authReq); err != nil {
-		return h.errorResponse(quic.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &authReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
 	}
 
 	if authReq.Username == "" {
-		return h.errorResponse(quic.StatusInvalidArgument, ErrQUICMissingField{Field: "username"})
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrQUICMissingField{Field: "username"})
 	}
 	if authReq.Password == "" {
-		return h.errorResponse(quic.StatusInvalidArgument, ErrQUICMissingField{Field: "password"})
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrQUICMissingField{Field: "password"})
 	}
 
 	result, err := h.iamService.Authenticate(ctx, &authReq)
 	if err != nil {
 		h.logger.Error(err, "failed to authenticate user", "username", authReq.Username)
-		return h.errorResponse(quic.StatusUnauthorized, ErrQUICOperationFailed{Op: "IAMAuthenticate", Cause: err})
+		return h.errorResponse(quicwire.StatusUnauthorized, ErrQUICOperationFailed{Op: "IAMAuthenticate", Cause: err})
 	}
 
-	payload, err := quic.EncodePayload(result)
+	payload, err := quicwire.EncodePayload(result)
 	if err != nil {
-		return h.errorResponse(quic.StatusInternalError, ErrQUICEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrQUICEncodingFailed{Cause: err})
 	}
 
-	return &quic.Response{
-		Status:  quic.StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }

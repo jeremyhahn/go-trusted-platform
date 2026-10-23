@@ -30,11 +30,10 @@ import (
 // for testing methods that require an existing bridge.
 func createTestSDNServiceWithBridge(bridgeName string) *SDNService {
 	svc := &SDNService{
-		bridges:   make(map[string]*bridgeResource),
-		ports:     make(map[string]*portResource),
-		taps:      make(map[string]*tapResource),
-		vlans:     make(map[string]*vlanResource),
-		portAuths: make(map[string]*portAuthResource),
+		bridges: make(map[string]*bridgeResource),
+		ports:   make(map[string]*portResource),
+		taps:    make(map[string]*tapResource),
+		vlans:   make(map[string]*vlanResource),
 	}
 	// Add a test bridge
 	svc.bridges[bridgeName] = &bridgeResource{
@@ -74,24 +73,6 @@ func createTestSDNServiceWithVLAN(bridgeName string, vlanID uint32, vlanName str
 		name:      vlanName,
 		ports:     []string{},
 		createdAt: time.Now(),
-	}
-	return svc
-}
-
-// createTestSDNServiceWithPortAuth creates an SDNService with a pre-configured
-// bridge, port, and authentication for testing auth revocation.
-func createTestSDNServiceWithPortAuth(bridgeName, portName string) *SDNService {
-	svc := createTestSDNServiceWithBridgeAndPort(bridgeName, portName)
-	// Add port authentication
-	authKey := bridgeName + ":" + portName
-	svc.portAuths[authKey] = &portAuthResource{
-		portID:          portName,
-		bridgeID:        bridgeName,
-		certificateCN:   "test-device",
-		certificate:     []byte("test-cert"),
-		authenticatedAt: time.Now(),
-		expiresAt:       time.Now().Add(24 * time.Hour),
-		authorizedVLANs: []uint32{100},
 	}
 	return svc
 }
@@ -177,129 +158,6 @@ func TestMCPServiceProvider_SDNListVLANs_WithVLANs(t *testing.T) {
 }
 
 // =============================================================================
-// SDNAuthenticatePort Coverage Tests
-// =============================================================================
-
-func TestMCPServiceProvider_SDNAuthenticatePort_BridgeNotFound(t *testing.T) {
-	ctx := context.Background()
-	sdnService := createTestSDNServiceWithBridge("br0")
-
-	provider := NewMCPServiceProvider(&MCPServiceProviderConfig{
-		SDNService: sdnService,
-		Logger:     slog.Default(),
-	})
-
-	credentials := map[string]string{
-		"certificate": "test-cert-data",
-		"format":      "PEM",
-	}
-	err := provider.SDNAuthenticatePort(ctx, "nonexistent-bridge", "port1", credentials)
-	if err == nil {
-		t.Fatal("expected error for non-existent bridge")
-	}
-}
-
-func TestMCPServiceProvider_SDNAuthenticatePort_EmptyBridgeName(t *testing.T) {
-	ctx := context.Background()
-	sdnService := createTestSDNServiceWithBridgeAndPort("br0", "port1")
-
-	provider := NewMCPServiceProvider(&MCPServiceProviderConfig{
-		SDNService: sdnService,
-		Logger:     slog.Default(),
-	})
-
-	credentials := map[string]string{
-		"certificate": "test-cert-data",
-		"format":      "PEM",
-	}
-	err := provider.SDNAuthenticatePort(ctx, "", "port1", credentials)
-	if err == nil {
-		t.Fatal("expected error for empty bridge name")
-	}
-}
-
-func TestMCPServiceProvider_SDNAuthenticatePort_EmptyPortName(t *testing.T) {
-	ctx := context.Background()
-	sdnService := createTestSDNServiceWithBridgeAndPort("br0", "port1")
-
-	provider := NewMCPServiceProvider(&MCPServiceProviderConfig{
-		SDNService: sdnService,
-		Logger:     slog.Default(),
-	})
-
-	credentials := map[string]string{
-		"certificate": "test-cert-data",
-		"format":      "PEM",
-	}
-	err := provider.SDNAuthenticatePort(ctx, "br0", "", credentials)
-	if err == nil {
-		t.Fatal("expected error for empty port name")
-	}
-}
-
-func TestMCPServiceProvider_SDNAuthenticatePort_EmptyCertificate(t *testing.T) {
-	ctx := context.Background()
-	sdnService := createTestSDNServiceWithBridgeAndPort("br0", "port1")
-
-	provider := NewMCPServiceProvider(&MCPServiceProviderConfig{
-		SDNService: sdnService,
-		Logger:     slog.Default(),
-	})
-
-	// Empty certificate should cause an error in the SDN service
-	credentials := map[string]string{
-		"certificate": "",
-		"format":      "PEM",
-	}
-	err := provider.SDNAuthenticatePort(ctx, "br0", "port1", credentials)
-	if err == nil {
-		t.Fatal("expected error for empty certificate")
-	}
-}
-
-func TestMCPServiceProvider_SDNAuthenticatePort_DefaultFormat(t *testing.T) {
-	ctx := context.Background()
-	sdnService := createTestSDNServiceWithBridgeAndPort("br0", "port1")
-
-	provider := NewMCPServiceProvider(&MCPServiceProviderConfig{
-		SDNService: sdnService,
-		Logger:     slog.Default(),
-	})
-
-	// No format specified - should default to PEM
-	credentials := map[string]string{
-		"certificate": "test-cert-data",
-	}
-	// This will fail on certificate parsing, but tests format defaulting
-	err := provider.SDNAuthenticatePort(ctx, "br0", "port1", credentials)
-	// We expect an error because the cert data is not valid, but the format defaulting happens first
-	if err == nil {
-		t.Fatal("expected error (invalid certificate)")
-	}
-}
-
-func TestMCPServiceProvider_SDNAuthenticatePort_DERFormat(t *testing.T) {
-	ctx := context.Background()
-	sdnService := createTestSDNServiceWithBridgeAndPort("br0", "port1")
-
-	provider := NewMCPServiceProvider(&MCPServiceProviderConfig{
-		SDNService: sdnService,
-		Logger:     slog.Default(),
-	})
-
-	// Explicit DER format
-	credentials := map[string]string{
-		"certificate": "test-cert-data",
-		"format":      "DER",
-	}
-	// This will fail on certificate parsing, but tests format handling
-	err := provider.SDNAuthenticatePort(ctx, "br0", "port1", credentials)
-	if err == nil {
-		t.Fatal("expected error (invalid certificate)")
-	}
-}
-
-// =============================================================================
 // SDNGetPortStats Coverage Tests
 // =============================================================================
 
@@ -365,7 +223,7 @@ func TestMCPServiceProvider_SDNGetFlowStats_BridgeNotFound(t *testing.T) {
 	})
 
 	// Try to get flow stats for a non-existent bridge
-	_, err := provider.SDNGetFlowStats(ctx, "nonexistent-bridge")
+	_, err := provider.SDNGetFlowStats(ctx, "nonexistent-bridge", "0x1")
 	if err == nil {
 		t.Fatal("expected error for non-existent bridge")
 	}
@@ -381,7 +239,7 @@ func TestMCPServiceProvider_SDNGetFlowStats_EmptyBridgeName(t *testing.T) {
 	})
 
 	// Empty bridge name should return error
-	_, err := provider.SDNGetFlowStats(ctx, "")
+	_, err := provider.SDNGetFlowStats(ctx, "", "0x1")
 	if err == nil {
 		t.Fatal("expected error for empty bridge name")
 	}
@@ -401,7 +259,7 @@ func TestMCPServiceProvider_SDNFlushFlows_BridgeNotFound(t *testing.T) {
 	})
 
 	// Try to flush flows for a non-existent bridge
-	err := provider.SDNFlushFlows(ctx, "nonexistent-bridge")
+	_, err := provider.SDNFlushFlows(ctx, "nonexistent-bridge")
 	if err == nil {
 		t.Fatal("expected error for non-existent bridge")
 	}
@@ -417,7 +275,7 @@ func TestMCPServiceProvider_SDNFlushFlows_EmptyBridgeName(t *testing.T) {
 	})
 
 	// Empty bridge name should return error
-	err := provider.SDNFlushFlows(ctx, "")
+	_, err := provider.SDNFlushFlows(ctx, "")
 	if err == nil {
 		t.Fatal("expected error for empty bridge name")
 	}
@@ -437,7 +295,7 @@ func TestMCPServiceProvider_SDNCreateVLAN_BridgeNotFound(t *testing.T) {
 	})
 
 	// Try to create VLAN on a non-existent bridge
-	err := provider.SDNCreateVLAN(ctx, "nonexistent-bridge", 100, "test-vlan")
+	_, err := provider.SDNCreateVLAN(ctx, "nonexistent-bridge", 100, "test-vlan")
 	if err == nil {
 		t.Fatal("expected error for non-existent bridge")
 	}
@@ -453,7 +311,7 @@ func TestMCPServiceProvider_SDNCreateVLAN_EmptyBridgeName(t *testing.T) {
 	})
 
 	// Empty bridge name should return error
-	err := provider.SDNCreateVLAN(ctx, "", 100, "test-vlan")
+	_, err := provider.SDNCreateVLAN(ctx, "", 100, "test-vlan")
 	if err == nil {
 		t.Fatal("expected error for empty bridge name")
 	}
@@ -469,7 +327,7 @@ func TestMCPServiceProvider_SDNCreateVLAN_InvalidVLANID_Zero(t *testing.T) {
 	})
 
 	// VLAN ID 0 should be rejected
-	err := provider.SDNCreateVLAN(ctx, "br0", 0, "test-vlan")
+	_, err := provider.SDNCreateVLAN(ctx, "br0", 0, "test-vlan")
 	if err == nil {
 		t.Fatal("expected error for VLAN ID 0")
 	}
@@ -485,7 +343,7 @@ func TestMCPServiceProvider_SDNCreateVLAN_InvalidVLANID_TooHigh(t *testing.T) {
 	})
 
 	// VLAN ID > 4095 should be rejected
-	err := provider.SDNCreateVLAN(ctx, "br0", 5000, "test-vlan")
+	_, err := provider.SDNCreateVLAN(ctx, "br0", 5000, "test-vlan")
 	if err == nil {
 		t.Fatal("expected error for VLAN ID > 4095")
 	}
@@ -501,7 +359,7 @@ func TestMCPServiceProvider_SDNCreateVLAN_Success(t *testing.T) {
 	})
 
 	// Valid VLAN creation
-	err := provider.SDNCreateVLAN(ctx, "br0", 100, "guest-vlan")
+	_, err := provider.SDNCreateVLAN(ctx, "br0", 100, "guest-vlan")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -527,7 +385,7 @@ func TestMCPServiceProvider_SDNCreateVLAN_ValidBoundaryValues(t *testing.T) {
 				Logger:     slog.Default(),
 			})
 
-			err := provider.SDNCreateVLAN(ctx, "br0", tc.vlanID, "test-vlan")
+			_, err := provider.SDNCreateVLAN(ctx, "br0", tc.vlanID, "test-vlan")
 			if err != nil {
 				t.Fatalf("unexpected error for %s: %v", tc.name, err)
 			}
@@ -636,107 +494,6 @@ func TestMCPServiceProvider_SDNDeleteVLAN_Success(t *testing.T) {
 }
 
 // =============================================================================
-// SDNRevokePortAuth Coverage Tests
-// =============================================================================
-
-func TestMCPServiceProvider_SDNRevokePortAuth_BridgeNotFound(t *testing.T) {
-	ctx := context.Background()
-	sdnService := createTestSDNServiceWithPortAuth("br0", "port1")
-
-	provider := NewMCPServiceProvider(&MCPServiceProviderConfig{
-		SDNService: sdnService,
-		Logger:     slog.Default(),
-	})
-
-	// Try to revoke auth on a non-existent bridge
-	err := provider.SDNRevokePortAuth(ctx, "nonexistent-bridge", "port1")
-	if err == nil {
-		t.Fatal("expected error for non-existent bridge")
-	}
-}
-
-func TestMCPServiceProvider_SDNRevokePortAuth_PortNotFound(t *testing.T) {
-	ctx := context.Background()
-	sdnService := createTestSDNServiceWithPortAuth("br0", "port1")
-
-	provider := NewMCPServiceProvider(&MCPServiceProviderConfig{
-		SDNService: sdnService,
-		Logger:     slog.Default(),
-	})
-
-	// Try to revoke auth on a non-existent port
-	err := provider.SDNRevokePortAuth(ctx, "br0", "nonexistent-port")
-	if err == nil {
-		t.Fatal("expected error for non-existent port")
-	}
-}
-
-func TestMCPServiceProvider_SDNRevokePortAuth_NotAuthenticated(t *testing.T) {
-	ctx := context.Background()
-	// Create service with bridge and port but no auth
-	sdnService := createTestSDNServiceWithBridgeAndPort("br0", "port1")
-
-	provider := NewMCPServiceProvider(&MCPServiceProviderConfig{
-		SDNService: sdnService,
-		Logger:     slog.Default(),
-	})
-
-	// Try to revoke auth on a port that is not authenticated
-	err := provider.SDNRevokePortAuth(ctx, "br0", "port1")
-	if err == nil {
-		t.Fatal("expected error for unauthenticated port")
-	}
-}
-
-func TestMCPServiceProvider_SDNRevokePortAuth_EmptyBridgeName(t *testing.T) {
-	ctx := context.Background()
-	sdnService := createTestSDNServiceWithPortAuth("br0", "port1")
-
-	provider := NewMCPServiceProvider(&MCPServiceProviderConfig{
-		SDNService: sdnService,
-		Logger:     slog.Default(),
-	})
-
-	// Empty bridge name should return error
-	err := provider.SDNRevokePortAuth(ctx, "", "port1")
-	if err == nil {
-		t.Fatal("expected error for empty bridge name")
-	}
-}
-
-func TestMCPServiceProvider_SDNRevokePortAuth_EmptyPortName(t *testing.T) {
-	ctx := context.Background()
-	sdnService := createTestSDNServiceWithPortAuth("br0", "port1")
-
-	provider := NewMCPServiceProvider(&MCPServiceProviderConfig{
-		SDNService: sdnService,
-		Logger:     slog.Default(),
-	})
-
-	// Empty port name should return error
-	err := provider.SDNRevokePortAuth(ctx, "br0", "")
-	if err == nil {
-		t.Fatal("expected error for empty port name")
-	}
-}
-
-func TestMCPServiceProvider_SDNRevokePortAuth_Success(t *testing.T) {
-	ctx := context.Background()
-	sdnService := createTestSDNServiceWithPortAuth("br0", "port1")
-
-	provider := NewMCPServiceProvider(&MCPServiceProviderConfig{
-		SDNService: sdnService,
-		Logger:     slog.Default(),
-	})
-
-	// Valid revocation
-	err := provider.SDNRevokePortAuth(ctx, "br0", "port1")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-}
-
-// =============================================================================
 // Table-Driven Tests for All Methods with Various Input Combinations
 // =============================================================================
 
@@ -755,13 +512,6 @@ func TestMCPServiceProvider_SDN_TableDrivenNilServiceChecks(t *testing.T) {
 			},
 		},
 		{
-			name:      "SDNAuthenticatePort with nil service",
-			operation: "SDNAuthenticatePort",
-			execFunc: func(ctx context.Context, p *MCPServiceProvider) error {
-				return p.SDNAuthenticatePort(ctx, "br0", "port1", map[string]string{"certificate": "test"})
-			},
-		},
-		{
 			name:      "SDNGetPortStats with nil service",
 			operation: "SDNGetPortStats",
 			execFunc: func(ctx context.Context, p *MCPServiceProvider) error {
@@ -773,7 +523,7 @@ func TestMCPServiceProvider_SDN_TableDrivenNilServiceChecks(t *testing.T) {
 			name:      "SDNGetFlowStats with nil service",
 			operation: "SDNGetFlowStats",
 			execFunc: func(ctx context.Context, p *MCPServiceProvider) error {
-				_, err := p.SDNGetFlowStats(ctx, "br0")
+				_, err := p.SDNGetFlowStats(ctx, "br0", "0x1")
 				return err
 			},
 		},
@@ -781,14 +531,16 @@ func TestMCPServiceProvider_SDN_TableDrivenNilServiceChecks(t *testing.T) {
 			name:      "SDNFlushFlows with nil service",
 			operation: "SDNFlushFlows",
 			execFunc: func(ctx context.Context, p *MCPServiceProvider) error {
-				return p.SDNFlushFlows(ctx, "br0")
+				_, err := p.SDNFlushFlows(ctx, "br0")
+				return err
 			},
 		},
 		{
 			name:      "SDNCreateVLAN with nil service",
 			operation: "SDNCreateVLAN",
 			execFunc: func(ctx context.Context, p *MCPServiceProvider) error {
-				return p.SDNCreateVLAN(ctx, "br0", 100, "test-vlan")
+				_, err := p.SDNCreateVLAN(ctx, "br0", 100, "test-vlan")
+				return err
 			},
 		},
 		{
@@ -796,13 +548,6 @@ func TestMCPServiceProvider_SDN_TableDrivenNilServiceChecks(t *testing.T) {
 			operation: "SDNDeleteVLAN",
 			execFunc: func(ctx context.Context, p *MCPServiceProvider) error {
 				return p.SDNDeleteVLAN(ctx, "br0", 100)
-			},
-		},
-		{
-			name:      "SDNRevokePortAuth with nil service",
-			operation: "SDNRevokePortAuth",
-			execFunc: func(ctx context.Context, p *MCPServiceProvider) error {
-				return p.SDNRevokePortAuth(ctx, "br0", "port1")
 			},
 		},
 	}
@@ -833,80 +578,6 @@ func TestMCPServiceProvider_SDN_TableDrivenNilServiceChecks(t *testing.T) {
 }
 
 // =============================================================================
-// Edge Cases for Format Handling in SDNAuthenticatePort
-// =============================================================================
-
-func TestMCPServiceProvider_SDNAuthenticatePort_FormatVariationsWithSDNService(t *testing.T) {
-	testCases := []struct {
-		name        string
-		credentials map[string]string
-	}{
-		{
-			name: "explicit PEM format",
-			credentials: map[string]string{
-				"certificate": "test-cert",
-				"format":      "PEM",
-			},
-		},
-		{
-			name: "explicit DER format",
-			credentials: map[string]string{
-				"certificate": "test-cert",
-				"format":      "DER",
-			},
-		},
-		{
-			name: "lowercase pem format",
-			credentials: map[string]string{
-				"certificate": "test-cert",
-				"format":      "pem",
-			},
-		},
-		{
-			name: "no format defaults to PEM",
-			credentials: map[string]string{
-				"certificate": "test-cert",
-			},
-		},
-		{
-			name:        "empty credentials map",
-			credentials: map[string]string{},
-		},
-		{
-			name: "nil-like empty values",
-			credentials: map[string]string{
-				"certificate": "",
-				"format":      "",
-			},
-		},
-	}
-
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			ctx := context.Background()
-			sdnService := createTestSDNServiceWithBridgeAndPort("br0", "port1")
-
-			provider := NewMCPServiceProvider(&MCPServiceProviderConfig{
-				SDNService: sdnService,
-				Logger:     slog.Default(),
-			})
-
-			// All these will fail on certificate validation, but we're testing format handling
-			err := provider.SDNAuthenticatePort(ctx, "br0", "port1", tc.credentials)
-			// We expect an error (invalid cert or empty cert) but NOT a nil service error
-			if err == nil {
-				t.Log("no error returned - certificate may have been processed differently")
-			} else {
-				// Make sure it's not a service not available error
-				if _, ok := err.(ErrServiceNotAvailable); ok {
-					t.Errorf("unexpected ErrServiceNotAvailable - SDN service should be available")
-				}
-			}
-		})
-	}
-}
-
-// =============================================================================
 // Multiple Operations Sequence Tests
 // =============================================================================
 
@@ -920,10 +591,10 @@ func TestMCPServiceProvider_SDN_CreateAndListVLANs(t *testing.T) {
 	})
 
 	// Create multiple VLANs
-	if err := provider.SDNCreateVLAN(ctx, "br0", 100, "vlan-100"); err != nil {
+	if _, err := provider.SDNCreateVLAN(ctx, "br0", 100, "vlan-100"); err != nil {
 		t.Fatalf("failed to create VLAN 100: %v", err)
 	}
-	if err := provider.SDNCreateVLAN(ctx, "br0", 200, "vlan-200"); err != nil {
+	if _, err := provider.SDNCreateVLAN(ctx, "br0", 200, "vlan-200"); err != nil {
 		t.Fatalf("failed to create VLAN 200: %v", err)
 	}
 
@@ -948,7 +619,7 @@ func TestMCPServiceProvider_SDN_CreateAndDeleteVLAN(t *testing.T) {
 	})
 
 	// Create a VLAN
-	if err := provider.SDNCreateVLAN(ctx, "br0", 100, "test-vlan"); err != nil {
+	if _, err := provider.SDNCreateVLAN(ctx, "br0", 100, "test-vlan"); err != nil {
 		t.Fatalf("failed to create VLAN: %v", err)
 	}
 

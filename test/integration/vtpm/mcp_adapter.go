@@ -91,15 +91,6 @@ const (
 // Error Types
 // =============================================================================
 
-// ErrMCPVTPMNotImplemented indicates a method is not yet implemented.
-type ErrMCPVTPMNotImplemented struct {
-	Method string
-}
-
-func (e ErrMCPVTPMNotImplemented) Error() string {
-	return fmt.Sprintf("MCP vTPM method %s not implemented", e.Method)
-}
-
 // ErrMCPVTPMConnectionFailed indicates an MCP connection failure.
 type ErrMCPVTPMConnectionFailed struct {
 	Endpoint string
@@ -346,17 +337,17 @@ type MCPAdapter struct {
 }
 
 // NewMCPAdapter creates a new MCP adapter for vTPM integration testing.
-// It reads the MCP endpoint from the VTPM_MCP_ENDPOINT environment variable,
-// which is set by setup_test.go to point to the in-process MCP HTTP server.
+// It reads the platformd MCP endpoint from the VTPM_MCP_ENDPOINT environment
+// variable, which the integration harness exports; MCP is HTTPS only (#844).
 func NewMCPAdapter() *MCPAdapter {
 	endpoint := os.Getenv("VTPM_MCP_ENDPOINT")
 	if endpoint == "" {
-		endpoint = "http://127.0.0.1:9445"
+		endpoint = "127.0.0.1:9445"
 	}
 
 	return &MCPAdapter{
-		endpoint:   endpoint,
-		httpClient: helpers.NewPlainHTTPClient(DefaultMCPTimeoutVTPM),
+		endpoint:   helpers.MCPBaseURL(endpoint),
+		httpClient: helpers.NewHTTPClient(DefaultMCPTimeoutVTPM),
 	}
 }
 

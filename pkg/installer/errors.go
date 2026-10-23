@@ -28,6 +28,9 @@ const (
 	ErrorTypeTPM           ErrorType = "tpm"
 	ErrorTypeCompletion    ErrorType = "completion"
 	ErrorTypeDiskRelease   ErrorType = "disk_release"
+	ErrorTypeBootModel     ErrorType = "boot_model"
+	ErrorTypeNBDTarget     ErrorType = "nbd_target"
+	ErrorTypeEnrollment    ErrorType = "enrollment"
 )
 
 // InstallerError wraps errors with additional context
@@ -136,22 +139,6 @@ type WrappedError struct {
 	Err error
 }
 
-// ErrOpenRCServiceEnable reports an OpenRC service that could not be enabled.
-type ErrOpenRCServiceEnable struct {
-	Service  string
-	Runlevel string
-	Output   string
-	Err      error
-}
-
-func (e *ErrOpenRCServiceEnable) Error() string {
-	return "installer: failed to enable OpenRC service " + e.Service + " in " + e.Runlevel
-}
-
-func (e *ErrOpenRCServiceEnable) Unwrap() error {
-	return e.Err
-}
-
 // Error implements the error interface.
 func (e *WrappedError) Error() string {
 	return e.Msg + ": " + e.Err.Error()
@@ -210,6 +197,13 @@ func ErrUnknownBootFirmware(name string) error {
 	return &InstallerError{Type: ErrorTypeInvalidConfig, Message: "unknown boot firmware " + name + " (uefi, uboot)"}
 }
 
+// ErrInvalidMappedName reports a disk.encryption.mapped-name that go-luks2's
+// Unlock would refuse (luks2.ValidateMappingName). Validation catches it
+// before the installer formats the disk, not at the unlock that follows.
+func ErrInvalidMappedName(name string, cause error) error {
+	return &InstallerError{Type: ErrorTypeInvalidConfig, Message: "invalid disk encryption mapped-name " + name, Cause: cause}
+}
+
 // ErrBootFirmwareStage reports a failure to lay the staged boot firmware
 // onto the EFI partition.
 func ErrBootFirmwareStage(message string, cause error) error {
@@ -229,3 +223,51 @@ func ErrMediaKernel(message string, cause error) error {
 func ErrDiskRelease(message string, cause error) error {
 	return &InstallerError{Type: ErrorTypeDiskRelease, Message: message, Cause: cause}
 }
+
+// ErrBootModel reports a boot model on the live command line that this
+// installer cannot install. Install returns it before it clears the TPM or
+// touches a disk.
+func ErrBootModel(message string, cause error) error {
+	return &InstallerError{Type: ErrorTypeBootModel, Message: message, Cause: cause}
+}
+
+// ErrNBDTarget reports a diskless-nbd install whose target, /dev/nbd0, is
+// not an attached NBD export. Install returns it before it clears the TPM or
+// touches a disk.
+func ErrNBDTarget(message string, cause error) error {
+	return &InstallerError{Type: ErrorTypeNBDTarget, Message: message, Cause: cause}
+}
+
+// NBDTargetError is the cause of an ErrNBDTarget: the device that was
+// checked and why it cannot be installed to.
+type NBDTargetError struct {
+	Device string
+	Reason string
+}
+
+func (e *NBDTargetError) Error() string {
+	return e.Device + ": " + e.Reason
+}
+
+// ErrEnrollment reports a diskless-nbd install whose node did not enrol, so
+// it holds no IDevID to attach its export with. Install returns it before it
+// clears the TPM or touches a disk.
+func ErrEnrollment(message string, cause error) error {
+	return &InstallerError{Type: ErrorTypeEnrollment, Message: message, Cause: cause}
+}
+
+// EnrollmentError is the cause of an ErrEnrollment: why the node holds no
+// IDevID, and the enrollment client's error when it returned one.
+type EnrollmentError struct {
+	Reason string
+	Err    error
+}
+
+func (e *EnrollmentError) Error() string {
+	if e.Err == nil {
+		return e.Reason
+	}
+	return e.Reason + ": " + e.Err.Error()
+}
+
+func (e *EnrollmentError) Unwrap() error { return e.Err }

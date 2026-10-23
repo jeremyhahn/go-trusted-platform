@@ -66,6 +66,7 @@ func TestOrchestrator_DryRun_EventLogWarnings(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
+	o.discoverMACs = unreachableMACDiscovery
 
 	result, err := o.DryRun(t.Context())
 	if err != nil {
@@ -116,6 +117,7 @@ func TestOrchestrator_DryRun_EventLogCleanIsSilent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
+	o.discoverMACs = unreachableMACDiscovery
 	result, err := o.DryRun(t.Context())
 	if err != nil {
 		t.Fatalf("dry-run failed: %v", err)
@@ -137,6 +139,7 @@ func TestOrchestrator_DryRun_EventLogUnsupportedAndUnreadable(t *testing.T) {
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
+		o.discoverMACs = unreachableMACDiscovery
 		result, err := o.DryRun(t.Context())
 		if err != nil {
 			t.Fatalf("dry-run failed: %v", err)
@@ -156,6 +159,7 @@ func TestOrchestrator_DryRun_EventLogUnsupportedAndUnreadable(t *testing.T) {
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
+		o.discoverMACs = unreachableMACDiscovery
 		result, err := o.DryRun(t.Context())
 		if err != nil {
 			t.Fatalf("dry-run failed: %v", err)

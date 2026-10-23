@@ -1,5 +1,8 @@
 # VXLAN Overlay QUIC API Reference
 
+> **Status: REFERENCE** · Last verified: 2026-10-15
+> The overlay opcodes of the platform QUIC protocol.
+
 ## Overview
 
 | Property | Value |
@@ -17,7 +20,7 @@ operation.
 
 | Sub-opcode | Operation | Description |
 |-----------|-----------|-------------|
-| `0x01` | Status | Overlay status (node ID, VTEP, counts, IPsec unpeered VTEPs, health) |
+| `0x01` | Status | Overlay status (node ID, VTEP, counts, health) |
 | `0x02` | ListVTEPs | List all known VTEPs |
 | `0x03` | GetVTEP | Get VTEP by ID |
 | `0x04` | ListVNIs | List configured VNIs |
@@ -26,11 +29,13 @@ operation.
 | `0x07` | ListTunnels | List VXLAN tunnels |
 | `0x08` | ListMACs | List learned MACs (VNI filter) |
 | `0x09` | ForgetMAC | Remove a learned MAC |
+| `0x0A` | TunnelStats | One tunnel's counters (remote VTEP, optional VNI) |
 
 ## Payload Types
 
-Payloads are msgpack-encoded structs; keys follow the `codec` tags in
-`pkg/api/quic/overlay_handlers.go`. For example the status response:
+Payloads are msgpack-encoded structs defined in
+`sdk/go/wire/quicwire/overlay.go`, shared by the daemon handler and the SDK
+QUIC adapter. For example the status response:
 
 ```go
 type OverlayStatusInfo struct {
@@ -43,7 +48,6 @@ type OverlayStatusInfo struct {
     VNICount     int    `codec:"vni_count"`
     TunnelCount  int    `codec:"tunnel_count"`
     MACCount     int    `codec:"mac_count"`
-    UnpeeredVTEPs int    `codec:"unpeered_vteps"`
     UplinkIface  string `codec:"uplink_iface,omitempty"`
     MTU          int    `codec:"mtu"`
     EncapType    string `codec:"encap_type"`
@@ -51,14 +55,29 @@ type OverlayStatusInfo struct {
 }
 ```
 
-List responses are paginated with a default limit of 100 and a maximum
-of 1000 entries per page.
+`CreateVNI` takes `OverlayCreateVNIRequest`; its `VLAN` field (0-4094, 0 maps
+no VLAN) reaches the controller's `VNIConfig`.
+
+List requests carry `limit` and `offset`; a page holds 100 entries by default
+and at most 1000, and a negative offset is refused with `InvalidRequest`. List
+responses carry `count`, the length of the page, and `total`, the number of
+entries in all. `ListTunnels` and `ListMACs` return only the given VNI when
+`vni` is non-zero. The SDK QUIC adapter pages until it holds `total` entries,
+so `Overlay().List*` returns every entry.
 
 ## Errors
 
 Typed sentinel errors map onto QUIC error frames, including: overlay
-service not available, VTEP/VNI/MAC not found, VNI already exists,
-invalid VNI (must be 1-16777215), and invalid MAC address format.
+service not available, VTEP/VNI/MAC/tunnel not found, VNI already exists,
+invalid VNI (must be 1-16777215), invalid VLAN (must be 0-4094; answered
+`StatusInvalidArgument`, the class REST answers 400 for), invalid MAC
+address format, and a
+missing or malformed remote VTEP address.
+
+`TunnelStats` takes `{remote_vtep, vni}` (`OverlayTunnelStatsRequest`); a
+VNI of 0 selects the first tunnel to the remote VTEP. It answers
+`{tunnel, timestamp}` with the tunnel gRPC `GetTunnelStats` returns, or
+NotFound when no tunnel matches.
 
 ## Client Usage
 

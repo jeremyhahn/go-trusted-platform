@@ -47,6 +47,17 @@ func buildHandlerMap(reg *ServiceRegistry) map[string]handlerFunc {
 	registerInvitationHandlers(m, reg)
 	registerConfigDeliveryHandlers(m, reg)
 	registerProxyHandlers(m, reg)
+	registerCeremonyHandlers(m, reg)
+	registerPIVHandlers(m, reg)
+	registerFIDO2Handlers(m, reg)
+	registerBMCHandlers(m, reg)
+	registerNTPHandlers(m, reg)
+	registerLUKSHandlers(m, reg)
+	registerSwitchHandlers(m, reg)
+	registerCacheHandlers(m, reg)
+	registerSchedulerHandlers(m, reg)
+	registerMessagingHandlers(m, reg)
+	registerObjectStorageHandlers(m, reg)
 
 	return m
 }
@@ -93,6 +104,12 @@ func registerDaemonHandlers(m map[string]handlerFunc, reg *ServiceRegistry) {
 	}
 	m[platformv1.PlatformDaemon_GetHealth_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
 		return svc.GetHealth(ctx, req.(*platformv1.GetHealthRequest))
+	}
+	m[platformv1.PlatformDaemon_Liveness_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.Liveness(ctx, req.(*platformv1.LivenessRequest))
+	}
+	m[platformv1.PlatformDaemon_Readiness_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.Readiness(ctx, req.(*platformv1.ReadinessRequest))
 	}
 	m[platformv1.PlatformDaemon_Shutdown_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
 		return svc.Shutdown(ctx, req.(*platformv1.ShutdownRequest))
@@ -152,6 +169,9 @@ func registerCAHandlers(m map[string]handlerFunc, reg *ServiceRegistry) {
 	}
 	m[platformv1.CAService_IssueCertificate_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
 		return svc.IssueCertificate(ctx, req.(*platformv1.IssueCertificateRequest))
+	}
+	m[platformv1.CAService_SignCSR_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.SignCSR(ctx, req.(*platformv1.SignCSRRequest))
 	}
 	m[platformv1.CAService_GetCertificate_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
 		return svc.GetCertificate(ctx, req.(*platformv1.GetCertificateRequest))
@@ -237,6 +257,9 @@ func registerTPMHandlers(m map[string]handlerFunc, reg *ServiceRegistry) {
 	m[platformv1.TPMService_VerifyQuote_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
 		return svc.VerifyQuote(ctx, req.(*platformv1.VerifyQuoteRequest))
 	}
+	m[platformv1.TPMService_Certify_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.Certify(ctx, req.(*platformv1.CertifyRequest))
+	}
 	m[platformv1.TPMService_GetEventLog_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
 		return svc.GetEventLog(ctx, req.(*platformv1.GetEventLogRequest))
 	}
@@ -257,6 +280,21 @@ func registerTPMHandlers(m map[string]handlerFunc, reg *ServiceRegistry) {
 	}
 	m[platformv1.TPMService_GetRandom_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
 		return svc.GetRandom(ctx, req.(*platformv1.GetRandomRequest))
+	}
+	m[platformv1.TPMService_GetCapabilities_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.GetCapabilities(ctx, req.(*platformv1.TPMCapabilitiesRequest))
+	}
+	m[platformv1.TPMService_GetPlatformAttributes_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.GetPlatformAttributes(ctx, req.(*platformv1.TPMPlatformAttributesRequest))
+	}
+	m[platformv1.TPMService_ExtendPCR_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.ExtendPCR(ctx, req.(*platformv1.ExtendPCRRequest))
+	}
+	m[platformv1.TPMService_MakeCredential_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.MakeCredential(ctx, req.(*platformv1.MakeCredentialRequest))
+	}
+	m[platformv1.TPMService_ActivateCredential_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.ActivateCredential(ctx, req.(*platformv1.TPMActivateCredentialRequest))
 	}
 }
 
@@ -388,8 +426,47 @@ func registerDeviceHandlers(m map[string]handlerFunc, reg *ServiceRegistry) {
 	m[platformv1.DeviceService_CountProfiles_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
 		return svc.CountProfiles(ctx, req.(*platformv1.CountProfilesRequest))
 	}
+	m[platformv1.DeviceService_CreateTemplate_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.CreateTemplate(ctx, req.(*platformv1.DeviceTemplateCreateRequest))
+	}
+	m[platformv1.DeviceService_GetTemplate_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.GetTemplate(ctx, req.(*platformv1.DeviceTemplateGetRequest))
+	}
+	m[platformv1.DeviceService_ListTemplates_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.ListTemplates(ctx, req.(*platformv1.DeviceTemplateListRequest))
+	}
+	m[platformv1.DeviceService_UpdateTemplate_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.UpdateTemplate(ctx, req.(*platformv1.DeviceTemplateUpdateRequest))
+	}
+	m[platformv1.DeviceService_DeleteTemplate_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.DeleteTemplate(ctx, req.(*platformv1.DeviceTemplateDeleteRequest))
+	}
+	m[platformv1.DeviceService_CreateProfileFromTemplate_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.CreateProfileFromTemplate(ctx, req.(*platformv1.CreateProfileFromTemplateRequest))
+	}
 	m[platformv1.DeviceService_ActivateDevice_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
 		return svc.ActivateDevice(ctx, req.(*platformv1.ActivateDeviceRequest))
+	}
+	m[platformv1.DeviceService_AttestDevice_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.AttestDevice(ctx, req.(*platformv1.AttestDeviceRequest))
+	}
+	m[platformv1.DeviceService_RecordAttestationCertificate_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.RecordAttestationCertificate(ctx, req.(*platformv1.RecordAttestationCertificateRequest))
+	}
+	m[platformv1.DeviceService_DisableDevice_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.DisableDevice(ctx, req.(*platformv1.DisableDeviceRequest))
+	}
+	m[platformv1.DeviceService_EnableDevice_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.EnableDevice(ctx, req.(*platformv1.EnableDeviceRequest))
+	}
+	m[platformv1.DeviceService_FindConfigForDevice_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.FindConfigForDevice(ctx, req.(*platformv1.FindConfigForDeviceRequest))
+	}
+	m[platformv1.DeviceService_AssignProfileToDevice_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.AssignProfileToDevice(ctx, req.(*platformv1.AssignProfileToDeviceRequest))
+	}
+	m[platformv1.DeviceService_UnassignProfileFromDevice_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.UnassignProfileFromDevice(ctx, req.(*platformv1.UnassignProfileFromDeviceRequest))
 	}
 }
 
@@ -701,6 +778,12 @@ func registerComputeHandlers(m map[string]handlerFunc, reg *ServiceRegistry) {
 	m[platformv1.ComputeService_RebootVM_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
 		return svc.RebootVM(ctx, req.(*platformv1.RebootVMRequest))
 	}
+	m[platformv1.ComputeService_SuspendVM_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.SuspendVM(ctx, req.(*platformv1.SuspendVMRequest))
+	}
+	m[platformv1.ComputeService_ResumeVM_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.ResumeVM(ctx, req.(*platformv1.ResumeVMRequest))
+	}
 	m[platformv1.ComputeService_DeleteVM_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
 		return svc.DeleteVM(ctx, req.(*platformv1.DeleteVMRequest))
 	}
@@ -734,8 +817,17 @@ func registerComputeHandlers(m map[string]handlerFunc, reg *ServiceRegistry) {
 	m[platformv1.ComputeService_ListSnapshots_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
 		return svc.ListSnapshots(ctx, req.(*platformv1.ListSnapshotsRequest))
 	}
+	m[platformv1.ComputeService_GetSnapshot_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.GetSnapshot(ctx, req.(*platformv1.GetSnapshotRequest))
+	}
 	m[platformv1.ComputeService_MigrateVM_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
 		return svc.MigrateVM(ctx, req.(*platformv1.MigrateVMRequest))
+	}
+	m[platformv1.ComputeService_PrepareMigration_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.PrepareMigration(ctx, req.(*platformv1.PrepareMigrationRequest))
+	}
+	m[platformv1.ComputeService_FinalizeMigration_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.FinalizeMigration(ctx, req.(*platformv1.FinalizeMigrationRequest))
 	}
 	m[platformv1.ComputeService_CreateContainer_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
 		return svc.CreateContainer(ctx, req.(*platformv1.CreateContainerRequest))
@@ -876,6 +968,11 @@ func registerAttestationHandlers(m map[string]handlerFunc, reg *ServiceRegistry)
 	}
 	m[platformv1.AttestationService_CollectContainerAttestation_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
 		return svc.CollectContainerAttestation(ctx, req.(*platformv1.CollectContainerAttestationRequest))
+	}
+	// StreamDeviceVerdicts reaches an in-process caller as long polls of this
+	// method; see embeddedClientConn.NewStream.
+	m[platformv1.AttestationService_PollDeviceVerdicts_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.PollDeviceVerdicts(ctx, req.(*platformv1.PollDeviceVerdictsRequest))
 	}
 }
 
@@ -1246,6 +1343,245 @@ func registerEABHandlers(m map[string]handlerFunc, reg *ServiceRegistry) {
 	}
 }
 
+func registerCeremonyHandlers(m map[string]handlerFunc, reg *ServiceRegistry) {
+	if reg.Ceremony == nil {
+		return
+	}
+	svc := reg.Ceremony
+
+	m[platformv1.CeremonyService_Init_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.Init(ctx, req.(*platformv1.CeremonyInitRequest))
+	}
+	m[platformv1.CeremonyService_Status_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.Status(ctx, req.(*platformv1.CeremonyStatusRequest))
+	}
+	m[platformv1.CeremonyService_ClaimCertBegin_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.ClaimCertBegin(ctx, req.(*platformv1.CeremonyClaimCertBeginRequest))
+	}
+	m[platformv1.CeremonyService_ClaimCertComplete_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.ClaimCertComplete(ctx, req.(*platformv1.CeremonyClaimCertCompleteRequest))
+	}
+	m[platformv1.CeremonyService_ClaimShareBegin_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.ClaimShareBegin(ctx, req.(*platformv1.CeremonyClaimShareBeginRequest))
+	}
+	m[platformv1.CeremonyService_ClaimShareComplete_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.ClaimShareComplete(ctx, req.(*platformv1.CeremonyClaimShareCompleteRequest))
+	}
+	m[platformv1.CeremonyService_SignCSR_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.SignCSR(ctx, req.(*platformv1.CeremonySignCSRRequest))
+	}
+}
+
+func registerPIVHandlers(m map[string]handlerFunc, reg *ServiceRegistry) {
+	if reg.PIV == nil {
+		return
+	}
+	svc := reg.PIV
+
+	m[platformv1.PIVService_ListDevices_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.ListDevices(ctx, req.(*platformv1.PIVListDevicesRequest))
+	}
+	m[platformv1.PIVService_ListSlots_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.ListSlots(ctx, req.(*platformv1.PIVListSlotsRequest))
+	}
+	m[platformv1.PIVService_SlotInfo_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.SlotInfo(ctx, req.(*platformv1.PIVSlotInfoRequest))
+	}
+	m[platformv1.PIVService_Generate_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.Generate(ctx, req.(*platformv1.PIVGenerateRequest))
+	}
+	m[platformv1.PIVService_Import_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.Import(ctx, req.(*platformv1.PIVImportRequest))
+	}
+	m[platformv1.PIVService_Sign_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.Sign(ctx, req.(*platformv1.PIVSignRequest))
+	}
+	m[platformv1.PIVService_Attest_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.Attest(ctx, req.(*platformv1.PIVAttestRequest))
+	}
+	m[platformv1.PIVService_Reset_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.Reset(ctx, req.(*platformv1.PIVResetRequest))
+	}
+}
+
+func registerFIDO2Handlers(m map[string]handlerFunc, reg *ServiceRegistry) {
+	if reg.FIDO2 == nil {
+		return
+	}
+	svc := reg.FIDO2
+
+	m[platformv1.FIDO2Service_ListDevices_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.ListDevices(ctx, req.(*platformv1.FIDO2ListDevicesRequest))
+	}
+	m[platformv1.FIDO2Service_WaitDevice_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.WaitDevice(ctx, req.(*platformv1.FIDO2WaitDeviceRequest))
+	}
+	m[platformv1.FIDO2Service_Info_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.Info(ctx, req.(*platformv1.FIDO2InfoRequest))
+	}
+	m[platformv1.FIDO2Service_Register_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.Register(ctx, req.(*platformv1.FIDO2RegisterRequest))
+	}
+	m[platformv1.FIDO2Service_Authenticate_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.Authenticate(ctx, req.(*platformv1.FIDO2AuthenticateRequest))
+	}
+}
+
+func registerBMCHandlers(m map[string]handlerFunc, reg *ServiceRegistry) {
+	if reg.BMC == nil {
+		return
+	}
+	svc := reg.BMC
+
+	m[platformv1.BMCService_PowerOn_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.PowerOn(ctx, req.(*platformv1.BMCPowerRequest))
+	}
+	m[platformv1.BMCService_PowerOff_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.PowerOff(ctx, req.(*platformv1.BMCPowerRequest))
+	}
+	m[platformv1.BMCService_PowerReset_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.PowerReset(ctx, req.(*platformv1.BMCPowerRequest))
+	}
+	m[platformv1.BMCService_PowerCycle_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.PowerCycle(ctx, req.(*platformv1.BMCPowerRequest))
+	}
+	m[platformv1.BMCService_PowerStatus_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.PowerStatus(ctx, req.(*platformv1.BMCPowerStatusRequest))
+	}
+	m[platformv1.BMCService_SetBootDevice_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.SetBootDevice(ctx, req.(*platformv1.BMCSetBootDeviceRequest))
+	}
+	m[platformv1.BMCService_GetBootDevice_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.GetBootDevice(ctx, req.(*platformv1.BMCGetBootDeviceRequest))
+	}
+	m[platformv1.BMCService_MountISO_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.MountISO(ctx, req.(*platformv1.BMCMountISORequest))
+	}
+	m[platformv1.BMCService_UnmountISO_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.UnmountISO(ctx, req.(*platformv1.BMCUnmountISORequest))
+	}
+	m[platformv1.BMCService_VirtualMediaStatus_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.VirtualMediaStatus(ctx, req.(*platformv1.BMCVirtualMediaStatusRequest))
+	}
+	m[platformv1.BMCService_GetSensors_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.GetSensors(ctx, req.(*platformv1.BMCGetSensorsRequest))
+	}
+	m[platformv1.BMCService_GetSystemInfo_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.GetSystemInfo(ctx, req.(*platformv1.BMCGetSystemInfoRequest))
+	}
+	m[platformv1.BMCService_Provision_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.Provision(ctx, req.(*platformv1.BMCProvisionRequest))
+	}
+	m[platformv1.BMCService_ProvisionStatus_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.ProvisionStatus(ctx, req.(*platformv1.BMCProvisionStatusRequest))
+	}
+	m[platformv1.BMCService_GetWebCertificate_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.GetWebCertificate(ctx, req.(*platformv1.BMCGetWebCertificateRequest))
+	}
+	m[platformv1.BMCService_ReplaceWebCertificate_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.ReplaceWebCertificate(ctx, req.(*platformv1.BMCReplaceWebCertificateRequest))
+	}
+	m[platformv1.BMCService_EnrollBMC_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.EnrollBMC(ctx, req.(*platformv1.BMCEnrollRequest))
+	}
+	m[platformv1.BMCService_RestoreFactoryCert_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.RestoreFactoryCert(ctx, req.(*platformv1.BMCRestoreRequest))
+	}
+	m[platformv1.BMCService_ListUsers_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.ListUsers(ctx, req.(*platformv1.BMCListUsersRequest))
+	}
+	m[platformv1.BMCService_CreateUser_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.CreateUser(ctx, req.(*platformv1.BMCCreateUserRequest))
+	}
+	m[platformv1.BMCService_DeleteUser_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.DeleteUser(ctx, req.(*platformv1.BMCDeleteUserRequest))
+	}
+	m[platformv1.BMCService_SetUserPassword_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.SetUserPassword(ctx, req.(*platformv1.BMCSetUserPasswordRequest))
+	}
+	m[platformv1.BMCService_SetUserPrivilege_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.SetUserPrivilege(ctx, req.(*platformv1.BMCSetUserPrivilegeRequest))
+	}
+}
+
+func registerNTPHandlers(m map[string]handlerFunc, reg *ServiceRegistry) {
+	if reg.NTP == nil {
+		return
+	}
+	svc := reg.NTP
+
+	m[platformv1.NTPService_GetStatus_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.GetStatus(ctx, req.(*platformv1.GetNTPStatusRequest))
+	}
+	m[platformv1.NTPService_ListSources_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.ListSources(ctx, req.(*platformv1.ListNTPSourcesRequest))
+	}
+	m[platformv1.NTPService_Step_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.Step(ctx, req.(*platformv1.StepNTPClockRequest))
+	}
+}
+
+func registerLUKSHandlers(m map[string]handlerFunc, reg *ServiceRegistry) {
+	if reg.LUKS == nil {
+		return
+	}
+	svc := reg.LUKS
+
+	m[platformv1.LUKSService_Status_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.Status(ctx, req.(*platformv1.LUKSStatusRequest))
+	}
+	m[platformv1.LUKSService_ListSlots_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.ListSlots(ctx, req.(*platformv1.LUKSListSlotsRequest))
+	}
+	m[platformv1.LUKSService_Info_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.Info(ctx, req.(*platformv1.LUKSInfoRequest))
+	}
+	m[platformv1.LUKSService_EnrollPassphrase_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.EnrollPassphrase(ctx, req.(*platformv1.LUKSEnrollPassphraseRequest))
+	}
+	m[platformv1.LUKSService_EnrollFIDO2_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.EnrollFIDO2(ctx, req.(*platformv1.LUKSEnrollFIDO2Request))
+	}
+	m[platformv1.LUKSService_EnrollTPM_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.EnrollTPM(ctx, req.(*platformv1.LUKSEnrollTPMRequest))
+	}
+	m[platformv1.LUKSService_EnrollRecovery_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.EnrollRecovery(ctx, req.(*platformv1.LUKSEnrollRecoveryRequest))
+	}
+	m[platformv1.LUKSService_RemoveKey_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.RemoveKey(ctx, req.(*platformv1.LUKSRemoveKeyRequest))
+	}
+	m[platformv1.LUKSService_TestUnlock_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.TestUnlock(ctx, req.(*platformv1.LUKSTestUnlockRequest))
+	}
+	m[platformv1.LUKSService_ChangePassphrase_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.ChangePassphrase(ctx, req.(*platformv1.LUKSChangePassphraseRequest))
+	}
+}
+
+func registerSwitchHandlers(m map[string]handlerFunc, reg *ServiceRegistry) {
+	if reg.Switch == nil {
+		return
+	}
+	svc := reg.Switch
+
+	m[platformv1.SwitchService_ListPorts_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.ListPorts(ctx, req.(*platformv1.ListSwitchPortsRequest))
+	}
+	m[platformv1.SwitchService_GetPortStatus_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.GetPortStatus(ctx, req.(*platformv1.GetSwitchPortStatusRequest))
+	}
+	m[platformv1.SwitchService_SetPortVLAN_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.SetPortVLAN(ctx, req.(*platformv1.SetSwitchPortVLANRequest))
+	}
+	m[platformv1.SwitchService_EnablePort_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.EnablePort(ctx, req.(*platformv1.EnableSwitchPortRequest))
+	}
+	m[platformv1.SwitchService_DisablePort_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.DisablePort(ctx, req.(*platformv1.DisableSwitchPortRequest))
+	}
+}
+
 // registerInvitationHandlers registers InvitationService handlers.
 func registerInvitationHandlers(m map[string]handlerFunc, reg *ServiceRegistry) {
 	if reg.Invitation == nil {
@@ -1324,5 +1660,134 @@ func registerProxyHandlers(m map[string]handlerFunc, reg *ServiceRegistry) {
 	}
 	m[platformv1.ProxyService_GetZoneMatrix_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
 		return svc.GetZoneMatrix(ctx, req.(*platformv1.GetProxyZoneMatrixRequest))
+	}
+}
+
+// registerCacheHandlers registers CacheService handlers.
+func registerCacheHandlers(m map[string]handlerFunc, reg *ServiceRegistry) {
+	if reg.Cache == nil {
+		return
+	}
+	svc := reg.Cache
+
+	m[platformv1.CacheService_GetStats_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.GetStats(ctx, req.(*platformv1.GetCacheStatsRequest))
+	}
+	m[platformv1.CacheService_Clear_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.Clear(ctx, req.(*platformv1.ClearCacheRequest))
+	}
+	m[platformv1.CacheService_GetConfig_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.GetConfig(ctx, req.(*platformv1.GetCacheConfigRequest))
+	}
+	m[platformv1.CacheService_UpdateConfig_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.UpdateConfig(ctx, req.(*platformv1.UpdateCacheConfigRequest))
+	}
+}
+
+// registerSchedulerHandlers registers SchedulerService handlers.
+func registerSchedulerHandlers(m map[string]handlerFunc, reg *ServiceRegistry) {
+	if reg.Scheduler == nil {
+		return
+	}
+	svc := reg.Scheduler
+
+	m[platformv1.SchedulerService_CreateJob_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.CreateJob(ctx, req.(*platformv1.CreateSchedulerJobRequest))
+	}
+	m[platformv1.SchedulerService_GetJob_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.GetJob(ctx, req.(*platformv1.GetSchedulerJobRequest))
+	}
+	m[platformv1.SchedulerService_UpdateJob_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.UpdateJob(ctx, req.(*platformv1.UpdateSchedulerJobRequest))
+	}
+	m[platformv1.SchedulerService_DeleteJob_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.DeleteJob(ctx, req.(*platformv1.DeleteSchedulerJobRequest))
+	}
+	m[platformv1.SchedulerService_ListJobs_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.ListJobs(ctx, req.(*platformv1.ListSchedulerJobsRequest))
+	}
+	m[platformv1.SchedulerService_TriggerJob_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.TriggerJob(ctx, req.(*platformv1.TriggerSchedulerJobRequest))
+	}
+	m[platformv1.SchedulerService_PauseJob_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.PauseJob(ctx, req.(*platformv1.PauseSchedulerJobRequest))
+	}
+	m[platformv1.SchedulerService_ResumeJob_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.ResumeJob(ctx, req.(*platformv1.ResumeSchedulerJobRequest))
+	}
+	m[platformv1.SchedulerService_CancelJob_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.CancelJob(ctx, req.(*platformv1.CancelSchedulerJobRequest))
+	}
+	m[platformv1.SchedulerService_GetJobHistory_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.GetJobHistory(ctx, req.(*platformv1.GetSchedulerJobHistoryRequest))
+	}
+	m[platformv1.SchedulerService_GetStatus_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.GetStatus(ctx, req.(*platformv1.GetSchedulerStatusRequest))
+	}
+}
+
+// registerMessagingHandlers registers MessagingService handlers.
+func registerMessagingHandlers(m map[string]handlerFunc, reg *ServiceRegistry) {
+	if reg.Messaging == nil {
+		return
+	}
+	svc := reg.Messaging
+
+	m[platformv1.MessagingService_CreateChannel_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.CreateChannel(ctx, req.(*platformv1.CreateMessagingChannelRequest))
+	}
+	m[platformv1.MessagingService_DeleteChannel_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.DeleteChannel(ctx, req.(*platformv1.DeleteMessagingChannelRequest))
+	}
+	m[platformv1.MessagingService_GetChannel_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.GetChannel(ctx, req.(*platformv1.GetMessagingChannelRequest))
+	}
+	m[platformv1.MessagingService_ListChannels_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.ListChannels(ctx, req.(*platformv1.ListMessagingChannelsRequest))
+	}
+	m[platformv1.MessagingService_Publish_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.Publish(ctx, req.(*platformv1.PublishMessageRequest))
+	}
+	m[platformv1.MessagingService_GetStats_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.GetStats(ctx, req.(*platformv1.GetMessagingStatsRequest))
+	}
+	m[platformv1.MessagingService_GetDedupStats_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.GetDedupStats(ctx, req.(*platformv1.GetMessagingDedupStatsRequest))
+	}
+	m[platformv1.MessagingService_GetChannelStats_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.GetChannelStats(ctx, req.(*platformv1.GetMessagingChannelStatsRequest))
+	}
+}
+
+// registerObjectStorageHandlers registers ObjectStorageService handlers.
+func registerObjectStorageHandlers(m map[string]handlerFunc, reg *ServiceRegistry) {
+	if reg.ObjectStorage == nil {
+		return
+	}
+	svc := reg.ObjectStorage
+
+	m[platformv1.ObjectStorageService_PutObject_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.PutObject(ctx, req.(*platformv1.PutObjectRequest))
+	}
+	m[platformv1.ObjectStorageService_GetObject_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.GetObject(ctx, req.(*platformv1.GetObjectRequest))
+	}
+	m[platformv1.ObjectStorageService_DeleteObject_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.DeleteObject(ctx, req.(*platformv1.DeleteObjectRequest))
+	}
+	m[platformv1.ObjectStorageService_HeadObject_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.HeadObject(ctx, req.(*platformv1.HeadObjectRequest))
+	}
+	m[platformv1.ObjectStorageService_ListObjects_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.ListObjects(ctx, req.(*platformv1.ListObjectsRequest))
+	}
+	m[platformv1.ObjectStorageService_CopyObject_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.CopyObject(ctx, req.(*platformv1.CopyObjectRequest))
+	}
+	m[platformv1.ObjectStorageService_ListObjectsByTag_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.ListObjectsByTag(ctx, req.(*platformv1.ListObjectsByTagRequest))
+	}
+	m[platformv1.ObjectStorageService_ListTenantObjects_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.ListTenantObjects(ctx, req.(*platformv1.ListTenantObjectsRequest))
 	}
 }

@@ -15,15 +15,6 @@
 
 package ceremony
 
-import (
-	"errors"
-	"os"
-	"strings"
-
-	daemonpkg "github.com/jeremyhahn/go-trusted-platform/pkg/api/daemon"
-	ceremonysdk "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/ceremony"
-)
-
 // Environment variable names for service endpoints. Keep in sync with the CA
 // adapter conventions so a single run-integration-tests.sh run picks up all
 // service adapters identically.
@@ -56,48 +47,5 @@ func GetServiceEndpoints() *ServiceEndpoints {
 		PlatformMCP:  "localhost:9445",
 		PlatformUnix: "/run/platformd.sock",
 		PlatformCTL:  "platformctl",
-	}
-}
-
-// isBackendUnavailable returns true when the supplied error corresponds to
-// "ceremony backend not configured" at any transport layer. All transports
-// (gRPC Unavailable, REST 503, QUIC StatusUnavailable, MCP tool error,
-// CLI exit code) eventually surface a string containing the daemon error
-// message, so we match both the sentinel error and its string form.
-func isBackendUnavailable(err error) bool {
-	if err == nil {
-		return false
-	}
-	if errors.Is(err, daemonpkg.ErrCeremonyNotConfigured) {
-		return true
-	}
-	if errors.Is(err, ceremonysdk.ErrNotYetWired) {
-		return true
-	}
-	msg := strings.ToLower(err.Error())
-	needles := []string{
-		"backend not configured",
-		"not yet wired",
-		"unavailable",
-		"not implemented",
-		"501",
-		"503",
-		"ceremony: ",
-		"phase35: service provider not configured",
-	}
-	for _, needle := range needles {
-		if strings.Contains(msg, needle) {
-			return true
-		}
-	}
-	return false
-}
-
-// SkipIfNotIntegration skips the test when INTEGRATION_TEST is not set.
-func SkipIfNotIntegration(t interface {
-	Skip(args ...any)
-}) {
-	if os.Getenv("INTEGRATION_TEST") == "" {
-		t.Skip("Skipping integration test: INTEGRATION_TEST not set")
 	}
 }

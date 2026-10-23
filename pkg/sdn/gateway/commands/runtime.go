@@ -34,34 +34,56 @@ import (
 // signal handling is installed.
 const ovsConnectTimeout = 30 * time.Second
 
+// runs reports whether this gatewayd runs service: the shared configuration
+// enables it (on), this process hosts it, and no supervised child runs it
+// instead. Every decision to open OVSDB or OpenFlow, or to dial platformd,
+// for a service goes through it, so a supervised child never touches what
+// another process hosts and a supervisor never touches what its children
+// host.
+func runs(gwCfg *gateway.GatewayConfig, on bool, service string) bool {
+	return on && gwCfg.Hosts(service) && !supervised(gwCfg, service)
+}
+
+// supervised reports whether a supervised child of this gatewayd runs
+// service, so this process only relays to it.
+func supervised(gwCfg *gateway.GatewayConfig, service string) bool {
+	return gwCfg.Supervisor != nil && gwCfg.Supervisor.Supervises(service)
+}
+
+// runsOverlay reports whether this gatewayd runs the overlay service.
+func runsOverlay(gwCfg *gateway.GatewayConfig) bool {
+	return runs(gwCfg, gwCfg.Overlay != nil && gwCfg.Overlay.Enabled, gateway.ServiceOverlay)
+}
+
 // datapathService returns the first enabled datapath service (firewall,
-// NAT, load balancer) or "" when none is enabled. These are the services
-// that require the OVS runtime; when none is enabled the runtime is not
-// assembled and the sdn: section's OVS endpoint is never dialed.
+// NAT, load balancer, overlay) this gateway hosts, or "" when there is none.
+// These are the services that require the OVS runtime; when none is hosted
+// the runtime is not assembled and the sdn: section's OVS endpoint is never
+// dialed — a supervised parser child never opens OVSDB.
 func datapathService(gwCfg *gateway.GatewayConfig) string {
 	switch {
-	case gwCfg.Firewall != nil && gwCfg.Firewall.Enabled:
+	case runs(gwCfg, gwCfg.Firewall != nil && gwCfg.Firewall.Enabled, gateway.ServiceFirewall):
 		return gateway.ServiceFirewall
-	case gwCfg.NAT != nil && gwCfg.NAT.Enabled:
+	case runs(gwCfg, gwCfg.NAT != nil && gwCfg.NAT.Enabled, gateway.ServiceNAT):
 		return gateway.ServiceNAT
-	case gwCfg.LoadBalancer != nil && gwCfg.LoadBalancer.Enabled:
+	case runs(gwCfg, gwCfg.LoadBalancer != nil && gwCfg.LoadBalancer.Enabled, gateway.ServiceLoadBalancer):
 		return gateway.ServiceLoadBalancer
-	case gwCfg.Overlay != nil && gwCfg.Overlay.Enabled:
+	case runsOverlay(gwCfg):
 		return gateway.ServiceOverlay
 	default:
 		return ""
 	}
 }
 
-// zoneMatrixService returns the enabled service that compiles the
-// per-zone flow matrix (firewall or NAT), or "" when neither is enabled.
-// These services silently enforce nothing when the per-zone network
+// zoneMatrixService returns the enabled service this gateway hosts that
+// compiles the per-zone flow matrix (firewall or NAT), or "" when it hosts
+// neither. These services silently enforce nothing when the per-zone network
 // summaries are empty, so assembly fails closed for them instead.
 func zoneMatrixService(gwCfg *gateway.GatewayConfig) string {
 	switch {
-	case gwCfg.Firewall != nil && gwCfg.Firewall.Enabled:
+	case runs(gwCfg, gwCfg.Firewall != nil && gwCfg.Firewall.Enabled, gateway.ServiceFirewall):
 		return gateway.ServiceFirewall
-	case gwCfg.NAT != nil && gwCfg.NAT.Enabled:
+	case runs(gwCfg, gwCfg.NAT != nil && gwCfg.NAT.Enabled, gateway.ServiceNAT):
 		return gateway.ServiceNAT
 	default:
 		return ""

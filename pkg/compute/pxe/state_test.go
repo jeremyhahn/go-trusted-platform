@@ -1373,7 +1373,8 @@ func TestStateManager_Transition_MultipleHandlers(t *testing.T) {
 }
 
 func TestStateManager_Transition_UpdatesStateChangedAt(t *testing.T) {
-	sm := NewStateManager()
+	clock := &stepClock{now: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)}
+	sm := newStateManager(clock.Now)
 	mac, _ := net.ParseMAC("00:11:22:33:44:55")
 
 	device := &DeviceInfo{
@@ -1386,23 +1387,57 @@ func TestStateManager_Transition_UpdatesStateChangedAt(t *testing.T) {
 	require.NoError(t, err)
 
 	beforeTransition, _ := sm.Get("device-123")
-	originalStateChangedAt := beforeTransition.StateChangedAt
+	assert.Equal(t, clock.now, beforeTransition.StateChangedAt)
 
-	// Small delay to ensure timestamp difference
-	// KNOWN GAP: this makes the two StateChangedAt timestamps distinguishable.
-	// Load only widens the gap, so it does not flake. It is banned anyway
-	// (go-style.md §No time.Sleep, owner ruling 2026-09-04) and cannot just be
-	// deleted — the state machine stamps StateChangedAt from time.Now() with no
-	// seam to advance. Replaced by an injectable clock in #284.
-	time.Sleep(10 * time.Millisecond)
-
+	clock.advance(time.Second)
 	err = sm.Transition("device-123", StateBooting, "test")
 	assert.NoError(t, err)
 
 	afterTransition, _ := sm.Get("device-123")
-	assert.True(t, afterTransition.StateChangedAt.After(originalStateChangedAt))
-	assert.True(t, afterTransition.UpdatedAt.After(originalStateChangedAt) ||
-		afterTransition.UpdatedAt.Equal(afterTransition.StateChangedAt))
+	assert.Equal(t, clock.now, afterTransition.StateChangedAt)
+	assert.Equal(t, clock.now, afterTransition.UpdatedAt)
+	assert.True(t, afterTransition.StateChangedAt.After(beforeTransition.StateChangedAt))
+}
+
+func TestStateManager_Transition_RejectedLeavesStateChangedAt(t *testing.T) {
+	clock := &stepClock{now: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)}
+	sm := newStateManager(clock.Now)
+	mac, _ := net.ParseMAC("00:11:22:33:44:55")
+
+	err := sm.Register(&DeviceInfo{ID: "device-123", MACAddress: mac, State: StateDiscovered})
+	require.NoError(t, err)
+	registeredAt := clock.now
+
+	// Discovered -> Authorized is not allowed; the clock moving on must not
+	// restamp a device whose transition was rejected
+	clock.advance(time.Second)
+	err = sm.Transition("device-123", StateAuthorized, "test")
+	var transitionErr ErrInvalidStateTransition
+	require.ErrorAs(t, err, &transitionErr)
+
+	device, _ := sm.Get("device-123")
+	assert.Equal(t, registeredAt, device.StateChangedAt)
+	assert.Equal(t, StateDiscovered, device.State)
+}
+
+// stepClock is a clock the test steps by hand. onNow, when set, runs once on
+// the next reading, which lets a test act inside Transition's CAS loop: the
+// loop reads the clock after loading the entry and before swapping it.
+type stepClock struct {
+	now   time.Time
+	onNow func()
+}
+
+func (c *stepClock) Now() time.Time {
+	if hook := c.onNow; hook != nil {
+		c.onNow = nil
+		hook()
+	}
+	return c.now
+}
+
+func (c *stepClock) advance(d time.Duration) {
+	c.now = c.now.Add(d)
 }
 
 func TestStateManager_Register_MACConflictCleansUpDevice(t *testing.T) {
@@ -1456,7 +1491,8 @@ func TestStateManager_Register_MACConflictCleansUpDevice(t *testing.T) {
 }
 
 func TestStateManager_Transition_DeviceDeletedDuringCASRetry(t *testing.T) {
-	sm := NewStateManager()
+	clock := &stepClock{now: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)}
+	sm := newStateManager(clock.Now)
 	mac, _ := net.ParseMAC("00:11:22:33:44:55")
 
 	device := &DeviceInfo{
@@ -1468,45 +1504,22 @@ func TestStateManager_Transition_DeviceDeletedDuringCASRetry(t *testing.T) {
 	err := sm.Register(device)
 	require.NoError(t, err)
 
-	// Start a transition in the background
-	var transitionErr error
-	var wg sync.WaitGroup
-	wg.Add(1)
-
-	go func() {
-		defer wg.Done()
-		// This will try to transition, but we'll delete the device
-		// This tests the path where CAS fails and device reload fails
-		transitionErr = sm.Transition("device-123", StateBooting, "test")
-	}()
-
-	// Give the transition goroutine a chance to start
-	// KNOWN WEAK: this 1ms is trying to land the delete inside the CAS retry
-	// window, and nothing guarantees it does — the test can pass without ever
-	// reaching the path it names. Making it deterministic needs a hook in
-	// Transition's CAS loop, which is a production change; left as-is and
-	// recorded rather than dressed up as synchronised (#262).
-	time.Sleep(1 * time.Millisecond)
-
-	// Delete the device
-	sm.devices.Delete("device-123")
-	sm.byMAC.Delete(mac.String())
-
-	wg.Wait()
-
-	// The transition should either succeed (if it completed before delete)
-	// or fail with device not found
-	if transitionErr != nil {
-		var notFoundErr ErrDeviceNotFound
-		var transitionErrType ErrInvalidStateTransition
-		assert.True(t, errors.As(transitionErr, &notFoundErr) ||
-			errors.As(transitionErr, &transitionErrType),
-			"expected ErrDeviceNotFound or ErrInvalidStateTransition, got: %v", transitionErr)
+	// Delete the device inside Transition's CAS loop, after it loaded the
+	// entry and before it swaps: the swap fails and the reload finds nothing
+	clock.onNow = func() {
+		sm.devices.Delete("device-123")
+		sm.byMAC.Delete(mac.String())
 	}
+
+	err = sm.Transition("device-123", StateBooting, "test")
+	var notFoundErr ErrDeviceNotFound
+	require.ErrorAs(t, err, &notFoundErr)
+	assert.Equal(t, "device-123", notFoundErr.DeviceID)
 }
 
 func TestStateManager_Transition_InvalidTransitionAfterConcurrentStateChange(t *testing.T) {
-	sm := NewStateManager()
+	clock := &stepClock{now: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)}
+	sm := newStateManager(clock.Now)
 	mac, _ := net.ParseMAC("00:11:22:33:44:55")
 
 	device := &DeviceInfo{
@@ -1518,43 +1531,22 @@ func TestStateManager_Transition_InvalidTransitionAfterConcurrentStateChange(t *
 	err := sm.Register(device)
 	require.NoError(t, err)
 
-	var wg sync.WaitGroup
-	results := make(chan error, 2)
-
-	// First goroutine transitions to booting (valid from discovered)
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		results <- sm.Transition("device-123", StateBooting, "first")
-	}()
-
-	// Second goroutine tries to transition to authorized (invalid from discovered,
-	// and becomes invalid from booting too)
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		// Small delay to ensure first goroutine has a chance to modify state
-		// KNOWN WEAK: same as above — this 1ms only makes the intended interleaving
-		// likely, not certain (#262).
-		time.Sleep(1 * time.Millisecond)
-		results <- sm.Transition("device-123", StateAuthorized, "second")
-	}()
-
-	wg.Wait()
-	close(results)
-
-	// One should succeed (discovered -> booting), one should fail
-	successCount := 0
-	failCount := 0
-	for err := range results {
-		if err == nil {
-			successCount++
-		} else {
-			failCount++
-		}
+	// Quarantine the device inside the CAS loop of a Discovered -> Booting
+	// transition. Booting was valid from Discovered but is not from
+	// Quarantined, so the re-validation after the failed swap must reject it.
+	var quarantineErr error
+	clock.onNow = func() {
+		quarantineErr = sm.Transition("device-123", StateQuarantined, "concurrent")
 	}
 
-	// At least one fails because authorized is not a valid transition
-	// from either discovered or booting
-	assert.GreaterOrEqual(t, failCount, 1)
+	err = sm.Transition("device-123", StateBooting, "first")
+	require.NoError(t, quarantineErr)
+
+	var transitionErr ErrInvalidStateTransition
+	require.ErrorAs(t, err, &transitionErr)
+	assert.Equal(t, string(StateQuarantined), transitionErr.FromState)
+	assert.Equal(t, string(StateBooting), transitionErr.ToState)
+
+	current, _ := sm.Get("device-123")
+	assert.Equal(t, StateQuarantined, current.State)
 }

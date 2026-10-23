@@ -15,14 +15,24 @@ package quic
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"errors"
+	"math/big"
+	"net"
 	"testing"
+	"time"
 
+	quicgo "github.com/quic-go/quic-go"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
-	quicapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
 	platform "github.com/jeremyhahn/go-trusted-platform/sdk/go"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 )
 
 func TestConnect_NilOptions(t *testing.T) {
@@ -49,6 +59,8 @@ func TestConnect_InvalidServer(t *testing.T) {
 	ctx := context.Background()
 	opts := platform.NewOptions(
 		platform.WithQUICAddr("localhost:19444"), // Non-existent server
+		// UDP gives no connection refused; bound the handshake wait.
+		platform.WithTimeout(250*time.Millisecond),
 	)
 
 	_, err := Connect(ctx, opts)
@@ -63,6 +75,190 @@ func TestConnect_InvalidServer(t *testing.T) {
 	if connErr.Protocol != platform.ProtocolQUIC {
 		t.Errorf("Protocol = %v, want %v", connErr.Protocol, platform.ProtocolQUIC)
 	}
+}
+
+// TestConnect_HandshakeTimeoutIsErrTimeout pins that a QUIC peer that never
+// answers the handshake is reported as ErrTimeout inside ErrConnectionFailed.
+func TestConnect_HandshakeTimeoutIsErrTimeout(t *testing.T) {
+	// A bound UDP socket that reads nothing: the handshake can only time out.
+	silent, err := net.ListenPacket("udp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := silent.Close(); err != nil {
+			t.Logf("cleanup: %v", err)
+		}
+	})
+
+	_, err = Connect(context.Background(), platform.NewOptions(
+		platform.WithQUICAddr(silent.LocalAddr().String()),
+		platform.WithTimeout(50*time.Millisecond),
+	))
+
+	var connErr platform.ErrConnectionFailed
+	if !errors.As(err, &connErr) {
+		t.Fatalf("err = %v, want ErrConnectionFailed", err)
+	}
+	var timeout platform.ErrTimeout
+	if !errors.As(err, &timeout) {
+		t.Fatalf("err = %v, want it to carry ErrTimeout", err)
+	}
+	if timeout.Operation != "QUIC handshake" {
+		t.Errorf("Operation = %q, want %q", timeout.Operation, "QUIC handshake")
+	}
+}
+
+// quicTestServer is an in-process QUIC listener on loopback that answers
+// every framed request with StatusOK and reports the token it carried.
+type quicTestServer struct {
+	addr   string
+	roots  *x509.CertPool
+	tokens chan string
+}
+
+// startQUICTestServer serves the platform QUIC framing with a self-signed
+// certificate valid for "platform.test" and 127.0.0.1.
+func startQUICTestServer(t *testing.T) *quicTestServer {
+	t.Helper()
+
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("generate key: %v", err)
+	}
+	template := &x509.Certificate{
+		SerialNumber:          big.NewInt(1),
+		Subject:               pkix.Name{CommonName: "platform.test"},
+		DNSNames:              []string{"platform.test"},
+		IPAddresses:           []net.IP{net.IPv4(127, 0, 0, 1)},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(time.Hour),
+		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageCertSign,
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		BasicConstraintsValid: true,
+		IsCA:                  true,
+	}
+	der, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
+	if err != nil {
+		t.Fatalf("create certificate: %v", err)
+	}
+	cert, err := x509.ParseCertificate(der)
+	if err != nil {
+		t.Fatalf("parse certificate: %v", err)
+	}
+	roots := x509.NewCertPool()
+	roots.AddCert(cert)
+
+	listener, err := quicgo.ListenAddr("127.0.0.1:0", &tls.Config{
+		Certificates: []tls.Certificate{{Certificate: [][]byte{der}, PrivateKey: key}},
+		NextProtos:   []string{"platform-quic"},
+		MinVersion:   tls.VersionTLS13,
+	}, nil)
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(func() {
+		cancel()
+		if err := listener.Close(); err != nil {
+			t.Logf("cleanup: %v", err)
+		}
+	})
+
+	srv := &quicTestServer{
+		addr:   listener.Addr().String(),
+		roots:  roots,
+		tokens: make(chan string, 8),
+	}
+	go srv.serve(ctx, listener)
+	return srv
+}
+
+func (s *quicTestServer) serve(ctx context.Context, listener *quicgo.Listener) {
+	for {
+		conn, err := listener.Accept(ctx)
+		if err != nil {
+			return
+		}
+		go s.serveConn(ctx, conn)
+	}
+}
+
+func (s *quicTestServer) serveConn(ctx context.Context, conn *quicgo.Conn) {
+	for {
+		stream, err := conn.AcceptStream(ctx)
+		if err != nil {
+			return
+		}
+		req, err := quicwire.ReadRequest(stream)
+		if err != nil {
+			stream.CancelRead(0)
+			return
+		}
+		s.tokens <- req.Token
+		if err := quicwire.WriteResponse(stream, &quicwire.Response{Status: quicwire.StatusOK}); err != nil {
+			return
+		}
+		if err := stream.Close(); err != nil {
+			return
+		}
+	}
+}
+
+func TestConnect_SendsBearerToken(t *testing.T) {
+	srv := startQUICTestServer(t)
+
+	adapter, err := Connect(context.Background(), platform.NewOptions(
+		platform.WithQUICAddr(srv.addr),
+		platform.WithTLSConfig(&tls.Config{RootCAs: srv.roots}),
+		platform.WithBearerToken("secret"),
+	))
+	if err != nil {
+		t.Fatalf("Connect() returned error: %v", err)
+	}
+	defer func() {
+		if err := adapter.Close(); err != nil {
+			t.Logf("cleanup: %v", err)
+		}
+	}()
+
+	if err := adapter.(*Adapter).Client().Health(context.Background()); err != nil {
+		t.Fatalf("Health() returned error: %v", err)
+	}
+	if got := <-srv.tokens; got != "secret" {
+		t.Errorf("request token = %q, want %q", got, "secret")
+	}
+}
+
+func TestConnect_HonoursTLSServerName(t *testing.T) {
+	srv := startQUICTestServer(t)
+
+	t.Run("matching name connects", func(t *testing.T) {
+		adapter, err := Connect(context.Background(), platform.NewOptions(
+			platform.WithQUICAddr(srv.addr),
+			platform.WithTLSConfig(&tls.Config{RootCAs: srv.roots}),
+			platform.WithTLSServerName("platform.test"),
+		))
+		if err != nil {
+			t.Fatalf("Connect() returned error: %v", err)
+		}
+		if err := adapter.Close(); err != nil {
+			t.Logf("cleanup: %v", err)
+		}
+	})
+
+	t.Run("mismatched name is rejected", func(t *testing.T) {
+		_, err := Connect(context.Background(), platform.NewOptions(
+			platform.WithQUICAddr(srv.addr),
+			platform.WithTLSConfig(&tls.Config{RootCAs: srv.roots}),
+			platform.WithTLSServerName("wrong.test"),
+		))
+		var connErr platform.ErrConnectionFailed
+		if !errors.As(err, &connErr) {
+			t.Fatalf("Connect() error = %T: %v, want platform.ErrConnectionFailed", err, err)
+		}
+	})
 }
 
 func TestAdapter_Target(t *testing.T) {
@@ -261,9 +457,11 @@ func TestGRPCMethodToOpcodeMap_Health(t *testing.T) {
 		method   string
 		expected byte
 	}{
-		{"/platform.v1.PlatformDaemon/GetHealth", quicapi.OpHealth},
-		{"/platform.v1.PlatformDaemon/GetStatus", quicapi.OpDaemonStatus},
-		{"/platform.v1.PlatformDaemon/GetVersion", quicapi.OpDaemonVersion},
+		{"/platform.v1.PlatformDaemon/GetHealth", quicwire.OpHealth},
+		{"/platform.v1.PlatformDaemon/Liveness", quicwire.OpLiveness},
+		{"/platform.v1.PlatformDaemon/Readiness", quicwire.OpReadiness},
+		{"/platform.v1.PlatformDaemon/GetStatus", quicwire.OpDaemonStatus},
+		{"/platform.v1.PlatformDaemon/GetVersion", quicwire.OpDaemonVersion},
 	}
 
 	for _, tt := range tests {
@@ -284,13 +482,14 @@ func TestGRPCMethodToOpcodeMap_CA(t *testing.T) {
 		method   string
 		expected byte
 	}{
-		{"/platform.v1.CAService/GetCAInfo", quicapi.OpCAInfo},
-		{"/platform.v1.CAService/IssueCertificate", quicapi.OpCAIssue},
-		{"/platform.v1.CAService/RevokeCertificate", quicapi.OpCARevoke},
-		{"/platform.v1.CAService/RenewCertificate", quicapi.OpCARenew},
-		{"/platform.v1.CAService/VerifyCertificate", quicapi.OpCAVerify},
-		{"/platform.v1.CAService/GetCRL", quicapi.OpCACRL},
-		{"/platform.v1.CAService/GetCABundle", quicapi.OpCABundle},
+		{"/platform.v1.CAService/GetCAInfo", quicwire.OpCAInfo},
+		{"/platform.v1.CAService/IssueCertificate", quicwire.OpCAIssue},
+		{"/platform.v1.CAService/SignCSR", quicwire.OpKMSExtendedCategory},
+		{"/platform.v1.CAService/RevokeCertificate", quicwire.OpCARevoke},
+		{"/platform.v1.CAService/RenewCertificate", quicwire.OpCARenew},
+		{"/platform.v1.CAService/VerifyCertificate", quicwire.OpCAVerify},
+		{"/platform.v1.CAService/GetCRL", quicwire.OpCACRL},
+		{"/platform.v1.CAService/GetCABundle", quicwire.OpCABundle},
 	}
 
 	for _, tt := range tests {
@@ -311,18 +510,18 @@ func TestGRPCMethodToOpcodeMap_KMS(t *testing.T) {
 		method   string
 		expected byte
 	}{
-		{"/platform.v1.KeyManagementService/GenerateKey", quicapi.OpKMSGenerateKey},
-		{"/platform.v1.KeyManagementService/UpdateKeyStatus", quicapi.OpKMSUpdateKeyStatus},
-		{"/platform.v1.KeyManagementService/BackendStatus", quicapi.OpKMSBackendStatus},
-		{"/platform.v1.KeyManagementService/Encrypt", quicapi.OpKMSEncrypt},
-		{"/platform.v1.KeyManagementService/Decrypt", quicapi.OpKMSDecrypt},
-		{"/platform.v1.KeyManagementService/BatchEncrypt", quicapi.OpKMSBatchEncrypt},
-		{"/platform.v1.KeyManagementService/BatchDecrypt", quicapi.OpKMSBatchDecrypt},
-		{"/platform.v1.KeyManagementService/Rewrap", quicapi.OpKMSRewrap},
-		{"/platform.v1.KeyManagementService/Sign", quicapi.OpKMSSign},
-		{"/platform.v1.KeyManagementService/Verify", quicapi.OpKMSVerify},
-		{"/platform.v1.KeyManagementService/HMAC", quicapi.OpKMSHMAC},
-		{"/platform.v1.KeyManagementService/VerifyHMAC", quicapi.OpKMSVerifyHMAC},
+		{"/platform.v1.KeyManagementService/GenerateKey", quicwire.OpKMSGenerateKey},
+		{"/platform.v1.KeyManagementService/UpdateKeyStatus", quicwire.OpKMSUpdateKeyStatus},
+		{"/platform.v1.KeyManagementService/BackendStatus", quicwire.OpKMSBackendStatus},
+		{"/platform.v1.KeyManagementService/Encrypt", quicwire.OpKMSEncrypt},
+		{"/platform.v1.KeyManagementService/Decrypt", quicwire.OpKMSDecrypt},
+		{"/platform.v1.KeyManagementService/BatchEncrypt", quicwire.OpKMSBatchEncrypt},
+		{"/platform.v1.KeyManagementService/BatchDecrypt", quicwire.OpKMSBatchDecrypt},
+		{"/platform.v1.KeyManagementService/Rewrap", quicwire.OpKMSRewrap},
+		{"/platform.v1.KeyManagementService/Sign", quicwire.OpKMSSign},
+		{"/platform.v1.KeyManagementService/Verify", quicwire.OpKMSVerify},
+		{"/platform.v1.KeyManagementService/HMAC", quicwire.OpKMSHMAC},
+		{"/platform.v1.KeyManagementService/VerifyHMAC", quicwire.OpKMSVerifyHMAC},
 	}
 
 	for _, tt := range tests {
@@ -343,9 +542,9 @@ func TestGRPCMethodToOpcodeMap_VTPM(t *testing.T) {
 		method   string
 		expected byte
 	}{
-		{"/platform.v1.VTPMService/QuoteVTPM", quicapi.OpVTPMQuote},
-		{"/platform.v1.VTPMService/SealVTPM", quicapi.OpVTPMSeal},
-		{"/platform.v1.VTPMService/UnsealVTPM", quicapi.OpVTPMUnseal},
+		{"/platform.v1.VTPMService/QuoteVTPM", quicwire.OpVTPMQuote},
+		{"/platform.v1.VTPMService/SealVTPM", quicwire.OpVTPMSeal},
+		{"/platform.v1.VTPMService/UnsealVTPM", quicwire.OpVTPMUnseal},
 	}
 
 	for _, tt := range tests {
@@ -374,62 +573,67 @@ func TestTranslateQUICErrorToGRPC(t *testing.T) {
 		},
 		{
 			name:         "client closed",
-			err:          quicapi.ErrClientClosed,
+			err:          quicwire.ErrClientClosed,
 			expectedCode: codes.Unavailable,
 		},
 		{
 			name:         "stream failed",
-			err:          quicapi.ErrStreamFailed,
+			err:          quicwire.ErrStreamFailed,
 			expectedCode: codes.Unavailable,
 		},
 		{
 			name:         "protocol error - not found",
-			err:          &quicapi.ErrProtocol{Status: quicapi.StatusNotFound, Message: "resource not found"},
+			err:          &quicwire.ErrProtocol{Status: quicwire.StatusNotFound, Message: "resource not found"},
 			expectedCode: codes.NotFound,
 		},
 		{
 			name:         "protocol error - unauthorized",
-			err:          &quicapi.ErrProtocol{Status: quicapi.StatusUnauthorized, Message: "authentication required"},
+			err:          &quicwire.ErrProtocol{Status: quicwire.StatusUnauthorized, Message: "authentication required"},
 			expectedCode: codes.Unauthenticated,
 		},
 		{
 			name:         "protocol error - permission denied",
-			err:          &quicapi.ErrProtocol{Status: quicapi.StatusPermissionDenied, Message: "access denied"},
+			err:          &quicwire.ErrProtocol{Status: quicwire.StatusPermissionDenied, Message: "access denied"},
 			expectedCode: codes.PermissionDenied,
 		},
 		{
 			name:         "protocol error - internal",
-			err:          &quicapi.ErrProtocol{Status: quicapi.StatusInternalError, Message: "internal error"},
+			err:          &quicwire.ErrProtocol{Status: quicwire.StatusInternalError, Message: "internal error"},
 			expectedCode: codes.Internal,
 		},
 		{
 			name:         "protocol error - invalid request",
-			err:          &quicapi.ErrProtocol{Status: quicapi.StatusInvalidRequest, Message: "bad request"},
+			err:          &quicwire.ErrProtocol{Status: quicwire.StatusInvalidRequest, Message: "bad request"},
 			expectedCode: codes.InvalidArgument,
 		},
 		{
 			name:         "protocol error - already exists",
-			err:          &quicapi.ErrProtocol{Status: quicapi.StatusAlreadyExists, Message: "already exists"},
+			err:          &quicwire.ErrProtocol{Status: quicwire.StatusAlreadyExists, Message: "already exists"},
 			expectedCode: codes.AlreadyExists,
 		},
 		{
 			name:         "protocol error - timeout",
-			err:          &quicapi.ErrProtocol{Status: quicapi.StatusTimeout, Message: "timed out"},
+			err:          &quicwire.ErrProtocol{Status: quicwire.StatusTimeout, Message: "timed out"},
 			expectedCode: codes.DeadlineExceeded,
 		},
 		{
 			name:         "protocol error - unavailable",
-			err:          &quicapi.ErrProtocol{Status: quicapi.StatusUnavailable, Message: "service unavailable"},
+			err:          &quicwire.ErrProtocol{Status: quicwire.StatusUnavailable, Message: "service unavailable"},
 			expectedCode: codes.Unavailable,
 		},
 		{
 			name:         "protocol error - not implemented",
-			err:          &quicapi.ErrProtocol{Status: quicapi.StatusNotImplemented, Message: "not implemented"},
+			err:          &quicwire.ErrProtocol{Status: quicwire.StatusNotImplemented, Message: "not implemented"},
 			expectedCode: codes.Unimplemented,
 		},
 		{
+			name:         "protocol error - failed precondition",
+			err:          &quicwire.ErrProtocol{Status: quicwire.StatusFailedPrecondition, Message: "IDevID key delete refused"},
+			expectedCode: codes.FailedPrecondition,
+		},
+		{
 			name:         "protocol error - unknown status",
-			err:          &quicapi.ErrProtocol{Status: 0xFF, Message: "unknown status"},
+			err:          &quicwire.ErrProtocol{Status: 0xFF, Message: "unknown status"},
 			expectedCode: codes.Unknown,
 		},
 		{
@@ -463,18 +667,19 @@ func TestTranslateQUICErrorToGRPC(t *testing.T) {
 func TestQUICStatusToGRPCMap_Coverage(t *testing.T) {
 	// Verify all QUIC status codes are mapped
 	expectedStatuses := []byte{
-		quicapi.StatusOK,
-		quicapi.StatusInvalidRequest,
-		quicapi.StatusNotFound,
-		quicapi.StatusUnauthorized,
-		quicapi.StatusInternalError,
-		quicapi.StatusTimeout,
-		quicapi.StatusAlreadyExists,
-		quicapi.StatusPermissionDenied,
-		quicapi.StatusResourceExhausted,
-		quicapi.StatusInvalidArgument,
-		quicapi.StatusUnavailable,
-		quicapi.StatusNotImplemented,
+		quicwire.StatusOK,
+		quicwire.StatusInvalidRequest,
+		quicwire.StatusNotFound,
+		quicwire.StatusUnauthorized,
+		quicwire.StatusInternalError,
+		quicwire.StatusTimeout,
+		quicwire.StatusAlreadyExists,
+		quicwire.StatusPermissionDenied,
+		quicwire.StatusResourceExhausted,
+		quicwire.StatusInvalidArgument,
+		quicwire.StatusUnavailable,
+		quicwire.StatusNotImplemented,
+		quicwire.StatusFailedPrecondition,
 	}
 
 	for _, s := range expectedStatuses {

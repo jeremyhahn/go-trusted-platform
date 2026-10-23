@@ -16,6 +16,7 @@ package adminclaim
 import (
 	"context"
 	"crypto/x509"
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"os"
@@ -45,6 +46,7 @@ type harness struct {
 	factors  *fakeFactors
 	users    *fakeUsers
 	issuer   *fakeIssuer
+	logs     *logSink
 }
 
 func newHarness(t *testing.T) *harness {
@@ -64,9 +66,10 @@ func newHarness(t *testing.T) *harness {
 		factors: &fakeFactors{resp: &quicbaassdk.AuthFactorListResponse{}},
 		users:   newFakeUsers(),
 		issuer:  &fakeIssuer{token: "console-jwt"},
+		logs:    &logSink{},
 	}
 	svc, err := NewService(ServiceParams{
-		Logger:       testLogger(),
+		Logger:       logging.NewLogger(slog.LevelDebug, h.logs),
 		Ceremony:     h.ceremony,
 		Factors:      h.factors,
 		Users:        h.users,
@@ -742,6 +745,151 @@ func TestClaimed_TracksLiveFactorsNotHistory(t *testing.T) {
 	// And the ceremony really is runnable again.
 	_, _, err = h.svc.Challenge(context.Background())
 	require.NoError(t, err)
+}
+
+const (
+	claimedMsg  = "adminclaim: system admin claimed"
+	securityMsg = "security_log"
+)
+
+// securityDetails returns the single security record a claim raised and
+// its decoded details body.
+func securityDetails(t *testing.T, h *harness) (map[string]any, reclaimDetails) {
+	t.Helper()
+	records := h.logs.records(t, securityMsg)
+	require.Len(t, records, 1, "a claim raises exactly one security record")
+	raw, ok := records[0]["details"].(string)
+	require.True(t, ok, "details is a JSON string")
+	var details reclaimDetails
+	require.NoError(t, json.Unmarshal([]byte(raw), &details))
+	return records[0], details
+}
+
+func finishClaim(t *testing.T, h *harness) {
+	t.Helper()
+	token := h.claimTo(t)
+	_, err := h.svc.FinishPasskey(context.Background(), token,
+		&quicbaassdk.FIDO2FinishRegistrationRequest{})
+	require.NoError(t, err)
+}
+
+func TestFinishPasskey_FirstClaimKeepsTheRoutineRecord(t *testing.T) {
+	h := newHarness(t)
+	// A first claim may still list other, revoked factor types; only a
+	// revoked fido2 factor makes a claim a re-claim.
+	revoked := time.Now()
+	h.factors.resp = &quicbaassdk.AuthFactorListResponse{
+		Enrollments: []quicbaassdk.AuthFactorEntry{
+			{EnrollmentID: "totp-1", FactorName: "totp", RevokedAt: &revoked},
+		},
+	}
+	finishClaim(t, h)
+
+	records := h.logs.records(t, claimedMsg)
+	require.Len(t, records, 1)
+	assert.Equal(t, "cred-1", records[0]["credential_id"])
+	assert.Equal(t, testTenantID, records[0]["tenant_id"])
+	assert.Empty(t, h.logs.records(t, securityMsg),
+		"a first claim is routine, not a security event")
+}
+
+func TestFinishPasskey_ReclaimRaisesAHighSeveritySecurityEvent(t *testing.T) {
+	h := newHarness(t)
+	enrolled := time.Date(2026, 9, 1, 10, 0, 0, 0, time.UTC)
+	revoked := time.Date(2026, 10, 1, 12, 30, 0, 0, time.UTC)
+	h.factors.resp = &quicbaassdk.AuthFactorListResponse{
+		Enrollments: []quicbaassdk.AuthFactorEntry{
+			{EnrollmentID: "fido2-old", FactorName: "FIDO2",
+				EnrolledAt: enrolled, RevokedAt: &revoked},
+			{EnrollmentID: "totp-1", FactorName: "totp", RevokedAt: &revoked},
+		},
+	}
+	before := time.Now().UTC()
+	finishClaim(t, h)
+
+	record, details := securityDetails(t, h)
+	assert.Equal(t, logging.SeverityHigh, record["severity"])
+	assert.Equal(t, logging.CategoryAccessControl, record["category"])
+	assert.Equal(t, logging.SourceAuthentication, record["source"])
+	assert.Equal(t, EventReclaim, details.Event)
+	assert.Equal(t, common.AdminUsername, details.Identity)
+	assert.Equal(t, testAdminEmail, details.Email)
+	assert.Equal(t, testTenantID, details.TenantID)
+	assert.Equal(t, "cred-1", details.CredentialID)
+	claimedAt, err := time.Parse(time.RFC3339Nano, details.ClaimedAt)
+	require.NoError(t, err)
+	assert.False(t, claimedAt.Before(before), "the claim time is when it completed")
+	assert.Equal(t, []replacedFactor{{
+		EnrollmentID: "fido2-old",
+		EnrolledAt:   enrolled.Format(time.RFC3339Nano),
+		RevokedAt:    revoked.Format(time.RFC3339Nano),
+	}}, details.Replaced, "only the revoked fido2 factor is replaced")
+	assert.Empty(t, h.logs.records(t, claimedMsg),
+		"a re-claim is never recorded as a routine first claim")
+}
+
+func TestFinishPasskey_UnknownHistoryIsRaisedAsStatusUnknown(t *testing.T) {
+	h := newHarness(t)
+	// The SDK answers without error but with no listing: nothing proves
+	// this is a first claim, so it is raised rather than assumed.
+	h.factors.resp = nil
+	finishClaim(t, h)
+
+	record, details := securityDetails(t, h)
+	assert.Equal(t, logging.SeverityHigh, record["severity"])
+	assert.Equal(t, EventReclaimStatusUnknown, details.Event)
+	assert.Equal(t, common.AdminUsername, details.Identity)
+	assert.Empty(t, details.Replaced)
+	assert.Empty(t, h.logs.records(t, claimedMsg))
+}
+
+func TestFinishPasskey_RefusesWhenTheFactorHistoryCannotBeRead(t *testing.T) {
+	h := newHarness(t)
+	token := h.claimTo(t)
+	sdkErr := errors.New("factors unavailable")
+	h.factors.err = sdkErr
+
+	bearer, err := h.svc.FinishPasskey(context.Background(), token,
+		&quicbaassdk.FIDO2FinishRegistrationRequest{})
+	require.ErrorIs(t, err, sdkErr)
+	assert.Empty(t, bearer)
+	assert.Zero(t, h.ceremony.finishCalls.Load(),
+		"no passkey is enrolled without the history the audit is decided by")
+	assert.Empty(t, h.logs.records(t, claimedMsg))
+	assert.Empty(t, h.logs.records(t, securityMsg))
+}
+
+func TestFactorHistory(t *testing.T) {
+	revoked := time.Now()
+	h := newHarness(t)
+	h.factors.resp = &quicbaassdk.AuthFactorListResponse{
+		Enrollments: []quicbaassdk.AuthFactorEntry{
+			{EnrollmentID: "a", FactorName: "fido2", RevokedAt: &revoked},
+			{EnrollmentID: "b", FactorName: "Fido2"},
+			{EnrollmentID: "c", FactorName: "totp", RevokedAt: &revoked},
+		},
+	}
+	history, err := h.svc.factorHistory(context.Background())
+	require.NoError(t, err)
+	assert.True(t, history.known)
+	assert.True(t, history.claimed, "a live fido2 factor of any case claims")
+	require.Len(t, history.revoked, 1)
+	assert.Equal(t, "a", history.revoked[0].EnrollmentID)
+
+	h.factors.resp = nil
+	history, err = h.svc.factorHistory(context.Background())
+	require.NoError(t, err)
+	assert.False(t, history.known, "no listing is no knowledge")
+	assert.False(t, history.claimed)
+}
+
+func TestFactorHistory_PropagatesTheSDKError(t *testing.T) {
+	h := newHarness(t)
+	sdkErr := errors.New("factors unavailable")
+	h.factors.err = sdkErr
+	history, err := h.svc.factorHistory(context.Background())
+	require.ErrorIs(t, err, sdkErr)
+	assert.Equal(t, claimHistory{}, history)
 }
 
 // TestMultiInstanceRefusesCeremony proves the fail-closed gate for

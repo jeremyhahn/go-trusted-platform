@@ -35,7 +35,7 @@ import type { RegisterDeviceInput } from '@/types/device';
 const deviceFormSchema = z.object({
   name: z.string().min(1, 'Name is required').max(100),
   type: z.enum(['physical', 'virtual']),
-  serial: z.string().optional(),
+  serial: z.string().trim().min(1, 'Serial number is required'),
   description: z.string().optional(),
   tpmManufacturer: z.string().optional(),
   tpmVersion: z.string().optional(),
@@ -68,10 +68,10 @@ export function DeviceForm({ onSuccess, onCancel }: DeviceFormProps) {
 
   const registerMutation = useMutation(
     async (values: DeviceFormValues) => {
-      // Sends fields neither the SDK CreateDeviceRequest nor the REST DeviceRegisterRequest declare — #455.
+      // Both REST listeners ignore every key here the device has no column for; manufacturer stands in for an absent model — #455, #484.
       const requestData: any = {
         device: {
-          serial: values.serial || undefined,
+          serial: values.serial,
           name: values.name,
           // Add other device fields as needed
         }
@@ -152,12 +152,12 @@ export function DeviceForm({ onSuccess, onCancel }: DeviceFormProps) {
           name="serial"
           render={({ field }) => (
             <FormItem>
-              <FormLabel>Serial Number (Optional)</FormLabel>
+              <FormLabel>Serial Number</FormLabel>
               <FormControl>
                 <Input placeholder="SN123456789" {...field} />
               </FormControl>
               <FormDescription>
-                Device serial number if available
+                The serial the device reports at enrollment
               </FormDescription>
               <FormMessage />
             </FormItem>

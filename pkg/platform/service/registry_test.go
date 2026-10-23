@@ -565,6 +565,35 @@ func TestRegistry_TenantUserService(t *testing.T) {
 	mockFactory.AssertExpectations(t)
 }
 
+func TestRegistry_IAMUserReconciler(t *testing.T) {
+	logger := logging.NewLogger(slog.LevelWarn, os.Stderr)
+	mockFactory := new(MockDatastoreFactory)
+	mockFactory.On("RegistrationDAO").Return(new(MockRegistrationDAO), nil)
+	mockFactory.On("RoleDAO").Return(new(MockRoleDAO), nil)
+	mockFactory.On("UserDAO").Return(new(MockUserDAO), nil)
+	mockFactory.On("WebAuthnDAO").Return(new(MockWebAuthnDAO), nil)
+	mockFactory.On("InvitationDAO").Return(new(MockInvitationDAO), nil)
+
+	registry, err := NewRegistry(logger, nil, nil, nil, nil, mockFactory)
+	require.NoError(t, err)
+
+	reconciler, err := registry.IAMUserReconciler(&fakeIAMMirror{}, &fakeIAMDirectory{}, &fakeRoleProvisioner{})
+	require.NoError(t, err)
+	assert.NotNil(t, reconciler)
+
+	_, err = registry.IAMUserReconciler(nil, &fakeIAMDirectory{}, &fakeRoleProvisioner{})
+	assert.Equal(t, ErrIAMReconcilerConfig{Field: "Mirror"}, err)
+}
+
+func TestRegistry_IAMUserReconciler_NoUserStore(t *testing.T) {
+	registry := &Registry{logger: logging.NewLogger(slog.LevelWarn, os.Stderr)}
+
+	reconciler, err := registry.IAMUserReconciler(&fakeIAMMirror{}, &fakeIAMDirectory{}, &fakeRoleProvisioner{})
+
+	assert.Nil(t, reconciler)
+	assert.Equal(t, ErrIAMReconcilerConfig{Field: "Users"}, err)
+}
+
 // TestRegistry_SetTenantUserService verifies setting the TenantUserService after initialization
 func TestRegistry_SetTenantUserService(t *testing.T) {
 	logger := logging.NewLogger(slog.LevelWarn, os.Stderr)

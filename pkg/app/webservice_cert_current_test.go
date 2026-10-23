@@ -117,7 +117,13 @@ func (f *servingCA) TrustedRootCertPool(*x509.Certificate) (*x509.CertPool, erro
 // startTLSServer serves leaf on 127.0.0.1 and returns its port.
 func startTLSServer(t *testing.T, leaf tls.Certificate) int {
 	t.Helper()
-	ln, err := tls.Listen("tcp", "127.0.0.1:0", &tls.Config{Certificates: []tls.Certificate{leaf}})
+	return startTLSServerOn(t, "127.0.0.1", leaf)
+}
+
+// startTLSServerOn serves leaf on host and returns its port.
+func startTLSServerOn(t *testing.T, host string, leaf tls.Certificate) int {
+	t.Helper()
+	ln, err := tls.Listen("tcp", net.JoinHostPort(host, "0"), &tls.Config{Certificates: []tls.Certificate{leaf}})
 	if err != nil {
 		t.Fatalf("listen: %v", err)
 	}
@@ -194,6 +200,45 @@ func TestWebServiceCertTarget_CurrentRejectsAMismatchedIdentity(t *testing.T) {
 		t.Error("Current accepted a certificate issued to a different identity by an " +
 			"unknown CA; the sweep would then read NotAfter from whatever is on that " +
 			"port and treat it as this service's certificate")
+	}
+}
+
+// TestWebServiceCertTarget_CurrentDialsTheBindHost serves on 127.0.0.2, an
+// address a 127.0.0.1 dial never reaches, as a webservice pinned to one
+// interface (bind-host 192.0.2.1 on a boot node) would be. Dialing loopback
+// there fails every read, and the certificate is never renewed.
+func TestWebServiceCertTarget_CurrentDialsTheBindHost(t *testing.T) {
+	root, pool, leaf := newTestCA(t, testServiceCN)
+	port := startTLSServerOn(t, "127.0.0.2", leaf)
+
+	app := &App{Logger: logging.DefaultLogger(), CA: &servingCA{root: root, pool: pool}}
+	target, err := buildWebServiceCertTarget(context.Background(), "api",
+		&v1.Config{BindHost: "127.0.0.2", TLSPort: port}, &xkmssdk.KeyAttributes{CN: testServiceCN}, app)
+	if err != nil {
+		t.Fatalf("buildWebServiceCertTarget: %v", err)
+	}
+	got, err := target.Current(context.Background())
+	if err != nil {
+		t.Fatalf("Current did not reach the webservice on its bind-host: %v", err)
+	}
+	if got.Subject.CommonName != testServiceCN {
+		t.Errorf("Current returned CN %q, want %q", got.Subject.CommonName, testServiceCN)
+	}
+}
+
+func TestWebServiceDialHost(t *testing.T) {
+	cases := map[string]string{
+		"":                "127.0.0.1",
+		"0.0.0.0":         "127.0.0.1",
+		"::":              "127.0.0.1",
+		"192.0.2.1":        "192.0.2.1",
+		"::1":             "::1",
+		"cp.example.test": "cp.example.test",
+	}
+	for bindHost, want := range cases {
+		if got := webServiceDialHost(bindHost); got != want {
+			t.Errorf("webServiceDialHost(%q) = %q, want %q", bindHost, got, want)
+		}
 	}
 }
 

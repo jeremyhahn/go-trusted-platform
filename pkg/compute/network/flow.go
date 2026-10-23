@@ -15,12 +15,12 @@ package network
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"log/slog"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 // FlowRuleType represents the type of flow rule.
@@ -347,7 +347,7 @@ func (f *flowManager) InstallQuarantineRules(ctx context.Context, portID string,
 
 	// Create quarantine ingress rule
 	ingressRule := &FlowRule{
-		ID:       generateRuleID(portID, "quarantine", "ingress"),
+		ID:       generateRuleID(),
 		PortID:   portID,
 		Type:     FlowRuleTypeQuarantine,
 		Priority: f.config.QuarantinePriority,
@@ -365,7 +365,7 @@ func (f *flowManager) InstallQuarantineRules(ctx context.Context, portID string,
 
 	// Create quarantine egress rule (limited access)
 	egressRule := &FlowRule{
-		ID:       generateRuleID(portID, "quarantine", "egress"),
+		ID:       generateRuleID(),
 		PortID:   portID,
 		Type:     FlowRuleTypeQuarantine,
 		Priority: f.config.QuarantinePriority,
@@ -433,7 +433,7 @@ func (f *flowManager) InstallProductionRules(ctx context.Context, portID string,
 
 	// Create production ingress rule
 	ingressRule := &FlowRule{
-		ID:       generateRuleID(portID, "production", "ingress"),
+		ID:       generateRuleID(),
 		PortID:   portID,
 		Type:     FlowRuleTypeProduction,
 		Priority: f.config.ProductionPriority,
@@ -451,7 +451,7 @@ func (f *flowManager) InstallProductionRules(ctx context.Context, portID string,
 
 	// Create production egress rule (full access)
 	egressRule := &FlowRule{
-		ID:       generateRuleID(portID, "production", "egress"),
+		ID:       generateRuleID(),
 		PortID:   portID,
 		Type:     FlowRuleTypeProduction,
 		Priority: f.config.ProductionPriority,
@@ -842,8 +842,6 @@ func (f *flowManager) removePortRule(portID string, ruleID string) {
 }
 
 // generateRuleID generates a unique rule ID.
-func generateRuleID(portID string, ruleType string, direction string) string {
-	data := portID + ruleType + direction + time.Now().Format(time.RFC3339Nano)
-	hash := sha256.Sum256([]byte(data))
-	return hex.EncodeToString(hash[:8])
+func generateRuleID() string {
+	return uuid.NewString()
 }

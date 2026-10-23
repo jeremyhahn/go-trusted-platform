@@ -19,6 +19,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/services/device"
 )
 
@@ -82,17 +83,7 @@ func runGet(flags *cli.CommonFlags, idStr string) error {
 		return ErrGetDeviceFailed{ID: id, Reason: err.Error()}
 	}
 
-	// Convert to output format
-	detail := deviceDetail{
-		ID:         d.Id,
-		Serial:     d.Serial,
-		Model:      d.Model,
-		HashAlgoID: int(d.HashAlgoId),
-		EKCert:     d.EkCert,
-		AttestPub:  d.AttestPub,
-		AttestCert: d.AttestCert,
-		SigningPub: d.SigningPub,
-	}
+	detail := toDeviceDetail(d)
 
 	// Output based on format
 	if flags.OutputFormat == cli.OutputFormatTable {
@@ -103,6 +94,20 @@ func runGet(flags *cli.CommonFlags, idStr string) error {
 	// JSON/YAML output
 	output := buildGetOutput(detail)
 	return base.Output(output)
+}
+
+// toDeviceDetail converts an SDK device into its output form.
+func toDeviceDetail(d *platformv1.Device) deviceDetail {
+	return deviceDetail{
+		ID:         d.Id,
+		Serial:     d.Serial,
+		Model:      d.Model,
+		HashAlgoID: int(d.HashAlgoId),
+		EKCert:     d.EkCert,
+		AttestPub:  d.AttestPub,
+		AttestCert: d.AttestCert,
+		SigningPub: d.SigningPub,
+	}
 }
 
 // deviceDetail represents detailed device information for output

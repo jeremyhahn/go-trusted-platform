@@ -10,13 +10,12 @@
 
 set -e
 
+# shellcheck source=build/docker/devcontainer/swtpm-provision.sh
+source /usr/local/lib/devcontainer/swtpm-provision.sh
+
 # =============================================================================
 # Environment Setup
 # =============================================================================
-
-# Source nvm if available
-export NVM_DIR="$HOME/.nvm"
-[ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
 
 # Ensure Go environment
 export GOPATH="${GOPATH:-/go}"
@@ -79,10 +78,10 @@ start_ovs() {
 stop_ovs() {
     echo "=== Stopping Open vSwitch Services ==="
     if [ -f /var/run/openvswitch/ovs-vswitchd.pid ]; then
-        kill $(cat /var/run/openvswitch/ovs-vswitchd.pid) 2>/dev/null || true
+        kill "$(cat /var/run/openvswitch/ovs-vswitchd.pid)" 2>/dev/null || true
     fi
     if [ -f /var/run/openvswitch/ovsdb-server.pid ]; then
-        kill $(cat /var/run/openvswitch/ovsdb-server.pid) 2>/dev/null || true
+        kill "$(cat /var/run/openvswitch/ovsdb-server.pid)" 2>/dev/null || true
     fi
     echo "=== OVS Services Stopped ==="
 }
@@ -146,7 +145,7 @@ setup_web() {
         fi
 
         # Install Playwright browsers if configured and not already installed
-        if [ -n "${PLAYWRIGHT_BROWSERS_PATH}" ] && [ ! -d "${PLAYWRIGHT_BROWSERS_PATH}/chromium-"* 2>/dev/null ]; then
+        if [ -n "${PLAYWRIGHT_BROWSERS_PATH}" ] && ! compgen -G "${PLAYWRIGHT_BROWSERS_PATH}/chromium-*" >/dev/null; then
             echo "Installing Playwright browsers to ${PLAYWRIGHT_BROWSERS_PATH}..."
             npx playwright install chromium firefox webkit
             echo "Playwright browsers installed"
@@ -229,9 +228,12 @@ start_swtpm() {
     rm -rf /tmp/swtpm
     mkdir -p /tmp/swtpm
 
-    # Initialize TPM state
+    # Provision it like shipped hardware, with an EK and an EK certificate
     echo "Initializing swtpm state..."
-    swtpm_setup --tpm2 --tpmstate /tmp/swtpm --overwrite --pcr-banks sha256
+    if ! provision_swtpm_state /tmp/swtpm; then
+        echo "ERROR: the swtpm has no EK and EK certificate"
+        return 1
+    fi
 
     # Start swtpm daemon
     echo "Starting swtpm daemon..."
@@ -296,6 +298,7 @@ start_platformd() {
         --quic-port="${PLATFORM_QUIC_PORT:-9444}" \
         --mcp-bind-host="${PLATFORM_BIND_HOST:-0.0.0.0}" \
         --mcp-port="${PLATFORM_MCP_PORT:-9445}" \
+        --enable-mtls \
         &
 
     PLATFORMD_PID=$!
@@ -331,12 +334,15 @@ start_platformd_web() {
     # Build platformd-web-test if not already built
     if [ ! -f /workspace/bin/platformd-web-test ]; then
         echo "Building platformd-web-test..."
-        cd /workspace && go build -tags 'raft iam' -o bin/platformd-web-test ./cmd/platformd/
+        cd /workspace || return 1
+        local build_tags
+        build_tags="$(make -s print-build-tags)" || return 1
+        go build -tags "$build_tags" -o bin/platformd-web-test ./cmd/platformd/ || return 1
     fi
 
     # Setup config
     echo "Setting up web-test configuration..."
-    cp /workspace/configs/platform/config.web-test.yaml /workspace/pkg/config.yaml
+    cp /workspace/configs/platform/standalone/web-test.example.yaml /workspace/pkg/config.yaml
     rm -rf /workspace/pkg/trusted-data
     mkdir -p /workspace/pkg/trusted-data/etc
 
@@ -419,7 +425,6 @@ verify_tools() {
     echo "Go:           $(go version 2>/dev/null || echo 'NOT FOUND')"
     echo "swtpm:        $(swtpm --version 2>&1 | head -1 || echo 'NOT FOUND')"
     echo "QEMU:         $(qemu-system-x86_64 --version 2>/dev/null | head -1 || echo 'NOT FOUND')"
-    echo "QEMU-CanoKey: $(/usr/local/bin/qemu-system-x86_64-canokey --version 2>/dev/null | head -1 || echo 'NOT FOUND')"
     echo "OVS:          $(ovs-vsctl --version 2>/dev/null | head -1 || echo 'NOT FOUND')"
     echo "xorriso:      $(xorriso --version 2>&1 | head -1 || echo 'NOT FOUND')"
     echo "Node:         $(node -v 2>/dev/null || echo 'NOT FOUND')"
@@ -526,7 +531,7 @@ Examples:
     # Run specific test with OVS
     docker run --rm --privileged --device /dev/net/tun \\
         -e AUTO_START_OVS=true IMAGE \\
-        go test -v ./test/integration/sdn/...
+        go test -v -tags "integration \$(make -s print-build-tags)" ./test/integration/sdn/...
 
     # Interactive development with full capabilities
     docker run --rm -it --privileged \\

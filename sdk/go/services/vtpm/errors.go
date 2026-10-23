@@ -467,3 +467,28 @@ func (e *ErrReadPCRFailed) Error() string {
 }
 
 func (e *ErrReadPCRFailed) Unwrap() error { return e.Cause }
+
+// Wire Errors
+
+// ErrUnknownWireValue is returned when a transport carries an enum value the
+// SDK does not recognise. It is refused rather than reported as UNSPECIFIED.
+type ErrUnknownWireValue struct {
+	Kind  string
+	Value string
+}
+
+func (e *ErrUnknownWireValue) Error() string {
+	return fmt.Sprintf("vtpm: unknown %s %q", e.Kind, e.Value)
+}
+
+// ErrWireDecode is returned when a transport reply cannot be decoded.
+type ErrWireDecode struct {
+	Message string
+	Err     error
+}
+
+func (e *ErrWireDecode) Error() string {
+	return fmt.Sprintf("vtpm: decode %s reply: %v", e.Message, e.Err)
+}
+
+func (e *ErrWireDecode) Unwrap() error { return e.Err }

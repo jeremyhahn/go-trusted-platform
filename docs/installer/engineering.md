@@ -32,6 +32,7 @@
 | `hardreset.go` | `HardReset` — SysRq-b warm reset |
 | `hwoffload.go` | `CheckHWOffloadSupport` |
 | `postinstall.go` | `PostInstallExecutor` |
+| `diskless.go`, `nbd_target.go` | `checkBootModel`, the diskless root parameters; the `diskless-nbd` target (`useNBDTarget`, `checkNBDAttached`, `nbdCmdlineParams`, `espFstabSource`) |
 | `errors.go`, `uki_rebuild_errors.go` | Typed errors |
 
 `pkg/initrd/` — the boot-time unlock engine: `types.go`, `config.go`,
@@ -135,6 +136,10 @@ Network (host addressing by role, §7): `NetworkConfig.Validate(*netplan.Plan)`,
 `ErrInvalidPlatformVRF`. `SubnetConfig`, `SubnetScope`, `SubnetRole`,
 `DHCPScopeConfig` and the `NetworkConfig` subnet helpers are gone: numbering
 comes from the plan only.
+
+dnsmasq (§7): `BuildDNSMasqConf(*DNSMasqConfig) string` renders the
+`/etc/dnsmasq.conf` the installer writes; it is exported for the installer
+integration suite (§9).
 
 Other exported names: `HardReset`, `CheckHWOffloadSupport`,
 `NewPostInstallExecutor`, `DefaultIMAMonitorPaths`,
@@ -264,7 +269,8 @@ Strategy constructors: `NewKeyfileStrategy`, `NewTPMPCRStrategy`,
     unmount fails), removes the `vg0-root` mapping and closes the LUKS
     mapping, on its own 30-second context so a cancelled install still
     cleans up, and logs every step that did not complete as
-    `ErrDiskRelease`. The install error is what `Install` returns; the
+    `ErrDiskRelease`. A LUKS mapping nothing has open
+    (`luks2.ErrVolumeNotUnlocked`) is already released, not a failure. The install error is what `Install` returns; the
     release never replaces it. A live install keeps its mounts because the
     operator is on the node and the reboot clears them; an image build has
     no reboot, and a mapping or loop device left open on the build host
@@ -299,6 +305,16 @@ Strategy constructors: `NewKeyfileStrategy`, `NewTPMPCRStrategy`,
     and dracut's `/lib/modules/<release>` see a packaged kernel. Failures are
     `ErrMediaKernel` (`ErrorTypeOSInstall`). The QEMU virt stand-in of the
     Raspberry Pi image is the consumer ([factory-image architecture.md](../factory-image/architecture.md) §2).
+20. **A successful install closes the root LUKS mapping, retrying only while
+    it is busy.** `closeInstalledLUKS` (`pkg/installer/release.go`) calls
+    `luks2.Lock` up to three times. go-luks2 v0.2.0's `Lock` retries a busy
+    target for about 3s itself before it returns `luks2.ErrMappingBusy`, so
+    only that error earns another attempt, after a 1s and then a 2s backoff
+    that a cancelled install interrupts. A name nothing has open
+    (`luks2.ErrVolumeNotUnlocked`) is closed. Any other failure, or a mapping
+    still busy after the last attempt, falls back to `devmapper.Remove`; a
+    failure there is logged as data that may not be persisted and does not
+    fail the install.
 
 ## 5. Unlock strategy table — as the code registers it
 
@@ -317,6 +333,34 @@ Strategy constructors: `NewKeyfileStrategy`, `NewTPMPCRStrategy`,
 
 `DefaultConfig().FallbackMethods` is
 `[UnlockTPMPCR, UnlockTPMUpgrade, UnlockFIDO2, UnlockPassword]`.
+
+**`TPM-Upgrade` has a reader and no production writer.** It is registered by
+default (`pkg/initrd/initrd.go:188-189`) and runs every boot: `CanUnlock`
+mounts the ESP, finds no `tpm2/seal-upgrade.pub` / `.priv`, logs
+*"TPM-Upgrade: No upgrade seal files found"* and declines
+(`pkg/initrd/strategy_tpm_upgrade.go:108-118`). `Install` creates nothing
+(`strategy_tpm_upgrade.go:287`), and `CreateUpgradeSeal`
+(`strategy_tpm_upgrade.go:304`) is called only from its test. The firstboot
+writer, `writeUpgradeSealedObjects` (`pkg/firstboot/executor.go:763-774`), is
+reached only from `Executor.Run` (`executor.go:357`), which nothing calls:
+`platformctl firstboot` builds an executor
+(`pkg/cli/commands/firstboot/firstboot.go:156`) but unlocks through
+`FirstbootSealStrategy` (`firstboot.go:171-189`), whose seal path writes the
+platform seal only and deletes any upgrade seal
+(`pkg/firstboot/strategy.go:1361`). Neither the kernel-update hook
+(`pkg/installer/kernel_hook.go`, `uki_rebuild.go`) nor the
+`tpm-firstboot-seal` OpenRC service re-seals: the service tests for
+`seal-upgrade.*` (`pkg/installer/installer.go:3259`) that never exist, and the
+`platformctl firstboot` it runs (`installer.go:3346`) declines once
+`seal-platform.pub` exists (`pkg/firstboot/strategy.go:131-161`). So a kernel
+or firmware change that moves the bound PCRs goes: `TPM-PCR` fails under the
+platform policy (`strategy_tpm_pcr.go:239-246`), `TPM-Upgrade` declines,
+`FIDO2` runs only if registered, `Keyfile` finds no `installer.luks`, and
+`Password` prompts. After the passphrase, platformd detects the Platform SRK
+policy drift (`pkg/app/app.go:1927-1934`) beside a present seal and returns
+`ErrTPMSealPolicyDrift` (`pkg/app/tpm_seal_guard.go:214`,
+`pkg/app/app.go:1970-1972`). The planned upgrade path is
+[architecture.md](architecture.md) trust boundary 4.
 
 **`TPMNoPCRStrategy` is constructible but unreachable through
 `registerDefaultStrategies`.** `luks.UnlockTPMNoPCR` exists as an
@@ -364,8 +408,7 @@ strategy tried and failed, and bare `ErrUnlockFailed` when none was eligible;
 returns `[]error{Sentinel, Cause}`, so `errors.Is(err, ErrUnlockFailed)` matches
 either way.
 
-`pkg/cli/commands/iso` errors are typed per failure: `ErrDaemonConnectionRequired`,
-`ErrInvalidArchitecture`, `ErrInvalidPlatformType`, `ErrISONotFound`,
+`pkg/cli/commands/iso` errors are typed per failure: `ErrInvalidArchitecture`, `ErrInvalidPlatformType`, `ErrISONotFound`,
 `ErrDirectoryNotFound`, `ErrDirectoryAlreadyExists`, `ErrDownloadFailed`,
 `ErrExtractionFailed`, `ErrCustomizationFailed`, `ErrBuildFailed`,
 `ErrConfigValidationFailed`, `ErrProfileNotFound`, `ErrConfigParseError`,
@@ -408,11 +451,11 @@ re-applies only the flags cobra reports as `Changed`.
 | `disk.encryption.key-size` | int (bits) | `512` |
 | `disk.encryption.hash` | string | `sha256` |
 | `disk.encryption.pbkdf` | string | **empty** — `fips.GetKDF()` auto-detects from `/proc/sys/crypto/fips_enabled` |
-| `disk.encryption.mapped-name` | string | `cryptroot` |
+| `disk.encryption.mapped-name` | string | `cryptroot` — `Validate` checks it with `luks2.ValidateMappingName` (`[A-Za-z0-9]` first, then `[A-Za-z0-9_.+-]`, at most 127 bytes) and refuses a bad name as `ErrorTypeInvalidConfig` before the disk is formatted, since `Unlock` would refuse it only after the wipe |
 | `disk.encryption.password` / `passphrase` | string, `secret:"true"` | — |
 | `disk.encryption.tpm.enabled` | bool | — |
 | `disk.encryption.tpm.handle` | uint32 | `DefaultLUKSTPMHandle` = `0x81000001` (SSRK) |
-| `disk.encryption.tpm.seal-pcrs` | []uint | falls back to top-level `pcrs` |
+| `disk.encryption.tpm.seal-pcrs` | []uint | falls back to top-level `pcrs`; recorded in `pcr-banks` only (`pkg/firstboot/strategy.go:1335`) and never applied to the seal, which uses the platform policy (`strategy.go:1302`) |
 | `disk.encryption.tpm.pcr-banks` | []string | falls back to the TPM config value |
 | `disk.encryption.tpm.platform-policy` | bool | should be `false` — the initrd unseals before platformd creates the platform policy |
 | `disk.encryption.tpm.factory-reset-on-firstboot` | bool | `false` in Go, `true` in reference templates |
@@ -428,7 +471,7 @@ re-applies only the flags cobra reports as `Changed`.
 | `os.hostname` | string | `trusted-platform` |
 | `os.fips` | bool | `false` |
 | `os.lockdown` / `os.lockdown-mode` | bool / `integrity`\|`confidentiality` | `true` / `confidentiality` |
-| `os.tpm-auto-upgrade-seal` | bool | `true` |
+| `os.tpm-auto-upgrade-seal` | bool | `true` — written to `/etc/alpine-tpm.conf` as `TPM_AUTO_UPGRADE_SEAL` (`pkg/installer/alpine.go:601`), which nothing reads; no upgrade seal is created either way (§5) |
 | `os.enable-fido2` | bool | `false` |
 | `os.kernel-modules` | []string | — (needed on bare metal for `igb`, `ixgbe`, …) |
 | `os.ima.*` | `IMAConfig` | policy `tcb`\|`appraise_tcb`\|`secure_boot`\|`critical_data`; appraise `off`\|`log`\|`enforce`\|`fix` |
@@ -484,7 +527,7 @@ The role → zones table (`roleZones`, `pkg/installer/network_role.go`):
 |---|---|
 | `control-plane` | fabric, hypervisor, storage, control-plane (control-plane nodes are hypervisors too) |
 | `compute` | fabric, hypervisor, storage |
-| `gateway` | exempt: gateways route and NAT by role (owner confirmation 2026-10-01) |
+| `gateway` | exempt: gateways route and NAT by role |
 
 For `control-plane` and `compute`, every static address — interfaces (IPv4 and
 IPv6), bridges, bonds, VLAN interfaces and bond zone VLANs — must lie in one of
@@ -517,7 +560,7 @@ dedicated `network.dnsmasq` block (`enabled: true`), the legacy
 paths install the package inside the chroot, enable the service in the
 default runlevel, and point `resolv.conf` at `nameserver 127.0.0.1`.
 
-`buildDNSMasqConf` renders `/etc/dnsmasq.conf`: `no-resolv`,
+`BuildDNSMasqConf` renders `/etc/dnsmasq.conf`: `no-resolv`,
 `listen-address=127.0.0.1`, `bind-interfaces`, `cache-size=1000`, one
 `server=` line per `upstream-servers` entry, then — when `local-domain` is
 set — `domain=<domain>` always, plus `local=/<domain>/` **only when no
@@ -575,9 +618,26 @@ carry, laid down by the installer and firstboot (#66):
 | Path | Written by | Purpose |
 |---|---|---|
 | `/usr/bin/gatewayd`, `/usr/sbin/gatewayd` → symlink | installer (`installGatewaydBinary`, from the ISO's `platformd-bin/`) | the edge daemon |
-| `/etc/init.d/gatewayd` | firstboot (`installGatewaydService`) | OpenRC service, default runlevel, after `platformd` |
+| `/etc/init.d/gatewayd` | firstboot (`installGatewaydService`) | OpenRC service, default runlevel, after `platformd`; `start_pre` runs `modprobe jool` only when the config has `gateway.nat64.enabled: true` |
+| apk `jool-modules-lts`, `jool-tools`, `jool-tools-openrc` | installer (`InstallPackages`, from `os.packages`: the gateway templates list them, and a gateway-role medium on the stock kernel adds them to its baked `configs/installer.yaml`) | the NAT64 translator gatewayd's `nat64:` section drives |
 | `/etc/gatewayd/config.yaml` (0600) | firstboot (`renderGatewaydConfig`) | the `gateway:`, `proxy:`, `trust:`, `sdn:`, `control-plane:` sections of the platform config |
 | `/etc/gatewayd/{client.pem,client-key.pem,cp-ca.pem}` | **operator** (not produced by the repo yet — #149, #431) | control-plane reporter mTLS identity; absent ⇒ reporter rendered disabled |
+
+The Jool package list is `tpconfig.GatewaydPackages` (`pkg/config/gateway_role.go`,
+#603); the shipped gateway templates carry it and a gateway-role ISO
+prefetches it beside the stock `linux-lts` kernel (not in a FIPS, kernel-less
+or non-lts ISO, where `jool-modules-lts` would pull in a second kernel).
+The prefetch and the install take the list from one function,
+`PreFetchConfig.installedPackages` (`pkg/iso/prefetch.go`), under that one
+kernel condition: whenever the medium prefetches the Jool packages, the
+`configs/installer.yaml` it bakes lists them in `os.packages`
+(`applyInstallerOverrides`, `pkg/iso/customize.go`), once, after the
+template's own entries. A gateway template on any other kernel still lists
+them itself; the medium adds nothing then.
+`jool-modules-lts` is built for one exact `linux-lts` release: upgrade the two
+together. A kernel that outruns the module leaves `jool` unloadable, the init
+script warns, and gatewayd refuses its `nat64:` section
+(`ErrNAT64ModuleUnavailable`).
 
 Nodes installed from media built with `--platform-apk-dir` carry the overlay's
 IPsec packages (#709). `EnableServices` adds every service of its list whose
@@ -586,6 +646,24 @@ so on these nodes `xkms-p11-kit` and `charon` join the default runlevel and the
 VICI socket exists after every boot. Both generated platformd scripts start
 `after charon`, and platformd runs as root, the socket's default owner
 ([sdn engineering](../sdn/engineering.md) §9.6).
+
+`os.services` (`OSConfig.Services`) names more services for the default
+runlevel. They are appended after that list, under the same init-script rule.
+The factory-image target sets it from `InstallerOverrides.ExtraServices`; the
+Raspberry Pi target sets `pcscd`
+([factory-image engineering](../factory-image/engineering.md)).
+
+A medium that bundles a platform config (ISO, factory image, netboot set)
+installs from the copy it bakes as `configs/installer.yaml`, through
+`os.packages` and `os.services`. Staging appends to those lists what the medium carries for the
+installed system: `PreFetchConfig.installedPackages` (`pkg/iso/prefetch.go`)
+— the IPsec packages of `--platform-apk-dir`, a gateway's Jool packages and
+`InstallerOverrides.ExtraPackages` — and `InstallerOverrides.ExtraServices`.
+The template's own entries come first and keep their order, and nothing is
+listed twice (`applyInstallerOverrides`, `pkg/iso/customize.go`). The
+prefetch reads the same function, so what is fetched is what is installed.
+A dynamic-config medium bakes no platform config: it installs the lists of
+the config it fetches, and nothing is appended to them.
 
 ESP layout, with the constants that name each file (`pkg/firstboot/types.go`,
 `pkg/firstboot/strategy.go`):
@@ -597,15 +675,22 @@ ESP layout, with the constants that name each file (`pkg/firstboot/types.go`,
 | `/boot/efi/tpm2/installer.luks` | `EFIInstallerFile`, `strategyInstallerContainerFile` | first boot, then until the **first `TPM-PCR` unlock**, which securely wipes it |
 | `/boot/efi/tpm2/seal-platform.pub` | `EFISealPlatformPub`, `strategySealPub` | permanent |
 | `/boot/efi/tpm2/seal-platform.priv` | `EFISealPlatformPriv`, `strategySealPriv` | permanent |
-| `/boot/efi/tpm2/seal-upgrade.pub` / `.priv` | `EFISealUpgradePub` / `Priv` | one boot — deleted immediately on use |
+| `/boot/efi/tpm2/seal-upgrade.pub` / `.priv` | `EFISealUpgradePub` / `Priv` | never written in production (§5); `TPM-Upgrade` would keep them after use (`pkg/initrd/strategy_tpm_upgrade.go:236-252`), and the first-boot seal and a `TPM-PCR` unlock delete them (`pkg/firstboot/strategy.go:1361`, `pkg/initrd/strategy_tpm_pcr.go:227`) |
 | `/boot/efi/tpm2/pcr-banks` | `EFIPCRBanks` | written minimally at install, overwritten authoritatively by firstboot |
 | `/boot/efi/tpm2/pcr-seal-values.txt` | `EFIPCRValues` | permanent |
 | `/boot/efi/tpm2/swtpm-state` | `EFISwtpmStateDir` | swtpm deployments only |
 | `/boot/efi/tpm2/ppi-clear-attempted` | — | loop guard for `force-clear-via-ppi` |
-| `/boot/efi/tpm2/network.conf` | — | written by `writeFirstbootNetworkConfig` at install; sourced by the dracut hook on first boot and by the firstboot service |
+| `/boot/efi/tpm2/network.conf` | — | written by `writeFirstbootNetworkConfig` at install; parsed (never sourced) by the dracut hook on first boot and by the firstboot service |
 
-**`network.conf` contract.** A `key=value` file meant to be sourced by
-POSIX sh. Keys: `INTERFACE`, `TYPE` (`static` or `dhcp`), and for static
+**`network.conf` contract.** A `KEY=value` file the ESP holds, which anyone with
+the disk can edit, so it is **parsed, never sourced**: `platformd_load_network_conf`
+(`pkg/disklessroot/network_conf_shell.go`, shared by the dracut hook and the
+firstboot service) splits each line at the first `=`, accepts only the keys
+below, strips one pair of surrounding double quotes, and accepts a value only
+if it is made of letters, digits and `. _ : / -` and spaces. Any other line (a
+command, `$(...)`, a `;`, a backtick, `${...}`, an unknown key) is reported on
+stderr, skipped and never executed or applied; the lines that pass still load.
+Keys: `INTERFACE`, `TYPE` (`static` or `dhcp`), and for static
 interfaces `IPV4_ADDRESS` (the **bare** address, never with a CIDR suffix),
 `IPV4_PREFIX` (0–32, derived by `firstbootStaticAddress` from the config's
 CIDR suffix, else its dotted netmask, else 24), `IPV4_NETMASK` (as configured,
@@ -619,6 +704,319 @@ The initramfs brings the address up as a serial-console diagnostic and to set
 the hostname the IAK/IDevID certificates are named after; nothing in
 `platform-initrd` needs the network, and ACME enrollment runs after
 `switch_root` in the firstboot service.
+
+`buildUKI` omits dracut's `network` and `network-legacy` modules, so the
+platformd module carries the network itself: `platformd_install_network`
+(`pkg/iso/dracut_network.go`, run from `module-setup.sh`'s `install()`)
+installs busybox `udhcpc`, the `default.script` that applies its lease
+(`/usr/share/udhcpc/default.script`, with `/etc/udhcpc/udhcpc.conf`, both from
+the busybox package of the root dracut runs in), and `ip`, `cut`, `chmod` and
+`mv`, which that script runs; `ping` and `hostname` are optional. `udhcpc`
+without its script obtains a lease and never puts the address or route on the
+interface. A diskless node fetches its root over that network, and a
+`diskless-nbd` node reaches its export over it, so when the embedded command
+line selects either model (`platformd_boot_model`, or `platformd_nbd_node` for
+`diskless-nbd`) a missing piece fails the dracut run, and the install, rather
+than producing a node that cannot boot; a disk install only warns.
+
+That initramfs is on the boot path of every model: `buildUKI` (`pkg/installer/installer.go`)
+runs dracut, injects `platform-initrd`, and makes the result the UKI's
+`.initrd`. Its `--omit` list stays `crypt network network-legacy nbd nfs` for
+every boot model. dracut's `nbd` module runs `nbd-client` over dracut's own
+network stack. A `diskless-nbd` node's `platform-initrd` attaches the export
+itself (planned, [below](#attaching-before-the-install)), over the network the
+platformd module brings up. What that node does need is the kernel's NBD block
+driver. `dracutDrivers` (`pkg/installer/arch.go`) adds `nbd` to the
+architecture's `--add-drivers` set for `diskless-nbd` only (`bootModelDrivers`),
+and the other models' sets are unchanged (`TestDracutDriversByBootModel`).
+
+A diskless node's root is shared by every node of the media set, so its own
+`/etc/hostname`, `/etc/network/interfaces` and `/etc/resolv.conf` would
+override the per-node `network.conf`. After mounting the overlay, and before
+`switch_root`, `platformd_seed_node_settings` writes the node's hostname,
+interface (static or DHCP) and resolver into the tmpfs upper layer, replacing
+any symlink; the shared root is never written.
+
+**`diskless-nbd` node side — install and boot of the installed UKI built, attach Planned (#689).** The NBD export server is built
+(`pkg/bootstrap/nbd`, [bootstrap engineering](../bootstrap/engineering.md#nbd-export-server-pkgbootstrapnbd)).
+So are four pieces of the node half: the `platform_nbd_server` reader
+`nbd.ServerFromCmdline`
+([kernel-cmdline §4](../reference/kernel-cmdline.md#nbd-root-parameter)), the
+client configuration builder `nbd.NewClientConfig`, the negotiation
+`nbd.Attach` (below), which meets the second to fourth points of this
+contract, and the installer target `nbd` (the fifth point,
+[below](#the-installer-target-nbd)). After the install, the boot server hands
+the node the UKI from its export instead of the installer
+([bootstrap engineering](../bootstrap/engineering.md#the-diskless-nbd-runtime-path)).
+`platform-initrd` does not attach an export yet, so only the installer calls
+`nbd.ServerFromCmdline`, and nothing calls the other two. The node half below is the
+contract every slice meets:
+
+- The boot server's NBD address comes from the **signed** UKI `.cmdline`,
+  under the same rule as the diskless root parameters: nothing on the live
+  command line can name the root. Built: the installer copies no live-line
+  parameter into the UKI but the debug sink (`hostUKICmdlineParams`), so a
+  live `platform_nbd_server` never reaches it.
+- `platform-initrd` sends the client flag `NBD_FLAG_C_FIXED_NEWSTYLE`. Its
+  first option is `NBD_OPT_STARTTLS`, and it requires TLS 1.3. It presents
+  the IDevID certificate, whose key stays in the TPM. It verifies the server
+  certificate against the platform CA carried in the image.
+- It then sends `NBD_OPT_GO` with an empty export name, or its own IDevID
+  identity.
+- A refusal is final. These include `NBD_REP_ERR_TLS_REQD`,
+  `NBD_REP_ERR_POLICY`, `NBD_REP_ERR_UNKNOWN`, a failed handshake, or a
+  closed connection. The node never retries in plaintext and never asks for
+  another export. The boot fails closed into the recovery path.
+- The installer target `nbd` runs Phase A against the attached export instead
+  of a local disk: it LUKS2-formats the export and installs onto it. The key
+  is sealed to the node's TPM, as on a disk install. Built.
+
+```go
+func Attach(ctx context.Context, conn net.Conn, cfg nbd.ClientConfig) (*nbd.Export, error)
+```
+
+`ClientConfig` carries `Certificate` (the IDevID; its `PrivateKey` is the TPM
+signer), `RootCAs` (the platform CA), `ServerName` and `HandshakeTimeout`
+(default 30 s; a context deadline that comes sooner wins). A missing field is
+`nbd.ErrInvalidConfig`, returned before anything is written. `Attach` sends
+`NBD_FLAG_C_FIXED_NEWSTYLE` (and `NO_ZEROES` when the server offers it), then
+`NBD_OPT_STARTTLS`, then a TLS 1.3-only handshake, then `NBD_OPT_GO` for the
+empty export name, asking for `NBD_INFO_BLOCK_SIZE`. It returns `Export`: the
+TLS connection, now in transmission, with the size, the transmission flags and
+the block-size constraints. It owns `conn` and closes it on every error:
+
+| Outcome | Typed error |
+|---|---|
+| any `NBD_REP_ERR_*` reply to `STARTTLS` or `GO` | `nbd.ErrServerRefused{Option, Reply}` |
+| handshake failure, including a TLS alert the server sends after a TLS 1.3 handshake has completed (client certificate rejected) | `nbd.ErrTLSHandshake` |
+| not fixed newstyle, bad magic, a reply to another option, an oversized or malformed reply, `GO` acknowledged without `NBD_INFO_EXPORT`, a closed connection, the timeout, a cancelled context | `nbd.ErrProtocol` |
+
+```go
+func NewClientConfig(ctx context.Context, server nbd.ServerAddr, anchor *trust.Anchor, idevid tls.Certificate) (nbd.ClientConfig, error)
+```
+
+`NewClientConfig` builds `Attach`'s configuration from the signed parameters.
+`server` is the address `ServerFromCmdline` read; its host becomes
+`ServerName`, so the boot server's certificate must carry it. `RootCAs` is the
+platform anchor's CA pool. `HandshakeTimeout` is the default. `idevid` is a
+parameter: it is the certificate the node's enrollment put in its TPM, and the
+node enrols before its first attach (#883 Q2,
+[below](#enrolling-before-the-attach)). `anchor` is a parameter too: no early-boot path reads a
+CA bundle today. The image's bundle is on the root filesystem, which for this
+model is the export itself. Nothing calls `NewClientConfig` yet.
+
+| Input | Typed error |
+|---|---|
+| an address with no valid host or a zero port | `nbd.ErrCmdline` |
+| no anchor | `nbd.ErrInvalidConfig` (`RootCAs`) |
+| an anchor whose bundle is unreadable or holds no CA | `nbd.ErrTrustAnchor`, wrapping `trust.ErrAnchorUnavailable` or `trust.ErrAnchorEmpty` |
+| an IDevID with no certificate or no key | `nbd.ErrInvalidConfig` (`Certificate`), from `ClientConfig.Validate` |
+
+### The installer target `nbd`
+
+`checkBootModel` (`pkg/installer/diskless.go`) is `Install`'s step 0. It
+returns the model the live command line selects: `""` (disk), `diskless`, or
+`diskless-nbd`, which it accepts only with exactly one well-formed
+`platform_nbd_server` (`nbd.ServerFromCmdline`). Every other value is
+`ErrorTypeBootModel`. For `diskless-nbd`, `Install` then enrols the node
+([below](#enrolling-before-the-attach)) and, once it holds the IDevID, calls
+`useNBDTarget` (`pkg/installer/nbd_target.go`). Both run before step 1.
+`useNBDTarget` refuses with `ErrorTypeNBDTarget` wrapping
+`*NBDTargetError{Device, Reason}`:
+
+| Condition | `Reason` |
+|---|---|
+| no `disk.encryption` (the export's root is always LUKS2) | `a diskless-nbd root must be LUKS2-encrypted; …` |
+| no `/sys/block/nbd0` (module not loaded) | `no such block device (…)` |
+| no `/sys/block/nbd0/pid` (no client holds an export) | `not attached to an NBD export (no pid)` |
+| `size` missing or not a decimal sector count | `size unreadable: …` / `size is not a number: …` |
+| `size` is 0 | `attached export has size 0` |
+
+Otherwise it sets `disk.device` to `/dev/nbd0` and `disk.partition-table` to
+`gpt`, whatever the profile chose for a local disk (a Pi profile's is `mbr`, for
+its firmware): the boot server reads the export's partition table itself
+([below](#the-nbd-metadata-area)) and reads only GPT. The disk manager shares that
+config, so the unchanged `setupDisk` partitions, LUKS2-formats, LVMs and
+mounts the export exactly as it would a disk; nothing is copied per model. The
+installer reads the attachment and never makes it: the export must be attached
+before `platformctl install system` runs
+([below](#attaching-before-the-install)).
+
+Step 1, the TPM clear, does not run for this model (`nbdTargetSkips`,
+`pkg/installer/boot_firmware.go`). The node attached its export with the IDevID
+whose key the TPM holds, and a TPM2_Clear evicts it with every other owner and
+endorsement object, so the node could never attach its root again. A
+re-install therefore keeps whatever else the TPM holds.
+
+The UKI's root parameters come from `nbdCmdlineParams`:
+`platform_boot_model=diskless-nbd` and the signed `platform_nbd_server`, and
+nothing else. `ukiRootCmdlineParams` returns them as they are, so the UKI
+carries no `root=`, `rd.luks.*` or `rd.lvm.*`; the only live-line parameter
+that reaches it is the debug sink (`hostUKICmdlineParams`).
+
+### Enrolling before the attach
+
+The installer enrols, then attaches (#883 Q2). The export admits a node only
+by its IDevID, so a `diskless-nbd` node holds one before its first attach.
+Every node except the first enrols the same way, on every architecture and
+boot model: ACME `enroll-01` or `endorse-01`, whichever
+`acme.client.enrollment.challenge` selects, through the go-quicbaas SDK's
+`sdk/go/xkms/acme` client. That is the client `platformd` runs on a disk
+node's first boot (`App.CompletePlatformIdentity`, `pkg/app/app.go`). There is
+no second enrollment path, and the installer adds no enrollment code: it calls
+the client through one seam (`pkg/installer/nbd_enrol.go`):
+
+```go
+type IdentityEnroller interface {
+    EnrollIdentity(ctx context.Context) (*x509.Certificate, error)
+}
+
+func WithIdentityEnroller(e IdentityEnroller) InstallerOption
+```
+
+`enrollNBDIdentity` calls it once, before the TPM clear, before
+`useNBDTarget` reads the attachment and before any disk is touched. A refusal
+is `ErrorTypeEnrollment` wrapping `*EnrollmentError{Reason, Err}`, and the
+install stops with no disk changed:
+
+| Condition | `Reason` |
+|---|---|
+| no enroller was supplied | `no enrollment client is configured` |
+| `EnrollIdentity` returned an error (kept as `Err`) | `enrollment failed` |
+| `EnrollIdentity` returned no certificate | `enrollment returned no IDevID certificate` |
+
+A refusal of the export after a successful enrollment stays
+`ErrorTypeNBDTarget`, so the two failures are told apart.
+
+The live environment does not supply an enroller yet (**Planned**), so a
+`diskless-nbd` install is refused at this step. The enrollment client runs
+inside `platformd`'s first-boot provisioning (`InitTPM`,
+`ProvisionPlatform`, `CompletePlatformIdentity`). That provisioning needs the
+TPM's PINs and writes the platform datastore, and on a `diskless-nbd` node
+both belong on the export, which the node can attach only after it enrols.
+Where the live environment keeps them until then is not decided.
+
+### Attaching before the install
+
+How the live environment reaches the installer on a `diskless-nbd` node:
+
+| Step | Where |
+|---|---|
+| The media set's installer initramfs | `pkg/diskimage/netboot/build.go` (`installerInitramfs`) makes it from Alpine's with `Customizer.InstallerInitramfs` (`pkg/iso/customize.go`), which adds the autoinstall overlay and patches `init` |
+| `init` starts the autoinstall | `patchInitScript`: when `/proc/cmdline` carries `alpine_start=autoinstall`, an inittab (`createAutoinstallOverlay`) runs `/root/run-autoinstall.sh` as `::sysinit:`, which runs `autoinstall.sh` |
+| The live command line | the device script's kernel arguments: `alpine_start=autoinstall` from the media set (`pkg/bootstrap/container/mediaset.go`), plus `platform_boot_model=diskless-nbd` and `platform_nbd_server` from `nodeBootArgs` (`pkg/bootstrap/container/server.go`). iPXE passes them to the kernel; nothing signs them |
+| The install | `autoinstall.sh` (`buildAutoinstallScript`) runs `platformctl install system --disk "$INSTALL_DISK"` |
+
+On this model `nbd_install_target` (`nbdInstallTargetFunction`) sets
+`INSTALL_DISK` to `/dev/nbd0`, and the local-disk scan does not run, so a node
+with no local disk does not stop at "No suitable installation disk found". It
+matches only the whole word `platform_boot_model=diskless-nbd`; every other
+node scans its disks as before. The installer validates the rest of the line
+(`checkBootModel`) and checks the attachment (`useNBDTarget`).
+
+The attach itself is **Planned**. It runs in the live environment between
+`nbd_install_target` and the install, through the code `platform-initrd` uses
+(the media already carries the `platform-initrd` binary,
+`CopyPlatformInitrdBinary`), and its failure ends the script through `error`
+before `platformctl install system` runs. Until it exists, the installer's own
+checks are the refusal: no enrollment is `ErrorTypeEnrollment` and no attached
+`nbd0` is `ErrorTypeNBDTarget`, both before the TPM, a partition table or a
+key is touched, and the failed install stays in the installer
+([autoinstall](autoinstall.md#8-failure-paths)). Two things hold the attach
+back, and both hold the `platform-initrd` attach back too:
+
+1. **The handoff to the kernel.** `nbd.Attach` ends with a `crypto/tls`
+   connection. The kernel `nbd` driver takes a socket it reads and writes in
+   plaintext (`NBD_SET_SOCK`, or netlink `NBD_ATTR_SOCKETS`), and `crypto/tls`
+   cannot hand its session keys to kernel TLS.
+2. **The IDevID before the first install.** A node attaches only after
+   enrollment, with the IDevID the bootstrap CA issued through the SDK (#883).
+   The installer enrols first ([above](#enrolling-before-the-attach)), but the
+   live environment does not supply its enrollment client yet.
+
+### The command line under Secure Boot
+
+An installed `diskless-nbd` node takes its root from the UKI's `.cmdline`, and
+from nothing else:
+
+| Link | Where |
+|---|---|
+| The UKI is systemd-stub plus `.linux`, `.initrd` and `.cmdline`; Secure Boot signs the whole image, sections included | `pkg/uki` (`builder.go`, `builder_objcopy.go`); the parser refuses a UKI with no `.cmdline` (`parser.go`) |
+| The device script boots the installed UKI by URL with **no arguments** | `BootImageURL` (`pkg/ipxe/script_generator.go`), set by `deviceBootInfo` (`pkg/bootstrap/container/server.go`) |
+| `platform-initrd` reads `/proc/cmdline`, which under Secure Boot is the signed `.cmdline`: systemd-stub ignores the load options | `pkg/boot/commands/boot.go`; `platform_nbd_server` is read only from it (`pkg/bootstrap/nbd/cmdline.go`) |
+| The dracut module reads `root=` from the `/etc/kernel/cmdline` it embeds in the initramfs, not from `/proc/cmdline` | `pkg/iso/customize.go` (the platformd module's `module-setup.sh` and `platformd-root.sh`) |
+
+Who refuses an unsigned command line is the **firmware**, not the server. The
+bootstrap server streams the UKI as it is and checks no signature
+(`pkg/bootstrap` has none). With Secure Boot on, the firmware refuses a UKI
+the db does not sign, and systemd-stub refuses load options, so a changed
+`.cmdline` does not boot. A Raspberry Pi always verifies: its U-Boot carries
+the preseeded keys ([factory image](../factory-image/architecture.md#3-rejected-alternatives),
+[`pxe-client --secure-boot`](../ipxe/cli.md)). On x86 Secure Boot is the
+firmware's setting.
+
+Two gaps remain, and neither is closed in code:
+
+1. **Without Secure Boot** systemd-stub takes the load options over `.cmdline`,
+   and anyone who can change the device script or the served UKI chooses the
+   server and the boot model. Nothing refuses a `diskless-nbd` boot with
+   Secure Boot off, and no document requires a check, so none is added here.
+   The TLS handshake still authenticates the export server, and the sealed key
+   still unseals only under the PCR policy.
+2. **The live line is unsigned.** The installer copies `platform_nbd_server`
+   from the live command line into the UKI it builds
+   (`disklessCmdlineParams`, `pkg/installer/diskless.go`). The signature says
+   who built the UKI; it does not prove the address was right. The attach's
+   TLS server authentication is what proves that.
+
+### The NBD metadata area
+
+The sealed key blob and the PCR banks live **on the NBD
+volume**, not on the node. The area is partition 1 of the export, the same
+partition a disk install uses as its ESP, so every reader and writer of those
+files works unchanged:
+
+| | |
+|---|---|
+| Location | `/dev/nbd0p1`: GPT partition 1, from 1 MiB (`diskManager.CreateEFIPartition`, `pkg/installer/disk.go`) |
+| Size | `disk.efi-partition-size` MiB, default 538; the LUKS2 root (`/dev/nbd0p2`) takes the rest |
+| Format | FAT32 (`vfat`, label `EFI`), the [ESP layout](#8-persistence-and-on-disk-layout) above: the UKI under `EFI/BOOT/`, and `tpm2/pcr-banks`, `tpm2/installer.luks` (first boot), `tpm2/seal-platform.pub` / `.priv`, `tpm2/pcr-seal-values.txt` (no `tpm2/seal-upgrade.*` — nothing writes it, §5) |
+| Mounted at | `/mnt/boot/efi` during Phase A; `/boot/efi` on the node, from fstab **by path** (`espFstabSource`), never `LABEL=EFI`, so a stray local partition with that label cannot receive the seal |
+
+Writers: Phase A writes `tpm2/pcr-banks` and `tpm2/installer.luks` under
+`/mnt/boot/efi/tpm2` (`prepareLUKSKeyForTPM`, `pkg/installer/installer.go`),
+and the first-boot seal writes `seal-platform.*` under `/boot/efi/tpm2`
+(`pkg/firstboot/types.go` `EFISealPlatformPub`/`Priv`). Readers: the unlock
+strategies find the area with `partition.FindESP(root)`, which takes partition
+1 beside the root device first (`/dev/nbd0p2` → `/dev/nbd0p1`) before any
+`EFI` label, and read `tpm2/seal-platform.*` and `tpm2/pcr-banks` from it
+(`pkg/initrd/strategy_tpm_pcr.go`). The boot server holds the area and the
+LUKS2 ciphertext; neither is useful without the node's TPM.
+
+The boot server reads one file from the area: the installed UKI, which it
+serves the node at every boot after the install (see
+[bootstrap engineering](../bootstrap/engineering.md#the-diskless-nbd-runtime-path)).
+`nbd.OpenMetadataFile(volumeDir, identity, name)` (`pkg/bootstrap/nbd/metadata.go`)
+reads it from `<volume_dir>/<identity>.img` without mounting or attaching
+anything. It finds the GPT header at LBA 1 for 512-, 1024-, 2048- or
+4096-byte sectors, checks the header and entry-array CRC32s, takes partition 1
+only if it lies inside the volume, checks the FAT32 boot sector, reads the
+first FAT whole (16 MiB at most), and follows cluster chains, refusing a free,
+reserved or out-of-range cluster, a loop, or a chain shorter than the file.
+Names match case-insensitively; long names are used only when their checksum
+matches the 8.3 entry.
+
+| Volume | Result |
+|---|---|
+| no `<identity>.img`, or one with no GPT and no MBR signature (blank, as the NBD server creates it) | `nbd.ErrNotInstalled` — the node has not been installed |
+| partitioned, but not a readable area holding `name` | `nbd.ErrMetadataArea{Identity, Reason, Cause}` |
+| an identity that is not a valid volume name | `nbd.ErrVolume` wrapping `fs.ErrInvalid` |
+
+An install that stopped after partitioning leaves a volume that is
+`ErrMetadataArea`. The boot server never reinstalls over it, because the
+installer would format whatever the export holds. To reinstall, the operator
+removes `<volume_dir>/<hostname>.img` while the node is off; the NBD server
+creates a blank one at the next attach.
 
 Inside the container while it is mounted at `/mnt/installer`:
 `luks-key.bin` (the only path `KeyfileStrategy` looks at),
@@ -643,6 +1041,7 @@ to every already-installed machine and needs a migration path in the same PR.
 | Unit | `pkg/iso/*_test.go` | Config defaults, customise steps, extract, prefetch, module injection, profile network generation |
 | Unit | `pkg/qemu/*_test.go` | Argument construction, Secure Boot enrolment, monitor, snapshot, migration |
 | Integration | `test/integration/ipxe/` and the `platformctl iso test` verbs | Real QEMU + real swtpm + real OVMF |
+| Integration | `test/integration/installer/` (`make integration-test-installer`) | A real dnsmasq on the `BuildDNSMasqConf` output, for the control-plane (loopback upstream) and worker (remote upstream) shapes, forwards a query for a name in the internal zone to a stub upstream; the same config with `local=/<domain>/` added answers NXDOMAIN and never forwards it (the #128 blackhole, #131) |
 
 **Seams for fault injection**, all package-level `var`s or interfaces so a test
 can substitute them without touching the host:
@@ -665,8 +1064,11 @@ have a matching `CommandDefinition` in the integration parity suite. **No
 
 ## 10. Corrections against the pre-convention documents
 
-The code wins. Each row is a defect in the older file, recorded rather than
-silently fixed, because those files are still linked from elsewhere.
+The code wins. Each row is a defect in an older file, recorded rather than
+silently fixed. SECURITY_MODEL.md, UNLOCK_STRATEGIES.md, initrd-overview.md,
+initrd-architecture.md and README.md have since been deleted
+([architecture.md §8](architecture.md#8-related)); their rows stay as the
+record of what they claimed.
 
 | Claim | Where | Reality in code |
 |---|---|---|
@@ -674,7 +1076,7 @@ silently fixed, because those files are still linked from elsewhere.
 | Installer container password is `installer` | SECURITY_MODEL.md | `installer.InstallerPassword` = `"forensic-protection-only"`. factory-reset.md is right. |
 | Seal files are `seal.pub` / `seal.priv` | SECURITY_MODEL.md, UNLOCK_STRATEGIES.md | `seal-platform.pub` / `seal-platform.priv`. |
 | FIDO2 strategy priority is 4 | UNLOCK_STRATEGIES.md | `3` (`strategy_fido2.go`). |
-| The strategy set is Firstboot / TPM-PCR / TPM-Upgrade / FIDO2 / Password | UNLOCK_STRATEGIES.md | `Keyfile` (80) and `TPMNoPCR` (5) also exist; `Keyfile` is the strategy that actually carries the first boot inside `pkg/initrd`. |
+| The strategy set is Firstboot / TPM-PCR / TPM-Upgrade / FIDO2 / Password, and `TPM-Upgrade` carries a kernel upgrade across | the pre-convention unlock-strategy notes | `Keyfile` (80) and `TPMNoPCR` (5) also exist; `Keyfile` is the strategy that actually carries the first boot inside `pkg/initrd`. `TPM-Upgrade` has no production writer and declines every boot ([§5](#5-unlock-strategy-table--as-the-code-registers-it)). |
 | "Write plain key to EFI partition" during install | README.md §System Overview | Superseded. The key is only ever inside `installer.luks`; the same README says so five sections later. |
 | Platform SRK policy is "PCR + PIN"; there are "PIN seals" | README.md, initrd-architecture.md | No PIN seal path exists in `pkg/initrd`. SECURITY_MODEL.md's "PCR policy" description is the accurate one. |
 | `pkg/luks`, `pkg/fido2`, `pkg/initrd/strategies/` | initrd-architecture.md | The real paths are `pkg/storage/luks`, the `go-quicbaas/sdk/go/xkms/fido2` re-export, and `pkg/initrd/strategy_*.go`. `initrd-architecture.md` is an **aspirational design note that predates the implementation** — read it for intent, never for identifiers. |

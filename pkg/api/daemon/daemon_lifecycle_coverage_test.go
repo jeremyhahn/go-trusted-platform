@@ -224,38 +224,6 @@ func TestStartLifecycle_AlreadyRunning(t *testing.T) {
 	}
 }
 
-func TestStartLifecycle_WithAllServicesNil(t *testing.T) {
-	socketPath := lifecycleShortSocketPath(t, "allnil")
-
-	config := testConfig(socketPath)
-	config.EnableREST = false
-	config.EnableMCP = false
-	config.EnableQUIC = false
-
-	d, err := New(config)
-	if err != nil {
-		t.Fatalf("New() failed: %v", err)
-	}
-	defer d.ForceStop()
-
-	// Verify optional services are nil
-	if d.sdnService != nil || d.kmsService != nil ||
-		d.iamService != nil || d.tenantService != nil {
-		t.Skip("Services should be nil for this test")
-	}
-
-	ctx := context.Background()
-
-	// Start should succeed with all nil services
-	if err := d.Start(ctx); err != nil {
-		t.Fatalf("Start() failed: %v", err)
-	}
-
-	if !d.IsRunning() {
-		t.Error("Daemon should be running after Start()")
-	}
-}
-
 func TestStartLifecycle_RunningStateTransitions(t *testing.T) {
 	socketPath := lifecycleShortSocketPath(t, "trans")
 
@@ -594,10 +562,7 @@ func TestForceStopLifecycle_ClosesHealthRegistry(t *testing.T) {
 
 	err = d.ForceStop()
 	if err != nil {
-		// May return "server is not running" - that's acceptable
-		if err.Error() != "server is not running" {
-			t.Fatalf("ForceStop() failed: %v", err)
-		}
+		t.Fatalf("ForceStop() failed: %v", err)
 	}
 }
 
@@ -620,7 +585,7 @@ func TestForceStopLifecycle_WithRESTServer(t *testing.T) {
 	}
 
 	err = d.ForceStop()
-	if err != nil && err.Error() != "server is not running" {
+	if err != nil {
 		t.Fatalf("ForceStop() failed: %v", err)
 	}
 }
@@ -651,7 +616,7 @@ func TestForceStopLifecycle_WithMCPServer(t *testing.T) {
 	}
 
 	err = d.ForceStop()
-	if err != nil && err.Error() != "server is not running" {
+	if err != nil {
 		t.Fatalf("ForceStop() failed: %v", err)
 	}
 }
@@ -675,7 +640,7 @@ func TestForceStopLifecycle_WithGRPCServer(t *testing.T) {
 	}
 
 	err = d.ForceStop()
-	if err != nil && err.Error() != "server is not running" {
+	if err != nil {
 		t.Fatalf("ForceStop() failed: %v", err)
 	}
 }
@@ -700,8 +665,8 @@ func TestForceStopLifecycle_WithNilHealthRegistry(t *testing.T) {
 
 	// ForceStop should not panic
 	err = d.ForceStop()
-	if err != nil && err.Error() != "server is not running" {
-		t.Logf("ForceStop() returned error: %v", err)
+	if err != nil {
+		t.Fatalf("ForceStop() failed: %v", err)
 	}
 }
 

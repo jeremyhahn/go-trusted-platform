@@ -23,7 +23,11 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"testing"
 	"time"
+
+	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
+	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers/surface"
 )
 
 // =============================================================================
@@ -45,30 +49,61 @@ const (
 )
 
 // =============================================================================
-// Skip Helpers
+// Prerequisite Errors
 // =============================================================================
 
-// SkipIfNotIntegration skips the test if not running in integration mode.
-func SkipIfNotIntegration(t interface{ Skip(...interface{}) }) {
-	if os.Getenv("INTEGRATION_TEST") == "" {
-		t.Skip("Skipping integration test. Set INTEGRATION_TEST=1 to run.")
-	}
+// ErrMissingPrerequisite reports something the suite needs that the
+// devcontainer provides and the run did not have.
+type ErrMissingPrerequisite struct {
+	// Name says what is missing.
+	Name string
+	// Provide says how to provide it.
+	Provide string
 }
 
-// SkipIfNoSwtpm skips the test if swtpm is not available on the system.
-func SkipIfNoSwtpm(t interface{ Skip(...interface{}) }) {
-	swtpmPath := GetSwtpmPath()
-	if _, err := os.Stat(swtpmPath); os.IsNotExist(err) {
-		t.Skip("Skipping test: swtpm not available at", swtpmPath)
-	}
+// Error implements error.
+func (e ErrMissingPrerequisite) Error() string {
+	return "vtpm: missing prerequisite " + e.Name + ": " + e.Provide
 }
 
-// SkipIfNoTPMDevice skips the test if no TPM device is available.
-func SkipIfNoTPMDevice(t interface{ Skip(...interface{}) }) {
-	if _, err := os.Stat("/dev/tpm0"); os.IsNotExist(err) {
-		if _, err := os.Stat("/dev/tpmrm0"); os.IsNotExist(err) {
-			t.Skip("Skipping test: no TPM device available (/dev/tpm0 or /dev/tpmrm0)")
-		}
+// ErrMissingSurface reports that the transport under test answered an
+// operation with a missing-surface declaration (surface.ErrNoSurface or
+// gRPC Unimplemented). Every vTPM transport serves every operation, so the
+// declaration is a regression, never a reason to skip.
+type ErrMissingSurface struct {
+	// Operation names the adapter operation.
+	Operation string
+	// Err is the declaration the transport returned.
+	Err error
+}
+
+// Error implements error.
+func (e ErrMissingSurface) Error() string {
+	return "vtpm: the transport under test has no surface for " + e.Operation +
+		" (" + e.Err.Error() + "); platformd must serve every vTPM operation on every transport"
+}
+
+// Unwrap returns the transport's declaration.
+func (e ErrMissingSurface) Unwrap() error {
+	return e.Err
+}
+
+// checkSurface returns ErrMissingSurface when err declares that the
+// transport has no surface for operation, and nil otherwise.
+func checkSurface(operation string, err error) error {
+	if surface.IsNotImplemented(err) {
+		return ErrMissingSurface{Operation: operation, Err: err}
+	}
+	return nil
+}
+
+// requireSurface fails the test when err declares that the transport has
+// no surface for operation. Any other error is left to the caller's own
+// assertions.
+func requireSurface(t testing.TB, operation string, err error) {
+	t.Helper()
+	if surfaceErr := checkSurface(operation, err); surfaceErr != nil {
+		t.Fatal(surfaceErr)
 	}
 }
 
@@ -190,7 +225,7 @@ func GetRESTEndpoint() string {
 	if endpoint := os.Getenv("VTPM_REST_ENDPOINT"); endpoint != "" {
 		return endpoint
 	}
-	return "https://localhost:8443"
+	return helpers.GetRESTEndpoint()
 }
 
 // GetGRPCEndpoint returns the gRPC API endpoint.
@@ -198,7 +233,7 @@ func GetGRPCEndpoint() string {
 	if endpoint := os.Getenv("VTPM_GRPC_ENDPOINT"); endpoint != "" {
 		return endpoint
 	}
-	return "localhost:10443"
+	return helpers.GetGRPCEndpoint()
 }
 
 // GetQUICEndpoint returns the QUIC API endpoint.
@@ -206,7 +241,7 @@ func GetQUICEndpoint() string {
 	if endpoint := os.Getenv("VTPM_QUIC_ENDPOINT"); endpoint != "" {
 		return endpoint
 	}
-	return "localhost:9444"
+	return helpers.GetQUICEndpoint()
 }
 
 // GetMCPEndpoint returns the MCP API endpoint.
@@ -214,7 +249,7 @@ func GetMCPEndpoint() string {
 	if endpoint := os.Getenv("VTPM_MCP_ENDPOINT"); endpoint != "" {
 		return endpoint
 	}
-	return "http://localhost:9445"
+	return helpers.GetMCPEndpoint()
 }
 
 // GetSocketPath returns the Unix socket path.
@@ -222,7 +257,7 @@ func GetSocketPath() string {
 	if path := os.Getenv("VTPM_SOCKET_PATH"); path != "" {
 		return path
 	}
-	return "/run/platformd.sock"
+	return helpers.GetSocketPath()
 }
 
 // GetSwtpmPath returns the path to the swtpm binary.

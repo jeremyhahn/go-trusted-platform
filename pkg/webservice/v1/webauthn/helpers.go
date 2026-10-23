@@ -21,6 +21,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	"time"
 
 	quicbaassdk "github.com/jeremyhahn/go-quicbaas/sdk/go"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/platform/service"
@@ -29,7 +30,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore/entities"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore/kvstore"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/util"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/restwire"
 )
 
 // validateInvitation enforces invitation preconditions before a
@@ -59,21 +60,24 @@ func (h *WebAuthnRestHandler) validateInvitation(w http.ResponseWriter, r *http.
 		h.writeInvitationStatusError(w, r, invitation.Status)
 		return false
 	}
-	if invitation.IsExpired() {
+	if invitation.IsExpired(time.Now()) {
 		h.responseWriter.Error400(w, r, ErrInvitationExpired)
+		return false
+	}
+	// Refused here, before an account exists: a member of the operating
+	// tenant could never sign in with this passkey, since a browser login
+	// is refused when the workspace is the operating tenant (#662).
+	if invitation.TenantID == h.tenantID {
+		h.responseWriter.Error403(w, r, ErrOperatingTenant, nil)
 		return false
 	}
 	return true
 }
 
-// orchestrateTenant attaches the freshly-registered user to a tenant.
-// Returns the resolved tenantID (empty when no TenantUserService is
-// wired or when the fallback path was used).
+// orchestrateTenant attaches the freshly-registered user to a tenant: a new
+// workspace, or the tenant an invitation names. Returns the resolved
+// tenantID (empty when the service reports no tenant).
 func (h *WebAuthnRestHandler) orchestrateTenant(r *http.Request, user *entities.User, invitationToken string) (string, error) {
-	if h.tenantUserService == nil {
-		h.logger.Debug("tenant user service not configured, saving user without tenant")
-		return "", h.userService.Save(r.Context(), user)
-	}
 	if invitationToken != "" {
 		h.logger.Debug("registering invited user",
 			slog.String("email", user.Email),
@@ -107,29 +111,28 @@ func resolveTenantID(user *entities.User, result *service.RegisterResult) string
 	return ""
 }
 
-// issueToken prefers the tenant-aware token, falling back to the
-// vanilla platform JWT when no tenant-bound issuer is wired.
+// issueToken mints the registration session in the user's own workspace
+// through the tenant user service. It fails closed with ErrOperatingTenant
+// when the user has no tenant or sits in the operating tenant: a browser
+// session never lands there (#662), and there is no unscoped fallback.
 func (h *WebAuthnRestHandler) issueToken(r *http.Request, user *entities.User) (string, error) {
-	if h.tenantUserService != nil {
-		// Fail closed: when the tenant issuer is configured, its token is
-		// the only acceptable one — falling back to an unscoped JWT after
-		// a tenant-claim failure would widen the caller's authority.
-		token, err := h.tenantUserService.IssueToken(r.Context(), user)
-		if err != nil {
-			h.logger.Error(err, "failed to issue token via tenant user service")
-			return "", err
-		}
-		if token == "" {
-			return "", ErrEmptyTenantToken
-		}
-		return token, nil
+	if user.TenantID == "" || user.TenantID == h.tenantID {
+		return "", ErrOperatingTenant
 	}
-	return h.jwtService.GenerateToken(user)
+	token, err := h.tenantUserService.IssueToken(r.Context(), user)
+	if err != nil {
+		h.logger.Error(err, "failed to issue token via tenant user service")
+		return "", err
+	}
+	if token == "" {
+		return "", ErrEmptyTenantToken
+	}
+	return token, nil
 }
 
 // writeConflictError writes a 409 Conflict response.
 func (h *WebAuthnRestHandler) writeConflictError(w http.ResponseWriter, r *http.Request, err error) {
-	h.responseWriter.Write(w, r, http.StatusConflict, response.WebServiceResponse{
+	h.responseWriter.Write(w, r, http.StatusConflict, restwire.WebServiceResponse{
 		Code:    http.StatusConflict,
 		Error:   err.Error(),
 		Success: false,

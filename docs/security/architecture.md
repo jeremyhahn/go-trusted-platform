@@ -70,7 +70,15 @@ Six embedded policies:
 | `container.rego` | `attestation.container` | Container admission |
 | `image.rego` | `attestation.image` | Image admission |
 | `quote.rego` | `attestation.quote` | TPM quote acceptance |
-| `proxy_authz.rego` | `proxy.authz` | Edge-proxy request authorization |
+| `proxy_authz.rego` | `proxy.authz` | Edge-proxy request evidence (zone, attestation, method) — not access |
+
+**OPA answers evidence questions; it never answers access questions.** "May
+this principal perform this action on this resource" is the IAM decision, made
+by go-qrdb ABAC through the go-quicbaas PEP (`docs/iam/`). Rego decides whether
+the evidence presented is acceptable: a TPM quote, an image digest, a client
+zone, an attestation outcome, an auth method. That is why `proxy_authz` is given
+no roles and a proxy route carries no role requirement — a route's permission is
+its `required-scopes` (#926).
 
 ### Alternatives rejected
 
@@ -82,7 +90,7 @@ Six embedded policies:
 | **Let the operator directory be additive only** | Then a broken default could not be replaced without a build. Same-name override is the escape hatch. |
 | **Default to allow when a policy is silent** | An undefined `allow` rule is the commonest Rego mistake. `DefaultPolicyAction` is `deny`, and `proxysvc.NewOPAEvaluator` hard-codes `DefaultAction: "deny"` regardless of configuration. |
 | **Fail open when the engine will not initialise** | `NewOPAEvaluator` returns initialisation errors so the proxy **fails closed at assembly time** rather than denying every request at runtime with an opaque error. |
-| **Use this engine as the platform's token/RBAC decision point** | There is exactly one RBAC decision point in the portfolio, in go-qrdb. This engine does workload admission, attestation-evidence and proxy-authz policy — never `scp` claim authorization. |
+| **Use this engine as the platform's token/RBAC decision point** | There is exactly one RBAC decision point in the portfolio, in go-qrdb. This engine does workload admission, attestation-evidence and proxy request-evidence policy — never `scp` claim authorization, and never an access decision. |
 | **Use OPA for SDN port authentication** | SDN port authentication is a separate engine in `pkg/sdn/policy/`, a port state machine, not a Rego evaluation. |
 
 ---
@@ -148,7 +156,8 @@ documenting the gap.
 
 The §R capability rows touched are *"TPM attestation of nodes and workloads"*
 (the engine evaluates the evidence) and the gateway/proxy row (the engine
-authorizes proxied requests).
+evaluates a proxied request's evidence; access is the route's
+`required-scopes`).
 
 ---
 
@@ -164,8 +173,11 @@ authorizes proxied requests).
 2. `Initialize` stats the directory, loads `*.rego` from it, loads the embedded
    set for names not already present, and compiles everything into one
    `ast.Compiler`.
-3. A request arrives. `pkg/proxy`'s auth chain reads the route's
-   `auth.opa-policy` name; an empty name means no policy check.
+3. A request arrives and has already been authenticated, and on the token path
+   its `required-scopes` checked. `pkg/proxy`'s auth chain reads the route's
+   `auth.opa-policy` name; an empty name means no policy check. The input
+   document carries the client's id, zone, device id, attestation outcome and
+   auth method — no roles (`docs/proxy/engineering.md` §6).
 4. `OPAEvaluator.Evaluate(ctx, policy, input)` calls
    `OPAEngine.Evaluate`, which builds two queries from the policy's package
    path — `data.<pkg>.allow` and `data.<pkg>.violations` — and evaluates both
@@ -236,8 +248,9 @@ Nothing. Policies live in the binary and on disk; the engine's store is
    different `data` for the same key race.** Use `Evaluate` unless you need
    external data and can guarantee it is stable.
 
-7. **The engine is not an authorization decision point for tokens.** It decides
-   workload admission, attestation-evidence acceptance and proxy authorization.
+7. **The engine is not an access decision point.** It decides workload
+   admission, attestation-evidence acceptance and a proxied request's evidence
+   (zone, attestation, method); access is the IAM decision.
    `scp` claim enforcement is the interceptors' job
    ([`docs/daemon/api.md`](../daemon/api.md) §5).
 
@@ -248,6 +261,21 @@ Nothing. Policies live in the binary and on disk; the engine's store is
 9. **`SQLSanitizer` is escaping, not parameterisation.** `EscapeString`,
    `EscapeIdentifier` and `ValidateIdentifier` exist; escaping is strictly worse
    than a bound parameter and should be the last resort, not the pattern.
+
+10. **Daemon key custody: the server key never leaves the keystore (#33).** The
+   daemon's mTLS server key is generated and held in the platform CA keystore.
+   The listeners present it through a `crypto.Signer`. Before #33 it was
+   written as a PEM bundle to `/tmp/platformd-integration/tls`.
+   - **No admin key is written.** The operator's only admin credential is the
+     one-shot `/init` reply ([`docs/bootstrap/cli.md`](../bootstrap/cli.md)
+     §1a). Only an `integration`-tagged test build writes a
+     `client-bundle.pem` for the devcontainer harness.
+   - The CA bundle in `<platform-dir>/tls` is public.
+   - The QEMU migration tls-creds directory is a second on-disk key. QEMU reads
+     its credentials from files, so that key is not a daemon key.
+
+   Detail: [`docs/daemon/architecture.md`](../daemon/architecture.md) §Daemon
+   TLS identity and key custody.
 
 ---
 
@@ -300,14 +328,14 @@ Recorded per `conventions/feature-docs.md` §7 — the code wins.
 
 | Stale statement | Where | Reality (2026-08-18) |
 |---|---|---|
-| A `pkg/security/audit/` package with `AuditEvent`, `AuditLogger`, `logger.go`, `middleware.go`, `audit.NewLogger(...)`, `audit.NewEvent()...Build()` | legacy `docs/security/README.md` | **`pkg/security/audit` does not exist.** `pkg/security` contains exactly two subpackages: `ratelimit` and `validation`. The audit package appears in a stale build coverage log; the source is gone. |
-| `ratelimit.NewTokenBucket(1000, 100)` | legacy `docs/security/README.md` | The constructor is `NewTokenBucketLimiter(config LimitConfig) (*TokenBucketLimiter, error)`. |
-| `ratelimit.NewSlidingWindow(100, time.Minute)` | legacy `docs/security/README.md` | The constructor is `NewSlidingWindowLimiter(config SlidingWindowConfig) (*SlidingWindowLimiter, error)`. |
-| `validation.StripXSS(html)` | legacy `docs/security/README.md` | No such function. The XSS surface is `StripHTML(input string, allowedTags []string) string` and `NewXSSValidator(field string) *XSSValidator`. |
-| `validation.ValidateEmail(email)` | legacy `docs/security/README.md` | No such function. The email surface is `NewEmailValidator(field string) *EmailValidator` implementing `Validator`. |
-| `safe := validation.SanitizePath(input)` (single return) | legacy `docs/security/README.md` | `SanitizePath(path string) (string, error)` returns two values. There is also a method form, `(*PathSanitizer).SanitizePath(input string) (string, error)`. |
-| Coverage "Rate limiting 82%+, Audit 69%+, Validation 86%+" | legacy `docs/security/README.md` | Current build log: ratelimit 95.6%, validation 98.7%, `pkg/policy/opa` 92.1%. Audit is not measured because it does not exist. |
-| The README does not mention `pkg/policy/opa` at all | legacy `docs/security/README.md` | It is the only part of this section with a production consumer. |
+| A `pkg/security/audit/` package with `AuditEvent`, `AuditLogger`, `logger.go`, `middleware.go`, `audit.NewLogger(...)`, `audit.NewEvent()...Build()` | deleted legacy `docs/security/README.md` | **`pkg/security/audit` does not exist.** `pkg/security` contains exactly two subpackages: `ratelimit` and `validation`. The audit package appears in a stale build coverage log; the source is gone. |
+| `ratelimit.NewTokenBucket(1000, 100)` | deleted legacy `docs/security/README.md` | The constructor is `NewTokenBucketLimiter(config LimitConfig) (*TokenBucketLimiter, error)`. |
+| `ratelimit.NewSlidingWindow(100, time.Minute)` | deleted legacy `docs/security/README.md` | The constructor is `NewSlidingWindowLimiter(config SlidingWindowConfig) (*SlidingWindowLimiter, error)`. |
+| `validation.StripXSS(html)` | deleted legacy `docs/security/README.md` | No such function. The XSS surface is `StripHTML(input string, allowedTags []string) string` and `NewXSSValidator(field string) *XSSValidator`. |
+| `validation.ValidateEmail(email)` | deleted legacy `docs/security/README.md` | No such function. The email surface is `NewEmailValidator(field string) *EmailValidator` implementing `Validator`. |
+| `safe := validation.SanitizePath(input)` (single return) | deleted legacy `docs/security/README.md` | `SanitizePath(path string) (string, error)` returns two values. There is also a method form, `(*PathSanitizer).SanitizePath(input string) (string, error)`. |
+| Coverage "Rate limiting 82%+, Audit 69%+, Validation 86%+" | deleted legacy `docs/security/README.md` | Current build log: ratelimit 95.6%, validation 98.7%, `pkg/policy/opa` 92.1%. Audit is not measured because it does not exist. |
+| The README does not mention `pkg/policy/opa` at all | deleted legacy `docs/security/README.md` | It is the only part of this section with a production consumer. |
 
 ---
 

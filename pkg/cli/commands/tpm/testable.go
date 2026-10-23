@@ -15,6 +15,7 @@ package tpm
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 
@@ -138,36 +139,47 @@ func runIDevIDInfoWithClient(base BaseCommandInterface) error {
 
 // runIDevIDDeleteWithClient runs IDevID delete with a testable interface
 func runIDevIDDeleteWithClient(base BaseCommandInterface) error {
+	return runIdentityKeyDelete(base, "IDevID", base.Client().IDevID().DeleteIDevIDDomain,
+		func(reason string) error { return ErrDeleteIDevIDFailed{Reason: reason} })
+}
+
+// runIdentityKeyDelete asks the daemon to delete the IDevID or IAK key and
+// succeeds only when the daemon reports the key deleted. The daemon refuses
+// on every transport, which returns ErrIdentityKeyDeleteRefused; any other
+// failure, including a delete the daemon does not report done, returns
+// failed.
+func runIdentityKeyDelete(
+	base BaseCommandInterface,
+	key string,
+	deleteKey func(context.Context) (bool, string, error),
+	failed func(reason string) error,
+) error {
 	defer base.Close()
 
-	ctx := base.Context()
-	deleted, message, err := base.Client().IDevID().DeleteIDevIDDomain(ctx)
-	if err != nil {
-		return ErrDeleteIDevIDFailed{Reason: err.Error()}
+	deleted, message, err := deleteKey(base.Context())
+	var refused *idevidsvc.ErrIdentityKeyNotDeletable
+	switch {
+	case errors.As(err, &refused):
+		return ErrIdentityKeyDeleteRefused{Key: key, Cause: err}
+	case err != nil:
+		return failed(err.Error())
+	case !deleted:
+		if message == "" {
+			message = "the daemon did not report the key deleted"
+		}
+		return failed(message)
 	}
 
-	printer := base.Printer()
 	flags := base.Flags()
-
-	output := map[string]interface{}{
-		"deleted": deleted,
-		"message": message,
-	}
-
 	switch flags.OutputFormat {
 	case cli.OutputFormatJSON, cli.OutputFormatYAML:
-		return printer.Print(output)
+		return base.Printer().Print(map[string]interface{}{
+			"deleted": deleted,
+			"message": message,
+		})
 
 	case cli.OutputFormatTable:
-		if deleted {
-			printer.PrintSuccess("IDevID key deleted successfully")
-		} else {
-			msg := "unknown error"
-			if message != "" {
-				msg = message
-			}
-			printer.PrintError(fmt.Sprintf("Failed to delete IDevID: %s", msg))
-		}
+		base.Printer().PrintSuccess(key + " key deleted")
 		return nil
 
 	default:
@@ -356,41 +368,8 @@ func runIAKInfoWithClient(base BaseCommandInterface) error {
 
 // runIAKDeleteWithClient runs IAK delete with a testable interface
 func runIAKDeleteWithClient(base BaseCommandInterface) error {
-	defer base.Close()
-
-	ctx := base.Context()
-	deleted, message, err := base.Client().IDevID().DeleteIAKDomain(ctx)
-	if err != nil {
-		return ErrDeleteIAKFailed{Reason: err.Error()}
-	}
-
-	printer := base.Printer()
-	flags := base.Flags()
-
-	output := map[string]interface{}{
-		"deleted": deleted,
-		"message": message,
-	}
-
-	switch flags.OutputFormat {
-	case cli.OutputFormatJSON, cli.OutputFormatYAML:
-		return printer.Print(output)
-
-	case cli.OutputFormatTable:
-		if deleted {
-			printer.PrintSuccess("IAK key deleted successfully")
-		} else {
-			msg := "unknown error"
-			if message != "" {
-				msg = message
-			}
-			printer.PrintError(fmt.Sprintf("Failed to delete IAK: %s", msg))
-		}
-		return nil
-
-	default:
-		return cli.ErrInvalidOutputFormat{Format: string(flags.OutputFormat)}
-	}
+	return runIdentityKeyDelete(base, "IAK", base.Client().IDevID().DeleteIAKDomain,
+		func(reason string) error { return ErrDeleteIAKFailed{Reason: reason} })
 }
 
 // runIAKCSRWithClient runs IAK CSR with a testable interface

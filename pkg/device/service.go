@@ -33,9 +33,10 @@ var (
 	// ErrNilDevice is returned when a write is handed no device at all.
 	ErrNilDevice = &MessageError{Msg: "device is required"}
 
-	// ErrHeartbeatIdentityRequired is returned when RecordHeartbeat is
-	// called without the certificate-derived identity.
-	ErrHeartbeatIdentityRequired = &MessageError{Msg: "heartbeat identity is required"}
+	// ErrIdentityRequired is returned when an identity lookup
+	// (RecordHeartbeat, ResolveIdentity) is called without the
+	// certificate-derived identity.
+	ErrIdentityRequired = &MessageError{Msg: "device identity is required"}
 )
 
 // writeLockStripes sizes the striped write-lock table. Device write
@@ -52,6 +53,9 @@ type Service struct {
 	// Writers that bypass the service and use the DAO directly are NOT
 	// covered — the service is the platform's device write path.
 	writeLocks [writeLockStripes]sync.Mutex
+	// createLock serializes creates so two racing for one serial cannot
+	// both pass the uniqueness check.
+	createLock sync.Mutex
 }
 
 // writeLock returns the stripe lock for a device ID.
@@ -99,8 +103,45 @@ func (s *Service) Create(ctx context.Context, device *entities.Device) error {
 	if device.ID == 0 {
 		device.ID = NewID()
 	}
+	// A created device starts registered with both timestamps set, whichever
+	// transport created it, so the same request persists the same entity on
+	// every listener (#484).
+	if device.State == "" {
+		device.State = entities.DeviceStateRegistered
+	}
+	if device.CreatedAt.IsZero() {
+		device.CreatedAt = time.Now()
+	}
+	if device.UpdatedAt.IsZero() {
+		device.UpdatedAt = device.CreatedAt
+	}
 
+	s.createLock.Lock()
+	defer s.createLock.Unlock()
+	if err := s.refuseTakenSerial(ctx, device.Serial); err != nil {
+		return err
+	}
 	return s.Save(ctx, device)
+}
+
+// refuseTakenSerial fails with ErrDeviceSerialExists when another device
+// already holds serial. An empty serial is not checked: no device is
+// matched by it.
+func (s *Service) refuseTakenSerial(ctx context.Context, serial string) error {
+	if serial == "" {
+		return nil
+	}
+	existing, err := s.deviceDAO.FindBySerial(ctx, serial)
+	if err != nil {
+		if isLookupMiss(err) {
+			return nil
+		}
+		return &WrappedError{Msg: "failed to check device serial", Err: err}
+	}
+	if existing != nil && existing.Serial == serial {
+		return ErrDeviceSerialExists{Serial: serial}
+	}
+	return nil
 }
 
 func (s *Service) Save(ctx context.Context, device *entities.Device) error {
@@ -222,8 +263,8 @@ func (s *Service) Update(ctx context.Context, device *entities.Device) error {
 	// error and no audit trail. A machine that had been attested could no
 	// longer prove it, and nothing said so (issue #252).
 	//
-	// TenantID is the sharpest case. DeviceRequest has no tenant field at
-	// all, so requestToDevice CANNOT populate it — every update erased it,
+	// TenantID is the sharpest case. device.Request has no tenant field at
+	// all, so a REST update CANNOT populate it — every update erased it,
 	// not merely the partial ones, detaching the device from its tenant.
 	if device.TenantID == "" {
 		device.TenantID = existing.TenantID
@@ -236,6 +277,9 @@ func (s *Service) Update(ctx context.Context, device *entities.Device) error {
 	}
 	if device.AttestCert == "" {
 		device.AttestCert = existing.AttestCert
+	}
+	if device.IDevIDCert == "" {
+		device.IDevIDCert = existing.IDevIDCert
 	}
 	if device.SigningPub == "" {
 		device.SigningPub = existing.SigningPub
@@ -262,6 +306,35 @@ func (s *Service) Update(ctx context.Context, device *entities.Device) error {
 		return &WrappedError{Msg: "failed to update device", Err: err}
 	}
 
+	return nil
+}
+
+// ClearAttestCert removes the device's attestation certificate while the
+// record still holds expected. It is the one write that may empty the field:
+// Update keeps a stored certificate when the incoming one is empty (#252).
+// The comparison runs under the device's write lock, so a certificate
+// recorded concurrently is never cleared; that case is
+// ErrAttestCertClearConflict.
+func (s *Service) ClearAttestCert(ctx context.Context, id uint64, expected string) error {
+	if id == 0 {
+		return ErrInvalidDeviceID
+	}
+
+	lock := s.writeLock(id)
+	lock.Lock()
+	defer lock.Unlock()
+	existing, err := s.deviceDAO.Get(ctx, id)
+	if err != nil {
+		return &WrappedError{Msg: "failed to get device for attestation certificate clear", Err: err}
+	}
+	if strings.TrimSpace(existing.AttestCert) != strings.TrimSpace(expected) {
+		return ErrAttestCertClearConflict{DeviceID: id}
+	}
+	existing.AttestCert = ""
+	existing.UpdatedAt = time.Now().UTC()
+	if err := s.deviceDAO.Save(ctx, existing); err != nil {
+		return &WrappedError{Msg: "failed to clear device attestation certificate", Err: err}
+	}
 	return nil
 }
 
@@ -311,40 +384,51 @@ func isLookupMiss(err error) bool {
 	return errors.As(err, &byID)
 }
 
-// RecordHeartbeat stamps the device's liveness timestamp. The identity
-// argument is the value extracted from the caller's verified mTLS
-// client certificate: it is matched against the device serial first and
-// the enrollment hostname (the IDevID common name) second, because
-// enrolled nodes authenticate with certificates naming their FQDN
-// rather than the hardware serial. Only LastHeartbeatAt and UpdatedAt
-// change — a heartbeat never moves the lifecycle state machine.
-func (s *Service) RecordHeartbeat(ctx context.Context, identity string, peerAddr string) (*entities.Device, error) {
+// ResolveIdentity finds the device a verified certificate identity names.
+// The identity is matched against the device serial first and the
+// enrollment hostname (the IDevID common name) second, because enrolled
+// nodes authenticate with certificates naming their FQDN rather than the
+// hardware serial. A miss is an *IdentityNotFoundError; a storage fault is
+// never reported as one.
+func (s *Service) ResolveIdentity(ctx context.Context, identity string) (*entities.Device, error) {
 	if identity == "" {
-		return nil, ErrHeartbeatIdentityRequired
+		return nil, ErrIdentityRequired
 	}
 	resolved, serialErr := s.deviceDAO.FindBySerial(ctx, identity)
-	if serialErr != nil || resolved == nil || resolved.Serial != identity {
-		// A storage fault during the serial lookup must surface as a
-		// server error, never masquerade as an unknown device.
-		if serialErr != nil && !isLookupMiss(serialErr) {
-			return nil, &WrappedError{Msg: "heartbeat device lookup failed", Err: serialErr}
+	if serialErr == nil && resolved != nil && resolved.Serial == identity {
+		return resolved, nil
+	}
+	// A storage fault during the serial lookup must surface as a server
+	// error, never masquerade as an unknown device.
+	if serialErr != nil && !isLookupMiss(serialErr) {
+		return nil, &WrappedError{Msg: "device identity lookup failed", Err: serialErr}
+	}
+	resolved, hostErr := s.deviceDAO.FindByHostname(ctx, identity)
+	if hostErr != nil {
+		if isLookupMiss(hostErr) {
+			return nil, &IdentityNotFoundError{Identity: identity, Cause: hostErr}
 		}
-		var hostErr error
-		resolved, hostErr = s.deviceDAO.FindByHostname(ctx, identity)
-		if hostErr != nil {
-			if isLookupMiss(hostErr) {
-				return nil, &HeartbeatDeviceNotFoundError{Identity: identity, Cause: hostErr}
-			}
-			return nil, &WrappedError{Msg: "heartbeat device lookup failed", Err: hostErr}
-		}
-		// Post-condition, independent of any DAO/index behavior: the
-		// record a heartbeat stamps MUST carry the authenticated
-		// identity — stamping a near-miss would report another node
-		// alive.
-		if resolved == nil || resolved.Hostname != identity {
-			return nil, &HeartbeatDeviceNotFoundError{Identity: identity,
-				Cause: &MessageError{Msg: "resolved device does not match heartbeat identity"}}
-		}
+		return nil, &WrappedError{Msg: "device identity lookup failed", Err: hostErr}
+	}
+	// Post-condition, independent of any DAO/index behavior: the record
+	// returned MUST carry the authenticated identity — answering with a
+	// near-miss would act on another node.
+	if resolved == nil || resolved.Hostname != identity {
+		return nil, &IdentityNotFoundError{Identity: identity,
+			Cause: &MessageError{Msg: "resolved device does not match identity"}}
+	}
+	return resolved, nil
+}
+
+// RecordHeartbeat stamps the device's liveness timestamp. The identity
+// argument is the value extracted from the caller's verified mTLS
+// client certificate, resolved by ResolveIdentity. Only LastHeartbeatAt
+// and UpdatedAt change — a heartbeat never moves the lifecycle state
+// machine.
+func (s *Service) RecordHeartbeat(ctx context.Context, identity string, peerAddr string) (*entities.Device, error) {
+	resolved, err := s.ResolveIdentity(ctx, identity)
+	if err != nil {
+		return nil, err
 	}
 	// Serialize against every other service-layer device write and
 	// RE-READ under the lock: stamping the copy resolved above would
@@ -361,7 +445,7 @@ func (s *Service) RecordHeartbeat(ctx context.Context, identity string, peerAddr
 	// renamed the record between lookup and lock, and the post-condition
 	// is on the record actually stamped, not the one first resolved.
 	if device.Serial != identity && device.Hostname != identity {
-		return nil, &HeartbeatDeviceNotFoundError{Identity: identity,
+		return nil, &IdentityNotFoundError{Identity: identity,
 			Cause: &MessageError{Msg: "device no longer carries the heartbeat identity"}}
 	}
 	now := time.Now().UTC()

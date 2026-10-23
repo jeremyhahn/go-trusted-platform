@@ -27,13 +27,14 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/credentials/local"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 
 	grpccreds "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/verdict"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/verdict/feed"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/auth"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/util/peercred"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	sdkattestation "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/attestation"
 )
@@ -60,17 +61,17 @@ func (s *verdictRegistryService) record(v verdict.DeviceVerdict, eventID string)
 	}
 }
 
-// tokenScopes is a platform-token validator keyed by bearer token: each
+// tokenContexts is a platform-token validator keyed by bearer token: each
 // token stands for one AuthorizedContext, and a required scope is enforced
 // as the real validator does.
-type tokenScopes map[string]*platformtoken.AuthorizedContext
+type tokenContexts map[string]*platformtoken.AuthorizedContext
 
-func (v tokenScopes) ValidateToken(_ context.Context, token string) (bool, error) {
+func (v tokenContexts) ValidateToken(_ context.Context, token string) (bool, error) {
 	_, ok := v[token]
 	return ok, nil
 }
 
-func (v tokenScopes) AuthorizeToken(_ context.Context, token, requiredPerm, _, _, _ string) (*platformtoken.AuthorizedContext, error) {
+func (v tokenContexts) AuthorizeToken(_ context.Context, token, requiredPerm, _, _, _ string) (*platformtoken.AuthorizedContext, error) {
 	authCtx, ok := v[token]
 	if !ok {
 		return nil, &platformtoken.InvalidTokenError{Detail: "unknown test token"}
@@ -83,32 +84,39 @@ func (v tokenScopes) AuthorizeToken(_ context.Context, token, requiredPerm, _, _
 	return authCtx, nil
 }
 
-// verdictStreamServer serves an attestation server wired to a fresh hub over
-// listener with opts, and returns the attestation service whose verdicts it
-// streams.
-func verdictStreamServer(t *testing.T, listener net.Listener, opts ...grpc.ServerOption) (*verdictRegistryService, *deviceVerdictHub, *signal) {
+// verdictFeedServer returns an attestation server wired to a fresh feed, the
+// attestation service whose verdicts it serves, and a signal fired each time
+// a follower takes the head of the feed.
+func verdictFeedServer(t *testing.T, opts ...feed.Option) (*AttestationServiceServer, *verdictRegistryService, *feed.Feed, *signal) {
 	t.Helper()
 	attestation := &verdictRegistryService{}
 	server := NewAttestationServiceServer(attestation, discardLogger().Slog())
-	hub := streamDeviceVerdicts(server, attestation)
-	if hub == nil {
-		t.Fatal("an attestation service that hands out its verdicts must get a hub")
+	followed := newSignal()
+	f := streamDeviceVerdicts(server, attestation, append(opts, feed.WithOnFollow(followed.fire))...)
+	if f == nil {
+		t.Fatal("an attestation service that hands out its verdicts must get a feed")
 	}
-	subscribed := newSignal()
-	hub.onSubscribe = subscribed.fire
+	t.Cleanup(f.Close)
+	return server, attestation, f, followed
+}
 
+// verdictStreamServer serves an attestation server wired to a fresh feed
+// over listener with opts.
+func verdictStreamServer(t *testing.T, listener net.Listener, opts ...grpc.ServerOption) (*verdictRegistryService, *feed.Feed, *signal) {
+	t.Helper()
+	server, attestation, f, followed := verdictFeedServer(t)
 	grpcServer := grpc.NewServer(opts...)
 	platformv1.RegisterAttestationServiceServer(grpcServer, server)
 	served := make(chan error, 1)
 	go func() { served <- grpcServer.Serve(listener) }()
 	t.Cleanup(func() {
-		hub.Close()
+		f.Close()
 		grpcServer.GracefulStop()
 		if err := <-served; err != nil {
 			t.Errorf("Serve: %v", err)
 		}
 	})
-	return attestation, hub, subscribed
+	return attestation, f, followed
 }
 
 func dialVerdicts(t *testing.T, target string, creds grpc.DialOption) *sdkattestation.Client {
@@ -125,15 +133,6 @@ func dialVerdicts(t *testing.T, target string, creds grpc.DialOption) *sdkattest
 	return sdkattestation.NewClientFromGRPC(platformv1.NewAttestationServiceClient(conn))
 }
 
-// unixPeerServerOptions serve the way platformd's gRPC Unix socket does:
-// every caller is admitted by its kernel-verified peer credentials.
-func unixPeerServerOptions() []grpc.ServerOption {
-	return []grpc.ServerOption{
-		grpc.Creds(peercred.NewUnixTransportCredentials()),
-		grpc.ChainStreamInterceptor(peercred.UnixCredentialsStreamInterceptor()),
-	}
-}
-
 func withBearer(ctx context.Context, token string) context.Context {
 	return metadata.AppendToOutgoingContext(ctx, "authorization", "Bearer "+token)
 }
@@ -146,8 +145,8 @@ func TestStreamDeviceVerdictsOverUnixSocket(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Listen: %v", err)
 	}
-	attestation, _, subscribed := verdictStreamServer(t, listener, unixPeerServerOptions()...)
-	client := dialVerdicts(t, "unix://"+listener.Addr().String(), grpc.WithTransportCredentials(peercred.NewUnixTransportCredentials()))
+	attestation, _, followed := verdictStreamServer(t, listener, grpc.Creds(local.NewCredentials()))
+	client := dialVerdicts(t, "unix://"+listener.Addr().String(), grpc.WithTransportCredentials(local.NewCredentials()))
 
 	ctx, cancel := context.WithTimeout(context.Background(), streamDeadline)
 	defer cancel()
@@ -155,7 +154,7 @@ func TestStreamDeviceVerdictsOverUnixSocket(t *testing.T) {
 	if err != nil {
 		t.Fatalf("StreamDeviceVerdicts: %v", err)
 	}
-	subscribed.await(t, 1, "verdict streams registered")
+	followed.await(t, 1, "verdict streams following")
 
 	failed := verdict.DeviceVerdict{DeviceID: 42, TenantID: "tenant-a", HostID: "node-42", Serial: "SN42", Cryptographic: true, Reason: "signature invalid"}
 	passed := verdict.DeviceVerdict{DeviceID: 43, HostID: "node-43", Passed: true}
@@ -190,9 +189,9 @@ func TestStreamDeviceVerdictsOverTCPEnforcesScopeAndTenant(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Listen: %v", err)
 	}
-	validator := tokenScopes{
+	validator := tokenContexts{
 		"tenant-a":  {Subject: "a", TenantID: "tenant-a", Scopes: []string{"attestation:read"}},
-		"operator":  {Subject: "op", TenantID: platformTenantID, Scopes: []string{"attestation:*"}},
+		"operator":  {Subject: "op", TenantID: feed.PlatformTenantID, Scopes: []string{"attestation:*"}},
 		"no-scope":  {Subject: "n", TenantID: "tenant-a", Scopes: []string{"device:read"}},
 		"no-tenant": {Subject: "x", Scopes: []string{"attestation:read"}},
 	}
@@ -205,7 +204,7 @@ func TestStreamDeviceVerdictsOverTCPEnforcesScopeAndTenant(t *testing.T) {
 	}
 	roots := x509.NewCertPool()
 	roots.AddCert(leaf)
-	attestation, _, subscribed := verdictStreamServer(t, listener,
+	attestation, _, followed := verdictStreamServer(t, listener,
 		grpc.Creds(credentials.NewServerTLSFromCert(&cert)),
 		grpc.StreamInterceptor(grpccreds.OIDCStreamInterceptor(grpccreds.WithTokenValidator(validator))))
 	client := dialVerdicts(t, listener.Addr().String(),
@@ -232,7 +231,7 @@ func TestStreamDeviceVerdictsOverTCPEnforcesScopeAndTenant(t *testing.T) {
 	if err != nil {
 		t.Fatalf("StreamDeviceVerdicts(operator): %v", err)
 	}
-	subscribed.await(t, 2, "verdict streams registered")
+	followed.await(t, 2, "verdict streams following")
 
 	attestation.record(verdict.DeviceVerdict{DeviceID: 1, TenantID: "tenant-b", Reason: "pcr mismatch"}, "ev-b")
 	attestation.record(verdict.DeviceVerdict{DeviceID: 2, Reason: "pcr mismatch"}, "ev-platform")
@@ -256,44 +255,6 @@ func TestStreamDeviceVerdictsOverTCPEnforcesScopeAndTenant(t *testing.T) {
 	}
 }
 
-// TestStreamDeviceVerdictsOverTCPWithoutACredentialIsRefused serves TCP with
-// no authentication interceptor, as the testing-only SkipIAMValidation does:
-// a caller that brings no credential was not admitted by its transport, so
-// it is refused rather than shown every tenant.
-func TestStreamDeviceVerdictsOverTCPWithoutACredentialIsRefused(t *testing.T) {
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("Listen: %v", err)
-	}
-	_, port, err := net.SplitHostPort(listener.Addr().String())
-	if err != nil {
-		t.Fatalf("SplitHostPort: %v", err)
-	}
-	pki := newNodeTestPKI(t, "localhost")
-	verdictStreamServer(t, listener, grpc.Creds(credentials.NewTLS(&tls.Config{
-		Certificates: []tls.Certificate{pki.server},
-		ClientAuth:   tls.RequireAndVerifyClientCert,
-		ClientCAs:    pki.pool,
-		MinVersion:   tls.VersionTLS12,
-	})))
-	client := dialVerdicts(t, net.JoinHostPort("localhost", port), grpc.WithTransportCredentials(credentials.NewTLS(&tls.Config{
-		Certificates: []tls.Certificate{pki.client},
-		RootCAs:      pki.pool,
-		ServerName:   "localhost",
-		MinVersion:   tls.VersionTLS12,
-	})))
-
-	ctx, cancel := context.WithTimeout(context.Background(), streamDeadline)
-	defer cancel()
-	stream, err := client.StreamDeviceVerdicts(ctx)
-	if err == nil {
-		_, err = stream.Recv()
-	}
-	if status.Code(errors.Unwrap(err)) != codes.PermissionDenied && status.Code(err) != codes.PermissionDenied {
-		t.Fatalf("a TCP caller with no credential: got %v, want PermissionDenied", err)
-	}
-}
-
 func TestVerdictAudienceFor(t *testing.T) {
 	tokenCtx := func(authCtx *platformtoken.AuthorizedContext) context.Context {
 		return grpccreds.ContextWithToken(grpccreds.ContextWithAuthorizedContext(context.Background(), authCtx), "tok")
@@ -310,17 +271,14 @@ func TestVerdictAudienceFor(t *testing.T) {
 	}{
 		{name: "tenant token", ctx: tokenCtx(&platformtoken.AuthorizedContext{TenantID: "t1", Scopes: []string{"attestation:read"}}),
 			sees: []string{"t1"}, blind: []string{"t2", ""}},
-		{name: "system token", ctx: tokenCtx(&platformtoken.AuthorizedContext{TenantID: platformTenantID, Scopes: []string{"*:*"}}),
+		{name: "system token", ctx: tokenCtx(&platformtoken.AuthorizedContext{TenantID: feed.PlatformTenantID, Scopes: []string{"*:*"}}),
 			sees: []string{"t1", "t2", ""}},
 		{name: "token without the scope", ctx: tokenCtx(&platformtoken.AuthorizedContext{TenantID: "t1", Scopes: []string{"attestation:write"}}), forbidden: true},
 		{name: "token without a tenant", ctx: tokenCtx(&platformtoken.AuthorizedContext{Scopes: []string{"attestation:read"}}), forbidden: true},
 		{name: "unscoped bearer token", ctx: grpccreds.ContextWithToken(context.Background(), "tok"), forbidden: true},
 		{name: "tenant certificate", ctx: mtlsCtx("t2"), sees: []string{"t2"}, blind: []string{"t1", ""}},
-		{name: "system-tenant certificate", ctx: mtlsCtx(platformTenantID), sees: []string{"t1", "t2", ""}},
-		{name: "certificate naming no tenant", ctx: mtlsCtx(""), forbidden: true},
-		{name: "local peer", ctx: peercred.ContextWithUnixCredentials(context.Background(), peercred.UnixCredentials{PID: 1, UID: 0}),
-			sees: []string{"t1", "t2", ""}},
-		{name: "no credential", ctx: context.Background(), forbidden: true},
+		{name: "infrastructure certificate", ctx: mtlsCtx(""), sees: []string{"t1", ""}},
+		{name: "local peer", ctx: context.Background(), sees: []string{"t1", "t2", ""}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -336,12 +294,12 @@ func TestVerdictAudienceFor(t *testing.T) {
 				t.Fatalf("verdictAudienceFor: %v", err)
 			}
 			for _, tenant := range tt.sees {
-				if !audience.admits(tenant) {
+				if !audience.Admits(tenant) {
 					t.Errorf("must see tenant %q", tenant)
 				}
 			}
 			for _, tenant := range tt.blind {
-				if audience.admits(tenant) {
+				if audience.Admits(tenant) {
 					t.Errorf("must not see tenant %q", tenant)
 				}
 			}
@@ -349,19 +307,34 @@ func TestVerdictAudienceFor(t *testing.T) {
 	}
 }
 
-func TestStreamDeviceVerdictsWithoutAHub(t *testing.T) {
-	// An attestation service that cannot hand out its verdicts gets no hub,
-	// and the RPC says so rather than streaming nothing forever.
-	server := NewAttestationServiceServer(&recordingHostQuoteService{}, discardLogger().Slog())
-	if hub := streamDeviceVerdicts(server, &recordingHostQuoteService{}); hub != nil {
-		t.Fatal("no hub for a service that cannot hand out its verdicts")
+// TestVerdictAudienceOfTokenRefusesAMissingToken guards QUIC and MCP, which
+// have no peer identity to fall back on: no token is no audience.
+func TestVerdictAudienceOfTokenRefusesAMissingToken(t *testing.T) {
+	var forbidden ErrVerdictStreamForbidden
+	if _, err := verdictAudienceOfToken(nil); !errors.As(err, &forbidden) {
+		t.Fatalf("err = %v, want ErrVerdictStreamForbidden", err)
 	}
-	if hub := streamDeviceVerdicts(nil, &verdictRegistryService{}); hub != nil {
-		t.Fatal("no hub without a server to serve it")
+	if status.Code(verdictStatus(ErrVerdictStreamForbidden{Reason: "x"})) != codes.PermissionDenied {
+		t.Fatal("a refused audience must be PermissionDenied on the wire")
+	}
+}
+
+func TestStreamDeviceVerdictsWithoutAFeed(t *testing.T) {
+	// An attestation service that cannot hand out its verdicts gets no feed,
+	// and both RPCs say so rather than serving nothing forever.
+	server := NewAttestationServiceServer(&recordingHostQuoteService{}, discardLogger().Slog())
+	if f := streamDeviceVerdicts(server, &recordingHostQuoteService{}); f != nil {
+		t.Fatal("no feed for a service that cannot hand out its verdicts")
+	}
+	if f := streamDeviceVerdicts(nil, &verdictRegistryService{}); f != nil {
+		t.Fatal("no feed without a server to serve it")
 	}
 	err := server.StreamDeviceVerdicts(&platformv1.StreamDeviceVerdictsRequest{}, nil)
 	if status.Code(err) != codes.FailedPrecondition {
 		t.Fatalf("err = %v, want FailedPrecondition", err)
+	}
+	if _, err := server.PollDeviceVerdicts(context.Background(), &platformv1.PollDeviceVerdictsRequest{}); status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("PollDeviceVerdicts = %v, want FailedPrecondition", err)
 	}
 	var nilServer *AttestationServiceServer
 	if status.Code(nilServer.StreamDeviceVerdicts(nil, nil)) != codes.FailedPrecondition {
@@ -369,16 +342,16 @@ func TestStreamDeviceVerdictsWithoutAHub(t *testing.T) {
 	}
 }
 
-// TestDeviceVerdictHubShutdownEndsOpenStreams closes the hub under an open
+// TestDeviceVerdictFeedShutdownEndsOpenStreams closes the feed under an open
 // stream: the stream must end, so the daemon's graceful gRPC stop does not
 // wait on it, and no stream may open afterwards.
-func TestDeviceVerdictHubShutdownEndsOpenStreams(t *testing.T) {
+func TestDeviceVerdictFeedShutdownEndsOpenStreams(t *testing.T) {
 	listener, err := net.Listen("unix", filepath.Join(t.TempDir(), "d.sock"))
 	if err != nil {
 		t.Fatalf("Listen: %v", err)
 	}
-	_, hub, subscribed := verdictStreamServer(t, listener, unixPeerServerOptions()...)
-	client := dialVerdicts(t, "unix://"+listener.Addr().String(), grpc.WithTransportCredentials(peercred.NewUnixTransportCredentials()))
+	_, f, followed := verdictStreamServer(t, listener, grpc.Creds(local.NewCredentials()))
+	client := dialVerdicts(t, "unix://"+listener.Addr().String(), grpc.WithTransportCredentials(local.NewCredentials()))
 
 	ctx, cancel := context.WithTimeout(context.Background(), streamDeadline)
 	defer cancel()
@@ -386,10 +359,9 @@ func TestDeviceVerdictHubShutdownEndsOpenStreams(t *testing.T) {
 	if err != nil {
 		t.Fatalf("StreamDeviceVerdicts: %v", err)
 	}
-	subscribed.await(t, 1, "verdict streams registered")
+	followed.await(t, 1, "verdict streams following")
 
-	hub.Close()
-	hub.Close()
+	f.Close()
 	if _, err := stream.Recv(); status.Code(err) != codes.Unavailable {
 		t.Fatalf("Recv after shutdown = %v, want Unavailable", err)
 	}
@@ -402,25 +374,81 @@ func TestDeviceVerdictHubShutdownEndsOpenStreams(t *testing.T) {
 	}
 }
 
-// TestDeviceVerdictHubCutsOffASubscriberThatFallsBehind fills a subscriber's
-// buffer: the next verdict must end its stream rather than vanish, so the
-// gateway follows again and its sweep re-reads what it missed.
-func TestDeviceVerdictHubCutsOffASubscriberThatFallsBehind(t *testing.T) {
-	hub := newDeviceVerdictHub()
-	slow, err := hub.subscribe()
+// TestPollDeviceVerdictsFollowsFromACursor long-polls the way the REST, QUIC
+// and MCP transports do: the first poll takes the head, each later poll
+// returns what was recorded since, filtered to the caller's tenant.
+func TestPollDeviceVerdictsFollowsFromACursor(t *testing.T) {
+	server, attestation, _, _ := verdictFeedServer(t)
+	ctx, cancel := context.WithTimeout(context.Background(), streamDeadline)
+	defer cancel()
+
+	head, err := server.PollDeviceVerdictsFor(ctx, feed.Tenant("tenant-a"), &platformv1.PollDeviceVerdictsRequest{})
 	if err != nil {
-		t.Fatalf("subscribe: %v", err)
+		t.Fatalf("PollDeviceVerdictsFor(head): %v", err)
 	}
-	for i := 0; i <= verdictSubscriberBuffer; i++ {
-		hub.OnDeviceVerdict(context.Background(), verdict.RecordedDeviceVerdict{Verdict: verdict.DeviceVerdict{DeviceID: uint64(i + 1)}})
+	if head.GetCursor() == "" || len(head.GetVerdicts()) != 0 {
+		t.Fatalf("the first poll returns only a cursor: %+v", head)
 	}
-	received := 0
-	for range slow {
-		received++
+
+	attestation.record(verdict.DeviceVerdict{DeviceID: 1, TenantID: "tenant-b", Reason: "pcr mismatch"}, "ev-b")
+	attestation.record(verdict.DeviceVerdict{DeviceID: 2, TenantID: "tenant-a", Reason: "pcr mismatch"}, "ev-a")
+
+	page, err := server.PollDeviceVerdictsFor(ctx, feed.Tenant("tenant-a"),
+		&platformv1.PollDeviceVerdictsRequest{Cursor: head.GetCursor(), WaitMs: 1000})
+	if err != nil {
+		t.Fatalf("PollDeviceVerdictsFor: %v", err)
 	}
-	if received != verdictSubscriberBuffer {
-		t.Fatalf("received %d verdicts before the cut-off, want %d", received, verdictSubscriberBuffer)
+	if len(page.GetVerdicts()) != 1 || page.GetVerdicts()[0].GetEventId() != "ev-a" || page.GetVerdicts()[0].GetDeviceId() != 2 {
+		t.Fatalf("tenant-a must see only its own device's verdict: %+v", page.GetVerdicts())
 	}
-	// Unsubscribing a cut-off subscriber is harmless.
-	hub.unsubscribe(slow)
+	if page.GetCursor() == head.GetCursor() {
+		t.Fatal("the cursor must advance past the verdicts read")
+	}
+
+	// A local gRPC peer sees every tenant.
+	every, err := server.PollDeviceVerdicts(ctx, &platformv1.PollDeviceVerdictsRequest{Cursor: head.GetCursor()})
+	if err != nil {
+		t.Fatalf("PollDeviceVerdicts: %v", err)
+	}
+	if len(every.GetVerdicts()) != 2 {
+		t.Fatalf("a local peer sees every tenant's verdicts: %+v", every.GetVerdicts())
+	}
+}
+
+func TestPollDeviceVerdictsRefusesBadCursors(t *testing.T) {
+	server, attestation, _, _ := verdictFeedServer(t, feed.WithCapacity(2))
+	ctx := context.Background()
+
+	head, err := server.PollDeviceVerdicts(ctx, &platformv1.PollDeviceVerdictsRequest{})
+	if err != nil {
+		t.Fatalf("PollDeviceVerdicts(head): %v", err)
+	}
+	for i, id := range []string{"ev-1", "ev-2", "ev-3"} {
+		attestation.record(verdict.DeviceVerdict{DeviceID: uint64(i + 1), TenantID: "t1"}, id)
+	}
+
+	tests := []struct {
+		name   string
+		cursor string
+		want   codes.Code
+	}{
+		{name: "missed verdicts", cursor: head.GetCursor(), want: codes.ResourceExhausted},
+		{name: "malformed", cursor: "garbage", want: codes.InvalidArgument},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := server.PollDeviceVerdicts(ctx, &platformv1.PollDeviceVerdictsRequest{Cursor: tt.cursor})
+			if status.Code(err) != tt.want {
+				t.Fatalf("err = %v, want %s", err, tt.want)
+			}
+		})
+	}
+}
+
+func TestPollDeviceVerdictsRefusesAForbiddenCaller(t *testing.T) {
+	server, _, _, _ := verdictFeedServer(t)
+	ctx := grpccreds.ContextWithToken(context.Background(), "tok")
+	if _, err := server.PollDeviceVerdicts(ctx, &platformv1.PollDeviceVerdictsRequest{}); status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("err = %v, want PermissionDenied for an unscoped bearer token", err)
+	}
 }

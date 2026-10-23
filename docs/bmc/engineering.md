@@ -343,7 +343,7 @@ Precedence on the CLI: **flag > environment > built-in default.**
 | `--bmc-host` given together with `--server-url`/`--profile-id` | `ErrBMCFlagConflict`. Neither mode is guessed |
 | Neither `--bmc-host` nor daemon flags | `ErrBMCNoMode` |
 | `bmc cert restore` without `--factory` | Rejected. The flag exists solely to make accidental invocation impossible |
-| `Provision` / `ProvisionStatus` with no baremetal orchestrator wired | gRPC `FailedPrecondition` — the daemon passes `nil` for the baremetal service today |
+| `Provision` / `ProvisionStatus` with no baremetal orchestrator wired | gRPC `Unavailable` with reason `SERVICE_NOT_CONFIGURED`, REST `503` — the daemon passes `nil` for the baremetal service today |
 | Rotation apply or verify fails | Rollback is attempted; the outcome is encoded in the error type (§6) |
 | IPMI password (or KG key) shorter than 14 bytes, **under FIPS activation** | `ErrFIPSKeyTooShort` at session open. See below |
 
@@ -358,12 +358,10 @@ socket is dialled, with a typed error.
 Two properties of that check are deliberate and easy to get wrong:
 
 - **It is a runtime check, not a build-tag one**, unlike this package's
-  algorithm tables. Those use `//go:build fips` so MD5 and SHA-1 are absent from
-  the binary; nothing needs removing here, and `crypto/hmac`'s own enforcement
-  keys on `GODEBUG`. Doc 04 ruling 1 makes FIPS activation a *deployment*
-  decision — one artifact serves both markets — so a binary built without the
-  tag can still be run under `fips140=only`, and a build-tag check would let it
-  panic exactly as before.
+  algorithm tables (`//go:build fips`, so MD5 and SHA-1 are absent from the
+  binary): `crypto/hmac` enforces on `GODEBUG`, which an untagged binary can
+  also run under. Why the two switches differ is in
+  [FIPS mode](../fips/architecture.md).
 - **Non-FIPS behaviour is unchanged.** A short password is accepted as it always
   was. A FIPS-capable build is not a FIPS-activated one.
 
@@ -620,6 +618,7 @@ signal, `VendorUnknown` otherwise.
 | Unit | `pkg/bmc/*_test.go`, `pkg/bmc/smc/*_test.go`, `pkg/bmc/credentials/*_test.go`, `pkg/quirks/quirks_test.go` | Config validation, factory dispatch, vendor classification, quirk resolution, cert-backend selection and fallback, virtual-media dispatch, rotation state machine, credential marshalling, SDR/FRU parsing, RMCP+ framing |
 | Unit (CLI) | `pkg/cli/commands/bmc/*_test.go` | Flag validation, mode conflict, standalone config construction, enroll option tri-state |
 | Unit (API) | `pkg/webservice/v1/bmc/*_test.go`, `pkg/api/mcp/bmc_dispatch_test.go`, `pkg/api/daemon/quic_dispatch_guard_test.go` | Handler status codes, MCP tool dispatch, QUIC opcode routing |
+| Unit (SDK parity) | `pkg/api/daemon/bmc_{quic,mcp,embedded}_sdk_test.go` (drivers in `bmc_sdk_parity_test.go`) | Every `BMCService` method through the SDK's QUIC, MCP and embedded adapters against the daemon's handlers; the gRPC scope and not-found refusals |
 | Integration | `test/integration/bmc/` | Real containerized vBMC responders |
 
 Make targets: `make test-bmc` (runs `./pkg/bmc/...`,
@@ -722,4 +721,4 @@ containing secret material.
 - [`docs/architecture/vendor-quirks.md`](../architecture/vendor-quirks.md) — the quirk registry design note
 - [`docs/device/`](../device/) — device templates and profiles
 - [`docs/bootstrap/`](../bootstrap/) — the orchestrator that enrolls at phase 5a
-- Legacy, superseded by this folder but retained: [`README.md`](README.md), [`configuration.md`](configuration.md), [`operations.md`](operations.md), [`sdk.md`](sdk.md), [`testing.md`](testing.md). Corrections are listed in [architecture.md](architecture.md) §9.
+- Legacy, deleted; these five files hold their content: `README.md`, `configuration.md`, `operations.md`, `sdk.md`, `testing.md`. Corrections are listed in [architecture.md](architecture.md) §9.

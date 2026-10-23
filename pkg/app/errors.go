@@ -134,6 +134,43 @@ func (e ErrPlatformCAInit) Error() string {
 // Unwrap returns the underlying cause.
 func (e ErrPlatformCAInit) Unwrap() error { return e.Cause }
 
+// ErrCANotConfigured is returned by LoadOrInitCA when the platform
+// configuration has no certificate authority section.
+type ErrCANotConfigured struct{}
+
+// Error returns the error message.
+func (ErrCANotConfigured) Error() string {
+	return "app: no certificate authority is configured"
+}
+
+// ErrCAPINs is returned by LoadOrInitCA when the CA's PINs cannot be read.
+type ErrCAPINs struct {
+	Cause error
+}
+
+// Error returns the error message.
+func (e ErrCAPINs) Error() string {
+	return fmt.Sprintf("app: failed to read the CA PINs: %v", e.Cause)
+}
+
+// Unwrap returns the underlying cause.
+func (e ErrCAPINs) Unwrap() error { return e.Cause }
+
+// ErrCALoadOrInit is returned by LoadOrInitCA when the CA can neither be
+// loaded nor initialized.
+type ErrCALoadOrInit struct {
+	LoadErr error
+	InitErr error
+}
+
+// Error returns the error message.
+func (e ErrCALoadOrInit) Error() string {
+	return fmt.Sprintf("app: failed to load or initialize the CA: load error: %v, init error: %v", e.LoadErr, e.InitErr)
+}
+
+// Unwrap returns both causes.
+func (e ErrCALoadOrInit) Unwrap() []error { return []error{e.LoadErr, e.InitErr} }
+
 // ErrStorageInit is returned when platform storage cannot be configured.
 type ErrStorageInit struct {
 	Cause error
@@ -353,6 +390,34 @@ func (e ErrHostNetworkValidation) Error() string {
 // Unwrap returns the underlying cause.
 func (e ErrHostNetworkValidation) Unwrap() error { return e.Cause }
 
+// ErrWebServiceValidation is returned when a webservice's configuration is
+// refused at startup, such as a provisioning surface bound outside the
+// provisioning zone (#177).
+type ErrWebServiceValidation struct {
+	Name  string
+	Cause error
+}
+
+// Error returns the error message.
+func (e ErrWebServiceValidation) Error() string {
+	return fmt.Sprintf("app: webservice %q configuration is invalid: %v", e.Name, e.Cause)
+}
+
+// Unwrap returns the underlying cause.
+func (e ErrWebServiceValidation) Unwrap() error { return e.Cause }
+
+// ErrWebServiceKeyRequired is returned when a webservice that does not take
+// the TPM IDevID for TLS has no `key:` section to create its dedicated TLS
+// key from.
+type ErrWebServiceKeyRequired struct {
+	Name string
+}
+
+// Error returns the error message.
+func (e ErrWebServiceKeyRequired) Error() string {
+	return fmt.Sprintf("app: webservice %q has no key: set key (store, algorithm, password) and certificate, or a certificate CN equal to tpm.idevid.cn", e.Name)
+}
+
 // ErrSDNOVSClientInit is returned when the OVS client cannot be created.
 type ErrSDNOVSClientInit struct {
 	Cause error
@@ -537,5 +602,22 @@ func (e ErrPlatformAnchorNoIdentity) Error() string {
 // Is implements errors.Is equality for value-type errors.
 func (e ErrPlatformAnchorNoIdentity) Is(target error) bool {
 	_, ok := target.(ErrPlatformAnchorNoIdentity)
+	return ok
+}
+
+// ErrIDevIDPublicKeyMissing signals that an IDevID signer was requested
+// without the public half of the key. crypto/tls reads a signer whose Public()
+// is nil as "no client certificate" and silently presents none, so the device
+// would fail mTLS at the control plane with nothing pointing here (#149).
+type ErrIDevIDPublicKeyMissing struct{}
+
+// Error implements the error interface.
+func (e ErrIDevIDPublicKeyMissing) Error() string {
+	return "IDevID signer: no public key supplied"
+}
+
+// Is implements errors.Is equality for value-type errors.
+func (e ErrIDevIDPublicKeyMissing) Is(target error) bool {
+	_, ok := target.(ErrIDevIDPublicKeyMissing)
 	return ok
 }

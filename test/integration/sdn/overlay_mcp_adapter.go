@@ -115,15 +115,6 @@ func (e ErrMCPOverlayClientClosed) Error() string {
 	return "MCP overlay client is closed"
 }
 
-// ErrMCPOverlayNotImplemented indicates a method is not yet implemented.
-type ErrMCPOverlayNotImplemented struct {
-	Method string
-}
-
-func (e ErrMCPOverlayNotImplemented) Error() string {
-	return fmt.Sprintf("MCP overlay method %s not implemented", e.Method)
-}
-
 // ErrMCPOverlayInvalidResponse indicates an invalid response from MCP.
 type ErrMCPOverlayInvalidResponse struct {
 	Tool   string

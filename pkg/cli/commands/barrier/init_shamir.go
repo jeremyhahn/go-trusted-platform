@@ -18,6 +18,7 @@ package barrier
 import (
 	"github.com/spf13/cobra"
 
+	platformbarrier "github.com/jeremyhahn/go-trusted-platform/pkg/barrier"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
 )
 
@@ -46,8 +47,9 @@ func newInitShamirCommand(getFlags func() *cli.CommonFlags) *cobra.Command {
                  PINBackend. Requires --user-pin (dual-control).
   --user-pin     Optional. Sets the user PIN. Requires --so-pin.
 
-Returns the freshly-generated shares to stdout; they MUST be captured
-and distributed to custodians before the barrier is sealed.`,
+The shares are not printed. Upstream seals each share to an enrolled
+Security Officer and returns only the counts; each officer claims their
+share with 'platformctl ceremony claim-share begin' and 'complete'.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return runInitShamir(getFlags(), f)
@@ -70,17 +72,27 @@ func validateInitShamirFlags(f *initShamirFlags) error {
 	if f.secret == "" {
 		return ErrMissingSecret{}
 	}
-	if f.total < 2 {
-		return ErrInvalidTotal{Total: f.total}
-	}
-	if f.threshold < 2 || f.threshold > f.total {
-		return ErrInvalidThreshold{Threshold: f.threshold, Total: f.total}
+	if err := validateShamirSplit(f.threshold, f.total); err != nil {
+		return err
 	}
 	if f.userPin != "" && f.soPin == "" {
 		return ErrUserPinRequiresSOPin{}
 	}
 	if f.soPin != "" && f.userPin == "" {
 		return ErrSOPinRequiresUserPin{}
+	}
+	return nil
+}
+
+// validateShamirSplit applies pkg/barrier's Shamir rule to a --threshold /
+// --total pair, reporting a total too small for any split before the
+// threshold itself.
+func validateShamirSplit(threshold, total int) error {
+	if total < platformbarrier.MinShamirThreshold {
+		return ErrInvalidTotal{Total: total}
+	}
+	if err := platformbarrier.ValidateShamirSplit(threshold, total); err != nil {
+		return ErrInvalidThreshold{Threshold: threshold, Total: total, Err: err}
 	}
 	return nil
 }

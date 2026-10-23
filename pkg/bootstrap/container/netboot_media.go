@@ -16,6 +16,7 @@ package container
 import (
 	"bytes"
 	"os"
+	"path"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -52,6 +53,34 @@ type NetbootMedia struct {
 	// ARM64IPXE is the db-signed arm64 iPXE served as snponly-aarch64.efi,
 	// or empty.
 	ARM64IPXE string `yaml:"arm64_ipxe,omitempty"`
+	// HTTPBoot is the directory of the Raspberry Pi HTTP boot files: the
+	// signed boot.img and its boot.sig, which the bootloader EEPROM fetches
+	// from HTTP_HOST/HTTP_PATH, or empty.
+	HTTPBoot string `yaml:"http_boot,omitempty"`
+}
+
+// The files of a Raspberry Pi HTTP boot directory (NetbootMedia.HTTPBoot).
+const (
+	// HTTPBootDir is the directory a netboot media build puts them in.
+	HTTPBootDir = "http-boot"
+	// HTTPBootImage is the FAT ramdisk of the Pi boot partition.
+	HTTPBootImage = "boot.img"
+	// HTTPBootSignature is the fleet key's rpi-eeprom-digest signature of it.
+	HTTPBootSignature = "boot.sig"
+	// HTTPBootPublicKey is the fleet public key in the bootloader's encoding
+	// (what rpi-eeprom-config embeds in the EEPROM); its SHA-256 is the OTP
+	// customer key hash. Public: it is served beside the image it verifies.
+	HTTPBootPublicKey = "pubkey.bin"
+)
+
+// HTTPBootPath is the EEPROM's HTTP_PATH for the build's HTTP boot files: the
+// container serves the data directory at DataURLPath, and HTTP_HOST is the
+// container's address. Empty when the build has none.
+func (m *NetbootMedia) HTTPBootPath() string {
+	if m.HTTPBoot == "" {
+		return ""
+	}
+	return path.Join(strings.TrimPrefix(DataURLPath, "/"), filepath.ToSlash(filepath.Clean(m.HTTPBoot)))
 }
 
 // LoadNetbootMedia reads and checks a netboot media build's index: every
@@ -90,6 +119,13 @@ func LoadNetbootMedia(root string) (*NetbootMedia, error) {
 		}
 		if err := check(f.field, f.rel); err != nil {
 			return nil, err
+		}
+	}
+	if media.HTTPBoot != "" {
+		for _, name := range []string{HTTPBootImage, HTTPBootSignature, HTTPBootPublicKey} {
+			if err := check("http_boot", filepath.Join(media.HTTPBoot, name)); err != nil {
+				return nil, err
+			}
 		}
 	}
 	if err := check("checksums", NetbootMediaSums); err != nil {

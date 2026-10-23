@@ -17,28 +17,30 @@ import (
 	"bytes"
 	"context"
 	"crypto/elliptic"
-	"crypto/rand"
 	"crypto/sha256"
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/hex"
-	"errors"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
-	"net/netip"
 	"strconv"
 	"strings"
 	"time"
 
-	"github.com/google/uuid"
-
 	quicbaassdk "github.com/jeremyhahn/go-quicbaas/sdk/go"
-	sdkiam "github.com/jeremyhahn/go-quicbaas/sdk/go/client/iam"
 	baasservice "github.com/jeremyhahn/go-quicbaas/sdk/go/service"
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	grpcapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/api/healthprobe"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/mcp"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/api/tpmattrs"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/api/tpmcertify"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/api/tpmclear"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/api/tpmek"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/api/tpmnv"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/api/tpmpcr"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/tpmsrk"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/verdict"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/compute"
@@ -46,15 +48,16 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device"
 	deviceentities "github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/dns"
-	platformservice "github.com/jeremyhahn/go-trusted-platform/pkg/platform/service"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/health"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/provisioning/configdelivery"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ipam"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/policy"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/zone"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/vtpm"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
+	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/proto"
 )
 
 // MCPServiceProviderConfig holds configuration for MCPServiceProvider.
@@ -63,34 +66,46 @@ type MCPServiceProviderConfig struct {
 	VTPMService          vtpm.VTPMService
 	DeviceService        device.DeviceService
 	DeviceProfileService device.DeviceProfileService
+	// DeviceTemplateService backs the device_template_* tools and
+	// profile_create_from_template; nil answers that no template service
+	// is configured.
+	DeviceTemplateService device.DeviceTemplateService
 	// VerdictSink receives device quote verdicts (event log + quarantine
 	// observers); nil means verdicts are only logged.
 	VerdictSink verdict.Sink
 	// AttestCertRecorder backs device_record_attest_cert; nil means the
 	// tool answers that no certificate authority is configured.
 	AttestCertRecorder AttestCertRecorder
+	// DeviceLifecycle backs device_disable and device_enable; nil means
+	// the tools answer that no SDN policy engine enforces them.
+	DeviceLifecycle DeviceLifecycle
 	// AttestationReporting carries the reporting service's report view,
 	// refresh trigger and caller policy for the MCP report tools (#226).
-	AttestationReporting  *ReportingHandles
-	DNSService            dns.DNSService
-	SDNService            *SDNService
-	PolicyEngine          policy.PolicyEngine
-	HealthService         *Service
-	IAMClient             quicbaassdk.IAMClient
-	PEPClient             quicbaassdk.IAMPEPClient
-	KMSService            baasservice.KMSService
-	CryptoService         baasservice.CryptoService
-	SecretsService        baasservice.SecretsService
+	AttestationReporting *ReportingHandles
+	// AttestationServer serves the device verdict feed for
+	// attestation_device_verdicts_poll (#709); nil answers that no feed is
+	// configured.
+	AttestationServer *AttestationServiceServer
+	DNSService        dns.DNSService
+	SDNService        *SDNService
+	HealthService     *Service
+	IAMClient         quicbaassdk.IAMClient
+	PEPClient         quicbaassdk.IAMPEPClient
+	IAMTokens         *IAMTokenService // iam_*_token tools; nil refuses verification
+	PlatformTenantID  string           // the system tenant, the only one admitted to create and list IAM tenants
+	KMSService        baasservice.KMSService
+	CryptoService     baasservice.CryptoService
+	SecretsService    baasservice.SecretsService
+	// DEKService backs the dek_* tools; nil answers that the DEK service is
+	// not available.
+	DEKService            DEKServiceInterface
+	KMSBackend            *PlatformKMSBackend
 	TPM2Service           xkmssdk.TrustedPlatformModule
 	Logger                *slog.Logger
 	ComputeOrchestrator   compute.Orchestrator
-	BMCService            BMCServicer
-	ClusterService        ClusterServicer
 	RegistryService       grpcapi.RegistryService
-	InvitationService     platformservice.InvitationServicer
 	EABService            EABServicer
 	EABDelivery           EABDeliveryServicer
-	BMCEnroller           BMCEnroller
 	ZoneService           gateway.ZoneService
 	IPAMService           ipam.Allocator
 	ConfigDeliveryService *configdelivery.Service
@@ -98,17 +113,25 @@ type MCPServiceProviderConfig struct {
 	// backs the proxy_* MCP tools (same instance as gRPC/REST/QUIC).
 	ProxyService *grpcapi.ProxyGRPCService
 
-	// GatewayLB serves gateway load balancer VIP tools (gateway_lb_*).
-	GatewayLB GatewayLoadBalancerInterface
+	// GatewayBackends is the shared gateway service the load balancer
+	// (gateway_lb_*), NAT64 and perf (gateway_perf_*) tools read their
+	// backend from (#660).
+	GatewayBackends GatewayBackendSource
 
 	// GatewaySnapshots serves the gateway telemetry snapshot tools
 	// (gateway_snapshot, gateway_snapshots); nil answers that no gateway
 	// snapshot surface is configured on this node.
 	GatewaySnapshots GatewaySnapshotReader
-
-	// GatewayPerf serves gateway performance verification tools
-	// (gateway_perf_*).
-	GatewayPerf GatewayPerfInterface
+	// GatewayStatus serves the gateway_status and gateway_mode_set tools;
+	// nil answers that the gateway service is not available.
+	GatewayStatus GatewayStatusController
+	// GatewayBGP serves the gateway_bgp_* tools; nil answers that the
+	// gateway service is not available.
+	GatewayBGP GatewayBGPController
+	// Overlay serves the overlay_* tools from the overlay controller the
+	// gRPC, REST and QUIC overlay services use; nil answers that the
+	// overlay service is not available.
+	Overlay OverlayControllerInterface
 }
 
 // MCPServiceProvider implements mcp.ServiceProvider by bridging to daemon services.
@@ -118,41 +141,56 @@ type MCPServiceProvider struct {
 	vtpmService           vtpm.VTPMService
 	deviceService         device.DeviceService
 	deviceProfileService  device.DeviceProfileService
+	deviceTemplateService device.DeviceTemplateService
 	deviceVerdicts        verdict.Sink
 	attestCertRecorder    AttestCertRecorder
+	lifecycle             DeviceLifecycle
 	attestationReporting  *ReportingHandles
+	attestationServer     *AttestationServiceServer
 	dnsService            dns.DNSService
 	sdnService            *SDNService
-	policyEngine          policy.PolicyEngine
 	healthService         *Service
-	iamClient             quicbaassdk.IAMClient
-	pepClient             quicbaassdk.IAMPEPClient
+	iam                   *IAMGRPCService // the iam_* tools answer what its gRPC methods answer
+	iamTokens             *IAMTokenService
 	kmsService            baasservice.KMSService
 	cryptoService         baasservice.CryptoService
 	secretsService        baasservice.SecretsService
+	dekService            DEKServiceInterface // the gRPC DEKManagement adapter, shared with QUIC
+	kmsBackend            *PlatformKMSBackend // shared with gRPC KeyManagementService, QUIC and REST
 	tpm2Service           xkmssdk.TrustedPlatformModule
 	computeOrchestrator   compute.Orchestrator
-	bmcService            BMCServicer
-	clusterService        ClusterServicer
+	bmcServer             platformv1.BMCServiceServer
+	pxeServer             platformv1.PXEServiceServer
+	clusterServer         platformv1.ClusterServiceServer
+	switchServer          platformv1.SwitchServiceServer
 	registryService       grpcapi.RegistryService
-	invitationService     platformservice.InvitationServicer
+	invitationServer      platformv1.InvitationServiceServer
 	eabService            EABServicer
 	eabDelivery           EABDeliveryServicer
-	bmcEnroller           BMCEnroller
-	bmcRestorer           BMCRestorer
 	phase35               phase35State
 	zoneService           gateway.ZoneService
-	ipamService           ipam.Allocator
 	configDeliveryService *configdelivery.Service
 	proxyService          *grpcapi.ProxyGRPCService
-	gatewayLB             GatewayLoadBalancerInterface
-	gatewayNAT64          GatewayNAT64Interface
-	gatewayPerf           GatewayPerfInterface
+	// gatewayBackends is the shared gateway service the gateway_lb_*,
+	// gateway_nat64_* and gateway_perf_* tools read their backend from.
+	gatewayBackends GatewayBackendSource
 	// gatewaySnapshotTools serves the telemetry snapshot tools.
 	gatewaySnapshotTools
+	// gatewayStatusTools serves the gateway status and mode tools (#65).
+	gatewayStatusTools
+	// gatewayBGPTools serves the gateway BGP tools (#65).
+	gatewayBGPTools
+	// gatewayIPAMTools serves the gateway IPAM tools.
+	gatewayIPAMTools
+	// overlayTools serves the overlay_* tools (#709).
+	overlayTools
 	ntpService    platformv1.NTPServiceServer
+	vpnService    platformv1.VPNServiceServer
+	tenantService platformv1.TenantServiceServer
 	logger        *slog.Logger
 	idevidService *IDevIDGRPCService
+	// appServices serves the cache_*, scheduler_* and messaging_* tools.
+	appServices mcp.AppServiceServers
 }
 
 // NewMCPServiceProvider creates a new MCPServiceProvider.
@@ -162,39 +200,44 @@ func NewMCPServiceProvider(config *MCPServiceProviderConfig) *MCPServiceProvider
 		logger = slog.Default()
 	}
 
+	iam := NewIAMGRPCService(logger, config.IAMClient, config.PEPClient)
+	iam.SetSystemTenant(config.PlatformTenantID)
+
 	return &MCPServiceProvider{
 		caService:             config.CAService,
 		vtpmService:           config.VTPMService,
 		deviceService:         config.DeviceService,
 		deviceProfileService:  config.DeviceProfileService,
+		deviceTemplateService: config.DeviceTemplateService,
 		deviceVerdicts:        config.VerdictSink,
 		attestCertRecorder:    config.AttestCertRecorder,
+		lifecycle:             config.DeviceLifecycle,
 		attestationReporting:  config.AttestationReporting,
+		attestationServer:     config.AttestationServer,
 		dnsService:            config.DNSService,
 		sdnService:            config.SDNService,
-		policyEngine:          config.PolicyEngine,
 		healthService:         config.HealthService,
-		iamClient:             config.IAMClient,
-		pepClient:             config.PEPClient,
+		iam:                   iam,
+		iamTokens:             config.IAMTokens,
 		kmsService:            config.KMSService,
 		cryptoService:         config.CryptoService,
 		secretsService:        config.SecretsService,
+		dekService:            config.DEKService,
+		kmsBackend:            config.KMSBackend,
 		tpm2Service:           config.TPM2Service,
 		computeOrchestrator:   config.ComputeOrchestrator,
-		bmcService:            config.BMCService,
-		bmcEnroller:           config.BMCEnroller,
-		clusterService:        config.ClusterService,
 		registryService:       config.RegistryService,
-		invitationService:     config.InvitationService,
 		eabService:            config.EABService,
 		eabDelivery:           config.EABDelivery,
 		zoneService:           config.ZoneService,
-		ipamService:           config.IPAMService,
+		gatewayIPAMTools:      gatewayIPAMTools{ipam: config.IPAMService},
 		configDeliveryService: config.ConfigDeliveryService,
 		proxyService:          config.ProxyService,
-		gatewayLB:             config.GatewayLB,
-		gatewayPerf:           config.GatewayPerf,
+		gatewayBackends:       config.GatewayBackends,
 		gatewaySnapshotTools:  gatewaySnapshotTools{reader: config.GatewaySnapshots},
+		gatewayStatusTools:    gatewayStatusTools{controller: config.GatewayStatus},
+		gatewayBGPTools:       gatewayBGPTools{controller: config.GatewayBGP},
+		overlayTools:          overlayTools{ctrl: config.Overlay},
 		logger:                logger,
 	}
 }
@@ -208,8 +251,8 @@ func (p *MCPServiceProvider) SetTPM2Service(svc xkmssdk.TrustedPlatformModule) {
 	p.tpm2Service = svc
 }
 
-// SetIDevIDService injects the shared IDevID gRPC service used for LDevID
-// (802.1AR) issuance over MCP.
+// SetIDevIDService injects the shared IDevID gRPC service that serves the MCP
+// IDevID, IAK and LDevID (802.1AR) tools.
 func (p *MCPServiceProvider) SetIDevIDService(svc *IDevIDGRPCService) {
 	p.idevidService = svc
 }
@@ -219,20 +262,22 @@ func (p *MCPServiceProvider) SetIDevIDService(svc *IDevIDGRPCService) {
 // =============================================================================
 
 // VTPMCreate creates a new vTPM bundle.
-func (p *MCPServiceProvider) VTPMCreate(ctx context.Context, name string, algorithm string) (interface{}, error) {
+func (p *MCPServiceProvider) VTPMCreate(ctx context.Context, name string, algorithm string, secureBoot bool, labels map[string]string) (interface{}, error) {
 	if p.vtpmService == nil {
 		return nil, ErrServiceNotAvailable{Service: "vtpm"}
 	}
 
-	ekAlg := vtpm.EKAlgorithmRSA
-	if algorithm == "ECC" {
-		ekAlg = vtpm.EKAlgorithmECC
+	ekAlg, err := vtpm.ParseEKAlgorithm(algorithm)
+	if err != nil {
+		return nil, err
 	}
 
 	opts := &vtpm.CreateBundleOptions{
-		Hostname:    name,
-		EKAlgorithm: ekAlg,
-		Mode:        vtpm.BundleModePreAssigned,
+		Hostname:          name,
+		EKAlgorithm:       ekAlg,
+		Mode:              vtpm.BundleModePreAssigned,
+		SecureBootEnabled: secureBoot,
+		Labels:            labels,
 	}
 
 	bundle, err := p.vtpmService.CreateBundle(ctx, opts)
@@ -251,12 +296,12 @@ func (p *MCPServiceProvider) VTPMDelete(ctx context.Context, name string) error 
 }
 
 // VTPMList lists all vTPM bundles.
-func (p *MCPServiceProvider) VTPMList(ctx context.Context) ([]interface{}, error) {
+func (p *MCPServiceProvider) VTPMList(ctx context.Context, opts *vtpm.ListOptions) ([]interface{}, error) {
 	if p.vtpmService == nil {
 		return nil, ErrServiceNotAvailable{Service: "vtpm"}
 	}
 
-	bundles, err := p.vtpmService.ListBundles(ctx, nil)
+	bundles, err := p.vtpmService.ListBundles(ctx, opts)
 	if err != nil {
 		return nil, err
 	}
@@ -302,26 +347,26 @@ func (p *MCPServiceProvider) VTPMQuote(ctx context.Context, name string, nonce [
 }
 
 // VTPMSeal seals data to a vTPM.
-func (p *MCPServiceProvider) VTPMSeal(ctx context.Context, name string, data []byte, pcrs []int) ([]byte, error) {
+func (p *MCPServiceProvider) VTPMSeal(ctx context.Context, name string, data []byte, pcrs []int, authValue string) ([]byte, error) {
 	if p.vtpmService == nil {
 		return nil, ErrServiceNotAvailable{Service: "vtpm"}
 	}
 	if _, err := p.vtpmService.GetBundle(ctx, name); err != nil {
 		return nil, err
 	}
-	opts := &vtpm.SealOptions{PCRs: pcrs}
+	opts := &vtpm.SealOptions{PCRs: pcrs, AuthValue: authValue}
 	return p.vtpmService.Seal(ctx, name, data, opts)
 }
 
 // VTPMUnseal unseals data from a vTPM.
-func (p *MCPServiceProvider) VTPMUnseal(ctx context.Context, name string, sealed []byte) ([]byte, error) {
+func (p *MCPServiceProvider) VTPMUnseal(ctx context.Context, name string, sealed []byte, authValue string) ([]byte, error) {
 	if p.vtpmService == nil {
 		return nil, ErrServiceNotAvailable{Service: "vtpm"}
 	}
 	if _, err := p.vtpmService.GetBundle(ctx, name); err != nil {
 		return nil, err
 	}
-	return p.vtpmService.Unseal(ctx, name, sealed, "")
+	return p.vtpmService.Unseal(ctx, name, sealed, authValue)
 }
 
 // VTPMExtendPCR extends a PCR value.
@@ -351,28 +396,27 @@ func (p *MCPServiceProvider) VTPMGet(ctx context.Context, name string) (interfac
 	if p.vtpmService == nil {
 		return nil, ErrServiceNotAvailable{Service: "vtpm"}
 	}
+	if name == "" {
+		return nil, ErrVTPMIDRequired{Field: "bundle id"}
+	}
 	bundle, err := p.vtpmService.GetBundle(ctx, name)
 	if err != nil {
-		return nil, err
+		return nil, mapVTPMError(err)
 	}
 	return bundle, nil
 }
 
-// VTPMValidate validates bundle integrity.
+// VTPMValidate validates bundle integrity. It answers as gRPC ValidateBundle
+// does: any validation error, including an absent bundle, is valid=false with
+// the error listed.
 func (p *MCPServiceProvider) VTPMValidate(ctx context.Context, name string) (interface{}, error) {
 	if p.vtpmService == nil {
 		return nil, ErrServiceNotAvailable{Service: "vtpm"}
 	}
-	err := p.vtpmService.ValidateBundle(ctx, name)
-	if err != nil {
-		// Propagate "not found" errors so callers can distinguish
-		// missing bundles from validation failures.
-		var notFound vtpm.ErrBundleNotFound
-		if errors.As(err, &notFound) {
-			return nil, err
-		}
-		// For validation errors (bundle exists but has issues),
-		// return the result with valid=false and the error details.
+	if name == "" {
+		return nil, ErrVTPMIDRequired{Field: "bundle id"}
+	}
+	if err := p.vtpmService.ValidateBundle(ctx, name); err != nil {
 		return map[string]interface{}{
 			"id":     name,
 			"valid":  false,
@@ -390,9 +434,12 @@ func (p *MCPServiceProvider) VTPMExport(ctx context.Context, name string) (inter
 	if p.vtpmService == nil {
 		return nil, ErrServiceNotAvailable{Service: "vtpm"}
 	}
+	if name == "" {
+		return nil, ErrVTPMIDRequired{Field: "bundle id"}
+	}
 	var buf bytes.Buffer
 	if err := p.vtpmService.ExportBundle(ctx, name, &buf); err != nil {
-		return nil, err
+		return nil, mapVTPMError(err)
 	}
 	data := buf.Bytes()
 	checksum := sha256.Sum256(data)
@@ -411,7 +458,7 @@ func (p *MCPServiceProvider) VTPMImport(ctx context.Context, data []byte) (inter
 	}
 	bundle, err := p.vtpmService.ImportBundle(ctx, bytes.NewReader(data))
 	if err != nil {
-		return nil, err
+		return nil, mapVTPMError(err)
 	}
 	return bundle, nil
 }
@@ -421,9 +468,9 @@ func (p *MCPServiceProvider) VTPMCreateTemplate(ctx context.Context, id string, 
 	if p.vtpmService == nil {
 		return nil, ErrServiceNotAvailable{Service: "vtpm"}
 	}
-	ekAlg := vtpm.EKAlgorithmRSA
-	if algorithm == "ECC" {
-		ekAlg = vtpm.EKAlgorithmECC
+	ekAlg, err := vtpm.ParseEKAlgorithm(algorithm)
+	if err != nil {
+		return nil, err
 	}
 	opts := &vtpm.CreateTemplateOptions{
 		ID:                id,
@@ -433,7 +480,7 @@ func (p *MCPServiceProvider) VTPMCreateTemplate(ctx context.Context, id string, 
 	}
 	template, err := p.vtpmService.CreateTemplate(ctx, opts)
 	if err != nil {
-		return nil, err
+		return nil, mapVTPMError(err)
 	}
 	return template, nil
 }
@@ -443,9 +490,12 @@ func (p *MCPServiceProvider) VTPMGetTemplate(ctx context.Context, id string) (in
 	if p.vtpmService == nil {
 		return nil, ErrServiceNotAvailable{Service: "vtpm"}
 	}
+	if id == "" {
+		return nil, ErrVTPMIDRequired{Field: "template id"}
+	}
 	template, err := p.vtpmService.GetTemplate(ctx, id)
 	if err != nil {
-		return nil, err
+		return nil, mapVTPMError(err)
 	}
 	return template, nil
 }
@@ -455,7 +505,10 @@ func (p *MCPServiceProvider) VTPMDeleteTemplate(ctx context.Context, id string) 
 	if p.vtpmService == nil {
 		return ErrServiceNotAvailable{Service: "vtpm"}
 	}
-	return p.vtpmService.DeleteTemplate(ctx, id)
+	if id == "" {
+		return ErrVTPMIDRequired{Field: "template id"}
+	}
+	return mapVTPMError(p.vtpmService.DeleteTemplate(ctx, id))
 }
 
 // VTPMListTemplates lists all templates.
@@ -465,7 +518,7 @@ func (p *MCPServiceProvider) VTPMListTemplates(ctx context.Context) (interface{}
 	}
 	templates, err := p.vtpmService.ListTemplates(ctx)
 	if err != nil {
-		return nil, err
+		return nil, mapVTPMError(err)
 	}
 	result := make([]interface{}, len(templates))
 	for i, t := range templates {
@@ -489,7 +542,7 @@ func (p *MCPServiceProvider) VTPMCloneTemplate(ctx context.Context, templateID s
 	}
 	bundle, err := p.vtpmService.CloneTemplate(ctx, opts)
 	if err != nil {
-		return nil, err
+		return nil, mapVTPMError(err)
 	}
 	return bundle, nil
 }
@@ -498,6 +551,9 @@ func (p *MCPServiceProvider) VTPMCloneTemplate(ctx context.Context, templateID s
 func (p *MCPServiceProvider) VTPMGetBundlePath(ctx context.Context, name string) (interface{}, error) {
 	if p.vtpmService == nil {
 		return nil, ErrServiceNotAvailable{Service: "vtpm"}
+	}
+	if name == "" {
+		return nil, ErrVTPMIDRequired{Field: "bundle id"}
 	}
 	path := p.vtpmService.GetBundlePath(name)
 	return map[string]interface{}{
@@ -511,6 +567,9 @@ func (p *MCPServiceProvider) VTPMGetTPMSocketPath(ctx context.Context, name stri
 	if p.vtpmService == nil {
 		return nil, ErrServiceNotAvailable{Service: "vtpm"}
 	}
+	if name == "" {
+		return nil, ErrVTPMIDRequired{Field: "bundle id"}
+	}
 	path := p.vtpmService.GetTPMSocketPath(name)
 	return map[string]interface{}{
 		"id":   name,
@@ -522,6 +581,9 @@ func (p *MCPServiceProvider) VTPMGetTPMSocketPath(ctx context.Context, name stri
 func (p *MCPServiceProvider) VTPMGetNVRAMPath(ctx context.Context, name string) (interface{}, error) {
 	if p.vtpmService == nil {
 		return nil, ErrServiceNotAvailable{Service: "vtpm"}
+	}
+	if name == "" {
+		return nil, ErrVTPMIDRequired{Field: "bundle id"}
 	}
 	path := p.vtpmService.GetNVRAMPath(name)
 	return map[string]interface{}{
@@ -535,6 +597,9 @@ func (p *MCPServiceProvider) VTPMIsRunning(ctx context.Context, name string) (in
 	if p.vtpmService == nil {
 		return nil, ErrServiceNotAvailable{Service: "vtpm"}
 	}
+	if name == "" {
+		return nil, ErrVTPMIDRequired{Field: "bundle_id"}
+	}
 	running := p.vtpmService.IsRunning(name)
 	return map[string]interface{}{
 		"bundle_id": name,
@@ -547,6 +612,17 @@ func (p *MCPServiceProvider) VTPMIsRunning(ctx context.Context, name string) (in
 // =============================================================================
 
 // DNSAddRecord adds a DNS record to a zone.
+// DNSServiceServer implements mcp.DNSServiceProvider: the dns_zone_*,
+// dns_record_* and dns_lookup MCP tools call the gRPC DNSService servicer
+// over the same DNS service, so they answer and fail as gRPC does. It
+// returns nil while no DNS service is wired.
+func (p *MCPServiceProvider) DNSServiceServer() platformv1.DNSServiceServer {
+	if p.dnsService == nil {
+		return nil
+	}
+	return NewDNSServiceServer(p.dnsService, p.logger)
+}
+
 func (p *MCPServiceProvider) DNSAddRecord(ctx context.Context, name string, recordType string, value string, ttl int) error {
 	if p.dnsService == nil {
 		return ErrDNSServiceNotAvailable{}
@@ -685,16 +761,38 @@ func (p *MCPServiceProvider) DNSListZones(ctx context.Context) ([]string, error)
 // =============================================================================
 
 // DeviceRegister registers a new device.
-func (p *MCPServiceProvider) DeviceRegister(ctx context.Context, name string, deviceType string, publicKey []byte) (interface{}, error) {
+func (p *MCPServiceProvider) DeviceRegister(ctx context.Context, req *mcp.DeviceRegisterRequest) (interface{}, error) {
 	if p.deviceService == nil {
 		return nil, ErrServiceNotAvailable{Service: "device"}
 	}
+	return registerMCPDevice(ctx, p.deviceService, req)
+}
 
-	dev := &deviceentities.Device{
-		Model:  name,
-		Serial: deviceType,
+// DeviceFindBySerial returns the device registered under the serial number.
+func (p *MCPServiceProvider) DeviceFindBySerial(ctx context.Context, serial string) (interface{}, error) {
+	if p.deviceService == nil {
+		return nil, ErrServiceNotAvailable{Service: "device"}
 	}
-	if err := p.deviceService.Create(ctx, dev); err != nil {
+	return p.deviceService.FindBySerial(ctx, serial)
+}
+
+// registerMCPDevice stores the device described by a device_register request
+// and returns it with its server-assigned id. Both MCP service providers
+// register through it so the argument-to-field mapping lives in one place.
+func registerMCPDevice(ctx context.Context, svc device.DeviceService, req *mcp.DeviceRegisterRequest) (*deviceentities.Device, error) {
+	if req == nil || req.Serial == "" {
+		return nil, ErrMissingRequiredField{Field: "serial"}
+	}
+	dev := &deviceentities.Device{
+		Serial:     req.Serial,
+		Model:      req.Model,
+		EKCert:     req.EKCert,
+		AttestPub:  req.AttestPub,
+		AttestCert: req.AttestCert,
+		SigningPub: req.SigningPub,
+		HashAlgoId: req.HashAlgoID,
+	}
+	if err := svc.Create(ctx, dev); err != nil {
 		return nil, err
 	}
 	return dev, nil
@@ -798,8 +896,30 @@ func (p *MCPServiceProvider) DeviceAttest(ctx context.Context, deviceID string, 
 // DeviceRecordAttestCert records a device's attestation certificate over
 // MCP through the shared recorder: the same fail-closed preflight and the
 // same refusal as gRPC, Unix, QUIC and REST.
-func (p *MCPServiceProvider) DeviceRecordAttestCert(ctx context.Context, deviceID string, reissue bool) (interface{}, error) {
-	return recordAttestCertForMCP(ctx, p.attestCertRecorder, deviceID, reissue, p.logger)
+func (p *MCPServiceProvider) DeviceRecordAttestCert(ctx context.Context, deviceID string, reissue, clearOnRefusal bool) (interface{}, error) {
+	return recordAttestCertForMCP(ctx, p.attestCertRecorder, deviceID, reissue, clearOnRefusal, p.logger)
+}
+
+// DeviceDisable serves the MCP device_disable tool with the gRPC answer.
+func (p *MCPServiceProvider) DeviceDisable(ctx context.Context, deviceID, reason string) (interface{}, error) {
+	return deviceLifecycleForMCP(ctx, p.lifecycle, deviceID, reason, false, p.logger)
+}
+
+// DeviceEnable serves the MCP device_enable tool with the gRPC answer.
+func (p *MCPServiceProvider) DeviceEnable(ctx context.Context, deviceID string) (interface{}, error) {
+	return deviceLifecycleForMCP(ctx, p.lifecycle, deviceID, "", true, p.logger)
+}
+
+// DeviceBootCertificate refuses a diskless node's boot-certificate request:
+// MCP carries no TLS connection for the proof to be bound to.
+func (p *MCPServiceProvider) DeviceBootCertificate(context.Context, string, []byte) (interface{}, error) {
+	return nil, errBootOverMCP()
+}
+
+// DeviceBootDelivery refuses a diskless node's boot-delivery request: MCP
+// carries no TLS connection for the evidence to be bound to.
+func (p *MCPServiceProvider) DeviceBootDelivery(context.Context, []byte) (interface{}, error) {
+	return nil, errBootOverMCP()
 }
 
 // akTrust returns the CA behind the MCP provider's CA service, or nil when
@@ -892,56 +1012,26 @@ func (p *MCPServiceProvider) SDNGetPortState(ctx context.Context, bridgeName str
 	return resp.GetPort(), nil
 }
 
-// SDNSetPortState sets the state of an SDN port.
-// Valid states: "blocked", "unblocked", "authorized", "unauthorized", "quarantined"
-func (p *MCPServiceProvider) SDNSetPortState(ctx context.Context, bridgeName string, portName string, state string) error {
-	// Validate parameters
-	if bridgeName == "" {
-		return ErrSDNMissingParameter{Parameter: "bridgeName"}
-	}
-	if portName == "" {
-		return ErrSDNMissingParameter{Parameter: "portName"}
-	}
-	if state == "" {
-		return ErrSDNMissingParameter{Parameter: "state"}
-	}
-
-	// Check if SDN service is available
+// SDNSetPortState sets a port's admin state ("up" or "down") and ingress
+// policing through the shared SDNService, as gRPC SetPortState does, and
+// returns the updated port.
+func (p *MCPServiceProvider) SDNSetPortState(ctx context.Context, bridgeName string, portName string, state string, rates mcp.PortRates) (interface{}, error) {
 	if p.sdnService == nil {
-		return ErrServiceNotAvailable{Service: "sdn"}
+		return nil, ErrServiceNotAvailable{Service: "sdn"}
 	}
-
-	// Check if policy engine is available
-	if p.policyEngine == nil {
-		return ErrSDNPolicyEngineNotConfigured{}
-	}
-
-	// Parse the state string to policy.PortState
-	portState, err := parsePortState(state)
-	if err != nil {
-		return err
-	}
-
-	// Verify the port exists via SDN service
-	_, getErr := p.sdnService.GetPort(ctx, &platformv1.GetPortRequest{
-		BridgeId: bridgeName,
-		PortId:   portName,
+	resp, err := p.sdnService.SetPortState(ctx, &platformv1.SetPortStateRequest{
+		BridgeId:     bridgeName,
+		PortId:       portName,
+		AdminState:   state,
+		IngressRate:  rates.IngressRate,
+		IngressBurst: rates.IngressBurst,
+		EgressRate:   rates.EgressRate,
+		EgressBurst:  rates.EgressBurst,
 	})
-	if getErr != nil {
-		return ErrSDNPortNotFound{BridgeName: bridgeName, PortName: portName}
+	if err != nil {
+		return nil, err
 	}
-
-	// Apply the state change via the policy engine
-	if err := p.policyEngine.SetPortState(portName, portState); err != nil {
-		return ErrSDNSetPortStateFailed{PortID: portName, Cause: err}
-	}
-
-	p.logger.Info("set port state",
-		slog.String("bridge", bridgeName),
-		slog.String("port", portName),
-		slog.String("state", state))
-
-	return nil
+	return resp.GetPort(), nil
 }
 
 // SDNListBridges lists all SDN bridges.
@@ -980,16 +1070,40 @@ func (p *MCPServiceProvider) SDNDeleteBridge(ctx context.Context, bridgeName str
 	return err
 }
 
-// SDNAddPort adds a port to an SDN bridge.
+// SDNAddPort adds a port of the given type to an SDN bridge.
 func (p *MCPServiceProvider) SDNAddPort(ctx context.Context, bridgeName string, portName string, portType string) error {
 	if p.sdnService == nil {
 		return ErrServiceNotAvailable{Service: "sdn"}
 	}
-	_, err := p.sdnService.AddPort(ctx, &platformv1.AddPortRequest{
+	pbType, err := portTypeFromName(portType)
+	if err != nil {
+		return err
+	}
+	_, err = p.sdnService.AddPort(ctx, &platformv1.AddPortRequest{
 		BridgeId: bridgeName,
-		Config:   &platformv1.PortConfig{Name: portName},
+		Config:   &platformv1.PortConfig{Name: portName, Type: pbType},
 	})
 	return err
+}
+
+// portTypeFromName parses the sdn_add_port port_type argument. It takes the
+// schema's short form ("internal", "tap") or the enum name
+// ("PORT_TYPE_INTERNAL"), in any case; an empty name leaves the type
+// unspecified, and an unknown one is refused rather than dropped.
+func portTypeFromName(name string) (platformv1.PortType, error) {
+	if name == "" {
+		return platformv1.PortType_PORT_TYPE_UNSPECIFIED, nil
+	}
+	const prefix = "PORT_TYPE_"
+	upper := strings.ToUpper(name)
+	if !strings.HasPrefix(upper, prefix) {
+		upper = prefix + upper
+	}
+	value, ok := platformv1.PortType_value[upper]
+	if !ok {
+		return platformv1.PortType_PORT_TYPE_UNSPECIFIED, ErrInvalidPortType{Type: name}
+	}
+	return platformv1.PortType(value), nil
 }
 
 // SDNDeletePort deletes a port from an SDN bridge.
@@ -1004,198 +1118,62 @@ func (p *MCPServiceProvider) SDNDeletePort(ctx context.Context, bridgeName strin
 	return err
 }
 
-// SDNApplyPolicy applies a network policy to a port.
-// The policyID is the port identifier, and bridgeName specifies the target bridge.
-// This method retrieves the policy from the policy engine and applies it to the port.
-func (p *MCPServiceProvider) SDNApplyPolicy(ctx context.Context, policyID string, bridgeName string) error {
-	// Validate parameters
-	if policyID == "" {
-		return ErrSDNMissingParameter{Parameter: "policyID"}
-	}
-	if bridgeName == "" {
-		return ErrSDNMissingParameter{Parameter: "bridgeName"}
-	}
-
-	// Check if SDN service is available
-	if p.sdnService == nil {
-		return ErrServiceNotAvailable{Service: "sdn"}
-	}
-
-	// Check if policy engine is available
-	if p.policyEngine == nil {
-		return ErrSDNPolicyEngineNotConfigured{}
-	}
-
-	// Get the policy from the engine
-	portPolicy, err := p.policyEngine.GetPolicy(policyID)
-	if err != nil {
-		return ErrSDNPolicyNotFound{PolicyID: policyID}
-	}
-
-	// Apply the policy to the port
-	if err := p.policyEngine.ApplyPolicy(policyID, portPolicy); err != nil {
-		return ErrSDNApplyPolicyFailed{PolicyID: policyID, Cause: err}
-	}
-
-	p.logger.Info("applied SDN policy",
-		slog.String("policy_id", policyID),
-		slog.String("bridge", bridgeName),
-		slog.String("tenant_id", portPolicy.TenantID),
-		slog.Int("vlan", int(portPolicy.VLAN)))
-
-	return nil
+// SDNApplyPolicy creates or replaces a policy, given as the REST create-policy
+// body, through the shared SDNService.
+func (p *MCPServiceProvider) SDNApplyPolicy(ctx context.Context, policy json.RawMessage) (interface{}, error) {
+	return applySDNPolicy(ctx, p.sdnService, policy)
 }
 
-// SDNGetPolicy retrieves an SDN policy by port ID.
-// Returns the policy information including VLAN, ACLs, tenant ID, and expiration.
+// SDNGetPolicy returns a policy by ID or name from the shared SDNService.
 func (p *MCPServiceProvider) SDNGetPolicy(ctx context.Context, policyID string) (interface{}, error) {
-	// Validate parameters
-	if policyID == "" {
-		return nil, ErrSDNMissingParameter{Parameter: "policyID"}
-	}
-
-	// Check if policy engine is available
-	if p.policyEngine == nil {
-		return nil, ErrSDNPolicyEngineNotConfigured{}
-	}
-
-	// Get the policy from the engine
-	portPolicy, err := p.policyEngine.GetPolicy(policyID)
-	if err != nil {
-		return nil, ErrSDNPolicyNotFound{PolicyID: policyID}
-	}
-
-	// Get port info for additional state information
-	portInfo, infoErr := p.policyEngine.GetPortInfo(policyID)
-
-	// Convert to a response format suitable for MCP
-	response := map[string]interface{}{
-		"port_id":   policyID,
-		"tenant_id": portPolicy.TenantID,
-		"vlan":      portPolicy.VLAN,
-		"acl_count": len(portPolicy.ACLs),
-		"issued_at": portPolicy.IssuedAt.Format(time.RFC3339),
-	}
-
-	if !portPolicy.ExpiresAt.IsZero() {
-		response["expires_at"] = portPolicy.ExpiresAt.Format(time.RFC3339)
-	}
-
-	if portPolicy.Metadata != nil {
-		response["metadata"] = portPolicy.Metadata
-	}
-
-	// Add port state information if available
-	if infoErr == nil && portInfo != nil {
-		response["state"] = portInfo.State.String()
-		response["last_state_change"] = portInfo.LastStateChange.Format(time.RFC3339)
-		response["auth_attempts"] = portInfo.AuthAttempts
-		response["error_count"] = portInfo.ErrorCount
-		if portInfo.LastError != "" {
-			response["last_error"] = portInfo.LastError
-		}
-	}
-
-	// Convert ACLs to a serializable format
-	if len(portPolicy.ACLs) > 0 {
-		acls := make([]map[string]interface{}, len(portPolicy.ACLs))
-		for i, acl := range portPolicy.ACLs {
-			acls[i] = map[string]interface{}{
-				"priority":    acl.Priority,
-				"description": acl.Description,
-				"action":      string(acl.Action.Type),
-			}
-		}
-		response["acls"] = acls
-	}
-
-	return response, nil
+	return getSDNPolicy(ctx, p.sdnService, policyID)
 }
 
-// SDNListPolicies lists all SDN policies currently applied to ports.
-// Returns a list of port IDs with their associated policy information.
-func (p *MCPServiceProvider) SDNListPolicies(ctx context.Context) ([]interface{}, error) {
-	// Check if policy engine is available
-	if p.policyEngine == nil {
-		return nil, ErrSDNPolicyEngineNotConfigured{}
-	}
+// SDNListPolicies lists the shared SDNService's policies, optionally filtered by
+// type and target.
+func (p *MCPServiceProvider) SDNListPolicies(ctx context.Context, policyType string, targetID string) ([]interface{}, error) {
+	return listSDNPolicies(ctx, p.sdnService, policyType, targetID)
+}
 
-	// Get all port info from the policy engine's state machine
-	// The policy engine manages port state internally, so we iterate through
-	// known ports and collect their policies
-	var policies []interface{}
-
-	// Get port info for all known ports by checking policy engine state
-	// We need to use a type assertion to access the underlying engine
-	// that has the state machine with ListPorts capability
-	if engine, ok := p.policyEngine.(*policy.Engine); ok {
-		// Access the state machine through GetPortInfo calls
-		// Since Engine doesn't expose ListPorts directly, we work with
-		// what the interface provides - GetPortInfo for known ports
-
-		// For now, we'll iterate through SDN service ports if available
-		if p.sdnService != nil {
-			// Get all bridges
-			bridgesResp, err := p.sdnService.ListBridges(ctx, &platformv1.ListBridgesRequest{})
-			if err == nil {
-				for _, bridge := range bridgesResp.GetBridges() {
-					// Get all ports on each bridge
-					portsResp, portErr := p.sdnService.ListPorts(ctx, &platformv1.ListPortsRequest{
-						BridgeId: bridge.GetId(),
-					})
-					if portErr == nil {
-						for _, port := range portsResp.GetPorts() {
-							portID := port.GetConfig().GetName()
-							if portID == "" {
-								portID = port.GetId()
-							}
-
-							// Try to get policy for this port
-							portPolicy, policyErr := engine.GetPolicy(portID)
-							if policyErr == nil && portPolicy != nil {
-								policyInfo := map[string]interface{}{
-									"port_id":   portID,
-									"bridge_id": bridge.GetId(),
-									"tenant_id": portPolicy.TenantID,
-									"vlan":      portPolicy.VLAN,
-									"acl_count": len(portPolicy.ACLs),
-								}
-
-								// Get port state
-								portState, stateErr := engine.GetPortState(portID)
-								if stateErr == nil {
-									policyInfo["state"] = portState.String()
-								}
-
-								if !portPolicy.ExpiresAt.IsZero() {
-									policyInfo["expires_at"] = portPolicy.ExpiresAt.Format(time.RFC3339)
-								}
-
-								policies = append(policies, policyInfo)
-							}
-						}
-					}
-				}
-			}
-		}
-	}
-
-	// If no policies found, return empty list rather than nil
-	if policies == nil {
-		policies = make([]interface{}, 0)
-	}
-
-	return policies, nil
+// SDNDeletePolicy deletes a policy by ID or name through the shared SDNService.
+func (p *MCPServiceProvider) SDNDeletePolicy(ctx context.Context, policyID string) error {
+	return deleteSDNPolicy(ctx, p.sdnService, policyID)
 }
 
 // SDNAddFlow adds a flow to an SDN bridge.
-func (p *MCPServiceProvider) SDNAddFlow(ctx context.Context, bridgeName string, flow map[string]interface{}) error {
+func (p *MCPServiceProvider) SDNAddFlow(ctx context.Context, bridgeName string, flow map[string]interface{}) (interface{}, error) {
 	if p.sdnService == nil {
-		return ErrServiceNotAvailable{Service: "sdn"}
+		return nil, ErrServiceNotAvailable{Service: "sdn"}
 	}
-	flowConfig := &platformv1.FlowConfig{BridgeId: bridgeName}
-	_, err := p.sdnService.AddFlow(ctx, &platformv1.AddFlowRequest{Config: flowConfig})
-	return err
+	flowConfig, err := flowConfigFromMap(flow)
+	if err != nil {
+		return nil, err
+	}
+	flowConfig.BridgeId = bridgeName
+	resp, err := p.sdnService.AddFlow(ctx, &platformv1.AddFlowRequest{Config: flowConfig})
+	if err != nil {
+		return nil, err
+	}
+	return resp.GetFlow(), nil
+}
+
+// flowConfigFromMap decodes an MCP flow body into the FlowConfig the gRPC
+// AddFlow takes, field for field. Decoding is strict: a field FlowConfig does
+// not have, or an enum name it does not know, is refused rather than dropped,
+// so a flow is never installed wider than the caller asked for.
+func flowConfigFromMap(flow map[string]interface{}) (*platformv1.FlowConfig, error) {
+	flowConfig := &platformv1.FlowConfig{}
+	if len(flow) == 0 {
+		return flowConfig, nil
+	}
+	body, err := json.Marshal(flow)
+	if err != nil {
+		return nil, ErrInvalidFlowConfig{Cause: err}
+	}
+	if err := protojson.Unmarshal(body, flowConfig); err != nil {
+		return nil, ErrInvalidFlowConfig{Cause: err}
+	}
+	return flowConfig, nil
 }
 
 // SDNDeleteFlow deletes a flow from an SDN bridge.
@@ -1227,27 +1205,33 @@ func (p *MCPServiceProvider) SDNListFlows(ctx context.Context, bridgeName string
 }
 
 // SDNFlushFlows flushes all flows from an SDN bridge.
-func (p *MCPServiceProvider) SDNFlushFlows(ctx context.Context, bridgeName string) error {
+func (p *MCPServiceProvider) SDNFlushFlows(ctx context.Context, bridgeName string) (uint32, error) {
 	if p.sdnService == nil {
-		return ErrServiceNotAvailable{Service: "sdn"}
+		return 0, ErrServiceNotAvailable{Service: "sdn"}
 	}
-	_, err := p.sdnService.FlushFlows(ctx, &platformv1.FlushFlowsRequest{BridgeId: bridgeName})
-	return err
+	resp, err := p.sdnService.FlushFlows(ctx, &platformv1.FlushFlowsRequest{BridgeId: bridgeName})
+	if err != nil {
+		return 0, err
+	}
+	return resp.GetDeletedCount(), nil
 }
 
 // SDNCreateVLAN creates a VLAN on an SDN bridge.
-func (p *MCPServiceProvider) SDNCreateVLAN(ctx context.Context, bridgeName string, vlanID int, name string) error {
+func (p *MCPServiceProvider) SDNCreateVLAN(ctx context.Context, bridgeName string, vlanID int, name string) (interface{}, error) {
 	if p.sdnService == nil {
-		return ErrServiceNotAvailable{Service: "sdn"}
+		return nil, ErrServiceNotAvailable{Service: "sdn"}
 	}
-	_, err := p.sdnService.CreateVLAN(ctx, &platformv1.CreateVLANRequest{
+	resp, err := p.sdnService.CreateVLAN(ctx, &platformv1.CreateVLANRequest{
 		Config: &platformv1.VLANConfig{
 			BridgeId: bridgeName,
 			VlanId:   uint32(vlanID),
 			Name:     name,
 		},
 	})
-	return err
+	if err != nil {
+		return nil, err
+	}
+	return resp.GetVlan(), nil
 }
 
 // SDNDeleteVLAN deletes a VLAN from an SDN bridge.
@@ -1278,37 +1262,6 @@ func (p *MCPServiceProvider) SDNListVLANs(ctx context.Context, bridgeName string
 	return result, nil
 }
 
-// SDNAuthenticatePort authenticates a port.
-func (p *MCPServiceProvider) SDNAuthenticatePort(ctx context.Context, bridgeName string, portName string, credentials map[string]string) error {
-	if p.sdnService == nil {
-		return ErrServiceNotAvailable{Service: "sdn"}
-	}
-	certificate := credentials["certificate"]
-	format := credentials["format"]
-	if format == "" {
-		format = "PEM"
-	}
-	_, err := p.sdnService.AuthenticatePort(ctx, &platformv1.AuthenticatePortRequest{
-		BridgeId:    bridgeName,
-		PortId:      portName,
-		Certificate: []byte(certificate),
-		Format:      format,
-	})
-	return err
-}
-
-// SDNRevokePortAuth revokes port authentication.
-func (p *MCPServiceProvider) SDNRevokePortAuth(ctx context.Context, bridgeName string, portName string) error {
-	if p.sdnService == nil {
-		return ErrServiceNotAvailable{Service: "sdn"}
-	}
-	_, err := p.sdnService.RevokePortAuth(ctx, &platformv1.RevokePortAuthRequest{
-		BridgeId: bridgeName,
-		PortId:   portName,
-	})
-	return err
-}
-
 // SDNGetPortStats gets port statistics.
 func (p *MCPServiceProvider) SDNGetPortStats(ctx context.Context, bridgeName string, portName string) (interface{}, error) {
 	if p.sdnService == nil {
@@ -1325,11 +1278,14 @@ func (p *MCPServiceProvider) SDNGetPortStats(ctx context.Context, bridgeName str
 }
 
 // SDNGetFlowStats gets flow statistics.
-func (p *MCPServiceProvider) SDNGetFlowStats(ctx context.Context, bridgeName string) (interface{}, error) {
+func (p *MCPServiceProvider) SDNGetFlowStats(ctx context.Context, bridgeName string, flowID string) (interface{}, error) {
 	if p.sdnService == nil {
 		return nil, ErrServiceNotAvailable{Service: "sdn"}
 	}
-	resp, err := p.sdnService.GetFlowStats(ctx, &platformv1.GetFlowStatsRequest{BridgeId: bridgeName})
+	resp, err := p.sdnService.GetFlowStats(ctx, &platformv1.GetFlowStatsRequest{
+		BridgeId: bridgeName,
+		FlowId:   flowID,
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -1340,47 +1296,50 @@ func (p *MCPServiceProvider) SDNGetFlowStats(ctx context.Context, bridgeName str
 // Health Operations
 // =============================================================================
 
-// Health returns the platform health status as an MCP-compatible map with
-// lowercase string status values and Unix millisecond timestamps.
+// Health returns the aggregate platform health verdict with no components:
+// the unauthenticated form of GetHealth, the answer QUIC OpHealth and
+// REST GET /health give.
 func (p *MCPServiceProvider) Health(ctx context.Context) (interface{}, error) {
 	if p.healthService == nil {
 		return nil, ErrServiceNotAvailable{Service: "health"}
 	}
-	resp, err := p.healthService.GetHealth(ctx, &platformv1.GetHealthRequest{})
-	if err != nil {
-		return nil, err
-	}
-	return mcpHealthResponseMap(resp), nil
+	probe := health.Aggregate(ctx, p.healthService.currentHealthRegistry())
+	return mcpProbeJSON(healthprobe.HealthSummaryResponse(probe))
 }
 
-// Liveness returns the platform liveness status.
+// Liveness returns the platform liveness status, as the Liveness rpc does.
 func (p *MCPServiceProvider) Liveness(ctx context.Context) (interface{}, error) {
 	if p.healthService == nil {
 		return nil, ErrServiceNotAvailable{Service: "health"}
 	}
-	resp, err := p.healthService.GetHealth(ctx, &platformv1.GetHealthRequest{})
+	resp, err := p.healthService.Liveness(ctx, &platformv1.LivenessRequest{})
 	if err != nil {
 		return nil, err
 	}
-	return map[string]interface{}{
-		"live":   resp.GetStatus() == platformv1.HealthStatus_HEALTH_STATUS_HEALTHY,
-		"status": mcpHealthStatusString(resp.GetStatus()),
-	}, nil
+	return mcpProbeJSON(resp)
 }
 
-// Readiness returns the platform readiness status.
+// Readiness returns the platform readiness status, as the Readiness rpc does.
 func (p *MCPServiceProvider) Readiness(ctx context.Context) (interface{}, error) {
 	if p.healthService == nil {
 		return nil, ErrServiceNotAvailable{Service: "health"}
 	}
-	resp, err := p.healthService.GetHealth(ctx, &platformv1.GetHealthRequest{})
+	resp, err := p.healthService.Readiness(ctx, &platformv1.ReadinessRequest{})
 	if err != nil {
 		return nil, err
 	}
-	return map[string]interface{}{
-		"ready":  resp.GetStatus() == platformv1.HealthStatus_HEALTH_STATUS_HEALTHY,
-		"status": mcpHealthStatusString(resp.GetStatus()),
-	}, nil
+	return mcpProbeJSON(resp)
+}
+
+// mcpProbeJSON renders a probe answer in the protojson the REST probes send,
+// so the SDK decodes the MCP result into the same message gRPC returns. The
+// probe tools are unauthenticated, so the answer is the status only.
+func mcpProbeJSON(message proto.Message) (interface{}, error) {
+	data, err := healthprobe.MarshalJSON(message)
+	if err != nil {
+		return nil, err
+	}
+	return json.RawMessage(data), nil
 }
 
 // =============================================================================
@@ -1527,6 +1486,11 @@ func (p *MCPServiceProvider) CAIssue(ctx context.Context, req *mcp.CAIssueReques
 		return nil, ErrServiceNotAvailable{Service: "ca"}
 	}
 
+	keyAlgorithm, err := parsePlatformKeyAlgorithm(req.Algorithm)
+	if err != nil {
+		return nil, err
+	}
+
 	// Convert MCP request to platformv1 request
 	certRequest := &platformv1.CertificateRequest{
 		Subject: &platformv1.Subject{
@@ -1536,9 +1500,11 @@ func (p *MCPServiceProvider) CAIssue(ctx context.Context, req *mcp.CAIssueReques
 			Country:            req.Country,
 			Province:           req.Province,
 			Locality:           req.Locality,
+			Address:            req.Address,
+			PostalCode:         req.PostalCode,
 		},
 		ValidDays:    int32(req.ValidDays),
-		KeyAlgorithm: parsePlatformKeyAlgorithm(req.Algorithm),
+		KeyAlgorithm: keyAlgorithm,
 		StoreType:    req.StoreType,
 		KeyUsage:     req.KeyUsage,
 		ExtKeyUsage:  req.ExtKeyUsage,
@@ -1563,14 +1529,32 @@ func (p *MCPServiceProvider) CAIssue(ctx context.Context, req *mcp.CAIssueReques
 	return p.caService.IssueCertificate(ctx, caReq)
 }
 
+// CASignCSR certifies the KMS key a CSR names for code signing. The CA
+// service authorizes the caller from the gRPC context, so the MCP caller's
+// validated platform token is carried over to it; a caller without one is
+// refused there.
+func (p *MCPServiceProvider) CASignCSR(ctx context.Context, req *mcp.CASignCSRRequest) (interface{}, error) {
+	if p.caService == nil {
+		return nil, ErrServiceNotAvailable{Service: "ca"}
+	}
+	if authCtx, ok := mcp.AuthorizedContextFromContext(ctx); ok {
+		ctx = grpcapi.ContextWithAuthorizedContext(ctx, authCtx)
+	}
+	return p.caService.SignCSR(ctx, &platformv1.SignCSRRequest{
+		CsrPem:    req.CSRPEM,
+		ValidDays: int32(req.ValidDays),
+	})
+}
+
 // CAGet retrieves a certificate by serial number.
-func (p *MCPServiceProvider) CAGet(ctx context.Context, serial string, includePEM bool) (interface{}, error) {
+func (p *MCPServiceProvider) CAGet(ctx context.Context, serial string, includePEM, includeDER bool) (interface{}, error) {
 	if p.caService == nil {
 		return nil, ErrServiceNotAvailable{Service: "ca"}
 	}
 	return p.caService.GetCertificate(ctx, &platformv1.GetCertificateRequest{
 		Serial:     serial,
 		IncludePem: includePEM,
+		IncludeDer: includeDER,
 	})
 }
 
@@ -1650,833 +1634,216 @@ func (p *MCPServiceProvider) CABundle(ctx context.Context, storeType string, alg
 // IAM Operations
 // =============================================================================
 
-// IAMCreateUser creates a new IAM user.
+// The iam_* tools below answer through p.iam, the gRPC PlatformIAMService
+// implementation, so each tool gives its gRPC method's response message and
+// error class: the same validation, tenant isolation and SDK status codes. A
+// daemon without QuicBaaS IAM answers ErrIAMServiceNotAvailable.
+
+// IAMCreateUser creates an IAM user, as gRPC CreateUser.
 func (p *MCPServiceProvider) IAMCreateUser(ctx context.Context, req *mcp.IAMCreateUserRequest) (interface{}, error) {
-	if p.iamClient == nil {
-		return nil, ErrIAMServiceNotAvailable{}
-	}
-
-	// Validate required parameters
-	if req.TenantID == "" {
-		return nil, ErrIAMMissingParameter{Parameter: "tenant_id"}
-	}
-	if req.Email == "" {
-		return nil, ErrIAMMissingParameter{Parameter: "email"}
-	}
-
-	sdkReq := &sdkiam.CreateUserRequest{
-		Email:       req.Email,
-		DisplayName: req.Name,
-		Roles:       req.Roles,
-		Groups:      req.Groups,
-		Metadata:    req.Attributes,
-	}
-
-	resp, err := p.iamClient.User().Create(ctx, req.TenantID, sdkReq)
-	if err != nil {
-		return nil, ErrIAMOperationFailed{Operation: "CreateUser", Cause: err}
-	}
-
-	p.logger.Info("IAM user created",
-		"tenant_id", req.TenantID,
-		"user_id", resp.ID,
-		"email", req.Email,
-	)
-
-	return sdkUserToMap(resp), nil
+	return p.iam.CreateUser(ctx, &platformv1.CreateIAMUserRequest{
+		TenantId:   req.TenantID,
+		Email:      req.Email,
+		Name:       req.Name,
+		Roles:      req.Roles,
+		Groups:     req.Groups,
+		Attributes: req.Attributes,
+	})
 }
 
-// IAMDeleteUser deletes an IAM user.
-func (p *MCPServiceProvider) IAMDeleteUser(ctx context.Context, tenantID string, userID string) error {
-	if p.iamClient == nil {
-		return ErrIAMServiceNotAvailable{}
-	}
-
-	// Validate required parameters
-	if tenantID == "" {
-		return ErrIAMMissingParameter{Parameter: "tenant_id"}
-	}
-	if userID == "" {
-		return ErrIAMMissingParameter{Parameter: "user_id"}
-	}
-
-	err := p.iamClient.User().Delete(ctx, tenantID, userID)
-	if err != nil {
-		return ErrIAMOperationFailed{Operation: "DeleteUser", Cause: err}
-	}
-
-	p.logger.Info("IAM user deleted",
-		"tenant_id", tenantID,
-		"user_id", userID,
-	)
-
-	return nil
+// IAMDeleteUser deletes an IAM user, as gRPC DeleteUser.
+func (p *MCPServiceProvider) IAMDeleteUser(ctx context.Context, tenantID string, userID string) (interface{}, error) {
+	return p.iam.DeleteUser(ctx, &platformv1.DeleteIAMUserRequest{TenantId: tenantID, UserId: userID})
 }
 
-// IAMGetUser retrieves an IAM user by ID.
+// IAMGetUser returns an IAM user, as gRPC GetUser.
 func (p *MCPServiceProvider) IAMGetUser(ctx context.Context, tenantID string, userID string) (interface{}, error) {
-	if p.iamClient == nil {
-		return nil, ErrIAMServiceNotAvailable{}
-	}
-
-	// Validate required parameters
-	if tenantID == "" {
-		return nil, ErrIAMMissingParameter{Parameter: "tenant_id"}
-	}
-	if userID == "" {
-		return nil, ErrIAMMissingParameter{Parameter: "user_id"}
-	}
-
-	resp, err := p.iamClient.User().Get(ctx, tenantID, userID)
-	if err != nil {
-		return nil, ErrIAMUserNotFound{TenantID: tenantID, UserID: userID}
-	}
-
-	return sdkUserToMap(resp), nil
+	return p.iam.GetUser(ctx, &platformv1.GetIAMUserRequest{TenantId: tenantID, UserId: userID})
 }
 
-// IAMListUsers lists IAM users for a tenant.
-func (p *MCPServiceProvider) IAMListUsers(ctx context.Context, tenantID string, limit int, offset int) (interface{}, error) {
-	if p.iamClient == nil {
-		return nil, ErrIAMServiceNotAvailable{}
-	}
-
-	// Validate required parameters
-	if tenantID == "" {
-		return nil, ErrIAMMissingParameter{Parameter: "tenant_id"}
-	}
-
-	// Apply defaults
-	if limit <= 0 {
-		limit = 50
-	}
-	if offset < 0 {
-		offset = 0
-	}
-
-	sdkReq := &sdkiam.ListUsersRequest{
-		PageSize: limit,
-	}
-
-	resp, err := p.iamClient.User().List(ctx, tenantID, sdkReq)
-	if err != nil {
-		return nil, ErrIAMOperationFailed{Operation: "ListUsers", Cause: err}
-	}
-
-	users := make([]map[string]interface{}, 0, len(resp.Users))
-	for i := range resp.Users {
-		users = append(users, sdkUserToMap(&resp.Users[i]))
-	}
-
-	return map[string]interface{}{
-		"users":  users,
-		"total":  resp.Pagination.TotalCount,
-		"limit":  limit,
-		"offset": offset,
-	}, nil
+// IAMListUsers lists a tenant's IAM users, as gRPC ListUsers.
+func (p *MCPServiceProvider) IAMListUsers(ctx context.Context, req *mcp.IAMListUsersRequest) (interface{}, error) {
+	return p.iam.ListUsers(ctx, &platformv1.ListIAMUsersRequest{
+		TenantId:    req.TenantID,
+		Pagination:  iamPaginationRequest(req.Pagination),
+		EmailFilter: req.EmailFilter,
+		RoleFilter:  req.RoleFilter,
+		GroupFilter: req.GroupFilter,
+	})
 }
 
-// IAMCreateRole creates a new IAM role.
+// IAMCreateRole creates an IAM role, as gRPC CreateRole.
 func (p *MCPServiceProvider) IAMCreateRole(ctx context.Context, req *mcp.IAMCreateRoleRequest) (interface{}, error) {
-	if p.iamClient == nil {
-		return nil, ErrIAMServiceNotAvailable{}
-	}
-
-	// Validate required parameters
-	if req.TenantID == "" {
-		return nil, ErrIAMMissingParameter{Parameter: "tenant_id"}
-	}
-	if req.ID == "" {
-		return nil, ErrIAMMissingParameter{Parameter: "id"}
-	}
-
-	sdkReq := &sdkiam.CreateRoleRequest{
-		ID:          req.ID,
+	return p.iam.CreateRole(ctx, &platformv1.CreateIAMRoleRequest{
+		TenantId:    req.TenantID,
+		Id:          req.ID,
 		Name:        req.Name,
 		Description: req.Description,
 		Permissions: req.Permissions,
-	}
-
-	resp, err := p.iamClient.Role().Create(ctx, req.TenantID, sdkReq)
-	if err != nil {
-		return nil, ErrIAMOperationFailed{Operation: "CreateRole", Cause: err}
-	}
-
-	p.logger.Info("IAM role created",
-		"tenant_id", req.TenantID,
-		"role_id", resp.ID,
-		"name", req.Name,
-	)
-
-	return sdkRoleToMap(resp), nil
+	})
 }
 
-// IAMDeleteRole deletes an IAM role.
-func (p *MCPServiceProvider) IAMDeleteRole(ctx context.Context, tenantID string, roleID string) error {
-	if p.iamClient == nil {
-		return ErrIAMServiceNotAvailable{}
-	}
-
-	// Validate required parameters
-	if tenantID == "" {
-		return ErrIAMMissingParameter{Parameter: "tenant_id"}
-	}
-	if roleID == "" {
-		return ErrIAMMissingParameter{Parameter: "role_id"}
-	}
-
-	err := p.iamClient.Role().Delete(ctx, tenantID, roleID)
-	if err != nil {
-		return ErrIAMOperationFailed{Operation: "DeleteRole", Cause: err}
-	}
-
-	p.logger.Info("IAM role deleted",
-		"tenant_id", tenantID,
-		"role_id", roleID,
-	)
-
-	return nil
+// IAMDeleteRole deletes an IAM role, as gRPC DeleteRole.
+func (p *MCPServiceProvider) IAMDeleteRole(ctx context.Context, tenantID string, roleID string) (interface{}, error) {
+	return p.iam.DeleteRole(ctx, &platformv1.DeleteIAMRoleRequest{TenantId: tenantID, RoleId: roleID})
 }
 
-// IAMGetRole retrieves an IAM role by ID.
+// IAMGetRole returns an IAM role, as gRPC GetRole.
 func (p *MCPServiceProvider) IAMGetRole(ctx context.Context, tenantID string, roleID string) (interface{}, error) {
-	if p.iamClient == nil {
-		return nil, ErrIAMServiceNotAvailable{}
-	}
-
-	// Validate required parameters
-	if tenantID == "" {
-		return nil, ErrIAMMissingParameter{Parameter: "tenant_id"}
-	}
-	if roleID == "" {
-		return nil, ErrIAMMissingParameter{Parameter: "role_id"}
-	}
-
-	resp, err := p.iamClient.Role().Get(ctx, tenantID, roleID)
-	if err != nil {
-		return nil, ErrIAMRoleNotFound{TenantID: tenantID, RoleID: roleID}
-	}
-
-	return sdkRoleToMap(resp), nil
+	return p.iam.GetRole(ctx, &platformv1.GetIAMRoleRequest{TenantId: tenantID, RoleId: roleID})
 }
 
-// IAMListRoles lists IAM roles for a tenant.
-func (p *MCPServiceProvider) IAMListRoles(ctx context.Context, tenantID string, limit int, offset int) (interface{}, error) {
-	if p.iamClient == nil {
-		return nil, ErrIAMServiceNotAvailable{}
-	}
-
-	// Validate required parameters
-	if tenantID == "" {
-		return nil, ErrIAMMissingParameter{Parameter: "tenant_id"}
-	}
-
-	// Apply defaults
-	if limit <= 0 {
-		limit = 50
-	}
-	if offset < 0 {
-		offset = 0
-	}
-
-	sdkReq := &sdkiam.ListRolesRequest{
-		PageSize: limit,
-	}
-
-	resp, err := p.iamClient.Role().List(ctx, tenantID, sdkReq)
-	if err != nil {
-		return nil, ErrIAMOperationFailed{Operation: "ListRoles", Cause: err}
-	}
-
-	roles := make([]map[string]interface{}, 0, len(resp.Roles))
-	for i := range resp.Roles {
-		roles = append(roles, sdkRoleToMap(&resp.Roles[i]))
-	}
-
-	return map[string]interface{}{
-		"roles":  roles,
-		"total":  resp.Pagination.TotalCount,
-		"limit":  limit,
-		"offset": offset,
-	}, nil
+// IAMListRoles lists a tenant's IAM roles, as gRPC ListRoles.
+func (p *MCPServiceProvider) IAMListRoles(ctx context.Context, tenantID string, page mcp.IAMPagination) (interface{}, error) {
+	return p.iam.ListRoles(ctx, &platformv1.ListIAMRolesRequest{
+		TenantId:   tenantID,
+		Pagination: iamPaginationRequest(page),
+	})
 }
 
-// IAMAssignRole assigns a role to a user.
-func (p *MCPServiceProvider) IAMAssignRole(ctx context.Context, tenantID string, userID string, role string) error {
-	if p.iamClient == nil {
-		return ErrIAMServiceNotAvailable{}
-	}
-
-	// Validate required parameters
-	if tenantID == "" {
-		return ErrIAMMissingParameter{Parameter: "tenant_id"}
-	}
-	if userID == "" {
-		return ErrIAMMissingParameter{Parameter: "user_id"}
-	}
-	if role == "" {
-		return ErrIAMMissingParameter{Parameter: "role"}
-	}
-
-	err := p.iamClient.User().AssignRole(ctx, tenantID, userID, role)
-	if err != nil {
-		return ErrIAMRoleAssignmentFailed{UserID: userID, RoleID: role, Reason: err.Error()}
-	}
-
-	p.logger.Info("IAM role assigned",
-		"tenant_id", tenantID,
-		"user_id", userID,
-		"role", role,
-	)
-
-	return nil
+// IAMAssignRole assigns a role to a user, as gRPC AssignRole.
+func (p *MCPServiceProvider) IAMAssignRole(ctx context.Context, tenantID string, userID string, roleID string) (interface{}, error) {
+	return p.iam.AssignRole(ctx, &platformv1.AssignIAMRoleRequest{TenantId: tenantID, UserId: userID, RoleId: roleID})
 }
 
-// IAMRevokeRole revokes a role from a user.
-func (p *MCPServiceProvider) IAMRevokeRole(ctx context.Context, tenantID string, userID string, role string) error {
-	if p.iamClient == nil {
-		return ErrIAMServiceNotAvailable{}
-	}
-
-	// Validate required parameters
-	if tenantID == "" {
-		return ErrIAMMissingParameter{Parameter: "tenant_id"}
-	}
-	if userID == "" {
-		return ErrIAMMissingParameter{Parameter: "user_id"}
-	}
-	if role == "" {
-		return ErrIAMMissingParameter{Parameter: "role"}
-	}
-
-	err := p.iamClient.User().RevokeRole(ctx, tenantID, userID, role)
-	if err != nil {
-		return ErrIAMRoleRevocationFailed{UserID: userID, RoleID: role, Reason: err.Error()}
-	}
-
-	p.logger.Info("IAM role revoked",
-		"tenant_id", tenantID,
-		"user_id", userID,
-		"role", role,
-	)
-
-	return nil
+// IAMRevokeRole revokes a role from a user, as gRPC RevokeRole.
+func (p *MCPServiceProvider) IAMRevokeRole(ctx context.Context, tenantID string, userID string, roleID string) (interface{}, error) {
+	return p.iam.RevokeRole(ctx, &platformv1.RevokeIAMRoleRequest{TenantId: tenantID, UserId: userID, RoleId: roleID})
 }
 
-// IAMCheckPermission checks if a user has permission to perform an action on a resource.
-func (p *MCPServiceProvider) IAMCheckPermission(ctx context.Context, tenantID string, userID string, resource string, action string) (bool, error) {
-	if p.pepClient == nil {
-		return false, ErrIAMServiceNotAvailable{}
-	}
-
-	// Validate required parameters
-	if tenantID == "" {
-		return false, ErrIAMMissingParameter{Parameter: "tenant_id"}
-	}
-	if userID == "" {
-		return false, ErrIAMMissingParameter{Parameter: "user_id"}
-	}
-	if resource == "" {
-		return false, ErrIAMMissingParameter{Parameter: "resource"}
-	}
-	if action == "" {
-		return false, ErrIAMMissingParameter{Parameter: "action"}
-	}
-
-	sdkReq := &sdkiam.CheckRequest{
-		Subject: sdkiam.CheckSubject{
-			ID:       userID,
-			TenantID: tenantID,
-		},
-		Resource: resource,
-		Action:   action,
-	}
-
-	resp, err := p.pepClient.Check(ctx, sdkReq)
-	if err != nil {
-		return false, ErrIAMOperationFailed{Operation: "CheckPermission", Cause: err}
-	}
-
-	return resp.Allowed, nil
+// IAMCheckPermission asks the policy decision point whether a subject may
+// act on a resource, as gRPC CheckPermission.
+func (p *MCPServiceProvider) IAMCheckPermission(ctx context.Context, req *mcp.IAMCheckPermissionRequest) (interface{}, error) {
+	return p.iam.CheckPermission(ctx, &platformv1.CheckIAMPermissionRequest{
+		TenantId:   req.TenantID,
+		SubjectId:  req.SubjectID,
+		Roles:      req.Roles,
+		Groups:     req.Groups,
+		Action:     req.Action,
+		Resource:   req.Resource,
+		Context:    req.Context,
+		Attributes: req.Attributes,
+	})
 }
 
-// IAMAuthenticate authenticates a user with credentials.
+// IAMAuthenticate refuses credential login with ErrIAMAuthenticationViaOIDC.
+// The IAM service holds no credentials to check, and the platform has no
+// Authenticate RPC: users sign in through the broker's OIDC flows, which
+// issue the platform token.
 func (p *MCPServiceProvider) IAMAuthenticate(ctx context.Context, req *mcp.IAMAuthenticateRequest) (interface{}, error) {
-	if p.iamClient == nil {
-		return nil, ErrIAMServiceNotAvailable{}
-	}
-
-	// Validate required parameters
-	if req.TenantID == "" {
-		return nil, ErrIAMMissingParameter{Parameter: "tenant_id"}
-	}
-	if req.Email == "" {
-		return nil, ErrIAMMissingParameter{Parameter: "email"}
-	}
-
-	// For now, we return basic user info after validation
-	// The actual authentication would typically return a JWT or session token
-	// This is a simplified implementation - in production, this would integrate
-	// with proper authentication flows including password verification, MFA, etc.
-
-	// Try to get the user to verify they exist
-	sdkReq := &sdkiam.ListUsersRequest{
-		PageSize: 1,
-		Filter:   req.Email,
-	}
-
-	resp, err := p.iamClient.User().List(ctx, req.TenantID, sdkReq)
-	if err != nil {
-		return nil, ErrIAMAuthenticationFailed{Reason: err.Error()}
-	}
-
-	if len(resp.Users) == 0 {
-		return nil, ErrIAMAuthenticationFailed{Reason: "user not found"}
-	}
-
-	user := resp.Users[0]
-
-	// In a real implementation, we would:
-	// 1. Verify the password hash
-	// 2. Check MFA if enabled
-	// 3. Generate a JWT or session token
-	// 4. Return the token along with user info
-
-	p.logger.Info("IAM user authenticated",
-		"tenant_id", req.TenantID,
-		"user_id", user.ID,
-		"email", req.Email,
-	)
-
-	return map[string]interface{}{
-		"authenticated": true,
-		"user":          sdkUserToMap(&user),
-		"tenant_id":     req.TenantID,
-	}, nil
+	return nil, ErrIAMAuthenticationViaOIDC{}
 }
 
-// =============================================================================
-// IAM Group Operations
-// =============================================================================
-
-// IAMCreateGroup creates a new IAM group.
+// IAMCreateGroup creates an IAM group, as gRPC CreateGroup.
 func (p *MCPServiceProvider) IAMCreateGroup(ctx context.Context, req *mcp.IAMCreateGroupRequest) (interface{}, error) {
-	if p.iamClient == nil {
-		return nil, ErrIAMServiceNotAvailable{}
-	}
-
-	// Validate required parameters
-	if req.TenantID == "" {
-		return nil, ErrIAMMissingParameter{Parameter: "tenant_id"}
-	}
-	if req.ID == "" && req.Name == "" {
-		return nil, ErrIAMMissingParameter{Parameter: "id or name"}
-	}
-
-	sdkReq := &sdkiam.CreateGroupRequest{
-		ID:          req.ID,
+	return p.iam.CreateGroup(ctx, &platformv1.CreateIAMGroupRequest{
+		TenantId:    req.TenantID,
+		Id:          req.ID,
 		Name:        req.Name,
 		Description: req.Description,
-	}
-
-	resp, err := p.iamClient.Group().Create(ctx, req.TenantID, sdkReq)
-	if err != nil {
-		return nil, ErrIAMOperationFailed{Operation: "CreateGroup", Cause: err}
-	}
-
-	p.logger.Info("IAM group created",
-		"tenant_id", req.TenantID,
-		"group_id", resp.ID,
-		"name", req.Name,
-	)
-
-	return sdkGroupToMap(resp), nil
+	})
 }
 
-// IAMDeleteGroup deletes an IAM group.
-func (p *MCPServiceProvider) IAMDeleteGroup(ctx context.Context, tenantID string, groupID string) error {
-	if p.iamClient == nil {
-		return ErrIAMServiceNotAvailable{}
-	}
-
-	// Validate required parameters
-	if tenantID == "" {
-		return ErrIAMMissingParameter{Parameter: "tenant_id"}
-	}
-	if groupID == "" {
-		return ErrIAMMissingParameter{Parameter: "group_id"}
-	}
-
-	err := p.iamClient.Group().Delete(ctx, tenantID, groupID)
-	if err != nil {
-		return ErrIAMOperationFailed{Operation: "DeleteGroup", Cause: err}
-	}
-
-	p.logger.Info("IAM group deleted",
-		"tenant_id", tenantID,
-		"group_id", groupID,
-	)
-
-	return nil
+// IAMDeleteGroup deletes an IAM group, as gRPC DeleteGroup.
+func (p *MCPServiceProvider) IAMDeleteGroup(ctx context.Context, tenantID string, groupID string) (interface{}, error) {
+	return p.iam.DeleteGroup(ctx, &platformv1.DeleteIAMGroupRequest{TenantId: tenantID, GroupId: groupID})
 }
 
-// IAMGetGroup retrieves an IAM group by ID.
+// IAMGetGroup returns an IAM group, as gRPC GetGroup.
 func (p *MCPServiceProvider) IAMGetGroup(ctx context.Context, tenantID string, groupID string) (interface{}, error) {
-	if p.iamClient == nil {
-		return nil, ErrIAMServiceNotAvailable{}
-	}
-
-	// Validate required parameters
-	if tenantID == "" {
-		return nil, ErrIAMMissingParameter{Parameter: "tenant_id"}
-	}
-	if groupID == "" {
-		return nil, ErrIAMMissingParameter{Parameter: "group_id"}
-	}
-
-	resp, err := p.iamClient.Group().Get(ctx, tenantID, groupID)
-	if err != nil {
-		return nil, ErrIAMGroupNotFound{TenantID: tenantID, GroupID: groupID}
-	}
-
-	return sdkGroupToMap(resp), nil
+	return p.iam.GetGroup(ctx, &platformv1.GetIAMGroupRequest{TenantId: tenantID, GroupId: groupID})
 }
 
-// IAMListGroups lists IAM groups for a tenant.
-func (p *MCPServiceProvider) IAMListGroups(ctx context.Context, tenantID string, limit int, offset int) (interface{}, error) {
-	if p.iamClient == nil {
-		return nil, ErrIAMServiceNotAvailable{}
-	}
-
-	// Validate required parameters
-	if tenantID == "" {
-		return nil, ErrIAMMissingParameter{Parameter: "tenant_id"}
-	}
-
-	// Apply defaults
-	if limit <= 0 {
-		limit = 50
-	}
-	if offset < 0 {
-		offset = 0
-	}
-
-	sdkReq := &sdkiam.ListGroupsRequest{
-		PageSize: limit,
-	}
-
-	resp, err := p.iamClient.Group().List(ctx, tenantID, sdkReq)
-	if err != nil {
-		return nil, ErrIAMOperationFailed{Operation: "ListGroups", Cause: err}
-	}
-
-	groups := make([]map[string]interface{}, 0, len(resp.Groups))
-	for i := range resp.Groups {
-		groups = append(groups, sdkGroupToMap(&resp.Groups[i]))
-	}
-
-	return map[string]interface{}{
-		"groups": groups,
-		"total":  resp.Pagination.TotalCount,
-		"limit":  limit,
-		"offset": offset,
-	}, nil
+// IAMListGroups lists a tenant's IAM groups, as gRPC ListGroups.
+func (p *MCPServiceProvider) IAMListGroups(ctx context.Context, tenantID string, page mcp.IAMPagination) (interface{}, error) {
+	return p.iam.ListGroups(ctx, &platformv1.ListIAMGroupsRequest{
+		TenantId:   tenantID,
+		Pagination: iamPaginationRequest(page),
+	})
 }
 
-// IAMAddGroupMember adds a user to a group.
-func (p *MCPServiceProvider) IAMAddGroupMember(ctx context.Context, tenantID string, groupID string, userID string) error {
-	if p.iamClient == nil {
-		return ErrIAMServiceNotAvailable{}
-	}
-
-	// Validate required parameters
-	if tenantID == "" {
-		return ErrIAMMissingParameter{Parameter: "tenant_id"}
-	}
-	if groupID == "" {
-		return ErrIAMMissingParameter{Parameter: "group_id"}
-	}
-	if userID == "" {
-		return ErrIAMMissingParameter{Parameter: "user_id"}
-	}
-
-	err := p.iamClient.Group().AddMember(ctx, tenantID, groupID, userID)
-	if err != nil {
-		return ErrIAMGroupMembershipFailed{GroupID: groupID, UserID: userID, Reason: err.Error()}
-	}
-
-	p.logger.Info("IAM group member added",
-		"tenant_id", tenantID,
-		"group_id", groupID,
-		"user_id", userID,
-	)
-
-	return nil
+// IAMAddGroupMember adds a user to a group, as gRPC AddGroupMember.
+func (p *MCPServiceProvider) IAMAddGroupMember(ctx context.Context, tenantID string, groupID string, userID string) (interface{}, error) {
+	return p.iam.AddGroupMember(ctx, &platformv1.AddGroupMemberRequest{TenantId: tenantID, GroupId: groupID, UserId: userID})
 }
 
-// IAMRemoveGroupMember removes a user from a group.
-func (p *MCPServiceProvider) IAMRemoveGroupMember(ctx context.Context, tenantID string, groupID string, userID string) error {
-	if p.iamClient == nil {
-		return ErrIAMServiceNotAvailable{}
-	}
-
-	// Validate required parameters
-	if tenantID == "" {
-		return ErrIAMMissingParameter{Parameter: "tenant_id"}
-	}
-	if groupID == "" {
-		return ErrIAMMissingParameter{Parameter: "group_id"}
-	}
-	if userID == "" {
-		return ErrIAMMissingParameter{Parameter: "user_id"}
-	}
-
-	err := p.iamClient.Group().RemoveMember(ctx, tenantID, groupID, userID)
-	if err != nil {
-		return ErrIAMGroupMembershipFailed{GroupID: groupID, UserID: userID, Reason: err.Error()}
-	}
-
-	p.logger.Info("IAM group member removed",
-		"tenant_id", tenantID,
-		"group_id", groupID,
-		"user_id", userID,
-	)
-
-	return nil
+// IAMRemoveGroupMember removes a user from a group, as gRPC RemoveGroupMember.
+func (p *MCPServiceProvider) IAMRemoveGroupMember(ctx context.Context, tenantID string, groupID string, userID string) (interface{}, error) {
+	return p.iam.RemoveGroupMember(ctx, &platformv1.RemoveGroupMemberRequest{TenantId: tenantID, GroupId: groupID, UserId: userID})
 }
 
-// =============================================================================
-// IAM Tenant Operations
-// =============================================================================
-
-// IAMCreateTenant creates a new IAM tenant.
+// IAMCreateTenant creates a tenant, as gRPC CreateTenant.
 func (p *MCPServiceProvider) IAMCreateTenant(ctx context.Context, req *mcp.IAMCreateTenantRequest) (interface{}, error) {
-	if p.iamClient == nil {
-		return nil, ErrIAMServiceNotAvailable{}
-	}
-
-	// Validate required parameters
-	if req.ID == "" {
-		return nil, ErrIAMMissingParameter{Parameter: "id"}
-	}
-
-	settings := make(map[string]string)
+	grpcReq := &platformv1.CreateIAMTenantRequest{Id: req.ID, Name: req.Name}
 	if req.Settings != nil {
-		if req.Settings.MFARequired {
-			settings["mfa_required"] = "true"
+		grpcReq.Settings = &platformv1.IAMTenantSettings{
+			MaxUsers:    req.Settings.MaxUsers,
+			MfaRequired: req.Settings.MFARequired,
 		}
 	}
-
-	sdkReq := &sdkiam.CreateTenantRequest{
-		ID:       req.ID,
-		Name:     req.Name,
-		Settings: settings,
-	}
-
-	resp, err := p.iamClient.Tenant().Create(ctx, sdkReq)
-	if err != nil {
-		return nil, ErrIAMOperationFailed{Operation: "CreateTenant", Cause: err}
-	}
-
-	p.logger.Info("IAM tenant created",
-		"tenant_id", resp.ID,
-		"name", req.Name,
-	)
-
-	return sdkTenantToMap(resp), nil
+	return p.iam.CreateTenant(ctx, grpcReq)
 }
 
-// IAMDeleteTenant deletes an IAM tenant.
-func (p *MCPServiceProvider) IAMDeleteTenant(ctx context.Context, tenantID string) error {
-	if p.iamClient == nil {
-		return ErrIAMServiceNotAvailable{}
-	}
-
-	// Validate required parameters
-	if tenantID == "" {
-		return ErrIAMMissingParameter{Parameter: "tenant_id"}
-	}
-
-	err := p.iamClient.Tenant().Delete(ctx, tenantID)
-	if err != nil {
-		return ErrIAMOperationFailed{Operation: "DeleteTenant", Cause: err}
-	}
-
-	p.logger.Info("IAM tenant deleted",
-		"tenant_id", tenantID,
-	)
-
-	return nil
+// IAMDeleteTenant deletes a tenant, as gRPC DeleteTenant.
+func (p *MCPServiceProvider) IAMDeleteTenant(ctx context.Context, tenantID string) (interface{}, error) {
+	return p.iam.DeleteTenant(ctx, &platformv1.DeleteIAMTenantRequest{TenantId: tenantID})
 }
 
-// IAMGetTenant retrieves an IAM tenant by ID.
+// IAMGetTenant returns a tenant, as gRPC GetTenant.
 func (p *MCPServiceProvider) IAMGetTenant(ctx context.Context, tenantID string) (interface{}, error) {
-	if p.iamClient == nil {
-		return nil, ErrIAMServiceNotAvailable{}
-	}
-
-	// Validate required parameters
-	if tenantID == "" {
-		return nil, ErrIAMMissingParameter{Parameter: "tenant_id"}
-	}
-
-	resp, err := p.iamClient.Tenant().Get(ctx, tenantID)
-	if err != nil {
-		return nil, ErrIAMTenantNotFound{TenantID: tenantID}
-	}
-
-	return sdkTenantToMap(resp), nil
+	return p.iam.GetTenant(ctx, &platformv1.GetIAMTenantRequest{TenantId: tenantID})
 }
 
-// IAMListTenants lists all IAM tenants.
-func (p *MCPServiceProvider) IAMListTenants(ctx context.Context, limit int, offset int) (interface{}, error) {
-	if p.iamClient == nil {
-		return nil, ErrIAMServiceNotAvailable{}
-	}
+// IAMListTenants lists the tenants, as gRPC ListTenants.
+func (p *MCPServiceProvider) IAMListTenants(ctx context.Context, page mcp.IAMPagination) (interface{}, error) {
+	return p.iam.ListTenants(ctx, &platformv1.ListIAMTenantsRequest{Pagination: iamPaginationRequest(page)})
+}
 
-	// Apply defaults
-	if limit <= 0 {
-		limit = 50
-	}
-	if offset < 0 {
-		offset = 0
-	}
-
-	sdkReq := &sdkiam.ListTenantsRequest{
-		PageSize: limit,
-	}
-
-	resp, err := p.iamClient.Tenant().List(ctx, sdkReq)
-	if err != nil {
-		return nil, ErrIAMOperationFailed{Operation: "ListTenants", Cause: err}
-	}
-
-	tenants := make([]map[string]interface{}, 0, len(resp.Tenants))
-	for i := range resp.Tenants {
-		tenants = append(tenants, sdkTenantToMap(&resp.Tenants[i]))
-	}
-
-	return map[string]interface{}{
-		"tenants": tenants,
-		"total":   resp.Pagination.TotalCount,
-		"limit":   limit,
-		"offset":  offset,
-	}, nil
+// iamPaginationRequest is the gRPC PaginationRequest of an IAM list tool's page.
+func iamPaginationRequest(page mcp.IAMPagination) *platformv1.PaginationRequest {
+	return &platformv1.PaginationRequest{Page: page.Page, PageSize: page.PageSize}
 }
 
 // =============================================================================
 // IAM Token Operations
 // =============================================================================
 
-// IAMCreateToken creates a new authentication token for a user.
-// Note: This is a simplified implementation. In production, this would integrate
-// with proper token generation flows including JWT signing and session management.
+// IAMCreateToken refuses token issuance with ErrIAMTokenViaOIDC, the refusal
+// the gRPC and QUIC token-create operations give: the SDK IAM client cannot
+// issue tokens; platform tokens come from the broker's OIDC flows.
 func (p *MCPServiceProvider) IAMCreateToken(ctx context.Context, req *mcp.IAMCreateTokenRequest) (interface{}, error) {
-	if p.iamClient == nil {
-		return nil, ErrIAMServiceNotAvailable{}
-	}
-
-	// Validate required parameters
-	if req.TenantID == "" {
-		return nil, ErrIAMMissingParameter{Parameter: "tenant_id"}
-	}
-	if req.UserID == "" {
-		return nil, ErrIAMMissingParameter{Parameter: "user_id"}
-	}
-
-	// Verify the user exists
-	user, err := p.iamClient.User().Get(ctx, req.TenantID, req.UserID)
-	if err != nil {
-		return nil, ErrIAMUserNotFound{TenantID: req.TenantID, UserID: req.UserID}
-	}
-
-	// Generate a token ID
-	tokenBytes := make([]byte, 32)
-	if _, err := rand.Read(tokenBytes); err != nil {
-		return nil, ErrIAMOperationFailed{Operation: "CreateToken", Cause: err}
-	}
-
-	// Calculate expiration time
-	expiresIn := req.ExpiresIn
-	if expiresIn <= 0 {
-		expiresIn = 3600 // Default to 1 hour
-	}
-	expiresAt := time.Now().Add(time.Duration(expiresIn) * time.Second)
-
-	p.logger.Info("IAM token created",
-		"tenant_id", req.TenantID,
-		"user_id", req.UserID,
-		"expires_at", expiresAt.Format(time.RFC3339),
-	)
-
-	// Return token information
-	// Note: In production, this would return an actual JWT or opaque token
-	return map[string]interface{}{
-		"token_id":    encodeHex(tokenBytes),
-		"tenant_id":   req.TenantID,
-		"user_id":     req.UserID,
-		"user_email":  user.Email,
-		"scopes":      req.Scopes,
-		"description": req.Description,
-		"expires_at":  expiresAt.Format(time.RFC3339),
-		"created_at":  time.Now().Format(time.RFC3339),
-	}, nil
+	return nil, p.iamTokens.Create()
 }
 
-// IAMRevokeToken revokes an authentication token.
+// IAMRevokeToken refuses token revocation with ErrIAMTokenViaOIDC, the
+// refusal the gRPC and QUIC token-revoke operations give: the SDK IAM client
+// cannot revoke tokens; platform tokens are revoked by the broker's OIDC flows.
 func (p *MCPServiceProvider) IAMRevokeToken(ctx context.Context, tokenID string) error {
-	if p.iamClient == nil {
-		return ErrIAMServiceNotAvailable{}
-	}
-
-	// Validate required parameters
-	if tokenID == "" {
-		return ErrIAMMissingParameter{Parameter: "token_id"}
-	}
-
-	// Note: In a real implementation, this would:
-	// 1. Look up the token in a token store
-	// 2. Mark the token as revoked
-	// 3. Add it to a revocation list or delete it
-	//
-	// Since the current IAM proto doesn't have dedicated token management RPCs,
-	// this is a placeholder that logs the revocation request.
-
-	p.logger.Info("IAM token revoked",
-		"token_id", tokenID,
-	)
-
-	return nil
+	return p.iamTokens.Revoke()
 }
 
-// IAMVerifyToken verifies an authentication token and returns its claims.
+// IAMVerifyToken verifies a token through IAMTokenService.Verify, the function
+// the gRPC and QUIC verify operations call. The result uses the
+// VerifyIAMTokenResponse JSON names: valid, plus reason for a rejected token,
+// or user_id, tenant_id, scopes and expires_at for a valid one. The token is
+// never echoed or logged.
 func (p *MCPServiceProvider) IAMVerifyToken(ctx context.Context, token string) (interface{}, error) {
-	if p.iamClient == nil {
-		return nil, ErrIAMServiceNotAvailable{}
+	verification, err := p.iamTokens.Verify(ctx, token)
+	if err != nil {
+		return nil, err
 	}
-
-	// Validate required parameters
-	if token == "" {
-		return nil, ErrIAMMissingParameter{Parameter: "token"}
+	if !verification.Valid {
+		return map[string]interface{}{
+			"valid":  false,
+			"reason": string(verification.Reason),
+		}, nil
 	}
-
-	// Note: In a real implementation, this would:
-	// 1. Decode and verify the JWT signature
-	// 2. Check if the token is in the revocation list
-	// 3. Validate expiration and other claims
-	// 4. Return the token claims
-	//
-	// Since the current IAM proto doesn't have dedicated token verification RPCs,
-	// this is a simplified implementation that returns basic verification status.
-
-	p.logger.Info("IAM token verification requested",
-		"token_length", len(token),
-	)
-
 	return map[string]interface{}{
-		"valid":       true,
-		"verified_at": time.Now().Format(time.RFC3339),
-		"message":     "token verification is a placeholder - implement JWT validation in production",
+		"valid":      true,
+		"user_id":    verification.Claims.Subject,
+		"tenant_id":  verification.Claims.TenantID,
+		"scopes":     verification.Claims.Scopes,
+		"expires_at": verification.Claims.ExpiresAt,
 	}, nil
 }
 
@@ -2580,7 +1947,7 @@ func (p *MCPServiceProvider) KMSGetKey(ctx context.Context, keyID string, versio
 		Version: version,
 	})
 	if err != nil {
-		return nil, ErrKMSKeyNotFound{KeyID: keyID}
+		return nil, kmsLookupError("GetKey", ErrKMSKeyNotFound{KeyID: keyID}, err)
 	}
 
 	return resp.Key, nil
@@ -2771,20 +2138,22 @@ func (p *MCPServiceProvider) KMSVerify(ctx context.Context, req *mcp.KMSVerifyRe
 
 // KMSGenerateRandom generates cryptographically secure random bytes.
 func (p *MCPServiceProvider) KMSGenerateRandom(ctx context.Context, numBytes int) ([]byte, error) {
+	if p.cryptoService == nil {
+		return nil, ErrServiceNotAvailable{Service: "kms"}
+	}
+
 	if numBytes <= 0 {
 		return nil, ErrKMSInvalidParameter{Parameter: "num_bytes", Reason: "number of bytes must be positive"}
 	}
 
-	if numBytes > 1024 {
-		return nil, ErrKMSInvalidParameter{Parameter: "num_bytes", Reason: "maximum 1024 bytes allowed"}
-	}
-
-	randomBytes := make([]byte, numBytes)
-	if _, err := rand.Read(randomBytes); err != nil {
+	// The KMS answers, as it does for gRPC GenerateRandom; the SDK enforces
+	// its own size limit.
+	resp, err := p.cryptoService.GenerateRandom(ctx, &baasservice.GenerateRandomRequest{NumBytes: numBytes})
+	if err != nil {
 		return nil, ErrKMSRandomGenerationFailed{Cause: err}
 	}
 
-	return randomBytes, nil
+	return resp.RandomBytes, nil
 }
 
 // KMSGenerateDataKey generates a data encryption key (DEK) for envelope encryption.
@@ -2932,120 +2301,30 @@ func parseUint64(s string) (uint64, error) {
 }
 
 // parsePlatformKeyAlgorithm converts a string algorithm to platformv1.KeyAlgorithm.
-func parsePlatformKeyAlgorithm(alg string) platformv1.KeyAlgorithm {
+// An empty name leaves the CA's default; a name it does not know is refused,
+// as the gRPC service refuses an unknown enum, rather than issued as the
+// default.
+func parsePlatformKeyAlgorithm(alg string) (platformv1.KeyAlgorithm, error) {
 	switch alg {
+	case "":
+		return platformv1.KeyAlgorithm_KEY_ALGORITHM_UNSPECIFIED, nil
 	case "RSA", "RSA2048", "RSA-2048":
-		return platformv1.KeyAlgorithm_KEY_ALGORITHM_RSA_2048
+		return platformv1.KeyAlgorithm_KEY_ALGORITHM_RSA_2048, nil
 	case "RSA3072", "RSA-3072":
-		return platformv1.KeyAlgorithm_KEY_ALGORITHM_RSA_3072
+		return platformv1.KeyAlgorithm_KEY_ALGORITHM_RSA_3072, nil
 	case "RSA4096", "RSA-4096":
-		return platformv1.KeyAlgorithm_KEY_ALGORITHM_RSA_4096
+		return platformv1.KeyAlgorithm_KEY_ALGORITHM_RSA_4096, nil
 	case "ECDSA", "EC", "ECDSA-P256", "P256":
-		return platformv1.KeyAlgorithm_KEY_ALGORITHM_ECDSA_P256
+		return platformv1.KeyAlgorithm_KEY_ALGORITHM_ECDSA_P256, nil
 	case "ECDSA-P384", "P384":
-		return platformv1.KeyAlgorithm_KEY_ALGORITHM_ECDSA_P384
+		return platformv1.KeyAlgorithm_KEY_ALGORITHM_ECDSA_P384, nil
 	case "ECDSA-P521", "P521":
-		return platformv1.KeyAlgorithm_KEY_ALGORITHM_ECDSA_P521
+		return platformv1.KeyAlgorithm_KEY_ALGORITHM_ECDSA_P521, nil
 	case "ED25519":
-		return platformv1.KeyAlgorithm_KEY_ALGORITHM_ED25519
+		return platformv1.KeyAlgorithm_KEY_ALGORITHM_ED25519, nil
 	default:
-		return platformv1.KeyAlgorithm_KEY_ALGORITHM_UNSPECIFIED
+		return platformv1.KeyAlgorithm_KEY_ALGORITHM_UNSPECIFIED, ErrCAInvalidKeyAlgorithm{Algorithm: alg}
 	}
-}
-
-// parsePortState converts a string state to policy.PortState.
-func parsePortState(state string) (policy.PortState, error) {
-	normalizedState := strings.ToLower(strings.TrimSpace(state))
-	switch normalizedState {
-	case "unconnected":
-		return policy.PortStateUnconnected, nil
-	case "provisioning":
-		return policy.PortStateProvisioning, nil
-	case "enrolled":
-		return policy.PortStateEnrolled, nil
-	case "unauthorized":
-		return policy.PortStateUnauthorized, nil
-	case "authenticating":
-		return policy.PortStateAuthenticating, nil
-	case "authorized":
-		return policy.PortStateAuthorized, nil
-	case "quarantined":
-		return policy.PortStateQuarantined, nil
-	case "blocked":
-		return policy.PortStateBlocked, nil
-	default:
-		return policy.PortStateUnconnected, ErrSDNInvalidPortState{State: state}
-	}
-}
-
-// sdkUserToMap converts an IAM SDK User to a map for JSON serialization.
-func sdkUserToMap(u *sdkiam.User) map[string]interface{} {
-	if u == nil {
-		return nil
-	}
-	result := map[string]interface{}{
-		"id":        u.ID,
-		"tenant_id": u.TenantID,
-		"email":     u.Email,
-	}
-
-	if u.DisplayName != "" {
-		result["name"] = u.DisplayName
-	}
-	if len(u.Roles) > 0 {
-		result["roles"] = u.Roles
-	}
-	if len(u.Groups) > 0 {
-		result["groups"] = u.Groups
-	}
-	if len(u.Metadata) > 0 {
-		result["attributes"] = u.Metadata
-	}
-	if len(u.AuthMethods) > 0 {
-		// See pkg/webservice/v1/rest/iam/handlers.go: MFAEnabled is gone in
-		// quicbaas v0.8.0; AuthMethods is the account's permitted-method policy.
-		result["mfa_verified"] = len(u.AuthMethods) > 0
-	}
-	if !u.CreatedAt.IsZero() {
-		result["created_at"] = u.CreatedAt.Format(time.RFC3339)
-	}
-	if !u.UpdatedAt.IsZero() {
-		result["updated_at"] = u.UpdatedAt.Format(time.RFC3339)
-	}
-	if u.LastLoginAt != nil {
-		result["last_auth"] = u.LastLoginAt.Format(time.RFC3339)
-	}
-
-	return result
-}
-
-// sdkRoleToMap converts an IAM SDK Role to a map for JSON serialization.
-func sdkRoleToMap(r *sdkiam.Role) map[string]interface{} {
-	if r == nil {
-		return nil
-	}
-	result := map[string]interface{}{
-		"id":        r.ID,
-		"tenant_id": r.TenantID,
-	}
-
-	if r.Name != "" {
-		result["name"] = r.Name
-	}
-	if r.Description != "" {
-		result["description"] = r.Description
-	}
-	if len(r.Permissions) > 0 {
-		result["permissions"] = r.Permissions
-	}
-	if !r.CreatedAt.IsZero() {
-		result["created_at"] = r.CreatedAt.Format(time.RFC3339)
-	}
-	if !r.UpdatedAt.IsZero() {
-		result["updated_at"] = r.UpdatedAt.Format(time.RFC3339)
-	}
-
-	return result
 }
 
 // parseKMSKeyUsage converts a string key usage to baasservice.KeyUsage.
@@ -3167,57 +2446,6 @@ func buildDataKeyAttributes(algorithm string) (*xkmssdk.KeyAttributes, error) {
 	}
 
 	return attrs, nil
-}
-
-// sdkGroupToMap converts an IAM SDK Group to a map for JSON serialization.
-func sdkGroupToMap(g *sdkiam.Group) map[string]interface{} {
-	if g == nil {
-		return nil
-	}
-	result := map[string]interface{}{
-		"id":        g.ID,
-		"tenant_id": g.TenantID,
-	}
-
-	if g.Name != "" {
-		result["name"] = g.Name
-	}
-	if g.Description != "" {
-		result["description"] = g.Description
-	}
-	if !g.CreatedAt.IsZero() {
-		result["created_at"] = g.CreatedAt.Format(time.RFC3339)
-	}
-	if !g.UpdatedAt.IsZero() {
-		result["updated_at"] = g.UpdatedAt.Format(time.RFC3339)
-	}
-
-	return result
-}
-
-// sdkTenantToMap converts an IAM SDK Tenant to a map for JSON serialization.
-func sdkTenantToMap(t *sdkiam.Tenant) map[string]interface{} {
-	if t == nil {
-		return nil
-	}
-	result := map[string]interface{}{
-		"id": t.ID,
-	}
-
-	if t.Name != "" {
-		result["name"] = t.Name
-	}
-	if len(t.Settings) > 0 {
-		result["settings"] = t.Settings
-	}
-	if !t.CreatedAt.IsZero() {
-		result["created_at"] = t.CreatedAt.Format(time.RFC3339)
-	}
-	if !t.UpdatedAt.IsZero() {
-		result["updated_at"] = t.UpdatedAt.Format(time.RFC3339)
-	}
-
-	return result
 }
 
 // encodeHex converts bytes to a hex-encoded string.
@@ -3406,7 +2634,7 @@ func (m *MCPServiceProvider) ContainerLogs(ctx context.Context, id string, follo
 	reader, err := streamer.Logs(ctx, id, opts)
 	if err != nil {
 		m.logger.Error("failed to get container logs", "container_id", id, "error", err)
-		return "", ErrContainerOperationFailed{Operation: "logs", Cause: err}
+		return "", classifyComputeErr(ErrContainerOperationFailed{Operation: "logs", Cause: err}, containerLogsErrToStatus)
 	}
 	defer reader.Close()
 
@@ -3511,257 +2739,17 @@ func (m *MCPServiceProvider) SetComputeOrchestrator(orchestrator compute.Orchest
 	m.computeOrchestrator = orchestrator
 }
 
-// =============================================================================
-// Overlay Network Operations - Stub implementations pending overlay service integration
-// =============================================================================
-
-// OverlayStatus returns the status of the overlay network.
-func (m *MCPServiceProvider) OverlayStatus(ctx context.Context) (interface{}, error) {
-	return nil, ErrOverlayOperationNotImplemented{Operation: "OverlayStatus"}
-}
-
-// OverlayVTEPList lists all VXLAN Tunnel Endpoints.
-func (m *MCPServiceProvider) OverlayVTEPList(ctx context.Context) ([]interface{}, error) {
-	return nil, ErrOverlayOperationNotImplemented{Operation: "OverlayVTEPList"}
-}
-
-// OverlayVTEPGet retrieves a specific VTEP by node ID.
-func (m *MCPServiceProvider) OverlayVTEPGet(ctx context.Context, nodeID string) (interface{}, error) {
-	return nil, ErrOverlayOperationNotImplemented{Operation: "OverlayVTEPGet"}
-}
-
-// OverlayVNIList lists all Virtual Network Identifiers.
-func (m *MCPServiceProvider) OverlayVNIList(ctx context.Context) ([]interface{}, error) {
-	return nil, ErrOverlayOperationNotImplemented{Operation: "OverlayVNIList"}
-}
-
-// OverlayVNICreate creates a new VNI.
-func (m *MCPServiceProvider) OverlayVNICreate(ctx context.Context, vni uint32, vlan uint16, name string) (interface{}, error) {
-	return nil, ErrOverlayOperationNotImplemented{Operation: "OverlayVNICreate"}
-}
-
-// OverlayVNIDelete deletes a VNI.
-func (m *MCPServiceProvider) OverlayVNIDelete(ctx context.Context, vni uint32) error {
-	return ErrOverlayOperationNotImplemented{Operation: "OverlayVNIDelete"}
-}
-
-// OverlayTunnelList lists all overlay tunnels for a VNI.
-func (m *MCPServiceProvider) OverlayTunnelList(ctx context.Context, vni uint32) ([]interface{}, error) {
-	return nil, ErrOverlayOperationNotImplemented{Operation: "OverlayTunnelList"}
-}
-
-// OverlayMACList lists all MAC addresses in the overlay network.
-func (m *MCPServiceProvider) OverlayMACList(ctx context.Context, vni uint32) ([]interface{}, error) {
-	return nil, ErrOverlayOperationNotImplemented{Operation: "OverlayMACList"}
-}
-
-// OverlayMACForget removes a MAC address entry from the overlay network.
-func (m *MCPServiceProvider) OverlayMACForget(ctx context.Context, mac string, vni uint32) error {
-	return ErrOverlayOperationNotImplemented{Operation: "OverlayMACForget"}
-}
+// The overlay network operations are served by the embedded overlayTools
+// (overlay_mcp_bindings.go).
 
 // =============================================================================
 // Gateway Operations - Stub implementations pending gateway service integration
 // =============================================================================
 
-// GatewayStatus returns the status of the gateway.
-func (m *MCPServiceProvider) GatewayStatus(ctx context.Context) (interface{}, error) {
-	return nil, ErrGatewayOperationNotImplemented{Operation: "GatewayStatus"}
-}
-
-// GatewayModeSet sets the gateway operating modes.
-func (m *MCPServiceProvider) GatewayModeSet(ctx context.Context, modes []string) (interface{}, error) {
-	return nil, ErrGatewayOperationNotImplemented{Operation: "GatewayModeSet"}
-}
-
-// GatewayBGPStatus returns the BGP status of the gateway.
-func (m *MCPServiceProvider) GatewayBGPStatus(ctx context.Context) (interface{}, error) {
-	return nil, ErrGatewayOperationNotImplemented{Operation: "GatewayBGPStatus"}
-}
-
-// GatewayBGPPeers lists all BGP peers.
-func (m *MCPServiceProvider) GatewayBGPPeers(ctx context.Context) ([]interface{}, error) {
-	return nil, ErrGatewayOperationNotImplemented{Operation: "GatewayBGPPeers"}
-}
-
-// GatewayBGPAnnounce announces a prefix via BGP.
-func (m *MCPServiceProvider) GatewayBGPAnnounce(ctx context.Context, prefix string, nextHop string) error {
-	return ErrGatewayOperationNotImplemented{Operation: "GatewayBGPAnnounce"}
-}
-
-// GatewayBGPWithdraw withdraws a prefix from BGP.
-func (m *MCPServiceProvider) GatewayBGPWithdraw(ctx context.Context, prefix string) error {
-	return ErrGatewayOperationNotImplemented{Operation: "GatewayBGPWithdraw"}
-}
-
-// GatewayBGPPrefixes lists all announced BGP prefixes.
-func (m *MCPServiceProvider) GatewayBGPPrefixes(ctx context.Context) ([]interface{}, error) {
-	return nil, ErrGatewayOperationNotImplemented{Operation: "GatewayBGPPrefixes"}
-}
-
-// requireIPAMService returns an error when the IPAM allocator is not configured.
-func (m *MCPServiceProvider) requireIPAMService() error {
-	if m.ipamService == nil {
-		return ErrServiceNotAvailable{Service: "ipam"}
-	}
-	return nil
-}
-
-// GatewayIPAMPools lists IPAM pools, optionally filtered by zone.
-func (m *MCPServiceProvider) GatewayIPAMPools(ctx context.Context, filterZone string) ([]interface{}, error) {
-	if err := m.requireIPAMService(); err != nil {
-		return nil, err
-	}
-	var pools []*ipam.Pool
-	var err error
-	if filterZone != "" {
-		pools, err = m.ipamService.ListPoolsByZone(ctx, filterZone)
-	} else {
-		pools, err = m.ipamService.ListPools(ctx)
-	}
-	if err != nil {
-		return nil, err
-	}
-	out := make([]interface{}, 0, len(pools))
-	for _, p := range pools {
-		out = append(out, p)
-	}
-	return out, nil
-}
-
-// GatewayIPAMPoolGet retrieves a single IPAM pool by ID.
-func (m *MCPServiceProvider) GatewayIPAMPoolGet(ctx context.Context, poolID string) (interface{}, error) {
-	if err := m.requireIPAMService(); err != nil {
-		return nil, err
-	}
-	return m.ipamService.GetPool(ctx, poolID)
-}
-
-// GatewayIPAMAllocate allocates an IP address from a pool.
-func (m *MCPServiceProvider) GatewayIPAMAllocate(ctx context.Context, poolID string, deviceID string, hostname string) (interface{}, error) {
-	if err := m.requireIPAMService(); err != nil {
-		return nil, err
-	}
-	alloc, err := m.ipamService.Allocate(ctx, &ipam.AllocationRequest{
-		PoolID:   poolID,
-		DeviceID: deviceID,
-		Hostname: hostname,
-	})
-	if err != nil {
-		return nil, err
-	}
-	return alloc, nil
-}
-
-// GatewayIPAMRelease releases an IP address back to the pool.
-func (m *MCPServiceProvider) GatewayIPAMRelease(ctx context.Context, ipStr string) error {
-	if err := m.requireIPAMService(); err != nil {
-		return err
-	}
-	addr, parseErr := netip.ParseAddr(ipStr)
-	if parseErr != nil {
-		return &WrappedError{Msg: fmt.Sprintf("invalid ip address %q", ipStr), Err: parseErr}
-	}
-	return m.ipamService.Release(ctx, addr)
-}
-
-// GatewayIPAMAllocations lists all IP address allocations for a pool.
-func (m *MCPServiceProvider) GatewayIPAMAllocations(ctx context.Context, poolID string) ([]interface{}, error) {
-	if err := m.requireIPAMService(); err != nil {
-		return nil, err
-	}
-	allocs, err := m.ipamService.GetAllocationsByPool(ctx, poolID)
-	if err != nil {
-		return nil, err
-	}
-	out := make([]interface{}, 0, len(allocs))
-	for _, a := range allocs {
-		out = append(out, a)
-	}
-	return out, nil
-}
-
-// GatewayIPAMPoolCreate creates a new IPAM pool.
-func (m *MCPServiceProvider) GatewayIPAMPoolCreate(ctx context.Context, req *mcp.IPAMPoolCreateRequest) (interface{}, error) {
-	if err := m.requireIPAMService(); err != nil {
-		return nil, err
-	}
-	cidr, err := netip.ParsePrefix(req.CIDR)
-	if err != nil {
-		return nil, &WrappedError{Msg: fmt.Sprintf("invalid cidr %q", req.CIDR), Err: err}
-	}
-	pool := &ipam.Pool{
-		ID:                   uuid.New().String(),
-		Name:                 req.Name,
-		CIDR:                 cidr.Masked(),
-		Zone:                 req.Zone,
-		Description:          req.Description,
-		DefaultLeaseDuration: time.Duration(req.LeaseDurationSeconds) * time.Second,
-	}
-	if req.Gateway != "" {
-		gw, parseErr := netip.ParseAddr(req.Gateway)
-		if parseErr != nil {
-			return nil, &WrappedError{Msg: fmt.Sprintf("invalid gateway %q", req.Gateway), Err: parseErr}
-		}
-		pool.Gateway = gw
-	}
-	reserved, rangeStart, rangeEnd, err := ipam.ParseWindow(req.Reserved, req.RangeStart, req.RangeEnd)
-	if err != nil {
-		return nil, err
-	}
-	pool.Reserved = reserved
-	pool.RangeStart = rangeStart
-	pool.RangeEnd = rangeEnd
-	if err := m.ipamService.CreatePool(ctx, pool); err != nil {
-		return nil, err
-	}
-	return m.ipamService.GetPool(ctx, pool.ID)
-}
-
-// GatewayIPAMPoolUpdate updates mutable fields of an IPAM pool. CIDR is immutable.
-func (m *MCPServiceProvider) GatewayIPAMPoolUpdate(ctx context.Context, poolID string, req *mcp.IPAMPoolUpdateRequest) (interface{}, error) {
-	if err := m.requireIPAMService(); err != nil {
-		return nil, err
-	}
-	pool, err := m.ipamService.GetPool(ctx, poolID)
-	if err != nil {
-		return nil, err
-	}
-	if req.Name != "" {
-		pool.Name = req.Name
-	}
-	if req.Zone != "" {
-		pool.Zone = req.Zone
-	}
-	if req.Description != "" {
-		pool.Description = req.Description
-	}
-	if req.Gateway != "" {
-		gw, parseErr := netip.ParseAddr(req.Gateway)
-		if parseErr != nil {
-			return nil, &WrappedError{Msg: fmt.Sprintf("invalid gateway %q", req.Gateway), Err: parseErr}
-		}
-		pool.Gateway = gw
-	}
-	if req.LeaseDurationSeconds > 0 {
-		pool.DefaultLeaseDuration = time.Duration(req.LeaseDurationSeconds) * time.Second
-	}
-	if err := pool.ApplyWindowUpdate(req.Reserved, req.RangeStart, req.RangeEnd); err != nil {
-		return nil, err
-	}
-	if err := m.ipamService.UpdatePool(ctx, pool); err != nil {
-		return nil, err
-	}
-	return m.ipamService.GetPool(ctx, poolID)
-}
-
-// GatewayIPAMPoolDelete deletes an IPAM pool.
-func (m *MCPServiceProvider) GatewayIPAMPoolDelete(ctx context.Context, poolID string) error {
-	if err := m.requireIPAMService(); err != nil {
-		return err
-	}
-	return m.ipamService.DeletePool(ctx, poolID)
-}
+// GatewayStatus and GatewayModeSet come from the embedded gatewayStatusTools
+// (gateway_status_bindings.go), the BGP tools from the embedded
+// gatewayBGPTools (gateway_bgp_bindings.go) and the IPAM tools from the
+// embedded gatewayIPAMTools (gateway_ipam_tools.go).
 
 // =============================================================================
 // Network Zone Operations
@@ -3859,11 +2847,16 @@ func (p *MCPServiceProvider) TPMInfo(ctx context.Context) (interface{}, error) {
 
 	info, err := p.tpm2Service.Info()
 	if err != nil {
-		return nil, err
+		return nil, mapTPMError(err)
 	}
 
 	result := map[string]interface{}{
-		"info": info,
+		"info":      info,
+		"version":   tpmattrs.Version,
+		"pcr_banks": tpmattrs.ActivePCRBanks(p.tpm2Service),
+	}
+	for key, value := range tpmsrk.InfoProperties(p.tpm2Service) {
+		result[key] = value
 	}
 
 	props, err := p.tpm2Service.FixedProperties()
@@ -3876,6 +2869,8 @@ func (p *MCPServiceProvider) TPMInfo(ctx context.Context) (interface{}, error) {
 		result["vendor_id"] = props.VendorID
 		result["fips_mode"] = props.Fips1402
 		result["max_nvram_size"] = props.NVBufferMax
+		result["lockout_counter"] = props.LockoutCounter
+		result["max_auth_fail"] = props.MaxAuthFail
 	}
 
 	cfg := p.tpm2Service.Config()
@@ -3896,14 +2891,14 @@ func (p *MCPServiceProvider) TPMProvision(ctx context.Context, ownerPassword str
 	if ownerPassword != "" {
 		held, err := xkmssdk.NewPasswordFromString(ownerPassword)
 		if err != nil {
-			return nil, err
+			return nil, mapTPMError(err)
 		}
 		ownerPwd = held
 	}
 
 	_, err := p.tpm2Service.ProvisionOwner(ownerPwd)
 	if err != nil {
-		return nil, err
+		return nil, mapTPMError(err)
 	}
 
 	return map[string]interface{}{
@@ -3923,8 +2918,8 @@ func (p *MCPServiceProvider) TPMClear(ctx context.Context, ownerPassword string)
 		lockoutAuth = []byte(ownerPassword)
 	}
 
-	if err := p.tpm2Service.Clear(lockoutAuth); err != nil {
-		return nil, err
+	if err := tpmclear.Clear(p.tpm2Service, lockoutAuth); err != nil {
+		return nil, mapTPMError(err)
 	}
 
 	return map[string]interface{}{
@@ -3941,7 +2936,7 @@ func (p *MCPServiceProvider) TPMGetEK(ctx context.Context) (interface{}, error) 
 
 	ekAttrs, err := p.tpm2Service.EKAttributes()
 	if err != nil {
-		return nil, err
+		return nil, mapTPMError(err)
 	}
 
 	return map[string]interface{}{
@@ -3959,7 +2954,7 @@ func (p *MCPServiceProvider) TPMGetEKCert(ctx context.Context) (interface{}, err
 
 	cert, err := p.tpm2Service.EKCertificate()
 	if err != nil {
-		return nil, err
+		return nil, mapTPMError(err)
 	}
 
 	return map[string]interface{}{
@@ -3978,7 +2973,7 @@ func (p *MCPServiceProvider) TPMImportEKCert(ctx context.Context, certDER []byte
 	}
 
 	if err := p.tpm2Service.ProvisionEKCert(nil, certDER); err != nil {
-		return nil, err
+		return nil, mapTPMError(err)
 	}
 
 	return map[string]interface{}{
@@ -3993,13 +2988,9 @@ func (p *MCPServiceProvider) TPMCreateEK(ctx context.Context) (interface{}, erro
 		return nil, ErrServiceNotAvailable{Service: "tpm"}
 	}
 
-	ekAttrs, err := p.tpm2Service.EKAttributes()
+	ekAttrs, err := tpmek.Create(p.tpm2Service)
 	if err != nil {
-		return nil, err
-	}
-
-	if err := p.tpm2Service.CreateEK(ekAttrs); err != nil {
-		return nil, err
+		return nil, mapTPMError(err)
 	}
 
 	return map[string]interface{}{
@@ -4034,7 +3025,7 @@ func (p *MCPServiceProvider) TPMGetSRK(ctx context.Context, handle uint32) (inte
 		return nil, ErrServiceNotAvailable{Service: "tpm"}
 	}
 
-	srkAttrs, err := tpmsrk.Resolve(p.tpm2Service, handle)
+	srkAttrs, err := resolveTPMSRK(p.tpm2Service, handle)
 	if err != nil {
 		return nil, err
 	}
@@ -4054,11 +3045,11 @@ func (p *MCPServiceProvider) TPMCreateSRK(ctx context.Context) (interface{}, err
 
 	srkAttrs, err := p.tpm2Service.SSRKAttributes()
 	if err != nil {
-		return nil, err
+		return nil, mapTPMError(err)
 	}
 
 	if err := p.tpm2Service.CreateSRK(srkAttrs); err != nil {
-		return nil, err
+		return nil, mapTPMError(err)
 	}
 
 	return map[string]interface{}{
@@ -4093,7 +3084,7 @@ func (p *MCPServiceProvider) TPMGetIAK(ctx context.Context) (interface{}, error)
 		return nil, ErrServiceNotAvailable{Service: "tpm"}
 	}
 
-	iakAttrs, err := p.tpm2Service.IAKAttributes()
+	iakAttrs, err := tpmIAKAttributes(p.tpm2Service)
 	if err != nil {
 		return nil, err
 	}
@@ -4113,12 +3104,12 @@ func (p *MCPServiceProvider) TPMCreateIAK(ctx context.Context) (interface{}, err
 
 	ekAttrs, err := p.tpm2Service.EKAttributes()
 	if err != nil {
-		return nil, err
+		return nil, mapTPMError(err)
 	}
 
 	iakAttrs, err := p.tpm2Service.CreateIAK(ekAttrs, nil)
 	if err != nil {
-		return nil, err
+		return nil, mapTPMError(err)
 	}
 
 	return map[string]interface{}{
@@ -4128,56 +3119,27 @@ func (p *MCPServiceProvider) TPMCreateIAK(ctx context.Context) (interface{}, err
 	}, nil
 }
 
-// TPMDeleteIAK deletes the Initial Attestation Key.
-func (p *MCPServiceProvider) TPMDeleteIAK(ctx context.Context) (interface{}, error) {
-	if p.tpm2Service == nil {
-		return nil, ErrServiceNotAvailable{Service: "tpm"}
-	}
-
-	iakAttrs, err := p.tpm2Service.IAKAttributes()
-	if err != nil {
-		return nil, err
-	}
-
-	p.tpm2Service.Flush(iakAttrs.TPMAttributes.Handle)
-
-	return map[string]interface{}{
-		"success": true,
-		"message": "IAK handle flushed",
-	}, nil
+// tpmQuotes serves the quote tools on the provider's TPM, so an MCP quote is
+// bound to its connection and verified exactly as on every other transport
+// (#482).
+func (p *MCPServiceProvider) tpmQuotes() tpmQuoteTools {
+	return tpmQuoteTools{tpm: p.tpm2Service, logger: p.logger}
 }
 
-// TPMQuote generates a TPM quote.
+// TPMQuote generates a TPM quote over SHA-256(nonce || channel_binding),
+// where channel_binding is the TLS exporter of the MCP connection the
+// request arrived on. MCP over stdio has no TLS connection and is refused.
 func (p *MCPServiceProvider) TPMQuote(ctx context.Context, nonce []byte, pcrs []int) (interface{}, error) {
-	if p.tpm2Service == nil {
-		return nil, ErrServiceNotAvailable{Service: "tpm"}
-	}
-
-	pcrIndices := make([]uint, len(pcrs))
-	for i, pcr := range pcrs {
-		pcrIndices[i] = uint(pcr)
-	}
-
-	quote, err := p.tpm2Service.Quote(pcrIndices, nonce)
-	if err != nil {
-		return nil, err
-	}
-
-	return map[string]interface{}{
-		"quote":     base64.StdEncoding.EncodeToString(quote.Quoted),
-		"signature": base64.StdEncoding.EncodeToString(quote.Signature),
-		"event_log": base64.StdEncoding.EncodeToString(quote.EventLog),
-	}, nil
+	return p.tpmQuotes().quote(ctx, nonce, pcrs)
 }
 
-// TPMVerifyQuote verifies a TPM quote.
-func (p *MCPServiceProvider) TPMVerifyQuote(ctx context.Context, quote []byte, signature []byte, nonce []byte) (interface{}, error) {
-	if p.tpm2Service == nil {
-		return nil, ErrServiceNotAvailable{Service: "tpm"}
-	}
-
-	// Quote verification is not yet implemented in the gRPC service either
-	return nil, ErrTPMOperationNotImplemented{Operation: "VerifyQuote"}
+// TPMVerifyQuote verifies a TPM quote against req.AKPublic, or the platform
+// IAK when it is empty, under the scheme req.SignatureAlgorithm declares (as
+// tpm_quote returned it). A non-empty req.ChannelBinding is the binding the
+// quote was produced under; the quote must then carry
+// SHA-256(nonce || channel_binding).
+func (p *MCPServiceProvider) TPMVerifyQuote(ctx context.Context, req *mcp.TPMVerifyQuoteRequest) (interface{}, error) {
+	return p.tpmQuotes().verify(ctx, req)
 }
 
 // TPMReadPCRs reads PCR values.
@@ -4201,7 +3163,7 @@ func (p *MCPServiceProvider) TPMReadPCRs(ctx context.Context, indices []int) (in
 
 	pcrBanks, err := p.tpm2Service.ReadPCRs(pcrIndices)
 	if err != nil {
-		return nil, err
+		return nil, mapTPMError(err)
 	}
 
 	banks := make([]map[string]interface{}, 0, len(pcrBanks))
@@ -4224,17 +3186,21 @@ func (p *MCPServiceProvider) TPMReadPCRs(ctx context.Context, indices []int) (in
 	}, nil
 }
 
-// TPMExtendPCR extends a PCR with measurement data.
-func (p *MCPServiceProvider) TPMExtendPCR(ctx context.Context, pcrIndex int, data []byte) (interface{}, error) {
+// TPMExtendPCR extends a PCR in the hashAlg bank (sha256 when empty)
+// through the shared tpmpcr layer the QUIC handler uses.
+func (p *MCPServiceProvider) TPMExtendPCR(ctx context.Context, pcrIndex int, hashAlg string, data []byte) (interface{}, error) {
 	if p.tpm2Service == nil {
 		return nil, ErrServiceNotAvailable{Service: "tpm"}
 	}
 
-	// PCR extension is typically done through the measurement log
-	// The TPM interface extends via Quote or direct PCR manipulation
-	// For now, return not implemented as the underlying API requires
-	// more context (hash algorithm selection, etc.)
-	return nil, ErrTPMOperationNotImplemented{Operation: "ExtendPCR"}
+	if err := tpmpcr.Extend(p.tpm2Service, pcrIndex, hashAlg, data); err != nil {
+		return nil, err
+	}
+
+	return map[string]interface{}{
+		"success": true,
+		"message": tpmpcr.ExtendedMessage(pcrIndex),
+	}, nil
 }
 
 // TPMEventLog retrieves the TPM event log.
@@ -4245,7 +3211,7 @@ func (p *MCPServiceProvider) TPMEventLog(ctx context.Context) (interface{}, erro
 
 	rawLog, err := p.tpm2Service.EventLog()
 	if err != nil {
-		return nil, err
+		return nil, mapTPMError(err)
 	}
 
 	result := map[string]interface{}{
@@ -4267,26 +3233,16 @@ func (p *MCPServiceProvider) TPMCapabilities(ctx context.Context) (interface{}, 
 		return nil, ErrServiceNotAvailable{Service: "tpm"}
 	}
 
-	props, err := p.tpm2Service.FixedProperties()
+	caps, err := tpmattrs.ReadCapabilities(p.tpm2Service)
 	if err != nil {
-		return nil, err
+		return nil, mapTPMError(err)
 	}
 
-	result := map[string]interface{}{
-		"manufacturer":    props.Manufacturer,
-		"model":           props.Model,
-		"family":          props.Family,
-		"revision":        props.Revision,
-		"vendor_id":       props.VendorID,
-		"fw_major":        props.FwMajor,
-		"fw_minor":        props.FwMinor,
-		"fips_mode":       props.Fips1402,
-		"lockout_counter": props.LockoutCounter,
-		"max_auth_fail":   props.MaxAuthFail,
-		"max_nvram_size":  props.NVBufferMax,
-	}
-
-	return result, nil
+	return map[string]interface{}{
+		"algorithms": caps.Algorithms,
+		"commands":   caps.Commands,
+		"ecc_curves": caps.ECCCurves,
+	}, nil
 }
 
 // TPMRandom generates random bytes from the TPM.
@@ -4302,81 +3258,149 @@ func (p *MCPServiceProvider) TPMRandom(ctx context.Context, numBytes int) ([]byt
 		return nil, ErrTPMInvalidSize{Max: 1024, Requested: numBytes}
 	}
 
-	return p.tpm2Service.RandomBytes(numBytes)
+	random, err := p.tpm2Service.RandomBytes(numBytes)
+	if err != nil {
+		return nil, mapTPMError(err)
+	}
+	return random, nil
 }
 
 // TPMSeal seals data to the TPM.
-func (p *MCPServiceProvider) TPMSeal(ctx context.Context, data []byte, pcrs []int) ([]byte, error) {
+//
+// It runs the gRPC Seal, so the PCR policy, CN and password apply and the
+// answer is the same encoded TPM2B_PUBLIC/TPM2B_PRIVATE payload. It used to
+// call Seal with no options and return the SealedData ciphertext, which a
+// TPM seal never fills: every seal answered success with empty sealed_data
+// and ignored the PCRs it was given (#304).
+func (p *MCPServiceProvider) TPMSeal(ctx context.Context, data []byte, pcrs []uint32, cn, password string) ([]byte, error) {
+	svc, err := p.tpmQuotes().service()
+	if err != nil {
+		return nil, err
+	}
+	resp, err := svc.Seal(ctx, &platformv1.SealRequest{
+		Data:       data,
+		PcrIndices: pcrs,
+		Cn:         cn,
+		Password:   password,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return resp.GetSealedData(), nil
+}
+
+// TPMUnseal unseals data from the TPM.
+//
+// It runs the gRPC Unseal. It used to pass SealedData without a backend,
+// which the SDK refuses as a backend mismatch, so no unseal ever succeeded
+// (#304).
+func (p *MCPServiceProvider) TPMUnseal(ctx context.Context, cn, password string) ([]byte, error) {
+	svc, err := p.tpmQuotes().service()
+	if err != nil {
+		return nil, err
+	}
+	resp, err := svc.Unseal(ctx, &platformv1.UnsealRequest{Cn: cn, Password: password})
+	if err != nil {
+		return nil, err
+	}
+	return resp.GetData(), nil
+}
+
+// TPMCertify has the IAK certify the key at a persistent handle through the
+// shared tpmcertify layer the gRPC, REST and QUIC transports use.
+func (p *MCPServiceProvider) TPMCertify(ctx context.Context, keyHandle uint32, keyPassword string, nonce []byte) (interface{}, error) {
 	if p.tpm2Service == nil {
 		return nil, ErrServiceNotAvailable{Service: "tpm"}
 	}
 
-	sealed, err := p.tpm2Service.Seal(ctx, data, nil)
+	res, err := tpmcertify.Certify(p.tpm2Service, keyHandle, keyPassword, nonce)
 	if err != nil {
 		return nil, err
 	}
 
-	return sealed.Ciphertext, nil
+	// The keys are the CertifyResponse proto's JSON names, so the SDK's
+	// MCP transport decodes the reply into the same message gRPC returns.
+	return map[string]interface{}{
+		"certify_info":              res.CertifyInfo,
+		"signature":                 res.Signature,
+		"signature_algorithm":       res.SignatureAlgorithm,
+		"certify_info_signature":    res.CertifyInfoSignature,
+		"attesting_key_public":      res.AttestingKeyPublic,
+		"attested_key_public":       res.AttestedKeyPublic,
+		"attesting_key_public_area": res.AttestingKeyPublicArea,
+		"attested_key_public_area":  res.AttestedKeyPublicArea,
+		"nonce":                     res.Nonce,
+	}, nil
 }
 
-// TPMUnseal unseals data from the TPM.
-func (p *MCPServiceProvider) TPMUnseal(ctx context.Context, cn string) ([]byte, error) {
-	if p.tpm2Service == nil {
-		return nil, ErrServiceNotAvailable{Service: "tpm"}
-	}
-
-	sealed := &xkmssdk.SealedData{
-		KeyID: cn,
-	}
-
-	return p.tpm2Service.Unseal(ctx, sealed, nil)
-}
-
-// TPMCertify certifies a TPM key.
-func (p *MCPServiceProvider) TPMCertify(ctx context.Context, keyHandle int) (interface{}, error) {
-	if p.tpm2Service == nil {
-		return nil, ErrServiceNotAvailable{Service: "tpm"}
-	}
-
-	// Key certification requires additional context (which AK to use, qualifying data)
-	// Not yet fully implemented in the gRPC service either
-	return nil, ErrTPMOperationNotImplemented{Operation: "Certify"}
-}
-
-// TPMNVList lists NVRAM indices.
+// TPMNVList lists the NV indexes defined on the TPM, from the same
+// FixedProperties inventory the QUIC and gRPC transports report.
 func (p *MCPServiceProvider) TPMNVList(ctx context.Context) (interface{}, error) {
 	if p.tpm2Service == nil {
 		return nil, ErrServiceNotAvailable{Service: "tpm"}
 	}
 
-	return nil, ErrTPMOperationNotImplemented{Operation: "NVList"}
+	props, err := p.tpm2Service.FixedProperties()
+	if err != nil {
+		return nil, err
+	}
+
+	indexes := make([]map[string]interface{}, 0, len(props.NVIndexes))
+	for _, ix := range props.NVIndexes {
+		indexes = append(indexes, map[string]interface{}{
+			"handle":     uint32(ix.Handle),
+			"type":       ix.Type,
+			"size":       uint32(ix.Size),
+			"auth_read":  ix.AuthRead,
+			"auth_write": ix.AuthWrite,
+		})
+	}
+
+	return map[string]interface{}{"indexes": indexes}, nil
 }
 
-// TPMNVRead reads data from an NVRAM index.
-func (p *MCPServiceProvider) TPMNVRead(ctx context.Context, index int, size int) ([]byte, error) {
+// TPMNVRead reads size bytes (the whole index when 0) at offset from an
+// NV index through the shared tpmnv layer.
+func (p *MCPServiceProvider) TPMNVRead(ctx context.Context, index uint32, size, offset uint16, password string) ([]byte, error) {
 	if p.tpm2Service == nil {
 		return nil, ErrServiceNotAvailable{Service: "tpm"}
 	}
 
-	return nil, ErrTPMOperationNotImplemented{Operation: "NVRead"}
+	return tpmnv.Read(p.tpm2Service.Transport(), index, size, offset, tpmnv.Password(password))
 }
 
-// TPMNVWrite writes data to an NVRAM index.
-func (p *MCPServiceProvider) TPMNVWrite(ctx context.Context, index int, data []byte) (interface{}, error) {
+// TPMNVWrite writes data at offset to an NV index through the shared
+// tpmnv layer.
+func (p *MCPServiceProvider) TPMNVWrite(ctx context.Context, index uint32, data []byte, offset uint16, password string) (interface{}, error) {
 	if p.tpm2Service == nil {
 		return nil, ErrServiceNotAvailable{Service: "tpm"}
 	}
 
-	return nil, ErrTPMOperationNotImplemented{Operation: "NVWrite"}
+	if err := tpmnv.Write(p.tpm2Service.Transport(), index, data, offset, tpmnv.Password(password)); err != nil {
+		return nil, err
+	}
+
+	return map[string]interface{}{
+		"success": true,
+		"message": fmt.Sprintf("wrote %d bytes to NV index 0x%08X", len(data), index),
+	}, nil
 }
 
-// TPMNVDelete undefines an NVRAM index.
-func (p *MCPServiceProvider) TPMNVDelete(ctx context.Context, index int) (interface{}, error) {
+// TPMNVDelete undefines an NV index under the owner hierarchy, which
+// parentPassword authorizes, through the shared tpmnv layer.
+func (p *MCPServiceProvider) TPMNVDelete(ctx context.Context, index uint32, parentPassword string) (interface{}, error) {
 	if p.tpm2Service == nil {
 		return nil, ErrServiceNotAvailable{Service: "tpm"}
 	}
 
-	return nil, ErrTPMOperationNotImplemented{Operation: "NVDelete"}
+	if err := tpmnv.Undefine(p.tpm2Service.Transport(), index, tpmnv.Password(parentPassword)); err != nil {
+		return nil, err
+	}
+
+	return map[string]interface{}{
+		"success": true,
+		"message": fmt.Sprintf("NV index 0x%08X undefined", index),
+	}, nil
 }
 
 // TPMPlatform retrieves platform-level TPM attributes.
@@ -4385,38 +3409,30 @@ func (p *MCPServiceProvider) TPMPlatform(ctx context.Context) (interface{}, erro
 		return nil, ErrServiceNotAvailable{Service: "tpm"}
 	}
 
-	cfg := p.tpm2Service.Config()
+	platform := tpmattrs.ReadPlatform(p.tpm2Service)
 	result := map[string]interface{}{
-		"available": true,
+		"available":    true,
+		"device":       platform.Device,
+		"is_fips":      platform.IsFIPS,
+		"pcr_extended": platform.PCRExtended,
+		"can_seal":     platform.CanSeal,
+		"is_simulator": platform.IsSimulator,
+		"manufacturer": platform.Manufacturer,
 	}
-
-	if cfg != nil {
-		result["is_simulator"] = cfg.UseSimulator
-		result["device"] = cfg.Device
-	}
-
-	// Include EK info if available
-	ekAttrs, err := p.tpm2Service.EKAttributes()
-	if err == nil {
-		result["ek_handle"] = uint32(ekAttrs.TPMAttributes.Handle)
-		result["ek_algorithm"] = ekAttrs.KeyAlgorithm.String()
-	}
-
-	// Include SRK info if available
-	srkAttrs, err := p.tpm2Service.SSRKAttributes()
-	if err == nil {
-		result["srk_handle"] = uint32(srkAttrs.TPMAttributes.Handle)
-		result["srk_algorithm"] = srkAttrs.KeyAlgorithm.String()
-	}
-
-	// Include IAK info if available
-	iakAttrs, err := p.tpm2Service.IAKAttributes()
-	if err == nil {
-		result["iak_handle"] = uint32(iakAttrs.TPMAttributes.Handle)
-		result["iak_algorithm"] = iakAttrs.KeyAlgorithm.String()
-	}
-
+	addKeyRef(result, "ek", platform.EK)
+	addKeyRef(result, "srk", platform.SRK)
+	addKeyRef(result, "iak", platform.IAK)
 	return result, nil
+}
+
+// addKeyRef adds a provisioned key's <name>_handle and <name>_algorithm
+// to an MCP result; an absent key adds neither.
+func addKeyRef(result map[string]interface{}, name string, ref *tpmattrs.KeyRef) {
+	if ref == nil {
+		return
+	}
+	result[name+"_handle"] = ref.Handle
+	result[name+"_algorithm"] = ref.Algorithm
 }
 
 // TPMMakeCredential creates a TPM2_MakeCredential challenge, delegating to
@@ -4428,7 +3444,7 @@ func (p *MCPServiceProvider) TPMMakeCredential(ctx context.Context, akName, secr
 
 	credentialBlob, encryptedSecret, plaintextSecret, err := makeCredential(p.tpm2Service, akName, secret, ekCert, iakPub)
 	if err != nil {
-		return nil, err
+		return nil, mapTPMError(err)
 	}
 
 	return map[string]interface{}{
@@ -4447,7 +3463,7 @@ func (p *MCPServiceProvider) TPMActivateCredential(ctx context.Context, credenti
 
 	secret, err := activateCredential(p.tpm2Service, credentialBlob, encryptedSecret)
 	if err != nil {
-		return nil, err
+		return nil, mapTPMError(err)
 	}
 
 	return map[string]interface{}{

@@ -296,7 +296,7 @@ func resolveWebUIPath(ctx context.Context, logger *logging.Logger, explicitPath 
 	logger.Info("This may take a few minutes on first run (building devcontainer and cloning web project)...")
 
 	buildCmd := exec.CommandContext(ctx, "make", "build-public-html")
-	buildCmd.Stdout = os.Stdout
+	buildCmd.Stdout = os.Stderr // build chatter is progress; stdout carries the verb's result
 	buildCmd.Stderr = os.Stderr
 
 	if err := buildCmd.Run(); err != nil {

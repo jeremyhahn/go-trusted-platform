@@ -92,7 +92,7 @@ platform's PXE service), and `pkg/cli/commands/iso` (`platformctl iso test pxe`)
 | Isolated network test harness | `pkg/ipxe/testenv.go` — `TestEnv`, `TestEnvConfig` | this repo |
 | **Manifest-driven container server** | `pkg/bootstrap/container` — wraps `ipxe.Server`; the binary is `cmd/pxeboot` | this repo, separate feature |
 | **PXE device lifecycle and state machine** | `pkg/compute/pxe/` — `PXEService`, 15 RPCs | this repo — [`docs/provisioning/`](../provisioning/) |
-| **Gateway edge PXE mode** | `pkg/sdn/gateway/modes/edge_pxe.go` | this repo — [`docs/gateway/`](../gateway/) |
+| **Gateway PXE section** | planned, not implemented — gatewayd refuses `pxe:` at start | this repo — [`docs/gateway/`](../gateway/) |
 | **DHCP wire protocol** | `github.com/insomniacslk/dhcp` | **not this repo** |
 | **TFTP wire protocol** | `github.com/pin/tftp/v3` | **not this repo** |
 | **iPXE firmware binaries** | downloaded from `boot.ipxe.org` | **not this repo** |
@@ -191,6 +191,21 @@ the boot options and no address, the network's server leases as usual.
 `platformctl bootstrap probe rpi` and the netboot integration suite speak
 this stage from the Pi's side, since no emulator has a Pi's EEPROM.
 
+**The other first stage: signed HTTP boot.** A Pi whose EEPROM has the HTTP
+nibble in `BOOT_ORDER` skips DHCP-and-TFTP for its first stage and fetches
+`boot.img` (the boot partition as a FAT ramdisk) and `boot.sig` from
+`HTTP_HOST`/`HTTP_PATH` instead. There is nothing new to serve: the HTTP
+server's `/data/` handler (`handleDataFiles`, `ServerConfig.DataDir`) serves the
+netboot media build's `http-boot/` directory, so `HTTP_PATH` is `data/http-boot`
+(`container.NetbootMedia.HTTPBootPath()`) and `HTTP_HOST` is the container's
+address and `bootstrap_http_port`. With `SIGNED_BOOT=1` the EEPROM runs the
+image only if `boot.sig` verifies against the fleet key hash in the Pi's OTP;
+the fleet key is held in the KMS and signs at build time, never in the
+container. `platformctl bootstrap probe rpi-http` speaks this stage from the
+Pi's side, and `ipxe.TestEnvConfig.DataDir` gives the integration environment
+the same `/data/` the container has. The build, the signature format and the
+provisioning runbook are in [docs/factory-image/](../factory-image/user.md#provision-a-fleet-signed-http-boot).
+
 **What crosses a process boundary.** The DHCP, TFTP and HTTP surfaces are all
 plain network protocols on the boot segment — none of them is one of the
 platform's six transports. `IPAMAllocator` calls out to the platform IPAM.
@@ -272,7 +287,7 @@ Six boundaries.
 - **It does not build ISOs.** It can *read* one — `ExtractBootFiles` pulls
   kernel, initrd, modloop and kernel args out of an ISO so a PXE test can boot
   the same image a CD would. Building is `pkg/iso`.
-- **It does not serve DNS.** `DHCPDNS` advertises a DNS server address; it does
+- **It does not serve DNS.** `DHCPDNS` advertises DNS server addresses; it does
   not run one.
 - **It has no CLI surface of its own.** `platformctl` has no `pxe` command
   group. `cmd/pxeboot` is a container entrypoint with flags, not an operator
@@ -288,13 +303,12 @@ Six boundaries.
 ## 8. Related
 
 - [engineering.md](engineering.md) · [cli.md](cli.md) · [api.md](api.md) · [user.md](user.md)
-- [configuration.md](configuration.md), [testing.md](testing.md),
-  [README.md](README.md) — pre-convention documents kept for their worked
-  examples. Where they disagree with the five files, the five files win; the
-  corrections are in [engineering.md](engineering.md) §9.
+- configuration.md, testing.md,
+  README.md — pre-convention documents, now deleted. These five files hold
+  their content; the corrections to them are in [engineering.md](engineering.md) §9.
 - [`docs/provisioning/`](../provisioning/) — device lifecycle, config delivery,
   the `PXEService` transport matrix
 - [`docs/installer/`](../installer/) — what the booted kernel does next
-- [`docs/bootstrap/config-delivery.md`](../bootstrap/config-delivery.md) — the
+- [`docs/architecture/bootstrap-flow.md`](../architecture/bootstrap-flow.md) — the
   orchestrator side of `/config/mac/*`
 - [`docs/daemon/api.md`](../daemon/api.md) — the platform transport model

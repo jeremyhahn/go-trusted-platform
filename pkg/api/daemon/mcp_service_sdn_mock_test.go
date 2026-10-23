@@ -15,14 +15,14 @@ package daemon
 
 import (
 	"context"
-	"crypto/x509"
 	"errors"
 	"log/slog"
+	"reflect"
 	"testing"
 	"time"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/api/mcp"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ovs"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/policy"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
 
@@ -38,138 +38,7 @@ func createMCPTestSDNService(mockOVS *ConfigurableMockOVSClient) *SDNService {
 		ports:     make(map[string]*portResource),
 		taps:      make(map[string]*tapResource),
 		vlans:     make(map[string]*vlanResource),
-		portAuths: make(map[string]*portAuthResource),
 	}
-}
-
-// mcpTestMockPolicyEngine implements policy.PolicyEngine for MCP SDN tests
-type mcpTestMockPolicyEngine struct {
-	// Policy storage
-	policies map[string]*policy.PortPolicy
-	// Port state storage
-	portStates map[string]policy.PortState
-	// Port info storage
-	portInfos map[string]*policy.PortInfo
-
-	// Error injection
-	getPolicyErr     error
-	applyPolicyErr   error
-	getPortStateErr  error
-	setPortStateErr  error
-	getPortInfoErr   error
-	getOFPortErr     error
-	getPortVLANErr   error
-	authenticateErr  error
-	removePolicyErr  error
-	blockPortErr     error
-	unblockPortErr   error
-	setPortVLANErr   error
-	onCertExpiredErr error
-	onCertRevokedErr error
-}
-
-func newMCPTestMockPolicyEngine() *mcpTestMockPolicyEngine {
-	return &mcpTestMockPolicyEngine{
-		policies:   make(map[string]*policy.PortPolicy),
-		portStates: make(map[string]policy.PortState),
-		portInfos:  make(map[string]*policy.PortInfo),
-	}
-}
-
-func (m *mcpTestMockPolicyEngine) GetPolicy(portID string) (*policy.PortPolicy, error) {
-	if m.getPolicyErr != nil {
-		return nil, m.getPolicyErr
-	}
-	if p, ok := m.policies[portID]; ok {
-		return p, nil
-	}
-	return nil, errors.New("policy not found")
-}
-
-func (m *mcpTestMockPolicyEngine) ApplyPolicy(portID string, pol *policy.PortPolicy) error {
-	if m.applyPolicyErr != nil {
-		return m.applyPolicyErr
-	}
-	m.policies[portID] = pol
-	return nil
-}
-
-func (m *mcpTestMockPolicyEngine) RemovePolicy(portID string) error {
-	if m.removePolicyErr != nil {
-		return m.removePolicyErr
-	}
-	delete(m.policies, portID)
-	return nil
-}
-
-func (m *mcpTestMockPolicyEngine) GetPortState(portID string) (policy.PortState, error) {
-	if m.getPortStateErr != nil {
-		return policy.PortStateUnconnected, m.getPortStateErr
-	}
-	if state, ok := m.portStates[portID]; ok {
-		return state, nil
-	}
-	return policy.PortStateUnconnected, nil
-}
-
-func (m *mcpTestMockPolicyEngine) SetPortState(portID string, state policy.PortState) error {
-	if m.setPortStateErr != nil {
-		return m.setPortStateErr
-	}
-	m.portStates[portID] = state
-	return nil
-}
-
-func (m *mcpTestMockPolicyEngine) GetPortInfo(portID string) (*policy.PortInfo, error) {
-	if m.getPortInfoErr != nil {
-		return nil, m.getPortInfoErr
-	}
-	if info, ok := m.portInfos[portID]; ok {
-		return info, nil
-	}
-	return nil, errors.New("port info not found")
-}
-
-func (m *mcpTestMockPolicyEngine) GetOFPort(portID string) (int32, error) {
-	if m.getOFPortErr != nil {
-		return 0, m.getOFPortErr
-	}
-	return 1, nil
-}
-
-func (m *mcpTestMockPolicyEngine) GetPortVLAN(portID string) (uint16, error) {
-	if m.getPortVLANErr != nil {
-		return 0, m.getPortVLANErr
-	}
-	return 100, nil
-}
-
-func (m *mcpTestMockPolicyEngine) SetPortVLAN(portID string, vlan uint16) error {
-	return m.setPortVLANErr
-}
-
-func (m *mcpTestMockPolicyEngine) BlockPort(portID string) error {
-	return m.blockPortErr
-}
-
-func (m *mcpTestMockPolicyEngine) UnblockPort(portID string) error {
-	return m.unblockPortErr
-}
-
-func (m *mcpTestMockPolicyEngine) AuthenticatePort(portID string, cert *x509.Certificate) error {
-	return m.authenticateErr
-}
-
-func (m *mcpTestMockPolicyEngine) OnCertificateExpired(portID string) error {
-	return m.onCertExpiredErr
-}
-
-func (m *mcpTestMockPolicyEngine) OnCertificateRevoked(portID string) error {
-	return m.onCertRevokedErr
-}
-
-func (m *mcpTestMockPolicyEngine) GetMonitor() *policy.CertificateMonitor {
-	return nil
 }
 
 // =============================================================================
@@ -527,6 +396,79 @@ func TestMCPServiceProvider_SDNAddPort_Success(t *testing.T) {
 	}
 }
 
+func TestMCPServiceProvider_SDNAddPort_HonoursThePortType(t *testing.T) {
+	for _, name := range []string{"internal", "VXLAN", "PORT_TYPE_GRE", ""} {
+		t.Run(name, func(t *testing.T) {
+			want, err := portTypeFromName(name)
+			if err != nil {
+				t.Fatalf("portTypeFromName(%q): %v", name, err)
+			}
+			mockOVS := NewConfigurableMockOVSClient()
+			mockOVS.OnAddPort(func(ctx context.Context, bridgeName, portName string) (*ovs.Port, error) {
+				return &ovs.Port{UUID: "port-uuid", Name: portName}, nil
+			})
+			sdnService := createMCPTestSDNService(mockOVS)
+			sdnService.bridges["br0"] = &bridgeResource{id: "br0-uuid", name: "br0"}
+			provider := NewMCPServiceProvider(&MCPServiceProviderConfig{SDNService: sdnService, Logger: slog.Default()})
+
+			if err := provider.SDNAddPort(context.Background(), "br0", "eth0", name); err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if got := sdnService.ports["eth0"].portType; got != want {
+				t.Fatalf("port type = %v, want %v", got, want)
+			}
+		})
+	}
+	if got, _ := portTypeFromName("vxlan"); got != platformv1.PortType_PORT_TYPE_VXLAN {
+		t.Fatalf("short form vxlan parsed as %v", got)
+	}
+}
+
+func TestMCPServiceProvider_SDNAddPort_RefusesAnUnknownPortType(t *testing.T) {
+	mockOVS := NewConfigurableMockOVSClient()
+	called := false
+	mockOVS.OnAddPort(func(ctx context.Context, bridgeName, portName string) (*ovs.Port, error) {
+		called = true
+		return &ovs.Port{UUID: "port-uuid", Name: portName}, nil
+	})
+	sdnService := createMCPTestSDNService(mockOVS)
+	sdnService.bridges["br0"] = &bridgeResource{id: "br0-uuid", name: "br0"}
+	provider := NewMCPServiceProvider(&MCPServiceProviderConfig{SDNService: sdnService, Logger: slog.Default()})
+
+	err := provider.SDNAddPort(context.Background(), "br0", "eth0", "wormhole")
+
+	var invalid ErrInvalidPortType
+	if !errors.As(err, &invalid) {
+		t.Fatalf("expected ErrInvalidPortType, got %v", err)
+	}
+	if called {
+		t.Fatal("no port is added for an unknown type")
+	}
+}
+
+func TestMCPServiceProvider_SDNSetPortState_ReturnsTheUpdatedPort(t *testing.T) {
+	mockOVS := NewConfigurableMockOVSClient()
+	mockOVS.OnGetPort(func(ctx context.Context, name string) (*ovs.Port, error) {
+		return &ovs.Port{UUID: "port-uuid-123", Name: name}, nil
+	})
+	sdnService := createMCPTestSDNService(mockOVS)
+	sdnService.ports["port1"] = &portResource{id: "port-uuid-123", name: "port1", bridgeID: "br0"}
+	provider := NewMCPServiceProvider(&MCPServiceProviderConfig{SDNService: sdnService, Logger: slog.Default()})
+
+	result, err := provider.SDNSetPortState(context.Background(), "br0", "port1", "down", mcp.PortRates{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	port, ok := result.(*platformv1.Port)
+	if !ok {
+		t.Fatalf("result is %T, want *platformv1.Port", result)
+	}
+	if port.GetStatus() != platformv1.PortStatus_PORT_STATUS_DOWN {
+		t.Fatalf("port status = %v, want down", port.GetStatus())
+	}
+}
+
 func TestMCPServiceProvider_SDNAddPort_ServiceError(t *testing.T) {
 	ctx := context.Background()
 
@@ -617,108 +559,6 @@ func TestMCPServiceProvider_SDNDeletePort_ServiceError(t *testing.T) {
 }
 
 // =============================================================================
-// SDNListPolicies Tests - With Mock Policy Engine
-// =============================================================================
-
-func TestMCPServiceProvider_SDNListPolicies_WithPolicies(t *testing.T) {
-	ctx := context.Background()
-
-	mockOVS := NewConfigurableMockOVSClient()
-	mockOVS.OnListBridges(func(ctx context.Context) ([]*ovs.Bridge, error) {
-		return []*ovs.Bridge{
-			{UUID: "br0-uuid", Name: "br0"},
-		}, nil
-	})
-	mockOVS.OnListPorts(func(ctx context.Context, bridgeName string) ([]*ovs.Port, error) {
-		return []*ovs.Port{
-			{UUID: "port1-uuid", Name: "port1"},
-		}, nil
-	})
-
-	sdnService := createMCPTestSDNService(mockOVS)
-	mockEngine := newMCPTestMockPolicyEngine()
-	mockEngine.policies["port1"] = &policy.PortPolicy{
-		TenantID: "tenant-123",
-		VLAN:     100,
-		IssuedAt: time.Now(),
-	}
-
-	provider := NewMCPServiceProvider(&MCPServiceProviderConfig{
-		SDNService:   sdnService,
-		PolicyEngine: mockEngine,
-		Logger:       slog.Default(),
-	})
-
-	result, err := provider.SDNListPolicies(ctx)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	if result == nil {
-		t.Fatal("expected non-nil result")
-	}
-}
-
-func TestMCPServiceProvider_SDNListPolicies_NoPolicies(t *testing.T) {
-	ctx := context.Background()
-
-	mockOVS := NewConfigurableMockOVSClient()
-	mockOVS.OnListBridges(func(ctx context.Context) ([]*ovs.Bridge, error) {
-		return []*ovs.Bridge{}, nil
-	})
-
-	sdnService := createMCPTestSDNService(mockOVS)
-	mockEngine := newMCPTestMockPolicyEngine()
-
-	provider := NewMCPServiceProvider(&MCPServiceProviderConfig{
-		SDNService:   sdnService,
-		PolicyEngine: mockEngine,
-		Logger:       slog.Default(),
-	})
-
-	result, err := provider.SDNListPolicies(ctx)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	if result == nil {
-		t.Fatal("expected non-nil result")
-	}
-
-	if len(result) != 0 {
-		t.Errorf("expected empty list, got %d items", len(result))
-	}
-}
-
-func TestMCPServiceProvider_SDNListPolicies_ListBridgesError(t *testing.T) {
-	ctx := context.Background()
-
-	mockOVS := NewConfigurableMockOVSClient()
-	mockOVS.OnListBridges(func(ctx context.Context) ([]*ovs.Bridge, error) {
-		return nil, errors.New("OVSDB error")
-	})
-
-	sdnService := createMCPTestSDNService(mockOVS)
-	mockEngine := newMCPTestMockPolicyEngine()
-
-	provider := NewMCPServiceProvider(&MCPServiceProviderConfig{
-		SDNService:   sdnService,
-		PolicyEngine: mockEngine,
-		Logger:       slog.Default(),
-	})
-
-	// Should return empty list on error, not fail
-	result, err := provider.SDNListPolicies(ctx)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	if result == nil {
-		t.Fatal("expected non-nil result")
-	}
-}
-
-// =============================================================================
 // SDNAddFlow Tests - With Mock SDN Service
 // =============================================================================
 
@@ -740,11 +580,11 @@ func TestMCPServiceProvider_SDNAddFlow_Success(t *testing.T) {
 
 	flow := map[string]interface{}{
 		"priority": 100,
-		"match":    "in_port=1",
-		"actions":  "output:2",
+		"match":    map[string]interface{}{"in_port": "1"},
+		"actions":  []interface{}{map[string]interface{}{"type": "FLOW_ACTION_OUTPUT", "port": "2"}},
 	}
 
-	err := provider.SDNAddFlow(ctx, "br0", flow)
+	_, err := provider.SDNAddFlow(ctx, "br0", flow)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -766,7 +606,7 @@ func TestMCPServiceProvider_SDNAddFlow_ServiceError(t *testing.T) {
 		Logger:     slog.Default(),
 	})
 
-	err := provider.SDNAddFlow(ctx, "br0", map[string]interface{}{"priority": 100})
+	_, err := provider.SDNAddFlow(ctx, "br0", map[string]interface{}{"priority": 100})
 	if err == nil {
 		t.Fatal("expected error but got nil")
 	}
@@ -1052,9 +892,8 @@ func TestMCPServiceProvider_SDN_ConcurrentAccess(t *testing.T) {
 func TestMCPServiceProvider_SDN_ErrorTypes(t *testing.T) {
 	ctx := context.Background()
 	provider := NewMCPServiceProvider(&MCPServiceProviderConfig{
-		SDNService:   nil,
-		PolicyEngine: nil,
-		Logger:       slog.Default(),
+		SDNService: nil,
+		Logger:     slog.Default(),
 	})
 
 	testCases := []struct {
@@ -1079,12 +918,12 @@ func TestMCPServiceProvider_SDN_ErrorTypes(t *testing.T) {
 			expectedErr: ErrServiceNotAvailable{},
 		},
 		{
-			name: "SDNListPolicies_nil_engine",
+			name: "SDNListPolicies_nil_service",
 			callFunc: func() error {
-				_, err := provider.SDNListPolicies(ctx)
+				_, err := provider.SDNListPolicies(ctx, "", "")
 				return err
 			},
-			expectedErr: ErrSDNPolicyEngineNotConfigured{},
+			expectedErr: ErrServiceNotAvailable{},
 		},
 		{
 			name: "SDNGetPortState_nil_service",
@@ -1125,7 +964,8 @@ func TestMCPServiceProvider_SDN_ErrorTypes(t *testing.T) {
 		{
 			name: "SDNAddFlow_nil_service",
 			callFunc: func() error {
-				return provider.SDNAddFlow(ctx, "br0", nil)
+				_, err := provider.SDNAddFlow(ctx, "br0", nil)
+				return err
 			},
 			expectedErr: ErrServiceNotAvailable{},
 		},
@@ -1145,15 +985,8 @@ func TestMCPServiceProvider_SDN_ErrorTypes(t *testing.T) {
 				t.Fatal("expected error but got nil")
 			}
 
-			switch tc.expectedErr.(type) {
-			case ErrServiceNotAvailable:
-				if _, ok := err.(ErrServiceNotAvailable); !ok {
-					t.Errorf("expected ErrServiceNotAvailable, got %T: %v", err, err)
-				}
-			case ErrSDNPolicyEngineNotConfigured:
-				if _, ok := err.(ErrSDNPolicyEngineNotConfigured); !ok {
-					t.Errorf("expected ErrSDNPolicyEngineNotConfigured, got %T: %v", err, err)
-				}
+			if reflect.TypeOf(err) != reflect.TypeOf(tc.expectedErr) {
+				t.Errorf("expected %T, got %T: %v", tc.expectedErr, err, err)
 			}
 		})
 	}
@@ -1187,7 +1020,9 @@ func TestMCPServiceProvider_SDN_MethodCallVerification(t *testing.T) {
 		t.Errorf("expected ListFlows to be called once, got %d", mockOVS.GetCallCount("ListFlows"))
 	}
 
-	_ = provider.SDNAddFlow(ctx, "br0", map[string]interface{}{"priority": 100})
+	if _, err := provider.SDNAddFlow(ctx, "br0", map[string]interface{}{"priority": 100}); err != nil {
+		t.Fatalf("SDNAddFlow: %v", err)
+	}
 	if mockOVS.GetCallCount("AddFlow") != 1 {
 		t.Errorf("expected AddFlow to be called once, got %d", mockOVS.GetCallCount("AddFlow"))
 	}
@@ -1289,10 +1124,10 @@ func TestMCPServiceProvider_SDN_IntegrationFlow(t *testing.T) {
 	// 4. Add a flow
 	flow := map[string]interface{}{
 		"priority": 100,
-		"match":    "in_port=1",
-		"actions":  "output:2",
+		"match":    map[string]interface{}{"in_port": "1"},
+		"actions":  []interface{}{map[string]interface{}{"type": "FLOW_ACTION_OUTPUT", "port": "2"}},
 	}
-	err = provider.SDNAddFlow(ctx, "test-br", flow)
+	_, err = provider.SDNAddFlow(ctx, "test-br", flow)
 	if err != nil {
 		t.Fatalf("failed to add flow: %v", err)
 	}
@@ -1426,7 +1261,8 @@ func TestMCPServiceProvider_SDN_TableDrivenScenarios(t *testing.T) {
 			},
 			setupPorts: func(s *SDNService) {},
 			operation: func(p *MCPServiceProvider, ctx context.Context) error {
-				return p.SDNAddFlow(ctx, "br0", map[string]interface{}{"priority": 100})
+				_, err := p.SDNAddFlow(ctx, "br0", map[string]interface{}{"priority": 100})
+				return err
 			},
 			expectError: false,
 		},
@@ -1502,13 +1338,6 @@ func TestMCPServiceProvider_SDN_TableDrivenScenarios(t *testing.T) {
 		})
 	}
 }
-
-// =============================================================================
-// Verify interface compliance
-// =============================================================================
-
-// Ensure mcpTestMockPolicyEngine implements policy.PolicyEngine
-var _ policy.PolicyEngine = (*mcpTestMockPolicyEngine)(nil)
 
 // Verify the mock Port response from SDNService GetPort
 func TestMCPServiceProvider_SDNGetPortState_ResponseContent(t *testing.T) {

@@ -16,21 +16,8 @@ package quic
 import (
 	"context"
 	"errors"
-)
 
-// Performance verification sub-opcodes carried in payload[0] under
-// OpGatewayCategory (0x2F). Gateway owns 0x00-0x14, the proxy service
-// owns 0x20-0x2D, and the load balancer owns 0x30-0x35, so perf claims
-// the next free sub-range 0x36-0x38.
-const (
-	// OpGatewayPerfFlows measures real flow-programming throughput.
-	OpGatewayPerfFlows byte = 0x36
-
-	// OpGatewayPerfDatapath reads live datapath counters.
-	OpGatewayPerfDatapath byte = 0x37
-
-	// OpGatewayPerfConntrack summarizes the conntrack table.
-	OpGatewayPerfConntrack byte = 0x38
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 )
 
 // Perf sentinel errors.
@@ -121,37 +108,37 @@ func (h *GatewayHandler) SetPerfService(perfService GatewayPerfServiceInterface)
 
 // gatewayPerfHandlers dispatches perf sub-opcodes (map-based for O(1)
 // lookup, matching the load balancer handler convention).
-var gatewayPerfHandlers = map[byte]func(*GatewayHandler, context.Context, *Request) *Response{
-	OpGatewayPerfFlows:     (*GatewayHandler).handlePerfFlows,
-	OpGatewayPerfDatapath:  (*GatewayHandler).handlePerfDatapath,
-	OpGatewayPerfConntrack: (*GatewayHandler).handlePerfConntrack,
+var gatewayPerfHandlers = map[byte]func(*GatewayHandler, context.Context, *quicwire.Request) *quicwire.Response{
+	quicwire.OpGatewayPerfFlows:     (*GatewayHandler).handlePerfFlows,
+	quicwire.OpGatewayPerfDatapath:  (*GatewayHandler).handlePerfDatapath,
+	quicwire.OpGatewayPerfConntrack: (*GatewayHandler).handlePerfConntrack,
 }
 
 // perfErrorResponse maps perf sentinel errors to wire statuses.
-func (h *GatewayHandler) perfErrorResponse(err error) *Response {
+func (h *GatewayHandler) perfErrorResponse(err error) *quicwire.Response {
 	var status byte
 	switch {
 	case errors.Is(err, ErrGatewayPerfNotConfigured):
-		status = StatusUnavailable
+		status = quicwire.StatusUnavailable
 	case errors.Is(err, ErrGatewayPerfInvalidRequest):
-		status = StatusInvalidArgument
+		status = quicwire.StatusInvalidArgument
 	case errors.Is(err, ErrGatewayPerfBridgeNotFound):
-		status = StatusNotFound
+		status = quicwire.StatusNotFound
 	default:
-		status = StatusInternalError
+		status = quicwire.StatusInternalError
 	}
 	return h.errorResponse(status, err)
 }
 
 // handlePerfFlows measures real flow-programming throughput.
-func (h *GatewayHandler) handlePerfFlows(ctx context.Context, req *Request) *Response {
+func (h *GatewayHandler) handlePerfFlows(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.perfService == nil {
-		return h.errorResponse(StatusUnavailable, ErrGatewayPerfNotConfigured)
+		return h.errorResponse(quicwire.StatusUnavailable, ErrGatewayPerfNotConfigured)
 	}
 
 	var flowsReq GatewayPerfFlowsRequest
-	if err := DecodePayload(req.Payload, &flowsReq); err != nil {
-		return h.errorResponse(StatusInvalidRequest, ErrGatewayDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &flowsReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrGatewayDecodingFailed{Cause: err})
 	}
 
 	result, err := h.perfService.PerfFlows(ctx, flowsReq.Bridge, flowsReq.Count, flowsReq.Batch)
@@ -160,22 +147,22 @@ func (h *GatewayHandler) handlePerfFlows(ctx context.Context, req *Request) *Res
 		return h.perfErrorResponse(err)
 	}
 
-	payload, err := EncodePayload(result)
+	payload, err := quicwire.EncodePayload(result)
 	if err != nil {
-		return h.errorResponse(StatusInternalError, ErrGatewayEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrGatewayEncodingFailed{Cause: err})
 	}
-	return &Response{Status: StatusOK, Payload: payload}
+	return &quicwire.Response{Status: quicwire.StatusOK, Payload: payload}
 }
 
 // handlePerfDatapath reads live datapath counters.
-func (h *GatewayHandler) handlePerfDatapath(ctx context.Context, req *Request) *Response {
+func (h *GatewayHandler) handlePerfDatapath(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.perfService == nil {
-		return h.errorResponse(StatusUnavailable, ErrGatewayPerfNotConfigured)
+		return h.errorResponse(quicwire.StatusUnavailable, ErrGatewayPerfNotConfigured)
 	}
 
 	var dpReq GatewayPerfDatapathRequest
-	if err := DecodePayload(req.Payload, &dpReq); err != nil {
-		return h.errorResponse(StatusInvalidRequest, ErrGatewayDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &dpReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrGatewayDecodingFailed{Cause: err})
 	}
 
 	result, err := h.perfService.PerfDatapath(ctx, dpReq.Bridge)
@@ -184,22 +171,22 @@ func (h *GatewayHandler) handlePerfDatapath(ctx context.Context, req *Request) *
 		return h.perfErrorResponse(err)
 	}
 
-	payload, err := EncodePayload(result)
+	payload, err := quicwire.EncodePayload(result)
 	if err != nil {
-		return h.errorResponse(StatusInternalError, ErrGatewayEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrGatewayEncodingFailed{Cause: err})
 	}
-	return &Response{Status: StatusOK, Payload: payload}
+	return &quicwire.Response{Status: quicwire.StatusOK, Payload: payload}
 }
 
 // handlePerfConntrack summarizes the conntrack table.
-func (h *GatewayHandler) handlePerfConntrack(ctx context.Context, req *Request) *Response {
+func (h *GatewayHandler) handlePerfConntrack(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.perfService == nil {
-		return h.errorResponse(StatusUnavailable, ErrGatewayPerfNotConfigured)
+		return h.errorResponse(quicwire.StatusUnavailable, ErrGatewayPerfNotConfigured)
 	}
 
 	var ctReq GatewayPerfConntrackRequest
-	if err := DecodePayload(req.Payload, &ctReq); err != nil {
-		return h.errorResponse(StatusInvalidRequest, ErrGatewayDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &ctReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrGatewayDecodingFailed{Cause: err})
 	}
 
 	result, err := h.perfService.PerfConntrack(ctx, ctReq.Zone)
@@ -208,9 +195,9 @@ func (h *GatewayHandler) handlePerfConntrack(ctx context.Context, req *Request) 
 		return h.perfErrorResponse(err)
 	}
 
-	payload, err := EncodePayload(result)
+	payload, err := quicwire.EncodePayload(result)
 	if err != nil {
-		return h.errorResponse(StatusInternalError, ErrGatewayEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrGatewayEncodingFailed{Cause: err})
 	}
-	return &Response{Status: StatusOK, Payload: payload}
+	return &quicwire.Response{Status: quicwire.StatusOK, Payload: payload}
 }

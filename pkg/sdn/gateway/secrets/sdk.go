@@ -27,17 +27,40 @@ import (
 // with. gatewayd supplies its platform anchor, which anchors verification
 // of the STORE: the returned config carries the platform CA as its root
 // pool, so the gateway talks to a peer the platform vouches for and to no
-// one else.
-//
-// It does NOT carry a client certificate — the anchor verifies servers and
-// returns no Certificates — so the
-// session is one-way authenticated. Which credential should identify the
-// gateway TO the store (its provisioned mTLS identity, or an IAM token)
-// is an open question tracked as #658; quicbaasd's gRPC client-certificate
-// requirement is operator-configured (ClientAuth, off by default), so a
-// store that requires one refuses this session today rather than serving
-// it to an unidentified caller.
+// one else. WithClientIdentity adds the gateway's side: the provisioned
+// node certificate the store authenticates the caller by (#658).
 type TLSFunc func(ctx context.Context, endpoint string) (*tls.Config, error)
+
+// WithClientIdentity returns a TLSFunc that dials with server's
+// verification config and presents identity as the client certificate, so
+// the store session is mutually authenticated: the gateway verifies the
+// store against server's roots, and a store that requires a client
+// certificate (quicbaasd's ClientAuth) learns which node is reading.
+//
+// A nil server yields a nil TLSFunc, which QuicBaaSDial refuses with
+// ErrTrustRequired. An identity without a certificate or private key is
+// refused at dial time with ErrClientIdentityRequired rather than dialled
+// one-way. The config server returns is cloned, never modified.
+func WithClientIdentity(server TLSFunc, identity tls.Certificate) TLSFunc {
+	if server == nil {
+		return nil
+	}
+	return func(ctx context.Context, endpoint string) (*tls.Config, error) {
+		if len(identity.Certificate) == 0 || identity.PrivateKey == nil {
+			return nil, &ErrClientIdentityRequired{}
+		}
+		serverCfg, err := server(ctx, endpoint)
+		if err != nil {
+			return nil, err
+		}
+		if serverCfg == nil {
+			return nil, &ErrTrustRequired{}
+		}
+		tlsCfg := serverCfg.Clone()
+		tlsCfg.Certificates = []tls.Certificate{identity}
+		return tlsCfg, nil
+	}
+}
 
 // QuicBaaSDial returns the production DialFunc: a go-quicbaas SDK client to
 // quicbaasd at cfg.QuicBaaSAddr, authenticated by tlsFn. A nil tlsFn is

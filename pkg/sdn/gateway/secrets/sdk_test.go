@@ -14,6 +14,7 @@
 package secrets
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"crypto/x509"
@@ -22,6 +23,8 @@ import (
 
 	quicbaassdk "github.com/jeremyhahn/go-quicbaas/sdk/go"
 	sdksecrets "github.com/jeremyhahn/go-quicbaas/sdk/go/client/secrets"
+
+	"github.com/jeremyhahn/go-trusted-platform/pkg/testutil"
 )
 
 func TestQuicBaaSDial_RequiresTrust(t *testing.T) {
@@ -140,5 +143,81 @@ func TestNewSDKSession_ReportsACloseFailureOnTheRefusalPath(t *testing.T) {
 	var want *ErrStoreUnavailable
 	if !errors.As(err, &want) {
 		t.Fatalf("got %v, want ErrStoreUnavailable", err)
+	}
+}
+
+// serverTLS is the anchor's shape: roots to verify the store by, no
+// certificate of the caller's own.
+func serverTLS(roots *x509.CertPool) TLSFunc {
+	return func(context.Context, string) (*tls.Config, error) {
+		return &tls.Config{MinVersion: tls.VersionTLS12, RootCAs: roots}, nil
+	}
+}
+
+func TestWithClientIdentity_PresentsTheNodeCertificate(t *testing.T) {
+	bundle := testutil.GenerateTestTLSBundle(t)
+	var served *tls.Config
+	server := func(ctx context.Context, ep string) (*tls.Config, error) {
+		cfg, err := serverTLS(bundle.CAPool)(ctx, ep)
+		served = cfg
+		return cfg, err
+	}
+
+	cfg, err := WithClientIdentity(server, bundle.ClientCert)(context.Background(), "127.0.0.1:1")
+	if err != nil {
+		t.Fatalf("tls: %v", err)
+	}
+	if len(cfg.Certificates) != 1 || !bytes.Equal(cfg.Certificates[0].Certificate[0], bundle.ClientCert.Certificate[0]) {
+		t.Fatal("the session must present the node certificate")
+	}
+	if cfg.RootCAs != bundle.CAPool {
+		t.Fatal("the session must keep verifying the store against the server roots")
+	}
+	if len(served.Certificates) != 0 {
+		t.Fatal("the server config must be cloned, not modified")
+	}
+}
+
+func TestWithClientIdentity_NilServerIsRefusedByTheDial(t *testing.T) {
+	bundle := testutil.GenerateTestTLSBundle(t)
+	tlsFn := WithClientIdentity(nil, bundle.ClientCert)
+	if tlsFn != nil {
+		t.Fatal("no server verification must yield no TLSFunc")
+	}
+	var trustErr *ErrTrustRequired
+	if _, err := QuicBaaSDial(Config{QuicBaaSAddr: "127.0.0.1:1"}, tlsFn)(context.Background()); !errors.As(err, &trustErr) {
+		t.Fatalf("err = %v, want *ErrTrustRequired", err)
+	}
+}
+
+func TestWithClientIdentity_RefusesAnEmptyIdentity(t *testing.T) {
+	bundle := testutil.GenerateTestTLSBundle(t)
+	noKey := tls.Certificate{Certificate: bundle.ClientCert.Certificate}
+	for name, identity := range map[string]tls.Certificate{
+		"no certificate": {},
+		"no private key": noKey,
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := WithClientIdentity(serverTLS(bundle.CAPool), identity)(context.Background(), "127.0.0.1:1")
+			var idErr *ErrClientIdentityRequired
+			if !errors.As(err, &idErr) {
+				t.Fatalf("err = %v, want *ErrClientIdentityRequired", err)
+			}
+		})
+	}
+}
+
+func TestWithClientIdentity_PropagatesServerFailures(t *testing.T) {
+	bundle := testutil.GenerateTestTLSBundle(t)
+	boom := errors.New("no trust anchor")
+	failing := func(context.Context, string) (*tls.Config, error) { return nil, boom }
+	if _, err := WithClientIdentity(failing, bundle.ClientCert)(context.Background(), "x"); !errors.Is(err, boom) {
+		t.Fatalf("err = %v, want the server failure", err)
+	}
+
+	empty := func(context.Context, string) (*tls.Config, error) { return nil, nil }
+	var trustErr *ErrTrustRequired
+	if _, err := WithClientIdentity(empty, bundle.ClientCert)(context.Background(), "x"); !errors.As(err, &trustErr) {
+		t.Fatalf("err = %v, want *ErrTrustRequired for a nil server config", err)
 	}
 }

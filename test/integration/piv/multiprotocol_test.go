@@ -19,9 +19,8 @@
 // either a real backend result or a consistent "backend not configured"
 // error surface across every transport.
 //
-// No real smartcards are required — a software stub backend is exercised
-// when available; otherwise the test treats the Unavailable error surface
-// as the contract.
+// No real smartcards are required. When the daemon has no PIV backend, every
+// transport must report ErrPIVNotConfigured; any other error fails the test.
 //
 // Run via:
 //
@@ -39,8 +38,6 @@ import (
 
 // TestPIVMultiProtocol runs the shared scenario against every protocol.
 func TestPIVMultiProtocol(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	t.Cleanup(cancel)
 
@@ -131,8 +128,10 @@ func runPIVScenario(t *testing.T, ctx context.Context, cmd PIVCommands) {
 			PrivateKeyPEM: "-----BEGIN PRIVATE KEY-----\nAAAA\n-----END PRIVATE KEY-----\n",
 			PIN:           "123456",
 		})
+		// Import fails closed (ErrPIVKeyImportUnsupported): reporting
+		// success would mean the key was filed as a certificate.
 		if err == nil {
-			return
+			t.Fatal("Import reported success; it must fail closed")
 		}
 		if !isBackendUnavailable(err) {
 			t.Fatalf("unexpected Import error: %v", err)

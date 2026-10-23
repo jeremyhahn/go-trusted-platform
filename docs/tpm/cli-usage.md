@@ -1,7 +1,11 @@
 # TPM CLI Usage
 
-This document provides the command-line reference for TPM operations
-using platformctl.
+> **Status: REFERENCE** · Last verified: 2026-10-15
+> The `platformctl tpm` commands, by example. The command tree is
+> [cli.md](cli.md).
+
+This document gives worked examples of TPM operations with `platformctl`. The
+commands live in `pkg/cli/commands/tpm/` and call the daemon's `TPMService`.
 
 ## Command Overview
 
@@ -9,348 +13,195 @@ using platformctl.
 platformctl tpm <command> [options]
 
 Commands:
-  info        Display TPM information
-  provision   Provision TPM keys
-  clear       Clear TPM (factory reset)
-  ek          Endorsement Key operations
-  srk         Storage Root Key operations
-  seal        Seal data to TPM
-  unseal      Unseal data from TPM
-  eventlog    Display TPM event log
+  info        Get TPM device information
+  status      Show TPM provisioning status (keys, certificates, hierarchies)
+  provision   Provision the TPM with required keys
+  clear       Clear the TPM
+  ek          Endorsement Key operations (create, info, certificate, delete)
+  srk         Storage Root Key operations (create, info, delete)
+  iak         IAK operations
+  idevid      IDevID operations
+  seal        Seal data to the TPM
+  unseal      Unseal data from the TPM
+  eventlog    Get the TPM event log
+  nvram       NVRAM operations (define, write, read, delete)
+  enroll      Enroll the device using the ACME enroll-01 challenge
+  certify     Certify a persistent key with the attestation key
 ```
+
+`install`, `destroy`, `policy`, `extend`, `xkms`, `flush` and `device` are also
+registered (`pkg/cli/commands/tpm/tpm.go`); see [cli.md](cli.md).
 
 ## TPM Information
 
-### Display TPM Info
-
 ```bash
-# Basic TPM information
+# TPM information as reported by the daemon
 platformctl tpm info
 
-# Output:
-# TPM Information
-# Manufacturer: Infineon
-# Vendor ID:    IFX
-# Family:       2.0
-# Revision:     1.38
-# Firmware:     7.85
-# FIPS 140-2:   true
-```
-
-### Detailed Information
-
-```bash
-# Verbose output with capabilities
-platformctl tpm info -v
-
-# JSON output
+# JSON output: {"info": "...", "version": "2.0", "pcr_banks": ["sha1", "sha256"],
+#   "manufacturer": {"name": "IFX", "id": 1229346816, "model": "SLB9670", "firmware_version": "7.85"},
+#   "fips_mode": true, "max_nvram_size": 2048, "is_simulator": false}
+# "manufacturer" is omitted when the TPM's fixed properties cannot be read.
 platformctl tpm info -o json
-```
 
-**JSON Output Example:**
-```json
-{
-  "version": "2.0",
-  "manufacturer": {
-    "name": "Infineon",
-    "id": "IFX",
-    "firmware": "7.85"
-  },
-  "capabilities": {
-    "algorithms": ["RSA", "ECC", "AES", "SHA256", "SHA384"],
-    "pcrBanks": ["SHA256", "SHA384"],
-    "maxNvramSize": 2048
-  },
-  "fipsMode": true,
-  "isSimulator": false
-}
+# Keys, certificates and hierarchies
+platformctl tpm status
 ```
 
 ## TPM Provisioning
 
-### Full Provision
-
 ```bash
-# Provision TPM with all standard keys
-platformctl tpm provision --so-pin
+# Create the EK, SRK and AK
+platformctl tpm provision
 
-# With explicit passwords
-platformctl tpm provision --raw-so-pin "owner-password"
+# With hierarchy passwords
+platformctl tpm provision --owner-password "$OWNER_PW" --endorsement-password "$EH_PW"
 ```
 
-### Provision Options
-
-| Option           | Description                              |
-|------------------|------------------------------------------|
-| `--so-pin`       | Prompt for Security Officer PIN         |
-| `--raw-so-pin`   | Provide SO PIN directly (automation)    |
-| `--hierarchy-auth`| Hierarchy authorization password        |
+| Option                   | Description                    | Default |
+|--------------------------|--------------------------------|---------|
+| `--create-ek`            | Create the EK                  | true    |
+| `--create-srk`           | Create the SRK                 | true    |
+| `--create-ak`            | Create the AK                  | true    |
+| `--owner-password`       | Owner hierarchy password       | (empty) |
+| `--endorsement-password` | Endorsement hierarchy password | (empty) |
 
 ## Endorsement Key Operations
 
-### View EK
-
 ```bash
-# Display EK information
-platformctl tpm ek show
+# EK information (default handle 0x81010001)
+platformctl tpm ek info
 
-# Output:
-# Endorsement Key (EK)
-# Handle:     0x81010001
-# Algorithm:  RSA-2048
-# Public Key: [base64 encoded]
-```
+# EK certificate
+platformctl tpm ek certificate
+platformctl tpm ek certificate -o json
 
-### Export EK Certificate
-
-```bash
-# Export EK certificate (PEM)
-platformctl tpm ek cert > ek.crt
-
-# Export in DER format
-platformctl tpm ek cert --format der > ek.der
-```
-
-### Create EK
-
-```bash
-# Create RSA EK
-platformctl tpm ek create --algorithm rsa2048
-
-# Create ECC EK
-platformctl tpm ek create --algorithm eccp384
+# Create an EK: RSA-2048 (default), RSA-3072, ECDSA-P256 or ECDSA-P384
+platformctl tpm ek create --algorithm ECDSA-P384
 ```
 
 ## Storage Root Key Operations
 
-### View SRK
-
 ```bash
-# Display SRK information
-platformctl tpm srk show
+# SRK information (default handle 0x81000001)
+platformctl tpm srk info
+platformctl tpm srk info -o json
 
-# Output:
-# Storage Root Key (SRK)
-# Handle:     0x81000002
-# Algorithm:  RSA-2048
-# Parent:     0x81010001 (EK)
+# Create an SRK under the EK at 0x81010001
+platformctl tpm srk create --algorithm RSA-2048
 ```
 
-### SRK Options
+## Seal and Unseal
+
+`seal` takes the secret in `--data`; it reads no positional arguments and no
+stdin. Objects are named by `--cn`.
 
 ```bash
-# Show with public key details
-platformctl tpm srk show -v
+# Seal with a password
+platformctl tpm seal --cn my-secret --data "sensitive-data" --password "$PW"
 
-# JSON output
-platformctl tpm srk show -o json
+# Seal to PCRs 7 and 9 (sha256 bank)
+platformctl tpm seal --cn my-secret --data "sensitive-data" --pcrs 7,9
+
+# Seal a file's contents
+platformctl tpm seal --cn tls-private-key --data "$(cat server.key)"
+
+# Unseal: table output prints the data as is
+platformctl tpm unseal --cn my-secret > secret.txt
+platformctl tpm unseal --cn my-secret --password "$PW"
 ```
 
-## Seal Operations
+The options are in [Sealing](sealing.md#seal-options). The daemon always seals
+under the SSRK and does not act on `--parent`, `--parent-password` or
+`--overwrite`. There is no `seal list` command.
 
-### Basic Seal
-
-```bash
-# Seal a secret string
-platformctl tpm seal my-secret "sensitive-data"
-
-# Seal from file
-cat secret.txt | platformctl tpm seal my-secret
-
-# Seal with echo
-echo -n "password123" | platformctl tpm seal db-password
-```
-
-### Seal Options
+## Event Log
 
 ```bash
-# Seal with password protection
-platformctl tpm seal my-secret "data" --password "keypass"
-
-# Seal with password auth only (no PCR binding: omit --pcrs)
-platformctl tpm seal my-secret "data" --password "required"
-
-# Seal to specific parent
-platformctl tpm seal my-secret "data" --parent 0x81000002
-
-# Overwrite existing
-platformctl tpm seal my-secret "new-data" --overwrite
-```
-
-### Seal Command Options
-
-| Option              | Description                      | Default      |
-|---------------------|----------------------------------|--------------|
-| `--parent, -p`      | Parent key handle                | 0x81000002   |
-| `--parent-password` | Parent key password              | (empty)      |
-| `--parent-policy`   | Use PCR policy for parent        | true         |
-| `--password`        | Sealed object password           | (empty)      |
-| `--policy`          | Attach PCR policy                | true         |
-| `--overwrite`       | Overwrite if exists              | false        |
-
-## Unseal Operations
-
-### Basic Unseal
-
-```bash
-# Unseal a secret
-platformctl tpm unseal my-secret
-
-# Output directly to stdout
-platformctl tpm unseal my-secret
-
-# Pipe to file
-platformctl tpm unseal my-secret > secret.txt
-```
-
-### Unseal Options
-
-```bash
-# Unseal with password
-platformctl tpm unseal my-secret --password "keypass"
-
-# Unseal from specific parent
-platformctl tpm unseal my-secret --parent 0x81000002
-```
-
-### Unseal Command Options
-
-| Option              | Description                      | Default      |
-|---------------------|----------------------------------|--------------|
-| `--parent, -p`      | Parent key handle                | 0x81000002   |
-| `--parent-password` | Parent key password              | (empty)      |
-| `--password`        | Sealed object password           | (empty)      |
-
-## Event Log Operations
-
-### View Event Log
-
-```bash
-# Display event log summary
+# Text (default)
 platformctl tpm eventlog
 
-# Detailed output
-platformctl tpm eventlog -v
-
-# JSON format
-platformctl tpm eventlog -o json
-```
-
-### Event Log Output
-
-```
-PCR[0]: EV_S_CRTM_VERSION - UEFI Platform Firmware
-PCR[0]: EV_EFI_PLATFORM_FIRMWARE_BLOB - Firmware code
-PCR[7]: EV_EFI_VARIABLE_DRIVER_CONFIG - SecureBoot
-PCR[7]: EV_EFI_VARIABLE_AUTHORITY - db certificate
-PCR[8]: EV_IPL - GRUB command line
-PCR[9]: EV_IPL - Linux kernel
+# JSON or raw binary
+platformctl tpm eventlog --format json
+platformctl tpm eventlog --format binary > binary_bios_measurements
 ```
 
 ## Clear TPM
 
-### Factory Reset
-
 ```bash
-# Clear TPM (requires owner auth)
-platformctl tpm clear --so-pin --confirm
+# Clear the TPM (requires owner authorization; --confirm is required)
+platformctl tpm clear --owner-password "$OWNER_PW" --confirm
 
-# With explicit password
-platformctl tpm clear --raw-so-pin "owner-password" --confirm
+# Clear through UEFI PPI (bypasses DA lockout, reboots)
+platformctl tpm clear --force --confirm
 ```
 
 **Warning:** Clearing the TPM removes all keys and sealed data permanently.
 
 ## Global Options
 
-These options are available for all TPM commands:
+The `platformctl` root flags (`pkg/cli/commands/root.go`) apply to every TPM
+command:
 
-| Option            | Short | Description                       |
-|-------------------|-------|-----------------------------------|
-| `--debug`         | `-d`  | Enable debug output               |
-| `--output`        | `-o`  | Output format (table, json, yaml) |
-| `--verbose`       | `-v`  | Verbose output                    |
-| `--config`        | `-c`  | Config file path                  |
-| `--platform-dir`  |       | Platform data directory           |
-| `--so-pin`        |       | Prompt for SO PIN                 |
-| `--pin`           |       | Prompt for user PIN               |
-| `--raw-so-pin`    |       | SO PIN (automation)               |
-| `--raw-pin`       |       | User PIN (automation)             |
+| Option          | Short | Description                          | Env |
+|-----------------|-------|--------------------------------------|-----|
+| `--config`      | `-c`  | Config file path                     | `PLATFORMCTL_CONFIG` |
+| `--context`     |       | Named context                        | `PLATFORMCTL_CONTEXT` |
+| `--transport`   |       | Transport override                   | `PLATFORMCTL_TRANSPORT` |
+| `--server`      |       | Server address override              | `PLATFORMCTL_SERVER` |
+| `--server-name` |       | TLS server name override             | `PLATFORMCTL_SERVER_NAME` |
+| `--output`      | `-o`  | Output format (default `table`)      | `PLATFORMCTL_OUTPUT` |
+| `--verbose`     | `-v`  | Verbose output                       | |
+| `--no-color`    |       | Disable colored output               | `NO_COLOR` |
+
+There are no TPM-wide PIN or password flags; each command takes its own.
 
 ## Examples
 
-### Example: Provision and Seal Database Credentials
+### Provision and Seal Database Credentials
 
 ```bash
 # 1. Provision TPM
-platformctl tpm provision --so-pin
+platformctl tpm provision
 
 # 2. Verify provisioning
-platformctl tpm info
-platformctl tpm ek show
-platformctl tpm srk show
+platformctl tpm status
+platformctl tpm ek info
+platformctl tpm srk info
 
 # 3. Seal database credentials
-platformctl tpm seal db-credentials "postgres://user:pass@localhost/db"
+platformctl tpm seal --cn db-credentials --data "postgres://user:pass@localhost/db"
 
-# 4. Verify sealed object exists
-platformctl tpm seal list
-
-# 5. Unseal for use
-DB_URL=$(platformctl tpm unseal db-credentials)
-echo "Connecting to: $DB_URL"
+# 4. Unseal for use
+DB_URL=$(platformctl tpm unseal --cn db-credentials)
 ```
 
-### Example: Seal TLS Private Key
+### Seal a TLS Private Key
 
 ```bash
-# Generate TLS key
 openssl ecparam -genkey -name prime256v1 -noout -out server.key
-
-# Seal the private key
-cat server.key | platformctl tpm seal tls-private-key
+platformctl tpm seal --cn tls-private-key --data "$(cat server.key)"
 
 # Later, unseal for use
-platformctl tpm unseal tls-private-key > /run/secrets/server.key
+platformctl tpm unseal --cn tls-private-key > /run/secrets/server.key
 chmod 600 /run/secrets/server.key
 ```
 
-### Example: Automation Script
+### PCR Values
 
-```bash
-#!/bin/bash
-set -e
-
-# Provision TPM (non-interactive)
-platformctl tpm provision --raw-so-pin "${TPM_OWNER_PASSWORD}"
-
-# Seal secrets
-platformctl tpm seal api-key "${API_KEY}" --raw-so-pin "${TPM_OWNER_PASSWORD}"
-platformctl tpm seal db-pass "${DB_PASSWORD}" --raw-so-pin "${TPM_OWNER_PASSWORD}"
-
-echo "Secrets sealed to TPM"
-```
-
-### Example: View PCR Values
-
-```bash
-# Note: Use platformctl platform or direct TPM tools
-# PCR values shown in event log context
-platformctl tpm eventlog -v
-
-# Or via attestation quote
-platformctl platform quote --pcrs 0,7,8,9
-```
+`platformctl tpm` has no PCR read or quote command. Read PCRs with the
+`TPMService.GetPCRs` RPC and quote with `TPMService.Quote`
+([Attestation](attestation.md)); `platformctl tpm eventlog` shows the
+measurements behind them.
 
 ## Error Messages
 
-| Error                           | Cause                    | Solution                  |
-|---------------------------------|--------------------------|---------------------------|
-| "TPM not found"                 | No TPM device            | Check /dev/tpmrm0 exists  |
-| "authorization failed"          | Wrong password/PIN       | Correct credentials       |
-| "object not found"              | Sealed object missing    | Check CN exists           |
-| "policy failed"                 | PCR state changed        | Re-seal after update      |
-| "TPM in lockout"                | Too many auth failures   | Wait or clear lockout     |
+| Error                  | Cause                    | Solution                     |
+|------------------------|--------------------------|------------------------------|
+| "TPM service not available" | Daemon has no TPM   | Check `tpm.device` and the device node |
+| Authorization failure  | Wrong password           | Correct credentials          |
+| Policy failure         | PCR state changed        | Re-seal after update         |
+| Lockout                | Too many auth failures   | Wait or clear lockout        |
 
 ## Related Documentation
 

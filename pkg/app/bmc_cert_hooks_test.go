@@ -31,8 +31,6 @@ import (
 type hookRecorder struct {
 	mu      sync.Mutex
 	calls   []string // ordered call names: "issued", "deployed"
-	leaves  []*x509.Certificate
-	cas     []*x509.Certificate
 	retErrs map[string]error
 }
 
@@ -40,20 +38,17 @@ func newHookRecorder() *hookRecorder {
 	return &hookRecorder{retErrs: make(map[string]error)}
 }
 
-func (r *hookRecorder) onIssued(_ context.Context, leaf *x509.Certificate) error {
+func (r *hookRecorder) onIssued(_ context.Context, _ *x509.Certificate) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.calls = append(r.calls, "issued")
-	r.leaves = append(r.leaves, leaf)
 	return r.retErrs["issued"]
 }
 
-func (r *hookRecorder) onDeployed(_ context.Context, leaf, ca *x509.Certificate) error {
+func (r *hookRecorder) onDeployed(_ context.Context, _, _ *x509.Certificate) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.calls = append(r.calls, "deployed")
-	r.leaves = append(r.leaves, leaf)
-	r.cas = append(r.cas, ca)
 	return r.retErrs["deployed"]
 }
 
@@ -249,9 +244,10 @@ func TestIssueBMCCertificateCore_DeployedHookNilCATolerance(t *testing.T) {
 	if !called {
 		t.Fatal("OnCertDeployed was not called")
 	}
-	// seenCA is expected to be nil when CACertificatePEM is empty — the
-	// hook must tolerate this without panicking.
-	_ = seenCA
+	// CACertificatePEM is empty, so the hook must be handed a nil CA.
+	if seenCA != nil {
+		t.Errorf("OnCertDeployed ca = %v, want nil when CACertificatePEM is empty", seenCA.Subject)
+	}
 }
 
 // TestIssueBMCCertificateCore_HooksPassedThroughReissue verifies that
@@ -301,7 +297,6 @@ type fakeDanePublisher struct {
 	publishCalls    int
 	prePublishErr   error
 	publishErr      error
-	lastLeaf        *x509.Certificate
 	lastCA          *x509.Certificate
 	lastHostname    string
 }
@@ -310,7 +305,6 @@ func (f *fakeDanePublisher) PrePublishRollover(_ context.Context, newCert *x509.
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.prePublishCalls++
-	f.lastLeaf = newCert
 	f.lastHostname = hostname
 	return f.prePublishErr
 }
@@ -319,7 +313,6 @@ func (f *fakeDanePublisher) PublishForCertificate(_ context.Context, leafCert, c
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.publishCalls++
-	f.lastLeaf = leafCert
 	f.lastCA = caCert
 	f.lastHostname = hostname
 	return f.publishErr

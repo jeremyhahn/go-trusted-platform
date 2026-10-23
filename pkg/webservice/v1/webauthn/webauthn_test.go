@@ -36,10 +36,10 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore/kvstore"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/tenant"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/util"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/jwt"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/login"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/login/logintest"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/restwire"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -138,6 +138,10 @@ func (m *mockResponseWriter) Error500(w http.ResponseWriter, r *http.Request, er
 	m.Called(w, r, err)
 }
 
+func (m *mockResponseWriter) Error503(w http.ResponseWriter, r *http.Request, err error) {
+	m.Called(w, r, err)
+}
+
 // mockFIDO2Client implements the SDK FIDO2Client interface — the single
 // canonical WebAuthn/FIDO2 ceremony surface the handler proxies to.
 type mockFIDO2Client struct{ mock.Mock }
@@ -194,6 +198,7 @@ type harness struct {
 	writer  *mockResponseWriter
 	sdk     *mockFIDO2Client
 	login   *fakeUnifiedLoginClient
+	tenants *mockTenantUserService
 	logger  *logging.Logger
 }
 
@@ -231,6 +236,14 @@ func (i *fakeSessionIssuer) IssueSession(identity *quicbaassdk.Identity) (string
 	return "platform-session-for-" + identity.Subject, time.Unix(1700003600, 0).UTC(), nil
 }
 
+// fixedWorkspace resolves every principal to one workspace, standing in for
+// the tenant user service the registry hands the FIDO2 binder.
+type fixedWorkspace string
+
+func (w fixedWorkspace) Workspace(context.Context, string) (string, error) {
+	return string(w), nil
+}
+
 func newHarness(t *testing.T) *harness {
 	t.Helper()
 	logger := logging.NewLogger(slog.LevelDebug, os.Stderr)
@@ -240,7 +253,8 @@ func newHarness(t *testing.T) *harness {
 	sdk := new(mockFIDO2Client)
 	unified := new(fakeUnifiedLoginClient)
 	issuer := new(fakeSessionIssuer)
-	fido2Binder, err := login.NewFIDO2Binder(testTenantID)
+	tenants := new(mockTenantUserService)
+	fido2Binder, err := login.NewFIDO2Binder(testTenantID, fixedWorkspace("workspace-1"))
 	require.NoError(t, err)
 	driver, err := login.NewDriver(login.DriverParams{
 		Client:         unified,
@@ -257,11 +271,11 @@ func newHarness(t *testing.T) *harness {
 			RPID:          "localhost",
 			RPOrigins:     []string{"http://localhost"},
 		},
-		JWTService:          &jwt.Service{},
 		Logger:              logger,
 		RegistrationService: regs,
 		ResponseWriter:      writer,
 		UserService:         users,
+		TenantUserService:   tenants,
 		FIDO2Client:         sdk,
 		LoginDriver:         driver,
 		TenantID:            testTenantID,
@@ -279,6 +293,7 @@ func newHarness(t *testing.T) *harness {
 		writer:  writer,
 		sdk:     sdk,
 		login:   unified,
+		tenants: tenants,
 		logger:  logger,
 	}
 }
@@ -477,6 +492,32 @@ func TestBeginRegistration_MissingEmail(t *testing.T) {
 	h.writer.AssertExpectations(t)
 }
 
+// TestBeginRegistration_InvalidEmail pins #643: an address the IAM identity
+// store would reject is refused at begin, before a user id is derived, the
+// SDK ceremony is opened or a registration session is stored, so finish can
+// never create a user and tenant for it.
+func TestBeginRegistration_InvalidEmail(t *testing.T) {
+	for _, email := range []string{"jhahn", "jhahn@localhost", "@example.com", "j hahn@example.com"} {
+		t.Run(email, func(t *testing.T) {
+			h := newHarness(t)
+			body, _ := json.Marshal(map[string]string{"email": email})
+			req := httptest.NewRequest(http.MethodPost, "/registration/begin", bytes.NewReader(body))
+			w := httptest.NewRecorder()
+			h.writer.On("Error400", w, req, mock.MatchedBy(func(err error) bool {
+				var invalid service.ErrInvalidEmail
+				return errors.As(err, &invalid) && invalid.Email == email
+			})).Return()
+
+			h.handler.BeginRegistration(w, req)
+
+			h.writer.AssertExpectations(t)
+			assert.Empty(t, h.users.Calls, "no user lookup or creation")
+			assert.Empty(t, h.sdk.Calls, "no SDK ceremony opened")
+			assert.Empty(t, h.regs.Calls, "no registration session stored")
+		})
+	}
+}
+
 func TestBeginRegistration_UserAlreadyRegistered(t *testing.T) {
 	h := newHarness(t)
 	username := "dup@example.com"
@@ -485,7 +526,7 @@ func TestBeginRegistration_UserAlreadyRegistered(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/registration/begin", bytes.NewReader(body))
 	w := httptest.NewRecorder()
 	h.users.On("Get", mock.Anything, userID).Return(&entities.User{ID: userID, Email: username}, nil)
-	h.writer.On("Write", w, req, http.StatusConflict, mock.MatchedBy(func(resp response.WebServiceResponse) bool {
+	h.writer.On("Write", w, req, http.StatusConflict, mock.MatchedBy(func(resp restwire.WebServiceResponse) bool {
 		return resp.Code == http.StatusConflict && resp.Error == ErrUserAlreadyExists.Error() && !resp.Success
 	})).Return()
 	h.handler.BeginRegistration(w, req)
@@ -631,6 +672,56 @@ func TestFinishRegistration_SuccessFalse_FailsClosed(t *testing.T) {
 
 func TestFinishRegistration_NilResponse_FailsClosed(t *testing.T) {
 	finishRegistrationRejection(t, nil)
+}
+
+// finishRegistrationLanding drives a verified registration through tenant
+// orchestration, with the tenant user service returning registered as the
+// stored user and tenant as the created workspace.
+func finishRegistrationLanding(t *testing.T, registered *entities.User, tenant *tenantEntity) (*harness, *httptest.ResponseRecorder, *http.Request) {
+	t.Helper()
+	h := newHarness(t)
+	handle := []byte("sdk-handle-landing")
+	recordID := util.NewID(handle)
+	body := []byte(`{"id":"cred-l","type":"public-key","response":{"clientDataJSON":"e30","attestationObject":"e30"}}`)
+	req := httptest.NewRequest(http.MethodPost, "/registration/finish", bytes.NewReader(body))
+	req.Header.Set("X-User-Id", base64.RawURLEncoding.EncodeToString(handle))
+	req.Header.Set("X-Session-Id", "sess")
+	w := httptest.NewRecorder()
+	h.regs.On("Get", mock.Anything, mock.Anything, recordID).
+		Return(&entities.Registration{ID: recordID, Email: registered.Email}, nil)
+	h.sdk.On("FinishRegistration", withTestTenant, mock.Anything).
+		Return(&quicbaassdk.FIDO2FinishRegistrationResponse{Success: true, CredentialID: "cred-l"}, nil)
+	h.users.On("Get", mock.Anything, registered.ID).Return(nil, datastore.ErrRecordNotFound)
+	h.tenants.On("RegisterNewUser", mock.Anything, mock.Anything).
+		Return(&service.RegisterResult{User: registered, Tenant: tenant}, nil)
+	h.regs.On("Delete", mock.Anything, mock.Anything, recordID).Return(nil)
+	return h, w, req
+}
+
+// TestFinishRegistration_LandsInWorkspace proves the registration session
+// is minted for the workspace the registration created (#662).
+func TestFinishRegistration_LandsInWorkspace(t *testing.T) {
+	email := "land@example.com"
+	registered := &entities.User{ID: util.NewID([]byte(email)), Email: email, TenantID: "workspace-1"}
+	h, w, req := finishRegistrationLanding(t, registered, &tenantEntity{ID: "workspace-1"})
+	h.tenants.On("IssueToken", mock.Anything, registered).Return("workspace-token", nil)
+	h.writer.On("Success200", w, req, FinishRegistrationResponse{Token: "workspace-token", TenantID: "workspace-1"}).Return()
+	h.handler.FinishRegistration(w, req)
+	h.tenants.AssertExpectations(t)
+	h.writer.AssertExpectations(t)
+}
+
+// TestFinishRegistration_OperatingTenant_Forbidden pins #662: a user that
+// resolves to the operating tenant gets a 403, never a session.
+func TestFinishRegistration_OperatingTenant_Forbidden(t *testing.T) {
+	email := "operator@example.com"
+	registered := &entities.User{ID: util.NewID([]byte(email)), Email: email, TenantID: testTenantID}
+	h, w, req := finishRegistrationLanding(t, registered, &tenantEntity{ID: testTenantID})
+	h.writer.On("Error403", w, req, ErrOperatingTenant, nil).Return()
+	h.handler.FinishRegistration(w, req)
+	h.writer.AssertExpectations(t)
+	h.tenants.AssertNotCalled(t, "IssueToken", mock.Anything, mock.Anything)
+	h.writer.AssertNotCalled(t, "Success200", mock.Anything, mock.Anything, mock.Anything)
 }
 
 // =============================================================================
@@ -1013,11 +1104,30 @@ func TestValidateInvitation_Pending_OK(t *testing.T) {
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPost, "/registration/begin", nil)
 	inv.On("GetByToken", mock.Anything, "tok").Return(&entities.Invitation{
-		Token: "tok", Email: "a@b", Status: entities.InvitationStatusPending,
+		Token: "tok", Email: "a@b", TenantID: "workspace-1", Status: entities.InvitationStatusPending,
 		ExpiresAt: futureTime(),
 	}, nil)
 	assert.True(t, h.handler.validateInvitation(w, r, "tok", "a@b"))
 	h.writer.AssertNotCalled(t, "Error400", mock.Anything, mock.Anything, mock.Anything)
+	h.writer.AssertNotCalled(t, "Error403", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+}
+
+// TestValidateInvitation_OperatingTenant_Forbidden pins #662: an
+// invitation into the operating tenant is refused at registration begin,
+// before an SDK ceremony opens or an account exists.
+func TestValidateInvitation_OperatingTenant_Forbidden(t *testing.T) {
+	h := newHarness(t)
+	inv := h.withInvitations(t)
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/registration/begin", nil)
+	inv.On("GetByToken", mock.Anything, "tok").Return(&entities.Invitation{
+		Token: "tok", Email: "a@b", TenantID: testTenantID, Status: entities.InvitationStatusPending,
+		ExpiresAt: futureTime(),
+	}, nil)
+	h.writer.On("Error403", w, r, ErrOperatingTenant, nil).Return()
+	assert.False(t, h.handler.validateInvitation(w, r, "tok", "a@b"))
+	h.writer.AssertExpectations(t)
+	h.sdk.AssertNotCalled(t, "BeginRegistration", mock.Anything, mock.Anything)
 }
 
 // =============================================================================
@@ -1047,6 +1157,11 @@ func (m *mockTenantUserService) GetUserTenant(ctx context.Context, userID uint64
 	}
 	return args.Get(0).(*tenantEntity), args.Error(1)
 }
+
+func (m *mockTenantUserService) Workspace(ctx context.Context, email string) (string, error) {
+	args := m.Called(ctx, email)
+	return args.String(0), args.Error(1)
+}
 func (m *mockTenantUserService) IsTenantOwner(ctx context.Context, userID uint64) (bool, error) {
 	args := m.Called(ctx, userID)
 	return args.Bool(0), args.Error(1)
@@ -1059,17 +1174,6 @@ func (m *mockTenantUserService) IssueToken(ctx context.Context, user *entities.U
 	return args.String(0), args.Error(1)
 }
 func (m *mockTenantUserService) SetIAMMirror(_ service.IAMUserMirror) {}
-
-func TestOrchestrateTenant_NoTenantService_SavesDirectly(t *testing.T) {
-	h := newHarness(t)
-	req := httptest.NewRequest(http.MethodPost, "/x", nil)
-	user := &entities.User{ID: 1, Email: "a@b"}
-	h.users.On("Save", mock.Anything, user).Return(nil)
-	id, err := h.handler.orchestrateTenant(req, user, "")
-	assert.NoError(t, err)
-	assert.Empty(t, id)
-	h.users.AssertExpectations(t)
-}
 
 func TestOrchestrateTenant_NewUser_TenantCreated(t *testing.T) {
 	h := newHarness(t)
@@ -1116,16 +1220,50 @@ func TestOrchestrateTenant_NewUser_PropagatesError(t *testing.T) {
 	tus.AssertExpectations(t)
 }
 
-func TestIssueToken_PrefersTenantUserService(t *testing.T) {
+// TestIssueToken_Workspace_MintsThroughTenantUserService proves a
+// registration session is minted by the tenant user service for the
+// user's own workspace (#662).
+func TestIssueToken_Workspace_MintsThroughTenantUserService(t *testing.T) {
 	h := newHarness(t)
-	tus := new(mockTenantUserService)
-	h.handler.tenantUserService = tus
 	req := httptest.NewRequest(http.MethodPost, "/x", nil)
-	user := &entities.User{ID: 1, Email: "a@b"}
-	tus.On("IssueToken", mock.Anything, user).Return("tenant-token", nil)
+	user := &entities.User{ID: 1, Email: "a@b", TenantID: "workspace-1"}
+	h.tenants.On("IssueToken", mock.Anything, user).Return("tenant-token", nil)
 	out, err := h.handler.issueToken(req, user)
 	require.NoError(t, err)
 	assert.Equal(t, "tenant-token", out)
+	h.tenants.AssertExpectations(t)
+}
+
+// TestIssueToken_OperatingTenant_Refused pins #662: a registration never
+// mints a session in the operating tenant, nor an unscoped one that would
+// fall back to it.
+func TestIssueToken_OperatingTenant_Refused(t *testing.T) {
+	for name, tenantID := range map[string]string{
+		"no tenant":        "",
+		"operating tenant": testTenantID,
+	} {
+		t.Run(name, func(t *testing.T) {
+			h := newHarness(t)
+			req := httptest.NewRequest(http.MethodPost, "/x", nil)
+			user := &entities.User{ID: 1, Email: "a@b", TenantID: tenantID}
+			out, err := h.handler.issueToken(req, user)
+			assert.ErrorIs(t, err, ErrOperatingTenant)
+			assert.Empty(t, out)
+			h.tenants.AssertNotCalled(t, "IssueToken", mock.Anything, mock.Anything)
+		})
+	}
+}
+
+// TestIssueToken_TenantUserServiceError propagates a mint failure.
+func TestIssueToken_TenantUserServiceError(t *testing.T) {
+	h := newHarness(t)
+	req := httptest.NewRequest(http.MethodPost, "/x", nil)
+	user := &entities.User{ID: 1, Email: "a@b", TenantID: "workspace-1"}
+	mintErr := errors.New("mint failed")
+	h.tenants.On("IssueToken", mock.Anything, user).Return("", mintErr)
+	out, err := h.handler.issueToken(req, user)
+	assert.ErrorIs(t, err, mintErr)
+	assert.Empty(t, out)
 }
 
 // TestReadCredentialBody_Boundaries pins the size cap on the
@@ -1203,6 +1341,21 @@ func TestNewHandler_RequiresLoginDriver(t *testing.T) {
 		TenantID:    testTenantID,
 	})
 	assert.ErrorIs(t, err, ErrLoginDriverRequired)
+}
+
+// TestNewHandler_RequiresTenantUserService pins #662: without a tenant
+// user service a registration has no workspace to land in, so the handler
+// is not built at all rather than minting an operating-tenant session.
+func TestNewHandler_RequiresTenantUserService(t *testing.T) {
+	h := newHarness(t)
+	_, err := NewHandler(ServiceParams{
+		Config:      &Config{RPID: "x", RPOrigins: []string{"https://x"}},
+		Logger:      h.logger,
+		FIDO2Client: new(mockFIDO2Client),
+		LoginDriver: h.handler.loginDriver,
+		TenantID:    testTenantID,
+	})
+	assert.ErrorIs(t, err, ErrTenantUserServiceRequired)
 }
 
 func TestBeginLogin_DelegatesUsernamelessToTheBackbone(t *testing.T) {

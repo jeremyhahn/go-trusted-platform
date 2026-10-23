@@ -15,6 +15,8 @@ package deployer
 
 import (
 	"context"
+	"path/filepath"
+	"strings"
 )
 
 const (
@@ -29,7 +31,26 @@ const (
 
 	// DefaultContainerName is the default container name.
 	DefaultContainerName = "bootstrap-pxe"
+
+	// ContainerFirmwareCacheDir is where pxeboot caches the iPXE firmware
+	// it downloads inside the container. In boot-node mode it is a host
+	// volume, so a replaced container does not download it again.
+	ContainerFirmwareCacheDir = "/var/cache/go-trusted-platform/firmware"
+
+	// firmwareCacheDirSuffix names the boot-node firmware cache beside
+	// DataDir when FirmwareCacheDir is unset: /srv/pxeboot caches into
+	// /srv/pxeboot-firmware.
+	firmwareCacheDirSuffix = "-firmware"
+
+	// bootNodeRestartPolicy restarts a boot node's container after a crash
+	// or a host reboot, until it is removed or stopped by hand.
+	bootNodeRestartPolicy = "unless-stopped"
 )
+
+// volatileDirs are host directories emptied on reboot (tmpfs or cleaned at
+// boot). A boot node's volumes must outlive a reboot, so neither may sit
+// under one.
+var volatileDirs = []string{"/tmp", "/run", "/dev/shm"}
 
 // DeployConfig holds deployment configuration.
 type DeployConfig struct {
@@ -89,8 +110,17 @@ type DeployConfig struct {
 	// "eth0" default takes effect.
 	BootstrapInterface string
 
+	// BootstrapBindHost is the address the bootstrap container's HTTP
+	// and TFTP servers bind (BOOTSTRAP_BIND_HOST env var, pxeboot
+	// --bind-host). Empty binds every interface. DHCP never binds it: it
+	// must receive broadcasts, so it stays on the unspecified address
+	// scoped to BootstrapInterface (#93).
+	BootstrapBindHost string
+
 	// BootstrapServerIP is the IP address the bootstrap container
-	// binds DHCP/TFTP/HTTP services to (BOOTSTRAP_SERVER_IP env var).
+	// advertises as the DHCP server and next server, and the address
+	// the per-device boot script server binds (BOOTSTRAP_SERVER_IP env
+	// var). The HTTP and TFTP servers bind BootstrapBindHost instead.
 	// The image's entrypoint defaults this to 192.0.2.1, which
 	// matches a typical post-bootstrap provisioning subnet. For the
 	// FIRST bootstrap on a fresh deploy (when no provisioning subnet
@@ -122,6 +152,12 @@ type DeployConfig struct {
 	// entrypoint default (192.0.2.1).
 	BootstrapGateway string
 
+	// BootstrapNoRouter advertises no gateway at all: the DHCP offer and
+	// ack carry no router option (3), for an isolated provisioning VLAN
+	// whose boot server does not route (BOOTSTRAP_NO_ROUTER). It excludes
+	// BootstrapGateway.
+	BootstrapNoRouter bool
+
 	// BootstrapDNS is the DNS server advertised in the DHCP offer
 	// (BOOTSTRAP_DNS env var). Empty falls through to the entrypoint
 	// default (192.0.2.1).
@@ -144,6 +180,19 @@ type DeployConfig struct {
 	// BootstrapProxyDHCP runs the container's DHCP server as a proxy
 	// (BOOTSTRAP_PROXY_DHCP).
 	BootstrapProxyDHCP bool
+
+	// BootNode keeps the container serving for good: it runs with a
+	// restart policy, and the firmware cache is a host volume at
+	// FirmwareCacheDir so it outlives the container. DataDir must then be
+	// a persistent path.
+	BootNode bool
+
+	// FirmwareCacheDir is the host directory mounted at
+	// ContainerFirmwareCacheDir in boot-node mode. Empty means DataDir
+	// with "-firmware" appended, beside it rather than inside it, so a
+	// teardown that deletes DataDir keeps the cache. Only valid with
+	// BootNode.
+	FirmwareCacheDir string
 
 	// netboot holds the container paths of the staged build's TFTP tree
 	// and arm64 iPXE, set by Deploy once the build is staged.
@@ -183,6 +232,9 @@ func (c *DeployConfig) ApplyDefaults() {
 	if c.ContainerName == "" {
 		c.ContainerName = DefaultContainerName
 	}
+	if c.BootNode && c.FirmwareCacheDir == "" {
+		c.FirmwareCacheDir = filepath.Clean(c.DataDir) + firmwareCacheDirSuffix
+	}
 }
 
 // Validate checks the deploy configuration for required fields.
@@ -200,7 +252,68 @@ func (c *DeployConfig) Validate() error {
 	if c.NetbootMediaDir == "" {
 		return ErrInvalidDeployConfig{Field: "netboot_media_dir", Reason: "must not be empty: the container serves the netboot media build's sets (make netboot-media)"}
 	}
+	if err := c.ValidateRouter(); err != nil {
+		return err
+	}
+	return c.ValidateBootNode()
+}
+
+// ValidateRouter refuses a gateway together with BootstrapNoRouter: the
+// two say opposite things about the DHCP router option.
+func (c *DeployConfig) ValidateRouter() error {
+	if c.BootstrapNoRouter && strings.TrimSpace(c.BootstrapGateway) != "" {
+		return ErrNoRouterWithGateway{Gateway: c.BootstrapGateway}
+	}
 	return nil
+}
+
+// ValidateBootNode checks the boot-node settings, after ApplyDefaults: a
+// boot node's data_dir and firmware cache must be absolute, persistent and
+// apart from each other, and a firmware cache without boot-node mode would
+// be silently ignored.
+func (c *DeployConfig) ValidateBootNode() error {
+	if !c.BootNode {
+		if c.FirmwareCacheDir != "" {
+			return ErrInvalidBootNodeConfig{Field: "firmware_cache_dir", Value: c.FirmwareCacheDir, Reason: "is mounted only in boot-node mode (boot_node: true)"}
+		}
+		return nil
+	}
+	if err := checkPersistentDir("data_dir", c.DataDir); err != nil {
+		return err
+	}
+	if err := checkPersistentDir("firmware_cache_dir", c.FirmwareCacheDir); err != nil {
+		return err
+	}
+	if isWithin(c.FirmwareCacheDir, c.DataDir) || isWithin(c.DataDir, c.FirmwareCacheDir) {
+		return ErrInvalidBootNodeConfig{Field: "firmware_cache_dir", Value: c.FirmwareCacheDir, Reason: "must not overlap data_dir " + c.DataDir + ": teardown deletes data_dir and must keep the cache"}
+	}
+	return nil
+}
+
+// checkPersistentDir rejects a boot-node host directory that is relative,
+// the filesystem root, or under a directory emptied on reboot.
+func checkPersistentDir(field, dir string) error {
+	if !filepath.IsAbs(dir) {
+		return ErrInvalidBootNodeConfig{Field: field, Value: dir, Reason: "must be an absolute host path"}
+	}
+	if filepath.Clean(dir) == "/" {
+		return ErrInvalidBootNodeConfig{Field: field, Value: dir, Reason: "must not be the filesystem root"}
+	}
+	for _, volatile := range volatileDirs {
+		if isWithin(dir, volatile) {
+			return ErrInvalidBootNodeConfig{Field: field, Value: dir, Reason: "is under " + volatile + ", which does not survive a reboot"}
+		}
+	}
+	return nil
+}
+
+// isWithin reports whether dir is root or a path inside it.
+func isWithin(dir, root string) bool {
+	rel, err := filepath.Rel(filepath.Clean(root), filepath.Clean(dir))
+	if err != nil {
+		return false
+	}
+	return rel != ".." && !strings.HasPrefix(rel, "../")
 }
 
 // ValidateTeardown checks the subset of fields required to tear down an

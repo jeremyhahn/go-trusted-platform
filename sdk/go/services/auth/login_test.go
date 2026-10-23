@@ -27,18 +27,34 @@ import (
 // TestExpandHome covers the expandHome helper. It must expand "~/X"
 // against the user home dir and pass through absolute paths.
 func TestExpandHome(t *testing.T) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		t.Skip("no home dir")
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	cases := map[string]string{
+		"~/x":  filepath.Join(home, "x"),
+		"~":    home,
+		"/abs": "/abs",
+		"~x":   "~x",
+		"":     "",
 	}
-	if got := expandHome("~/x"); got != filepath.Join(home, "x") {
-		t.Errorf("expandHome(~/x) = %q, want %q", got, filepath.Join(home, "x"))
+	for in, want := range cases {
+		if got := expandHome(in); got != want {
+			t.Errorf("expandHome(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// TestExpandHome_NoHomeDir: a ~ path cannot be resolved without a home
+// directory, so it expands to "" rather than to a path relative to the
+// working directory. Absolute paths are unaffected.
+func TestExpandHome_NoHomeDir(t *testing.T) {
+	t.Setenv("HOME", "")
+
+	if got := expandHome("~/x"); got != "" {
+		t.Errorf("expandHome(~/x) without HOME = %q, want empty", got)
 	}
 	if got := expandHome("/abs"); got != "/abs" {
-		t.Errorf("expandHome(/abs) = %q, want /abs", got)
-	}
-	if got := expandHome(""); got != "" {
-		t.Errorf("expandHome(\"\") = %q, want empty", got)
+		t.Errorf("expandHome(/abs) without HOME = %q, want /abs", got)
 	}
 }
 

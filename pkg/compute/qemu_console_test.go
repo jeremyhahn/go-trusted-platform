@@ -88,8 +88,10 @@ func TestConsoleBroker_FanOutAndWrite(t *testing.T) {
 	assert.Error(t, s2.Write([]byte("x")))
 }
 
-// startFakeConsole opens a unix socket that echoes a banner then reads input.
-func startFakeConsole(t *testing.T, path string) chan string {
+// startFakeConsole opens a unix socket that writes a banner once release is
+// closed, then reads input. The broker delivers output only to viewers
+// attached when it arrives, so the test releases the banner after attaching.
+func startFakeConsole(t *testing.T, path string, release <-chan struct{}) chan string {
 	t.Helper()
 	ln, err := net.Listen("unix", path)
 	require.NoError(t, err)
@@ -101,6 +103,7 @@ func startFakeConsole(t *testing.T, path string) chan string {
 		if err != nil {
 			return
 		}
+		<-release
 		_, _ = conn.Write([]byte("banner\n"))
 		buf := make([]byte, 64)
 		for {
@@ -120,13 +123,15 @@ func TestAttachConsole_MultiViewer(t *testing.T) {
 	orch := newOpsOrchestrator(t)
 	wd := t.TempDir()
 	insertVMInstance(t, orch, "vmc", true, &InstanceConfig{WorkDir: wd})
-	inputs := startFakeConsole(t, filepath.Join(wd, "console.sock"))
+	release := make(chan struct{})
+	inputs := startFakeConsole(t, filepath.Join(wd, "console.sock"), release)
 	t.Cleanup(func() { orch.closeConsole("vmc") })
 
 	s1, err := orch.AttachConsole(context.Background(), "vmc")
 	require.NoError(t, err)
 	s2, err := orch.AttachConsole(context.Background(), "vmc")
 	require.NoError(t, err)
+	close(release)
 
 	assert.Equal(t, "banner\n", string(recvChunk(t, s1.Output())))
 	assert.Equal(t, "banner\n", string(recvChunk(t, s2.Output())))

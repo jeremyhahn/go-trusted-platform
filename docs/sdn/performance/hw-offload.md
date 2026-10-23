@@ -1,5 +1,8 @@
 # OVS Hardware Offload (tc-flower)
 
+> **Status: REFERENCE** · Last verified: 2026-10-15
+> OVS hardware flow offload and the `sdn.ovs.hw-offload` key.
+
 Hardware flow offload moves established OVS datapath flows out of the
 kernel software path and into the NIC's embedded switch. platformd enables
 it declaratively via the `sdn.ovs.hw-offload` config key (see
@@ -59,9 +62,10 @@ zcat /proc/config.gz | grep -E 'CONFIG_(MLX5_ESWITCH|MLX5_CLS_ACT|MLX5_TC_CT|BNX
 
 `=y` or `=m` is required for each; a missing line or `# ... is not set`
 means that offload stage silently falls back to the kernel software path.
-The installer exposes this check programmatically as
-`installer.CheckHWOffloadSupport` (parses `/proc/config.gz`-style content
-and reports missing symbols, grouped core/mlx5/bnxt).
+The same check exists as a library function,
+`installer.CheckHWOffloadSupport` (`pkg/installer/hwoffload.go:95`): it parses
+`/proc/config.gz`-style content and reports missing symbols, grouped
+core/mlx5/bnxt. No installer step calls it yet, so run the commands above.
 
 ## Bring-up order
 

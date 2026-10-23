@@ -123,7 +123,6 @@ func pbTestRoute(id string) *platformv1.ProxyRoute {
 			BackendZone:            "internal",
 			RequireAttestation:     true,
 			AttestationMaxAgeNanos: int64(5 * time.Minute),
-			RequiredRoles:          []string{"admin"},
 			RequiredScopes:         []string{"proxy:read"},
 			OpaPolicy:              "policies/proxy.rego",
 			TokenZone:              "edge",
@@ -208,7 +207,7 @@ func TestProxyGRPCService_NilService(t *testing.T) {
 
 func TestProxyGRPCService_CreateRoute(t *testing.T) {
 	fake := &fakeProxyService{
-		route:   ProxyRouteFromProto(pbTestRoute("web")),
+		route:   proxy.RouteFromProto(pbTestRoute("web")),
 		version: 7,
 	}
 	s := newProxyTestService(fake)
@@ -245,7 +244,7 @@ func TestProxyGRPCService_CreateRoute_Invalid(t *testing.T) {
 }
 
 func TestProxyGRPCService_GetRoute(t *testing.T) {
-	fake := &fakeProxyService{route: ProxyRouteFromProto(pbTestRoute("web"))}
+	fake := &fakeProxyService{route: proxy.RouteFromProto(pbTestRoute("web"))}
 	s := newProxyTestService(fake)
 
 	resp, err := s.GetRoute(context.Background(), &platformv1.GetProxyRouteRequest{Id: "web"})
@@ -272,7 +271,7 @@ func TestProxyGRPCService_GetRoute_Errors(t *testing.T) {
 }
 
 func TestProxyGRPCService_UpdateRoute_IDResolution(t *testing.T) {
-	fake := &fakeProxyService{route: ProxyRouteFromProto(pbTestRoute("web")), version: 3}
+	fake := &fakeProxyService{route: proxy.RouteFromProto(pbTestRoute("web")), version: 3}
 	s := newProxyTestService(fake)
 	ctx := context.Background()
 
@@ -324,7 +323,7 @@ func TestProxyGRPCService_DeleteRoute_Errors(t *testing.T) {
 
 func TestProxyGRPCService_ListRoutes(t *testing.T) {
 	fake := &fakeProxyService{
-		routes:  []proxy.RouteConfig{ProxyRouteFromProto(pbTestRoute("a")), ProxyRouteFromProto(pbTestRoute("b"))},
+		routes:  []proxy.RouteConfig{proxy.RouteFromProto(pbTestRoute("a")), proxy.RouteFromProto(pbTestRoute("b"))},
 		version: 4,
 	}
 	s := newProxyTestService(fake)
@@ -345,7 +344,7 @@ func TestProxyGRPCService_ListRoutes_Error(t *testing.T) {
 }
 
 func TestProxyGRPCService_CreatePool(t *testing.T) {
-	fake := &fakeProxyService{pool: ProxyPoolFromProto(pbTestPool("pool-1")), version: 2}
+	fake := &fakeProxyService{pool: proxy.PoolFromProto(pbTestPool("pool-1")), version: 2}
 	s := newProxyTestService(fake)
 
 	resp, err := s.CreatePool(context.Background(), &platformv1.CreateProxyPoolRequest{Pool: pbTestPool("pool-1")})
@@ -386,7 +385,7 @@ func TestProxyGRPCService_GetPool_Errors(t *testing.T) {
 }
 
 func TestProxyGRPCService_UpdatePool_IDResolution(t *testing.T) {
-	fake := &fakeProxyService{pool: ProxyPoolFromProto(pbTestPool("pool-1")), version: 5}
+	fake := &fakeProxyService{pool: proxy.PoolFromProto(pbTestPool("pool-1")), version: 5}
 	s := newProxyTestService(fake)
 	ctx := context.Background()
 
@@ -426,7 +425,7 @@ func TestProxyGRPCService_DeletePool_Errors(t *testing.T) {
 
 func TestProxyGRPCService_ListPools(t *testing.T) {
 	fake := &fakeProxyService{
-		pools:   []proxy.BackendPoolConfig{ProxyPoolFromProto(pbTestPool("a"))},
+		pools:   []proxy.BackendPoolConfig{proxy.PoolFromProto(pbTestPool("a"))},
 		version: 6,
 	}
 	s := newProxyTestService(fake)
@@ -448,8 +447,8 @@ func TestProxyGRPCService_ListPools_Error(t *testing.T) {
 
 func TestProxyGRPCService_GetProxyConfig(t *testing.T) {
 	fake := &fakeProxyService{
-		routes:  []proxy.RouteConfig{ProxyRouteFromProto(pbTestRoute("web"))},
-		pools:   []proxy.BackendPoolConfig{ProxyPoolFromProto(pbTestPool("pool-1"))},
+		routes:  []proxy.RouteConfig{proxy.RouteFromProto(pbTestRoute("web"))},
+		pools:   []proxy.BackendPoolConfig{proxy.PoolFromProto(pbTestPool("pool-1"))},
 		version: 11,
 	}
 	s := newProxyTestService(fake)
@@ -554,43 +553,4 @@ func TestProxyGRPCService_ValidationErrorMapsInvalidArgument(t *testing.T) {
 	}})
 	_, err := s.CreateRoute(context.Background(), &platformv1.CreateProxyRouteRequest{Route: pbTestRoute("web")})
 	requireCode(t, err, codes.InvalidArgument)
-}
-
-func TestProxyConverters_RoundTrip(t *testing.T) {
-	route := pbTestRoute("web")
-	back := ProxyRouteToProto(ProxyRouteFromProto(route))
-	if back.GetId() != route.GetId() ||
-		back.GetPathPrefix() != route.GetPathPrefix() ||
-		back.GetPoolId() != route.GetPoolId() ||
-		back.GetStripPrefix() != route.GetStripPrefix() ||
-		back.GetPreserveHost() != route.GetPreserveHost() ||
-		back.GetAuth().GetMode() != route.GetAuth().GetMode() ||
-		back.GetAuth().GetOpaPolicy() != route.GetAuth().GetOpaPolicy() ||
-		back.GetAuth().GetAttestationMaxAgeNanos() != route.GetAuth().GetAttestationMaxAgeNanos() {
-		t.Errorf("route round trip mismatch:\n got %+v\nwant %+v", back, route)
-	}
-
-	pool := pbTestPool("pool-1")
-	backPool := ProxyPoolToProto(ProxyPoolFromProto(pool))
-	if backPool.GetId() != pool.GetId() ||
-		backPool.GetBalancer() != pool.GetBalancer() ||
-		backPool.GetMaxIdleConnsPerHost() != pool.GetMaxIdleConnsPerHost() ||
-		backPool.GetIdleConnTimeoutNanos() != pool.GetIdleConnTimeoutNanos() ||
-		backPool.GetTls().GetTrustClass() != pool.GetTls().GetTrustClass() ||
-		backPool.GetTls().GetMtlsClientCert() != pool.GetTls().GetMtlsClientCert() ||
-		len(backPool.GetBackends()) != len(pool.GetBackends()) {
-		t.Errorf("pool round trip mismatch:\n got %+v\nwant %+v", backPool, pool)
-	}
-}
-
-func TestProxyConverters_NilInputs(t *testing.T) {
-	if got := ProxyRouteFromProto(nil); got.ID != "" {
-		t.Errorf("nil route conversion = %+v, want zero", got)
-	}
-	if got := ProxyPoolFromProto(nil); got.ID != "" {
-		t.Errorf("nil pool conversion = %+v, want zero", got)
-	}
-	if got := proxyAuthFromProto(nil); got.Mode != "" {
-		t.Errorf("nil auth conversion = %+v, want zero", got)
-	}
 }

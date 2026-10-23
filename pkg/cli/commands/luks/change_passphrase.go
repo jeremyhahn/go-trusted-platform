@@ -78,7 +78,10 @@ func runChangePassphrase(commonFlags *cli.CommonFlags, f *changePassphraseFlags)
 	}
 	defer base.Close()
 
-	client := lukssvc.NewClient()
+	client, err := newService(base.Client())
+	if err != nil {
+		return err
+	}
 	resp, err := client.ChangePassphrase(base.Context(), &lukssvc.ChangePassphraseRequest{
 		Device:        device,
 		Slot:          f.slot,

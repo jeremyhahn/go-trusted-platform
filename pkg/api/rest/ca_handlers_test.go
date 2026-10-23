@@ -25,6 +25,7 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"errors"
+	"io"
 	"log/slog"
 	"math/big"
 	"net/http"
@@ -36,8 +37,11 @@ import (
 	"github.com/gorilla/mux"
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	quicbaasca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/ca"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/ca/issuance/issuancetest"
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/encoding/protojson"
 )
 
 // =============================================================================
@@ -61,6 +65,8 @@ type mockCAService struct {
 	generateCRLSupport bool
 	crlData            []byte
 	crlErr             error
+	// csrCA certifies CSRs; nil until a test sets it.
+	csrCA *issuancetest.CA
 }
 
 func newMockCAService() *mockCAService {
@@ -122,6 +128,13 @@ func (m *mockCAService) IssueCertificate(_ context.Context, req *quicbaasca.CACe
 	m.issuedCerts[hex.EncodeToString(cert.SerialNumber.Bytes())] = cert
 	m.certStore.certs[hex.EncodeToString(cert.SerialNumber.Bytes())] = cert
 	return cert, nil
+}
+
+func (m *mockCAService) SignCSR(ctx context.Context, csrPEM []byte, opts *quicbaasca.SignOptions) (*x509.Certificate, error) {
+	if m.csrCA == nil {
+		return nil, errors.New("no CSR CA")
+	}
+	return m.csrCA.SignCSR(ctx, csrPEM, opts)
 }
 
 func (m *mockCAService) Revoke(_ context.Context, cert *x509.Certificate, keyAttrs *xkmssdk.KeyAttributes) error {
@@ -436,54 +449,56 @@ func TestCAHandlers_IssueCertificate_Success(t *testing.T) {
 	ca := newMockCAService()
 	_, router := setupCAHandlers(ca)
 
-	reqBody := CertificateIssueRequest{
-		Subject: CASubjectRequest{
-			CommonName:   "test.example.com",
-			Organization: "Test Org",
+	rr := postJSON(t, router, "/api/v1/ca/certificates", &platformv1.IssueCertificateRequest{
+		Request: &platformv1.CertificateRequest{
+			Subject: &platformv1.Subject{
+				CommonName:   "test.example.com",
+				Organization: "Test Org",
+			},
+			ValidDays:    90,
+			KeyAlgorithm: platformv1.KeyAlgorithm_KEY_ALGORITHM_ECDSA_P256,
+			Sans: &platformv1.SubjectAlternativeNames{
+				DnsNames: []string{"test.example.com", "www.test.example.com"},
+			},
 		},
-		ValidDays:    90,
-		KeyAlgorithm: "ECDSA",
-		SANs: &CASANsRequest{
-			DNS: []string{"test.example.com", "www.test.example.com"},
-		},
-	}
-	body, _ := json.Marshal(reqBody)
+	})
+	require.Equal(t, http.StatusCreated, rr.Code, rr.Body.String())
 
-	req, _ := http.NewRequest(http.MethodPost, "/api/v1/ca/certificates", bytes.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	rr := httptest.NewRecorder()
+	resp := &platformv1.IssueCertificateResponse{}
+	require.NoError(t, protojson.Unmarshal(rr.Body.Bytes(), resp))
 
-	router.ServeHTTP(rr, req)
+	assert.True(t, resp.GetStatus().GetSuccess())
+	assert.Equal(t, "certificate issued successfully", resp.GetStatus().GetMessage())
+	assert.NotNil(t, resp.GetTimestamp())
+	require.NotNil(t, resp.GetCertificate())
+	assert.Equal(t, "test.example.com", resp.GetCertificate().GetSubject().GetCommonName())
+	assert.Contains(t, string(resp.GetCertificate().GetPem()), "BEGIN CERTIFICATE")
+	assert.Len(t, ca.issuedCerts, 1)
+}
 
-	assert.Equal(t, http.StatusCreated, rr.Code)
+// The issue route takes the protobuf IssueCertificateRequest, which wraps
+// the certificate request; a body without it is refused before the CA.
+func TestCAHandlers_IssueCertificate_MissingRequest(t *testing.T) {
+	ca := newMockCAService()
+	_, router := setupCAHandlers(ca)
 
-	var resp CAIssueCertificateResponse
-	err := json.Unmarshal(rr.Body.Bytes(), &resp)
-	require.NoError(t, err)
-
-	assert.True(t, resp.Success)
-	assert.Equal(t, "certificate issued successfully", resp.Message)
-	assert.NotNil(t, resp.Certificate)
-	assert.Equal(t, "test.example.com", resp.Certificate.Subject.CommonName)
-	assert.NotEmpty(t, resp.Certificate.PEM)
+	rr := postJSON(t, router, "/api/v1/ca/certificates", map[string]any{
+		"subject": map[string]string{"common_name": "test.example.com"},
+	})
+	assert.Equal(t, http.StatusBadRequest, rr.Code)
+	assert.Contains(t, rr.Body.String(), ErrMissingCertificateRequest{}.Error())
+	assert.Empty(t, ca.issuedCerts, "a request without a certificate request reached the CA")
 }
 
 func TestCAHandlers_IssueCertificate_MissingCommonName(t *testing.T) {
 	ca := newMockCAService()
 	_, router := setupCAHandlers(ca)
 
-	reqBody := CertificateIssueRequest{
-		Subject: CASubjectRequest{
-			Organization: "Test Org",
+	rr := postJSON(t, router, "/api/v1/ca/certificates", &platformv1.IssueCertificateRequest{
+		Request: &platformv1.CertificateRequest{
+			Subject: &platformv1.Subject{Organization: "Test Org"},
 		},
-	}
-	body, _ := json.Marshal(reqBody)
-
-	req, _ := http.NewRequest(http.MethodPost, "/api/v1/ca/certificates", bytes.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	rr := httptest.NewRecorder()
-
-	router.ServeHTTP(rr, req)
+	})
 
 	assert.Equal(t, http.StatusBadRequest, rr.Code)
 
@@ -497,19 +512,12 @@ func TestCAHandlers_IssueCertificate_InvalidKeyAlgorithm(t *testing.T) {
 	ca := newMockCAService()
 	_, router := setupCAHandlers(ca)
 
-	reqBody := CertificateIssueRequest{
-		Subject: CASubjectRequest{
-			CommonName: "test.example.com",
+	rr := postJSON(t, router, "/api/v1/ca/certificates", &platformv1.IssueCertificateRequest{
+		Request: &platformv1.CertificateRequest{
+			Subject:      &platformv1.Subject{CommonName: "test.example.com"},
+			KeyAlgorithm: platformv1.KeyAlgorithm_KEY_ALGORITHM_DILITHIUM2,
 		},
-		KeyAlgorithm: "INVALID_ALG",
-	}
-	body, _ := json.Marshal(reqBody)
-
-	req, _ := http.NewRequest(http.MethodPost, "/api/v1/ca/certificates", bytes.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	rr := httptest.NewRecorder()
-
-	router.ServeHTTP(rr, req)
+	})
 
 	assert.Equal(t, http.StatusBadRequest, rr.Code)
 
@@ -537,18 +545,11 @@ func TestCAHandlers_IssueCertificate_IssueFailed(t *testing.T) {
 	ca.issueErr = errors.New("issuance failed")
 	_, router := setupCAHandlers(ca)
 
-	reqBody := CertificateIssueRequest{
-		Subject: CASubjectRequest{
-			CommonName: "test.example.com",
+	rr := postJSON(t, router, "/api/v1/ca/certificates", &platformv1.IssueCertificateRequest{
+		Request: &platformv1.CertificateRequest{
+			Subject: &platformv1.Subject{CommonName: "test.example.com"},
 		},
-	}
-	body, _ := json.Marshal(reqBody)
-
-	req, _ := http.NewRequest(http.MethodPost, "/api/v1/ca/certificates", bytes.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	rr := httptest.NewRecorder()
-
-	router.ServeHTTP(rr, req)
+	})
 
 	assert.Equal(t, http.StatusInternalServerError, rr.Code)
 }
@@ -556,18 +557,11 @@ func TestCAHandlers_IssueCertificate_IssueFailed(t *testing.T) {
 func TestCAHandlers_IssueCertificate_CANotAvailable(t *testing.T) {
 	_, router := setupCAHandlers(nil)
 
-	reqBody := CertificateIssueRequest{
-		Subject: CASubjectRequest{
-			CommonName: "test.example.com",
+	rr := postJSON(t, router, "/api/v1/ca/certificates", &platformv1.IssueCertificateRequest{
+		Request: &platformv1.CertificateRequest{
+			Subject: &platformv1.Subject{CommonName: "test.example.com"},
 		},
-	}
-	body, _ := json.Marshal(reqBody)
-
-	req, _ := http.NewRequest(http.MethodPost, "/api/v1/ca/certificates", bytes.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	rr := httptest.NewRecorder()
-
-	router.ServeHTTP(rr, req)
+	})
 
 	assert.Equal(t, http.StatusServiceUnavailable, rr.Code)
 }
@@ -661,12 +655,13 @@ func TestCAHandlers_GetCertificate_RootCert(t *testing.T) {
 
 	assert.Equal(t, http.StatusOK, rr.Code)
 
-	var resp CAGetCertificateResponse
-	err := json.Unmarshal(rr.Body.Bytes(), &resp)
-	require.NoError(t, err)
+	resp := &platformv1.GetCertificateResponse{}
+	require.NoError(t, protojson.Unmarshal(rr.Body.Bytes(), resp))
 
-	assert.NotNil(t, resp.Certificate)
-	assert.Equal(t, serial, resp.Certificate.Serial)
+	require.NotNil(t, resp.GetCertificate())
+	assert.Equal(t, serial, resp.GetCertificate().GetSerial())
+	assert.Empty(t, resp.GetCertificate().GetPem())
+	assert.NotNil(t, resp.GetTimestamp())
 }
 
 func TestCAHandlers_GetCertificate_WithPEM(t *testing.T) {
@@ -681,12 +676,31 @@ func TestCAHandlers_GetCertificate_WithPEM(t *testing.T) {
 
 	assert.Equal(t, http.StatusOK, rr.Code)
 
-	var resp CAGetCertificateResponse
-	err := json.Unmarshal(rr.Body.Bytes(), &resp)
-	require.NoError(t, err)
+	resp := &platformv1.GetCertificateResponse{}
+	require.NoError(t, protojson.Unmarshal(rr.Body.Bytes(), resp))
 
-	assert.NotEmpty(t, resp.Certificate.PEM)
-	assert.Contains(t, resp.Certificate.PEM, "BEGIN CERTIFICATE")
+	assert.Contains(t, string(resp.GetCertificate().GetPem()), "BEGIN CERTIFICATE")
+}
+
+// The DER rides only when asked for, as include_der does on gRPC (#691).
+func TestCAHandlers_GetCertificate_IncludeDer(t *testing.T) {
+	ca := newMockCAService()
+	_, router := setupCAHandlers(ca)
+	serial := hex.EncodeToString(ca.rootCert.SerialNumber.Bytes())
+
+	get := func(query string) *platformv1.Certificate {
+		req, err := http.NewRequest(http.MethodGet, "/api/v1/ca/certificates/"+serial+query, nil)
+		require.NoError(t, err)
+		rr := httptest.NewRecorder()
+		router.ServeHTTP(rr, req)
+		require.Equal(t, http.StatusOK, rr.Code)
+		resp := &platformv1.GetCertificateResponse{}
+		require.NoError(t, protojson.Unmarshal(rr.Body.Bytes(), resp))
+		return resp.GetCertificate()
+	}
+
+	assert.Equal(t, ca.rootCert.Raw, get("?include_der=true").GetDer())
+	assert.Empty(t, get("").GetDer())
 }
 
 func TestCAHandlers_GetCertificate_NotFound(t *testing.T) {
@@ -1534,6 +1548,139 @@ func TestCAHandlers_CertToResponse_NoPEM(t *testing.T) {
 
 	assert.NotNil(t, resp)
 	assert.Empty(t, resp.PEM)
+}
+
+// certToProto answers in the gRPC CA shape: protobuf times and enums, the
+// PEM and DER only when asked for.
+func TestCAHandlers_CertToProto(t *testing.T) {
+	handlers := NewCAHandlers(nil, nil, nil)
+	cert := generateTestCertificate("test.example.com", false, nil, nil)
+
+	got := handlers.certToProto(cert, true, true)
+	require.NotNil(t, got)
+	assert.Equal(t, hex.EncodeToString(cert.SerialNumber.Bytes()), got.GetSerial())
+	assert.Equal(t, "test.example.com", got.GetSubject().GetCommonName())
+	assert.Equal(t, cert.NotBefore.Unix(), got.GetNotBefore().AsTime().Unix())
+	assert.Equal(t, cert.NotAfter.Unix(), got.GetNotAfter().AsTime().Unix())
+	assert.Equal(t, platformv1.CertificateStatus_CERTIFICATE_STATUS_VALID, got.GetStatus())
+	assert.Equal(t, platformv1.KeyAlgorithm_KEY_ALGORITHM_ECDSA_P256, got.GetKeyAlgorithm())
+	assert.Contains(t, string(got.GetPem()), "BEGIN CERTIFICATE")
+	assert.Equal(t, cert.Raw, got.GetDer())
+	assert.NotEmpty(t, got.GetFingerprintSha256())
+
+	bare := handlers.certToProto(cert, false, false)
+	assert.Empty(t, bare.GetPem())
+	assert.Empty(t, bare.GetDer())
+}
+
+func TestCAHandlers_CertToProto_NilCert(t *testing.T) {
+	handlers := NewCAHandlers(nil, nil, nil)
+	assert.Nil(t, handlers.certToProto(nil, true, true))
+}
+
+func TestCertStatusToProto(t *testing.T) {
+	now := time.Now()
+	cert := &x509.Certificate{NotBefore: now.Add(-time.Hour), NotAfter: now.Add(time.Hour)}
+
+	assert.Equal(t, platformv1.CertificateStatus_CERTIFICATE_STATUS_VALID, certStatusToProto(cert, now))
+	assert.Equal(t, platformv1.CertificateStatus_CERTIFICATE_STATUS_PENDING, certStatusToProto(cert, now.Add(-2*time.Hour)))
+	assert.Equal(t, platformv1.CertificateStatus_CERTIFICATE_STATUS_EXPIRED, certStatusToProto(cert, now.Add(2*time.Hour)))
+}
+
+func TestKeyAlgorithmToProto(t *testing.T) {
+	assert.Equal(t, platformv1.KeyAlgorithm_KEY_ALGORITHM_RSA_2048, keyAlgorithmToProto(x509.RSA))
+	assert.Equal(t, platformv1.KeyAlgorithm_KEY_ALGORITHM_ECDSA_P256, keyAlgorithmToProto(x509.ECDSA))
+	assert.Equal(t, platformv1.KeyAlgorithm_KEY_ALGORITHM_ED25519, keyAlgorithmToProto(x509.Ed25519))
+	assert.Equal(t, platformv1.KeyAlgorithm_KEY_ALGORITHM_UNSPECIFIED, keyAlgorithmToProto(x509.DSA))
+}
+
+func TestProtoKeyAlgorithmToX509(t *testing.T) {
+	cases := map[platformv1.KeyAlgorithm]x509.PublicKeyAlgorithm{
+		platformv1.KeyAlgorithm_KEY_ALGORITHM_UNSPECIFIED: x509.ECDSA,
+		platformv1.KeyAlgorithm_KEY_ALGORITHM_RSA_4096:    x509.RSA,
+		platformv1.KeyAlgorithm_KEY_ALGORITHM_ECDSA_P384:  x509.ECDSA,
+		platformv1.KeyAlgorithm_KEY_ALGORITHM_ED25519:     x509.Ed25519,
+	}
+	for in, want := range cases {
+		got, err := protoKeyAlgorithmToX509(in)
+		require.NoError(t, err, in.String())
+		assert.Equal(t, want, got, in.String())
+	}
+}
+
+func TestProtoKeyAlgorithmToX509_Unsupported(t *testing.T) {
+	_, err := protoKeyAlgorithmToX509(platformv1.KeyAlgorithm_KEY_ALGORITHM_DILITHIUM3)
+	var invalid ErrInvalidKeyAlgorithm
+	require.ErrorAs(t, err, &invalid)
+	assert.Equal(t, "KEY_ALGORITHM_DILITHIUM3", invalid.Algorithm)
+}
+
+// failingBody is a request body whose read fails.
+type failingBody struct{}
+
+func (failingBody) Read([]byte) (int, error) { return 0, errors.New("connection reset") }
+
+func TestCAHandlers_DecodeProto(t *testing.T) {
+	handlers := NewCAHandlers(nil, nil, nil)
+	decode := func(body io.Reader) (*platformv1.SignCSRRequest, *httptest.ResponseRecorder, bool) {
+		msg := &platformv1.SignCSRRequest{}
+		rr := httptest.NewRecorder()
+		ok := handlers.decodeProto(rr, httptest.NewRequest(http.MethodPost, "/", body), msg)
+		return msg, rr, ok
+	}
+
+	msg, _, ok := decode(strings.NewReader(`{"csrPem":"pem","validDays":7}`))
+	require.True(t, ok)
+	assert.Equal(t, "pem", msg.GetCsrPem())
+	assert.Equal(t, int32(7), msg.GetValidDays())
+
+	msg, _, ok = decode(strings.NewReader(`{"csr_pem":"pem","unknown":1}`))
+	require.True(t, ok, "snake_case names and unknown fields are accepted")
+	assert.Equal(t, "pem", msg.GetCsrPem())
+
+	_, _, ok = decode(strings.NewReader(""))
+	assert.True(t, ok, "an empty body is the zero request")
+}
+
+func TestCAHandlers_DecodeProto_Errors(t *testing.T) {
+	handlers := NewCAHandlers(nil, nil, nil)
+	for name, body := range map[string]io.Reader{
+		"not JSON":    strings.NewReader("{"),
+		"wrong type":  strings.NewReader(`{"validDays":"seven"}`),
+		"read failed": failingBody{},
+	} {
+		t.Run(name, func(t *testing.T) {
+			rr := httptest.NewRecorder()
+			ok := handlers.decodeProto(rr, httptest.NewRequest(http.MethodPost, "/", body), &platformv1.SignCSRRequest{})
+			assert.False(t, ok)
+			assert.Equal(t, http.StatusBadRequest, rr.Code)
+			assert.Contains(t, rr.Body.String(), "invalid request body")
+		})
+	}
+}
+
+func TestCAHandlers_WriteProto(t *testing.T) {
+	handlers := NewCAHandlers(nil, nil, nil)
+	rr := httptest.NewRecorder()
+	handlers.writeProto(rr, http.StatusCreated, &platformv1.Status{Success: true})
+
+	assert.Equal(t, http.StatusCreated, rr.Code)
+	assert.Equal(t, "application/json", rr.Header().Get("Content-Type"))
+	got := &platformv1.Status{}
+	require.NoError(t, protojson.Unmarshal(rr.Body.Bytes(), got))
+	assert.True(t, got.GetSuccess())
+	assert.Contains(t, rr.Body.String(), `"message":""`, "unpopulated fields are emitted")
+}
+
+// A message protojson cannot encode (a string that is not UTF-8) is a 500,
+// not a half-written body.
+func TestCAHandlers_WriteProto_MarshalError(t *testing.T) {
+	handlers := NewCAHandlers(nil, nil, nil)
+	rr := httptest.NewRecorder()
+	handlers.writeProto(rr, http.StatusOK, &platformv1.Status{Message: "\xff"})
+
+	assert.Equal(t, http.StatusInternalServerError, rr.Code)
+	assert.NotContains(t, rr.Body.String(), `"success"`)
 }
 
 // =============================================================================

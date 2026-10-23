@@ -53,7 +53,8 @@ func NewReportingVerifier(verify DeviceQuoteVerifyFunc) (*ReportingVerifier, err
 // same DeviceQuoteVerifier every transport uses (#405): the device's
 // enrolled attestation certificate chained to the platform CA, the
 // profile's PCR baseline, and the verdict sink that writes the event log
-// and drives quarantine.
+// and drives quarantine. Unlike the transports, it also requires the quote to
+// be bound to the TLS session the collector collected it over (#482).
 func DeviceQuoteVerifierForReporting(
 	devices device.DeviceService,
 	profiles device.DeviceProfileService,
@@ -67,7 +68,11 @@ func DeviceQuoteVerifierForReporting(
 	if profiles == nil {
 		return nil, ErrServiceNotAvailable{Service: "device_profile"}
 	}
-	return NewReportingVerifier(NewDeviceQuoteVerifier(devices, profiles, trust, verdicts, logger).Verify)
+	// The collector binds every quote to the TLS session it collected it
+	// over, so this verifier refuses evidence that is not bound.
+	v := NewDeviceQuoteVerifier(devices, profiles, trust, verdicts, logger)
+	v.requireChannelBinding = true
+	return NewReportingVerifier(v.Verify)
 }
 
 // VerifyDeviceQuote implements reporting.Verifier.

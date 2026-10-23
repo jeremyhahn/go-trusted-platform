@@ -6,12 +6,14 @@
 package daemon
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -83,7 +85,7 @@ func TestDeviceQuoteVerifier_BaselineMismatchIsACryptographicFailure(t *testing.
 	assert.True(t, result.SignatureValid, "the quote itself was genuine")
 	assert.False(t, result.PCRsValid, "the values differ from the signed baseline")
 	assert.Equal(t, string(deviceentities.BaselineSourceSigned), result.PCRBaselineSource)
-	assert.Contains(t, result.Message, "pcr 7")
+	assert.Contains(t, result.Message, "PCR [7] diverges from the baseline")
 
 	dv := f.sink.last(t)
 	assert.False(t, dv.Passed)
@@ -91,6 +93,159 @@ func TestDeviceQuoteVerifier_BaselineMismatchIsACryptographicFailure(t *testing.
 	assert.Equal(t, deviceentities.BaselineSourceSigned, deviceentities.BaselineSource(dv.BaselineSource))
 	assert.Equal(t, deviceentities.BaselineSourceSigned, f.profiles.profiles[f.profile.ID].PCRBaseline.Source,
 		"a mismatch never overwrites the baseline")
+}
+
+func TestDeviceQuoteVerifier_DifferentPCRSelectionIsDeniedNotQuarantined(t *testing.T) {
+	f := newQuoteFixture(t)
+	f.profile.PCRBaseline = &deviceentities.PCRBaseline{
+		Values:     goldenPCRs(),
+		Source:     deviceentities.BaselineSourceSigned,
+		RecordedAt: f.now,
+	}
+	v := f.verifier(t)
+
+	// A genuine quote over a wider selection: every value the baseline knows
+	// is unchanged, the quote simply covers a register the baseline does not.
+	wider := goldenPCRs()
+	wider[10] = fillPCR(0xA0)
+	result, err := v.Verify(context.Background(), itoa(f.device.ID), f.evidence(t, []byte("nonce-1"), wider))
+	require.NoError(t, err)
+
+	assert.False(t, result.Verified)
+	assert.True(t, result.SignatureValid, "the quote itself was genuine")
+	assert.False(t, result.PCRsValid)
+	assert.False(t, result.CryptographicFailure)
+	assert.Contains(t, result.Message, "does not equal the baseline set")
+
+	dv := f.sink.last(t)
+	assert.False(t, dv.Passed, "a selection the baseline does not cover is denied")
+	assert.False(t, dv.Cryptographic, "nothing the TPM signed was wrong: denied, never quarantined")
+	assert.Equal(t, goldenPCRs(), f.profiles.profiles[f.profile.ID].PCRBaseline.Values,
+		"a selection mismatch never rewrites the baseline")
+}
+
+func TestDeviceQuoteVerifier_UnusableStoredBaselineIsAnAbsence(t *testing.T) {
+	f := newQuoteFixture(t)
+	f.profile.PCRBaseline = &deviceentities.PCRBaseline{
+		Values: map[int][]byte{0: fillPCR(0x11), 7: {}},
+		Source: deviceentities.BaselineSourceSigned,
+	}
+
+	result, err := f.verifier(t).Verify(context.Background(), itoa(f.device.ID), f.evidence(t, []byte("nonce-1"), goldenPCRs()))
+	require.NoError(t, err)
+
+	assert.False(t, result.Verified)
+	assert.False(t, result.CryptographicFailure)
+	assert.Contains(t, result.Message, "baseline is unusable")
+	assert.False(t, f.sink.last(t).Cryptographic, "a baseline the verifier cannot use is a check that could not run")
+}
+
+// testChannelBinding stands in for the 32-byte TLS exporter value.
+var testChannelBinding = bytes.Repeat([]byte{0xB1}, xkms.PeerChannelBindingLength)
+
+func TestDeviceQuoteVerifier_RequiredBindingAcceptsABoundQuote(t *testing.T) {
+	f := newQuoteFixture(t)
+	v := f.verifier(t)
+	v.requireChannelBinding = true
+	nonce := []byte("nonce-bound")
+
+	evidence := f.boundEvidence(t, nonce, xkms.PeerQualifyingData(nonce, testChannelBinding), testChannelBinding)
+	result, err := v.Verify(context.Background(), itoa(f.device.ID), evidence)
+	require.NoError(t, err)
+
+	assert.True(t, result.Verified, result.Message)
+	assert.True(t, result.NonceValid)
+	assert.True(t, f.sink.last(t).Passed)
+}
+
+// A quote over the bare nonce was produced for some session other than the
+// one the collector derived the binding from: the TPM signed it, so the
+// refusal is cryptographic and drives quarantine.
+func TestDeviceQuoteVerifier_RequiredBindingRefusesAnUnboundQuoteAsCryptographic(t *testing.T) {
+	f := newQuoteFixture(t)
+	v := f.verifier(t)
+	v.requireChannelBinding = true
+	nonce := []byte("nonce-bare")
+
+	result, err := v.Verify(context.Background(), itoa(f.device.ID), f.boundEvidence(t, nonce, nonce, testChannelBinding))
+	require.NoError(t, err)
+
+	assert.False(t, result.Verified)
+	assert.False(t, result.NonceValid)
+	assert.True(t, result.SignatureValid)
+	assert.True(t, result.CryptographicFailure)
+	assert.Contains(t, result.Message, "not bound to this TLS channel")
+	assert.True(t, f.sink.last(t).Cryptographic)
+	assert.Nil(t, f.profile.PCRBaseline, "an unbound quote must not seed the TOFU baseline")
+}
+
+func TestDeviceQuoteVerifier_RequiredBindingRefusesEvidenceWithoutOne(t *testing.T) {
+	f := newQuoteFixture(t)
+	v := f.verifier(t)
+	v.requireChannelBinding = true
+
+	result, err := v.Verify(context.Background(), itoa(f.device.ID), f.evidence(t, []byte("nonce-1"), goldenPCRs()))
+	assert.Nil(t, result)
+	var invalid ErrInvalidAttestationEvidence
+	require.ErrorAs(t, err, &invalid)
+	assert.Contains(t, invalid.Reason, "channel binding is required")
+	assert.Empty(t, f.sink.verdicts, "evidence refused before verification records no verdict")
+}
+
+// The transports verify evidence a caller submits; a binding in it names no
+// session the verifier saw, so it is ignored rather than honoured.
+func TestDeviceQuoteVerifier_SubmittedBindingIsIgnoredWhenNotRequired(t *testing.T) {
+	f := newQuoteFixture(t)
+	nonce := []byte("nonce-api")
+
+	result, err := f.verifier(t).Verify(context.Background(), itoa(f.device.ID), f.boundEvidence(t, nonce, nonce, testChannelBinding))
+	require.NoError(t, err)
+	assert.True(t, result.Verified, result.Message)
+}
+
+func TestDeviceQuoteVerifier_DoneContextReachesNoVerdict(t *testing.T) {
+	expired, cancelExpired := context.WithDeadline(context.Background(), time.Unix(0, 0))
+	t.Cleanup(cancelExpired)
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	for _, tc := range []struct {
+		name  string
+		ctx   context.Context
+		cause error
+	}{
+		{"cancelled", cancelled, context.Canceled},
+		{"deadline exceeded", expired, context.DeadlineExceeded},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newQuoteFixture(t)
+			_, err := f.verifier(t).Verify(tc.ctx, itoa(f.device.ID), f.evidence(t, []byte("nonce-1"), goldenPCRs()))
+			require.Error(t, err)
+			assert.IsType(t, ErrAttestationFailed{}, err)
+			assert.ErrorIs(t, err, tc.cause, "the context error must stay matchable through the wrap")
+			assert.Empty(t, f.sink.verdicts, "an abandoned verification reaches no verdict")
+			assert.Nil(t, f.profiles.profiles[f.profile.ID].PCRBaseline)
+		})
+	}
+}
+
+// A profile store that cannot answer decides nothing: the verification
+// fails closed with the cause attached, and is never read as "no profile".
+func TestDeviceQuoteVerifier_ProfileLookupFailureFailsClosed(t *testing.T) {
+	f := newQuoteFixture(t)
+	storeErr := errors.New("profile store unreachable")
+	f.profiles.findForDeviceErr = storeErr
+
+	result, err := f.verifier(t).Verify(context.Background(), itoa(f.device.ID), f.evidence(t, []byte("nonce-1"), goldenPCRs()))
+	require.Error(t, err)
+	assert.Nil(t, result)
+
+	var lookup ErrDeviceProfileLookupFailed
+	require.ErrorAs(t, err, &lookup)
+	assert.Equal(t, itoa(f.device.ID), lookup.DeviceID)
+	assert.ErrorIs(t, err, storeErr)
+	assert.Empty(t, f.sink.verdicts, "a lookup failure reaches no verdict")
+	assert.Nil(t, f.profiles.profiles[f.profile.ID].PCRBaseline, "nothing is captured without a profile answer")
 }
 
 func TestDeviceQuoteVerifier_SignedBaselineMatchReportsItsSource(t *testing.T) {
@@ -152,7 +307,7 @@ func TestDeviceQuoteVerifier_CertificateFromAnotherCAIsRejected(t *testing.T) {
 
 	assert.False(t, result.Verified)
 	assert.False(t, result.AKCertificateVerified)
-	assert.Contains(t, result.Message, "trusted root")
+	assert.Contains(t, result.Message, "does not chain to a trusted anchor")
 	assert.True(t, f.sink.last(t).Cryptographic)
 }
 
@@ -241,7 +396,7 @@ func TestDeviceQuoteVerifier_ReportedPCRsMustHashToTheSignedDigest(t *testing.T)
 	assert.True(t, result.SignatureValid)
 	assert.True(t, result.NonceValid)
 	assert.False(t, result.PCRsValid)
-	assert.Contains(t, result.Message, "signed digest")
+	assert.Contains(t, result.Message, "signed PCR digest")
 	assert.Nil(t, f.profiles.profiles[f.profile.ID].PCRBaseline, "values the TPM did not sign never become the baseline")
 	assert.True(t, f.sink.last(t).Cryptographic)
 }
@@ -369,4 +524,43 @@ func TestDeviceQuoteVerifier_NilSinkOnlyLogs(t *testing.T) {
 	result, err := v.Verify(context.Background(), itoa(f.device.ID), f.evidence(t, []byte("nonce-1"), goldenPCRs()))
 	require.NoError(t, err)
 	assert.True(t, result.Verified)
+}
+
+func TestParseDeviceID(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   string
+		want    uint64
+		wantErr bool
+	}{
+		{name: "valid ID", input: "123", want: 123},
+		{name: "zero", input: "0", want: 0},
+		{name: "max uint64 value", input: "18446744073709551615", want: 18446744073709551615},
+		// Sscanf parses the leading digits and ignores trailing characters.
+		{name: "mixed alphanumeric parses leading digits", input: "123abc", want: 123},
+		{name: "float stops at the decimal point", input: "1.5", want: 1},
+		{name: "leading whitespace is skipped", input: " 123", want: 123},
+		{name: "invalid string", input: "abc", wantErr: true},
+		{name: "empty string", input: "", wantErr: true},
+		{name: "negative number", input: "-1", wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := parseDeviceID(tt.input)
+			if tt.wantErr {
+				var msgErr *MessageError
+				if !errors.As(err, &msgErr) {
+					t.Errorf("parseDeviceID(%q) error = %v, want a MessageError", tt.input, err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("parseDeviceID(%q): %v", tt.input, err)
+			}
+			if got != tt.want {
+				t.Errorf("parseDeviceID(%q) = %d, want %d", tt.input, got, tt.want)
+			}
+		})
+	}
 }

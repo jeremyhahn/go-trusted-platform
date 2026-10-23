@@ -35,6 +35,27 @@ func TestSsrkHandleHex(t *testing.T) {
 	}
 }
 
+func TestDecodePlatformTPMConfig(t *testing.T) {
+	logger := logging.DefaultLogger()
+	// A kms:// reference elsewhere in the document must not stop the tpm
+	// section from decoding (#778).
+	doc := []byte("tpm:\n  platform-pcr: 23\ncertificate-authority:\n  identity:\n    - keys:\n        - password: \"kms://ca/root/keys/0/password?ensure=true\"\n")
+	got := decodePlatformTPMConfig(doc, "/etc/trusted-platform/config.yaml", logger)
+	if got == nil || got.PlatformPCR != 23 {
+		t.Fatalf("tpm config = %+v", got)
+	}
+}
+
+func TestDecodePlatformTPMConfig_Invalid(t *testing.T) {
+	logger := logging.DefaultLogger()
+	if got := decodePlatformTPMConfig([]byte("tpm: [unterminated\n"), "bad.yaml", logger); got != nil {
+		t.Errorf("malformed candidate = %+v, want nil", got)
+	}
+	if got := decodePlatformTPMConfig([]byte("other: 1\n"), "none.yaml", logger); got != nil {
+		t.Errorf("candidate without tpm = %+v, want nil", got)
+	}
+}
+
 func TestParsePCRBanksConfig_NonexistentFile(t *testing.T) {
 	logger := logging.DefaultLogger()
 	result := parsePCRBanksConfig("/nonexistent/path", logger)

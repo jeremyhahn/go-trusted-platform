@@ -15,249 +15,16 @@ package mcp
 
 import (
 	"fmt"
+
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/mcpwire"
+	"google.golang.org/grpc/status"
 )
 
 // registerVMTools registers VM-related MCP tools.
 func (r *ToolRegistry) registerVMTools() {
-	r.addTool(ToolDefinition{
-		Name:        "vm_create",
-		Description: "Create a new virtual machine with the specified configuration",
-		InputSchema: map[string]interface{}{
-			"type": "object",
-			"properties": map[string]interface{}{
-				"name": map[string]interface{}{
-					"type":        "string",
-					"description": "VM name (required, must start with a letter, alphanumeric with hyphens/underscores)",
-				},
-				"profile_id": map[string]interface{}{
-					"type":        "integer",
-					"description": "Device profile ID to use for VM configuration",
-				},
-				"profile_name": map[string]interface{}{
-					"type":        "string",
-					"description": "Device profile name to use for VM configuration",
-				},
-				"memory": map[string]interface{}{
-					"type":        "integer",
-					"description": "Memory in MB (e.g., 2048 for 2GB)",
-					"default":     2048,
-				},
-				"cpus": map[string]interface{}{
-					"type":        "integer",
-					"description": "Number of CPU cores",
-					"default":     2,
-				},
-				"disk_size": map[string]interface{}{
-					"type":        "string",
-					"description": "Disk size (e.g., '20G', '100G')",
-					"default":     "20G",
-				},
-				"iso_path": map[string]interface{}{
-					"type":        "string",
-					"description": "Path to installation ISO (for install mode)",
-				},
-				"boot_mode": map[string]interface{}{
-					"type":        "string",
-					"description": "Boot mode (install, boot, pxe)",
-					"default":     "boot",
-				},
-				"enable_kvm": map[string]interface{}{
-					"type":        "boolean",
-					"description": "Enable KVM hardware acceleration",
-					"default":     true,
-				},
-				"secure_boot": map[string]interface{}{
-					"type":        "boolean",
-					"description": "Enable UEFI Secure Boot",
-					"default":     false,
-				},
-				"tpm_enabled": map[string]interface{}{
-					"type":        "boolean",
-					"description": "Enable virtual TPM for the VM",
-					"default":     true,
-				},
-				"network_mode": map[string]interface{}{
-					"type":        "string",
-					"description": "Network mode (bridge, nat, none)",
-					"default":     "bridge",
-				},
-				"environment": map[string]interface{}{
-					"type":        "object",
-					"description": "Environment variables as key-value pairs",
-				},
-				"labels": map[string]interface{}{
-					"type":        "object",
-					"description": "VM labels as key-value pairs",
-				},
-			},
-			"required": []string{"name"},
-		},
-	})
+	r.registerVMLifecycleTools()
 
-	r.addTool(ToolDefinition{
-		Name:        "vm_get",
-		Description: "Get detailed information about a virtual machine by ID",
-		InputSchema: map[string]interface{}{
-			"type": "object",
-			"properties": map[string]interface{}{
-				"id": map[string]interface{}{
-					"type":        "string",
-					"description": "VM ID or name",
-				},
-			},
-			"required": []string{"id"},
-		},
-	})
-
-	r.addTool(ToolDefinition{
-		Name:        "vm_list",
-		Description: "List virtual machines with optional filters",
-		InputSchema: map[string]interface{}{
-			"type": "object",
-			"properties": map[string]interface{}{
-				"state": map[string]interface{}{
-					"type":        "string",
-					"description": "Filter by state (running, stopped, creating, etc.)",
-				},
-				"name": map[string]interface{}{
-					"type":        "string",
-					"description": "Filter by name (substring match)",
-				},
-				"limit": map[string]interface{}{
-					"type":        "integer",
-					"description": "Maximum number of VMs to return",
-					"default":     50,
-				},
-			},
-		},
-	})
-
-	r.addTool(ToolDefinition{
-		Name:        "vm_update",
-		Description: "Update virtual machine configuration",
-		InputSchema: map[string]interface{}{
-			"type": "object",
-			"properties": map[string]interface{}{
-				"id": map[string]interface{}{
-					"type":        "string",
-					"description": "VM ID or name",
-				},
-				"name": map[string]interface{}{
-					"type":        "string",
-					"description": "New VM name",
-				},
-				"memory": map[string]interface{}{
-					"type":        "integer",
-					"description": "Memory in MB",
-				},
-				"cpus": map[string]interface{}{
-					"type":        "integer",
-					"description": "Number of CPU cores",
-				},
-				"environment": map[string]interface{}{
-					"type":        "object",
-					"description": "Environment variables to set or update",
-				},
-				"labels": map[string]interface{}{
-					"type":        "object",
-					"description": "Labels to set or update",
-				},
-			},
-			"required": []string{"id"},
-		},
-	})
-
-	r.addTool(ToolDefinition{
-		Name:        "vm_delete",
-		Description: "Delete a virtual machine",
-		InputSchema: map[string]interface{}{
-			"type": "object",
-			"properties": map[string]interface{}{
-				"id": map[string]interface{}{
-					"type":        "string",
-					"description": "VM ID or name",
-				},
-			},
-			"required": []string{"id"},
-		},
-	})
-
-	r.addTool(ToolDefinition{
-		Name:        "vm_start",
-		Description: "Start a stopped virtual machine",
-		InputSchema: map[string]interface{}{
-			"type": "object",
-			"properties": map[string]interface{}{
-				"id": map[string]interface{}{
-					"type":        "string",
-					"description": "VM ID or name",
-				},
-			},
-			"required": []string{"id"},
-		},
-	})
-
-	r.addTool(ToolDefinition{
-		Name:        "vm_stop",
-		Description: "Stop a running virtual machine",
-		InputSchema: map[string]interface{}{
-			"type": "object",
-			"properties": map[string]interface{}{
-				"id": map[string]interface{}{
-					"type":        "string",
-					"description": "VM ID or name",
-				},
-			},
-			"required": []string{"id"},
-		},
-	})
-
-	r.addTool(ToolDefinition{
-		Name:        "vm_reboot",
-		Description: "Reboot a virtual machine",
-		InputSchema: map[string]interface{}{
-			"type": "object",
-			"properties": map[string]interface{}{
-				"id": map[string]interface{}{
-					"type":        "string",
-					"description": "VM ID or name",
-				},
-			},
-			"required": []string{"id"},
-		},
-	})
-
-	r.addTool(ToolDefinition{
-		Name:        "vm_suspend",
-		Description: "Suspend a running virtual machine",
-		InputSchema: map[string]interface{}{
-			"type": "object",
-			"properties": map[string]interface{}{
-				"id": map[string]interface{}{
-					"type":        "string",
-					"description": "VM ID or name",
-				},
-			},
-			"required": []string{"id"},
-		},
-	})
-
-	r.addTool(ToolDefinition{
-		Name:        "vm_resume",
-		Description: "Resume a suspended virtual machine",
-		InputSchema: map[string]interface{}{
-			"type": "object",
-			"properties": map[string]interface{}{
-				"id": map[string]interface{}{
-					"type":        "string",
-					"description": "VM ID or name",
-				},
-			},
-			"required": []string{"id"},
-		},
-	})
-
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "vm_snapshot_create",
 		Description: "Create a snapshot of a virtual machine",
 		InputSchema: map[string]interface{}{
@@ -275,12 +42,20 @@ func (r *ToolRegistry) registerVMTools() {
 					"type":        "string",
 					"description": "Snapshot description",
 				},
+				"memory_snapshot": map[string]interface{}{
+					"type":        "boolean",
+					"description": "Capture memory. Internal snapshots capture memory and disk together, so this must equal disk_snapshot",
+				},
+				"disk_snapshot": map[string]interface{}{
+					"type":        "boolean",
+					"description": "Capture disk; must equal memory_snapshot",
+				},
 			},
 			"required": []string{"vm_id", "name"},
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "vm_snapshot_get",
 		Description: "Get details of a specific VM snapshot",
 		InputSchema: map[string]interface{}{
@@ -299,7 +74,7 @@ func (r *ToolRegistry) registerVMTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "vm_snapshot_list",
 		Description: "List all snapshots for a virtual machine",
 		InputSchema: map[string]interface{}{
@@ -314,7 +89,7 @@ func (r *ToolRegistry) registerVMTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "vm_snapshot_delete",
 		Description: "Delete a VM snapshot",
 		InputSchema: map[string]interface{}{
@@ -333,7 +108,7 @@ func (r *ToolRegistry) registerVMTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "vm_snapshot_restore",
 		Description: "Restore a virtual machine from a snapshot",
 		InputSchema: map[string]interface{}{
@@ -352,7 +127,7 @@ func (r *ToolRegistry) registerVMTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "vm_attest",
 		Description: "Perform TPM attestation for a virtual machine, generating a cryptographic proof of its integrity",
 		InputSchema: map[string]interface{}{
@@ -381,7 +156,7 @@ func (r *ToolRegistry) registerVMTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "vm_attest_verify",
 		Description: "Verify VM attestation evidence (quote, signature, nonce, expected PCR values) against the VM's live vTPM attestation key",
 		InputSchema: map[string]interface{}{
@@ -398,6 +173,10 @@ func (r *ToolRegistry) registerVMTools() {
 				"signature": map[string]interface{}{
 					"type":        "string",
 					"description": "Base64-encoded AK signature over the quote",
+				},
+				"signature_algorithm": map[string]interface{}{
+					"type":        "string",
+					"description": "Scheme the quote declares, as vm_attest returned it (e.g. SHA256-RSAPSS); an absent or unknown scheme fails verification",
 				},
 				"nonce": map[string]interface{}{
 					"type":        "string",
@@ -427,16 +206,16 @@ func (e *VMError) Error() string {
 	return fmt.Sprintf("%s: %s", e.Code, e.Message)
 }
 
+// GRPCStatus classifies the error by its Code (codeClass), so the MCP
+// server answers it with the matching JSON-RPC code.
+func (e *VMError) GRPCStatus() *status.Status {
+	return codeStatus(e.Code, e.Error())
+}
+
 // ErrVMServiceUnavailable indicates the VM service is not available.
 var ErrVMServiceUnavailable = &VMError{
 	Code:    "VM_SERVICE_UNAVAILABLE",
 	Message: "VM service is not available",
-}
-
-// ErrVMNameRequired indicates a VM name is required.
-var ErrVMNameRequired = &VMError{
-	Code:    "VM_NAME_REQUIRED",
-	Message: "VM name is required",
 }
 
 // ErrVMIDRequired indicates a VM ID is required.

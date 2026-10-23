@@ -286,20 +286,23 @@ func initSDNPolicy(a *app.App, slogger *slog.Logger) *sdnPolicyComponents {
 // Warning-severity violations. When unavailable, Severe violations
 // (BlockPort) still function; Warning violations will log an error via the
 // observer.
+//
+// It returns the manager it registered, or nil when it registered none; the
+// operator Enable/Disable Device flow (#250) enforces through the same manager.
 func wireQuarantineObserver(
 	svcs *attestationServices,
 	sdnPolicy *sdnPolicyComponents,
 	deviceService device.DeviceService,
 	logger *logging.Logger,
-) {
+) *policy.QuarantineManager {
 	if svcs == nil || svcs.Service == nil {
-		return
+		return nil
 	}
 	if sdnPolicy == nil || sdnPolicy.Engine == nil {
-		return
+		return nil
 	}
 	if deviceService == nil {
-		return
+		return nil
 	}
 
 	slogger := logger.Slog()
@@ -315,7 +318,7 @@ func wireQuarantineObserver(
 	if err != nil {
 		slogger.Error("quarantine observer: failed to construct manager, observer not registered",
 			slog.String("error", err.Error()))
-		return
+		return nil
 	}
 
 	obs := &quarantineObserver{
@@ -331,6 +334,7 @@ func wireQuarantineObserver(
 	slogger.Info("quarantine observer registered",
 		slog.Bool("zone_flow_manager", sdnPolicy.ZoneFlowManager != nil),
 		slog.Int("resolved_zones", len(sdnPolicy.ResolvedZones)))
+	return manager
 }
 
 // pipelineTerminalForBridge reports the terminal platformd's allow rules

@@ -23,7 +23,7 @@ What is local:
 | Location | Role |
 |---|---|
 | `pkg/webservice/v1/rest/iam/` | REST adapter — `handlers.go`, `router.go`, `types.go`, `errors.go`, `adapter.go`, `adapter_helpers.go`, `mirror.go` |
-| `pkg/api/daemon/iam_service.go`, `iam_adapter.go`, `iam_grpc_service.go` | Service and gRPC wiring |
+| `pkg/api/daemon/iam_service.go`, `iam_grpc_service.go` | Service and gRPC wiring |
 | `pkg/api/daemon/iam_service_stub.go` | The stub used when IAM is not wired |
 | `pkg/api/daemon/iam_health_checker.go` | Health |
 | `pkg/api/grpc/iam_service.go`, `iam_types.go` | gRPC `PlatformIAMService` |
@@ -57,6 +57,18 @@ drift:
 
 **A user that exists in one store and not the other is the failure mode to look
 for** when "the user was created but does not appear in `/api/v1/iam/users`".
+
+What keeps the two stores in step (#641; the why is in
+[architecture.md](architecture.md) §"What keeps the mirror working"):
+
+| Guarantee | Where | Typed error |
+|---|---|---|
+| A new IAM tenant carries the built-in roles the mirror names | `tenant.Manager.CreateTenant` → `EnsureDefaultRoles` → SDK `iam.RoleClient.Reconcile` (`pkg/tenant/manager.go`) | `tenant.ErrDefaultRolesFailed`; the IAM tenant is rolled back |
+| A registered tenant owner is in the IAM tenant | `TenantUserService.RegisterNewUser` (`pkg/platform/service/tenant_user.go`) mirrors the owner with `iamMirrorRoles` (`admin`) | `service.ErrIAMMirrorFailed`; the platform user and the tenant are deleted |
+| A platform user missing from its IAM tenant is mirrored once | `service.IAMUserReconciler.Reconcile` (`pkg/platform/service/iam_user_reconcile.go`), started in the background by `HandlerRegistry.startIAMUserReconcile` (`pkg/webservice/v1/registry.go`); membership is read through `QuicBaaSUserMirror.MirroredEmails` and compared by lower-cased email | `service.ErrIAMReconcileFailed` only when the platform user store cannot be read; per-user and per-tenant failures are logged with `user_id` and counted in `IAMUserReconcileReport.Failed` |
+
+`tenant.NewManager` refuses a config without `IAMRoleClient`
+(`ErrInvalidRequest`), so no wiring can create a tenant that cannot hold users.
 
 ## 3. Two tenant route trees
 

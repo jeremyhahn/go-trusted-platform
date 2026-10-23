@@ -56,6 +56,27 @@ func netbootBuild(t *testing.T, pi, defaultArm64 bool, sets ...string) string {
 	return root
 }
 
+func markMediaSetDiskless(t *testing.T, root, set string) {
+	t.Helper()
+	setDir := root + "/" + container.NetbootMediaSetsDir + "/" + set
+	arch := "arm64"
+	if set == container.MediaSetX86_64 {
+		arch = "x86_64"
+	}
+	content := fmt.Sprintf("name: %s\narchitecture: %s\nkernel: k\ninitrd: i\nmodloop: m\ndefault: true\ndiskless: true\n", set, arch)
+	require.NoError(t, os.WriteFile(setDir+"/"+container.MediaSetDescriptor, []byte(content), 0o644))
+	require.NoError(t, os.WriteFile(setDir+"/rootfs.squashfs", []byte("rootfs"), 0o644))
+	require.NoError(t, os.WriteFile(setDir+"/rootfs.verity", []byte("verity"), 0o644))
+	require.NoError(t, os.MkdirAll(setDir+"/cdrom/diskless", 0o755))
+	require.NoError(t, os.WriteFile(setDir+"/cdrom/diskless/manifest.json", []byte("{}"), 0o644))
+	require.NoError(t, os.WriteFile(setDir+"/cdrom/diskless/manifest.json.sig", []byte("sig"), 0o644))
+	entries, err := container.PayloadFromTree(setDir+"/cdrom", "cdrom")
+	require.NoError(t, err)
+	list, err := os.Create(setDir + "/" + container.PayloadListName)
+	require.NoError(t, err)
+	require.NoError(t, errors.Join(container.WritePayloadList(list, entries), list.Close()))
+}
+
 // fleetMedia is a complete netboot media build — every set, the Pi stage —
 // that minimalConfig deploys, written once for the package's tests.
 var fleetMedia string
@@ -110,12 +131,47 @@ func TestNodePlatform_ValidRaspberryPi(t *testing.T) {
 	assert.Empty(t, generic.EffectiveBootModel())
 	_, ok = generic.PiSerial()
 	assert.False(t, ok)
+
+	piNode := piWorker()
+	piNode.Architecture, piNode.BootModel, piNode.Serial, piNode.Model = ArchitectureAArch64, BootModelSD, "0x1a2b", "rpi5"
+	require.NoError(t, piConfig(t, piNode).Validate())
+
+	piNode = piWorker()
+	piNode.BootModel = BootModelDiskless
+	cfg = piConfig(t, piNode)
+	markMediaSetDiskless(t, cfg.Deployer.NetbootMediaDir, container.MediaSetRaspberryPi)
+	require.NoError(t, cfg.Validate())
+
+	piNode = piWorker()
+	piNode.Serial = "" // the per-device directory is optional
+	require.NoError(t, piConfig(t, piNode).Validate())
+
+	arm := NodeConfig{Hostname: "arm1", Role: RoleWorker, MACs: []string{"aa:bb:cc:dd:ee:09"}, Architecture: ArchitectureAArch64}
+	cfg = configWith(arm)
+	cfg.Deployer.NetbootMediaDir = netbootBuild(t, false, true, container.MediaSetARM64Virt, container.MediaSetX86_64)
+	require.NoError(t, cfg.Validate(), "a generic aarch64 server boots the arm64 default")
+
+	diskless := NodeConfig{Hostname: "w-diskless", Role: RoleWorker, MACs: []string{"aa:bb:cc:dd:ee:10"}, Architecture: ArchitectureAArch64, BootModel: BootModelDiskless}
+	cfg = configWith(diskless)
+	cfg.Deployer.NetbootMediaDir = netbootBuild(t, false, true, container.MediaSetARM64Virt, container.MediaSetX86_64)
+	markMediaSetDiskless(t, cfg.Deployer.NetbootMediaDir, container.MediaSetARM64Virt)
+	require.NoError(t, cfg.Validate(), "generic arm64 servers may opt into the stateless diskless boot model when the selected media set has a diskless root")
 }
 
 func TestNodePlatform_ExplicitValuesAccepted(t *testing.T) {
 	pi := piWorker()
 	pi.Architecture, pi.BootModel, pi.Serial, pi.Model = ArchitectureAArch64, BootModelSD, "0x1a2b", "rpi5"
 	require.NoError(t, piConfig(t, pi).Validate())
+
+	pi = piWorker()
+	pi.BootModel = BootModelDiskless
+	disklessPi := piConfig(t, pi)
+	markMediaSetDiskless(t, disklessPi.Deployer.NetbootMediaDir, container.MediaSetRaspberryPi)
+	require.NoError(t, disklessPi.Validate())
+
+	pi = piWorker()
+	pi.BootModel = BootModelDisklessNBD
+	require.NoError(t, piConfig(t, pi).Validate(), "an NBD root is installed by the set's installer, so the set needs no diskless root")
 
 	pi = piWorker()
 	pi.Serial = "" // the per-device directory is optional
@@ -125,6 +181,12 @@ func TestNodePlatform_ExplicitValuesAccepted(t *testing.T) {
 	cfg := configWith(arm)
 	cfg.Deployer.NetbootMediaDir = netbootBuild(t, false, true, container.MediaSetARM64Virt, container.MediaSetX86_64)
 	require.NoError(t, cfg.Validate(), "a generic aarch64 server boots the arm64 default")
+
+	diskless := NodeConfig{Hostname: "w-diskless", Role: RoleWorker, MACs: []string{"aa:bb:cc:dd:ee:10"}, BootModel: BootModelDiskless}
+	cfg = configWith(diskless)
+	cfg.Deployer.NetbootMediaDir = netbootBuild(t, false, true, container.MediaSetX86_64)
+	markMediaSetDiskless(t, cfg.Deployer.NetbootMediaDir, container.MediaSetX86_64)
+	require.NoError(t, cfg.Validate(), "generic servers may opt into the stateless diskless boot model when the selected media set has a diskless root")
 }
 
 func TestNodePlatform_Rejections(t *testing.T) {
@@ -144,6 +206,7 @@ func TestNodePlatform_Rejections(t *testing.T) {
 		"generic with model":   {func(n *NodeConfig) { n.Platform = ""; n.Serial = "" }, "model"},
 		"generic with serial":  {func(n *NodeConfig) { n.Platform = ""; n.Model = "" }, "serial"},
 		"generic boot model":   {func(n *NodeConfig) { n.Platform = ""; n.Model = ""; n.Serial = ""; n.BootModel = BootModelSD }, "boot_model"},
+		"generic NBD root":     {func(n *NodeConfig) { n.Platform = ""; n.Model = ""; n.Serial = ""; n.BootModel = BootModelDisklessNBD }, "boot_model"},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -232,6 +295,17 @@ func TestValidateNetbootMedia(t *testing.T) {
 	require.NoError(t, minimalConfig().Validate(), "the fleet build serves an x86 fleet")
 }
 
+func TestValidateNetbootMediaRejectsDisklessWithoutRoot(t *testing.T) {
+	diskless := minimalConfig()
+	diskless.Nodes[0].BootModel = BootModelDiskless
+	diskless.Deployer.NetbootMediaDir = netbootBuild(t, false, false, container.MediaSetX86_64)
+
+	var need ErrNetbootMediaRequired
+	require.ErrorAs(t, diskless.Validate(), &need)
+	assert.Equal(t, "cp1", need.Hostname)
+	assert.Contains(t, need.Error(), "has no diskless root")
+}
+
 func TestNodeMediaSetAndIPXEArchitecture(t *testing.T) {
 	pi := piWorker()
 	assert.Equal(t, container.MediaSetRaspberryPi, pi.MediaSet())
@@ -243,9 +317,17 @@ func TestNodeMediaSetAndIPXEArchitecture(t *testing.T) {
 	assert.Empty(t, x86.MediaSet())
 	assert.Equal(t, "x86_64", x86.IPXEArchitecture())
 
-	infos := toDiscoveredNodeInfos([]DiscoveredNode{{NodeConfig: pi, DiscoveredMACs: pi.MACs}, {NodeConfig: NodeConfig{Hostname: "x"}, DiscoveredMACs: []string{"aa:bb:cc:dd:ee:01"}}})
+	diskless := NodeConfig{Hostname: "d", Architecture: ArchitectureAArch64, BootModel: BootModelDiskless}
+	infos := toDiscoveredNodeInfos([]DiscoveredNode{
+		{NodeConfig: pi, DiscoveredMACs: pi.MACs},
+		{NodeConfig: NodeConfig{Hostname: "x"}, DiscoveredMACs: []string{"aa:bb:cc:dd:ee:01"}},
+		{NodeConfig: diskless, DiscoveredMACs: []string{"aa:bb:cc:dd:ee:02"}},
+	})
 	assert.Equal(t, "arm64", infos[0].Architecture)
 	assert.Equal(t, container.MediaSetRaspberryPi, infos[0].MediaSet)
+	assert.Equal(t, BootModelSD, infos[0].BootModel)
 	assert.Equal(t, "x86_64", infos[1].Architecture)
 	assert.Empty(t, infos[1].MediaSet)
+	assert.Empty(t, infos[1].BootModel, "a generic node installs to its disk")
+	assert.Equal(t, BootModelDiskless, infos[2].BootModel, "the container learns which nodes boot diskless")
 }

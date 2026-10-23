@@ -17,6 +17,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
@@ -910,7 +911,7 @@ func TestService_RecordHeartbeat_EmptyIdentity(t *testing.T) {
 	require.NoError(t, err)
 
 	_, err = service.RecordHeartbeat(context.Background(), "", "")
-	assert.ErrorIs(t, err, ErrHeartbeatIdentityRequired)
+	assert.ErrorIs(t, err, ErrIdentityRequired)
 }
 
 // TestService_RecordHeartbeat_TypedNotFound pins the typed error the
@@ -921,7 +922,7 @@ func TestService_RecordHeartbeat_TypedNotFound(t *testing.T) {
 	require.NoError(t, err)
 
 	_, err = service.RecordHeartbeat(context.Background(), "no-such-device", "")
-	var notFound *HeartbeatDeviceNotFoundError
+	var notFound *IdentityNotFoundError
 	assert.ErrorAs(t, err, &notFound)
 }
 
@@ -942,12 +943,42 @@ func TestService_RecordHeartbeat_NeverStampsMismatchedDevice(t *testing.T) {
 	require.NoError(t, service.Save(ctx, device))
 
 	_, err = service.RecordHeartbeat(ctx, "node-01-gateway", "")
-	var notFound *HeartbeatDeviceNotFoundError
+	var notFound *IdentityNotFoundError
 	require.ErrorAs(t, err, &notFound)
 
 	stored, err := service.Get(ctx, device.ID)
 	require.NoError(t, err)
 	assert.True(t, stored.LastHeartbeatAt.IsZero(), "mismatched device must not be stamped")
+}
+
+// TestService_ResolveIdentity covers the lookup the heartbeat and a
+// diskless node's boot delivery share: serial first, hostname second, and
+// a typed miss — never another node's record — otherwise.
+func TestService_ResolveIdentity(t *testing.T) {
+	ds := testServiceDatastore(t)
+	service, err := NewService(ds)
+	require.NoError(t, err)
+	ctx := context.Background()
+
+	device := &entities.Device{ID: 310, Serial: "RES-SERIAL", Hostname: "res.example.internal"}
+	require.NoError(t, service.Save(ctx, device))
+	require.NoError(t, service.Save(ctx, &entities.Device{ID: 311, Serial: "UNNAMED-NODE"}))
+
+	bySerial, err := service.ResolveIdentity(ctx, "RES-SERIAL")
+	require.NoError(t, err)
+	assert.Equal(t, device.ID, bySerial.ID)
+
+	byHost, err := service.ResolveIdentity(ctx, "res.example.internal")
+	require.NoError(t, err)
+	assert.Equal(t, device.ID, byHost.ID)
+
+	_, err = service.ResolveIdentity(ctx, "")
+	assert.ErrorIs(t, err, ErrIdentityRequired)
+
+	_, err = service.ResolveIdentity(ctx, "node-02-gateway")
+	var notFound *IdentityNotFoundError
+	require.ErrorAs(t, err, &notFound)
+	assert.Equal(t, "node-02-gateway", notFound.Identity)
 }
 
 // TestService_Update_PreservesServerOwnedFields proves an ordinary
@@ -964,6 +995,7 @@ func TestService_Update_PreservesServerOwnedFields(t *testing.T) {
 		State:      entities.DeviceStateActivated,
 		AttestPub:  "-----BEGIN PUBLIC KEY-----\nenrolled-ak\n-----END PUBLIC KEY-----",
 		AttestCert: "-----BEGIN CERTIFICATE-----\nenrolled-ak-cert\n-----END CERTIFICATE-----",
+		IDevIDCert: "-----BEGIN CERTIFICATE-----\nenrolled-idevid-cert\n-----END CERTIFICATE-----",
 	}
 	require.NoError(t, service.Save(ctx, device))
 	_, err = service.RecordHeartbeat(ctx, "KEEP-1", "")
@@ -987,6 +1019,9 @@ func TestService_Update_PreservesServerOwnedFields(t *testing.T) {
 	// carrying verifiedTPMRestricted to a bare key that cannot (#374).
 	assert.Equal(t, device.AttestPub, stored.AttestPub, "AttestPub erased by update")
 	assert.Equal(t, device.AttestCert, stored.AttestCert, "AttestCert erased by update")
+	// An erased IDevID chain strands a diskless node: it is the only copy of
+	// the certificate the node presents on its next boot (#690).
+	assert.Equal(t, device.IDevIDCert, stored.IDevIDCert, "IDevIDCert erased by update")
 }
 
 // TestService_Update_PreservesNetworkPortID proves a dashboard-shaped
@@ -1023,7 +1058,7 @@ func TestIsLookupMiss(t *testing.T) {
 
 // TestService_RecordHeartbeat_StorageFaultIsNotNotFound proves a
 // backend failure during lookup surfaces as a server error, never as
-// the 404-mapped HeartbeatDeviceNotFoundError.
+// the 404-mapped IdentityNotFoundError.
 func TestService_RecordHeartbeat_StorageFaultIsNotNotFound(t *testing.T) {
 	ds, mockStorage := testServiceDatastoreWithMock(t)
 	service, err := NewService(ds)
@@ -1034,7 +1069,7 @@ func TestService_RecordHeartbeat_StorageFaultIsNotNotFound(t *testing.T) {
 
 	_, err = service.RecordHeartbeat(context.Background(), "any-node", "")
 	require.Error(t, err)
-	var notFound *HeartbeatDeviceNotFoundError
+	var notFound *IdentityNotFoundError
 	assert.False(t, errors.As(err, &notFound),
 		"storage fault must not be classified as device-not-found: %v", err)
 }
@@ -1201,6 +1236,43 @@ func TestService_Create_HonoursCallerSuppliedID(t *testing.T) {
 	assert.Equal(t, "SN-CREATE-002", stored.Serial)
 }
 
+// Every transport creates through Service.Create, so the defaults it fills
+// in are what makes the same body persist the same entity on each (#484).
+func TestService_Create_DefaultsStateAndTimestamps(t *testing.T) {
+	service, err := NewService(testServiceDatastore(t))
+	require.NoError(t, err)
+
+	device := &entities.Device{Serial: "SN-CREATE-DEFAULTS"}
+	require.NoError(t, service.Create(context.Background(), device))
+
+	stored, err := service.Get(context.Background(), device.ID)
+	require.NoError(t, err)
+	assert.Equal(t, entities.DeviceStateRegistered, stored.State)
+	assert.False(t, stored.CreatedAt.IsZero(), "CreatedAt must be stamped")
+	assert.True(t, stored.UpdatedAt.Equal(stored.CreatedAt), "a new device was last updated when it was created")
+}
+
+func TestService_Create_KeepsCallerStateAndTimestamps(t *testing.T) {
+	service, err := NewService(testServiceDatastore(t))
+	require.NoError(t, err)
+
+	created := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	updated := created.Add(time.Hour)
+	device := &entities.Device{
+		Serial:    "SN-CREATE-CALLER",
+		State:     entities.DeviceStateActivated,
+		CreatedAt: created,
+		UpdatedAt: updated,
+	}
+	require.NoError(t, service.Create(context.Background(), device))
+
+	stored, err := service.Get(context.Background(), device.ID)
+	require.NoError(t, err)
+	assert.Equal(t, entities.DeviceStateActivated, stored.State)
+	assert.True(t, stored.CreatedAt.Equal(created))
+	assert.True(t, stored.UpdatedAt.Equal(updated))
+}
+
 // TestService_Create_MintsDistinctIdentities guards the one thing a
 // minted ID must do: two creates must not collide, or the second
 // silently overwrites the first.
@@ -1252,6 +1324,41 @@ func TestService_Create_DAOError(t *testing.T) {
 	err = service.Create(context.Background(), device)
 	assert.Error(t, err)
 	assert.NotZero(t, device.ID, "the ID is assigned before the write is attempted")
+}
+
+func TestService_Create_RefusesATakenSerial(t *testing.T) {
+	service, err := NewService(testServiceDatastore(t))
+	require.NoError(t, err)
+	ctx := context.Background()
+
+	first := &entities.Device{Serial: "SN-TAKEN", Model: "first"}
+	require.NoError(t, service.Create(ctx, first))
+
+	err = service.Create(ctx, &entities.Device{Serial: "SN-TAKEN", Model: "second"})
+	assert.Equal(t, ErrDeviceSerialExists{Serial: "SN-TAKEN"}, err)
+	assert.Equal(t, "device already exists with serial: SN-TAKEN", err.Error())
+
+	count, err := service.Count(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, 1, count, "the refused create must not write a second row")
+	stored, err := service.Get(ctx, first.ID)
+	require.NoError(t, err)
+	assert.Equal(t, "first", stored.Model)
+}
+
+func TestService_Create_SerialCheckStorageFaultIsNotADuplicate(t *testing.T) {
+	ds, mockStorage := testServiceDatastoreWithMock(t)
+	service, err := NewService(ds)
+	require.NoError(t, err)
+
+	// Stop the backend so the serial lookup fails operationally, not as a miss.
+	require.NoError(t, mockStorage.Stop(context.Background()))
+
+	err = service.Create(context.Background(), &entities.Device{Serial: "SN-FAULT"})
+	require.Error(t, err)
+	assert.False(t, errors.As(err, &ErrDeviceSerialExists{}), "a storage fault is not a taken serial: %v", err)
+	var wrapped *WrappedError
+	assert.ErrorAs(t, err, &wrapped)
 }
 
 // TestService_Save_NilDevice pins the nil guard Save gained alongside

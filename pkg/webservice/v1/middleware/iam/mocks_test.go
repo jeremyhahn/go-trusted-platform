@@ -42,8 +42,7 @@ type getUserCall struct {
 // listUsersEmailCall records a call to ListUsersByEmail.
 // Email field is exposed so tests can inspect it directly (e.g. listUsersCalls[0].Email).
 type listUsersEmailCall struct {
-	TenantID string
-	Email    string
+	Email string
 }
 
 func newMockIAMServiceClient() *mockIAMServiceClient {
@@ -63,7 +62,7 @@ func (m *mockIAMServiceClient) GetUser(ctx context.Context, tenantID, userID str
 
 func (m *mockIAMServiceClient) ListUsersByEmail(ctx context.Context, tenantID, email string) ([]sdkiam.User, error) {
 	m.mu.Lock()
-	m.listUsersEmailCalls = append(m.listUsersEmailCalls, listUsersEmailCall{TenantID: tenantID, Email: email})
+	m.listUsersEmailCalls = append(m.listUsersEmailCalls, listUsersEmailCall{Email: email})
 	m.mu.Unlock()
 
 	if m.listUsersByEmailFunc != nil {
@@ -115,33 +114,9 @@ func (m *mockPEPServiceClient) CheckBatch(ctx context.Context, req *sdkiam.Check
 type mockHttpWriter struct {
 	mu sync.Mutex
 
-	writeCalls      []mockWriteCall
-	success200Calls []mockSuccessCall
-	success201Calls []mockSuccessCall
-	error200Calls   []mockErrorCall
-	error401Calls   []mockErrorCall
-	error400Calls   []mockErrorCall
-	error403Calls   []mockForbiddenCall
-	error404Calls   []mockErrorCall
-	error500Calls   []mockErrorCall
-}
-
-type mockWriteCall struct {
-	Status   int
-	Response interface{}
-}
-
-type mockSuccessCall struct {
-	Payload interface{}
-}
-
-type mockErrorCall struct {
-	Err error
-}
-
-type mockForbiddenCall struct {
-	Err     error
-	Payload interface{}
+	error401Calls int
+	error403Calls int
+	error500Calls int
 }
 
 func newMockHttpWriter() *mockHttpWriter {
@@ -149,87 +124,64 @@ func newMockHttpWriter() *mockHttpWriter {
 }
 
 func (m *mockHttpWriter) Write(w http.ResponseWriter, r *http.Request, status int, response interface{}) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.writeCalls = append(m.writeCalls, mockWriteCall{Status: status, Response: response})
 	w.WriteHeader(status)
 }
 
 func (m *mockHttpWriter) WriteYaml(w http.ResponseWriter, status int, response interface{}) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.writeCalls = append(m.writeCalls, mockWriteCall{Status: status, Response: response})
 	w.WriteHeader(status)
 }
 
 func (m *mockHttpWriter) WriteJson(w http.ResponseWriter, status int, response interface{}) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.writeCalls = append(m.writeCalls, mockWriteCall{Status: status, Response: response})
 	w.WriteHeader(status)
 }
 
 func (m *mockHttpWriter) Success200(w http.ResponseWriter, r *http.Request, payload interface{}) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.success200Calls = append(m.success200Calls, mockSuccessCall{Payload: payload})
 	w.WriteHeader(http.StatusOK)
 }
 
 func (m *mockHttpWriter) Success201(w http.ResponseWriter, r *http.Request, payload interface{}) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.success201Calls = append(m.success201Calls, mockSuccessCall{Payload: payload})
 	w.WriteHeader(http.StatusCreated)
 }
 
 func (m *mockHttpWriter) Success404(w http.ResponseWriter, r *http.Request, payload interface{}, err error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.error404Calls = append(m.error404Calls, mockErrorCall{Err: err})
 	w.WriteHeader(http.StatusNotFound)
 }
 
 func (m *mockHttpWriter) Error200(w http.ResponseWriter, r *http.Request, err error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.error200Calls = append(m.error200Calls, mockErrorCall{Err: err})
 	w.WriteHeader(http.StatusOK)
 }
 
 func (m *mockHttpWriter) Error401(w http.ResponseWriter, r *http.Request, err error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.error401Calls = append(m.error401Calls, mockErrorCall{Err: err})
+	m.error401Calls++
 	w.WriteHeader(http.StatusUnauthorized)
 }
 
 func (m *mockHttpWriter) Error400(w http.ResponseWriter, r *http.Request, err error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.error400Calls = append(m.error400Calls, mockErrorCall{Err: err})
 	w.WriteHeader(http.StatusBadRequest)
 }
 
 func (m *mockHttpWriter) Error404(w http.ResponseWriter, r *http.Request, err error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.error404Calls = append(m.error404Calls, mockErrorCall{Err: err})
 	w.WriteHeader(http.StatusNotFound)
 }
 
 func (m *mockHttpWriter) Error403(w http.ResponseWriter, r *http.Request, err error, payload interface{}) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.error403Calls = append(m.error403Calls, mockForbiddenCall{Err: err, Payload: payload})
+	m.error403Calls++
 	w.WriteHeader(http.StatusForbidden)
 }
 
 func (m *mockHttpWriter) Error500(w http.ResponseWriter, r *http.Request, err error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.error500Calls = append(m.error500Calls, mockErrorCall{Err: err})
+	m.error500Calls++
 	w.WriteHeader(http.StatusInternalServerError)
+}
+
+func (m *mockHttpWriter) Error503(w http.ResponseWriter, r *http.Request, err error) {
+	w.WriteHeader(http.StatusServiceUnavailable)
 }
 
 // Helper methods for mock assertions
@@ -237,17 +189,17 @@ func (m *mockHttpWriter) Error500(w http.ResponseWriter, r *http.Request, err er
 func (m *mockHttpWriter) getError401Count() int {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return len(m.error401Calls)
+	return m.error401Calls
 }
 
 func (m *mockHttpWriter) getError403Count() int {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return len(m.error403Calls)
+	return m.error403Calls
 }
 
 func (m *mockHttpWriter) getError500Count() int {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return len(m.error500Calls)
+	return m.error500Calls
 }

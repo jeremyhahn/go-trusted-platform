@@ -47,6 +47,23 @@ func TestBuildManifest(t *testing.T) {
 	}
 }
 
+// TestBuildManifest_BootModel: the boot model travels per node, each MAC
+// of a node carrying it, and a node without one stays without.
+func TestBuildManifest_BootModel(t *testing.T) {
+	manifest := BuildManifest([]DiscoveredNodeInfo{
+		{MACs: []string{"aa:bb:cc:dd:ee:01", "aa:bb:cc:dd:ee:02"}, Role: "worker", Hostname: "diskless-01", BootModel: "diskless"},
+		{MACs: []string{"aa:bb:cc:dd:ee:03"}, Role: "worker", Hostname: "disk-01"},
+	})
+	if len(manifest.Nodes) != 3 {
+		t.Fatalf("expected 3 entries, got %d", len(manifest.Nodes))
+	}
+	for i, want := range []string{"diskless", "diskless", ""} {
+		if manifest.Nodes[i].BootModel != want {
+			t.Errorf("entry %d (%s) boot model = %q, want %q", i, manifest.Nodes[i].MAC, manifest.Nodes[i].BootModel, want)
+		}
+	}
+}
+
 func TestBuildManifest_Empty(t *testing.T) {
 	manifest := BuildManifest(nil)
 	if len(manifest.Nodes) != 0 {

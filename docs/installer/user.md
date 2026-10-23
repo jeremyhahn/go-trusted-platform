@@ -24,10 +24,6 @@ Three things surprise people, so read them before you start:
    encryption key** inside a container whose password is a published constant.
    That is a deliberate trade for forensic protection, not a secret. Don't
    leave a machine in that state, and don't image the disk in that state.
-3. **`iso build`, `iso download`, `iso extract`, `iso customize` and every
-   `iso profile` verb currently do nothing.** They print
-   *"daemon connection required … dual-mode will be added later"*. Use
-   `iso create`, which does the whole pipeline.
 
 ---
 
@@ -245,6 +241,33 @@ sshd overrides. A node that "installed" without it is a node you cannot reach.
 When it finishes: remove the media and reboot. **The first boot is where the
 real work happens.** Watch it on the console or the BMC serial channel.
 
+### A node whose root is an NBD export (`diskless-nbd`)
+
+A node with `boot_model: diskless-nbd` in `bootstrap.yaml` has no local disk.
+Its installer command line carries `platform_boot_model=diskless-nbd` and
+`platform_nbd_server`, and the installer ignores `disk.device` and installs
+onto `/dev/nbd0`, the node's export on the boot server. Three things must hold
+before it starts, or it stops before it clears the TPM or formats anything:
+
+- The node enrols first, through the same `enroll-01` or `endorse-01` client
+  every node uses, because the export admits only its IDevID. The live
+  environment does not supply that client yet (**Planned**), so today every
+  `diskless-nbd` install stops here.
+- `/dev/nbd0` is attached to the export. The installer checks and never
+  attaches it itself (the attach is **Planned** with `platform-initrd`).
+- `disk.encryption` is set. The export is always LUKS2; the boot server only
+  ever holds ciphertext.
+
+The export's first partition holds what a disk's EFI partition would: the UKI,
+`tpm2/pcr-banks` and, after the first boot, the sealed key. The node mounts it
+at `/boot/efi`, so the checks in [First boot](#5-first-boot) are the same.
+
+From the next network boot on, the boot server hands the node that UKI instead
+of the installer. If an install stopped partway, the export is partitioned but
+holds no UKI. The node's boot then fails with HTTP 500 rather than reinstalling
+over it. To reinstall, power the node off, remove `<volume_dir>/<hostname>.img`
+on the boot server, and boot it again.
+
 ### Signing without shipping the key
 
 If your Secure Boot DB key lives in the control-plane KMS and must not travel:
@@ -304,7 +327,9 @@ platformctl install uki-rebuild --kver 6.12.8-lts
 
 Then plan the reseal. A new UKI produces new PCR values, and anything sealed to
 the old ones — the LUKS key, vTPM secrets, golden-PCR attestation policy — needs
-updating in the same maintenance window.
+updating in the same maintenance window. Nothing re-seals automatically —
+the hook rebuilds and re-signs only — so expect the next boot to stop at the
+passphrase prompt ([architecture.md](architecture.md) trust boundary 4).
 
 ### Firmware updates
 
@@ -377,6 +402,17 @@ encryption key is still sitting on an unauthenticated partition. Diagnose the
 seal failure, complete firstboot, and confirm the container is gone. If you
 must clear it manually, use `platformctl wipe --path … --trim` and be aware you
 have then removed your only unsealed copy of the key.
+
+**"refusing to install" with `/dev/nbd0: …`.**
+A `diskless-nbd` install found no usable export: the `nbd` module is not
+loaded, `nbd0` is not attached, the export is empty, or `disk.encryption` is
+not set. The message names which. Nothing was touched; attach the export or
+fix the config and rerun.
+
+**"enrollment: refusing to attach the NBD export".**
+A `diskless-nbd` node did not enrol, so it holds no IDevID to attach its export
+with: no enrollment client is configured, enrollment failed (the client's own
+error follows), or it returned no certificate. Nothing was touched.
 
 **No TPM detected.**
 The installer logs *"TPM sealing enabled but no TPM device found, continuing

@@ -16,6 +16,9 @@ package daemon
 import (
 	"errors"
 	"testing"
+
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 func TestErrServiceStartFailed(t *testing.T) {
@@ -377,15 +380,6 @@ func TestErrVTPMOperationNotImplemented(t *testing.T) {
 	}
 }
 
-func TestErrDeviceOperationNotImplemented(t *testing.T) {
-	t.Parallel()
-	err := ErrDeviceOperationNotImplemented{Operation: "provision"}
-	expected := "device operation not implemented: provision"
-	if got := err.Error(); got != expected {
-		t.Errorf("Error() = %q, want %q", got, expected)
-	}
-}
-
 func TestErrSDNOperationNotImplemented(t *testing.T) {
 	t.Parallel()
 	err := ErrSDNOperationNotImplemented{Operation: "apply_policy"}
@@ -452,24 +446,6 @@ func TestErrInvalidAttestationEvidence(t *testing.T) {
 }
 
 // SDN Service Errors
-
-func TestErrSDNPolicyEngineNotConfigured(t *testing.T) {
-	t.Parallel()
-	err := ErrSDNPolicyEngineNotConfigured{}
-	expected := "SDN policy engine not configured"
-	if got := err.Error(); got != expected {
-		t.Errorf("Error() = %q, want %q", got, expected)
-	}
-}
-
-func TestErrSDNInvalidPortState(t *testing.T) {
-	t.Parallel()
-	err := ErrSDNInvalidPortState{State: "invalid_state"}
-	expected := "invalid port state: invalid_state"
-	if got := err.Error(); got != expected {
-		t.Errorf("Error() = %q, want %q", got, expected)
-	}
-}
 
 func TestErrSDNPolicyNotFound(t *testing.T) {
 	t.Parallel()
@@ -547,24 +523,6 @@ func TestErrSDNMissingParameter(t *testing.T) {
 }
 
 // DNS QUIC Handler Errors
-
-func TestErrDNSConfigUpdateNotSupported(t *testing.T) {
-	t.Parallel()
-	err := ErrDNSConfigUpdateNotSupported{}
-	expected := "DNS configuration updates are not supported at runtime"
-	if got := err.Error(); got != expected {
-		t.Errorf("Error() = %q, want %q", got, expected)
-	}
-}
-
-func TestErrDNSCacheFlushNotSupported(t *testing.T) {
-	t.Parallel()
-	err := ErrDNSCacheFlushNotSupported{}
-	expected := "DNS cache flushing is not supported"
-	if got := err.Error(); got != expected {
-		t.Errorf("Error() = %q, want %q", got, expected)
-	}
-}
 
 func TestErrDNSZoneNotFound(t *testing.T) {
 	t.Parallel()
@@ -736,12 +694,23 @@ func TestErrIAMAppAlreadyExists(t *testing.T) {
 	}
 }
 
-func TestErrIAMAuthenticationFailed(t *testing.T) {
+func TestErrIAMAuthenticationViaOIDC(t *testing.T) {
 	t.Parallel()
-	err := ErrIAMAuthenticationFailed{Reason: "invalid credentials"}
-	expected := "IAM authentication failed: invalid credentials"
+	err := ErrIAMAuthenticationViaOIDC{}
+	expected := "iam authentication is handled via OIDC flows, not the IAM service"
 	if got := err.Error(); got != expected {
 		t.Errorf("Error() = %q, want %q", got, expected)
+	}
+	if got := status.Code(err); got != codes.Unimplemented {
+		t.Errorf("status.Code() = %v, want %v", got, codes.Unimplemented)
+	}
+}
+
+func TestErrIAMServiceNotAvailable_GRPCStatus(t *testing.T) {
+	t.Parallel()
+	err := ErrIAMServiceNotAvailable{}
+	if got := status.Code(err); got != codes.FailedPrecondition {
+		t.Errorf("status.Code() = %v, want %v", got, codes.FailedPrecondition)
 	}
 }
 
@@ -751,21 +720,6 @@ func TestErrIAMPermissionDenied(t *testing.T) {
 	expected := "IAM permission denied: subject user-1 cannot perform delete on document-123"
 	if got := err.Error(); got != expected {
 		t.Errorf("Error() = %q, want %q", got, expected)
-	}
-}
-
-func TestErrIAMOperationFailed(t *testing.T) {
-	t.Parallel()
-	cause := errors.New("database timeout")
-	err := ErrIAMOperationFailed{Operation: "create_user", Cause: cause}
-
-	expected := "IAM operation create_user failed: database timeout"
-	if got := err.Error(); got != expected {
-		t.Errorf("Error() = %q, want %q", got, expected)
-	}
-
-	if unwrapped := err.Unwrap(); unwrapped != cause {
-		t.Errorf("Unwrap() = %v, want %v", unwrapped, cause)
 	}
 }
 

@@ -1,20 +1,34 @@
 # `platformctl fido2`
 
+> **Status: REFERENCE** · Last verified: 2026-10-13
+> The `platformctl fido2` command reference, wire mapping and scopes.
+
 FIDO2 authenticator device operations and WebAuthn register / authenticate.
 
-All subcommands route through the go-quicbaas SDK
-(`Security().Auth().FIDO2()` — the single canonical surface for both
-device-level verbs and the WebAuthn ceremony). The platform repo does
-not implement any FIDO2 CTAP2 or WebAuthn logic locally — the canonical
-implementation lives in go-xkms and is re-exported through
-`go-quicbaas/sdk/go/xkms/fido2` for the initramfs carve-out.
+All subcommands route through `platform.Client.FIDO2()` and the platform SDK
+FIDO2 service adapter. The platform repo does not implement FIDO2 CTAP2 or
+WebAuthn logic locally. Runtime WebAuthn/FIDO2 ceremony support belongs behind
+`quicbaas.SDK().Security().Auth().FIDO2()` in the composed SDK.
+
+`platformd serve` currently leaves the daemon FIDO2 backend unwired because the
+SDK exposes the WebAuthn ceremony surface and client-local device discovery,
+but not the daemon backend shape used by these platform transports
+(`ListDevices`, `WaitDevice`, `Info`, `Register`, `Authenticate`). Until that
+SDK surface exists, every FIDO2 transport returns the typed
+`fido2: backend not configured` error rather than installing a local CTAP2/KV
+credential implementation.
+
+The `quicbaas/sdk/go/xkms/fido2` re-export remains valid for the initramfs
+carve-out and LUKS-specific flows that run before the runtime SDK is available.
+It is not used by the long-running daemon FIDO2 service.
 
 The subcommands honor the global flags `--config`, `--context`,
 `--transport`, `--server`, `--output`.
 
 ## Migration from the LUKS-focused command tree
 
-LUKS-specific FIDO2 management has moved under `platformctl luks`:
+LUKS-specific FIDO2 management has moved under `platformctl luks`
+([`docs/luks/cli.md`](../luks/cli.md)):
 
 | Old command | New command |
 |-------------|-------------|
@@ -73,29 +87,61 @@ platformctl fido2 register \
 ceremony role (`so`, `admin`, `user`) for later use by `ceremony
 claim-cert`.
 
+The command prints the new credential's hex-encoded id. platformd stores no
+FIDO2 credential: with the backend unwired (above), `platformd serve` answers
+`fido2: backend not configured`.
+
 ### `fido2 authenticate`
 
 Test an authentication ceremony against a registered credential.
 
 ```
-platformctl fido2 authenticate --credential-id <base64url credID>
+platformctl fido2 authenticate --credential-id <hex credID from register>
 ```
+
+The id is the hex string `fido2 register` printed. Like every FIDO2 call,
+`platformd serve` answers it with `fido2: backend not configured` until the
+backend is wired.
 
 ## Exit codes
 
-Non-zero on any SDK error. Typed errors propagate from
-`go-quicbaas/sdk/go/security/fido2` (device verbs) and
-`go-quicbaas/sdk/go/security/webauthn` (ceremony verbs).
+Non-zero on any SDK error. Typed command-surface errors live in
+`sdk/go/services/fido2/errors.go`; backend errors propagate through the
+selected platform SDK transport.
 
 ## Wire surface
 
-Every CLI subcommand maps 1:1 to a quicbaas SDK call and is reachable
-over every quicbaas transport (REST, gRPC, QUIC, MCP, Unix, embedded).
+Every CLI subcommand maps 1:1 to the FIDO2 service client exposed by
+`platform.Client.FIDO2()` and is reachable over every platform transport
+(REST, gRPC, QUIC, MCP, Unix, embedded).
 
-| Subcommand | SDK call | REST endpoint | MCP tool |
-|------------|----------|---------------|----------|
-| `fido2 list-devices` | `Security().Auth().FIDO2().ListDevices` | `GET /api/v1/fido2/devices` | `platform_fido2_list_devices` |
-| `fido2 wait-device` | `Security().Auth().FIDO2().WaitDevice` | `GET /api/v1/fido2/devices/wait?timeout_seconds=…` | `platform_fido2_wait_device` |
-| `fido2 info` | `Security().Auth().FIDO2().Info` | `GET /api/v1/fido2/devices/{device}` | `platform_fido2_info` |
-| `fido2 register` | `Security().Auth().FIDO2().BeginRegistration` + `FinishRegistration` | `POST /api/v1/fido2/register` | `platform_fido2_register` |
-| `fido2 authenticate` | `Security().Auth().FIDO2().BeginAuthentication` + `FinishAuthentication` | `POST /api/v1/fido2/authenticate` | `platform_fido2_authenticate` |
+| Subcommand | Platform SDK call | REST endpoint | MCP tool |
+|------------|-------------------|---------------|----------|
+| `fido2 list-devices` | `Client.FIDO2().ListDevices` | `GET /api/v1/fido2/devices` | `platform_fido2_list_devices` |
+| `fido2 wait-device` | `Client.FIDO2().WaitDevice` | `GET /api/v1/fido2/devices/wait?timeout_seconds=…` | `platform_fido2_wait_device` |
+| `fido2 info` | `Client.FIDO2().Info` | `GET /api/v1/fido2/devices/{device}` | `platform_fido2_info` |
+| `fido2 register` | `Client.FIDO2().Register` | `POST /api/v1/fido2/register` | `platform_fido2_register` |
+| `fido2 authenticate` | `Client.FIDO2().Authenticate` | `POST /api/v1/fido2/authenticate` | `platform_fido2_authenticate` |
+
+### Transports and scopes
+
+The SDK client for each transport is tested against the daemon's real handlers.
+QUIC uses category opcode `0x9D` with the sub-opcode in `payload[0]`.
+The embedded transport dispatches every RPC in-process through
+`ServiceRegistry.FIDO2`.
+
+| Subcommand | gRPC method (`platform.v1.FIDO2Service`) | QUIC sub-opcode | Scope |
+|------------|------------------------------------------|-----------------|-------|
+| `fido2 list-devices` | `ListDevices` | `0x01` | `fido2:read` |
+| `fido2 wait-device` | `WaitDevice` | `0x02` | `fido2:read` |
+| `fido2 info` | `Info` | `0x03` | `fido2:read` |
+| `fido2 register` | `Register` | `0x04` | `fido2:write` |
+| `fido2 authenticate` | `Authenticate` | `0x05` | `fido2:write` |
+
+gRPC (TCP), QUIC and MCP refuse a token that lacks the scope (`PermissionDenied`
+/ `StatusPermissionDenied`). QUIC refuses a caller with no principal the same
+way; under mTLS the client certificate is the principal and holds every scope
+([`docs/daemon/api.md`](../daemon/api.md) §5). The Unix socket is local and not
+token-gated. Scopes are minted by the broker from the subject's IAM
+permissions, so a role gains `fido2:read` / `fido2:write` by being granted those permissions; the admin role
+needs both.

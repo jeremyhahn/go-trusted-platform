@@ -26,9 +26,11 @@ import (
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	trustedca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/acme"
 	grpcapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc"
+	restapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/rest"
 	attestationstore "github.com/jeremyhahn/go-trusted-platform/pkg/attestation/store"
 	devicepkg "github.com/jeremyhahn/go-trusted-platform/pkg/device"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/dns"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/health"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/platform/service"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/provisioning/configdelivery"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/vtpm"
@@ -90,6 +92,7 @@ type testHandlerRegistry struct {
 	webauthn       webauthn.RestHandler
 	mtls           middleware.MTLSMiddleware
 	deviceHandler  device.RestHandler
+	bootHandler    device.BootHandler
 	acmeService    trustedca.ACMERestServicer
 	sdnService     platformv1.SDNServiceServer
 	tpm            xkmssdk.TrustedPlatformModule
@@ -104,19 +107,24 @@ type testHandlerRegistry struct {
 	dnsService            dns.DNSService
 	eabService            platformv1.EABServiceServer
 	ntpService            platformv1.NTPServiceServer
+	vpnService            platformv1.VPNServiceServer
+	appServices           restapi.AppServiceServers
 	overlayService        platformv1.OverlayServiceServer
 	switchService         device.SwitchServiceProvider
 	gatewayService        platformv1.GatewayServiceServer
 	gatewayStore          restgateway.GatewayStateStore
 	configDelivery        configdelivery.RestHandler
 	pxeService            platformv1.PXEServiceServer
+	pxeWebhookEnabled     bool
 	attestationService    platformv1.AttestationServiceServer
 	attestationReporting  *restattestation.Reporting
 	ociDistBackend        restregistry.OCIDistBackend
+	healthRegistry        health.Registry
 	deviceGRPCService     platformv1.DeviceServiceServer
 	deviceTemplateService devicepkg.DeviceTemplateService
 	deviceProfileService  devicepkg.DeviceProfileService
 	invitationService     platformv1.InvitationServiceServer
+	caService             platformv1.CAServiceServer
 	registryService       grpcapi.RegistryService
 	tpmService            platformv1.TPMServiceServer
 	tenantService         platformv1.TenantServiceServer
@@ -146,6 +154,10 @@ func (r *testHandlerRegistry) ACMERestService() trustedca.ACMERestServicer {
 
 func (r *testHandlerRegistry) DeviceRestHandler() device.RestHandler {
 	return r.deviceHandler
+}
+
+func (r *testHandlerRegistry) DeviceBootHandler() device.BootHandler {
+	return r.bootHandler
 }
 
 func (r *testHandlerRegistry) IAMClients() (restiam.IAMClient, restiam.PEPClient) {
@@ -256,6 +268,10 @@ func (r *testHandlerRegistry) InvitationServiceServer() platformv1.InvitationSer
 	return r.invitationService
 }
 
+func (r *testHandlerRegistry) CAServiceServer() platformv1.CAServiceServer {
+	return r.caService
+}
+
 func (r *testHandlerRegistry) OverlayServiceServer() platformv1.OverlayServiceServer {
 	return r.overlayService
 }
@@ -264,8 +280,20 @@ func (r *testHandlerRegistry) PXEServiceServer() platformv1.PXEServiceServer {
 	return r.pxeService
 }
 
+func (r *testHandlerRegistry) PXEWebhookEnabled() bool {
+	return r.pxeWebhookEnabled
+}
+
 func (r *testHandlerRegistry) NTPServiceServer() platformv1.NTPServiceServer {
 	return r.ntpService
+}
+
+func (r *testHandlerRegistry) VPNServiceServer() platformv1.VPNServiceServer {
+	return r.vpnService
+}
+
+func (r *testHandlerRegistry) AppServiceServers() restapi.AppServiceServers {
+	return r.appServices
 }
 
 func (r *testHandlerRegistry) TenantServiceServer() platformv1.TenantServiceServer {
@@ -282,6 +310,10 @@ func (r *testHandlerRegistry) RegistryService() grpcapi.RegistryService {
 
 func (r *testHandlerRegistry) OCIDistBackend() restregistry.OCIDistBackend {
 	return r.ociDistBackend
+}
+
+func (r *testHandlerRegistry) HealthRegistry() health.Registry {
+	return r.healthRegistry
 }
 
 // stubEventReader mounts /api/v1/attestation/events under the audit so the
@@ -302,9 +334,15 @@ func (r *testHandlerRegistry) AttestationReporting() *restattestation.Reporting 
 	return r.attestationReporting
 }
 
+func (r *testHandlerRegistry) AttestationVerdicts() restattestation.VerdictPoller {
+	return nil
+}
+
 func (r *testHandlerRegistry) GatewayControlPlane() (restgateway.GatewayStateStore, restgateway.DesiredConfigSource) {
 	return r.gatewayStore, nil
 }
+
+func (r *testHandlerRegistry) GatewayVPNLeases() restgateway.VPNLeaseSink { return nil }
 
 // Tests
 

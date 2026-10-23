@@ -136,6 +136,14 @@ type platformTokenValidator struct {
 	validator   *platformtoken.Validator
 	allowBearer bool
 	logger      *logging.Logger
+	// liveness is the revocation backend the validator consults in online and
+	// hybrid authz modes; nil in offline mode. Token verification (see
+	// verifyIAMToken) asks it directly because it checks a token on behalf of
+	// a caller that is not the token's presenter.
+	liveness platformtoken.LivenessChecker
+	// pep decides CheckPermission for the token's principal; nil makes every
+	// CheckPermission fail closed.
+	pep quicbaas.IAMPEPClient
 }
 
 // Compile-time checks: the transports bind the shared validator via runtime
@@ -159,7 +167,10 @@ var (
 // for LivenessCacheTTL. When the effective mode requires liveness (online or
 // hybrid) and no IntrospectionURL is configured, construction fails rather than
 // silently downgrading to offline.
-func newPlatformTokenValidator(cfg PlatformTokenConfig, logger *logging.Logger) (*platformTokenValidator, error) {
+//
+// pep is the IAM policy enforcement point CheckPermission asks; nil leaves
+// token validation intact and makes CheckPermission fail closed.
+func newPlatformTokenValidator(cfg PlatformTokenConfig, pep quicbaas.IAMPEPClient, logger *logging.Logger) (*platformTokenValidator, error) {
 	if strings.TrimSpace(cfg.Issuer) == "" {
 		return nil, ErrPlatformTokenConfig{Field: "issuer", Reason: "broker token issuer is required"}
 	}
@@ -240,6 +251,8 @@ func newPlatformTokenValidator(cfg PlatformTokenConfig, logger *logging.Logger) 
 		validator:   validator,
 		allowBearer: cfg.AllowBearer,
 		logger:      logger,
+		liveness:    livenessChecker,
+		pep:         pep,
 	}, nil
 }
 
@@ -327,21 +340,27 @@ func (v *platformTokenValidator) GetTokenClaims(ctx context.Context, token strin
 
 // CheckPermission implements mcp.AuthorizationService for the legacy MCP seam.
 // The subject argument is the bearer token (per the MCP authorization checker's
-// convention). It validates the token and enforces the qrdb-canonical
-// "resource:action" scope against the granted scope set.
+// convention). It validates the token, refuses an empty resource or action
+// with ErrEmptyPermission, requires the qrdb-canonical "resource:action" scope
+// in the granted scope set, and then asks the IAM policy enforcement point
+// whether the token's principal holds the permission. Without a PEP the check
+// fails closed.
 func (v *platformTokenValidator) CheckPermission(ctx context.Context, subject, resource, action string) (bool, error) {
 	claims, err := v.validator.ValidatePlatformToken(ctx, subject)
 	if err != nil {
 		return false, err
 	}
 	authCtx := platformtoken.Authorize(claims)
-	if resource == "" || action == "" {
-		return true, nil
+	if strings.TrimSpace(resource) == "" || strings.TrimSpace(action) == "" {
+		return false, ErrEmptyPermission{Resource: resource, Action: action}
 	}
+	// The token's scopes bound what it was issued for; the PEP decides
+	// whether its principal holds the permission (#926).
 	if err := authCtx.RequireScope(resource + ":" + action); err != nil {
 		return false, nil
 	}
-	return true, nil
+	principal := &tokenPrincipal{Subject: authCtx.Subject, TenantID: authCtx.TenantID, Roles: authCtx.Roles}
+	return checkPrincipalPermission(ctx, v.pep, principal, resource, action)
 }
 
 // ErrPlatformTokenConfig indicates the shared platform-token validator was

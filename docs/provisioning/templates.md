@@ -1,5 +1,8 @@
 # Device Templates
 
+> **Status: REFERENCE** · Last verified: 2026-10-15
+> Device templates and the profiles made from them.
+
 Device templates are reusable configuration blueprints for device provisioning. A template contains a full platform configuration (`app.App`) that can be copied to create device profiles with device-specific customizations.
 
 ## Lifecycle
@@ -14,20 +17,7 @@ Device Template ──(copy + customize)──▶ Device Profile ──(assign d
 
 ## Creating Templates
 
-### CLI
-
-```bash
-# Create from a YAML config file
-platformctl device template create --name "edge-server-v1" \
-  --role server \
-  --config /path/to/platform-config.yaml
-
-# List templates
-platformctl device template list
-
-# Get template details
-platformctl device template get --id 1
-```
+There is no `platformctl` command for templates; use the REST API or the web UI.
 
 ### REST API
 
@@ -40,15 +30,21 @@ curl -X POST https://platform:8443/api/v1/device/templates \
     "name": "edge-server-v1",
     "description": "Edge server with TPM sealing and LUKS encryption",
     "role": "server",
-    "config": { ... }
+    "config": "<base64 of the platform config YAML>"
   }'
 
 # List templates
-curl https://platform:8443/api/v1/devices/templates
+curl https://platform:8443/api/v1/device/templates
 
-# Get template
-curl https://platform:8443/api/v1/devices/templates/1
+# Get template, or find it by name
+curl https://platform:8443/api/v1/device/templates/1
+curl https://platform:8443/api/v1/device/templates/name/edge-server-v1
 ```
+
+`config` is the platform config YAML as raw bytes, so in JSON it is a base64
+string (`TemplateRequest`, `pkg/webservice/v1/device/template_types.go`). The
+fields may also be sent wrapped in a `template` object. `PUT` and `DELETE` on
+`/api/v1/device/templates/{id}` update and delete a template.
 
 ### Web UI
 
@@ -56,42 +52,38 @@ Navigate to **Devices > Templates** to manage templates through the web interfac
 
 ## Creating Profiles from Templates
 
-```bash
-# Create profile from template with overrides
-platformctl device template to-profile --id 1 \
-  --ek-serial "ABC123DEF456" \
-  --hostname "edge-01.example.com" \
-  --ip "10.0.1.100/24"
-```
-
 ### REST API
 
 ```bash
-curl -X POST https://platform:8443/api/v1/devices/templates/1/create-profile \
+curl -X POST https://platform:8443/api/v1/device/templates/1/create-profile \
   -H "Content-Type: application/json" \
   -d '{
-    "ek_serial": "ABC123DEF456",
-    "mac_address": "52:54:00:12:34:56",
     "overrides": {
-      "hostname": "edge-01.example.com"
+      "name": "edge-01",
+      "ek_serial": "ABC123DEF456",
+      "mac_address": "52:54:00:12:34:56"
     }
   }'
 ```
 
+The body is optional. `overrides` takes the device profile request fields
+(`ProfileRequest`, `pkg/webservice/v1/device/types.go`); a body that does not
+decode is refused with `400`. The answer is `201` with the new profile. The web
+UI offers the same at **Devices > Templates > (template) > Create Profile**.
+
 ## vTPM Integration
 
-When generating a vTPM bundle for a profile, the EK certificate serial number is automatically extracted and assigned to the profile. This makes the profile discoverable during boot.
-
-```bash
-# Generate vTPM bundle for profile (EK serial auto-assigned)
-platformctl vtpm generate --profile-id 5
-
-# The profile is now discoverable by EK serial at boot time
-```
+When the compute QEMU provider starts a VM for a profile it generates the VM's
+vTPM (`GeneratorService.GenerateForProfile`, `pkg/vtpm/generator.go`). The
+generator binds the vTPM's EK serial and EK certificate to the profile only
+when a `ProfileAssigner` is set, and no production code sets one
+(`SetProfileAssigner` has no caller). Today, set `ek_serial` (and `ek_cert`) on
+the profile yourself, or let config delivery match the device by MAC.
 
 ## Configuration Structure
 
-Templates use the standard `app.App` configuration structure which includes:
+Templates use the standard `app.App` configuration structure
+(`pkg/app/app.go`), which includes:
 
 | Section | Purpose |
 |---------|---------|
@@ -103,4 +95,5 @@ Templates use the standard `app.App` configuration structure which includes:
 | `webservice` | Web service, TLS, CORS |
 | `tpm` | TPM configuration, PCR policy |
 | `seal-pcrs` | PCR registers for LUKS sealing |
-| `bootstrap` | Trust bootstrap (Noise, DANE) |
+| `bootstrap` | Server-side bootstrap orchestrator (see [Bootstrap](../bootstrap/user.md)) |
+| `trust` | Peer trust resolver: `trust.bootstrap`, `trust.bmc` (see `docs/trust/`) |

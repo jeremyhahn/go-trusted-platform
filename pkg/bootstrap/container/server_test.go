@@ -20,9 +20,12 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/bootstrap/nbd"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/diskimage/artifacts"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/disklessroot"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/ipxe"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -47,21 +50,25 @@ func testDataDir(t *testing.T, sets ...MediaSet) string {
 			t.Fatal(err)
 		}
 	}
-	// payload writes a set's payload list for one binary the installer
-	// fetches.
-	payload := func(dir, src string) {
+	// payload writes a set's payload list for the files the installer
+	// fetches, destination to source.
+	payload := func(dir string, files map[string]string) {
 		t.Helper()
-		write(filepath.Join(dir, src), "binary for "+dir)
-		sum, err := artifacts.FileSHA256(filepath.Join(dir, src))
-		if err != nil {
-			t.Fatal(err)
+		var entries []PayloadEntry
+		for dest, src := range files {
+			write(filepath.Join(dir, src), "content of "+src+" for "+dir)
+			sum, err := artifacts.FileSHA256(filepath.Join(dir, src))
+			if err != nil {
+				t.Fatal(err)
+			}
+			entries = append(entries, PayloadEntry{SHA256: sum, Kind: PayloadFile, Dest: dest, Src: src})
 		}
 		f, err := os.Create(filepath.Join(dir, PayloadListName))
 		if err != nil {
 			t.Fatal(err)
 		}
 		defer f.Close()
-		if err := WritePayloadList(f, []PayloadEntry{{SHA256: sum, Kind: PayloadFile, Dest: "platformd-bin/platformctl", Src: src}}); err != nil {
+		if err := WritePayloadList(f, entries); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -70,12 +77,20 @@ func testDataDir(t *testing.T, sets ...MediaSet) string {
 		for _, f := range []string{set.Kernel, set.Initrd, set.Modloop} {
 			write(filepath.Join(dir, f), f)
 		}
+		files := map[string]string{InstallerEntryPoint: "cdrom/platformd-bin/platformctl"}
+		if set.Diskless {
+			write(filepath.Join(dir, disklessroot.RootFSFile), "squashfs")
+			write(filepath.Join(dir, disklessroot.VerityFile), "hash tree")
+			for _, name := range []string{disklessroot.ManifestFile, disklessroot.SignatureFile} {
+				files[disklessroot.Dir+"/"+name] = "cdrom/" + disklessroot.Dir + "/" + name
+			}
+		}
 		data, err := yaml.Marshal(set)
 		if err != nil {
 			t.Fatal(err)
 		}
 		write(filepath.Join(dir, MediaSetDescriptor), string(data))
-		payload(dir, "cdrom/platformd-bin/platformctl")
+		payload(dir, files)
 	}
 	return dataDir
 }
@@ -339,6 +354,162 @@ func TestLoadMediaSets_Validation(t *testing.T) {
 	assert.Contains(t, setErr.Error(), "cannot parse")
 }
 
+func disklessVirtSet() MediaSet {
+	set := virtSet()
+	set.Diskless = true
+	return set
+}
+
+func TestLoadMediaSets_DisklessRoot(t *testing.T) {
+	dataDir := testDataDir(t, disklessVirtSet())
+	sets, err := LoadMediaSets(filepath.Join(dataDir, "media"), "/data/media")
+	require.NoError(t, err)
+	require.Len(t, sets, 1)
+	assert.True(t, sets[0].Diskless)
+	// The set's own arguments name no root: the root hash is in the signed
+	// manifest alone, and a set is diskless only for a diskless node.
+	args := sets[0].bootArgs(&ServerConfig{DHCPConfig: DHCPConfig{ServerIP: "192.168.1.1"}, HTTPPort: 8080, APKMirror: "https://dl-cdn.alpinelinux.org/alpine", AlpineVersion: "3.22"})
+	for _, param := range []string{disklessroot.ParamBootModel, disklessroot.ParamRootHash, disklessroot.ParamRootFSURL, "roothash="} {
+		assert.NotContains(t, args, param)
+	}
+}
+
+func TestLoadMediaSets_DisklessRootValidation(t *testing.T) {
+	var setErr ErrMediaSet
+	dataDir := testDataDir(t, disklessVirtSet())
+	setDir := filepath.Join(dataDir, "media", "aarch64-virt")
+	require.NoError(t, os.Remove(filepath.Join(setDir, disklessroot.VerityFile)))
+	_, err := LoadMediaSets(filepath.Join(dataDir, "media"), "/data/media")
+	require.ErrorAs(t, err, &setErr)
+	assert.Contains(t, setErr.Error(), "verity "+disklessroot.VerityFile+" is missing")
+
+	// A diskless set whose install media lacks the signed manifest could
+	// only boot an unverified root.
+	dataDir = testDataDir(t, virtSet())
+	setDir = filepath.Join(dataDir, "media", "aarch64-virt")
+	for _, f := range []string{disklessroot.RootFSFile, disklessroot.VerityFile} {
+		require.NoError(t, os.WriteFile(filepath.Join(setDir, f), []byte(f), 0o644))
+	}
+	data, err := yaml.Marshal(disklessVirtSet())
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(setDir, MediaSetDescriptor), data, 0o644))
+	_, err = LoadMediaSets(filepath.Join(dataDir, "media"), "/data/media")
+	require.ErrorAs(t, err, &setErr)
+	assert.Contains(t, setErr.Error(), "provides no "+disklessroot.Dir+"/"+disklessroot.ManifestFile)
+}
+
+const disklessManifest = `nodes:
+  - mac: "52:54:00:12:34:56"
+    role: "worker"
+    hostname: "arm-diskless"
+    architecture: "arm64"
+    boot_model: "diskless"
+  - mac: "52:54:00:12:34:57"
+    role: "worker"
+    hostname: "arm-disk"
+    architecture: "arm64"
+`
+
+func TestDeviceBootInfo_BootModelIsPerNode(t *testing.T) {
+	server, err := newTestContainer(t, disklessManifest, disklessVirtSet())
+	require.NoError(t, err)
+	selector := disklessroot.ParamBootModel + "=" + disklessroot.BootModel
+
+	info, err := server.deviceBootInfo("52:54:00:12:34:56")
+	require.NoError(t, err)
+	assert.Contains(t, info.ExtraKernelArgs[0], selector, "the diskless node is told its boot model")
+	assert.NotContains(t, info.ExtraKernelArgs[0], disklessroot.ParamRootHash, "never the root, which nothing on this line signs")
+
+	// The same set boots a disk node, which installs to its disk.
+	info, err = server.deviceBootInfo("52:54:00:12:34:57")
+	require.NoError(t, err)
+	assert.NotContains(t, info.ExtraKernelArgs[0], selector)
+
+	// The architecture's default entry, for machines the manifest does not
+	// know, is never diskless.
+	set := disklessVirtSet()
+	assert.NotContains(t, set.bootEntry(server.config).Args, selector)
+}
+
+func TestDeviceBootInfo_DisklessNodeNeedsADisklessSet(t *testing.T) {
+	server, err := newTestContainer(t, disklessManifest, virtSet())
+	require.NoError(t, err)
+	_, err = server.deviceBootInfo("52:54:00:12:34:56")
+	var unavailable ErrDisklessUnavailable
+	require.ErrorAs(t, err, &unavailable)
+	assert.Equal(t, "aarch64-virt", unavailable.MediaSet)
+	assert.Contains(t, unavailable.Error(), "--diskless")
+
+	code, _ := deviceScript(t, server, "/boot/device/52:54:00:12:34:56.ipxe")
+	assert.NotEqual(t, http.StatusOK, code, "a diskless node is not sent to install onto a disk")
+}
+
+func TestNodeBootArgs_DisklessNBDNode(t *testing.T) {
+	config := &ServerConfig{DHCPConfig: DHCPConfig{ServerIP: "192.168.1.1"}, HTTPPort: 8080, APKMirror: "https://dl-cdn.alpinelinux.org/alpine", AlpineVersion: "3.22"}
+	config.ApplyDefaults()
+	set := piSet()
+	selector := disklessroot.ParamBootModel + "=" + nbd.BootModel
+	server := nbd.ParamServer + "=192.168.1.1:10809"
+
+	args, err := nodeBootArgs(&ManifestEntry{MAC: "dc:a6:32:01:36:c2", Hostname: "nbd-01", BootModel: nbd.BootModel}, set, config)
+	require.NoError(t, err, "an NBD root needs no diskless root in the set")
+	assert.True(t, strings.HasSuffix(args, " "+selector+" "+server), "the node is told its boot model and the export server's listener: %s", args)
+	assert.Contains(t, args, "alpine_start=autoinstall", "it boots the set's installer, which installs onto the export")
+
+	// No other boot model is told an NBD server.
+	disklessSet := set
+	disklessSet.Diskless = true
+	for _, entry := range []ManifestEntry{
+		{MAC: "dc:a6:32:01:36:c3", Hostname: "sd-01", BootModel: "sd"},
+		{MAC: "dc:a6:32:01:36:c4", Hostname: "disk-01"},
+		{MAC: "dc:a6:32:01:36:c5", Hostname: "diskless-01", BootModel: disklessroot.BootModel},
+	} {
+		args, err = nodeBootArgs(&entry, disklessSet, config)
+		require.NoError(t, err)
+		assert.NotContains(t, args, nbd.ParamServer, "a %q node attaches no export", entry.BootModel)
+		assert.NotContains(t, args, selector)
+	}
+	args, err = nodeBootArgs(&ManifestEntry{MAC: "dc:a6:32:01:36:c3", Hostname: "sd-01", BootModel: "sd"}, set, config)
+	require.NoError(t, err)
+	assert.NotContains(t, args, disklessroot.ParamBootModel, "an SD node gets the set's arguments alone")
+}
+
+func TestNodeBootArgs_NBDServerAddress(t *testing.T) {
+	entry := &ManifestEntry{MAC: "dc:a6:32:01:36:c2", Hostname: "nbd-01", BootModel: nbd.BootModel}
+	tests := []struct {
+		listenAddr string
+		want       string
+	}{
+		{"192.0.2.1:10809", "192.0.2.1:10809"},
+		{":10811", "192.168.1.1:10811"},
+		{"0.0.0.0:10809", "192.168.1.1:10809"},
+		{"[::]:10809", "192.168.1.1:10809"},
+		{"[fd00:405::1]:10809", "[fd00:405::1]:10809"},
+	}
+	for _, tc := range tests {
+		config := &ServerConfig{DHCPConfig: DHCPConfig{ServerIP: "192.168.1.1"}, NBD: NBDConfig{ListenAddr: tc.listenAddr}}
+		args, err := nodeBootArgs(entry, piSet(), config)
+		require.NoError(t, err, tc.listenAddr)
+		assert.True(t, strings.HasSuffix(args, " "+nbd.ParamServer+"="+tc.want), "listen %s: %s", tc.listenAddr, args)
+	}
+}
+
+func TestNodeBootArgs_NBDServerAddressUnknown(t *testing.T) {
+	entry := &ManifestEntry{MAC: "dc:a6:32:01:36:c2", Hostname: "nbd-01", BootModel: nbd.BootModel}
+	for _, config := range []*ServerConfig{
+		{},                                     // no listener and no provisioning address
+		{NBD: NBDConfig{ListenAddr: ":10809"}}, // a wildcard bind and no provisioning address
+		{NBD: NBDConfig{ListenAddr: "192.0.2.1"}},
+		{NBD: NBDConfig{ListenAddr: "192.0.2.1:0"}},
+	} {
+		_, err := nodeBootArgs(entry, piSet(), config)
+		var unknown ErrNBDServerAddress
+		require.ErrorAs(t, err, &unknown, "listen %q", config.NBD.ListenAddr)
+		assert.Equal(t, config.NBD.ListenAddr, unknown.ListenAddr)
+		assert.Contains(t, unknown.Error(), "nbd.listen_addr")
+	}
+}
+
 func TestServerConfig_Validate_PathsMustBeServed(t *testing.T) {
 	cfg := &ServerConfig{
 		ManifestPath: "/m.yaml", DataDir: "/data",
@@ -465,10 +636,24 @@ func TestExtractMACFromPath(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			result := extractMACFromPath(tc.path)
+			result := extractMACFromPath(tc.path, deviceScriptRoute, deviceScriptSuffix)
 			if result != tc.expected {
 				t.Errorf("extractMACFromPath(%q) = %q, want %q", tc.path, result, tc.expected)
 			}
 		})
+	}
+}
+
+func TestExtractMACFromPath_InstalledUKIRoute(t *testing.T) {
+	for path, want := range map[string]string{
+		"/boot/uki/DC-A6-32-01-36-C2.efi":    "dc:a6:32:01:36:c2",
+		"/boot/uki/dc:a6:32:01:36:c2.efi":    "dc:a6:32:01:36:c2",
+		"/boot/uki/dc:a6:32:01:36:c2.ipxe":   "",
+		"/boot/uki/../tpm2/installer.luks":   "",
+		"/boot/device/dc:a6:32:01:36:c2.efi": "",
+	} {
+		if got := extractMACFromPath(path, installedUKIRoute, installedUKISuffix); got != want {
+			t.Errorf("extractMACFromPath(%q) = %q, want %q", path, got, want)
+		}
 	}
 }

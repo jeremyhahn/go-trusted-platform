@@ -16,10 +16,12 @@ package cluster
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
@@ -683,34 +685,51 @@ func TestNewOVSSynchronizerWithOptions(t *testing.T) {
 
 // Test: Start and Stop lifecycle
 func TestSynchronizerStartStop(t *testing.T) {
-	stateManager := newMockStateManager()
-	ovsClient := newMockOVSClient()
-	logger := createTestLogger()
+	synctest.Test(t, func(t *testing.T) {
+		stateManager := newMockStateManager()
+		ovsClient := newMockOVSClient()
+		logger := createTestLogger()
 
-	sync := NewOVSSynchronizer(
-		stateManager,
-		ovsClient,
-		logger,
-		WithReconcileOnStartup(false),
-		WithSyncInterval(100*time.Millisecond),
-	)
+		sync := NewOVSSynchronizer(
+			stateManager,
+			ovsClient,
+			logger,
+			WithReconcileOnStartup(false),
+			WithSyncInterval(100*time.Millisecond),
+		)
 
-	ctx := context.Background()
+		ctx := context.Background()
 
-	// Start the synchronizer
-	err := sync.Start(ctx)
-	if err != nil {
-		t.Fatalf("Start failed: %v", err)
-	}
+		// Start the synchronizer
+		err := sync.Start(ctx)
+		if err != nil {
+			t.Fatalf("Start failed: %v", err)
+		}
 
-	// Give it time to start
-	time.Sleep(50 * time.Millisecond)
+		// No reconciliation before the first tick
+		synctest.Wait()
+		if got := sync.GetSyncStatus().LastSyncTime; !got.IsZero() {
+			t.Fatalf("LastSyncTime before first tick = %v, want zero", got)
+		}
 
-	// Stop the synchronizer
-	err = sync.Stop()
-	if err != nil {
-		t.Fatalf("Stop failed: %v", err)
-	}
+		// The first tick reconciles
+		<-time.After(100 * time.Millisecond)
+		synctest.Wait()
+		if got := sync.GetSyncStatus().LastSyncTime; got.IsZero() {
+			t.Fatal("LastSyncTime after first tick is zero, want the tick time")
+		}
+
+		// Stop the synchronizer; it returns as soon as the loop exits, well
+		// before its 10s timeout
+		stopStart := time.Now()
+		err = sync.Stop()
+		if err != nil {
+			t.Fatalf("Stop failed: %v", err)
+		}
+		if elapsed := time.Since(stopStart); elapsed != 0 {
+			t.Errorf("Stop took %v of fake time, want 0 (loop exit, not timeout)", elapsed)
+		}
+	})
 }
 
 // Test: Start when already running returns error
@@ -776,10 +795,11 @@ func TestSyncAllCreatesBridges(t *testing.T) {
 
 	// Add a bridge to QuicBaaS state
 	bridge := &BridgeState{
-		ID:       "bridge-1",
-		Name:     "br0",
-		NodeID:   1,
-		FailMode: "secure",
+		ID:            "bridge-1",
+		Name:          "br0",
+		NodeID:        1,
+		FailMode:      "secure",
+		FlowProtocols: []string{"OpenFlow13"},
 	}
 	stateManager.CreateBridge(context.Background(), bridge)
 
@@ -804,6 +824,14 @@ func TestSyncAllCreatesBridges(t *testing.T) {
 
 	if ovsClient.createBridgeCalls[0] != "br0" {
 		t.Errorf("Expected bridge name 'br0', got '%s'", ovsClient.createBridgeCalls[0])
+	}
+
+	// The new bridge gets the desired fail mode and flow protocols
+	if !slices.Equal(ovsClient.setFailModeCalls, []string{"br0:secure"}) {
+		t.Errorf("Expected SetBridgeFailMode(br0, secure), got %v", ovsClient.setFailModeCalls)
+	}
+	if !slices.Equal(ovsClient.setProtocolsCalls, []string{"br0"}) {
+		t.Errorf("Expected SetBridgeProtocols(br0), got %v", ovsClient.setProtocolsCalls)
 	}
 
 	// Verify sync status
@@ -1650,47 +1678,66 @@ func TestDefaultSynchronizerConfig(t *testing.T) {
 
 // Test: Context cancellation stops retry
 func TestContextCancellationStopsRetry(t *testing.T) {
-	stateManager := newMockStateManager()
-	ovsClient := newMockOVSClient()
-	logger := createTestLogger()
+	synctest.Test(t, func(t *testing.T) {
+		stateManager := newMockStateManager()
+		ovsClient := newMockOVSClient()
+		logger := createTestLogger()
 
-	// Add a bridge
-	bridge := &BridgeState{ID: "bridge-1", Name: "br0", NodeID: 1}
-	stateManager.CreateBridge(context.Background(), bridge)
+		// Add a bridge
+		bridge := &BridgeState{ID: "bridge-1", Name: "br0", NodeID: 1}
+		if err := stateManager.CreateBridge(context.Background(), bridge); err != nil {
+			t.Fatalf("CreateBridge: %v", err)
+		}
 
-	// Always fail to trigger retries
-	ovsClient.createBridgeErr = errors.New("always fail")
+		// Always fail to trigger retries
+		ovsClient.createBridgeErr = errors.New("always fail")
 
-	sync := NewOVSSynchronizer(
-		stateManager,
-		ovsClient,
-		logger,
-		WithRetryConfig(100*time.Millisecond, 10, 1.0),
-		WithReconcileOnStartup(true),
-		WithNodeID(1),
-	)
+		sync := NewOVSSynchronizer(
+			stateManager,
+			ovsClient,
+			logger,
+			WithRetryConfig(100*time.Millisecond, 10, 1.0),
+			WithReconcileOnStartup(true),
+			WithNodeID(1),
+		)
 
-	ctx, cancel := context.WithCancel(context.Background())
+		ctx, cancel := context.WithCancel(context.Background())
 
-	// Start sync in goroutine
-	done := make(chan error, 1)
-	go func() {
-		done <- sync.Start(ctx)
-	}()
+		// Start sync in goroutine
+		done := make(chan error, 1)
+		go func() {
+			done <- sync.Start(ctx)
+		}()
 
-	// Give it time to start retrying
-	time.Sleep(50 * time.Millisecond)
+		// Start is now blocked in the first retry backoff
+		synctest.Wait()
+		select {
+		case err := <-done:
+			t.Fatalf("Start returned before cancellation: %v", err)
+		default:
+		}
+		ovsClient.mu.RLock()
+		attempts := len(ovsClient.createBridgeCalls)
+		ovsClient.mu.RUnlock()
+		if attempts != 1 {
+			t.Fatalf("CreateBridge attempts before cancellation = %d, want 1", attempts)
+		}
 
-	// Cancel context
-	cancel()
+		// Cancel context: the retry stops at once instead of running out
+		// its remaining 100ms backoffs
+		cancelAt := time.Now()
+		cancel()
+		if err := <-done; err != nil {
+			t.Fatalf("Start: %v", err)
+		}
+		if elapsed := time.Since(cancelAt); elapsed != 0 {
+			t.Errorf("Start returned %v after cancellation, want 0", elapsed)
+		}
 
-	// Should complete quickly
-	select {
-	case <-done:
-		// Expected
-	case <-time.After(500 * time.Millisecond):
-		t.Error("Expected sync to stop on context cancellation")
-	}
+		if err := sync.Stop(); err != nil {
+			t.Fatalf("Stop: %v", err)
+		}
+	})
 }
 
 // Test: Delete orphaned bridges
@@ -2858,28 +2905,39 @@ func TestReconcile_Success(t *testing.T) {
 }
 
 func TestSyncLoop_ContextCancelled(t *testing.T) {
-	stateManager := newMockStateManager()
-	ovsClient := newMockOVSClient()
-	logger := createTestLogger()
+	synctest.Test(t, func(t *testing.T) {
+		stateManager := newMockStateManager()
+		ovsClient := newMockOVSClient()
+		logger := createTestLogger()
 
-	sync := NewOVSSynchronizer(
-		stateManager,
-		ovsClient,
-		logger,
-		WithSyncInterval(100*time.Millisecond),
-		WithRetryConfig(10*time.Millisecond, 2, 2.0),
-		WithReconcileOnStartup(false),
-		WithNodeID(1),
-	)
+		sync := NewOVSSynchronizer(
+			stateManager,
+			ovsClient,
+			logger,
+			WithSyncInterval(100*time.Millisecond),
+			WithRetryConfig(10*time.Millisecond, 2, 2.0),
+			WithReconcileOnStartup(false),
+			WithNodeID(1),
+		)
 
-	// Start and immediately stop
-	if err := sync.Start(context.Background()); err != nil {
-		t.Errorf("Start() error = %v", err)
-	}
+		ctx, cancel := context.WithCancel(context.Background())
+		if err := sync.Start(ctx); err != nil {
+			t.Fatalf("Start() error = %v", err)
+		}
 
-	time.Sleep(50 * time.Millisecond)
+		// Cancel the context and let a tick pass
+		cancel()
+		<-time.After(100 * time.Millisecond)
+		synctest.Wait()
 
-	if err := sync.Stop(); err != nil {
-		t.Errorf("Stop() error = %v", err)
-	}
+		// The loop exits on Stop, not on its context: Stop returns without
+		// waiting out its 10s timeout
+		stopStart := time.Now()
+		if err := sync.Stop(); err != nil {
+			t.Errorf("Stop() error = %v", err)
+		}
+		if elapsed := time.Since(stopStart); elapsed != 0 {
+			t.Errorf("Stop took %v of fake time, want 0 (loop exit, not timeout)", elapsed)
+		}
+	})
 }

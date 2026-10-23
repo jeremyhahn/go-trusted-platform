@@ -1,15 +1,13 @@
 package v1
 
 import (
-	"net/http/httptest"
-	"regexp"
 	"sort"
 	"strings"
 	"testing"
 
-	"github.com/gorilla/mux"
 	"github.com/stretchr/testify/require"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/testutil"
 	sdkrest "github.com/jeremyhahn/go-trusted-platform/sdk/go/transport/rest"
 )
 
@@ -25,15 +23,6 @@ import (
 // which is why RouteClaim's own doc says consumers must match by ROUTING a
 // concrete path rather than comparing strings. This asserts the second half:
 // the route it routes TO is the one it claims.
-
-var placeholderName = regexp.MustCompile(`\{[^}]*\}`)
-
-// normalisePlaceholders collapses {id}, {deviceID} and {id:[0-9]+} to {} so a
-// claim and the route it matched compare on SHAPE, not on the names the two
-// sides happened to choose for the same segment.
-func normalisePlaceholders(template string) string {
-	return placeholderName.ReplaceAllString(template, "{}")
-}
 
 // claimsResolvingToASiblingRoute are claims that today match a route other than
 // the one they name. Each is a real defect and each has an owner; the map exists
@@ -56,6 +45,7 @@ var claimsResolvingToASiblingRoute = map[string]string{
 // TestSDKRouteClaims_ResolveToTheirOwnOperation is the fourth ratchet (#415).
 func TestSDKRouteClaims_ResolveToTheirOwnOperation(t *testing.T) {
 	router := newGatedTestRouter(t, &testHandlerRegistry{tokenHandler: &anonymousAuth{}})
+	built := testutil.WalkRoutes(t, router)
 
 	claims := sdkrest.RouteClaims()
 	require.GreaterOrEqualf(t, len(claims), 280,
@@ -68,8 +58,7 @@ func TestSDKRouteClaims_ResolveToTheirOwnOperation(t *testing.T) {
 	resolved := 0
 
 	for _, c := range claims {
-		prefix := strings.SplitN(strings.TrimPrefix(c.Path, "/api/v1/"), "/", 2)[0]
-		if _, ok := unservedPrefixes[prefix]; ok {
+		if _, ok := testutil.DaemonOnlyPrefixOf(c.Path); ok {
 			continue
 		}
 		// A claim that resolves nowhere is ResolveAgainstBuiltRoutes' finding.
@@ -78,18 +67,17 @@ func TestSDKRouteClaims_ResolveToTheirOwnOperation(t *testing.T) {
 			continue
 		}
 
-		req := httptest.NewRequest(c.Method, concreteFor(c.Path), nil)
-		var match mux.RouteMatch
-		if !router.Match(req, &match) || match.MatchErr != nil || match.Route == nil {
+		route, ok := testutil.MatchClaim(router, c.Method, c.Path, built)
+		if !ok {
 			continue
 		}
-		template, err := match.Route.GetPathTemplate()
+		template, err := route.GetPathTemplate()
 		if err != nil {
 			continue
 		}
 		resolved++
 
-		if normalisePlaceholders(template) == normalisePlaceholders(c.Path) {
+		if testutil.NormalisePlaceholders(template) == testutil.NormalisePlaceholders(c.Path) {
 			continue
 		}
 		if _, known := claimsResolvingToASiblingRoute[c.GRPCMethod]; known {
@@ -123,6 +111,7 @@ func TestSDKRouteClaims_SiblingExemptionsAreStillReal(t *testing.T) {
 		return
 	}
 	router := newGatedTestRouter(t, &testHandlerRegistry{tokenHandler: &anonymousAuth{}})
+	built := testutil.WalkRoutes(t, router)
 
 	live := map[string]sdkrest.RouteClaim{}
 	for _, c := range sdkrest.RouteClaims() {
@@ -136,17 +125,16 @@ func TestSDKRouteClaims_SiblingExemptionsAreStillReal(t *testing.T) {
 			stale = append(stale, method+" (no longer a claim at all)")
 			continue
 		}
-		req := httptest.NewRequest(c.Method, concreteFor(c.Path), nil)
-		var match mux.RouteMatch
-		if !router.Match(req, &match) || match.MatchErr != nil || match.Route == nil {
+		route, ok := testutil.MatchClaim(router, c.Method, c.Path, built)
+		if !ok {
 			stale = append(stale, method+" (now resolves to no route -- that is unroutedClaims' finding)")
 			continue
 		}
-		template, err := match.Route.GetPathTemplate()
+		template, err := route.GetPathTemplate()
 		if err != nil {
 			continue
 		}
-		if normalisePlaceholders(template) == normalisePlaceholders(c.Path) {
+		if testutil.NormalisePlaceholders(template) == testutil.NormalisePlaceholders(c.Path) {
 			stale = append(stale, method+" (now lands on its own route)")
 		}
 	}

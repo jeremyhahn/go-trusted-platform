@@ -131,6 +131,17 @@ func (e ErrTemplateConfigRequired) Error() string {
 	return "device: template config is required for profile conversion"
 }
 
+// ErrTemplateProfileDependency indicates creating a profile from a template
+// was attempted without the template or profile service it needs.
+type ErrTemplateProfileDependency struct {
+	Name string
+}
+
+// Error returns the error message.
+func (e ErrTemplateProfileDependency) Error() string {
+	return fmt.Sprintf("device: creating a profile from a template requires the %s", e.Name)
+}
+
 // MessageError is a typed error carrying a fully formatted message with no
 // underlying cause. It replaces inline formatted-error constructions that do not wrap
 // another error.
@@ -161,22 +172,23 @@ func (e *WrappedError) Unwrap() error {
 	return e.Err
 }
 
-// HeartbeatDeviceNotFoundError is returned when the heartbeat identity
-// resolves to no device by serial or hostname. It lets transport
-// handlers answer 404 for an unknown identity while a storage failure
-// after resolution surfaces as a server error.
-type HeartbeatDeviceNotFoundError struct {
+// IdentityNotFoundError is returned when a certificate identity (a
+// heartbeat's, or a diskless node's at boot) resolves to no device by
+// serial or hostname. It lets transport handlers answer 404 for an
+// unknown identity while a storage failure after resolution surfaces as
+// a server error.
+type IdentityNotFoundError struct {
 	Identity string
 	Cause    error
 }
 
 // Error implements the error interface.
-func (e *HeartbeatDeviceNotFoundError) Error() string {
-	return "device: no device matches heartbeat identity " + e.Identity + ": " + e.Cause.Error()
+func (e *IdentityNotFoundError) Error() string {
+	return "device: no device matches identity " + e.Identity + ": " + e.Cause.Error()
 }
 
 // Unwrap exposes the cause for errors.Is / errors.As.
-func (e *HeartbeatDeviceNotFoundError) Unwrap() error {
+func (e *IdentityNotFoundError) Unwrap() error {
 	return e.Cause
 }
 
@@ -324,6 +336,28 @@ func (e ErrAttestCertWriteFailed) Unwrap() error {
 	return e.Cause
 }
 
+// ErrAttestCertClearUnsupported indicates the recorder's device service has
+// no compare-and-clear write for the attestation certificate, so a refused
+// certificate cannot be removed. device.Service implements it.
+type ErrAttestCertClearUnsupported struct{}
+
+// Error returns the error message.
+func (e ErrAttestCertClearUnsupported) Error() string {
+	return "device: the device service cannot clear an attestation certificate"
+}
+
+// ErrAttestCertClearConflict indicates the certificate on the device record
+// changed between the refusal and the clear, so nothing was cleared: a
+// concurrent write is never undone by a clear.
+type ErrAttestCertClearConflict struct {
+	DeviceID uint64
+}
+
+// Error returns the error message.
+func (e ErrAttestCertClearConflict) Error() string {
+	return fmt.Sprintf("device: attestation certificate of device %d changed since it was refused; nothing cleared", e.DeviceID)
+}
+
 // ErrAttestCertRefused indicates no candidate certificate passed the
 // fail-closed preflight, so nothing was recorded. Attempts lists every
 // candidate evaluated and why it was refused; Unwrap exposes their errors so
@@ -411,6 +445,75 @@ func (ErrRegistrationNoSerial) Error() string {
 	return "device registration: the enrollment carries no product serial"
 }
 
+// ErrRegistrationEKIdentityUnbound reports an enrollment whose serial or
+// Common Name claims an EK-derived node identity (entities.IsEKNodeIdentity)
+// that is not the identity of the EK certificate the enrollment carries. A
+// diskless node is found by that name on every boot (#690), so recording an
+// unbound claim would hand one node's record to another.
+type ErrRegistrationEKIdentityUnbound struct {
+	Claimed string
+	Reason  string
+	Cause   error
+}
+
+// Error returns the error message.
+func (e ErrRegistrationEKIdentityUnbound) Error() string {
+	msg := fmt.Sprintf("device registration: %q is not bound to the enrollment's EK: %s", e.Claimed, e.Reason)
+	if e.Cause != nil {
+		msg += ": " + e.Cause.Error()
+	}
+	return msg
+}
+
+// Unwrap returns the underlying cause.
+func (e ErrRegistrationEKIdentityUnbound) Unwrap() error { return e.Cause }
+
+// ErrDeviceSerialRequired reports a device create request without a serial.
+// Every REST listener refuses it with HTTP 400 (#484).
+type ErrDeviceSerialRequired struct{}
+
+// Error returns the error message.
+func (ErrDeviceSerialRequired) Error() string {
+	return "device serial is required"
+}
+
+// ErrDeviceSerialExists is returned when a create names a serial another
+// device already holds. The serial is the identity enrollment matches a TPM
+// against, so two rows holding it would make that match ambiguous.
+type ErrDeviceSerialExists struct {
+	Serial string
+}
+
+// Error returns the error message.
+func (e ErrDeviceSerialExists) Error() string {
+	return fmt.Sprintf("device already exists with serial: %s", e.Serial)
+}
+
+// ErrDeviceRequestConflict reports a device request that sets the same field
+// flat and inside the {device:{...}} envelope to different values.
+type ErrDeviceRequestConflict struct {
+	Field string
+}
+
+// Error returns the error message.
+func (e ErrDeviceRequestConflict) Error() string {
+	return fmt.Sprintf("device request sets %q flat and in the device envelope to different values", e.Field)
+}
+
+// ErrDeviceRequestBody reports a device request body that is not valid JSON
+// for the device request shape.
+type ErrDeviceRequestBody struct {
+	Cause error
+}
+
+// Error returns the error message.
+func (e ErrDeviceRequestBody) Error() string {
+	return fmt.Sprintf("invalid device request body: %v", e.Cause)
+}
+
+// Unwrap returns the decoding error.
+func (e ErrDeviceRequestBody) Unwrap() error { return e.Cause }
+
 // ErrRegistrationSaveFailed reports a new device record that could not be
 // written.
 type ErrRegistrationSaveFailed struct {
@@ -474,4 +577,49 @@ type ErrControlPlaneNoAttestationKey struct{}
 // Error returns the error message.
 func (ErrControlPlaneNoAttestationKey) Error() string {
 	return "device registration: the control plane's TPM holds no attestation key public area; provision the IAK before registering the control plane as a device"
+}
+
+// ErrLifecycleUnenforced is returned for an operator Enable or Disable on a
+// control plane with no SDN policy engine: nothing could cut or re-admit the
+// device's port, so recording a state change would claim enforcement that
+// does not exist.
+type ErrLifecycleUnenforced struct{}
+
+// Error returns the error message.
+func (ErrLifecycleUnenforced) Error() string {
+	return "device lifecycle: this control plane has no SDN policy engine to enforce a device disable or enable"
+}
+
+// ErrLifecycleDependency is returned by NewLifecycleService when a required
+// dependency is missing.
+type ErrLifecycleDependency struct {
+	Name string
+}
+
+// Error returns the error message.
+func (e ErrLifecycleDependency) Error() string {
+	return fmt.Sprintf("device lifecycle: %s is required", e.Name)
+}
+
+// ErrDeviceNotOnFabric is returned when an operator Enable or Disable targets
+// a device with no recorded switch port: it was never admitted to the SDN
+// fabric, so there is no port to cut or re-admit.
+type ErrDeviceNotOnFabric struct {
+	DeviceID uint64
+}
+
+// Error returns the error message.
+func (e ErrDeviceNotOnFabric) Error() string {
+	return fmt.Sprintf("device lifecycle: device %d has no switch port on the SDN fabric to enforce", e.DeviceID)
+}
+
+// ErrLifecycleReasonTooLong is returned when a disable reason exceeds Max
+// bytes.
+type ErrLifecycleReasonTooLong struct {
+	Max int
+}
+
+// Error returns the error message.
+func (e ErrLifecycleReasonTooLong) Error() string {
+	return fmt.Sprintf("device lifecycle: reason exceeds %d bytes", e.Max)
 }

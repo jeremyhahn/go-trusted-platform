@@ -29,6 +29,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
 )
 
 // =============================================================================
@@ -50,6 +52,10 @@ const (
 
 	// DefaultCommandTimeout is the default timeout for CLI commands.
 	DefaultCommandTimeout = 30 * time.Second
+
+	// cliWaitDelay bounds how long a killed command's output pipes are
+	// drained before Run returns.
+	cliWaitDelay = 5 * time.Second
 )
 
 // =============================================================================
@@ -108,6 +114,8 @@ func (e ErrCLIBinaryNotFound) Error() string {
 type CLIAdapter struct {
 	binaryPath     string
 	socketPath     string
+	configDir      string
+	configPath     string
 	commandTimeout time.Duration
 }
 
@@ -152,8 +160,14 @@ func (c *CLIAdapter) Setup(ctx context.Context) error {
 		return ErrCLIBinaryNotFound{Path: c.binaryPath}
 	}
 
+	dir, path, err := helpers.WriteTempLocalCLIConfig(c.socketPath, helpers.GetGRPCEndpoint())
+	if err != nil {
+		return err
+	}
+	c.configDir, c.configPath = dir, path
+
 	// Verify binary works by running version command
-	_, err := c.runCommand(ctx, "version")
+	_, err = c.runCommand(ctx, "version")
 	if err != nil {
 		return fmt.Errorf("CLI binary verification failed: %w", err)
 	}
@@ -163,7 +177,10 @@ func (c *CLIAdapter) Setup(ctx context.Context) error {
 
 // Teardown performs cleanup (no-op for CLI adapter).
 func (c *CLIAdapter) Teardown() error {
-	return nil
+	if c.configDir == "" {
+		return nil
+	}
+	return os.RemoveAll(c.configDir)
 }
 
 // =============================================================================
@@ -172,26 +189,30 @@ func (c *CLIAdapter) Teardown() error {
 
 // runCommand executes a platformctl command and returns the output.
 func (c *CLIAdapter) runCommand(ctx context.Context, args ...string) ([]byte, error) {
-	// Create context with timeout if not already set
-	if _, hasDeadline := ctx.Deadline(); !hasDeadline {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, c.commandTimeout)
-		defer cancel()
-	}
+	// Every command gets its own timeout. The suite's context always carries
+	// a deadline (10 minutes, go test's own limit), so applying the timeout
+	// only to a deadline-free context left a hung platformctl to run until
+	// the package panicked. A shorter caller deadline still wins.
+	ctx, cancel := context.WithTimeout(ctx, c.commandTimeout)
+	defer cancel()
 
 	// Build command with common flags
 	fullArgs := []string{
 		"--output", "json",
 	}
 
-	// Add socket path if specified and not default
-	if c.socketPath != "" && c.socketPath != DefaultPlatformdSocket {
-		fullArgs = append(fullArgs, "--socket", c.socketPath)
+	// platformctl has no --socket flag; the harness socket reaches it through
+	// the config file Setup wrote (#540).
+	if c.configPath != "" {
+		fullArgs = append(fullArgs, "--config", c.configPath)
 	}
 
 	fullArgs = append(fullArgs, args...)
 
 	cmd := exec.CommandContext(ctx, c.binaryPath, fullArgs...)
+	// Once the context kills platformctl, stop waiting for its output pipes:
+	// a child process still holding them would otherwise keep Run blocked.
+	cmd.WaitDelay = cliWaitDelay
 
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout

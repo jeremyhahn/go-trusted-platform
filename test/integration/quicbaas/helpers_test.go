@@ -19,14 +19,14 @@
 //
 // Run these tests via:
 //
-//	make integration-test-quicbaas
+//	go test -v -tags "$(make -s print-build-tags) integration" ./test/integration/quicbaas/...
 //
-// Tests require INTEGRATION_TEST=1 environment variable.
+// The integration build tag selects them; there is no environment gate.
 package quicbaas_test
 
 import (
 	"context"
-	"os"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -43,14 +43,6 @@ const startupTimeout = 60 * time.Second
 
 // shutdownTimeout is the timeout for factory shutdown operations.
 const shutdownTimeout = 10 * time.Second
-
-// skipIfNotIntegration skips the test if the INTEGRATION_TEST env var is not set.
-func skipIfNotIntegration(t *testing.T) {
-	t.Helper()
-	if os.Getenv("INTEGRATION_TEST") == "" {
-		t.Skip("Skipping integration test. Set INTEGRATION_TEST=1 to run.")
-	}
-}
 
 // testContext returns a context with the test timeout.
 func testContext() (context.Context, context.CancelFunc) {
@@ -72,6 +64,35 @@ type testFactory struct {
 	Factory *quicbaas.Factory
 	Logger  *logging.Logger
 	Cleanup func()
+}
+
+// ErrOllamaUnavailable is the missing prerequisite an Ollama test fails on:
+// the embedded QuicBaaS answered an Ollama call with an error. The platform's
+// quicbaas.Config has no Ollama section, so ToQuicBaaSConfig leaves Ollama
+// disabled and every Ollama call errors until one is added; the devcontainer
+// runs no Ollama server either.
+type ErrOllamaUnavailable struct {
+	Op  string
+	Err error
+}
+
+func (e ErrOllamaUnavailable) Error() string {
+	return "Ollama " + e.Op + " failed: the embedded QuicBaaS needs Ollama enabled with an endpoint, " +
+		"and pkg/storage/quicbaas.Config has no Ollama section to set it: " + e.Err.Error()
+}
+
+func (e ErrOllamaUnavailable) Unwrap() error {
+	return e.Err
+}
+
+// requireOllama fails the test unless the embedded QuicBaaS reaches a
+// healthy Ollama. Tests that embed text call it first, so the prerequisite
+// they share is stated once instead of rediscovered in each subtest.
+func requireOllama(ctx context.Context, t *testing.T, ollama quicbaassdk.OllamaClient) {
+	t.Helper()
+	if _, err := ollama.Health(ctx, &quicbaassdk.OllamaHealthRequest{}); err != nil {
+		t.Fatalf("missing prerequisite: %v", ErrOllamaUnavailable{Op: "Health", Err: err})
+	}
 }
 
 // newTestFactory creates a new test factory with embedded transport.
@@ -180,6 +201,15 @@ func assertHealthClient(t *testing.T, sdk quicbaassdk.Client) {
 // generateTestKey generates a unique key for testing.
 func generateTestKey(prefix string) string {
 	return prefix + "_" + time.Now().Format("20060102150405.000000000")
+}
+
+// entityIDs hands out KV entity IDs. The SDK documents a PutResponse ID as one
+// that "may be auto-generated if not provided", which the embedded transport
+// does not do, so a test that needs distinct entities names each one's ID.
+var entityIDs atomic.Uint64
+
+func nextEntityID() uint64 {
+	return entityIDs.Add(1)
 }
 
 // generateTestValue generates test data.

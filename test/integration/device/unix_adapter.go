@@ -63,15 +63,6 @@ func (e ErrUnixRPCFailed) Unwrap() error {
 	return e.Err
 }
 
-// ErrUnixNotImplemented indicates a method is not yet implemented for Unix.
-type ErrUnixNotImplemented struct {
-	Method string
-}
-
-func (e ErrUnixNotImplemented) Error() string {
-	return fmt.Sprintf("Unix method %s not implemented", e.Method)
-}
-
 // =============================================================================
 // Unix Protocol Adapter
 // =============================================================================
@@ -94,7 +85,7 @@ func NewUnixAdapter() *UnixAdapter {
 func (a *UnixAdapter) Setup(ctx context.Context) error {
 	// Create gRPC connection using Unix socket dialer
 	conn, err := grpc.DialContext(ctx, "unix://"+a.socketPath,
-		helpers.GRPCTransportCredentials(),
+		helpers.GRPCUnixCredentials(),
 		grpc.WithContextDialer(func(ctx context.Context, addr string) (net.Conn, error) {
 			// Strip the unix:// prefix if present
 			socketAddr := strings.TrimPrefix(addr, "unix://")
@@ -151,7 +142,7 @@ func (a *UnixAdapter) RegisterDevice(ctx context.Context, opts RegisterDeviceOpt
 	}
 
 	return &RegisterDeviceResult{
-		Device: unixProtoToDevice(resp.GetDevice()),
+		Device: protoToDevice(resp.GetDevice()),
 	}, nil
 }
 
@@ -172,7 +163,7 @@ func (a *UnixAdapter) GetDevice(ctx context.Context, opts GetDeviceOptions) (*Ge
 	}
 
 	return &GetDeviceResult{
-		Device: unixProtoToDevice(resp.GetDevice()),
+		Device: protoToDevice(resp.GetDevice()),
 	}, nil
 }
 
@@ -201,7 +192,7 @@ func (a *UnixAdapter) UpdateDevice(ctx context.Context, opts UpdateDeviceOptions
 	}
 
 	return &UpdateDeviceResult{
-		Device: unixProtoToDevice(resp.GetDevice()),
+		Device: protoToDevice(resp.GetDevice()),
 	}, nil
 }
 
@@ -248,7 +239,7 @@ func (a *UnixAdapter) ListDevices(ctx context.Context, opts ListDevicesOptions) 
 
 	devices := make([]*entities.Device, 0, len(resp.GetDevices()))
 	for _, d := range resp.GetDevices() {
-		devices = append(devices, unixProtoToDevice(d))
+		devices = append(devices, protoToDevice(d))
 	}
 
 	total := 0
@@ -278,7 +269,7 @@ func (a *UnixAdapter) FindBySerial(ctx context.Context, opts FindBySerialOptions
 	}
 
 	return &FindBySerialResult{
-		Device: unixProtoToDevice(resp.GetDevice()),
+		Device: protoToDevice(resp.GetDevice()),
 	}, nil
 }
 
@@ -301,7 +292,7 @@ func (a *UnixAdapter) CreateProfile(ctx context.Context, opts CreateProfileOptio
 	}
 
 	if opts.MatchRules != nil {
-		req.Profile.MatchRules = unixEntityMatchRulesToProto(opts.MatchRules)
+		req.Profile.MatchRules = entityMatchRulesToProto(opts.MatchRules)
 	}
 
 	resp, err := a.client.CreateProfile(ctx, req)
@@ -310,7 +301,7 @@ func (a *UnixAdapter) CreateProfile(ctx context.Context, opts CreateProfileOptio
 	}
 
 	return &CreateProfileResult{
-		Profile: unixProtoToProfile(resp.GetProfile()),
+		Profile: protoToProfile(resp.GetProfile()),
 	}, nil
 }
 
@@ -331,7 +322,7 @@ func (a *UnixAdapter) GetProfile(ctx context.Context, opts GetProfileOptions) (*
 	}
 
 	return &GetProfileResult{
-		Profile: unixProtoToProfile(resp.GetProfile()),
+		Profile: protoToProfile(resp.GetProfile()),
 	}, nil
 }
 
@@ -352,7 +343,7 @@ func (a *UnixAdapter) UpdateProfile(ctx context.Context, opts UpdateProfileOptio
 	}
 
 	if opts.MatchRules != nil {
-		req.Profile.MatchRules = unixEntityMatchRulesToProto(opts.MatchRules)
+		req.Profile.MatchRules = entityMatchRulesToProto(opts.MatchRules)
 	}
 
 	resp, err := a.client.UpdateProfile(ctx, req)
@@ -361,7 +352,7 @@ func (a *UnixAdapter) UpdateProfile(ctx context.Context, opts UpdateProfileOptio
 	}
 
 	return &UpdateProfileResult{
-		Profile: unixProtoToProfile(resp.GetProfile()),
+		Profile: protoToProfile(resp.GetProfile()),
 	}, nil
 }
 
@@ -408,7 +399,7 @@ func (a *UnixAdapter) ListProfiles(ctx context.Context, opts ListProfilesOptions
 
 	profiles := make([]*entities.DeviceProfile, 0, len(resp.GetProfiles()))
 	for _, p := range resp.GetProfiles() {
-		profiles = append(profiles, unixProtoToProfile(p))
+		profiles = append(profiles, protoToProfile(p))
 	}
 
 	total := 0
@@ -438,7 +429,7 @@ func (a *UnixAdapter) FindProfileByMACAddress(ctx context.Context, opts FindProf
 	}
 
 	return &FindProfileByMACAddressResult{
-		Profile: unixProtoToProfile(resp.GetProfile()),
+		Profile: protoToProfile(resp.GetProfile()),
 	}, nil
 }
 
@@ -454,7 +445,7 @@ func (a *UnixAdapter) FindProfileBySerial(ctx context.Context, opts FindProfileB
 	}
 
 	return &FindProfileBySerialResult{
-		Profile: unixProtoToProfile(resp.GetProfile()),
+		Profile: protoToProfile(resp.GetProfile()),
 	}, nil
 }
 
@@ -472,7 +463,7 @@ func (a *UnixAdapter) FindMatchingProfile(ctx context.Context, opts FindMatching
 	}
 
 	return &FindMatchingProfileResult{
-		Profile: unixProtoToProfile(resp.GetProfile()),
+		Profile: protoToProfile(resp.GetProfile()),
 	}, nil
 }
 
@@ -502,8 +493,9 @@ func (a *UnixAdapter) AttestDevice(ctx context.Context, opts AttestDeviceOptions
 // DeviceService.RecordAttestationCertificate.
 func (a *UnixAdapter) RecordAttestCert(ctx context.Context, opts RecordAttestCertOptions) (*RecordAttestCertResult, error) {
 	resp, err := a.client.RecordAttestationCertificate(ctx, &pb.RecordAttestationCertificateRequest{
-		DeviceId: opts.DeviceID,
-		Reissue:  opts.Reissue,
+		DeviceId:       opts.DeviceID,
+		Reissue:        opts.Reissue,
+		ClearOnRefusal: opts.ClearOnRefusal,
 	})
 	if err != nil {
 		return nil, ErrUnixRPCFailed{Method: "RecordAttestationCertificate", Err: err}
@@ -519,36 +511,83 @@ func (a *UnixAdapter) RecordAttestCert(ctx context.Context, opts RecordAttestCer
 		Subject:           resp.GetSubject(),
 		CertificateSerial: resp.GetCertificateSerial(),
 		AttestCert:        resp.GetAttestCert(),
+		Cleared:           resp.GetCleared(),
+		Refusal:           resp.GetRefusal(),
 	}, nil
 }
 
 // =============================================================================
-// Template CRUD Operations (not yet available via Unix/gRPC)
+// Template CRUD Operations
 // =============================================================================
 
 // CreateTemplate creates a new device template via Unix socket.
 func (a *UnixAdapter) CreateTemplate(ctx context.Context, opts CreateTemplateOptions) (*CreateTemplateResult, error) {
-	return nil, ErrUnixNotImplemented{Method: "CreateTemplate"}
+	resp, err := a.client.CreateTemplate(ctx, templateCreateRequest(opts))
+	if err != nil {
+		return nil, ErrUnixRPCFailed{Method: "CreateTemplate", Err: err}
+	}
+	if resp.GetTemplate() == nil {
+		return nil, ErrUnixRPCFailed{Method: "CreateTemplate", Err: fmt.Errorf("daemon returned no template")}
+	}
+	return &CreateTemplateResult{Template: protoToTemplate(resp.GetTemplate())}, nil
 }
 
 // GetTemplate retrieves a template by ID via Unix socket.
 func (a *UnixAdapter) GetTemplate(ctx context.Context, opts GetTemplateOptions) (*GetTemplateResult, error) {
-	return nil, ErrUnixNotImplemented{Method: "GetTemplate"}
+	id, err := strconv.ParseUint(opts.TemplateID, 10, 64)
+	if err != nil {
+		return nil, ErrUnixRPCFailed{Method: "GetTemplate", Err: fmt.Errorf("invalid template ID: %w", err)}
+	}
+	resp, err := a.client.GetTemplate(ctx, &pb.DeviceTemplateGetRequest{Id: id})
+	if err != nil {
+		return nil, ErrUnixRPCFailed{Method: "GetTemplate", Err: err}
+	}
+	if resp.GetTemplate() == nil {
+		return nil, ErrUnixRPCFailed{Method: "GetTemplate", Err: fmt.Errorf("daemon returned no template")}
+	}
+	return &GetTemplateResult{Template: protoToTemplate(resp.GetTemplate())}, nil
 }
 
 // UpdateTemplate updates an existing template via Unix socket.
 func (a *UnixAdapter) UpdateTemplate(ctx context.Context, opts UpdateTemplateOptions) (*UpdateTemplateResult, error) {
-	return nil, ErrUnixNotImplemented{Method: "UpdateTemplate"}
+	id, err := strconv.ParseUint(opts.TemplateID, 10, 64)
+	if err != nil {
+		return nil, ErrUnixRPCFailed{Method: "UpdateTemplate", Err: fmt.Errorf("invalid template ID: %w", err)}
+	}
+	resp, err := a.client.UpdateTemplate(ctx, templateUpdateRequest(id, opts))
+	if err != nil {
+		return nil, ErrUnixRPCFailed{Method: "UpdateTemplate", Err: err}
+	}
+	if resp.GetTemplate() == nil {
+		return nil, ErrUnixRPCFailed{Method: "UpdateTemplate", Err: fmt.Errorf("daemon returned no template")}
+	}
+	return &UpdateTemplateResult{Template: protoToTemplate(resp.GetTemplate())}, nil
 }
 
 // DeleteTemplate removes a template via Unix socket.
 func (a *UnixAdapter) DeleteTemplate(ctx context.Context, opts DeleteTemplateOptions) (*DeleteTemplateResult, error) {
-	return nil, ErrUnixNotImplemented{Method: "DeleteTemplate"}
+	id, err := strconv.ParseUint(opts.TemplateID, 10, 64)
+	if err != nil {
+		return nil, ErrUnixRPCFailed{Method: "DeleteTemplate", Err: fmt.Errorf("invalid template ID: %w", err)}
+	}
+	resp, err := a.client.DeleteTemplate(ctx, &pb.DeviceTemplateDeleteRequest{Id: id})
+	if err != nil {
+		return nil, ErrUnixRPCFailed{Method: "DeleteTemplate", Err: err}
+	}
+	return &DeleteTemplateResult{Success: resp.GetStatus().GetSuccess()}, nil
 }
 
-// ListTemplates lists all templates via Unix socket.
+// ListTemplates pages templates via Unix socket.
 func (a *UnixAdapter) ListTemplates(ctx context.Context, opts ListTemplatesOptions) (*ListTemplatesResult, error) {
-	return nil, ErrUnixNotImplemented{Method: "ListTemplates"}
+	req, err := templateListRequest("Unix", opts)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := a.client.ListTemplates(ctx, req)
+	if err != nil {
+		return nil, ErrUnixRPCFailed{Method: "ListTemplates", Err: err}
+	}
+	return templateListResult(resp), nil
 }
 
 // CreateProfileFromTemplate creates a profile from a template via Unix socket.
@@ -584,13 +623,20 @@ func (a *UnixAdapter) CreateProfileFromTemplate(ctx context.Context, opts Create
 	}
 
 	return &CreateProfileResult{
-		Profile: unixProtoToProfile(resp.GetProfile()),
+		Profile: protoToProfile(resp.GetProfile()),
 	}, nil
 }
 
 // FindConfigForDevice finds the config for a device via Unix socket.
 func (a *UnixAdapter) FindConfigForDevice(ctx context.Context, opts FindConfigForDeviceOptions) (*FindConfigForDeviceResult, error) {
-	return nil, ErrUnixNotImplemented{Method: "FindConfigForDevice"}
+	resp, err := a.client.FindConfigForDevice(ctx, &pb.FindConfigForDeviceRequest{
+		EkSerial:   opts.EKSerial,
+		MacAddress: opts.MACAddress,
+	})
+	if err != nil {
+		return nil, ErrUnixRPCFailed{Method: "FindConfigForDevice", Err: err}
+	}
+	return &FindConfigForDeviceResult{Profile: protoToProfile(resp.GetProfile())}, nil
 }
 
 // AssignProfileToDevice assigns a profile to a device via Unix socket.
@@ -621,156 +667,31 @@ func (a *UnixAdapter) AssignProfileToDevice(ctx context.Context, opts AssignProf
 	}
 
 	return &AssignProfileToDeviceResult{
-		Profile: unixProtoToProfile(resp.GetProfile()),
+		Profile: protoToProfile(resp.GetProfile()),
 	}, nil
+}
+
+// DisableDevice calls DeviceService.DisableDevice over the Unix socket.
+func (a *UnixAdapter) DisableDevice(ctx context.Context, opts DisableDeviceOptions) (*DeviceLifecycleResult, error) {
+	resp, err := a.client.DisableDevice(ctx, &pb.DisableDeviceRequest{DeviceId: opts.DeviceID, Reason: opts.Reason})
+	if err != nil {
+		return nil, ErrUnixRPCFailed{Method: "DisableDevice", Err: err}
+	}
+	return lifecycleResultFromProto(resp), nil
+}
+
+// EnableDevice calls DeviceService.EnableDevice over the Unix socket.
+func (a *UnixAdapter) EnableDevice(ctx context.Context, opts EnableDeviceOptions) (*DeviceLifecycleResult, error) {
+	resp, err := a.client.EnableDevice(ctx, &pb.EnableDeviceRequest{DeviceId: opts.DeviceID})
+	if err != nil {
+		return nil, ErrUnixRPCFailed{Method: "EnableDevice", Err: err}
+	}
+	return lifecycleResultFromProto(resp), nil
 }
 
 // =============================================================================
 // Proto Conversion Helpers (Unix-specific to avoid name collisions)
 // =============================================================================
-
-// unixProtoToDevice converts a proto device to an entity device
-func unixProtoToDevice(d *pb.Device) *entities.Device {
-	if d == nil {
-		return nil
-	}
-	return &entities.Device{
-		ID:         d.GetId(),
-		Serial:     d.GetSerial(),
-		Model:      d.GetModel(),
-		EKCert:     d.GetEkCert(),
-		AttestPub:  d.GetAttestPub(),
-		AttestCert: d.GetAttestCert(),
-		SigningPub: d.GetSigningPub(),
-		HashAlgoId: d.GetHashAlgoId(),
-		EventLog:   d.GetEventLog(),
-	}
-}
-
-// unixProtoToProfile converts a proto profile to an entity profile
-func unixProtoToProfile(p *pb.DeviceProfile) *entities.DeviceProfile {
-	if p == nil {
-		return nil
-	}
-	profile := &entities.DeviceProfile{
-		ID:       p.GetId(),
-		Name:     p.GetName(),
-		Model:    p.GetModel(),
-		Role:     grpcapi.ProtoRoleToEntity(p.GetRole()),
-		EventLog: p.GetEventLog(),
-	}
-
-	if p.GetMatchRules() != nil {
-		profile.MatchRules = unixProtoMatchRulesToEntity(p.GetMatchRules())
-	}
-
-	// The current proto carries named network phases in a map plus the
-	// enrollment / post-enrollment / failure phase name bindings instead
-	// of the former fixed provisioning / production / quarantine fields.
-	profile.Zone = p.GetZone()
-	profile.TenantID = p.GetTenantId()
-	profile.EnrollmentNetwork = p.GetEnrollmentNetwork()
-	profile.PostEnrollmentNetwork = p.GetPostEnrollmentNetwork()
-	profile.FailureNetwork = p.GetFailureNetwork()
-
-	profile.Networks = make(map[string]*entities.NetworkPhaseConfig, len(p.GetNetworks()))
-	for name, cfg := range p.GetNetworks() {
-		profile.Networks[name] = unixProtoNetworkConfigToEntity(cfg)
-	}
-
-	return profile
-}
-
-// unixProtoMatchRulesToEntity converts proto ProfileMatchRules to entity ProfileMatchRules
-func unixProtoMatchRulesToEntity(rules *pb.ProfileMatchRules) *entities.ProfileMatchRules {
-	if rules == nil {
-		return nil
-	}
-	return &entities.ProfileMatchRules{
-		MACPrefix:         rules.GetMacPrefix(),
-		SerialPrefix:      rules.GetSerialPrefix(),
-		Model:             rules.GetModel(),
-		ModelPattern:      rules.GetModelPattern(),
-		SerialPattern:     rules.GetSerialPattern(),
-		ManufacturerMatch: rules.GetManufacturerMatch(),
-		TPMVendor:         rules.GetTpmVendor(),
-		CustomAttributes:  rules.GetCustomAttributes(),
-	}
-}
-
-// unixEntityMatchRulesToProto converts entity ProfileMatchRules to proto ProfileMatchRules
-func unixEntityMatchRulesToProto(rules *entities.ProfileMatchRules) *pb.ProfileMatchRules {
-	if rules == nil {
-		return nil
-	}
-	return &pb.ProfileMatchRules{
-		MacPrefix:         rules.MACPrefix,
-		SerialPrefix:      rules.SerialPrefix,
-		Model:             rules.Model,
-		ModelPattern:      rules.ModelPattern,
-		SerialPattern:     rules.SerialPattern,
-		ManufacturerMatch: rules.ManufacturerMatch,
-		TpmVendor:         rules.TPMVendor,
-		CustomAttributes:  rules.CustomAttributes,
-	}
-}
-
-// unixProtoNetworkConfigToEntity converts proto NetworkPhaseConfig to entity NetworkPhaseConfig
-func unixProtoNetworkConfigToEntity(config *pb.NetworkPhaseConfig) *entities.NetworkPhaseConfig {
-	if config == nil {
-		return nil
-	}
-
-	result := &entities.NetworkPhaseConfig{
-		VLAN:       uint16(config.GetVlan()),
-		StaticIP:   config.GetStaticIp(),
-		Gateway:    config.GetGateway(),
-		DNS:        config.GetDns(),
-		AuthMethod: unixProtoAuthMethodToEntity(config.GetAuthMethod()),
-		Subnet:     config.GetSubnet(),
-		DNSServers: config.GetDnsServers(),
-		DHCP:       config.GetDhcp(),
-		Zone:       config.GetZone(),
-	}
-
-	if config.GetDhcpPool() != nil {
-		result.DHCPPool = &entities.DHCPPoolConfig{
-			Network:    config.GetDhcpPool().GetNetwork(),
-			RangeStart: config.GetDhcpPool().GetRangeStart(),
-			RangeEnd:   config.GetDhcpPool().GetRangeEnd(),
-			LeaseTime:  int(config.GetDhcpPool().GetLeaseTime()),
-		}
-	}
-
-	if config.GetAcls() != nil {
-		result.ACLs = make([]entities.ACLConfig, 0, len(config.GetAcls()))
-		for _, acl := range config.GetAcls() {
-			result.ACLs = append(result.ACLs, entities.ACLConfig{
-				Priority: int(acl.GetPriority()),
-				Protocol: acl.GetProtocol(),
-				SrcIP:    acl.GetSrcIp(),
-				DstIP:    acl.GetDstIp(),
-				SrcPort:  uint16(acl.GetSrcPort()),
-				DstPort:  uint16(acl.GetDstPort()),
-				Action:   acl.GetAction(),
-			})
-		}
-	}
-
-	return result
-}
-
-// unixProtoAuthMethodToEntity converts proto AuthMethod to entity AuthMethod
-func unixProtoAuthMethodToEntity(method pb.AuthMethod) entities.AuthMethod {
-	switch method {
-	case pb.AuthMethod_AUTH_METHOD_802_1X:
-		return entities.AuthMethod802_1X
-	case pb.AuthMethod_AUTH_METHOD_NONE:
-		return entities.AuthMethodNone
-	default:
-		return entities.AuthMethodNone
-	}
-}
 
 // =============================================================================
 // Compile-time Interface Verification

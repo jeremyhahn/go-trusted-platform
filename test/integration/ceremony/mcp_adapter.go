@@ -49,7 +49,7 @@ const (
 	mcpToolSignCSR            = "platform_ceremony_sign_csr"
 )
 
-// MCPAdapter drives ceremony operations via MCP (JSON-RPC 2.0 over plain HTTP).
+// MCPAdapter drives ceremony operations over MCP (JSON-RPC 2.0 over HTTPS, TLS 1.3).
 type MCPAdapter struct {
 	endpoint   string
 	httpClient *http.Client
@@ -69,8 +69,8 @@ func (m *MCPAdapter) Setup(ctx context.Context) error {
 	if endpoint == "" {
 		endpoint = GetServiceEndpoints().PlatformMCP
 	}
-	m.endpoint = "http://" + endpoint
-	m.httpClient = helpers.NewPlainHTTPClient(defaultMCPTimeout)
+	m.endpoint = helpers.MCPBaseURL(endpoint)
+	m.httpClient = helpers.NewHTTPClient(defaultMCPTimeout)
 
 	initParams := map[string]interface{}{
 		"protocolVersion": mcpProtocolVersion,

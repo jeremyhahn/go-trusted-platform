@@ -11,71 +11,68 @@
 // 2. Commercial License
 //    Contact licensing@automatethethings.com for commercial licensing options.
 
-//go:build integration
+// This file carries no build tag so endpoints_test.go can check, in the unit
+// suite, that it reads the names the integration runner exports (#502).
 
 package helpers
 
 import "os"
 
+// Endpoint environment variables. The integration runner
+// (build/docker/devcontainer/run-integration-tests.sh) exports every one of
+// them, built from the same port variable it passes to `platformd serve`.
+// These are also the names the suites that read the environment directly use.
+const (
+	envRESTEndpoint = "PLATFORM_REST_ENDPOINT"
+	envGRPCEndpoint = "PLATFORM_GRPC_ENDPOINT"
+	envQUICEndpoint = "PLATFORM_QUIC_ENDPOINT"
+	envMCPEndpoint  = "PLATFORM_MCP_ENDPOINT"
+	envSocketPath   = "PLATFORM_SOCKET_PATH"
+)
+
+// Defaults for running a suite by hand, outside the runner, against a
+// platformd on its standard ports. Under the runner they never apply: it sets
+// every variable above. REST and MCP serve TLS only (#844).
+const (
+	defaultRESTEndpoint = "https://localhost:8443"
+	defaultGRPCEndpoint = "localhost:10443"
+	defaultQUICEndpoint = "localhost:9444"
+	defaultMCPEndpoint  = "https://localhost:9445"
+	defaultSocketPath   = "/run/platformd.sock"
+)
+
+// envOrDefault returns the value of the environment variable name, or
+// fallback when it is unset or empty.
+func envOrDefault(name, fallback string) string {
+	if value := os.Getenv(name); value != "" {
+		return value
+	}
+	return fallback
+}
+
 // GetRESTEndpoint returns the REST API endpoint for testing
 func GetRESTEndpoint() string {
-	endpoint := os.Getenv("PLATFORM_REST_URL")
-	if endpoint == "" {
-		port := os.Getenv("PLATFORM_REST_PORT")
-		if port == "" {
-			port = "8443"
-		}
-		endpoint = "http://localhost:" + port
-	}
-	return endpoint
+	return envOrDefault(envRESTEndpoint, defaultRESTEndpoint)
 }
 
 // GetGRPCEndpoint returns the gRPC endpoint for testing
 func GetGRPCEndpoint() string {
-	endpoint := os.Getenv("PLATFORM_GRPC_URL")
-	if endpoint == "" {
-		port := os.Getenv("PLATFORM_GRPC_PORT")
-		if port == "" {
-			port = "10443"
-		}
-		endpoint = "localhost:" + port
-	}
-	return endpoint
+	return envOrDefault(envGRPCEndpoint, defaultGRPCEndpoint)
 }
 
 // GetQUICEndpoint returns the QUIC endpoint for testing
 func GetQUICEndpoint() string {
-	endpoint := os.Getenv("PLATFORM_QUIC_URL")
-	if endpoint == "" {
-		port := os.Getenv("PLATFORM_QUIC_PORT")
-		if port == "" {
-			port = "9444"
-		}
-		endpoint = "localhost:" + port
-	}
-	return endpoint
+	return envOrDefault(envQUICEndpoint, defaultQUICEndpoint)
 }
 
 // GetMCPEndpoint returns the MCP endpoint for testing
 func GetMCPEndpoint() string {
-	endpoint := os.Getenv("PLATFORM_MCP_URL")
-	if endpoint == "" {
-		port := os.Getenv("PLATFORM_MCP_PORT")
-		if port == "" {
-			port = "9445"
-		}
-		endpoint = "http://localhost:" + port
-	}
-	return endpoint
+	return envOrDefault(envMCPEndpoint, defaultMCPEndpoint)
 }
 
 // GetSocketPath returns the Unix socket path for testing
 func GetSocketPath() string {
-	path := os.Getenv("PLATFORM_SOCKET_PATH")
-	if path == "" {
-		path = "/run/platformd.sock"
-	}
-	return path
+	return envOrDefault(envSocketPath, defaultSocketPath)
 }
 
 // EndpointConfig holds all protocol endpoints for testing

@@ -49,14 +49,6 @@ func (app *App) initBarrier(ctx context.Context) error {
 		return nil
 	}
 
-	// Attempt auto-unseal if configured and barrier is sealed
-	if mgr.IsSealed() && app.BarrierConfig.AutoUnseal {
-		if err := app.autoUnsealBarrier(ctx, mgr); err != nil {
-			app.Logger.Warn("barrier: auto-unseal failed, manual unseal required",
-				slog.String("error", err.Error()))
-		}
-	}
-
 	// Log barrier state for operator awareness
 	if mgr.IsSealed() {
 		app.Logger.Info("barrier: sealed, waiting for unseal command")
@@ -65,24 +57,4 @@ func (app *App) initBarrier(ctx context.Context) error {
 	}
 
 	return nil
-}
-
-// autoUnsealBarrier attempts to automatically unseal the barrier based on
-// the configured seal strategy. Software strategy cannot auto-unseal
-// without user input. TPM2 and PKCS11 strategies can unseal using
-// hardware-bound keys.
-func (app *App) autoUnsealBarrier(ctx context.Context, mgr *barrier.Manager) error {
-	switch app.BarrierConfig.SealStrategy {
-	case barrier.SealStrategyTPM2:
-		// DEFERRED: Implement TPM2 auto-unseal using NVRAM-sealed key. Blocked by: TPM2 NVRAM sealing API.
-		return nil
-	case barrier.SealStrategyPKCS11:
-		// DEFERRED: Implement PKCS11 auto-unseal using hardware token. Blocked by: PKCS11 provider integration.
-		return nil
-	case barrier.SealStrategySoftware:
-		// Software strategy requires interactive user input
-		return nil
-	default:
-		return nil
-	}
 }

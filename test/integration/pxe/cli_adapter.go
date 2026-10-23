@@ -28,6 +28,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
 )
 
 // =============================================================================
@@ -78,6 +80,8 @@ func (e ErrCLIBinaryNotFound) Error() string {
 type CLIAdapter struct {
 	binaryPath     string
 	socketPath     string
+	configDir      string
+	configPath     string
 	commandTimeout time.Duration
 }
 
@@ -111,7 +115,13 @@ func (c *CLIAdapter) Setup(ctx context.Context) error {
 		return ErrCLIBinaryNotFound{Path: c.binaryPath}
 	}
 
-	_, err := c.runCommand(ctx, "version")
+	dir, path, err := helpers.WriteTempLocalCLIConfig(c.socketPath, helpers.GetGRPCEndpoint())
+	if err != nil {
+		return err
+	}
+	c.configDir, c.configPath = dir, path
+
+	_, err = c.runCommand(ctx, "version")
 	if err != nil {
 		return fmt.Errorf("CLI binary verification failed: %w", err)
 	}
@@ -121,7 +131,10 @@ func (c *CLIAdapter) Setup(ctx context.Context) error {
 
 // Teardown performs cleanup (no-op for CLI adapter).
 func (c *CLIAdapter) Teardown() error {
-	return nil
+	if c.configDir == "" {
+		return nil
+	}
+	return os.RemoveAll(c.configDir)
 }
 
 // =============================================================================
@@ -137,8 +150,10 @@ func (c *CLIAdapter) runCommand(ctx context.Context, args ...string) ([]byte, er
 
 	fullArgs := []string{"--output", "json"}
 
-	if c.socketPath != "" && c.socketPath != DefaultPlatformdSocket {
-		fullArgs = append(fullArgs, "--socket", c.socketPath)
+	// platformctl has no --socket flag; the harness socket reaches it through
+	// the config file Setup wrote (#540).
+	if c.configPath != "" {
+		fullArgs = append(fullArgs, "--config", c.configPath)
 	}
 
 	fullArgs = append(fullArgs, args...)

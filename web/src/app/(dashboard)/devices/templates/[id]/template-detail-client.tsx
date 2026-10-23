@@ -34,25 +34,14 @@ import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Separator } from '@/components/ui/separator';
 import { useToast, useApi, useDevice, useMutation } from '@/hooks';
 import type { DeviceRole } from 'trusted-platform-sdk';
+import { deviceRoleLabel } from '@/lib/device-role';
 
 // ============================================================================
 // Helper Functions
 // ============================================================================
 
 function getRoleBadge(role: DeviceRole) {
-  const roleLabels: Record<DeviceRole, string> = {
-    UNSPECIFIED: 'Unspecified',
-    UNKNOWN: 'Unknown',
-    SERVER: 'Server',
-    CLIENT: 'Client',
-    WORKSTATION: 'Workstation',
-    EDGE: 'Edge',
-    IOT: 'IoT',
-    GATEWAY: 'Gateway',
-    LOAD_BALANCER: 'Load Balancer',
-  };
-
-  return <Badge variant="outline">{roleLabels[role] ?? role}</Badge>;
+  return <Badge variant="outline">{deviceRoleLabel(role)}</Badge>;
 }
 
 function formatDate(dateString: string) {

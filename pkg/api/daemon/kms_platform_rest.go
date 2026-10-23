@@ -15,7 +15,6 @@ package daemon
 
 import (
 	"context"
-	"strconv"
 
 	grpcapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc"
 	restapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/rest"
@@ -445,7 +444,7 @@ func (f *PlatformKMSRESTFacade) BatchEncrypt(
 	items := make([]*grpcapi.KMSBatchEncryptItem, len(req.Items))
 	for i, item := range req.Items {
 		items[i] = &grpcapi.KMSBatchEncryptItem{
-			ItemID:    strconv.Itoa(i),
+			ItemID:    item.ItemID,
 			Plaintext: item.Plaintext,
 			Context:   item.Context,
 			Nonce:     item.Nonce,
@@ -464,6 +463,7 @@ func (f *PlatformKMSRESTFacade) BatchEncrypt(
 	results := make([]*restapi.KMSBatchEncryptResultItem, len(resp.Results))
 	for i, r := range resp.Results {
 		results[i] = &restapi.KMSBatchEncryptResultItem{
+			ItemID:     r.ItemID,
 			Ciphertext: r.Ciphertext,
 			Nonce:      r.Nonce,
 			Error:      r.Message,
@@ -499,7 +499,7 @@ func (f *PlatformKMSRESTFacade) BatchDecrypt(
 	items := make([]*grpcapi.KMSBatchDecryptItem, len(req.Items))
 	for i, item := range req.Items {
 		items[i] = &grpcapi.KMSBatchDecryptItem{
-			ItemID:     strconv.Itoa(i),
+			ItemID:     item.ItemID,
 			Ciphertext: item.Ciphertext,
 			Context:    item.Context,
 			Nonce:      item.Nonce,
@@ -518,6 +518,7 @@ func (f *PlatformKMSRESTFacade) BatchDecrypt(
 	results := make([]*restapi.KMSBatchDecryptResultItem, len(resp.Results))
 	for i, r := range resp.Results {
 		results[i] = &restapi.KMSBatchDecryptResultItem{
+			ItemID:     r.ItemID,
 			Plaintext:  r.Plaintext,
 			KeyVersion: r.KeyVersion,
 			Error:      r.Message,

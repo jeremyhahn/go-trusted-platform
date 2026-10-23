@@ -31,6 +31,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"testing"
 	"time"
 
@@ -47,6 +48,7 @@ const testCPTLSName = "cp.example.test"
 type testCPPKI struct {
 	caPEM    []byte
 	caCert   *x509.Certificate
+	caKey    *ecdsa.PrivateKey
 	tlsCert  tls.Certificate
 	spkiPinB string // base64-std SHA-256 of the CA's SPKI
 }
@@ -107,6 +109,7 @@ func newTestCPPKI(t *testing.T) *testCPPKI {
 	return &testCPPKI{
 		caPEM:  pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: caDER}),
 		caCert: caCert,
+		caKey:  caKey,
 		tlsCert: tls.Certificate{
 			Certificate: [][]byte{leafDER, caDER},
 			PrivateKey:  leafKey,
@@ -116,8 +119,8 @@ func newTestCPPKI(t *testing.T) *testCPPKI {
 }
 
 // startTestCPServer serves body at every path over TLS using the PKI's
-// leaf+CA chain and redirects cpWebservicePort at its ephemeral port for
-// the duration of the test.
+// leaf+CA chain on an ephemeral port; pointControlPlaneAt aims an
+// orchestrator at it.
 func startTestCPServer(t *testing.T, pki *testCPPKI, status int, body []byte) *httptest.Server {
 	t.Helper()
 	return startTestCPServerHandler(t, pki, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -141,16 +144,28 @@ func startTestCPServerHandler(t *testing.T, pki *testCPPKI, handler http.Handler
 	}
 	srv.StartTLS()
 	t.Cleanup(srv.Close)
+	return srv
+}
 
+// serverPort is the port srv listens on.
+func serverPort(t *testing.T, srv *httptest.Server) int {
+	t.Helper()
 	_, port, err := net.SplitHostPort(srv.Listener.Addr().String())
 	if err != nil {
 		t.Fatalf("split server addr: %v", err)
 	}
-	prev := cpWebservicePort
-	cpWebservicePort = port
-	t.Cleanup(func() { cpWebservicePort = prev })
+	p, err := strconv.Atoi(port)
+	if err != nil {
+		t.Fatalf("parse port: %v", err)
+	}
+	return p
+}
 
-	return srv
+// pointControlPlaneAt configures o's control-plane webservice port to srv's
+// ephemeral port, the way an operator sets platform.control_plane_port.
+func pointControlPlaneAt(t *testing.T, o *Orchestrator, srv *httptest.Server) {
+	t.Helper()
+	o.config.Platform.ControlPlanePort = serverPort(t, srv)
 }
 
 // newTrustTestOrchestrator builds a minimal orchestrator whose discovered
@@ -181,9 +196,10 @@ func newTrustTestOrchestrator() *Orchestrator {
 
 func TestFetchControlPlaneCABundle_CaptureThenVerify(t *testing.T) {
 	pki := newTestCPPKI(t)
-	startTestCPServer(t, pki, http.StatusOK, pki.caPEM)
+	srv := startTestCPServer(t, pki, http.StatusOK, pki.caPEM)
 
 	o := newTrustTestOrchestrator()
+	pointControlPlaneAt(t, o, srv)
 	bundle, err := o.fetchControlPlaneCABundle(context.Background())
 	if err != nil {
 		t.Fatalf("fetchControlPlaneCABundle: %v", err)
@@ -201,9 +217,10 @@ func TestFetchControlPlaneCABundle_RejectsMismatchedBundle(t *testing.T) {
 	other := newTestCPPKI(t)
 	// The server's TLS chain is signed by `serving`, but the bundle it
 	// returns belongs to `other` — capture-then-verify must reject it.
-	startTestCPServer(t, serving, http.StatusOK, other.caPEM)
+	srv := startTestCPServer(t, serving, http.StatusOK, other.caPEM)
 
 	o := newTrustTestOrchestrator()
+	pointControlPlaneAt(t, o, srv)
 	_, err := o.fetchControlPlaneCABundle(context.Background())
 	var verifyErr ErrCABundleVerifyFailed
 	if !errors.As(err, &verifyErr) {
@@ -224,9 +241,10 @@ func TestFetchControlPlaneCABundle_AcceptsMixedBundle(t *testing.T) {
 	serving := newTestCPPKI(t)
 	extra := newTestCPPKI(t)
 	mixed := append(append([]byte{}, serving.caPEM...), extra.caPEM...)
-	startTestCPServer(t, serving, http.StatusOK, mixed)
+	srv := startTestCPServer(t, serving, http.StatusOK, mixed)
 
 	o := newTrustTestOrchestrator()
+	pointControlPlaneAt(t, o, srv)
 	bundle, err := o.fetchControlPlaneCABundle(context.Background())
 	if err != nil {
 		t.Fatalf("fetchControlPlaneCABundle rejected a valid mixed bundle: %v", err)
@@ -241,9 +259,10 @@ func TestFetchControlPlaneCABundle_AcceptsMixedBundle(t *testing.T) {
 
 func TestFetchControlPlaneCABundle_RejectsInvalidPEM(t *testing.T) {
 	pki := newTestCPPKI(t)
-	startTestCPServer(t, pki, http.StatusOK, []byte("this is not a PEM bundle"))
+	srv := startTestCPServer(t, pki, http.StatusOK, []byte("this is not a PEM bundle"))
 
 	o := newTrustTestOrchestrator()
+	pointControlPlaneAt(t, o, srv)
 	_, err := o.fetchControlPlaneCABundle(context.Background())
 	var invalidErr ErrCABundleInvalid
 	if !errors.As(err, &invalidErr) {
@@ -277,7 +296,7 @@ func TestFetchControlPlaneSPKIPin_RequiresCAPool(t *testing.T) {
 func TestFetchControlPlaneSPKIPin_RejectsUnverifiedChain(t *testing.T) {
 	serving := newTestCPPKI(t)
 	other := newTestCPPKI(t)
-	startTestCPServer(t, serving, http.StatusOK, serving.caPEM)
+	srv := startTestCPServer(t, serving, http.StatusOK, serving.caPEM)
 
 	// cpCAPool holds an unrelated CA: tls.DialWithDialer rejects the
 	// server certificate because it is not signed by any root in the pool.
@@ -285,6 +304,7 @@ func TestFetchControlPlaneSPKIPin_RejectsUnverifiedChain(t *testing.T) {
 	// ErrCABundleVerifyFailed, because the TLS library returns before any
 	// application-layer verification can run.
 	o := newTrustTestOrchestrator()
+	pointControlPlaneAt(t, o, srv)
 	pool := x509.NewCertPool()
 	pool.AddCert(other.caCert)
 	o.cpCAPool = pool
@@ -299,9 +319,10 @@ func TestFetchControlPlaneSPKIPin_RejectsUnverifiedChain(t *testing.T) {
 
 func TestFetchControlPlaneSPKIPin_VerifiedCapture(t *testing.T) {
 	pki := newTestCPPKI(t)
-	startTestCPServer(t, pki, http.StatusOK, pki.caPEM)
+	srv := startTestCPServer(t, pki, http.StatusOK, pki.caPEM)
 
 	o := newTrustTestOrchestrator()
+	pointControlPlaneAt(t, o, srv)
 	if _, err := o.fetchControlPlaneCABundle(context.Background()); err != nil {
 		t.Fatalf("prerequisite bundle fetch: %v", err)
 	}
@@ -317,9 +338,10 @@ func TestFetchControlPlaneSPKIPin_VerifiedCapture(t *testing.T) {
 
 func TestControlPlaneCAPool_FetchesAndCaches(t *testing.T) {
 	pki := newTestCPPKI(t)
-	startTestCPServer(t, pki, http.StatusOK, pki.caPEM)
+	srv := startTestCPServer(t, pki, http.StatusOK, pki.caPEM)
 
 	o := newTrustTestOrchestrator()
+	pointControlPlaneAt(t, o, srv)
 	pool, err := o.ControlPlaneCAPool(context.Background())
 	if err != nil {
 		t.Fatalf("ControlPlaneCAPool: %v", err)

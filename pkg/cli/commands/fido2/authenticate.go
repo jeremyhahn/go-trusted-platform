@@ -38,7 +38,7 @@ func newAuthenticateCommand(getFlags func() *cli.CommonFlags) *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&f.credentialID, "credential-id", "", "WebAuthn credential id (base64url)")
+	cmd.Flags().StringVar(&f.credentialID, "credential-id", "", "credential id printed by \"fido2 register\" (hex)")
 
 	return cmd
 }
@@ -55,7 +55,10 @@ func runAuthenticate(commonFlags *cli.CommonFlags, f *authenticateFlags) error {
 	}
 	defer base.Close()
 
-	client := fido2svc.NewClient()
+	client, err := newService(base.Client())
+	if err != nil {
+		return err
+	}
 	resp, err := client.Authenticate(base.Context(), &fido2svc.AuthenticateRequest{CredentialID: f.credentialID})
 	if err != nil {
 		return err

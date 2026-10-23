@@ -144,6 +144,9 @@ func TestControllerReadsTrackingAndSources(t *testing.T) {
 	if !ok {
 		t.Fatal("no tracking call recorded")
 	}
+	if call.Name != "chronyc" {
+		t.Fatalf("tracking ran %q, want chronyc", call.Name)
+	}
 	joined := strings.Join(call.Args, " ")
 	for _, want := range []string{"-c", "-n", "-h /run/chrony/chronyd.sock"} {
 		if !strings.Contains(joined, want) {

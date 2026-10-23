@@ -17,7 +17,6 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
-	ceremonysvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/ceremony"
 )
 
 // newStatusCommand creates the "ceremony status" subcommand.
@@ -40,7 +39,10 @@ func runStatus(commonFlags *cli.CommonFlags) error {
 	}
 	defer base.Close()
 
-	client := ceremonysvc.NewClient()
+	client, err := NewService(base.Client())
+	if err != nil {
+		return err
+	}
 
 	resp, err := client.Status(base.Context())
 	if err != nil {

@@ -1278,16 +1278,18 @@ func (x *DSRecord) GetTtl() uint32 {
 
 // RRSIG Record
 type RRSIGRecord struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	TypeCovered   string                 `protobuf:"bytes,1,opt,name=type_covered,json=typeCovered,proto3" json:"type_covered,omitempty"`
-	Algorithm     uint32                 `protobuf:"varint,2,opt,name=algorithm,proto3" json:"algorithm,omitempty"`
-	Labels        uint32                 `protobuf:"varint,3,opt,name=labels,proto3" json:"labels,omitempty"`
-	OriginalTtl   uint32                 `protobuf:"varint,4,opt,name=original_ttl,json=originalTtl,proto3" json:"original_ttl,omitempty"`
-	Expiration    string                 `protobuf:"bytes,5,opt,name=expiration,proto3" json:"expiration,omitempty"`
-	Inception     string                 `protobuf:"bytes,6,opt,name=inception,proto3" json:"inception,omitempty"`
-	KeyTag        uint32                 `protobuf:"varint,7,opt,name=key_tag,json=keyTag,proto3" json:"key_tag,omitempty"`
-	SignerName    string                 `protobuf:"bytes,8,opt,name=signer_name,json=signerName,proto3" json:"signer_name,omitempty"`
-	Signature     string                 `protobuf:"bytes,9,opt,name=signature,proto3" json:"signature,omitempty"`
+	state       protoimpl.MessageState `protogen:"open.v1"`
+	TypeCovered string                 `protobuf:"bytes,1,opt,name=type_covered,json=typeCovered,proto3" json:"type_covered,omitempty"`
+	Algorithm   uint32                 `protobuf:"varint,2,opt,name=algorithm,proto3" json:"algorithm,omitempty"`
+	Labels      uint32                 `protobuf:"varint,3,opt,name=labels,proto3" json:"labels,omitempty"`
+	OriginalTtl uint32                 `protobuf:"varint,4,opt,name=original_ttl,json=originalTtl,proto3" json:"original_ttl,omitempty"`
+	Expiration  string                 `protobuf:"bytes,5,opt,name=expiration,proto3" json:"expiration,omitempty"`
+	Inception   string                 `protobuf:"bytes,6,opt,name=inception,proto3" json:"inception,omitempty"`
+	KeyTag      uint32                 `protobuf:"varint,7,opt,name=key_tag,json=keyTag,proto3" json:"key_tag,omitempty"`
+	SignerName  string                 `protobuf:"bytes,8,opt,name=signer_name,json=signerName,proto3" json:"signer_name,omitempty"`
+	Signature   string                 `protobuf:"bytes,9,opt,name=signature,proto3" json:"signature,omitempty"`
+	// Owner of the signed RRset; empty means the zone apex.
+	Name          string `protobuf:"bytes,10,opt,name=name,proto3" json:"name,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1381,6 +1383,13 @@ func (x *RRSIGRecord) GetSignerName() string {
 func (x *RRSIGRecord) GetSignature() string {
 	if x != nil {
 		return x.Signature
+	}
+	return ""
+}
+
+func (x *RRSIGRecord) GetName() string {
+	if x != nil {
+		return x.Name
 	}
 	return ""
 }
@@ -3388,7 +3397,7 @@ const file_platform_dns_proto_rawDesc = "" +
 	"\vdigest_type\x18\x04 \x01(\rR\n" +
 	"digestType\x12\x16\n" +
 	"\x06digest\x18\x05 \x01(\tR\x06digest\x12\x10\n" +
-	"\x03ttl\x18\x06 \x01(\rR\x03ttl\"\x9f\x02\n" +
+	"\x03ttl\x18\x06 \x01(\rR\x03ttl\"\xb3\x02\n" +
 	"\vRRSIGRecord\x12!\n" +
 	"\ftype_covered\x18\x01 \x01(\tR\vtypeCovered\x12\x1c\n" +
 	"\talgorithm\x18\x02 \x01(\rR\talgorithm\x12\x16\n" +
@@ -3401,7 +3410,9 @@ const file_platform_dns_proto_rawDesc = "" +
 	"\akey_tag\x18\a \x01(\rR\x06keyTag\x12\x1f\n" +
 	"\vsigner_name\x18\b \x01(\tR\n" +
 	"signerName\x12\x1c\n" +
-	"\tsignature\x18\t \x01(\tR\tsignature\"t\n" +
+	"\tsignature\x18\t \x01(\tR\tsignature\x12\x12\n" +
+	"\x04name\x18\n" +
+	" \x01(\tR\x04name\"t\n" +
 	"\n" +
 	"NSECRecord\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x1f\n" +

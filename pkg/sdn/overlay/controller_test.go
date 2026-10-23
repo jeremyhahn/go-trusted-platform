@@ -723,18 +723,28 @@ func TestController_Uptime(t *testing.T) {
 		t.Errorf("Uptime() before start = %v, want 0", uptime)
 	}
 
+	current := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	ctrl.now = func() time.Time { return current }
+
 	if err := ctrl.Start(ctx); err != nil {
 		t.Fatalf("Start() error = %v", err)
 	}
-	defer ctrl.Stop(ctx)
 
-	// After start, uptime should be > 0
-	// Small delay to ensure measurable uptime
-	time.Sleep(10 * time.Millisecond)
+	if uptime := ctrl.Uptime(); uptime != 0 {
+		t.Errorf("Uptime() at start = %v, want 0", uptime)
+	}
 
-	uptime := ctrl.Uptime()
-	if uptime <= 0 {
-		t.Errorf("Uptime() after start = %v, want > 0", uptime)
+	current = current.Add(90 * time.Second)
+	if uptime := ctrl.Uptime(); uptime != 90*time.Second {
+		t.Errorf("Uptime() after 90s = %v, want 90s", uptime)
+	}
+
+	// After stop, uptime is 0 again
+	if err := ctrl.Stop(ctx); err != nil {
+		t.Fatalf("Stop() error = %v", err)
+	}
+	if uptime := ctrl.Uptime(); uptime != 0 {
+		t.Errorf("Uptime() after stop = %v, want 0", uptime)
 	}
 }
 

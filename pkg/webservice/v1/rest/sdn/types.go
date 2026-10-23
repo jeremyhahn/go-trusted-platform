@@ -70,6 +70,25 @@ type PortResponse struct {
 	Labels    map[string]string `json:"labels,omitempty"`
 }
 
+// AuthenticatePortRequest is the request body for authenticating a port with
+// a client certificate. The certificate travels base64-encoded; format is
+// "PEM" (the default) or "DER".
+type AuthenticatePortRequest struct {
+	Certificate []byte `json:"certificate"`
+	Format      string `json:"format,omitempty"`
+}
+
+// PortAuthResponse is the authentication state of a port.
+type PortAuthResponse struct {
+	BridgeID        string     `json:"bridge_id"`
+	PortID          string     `json:"port_id"`
+	Authenticated   bool       `json:"authenticated"`
+	CertificateCN   string     `json:"certificate_cn,omitempty"`
+	AuthenticatedAt *time.Time `json:"authenticated_at,omitempty"`
+	ExpiresAt       *time.Time `json:"expires_at,omitempty"`
+	AuthorizedVLANs []uint32   `json:"authorized_vlans,omitempty"`
+}
+
 // ListPortsResponse is the response for listing ports
 type ListPortsResponse struct {
 	Ports []PortResponse `json:"ports"`
@@ -77,13 +96,19 @@ type ListPortsResponse struct {
 
 // SetPortStateRequest is the request body for setting port state
 type SetPortStateRequest struct {
-	State string `json:"state"` // "up" or "down"
+	AdminState   string `json:"admin_state"`   // "up" or "down", case-insensitive
+	IngressRate  uint64 `json:"ingress_rate"`  // bits/s; 0 leaves policing as it is
+	IngressBurst uint64 `json:"ingress_burst"` // bits; 0 lets Open vSwitch pick
+	EgressRate   uint64 `json:"egress_rate"`   // bits/s; 0 leaves shaping as it is
+	EgressBurst  uint64 `json:"egress_burst"`  // bits; 0 lets Open vSwitch pick
 }
 
-// PortStateResponse is the response for port state operations
+// PortStateResponse is the response for port state operations. The field
+// names match the daemon REST answer (docs/sdn/api-reference-rest.md).
 type PortStateResponse struct {
-	PortID string `json:"port_id"`
-	State  string `json:"state"`
+	BridgeID   string `json:"bridge_id"`
+	PortID     string `json:"port_id"`
+	AdminState string `json:"admin_state"`
 }
 
 // AddFlowRequest is the request body for adding a flow
@@ -153,15 +178,6 @@ type ListFlowsResponse struct {
 type DeleteFlowRequest struct {
 	BridgeID string `json:"bridge_id"`
 	FlowID   string `json:"flow_id"`
-}
-
-// ApplyPolicyRequest is the request body for applying a policy
-type ApplyPolicyRequest struct {
-	Name        string   `json:"name"`
-	Description string   `json:"description,omitempty"`
-	Rules       []Rule   `json:"rules"`
-	BridgeIDs   []string `json:"bridge_ids,omitempty"`
-	Priority    int32    `json:"priority,omitempty"`
 }
 
 // Rule represents a policy rule

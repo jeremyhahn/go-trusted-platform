@@ -44,6 +44,17 @@ var ErrLUKSSlotRequired = errors.New("luks: slot index is required")
 // ErrLUKSRootRequired indicates the operation requires root privileges.
 var ErrLUKSRootRequired = errors.New("luks: operation requires root privileges")
 
+// ErrLUKSMalformedBody indicates a REST request body that is not valid JSON
+// for the operation. It carries no decoder detail, because a JSON syntax
+// error quotes the offending input and the body may hold a passphrase.
+var ErrLUKSMalformedBody = errors.New("luks: malformed request body")
+
+// ErrLUKSFIDO2PINUnsupported refuses a FIDO2 enrolment that asks for a PIN.
+// The go-quicbaas SDK fido2 re-export offers only the PIN-less handler, so a
+// "PIN-required" keyslot would be protected by user presence alone. The
+// refusal stands until the SDK seam for a PIN-capable handler ships (#584).
+var ErrLUKSFIDO2PINUnsupported = errors.New("luks: fido2 require-pin is refused: the SDK has no PIN-capable fido2 handler yet (SDK seam #584)")
+
 // LUKSKeyType enumerates the LUKS2 keyslot backends.
 type LUKSKeyType string
 
@@ -98,11 +109,12 @@ type LUKSInfo struct {
 	MetadataJSON string
 }
 
-// LUKSEnrollPassphraseRequest adds a passphrase slot.
+// LUKSEnrollPassphraseRequest adds a passphrase slot. The request structs'
+// JSON tags are the REST body keys: the snake_case names QUIC and MCP use.
 type LUKSEnrollPassphraseRequest struct {
-	Device             string
-	ExistingPassphrase string
-	NewPassphrase      string
+	Device             string `json:"device"`
+	ExistingPassphrase string `json:"existing_passphrase"`
+	NewPassphrase      string `json:"new_passphrase"`
 }
 
 // LUKSEnrollPassphraseResult is returned by EnrollPassphrase.
@@ -112,11 +124,11 @@ type LUKSEnrollPassphraseResult struct {
 
 // LUKSEnrollFIDO2Request adds a FIDO2 slot.
 type LUKSEnrollFIDO2Request struct {
-	Device             string
-	ExistingPassphrase string
-	CredentialID       string
-	RequirePIN         bool
-	RequireUV          bool
+	Device             string `json:"device"`
+	ExistingPassphrase string `json:"existing_passphrase"`
+	CredentialID       string `json:"credential_id"`
+	RequirePIN         bool   `json:"require_pin"`
+	RequireUV          bool   `json:"require_uv"`
 }
 
 // LUKSEnrollFIDO2Result is returned by EnrollFIDO2.
@@ -127,10 +139,10 @@ type LUKSEnrollFIDO2Result struct {
 
 // LUKSEnrollTPMRequest adds a TPM2-sealed slot.
 type LUKSEnrollTPMRequest struct {
-	Device             string
-	ExistingPassphrase string
-	PCRs               []int32
-	Handle             string
+	Device             string  `json:"device"`
+	ExistingPassphrase string  `json:"existing_passphrase"`
+	PCRs               []int32 `json:"pcrs"`
+	Handle             string  `json:"handle"`
 }
 
 // LUKSEnrollTPMResult is returned by EnrollTPM.
@@ -141,8 +153,8 @@ type LUKSEnrollTPMResult struct {
 
 // LUKSEnrollRecoveryRequest adds a recovery-key slot.
 type LUKSEnrollRecoveryRequest struct {
-	Device             string
-	ExistingPassphrase string
+	Device             string `json:"device"`
+	ExistingPassphrase string `json:"existing_passphrase"`
 }
 
 // LUKSEnrollRecoveryResult is returned by EnrollRecovery.
@@ -153,22 +165,22 @@ type LUKSEnrollRecoveryResult struct {
 
 // LUKSRemoveKeyRequest removes a keyslot.
 type LUKSRemoveKeyRequest struct {
-	Device string
-	Slot   int32
+	Device string `json:"device"`
+	Slot   int32  `json:"slot"`
 }
 
 // LUKSTestUnlockRequest tests a keyslot.
 type LUKSTestUnlockRequest struct {
-	Device string
-	Slot   int32
+	Device string `json:"device"`
+	Slot   int32  `json:"slot"`
 }
 
 // LUKSChangePassphraseRequest changes a passphrase slot.
 type LUKSChangePassphraseRequest struct {
-	Device        string
-	Slot          int32
-	OldPassphrase string
-	NewPassphrase string
+	Device        string `json:"device"`
+	Slot          int32  `json:"slot"`
+	OldPassphrase string `json:"old_passphrase"`
+	NewPassphrase string `json:"new_passphrase"`
 }
 
 // LUKSBackend abstracts the upstream LUKS2 implementation.
@@ -298,6 +310,10 @@ func (s *LUKSService) EnrollPassphrase(ctx context.Context, req *LUKSEnrollPassp
 
 // EnrollFIDO2 adds a FIDO2 slot. Requires root.
 func (s *LUKSService) EnrollFIDO2(ctx context.Context, req *LUKSEnrollFIDO2Request) (*LUKSEnrollFIDO2Result, error) {
+	// Refused before anything else: no caller can get a PIN-required slot.
+	if req != nil && req.RequirePIN {
+		return nil, ErrLUKSFIDO2PINUnsupported
+	}
 	if err := s.requireRoot(); err != nil {
 		return nil, err
 	}

@@ -14,10 +14,17 @@
 package fido2
 
 import (
+	"context"
+	"errors"
 	"strings"
 	"testing"
 
+	"google.golang.org/grpc"
+
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
+	platform "github.com/jeremyhahn/go-trusted-platform/sdk/go"
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
+	fido2svc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/fido2"
 )
 
 func testFlags() func() *cli.CommonFlags {
@@ -205,5 +212,52 @@ func TestRolesMap(t *testing.T) {
 		if _, ok := roles[name]; !ok {
 			t.Errorf("roles missing %q", name)
 		}
+	}
+}
+
+type fido2OnlyClient struct {
+	platform.Client
+	rpc platformv1.FIDO2ServiceClient
+}
+
+func (c fido2OnlyClient) FIDO2() platformv1.FIDO2ServiceClient { return c.rpc }
+
+type listDevicesRPC struct {
+	platformv1.FIDO2ServiceClient
+	called bool
+}
+
+func (s *listDevicesRPC) ListDevices(_ context.Context, _ *platformv1.FIDO2ListDevicesRequest, _ ...grpc.CallOption) (*platformv1.FIDO2ListDevicesResponse, error) {
+	s.called = true
+	return &platformv1.FIDO2ListDevicesResponse{}, nil
+}
+
+func TestNewService_DispatchesOverTheSDKClient(t *testing.T) {
+	rpc := &listDevicesRPC{}
+
+	svc, err := newService(fido2OnlyClient{rpc: rpc})
+	if err != nil {
+		t.Fatalf("newService() error = %v", err)
+	}
+	if _, err := svc.ListDevices(context.Background(), &fido2svc.ListDevicesRequest{}); err != nil {
+		t.Fatalf("ListDevices() error = %v", err)
+	}
+	if !rpc.called {
+		t.Error("expected ListDevices to reach the SDK FIDO2 client")
+	}
+}
+
+func TestNewService_RefusesAClientWithoutTheFIDO2Service(t *testing.T) {
+	svc, err := newService(fido2OnlyClient{})
+	if svc != nil {
+		t.Errorf("expected no service, got %v", svc)
+	}
+
+	var unavailable platform.ErrServiceUnavailable
+	if !errors.As(err, &unavailable) {
+		t.Fatalf("expected platform.ErrServiceUnavailable, got %v", err)
+	}
+	if unavailable.Service != fido2svcName {
+		t.Errorf("ErrServiceUnavailable.Service = %q, want %q", unavailable.Service, fido2svcName)
 	}
 }

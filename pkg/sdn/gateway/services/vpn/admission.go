@@ -16,11 +16,14 @@ package vpn
 import (
 	"context"
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"net/http"
 	"net/netip"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/calleradmission"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/manifest"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/policy/opa"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ipam"
@@ -52,6 +55,11 @@ func (s *Service) Admit(ctx context.Context, req *AdmissionRequest) (*Lease, err
 	if !decision.Admitted {
 		return nil, s.refuse(ctx, req.DeviceID, &ErrPeerRefused{Reason: decision.Reason})
 	}
+	// An admitted identity is a peer only when the control plane enrolled
+	// it, and only for the zones the enrolment grants.
+	if err := s.enrolled(req.TenantID, req.DeviceID, req.RequestedZones); err != nil {
+		return nil, s.refuse(ctx, req.DeviceID, err)
+	}
 
 	// 2. Attestation.
 	summary, err := s.attest(ctx, req.DeviceID, req.Nonce, req.Attestation)
@@ -60,12 +68,23 @@ func (s *Service) Admit(ctx context.Context, req *AdmissionRequest) (*Lease, err
 	}
 
 	// 3. Posture.
-	if err := s.posture(ctx, req.Posture, summary); err != nil {
+	if err := s.posture(ctx, req.TenantID, req.Posture, summary); err != nil {
 		return nil, s.refuse(ctx, req.DeviceID, err)
 	}
 
 	// 4. Person factor.
 	if err := s.personFactor(ctx, req.TenantID, req.DeviceID, req.Nonce, req.PersonFactor, s.cfg.RequirePersonFactor.OnAdmit); err != nil {
+		return nil, s.refuse(ctx, req.DeviceID, err)
+	}
+
+	// The control plane may have withdrawn the peer while attestation and
+	// the factor check ran. Authorize again under the enrolment gate and
+	// keep it to the lease write: the commit then lands either before
+	// SetEnrolments publishes a set, so its sweep sees the lease, or after
+	// the sweep, where this check sees the withdrawal.
+	s.enrolGate.RLock()
+	defer s.enrolGate.RUnlock()
+	if err := s.enrolled(req.TenantID, req.DeviceID, req.RequestedZones); err != nil {
 		return nil, s.refuse(ctx, req.DeviceID, err)
 	}
 
@@ -165,15 +184,24 @@ func (s *Service) Renew(ctx context.Context, id LeaseID, ev *Evidence) (*Lease, 
 	if opensAt := lease.ExpiresAt.Add(-s.cfg.RenewWindow); now.Before(opensAt) {
 		return nil, s.refuse(ctx, lease.DeviceID, &ErrRenewalNotOpen{LeaseID: id, OpensAt: opensAt})
 	}
+	if err := s.enrolled(lease.TenantID, lease.DeviceID, lease.Zones); err != nil {
+		if rErr := s.revoke(ctx, lease, RevokeOperator); rErr != nil {
+			s.logger.Warn("vpn.renew: revoking an unenrolled lease failed",
+				slog.String("lease", string(lease.ID)), slog.Any("error", rErr))
+		}
+		return nil, s.refuse(ctx, lease.DeviceID, err)
+	}
 	if !s.consumeNonce(ev.Nonce) {
 		return nil, s.refuse(ctx, lease.DeviceID, &ErrNonceUnknown{})
 	}
+	started := s.deps.Clock.Now()
 	summary, err := s.attest(ctx, lease.DeviceID, ev.Nonce, ev.Attestation)
+	s.reattest.observe(s.deps.Clock.Now().Sub(started))
 	if err != nil {
 		_ = s.revoke(ctx, lease, RevokeAttestation)
 		return nil, s.refuse(ctx, lease.DeviceID, err)
 	}
-	if err := s.posture(ctx, ev.Posture, summary); err != nil {
+	if err := s.posture(ctx, lease.TenantID, ev.Posture, summary); err != nil {
 		_ = s.revoke(ctx, lease, RevokePosture)
 		return nil, s.refuse(ctx, lease.DeviceID, err)
 	}
@@ -194,9 +222,10 @@ func (s *Service) Renew(ctx context.Context, id LeaseID, ev *Evidence) (*Lease, 
 	return &cp, nil
 }
 
-// Revoke ends a lease: the peer is removed, then the address released, then
-// the lease deleted. It is idempotent: an unknown lease is ErrLeaseNotFound
-// and nothing else happens.
+// Revoke ends a lease: the lease is deleted, then the peer removed, then the
+// address released. It is idempotent: an unknown lease is ErrLeaseNotFound
+// and nothing else happens. A revocation the store could not record is
+// ErrRevocationNotRecorded and leaves the lease served; retry it.
 func (s *Service) Revoke(ctx context.Context, id LeaseID, reason RevokeReason) error {
 	if !s.Active() {
 		return &ErrNotStarted{}
@@ -224,11 +253,45 @@ func (s *Service) Lease(ctx context.Context, id LeaseID) (*Lease, error) {
 	return s.deps.Leases.Get(ctx, id)
 }
 
-// revoke tears a lease down in order: peer, address, record. The record is
-// deleted even when the peer removal failed, because a lease past its
-// authority is dead whether or not the datapath answered; the removal error
+// OwnLease returns the lease named by id only when peer presents the device
+// certificate the lease was admitted with: a device renews and disconnects
+// its own lease and no other. A lease bound to another certificate is
+// reported as not found, so a caller cannot probe for other devices' leases.
+func (s *Service) OwnLease(ctx context.Context, id LeaseID, peer *calleradmission.Peer) (*Lease, error) {
+	if peer == nil || peer.Leaf == nil {
+		return nil, &ErrPeerRefused{Reason: calleradmission.ReasonNoIdentity}
+	}
+	lease, err := s.deps.Leases.Get(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	sum := sha256.Sum256(peer.Leaf.Raw)
+	if subtle.ConstantTimeCompare(sum[:], lease.Keys.ClientCertificateSHA256) != 1 {
+		return nil, &ErrLeaseNotFound{LeaseID: id}
+	}
+	return lease, nil
+}
+
+// revoke ends a lease in order: record, peer, address. A store that could
+// record the revocation nowhere (ErrRevocationNotRecorded) keeps the lease,
+// and revoke then tears nothing down: a peer removed or an address released
+// under a lease a restart restores would be a session the gateway and its
+// next start disagree on. Any other store error still tears the lease down,
+// because a lease past its authority is dead whether or not its record went;
+// the peer is removed even when that error is returned, and a removal error
 // is returned so the caller retries the peer.
 func (s *Service) revoke(ctx context.Context, lease *Lease, reason RevokeReason) error {
+	var storeErr error
+	if err := s.deps.Leases.Delete(ctx, lease.ID); err != nil {
+		var nf *ErrLeaseNotFound
+		var unrecorded *ErrRevocationNotRecorded
+		if errors.As(err, &unrecorded) {
+			return err
+		}
+		if !errors.As(err, &nf) {
+			storeErr = err
+		}
+	}
 	var planeErr error
 	if plane, ok := s.deps.DataPlanes[lease.DataPlane]; ok {
 		if err := plane.RemovePeer(ctx, lease.ID); err != nil {
@@ -236,14 +299,9 @@ func (s *Service) revoke(ctx context.Context, lease *Lease, reason RevokeReason)
 		}
 	}
 	s.releaseAddress(ctx, lease.Address)
-	if err := s.deps.Leases.Delete(ctx, lease.ID); err != nil {
-		var nf *ErrLeaseNotFound
-		if !errors.As(err, &nf) {
-			return err
-		}
-	}
+	s.revocations.inc(string(reason))
 	s.logger.Info("vpn.revoke", slog.String("lease", string(lease.ID)), slog.String("device", lease.DeviceID), slog.String("reason", string(reason)))
-	return planeErr
+	return errors.Join(storeErr, planeErr)
 }
 
 func (s *Service) releaseAddress(ctx context.Context, addr netip.Prefix) {
@@ -257,8 +315,25 @@ func (s *Service) releaseAddress(ctx context.Context, addr netip.Prefix) {
 
 func (s *Service) refuse(ctx context.Context, deviceID string, err error) error {
 	s.recordRefusal(err.Error())
-	s.logger.Warn("vpn.refuse", slog.String("device", deviceID), slog.String("reason", err.Error()))
+	s.logger.Warn("vpn.refuse", refusalAttrs(deviceID, err)...)
 	return err
+}
+
+// refusalAttrs are the vpn.refuse log attributes: the refusal class the
+// client is told and the violated posture rules, never the error text of a
+// policy refusal, which can carry the policy's identity list. A refusal the
+// gateway caused (a 5xx class: a store, a plane or the engine is down) keeps
+// its error, which names the failing dependency.
+func refusalAttrs(deviceID string, err error) []any {
+	refusal, status := RefusalOf(err)
+	attrs := []any{slog.String("device", deviceID), slog.String("reason", string(refusal.Reason))}
+	if len(refusal.Rules) > 0 {
+		attrs = append(attrs, slog.Any("rules", refusal.Rules))
+	}
+	if status >= http.StatusInternalServerError {
+		attrs = append(attrs, slog.String("error", err.Error()))
+	}
+	return attrs
 }
 
 func (s *Service) validateRequest(req *AdmissionRequest) error {
@@ -329,21 +404,27 @@ func postureInput(report *PostureReport, v *VerdictSummary) (map[string]interfac
 	return input, nil
 }
 
-func (s *Service) posture(ctx context.Context, report *PostureReport, v *VerdictSummary) error {
+func (s *Service) posture(ctx context.Context, tenantID string, report *PostureReport, v *VerdictSummary) error {
 	if report == nil {
-		return &ErrPostureViolation{Violations: []string{"posture-missing"}}
+		return s.postureViolation([]string{"posture-missing"})
 	}
 	input, err := postureInput(report, v)
 	if err != nil {
 		return &ErrPostureUnavailable{Cause: err}
 	}
-	result, err := s.deps.Posture.Evaluate(ctx, s.cfg.PosturePolicy, input)
+	evaluator, policyName, err := s.postureFor(tenantID)
+	if err != nil {
+		// A tenant policy that failed to compile refuses; it never falls
+		// back to the default.
+		return &ErrPostureUnavailable{Cause: err}
+	}
+	result, err := evaluator.Evaluate(ctx, policyName, input)
 	if err != nil {
 		// Every engine failure is a refusal: no policy never means allow.
 		return &ErrPostureUnavailable{Cause: err}
 	}
 	if result == nil {
-		return &ErrPostureUnavailable{Cause: &opa.ErrEvaluationFailed{PolicyName: s.cfg.PosturePolicy, Reason: "no result"}}
+		return &ErrPostureUnavailable{Cause: &opa.ErrEvaluationFailed{PolicyName: policyName, Reason: "no result"}}
 	}
 	if len(result.Violations) > 0 || !result.Allowed {
 		names := make([]string, 0, len(result.Violations))
@@ -353,9 +434,17 @@ func (s *Service) posture(ctx context.Context, report *PostureReport, v *Verdict
 		if len(names) == 0 {
 			names = append(names, "denied")
 		}
-		return &ErrPostureViolation{Violations: names}
+		return s.postureViolation(names)
 	}
 	return nil
+}
+
+// postureViolation counts each violated rule and returns the refusal.
+func (s *Service) postureViolation(rules []string) error {
+	for _, rule := range rules {
+		s.postureViolations.inc(rule)
+	}
+	return &ErrPostureViolation{Violations: rules}
 }
 
 func (s *Service) personFactor(ctx context.Context, tenantID, deviceID string, nonce []byte, factor *PersonFactor, required bool) error {
@@ -378,17 +467,11 @@ func (s *Service) personFactor(ctx context.Context, tenantID, deviceID string, n
 }
 
 func (s *Service) allocate(ctx context.Context, req *AdmissionRequest) (netip.Prefix, error) {
-	pool, err := s.deps.IPAM.GetPoolByName(ctx, s.cfg.Pool)
+	areq, err := s.allocationRequest(ctx, req.TenantID, req.DeviceID)
 	if err != nil {
-		return netip.Prefix{}, &ErrPoolExhausted{Pool: s.cfg.Pool, Cause: err}
+		return netip.Prefix{}, err
 	}
-	alloc, err := s.deps.IPAM.Allocate(ctx, &ipam.AllocationRequest{
-		PoolID:        pool.ID,
-		DeviceID:      req.DeviceID,
-		Description:   "vpn lease",
-		Tags:          []string{"vpn", "tenant:" + req.TenantID},
-		LeaseDuration: s.cfg.LeaseTTL,
-	})
+	alloc, err := s.deps.IPAM.Allocate(ctx, areq)
 	if err != nil {
 		return netip.Prefix{}, &ErrPoolExhausted{Pool: s.cfg.Pool, Cause: err}
 	}
@@ -396,6 +479,22 @@ func (s *Service) allocate(ctx context.Context, req *AdmissionRequest) (netip.Pr
 		return netip.Prefix{}, &ErrPoolExhausted{Pool: s.cfg.Pool}
 	}
 	return netip.PrefixFrom(alloc.IP, alloc.IP.BitLen()), nil
+}
+
+// allocationRequest is the IPAM request for an address of the tenant's
+// device from the VPN pool.
+func (s *Service) allocationRequest(ctx context.Context, tenantID, deviceID string) (*ipam.AllocationRequest, error) {
+	pool, err := s.deps.IPAM.GetPoolByName(ctx, s.cfg.Pool)
+	if err != nil {
+		return nil, &ErrPoolExhausted{Pool: s.cfg.Pool, Cause: err}
+	}
+	return &ipam.AllocationRequest{
+		PoolID:        pool.ID,
+		DeviceID:      deviceID,
+		Description:   "vpn lease",
+		Tags:          []string{"vpn", "tenant:" + tenantID},
+		LeaseDuration: s.cfg.LeaseTTL,
+	}, nil
 }
 
 // zonesAllowed is exported for the daemon's authorization layer: the lease's

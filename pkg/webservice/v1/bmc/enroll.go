@@ -176,7 +176,7 @@ func (h *handler) EnrollBMC(w http.ResponseWriter, r *http.Request) {
 	h.logger.Debug("bmc: enroll request received")
 
 	if h.enrollDeps.enroller == nil {
-		h.responseWriter.Error500(w, r, ErrBMCEnrollerNotAvailable{})
+		h.responseWriter.Error503(w, r, ErrBMCEnrollerNotAvailable{})
 		return
 	}
 

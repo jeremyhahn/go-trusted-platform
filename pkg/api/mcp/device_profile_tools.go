@@ -22,7 +22,10 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/device"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // formatUint64ID renders a uint64 identifier as a decimal string per the
@@ -56,6 +59,14 @@ var ErrDeviceProfileNotConfigured = errors.New("device_profile: profile service 
 // carried neither an EK serial nor a MAC address.
 var ErrDeviceProfileIdentityRequired = errors.New("device_profile: device_id, ek_serial or mac_address is required")
 
+// ErrDeviceProfileMatchCriteriaRequired indicates a profile match request
+// carried no MAC address, serial or model to match on.
+var ErrDeviceProfileMatchCriteriaRequired = errors.New("device_profile: mac_address, serial or model is required")
+
+// ErrDeviceConfigIdentityRequired indicates a config lookup carried neither
+// an EK serial nor a MAC address.
+var ErrDeviceConfigIdentityRequired = errors.New("device_profile: ek_serial or mac_address is required")
+
 // ErrDeviceProfileInvalidArgs indicates the tool arguments did not decode
 // into the device profile request shape.
 type ErrDeviceProfileInvalidArgs struct {
@@ -70,6 +81,28 @@ func (e ErrDeviceProfileInvalidArgs) Error() string {
 // Unwrap exposes the underlying decode error for errors.Is/As.
 func (e ErrDeviceProfileInvalidArgs) Unwrap() error {
 	return e.Cause
+}
+
+// GRPCStatus classifies undecodable tool arguments as InvalidArgument.
+func (e ErrDeviceProfileInvalidArgs) GRPCStatus() *status.Status {
+	return status.New(codes.InvalidArgument, e.Error())
+}
+
+// ErrDeviceProfileLookupKeyRequired indicates a profile lookup tool was
+// called without the device attribute it looks up by.
+type ErrDeviceProfileLookupKeyRequired struct {
+	Field string
+}
+
+// Error returns a human-readable description of the error.
+func (e ErrDeviceProfileLookupKeyRequired) Error() string {
+	return "device_profile: " + e.Field + " is required"
+}
+
+// GRPCStatus classifies a missing lookup key as InvalidArgument, as gRPC
+// does.
+func (e ErrDeviceProfileLookupKeyRequired) GRPCStatus() *status.Status {
+	return status.New(codes.InvalidArgument, e.Error())
 }
 
 // DeviceProfileProvider is the optional interface a ServiceProvider can
@@ -89,11 +122,28 @@ type DeviceProfileProvider interface {
 	// profile count.
 	DeviceProfileList(ctx context.Context, page, pageSize int) ([]*entities.DeviceProfile, int, error)
 
-	// DeviceProfileUpdate replaces an existing device profile.
-	DeviceProfileUpdate(ctx context.Context, profile *entities.DeviceProfile) (*entities.DeviceProfile, error)
+	// DeviceProfileUpdate replaces an existing device profile. opts carries
+	// the intents the entity cannot, such as device.ClearTLSServerName.
+	DeviceProfileUpdate(ctx context.Context, profile *entities.DeviceProfile, opts ...device.ProfileUpdateOption) (*entities.DeviceProfile, error)
 
 	// DeviceProfileDelete removes a device profile by ID.
 	DeviceProfileDelete(ctx context.Context, id uint64) error
+
+	// DeviceProfileMatch returns the profile whose match rules fit the
+	// device's MAC address, serial or model.
+	DeviceProfileMatch(ctx context.Context, macAddr, serial, model string) (*entities.DeviceProfile, error)
+
+	// DeviceProfileFindByMAC returns the profile whose MAC prefix rule fits
+	// the device's MAC address.
+	DeviceProfileFindByMAC(ctx context.Context, macAddr string) (*entities.DeviceProfile, error)
+
+	// DeviceProfileFindBySerial returns the profile whose serial prefix rule
+	// fits the device's serial number.
+	DeviceProfileFindBySerial(ctx context.Context, serial string) (*entities.DeviceProfile, error)
+
+	// DeviceProfileFindConfig returns the profile a booting device receives,
+	// looked up by its EK serial first and its MAC address second.
+	DeviceProfileFindConfig(ctx context.Context, ekSerial, macAddr string) (*entities.DeviceProfile, error)
 
 	// DeviceProfileAssign binds a profile to a device identity — a
 	// registered device (deviceID != 0, whose stored EK certificate supplies
@@ -144,19 +194,26 @@ type deviceProfileToolRequest struct {
 	// verifies a node of this profile against (#430). There is deliberately
 	// no pcr_baseline field: the baseline is read-only, so a pcr_baseline
 	// argument is dropped by the typed decode and never reaches the entity
-	// (#373, #448).
-	TLSServerName string `json:"tls_server_name"`
+	// (#373, #448). A pointer so profile_update_by_id can tell an omitted
+	// name (keep) from "" (clear, #462).
+	TLSServerName *string `json:"tls_server_name"`
 }
 
 // decodeDeviceProfileToolRequest binds the raw tool arguments onto the
 // typed request via a JSON round trip so nested objects (networks,
 // match_rules, config) decode into their entity types.
 func decodeDeviceProfileToolRequest(args map[string]interface{}) (*deviceProfileToolRequest, error) {
+	return decodeToolArgs[deviceProfileToolRequest](args)
+}
+
+// decodeToolArgs decodes tool arguments into the typed request T through
+// a JSON round trip, so the struct's json tags define the argument names.
+func decodeToolArgs[T any](args map[string]interface{}) (*T, error) {
 	encoded, err := json.Marshal(args)
 	if err != nil {
 		return nil, ErrDeviceProfileInvalidArgs{Cause: err}
 	}
-	var req deviceProfileToolRequest
+	var req T
 	if err := json.Unmarshal(encoded, &req); err != nil {
 		return nil, ErrDeviceProfileInvalidArgs{Cause: err}
 	}
@@ -184,7 +241,13 @@ func decodeDeviceProfileEventLog(encoded string) ([]byte, error) {
 // certificate is public key material carrying no secrets, so echoing it
 // back lets operators audit which certificate is prestaged.
 func deviceProfileToolResult(profile *entities.DeviceProfile) (interface{}, error) {
-	encoded, err := json.Marshal(profile)
+	return entityToolResult(profile, profile.ID)
+}
+
+// entityToolResult renders an entity as a JSON object whose numbers keep
+// their precision and whose uint64 id is a decimal string.
+func entityToolResult(entity any, id uint64) (map[string]interface{}, error) {
+	encoded, err := json.Marshal(entity)
 	if err != nil {
 		return nil, err
 	}
@@ -194,7 +257,7 @@ func deviceProfileToolResult(profile *entities.DeviceProfile) (interface{}, erro
 	if err := decoder.Decode(&result); err != nil {
 		return nil, err
 	}
-	result["id"] = formatUint64ID(profile.ID)
+	result["id"] = formatUint64ID(id)
 	return result, nil
 }
 
@@ -212,8 +275,18 @@ var deviceProfileToolDispatch = map[string]deviceProfileToolHandler{
 	"profile_list_all":             (*ToolRegistry).executeDeviceProfileList,
 	"profile_update_by_id":         (*ToolRegistry).executeDeviceProfileUpdate,
 	"profile_delete_by_id":         (*ToolRegistry).executeDeviceProfileDelete,
+	"profile_find_matching":        (*ToolRegistry).executeDeviceProfileMatch,
+	"profile_find_by_mac":          (*ToolRegistry).executeDeviceProfileFindByMAC,
+	"profile_find_by_serial":       (*ToolRegistry).executeDeviceProfileFindBySerial,
+	"profile_find_config":          (*ToolRegistry).executeDeviceProfileFindConfig,
 	"profile_assign_to_device":     (*ToolRegistry).executeDeviceProfileAssign,
 	"profile_unassign_from_device": (*ToolRegistry).executeDeviceProfileUnassign,
+	"device_template_create":       (*ToolRegistry).executeDeviceTemplateCreate,
+	"device_template_get":          (*ToolRegistry).executeDeviceTemplateGet,
+	"device_template_list":         (*ToolRegistry).executeDeviceTemplateList,
+	"device_template_update":       (*ToolRegistry).executeDeviceTemplateUpdate,
+	"device_template_delete":       (*ToolRegistry).executeDeviceTemplateDelete,
+	"profile_create_from_template": (*ToolRegistry).executeDeviceProfileFromTemplate,
 }
 
 // dispatchDeviceProfileTool looks up a device profile tool and invokes it.
@@ -245,6 +318,21 @@ func (r *ToolRegistry) executeDeviceProfileCreate(ctx context.Context, args map[
 	if req.Name == "" {
 		return nil, ErrProfileNameRequired
 	}
+	profile, err := req.toEntity()
+	if err != nil {
+		return nil, err
+	}
+
+	created, err := p.DeviceProfileCreate(ctx, profile)
+	if err != nil {
+		return nil, err
+	}
+	return deviceProfileToolResult(created)
+}
+
+// toEntity maps the decoded tool arguments onto a new device profile,
+// validating the fields that cannot be stored as given.
+func (req *deviceProfileToolRequest) toEntity() (*entities.DeviceProfile, error) {
 	// A prestaged EK certificate binds config delivery and remote UKI
 	// signing to the hardware EK; an unparseable value can never match a
 	// presented certificate, so reject it at the boundary.
@@ -271,7 +359,6 @@ func (r *ToolRegistry) executeDeviceProfileCreate(ctx context.Context, args map[
 		EKCert:                req.EKCert,
 		MACAddress:            req.MACAddress,
 		Config:                req.Config,
-		TLSServerName:         req.TLSServerName,
 	}
 	if req.Assigned != nil {
 		profile.Assigned = *req.Assigned
@@ -279,12 +366,10 @@ func (r *ToolRegistry) executeDeviceProfileCreate(ctx context.Context, args map[
 	if req.AssignedAt != nil {
 		profile.AssignedAt = *req.AssignedAt
 	}
-
-	created, err := p.DeviceProfileCreate(ctx, profile)
-	if err != nil {
-		return nil, err
+	if req.TLSServerName != nil {
+		profile.TLSServerName = *req.TLSServerName
 	}
-	return deviceProfileToolResult(created)
+	return profile, nil
 }
 
 func (r *ToolRegistry) executeDeviceProfileGet(ctx context.Context, args map[string]interface{}) (interface{}, error) {
@@ -297,6 +382,85 @@ func (r *ToolRegistry) executeDeviceProfileGet(ctx context.Context, args map[str
 		return nil, ErrProfileIDRequired
 	}
 	profile, err := p.DeviceProfileGet(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	return deviceProfileToolResult(profile)
+}
+
+// executeDeviceProfileMatch returns the profile whose match rules fit the
+// device attributes given; at least one is required.
+func (r *ToolRegistry) executeDeviceProfileMatch(ctx context.Context, args map[string]interface{}) (interface{}, error) {
+	p := r.deviceProfileProvider()
+	if p == nil {
+		return nil, ErrDeviceProfileNotConfigured
+	}
+	macAddr := getString(args, "mac_address")
+	serial := getString(args, "serial")
+	model := getString(args, "model")
+	if macAddr == "" && serial == "" && model == "" {
+		return nil, ErrDeviceProfileMatchCriteriaRequired
+	}
+	profile, err := p.DeviceProfileMatch(ctx, macAddr, serial, model)
+	if err != nil {
+		return nil, err
+	}
+	return deviceProfileToolResult(profile)
+}
+
+// executeDeviceProfileFindByMAC returns the profile whose MAC prefix rule
+// fits the mac_address given.
+func (r *ToolRegistry) executeDeviceProfileFindByMAC(ctx context.Context, args map[string]interface{}) (interface{}, error) {
+	p := r.deviceProfileProvider()
+	if p == nil {
+		return nil, ErrDeviceProfileNotConfigured
+	}
+	return lookupDeviceProfile(ctx, args, "mac_address", p.DeviceProfileFindByMAC)
+}
+
+// executeDeviceProfileFindBySerial returns the profile whose serial prefix
+// rule fits the serial given.
+func (r *ToolRegistry) executeDeviceProfileFindBySerial(ctx context.Context, args map[string]interface{}) (interface{}, error) {
+	p := r.deviceProfileProvider()
+	if p == nil {
+		return nil, ErrDeviceProfileNotConfigured
+	}
+	return lookupDeviceProfile(ctx, args, "serial", p.DeviceProfileFindBySerial)
+}
+
+// executeDeviceProfileFindConfig returns the profile a booting device
+// receives for the ek_serial or mac_address given; at least one is required.
+func (r *ToolRegistry) executeDeviceProfileFindConfig(ctx context.Context, args map[string]interface{}) (interface{}, error) {
+	p := r.deviceProfileProvider()
+	if p == nil {
+		return nil, ErrDeviceProfileNotConfigured
+	}
+	ekSerial := getString(args, "ek_serial")
+	macAddr := getString(args, "mac_address")
+	if ekSerial == "" && macAddr == "" {
+		return nil, ErrDeviceConfigIdentityRequired
+	}
+	profile, err := p.DeviceProfileFindConfig(ctx, ekSerial, macAddr)
+	if err != nil {
+		return nil, err
+	}
+	return deviceProfileToolResult(profile)
+}
+
+// lookupDeviceProfile runs a single-attribute profile lookup: the attribute
+// named by field is required, and the profile is returned in its domain JSON
+// shape.
+func lookupDeviceProfile(
+	ctx context.Context,
+	args map[string]interface{},
+	field string,
+	lookup func(context.Context, string) (*entities.DeviceProfile, error),
+) (interface{}, error) {
+	value := getString(args, field)
+	if value == "" {
+		return nil, ErrDeviceProfileLookupKeyRequired{Field: field}
+	}
+	profile, err := lookup(ctx, value)
 	if err != nil {
 		return nil, err
 	}
@@ -417,11 +581,10 @@ func (r *ToolRegistry) executeDeviceProfileUpdate(ctx context.Context, args map[
 	if req.AssignedAt != nil {
 		profile.AssignedAt = *req.AssignedAt
 	}
-	if req.TLSServerName != "" {
-		profile.TLSServerName = req.TLSServerName
-	}
+	// tls_server_name is tri-state too; "" clears it explicitly (#462).
+	opts := device.ApplyTLSServerName(profile, req.TLSServerName)
 
-	updated, err := p.DeviceProfileUpdate(ctx, profile)
+	updated, err := p.DeviceProfileUpdate(ctx, profile, opts...)
 	if err != nil {
 		return nil, err
 	}

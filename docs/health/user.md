@@ -74,10 +74,12 @@ rest       healthy   REST server is healthy
 ## Getting the detail behind a message
 
 `--detailed` shows the message. It does **not** show the diagnostic fields —
-stratum, certificate expiry date, listen address, connection counts. Those exist
-but do not survive the trip through the CLI's transport.
+stratum, certificate expiry date, listen address, connection counts. Checkers
+record them in `Details`, but no transport carries `Details` today
+([api.md](api.md) §5); the message is the most any endpoint returns.
 
-To see them, ask the HTTP endpoint:
+The HTTP endpoints return the same per-component messages. On the daemon's
+own listener:
 
 ```bash
 curl -s https://platform.example.com/api/v1/health | jq .
@@ -99,7 +101,8 @@ and stay with it.
 **Which one is unauthenticated matters and is not symmetric.** The
 component-by-component breakdown tells a reader which subsystem is degraded,
 which is useful to somebody choosing where to push, so the dashboard listener's
-copy is gated. The load-balancer path below is not — see
+copy is gated. The daemon listener's `/api/v1/health` is not, and the
+load-balancer probes below carry no component at all — see
 [`docs/auth/architecture.md`](../auth/architecture.md) §6c for the full public
 set and the reason attached to each entry.
 
@@ -128,41 +131,40 @@ naming the clock. See [`docs/ntp/user.md`](../ntp/user.md).
 
 ## Wiring health into a load balancer
 
-Point it at the unversioned root path:
+Three unversioned probes answer on both the daemon's REST listener and the
+webservice port, without a credential:
 
 ```
-GET https://platform.example.com/health
+GET https://platform.example.com/health/live    # liveness: restart the node if this fails
+GET https://platform.example.com/health/ready   # readiness: take it out of rotation if this fails
+GET https://platform.example.com/health         # aggregate: every component healthy
 ```
 
-It exists precisely because load balancers frequently cannot be pointed at a
-versioned path, and it returns the same aggregate answer as `/api/v1/health`.
+**The status code is the verdict.** Each answers `200` when the probe passes
+and `503` when it does not, so a load balancer that keys on the status code
+does the right thing. The body says the same thing in JSON, for example
+`{"ready": false, "status": "HEALTH_STATUS_UNHEALTHY", "timestamp": "…"}`.
 
-Two things to know before you rely on it:
+**Use `/health/ready` for rotation, not `/health`.** Readiness fails only when a
+component is unhealthy. `/health` fails while any component is merely
+degraded — an NTP source lost, say — and would pull a working node.
 
-**It always returns HTTP 200.** The verdict is in the body's `status` field, not
-in the status code. A load balancer that keys on the status code will never mark
-the node down. Configure it to match on the body, or accept that it is a
-liveness check rather than a health check.
-
-**There is no HTTP readiness endpoint.** Liveness and readiness probes exist
-only on QUIC and MCP ([api.md](api.md) §3). If your orchestrator wants an HTTP
-readiness path, `/health` is what you have.
+**The probes name no component.** For the breakdown, use
+`/api/v1/platform/health` with an admin credential, or
+`platformctl health --detailed`.
 
 ---
 
 ## Checking health from an AI/MCP client
 
-Three tools, none of which require a permission:
+Three tools, none of which require a permission. Each answers what the
+matching REST probe does:
 
 | Tool | Returns |
 |---|---|
-| `platform_health` | The aggregate check, per component |
-| `platform_liveness` | A constant "alive" — it reads nothing |
-| `platform_readiness` | Which subsystems are **wired**, not whether they work |
-
-`platform_readiness` is the one people misread. It reports that a subsystem was
-configured and constructed, not that it is functioning. For "is it working?",
-use `platform_health`.
+| `platform_health` | The aggregate status, with no components |
+| `platform_liveness` | `alive: true` — it reads nothing; an answer is the proof |
+| `platform_readiness` | `ready`, and the overall status: ready unless a component is unhealthy |
 
 ---
 

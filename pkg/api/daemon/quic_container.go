@@ -19,8 +19,8 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
-	"github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 )
 
 // =============================================================================
@@ -40,7 +40,7 @@ import (
 // The direct container opcodes collide with other top-level ranges (0xFC-0xFF
 // are the PXE extended range, 0xEC/... overlap other reserved codes), so
 // remote transports carry the unary container operations as sub-opcodes in
-// payload[0] under the compute extended category opcode (quic.OpVMExtendedCategory,
+// payload[0] under the compute extended category opcode (quicwire.OpVMExtendedCategory,
 // 0x69); see handleVMServiceOperation. The unary operations decode the pb
 // message and delegate to the shared *ComputeGRPCService (the same business
 // path the gRPC transport uses). Create/Start/Stop/Remove/Get/List plus the
@@ -56,13 +56,13 @@ import (
 // handleContainerOperation routes the direct container opcodes reachable at
 // the top-level dispatcher (Get, List, Logs). The unary operations converge
 // to pb and delegate; Logs is forwarded to the flat handler.
-func (h *QUICServiceHandler) handleContainerOperation(ctx context.Context, req *quic.Request) *quic.Response {
+func (h *QUICServiceHandler) handleContainerOperation(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if resp, handled := h.handleContainerPB(ctx, req.Opcode, req.Payload); handled {
 		return resp
 	}
 
 	if h.containerHandler == nil {
-		return h.errorResponse(quic.StatusUnavailable, ErrQUICServiceUnavailable{Service: "container"})
+		return h.errorResponse(quicwire.StatusUnavailable, ErrQUICServiceUnavailable{Service: "container"})
 	}
 	return h.containerHandler.HandleRequest(ctx, req)
 }
@@ -74,15 +74,15 @@ func (h *QUICServiceHandler) handleContainerOperation(ctx context.Context, req *
 // caller forwards the request to the flat ContainerHandler. payload carries the
 // marshalled pb request body (already stripped of any category sub-opcode
 // prefix).
-func (h *QUICServiceHandler) handleContainerPB(ctx context.Context, opcode byte, payload []byte) (*quic.Response, bool) {
+func (h *QUICServiceHandler) handleContainerPB(ctx context.Context, opcode byte, payload []byte) (*quicwire.Response, bool) {
 	switch opcode {
-	case quic.OpContainerCreate:
+	case quicwire.OpContainerCreate:
 		if h.computeGRPC == nil {
-			return h.errorResponse(quic.StatusUnavailable, ErrQUICServiceUnavailable{Service: "container"}), true
+			return h.errorResponse(quicwire.StatusUnavailable, ErrQUICServiceUnavailable{Service: "container"}), true
 		}
 		var createReq platformv1.CreateContainerRequest
-		if err := quic.DecodePayload(payload, &createReq); err != nil {
-			return h.errorResponse(quic.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err}), true
+		if err := quicwire.DecodePayload(payload, &createReq); err != nil {
+			return h.errorResponse(quicwire.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err}), true
 		}
 		resp, err := h.computeGRPC.CreateContainer(ctx, &createReq)
 		if err != nil {
@@ -90,13 +90,13 @@ func (h *QUICServiceHandler) handleContainerPB(ctx context.Context, opcode byte,
 		}
 		return h.encodeQUICOK(resp), true
 
-	case quic.OpContainerStart:
+	case quicwire.OpContainerStart:
 		if h.computeGRPC == nil {
-			return h.errorResponse(quic.StatusUnavailable, ErrQUICServiceUnavailable{Service: "container"}), true
+			return h.errorResponse(quicwire.StatusUnavailable, ErrQUICServiceUnavailable{Service: "container"}), true
 		}
 		var startReq platformv1.StartContainerRequest
-		if err := quic.DecodePayload(payload, &startReq); err != nil {
-			return h.errorResponse(quic.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err}), true
+		if err := quicwire.DecodePayload(payload, &startReq); err != nil {
+			return h.errorResponse(quicwire.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err}), true
 		}
 		resp, err := h.computeGRPC.StartContainer(ctx, &startReq)
 		if err != nil {
@@ -104,13 +104,13 @@ func (h *QUICServiceHandler) handleContainerPB(ctx context.Context, opcode byte,
 		}
 		return h.encodeQUICOK(resp), true
 
-	case quic.OpContainerStop:
+	case quicwire.OpContainerStop:
 		if h.computeGRPC == nil {
-			return h.errorResponse(quic.StatusUnavailable, ErrQUICServiceUnavailable{Service: "container"}), true
+			return h.errorResponse(quicwire.StatusUnavailable, ErrQUICServiceUnavailable{Service: "container"}), true
 		}
 		var stopReq platformv1.StopContainerRequest
-		if err := quic.DecodePayload(payload, &stopReq); err != nil {
-			return h.errorResponse(quic.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err}), true
+		if err := quicwire.DecodePayload(payload, &stopReq); err != nil {
+			return h.errorResponse(quicwire.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err}), true
 		}
 		resp, err := h.computeGRPC.StopContainer(ctx, &stopReq)
 		if err != nil {
@@ -118,13 +118,13 @@ func (h *QUICServiceHandler) handleContainerPB(ctx context.Context, opcode byte,
 		}
 		return h.encodeQUICOK(resp), true
 
-	case quic.OpContainerRemove:
+	case quicwire.OpContainerRemove:
 		if h.computeGRPC == nil {
-			return h.errorResponse(quic.StatusUnavailable, ErrQUICServiceUnavailable{Service: "container"}), true
+			return h.errorResponse(quicwire.StatusUnavailable, ErrQUICServiceUnavailable{Service: "container"}), true
 		}
 		var deleteReq platformv1.DeleteContainerRequest
-		if err := quic.DecodePayload(payload, &deleteReq); err != nil {
-			return h.errorResponse(quic.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err}), true
+		if err := quicwire.DecodePayload(payload, &deleteReq); err != nil {
+			return h.errorResponse(quicwire.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err}), true
 		}
 		resp, err := h.computeGRPC.DeleteContainer(ctx, &deleteReq)
 		if err != nil {
@@ -132,13 +132,13 @@ func (h *QUICServiceHandler) handleContainerPB(ctx context.Context, opcode byte,
 		}
 		return h.encodeQUICOK(resp), true
 
-	case quic.OpContainerGet:
+	case quicwire.OpContainerGet:
 		if h.computeGRPC == nil {
-			return h.errorResponse(quic.StatusUnavailable, ErrQUICServiceUnavailable{Service: "container"}), true
+			return h.errorResponse(quicwire.StatusUnavailable, ErrQUICServiceUnavailable{Service: "container"}), true
 		}
 		var getReq platformv1.GetContainerRequest
-		if err := quic.DecodePayload(payload, &getReq); err != nil {
-			return h.errorResponse(quic.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err}), true
+		if err := quicwire.DecodePayload(payload, &getReq); err != nil {
+			return h.errorResponse(quicwire.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err}), true
 		}
 		resp, err := h.computeGRPC.GetContainer(ctx, &getReq)
 		if err != nil {
@@ -146,14 +146,14 @@ func (h *QUICServiceHandler) handleContainerPB(ctx context.Context, opcode byte,
 		}
 		return h.encodeQUICOK(resp), true
 
-	case quic.OpContainerList:
+	case quicwire.OpContainerList:
 		if h.computeGRPC == nil {
-			return h.errorResponse(quic.StatusUnavailable, ErrQUICServiceUnavailable{Service: "container"}), true
+			return h.errorResponse(quicwire.StatusUnavailable, ErrQUICServiceUnavailable{Service: "container"}), true
 		}
 		var listReq platformv1.ListContainersRequest
 		if len(payload) > 0 {
-			if err := quic.DecodePayload(payload, &listReq); err != nil {
-				return h.errorResponse(quic.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err}), true
+			if err := quicwire.DecodePayload(payload, &listReq); err != nil {
+				return h.errorResponse(quicwire.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err}), true
 			}
 		}
 		resp, err := h.computeGRPC.ListContainers(ctx, &listReq)
@@ -162,13 +162,13 @@ func (h *QUICServiceHandler) handleContainerPB(ctx context.Context, opcode byte,
 		}
 		return h.encodeQUICOK(resp), true
 
-	case quic.OpContainerExec:
+	case quicwire.OpContainerExec:
 		if h.computeGRPC == nil {
-			return h.errorResponse(quic.StatusUnavailable, ErrQUICServiceUnavailable{Service: "container"}), true
+			return h.errorResponse(quicwire.StatusUnavailable, ErrQUICServiceUnavailable{Service: "container"}), true
 		}
 		var execReq platformv1.ExecContainerRequest
-		if err := quic.DecodePayload(payload, &execReq); err != nil {
-			return h.errorResponse(quic.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err}), true
+		if err := quicwire.DecodePayload(payload, &execReq); err != nil {
+			return h.errorResponse(quicwire.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err}), true
 		}
 		resp, err := h.computeGRPC.ExecContainer(ctx, &execReq)
 		if err != nil {
@@ -176,13 +176,13 @@ func (h *QUICServiceHandler) handleContainerPB(ctx context.Context, opcode byte,
 		}
 		return h.encodeQUICOK(resp), true
 
-	case quic.OpContainerMetrics:
+	case quicwire.OpContainerMetrics:
 		if h.computeGRPC == nil {
-			return h.errorResponse(quic.StatusUnavailable, ErrQUICServiceUnavailable{Service: "container"}), true
+			return h.errorResponse(quicwire.StatusUnavailable, ErrQUICServiceUnavailable{Service: "container"}), true
 		}
 		var metricsReq platformv1.GetContainerMetricsRequest
-		if err := quic.DecodePayload(payload, &metricsReq); err != nil {
-			return h.errorResponse(quic.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err}), true
+		if err := quicwire.DecodePayload(payload, &metricsReq); err != nil {
+			return h.errorResponse(quicwire.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err}), true
 		}
 		resp, err := h.computeGRPC.GetContainerMetrics(ctx, &metricsReq)
 		if err != nil {
@@ -205,13 +205,13 @@ func (h *QUICServiceHandler) handleContainerPB(ctx context.Context, opcode byte,
 
 // encodeQUICOK encodes v (a platform.v1 pb response or a daemon-native wire
 // struct) as a StatusOK QUIC response.
-func (h *QUICServiceHandler) encodeQUICOK(v interface{}) *quic.Response {
-	payload, err := quic.EncodePayload(v)
+func (h *QUICServiceHandler) encodeQUICOK(v interface{}) *quicwire.Response {
+	payload, err := quicwire.EncodePayload(v)
 	if err != nil {
-		return h.errorResponse(quic.StatusInternalError, ErrQUICEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrQUICEncodingFailed{Cause: err})
 	}
-	return &quic.Response{
-		Status:  quic.StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
@@ -221,12 +221,18 @@ func (h *QUICServiceHandler) encodeQUICOK(v interface{}) *quic.Response {
 // status-code semantics. It reuses the device code map and additionally maps
 // Unimplemented (which the compute service returns for unsupported
 // orchestrator features) onto StatusNotImplemented.
-func (h *QUICServiceHandler) grpcStatusToQUICResponse(op string, err error) *quic.Response {
-	quicStatus := quic.StatusInternalError
+func (h *QUICServiceHandler) grpcStatusToQUICResponse(op string, err error) *quicwire.Response {
+	return h.errorResponse(grpcCodeToQUICStatus(err), ErrQUICOperationFailed{Op: op, Cause: err})
+}
+
+// grpcCodeToQUICStatus is the QUIC status for the gRPC class of err;
+// a class with no mapping is StatusInternalError.
+func grpcCodeToQUICStatus(err error) byte {
 	if mapped, ok := deviceGRPCCodeToQUICStatus[status.Code(err)]; ok {
-		quicStatus = mapped
-	} else if status.Code(err) == codes.Unimplemented {
-		quicStatus = quic.StatusNotImplemented
+		return mapped
 	}
-	return h.errorResponse(quicStatus, ErrQUICOperationFailed{Op: op, Cause: err})
+	if status.Code(err) == codes.Unimplemented {
+		return quicwire.StatusNotImplemented
+	}
+	return quicwire.StatusInternalError
 }

@@ -20,12 +20,21 @@ import (
 	"strings"
 )
 
+// dialUDP opens the logical UDP connection PreferredIPv4 and PreferredIPv6
+// read their local address from.
+// Overridable seam for tests; defaults to net.Dial.
+var dialUDP = net.Dial
+
+// interfaceAddrs lists the host's interface addresses for LocalAddresses.
+// Overridable seam for tests; defaults to net.InterfaceAddrs.
+var interfaceAddrs = net.InterfaceAddrs
+
 // Performs a logical UDP connection to an endpoint
 // that does not need to exist and returns the local
 // IP address that was used to perform the connection.
 // Returns nil if network is unavailable (e.g., in initramfs before network init).
 func PreferredIPv4() net.IP {
-	conn, err := net.Dial("udp", "1.2.3.4:80")
+	conn, err := dialUDP("udp", "1.2.3.4:80")
 	if err != nil {
 		// Network unavailable - this is normal in initramfs
 		// Return nil instead of crashing the process
@@ -41,7 +50,7 @@ func PreferredIPv4() net.IP {
 // IP address that was used to perform the connection.
 // Returns nil if network is unavailable (e.g., in initramfs before network init).
 func PreferredIPv6() net.IP {
-	conn, err := net.Dial("udp", "[::1]:80")
+	conn, err := dialUDP("udp", "[::1]:80")
 	if err != nil {
 		// Network unavailable - this is normal in initramfs
 		// Return nil instead of crashing the process
@@ -55,7 +64,7 @@ func PreferredIPv6() net.IP {
 // Parses a list of usable local IP addresses
 func LocalAddresses() ([]string, error) {
 	ips := make([]string, 0)
-	addrs, err := net.InterfaceAddrs()
+	addrs, err := interfaceAddrs()
 	if err != nil {
 		return nil, err
 	}

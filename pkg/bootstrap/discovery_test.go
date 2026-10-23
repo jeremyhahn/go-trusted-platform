@@ -176,7 +176,10 @@ func TestDiscoverNodes_BMCFailure(t *testing.T) {
 		},
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	// A deadline that has already passed fails the BMC dial at once, where
+	// a live one would wait out its timeout against the unroutable address
+	// (#284).
+	ctx, cancel := context.WithDeadline(context.Background(), time.Now())
 	t.Cleanup(cancel)
 
 	logger := discoveryTestLogger()

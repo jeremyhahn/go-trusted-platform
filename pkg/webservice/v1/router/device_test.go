@@ -22,6 +22,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
+
+	wsdevice "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/device"
 )
 
 // MockMTLSMiddleware implements middleware.MTLSMiddleware
@@ -158,53 +160,70 @@ func registerAllDeviceRoutes(r *DeviceRouter, m *mux.Router) {
 	r.RegisterRoutes(m)
 }
 
+// newTestDeviceRouter builds a DeviceRouter whose required template handler is
+// an inert mock, for tests that exercise the other route groups.
+func newTestDeviceRouter(t *testing.T, mtls *MockMTLSMiddleware, deviceHandler *MockDeviceRestHandler, crud *MockDeviceCRUDHandler) *DeviceRouter {
+	t.Helper()
+	r, err := NewDeviceRouter(mtls, deviceHandler, crud, &MockTemplateCRUDHandler{}, nil, nil)
+	require.NoError(t, err)
+	return r
+}
+
 func TestNewDeviceRouter(t *testing.T) {
-	mockMTLS := &MockMTLSMiddleware{}
-	mockHandler := &MockDeviceRestHandler{}
+	deviceRouter, err := NewDeviceRouter(&MockMTLSMiddleware{}, &MockDeviceRestHandler{},
+		&MockDeviceCRUDHandler{}, &MockTemplateCRUDHandler{}, nil, nil)
 
-	deviceRouter := NewDeviceRouter(mockMTLS, mockHandler, nil, nil, nil, nil)
-
+	require.NoError(t, err)
 	require.NotNil(t, deviceRouter)
 	assert.NotNil(t, deviceRouter.mtlsMiddleware)
 	assert.NotNil(t, deviceRouter.deviceHandler)
-	assert.Nil(t, deviceRouter.crudHandler)
+	assert.NotNil(t, deviceRouter.crudHandler)
+	assert.NotNil(t, deviceRouter.templateHandler)
+	assert.Nil(t, deviceRouter.configDeliveryHandler)
 
 	// It still satisfies WebServiceRouter; the concrete return type exists
 	// only so the caller can reach RegisterMachineFacingRoutes (#165).
 	var _ WebServiceRouter = deviceRouter
 }
 
-func TestNewDeviceRouterWithCRUD(t *testing.T) {
-	mockMTLS := &MockMTLSMiddleware{}
-	mockHandler := &MockDeviceRestHandler{}
-	mockCRUD := &MockDeviceCRUDHandler{}
+// TestNewDeviceRouter_RequiresTheHandlersRegisterRoutesDereferences pins
+// #320: RegisterRoutes mounts the device, profile and template routes without
+// a nil check, so the constructor must refuse a router that would serve them
+// with no handler behind them.
+func TestNewDeviceRouter_RequiresTheHandlersRegisterRoutesDereferences(t *testing.T) {
+	tests := []struct {
+		name     string
+		crud     wsdevice.DeviceCRUDHandler
+		template wsdevice.TemplateCRUDHandler
+		missing  string
+	}{
+		{"no CRUD handler", nil, &MockTemplateCRUDHandler{}, "DeviceCRUDHandler"},
+		{"no template handler", &MockDeviceCRUDHandler{}, nil, "TemplateCRUDHandler"},
+		{"neither", nil, nil, "DeviceCRUDHandler"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			deviceRouter, err := NewDeviceRouter(&MockMTLSMiddleware{}, &MockDeviceRestHandler{},
+				tt.crud, tt.template, &MockConfigDeliveryHandler{}, nil)
 
-	deviceRouter := NewDeviceRouter(mockMTLS, mockHandler, mockCRUD, nil, nil, nil)
+			assert.Nil(t, deviceRouter)
+			var required ErrDeviceHandlerRequired
+			require.ErrorAs(t, err, &required)
+			assert.Equal(t, tt.missing, required.Handler)
+		})
+	}
+}
 
-	require.NotNil(t, deviceRouter)
-	assert.NotNil(t, deviceRouter.mtlsMiddleware)
-	assert.NotNil(t, deviceRouter.deviceHandler)
-	assert.NotNil(t, deviceRouter.crudHandler)
+func TestErrDeviceHandlerRequired_Error(t *testing.T) {
+	assert.Equal(t, "device router: missing required handler: TemplateCRUDHandler",
+		ErrDeviceHandlerRequired{Handler: "TemplateCRUDHandler"}.Error())
 }
 
 func TestDeviceRouter_RegisterRoutes(t *testing.T) {
 	mockMTLS := &MockMTLSMiddleware{}
 	mockHandler := &MockDeviceRestHandler{}
 
-	deviceRouter := NewDeviceRouter(mockMTLS, mockHandler, nil, nil, nil, nil)
-	muxRouter := mux.NewRouter()
-
-	require.NotPanics(t, func() {
-		registerAllDeviceRoutes(deviceRouter, muxRouter)
-	})
-}
-
-func TestDeviceRouter_RegisterRoutes_WithCRUD(t *testing.T) {
-	mockMTLS := &MockMTLSMiddleware{}
-	mockHandler := &MockDeviceRestHandler{}
-	mockCRUD := &MockDeviceCRUDHandler{}
-
-	deviceRouter := NewDeviceRouter(mockMTLS, mockHandler, mockCRUD, nil, nil, nil)
+	deviceRouter := newTestDeviceRouter(t, mockMTLS, mockHandler, &MockDeviceCRUDHandler{})
 	muxRouter := mux.NewRouter()
 
 	require.NotPanics(t, func() {
@@ -218,7 +237,7 @@ func TestDeviceRouter_ProfileEndpoint(t *testing.T) {
 	mockMTLS.On("Verify", mock.Anything, mock.Anything, mock.Anything).Return()
 	mockHandler.On("GetProfile", mock.Anything, mock.Anything).Return()
 
-	deviceRouter := NewDeviceRouter(mockMTLS, mockHandler, nil, nil, nil, nil)
+	deviceRouter := newTestDeviceRouter(t, mockMTLS, mockHandler, &MockDeviceCRUDHandler{})
 	muxRouter := mux.NewRouter()
 	registerAllDeviceRoutes(deviceRouter, muxRouter)
 
@@ -235,7 +254,7 @@ func TestDeviceRouter_ActivateEndpoint(t *testing.T) {
 	mockMTLS.On("Verify", mock.Anything, mock.Anything, mock.Anything).Return()
 	mockHandler.On("Activate", mock.Anything, mock.Anything).Return()
 
-	deviceRouter := NewDeviceRouter(mockMTLS, mockHandler, nil, nil, nil, nil)
+	deviceRouter := newTestDeviceRouter(t, mockMTLS, mockHandler, &MockDeviceCRUDHandler{})
 	muxRouter := mux.NewRouter()
 	registerAllDeviceRoutes(deviceRouter, muxRouter)
 
@@ -255,7 +274,7 @@ func TestDeviceRouter_HeartbeatEndpoint(t *testing.T) {
 	mockMTLS.On("Verify", mock.Anything, mock.Anything, mock.Anything).Return()
 	mockHandler.On("Heartbeat", mock.Anything, mock.Anything).Return()
 
-	deviceRouter := NewDeviceRouter(mockMTLS, mockHandler, nil, nil, nil, nil)
+	deviceRouter := newTestDeviceRouter(t, mockMTLS, mockHandler, &MockDeviceCRUDHandler{})
 	muxRouter := mux.NewRouter()
 	registerAllDeviceRoutes(deviceRouter, muxRouter)
 
@@ -335,7 +354,7 @@ func TestDeviceRouter_CRUDDeviceEndpoints(t *testing.T) {
 			mockMTLS.On("Verify", mock.Anything, mock.Anything, mock.Anything).Return()
 			mockCRUD.On(tt.handler, mock.Anything, mock.Anything).Return()
 
-			deviceRouter := NewDeviceRouter(mockMTLS, mockHandler, mockCRUD, nil, nil, nil)
+			deviceRouter := newTestDeviceRouter(t, mockMTLS, mockHandler, mockCRUD)
 			muxRouter := mux.NewRouter()
 			registerAllDeviceRoutes(deviceRouter, muxRouter)
 
@@ -430,7 +449,7 @@ func TestDeviceRouter_CRUDProfileEndpoints(t *testing.T) {
 			mockMTLS.On("Verify", mock.Anything, mock.Anything, mock.Anything).Return()
 			mockCRUD.On(tt.handler, mock.Anything, mock.Anything).Return()
 
-			deviceRouter := NewDeviceRouter(mockMTLS, mockHandler, mockCRUD, nil, nil, nil)
+			deviceRouter := newTestDeviceRouter(t, mockMTLS, mockHandler, mockCRUD)
 			muxRouter := mux.NewRouter()
 			registerAllDeviceRoutes(deviceRouter, muxRouter)
 
@@ -444,27 +463,34 @@ func TestDeviceRouter_CRUDProfileEndpoints(t *testing.T) {
 	}
 }
 
-func TestDeviceRouter_WithoutCRUD_NoCRUDRoutes(t *testing.T) {
-	mockMTLS := &MockMTLSMiddleware{}
-	mockHandler := &MockDeviceRestHandler{}
+// TestRegisterRoutes_MountsTheTemplateRoutes is the other half of #320: with
+// the template handler guaranteed by the constructor, every template and
+// profile-assignment route is on the operator half.
+func TestRegisterRoutes_MountsTheTemplateRoutes(t *testing.T) {
+	r := newTestDeviceRouter(t, &MockMTLSMiddleware{}, &MockDeviceRestHandler{}, &MockDeviceCRUDHandler{})
+	operator := registeredDevicePaths(r.RegisterRoutes)
 
-	deviceRouter := NewDeviceRouter(mockMTLS, mockHandler, nil, nil, nil, nil)
-	muxRouter := mux.NewRouter()
-	registerAllDeviceRoutes(deviceRouter, muxRouter)
-
-	// CRUD endpoints should return 404 when no CRUD handler
-	req := httptest.NewRequest(http.MethodPost, "/devices", nil)
-	rec := httptest.NewRecorder()
-	muxRouter.ServeHTTP(rec, req)
-
-	assert.Equal(t, http.StatusNotFound, rec.Code)
+	for _, route := range []string{
+		"POST /device/templates",
+		"GET /device/templates",
+		"GET /device/templates/name/{name}",
+		"GET /device/templates/{id:[0-9]+}",
+		"PUT /device/templates/{id:[0-9]+}",
+		"DELETE /device/templates/{id:[0-9]+}",
+		"POST /device/templates/{id:[0-9]+}/create-profile",
+		"GET /device/profiles/find-config",
+		"POST /device/profiles/{id:[0-9]+}/assign",
+		"POST /device/profiles/{id:[0-9]+}/unassign",
+	} {
+		assert.True(t, operator[route], "%s is not registered", route)
+	}
 }
 
 func TestDeviceRouter_ImplementsInterface(t *testing.T) {
 	mockMTLS := &MockMTLSMiddleware{}
 	mockHandler := &MockDeviceRestHandler{}
 
-	var router = NewDeviceRouter(mockMTLS, mockHandler, nil, nil, nil, nil)
+	var router = newTestDeviceRouter(t, mockMTLS, mockHandler, &MockDeviceCRUDHandler{})
 	assert.NotNil(t, router)
 	assert.Implements(t, (*WebServiceRouter)(nil), router)
 }
@@ -533,7 +559,7 @@ func registeredDevicePaths(register func(*mux.Router)) map[string]bool {
 // certificate at all, so the failure is "provisioning impossible", not
 // "request denied".
 func TestRegisterMachineFacingRoutes_IsExactlyTheDeviceFacingSet(t *testing.T) {
-	r := NewDeviceRouter(
+	r, err := NewDeviceRouter(
 		&MockMTLSMiddleware{},
 		&MockDeviceRestHandler{},
 		&MockDeviceCRUDHandler{},
@@ -541,6 +567,8 @@ func TestRegisterMachineFacingRoutes_IsExactlyTheDeviceFacingSet(t *testing.T) {
 		&MockConfigDeliveryHandler{},
 		nil,
 	)
+	require.NoError(t, err)
+	r.SetBootHandler(&stubBootHandler{})
 
 	assert.Equal(t, map[string]bool{
 		"GET /device/profile":                         true,
@@ -550,14 +578,64 @@ func TestRegisterMachineFacingRoutes_IsExactlyTheDeviceFacingSet(t *testing.T) {
 		"GET /provisioning/config/nonce":              true,
 		"POST /provisioning/sign":                     true,
 		"GET /provisioning/sessions/{sessionID}/poll": true,
+		"POST /device/boot/certificate":               true,
+		"POST /device/boot":                           true,
 	}, registeredDevicePaths(r.RegisterMachineFacingRoutes))
+}
+
+// stubBootHandler records which boot route reached it.
+type stubBootHandler struct {
+	certificate, delivery bool
+}
+
+func (h *stubBootHandler) HandleBootCertificate(http.ResponseWriter, *http.Request) {
+	h.certificate = true
+}
+
+func (h *stubBootHandler) HandleBootDelivery(http.ResponseWriter, *http.Request) {
+	h.delivery = true
+}
+
+// TestDeviceRouter_BootRoutes proves the delivery route sits behind the mTLS
+// verifier and the certificate route does not: a diskless node fetches the
+// chain because it has nothing to present yet, and proves its key in the
+// request instead.
+func TestDeviceRouter_BootRoutes(t *testing.T) {
+	cases := map[string]struct {
+		method, path string
+		wantMTLS     bool
+	}{
+		"certificate is reached without a client certificate": {http.MethodPost, "/device/boot/certificate", false},
+		"delivery is verified by the mTLS middleware":         {http.MethodPost, "/device/boot", true},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			mockMTLS := &MockMTLSMiddleware{}
+			mockMTLS.On("Verify", mock.Anything, mock.Anything, mock.Anything).Return()
+			boot := &stubBootHandler{}
+			deviceRouter := newTestDeviceRouter(t, mockMTLS, &MockDeviceRestHandler{}, &MockDeviceCRUDHandler{})
+			deviceRouter.SetBootHandler(boot)
+			muxRouter := mux.NewRouter()
+			deviceRouter.RegisterMachineFacingRoutes(muxRouter)
+
+			muxRouter.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(tc.method, tc.path, nil))
+
+			assert.Equal(t, tc.path == "/device/boot/certificate", boot.certificate)
+			assert.Equal(t, tc.path == "/device/boot", boot.delivery)
+			if tc.wantMTLS {
+				mockMTLS.AssertCalled(t, "Verify", mock.Anything, mock.Anything, mock.Anything)
+			} else {
+				mockMTLS.AssertNotCalled(t, "Verify", mock.Anything, mock.Anything, mock.Anything)
+			}
+		})
+	}
 }
 
 // TestRegisterRoutes_ExcludesEveryMachineFacingRoute is the assertion that
 // matters for the gate: nothing a device calls may appear in the half the
 // caller mounts behind the admin guard.
 func TestRegisterRoutes_ExcludesEveryMachineFacingRoute(t *testing.T) {
-	r := NewDeviceRouter(
+	r, err := NewDeviceRouter(
 		&MockMTLSMiddleware{},
 		&MockDeviceRestHandler{},
 		&MockDeviceCRUDHandler{},
@@ -565,6 +643,8 @@ func TestRegisterRoutes_ExcludesEveryMachineFacingRoute(t *testing.T) {
 		&MockConfigDeliveryHandler{},
 		nil,
 	)
+	require.NoError(t, err)
+	r.SetBootHandler(&stubBootHandler{})
 
 	operator := registeredDevicePaths(r.RegisterRoutes)
 	machine := registeredDevicePaths(r.RegisterMachineFacingRoutes)

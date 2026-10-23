@@ -44,16 +44,10 @@ func TestBoost_ComputeGRPCService_CreateVM_Success(t *testing.T) {
 	}
 
 	resp, err := svc.CreateVM(context.Background(), &platformv1.CreateVMRequest{
+		// A plain orchestrator can create a default VM only.
 		Config: &platformv1.VMConfig{
 			Name: "test-vm",
-			Memory: &platformv1.MemoryConfig{
-				SizeMb: 2048,
-			},
-			Cpu: &platformv1.CPUConfig{
-				Cores: 4,
-			},
-			Tpm:        &platformv1.TPMConfig{Enabled: true},
-			SecureBoot: true,
+			Tpm:  &platformv1.TPMConfig{Enabled: true},
 		},
 	})
 	if err != nil {

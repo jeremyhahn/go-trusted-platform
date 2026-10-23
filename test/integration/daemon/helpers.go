@@ -23,7 +23,6 @@ import (
 	"context"
 	"os"
 	"strings"
-	"testing"
 	"time"
 )
 
@@ -32,14 +31,10 @@ import (
 // =============================================================================
 
 const (
-	// EnvIntegrationTest is the environment variable that must be set to run
-	// integration tests. Set INTEGRATION_TEST=1 to enable.
-	EnvIntegrationTest = "INTEGRATION_TEST"
-
 	// EnvPlatformdSocket is the Unix socket path for platformd.
 	EnvPlatformdSocket = "PLATFORMD_SOCKET"
 
-	// EnvPlatformAPIEndpoint is the environment variable for platform-api REST endpoint.
+	// EnvPlatformAPIEndpoint is the environment variable for the platformd REST endpoint.
 	EnvPlatformAPIEndpoint = "PLATFORM_API_ENDPOINT"
 
 	// EnvPlatformGRPCEndpoint is the environment variable for platformd gRPC endpoint.
@@ -63,7 +58,7 @@ const (
 	// DefaultPlatformdSocket is the default Unix socket path.
 	DefaultPlatformdSocket = "/run/platformd.sock"
 
-	// DefaultPlatformAPIEndpoint is the default platform-api REST endpoint.
+	// DefaultPlatformAPIEndpoint is the default platformd REST endpoint.
 	DefaultPlatformAPIEndpoint = "http://127.0.0.1:8443"
 
 	// DefaultPlatformGRPCEndpoint is the default platformd gRPC endpoint.
@@ -81,20 +76,6 @@ const (
 	// DefaultCommandTimeout is the default timeout for CLI commands.
 	DefaultCommandTimeout = 30 * time.Second
 )
-
-// =============================================================================
-// Skip Helpers
-// =============================================================================
-
-// SkipIfNotIntegration skips the test if the INTEGRATION_TEST environment
-// variable is not set. This ensures integration tests only run when explicitly
-// requested, preventing accidental execution during normal unit testing.
-func SkipIfNotIntegration(t *testing.T) {
-	t.Helper()
-	if os.Getenv(EnvIntegrationTest) == "" {
-		t.Skip("Skipping integration test. Set INTEGRATION_TEST=1 to run.")
-	}
-}
 
 // =============================================================================
 // Endpoint Configuration

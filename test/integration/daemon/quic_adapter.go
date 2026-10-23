@@ -30,6 +30,7 @@ import (
 
 	"github.com/jeremyhahn/go-codec"
 	"github.com/jeremyhahn/go-codec/pkg/factory"
+	pb "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
 	quicgo "github.com/quic-go/quic-go"
 )
@@ -63,7 +64,7 @@ const (
 )
 
 // QUIC Operation codes for Daemon operations.
-// These MUST match the server-side opcodes defined in pkg/api/quic/protocol.go.
+// These MUST match the server-side opcodes defined in sdk/go/wire/quicwire/protocol.go.
 const (
 	// Health uses the global health opcode (0x00)
 	OpQUICDaemonHealth byte = 0x00
@@ -97,16 +98,6 @@ type quicResponse struct {
 // =============================================================================
 // Request/Response Payload Types (MessagePack encoded)
 // =============================================================================
-
-// quicHealthResponse matches the server-side HealthCheckResponse wire format.
-// The server sends Components as map[string]string (component name -> status),
-// not as a slice of structs.
-type quicHealthResponse struct {
-	Healthy    bool              `codec:"healthy"`
-	Status     string            `codec:"status"`
-	Components map[string]string `codec:"components"`
-	Timestamp  int64             `codec:"timestamp"`
-}
 
 type quicStatusResponse struct {
 	Status    string         `codec:"status"`
@@ -467,25 +458,13 @@ func (q *QUICAdapter) Health(ctx context.Context) (*HealthResult, error) {
 		return nil, err
 	}
 
-	var result quicHealthResponse
+	// OpHealth is unauthenticated, so it answers the status only: a
+	// GetHealthResponse with no components.
+	var result pb.GetHealthResponse
 	if err := decodePayload(resp.Payload, &result); err != nil {
 		return nil, ErrQUICDecodeFailed{Operation: "Health", Err: err}
 	}
-
-	healthResult := &HealthResult{
-		Status:    result.Status,
-		Timestamp: time.Unix(result.Timestamp, 0),
-	}
-
-	// Convert map[string]string components to []ComponentHealth
-	for name, status := range result.Components {
-		healthResult.Components = append(healthResult.Components, ComponentHealth{
-			Name:   name,
-			Status: normalizeHealthStatus(status),
-		})
-	}
-
-	return healthResult, nil
+	return healthResultFromProto(&result), nil
 }
 
 // =============================================================================

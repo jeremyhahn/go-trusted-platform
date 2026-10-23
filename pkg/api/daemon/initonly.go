@@ -32,6 +32,8 @@ import (
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/rest"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/security/ratelimit"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/util/peercred"
 )
 
 // =============================================================================
@@ -64,6 +66,14 @@ func (ErrInitOnlyMissingState) Error() string {
 	return "init-only server requires a StateProvider"
 }
 
+// ErrInitOnlyMissingLogger is returned when InitOnlyConfig.Logger is nil.
+type ErrInitOnlyMissingLogger struct{}
+
+// Error returns a human-readable description of the error.
+func (ErrInitOnlyMissingLogger) Error() string {
+	return "init-only server requires a logger"
+}
+
 // ErrInitOnlyListenerFailed wraps a listener bind failure.
 type ErrInitOnlyListenerFailed struct {
 	Address string
@@ -85,6 +95,22 @@ func (e *ErrInitOnlyListenerFailed) Unwrap() error { return e.Cause }
 // Configuration
 // =============================================================================
 
+const (
+	// DefaultInitAttemptBurst lets an operator retry a lost /init response a
+	// few times without waiting.
+	DefaultInitAttemptBurst = 5
+
+	// DefaultInitAttemptInterval refills one /init attempt every 12
+	// seconds: five a minute, which keeps PIN guessing impractical.
+	DefaultInitAttemptInterval = 12 * time.Second
+)
+
+// DefaultInitOnlyHTTPAddr is the loopback address of the pre-unseal HTTP
+// listener. Port 9446 is reserved for the barrier gate: it collides with
+// none of the production transports (REST 8443, gRPC 10443, QUIC 9444,
+// MCP 9445).
+const DefaultInitOnlyHTTPAddr = "127.0.0.1:9446"
+
 // InitOnlyConfig configures the minimal pre-unseal listener set.
 type InitOnlyConfig struct {
 	// SocketPath is the Unix domain socket bound for local platformctl.
@@ -95,7 +121,7 @@ type InitOnlyConfig struct {
 	SocketMode os.FileMode
 
 	// HTTPListenAddr is the loopback address bound for the minimal HTTP
-	// surface. Defaults to "127.0.0.1:9445" when empty.
+	// surface. Defaults to DefaultInitOnlyHTTPAddr when empty.
 	HTTPListenAddr string
 
 	// State reports the current platform state. Required.
@@ -113,6 +139,14 @@ type InitOnlyConfig struct {
 	// ShutdownTimeout caps graceful shutdown of the HTTP server. Defaults
 	// to 10 seconds.
 	ShutdownTimeout time.Duration
+
+	// InitAttemptBurst is how many POST /init attempts a caller may make
+	// back to back. Defaults to DefaultInitAttemptBurst.
+	InitAttemptBurst int
+
+	// InitAttemptInterval is how often a caller regains one attempt.
+	// Defaults to DefaultInitAttemptInterval.
+	InitAttemptInterval time.Duration
 
 	// UnixHandler is an optional HTTP handler bound to the Unix socket. When
 	// nil the same minimal /healthz + /init + /unseal mux is reused on the
@@ -138,7 +172,7 @@ type InitOnlyServer struct {
 	unixListener net.Listener
 	httpServer   *http.Server
 	unixServer   *http.Server
-	handlers     *rest.InitHandlers
+	initLimiter  *ratelimit.TokenBucketLimiter
 }
 
 // NewInitOnlyServer constructs an InitOnlyServer from the given config.
@@ -149,7 +183,7 @@ func NewInitOnlyServer(cfg InitOnlyConfig) (*InitOnlyServer, error) {
 		return nil, ErrInitOnlyMissingState{}
 	}
 	if cfg.Logger == nil {
-		return nil, errors.New("init-only server requires a logger")
+		return nil, ErrInitOnlyMissingLogger{}
 	}
 	if cfg.SocketPath == "" {
 		cfg.SocketPath = "/run/platformd.sock"
@@ -158,23 +192,46 @@ func NewInitOnlyServer(cfg InitOnlyConfig) (*InitOnlyServer, error) {
 		cfg.SocketMode = 0660
 	}
 	if cfg.HTTPListenAddr == "" {
-		cfg.HTTPListenAddr = "127.0.0.1:9445"
+		cfg.HTTPListenAddr = DefaultInitOnlyHTTPAddr
 	}
 	if cfg.ShutdownTimeout <= 0 {
 		cfg.ShutdownTimeout = 10 * time.Second
 	}
-
-	handlers := rest.NewInitHandlers(rest.InitHandlersConfig{
-		State:  cfg.State,
-		Init:   cfg.Init,
-		Unseal: cfg.Unseal,
-	})
+	if cfg.InitAttemptBurst <= 0 {
+		cfg.InitAttemptBurst = DefaultInitAttemptBurst
+	}
+	if cfg.InitAttemptInterval <= 0 {
+		cfg.InitAttemptInterval = DefaultInitAttemptInterval
+	}
 
 	return &InitOnlyServer{
-		cfg:      cfg,
-		logger:   cfg.Logger,
-		handlers: handlers,
+		cfg:    cfg,
+		logger: cfg.Logger,
 	}, nil
+}
+
+// newInitLimiter builds the /init attempt limiter. It runs a cleanup
+// goroutine, so it is created by Start and closed by Stop.
+func (s *InitOnlyServer) newInitLimiter() (*ratelimit.TokenBucketLimiter, error) {
+	return ratelimit.NewTokenBucketLimiter(ratelimit.LimitConfig{
+		Rate:            1 / s.cfg.InitAttemptInterval.Seconds(),
+		Burst:           s.cfg.InitAttemptBurst,
+		CleanupInterval: time.Minute,
+		MaxIdleTime:     time.Duration(s.cfg.InitAttemptBurst) * s.cfg.InitAttemptInterval,
+	})
+}
+
+// withPeerCredentials puts the kernel-verified SO_PEERCRED identity of a
+// Unix-socket caller into every request context on that connection. The
+// init service relies on it to replay the admin bundle only to the uid that
+// was issued it. A connection whose credentials cannot be read carries none,
+// which the service treats as unidentified.
+func withPeerCredentials(ctx context.Context, conn net.Conn) context.Context {
+	creds, err := peercred.ExtractUnixCredentials(conn)
+	if err != nil {
+		return ctx
+	}
+	return peercred.ContextWithUnixCredentials(ctx, creds)
 }
 
 // HTTPListenAddr returns the loopback HTTP address actually bound (after
@@ -205,13 +262,23 @@ func (s *InitOnlyServer) Start(_ context.Context) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	initLimiter, err := s.newInitLimiter()
+	if err != nil {
+		return err
+	}
 	mux := http.NewServeMux()
-	s.handlers.Register(mux)
+	rest.NewInitHandlers(rest.InitHandlersConfig{
+		State:       s.cfg.State,
+		Init:        s.cfg.Init,
+		Unseal:      s.cfg.Unseal,
+		InitLimiter: initLimiter,
+	}).Register(mux)
 
 	// Bind the loopback HTTP listener first; any failure here is fatal
 	// because the orchestrator can't probe /healthz without it.
 	httpListener, err := net.Listen("tcp", s.cfg.HTTPListenAddr)
 	if err != nil {
+		_ = initLimiter.Close()
 		return &ErrInitOnlyListenerFailed{Address: s.cfg.HTTPListenAddr, Cause: err}
 	}
 	s.httpListener = httpListener
@@ -224,11 +291,13 @@ func (s *InitOnlyServer) Start(_ context.Context) error {
 	// fatal too; we do not want to silently fall back to "HTTP only".
 	if rmErr := os.RemoveAll(s.cfg.SocketPath); rmErr != nil {
 		_ = httpListener.Close()
+		_ = initLimiter.Close()
 		return &ErrInitOnlyListenerFailed{Address: s.cfg.SocketPath, Cause: rmErr}
 	}
 	unixListener, err := net.Listen("unix", s.cfg.SocketPath)
 	if err != nil {
 		_ = httpListener.Close()
+		_ = initLimiter.Close()
 		return &ErrInitOnlyListenerFailed{Address: s.cfg.SocketPath, Cause: err}
 	}
 	if chmodErr := os.Chmod(s.cfg.SocketPath, s.cfg.SocketMode); chmodErr != nil {
@@ -246,7 +315,9 @@ func (s *InitOnlyServer) Start(_ context.Context) error {
 	s.unixServer = &http.Server{
 		Handler:           unixHandler,
 		ReadHeaderTimeout: 5 * time.Second,
+		ConnContext:       withPeerCredentials,
 	}
+	s.initLimiter = initLimiter
 
 	s.running.Store(true)
 
@@ -307,6 +378,10 @@ func (s *InitOnlyServer) Stop(ctx context.Context) error {
 	if s.unixListener != nil {
 		_ = s.unixListener.Close()
 		s.unixListener = nil
+	}
+	if s.initLimiter != nil {
+		_ = s.initLimiter.Close()
+		s.initLimiter = nil
 	}
 	// Best-effort socket file cleanup; failures here are not fatal.
 	_ = os.RemoveAll(s.cfg.SocketPath)

@@ -453,6 +453,17 @@ func (f *Factory) DANEPublisher() *DANEPublisherAdapter {
 	return f.embeddedServer.DANEPublisher()
 }
 
+// ContainerAttestor returns the container attestor adapter registered with
+// the embedded QuicBaaS server, or nil for remote transport modes (whose
+// server registers its own attestor). The platform installs its fleet
+// attestor via the adapter's SetAttestor once the attestation surface exists.
+func (f *Factory) ContainerAttestor() *ContainerAttestorAdapter {
+	if f.embeddedServer == nil {
+		return nil
+	}
+	return f.embeddedServer.ContainerAttestor()
+}
+
 // Transport returns the transport type being used.
 func (f *Factory) Transport() Transport {
 	return f.config.Transport

@@ -17,11 +17,8 @@ import "context"
 
 // Service defines the operations exposed by the platform ceremony service.
 //
-// All methods are transport-agnostic: implementations are expected to dispatch
-// over whichever SDK transport (embedded, rest, grpc, quic, mcp, unix) the
-// caller selected via the platform.Client. The Phase 3 default client
-// (returned by NewClient) is a stub that returns ErrNotYetWired for every
-// method until the server-side handlers are wired up in Phase 3.5.
+// Implementations dispatch over whichever SDK transport the caller selected
+// via the platform.Client; GRPCClient is the gRPC-backed implementation.
 type Service interface {
 	// Init performs the initial ceremony bootstrap.
 	Init(ctx context.Context, req *InitRequest) (*InitResponse, error)
@@ -39,62 +36,3 @@ type Service interface {
 	// SignCSR signs a CSR using the ceremony CA.
 	SignCSR(ctx context.Context, req *SignCSRRequest) (*SignCSRResponse, error)
 }
-
-// Client is the default Service implementation.
-//
-// TODO: wire to platformd server-side ceremony handlers (Phase 3.5).
-// Today every method returns ErrNotYetWired.
-type Client struct{}
-
-// NewClient constructs a Phase 3 stub ceremony client.
-// When server-side handlers land the signature will grow a transport argument
-// (for example platform.Client) without breaking existing call sites that go
-// through Service.
-func NewClient() *Client {
-	return &Client{}
-}
-
-// Init is the stubbed Init entrypoint.
-// TODO: wire to platformd server-side handler (Phase 3.5).
-func (c *Client) Init(_ context.Context, _ *InitRequest) (*InitResponse, error) {
-	return nil, &ErrInitFailed{Cause: ErrNotYetWired}
-}
-
-// Status is the stubbed Status entrypoint.
-// TODO: wire to platformd server-side handler (Phase 3.5).
-func (c *Client) Status(_ context.Context) (*StatusResponse, error) {
-	return nil, &ErrStatusFailed{Cause: ErrNotYetWired}
-}
-
-// ClaimCertBegin is the stubbed ClaimCertBegin entrypoint.
-// TODO: wire to platformd server-side handler (Phase 3.5).
-func (c *Client) ClaimCertBegin(_ context.Context, _ *ClaimCertBeginRequest) (*ClaimCertBeginResponse, error) {
-	return nil, &ErrClaimCertBeginFailed{Cause: ErrNotYetWired}
-}
-
-// ClaimCertComplete is the stubbed ClaimCertComplete entrypoint.
-// TODO: wire to platformd server-side handler (Phase 3.5).
-func (c *Client) ClaimCertComplete(_ context.Context, _ *ClaimCertCompleteRequest) (*ClaimCertCompleteResponse, error) {
-	return nil, &ErrClaimCertCompleteFailed{Cause: ErrNotYetWired}
-}
-
-// ClaimShareBegin is the stubbed ClaimShareBegin entrypoint.
-// TODO: wire to platformd server-side handler (Phase 3.5).
-func (c *Client) ClaimShareBegin(_ context.Context, _ *ClaimShareBeginRequest) (*ClaimShareBeginResponse, error) {
-	return nil, &ErrClaimShareFailed{Cause: ErrNotYetWired}
-}
-
-// ClaimShareComplete is the stubbed ClaimShareComplete entrypoint.
-// TODO: wire to platformd server-side handler (Phase 3.5).
-func (c *Client) ClaimShareComplete(_ context.Context, _ *ClaimShareCompleteRequest) (*ClaimShareCompleteResponse, error) {
-	return nil, &ErrClaimShareFailed{Cause: ErrNotYetWired}
-}
-
-// SignCSR is the stubbed SignCSR entrypoint.
-// TODO: wire to platformd server-side handler (Phase 3.5).
-func (c *Client) SignCSR(_ context.Context, _ *SignCSRRequest) (*SignCSRResponse, error) {
-	return nil, &ErrSignCSRFailed{Cause: ErrNotYetWired}
-}
-
-// Compile-time interface check.
-var _ Service = (*Client)(nil)

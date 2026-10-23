@@ -176,11 +176,8 @@ func TestKeyfileStrategyCanUnlockUnreadableFile(t *testing.T) {
 		MappingName: "cryptroot",
 	}
 
-	// On root the file may still be readable, skip if running as root
-	if os.Getuid() == 0 {
-		t.Skip("skipping unreadable file test when running as root")
-	}
-
+	// CanUnlock judges the mode bits, not an open, so the result is the
+	// same for root.
 	if strategy.CanUnlock(ctx, volume) {
 		t.Error("expected CanUnlock to return false for unreadable file")
 	}

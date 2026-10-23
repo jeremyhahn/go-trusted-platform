@@ -82,13 +82,6 @@ func (e ErrMissingGroupName) Error() string {
 	return "group name is required"
 }
 
-// ErrMissingToken is returned when token is required but not provided.
-type ErrMissingToken struct{}
-
-func (e ErrMissingToken) Error() string {
-	return "token is required"
-}
-
 // ErrMissingSubjectID is returned when subject ID is required but not provided.
 type ErrMissingSubjectID struct{}
 
@@ -164,6 +157,7 @@ type IAMGRPCService struct {
 }
 
 // NewIAMGRPCService creates a new IAMGRPCService instance.
+// Kept with no caller: docs/iam names this file as the PlatformIAMService surface the daemon's token stubs still shadow.
 func NewIAMGRPCService(
 	logger *logging.Logger,
 	service IAMService,
@@ -929,108 +923,6 @@ func (s *IAMGRPCService) CheckPermission(
 		Reason:           resp.Reason,
 		EvaluationTimeNs: time.Since(startTime).Nanoseconds(),
 		Timestamp:        timestamppb.Now(),
-	}, nil
-}
-
-// CreateToken creates a new access token.
-func (s *IAMGRPCService) CreateToken(
-	ctx context.Context,
-	req *platformv1.CreateIAMTokenRequest,
-) (*platformv1.CreateIAMTokenResponse, error) {
-
-	if s.service == nil {
-		return nil, status.Error(codes.FailedPrecondition, ErrNilIAMService{}.Error())
-	}
-
-	if req.GetTenantId() == "" {
-		return nil, status.Error(codes.InvalidArgument, ErrMissingTenantID{}.Error())
-	}
-
-	if req.GetUserId() == "" {
-		return nil, status.Error(codes.InvalidArgument, ErrMissingUserID{}.Error())
-	}
-
-	iamReq := &IAMIssueTokenRequest{
-		TenantID:  req.GetTenantId(),
-		UserID:    req.GetUserId(),
-		Scopes:    req.GetScopes(),
-		ExpiresIn: req.GetExpiresIn(),
-	}
-
-	resp, err := s.service.IssueToken(ctx, iamReq)
-	if err != nil {
-		return nil, s.mapError("CreateToken", err)
-	}
-
-	return &platformv1.CreateIAMTokenResponse{
-		TokenId:      resp.TokenID,
-		AccessToken:  resp.AccessToken,
-		RefreshToken: resp.RefreshToken,
-		ExpiresIn:    resp.ExpiresIn,
-		TokenType:    resp.TokenType,
-		Timestamp:    timestamppb.Now(),
-	}, nil
-}
-
-// RevokeToken revokes an access token.
-func (s *IAMGRPCService) RevokeToken(
-	ctx context.Context,
-	req *platformv1.RevokeIAMTokenRequest,
-) (*platformv1.RevokeIAMTokenResponse, error) {
-
-	if s.service == nil {
-		return nil, status.Error(codes.FailedPrecondition, ErrNilIAMService{}.Error())
-	}
-
-	if req.GetTokenId() == "" && req.GetToken() == "" {
-		return nil, status.Error(codes.InvalidArgument, ErrMissingToken{}.Error())
-	}
-
-	iamReq := &IAMRevokeTokenRequest{
-		TokenID: req.GetTokenId(),
-		Token:   req.GetToken(),
-	}
-
-	if err := s.service.RevokeToken(ctx, iamReq); err != nil {
-		return nil, s.mapError("RevokeToken", err)
-	}
-
-	return &platformv1.RevokeIAMTokenResponse{
-		Status:    iamSuccessStatus("token revoked successfully"),
-		Timestamp: timestamppb.Now(),
-	}, nil
-}
-
-// VerifyToken verifies an access token.
-func (s *IAMGRPCService) VerifyToken(
-	ctx context.Context,
-	req *platformv1.VerifyIAMTokenRequest,
-) (*platformv1.VerifyIAMTokenResponse, error) {
-
-	if s.service == nil {
-		return nil, status.Error(codes.FailedPrecondition, ErrNilIAMService{}.Error())
-	}
-
-	if req.GetToken() == "" {
-		return nil, status.Error(codes.InvalidArgument, ErrMissingToken{}.Error())
-	}
-
-	iamReq := &IAMValidateTokenRequest{
-		Token: req.GetToken(),
-	}
-
-	resp, err := s.service.ValidateToken(ctx, iamReq)
-	if err != nil {
-		return nil, s.mapError("VerifyToken", err)
-	}
-
-	return &platformv1.VerifyIAMTokenResponse{
-		Valid:     resp.Valid,
-		UserId:    resp.UserID,
-		TenantId:  resp.TenantID,
-		Scopes:    resp.Scopes,
-		ExpiresAt: resp.ExpiresAt,
-		Timestamp: timestamppb.Now(),
 	}, nil
 }
 

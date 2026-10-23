@@ -20,9 +20,9 @@ registered on any root command.** Grepped repo-wide on 2026-08-18:
 So `platformctl cluster status` is **not a command a user can run**. Running it
 produces cobra's unknown-command error.
 
-This is recorded rather than papered over. The legacy
-[`cli-usage.md`](cli-usage.md) in this folder documents the command group as
-though it ships; it does not, and several of the flags it documents do not
+This is recorded rather than papered over. The deleted legacy
+`cli-usage.md` documented the command group as
+though it ships; it does not, and several of the flags it documented do not
 exist even in the unregistered code (§4).
 
 The rest of this file documents the command tree **as written**, because it is
@@ -52,7 +52,7 @@ client is nil. Each then wraps the gRPC client in
 **All five are client verbs** — they need a reachable `platformd`.
 `--transport embedded` runs the services in-process, but the embedded
 `ServiceRegistry.Cluster` field is not populated by the one place a registry is
-built (`cmd/platformctl/bindings_server.go`), so embedded does not reach the
+built (`pkg/api/daemon/embedded_host.go`), so embedded does not reach the
 cluster service either ([api.md](api.md) §3).
 
 ### Global flags
@@ -232,7 +232,7 @@ omits the timestamps.
 
 ## 4. Corrections to the legacy `cli-usage.md`
 
-[`cli-usage.md`](cli-usage.md) in this folder predates this convention and does
+The deleted legacy `cli-usage.md` predated this convention and did
 not match the code:
 
 | Legacy claim | Reality |
@@ -254,9 +254,10 @@ Where they disagree, the code is right and the legacy file is the defect.
 `ErrClusterStatusFailed`, `ErrClusterNodesFailed`, each carrying the underlying
 error.
 
-Because the daemon's cluster service is an `Unimplemented` stub
-([architecture.md](architecture.md) §3), every one of these verbs would fail
-against a shipped daemon even if the command tree were registered.
+Because no cluster servicer is wired into the daemon
+([architecture.md](architecture.md) §3), its cluster service answers
+`Unavailable`, so every one of these verbs would fail against a shipped daemon
+even if the command tree were registered.
 
 `--output json` is the form to parse; the `table` renderer is for humans and its
 columns are not a stable interface.

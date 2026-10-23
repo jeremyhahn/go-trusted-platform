@@ -249,5 +249,5 @@ are not a stable interface. Parse JSON.
 ## 9. Related
 
 - [architecture.md](architecture.md) · [engineering.md](engineering.md) · [api.md](api.md) · [user.md](user.md)
-- [`docs/cli/global-flags.md`](../cli/global-flags.md) — the persistent flag set
+- [`docs/daemon/cli.md`](../daemon/cli.md) §2 — the persistent flag set
 - [`docs/kms/cli.md`](../kms/cli.md) — the KMS verbs migration writes into

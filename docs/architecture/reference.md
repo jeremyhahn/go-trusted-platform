@@ -1,5 +1,8 @@
 # Reference Architecture
 
+> **Status: REFERENCE** · Last verified: 2026-10-13
+> The IoT reference architecture and the "fully configured" system requirements.
+
 This document discusses the reference architecture for the Trusted Platform.
 
 There are many different ways to deploy and use the Trusted Platform, for example, home, office or corporate authentication and network access, devops automation workflows, building secure, trusted web services, and running a public or private cloud.
@@ -31,7 +34,7 @@ The Trusted Platform is intended to run on [immutable infrastructure](https://ww
 
 The platform software includes tooling to build custom ISOs and container images with custom secure boot keys specific to the system being provisioned.
 
-The included ISO tooling builds a custom Linux kernel with [EFI Stub](https://docs.kernel.org/admin-guide/efi-stub.html) support and subsequently peforms a [Unified Kernel Image](https://github.com/uapi-group/specifications/blob/main/specs/unified_kernel_image.md) build. The resulting UKI is signed using the secure boot keys generated during the installation process, making it ready to boot directly from the system's [UEFI](../UEFI-SECURE-BOOT.md) firmware after the secure boot keys have been enrolled.
+The included ISO tooling builds a custom Linux kernel with [EFI Stub](https://docs.kernel.org/admin-guide/efi-stub.html) support and subsequently peforms a [Unified Kernel Image](https://github.com/uapi-group/specifications/blob/main/specs/unified_kernel_image.md) build. The resulting UKI is signed using the secure boot keys generated during the installation process, making it ready to boot directly from the system's [UEFI](../firmware/secure-boot.md) firmware after the secure boot keys have been enrolled.
 
 Upgrading the kernel requires building a new UKI. Following immutable infrastructure best practices, this can be accomplished by using the included tooling to build a new UKI, ISO, container image or whatever media best suits your immutable infrastructure platform and automated deployment architecture.
 

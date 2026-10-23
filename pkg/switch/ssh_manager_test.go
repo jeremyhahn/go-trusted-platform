@@ -19,6 +19,8 @@ import (
 	"log/slog"
 	"os"
 	"testing"
+
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/switchwire"
 )
 
 func testSSHConfig() *Config {
@@ -168,7 +170,7 @@ Trunking Native Mode VLAN: 1 (default)
 	if status.Port != "Eth1/3" {
 		t.Fatalf("expected port Eth1/3, got %s", status.Port)
 	}
-	if status.Mode != PortModeAccess {
+	if status.Mode != switchwire.PortModeAccess {
 		t.Fatalf("expected access mode, got %s", status.Mode)
 	}
 	if status.AccessVLAN != 100 {
@@ -192,7 +194,7 @@ Trunking VLANs Allowed: 10,20,30
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if status.Mode != PortModeTrunk {
+	if status.Mode != switchwire.PortModeTrunk {
 		t.Fatalf("expected trunk mode, got %s", status.Mode)
 	}
 	if len(status.TrunkVLANs) != 3 {
@@ -265,7 +267,7 @@ Eth1/3    --                 disabled     200        auto    auto    10/100/1000
 	if ports[0].Port != "Eth1/1" {
 		t.Fatalf("expected port Eth1/1, got %s", ports[0].Port)
 	}
-	if ports[0].Mode != PortModeTrunk {
+	if ports[0].Mode != switchwire.PortModeTrunk {
 		t.Fatalf("expected trunk mode, got %s", ports[0].Mode)
 	}
 	if !ports[0].Enabled {
@@ -279,7 +281,7 @@ Eth1/3    --                 disabled     200        auto    auto    10/100/1000
 	}
 
 	// Port 2: access vlan 100, connected
-	if ports[1].Mode != PortModeAccess {
+	if ports[1].Mode != switchwire.PortModeAccess {
 		t.Fatalf("expected access mode, got %s", ports[1].Mode)
 	}
 	if ports[1].AccessVLAN != 100 {
@@ -529,7 +531,7 @@ Trunking Native Mode VLAN: 1 (default)
 	if status.Port != "Eth1/3" {
 		t.Fatalf("expected port Eth1/3, got %s", status.Port)
 	}
-	if status.Mode != PortModeAccess {
+	if status.Mode != switchwire.PortModeAccess {
 		t.Fatalf("expected access mode, got %s", status.Mode)
 	}
 	if status.AccessVLAN != 100 {

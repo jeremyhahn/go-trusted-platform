@@ -18,6 +18,7 @@ import (
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -145,24 +146,24 @@ func NewProxyHandler(logger *logging.Logger, service ProxyServiceInterface) *Pro
 }
 
 // proxyQUICHandler handles one proxy sub-operation.
-type proxyQUICHandler func(h *ProxyHandler, ctx context.Context, payload []byte) *Response
+type proxyQUICHandler func(h *ProxyHandler, ctx context.Context, payload []byte) *quicwire.Response
 
 // proxyQUICDispatch routes proxy sub-opcodes with O(1) lookup.
 var proxyQUICDispatch = map[byte]proxyQUICHandler{
-	ProxySubRouteCreate: (*ProxyHandler).handleRouteCreate,
-	ProxySubRouteGet:    (*ProxyHandler).handleRouteGet,
-	ProxySubRouteUpdate: (*ProxyHandler).handleRouteUpdate,
-	ProxySubRouteDelete: (*ProxyHandler).handleRouteDelete,
-	ProxySubRouteList:   (*ProxyHandler).handleRouteList,
-	ProxySubPoolCreate:  (*ProxyHandler).handlePoolCreate,
-	ProxySubPoolGet:     (*ProxyHandler).handlePoolGet,
-	ProxySubPoolUpdate:  (*ProxyHandler).handlePoolUpdate,
-	ProxySubPoolDelete:  (*ProxyHandler).handlePoolDelete,
-	ProxySubPoolList:    (*ProxyHandler).handlePoolList,
-	ProxySubConfigGet:   (*ProxyHandler).handleConfigGet,
-	ProxySubStatusGet:   (*ProxyHandler).handleStatusGet,
-	ProxySubReload:      (*ProxyHandler).handleReload,
-	ProxySubZoneMatrix:  (*ProxyHandler).handleZoneMatrix,
+	quicwire.ProxySubRouteCreate: (*ProxyHandler).handleRouteCreate,
+	quicwire.ProxySubRouteGet:    (*ProxyHandler).handleRouteGet,
+	quicwire.ProxySubRouteUpdate: (*ProxyHandler).handleRouteUpdate,
+	quicwire.ProxySubRouteDelete: (*ProxyHandler).handleRouteDelete,
+	quicwire.ProxySubRouteList:   (*ProxyHandler).handleRouteList,
+	quicwire.ProxySubPoolCreate:  (*ProxyHandler).handlePoolCreate,
+	quicwire.ProxySubPoolGet:     (*ProxyHandler).handlePoolGet,
+	quicwire.ProxySubPoolUpdate:  (*ProxyHandler).handlePoolUpdate,
+	quicwire.ProxySubPoolDelete:  (*ProxyHandler).handlePoolDelete,
+	quicwire.ProxySubPoolList:    (*ProxyHandler).handlePoolList,
+	quicwire.ProxySubConfigGet:   (*ProxyHandler).handleConfigGet,
+	quicwire.ProxySubStatusGet:   (*ProxyHandler).handleStatusGet,
+	quicwire.ProxySubReload:      (*ProxyHandler).handleReload,
+	quicwire.ProxySubZoneMatrix:  (*ProxyHandler).handleZoneMatrix,
 }
 
 // IsProxySubOpcode reports whether sub belongs to the proxy sub-range under
@@ -176,47 +177,47 @@ func IsProxySubOpcode(sub byte) bool {
 
 // HandleRequest dispatches a proxy category request. The request Opcode
 // carries the sub-opcode (the category dispatcher strips payload[0]).
-func (h *ProxyHandler) HandleRequest(ctx context.Context, req *Request) *Response {
+func (h *ProxyHandler) HandleRequest(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if req == nil {
-		return h.errorResponse(StatusInvalidRequest, ErrProxyMissingSubOpcode{})
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrProxyMissingSubOpcode{})
 	}
 	fn, ok := proxyQUICDispatch[req.Opcode]
 	if !ok {
-		return h.errorResponse(StatusNotImplemented, ErrProxyUnknownSubOpcode{SubOpcode: req.Opcode})
+		return h.errorResponse(quicwire.StatusNotImplemented, ErrProxyUnknownSubOpcode{SubOpcode: req.Opcode})
 	}
 	if h.service == nil {
-		return h.errorResponse(StatusUnavailable, ErrProxyServiceNotConfigured{})
+		return h.errorResponse(quicwire.StatusUnavailable, ErrProxyServiceNotConfigured{})
 	}
 	return fn(h, ctx, req.Payload)
 }
 
 // errorResponse builds an error response with the given status byte.
-func (h *ProxyHandler) errorResponse(statusByte byte, err error) *Response {
-	return &Response{
+func (h *ProxyHandler) errorResponse(statusByte byte, err error) *quicwire.Response {
+	return &quicwire.Response{
 		Status:  statusByte,
 		Payload: []byte(err.Error()),
 	}
 }
 
-// proxyGRPCCodeToQUICStatus maps gRPC codes produced by the shared
-// ProxyGRPCService to QUIC status bytes.
-var proxyGRPCCodeToQUICStatus = map[codes.Code]byte{
-	codes.InvalidArgument:    StatusInvalidArgument,
-	codes.Unauthenticated:    StatusUnauthorized,
-	codes.PermissionDenied:   StatusPermissionDenied,
-	codes.NotFound:           StatusNotFound,
-	codes.AlreadyExists:      StatusAlreadyExists,
-	codes.FailedPrecondition: StatusInvalidRequest,
-	codes.Unavailable:        StatusUnavailable,
-	codes.Internal:           StatusInternalError,
+// grpcCodeToQUICStatus maps gRPC codes produced by the shared gRPC services
+// (ProxyGRPCService, the gateway service) to QUIC status bytes.
+var grpcCodeToQUICStatus = map[codes.Code]byte{
+	codes.InvalidArgument:    quicwire.StatusInvalidArgument,
+	codes.Unauthenticated:    quicwire.StatusUnauthorized,
+	codes.PermissionDenied:   quicwire.StatusPermissionDenied,
+	codes.NotFound:           quicwire.StatusNotFound,
+	codes.AlreadyExists:      quicwire.StatusAlreadyExists,
+	codes.FailedPrecondition: quicwire.StatusInvalidRequest,
+	codes.Unavailable:        quicwire.StatusUnavailable,
+	codes.Internal:           quicwire.StatusInternalError,
 }
 
 // proxyErrorResponse converts a gRPC status error from the shared
 // ProxyGRPCService into a QUIC error response, preserving the status-code
 // semantics established by the service's mapError table.
-func (h *ProxyHandler) proxyErrorResponse(op string, err error) *Response {
-	quicStatus := StatusInternalError
-	if mapped, ok := proxyGRPCCodeToQUICStatus[status.Code(err)]; ok {
+func (h *ProxyHandler) proxyErrorResponse(op string, err error) *quicwire.Response {
+	quicStatus := quicwire.StatusInternalError
+	if mapped, ok := grpcCodeToQUICStatus[status.Code(err)]; ok {
 		quicStatus = mapped
 	}
 	h.logger.Error(err, "proxy QUIC operation failed", "operation", op)
@@ -224,13 +225,13 @@ func (h *ProxyHandler) proxyErrorResponse(op string, err error) *Response {
 }
 
 // encodeResponse encodes v as a StatusOK QUIC response.
-func (h *ProxyHandler) encodeResponse(v interface{}) *Response {
-	payload, err := EncodePayload(v)
+func (h *ProxyHandler) encodeResponse(v interface{}) *quicwire.Response {
+	payload, err := quicwire.EncodePayload(v)
 	if err != nil {
-		return h.errorResponse(StatusInternalError, ErrProxyEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrProxyEncodingFailed{Cause: err})
 	}
-	return &Response{
-		Status:  StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
@@ -239,10 +240,10 @@ func (h *ProxyHandler) encodeResponse(v interface{}) *Response {
 // Sub-operation handlers
 // =============================================================================
 
-func (h *ProxyHandler) handleRouteCreate(ctx context.Context, payload []byte) *Response {
+func (h *ProxyHandler) handleRouteCreate(ctx context.Context, payload []byte) *quicwire.Response {
 	var req platformv1.CreateProxyRouteRequest
-	if err := DecodePayload(payload, &req); err != nil {
-		return h.errorResponse(StatusInvalidRequest, ErrProxyDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(payload, &req); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrProxyDecodingFailed{Cause: err})
 	}
 	resp, err := h.service.CreateRoute(ctx, &req)
 	if err != nil {
@@ -251,10 +252,10 @@ func (h *ProxyHandler) handleRouteCreate(ctx context.Context, payload []byte) *R
 	return h.encodeResponse(resp)
 }
 
-func (h *ProxyHandler) handleRouteGet(ctx context.Context, payload []byte) *Response {
+func (h *ProxyHandler) handleRouteGet(ctx context.Context, payload []byte) *quicwire.Response {
 	var req platformv1.GetProxyRouteRequest
-	if err := DecodePayload(payload, &req); err != nil {
-		return h.errorResponse(StatusInvalidRequest, ErrProxyDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(payload, &req); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrProxyDecodingFailed{Cause: err})
 	}
 	resp, err := h.service.GetRoute(ctx, &req)
 	if err != nil {
@@ -263,10 +264,10 @@ func (h *ProxyHandler) handleRouteGet(ctx context.Context, payload []byte) *Resp
 	return h.encodeResponse(resp)
 }
 
-func (h *ProxyHandler) handleRouteUpdate(ctx context.Context, payload []byte) *Response {
+func (h *ProxyHandler) handleRouteUpdate(ctx context.Context, payload []byte) *quicwire.Response {
 	var req platformv1.UpdateProxyRouteRequest
-	if err := DecodePayload(payload, &req); err != nil {
-		return h.errorResponse(StatusInvalidRequest, ErrProxyDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(payload, &req); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrProxyDecodingFailed{Cause: err})
 	}
 	resp, err := h.service.UpdateRoute(ctx, &req)
 	if err != nil {
@@ -275,10 +276,10 @@ func (h *ProxyHandler) handleRouteUpdate(ctx context.Context, payload []byte) *R
 	return h.encodeResponse(resp)
 }
 
-func (h *ProxyHandler) handleRouteDelete(ctx context.Context, payload []byte) *Response {
+func (h *ProxyHandler) handleRouteDelete(ctx context.Context, payload []byte) *quicwire.Response {
 	var req platformv1.DeleteProxyRouteRequest
-	if err := DecodePayload(payload, &req); err != nil {
-		return h.errorResponse(StatusInvalidRequest, ErrProxyDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(payload, &req); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrProxyDecodingFailed{Cause: err})
 	}
 	resp, err := h.service.DeleteRoute(ctx, &req)
 	if err != nil {
@@ -287,10 +288,10 @@ func (h *ProxyHandler) handleRouteDelete(ctx context.Context, payload []byte) *R
 	return h.encodeResponse(resp)
 }
 
-func (h *ProxyHandler) handleRouteList(ctx context.Context, payload []byte) *Response {
+func (h *ProxyHandler) handleRouteList(ctx context.Context, payload []byte) *quicwire.Response {
 	var req platformv1.ListProxyRoutesRequest
-	if err := DecodePayload(payload, &req); err != nil {
-		return h.errorResponse(StatusInvalidRequest, ErrProxyDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(payload, &req); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrProxyDecodingFailed{Cause: err})
 	}
 	resp, err := h.service.ListRoutes(ctx, &req)
 	if err != nil {
@@ -299,10 +300,10 @@ func (h *ProxyHandler) handleRouteList(ctx context.Context, payload []byte) *Res
 	return h.encodeResponse(resp)
 }
 
-func (h *ProxyHandler) handlePoolCreate(ctx context.Context, payload []byte) *Response {
+func (h *ProxyHandler) handlePoolCreate(ctx context.Context, payload []byte) *quicwire.Response {
 	var req platformv1.CreateProxyPoolRequest
-	if err := DecodePayload(payload, &req); err != nil {
-		return h.errorResponse(StatusInvalidRequest, ErrProxyDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(payload, &req); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrProxyDecodingFailed{Cause: err})
 	}
 	resp, err := h.service.CreatePool(ctx, &req)
 	if err != nil {
@@ -311,10 +312,10 @@ func (h *ProxyHandler) handlePoolCreate(ctx context.Context, payload []byte) *Re
 	return h.encodeResponse(resp)
 }
 
-func (h *ProxyHandler) handlePoolGet(ctx context.Context, payload []byte) *Response {
+func (h *ProxyHandler) handlePoolGet(ctx context.Context, payload []byte) *quicwire.Response {
 	var req platformv1.GetProxyPoolRequest
-	if err := DecodePayload(payload, &req); err != nil {
-		return h.errorResponse(StatusInvalidRequest, ErrProxyDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(payload, &req); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrProxyDecodingFailed{Cause: err})
 	}
 	resp, err := h.service.GetPool(ctx, &req)
 	if err != nil {
@@ -323,10 +324,10 @@ func (h *ProxyHandler) handlePoolGet(ctx context.Context, payload []byte) *Respo
 	return h.encodeResponse(resp)
 }
 
-func (h *ProxyHandler) handlePoolUpdate(ctx context.Context, payload []byte) *Response {
+func (h *ProxyHandler) handlePoolUpdate(ctx context.Context, payload []byte) *quicwire.Response {
 	var req platformv1.UpdateProxyPoolRequest
-	if err := DecodePayload(payload, &req); err != nil {
-		return h.errorResponse(StatusInvalidRequest, ErrProxyDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(payload, &req); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrProxyDecodingFailed{Cause: err})
 	}
 	resp, err := h.service.UpdatePool(ctx, &req)
 	if err != nil {
@@ -335,10 +336,10 @@ func (h *ProxyHandler) handlePoolUpdate(ctx context.Context, payload []byte) *Re
 	return h.encodeResponse(resp)
 }
 
-func (h *ProxyHandler) handlePoolDelete(ctx context.Context, payload []byte) *Response {
+func (h *ProxyHandler) handlePoolDelete(ctx context.Context, payload []byte) *quicwire.Response {
 	var req platformv1.DeleteProxyPoolRequest
-	if err := DecodePayload(payload, &req); err != nil {
-		return h.errorResponse(StatusInvalidRequest, ErrProxyDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(payload, &req); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrProxyDecodingFailed{Cause: err})
 	}
 	resp, err := h.service.DeletePool(ctx, &req)
 	if err != nil {
@@ -347,10 +348,10 @@ func (h *ProxyHandler) handlePoolDelete(ctx context.Context, payload []byte) *Re
 	return h.encodeResponse(resp)
 }
 
-func (h *ProxyHandler) handlePoolList(ctx context.Context, payload []byte) *Response {
+func (h *ProxyHandler) handlePoolList(ctx context.Context, payload []byte) *quicwire.Response {
 	var req platformv1.ListProxyPoolsRequest
-	if err := DecodePayload(payload, &req); err != nil {
-		return h.errorResponse(StatusInvalidRequest, ErrProxyDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(payload, &req); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrProxyDecodingFailed{Cause: err})
 	}
 	resp, err := h.service.ListPools(ctx, &req)
 	if err != nil {
@@ -359,10 +360,10 @@ func (h *ProxyHandler) handlePoolList(ctx context.Context, payload []byte) *Resp
 	return h.encodeResponse(resp)
 }
 
-func (h *ProxyHandler) handleConfigGet(ctx context.Context, payload []byte) *Response {
+func (h *ProxyHandler) handleConfigGet(ctx context.Context, payload []byte) *quicwire.Response {
 	var req platformv1.GetProxyConfigRequest
-	if err := DecodePayload(payload, &req); err != nil {
-		return h.errorResponse(StatusInvalidRequest, ErrProxyDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(payload, &req); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrProxyDecodingFailed{Cause: err})
 	}
 	resp, err := h.service.GetProxyConfig(ctx, &req)
 	if err != nil {
@@ -371,10 +372,10 @@ func (h *ProxyHandler) handleConfigGet(ctx context.Context, payload []byte) *Res
 	return h.encodeResponse(resp)
 }
 
-func (h *ProxyHandler) handleStatusGet(ctx context.Context, payload []byte) *Response {
+func (h *ProxyHandler) handleStatusGet(ctx context.Context, payload []byte) *quicwire.Response {
 	var req platformv1.GetProxyStatusRequest
-	if err := DecodePayload(payload, &req); err != nil {
-		return h.errorResponse(StatusInvalidRequest, ErrProxyDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(payload, &req); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrProxyDecodingFailed{Cause: err})
 	}
 	resp, err := h.service.GetProxyStatus(ctx, &req)
 	if err != nil {
@@ -383,10 +384,10 @@ func (h *ProxyHandler) handleStatusGet(ctx context.Context, payload []byte) *Res
 	return h.encodeResponse(resp)
 }
 
-func (h *ProxyHandler) handleReload(ctx context.Context, payload []byte) *Response {
+func (h *ProxyHandler) handleReload(ctx context.Context, payload []byte) *quicwire.Response {
 	var req platformv1.ReloadProxyConfigRequest
-	if err := DecodePayload(payload, &req); err != nil {
-		return h.errorResponse(StatusInvalidRequest, ErrProxyDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(payload, &req); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrProxyDecodingFailed{Cause: err})
 	}
 	resp, err := h.service.ReloadProxyConfig(ctx, &req)
 	if err != nil {
@@ -395,10 +396,10 @@ func (h *ProxyHandler) handleReload(ctx context.Context, payload []byte) *Respon
 	return h.encodeResponse(resp)
 }
 
-func (h *ProxyHandler) handleZoneMatrix(ctx context.Context, payload []byte) *Response {
+func (h *ProxyHandler) handleZoneMatrix(ctx context.Context, payload []byte) *quicwire.Response {
 	var req platformv1.GetProxyZoneMatrixRequest
-	if err := DecodePayload(payload, &req); err != nil {
-		return h.errorResponse(StatusInvalidRequest, ErrProxyDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(payload, &req); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrProxyDecodingFailed{Cause: err})
 	}
 	resp, err := h.service.GetZoneMatrix(ctx, &req)
 	if err != nil {

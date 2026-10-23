@@ -23,9 +23,10 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
 )
 
 // =============================================================================
@@ -141,18 +142,11 @@ func (c *CLIAdapter) createTestConfig() error {
 	}
 	c.configDir = tmpDir
 
-	configPath := filepath.Join(tmpDir, "config.yaml")
-
-	configContent := fmt.Sprintf(`current_context: integration-test
-contexts:
-  - name: integration-test
-    type: local
-    local:
-      socket_path: %s
-      grpc_addr: %s
-`, c.socketPath, c.grpcEndpoint)
-
-	if writeErr := os.WriteFile(configPath, []byte(configContent), 0600); writeErr != nil {
+	// The kms verbs the CA suite runs (`kms key csr`) open the CLI's
+	// quicbaas client. The shared harness config points it at platformd's
+	// gRPC listener with the harness mTLS files (docs/kms/cli.md §3).
+	configPath, writeErr := helpers.WriteLocalCLIConfig(tmpDir, c.socketPath, c.grpcEndpoint)
+	if writeErr != nil {
 		return ErrCLIConfigCreationFailed{Cause: writeErr}
 	}
 
@@ -439,14 +433,47 @@ func (c *CLIAdapter) IssueCertificate(ctx context.Context, opts IssueCertificate
 	if err != nil {
 		return nil, ErrCallFailed{Protocol: "CLI", Method: "ca issue", Err: err}
 	}
+	return parseCLIIssueResult(output, "ca issue")
+}
 
-	// CLI prints *casvc.IssueCertificateResult: {certificate: {...}}
+// SignCSR certifies opts.CSRPEM through 'ca sign-csr', which reads the CSR
+// from a file.
+func (c *CLIAdapter) SignCSR(ctx context.Context, opts SignCSROptions) (*IssueCertificateResult, error) {
+	csrFile, err := os.CreateTemp("", "ca-sign-csr-*.csr")
+	if err != nil {
+		return nil, ErrCallFailed{Protocol: "CLI", Method: "ca sign-csr", Err: err}
+	}
+	defer os.Remove(csrFile.Name())
+
+	if _, err := csrFile.WriteString(opts.CSRPEM); err != nil {
+		csrFile.Close()
+		return nil, ErrCallFailed{Protocol: "CLI", Method: "ca sign-csr", Err: err}
+	}
+	if err := csrFile.Close(); err != nil {
+		return nil, ErrCallFailed{Protocol: "CLI", Method: "ca sign-csr", Err: err}
+	}
+
+	args := []string{"ca", "sign-csr", csrFile.Name(), "--output", "json"}
+	if opts.ValidDays > 0 {
+		args = append(args, "--valid-days", fmt.Sprintf("%d", opts.ValidDays))
+	}
+
+	output, err := c.runCommand(ctx, args...)
+	if err != nil {
+		return nil, ErrCallFailed{Protocol: "CLI", Method: "ca sign-csr", Err: err}
+	}
+	return parseCLIIssueResult(output, "ca sign-csr")
+}
+
+// parseCLIIssueResult decodes the *casvc.IssueCertificateResult that both
+// 'ca issue' and 'ca sign-csr' print: {certificate: {...}}.
+func parseCLIIssueResult(output []byte, method string) (*IssueCertificateResult, error) {
 	var resp struct {
 		Certificate *cliCertificate `json:"certificate,omitempty"`
 	}
 
 	if err := json.Unmarshal(output, &resp); err != nil {
-		return nil, ErrCallFailed{Protocol: "CLI", Method: "ca issue", Err: err}
+		return nil, ErrCallFailed{Protocol: "CLI", Method: method, Err: err}
 	}
 
 	result := &IssueCertificateResult{}
@@ -799,6 +826,10 @@ func (c *CLIAdapter) GetCRL(ctx context.Context, opts GetCRLOptions) (*GetCRLRes
 			Reason:         parseRevocationReasonString(entry.Reason),
 			RevocationTime: entry.RevocationTime,
 		})
+	}
+
+	if err := result.setIssuerFromData("CLI"); err != nil {
+		return nil, err
 	}
 
 	return result, nil

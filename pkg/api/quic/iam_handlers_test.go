@@ -24,13 +24,14 @@ import (
 
 	"github.com/jeremyhahn/go-codec"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 func init() {
 	// Set the default codec to MsgPack for encoding/decoding payloads
-	_ = SetDefaultCodecType(codec.MsgPack)
+	_ = quicwire.SetDefaultCodecType(codec.MsgPack)
 }
 
 // =============================================================================
@@ -42,7 +43,6 @@ type mockIAMService struct {
 	users  map[string]*IAMUserInfo
 	roles  map[string]*IAMRoleInfo
 	groups map[string]*IAMGroupInfo
-	tokens map[string]*mockToken
 
 	createUserError        error
 	getUserError           error
@@ -65,18 +65,6 @@ type mockIAMService struct {
 	removeGroupMemberError error
 	checkPermissionError   error
 	checkPermissionResult  *IAMCheckPermissionResponse
-	createTokenError       error
-	verifyTokenError       error
-	verifyTokenResult      *IAMTokenVerifyResponse
-	revokeTokenError       error
-}
-
-type mockToken struct {
-	tokenID  string
-	userID   string
-	tenantID string
-	scopes   []string
-	expires  time.Time
 }
 
 func newMockIAMService() *mockIAMService {
@@ -84,7 +72,6 @@ func newMockIAMService() *mockIAMService {
 		users:  make(map[string]*IAMUserInfo),
 		roles:  make(map[string]*IAMRoleInfo),
 		groups: make(map[string]*IAMGroupInfo),
-		tokens: make(map[string]*mockToken),
 	}
 }
 
@@ -404,51 +391,6 @@ func (m *mockIAMService) CheckPermission(ctx context.Context, req *IAMCheckPermi
 	}, nil
 }
 
-func (m *mockIAMService) CreateToken(ctx context.Context, tenantID, userID string, req *IAMCreateTokenRequest) (*IAMTokenResponse, error) {
-	if m.createTokenError != nil {
-		return nil, m.createTokenError
-	}
-	tokenID := "token-" + userID
-	m.tokens[tokenID] = &mockToken{
-		tokenID:  tokenID,
-		userID:   userID,
-		tenantID: tenantID,
-		scopes:   req.Scopes,
-		expires:  time.Now().Add(time.Duration(req.ExpiresIn) * time.Second),
-	}
-	return &IAMTokenResponse{
-		TokenID:      tokenID,
-		AccessToken:  "access-" + tokenID,
-		RefreshToken: "refresh-" + tokenID,
-		ExpiresIn:    req.ExpiresIn,
-		TokenType:    "Bearer",
-	}, nil
-}
-
-func (m *mockIAMService) VerifyToken(ctx context.Context, token string) (*IAMTokenVerifyResponse, error) {
-	if m.verifyTokenError != nil {
-		return nil, m.verifyTokenError
-	}
-	if m.verifyTokenResult != nil {
-		return m.verifyTokenResult, nil
-	}
-	return &IAMTokenVerifyResponse{
-		Valid:     true,
-		UserID:    "user-123",
-		TenantID:  "tenant-123",
-		Scopes:    []string{"read", "write"},
-		ExpiresAt: time.Now().Add(time.Hour).Unix(),
-	}, nil
-}
-
-func (m *mockIAMService) RevokeToken(ctx context.Context, tokenID string) error {
-	if m.revokeTokenError != nil {
-		return m.revokeTokenError
-	}
-	delete(m.tokens, tokenID)
-	return nil
-}
-
 // =============================================================================
 // Test Helpers
 // =============================================================================
@@ -542,19 +484,19 @@ func TestIAMHandleRequest(t *testing.T) {
 
 		resp := handler.HandleRequest(context.Background(), nil)
 
-		assert.Equal(t, StatusInvalidRequest, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidRequest, resp.Status)
 	})
 
 	t.Run("returns error for unknown opcode", func(t *testing.T) {
 		handler, _ := createTestIAMHandler()
 
-		req := &Request{
+		req := &quicwire.Request{
 			Opcode: 0x00, // Unknown opcode
 		}
 
 		resp := handler.HandleRequest(context.Background(), req)
 
-		assert.Equal(t, StatusInvalidRequest, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidRequest, resp.Status)
 		assert.Contains(t, string(resp.Payload), "unknown IAM operation")
 	})
 }
@@ -576,20 +518,20 @@ func TestHandleUserCreate(t *testing.T) {
 			Name:     "Test User",
 		}
 
-		payload, err := EncodePayload(createReq)
+		payload, err := quicwire.EncodePayload(createReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpIAMUserCreate,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpIAMUserCreate,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 		var userResp IAMUserResponse
-		err = DecodePayload(resp.Payload, &userResp)
+		err = quicwire.DecodePayload(resp.Payload, &userResp)
 		require.NoError(t, err)
 
 		assert.NotNil(t, userResp.User)
@@ -606,17 +548,17 @@ func TestHandleUserCreate(t *testing.T) {
 			Email:    "test@example.com",
 		}
 
-		payload, err := EncodePayload(createReq)
+		payload, err := quicwire.EncodePayload(createReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpIAMUserCreate,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpIAMUserCreate,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 
 	t.Run("returns error for missing tenant ID", func(t *testing.T) {
@@ -626,17 +568,17 @@ func TestHandleUserCreate(t *testing.T) {
 			Email: "test@example.com",
 		}
 
-		payload, err := EncodePayload(createReq)
+		payload, err := quicwire.EncodePayload(createReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpIAMUserCreate,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpIAMUserCreate,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 
 	t.Run("returns error for missing email", func(t *testing.T) {
@@ -646,30 +588,30 @@ func TestHandleUserCreate(t *testing.T) {
 			TenantID: "tenant-1",
 		}
 
-		payload, err := EncodePayload(createReq)
+		payload, err := quicwire.EncodePayload(createReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpIAMUserCreate,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpIAMUserCreate,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 
 	t.Run("returns error for invalid payload", func(t *testing.T) {
 		handler, _ := createTestIAMHandler()
 
-		req := &Request{
-			Opcode:  OpIAMUserCreate,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpIAMUserCreate,
 			Payload: []byte("invalid payload"),
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidRequest, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidRequest, resp.Status)
 	})
 
 	t.Run("returns error when create fails", func(t *testing.T) {
@@ -681,17 +623,17 @@ func TestHandleUserCreate(t *testing.T) {
 			Email:    "test@example.com",
 		}
 
-		payload, err := EncodePayload(createReq)
+		payload, err := quicwire.EncodePayload(createReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpIAMUserCreate,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpIAMUserCreate,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusAlreadyExists, resp.Status)
+		assert.Equal(t, quicwire.StatusAlreadyExists, resp.Status)
 	})
 }
 
@@ -711,20 +653,20 @@ func TestHandleUserGet(t *testing.T) {
 			UserID:   "user-1",
 		}
 
-		payload, err := EncodePayload(getReq)
+		payload, err := quicwire.EncodePayload(getReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpIAMUserGet,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpIAMUserGet,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 		var userResp IAMUserResponse
-		err = DecodePayload(resp.Payload, &userResp)
+		err = quicwire.DecodePayload(resp.Payload, &userResp)
 		require.NoError(t, err)
 
 		assert.NotNil(t, userResp.User)
@@ -739,17 +681,17 @@ func TestHandleUserGet(t *testing.T) {
 			UserID:   "user-1",
 		}
 
-		payload, err := EncodePayload(getReq)
+		payload, err := quicwire.EncodePayload(getReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpIAMUserGet,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpIAMUserGet,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 
 	t.Run("returns error for missing tenant ID", func(t *testing.T) {
@@ -759,17 +701,17 @@ func TestHandleUserGet(t *testing.T) {
 			UserID: "user-1",
 		}
 
-		payload, err := EncodePayload(getReq)
+		payload, err := quicwire.EncodePayload(getReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpIAMUserGet,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpIAMUserGet,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 
 	t.Run("returns error for missing user ID", func(t *testing.T) {
@@ -779,17 +721,17 @@ func TestHandleUserGet(t *testing.T) {
 			TenantID: "tenant-1",
 		}
 
-		payload, err := EncodePayload(getReq)
+		payload, err := quicwire.EncodePayload(getReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpIAMUserGet,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpIAMUserGet,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 
 	t.Run("returns error for user not found", func(t *testing.T) {
@@ -800,17 +742,17 @@ func TestHandleUserGet(t *testing.T) {
 			UserID:   "nonexistent",
 		}
 
-		payload, err := EncodePayload(getReq)
+		payload, err := quicwire.EncodePayload(getReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpIAMUserGet,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpIAMUserGet,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusNotFound, resp.Status)
+		assert.Equal(t, quicwire.StatusNotFound, resp.Status)
 	})
 }
 
@@ -831,20 +773,20 @@ func TestHandleUserList(t *testing.T) {
 			Limit:    10,
 		}
 
-		payload, err := EncodePayload(listReq)
+		payload, err := quicwire.EncodePayload(listReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpIAMUserList,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpIAMUserList,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 		var listResp IAMUserListResponse
-		err = DecodePayload(resp.Payload, &listResp)
+		err = quicwire.DecodePayload(resp.Payload, &listResp)
 		require.NoError(t, err)
 
 		assert.Equal(t, int64(2), listResp.Total)
@@ -858,20 +800,20 @@ func TestHandleUserList(t *testing.T) {
 			TenantID: "tenant-1",
 		}
 
-		payload, err := EncodePayload(listReq)
+		payload, err := quicwire.EncodePayload(listReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpIAMUserList,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpIAMUserList,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 		var listResp IAMUserListResponse
-		err = DecodePayload(resp.Payload, &listResp)
+		err = quicwire.DecodePayload(resp.Payload, &listResp)
 		require.NoError(t, err)
 
 		assert.Equal(t, iamDefaultLimit, listResp.Limit)
@@ -885,20 +827,20 @@ func TestHandleUserList(t *testing.T) {
 			Limit:    5000, // exceeds max
 		}
 
-		payload, err := EncodePayload(listReq)
+		payload, err := quicwire.EncodePayload(listReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpIAMUserList,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpIAMUserList,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 		var listResp IAMUserListResponse
-		err = DecodePayload(resp.Payload, &listResp)
+		err = quicwire.DecodePayload(resp.Payload, &listResp)
 		require.NoError(t, err)
 
 		assert.Equal(t, iamMaxLimit, listResp.Limit)
@@ -911,17 +853,17 @@ func TestHandleUserList(t *testing.T) {
 			TenantID: "tenant-1",
 		}
 
-		payload, err := EncodePayload(listReq)
+		payload, err := quicwire.EncodePayload(listReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpIAMUserList,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpIAMUserList,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 
 	t.Run("returns error for missing tenant ID", func(t *testing.T) {
@@ -929,17 +871,17 @@ func TestHandleUserList(t *testing.T) {
 
 		listReq := &IAMListRequest{}
 
-		payload, err := EncodePayload(listReq)
+		payload, err := quicwire.EncodePayload(listReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpIAMUserList,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpIAMUserList,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 
 	t.Run("returns error when list fails", func(t *testing.T) {
@@ -950,17 +892,17 @@ func TestHandleUserList(t *testing.T) {
 			TenantID: "tenant-1",
 		}
 
-		payload, err := EncodePayload(listReq)
+		payload, err := quicwire.EncodePayload(listReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpIAMUserList,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpIAMUserList,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInternalError, resp.Status)
+		assert.Equal(t, quicwire.StatusInternalError, resp.Status)
 	})
 }
 
@@ -981,20 +923,20 @@ func TestHandleUserUpdate(t *testing.T) {
 			Name:     "Updated Name",
 		}
 
-		payload, err := EncodePayload(updateReq)
+		payload, err := quicwire.EncodePayload(updateReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpIAMUserUpdate,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpIAMUserUpdate,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 		var userResp IAMUserResponse
-		err = DecodePayload(resp.Payload, &userResp)
+		err = quicwire.DecodePayload(resp.Payload, &userResp)
 		require.NoError(t, err)
 
 		assert.Equal(t, "Updated Name", userResp.User.Name)
@@ -1008,17 +950,17 @@ func TestHandleUserUpdate(t *testing.T) {
 			UserID:   "user-1",
 		}
 
-		payload, err := EncodePayload(updateReq)
+		payload, err := quicwire.EncodePayload(updateReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpIAMUserUpdate,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpIAMUserUpdate,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 
 	t.Run("returns error for missing tenant ID", func(t *testing.T) {
@@ -1028,17 +970,17 @@ func TestHandleUserUpdate(t *testing.T) {
 			UserID: "user-1",
 		}
 
-		payload, err := EncodePayload(updateReq)
+		payload, err := quicwire.EncodePayload(updateReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpIAMUserUpdate,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpIAMUserUpdate,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 
 	t.Run("returns error for missing user ID", func(t *testing.T) {
@@ -1048,17 +990,17 @@ func TestHandleUserUpdate(t *testing.T) {
 			TenantID: "tenant-1",
 		}
 
-		payload, err := EncodePayload(updateReq)
+		payload, err := quicwire.EncodePayload(updateReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpIAMUserUpdate,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpIAMUserUpdate,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 
 	t.Run("returns error for user not found", func(t *testing.T) {
@@ -1069,17 +1011,17 @@ func TestHandleUserUpdate(t *testing.T) {
 			UserID:   "nonexistent",
 		}
 
-		payload, err := EncodePayload(updateReq)
+		payload, err := quicwire.EncodePayload(updateReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpIAMUserUpdate,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpIAMUserUpdate,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusNotFound, resp.Status)
+		assert.Equal(t, quicwire.StatusNotFound, resp.Status)
 	})
 }
 
@@ -1099,20 +1041,20 @@ func TestHandleUserDelete(t *testing.T) {
 			UserID:   "user-1",
 		}
 
-		payload, err := EncodePayload(deleteReq)
+		payload, err := quicwire.EncodePayload(deleteReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpIAMUserDelete,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpIAMUserDelete,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 		var successResp IAMSuccessResponse
-		err = DecodePayload(resp.Payload, &successResp)
+		err = quicwire.DecodePayload(resp.Payload, &successResp)
 		require.NoError(t, err)
 
 		assert.True(t, successResp.Success)
@@ -1126,17 +1068,17 @@ func TestHandleUserDelete(t *testing.T) {
 			UserID:   "user-1",
 		}
 
-		payload, err := EncodePayload(deleteReq)
+		payload, err := quicwire.EncodePayload(deleteReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpIAMUserDelete,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpIAMUserDelete,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 
 	t.Run("returns error for missing tenant ID", func(t *testing.T) {
@@ -1146,17 +1088,17 @@ func TestHandleUserDelete(t *testing.T) {
 			UserID: "user-1",
 		}
 
-		payload, err := EncodePayload(deleteReq)
+		payload, err := quicwire.EncodePayload(deleteReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpIAMUserDelete,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpIAMUserDelete,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 
 	t.Run("returns error for missing user ID", func(t *testing.T) {
@@ -1166,17 +1108,17 @@ func TestHandleUserDelete(t *testing.T) {
 			TenantID: "tenant-1",
 		}
 
-		payload, err := EncodePayload(deleteReq)
+		payload, err := quicwire.EncodePayload(deleteReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpIAMUserDelete,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpIAMUserDelete,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 
 	t.Run("returns error for user not found", func(t *testing.T) {
@@ -1187,17 +1129,17 @@ func TestHandleUserDelete(t *testing.T) {
 			UserID:   "nonexistent",
 		}
 
-		payload, err := EncodePayload(deleteReq)
+		payload, err := quicwire.EncodePayload(deleteReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpIAMUserDelete,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpIAMUserDelete,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusNotFound, resp.Status)
+		assert.Equal(t, quicwire.StatusNotFound, resp.Status)
 	})
 }
 
@@ -1218,20 +1160,20 @@ func TestHandleRoleCreate(t *testing.T) {
 			Permissions: []string{"read", "write", "delete"},
 		}
 
-		payload, err := EncodePayload(createReq)
+		payload, err := quicwire.EncodePayload(createReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpIAMRoleCreate,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpIAMRoleCreate,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 		var roleResp IAMRoleResponse
-		err = DecodePayload(resp.Payload, &roleResp)
+		err = quicwire.DecodePayload(resp.Payload, &roleResp)
 		require.NoError(t, err)
 
 		assert.NotNil(t, roleResp.Role)
@@ -1246,17 +1188,17 @@ func TestHandleRoleCreate(t *testing.T) {
 			Name:     "admin",
 		}
 
-		payload, err := EncodePayload(createReq)
+		payload, err := quicwire.EncodePayload(createReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpIAMRoleCreate,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpIAMRoleCreate,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 
 	t.Run("returns error for missing tenant ID", func(t *testing.T) {
@@ -1266,17 +1208,17 @@ func TestHandleRoleCreate(t *testing.T) {
 			Name: "admin",
 		}
 
-		payload, err := EncodePayload(createReq)
+		payload, err := quicwire.EncodePayload(createReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpIAMRoleCreate,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpIAMRoleCreate,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 
 	t.Run("returns error for missing name", func(t *testing.T) {
@@ -1286,17 +1228,17 @@ func TestHandleRoleCreate(t *testing.T) {
 			TenantID: "tenant-1",
 		}
 
-		payload, err := EncodePayload(createReq)
+		payload, err := quicwire.EncodePayload(createReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpIAMRoleCreate,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpIAMRoleCreate,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 }
 
@@ -1316,20 +1258,20 @@ func TestHandleRoleGet(t *testing.T) {
 			RoleID:   "role-1",
 		}
 
-		payload, err := EncodePayload(getReq)
+		payload, err := quicwire.EncodePayload(getReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpIAMRoleGet,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpIAMRoleGet,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 		var roleResp IAMRoleResponse
-		err = DecodePayload(resp.Payload, &roleResp)
+		err = quicwire.DecodePayload(resp.Payload, &roleResp)
 		require.NoError(t, err)
 
 		assert.NotNil(t, roleResp.Role)
@@ -1344,17 +1286,17 @@ func TestHandleRoleGet(t *testing.T) {
 			RoleID:   "role-1",
 		}
 
-		payload, err := EncodePayload(getReq)
+		payload, err := quicwire.EncodePayload(getReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpIAMRoleGet,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpIAMRoleGet,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 
 	t.Run("returns error for missing tenant ID", func(t *testing.T) {
@@ -1364,17 +1306,17 @@ func TestHandleRoleGet(t *testing.T) {
 			RoleID: "role-1",
 		}
 
-		payload, err := EncodePayload(getReq)
+		payload, err := quicwire.EncodePayload(getReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpIAMRoleGet,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpIAMRoleGet,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 
 	t.Run("returns error for missing role ID", func(t *testing.T) {
@@ -1384,17 +1326,17 @@ func TestHandleRoleGet(t *testing.T) {
 			TenantID: "tenant-1",
 		}
 
-		payload, err := EncodePayload(getReq)
+		payload, err := quicwire.EncodePayload(getReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpIAMRoleGet,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpIAMRoleGet,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 
 	t.Run("returns error for role not found", func(t *testing.T) {
@@ -1405,17 +1347,17 @@ func TestHandleRoleGet(t *testing.T) {
 			RoleID:   "nonexistent",
 		}
 
-		payload, err := EncodePayload(getReq)
+		payload, err := quicwire.EncodePayload(getReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpIAMRoleGet,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpIAMRoleGet,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusNotFound, resp.Status)
+		assert.Equal(t, quicwire.StatusNotFound, resp.Status)
 	})
 }
 
@@ -1436,20 +1378,20 @@ func TestHandleRoleList(t *testing.T) {
 			Limit:    10,
 		}
 
-		payload, err := EncodePayload(listReq)
+		payload, err := quicwire.EncodePayload(listReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpIAMRoleList,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpIAMRoleList,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 		var listResp IAMRoleListResponse
-		err = DecodePayload(resp.Payload, &listResp)
+		err = quicwire.DecodePayload(resp.Payload, &listResp)
 		require.NoError(t, err)
 
 		assert.Equal(t, int64(2), listResp.Total)
@@ -1463,17 +1405,17 @@ func TestHandleRoleList(t *testing.T) {
 			TenantID: "tenant-1",
 		}
 
-		payload, err := EncodePayload(listReq)
+		payload, err := quicwire.EncodePayload(listReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpIAMRoleList,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpIAMRoleList,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 
 	t.Run("returns error for missing tenant ID", func(t *testing.T) {
@@ -1481,17 +1423,17 @@ func TestHandleRoleList(t *testing.T) {
 
 		listReq := &IAMListRequest{}
 
-		payload, err := EncodePayload(listReq)
+		payload, err := quicwire.EncodePayload(listReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpIAMRoleList,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpIAMRoleList,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 }
 
@@ -1513,20 +1455,20 @@ func TestHandleRoleAssign(t *testing.T) {
 			RoleID:   "role-1",
 		}
 
-		payload, err := EncodePayload(assignReq)
+		payload, err := quicwire.EncodePayload(assignReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpIAMRoleAssign,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpIAMRoleAssign,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 		var successResp IAMSuccessResponse
-		err = DecodePayload(resp.Payload, &successResp)
+		err = quicwire.DecodePayload(resp.Payload, &successResp)
 		require.NoError(t, err)
 
 		assert.True(t, successResp.Success)
@@ -1541,17 +1483,17 @@ func TestHandleRoleAssign(t *testing.T) {
 			RoleID:   "role-1",
 		}
 
-		payload, err := EncodePayload(assignReq)
+		payload, err := quicwire.EncodePayload(assignReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpIAMRoleAssign,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpIAMRoleAssign,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 
 	t.Run("returns error for missing tenant ID", func(t *testing.T) {
@@ -1562,17 +1504,17 @@ func TestHandleRoleAssign(t *testing.T) {
 			RoleID: "role-1",
 		}
 
-		payload, err := EncodePayload(assignReq)
+		payload, err := quicwire.EncodePayload(assignReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpIAMRoleAssign,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpIAMRoleAssign,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 
 	t.Run("returns error for missing user ID", func(t *testing.T) {
@@ -1583,17 +1525,17 @@ func TestHandleRoleAssign(t *testing.T) {
 			RoleID:   "role-1",
 		}
 
-		payload, err := EncodePayload(assignReq)
+		payload, err := quicwire.EncodePayload(assignReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpIAMRoleAssign,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpIAMRoleAssign,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 
 	t.Run("returns error for missing role ID", func(t *testing.T) {
@@ -1604,17 +1546,17 @@ func TestHandleRoleAssign(t *testing.T) {
 			UserID:   "user-1",
 		}
 
-		payload, err := EncodePayload(assignReq)
+		payload, err := quicwire.EncodePayload(assignReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpIAMRoleAssign,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpIAMRoleAssign,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 }
 
@@ -1637,20 +1579,20 @@ func TestHandleRoleRevoke(t *testing.T) {
 			RoleID:   "role-1",
 		}
 
-		payload, err := EncodePayload(revokeReq)
+		payload, err := quicwire.EncodePayload(revokeReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpIAMRoleRevoke,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpIAMRoleRevoke,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 		var successResp IAMSuccessResponse
-		err = DecodePayload(resp.Payload, &successResp)
+		err = quicwire.DecodePayload(resp.Payload, &successResp)
 		require.NoError(t, err)
 
 		assert.True(t, successResp.Success)
@@ -1665,17 +1607,17 @@ func TestHandleRoleRevoke(t *testing.T) {
 			RoleID:   "role-1",
 		}
 
-		payload, err := EncodePayload(revokeReq)
+		payload, err := quicwire.EncodePayload(revokeReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpIAMRoleRevoke,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpIAMRoleRevoke,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 
 	t.Run("returns error for missing tenant ID", func(t *testing.T) {
@@ -1686,17 +1628,17 @@ func TestHandleRoleRevoke(t *testing.T) {
 			RoleID: "role-1",
 		}
 
-		payload, err := EncodePayload(revokeReq)
+		payload, err := quicwire.EncodePayload(revokeReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpIAMRoleRevoke,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpIAMRoleRevoke,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 }
 
@@ -1716,20 +1658,20 @@ func TestHandleRoleDelete(t *testing.T) {
 			RoleID:   "role-1",
 		}
 
-		payload, err := EncodePayload(deleteReq)
+		payload, err := quicwire.EncodePayload(deleteReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpIAMRoleDelete,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpIAMRoleDelete,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 		var successResp IAMSuccessResponse
-		err = DecodePayload(resp.Payload, &successResp)
+		err = quicwire.DecodePayload(resp.Payload, &successResp)
 		require.NoError(t, err)
 
 		assert.True(t, successResp.Success)
@@ -1743,17 +1685,17 @@ func TestHandleRoleDelete(t *testing.T) {
 			RoleID:   "role-1",
 		}
 
-		payload, err := EncodePayload(deleteReq)
+		payload, err := quicwire.EncodePayload(deleteReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpIAMRoleDelete,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpIAMRoleDelete,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 
 	t.Run("returns error for missing tenant ID", func(t *testing.T) {
@@ -1763,17 +1705,17 @@ func TestHandleRoleDelete(t *testing.T) {
 			RoleID: "role-1",
 		}
 
-		payload, err := EncodePayload(deleteReq)
+		payload, err := quicwire.EncodePayload(deleteReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpIAMRoleDelete,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpIAMRoleDelete,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 
 	t.Run("returns error for missing role ID", func(t *testing.T) {
@@ -1783,17 +1725,17 @@ func TestHandleRoleDelete(t *testing.T) {
 			TenantID: "tenant-1",
 		}
 
-		payload, err := EncodePayload(deleteReq)
+		payload, err := quicwire.EncodePayload(deleteReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpIAMRoleDelete,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpIAMRoleDelete,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 
 	t.Run("returns error for role not found", func(t *testing.T) {
@@ -1804,17 +1746,17 @@ func TestHandleRoleDelete(t *testing.T) {
 			RoleID:   "nonexistent",
 		}
 
-		payload, err := EncodePayload(deleteReq)
+		payload, err := quicwire.EncodePayload(deleteReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpIAMRoleDelete,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpIAMRoleDelete,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusNotFound, resp.Status)
+		assert.Equal(t, quicwire.StatusNotFound, resp.Status)
 	})
 }
 
@@ -1834,20 +1776,20 @@ func TestHandleGroupCreate(t *testing.T) {
 			Description: "Development team",
 		}
 
-		payload, err := EncodePayload(createReq)
+		payload, err := quicwire.EncodePayload(createReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpIAMGroupCreate,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpIAMGroupCreate,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 		var groupResp IAMGroupResponse
-		err = DecodePayload(resp.Payload, &groupResp)
+		err = quicwire.DecodePayload(resp.Payload, &groupResp)
 		require.NoError(t, err)
 
 		assert.NotNil(t, groupResp.Group)
@@ -1862,17 +1804,17 @@ func TestHandleGroupCreate(t *testing.T) {
 			Name:     "developers",
 		}
 
-		payload, err := EncodePayload(createReq)
+		payload, err := quicwire.EncodePayload(createReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpIAMGroupCreate,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpIAMGroupCreate,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 
 	t.Run("returns error for missing tenant ID", func(t *testing.T) {
@@ -1882,17 +1824,17 @@ func TestHandleGroupCreate(t *testing.T) {
 			Name: "developers",
 		}
 
-		payload, err := EncodePayload(createReq)
+		payload, err := quicwire.EncodePayload(createReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpIAMGroupCreate,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpIAMGroupCreate,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 
 	t.Run("returns error for missing name", func(t *testing.T) {
@@ -1902,17 +1844,17 @@ func TestHandleGroupCreate(t *testing.T) {
 			TenantID: "tenant-1",
 		}
 
-		payload, err := EncodePayload(createReq)
+		payload, err := quicwire.EncodePayload(createReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpIAMGroupCreate,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpIAMGroupCreate,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 }
 
@@ -1932,20 +1874,20 @@ func TestHandleGroupGet(t *testing.T) {
 			GroupID:  "group-1",
 		}
 
-		payload, err := EncodePayload(getReq)
+		payload, err := quicwire.EncodePayload(getReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpIAMGroupGet,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpIAMGroupGet,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 		var groupResp IAMGroupResponse
-		err = DecodePayload(resp.Payload, &groupResp)
+		err = quicwire.DecodePayload(resp.Payload, &groupResp)
 		require.NoError(t, err)
 
 		assert.NotNil(t, groupResp.Group)
@@ -1960,17 +1902,17 @@ func TestHandleGroupGet(t *testing.T) {
 			GroupID:  "group-1",
 		}
 
-		payload, err := EncodePayload(getReq)
+		payload, err := quicwire.EncodePayload(getReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpIAMGroupGet,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpIAMGroupGet,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 
 	t.Run("returns error for missing tenant ID", func(t *testing.T) {
@@ -1980,17 +1922,17 @@ func TestHandleGroupGet(t *testing.T) {
 			GroupID: "group-1",
 		}
 
-		payload, err := EncodePayload(getReq)
+		payload, err := quicwire.EncodePayload(getReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpIAMGroupGet,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpIAMGroupGet,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 
 	t.Run("returns error for missing group ID", func(t *testing.T) {
@@ -2000,17 +1942,17 @@ func TestHandleGroupGet(t *testing.T) {
 			TenantID: "tenant-1",
 		}
 
-		payload, err := EncodePayload(getReq)
+		payload, err := quicwire.EncodePayload(getReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpIAMGroupGet,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpIAMGroupGet,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 
 	t.Run("returns error for group not found", func(t *testing.T) {
@@ -2021,17 +1963,17 @@ func TestHandleGroupGet(t *testing.T) {
 			GroupID:  "nonexistent",
 		}
 
-		payload, err := EncodePayload(getReq)
+		payload, err := quicwire.EncodePayload(getReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpIAMGroupGet,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpIAMGroupGet,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusNotFound, resp.Status)
+		assert.Equal(t, quicwire.StatusNotFound, resp.Status)
 	})
 }
 
@@ -2052,20 +1994,20 @@ func TestHandleGroupList(t *testing.T) {
 			Limit:    10,
 		}
 
-		payload, err := EncodePayload(listReq)
+		payload, err := quicwire.EncodePayload(listReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpIAMGroupList,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpIAMGroupList,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 		var listResp IAMGroupListResponse
-		err = DecodePayload(resp.Payload, &listResp)
+		err = quicwire.DecodePayload(resp.Payload, &listResp)
 		require.NoError(t, err)
 
 		assert.Equal(t, int64(2), listResp.Total)
@@ -2079,17 +2021,17 @@ func TestHandleGroupList(t *testing.T) {
 			TenantID: "tenant-1",
 		}
 
-		payload, err := EncodePayload(listReq)
+		payload, err := quicwire.EncodePayload(listReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpIAMGroupList,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpIAMGroupList,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 
 	t.Run("returns error for missing tenant ID", func(t *testing.T) {
@@ -2097,17 +2039,17 @@ func TestHandleGroupList(t *testing.T) {
 
 		listReq := &IAMListRequest{}
 
-		payload, err := EncodePayload(listReq)
+		payload, err := quicwire.EncodePayload(listReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpIAMGroupList,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpIAMGroupList,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 }
 
@@ -2127,20 +2069,20 @@ func TestHandleGroupDelete(t *testing.T) {
 			GroupID:  "group-1",
 		}
 
-		payload, err := EncodePayload(deleteReq)
+		payload, err := quicwire.EncodePayload(deleteReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpIAMGroupDelete,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpIAMGroupDelete,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 		var successResp IAMSuccessResponse
-		err = DecodePayload(resp.Payload, &successResp)
+		err = quicwire.DecodePayload(resp.Payload, &successResp)
 		require.NoError(t, err)
 
 		assert.True(t, successResp.Success)
@@ -2154,17 +2096,17 @@ func TestHandleGroupDelete(t *testing.T) {
 			GroupID:  "group-1",
 		}
 
-		payload, err := EncodePayload(deleteReq)
+		payload, err := quicwire.EncodePayload(deleteReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpIAMGroupDelete,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpIAMGroupDelete,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 
 	t.Run("returns error for missing tenant ID", func(t *testing.T) {
@@ -2174,17 +2116,17 @@ func TestHandleGroupDelete(t *testing.T) {
 			GroupID: "group-1",
 		}
 
-		payload, err := EncodePayload(deleteReq)
+		payload, err := quicwire.EncodePayload(deleteReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpIAMGroupDelete,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpIAMGroupDelete,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 
 	t.Run("returns error for missing group ID", func(t *testing.T) {
@@ -2194,17 +2136,17 @@ func TestHandleGroupDelete(t *testing.T) {
 			TenantID: "tenant-1",
 		}
 
-		payload, err := EncodePayload(deleteReq)
+		payload, err := quicwire.EncodePayload(deleteReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpIAMGroupDelete,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpIAMGroupDelete,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 
 	t.Run("returns error for group not found", func(t *testing.T) {
@@ -2215,17 +2157,17 @@ func TestHandleGroupDelete(t *testing.T) {
 			GroupID:  "nonexistent",
 		}
 
-		payload, err := EncodePayload(deleteReq)
+		payload, err := quicwire.EncodePayload(deleteReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpIAMGroupDelete,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpIAMGroupDelete,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusNotFound, resp.Status)
+		assert.Equal(t, quicwire.StatusNotFound, resp.Status)
 	})
 }
 
@@ -2247,20 +2189,20 @@ func TestHandleGroupAddMember(t *testing.T) {
 			UserID:   "user-1",
 		}
 
-		payload, err := EncodePayload(memberReq)
+		payload, err := quicwire.EncodePayload(memberReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpIAMGroupAddMember,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpIAMGroupAddMember,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 		var successResp IAMSuccessResponse
-		err = DecodePayload(resp.Payload, &successResp)
+		err = quicwire.DecodePayload(resp.Payload, &successResp)
 		require.NoError(t, err)
 
 		assert.True(t, successResp.Success)
@@ -2275,17 +2217,17 @@ func TestHandleGroupAddMember(t *testing.T) {
 			UserID:   "user-1",
 		}
 
-		payload, err := EncodePayload(memberReq)
+		payload, err := quicwire.EncodePayload(memberReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpIAMGroupAddMember,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpIAMGroupAddMember,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 
 	t.Run("returns error for missing tenant ID", func(t *testing.T) {
@@ -2296,17 +2238,17 @@ func TestHandleGroupAddMember(t *testing.T) {
 			UserID:  "user-1",
 		}
 
-		payload, err := EncodePayload(memberReq)
+		payload, err := quicwire.EncodePayload(memberReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpIAMGroupAddMember,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpIAMGroupAddMember,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 
 	t.Run("returns error for missing group ID", func(t *testing.T) {
@@ -2317,17 +2259,17 @@ func TestHandleGroupAddMember(t *testing.T) {
 			UserID:   "user-1",
 		}
 
-		payload, err := EncodePayload(memberReq)
+		payload, err := quicwire.EncodePayload(memberReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpIAMGroupAddMember,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpIAMGroupAddMember,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 
 	t.Run("returns error for missing user ID", func(t *testing.T) {
@@ -2338,17 +2280,17 @@ func TestHandleGroupAddMember(t *testing.T) {
 			GroupID:  "group-1",
 		}
 
-		payload, err := EncodePayload(memberReq)
+		payload, err := quicwire.EncodePayload(memberReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpIAMGroupAddMember,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpIAMGroupAddMember,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 }
 
@@ -2371,20 +2313,20 @@ func TestHandleGroupRemoveMember(t *testing.T) {
 			UserID:   "user-1",
 		}
 
-		payload, err := EncodePayload(memberReq)
+		payload, err := quicwire.EncodePayload(memberReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpIAMGroupRemoveMember,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpIAMGroupRemoveMember,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 		var successResp IAMSuccessResponse
-		err = DecodePayload(resp.Payload, &successResp)
+		err = quicwire.DecodePayload(resp.Payload, &successResp)
 		require.NoError(t, err)
 
 		assert.True(t, successResp.Success)
@@ -2399,17 +2341,17 @@ func TestHandleGroupRemoveMember(t *testing.T) {
 			UserID:   "user-1",
 		}
 
-		payload, err := EncodePayload(memberReq)
+		payload, err := quicwire.EncodePayload(memberReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpIAMGroupRemoveMember,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpIAMGroupRemoveMember,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 
 	t.Run("returns error for missing tenant ID", func(t *testing.T) {
@@ -2420,17 +2362,17 @@ func TestHandleGroupRemoveMember(t *testing.T) {
 			UserID:  "user-1",
 		}
 
-		payload, err := EncodePayload(memberReq)
+		payload, err := quicwire.EncodePayload(memberReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpIAMGroupRemoveMember,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpIAMGroupRemoveMember,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 }
 
@@ -2451,20 +2393,20 @@ func TestHandleCheckPermission(t *testing.T) {
 			Action:    "read",
 		}
 
-		payload, err := EncodePayload(checkReq)
+		payload, err := quicwire.EncodePayload(checkReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpIAMCheckPermission,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpIAMCheckPermission,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 		var checkResp IAMCheckPermissionResponse
-		err = DecodePayload(resp.Payload, &checkResp)
+		err = quicwire.DecodePayload(resp.Payload, &checkResp)
 		require.NoError(t, err)
 
 		assert.True(t, checkResp.Allowed)
@@ -2480,17 +2422,17 @@ func TestHandleCheckPermission(t *testing.T) {
 			Action:    "read",
 		}
 
-		payload, err := EncodePayload(checkReq)
+		payload, err := quicwire.EncodePayload(checkReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpIAMCheckPermission,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpIAMCheckPermission,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 
 	t.Run("returns error for missing tenant ID", func(t *testing.T) {
@@ -2502,17 +2444,17 @@ func TestHandleCheckPermission(t *testing.T) {
 			Action:    "read",
 		}
 
-		payload, err := EncodePayload(checkReq)
+		payload, err := quicwire.EncodePayload(checkReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpIAMCheckPermission,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpIAMCheckPermission,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 
 	t.Run("returns error for missing subject ID", func(t *testing.T) {
@@ -2524,17 +2466,17 @@ func TestHandleCheckPermission(t *testing.T) {
 			Action:   "read",
 		}
 
-		payload, err := EncodePayload(checkReq)
+		payload, err := quicwire.EncodePayload(checkReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpIAMCheckPermission,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpIAMCheckPermission,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 
 	t.Run("returns error for missing resource", func(t *testing.T) {
@@ -2546,17 +2488,17 @@ func TestHandleCheckPermission(t *testing.T) {
 			Action:    "read",
 		}
 
-		payload, err := EncodePayload(checkReq)
+		payload, err := quicwire.EncodePayload(checkReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpIAMCheckPermission,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpIAMCheckPermission,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 
 	t.Run("returns error for missing action", func(t *testing.T) {
@@ -2568,313 +2510,17 @@ func TestHandleCheckPermission(t *testing.T) {
 			Resource:  "document:123",
 		}
 
-		payload, err := EncodePayload(checkReq)
+		payload, err := quicwire.EncodePayload(checkReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpIAMCheckPermission,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpIAMCheckPermission,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
-	})
-}
-
-// =============================================================================
-// Test: Token Create
-// =============================================================================
-
-func TestHandleTokenCreate(t *testing.T) {
-	ctx := context.Background()
-
-	t.Run("creates token successfully", func(t *testing.T) {
-		handler, _ := createTestIAMHandler()
-
-		tokenReq := &IAMCreateTokenRequest{
-			TenantID:  "tenant-1",
-			UserID:    "user-1",
-			Scopes:    []string{"read", "write"},
-			ExpiresIn: 3600,
-		}
-
-		payload, err := EncodePayload(tokenReq)
-		require.NoError(t, err)
-
-		req := &Request{
-			Opcode:  OpIAMTokenCreate,
-			Payload: payload,
-		}
-
-		resp := handler.HandleRequest(ctx, req)
-
-		assert.Equal(t, StatusOK, resp.Status)
-
-		var tokenResp IAMTokenResponse
-		err = DecodePayload(resp.Payload, &tokenResp)
-		require.NoError(t, err)
-
-		assert.NotEmpty(t, tokenResp.TokenID)
-		assert.NotEmpty(t, tokenResp.AccessToken)
-		assert.Equal(t, "Bearer", tokenResp.TokenType)
-	})
-
-	t.Run("returns error when service unavailable", func(t *testing.T) {
-		handler := NewIAMHandler(newTestIAMLogger(), nil)
-
-		tokenReq := &IAMCreateTokenRequest{
-			TenantID:  "tenant-1",
-			UserID:    "user-1",
-			Scopes:    []string{"read"},
-			ExpiresIn: 3600,
-		}
-
-		payload, err := EncodePayload(tokenReq)
-		require.NoError(t, err)
-
-		req := &Request{
-			Opcode:  OpIAMTokenCreate,
-			Payload: payload,
-		}
-
-		resp := handler.HandleRequest(ctx, req)
-
-		assert.Equal(t, StatusUnavailable, resp.Status)
-	})
-
-	t.Run("returns error for missing tenant ID", func(t *testing.T) {
-		handler, _ := createTestIAMHandler()
-
-		tokenReq := &IAMCreateTokenRequest{
-			UserID:    "user-1",
-			ExpiresIn: 3600,
-		}
-
-		payload, err := EncodePayload(tokenReq)
-		require.NoError(t, err)
-
-		req := &Request{
-			Opcode:  OpIAMTokenCreate,
-			Payload: payload,
-		}
-
-		resp := handler.HandleRequest(ctx, req)
-
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
-	})
-
-	t.Run("returns error for missing user ID", func(t *testing.T) {
-		handler, _ := createTestIAMHandler()
-
-		tokenReq := &IAMCreateTokenRequest{
-			TenantID:  "tenant-1",
-			ExpiresIn: 3600,
-		}
-
-		payload, err := EncodePayload(tokenReq)
-		require.NoError(t, err)
-
-		req := &Request{
-			Opcode:  OpIAMTokenCreate,
-			Payload: payload,
-		}
-
-		resp := handler.HandleRequest(ctx, req)
-
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
-	})
-}
-
-// =============================================================================
-// Test: Token Verify
-// =============================================================================
-
-func TestHandleTokenVerify(t *testing.T) {
-	ctx := context.Background()
-
-	t.Run("verifies token successfully", func(t *testing.T) {
-		handler, _ := createTestIAMHandler()
-
-		verifyReq := &IAMVerifyTokenRequest{
-			Token: "valid-token",
-		}
-
-		payload, err := EncodePayload(verifyReq)
-		require.NoError(t, err)
-
-		req := &Request{
-			Opcode:  OpIAMTokenVerify,
-			Payload: payload,
-		}
-
-		resp := handler.HandleRequest(ctx, req)
-
-		assert.Equal(t, StatusOK, resp.Status)
-
-		var verifyResp IAMTokenVerifyResponse
-		err = DecodePayload(resp.Payload, &verifyResp)
-		require.NoError(t, err)
-
-		assert.True(t, verifyResp.Valid)
-	})
-
-	t.Run("returns error when service unavailable", func(t *testing.T) {
-		handler := NewIAMHandler(newTestIAMLogger(), nil)
-
-		verifyReq := &IAMVerifyTokenRequest{
-			Token: "some-token",
-		}
-
-		payload, err := EncodePayload(verifyReq)
-		require.NoError(t, err)
-
-		req := &Request{
-			Opcode:  OpIAMTokenVerify,
-			Payload: payload,
-		}
-
-		resp := handler.HandleRequest(ctx, req)
-
-		assert.Equal(t, StatusUnavailable, resp.Status)
-	})
-
-	t.Run("returns error for missing token", func(t *testing.T) {
-		handler, _ := createTestIAMHandler()
-
-		verifyReq := &IAMVerifyTokenRequest{}
-
-		payload, err := EncodePayload(verifyReq)
-		require.NoError(t, err)
-
-		req := &Request{
-			Opcode:  OpIAMTokenVerify,
-			Payload: payload,
-		}
-
-		resp := handler.HandleRequest(ctx, req)
-
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
-	})
-
-	t.Run("returns error for invalid token", func(t *testing.T) {
-		handler, service := createTestIAMHandler()
-		service.verifyTokenError = ErrIAMTokenInvalid{}
-
-		verifyReq := &IAMVerifyTokenRequest{
-			Token: "invalid-token",
-		}
-
-		payload, err := EncodePayload(verifyReq)
-		require.NoError(t, err)
-
-		req := &Request{
-			Opcode:  OpIAMTokenVerify,
-			Payload: payload,
-		}
-
-		resp := handler.HandleRequest(ctx, req)
-
-		assert.Equal(t, StatusUnauthorized, resp.Status)
-	})
-}
-
-// =============================================================================
-// Test: Token Revoke
-// =============================================================================
-
-func TestHandleTokenRevoke(t *testing.T) {
-	ctx := context.Background()
-
-	t.Run("revokes token by ID successfully", func(t *testing.T) {
-		handler, service := createTestIAMHandler()
-		service.tokens["token-123"] = &mockToken{tokenID: "token-123"}
-
-		revokeReq := &IAMRevokeTokenRequest{
-			TokenID: "token-123",
-		}
-
-		payload, err := EncodePayload(revokeReq)
-		require.NoError(t, err)
-
-		req := &Request{
-			Opcode:  OpIAMTokenRevoke,
-			Payload: payload,
-		}
-
-		resp := handler.HandleRequest(ctx, req)
-
-		assert.Equal(t, StatusOK, resp.Status)
-
-		var successResp IAMSuccessResponse
-		err = DecodePayload(resp.Payload, &successResp)
-		require.NoError(t, err)
-
-		assert.True(t, successResp.Success)
-	})
-
-	t.Run("revokes token by token value successfully", func(t *testing.T) {
-		handler, _ := createTestIAMHandler()
-
-		revokeReq := &IAMRevokeTokenRequest{
-			Token: "access-token-value",
-		}
-
-		payload, err := EncodePayload(revokeReq)
-		require.NoError(t, err)
-
-		req := &Request{
-			Opcode:  OpIAMTokenRevoke,
-			Payload: payload,
-		}
-
-		resp := handler.HandleRequest(ctx, req)
-
-		assert.Equal(t, StatusOK, resp.Status)
-
-		var successResp IAMSuccessResponse
-		err = DecodePayload(resp.Payload, &successResp)
-		require.NoError(t, err)
-
-		assert.True(t, successResp.Success)
-	})
-
-	t.Run("returns error when service unavailable", func(t *testing.T) {
-		handler := NewIAMHandler(newTestIAMLogger(), nil)
-
-		revokeReq := &IAMRevokeTokenRequest{
-			TokenID: "token-123",
-		}
-
-		payload, err := EncodePayload(revokeReq)
-		require.NoError(t, err)
-
-		req := &Request{
-			Opcode:  OpIAMTokenRevoke,
-			Payload: payload,
-		}
-
-		resp := handler.HandleRequest(ctx, req)
-
-		assert.Equal(t, StatusUnavailable, resp.Status)
-	})
-
-	t.Run("returns error for missing token", func(t *testing.T) {
-		handler, _ := createTestIAMHandler()
-
-		revokeReq := &IAMRevokeTokenRequest{}
-
-		payload, err := EncodePayload(revokeReq)
-		require.NoError(t, err)
-
-		req := &Request{
-			Opcode:  OpIAMTokenRevoke,
-			Payload: payload,
-		}
-
-		resp := handler.HandleRequest(ctx, req)
-
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 }
 
@@ -2948,26 +2594,6 @@ func TestIAMErrorTypes(t *testing.T) {
 		assert.Equal(t, "permission denied", err.Error())
 		assert.True(t, errors.Is(err, ErrIAMPermissionDenied{}))
 	})
-
-	t.Run("ErrIAMTokenExpired", func(t *testing.T) {
-		err := ErrIAMTokenExpired{}
-		assert.Equal(t, "token expired", err.Error())
-		assert.True(t, errors.Is(err, ErrIAMTokenExpired{}))
-	})
-
-	t.Run("ErrIAMTokenInvalid", func(t *testing.T) {
-		err := ErrIAMTokenInvalid{}
-		assert.Equal(t, "token invalid", err.Error())
-		assert.True(t, errors.Is(err, ErrIAMTokenInvalid{}))
-	})
-
-	t.Run("ErrIAMTokenVerificationFailed", func(t *testing.T) {
-		cause := errors.New("verification failed")
-		err := ErrIAMTokenVerificationFailed{Cause: cause}
-
-		assert.Contains(t, err.Error(), "token verification failed")
-		assert.Equal(t, cause, errors.Unwrap(err))
-	})
 }
 
 // =============================================================================
@@ -2988,28 +2614,21 @@ func TestIAMErrorResponseMapping(t *testing.T) {
 			setupError: func() {
 				service.getUserError = ErrIAMUserNotFound{}
 			},
-			expectedStatus: StatusNotFound,
+			expectedStatus: quicwire.StatusNotFound,
 		},
 		{
 			name: "user already exists maps to StatusAlreadyExists",
 			setupError: func() {
 				service.createUserError = ErrIAMUserAlreadyExists{}
 			},
-			expectedStatus: StatusAlreadyExists,
+			expectedStatus: quicwire.StatusAlreadyExists,
 		},
 		{
 			name: "permission denied maps to StatusPermissionDenied",
 			setupError: func() {
 				service.checkPermissionError = ErrIAMPermissionDenied{}
 			},
-			expectedStatus: StatusPermissionDenied,
-		},
-		{
-			name: "token expired maps to StatusUnauthorized",
-			setupError: func() {
-				service.verifyTokenError = ErrIAMTokenExpired{}
-			},
-			expectedStatus: StatusUnauthorized,
+			expectedStatus: quicwire.StatusPermissionDenied,
 		},
 	}
 
@@ -3019,27 +2638,26 @@ func TestIAMErrorResponseMapping(t *testing.T) {
 			service.getUserError = nil
 			service.createUserError = nil
 			service.checkPermissionError = nil
-			service.verifyTokenError = nil
 
 			tt.setupError()
 
 			// Make appropriate request based on the error type
-			var req *Request
+			var req *quicwire.Request
 			var payload []byte
 			var err error
 
 			switch {
 			case service.getUserError != nil:
 				getReq := &IAMGetUserRequest{TenantID: "tenant-1", UserID: "user-1"}
-				payload, err = EncodePayload(getReq)
+				payload, err = quicwire.EncodePayload(getReq)
 				require.NoError(t, err)
-				req = &Request{Opcode: OpIAMUserGet, Payload: payload}
+				req = &quicwire.Request{Opcode: quicwire.OpIAMUserGet, Payload: payload}
 
 			case service.createUserError != nil:
 				createReq := &IAMCreateUserRequest{TenantID: "tenant-1", Email: "test@example.com"}
-				payload, err = EncodePayload(createReq)
+				payload, err = quicwire.EncodePayload(createReq)
 				require.NoError(t, err)
-				req = &Request{Opcode: OpIAMUserCreate, Payload: payload}
+				req = &quicwire.Request{Opcode: quicwire.OpIAMUserCreate, Payload: payload}
 
 			case service.checkPermissionError != nil:
 				checkReq := &IAMCheckPermissionRequest{
@@ -3048,15 +2666,9 @@ func TestIAMErrorResponseMapping(t *testing.T) {
 					Resource:  "doc:1",
 					Action:    "read",
 				}
-				payload, err = EncodePayload(checkReq)
+				payload, err = quicwire.EncodePayload(checkReq)
 				require.NoError(t, err)
-				req = &Request{Opcode: OpIAMCheckPermission, Payload: payload}
-
-			case service.verifyTokenError != nil:
-				verifyReq := &IAMVerifyTokenRequest{Token: "expired-token"}
-				payload, err = EncodePayload(verifyReq)
-				require.NoError(t, err)
-				req = &Request{Opcode: OpIAMTokenVerify, Payload: payload}
+				req = &quicwire.Request{Opcode: quicwire.OpIAMCheckPermission, Payload: payload}
 			}
 
 			resp := handler.HandleRequest(ctx, req)

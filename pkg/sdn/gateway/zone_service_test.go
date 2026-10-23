@@ -26,6 +26,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/services/vpn"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/netplan"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/zone"
 )
@@ -113,10 +114,20 @@ func TestTransitServiceConfig_Validate_Disabled_NoError(t *testing.T) {
 func TestManagementVPNServiceConfig_Validate_Enabled_NoError(t *testing.T) {
 	t.Parallel()
 
-	cfg := &ManagementVPNServiceConfig{Enabled: true}
-	if err := cfg.Validate(); err != nil {
+	if err := validVPNServiceConfig().Validate(); err != nil {
 		t.Errorf("enabled ManagementVPNServiceConfig must pass, got: %v", err)
 	}
+}
+
+// TestManagementVPNServiceConfig_Validate_EnabledNeedsPoolAndZones: an
+// enabled VPN is checked against the core's own rules, defaults applied.
+func TestManagementVPNServiceConfig_Validate_EnabledNeedsPoolAndZones(t *testing.T) {
+	t.Parallel()
+
+	err := (&ManagementVPNServiceConfig{Enabled: true}).Validate()
+	var invalid *vpn.ErrInvalidConfig
+	require.True(t, errors.As(err, &invalid), "got %v", err)
+	assert.Equal(t, "pool", invalid.Field)
 }
 
 func TestManagementVPNServiceConfig_Validate_Disabled_NoError(t *testing.T) {
@@ -151,7 +162,7 @@ func TestGatewayConfig_HasEnabledServices_ManagementVPNEnabled(t *testing.T) {
 	cfg := &GatewayConfig{
 		Enabled:       true,
 		ID:            "gw-01",
-		ManagementVPN: &ManagementVPNServiceConfig{Enabled: true},
+		ManagementVPN: validVPNServiceConfig(),
 	}
 	if !cfg.HasEnabledServices() {
 		t.Error("GatewayConfig with enabled ManagementVPN must report HasEnabledServices = true")
@@ -179,7 +190,7 @@ func TestGatewayConfig_Validate_WithTransitAndManagementVPN_NoError(t *testing.T
 		Enabled:       true,
 		ID:            "gw-01",
 		Transit:       &TransitServiceConfig{Enabled: true},
-		ManagementVPN: &ManagementVPNServiceConfig{Enabled: true},
+		ManagementVPN: validVPNServiceConfig(),
 	}
 	if err := cfg.Validate(); err != nil {
 		t.Errorf("GatewayConfig with transit+management_vpn must pass, got: %v", err)
@@ -194,7 +205,7 @@ func TestGatewayConfig_Validate_Disabled_SkipsServiceValidation(t *testing.T) {
 		Enabled: false,
 		// ID absent — normally required but gate is disabled.
 		Transit:       &TransitServiceConfig{Enabled: true},
-		ManagementVPN: &ManagementVPNServiceConfig{Enabled: true},
+		ManagementVPN: validVPNServiceConfig(),
 	}
 	if err := cfg.Validate(); err != nil {
 		t.Errorf("disabled gateway must skip validation, got: %v", err)

@@ -15,44 +15,95 @@ package daemon
 
 import (
 	"context"
-	"sync/atomic"
+
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
 
-// configManagedService is a ManagedService backed by a ServiceConfig entry.
-// It provides basic start/stop lifecycle tracking using lock-free atomics.
-type configManagedService struct {
+// subsystemService is the registry entry for a platform subsystem named in
+// Config.Services. platformd builds these subsystems at start-up and tears
+// them down at exit; none of them can be stopped and brought back while the
+// process runs. Start and Stop therefore refuse with
+// ErrServiceNotControllable, and IsRunning reports the subsystem's real
+// state through its probe rather than a flag the verbs could flip.
+type subsystemService struct {
 	name    string
-	config  ServiceConfig
-	running atomic.Bool
+	reason  string
+	running func() bool
 }
 
-// newConfigManagedService creates a configManagedService for the given
-// service name and configuration.
-func newConfigManagedService(name string, cfg ServiceConfig) *configManagedService {
-	return &configManagedService{
-		name:   name,
-		config: cfg,
-	}
+// Start refuses: the subsystem's lifecycle belongs to the process.
+func (s *subsystemService) Start(_ context.Context) error {
+	return s.refusal()
 }
 
-// Start marks the service as running.
-func (s *configManagedService) Start(_ context.Context) error {
-	s.running.Store(true)
-	return nil
+// Stop refuses: the subsystem's lifecycle belongs to the process.
+func (s *subsystemService) Stop(_ context.Context) error {
+	return s.refusal()
 }
 
-// Stop marks the service as stopped.
-func (s *configManagedService) Stop(_ context.Context) error {
-	s.running.Store(false)
-	return nil
-}
-
-// IsRunning returns true when the service has been started and not yet stopped.
-func (s *configManagedService) IsRunning() bool {
-	return s.running.Load()
+// IsRunning reports whether the subsystem is up in this process.
+func (s *subsystemService) IsRunning() bool {
+	return s.running()
 }
 
 // Name returns the service name.
-func (s *configManagedService) Name() string {
+func (s *subsystemService) Name() string {
 	return s.name
+}
+
+func (s *subsystemService) refusal() ErrServiceNotControllable {
+	return ErrServiceNotControllable{ServiceName: s.name, Reason: s.reason}
+}
+
+// processOwned reports the refusal for a ManagedService whose lifecycle
+// belongs to the platformd process. The service verbs check it before they
+// touch any state, so a refused verb leaves the reported status unchanged.
+func processOwned(svc ManagedService) (ErrServiceNotControllable, bool) {
+	sub, ok := svc.(*subsystemService)
+	if !ok {
+		return ErrServiceNotControllable{}, false
+	}
+	return sub.refusal(), true
+}
+
+// subsystemSpec describes one platform subsystem: why the daemon refuses to
+// drive it, and how to observe it.
+type subsystemSpec struct {
+	reason string
+	// wired reports whether this daemon built the subsystem. New wires every
+	// one of them, so the answer is fixed by the time Start registers the
+	// services and holds for the life of the process. nil marks a subsystem
+	// the composition root runs outside the daemon; its state comes from the
+	// probe set with SetSubsystemProbe.
+	wired func(d *Daemon) bool
+}
+
+// subsystemSpecs covers every ServiceType a Config.Services entry can name.
+var subsystemSpecs = map[platformv1.ServiceType]subsystemSpec{
+	platformv1.ServiceType_SERVICE_TYPE_TPM: {
+		reason: "the TPM is opened once and shared by the keystores, CA, IDevID and attestation for the life of the process",
+		wired:  func(d *Daemon) bool { return d.tpm2Service != nil },
+	},
+	platformv1.ServiceType_SERVICE_TYPE_SDN: {
+		reason: "the SDN service drives the host's Open vSwitch daemon, which platformd does not run",
+		wired:  func(d *Daemon) bool { return d.sdnService != nil && d.sdnService.ovsClient != nil },
+	},
+	platformv1.ServiceType_SERVICE_TYPE_COMPUTE: {
+		reason: "the compute orchestrator starts and stops instances, not itself, and closing it is final",
+		wired:  func(d *Daemon) bool { return d.computeService != nil && d.computeService.orchestrator != nil },
+	},
+	platformv1.ServiceType_SERVICE_TYPE_DNS: {
+		reason: "platformd serves DNS zone management in-process and runs no DNS server",
+		wired:  func(d *Daemon) bool { return d.zoneSvc != nil },
+	},
+	platformv1.ServiceType_SERVICE_TYPE_ACME: {
+		reason: "the ACME server is a set of routes on the web services, with no lifecycle of its own",
+	},
+	platformv1.ServiceType_SERVICE_TYPE_WEBSERVICE: {
+		reason: "the web services carry the REST API and cannot be served again once shut down",
+	},
+	platformv1.ServiceType_SERVICE_TYPE_ATTESTATION: {
+		reason: "attestation reporting is wired once at start-up and stopped once at exit",
+		wired:  func(d *Daemon) bool { return d.attestationService != nil && d.attestationService.service != nil },
+	},
 }

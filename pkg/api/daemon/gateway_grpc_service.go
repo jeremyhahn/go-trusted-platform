@@ -26,6 +26,7 @@ import (
 	gwstate "github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/state"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ipam"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -81,6 +82,19 @@ type GatewayService struct {
 	startedAt     time.Time
 	mu            sync.RWMutex
 }
+
+// GatewayBackendSource is the one place every transport reads the
+// gatewayd-resident backends from (#660): REST, QUIC and MCP hold the
+// shared *GatewayService through it instead of a nil field of their own,
+// so a backend wired at construction reaches every transport at once.
+type GatewayBackendSource interface {
+	LoadBalancer() GatewayLoadBalancerInterface
+	NAT64() GatewayNAT64Interface
+	Perf() GatewayPerfInterface
+}
+
+// Ensure *GatewayService is the shared backend source.
+var _ GatewayBackendSource = (*GatewayService)(nil)
 
 // GatewayServiceOption is a functional option for configuring the GatewayService.
 type GatewayServiceOption func(*GatewayService)
@@ -211,6 +225,9 @@ func (s *GatewayService) GetGatewayStatus(ctx context.Context, req *platformv1.G
 func (s *GatewayService) SetGatewayMode(ctx context.Context, req *platformv1.SetGatewayModeRequest) (*platformv1.SetGatewayModeResponse, error) {
 	if req.GetModes() == 0 {
 		return nil, status.Error(codes.InvalidArgument, "modes is required")
+	}
+	if req.GetModes()&^quicwire.GatewayModesAll != 0 {
+		return nil, status.Errorf(codes.InvalidArgument, "modes %#x sets an undefined mode bit", req.GetModes())
 	}
 
 	s.mu.Lock()
@@ -809,6 +826,7 @@ func ipamAllocationToProto(a *ipam.Allocation) *platformv1.IPAllocation {
 		PoolId:      a.PoolID,
 		DeviceId:    a.DeviceID,
 		Hostname:    a.Hostname,
+		Status:      string(a.Status),
 		AllocatedAt: timestamppb.New(a.AllocatedAt),
 		ExpiresAt:   expiresAt,
 	}

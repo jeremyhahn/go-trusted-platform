@@ -1,17 +1,21 @@
 # SDN QUIC API Reference
 
+> **Status: REFERENCE** · Last verified: 2026-10-15
+
+> The SDN opcodes of the platform QUIC protocol.
+
 Endpoint: UDP port 9444, mTLS required.
 
 Requests and responses are msgpack-encoded frames; msgpack keys follow
 the Go field names declared in the QUIC handler types. Opcodes are
-defined in `pkg/api/quic/protocol.go`.
+defined in `sdk/go/wire/quicwire/protocol.go`.
 
 ## SDN Opcodes
 
 | Opcode | Operation | Description |
 |--------|-----------|-------------|
 | `0x40` | SDNGetPortState | Get port admin state |
-| `0x41` | SDNSetPortState | Set port admin state |
+| `0x41` | SDNSetPortState | Set port admin state, ingress policing and egress shaping |
 | `0x42` | SDNListPorts | List ports on a bridge |
 | `0x43` | SDNGetFlow | Get a flow |
 | `0x44` | SDNAddFlow | Add a flow rule |
@@ -32,11 +36,39 @@ defined in `pkg/api/quic/protocol.go`.
 | `0xB3` | SDNDeletePort | Delete a port |
 | `0xB4` | SDNDeletePolicy | Delete a policy |
 
+Port authentication has no opcode. The SDK's QUIC transport maps neither
+`AuthenticatePort` nor `RevokePortAuth` and answers `Unimplemented` without
+sending anything. The other transports refuse both with `FailedPrecondition`
+until the switch enforces port authentication ([api.md](api.md) §4).
+
+The policy operations carry the policy shape REST, gRPC and MCP use, so a
+policy applied on one transport reads back the same on the others. The
+apply request and the responses are the REST types in
+`pkg/api/rest/sdn_handlers.go`, keyed by their Go field names (`Name`,
+`Type`, `Rules`, `DestinationPort`, …), not by the snake_case JSON names:
+
+| Opcode | Request | Response |
+|--------|---------|----------|
+| `0x47` SDNApplyPolicy | `CreatePolicyRequest` | `PolicyResponse` |
+| `0x48` SDNGetPolicy | `PolicyID` | `PolicyResponse` |
+| `0x49` SDNListPolicies | `Type`, `TargetID` (empty fields do not filter) | `SDNPolicyListResponse` (`Policies`, `Count`, `Timestamp`) |
+| `0xB4` SDNDeletePolicy | `PolicyID` | `SDNActionResponse` (`ResourceType` `policy`, `Action` `delete`) |
+
+`SDNApplyPolicy` refuses an unknown policy type, target type or rule action
+with `StatusInvalidArgument`, a missing name with `StatusInvalidArgument`, and
+a name already in use with `StatusAlreadyExists`.
+
+`SDNGetPolicy` and `SDNDeletePolicy` take the policy ID or name in
+`PolicyID`. When no such policy exists the response is `StatusNotFound`
+and the error names the requested policy (`SDN policy not found: <id>`);
+any other failure keeps its own status and is not reported as a missing
+policy.
+
 Related SDN category opcodes: the overlay service uses category opcode
 `0x2E` with its own sub-opcodes (see
 [overlay/api-reference-quic.md](overlay/api-reference-quic.md)); the
 gateway and IPAM surfaces have their own opcode assignments in
-`pkg/api/quic/gateway_handlers.go`. The zone operations are gateway
+`sdk/go/wire/quicwire/gateway_opcodes.go`. The zone operations are gateway
 category (`0x2F`) sub-opcodes `0x10` list, `0x11` create, `0x12` update and
 `0x13` delete; `0x14` (the retired assign operation) is never reused. Their
 codec bodies carry the whole zone schema (`offset`, `port_classes`,

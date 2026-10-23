@@ -28,7 +28,7 @@ import (
 
 	"github.com/gorilla/mux"
 	"github.com/jeremyhahn/go-codec"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -96,9 +96,8 @@ func TestRESTServerStartStop(t *testing.T) {
 		require.NoError(t, err)
 		assert.True(t, server.IsRunning())
 
-		// Give it time to start
-		time.Sleep(100 * time.Millisecond)
-
+		// Start binds the listener synchronously, so the server can be
+		// stopped as soon as Start returns.
 		// Stop server
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
@@ -688,10 +687,10 @@ func TestRESTMiddlewareChain(t *testing.T) {
 func TestMain(m *testing.M) {
 	// Initialize the QUIC codec for all tests in this package.
 	// Try MsgPack first, fall back to JSON if not available.
-	if quic.IsCodecSupported(codec.MsgPack) {
-		_ = quic.SetDefaultCodecType(codec.MsgPack)
+	if quicwire.IsCodecSupported(codec.MsgPack) {
+		_ = quicwire.SetDefaultCodecType(codec.MsgPack)
 	} else {
-		_ = quic.SetDefaultCodecType(codec.JSON)
+		_ = quicwire.SetDefaultCodecType(codec.JSON)
 	}
 
 	code := m.Run()

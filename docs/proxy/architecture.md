@@ -115,7 +115,7 @@ anything inside `pkg/proxy`.
 | `platformctl proxy` | `pkg/cli/commands/proxy/` | this repo |
 | **mTLS identity adapter** | `pkg/auth` (`MTLSAdapter`, `ValidateIDevID`) | this repo, separate feature |
 | **Zone matrix** (`zone.Matrix`, `Allowed`) | `pkg/sdn/zone` — [`docs/sdn/`](../sdn/) | this repo, separate feature |
-| **Trust classes** (`default` / `bmc` / `internal`) | `pkg/trust` | this repo, separate feature |
+| **Platform anchor and trust classes** | `pkg/trust` — [`docs/trust/`](../trust/) | this repo, separate feature |
 | **OPA engine and embedded policies** | `pkg/policy/opa` | this repo, separate feature |
 | **Attestation manifests and verification** | `pkg/attestation` — [`docs/attestation/`](../attestation/) | this repo, separate feature |
 | **`OIDTPNetworkZone` OID and its parser** | `go-quicbaas/sdk/go/xkms/ca` | **not this repo** |
@@ -198,12 +198,12 @@ refuse is a startup error. Listeners remain gatewayd-local.
    is present** — when both credentials arrive the certificate wins and the
    bearer token is ignored and never forwarded.
 6. **mTLS path** — adapter authentication (chain, validity), then IDevID
-   validation on `require-idevid` routes, then zone extraction and enforcement,
-   then roles.
+   validation on `require-idevid` routes, then zone extraction and enforcement.
 7. **Token path** — bearer extraction, then the platformtoken SDK pipeline
    (JWKS-by-`kid`, `iss`/`aud`/`exp`, RFC 9068 `typ: at+jwt`, DPoP proof for
    `cnf.jkt`-bound tokens, scope enforcement, per-mode liveness), then the
-   operator-assigned token zone, then roles.
+   operator-assigned token zone. There is no role check on either path: a
+   route's permission is its `required-scopes` (#926).
 8. **Attestation gate** (`require-attestation` routes), then **OPA policy**
    (`opa-policy` routes) — both shared by the two paths, in that order, so the
    policy input sees the attestation outcome.
@@ -236,7 +236,9 @@ Two further TLS legs, both outbound and both anchored by `pkg/trust`:
   pool must be homogeneous in trust terms.
 - **gatewayd → platformd.** Unix socket by default; `platformd.protocol: grpc`
   requires `platform-ca-file:`, the platform anchor
-  (`ErrPlatformAnchorRequiredForGRPC`). Verification is never skipped.
+  (`ErrPlatformAnchorRequiredForGRPC`), and a client identity — a client
+  certificate or a token file — because platformd's gRPC listener refuses
+  unauthenticated callers. Verification is never skipped.
 
 ### 6.2 Where token validation happens — and what it is not
 

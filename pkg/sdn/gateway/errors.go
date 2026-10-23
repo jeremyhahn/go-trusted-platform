@@ -129,6 +129,22 @@ func (e *ErrServiceStartFailed) Unwrap() error {
 	return e.Cause
 }
 
+// ErrRevocationJournal is a management VPN revocation journal that could not
+// be read, parsed or written.
+type ErrRevocationJournal struct {
+	Path  string
+	Op    string
+	Cause error
+}
+
+func (e *ErrRevocationJournal) Error() string {
+	return fmt.Sprintf("vpn revocation journal %s: %s: %v", e.Path, e.Op, e.Cause)
+}
+
+func (e *ErrRevocationJournal) Unwrap() error {
+	return e.Cause
+}
+
 // ErrServiceStopFailed is returned when a service handler fails to stop.
 type ErrServiceStopFailed struct {
 	Service string
@@ -162,36 +178,6 @@ type ErrServiceNotActive struct {
 
 func (e *ErrServiceNotActive) Error() string {
 	return fmt.Sprintf("service not active: %s", e.Service)
-}
-
-// ErrReputationTooLow is returned when node reputation is below the minimum.
-type ErrReputationTooLow struct {
-	Required float64
-	Actual   float64
-}
-
-func (e *ErrReputationTooLow) Error() string {
-	return fmt.Sprintf("reputation too low: required %.2f, actual %.2f", e.Required, e.Actual)
-}
-
-// ErrAgeTooYoung is returned when node age is below the minimum.
-type ErrAgeTooYoung struct {
-	RequiredDays int
-	ActualDays   int
-}
-
-func (e *ErrAgeTooYoung) Error() string {
-	return fmt.Sprintf("node age too young: required %d days, actual %d days", e.RequiredDays, e.ActualDays)
-}
-
-// ErrUptimeTooLow is returned when node uptime is below the minimum.
-type ErrUptimeTooLow struct {
-	RequiredPct float64
-	ActualPct   float64
-}
-
-func (e *ErrUptimeTooLow) Error() string {
-	return fmt.Sprintf("uptime too low: required %.1f%%, actual %.1f%%", e.RequiredPct, e.ActualPct)
 }
 
 // ErrOnboardingFailed is returned when gateway onboarding fails.
@@ -546,6 +532,19 @@ func (e *ErrHostFWConfigInvalid) Unwrap() error {
 	return e.Cause
 }
 
+// ErrOverlayIPsecConfigInvalid wraps an overlay ipsec section error.
+type ErrOverlayIPsecConfigInvalid struct {
+	Cause error
+}
+
+func (e *ErrOverlayIPsecConfigInvalid) Error() string {
+	return fmt.Sprintf("gateway overlay ipsec configuration invalid: %v", e.Cause)
+}
+
+func (e *ErrOverlayIPsecConfigInvalid) Unwrap() error {
+	return e.Cause
+}
+
 // ErrServiceUnhealthy reports a supervised service whose owning process is
 // down, failed its restart budget, or reports the service unhealthy (#557).
 // Cause is the supervisor's own typed error.
@@ -560,6 +559,37 @@ func (e *ErrServiceUnhealthy) Error() string {
 
 func (e *ErrServiceUnhealthy) Unwrap() error {
 	return e.Cause
+}
+
+// ErrSupervisedSnapshot reports a snapshot section whose state lives in a
+// supervised child that could not be read (#557). The snapshot carries it in
+// the section's error field rather than omitting the section's detail
+// silently; a datapath section, which has no error field, is left empty and
+// the failure is logged, while Services reports the service unhealthy. Cause
+// is the supervisor's own typed error.
+type ErrSupervisedSnapshot struct {
+	Service string
+	Cause   error
+}
+
+func (e *ErrSupervisedSnapshot) Error() string {
+	return fmt.Sprintf("gateway service %q snapshot unavailable from its supervised process: %v", e.Service, e.Cause)
+}
+
+func (e *ErrSupervisedSnapshot) Unwrap() error {
+	return e.Cause
+}
+
+// ErrServiceNotSupervised reports a request to relay a service to a
+// supervised child when the gateway has no supervisor, or its supervisor
+// does not run that service out of process (#557). Registering the relay
+// anyway would leave the service with no process hosting it.
+type ErrServiceNotSupervised struct {
+	Service string
+}
+
+func (e *ErrServiceNotSupervised) Error() string {
+	return fmt.Sprintf("gateway service %q is not run by a supervised process", e.Service)
 }
 
 // ErrNAT64ConfigInvalid wraps a NAT64 configuration error with the section

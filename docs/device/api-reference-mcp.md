@@ -1,6 +1,9 @@
 # Device MCP API Reference
 
-Endpoint: `localhost:9445` (HTTP) or `stdio`
+> **Status: REFERENCE** · Last verified: 2026-10-13
+> The device MCP tools, resources and error codes.
+
+Endpoint: `https://localhost:9445/mcp`
 
 ## Overview
 
@@ -8,113 +11,58 @@ The Device API is exposed via the Model Context Protocol (MCP) for AI/LLM integr
 
 ## Tools
 
+Device ids are passed as decimal **strings** (`device_id`). Every device result
+is the stored device entity as JSON (`id`, `serial`, `model`, `ek_cert`,
+`att_pub`, `attest_cert`, `signing_pub`, `hash_algo`, `state`, …), with `id` a
+JSON number.
+
 ### device_register
 
-Register a new device with TPM credentials.
+Register a new device; the server assigns its id. Each argument is stored under
+the device field of the same name, and the result is the created device.
 
 ```json
 {
   "name": "device_register",
-  "description": "Register a new device with TPM credentials",
   "inputSchema": {
     "type": "object",
     "properties": {
       "serial": {"type": "string", "description": "Device serial number"},
       "model": {"type": "string", "description": "Device model"},
-      "ek_cert": {"type": "string", "description": "PEM-encoded EK certificate"},
-      "attest_pub": {"type": "string", "description": "PEM-encoded attestation public key"},
-      "attest_cert": {"type": "string", "description": "PEM-encoded attestation (IAK/AK) certificate issued by the platform CA"},
-      "signing_pub": {"type": "string", "description": "PEM-encoded signing public key"},
-      "hash_algo_id": {"type": "integer", "description": "Hash algorithm ID (11=SHA256)"}
+      "ek_cert": {"type": "string", "description": "PEM TPM endorsement key certificate"},
+      "attest_pub": {"type": "string", "description": "Attestation public key"},
+      "attest_cert": {"type": "string", "description": "PEM attestation key certificate issued by the platform CA"},
+      "signing_pub": {"type": "string", "description": "Signing public key"},
+      "hash_algo_id": {"type": "integer", "description": "TPM hash algorithm identifier"}
     },
-    "required": ["serial", "model"]
+    "required": ["serial"]
   }
 }
 ```
 
-### device_get
+A missing `serial` is refused; a `hash_algo_id` outside the uint32 range is
+refused before it reaches the service.
 
-Get device by ID.
+### device_get
 
 ```json
 {
   "name": "device_get",
-  "description": "Get device by ID",
   "inputSchema": {
     "type": "object",
     "properties": {
-      "id": {"type": "integer", "description": "Device ID"}
+      "device_id": {"type": "string", "description": "Device ID"}
     },
-    "required": ["id"]
-  }
-}
-```
-
-### device_update
-
-Update device information.
-
-```json
-{
-  "name": "device_update",
-  "description": "Update device information",
-  "inputSchema": {
-    "type": "object",
-    "properties": {
-      "id": {"type": "integer", "description": "Device ID"},
-      "serial": {"type": "string"},
-      "model": {"type": "string"}
-    },
-    "required": ["id"]
-  }
-}
-```
-
-### device_delete
-
-Delete device from registry.
-
-```json
-{
-  "name": "device_delete",
-  "description": "Delete device from registry",
-  "inputSchema": {
-    "type": "object",
-    "properties": {
-      "id": {"type": "integer", "description": "Device ID"}
-    },
-    "required": ["id"]
-  }
-}
-```
-
-### device_list
-
-List devices with pagination.
-
-```json
-{
-  "name": "device_list",
-  "description": "List devices with pagination",
-  "inputSchema": {
-    "type": "object",
-    "properties": {
-      "page": {"type": "integer", "default": 1},
-      "page_size": {"type": "integer", "default": 10},
-      "sort_order": {"type": "string", "enum": ["asc", "desc"]}
-    }
+    "required": ["device_id"]
   }
 }
 ```
 
 ### device_find_by_serial
 
-Find device by serial number.
-
 ```json
 {
   "name": "device_find_by_serial",
-  "description": "Find device by serial number",
   "inputSchema": {
     "type": "object",
     "properties": {
@@ -125,9 +73,62 @@ Find device by serial number.
 }
 ```
 
+### device_update
+
+Update a device's `model` or `serial` and return the stored device; omitted
+fields are kept. The attestation fields are server-owned and are not changed
+by this tool.
+
+```json
+{
+  "name": "device_update",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "device_id": {"type": "string", "description": "Device ID"},
+      "model": {"type": "string", "description": "New device model"},
+      "serial": {"type": "string", "description": "New device serial number"}
+    },
+    "required": ["device_id"]
+  }
+}
+```
+
+### device_delete
+
+```json
+{
+  "name": "device_delete",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "device_id": {"type": "string", "description": "Device ID"}
+    },
+    "required": ["device_id"]
+  }
+}
+```
+
+### device_list
+
+```json
+{
+  "name": "device_list",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "device_type": {"type": "string", "description": "Filter by device type"},
+      "status": {"type": "string", "description": "Filter by status"}
+    }
+  }
+}
+```
+
 ### device_attest
 
-Verify TPM quote evidence submitted for a device.
+Verify TPM quote evidence submitted for a device. Permission `device:write`:
+a verified quote can seed the profile's PCR baseline and a failed one
+quarantines the device ([api.md §7](api.md#7-authorization)).
 
 The tool takes the whole evidence document as one base64 argument, not the
 quote fields spread across separate arguments: every transport carries the
@@ -172,9 +173,13 @@ record without re-enrolling the device. Permission `device:write`. The
 control plane fails closed — the certificate must parse, chain to the
 platform CA, carry `tcg-cap-verifiedTPMRestricted` and certify the device's
 enrolled attestation key — and a refusal names every candidate it evaluated.
+`clear_on_refusal` (default `false`) clears a stored certificate every
+candidate refused instead of returning the refusal, audited as
+`device_attest_cert_cleared`.
 The result carries the `RecordAttestationCertificateResponse` fields with
 proto names (`device_id`, `changed`, `source`, `source_detail`, `reissued`,
-`subject`, `certificate_serial`, `not_after`, `attest_cert`). See
+`subject`, `certificate_serial`, `not_after`, `attest_cert`, `cleared`,
+`refusal`). See
 [api.md §4.5](api.md#45-recording-the-attestation-certificate-without-re-enrolling-473).
 
 ```json
@@ -184,12 +189,87 @@ proto names (`device_id`, `changed`, `source`, `source_detail`, `reissued`,
     "type": "object",
     "properties": {
       "device_id": {"type": "string", "description": "Device ID"},
-      "reissue": {"type": "boolean", "description": "Ask the platform CA to issue a fresh attestation certificate over the enrolled attestation public key when no stored certificate passes the preflight"}
+      "reissue": {"type": "boolean", "description": "Ask the platform CA to issue a fresh attestation certificate over the enrolled attestation public key when no stored certificate passes the preflight"},
+      "clear_on_refusal": {"type": "boolean", "description": "Clear the stored attestation certificate when every candidate is refused (default false); an audit event records the clear"}
     },
     "required": ["device_id"]
   }
 }
 ```
+
+### device_boot_certificate
+
+A diskless node's proof-of-possession request for its recorded IDevID chain
+([api.md §4.6](api.md#46-diskless-boot-delivery-690)). No permission is required:
+the service authenticates the request itself. `identity` is the claimed device
+identity and `signature` is base64 (the proof over the identity and the
+channel nonce). MCP carries no TLS connection, so the nonce is empty and the
+service refuses the request with `-32007` (`FailedPrecondition`,
+`ErrBootChannelRequired`); the tool exists so every transport enforces the
+same check. A `signature` that is not base64 is `-32602`.
+
+```json
+{
+  "name": "device_boot_certificate",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "identity": {"type": "string", "description": "Claimed device identity"},
+      "signature": {"type": "string", "description": "Base64 proof-of-possession signature"}
+    },
+    "required": ["identity", "signature"]
+  }
+}
+```
+
+### device_boot_delivery
+
+A diskless node's attestation evidence in, network profile and CA bundle out
+([api.md §4.6](api.md#46-diskless-boot-delivery-690)). No permission is required.
+`evidence` is base64. The node's identity is the client certificate of the
+connection, which MCP does not have, so the service refuses the request with
+`-32007` (`FailedPrecondition`). `evidence` that is not base64 is `-32602`.
+
+```json
+{
+  "name": "device_boot_delivery",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "evidence": {"type": "string", "description": "Base64 attestation evidence"}
+    },
+    "required": ["evidence"]
+  }
+}
+```
+
+### device_disable / device_enable
+
+The operator's lifecycle transitions. Permission `device:write`.
+`device_disable` blocks the device's switch port and records it `suspended`;
+`device_enable` re-admits a `suspended` device to the quarantine zone, records
+it `quarantined` and requests re-attestation. Both are refused when no SDN
+policy engine runs, when the device has no switch port, or when the
+transition is not allowed. The result carries the `DeviceLifecycleResponse`
+fields (`device_id`, `state`, `previous_state`, `state_reason`,
+`reattestation_requested`). See
+[api.md §4.7](api.md#47-operator-disable-and-enable-250).
+
+```json
+{
+  "name": "device_disable",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "device_id": {"type": "string", "description": "Device ID"},
+      "reason": {"type": "string", "description": "Why the device is disabled (at most 256 bytes; default \"disabled\")"}
+    },
+    "required": ["device_id"]
+  }
+}
+```
+
+`device_enable` takes only `device_id`.
 
 ### profile_create
 
@@ -237,7 +317,9 @@ decode, never stored (`docs/device/api.md` §3.6).
 
 ### profile_get_by_id
 
-Get profile by ID.
+Get profile by ID. A missing profile is `NotFound` here and from
+`profile_delete_by_id`, as on gRPC, so the SDK reports the same error on
+every transport.
 
 ```json
 {
@@ -259,8 +341,10 @@ Update profile properties by ID. Partial update: only supplied fields
 replace stored values. Accepts the same pre-boot record fields as
 `profile_create` (`ek_serial`, `ek_cert`, `mac_address`, `config`,
 `assigned`, `assigned_at`, `tls_server_name`); an unparseable `ek_cert` is
-rejected with a typed validation error, and an omitted `tls_server_name`
-keeps the stored name.
+rejected with a typed validation error. An omitted (or `null`)
+`tls_server_name` keeps the stored name, and an explicit `""` clears it, so
+the collector verifies each node against its own FQDN again
+(`docs/device/api.md` §3.2).
 
 ```json
 {
@@ -324,7 +408,11 @@ List profiles with pagination.
 
 ### profile_find_matching
 
-Find profile matching device attributes.
+Find the profile whose match rules fit a device's MAC address, serial or
+model; the SDK's `FindMatchingProfile` uses it on this transport. At least
+one attribute is required (`InvalidArgument` otherwise), and no matching
+profile is `NotFound`, as on gRPC. Requires `device:read`. The result is
+the profile in its domain JSON shape.
 
 ```json
 {
@@ -343,36 +431,44 @@ Find profile matching device attributes.
 
 ### profile_find_by_mac
 
-Find profile by MAC address prefix.
+Find the profile whose `mac_prefix` rule is a prefix of a device MAC address
+(compared case-insensitively); the SDK's `FindProfileByMACAddress` uses it on
+this transport. A missing `mac_address` is `InvalidArgument`, and no matching
+profile is `NotFound`, as on gRPC. Requires `device:read`. The result is the
+profile in its domain JSON shape.
 
 ```json
 {
   "name": "profile_find_by_mac",
-  "description": "Find profile by MAC address prefix",
+  "description": "Find the profile whose MAC prefix rule fits a device MAC address",
   "inputSchema": {
     "type": "object",
     "properties": {
-      "mac_prefix": {"type": "string", "description": "MAC address prefix"}
+      "mac_address": {"type": "string", "description": "Device MAC address"}
     },
-    "required": ["mac_prefix"]
+    "required": ["mac_address"]
   }
 }
 ```
 
 ### profile_find_by_serial
 
-Find profile by serial prefix.
+Find the profile whose `serial_prefix` rule is a prefix of a device serial
+number (compared case-insensitively); the SDK's `FindProfileBySerial` uses it
+on this transport. A missing `serial` is `InvalidArgument`, and no matching
+profile is `NotFound`, as on gRPC. Requires `device:read`. The result is the
+profile in its domain JSON shape.
 
 ```json
 {
   "name": "profile_find_by_serial",
-  "description": "Find profile by serial prefix",
+  "description": "Find the profile whose serial prefix rule fits a device serial number",
   "inputSchema": {
     "type": "object",
     "properties": {
-      "serial_prefix": {"type": "string", "description": "Serial number prefix"}
+      "serial": {"type": "string", "description": "Device serial number"}
     },
-    "required": ["serial_prefix"]
+    "required": ["serial"]
   }
 }
 ```
@@ -426,83 +522,105 @@ prestaged EK certificate, and assignment state are all reset.
 
 Returns the updated (now unassigned) profile.
 
-## Resources
+### device_template_create
 
-### device://inventory
-
-Read-only access to device inventory.
-
-```json
-{
-  "uri": "device://inventory",
-  "name": "Device Inventory",
-  "description": "Complete device inventory with status",
-  "mimeType": "application/json"
-}
-```
-
-### device://profiles
-
-Read-only access to device profiles.
+Stores a device template — a reusable configuration, role and match rules
+that profiles are built from (`DeviceService.CreateTemplate`). It is not a
+vTPM template; the `vtpm_*` tools create those. `name` is required; `role`
+is the domain role string ([api.md §4.2](api.md#42-role-vocabulary)) and
+`config` is YAML **text**. Requires `device:write`.
 
 ```json
 {
-  "uri": "device://profiles",
-  "name": "Device Profiles",
-  "description": "All configured device profiles",
-  "mimeType": "application/json"
-}
-```
-
-### device://{id}
-
-Individual device resource.
-
-```json
-{
-  "uri": "device://{id}",
-  "name": "Device Details",
-  "description": "Device details by ID",
-  "mimeType": "application/json"
-}
-```
-
-## Usage Examples
-
-### stdio Mode
-
-```bash
-# Start MCP server
-platformctl mcp serve --transport stdio
-
-# Example tool call (sent via stdin)
-{
-  "jsonrpc": "2.0",
-  "id": 1,
-  "method": "tools/call",
-  "params": {
-    "name": "device_list",
-    "arguments": {"page": 1, "page_size": 10}
+  "name": "device_template_create",
+  "arguments": {
+    "tenant_id": "acme",
+    "name": "edge",
+    "role": "load-balancer",
+    "config": "hostname: edge-01\n",
+    "match_rules": {"mac_prefix": "00:25:90"}
   }
 }
 ```
 
+Returns the stored template with the server-assigned `id` as a decimal
+string and `config` as text.
+
+### device_template_get, device_template_list, device_template_update, device_template_delete
+
+Read, page, replace and delete stored device templates
+(`DeviceService.GetTemplate`, `ListTemplates`, `UpdateTemplate`,
+`DeleteTemplate`). `id` is a decimal string or a number; an unknown id is an
+error. `device_template_update` takes `id` and the `device_template_create`
+arguments, with `name` required, and replaces the stored template.
+`device_template_list` takes `page` and `page_size` (defaults 1 and 50).
+Get and list require `device:read`, update `device:write`, delete
+`device:delete`.
+
+```json
+{"name": "device_template_get", "arguments": {"id": "9000"}}
+{"name": "device_template_list", "arguments": {"page": 1, "page_size": 50}}
+{"name": "device_template_update", "arguments": {"id": "9000", "name": "edge", "role": "load-balancer", "config": "hostname: edge-02\n"}}
+{"name": "device_template_delete", "arguments": {"id": "9000"}}
+```
+
+Get and update return the template as `device_template_create` does; list
+returns `{"templates": [...], "total": N, "page": P, "page_size": S}`;
+delete returns `{"success": true, "id": "9000"}`.
+
+### profile_create_from_template
+
+Builds a profile from a stored device template and saves it
+(`DeviceService.CreateProfileFromTemplate`). `template_id` is required. The
+profile takes the template's tenant, role, config and match rules; the
+non-empty fields of `overrides`, which use the `profile_create` argument
+names, replace them. Requires `device:write`.
+
+```json
+{
+  "name": "profile_create_from_template",
+  "arguments": {
+    "template_id": 9000,
+    "overrides": {"name": "gw-01", "ek_serial": "1234567890"}
+  }
+}
+```
+
+Returns the saved profile with the uint64 `id` rendered as a decimal
+string. The Go SDK refuses template `bmc` and `overrides.tenant_id`,
+`overrides.networks` and `overrides.platformd_config` before sending, since
+these arguments have no place for them ([api.md §4](api.md#4-device-templates)).
+
+## Resources
+
+Two read-only device resources are registered (`pkg/api/mcp/resources.go`).
+There is no profiles resource.
+
+| URI | Name | Content |
+|-----|------|---------|
+| `platform://device/list` | Device List | Every registered device |
+| `platform://device/{id}` | Device Details | One device by id |
+
+## Usage Examples
+
+platformd serves MCP over HTTPS only. `MCPConfig.Transport`
+(`pkg/api/daemon/config.go`) defaults to `http`, and no configuration key or
+flag selects `stdio`.
+
 ### HTTP Mode
 
 ```bash
-# Start MCP server
-platformctl mcp serve --transport http --port 9445
-
-# Tool call via HTTP
-curl -X POST http://localhost:9445/mcp \
+# Tool call over HTTPS (TLS 1.3 only; trust the platform CA)
+curl --tlsv1.3 --cacert platform-ca.pem -X POST https://localhost:9445/mcp \
   -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $TOKEN" \
   -d '{
     "jsonrpc": "2.0",
     "id": 1,
     "method": "tools/call",
     "params": {
       "name": "device_get",
-      "arguments": {"id": 1234567890}
+      "arguments": {"device_id": "1234567890"}
     }
   }'
 ```
@@ -526,16 +644,17 @@ curl -X POST http://localhost:9445/mcp \
 
 ## Error Handling
 
-MCP errors follow JSON-RPC 2.0:
+MCP errors follow JSON-RPC 2.0. A failed tool call answers the code for its
+error class (#505); the message is the error text and `data` names the tool:
 
 ```json
 {
   "jsonrpc": "2.0",
   "id": 1,
   "error": {
-    "code": -32000,
-    "message": "Device not found",
-    "data": {"device_id": 999}
+    "code": -32005,
+    "message": "DEVICE_NOT_FOUND: device not found",
+    "data": "device_get"
   }
 }
 ```
@@ -545,8 +664,14 @@ MCP errors follow JSON-RPC 2.0:
 | -32700 | Parse error |
 | -32600 | Invalid request |
 | -32601 | Method not found |
-| -32602 | Invalid params |
-| -32603 | Internal error |
-| -32000 | Application error |
+| -32602 | Invalid argument (also an unknown tool) |
+| -32001 / -32002 / -32003 | Authentication required / invalid token / permission denied |
+| -32004 | Service unavailable |
+| -32005 | Not found |
+| -32006 | Already exists |
+| -32007 | Failed precondition |
+| -32603 | Unclassified failure |
 
-See [api-reference.md](api-reference.md) for complete error code mapping.
+The classification rules are in [`docs/daemon/api.md`](../daemon/api.md) §1.
+
+See [api.md](api.md) for the device transport matrix.

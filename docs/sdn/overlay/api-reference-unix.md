@@ -1,5 +1,8 @@
 # VXLAN Overlay Unix Socket API Reference
 
+> **Status: REFERENCE** · Last verified: 2026-10-15
+> How to reach the overlay operations over the local socket.
+
 ## Overview
 
 | Property | Value |
@@ -26,8 +29,6 @@ platformctl --transport unix sdn overlay status
 platformctl --transport unix sdn overlay vtep list
 platformctl --transport unix sdn overlay vni create --vni 1000100 --vlan 100
 ```
-
-The status payload includes `unpeered_vteps` when overlay IPsec is enabled.
 
 ### Go (platform SDK)
 

@@ -17,13 +17,29 @@ import (
 	"context"
 	"encoding/base64"
 	"errors"
-	"strings"
 	"testing"
+
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
+
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
 
-// vmToolNames is the authoritative list of VM snapshot/attestation tool
-// names. Registration, routing, and this list must all agree.
+// vmToolNames is the authoritative list of VM lifecycle, snapshot and
+// attestation tool names. Registration, routing, and this list must all agree.
 var vmToolNames = []string{
+	"vm_create",
+	"vm_list",
+	"vm_get",
+	"vm_delete",
+	"vm_start",
+	"vm_stop",
+	"vm_reboot",
+	"vm_suspend",
+	"vm_resume",
+	"vm_migration_prepare",
+	"vm_migration_finalize",
 	"vm_snapshot_create",
 	"vm_snapshot_get",
 	"vm_snapshot_list",
@@ -34,83 +50,61 @@ var vmToolNames = []string{
 }
 
 // vmStubProvider satisfies VMProvider for tests, capturing the arguments
-// each method receives.
+// and requests each method receives.
 type vmStubProvider struct {
 	lastCall       string
 	lastVMID       string
 	lastSnapshotID string
-	lastNonce      []byte
-	lastPCRs       []int
-	lastVerifyReq  *VMAttestVerifyMCPRequest
-
-	snapshotCreateFunc func(ctx context.Context, vmID, name string) (interface{}, error)
-	attestFunc         func(ctx context.Context, vmID string, nonce []byte, pcrs []int) (interface{}, error)
-	verifyFunc         func(ctx context.Context, vmID string, req *VMAttestVerifyMCPRequest) (interface{}, error)
-	snapshotErr        error
+	lastCreateReq  *platformv1.CreateSnapshotRequest
+	lastAttestReq  *platformv1.AttestVMRequest
+	lastVerifyReq  *platformv1.VerifyVMAttestationRequest
+	snapshotErr    error
 }
 
-func (s *vmStubProvider) VMSnapshotCreate(ctx context.Context, vmID, name string) (interface{}, error) {
+func (s *vmStubProvider) VMSnapshotCreate(_ context.Context, req *platformv1.CreateSnapshotRequest) (interface{}, error) {
 	s.lastCall = "snapshot_create"
-	s.lastVMID = vmID
-	s.lastSnapshotID = name
-	if s.snapshotCreateFunc != nil {
-		return s.snapshotCreateFunc(ctx, vmID, name)
-	}
-	return map[string]interface{}{"name": name, "vm_id": vmID}, nil
+	s.lastCreateReq = req
+	return &platformv1.CreateSnapshotResponse{}, nil
 }
 
-func (s *vmStubProvider) VMSnapshotGet(ctx context.Context, vmID, snapshotID string) (interface{}, error) {
-	s.lastCall = "snapshot_get"
+func (s *vmStubProvider) VMSnapshotGet(_ context.Context, vmID, snapshotID string) (interface{}, error) {
+	return s.recordByID("snapshot_get", vmID, snapshotID)
+}
+
+func (s *vmStubProvider) VMSnapshotList(_ context.Context, vmID string) (interface{}, error) {
+	return s.recordByID("snapshot_list", vmID, "")
+}
+
+func (s *vmStubProvider) VMSnapshotDelete(_ context.Context, vmID, snapshotID string) (interface{}, error) {
+	return s.recordByID("snapshot_delete", vmID, snapshotID)
+}
+
+func (s *vmStubProvider) VMSnapshotRestore(_ context.Context, vmID, snapshotID string) (interface{}, error) {
+	return s.recordByID("snapshot_restore", vmID, snapshotID)
+}
+
+// recordByID records a snapshot verb addressed by ids and answers with the
+// configured error, or a reply naming the call.
+func (s *vmStubProvider) recordByID(call, vmID, snapshotID string) (interface{}, error) {
+	s.lastCall = call
 	s.lastVMID = vmID
 	s.lastSnapshotID = snapshotID
 	if s.snapshotErr != nil {
 		return nil, s.snapshotErr
 	}
-	return map[string]interface{}{"name": snapshotID, "vm_id": vmID}, nil
+	return map[string]interface{}{"call": call}, nil
 }
 
-func (s *vmStubProvider) VMSnapshotList(ctx context.Context, vmID string) (interface{}, error) {
-	s.lastCall = "snapshot_list"
-	s.lastVMID = vmID
-	if s.snapshotErr != nil {
-		return nil, s.snapshotErr
-	}
-	return map[string]interface{}{"vm_id": vmID, "snapshots": []interface{}{}, "count": 0}, nil
-}
-
-func (s *vmStubProvider) VMSnapshotDelete(ctx context.Context, vmID, snapshotID string) error {
-	s.lastCall = "snapshot_delete"
-	s.lastVMID = vmID
-	s.lastSnapshotID = snapshotID
-	return s.snapshotErr
-}
-
-func (s *vmStubProvider) VMSnapshotRestore(ctx context.Context, vmID, snapshotID string) error {
-	s.lastCall = "snapshot_restore"
-	s.lastVMID = vmID
-	s.lastSnapshotID = snapshotID
-	return s.snapshotErr
-}
-
-func (s *vmStubProvider) VMAttest(ctx context.Context, vmID string, nonce []byte, pcrs []int) (interface{}, error) {
+func (s *vmStubProvider) VMAttest(_ context.Context, req *platformv1.AttestVMRequest) (interface{}, error) {
 	s.lastCall = "attest"
-	s.lastVMID = vmID
-	s.lastNonce = nonce
-	s.lastPCRs = pcrs
-	if s.attestFunc != nil {
-		return s.attestFunc(ctx, vmID, nonce, pcrs)
-	}
-	return map[string]interface{}{"vm_id": vmID, "quote": "cXVvdGU="}, nil
+	s.lastAttestReq = req
+	return &platformv1.AttestVMResponse{}, nil
 }
 
-func (s *vmStubProvider) VMAttestVerify(ctx context.Context, vmID string, req *VMAttestVerifyMCPRequest) (interface{}, error) {
+func (s *vmStubProvider) VMAttestVerify(_ context.Context, req *platformv1.VerifyVMAttestationRequest) (interface{}, error) {
 	s.lastCall = "attest_verify"
-	s.lastVMID = vmID
 	s.lastVerifyReq = req
-	if s.verifyFunc != nil {
-		return s.verifyFunc(ctx, vmID, req)
-	}
-	return map[string]interface{}{"vm_id": vmID, "verified": true}, nil
+	return &platformv1.VerifyVMAttestationResponse{}, nil
 }
 
 // vmCombinedProvider embeds both mockServiceProvider (satisfies the full
@@ -144,10 +138,11 @@ func newVMRegistry() (*ToolRegistry, *vmStubProvider) {
 
 // TestVMToolRegistrationAndRoutingParity guards against the bug class where
 // a tool is registered but never routed. It asserts that:
-//  1. every expected VM snapshot/attestation tool is registered,
-//  2. the dispatch map keys and the expected name list are identical, and
+//  1. every expected VM lifecycle/snapshot/attestation tool is registered,
+//  2. each expected tool is routed by exactly one of the dispatch map and
+//     the gRPC-bound lifecycle map, and neither routes an unlisted tool, and
 //  3. ExecuteTool actually routes every tool to the VM executor (a provider
-//     without VMProvider yields ErrVMComputeNotConfigured, never
+//     without the VM interfaces yields ErrVMComputeNotConfigured, never
 //     "unknown tool").
 func TestVMToolRegistrationAndRoutingParity(t *testing.T) {
 	ctx := context.Background()
@@ -155,29 +150,28 @@ func TestVMToolRegistrationAndRoutingParity(t *testing.T) {
 
 	registered := make(map[string]bool)
 	for _, tool := range registry.ListTools() {
-		if strings.HasPrefix(tool.Name, "vm_snapshot_") || strings.HasPrefix(tool.Name, "vm_attest") {
-			registered[tool.Name] = true
-		}
+		registered[tool.Name] = true
 	}
-
-	if len(registered) != len(vmToolNames) {
-		t.Errorf("registered %d VM snapshot/attest tools, want %d: %v",
-			len(registered), len(vmToolNames), registered)
-	}
+	expected := make(map[string]bool, len(vmToolNames))
 	for _, name := range vmToolNames {
+		expected[name] = true
 		if !registered[name] {
 			t.Errorf("expected tool %q is not registered", name)
 		}
-	}
-
-	for name := range registered {
-		if _, ok := vmToolDispatch[name]; !ok {
-			t.Errorf("registered tool %q has no executor in vmToolDispatch", name)
+		_, executed := vmToolDispatch[name]
+		_, bound := vmLifecycleTools[name]
+		if executed == bound {
+			t.Errorf("expected tool %q must be routed by exactly one of vmToolDispatch and vmLifecycleTools", name)
 		}
 	}
 	for name := range vmToolDispatch {
-		if !registered[name] {
-			t.Errorf("dispatch map routes %q but the tool is not registered", name)
+		if !expected[name] {
+			t.Errorf("dispatch map routes %q but it is not in vmToolNames", name)
+		}
+	}
+	for name := range vmLifecycleTools {
+		if !expected[name] {
+			t.Errorf("vmLifecycleTools binds %q but it is not in vmToolNames", name)
 		}
 	}
 
@@ -197,8 +191,11 @@ func TestExecuteVMSnapshotCreate(t *testing.T) {
 	registry, stub := newVMRegistry()
 
 	result, err := registry.ExecuteTool(ctx, "vm_snapshot_create", map[string]interface{}{
-		"vm_id": "vm1",
-		"name":  "snap1",
+		"vm_id":           "vm1",
+		"name":            "snap1",
+		"description":     "nightly",
+		"memory_snapshot": true,
+		"disk_snapshot":   true,
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -206,8 +203,14 @@ func TestExecuteVMSnapshotCreate(t *testing.T) {
 	if result == nil {
 		t.Fatal("expected result")
 	}
-	if stub.lastCall != "snapshot_create" || stub.lastVMID != "vm1" || stub.lastSnapshotID != "snap1" {
-		t.Errorf("provider call mismatch: %+v", stub)
+	want := &platformv1.CreateSnapshotRequest{
+		VmId: "vm1",
+		Config: &platformv1.SnapshotConfig{
+			Name: "snap1", Description: "nightly", MemorySnapshot: true, DiskSnapshot: true,
+		},
+	}
+	if stub.lastCall != "snapshot_create" || !proto.Equal(stub.lastCreateReq, want) {
+		t.Errorf("CreateSnapshot request = %v, want %v", stub.lastCreateReq, want)
 	}
 }
 
@@ -223,42 +226,35 @@ func TestExecuteVMSnapshotCreate_MissingArgs(t *testing.T) {
 	}
 }
 
+// TestExecuteVMSnapshotLifecycle: each by-id verb reaches its provider method
+// with both ids, and the provider's reply is the tool's reply.
 func TestExecuteVMSnapshotLifecycle(t *testing.T) {
 	ctx := context.Background()
 	registry, stub := newVMRegistry()
 
 	args := map[string]interface{}{"vm_id": "vm1", "snapshot_id": "snap1"}
-
-	if _, err := registry.ExecuteTool(ctx, "vm_snapshot_get", args); err != nil {
-		t.Fatalf("get: %v", err)
-	}
-	if stub.lastCall != "snapshot_get" {
-		t.Errorf("expected snapshot_get, got %s", stub.lastCall)
+	for _, tc := range []struct{ tool, call string }{
+		{"vm_snapshot_get", "snapshot_get"},
+		{"vm_snapshot_delete", "snapshot_delete"},
+		{"vm_snapshot_restore", "snapshot_restore"},
+	} {
+		result, err := registry.ExecuteTool(ctx, tc.tool, args)
+		if err != nil {
+			t.Fatalf("%s: %v", tc.tool, err)
+		}
+		if stub.lastCall != tc.call || stub.lastVMID != "vm1" || stub.lastSnapshotID != "snap1" {
+			t.Errorf("%s: provider saw %s(%q, %q)", tc.tool, stub.lastCall, stub.lastVMID, stub.lastSnapshotID)
+		}
+		if m, ok := result.(map[string]interface{}); !ok || m["call"] != tc.call {
+			t.Errorf("%s: result = %v, want the provider's reply", tc.tool, result)
+		}
 	}
 
 	if _, err := registry.ExecuteTool(ctx, "vm_snapshot_list", map[string]interface{}{"vm_id": "vm1"}); err != nil {
 		t.Fatalf("list: %v", err)
 	}
-	if stub.lastCall != "snapshot_list" {
-		t.Errorf("expected snapshot_list, got %s", stub.lastCall)
-	}
-
-	result, err := registry.ExecuteTool(ctx, "vm_snapshot_delete", args)
-	if err != nil {
-		t.Fatalf("delete: %v", err)
-	}
-	if stub.lastCall != "snapshot_delete" {
-		t.Errorf("expected snapshot_delete, got %s", stub.lastCall)
-	}
-	if m, ok := result.(map[string]interface{}); !ok || m["success"] != true {
-		t.Errorf("delete result = %v, want success map", result)
-	}
-
-	if _, err := registry.ExecuteTool(ctx, "vm_snapshot_restore", args); err != nil {
-		t.Fatalf("restore: %v", err)
-	}
-	if stub.lastCall != "snapshot_restore" {
-		t.Errorf("expected snapshot_restore, got %s", stub.lastCall)
+	if stub.lastCall != "snapshot_list" || stub.lastVMID != "vm1" {
+		t.Errorf("list: provider saw %s(%q)", stub.lastCall, stub.lastVMID)
 	}
 }
 
@@ -308,20 +304,15 @@ func TestExecuteVMAttest(t *testing.T) {
 	if result == nil {
 		t.Fatal("expected result")
 	}
-	if stub.lastCall != "attest" || stub.lastVMID != "vm1" {
-		t.Errorf("provider call mismatch: %+v", stub)
-	}
-	if string(stub.lastNonce) != string(nonce) {
-		t.Errorf("nonce = %q, want %q", stub.lastNonce, nonce)
-	}
-	if len(stub.lastPCRs) != 2 || stub.lastPCRs[0] != 0 || stub.lastPCRs[1] != 7 {
-		t.Errorf("pcrs = %v, want [0 7]", stub.lastPCRs)
+	want := &platformv1.AttestVMRequest{VmId: "vm1", Nonce: nonce, PcrIndices: []uint32{0, 7}}
+	if stub.lastCall != "attest" || !proto.Equal(stub.lastAttestReq, want) {
+		t.Errorf("AttestVM request = %v, want %v", stub.lastAttestReq, want)
 	}
 }
 
 func TestExecuteVMAttest_InvalidArgs(t *testing.T) {
 	ctx := context.Background()
-	registry, _ := newVMRegistry()
+	registry, stub := newVMRegistry()
 
 	if _, err := registry.ExecuteTool(ctx, "vm_attest", map[string]interface{}{}); !errors.Is(err, ErrVMIDRequired) {
 		t.Errorf("missing vm_id: err = %v, want ErrVMIDRequired", err)
@@ -335,6 +326,21 @@ func TestExecuteVMAttest_InvalidArgs(t *testing.T) {
 	if !errors.As(err, &nonceErr) {
 		t.Errorf("invalid nonce: err = %v, want ErrVMInvalidNonce", err)
 	}
+
+	_, err = registry.ExecuteTool(ctx, "vm_attest", map[string]interface{}{
+		"vm_id":        "vm1",
+		"include_pcrs": []interface{}{float64(-1)},
+	})
+	var pcrErr ErrVMInvalidPCRIndex
+	if !errors.As(err, &pcrErr) || pcrErr.Index != -1 {
+		t.Errorf("negative PCR: err = %v, want ErrVMInvalidPCRIndex{-1}", err)
+	}
+	if status.Code(err) != codes.InvalidArgument {
+		t.Errorf("negative PCR: code = %v, want InvalidArgument", status.Code(err))
+	}
+	if stub.lastAttestReq != nil {
+		t.Errorf("an invalid request reached the provider: %v", stub.lastAttestReq)
+	}
 }
 
 func TestExecuteVMAttestVerify(t *testing.T) {
@@ -344,10 +350,11 @@ func TestExecuteVMAttestVerify(t *testing.T) {
 	b64 := func(b []byte) string { return base64.StdEncoding.EncodeToString(b) }
 
 	result, err := registry.ExecuteTool(ctx, "vm_attest_verify", map[string]interface{}{
-		"vm_id":     "vm1",
-		"quote":     b64([]byte("quote")),
-		"signature": b64([]byte("signature")),
-		"nonce":     b64([]byte("nonce")),
+		"vm_id":               "vm1",
+		"quote":               b64([]byte("quote")),
+		"signature":           b64([]byte("signature")),
+		"signature_algorithm": "SHA256-RSAPSS",
+		"nonce":               b64([]byte("nonce")),
 		"expected_pcrs": map[string]interface{}{
 			"0": b64([]byte{0x01}),
 			"7": b64([]byte{0x07}),
@@ -362,15 +369,19 @@ func TestExecuteVMAttestVerify(t *testing.T) {
 	if stub.lastCall != "attest_verify" {
 		t.Errorf("expected attest_verify, got %s", stub.lastCall)
 	}
-	req := stub.lastVerifyReq
-	if req == nil {
-		t.Fatal("expected verify request")
+	want := &platformv1.VerifyVMAttestationRequest{
+		VmId:               "vm1",
+		Quote:              []byte("quote"),
+		Signature:          []byte("signature"),
+		SignatureAlgorithm: "SHA256-RSAPSS",
+		Nonce:              []byte("nonce"),
+		ExpectedPcrs: []*platformv1.PCRValue{
+			{Index: 0, Bank: platformv1.PCRBank_PCR_BANK_SHA256, Value: []byte{0x01}},
+			{Index: 7, Bank: platformv1.PCRBank_PCR_BANK_SHA256, Value: []byte{0x07}},
+		},
 	}
-	if string(req.Quote) != "quote" || string(req.Signature) != "signature" || string(req.Nonce) != "nonce" {
-		t.Errorf("evidence mismatch: %+v", req)
-	}
-	if len(req.ExpectedPCRs) != 2 || req.ExpectedPCRs[0][0] != 0x01 || req.ExpectedPCRs[7][0] != 0x07 {
-		t.Errorf("expected PCRs mismatch: %v", req.ExpectedPCRs)
+	if !proto.Equal(stub.lastVerifyReq, want) {
+		t.Errorf("VerifyVMAttestation request = %v, want %v", stub.lastVerifyReq, want)
 	}
 }
 

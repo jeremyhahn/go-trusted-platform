@@ -14,8 +14,10 @@
 package bootstrap
 
 import (
+	"net"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -205,6 +207,45 @@ type PlatformGlobalConfig struct {
 	// minutes later, and that failure cancelled the whole remaining-nodes
 	// phase. An operator on slower chassis can raise it without a rebuild.
 	HealthTimeout time.Duration `yaml:"health_timeout,omitempty"`
+
+	// ControlPlanePort is the TLS port of the control plane's webservice,
+	// the webservices[].tls-port its role template declares. The
+	// orchestrator dials it to capture the CA bundle and SPKI pin, to seed
+	// templates and to probe health, and picks the certificate identity
+	// it verifies from the webservice entry on this port. Zero uses
+	// DefaultControlPlanePort; set it when the control-plane template
+	// moves the webservice.
+	ControlPlanePort int `yaml:"control_plane_port,omitempty"`
+}
+
+// DefaultControlPlanePort is the control plane's webservice TLS port when
+// platform.control_plane_port is unset: the tls-port the shipped
+// control-plane template declares.
+const DefaultControlPlanePort = 8443
+
+// EffectiveControlPlanePort returns the configured control-plane webservice
+// port, or DefaultControlPlanePort when unset. Config validation has already
+// bounded an explicit value.
+func (c *BootstrapConfig) EffectiveControlPlanePort() int {
+	if c == nil || c.Platform.ControlPlanePort == 0 {
+		return DefaultControlPlanePort
+	}
+	return c.Platform.ControlPlanePort
+}
+
+// HealthProbePorts returns the HTTPS ports a node health probe tries, in
+// order: the control plane's webservice port, then the gateway and worker
+// listener (nodeWebserviceTLSPort) and the gateway's 443. A node's port
+// depends on its role, which a probe by address cannot see, so the probe
+// tries each; a control-plane port equal to one of the others is tried once.
+func (c *BootstrapConfig) HealthProbePorts() []int {
+	ports := []int{c.EffectiveControlPlanePort()}
+	for _, port := range []int{nodeWebserviceTLSPort, gatewayWebserviceTLSPort} {
+		if !slices.Contains(ports, port) {
+			ports = append(ports, port)
+		}
+	}
+	return ports
 }
 
 // EffectivePostInstallHealthTimeout returns the configured post-install health
@@ -278,8 +319,16 @@ type DeployerConfig struct {
 	// up the right NIC for DHCP/TFTP listening.
 	BootstrapInterface string `yaml:"bootstrap_interface,omitempty"`
 
-	// BootstrapServerIP is the IP the bootstrap container's
-	// DHCP/TFTP/HTTP services bind to. Default in the entrypoint is
+	// BootstrapBindHost is the address the bootstrap container's HTTP
+	// and TFTP servers bind. Empty, the default, binds every interface.
+	// DHCP never binds it: PXE clients broadcast, and Linux delivers a
+	// broadcast only to a socket on the unspecified address, so DHCP
+	// stays there, scoped to bootstrap_interface (#93).
+	BootstrapBindHost string `yaml:"bootstrap_bind_host,omitempty"`
+
+	// BootstrapServerIP is the IP the bootstrap container advertises as
+	// the DHCP server and next server; the per-device boot script server
+	// binds it. Default in the entrypoint is
 	// 192.0.2.1, suitable for a deployment that already has the
 	// provisioning subnet configured. For first bootstrap on a
 	// fresh deploy (no provisioning subnet yet) this MUST point at
@@ -317,6 +366,13 @@ type DeployerConfig struct {
 	// offers. Empty falls through to entrypoint default (192.0.2.1).
 	BootstrapGateway string `yaml:"bootstrap_gateway,omitempty"`
 
+	// BootstrapNoRouter makes the bootstrap container's DHCP server
+	// advertise no gateway (no option 3), for an isolated provisioning
+	// VLAN whose boot server is not a router. Off (the default) keeps
+	// bootstrap_gateway and its entrypoint default. Setting both is an
+	// error.
+	BootstrapNoRouter bool `yaml:"bootstrap_no_router,omitempty"`
+
 	// BootstrapDNS is the DNS server advertised in DHCP offers.
 	// Empty falls through to entrypoint default (192.0.2.1).
 	BootstrapDNS string `yaml:"bootstrap_dns,omitempty"`
@@ -342,6 +398,22 @@ type DeployerConfig struct {
 	// get boot options and no lease, for a provisioning segment whose own
 	// DHCP server leases addresses.
 	ProxyDHCP bool `yaml:"proxy_dhcp,omitempty"`
+
+	// BootNode keeps the bootstrap container serving after the run: it
+	// starts with --restart unless-stopped, Phase 7 neither removes it nor
+	// deletes data_dir, and the iPXE firmware cache is a host volume at
+	// FirmwareCacheDir. data_dir must then be an absolute path that
+	// survives a reboot (not under /tmp, /run or /dev/shm). An explicit
+	// `platformctl bootstrap teardown` still removes the container and
+	// data_dir. Off (the default) is the transient bootstrap container.
+	BootNode bool `yaml:"boot_node,omitempty"`
+
+	// FirmwareCacheDir is the host directory mounted as the container's
+	// iPXE firmware cache in boot-node mode. Empty means data_dir with
+	// "-firmware" appended (/srv/pxeboot → /srv/pxeboot-firmware): beside
+	// data_dir, never inside it, so a teardown keeps the cache. Only valid
+	// with boot_node.
+	FirmwareCacheDir string `yaml:"firmware_cache_dir,omitempty"`
 
 	// PXEServiceHost names the platform node that should host the
 	// persistent PXE/DHCP service after Phase 5 hand-off. Empty means
@@ -452,6 +524,42 @@ func (d *DeployerConfig) validatePorts() error {
 		}
 	}
 	return nil
+}
+
+// validateBindHost rejects a bootstrap_bind_host that is not an IP
+// address. Empty is valid: every interface.
+func (d *DeployerConfig) validateBindHost() error {
+	if d.BootstrapBindHost == "" || net.ParseIP(d.BootstrapBindHost) != nil {
+		return nil
+	}
+	return ErrInvalidConfig{
+		Field:  "deployer.bootstrap_bind_host",
+		Reason: d.BootstrapBindHost + " is not an IP address",
+	}
+}
+
+// validateBootNode applies the deployer's boot-node rules at config-load
+// time, so `platformctl bootstrap validate` rejects a boot node on a
+// volatile data_dir before any SSH session. The rules live in the
+// deployer package; this only feeds them the YAML values.
+func (d *DeployerConfig) validateBootNode() error {
+	dc := deployer.DeployConfig{
+		DataDir:          d.DataDir,
+		BootNode:         d.BootNode,
+		FirmwareCacheDir: d.FirmwareCacheDir,
+	}
+	dc.ApplyDefaults()
+	return dc.ValidateBootNode()
+}
+
+// validateRouter applies the deployer's router rule at config-load time:
+// bootstrap_no_router and bootstrap_gateway together are refused.
+func (d *DeployerConfig) validateRouter() error {
+	dc := deployer.DeployConfig{
+		BootstrapGateway:  d.BootstrapGateway,
+		BootstrapNoRouter: d.BootstrapNoRouter,
+	}
+	return dc.ValidateRouter()
 }
 
 // validateExplicitPort bounds a port an operator actually set. Zero is
@@ -1046,6 +1154,18 @@ func (c *BootstrapConfig) ValidateDefinition() error {
 	}
 
 	if err := c.Deployer.validatePorts(); err != nil {
+		return err
+	}
+	if err := c.Deployer.validateBindHost(); err != nil {
+		return err
+	}
+	if err := c.Deployer.validateBootNode(); err != nil {
+		return err
+	}
+	if err := c.Deployer.validateRouter(); err != nil {
+		return err
+	}
+	if err := validateExplicitPort("platform.control_plane_port", c.Platform.ControlPlanePort); err != nil {
 		return err
 	}
 

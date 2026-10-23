@@ -16,7 +16,7 @@ import (
 	"strconv"
 	"time"
 
-	aggeneric "github.com/jeremyhahn/arduino-generic/sdk/go"
+	tfw "github.com/jeremyhahn/trusted-firmware/sdk/go"
 
 	bmcattestation "github.com/jeremyhahn/go-trusted-platform/pkg/bmc/attestation"
 )
@@ -29,7 +29,8 @@ var (
 
 // oidUCCSEvidence is tcg-dice-UCCS-evidence, TCG DICE Attestation
 // Architecture r23 §6.1.4. Its PRESENCE is all this package reads; the claims
-// set inside it is go-xkms's to decode.
+// set inside it is decoded by go-xkms, reached through the go-quicbaas SDK
+// (not yet published).
 var oidUCCSEvidence = asn1.ObjectIdentifier{2, 23, 133, 5, 4, 6}
 
 // CertAttester is implemented by a backend that can mint an enrolment-time
@@ -47,7 +48,7 @@ type CertAttester interface {
 	AttestCert(ctx context.Context, nonce []byte) (*bmcattestation.Evidence, error)
 }
 
-// Backend is one attached arduino-generic device, presented as an attestation
+// Backend is one attached trusted-firmware device, presented as an attestation
 // provider for one tenant.
 //
 // It holds the device's CAPS reply, read once at construction and never
@@ -60,8 +61,8 @@ type CertAttester interface {
 // The link belongs to whoever opened it. This type does not close it.
 type Backend struct {
 	config *Config
-	device *aggeneric.Device
-	caps   aggeneric.Caps
+	device *tfw.Device
+	caps   tfw.Caps
 	logger *slog.Logger
 
 	// elementSerial is the secure element's nine-byte serial, hex-encoded,
@@ -80,7 +81,7 @@ type Backend struct {
 // what binds recorded evidence to a specific piece of silicon; a
 // secure-element device that cannot say which element it holds is refused
 // rather than recorded anonymously.
-func New(ctx context.Context, config *Config, device *aggeneric.Device) (*Backend, error) {
+func New(ctx context.Context, config *Config, device *tfw.Device) (*Backend, error) {
 	if config == nil {
 		return nil, ErrNilConfig{}
 	}
@@ -111,14 +112,14 @@ func New(ctx context.Context, config *Config, device *aggeneric.Device) (*Backen
 	}
 	b.caps = *caps
 
-	if !caps.Has(aggeneric.FeatureAttest) {
+	if !caps.Has(tfw.FeatureAttest) {
 		return nil, ErrAttestationNotCompiledIn{
-			BoardID:    caps.BoardID,
+			BoardID:    uint8(caps.BoardID),
 			CryptoTier: caps.CryptoTier.String(),
 		}
 	}
 
-	if caps.CryptoTier == aggeneric.CryptoSecureElement {
+	if caps.CryptoTier == tfw.CryptoSecureElement {
 		info, err := device.ProvInfo(callCtx)
 		if err != nil {
 			return nil, b.deviceFailure(bmcattestation.ActionGetInfo, "PROV_INFO", err)
@@ -142,7 +143,7 @@ func New(ctx context.Context, config *Config, device *aggeneric.Device) (*Backen
 func (b *Backend) TenantID() string { return b.config.TenantID }
 
 // Caps reports the device's capabilities as read at construction.
-func (b *Backend) Caps() aggeneric.Caps { return b.caps }
+func (b *Backend) Caps() tfw.Caps { return b.caps }
 
 // Dump asks the device for nonce-bound runtime evidence.
 //
@@ -156,8 +157,8 @@ func (b *Backend) Caps() aggeneric.Caps { return b.caps }
 // by THIS gateway at relay time — the device contributed no time and this
 // field must never be read as one it did.
 func (b *Backend) Dump(ctx context.Context, nonce []byte) (*bmcattestation.Evidence, error) {
-	if len(nonce) != aggeneric.AttestNonceLen {
-		return nil, ErrNonceLength{Flow: "runtime", Got: len(nonce), Want: aggeneric.AttestNonceLen}
+	if len(nonce) != tfw.AttestNonceLen {
+		return nil, ErrNonceLength{Flow: "runtime", Got: len(nonce), Want: tfw.AttestNonceLen}
 	}
 
 	callCtx, cancel := context.WithTimeout(ctx, b.timeout)
@@ -167,8 +168,8 @@ func (b *Backend) Dump(ctx context.Context, nonce []byte) (*bmcattestation.Evide
 	if err != nil {
 		return nil, b.deviceFailure(bmcattestation.ActionDump, "ATTEST", err)
 	}
-	if len(raw) != aggeneric.EvidenceLen {
-		return nil, ErrEvidenceLength{Got: len(raw), Want: aggeneric.EvidenceLen}
+	if len(raw) != tfw.EvidenceLen {
+		return nil, ErrEvidenceLength{Got: len(raw), Want: tfw.EvidenceLen}
 	}
 
 	return b.wrap(ActionDump, FormatFrame, nonce, raw), nil
@@ -186,8 +187,8 @@ func (b *Backend) Dump(ctx context.Context, nonce []byte) (*bmcattestation.Evide
 // that passed a raw key authorization is refused for its width rather than
 // quietly enrolled against something else.
 func (b *Backend) AttestCert(ctx context.Context, nonce []byte) (*bmcattestation.Evidence, error) {
-	if len(nonce) != aggeneric.AliasNonceLen {
-		return nil, ErrNonceLength{Flow: "enrolment", Got: len(nonce), Want: aggeneric.AliasNonceLen}
+	if len(nonce) != tfw.AliasNonceLen {
+		return nil, ErrNonceLength{Flow: "enrolment", Got: len(nonce), Want: tfw.AliasNonceLen}
 	}
 
 	callCtx, cancel := context.WithTimeout(ctx, b.timeout)
@@ -268,7 +269,8 @@ func (b *Backend) GetInfo(ctx context.Context, ev *bmcattestation.Evidence) (*bm
 // a comparison that flagged them would report every device as drifted.
 //
 // Only evidence frames compare. An alias certificate's comparable content is
-// its UCCS claims set, and decoding that belongs to go-xkms.
+// its UCCS claims set, and decoding that goes through the go-quicbaas SDK
+// (not yet published), which delegates to go-xkms.
 func (b *Backend) Compare(ctx context.Context, live, ref *bmcattestation.Evidence) (*bmcattestation.CompareResult, error) {
 	if live == nil || ref == nil {
 		return nil, bmcattestation.ErrInvalidEvidence{Reason: "compare requires both live and reference evidence"}
@@ -330,7 +332,8 @@ func (b *Backend) measureFrame(ev *bmcattestation.Evidence) (*bmcattestation.Mea
 // NonceEcho is left nil. The challenge is inside the UCCS claims set, this
 // package does not decode that, and reporting a nonce it had not read would
 // be reporting a check it had not performed. Nonce verification on this path
-// is dice.Verify's, through go-xkms.
+// is go-xkms's dice.Verify, reached through the go-quicbaas SDK (not yet
+// published).
 func (b *Backend) measureCertificate(ev *bmcattestation.Evidence) (*bmcattestation.Measurement, error) {
 	leaf, err := x509.ParseCertificate(ev.Raw)
 	if err != nil {

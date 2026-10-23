@@ -19,10 +19,12 @@ import (
 	"errors"
 	"log/slog"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/qemu"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/policy"
 )
 
@@ -163,7 +165,7 @@ func TestQEMUOrchestrator_Start_AlreadyRunning(t *testing.T) {
 	config.WorkDir = tmpDir
 
 	logger := logging.NewLogger(slog.LevelDebug, nil)
-	orch, err := NewQEMUOrchestrator(config, logger)
+	orch, err := newFakeHostOrchestrator(t, config, logger)
 	if err != nil {
 		t.Fatalf("Failed to create orchestrator: %v", err)
 	}
@@ -198,7 +200,7 @@ func TestQEMUOrchestrator_Start_InvalidState(t *testing.T) {
 	config.WorkDir = tmpDir
 
 	logger := logging.NewLogger(slog.LevelDebug, nil)
-	orch, err := NewQEMUOrchestrator(config, logger)
+	orch, err := newFakeHostOrchestrator(t, config, logger)
 	if err != nil {
 		t.Fatalf("Failed to create orchestrator: %v", err)
 	}
@@ -233,7 +235,7 @@ func TestQEMUOrchestrator_Stop_AlreadyStopped(t *testing.T) {
 	config.WorkDir = tmpDir
 
 	logger := logging.NewLogger(slog.LevelDebug, nil)
-	orch, err := NewQEMUOrchestrator(config, logger)
+	orch, err := newFakeHostOrchestrator(t, config, logger)
 	if err != nil {
 		t.Fatalf("Failed to create orchestrator: %v", err)
 	}
@@ -266,7 +268,7 @@ func TestQEMUOrchestrator_Delete_WithSWTPM(t *testing.T) {
 	config.WorkDir = tmpDir
 
 	logger := logging.NewLogger(slog.LevelDebug, nil)
-	orch, err := NewQEMUOrchestrator(config, logger)
+	orch, err := newFakeHostOrchestrator(t, config, logger)
 	if err != nil {
 		t.Fatalf("Failed to create orchestrator: %v", err)
 	}
@@ -305,7 +307,7 @@ func TestQEMUOrchestrator_AttachNetwork_NoOVSClient(t *testing.T) {
 	config.WorkDir = tmpDir
 
 	logger := logging.NewLogger(slog.LevelDebug, nil)
-	orch, err := NewQEMUOrchestrator(config, logger)
+	orch, err := newFakeHostOrchestrator(t, config, logger)
 	if err != nil {
 		t.Fatalf("Failed to create orchestrator: %v", err)
 	}
@@ -338,7 +340,7 @@ func TestQEMUOrchestrator_AttachNetwork_AlreadyAttached(t *testing.T) {
 	config.WorkDir = tmpDir
 
 	logger := logging.NewLogger(slog.LevelDebug, nil)
-	orch, err := NewQEMUOrchestrator(config, logger)
+	orch, err := newFakeHostOrchestrator(t, config, logger)
 	if err != nil {
 		t.Fatalf("Failed to create orchestrator: %v", err)
 	}
@@ -378,7 +380,7 @@ func TestQEMUOrchestrator_DetachNetwork_NoNetworkAttached(t *testing.T) {
 	config.WorkDir = tmpDir
 
 	logger := logging.NewLogger(slog.LevelDebug, nil)
-	orch, err := NewQEMUOrchestrator(config, logger)
+	orch, err := newFakeHostOrchestrator(t, config, logger)
 	if err != nil {
 		t.Fatalf("Failed to create orchestrator: %v", err)
 	}
@@ -413,7 +415,7 @@ func TestQEMUOrchestrator_ActivateInstance_NoNetwork(t *testing.T) {
 	config.PolicyEngine = newMockPolicyEngine()
 
 	logger := logging.NewLogger(slog.LevelDebug, nil)
-	orch, err := NewQEMUOrchestrator(config, logger)
+	orch, err := newFakeHostOrchestrator(t, config, logger)
 	if err != nil {
 		t.Fatalf("Failed to create orchestrator: %v", err)
 	}
@@ -452,7 +454,7 @@ func TestQEMUOrchestrator_Close_MultipleInstances(t *testing.T) {
 	config.MaxInstances = 10
 
 	logger := logging.NewLogger(slog.LevelDebug, nil)
-	orch, err := NewQEMUOrchestrator(config, logger)
+	orch, err := newFakeHostOrchestrator(t, config, logger)
 	if err != nil {
 		t.Fatalf("Failed to create orchestrator: %v", err)
 	}
@@ -610,91 +612,63 @@ func TestLifecycleManager_WaitForState_EmptyID(t *testing.T) {
 
 // TestLifecycleManager_WaitForState_InstanceNotFound tests WaitForState when instance not found
 func TestLifecycleManager_WaitForState_InstanceNotFound(t *testing.T) {
-	lm := NewLifecycleManager()
+	synctest.Test(t, func(t *testing.T) {
+		lm := NewLifecycleManager()
 
-	err := lm.WaitForState("non-existent", StateStopped, time.Millisecond*200)
-	if err != ErrInstanceNotFound {
-		t.Errorf("Expected ErrInstanceNotFound, got %v", err)
-	}
+		err := lm.WaitForState("non-existent", StateStopped, time.Millisecond*200)
+		if err != ErrInstanceNotFound {
+			t.Errorf("Expected ErrInstanceNotFound, got %v", err)
+		}
+	})
 }
 
 // TestLifecycleManager_WaitForState_Timeout tests WaitForState timeout
 func TestLifecycleManager_WaitForState_Timeout(t *testing.T) {
-	lm := NewLifecycleManager()
+	synctest.Test(t, func(t *testing.T) {
+		lm := NewLifecycleManager()
 
-	// Set initial state
-	err := lm.SetState("test-instance", StateCreating)
-	if err != nil {
-		t.Fatalf("Failed to set initial state: %v", err)
-	}
+		// Set initial state
+		err := lm.SetState("test-instance", StateCreating)
+		if err != nil {
+			t.Fatalf("Failed to set initial state: %v", err)
+		}
 
-	// Wait for a state that will never be reached
-	err = lm.WaitForState("test-instance", StateRunning, time.Millisecond*200)
-	if err != ErrTimeout {
-		t.Errorf("Expected ErrTimeout, got %v", err)
-	}
+		// Wait for a state that will never be reached
+		err = lm.WaitForState("test-instance", StateRunning, time.Millisecond*200)
+		if err != ErrTimeout {
+			t.Errorf("Expected ErrTimeout, got %v", err)
+		}
+	})
 }
 
 // TestLifecycleManager_WaitForState_EntersError tests WaitForState when instance enters error state
 func TestLifecycleManager_WaitForState_EntersError(t *testing.T) {
-	lm := NewLifecycleManager()
+	synctest.Test(t, func(t *testing.T) {
+		lm := NewLifecycleManager()
+		mustSetState(t, lm, "test-instance", StateCreating)
 
-	// Set initial state
-	err := lm.SetState("test-instance", StateCreating)
-	if err != nil {
-		t.Fatalf("Failed to set initial state: %v", err)
-	}
+		done := startWaitForState(lm, "test-instance", StateRunning, time.Second*5)
+		mustSetState(t, lm, "test-instance", StateError)
 
-	// Start waiting in goroutine
-	done := make(chan error, 1)
-	go func() {
-		done <- lm.WaitForState("test-instance", StateRunning, time.Second*5)
-	}()
-
-	// Transition to error state after a short delay
-	time.Sleep(time.Millisecond * 150)
-	lm.SetState("test-instance", StateError)
-
-	// Check result
-	select {
-	case err := <-done:
-		if err == nil {
+		if err := <-done; err == nil {
 			t.Error("Expected error when instance enters error state")
 		}
-	case <-time.After(time.Second * 2):
-		t.Error("WaitForState did not return in time")
-	}
+	})
 }
 
 // TestLifecycleManager_WaitForState_Success tests WaitForState success case
 func TestLifecycleManager_WaitForState_Success(t *testing.T) {
-	lm := NewLifecycleManager()
+	synctest.Test(t, func(t *testing.T) {
+		lm := NewLifecycleManager()
+		mustSetState(t, lm, "test-instance", StateCreating)
 
-	// Set initial state
-	err := lm.SetState("test-instance", StateCreating)
-	if err != nil {
-		t.Fatalf("Failed to set initial state: %v", err)
-	}
+		done := startWaitForState(lm, "test-instance", StateStopped, time.Second*5)
+		mustSetState(t, lm, "test-instance", StateStopped)
 
-	// Start waiting in goroutine
-	done := make(chan error, 1)
-	go func() {
-		done <- lm.WaitForState("test-instance", StateStopped, time.Second*5)
-	}()
-
-	// Transition to target state after a short delay
-	time.Sleep(time.Millisecond * 150)
-	lm.SetState("test-instance", StateStopped)
-
-	// Check result
-	select {
-	case err := <-done:
-		if err != nil {
+		if err := <-done; err != nil {
 			t.Errorf("Unexpected error: %v", err)
 		}
-	case <-time.After(time.Second * 2):
-		t.Error("WaitForState did not return in time")
-	}
+	})
 }
 
 // TestLifecycleManager_GetStateTimestamp_NotFound tests GetStateTimestamp when instance not found
@@ -716,6 +690,7 @@ func TestOrchestratorConfig_Validate_EmptyDiskSize(t *testing.T) {
 		DefaultCPUs:     2,
 		DefaultDiskSize: "",
 		MaxInstances:    10,
+		Arch:            qemu.ArchX86_64,
 		QEMUBinary:      "qemu-system-x86_64",
 		OVMFCode:        "/path/to/ovmf",
 		OVMFVars:        "/path/to/vars",
@@ -770,6 +745,7 @@ func TestOrchestratorConfig_Validate_VM_MissingQEMU(t *testing.T) {
 		DefaultCPUs:     2,
 		DefaultDiskSize: "10G",
 		MaxInstances:    10,
+		Arch:            qemu.ArchX86_64,
 		QEMUBinary:      "",
 		OVMFCode:        "/path/to/ovmf",
 		OVMFVars:        "/path/to/vars",
@@ -790,6 +766,7 @@ func TestOrchestratorConfig_Validate_VM_MissingOVMFCode(t *testing.T) {
 		DefaultCPUs:     2,
 		DefaultDiskSize: "10G",
 		MaxInstances:    10,
+		Arch:            qemu.ArchX86_64,
 		QEMUBinary:      "qemu-system-x86_64",
 		OVMFCode:        "",
 		OVMFVars:        "/path/to/vars",
@@ -810,6 +787,7 @@ func TestOrchestratorConfig_Validate_VM_MissingOVMFVars(t *testing.T) {
 		DefaultCPUs:     2,
 		DefaultDiskSize: "10G",
 		MaxInstances:    10,
+		Arch:            qemu.ArchX86_64,
 		QEMUBinary:      "qemu-system-x86_64",
 		OVMFCode:        "/path/to/ovmf",
 		OVMFVars:        "",
@@ -851,7 +829,7 @@ func TestQEMUOrchestrator_Wait_EmptyID(t *testing.T) {
 	config.WorkDir = tmpDir
 
 	logger := logging.NewLogger(slog.LevelDebug, nil)
-	orch, err := NewQEMUOrchestrator(config, logger)
+	orch, err := newFakeHostOrchestrator(t, config, logger)
 	if err != nil {
 		t.Fatalf("Failed to create orchestrator: %v", err)
 	}
@@ -873,7 +851,7 @@ func TestQEMUOrchestrator_Wait_NotFound(t *testing.T) {
 	config.WorkDir = tmpDir
 
 	logger := logging.NewLogger(slog.LevelDebug, nil)
-	orch, err := NewQEMUOrchestrator(config, logger)
+	orch, err := newFakeHostOrchestrator(t, config, logger)
 	if err != nil {
 		t.Fatalf("Failed to create orchestrator: %v", err)
 	}
@@ -897,7 +875,7 @@ func TestQEMUOrchestrator_DetachNetwork_WithPortAuth(t *testing.T) {
 	config.PolicyEngine = newMockPolicyEngine()
 
 	logger := logging.NewLogger(slog.LevelDebug, nil)
-	orch, err := NewQEMUOrchestrator(config, logger)
+	orch, err := newFakeHostOrchestrator(t, config, logger)
 	if err != nil {
 		t.Fatalf("Failed to create orchestrator: %v", err)
 	}
@@ -959,7 +937,7 @@ func TestQEMUOrchestrator_Delete_WithPortAuth(t *testing.T) {
 	config.PolicyEngine = newMockPolicyEngine()
 
 	logger := logging.NewLogger(slog.LevelDebug, nil)
-	orch, err := NewQEMUOrchestrator(config, logger)
+	orch, err := newFakeHostOrchestrator(t, config, logger)
 	if err != nil {
 		t.Fatalf("Failed to create orchestrator: %v", err)
 	}

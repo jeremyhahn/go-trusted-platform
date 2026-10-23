@@ -63,6 +63,7 @@ start-backend: start-container
 		docker exec $(CONTAINER_NAME) bash -c "if [ ! -f /workspace/bin/platformd ]; then cd /workspace && CGO_ENABLED=1 go build -tags 'iam codec_msgpack codec_cbor codec_json local objstore raft' -o bin/platformd ./cmd/platformd; fi"; \
 		echo "$(CYAN)Starting backend in container...$(NO_COLOR)"; \
 		docker exec $(CONTAINER_NAME) bash -c "rm -rf /workspace/trusted-data 2>/dev/null; mkdir -p /workspace/trusted-data/{etc,log,quicbaas/wal,www}"; \
+		docker exec $(CONTAINER_NAME) cp /workspace/configs/platform/standalone/web-test.example.yaml /workspace/config.yaml; \
 		docker exec -d $(CONTAINER_NAME) bash -c "cd /workspace && ./bin/platformd --config config.yaml --init > $(BACKEND_LOG_FILE) 2>&1"; \
 		echo "$(CYAN)Waiting for backend to be ready...$(NO_COLOR)"; \
 		for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do \

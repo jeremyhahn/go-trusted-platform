@@ -26,9 +26,13 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"strings"
 	"sync/atomic"
 	"time"
+
+	"google.golang.org/protobuf/encoding/protojson"
+
+	pb "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
+	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
 )
 
 // =============================================================================
@@ -134,8 +138,8 @@ type MCPAdapter struct {
 }
 
 // NewMCPAdapter creates a new MCP adapter for integration testing.
-// The MCP server serves plain HTTP (not HTTPS), so the adapter uses a plain
-// HTTP client regardless of whether mTLS is configured for other protocols.
+// The MCP server serves TLS 1.3 only (#844), so the adapter uses the mTLS
+// HTTPS client shared with the other transports.
 func NewMCPAdapter() *MCPAdapter {
 	endpoint := os.Getenv(EnvPlatformMCPEndpoint)
 	if endpoint == "" {
@@ -143,10 +147,8 @@ func NewMCPAdapter() *MCPAdapter {
 	}
 
 	return &MCPAdapter{
-		endpoint: endpoint,
-		httpClient: &http.Client{
-			Timeout: DefaultMCPTimeout,
-		},
+		endpoint:   endpoint,
+		httpClient: helpers.NewHTTPClient(DefaultMCPTimeout),
 	}
 }
 
@@ -192,15 +194,6 @@ func (m *MCPAdapter) nextRequestID() int64 {
 	return atomic.AddInt64(&m.requestID, 1)
 }
 
-// mcpEndpointURL constructs the MCP endpoint URL. The MCP server always serves
-// plain HTTP, so this function always uses the http:// scheme.
-func mcpEndpointURL(endpoint string) string {
-	if strings.HasPrefix(endpoint, "http://") || strings.HasPrefix(endpoint, "https://") {
-		return endpoint + "/mcp"
-	}
-	return "http://" + endpoint + "/mcp"
-}
-
 func (m *MCPAdapter) sendRequest(ctx context.Context, method string, params interface{}, result interface{}) error {
 	req := jsonRPCRequest{
 		JSONRPC: "2.0",
@@ -214,7 +207,7 @@ func (m *MCPAdapter) sendRequest(ctx context.Context, method string, params inte
 		return ErrMCPRequestFailed{Err: fmt.Errorf("failed to marshal request: %w", err)}
 	}
 
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, mcpEndpointURL(m.endpoint), bytes.NewReader(reqBody))
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, helpers.MCPEndpointURL(m.endpoint), bytes.NewReader(reqBody))
 	if err != nil {
 		return ErrMCPRequestFailed{Err: fmt.Errorf("failed to create request: %w", err)}
 	}
@@ -311,26 +304,18 @@ func (m *MCPAdapter) callTool(ctx context.Context, toolName string, args map[str
 
 // Health retrieves health status via MCP tool call.
 func (m *MCPAdapter) Health(ctx context.Context) (*HealthResult, error) {
-	var resp mcpHealthResponse
-	if err := m.callTool(ctx, "platform_health", nil, &resp); err != nil {
+	// platform_health is unauthenticated, so it answers the status only: a
+	// GetHealthResponse with no components, in protojson.
+	var raw json.RawMessage
+	if err := m.callTool(ctx, "platform_health", nil, &raw); err != nil {
 		return nil, err
 	}
 
-	result := &HealthResult{
-		Status:    resp.Status,
-		Timestamp: mcpUnixMillisToTime(resp.Timestamp),
+	var resp pb.GetHealthResponse
+	if err := protojson.Unmarshal(raw, &resp); err != nil {
+		return nil, ErrMCPResponseParseFailed{Operation: "platform_health", Err: err}
 	}
-
-	for _, c := range resp.Components {
-		result.Components = append(result.Components, ComponentHealth{
-			Name:      c.Name,
-			Status:    c.Status,
-			Message:   c.Message,
-			LastCheck: mcpUnixMillisToTime(c.LastCheck),
-		})
-	}
-
-	return result, nil
+	return healthResultFromProto(&resp), nil
 }
 
 // =============================================================================
@@ -531,19 +516,6 @@ func (m *MCPAdapter) ListProtocols(ctx context.Context) (*ListProtocolsResult, e
 // =============================================================================
 // MCP Response Types
 // =============================================================================
-
-type mcpHealthResponse struct {
-	Status     string                       `json:"status"`
-	Components []mcpComponentHealthResponse `json:"components,omitempty"`
-	Timestamp  int64                        `json:"timestamp"`
-}
-
-type mcpComponentHealthResponse struct {
-	Name      string `json:"name"`
-	Status    string `json:"status"`
-	Message   string `json:"message,omitempty"`
-	LastCheck int64  `json:"lastCheck"`
-}
 
 type mcpStatusResponse struct {
 	Status    string               `json:"status"`

@@ -31,10 +31,9 @@ import (
 
 const defaultRESTTimeout = 30 * time.Second
 
-// RESTAdapter drives ceremony operations over HTTPS REST. The Phase 3.5 REST
-// routes are not yet wired, so calls currently return 404 / 503; the
-// multiprotocol test treats that as "backend not configured" (same surface
-// as the other transports reporting ErrCeremonyNotConfigured).
+// RESTAdapter drives ceremony operations over HTTPS REST through the SDK REST
+// transport. A daemon without a ceremony backend answers 503 with
+// ErrCeremonyNotConfigured, the same error the other transports report.
 type RESTAdapter struct {
 	baseURL    string
 	httpClient *http.Client

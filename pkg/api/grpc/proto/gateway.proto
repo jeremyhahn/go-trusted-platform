@@ -145,9 +145,6 @@ message SnapshotOverlay {
   int64 uptime_seconds = 13;
   repeated GatewayAdmittedVTEP admitted_vteps = 14;
   SnapshotOverlayNDCounters nd_counters = 15;
-  // refused_replays counts the replays of a refused VTEP's routes that
-  // failed, leaving the VTEP refused for the next sweep.
-  uint64 refused_replays = 16;
 }
 
 message SnapshotOverlayNDCounters {
@@ -377,6 +374,10 @@ message IPAllocation {
   string hostname = 4;
   google.protobuf.Timestamp allocated_at = 5;
   google.protobuf.Timestamp expires_at = 6;
+  // IPAM allocation status: "active", "reserved", "expired" or "released".
+  // An allocation IPAM expired for inactivity keeps a zero expires_at, so
+  // only this field says it no longer holds its address.
+  string status = 7;
 }
 
 // Request/Response messages — Gateway

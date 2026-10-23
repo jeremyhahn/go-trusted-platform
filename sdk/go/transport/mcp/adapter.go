@@ -19,16 +19,20 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"maps"
 	"strings"
 	"sync/atomic"
+	"time"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
-	mcpapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/mcp"
 	platform "github.com/jeremyhahn/go-trusted-platform/sdk/go"
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/transport"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/transport/pollstream"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/mcpwire"
 )
 
 func init() {
@@ -37,10 +41,12 @@ func init() {
 
 // Adapter implements the transport.Adapter interface for MCP over HTTP.
 type Adapter struct {
-	client    *mcpapi.Client
+	client    *mcpwire.Client
 	connected atomic.Bool
 	closed    atomic.Bool
 	address   string
+	// timeout bounds each tool call; a polled stream waits half of it.
+	timeout time.Duration
 }
 
 // Connect establishes an MCP connection to the platform daemon.
@@ -53,18 +59,36 @@ func Connect(ctx context.Context, opts *platform.Options) (transport.Adapter, er
 		return nil, platform.ErrEmptyAddress
 	}
 
-	// Ensure address has proper scheme - always use HTTPS
+	// The daemon serves MCP over TLS 1.3 only (#844), so a bare address
+	// dials https://. An explicit http:// address is passed through for
+	// non-daemon MCP servers, but credentials only ever travel over https://.
 	address := opts.MCPAddr
-	if !strings.HasPrefix(address, "http://") && !strings.HasPrefix(address, "https://") {
+	if strings.HasPrefix(address, "http://") {
+		if names := opts.CredentialOptions(); len(names) > 0 {
+			return nil, platform.ErrInsecureTransport{
+				Protocol: platform.ProtocolMCP,
+				Target:   opts.MCPAddr,
+				Reason:   strings.Join(names, ", ") + " requires https://",
+			}
+		}
+	} else if !strings.HasPrefix(address, "https://") {
 		address = "https://" + address
 	}
 
 	// Build MCP client configuration
-	clientConfig := mcpapi.DefaultClientConfig(address)
+	clientConfig := mcpwire.DefaultClientConfig(address)
 	clientConfig.Timeout = opts.GetTimeout()
+	if strings.HasPrefix(address, "https://") {
+		clientConfig.TLSConfig = opts.ClientTLSConfig()
+	}
+
+	var clientOpts []mcpwire.ClientOption
+	if opts.BearerToken != "" {
+		clientOpts = append(clientOpts, mcpwire.WithMCPToken(opts.BearerToken))
+	}
 
 	// Create MCP client
-	client, err := mcpapi.NewClient(clientConfig)
+	client, err := mcpwire.NewClient(clientConfig, clientOpts...)
 	if err != nil {
 		return nil, platform.ErrConnectionFailed{
 			Protocol: platform.ProtocolMCP,
@@ -73,21 +97,29 @@ func Connect(ctx context.Context, opts *platform.Options) (transport.Adapter, er
 		}
 	}
 
-	a := &Adapter{
-		client:  client,
-		address: opts.MCPAddr,
-	}
-	a.connected.Store(true)
-
-	// Optionally initialize the MCP connection
 	initCtx, cancel := context.WithTimeout(ctx, opts.GetTimeout())
 	defer cancel()
 
-	// Initialize the MCP connection. Initialization failure is non-fatal
-	// because the MCP server might not require initialization.
+	// A server that does not answer initialize is not usable, so report the
+	// failure and let auto-detection fall back to the next protocol.
+	start := time.Now()
 	if _, initErr := client.Initialize(initCtx); initErr != nil {
-		a.connected.Store(false)
+		if transport.IsTimeout(initErr) {
+			initErr = platform.ErrTimeout{Operation: "MCP initialize", Elapsed: time.Since(start), Err: initErr}
+		}
+		return nil, platform.ErrConnectionFailed{
+			Protocol: platform.ProtocolMCP,
+			Target:   opts.MCPAddr,
+			Err:      errors.Join(initErr, client.Close()),
+		}
 	}
+
+	a := &Adapter{
+		client:  client,
+		address: opts.MCPAddr,
+		timeout: clientConfig.Timeout,
+	}
+	a.connected.Store(true)
 
 	return a, nil
 }
@@ -133,7 +165,7 @@ func (a *Adapter) Target() string {
 }
 
 // Client returns the underlying MCP client for direct access.
-func (a *Adapter) Client() *mcpapi.Client {
+func (a *Adapter) Client() *mcpwire.Client {
 	return a.client
 }
 
@@ -156,6 +188,16 @@ func (c *mcpClientConn) Invoke(ctx context.Context, method string, args interfac
 	toolName, ok := grpcMethodToMCPToolMap[method]
 	if !ok {
 		return status.Error(codes.Unimplemented, ErrMethodNotMapped{Method: method}.Error())
+	}
+
+	// The daemon serves MCP over plain HTTP and stdio: there is no TLS
+	// connection whose exporter a proof could be bound to, so a call that
+	// needs one is refused before anything is sent (docs/device/architecture.md).
+	if _, bound := transport.ChannelBindingFrom(opts); bound {
+		return &transport.ErrChannelBindingUnavailable{
+			Transport: platform.ProtocolMCP.String(),
+			Reason:    "MCP is served over plain HTTP or stdio, with no TLS connection to bind to",
+		}
 	}
 
 	// Check connection state
@@ -191,11 +233,11 @@ func (c *mcpClientConn) Invoke(ctx context.Context, method string, args interfac
 	// Convert result to reply. Methods with a custom decoder (domain JSON
 	// shapes, flattened oneofs) bypass the generic JSON round-trip.
 	if reply != nil && result != nil {
+		if decode, hasDecoder := mcpRequestReplyDecoders[method]; hasDecoder {
+			return decodeStatus(decode(args, result, reply))
+		}
 		if decode, hasDecoder := mcpReplyDecoders[method]; hasDecoder {
-			if decErr := decode(result, reply); decErr != nil {
-				return status.Error(codes.Internal, decErr.Error())
-			}
-			return nil
+			return decodeStatus(decode(result, reply))
 		}
 		if err := mapToStruct(result, reply); err != nil {
 			return status.Error(codes.Internal, ErrUnmarshalFailed{Err: err}.Error())
@@ -205,15 +247,31 @@ func (c *mcpClientConn) Invoke(ctx context.Context, method string, args interfac
 	return nil
 }
 
-// NewStream creates a new stream (not supported for MCP).
-func (c *mcpClientConn) NewStream(ctx context.Context, desc *grpc.StreamDesc, method string, opts ...grpc.CallOption) (grpc.ClientStream, error) {
-	return nil, status.Error(codes.Unimplemented, "streaming not supported over MCP transport")
+// decodeStatus maps a reply decoder's error onto a gRPC status: an error
+// that carries its own status (e.g. a lookup that finds nothing) keeps it,
+// and any other is Internal.
+func decodeStatus(err error) error {
+	if err == nil {
+		return nil
+	}
+	if st, ok := status.FromError(err); ok {
+		return st.Err()
+	}
+	return status.Error(codes.Internal, err.Error())
+}
+
+// NewStream opens a server-streaming RPC by long-polling its unary twin; MCP
+// carries no streams of its own. A method with no unary twin is
+// Unimplemented.
+func (c *mcpClientConn) NewStream(ctx context.Context, _ *grpc.StreamDesc, method string, opts ...grpc.CallOption) (grpc.ClientStream, error) {
+	return pollstream.NewStream(ctx, c, method, c.adapter.timeout, opts...)
 }
 
 // grpcMethodToMCPToolMap provides O(1) lookup for gRPC method to MCP tool mapping.
 // Method paths use the proto package "platform.v1" (with dot) and full RPC names
 // matching the generated gRPC stubs. Tool names mirror those registered server-side
-// by pkg/api/mcp/tools.go so adapter and server stay in lockstep.
+// by pkg/api/mcp/tools.go; pkg/api/mcp checks every entry against its
+// registry through MethodTools, so adapter and server stay in lockstep.
 var grpcMethodToMCPToolMap = map[string]string{
 	// Gateway perf verification — proto: pkg/api/grpc/proto/gateway.proto.
 	// Tool executors live in pkg/api/mcp/gateway_perf_tools.go; results
@@ -230,7 +288,6 @@ var grpcMethodToMCPToolMap = map[string]string{
 	"/platform.v1.GatewayService/ListGatewayAdmittedVTEPs": "gateway_admitted_vteps",
 
 	// Daemon / Health — proto: pkg/api/grpc/proto/daemon.proto
-	"/platform.v1.PlatformDaemon/GetHealth":        "platform_health",
 	"/platform.v1.PlatformDaemon/GetStatus":        "platform_daemon_status",
 	"/platform.v1.PlatformDaemon/GetVersion":       "platform_daemon_version",
 	"/platform.v1.PlatformDaemon/ListServices":     "platform_daemon_list_services",
@@ -239,9 +296,22 @@ var grpcMethodToMCPToolMap = map[string]string{
 	"/platform.v1.PlatformDaemon/StopService":      "platform_daemon_stop_service",
 	"/platform.v1.PlatformDaemon/RestartService":   "platform_daemon_restart_service",
 
+	// TPM Service — proto: pkg/api/grpc/proto/tpm.proto. Only the quote
+	// pair is routed (#482); the SDK refuses Quote here, because MCP has no
+	// TLS connection to bind it to.
+	"/platform.v1.TPMService/Quote":       "platform_tpm_quote",
+	"/platform.v1.TPMService/VerifyQuote": "platform_tpm_verify_quote",
+	"/platform.v1.TPMService/Certify":     "platform_tpm_certify",
+	// Capabilities, platform attributes and PCR extend (#704); the argument
+	// and result mapping is in tpm_attrs.go.
+	"/platform.v1.TPMService/GetCapabilities":       "platform_tpm_capabilities",
+	"/platform.v1.TPMService/GetPlatformAttributes": "platform_tpm_platform",
+	"/platform.v1.TPMService/ExtendPCR":             "platform_tpm_pcr_extend",
+
 	// CA Service — proto: pkg/api/grpc/proto/ca.proto
 	"/platform.v1.CAService/GetCAInfo":         "ca_info",
 	"/platform.v1.CAService/IssueCertificate":  "ca_issue",
+	"/platform.v1.CAService/SignCSR":           "ca_sign_csr",
 	"/platform.v1.CAService/GetCertificate":    "ca_get",
 	"/platform.v1.CAService/ListCertificates":  "ca_list",
 	"/platform.v1.CAService/RevokeCertificate": "ca_revoke",
@@ -279,7 +349,6 @@ var grpcMethodToMCPToolMap = map[string]string{
 	"/platform.v1.PlatformIAMService/ListTenants":  "iam_list_tenants",
 
 	// IAM Token / Auth Operations
-	"/platform.v1.PlatformIAMService/Authenticate":    "iam_authenticate",
 	"/platform.v1.PlatformIAMService/CheckPermission": "iam_check_permission",
 	"/platform.v1.PlatformIAMService/CreateToken":     "iam_create_token",
 	"/platform.v1.PlatformIAMService/RevokeToken":     "iam_revoke_token",
@@ -298,6 +367,15 @@ var grpcMethodToMCPToolMap = map[string]string{
 	"/platform.v1.KeyManagementService/GenerateRandom":         "kms_random",
 	"/platform.v1.KeyManagementService/GenerateDataKey":        "kms_generate_data_key",
 	"/platform.v1.KeyManagementService/GenerateWrappedDataKey": "kms_generate_wrapped_data_key",
+	"/platform.v1.KeyManagementService/Hash":                   "kms_hash",
+	"/platform.v1.KeyManagementService/HMAC":                   "kms_hmac",
+	"/platform.v1.KeyManagementService/VerifyHMAC":             "kms_verify_hmac",
+	"/platform.v1.KeyManagementService/Rewrap":                 "kms_rewrap",
+	"/platform.v1.KeyManagementService/ImportKey":              "kms_import_key",
+	"/platform.v1.KeyManagementService/UpdateKeyStatus":        "kms_update_key_status",
+	"/platform.v1.KeyManagementService/GetKeyVersions":         "kms_list_key_versions",
+	"/platform.v1.KeyManagementService/BatchEncrypt":           "kms_batch_encrypt",
+	"/platform.v1.KeyManagementService/BatchDecrypt":           "kms_batch_decrypt",
 
 	// vTPM — proto: pkg/api/grpc/proto/vtpm.proto
 	"/platform.v1.VTPMService/QuoteVTPM":     "vtpm_quote",
@@ -308,7 +386,7 @@ var grpcMethodToMCPToolMap = map[string]string{
 
 	// Device — proto: pkg/api/grpc/proto/device.proto
 	"/platform.v1.DeviceService/CreateDevice": "device_register",
-	"/platform.v1.DeviceService/DeleteDevice": "device_unregister",
+	"/platform.v1.DeviceService/DeleteDevice": "device_delete",
 	"/platform.v1.DeviceService/GetDevice":    "device_get",
 	"/platform.v1.DeviceService/ListDevices":  "device_list",
 	"/platform.v1.DeviceService/UpdateDevice": "device_update",
@@ -317,36 +395,27 @@ var grpcMethodToMCPToolMap = map[string]string{
 	// the result carries proto field names, so the generic round-trip
 	// decodes straight into RecordAttestationCertificateResponse.
 	"/platform.v1.DeviceService/RecordAttestationCertificate": "device_record_attest_cert",
+	// A diskless node's per-boot requests. Server tools: pkg/api/mcp/tools.go
+	// device_boot_certificate / device_boot_delivery. MCP carries no TLS
+	// connection, so the server refuses both; the mapping exists for parity.
+	"/platform.v1.DeviceService/BootCertificate": "device_boot_certificate",
+	"/platform.v1.DeviceService/BootDelivery":    "device_boot_delivery",
 
-	// SDN — proto: pkg/api/grpc/proto/sdn.proto
-	"/platform.v1.SDNService/CreateBridge": "sdn_create_bridge",
-	"/platform.v1.SDNService/DeleteBridge": "sdn_delete_bridge",
-	"/platform.v1.SDNService/ListBridges":  "sdn_list_bridges",
-	"/platform.v1.SDNService/AddFlow":      "sdn_add_flow",
-	"/platform.v1.SDNService/DeleteFlow":   "sdn_delete_flow",
-	"/platform.v1.SDNService/ListFlows":    "sdn_list_flows",
+	// Operator Enable/Disable Device (#250). Server tools:
+	// pkg/api/mcp/tools.go device_disable / device_enable; the result is a
+	// DeviceLifecycleResponse with proto field names.
+	"/platform.v1.DeviceService/DisableDevice": "device_disable",
+	"/platform.v1.DeviceService/EnableDevice":  "device_enable",
 
-	// DNS — proto: pkg/api/grpc/proto/platform_dns.proto
-	"/platform.v1.DNSService/AddRecord":    "dns_add_record",
-	"/platform.v1.DNSService/DeleteRecord": "dns_delete_record",
-	"/platform.v1.DNSService/ListRecords":  "dns_list_records",
-	"/platform.v1.DNSService/Resolve":      "dns_resolve",
-	"/platform.v1.DNSService/CreateZone":   "dns_create_zone",
-	"/platform.v1.DNSService/DeleteZone":   "dns_delete_zone",
-	"/platform.v1.DNSService/ListZones":    "dns_list_zones",
+	// SDN — proto: pkg/api/grpc/proto/sdn.proto; registered in sdn.go
 
-	// Tenant — proto: pkg/api/grpc/proto/tenant.proto
-	"/platform.v1.TenantService/CreateTenant":  "tenant_create",
-	"/platform.v1.TenantService/DeleteTenant":  "tenant_delete",
-	"/platform.v1.TenantService/GetTenant":     "tenant_get",
-	"/platform.v1.TenantService/ListTenants":   "tenant_list",
-	"/platform.v1.TenantService/UpdateTenant":  "tenant_update",
-	"/platform.v1.TenantService/SuspendTenant": "tenant_suspend",
-	"/platform.v1.TenantService/ResumeTenant":  "tenant_resume",
+	// DNS — proto: pkg/api/grpc/proto/platform_dns.proto; registered in dns.go
+
+	// Tenant — proto: pkg/api/grpc/proto/tenant.proto; registered in tenant.go.
 
 	// Compute / Container — proto: pkg/api/grpc/proto/compute.proto
 	"/platform.v1.ComputeService/CreateContainer":  "container_create",
-	"/platform.v1.ComputeService/DeleteContainer":  "container_delete",
+	"/platform.v1.ComputeService/DeleteContainer":  "container_remove",
 	"/platform.v1.ComputeService/StartContainer":   "container_start",
 	"/platform.v1.ComputeService/StopContainer":    "container_stop",
 	"/platform.v1.ComputeService/ListContainers":   "container_list",
@@ -389,32 +458,30 @@ var grpcMethodToMCPToolMap = map[string]string{
 	"/platform.v1.ConfigDeliveryService/GetSession":     "provision_get_session",
 }
 
-// mcpErrorCodeToGRPCMap provides O(1) lookup for MCP error codes to gRPC codes.
-var mcpErrorCodeToGRPCMap = map[int]codes.Code{
-	mcpapi.ParseError:             codes.InvalidArgument,
-	mcpapi.InvalidRequest:         codes.InvalidArgument,
-	mcpapi.MethodNotFound:         codes.Unimplemented,
-	mcpapi.InvalidParams:          codes.InvalidArgument,
-	mcpapi.InternalError:          codes.Internal,
-	mcpapi.AuthenticationRequired: codes.Unauthenticated,
-	mcpapi.InvalidToken:           codes.Unauthenticated,
-	mcpapi.PermissionDenied:       codes.PermissionDenied,
-	mcpapi.ServiceUnavailable:     codes.Unavailable,
+// MethodTools returns a copy of the gRPC full-method to MCP tool-name table
+// this transport dispatches through. The daemon checks its tool registry
+// against it, so a mapping to a tool the server does not register fails
+// there rather than at a caller.
+func MethodTools() map[string]string {
+	return maps.Clone(grpcMethodToMCPToolMap)
 }
 
-// translateMCPErrorToGRPC translates MCP errors to gRPC status errors.
+// translateMCPErrorToGRPC decodes an MCP error into the gRPC status error
+// the gRPC and REST transports return for the same failure, so callers
+// branch on status.Code whichever transport carried the call.
 func translateMCPErrorToGRPC(err error) error {
 	if err == nil {
 		return nil
 	}
 
-	// Check for MCP-specific errors
-	if mcpErr, ok := err.(*mcpapi.MCPError); ok {
-		code, found := mcpErrorCodeToGRPCMap[mcpErr.Code]
-		if !found {
-			code = codes.Unknown
-		}
-		return status.Error(code, mcpErr.Message)
+	var mcpErr *mcpwire.MCPError
+	if errors.As(err, &mcpErr) {
+		return status.Error(mcpwire.ClassForCode(mcpErr.Code), mcpErr.Message)
+	}
+
+	var statusErr *mcpwire.HTTPStatusError
+	if errors.As(err, &statusErr) {
+		return status.Error(statusErr.Class(), statusErr.Error())
 	}
 
 	// Default to unavailable for connection issues

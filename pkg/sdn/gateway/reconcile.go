@@ -73,21 +73,39 @@ func (g *Gateway) Apply(ctx context.Context, desired *gwstate.DesiredConfig) err
 		return nil
 	}
 
-	// In the supervised process model the services live in the datapath
-	// child; the document goes to it whole and its reconciliation state
-	// is the truth this gateway reports (#557).
-	if g.config.Supervisor != nil {
+	// A supervising gatewayd runs the datapath services in the datapath
+	// child; the document goes to it whole, the supervisor keeps it to
+	// re-send to a relaunched child, and its reconciliation state is the truth this
+	// gateway reports (#557). A gatewayd with no supervisor — the datapath
+	// child itself, or one run with process supervision off — hosts the
+	// services and applies the document here.
+	// The VPN runs in this process whichever way the datapath runs, so its
+	// section is applied here in both cases.
+	var failures []error
+	if err := g.applyVPN(ctx, desired.VPN); err != nil {
+		failures = append(failures, &ErrDesiredApplyFailed{Section: gwstate.SectionVPN, Cause: err})
+	}
+	if g.supervises(ServiceLoadBalancer) || g.supervises(ServiceNAT) {
+		previous := d.state.Version
 		state, err := g.config.Supervisor.Apply(ctx, desired)
 		d.state = state
 		d.state.AttemptedAt = d.clock()
 		if err != nil {
+			// The child's state already names the version it last applied.
+			failures = append(failures, err)
+		} else if len(failures) > 0 {
+			// The child applied the document but the VPN did not, so the
+			// document as a whole is not applied.
+			d.state.Version = previous
+		}
+		if len(failures) > 0 {
+			err := errors.Join(failures...)
 			d.state.LastError = err.Error()
 			return err
 		}
 		return nil
 	}
 
-	var failures []error
 	if desired.LoadBalancer != nil {
 		if err := g.applyLoadBalancer(ctx, desired.LoadBalancer); err != nil {
 			failures = append(failures, &ErrDesiredApplyFailed{Section: gwstate.SectionLoadBalancer, Cause: err})

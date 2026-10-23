@@ -56,6 +56,40 @@ type ServiceRegistry struct {
 	// (nonce issuance, config fetch, remote Secure Boot digest signing,
 	// provisioning session management).
 	ConfigDelivery platformv1.ConfigDeliveryServiceServer
+
+	// Ceremony, PIV and FIDO2 back the barrier ceremony and the local
+	// authenticator verbs.
+	Ceremony platformv1.CeremonyServiceServer
+	PIV      platformv1.PIVServiceServer
+	FIDO2    platformv1.FIDO2ServiceServer
+
+	// BMC backs the out-of-band management verbs (power, boot, virtual
+	// media, provisioning, web certificate, users, enrollment).
+	BMC platformv1.BMCServiceServer
+
+	// NTP backs the time-synchronization verbs (status, sources, step);
+	// LUKS backs the disk-encryption keyslot verbs.
+	NTP  platformv1.NTPServiceServer
+	LUKS platformv1.LUKSServiceServer
+
+	// Switch backs the managed-switch port verbs (list, status, VLAN,
+	// enable, disable).
+	Switch platformv1.SwitchServiceServer
+
+	// Cache, Scheduler, Messaging and ObjectStorage back the application
+	// services the composed go-quicbaas SDK serves (docs/sdk/api.md §3.5).
+	Cache         platformv1.CacheServiceServer
+	Scheduler     platformv1.SchedulerServiceServer
+	Messaging     platformv1.MessagingServiceServer
+	ObjectStorage platformv1.ObjectStorageServiceServer
+
+	// CallerContext attaches the in-process caller's identity to every
+	// call, as a network transport's authentication interceptors do; the
+	// embedded transport runs none. The embedder sets it: the services
+	// authorize on what it attaches (platformd's own services read
+	// peercred.UnixCredentials, the Unix socket's identity). Nil attaches
+	// nothing, and a service that requires an identity refuses the call.
+	CallerContext func(context.Context) context.Context
 }
 
 // Adapter implements the transport.Adapter interface for in-process
@@ -75,6 +109,16 @@ func init() {
 func Connect(ctx context.Context, opts *platform.Options) (transport.Adapter, error) {
 	if opts == nil {
 		return nil, ErrNilRegistry{}
+	}
+
+	// Calls never leave the process, so a token or TLS setting would be
+	// silently dropped. Refuse it instead.
+	if names := opts.CredentialOptions(); len(names) > 0 {
+		return nil, platform.ErrUnsupportedOption{
+			Protocol: platform.ProtocolEmbedded,
+			Option:   names[0],
+			Reason:   "the embedded transport calls services in-process",
+		}
 	}
 
 	registry, ok := opts.EmbeddedServices.(*ServiceRegistry)

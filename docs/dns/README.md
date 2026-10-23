@@ -1,5 +1,8 @@
 # Trusted Platform DNS
 
+> **Status: REFERENCE** · Last verified: 2026-10-15
+> Overview of the authoritative DNS subsystem in `pkg/dns/` and its documents.
+
 Enterprise-grade DNS subsystem integrated with the Trusted Platform.
 
 ## Overview
@@ -26,7 +29,7 @@ Trusted Platform DNS provides a fully integrated DNS service built on CoreDNS wi
 | Aspect | Decision |
 |--------|----------|
 | Architecture | DNS built into platformd as optional module |
-| Binary | Single `platformd` / `platformctl` binary |
+| Binary | Built into `platformd`; there is no separate DNS binary |
 | Activation | Configure `dns` section in platform config |
 | Implementation | CoreDNS with custom TrustedPlatform plugin |
 
@@ -34,7 +37,7 @@ Trusted Platform DNS provides a fully integrated DNS service built on CoreDNS wi
 - Single binary simplifies deployment and maintenance
 - Zone data benefits from platform datastore guarantees
 - Shared security infrastructure with platform components
-- Unified CLI and configuration model
+- Unified configuration model
 
 ## Quick Start
 
@@ -47,7 +50,7 @@ dns:
   allow-external-registration: false
   allow-internal-registration: true
   default-ttl: 3600
-  private-ipv4: "192.168.1.100"
+  private-ipv4: "192.0.2.100"
   public-ipv4: "203.0.113.50"
 
   # QuicBaaS storage configuration
@@ -60,14 +63,10 @@ dns:
     log-level: warn
     consistency-level: linearizable
 
-  # Service-specific shard and partition
-  shard-id: 2
-  partition: dns
-
   internal:
     port: 9053
     forwarders:
-      - "192.168.1.1"
+      - "192.0.2.1"
     zone:
       name: "example.internal."
       ttl: 3600
@@ -82,7 +81,7 @@ dns:
           refresh: 86400
           retry: 7200
           expire: 86400
-          minimum_ttl: 3600
+          min_ttl: 3600
           ttl: 3600
         ns:
           - name: "example.internal."
@@ -90,17 +89,17 @@ dns:
             ttl: 3600
         a:
           - name: "ns1"
-            value: "${LOCAL_IPv4}"
+            value: "${PRIVATE_IPv4}"
             ttl: 3600
           - name: "${HOSTNAME}"
-            value: "${LOCAL_IPv4}"
+            value: "${PRIVATE_IPv4}"
             ttl: 3600
 
   public:
     port: 8053
     forwarders:
       - "8.8.8.8"
-      - "4.4.4.4"
+      - "8.8.4.4"
     zone:
       name: "example.com."
       ttl: 3600
@@ -115,7 +114,7 @@ dns:
           refresh: 86400
           retry: 7200
           expire: 86400
-          minimum_ttl: 3600
+          min_ttl: 3600
           ttl: 3600
         ns:
           - name: "example.com."
@@ -145,11 +144,13 @@ dig @localhost -p 9053 example.internal SOA
 
 ### Register a Device
 
+There is no `platformctl dns` command group ([cli.md](cli.md)). Devices
+register through the REST API:
+
 ```bash
-# Devices can self-register using the platform API
-platformctl dns register \
-  --fqdn "newhost.example.internal" \
-  --ip "192.168.1.50"
+curl -X POST https://localhost:8443/api/v1/dns/register \
+  -H "Content-Type: application/json" \
+  -d '{"fqdn": "newhost.example.internal", "ip": "192.0.2.50"}'
 ```
 
 ## Architecture Overview
@@ -222,14 +223,14 @@ The DNS subsystem supports dynamic macro expansion in zone configurations:
 | [Records](records.md) | DNS record types and management |
 | [Resolution](resolution.md) | Query resolution and forwarding |
 | [DNSSEC](dnssec.md) | DNSSEC signing and validation |
-| [DNSSEC Rollover](dnssec-rollover.md) | Key rollover procedures |
+| [DNSSEC Rollover](dnssec-rollover.md) | Key rollover: not implemented; what the code does with zone keys |
 | [DANE/TLSA](dane.md) | DANE certificate pinning and TLSA records |
-| [Dynamic DNS](dynamic-dns.md) | RFC 2136 dynamic updates with attestation |
+| [Dynamic DNS](dynamic-dns.md) | RFC 2136 UPDATE: not implemented; how records change today |
 | [DoT/DoH](dot-doh.md) | DNS over TLS/HTTPS (planned) |
-| [Zone Transfer](zone-transfer.md) | AXFR/IXFR zone transfer (planned) |
+| [Zone Transfer](zone-transfer.md) | Outbound AXFR to TSIG-authenticated secondaries |
 | [ACME Integration](acme-integration.md) | DNS-01 challenge support |
 | [Configuration](configuration.md) | Complete configuration reference |
-| [CLI Reference](cli-reference.md) | Command-line interface |
+| [CLI](cli.md) | Why there is no `platformctl dns` group, and what to use instead |
 | [Security](security.md) | Security model and best practices |
 | [Operations](operations.md) | Operations, monitoring, and capacity planning |
 | [API Reference](api-reference.md) | REST and gRPC API documentation |
@@ -239,10 +240,8 @@ The DNS subsystem supports dynamic macro expansion in zone configurations:
 
 | Component | Integration |
 |-----------|-------------|
-| **KMS** | DNSSEC key storage and management via go-quicbaas |
-| **TPM** | Hardware-backed protection for DNSSEC signing keys |
-| **CA** | Certificate issuance for DNS-over-TLS/HTTPS |
-| **ACME** | DNS-01 challenge automation for certificate enrollment |
+| **KMS** | DNSSEC keys in the go-quicbaas KMS software store ([security.md](security.md)) |
+| **ACME** | dns-01 TXT records for BMC certificates; dns-01 verification in the ACME server ([acme-integration.md](acme-integration.md)) |
 | **IAM/ABAC** | Access control for zone and record management |
 | **Datastore** | Persistent storage for zones and records |
 
@@ -281,22 +280,22 @@ Security events include:
 
 | Feature | Status | Description |
 |---------|--------|-------------|
-| DNSSEC Signing | Implemented | Full DNSSEC with TPM-backed keys |
-| Dynamic DNS (RFC 2136) | Implemented | TSIG-authenticated dynamic updates with TPM attestation |
-| DNS-01 ACME Challenges | Implemented | Automatic certificate enrollment support |
-| Key Rollover Automation | Implemented | Scheduled ZSK/KSK rotation |
+| DNSSEC Signing | Implemented | One KSK and one ZSK per zone, in the go-quicbaas KMS ([dnssec.md](dnssec.md)) |
+| Dynamic DNS (RFC 2136) | Not implemented | No UPDATE server or client ([dynamic-dns.md](dynamic-dns.md)) |
+| DNS-01 ACME Challenges | Implemented | TXT records for BMC certificates; verification in the ACME server ([acme-integration.md](acme-integration.md)) |
+| Key Rollover Automation | Not implemented | No scheduler, API route or CLI verb ([dnssec-rollover.md](dnssec-rollover.md)) |
 | Multi-Backend KMS | Implemented | Software, TPM2, PKCS#11, Cloud KMS |
 | DANE/TLSA | Implemented | Certificate pinning with auto-generation |
 | CAA Records | Implemented | Certificate Authority Authorization |
-| Zone Transfer (AXFR/IXFR) | Planned | Secondary DNS server support ([spec](zone-transfer.md)) |
+| Zone Transfer (AXFR) | Implemented | Outbound AXFR to TSIG-authenticated secondaries; IXFR is answered as a full AXFR ([zone-transfer.md](zone-transfer.md)) |
 | Response Rate Limiting | Planned | DDoS mitigation |
 | DNS-over-TLS | Planned | Encrypted DNS transport ([spec](dot-doh.md)) |
 | DNS-over-HTTPS | Planned | DoH endpoint support ([spec](dot-doh.md)) |
 
 ## See Also
 
-- [KMS Documentation](../kms/README.md)
+- [KMS Documentation](../kms/architecture.md)
 - [TPM Documentation](../tpm/README.md)
-- [IAM Documentation](../iam/README.md)
+- [IAM Documentation](../iam/architecture.md)
 - [ACME Documentation](../ca/acme.md)
-- [Platform Architecture](../architecture/README.md)
+- [Platform Architecture](../daemon/architecture.md)

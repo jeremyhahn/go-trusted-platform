@@ -1,5 +1,8 @@
 # QEMU
 
+> **Status: REFERENCE** · Last verified: 2026-10-13
+> What a QEMU/KVM guest needs for the full Trusted Platform boot, and the disk-cache setting for nested-virt hosts.
+
 This section outlines the concepts, configuration and procedures needed to boot a QEMU / KVM instance on linux with full support for the Trusted Platform.
 
 # Requirements for Full Support
@@ -13,9 +16,9 @@ This section outlines the concepts, configuration and procedures needed to boot 
 
 #### Installation
 
-1. Installed Kernel w/ EFI Stub (signed)
+1. Installed Unified Kernel Image (signed)
 2. LUKS encrypted file system
-3. UEFI boot entry pointing to `/EFI/debian/kernel.efi` or use the default path `/EFI/Boot/bootx64.efi`.
+3. The UKI at the default removable-media path `/EFI/BOOT/BOOTX64.EFI` (`BOOTAA64.EFI` on arm64), which the installer also registers as a UEFI boot entry.
 
 # References
 

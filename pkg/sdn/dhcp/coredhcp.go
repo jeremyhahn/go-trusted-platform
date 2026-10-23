@@ -257,10 +257,12 @@ func (s *CoreDHCPServer) createHandlerFunc(plugin *IPAMPlugin) server4.Handler {
 			return
 		}
 
-		// Call the plugin handler
-		result, stop := plugin.Handler4()(req, resp)
+		// Call the plugin handler. It is the last in the chain, so its stop
+		// flag only ends the chain: a non-nil result is the reply to send, and
+		// a nil result means the message gets none.
+		result, _ := plugin.Handler4()(req, resp)
 
-		if result != nil && !stop {
+		if result != nil {
 			s.stats.IncPacketsSent()
 			s.recordResponseStats(result.MessageType())
 

@@ -59,6 +59,7 @@ func TestRenderControlPlaneEmitsServerAndClientDirectives(t *testing.T) {
 		"ntsservercert /etc/chrony/nts.d/current/nts-server.crt",
 		"ntsserverkey /etc/chrony/nts.d/current/nts-server.key",
 		"ntsdumpdir /var/lib/chrony",
+		"ntsport 4460",
 		"bindcmdaddress /run/chrony/chronyd.sock",
 		"cmdport 0",
 	)
@@ -95,6 +96,30 @@ func TestRenderOmitsRTCSyncAndOrphanWhenDisabled(t *testing.T) {
 
 	requireNoLines(t, rendered, "rtcsync", "local stratum", "ntsservercert")
 	requireLines(t, rendered, "allow 10.4.200.0/24")
+}
+
+func TestRenderUsesTheConfiguredNTSKEPort(t *testing.T) {
+	cfg := controlPlaneConfig()
+	cfg.Serve.NTS.Port = 14460
+
+	rendered, err := Render(cfg, DefaultPaths())
+	if err != nil {
+		t.Fatalf("Render() error = %v", err)
+	}
+
+	requireLines(t, rendered, "ntsport 14460")
+	requireNoLines(t, rendered, "ntsport 4460")
+}
+
+func TestRenderRejectsAnInvalidNTSKEPort(t *testing.T) {
+	cfg := controlPlaneConfig()
+	cfg.Serve.NTS.Port = 65536
+
+	_, err := Render(cfg, DefaultPaths())
+	var portErr ErrInvalidNTSKEPort
+	if !errors.As(err, &portErr) || portErr.Port != 65536 {
+		t.Fatalf("Render() error = %v, want ErrInvalidNTSKEPort{65536}", err)
+	}
 }
 
 func TestRenderHonorsCustomPaths(t *testing.T) {

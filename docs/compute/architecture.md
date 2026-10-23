@@ -64,9 +64,23 @@ additions:
 The §R capability row is *"Compute — VM and container orchestration, placement,
 lifecycle"*, Tier 1, reached through `services/compute`.
 
-Container trust tiers are go-quicbaas's; this repo registers the fleet attestor
-through `WithContainerAttestor` and supplies the device registry, scheduled
-re-attestation, quarantine and golden-PCR policy.
+Container trust tiers are go-quicbaas's. This repo registers the fleet attestor
+(`container.FleetContainerAttestor`) through `WithContainerAttestor`. The fleet
+attestor adds the platform's policy around the SDK's runtime attestor:
+
+- it looks the host up in the device registry;
+- it applies the golden PCRs of the host's device profile, checked on their
+  own before any PCR the request adds;
+- on drift it records a cryptographic failure verdict, moves the device to
+  quarantine itself (SDN port isolation is added when SDN is wired), and asks
+  the attestation collector to re-attest it.
+
+The embedded server registers a lazy adapter
+(`pkg/storage/quicbaas.ContainerAttestorAdapter`) when it starts. `platformd`
+installs the fleet attestor into that adapter once the attestation services
+exist (`pkg/daemon/commands/container_attestor_init.go`). Until then, and on a
+node that lacks a prerequisite, `Security().Attestation().AttestContainer`
+refuses with a typed error.
 
 ## Data flow — creating an attestable VM
 
@@ -258,6 +272,15 @@ via the go-qemu library (github.com/digitalocean/go-qemu).
   └──────────────────────────────────────┴────────────────────────────────┘
 ```
 
+`Start` reports success only after step 4: the instance becomes `running`
+once its QMP monitor accepts a connection, so suspend, resume and reboot work
+as soon as `Start` returns. The monitor is retried for up to 30 seconds while
+QEMU initializes. If QEMU exits first, `Start` fails with
+`ErrVMExitedDuringStart` and QEMU's own stderr (for example `failed to
+initialize kvm: No such file or directory`). If QEMU keeps running but the
+monitor never accepts, `Start` kills the process and fails with
+`ErrMonitorNotReady`. In both cases the instance is left in `error`.
+
 ### VM Configuration
 
 ```
@@ -265,8 +288,9 @@ QEMU Command Structure:
 ┌────────────────────────────────────────────────────────────────────┐
 │ qemu-system-x86_64                                                 │
 │   -name <instance-name>                                            │
-│   -machine q35,accel=kvm                                           │
-│   -cpu host                                                        │
+│   -enable-kvm                         ← KVM only (see below)       │
+│   -machine q35                                                     │
+│   -cpu host                           ← max under TCG              │
 │   -smp <cpus>                                                      │
 │   -m <memory>                                                      │
 │   -drive file=<disk>,format=qcow2,if=virtio                        │
@@ -281,18 +305,45 @@ QEMU Command Structure:
 └────────────────────────────────────────────────────────────────────┘
 ```
 
+That is the x86_64 guest. An aarch64 guest, the default on an arm64 host such
+as the Raspberry Pi 4, runs `qemu-system-aarch64` with:
+
+- `-machine virt,gic-version=host` under KVM, so the guest gets the host's
+  own GIC (the Raspberry Pi 4's GIC-400 is GICv2 only), and
+  `virt,gic-version=3` without;
+- `-cpu host` under KVM, `cortex-a72` without;
+- the same two pflash drives, carrying AAVMF;
+- `-device tpm-tis-device` for the vTPM.
+
+KVM runs only when `enable_kvm` is set, the guest architecture matches the
+host's, and `/dev/kvm` opens read-write. When `enable_kvm` is set but
+`/dev/kvm` is missing or not accessible (a CI runner or container without
+the device), the VM runs TCG instead of failing to start: no `-enable-kvm`,
+`-cpu max` for x86_64 (TCG cannot take `-cpu host`), and `virt,gic-version=3`
+with `cortex-a72` for aarch64. platformd logs one warning naming the reason
+each time it builds that command line. A guest of a foreign architecture
+always runs TCG, without probing the device.
+
+The arch keys and their defaults are in
+[engineering.md §4](engineering.md#4-configuration).
+
 ### UEFI Boot
 
-OVMF firmware provides UEFI boot with optional Secure Boot:
+OVMF (x86_64) and AAVMF (aarch64) firmware provide UEFI boot with optional
+Secure Boot. Each instance gets its own copy of the vars template.
 
 ```
-Standard Boot:
+x86_64 standard boot:
   OVMF_CODE_4M.fd - UEFI firmware
   OVMF_VARS_4M.fd - NVRAM template
 
-Secure Boot:
+x86_64 Secure Boot:
   OVMF_CODE_4M.secboot.fd - Secure Boot firmware
   OVMF_VARS_4M.fd - NVRAM with secure keys
+
+aarch64 (standard and Secure Boot):
+  /usr/share/AAVMF/AAVMF_CODE.fd - UEFI firmware
+  /usr/share/AAVMF/AAVMF_VARS.fd - NVRAM template
 ```
 
 ## swtpm Integration
@@ -509,6 +560,8 @@ var (
     ErrInvalidState             = errors.New("invalid state transition")
     ErrTimeout                  = errors.New("operation timed out")
     ErrResourceExhausted        = errors.New("resource limit reached")
+    ErrVMExitedDuringStart      = errors.New("QEMU exited during start")
+    ErrMonitorNotReady          = errors.New("QMP monitor not ready")
 )
 ```
 

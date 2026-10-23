@@ -13,6 +13,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
 	pkgdiskimage "github.com/jeremyhahn/go-trusted-platform/pkg/diskimage"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/diskimage/rpi"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/installer"
 	pkgiso "github.com/jeremyhahn/go-trusted-platform/pkg/iso"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 )
@@ -62,6 +63,7 @@ type createFlags struct {
 	mediaFlags
 	target      string
 	model       string
+	role        string
 	sizeMB      int
 	output      string
 	binariesDir string
@@ -98,6 +100,9 @@ Examples:
   # Raspberry Pi 4 image with the defaults
   platformctl diskimage create --target rpi --model rpi4 --output bin/trusted-platform-rpi.img
 
+  # Raspberry Pi 4 compute node of the dedicated profile
+  platformctl diskimage create --target rpi --model rpi4 --role compute --overrides node.yaml
+
   # QEMU virt stand-in for the integration tests
   platformctl diskimage create --target qemu-virt --output bin/trusted-platform-qemu.img
 
@@ -111,6 +116,7 @@ Examples:
 	f := cmd.Flags()
 	f.StringVar(&flags.target, "target", pkgdiskimage.DefaultTarget, "Image target: rpi or qemu-virt")
 	f.StringVar(&flags.model, "model", "", "Board model for the rpi target (default "+rpi.DefaultModel+"): "+joinModels())
+	f.StringVar(&flags.role, "role", "", "Dedicated-profile role for the rpi target, built from dedicated/raspberrypi/<model>/<role>.yaml (compute on rpi4 and rpi5, control-plane on cm4 and rpi4); empty builds the single-node image")
 	f.IntVar(&flags.sizeMB, "size", pkgdiskimage.DefaultSizeMB, "Image size in MB")
 	f.StringVar(&flags.output, "output", "", "Output image path (default <work-dir>/trusted-platform-<target>.img)")
 	f.StringVar(&flags.binariesDir, "binaries-dir", "", "Directory holding the target-architecture platformd, platformctl, platformctl-static, platform-initrd and gatewayd (default: aarch64/ next to this binary)")
@@ -159,11 +165,14 @@ func addMediaFlags(f *pflag.FlagSet, flags *mediaFlags) {
 
 func joinModels() string {
 	out := ""
-	for i, m := range rpi.Models() {
+	for i, name := range rpi.Models() {
 		if i > 0 {
 			out += ", "
 		}
-		out += m
+		out += name
+		if m, err := rpi.LookupModel(name); err == nil && m.Experimental {
+			out += " (experimental)"
+		}
 	}
 	return out
 }
@@ -270,7 +279,33 @@ func binariesDir(dir, sub string) (string, error) {
 
 // buildConfig turns create's flags into the ISO build configuration with
 // its target-architecture binaries.
+// hostInstallerBinary is the host-architecture platformctl-static that sits
+// beside the running platformctl; a foreign-architecture image build runs the
+// installer with it so LUKS and the filesystems are native (#802).
+func hostInstallerBinary() (string, error) {
+	self, err := os.Executable()
+	if err != nil {
+		return "", ErrBuildFailed{Reason: "cannot resolve the running binary: " + err.Error()}
+	}
+	if resolved, err := filepath.EvalSymlinks(self); err == nil {
+		self = resolved
+	}
+	path := filepath.Join(filepath.Dir(self), "platformctl-static")
+	if _, err := os.Stat(path); err != nil {
+		// Only a foreign-architecture build needs it; Create reports it then.
+		return "", nil
+	}
+	return path, nil
+}
+
 func buildConfig(flags *createFlags) (*pkgiso.ISOBuildConfig, error) {
+	if flags.role != "" {
+		path, err := roleTemplate(flags.target, flags.model, flags.role, flags.platformConfig)
+		if err != nil {
+			return nil, err
+		}
+		flags.platformConfig = path
+	}
 	cfg, err := flags.isoConfig(flags.target, flags.model)
 	if err != nil {
 		return nil, err
@@ -281,6 +316,47 @@ func buildConfig(flags *createFlags) (*pkgiso.ISOBuildConfig, error) {
 	}
 	cfg.PlatformdBinary = filepath.Join(binDir, "platformd")
 	return cfg, nil
+}
+
+// templateRoles are the host roles a dedicated template file is named for.
+var templateRoles = map[installer.HostRole]struct{}{
+	installer.HostRoleGateway:      {},
+	installer.HostRoleControlPlane: {},
+	installer.HostRoleCompute:      {},
+}
+
+// roleTemplate returns the dedicated-profile template a --role build uses,
+// dedicated/raspberrypi/<model>/<role>.yaml. Unlike the single-node default
+// there is no fallback: a role without a template is refused, never built
+// as a single-node image.
+func roleTemplate(target, model, role, platformConfig string) (string, error) {
+	if model == "" {
+		model = rpi.DefaultModel
+	}
+	refuse := func(reason string) (string, error) {
+		return "", ErrRoleTemplate{Target: target, Model: model, Role: role, Reason: reason}
+	}
+	if platformConfig != "" {
+		return refuse("--platform-config already chooses the template; pass one of them")
+	}
+	if target != rpi.Name {
+		return refuse("dedicated roles are built for the " + rpi.Name + " target only")
+	}
+	// The model names the template directory, so only a board the image
+	// builder knows may reach the path.
+	if _, err := rpi.LookupModel(model); err != nil {
+		return refuse(err.Error())
+	}
+	// The role names the template file, so only a host role may reach the
+	// path; the example overrides beside the templates are not roles.
+	if _, ok := templateRoles[installer.HostRole(role)]; !ok {
+		return refuse("not a host role: want gateway, control-plane or compute")
+	}
+	path := filepath.Join("configs", "platform", "templates", "dedicated", "raspberrypi", model, role+".yaml")
+	if _, err := os.Stat(path); err != nil {
+		return refuse("no template: " + err.Error())
+	}
+	return path, nil
 }
 
 func runCreate(common *cli.CommonFlags, flags *createFlags) (err error) {
@@ -304,6 +380,9 @@ func runCreate(common *cli.CommonFlags, flags *createFlags) (err error) {
 	build.SizeMB = flags.sizeMB
 	build.Output = flags.output
 	build.BinariesDir = filepath.Dir(cfg.PlatformdBinary)
+	if build.HostInstallerBinary, err = hostInstallerBinary(); err != nil {
+		return err
+	}
 	result, err := pkgdiskimage.Create(context.Background(), build)
 	if err != nil {
 		return ErrBuildFailed{Reason: err.Error()}

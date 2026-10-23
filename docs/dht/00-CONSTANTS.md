@@ -1,5 +1,7 @@
 # DHT Constants Reference
 
+> **Status: PLANNED** · Scope: design only, no implementation · Last verified: 2026-10-20
+
 **Version:** 1.5.0
 **Last Updated:** 2026-01-10
 **Status:** Canonical Reference

@@ -2,10 +2,13 @@ package embedded
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
+	platform "github.com/jeremyhahn/go-trusted-platform/sdk/go"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/transport"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -50,6 +53,32 @@ func TestInvoke_UnregisteredMethod(t *testing.T) {
 
 	if !strings.Contains(st.Message(), "not registered") {
 		t.Errorf("expected error message to contain 'not registered', got %q", st.Message())
+	}
+}
+
+// An in-process call has no connection, so a call bound to its channel is
+// refused with the typed error before dispatch and its proof callback never
+// runs.
+func TestInvoke_RefusesChannelBinding(t *testing.T) {
+	conn := newEmbeddedClientConn(testRegistry())
+	called := false
+	bind := transport.WithChannelBinding(func(context.Context, []byte) error {
+		called = true
+		return nil
+	})
+
+	err := conn.Invoke(context.Background(), platformv1.PlatformDaemon_GetVersion_FullMethodName,
+		&platformv1.GetVersionRequest{}, &platformv1.GetVersionResponse{}, bind)
+
+	var unavailable *transport.ErrChannelBindingUnavailable
+	if !errors.As(err, &unavailable) {
+		t.Fatalf("err = %v, want ErrChannelBindingUnavailable", err)
+	}
+	if unavailable.Transport != platform.ProtocolEmbedded.String() {
+		t.Errorf("transport = %q, want %q", unavailable.Transport, platform.ProtocolEmbedded.String())
+	}
+	if called {
+		t.Error("the proof callback ran on a transport with no connection to bind to")
 	}
 }
 
@@ -113,6 +142,56 @@ func (s *errorDaemonServer) GetStatus(ctx context.Context, req *platformv1.GetSt
 	return nil, status.Error(codes.Internal, "test error from handler")
 }
 
+// callerKey marks the context a CallerContext hook returns.
+type callerKey struct{}
+
+// callerDaemonServer reports, as its version, the caller identity the
+// context reached it with.
+type callerDaemonServer struct {
+	platformv1.UnimplementedPlatformDaemonServer
+}
+
+func (s *callerDaemonServer) GetVersion(ctx context.Context, req *platformv1.GetVersionRequest) (*platformv1.GetVersionResponse, error) {
+	caller, ok := ctx.Value(callerKey{}).(string)
+	if !ok {
+		caller = "none"
+	}
+	return &platformv1.GetVersionResponse{Version: caller}, nil
+}
+
+// The embedder states who is calling, as a network transport's interceptors
+// do; the hook's context is the one the service sees.
+func TestInvoke_CallerContextReachesTheHandler(t *testing.T) {
+	conn := newEmbeddedClientConn(&ServiceRegistry{
+		Daemon: &callerDaemonServer{},
+		CallerContext: func(ctx context.Context) context.Context {
+			return context.WithValue(ctx, callerKey{}, "the embedder")
+		},
+	})
+
+	reply := &platformv1.GetVersionResponse{}
+	if err := conn.Invoke(context.Background(), platformv1.PlatformDaemon_GetVersion_FullMethodName, &platformv1.GetVersionRequest{}, reply); err != nil {
+		t.Fatalf("Invoke() error: %v", err)
+	}
+	if reply.GetVersion() != "the embedder" {
+		t.Fatalf("caller = %q, want the embedder", reply.GetVersion())
+	}
+}
+
+// Without a hook the call carries no identity, and a service that checks
+// one refuses it.
+func TestInvoke_NoCallerContextAddsNoIdentity(t *testing.T) {
+	conn := newEmbeddedClientConn(&ServiceRegistry{Daemon: &callerDaemonServer{}})
+
+	reply := &platformv1.GetVersionResponse{}
+	if err := conn.Invoke(context.Background(), platformv1.PlatformDaemon_GetVersion_FullMethodName, &platformv1.GetVersionRequest{}, reply); err != nil {
+		t.Fatalf("Invoke() error: %v", err)
+	}
+	if reply.GetVersion() != "none" {
+		t.Fatalf("caller = %q, want none", reply.GetVersion())
+	}
+}
+
 func TestNewStream_ReturnsUnimplemented(t *testing.T) {
 	registry := testRegistry()
 	conn := newEmbeddedClientConn(registry)
@@ -135,8 +214,8 @@ func TestNewStream_ReturnsUnimplemented(t *testing.T) {
 		t.Errorf("expected Unimplemented code, got %v", st.Code())
 	}
 
-	if !strings.Contains(st.Message(), "streaming not supported") {
-		t.Errorf("expected error message to contain 'streaming not supported', got %q", st.Message())
+	if !strings.Contains(st.Message(), "is not supported over this transport") {
+		t.Errorf("expected error message to name the unsupported stream, got %q", st.Message())
 	}
 }
 
@@ -149,9 +228,10 @@ func TestMethodCount(t *testing.T) {
 		t.Error("expected MethodCount() > 0 for registry with Daemon service")
 	}
 
-	// The daemon service registers 14 unary methods (excluding streaming).
-	if count != 13 {
-		t.Errorf("expected 13 daemon methods, got %d", count)
+	// The daemon service registers 15 unary methods (excluding streaming),
+	// Liveness and Readiness among them.
+	if count != 15 {
+		t.Errorf("expected 15 daemon methods, got %d", count)
 	}
 }
 

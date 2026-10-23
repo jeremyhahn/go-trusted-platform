@@ -17,14 +17,15 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"errors"
 	"fmt"
 	"os"
 
 	platform "github.com/jeremyhahn/go-trusted-platform/sdk/go"
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/auth"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/transport/embedded"
 
 	// Import transport adapters to register them with the platform package
-	_ "github.com/jeremyhahn/go-trusted-platform/sdk/go/transport/embedded"
 	_ "github.com/jeremyhahn/go-trusted-platform/sdk/go/transport/grpc"
 	_ "github.com/jeremyhahn/go-trusted-platform/sdk/go/transport/mcp"
 	_ "github.com/jeremyhahn/go-trusted-platform/sdk/go/transport/quic"
@@ -41,6 +42,17 @@ type CommonFlags struct {
 	NoColor      bool
 	GetConfig    func() (*Config, error)
 	GetContext   func() (*Context, error)
+
+	// StartEmbedded hosts platformd in this process for a context whose
+	// transport is embedded. Nil means the command cannot host one.
+	StartEmbedded func(ctx context.Context, c *Context) (EmbeddedHost, error)
+}
+
+// EmbeddedHost is platformd running inside this process. The SDK's embedded
+// transport dispatches to its services.
+type EmbeddedHost interface {
+	Services() *embedded.ServiceRegistry
+	Stop(ctx context.Context) error
 }
 
 // BaseCommand provides common functionality for all commands
@@ -48,6 +60,7 @@ type BaseCommand struct {
 	flags   *CommonFlags
 	client  platform.Client
 	printer *Printer
+	host    EmbeddedHost
 }
 
 // NewBaseCommand creates a new base command with SDK client
@@ -69,9 +82,17 @@ func NewBaseCommand(flags *CommonFlags) (*BaseCommand, error) {
 		return nil, ErrConnectionFailed{Target: ctx.Name, Err: err}
 	}
 
+	host, err := startEmbeddedHost(flags, ctx, opts)
+	if err != nil {
+		return nil, ErrConnectionFailed{Target: ctx.Name, Err: err}
+	}
+
 	// Create SDK client
 	client, err := platform.Connect(context.Background(), opts)
 	if err != nil {
+		if host != nil {
+			err = errors.Join(err, host.Stop(context.Background()))
+		}
 		return nil, ErrConnectionFailed{Target: ctx.Name, Err: err}
 	}
 
@@ -82,7 +103,31 @@ func NewBaseCommand(flags *CommonFlags) (*BaseCommand, error) {
 		flags:   flags,
 		client:  client,
 		printer: printer,
+		host:    host,
 	}, nil
+}
+
+// startEmbeddedHost hosts platformd in this process when the context's
+// transport is embedded, and gives its services to the SDK options. Any other
+// transport needs no host, and nil is returned.
+//
+// The host attaches this process's own credentials to every call, the
+// identity a Unix socket peer has, so an embedded command may do what the
+// same user may do over /run/platformd.sock. The network transports'
+// authentication is not involved.
+func startEmbeddedHost(flags *CommonFlags, ctx *Context, opts *platform.Options) (EmbeddedHost, error) {
+	if protocolMap[ctx.ResolveProtocol()] != platform.ProtocolEmbedded {
+		return nil, nil
+	}
+	if flags.StartEmbedded == nil {
+		return nil, ErrEmbeddedHostUnavailable{}
+	}
+	host, err := flags.StartEmbedded(context.Background(), ctx)
+	if err != nil {
+		return nil, err
+	}
+	opts.EmbeddedServices = host.Services()
+	return host, nil
 }
 
 // protocolMap provides O(1) lookup from protocol string to platform.Protocol.
@@ -131,7 +176,7 @@ func contextToSDKOptions(ctx *Context) (*platform.Options, error) {
 		// Set the protocol-specific address
 		opts = append(opts, protocolAddress(proto, ctx.Remote.Server)...)
 
-		tlsConfig, err := buildTLSConfig(ctx.Remote)
+		tlsConfig, err := buildTLSConfig(ctx.Remote.CACert, ctx.Remote.ClientCert, ctx.Remote.ClientKey)
 		if err != nil {
 			return nil, err
 		}
@@ -146,14 +191,24 @@ func contextToSDKOptions(ctx *Context) (*platform.Options, error) {
 		}
 
 	case ContextTypeEmbedded:
-		// Embedded contexts are handled by the caller providing services
-		// via platform.WithEmbeddedServices()
+		// The services come from the platformd NewBaseCommand hosts
+		// in-process (startEmbeddedHost).
 
 	default:
 		return nil, ErrInvalidContext{Context: string(ctx.Type)}
 	}
 
-	opts = append(opts, resolveContextQuicBaaSOptions(ctx)...)
+	quicbaasOpts := resolveContextQuicBaaSOptions(ctx)
+	if len(quicbaasOpts) > 0 {
+		quicbaasTLS, err := resolveContextQuicBaaSTLS(ctx)
+		if err != nil {
+			return nil, err
+		}
+		if quicbaasTLS != nil {
+			quicbaasOpts = append(quicbaasOpts, platform.WithQuicBaaSTLSConfig(quicbaasTLS))
+		}
+	}
+	opts = append(opts, quicbaasOpts...)
 	return platform.NewOptions(opts...), nil
 }
 
@@ -215,37 +270,56 @@ func resolveContextQuicBaaSOptions(ctx *Context) []platform.Option {
 	return opts
 }
 
-// buildTLSConfig creates a TLS configuration from remote context settings.
-// Supports two modes:
+// resolveContextQuicBaaSTLS builds the TLS configuration of the quicbaas
+// connection from the context's TLS files: a local context's
+// quicbaas_ca_cert, quicbaas_client_cert and quicbaas_client_key, or a
+// remote context's ca_cert, client_cert and client_key. The quicbaas SDK
+// refuses every connection without TLS, the Unix transport included, so
+// these files must reach it; without them Client.QuicBaaS() reports
+// ErrQuicBaaSTLSNotConfigured. Other context types return nil.
+func resolveContextQuicBaaSTLS(ctx *Context) (*tls.Config, error) {
+	switch {
+	case ctx.Type == ContextTypeLocal && ctx.Local != nil:
+		return buildTLSConfig(ctx.Local.QuicBaaSCACert, ctx.Local.QuicBaaSClientCert, ctx.Local.QuicBaaSClientKey)
+	case ctx.Type == ContextTypeRemote && ctx.Remote != nil:
+		return buildTLSConfig(ctx.Remote.CACert, ctx.Remote.ClientCert, ctx.Remote.ClientKey)
+	default:
+		return nil, nil
+	}
+}
+
+// buildTLSConfig creates a TLS configuration from a context's CA
+// certificate, client certificate and client key files. No file at all
+// returns nil. Supports two modes:
 //   - CA-only: only CACert is set, provides server TLS verification without
 //     client certificate authentication (one-way TLS).
 //   - mTLS: CACert, ClientCert, and ClientKey are set, provides mutual TLS.
-func buildTLSConfig(remote *RemoteContext) (*tls.Config, error) {
-	if remote.ClientCert == "" && remote.ClientKey == "" && remote.CACert == "" {
+func buildTLSConfig(caCert, clientCert, clientKey string) (*tls.Config, error) {
+	if clientCert == "" && clientKey == "" && caCert == "" {
 		return nil, nil
 	}
 
 	// CA-only mode: server TLS verification without client certificates.
-	// This is used by commands like 'device register' that connect to the
-	// control plane before the device has been issued a client certificate.
-	hasClientCert := remote.ClientCert != "" || remote.ClientKey != ""
-	if !hasClientCert && remote.CACert != "" {
-		return buildCACertOnlyTLSConfig(remote.CACert)
+	// This serves a remote context that connects to the control plane before
+	// the client has been issued a client certificate.
+	hasClientCert := clientCert != "" || clientKey != ""
+	if !hasClientCert && caCert != "" {
+		return buildCACertOnlyTLSConfig(caCert)
 	}
 
 	// mTLS mode: full mutual TLS with client certificate
 	var mtlsOpts []auth.MTLSOption
 
-	if remote.CACert != "" {
-		mtlsOpts = append(mtlsOpts, auth.WithCAFile(remote.CACert))
+	if caCert != "" {
+		mtlsOpts = append(mtlsOpts, auth.WithCAFile(caCert))
 	}
 
-	if remote.ClientCert != "" {
-		mtlsOpts = append(mtlsOpts, auth.WithCertFile(remote.ClientCert))
+	if clientCert != "" {
+		mtlsOpts = append(mtlsOpts, auth.WithCertFile(clientCert))
 	}
 
-	if remote.ClientKey != "" {
-		mtlsOpts = append(mtlsOpts, auth.WithKeyFile(remote.ClientKey))
+	if clientKey != "" {
+		mtlsOpts = append(mtlsOpts, auth.WithKeyFile(clientKey))
 	}
 
 	// Create mTLS provider to build the TLS config
@@ -277,12 +351,17 @@ func buildCACertOnlyTLSConfig(caCertPath string) (*tls.Config, error) {
 	}, nil
 }
 
-// Close closes the client connection
+// Close closes the client connection, then stops platformd if this command
+// hosted it.
 func (b *BaseCommand) Close() error {
+	var errs []error
 	if b.client != nil {
-		return b.client.Close()
+		errs = append(errs, b.client.Close())
 	}
-	return nil
+	if b.host != nil {
+		errs = append(errs, b.host.Stop(context.Background()))
+	}
+	return errors.Join(errs...)
 }
 
 // Client returns the platform SDK client

@@ -15,217 +15,502 @@ package app
 
 import (
 	"encoding/json"
-	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 )
 
-func TestParseDebugSinkFromCmdline_Present(t *testing.T) {
-	t.Parallel()
+// The tests below that set the package seams are not parallel; each restores
+// the seams it set with t.Cleanup.
 
-	dir := t.TempDir()
-	cmdlinePath := filepath.Join(dir, "cmdline")
-	if err := os.WriteFile(cmdlinePath, []byte("root=/dev/sda1 platform_debug_sink=10.4.2.91:8080 quiet\n"), 0644); err != nil {
-		t.Fatal(err)
+const (
+	// outboundIP is the address the fake UDP dial reports as the host's
+	// outbound address.
+	outboundIP = "192.0.2.10"
+	// primaryMAC is the hardware address of the interface holding outboundIP.
+	primaryMAC = "52:54:00:12:34:56"
+)
+
+var (
+	errNetworkUnreachable = &net.OpError{Op: "dial", Net: "udp", Err: syscall.ENETUNREACH}
+	errInterfaceGone      = &net.OpError{Op: "route", Net: "ip+net", Err: syscall.ENODEV}
+)
+
+// fakeUDPConn is the logical UDP connection preferredOutboundIP reads its
+// local address from.
+type fakeUDPConn struct {
+	net.Conn
+	local  net.Addr
+	dialed string
+	closed bool
+}
+
+func (c *fakeUDPConn) LocalAddr() net.Addr { return c.local }
+
+func (c *fakeUDPConn) Close() error {
+	c.closed = true
+	return nil
+}
+
+// fakeInterface is one host interface primaryInterfaceInfo walks.
+type fakeInterface struct {
+	net.Interface
+	addrs []net.Addr
+	err   error
+}
+
+// registrationRequest is one request the fake bootstrap server received.
+type registrationRequest struct {
+	method      string
+	path        string
+	contentType string
+	reg         BootstrapRegistration
+}
+
+func useCmdline(t *testing.T, cmdline string) {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "cmdline")
+	if err := os.WriteFile(path, []byte(cmdline), 0o644); err != nil {
+		t.Fatalf("write cmdline: %v", err)
 	}
+	useCmdlinePath(t, path)
+}
 
-	// We need to test the parsing logic directly since procCmdlinePath is a const.
-	// Parse the file ourselves using the same logic.
-	data, err := os.ReadFile(cmdlinePath)
-	if err != nil {
-		t.Fatal(err)
+func useCmdlinePath(t *testing.T, path string) {
+	t.Helper()
+	saved := procCmdlinePath
+	procCmdlinePath = path
+	t.Cleanup(func() { procCmdlinePath = saved })
+}
+
+func useDial(t *testing.T, dial func(network, address string) (net.Conn, error)) {
+	t.Helper()
+	saved := dialUDP
+	dialUDP = dial
+	t.Cleanup(func() { dialUDP = saved })
+}
+
+// useOutboundIP makes preferredOutboundIP see ip as the host's outbound
+// address and returns the connection the dial hands out.
+func useOutboundIP(t *testing.T, ip string) *fakeUDPConn {
+	t.Helper()
+	conn := &fakeUDPConn{local: &net.UDPAddr{IP: net.ParseIP(ip), Port: 54321}}
+	useDial(t, func(network, address string) (net.Conn, error) {
+		conn.dialed = network + " " + address
+		return conn, nil
+	})
+	return conn
+}
+
+// useNoRoute makes the outbound UDP dial fail as it does on a host with no
+// IPv4 route.
+func useNoRoute(t *testing.T) {
+	t.Helper()
+	useDial(t, func(string, string) (net.Conn, error) { return nil, errNetworkUnreachable })
+}
+
+func useInterfaceSeams(t *testing.T) {
+	t.Helper()
+	savedList, savedAddrs := listInterfaces, interfaceAddrs
+	t.Cleanup(func() { listInterfaces, interfaceAddrs = savedList, savedAddrs })
+}
+
+// useInterfaces makes primaryInterfaceInfo walk ifaces in order.
+func useInterfaces(t *testing.T, ifaces ...fakeInterface) {
+	t.Helper()
+	useInterfaceSeams(t)
+	byName := make(map[string]fakeInterface, len(ifaces))
+	list := make([]net.Interface, 0, len(ifaces))
+	for _, f := range ifaces {
+		byName[f.Name] = f
+		list = append(list, f.Interface)
 	}
-
-	var found string
-	for _, field := range strings.Fields(string(data)) {
-		if strings.HasPrefix(field, kernelCmdlineParam+"=") {
-			found = strings.TrimPrefix(field, kernelCmdlineParam+"=")
-		}
-	}
-
-	if found != "10.4.2.91:8080" {
-		t.Fatalf("expected 10.4.2.91:8080, got %q", found)
+	listInterfaces = func() ([]net.Interface, error) { return list, nil }
+	interfaceAddrs = func(iface *net.Interface) ([]net.Addr, error) {
+		f := byName[iface.Name]
+		return f.addrs, f.err
 	}
 }
 
-func TestParseDebugSinkFromCmdline_Absent(t *testing.T) {
-	t.Parallel()
-
-	dir := t.TempDir()
-	cmdlinePath := filepath.Join(dir, "cmdline")
-	if err := os.WriteFile(cmdlinePath, []byte("root=/dev/sda1 quiet\n"), 0644); err != nil {
-		t.Fatal(err)
-	}
-
-	data, err := os.ReadFile(cmdlinePath)
+func newInterface(t *testing.T, name string, flags net.Flags, mac string, addrs ...net.Addr) fakeInterface {
+	t.Helper()
+	hw, err := net.ParseMAC(mac)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("parse MAC %q: %v", mac, err)
 	}
-
-	var found bool
-	for _, field := range strings.Fields(string(data)) {
-		if strings.HasPrefix(field, kernelCmdlineParam+"=") {
-			found = true
-		}
-	}
-
-	if found {
-		t.Fatal("expected no platform_debug_sink, but found one")
+	return fakeInterface{
+		Interface: net.Interface{Name: name, Flags: flags, HardwareAddr: hw},
+		addrs:     addrs,
 	}
 }
 
-func TestParseDebugSinkFromCmdline_EmptyValue(t *testing.T) {
-	t.Parallel()
+func hostAddr(ip string) *net.IPNet {
+	return &net.IPNet{IP: net.ParseIP(ip), Mask: net.CIDRMask(24, 32)}
+}
 
-	dir := t.TempDir()
-	cmdlinePath := filepath.Join(dir, "cmdline")
-	if err := os.WriteFile(cmdlinePath, []byte("root=/dev/sda1 platform_debug_sink= quiet\n"), 0644); err != nil {
-		t.Fatal(err)
+// usePrimaryInterface makes the host look like a machine whose eth0 holds
+// outboundIP with primaryMAC.
+func usePrimaryInterface(t *testing.T) {
+	t.Helper()
+	useOutboundIP(t, outboundIP)
+	useInterfaces(t, newInterface(t, "eth0", net.FlagUp, primaryMAC, hostAddr(outboundIP)))
+}
+
+// newRegistrationServer starts a bootstrap server that answers every request
+// with status and hands it to the returned channel. It returns the server's
+// host:port, the form platform_debug_sink carries.
+func newRegistrationServer(t *testing.T, status int) (string, <-chan registrationRequest) {
+	t.Helper()
+	requests := make(chan registrationRequest, 4)
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		req := registrationRequest{
+			method:      r.Method,
+			path:        r.URL.Path,
+			contentType: r.Header.Get("Content-Type"),
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req.reg); err != nil {
+			t.Errorf("decode registration: %v", err)
+		}
+		requests <- req
+		w.WriteHeader(status)
+	}))
+	t.Cleanup(ts.Close)
+	return ts.Listener.Addr().String(), requests
+}
+
+func receiveRegistration(t *testing.T, requests <-chan registrationRequest) registrationRequest {
+	t.Helper()
+	select {
+	case req := <-requests:
+		return req
+	case <-time.After(bootstrapRegistrationTimeout):
+		t.Fatal("bootstrap server never received a registration request")
+		return registrationRequest{}
 	}
+}
 
-	data, err := os.ReadFile(cmdlinePath)
-	if err != nil {
-		t.Fatal(err)
+func newTestApp(hostname string) *App {
+	return &App{Hostname: hostname, Logger: logging.DefaultLogger()}
+}
+
+func TestBootstrapRegistrationSeamDefaults(t *testing.T) {
+	if procCmdlinePath != "/proc/cmdline" {
+		t.Errorf("procCmdlinePath = %q, want /proc/cmdline", procCmdlinePath)
 	}
+	seams := []struct {
+		name      string
+		got, want any
+	}{
+		{"dialUDP", dialUDP, net.Dial},
+		{"listInterfaces", listInterfaces, net.Interfaces},
+		{"interfaceAddrs", interfaceAddrs, (*net.Interface).Addrs},
+	}
+	for _, s := range seams {
+		if reflect.ValueOf(s.got).Pointer() != reflect.ValueOf(s.want).Pointer() {
+			t.Errorf("%s does not default to the net package function", s.name)
+		}
+	}
+}
 
-	var val string
-	var ok bool
-	for _, field := range strings.Fields(string(data)) {
-		if strings.HasPrefix(field, kernelCmdlineParam+"=") {
-			val = strings.TrimPrefix(field, kernelCmdlineParam+"=")
-			if val != "" {
-				ok = true
+func TestParseDebugSinkFromCmdline(t *testing.T) {
+	tests := []struct {
+		name     string
+		cmdline  string
+		wantSink string
+		wantOK   bool
+	}{
+		{"present", "root=/dev/sda1 platform_debug_sink=10.4.2.91:8080 quiet\n", "10.4.2.91:8080", true},
+		{"absent", "root=/dev/sda1 quiet\n", "", false},
+		{"empty value", "root=/dev/sda1 platform_debug_sink= quiet\n", "", false},
+		{"empty value then a value", "platform_debug_sink= platform_debug_sink=10.4.2.91:8080\n", "10.4.2.91:8080", true},
+		{"prefix of another parameter", "platform_debug_sinks=10.4.2.91:8080\n", "", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			useCmdline(t, tt.cmdline)
+			sink, ok := parseDebugSinkFromCmdline()
+			if sink != tt.wantSink || ok != tt.wantOK {
+				t.Errorf("parseDebugSinkFromCmdline() = (%q, %v), want (%q, %v)", sink, ok, tt.wantSink, tt.wantOK)
 			}
-		}
+		})
 	}
+}
 
-	if ok {
-		t.Fatalf("expected empty value to be rejected, got %q", val)
+func TestParseDebugSinkFromCmdline_Unreadable(t *testing.T) {
+	useCmdlinePath(t, filepath.Join(t.TempDir(), "missing"))
+	if sink, ok := parseDebugSinkFromCmdline(); sink != "" || ok {
+		t.Errorf("parseDebugSinkFromCmdline() = (%q, %v), want (\"\", false)", sink, ok)
 	}
+}
+
+func TestRunBootstrapRegistration_PostsToSink(t *testing.T) {
+	sink, requests := newRegistrationServer(t, http.StatusOK)
+	useCmdline(t, "root=/dev/sda1 platform_debug_sink="+sink+"\n")
+	// The dial is the background registration's only seam read; the channel
+	// orders it before the seam is restored.
+	dialed := make(chan struct{}, 1)
+	useDial(t, func(string, string) (net.Conn, error) {
+		dialed <- struct{}{}
+		return nil, errNetworkUnreachable
+	})
+
+	newTestApp("node-01").RunBootstrapRegistration()
+
+	req := receiveRegistration(t, requests)
+	// The request follows the dial, so the dial has signalled by now.
+	<-dialed
+	if req.path != "/installs/node-01/registration.json" {
+		t.Errorf("registration path = %q, want /installs/node-01/registration.json", req.path)
+	}
+	if req.reg.Hostname != "node-01" {
+		t.Errorf("registration hostname = %q, want node-01", req.reg.Hostname)
+	}
+}
+
+func TestRunBootstrapRegistration_NoSink(t *testing.T) {
+	tests := []struct {
+		name    string
+		cmdline string
+	}{
+		{"absent", "root=/dev/sda1 quiet\n"},
+		{"empty value", "root=/dev/sda1 platform_debug_sink= quiet\n"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			useCmdline(t, tt.cmdline)
+			var dialed atomic.Bool
+			useDial(t, func(string, string) (net.Conn, error) {
+				dialed.Store(true)
+				return nil, errNetworkUnreachable
+			})
+
+			newTestApp("node-01").RunBootstrapRegistration()
+
+			if dialed.Load() {
+				t.Error("RunBootstrapRegistration started a registration without a sink")
+			}
+		})
+	}
+}
+
+func TestPreferredOutboundIP(t *testing.T) {
+	conn := useOutboundIP(t, outboundIP)
+
+	if got := preferredOutboundIP(); got != outboundIP {
+		t.Errorf("preferredOutboundIP() = %q, want %q", got, outboundIP)
+	}
+	if conn.dialed != "udp 1.2.3.4:80" {
+		t.Errorf("dialed %q, want \"udp 1.2.3.4:80\"", conn.dialed)
+	}
+	if !conn.closed {
+		t.Error("preferredOutboundIP left the UDP connection open")
+	}
+}
+
+func TestPreferredOutboundIP_Errors(t *testing.T) {
+	t.Run("no route", func(t *testing.T) {
+		useNoRoute(t)
+		if got := preferredOutboundIP(); got != "" {
+			t.Errorf("preferredOutboundIP() = %q, want empty", got)
+		}
+	})
+
+	t.Run("local address is not UDP", func(t *testing.T) {
+		conn := &fakeUDPConn{local: &net.TCPAddr{IP: net.ParseIP(outboundIP), Port: 54321}}
+		useDial(t, func(string, string) (net.Conn, error) { return conn, nil })
+		if got := preferredOutboundIP(); got != "" {
+			t.Errorf("preferredOutboundIP() = %q, want empty", got)
+		}
+		if !conn.closed {
+			t.Error("preferredOutboundIP left the UDP connection open")
+		}
+	})
 }
 
 func TestPrimaryInterfaceInfo(t *testing.T) {
-	t.Parallel()
-
-	ip, mac := primaryInterfaceInfo()
-
-	// On a machine with networking, these should be non-empty.
-	// In CI or containers they may be empty, which is acceptable.
-	if ip == "" {
-		t.Skip("no outbound IP available (expected in some CI environments)")
+	// Every interface below holds outboundIP but must be passed over: its
+	// MAC is never the answer.
+	skipped := func(t *testing.T) []fakeInterface {
+		broken := newInterface(t, "eth2", net.FlagUp, "02:00:00:00:00:03")
+		broken.err = errInterfaceGone
+		return []fakeInterface{
+			newInterface(t, "lo", net.FlagUp|net.FlagLoopback, "02:00:00:00:00:01", hostAddr(outboundIP)),
+			newInterface(t, "eth1", 0, "02:00:00:00:00:02", hostAddr(outboundIP)),
+			broken,
+			newInterface(t, "eth3", net.FlagUp, "02:00:00:00:00:04",
+				&net.IPAddr{IP: net.ParseIP(outboundIP)},
+				hostAddr("192.0.2.99"),
+				&net.IPNet{IP: net.ParseIP("2001:db8::10"), Mask: net.CIDRMask(64, 128)}),
+		}
 	}
 
-	// Validate IP format.
-	if net.ParseIP(ip) == nil {
-		t.Fatalf("invalid IP address: %q", ip)
+	tests := []struct {
+		name    string
+		setup   func(t *testing.T)
+		wantIP  string
+		wantMAC string
+	}{
+		{
+			name: "up non-loopback interface holds the outbound address",
+			setup: func(t *testing.T) {
+				useOutboundIP(t, outboundIP)
+				ifaces := append(skipped(t), newInterface(t, "eth0", net.FlagUp, primaryMAC, hostAddr(outboundIP)))
+				useInterfaces(t, ifaces...)
+			},
+			wantIP:  outboundIP,
+			wantMAC: primaryMAC,
+		},
+		{
+			name: "no usable interface holds the outbound address",
+			setup: func(t *testing.T) {
+				useOutboundIP(t, outboundIP)
+				useInterfaces(t, skipped(t)...)
+			},
+			wantIP: outboundIP,
+		},
+		{
+			name: "interfaces cannot be listed",
+			setup: func(t *testing.T) {
+				useOutboundIP(t, outboundIP)
+				useInterfaceSeams(t)
+				listInterfaces = func() ([]net.Interface, error) { return nil, errInterfaceGone }
+			},
+			wantIP: outboundIP,
+		},
+		{
+			name: "no outbound address",
+			setup: func(t *testing.T) {
+				useNoRoute(t)
+				useInterfaceSeams(t)
+				listInterfaces = func() ([]net.Interface, error) {
+					t.Error("interfaces listed without an outbound address")
+					return nil, errInterfaceGone
+				}
+			},
+		},
 	}
-
-	// MAC should be non-empty when IP was found on a real interface.
-	if mac == "" {
-		t.Log("warning: MAC address not found for primary interface")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tt.setup(t)
+			ip, mac := primaryInterfaceInfo()
+			if ip != tt.wantIP || mac != tt.wantMAC {
+				t.Errorf("primaryInterfaceInfo() = (%q, %q), want (%q, %q)", ip, mac, tt.wantIP, tt.wantMAC)
+			}
+		})
 	}
 }
 
 func TestPostBootstrapRegistration_Success(t *testing.T) {
-	t.Parallel()
+	usePrimaryInterface(t)
+	sink, requests := newRegistrationServer(t, http.StatusOK)
 
-	var received atomic.Value
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPut {
-			t.Errorf("expected PUT, got %s", r.Method)
+	newTestApp("test-node-01").postBootstrapRegistration(sink)
+
+	// The MAC-keyed path goes first; the hostname-keyed path is the fallback.
+	wantPaths := []string{
+		"/installs/mac/52-54-00-12-34-56/registration.json",
+		"/installs/test-node-01/registration.json",
+	}
+	if len(requests) != len(wantPaths) {
+		t.Fatalf("server received %d requests, want %d", len(requests), len(wantPaths))
+	}
+	for _, wantPath := range wantPaths {
+		req := receiveRegistration(t, requests)
+		if req.path != wantPath {
+			t.Errorf("registration path = %q, want %q", req.path, wantPath)
 		}
-		if ct := r.Header.Get("Content-Type"); ct != "application/json" {
-			t.Errorf("expected Content-Type application/json, got %s", ct)
+		if req.method != http.MethodPut {
+			t.Errorf("method = %s, want PUT", req.method)
+		}
+		if req.contentType != "application/json" {
+			t.Errorf("Content-Type = %q, want application/json", req.contentType)
 		}
 
-		body, readErr := io.ReadAll(r.Body)
-		if readErr != nil {
-			t.Errorf("failed to read body: %v", readErr)
+		reg := req.reg
+		if reg.Hostname != "test-node-01" || reg.IP != outboundIP || reg.MAC != primaryMAC {
+			t.Errorf("registration = (%q, %q, %q), want (test-node-01, %q, %q)",
+				reg.Hostname, reg.IP, reg.MAC, outboundIP, primaryMAC)
 		}
-		defer func() { _ = r.Body.Close() }()
-
-		var reg BootstrapRegistration
-		if unmarshalErr := json.Unmarshal(body, &reg); unmarshalErr != nil {
-			t.Errorf("failed to unmarshal: %v", unmarshalErr)
+		if reg.Services["platformd"] != "running" || reg.Services["sshd"] != "running" {
+			t.Errorf("services = %v, want platformd and sshd running", reg.Services)
 		}
-		received.Store(reg)
-
-		w.WriteHeader(http.StatusOK)
-	}))
-	t.Cleanup(ts.Close)
-
-	// Extract host:port from test server URL (strip "http://")
-	sink := strings.TrimPrefix(ts.URL, "http://")
-
-	testApp := &App{
-		Hostname: "test-node-01",
-		Logger:   logging.DefaultLogger(),
+		if _, err := time.Parse(time.RFC3339, reg.Timestamp); err != nil {
+			t.Errorf("timestamp %q is not RFC3339: %v", reg.Timestamp, err)
+		}
 	}
+}
 
-	// Run synchronously for test determinism.
-	testApp.postBootstrapRegistration(sink)
+func TestPostBootstrapRegistration_NoMAC(t *testing.T) {
+	useNoRoute(t)
+	sink, requests := newRegistrationServer(t, http.StatusOK)
 
-	raw := received.Load()
-	if raw == nil {
-		t.Fatal("server never received a registration request")
-	}
+	newTestApp("test-node-02").postBootstrapRegistration(sink)
 
-	reg := raw.(BootstrapRegistration)
-	if reg.Hostname != "test-node-01" {
-		t.Errorf("expected hostname test-node-01, got %s", reg.Hostname)
+	if len(requests) != 1 {
+		t.Fatalf("server received %d requests, want only the hostname-keyed one", len(requests))
 	}
-	if reg.Services["platformd"] != "running" {
-		t.Errorf("expected platformd=running, got %s", reg.Services["platformd"])
+	req := receiveRegistration(t, requests)
+	if req.path != "/installs/test-node-02/registration.json" {
+		t.Errorf("registration path = %q, want /installs/test-node-02/registration.json", req.path)
 	}
-	if reg.Services["sshd"] != "running" {
-		t.Errorf("expected sshd=running, got %s", reg.Services["sshd"])
-	}
-	if reg.Timestamp == "" {
-		t.Error("expected non-empty timestamp")
-	}
-	if _, parseErr := time.Parse(time.RFC3339, reg.Timestamp); parseErr != nil {
-		t.Errorf("timestamp not RFC3339: %v", parseErr)
+	if req.reg.IP != "" || req.reg.MAC != "" {
+		t.Errorf("registration IP, MAC = (%q, %q), want both empty", req.reg.IP, req.reg.MAC)
 	}
 }
 
 func TestPostBootstrapRegistration_ServerError(t *testing.T) {
-	t.Parallel()
+	usePrimaryInterface(t)
+	sink, requests := newRegistrationServer(t, http.StatusInternalServerError)
 
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusInternalServerError)
-	}))
-	t.Cleanup(ts.Close)
+	newTestApp("test-node-03").postBootstrapRegistration(sink)
 
-	sink := strings.TrimPrefix(ts.URL, "http://")
-
-	testApp := &App{
-		Hostname: "test-node-02",
-		Logger:   logging.DefaultLogger(),
+	// A rejected MAC-keyed upload does not stop the hostname-keyed one.
+	if len(requests) != 2 {
+		t.Fatalf("server received %d requests, want both endpoints tried", len(requests))
 	}
-
-	// Should not panic; just logs a warning.
-	testApp.postBootstrapRegistration(sink)
 }
 
 func TestPostBootstrapRegistration_Unreachable(t *testing.T) {
-	t.Parallel()
+	useNoRoute(t)
 
-	testApp := &App{
-		Hostname: "test-node-03",
-		Logger:   logging.DefaultLogger(),
+	// Port 1 on loopback refuses the connection at once; the failure is
+	// logged, never returned or panicked.
+	newTestApp("test-node-04").postBootstrapRegistration("127.0.0.1:1")
+}
+
+func TestSanitizeMACForRegistrationPath(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{"empty string", "", ""},
+		{"valid lowercase", "aa:bb:cc:dd:ee:ff", "aa-bb-cc-dd-ee-ff"},
+		{"valid uppercase", "AA:BB:CC:DD:EE:FF", "aa-bb-cc-dd-ee-ff"},
+		{"mixed case", "aA:bB:cC:dD:eE:fF", "aa-bb-cc-dd-ee-ff"},
+		{"no separators", "aabbccddeeff", "aa-bb-cc-dd-ee-ff"},
+		{"too short", "aa:bb:cc", ""},
+		{"non-hex chars only", "zz:yy:xx:ww:vv:uu", ""},
+		// zz is stripped, leaving 10 hex digits.
+		{"mixed valid and invalid chars", "aa:bb:cc:dd:ee:zz", ""},
 	}
-
-	// Use an address that will refuse connection immediately.
-	testApp.postBootstrapRegistration("127.0.0.1:1")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := sanitizeMACForRegistrationPath(tt.input); got != tt.want {
+				t.Errorf("sanitizeMACForRegistrationPath(%q) = %q, want %q", tt.input, got, tt.want)
+			}
+		})
+	}
 }
 
 func TestBootstrapRegistrationPayloadFields(t *testing.T) {
@@ -257,20 +542,6 @@ func TestBootstrapRegistrationPayloadFields(t *testing.T) {
 		if _, ok := decoded[key]; !ok {
 			t.Errorf("missing required JSON key: %s", key)
 		}
-	}
-}
-
-func TestBootstrapRegistrationURL(t *testing.T) {
-	t.Parallel()
-
-	// Verify the URL pattern matches what the bootstrap server expects.
-	sink := "10.4.2.91:8080"
-	hostname := "host-02"
-	expected := "http://10.4.2.91:8080/installs/host-02/registration.json"
-
-	got := "http://" + sink + "/installs/" + hostname + "/registration.json"
-	if got != expected {
-		t.Errorf("URL mismatch:\n  got:  %s\n  want: %s", got, expected)
 	}
 }
 

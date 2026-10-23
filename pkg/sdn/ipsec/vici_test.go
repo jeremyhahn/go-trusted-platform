@@ -152,6 +152,80 @@ func TestVICISessionRequests(t *testing.T) {
 	}
 }
 
+// TestVICISessionRejectsRefusals hands every command a success=no reply with
+// no transport error: the session itself must fail it as ErrCommandRefused
+// with charon's errmsg, whatever govici makes of the reply.
+func TestVICISessionRejectsRefusals(t *testing.T) {
+	ctx := context.Background()
+	key := TokenKey{KeyID: []byte("ipsec")}
+	commands := []struct {
+		cmd string
+		run func(s *viciSession) error
+	}{
+		{"load-conn", func(s *viciSession) error { return s.LoadConn(ctx, "vtep-10.20.0.30", &Connection{Version: "2"}) }},
+		{"unload-conn", func(s *viciSession) error { return s.UnloadConn(ctx, "vtep-10.20.0.30") }},
+		{"get-conns", func(s *viciSession) error {
+			names, err := s.Conns(ctx)
+			if names != nil {
+				t.Errorf("get-conns returned %v from a refusal", names)
+			}
+			return err
+		}},
+		{"list-sas", func(s *viciSession) error {
+			held, err := s.IKESAs(ctx, "vtep-10.20.0.30")
+			if held != nil {
+				t.Errorf("list-sas returned %v from a refusal", held)
+			}
+			return err
+		}},
+		{"terminate", func(s *viciSession) error { return s.TerminateIKE(ctx, "7") }},
+		{"load-cert", func(s *viciSession) error {
+			return s.LoadCert(ctx, Credential{Kind: CredentialAuthority, DER: []byte{0x30}})
+		}},
+		{"load-token", func(s *viciSession) error { return s.LoadToken(ctx, key, newSecret(t, "1234")) }},
+		{"load-token", func(s *viciSession) error { return s.LoadToken(ctx, key, nil) }},
+	}
+	replies := []struct {
+		name   string
+		reply  *govici.Message
+		reason string
+	}{
+		{"with errmsg", message(t, "success", "no", "errmsg", "loading private key failed"), "loading private key failed"},
+		{"without errmsg", message(t, "success", "no"), "no errmsg"},
+	}
+	for _, r := range replies {
+		for _, c := range commands {
+			s, fake := newFakeVICISession(t)
+			fake.resp, fake.stream = r.reply, []*govici.Message{r.reply}
+			err := c.run(s)
+			var cmdErr *CommandError
+			if !errors.As(err, &cmdErr) || cmdErr.Command != c.cmd || cmdErr.Reason != r.reason || !errors.Is(err, ErrCommandRefused) {
+				t.Errorf("%s %s: err = %v, want a refused CommandError carrying %q", r.name, c.cmd, err, r.reason)
+			}
+		}
+	}
+}
+
+// TestVICISessionAcceptsReplies checks what is not a refusal: success=yes,
+// a reply without a success field, as get-conns sends, and a list-sa event
+// with a connection that happens to be named success.
+func TestVICISessionAcceptsReplies(t *testing.T) {
+	ctx := context.Background()
+	s, fake := newFakeVICISession(t)
+	fake.resp = message(t, "success", "yes")
+	if err := s.UnloadConn(ctx, "vtep-10.20.0.30"); err != nil {
+		t.Fatalf("success=yes: %v", err)
+	}
+	fake.resp = message(t, "conns", []string{"vtep-10.20.0.30"})
+	if names, err := s.Conns(ctx); err != nil || !slices.Equal(names, []string{"vtep-10.20.0.30"}) {
+		t.Fatalf("get-conns = %v, %v", names, err)
+	}
+	fake.stream = []*govici.Message{message(t, "success", message(t, "uniqueid", "3"))}
+	if held, err := s.IKESAs(ctx, ""); err != nil || len(held) != 1 || held[0].Conn != "success" {
+		t.Fatalf("list-sas = %v, %v", held, err)
+	}
+}
+
 func TestVICISessionConns(t *testing.T) {
 	ctx := context.Background()
 	s, c := newFakeVICISession(t)
@@ -650,12 +724,13 @@ func TestVICIDialerConnectionRefused(t *testing.T) {
 
 // VICI packet and element types, from charon's vici README.
 const (
-	pktCmdRequest    = 0
-	pktCmdResponse   = 1
-	pktEventRegister = 3
-	pktEventConfirm  = 5
-	pktEventUnknown  = 6
-	pktEvent         = 7
+	pktCmdRequest      = 0
+	pktCmdResponse     = 1
+	pktEventRegister   = 3
+	pktEventUnregister = 4
+	pktEventConfirm    = 5
+	pktEventUnknown    = 6
+	pktEvent           = 7
 
 	elemSectionStart = 1
 	elemSectionEnd   = 2
@@ -663,18 +738,42 @@ const (
 )
 
 // viciServer answers VICI on a unix socket the way charon does, closely
-// enough for govici: every command succeeds with an empty response, and
-// event registration is confirmed, or refused when unknownEvents is set.
+// enough for govici: every command succeeds with an empty response, or is
+// refused with success=no and refuse as its errmsg when refuse is set (only
+// the commands in refused, when that is set), and event registration and
+// unregistration are confirmed, or refused when unknownEvents is set.
 type viciServer struct {
 	path          string
 	conns         chan net.Conn
 	unknownEvents bool
+	refuse        string
+	refused       []string
+}
+
+// refuses reports whether s refuses the command request pkt.
+func (s *viciServer) refuses(pkt []byte) bool {
+	if s.refuse == "" {
+		return false
+	}
+	if len(s.refused) == 0 {
+		return true
+	}
+	if len(pkt) < 2 || len(pkt) < 2+int(pkt[1]) {
+		return false
+	}
+	return slices.Contains(s.refused, string(pkt[2:2+int(pkt[1])]))
 }
 
 func newVICIServer(t *testing.T, unknownEvents bool) *viciServer {
 	t.Helper()
+	return startVICIServer(t, &viciServer{unknownEvents: unknownEvents})
+}
+
+// startVICIServer serves s, whose options are set before any connection.
+func startVICIServer(t *testing.T, s *viciServer) *viciServer {
+	t.Helper()
 	path, ln := listenSocket(t, 0o600)
-	s := &viciServer{path: path, conns: make(chan net.Conn, 4), unknownEvents: unknownEvents}
+	s.path, s.conns = path, make(chan net.Conn, 4)
 	go func() {
 		for {
 			c, err := ln.Accept()
@@ -704,15 +803,18 @@ func (s *viciServer) serve(c net.Conn) {
 			return
 		}
 		reply := byte(pktCmdResponse)
+		var body [][]byte
 		switch {
 		case pkt[0] == pktEventRegister && s.unknownEvents:
 			reply = pktEventUnknown
-		case pkt[0] == pktEventRegister:
+		case pkt[0] == pktEventRegister || pkt[0] == pktEventUnregister:
 			reply = pktEventConfirm
 		case pkt[0] != pktCmdRequest:
 			continue
+		case s.refuses(pkt):
+			body = [][]byte{keyValue("success", "no"), keyValue("errmsg", s.refuse)}
 		}
-		if _, err := c.Write(viciPacket(reply, "")); err != nil {
+		if _, err := c.Write(viciPacket(reply, "", body...)); err != nil {
 			return
 		}
 	}
@@ -790,6 +892,118 @@ func TestVICIDialerOverASocket(t *testing.T) {
 	}
 	if err := events.Close(); err != nil {
 		t.Errorf("Close stream: %v", err)
+	}
+}
+
+// TestVICISessionRefusedOverASocket drives every command through govici
+// against a charon that refuses each one with success=no: none may pass for
+// done, and each must fail as a CommandError carrying charon's errmsg.
+func TestVICISessionRefusedOverASocket(t *testing.T) {
+	// A command left waiting on a reply fails the test instead of hanging it.
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	const reason = "loading private key failed"
+	srv := startVICIServer(t, &viciServer{refuse: reason})
+	sess, err := NewVICIDialer(srv.path, os.Geteuid()).Dial(ctx)
+	if err != nil {
+		t.Fatalf("Dial: %v", err)
+	}
+	recv(t, srv.conns)
+	t.Cleanup(func() {
+		if err := sess.Close(); err != nil {
+			t.Errorf("Close: %v", err)
+		}
+	})
+	key := TokenKey{KeyID: []byte("ipsec"), Module: "xkms"}
+	commands := []struct {
+		cmd string
+		run func() error
+	}{
+		{"load-conn", func() error {
+			return sess.LoadConn(ctx, "vtep-10.20.0.30", &Connection{Version: "2", RemoteAddrs: []string{"10.20.0.30"}})
+		}},
+		{"unload-conn", func() error { return sess.UnloadConn(ctx, "vtep-10.20.0.30") }},
+		{"get-conns", func() error {
+			names, err := sess.Conns(ctx)
+			if names != nil {
+				t.Errorf("get-conns returned %v from a refusal", names)
+			}
+			return err
+		}},
+		{"list-sas", func() error {
+			held, err := sess.IKESAs(ctx, "vtep-10.20.0.30")
+			if held != nil {
+				t.Errorf("list-sas returned %v from a refusal", held)
+			}
+			return err
+		}},
+		{"terminate", func() error { return sess.TerminateIKE(ctx, "7") }},
+		{"load-cert", func() error { return sess.LoadCert(ctx, Credential{Kind: CredentialEndEntity, DER: []byte{0x30}}) }},
+		{"load-token", func() error { return sess.LoadToken(ctx, key, newSecret(t, "1234")) }},
+		{"load-token", func() error { return sess.LoadToken(ctx, key, nil) }},
+	}
+	for _, c := range commands {
+		err := c.run()
+		var cmdErr *CommandError
+		if !errors.As(err, &cmdErr) || cmdErr.Command != c.cmd || cmdErr.Reason != reason || !errors.Is(err, ErrCommandRefused) {
+			t.Errorf("%s: err = %v, want a CommandError carrying %q", c.cmd, err, reason)
+		}
+	}
+}
+
+// TestAttachOverARefusingSocket joins the controller to a govici session
+// whose charon refuses commands: a refused credential leaves the controller
+// detached, and a refused connection is not marked loaded but left for the
+// retry, so the controller keeps converging.
+func TestAttachOverARefusingSocket(t *testing.T) {
+	tests := []struct {
+		name     string
+		refused  []string
+		op       string
+		attached bool
+	}{
+		{"load-cert refused", []string{"load-cert"}, "load-cert", false},
+		{"load-token refused", []string{"load-token"}, "load-token", false},
+		{"load-conn refused", []string{"load-conn"}, "load-conn", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			srv := startVICIServer(t, &viciServer{refuse: "no such key", refused: tt.refused})
+			sess, err := NewVICIDialer(srv.path, os.Geteuid()).Dial(ctx)
+			if err != nil {
+				t.Fatalf("Dial: %v", err)
+			}
+			recv(t, srv.conns)
+			t.Cleanup(func() {
+				if err := sess.Close(); err != nil {
+					t.Errorf("Close: %v", err)
+				}
+			})
+			h := newDetachedHarness(t)
+
+			err = h.ctl.Attach(ctx, sess)
+			var opErr *OpError
+			var peerErr *PeerError
+			failedOp := (errors.As(err, &opErr) && opErr.Op == tt.op) || (errors.As(err, &peerErr) && peerErr.Op == tt.op)
+			if !failedOp || !errors.Is(err, ErrCommandRefused) {
+				t.Fatalf("Attach: err = %v, want the %s refusal", err, tt.op)
+			}
+			if h.ctl.attached() != tt.attached || len(h.ctl.loaded) != 0 {
+				t.Fatalf("attached=%v with %d connections marked loaded, want attached=%v and none", h.ctl.attached(), len(h.ctl.loaded), tt.attached)
+			}
+			if tt.attached {
+				if s := h.ctl.Status(); len(s.Unsynced) != 2 {
+					t.Fatalf("unsynced = %v, want both static peers left for the retry", s.Unsynced)
+				}
+				select {
+				case <-h.ctl.retry:
+				default:
+					t.Fatal("a refused connection did not signal a retry")
+				}
+			}
+		})
 	}
 }
 

@@ -14,8 +14,8 @@
 package quic
 
 import (
-	quicapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 )
 
 // The canonical QUIC wire contract for the device surface is the
@@ -49,7 +49,7 @@ func decodeDeviceCountReply(payload []byte, reply interface{}) error {
 		}
 	}
 	var wire platformv1.ListDevicesResponse
-	if err := quicapi.DecodePayload(payload, &wire); err != nil {
+	if err := quicwire.DecodePayload(payload, &wire); err != nil {
 		return ErrDecodingFailed{Err: err}
 	}
 	out.Count = int32(wire.GetPagination().GetTotalItems())
@@ -66,7 +66,7 @@ func decodeProfileCountReply(payload []byte, reply interface{}) error {
 		}
 	}
 	var wire platformv1.ListProfilesResponse
-	if err := quicapi.DecodePayload(payload, &wire); err != nil {
+	if err := quicwire.DecodePayload(payload, &wire); err != nil {
 		return ErrDecodingFailed{Err: err}
 	}
 	out.Count = int32(wire.GetPagination().GetTotalItems())

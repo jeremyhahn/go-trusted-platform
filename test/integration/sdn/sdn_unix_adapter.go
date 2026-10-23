@@ -24,6 +24,7 @@ import (
 
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
+	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers/surface"
 	"google.golang.org/grpc"
 )
 
@@ -475,13 +476,13 @@ func (u *SDNUnixAdapter) ReleaseIP(ctx context.Context, poolID, ip string) error
 // GetDHCPStatus returns the DHCP server status via Unix socket.
 // Note: DHCP status is not currently exposed via gRPC; returns not implemented error.
 func (u *SDNUnixAdapter) GetDHCPStatus(ctx context.Context) (*DHCPStatusResponse, error) {
-	return nil, ErrAdapterNotImplemented{Protocol: "Unix", Operation: "GetDHCPStatus"}
+	return nil, surface.ErrNoSurface{Transport: "Unix", Operation: "GetDHCPStatus"}
 }
 
 // ListLeases returns all DHCP leases via Unix socket.
 // Note: DHCP leases are not currently exposed via gRPC; returns not implemented error.
 func (u *SDNUnixAdapter) ListLeases(ctx context.Context) (*DHCPLeaseListResponse, error) {
-	return nil, ErrAdapterNotImplemented{Protocol: "Unix", Operation: "ListLeases"}
+	return nil, surface.ErrNoSurface{Transport: "Unix", Operation: "ListLeases"}
 }
 
 // =============================================================================

@@ -15,11 +15,9 @@ package daemon
 
 import (
 	"context"
-	"reflect"
+	"net"
 	"strings"
-	"sync/atomic"
 	"testing"
-	"unsafe"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/mcp"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
@@ -577,43 +575,27 @@ func TestHealthCheckerMessages(t *testing.T) {
 	}
 }
 
-// setAtomicBoolField uses reflection to set an unexported atomic.Bool field.
-// This is used only for testing to simulate running state without actually
-// starting servers.
-func setAtomicBoolField(obj interface{}, fieldName string, value bool) bool {
-	val := reflect.ValueOf(obj)
-	if val.Kind() == reflect.Ptr {
-		val = val.Elem()
-	}
-	field := val.FieldByName(fieldName)
-	if !field.IsValid() {
-		return false
-	}
-	// Get the address of the atomic.Bool field
-	ptr := unsafe.Pointer(field.UnsafeAddr())
-	atomicBool := (*atomic.Bool)(ptr)
-	atomicBool.Store(value)
-	return true
-}
-
 // TestQUICServerHealthChecker_HealthyServer tests the QUIC health checker
-// when the server is in a "running" state (simulated via reflection).
+// against a server started on an ephemeral port.
 func TestQUICServerHealthChecker_HealthyServer(t *testing.T) {
 	t.Run("Check returns healthy when server is running", func(t *testing.T) {
 		bundle := testutil.GenerateTestTLSBundle(t)
 		config := &quic.ServerConfig{
-			ListenAddr: "127.0.0.1:9999",
+			ListenAddr: "127.0.0.1:0",
 			TLSConfig:  bundle.ServerTLSConfig(),
 		}
 		server, err := quic.NewServer(config)
 		if err != nil {
 			t.Fatalf("Failed to create QUIC server: %v", err)
 		}
-
-		// Use reflection to set the running state
-		if !setAtomicBoolField(server, "running", true) {
-			t.Skip("Cannot set running field via reflection")
+		if err := server.Start(); err != nil {
+			t.Fatalf("Failed to start QUIC server: %v", err)
 		}
+		t.Cleanup(func() {
+			if err := server.Stop(); err != nil {
+				t.Errorf("Failed to stop QUIC server: %v", err)
+			}
+		})
 
 		checker := NewQUICServerHealthChecker(server)
 		result := checker.Check(context.Background())
@@ -627,8 +609,17 @@ func TestQUICServerHealthChecker_HealthyServer(t *testing.T) {
 		if result.Details["running"] != true {
 			t.Errorf("Details[running] = %v, want true", result.Details["running"])
 		}
-		if result.Details["listen_addr"] != "127.0.0.1:9999" {
-			t.Errorf("Details[listen_addr] = %v, want '127.0.0.1:9999'", result.Details["listen_addr"])
+		// A server started on port 0 reports the port it bound.
+		listenAddr, ok := result.Details["listen_addr"].(string)
+		if !ok {
+			t.Fatalf("Details[listen_addr] = %v, want a string", result.Details["listen_addr"])
+		}
+		host, port, err := net.SplitHostPort(listenAddr)
+		if err != nil {
+			t.Fatalf("Details[listen_addr] = %q: %v", listenAddr, err)
+		}
+		if host != "127.0.0.1" || port == "0" {
+			t.Errorf("Details[listen_addr] = %q, want 127.0.0.1 with the bound port", listenAddr)
 		}
 		// Check that stats are included
 		if _, ok := result.Details["active_connections"]; !ok {
@@ -650,22 +641,28 @@ func TestQUICServerHealthChecker_HealthyServer(t *testing.T) {
 }
 
 // TestMCPServiceHealthChecker_HealthyServer tests the MCP health checker
-// when the server is in a "running" state (simulated via reflection).
+// against a server started on an ephemeral port.
 func TestMCPServiceHealthChecker_HealthyServer(t *testing.T) {
 	t.Run("Check returns healthy when server is running", func(t *testing.T) {
+		// The HTTP transport is TLS-only; it refuses to start without a certificate.
+		bundle := testutil.GenerateTestTLSBundle(t)
 		config := &mcp.Config{
 			ServerName:    "Test MCP Server",
 			ServerVersion: "1.0.0",
 			Transport:     "http",
 			HTTPAddr:      "127.0.0.1:0",
+			TLSConfig:     bundle.ServerTLSConfig(),
 		}
 		logger := logging.DefaultLogger()
 		server := mcp.NewServer(nil, config, logger)
-
-		// Use reflection to set the running state
-		if !setAtomicBoolField(server, "running", true) {
-			t.Skip("Cannot set running field via reflection")
+		if err := server.Start(); err != nil {
+			t.Fatalf("Failed to start MCP server: %v", err)
 		}
+		t.Cleanup(func() {
+			if err := server.Stop(); err != nil {
+				t.Errorf("Failed to stop MCP server: %v", err)
+			}
+		})
 
 		checker := NewMCPServiceHealthChecker(server)
 		result := checker.Check(context.Background())
@@ -696,8 +693,7 @@ func TestIAMServiceHealthChecker_CheckCoverage(t *testing.T) {
 
 		checker := NewIAMServiceHealthChecker(service)
 		if checker == nil {
-			// Stub implementation returns nil, which is valid behavior
-			t.Skip("Stub implementation returns nil - run with -tags iam for full tests")
+			t.Fatal("NewIAMServiceHealthChecker returned nil for a non-nil service")
 		}
 
 		result := checker.Check(context.Background())
@@ -736,7 +732,7 @@ func TestIAMServiceHealthChecker_CheckCoverage(t *testing.T) {
 
 		checker := NewIAMServiceHealthChecker(service)
 		if checker == nil {
-			t.Skip("Stub implementation returns nil - run with -tags iam for full tests")
+			t.Fatal("NewIAMServiceHealthChecker returned nil for a non-nil service")
 		}
 		result := checker.Check(context.Background())
 
@@ -750,7 +746,7 @@ func TestIAMServiceHealthChecker_CheckCoverage(t *testing.T) {
 
 		checker := NewIAMServiceHealthChecker(service)
 		if checker == nil {
-			t.Skip("Stub implementation returns nil - run with -tags iam for full tests")
+			t.Fatal("NewIAMServiceHealthChecker returned nil for a non-nil service")
 		}
 		result := checker.Check(context.Background())
 
@@ -764,7 +760,7 @@ func TestIAMServiceHealthChecker_CheckCoverage(t *testing.T) {
 
 		checker := NewIAMServiceHealthChecker(service)
 		if checker == nil {
-			t.Skip("Stub implementation returns nil - run with -tags iam for full tests")
+			t.Fatal("NewIAMServiceHealthChecker returned nil for a non-nil service")
 		}
 		result := checker.Check(context.Background())
 
@@ -777,7 +773,7 @@ func TestIAMServiceHealthChecker_CheckCoverage(t *testing.T) {
 		service := &IAMService{}
 		checker := NewIAMServiceHealthChecker(service)
 		if checker == nil {
-			t.Skip("Stub implementation returns nil - run with -tags iam for full tests")
+			t.Fatal("NewIAMServiceHealthChecker returned nil for a non-nil service")
 		}
 
 		if checker.Name() != "iam" {
@@ -875,7 +871,7 @@ func TestIAMServiceHealthChecker_Concurrency(t *testing.T) {
 		service := &IAMService{}
 		checker := NewIAMServiceHealthChecker(service)
 		if checker == nil {
-			t.Skip("Stub implementation returns nil - run with -tags iam for full tests")
+			t.Fatal("NewIAMServiceHealthChecker returned nil for a non-nil service")
 		}
 
 		done := make(chan bool)
@@ -920,7 +916,7 @@ func TestIAMTenantHealthCheckers_ContextHandling(t *testing.T) {
 		service := &IAMService{}
 		checker := NewIAMServiceHealthChecker(service)
 		if checker == nil {
-			t.Skip("Stub implementation returns nil - run with -tags iam for full tests")
+			t.Fatal("NewIAMServiceHealthChecker returned nil for a non-nil service")
 		}
 
 		ctx, cancel := context.WithCancel(context.Background())

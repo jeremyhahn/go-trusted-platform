@@ -15,6 +15,7 @@ package iso
 
 import (
 	"context"
+	"crypto"
 	"crypto/x509"
 	"encoding/pem"
 	"os"
@@ -53,6 +54,11 @@ type SecureBootMaterial struct {
 	// DB signs build artifacts (kernels, iPXE) with the Secure Boot DB key:
 	// the KMS-held key for a kms:// reference, the file pair otherwise.
 	DB authenticode.Authenticode
+	// DBKey and DBCert are the same DB key and its certificate, for signing
+	// what is not a PE image: the diskless root manifest, which the
+	// installer verifies against the DB certificate on its media.
+	DBKey  crypto.Signer
+	DBCert *x509.Certificate
 }
 
 // ResolveSecureBootMaterial resolves the build's Secure Boot certificates and
@@ -91,11 +97,12 @@ func ResolveSecureBootMaterial(ctx context.Context, build *ISOBuildConfig, clien
 		}
 	}
 
-	db, err := r.dbSigner(ctx, logger)
+	material, err := r.dbSigner(ctx, logger)
 	if err != nil {
 		return nil, err
 	}
-	return &SecureBootMaterial{CertDir: certDir, DB: db}, nil
+	material.CertDir = certDir
+	return material, nil
 }
 
 // materialResolver resolves one build's references, opening the platform
@@ -153,37 +160,39 @@ func (r *materialResolver) certificate(ctx context.Context, role string, ref ins
 	return cert, nil
 }
 
-// dbSigner builds the DB signer: the KMS-held key for a kms:// key-uri, the
+// dbSigner builds the DB signer, with its key and certificate: the KMS-held key for a kms:// key-uri, the
 // keys directory's pair (the media files a file:// reference names, else
 // DB.key / DB.crt) otherwise.
-func (r *materialResolver) dbSigner(ctx context.Context, logger *logging.Logger) (authenticode.Authenticode, error) {
+func (r *materialResolver) dbSigner(ctx context.Context, logger *logging.Logger) (*SecureBootMaterial, error) {
+	var (
+		signer crypto.Signer
+		cert   *x509.Certificate
+		err    error
+	)
 	if isKMSRef(r.sb.DB.KeyURI) {
-		clients, err := r.kms()
-		if err != nil {
-			return nil, err
+		clients, kmsErr := r.kms()
+		if kmsErr != nil {
+			return nil, kmsErr
 		}
-		signer, cert, err := secureboot.NewKMSSigner(ctx, clients.KMS, clients.CA, r.sb.DB.KeyURI, r.sb.DB.CertURI)
-		if err != nil {
-			return nil, &SecureBootMaterialError{Step: "DB signer", Err: err}
+		signer, cert, err = secureboot.NewKMSSigner(ctx, clients.KMS, clients.CA, r.sb.DB.KeyURI, r.sb.DB.CertURI)
+	} else {
+		keyName, certName := "DB.key", "DB.crt"
+		if file, ok := secureBootMediaFileName(r.sb.DB.KeyURI); ok {
+			keyName = file
 		}
-		db, err := authenticode.NewCryptoSigner(ctx, signer, cert, logger)
-		if err != nil {
-			return nil, &SecureBootMaterialError{Step: "DB signer", Err: err}
+		if file, ok := secureBootMediaFileName(r.sb.DB.CertURI); ok {
+			certName = file
 		}
-		return db, nil
+		signer, cert, err = authenticode.LoadSigningPair(filepath.Join(r.build.KeysDir, keyName), filepath.Join(r.build.KeysDir, certName))
 	}
-	keyName, certName := "DB.key", "DB.crt"
-	if file, ok := secureBootMediaFileName(r.sb.DB.KeyURI); ok {
-		keyName = file
-	}
-	if file, ok := secureBootMediaFileName(r.sb.DB.CertURI); ok {
-		certName = file
-	}
-	db, err := authenticode.NewFileSigner(ctx, filepath.Join(r.build.KeysDir, keyName), filepath.Join(r.build.KeysDir, certName), logger)
 	if err != nil {
 		return nil, &SecureBootMaterialError{Step: "DB signer", Err: err}
 	}
-	return db, nil
+	db, err := authenticode.NewCryptoSigner(ctx, signer, cert, logger)
+	if err != nil {
+		return nil, &SecureBootMaterialError{Step: "DB signer", Err: err}
+	}
+	return &SecureBootMaterial{DB: db, DBKey: signer, DBCert: cert}, nil
 }
 
 // platformSecureBoot decodes the platform config's secure-boot section into the

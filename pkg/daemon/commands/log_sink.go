@@ -18,6 +18,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/app"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/log/jsonfile"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 )
@@ -32,18 +33,22 @@ import (
 // trusted-data/log/jsonl/platformd.jsonl with 64 MiB size rotation
 // and a 14-day retention cap.
 //
-// Returns a Querier suitable for handing to the platform REST router
-// via registry params. On failure (LogDir unwritable, etc.) the
-// caller is logged and the function returns nil — the daemon
-// continues without the WebUI Logs surface, which is preferable to
-// taking the whole daemon down because logs couldn't be tee'd.
-func installJSONLLogging(logger *logging.Logger) *jsonfile.Querier {
-	if App == nil {
-		return nil
+// Returns the logger every component built afterwards must use, and a
+// Querier suitable for handing to the platform REST router via registry
+// params. The tee is a NEW logger: a component still holding the one
+// passed in logs around the sink, and its records — the admin claim's
+// re-claim security event among them — never reach the console Logs
+// page. On failure (LogDir unwritable, etc.) the failure is logged and
+// the given logger comes back with a nil Querier — the daemon continues
+// without the WebUI Logs surface, which is preferable to taking the
+// whole daemon down because logs couldn't be tee'd.
+func installJSONLLogging(a *app.App, logger *logging.Logger) (*logging.Logger, *jsonfile.Querier) {
+	if a == nil {
+		return logger, nil
 	}
-	dir := filepath.Join(App.LogDir, "jsonl")
+	dir := filepath.Join(a.LogDir, "jsonl")
 	level := slog.LevelInfo
-	if App.DebugFlag {
+	if a.DebugFlag {
 		level = slog.LevelDebug
 	}
 	h, err := jsonfile.NewHandler(jsonfile.Options{
@@ -57,17 +62,17 @@ func installJSONLLogging(logger *logging.Logger) *jsonfile.Querier {
 	})
 	if err != nil {
 		logger.Warnf("jsonl log sink unavailable: %v", err)
-		return nil
+		return logger, nil
 	}
 
 	// Compose with the existing handler so the platformd.log file and
 	// stderr stream continue to receive every record.
-	existing := App.Logger.Slog().Handler()
-	multi := logging.NewMultiHandler(existing, h)
+	multi := logging.NewMultiHandler(logger.Slog().Handler(), h)
 
-	App.Logger = logging.WrapHandler(multi)
+	teed := logging.WrapHandler(multi)
+	a.Logger = teed
 	slog.SetDefault(slog.New(multi))
 
-	logger.Info("structured JSON-lines log sink installed", "dir", dir)
-	return jsonfile.NewQuerier(h)
+	teed.Info("structured JSON-lines log sink installed", "dir", dir)
+	return teed, jsonfile.NewQuerier(h)
 }

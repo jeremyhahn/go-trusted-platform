@@ -1,8 +1,8 @@
 # Platform Tenancy — CLI
 
-> **Status: NORMATIVE** · Scope: `platformctl tenant` · Last verified: 2026-08-18
+> **Status: NORMATIVE** · Scope: `platformctl tenant` · Last verified: 2026-10-16
 > Conflicts with this document are defects. Fix them here first.
-> Read out of `pkg/cli/commands/tenant/` on 2026-08-18.
+> Read out of `pkg/cli/commands/tenant/` on 2026-10-16.
 
 ---
 
@@ -12,7 +12,7 @@
 platformctl tenant    Tenant management operations
 ```
 
-Eighteen verbs across the group, `quotas` and `barrier`.
+Nine verbs on the group itself, three under `quotas` and four under `barrier`.
 
 ### Global flags
 
@@ -41,17 +41,28 @@ Every verb needs a reachable daemon. `--transport embedded` runs in-process.
 | `create` | — | `--name` (required, unique), `--display-name` |
 | `list` | — | — |
 | `show` | `<tenant-name>` | — |
+| `update` | `<tenant-name>` | `--display-name`, `--labels k=v,...`, `--annotations k=v,...` |
 | `suspend` | `<tenant-name>` | — |
 | `resume` | `<tenant-name>` | — |
 | `delete` | `<tenant-name>` | `--force` (skip the confirmation prompt) |
 
 **Verbs take a tenant *name*, not an ID.** The REST and gRPC surfaces are
 ID-keyed with a separate `by-name` lookup; the CLI is name-keyed throughout.
+Every verb resolves the name first, so a tenant-bound caller can name its own
+tenant and no other: another tenant's name, and a name that does not exist,
+are both refused with `PermissionDenied`. The system tenant and the Unix-socket
+operator can name any tenant ([api.md](api.md) §7).
+
+Every verb runs on `unix`, `grpc`, `rest`, `quic`, `mcp` and `embedded`: the
+SDK REST transport carries the name lookup, quotas and usage on the routes in
+[api.md](api.md) §2–3, and the SDK MCP transport carries every method on the
+daemon's MCP tools ([api.md](api.md) §7).
 
 ```bash
 platformctl tenant create --name tenant-a --display-name "Tenant A"
 platformctl tenant list --output json
 platformctl tenant show tenant-a
+platformctl tenant update tenant-a --display-name "Tenant A" --labels env=prod
 platformctl tenant suspend tenant-a
 platformctl tenant resume tenant-a
 platformctl tenant delete tenant-a --force
@@ -62,6 +73,11 @@ platformctl tenant delete tenant-a --force
 terminal: no transition leaves it, so a deleted tenant is replaced rather than
 restored. `--force` only skips the prompt; it does not make deletion any more
 recoverable.
+
+**`update` replaces maps, not entries.** `--labels` and `--annotations` each
+replace the tenant's whole map; a flag not given leaves its map, and the display
+name, as they are. An `update` with none of the three flags is refused before
+any call. Quotas are not changed here: use `quotas set`.
 
 Re-running `suspend` on a suspended tenant succeeds — same-state transitions are
 allowed so retried calls do not fail.
@@ -74,6 +90,7 @@ allowed so retried calls do not fail.
 |---|---|
 | `get` | `<tenant-name>` |
 | `set` | `<tenant-name>` |
+| `check` | `<tenant-name>` |
 
 **`set` flags** — all `int64`, all default `0`:
 
@@ -93,6 +110,11 @@ allowed so retried calls do not fail.
 `cmd.Flags().Changed(...)` reports it was given, so an omitted flag leaves the
 existing limit alone. That matters because **`0` is a real value meaning "no
 capacity"** — without the `Changed` check, omitting a flag would zero the limit.
+The CLI sends only the sections whose flags were given; the server keeps the
+limits of every section left out, and never changes usage.
+
+**There is no disk flag.** The disk limit (`MaxDiskGB`) has no field on the
+gRPC wire, so `set` keeps it as it is; `get` does not show it.
 
 **Two unit hazards.** The CLI flag is `--max-memory-gb` while the underlying
 field is `MaxMemoryMB` — **megabytes**. And `--max-bridges`, `--max-ports`,
@@ -100,21 +122,31 @@ field is `MaxMemoryMB` — **megabytes**. And `--max-bridges`, `--max-ports`,
 counterpart field in `ComputeQuota`, which carries only VMs, containers, vCPUs,
 memory and disk. Confirm what a value lands in before setting it.
 
+**`check`** asks whether the tenant could allocate `--amount` (positive) of
+`--resource` (`vms`, `containers`, `vcpus`, `memory`, `disk`, `bridges`,
+`ports`, `bandwidth`, `volumes`, `snapshots`) without going over its quota.
+Nothing is allocated. Over quota is an answer, not an error: the command
+succeeds with `allowed: false` and a `message` naming the limit. The JSON/YAML
+form is `{tenant_id, tenant_name, resource, amount, allowed, message}`.
+
 ```bash
 platformctl tenant quotas get tenant-a
 platformctl tenant quotas set tenant-a --max-vms 20 --max-vcpus 80 --max-memory-gb 256
+platformctl tenant quotas check tenant-a --resource vms --amount 2 -o json
 ```
 
 ---
 
-## 4. Inspection verbs
+## 4. Inspection and maintenance verbs
 
-| Verb | Positional | Shows |
+| Verb | Positional | Does |
 |---|---|---|
-| `usage` | `<tenant-name>` | Resource usage against limits |
+| `usage` | `<tenant-name>` | Shows what the tenant uses beside each limit, as the server's usage tracker reports it; a limit of 0 reads as unlimited. Storage in use is disk GB against the volume quota in GB. JSON/YAML: `{tenant_id, compute, network, storage}`, each resource `{used, max}` |
+| `sync` | — | Recounts every tenant's usage and releases expired quota reservations; safe to repeat. JSON/YAML: `{success}` |
 
 ```bash
 platformctl tenant usage tenant-a
+platformctl tenant sync
 ```
 
 The former `vlan` and `bridge` verbs were removed with the per-tenant VLAN
@@ -125,11 +157,14 @@ the CLI's point of view (§6).
 
 ## 5. `platformctl tenant barrier`
 
-Per-tenant cryptographic barrier lifecycle.
+Per-tenant cryptographic barrier lifecycle. The barrier model is in
+[`docs/barrier/`](../barrier/architecture.md#two-barriers); the platform
+barrier has its own verbs, `platformctl barrier`
+([`docs/barrier/cli.md`](../barrier/cli.md)).
 
 | Verb | Positional | Flags |
 |---|---|---|
-| `init` | `<tenant-name>` | — |
+| `init` | `<tenant-name>` | `--threshold`, `--shares` — leave both `0` (deterministic init); the service refuses a non-zero value with `InvalidArgument`, since it cannot split the barrier into shares |
 | `unseal` | `<tenant-name>` | `--key-hex`, `--key-base64` |
 | `seal` | `<tenant-name>` | — |
 | `status` | `<tenant-name>` | — |
@@ -155,10 +190,8 @@ not a failure.
 
 | Capability | Reach it with |
 |---|---|
-| Rotate the tenant DEK | REST `POST /api/v1/tenants/{id}/dek/rotate`, gRPC `RotateTenantDEK`, MCP `tenant_rotate_dek` |
-| Tenant DEK status | REST `GET /api/v1/tenants/{id}/dek`, MCP `tenant_get_dek_status` |
-| Check quota for a prospective allocation | REST `POST .../quota-check`, gRPC `CheckQuota` |
-| Sync tenants | REST `POST /api/v1/tenants/sync`, gRPC `Sync` |
+| Rotate the tenant DEK | REST `POST /api/v1/tenants/{id}/dek/rotate`, gRPC/Unix `RotateTenantDEK`, QUIC `0xEA`, MCP `tenant_rotate_dek` |
+| Tenant DEK status | REST `GET /api/v1/tenants/{id}/dek`, gRPC/Unix `GetTenantDEKStatus`, QUIC `0xEB`, MCP `tenant_get_dek_status` |
 | Get tenant by name over the API | gRPC `GetTenantByName`, REST `/by-name/{name}` |
 
 ---

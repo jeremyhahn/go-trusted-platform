@@ -1,19 +1,31 @@
 # Device REST API Reference
 
+> **Status: REFERENCE** · Last verified: 2026-10-13
+> The device, profile, template and diskless-boot REST routes, their scopes and bodies.
+
 Base URL: `https://localhost:8443/api/v1`
 
 ## Device Endpoints
 
-| Method | Path | Description |
-|--------|------|-------------|
-| POST | `/devices` | Register a new device |
-| GET | `/devices/{id}` | Get device by ID |
-| PUT | `/devices/{id}` | Update device |
-| DELETE | `/devices/{id}` | Delete device |
-| GET | `/devices` | List devices |
-| GET | `/devices/serial/{serial}` | Find by serial |
-| POST | `/devices/{id}/attest` | Verify submitted quote evidence (see below) |
-| POST | `/devices/{id}/attest-cert/record` | Record the device's attestation certificate without re-enrolling (admin; fail-closed on `tcg-cap-verifiedTPMRestricted`; body `{"reissue": bool}` optional) — [api.md §4.5](api.md#45-recording-the-attestation-certificate-without-re-enrolling-473) |
+| Method | Path | Scope | Description |
+|--------|------|-------|-------------|
+| POST | `/devices` | `device:write` | Register a new device |
+| GET | `/devices/{id}` | `device:read` | Get device by ID |
+| PUT | `/devices/{id}` | `device:write` | Update device |
+| DELETE | `/devices/{id}` | `device:delete` | Delete device |
+| GET | `/devices` | `device:read` | List devices |
+| GET | `/devices/count` | `device:read` | Count devices |
+| GET | `/devices/serial/{serial}` | `device:read` | Find by serial |
+| POST | `/devices/{id}/attest` | `device:write` | Verify submitted quote evidence (see below) |
+| POST | `/devices/{id}/attest-cert/record` | `device:write` | Record the device's attestation certificate without re-enrolling (admin; fail-closed on `tcg-cap-verifiedTPMRestricted`; body `{"reissue": bool, "clear_on_refusal": bool}` optional; `409` when a clear loses its compare-and-clear) — [api.md §4.5](api.md#45-recording-the-attestation-certificate-without-re-enrolling-473) |
+| POST | `/devices/{id}/disable` | `device:write` | Block the device's switch port and record it `suspended` (admin; body `{"reason": "<text>"}` optional, at most 256 bytes; `400` when nothing can enforce it) — [api.md §4.7](api.md#47-operator-disable-and-enable-250) |
+| POST | `/devices/{id}/enable` | `device:write` | Re-admit a `suspended` device to the quarantine zone and request re-attestation (admin; no body; `400` when the device is not suspended) — [api.md §4.7](api.md#47-operator-disable-and-enable-250) |
+
+Every operator route on this page takes the scope in its table, which is the
+scope its gRPC twin takes: behind the platform-token middleware it is required
+on top of the admin role gate, and a token without it gets `403`. The legacy JWT
+handler carries no scopes, so there the role gate alone applies
+([api.md §7](api.md#7-authorization)).
 
 ### POST `/devices/{id}/attest`
 
@@ -54,20 +66,94 @@ route is registered only when the daemon has a verifier wired, so a `404`
 means attestation is not configured on this node, never that it silently
 passed.
 
+## Diskless Boot Endpoints
+
+Machine-facing, called by a diskless node's platformd during startup — not an
+operator API, so REST only. Request/response shapes, refusal rules and status
+codes: [api.md §4.6](api.md#46-diskless-boot-delivery-690).
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| POST | `/device/boot/certificate` | IDevID key proof over the connection (no client certificate) | The IDevID chain recorded at enrollment; body `{"identity": "<name>", "signature": "<base64>"}`. Every unproven request gets one identical 403 |
+| POST | `/device/boot` | mTLS (IDevID) | Attested, channel-bound delivery of the node's IDevID chain, IAK certificate, CA bundle and profile; body `{"evidence": "<base64 DeviceQuoteEvidence>"}` |
+
 ## Profile Endpoints
 
-| Method | Path | Description |
-|--------|------|-------------|
-| POST | `/profiles` | Create profile |
-| GET | `/profiles/{id}` | Get profile by ID |
-| PUT | `/profiles/{id}` | Update profile |
-| DELETE | `/profiles/{id}` | Delete profile |
-| GET | `/profiles` | List profiles |
-| GET | `/profiles/match` | Find matching profile |
-| GET | `/profiles/mac/{prefix}` | Find by MAC prefix |
-| GET | `/profiles/serial/{prefix}` | Find by serial prefix |
-| POST | `/devices/profiles/{id}/assign` | Bind profile to a device identity (EK serial / MAC), optionally prestaging the EK certificate |
-| POST | `/devices/profiles/{id}/unassign` | Clear a profile's device binding |
+Profiles live under the singular `/device/` prefix and device records under
+the plural `/devices/`; no path is served under both (#266,
+[api.md §3.1](api.md#31-one-name-per-resource)).
+
+| Method | Path | Scope | Description |
+|--------|------|-------|-------------|
+| POST | `/device/profiles` | `device:write` | Create profile |
+| GET | `/device/profiles/{id}` | `device:read` | Get profile by ID |
+| PUT | `/device/profiles/{id}` | `device:write` | Update profile |
+| DELETE | `/device/profiles/{id}` | `device:delete` | Delete profile |
+| GET | `/device/profiles` | `device:read` | List profiles |
+| GET | `/device/profiles/count` | `device:read` | Count profiles |
+| POST | `/device/profiles/match` | `device:read` | Find matching profile |
+| GET | `/device/profiles/mac/{mac}` | `device:read` | Find by MAC address |
+| GET | `/device/profiles/serial/{serial}` | `device:read` | Find by serial |
+| GET | `/device/profiles/find-config` | `device:read` | Find the config for a device (EK serial / MAC) |
+| POST | `/device/activate-json` | `device:write` | Activate a device (JSON body) |
+| POST | `/device/profiles/{id}/assign` | `device:write` | Bind profile to a device identity (EK serial / MAC), optionally prestaging the EK certificate |
+| POST | `/device/profiles/{id}/unassign` | `device:write` | Clear a profile's device binding |
+
+## Template Endpoints
+
+| Method | Path | Scope | Description |
+|--------|------|-------|-------------|
+| GET | `/device/templates` | `device:read` | List templates |
+| GET | `/device/templates/{id}` | `device:read` | Get template by ID |
+| GET | `/device/templates/name/{name}` | `device:read` | Find template by name |
+| PUT | `/device/templates/{id}` | `device:write` | Update template |
+| DELETE | `/device/templates/{id}` | `device:delete` | Delete template |
+| POST | `/device/templates` | `device:write` | Create a device template (singular path only — the plural `POST` is the bootstrap seeder's, [api.md §4.1](api.md#41-post-apiv1devicestemplates-belongs-to-the-bootstrap-seeder)) |
+| POST | `/device/templates/{id}/create-profile` | `device:write` | Build and save a profile from a stored template |
+
+### POST `/device/templates`
+
+```json
+{
+  "tenant_id": "acme",
+  "name": "edge",
+  "role": "load-balancer",
+  "config": "aG9zdG5hbWU6IGVkZ2UtMDEK",
+  "match_rules": {"mac_prefix": "00:25:90"}
+}
+```
+
+`config` is bytes, so it travels as **base64** in both directions. `name` is
+required; an omitted id is assigned by the server. The reply is `201` with the
+stored template in the `{code, success, payload}` envelope, `payload.id` a
+JSON string. Behind the platform-token middleware the route requires
+`device:write`, as `CreateTemplate` does on gRPC, QUIC and MCP; a token without
+it gets `403` ([api.md §7](api.md#7-authorization)).
+
+### POST `/device/templates/{id}/create-profile`
+
+```json
+{"overrides": {"name": "gw-01", "ek_serial": "1234567890"}}
+```
+
+`overrides` is a full profile request
+([api.md §3](api.md)); the template id comes from the path. An empty body
+means no overrides; a body that does not decode is `400`
+(`ErrInvalidRequestBody`) and nothing is stored. The reply is `201` with the
+saved profile in the envelope.
+
+The Go SDK reaches both routes as `DeviceService/CreateTemplate` and
+`DeviceService/CreateProfileFromTemplate` through the REST adapter
+(`sdk/go/transport/rest/device_template.go`), which renders the pb messages
+in this shape and refuses the fields it has no place for
+([api.md §4](api.md#4-device-templates)).
+
+It reaches `GET`, `PUT` and `DELETE /device/templates/{id}` and
+`GET /device/templates` as `DeviceService/GetTemplate`, `UpdateTemplate`,
+`DeleteTemplate` and `ListTemplates`. Get and update answer the bare
+template; delete answers `204`; the list takes `page` and `page_size` query
+parameters and answers `{"templates": [...], "pagination": {page, page_size,
+total, total_pages, has_more}}`.
 
 ## Device Operations
 
@@ -296,9 +382,11 @@ reads echo it back for operator auditability. See
 Both routes also accept `tls_server_name`: the certificate name the
 attestation collector verifies a node of this profile against when it dials
 it for a quote (e.g. `compute.example.internal`); omitted means the
-device's own FQDN. On `PUT` an omitted `tls_server_name` keeps the stored
-value (`api.md` §3.3). The operator path is
-`platformctl device profile update <id> --tls-server-name <name>`.
+device's own FQDN. On `PUT` an omitted or `null` `tls_server_name` keeps the
+stored value (`api.md` §3.3), and an explicit `"tls_server_name": ""` clears
+it (`api.md` §3.2). The operator path is
+`platformctl device profile update <id> --tls-server-name <name>` (or
+`--clear-tls-server-name`).
 
 ### Get Profile
 
@@ -455,14 +543,14 @@ physical hardware TPM) and must parse as a PEM X.509 certificate. An empty
 `ek_cert` leaves any previously prestaged certificate untouched.
 
 ```http
-POST /api/v1/devices/profiles/1/assign
+POST /api/v1/device/profiles/1/assign
 Content-Type: application/json
 
 {"device_id": "970392025956353"}
 ```
 
 ```http
-POST /api/v1/devices/profiles/1/assign
+POST /api/v1/device/profiles/1/assign
 Content-Type: application/json
 
 {
@@ -481,7 +569,7 @@ Clears the profile's device binding: the EK serial, MAC address,
 prestaged EK certificate, and assignment state are all reset.
 
 ```http
-POST /api/v1/devices/profiles/1/unassign
+POST /api/v1/device/profiles/1/unassign
 ```
 
 Response `200 OK`: the updated profile (with `assigned: false` and the
@@ -489,13 +577,18 @@ identity fields cleared).
 
 ## Error Responses
 
+Errors use the platform response envelope (`restwire.WebServiceResponse`):
+
 ```json
 {
-  "error": {
-    "code": "DEVICE_NOT_FOUND",
-    "message": "Device with ID 999 not found"
-  }
+  "code": 404,
+  "error": "<service error text>",
+  "success": false,
+  "payload": null
 }
 ```
 
-See [api-reference.md](api-reference.md) for complete error code list.
+The CRUD handlers (`handleServiceError` in
+`pkg/webservice/v1/device/rest_handlers.go`) answer `400` for an invalid id
+or a profile whose networks share a VLAN, `409` for a duplicate serial, `404`
+when the device or profile is not found, and `500` otherwise.

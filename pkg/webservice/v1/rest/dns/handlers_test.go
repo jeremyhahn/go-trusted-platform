@@ -22,6 +22,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"sort"
 	"testing"
 
 	"github.com/gorilla/mux"
@@ -31,7 +32,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/dns"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/dns/entities"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/restwire"
 )
 
 // mockDNSService implements dns.DNSService for testing
@@ -215,7 +216,7 @@ func (m *mockHttpWriter) Success200(w http.ResponseWriter, r *http.Request, payl
 	m.lastStatus = http.StatusOK
 	m.lastPayload = payload
 	w.WriteHeader(http.StatusOK)
-	resp := response.WebServiceResponse{Code: 200, Success: true, Payload: payload}
+	resp := restwire.WebServiceResponse{Code: 200, Success: true, Payload: payload}
 	json.NewEncoder(w).Encode(resp)
 }
 
@@ -223,7 +224,7 @@ func (m *mockHttpWriter) Success201(w http.ResponseWriter, r *http.Request, payl
 	m.lastStatus = http.StatusCreated
 	m.lastPayload = payload
 	w.WriteHeader(http.StatusCreated)
-	resp := response.WebServiceResponse{Code: 201, Success: true, Payload: payload}
+	resp := restwire.WebServiceResponse{Code: 201, Success: true, Payload: payload}
 	json.NewEncoder(w).Encode(resp)
 }
 
@@ -244,7 +245,7 @@ func (m *mockHttpWriter) Error400(w http.ResponseWriter, r *http.Request, err er
 	m.lastStatus = http.StatusBadRequest
 	m.lastError = err
 	w.WriteHeader(http.StatusBadRequest)
-	resp := response.WebServiceResponse{Code: 400, Success: false, Error: err.Error()}
+	resp := restwire.WebServiceResponse{Code: 400, Success: false, Error: err.Error()}
 	json.NewEncoder(w).Encode(resp)
 }
 
@@ -265,7 +266,7 @@ func (m *mockHttpWriter) Error404(w http.ResponseWriter, r *http.Request, err er
 	m.lastStatus = http.StatusNotFound
 	m.lastError = err
 	w.WriteHeader(http.StatusNotFound)
-	resp := response.WebServiceResponse{Code: 404, Success: false, Error: err.Error()}
+	resp := restwire.WebServiceResponse{Code: 404, Success: false, Error: err.Error()}
 	json.NewEncoder(w).Encode(resp)
 }
 
@@ -273,7 +274,15 @@ func (m *mockHttpWriter) Error500(w http.ResponseWriter, r *http.Request, err er
 	m.lastStatus = http.StatusInternalServerError
 	m.lastError = err
 	w.WriteHeader(http.StatusInternalServerError)
-	resp := response.WebServiceResponse{Code: 500, Success: false, Error: err.Error()}
+	resp := restwire.WebServiceResponse{Code: 500, Success: false, Error: err.Error()}
+	json.NewEncoder(w).Encode(resp)
+}
+
+func (m *mockHttpWriter) Error503(w http.ResponseWriter, r *http.Request, err error) {
+	m.lastStatus = http.StatusServiceUnavailable
+	m.lastError = err
+	w.WriteHeader(http.StatusServiceUnavailable)
+	resp := restwire.WebServiceResponse{Code: 503, Success: false, Error: err.Error()}
 	json.NewEncoder(w).Encode(resp)
 }
 
@@ -1401,6 +1410,213 @@ func TestListRecords_ZoneNotFound(t *testing.T) {
 	assert.Equal(t, http.StatusNotFound, writer.lastStatus)
 }
 
+// recordLookupZone holds a name in two types so a lookup that ignores the
+// type, or the name, answers the wrong record.
+func recordLookupZone() *entities.Zone {
+	zone := createTestZone("example.com.")
+	zone.AddARecord(&entities.ARecord{Name: "api", Value: "192.168.1.9", TTL: 300})
+	zone.AddARecord(&entities.ARecord{Name: "www", Value: "192.168.1.1", TTL: 3600})
+	zone.AddAAAARecord(&entities.AAAARecord{Name: "www", Value: "2001:db8::1", TTL: 3600})
+	zone.AddMXRecord(&entities.MXRecord{Name: "@", Value: "mail.example.com.", Priority: 10, TTL: 3600})
+	return zone
+}
+
+func TestGetRecord_Success(t *testing.T) {
+	service := newMockDNSService()
+	service.zones["example.com."] = recordLookupZone()
+	handlers, writer := newTestHandlers(service)
+
+	tests := []struct {
+		name       string
+		recordType string
+		recordName string
+		want       RecordResponse
+	}{
+		{"A", "A", "www", RecordResponse{Type: "A", A: &AResponse{Name: "www", Value: "192.168.1.1", TTL: 3600}}},
+		{"lowercase type", "aaaa", "www", RecordResponse{Type: "AAAA", AAAA: &AAAAResponse{Name: "www", Value: "2001:db8::1", TTL: 3600}}},
+		{"MX", "MX", "@", RecordResponse{Type: "MX", MX: &MXResponse{Name: "@", Value: "mail.example.com.", Priority: 10, TTL: 3600}}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			req := createRequestWithVars(http.MethodGet, "/api/v1/dns/zones/example.com./records/"+tc.recordType+"/"+tc.recordName, nil, map[string]string{
+				"zone": "example.com.",
+				"type": tc.recordType,
+				"name": tc.recordName,
+			})
+
+			handlers.GetRecord(httptest.NewRecorder(), req)
+
+			require.Equal(t, http.StatusOK, writer.lastStatus)
+			assert.Equal(t, tc.want, writer.lastPayload)
+		})
+	}
+}
+
+func TestGetRecord_NotFound(t *testing.T) {
+	service := newMockDNSService()
+	service.zones["example.com."] = recordLookupZone()
+	handlers, writer := newTestHandlers(service)
+
+	tests := []struct {
+		name    string
+		vars    map[string]string
+		wantErr error
+	}{
+		{"unknown zone", map[string]string{"zone": "nonexistent.com.", "type": "A", "name": "www"}, dns.ErrZoneNotFound},
+		{"unknown name", map[string]string{"zone": "example.com.", "type": "A", "name": "ftp"}, ErrRecordNotFound{Type: "A", Name: "ftp"}},
+		{"name held only in another type", map[string]string{"zone": "example.com.", "type": "AAAA", "name": "api"}, ErrRecordNotFound{Type: "AAAA", Name: "api"}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			req := createRequestWithVars(http.MethodGet, "/api/v1/dns/zones/x/records/y/z", nil, tc.vars)
+
+			handlers.GetRecord(httptest.NewRecorder(), req)
+
+			assert.Equal(t, http.StatusNotFound, writer.lastStatus)
+			assert.Equal(t, tc.wantErr, writer.lastError)
+		})
+	}
+}
+
+func TestGetRecord_BadPath(t *testing.T) {
+	service := newMockDNSService()
+	service.zones["example.com."] = recordLookupZone()
+	handlers, writer := newTestHandlers(service)
+
+	tests := []struct {
+		name    string
+		vars    map[string]string
+		wantErr error
+	}{
+		{"missing zone", map[string]string{"type": "A", "name": "www"}, ErrMissingZoneName{}},
+		{"missing type", map[string]string{"zone": "example.com.", "name": "www"}, ErrMissingRecordType{}},
+		{"unknown type", map[string]string{"zone": "example.com.", "type": "BOGUS", "name": "www"}, ErrInvalidRecordType{Type: "BOGUS"}},
+		{"missing name", map[string]string{"zone": "example.com.", "type": "A"}, ErrMissingRecordName{}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			req := createRequestWithVars(http.MethodGet, "/api/v1/dns/zones/x/records/y/z", nil, tc.vars)
+
+			handlers.GetRecord(httptest.NewRecorder(), req)
+
+			assert.Equal(t, http.StatusBadRequest, writer.lastStatus)
+			assert.Equal(t, tc.wantErr, writer.lastError)
+		})
+	}
+}
+
+func TestResolve_ManagedZone(t *testing.T) {
+	service := newMockDNSService()
+	service.zones["example.com."] = recordLookupZone()
+	handlers, writer := newTestHandlers(service)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/dns/resolve?fqdn=www.example.com.&type=aaaa", nil)
+
+	handlers.Resolve(httptest.NewRecorder(), req)
+
+	require.Equal(t, http.StatusOK, writer.lastStatus)
+	assert.Equal(t, ResolveResponse{
+		Records:       []RecordResponse{{Type: "AAAA", AAAA: &AAAAResponse{Name: "www", Value: "2001:db8::1", TTL: 3600}}},
+		Authoritative: true,
+	}, writer.lastPayload)
+}
+
+// TestResolve_AnswersOnlyTheQueriedOwner: the REST resolve answers through
+// dns.ResolveName — the longest managed zone suffix, the queried owner's
+// records only, filtered by type (docs/dns/resolution.md, "API resolve").
+func TestResolve_AnswersOnlyTheQueriedOwner(t *testing.T) {
+	cases := []struct {
+		name          string
+		query         string
+		authoritative bool
+		want          []string
+	}{
+		{"OwnerInsideZone", "fqdn=www.example.com.", true, []string{"A 192.168.1.1", "AAAA 2001:db8::1"}},
+		{"ApexOnlyApexRecords", "fqdn=example.com.", true, []string{"MX mail.example.com."}},
+		{"TypeFilter", "fqdn=www.example.com.&type=A", true, []string{"A 192.168.1.1"}},
+		{"UnknownOwnerInsideZone", "fqdn=nope.example.com.&type=A", true, []string{}},
+		{"OutsideEveryZone", "fqdn=www.example.org.&type=A", false, []string{}},
+		{"CaseAndNoTrailingDot", "fqdn=API.Example.COM&type=a", true, []string{"A 192.168.1.9"}},
+		{"NestedZoneLongestMatch", "fqdn=host.sub.example.com.&type=A", true, []string{"A 10.0.1.2"}},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			service := newMockDNSService()
+			service.zones["example.com."] = recordLookupZone()
+			service.zones["example.com."].AddARecord(&entities.ARecord{Name: "host.sub", Value: "10.0.0.99", TTL: 300})
+			nested := createTestZone("sub.example.com.")
+			nested.AddARecord(&entities.ARecord{Name: "host", Value: "10.0.1.2", TTL: 300})
+			service.zones["sub.example.com."] = nested
+			handlers, writer := newTestHandlers(service)
+
+			handlers.Resolve(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/api/v1/dns/resolve?"+tc.query, nil))
+
+			require.Equal(t, http.StatusOK, writer.lastStatus)
+			resp, ok := writer.lastPayload.(ResolveResponse)
+			require.True(t, ok)
+			require.NotNil(t, resp.Records, "records must encode as [], never null")
+			assert.Equal(t, tc.authoritative, resp.Authoritative)
+			assert.Equal(t, tc.want, restRecordValues(resp.Records))
+		})
+	}
+}
+
+// TestResolve_UnservedRecordType: a type resolution does not answer is a 400
+// naming the type, not an empty answer.
+func TestResolve_UnservedRecordType(t *testing.T) {
+	service := newMockDNSService()
+	service.zones["example.com."] = recordLookupZone()
+	handlers, writer := newTestHandlers(service)
+
+	handlers.Resolve(httptest.NewRecorder(),
+		httptest.NewRequest(http.MethodGet, "/api/v1/dns/resolve?fqdn=example.com.&type=SOA", nil))
+
+	assert.Equal(t, http.StatusBadRequest, writer.lastStatus)
+	assert.Equal(t, ErrInvalidRecordType{Type: "SOA"}, writer.lastError)
+}
+
+// restRecordValues flattens resolved records to sorted "TYPE value" lines.
+func restRecordValues(records []RecordResponse) []string {
+	values := []string{}
+	for _, r := range records {
+		switch {
+		case r.A != nil:
+			values = append(values, "A "+r.A.Value)
+		case r.AAAA != nil:
+			values = append(values, "AAAA "+r.AAAA.Value)
+		case r.MX != nil:
+			values = append(values, "MX "+r.MX.Value)
+		default:
+			values = append(values, r.Type)
+		}
+	}
+	sort.Strings(values)
+	return values
+}
+
+func TestResolve_UnmanagedNameIsEmptyAndNotAuthoritative(t *testing.T) {
+	handlers, writer := newTestHandlers(newMockDNSService())
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/dns/resolve?fqdn=elsewhere.org.", nil)
+
+	handlers.Resolve(httptest.NewRecorder(), req)
+
+	require.Equal(t, http.StatusOK, writer.lastStatus)
+	assert.Equal(t, ResolveResponse{Records: []RecordResponse{}}, writer.lastPayload)
+}
+
+func TestResolve_MissingFQDN(t *testing.T) {
+	handlers, writer := newTestHandlers(newMockDNSService())
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/dns/resolve?type=A", nil)
+
+	handlers.Resolve(httptest.NewRecorder(), req)
+
+	assert.Equal(t, http.StatusBadRequest, writer.lastStatus)
+	assert.Equal(t, ErrMissingFQDN{}, writer.lastError)
+}
+
 // Test SignZone
 
 func TestSignZone_Success(t *testing.T) {
@@ -1781,7 +1997,7 @@ func TestExtractRecords_FilteredByType(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run("Filter_"+tc.typeFilter, func(t *testing.T) {
-			records := handlers.extractRecords(zone, tc.typeFilter)
+			records := handlers.extractRecords(&zone.RecordSet, tc.typeFilter)
 			assert.Len(t, records, tc.expectedCount)
 		})
 	}

@@ -18,6 +18,7 @@ import (
 	"testing"
 
 	quicbaas "github.com/jeremyhahn/go-quicbaas/sdk/go"
+	"github.com/jeremyhahn/go-quicbaas/sdk/go/secret"
 )
 
 // mockSDKClient implements the quicbaas.Client interface for testing.
@@ -30,7 +31,44 @@ type mockSDKClient struct {
 	transport   quicbaas.Transport
 	kvClient    quicbaas.KVClient
 	batchClient quicbaas.BatchClient
+
+	orchestratorClient quicbaas.OrchestratorClient
+	projectClient      quicbaas.ProjectClient
+	accountClient      quicbaas.AccountClient
+	sdlcClient         quicbaas.SDLCClient
+
+	ragClient quicbaas.RAGClient
+	discovery *quicbaas.DiscoveryRegistry
+	dataStore quicbaas.QRDBKVStore
+	qrdbErr   error
+
+	security     mockSecurityService
+	ceremonyMgmt mockBarrierCeremonyService
+	tenantMgmt   mockTenantService
+
+	cacheClient         quicbaas.CacheClient
+	vectorClient        quicbaas.VectorClient
+	timeSeriesClient    quicbaas.TimeSeriesClient
+	objectStorageClient quicbaas.ObjectStorageClient
+	schedulerClient     quicbaas.SchedulerClient
+	messagingClient     quicbaas.MessagingClient
 }
+
+// Distinct non-nil clients for the agentic accessors. Each embeds the
+// upstream interface, so a test can tell the wrapper returned this exact
+// value rather than nil or another service's client.
+type stubOrchestratorClient struct{ quicbaas.OrchestratorClient }
+type stubProjectClient struct{ quicbaas.ProjectClient }
+type stubAccountClient struct{ quicbaas.AccountClient }
+type stubSDLCClient struct{ quicbaas.SDLCClient }
+
+// Distinct non-nil clients for the application and search accessors.
+type stubCacheClient struct{ quicbaas.CacheClient }
+type stubVectorClient struct{ quicbaas.VectorClient }
+type stubTimeSeriesClient struct{ quicbaas.TimeSeriesClient }
+type stubObjectStorageClient struct{ quicbaas.ObjectStorageClient }
+type stubSchedulerClient struct{ quicbaas.SchedulerClient }
+type stubMessagingClient struct{ quicbaas.MessagingClient }
 
 func newMockSDKClient() *mockSDKClient {
 	return &mockSDKClient{}
@@ -39,44 +77,46 @@ func newMockSDKClient() *mockSDKClient {
 // Sub-interface accessors (organized API).
 func (m *mockSDKClient) CoreData() quicbaas.CoreDataService             { return nil }
 func (m *mockSDKClient) ClusterMgmt() quicbaas.ClusterManagementService { return nil }
-func (m *mockSDKClient) Security() quicbaas.SecurityService             { return &mockSecurityService{} }
+func (m *mockSDKClient) Security() quicbaas.SecurityService             { return &m.security }
 func (m *mockSDKClient) Identity() quicbaas.IdentityService             { return &mockIdentityService{} }
 func (m *mockSDKClient) Search() quicbaas.SearchService                 { return nil }
 func (m *mockSDKClient) Storage() quicbaas.StorageService               { return nil }
 func (m *mockSDKClient) Async() quicbaas.AsyncService                   { return nil }
 func (m *mockSDKClient) AI() quicbaas.AIService                         { return nil }
 func (m *mockSDKClient) BarrierCeremonyMgmt() quicbaas.BarrierCeremonyService {
-	return nil
+	return &m.ceremonyMgmt
 }
-func (m *mockSDKClient) TenantMgmtService() quicbaas.TenantService { return nil }
+func (m *mockSDKClient) TenantMgmtService() quicbaas.TenantService { return &m.tenantMgmt }
 
 // Backward-compatible service accessors.
-func (m *mockSDKClient) KV() quicbaas.KVClient                                 { return m.kvClient }
-func (m *mockSDKClient) Batch() quicbaas.BatchClient                           { return m.batchClient }
-func (m *mockSDKClient) Transaction() quicbaas.TransactionClient               { return nil }
-func (m *mockSDKClient) Query() quicbaas.QueryClient                           { return nil }
-func (m *mockSDKClient) Cluster() quicbaas.ClusterClient                       { return nil }
-func (m *mockSDKClient) Health() quicbaas.HealthClient                         { return nil }
-func (m *mockSDKClient) Operations() quicbaas.OperationsClient                 { return nil }
-func (m *mockSDKClient) Cache() quicbaas.CacheClient                           { return nil }
-func (m *mockSDKClient) Discovery() (*quicbaas.DiscoveryRegistry, error)       { return nil, nil }
+func (m *mockSDKClient) KV() quicbaas.KVClient                   { return m.kvClient }
+func (m *mockSDKClient) Batch() quicbaas.BatchClient             { return m.batchClient }
+func (m *mockSDKClient) Transaction() quicbaas.TransactionClient { return nil }
+func (m *mockSDKClient) Query() quicbaas.QueryClient             { return nil }
+func (m *mockSDKClient) Cluster() quicbaas.ClusterClient         { return nil }
+func (m *mockSDKClient) Health() quicbaas.HealthClient           { return nil }
+func (m *mockSDKClient) Operations() quicbaas.OperationsClient   { return nil }
+func (m *mockSDKClient) Cache() quicbaas.CacheClient             { return m.cacheClient }
+func (m *mockSDKClient) Discovery() (*quicbaas.DiscoveryRegistry, error) {
+	return m.discovery, m.qrdbErr
+}
 func (m *mockSDKClient) IAM() quicbaas.IAMClient                               { return nil }
-func (m *mockSDKClient) Vector() quicbaas.VectorClient                         { return nil }
-func (m *mockSDKClient) TimeSeries() quicbaas.TimeSeriesClient                 { return nil }
+func (m *mockSDKClient) Vector() quicbaas.VectorClient                         { return m.vectorClient }
+func (m *mockSDKClient) TimeSeries() quicbaas.TimeSeriesClient                 { return m.timeSeriesClient }
 func (m *mockSDKClient) Backup() quicbaas.BackupClient                         { return nil }
-func (m *mockSDKClient) ObjectStorage() quicbaas.ObjectStorageClient           { return nil }
+func (m *mockSDKClient) ObjectStorage() quicbaas.ObjectStorageClient           { return m.objectStorageClient }
 func (m *mockSDKClient) ObjectStorageAdmin() quicbaas.ObjectStorageAdminClient { return nil }
 func (m *mockSDKClient) ObjectTransfer() quicbaas.ObjectTransferClient         { return nil }
 func (m *mockSDKClient) ParameterStore() quicbaas.ParameterStoreClient         { return nil }
-func (m *mockSDKClient) Scheduler() quicbaas.SchedulerClient                   { return nil }
-func (m *mockSDKClient) Messaging() quicbaas.MessagingClient                   { return nil }
+func (m *mockSDKClient) Scheduler() quicbaas.SchedulerClient                   { return m.schedulerClient }
+func (m *mockSDKClient) Messaging() quicbaas.MessagingClient                   { return m.messagingClient }
 func (m *mockSDKClient) Embedding() quicbaas.EmbeddingClient                   { return nil }
 func (m *mockSDKClient) Ollama() quicbaas.OllamaClient                         { return nil }
-func (m *mockSDKClient) RAG() quicbaas.RAGClient                               { return nil }
-func (m *mockSDKClient) Project() quicbaas.ProjectClient                       { return nil }
-func (m *mockSDKClient) Account() quicbaas.AccountClient                       { return nil }
-func (m *mockSDKClient) Orchestrator() quicbaas.OrchestratorClient             { return nil }
-func (m *mockSDKClient) SDLC() quicbaas.SDLCClient                             { return nil }
+func (m *mockSDKClient) RAG() quicbaas.RAGClient                               { return m.ragClient }
+func (m *mockSDKClient) Project() quicbaas.ProjectClient                       { return m.projectClient }
+func (m *mockSDKClient) Account() quicbaas.AccountClient                       { return m.accountClient }
+func (m *mockSDKClient) Orchestrator() quicbaas.OrchestratorClient             { return m.orchestratorClient }
+func (m *mockSDKClient) SDLC() quicbaas.SDLCClient                             { return m.sdlcClient }
 
 // QRDB-backed accessors (returning two values, error path always nil).
 func (m *mockSDKClient) SealStore() (quicbaas.QRDBSealStoreClient, error) {
@@ -87,7 +127,7 @@ func (m *mockSDKClient) CustodianGroup() (quicbaas.QRDBCustodianGroupClient, err
 	return nil, nil
 }
 func (m *mockSDKClient) Share() (quicbaas.QRDBShareClient, error) { return nil, nil }
-func (m *mockSDKClient) DataStore() (quicbaas.QRDBKVStore, error) { return nil, nil }
+func (m *mockSDKClient) DataStore() (quicbaas.QRDBKVStore, error) { return m.dataStore, m.qrdbErr }
 
 func (m *mockSDKClient) Transport() quicbaas.Transport { return m.transport }
 func (m *mockSDKClient) Close() error {
@@ -108,12 +148,95 @@ type mockIdentityService struct {
 
 func (mockIdentityService) IAM() quicbaas.IAMClient { return nil }
 
-// mockSecurityService is a minimal SecurityService that returns nil for every
-// capability. It lets the wrapper's Security().X() delegation execute without
-// panicking while preserving the test's "expected nil" expectations.
+// mockSecurityService is a minimal SecurityService. Its zero value returns nil
+// for every capability, which lets the wrapper's Security().X() delegation
+// execute without panicking while preserving the test's "expected nil"
+// expectations. A test sets a field to make the matching capability return
+// that value, and err to make every QRDB-backed capability fail.
 type mockSecurityService struct {
 	quicbaas.SecurityService
+
+	certificateExt quicbaas.CertificateExtensions
+	acme           quicbaas.ACMEService
+	trust          quicbaas.TrustService
+	attestation    quicbaas.AttestationService
+	ssh            quicbaas.SSHService
+	barrier        quicbaas.QRDBBarrierClient
+	ceremony       quicbaas.QRDBCeremonyClient
+	credentials    quicbaas.QRDBCredentialClient
+	sealStore      quicbaas.QRDBSealStoreClient
+	secretResolver *secret.ResolverRegistry
+	err            error
 }
+
+// Distinct non-nil clients for the Security() accessors, as for the agentic
+// ones above.
+type stubCertificateExt struct{ quicbaas.CertificateExtensions }
+type stubACMEService struct{ quicbaas.ACMEService }
+type stubTrustService struct{ quicbaas.TrustService }
+type stubAttestationService struct{ quicbaas.AttestationService }
+type stubSSHService struct{ quicbaas.SSHService }
+type stubBarrierClient struct{ quicbaas.QRDBBarrierClient }
+type stubCeremonyClient struct{ quicbaas.QRDBCeremonyClient }
+type stubCredentialClient struct{ quicbaas.QRDBCredentialClient }
+type stubSealStoreClient struct{ quicbaas.QRDBSealStoreClient }
+
+func (s *mockSecurityService) CertificateExt() quicbaas.CertificateExtensions {
+	return s.certificateExt
+}
+func (s *mockSecurityService) ACME() quicbaas.ACMEService               { return s.acme }
+func (s *mockSecurityService) Trust() quicbaas.TrustService             { return s.trust }
+func (s *mockSecurityService) Attestation() quicbaas.AttestationService { return s.attestation }
+func (s *mockSecurityService) SSH() quicbaas.SSHService                 { return s.ssh }
+func (s *mockSecurityService) Barrier() (quicbaas.QRDBBarrierClient, error) {
+	return s.barrier, s.err
+}
+func (s *mockSecurityService) Ceremony() (quicbaas.QRDBCeremonyClient, error) {
+	return s.ceremony, s.err
+}
+func (s *mockSecurityService) Credentials() (quicbaas.QRDBCredentialClient, error) {
+	return s.credentials, s.err
+}
+func (s *mockSecurityService) SealStore() (quicbaas.QRDBSealStoreClient, error) {
+	return s.sealStore, s.err
+}
+func (s *mockSecurityService) SecretResolver() *secret.ResolverRegistry { return s.secretResolver }
+
+// mockBarrierCeremonyService returns its fields; err fails every capability.
+type mockBarrierCeremonyService struct {
+	ceremony       quicbaas.QRDBCeremonyClient
+	custodianGroup quicbaas.QRDBCustodianGroupClient
+	share          quicbaas.QRDBShareClient
+	err            error
+}
+
+func (s *mockBarrierCeremonyService) Ceremony() (quicbaas.QRDBCeremonyClient, error) {
+	return s.ceremony, s.err
+}
+func (s *mockBarrierCeremonyService) CustodianGroup() (quicbaas.QRDBCustodianGroupClient, error) {
+	return s.custodianGroup, s.err
+}
+func (s *mockBarrierCeremonyService) Share() (quicbaas.QRDBShareClient, error) {
+	return s.share, s.err
+}
+
+// mockTenantService returns its tenant client, or err.
+type mockTenantService struct {
+	tenant quicbaas.QRDBTenantClient
+	err    error
+}
+
+func (s *mockTenantService) Tenant() (quicbaas.QRDBTenantClient, error) { return s.tenant, s.err }
+
+// Distinct non-nil clients for the AI, ceremony management, tenant management
+// and service registry accessors.
+type stubRAGClient struct{ quicbaas.RAGClient }
+type stubCustodianGroupClient struct {
+	quicbaas.QRDBCustodianGroupClient
+}
+type stubShareClient struct{ quicbaas.QRDBShareClient }
+type stubTenantClient struct{ quicbaas.QRDBTenantClient }
+type stubKVStore struct{ quicbaas.QRDBKVStore }
 
 func (mockSecurityService) Auth() quicbaas.AuthService                    { return nil }
 func (mockSecurityService) Seal() quicbaas.SealClient                     { return nil }
@@ -284,6 +407,359 @@ func TestClient_ServiceAccessors(t *testing.T) {
 	}
 }
 
+// TestClient_AgenticAccessors proves each agentic accessor routes to its own
+// go-quicbaas client: the value returned is the SDK's, not a sibling's.
+func TestClient_AgenticAccessors(t *testing.T) {
+	orchestrator := &stubOrchestratorClient{}
+	project := &stubProjectClient{}
+	account := &stubAccountClient{}
+	sdlc := &stubSDLCClient{}
+	mockSDK := newMockSDKClient()
+	mockSDK.orchestratorClient = orchestrator
+	mockSDK.projectClient = project
+	mockSDK.accountClient = account
+	mockSDK.sdlcClient = sdlc
+
+	client, err := NewClientFromSDK(mockSDK)
+	if err != nil {
+		t.Fatalf("NewClientFromSDK() error = %v", err)
+	}
+
+	if got := client.Orchestrator(); got != orchestrator {
+		t.Errorf("Orchestrator() = %v, want the SDK's orchestrator client", got)
+	}
+	if got := client.Project(); got != project {
+		t.Errorf("Project() = %v, want the SDK's project client", got)
+	}
+	if got := client.Account(); got != account {
+		t.Errorf("Account() = %v, want the SDK's account client", got)
+	}
+	if got := client.SDLC(); got != sdlc {
+		t.Errorf("SDLC() = %v, want the SDK's SDLC client", got)
+	}
+}
+
+// TestClient_AgenticAccessors_ServiceUnavailable proves an SDK that does not
+// serve the agentic surface yields nil from each accessor rather than a
+// panic or a client for some other service.
+func TestClient_AgenticAccessors_ServiceUnavailable(t *testing.T) {
+	client, err := NewClientFromSDK(newMockSDKClient())
+	if err != nil {
+		t.Fatalf("NewClientFromSDK() error = %v", err)
+	}
+
+	if got := client.Orchestrator(); got != nil {
+		t.Errorf("Orchestrator() = %v, want nil", got)
+	}
+	if got := client.Project(); got != nil {
+		t.Errorf("Project() = %v, want nil", got)
+	}
+	if got := client.Account(); got != nil {
+		t.Errorf("Account() = %v, want nil", got)
+	}
+	if got := client.SDLC(); got != nil {
+		t.Errorf("SDLC() = %v, want nil", got)
+	}
+}
+
+// TestClient_AppServiceAccessors proves each application and search accessor
+// routes to its own go-quicbaas client: the value returned is the SDK's, not a
+// sibling's.
+func TestClient_AppServiceAccessors(t *testing.T) {
+	cache := &stubCacheClient{}
+	vector := &stubVectorClient{}
+	timeSeries := &stubTimeSeriesClient{}
+	objectStorage := &stubObjectStorageClient{}
+	scheduler := &stubSchedulerClient{}
+	messaging := &stubMessagingClient{}
+	mockSDK := newMockSDKClient()
+	mockSDK.cacheClient = cache
+	mockSDK.vectorClient = vector
+	mockSDK.timeSeriesClient = timeSeries
+	mockSDK.objectStorageClient = objectStorage
+	mockSDK.schedulerClient = scheduler
+	mockSDK.messagingClient = messaging
+
+	client, err := NewClientFromSDK(mockSDK)
+	if err != nil {
+		t.Fatalf("NewClientFromSDK() error = %v", err)
+	}
+
+	if got := client.Cache(); got != cache {
+		t.Errorf("Cache() = %v, want the SDK's cache client", got)
+	}
+	if got := client.Vector(); got != vector {
+		t.Errorf("Vector() = %v, want the SDK's vector client", got)
+	}
+	if got := client.TimeSeries(); got != timeSeries {
+		t.Errorf("TimeSeries() = %v, want the SDK's time-series client", got)
+	}
+	if got := client.ObjectStorage(); got != objectStorage {
+		t.Errorf("ObjectStorage() = %v, want the SDK's object storage client", got)
+	}
+	if got := client.Scheduler(); got != scheduler {
+		t.Errorf("Scheduler() = %v, want the SDK's scheduler client", got)
+	}
+	if got := client.Messaging(); got != messaging {
+		t.Errorf("Messaging() = %v, want the SDK's messaging client", got)
+	}
+}
+
+// TestClient_AppServiceAccessors_ServiceUnavailable proves an SDK that does
+// not serve the application and search services yields nil from each accessor
+// rather than a panic or a client for some other service.
+func TestClient_AppServiceAccessors_ServiceUnavailable(t *testing.T) {
+	client, err := NewClientFromSDK(newMockSDKClient())
+	if err != nil {
+		t.Fatalf("NewClientFromSDK() error = %v", err)
+	}
+
+	if got := client.Cache(); got != nil {
+		t.Errorf("Cache() = %v, want nil", got)
+	}
+	if got := client.Vector(); got != nil {
+		t.Errorf("Vector() = %v, want nil", got)
+	}
+	if got := client.TimeSeries(); got != nil {
+		t.Errorf("TimeSeries() = %v, want nil", got)
+	}
+	if got := client.ObjectStorage(); got != nil {
+		t.Errorf("ObjectStorage() = %v, want nil", got)
+	}
+	if got := client.Scheduler(); got != nil {
+		t.Errorf("Scheduler() = %v, want nil", got)
+	}
+	if got := client.Messaging(); got != nil {
+		t.Errorf("Messaging() = %v, want nil", got)
+	}
+}
+
+// TestClient_SecurityAccessors proves each Security() accessor routes to its
+// own go-quicbaas client: the value returned is the SDK's, not a sibling's.
+func TestClient_SecurityAccessors(t *testing.T) {
+	certificateExt := &stubCertificateExt{}
+	acme := &stubACMEService{}
+	trust := &stubTrustService{}
+	attestation := &stubAttestationService{}
+	ssh := &stubSSHService{}
+	barrier := &stubBarrierClient{}
+	ceremony := &stubCeremonyClient{}
+	credentials := &stubCredentialClient{}
+	sealStore := &stubSealStoreClient{}
+	secretResolver := secret.NewResolverRegistry()
+	mockSDK := newMockSDKClient()
+	mockSDK.security = mockSecurityService{
+		certificateExt: certificateExt,
+		acme:           acme,
+		trust:          trust,
+		attestation:    attestation,
+		ssh:            ssh,
+		barrier:        barrier,
+		ceremony:       ceremony,
+		credentials:    credentials,
+		sealStore:      sealStore,
+		secretResolver: secretResolver,
+	}
+
+	client, err := NewClientFromSDK(mockSDK)
+	if err != nil {
+		t.Fatalf("NewClientFromSDK() error = %v", err)
+	}
+
+	if got := client.CertificateExt(); got != certificateExt {
+		t.Errorf("CertificateExt() = %v, want the SDK's certificate extensions client", got)
+	}
+	if got := client.ACME(); got != acme {
+		t.Errorf("ACME() = %v, want the SDK's ACME service", got)
+	}
+	if got := client.Trust(); got != trust {
+		t.Errorf("Trust() = %v, want the SDK's trust service", got)
+	}
+	if got := client.Attestation(); got != attestation {
+		t.Errorf("Attestation() = %v, want the SDK's attestation service", got)
+	}
+	if got := client.SSH(); got != ssh {
+		t.Errorf("SSH() = %v, want the SDK's SSH service", got)
+	}
+	if got := client.SecretResolver(); got != secretResolver {
+		t.Errorf("SecretResolver() = %v, want the SDK's resolver registry", got)
+	}
+
+	gotBarrier, err := client.Barrier()
+	if err != nil || gotBarrier != barrier {
+		t.Errorf("Barrier() = %v, %v; want the SDK's barrier client", gotBarrier, err)
+	}
+	gotCeremony, err := client.Ceremony()
+	if err != nil || gotCeremony != ceremony {
+		t.Errorf("Ceremony() = %v, %v; want the SDK's ceremony client", gotCeremony, err)
+	}
+	gotCredentials, err := client.Credentials()
+	if err != nil || gotCredentials != credentials {
+		t.Errorf("Credentials() = %v, %v; want the SDK's credential client", gotCredentials, err)
+	}
+	gotSealStore, err := client.SealStore()
+	if err != nil || gotSealStore != sealStore {
+		t.Errorf("SealStore() = %v, %v; want the SDK's seal store client", gotSealStore, err)
+	}
+}
+
+// TestClient_SecurityAccessors_ServiceUnavailable proves an SDK that does not
+// serve a Security() capability yields nil rather than a panic, and that a
+// QRDB-backed accessor whose upstream fails returns ErrServiceUnavailable
+// carrying the upstream error.
+func TestClient_SecurityAccessors_ServiceUnavailable(t *testing.T) {
+	cause := errors.New("qrdb transport not initialized")
+	mockSDK := newMockSDKClient()
+	mockSDK.security.err = cause
+	client, err := NewClientFromSDK(mockSDK)
+	if err != nil {
+		t.Fatalf("NewClientFromSDK() error = %v", err)
+	}
+
+	if got := client.CertificateExt(); got != nil {
+		t.Errorf("CertificateExt() = %v, want nil", got)
+	}
+	if got := client.ACME(); got != nil {
+		t.Errorf("ACME() = %v, want nil", got)
+	}
+	if got := client.Trust(); got != nil {
+		t.Errorf("Trust() = %v, want nil", got)
+	}
+	if got := client.Attestation(); got != nil {
+		t.Errorf("Attestation() = %v, want nil", got)
+	}
+	if got := client.SSH(); got != nil {
+		t.Errorf("SSH() = %v, want nil", got)
+	}
+	if got := client.SecretResolver(); got != nil {
+		t.Errorf("SecretResolver() = %v, want nil", got)
+	}
+
+	tests := []struct {
+		service  string
+		accessor func() (interface{}, error)
+	}{
+		{"barrier", func() (interface{}, error) { return client.Barrier() }},
+		{"ceremony", func() (interface{}, error) { return client.Ceremony() }},
+		{"credentials", func() (interface{}, error) { return client.Credentials() }},
+		{"seal store", func() (interface{}, error) { return client.SealStore() }},
+	}
+	for _, tt := range tests {
+		t.Run(tt.service, func(t *testing.T) {
+			got, err := tt.accessor()
+			assertServiceUnavailable(t, tt.service, got, err, cause)
+		})
+	}
+}
+
+// assertServiceUnavailable checks that a failed QRDB-backed accessor returned
+// no client and an ErrServiceUnavailable naming the service and wrapping cause.
+func assertServiceUnavailable(t *testing.T, service string, got interface{}, err, cause error) {
+	t.Helper()
+	var unavailable ErrServiceUnavailable
+	if !errors.As(err, &unavailable) {
+		t.Fatalf("error = %T %v, want ErrServiceUnavailable", err, err)
+	}
+	if unavailable.Service != service {
+		t.Errorf("Service = %q, want %q", unavailable.Service, service)
+	}
+	if !errors.Is(err, cause) {
+		t.Errorf("error %v does not wrap %v", err, cause)
+	}
+	if got != nil {
+		t.Errorf("client = %v, want nil on error", got)
+	}
+}
+
+// TestClient_ManagementAccessors proves RAG, the ceremony and tenant
+// management accessors and the service registry accessors each return the
+// SDK's own client.
+func TestClient_ManagementAccessors(t *testing.T) {
+	rag := &stubRAGClient{}
+	custodianGroup := &stubCustodianGroupClient{}
+	share := &stubShareClient{}
+	tenant := &stubTenantClient{}
+	discovery := &quicbaas.DiscoveryRegistry{}
+	dataStore := &stubKVStore{}
+	mockSDK := newMockSDKClient()
+	mockSDK.ragClient = rag
+	mockSDK.ceremonyMgmt = mockBarrierCeremonyService{custodianGroup: custodianGroup, share: share}
+	mockSDK.tenantMgmt = mockTenantService{tenant: tenant}
+	mockSDK.discovery = discovery
+	mockSDK.dataStore = dataStore
+
+	client, err := NewClientFromSDK(mockSDK)
+	if err != nil {
+		t.Fatalf("NewClientFromSDK() error = %v", err)
+	}
+
+	if got := client.RAG(); got != rag {
+		t.Errorf("RAG() = %v, want the SDK's RAG client", got)
+	}
+	gotCustodianGroup, err := client.CustodianGroup()
+	if err != nil || gotCustodianGroup != custodianGroup {
+		t.Errorf("CustodianGroup() = %v, %v; want the SDK's custodian group client", gotCustodianGroup, err)
+	}
+	gotShare, err := client.Share()
+	if err != nil || gotShare != share {
+		t.Errorf("Share() = %v, %v; want the SDK's share client", gotShare, err)
+	}
+	gotTenant, err := client.Tenant()
+	if err != nil || gotTenant != tenant {
+		t.Errorf("Tenant() = %v, %v; want the SDK's tenant client", gotTenant, err)
+	}
+	gotDiscovery, err := client.Discovery()
+	if err != nil || gotDiscovery != discovery {
+		t.Errorf("Discovery() = %v, %v; want the SDK's discovery registry", gotDiscovery, err)
+	}
+	gotDataStore, err := client.DataStore()
+	if err != nil || gotDataStore != dataStore {
+		t.Errorf("DataStore() = %v, %v; want the SDK's data store", gotDataStore, err)
+	}
+}
+
+// TestClient_ManagementAccessors_ServiceUnavailable proves RAG yields nil when
+// the SDK serves none, and that each QRDB-backed accessor whose upstream fails
+// returns ErrServiceUnavailable carrying the upstream error.
+func TestClient_ManagementAccessors_ServiceUnavailable(t *testing.T) {
+	cause := errors.New("qrdb transport not initialized")
+	mockSDK := newMockSDKClient()
+	mockSDK.ceremonyMgmt.err = cause
+	mockSDK.tenantMgmt.err = cause
+	mockSDK.qrdbErr = cause
+	client, err := NewClientFromSDK(mockSDK)
+	if err != nil {
+		t.Fatalf("NewClientFromSDK() error = %v", err)
+	}
+
+	if got := client.RAG(); got != nil {
+		t.Errorf("RAG() = %v, want nil", got)
+	}
+
+	tests := []struct {
+		service  string
+		accessor func() (interface{}, error)
+	}{
+		{"custodian group", func() (interface{}, error) { return client.CustodianGroup() }},
+		{"share", func() (interface{}, error) { return client.Share() }},
+		{"tenant", func() (interface{}, error) { return client.Tenant() }},
+		{"discovery", func() (interface{}, error) {
+			registry, err := client.Discovery()
+			if registry == nil {
+				return nil, err
+			}
+			return registry, err
+		}},
+		{"data store", func() (interface{}, error) { return client.DataStore() }},
+	}
+	for _, tt := range tests {
+		t.Run(tt.service, func(t *testing.T) {
+			got, err := tt.accessor()
+			assertServiceUnavailable(t, tt.service, got, err, cause)
+		})
+	}
+}
+
 // TestClient_Transport tests the Transport accessor.
 func TestClient_Transport(t *testing.T) {
 	mockSDK := newMockSDKClient()
@@ -356,6 +832,18 @@ func TestErrors(t *testing.T) {
 			t.Error("Unwrap() did not return expected cause")
 		}
 	})
+
+	t.Run("ErrServiceUnavailable", func(t *testing.T) {
+		cause := errors.New("dial unix: no such file")
+		err := ErrServiceUnavailable{Service: "barrier", Cause: cause}
+		expected := "quicbaas: barrier service unavailable: dial unix: no such file"
+		if err.Error() != expected {
+			t.Errorf("Error() = %q, want %q", err.Error(), expected)
+		}
+		if !errors.Is(err, cause) {
+			t.Error("Unwrap() did not return expected cause")
+		}
+	})
 }
 
 // TestNewClient_EmptyAddress tests that NewClient with empty address returns error.
@@ -382,16 +870,19 @@ func TestNewClient_InvalidAddress(t *testing.T) {
 	client, err := NewClient("invalid-address-format")
 	// The behavior depends on SDK implementation. At minimum, we should
 	// get a valid error or a working client object.
-	if err != nil {
+	switch {
+	case err != nil:
 		var errCreation ErrClientCreationFailed
 		if !errors.As(err, &errCreation) {
 			t.Errorf("Expected ErrClientCreationFailed, got %T: %v", err, err)
 		}
-	} else if client == nil {
+	case client == nil:
 		t.Error("NewClient() returned nil client with nil error")
-	} else {
+	default:
 		// Client was created, clean up.
-		client.Close()
+		if err := client.Close(); err != nil {
+			t.Logf("cleanup: %v", err)
+		}
 	}
 }
 

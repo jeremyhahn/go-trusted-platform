@@ -1,6 +1,6 @@
 # Bootstrap — API
 
-> **Status: NORMATIVE** · Scope: bootstrap, first-boot and pre-unseal barrier routes on every transport · Last verified: 2026-08-18
+> **Status: NORMATIVE** · Scope: bootstrap, first-boot and pre-unseal barrier routes on every transport · Last verified: 2026-10-19
 > Conflicts with this document are defects. Fix them here first.
 > The feature folder is: [architecture.md](architecture.md) · [engineering.md](engineering.md) · [cli.md](cli.md) · [api.md](api.md) · [user.md](user.md).
 >
@@ -23,13 +23,14 @@ does not repeat them.
 is deliberate for half of it and a gap for the other half.** Read §5 before
 concluding anything is missing by accident.
 
-Two surfaces in this feature are **not** among the six, and a client that needs
-them cannot reach them through the SDK:
+Three surfaces in this feature are **not** among the six. Only the pre-unseal
+mux has an SDK client — `sdk/go/services/gate`, a separate package because it
+speaks plain HTTP to a local endpoint rather than any of the six transports:
 
 | Out-of-band surface | Where | Why it exists |
 |---|---|---|
-| The pre-unseal HTTP mux — `/healthz`, `/init`, `/unseal` | `pkg/api/rest/init_handlers.go`, bound on a bare `http.ServeMux` with no `/api/v1` prefix | It has to answer *before* the barrier is unsealed, when no other transport is bound |
-| The Noise_NK bundle listener | `pkg/api/noise`, default `:9999` | It has to work when TLS cannot be verified at all |
+| The pre-unseal HTTP mux — `/healthz`, `/init`, `/unseal` | `pkg/api/rest/init_handlers.go`, bound on a bare `http.ServeMux` with no `/api/v1` prefix, on the Unix socket and `127.0.0.1:9446` only | It has to answer *before* the barrier is unsealed, when no other transport is bound ([`docs/daemon/api.md`](../daemon/api.md) §1) |
+| The Noise_NK bundle listener | `pkg/api/noise`, default `:9999` (`pkg/bootstrap` `DefaultConfig`) | It has to work when TLS cannot be verified at all |
 | The bootstrap container's HTTP server — `/installs/…`, `/config/mac/…`, `/boot.ipxe`, `/health` | `pkg/ipxe/http_server.go`, `:8080` on the deployer host | It serves machines that have no identity yet; see [`docs/ipxe/architecture.md`](../ipxe/architecture.md) |
 
 ---
@@ -57,11 +58,15 @@ reachable through the six.
 ³ Constructed in production and shared between the platform's own certificate
 flow and the SDK-registered publisher adapter, so there is one DNS-write path.
 
-⁴ Reached from the CLI (`bootstrap trust --install-to-system-trust`), not from a
-service.
+⁴ Reached from the CLI (`bootstrap trust --install-to-system-trust`) and from
+daemon start-up when the trust config sets `install-to-system-trust`
+(`pkg/app`), not from a service.
 
-⁵ Constructed in production and wired into `tls.Config.GetCertificate`, but
-**no production code calls `Reload`** ([engineering.md](engineering.md) §7.3).
+⁵ Constructed in production and wired into `tls.Config.GetCertificate`.
+`WebServerV1.ReloadCertificate` calls `Reload`; `serve` registers it as the
+webservice certificate installer, so the renewal sweep rotates the live
+certificate ([`docs/operations/cert-lifecycle.md`](../operations/cert-lifecycle.md)).
+`RolloverManager` also calls `Reload`, but nothing in production constructs it.
 
 ### `GET /v1/ca/bootstrap` and `GET /api/v1/ca/bootstrap`
 
@@ -117,53 +122,23 @@ invalid PEM data`.
 
 ## 3. Barrier — the pre-unseal surface
 
-Before the barrier is unsealed, the daemon binds **only** the three routes below.
-No gRPC TCP, no business REST, no QUIC, no MCP.
+Before the barrier is unsealed, `platformd` binds only the barrier gate
+(`/healthz`, `/init`, `/unseal`). The gate routes, their schemas and status
+codes, and the platform barrier capability rows (init, status, unseal, seal,
+rekey, recovery) are in [`docs/barrier/api.md`](../barrier/api.md). The
+operator walk-through of first init and unseal is
+[`docs/barrier/user.md`](../barrier/user.md#first-start-on-a-new-node).
+
+What bootstrap adds on top is the officer ceremony:
 
 | Capability | REST | gRPC / Unix | QUIC | MCP | Embedded |
 |---|---|---|---|---|---|
-| Report platform state / readiness | `GET /healthz` ⁶ | `BarrierService.GetStatus` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `barrier.Manager.IsSealed` / `IsInitialized` / `SyncStatus` |
-| Initialize the barrier (ceremony bootstrap) | `POST /init` ⁶ | `BarrierService.Init` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `Manager.Initialize`, `Manager.InitializeShamir` |
-| Submit a secret or share toward unseal | `POST /unseal` ⁶ | `BarrierService.Unseal` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `Manager.Unseal`, `Manager.UnsealWithShare` |
-| Seal, rekey, ceremony claim-cert / claim-share | see [`docs/cli/barrier.md`](../cli/barrier.md) | `BarrierService.Seal`, `.Rekey`; `CeremonyService` | `OpCeremonyCategory` (`0x9A`) | `MISSING — docs/13 G7` | `Manager.Seal`, `.Rekey`, `.CeremonyInitialize`, `.BeginClaimCert`, `.CompleteClaimCert`, `.BeginClaimShare`, `.CompleteClaimShare` |
+| Ceremony status, claim-cert, claim-share | `MISSING — docs/13 G7` | `CeremonyService` | `OpCeremonyCategory` (`0x9A`) | `platform_ceremony_*` ([`docs/cli/ceremony.md`](../cli/ceremony.md)) | `ServiceRegistry.Ceremony`; `Manager.CeremonyInitialize`, `.CeremonyStatus`, `.BeginClaimCert`, `.CompleteClaimCert`, `.BeginClaimShare`, `.CompleteClaimShare` |
 
-⁶ On the **pre-unseal mux**, not under `/api/v1`. These three paths are bound by
-`InitHandlers.Register` on a bare `http.ServeMux`.
-
-**`OpTenantBarrierCategory` (`0x9E`) and the MCP tools
-`platform_tenant_barrier_init` / `platform_tenant_barrier_unseal` are a different
-capability**: they operate on *per-tenant* barriers, not on the platform barrier
-that gates daemon startup. Do not reach for them expecting to unseal the
-platform.
-
-### Request and response schemas
-
-`POST /init` accepts `so_pin`, `user_pin`, `barrier_strategy`, `shares`,
-`threshold`, `hostname`, `sans`, `credential_seal_strategy` — all optional in the
-JSON, with the effective requirements decided by the ceremony backend. It returns
-`ceremony_id`, `state`, `initialized_at`, `spki_pin`, `admin_cert_pem`,
-`admin_key_pem`.
-
-**The `/init` response is the only time the admin key is available.** Capture it,
-along with `spki_pin`, before doing anything else.
-
-`POST /unseal` accepts exactly one of `secret` (software strategy) or `share`
-(Shamir) and returns `state`, `shares_provided`, `required`, `sealed` — so a
-multi-share workflow can iterate until `sealed` is false.
-
-`GET /healthz` returns `state` and `ready`. `state` is one of `uninitialized`,
-`sealed`, `unsealing`, `unsealed`; `ready` is true only for `unsealed`.
-
-### Status mapping
-
-| Status | When |
-|---|---|
-| `200` | Success, and always for `/healthz` |
-| `405` | Wrong method |
-| `409` | `ErrInitNotPermitted` (not `uninitialized`) or `ErrUnsealNotPermitted` (not `sealed`) |
-| `503` | The init or unseal backend is not wired |
-
-Request bodies are capped at 64 KiB by default (`InitHandlersConfig.MaxBodyBytes`).
+**`OpTenantBarrierCategory` (`0x9E`) and the `platform_tenant_barrier_*` MCP
+tools are a different capability**: they operate on per-tenant barriers, not on
+the platform barrier that gates daemon start-up. Do not reach for them expecting
+to unseal the platform.
 
 ---
 
@@ -213,17 +188,29 @@ They are the only part of bootstrap that crosses a network boundary as an API.
 |---|---|---|---|---|---|
 | Upload a device template (seeder shape) | `POST /api/v1/devices/templates` | `MISSING — docs/13 G7` ⁷ | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | ✅ via the template service |
 | Create a profile from a template (seeder shape) | `POST /api/v1/devices/templates/{id}/create-profile` → `201` envelope, `payload.id` string (below) | `DeviceService.CreateProfileFromTemplate` | `MISSING — docs/13 G7` ⁸ | `MISSING — docs/13 G7` | ✅ |
-| Fetch a device's config by identity | `GET /api/v1/devices/config` | `DeviceService.FindConfigForDevice` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | ✅ |
+| Fetch a device's config at boot (`?mac=` / `?serial=`) | `GET /api/v1/devices/config`, **provisioning listener only** (#177) | REST-only ⁹ | REST-only ⁹ | REST-only ⁹ | REST-only ⁹ |
 | Enroll a node's BMC | `POST /api/v1/bmc/{profileID}/enroll` | see [`docs/bmc/`](../bmc/) | see [`docs/bmc/`](../bmc/) | see [`docs/bmc/`](../bmc/) | see [`docs/bmc/`](../bmc/) |
 
-⁷ Device-template CRUD was **removed** from `device.proto` — the comment in place
-records that the `Template` RPCs collided with the vTPM messages of the same
-name, were never generated, and were referenced by nothing. Template CRUD is
-REST-only until someone defines it with `DeviceTemplate…` message prefixes.
+⁷ The seeder's `{"role", "template"}` upload has no equivalent on the other
+transports. Storing a template in the CRUD shape does: `DeviceService.CreateTemplate`
+on gRPC/Unix, QUIC sub-op `0x23` under `0xCF`, the MCP tool
+`device_template_create` and embedded (#497) — see
+[`docs/device/api.md`](../device/api.md) §4.
 
 ⁸ `OpDeviceCreateProfile` (`0x38`) creates a profile directly; it is **not** the
 create-from-template path. The MCP `profile_create` tool is likewise the direct
-path.
+path. Building a profile from a template in the CRUD shape (`overrides` only, no
+seeder `mac`/`hostname`/`config`) is QUIC sub-op `0x24` under `0xCF` and the MCP
+tool `profile_create_from_template` (#497).
+
+⁹ The boot fetch is REST-only by design. Its caller is a machine still booting,
+with no credential, so it is served only by a webservice with
+`surface: provisioning` bound inside the provisioning zone. Every other listener
+answers it with the unknown-route `404` (#177; see *Authorization* below).
+`DeviceService.FindConfigForDevice` on gRPC, Unix, QUIC, MCP and embedded is a
+different operation: the scope-gated `device:read` operator query, whose REST
+equivalent is `GET /api/v1/device/profiles/find-config`
+([`docs/device/api.md`](../device/api.md) §3).
 
 ### Request and response shapes
 
@@ -231,9 +218,9 @@ Template upload takes `{"role": <string>, "template": <object>}` and returns the
 new template's `id` inside the standard `{code, success, payload}` envelope.
 The template is sent as **JSON**, converted from the role YAML, because YAML
 comments are not valid JSON. `role` is one of the node roles of
-[`config-reference.md`](config-reference.md) — `control-plane`, `gateway`,
+[`engineering.md`](engineering.md) — `control-plane`, `gateway`,
 `worker` — and is stored verbatim as the template's `name` **and** `role`, so
-`GET /api/v1/devices/templates` lists the three seeded roles by name. The
+`GET /api/v1/device/templates` lists the three seeded roles by name. The
 template id is `util.NewID(role)`, so re-seeding a role is idempotent. A role
 outside the device vocabulary ([`docs/device/api.md`](../device/api.md) §4.2)
 is a `400`; it is never stored as `unknown`. The seeder router is the only
@@ -244,10 +231,11 @@ Profile creation takes `{"mac", "hostname", "role", "config", "ek_cert"}` where
 `config` is the fully merged device configuration. The control plane stores
 `config` on the profile **verbatim** (it is authoritative — the handler does
 not merge it onto the template again, so keys the seeder replaced stay
-replaced) and delivers it unchanged from `GET /api/v1/devices/config`. A
+replaced) and delivers it unchanged from `GET /api/v1/devices/config` on the
+provisioning listener. A
 `config` that is not a JSON object (an explicit `null` included) is a `400`.
 **`ek_cert` is refused with `400` on this route**: the route carries no caller
-credential today (see *Authorization — ruled, pending an upstream capability*
+credential today (see *Authorization — pending an upstream capability*
 below), so accepting a
 certificate here would let anyone reaching the port prestage hardware identity
 for a hostname-derived profile id. EK binding stays on the authenticated
@@ -264,22 +252,22 @@ call answers `201` with the created profile inside the standard envelope:
 `payload.id` is the deterministic profile id (`util.NewID(hostname)`, so
 re-seeding the same host is idempotent) **as a JSON string** — a `uint64`
 exceeds the precision of a double. The payload fields are the subset of the
-`GET /api/v1/devices/profiles` item shape the seeder consumes; see
+`GET /api/v1/device/profiles` item shape the seeder consumes; see
 [`docs/device/api.md`](../device/api.md) §4. The seeder reads `payload.id` and
 also accepts a bare `{"id": "<string>"}` body.
 `TestSeederContract_*` in `pkg/bootstrap` drives the real seeder client through
 the real handler so the two shapes cannot drift apart again.
 
-### Authorization — ruled, pending an upstream capability
+### Authorization — pending an upstream capability
 
 The main device router is constructed with the mTLS middleware. The **seeder**
 router registered alongside it is constructed without any middleware, no
 router-wide authentication middleware is applied to `/api/v1` (only CORS, and
-rate limiting on the ACME subtree), and the seeder's own HTTP client presents no
+the per-source rate limiter on the root router, #571), and the seeder's own HTTP client presents no
 bearer token and no client certificate — it verifies the *server*, not itself.
 
-**These routes are reachable without a credential on every running platformd.**
-That was measured, not inferred, and the chain is:
+**The two POST routes are reachable without a credential on every running
+platformd.** The chain is:
 
 1. `pkg/app/app.go` constructs the profile and template services
    unconditionally, failing fatally if either cannot be built. So the
@@ -290,37 +278,55 @@ That was measured, not inferred, and the chain is:
    all.
 2. The seeder router registers directly on the `/api/v1` subrouter, while the
    main device router is constructed with `MTLSMiddleware()`.
-3. `pkg/webservice/webserver_v1.go` mounts that `/api/v1` subrouter with only
-   the CORS middleware. There is no router-wide authentication seam behind it.
+3. `pkg/webservice/webserver_v1.go` mounts that `/api/v1` subrouter behind
+   only the per-source rate limiter and the CORS middleware. There is no
+   router-wide authentication seam behind it.
 
-The consequences are read *and* write. `GET /api/v1/devices/config` returns any
-node's full merged configuration as YAML to an unauthenticated caller. More
-seriously, `POST /api/v1/devices/templates/{id}/create-profile` derives the
+Until #177, `GET /api/v1/devices/config` sat on the same subrouter and returned
+any node's full merged configuration as YAML to an unauthenticated caller on
+every listener. It no longer does (below). The write is the more serious
+exposure: `POST /api/v1/devices/templates/{id}/create-profile` derives the
 profile id as `util.NewID(hostname)` and saves over whatever is there, so an
 unauthenticated caller who knows or guesses a hostname can **replace that node's
 profile, including the `config` the control plane delivers to it on first
 boot**.
 
-A deliberate day-zero affordance was the plausible reading — the seeder runs
-before any credential exists — but the routes stay registered for the daemon's
-entire life, not only during seeding. A day-zero affordance that never closes is
-an open door, which is what made this a defect rather than a design trade.
+The routes stay registered for the daemon's entire life, not only during
+seeding, so they are a defect, not a day-zero affordance.
 
-**This was ruled on 2026-09-02: the seeder authenticates as `admin@system` over
-mTLS, using the firstboot admin bundle.** It is not a deliberate credential-less
-affordance. The parent record is issue #121; the two POST routes are #176 and
-`GET /api/v1/devices/config` is #177, which cannot take the same treatment —
+**The seeder is to authenticate as `admin@system` over mTLS, using the
+firstboot admin bundle** — not implemented: today its client presents no
+credential (`SeederParams` carries only the CA pool that verifies the server).
+The parent record is issue #121; the two POST routes are #176
+and `GET /api/v1/devices/config` is #177, which cannot take the same treatment:
 its caller is a machine that is still booting and holds no credential, so
 locking it to admin mTLS would break PXE provisioning.
 
-The ruling is not yet implemented, and the reason is worth stating so the
-obvious partial fix is not mistaken for it. `MTLSMiddleware()` already exists
+**The config fetch (#177) is served only on the isolated provisioning VLAN.** Only a webservice with
+`surface: provisioning` mounts it, and that listener mounts nothing else.
+Startup refuses the listener unless its `bind-host` is an IP literal inside
+the provisioning zone of the node's network plan
+(`webservice.ValidateProvisioningSurface`). Every full and edge listener
+answers the route with the unknown-route `404`. The route stays
+unauthenticated by design, so the boundary is the address plus the
+provisioning zone's flows: a candidate on that VLAN reaches it, and nothing
+else does. Binding an address alone is not isolation, because Linux accepts a
+packet for any local address on any interface. An EK-bound challenge, so that
+only the machine a profile names can read its config, is the planned
+follow-up ([`docs/provisioning/engineering.md`](../provisioning/engineering.md)).
+The trust boundary is in [`docs/device/architecture.md`](../device/architecture.md)
+§4.2.
+
+The rest of this section concerns the two POST routes.
+
+Admin mTLS on these routes is not implemented yet, and the obvious partial fix
+is not it. `MTLSMiddleware()` already exists
 and is already applied to the main device router constructed alongside the
 seeder router, so wiring it here looks like a one-line change. It is not
 sufficient: that middleware accepts **any** certificate chaining to the platform
 trust roots, so applying it alone would move the exposure from *anyone who can
 reach the port* to *any enrolled device* — a real reduction, and still not the
-ruled outcome. Authorizing specifically `admin@system` needs an
+required outcome. Authorizing specifically `admin@system` needs an
 identity-from-client-certificate lookup that the SDK does not yet expose,
 tracked upstream as `go-quicbaas#376`.
 

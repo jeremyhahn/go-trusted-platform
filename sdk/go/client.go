@@ -52,21 +52,39 @@ type Client interface {
 	PXE() platformv1.PXEServiceClient
 	DNS() platformv1.DNSServiceClient
 	NTP() platformv1.NTPServiceClient
+	VPN() platformv1.VPNServiceClient
 	Gateway() platformv1.GatewayServiceClient
 	Proxy() platformv1.ProxyServiceClient
 	Overlay() platformv1.OverlayServiceClient
 	Registry() platformv1.RegistryServiceClient
 	Cluster() platformv1.ClusterServiceClient
+	PIV() platformv1.PIVServiceClient
+	FIDO2() platformv1.FIDO2ServiceClient
+	Ceremony() platformv1.CeremonyServiceClient
+	LUKS() platformv1.LUKSServiceClient
+	Switch() platformv1.SwitchServiceClient
 
 	// ConfigDelivery returns the config-delivery provisioning client
 	// (nonce issuance, pre-enrollment config fetch, remote Secure Boot
 	// digest signing, provisioning session management).
 	ConfigDelivery() platformv1.ConfigDeliveryServiceClient
 
+	// Cache, Scheduler, Messaging and ObjectStorage return the clients of the application
+	// services platformd serves over the composed go-quicbaas SDK.
+	Cache() platformv1.CacheServiceClient
+	Scheduler() platformv1.SchedulerServiceClient
+	Messaging() platformv1.MessagingServiceClient
+	ObjectStorage() platformv1.ObjectStorageServiceClient
+
 	// Security Platform Services
 	IAM() platformv1.PlatformIAMServiceClient
 	KMS() platformv1.KeyManagementServiceClient
 	Barrier() platformv1.BarrierServiceClient
+
+	// Invitation returns the tenant invitation client; EAB returns the ACME
+	// External Account Binding client.
+	Invitation() platformv1.InvitationServiceClient
+	EAB() platformv1.EABServiceClient
 
 	// QuicBaaS returns the QuicBaaS SDK client used to reach quicbaasd.
 	// Returns ErrQuicBaaSNotConfigured when no QuicBaaS address was
@@ -103,14 +121,29 @@ type ServiceClients struct {
 	PXE         platformv1.PXEServiceClient
 	DNS         platformv1.DNSServiceClient
 	NTP         platformv1.NTPServiceClient
+	VPN         platformv1.VPNServiceClient
 	Gateway     platformv1.GatewayServiceClient
 	Proxy       platformv1.ProxyServiceClient
 	Overlay     platformv1.OverlayServiceClient
 	Registry    platformv1.RegistryServiceClient
 	Cluster     platformv1.ClusterServiceClient
+	PIV         platformv1.PIVServiceClient
+	FIDO2       platformv1.FIDO2ServiceClient
+	Ceremony    platformv1.CeremonyServiceClient
+	LUKS        platformv1.LUKSServiceClient
+	Switch      platformv1.SwitchServiceClient
 
 	// ConfigDelivery is the config-delivery provisioning service client.
 	ConfigDelivery platformv1.ConfigDeliveryServiceClient
+
+	Invitation platformv1.InvitationServiceClient
+	EAB        platformv1.EABServiceClient
+
+	// Application services served over the composed go-quicbaas SDK.
+	Cache         platformv1.CacheServiceClient
+	Scheduler     platformv1.SchedulerServiceClient
+	Messaging     platformv1.MessagingServiceClient
+	ObjectStorage platformv1.ObjectStorageServiceClient
 }
 
 // ConnectFunc is a function type for protocol-specific connection establishment.
@@ -335,40 +368,58 @@ func (c *platformClient) initServiceClients() {
 		PXE:         platformv1.NewPXEServiceClient(conn),
 		DNS:         platformv1.NewDNSServiceClient(conn),
 		NTP:         platformv1.NewNTPServiceClient(conn),
+		VPN:         platformv1.NewVPNServiceClient(conn),
 		Gateway:     platformv1.NewGatewayServiceClient(conn),
 		Proxy:       platformv1.NewProxyServiceClient(conn),
 		Overlay:     platformv1.NewOverlayServiceClient(conn),
 		Registry:    platformv1.NewRegistryServiceClient(conn),
 		Cluster:     platformv1.NewClusterServiceClient(conn),
+		PIV:         platformv1.NewPIVServiceClient(conn),
+		FIDO2:       platformv1.NewFIDO2ServiceClient(conn),
+		Ceremony:    platformv1.NewCeremonyServiceClient(conn),
+		LUKS:        platformv1.NewLUKSServiceClient(conn),
+		Switch:      platformv1.NewSwitchServiceClient(conn),
 
 		ConfigDelivery: platformv1.NewConfigDeliveryServiceClient(conn),
+
+		Invitation: platformv1.NewInvitationServiceClient(conn),
+		EAB:        platformv1.NewEABServiceClient(conn),
+
+		Cache:         platformv1.NewCacheServiceClient(conn),
+		Scheduler:     platformv1.NewSchedulerServiceClient(conn),
+		Messaging:     platformv1.NewMessagingServiceClient(conn),
+		ObjectStorage: platformv1.NewObjectStorageServiceClient(conn),
 	}
 }
 
-// quicbaasTransportOptions maps a CLI/context transport string to the
-// corresponding go-quicbaas SDK option. Empty (or unknown) returns nil
-// so the SDK falls back to its built-in auto-detection
-// (HTTP URL -> REST, .sock path -> Unix, otherwise gRPC).
+// quicbaasTransports maps each transport name the QuicBaaS side-client
+// accepts to its go-quicbaas SDK options. gRPC is the SDK default, so it
+// maps to nil and lets auto-detection still pick Unix for a .sock path.
 //
 // Note: WithUnix is the only option that takes the socket path; every
 // other transport reads the path from the NewClient address argument.
-func quicbaasTransportOptions(addr, transport string) []quicbaassdk.Option {
-	switch transport {
-	case "unix":
-		return []quicbaassdk.Option{quicbaassdk.WithUnix(addr)}
-	case "rest":
-		return []quicbaassdk.Option{quicbaassdk.WithREST()}
-	case "quic":
-		return []quicbaassdk.Option{quicbaassdk.WithQUIC()}
-	case "mcp":
-		return []quicbaassdk.Option{quicbaassdk.WithMCP()}
-	case "grpc", "":
-		// gRPC is the SDK default; nil lets auto-detect fire so a
-		// .sock path still picks Unix when transport is unset.
-		return nil
-	default:
-		return nil
+var quicbaasTransports = map[string]func(addr string) []quicbaassdk.Option{
+	"unix": func(addr string) []quicbaassdk.Option { return []quicbaassdk.Option{quicbaassdk.WithUnix(addr)} },
+	"rest": func(string) []quicbaassdk.Option { return []quicbaassdk.Option{quicbaassdk.WithREST()} },
+	"quic": func(string) []quicbaassdk.Option { return []quicbaassdk.Option{quicbaassdk.WithQUIC()} },
+	"mcp":  func(string) []quicbaassdk.Option { return []quicbaassdk.Option{quicbaassdk.WithMCP()} },
+	"grpc": func(string) []quicbaassdk.Option { return nil },
+}
+
+// quicbaasTransportOptions maps a CLI/context transport string to the
+// corresponding go-quicbaas SDK options. An empty name returns nil so the
+// SDK auto-detects (HTTP URL -> REST, .sock path -> Unix, otherwise gRPC);
+// any other unknown name is ErrProtocolNotSupported, so a typo is not
+// silently dialled over a different transport.
+func quicbaasTransportOptions(addr, transport string) ([]quicbaassdk.Option, error) {
+	if transport == "" {
+		return nil, nil
 	}
+	options, ok := quicbaasTransports[transport]
+	if !ok {
+		return nil, ErrProtocolNotSupported{Transport: transport}
+	}
+	return options(addr), nil
 }
 
 // initQuicBaaSClient constructs the QuicBaaS SDK client when the
@@ -378,8 +429,15 @@ func (c *platformClient) initQuicBaaSClient(opts *Options) {
 	if opts == nil || opts.QuicBaaSAddr == "" {
 		return
 	}
-	qOpts := quicbaasTransportOptions(opts.QuicBaaSAddr, opts.QuicBaaSTransport)
-	sdk, err := quicbaassdk.NewClient(opts.QuicBaaSAddr, qOpts...)
+	qOpts, err := quicbaasTransportOptions(opts.QuicBaaSAddr, opts.QuicBaaSTransport)
+	if err == nil && opts.QuicBaaSTLSConfig == nil {
+		err = ErrQuicBaaSTLSNotConfigured{}
+	}
+	var sdk quicbaassdk.Client
+	if err == nil {
+		qOpts = append(qOpts, quicbaassdk.WithTLSConfig(opts.QuicBaaSTLSConfig))
+		sdk, err = quicbaassdk.NewClient(opts.QuicBaaSAddr, qOpts...)
+	}
 	if err != nil {
 		c.quicbaasInitErr = ErrQuicBaaSInitFailed{
 			Addr:      opts.QuicBaaSAddr,
@@ -533,6 +591,14 @@ func (c *platformClient) NTP() platformv1.NTPServiceClient {
 	return c.services.NTP
 }
 
+// VPN returns the management-VPN control-plane service client.
+func (c *platformClient) VPN() platformv1.VPNServiceClient {
+	if c.services == nil {
+		return nil
+	}
+	return c.services.VPN
+}
+
 // Gateway returns the Gateway service client.
 func (c *platformClient) Gateway() platformv1.GatewayServiceClient {
 	if c.services == nil {
@@ -573,12 +639,100 @@ func (c *platformClient) Cluster() platformv1.ClusterServiceClient {
 	return c.services.Cluster
 }
 
+// PIV returns the PIV smartcard service client.
+func (c *platformClient) PIV() platformv1.PIVServiceClient {
+	if c.services == nil {
+		return nil
+	}
+	return c.services.PIV
+}
+
+// FIDO2 returns the FIDO2 authenticator service client.
+func (c *platformClient) FIDO2() platformv1.FIDO2ServiceClient {
+	if c.services == nil {
+		return nil
+	}
+	return c.services.FIDO2
+}
+
+// Ceremony returns the ceremony service client.
+func (c *platformClient) Ceremony() platformv1.CeremonyServiceClient {
+	if c.services == nil {
+		return nil
+	}
+	return c.services.Ceremony
+}
+
+// LUKS returns the LUKS volume service client.
+func (c *platformClient) LUKS() platformv1.LUKSServiceClient {
+	if c.services == nil {
+		return nil
+	}
+	return c.services.LUKS
+}
+
+// Invitation returns the tenant invitation service client.
+func (c *platformClient) Invitation() platformv1.InvitationServiceClient {
+	if c.services == nil {
+		return nil
+	}
+	return c.services.Invitation
+}
+
+// EAB returns the ACME External Account Binding service client.
+func (c *platformClient) EAB() platformv1.EABServiceClient {
+	if c.services == nil {
+		return nil
+	}
+	return c.services.EAB
+}
+
+// Switch returns the physical switch port service client.
+func (c *platformClient) Switch() platformv1.SwitchServiceClient {
+	if c.services == nil {
+		return nil
+	}
+	return c.services.Switch
+}
+
 // ConfigDelivery returns the config-delivery provisioning service client.
 func (c *platformClient) ConfigDelivery() platformv1.ConfigDeliveryServiceClient {
 	if c.services == nil {
 		return nil
 	}
 	return c.services.ConfigDelivery
+}
+
+// Cache returns the cache service client.
+func (c *platformClient) Cache() platformv1.CacheServiceClient {
+	if c.services == nil {
+		return nil
+	}
+	return c.services.Cache
+}
+
+// Scheduler returns the scheduler service client.
+func (c *platformClient) Scheduler() platformv1.SchedulerServiceClient {
+	if c.services == nil {
+		return nil
+	}
+	return c.services.Scheduler
+}
+
+// Messaging returns the messaging service client.
+func (c *platformClient) Messaging() platformv1.MessagingServiceClient {
+	if c.services == nil {
+		return nil
+	}
+	return c.services.Messaging
+}
+
+// ObjectStorage returns the object storage service client.
+func (c *platformClient) ObjectStorage() platformv1.ObjectStorageServiceClient {
+	if c.services == nil {
+		return nil
+	}
+	return c.services.ObjectStorage
 }
 
 // QuicBaaS returns the QuicBaaS SDK client used to reach quicbaasd.

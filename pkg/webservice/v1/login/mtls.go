@@ -14,6 +14,7 @@
 package login
 
 import (
+	"context"
 	"net/http"
 
 	quicbaas "github.com/jeremyhahn/go-quicbaas/sdk/go"
@@ -101,4 +102,11 @@ func (b *MTLSBinder) Challenge(begin *quicbaas.BeginLoginResponse) (any, error) 
 // the proof.
 func (b *MTLSBinder) Finish(r *http.Request, sessionID string) (quicbaas.FinishLoginRequest, error) {
 	return quicbaas.FinishLoginRequest{}, b.unavailable()
+}
+
+// Tenant declines for the same reason Begin does. Which tenant a
+// certificate login lands in is decided when #857 lets the ceremony run;
+// until then no answer here can be exercised, so none is given.
+func (b *MTLSBinder) Tenant(ctx context.Context, identity *quicbaas.Identity) (string, error) {
+	return "", b.unavailable()
 }

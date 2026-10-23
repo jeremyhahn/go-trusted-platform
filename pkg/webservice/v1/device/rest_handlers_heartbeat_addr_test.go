@@ -14,11 +14,13 @@ package device
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/device"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
 )
 
@@ -48,8 +50,7 @@ func TestDeviceToResponse_NoHeartbeatAddrOmitted(t *testing.T) {
 // TestRequestToDevice_CannotSetLastHeartbeatAddr pins that the address is
 // server-recorded: a body naming it reaches the entity with none.
 func TestRequestToDevice_CannotSetLastHeartbeatAddr(t *testing.T) {
-	handler, _, _ := newTestHandler()
-	var req DeviceRequest
-	require.NoError(t, json.Unmarshal([]byte(`{"serial":"SN","last_heartbeat_addr":"10.0.0.1:1"}`), &req))
-	assert.Empty(t, handler.requestToDevice(&req).LastHeartbeatAddr)
+	d, err := device.DecodeRequest(strings.NewReader(`{"serial":"SN","last_heartbeat_addr":"10.0.0.1:1"}`))
+	require.NoError(t, err)
+	assert.Empty(t, d.LastHeartbeatAddr)
 }

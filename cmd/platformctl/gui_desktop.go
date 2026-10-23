@@ -33,8 +33,7 @@ var assets embed.FS
 func launchGUI(logger *slog.Logger) error {
 	logger.Debug("creating Wails bindings")
 
-	conn := NewConnectionBinding(logger)
-	daemon := NewDaemonBinding(logger, conn)
+	conn, bindings := newGUIBindings(logger)
 
 	logger.Debug("launching Wails application")
 
@@ -53,9 +52,6 @@ func launchGUI(logger *slog.Logger) error {
 			logger.Debug("Wails OnShutdown")
 			conn.shutdown(ctx)
 		},
-		Bind: []interface{}{
-			conn,
-			daemon,
-		},
+		Bind: bindings,
 	})
 }

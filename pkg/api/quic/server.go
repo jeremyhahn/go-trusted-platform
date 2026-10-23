@@ -26,12 +26,13 @@ import (
 	quicgo "github.com/quic-go/quic-go"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 )
 
 // Handler processes incoming QUIC requests
 type Handler interface {
 	// HandleRequest processes a request and returns a response
-	HandleRequest(ctx context.Context, req *Request) *Response
+	HandleRequest(ctx context.Context, req *quicwire.Request) *quicwire.Response
 }
 
 // ServerStats holds statistics about the QUIC server
@@ -47,7 +48,7 @@ type ServerStats struct {
 type Server struct {
 	config   *ServerConfig
 	handler  Handler
-	listener *quicgo.Listener
+	listener atomic.Pointer[quicgo.Listener]
 	logger   *logging.Logger
 
 	// Server state
@@ -147,30 +148,34 @@ func (s *Server) Start() error {
 		return err
 	}
 
-	s.listener = listener
+	s.listener.Store(listener)
 	s.running.Store(true)
 
 	s.logger.Infof("QUIC server started on %s", s.config.ListenAddr)
 
 	s.wg.Add(1)
-	go s.acceptConnections()
+	go s.acceptConnections(listener)
 
 	return nil
 }
 
 // Stop gracefully stops the QUIC server
 func (s *Server) Stop() error {
-	if !s.running.Load() {
+	// Claim the stop atomically so concurrent callers cannot both pass the
+	// check and tear the server down twice: exactly one wins, the rest get
+	// ErrServerNotRunning.
+	if !s.running.CompareAndSwap(true, false) {
 		return ErrServerNotRunning
 	}
 
 	s.logger.Info("Stopping QUIC server")
 
-	s.running.Store(false)
 	s.cancel()
 
-	if s.listener != nil {
-		if err := s.listener.Close(); err != nil {
+	// Swap the listener out before closing it, so ListenAddr never reads a
+	// closed listener.
+	if listener := s.listener.Swap(nil); listener != nil {
+		if err := listener.Close(); err != nil {
 			s.logger.Warnf("Error closing QUIC listener: %v", err)
 		}
 	}
@@ -193,11 +198,11 @@ func (s *Server) Stop() error {
 }
 
 // acceptConnections accepts incoming QUIC connections
-func (s *Server) acceptConnections() {
+func (s *Server) acceptConnections(listener *quicgo.Listener) {
 	defer s.wg.Done()
 
 	for s.running.Load() {
-		conn, err := s.listener.Accept(s.ctx)
+		conn, err := listener.Accept(s.ctx)
 		if err != nil {
 			if !s.running.Load() {
 				return
@@ -223,6 +228,13 @@ func (s *Server) handleConnection(conn *quicgo.Conn) {
 		slog.String("remote_addr", remoteAddr),
 		slog.Int64("active_conns", s.activeConns.Load()),
 	)
+
+	// Every request on this connection carries its TLS state: the auth
+	// middleware authenticates the verified client certificate (mTLS), and
+	// handlers that bind a request to its own connection (diskless boot)
+	// read the handshake's exporter.
+	tlsState := conn.ConnectionState().TLS
+	connCtx := WithConnectionTLS(s.ctx, &tlsState)
 
 	for s.running.Load() {
 		stream, err := conn.AcceptStream(s.ctx)
@@ -252,7 +264,7 @@ func (s *Server) handleConnection(conn *quicgo.Conn) {
 
 		s.activeStreams.Add(1)
 		s.wg.Add(1)
-		go s.handleStream(stream, remoteAddr)
+		go s.handleStream(connCtx, stream, remoteAddr)
 	}
 }
 
@@ -262,7 +274,7 @@ func (s *Server) handleConnection(conn *quicgo.Conn) {
 // guard ensures the stream goroutine is never silently killed). A panicking
 // handler produces a StatusInternalError response so the client always receives
 // a valid response frame rather than an EOF.
-func (s *Server) handleStream(stream *quicgo.Stream, remoteAddr string) {
+func (s *Server) handleStream(connCtx context.Context, stream *quicgo.Stream, remoteAddr string) {
 	defer s.wg.Done()
 	defer s.activeStreams.Add(-1)
 
@@ -276,16 +288,16 @@ func (s *Server) handleStream(stream *quicgo.Stream, remoteAddr string) {
 
 	// Goroutine-level panic guard: write an error response before the stream
 	// closes so the client never sees a bare EOF from a panicking handler.
-	var panicResp *Response
+	var panicResp *quicwire.Response
 	defer func() {
 		if r := recover(); r != nil {
 			s.totalErrors.Add(1)
 			s.logger.Errorf("QUIC stream handler panic: %v\n%s", r, debug.Stack())
-			panicResp = &Response{
-				Status:  StatusInternalError,
+			panicResp = &quicwire.Response{
+				Status:  quicwire.StatusInternalError,
 				Payload: []byte(fmt.Sprintf("internal server error: %v", r)),
 			}
-			if werr := WriteResponse(stream, panicResp); werr != nil {
+			if werr := quicwire.WriteResponse(stream, panicResp); werr != nil {
 				slog.Debug("QUIC WriteResponse failed after panic recovery",
 					slog.Int64("stream_id", streamID),
 					slog.String("error", werr.Error()),
@@ -305,7 +317,7 @@ func (s *Server) handleStream(stream *quicgo.Stream, remoteAddr string) {
 
 	startTime := time.Now()
 
-	req, err := ReadRequest(stream)
+	req, err := quicwire.ReadRequest(stream)
 	if err != nil {
 		s.totalErrors.Add(1)
 		slog.Debug("QUIC stream read request failed",
@@ -313,11 +325,11 @@ func (s *Server) handleStream(stream *quicgo.Stream, remoteAddr string) {
 			slog.Int64("stream_id", streamID),
 			slog.String("error", err.Error()),
 		)
-		resp := &Response{
-			Status:  StatusInvalidRequest,
+		resp := &quicwire.Response{
+			Status:  quicwire.StatusInvalidRequest,
 			Payload: []byte(err.Error()),
 		}
-		if werr := WriteResponse(stream, resp); werr != nil {
+		if werr := quicwire.WriteResponse(stream, resp); werr != nil {
 			slog.Debug("QUIC WriteResponse failed after read error",
 				slog.String("remote_addr", remoteAddr),
 				slog.Int64("stream_id", streamID),
@@ -332,17 +344,17 @@ func (s *Server) handleStream(stream *quicgo.Stream, remoteAddr string) {
 	slog.Debug("QUIC stream request read",
 		slog.String("remote_addr", remoteAddr),
 		slog.Int64("stream_id", streamID),
-		slog.String("opcode", OpcodeToString(req.Opcode)),
+		slog.String("opcode", quicwire.OpcodeToString(req.Opcode)),
 		slog.String("opcode_hex", fmt.Sprintf("0x%02X", req.Opcode)),
 		slog.Int("payload_len", len(req.Payload)),
 	)
 
-	var resp *Response
+	var resp *quicwire.Response
 	if s.handler != nil {
-		resp = s.handler.HandleRequest(s.ctx, req)
+		resp = s.handler.HandleRequest(connCtx, req)
 	} else {
-		resp = &Response{
-			Status:  StatusNotImplemented,
+		resp = &quicwire.Response{
+			Status:  quicwire.StatusNotImplemented,
 			Payload: []byte("no handler configured"),
 		}
 	}
@@ -355,17 +367,17 @@ func (s *Server) handleStream(stream *quicgo.Stream, remoteAddr string) {
 	slog.Debug("QUIC stream response ready",
 		slog.String("remote_addr", remoteAddr),
 		slog.Int64("stream_id", streamID),
-		slog.String("opcode", OpcodeToString(req.Opcode)),
-		slog.String("status", StatusToString(resp.Status)),
+		slog.String("opcode", quicwire.OpcodeToString(req.Opcode)),
+		slog.String("status", quicwire.StatusToString(resp.Status)),
 		slog.Int("payload_len", respPayloadLen),
 	)
 
-	if werr := WriteResponse(stream, resp); werr != nil {
+	if werr := quicwire.WriteResponse(stream, resp); werr != nil {
 		s.totalErrors.Add(1)
 		slog.Error("QUIC stream WriteResponse failed",
 			slog.String("remote_addr", remoteAddr),
 			slog.Int64("stream_id", streamID),
-			slog.String("opcode", OpcodeToString(req.Opcode)),
+			slog.String("opcode", quicwire.OpcodeToString(req.Opcode)),
 			slog.String("error", werr.Error()),
 		)
 		return
@@ -375,8 +387,8 @@ func (s *Server) handleStream(stream *quicgo.Stream, remoteAddr string) {
 	slog.Debug("QUIC stream request completed",
 		slog.String("remote_addr", remoteAddr),
 		slog.Int64("stream_id", streamID),
-		slog.String("opcode", OpcodeToString(req.Opcode)),
-		slog.String("status", StatusToString(resp.Status)),
+		slog.String("opcode", quicwire.OpcodeToString(req.Opcode)),
+		slog.String("status", quicwire.StatusToString(resp.Status)),
 		slog.Int64("elapsed_us", elapsed.Microseconds()),
 	)
 }
@@ -418,7 +430,17 @@ func (s *Server) IsRunning() bool {
 	return s.running.Load()
 }
 
-// ListenAddr returns the configured listen address
+// ListenAddr returns the address the server is bound to while it runs, so a
+// configured port 0 reports the port the kernel chose, and the configured
+// address otherwise, including a server marked running that has no
+// listener yet or whose listener Stop has already taken.
 func (s *Server) ListenAddr() string {
-	return s.config.ListenAddr
+	if !s.running.Load() {
+		return s.config.ListenAddr
+	}
+	listener := s.listener.Load()
+	if listener == nil {
+		return s.config.ListenAddr
+	}
+	return listener.Addr().String()
 }

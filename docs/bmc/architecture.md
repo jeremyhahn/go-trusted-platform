@@ -5,10 +5,10 @@
 > The feature folder is: [architecture.md](architecture.md) · [engineering.md](engineering.md) · [cli.md](cli.md) · [api.md](api.md) · [user.md](user.md).
 >
 > **Verification scope.** Every package, type, constant, route, opcode and flag
-> below was read out of the tree on 2026-08-18. Where the legacy files in this
-> folder (`README.md`, `configuration.md`, `operations.md`, `sdk.md`,
-> `testing.md`) disagree with the code, the code wins and the correction is
-> stated in §9.
+> below was read out of the tree on 2026-08-18. The legacy files this folder held
+> (`README.md`, `configuration.md`, `operations.md`, `sdk.md`, `testing.md`) are
+> deleted; these five files hold their content. Where they disagreed with the
+> code, the correction is stated in §9.
 
 ---
 
@@ -328,10 +328,6 @@ see [engineering.md](engineering.md) §6.
   dispatch registry and three backends — and **nothing in the platform imports
   it**. `pkg/bmc/CLAUDE.md` calls it "preserved scaffolding, no real
   implementation until RoT-capable hardware available".
-- **It does not expose a BMC surface on the embedded transport.**
-  `ServiceRegistry` in `sdk/go/transport/embedded/adapter.go` has no `BMC`
-  field, so `--transport embedded` cannot reach any BMC capability. Recorded as
-  a Tier-1 gap in [api.md](api.md), not chosen.
 
 ## 7. Vendor quirks — how a board gets supported
 
@@ -392,7 +388,11 @@ resolved at `Info` once per client so a run log shows which one won:
   useless for power, boot, virtual media and sensors alike.
   `HardwareIdentity` deliberately bypasses the negative cache
   (`discoverFresh`) because the bootstrap layer retries it, bounded, once per
-  node and not in a loop.
+  node and not in a loop. A successful fresh discovery latches for every
+  gated call, so the bootstrap layer reads the identity *before*
+  `GetSystemInfo`: system info then rides a discovery the identity retry
+  recovered instead of the cached failure (#206,
+  `TestRedfishClient_GetSystemInfo_RidesDiscoveryRecoveredByIdentity`).
 - **`Client.HardwareIdentity`** — returns the `quirks.Identity` the client
   itself resolves from, so a caller lands on that client's registry entry
   and no other. It is deliberately not `SystemInfo`: over IPMI,
@@ -481,7 +481,7 @@ code as of 2026-08-18.
 | `enrollment:`, `certificate:`, `key:`, `backend:`, `allow_cgi_fallback` shown as **device-profile** fields | `configuration.md` | `entities.BMCConfig` has exactly five fields: `address`, `port`, `username`, `password`, `protocol`. Those other keys belong to `bmc.Config`, which is populated from the top-level `bmc:` block of the platformd YAML — not from a device profile |
 | `acme.request.authz_type` / `challenge_type` | `configuration.md` | The validated field is `Certificate.ACME.Challenge`; `validateCertBlock` requires it to equal `dns-01` |
 | REST endpoint table lists 13 routes, omitting cert and user routes | `operations.md` | The daemon registers 20 route entries covering 17 distinct paths, including `GET/PUT /bmc/{profileID}/cert` and five `/users` routes |
-| "All five transports expose the enrollment operation" | `operations.md` | Four do: REST, gRPC, Unix (gRPC over UDS), QUIC, MCP — that is five *listed*, but **embedded is a sixth transport and has no BMC route at all** (`ServiceRegistry` has no `BMC` field). Enrollment is a Tier-1 capability missing one required transport |
+| "All five transports expose the enrollment operation" | `operations.md` | Five were listed — REST, gRPC, Unix (gRPC over UDS), QUIC, MCP — but there are six: embedded carries enrollment too, through `ServiceRegistry.BMC` ([api.md](api.md) §2) |
 | "automatic 90-day password rotation" as a shipped capability | `README.md` | `DefaultRotationInterval` is defined and `RotationEngine.RotateOnce` works, but no scheduler job registers rotation. Only *certificate* renewal is scheduled (`RegisterCertRenewal`) |
 | `--output-format json` | `operations.md` | The global output flag is `--output` / `-o`; `platformctl` uses `cli.CommonFlags.OutputFormat` behind it |
 | `platformctl bmc cert restore --profile-id 7 --factory` documented under "Factory Certificate Restore" only | `operations.md` | Correct, and worth keeping: `--factory` is a required explicit flag with no default, present solely to make accidental invocation impossible |

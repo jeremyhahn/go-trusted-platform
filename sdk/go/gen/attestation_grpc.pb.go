@@ -34,6 +34,7 @@ const (
 	AttestationService_RefreshDeviceReport_FullMethodName         = "/platform.v1.AttestationService/RefreshDeviceReport"
 	AttestationService_DescribeCallerPolicy_FullMethodName        = "/platform.v1.AttestationService/DescribeCallerPolicy"
 	AttestationService_StreamDeviceVerdicts_FullMethodName        = "/platform.v1.AttestationService/StreamDeviceVerdicts"
+	AttestationService_PollDeviceVerdicts_FullMethodName          = "/platform.v1.AttestationService/PollDeviceVerdicts"
 )
 
 // AttestationServiceClient is the client API for AttestationService service.
@@ -90,6 +91,15 @@ type AttestationServiceClient interface {
 	// devices. This is how the overlay gateways learn that a device's
 	// attestation failed or recovered.
 	StreamDeviceVerdicts(ctx context.Context, in *StreamDeviceVerdictsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[DeviceVerdictEvent], error)
+	// PollDeviceVerdicts follows the same verdicts by long-poll, for the
+	// transports that carry no server stream (REST, QUIC, MCP). A request with
+	// no cursor answers at once with the cursor to follow from; every later
+	// request returns the verdicts recorded after its cursor, waiting up to
+	// wait_ms (at most 20 seconds) for one. A cursor that missed verdicts —
+	// older than the verdicts platformd keeps, or from an earlier platformd
+	// run — fails with RESOURCE_EXHAUSTED, as a stream that falls behind does.
+	// Same scope and tenant filter as StreamDeviceVerdicts.
+	PollDeviceVerdicts(ctx context.Context, in *PollDeviceVerdictsRequest, opts ...grpc.CallOption) (*PollDeviceVerdictsResponse, error)
 }
 
 type attestationServiceClient struct {
@@ -259,6 +269,16 @@ func (c *attestationServiceClient) StreamDeviceVerdicts(ctx context.Context, in 
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type AttestationService_StreamDeviceVerdictsClient = grpc.ServerStreamingClient[DeviceVerdictEvent]
 
+func (c *attestationServiceClient) PollDeviceVerdicts(ctx context.Context, in *PollDeviceVerdictsRequest, opts ...grpc.CallOption) (*PollDeviceVerdictsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(PollDeviceVerdictsResponse)
+	err := c.cc.Invoke(ctx, AttestationService_PollDeviceVerdicts_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // AttestationServiceServer is the server API for AttestationService service.
 // All implementations must embed UnimplementedAttestationServiceServer
 // for forward compatibility.
@@ -313,6 +333,15 @@ type AttestationServiceServer interface {
 	// devices. This is how the overlay gateways learn that a device's
 	// attestation failed or recovered.
 	StreamDeviceVerdicts(*StreamDeviceVerdictsRequest, grpc.ServerStreamingServer[DeviceVerdictEvent]) error
+	// PollDeviceVerdicts follows the same verdicts by long-poll, for the
+	// transports that carry no server stream (REST, QUIC, MCP). A request with
+	// no cursor answers at once with the cursor to follow from; every later
+	// request returns the verdicts recorded after its cursor, waiting up to
+	// wait_ms (at most 20 seconds) for one. A cursor that missed verdicts —
+	// older than the verdicts platformd keeps, or from an earlier platformd
+	// run — fails with RESOURCE_EXHAUSTED, as a stream that falls behind does.
+	// Same scope and tenant filter as StreamDeviceVerdicts.
+	PollDeviceVerdicts(context.Context, *PollDeviceVerdictsRequest) (*PollDeviceVerdictsResponse, error)
 	mustEmbedUnimplementedAttestationServiceServer()
 }
 
@@ -367,6 +396,9 @@ func (UnimplementedAttestationServiceServer) DescribeCallerPolicy(context.Contex
 }
 func (UnimplementedAttestationServiceServer) StreamDeviceVerdicts(*StreamDeviceVerdictsRequest, grpc.ServerStreamingServer[DeviceVerdictEvent]) error {
 	return status.Error(codes.Unimplemented, "method StreamDeviceVerdicts not implemented")
+}
+func (UnimplementedAttestationServiceServer) PollDeviceVerdicts(context.Context, *PollDeviceVerdictsRequest) (*PollDeviceVerdictsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method PollDeviceVerdicts not implemented")
 }
 func (UnimplementedAttestationServiceServer) mustEmbedUnimplementedAttestationServiceServer() {}
 func (UnimplementedAttestationServiceServer) testEmbeddedByValue()                            {}
@@ -652,6 +684,24 @@ func _AttestationService_StreamDeviceVerdicts_Handler(srv interface{}, stream gr
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type AttestationService_StreamDeviceVerdictsServer = grpc.ServerStreamingServer[DeviceVerdictEvent]
 
+func _AttestationService_PollDeviceVerdicts_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(PollDeviceVerdictsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AttestationServiceServer).PollDeviceVerdicts(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AttestationService_PollDeviceVerdicts_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AttestationServiceServer).PollDeviceVerdicts(ctx, req.(*PollDeviceVerdictsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // AttestationService_ServiceDesc is the grpc.ServiceDesc for AttestationService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -714,6 +764,10 @@ var AttestationService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "DescribeCallerPolicy",
 			Handler:    _AttestationService_DescribeCallerPolicy_Handler,
+		},
+		{
+			MethodName: "PollDeviceVerdicts",
+			Handler:    _AttestationService_PollDeviceVerdicts_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

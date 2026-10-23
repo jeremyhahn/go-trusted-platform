@@ -235,6 +235,35 @@ func (e *ErrFindMatchingProfileFailed) Unwrap() error {
 	return e.Cause
 }
 
+// ErrFindConfigForDeviceFailed is returned when the config lookup by EK
+// serial or MAC address fails.
+type ErrFindConfigForDeviceFailed struct {
+	Cause error
+}
+
+func (e *ErrFindConfigForDeviceFailed) Error() string {
+	return fmt.Sprintf("failed to find config for device: %v", e.Cause)
+}
+
+func (e *ErrFindConfigForDeviceFailed) Unwrap() error {
+	return e.Cause
+}
+
+// ErrAttestDeviceFailed is returned when verifying a device's attestation
+// evidence fails.
+type ErrAttestDeviceFailed struct {
+	ID    uint64
+	Cause error
+}
+
+func (e *ErrAttestDeviceFailed) Error() string {
+	return fmt.Sprintf("failed to attest device %d: %v", e.ID, e.Cause)
+}
+
+func (e *ErrAttestDeviceFailed) Unwrap() error {
+	return e.Cause
+}
+
 // ErrCountProfilesFailed is returned when counting profiles fails.
 type ErrCountProfilesFailed struct {
 	Cause error
@@ -245,6 +274,89 @@ func (e *ErrCountProfilesFailed) Error() string {
 }
 
 func (e *ErrCountProfilesFailed) Unwrap() error {
+	return e.Cause
+}
+
+// ErrCreateTemplateFailed is returned when creating a device template fails.
+type ErrCreateTemplateFailed struct {
+	Cause error
+}
+
+func (e *ErrCreateTemplateFailed) Error() string {
+	return fmt.Sprintf("failed to create device template: %v", e.Cause)
+}
+
+func (e *ErrCreateTemplateFailed) Unwrap() error {
+	return e.Cause
+}
+
+// ErrGetTemplateFailed is returned when retrieving a device template fails.
+type ErrGetTemplateFailed struct {
+	ID    uint64
+	Cause error
+}
+
+func (e *ErrGetTemplateFailed) Error() string {
+	return fmt.Sprintf("failed to get device template %d: %v", e.ID, e.Cause)
+}
+
+func (e *ErrGetTemplateFailed) Unwrap() error {
+	return e.Cause
+}
+
+// ErrListTemplatesFailed is returned when listing device templates fails.
+type ErrListTemplatesFailed struct {
+	Cause error
+}
+
+func (e *ErrListTemplatesFailed) Error() string {
+	return fmt.Sprintf("failed to list device templates: %v", e.Cause)
+}
+
+func (e *ErrListTemplatesFailed) Unwrap() error {
+	return e.Cause
+}
+
+// ErrUpdateTemplateFailed is returned when replacing a device template fails.
+type ErrUpdateTemplateFailed struct {
+	ID    uint64
+	Cause error
+}
+
+func (e *ErrUpdateTemplateFailed) Error() string {
+	return fmt.Sprintf("failed to update device template %d: %v", e.ID, e.Cause)
+}
+
+func (e *ErrUpdateTemplateFailed) Unwrap() error {
+	return e.Cause
+}
+
+// ErrDeleteTemplateFailed is returned when deleting a device template fails.
+type ErrDeleteTemplateFailed struct {
+	ID    uint64
+	Cause error
+}
+
+func (e *ErrDeleteTemplateFailed) Error() string {
+	return fmt.Sprintf("failed to delete device template %d: %v", e.ID, e.Cause)
+}
+
+func (e *ErrDeleteTemplateFailed) Unwrap() error {
+	return e.Cause
+}
+
+// ErrCreateProfileFromTemplateFailed is returned when deriving a profile
+// from a device template fails.
+type ErrCreateProfileFromTemplateFailed struct {
+	TemplateID uint64
+	Cause      error
+}
+
+func (e *ErrCreateProfileFromTemplateFailed) Error() string {
+	return fmt.Sprintf("failed to create profile from template %d: %v", e.TemplateID, e.Cause)
+}
+
+func (e *ErrCreateProfileFromTemplateFailed) Unwrap() error {
 	return e.Cause
 }
 
@@ -286,10 +398,80 @@ type ErrRecordAttestCertFailed struct {
 	Cause error
 }
 
+// ErrBootCertificateFailed is returned when a diskless node's boot-certificate
+// request fails or is refused by the control plane.
+type ErrBootCertificateFailed struct {
+	Identity string
+	Cause    error
+}
+
+func (e *ErrBootCertificateFailed) Error() string {
+	return fmt.Sprintf("failed to fetch boot certificate for %q: %v", e.Identity, e.Cause)
+}
+
+func (e *ErrBootCertificateFailed) Unwrap() error {
+	return e.Cause
+}
+
+// ErrBootDeliveryFailed is returned when a diskless node's boot-delivery
+// request fails or is refused by the control plane.
+type ErrBootDeliveryFailed struct {
+	Cause error
+}
+
+func (e *ErrBootDeliveryFailed) Error() string {
+	return fmt.Sprintf("failed to fetch boot delivery: %v", e.Cause)
+}
+
+func (e *ErrBootDeliveryFailed) Unwrap() error {
+	return e.Cause
+}
+
+// ErrBootProofMissing is returned when a boot call is made without the
+// callback that computes its proof over the connection's channel binding.
+type ErrBootProofMissing struct{}
+
+func (e *ErrBootProofMissing) Error() string {
+	return "a boot call needs a proof callback; a proof cannot be computed before the connection exists"
+}
+
 func (e *ErrRecordAttestCertFailed) Error() string {
 	return fmt.Sprintf("failed to record attestation certificate for device %d: %v", e.ID, e.Cause)
 }
 
 func (e *ErrRecordAttestCertFailed) Unwrap() error {
+	return e.Cause
+}
+
+// ErrDisableFailed is returned when the control plane refuses or fails an
+// operator Disable. Cause carries the gRPC status: FailedPrecondition when
+// no SDN policy engine runs, the device has no switch port or its state
+// cannot move to suspended.
+type ErrDisableFailed struct {
+	ID    uint64
+	Cause error
+}
+
+func (e *ErrDisableFailed) Error() string {
+	return fmt.Sprintf("failed to disable device %d: %v", e.ID, e.Cause)
+}
+
+func (e *ErrDisableFailed) Unwrap() error {
+	return e.Cause
+}
+
+// ErrEnableFailed is returned when the control plane refuses or fails an
+// operator Enable. Cause carries the gRPC status: FailedPrecondition when
+// the device is not disabled.
+type ErrEnableFailed struct {
+	ID    uint64
+	Cause error
+}
+
+func (e *ErrEnableFailed) Error() string {
+	return fmt.Sprintf("failed to enable device %d: %v", e.ID, e.Cause)
+}
+
+func (e *ErrEnableFailed) Unwrap() error {
 	return e.Cause
 }

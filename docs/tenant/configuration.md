@@ -1,5 +1,8 @@
 # Tenant Configuration Reference
 
+> **Status: REFERENCE** · Last verified: 2026-10-13
+> `tenant.Config` (`pkg/tenant/config.go`) and how `platformd serve` builds it (`pkg/daemon/commands/serve_tenant.go`).
+
 > Subordinate to the feature files ([architecture.md](architecture.md),
 > [engineering.md](engineering.md), [cli.md](cli.md), [api.md](api.md),
 > [user.md](user.md)); where this file disagrees with them, they win.
@@ -28,8 +31,8 @@ The tenant manager is configured in code with `tenant.Config`
 | `DEKMaxBytes` | `uint64` | `0` (unlimited) | Bytes encrypted before rotation is due |
 | `DEKWarningPercent` | `int32` | `80` | Usage percentage at which DEK status reports a warning |
 
-`Config.Validate` rejects negative quota limits and an unsupported DEK
-algorithm with `ErrConfigValidation`.
+`Config.Validate` rejects negative quota limits, an unsupported DEK algorithm
+and a `DEKWarningPercent` outside 0-100 with `ErrConfigValidation`.
 
 ## How platformd wires it today
 

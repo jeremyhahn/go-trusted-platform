@@ -1,5 +1,8 @@
 # VM Migration
 
+> **Status: REFERENCE** · Last verified: 2026-10-13
+> Deep dive on cold and live VM migration: modes, transport security and the inter-daemon handshake.
+
 Live and cold VM migration move a running guest from one `platformd` (the
 **source**) to a peer `platformd` (the **destination**) over a mutually
 authenticated, CA-secured channel. Migration is available only on the local
@@ -61,7 +64,8 @@ TLS identity and vTPM EK certificates.
 
 The destination side of a migration is exposed as two RPCs on the
 `ComputeService`, served on the same gRPC TCP and Unix-socket listeners as every
-other compute method:
+other compute method, and on REST, QUIC and MCP through the same service
+([api.md §3](api.md#3-vm-disks-snapshots-and-migration)):
 
 ```protobuf
 // Inter-daemon migration handshake (destination side)
@@ -80,6 +84,7 @@ message VMMigrationSpec {
   bool   tpm_enabled  = 7;
   string network_mode = 8;
   string mac_address  = 9;
+  string arch         = 10;  // source guest arch: "x86_64" | "aarch64"; empty = x86_64
 }
 
 message PrepareMigrationRequest {
@@ -113,12 +118,13 @@ Source platformd                         Destination platformd
 ----------------                         ---------------------
 MigrateVM(vm, dest:port, {live?})
   │
-  ├── PrepareMigration (mTLS gRPC) ─────▶ materialize server tls-creds (CA)
+  ├── PrepareMigration (mTLS gRPC) ─────▶ refuse spec.arch ≠ this host's guest arch
+  │                                       materialize server tls-creds (CA)
   │                                       launch receiver QEMU:
   │                                         -incoming defer
   │                                         -object tls-creds-x509,endpoint=server
   │                                       QMP: migrate-set-parameters tls-creds
-  │                                       QMP: migrate-incoming tcp:0.0.0.0:PORT
+  │                                       QMP: migrate-incoming tcp:LISTEN:PORT
   │   ◀── {receiver_id, port, tls_hostname}
   │
   ├── install client tls-creds on source QMP monitor (CA-issued)
@@ -132,6 +138,13 @@ MigrateVM(vm, dest:port, {live?})
   │
   └── quit source QEMU, drop local bookkeeping
 ```
+
+The source names its guest's architecture in `spec.arch` (`compute.arch`, the
+guest every VM on that host runs). The destination builds its receiver from its
+own `compute.arch`, and QEMU cannot load an x86_64 guest into an aarch64
+machine or the reverse, so a destination of another architecture refuses the
+spec before it issues credentials or starts a receiver. An empty `arch` is
+`x86_64`, the guest a configuration without an arch builds.
 
 On any failure the source calls `FinalizeMigration{commit=false}`, the
 destination tears the idle receiver down and releases its TLS material, and the
@@ -158,24 +171,32 @@ message MigrateVMRequest {
 The source combines `destination_host` with the receiver `port` returned by
 `PrepareMigration` to form the QEMU migrate URI (`tcp:<host>:<port>`).
 
+The destination's receiver binds `compute.migration_listen_address` (`LISTEN`
+and `PORT` in the flow above). By default that is `0.0.0.0:0`: every address,
+with an ephemeral port per receiver. Set it to the migration network's address
+to keep the stream on that network, and give it a fixed port when a firewall
+needs one ([Configuration](engineering.md#4-configuration)).
+
 ## Error semantics
 
 | Condition | gRPC status |
 |-----------|-------------|
 | Live migration without shared storage | `FAILED_PRECONDITION` |
 | Migration coordinator / TLS provider not wired (no CA) | `FAILED_PRECONDITION` |
+| Source guest arch differs from the destination's (`MigrationArchMismatchError`) | `FAILED_PRECONDITION` |
 | Empty destination / VM id / receiver id / spec | `INVALID_ARGUMENT` |
 | Orchestrator does not support VM migration | `FAILED_PRECONDITION` |
 | Unknown receiver on finalize | `NOT_FOUND` |
 | Receiver launch / stream failure | `INTERNAL` |
+| Destination `compute.migration_listen_address` unset or not an `IP:port` (`MigrationListenAddressError`) | `FAILED_PRECONDITION` |
 
 When the platform CA is available (the daemon has provisioned its TLS identity)
 the migration coordinator and TLS provider are wired automatically for the
 `local-qemu` provider; no additional operator configuration is required beyond
-the optional `shared_storage` block.
+the optional `shared_storage` block and `migration_listen_address`.
 
 ## See Also
 
-- [API Reference](api-reference.md) — full ComputeService surface
-- [Configuration](configuration.md) — `compute:` and `shared_storage:`
+- [API](api.md) — full ComputeService surface
+- [Engineering](engineering.md) — `compute.shared_storage` and the migration invariants
 - [Architecture](architecture.md) — orchestrator internals

@@ -34,7 +34,7 @@ func TestNAT64Status_DecodesTheServedPayload(t *testing.T) {
 	const served = `{"active":true,"instance_present":true,"prefix":"64:ff9b::/96","instance":"tp-nat64","sessions":12,"pool4_used":7,"module_version":"4.1.14","flow_count":5,"last_reconcile":"2026-10-01T12:00:00Z","timestamp":"2026-10-01T12:00:05Z"}`
 	wantReconcile := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
 	a, _ := adapterAgainst(t, func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/health" {
+		if r.URL.Path == "/health/live" {
 			w.WriteHeader(http.StatusOK)
 			return
 		}

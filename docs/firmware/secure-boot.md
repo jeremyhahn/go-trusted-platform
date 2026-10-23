@@ -1,5 +1,8 @@
 # Secure Boot Configuration and Management
 
+> **Status: REFERENCE** · Last verified: 2026-10-15
+> Secure Boot key management, module signing and install-time enforcement as built.
+
 ## Overview
 
 The Trusted Platform provides **URI-driven Secure Boot key management** with support for both **TPM-resident keys** (PK/KEK) and **remote KMS-backed keys** (DB). Keys are referenced by URI (`kms://` or `file://`) rather than filesystem paths, enabling flexible deployment from ISO media, remote KMS backends, or airgap-mode file storage.
@@ -7,7 +10,7 @@ The Trusted Platform provides **URI-driven Secure Boot key management** with sup
 The implementation includes:
 
 - **URI-driven key references** - `kms://` (remote KMS) or `file://` (airgap/dev)
-- **Hybrid default placement** - PK/KEK on TPM (never leave silicon), DB in CP-KMS
+- **Hybrid default placement** - the example configuration places PK/KEK on `store: tpm2` and DB in CP-KMS; the installer itself uses only the PK/KEK certificates
 - **Remote signing** - DB key stays server-side; only 64-byte digests sent for signing
 - **Kernel module signing** - Compile-time `CONFIG_MODULE_SIG_FORCE` enforcement (separate from UKI signing)
 - **Install-time enforcement** - Verify-before-enforce model with Setup Mode verification
@@ -40,15 +43,24 @@ Each key reference contains:
 |--------|---------|---------|----------------|
 | `kms://` | `kms://platform/secureboot/db` | Remote KMS backend (canonical for production). The `store` field picks the backend. | Server-side (never leaves KMS during signing) |
 | `file://` | `file:///etc/secureboot/db.key` | Airgap/dev mode: key material on disk. Use only in isolated environments. | On-disk (dev/recovery only) |
-| `idevid:` | `idevid://base64data` | Inline secret: base64-encoded ciphertext decrypted by device IDevID cert. Used for device-specific provisioning. | Inline in config |
+
+`key-uri` and `cert-uri` accept only `kms://` and `file://`; any other scheme
+fails validation (`validSecureBootURI`, `pkg/installer/types.go`). `idevid://`
+is a config-secret scheme (`pkg/config/secrets`), not a key reference.
 
 ### Backend Selection
 
 Backend selection is **not** controlled by the URI scheme. Instead, the inlined `store` field determines how the KMS backend routes key operations:
 
-- `store: tpm2` → TPM 2.0 backend (key never leaves silicon)
-- `store: software` → Software backend (in-memory or KMS persisted)
-- `store: hsm` → Hardware Security Module (future)
+- `store: tpm2` → TPM 2.0 backend
+- `store: software` → Software backend
+- `store: pkcs11` → PKCS#11 HSM
+- `store: awskms`, `azurekv`, `gcpkms`, `vault` → cloud KMS / Vault
+- `store: file` → on-disk key
+
+These are the `pkg/secureboot` backend types. At install time `store` is read
+only for the DB key, to pick the backend when the DB key is generated on the
+node (default `software`, `pkg/installer/installer.go`).
 
 The URI scheme (`kms://` vs `file://`) only distinguishes **remote KMS resolution** from **on-disk key material**. The `store` field is what the backend looks at to choose the actual key provider.
 
@@ -86,7 +98,8 @@ secure-boot:
 - **`enabled`** (bool, optional) - Enables Secure Boot support. If false, UKI signing and enforcement are skipped. Default: false.
 - **`enforce`** (bool, optional) - Attempt to transition firmware into enforced Secure Boot mode. Default: false. SAFETY: enforcement only proceeds if the signed UKI verifies against the db certificate AND the firmware is in Setup Mode. Failures are logged as warnings and never abort the install.
 - **`resign-mode`** (string, optional) - `remote` (default) or `local`. Controls whether DB signing uses remote KMS (digest only) or local key material.
-- **`pk`, `kek`, `db`** - Key reference blocks. Each requires `cn`, `store`, `key-uri`, and `cert-uri`.
+- **`pk`, `kek`, `db`** - Key reference blocks. When `enabled`, `db.key-uri` is required; when `enforce` is set, `pk.key-uri` and `kek.key-uri` are required as well. Every URI must be `kms://` or `file://` (`SecureBootConfig.Validate`, `pkg/installer/types.go`). An unknown `resign-mode` is an error.
+- The installer uses only the PK and KEK **certificates**: a `file://` `cert-uri`, otherwise `PK.crt` / `KEK.crt` in the Secure Boot keys directory. A `kms://` `cert-uri` for PK or KEK is not resolved there, and the PK/KEK `key-uri` is not read.
 
 ## Kernel Module Signing
 
@@ -121,7 +134,7 @@ This enforcement happens **at load time**, before the module code executes. Comb
 - Modules signed with this key load anywhere
 - Out-of-tree modules can be signed with the same key via `pkg/modulesign`
 
-**Development builds** (e.g., local `make fips-kernel`):
+**Development builds** (e.g., `make -C build/docker/fips-kernel-builder build` without `MODULE_SIGNING_KEY`):
 - `MODULE_SIGNING_KEY` unset
 - Kernel auto-generates an ephemeral per-build key
 - All in-tree modules signed with the ephemeral key
@@ -225,15 +238,19 @@ The platform uses native Go Authenticode signing via `pkg/authenticode`. The UKI
 ```go
 import "github.com/jeremyhahn/go-trusted-platform/pkg/authenticode"
 
-signer, err := authenticode.NewSigner(&authenticode.SignerOptions{
+signer, err := authenticode.NewSigner(ctx, &authenticode.SignerOptions{
     KeyStore:      keyBackend,      // SDK-backed key provider
-    Certificate:   dbCert,           // DB certificate (embedded in UKI signature)
+    KeyAttributes: dbKeyAttrs,      // the DB key in that provider
+    Certificate:   dbCert,          // DB certificate (embedded in UKI signature)
     Logger:        logger,
 })
 
-// Sign the UKI in place
-err = signer.SignFile(ukiPath)
+// Sign the UKI into a new file
+err = signer.SignFile(ukiPath, signedUKIPath)
 ```
+
+The output path must differ from the input: `SignFile` creates (truncates) the
+output before it reads the input. See [Authenticode](authenticode.md).
 
 ### Install-Media Key Staging (ISO builds)
 
@@ -418,13 +435,16 @@ pinned by unit regression tests in `pkg/uefi`.
 ```go
 import "github.com/jeremyhahn/go-trusted-platform/pkg/uefi"
 
-// Check if firmware is in Setup Mode
+// Live firmware (efivarfs)
 isSetup, err := uefi.IsSetupMode()
+status, err := uefi.ReadSecureBootStatus()
 
-// Read/write EFI variables
-nvram, err := uefi.ReadVariable("SetupMode", uefi.EFIGlobalVariable)
-err = uefi.WriteVariable("db", uefi.EFIImageSecurityDatabase, eslBytes)
+// Offline OVMF variable store
+nvram, err := uefi.OpenNVRAM("OVMF_VARS.fd")
+v, err := nvram.GetVariable("db", uefi.EFIImageSecurityDatabase)
 ```
+
+See [UEFI](uefi.md) for the full API.
 
 ### Authenticode Signing
 
@@ -467,7 +487,7 @@ Some firmware images do not expose the `efivarfs` pseudo-filesystem. Enforcement
 
 **CRITICAL**: Secure Boot keys are the root of trust for firmware signature verification.
 
-- **PK/KEK (TPM-resident)** - Keys never leave the TPM; the TPM itself is the trusted storage
+- **PK/KEK** - Configure them with `store: tpm2` so the private keys stay in the TPM; the installer needs only their certificates
 - **DB (KMS-backed)** - In production, DB keys are stored in the CP-KMS and never leave the server for `remote` resign-mode
 - **File-backed keys** (dev only) - Keep encrypted; never commit to version control
 
@@ -540,8 +560,8 @@ The devcontainer provides `qemu-system-x86`, `ovmf` (the
 
 The Secure Boot implementation provides:
 
-1. **URI-driven configuration** - Flexible key referencing (kms://, file://, idevid://)
-2. **Hybrid key placement** - PK/KEK on TPM, DB in KMS by default
+1. **URI-driven configuration** - Flexible key referencing (kms://, file://)
+2. **Hybrid key placement** - PK/KEK on TPM, DB in KMS in the example configuration
 3. **Remote signing** - DB key stays server-side during production deployments
 4. **Separate module signing** - Compile-time enforcement via CONFIG_MODULE_SIG_FORCE
 5. **Safe installation** - Verify-before-enforce gate with Setup Mode verification

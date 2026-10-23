@@ -22,8 +22,11 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc/codes"
 
+	sdkerrors "github.com/jeremyhahn/go-quicbaas/sdk/go/errors"
 	service "github.com/jeremyhahn/go-quicbaas/sdk/go/service"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/api/errclass"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/mcp"
 )
 
@@ -91,6 +94,12 @@ type lifecycleSecretsServiceMock struct {
 	deleteSecretFunc      func(ctx context.Context, req *service.DeleteSecretRequest) (*service.DeleteSecretResponse, error)
 	setRotationPolicyFunc func(ctx context.Context, req *service.SetRotationPolicyRequest) (*service.SetRotationPolicyResponse, error)
 	getRotationPolicyFunc func(ctx context.Context, req *service.GetRotationPolicyRequest) (*service.GetRotationPolicyResponse, error)
+
+	getSecretVersionFunc   func(ctx context.Context, req *service.GetSecretVersionRequest) (*service.GetSecretVersionResponse, error)
+	listSecretVersionsFunc func(ctx context.Context, req *service.ListSecretVersionsRequest) (*service.ListSecretVersionsResponse, error)
+	rotateSecretFunc       func(ctx context.Context, req *service.RotateSecretRequest) (*service.RotateSecretResponse, error)
+	rollbackSecretFunc     func(ctx context.Context, req *service.RollbackSecretRequest) (*service.RollbackSecretResponse, error)
+	updateStatusFunc       func(ctx context.Context, req *service.UpdateSecretStatusRequest) (*service.UpdateSecretStatusResponse, error)
 }
 
 var _ service.SecretsService = (*lifecycleSecretsServiceMock)(nil)
@@ -128,18 +137,30 @@ func (m *lifecycleSecretsServiceMock) DeleteSecret(ctx context.Context, req *ser
 }
 
 func (m *lifecycleSecretsServiceMock) GetSecretVersion(ctx context.Context, req *service.GetSecretVersionRequest) (*service.GetSecretVersionResponse, error) {
+	if m.getSecretVersionFunc != nil {
+		return m.getSecretVersionFunc(ctx, req)
+	}
 	return nil, errors.New("not implemented")
 }
 
 func (m *lifecycleSecretsServiceMock) ListSecretVersions(ctx context.Context, req *service.ListSecretVersionsRequest) (*service.ListSecretVersionsResponse, error) {
+	if m.listSecretVersionsFunc != nil {
+		return m.listSecretVersionsFunc(ctx, req)
+	}
 	return nil, errors.New("not implemented")
 }
 
 func (m *lifecycleSecretsServiceMock) RollbackSecret(ctx context.Context, req *service.RollbackSecretRequest) (*service.RollbackSecretResponse, error) {
+	if m.rollbackSecretFunc != nil {
+		return m.rollbackSecretFunc(ctx, req)
+	}
 	return nil, errors.New("not implemented")
 }
 
 func (m *lifecycleSecretsServiceMock) RotateSecret(ctx context.Context, req *service.RotateSecretRequest) (*service.RotateSecretResponse, error) {
+	if m.rotateSecretFunc != nil {
+		return m.rotateSecretFunc(ctx, req)
+	}
 	return nil, errors.New("not implemented")
 }
 
@@ -158,6 +179,9 @@ func (m *lifecycleSecretsServiceMock) GetRotationPolicy(ctx context.Context, req
 }
 
 func (m *lifecycleSecretsServiceMock) UpdateSecretStatus(ctx context.Context, req *service.UpdateSecretStatusRequest) (*service.UpdateSecretStatusResponse, error) {
+	if m.updateStatusFunc != nil {
+		return m.updateStatusFunc(ctx, req)
+	}
 	return nil, errors.New("not implemented")
 }
 
@@ -244,7 +268,12 @@ func TestMCPServiceProviderKMSKeyMetadata(t *testing.T) {
 	})
 
 	t.Run("GetNotFound", func(t *testing.T) {
-		provider := newLifecycleProvider(&lifecycleKMSServiceMock{}, nil)
+		mock := &lifecycleKMSServiceMock{
+			getKeyMetadataFunc: func(ctx context.Context, req *service.GetKeyMetadataRequest) (*service.GetKeyMetadataResponse, error) {
+				return nil, sdkerrors.NewNotFound("kms", "no key "+req.KeyID)
+			},
+		}
+		provider := newLifecycleProvider(mock, nil)
 		_, err := provider.KMSGetKeyMetadata(ctx, "missing")
 		var notFoundErr ErrKMSKeyNotFound
 		assert.ErrorAs(t, err, &notFoundErr)
@@ -334,12 +363,63 @@ func TestMCPServiceProviderKMSKeyPolicy(t *testing.T) {
 		assert.Equal(t, uint64(3), policy.Version)
 	})
 
-	t.Run("GetBackendError", func(t *testing.T) {
-		provider := newLifecycleProvider(&lifecycleKMSServiceMock{}, nil)
+	t.Run("GetNotFound", func(t *testing.T) {
+		mock := &lifecycleKMSServiceMock{
+			getKeyPolicyFunc: func(ctx context.Context, req *service.GetKeyPolicyRequest) (*service.GetKeyPolicyResponse, error) {
+				return nil, sdkerrors.NewNotFound("kms", "no policy for "+req.KeyID)
+			},
+		}
+		provider := newLifecycleProvider(mock, nil)
 		_, err := provider.KMSGetKeyPolicy(ctx, "key-1")
-		var opErr ErrKMSOperationFailed
-		assert.ErrorAs(t, err, &opErr)
+		var notFoundErr ErrKMSKeyPolicyNotFound
+		assert.ErrorAs(t, err, &notFoundErr)
 	})
+}
+
+// TestMCPServiceProviderKMSLookupClasses checks that a failed key lookup
+// keeps the backend's class on MCP, as it does on gRPC (#304): only a
+// NotFound backend error answers "key not found".
+func TestMCPServiceProviderKMSLookupClasses(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	tests := []struct {
+		name string
+		err  error
+		want codes.Code
+	}{
+		{"not found", sdkerrors.NewNotFound("kms", "no key"), codes.NotFound},
+		{"invalid input", sdkerrors.NewInvalidInput("kms", "bad key id"), codes.InvalidArgument},
+		{"forbidden", sdkerrors.NewForbidden("kms", "no"), codes.PermissionDenied},
+		{"unavailable", sdkerrors.NewUnavailable("kms", "down"), codes.Unavailable},
+		{"no class", errors.New("key not found"), codes.Internal},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			mock := &lifecycleKMSServiceMock{
+				mockKMSServiceForMCPTests: mockKMSServiceForMCPTests{
+					getKeyFunc: func(ctx context.Context, req *service.GetKeyRequest) (*service.GetKeyResponse, error) {
+						return nil, tt.err
+					},
+				},
+				getKeyMetadataFunc: func(ctx context.Context, req *service.GetKeyMetadataRequest) (*service.GetKeyMetadataResponse, error) {
+					return nil, tt.err
+				},
+				getKeyPolicyFunc: func(ctx context.Context, req *service.GetKeyPolicyRequest) (*service.GetKeyPolicyResponse, error) {
+					return nil, tt.err
+				},
+			}
+			provider := newLifecycleProvider(mock, nil)
+
+			_, err := provider.KMSGetKey(ctx, "k", 0)
+			assert.Equal(t, tt.want, errclass.Code(err), "GetKey: %v", err)
+			_, err = provider.KMSGetKeyMetadata(ctx, "k")
+			assert.Equal(t, tt.want, errclass.Code(err), "GetKeyMetadata: %v", err)
+			_, err = provider.KMSGetKeyPolicy(ctx, "k")
+			assert.Equal(t, tt.want, errclass.Code(err), "GetKeyPolicy: %v", err)
+		})
+	}
 }
 
 func TestMCPServiceProviderKMSAlgorithmsAndStatus(t *testing.T) {
@@ -517,10 +597,159 @@ func TestMCPServiceProviderSecretRotationPolicy(t *testing.T) {
 		assert.Equal(t, 4, resp.Policy.RetainVersions)
 	})
 
-	t.Run("GetBackendError", func(t *testing.T) {
+	t.Run("GetNotFound", func(t *testing.T) {
 		provider := newLifecycleProvider(nil, &lifecycleSecretsServiceMock{})
 		_, err := provider.SecretGetRotationPolicy(ctx, "db/password")
+		var notFoundErr ErrSecretRotationPolicyNotFound
+		assert.ErrorAs(t, err, &notFoundErr)
+	})
+}
+
+func TestMCPServiceProviderSecretVersions(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("GetVersionDelegates", func(t *testing.T) {
+		var got *service.GetSecretVersionRequest
+		mock := &lifecycleSecretsServiceMock{
+			getSecretVersionFunc: func(ctx context.Context, req *service.GetSecretVersionRequest) (*service.GetSecretVersionResponse, error) {
+				got = req
+				return &service.GetSecretVersionResponse{}, nil
+			},
+		}
+		provider := newLifecycleProvider(nil, mock)
+
+		_, err := provider.SecretGetVersion(ctx, "db/password", 2)
+		require.NoError(t, err)
+		require.NotNil(t, got)
+		assert.Equal(t, "db/password", got.SecretID)
+		assert.Equal(t, uint64(2), got.Version)
+	})
+
+	t.Run("GetVersionNotFound", func(t *testing.T) {
+		provider := newLifecycleProvider(nil, &lifecycleSecretsServiceMock{})
+		_, err := provider.SecretGetVersion(ctx, "db/password", 2)
+		var notFoundErr ErrSecretNotFound
+		assert.ErrorAs(t, err, &notFoundErr)
+	})
+
+	t.Run("ListVersionsDelegates", func(t *testing.T) {
+		var got *service.ListSecretVersionsRequest
+		mock := &lifecycleSecretsServiceMock{
+			listSecretVersionsFunc: func(ctx context.Context, req *service.ListSecretVersionsRequest) (*service.ListSecretVersionsResponse, error) {
+				got = req
+				return &service.ListSecretVersionsResponse{}, nil
+			},
+		}
+		provider := newLifecycleProvider(nil, mock)
+
+		_, err := provider.SecretListVersions(ctx, "db/password", 7)
+		require.NoError(t, err)
+		require.NotNil(t, got)
+		assert.Equal(t, 7, got.Limit)
+	})
+
+	t.Run("ListVersionsNotFound", func(t *testing.T) {
+		provider := newLifecycleProvider(nil, &lifecycleSecretsServiceMock{})
+		_, err := provider.SecretListVersions(ctx, "db/password", 0)
+		var notFoundErr ErrSecretNotFound
+		assert.ErrorAs(t, err, &notFoundErr)
+	})
+
+	t.Run("RotateDelegates", func(t *testing.T) {
+		var got *service.RotateSecretRequest
+		mock := &lifecycleSecretsServiceMock{
+			rotateSecretFunc: func(ctx context.Context, req *service.RotateSecretRequest) (*service.RotateSecretResponse, error) {
+				got = req
+				return &service.RotateSecretResponse{}, nil
+			},
+		}
+		provider := newLifecycleProvider(nil, mock)
+
+		_, err := provider.SecretRotate(ctx, &mcp.SecretRotateRequest{
+			SecretID: "db/password",
+			NewData:  []byte("hunter3"),
+			Metadata: map[string]string{"reason": "scheduled"},
+		})
+		require.NoError(t, err)
+		require.NotNil(t, got)
+		assert.Equal(t, []byte("hunter3"), got.NewData)
+		assert.Equal(t, "scheduled", got.Metadata["reason"])
+	})
+
+	t.Run("RotateErrors", func(t *testing.T) {
+		provider := newLifecycleProvider(nil, &lifecycleSecretsServiceMock{})
+		var invalidErr ErrKMSInvalidParameter
+		_, err := provider.SecretRotate(ctx, &mcp.SecretRotateRequest{SecretID: "db/password"})
+		assert.ErrorAs(t, err, &invalidErr)
+
+		_, err = provider.SecretRotate(ctx, &mcp.SecretRotateRequest{SecretID: "db/password", NewData: []byte("x")})
 		var opErr ErrSecretsOperationFailed
 		assert.ErrorAs(t, err, &opErr)
+	})
+
+	t.Run("RollbackDelegates", func(t *testing.T) {
+		var got *service.RollbackSecretRequest
+		mock := &lifecycleSecretsServiceMock{
+			rollbackSecretFunc: func(ctx context.Context, req *service.RollbackSecretRequest) (*service.RollbackSecretResponse, error) {
+				got = req
+				return &service.RollbackSecretResponse{}, nil
+			},
+		}
+		provider := newLifecycleProvider(nil, mock)
+
+		_, err := provider.SecretRollback(ctx, "db/password", 1)
+		require.NoError(t, err)
+		require.NotNil(t, got)
+		assert.Equal(t, uint64(1), got.TargetVersion)
+	})
+
+	t.Run("RollbackErrors", func(t *testing.T) {
+		provider := newLifecycleProvider(nil, &lifecycleSecretsServiceMock{})
+		var invalidErr ErrKMSInvalidParameter
+		_, err := provider.SecretRollback(ctx, "db/password", 0)
+		assert.ErrorAs(t, err, &invalidErr)
+
+		_, err = provider.SecretRollback(ctx, "db/password", 1)
+		var opErr ErrSecretsOperationFailed
+		assert.ErrorAs(t, err, &opErr)
+	})
+
+	t.Run("UpdateStatusDelegates", func(t *testing.T) {
+		var got *service.UpdateSecretStatusRequest
+		mock := &lifecycleSecretsServiceMock{
+			updateStatusFunc: func(ctx context.Context, req *service.UpdateSecretStatusRequest) (*service.UpdateSecretStatusResponse, error) {
+				got = req
+				return &service.UpdateSecretStatusResponse{}, nil
+			},
+		}
+		provider := newLifecycleProvider(nil, mock)
+
+		_, err := provider.SecretUpdateStatus(ctx, "db/password", "disabled")
+		require.NoError(t, err)
+		require.NotNil(t, got)
+		assert.Equal(t, service.SecretStatusDisabled, got.Status)
+	})
+
+	t.Run("UpdateStatusRejectsUnknownStatus", func(t *testing.T) {
+		provider := newLifecycleProvider(nil, &lifecycleSecretsServiceMock{})
+		_, err := provider.SecretUpdateStatus(ctx, "db/password", "archived")
+		var invalidErr ErrKMSInvalidParameter
+		require.ErrorAs(t, err, &invalidErr)
+		assert.Equal(t, "status", invalidErr.Parameter)
+	})
+
+	t.Run("NoSecretsService", func(t *testing.T) {
+		provider := newLifecycleProvider(nil, nil)
+		var unavailable ErrServiceNotAvailable
+		_, err := provider.SecretGetVersion(ctx, "db/password", 1)
+		assert.ErrorAs(t, err, &unavailable)
+		_, err = provider.SecretListVersions(ctx, "db/password", 0)
+		assert.ErrorAs(t, err, &unavailable)
+		_, err = provider.SecretRotate(ctx, &mcp.SecretRotateRequest{SecretID: "db/password", NewData: []byte("x")})
+		assert.ErrorAs(t, err, &unavailable)
+		_, err = provider.SecretRollback(ctx, "db/password", 1)
+		assert.ErrorAs(t, err, &unavailable)
+		_, err = provider.SecretUpdateStatus(ctx, "db/password", "enabled")
+		assert.ErrorAs(t, err, &unavailable)
 	})
 }

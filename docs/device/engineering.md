@@ -25,6 +25,7 @@ read out of the source on 2026-08-18.
 | `pkg/device/registration.go` | `Registrar`, `Registration`, `Register` — the ONE find-or-create used by ACME enrollment and by the control plane; PEM helpers and `IsRecordNotFound` |
 | `pkg/device/controlplane.go` | `ControlPlaneTPM`, `ControlPlaneRegistrar` — the control plane's own device record, read from its own TPM (#472) |
 | `pkg/device/sdn_integration.go` | `SDNIntegration` interface and its event types — **contract only** |
+| `pkg/device/lifecycle.go` | `LifecycleService` — operator Disable/Enable (#250); `PortEnforcer`, `ReattestationRequester` |
 | `pkg/device/entities/device.go` | `Device`, `DeviceState`, `allowedTransitions`, `ErrInvalidTransition` |
 | `pkg/device/entities/profile.go` | `DeviceProfile`, `NetworkPhaseConfig`, `ProfileMatchRules`, `ACLConfig`, `DHCPPoolConfig`, `PlatformdConfigRef`, `DeviceRole`, `AuthMethod` |
 | `pkg/device/entities/template.go` | `DeviceTemplate` |
@@ -59,8 +60,16 @@ type DeviceService interface {
 
 **`FindConfigForDevice` and `AssignToDevice` are on the concrete
 `*ProfileService` only** — they are not members of the `DeviceProfileService`
-interface. Code holding the interface cannot call them; hold `*ProfileService`
-or add them to the interface deliberately.
+interface. `FindConfigForDevice` has its own one-method interface,
+`ConfigForDeviceFinder`: the REST handler and the daemon's `DeviceGRPCService`
+assert the profile service they were given against it, so gRPC, Unix and the
+embedded transport resolve configs through the same method REST does.
+
+**`CreateProfileFromTemplate(ctx, templates, profiles, templateID, overrides)`**
+is a package function, not a method, because it spans both services: it calls
+`ToProfile`, assigns an ID when the overrides carry none, and saves the profile.
+The REST route and `DeviceGRPCService.CreateProfileFromTemplate` both call it.
+A nil service is `ErrTemplateProfileDependency{Name}`.
 
 ### 2.2 Constructors
 
@@ -70,9 +79,29 @@ or add them to the interface deliberately.
 | `NewService` | `(*Datastore) (*Service, error)` |
 | `NewProfileService` | `(*Datastore) (*ProfileService, error)` |
 | `NewTemplateService` | `(*Datastore) (*TemplateService, error)` |
+| `NewLifecycleService` | `(DeviceService, PortEnforcer, ...LifecycleOption) (*LifecycleService, error)` |
 
-There are no functional options anywhere in `pkg/device` (grepped
-2026-08-18). All three services take exactly one argument.
+The three storage services take exactly one argument. `NewLifecycleService`
+is the package's only constructor with functional options:
+`WithLifecycleReattestation(ReattestationRequester)` and
+`WithLifecycleLogger(*slog.Logger)`. A nil `DeviceService` or `PortEnforcer`
+is `ErrLifecycleDependency`.
+
+`LifecycleService` holds two seams, both implemented outside the package:
+
+```go
+type PortEnforcer interface { // policy.QuarantineManager
+    OperatorSuspend(ctx, deviceID uint64, portID, reason string) (*entities.Device, error)
+    OperatorReadmit(ctx, deviceID uint64, portID string) (*entities.Device, error)
+}
+type ReattestationRequester interface { // reporting.Collector
+    Refresh(deviceID string) error
+}
+```
+
+`Disable(ctx, id, reason)` and `Enable(ctx, id)` return a `LifecycleResult`
+carrying the saved `Device`, the `PreviousState` and, for Enable,
+`ReattestationRequested`.
 
 `Datastore` exposes `DeviceDAO()`, `ProfileDAO()`, `TemplateDAO()`. All three
 return `(dao.X, error)` and, in the current implementation, never return a
@@ -179,8 +208,8 @@ over here.
    `EKCert` and `AttestPub` are what let an attested machine prove it is the
    same machine — with no error and no audit trail.
 
-   `TenantID` was the sharpest case: `DeviceRequest` has **no tenant field at
-   all**, so `requestToDevice` cannot populate it and *every* update erased it,
+   `TenantID` was the sharpest case: `device.Request` has **no tenant field at
+   all**, so a REST update cannot populate it and *every* update erased it,
    not merely the partial ones.
 
    Merging does not freeze a field — a caller sending a new value still wins,
@@ -193,11 +222,9 @@ over here.
    it so the wire format stays consistent.
 
    Two callers mint a device id: `Service.Create` and `Register`. Transport
-   adapters do not mint their own. The single exception is the REST create
-   handler, which assigns ahead of `Create` only when the request carries no
-   serial, because the `dev-<id>` placeholder it substitutes needs the id
-   before the write. Profiles and templates mint at their own create sites
-   and are unaffected.
+   adapters do not mint their own; the webservice create handler did, for the
+   `dev-<id>` serial it synthesised, until #484 made the serial required.
+   Profiles and templates mint at their own create sites and are unaffected.
 6. **Template timestamps are service-managed.** `TemplateService.Save` sets
    `CreatedAt` if zero and always sets `UpdatedAt`; `Update` sets `UpdatedAt`.
    The device and profile services do **not** manage timestamps — `Device`
@@ -226,6 +253,20 @@ over here.
 12. **Lifecycle transitions are table-driven.** `DeviceState.CanTransitionTo`
     consults `allowedTransitions`; `Device.Transition` applies it and stamps
     `UpdatedAt`. `revoked` has an empty target set and is terminal.
+    `suspended → quarantined` exists for the operator Enable (#250).
+
+    **An operator lifecycle change is enforced first or not at all.**
+    `LifecycleService` is the only operator path that changes a device's
+    state; the generic update never carries one. It refuses a device with no
+    `NetworkPortID` (`ErrDeviceNotOnFabric`) before calling the enforcer, and
+    the enforcer checks the transition before it touches the port. Disable
+    records `suspended` with `StateReason` = `"operator: " + reason`
+    (`"operator: disabled"` when blank; a reason over
+    `MaxLifecycleReasonLength` = 256 bytes is `ErrLifecycleReasonTooLong`).
+    Enable records `quarantined`, never `attested`: only a passing
+    re-attestation restores the prior state, and the prior record written at
+    suspension survives the re-enable for that purpose. A failed re-attestation
+    request is logged, not returned.
 13. **Roles resolve in one place.** `entities.ParseDeviceRole` is the only
     string-to-`DeviceRole` mapping (a map of canonical values plus aliases,
     case-insensitive). The bootstrap roles `control-plane`, `gateway` and
@@ -259,10 +300,15 @@ over here.
 | `ErrTemplateNotFound{ID}` | struct | Declared; **not returned by `pkg/device` today** — `TemplateService.Get` wraps the DAO error instead |
 | `ErrDuplicateTemplateName{Name}` | struct | Declared; **not returned by `pkg/device` today** |
 | `ErrTemplateConfigRequired{}` | struct | Declared; **not returned by `pkg/device` today** |
+| `ErrTemplateProfileDependency{Name}` | struct | `CreateProfileFromTemplate` given a nil template or profile service |
 | `ErrProfileNotAssigned{ID}` | struct | Declared; **not returned by `pkg/device` today** |
 | `ErrDeviceIdentityRequired{}` | struct | `FindConfigForDevice` / `AssignToDeviceWithEK` with neither EK serial nor MAC |
 | `ErrNoMatchingConfig{EKSerial, MAC}` | struct | `FindConfigForDevice` found nothing |
 | `ErrProfileVLANsNotDistinct{VLAN}` | struct | A profile's provisioning and admitted networks share a VLAN, on any path that can introduce it — `Save`, `Update`, `AssignToDeviceWithEK`. Never from `UnassignFromDevice` or `Delete` (see below) |
+| `ErrLifecycleUnenforced{}` | struct | Operator Disable/Enable on a daemon with no `LifecycleService` (no SDN policy engine); returned by the transports, not by `LifecycleService` |
+| `ErrDeviceNotOnFabric{DeviceID}` | struct | Disable/Enable on a device with no `NetworkPortID` |
+| `ErrLifecycleReasonTooLong{Max}` | struct | Disable reason over `MaxLifecycleReasonLength` bytes after trimming |
+| `ErrLifecycleDependency{Name}` | struct | `NewLifecycleService` given a nil dependency |
 
 **`ProfileService.save` is the one call to `profileDAO.Save`**, and
 **`saveValidated` is the seam every path that can INTRODUCE invalid network
@@ -323,8 +369,11 @@ underlying DAO error — including `quicbaas.ErrNotFoundByIndex`.
 | `AssignToDeviceWithEK` | No identity ⇒ `ErrDeviceIdentityRequired`, before any storage read. |
 | `DeviceState.CanTransitionTo` | Unknown source state ⇒ `ErrInvalidTransition`, not "allow". |
 | `ViolationEvent.Validate` | Unrecognised severity or source ⇒ error, never the lenient branch. |
+| `LifecycleService.Disable` / `Enable` | No engine ⇒ `ErrLifecycleUnenforced`; no port ⇒ `ErrDeviceNotOnFabric`; a disallowed transition, a device that is not suspended, or no quarantine-role zone ⇒ refused before the port is touched. An Enable failure after `UnblockPort` re-blocks the port. |
 | `Handler.Activate` | A switch-move validation error ⇒ HTTP 500 before the SDN policy step; a physical-commit error after enforcement ⇒ HTTP 500 with the port fail-closed on the provisioning VLAN. |
 | `Handler.GetProfile` / `Handler.Activate` | Missing serial in the mTLS-populated context ⇒ 400 `ErrMissingSerial`. The serial is never taken from the request body. |
+| Device IDevID client (`App.newIDevIDClient`: activation and heartbeat) | Refused at construction, never at the handshake: no TPM, IDevID config or platform key store ⇒ `provisioning.ErrMissingCertificate`; no public key ⇒ `app.ErrIDevIDPublicKeyMissing`; unparseable public-key bytes in the key attributes ⇒ `platform.ErrTPMSignerPublicKey`. |
+| Diskless boot (`BootCertificate` / `BootDelivery`) over Unix or MCP | Not a valid channel for boot proofs: neither carries TLS, so there is no exporter to bind the proof to. The SDK refuses with `*transport.ErrChannelBindingUnavailable` before sending; the daemon answers `ErrBootChannelRequired` without calling the boot service. No weaker binding is substituted ([architecture.md §4.5](architecture.md), [api.md §4.6](api.md#46-diskless-boot-delivery-690)). |
 
 **One path is deliberately open:** `prepareSwitchTransition` returns a nil
 move when no switch service is configured or when the context carries no
@@ -391,8 +440,11 @@ Profile-level configuration knobs worth knowing:
   - `FindByMACPrefix` lowercases both the input and the stored `MACPrefix`.
   - `FindBySerialPrefix` uppercases both the input and the stored
     `SerialPrefix`.
-  - `FindMatchingProfile` lowercases the MAC and uppercases the serial before
-    calling `ProfileMatchRules.Matches`.
+  - `FindMatchingProfile` lowercases the MAC and uppercases the serial, and
+    compares them against a copy of the stored rules normalised the same way
+    (MAC prefix lowercase, serial prefixes uppercase) before calling
+    `ProfileMatchRules.Matches`, so a prefix stored as `AA:BB:ce` matches
+    `aa:bb:CE:…`.
   - `FindByEKSerial` and `FindByExactMAC` use `strings.EqualFold`.
   - **`ProfileMatchRules.Matches` itself does no normalisation** — it is a plain
     prefix/equality comparison. Callers that invoke it directly (not through the
@@ -424,6 +476,10 @@ Profile-level configuration knobs worth knowing:
 | Unit — SDN contract | `pkg/device/sdn_integration_test.go` | Event/phase validation |
 | Benchmark | `pkg/device/benchmark_test.go` | Profile matching cost |
 | Transport | `pkg/webservice/v1/device/*_test.go`, `pkg/webservice/v1/rest/device/*_test.go`, `pkg/api/daemon/quic_device_*_test.go`, `pkg/api/mcp/device_profile_dispatch_test.go` | REST routing, QUIC wire compatibility, MCP dispatch |
+| Unit — operator lifecycle (#250) | `pkg/device/lifecycle_test.go`, `pkg/sdn/policy/quarantine_operator_test.go`, `pkg/api/daemon/device_grpc_lifecycle_test.go`, `pkg/webservice/v1/device/lifecycle_handler_test.go`, `pkg/api/mcp/tools_device_lifecycle_test.go`, `pkg/cli/commands/device/lifecycle_test.go`, `pkg/daemon/commands/device_lifecycle_init_test.go`, `pkg/api/grpc/method_permissions_test.go` | Port blocked before the record changes, refusals leave the port untouched, re-block on a failed Enable, gRPC/REST/QUIC/MCP status mapping, unenforced daemon refuses, every DeviceService RPC scoped |
+| Web console | `web/src/lib/device-lifecycle.test.ts`, `web/src/components/features/devices/device-table.test.tsx`, `web/src/app/(dashboard)/devices/[id]/device-detail-client.test.tsx` | The toggle sends the real lifecycle request (never a PUT), a refusal is a destructive toast, `suspended` offers Enable, `revoked` offers nothing |
+| Unit — device mTLS identity (#149) | `pkg/app/idevid_mtls_test.go`, `pkg/app/idevid_activation_test.go`, `pkg/platform/keychain_test.go` | On the go-tpm-tools simulator (needs CGO and OpenSSL headers): the IDevID signs a TLS 1.3 `CertificateVerify` (`TestTPMSigner_IDevIDSignsTLS13ClientCertificateVerify`); activation over mTLS through the real router, middleware, handler, enrollment hook and policy engine authorizes the port, and a foreign-issued certificate changes nothing (`TestDeviceActivation_IDevIDOverMTLS`); PSS options reach the TPM; construction-time signer errors |
+| Integration | `test/integration/device/multiprotocol_test.go` `OperatorLifecycle` | Every adapter (CLI, REST, gRPC, QUIC, MCP, Unix) refuses a device with no switch port and leaves its state unchanged. The enforced path needs an OVS port bound to a device and is covered by the unit tests above |
 
 Fault-injection seams: the DAO interfaces in `pkg/device/dao/types.go` (swap a
 fake `DeviceProfileDAO`), and `deviceProfileClient` in
@@ -440,15 +496,20 @@ exercise the derivation logic without a live daemon."*
   entity id. `Handler.Activate` logs at Error for ARP lookup failure, switch
   VLAN transition failure and port-state transition failure, and at Info on
   success (`"Device %s activated on admitted VLAN %d"`). `commitSwitchTransition`
-  logs the switch, port and VLAN at Info.
+  logs the switch, port and VLAN at Info. `LifecycleService` logs every
+  operator Disable (`"device disabled by operator"`, with the previous state
+  and reason) and Enable (`"device re-enabled by operator into quarantine"`)
+  at Info, and a failed re-attestation request at Warn. A refused transition
+  is logged by the REST handler at Error.
 - **Metrics.** `pkg/device` declares none.
 - **Audit.** `pkg/device` writes no audit records itself.
 - **Redaction.** `pkg/config/snapshot.go` redacts any config key whose name
   contains `password`, `secret`, `token`, `private` and similar substrings,
   substituting `••••`. `BMCConfig.Password` is additionally tagged
   `secret:"true"`. Note that `pkg/bootstrap.SecretStructTag` (the constant
-  naming that tag) has **no consumer in non-test code** — the tag is currently
-  declarative. Do not assume a resolver walks it.
+  naming that tag) has one consumer, `bootstrap.PlaintextSecretFields`, which
+  the diskless image build uses to refuse plaintext secrets in the installed
+  platform config. No resolver or redactor walks it.
 - **Never log**: `DeviceProfile.BMC.Password`, and the delivered
   `DeviceProfile.Config` (it is a full platform configuration and may embed
   secret references).

@@ -719,12 +719,17 @@ func TestChainManager_GetStatistics(t *testing.T) {
 			{WorkloadType: WorkloadTypeVM, WorkloadID: "v2", ImageDigest: "d5"},
 		}
 
+		// Each entry is stamped one second after the previous one.
+		first := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+		current := first
+		cm.(*chainManager).now = func() time.Time { return current }
 		for _, m := range measurements {
 			if _, err := cm.ExtendPCR(ctx, m); err != nil {
 				t.Fatalf("ExtendPCR failed: %v", err)
 			}
-			time.Sleep(time.Millisecond) // Ensure different timestamps
+			current = current.Add(time.Second)
 		}
+		last := first.Add(time.Duration(len(measurements)-1) * time.Second)
 
 		stats := cm.GetStatistics()
 		if stats.TotalEntries != 5 {
@@ -736,8 +741,11 @@ func TestChainManager_GetStatistics(t *testing.T) {
 		if stats.ContainerCount != 3 {
 			t.Errorf("ContainerCount = %d, want 3", stats.ContainerCount)
 		}
-		if stats.FirstEntryTime.After(stats.LastEntryTime) {
-			t.Error("FirstEntryTime should be before LastEntryTime")
+		if !stats.FirstEntryTime.Equal(first) {
+			t.Errorf("FirstEntryTime = %v, want %v", stats.FirstEntryTime, first)
+		}
+		if !stats.LastEntryTime.Equal(last) {
+			t.Errorf("LastEntryTime = %v, want %v", stats.LastEntryTime, last)
 		}
 		if len(stats.CurrentPCRValue) != 32 {
 			t.Errorf("CurrentPCRValue length = %d, want 32", len(stats.CurrentPCRValue))

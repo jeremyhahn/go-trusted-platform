@@ -53,22 +53,14 @@ func Connect(ctx context.Context, opts *platform.Options) (transport.Adapter, er
 	// Build dial options - TLS is mandatory for gRPC transport
 	var dialOpts []grpc.DialOption
 
-	var tlsConfig *tls.Config
-	if opts.TLSConfig != nil {
-		tlsConfig = opts.TLSConfig.Clone()
-		if tlsConfig.MinVersion < tls.VersionTLS13 {
-			tlsConfig.MinVersion = tls.VersionTLS13
-		}
-	} else {
-		// Use system certificate pool with TLS 1.3 minimum
-		tlsConfig = &tls.Config{
-			MinVersion: tls.VersionTLS13,
-		}
-	}
-	if opts.TLSServerName != "" {
-		tlsConfig.ServerName = opts.TLSServerName
-	}
-	dialOpts = append(dialOpts, grpc.WithTransportCredentials(credentials.NewTLS(tlsConfig)))
+	// The recorded handshake state lets calls bound to their channel
+	// (transport.WithChannelBinding) read the exporter of the connection
+	// they travel on.
+	handshake := &atomic.Pointer[tls.ConnectionState]{}
+	dialOpts = append(dialOpts,
+		grpc.WithTransportCredentials(&recordingCreds{TransportCredentials: credentials.NewTLS(opts.ClientTLSConfig()), state: handshake}),
+		grpc.WithChainUnaryInterceptor(bindingInterceptor(handshake)),
+	)
 
 	dialOpts = append(dialOpts, grpc.WithDefaultCallOptions(
 		grpc.MaxCallRecvMsgSize(maxMsgSize),

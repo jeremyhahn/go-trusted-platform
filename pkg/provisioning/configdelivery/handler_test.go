@@ -33,6 +33,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	devicewire "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/device"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/restwire"
 )
 
 func testHandler(t *testing.T) (RestHandler, *Service) {
@@ -83,7 +84,7 @@ func TestHandler_GetNonce(t *testing.T) {
 		t.Fatalf("expected status 200, got %d", w.Code)
 	}
 
-	var resp response.WebServiceResponse
+	var resp restwire.WebServiceResponse
 	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("failed to decode response: %v", err)
 	}
@@ -101,7 +102,7 @@ func TestHandler_GetNonce_ReturnsNonceField(t *testing.T) {
 
 	h.GetNonce(w, req)
 
-	var resp response.WebServiceResponse
+	var resp restwire.WebServiceResponse
 	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("failed to decode response: %v", err)
 	}
@@ -175,7 +176,7 @@ func TestHandler_FetchConfig_Found(t *testing.T) {
 		t.Fatalf("expected status 200, got %d", w.Code)
 	}
 
-	var resp response.WebServiceResponse
+	var resp restwire.WebServiceResponse
 	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("failed to decode response: %v", err)
 	}
@@ -216,7 +217,7 @@ func TestHandler_FetchConfig_Pending(t *testing.T) {
 		t.Fatalf("expected status 200, got %d", w.Code)
 	}
 
-	var resp response.WebServiceResponse
+	var resp restwire.WebServiceResponse
 	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("failed to decode response: %v", err)
 	}
@@ -269,7 +270,7 @@ func TestHandler_PollSession_Pending(t *testing.T) {
 		t.Fatalf("expected status 200, got %d", w.Code)
 	}
 
-	var resp response.WebServiceResponse
+	var resp restwire.WebServiceResponse
 	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("failed to decode response: %v", err)
 	}
@@ -306,7 +307,7 @@ func TestHandler_PollSession_Fulfilled(t *testing.T) {
 		t.Fatalf("expected status 200, got %d", w.Code)
 	}
 
-	var resp response.WebServiceResponse
+	var resp restwire.WebServiceResponse
 	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("failed to decode response: %v", err)
 	}
@@ -346,7 +347,7 @@ func TestHandler_PollSession_FulfilledWithoutProfile(t *testing.T) {
 		t.Fatalf("expected status 500, got %d", w.Code)
 	}
 
-	var resp response.WebServiceResponse
+	var resp restwire.WebServiceResponse
 	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("failed to decode response: %v", err)
 	}
@@ -455,6 +456,32 @@ func TestHandler_FulfillSession_NotFound(t *testing.T) {
 
 	if w.Code != http.StatusNotFound {
 		t.Fatalf("expected status 404, got %d", w.Code)
+	}
+}
+
+func TestHandler_FulfillSession_ZeroProfileID(t *testing.T) {
+	h, svc := testHandlerWithDeps(t, &mockProfileResolver{}, &mockEABService{})
+
+	for name, body := range map[string]string{
+		"zero":    `{"profile_id": 0}`,
+		"missing": `{}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			session := svc.CreateSession("ek-1", "aa:bb:cc:dd:ee:01")
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/provision/sessions/"+session.ID+"/fulfill", strings.NewReader(body))
+			req.Header.Set("Accept", "application/json")
+			req = mux.SetURLVars(req, map[string]string{"sessionID": session.ID})
+			w := httptest.NewRecorder()
+
+			h.FulfillSession(w, req)
+
+			if w.Code != http.StatusBadRequest {
+				t.Fatalf("expected status 400, got %d", w.Code)
+			}
+			if !strings.Contains(w.Body.String(), ErrProfileIDRequired{}.Error()) {
+				t.Fatalf("body = %s, want the ErrProfileIDRequired text", w.Body.String())
+			}
+		})
 	}
 }
 

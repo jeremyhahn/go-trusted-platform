@@ -83,7 +83,7 @@ firmware. No authentication on any of them; see
 | Direction | Content |
 |---|---|
 | In | `DISCOVER` / `REQUEST`. Client type is read from option 60 (`PXEClient` prefix) or the presence of option 93; iPXE is read from option 77 user class `iPXE` |
-| Out | `yiaddr` from the `IPAllocator`; `siaddr` = server IP; `file` = the arch-selected boot filename, or the iPXE script URL for an iPXE client; option 1 subnet mask; option 3 router when `DHCPGateway` set; option 6 DNS when `DHCPDNS` set; option 51 lease time; **option 60 `PXEClient`**; **option 43 = `{0x06, 0x01, 0x08, 0xFF}`** |
+| Out | `yiaddr` from the `IPAllocator`; `siaddr` = server IP; `file` = the arch-selected boot filename, or the iPXE script URL for an iPXE client; option 1 subnet mask; option 3 router when `DHCPGateway` set; option 6 with every `DHCPDNS` server, in order, when the list is non-empty; option 51 lease time; **option 60 `PXEClient`**; **option 43 = `{0x06, 0x01, 0x08, 0xFF}`** |
 
 Option-93 to boot filename:
 
@@ -95,7 +95,9 @@ Option-93 to boot filename:
 | `0x0009` UEFI byte code | `ipxe.efi` |
 | anything else | `ServerConfig.BootFilename` (default `ipxe.efi`) |
 
-Non-PXE clients are ignored unless `DHCPRespondToAll` is set.
+Non-PXE clients are ignored unless `DHCPRespondToAll` is set. A packet whose
+`chaddr` is empty or all zeros is ignored whatever its type: leases are keyed
+on the hardware address.
 
 ### 3.2 TFTP — UDP 69
 
@@ -120,7 +122,11 @@ what `/boot.ipxe` chains; and it runs its own `http.Server` on
 known MAC gets the same script from both (one lookup, one generator); an
 unknown MAC gets a 404 here and, on the second listener, a script that chains
 `/boot.ipxe`. That listener is where a port conflict on the deployer kills
-pxeboot, which is why the port is configurable rather than derived-only.
+pxeboot, which is why the port is configurable rather than derived-only. It
+also serves `GET /boot/uki/{mac}.efi`, an installed `diskless-nbd` node's UKI
+read from its NBD export, which that node's device script boots
+([bootstrap engineering](../bootstrap/engineering.md#the-diskless-nbd-runtime-path));
+this server has no such route.
 
 | Method | Path | Purpose | Registered when |
 |---|---|---|---|
@@ -131,7 +137,7 @@ pxeboot, which is why the port is configurable rather than derived-only.
 | GET | `/health` | Liveness | always |
 | GET | `/static/*` | Static files | always |
 | GET | `/files/*` | Files under `LocalFilesDir` | `LocalFilesDir != ""` |
-| GET | `/data/*` | Files under `DataDir` — kernel, initramfs, ISOs | `DataDir != ""` |
+| GET | `/data/*` | Files under `DataDir` — kernel, initramfs, ISOs, and the Raspberry Pi's signed HTTP boot files (`/data/http-boot/{boot.img,boot.sig}`, the EEPROM's `HTTP_PATH=data/http-boot`) | `DataDir != ""` |
 | GET | `/media/status` | Open files under `DataDir` with read offsets and opener process names — the orchestrator's evidence that a virtual-media host is reading the ISO | always (503 if `DataDir == ""`, 405 on any other method) |
 | GET | `/proxy/https/{host}/{path}` | HTTPS→HTTP relay for iPXE | always |
 | PUT | `/installs/{hostname}/{filename}` | Install-log upload | always |
@@ -248,12 +254,19 @@ who arrived here can find them:
 
 | Capability group | REST base | gRPC | QUIC | MCP |
 |---|---|---|---|---|
-| Device lifecycle — register, list, get, get-by-MAC, remove, update state, set enrolled | `/api/v1/pxe/devices` | `PXEService` | `0xEC`–`0xEF`, `0xFC`–`0xFF` | `pxe_*` |
-| **Authorize / quarantine / retry** | `/api/v1/pxe/devices/{id}/…` | `PXEService` | as above | `pxe_authorize_device`, `pxe_quarantine_device`, `pxe_retry_device` |
-| Events | `GET /api/v1/pxe/devices/{id}/events` | `GetEvents` | as above | `pxe_get_device_events` |
-| Service status / start / stop | `/api/v1/pxe/status`, `/start`, `/stop` | `GetStatus`, `StartService`, `StopService` | as above | `pxe_service_status`, `pxe_start_service`, `pxe_stop_service` |
-| Install-complete webhook | `POST /api/v1/pxe/webhook/complete` | `WebhookComplete` | as above | `pxe_webhook_complete` |
-| Gateway-side provisioning | — | `ProvisioningGateway` (4 RPCs) | — | — |
+| Device lifecycle — register, list, get, get-by-MAC, remove, update state, set enrolled | `/api/v1/pxe/devices` | `PXEService` | `0xEC`–`0xEF`, remove `0xFF`; get-by-MAC and set-enrolled `0xCF` subs `0x30`, `0x31` | `pxe_*` |
+| **Authorize / quarantine / retry** | `/api/v1/pxe/devices/{id}/…` | `PXEService` | `0xFC`, `0xFD`, `0xFE` | `pxe_authorize_device`, `pxe_quarantine_device`, `pxe_retry_device` |
+| Events | `GET /api/v1/pxe/devices/{id}/events` | `GetEvents` | `0xCF` sub `0x32` | `pxe_get_device_events` |
+| Service status / start / stop | `/api/v1/pxe/status`, `/start`, `/stop` | `GetStatus`, `StartService`, `StopService` | `0xCF` subs `0x33`, `0x34`, `0x35` | `pxe_service_status`, `pxe_start_service`, `pxe_stop_service` |
+| Install-complete webhook | `POST /api/v1/pxe/webhook/complete` | `WebhookComplete` | `0xCF` sub `0x36` | `pxe_webhook_complete` |
+| Gateway-side provisioning — register, state, install complete | `/api/v1/provisioning/devices/{mac}/…` ([provisioning api.md](../provisioning/api.md) §4) | `ProvisioningGateway` (4 RPCs) | — | — |
+
+**The install-complete webhook route exists only when the operator sets
+`pxe.ServiceConfig.WebhookEnabled`** (default `false`). Disabled, the path is
+not registered and answers 404 like any unknown path. Enabled, it is
+**unauthenticated**: the caller is a booting node that presents no credential,
+and the device is identified by the MAC in the request body. What a booting
+node should present is #238; `WebhookSecret` is reserved for it and unused.
 
 **The `REST base` column is a locator, not the contract.** It gives the prefix a
 route hangs under; it does not give the route. The normative per-route path
@@ -275,11 +288,20 @@ and an unimplemented route are indistinguishable from the client, and the
 client cannot tell it guessed. Record the method beside the path or this
 recurs.
 
-**Correction to carry upstream.** `docs/provisioning/api.md` §1 records the PXE
-QUIC opcodes as `0xFC`–`0xFF`. `pkg/api/quic/protocol.go` also defines
-`OpPXEListDevices` `0xEC`, `OpPXEGetDevice` `0xED`, `OpPXERegisterDevice` `0xEE`
-and `OpPXEUpdateState` `0xEF` — eight, not four. Raised against
-`docs/provisioning/`, which owns that table.
+The SDK's own REST transport guessed too, until #452. It sent `UpdateState`,
+`Authorize` and `Quarantine` to `…/devices/state`, `…/devices/authorize` and
+`…/devices/quarantine` with the device in the body, and no router serves those
+paths. It now claims the normative item routes. The device id travels only in
+the path (the templated rows in `sdk/go/transport/rest/adapter.go`), and a
+request without one is refused with `InvalidArgument` before it is sent.
+
+**QUIC carries all fifteen (#704).** Eight methods have a direct opcode in
+`sdk/go/wire/quicwire/protocol.go` (`0xEC`–`0xEF`, `0xFC`–`0xFF`); the other
+seven ride the provisioning category `0xCF` as subs `0x30`–`0x36`
+(`sdk/go/wire/quicwire/pxe_opcodes.go`). The daemon dispatches every one through
+a map to the gRPC servicer (`pkg/api/daemon/quic_pxe.go`), and the SDK QUIC
+adapter maps all fifteen (`sdk/go/transport/quic/aab_pxe.go`). The per-method
+opcode is in [`docs/provisioning/api.md`](../provisioning/api.md) §2.
 
 ---
 
@@ -291,14 +313,51 @@ in §3. A client is identified by a MAC address it asserts, and
 `installer.yaml`. The control is the network segment; see
 [architecture.md](architecture.md) §6.
 
-**None on the control plane either.** `PXEService` is not in the gRPC scope
-catalog (`pkg/api/grpc/method_permissions.go` covers 185 methods across eleven
-services; `PXEService` is not among them), and no `pxe_*` tool is in the MCP
-authorization map. A method absent from the catalog *"carries no required scope:
-the interceptor allows it once the token is validated"*. So **any validated
-token can authorize or quarantine a PXE device.** Recorded, with the same
-framing, in [`docs/provisioning/api.md`](../provisioning/api.md) §6 — that is
-the folder that owns the question.
+**The control plane is scoped on gRPC.** Both catalogs are default-deny
+([`docs/auth/architecture.md`](../auth/architecture.md)), and every `PXEService`
+RPC is in the gRPC scope catalog (`pkg/api/grpc/method_permissions.go`):
+
+| Permission | RPCs |
+|---|---|
+| `pxe:read` | `GetDevice`, `GetDeviceByMAC`, `GetEvents`, `GetStatus`, `ListDevices` |
+| `pxe:write` | `Authorize`, `Quarantine`, `RegisterDevice`, `Retry`, `SetDeviceEnrolled`, `StartService`, `StopService`, `UpdateState`, `WebhookComplete` |
+| `pxe:delete` | `RemoveDevice` |
+
+Authorizing or quarantining a PXE device therefore needs `pxe:write`.
+
+**QUIC and MCP take the same scopes (#704).** Each QUIC opcode and `0xCF` sub
+carries the scope of its RPC (`pkg/api/quic/opcode_permissions.go`), and each of
+the fifteen `pxe_*` MCP tools is classified with it (`pkg/api/mcp/pxe_tools.go`);
+a caller without the scope is refused before the service is reached.
+
+**REST takes the same scopes (#452).** Behind the platform-token middleware each
+operator route takes, on top of the admin role gate, the scope its RPC takes on
+gRPC; a token without it gets `403`. The route table names the RPC and reads the
+scope from the gRPC catalog (`pkg/webservice/v1/rest/pxe/router.go`), so the two
+cannot drift. Under the legacy JWT handler, which carries roles and no scopes,
+the role gate alone applies.
+
+| Route | RPC | Scope |
+|---|---|---|
+| `GET /api/v1/pxe/status` | `GetStatus` | `pxe:read` |
+| `POST /api/v1/pxe/start` | `StartService` | `pxe:write` |
+| `POST /api/v1/pxe/stop` | `StopService` | `pxe:write` |
+| `GET /api/v1/pxe/devices` | `ListDevices` | `pxe:read` |
+| `POST /api/v1/pxe/devices` | `RegisterDevice` | `pxe:write` |
+| `GET /api/v1/pxe/devices/mac/{mac}` | `GetDeviceByMAC` | `pxe:read` |
+| `GET /api/v1/pxe/devices/{id}` | `GetDevice` | `pxe:read` |
+| `DELETE /api/v1/pxe/devices/{id}` | `RemoveDevice` | `pxe:delete` |
+| `PUT /api/v1/pxe/devices/{id}/state` | `UpdateState` | `pxe:write` |
+| `POST /api/v1/pxe/devices/{id}/enrolled` | `SetDeviceEnrolled` | `pxe:write` |
+| `POST /api/v1/pxe/devices/{id}/authorize` | `Authorize` | `pxe:write` |
+| `POST /api/v1/pxe/devices/{id}/quarantine` | `Quarantine` | `pxe:write` |
+| `POST /api/v1/pxe/devices/{id}/retry` | `Retry` | `pxe:write` |
+| `GET /api/v1/pxe/devices/{id}/events` | `GetEvents` | `pxe:read` |
+
+`POST /api/v1/pxe/webhook/complete` takes neither the admin gate nor a scope:
+its caller is a booting node, and it presents no credential (#238). It is the
+one PXE route wider than its RPC, `WebhookComplete`, which needs `pxe:write`. [`docs/provisioning/api.md`](../provisioning/api.md) §6
+covers the provisioning half of the control plane.
 
 ---
 

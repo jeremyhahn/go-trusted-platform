@@ -23,7 +23,7 @@ import (
 	restregistry "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/registry"
 	"net/http"
 	"net/http/httptest"
-	"sort"
+	"slices"
 	"strings"
 	"testing"
 
@@ -39,14 +39,19 @@ import (
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	trustedca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/acme"
 	grpcapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/api/healthprobe"
+	restapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/rest"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/common"
 	devicepkg "github.com/jeremyhahn/go-trusted-platform/pkg/device"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/dns"
+	dnsentities "github.com/jeremyhahn/go-trusted-platform/pkg/dns/entities"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/health"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/platform"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/platform/service"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/provisioning/configdelivery"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore/entities"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/testutil"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/vtpm"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/adminclaim"
 	webdevice "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/device"
@@ -129,6 +134,13 @@ type stubComputeServer struct {
 type stubRegistryService struct{ grpcapi.RegistryService }
 
 type stubDNSService struct{ dns.DNSService }
+
+// Zone serves no zone, so an admitted DNS probe answers from its handler
+// instead of reaching the nil embedded service.
+func (s *stubDNSService) Zone(context.Context, string) (*dnsentities.Zone, error) {
+	return nil, dns.ErrZoneNotFound
+}
+
 type stubSwitchService struct {
 	webdevice.SwitchServiceProvider
 }
@@ -139,6 +151,10 @@ type stubEABServer struct {
 
 type stubNTPServer struct {
 	platformv1.UnimplementedNTPServiceServer
+}
+
+type stubVPNServer struct {
+	platformv1.UnimplementedVPNServiceServer
 }
 
 type stubOverlayServer struct {
@@ -227,7 +243,9 @@ type probePEP struct{ restiam.PEPClient }
 //     new-nonce and CA-bundle routes are public by protocol; every other route
 //     is JWS-authenticated inside the xkms ACME server (docs/ca/api.md §5).
 //   - probeDeviceHandler registers the mTLS-verified /device/{profile,
-//     activate,heartbeat} (router/device.go RegisterMachineFacingRoutes).
+//     activate,heartbeat} (router/device.go RegisterMachineFacingRoutes);
+//     probeBootHandler adds the diskless per-boot POST /device/boot behind
+//     the same middleware (#690).
 //     The middleware in front of it is the REAL middleware.NewMTLSMiddleware
 //     over an empty pool, not a double: a plain-HTTP probe is refused 401 by
 //     the same code path production runs, so the refusal under test is
@@ -243,6 +261,7 @@ type probePEP struct{ restiam.PEPClient }
 //     asserts for a ceremony route.
 type probeACME struct{ trustedca.ACMERestServicer }
 type probeDeviceHandler struct{ webdevice.RestHandler }
+type probeBootHandler struct{ webdevice.BootHandler }
 type probeClaimCeremony struct{ adminclaim.FIDO2Ceremony }
 type probeClaimFactors struct{ adminclaim.FactorLister }
 type probeClaimUsers struct{ service.UserServicer }
@@ -283,7 +302,9 @@ func newGatedTestRouter(t *testing.T, registry *testHandlerRegistry) *mux.Router
 	respWriter := response.NewResponseWriter(logger, nil)
 	registry.responseWriter = respWriter
 	registry.tpmService = &stubTPMServer{}
-	registry.tenantService = &stubTenantServer{}
+	if registry.tenantService == nil {
+		registry.tenantService = &stubTenantServer{}
+	}
 	registry.idevidService = &stubIDevIDServer{}
 	registry.vtpmService = &stubVTPMService{}
 	registry.kmsKeyMgmt = &stubKMSClient{}
@@ -296,6 +317,14 @@ func newGatedTestRouter(t *testing.T, registry *testHandlerRegistry) *mux.Router
 	registry.dnsService = &stubDNSService{}
 	registry.eabService = &stubEABServer{}
 	registry.ntpService = &stubNTPServer{}
+	registry.vpnService = &stubVPNServer{}
+	if registry.appServices == (restapi.AppServiceServers{}) {
+		registry.appServices = restapi.AppServiceServers{
+			Cache:     &countingCacheServer{},
+			Scheduler: &countingSchedulerServer{},
+			Messaging: &countingMessagingServer{},
+		}
+	}
 	registry.overlayService = &stubOverlayServer{}
 	registry.switchService = &stubSwitchService{}
 	registry.sdnService = &stubSDNServer{}
@@ -303,6 +332,9 @@ func newGatedTestRouter(t *testing.T, registry *testHandlerRegistry) *mux.Router
 	registry.gatewayStore = &stubGatewayStore{}
 	registry.configDelivery = &stubConfigDelivery{}
 	registry.pxeService = &stubPXEServer{}
+	// The audit covers every route the platform can serve, so it mounts
+	// the install-completion webhook too; operators turn it on (#238).
+	registry.pxeWebhookEnabled = true
 	registry.attestationService = &stubAttestationServer{}
 	registry.deviceGRPCService = &stubDeviceGRPCServer{}
 	registry.deviceTemplateService = &stubDeviceTemplateService{}
@@ -313,13 +345,17 @@ func newGatedTestRouter(t *testing.T, registry *testHandlerRegistry) *mux.Router
 	registry.webauthn = &mockWebAuthnHandler{}
 	registry.acmeService = &probeACME{}
 	registry.deviceHandler = &probeDeviceHandler{}
+	registry.bootHandler = &probeBootHandler{}
 	registry.mtls = middleware.NewMTLSMiddleware(logger, respWriter, x509.NewCertPool())
 	registry.adminClaim = adminClaimFixture(t, logger, respWriter)
 	registry.tenantID = "system"
 
 	v1Router := NewRouter(logger, &stubCA{}, nil, nil, registry, respWriter)
 
+	// Both halves, as webserver_v1.go mounts them: the root carries the
+	// health probes the SDK's PlatformDaemon claims resolve to.
 	root := mux.NewRouter()
+	require.NoError(t, v1Router.RegisterRootRoutes(root))
 	v1Router.RegisterRoutes(root.PathPrefix("/api/v1").Subrouter())
 	return root
 }
@@ -346,7 +382,7 @@ const probeHandlerReached = 599
 
 func probe(router *mux.Router, method, template string) int {
 	return serve(router,
-		httptest.NewRequest(method, concreteFor(template), nil))
+		httptest.NewRequest(method, testutil.ConcreteFor(template), nil))
 }
 
 // serve runs one request through the router and reports the status the wire
@@ -378,7 +414,7 @@ func denied(code int) bool {
 		code == http.StatusNotFound
 }
 
-// publicRoutes is the complete set of v1 routes that answer a caller
+// publicRoutes is the complete set of v1 and root routes that answer a caller
 // holding no credential, WITH the reason each one must. It is the
 // artifact #165 asks for: an unexplained public route is the defect, so a
 // route may only leave the gate by acquiring a line here.
@@ -463,6 +499,23 @@ var publicRoutes = map[string]string{
 	// flow is still open, so the console can route a fresh node to its setup
 	// page").
 	"GET /api/v1/admin/claim/status": "admin-claim status: whether the one-time claim is still open; no secret disclosed (docs/auth/api.md §2b).",
+
+	// A diskless node's IDevID chain (#690; docs/device/api.md). The node
+	// keeps no disk, so it fetches its own chain before it can present it in
+	// the mTLS handshake that POST /device/boot demands. It authenticates in
+	// the request instead: a signature by the TPM-resident IDevID key over
+	// the connection, checked against the recorded chain. Every other
+	// request is refused alike, so a name alone learns nothing.
+	"POST /api/v1/device/boot/certificate": "a diskless node's IDevID chain, released for proof of its TPM-resident key over the connection, needed before it can present that chain over mTLS (docs/device/api.md).",
+
+	// The health probes at the host root (docs/health/api.md §7). Load
+	// balancers, orchestrators and the SDK's Connect probe reach them before
+	// any credential exists. The bodies carry the verdict only; the
+	// component breakdown stays behind the admin chain at
+	// /api/v1/platform/health.
+	"GET /health":       "aggregate health for load balancers and the SDK's GetHealth; status only, 503 unless healthy.",
+	"GET /health/live":  "liveness for orchestrators and the SDK's Connect probe; answers whenever the process does.",
+	"GET /health/ready": "readiness for orchestrators; status only, 503 while a checker is unhealthy.",
 }
 
 // pendingRoutes is the rest of #165: routes still reachable without a
@@ -498,12 +551,14 @@ var pendingRoutes = map[string]string{
 	// than gated, because implementing the ruled seam is that issue's work,
 	// not #165's.
 	//
-	// The third route, POST /devices/templates/{id:[0-9]+}/create-profile,
+	// The second route, POST /devices/templates/{id:[0-9]+}/create-profile,
 	// was believed not to appear in the walk. It does -- it is in the golden
 	// -- and the audit passed it only because the old probe could not reach
 	// a numeric-pattern route (#420). It is reachable, unauthenticated, and
-	// carries the same ruling as the other two.
-	"GET /api/v1/devices/config":                                "#121/#176 — bootstrap seeder; ruled to present admin@system over mTLS.",
+	// carries the same ruling as the first.
+	//
+	// The seeder's GET /devices/config is not in this table: it is mounted
+	// only on the provisioning surface, never on the full one (#177).
 	"POST /api/v1/devices/templates":                            "#121/#176 — bootstrap seeder; ruled to present admin@system over mTLS.",
 	"POST /api/v1/devices/templates/{id:[0-9]+}/create-profile": "#121/#176 — bootstrap seeder; ruled to present admin@system over mTLS. Hidden from the audit until #420 made the probe pattern-aware.",
 
@@ -513,7 +568,8 @@ var pendingRoutes = map[string]string{
 	// campaign left open it presents NO credential and the server checks
 	// none: the device is identified by a MAC address taken from the request
 	// body. Choosing what a booting node should present is an architecture
-	// decision, so #165 could not close it. See #238.
+	// decision, so #165 could not close it. See #238. Until then it is
+	// mounted only when the operator sets pxe.ServiceConfig.WebhookEnabled.
 	"POST /api/v1/pxe/webhook/complete": "#238 — authenticates nobody; identifies the device by an attacker-supplied MAC.",
 
 	// /provisioning was split by principal in slice 3: the session views and
@@ -563,37 +619,6 @@ var pendingRoutes = map[string]string{
 	// claim token the verify step issues, and the walk sees them refuse.
 	"POST /api/v1/admin/claim/challenge": "admin claim: issues a possession nonce; pre-auth by necessity (docs/auth/architecture.md §6b).",
 	"POST /api/v1/admin/claim/verify":    "admin claim: exchanges the certificate proof for a claim token; the proof is the credential.",
-}
-
-// walkRoutes returns every "METHOD /template" the finished table exposes.
-func walkRoutes(t *testing.T, router *mux.Router) []string {
-	t.Helper()
-
-	seen := map[string]bool{}
-	require.NoError(t, router.Walk(
-		func(route *mux.Route, _ *mux.Router, _ []*mux.Route) error {
-			template, err := route.GetPathTemplate()
-			if err != nil {
-				return nil
-			}
-			methods, err := route.GetMethods()
-			if err != nil || len(methods) == 0 {
-				// A route with no method matcher answers all of them;
-				// GET is enough to establish whether it is gated.
-				methods = []string{http.MethodGet}
-			}
-			for _, method := range methods {
-				seen[method+" "+template] = true
-			}
-			return nil
-		}))
-
-	out := make([]string, 0, len(seen))
-	for route := range seen {
-		out = append(out, route)
-	}
-	sort.Strings(out)
-	return out
 }
 
 // =============================================================================
@@ -660,7 +685,7 @@ func walkRoutes(t *testing.T, router *mux.Router) []string {
 func TestRegisterRoutes_EveryRouteDeniesWithoutCredential(t *testing.T) {
 	router := newGatedTestRouter(t, &testHandlerRegistry{tokenHandler: &anonymousAuth{}})
 
-	for _, route := range walkRoutes(t, router) {
+	for _, route := range testutil.WalkRoutes(t, router) {
 		method, template := splitRoute(route)
 		if _, ok := publicRoutes[route]; ok {
 			continue
@@ -683,35 +708,39 @@ func TestRegisterRoutes_EveryRouteDeniesWithoutCredential(t *testing.T) {
 // never sees them. That blind spot is exactly where /v2 shipped
 // unauthenticated (#549): a comment excused it as attestation-gated and no
 // test could contradict the comment. This walk can. Every route the root
-// router carries must refuse a credential-free request; there is no public
-// list, because nothing at the root is public by design — a registry
-// client that reaches an ungated /v2/ is a client that could push.
+// router carries must refuse a credential-free request except the health
+// probes declared in publicRoutes, which carry a verdict and nothing else — a
+// registry client that reaches an ungated /v2/ is a client that could push.
 func TestRegisterRootRoutes_EveryRouteDeniesWithoutCredential(t *testing.T) {
 	root := newRootTestRouter(t, &testHandlerRegistry{
 		tokenHandler:   &anonymousAuth{},
 		ociDistBackend: &stubOCIDistBackend{},
 	})
 
-	routes := walkRoutes(t, root)
+	routes := testutil.WalkRoutes(t, root)
 	require.NotEmpty(t, routes, "the root fixture mounted nothing, so it proves nothing")
 	for _, route := range routes {
+		if _, ok := publicRoutes[route]; ok {
+			continue
+		}
 		method, template := splitRoute(route)
 		code := probe(root, method, template)
 		// Stricter than denied(): every root route addresses a handler, so
 		// a 404 here would mean the mount vanished, not that it refused.
 		assert.True(t, code == http.StatusUnauthorized || code == http.StatusForbidden,
 			"%s answered %d to a request carrying no credential. Root mounts go through "+
-				"RegisterRootRoutes behind the caller gate and admin chain; nothing at the root is public.",
+				"RegisterRootRoutes behind the caller gate and admin chain; only publicRoutes is public.",
 			route, code)
 	}
 }
 
-// TestRegisterRootRoutes_NilBackendMountsNothing pins the other half of the
-// contract: with no distribution backend the registry is not configured on
-// this node, and the root carries no /v2 at all — not an ungated one.
-func TestRegisterRootRoutes_NilBackendMountsNothing(t *testing.T) {
+// TestRegisterRootRoutes_NilBackendMountsOnlyTheProbes pins the other half of
+// the contract: with no distribution backend the registry is not configured
+// on this node, and the root carries no /v2 at all — not an ungated one —
+// only the health probes.
+func TestRegisterRootRoutes_NilBackendMountsOnlyTheProbes(t *testing.T) {
 	root := newRootTestRouter(t, &testHandlerRegistry{tokenHandler: &anonymousAuth{}})
-	assert.Empty(t, walkRoutes(t, root))
+	assert.ElementsMatch(t, probeRoutes, testutil.WalkRoutes(t, root))
 }
 
 // newRootTestRouter builds the v1 router on the same fixture as
@@ -731,6 +760,70 @@ func newRootTestRouter(t *testing.T, registry *testHandlerRegistry) *mux.Router 
 	return root
 }
 
+// probeRoutes are the health probes RegisterRootRoutes mounts whether or not
+// a distribution backend is configured.
+var probeRoutes = []string{
+	"GET " + healthprobe.HealthPath,
+	"GET " + healthprobe.LivenessPath,
+	"GET " + healthprobe.ReadinessPath,
+}
+
+// fixedHealthChecker reports a fixed status under a name, message and detail
+// no probe body may carry.
+type fixedHealthChecker struct {
+	name   string
+	status health.HealthStatus
+}
+
+func (c *fixedHealthChecker) Name() string { return c.name }
+
+func (c *fixedHealthChecker) Check(ctx context.Context) health.ComponentHealth {
+	return health.ComponentHealth{
+		Name:    c.name,
+		Status:  c.status,
+		Message: "secret-message-" + c.name,
+		Details: map[string]interface{}{"address": "10.9.8.7"},
+	}
+}
+
+// The probes the webservice listener mounts at the root answer a caller with
+// no credential, 503 when the probe fails, and name no component.
+func TestRegisterRootRoutes_HealthProbesAnswerWithoutCredential(t *testing.T) {
+	cases := map[health.HealthStatus]map[string]int{
+		health.StatusHealthy: {
+			healthprobe.HealthPath: http.StatusOK, healthprobe.LivenessPath: http.StatusOK, healthprobe.ReadinessPath: http.StatusOK},
+		health.StatusDegraded: {
+			healthprobe.HealthPath: http.StatusServiceUnavailable, healthprobe.LivenessPath: http.StatusOK, healthprobe.ReadinessPath: http.StatusOK},
+		health.StatusUnhealthy: {
+			healthprobe.HealthPath: http.StatusServiceUnavailable, healthprobe.LivenessPath: http.StatusOK, healthprobe.ReadinessPath: http.StatusServiceUnavailable},
+	}
+	for status, want := range cases {
+		t.Run(string(status), func(t *testing.T) {
+			registry := health.NewRegistry()
+			t.Cleanup(func() {
+				if err := registry.Close(); err != nil {
+					t.Errorf("Close: %v", err)
+				}
+			})
+			require.NoError(t, registry.Register(&fixedHealthChecker{name: "component-ca", status: health.StatusHealthy}))
+			require.NoError(t, registry.Register(&fixedHealthChecker{name: "component-kms", status: status}))
+			root := newRootTestRouter(t, &testHandlerRegistry{
+				tokenHandler:   &anonymousAuth{},
+				healthRegistry: registry,
+			})
+
+			for path, code := range want {
+				recorder := httptest.NewRecorder()
+				root.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, path, nil))
+				assert.Equal(t, code, recorder.Code, "GET %s", path)
+				for _, leak := range []string{"component-", "secret-message", "10.9.8.7"} {
+					assert.NotContains(t, recorder.Body.String(), leak, "GET %s leaks %q", path, leak)
+				}
+			}
+		})
+	}
+}
+
 // stubOCIDistBackend mounts /v2 in the root fixture. Its methods are never
 // reached by a credential-free probe; a probe that reaches one has already
 // failed the audit, and the panic is reported as probeHandlerReached.
@@ -745,7 +838,7 @@ func TestRegisterRoutes_EveryDeclaredOpenRouteIsActuallyOpen(t *testing.T) {
 	router := newGatedTestRouter(t, &testHandlerRegistry{tokenHandler: &anonymousAuth{}})
 
 	registered := map[string]bool{}
-	for _, route := range walkRoutes(t, router) {
+	for _, route := range testutil.WalkRoutes(t, router) {
 		registered[route] = true
 	}
 
@@ -794,7 +887,9 @@ var gatedProbes = []struct {
 	{"attestation manifests list", http.MethodGet, "/api/v1/attestation/manifests"},
 	{"attestation manifest build", http.MethodPost, "/api/v1/attestation/manifests/build"},
 	{"attestation events", http.MethodGet, "/api/v1/attestation/events"},
+	{"tpm nvram read", http.MethodGet, "/api/v1/tpm/nvram/0x1c00002"},
 	{"tpm nvram write", http.MethodPut, "/api/v1/tpm/nvram/0x1c00002"},
+	{"tpm nvram undefine", http.MethodDelete, "/api/v1/tpm/nvram/0x1c00002"},
 	{"tenant barrier unseal", http.MethodPost, "/api/v1/tenants/t1/barrier/unseal"},
 	{"tenant barrier init", http.MethodPost, "/api/v1/tenants/t1/barrier/init"},
 	{"tenant DEK rotate", http.MethodPost, "/api/v1/tenants/t1/dek/rotate"},
@@ -803,12 +898,28 @@ var gatedProbes = []struct {
 	{"kms sign", http.MethodPost, "/api/v1/kms/sign/k1"},
 	{"kms secret read", http.MethodGet, "/api/v1/kms/secrets/s1"},
 	{"kms key delete", http.MethodDelete, "/api/v1/kms/keys/k1"},
+	{"kms generate data key", http.MethodPost, "/api/v1/kms/data-keys"},
+	{"kms generate wrapped data key", http.MethodPost, "/api/v1/kms/data-keys/wrapped"},
 	{"ca issue certificate", http.MethodPost, "/api/v1/ca/certificates"},
 	{"ca revoke certificate", http.MethodDelete, "/api/v1/ca/certificates/abc"},
 	{"idevid generate", http.MethodPost, "/api/v1/idevid/generate"},
 	{"idevid delete", http.MethodDelete, "/api/v1/idevid"},
+	{"idevid install certificate", http.MethodPost, "/api/v1/idevid/certificate"},
+	{"idevid create ldevid", http.MethodPost, "/api/v1/idevid/ldevid"},
+	{"idevid key delete, daemon path", http.MethodDelete, "/api/v1/tpm/idevid"},
+	{"iak key delete, daemon path", http.MethodDelete, "/api/v1/tpm/iak"},
 	{"vtpm bundle export", http.MethodGet, "/api/v1/vtpm/bundles/b1/export"},
 	{"vtpm bundle delete", http.MethodDelete, "/api/v1/vtpm/bundles/b1"},
+	{"vtpm start", http.MethodPost, "/api/v1/vtpm/bundles/b1/start"},
+	{"vtpm stop", http.MethodPost, "/api/v1/vtpm/bundles/b1/stop"},
+	{"vtpm state", http.MethodGet, "/api/v1/vtpm/bundles/b1/state"},
+	{"vtpm quote", http.MethodPost, "/api/v1/vtpm/bundles/b1/quote"},
+	{"vtpm seal", http.MethodPost, "/api/v1/vtpm/bundles/b1/seal"},
+	{"vtpm unseal", http.MethodPost, "/api/v1/vtpm/bundles/b1/unseal"},
+	{"vtpm pcr read", http.MethodGet, "/api/v1/vtpm/bundles/b1/pcrs"},
+	{"vtpm pcr extend", http.MethodPost, "/api/v1/vtpm/bundles/b1/pcrs/extend"},
+	{"dns record get", http.MethodGet, "/api/v1/dns/zones/example.com./records/A/www"},
+	{"dns resolve", http.MethodGet, "/api/v1/dns/resolve?fqdn=www.example.com.&type=A"},
 }
 
 // TestGatedRoutes_RejectAnonymousCallers is the authentication half of the
@@ -1231,7 +1342,7 @@ func TestPlatformRoutes_AreRegisteredAndGated(t *testing.T) {
 	router := newGatedTestRouter(t, &testHandlerRegistry{tokenHandler: &anonymousAuth{}})
 
 	registered := map[string]bool{}
-	for _, route := range walkRoutes(t, router) {
+	for _, route := range testutil.WalkRoutes(t, router) {
 		registered[route] = true
 	}
 	for _, want := range []string{
@@ -1306,7 +1417,8 @@ func TestServiceRegistryEndpoint_SurvivesTheGatedPlatformSubtree(t *testing.T) {
 
 // computeProbes are the compute and curated-image routes chosen for blast
 // radius. `container exec` is arbitrary code execution inside a workload;
-// `vm migrate` moves a workload to another host.
+// `vm migrate` moves a workload to another host, and `migration prepare`
+// and `migration finalize` land one on this host.
 var computeProbes = []struct {
 	name   string
 	method string
@@ -1315,6 +1427,8 @@ var computeProbes = []struct {
 	{"vm create", http.MethodPost, "/api/v1/compute/vms"},
 	{"vm delete", http.MethodDelete, "/api/v1/compute/vms/v1"},
 	{"vm migrate", http.MethodPost, "/api/v1/compute/vms/v1/migrate"},
+	{"migration prepare", http.MethodPost, "/api/v1/compute/migrations/prepare"},
+	{"migration finalize", http.MethodPost, "/api/v1/compute/migrations/r1/finalize"},
 	{"vm snapshot restore", http.MethodPost, "/api/v1/compute/vms/v1/snapshots/s1/restore"},
 	{"vm disk detach", http.MethodDelete, "/api/v1/compute/vms/v1/disks/d1"},
 	{"vm list", http.MethodGet, "/api/v1/compute/vms"},
@@ -1333,12 +1447,13 @@ func TestComputeRoutes_AreRegisteredAndGated(t *testing.T) {
 	router := newGatedTestRouter(t, &testHandlerRegistry{tokenHandler: &anonymousAuth{}})
 
 	registered := map[string]bool{}
-	for _, route := range walkRoutes(t, router) {
+	for _, route := range testutil.WalkRoutes(t, router) {
 		registered[route] = true
 	}
 	for _, want := range []string{
 		"POST /api/v1/compute/vms",
 		"POST /api/v1/compute/vms/{id}/migrate",
+		"POST /api/v1/compute/migrations/prepare",
 		"POST /api/v1/compute/containers/{id}/exec",
 		"POST /api/v1/compute/images",
 		"DELETE /api/v1/compute/images/{repository:.+}",
@@ -1399,8 +1514,18 @@ var networkProbes = []struct {
 	{"sdn add flow", http.MethodPost, "/api/v1/sdn/bridges/br0/flows"},
 	{"sdn delete bridge", http.MethodDelete, "/api/v1/sdn/bridges/br0"},
 	{"sdn delete port", http.MethodDelete, "/api/v1/sdn/bridges/br0/ports/p1"},
+	{"sdn add port", http.MethodPost, "/api/v1/sdn/bridges/br0/ports"},
+	{"sdn authenticate port", http.MethodPost, "/api/v1/sdn/bridges/br0/ports/p1/auth"},
+	{"sdn revoke port auth", http.MethodDelete, "/api/v1/sdn/bridges/br0/ports/p1/auth"},
+	{"switch list ports", http.MethodGet, "/api/v1/switches/sw1/ports"},
+	{"switch get port status", http.MethodGet, "/api/v1/switches/sw1/ports/1"},
 	{"switch set port vlan", http.MethodPost, "/api/v1/switches/sw1/ports/1/vlan"},
+	{"switch enable port", http.MethodPost, "/api/v1/switches/sw1/ports/1/enable"},
 	{"switch disable port", http.MethodPost, "/api/v1/switches/sw1/ports/1/disable"},
+	// Authorizing or quarantining a PXE device moves it between VLANs too.
+	{"pxe update state", http.MethodPut, "/api/v1/pxe/devices/d1/state"},
+	{"pxe authorize", http.MethodPost, "/api/v1/pxe/devices/d1/authorize"},
+	{"pxe quarantine", http.MethodPost, "/api/v1/pxe/devices/d1/quarantine"},
 	{"overlay create vni", http.MethodPost, "/api/v1/overlay/vnis"},
 	{"overlay delete vni", http.MethodDelete, "/api/v1/overlay/vnis/100"},
 	{"dns zone list", http.MethodGet, "/api/v1/dns/zones"},
@@ -1416,12 +1541,15 @@ func TestNetworkRoutes_AreRegisteredAndGated(t *testing.T) {
 	router := newGatedTestRouter(t, &testHandlerRegistry{tokenHandler: &anonymousAuth{}})
 
 	registered := map[string]bool{}
-	for _, route := range walkRoutes(t, router) {
+	for _, route := range testutil.WalkRoutes(t, router) {
 		registered[route] = true
 	}
 	for _, want := range []string{
 		"DELETE /api/v1/sdn/bridges/{name}",
+		"POST /api/v1/sdn/bridges/{name}/ports/{port}/auth",
+		"DELETE /api/v1/sdn/bridges/{name}/ports/{port}/auth",
 		"POST /api/v1/switches/{switch}/ports/{port}/vlan",
+		"POST /api/v1/pxe/devices/{id}/authorize",
 		"POST /api/v1/overlay/vnis",
 		"POST /api/v1/ntp/step",
 	} {
@@ -1460,7 +1588,7 @@ func TestGatewayOperatorRoutes_AreRegisteredAndGated(t *testing.T) {
 	router := newGatedTestRouter(t, &testHandlerRegistry{tokenHandler: &anonymousAuth{}})
 
 	registered := map[string]bool{}
-	for _, route := range walkRoutes(t, router) {
+	for _, route := range testutil.WalkRoutes(t, router) {
 		registered[route] = true
 	}
 	for _, want := range []string{
@@ -1505,7 +1633,7 @@ func TestGatewayFacingRoutes_RefuseACallerWithNoClientCertificate(t *testing.T) 
 	router := newGatedTestRouter(t, &testHandlerRegistry{tokenHandler: &anonymousAuth{}})
 
 	registered := map[string]bool{}
-	for _, route := range walkRoutes(t, router) {
+	for _, route := range testutil.WalkRoutes(t, router) {
 		registered[route] = true
 	}
 	require.True(t, registered["POST /api/v1/gateway/telemetry"])
@@ -1724,7 +1852,8 @@ func TestTenantRoutes_CrossTenantOperationsAreSystemOnly(t *testing.T) {
 		{"list every tenant", http.MethodGet, "/api/v1/tenants"},
 		{"create a tenant", http.MethodPost, "/api/v1/tenants"},
 		{"sync tenants", http.MethodPost, "/api/v1/tenants/sync"},
-		{"look a tenant up by name", http.MethodGet, "/api/v1/tenants/by-name/victim"},
+		// The lookup by name is not system-only: a tenant resolves its own
+		// name (router_tenant_byname_test.go).
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			assert.Equal(t, http.StatusForbidden, probe(router, tc.method, tc.path),
@@ -1751,7 +1880,7 @@ func TestRegisterRoutes_DeviceAttestIsRegisteredAndGated(t *testing.T) {
 	const route = "POST /api/v1/devices/{id}/attest"
 
 	var found bool
-	for _, r := range walkRoutes(t, router) {
+	for _, r := range testutil.WalkRoutes(t, router) {
 		if r == route {
 			found = true
 			break
@@ -1769,6 +1898,99 @@ func TestRegisterRoutes_DeviceAttestIsRegisteredAndGated(t *testing.T) {
 	assert.False(t, pending, "%s must not be parked as pending; it is gated today", route)
 }
 
+// scopedSessionAuth is a session carrying roles AND scopes. Like the
+// platform-token middleware it is also the router's ScopeAuthorizer, so the
+// routes that take a scope check it; the legacy sessionAuth does not.
+type scopedSessionAuth struct {
+	sessionAuth
+	scopes []string
+}
+
+func (s *scopedSessionAuth) RequireScope(scope string) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if !slices.Contains(s.scopes, scope) {
+				w.WriteHeader(http.StatusForbidden)
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
+// pxeOperatorProbes is every PXE operator route and the PXEService RPC it
+// stands for. The route must take the scope the gRPC catalog gives the RPC.
+var pxeOperatorProbes = []struct{ method, path, rpc string }{
+	{http.MethodGet, "/api/v1/pxe/status", "GetStatus"},
+	{http.MethodPost, "/api/v1/pxe/start", "StartService"},
+	{http.MethodPost, "/api/v1/pxe/stop", "StopService"},
+	{http.MethodGet, "/api/v1/pxe/devices", "ListDevices"},
+	{http.MethodPost, "/api/v1/pxe/devices", "RegisterDevice"},
+	{http.MethodGet, "/api/v1/pxe/devices/mac/{mac}", "GetDeviceByMAC"},
+	{http.MethodGet, "/api/v1/pxe/devices/{id}", "GetDevice"},
+	{http.MethodDelete, "/api/v1/pxe/devices/{id}", "RemoveDevice"},
+	{http.MethodPut, "/api/v1/pxe/devices/{id}/state", "UpdateState"},
+	{http.MethodPost, "/api/v1/pxe/devices/{id}/enrolled", "SetDeviceEnrolled"},
+	{http.MethodPost, "/api/v1/pxe/devices/{id}/authorize", "Authorize"},
+	{http.MethodPost, "/api/v1/pxe/devices/{id}/quarantine", "Quarantine"},
+	{http.MethodPost, "/api/v1/pxe/devices/{id}/retry", "Retry"},
+	{http.MethodGet, "/api/v1/pxe/devices/{id}/events", "GetEvents"},
+}
+
+// pxeScopedAdmin builds the gated router for an admin session holding scopes.
+func pxeScopedAdmin(t *testing.T, scopes ...string) *mux.Router {
+	return newGatedTestRouter(t, &testHandlerRegistry{
+		tokenHandler: &scopedSessionAuth{
+			sessionAuth: sessionAuth{roles: []string{common.ROLE_ADMIN}, tenantID: "system"},
+			scopes:      scopes,
+		},
+	})
+}
+
+// TestPXEOperatorRoutes_RefuseTheAdminRoleWithoutTheRPCScope closes the gap
+// where REST was wider than gRPC: an admin token holding every pxe scope but
+// the one the route's RPC needs is refused, as gRPC refuses the RPC.
+func TestPXEOperatorRoutes_RefuseTheAdminRoleWithoutTheRPCScope(t *testing.T) {
+	pxeScopes := []string{"pxe:read", "pxe:write", "pxe:delete"}
+	for _, tc := range pxeOperatorProbes {
+		t.Run(tc.method+" "+tc.path, func(t *testing.T) {
+			scope := grpcapi.ScopeForMethod("/platform.v1.PXEService/" + tc.rpc)
+			require.NotEmpty(t, scope, "%s is not in the gRPC catalog", tc.rpc)
+			others := slices.DeleteFunc(slices.Clone(pxeScopes), func(s string) bool { return s == scope })
+
+			assert.Equal(t, http.StatusForbidden, probe(pxeScopedAdmin(t, others...), tc.method, tc.path))
+		})
+	}
+}
+
+// TestPXEOperatorRoutes_AdmitTheAdminRoleWithTheRPCScope: the role and the
+// RPC's scope together reach the service. The stub service implements no
+// RPC, so reaching it answers 501.
+func TestPXEOperatorRoutes_AdmitTheAdminRoleWithTheRPCScope(t *testing.T) {
+	for _, tc := range pxeOperatorProbes {
+		t.Run(tc.method+" "+tc.path, func(t *testing.T) {
+			scope := grpcapi.ScopeForMethod("/platform.v1.PXEService/" + tc.rpc)
+			require.NotEmpty(t, scope, "%s is not in the gRPC catalog", tc.rpc)
+
+			assert.Equal(t, http.StatusNotImplemented, probe(pxeScopedAdmin(t, scope), tc.method, tc.path))
+		})
+	}
+}
+
+// TestPXEOperatorRoutes_ScopeAloneDoesNotPassTheRoleGate: the scope is on top
+// of the admin gate, not instead of it.
+func TestPXEOperatorRoutes_ScopeAloneDoesNotPassTheRoleGate(t *testing.T) {
+	router := newGatedTestRouter(t, &testHandlerRegistry{
+		tokenHandler: &scopedSessionAuth{
+			sessionAuth: sessionAuth{roles: []string{"user"}, tenantID: "system"},
+			scopes:      []string{"pxe:read", "pxe:write", "pxe:delete"},
+		},
+	})
+	for _, tc := range pxeOperatorProbes {
+		assert.Equal(t, http.StatusForbidden, probe(router, tc.method, tc.path), "%s %s", tc.method, tc.path)
+	}
+}
+
 // =============================================================================
 // IAM (#400)
 // =============================================================================
@@ -1779,15 +2001,15 @@ func TestRegisterRoutes_DeviceAttestIsRegisteredAndGated(t *testing.T) {
 // matching only it answers 404).
 //
 // It requires the count rather than merely the presence: rest/iam/router.go
-// registers each capability twice (docs/iam/api.md §2) — 32 flat routes and
-// 37 tenant-scoped ones — and a fixture that silently lost one tree would
+// registers each capability twice (docs/iam/api.md §2) — 33 flat routes and
+// 38 tenant-scoped ones — and a fixture that silently lost one tree would
 // otherwise pass the per-route assertions over the other.
 func iamRoutesUnderAudit(t *testing.T, router *mux.Router) []string {
 	t.Helper()
 
-	const wantIAMRoutes = 69
+	const wantIAMRoutes = 71
 	var routes []string
-	for _, route := range walkRoutes(t, router) {
+	for _, route := range testutil.WalkRoutes(t, router) {
 		_, template := splitRoute(route)
 		if strings.HasPrefix(template, "/api/v1/iam/") {
 			routes = append(routes, route)
@@ -1833,6 +2055,32 @@ func TestIAMRoutes_RejectAuthenticatedCallersWithoutTheAdminRole(t *testing.T) {
 	}
 }
 
+// TestIAMPermissionCheckRoutes_AreGated pins the gate on the permission-check
+// routes #452 registered for the SDK's CheckPermission claim. The check is a
+// read-tier decision, but it sits behind the same admin gate as every other
+// /api/v1/iam route (docs/iam/api.md §8): no credential is 401 and a
+// non-admin session is 403, on the flat route and its tenant-scoped twin.
+// Requiring the routes in the audited set first keeps a 401 from an
+// unregistered path from passing for the gate.
+func TestIAMPermissionCheckRoutes_AreGated(t *testing.T) {
+	anonymous := newGatedTestRouter(t, &testHandlerRegistry{tokenHandler: &anonymousAuth{}})
+	underPrivileged := newGatedTestRouter(t, &testHandlerRegistry{
+		tokenHandler: &sessionAuth{roles: []string{"user"}, tenantID: "system"},
+	})
+	built := iamRoutesUnderAudit(t, anonymous)
+
+	for _, template := range []string{
+		"/api/v1/iam/permissions/check",
+		"/api/v1/iam/tenants/{tenant}/permissions/check",
+	} {
+		require.Containsf(t, built, http.MethodPost+" "+template, "%s is not registered", template)
+		assert.Equalf(t, http.StatusUnauthorized, probe(anonymous, http.MethodPost, template),
+			"POST %s did not answer 401 to a request carrying no credential", template)
+		assert.Equalf(t, http.StatusForbidden, probe(underPrivileged, http.MethodPost, template),
+			"POST %s did not answer 403 to an authenticated caller without the admin role", template)
+	}
+}
+
 // TestIAMRoutes_TenantGuardsAreWiredToThePlatformSession asserts the two
 // guards Router.iamRoutes builds from the platform's own state, which
 // rest/iam's tests cannot see because they inject their own:
@@ -1866,8 +2114,8 @@ func TestIAMRoutes_TenantGuardsAreWiredToThePlatformSession(t *testing.T) {
 		assert.NotEqualf(t, http.StatusUnauthorized, code, "%s refused the admin authentication", route)
 		assert.NotEqualf(t, http.StatusForbidden, code, "%s refused the admin authorization", route)
 	}
-	require.Equal(t, 37, tenantGuarded, "tenant-record plus tenant-scoped routes")
-	require.Equal(t, 32, flat, "flat routes")
+	require.Equal(t, 38, tenantGuarded, "tenant-record plus tenant-scoped routes")
+	require.Equal(t, 33, flat, "flat routes")
 }
 
 // TestIAMRoutes_SystemTenantAdminReachesTenantLifecycle is the other half of

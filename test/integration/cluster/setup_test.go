@@ -25,6 +25,7 @@
 package cluster
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"os"
@@ -36,6 +37,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cluster"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/storage/quicbaas"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/testenv"
 	"github.com/stretchr/testify/require"
 )
 
@@ -49,24 +51,6 @@ const (
 	startupTimeout            = 60 * time.Second
 	shutdownTimeout           = 10 * time.Second
 )
-
-// skipIfNotIntegration skips the test if the INTEGRATION_TEST env var is not set.
-func skipIfNotIntegration(t *testing.T) {
-	if os.Getenv("INTEGRATION_TEST") == "" {
-		t.Skip("Skipping integration test. Set INTEGRATION_TEST=1 to run.")
-	}
-}
-
-// skipIfNoRaftCluster skips data replication tests that require a Raft cluster
-// simulation. The mock cluster provides shared storage that simulates Raft
-// replication by propagating writes to all nodes.
-// Set RAFT_CLUSTER_TEST=1 to run these tests.
-func skipIfNoRaftCluster(t *testing.T) {
-	skipIfNotIntegration(t)
-	if os.Getenv("RAFT_CLUSTER_TEST") == "" {
-		t.Skip("Skipping Raft cluster test. Set RAFT_CLUSTER_TEST=1 to run with simulated Raft cluster.")
-	}
-}
 
 // sharedStorage provides a thread-safe storage wrapper that propagates writes
 // to all registered node storages, simulating Raft replication.
@@ -541,6 +525,60 @@ func (tc *testCluster) nodeCount() int {
 	tc.mu.Lock()
 	defer tc.mu.Unlock()
 	return len(tc.nodes)
+}
+
+// waitForReplication waits until every node reads each key in want with its
+// value. A timeout is only logged: the caller's own reads assert on the data.
+func waitForReplication(ctx context.Context, t *testing.T, nodes []*testNode, table string, want map[uint64][]byte) {
+	t.Helper()
+
+	replicated := func() bool {
+		for _, node := range nodes {
+			for key, value := range want {
+				data, found, err := node.storage.Get(ctx, table, key, shardID)
+				if err != nil || !found || !bytes.Equal(data, value) {
+					return false
+				}
+			}
+		}
+		return true
+	}
+	condition := fmt.Sprintf("%d %s record(s) on %d node(s)", len(want), table, len(nodes))
+	if err := testenv.WaitUntil(ctx, defaultOperationTimeout, condition, replicated); err != nil {
+		t.Logf("%v", err)
+	}
+}
+
+// waitForNodeCount waits until the leader's status counts want nodes, which
+// it does once its membership cache has caught up with a node leaving or
+// joining. A timeout is only logged: the caller's own assertions decide.
+func waitForNodeCount(ctx context.Context, t *testing.T, leader *testNode, want int) {
+	t.Helper()
+	counted := func() bool {
+		status, err := leader.coordinator.Status(ctx)
+		return err == nil && status.NodeCount == want
+	}
+	condition := fmt.Sprintf("node %d to count %d node(s)", leader.id, want)
+	if err := testenv.WaitUntil(ctx, defaultOperationTimeout, condition, counted); err != nil {
+		t.Logf("%v", err)
+	}
+}
+
+// waitForNewLeader waits until one of nodes reports itself leader and
+// returns it.
+func waitForNewLeader(ctx context.Context, timeout time.Duration, nodes []*testNode) (*testNode, error) {
+	var leader *testNode
+	elected := func() bool {
+		for _, node := range nodes {
+			if node.coordinator.IsLeader() {
+				leader = node
+				return true
+			}
+		}
+		return false
+	}
+	err := testenv.WaitUntil(ctx, timeout, "a running follower to lead", elected)
+	return leader, err
 }
 
 // sharedClusterState provides shared state across all mock Raft operators

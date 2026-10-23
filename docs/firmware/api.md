@@ -79,11 +79,11 @@ platform's normal `scp`-claim path. It authenticates instead with, in order:
 4. cryptographic EK-certificate binding against the matched profile.
 
 All four are enforced **before the digest is signed**. There is no `scp`
-permission on the REST route and no MCP permission entry for
-`provision_sign_digest` — `AuthorizeTool` allows a tool absent from the
-authorization map once the token validates, so on MCP this capability is gated
-by the token and by the four checks above, not by a scope. Recorded here so the
-gap is visible rather than assumed.
+permission on the REST route, and gRPC `SignDigest` is pre-auth. On MCP
+`provision_sign_digest` is classified open (`""`, #304) to match: it needs no
+token, and the four checks above, made by the shared
+`configdelivery.Service`, are the whole gate. The QUIC sign sub-opcode is
+pre-auth the same way (#317).
 
 Post-install the node stops using this endpoint and reaches the KMS directly:
 `install uki-rebuild` calls the platform `KeyManagementService.Sign` RPC over its
@@ -177,7 +177,7 @@ over it — "generate this platform's PK/KEK/DB set" is not an RPC.
 | Verify an Authenticode signature | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | ✅ `(Authenticode).VerifyFile(path)` / `.Verify(r)` |
 | Extract the embedded signing certificate | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | ✅ `(Authenticode).ExtractCertificateFile(path)` / `.ExtractCertificate(r)` |
 | Read the signing time from a signed PE | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | ✅ `authenticode.SigningTime(r)` |
-| RFC 3161 timestamping | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | **PLANNED** — `SignerOptions.TimestampURL` is accepted and `addTimestamp` returns `ErrRFC3161NotImplemented`, logged as a non-fatal warning |
+| RFC 3161 timestamping | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | ✅ `SignerOptions.TimestampURL` — the token is embedded as the SPC RFC 3161 unauthenticated attribute and checked by `Verify`; a TSA that cannot stamp fails signing with `*TimestampError` |
 
 These are file-manipulation operations over local paths. There is no sensible
 RPC shape for "build a UKI from `/boot/vmlinuz`" that does not amount to shipping
@@ -217,7 +217,7 @@ must be able to tell "not exposed" from "not built".
 | A `firmware:` configuration section | **Not implemented** |
 
 All PLANNED. See [architecture.md](architecture.md) §8–§9 and the legacy
-[ROADMAP.md](ROADMAP.md).
+ROADMAP.md.
 
 ---
 

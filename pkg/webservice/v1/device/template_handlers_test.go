@@ -414,6 +414,29 @@ func TestTemplateHandler_CreateProfileFromTemplate_NoOverridesBody(t *testing.T)
 	require.Len(t, profileSvc.profiles, 1)
 }
 
+func TestTemplateHandler_CreateProfileFromTemplate_EmptyBody(t *testing.T) {
+	handler, profileSvc := newTestTemplateHandler()
+	templateSvc := &overridesCaptureService{}
+	handler.templateService = templateSvc
+
+	rec := createProfileFromTemplateRequest(t, handler, ``)
+	require.Equal(t, http.StatusCreated, rec.Code, rec.Body.String())
+	assert.Nil(t, templateSvc.overrides)
+	require.Len(t, profileSvc.profiles, 1)
+}
+
+// A body that does not decode must be refused: creating the profile
+// without the overrides the caller sent would store values they never
+// asked for.
+func TestTemplateHandler_CreateProfileFromTemplate_MalformedBody(t *testing.T) {
+	handler, profileSvc := newTestTemplateHandler()
+	handler.templateService = &overridesCaptureService{}
+
+	rec := createProfileFromTemplateRequest(t, handler, `{"overrides": {"name": 42}}`)
+	require.Equal(t, http.StatusBadRequest, rec.Code, rec.Body.String())
+	assert.Empty(t, profileSvc.profiles)
+}
+
 // TestTemplateHandler_AssignProfileToDevice_ByDeviceID pins the live REST
 // surface of assign-by-device (#463): the EK serial and prestaged
 // certificate derive on the server from the registered device, explicit

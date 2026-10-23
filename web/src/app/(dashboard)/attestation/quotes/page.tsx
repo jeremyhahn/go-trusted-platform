@@ -37,7 +37,8 @@ interface TPMQuote {
   deviceId: string;
   deviceName: string;
   tpmManufacturer: string;
-  status: "verified" | "pending" | "failed" | "expired";
+  /** Signature and age only: no verifier has judged a quote listed here (#643) */
+  status: "signed" | "unsigned" | "expired";
   algorithm: string;
   nonce: string;
   pcrSelection: number[];
@@ -53,9 +54,8 @@ const statusConfig: Record<
     icon: React.ComponentType<{ className?: string }>;
   }
 > = {
-  verified: { label: "Verified", variant: "default", icon: CheckCircle2 },
-  pending: { label: "Pending", variant: "secondary", icon: Clock },
-  failed: { label: "Failed", variant: "destructive", icon: XCircle },
+  signed: { label: "Signed", variant: "outline", icon: CheckCircle2 },
+  unsigned: { label: "Unsigned", variant: "secondary", icon: XCircle },
   expired: { label: "Expired", variant: "outline", icon: Clock },
 };
 
@@ -198,11 +198,11 @@ export default function QuotesPage() {
         const quoteAge = now - new Date(manifest.timestamp).getTime();
         const oneDayMs = 24 * 60 * 60 * 1000;
 
-        let status: "verified" | "pending" | "failed" | "expired" = "verified";
+        let status: TPMQuote["status"] = "signed";
         if (quoteAge > 7 * oneDayMs) {
           status = "expired";
         } else if (!manifest.signature) {
-          status = "pending";
+          status = "unsigned";
         }
 
         extractedQuotes.push({
@@ -225,11 +225,11 @@ export default function QuotesPage() {
         const quoteAge = Date.now() - new Date(vm.timestamp).getTime();
         const oneDayMs = 24 * 60 * 60 * 1000;
 
-        let status: "verified" | "pending" | "failed" | "expired" = "verified";
+        let status: TPMQuote["status"] = "signed";
         if (quoteAge > 7 * oneDayMs) {
           status = "expired";
         } else if (!vm.signature) {
-          status = "pending";
+          status = "unsigned";
         }
 
         extractedQuotes.push({
@@ -253,9 +253,8 @@ export default function QuotesPage() {
   const stats = React.useMemo(() => {
     return {
       total: quotes.length,
-      verified: quotes.filter((q) => q.status === "verified").length,
-      pending: quotes.filter((q) => q.status === "pending").length,
-      failed: quotes.filter((q) => q.status === "failed").length,
+      signed: quotes.filter((q) => q.status === "signed").length,
+      unsigned: quotes.filter((q) => q.status === "unsigned").length,
       expired: quotes.filter((q) => q.status === "expired").length,
     };
   }, [quotes]);
@@ -314,7 +313,7 @@ export default function QuotesPage() {
       </div>
 
       {/* Statistics Cards */}
-      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-5">
+      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
         <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
             <CardTitle className="text-sm font-medium">Total Quotes</CardTitle>
@@ -330,45 +329,30 @@ export default function QuotesPage() {
 
         <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Verified</CardTitle>
-            <CheckCircle2 className="h-4 w-4 text-green-500" />
+            <CardTitle className="text-sm font-medium">Signed</CardTitle>
+            <CheckCircle2 className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold text-green-600 dark:text-green-400">
-              {stats.verified}
+            <div className="text-2xl font-bold">
+              {stats.signed}
             </div>
             <p className="text-xs text-muted-foreground">
-              Successfully validated
+              Carries a signature; not a verdict
             </p>
           </CardContent>
         </Card>
 
         <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Pending</CardTitle>
-            <Clock className="h-4 w-4 text-orange-500" />
+            <CardTitle className="text-sm font-medium">Unsigned</CardTitle>
+            <XCircle className="h-4 w-4 text-orange-500" />
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold text-orange-600 dark:text-orange-400">
-              {stats.pending}
+              {stats.unsigned}
             </div>
             <p className="text-xs text-muted-foreground">
-              Awaiting verification
-            </p>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Failed</CardTitle>
-            <XCircle className="h-4 w-4 text-destructive" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold text-destructive">
-              {stats.failed}
-            </div>
-            <p className="text-xs text-muted-foreground">
-              Verification failed
+              No signature on the quote
             </p>
           </CardContent>
         </Card>
@@ -409,9 +393,8 @@ export default function QuotesPage() {
                 id: "status",
                 title: "Status",
                 options: [
-                  { label: "Verified", value: "verified" },
-                  { label: "Pending", value: "pending" },
-                  { label: "Failed", value: "failed" },
+                  { label: "Signed", value: "signed" },
+                  { label: "Unsigned", value: "unsigned" },
                   { label: "Expired", value: "expired" },
                 ],
               },

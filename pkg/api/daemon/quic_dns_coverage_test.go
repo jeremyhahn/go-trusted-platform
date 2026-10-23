@@ -22,8 +22,8 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 
-	"github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -105,15 +105,15 @@ func TestDNSErrorToQUICResponse(t *testing.T) {
 		code codes.Code
 		want byte
 	}{
-		{"invalid argument", codes.InvalidArgument, quic.StatusInvalidArgument},
-		{"not found", codes.NotFound, quic.StatusNotFound},
-		{"already exists", codes.AlreadyExists, quic.StatusAlreadyExists},
-		{"unauthenticated", codes.Unauthenticated, quic.StatusUnauthorized},
-		{"permission denied", codes.PermissionDenied, quic.StatusPermissionDenied},
-		{"failed precondition", codes.FailedPrecondition, quic.StatusInvalidRequest},
-		{"unavailable", codes.Unavailable, quic.StatusUnavailable},
-		{"internal", codes.Internal, quic.StatusInternalError},
-		{"unknown maps to internal", codes.DataLoss, quic.StatusInternalError},
+		{"invalid argument", codes.InvalidArgument, quicwire.StatusInvalidArgument},
+		{"not found", codes.NotFound, quicwire.StatusNotFound},
+		{"already exists", codes.AlreadyExists, quicwire.StatusAlreadyExists},
+		{"unauthenticated", codes.Unauthenticated, quicwire.StatusUnauthorized},
+		{"permission denied", codes.PermissionDenied, quicwire.StatusPermissionDenied},
+		{"failed precondition", codes.FailedPrecondition, quicwire.StatusInvalidRequest},
+		{"unavailable", codes.Unavailable, quicwire.StatusUnavailable},
+		{"internal", codes.Internal, quicwire.StatusInternalError},
+		{"unknown maps to internal", codes.DataLoss, quicwire.StatusInternalError},
 	}
 
 	for _, tc := range cases {

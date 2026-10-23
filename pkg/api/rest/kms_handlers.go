@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -25,6 +26,8 @@ import (
 	"time"
 
 	"github.com/gorilla/mux"
+
+	"github.com/jeremyhahn/go-trusted-platform/pkg/api/errclass"
 )
 
 // =============================================================================
@@ -179,7 +182,8 @@ type KMSDecryptRequest struct {
 
 // KMSBatchEncryptItemRequest represents a single item in a batch encryption request.
 type KMSBatchEncryptItemRequest struct {
-	Plaintext string `json:"plaintext"` // Base64 encoded
+	ItemID    string `json:"item_id,omitempty"` // Caller's correlation identifier, echoed in the result
+	Plaintext string `json:"plaintext"`         // Base64 encoded
 	Context   string `json:"context,omitempty"`
 	Nonce     string `json:"nonce,omitempty"`
 }
@@ -192,7 +196,8 @@ type KMSBatchEncryptRequest struct {
 
 // KMSBatchDecryptItemRequest represents a single item in a batch decryption request.
 type KMSBatchDecryptItemRequest struct {
-	Ciphertext string `json:"ciphertext"` // Base64 encoded
+	ItemID     string `json:"item_id,omitempty"` // Caller's correlation identifier, echoed in the result
+	Ciphertext string `json:"ciphertext"`        // Base64 encoded
 	Context    string `json:"context,omitempty"`
 	Nonce      string `json:"nonce,omitempty"`
 	KeyVersion uint64 `json:"key_version,omitempty"`
@@ -371,6 +376,7 @@ type KMSDecryptResponse struct {
 
 // KMSBatchEncryptResultItemResponse represents a single result in a batch encryption response.
 type KMSBatchEncryptResultItemResponse struct {
+	ItemID     string `json:"item_id,omitempty"`
 	Ciphertext string `json:"ciphertext,omitempty"` // Base64 encoded
 	Nonce      string `json:"nonce,omitempty"`
 	Error      string `json:"error,omitempty"`
@@ -388,6 +394,7 @@ type KMSBatchEncryptResponse struct {
 
 // KMSBatchDecryptResultItemResponse represents a single result in a batch decryption response.
 type KMSBatchDecryptResultItemResponse struct {
+	ItemID     string `json:"item_id,omitempty"`
 	Plaintext  string `json:"plaintext,omitempty"` // Base64 encoded
 	KeyVersion uint64 `json:"key_version,omitempty"`
 	Error      string `json:"error,omitempty"`
@@ -787,30 +794,40 @@ func (h *KMSHandlers) handleExportKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Parse optional parameters from query string
-	var wrappingKeyID string
+	// Parse optional parameters from query string. A malformed number is
+	// refused rather than read as zero, which would export another version or
+	// format than the caller asked for.
+	query := r.URL.Query()
+	wrappingKeyID := query.Get("wrapping_key_id")
+
 	var wrappingAlgorithm int32
+	if wa := query.Get("wrapping_algorithm"); wa != "" {
+		parsed, err := strconv.ParseInt(wa, 10, 32)
+		if err != nil {
+			h.writeError(w, http.StatusBadRequest, ErrInvalidQueryParameter{Name: "wrapping_algorithm", Value: wa, Reason: err.Error()})
+			return
+		}
+		wrappingAlgorithm = int32(parsed)
+	}
+
 	var format int32
+	if f := query.Get("format"); f != "" {
+		parsed, err := strconv.ParseInt(f, 10, 32)
+		if err != nil {
+			h.writeError(w, http.StatusBadRequest, ErrInvalidQueryParameter{Name: "format", Value: f, Reason: err.Error()})
+			return
+		}
+		format = int32(parsed)
+	}
+
 	var version uint64
-
-	wrappingKeyID = r.URL.Query().Get("wrapping_key_id")
-
-	if wa := r.URL.Query().Get("wrapping_algorithm"); wa != "" {
-		if parsed, err := strconv.ParseInt(wa, 10, 32); err == nil {
-			wrappingAlgorithm = int32(parsed)
+	if v := query.Get("version"); v != "" {
+		parsed, err := strconv.ParseUint(v, 10, 64)
+		if err != nil {
+			h.writeError(w, http.StatusBadRequest, ErrInvalidQueryParameter{Name: "version", Value: v, Reason: err.Error()})
+			return
 		}
-	}
-
-	if f := r.URL.Query().Get("format"); f != "" {
-		if parsed, err := strconv.ParseInt(f, 10, 32); err == nil {
-			format = int32(parsed)
-		}
-	}
-
-	if v := r.URL.Query().Get("version"); v != "" {
-		if parsed, err := strconv.ParseUint(v, 10, 64); err == nil {
-			version = parsed
-		}
+		version = parsed
 	}
 
 	serviceReq := &KMSExportKeyServiceRequest{
@@ -1174,6 +1191,7 @@ func (h *KMSHandlers) handleBatchEncrypt(w http.ResponseWriter, r *http.Request)
 		}
 
 		serviceItems = append(serviceItems, &KMSBatchEncryptItem{
+			ItemID:    item.ItemID,
 			Plaintext: plaintext,
 			Context:   encContext,
 			Nonce:     nonce,
@@ -1196,7 +1214,8 @@ func (h *KMSHandlers) handleBatchEncrypt(w http.ResponseWriter, r *http.Request)
 	results := make([]KMSBatchEncryptResultItemResponse, 0, len(resp.Results))
 	for _, result := range resp.Results {
 		item := KMSBatchEncryptResultItemResponse{
-			Error: result.Error,
+			ItemID: result.ItemID,
+			Error:  result.Error,
 		}
 		if len(result.Ciphertext) > 0 {
 			item.Ciphertext = base64.StdEncoding.EncodeToString(result.Ciphertext)
@@ -1284,6 +1303,7 @@ func (h *KMSHandlers) handleBatchDecrypt(w http.ResponseWriter, r *http.Request)
 		}
 
 		serviceItems = append(serviceItems, &KMSBatchDecryptItem{
+			ItemID:     item.ItemID,
 			Ciphertext: ciphertext,
 			Context:    decContext,
 			Nonce:      nonce,
@@ -1307,6 +1327,7 @@ func (h *KMSHandlers) handleBatchDecrypt(w http.ResponseWriter, r *http.Request)
 	results := make([]KMSBatchDecryptResultItemResponse, 0, len(resp.Results))
 	for _, result := range resp.Results {
 		item := KMSBatchDecryptResultItemResponse{
+			ItemID:     result.ItemID,
 			KeyVersion: result.KeyVersion,
 			Error:      result.Error,
 		}
@@ -1906,55 +1927,18 @@ func (h *KMSHandlers) writeError(w http.ResponseWriter, status int, err error) {
 	})
 }
 
-// writeKMSError maps KMS errors to appropriate HTTP status codes.
+// writeKMSError answers a failed KMS operation with the HTTP status for its
+// error's class, as the shared classifier names it; an error that names no
+// class is 500.
 func (h *KMSHandlers) writeKMSError(w http.ResponseWriter, operation string, err error) {
-	var status int
-
-	// Map error types to HTTP status codes
-	switch e := err.(type) {
-	case ErrKMSOperationFailed:
-		if e.Reason == "not implemented" {
-			status = http.StatusNotImplemented
-		} else {
-			status = http.StatusInternalServerError
-		}
-	case ErrKMSKeyNotFound:
-		status = http.StatusNotFound
-	case ErrKMSKeyAlreadyExists:
-		status = http.StatusConflict
-	case ErrKMSInvalidKeySpec:
-		status = http.StatusBadRequest
-	case ErrKMSKeyNotExportable:
-		status = http.StatusForbidden
-	case ErrKMSKeyDisabled:
-		status = http.StatusForbidden
-	case ErrKMSKeyPendingDeletion:
-		status = http.StatusForbidden
-	case ErrKMSEncryptionFailed:
-		status = http.StatusInternalServerError
-	case ErrKMSDecryptionFailed:
-		status = http.StatusInternalServerError
-	case ErrKMSSigningFailed:
-		status = http.StatusInternalServerError
-	case ErrKMSVerificationFailed:
-		status = http.StatusInternalServerError
-	case ErrKMSInvalidAlgorithm:
-		status = http.StatusBadRequest
-	case ErrKMSServiceUnavailable:
-		status = http.StatusServiceUnavailable
-	case ErrKMSBatchOperationFailed:
-		status = http.StatusMultiStatus
-	case ErrKMSRewrapFailed:
-		status = http.StatusInternalServerError
-	case ErrKMSBatchItemsEmpty:
-		status = http.StatusBadRequest
-	case ErrKMSBatchItemsTooMany:
-		status = http.StatusBadRequest
-	default:
-		status = http.StatusInternalServerError
+	// A batch with some failed items is a partial success, not an error class.
+	httpStatus := errclass.HTTPStatus(err)
+	var batchErr ErrKMSBatchOperationFailed
+	if errors.As(err, &batchErr) {
+		httpStatus = http.StatusMultiStatus
 	}
 
-	h.writeError(w, status, ErrKMSHandlerOperationFailed{
+	h.writeError(w, httpStatus, ErrKMSHandlerOperationFailed{
 		Operation: operation,
 		Cause:     err,
 	})

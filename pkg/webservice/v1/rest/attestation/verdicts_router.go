@@ -14,159 +14,89 @@
 package attestation
 
 import (
-	"errors"
-	"fmt"
+	"context"
 	"net/http"
-	"time"
 
 	"github.com/gorilla/mux"
-	"google.golang.org/protobuf/encoding/protojson"
 
-	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/verdict"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/middleware/iam"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/verdict/feed"
+	iammw "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/middleware/iam"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/internal/protorest"
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
 
-// verdictHeartbeatInterval is how often an idle verdict stream sends an SSE
-// comment, so a proxy or load balancer does not close the connection.
-const verdictHeartbeatInterval = 15 * time.Second
+// VerdictPoller answers one long-poll of the device verdict feed for an
+// audience the transport decided. The daemon's AttestationServiceServer
+// implements it, so REST shares cursors, waits and errors with gRPC.
+type VerdictPoller interface {
+	PollDeviceVerdictsFor(ctx context.Context, audience feed.Audience, req *platformv1.PollDeviceVerdictsRequest) (*platformv1.PollDeviceVerdictsResponse, error)
+}
 
-// VerdictsRouter serves the device verdict stream as Server-Sent Events:
+// VerdictsRouter serves the device verdict feed (#709) as a long-poll:
 //
-//	GET /api/v1/attestation/verdicts/stream
+//	GET /api/v1/attestation/verdicts?cursor=&wait_ms= - verdicts after cursor
 //
-// Each recorded verdict is one `verdict` event whose data is the protojson
-// DeviceVerdictEvent gRPC StreamDeviceVerdicts sends. The stream ends when the
-// client disconnects, the daemon shuts down, or the subscriber falls behind;
-// the last two are announced with an `error` event so the client knows it must
-// follow again.
-//
-// The router holds no audience rules: the stream service decides who sees which
-// tenant's verdicts for every transport. The router only tells it who is
-// calling. Mount on the admin gate.
+// HTTP carries no server stream, so a client follows the feed by passing each
+// reply's cursor to its next poll; the SDK's StreamDeviceVerdicts does that.
 type VerdictsRouter struct {
-	opener     verdict.StreamOpener
+	poller     VerdictPoller
 	respWriter response.HttpWriter
-	heartbeat  time.Duration
 }
 
-// NewVerdictsRouter builds the router. A nil opener registers a route that
-// answers 503, so an operator can tell "not served here" from a typo.
-func NewVerdictsRouter(opener verdict.StreamOpener, respWriter response.HttpWriter) *VerdictsRouter {
-	return &VerdictsRouter{opener: opener, respWriter: respWriter, heartbeat: verdictHeartbeatInterval}
+// NewVerdictsRouter builds the router. A nil poller registers a route that
+// answers 503, so an operator can tell "not configured here" from a typo.
+func NewVerdictsRouter(poller VerdictPoller, respWriter response.HttpWriter) *VerdictsRouter {
+	return &VerdictsRouter{poller: poller, respWriter: respWriter}
 }
 
-// RegisterRoutes mounts the route.
+// RegisterRoutes mounts the route. Mount on the admin gate: a verdict is a
+// security judgement about a machine.
 func (r *VerdictsRouter) RegisterRoutes(parent *mux.Router) {
 	sr := parent.PathPrefix("/attestation").Subrouter()
-	sr.HandleFunc("/verdicts/stream", r.stream).Methods(http.MethodGet)
+	sr.HandleFunc("/verdicts", r.pollVerdicts).Methods(http.MethodGet)
 }
 
-// ErrVerdictStreamNotConfigured reports a node with no verdict stream.
-type ErrVerdictStreamNotConfigured struct{}
-
-func (ErrVerdictStreamNotConfigured) Error() string {
-	return "attestation: the device verdict stream is not available on this node"
-}
-
-// ErrVerdictStreamingUnsupported reports a response writer that cannot flush,
-// which an event stream needs.
-type ErrVerdictStreamingUnsupported struct{}
-
-func (ErrVerdictStreamingUnsupported) Error() string {
-	return "attestation: the response writer does not support streaming"
-}
-
-// verdictPrincipalOf reports who is calling: the tenant of the IAM session the
-// authentication chain published, and whether a client certificate came with
-// the request. A request that is neither carries no credential, and REST has no
-// Unix peer-credential caller.
-func verdictPrincipalOf(req *http.Request) verdict.StreamPrincipal {
-	principal := verdict.StreamPrincipal{
-		HasCertificate: req.TLS != nil && len(req.TLS.PeerCertificates) > 0,
-	}
-	if session, ok := iam.GetSessionFromContext(req.Context()); ok && session != nil {
-		principal.TenantID = session.TenantID()
-	}
-	return principal
-}
-
-func (r *VerdictsRouter) stream(w http.ResponseWriter, req *http.Request) {
-	if r.opener == nil {
-		r.refuse(w, req, http.StatusServiceUnavailable, ErrVerdictStreamNotConfigured{})
+// pollVerdicts answers one poll for the caller's verified session: its tenant
+// sees its own devices' verdicts, the platform tenant sees every tenant's, and
+// a session naming no tenant is refused before the feed is reached.
+func (r *VerdictsRouter) pollVerdicts(w http.ResponseWriter, req *http.Request) {
+	if r.poller == nil {
+		protorest.WriteError(w, req, r.respWriter, &protorest.ErrServiceUnavailable{Service: "attestation verdicts"})
 		return
 	}
-	flusher, ok := w.(http.Flusher)
-	if !ok {
-		r.refuse(w, req, http.StatusInternalServerError, ErrVerdictStreamingUnsupported{})
+	tenantID := sessionTenant(req)
+	if tenantID == "" {
+		r.respWriter.Error403(w, req, ErrVerdictsForbidden{}, nil)
 		return
 	}
-	subscription, err := r.opener.OpenVerdictStream(verdictPrincipalOf(req))
+	waitMs, err := protorest.QueryUint32(req, "wait_ms")
 	if err != nil {
-		r.refuse(w, req, verdictOpenStatus(err), err)
+		r.respWriter.Error400(w, req, err)
 		return
 	}
-	defer subscription.Close()
-
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Connection", "keep-alive")
-	w.Header().Set("X-Accel-Buffering", "no")
-	w.WriteHeader(http.StatusOK)
-	// The comment tells the client its subscription is live before any verdict.
-	if _, err := fmt.Fprint(w, ": subscribed\n\n"); err != nil {
+	page, err := r.poller.PollDeviceVerdictsFor(req.Context(), feed.Tenant(tenantID),
+		&platformv1.PollDeviceVerdictsRequest{Cursor: req.URL.Query().Get("cursor"), WaitMs: waitMs})
+	if err != nil {
+		protorest.WriteError(w, req, r.respWriter, err)
 		return
 	}
-	flusher.Flush()
-
-	err = subscription.Serve(req.Context(), func(recorded verdict.RecordedDeviceVerdict) error {
-		data, err := protojson.Marshal(verdict.EventOf(recorded))
-		if err != nil {
-			return err
-		}
-		if _, err := fmt.Fprintf(w, "id: %s\nevent: verdict\ndata: %s\n\n", recorded.EventID, data); err != nil {
-			return err
-		}
-		flusher.Flush()
-		return nil
-	}, verdict.StreamHeartbeat{Every: r.heartbeat, Beat: func() error {
-		if _, err := fmt.Fprint(w, ": heartbeat\n\n"); err != nil {
-			return err
-		}
-		flusher.Flush()
-		return nil
-	}})
-	if err == nil || req.Context().Err() != nil {
-		return
-	}
-	var closed verdict.ErrStreamClosed
-	var behind verdict.ErrSubscriberBehind
-	if errors.As(err, &closed) || errors.As(err, &behind) {
-		fmt.Fprintf(w, "event: error\ndata: %q\n\n", err.Error())
-		flusher.Flush()
-	}
+	protorest.WriteSuccess(w, req, r.respWriter, page)
 }
 
-// refuse answers before the event stream starts, as ordinary JSON.
-func (r *VerdictsRouter) refuse(w http.ResponseWriter, req *http.Request, code int, err error) {
-	if code == http.StatusForbidden {
-		r.respWriter.Error403(w, req, err, nil)
-		return
+// sessionTenant is the tenant of the verified session the auth middleware
+// published, or "" when there is none.
+func sessionTenant(req *http.Request) string {
+	if session, ok := iammw.GetSessionFromContext(req.Context()); ok && session != nil {
+		return session.TenantID()
 	}
-	r.respWriter.Write(w, req, code, response.WebServiceResponse{Code: code, Error: err.Error()})
+	return ""
 }
 
-// verdictOpenStatus maps the reason a subscription was not opened to its
-// HTTP status.
-func verdictOpenStatus(err error) int {
-	var forbidden verdict.ErrStreamForbidden
-	if errors.As(err, &forbidden) {
-		return http.StatusForbidden
-	}
-	var unavailable verdict.ErrStreamUnavailable
-	var closed verdict.ErrStreamClosed
-	if errors.As(err, &unavailable) || errors.As(err, &closed) {
-		return http.StatusServiceUnavailable
-	}
-	return http.StatusInternalServerError
+// ErrVerdictsForbidden reports a caller whose session names no tenant, so no
+// verdict audience can be decided for it.
+type ErrVerdictsForbidden struct{}
+
+func (ErrVerdictsForbidden) Error() string {
+	return "attestation: device verdicts denied: the session names no tenant"
 }

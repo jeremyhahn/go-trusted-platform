@@ -370,8 +370,6 @@ func BenchmarkContainerAttestAlloc(b *testing.B) {
 
 // TestContainerThroughput measures container operation throughput.
 func TestContainerThroughput(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
@@ -427,8 +425,6 @@ func TestContainerThroughput(t *testing.T) {
 
 // TestContainerLatency measures container operation latencies.
 func TestContainerLatency(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 

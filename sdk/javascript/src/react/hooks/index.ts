@@ -35,6 +35,7 @@ export {
   useTenant,
   useTPM,
   useVTPM,
+  useVPN,
 } from './use-services.js';
 
 // Invitation hooks

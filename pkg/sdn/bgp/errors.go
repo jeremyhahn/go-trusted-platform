@@ -917,7 +917,7 @@ type ErrAuthTypeUnavailableInFIPS struct {
 
 // Error implements the error interface.
 func (e ErrAuthTypeUnavailableInFIPS) Error() string {
-	return "bgp: peer " + e.Peer + ": auth-type " + e.AuthType.String() + " is not available in a FIPS build; use tcp-ao"
+	return "bgp: peer " + e.Peer + ": auth-type " + e.AuthType.String() + " is not available in a FIPS build; use auth-type none (tcp-ao peers are refused until GoBGP binds TCP-AO sessions)"
 }
 
 // ErrAuthSecretRequired is returned when a peer selects an authentication

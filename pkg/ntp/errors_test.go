@@ -41,6 +41,7 @@ func TestErrorMessagesIdentifyTheirOrigin(t *testing.T) {
 		"invalid network":       {ErrInvalidListenNetwork{Network: "x", Cause: errCause}, "invalid serve.listen-networks entry"},
 		"unrestricted network":  {ErrUnrestrictedListenNetwork{Network: "0.0.0.0/0"}, "is unrestricted"},
 		"invalid stratum":       {ErrInvalidLocalStratum{Stratum: 42}, "out of range (1-15)"},
+		"invalid NTS-KE port":   {ErrInvalidNTSKEPort{Port: 0}, "serve.nts.port 0 out of range (1-65535)"},
 		"missing NTS material":  {ErrMissingNTSMaterial{Field: "serve.nts.key-uri"}, "serve.nts.key-uri"},
 		"invalid gate timeout":  {ErrInvalidGateTimeout{Seconds: -1}, "must be positive"},
 		"render failed":         {ErrRenderFailed{Cause: errCause}, "chrony.conf render failed"},
@@ -240,6 +241,9 @@ func TestWithServiceNameOverridesTheOpenRCUnit(t *testing.T) {
 	call, ok := runner.callFor("default")
 	if !ok {
 		t.Fatal("rc-update was not invoked")
+	}
+	if call.Name != "rc-update" {
+		t.Fatalf("runlevel enable ran %q, want rc-update", call.Name)
 	}
 	if call.Args[1] != "chrony" {
 		t.Fatalf("rc-update service = %q, want chrony", call.Args[1])

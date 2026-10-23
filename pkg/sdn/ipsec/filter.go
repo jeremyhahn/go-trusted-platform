@@ -25,6 +25,7 @@ import (
 
 	"github.com/google/nftables"
 	"github.com/google/nftables/expr"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ipsec/config"
 	"golang.org/x/sys/unix"
 )
 
@@ -110,7 +111,7 @@ type Filter struct {
 // configuration. It needs CAP_NET_ADMIN. Options are passed through to
 // the library, which is how a caller pins the connection to a network
 // namespace (nftables.WithNetNSFd).
-func NewFilter(cfg *Config, opts ...nftables.ConnOption) (*Filter, error) {
+func NewFilter(cfg *config.Config, opts ...nftables.ConnOption) (*Filter, error) {
 	conn, err := nftables.New(opts...)
 	if err != nil {
 		return nil, &OpError{Op: "nftables connect", Err: err}
@@ -118,8 +119,8 @@ func NewFilter(cfg *Config, opts ...nftables.ConnOption) (*Filter, error) {
 	return newFilter(cfg, conn)
 }
 
-func newFilter(cfg *Config, conn nftConn) (*Filter, error) {
-	local, err := enabledLocal(cfg)
+func newFilter(cfg *config.Config, conn nftConn) (*Filter, error) {
+	local, err := config.EnabledLocal(cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -234,7 +235,7 @@ func (f *Filter) setEvicted(ctx context.Context, peer netip.Addr, evict bool) er
 	}
 	peer = peer.Unmap()
 	if !peer.IsValid() || peer.Is4() != f.local.Is4() {
-		return &PeerError{Peer: peer, Op: "evicted set", Err: ErrFamilyMismatch}
+		return &PeerError{Peer: peer, Op: "evicted set", Err: config.ErrFamilyMismatch}
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()

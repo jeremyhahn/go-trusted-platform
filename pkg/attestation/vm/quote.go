@@ -19,17 +19,89 @@ import (
 	"crypto/ecdsa"
 	"crypto/rsa"
 	"crypto/sha256"
+	"crypto/x509"
+	"fmt"
 	"sort"
 
 	"github.com/google/go-tpm/tpm2"
+	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 )
 
-// VerifyQuoteSignature verifies the AK signature over a marshaled TPMS_ATTEST
-// quote structure. The AK public key may be DER (PKIX or PKCS#1) or PEM
-// encoded. RSA signatures are verified as RSASSA-PKCS1-v1_5 over SHA-256 and
-// ECDSA signatures as ASN.1 DER over SHA-256, matching the signature formats
-// produced by the platform's TPM quote path.
-func VerifyQuoteSignature(akPublicKey, quoteData, signature []byte) error {
+// VerifyQuoteSignatureWithAlgorithm verifies the AK signature over a
+// marshaled TPMS_ATTEST quote structure under the signature algorithm the
+// quote declares, named as x509.SignatureAlgorithm names it ("SHA256-RSA",
+// "SHA256-RSAPSS", "ECDSA-SHA256", ...). The TPM signs a quote with the AK's
+// own scheme, so an RSA AK may produce either an RSASSA-PKCS1-v1_5 or an
+// RSASSA-PSS signature; the declared algorithm says which. It is the only quote
+// signature check: no scheme is ever inferred from the key type. The AK public
+// key may be DER (PKIX or PKCS#1) or PEM encoded.
+//
+// An empty or unknown algorithm fails closed with
+// ErrUnsupportedSignatureAlgorithm, and a key that cannot carry the declared
+// scheme fails with ErrSignatureSchemeMismatch.
+func VerifyQuoteSignatureWithAlgorithm(akPublicKey, quoteData, signature []byte, algorithm string) error {
+	if err := checkQuoteSignatureInputs(akPublicKey, quoteData, signature); err != nil {
+		return err
+	}
+
+	scheme, ok := quoteSchemes[algorithm]
+	if !ok {
+		return ErrUnsupportedSignatureAlgorithm{Algorithm: algorithm}
+	}
+
+	pubKey, err := parsePublicKey(akPublicKey)
+	if err != nil {
+		return ErrSignatureInvalid{Reason: "failed to parse AK public key", Cause: err}
+	}
+	return verifyQuoteScheme(pubKey, quoteData, signature, scheme)
+}
+
+// IAKSource is the TPM surface that describes the attestation key quotes
+// are signed with.
+type IAKSource interface {
+	IAKAttributes() (*xkmssdk.KeyAttributes, error)
+}
+
+// QuoteSignatureAlgorithm names the scheme tpm's IAK signs quotes under, in
+// the form VerifyQuoteSignatureWithAlgorithm dispatches on. A quote's
+// signature is bare bytes, so whoever hands a quote out hands this name out
+// with it. An IAK that declares no scheme fails with
+// ErrQuoteSchemeUnavailable rather than producing a quote nobody can check.
+func QuoteSignatureAlgorithm(tpm IAKSource) (string, error) {
+	attrs, err := tpm.IAKAttributes()
+	if err != nil {
+		return "", ErrQuoteSchemeUnavailable{Cause: err}
+	}
+	if attrs == nil || attrs.SignatureAlgorithm == x509.UnknownSignatureAlgorithm {
+		return "", ErrQuoteSchemeUnavailable{}
+	}
+	return attrs.SignatureAlgorithm.String(), nil
+}
+
+// quoteScheme is how a quote signature of one declared algorithm is checked:
+// the digest it signs and the verification the scheme defines.
+type quoteScheme struct {
+	hash   crypto.Hash
+	verify func(key crypto.PublicKey, hash crypto.Hash, digest, signature []byte) error
+}
+
+// quoteSchemes maps each signature algorithm a TPM quote can declare to its
+// scheme, keyed by the x509.SignatureAlgorithm name the IAK attributes carry.
+var quoteSchemes = map[string]quoteScheme{
+	x509.SHA256WithRSA.String():    {hash: crypto.SHA256, verify: verifyRSASSA},
+	x509.SHA384WithRSA.String():    {hash: crypto.SHA384, verify: verifyRSASSA},
+	x509.SHA512WithRSA.String():    {hash: crypto.SHA512, verify: verifyRSASSA},
+	x509.SHA256WithRSAPSS.String(): {hash: crypto.SHA256, verify: verifyRSAPSS},
+	x509.SHA384WithRSAPSS.String(): {hash: crypto.SHA384, verify: verifyRSAPSS},
+	x509.SHA512WithRSAPSS.String(): {hash: crypto.SHA512, verify: verifyRSAPSS},
+	x509.ECDSAWithSHA256.String():  {hash: crypto.SHA256, verify: verifyECDSA},
+	x509.ECDSAWithSHA384.String():  {hash: crypto.SHA384, verify: verifyECDSA},
+	x509.ECDSAWithSHA512.String():  {hash: crypto.SHA512, verify: verifyECDSA},
+}
+
+// checkQuoteSignatureInputs refuses a signature check that is missing any of
+// its three inputs.
+func checkQuoteSignatureInputs(akPublicKey, quoteData, signature []byte) error {
 	if len(akPublicKey) == 0 {
 		return ErrSignatureInvalid{Reason: "AK public key is empty"}
 	}
@@ -39,28 +111,51 @@ func VerifyQuoteSignature(akPublicKey, quoteData, signature []byte) error {
 	if len(signature) == 0 {
 		return ErrSignatureInvalid{Reason: "signature is empty"}
 	}
+	return nil
+}
 
-	pubKey, err := parsePublicKey(akPublicKey)
-	if err != nil {
-		return ErrSignatureInvalid{Reason: "failed to parse AK public key", Cause: err}
+// verifyQuoteScheme hashes the quote with the scheme's digest and checks the
+// signature under the scheme.
+func verifyQuoteScheme(key crypto.PublicKey, quoteData, signature []byte, scheme quoteScheme) error {
+	h := scheme.hash.New()
+	h.Write(quoteData)
+	return scheme.verify(key, scheme.hash, h.Sum(nil), signature)
+}
+
+func verifyRSASSA(key crypto.PublicKey, hash crypto.Hash, digest, signature []byte) error {
+	rsaKey, ok := key.(*rsa.PublicKey)
+	if !ok {
+		return ErrSignatureSchemeMismatch{Scheme: "RSASSA-PKCS1-v1_5", KeyType: fmt.Sprintf("%T", key)}
 	}
-
-	hashed := sha256.Sum256(quoteData)
-
-	switch key := pubKey.(type) {
-	case *rsa.PublicKey:
-		if err := rsa.VerifyPKCS1v15(key, crypto.SHA256, hashed[:], signature); err != nil {
-			return ErrSignatureInvalid{Reason: "RSA signature verification failed", Cause: err}
-		}
-		return nil
-	case *ecdsa.PublicKey:
-		if !ecdsa.VerifyASN1(key, hashed[:], signature) {
-			return ErrSignatureInvalid{Reason: "ECDSA signature verification failed"}
-		}
-		return nil
-	default:
-		return ErrSignatureInvalid{Reason: "unsupported AK key type"}
+	if err := rsa.VerifyPKCS1v15(rsaKey, hash, digest, signature); err != nil {
+		return ErrSignatureInvalid{Reason: "RSA signature verification failed", Cause: err}
 	}
+	return nil
+}
+
+// verifyRSAPSS accepts any salt length: TPMs differ on whether they salt
+// RSASSA-PSS with the digest length or the maximum the key allows.
+func verifyRSAPSS(key crypto.PublicKey, hash crypto.Hash, digest, signature []byte) error {
+	rsaKey, ok := key.(*rsa.PublicKey)
+	if !ok {
+		return ErrSignatureSchemeMismatch{Scheme: "RSASSA-PSS", KeyType: fmt.Sprintf("%T", key)}
+	}
+	opts := &rsa.PSSOptions{SaltLength: rsa.PSSSaltLengthAuto, Hash: hash}
+	if err := rsa.VerifyPSS(rsaKey, hash, digest, signature, opts); err != nil {
+		return ErrSignatureInvalid{Reason: "RSA-PSS signature verification failed", Cause: err}
+	}
+	return nil
+}
+
+func verifyECDSA(key crypto.PublicKey, _ crypto.Hash, digest, signature []byte) error {
+	ecKey, ok := key.(*ecdsa.PublicKey)
+	if !ok {
+		return ErrSignatureSchemeMismatch{Scheme: "ECDSA", KeyType: fmt.Sprintf("%T", key)}
+	}
+	if !ecdsa.VerifyASN1(ecKey, digest, signature) {
+		return ErrSignatureInvalid{Reason: "ECDSA signature verification failed"}
+	}
+	return nil
 }
 
 // ParseQuoteNonce extracts the anti-replay nonce (TPMS_ATTEST extraData /

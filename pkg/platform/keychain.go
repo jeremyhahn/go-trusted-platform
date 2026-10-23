@@ -16,6 +16,7 @@ package platform
 import (
 	"context"
 	"crypto"
+	"crypto/rsa"
 	"crypto/x509"
 	"errors"
 	"fmt"
@@ -52,6 +53,25 @@ func (e ErrUnsupportedKeyAlgorithm) Error() string {
 	return fmt.Sprintf("xkms: unsupported key algorithm: %v", e.Algorithm)
 }
 
+// ErrTPMSignerPublicKey reports key attributes that carry public key bytes
+// the TPM cannot parse. A signer built over them would report a nil Public(),
+// which crypto/tls reads as "no client certificate" and silently presents
+// none, so construction refuses them instead (#149).
+type ErrTPMSignerPublicKey struct {
+	CN  string
+	Err error
+}
+
+// Error returns the error message.
+func (e *ErrTPMSignerPublicKey) Error() string {
+	return fmt.Sprintf("xkms: TPM signer %q: unparseable public key: %v", e.CN, e.Err)
+}
+
+// Unwrap returns the parse error.
+func (e *ErrTPMSignerPublicKey) Unwrap() error {
+	return e.Err
+}
+
 // Type aliases for backward compatibility
 // KeyringConfig is an alias for XKMSConfig for backward compatibility.
 type KeyringConfig = XKMSConfig
@@ -66,26 +86,6 @@ type TPMSigner struct {
 	attrs     *xkmssdk.KeyAttributes
 	backend   xkmssdk.TPMKeyBackend
 	publicKey crypto.PublicKey
-
-	// pubKeyErr records a FAILED attempt to parse TPMAttributes.PublicKeyBytes.
-	//
-	// It is non-nil only when bytes were PRESENT and unparseable — never when
-	// they are absent. Absent bytes are the documented steady state on enrolled
-	// nodes (see certSigner in pkg/app/heartbeat.go, which overrides Public()
-	// precisely because of it), so that path never sets this and is unaffected.
-	//
-	// Present-but-unparseable is different: something intended to supply a
-	// public key and produced bytes the TPM could not read. Discarding that
-	// left Public() nil, which crypto/tls reads as "no certificate available"
-	// and silently presents none — the control plane answers 401 and the caller
-	// has no way to learn why. That cost a live bring-up to diagnose (#149).
-	//
-	// It surfaces at Sign() rather than at construction. A signer that cannot
-	// resolve its public key is survivable — certSigner supplies one from the
-	// certificate — but one that cannot resolve its key AND is asked to sign is
-	// broken at the moment it matters, which is where an error is both correct
-	// and diagnosable.
-	pubKeyErr error
 }
 
 // Public returns the public key corresponding to the TPM key.
@@ -95,46 +95,47 @@ func (s *TPMSigner) Public() crypto.PublicKey {
 }
 
 // Sign signs the digest using the TPM key.
-//
-// It refuses if the public key bytes supplied at construction could not be
-// parsed; see pubKeyErr. Signing with a signer whose public half is unknown is
-// how #149's failure stayed invisible.
 func (s *TPMSigner) Sign(rand io.Reader, digest []byte, opts crypto.SignerOpts) ([]byte, error) {
-	if s.pubKeyErr != nil {
-		return nil, s.pubKeyErr
-	}
-
 	signerOpts := &xkmssdk.TPMSignerOpts{
 		KeyAttributes: s.attrs,
 		Backend:       s.backend,
 	}
+	// A caller asking for RSA-PSS must get PSS: TLS 1.3 accepts nothing else
+	// for an RSA CertificateVerify, and a PKCS#1 v1.5 signature over the same
+	// digest fails the peer's verification.
+	if pss, ok := opts.(*rsa.PSSOptions); ok {
+		signerOpts.PSSOptions = pss
+	}
 	return s.tpm.Sign(rand, digest, signerOpts)
 }
 
-// NewTPMSigner creates a new TPM signer for the given key attributes.
-// It attempts to resolve the public key from the key attributes.
+// NewTPMSigner creates a new TPM signer for the given key attributes and
+// resolves its public key from TPMAttributes.PublicKeyBytes.
+//
+// Absent bytes are not an error: they are the steady-state shape on an
+// enrolled node (IDevIDAttributesFromConfig never sets them), and the caller
+// supplies the public half itself — see certSigner in pkg/app/heartbeat.go.
+// Present but unparseable bytes return *ErrTPMSignerPublicKey: something meant
+// to supply a public key and failed, and a signer without one makes crypto/tls
+// silently present no client certificate (#149).
 func NewTPMSigner(
 	tpm xkmssdk.TrustedPlatformModule,
 	attrs *xkmssdk.KeyAttributes,
-	backend xkmssdk.TPMKeyBackend) *TPMSigner {
+	backend xkmssdk.TPMKeyBackend) (*TPMSigner, error) {
 	signer := &TPMSigner{
 		tpm:     tpm,
 		attrs:   attrs,
 		backend: backend,
 	}
-	// Try to resolve the public key from TPMAttributes
-	if attrs.TPMAttributes != nil && len(attrs.TPMAttributes.PublicKeyBytes) > 0 {
-		pubKey, err := tpm.ParsePublicKey(attrs.TPMAttributes.PublicKeyBytes)
-		if err != nil {
-			// Recorded, not discarded, and not fatal here: construction stays
-			// infallible so the three call sites keep their shapes, including
-			// the struct literal in pkg/app/heartbeat.go.
-			signer.pubKeyErr = err
-		} else {
-			signer.publicKey = pubKey
-		}
+	if attrs.TPMAttributes == nil || len(attrs.TPMAttributes.PublicKeyBytes) == 0 {
+		return signer, nil
 	}
-	return signer
+	pubKey, err := tpm.ParsePublicKey(attrs.TPMAttributes.PublicKeyBytes)
+	if err != nil {
+		return nil, &ErrTPMSignerPublicKey{CN: attrs.CN, Err: err}
+	}
+	signer.publicKey = pubKey
+	return signer, nil
 }
 
 // PlatformKeyStore implements xkmssdk.PlatformKeyStorer interface.
@@ -761,7 +762,11 @@ func (kc *XKMS) Signer(ctx context.Context, attrs *xkmssdk.KeyAttributes) (crypt
 		if kc.tpm == nil {
 			return nil, errors.New("xkms: TPM not configured for TPM2 key")
 		}
-		return NewTPMSigner(kc.tpm, attrs, kc.keyBackend), nil
+		signer, err := NewTPMSigner(kc.tpm, attrs, kc.keyBackend)
+		if err != nil {
+			return nil, err
+		}
+		return signer, nil
 	}
 
 	// Use backend for other store types

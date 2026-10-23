@@ -45,6 +45,7 @@ func TestBuildQEMUCommand_BootMode_WithVNC(t *testing.T) {
 		WorkDir:       tmpDir,
 		SecureBoot:    false,
 		EnableKVM:     true,
+		KVMProbe:      func() error { return nil },
 		SerialConsole: false,
 		NoGraphic:     false,
 		VNCDisplay:    2,

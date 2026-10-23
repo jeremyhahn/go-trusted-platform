@@ -119,6 +119,30 @@ func (b *singleShotBinder) Finish(_ *http.Request, sessionID string) (quicbaas.F
 	return quicbaas.FinishLoginRequest{SessionID: sessionID, Type: quicbaas.FactorTypePIV}, nil
 }
 
+// Tenant lands the session in the tenant the ceremony ran in, so the
+// driver's other paths can be tested without a workspace in the way.
+func (b *singleShotBinder) Tenant(_ context.Context, identity *quicbaas.Identity) (string, error) {
+	return identity.TenantID, nil
+}
+
+// fakeWorkspaces stands in for the platform's tenant service. It records
+// the subject it was asked about, so a test can assert the workspace was
+// resolved for the principal the BACKBONE authenticated.
+type fakeWorkspaces struct {
+	subject   string
+	workspace string
+	err       error
+}
+
+func (f *fakeWorkspaces) Workspace(_ context.Context, subject string) (string, error) {
+	f.subject = subject
+	return f.workspace, f.err
+}
+
+func newTestWorkspaces() *fakeWorkspaces {
+	return &fakeWorkspaces{workspace: "workspace-a"}
+}
+
 func testDeps() (*logging.Logger, response.HttpWriter) {
 	logger := logging.NewLogger(slog.LevelError, os.Stderr)
 	return logger, response.NewResponseWriter(logger, nil)
@@ -224,7 +248,7 @@ func TestNewDriverRejectsDuplicateAndNilBinders(t *testing.T) {
 }
 
 func TestDriverBeginFIDO2IssuesAUsernamelessChallenge(t *testing.T) {
-	fido2, err := NewFIDO2Binder("tenant-a")
+	fido2, err := NewFIDO2Binder("tenant-a", newTestWorkspaces())
 	if err != nil {
 		t.Fatalf("NewFIDO2Binder: %v", err)
 	}
@@ -264,7 +288,7 @@ func TestDriverBeginFIDO2IssuesAUsernamelessChallenge(t *testing.T) {
 }
 
 func TestDriverBeginFIDO2FailsWhenTheChallengeIsIncomplete(t *testing.T) {
-	fido2, err := NewFIDO2Binder("tenant-a")
+	fido2, err := NewFIDO2Binder("tenant-a", newTestWorkspaces())
 	if err != nil {
 		t.Fatalf("NewFIDO2Binder: %v", err)
 	}
@@ -282,7 +306,7 @@ func TestDriverBeginFIDO2FailsWhenTheChallengeIsIncomplete(t *testing.T) {
 }
 
 func TestDriverFinishFIDO2SubmitsTheCredentialIDAsTheLookupKey(t *testing.T) {
-	fido2, err := NewFIDO2Binder("tenant-a")
+	fido2, err := NewFIDO2Binder("tenant-a", newTestWorkspaces())
 	if err != nil {
 		t.Fatalf("NewFIDO2Binder: %v", err)
 	}
@@ -321,7 +345,7 @@ func TestDriverFinishFIDO2SubmitsTheCredentialIDAsTheLookupKey(t *testing.T) {
 }
 
 func TestDriverFinishFIDO2RejectsAProofWithNoSessionOrCredentialID(t *testing.T) {
-	fido2, err := NewFIDO2Binder("tenant-a")
+	fido2, err := NewFIDO2Binder("tenant-a", newTestWorkspaces())
 	if err != nil {
 		t.Fatalf("NewFIDO2Binder: %v", err)
 	}
@@ -351,7 +375,7 @@ func TestDriverFinishFIDO2RejectsAProofWithNoSessionOrCredentialID(t *testing.T)
 }
 
 func TestDriverFinishFIDO2RejectsAnOversizedProof(t *testing.T) {
-	fido2, err := NewFIDO2Binder("tenant-a")
+	fido2, err := NewFIDO2Binder("tenant-a", newTestWorkspaces())
 	if err != nil {
 		t.Fatalf("NewFIDO2Binder: %v", err)
 	}
@@ -484,10 +508,16 @@ func TestDriverRejectsABeginResponseThatIsNil(t *testing.T) {
 func TestNewFIDO2BinderRequiresACeremonyTenant(t *testing.T) {
 	// A WebAuthn assertion is only valid against its tenant's relying
 	// party, so an unscoped binder must not exist.
-	if _, err := NewFIDO2Binder(""); err == nil {
+	if _, err := NewFIDO2Binder("", newTestWorkspaces()); err == nil {
 		t.Fatal("expected a missing-tenant error")
 	}
-	if _, err := NewFIDO2Binder("tenant-a"); err != nil {
+	// And without a resolver the only tenant it could land a session in
+	// is the ceremony's, which a browser login never lands in (#662).
+	var config *DriverConfigError
+	if _, err := NewFIDO2Binder("tenant-a", nil); !errors.As(err, &config) {
+		t.Fatalf("expected a missing-resolver DriverConfigError, got %v", err)
+	}
+	if _, err := NewFIDO2Binder("tenant-a", newTestWorkspaces()); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
@@ -531,6 +561,9 @@ func TestMTLSBinderDeclinesTheCeremonyItCannotBind(t *testing.T) {
 		if _, err := binder.Finish(request, sessionID); !errors.As(err, &unavailable) {
 			t.Fatalf("Finish(%q): expected FactorUnavailableError, got %v", sessionID, err)
 		}
+	}
+	if _, err := binder.Tenant(context.Background(), &quicbaas.Identity{Subject: "operator@platform"}); !errors.As(err, &unavailable) {
+		t.Fatalf("Tenant: expected FactorUnavailableError, got %v", err)
 	}
 }
 
@@ -705,6 +738,208 @@ func TestDriverRefusesAFinishResponseMissingItsCeremonyHalf(t *testing.T) {
 
 	if recorder.Code != http.StatusUnauthorized {
 		t.Fatalf("expected 401, got %d: %s", recorder.Code, recorder.Body.String())
+	}
+}
+
+// finishFIDO2 runs a browser login's finish leg against a FIDO2 binder
+// whose ceremony tenant is "tenant-a" — the operating tenant the backbone's
+// identity names — and the given workspace resolver.
+func finishFIDO2(t *testing.T, issuer *fakeIssuer, workspaces WorkspaceResolver) (*httptest.ResponseRecorder, *fakeClient) {
+	t.Helper()
+	return finishFIDO2WithRoles(t, issuer, workspaces, nil)
+}
+
+// finishFIDO2WithRoles completes a fido2 ceremony on a driver whose
+// workspace sessions take their roles from roles (nil: none wired).
+func finishFIDO2WithRoles(
+	t *testing.T, issuer *fakeIssuer, workspaces WorkspaceResolver, roles RoleResolver) (*httptest.ResponseRecorder, *fakeClient) {
+
+	t.Helper()
+	fido2, err := NewFIDO2Binder("tenant-a", workspaces)
+	if err != nil {
+		t.Fatalf("NewFIDO2Binder: %v", err)
+	}
+	client := &fakeClient{finish: finishResponse(t, "bearer-xyz", "refresh-xyz")}
+	logger, writer := testDeps()
+	driver, err := NewDriver(DriverParams{
+		Client:         client,
+		Binders:        []Binder{fido2},
+		SessionIssuer:  issuer,
+		Roles:          roles,
+		Logger:         logger,
+		ResponseWriter: writer,
+	})
+	if err != nil {
+		t.Fatalf("NewDriver: %v", err)
+	}
+
+	request := httptest.NewRequest(http.MethodPost, "/login/finish", strings.NewReader(assertionBody("Q1JFRC1JRA")))
+	request.Header.Set(SessionIDHeader, "sess-1")
+	recorder := httptest.NewRecorder()
+	driver.Finish(recorder, request, quicbaas.FactorTypeFIDO2)
+	return recorder, client
+}
+
+func TestDriverLandsABrowserLoginInThePrincipalsWorkspace(t *testing.T) {
+	issuer := newTestIssuer()
+	workspaces := newTestWorkspaces()
+
+	recorder, client := finishFIDO2(t, issuer, workspaces)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", recorder.Code, recorder.Body.String())
+	}
+	if workspaces.subject != "operator@platform" {
+		t.Fatalf("expected the workspace of the authenticated principal, got %q", workspaces.subject)
+	}
+	// The backbone names the operating tenant the ceremony ran in; the
+	// session must name the principal's workspace instead (#662).
+	if issuer.identity == nil || issuer.identity.TenantID != "workspace-a" {
+		t.Fatalf("expected the session minted in the workspace, got %+v", issuer.identity)
+	}
+	if issuer.identity.Subject != "operator@platform" {
+		t.Fatalf("expected the backbone's subject kept, got %q", issuer.identity.Subject)
+	}
+	if client.finish.Identity.TenantID != "tenant-a" {
+		t.Fatalf("the backbone's answer must not be edited in place, got %q", client.finish.Identity.TenantID)
+	}
+}
+
+func TestDriverRefusesABrowserLoginWithNoWorkspace(t *testing.T) {
+	notInTenant := errors.New("user not in tenant")
+	cases := []struct {
+		name       string
+		workspaces *fakeWorkspaces
+	}{
+		{name: "resolver fails", workspaces: &fakeWorkspaces{err: notInTenant}},
+		{name: "no workspace", workspaces: &fakeWorkspaces{}},
+		{name: "workspace is the operating tenant", workspaces: &fakeWorkspaces{workspace: "tenant-a"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			issuer := newTestIssuer()
+
+			recorder, _ := finishFIDO2(t, issuer, tc.workspaces)
+
+			if recorder.Code != http.StatusForbidden {
+				t.Fatalf("expected 403, got %d: %s", recorder.Code, recorder.Body.String())
+			}
+			// Never a fallback: no session at all rather than one in the
+			// operating tenant.
+			if issuer.calls != 0 {
+				t.Fatalf("no session may be minted without a workspace, got %+v", issuer.identity)
+			}
+			if strings.Contains(recorder.Body.String(), "platform.session.token") {
+				t.Fatalf("no credential may reach the client, got %s", recorder.Body.String())
+			}
+		})
+	}
+}
+
+func TestNoWorkspaceErrorNamesThePrincipalAndUnwrapsItsCause(t *testing.T) {
+	cause := errors.New("user not in tenant")
+	err := &NoWorkspaceError{Subject: "ann@example.com", Cause: cause}
+
+	if !errors.Is(err, cause) {
+		t.Fatal("expected the resolver's failure to unwrap")
+	}
+	if !strings.Contains(err.Error(), "ann@example.com") || !strings.Contains(err.Error(), cause.Error()) {
+		t.Fatalf("expected the principal and the cause in the message, got %q", err.Error())
+	}
+	bare := &NoWorkspaceError{Subject: "ann@example.com"}
+	if bare.Unwrap() != nil || strings.HasSuffix(bare.Error(), ": ") {
+		t.Fatalf("expected a causeless message, got %q", bare.Error())
+	}
+}
+
+// fakeRoles answers one principal's roles in a workspace and records the
+// question it was asked.
+type fakeRoles struct {
+	tenantID string
+	subject  string
+	roles    []string
+	err      error
+}
+
+func (f *fakeRoles) Roles(_ context.Context, tenantID, subject string) ([]string, error) {
+	f.tenantID = tenantID
+	f.subject = subject
+	return f.roles, f.err
+}
+
+// TestDriverGivesAWorkspaceSessionTheWorkspaceRolesOnly is the regression
+// test for the escalation Codex found on #891: the backbone resolves the
+// principal in the operating tenant, where they are an admin, and the
+// session lands in their workspace, where they are a member. The session
+// must carry the member role, not the operating tenant's admin.
+func TestDriverGivesAWorkspaceSessionTheWorkspaceRolesOnly(t *testing.T) {
+	issuer := newTestIssuer()
+	roles := &fakeRoles{roles: []string{"member"}}
+
+	recorder, client := finishFIDO2WithRoles(t, issuer, newTestWorkspaces(), roles)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", recorder.Code, recorder.Body.String())
+	}
+	if roles.tenantID != "workspace-a" || roles.subject != "operator@platform" {
+		t.Fatalf("expected the roles of operator@platform in workspace-a, asked for %q in %q",
+			roles.subject, roles.tenantID)
+	}
+	if got := issuer.identity.Roles; len(got) != 1 || got[0] != "member" {
+		t.Fatalf("expected the workspace roles [member] and nothing else, got %v", got)
+	}
+	if got := client.finish.Identity.Roles; len(got) != 1 || got[0] != "admin" {
+		t.Fatalf("the backbone's answer must not be edited in place, got %v", got)
+	}
+}
+
+// TestDriverGivesAWorkspaceSessionNoRolesWithoutAResolver proves the
+// fallback is the ordinary member, never the operating tenant's admin.
+func TestDriverGivesAWorkspaceSessionNoRolesWithoutAResolver(t *testing.T) {
+	issuer := newTestIssuer()
+
+	recorder, _ := finishFIDO2(t, issuer, newTestWorkspaces())
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", recorder.Code, recorder.Body.String())
+	}
+	if len(issuer.identity.Roles) != 0 {
+		t.Fatalf("expected no roles in the workspace, got %v", issuer.identity.Roles)
+	}
+}
+
+// TestDriverRefusesAWorkspaceSessionWhoseRolesCannotBeResolved: a failing
+// resolver refuses the session as a platform fault, and nothing is minted.
+func TestDriverRefusesAWorkspaceSessionWhoseRolesCannotBeResolved(t *testing.T) {
+	issuer := newTestIssuer()
+	roles := &fakeRoles{err: errors.New("iam unreachable")}
+
+	recorder, _ := finishFIDO2WithRoles(t, issuer, newTestWorkspaces(), roles)
+
+	if recorder.Code != http.StatusInternalServerError {
+		t.Fatalf("expected 500, got %d: %s", recorder.Code, recorder.Body.String())
+	}
+	if issuer.calls != 0 {
+		t.Fatalf("no session may be minted without the workspace roles, got %d", issuer.calls)
+	}
+}
+
+func TestWorkspaceRolesErrorNamesThePrincipalAndUnwrapsItsCause(t *testing.T) {
+	cause := errors.New("iam unreachable")
+	err := &WorkspaceRolesError{TenantID: "workspace-a", Subject: "operator@platform", Cause: cause}
+
+	if !errors.Is(err, cause) {
+		t.Fatalf("expected the cause to unwrap")
+	}
+	for _, want := range []string{"operator@platform", "workspace-a", "iam unreachable"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("expected %q in %q", want, err.Error())
+		}
+	}
+	bare := &WorkspaceRolesError{TenantID: "workspace-a", Subject: "operator@platform"}
+	want := "login: the roles of operator@platform in workspace workspace-a could not be resolved"
+	if bare.Error() != want {
+		t.Fatalf("expected %q, got %q", want, bare.Error())
 	}
 }
 

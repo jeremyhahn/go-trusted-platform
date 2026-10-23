@@ -1238,7 +1238,7 @@ EnvironmentFile=-/etc/trusted-platform/platformd.env
 
 # Start the platform daemon (web services auto-start if configured)
 # Platform provisioning (TPM, CA) is handled by platformd platform provision in initramfs
-ExecStart=/usr/sbin/platformd serve --platform-dir=/var/lib/trusted-platform --config-dir=/etc/trusted-platform --log-dir=/var/log/trusted-platform ${PLATFORMD_DEBUG}
+ExecStart=/usr/sbin/platformd serve --platform-dir=/var/lib/trusted-platform --config-dir=/etc/trusted-platform --log-dir=/var/log/trusted-platform --enable-mtls ${PLATFORMD_DEBUG}
 
 # Security hardening
 NoNewPrivileges=false
@@ -1269,14 +1269,14 @@ name="platformd"
 description="Trusted Platform :: Trusted / Confidential Computing Platform"
 
 command="/usr/sbin/platformd"
-command_args="serve --platform-dir=/var/lib/trusted-platform --config-dir=/etc/trusted-platform --log-dir=/var/log/trusted-platform ${PLATFORMD_DEBUG}"
+command_args="serve --platform-dir=/var/lib/trusted-platform --config-dir=/etc/trusted-platform --log-dir=/var/log/trusted-platform --enable-mtls ${PLATFORMD_DEBUG}"
 command_background=true
 pidfile="/run/${RC_SVCNAME}.pid"
 directory="/var/lib/trusted-platform"
 start_stop_daemon_args="--stdout /var/log/trusted-platform/platformd.log --stderr /var/log/trusted-platform/platformd.log"
 
 depend() {
-    need networking
+    need net
     after firewall charon
 }
 

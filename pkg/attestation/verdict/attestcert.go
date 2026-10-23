@@ -20,7 +20,9 @@ import "context"
 // either recorded (the certificate parsed, chained to the platform CA,
 // carried tcg-cap-verifiedTPMRestricted and certified the device's enrolled
 // attestation key) or refused (no candidate certificate did), and a refusal
-// changes nothing on the device record.
+// changes nothing on the device record — unless the operator asked for a
+// refused certificate to be cleared, in which case the outcome is cleared:
+// the record's certificate was removed because no candidate passed.
 type AttestCertEvent struct {
 	// DeviceID is the platform device record the attempt was for.
 	DeviceID uint64
@@ -38,19 +40,27 @@ type AttestCertEvent struct {
 	// Reissued is true when the CA was asked to issue a new attestation
 	// certificate during the attempt, whether or not it was then recorded.
 	Reissued bool
+	// Cleared is true when every candidate was refused and the operator's
+	// explicit request removed the certificate the record held. Subject then
+	// names the removed certificate when it parsed.
+	Cleared bool
 	// Reason is the refusal detail; empty when Recorded.
 	Reason string
 }
 
 // Validate reports whether the event is internally consistent: a recorded
 // event names its source and carries no reason, a refused one carries a
-// reason.
+// reason, and a cleared one is not recorded and carries the refusal that
+// justified the clear.
 func (e AttestCertEvent) Validate() error {
 	if e.DeviceID == 0 {
 		return ErrInvalidVerdict{Reason: "device ID is required"}
 	}
 	if e.Recorded && e.Reason != "" {
 		return ErrInvalidVerdict{Reason: "a recorded certificate carries no refusal reason"}
+	}
+	if e.Recorded && e.Cleared {
+		return ErrInvalidVerdict{Reason: "a certificate is either recorded or cleared, not both"}
 	}
 	if e.Recorded && e.Source == "" {
 		return ErrInvalidVerdict{Reason: "a recorded certificate names its source"}

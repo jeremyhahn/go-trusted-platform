@@ -13,13 +13,6 @@
 
 package ceremony
 
-import "errors"
-
-// ErrNotYetWired indicates the ceremony service handler has not yet been
-// wired up on the server side. This is a deliberate placeholder returned by
-// the Phase 3 SDK stubs; real implementations land in Phase 3.5.
-var ErrNotYetWired = errors.New("ceremony: service not yet wired in this release")
-
 // ErrInitFailed indicates a ceremony initialization failure.
 type ErrInitFailed struct {
 	Cause error
@@ -97,3 +90,29 @@ func (e *ErrSignCSRFailed) Error() string {
 
 // Unwrap returns the underlying cause.
 func (e *ErrSignCSRFailed) Unwrap() error { return e.Cause }
+
+// ErrUnknownWireValue indicates a transport carried an enum value the SDK
+// does not recognise. It is refused rather than reported as UNSPECIFIED.
+type ErrUnknownWireValue struct {
+	Kind  string
+	Value string
+}
+
+// Error implements the error interface.
+func (e *ErrUnknownWireValue) Error() string {
+	return "ceremony: unknown " + e.Kind + " " + e.Value
+}
+
+// ErrWireDecode indicates a REST or MCP result could not be decoded.
+type ErrWireDecode struct {
+	Message string
+	Err     error
+}
+
+// Error implements the error interface.
+func (e *ErrWireDecode) Error() string {
+	return "ceremony: decode " + e.Message + " result: " + e.Err.Error()
+}
+
+// Unwrap returns the underlying cause.
+func (e *ErrWireDecode) Unwrap() error { return e.Err }

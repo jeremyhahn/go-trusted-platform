@@ -16,11 +16,13 @@
 package quic
 
 import (
+	"bytes"
 	"context"
 	"crypto"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/tls"
 	"crypto/x509"
 	"errors"
 	"math/big"
@@ -30,6 +32,8 @@ import (
 	"github.com/google/go-tpm/tpm2/transport"
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/testutil"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -52,6 +56,7 @@ type mockTPM struct {
 	ekAttrs            *xkmssdk.KeyAttributes
 	ekAttrsErr         error
 	createEKErr        error
+	ekPersisted        bool
 	ekCert             *x509.Certificate
 	ekCertErr          error
 	provisionEKCertErr error
@@ -71,6 +76,7 @@ type mockTPM struct {
 	idevidPubKey       crypto.PublicKey
 	idevidPubKeyErr    error
 	quoteResult        xkmssdk.Quote
+	quoted             []byte
 	quoteErr           error
 	readPCRsResult     []xkmssdk.PCRBank
 	readPCRsErr        error
@@ -118,6 +124,7 @@ func newMockTPM() *mockTPM {
 			TPMAttributes: &xkmssdk.TPMAttributes{
 				Handle:         0x81010001,
 				PublicKeyBytes: []byte("test-ek-pub"),
+				Template:       tpm2.RSAEKTemplate,
 			},
 		},
 		ssrkAttrs: &xkmssdk.KeyAttributes{
@@ -138,7 +145,8 @@ func newMockTPM() *mockTPM {
 			},
 		},
 		iakAttrs: &xkmssdk.KeyAttributes{
-			CN: "test-iak",
+			CN:                 "test-iak",
+			SignatureAlgorithm: x509.SHA256WithRSAPSS,
 			TPMAttributes: &xkmssdk.TPMAttributes{
 				Handle:         0x81020001,
 				PublicKeyBytes: []byte("test-iak-pub"),
@@ -177,7 +185,15 @@ func (m *mockTPM) ProvisionOwner(auth xkmssdk.Password) (*xkmssdk.KeyAttributes,
 func (m *mockTPM) Clear(lockoutAuth []byte) error                 { return m.clearErr }
 func (m *mockTPM) EKAttributes() (*xkmssdk.KeyAttributes, error)  { return m.ekAttrs, m.ekAttrsErr }
 func (m *mockTPM) CreateEK(keyAttrs *xkmssdk.KeyAttributes) error { return m.createEKErr }
-func (m *mockTPM) Flush(handle tpm2.TPMHandle)                    {}
+
+// ReadHandle reports the EK handle occupied only when ekPersisted is set.
+func (m *mockTPM) ReadHandle(tpm2.TPMHandle) (tpm2.TPM2BName, tpm2.TPMTPublic, error) {
+	if m.ekPersisted {
+		return tpm2.TPM2BName{}, tpm2.TPMTPublic{}, nil
+	}
+	return tpm2.TPM2BName{}, tpm2.TPMTPublic{}, tpm2.TPMRCHandle
+}
+func (m *mockTPM) Flush(handle tpm2.TPMHandle) {}
 func (m *mockTPM) EKCertificate() (*x509.Certificate, error) {
 	if m.ekCertErr != nil {
 		return nil, m.ekCertErr
@@ -226,6 +242,7 @@ func (m *mockTPM) IDevID() (crypto.PublicKey, error) {
 	return &key.PublicKey, nil
 }
 func (m *mockTPM) Quote(pcrs []uint, nonce []byte) (xkmssdk.Quote, error) {
+	m.quoted = nonce
 	return m.quoteResult, m.quoteErr
 }
 func (m *mockTPM) ReadPCRs(pcrList []uint) ([]xkmssdk.PCRBank, error) {
@@ -291,6 +308,7 @@ func TestNewTPM2Handler(t *testing.T) {
 	h := NewTPM2Handler(logging.DefaultLogger())
 	require.NotNil(t, h)
 	assert.NotNil(t, h.handlers)
+	// 34 sub-opcodes less SubOpTPM2DeleteIAK, which the daemon refuses.
 	assert.Len(t, h.handlers, 33)
 	assert.Nil(t, h.tpm)
 }
@@ -306,30 +324,30 @@ func TestTPM2Handler_HandleMessage_NilRequest(t *testing.T) {
 	h.SetTPM2Service(newMockTPM())
 	resp := h.HandleMessage(context.Background(), nil)
 	require.NotNil(t, resp)
-	assert.Equal(t, StatusInvalidRequest, resp.Status)
+	assert.Equal(t, quicwire.StatusInvalidRequest, resp.Status)
 }
 
 func TestTPM2Handler_HandleMessage_NilTPM(t *testing.T) {
 	h := NewTPM2Handler(logging.DefaultLogger())
-	resp := h.HandleMessage(context.Background(), &Request{Payload: []byte{SubOpTPM2Info}})
+	resp := h.HandleMessage(context.Background(), &quicwire.Request{Payload: []byte{quicwire.SubOpTPM2Info}})
 	require.NotNil(t, resp)
-	assert.Equal(t, StatusUnavailable, resp.Status)
+	assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 }
 
 func TestTPM2Handler_HandleMessage_EmptyPayload(t *testing.T) {
 	h := NewTPM2Handler(logging.DefaultLogger())
 	h.SetTPM2Service(newMockTPM())
-	resp := h.HandleMessage(context.Background(), &Request{Payload: []byte{}})
+	resp := h.HandleMessage(context.Background(), &quicwire.Request{Payload: []byte{}})
 	require.NotNil(t, resp)
-	assert.Equal(t, StatusInvalidRequest, resp.Status)
+	assert.Equal(t, quicwire.StatusInvalidRequest, resp.Status)
 }
 
 func TestTPM2Handler_HandleMessage_UnknownSubOpcode(t *testing.T) {
 	h := NewTPM2Handler(logging.DefaultLogger())
 	h.SetTPM2Service(newMockTPM())
-	resp := h.HandleMessage(context.Background(), &Request{Payload: []byte{0xFF}})
+	resp := h.HandleMessage(context.Background(), &quicwire.Request{Payload: []byte{0xFF}})
 	require.NotNil(t, resp)
-	assert.Equal(t, StatusNotImplemented, resp.Status)
+	assert.Equal(t, quicwire.StatusNotImplemented, resp.Status)
 }
 
 // =============================================================================
@@ -338,15 +356,19 @@ func TestTPM2Handler_HandleMessage_UnknownSubOpcode(t *testing.T) {
 
 func TestTPM2Handler_HandleInfo_Success(t *testing.T) {
 	h := NewTPM2Handler(logging.DefaultLogger())
-	h.SetTPM2Service(newMockTPM())
-	resp := h.HandleMessage(context.Background(), &Request{Payload: []byte{SubOpTPM2Info}})
+	mock := newMockTPM()
+	mock.readPCRsResult = []xkmssdk.PCRBank{{Algorithm: "SHA1"}, {Algorithm: "SHA256"}}
+	h.SetTPM2Service(mock)
+	resp := h.HandleMessage(context.Background(), &quicwire.Request{Payload: []byte{quicwire.SubOpTPM2Info}})
 	require.NotNil(t, resp)
-	assert.Equal(t, StatusOK, resp.Status)
+	assert.Equal(t, quicwire.StatusOK, resp.Status)
 	var infoResp TPM2InfoResponse
-	require.NoError(t, DecodePayload(resp.Payload, &infoResp))
+	require.NoError(t, quicwire.DecodePayload(resp.Payload, &infoResp))
 	assert.Equal(t, "mock-tpm-info", infoResp.Info)
 	assert.Equal(t, "TEST-MFR", infoResp.Manufacturer)
 	assert.True(t, infoResp.IsSimulator)
+	assert.Equal(t, "2.0", infoResp.Version)
+	assert.Equal(t, []string{"sha1", "sha256"}, infoResp.PCRBanks)
 }
 
 func TestTPM2Handler_HandleInfo_Error(t *testing.T) {
@@ -354,17 +376,22 @@ func TestTPM2Handler_HandleInfo_Error(t *testing.T) {
 	mock := newMockTPM()
 	mock.infoErr = errors.New("tpm not available")
 	h.SetTPM2Service(mock)
-	resp := h.HandleMessage(context.Background(), &Request{Payload: []byte{SubOpTPM2Info}})
-	assert.NotEqual(t, StatusOK, resp.Status)
+	resp := h.HandleMessage(context.Background(), &quicwire.Request{Payload: []byte{quicwire.SubOpTPM2Info}})
+	assert.NotEqual(t, quicwire.StatusOK, resp.Status)
 }
 
 func TestTPM2Handler_HandleInfo_NoProperties(t *testing.T) {
 	h := NewTPM2Handler(logging.DefaultLogger())
 	mock := newMockTPM()
 	mock.fixedPropsErr = errors.New("n/a")
+	mock.readPCRsResult = []xkmssdk.PCRBank{{Algorithm: "SHA256"}}
+	mock.readPCRsErr = errors.New("n/a")
 	h.SetTPM2Service(mock)
-	resp := h.HandleMessage(context.Background(), &Request{Payload: []byte{SubOpTPM2Info}})
-	assert.Equal(t, StatusOK, resp.Status)
+	resp := h.HandleMessage(context.Background(), &quicwire.Request{Payload: []byte{quicwire.SubOpTPM2Info}})
+	require.Equal(t, quicwire.StatusOK, resp.Status)
+	var infoResp TPM2InfoResponse
+	require.NoError(t, quicwire.DecodePayload(resp.Payload, &infoResp))
+	assert.Empty(t, infoResp.PCRBanks, "a refused PCR read leaves the banks empty and fails nothing")
 }
 
 func TestTPM2Handler_HandleInfo_NilConfig(t *testing.T) {
@@ -372,24 +399,58 @@ func TestTPM2Handler_HandleInfo_NilConfig(t *testing.T) {
 	mock := newMockTPM()
 	mock.config = nil
 	h.SetTPM2Service(mock)
-	resp := h.HandleMessage(context.Background(), &Request{Payload: []byte{SubOpTPM2Info}})
-	assert.Equal(t, StatusOK, resp.Status)
+	resp := h.HandleMessage(context.Background(), &quicwire.Request{Payload: []byte{quicwire.SubOpTPM2Info}})
+	assert.Equal(t, quicwire.StatusOK, resp.Status)
+}
+
+func TestTPM2Handler_HandleInfo_PublishesConfiguredSRKHandles(t *testing.T) {
+	h := NewTPM2Handler(logging.DefaultLogger())
+	mock := newMockTPM()
+	mock.config = &xkmssdk.TPMConfig{
+		PlatformSRK: &xkmssdk.PlatformSRKConfig{SRKHandle: 0x81000005},
+		SSRK:        &xkmssdk.SRKConfig{Handle: 0x81000007},
+	}
+	h.SetTPM2Service(mock)
+
+	resp := h.HandleMessage(context.Background(), &quicwire.Request{Payload: []byte{quicwire.SubOpTPM2Info}})
+
+	require.Equal(t, quicwire.StatusOK, resp.Status)
+	var infoResp TPM2InfoResponse
+	require.NoError(t, quicwire.DecodePayload(resp.Payload, &infoResp))
+	assert.Equal(t, "0x81000005", infoResp.Properties["platform_srk_handle"])
+	assert.Equal(t, "0x81000007", infoResp.Properties["ssrk_handle"])
+	assert.Equal(t, "mock-tpm-info", infoResp.Properties["info"])
+}
+
+func TestTPM2Handler_HandleInfo_PublishesDefaultSRKHandlesWithNilConfig(t *testing.T) {
+	h := NewTPM2Handler(logging.DefaultLogger())
+	mock := newMockTPM()
+	mock.config = nil
+	h.SetTPM2Service(mock)
+
+	resp := h.HandleMessage(context.Background(), &quicwire.Request{Payload: []byte{quicwire.SubOpTPM2Info}})
+
+	require.Equal(t, quicwire.StatusOK, resp.Status)
+	var infoResp TPM2InfoResponse
+	require.NoError(t, quicwire.DecodePayload(resp.Payload, &infoResp))
+	assert.Equal(t, "0x81000002", infoResp.Properties["platform_srk_handle"])
+	assert.Equal(t, "0x81000001", infoResp.Properties["ssrk_handle"])
 }
 
 func TestTPM2Handler_HandleProvision_Success(t *testing.T) {
 	h := NewTPM2Handler(logging.DefaultLogger())
 	h.SetTPM2Service(newMockTPM())
-	resp := h.HandleMessage(context.Background(), &Request{Payload: []byte{SubOpTPM2Provision}})
-	assert.Equal(t, StatusOK, resp.Status)
+	resp := h.HandleMessage(context.Background(), &quicwire.Request{Payload: []byte{quicwire.SubOpTPM2Provision}})
+	assert.Equal(t, quicwire.StatusOK, resp.Status)
 }
 
 func TestTPM2Handler_HandleProvision_WithPassword(t *testing.T) {
 	h := NewTPM2Handler(logging.DefaultLogger())
 	h.SetTPM2Service(newMockTPM())
 	req := TPM2ProvisionRequest{OwnerPassword: "test-pw"}
-	payload, _ := EncodePayload(req)
-	resp := h.HandleMessage(context.Background(), &Request{Payload: append([]byte{SubOpTPM2Provision}, payload...)})
-	assert.Equal(t, StatusOK, resp.Status)
+	payload, _ := quicwire.EncodePayload(req)
+	resp := h.HandleMessage(context.Background(), &quicwire.Request{Payload: append([]byte{quicwire.SubOpTPM2Provision}, payload...)})
+	assert.Equal(t, quicwire.StatusOK, resp.Status)
 }
 
 func TestTPM2Handler_HandleProvision_Error(t *testing.T) {
@@ -397,15 +458,15 @@ func TestTPM2Handler_HandleProvision_Error(t *testing.T) {
 	mock := newMockTPM()
 	mock.provisionOwnerErr = errors.New("failed")
 	h.SetTPM2Service(mock)
-	resp := h.HandleMessage(context.Background(), &Request{Payload: []byte{SubOpTPM2Provision}})
-	assert.NotEqual(t, StatusOK, resp.Status)
+	resp := h.HandleMessage(context.Background(), &quicwire.Request{Payload: []byte{quicwire.SubOpTPM2Provision}})
+	assert.NotEqual(t, quicwire.StatusOK, resp.Status)
 }
 
 func TestTPM2Handler_HandleClear_Success(t *testing.T) {
 	h := NewTPM2Handler(logging.DefaultLogger())
 	h.SetTPM2Service(newMockTPM())
-	resp := h.HandleMessage(context.Background(), &Request{Payload: []byte{SubOpTPM2Clear}})
-	assert.Equal(t, StatusOK, resp.Status)
+	resp := h.HandleMessage(context.Background(), &quicwire.Request{Payload: []byte{quicwire.SubOpTPM2Clear}})
+	assert.Equal(t, quicwire.StatusOK, resp.Status)
 }
 
 func TestTPM2Handler_HandleClear_Error(t *testing.T) {
@@ -413,15 +474,15 @@ func TestTPM2Handler_HandleClear_Error(t *testing.T) {
 	mock := newMockTPM()
 	mock.clearErr = errors.New("authorization denied")
 	h.SetTPM2Service(mock)
-	resp := h.HandleMessage(context.Background(), &Request{Payload: []byte{SubOpTPM2Clear}})
-	assert.NotEqual(t, StatusOK, resp.Status)
+	resp := h.HandleMessage(context.Background(), &quicwire.Request{Payload: []byte{quicwire.SubOpTPM2Clear}})
+	assert.NotEqual(t, quicwire.StatusOK, resp.Status)
 }
 
 func TestTPM2Handler_HandleGetEK_Success(t *testing.T) {
 	h := NewTPM2Handler(logging.DefaultLogger())
 	h.SetTPM2Service(newMockTPM())
-	resp := h.HandleMessage(context.Background(), &Request{Payload: []byte{SubOpTPM2GetEK}})
-	assert.Equal(t, StatusOK, resp.Status)
+	resp := h.HandleMessage(context.Background(), &quicwire.Request{Payload: []byte{quicwire.SubOpTPM2GetEK}})
+	assert.Equal(t, quicwire.StatusOK, resp.Status)
 }
 
 func TestTPM2Handler_HandleGetEK_Error(t *testing.T) {
@@ -429,15 +490,21 @@ func TestTPM2Handler_HandleGetEK_Error(t *testing.T) {
 	mock := newMockTPM()
 	mock.ekAttrsErr = errors.New("EK not found")
 	h.SetTPM2Service(mock)
-	resp := h.HandleMessage(context.Background(), &Request{Payload: []byte{SubOpTPM2GetEK}})
-	assert.Equal(t, StatusNotFound, resp.Status)
+	resp := h.HandleMessage(context.Background(), &quicwire.Request{Payload: []byte{quicwire.SubOpTPM2GetEK}})
+	assert.Equal(t, quicwire.StatusNotFound, resp.Status)
 }
 
 func TestTPM2Handler_HandleCreateEK_Success(t *testing.T) {
 	h := NewTPM2Handler(logging.DefaultLogger())
 	h.SetTPM2Service(newMockTPM())
-	resp := h.HandleMessage(context.Background(), &Request{Payload: []byte{SubOpTPM2CreateEK}})
-	assert.Equal(t, StatusOK, resp.Status)
+	resp := h.HandleMessage(context.Background(), &quicwire.Request{Payload: []byte{quicwire.SubOpTPM2CreateEK}})
+	require.Equal(t, quicwire.StatusOK, resp.Status)
+
+	// The handle and public key match gRPC's CreateEKResponse.
+	key := decodeKeyResponse(t, resp)
+	assert.Equal(t, uint32(0x81010001), key.Handle)
+	assert.Equal(t, []byte("test-ek-pub"), key.PublicKey)
+	assert.Equal(t, "RSA", key.Algorithm)
 }
 
 func TestTPM2Handler_HandleCreateEK_Error(t *testing.T) {
@@ -445,22 +512,44 @@ func TestTPM2Handler_HandleCreateEK_Error(t *testing.T) {
 	mock := newMockTPM()
 	mock.createEKErr = errors.New("already exists")
 	h.SetTPM2Service(mock)
-	resp := h.HandleMessage(context.Background(), &Request{Payload: []byte{SubOpTPM2CreateEK}})
-	assert.Equal(t, StatusAlreadyExists, resp.Status)
+	resp := h.HandleMessage(context.Background(), &quicwire.Request{Payload: []byte{quicwire.SubOpTPM2CreateEK}})
+	assert.Equal(t, quicwire.StatusAlreadyExists, resp.Status)
+}
+
+func TestTPM2Handler_HandleCreateEK_PersistedEKIsAlreadyExists(t *testing.T) {
+	h := NewTPM2Handler(logging.DefaultLogger())
+	mock := newMockTPM()
+	mock.ekPersisted = true
+	mock.createEKErr = errors.New("CreateEK must not run on an occupied handle")
+	h.SetTPM2Service(mock)
+	resp := h.HandleMessage(context.Background(), &quicwire.Request{Payload: []byte{quicwire.SubOpTPM2CreateEK}})
+	assert.Equal(t, quicwire.StatusAlreadyExists, resp.Status)
+}
+
+// Sub-opcode 0x05 used to panic the server: template-less EK attributes
+// reached go-tpm's TPMT_PUBLIC marshaller.
+func TestTPM2Handler_HandleCreateEK_TemplateLessAttributesAreRefused(t *testing.T) {
+	h := NewTPM2Handler(logging.DefaultLogger())
+	mock := newMockTPM()
+	mock.ekAttrs.TPMAttributes.Template = tpm2.TPMTPublic{}
+	mock.createEKErr = errors.New("CreateEK must not run without a template")
+	h.SetTPM2Service(mock)
+	resp := h.HandleMessage(context.Background(), &quicwire.Request{Payload: []byte{quicwire.SubOpTPM2CreateEK}})
+	assert.Equal(t, quicwire.StatusInvalidRequest, resp.Status)
 }
 
 func TestTPM2Handler_HandleDeleteEK(t *testing.T) {
 	h := NewTPM2Handler(logging.DefaultLogger())
 	h.SetTPM2Service(newMockTPM())
-	resp := h.HandleMessage(context.Background(), &Request{Payload: []byte{SubOpTPM2DeleteEK}})
-	assert.Equal(t, StatusOK, resp.Status)
+	resp := h.HandleMessage(context.Background(), &quicwire.Request{Payload: []byte{quicwire.SubOpTPM2DeleteEK}})
+	assert.Equal(t, quicwire.StatusOK, resp.Status)
 }
 
 func TestTPM2Handler_HandleGetEKCert_Success(t *testing.T) {
 	h := NewTPM2Handler(logging.DefaultLogger())
 	h.SetTPM2Service(newMockTPM())
-	resp := h.HandleMessage(context.Background(), &Request{Payload: []byte{SubOpTPM2GetEKCert}})
-	assert.Equal(t, StatusOK, resp.Status)
+	resp := h.HandleMessage(context.Background(), &quicwire.Request{Payload: []byte{quicwire.SubOpTPM2GetEKCert}})
+	assert.Equal(t, quicwire.StatusOK, resp.Status)
 }
 
 func TestTPM2Handler_HandleGetEKCert_Error(t *testing.T) {
@@ -468,52 +557,52 @@ func TestTPM2Handler_HandleGetEKCert_Error(t *testing.T) {
 	mock := newMockTPM()
 	mock.ekCertErr = errors.New("not found")
 	h.SetTPM2Service(mock)
-	resp := h.HandleMessage(context.Background(), &Request{Payload: []byte{SubOpTPM2GetEKCert}})
-	assert.NotEqual(t, StatusOK, resp.Status)
+	resp := h.HandleMessage(context.Background(), &quicwire.Request{Payload: []byte{quicwire.SubOpTPM2GetEKCert}})
+	assert.NotEqual(t, quicwire.StatusOK, resp.Status)
 }
 
 func TestTPM2Handler_HandleImportEKCert_MissingData(t *testing.T) {
 	h := NewTPM2Handler(logging.DefaultLogger())
 	h.SetTPM2Service(newMockTPM())
-	resp := h.HandleMessage(context.Background(), &Request{Payload: []byte{SubOpTPM2ImportEKCert}})
-	assert.Equal(t, StatusInvalidArgument, resp.Status)
+	resp := h.HandleMessage(context.Background(), &quicwire.Request{Payload: []byte{quicwire.SubOpTPM2ImportEKCert}})
+	assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 }
 
 func TestTPM2Handler_HandleImportEKCert_Success(t *testing.T) {
 	h := NewTPM2Handler(logging.DefaultLogger())
 	h.SetTPM2Service(newMockTPM())
 	req := &TPM2ImportEKCertRequest{Certificate: []byte("test-cert")}
-	payload, _ := EncodePayload(req)
-	resp := h.HandleMessage(context.Background(), &Request{Payload: append([]byte{SubOpTPM2ImportEKCert}, payload...)})
-	assert.Equal(t, StatusOK, resp.Status)
+	payload, _ := quicwire.EncodePayload(req)
+	resp := h.HandleMessage(context.Background(), &quicwire.Request{Payload: append([]byte{quicwire.SubOpTPM2ImportEKCert}, payload...)})
+	assert.Equal(t, quicwire.StatusOK, resp.Status)
 }
 
 func TestTPM2Handler_HandleGetSRK(t *testing.T) {
 	h := NewTPM2Handler(logging.DefaultLogger())
 	h.SetTPM2Service(newMockTPM())
-	resp := h.HandleMessage(context.Background(), &Request{Payload: []byte{SubOpTPM2GetSRK}})
-	assert.Equal(t, StatusOK, resp.Status)
+	resp := h.HandleMessage(context.Background(), &quicwire.Request{Payload: []byte{quicwire.SubOpTPM2GetSRK}})
+	assert.Equal(t, quicwire.StatusOK, resp.Status)
 }
 
 func TestTPM2Handler_HandleCreateSRK(t *testing.T) {
 	h := NewTPM2Handler(logging.DefaultLogger())
 	h.SetTPM2Service(newMockTPM())
-	resp := h.HandleMessage(context.Background(), &Request{Payload: []byte{SubOpTPM2CreateSRK}})
-	assert.Equal(t, StatusOK, resp.Status)
+	resp := h.HandleMessage(context.Background(), &quicwire.Request{Payload: []byte{quicwire.SubOpTPM2CreateSRK}})
+	assert.Equal(t, quicwire.StatusOK, resp.Status)
 }
 
 func TestTPM2Handler_HandleDeleteSRK(t *testing.T) {
 	h := NewTPM2Handler(logging.DefaultLogger())
 	h.SetTPM2Service(newMockTPM())
-	resp := h.HandleMessage(context.Background(), &Request{Payload: []byte{SubOpTPM2DeleteSRK}})
-	assert.Equal(t, StatusOK, resp.Status)
+	resp := h.HandleMessage(context.Background(), &quicwire.Request{Payload: []byte{quicwire.SubOpTPM2DeleteSRK}})
+	assert.Equal(t, quicwire.StatusOK, resp.Status)
 }
 
 func TestTPM2Handler_HandleGetIAK(t *testing.T) {
 	h := NewTPM2Handler(logging.DefaultLogger())
 	h.SetTPM2Service(newMockTPM())
-	resp := h.HandleMessage(context.Background(), &Request{Payload: []byte{SubOpTPM2GetIAK}})
-	assert.Equal(t, StatusOK, resp.Status)
+	resp := h.HandleMessage(context.Background(), &quicwire.Request{Payload: []byte{quicwire.SubOpTPM2GetIAK}})
+	assert.Equal(t, quicwire.StatusOK, resp.Status)
 }
 
 func TestTPM2Handler_HandleCreateIAK_Success(t *testing.T) {
@@ -526,15 +615,17 @@ func TestTPM2Handler_HandleCreateIAK_Success(t *testing.T) {
 		},
 	}
 	h.SetTPM2Service(mock)
-	resp := h.HandleMessage(context.Background(), &Request{Payload: []byte{SubOpTPM2CreateIAK}})
-	assert.Equal(t, StatusOK, resp.Status)
+	resp := h.HandleMessage(context.Background(), &quicwire.Request{Payload: []byte{quicwire.SubOpTPM2CreateIAK}})
+	assert.Equal(t, quicwire.StatusOK, resp.Status)
 }
 
-func TestTPM2Handler_HandleDeleteIAK(t *testing.T) {
+// The IAK delete is refused by the daemon dispatcher before it reaches this
+// handler; the handler itself must not serve it, so it cannot flush the key.
+func TestTPM2Handler_DeleteIAKNotServed(t *testing.T) {
 	h := NewTPM2Handler(logging.DefaultLogger())
 	h.SetTPM2Service(newMockTPM())
-	resp := h.HandleMessage(context.Background(), &Request{Payload: []byte{SubOpTPM2DeleteIAK}})
-	assert.Equal(t, StatusOK, resp.Status)
+	resp := h.HandleMessage(context.Background(), &quicwire.Request{Payload: []byte{quicwire.SubOpTPM2DeleteIAK}})
+	assert.Equal(t, quicwire.StatusNotImplemented, resp.Status)
 }
 
 func TestTPM2Handler_HandleQuote_Success(t *testing.T) {
@@ -542,10 +633,53 @@ func TestTPM2Handler_HandleQuote_Success(t *testing.T) {
 	mock := newMockTPM()
 	mock.quoteResult = xkmssdk.Quote{Quoted: []byte("quoted"), Signature: []byte("sig")}
 	h.SetTPM2Service(mock)
-	req := &TPM2QuoteRequest{PCRIndices: []uint32{0, 1, 7}, Nonce: []byte("nonce")}
-	payload, _ := EncodePayload(req)
-	resp := h.HandleMessage(context.Background(), &Request{Payload: append([]byte{SubOpTPM2Quote}, payload...)})
-	assert.Equal(t, StatusOK, resp.Status)
+	req := &quicwire.TPM2QuoteRequest{PCRIndices: []uint32{0, 1, 7}, Nonce: []byte("nonce")}
+	payload, _ := quicwire.EncodePayload(req)
+	state := testutil.ServerConnectionState(t)
+	resp := h.HandleMessage(WithConnectionTLS(context.Background(), state), &quicwire.Request{Payload: append([]byte{quicwire.SubOpTPM2Quote}, payload...)})
+	require.Equal(t, quicwire.StatusOK, resp.Status)
+
+	// The TPM quoted SHA-256(nonce || binding) for this connection, and the
+	// response echoes that binding so the caller can check it.
+	var out quicwire.TPM2QuoteResponse
+	require.NoError(t, quicwire.DecodePayload(resp.Payload, &out))
+	binding, err := xkmssdk.PeerChannelBinding(state)
+	require.NoError(t, err)
+	assert.Equal(t, binding, out.ChannelBinding)
+	assert.Equal(t, xkmssdk.PeerQualifyingData([]byte("nonce"), binding), mock.quoted)
+	assert.Equal(t, x509.SHA256WithRSAPSS.String(), out.SignatureAlgorithm,
+		"the response names the scheme the IAK signed under")
+}
+
+func TestTPM2Handler_HandleQuote_RefusesAnIAKWithoutAScheme(t *testing.T) {
+	h := NewTPM2Handler(logging.DefaultLogger())
+	mock := newMockTPM()
+	mock.iakAttrs.SignatureAlgorithm = x509.UnknownSignatureAlgorithm
+	h.SetTPM2Service(mock)
+	payload, err := quicwire.EncodePayload(&quicwire.TPM2QuoteRequest{PCRIndices: []uint32{0}, Nonce: []byte("nonce")})
+	require.NoError(t, err)
+	ctx := WithConnectionTLS(context.Background(), testutil.ServerConnectionState(t))
+	resp := h.HandleMessage(ctx, &quicwire.Request{Payload: append([]byte{quicwire.SubOpTPM2Quote}, payload...)})
+	assert.NotEqual(t, quicwire.StatusOK, resp.Status)
+	assert.Nil(t, mock.quoted, "a quote nobody could verify was never taken")
+}
+
+func TestTPM2Handler_HandleQuote_RefusesAConnectionItCannotBind(t *testing.T) {
+	for name, ctx := range map[string]context.Context{
+		"no TLS state": context.Background(),
+		"TLS 1.2":      WithConnectionTLS(context.Background(), &tls.ConnectionState{Version: tls.VersionTLS12}),
+	} {
+		t.Run(name, func(t *testing.T) {
+			h := NewTPM2Handler(logging.DefaultLogger())
+			mock := newMockTPM()
+			h.SetTPM2Service(mock)
+			payload, err := quicwire.EncodePayload(&quicwire.TPM2QuoteRequest{PCRIndices: []uint32{0}, Nonce: []byte("nonce")})
+			require.NoError(t, err)
+			resp := h.HandleMessage(ctx, &quicwire.Request{Payload: append([]byte{quicwire.SubOpTPM2Quote}, payload...)})
+			assert.Equal(t, quicwire.StatusInvalidRequest, resp.Status)
+			assert.Nil(t, mock.quoted, "nothing may be quoted unbound")
+		})
+	}
 }
 
 func TestTPM2Handler_HandleQuote_Error(t *testing.T) {
@@ -553,94 +687,95 @@ func TestTPM2Handler_HandleQuote_Error(t *testing.T) {
 	mock := newMockTPM()
 	mock.quoteErr = errors.New("failed")
 	h.SetTPM2Service(mock)
-	req := &TPM2QuoteRequest{PCRIndices: []uint32{0}}
-	payload, _ := EncodePayload(req)
-	resp := h.HandleMessage(context.Background(), &Request{Payload: append([]byte{SubOpTPM2Quote}, payload...)})
-	assert.NotEqual(t, StatusOK, resp.Status)
+	req := &quicwire.TPM2QuoteRequest{PCRIndices: []uint32{0}}
+	payload, _ := quicwire.EncodePayload(req)
+	ctx := WithConnectionTLS(context.Background(), testutil.ServerConnectionState(t))
+	resp := h.HandleMessage(ctx, &quicwire.Request{Payload: append([]byte{quicwire.SubOpTPM2Quote}, payload...)})
+	assert.NotEqual(t, quicwire.StatusOK, resp.Status)
 }
 
 func TestTPM2Handler_HandleReadPCRs_Success(t *testing.T) {
 	h := NewTPM2Handler(logging.DefaultLogger())
 	h.SetTPM2Service(newMockTPM())
 	req := &TPM2ReadPCRsRequest{Indices: []uint32{0, 1, 7}}
-	payload, _ := EncodePayload(req)
-	resp := h.HandleMessage(context.Background(), &Request{Payload: append([]byte{SubOpTPM2ReadPCRs}, payload...)})
-	assert.Equal(t, StatusOK, resp.Status)
+	payload, _ := quicwire.EncodePayload(req)
+	resp := h.HandleMessage(context.Background(), &quicwire.Request{Payload: append([]byte{quicwire.SubOpTPM2ReadPCRs}, payload...)})
+	assert.Equal(t, quicwire.StatusOK, resp.Status)
 }
 
 func TestTPM2Handler_HandleReadPCRs_Default(t *testing.T) {
 	h := NewTPM2Handler(logging.DefaultLogger())
 	h.SetTPM2Service(newMockTPM())
-	resp := h.HandleMessage(context.Background(), &Request{Payload: []byte{SubOpTPM2ReadPCRs}})
-	assert.Equal(t, StatusOK, resp.Status)
+	resp := h.HandleMessage(context.Background(), &quicwire.Request{Payload: []byte{quicwire.SubOpTPM2ReadPCRs}})
+	assert.Equal(t, quicwire.StatusOK, resp.Status)
 }
 
 func TestTPM2Handler_HandleExtendPCR_Success(t *testing.T) {
 	h := NewTPM2Handler(logging.DefaultLogger())
 	h.SetTPM2Service(newMockTPM())
 	req := &TPM2ExtendPCRRequest{PCRIndex: 14, HashAlg: "sha256", Data: []byte("data")}
-	payload, _ := EncodePayload(req)
-	resp := h.HandleMessage(context.Background(), &Request{Payload: append([]byte{SubOpTPM2ExtendPCR}, payload...)})
-	assert.Equal(t, StatusOK, resp.Status)
+	payload, _ := quicwire.EncodePayload(req)
+	resp := h.HandleMessage(context.Background(), &quicwire.Request{Payload: append([]byte{quicwire.SubOpTPM2ExtendPCR}, payload...)})
+	assert.Equal(t, quicwire.StatusOK, resp.Status)
 }
 
 func TestTPM2Handler_HandleExtendPCR_InvalidIndex(t *testing.T) {
 	h := NewTPM2Handler(logging.DefaultLogger())
 	h.SetTPM2Service(newMockTPM())
 	req := &TPM2ExtendPCRRequest{PCRIndex: 25, HashAlg: "sha256", Data: []byte("data")}
-	payload, _ := EncodePayload(req)
-	resp := h.HandleMessage(context.Background(), &Request{Payload: append([]byte{SubOpTPM2ExtendPCR}, payload...)})
-	assert.Equal(t, StatusInvalidArgument, resp.Status)
+	payload, _ := quicwire.EncodePayload(req)
+	resp := h.HandleMessage(context.Background(), &quicwire.Request{Payload: append([]byte{quicwire.SubOpTPM2ExtendPCR}, payload...)})
+	assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 }
 
 func TestTPM2Handler_HandleExtendPCR_MissingData(t *testing.T) {
 	h := NewTPM2Handler(logging.DefaultLogger())
 	h.SetTPM2Service(newMockTPM())
 	req := &TPM2ExtendPCRRequest{PCRIndex: 14, HashAlg: "sha256"}
-	payload, _ := EncodePayload(req)
-	resp := h.HandleMessage(context.Background(), &Request{Payload: append([]byte{SubOpTPM2ExtendPCR}, payload...)})
-	assert.Equal(t, StatusInvalidArgument, resp.Status)
+	payload, _ := quicwire.EncodePayload(req)
+	resp := h.HandleMessage(context.Background(), &quicwire.Request{Payload: append([]byte{quicwire.SubOpTPM2ExtendPCR}, payload...)})
+	assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 }
 
 func TestTPM2Handler_HandleEventLog(t *testing.T) {
 	h := NewTPM2Handler(logging.DefaultLogger())
 	h.SetTPM2Service(newMockTPM())
-	resp := h.HandleMessage(context.Background(), &Request{Payload: []byte{SubOpTPM2EventLog}})
-	assert.Equal(t, StatusOK, resp.Status)
+	resp := h.HandleMessage(context.Background(), &quicwire.Request{Payload: []byte{quicwire.SubOpTPM2EventLog}})
+	assert.Equal(t, quicwire.StatusOK, resp.Status)
 }
 
 func TestTPM2Handler_HandleRandom_Success(t *testing.T) {
 	h := NewTPM2Handler(logging.DefaultLogger())
 	h.SetTPM2Service(newMockTPM())
-	resp := h.HandleMessage(context.Background(), &Request{Payload: []byte{SubOpTPM2Random}})
-	assert.Equal(t, StatusOK, resp.Status)
+	resp := h.HandleMessage(context.Background(), &quicwire.Request{Payload: []byte{quicwire.SubOpTPM2Random}})
+	assert.Equal(t, quicwire.StatusOK, resp.Status)
 }
 
 func TestTPM2Handler_HandleRandom_TooManyBytes(t *testing.T) {
 	h := NewTPM2Handler(logging.DefaultLogger())
 	h.SetTPM2Service(newMockTPM())
 	req := &TPM2RandomRequest{NumBytes: 2048}
-	payload, _ := EncodePayload(req)
-	resp := h.HandleMessage(context.Background(), &Request{Payload: append([]byte{SubOpTPM2Random}, payload...)})
-	assert.Equal(t, StatusInvalidArgument, resp.Status)
+	payload, _ := quicwire.EncodePayload(req)
+	resp := h.HandleMessage(context.Background(), &quicwire.Request{Payload: append([]byte{quicwire.SubOpTPM2Random}, payload...)})
+	assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 }
 
 func TestTPM2Handler_HandleSeal_Success(t *testing.T) {
 	h := NewTPM2Handler(logging.DefaultLogger())
 	h.SetTPM2Service(newMockTPM())
 	req := &TPM2SealRequest{Data: []byte("secret")}
-	payload, _ := EncodePayload(req)
-	resp := h.HandleMessage(context.Background(), &Request{Payload: append([]byte{SubOpTPM2Seal}, payload...)})
-	assert.Equal(t, StatusOK, resp.Status)
+	payload, _ := quicwire.EncodePayload(req)
+	resp := h.HandleMessage(context.Background(), &quicwire.Request{Payload: append([]byte{quicwire.SubOpTPM2Seal}, payload...)})
+	assert.Equal(t, quicwire.StatusOK, resp.Status)
 }
 
 func TestTPM2Handler_HandleSeal_MissingData(t *testing.T) {
 	h := NewTPM2Handler(logging.DefaultLogger())
 	h.SetTPM2Service(newMockTPM())
 	req := &TPM2SealRequest{}
-	payload, _ := EncodePayload(req)
-	resp := h.HandleMessage(context.Background(), &Request{Payload: append([]byte{SubOpTPM2Seal}, payload...)})
-	assert.Equal(t, StatusInvalidArgument, resp.Status)
+	payload, _ := quicwire.EncodePayload(req)
+	resp := h.HandleMessage(context.Background(), &quicwire.Request{Payload: append([]byte{quicwire.SubOpTPM2Seal}, payload...)})
+	assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 }
 
 func TestTPM2Handler_HandleUnseal_Success(t *testing.T) {
@@ -649,25 +784,32 @@ func TestTPM2Handler_HandleUnseal_Success(t *testing.T) {
 	mock.unsealResult = []byte("plaintext")
 	h.SetTPM2Service(mock)
 	req := &TPM2UnsealRequest{CN: "test-key"}
-	payload, _ := EncodePayload(req)
-	resp := h.HandleMessage(context.Background(), &Request{Payload: append([]byte{SubOpTPM2Unseal}, payload...)})
-	assert.Equal(t, StatusOK, resp.Status)
+	payload, _ := quicwire.EncodePayload(req)
+	resp := h.HandleMessage(context.Background(), &quicwire.Request{Payload: append([]byte{quicwire.SubOpTPM2Unseal}, payload...)})
+	assert.Equal(t, quicwire.StatusOK, resp.Status)
 }
 
 func TestTPM2Handler_HandleUnseal_MissingCN(t *testing.T) {
 	h := NewTPM2Handler(logging.DefaultLogger())
 	h.SetTPM2Service(newMockTPM())
 	req := &TPM2UnsealRequest{}
-	payload, _ := EncodePayload(req)
-	resp := h.HandleMessage(context.Background(), &Request{Payload: append([]byte{SubOpTPM2Unseal}, payload...)})
-	assert.Equal(t, StatusInvalidArgument, resp.Status)
+	payload, _ := quicwire.EncodePayload(req)
+	resp := h.HandleMessage(context.Background(), &quicwire.Request{Payload: append([]byte{quicwire.SubOpTPM2Unseal}, payload...)})
+	assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 }
 
 func TestTPM2Handler_HandleCapabilities_Success(t *testing.T) {
 	h := NewTPM2Handler(logging.DefaultLogger())
 	h.SetTPM2Service(newMockTPM())
-	resp := h.HandleMessage(context.Background(), &Request{Payload: []byte{SubOpTPM2Capabilities}})
-	assert.Equal(t, StatusOK, resp.Status)
+
+	resp := h.HandleMessage(context.Background(), &quicwire.Request{Payload: []byte{quicwire.SubOpTPM2Capabilities}})
+
+	require.Equal(t, quicwire.StatusOK, resp.Status)
+	var out TPM2CapabilitiesResponse
+	require.NoError(t, quicwire.DecodePayload(resp.Payload, &out))
+	assert.Equal(t, []string{"RSA", "ECDSA", "SHA256"}, out.Algorithms)
+	assert.Equal(t, []string{"TPM2_Create", "TPM2_Sign"}, out.Commands)
+	assert.Equal(t, []string{"P256", "P384"}, out.ECCCurves)
 }
 
 func TestTPM2Handler_HandleCapabilities_Errors(t *testing.T) {
@@ -684,8 +826,8 @@ func TestTPM2Handler_HandleCapabilities_Errors(t *testing.T) {
 			mock := newMockTPM()
 			tc.fn(mock)
 			h.SetTPM2Service(mock)
-			resp := h.HandleMessage(context.Background(), &Request{Payload: []byte{SubOpTPM2Capabilities}})
-			assert.NotEqual(t, StatusOK, resp.Status)
+			resp := h.HandleMessage(context.Background(), &quicwire.Request{Payload: []byte{quicwire.SubOpTPM2Capabilities}})
+			assert.NotEqual(t, quicwire.StatusOK, resp.Status)
 		})
 	}
 }
@@ -693,11 +835,11 @@ func TestTPM2Handler_HandleCapabilities_Errors(t *testing.T) {
 func TestTPM2Handler_HandleNVList_Success(t *testing.T) {
 	h := NewTPM2Handler(logging.DefaultLogger())
 	h.SetTPM2Service(newMockTPM())
-	resp := h.HandleMessage(context.Background(), &Request{Payload: []byte{SubOpTPM2NVList}})
-	assert.Equal(t, StatusOK, resp.Status)
+	resp := h.HandleMessage(context.Background(), &quicwire.Request{Payload: []byte{quicwire.SubOpTPM2NVList}})
+	assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 	var out TPM2NVListResponse
-	require.NoError(t, DecodePayload(resp.Payload, &out))
+	require.NoError(t, quicwire.DecodePayload(resp.Payload, &out))
 }
 
 func TestTPM2Handler_HandleNVList_Error(t *testing.T) {
@@ -705,26 +847,26 @@ func TestTPM2Handler_HandleNVList_Error(t *testing.T) {
 	mock := newMockTPM()
 	mock.fixedPropsErr = errors.New("cap read failed")
 	h.SetTPM2Service(mock)
-	resp := h.HandleMessage(context.Background(), &Request{Payload: []byte{SubOpTPM2NVList}})
-	assert.NotEqual(t, StatusOK, resp.Status)
+	resp := h.HandleMessage(context.Background(), &quicwire.Request{Payload: []byte{quicwire.SubOpTPM2NVList}})
+	assert.NotEqual(t, quicwire.StatusOK, resp.Status)
 }
 
 func TestTPM2Handler_HandleNVRead_MissingIndex(t *testing.T) {
 	h := NewTPM2Handler(logging.DefaultLogger())
 	h.SetTPM2Service(newMockTPM())
-	body, err := EncodePayload(&TPM2NVReadRequest{Index: 0})
+	body, err := quicwire.EncodePayload(&TPM2NVReadRequest{Index: 0})
 	require.NoError(t, err)
-	resp := h.HandleMessage(context.Background(), &Request{Payload: append([]byte{SubOpTPM2NVRead}, body...)})
-	assert.Equal(t, StatusInvalidArgument, resp.Status)
+	resp := h.HandleMessage(context.Background(), &quicwire.Request{Payload: append([]byte{quicwire.SubOpTPM2NVRead}, body...)})
+	assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 }
 
 func TestTPM2Handler_HandleNVRead_TransportUnavailable(t *testing.T) {
 	h := NewTPM2Handler(logging.DefaultLogger())
 	h.SetTPM2Service(newMockTPM()) // nil transport
-	body, err := EncodePayload(&TPM2NVReadRequest{Index: 0x01500001, Size: 32})
+	body, err := quicwire.EncodePayload(&TPM2NVReadRequest{Index: 0x01500001, Size: 32})
 	require.NoError(t, err)
-	resp := h.HandleMessage(context.Background(), &Request{Payload: append([]byte{SubOpTPM2NVRead}, body...)})
-	assert.Equal(t, StatusUnavailable, resp.Status)
+	resp := h.HandleMessage(context.Background(), &quicwire.Request{Payload: append([]byte{quicwire.SubOpTPM2NVRead}, body...)})
+	assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 }
 
 func TestTPM2Handler_HandleNVWrite_Validation(t *testing.T) {
@@ -732,37 +874,37 @@ func TestTPM2Handler_HandleNVWrite_Validation(t *testing.T) {
 	h.SetTPM2Service(newMockTPM())
 
 	// missing index
-	body, err := EncodePayload(&TPM2NVWriteRequest{Index: 0, Data: []byte("x")})
+	body, err := quicwire.EncodePayload(&TPM2NVWriteRequest{Index: 0, Data: []byte("x")})
 	require.NoError(t, err)
-	resp := h.HandleMessage(context.Background(), &Request{Payload: append([]byte{SubOpTPM2NVWrite}, body...)})
-	assert.Equal(t, StatusInvalidArgument, resp.Status)
+	resp := h.HandleMessage(context.Background(), &quicwire.Request{Payload: append([]byte{quicwire.SubOpTPM2NVWrite}, body...)})
+	assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 
 	// missing data
-	body, err = EncodePayload(&TPM2NVWriteRequest{Index: 0x01500001})
+	body, err = quicwire.EncodePayload(&TPM2NVWriteRequest{Index: 0x01500001})
 	require.NoError(t, err)
-	resp = h.HandleMessage(context.Background(), &Request{Payload: append([]byte{SubOpTPM2NVWrite}, body...)})
-	assert.Equal(t, StatusInvalidArgument, resp.Status)
+	resp = h.HandleMessage(context.Background(), &quicwire.Request{Payload: append([]byte{quicwire.SubOpTPM2NVWrite}, body...)})
+	assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 
 	// valid request, nil transport
-	body, err = EncodePayload(&TPM2NVWriteRequest{Index: 0x01500001, Data: []byte("payload")})
+	body, err = quicwire.EncodePayload(&TPM2NVWriteRequest{Index: 0x01500001, Data: []byte("payload")})
 	require.NoError(t, err)
-	resp = h.HandleMessage(context.Background(), &Request{Payload: append([]byte{SubOpTPM2NVWrite}, body...)})
-	assert.Equal(t, StatusUnavailable, resp.Status)
+	resp = h.HandleMessage(context.Background(), &quicwire.Request{Payload: append([]byte{quicwire.SubOpTPM2NVWrite}, body...)})
+	assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 }
 
 func TestTPM2Handler_HandleNVDelete_Validation(t *testing.T) {
 	h := NewTPM2Handler(logging.DefaultLogger())
 	h.SetTPM2Service(newMockTPM())
 
-	body, err := EncodePayload(&TPM2NVDeleteRequest{Index: 0})
+	body, err := quicwire.EncodePayload(&TPM2NVDeleteRequest{Index: 0})
 	require.NoError(t, err)
-	resp := h.HandleMessage(context.Background(), &Request{Payload: append([]byte{SubOpTPM2NVDelete}, body...)})
-	assert.Equal(t, StatusInvalidArgument, resp.Status)
+	resp := h.HandleMessage(context.Background(), &quicwire.Request{Payload: append([]byte{quicwire.SubOpTPM2NVDelete}, body...)})
+	assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 
-	body, err = EncodePayload(&TPM2NVDeleteRequest{Index: 0x01500001})
+	body, err = quicwire.EncodePayload(&TPM2NVDeleteRequest{Index: 0x01500001})
 	require.NoError(t, err)
-	resp = h.HandleMessage(context.Background(), &Request{Payload: append([]byte{SubOpTPM2NVDelete}, body...)})
-	assert.Equal(t, StatusUnavailable, resp.Status)
+	resp = h.HandleMessage(context.Background(), &quicwire.Request{Payload: append([]byte{quicwire.SubOpTPM2NVDelete}, body...)})
+	assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 }
 
 func TestTPM2Handler_HandleVerifyQuote_Validation(t *testing.T) {
@@ -770,51 +912,154 @@ func TestTPM2Handler_HandleVerifyQuote_Validation(t *testing.T) {
 	h.SetTPM2Service(newMockTPM())
 
 	// missing quote
-	body, err := EncodePayload(&TPM2VerifyQuoteRequest{Signature: []byte("sig")})
+	body, err := quicwire.EncodePayload(&quicwire.TPM2VerifyQuoteRequest{Signature: []byte("sig")})
 	require.NoError(t, err)
-	resp := h.HandleMessage(context.Background(), &Request{Payload: append([]byte{SubOpTPM2VerifyQuote}, body...)})
-	assert.Equal(t, StatusInvalidArgument, resp.Status)
+	resp := h.HandleMessage(context.Background(), &quicwire.Request{Payload: append([]byte{quicwire.SubOpTPM2VerifyQuote}, body...)})
+	assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 
 	// missing signature
-	body, err = EncodePayload(&TPM2VerifyQuoteRequest{Quote: []byte("quote")})
+	body, err = quicwire.EncodePayload(&quicwire.TPM2VerifyQuoteRequest{Quote: []byte("quote")})
 	require.NoError(t, err)
-	resp = h.HandleMessage(context.Background(), &Request{Payload: append([]byte{SubOpTPM2VerifyQuote}, body...)})
-	assert.Equal(t, StatusInvalidArgument, resp.Status)
+	resp = h.HandleMessage(context.Background(), &quicwire.Request{Payload: append([]byte{quicwire.SubOpTPM2VerifyQuote}, body...)})
+	assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 }
 
 func TestTPM2Handler_HandleVerifyQuote_BadSignature(t *testing.T) {
 	h := NewTPM2Handler(logging.DefaultLogger())
 	h.SetTPM2Service(newMockTPM()) // IAK() returns a valid ECDSA key
-	body, err := EncodePayload(&TPM2VerifyQuoteRequest{
+	body, err := quicwire.EncodePayload(&quicwire.TPM2VerifyQuoteRequest{
 		Quote:     []byte("not-a-real-attest"),
 		Signature: []byte("garbage-signature"),
 	})
 	require.NoError(t, err)
-	resp := h.HandleMessage(context.Background(), &Request{Payload: append([]byte{SubOpTPM2VerifyQuote}, body...)})
+	resp := h.HandleMessage(context.Background(), &quicwire.Request{Payload: append([]byte{quicwire.SubOpTPM2VerifyQuote}, body...)})
 	// Verification failure is a successful RPC with verified=false.
-	assert.Equal(t, StatusOK, resp.Status)
-	var out TPM2VerifyQuoteResponse
-	require.NoError(t, DecodePayload(resp.Payload, &out))
+	assert.Equal(t, quicwire.StatusOK, resp.Status)
+	var out quicwire.TPM2VerifyQuoteResponse
+	require.NoError(t, quicwire.DecodePayload(resp.Payload, &out))
 	assert.False(t, out.Verified)
+}
+
+func TestTPM2Handler_HandleVerifyQuote_DeclaredScheme(t *testing.T) {
+	quote := []byte("quoted-attest")
+	signature, akPublic := testutil.SignPSSQuote(t, quote)
+	verify := func(t *testing.T, scheme string) quicwire.TPM2VerifyQuoteResponse {
+		t.Helper()
+		h := NewTPM2Handler(logging.DefaultLogger())
+		h.SetTPM2Service(newMockTPM())
+		body, err := quicwire.EncodePayload(&quicwire.TPM2VerifyQuoteRequest{
+			Quote:              quote,
+			Signature:          signature,
+			AKPublic:           akPublic,
+			SignatureAlgorithm: scheme,
+		})
+		require.NoError(t, err)
+		resp := h.HandleMessage(context.Background(), &quicwire.Request{Payload: append([]byte{quicwire.SubOpTPM2VerifyQuote}, body...)})
+		require.Equal(t, quicwire.StatusOK, resp.Status)
+		var out quicwire.TPM2VerifyQuoteResponse
+		require.NoError(t, quicwire.DecodePayload(resp.Payload, &out))
+		return out
+	}
+
+	t.Run("an RSA-PSS quote verifies under the scheme it declares", func(t *testing.T) {
+		out := verify(t, testutil.PSSQuoteScheme)
+		assert.True(t, out.Verified, out.Message)
+	})
+	t.Run("no scheme or the wrong one fails", func(t *testing.T) {
+		for name, scheme := range map[string]string{
+			"undeclared":    "",
+			"PKCS#1 v1.5":   x509.SHA256WithRSA.String(),
+			"ECDSA for RSA": x509.ECDSAWithSHA256.String(),
+		} {
+			t.Run(name, func(t *testing.T) {
+				out := verify(t, scheme)
+				assert.False(t, out.Verified)
+				assert.Contains(t, out.Message, "signature_verification_failed")
+			})
+		}
+	})
+}
+
+func TestTPM2Handler_HandleVerifyQuote_ChannelBinding(t *testing.T) {
+	nonce := []byte("verify-nonce")
+	binding := bytes.Repeat([]byte{0x5a}, 32)
+	quote := tpm2.Marshal(tpm2.TPMSAttest{
+		Magic:     tpm2.TPMGeneratedValue,
+		Type:      tpm2.TPMSTAttestQuote,
+		ExtraData: tpm2.TPM2BData{Buffer: xkmssdk.PeerQualifyingData(nonce, binding)},
+		Attested:  tpm2.NewTPMUAttest(tpm2.TPMSTAttestQuote, &tpm2.TPMSQuoteInfo{}),
+	})
+	verify := func(t *testing.T, req quicwire.TPM2VerifyQuoteRequest) *quicwire.Response {
+		t.Helper()
+		h := NewTPM2Handler(logging.DefaultLogger())
+		h.SetTPM2Service(newMockTPM())
+		req.Quote = quote
+		req.Signature = []byte("garbage-signature")
+		body, err := quicwire.EncodePayload(&req)
+		require.NoError(t, err)
+		return h.HandleMessage(context.Background(), &quicwire.Request{Payload: append([]byte{quicwire.SubOpTPM2VerifyQuote}, body...)})
+	}
+	message := func(t *testing.T, resp *quicwire.Response) string {
+		t.Helper()
+		require.Equal(t, quicwire.StatusOK, resp.Status)
+		var out quicwire.TPM2VerifyQuoteResponse
+		require.NoError(t, quicwire.DecodePayload(resp.Payload, &out))
+		assert.False(t, out.Verified)
+		return out.Message
+	}
+
+	t.Run("the bound echo passes the nonce check", func(t *testing.T) {
+		resp := verify(t, quicwire.TPM2VerifyQuoteRequest{Nonce: nonce, ChannelBinding: binding})
+		assert.Contains(t, message(t, resp), "signature_verification_failed")
+	})
+	t.Run("the bare nonce does not", func(t *testing.T) {
+		resp := verify(t, quicwire.TPM2VerifyQuoteRequest{Nonce: nonce})
+		assert.Contains(t, message(t, resp), "nonce_verification_failed")
+	})
+	t.Run("a binding without a nonce is refused", func(t *testing.T) {
+		resp := verify(t, quicwire.TPM2VerifyQuoteRequest{ChannelBinding: binding})
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
+	})
 }
 
 func TestTPM2Handler_HandlePlatformAttributes_Success(t *testing.T) {
 	h := NewTPM2Handler(logging.DefaultLogger())
-	h.SetTPM2Service(newMockTPM())
-	resp := h.HandleMessage(context.Background(), &Request{Payload: []byte{SubOpTPM2PlatformAttrs}})
-	assert.Equal(t, StatusOK, resp.Status)
+	mock := newMockTPM()
+	mock.deviceResult = "/dev/tpmrm0"
+	mock.ekAttrs = &xkmssdk.KeyAttributes{KeyAlgorithm: x509.RSA, TPMAttributes: &xkmssdk.TPMAttributes{Handle: 0x81010001}}
+	mock.ssrkAttrs = &xkmssdk.KeyAttributes{KeyAlgorithm: x509.RSA, TPMAttributes: &xkmssdk.TPMAttributes{Handle: 0x81000001}}
+	mock.iakAttrs = nil
+	mock.iakAttrsErr = errors.New("IAK not provisioned")
+	h.SetTPM2Service(mock)
+
+	resp := h.HandleMessage(context.Background(), &quicwire.Request{Payload: []byte{quicwire.SubOpTPM2PlatformAttrs}})
+
+	require.Equal(t, quicwire.StatusOK, resp.Status)
+	var out TPM2PlatformAttributesResponse
+	require.NoError(t, quicwire.DecodePayload(resp.Payload, &out))
+	assert.Equal(t, "/dev/tpmrm0", out.Device)
+	assert.Equal(t, &TPM2KeyRef{Handle: 0x81010001, Algorithm: "RSA"}, out.EK)
+	assert.Equal(t, &TPM2KeyRef{Handle: 0x81000001, Algorithm: "RSA"}, out.SRK)
+	assert.Nil(t, out.IAK, "an unprovisioned IAK is absent, not a zero handle")
 }
 
 func TestTPM2Handler_HandlePlatformAttributes_ErrorPaths(t *testing.T) {
 	h := NewTPM2Handler(logging.DefaultLogger())
 	mock := newMockTPM()
+	mock.isFIPSResult = true
 	mock.isFIPSErr = errors.New("n/a")
 	mock.isPCRExtErr = errors.New("n/a")
 	mock.config = nil
 	mock.fixedPropsErr = errors.New("n/a")
 	h.SetTPM2Service(mock)
-	resp := h.HandleMessage(context.Background(), &Request{Payload: []byte{SubOpTPM2PlatformAttrs}})
-	assert.Equal(t, StatusOK, resp.Status)
+
+	resp := h.HandleMessage(context.Background(), &quicwire.Request{Payload: []byte{quicwire.SubOpTPM2PlatformAttrs}})
+
+	require.Equal(t, quicwire.StatusOK, resp.Status)
+	var out TPM2PlatformAttributesResponse
+	require.NoError(t, quicwire.DecodePayload(resp.Payload, &out))
+	assert.False(t, out.IsFIPS, "a refused FIPS read reports false")
+	assert.Empty(t, out.Manufacturer)
 }
 
 func TestTPM2Handler_HandleGetIDevID_Success(t *testing.T) {
@@ -828,8 +1073,8 @@ func TestTPM2Handler_HandleGetIDevID_Success(t *testing.T) {
 	}
 	mock.idevidPubKey = &key.PublicKey
 	h.SetTPM2Service(mock)
-	resp := h.HandleMessage(context.Background(), &Request{Payload: []byte{SubOpTPM2GetIDevID}})
-	assert.Equal(t, StatusOK, resp.Status)
+	resp := h.HandleMessage(context.Background(), &quicwire.Request{Payload: []byte{quicwire.SubOpTPM2GetIDevID}})
+	assert.Equal(t, quicwire.StatusOK, resp.Status)
 }
 
 func TestTPM2Handler_HandleGetIDevID_AttrsError(t *testing.T) {
@@ -837,8 +1082,8 @@ func TestTPM2Handler_HandleGetIDevID_AttrsError(t *testing.T) {
 	mock := newMockTPM()
 	mock.idevidAttrsErr = errors.New("IDevID not found")
 	h.SetTPM2Service(mock)
-	resp := h.HandleMessage(context.Background(), &Request{Payload: []byte{SubOpTPM2GetIDevID}})
-	assert.Equal(t, StatusNotFound, resp.Status)
+	resp := h.HandleMessage(context.Background(), &quicwire.Request{Payload: []byte{quicwire.SubOpTPM2GetIDevID}})
+	assert.Equal(t, quicwire.StatusNotFound, resp.Status)
 }
 
 func TestTPM2Handler_HandleVerifyQuote_EmptyPayload(t *testing.T) {
@@ -846,15 +1091,15 @@ func TestTPM2Handler_HandleVerifyQuote_EmptyPayload(t *testing.T) {
 	h.SetTPM2Service(newMockTPM())
 	// A bare sub-opcode with no request body must be rejected, not
 	// silently treated as an empty (and therefore invalid) quote.
-	resp := h.HandleMessage(context.Background(), &Request{Payload: []byte{SubOpTPM2VerifyQuote}})
-	assert.NotEqual(t, StatusOK, resp.Status)
+	resp := h.HandleMessage(context.Background(), &quicwire.Request{Payload: []byte{quicwire.SubOpTPM2VerifyQuote}})
+	assert.NotEqual(t, quicwire.StatusOK, resp.Status)
 }
 
 func TestTPM2Handler_HandleCreateIDevIDCSR(t *testing.T) {
 	h := NewTPM2Handler(logging.DefaultLogger())
 	h.SetTPM2Service(newMockTPM())
-	resp := h.HandleMessage(context.Background(), &Request{Payload: []byte{SubOpTPM2IDevIDCSR}})
-	assert.Equal(t, StatusOK, resp.Status)
+	resp := h.HandleMessage(context.Background(), &quicwire.Request{Payload: []byte{quicwire.SubOpTPM2IDevIDCSR}})
+	assert.Equal(t, quicwire.StatusOK, resp.Status)
 }
 
 func TestTPM2Handler_HandleCreateIDevIDCSR_EKCertError(t *testing.T) {
@@ -862,15 +1107,15 @@ func TestTPM2Handler_HandleCreateIDevIDCSR_EKCertError(t *testing.T) {
 	mock := newMockTPM()
 	mock.ekCertErr = errors.New("no EK certificate")
 	h.SetTPM2Service(mock)
-	resp := h.HandleMessage(context.Background(), &Request{Payload: []byte{SubOpTPM2IDevIDCSR}})
-	assert.NotEqual(t, StatusOK, resp.Status)
+	resp := h.HandleMessage(context.Background(), &quicwire.Request{Payload: []byte{quicwire.SubOpTPM2IDevIDCSR}})
+	assert.NotEqual(t, quicwire.StatusOK, resp.Status)
 }
 
 func TestTPM2Handler_HandleCreateLDevIDCSR(t *testing.T) {
 	h := NewTPM2Handler(logging.DefaultLogger())
 	h.SetTPM2Service(newMockTPM())
-	resp := h.HandleMessage(context.Background(), &Request{Payload: []byte{SubOpTPM2LDevIDCSR}})
-	assert.Equal(t, StatusOK, resp.Status)
+	resp := h.HandleMessage(context.Background(), &quicwire.Request{Payload: []byte{quicwire.SubOpTPM2LDevIDCSR}})
+	assert.Equal(t, quicwire.StatusOK, resp.Status)
 }
 
 // =============================================================================
@@ -920,13 +1165,13 @@ func TestTPMErrorResponse_StatusMapping(t *testing.T) {
 		errMsg     string
 		wantStatus byte
 	}{
-		{"key not found", StatusNotFound},
-		{"already exists", StatusAlreadyExists},
-		{"invalid argument", StatusInvalidArgument},
-		{"permission denied", StatusPermissionDenied},
-		{"not implemented", StatusNotImplemented},
-		{"service unavailable", StatusUnavailable},
-		{"some error", StatusInternalError},
+		{"key not found", quicwire.StatusNotFound},
+		{"already exists", quicwire.StatusAlreadyExists},
+		{"invalid argument", quicwire.StatusInvalidArgument},
+		{"permission denied", quicwire.StatusPermissionDenied},
+		{"not implemented", quicwire.StatusNotImplemented},
+		{"service unavailable", quicwire.StatusUnavailable},
+		{"some error", quicwire.StatusInternalError},
 	}
 	for _, tt := range tests {
 		resp := h.tpmErrorResponse(errors.New(tt.errMsg))
@@ -941,73 +1186,73 @@ func TestTPMErrorResponse_StatusMapping(t *testing.T) {
 func TestTPM2Handler_HandleProvision_DecodeError(t *testing.T) {
 	h := NewTPM2Handler(logging.DefaultLogger())
 	h.SetTPM2Service(newMockTPM())
-	resp := h.HandleMessage(context.Background(), &Request{Payload: append([]byte{SubOpTPM2Provision}, []byte{0xFF, 0xFE}...)})
-	assert.Equal(t, StatusInvalidRequest, resp.Status)
+	resp := h.HandleMessage(context.Background(), &quicwire.Request{Payload: append([]byte{quicwire.SubOpTPM2Provision}, []byte{0xFF, 0xFE}...)})
+	assert.Equal(t, quicwire.StatusInvalidRequest, resp.Status)
 }
 
 func TestTPM2Handler_HandleClear_DecodeError(t *testing.T) {
 	h := NewTPM2Handler(logging.DefaultLogger())
 	h.SetTPM2Service(newMockTPM())
-	resp := h.HandleMessage(context.Background(), &Request{Payload: append([]byte{SubOpTPM2Clear}, []byte{0xFF, 0xFE}...)})
-	assert.Equal(t, StatusInvalidRequest, resp.Status)
+	resp := h.HandleMessage(context.Background(), &quicwire.Request{Payload: append([]byte{quicwire.SubOpTPM2Clear}, []byte{0xFF, 0xFE}...)})
+	assert.Equal(t, quicwire.StatusInvalidRequest, resp.Status)
 }
 
 func TestTPM2Handler_HandleClear_WithPassword(t *testing.T) {
 	h := NewTPM2Handler(logging.DefaultLogger())
 	h.SetTPM2Service(newMockTPM())
 	req := TPM2ClearRequest{OwnerPassword: "test-pw"}
-	payload, _ := EncodePayload(req)
-	resp := h.HandleMessage(context.Background(), &Request{Payload: append([]byte{SubOpTPM2Clear}, payload...)})
-	assert.Equal(t, StatusOK, resp.Status)
+	payload, _ := quicwire.EncodePayload(req)
+	resp := h.HandleMessage(context.Background(), &quicwire.Request{Payload: append([]byte{quicwire.SubOpTPM2Clear}, payload...)})
+	assert.Equal(t, quicwire.StatusOK, resp.Status)
 }
 
 func TestTPM2Handler_HandleQuote_DecodeError(t *testing.T) {
 	h := NewTPM2Handler(logging.DefaultLogger())
 	h.SetTPM2Service(newMockTPM())
-	resp := h.HandleMessage(context.Background(), &Request{Payload: append([]byte{SubOpTPM2Quote}, []byte{0xFF, 0xFE}...)})
-	assert.Equal(t, StatusInvalidRequest, resp.Status)
+	resp := h.HandleMessage(context.Background(), &quicwire.Request{Payload: append([]byte{quicwire.SubOpTPM2Quote}, []byte{0xFF, 0xFE}...)})
+	assert.Equal(t, quicwire.StatusInvalidRequest, resp.Status)
 }
 
 func TestTPM2Handler_HandleReadPCRs_DecodeError(t *testing.T) {
 	h := NewTPM2Handler(logging.DefaultLogger())
 	h.SetTPM2Service(newMockTPM())
-	resp := h.HandleMessage(context.Background(), &Request{Payload: append([]byte{SubOpTPM2ReadPCRs}, []byte{0xFF, 0xFE}...)})
-	assert.Equal(t, StatusInvalidRequest, resp.Status)
+	resp := h.HandleMessage(context.Background(), &quicwire.Request{Payload: append([]byte{quicwire.SubOpTPM2ReadPCRs}, []byte{0xFF, 0xFE}...)})
+	assert.Equal(t, quicwire.StatusInvalidRequest, resp.Status)
 }
 
 func TestTPM2Handler_HandleExtendPCR_DecodeError(t *testing.T) {
 	h := NewTPM2Handler(logging.DefaultLogger())
 	h.SetTPM2Service(newMockTPM())
-	resp := h.HandleMessage(context.Background(), &Request{Payload: append([]byte{SubOpTPM2ExtendPCR}, []byte{0xFF, 0xFE}...)})
-	assert.Equal(t, StatusInvalidRequest, resp.Status)
+	resp := h.HandleMessage(context.Background(), &quicwire.Request{Payload: append([]byte{quicwire.SubOpTPM2ExtendPCR}, []byte{0xFF, 0xFE}...)})
+	assert.Equal(t, quicwire.StatusInvalidRequest, resp.Status)
 }
 
 func TestTPM2Handler_HandleRandom_DecodeError(t *testing.T) {
 	h := NewTPM2Handler(logging.DefaultLogger())
 	h.SetTPM2Service(newMockTPM())
-	resp := h.HandleMessage(context.Background(), &Request{Payload: append([]byte{SubOpTPM2Random}, []byte{0xFF, 0xFE}...)})
-	assert.Equal(t, StatusInvalidRequest, resp.Status)
+	resp := h.HandleMessage(context.Background(), &quicwire.Request{Payload: append([]byte{quicwire.SubOpTPM2Random}, []byte{0xFF, 0xFE}...)})
+	assert.Equal(t, quicwire.StatusInvalidRequest, resp.Status)
 }
 
 func TestTPM2Handler_HandleSeal_DecodeError(t *testing.T) {
 	h := NewTPM2Handler(logging.DefaultLogger())
 	h.SetTPM2Service(newMockTPM())
-	resp := h.HandleMessage(context.Background(), &Request{Payload: append([]byte{SubOpTPM2Seal}, []byte{0xFF, 0xFE}...)})
-	assert.Equal(t, StatusInvalidRequest, resp.Status)
+	resp := h.HandleMessage(context.Background(), &quicwire.Request{Payload: append([]byte{quicwire.SubOpTPM2Seal}, []byte{0xFF, 0xFE}...)})
+	assert.Equal(t, quicwire.StatusInvalidRequest, resp.Status)
 }
 
 func TestTPM2Handler_HandleUnseal_DecodeError(t *testing.T) {
 	h := NewTPM2Handler(logging.DefaultLogger())
 	h.SetTPM2Service(newMockTPM())
-	resp := h.HandleMessage(context.Background(), &Request{Payload: append([]byte{SubOpTPM2Unseal}, []byte{0xFF, 0xFE}...)})
-	assert.Equal(t, StatusInvalidRequest, resp.Status)
+	resp := h.HandleMessage(context.Background(), &quicwire.Request{Payload: append([]byte{quicwire.SubOpTPM2Unseal}, []byte{0xFF, 0xFE}...)})
+	assert.Equal(t, quicwire.StatusInvalidRequest, resp.Status)
 }
 
 func TestTPM2Handler_HandleImportEKCert_DecodeError(t *testing.T) {
 	h := NewTPM2Handler(logging.DefaultLogger())
 	h.SetTPM2Service(newMockTPM())
-	resp := h.HandleMessage(context.Background(), &Request{Payload: append([]byte{SubOpTPM2ImportEKCert}, []byte{0xFF, 0xFE}...)})
-	assert.Equal(t, StatusInvalidRequest, resp.Status)
+	resp := h.HandleMessage(context.Background(), &quicwire.Request{Payload: append([]byte{quicwire.SubOpTPM2ImportEKCert}, []byte{0xFF, 0xFE}...)})
+	assert.Equal(t, quicwire.StatusInvalidRequest, resp.Status)
 }
 
 func TestTPM2Handler_HandleGetSRK_Error(t *testing.T) {
@@ -1015,8 +1260,8 @@ func TestTPM2Handler_HandleGetSRK_Error(t *testing.T) {
 	mock := newMockTPM()
 	mock.ssrkAttrsErr = errors.New("SRK not found")
 	h.SetTPM2Service(mock)
-	resp := h.HandleMessage(context.Background(), &Request{Payload: []byte{SubOpTPM2GetSRK}})
-	assert.NotEqual(t, StatusOK, resp.Status)
+	resp := h.HandleMessage(context.Background(), &quicwire.Request{Payload: []byte{quicwire.SubOpTPM2GetSRK}})
+	assert.NotEqual(t, quicwire.StatusOK, resp.Status)
 }
 
 func TestTPM2Handler_HandleCreateSRK_Error(t *testing.T) {
@@ -1024,8 +1269,8 @@ func TestTPM2Handler_HandleCreateSRK_Error(t *testing.T) {
 	mock := newMockTPM()
 	mock.createSRKErr = errors.New("SRK already exists")
 	h.SetTPM2Service(mock)
-	resp := h.HandleMessage(context.Background(), &Request{Payload: []byte{SubOpTPM2CreateSRK}})
-	assert.NotEqual(t, StatusOK, resp.Status)
+	resp := h.HandleMessage(context.Background(), &quicwire.Request{Payload: []byte{quicwire.SubOpTPM2CreateSRK}})
+	assert.NotEqual(t, quicwire.StatusOK, resp.Status)
 }
 
 func TestTPM2Handler_HandleGetIAK_Error(t *testing.T) {
@@ -1033,8 +1278,8 @@ func TestTPM2Handler_HandleGetIAK_Error(t *testing.T) {
 	mock := newMockTPM()
 	mock.iakAttrsErr = errors.New("IAK not found")
 	h.SetTPM2Service(mock)
-	resp := h.HandleMessage(context.Background(), &Request{Payload: []byte{SubOpTPM2GetIAK}})
-	assert.NotEqual(t, StatusOK, resp.Status)
+	resp := h.HandleMessage(context.Background(), &quicwire.Request{Payload: []byte{quicwire.SubOpTPM2GetIAK}})
+	assert.NotEqual(t, quicwire.StatusOK, resp.Status)
 }
 
 func TestTPM2Handler_HandleGetIAK_PubKeyError(t *testing.T) {
@@ -1042,8 +1287,8 @@ func TestTPM2Handler_HandleGetIAK_PubKeyError(t *testing.T) {
 	mock := newMockTPM()
 	mock.iakPubKeyErr = errors.New("key retrieval failed")
 	h.SetTPM2Service(mock)
-	resp := h.HandleMessage(context.Background(), &Request{Payload: []byte{SubOpTPM2GetIAK}})
-	assert.NotEqual(t, StatusOK, resp.Status)
+	resp := h.HandleMessage(context.Background(), &quicwire.Request{Payload: []byte{quicwire.SubOpTPM2GetIAK}})
+	assert.NotEqual(t, quicwire.StatusOK, resp.Status)
 }
 
 func TestTPM2Handler_HandleCreateIAK_Error(t *testing.T) {
@@ -1051,8 +1296,8 @@ func TestTPM2Handler_HandleCreateIAK_Error(t *testing.T) {
 	mock := newMockTPM()
 	mock.createIAKErr = errors.New("creation failed")
 	h.SetTPM2Service(mock)
-	resp := h.HandleMessage(context.Background(), &Request{Payload: []byte{SubOpTPM2CreateIAK}})
-	assert.NotEqual(t, StatusOK, resp.Status)
+	resp := h.HandleMessage(context.Background(), &quicwire.Request{Payload: []byte{quicwire.SubOpTPM2CreateIAK}})
+	assert.NotEqual(t, quicwire.StatusOK, resp.Status)
 }
 
 func TestTPM2Handler_HandleExtendPCR_TPMError(t *testing.T) {
@@ -1061,9 +1306,9 @@ func TestTPM2Handler_HandleExtendPCR_TPMError(t *testing.T) {
 	mock.extendPCRErr = errors.New("PCR extend failed")
 	h.SetTPM2Service(mock)
 	req := &TPM2ExtendPCRRequest{PCRIndex: 14, HashAlg: "sha256", Data: []byte("data")}
-	payload, _ := EncodePayload(req)
-	resp := h.HandleMessage(context.Background(), &Request{Payload: append([]byte{SubOpTPM2ExtendPCR}, payload...)})
-	assert.NotEqual(t, StatusOK, resp.Status)
+	payload, _ := quicwire.EncodePayload(req)
+	resp := h.HandleMessage(context.Background(), &quicwire.Request{Payload: append([]byte{quicwire.SubOpTPM2ExtendPCR}, payload...)})
+	assert.NotEqual(t, quicwire.StatusOK, resp.Status)
 }
 
 func TestTPM2Handler_HandleRandom_TPMError(t *testing.T) {
@@ -1071,8 +1316,8 @@ func TestTPM2Handler_HandleRandom_TPMError(t *testing.T) {
 	mock := newMockTPM()
 	mock.randomBytesErr = errors.New("RNG failed")
 	h.SetTPM2Service(mock)
-	resp := h.HandleMessage(context.Background(), &Request{Payload: []byte{SubOpTPM2Random}})
-	assert.NotEqual(t, StatusOK, resp.Status)
+	resp := h.HandleMessage(context.Background(), &quicwire.Request{Payload: []byte{quicwire.SubOpTPM2Random}})
+	assert.NotEqual(t, quicwire.StatusOK, resp.Status)
 }
 
 func TestTPM2Handler_HandleSeal_TPMError(t *testing.T) {
@@ -1081,9 +1326,9 @@ func TestTPM2Handler_HandleSeal_TPMError(t *testing.T) {
 	mock.sealErr = errors.New("seal failed")
 	h.SetTPM2Service(mock)
 	req := &TPM2SealRequest{Data: []byte("secret")}
-	payload, _ := EncodePayload(req)
-	resp := h.HandleMessage(context.Background(), &Request{Payload: append([]byte{SubOpTPM2Seal}, payload...)})
-	assert.NotEqual(t, StatusOK, resp.Status)
+	payload, _ := quicwire.EncodePayload(req)
+	resp := h.HandleMessage(context.Background(), &quicwire.Request{Payload: append([]byte{quicwire.SubOpTPM2Seal}, payload...)})
+	assert.NotEqual(t, quicwire.StatusOK, resp.Status)
 }
 
 func TestTPM2Handler_HandleUnseal_TPMError(t *testing.T) {
@@ -1092,9 +1337,9 @@ func TestTPM2Handler_HandleUnseal_TPMError(t *testing.T) {
 	mock.unsealErr = errors.New("unseal failed")
 	h.SetTPM2Service(mock)
 	req := &TPM2UnsealRequest{CN: "test-key"}
-	payload, _ := EncodePayload(req)
-	resp := h.HandleMessage(context.Background(), &Request{Payload: append([]byte{SubOpTPM2Unseal}, payload...)})
-	assert.NotEqual(t, StatusOK, resp.Status)
+	payload, _ := quicwire.EncodePayload(req)
+	resp := h.HandleMessage(context.Background(), &quicwire.Request{Payload: append([]byte{quicwire.SubOpTPM2Unseal}, payload...)})
+	assert.NotEqual(t, quicwire.StatusOK, resp.Status)
 }
 
 func TestTPM2Handler_HandleEventLog_Error(t *testing.T) {
@@ -1102,8 +1347,8 @@ func TestTPM2Handler_HandleEventLog_Error(t *testing.T) {
 	mock := newMockTPM()
 	mock.eventLogErr = errors.New("event log unavailable")
 	h.SetTPM2Service(mock)
-	resp := h.HandleMessage(context.Background(), &Request{Payload: []byte{SubOpTPM2EventLog}})
-	assert.NotEqual(t, StatusOK, resp.Status)
+	resp := h.HandleMessage(context.Background(), &quicwire.Request{Payload: []byte{quicwire.SubOpTPM2EventLog}})
+	assert.NotEqual(t, quicwire.StatusOK, resp.Status)
 }
 
 func TestTPM2Handler_HandleReadPCRs_Error(t *testing.T) {
@@ -1112,9 +1357,9 @@ func TestTPM2Handler_HandleReadPCRs_Error(t *testing.T) {
 	mock.readPCRsErr = errors.New("PCR read failed")
 	h.SetTPM2Service(mock)
 	req := &TPM2ReadPCRsRequest{Indices: []uint32{0}}
-	payload, _ := EncodePayload(req)
-	resp := h.HandleMessage(context.Background(), &Request{Payload: append([]byte{SubOpTPM2ReadPCRs}, payload...)})
-	assert.NotEqual(t, StatusOK, resp.Status)
+	payload, _ := quicwire.EncodePayload(req)
+	resp := h.HandleMessage(context.Background(), &quicwire.Request{Payload: append([]byte{quicwire.SubOpTPM2ReadPCRs}, payload...)})
+	assert.NotEqual(t, quicwire.StatusOK, resp.Status)
 }
 
 func TestTPM2Handler_HandleGetIDevID_PubKeyError(t *testing.T) {
@@ -1122,8 +1367,8 @@ func TestTPM2Handler_HandleGetIDevID_PubKeyError(t *testing.T) {
 	mock := newMockTPM()
 	mock.idevidPubKeyErr = errors.New("key not available")
 	h.SetTPM2Service(mock)
-	resp := h.HandleMessage(context.Background(), &Request{Payload: []byte{SubOpTPM2GetIDevID}})
-	assert.NotEqual(t, StatusOK, resp.Status)
+	resp := h.HandleMessage(context.Background(), &quicwire.Request{Payload: []byte{quicwire.SubOpTPM2GetIDevID}})
+	assert.NotEqual(t, quicwire.StatusOK, resp.Status)
 }
 
 func TestTPM2Handler_HandleCreateIDevIDCSR_IAKError(t *testing.T) {
@@ -1131,8 +1376,8 @@ func TestTPM2Handler_HandleCreateIDevIDCSR_IAKError(t *testing.T) {
 	mock := newMockTPM()
 	mock.iakAttrsErr = errors.New("IAK not found")
 	h.SetTPM2Service(mock)
-	resp := h.HandleMessage(context.Background(), &Request{Payload: []byte{SubOpTPM2IDevIDCSR}})
-	assert.NotEqual(t, StatusOK, resp.Status)
+	resp := h.HandleMessage(context.Background(), &quicwire.Request{Payload: []byte{quicwire.SubOpTPM2IDevIDCSR}})
+	assert.NotEqual(t, quicwire.StatusOK, resp.Status)
 }
 
 func TestTPM2Handler_HandleCreateIDevIDCSR_IDevIDError(t *testing.T) {
@@ -1140,6 +1385,6 @@ func TestTPM2Handler_HandleCreateIDevIDCSR_IDevIDError(t *testing.T) {
 	mock := newMockTPM()
 	mock.idevidAttrsErr = errors.New("IDevID not found")
 	h.SetTPM2Service(mock)
-	resp := h.HandleMessage(context.Background(), &Request{Payload: []byte{SubOpTPM2IDevIDCSR}})
-	assert.NotEqual(t, StatusOK, resp.Status)
+	resp := h.HandleMessage(context.Background(), &quicwire.Request{Payload: []byte{quicwire.SubOpTPM2IDevIDCSR}})
+	assert.NotEqual(t, quicwire.StatusOK, resp.Status)
 }

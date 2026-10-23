@@ -19,7 +19,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"testing"
@@ -31,6 +30,8 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/openflow"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ovs"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/testenv"
+	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers/boundedexec"
 )
 
 const (
@@ -54,7 +55,7 @@ func TestNetworkProvisioningFlow(t *testing.T) {
 
 	err = client.Connect(ctx)
 	if err != nil {
-		t.Skipf("Skipping test: cannot connect to OVSDB: %v", err)
+		t.Fatal(missing("a connection to OVSDB", err))
 	}
 
 	// Create test bridges
@@ -187,7 +188,7 @@ func TestNetworkProvisioningFlow(t *testing.T) {
 
 	t.Run("ApplyProductionPhaseACLs", func(t *testing.T) {
 		if profile.Networks[entities.DefaultPostEnrollmentNetwork] == nil || len(profile.Networks[entities.DefaultPostEnrollmentNetwork].ACLs) == 0 {
-			t.Skip("No production ACLs defined")
+			t.Fatal("the createTestDeviceProfile fixture defines no post-enrollment ACLs")
 		}
 
 		// Get the new OpenFlow port number (may have changed after moving to production bridge)
@@ -250,7 +251,7 @@ func TestDeviceProfileToNetworkConfig(t *testing.T) {
 
 	err = client.Connect(ctx)
 	if err != nil {
-		t.Skipf("Skipping test: cannot connect to OVSDB: %v", err)
+		t.Fatal(missing("a connection to OVSDB", err))
 	}
 
 	bridgeName := "br-test-profile"
@@ -267,7 +268,7 @@ func TestDeviceProfileToNetworkConfig(t *testing.T) {
 
 	t.Run("TranslateProvisioningNetworkConfig", func(t *testing.T) {
 		if profile.Networks[entities.DefaultEnrollmentNetwork] == nil {
-			t.Skip("No provisioning network config")
+			t.Fatal("the createTestDeviceProfile fixture defines no enrollment network")
 		}
 
 		config := profile.Networks[entities.DefaultEnrollmentNetwork]
@@ -287,7 +288,7 @@ func TestDeviceProfileToNetworkConfig(t *testing.T) {
 
 	t.Run("TranslateProductionNetworkConfig", func(t *testing.T) {
 		if profile.Networks[entities.DefaultPostEnrollmentNetwork] == nil {
-			t.Skip("No production network config")
+			t.Fatal("the createTestDeviceProfile fixture defines no post-enrollment network")
 		}
 
 		config := profile.Networks[entities.DefaultPostEnrollmentNetwork]
@@ -307,7 +308,7 @@ func TestDeviceProfileToNetworkConfig(t *testing.T) {
 
 	t.Run("ApplyACLRulesAsOpenFlowEntries", func(t *testing.T) {
 		if profile.Networks[entities.DefaultPostEnrollmentNetwork] == nil {
-			t.Skip("No production network config")
+			t.Fatal("the createTestDeviceProfile fixture defines no post-enrollment network")
 		}
 
 		portName := "test-acl-port"
@@ -372,7 +373,7 @@ func TestDeviceProfileToNetworkConfig(t *testing.T) {
 func cleanupBridges(t *testing.T, ctx context.Context, client *ovs.Client, bridges ...string) {
 	for _, bridge := range bridges {
 		// Use ovs-vsctl for reliable cleanup
-		exec.CommandContext(ctx, "ovs-vsctl", "--if-exists", "del-br", bridge).Run()
+		boundedexec.CommandContext(ctx, "ovs-vsctl", "--if-exists", "del-br", bridge).Run()
 	}
 }
 
@@ -384,7 +385,7 @@ func createBridgeViaOVS(t *testing.T, name string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, "ovs-vsctl", "add-br", name)
+	cmd := boundedexec.CommandContext(ctx, "ovs-vsctl", "add-br", name)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("Failed to create bridge %s via ovs-vsctl: %v, output: %s", name, err, output)
@@ -398,14 +399,14 @@ func configureBridgeForOpenFlow(t *testing.T, bridgeName string, protocol string
 	defer cancel()
 
 	// Set protocols
-	cmd := exec.CommandContext(ctx, "ovs-vsctl", "set", "bridge", bridgeName,
+	cmd := boundedexec.CommandContext(ctx, "ovs-vsctl", "set", "bridge", bridgeName,
 		fmt.Sprintf("protocols=%s", protocol))
 	if output, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("Failed to set protocols on bridge %s: %v, output: %s", bridgeName, err, output)
 	}
 
 	// Set fail_mode
-	cmd = exec.CommandContext(ctx, "ovs-vsctl", "set", "bridge", bridgeName,
+	cmd = boundedexec.CommandContext(ctx, "ovs-vsctl", "set", "bridge", bridgeName,
 		fmt.Sprintf("fail_mode=%s", failMode))
 	if output, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("Failed to set fail_mode on bridge %s: %v, output: %s", bridgeName, err, output)
@@ -536,32 +537,16 @@ func waitForBridgeSocket(t *testing.T, bridgeName string) {
 	t.Helper()
 
 	socketPath := filepath.Join(ovsSocketDir, bridgeName+".mgmt")
-	deadline := time.Now().Add(socketWaitTimeout)
-	retryDelay := 100 * time.Millisecond
-	maxDelay := 1 * time.Second
-
-	for time.Now().Before(deadline) {
-		// Check if socket file exists
-		if _, err := os.Stat(socketPath); os.IsNotExist(err) {
-			time.Sleep(retryDelay)
-			if retryDelay < maxDelay {
-				retryDelay *= 2
-			}
-			continue
+	available := func() bool {
+		if _, err := os.Stat(socketPath); err != nil {
+			return false
 		}
-
-		// Socket file exists, try to connect
-		if checkOpenFlowAvailable(bridgeName) {
-			return // Success
-		}
-
-		time.Sleep(retryDelay)
-		if retryDelay < maxDelay {
-			retryDelay *= 2
-		}
+		return checkOpenFlowAvailable(bridgeName)
 	}
-
-	t.Fatalf("OpenFlow socket for bridge %s not available after %v", bridgeName, socketWaitTimeout)
+	condition := "OpenFlow socket for bridge " + bridgeName
+	if err := testenv.WaitUntil(t.Context(), socketWaitTimeout, condition, available); err != nil {
+		t.Fatalf("%v", err)
+	}
 }
 
 // checkOpenFlowAvailable checks if we can actually connect to the OpenFlow socket
@@ -594,20 +579,12 @@ func addPortViaOVS(t *testing.T, bridgeName, portName string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, "ovs-vsctl", "add-port", bridgeName, portName, "--", "set", "interface", portName, "type=internal")
+	cmd := boundedexec.CommandContext(ctx, "ovs-vsctl", "add-port", bridgeName, portName, "--", "set", "interface", portName, "type=internal")
 	output, err := cmd.CombinedOutput()
 	require.NoError(t, err, "Failed to add port %s to %s: %s", portName, bridgeName, output)
 
 	// Wait for OVS to create the internal port interface in the kernel and bring it up
-	var linkUpErr error
-	for i := 0; i < 10; i++ {
-		time.Sleep(100 * time.Millisecond)
-		cmd = exec.CommandContext(ctx, "ip", "link", "set", portName, "up")
-		output, linkUpErr = cmd.CombinedOutput()
-		if linkUpErr == nil {
-			break
-		}
-	}
+	output, linkUpErr := bringInternalPortUp(ctx, portName)
 	require.NoError(t, linkUpErr, "Failed to bring up interface %s after retries: %s", portName, output)
 }
 
@@ -617,7 +594,7 @@ func deletePortViaOVS(t *testing.T, bridgeName, portName string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, "ovs-vsctl", "--if-exists", "del-port", bridgeName, portName)
+	cmd := boundedexec.CommandContext(ctx, "ovs-vsctl", "--if-exists", "del-port", bridgeName, portName)
 	output, err := cmd.CombinedOutput()
 	require.NoError(t, err, "Failed to delete port %s from %s: %s", portName, bridgeName, output)
 }
@@ -628,23 +605,20 @@ func getOFPortViaOVS(t *testing.T, portName string) int32 {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	// Wait for OVS to assign the ofport with retry logic
+	// Wait for OVS to assign the ofport
 	var ofport int32
-	var err error
-	var output []byte
-	for i := 0; i < 10; i++ {
-		time.Sleep(200 * time.Millisecond)
-
-		cmd := exec.CommandContext(ctx, "ovs-vsctl", "get", "interface", portName, "ofport")
-		output, err = cmd.CombinedOutput()
+	assigned := func() bool {
+		cmd := boundedexec.CommandContext(ctx, "ovs-vsctl", "get", "interface", portName, "ofport")
+		output, err := cmd.CombinedOutput()
 		require.NoError(t, err, "Failed to get ofport for %s: %s", portName, output)
 
 		_, err = fmt.Sscanf(string(output), "%d", &ofport)
 		require.NoError(t, err, "Failed to parse ofport from: %s", output)
 
-		if ofport > 0 {
-			break
-		}
+		return ofport > 0
+	}
+	if err := testenv.WaitUntil(ctx, ofportTimeout, "ofport for "+portName, assigned); err != nil {
+		t.Logf("%v", err)
 	}
 	require.Greater(t, ofport, int32(0), "OpenFlow port number should be positive")
 
@@ -657,7 +631,7 @@ func setPortVLANViaOVS(t *testing.T, portName string, vlan uint16) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, "ovs-vsctl", "set", "port", portName, fmt.Sprintf("tag=%d", vlan))
+	cmd := boundedexec.CommandContext(ctx, "ovs-vsctl", "set", "port", portName, fmt.Sprintf("tag=%d", vlan))
 	output, err := cmd.CombinedOutput()
 	require.NoError(t, err, "Failed to set VLAN %d on port %s: %s", vlan, portName, output)
 }
@@ -668,7 +642,7 @@ func getPortVLANViaOVS(t *testing.T, portName string) int64 {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, "ovs-vsctl", "get", "port", portName, "tag")
+	cmd := boundedexec.CommandContext(ctx, "ovs-vsctl", "get", "port", portName, "tag")
 	output, err := cmd.CombinedOutput()
 	require.NoError(t, err, "Failed to get VLAN for %s: %s", portName, output)
 

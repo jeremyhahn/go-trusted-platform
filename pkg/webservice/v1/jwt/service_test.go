@@ -20,8 +20,10 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"testing"
 
+	"github.com/golang-jwt/jwt/v5"
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore/entities"
 	"github.com/stretchr/testify/assert"
@@ -154,7 +156,9 @@ func TestParseToken(t *testing.T) {
 	assert.NotNil(t, token)
 	assert.NotNil(t, claims)
 	assert.True(t, token.Valid)
-	assert.Equal(t, uint64(12345), claims.UserID)
+	userID, err := claims.PlatformUserID()
+	assert.NoError(t, err)
+	assert.Equal(t, uint64(12345), userID)
 }
 
 func TestParseToken_MissingAuthHeader(t *testing.T) {
@@ -175,6 +179,54 @@ func TestParseToken_MissingAuthHeader(t *testing.T) {
 	assert.Equal(t, ErrAuthorizationHeaderRequired, err)
 	assert.Nil(t, token)
 	assert.Nil(t, claims)
+}
+
+func TestVerifyTokenClaims_ReturnsVerifiedPrincipal(t *testing.T) {
+	params, ks := testServiceParamsWithXKMS()
+	params.KeyAttrs.KeyType = xkmssdk.KeyTypeTLS
+	_, err := ks.GenerateKey(context.Background(), params.KeyAttrs)
+	require.NoError(t, err)
+	service, err := NewService(context.Background(), params)
+	require.NoError(t, err)
+
+	user := entities.NewUser("test@localhost")
+	user.ID = 12345
+	user.TenantID = "acme"
+	user.Roles = []*entities.Role{{Name: "operator"}}
+	tokenString, err := service.GenerateToken(user)
+	require.NoError(t, err)
+
+	claims, err := service.VerifyTokenClaims("Bearer " + tokenString)
+	require.NoError(t, err)
+	assert.Equal(t, "12345", claims.UserIDStr)
+	assert.Equal(t, "acme", claims.TenantID)
+	assert.Equal(t, []string{"operator"}, claims.Roles)
+}
+
+func TestVerifyTokenClaims_RejectsInvalidTokens(t *testing.T) {
+	params, ks := testServiceParamsWithXKMS()
+	params.KeyAttrs.KeyType = xkmssdk.KeyTypeTLS
+	_, err := ks.GenerateKey(context.Background(), params.KeyAttrs)
+	require.NoError(t, err)
+	service, err := NewService(context.Background(), params)
+	require.NoError(t, err)
+
+	for name, token := range map[string]string{
+		"empty":        "",
+		"bearer only":  "Bearer ",
+		"not a jwt":    "not-a-jwt",
+		"wrong format": "a.b.c",
+	} {
+		t.Run(name, func(t *testing.T) {
+			claims, err := service.VerifyTokenClaims(token)
+			assert.Error(t, err)
+			assert.Nil(t, claims)
+		})
+	}
+
+	var nilService *Service
+	_, err = nilService.VerifyTokenClaims("x")
+	assert.ErrorIs(t, err, ErrInvalidToken)
 }
 
 func TestParseToken_InvalidToken(t *testing.T) {
@@ -222,7 +274,96 @@ func TestParseTokenString(t *testing.T) {
 
 	claims, ok := token.Claims.(*TokenClaims)
 	assert.True(t, ok)
-	assert.Equal(t, uint64(67890), claims.UserID)
+	userID, err := claims.PlatformUserID()
+	assert.NoError(t, err)
+	assert.Equal(t, uint64(67890), userID)
+}
+
+// newTestService returns a Service signing with a freshly generated key.
+func newTestService(t *testing.T) *Service {
+	t.Helper()
+	params, ks := testServiceParamsWithXKMS()
+	params.KeyAttrs.KeyType = xkmssdk.KeyTypeTLS
+	_, err := ks.GenerateKey(context.Background(), params.KeyAttrs)
+	require.NoError(t, err)
+	service, err := NewService(context.Background(), params)
+	require.NoError(t, err)
+	return service
+}
+
+// hostileUser returns a user whose store key is above 2^53, the largest
+// integer a float64 holds exactly. User ids are xxhash64 (util.NewID), so
+// almost every real id is in this range; a small id would hide a float64
+// round-trip (#642).
+func hostileUser(t *testing.T) *entities.User {
+	t.Helper()
+	user := entities.NewUser("issue-642@hostile.example")
+	require.Greater(t, user.ID, uint64(1)<<53)
+	require.NotEqual(t, user.ID, uint64(float64(user.ID)),
+		"the id must change under a float64 round-trip to be hostile")
+	return user
+}
+
+// A consumer that decodes the claims without a schema (golang-jwt's
+// MapClaims, the web console's JSON.parse) turns every JSON number into a
+// float64. The platform user id must therefore travel as a decimal string,
+// or such a consumer reads a different user (#642).
+func TestGenerateToken_HostileUserIDSurvivesASchemalessDecode(t *testing.T) {
+	service := newTestService(t)
+	user := hostileUser(t)
+
+	tokenString, err := service.GenerateToken(user)
+	require.NoError(t, err)
+
+	token, err := jwt.Parse(tokenString, service.KeyFunc)
+	require.NoError(t, err)
+	mapClaims, ok := token.Claims.(jwt.MapClaims)
+	require.True(t, ok)
+
+	want := strconv.FormatUint(user.ID, 10)
+	for _, name := range []string{"uid", "user_id", "sub"} {
+		got, ok := mapClaims[name].(string)
+		require.Truef(t, ok, "%q claim is %T %v, want the decimal string %s",
+			name, mapClaims[name], mapClaims[name], want)
+		assert.Equal(t, want, got, name)
+	}
+}
+
+// The server's own reader: the real issuer, then the real parser, must
+// hand back exactly the id that was issued.
+func TestParseToken_HostileUserIDRoundTrips(t *testing.T) {
+	service := newTestService(t)
+	user := hostileUser(t)
+
+	tokenString, err := service.GenerateToken(user)
+	require.NoError(t, err)
+	req := httptest.NewRequest(http.MethodGet, "/test", nil)
+	req.Header.Set("Authorization", "Bearer "+tokenString)
+
+	_, claims, err := service.ParseToken(req)
+	require.NoError(t, err)
+	userID, err := claims.PlatformUserID()
+	require.NoError(t, err)
+	assert.Equal(t, user.ID, userID)
+	assert.Equal(t, strconv.FormatUint(user.ID, 10), claims.UserIDStr)
+}
+
+func TestPlatformUserID_RejectsAMissingOrMalformedClaim(t *testing.T) {
+	for name, uid := range map[string]string{
+		"missing":       "",
+		"not a number":  "operator@platform",
+		"negative":      "-1",
+		"float":         "6.339618737788534e+18",
+		"above uint64":  "18446744073709551616",
+		"leading space": " 42",
+	} {
+		t.Run(name, func(t *testing.T) {
+			claims := &TokenClaims{UID: uid}
+			id, err := claims.PlatformUserID()
+			assert.ErrorIs(t, err, ErrInvalidUserClaim)
+			assert.Zero(t, id)
+		})
+	}
 }
 
 func TestParseTokenString_InvalidToken(t *testing.T) {

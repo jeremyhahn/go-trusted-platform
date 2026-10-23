@@ -1,5 +1,9 @@
 # Firmware API Reference
 
+> **Status: NORMATIVE** · Scope: planned `platformctl firmware`, `platformctl ota` and `platformctl vtpm` bundle commands; none is implemented · Last verified: 2026-10-18
+> Conflicts with this document are defects. Fix them here first.
+> The shipped `platformctl vtpm` commands (`create`, `export`, `import` and the rest) are in [docs/vtpm/cli.md](../vtpm/cli.md); `install-swtpm`, `create-bundle` and `deploy-bundle` below are not among them.
+
 CLI commands and API for Trusted Platform Firmware.
 
 ## platformctl firmware Commands
@@ -163,4 +167,4 @@ platformctl firmware test \
 
 - [README.md](README.md) - Overview
 - [Configuration](configuration.md) - Config examples
-- [Roadmap](ROADMAP.md) - Development roadmap
+- [Roadmap](../../ROADMAP.md) - Development roadmap

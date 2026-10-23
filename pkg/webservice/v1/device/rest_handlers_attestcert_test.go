@@ -96,19 +96,26 @@ func TestCRUDHandler_AttestCert_SurvivesUpdateWithoutIt(t *testing.T) {
 // (flat legacy and the SDK's {device: {...}} envelope) carry the certificate,
 // and that the envelope overrides the flat field exactly as attest_pub does.
 func TestRequestToDevice_AttestCert_FlatAndNested(t *testing.T) {
-	handler, _, _ := newTestHandler()
-
-	flat := handler.requestToDevice(&DeviceRequest{Serial: "SN", AttestCert: testAttestCertPEM})
+	flat, err := (&DeviceRequest{RequestFields: devicepkg.RequestFields{Serial: "SN", AttestCert: testAttestCertPEM}}).ToDevice()
+	require.NoError(t, err)
 	assert.Equal(t, testAttestCertPEM, flat.AttestCert)
 
-	nested := handler.requestToDevice(&DeviceRequest{
-		Serial:     "SN",
-		AttestCert: "flat-loses",
-		Device:     &DeviceRequestPayload{AttestCert: testAttestCertPEM},
-	})
-	assert.Equal(t, testAttestCertPEM, nested.AttestCert, "the nested envelope wins, as it does for every other field")
+	nested, err := (&DeviceRequest{
+		RequestFields: devicepkg.RequestFields{Serial: "SN"},
+		Device:        &devicepkg.RequestFields{AttestCert: testAttestCertPEM},
+	}).ToDevice()
+	require.NoError(t, err)
+	assert.Equal(t, testAttestCertPEM, nested.AttestCert)
 
-	empty := handler.requestToDevice(&DeviceRequest{Serial: "SN", Device: &DeviceRequestPayload{}})
+	_, err = (&DeviceRequest{
+		RequestFields: devicepkg.RequestFields{Serial: "SN", AttestCert: "flat-differs"},
+		Device:        &devicepkg.RequestFields{AttestCert: testAttestCertPEM},
+	}).ToDevice()
+	assert.Equal(t, devicepkg.ErrDeviceRequestConflict{Field: "attest_cert"}, err,
+		"a certificate set flat and nested to different values is refused, not resolved by precedence")
+
+	empty, err := (&DeviceRequest{RequestFields: devicepkg.RequestFields{Serial: "SN"}, Device: &devicepkg.RequestFields{}}).ToDevice()
+	require.NoError(t, err)
 	assert.Empty(t, empty.AttestCert, "an empty envelope must not clear or invent a certificate")
 }
 

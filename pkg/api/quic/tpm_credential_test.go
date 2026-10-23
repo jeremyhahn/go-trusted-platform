@@ -29,6 +29,7 @@ import (
 	tpmgo "github.com/google/go-tpm/tpm2"
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 )
 
 // credMockTPM records the arguments passed to the credential primitives and
@@ -80,7 +81,7 @@ func newCredHandler(tpm xkmssdk.TrustedPlatformModule) *TPM2Handler {
 
 func mustEncode(t *testing.T, v interface{}) []byte {
 	t.Helper()
-	b, err := EncodePayload(v)
+	b, err := quicwire.EncodePayload(v)
 	if err != nil {
 		t.Fatalf("encode payload: %v", err)
 	}
@@ -99,10 +100,10 @@ func TestTPM2Handler_MakeCredential_LocalEK(t *testing.T) {
 		AKName: []byte("ak-name"),
 		Secret: []byte("seed"),
 	})
-	payload := append([]byte{SubOpTPM2MakeCred}, reqBody...)
+	payload := append([]byte{quicwire.SubOpTPM2MakeCred}, reqBody...)
 
-	resp := h.HandleMessage(context.Background(), &Request{Payload: payload})
-	if resp.Status != StatusOK {
+	resp := h.HandleMessage(context.Background(), &quicwire.Request{Payload: payload})
+	if resp.Status != quicwire.StatusOK {
 		t.Fatalf("status = %d, body=%s", resp.Status, resp.Payload)
 	}
 	if mock.usedExtEK {
@@ -116,7 +117,7 @@ func TestTPM2Handler_MakeCredential_LocalEK(t *testing.T) {
 	}
 
 	var out TPM2MakeCredentialResponse
-	if err := DecodePayload(resp.Payload, &out); err != nil {
+	if err := quicwire.DecodePayload(resp.Payload, &out); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
 	if !bytes.Equal(out.CredentialBlob, mock.makeBlob) ||
@@ -141,10 +142,10 @@ func TestTPM2Handler_MakeCredential_ExternalEK(t *testing.T) {
 		IAKPub: []byte("iak-pub"),
 		Secret: []byte("seed"),
 	})
-	payload := append([]byte{SubOpTPM2MakeCred}, reqBody...)
+	payload := append([]byte{quicwire.SubOpTPM2MakeCred}, reqBody...)
 
-	resp := h.HandleMessage(context.Background(), &Request{Payload: payload})
-	if resp.Status != StatusOK {
+	resp := h.HandleMessage(context.Background(), &quicwire.Request{Payload: payload})
+	if resp.Status != quicwire.StatusOK {
 		t.Fatalf("status = %d, body=%s", resp.Status, resp.Payload)
 	}
 	if !mock.usedExtEK {
@@ -162,8 +163,8 @@ func TestTPM2Handler_MakeCredential_Error(t *testing.T) {
 	mock := &credMockTPM{makeErr: errors.New("tpm failure")}
 	h := newCredHandler(mock)
 	reqBody := mustEncode(t, &TPM2MakeCredentialRequest{AKName: []byte("ak")})
-	resp := h.HandleMessage(context.Background(), &Request{Payload: append([]byte{SubOpTPM2MakeCred}, reqBody...)})
-	if resp.Status == StatusOK {
+	resp := h.HandleMessage(context.Background(), &quicwire.Request{Payload: append([]byte{quicwire.SubOpTPM2MakeCred}, reqBody...)})
+	if resp.Status == quicwire.StatusOK {
 		t.Fatal("expected error status for failing MakeCredential")
 	}
 }
@@ -176,10 +177,10 @@ func TestTPM2Handler_ActivateCredential(t *testing.T) {
 		CredentialBlob:  []byte("cred"),
 		EncryptedSecret: []byte("enc"),
 	})
-	payload := append([]byte{SubOpTPM2ActivateCred}, reqBody...)
+	payload := append([]byte{quicwire.SubOpTPM2ActivateCred}, reqBody...)
 
-	resp := h.HandleMessage(context.Background(), &Request{Payload: payload})
-	if resp.Status != StatusOK {
+	resp := h.HandleMessage(context.Background(), &quicwire.Request{Payload: payload})
+	if resp.Status != quicwire.StatusOK {
 		t.Fatalf("status = %d, body=%s", resp.Status, resp.Payload)
 	}
 	if !bytes.Equal(mock.gotCredBlob, []byte("cred")) || !bytes.Equal(mock.gotEncSecret, []byte("enc")) {
@@ -187,7 +188,7 @@ func TestTPM2Handler_ActivateCredential(t *testing.T) {
 	}
 
 	var out TPM2ActivateCredentialResponse
-	if err := DecodePayload(resp.Payload, &out); err != nil {
+	if err := quicwire.DecodePayload(resp.Payload, &out); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
 	if !bytes.Equal(out.Secret, []byte("recovered")) {
@@ -198,8 +199,8 @@ func TestTPM2Handler_ActivateCredential(t *testing.T) {
 func TestTPM2Handler_ActivateCredential_MissingFields(t *testing.T) {
 	h := newCredHandler(&credMockTPM{})
 	reqBody := mustEncode(t, &TPM2ActivateCredentialRequest{EncryptedSecret: []byte("enc")})
-	resp := h.HandleMessage(context.Background(), &Request{Payload: append([]byte{SubOpTPM2ActivateCred}, reqBody...)})
-	if resp.Status == StatusOK {
+	resp := h.HandleMessage(context.Background(), &quicwire.Request{Payload: append([]byte{quicwire.SubOpTPM2ActivateCred}, reqBody...)})
+	if resp.Status == quicwire.StatusOK {
 		t.Fatal("expected error for missing credential_blob")
 	}
 }

@@ -17,6 +17,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/netip"
 	"strings"
@@ -24,6 +25,7 @@ import (
 	"testing"
 
 	api "github.com/osrg/gobgp/v4/api"
+	gobgp "github.com/osrg/gobgp/v4/pkg/packet/bgp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -49,6 +51,13 @@ type fakeBGPServer struct {
 	// global and added are what the speaker asked GoBGP to run.
 	global *api.Global
 	added  []*api.Peer
+	// policies is the last routing policy the speaker installed.
+	policies *api.SetPoliciesRequest
+	// paths and withdrawn are the routes the speaker advertised and
+	// withdrew; refusePrefixes fails every EVPN IP prefix route.
+	paths          []*api.Path
+	withdrawn      []*api.Path
+	refusePrefixes error
 }
 
 func (f *fakeBGPServer) Start() error {
@@ -97,10 +106,88 @@ func (f *fakeBGPServer) ListPeer(_ context.Context, _ *api.ListPeerRequest, fn f
 func (f *fakeBGPServer) ResetPeer(context.Context, *api.ResetPeerRequest) error   { return nil }
 func (f *fakeBGPServer) EnableMrt(context.Context, *api.EnableMrtRequest) error   { return nil }
 func (f *fakeBGPServer) DisableMrt(context.Context, *api.DisableMrtRequest) error { return nil }
-func (f *fakeBGPServer) AddPath(context.Context, *api.AddPathRequest) (*api.AddPathResponse, error) {
+func (f *fakeBGPServer) AddPath(_ context.Context, req *api.AddPathRequest) (*api.AddPathResponse, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.refusePrefixes != nil && req.GetPath().GetNlri().GetEvpnIpPrefix() != nil {
+		return nil, f.refusePrefixes
+	}
+	f.paths = append(f.paths, req.GetPath())
 	return &api.AddPathResponse{}, nil
 }
-func (f *fakeBGPServer) DeletePath(context.Context, *api.DeletePathRequest) error { return nil }
+func (f *fakeBGPServer) DeletePath(_ context.Context, req *api.DeletePathRequest) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.withdrawn = append(f.withdrawn, req.GetPath())
+	return nil
+}
+
+// evpnPrefixes are the EVPN IP prefix routes among paths, as "prefix/len
+// L3VNI".
+func evpnPrefixes(paths []*api.Path) []string {
+	var out []string
+	for _, p := range paths {
+		if route := p.GetNlri().GetEvpnIpPrefix(); route != nil {
+			out = append(out, fmt.Sprintf("%s/%d %d", route.GetIpPrefix(), route.GetIpPrefixLen(), route.GetLabel()))
+		}
+	}
+	return out
+}
+
+func (f *fakeBGPServer) advertisedPrefixes() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return evpnPrefixes(f.paths)
+}
+
+func (f *fakeBGPServer) withdrawnPrefixes() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return evpnPrefixes(f.withdrawn)
+}
+
+// advertisedPrefixTargets are the route targets of every advertised EVPN IP
+// prefix route.
+func (f *fakeBGPServer) advertisedPrefixTargets() [][]string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var out [][]string
+	for _, p := range f.paths {
+		if p.GetNlri().GetEvpnIpPrefix() != nil {
+			out = append(out, routeTargetsOf(p))
+		}
+	}
+	return out
+}
+
+// routeTargetsOf are the route targets among a path's extended communities,
+// as "ASN:value".
+func routeTargetsOf(p *api.Path) []string {
+	var out []string
+	for _, attr := range p.GetPattrs() {
+		for _, community := range attr.GetExtendedCommunities().GetCommunities() {
+			rt := community.GetTwoOctetAsSpecific()
+			if rt != nil && rt.GetSubType() == uint32(gobgp.EC_SUBTYPE_ROUTE_TARGET) {
+				out = append(out, fmt.Sprintf("%d:%d", rt.GetAsn(), rt.GetLocalAdmin()))
+			}
+		}
+	}
+	return out
+}
+
+// routeTargetSets are the route-target patterns of every extended-community
+// set in the policy the speaker installed, by set name.
+func (f *fakeBGPServer) routeTargetSets() map[string][]string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make(map[string][]string)
+	for _, set := range f.policies.GetDefinedSets() {
+		if set.GetDefinedType() == api.DefinedType_DEFINED_TYPE_EXT_COMMUNITY {
+			out[set.GetName()] = set.GetList()
+		}
+	}
+	return out
+}
 func (f *fakeBGPServer) ListPath(context.Context, *api.ListPathRequest, func(*api.Destination)) error {
 	return nil
 }
@@ -110,7 +197,12 @@ func (f *fakeBGPServer) WatchEvent(context.Context, *api.WatchEventRequest, func
 func (f *fakeBGPServer) AddTcpAoKeychain(context.Context, *api.AddTcpAoKeychainRequest) error {
 	return nil
 }
-func (f *fakeBGPServer) SetPolicies(context.Context, *api.SetPoliciesRequest) error { return nil }
+func (f *fakeBGPServer) SetPolicies(_ context.Context, req *api.SetPoliciesRequest) error {
+	f.mu.Lock()
+	f.policies = req
+	f.mu.Unlock()
+	return nil
+}
 func (f *fakeBGPServer) SetPolicyAssignment(context.Context, *api.SetPolicyAssignmentRequest) error {
 	return nil
 }
@@ -257,7 +349,7 @@ func TestEnabledServices_EveryEntryIsBuiltOrRefused(t *testing.T) {
 		Edge:          &EdgeConfig{Enabled: true},
 		DHCP:          &DHCPServiceConfig{Enabled: true},
 		PXE:           &PXEServiceConfig{Enabled: true, HTTPPort: 8069},
-		ManagementVPN: &ManagementVPNServiceConfig{Enabled: true},
+		ManagementVPN: validVPNServiceConfig(),
 		NAT64: &NAT64Config{
 			Enabled:        true,
 			TranslatorPort: "nat640",
@@ -273,7 +365,7 @@ func TestEnabledServices_EveryEntryIsBuiltOrRefused(t *testing.T) {
 	assert.Equal(t, []string{
 		ServiceFirewall, ServiceNAT, ServiceLoadBalancer, ServiceNAT64, ServiceHostFW, ServiceTunnels, ServiceTransit,
 		ServiceOverlay, ServiceEdge, ServiceDHCP, ServicePXE, ServiceManagementVPN,
-	}, names, "datapath services first, then host services, then refused sections")
+	}, names, "datapath services first, then host services, then the edge sections")
 
 	built := map[string]bool{}
 	refused := map[string]bool{}
@@ -287,10 +379,16 @@ func TestEnabledServices_EveryEntryIsBuiltOrRefused(t *testing.T) {
 			refused[name] = true
 		}
 	}
-	assert.Equal(t, map[string]bool{ServiceFirewall: true, ServiceNAT: true, ServiceLoadBalancer: true, ServiceNAT64: true, ServiceHostFW: true, ServiceTunnels: true, ServiceTransit: true, ServiceOverlay: true}, built)
-	assert.Equal(t, map[string]bool{ServiceEdge: true, ServiceDHCP: true, ServicePXE: true, ServiceManagementVPN: true}, refused)
+	assert.Equal(t, map[string]bool{ServiceFirewall: true, ServiceNAT: true, ServiceLoadBalancer: true, ServiceNAT64: true, ServiceHostFW: true, ServiceTunnels: true, ServiceTransit: true, ServiceOverlay: true, ServiceManagementVPN: true}, built)
+	assert.Equal(t, map[string]bool{ServiceEdge: true, ServiceDHCP: true, ServicePXE: true}, refused)
 	for name := range refused {
-		assert.NotEmpty(t, serviceRefusals[name], "refusal for %s names no blocker", name)
+		reason := serviceRefusals[name]
+		assert.NotEmpty(t, reason, "refusal for %s names no blocker", name)
+		// The operator reads this text; an issue number means nothing to
+		// them, and a constructor name points at code that does not run.
+		assert.Contains(t, reason, "planned", "refusal for %s must say the service is planned", name)
+		assert.NotContains(t, reason, "#", "refusal for %s must not cite an issue number", name)
+		assert.NotContains(t, reason, "modes.", "refusal for %s must not name an unreachable constructor", name)
 	}
 	assert.True(t, cfg.HasEnabledServices())
 	assert.False(t, baseGatewayConfig("none").HasEnabledServices())
@@ -324,10 +422,9 @@ func TestNewGateway_RegistersHandlersInDeclaredOrder(t *testing.T) {
 // no pipeline behind.
 func TestGatewayStart_RefusedSectionIsATypedStartError(t *testing.T) {
 	sections := map[string]func(*GatewayConfig){
-		ServiceEdge:          func(c *GatewayConfig) { c.Edge = &EdgeConfig{Enabled: true, MaxDevices: 100, MaxServices: 50} },
-		ServiceDHCP:          func(c *GatewayConfig) { c.DHCP = &DHCPServiceConfig{Enabled: true, Interface: "eth0"} },
-		ServicePXE:           func(c *GatewayConfig) { c.PXE = &PXEServiceConfig{Enabled: true, HTTPPort: 8069} },
-		ServiceManagementVPN: func(c *GatewayConfig) { c.ManagementVPN = &ManagementVPNServiceConfig{Enabled: true} },
+		ServiceEdge: func(c *GatewayConfig) { c.Edge = &EdgeConfig{Enabled: true, MaxDevices: 100, MaxServices: 50} },
+		ServiceDHCP: func(c *GatewayConfig) { c.DHCP = &DHCPServiceConfig{Enabled: true, Interface: "eth0"} },
+		ServicePXE:  func(c *GatewayConfig) { c.PXE = &PXEServiceConfig{Enabled: true, HTTPPort: 8069} },
 	}
 	for name, enable := range sections {
 		t.Run(name, func(t *testing.T) {
@@ -589,7 +686,12 @@ func TestHostFWService_Lifecycle(t *testing.T) {
 		TunnelManager: &fakeTunnelManager{},
 	}
 	gw := startGateway(t, cfg)
-	defer func() { require.NoError(t, gw.Stop(context.Background())) }()
+	stopped := false
+	defer func() {
+		if !stopped {
+			require.NoError(t, gw.Stop(context.Background()))
+		}
+	}()
 
 	assert.True(t, gw.HasService(ServiceHostFW))
 	assert.Equal(t, 1, applier.applied)
@@ -605,6 +707,11 @@ func TestHostFWService_Lifecycle(t *testing.T) {
 
 	require.NoError(t, gw.ReconcileHostFW(context.Background()))
 	assert.Equal(t, "healthy", gw.Snapshot().Health.Components[ServiceHostFW])
+
+	// Stopping the gateway takes its host firewall table down with it.
+	stopped = true
+	require.NoError(t, gw.Stop(context.Background()))
+	assert.Equal(t, 1, applier.removed)
 }
 
 func TestHostFWService_InvalidConfigIsRefusedAtValidate(t *testing.T) {

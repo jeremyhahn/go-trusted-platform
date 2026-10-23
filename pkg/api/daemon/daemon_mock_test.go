@@ -359,7 +359,7 @@ func TestStopMock_ClosesGRPCListener(t *testing.T) {
 
 	// Verify listener was created
 	if d.grpcListener == nil {
-		t.Skip("gRPC listener not created")
+		t.Error("gRPC listener should exist after Start() with gRPC TCP enabled")
 	}
 
 	err = d.Stop(ctx)
@@ -391,7 +391,7 @@ func TestForceStopMock_WithRESTServer(t *testing.T) {
 	}
 
 	err = d.ForceStop()
-	if err != nil && err.Error() != "server is not running" {
+	if err != nil {
 		t.Errorf("ForceStop() failed: %v", err)
 	}
 }
@@ -420,7 +420,7 @@ func TestForceStopMock_WithMCPServer(t *testing.T) {
 	}
 
 	err = d.ForceStop()
-	if err != nil && err.Error() != "server is not running" {
+	if err != nil {
 		t.Errorf("ForceStop() failed: %v", err)
 	}
 }
@@ -442,7 +442,7 @@ func TestForceStopMock_WithGRPCTCP(t *testing.T) {
 	}
 
 	err = d.ForceStop()
-	if err != nil && err.Error() != "server is not running" {
+	if err != nil {
 		t.Errorf("ForceStop() failed: %v", err)
 	}
 }

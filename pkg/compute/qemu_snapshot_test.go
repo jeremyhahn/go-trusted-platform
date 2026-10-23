@@ -93,7 +93,7 @@ func newSnapshotTestOrchestrator(t *testing.T) (*QEMUOrchestrator, *fakeSnapshot
 	config := DefaultOrchestratorConfig(ComputeTypeVM)
 	config.WorkDir = t.TempDir()
 
-	orch, err := NewQEMUOrchestrator(config, logging.DefaultLogger())
+	orch, err := newFakeHostOrchestrator(t, config, logging.DefaultLogger())
 	require.NoError(t, err)
 
 	ops := &fakeSnapshotOps{}

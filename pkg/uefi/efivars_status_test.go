@@ -265,3 +265,81 @@ func TestEnrollKeysToEfivarsDir_MalformedSetupMode(t *testing.T) {
 	require.ErrorAs(t, err, &readErr)
 	assert.Equal(t, "SetupMode", readErr.Var)
 }
+
+// TestReadDBCertificatesFromDir returns the X.509 certificates enrolled in db,
+// across signature lists, and nothing from hash lists or other variables.
+func TestReadDBCertificatesFromDir(t *testing.T) {
+	dir := t.TempDir()
+	first := testSelfSignedCert(t, "Platform DB")
+	second := testSelfSignedCert(t, "Vendor CA")
+	hash := sha256.Sum256([]byte("an allowed image"))
+	esl := ConcatSignatureLists(
+		NewSignatureListFromCert(first.Raw, TrustedPlatformGUID),
+		NewSignatureListFromHash(hash[:], EFISHA256, TrustedPlatformGUID),
+		NewSignatureListFromCert([]byte("not a certificate"), TrustedPlatformGUID),
+		NewSignatureListFromCert(second.Raw, TrustedPlatformGUID),
+	)
+	data := make([]byte, 4, 4+len(esl))
+	binary.LittleEndian.PutUint32(data[0:4], SecureBootAttributes)
+	require.NoError(t, os.WriteFile(filepath.Join(dir, efivarFileName("db", EFIImageSecurityDatabase)), append(data, esl...), 0644))
+	writeCertVar(t, dir, "KEK", EFIGlobalVariable, testSelfSignedCert(t, "KEK").Raw)
+
+	certs, err := ReadDBCertificatesFromDir(dir)
+	require.NoError(t, err)
+	require.Len(t, certs, 2)
+	assert.Equal(t, first.Raw, certs[0].Raw)
+	assert.Equal(t, second.Raw, certs[1].Raw)
+}
+
+// TestReadDBCertificatesFromDir_AuthDescriptor reads a db written by the
+// enroller, which keeps the authenticated-variable descriptor.
+func TestReadDBCertificatesFromDir_AuthDescriptor(t *testing.T) {
+	dir := t.TempDir()
+	db := testSelfSignedCert(t, "DB")
+	require.NoError(t, writeKeyVarToDir(dir, "db", EFIImageSecurityDatabase, db, NewEFITime(fixedTestTime)))
+
+	certs, err := ReadDBCertificatesFromDir(dir)
+	require.NoError(t, err)
+	require.Len(t, certs, 1)
+	assert.Equal(t, db.Raw, certs[0].Raw)
+}
+
+// TestReadDBCertificatesFromDir_Empty: no db, or an empty one, enrolls nothing.
+func TestReadDBCertificatesFromDir_Empty(t *testing.T) {
+	dir := t.TempDir()
+	certs, err := ReadDBCertificatesFromDir(dir)
+	require.NoError(t, err)
+	assert.Empty(t, certs)
+
+	path := filepath.Join(dir, efivarFileName("db", EFIImageSecurityDatabase))
+	require.NoError(t, os.WriteFile(path, []byte{0x07, 0x00, 0x00, 0x00}, 0644))
+	certs, err = ReadDBCertificatesFromDir(dir)
+	require.NoError(t, err)
+	assert.Empty(t, certs)
+}
+
+func TestReadDBCertificatesFromDir_Failures(t *testing.T) {
+	_, err := ReadDBCertificatesFromDir(filepath.Join(t.TempDir(), "nonexistent"))
+	assert.ErrorIs(t, err, ErrEfivarsUnavailable)
+
+	for name, content := range map[string][]byte{
+		"truncated":  {0x07},
+		"malformed":  {0x07, 0x00, 0x00, 0x00, 0xDE, 0xAD, 0xBE, 0xEF, 0x01},
+		"unreadable": nil,
+	} {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, efivarFileName("db", EFIImageSecurityDatabase))
+			if content == nil {
+				// A directory where the variable should be cannot be read.
+				require.NoError(t, os.Mkdir(path, 0o755))
+			} else {
+				require.NoError(t, os.WriteFile(path, content, 0644))
+			}
+			_, err := ReadDBCertificatesFromDir(dir)
+			var readErr *ErrEfivarRead
+			require.ErrorAs(t, err, &readErr)
+			assert.Equal(t, "db", readErr.Var)
+		})
+	}
+}

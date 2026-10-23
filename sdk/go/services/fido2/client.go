@@ -18,9 +18,7 @@ import "context"
 // Service defines the operations exposed by the platform FIDO2 service.
 //
 // Implementations dispatch over whichever SDK transport the caller selected
-// via the platform.Client. The Phase 3 default client (returned by NewClient)
-// is a stub that returns ErrNotYetWired for every method until the server-side
-// FIDO2 handlers land in Phase 3.5.
+// via the platform.Client; GRPCClient is the gRPC-backed implementation.
 type Service interface {
 	// ListDevices enumerates FIDO2 authenticators attached to the host.
 	ListDevices(ctx context.Context, req *ListDevicesRequest) (*ListDevicesResponse, error)
@@ -33,47 +31,3 @@ type Service interface {
 	// Authenticate tests a WebAuthn authentication ceremony against a credential.
 	Authenticate(ctx context.Context, req *AuthenticateRequest) (*AuthenticateResponse, error)
 }
-
-// Client is the default Service implementation.
-//
-// TODO: wire to platformd server-side FIDO2 handlers (Phase 3.5).
-// Today every method returns ErrNotYetWired.
-type Client struct{}
-
-// NewClient constructs a Phase 3 stub FIDO2 client.
-func NewClient() *Client {
-	return &Client{}
-}
-
-// ListDevices is the stubbed ListDevices entrypoint.
-// TODO: wire to platformd server-side handler (Phase 3.5).
-func (c *Client) ListDevices(_ context.Context, _ *ListDevicesRequest) (*ListDevicesResponse, error) {
-	return nil, &ErrListDevicesFailed{Cause: ErrNotYetWired}
-}
-
-// WaitDevice is the stubbed WaitDevice entrypoint.
-// TODO: wire to platformd server-side handler (Phase 3.5).
-func (c *Client) WaitDevice(_ context.Context, _ *WaitDeviceRequest) (*WaitDeviceResponse, error) {
-	return nil, &ErrWaitDeviceFailed{Cause: ErrNotYetWired}
-}
-
-// Info is the stubbed Info entrypoint.
-// TODO: wire to platformd server-side handler (Phase 3.5).
-func (c *Client) Info(_ context.Context, _ *InfoRequest) (*InfoResponse, error) {
-	return nil, &ErrDeviceInfoFailed{Cause: ErrNotYetWired}
-}
-
-// Register is the stubbed Register entrypoint.
-// TODO: wire to platformd server-side handler (Phase 3.5).
-func (c *Client) Register(_ context.Context, _ *RegisterRequest) (*RegisterResponse, error) {
-	return nil, &ErrRegisterFailed{Cause: ErrNotYetWired}
-}
-
-// Authenticate is the stubbed Authenticate entrypoint.
-// TODO: wire to platformd server-side handler (Phase 3.5).
-func (c *Client) Authenticate(_ context.Context, _ *AuthenticateRequest) (*AuthenticateResponse, error) {
-	return nil, &ErrAuthenticateFailed{Cause: ErrNotYetWired}
-}
-
-// Compile-time interface check.
-var _ Service = (*Client)(nil)

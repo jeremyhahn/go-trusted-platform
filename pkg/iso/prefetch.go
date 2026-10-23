@@ -28,6 +28,7 @@ import (
 	"strings"
 	"time"
 
+	tpconfig "github.com/jeremyhahn/go-trusted-platform/pkg/config"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/installer/alpine"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 )
@@ -109,6 +110,10 @@ type PreFetchConfig struct {
 	// apks are copied from it, and the packages they need from the mirror are
 	// prefetched with them. See PlatformPackages.
 	PlatformAPKDir string
+
+	// GatewayRole adds the gateway's packages (tpconfig.GatewaydPackages):
+	// the bundled platform config enables the gateway role.
+	GatewayRole bool
 }
 
 // defaultKernelPackage is the Alpine kernel package the platform installs
@@ -359,15 +364,28 @@ func CollectRequiredPackages(config *PreFetchConfig) []string {
 		}
 	}
 
-	// Add the overlay's IPsec transport when the media carries it
-	if config.PlatformAPKDir != "" {
+	return append(packages, config.installedPackages()...)
+}
+
+// installedPackages are the packages the media carries for the installed
+// system beyond the base set the installer installs on its own: the
+// overlay's IPsec transport, a gateway's Jool translator and the target's
+// extra packages. The prefetch fetches exactly this list and the installer
+// configuration the media bakes installs exactly this list, so a package
+// cannot be fetched and then left out of the install (#689, #603).
+func (c *PreFetchConfig) installedPackages() []string {
+	var packages []string
+	// The overlay's IPsec transport, when the media carries it.
+	if c.PlatformAPKDir != "" {
 		packages = append(packages, PlatformPackages()...)
 	}
-
-	// Add user-specified extra packages
-	packages = append(packages, config.ExtraPackages...)
-
-	return packages
+	// A gateway's Jool translator (#603). jool-modules-lts depends on one
+	// exact linux-lts build, so it is carried only alongside that kernel;
+	// with any other kernel it would drag linux-lts onto the node.
+	if c.GatewayRole && !c.FIPS && !c.SkipKernel && c.kernelPackage() == defaultKernelPackage {
+		packages = append(packages, tpconfig.GatewaydPackages...)
+	}
+	return append(packages, c.ExtraPackages...)
 }
 
 // BuildLocalRepository downloads all packages and creates a local APK repository in the ISO.
@@ -973,16 +991,22 @@ func (b *PreFetchBuilder) downloadPackage(ctx context.Context, pkg *apkPackageEn
 	filename := fmt.Sprintf("%s-%s.apk", pkg.Name, pkg.Version)
 	destPath := filepath.Join(destDir, filename)
 
+	// A platform-built apk comes from the builder output, not a mirror. It is
+	// copied every time, never taken from a reused directory: a rebuild keeps
+	// its version and pkgrel, so a file of that name may be an earlier build.
+	// The copy is then checked against the builder's index entry.
+	if pkg.LocalPath != "" {
+		if err := copyLocalPackage(pkg.LocalPath, destPath); err != nil {
+			return err
+		}
+		return verifyPlatformAPK(destPath, pkg)
+	}
+
 	// Check if already downloaded
 	if _, err := os.Stat(destPath); err == nil {
 		b.logger.Debug("[PREFETCH] Package already exists, skipping",
 			"package", pkg.Name)
 		return nil
-	}
-
-	// A platform-built apk comes from the builder output, not a mirror.
-	if pkg.LocalPath != "" {
-		return copyLocalPackage(pkg.LocalPath, destPath)
 	}
 
 	// Try main repository first, then community

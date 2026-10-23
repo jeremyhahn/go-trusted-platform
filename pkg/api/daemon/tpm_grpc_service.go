@@ -16,20 +16,18 @@ package daemon
 import (
 	"bytes"
 	"context"
-	"crypto"
-	"crypto/ecdsa"
-	"crypto/rsa"
 	"crypto/x509"
-	"encoding/asn1"
 	"fmt"
 	"log/slog"
-	"math/big"
+	"math"
 	"sync"
 
 	tpmgo "github.com/google/go-tpm/tpm2"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/channelbind"
+	attestvm "github.com/jeremyhahn/go-trusted-platform/pkg/attestation/vm"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 
@@ -44,6 +42,12 @@ import (
 	// name (UnsealRequest, KeyInfo, PIVSignRequest, …).
 	quicbaassdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/api/tpmattrs"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/api/tpmcertify"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/api/tpmclear"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/api/tpmek"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/api/tpmnv"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/api/tpmpcr"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/tpmsrk"
 )
 
@@ -105,14 +109,16 @@ func (s *TPMGRPCService) Info(
 	}
 
 	resp := &platformv1.TPMInfoResponse{
-		Version: platformv1.TPMVersion_TPM_VERSION_2_0,
-		Properties: map[string]string{
-			"info": info,
-		},
+		Version:    platformv1.TPMVersion_TPM_VERSION_2_0,
+		Properties: tpmsrk.InfoProperties(tpm),
 	}
+	resp.Properties["info"] = info
 
 	if cfg := tpm.Config(); cfg != nil {
 		resp.IsSimulator = cfg.UseSimulator
+	}
+	for _, bank := range tpmattrs.ActivePCRBanks(tpm) {
+		resp.PcrBanks = append(resp.PcrBanks, hashAlgToProtoPCRBank(bank))
 	}
 
 	// Populate structured fields from the typed xkms.FixedProperties
@@ -259,7 +265,7 @@ func (s *TPMGRPCService) Clear(
 		lockoutAuth = []byte(req.GetOwnerPassword())
 	}
 
-	if err := tpm.Clear(lockoutAuth); err != nil {
+	if err := tpmclear.Clear(tpm, lockoutAuth); err != nil {
 		s.logger.Slog().Error("TPM Clear failed", slog.String("error", err.Error()))
 		return nil, s.mapError(err)
 	}
@@ -289,14 +295,8 @@ func (s *TPMGRPCService) CreateEK(
 
 	s.logger.Debug("TPM CreateEK request received")
 
-	// Get EK attributes from config or use defaults
-	ekAttrs, err := tpm.EKAttributes()
+	ekAttrs, err := tpmek.Create(tpm)
 	if err != nil {
-		s.logger.Slog().Error("Failed to get EK attributes", slog.String("error", err.Error()))
-		return nil, s.mapError(err)
-	}
-
-	if err := tpm.CreateEK(ekAttrs); err != nil {
 		s.logger.Slog().Error("TPM CreateEK failed", slog.String("error", err.Error()))
 		return nil, s.mapError(err)
 	}
@@ -504,15 +504,12 @@ func (s *TPMGRPCService) GetSRK(
 	s.logger.Debug("TPM GetSRK request received",
 		slog.Uint64("requested_handle", uint64(req.GetHandle())))
 
-	srkAttrs, err := tpmsrk.Resolve(tpm, req.GetHandle())
+	srkAttrs, err := resolveTPMSRK(tpm, req.GetHandle())
 	if err != nil {
-		if tpmsrk.IsUnknownHandle(err) {
-			return nil, status.Errorf(codes.NotFound, "GetSRK: %s", err.Error())
-		}
 		s.logger.Slog().Error("Failed to get SRK attributes",
 			slog.Uint64("requested_handle", uint64(req.GetHandle())),
 			slog.String("error", err.Error()))
-		return nil, s.mapError(err)
+		return nil, err
 	}
 
 	return &platformv1.GetSRKResponse{
@@ -520,6 +517,20 @@ func (s *TPMGRPCService) GetSRK(
 		PublicKey: srkAttrs.TPMAttributes.PublicKeyBytes,
 		Algorithm: keyAlgorithmToProto(srkAttrs.KeyAlgorithm),
 	}, nil
+}
+
+// resolveTPMSRK resolves the SRK a caller names by handle (0 is the
+// platform SSRK). A handle that names no SRK is NotFound on every
+// transport; any other failure takes its class from mapTPMError.
+func resolveTPMSRK(tpm quicbaassdk.TrustedPlatformModule, handle uint32) (*quicbaassdk.KeyAttributes, error) {
+	srkAttrs, err := tpmsrk.Resolve(tpm, handle)
+	if err == nil {
+		return srkAttrs, nil
+	}
+	if tpmsrk.IsUnknownHandle(err) {
+		return nil, status.Errorf(codes.NotFound, "GetSRK: %s", err.Error())
+	}
+	return nil, mapTPMError(err)
 }
 
 // DeleteSRK deletes the Storage Root Key.
@@ -610,18 +621,10 @@ func (s *TPMGRPCService) GetAK(
 
 	s.logger.Debug("TPM GetAK request received")
 
-	iakAttrs, err := tpm.IAKAttributes()
+	iakAttrs, err := tpmIAKAttributes(tpm)
 	if err != nil {
 		s.logger.Slog().Error("Failed to get IAK attributes", slog.String("error", err.Error()))
-		return nil, s.mapError(err)
-	}
-
-	pubKey, iakErr := tpm.IAK()
-	if iakErr != nil {
-		return nil, s.mapError(iakErr)
-	}
-	if pubKey == nil {
-		return nil, status.Error(codes.NotFound, "IAK not found")
+		return nil, err
 	}
 
 	s.logger.Debug("TPM GetAK completed")
@@ -632,36 +635,33 @@ func (s *TPMGRPCService) GetAK(
 	}, nil
 }
 
-// DeleteAK deletes the Attestation Key.
+// tpmIAKAttributes returns the IAK's attributes only when the IAK exists:
+// attributes alone describe where an IAK would live, so a TPM without one
+// answers NotFound on every transport.
+func tpmIAKAttributes(tpm quicbaassdk.TrustedPlatformModule) (*quicbaassdk.KeyAttributes, error) {
+	iakAttrs, err := tpm.IAKAttributes()
+	if err != nil {
+		return nil, mapTPMError(err)
+	}
+	pubKey, err := tpm.IAK()
+	if err != nil {
+		return nil, mapTPMError(err)
+	}
+	if pubKey == nil {
+		return nil, status.Error(codes.NotFound, "IAK not found")
+	}
+	return iakAttrs, nil
+}
+
+// DeleteAK refuses: the attestation key this service names is the IAK, which
+// is TPM-resident and not evicted here, so it answers like IDevIDService
+// DeleteIAK whatever the request's handle, without touching the TPM.
 func (s *TPMGRPCService) DeleteAK(
 	ctx context.Context,
 	req *platformv1.DeleteAKRequest,
 ) (*platformv1.DeleteAKResponse, error) {
 
-	s.mu.RLock()
-	tpm := s.tpm
-	s.mu.RUnlock()
-
-	if tpm == nil {
-		return nil, status.Error(codes.Unavailable, "TPM service not available")
-	}
-
-	s.logger.Debug("TPM DeleteAK request received")
-
-	iakAttrs, err := tpm.IAKAttributes()
-	if err != nil {
-		return nil, s.mapError(err)
-	}
-
-	tpm.Flush(iakAttrs.TPMAttributes.Handle)
-
-	s.logger.Debug("TPM DeleteAK completed")
-	return &platformv1.DeleteAKResponse{
-		Status: &platformv1.Status{
-			Success: true,
-			Message: "AK handle flushed",
-		},
-	}, nil
+	return nil, ErrDeviceIdentityKeyNotDeletable{Key: "IAK"}
 }
 
 // Seal seals data to the TPM.
@@ -932,7 +932,20 @@ func (s *TPMGRPCService) Quote(
 		pcrs[i] = uint(pcr)
 	}
 
-	quote, err := tpm.Quote(pcrs, req.GetNonce())
+	// The TPM quotes the nonce bound to the connection the request arrived
+	// on, never the nonce as sent (#482); a request with no TLS connection
+	// is refused.
+	bound, err := bindQuote(ctx, req.GetNonce())
+	if err != nil {
+		return nil, err
+	}
+
+	sigAlg, err := attestvm.QuoteSignatureAlgorithm(tpm)
+	if err != nil {
+		s.logger.Slog().Error("TPM Quote refused", slog.String("error", err.Error()))
+		return nil, status.Error(codes.FailedPrecondition, err.Error())
+	}
+	quote, err := tpm.Quote(pcrs, bound.QualifyingData)
 	if err != nil {
 		s.logger.Slog().Error("TPM Quote failed", slog.String("error", err.Error()))
 		return nil, s.mapError(err)
@@ -940,9 +953,11 @@ func (s *TPMGRPCService) Quote(
 
 	s.logger.Debug("TPM Quote completed")
 	return &platformv1.QuoteResponse{
-		Quote:     quote.Quoted,
-		Signature: quote.Signature,
-		EventLog:  quote.EventLog,
+		Quote:              quote.Quoted,
+		Signature:          quote.Signature,
+		EventLog:           quote.EventLog,
+		ChannelBinding:     bound.Binding,
+		SignatureAlgorithm: sigAlg,
 	}, nil
 }
 
@@ -956,9 +971,10 @@ func (s *TPMGRPCService) Quote(
 //  3. The ExtraData (qualifying data) field exactly matches the
 //     verifier-supplied nonce — anti-replay.
 //  4. The signature over the raw Quoted bytes validates against the
-//     attestation key's public half. RSASSA-PKCS1v15, RSA-PSS, and
-//     ECDSA are supported, with the digest algorithm taken from the
-//     IAK's KeyAttributes (typically SHA-256).
+//     attestation key's public half under the scheme the request
+//     declares in signature_algorithm (QuoteResponse.signature_algorithm),
+//     through the platform's one quote verifier. No scheme, or one the
+//     key cannot carry, fails; the scheme is never inferred from the key.
 //
 // AK public key resolution order:
 //   - If req.AkPublic is non-empty, parse it as PKIX DER and use it
@@ -997,8 +1013,7 @@ func (s *TPMGRPCService) VerifyQuote(
 		return nil, status.Error(codes.InvalidArgument, "signature is required")
 	}
 
-	// Resolve the AK public key + signing/hash algorithms.
-	pubKey, hashAlg, sigAlgo, keyAlgo, err := s.resolveVerifyKeyMaterial(req.GetAkPublic())
+	akPublic, err := s.resolveVerifyAKPublic(req.GetAkPublic())
 	if err != nil {
 		s.logger.Slog().Error("Failed to resolve AK public key", slog.String("error", err.Error()))
 		return &platformv1.VerifyQuoteResponse{
@@ -1028,19 +1043,24 @@ func (s *TPMGRPCService) VerifyQuote(
 		}, nil
 	}
 
-	// Anti-replay: ExtraData must equal the supplied nonce.
-	if len(req.GetNonce()) > 0 {
-		if !bytes.Equal(attest.ExtraData.Buffer, req.GetNonce()) {
+	// Anti-replay: ExtraData must equal the supplied nonce, or, for a quote
+	// the node produced over a bound connection, SHA-256(nonce || binding).
+	expectedNonce, err := channelbind.ExpectedQualifyingData(req.GetNonce(), req.GetChannelBinding())
+	if err != nil {
+		return nil, err
+	}
+	if len(expectedNonce) > 0 {
+		if !bytes.Equal(attest.ExtraData.Buffer, expectedNonce) {
 			return &platformv1.VerifyQuoteResponse{
 				Verified: false,
-				Message: fmt.Sprintf("nonce mismatch: quote carries %d bytes of ExtraData, request supplied %d bytes",
-					len(attest.ExtraData.Buffer), len(req.GetNonce())),
+				Message: fmt.Sprintf("nonce mismatch: quote carries %d bytes of ExtraData, request expects %d bytes",
+					len(attest.ExtraData.Buffer), len(expectedNonce)),
 			}, nil
 		}
 	}
 
-	// Verify the signature over the raw Quoted bytes.
-	if err := s.verifyQuoteSignature(pubKey, hashAlg, sigAlgo, keyAlgo, req.GetQuote(), req.GetSignature()); err != nil {
+	// Verify the signature over the raw Quoted bytes under the declared scheme.
+	if err := attestvm.VerifyQuoteSignatureWithAlgorithm(akPublic, req.GetQuote(), req.GetSignature(), req.GetSignatureAlgorithm()); err != nil {
 		s.logger.Slog().Warn("TPM quote signature verification failed", slog.String("error", err.Error()))
 		return &platformv1.VerifyQuoteResponse{
 			Verified: false,
@@ -1055,94 +1075,62 @@ func (s *TPMGRPCService) VerifyQuote(
 	}, nil
 }
 
-// resolveVerifyKeyMaterial picks the AK public key + signing
-// algorithms used to verify the quote. Caller-supplied AkPublic
-// (PKIX DER) wins; otherwise we fall back to the IAK provisioned on
-// this platform.
-func (s *TPMGRPCService) resolveVerifyKeyMaterial(akPublic []byte) (crypto.PublicKey, crypto.Hash, x509.SignatureAlgorithm, x509.PublicKeyAlgorithm, error) {
-	if len(akPublic) > 0 {
-		pub, err := x509.ParsePKIXPublicKey(akPublic)
-		if err != nil {
-			return nil, 0, 0, 0, &WrappedError{Msg: "parse PKIX ak_public", Err: err}
-		}
-		// Without ak attrs from the caller, infer reasonable defaults:
-		// SHA-256 is the canonical hash for TPM 2.0 quotes, RSASSA for
-		// RSA keys, ECDSA for EC keys. Callers that need RSA-PSS need
-		// to supply the IAK side-channel; this branch is primarily for
-		// remote verifiers that accept the platform's signing
-		// conventions.
-		switch pub.(type) {
-		case *rsa.PublicKey:
-			return pub, crypto.SHA256, x509.SHA256WithRSA, x509.RSA, nil
-		case *ecdsa.PublicKey:
-			return pub, crypto.SHA256, x509.ECDSAWithSHA256, x509.ECDSA, nil
-		default:
-			return nil, 0, 0, 0, &MessageError{Msg: fmt.Sprintf("unsupported ak_public key type: %T", pub)}
-		}
+// Certify has the IAK certify that the key at a persistent handle is
+// resident in this TPM (TPM2_Certify), over the caller's nonce.
+func (s *TPMGRPCService) Certify(
+	ctx context.Context,
+	req *platformv1.CertifyRequest,
+) (*platformv1.CertifyResponse, error) {
+
+	s.mu.RLock()
+	tpm := s.tpm
+	s.mu.RUnlock()
+
+	if tpm == nil {
+		return nil, status.Error(codes.Unavailable, "TPM service not available")
 	}
 
-	pub, err := s.tpm.IAK()
+	s.logger.Debug("TPM Certify request received",
+		slog.String("handle", fmt.Sprintf("0x%08X", req.GetKeyHandle())))
+
+	res, err := tpmcertify.Certify(tpm, req.GetKeyHandle(), req.GetKeyPassword(), req.GetNonce())
 	if err != nil {
-		return nil, 0, 0, 0, &WrappedError{Msg: "read IAK public", Err: err}
+		s.logger.Slog().Error("TPM Certify failed",
+			slog.String("handle", fmt.Sprintf("0x%08X", req.GetKeyHandle())),
+			slog.String("error", err.Error()))
+		return nil, s.mapError(err)
 	}
-	attrs, err := s.tpm.IAKAttributes()
-	if err != nil {
-		return nil, 0, 0, 0, &WrappedError{Msg: "read IAK attributes", Err: err}
-	}
-	hashAlg := attrs.Hash
-	if hashAlg == 0 {
-		hashAlg = crypto.SHA256
-	}
-	return pub, hashAlg, attrs.SignatureAlgorithm, attrs.KeyAlgorithm, nil
+
+	s.logger.Debug("TPM Certify completed")
+	return &platformv1.CertifyResponse{
+		CertifyInfo:            res.CertifyInfo,
+		Signature:              res.Signature,
+		SignatureAlgorithm:     res.SignatureAlgorithm,
+		CertifyInfoSignature:   res.CertifyInfoSignature,
+		AttestingKeyPublic:     res.AttestingKeyPublic,
+		AttestedKeyPublic:      res.AttestedKeyPublic,
+		AttestingKeyPublicArea: res.AttestingKeyPublicArea,
+		AttestedKeyPublicArea:  res.AttestedKeyPublicArea,
+		Nonce:                  res.Nonce,
+	}, nil
 }
 
-// verifyQuoteSignature validates `signature` over `quoted` using the
-// supplied public key. Algorithm dispatch follows the IAK's
-// configured signing scheme. The TPM emits raw RSA signature bytes
-// for both RSASSA and RSA-PSS, and ASN.1-encoded R||S for ECDSA
-// (matching go-xkms's Quote() encoding).
-func (s *TPMGRPCService) verifyQuoteSignature(
-	pub crypto.PublicKey,
-	hashAlg crypto.Hash,
-	sigAlgo x509.SignatureAlgorithm,
-	keyAlgo x509.PublicKeyAlgorithm,
-	quoted, signature []byte,
-) error {
-	if !hashAlg.Available() {
-		return &MessageError{Msg: fmt.Sprintf("hash algorithm %v not linked into binary", hashAlg)}
+// resolveVerifyAKPublic returns the PKIX DER of the AK public key the
+// quote is verified against. Caller-supplied akPublic wins; otherwise
+// the IAK provisioned on this platform is used.
+func (s *TPMGRPCService) resolveVerifyAKPublic(akPublic []byte) ([]byte, error) {
+	if len(akPublic) > 0 {
+		return akPublic, nil
 	}
-	h := hashAlg.New()
-	h.Write(quoted)
-	digest := h.Sum(nil)
-
-	switch keyAlgo {
-	case x509.RSA:
-		rsaPub, ok := pub.(*rsa.PublicKey)
-		if !ok {
-			return &MessageError{Msg: fmt.Sprintf("public key is %T, not *rsa.PublicKey", pub)}
-		}
-		if quicbaassdk.IsRSAPSS(sigAlgo) {
-			return rsa.VerifyPSS(rsaPub, hashAlg, digest, signature, nil)
-		}
-		return rsa.VerifyPKCS1v15(rsaPub, hashAlg, digest, signature)
-
-	case x509.ECDSA:
-		ecPub, ok := pub.(*ecdsa.PublicKey)
-		if !ok {
-			return &MessageError{Msg: fmt.Sprintf("public key is %T, not *ecdsa.PublicKey", pub)}
-		}
-		var rs struct{ R, S *big.Int }
-		if _, err := asn1.Unmarshal(signature, &rs); err != nil {
-			return &WrappedError{Msg: "decode ECDSA R||S", Err: err}
-		}
-		if !ecdsa.Verify(ecPub, digest, rs.R, rs.S) {
-			return &MessageError{Msg: "ECDSA signature does not validate"}
-		}
-		return nil
-
-	default:
-		return &MessageError{Msg: fmt.Sprintf("unsupported key algorithm: %v", keyAlgo)}
+	pub, err := s.tpm.IAK()
+	if err != nil {
+		return nil, &WrappedError{Msg: "read IAK public", Err: err}
 	}
+	der, err := x509.MarshalPKIXPublicKey(pub)
+	if err != nil {
+		return nil, &WrappedError{Msg: "marshal IAK public", Err: err}
+	}
+	return der, nil
 }
 
 // GetEventLog retrieves the TPM event log.
@@ -1306,6 +1294,12 @@ func (s *TPMGRPCService) DefineNVRAM(
 	if req.GetSize() == 0 {
 		return nil, status.Error(codes.InvalidArgument, "size is required")
 	}
+	if err := tpmnv.CheckIndex(req.GetIndex()); err != nil {
+		return nil, err
+	}
+	if err := tpmnv.CheckSpan(0, uint64(req.GetSize())); err != nil {
+		return nil, err
+	}
 
 	tr := tpm.Transport()
 	if tr == nil {
@@ -1405,13 +1399,12 @@ func buildNVAttributes(names []string) tpmgo.TPMANV {
 	return a
 }
 
-// WriteNVRAM writes a payload to a defined NV index. Auth
-// dispatch mirrors ReadNVRAM: AUTHWRITE → index-self auth,
-// OWNERWRITE → owner hierarchy, PPWRITE → platform hierarchy.
-// Writes are chunked at 512-byte boundaries to stay below
-// TPM_PT_NV_BUFFER_MAX on every supported device (Infineon
-// SLB9665 reports 7 bytes; the conservative cap matches
-// xkms/EK-cert / tpm2-tools default behavior).
+// WriteNVRAM writes a payload to a defined NV index through
+// tpmnv.Write, the path QUIC and MCP share. Auth dispatch mirrors
+// ReadNVRAM: AUTHWRITE → index-self auth, OWNERWRITE → owner
+// hierarchy, PPWRITE → platform hierarchy. Writes are chunked at
+// 512-byte boundaries to stay below TPM_PT_NV_BUFFER_MAX on every
+// supported device.
 func (s *TPMGRPCService) WriteNVRAM(
 	ctx context.Context,
 	req *platformv1.WriteNVRAMRequest,
@@ -1424,95 +1417,37 @@ func (s *TPMGRPCService) WriteNVRAM(
 	if tpm == nil {
 		return nil, status.Error(codes.Unavailable, "TPM service not available")
 	}
-	if req.GetIndex() == 0 {
-		return nil, status.Error(codes.InvalidArgument, "index is required")
-	}
-
-	tr := tpm.Transport()
-	if tr == nil {
-		return nil, status.Error(codes.Unavailable, "TPM transport not available")
+	offset, err := nvOffset(req.GetOffset())
+	if err != nil {
+		return nil, err
 	}
 
 	s.logger.Debug("TPM WriteNVRAM request received",
 		slog.Uint64("index", uint64(req.GetIndex())),
 		slog.Int("data_bytes", len(req.GetData())),
-		slog.Uint64("offset", uint64(req.GetOffset())))
+		slog.Uint64("offset", uint64(offset)))
 
-	nvHandle := tpmgo.TPMHandle(req.GetIndex())
-	pubRsp, err := tpmgo.NVReadPublic{NVIndex: nvHandle}.Execute(tr)
+	err = tpmnv.Write(tpm.Transport(), req.GetIndex(), req.GetData(), offset, tpmnv.Password(req.GetPassword()))
 	if err != nil {
+		s.logger.Slog().Error("TPM NVWrite failed",
+			slog.Uint64("index", uint64(req.GetIndex())),
+			slog.String("error", err.Error()))
 		return nil, s.mapError(err)
 	}
-	pub, err := pubRsp.NVPublic.Contents()
-	if err != nil {
-		return nil, status.Error(codes.Internal, "decode NVPublic: "+err.Error())
-	}
 
-	var pwd []byte
-	if p := req.GetPassword(); p != "" {
-		pwd = []byte(p)
-	}
-	authHandle := tpmgo.AuthHandle{
-		Handle: nvHandle,
-		Name:   pubRsp.NVName,
-		Auth:   tpmgo.PasswordAuth(pwd),
-	}
-	if pub.Attributes.OwnerWrite && !pub.Attributes.AuthWrite {
-		authHandle = tpmgo.AuthHandle{
-			Handle: tpmgo.TPMRHOwner,
-			Auth:   tpmgo.PasswordAuth(pwd),
-		}
-	} else if pub.Attributes.PPWrite {
-		authHandle = tpmgo.AuthHandle{
-			Handle: tpmgo.TPMRHPlatform,
-			Auth:   tpmgo.PasswordAuth(pwd),
-		}
-	}
-
-	const maxNVChunk = 512
-	data := req.GetData()
-	startOffset := uint16(req.GetOffset())
-	for i := 0; i < len(data); {
-		end := i + maxNVChunk
-		if end > len(data) {
-			end = len(data)
-		}
-		chunk := data[i:end]
-		_, err := tpmgo.NVWrite{
-			AuthHandle: authHandle,
-			NVIndex: tpmgo.AuthHandle{
-				Handle: nvHandle,
-				Name:   pubRsp.NVName,
-				Auth:   tpmgo.PasswordAuth(pwd),
-			},
-			Data:   tpmgo.TPM2BMaxNVBuffer{Buffer: chunk},
-			Offset: startOffset + uint16(i),
-		}.Execute(tr)
-		if err != nil {
-			s.logger.Slog().Error("TPM NVWrite chunk failed",
-				slog.Uint64("index", uint64(req.GetIndex())),
-				slog.Int("offset", i),
-				slog.Int("chunk_size", len(chunk)),
-				slog.String("error", err.Error()))
-			return nil, s.mapError(err)
-		}
-		i = end
-	}
-
-	s.logger.Debug("TPM NVWrite completed", slog.Int("bytes", len(data)))
+	s.logger.Debug("TPM NVWrite completed", slog.Int("bytes", len(req.GetData())))
 	return &platformv1.WriteNVRAMResponse{}, nil
 }
 
-// ReadNVRAM reads payload bytes from a defined NV index.
+// ReadNVRAM reads payload bytes from a defined NV index through
+// tpmnv.Read, the path QUIC and MCP share.
 //
-// Implementation issues TPM2_NVReadPublic to learn the index's
-// hash algorithm + auth-hierarchy attributes, then issues
-// TPM2_NVRead with the operator-supplied password (empty for
+// tpmnv issues TPM2_NVReadPublic to learn the index's size and
+// auth-hierarchy attributes, then TPM2_NVRead in 512-byte chunks
+// with the operator-supplied password (empty for
 // AuthRead-without-password indices like the TCG-reserved EK
-// certificate at 0x1c00002). Reads are chunked at the device's
-// NV buffer max size when the requested size exceeds it; this
-// page calls in already with size <= NVBufferMax so the chunking
-// path is rare in practice.
+// certificate at 0x1c00002). A size of 0, or one past the end of
+// the index, reads to the end.
 func (s *TPMGRPCService) ReadNVRAM(
 	ctx context.Context,
 	req *platformv1.ReadNVRAMRequest,
@@ -1525,104 +1460,25 @@ func (s *TPMGRPCService) ReadNVRAM(
 	if tpm == nil {
 		return nil, status.Error(codes.Unavailable, "TPM service not available")
 	}
-
-	if req.GetIndex() == 0 {
-		return nil, status.Error(codes.InvalidArgument, "index is required")
+	offset, err := nvOffset(req.GetOffset())
+	if err != nil {
+		return nil, err
 	}
 
 	s.logger.Debug("TPM ReadNVRAM request received",
 		slog.Uint64("index", uint64(req.GetIndex())),
 		slog.Uint64("size", uint64(req.GetSize())),
-		slog.Uint64("offset", uint64(req.GetOffset())))
+		slog.Uint64("offset", uint64(offset)))
 
-	tr := tpm.Transport()
-	if tr == nil {
-		return nil, status.Error(codes.Unavailable, "TPM transport not available")
-	}
-
-	nvHandle := tpmgo.TPMHandle(req.GetIndex())
-	pubRsp, err := tpmgo.NVReadPublic{NVIndex: nvHandle}.Execute(tr)
+	// No NV index exceeds 65535 bytes, so a larger size reads the whole
+	// index, as any size past the index's DataSize does.
+	size := uint16(min(req.GetSize(), math.MaxUint16))
+	out, err := tpmnv.Read(tpm.Transport(), req.GetIndex(), size, offset, tpmnv.Password(req.GetPassword()))
 	if err != nil {
-		s.logger.Slog().Error("TPM NVReadPublic failed",
+		s.logger.Slog().Error("TPM NVRead failed",
 			slog.Uint64("index", uint64(req.GetIndex())),
 			slog.String("error", err.Error()))
 		return nil, s.mapError(err)
-	}
-	pub, err := pubRsp.NVPublic.Contents()
-	if err != nil {
-		return nil, status.Error(codes.Internal, "decode NVPublic: "+err.Error())
-	}
-	dataSize := uint16(pub.DataSize)
-	if req.GetSize() > 0 && req.GetSize() < uint32(dataSize) {
-		dataSize = uint16(req.GetSize())
-	}
-
-	// Build the auth value. nil (vs empty []byte) is meaningful
-	// in go-tpm: nil PasswordAuth omits the auth value from the
-	// command frame; an empty []byte sends a zero-length value
-	// that some TPMs reject with TPM_RC_SIZE.
-	var pwd []byte
-	if p := req.GetPassword(); p != "" {
-		pwd = []byte(p)
-	}
-
-	// Choose the auth-handle hierarchy based on the NV public
-	// attributes. AUTHREAD authorizes against the index's own
-	// AuthValue; OWNERREAD/PPREAD route through the owner /
-	// platform hierarchy with their respective auth values. The
-	// vast majority of indices on the WebUI's path (TCG-reserved
-	// EK cert at 0x1c00002, user-defined ordinary indices) are
-	// AUTHREAD with empty password.
-	authHandle := tpmgo.AuthHandle{
-		Handle: nvHandle,
-		Name:   pubRsp.NVName,
-		Auth:   tpmgo.PasswordAuth(pwd),
-	}
-	if pub.Attributes.OwnerRead && !pub.Attributes.AuthRead {
-		authHandle = tpmgo.AuthHandle{
-			Handle: tpmgo.TPMRHOwner,
-			Auth:   tpmgo.PasswordAuth(pwd),
-		}
-	} else if pub.Attributes.PPRead {
-		authHandle = tpmgo.AuthHandle{
-			Handle: tpmgo.TPMRHPlatform,
-			Auth:   tpmgo.PasswordAuth(pwd),
-		}
-	}
-
-	// Chunk the read. TPM_PT_NV_BUFFER_MAX varies wildly between
-	// vendors (Infineon SLB9665 reports 7 in one mode, 1024 in
-	// another); a conservative 512-byte cap is what xkms's own
-	// EKCertificate path uses and what tpm2-tools defaults to.
-	const maxNVChunk uint16 = 512
-	startOffset := uint16(req.GetOffset())
-	out := make([]byte, 0, dataSize)
-	for offset := startOffset; offset-startOffset < dataSize; {
-		remaining := dataSize - (offset - startOffset)
-		chunk := remaining
-		if chunk > maxNVChunk {
-			chunk = maxNVChunk
-		}
-		readRsp, err := tpmgo.NVRead{
-			AuthHandle: authHandle,
-			NVIndex: tpmgo.AuthHandle{
-				Handle: nvHandle,
-				Name:   pubRsp.NVName,
-				Auth:   tpmgo.PasswordAuth(pwd),
-			},
-			Size:   chunk,
-			Offset: offset,
-		}.Execute(tr)
-		if err != nil {
-			s.logger.Slog().Error("TPM NVRead chunk failed",
-				slog.Uint64("index", uint64(req.GetIndex())),
-				slog.Uint64("offset", uint64(offset)),
-				slog.Uint64("chunk_size", uint64(chunk)),
-				slog.String("error", err.Error()))
-			return nil, s.mapError(err)
-		}
-		out = append(out, readRsp.Data.Buffer...)
-		offset += chunk
 	}
 
 	s.logger.Debug("TPM NVRead completed",
@@ -1650,38 +1506,11 @@ func (s *TPMGRPCService) UndefineNVRAM(
 	if tpm == nil {
 		return nil, status.Error(codes.Unavailable, "TPM service not available")
 	}
-	if req.GetIndex() == 0 {
-		return nil, status.Error(codes.InvalidArgument, "index is required")
-	}
-
-	tr := tpm.Transport()
-	if tr == nil {
-		return nil, status.Error(codes.Unavailable, "TPM transport not available")
-	}
 
 	s.logger.Debug("TPM UndefineNVRAM request received",
 		slog.Uint64("index", uint64(req.GetIndex())))
 
-	nvHandle := tpmgo.TPMHandle(req.GetIndex())
-	pubRsp, err := tpmgo.NVReadPublic{NVIndex: nvHandle}.Execute(tr)
-	if err != nil {
-		return nil, s.mapError(err)
-	}
-
-	var ownerAuth []byte
-	if p := req.GetParentPassword(); p != "" {
-		ownerAuth = []byte(p)
-	}
-	if _, err := (tpmgo.NVUndefineSpace{
-		AuthHandle: tpmgo.AuthHandle{
-			Handle: tpmgo.TPMRHOwner,
-			Auth:   tpmgo.PasswordAuth(ownerAuth),
-		},
-		NVIndex: tpmgo.NamedHandle{
-			Handle: nvHandle,
-			Name:   pubRsp.NVName,
-		},
-	}.Execute(tr)); err != nil {
+	if err := tpmnv.Undefine(tpm.Transport(), req.GetIndex(), tpmnv.Password(req.GetParentPassword())); err != nil {
 		s.logger.Slog().Error("TPM NVUndefineSpace failed",
 			slog.Uint64("index", uint64(req.GetIndex())),
 			slog.String("error", err.Error()))
@@ -1725,6 +1554,108 @@ func (s *TPMGRPCService) GetRandom(
 	s.logger.Debug("TPM GetRandom completed")
 	return &platformv1.GetRandomResponse{
 		RandomBytes: random,
+	}, nil
+}
+
+// GetCapabilities returns the algorithms, commands and ECC curves the TPM
+// implements. QUIC 0x99·0x17 and MCP platform_tpm_capabilities read the
+// same lists through tpmattrs.ReadCapabilities.
+func (s *TPMGRPCService) GetCapabilities(
+	ctx context.Context,
+	req *platformv1.TPMCapabilitiesRequest,
+) (*platformv1.TPMCapabilitiesResponse, error) {
+
+	s.mu.RLock()
+	tpm := s.tpm
+	s.mu.RUnlock()
+
+	if tpm == nil {
+		return nil, status.Error(codes.Unavailable, "TPM service not available")
+	}
+
+	caps, err := tpmattrs.ReadCapabilities(tpm)
+	if err != nil {
+		s.logger.Slog().Error("TPM capability read failed", slog.String("error", err.Error()))
+		return nil, s.mapError(err)
+	}
+
+	return &platformv1.TPMCapabilitiesResponse{
+		Algorithms: caps.Algorithms,
+		Commands:   caps.Commands,
+		EccCurves:  caps.ECCCurves,
+	}, nil
+}
+
+// GetPlatformAttributes describes the TPM device and its provisioned
+// identity keys. QUIC 0x99·0x1E and MCP platform_tpm_platform read the
+// same attributes through tpmattrs.ReadPlatform.
+func (s *TPMGRPCService) GetPlatformAttributes(
+	ctx context.Context,
+	req *platformv1.TPMPlatformAttributesRequest,
+) (*platformv1.TPMPlatformAttributesResponse, error) {
+
+	s.mu.RLock()
+	tpm := s.tpm
+	s.mu.RUnlock()
+
+	if tpm == nil {
+		return nil, status.Error(codes.Unavailable, "TPM service not available")
+	}
+
+	platform := tpmattrs.ReadPlatform(tpm)
+	return &platformv1.TPMPlatformAttributesResponse{
+		Device:       platform.Device,
+		IsFips:       platform.IsFIPS,
+		PcrExtended:  platform.PCRExtended,
+		CanSeal:      platform.CanSeal,
+		IsSimulator:  platform.IsSimulator,
+		Manufacturer: platform.Manufacturer,
+		Ek:           tpmKeyRefProto(platform.EK),
+		Srk:          tpmKeyRefProto(platform.SRK),
+		Iak:          tpmKeyRefProto(platform.IAK),
+	}, nil
+}
+
+// tpmKeyRefProto converts a provisioned key reference; an absent key
+// stays absent.
+func tpmKeyRefProto(ref *tpmattrs.KeyRef) *platformv1.TPMKeyRef {
+	if ref == nil {
+		return nil
+	}
+	return &platformv1.TPMKeyRef{Handle: ref.Handle, Algorithm: ref.Algorithm}
+}
+
+// ExtendPCR extends one PCR through tpmpcr.Extend, the validation QUIC
+// 0x99·0x12 and MCP platform_tpm_pcr_extend share.
+func (s *TPMGRPCService) ExtendPCR(
+	ctx context.Context,
+	req *platformv1.ExtendPCRRequest,
+) (*platformv1.ExtendPCRResponse, error) {
+
+	s.mu.RLock()
+	tpm := s.tpm
+	s.mu.RUnlock()
+
+	if tpm == nil {
+		return nil, status.Error(codes.Unavailable, "TPM service not available")
+	}
+
+	s.logger.Debug("TPM ExtendPCR request received",
+		slog.Uint64("index", uint64(req.GetIndex())),
+		slog.String("hash_alg", req.GetHashAlg()))
+
+	if err := tpmpcr.Extend(tpm, int(req.GetIndex()), req.GetHashAlg(), req.GetData()); err != nil {
+		s.logger.Slog().Error("TPM ExtendPCR failed",
+			slog.Uint64("index", uint64(req.GetIndex())),
+			slog.String("error", err.Error()))
+		return nil, s.mapError(err)
+	}
+
+	return &platformv1.ExtendPCRResponse{
+		Status: &platformv1.Status{
+			Success: true,
+			Message: tpmpcr.ExtendedMessage(int(req.GetIndex())),
+		},
 	}, nil
 }
 
@@ -1831,10 +1762,32 @@ func activateCredential(
 	return tpm.ActivateCredential(credentialBlob, encryptedSecret)
 }
 
+// nvOffset narrows a proto NV offset to the 16 bits the TPM command
+// carries, rejecting one that does not fit.
+func nvOffset(offset uint32) (uint16, error) {
+	if offset > math.MaxUint16 {
+		return 0, ErrNVOffsetOutOfRange{Offset: offset}
+	}
+	return uint16(offset), nil
+}
+
 // mapError converts service errors to gRPC status errors.
 func (s *TPMGRPCService) mapError(err error) error {
+	return mapTPMError(err)
+}
+
+// mapTPMError gives a TPM backend error its gRPC class. The MCP TPM tools
+// return their errors through it too, so a tool and its gRPC twin answer
+// the same input with the same class.
+func mapTPMError(err error) error {
 	if err == nil {
 		return nil
+	}
+
+	// A typed error that already carries its gRPC class (the shared
+	// tpmnv / tpmpcr validation errors) keeps it.
+	if st, ok := status.FromError(err); ok && st.Code() != codes.Unknown {
+		return st.Err()
 	}
 
 	errMsg := err.Error()

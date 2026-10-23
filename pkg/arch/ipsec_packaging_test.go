@@ -18,7 +18,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ipsec"
+	ipsecconfig "github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ipsec/config"
 )
 
 // The overlay IPsec packaging (#709) spreads one set of facts -- the plugin
@@ -143,7 +143,7 @@ func TestIPsecPackaging_SocketPathsAgree(t *testing.T) {
 		"charon needs module host":  {strongSwanAport + "/charon.initd", []string{"xkms-p11-kit"}},
 		"pkcs11 plugin module path": {strongSwanAport + "/pkcs11.conf", []string{"/usr/lib/pkcs11/p11-kit-client.so"}},
 		// load-token names the module by its strongswan.conf section.
-		"pkcs11 plugin module name": {strongSwanAport + "/pkcs11.conf", []string{"\t\t" + ipsec.DefaultTokenModule + " {"}},
+		"pkcs11 plugin module name": {strongSwanAport + "/pkcs11.conf", []string{"\t\t" + ipsecconfig.DefaultTokenModule + " {"}},
 	}
 	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -152,7 +152,7 @@ func TestIPsecPackaging_SocketPathsAgree(t *testing.T) {
 	}
 
 	// platformd dials what charon serves.
-	assert.Equal(t, viciSocketPath, ipsec.DefaultVICISocket)
+	assert.Equal(t, viciSocketPath, ipsecconfig.DefaultVICISocket)
 }
 
 func TestIPsecPackaging_P11KitPinIsConsistent(t *testing.T) {

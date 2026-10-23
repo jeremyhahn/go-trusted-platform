@@ -43,7 +43,6 @@ func TestDefaultServiceConfig(t *testing.T) {
 	assert.Equal(t, DefaultEnrollmentTimeout, cfg.EnrollmentTimeout)
 	assert.True(t, cfg.EnableAutoQuarantine)
 	assert.False(t, cfg.WebhookEnabled)
-	assert.Equal(t, DefaultWebhookPath, cfg.WebhookPath)
 	assert.Equal(t, "", cfg.WebhookSecret)
 }
 
@@ -380,7 +379,6 @@ func TestConstants(t *testing.T) {
 	assert.Equal(t, 3, DefaultMaxRetries)
 	assert.Equal(t, 30*time.Minute, DefaultInstallTimeout)
 	assert.Equal(t, 5*time.Minute, DefaultEnrollmentTimeout)
-	assert.Equal(t, "/api/v1/pxe/webhook/complete", DefaultWebhookPath)
 	assert.Equal(t, "iso/platform:latest", DefaultISORef)
 	assert.Equal(t, "https://boot.ipxe.org/ipxe.efi", DefaultUpstreamFirmwareURL)
 	assert.Equal(t, "upstream", FirmwareSourceUpstream)
@@ -404,7 +402,6 @@ func TestServiceConfig_WithAllFieldsSet(t *testing.T) {
 		EnrollmentTimeout:    10 * time.Minute,
 		EnableAutoQuarantine: false,
 		WebhookEnabled:       true,
-		WebhookPath:          "/custom/webhook",
 		WebhookSecret:        "secret123",
 	}
 

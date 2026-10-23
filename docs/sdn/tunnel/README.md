@@ -1,7 +1,10 @@
 # Tunnel Management
 
+> **Status: REFERENCE** · Last verified: 2026-10-15
+> The gateway's transit-relay tunnels in `pkg/sdn/tunnel`.
+
 The `pkg/sdn/tunnel` package manages the gateway's point-to-point tunnels to
-remote relays (the POP A / POP B VPS nodes that hold the site's eBGP) through
+the transit relays (the remote nodes that hold the site's eBGP) through
 Linux netlink, under a **pluggable transport**, and pins each tunnel's outer
 packets to the WAN uplink it was sourced from (#582).
 
@@ -23,7 +26,7 @@ prerequisites are missing is refused before any netlink call
 
 | `transport` | Carrier | Protection | Builds |
 |---|---|---|---|
-| `gre` (default) | `gre` / `gre6` / `ipip` link | none — the shape the VPS relays speak today | all |
+| `gre` (default) | `gre` / `gre6` / `ipip` link | none — the shape most relays speak today | all |
 | `ipsec` | the same carrier | ESP, transport mode, `rfc4106(gcm(aes))` 256-bit with 128-bit ICV, ESN, anti-replay window — programmed as XFRM states and policies selecting only the carrier protocol between the two endpoints | all (FIPS-approved primitives) |
 | `wireguard` | its own kernel interface | WireGuard (Curve25519 / ChaCha20-Poly1305 / BLAKE2s) | `!fips` only — refused with `ErrTransportUnavailable` under the `fips` build tag |
 
@@ -40,8 +43,33 @@ ever leaves in the clear; a failure at any step unwinds what preceded it.
 Removal is the reverse. `Rekey(name)` re-resolves both references and updates the
 SAs in place (`XFRM_MSG_UPDSA`), outbound first; SPIs and policies do not change,
 so the peer rotates the same references in lockstep and traffic never stops.
+Nothing in the platform calls `Rekey` yet: `ipsec.rekey-interval` is reported in
+the tunnel status (`pkg/sdn/gateway/snapshot.go:372`) but drives no timer.
 Liveness is not this package's job: BFD on the BGP neighbor (GoBGP 4.9, #556)
 detects a dead path; vendor GRE keepalives are a non-goal.
+
+A link `EnsureTunnel` finds in the kernel without tracking it, as a killed
+datapath leaves one, is adopted instead of recreated when it is exactly the
+configured tunnel (`Manager.adoptable`). A `gre` link must match its kind,
+endpoints, key, TTL, MTU, up state and exact tunnel addresses. A `wireguard`
+device must match MTU, up state and addresses as well, and its private key and
+listen port, read back from the kernel, must equal the configuration (any port
+when `listen-port` is unset). Its peers are then reconciled by diff: a peer the
+tunnel does not configure is removed, and the configured peer is set in place
+only when its endpoint, keepalive, allowed IPs or preshared key differ, so its
+session survives. An `ipsec` carrier is adopted on the `gre` test, and its SAs
+and policies are then reconciled against the kernel's (`reconcileIPsec`, which a
+fresh install runs too): each is read back by SPI or selector; a matching SA or
+policy is kept, so the live SAs keep their sequence numbers and replay state; a
+differing SA (endpoints, mode, request id, ESN, replay window, algorithm or key,
+the key compared in constant time) is deleted and re-added; a differing policy
+(action, mark, or template endpoints, mode, request id or `optional` flag, since
+an optional template would let unencrypted carrier traffic in) is replaced in place (`XFRM_MSG_UPDPOLICY`); a missing one is added. The kernel
+hands SA keys back to `CAP_NET_ADMIN`, except in lockdown confidentiality mode,
+where they come back zeroed and the SAs are therefore always replaced. An
+adoption that fails part-way removes nothing, so the next attempt finds the live
+SAs still in place; a fresh install that fails unwinds as above. SAs left under SPIs the configuration no longer names are not
+swept. Anything else that differs in a single field is deleted and recreated.
 
 ## Uplinks and policy routing
 
@@ -69,16 +97,20 @@ mgr := tunnel.NewManager(logger, tunnel.WithKeyProvider(kms), tunnel.WithUplinks
 defer mgr.Close()
 
 err := mgr.EnsureTunnel(ctx, tunnel.TunnelConfig{
-    Name: "gre-popa-ispa", Type: "gre", Transport: "ipsec", Uplink: "ispa",
-    Local: "198.51.100.4", Remote: "198.51.100.100", TunnelIP: "10.4.255.1/30",
-    IPsec: &tunnel.IPsecConfig{KeyRef: "kms://platform/tunnel/popa-ispa/out", SPIOut: 0x1001, SPIIn: 0x1002},
+    Name: "gre-relay-ispa", Type: "gre", Transport: "ipsec", Uplink: "ispa",
+    Local: "198.51.100.4", Remote: "203.0.113.100", TunnelIP: "10.4.128.2/31",
+    IPsec: &tunnel.IPsecConfig{KeyRef: "kms://platform/tunnel/relay-ispa/out", SPIOut: 0x1001, SPIIn: 0x1002},
 })
 ```
 
 ## Integration with BGP
 
-The tunnel addresses (`10.4.255.x/30`, from the environment's IPAM pool) are the iBGP peer addresses in
-`BGPConfig.Neighbors`. The gateway service handler that builds both managers
-from the `tunnels:` and `uplinks:` sections is #568's `backedServiceHandler`.
+The tunnel addresses (`/31`s from the environment's tunnel point-to-point range,
+`10.4.128.0/22` in environment 4 of the
+[reference network](../../architecture/reference-network.md)) are the iBGP peer addresses in
+`BGPConfig.Neighbors`. The gateway's tunnels service builds both managers from
+the `tunnels:` and `routing-uplinks:` sections of the gateway configuration
+(`pkg/sdn/gateway/handlers.go:635`). `routing-uplinks:` is distinct from the
+gateway's `uplinks:`, which are the NAT and NIC ports.
 
 See [configuration.md](configuration.md) for the field reference.

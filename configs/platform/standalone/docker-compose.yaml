@@ -4,7 +4,7 @@
 # Uses the devcontainer image and builds binaries at runtime.
 #
 # Prerequisites:
-#   docker build -t go-trusted-platform-dev:latest build/docker/devcontainer/
+#   make build-devcontainer DEVCONTAINER_IMAGE=go-trusted-platform-dev:latest
 #
 # Usage:
 #   docker compose up -d                    # Start all services
@@ -157,7 +157,7 @@ services:
       PRIVATE_IPv4: 10.99.99.3
       PREFERRED_IP: 10.99.99.3
     working_dir: /workspace
-    command: ["bash", "-c", "if [ ! -f /workspace/bin/platformd ]; then echo 'Building platformd...' && cd /workspace && make build 2>&1 | tail -20; fi && echo 'Starting client...' && /workspace/bin/platformd serve --config /workspace/configs/platform/standalone/qemu.client.example.com.yaml --platform-dir /var/lib/trusted-platform --log-dir /var/lib/trusted-platform/log --ca-dir /var/lib/trusted-platform/ca --init --debug --raw-so-pin test --raw-pin test"]
+    command: ["bash", "-c", "if [ ! -f /workspace/bin/platformd ]; then echo 'Building platformd...' && cd /workspace && make build 2>&1 | tail -20; fi && echo 'Starting client...' && /workspace/bin/platformd serve --config /workspace/configs/platform/standalone/qemu.client.example.com.yaml --platform-dir /var/lib/trusted-platform --log-dir /var/lib/trusted-platform/log --ca-dir /var/lib/trusted-platform/ca --init --debug --raw-so-pin test --raw-pin test --enable-mtls"]
     depends_on:
       server:
         condition: service_healthy

@@ -13,21 +13,14 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Input } from "@/components/ui/input";
 import { SidebarTrigger } from "@/components/ui/sidebar";
 import { Separator } from "@/components/ui/separator";
 import { Breadcrumbs } from "./breadcrumbs";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { useLogout } from "@/hooks/use-logout";
-
-interface HeaderProps {
-  user?: {
-    name: string;
-    email: string;
-    avatar?: string;
-  };
-}
+import { useSignedInIdentity } from "@/hooks/use-signed-in-identity";
 
 /**
  * Top header component for the application
@@ -37,16 +30,12 @@ interface HeaderProps {
  * - Breadcrumb navigation
  * - Search input
  * - Dark mode toggle using next-themes
- * - User dropdown menu
- *
- * @example
- * ```tsx
- * <Header user={{ name: "John Doe", email: "john@example.com" }} />
- * ```
+ * - User dropdown menu showing the signed-in account from the session claims
  */
-export function Header({ user }: HeaderProps) {
+export function Header() {
   const router = useRouter();
   const handleLogout = useLogout();
+  const identity = useSignedInIdentity();
 
   return (
     <header className="sticky top-0 z-50 flex h-16 items-center gap-4 border-b bg-background px-6">
@@ -88,9 +77,8 @@ export function Header({ user }: HeaderProps) {
               aria-label="Account menu"
             >
               <Avatar className="h-9 w-9">
-                <AvatarImage src={user?.avatar} alt={user?.name} />
                 <AvatarFallback className="bg-primary text-primary-foreground">
-                  {user?.name?.charAt(0).toUpperCase() ?? "U"}
+                  {identity?.initial}
                 </AvatarFallback>
               </Avatar>
             </Button>
@@ -98,12 +86,17 @@ export function Header({ user }: HeaderProps) {
           <DropdownMenuContent className="w-56" align="end" forceMount>
             <DropdownMenuLabel className="font-normal">
               <div className="flex flex-col space-y-1">
-                <p className="text-sm font-medium leading-none">
-                  {user?.name ?? "User"}
+                <p
+                  className="text-sm font-medium leading-none"
+                  data-testid="header-account-email"
+                >
+                  {identity?.email}
                 </p>
-                <p className="text-xs leading-none text-muted-foreground">
-                  {user?.email ?? "user@example.com"}
-                </p>
+                {identity?.tenantId && (
+                  <p className="text-xs leading-none text-muted-foreground">
+                    {identity.tenantId}
+                  </p>
+                )}
               </div>
             </DropdownMenuLabel>
             <DropdownMenuSeparator />

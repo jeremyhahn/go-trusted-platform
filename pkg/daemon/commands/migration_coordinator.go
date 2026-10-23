@@ -133,7 +133,7 @@ func (c *grpcMigrationCoordinator) PrepareIncoming(ctx context.Context, destinat
 		VmId:   spec.InstanceID,
 		VmName: spec.VMName,
 		Mode:   string(spec.Mode),
-		Spec:   toProtoMigrationSpec(spec.Config),
+		Spec:   toProtoMigrationSpec(spec),
 	})
 	if err != nil {
 		return nil, &ErrMigrationPeer{Op: "PrepareMigration", Cause: err}
@@ -195,9 +195,11 @@ func pendingKey(destination, instanceID string) string {
 	return destination + "|" + instanceID
 }
 
-// toProtoMigrationSpec projects a compute.InstanceConfig onto the wire spec the
-// destination uses to launch a matching receiver.
-func toProtoMigrationSpec(cfg *compute.InstanceConfig) *platformv1.VMMigrationSpec {
+// toProtoMigrationSpec projects a compute.MigrationSpec's VM configuration and
+// guest arch onto the wire spec the destination uses to launch a matching
+// receiver. A spec without a configuration has no wire spec.
+func toProtoMigrationSpec(spec compute.MigrationSpec) *platformv1.VMMigrationSpec {
+	cfg := spec.Config
 	if cfg == nil {
 		return nil
 	}
@@ -211,6 +213,7 @@ func toProtoMigrationSpec(cfg *compute.InstanceConfig) *platformv1.VMMigrationSp
 		TpmEnabled:  cfg.TPMEnabled,
 		NetworkMode: cfg.NetworkMode,
 		MacAddress:  cfg.MACAddress,
+		Arch:        string(spec.Arch),
 	}
 }
 

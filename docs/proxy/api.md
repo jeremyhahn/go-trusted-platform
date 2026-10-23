@@ -71,8 +71,10 @@ Schemas: `CreateProxyRouteRequest{route}` → `CreateProxyRouteResponse{route, v
 `ProxyRoute` = `{id, hosts[], path_prefix, pool_id, auth, strip_prefix,
 preserve_host, passthrough_tcp}`.
 `ProxyAuthRequirements` = `{mode, require_idevid, allowed_zones[],
-backend_zone, require_attestation, attestation_max_age_nanos, required_roles[],
-required_scopes[], opa_policy, token_zone}`.
+backend_zone, require_attestation, attestation_max_age_nanos,
+required_scopes[], opa_policy, token_zone}`. Field 7 (`required_roles`) is
+reserved: it was removed (#926), and a route's permission is its
+`required_scopes`.
 
 **`attestation_max_age_nanos` is nanoseconds**, not seconds and not a duration
 string. Likewise `idle_conn_timeout_nanos` on a pool.
@@ -159,19 +161,18 @@ permissions. Enforcement is per operation: gRPC `RequireScope`, QUIC
 `AuthorizeRequest`, MCP `AuthorizeTool`. Platform-wide picture:
 [`docs/daemon/api.md`](../daemon/api.md) §5.
 
-**`ProxyService` is fully covered in both catalogs — one of the few surfaces
-where that is true.**
+**`ProxyService` is fully covered in both catalogs.**
 
 - gRPC (`pkg/api/grpc/method_permissions.go`): **all 14 RPCs mapped**, resource
-  `proxy`, actions `read` / `write` / `delete`. `GatewayService`, by contrast,
-  has 9 of its 24 mapped.
+  `proxy`, actions `read` / `write` / `delete`.
 - MCP (`pkg/api/mcp/authz.go`): **all 14 tool names mapped**, same resource and
   actions. There is no duplicated tool family here, so none of the
   authorization asymmetry that affects the dns and vtpm surfaces
   ([`docs/vtpm/api.md`](../vtpm/api.md) §5).
 
-Both catalogs are default-allow for unlisted entries; that does not bite this
-feature because nothing is unlisted.
+The gRPC, MCP and QUIC catalogs are all default-deny for unlisted entries;
+nothing in this feature is unlisted, so no proxy call is refused for want of a
+classification.
 
 The `scp` column in §3–5 is the required scope per capability.
 

@@ -85,7 +85,7 @@ func TestNewRemoveCommand_Flags(t *testing.T) {
 		defValue  string
 	}{
 		{"force", "f", "false"},
-		{"volumes", "v", "false"},
+		{"volumes", "", "false"},
 	}
 
 	for _, tt := range tests {

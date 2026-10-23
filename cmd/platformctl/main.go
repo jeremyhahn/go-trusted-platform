@@ -22,6 +22,7 @@ import (
 	"log/slog"
 	"os"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli/commands"
 )
 
@@ -108,9 +109,10 @@ func main() {
 		}
 	}
 
-	// CLI mode
+	// CLI mode. A verb with documented exit codes returns a cli.ExitError;
+	// every other failure exits 1.
 	if err := commands.Execute(); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		os.Exit(1)
+		os.Exit(cli.ExitCode(err))
 	}
 }

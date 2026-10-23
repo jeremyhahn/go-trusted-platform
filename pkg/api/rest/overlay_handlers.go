@@ -25,6 +25,8 @@ import (
 	"time"
 
 	"github.com/gorilla/mux"
+
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/overlay"
 )
 
 // =============================================================================
@@ -58,6 +60,15 @@ type ErrInvalidVNI struct {
 
 func (e ErrInvalidVNI) Error() string {
 	return fmt.Sprintf("invalid VNI: %d", e.VNI)
+}
+
+// ErrInvalidVLAN is returned when a VNI's VLAN is above 4094.
+type ErrInvalidVLAN struct {
+	VLAN uint32
+}
+
+func (e ErrInvalidVLAN) Error() string {
+	return fmt.Sprintf("invalid VLAN: %d (must be between 0 and %d)", e.VLAN, overlay.MaxVLAN)
 }
 
 // ErrInvalidMAC is returned when a MAC address is invalid or empty.
@@ -207,7 +218,6 @@ type OverlayStatusResponse struct {
 	VNICount       uint32    `json:"vni_count"`
 	TunnelCount    uint32    `json:"tunnel_count"`
 	RemoteMACCount uint32    `json:"remote_mac_count"`
-	UnpeeredVTEPs  uint32    `json:"unpeered_vteps"`
 	Healthy        bool      `json:"healthy"`
 	Timestamp      time.Time `json:"timestamp"`
 }
@@ -438,6 +448,11 @@ func (h *OverlayHandlers) handleCreateVNI(w http.ResponseWriter, r *http.Request
 		return
 	}
 
+	if req.VLAN > overlay.MaxVLAN {
+		h.writeError(w, http.StatusBadRequest, ErrInvalidVLAN{VLAN: req.VLAN})
+		return
+	}
+
 	vni, err := h.overlayService.CreateVNI(ctx, &req)
 	if err != nil {
 		h.logger.Error("Failed to create VNI", "error", err, "vni", req.VNI)
@@ -660,6 +675,8 @@ func (h *OverlayHandlers) writeOverlayError(w http.ResponseWriter, operation str
 	case ErrMACNotFound:
 		status = http.StatusNotFound
 	case ErrInvalidVNI:
+		status = http.StatusBadRequest
+	case ErrInvalidVLAN:
 		status = http.StatusBadRequest
 	case ErrInvalidNodeID:
 		status = http.StatusBadRequest

@@ -1,5 +1,7 @@
 # Content Distribution System
 
+> **Status: PLANNED** · Scope: design only, no implementation · Last verified: 2026-10-20
+
 ## Overview
 
 The Content Distribution System provides comprehensive infrastructure for storing, distributing, and verifying large files across the trusted DHT network. It encompasses four integrated subsystems:

@@ -92,7 +92,7 @@ func mintTestMTLSCert(dir, name, subject string) (*MintTestMTLSCertResult, error
 // FIDO2StubAdd is the FIDO2 factor enrollment helper. The cold-start
 // suite cannot exercise a real authenticator without #143-b (FIDO2 stub
 // authenticator). The helper returns ErrAuthenticatorStubMissing so the
-// caller can call t.Skip with a clear pointer to the blocking task.
+// caller fails with a clear pointer to the blocking task.
 func FIDO2StubAdd() error {
 	return &ErrAuthenticatorStubMissing{Method: "fido2"}
 }

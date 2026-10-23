@@ -16,7 +16,11 @@ package barrier
 import (
 	"context"
 	"errors"
+	"log/slog"
+	"sync"
 	"testing"
+
+	quicbaassdk "github.com/jeremyhahn/go-quicbaas/sdk/go"
 )
 
 func TestNewManager_NilSDK(t *testing.T) {
@@ -81,9 +85,7 @@ func TestManager_IsInitialized_DefaultFalse(t *testing.T) {
 }
 
 func TestManager_SignalReady_Idempotent(t *testing.T) {
-	m := &Manager{
-		ready: make(chan struct{}),
-	}
+	m := newTestManager()
 
 	// First signal should close the channel.
 	m.signalReady()
@@ -93,7 +95,7 @@ func TestManager_SignalReady_Idempotent(t *testing.T) {
 
 	// Channel should be closed.
 	select {
-	case <-m.ready:
+	case <-m.ready.Load().ch:
 		// expected
 	default:
 		t.Error("ready channel should be closed after signalReady")
@@ -101,10 +103,8 @@ func TestManager_SignalReady_Idempotent(t *testing.T) {
 }
 
 func TestManager_WaitReady_AlreadyReady(t *testing.T) {
-	m := &Manager{
-		ready: make(chan struct{}),
-	}
-	close(m.ready)
+	m := newTestManager()
+	m.signalReady()
 
 	ctx := context.Background()
 	if err := m.WaitReady(ctx); err != nil {
@@ -113,9 +113,7 @@ func TestManager_WaitReady_AlreadyReady(t *testing.T) {
 }
 
 func TestManager_WaitReady_ContextCancelled(t *testing.T) {
-	m := &Manager{
-		ready: make(chan struct{}),
-	}
+	m := newTestManager()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -130,9 +128,7 @@ func TestManager_WaitReady_ContextCancelled(t *testing.T) {
 }
 
 func TestManager_WaitReady_NilContext(t *testing.T) {
-	m := &Manager{
-		ready: make(chan struct{}),
-	}
+	m := newTestManager()
 
 	err := m.WaitReady(nil) //nolint:staticcheck
 	if !errors.Is(err, ErrNilContext) {
@@ -141,9 +137,7 @@ func TestManager_WaitReady_NilContext(t *testing.T) {
 }
 
 func TestManager_Initialize_NilContext(t *testing.T) {
-	m := &Manager{
-		ready: make(chan struct{}),
-	}
+	m := newTestManager()
 
 	err := m.Initialize(nil, "secret") //nolint:staticcheck
 	if !errors.Is(err, ErrNilContext) {
@@ -152,9 +146,7 @@ func TestManager_Initialize_NilContext(t *testing.T) {
 }
 
 func TestManager_Initialize_EmptySecret(t *testing.T) {
-	m := &Manager{
-		ready: make(chan struct{}),
-	}
+	m := newTestManager()
 
 	err := m.Initialize(context.Background(), "")
 	if !errors.Is(err, ErrEmptySecret) {
@@ -163,9 +155,7 @@ func TestManager_Initialize_EmptySecret(t *testing.T) {
 }
 
 func TestManager_Initialize_AlreadyInitialized(t *testing.T) {
-	m := &Manager{
-		ready: make(chan struct{}),
-	}
+	m := newTestManager()
 	m.initialized.Store(true)
 
 	err := m.Initialize(context.Background(), "secret")
@@ -175,9 +165,7 @@ func TestManager_Initialize_AlreadyInitialized(t *testing.T) {
 }
 
 func TestManager_InitializeShamir_NilContext(t *testing.T) {
-	m := &Manager{
-		ready: make(chan struct{}),
-	}
+	m := newTestManager()
 
 	_, err := m.InitializeShamir(nil, "secret", 3, 5) //nolint:staticcheck
 	if !errors.Is(err, ErrNilContext) {
@@ -186,9 +174,7 @@ func TestManager_InitializeShamir_NilContext(t *testing.T) {
 }
 
 func TestManager_InitializeShamir_EmptySecret(t *testing.T) {
-	m := &Manager{
-		ready: make(chan struct{}),
-	}
+	m := newTestManager()
 
 	_, err := m.InitializeShamir(context.Background(), "", 3, 5)
 	if !errors.Is(err, ErrEmptySecret) {
@@ -197,9 +183,7 @@ func TestManager_InitializeShamir_EmptySecret(t *testing.T) {
 }
 
 func TestManager_InitializeShamir_InvalidThreshold(t *testing.T) {
-	m := &Manager{
-		ready: make(chan struct{}),
-	}
+	m := newTestManager()
 
 	tests := []struct {
 		name      string
@@ -207,6 +191,7 @@ func TestManager_InitializeShamir_InvalidThreshold(t *testing.T) {
 		shares    int
 	}{
 		{"zero threshold", 0, 5},
+		{"threshold of one", 1, 5},
 		{"zero shares", 3, 0},
 		{"threshold exceeds shares", 5, 3},
 		{"negative threshold", -1, 5},
@@ -223,9 +208,7 @@ func TestManager_InitializeShamir_InvalidThreshold(t *testing.T) {
 }
 
 func TestManager_InitializeShamir_AlreadyInitialized(t *testing.T) {
-	m := &Manager{
-		ready: make(chan struct{}),
-	}
+	m := newTestManager()
 	m.initialized.Store(true)
 
 	_, err := m.InitializeShamir(context.Background(), "secret", 3, 5)
@@ -234,10 +217,89 @@ func TestManager_InitializeShamir_AlreadyInitialized(t *testing.T) {
 	}
 }
 
-func TestManager_Unseal_NilContext(t *testing.T) {
-	m := &Manager{
-		ready: make(chan struct{}),
+// TestManager_RegisterOfficer forwards the officer's username and CSR to the
+// SDK barrier client, which is what enrolls the officer for share sealing.
+func TestManager_RegisterOfficer(t *testing.T) {
+	fake := &fakeBarrierClient{}
+	m := newSealedManager(fake)
+
+	if err := m.RegisterOfficer(context.Background(), "alice", []byte("csr")); err != nil {
+		t.Fatalf("RegisterOfficer: %v", err)
 	}
+	if len(fake.registered) != 1 {
+		t.Fatalf("registered %d officers, want 1", len(fake.registered))
+	}
+	got := fake.registered[0]
+	if got.Username != "alice" || string(got.CSRPEM) != "csr" {
+		t.Errorf("registered %q with CSR %q, want alice with csr", got.Username, got.CSRPEM)
+	}
+}
+
+func TestManager_RegisterOfficer_Errors(t *testing.T) {
+	upstream := errors.New("ceremony CA not initialized")
+	cases := []struct {
+		name     string
+		ctx      context.Context
+		username string
+		csr      []byte
+		fakeErr  error
+		want     error
+	}{
+		{name: "nil context", ctx: nil, username: "alice", csr: []byte("csr"), want: ErrNilContext},
+		{name: "empty username", ctx: context.Background(), csr: []byte("csr"), want: ErrEmptyUsername},
+		{name: "empty CSR", ctx: context.Background(), username: "alice", want: ErrEmptyCSR},
+		{name: "SDK rejects", ctx: context.Background(), username: "alice", csr: []byte("csr"), fakeErr: upstream, want: upstream},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fake := &fakeBarrierClient{registerErr: tc.fakeErr}
+			m := newSealedManager(fake)
+
+			err := m.RegisterOfficer(tc.ctx, tc.username, tc.csr)
+			if !errors.Is(err, tc.want) {
+				t.Fatalf("RegisterOfficer error = %v, want %v", err, tc.want)
+			}
+			if len(fake.registered) != 0 {
+				t.Errorf("a refused registration reached the SDK: %d registered", len(fake.registered))
+			}
+		})
+	}
+}
+
+func TestManager_Officers(t *testing.T) {
+	fake := &fakeBarrierClient{officers: []*quicbaassdk.QRDBOfficerStatus{
+		{Username: "alice", ShareIndex: 1},
+		nil,
+		{Username: "bob", ShareIndex: 2},
+	}}
+	m := newSealedManager(fake)
+
+	got, err := m.Officers(context.Background())
+	if err != nil {
+		t.Fatalf("Officers: %v", err)
+	}
+	if len(got) != 2 || got[0] != "alice" || got[1] != "bob" {
+		t.Errorf("Officers = %v, want [alice bob]", got)
+	}
+}
+
+func TestManager_Officers_Errors(t *testing.T) {
+	m := newSealedManager(&fakeBarrierClient{})
+	if _, err := m.Officers(nil); !errors.Is(err, ErrNilContext) { //nolint:staticcheck
+		t.Errorf("nil context: got %v, want ErrNilContext", err)
+	}
+
+	upstream := errors.New("ceremony not configured")
+	m = newSealedManager(&fakeBarrierClient{listErr: upstream})
+	_, err := m.Officers(context.Background())
+	var managerErr *ManagerError
+	if !errors.As(err, &managerErr) || !errors.Is(err, upstream) {
+		t.Errorf("SDK failure: got %v, want a ManagerError wrapping it", err)
+	}
+}
+
+func TestManager_Unseal_NilContext(t *testing.T) {
+	m := newTestManager()
 	m.sealed.Store(true)
 
 	err := m.Unseal(nil, "secret") //nolint:staticcheck
@@ -247,9 +309,7 @@ func TestManager_Unseal_NilContext(t *testing.T) {
 }
 
 func TestManager_Unseal_EmptySecret(t *testing.T) {
-	m := &Manager{
-		ready: make(chan struct{}),
-	}
+	m := newTestManager()
 	m.sealed.Store(true)
 
 	err := m.Unseal(context.Background(), "")
@@ -259,9 +319,7 @@ func TestManager_Unseal_EmptySecret(t *testing.T) {
 }
 
 func TestManager_Unseal_NotSealed(t *testing.T) {
-	m := &Manager{
-		ready: make(chan struct{}),
-	}
+	m := newTestManager()
 	m.sealed.Store(false)
 
 	err := m.Unseal(context.Background(), "secret")
@@ -271,9 +329,7 @@ func TestManager_Unseal_NotSealed(t *testing.T) {
 }
 
 func TestManager_UnsealWithShare_NilContext(t *testing.T) {
-	m := &Manager{
-		ready: make(chan struct{}),
-	}
+	m := newTestManager()
 
 	_, err := m.UnsealWithShare(nil, "share") //nolint:staticcheck
 	if !errors.Is(err, ErrNilContext) {
@@ -282,9 +338,7 @@ func TestManager_UnsealWithShare_NilContext(t *testing.T) {
 }
 
 func TestManager_UnsealWithShare_EmptyShare(t *testing.T) {
-	m := &Manager{
-		ready: make(chan struct{}),
-	}
+	m := newTestManager()
 
 	_, err := m.UnsealWithShare(context.Background(), "")
 	if !errors.Is(err, ErrEmptyShare) {
@@ -293,9 +347,7 @@ func TestManager_UnsealWithShare_EmptyShare(t *testing.T) {
 }
 
 func TestManager_Seal_NilContext(t *testing.T) {
-	m := &Manager{
-		ready: make(chan struct{}),
-	}
+	m := newTestManager()
 	m.sealed.Store(false)
 
 	err := m.Seal(nil) //nolint:staticcheck
@@ -305,9 +357,7 @@ func TestManager_Seal_NilContext(t *testing.T) {
 }
 
 func TestManager_Seal_AlreadySealed(t *testing.T) {
-	m := &Manager{
-		ready: make(chan struct{}),
-	}
+	m := newTestManager()
 	m.sealed.Store(true)
 
 	err := m.Seal(context.Background())
@@ -317,9 +367,7 @@ func TestManager_Seal_AlreadySealed(t *testing.T) {
 }
 
 func TestManager_Status_NilContext(t *testing.T) {
-	m := &Manager{
-		ready: make(chan struct{}),
-	}
+	m := newTestManager()
 
 	_, err := m.Status(nil) //nolint:staticcheck
 	if !errors.Is(err, ErrNilContext) {
@@ -328,9 +376,7 @@ func TestManager_Status_NilContext(t *testing.T) {
 }
 
 func TestManager_Rekey_NilContext(t *testing.T) {
-	m := &Manager{
-		ready: make(chan struct{}),
-	}
+	m := newTestManager()
 
 	_, err := m.Rekey(nil, 3, 5) //nolint:staticcheck
 	if !errors.Is(err, ErrNilContext) {
@@ -339,9 +385,7 @@ func TestManager_Rekey_NilContext(t *testing.T) {
 }
 
 func TestManager_Rekey_InvalidThreshold(t *testing.T) {
-	m := &Manager{
-		ready: make(chan struct{}),
-	}
+	m := newTestManager()
 
 	tests := []struct {
 		name      string
@@ -349,6 +393,7 @@ func TestManager_Rekey_InvalidThreshold(t *testing.T) {
 		total     int
 	}{
 		{"zero threshold", 0, 5},
+		{"threshold of one", 1, 5},
 		{"zero total", 3, 0},
 		{"threshold exceeds total", 5, 3},
 	}
@@ -363,9 +408,7 @@ func TestManager_Rekey_InvalidThreshold(t *testing.T) {
 }
 
 func TestManager_Rekey_Sealed(t *testing.T) {
-	m := &Manager{
-		ready: make(chan struct{}),
-	}
+	m := newTestManager()
 	m.sealed.Store(true)
 
 	_, err := m.Rekey(context.Background(), 3, 5)
@@ -375,9 +418,7 @@ func TestManager_Rekey_Sealed(t *testing.T) {
 }
 
 func TestManager_SyncStatus_NilContext(t *testing.T) {
-	m := &Manager{
-		ready: make(chan struct{}),
-	}
+	m := newTestManager()
 
 	err := m.SyncStatus(nil) //nolint:staticcheck
 	if !errors.Is(err, ErrNilContext) {
@@ -387,12 +428,278 @@ func TestManager_SyncStatus_NilContext(t *testing.T) {
 
 func TestManager_Config_ReturnsConfig(t *testing.T) {
 	cfg := DefaultConfig()
-	m := &Manager{
-		config: cfg,
-		ready:  make(chan struct{}),
-	}
+	m := newTestManager()
+	m.config = cfg
 
 	if m.Config() != cfg {
 		t.Error("Config() should return the same config pointer")
+	}
+}
+
+// fakeBarrierClient answers the barrier calls the unsealing-state tests
+// make; every other method panics through the nil embedded interface.
+type fakeBarrierClient struct {
+	quicbaassdk.QRDBBarrierClient
+	shareResp *quicbaassdk.QRDBBarrierUnsealShareResponse
+	shareErr  error
+	status    *quicbaassdk.QRDBBarrierStatusResponse
+
+	registered  []*quicbaassdk.QRDBOfficerRegisterRequest
+	registerErr error
+	officers    []*quicbaassdk.QRDBOfficerStatus
+	listErr     error
+}
+
+func (f *fakeBarrierClient) OfficerRegister(_ context.Context, req *quicbaassdk.QRDBOfficerRegisterRequest) (*quicbaassdk.QRDBOfficerRegisterResponse, error) {
+	if f.registerErr != nil {
+		return nil, f.registerErr
+	}
+	f.registered = append(f.registered, req)
+	return &quicbaassdk.QRDBOfficerRegisterResponse{ShareIndex: len(f.registered)}, nil
+}
+
+func (f *fakeBarrierClient) OfficerList(context.Context) ([]*quicbaassdk.QRDBOfficerStatus, error) {
+	return f.officers, f.listErr
+}
+
+func (f *fakeBarrierClient) BarrierUnsealWithShare(context.Context, *quicbaassdk.QRDBBarrierUnsealShareRequest) (*quicbaassdk.QRDBBarrierUnsealShareResponse, error) {
+	return f.shareResp, f.shareErr
+}
+
+func (f *fakeBarrierClient) BarrierSeal(context.Context) error { return nil }
+
+func (f *fakeBarrierClient) BarrierStatus(context.Context) (*quicbaassdk.QRDBBarrierStatusResponse, error) {
+	return f.status, nil
+}
+
+type fakeSecurity struct {
+	quicbaassdk.SecurityService
+	barrier *fakeBarrierClient
+}
+
+func (s fakeSecurity) Barrier() (quicbaassdk.QRDBBarrierClient, error) { return s.barrier, nil }
+
+type fakeSDK struct {
+	quicbaassdk.Client
+	barrier *fakeBarrierClient
+}
+
+func (c fakeSDK) Security() quicbaassdk.SecurityService { return fakeSecurity{barrier: c.barrier} }
+
+// newSealedManager returns a sealed, initialized Manager over the fake.
+func newSealedManager(fake *fakeBarrierClient) *Manager {
+	m := newTestManager()
+	m.sdk = fakeSDK{barrier: fake}
+	m.config = DefaultConfig()
+	m.logger = slog.New(slog.DiscardHandler)
+	m.initialized.Store(true)
+	m.sealed.Store(true)
+	return m
+}
+
+// newTestManager returns a bare Manager with its first ready generation in
+// place, as NewManager would leave it.
+func newTestManager() *Manager {
+	m := &Manager{}
+	m.ready.Store(newReadyGate())
+	return m
+}
+
+func TestManager_IsUnsealing_FalseByDefault(t *testing.T) {
+	m := newSealedManager(&fakeBarrierClient{})
+	if m.IsUnsealing() {
+		t.Fatal("a sealed barrier with no shares submitted is not unsealing")
+	}
+}
+
+func TestManager_UnsealWithShare_PartialReportsUnsealing(t *testing.T) {
+	fake := &fakeBarrierClient{shareResp: &quicbaassdk.QRDBBarrierUnsealShareResponse{Required: 3, Submitted: 1}}
+	m := newSealedManager(fake)
+
+	if _, err := m.UnsealWithShare(context.Background(), "share-1"); err != nil {
+		t.Fatalf("UnsealWithShare: %v", err)
+	}
+	if !m.IsUnsealing() {
+		t.Fatal("expected IsUnsealing after a partial share")
+	}
+	if !m.IsSealed() {
+		t.Fatal("a partial share must not unseal the barrier")
+	}
+}
+
+func TestManager_UnsealWithShare_CompleteClearsUnsealing(t *testing.T) {
+	fake := &fakeBarrierClient{shareResp: &quicbaassdk.QRDBBarrierUnsealShareResponse{Required: 2, Submitted: 1}}
+	m := newSealedManager(fake)
+	if _, err := m.UnsealWithShare(context.Background(), "share-1"); err != nil {
+		t.Fatalf("first share: %v", err)
+	}
+
+	fake.shareResp = &quicbaassdk.QRDBBarrierUnsealShareResponse{Required: 2, Submitted: 2, Complete: true}
+	if _, err := m.UnsealWithShare(context.Background(), "share-2"); err != nil {
+		t.Fatalf("second share: %v", err)
+	}
+	if m.IsUnsealing() || m.IsSealed() {
+		t.Fatalf("after the threshold: unsealing=%v sealed=%v, want both false", m.IsUnsealing(), m.IsSealed())
+	}
+}
+
+func TestManager_UnsealWithShare_ErrorLeavesStateUnchanged(t *testing.T) {
+	boom := errors.New("bad share")
+	m := newSealedManager(&fakeBarrierClient{shareErr: boom})
+
+	_, err := m.UnsealWithShare(context.Background(), "share-1")
+	var mgrErr *ManagerError
+	if !errors.As(err, &mgrErr) || !errors.Is(err, boom) {
+		t.Fatalf("expected ManagerError wrapping the SDK error, got %v", err)
+	}
+	if m.IsUnsealing() {
+		t.Fatal("a rejected share must not report unsealing")
+	}
+}
+
+func TestManager_Seal_ClearsUnsealing(t *testing.T) {
+	m := newSealedManager(&fakeBarrierClient{})
+	m.sealed.Store(false)
+	m.unsealing.Store(true)
+
+	if err := m.Seal(context.Background()); err != nil {
+		t.Fatalf("Seal: %v", err)
+	}
+	if m.IsUnsealing() {
+		t.Fatal("a fresh seal must start with no share progress")
+	}
+}
+
+func TestManager_SyncStatus_UnsealedClearsUnsealing(t *testing.T) {
+	fake := &fakeBarrierClient{status: &quicbaassdk.QRDBBarrierStatusResponse{Sealed: false, InitializedAt: "2026-10-11T00:00:00Z"}}
+	m := newSealedManager(fake)
+	m.unsealing.Store(true)
+
+	if err := m.SyncStatus(context.Background()); err != nil {
+		t.Fatalf("SyncStatus (unsealed): %v", err)
+	}
+
+	// The barrier is sealed again elsewhere; the old share progress must
+	// not resurface as unsealing.
+	fake.status = &quicbaassdk.QRDBBarrierStatusResponse{Sealed: true, InitializedAt: "2026-10-11T00:00:00Z"}
+	if err := m.SyncStatus(context.Background()); err != nil {
+		t.Fatalf("SyncStatus (sealed): %v", err)
+	}
+	if m.IsUnsealing() {
+		t.Fatal("share progress from before an unseal must not survive it")
+	}
+}
+
+// TestManager_ConcurrentSealWaitReadySignal drives Seal, WaitReady and
+// signalReady from three goroutines released together. Under -race it fails
+// if Seal's new ready generation is published without synchronisation.
+func TestManager_ConcurrentSealWaitReadySignal(t *testing.T) {
+	const rounds = 200
+	m := newSealedManager(&fakeBarrierClient{})
+
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	start := make(chan struct{})
+	errs := make(chan error, 2*rounds)
+	var wg sync.WaitGroup
+	wg.Add(3)
+	go func() {
+		defer wg.Done()
+		<-start
+		for range rounds {
+			m.sealed.Store(false)
+			if err := m.Seal(context.Background()); err != nil && !errors.Is(err, ErrSealed) {
+				errs <- err
+			}
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		<-start
+		for range rounds {
+			if err := m.WaitReady(cancelled); err != nil && !errors.Is(err, context.Canceled) {
+				errs <- err
+			}
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		<-start
+		for range rounds {
+			m.signalReady()
+		}
+	}()
+	close(start)
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+// TestManager_ConcurrentUnsealSignalsDoNotPanic releases a completing share
+// submission and an unsealed SyncStatus on many goroutines at once. Both
+// paths signal the same ready generation; it must close exactly once.
+func TestManager_ConcurrentUnsealSignalsDoNotPanic(t *testing.T) {
+	const signallers = 64
+	fake := &fakeBarrierClient{
+		shareResp: &quicbaassdk.QRDBBarrierUnsealShareResponse{Complete: true, Submitted: 2, Required: 2},
+		status:    &quicbaassdk.QRDBBarrierStatusResponse{Sealed: false, InitializedAt: "2026-10-11T00:00:00Z"},
+	}
+	m := newSealedManager(fake)
+
+	start := make(chan struct{})
+	errs := make(chan error, signallers)
+	var wg sync.WaitGroup
+	for i := range signallers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			if i%2 == 0 {
+				if _, err := m.UnsealWithShare(context.Background(), "share"); err != nil {
+					errs <- err
+				}
+				return
+			}
+			if err := m.SyncStatus(context.Background()); err != nil {
+				errs <- err
+			}
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Errorf("unexpected error: %v", err)
+	}
+	if err := m.WaitReady(context.Background()); err != nil {
+		t.Fatalf("WaitReady after unseal: %v", err)
+	}
+}
+
+// TestManager_Seal_StartsNewReadyGeneration checks that Seal makes WaitReady
+// block again and that the next signal releases it.
+func TestManager_Seal_StartsNewReadyGeneration(t *testing.T) {
+	m := newSealedManager(&fakeBarrierClient{})
+	m.sealed.Store(false)
+	m.signalReady()
+	if err := m.WaitReady(context.Background()); err != nil {
+		t.Fatalf("WaitReady while unsealed: %v", err)
+	}
+
+	if err := m.Seal(context.Background()); err != nil {
+		t.Fatalf("Seal: %v", err)
+	}
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := m.WaitReady(cancelled); !errors.Is(err, context.Canceled) {
+		t.Fatalf("WaitReady after Seal = %v, want context.Canceled", err)
+	}
+
+	m.signalReady()
+	if err := m.WaitReady(context.Background()); err != nil {
+		t.Fatalf("WaitReady after the next signal: %v", err)
 	}
 }

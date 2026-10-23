@@ -15,68 +15,159 @@ package util
 
 import (
 	"net"
+	"reflect"
+	"syscall"
 	"testing"
 )
 
+// fakeUDPConn is the logical UDP connection fakeDial returns; only
+// LocalAddr and Close are called on it.
+type fakeUDPConn struct {
+	net.Conn
+	local  *net.UDPAddr
+	closed bool
+}
+
+func (c *fakeUDPConn) LocalAddr() net.Addr { return c.local }
+
+func (c *fakeUDPConn) Close() error {
+	c.closed = true
+	return nil
+}
+
+// useDialUDP replaces the dial seam with dial for one test.
+func useDialUDP(t *testing.T, dial func(network, address string) (net.Conn, error)) {
+	t.Helper()
+	saved := dialUDP
+	dialUDP = dial
+	t.Cleanup(func() { dialUDP = saved })
+}
+
+// useInterfaceAddrs replaces the interface seam with list for one test.
+func useInterfaceAddrs(t *testing.T, list func() ([]net.Addr, error)) {
+	t.Helper()
+	saved := interfaceAddrs
+	interfaceAddrs = list
+	t.Cleanup(func() { interfaceAddrs = saved })
+}
+
+// errNetworkUnreachable is the dial failure a host without a route returns.
+var errNetworkUnreachable = &net.OpError{Op: "dial", Net: "udp", Err: syscall.ENETUNREACH}
+
+func TestNetSeamDefaults(t *testing.T) {
+	if reflect.ValueOf(dialUDP).Pointer() != reflect.ValueOf(net.Dial).Pointer() {
+		t.Error("dialUDP should default to net.Dial")
+	}
+	if reflect.ValueOf(interfaceAddrs).Pointer() != reflect.ValueOf(net.InterfaceAddrs).Pointer() {
+		t.Error("interfaceAddrs should default to net.InterfaceAddrs")
+	}
+}
+
 func TestPreferredIPv4(t *testing.T) {
+	conn := &fakeUDPConn{local: &net.UDPAddr{IP: net.ParseIP("192.0.2.10"), Port: 40000}}
+	var dialed string
+	useDialUDP(t, func(network, address string) (net.Conn, error) {
+		dialed = network + " " + address
+		return conn, nil
+	})
+
 	ip := PreferredIPv4()
 
-	// IP may be nil if network is unavailable (e.g., in CI environments)
-	// This is expected behavior as documented in the function
-	if ip == nil {
-		t.Skip("Network unavailable - skipping test")
+	if !ip.Equal(net.ParseIP("192.0.2.10")) {
+		t.Errorf("PreferredIPv4() = %v, want 192.0.2.10", ip)
 	}
-
-	// If we get an IP, verify it's valid IPv4
-	if ip.To4() == nil {
-		t.Errorf("Expected IPv4 address, got %v", ip)
+	if dialed != "udp 1.2.3.4:80" {
+		t.Errorf("dialed %q, want udp 1.2.3.4:80", dialed)
 	}
+	if !conn.closed {
+		t.Error("the UDP connection was not closed")
+	}
+}
 
-	// Verify it's not nil or empty
-	if ip.String() == "" {
-		t.Error("Expected non-empty IP address")
+func TestPreferredIPv4_NetworkUnavailable(t *testing.T) {
+	useDialUDP(t, func(string, string) (net.Conn, error) { return nil, errNetworkUnreachable })
+
+	if ip := PreferredIPv4(); ip != nil {
+		t.Errorf("PreferredIPv4() = %v, want nil when the dial fails", ip)
 	}
 }
 
 func TestPreferredIPv6(t *testing.T) {
+	conn := &fakeUDPConn{local: &net.UDPAddr{IP: net.ParseIP("2001:db8::10"), Port: 40000}}
+	var dialed string
+	useDialUDP(t, func(network, address string) (net.Conn, error) {
+		dialed = network + " " + address
+		return conn, nil
+	})
+
 	ip := PreferredIPv6()
 
-	// IP may be nil if network is unavailable (e.g., in CI environments)
-	// This is expected behavior as documented in the function
-	if ip == nil {
-		t.Skip("IPv6 network unavailable - skipping test")
+	if !ip.Equal(net.ParseIP("2001:db8::10")) {
+		t.Errorf("PreferredIPv6() = %v, want 2001:db8::10", ip)
 	}
+	if dialed != "udp [::1]:80" {
+		t.Errorf("dialed %q, want udp [::1]:80", dialed)
+	}
+	if !conn.closed {
+		t.Error("the UDP connection was not closed")
+	}
+}
 
-	// Verify it's not nil or empty
-	if ip.String() == "" {
-		t.Error("Expected non-empty IP address")
+func TestPreferredIPv6_NetworkUnavailable(t *testing.T) {
+	useDialUDP(t, func(string, string) (net.Conn, error) { return nil, errNetworkUnreachable })
+
+	if ip := PreferredIPv6(); ip != nil {
+		t.Errorf("PreferredIPv6() = %v, want nil when the dial fails", ip)
 	}
 }
 
 func TestLocalAddresses(t *testing.T) {
+	useInterfaceAddrs(t, func() ([]net.Addr, error) {
+		return []net.Addr{
+			&net.IPNet{IP: net.ParseIP("127.0.0.1"), Mask: net.CIDRMask(8, 32)},
+			&net.IPNet{IP: net.ParseIP("192.0.2.10"), Mask: net.CIDRMask(24, 32)},
+			&net.IPNet{IP: net.ParseIP("2001:db8::10"), Mask: net.CIDRMask(64, 128)},
+			&net.IPAddr{IP: net.ParseIP("198.51.100.1")},
+			&net.IPNet{IP: net.ParseIP("10.0.0.5"), Mask: net.CIDRMask(8, 32)},
+		}, nil
+	})
+
 	addrs, err := LocalAddresses()
 	if err != nil {
 		t.Fatalf("LocalAddresses() returned error: %v", err)
 	}
 
-	// May be empty if no non-loopback IPv4 interfaces are available
-	// This is valid behavior
-	if len(addrs) == 0 {
-		t.Skip("No non-loopback IPv4 addresses found - skipping test")
+	// Loopback, IPv6 and non-IPNet addresses are dropped; order is kept.
+	want := []string{"192.0.2.10", "10.0.0.5"}
+	if !reflect.DeepEqual(addrs, want) {
+		t.Errorf("LocalAddresses() = %v, want %v", addrs, want)
 	}
+}
 
-	// Verify all returned addresses are valid IPv4
-	for _, addr := range addrs {
-		ip := net.ParseIP(addr)
-		if ip == nil {
-			t.Errorf("Invalid IP address returned: %s", addr)
-		}
-		if ip.To4() == nil {
-			t.Errorf("Expected IPv4 address, got %s", addr)
-		}
-		if ip.IsLoopback() {
-			t.Errorf("Loopback address should not be included: %s", addr)
-		}
+func TestLocalAddresses_NoUsableAddress(t *testing.T) {
+	useInterfaceAddrs(t, func() ([]net.Addr, error) {
+		return []net.Addr{&net.IPNet{IP: net.ParseIP("127.0.0.1"), Mask: net.CIDRMask(8, 32)}}, nil
+	})
+
+	addrs, err := LocalAddresses()
+	if err != nil {
+		t.Fatalf("LocalAddresses() returned error: %v", err)
+	}
+	if addrs == nil || len(addrs) != 0 {
+		t.Errorf("LocalAddresses() = %#v, want an empty, non-nil slice", addrs)
+	}
+}
+
+func TestLocalAddresses_Error(t *testing.T) {
+	listErr := &net.OpError{Op: "route", Net: "ip+net", Err: syscall.EPERM}
+	useInterfaceAddrs(t, func() ([]net.Addr, error) { return nil, listErr })
+
+	addrs, err := LocalAddresses()
+	if err != listErr {
+		t.Errorf("LocalAddresses() error = %v, want %v", err, listErr)
+	}
+	if addrs != nil {
+		t.Errorf("LocalAddresses() = %v, want nil on error", addrs)
 	}
 }
 

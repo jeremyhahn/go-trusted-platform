@@ -26,6 +26,8 @@ import (
 	"path/filepath"
 	"sync"
 	"time"
+
+	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
 )
 
 // PlatformdState mirrors the canonical /healthz state strings emitted by
@@ -249,6 +251,8 @@ func (h *Harness) IssueAdminBundle(ctx context.Context, soPin, userPin, hostname
 		"--so-pin", soPin,
 		"--user-pin", userPin,
 		"--hostname", hostname,
+		// Before unseal the daemon socket serves only the pre-unseal mux.
+		"--gate-endpoint", "unix://" + h.cfg.SocketPath,
 	}
 	if sans != "" {
 		args = append(args, "--sans", sans)
@@ -268,7 +272,7 @@ func (h *Harness) IssueAdminBundle(ctx context.Context, soPin, userPin, hostname
 // MCPHealthURL returns the URL of the /healthz endpoint exposed on the
 // MCP port (per the locked init-only contract: /healthz, /init, /unseal).
 func (h *Harness) MCPHealthURL() string {
-	return fmt.Sprintf("http://127.0.0.1:%d/healthz", h.cfg.MCPPort)
+	return fmt.Sprintf("https://127.0.0.1:%d/healthz", h.cfg.MCPPort)
 }
 
 // serveArgs returns the platformd `serve` command-line arguments for
@@ -329,6 +333,8 @@ func (h *Harness) fetchHealthz(ctx context.Context) (PlatformdState, error) {
 			Dial: func(network, addr string) (net.Conn, error) {
 				return net.DialTimeout(network, addr, 2*time.Second)
 			},
+			// The MCP port serves TLS 1.3 only (#844).
+			TLSClientConfig: helpers.TLSConfigOrInsecure(),
 		},
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)

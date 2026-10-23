@@ -16,6 +16,8 @@ package iam
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -30,6 +32,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	iammw "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/middleware/iam"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/restwire"
 )
 
 const (
@@ -46,6 +49,7 @@ type IAMClient interface {
 	// User operations
 	CreateUser(ctx context.Context, tenantID string, req *iamsdk.CreateUserRequest) (*iamsdk.User, error)
 	GetUser(ctx context.Context, tenantID, userID string) (*iamsdk.User, error)
+	GetUserByEmail(ctx context.Context, tenantID, email string) (*iamsdk.User, error)
 	ListUsers(ctx context.Context, tenantID string, req *iamsdk.ListUsersRequest) (*iamsdk.ListUsersResponse, error)
 	UpdateUser(ctx context.Context, tenantID, userID string, req *iamsdk.UpdateUserRequest) (*iamsdk.User, error)
 	DeleteUser(ctx context.Context, tenantID, userID string) error
@@ -128,7 +132,9 @@ func NewIAMHandlers(
 //  1. URL path variable {tenant} — tenant-scoped routes like
 //     /iam/tenants/{tenant}/users, gated by RequireOwnTenant
 //  2. the verified session's tenant — flat routes like /iam/users,
-//     where the WebUI doesn't carry the tenant in the URL
+//     where the WebUI doesn't carry the tenant in the URL. A tenant_id
+//     query on a flat route is never read here: RequireOwnTenant has
+//     already refused it unless it names the session's own tenant.
 //
 // This dual-mode resolution lets the same handler back both
 // /api/v1/iam/users (flat, browser-friendly) and
@@ -221,12 +227,73 @@ func (h *IAMHandlers) createContext() (context.Context, context.CancelFunc) {
 
 func (h *IAMHandlers) decodeJSON(r *http.Request, v interface{}) error {
 	// IAM REST request structs intentionally accept extra unknown fields
-	// because the JS SDK includes redundant context such as `tenantId`
-	// in the request body even though the server already parses tenant
-	// from the URL path. Rejecting unknowns would force every page to
-	// strip those fields client-side. Validation of required fields
-	// happens after decode in each handler.
+	// because the JS SDK includes redundant context in the request body.
+	// Rejecting unknowns would force every page to strip those fields
+	// client-side. Validation of required fields happens after decode in
+	// each handler. The tenant a body names is not redundant: see
+	// decodeTenantBody.
 	return json.NewDecoder(r.Body).Decode(v)
+}
+
+// tenantBody is a request body that may name a tenant; every request type
+// embedding BodyTenant is one.
+type tenantBody interface {
+	namesOtherThan(tenant string) bool
+}
+
+// decodeTenantBody decodes the request body into v and refuses, with 403, a
+// body naming a tenant other than tenantID, the tenant the route acts on. The
+// tenant fields are decoded with the rest of v, so the body is read once. It
+// reports whether the handler may go on; when it may not, the response has
+// been written.
+func (h *IAMHandlers) decodeTenantBody(w http.ResponseWriter, r *http.Request, tenantID string, v tenantBody) bool {
+	if err := h.decodeJSON(r, v); err != nil {
+		h.respWriter.Error400(w, r, ErrInvalidRequestBody{Reason: err.Error()})
+		return false
+	}
+	return h.ownBodyTenant(w, r, tenantID, v)
+}
+
+// decodeListBodyTenant holds a list route to the same rule. A list is a GET
+// whose parameters travel in the query, but the Go SDK's REST transport sends
+// its proto List request, tenant_id included, as the GET body. An absent body
+// names no tenant.
+func (h *IAMHandlers) decodeListBodyTenant(w http.ResponseWriter, r *http.Request, tenantID string) bool {
+	var body BodyTenant
+	if r.Body != nil {
+		if err := h.decodeJSON(r, &body); err != nil && !errors.Is(err, io.EOF) {
+			h.respWriter.Error400(w, r, ErrInvalidRequestBody{Reason: err.Error()})
+			return false
+		}
+	}
+	return h.ownBodyTenant(w, r, tenantID, body)
+}
+
+// ownBodyTenant writes 403 and reports false when body names a tenant other
+// than tenantID.
+func (h *IAMHandlers) ownBodyTenant(w http.ResponseWriter, r *http.Request, tenantID string, body tenantBody) bool {
+	if body.namesOtherThan(tenantID) {
+		h.respWriter.Error403(w, r, ErrForeignBodyTenant{Tenant: tenantID}, nil)
+		return false
+	}
+	return true
+}
+
+// consistentTenant refuses a tenant-scoped request whose tenant_id query
+// names a tenant other than the path's {tenant}, with 403 and before next
+// runs. The handler acts on the path's tenant, so a conflicting query was
+// silently ignored; the request is ambiguous and is refused instead (#401).
+// The same tenant in both, or no query, is served.
+func (h *IAMHandlers) consistentTenant(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		pathTenant := mux.Vars(r)["tenant"]
+		queryTenant := r.URL.Query().Get(tenantQueryParam)
+		if pathTenant != "" && queryTenant != "" && queryTenant != pathTenant {
+			h.respWriter.Error403(w, r, ErrConflictingQueryTenant{Path: pathTenant, Query: queryTenant}, nil)
+			return
+		}
+		next(w, r)
+	}
 }
 
 func (h *IAMHandlers) handleError(w http.ResponseWriter, r *http.Request, err error) {
@@ -285,8 +352,7 @@ func (h *IAMHandlers) CreateUser(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req CreateUserRequest
-	if err := h.decodeJSON(r, &req); err != nil {
-		h.respWriter.Error400(w, r, ErrInvalidRequestBody{Reason: err.Error()})
+	if !h.decodeTenantBody(w, r, tenantID, &req) {
 		return
 	}
 
@@ -297,11 +363,7 @@ func (h *IAMHandlers) CreateUser(w http.ResponseWriter, r *http.Request) {
 	// only supplies an email. The IAM SDK rejects empty usernames.
 	username := req.Username
 	if username == "" {
-		if at := strings.IndexByte(req.Email, '@'); at > 0 {
-			username = req.Email[:at]
-		} else {
-			username = req.Email
-		}
+		username = UsernameFromEmail(req.Email)
 	}
 	sdkReq := &iamsdk.CreateUserRequest{
 		Username:    username,
@@ -326,6 +388,9 @@ func (h *IAMHandlers) ListUsers(w http.ResponseWriter, r *http.Request) {
 	tenantID := h.getTenantID(r)
 	if tenantID == "" {
 		h.respWriter.Error400(w, r, ErrMissingTenantID{})
+		return
+	}
+	if !h.decodeListBodyTenant(w, r, tenantID) {
 		return
 	}
 
@@ -403,8 +468,7 @@ func (h *IAMHandlers) UpdateUser(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req UpdateUserRequest
-	if err := h.decodeJSON(r, &req); err != nil {
-		h.respWriter.Error400(w, r, ErrInvalidRequestBody{Reason: err.Error()})
+	if !h.decodeTenantBody(w, r, tenantID, &req) {
 		return
 	}
 
@@ -569,8 +633,7 @@ func (h *IAMHandlers) CreateGroup(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req CreateGroupRequest
-	if err := h.decodeJSON(r, &req); err != nil {
-		h.respWriter.Error400(w, r, ErrInvalidRequestBody{Reason: err.Error()})
+	if !h.decodeTenantBody(w, r, tenantID, &req) {
 		return
 	}
 
@@ -597,6 +660,9 @@ func (h *IAMHandlers) ListGroups(w http.ResponseWriter, r *http.Request) {
 	tenantID := h.getTenantID(r)
 	if tenantID == "" {
 		h.respWriter.Error400(w, r, ErrMissingTenantID{})
+		return
+	}
+	if !h.decodeListBodyTenant(w, r, tenantID) {
 		return
 	}
 
@@ -671,8 +737,7 @@ func (h *IAMHandlers) UpdateGroup(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req UpdateGroupRequest
-	if err := h.decodeJSON(r, &req); err != nil {
-		h.respWriter.Error400(w, r, ErrInvalidRequestBody{Reason: err.Error()})
+	if !h.decodeTenantBody(w, r, tenantID, &req) {
 		return
 	}
 
@@ -819,8 +884,7 @@ func (h *IAMHandlers) CreateRole(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req CreateRoleRequest
-	if err := h.decodeJSON(r, &req); err != nil {
-		h.respWriter.Error400(w, r, ErrInvalidRequestBody{Reason: err.Error()})
+	if !h.decodeTenantBody(w, r, tenantID, &req) {
 		return
 	}
 
@@ -848,6 +912,9 @@ func (h *IAMHandlers) ListRoles(w http.ResponseWriter, r *http.Request) {
 	tenantID := h.getTenantID(r)
 	if tenantID == "" {
 		h.respWriter.Error400(w, r, ErrMissingTenantID{})
+		return
+	}
+	if !h.decodeListBodyTenant(w, r, tenantID) {
 		return
 	}
 
@@ -922,8 +989,7 @@ func (h *IAMHandlers) UpdateRole(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req UpdateRoleRequest
-	if err := h.decodeJSON(r, &req); err != nil {
-		h.respWriter.Error400(w, r, ErrInvalidRequestBody{Reason: err.Error()})
+	if !h.decodeTenantBody(w, r, tenantID, &req) {
 		return
 	}
 
@@ -1116,8 +1182,7 @@ func (h *IAMHandlers) CreatePolicy(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req CreatePolicyRequest
-	if err := h.decodeJSON(r, &req); err != nil {
-		h.respWriter.Error400(w, r, ErrInvalidRequestBody{Reason: err.Error()})
+	if !h.decodeTenantBody(w, r, tenantID, &req) {
 		return
 	}
 
@@ -1147,6 +1212,9 @@ func (h *IAMHandlers) ListPolicies(w http.ResponseWriter, r *http.Request) {
 	tenantID := h.getTenantID(r)
 	if tenantID == "" {
 		h.respWriter.Error400(w, r, ErrMissingTenantID{})
+		return
+	}
+	if !h.decodeListBodyTenant(w, r, tenantID) {
 		return
 	}
 
@@ -1205,8 +1273,7 @@ func (h *IAMHandlers) UpdatePolicy(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req UpdatePolicyRequest
-	if err := h.decodeJSON(r, &req); err != nil {
-		h.respWriter.Error400(w, r, ErrInvalidRequestBody{Reason: err.Error()})
+	if !h.decodeTenantBody(w, r, tenantID, &req) {
 		return
 	}
 
@@ -1260,8 +1327,7 @@ func (h *IAMHandlers) ValidatePolicy(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req ValidatePolicyRequest
-	if err := h.decodeJSON(r, &req); err != nil {
-		h.respWriter.Error400(w, r, ErrInvalidRequestBody{Reason: err.Error()})
+	if !h.decodeTenantBody(w, r, tenantID, &req) {
 		return
 	}
 
@@ -1291,8 +1357,7 @@ func (h *IAMHandlers) TestPolicy(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req TestPolicyRequest
-	if err := h.decodeJSON(r, &req); err != nil {
-		h.respWriter.Error400(w, r, ErrInvalidRequestBody{Reason: err.Error()})
+	if !h.decodeTenantBody(w, r, tenantID, &req) {
 		return
 	}
 
@@ -1321,6 +1386,85 @@ func (h *IAMHandlers) TestPolicy(w http.ResponseWriter, r *http.Request) {
 	h.respWriter.Success200(w, r, resp)
 }
 
+// CheckPermission handles POST /api/v1/iam/permissions/check and its
+// /tenants/{tenant}/ twin. It asks the policy enforcement point the gRPC
+// CheckPermission RPC uses for the live decision on one subject, action and
+// resource; the subject's tenant is always the request's resolved tenant.
+func (h *IAMHandlers) CheckPermission(w http.ResponseWriter, r *http.Request) {
+	if h.pepClient == nil {
+		err := ErrPEPClientMissing{}
+		h.respWriter.Write(w, r, http.StatusServiceUnavailable, restwire.WebServiceResponse{
+			Code:  http.StatusServiceUnavailable,
+			Error: err.Error(),
+		})
+		return
+	}
+
+	tenantID := h.getTenantID(r)
+	if tenantID == "" {
+		h.respWriter.Error400(w, r, ErrMissingTenantID{})
+		return
+	}
+
+	var req CheckPermissionRequest
+	if !h.decodeTenantBody(w, r, tenantID, &req) {
+		return
+	}
+
+	if req.SubjectID == "" {
+		h.respWriter.Error400(w, r, ErrInvalidRequestBody{Reason: "subject_id is required"})
+		return
+	}
+	if req.Action == "" {
+		h.respWriter.Error400(w, r, ErrInvalidRequestBody{Reason: "action is required"})
+		return
+	}
+	if req.Resource == "" {
+		h.respWriter.Error400(w, r, ErrInvalidRequestBody{Reason: "resource is required"})
+		return
+	}
+
+	ctx, cancel := h.createContext()
+	defer cancel()
+
+	resp, err := h.pepClient.Check(ctx, &iamsdk.CheckRequest{
+		Subject: iamsdk.CheckSubject{
+			ID:         req.SubjectID,
+			TenantID:   tenantID,
+			Roles:      req.Roles,
+			Groups:     req.Groups,
+			Attributes: toAnyMap(req.Attributes),
+		},
+		Action:   req.Action,
+		Resource: req.Resource,
+		Context:  toAnyMap(req.Context),
+	})
+	if err != nil {
+		h.handleError(w, r, err)
+		return
+	}
+
+	h.respWriter.Success200(w, r, &CheckPermissionResponse{
+		Allowed:          resp.Allowed,
+		MatchedPolicy:    resp.MatchedPolicy,
+		MatchedRule:      resp.MatchedRule,
+		EvaluationTimeNs: resp.EvaluationTimeNs,
+	})
+}
+
+// toAnyMap widens a string map to the map[string]interface{} the PEP's
+// subject attributes and request context take; an empty map stays nil.
+func toAnyMap(in map[string]string) map[string]interface{} {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]interface{}, len(in))
+	for k, v := range in {
+		out[k] = v
+	}
+	return out
+}
+
 // App Handlers
 
 // RegisterApp handles POST /api/v1/iam/tenants/{tenant}/apps
@@ -1332,8 +1476,7 @@ func (h *IAMHandlers) RegisterApp(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req RegisterAppRequest
-	if err := h.decodeJSON(r, &req); err != nil {
-		h.respWriter.Error400(w, r, ErrInvalidRequestBody{Reason: err.Error()})
+	if !h.decodeTenantBody(w, r, tenantID, &req) {
 		return
 	}
 
@@ -1366,6 +1509,9 @@ func (h *IAMHandlers) ListApps(w http.ResponseWriter, r *http.Request) {
 	tenantID := h.getTenantID(r)
 	if tenantID == "" {
 		h.respWriter.Error400(w, r, ErrMissingTenantID{})
+		return
+	}
+	if !h.decodeListBodyTenant(w, r, tenantID) {
 		return
 	}
 
@@ -1424,8 +1570,7 @@ func (h *IAMHandlers) UpdateApp(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req UpdateAppRequest
-	if err := h.decodeJSON(r, &req); err != nil {
-		h.respWriter.Error400(w, r, ErrInvalidRequestBody{Reason: err.Error()})
+	if !h.decodeTenantBody(w, r, tenantID, &req) {
 		return
 	}
 

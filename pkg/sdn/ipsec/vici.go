@@ -31,10 +31,6 @@ import (
 )
 
 const (
-	// DefaultVICISocket is charon's control socket, as the shipped
-	// strongswan.d/trusted-platform.conf sets it.
-	DefaultVICISocket = "/run/charon.vici"
-
 	// socketMode is the only mode the VICI socket may have: VICI carries
 	// no authentication, so whoever can open the socket commands charon.
 	socketMode fs.FileMode = 0o600
@@ -232,12 +228,36 @@ func (s *viciSession) Close() error {
 	return nil
 }
 
+// call sends cmd. The reply is checked here, not left to govici: a command
+// charon refused must never pass for done.
 func (s *viciSession) call(ctx context.Context, cmd string, req *govici.Message) (*govici.Message, error) {
 	resp, err := s.c.Call(ctx, cmd, req)
+	if refused := refusal(cmd, resp); refused != nil {
+		return nil, refused
+	}
 	if err != nil {
 		return nil, &CommandError{Command: cmd, Err: err}
 	}
 	return resp, nil
+}
+
+// refusal returns the CommandError of a reply in which charon refused cmd:
+// one whose success field is a value other than yes. A reply without one,
+// as get-conns sends, or with a section of that name, as a list-sa event
+// with a connection called success carries, is no refusal.
+func refusal(cmd string, reply *govici.Message) error {
+	if reply == nil {
+		return nil
+	}
+	success, isValue := reply.Get("success").(string)
+	if !isValue || success == "yes" {
+		return nil
+	}
+	reason, given := reply.Get("errmsg").(string)
+	if !given || reason == "" {
+		reason = "no errmsg"
+	}
+	return &CommandError{Command: cmd, Reason: reason, Err: ErrCommandRefused}
 }
 
 // Requests, marshalled by govici. Empty fields are left out.
@@ -315,6 +335,9 @@ func (s *viciSession) IKESAs(ctx context.Context, conn string) ([]HeldSA, error)
 	}
 	var held []HeldSA
 	for ev, err := range s.c.CallStreaming(ctx, "list-sas", "list-sa", req) {
+		if refused := refusal("list-sas", ev); refused != nil {
+			return nil, refused
+		}
 		if err != nil {
 			return nil, &CommandError{Command: "list-sas", Err: err}
 		}

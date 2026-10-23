@@ -18,6 +18,7 @@ import (
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 )
 
 // =============================================================================
@@ -38,6 +39,11 @@ import (
 //       OpAttestQuote       (0x70) -> GetAttestationQuote
 //       OpAttestVerify      (0x71) -> VerifyAttestationQuote
 //       OpAttestCollectHost (0x72) -> CollectHostAttestation
+//       OpAttestPollVerdicts (0x75) -> PollDeviceVerdicts
+//
+//     PollDeviceVerdicts is how a QUIC client follows device verdicts: QUIC
+//     requests are unary, so the gRPC server stream StreamDeviceVerdicts is
+//     served as a cursor long-poll instead.
 //
 //     CollectHostAttestation was moved off the OpAttestQuote opcode onto its
 //     own OpAttestCollectHost (0x72): the SDK adapter previously mapped both
@@ -49,8 +55,12 @@ import (
 //  2. The daemon-native manifest surface (build/verify manifest, host/VM/
 //     container/device workload attestation, reports, policies) on opcodes
 //     0x76/0x77/0x7C-0x7F and the extended codes. These have no SDK QUIC
-//     client and remain flat-struct operations served by the local
+//     client and remain flat-struct operations decoded by the local
 //     AttestationHandler, exercised by the CLI and the integration harness.
+//     daemon.go hands that handler an attestationQUICAdapter over the same
+//     *AttestationServiceServer, so each opcode answers what gRPC, REST,
+//     Unix and MCP answer, refusals included; 0x77 has no report store
+//     behind any transport and answers StatusNotImplemented.
 
 // attestQuoteOpcodes is the set of opcodes served by the pb quote surface;
 // everything else routes to the daemon-native manifest handler.
@@ -59,17 +69,19 @@ import (
 // AttestationService quote opcodes decode the platform.v1 pb request and
 // delegate to the shared *AttestationServiceServer; every other opcode is
 // served by the daemon-native manifest AttestationHandler.
-func (h *QUICServiceHandler) handleAttestationOperation(ctx context.Context, req *quic.Request) *quic.Response {
+func (h *QUICServiceHandler) handleAttestationOperation(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	switch req.Opcode {
-	case quic.OpAttestQuote:
+	case quicwire.OpAttestQuote:
 		return h.handleAttestationGetQuote(ctx, req)
-	case quic.OpAttestVerify:
+	case quicwire.OpAttestVerify:
 		return h.handleAttestationVerifyQuote(ctx, req)
-	case quic.OpAttestCollectHost:
+	case quicwire.OpAttestCollectHost:
 		return h.handleAttestationCollectHost(ctx, req)
+	case quicwire.OpAttestPollVerdicts:
+		return h.handleAttestationPollVerdicts(ctx, req)
 	default:
 		if h.attestationHandler == nil {
-			return h.errorResponse(quic.StatusUnavailable, ErrQUICServiceUnavailable{Service: "attestation"})
+			return h.errorResponse(quicwire.StatusUnavailable, ErrQUICServiceUnavailable{Service: "attestation"})
 		}
 		return h.attestationHandler.HandleRequest(ctx, req)
 	}
@@ -77,14 +89,14 @@ func (h *QUICServiceHandler) handleAttestationOperation(ctx context.Context, req
 
 // handleAttestationGetQuote decodes GetAttestationQuoteRequest and delegates
 // to the shared *AttestationServiceServer.
-func (h *QUICServiceHandler) handleAttestationGetQuote(ctx context.Context, req *quic.Request) *quic.Response {
+func (h *QUICServiceHandler) handleAttestationGetQuote(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.attestGRPC == nil {
-		return h.errorResponse(quic.StatusUnavailable, ErrQUICServiceUnavailable{Service: "attestation"})
+		return h.errorResponse(quicwire.StatusUnavailable, ErrQUICServiceUnavailable{Service: "attestation"})
 	}
 
 	var quoteReq platformv1.GetAttestationQuoteRequest
-	if err := quic.DecodePayload(req.Payload, &quoteReq); err != nil {
-		return h.errorResponse(quic.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &quoteReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
 	}
 
 	resp, err := h.attestGRPC.GetAttestationQuote(ctx, &quoteReq)
@@ -96,14 +108,14 @@ func (h *QUICServiceHandler) handleAttestationGetQuote(ctx context.Context, req 
 
 // handleAttestationVerifyQuote decodes VerifyAttestationQuoteRequest and
 // delegates to the shared *AttestationServiceServer.
-func (h *QUICServiceHandler) handleAttestationVerifyQuote(ctx context.Context, req *quic.Request) *quic.Response {
+func (h *QUICServiceHandler) handleAttestationVerifyQuote(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.attestGRPC == nil {
-		return h.errorResponse(quic.StatusUnavailable, ErrQUICServiceUnavailable{Service: "attestation"})
+		return h.errorResponse(quicwire.StatusUnavailable, ErrQUICServiceUnavailable{Service: "attestation"})
 	}
 
 	var verifyReq platformv1.VerifyAttestationQuoteRequest
-	if err := quic.DecodePayload(req.Payload, &verifyReq); err != nil {
-		return h.errorResponse(quic.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &verifyReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
 	}
 
 	resp, err := h.attestGRPC.VerifyAttestationQuote(ctx, &verifyReq)
@@ -115,19 +127,46 @@ func (h *QUICServiceHandler) handleAttestationVerifyQuote(ctx context.Context, r
 
 // handleAttestationCollectHost decodes CollectHostAttestationRequest and
 // delegates to the shared *AttestationServiceServer.
-func (h *QUICServiceHandler) handleAttestationCollectHost(ctx context.Context, req *quic.Request) *quic.Response {
+func (h *QUICServiceHandler) handleAttestationCollectHost(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.attestGRPC == nil {
-		return h.errorResponse(quic.StatusUnavailable, ErrQUICServiceUnavailable{Service: "attestation"})
+		return h.errorResponse(quicwire.StatusUnavailable, ErrQUICServiceUnavailable{Service: "attestation"})
 	}
 
 	var collectReq platformv1.CollectHostAttestationRequest
-	if err := quic.DecodePayload(req.Payload, &collectReq); err != nil {
-		return h.errorResponse(quic.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &collectReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
 	}
 
 	resp, err := h.attestGRPC.CollectHostAttestation(ctx, &collectReq)
 	if err != nil {
 		return h.grpcStatusToQUICResponse("AttestCollectHost", err)
+	}
+	return h.encodeQUICOK(resp)
+}
+
+// handleAttestationPollVerdicts decodes PollDeviceVerdictsRequest and answers
+// one long-poll of the device verdicts the caller's platform token may see.
+// The daemon does not authorize QUIC requests centrally, so a request without
+// a token holding attestation:read is refused here.
+func (h *QUICServiceHandler) handleAttestationPollVerdicts(ctx context.Context, req *quicwire.Request) *quicwire.Response {
+	if h.attestGRPC == nil {
+		return h.errorResponse(quicwire.StatusUnavailable, ErrQUICServiceUnavailable{Service: "attestation"})
+	}
+
+	var pollReq platformv1.PollDeviceVerdictsRequest
+	if err := quicwire.DecodePayload(req.Payload, &pollReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
+	}
+
+	authCtx, _ := quic.AuthorizedContextFromContext(ctx)
+	audience, err := verdictAudienceOfToken(authCtx)
+	if err != nil {
+		return h.grpcDelegateErrorToQUIC("AttestPollVerdicts", verdictStatus(err))
+	}
+
+	resp, err := h.attestGRPC.PollDeviceVerdictsFor(ctx, audience, &pollReq)
+	if err != nil {
+		return h.grpcDelegateErrorToQUIC("AttestPollVerdicts", err)
 	}
 	return h.encodeQUICOK(resp)
 }

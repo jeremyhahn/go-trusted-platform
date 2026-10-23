@@ -1,17 +1,9 @@
 # SDN (Software-Defined Networking) Package
 
+> **Status: REFERENCE** · Last verified: 2026-10-15
+> Overview of the SDN packages under `pkg/sdn/`.
+
 Pure Go implementation of SDN components for the Trusted Platform.
-
-## Status
-
-| Component | Status | Test Coverage | Integration Tests |
-|-----------|--------|---------------|-------------------|
-| ARP Reader | Complete | 95%+ | 10 tests |
-| OpenFlow 1.3 | Complete | 90%+ | 18 tests |
-| OVSDB Client | Complete | 90%+ | 12 tests |
-| TAP/Netlink | Complete | 85%+ | 8 tests |
-| Policy Engine | Complete | 90%+ | 27 tests |
-| **Total** | **100% Complete** | **90%+** | **27 integration tests** |
 
 ## Features
 
@@ -21,8 +13,8 @@ Pure Go implementation of SDN components for the Trusted Platform.
 |---------|-------------|--------|
 | OVSDB JSON-RPC | RFC 7047 compliant client | Complete |
 | OpenFlow 1.3 | Native binary protocol | Complete |
-| 802.1X Policy | Certificate-based port authentication | Complete |
-| VLAN Management | Provisioning (998), Production, Quarantine (666) | Complete |
+| Port Policy | Certificate-based port authorisation engine (not 802.1X; the API refuses port authentication today, see [user.md](user.md)) | Engine only |
+| Zone VLANs | Provisioning (zone offset 05), production zones, quarantine (offset 04), all numbered from `sdn.environment` | Complete |
 | ARP Table | Pure Go /proc/net/arp reader | Complete |
 | TAP Devices | Netlink-based TAP management | Complete |
 | Certificate Policies | X.509 policy extraction | Complete |
@@ -44,7 +36,7 @@ Pure Go implementation of SDN components for the Trusted Platform.
 | IPAM | IP Address Management with pool-based allocation | Complete |
 | DHCP | Integrated DHCP server for overlay networks | Complete |
 
-See [ROADMAP-BGP.md](../ROADMAP-BGP.md) for full implementation details.
+See [ROADMAP.md](../../ROADMAP.md) for full implementation details.
 
 ## Package Structure
 
@@ -54,19 +46,30 @@ pkg/sdn/
 ├── netlink/     # TAP device and link management
 ├── openflow/    # Native OpenFlow 1.3 protocol client
 ├── ovs/         # OVSDB client (RFC 7047) + flow management
-├── policy/      # 802.1X port-based authentication engine
+├── policy/      # Certificate-based port authorisation engine, port state machine
+├── zone/        # Underlay zone vocabulary of the reference network
+├── netplan/     # Derives every VLAN and subnet number from sdn.environment
+├── ct/          # OVS connection-tracking zone allocation
 ├── cluster/     # QuicBaaS-backed cluster state management
-├── vxlan/       # VXLAN tunnel management, VNI mapping
+├── vxlan/       # The local VTEP of the overlay
+├── ipsec/       # Host-to-host IPsec on the overlay underlay
+├── tunnel/      # GRE/IPIP tunnel lifecycle
+├── fabric/      # Physical switch fabric (VLAN/VNI provisioning)
+├── fhrp/        # First-hop redundancy speaker (VRRPv3)
 ├── bgp/         # GoBGP integration (EVPN + Transit)
-├── gateway/     # Unified gateway nodes (overlay/edge/transit modes)
+├── gateway/     # gatewayd: overlay, edge and transit gateway node
 │   ├── commands/ # gatewayd CLI commands (serve, version)
-│   ├── modes/    # Mode implementations (overlay, edge, transit)
+│   ├── modes/    # The EVPN overlay mode handler
+│   ├── services/ # firewall, hostfw, loadbalancer, nat64, perf, vpn
 │   └── p2p/      # P2P gateway functionality
 ├── overlay/     # Multi-host overlay controller
 ├── ipam/        # IP Address Management (pool-based allocation)
 │   └── backends/ # Storage backends (memory, quicbaas, dht)
 └── dhcp/        # DHCP server for overlay networks
 ```
+
+`gateway/` also holds `controlplane/`, `ipc/`, `process/`, `proxysvc/`,
+`sdkclient/`, `secrets/` and `state/`; see [docs/gateway/](../gateway/).
 
 ## Architecture Overview
 
@@ -97,7 +100,10 @@ pkg/sdn/
 
 ## Key Design Principles
 
-1. **Pure Go Implementation** - No shell commands or exec.Command calls
+1. **Pure Go Implementation** - No shell commands, with two exceptions in
+   gatewayd: it re-executes itself to supervise its children
+   (`gateway/process/launcher.go`), and the NAT64 driver runs the `jool`
+   CLI (`gateway/services/nat64/driver.go`)
 2. **Native Protocols** - Direct OVSDB JSON-RPC and OpenFlow binary protocols
 3. **RFC Compliant** - OVSDB (RFC 7047), OpenFlow 1.3, ACME (RFC 8555)
 4. **Hand-rolled core protocol clients** - `pkg/sdn/ovs` (OVSDB JSON-RPC) and `pkg/sdn/openflow` (OpenFlow 1.3 binary) are written against the stdlib alone, with no protocol library behind them
@@ -106,7 +112,7 @@ The stdlib-only property covers those two packages, not the whole SDN subsystem.
 
 | Package | Dependency | Why |
 |---------|------------|-----|
-| `pkg/sdn/bgp` | `osrg/gobgp/v3` | BGP speaker (EVPN + Transit); GoBGP provides the session state machine and route handling |
+| `pkg/sdn/bgp` | `osrg/gobgp/v4` | BGP speaker (EVPN + Transit); GoBGP provides the session state machine and route handling — see [docs/bgp/](../bgp/architecture.md) |
 | `pkg/sdn/netlink` | `vishvananda/netlink` | Kernel netlink socket operations |
 | `test/integration/sdn` | `ovn-org/libovsdb` | Independent OVSDB client used as a test oracle against a real switch, so the hand-rolled client is checked against a second implementation rather than against itself |
 
@@ -122,12 +128,12 @@ The stdlib-only property covers those two packages, not the whole SDN subsystem.
 - [Testing](testing.md) - Testing strategy and guidelines
 
 ### Multi-Host Networking
-- [BGP](bgp/README.md) - BGP service (EVPN + Transit)
-- [Gateway](gateway/README.md) - Multi-mode gateway nodes
+- [BGP](../bgp/architecture.md) - BGP speaker (EVPN + Transit)
+- [Gateway](../gateway/architecture.md) - Multi-mode gateway nodes
 - [Overlay](overlay/README.md) - VXLAN overlay controller
 - [IPAM](ipam/README.md) - IP Address Management
 - [DHCP](dhcp/README.md) - DHCP server for overlay networks
-- [Multi-Host Roadmap](../ROADMAP-BGP.md) - Implementation roadmap
+- [Multi-Host Roadmap](../../ROADMAP.md) - Implementation roadmap
 
 ## Quick Start
 
@@ -184,10 +190,12 @@ if err := ofClient.Connect(ctx); err != nil {
 defer ofClient.Close()
 
 // Add flow rule
-flow := openflow.NewFlowMod(100) // priority 100
-flow.Match.SetInPort(1)
-flow.Match.SetEthType(0x0800) // IPv4
-flow.AddOutputAction(2)
+flow := openflow.NewFlowMod(1) // transaction ID
+flow.Priority = 100
+flow.Match.AddInPort(1)
+flow.Match.AddEthType(0x0800) // IPv4
+flow.Instructions = append(flow.Instructions,
+    openflow.NewInstructionApplyActions(openflow.NewActionOutput(2, 0xffff)))
 
 err = ofClient.AddFlow(ctx, flow)
 ```
@@ -201,7 +209,7 @@ import "github.com/jeremyhahn/go-trusted-platform/pkg/sdn/arp"
 table := arp.NewTable()
 
 // Lookup MAC address from IP
-mac, err := table.LookupMAC("192.168.1.100")
+mac, err := table.LookupMAC("192.0.2.100")
 if err != nil {
     // IP not in ARP cache
     return err
@@ -248,40 +256,34 @@ err = engine.ApplyPolicy("eth1", prodPolicy)
 
 ## Port States
 
-The policy engine manages port authentication states:
+The policy engine manages eight port states (`pkg/sdn/policy/types.go`):
 
-| State | VLAN | Description |
+| State | Zone | Description |
 |-------|------|-------------|
-| `PortStateUnconnected` | - | No device connected |
-| `PortStateProvisioning` | 998 | Limited access for enrollment |
-| `PortStateEnrolled` | 998 | Enrolled, awaiting activation |
-| `PortStateAuthorized` | Profile | Full production access |
-| `PortStateQuarantined` | 666 | Isolated VLAN (compliance issue) |
+| `PortStateUnconnected` | - | No device connected (the zero value) |
+| `PortStateProvisioning` | provisioning | Limited access for enrollment |
+| `PortStateEnrolled` | provisioning | Enrolled, awaiting activation |
+| `PortStateUnauthorized` | - | Not authenticated |
+| `PortStateAuthenticating` | - | Authentication in progress |
+| `PortStateAuthorized` | the role's port class | Full production access |
+| `PortStateQuarantined` | quarantine | Isolated for scanning or remediation |
 | `PortStateBlocked` | - | Complete network isolation (DROP) |
 
 ## Port State Machine
 
-```
-                 device_connect
-Unconnected ──────────────────────> Provisioning
-                                          │
-                                          │ enrollment_complete
-                                          ▼
-                                      Enrolled
-                                          │
-                                          │ client_activates
-                                          ▼
-                                     Authorized <────────────┐
-                                          │                  │
-                            cert_expired/ │                  │ remediation
-                            compliance    │                  │ complete
-                                          ▼                  │
-                                    Quarantined ─────────────┘
-                                          │
-                                          │ cert_revoked
-                                          ▼
-                                       Blocked
-```
+The allowed transitions (`pkg/sdn/policy/state.go`). Every state except
+`Blocked` may also move to `Blocked`.
+
+| From | To |
+|------|----|
+| `Unconnected` | `Provisioning` |
+| `Provisioning` | `Enrolled`, `Unauthorized`, `Authenticating`, `Authorized` |
+| `Enrolled` | `Authorized` (client activates), `Provisioning` (re-enroll) |
+| `Unauthorized` | `Authenticating`, `Provisioning` |
+| `Authenticating` | `Authorized`, `Unauthorized` |
+| `Authorized` | `Unauthorized`, `Quarantined` |
+| `Quarantined` | `Authorized` (remediated), `Provisioning` (re-enroll) |
+| `Blocked` | `Unconnected` (admin reset), `Provisioning` (admin re-enrollment) |
 
 ## Integration with Compute
 

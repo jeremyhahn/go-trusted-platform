@@ -19,6 +19,7 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 )
 
 // GatewaySnapshotReader is the snapshot half of the gateway gRPC service.
@@ -71,7 +72,7 @@ func (a gatewaySnapshotQUICAdapter) ListSnapshots(ctx context.Context) ([]*quic.
 }
 
 // GetAdmittedVTEP returns one VTEP the gateway reported as admitted.
-func (a gatewaySnapshotQUICAdapter) GetAdmittedVTEP(ctx context.Context, gatewayID, vtep string) (*quic.GatewayAdmittedVTEPInfo, error) {
+func (a gatewaySnapshotQUICAdapter) GetAdmittedVTEP(ctx context.Context, gatewayID, vtep string) (*quicwire.GatewayAdmittedVTEPInfo, error) {
 	if a.reader == nil {
 		return nil, errGatewayFeatureNotConfigured
 	}
@@ -84,7 +85,7 @@ func (a gatewaySnapshotQUICAdapter) GetAdmittedVTEP(ctx context.Context, gateway
 }
 
 // ListAdmittedVTEPs returns every VTEP the gateway reported as admitted.
-func (a gatewaySnapshotQUICAdapter) ListAdmittedVTEPs(ctx context.Context, gatewayID string) ([]*quic.GatewayAdmittedVTEPInfo, error) {
+func (a gatewaySnapshotQUICAdapter) ListAdmittedVTEPs(ctx context.Context, gatewayID string) ([]*quicwire.GatewayAdmittedVTEPInfo, error) {
 	if a.reader == nil {
 		return nil, errGatewayFeatureNotConfigured
 	}
@@ -92,7 +93,7 @@ func (a gatewaySnapshotQUICAdapter) ListAdmittedVTEPs(ctx context.Context, gatew
 	if err != nil {
 		return nil, err
 	}
-	out := make([]*quic.GatewayAdmittedVTEPInfo, 0, len(resp.GetVteps()))
+	out := make([]*quicwire.GatewayAdmittedVTEPInfo, 0, len(resp.GetVteps()))
 	for _, vtep := range resp.GetVteps() {
 		entry := protoAdmittedVTEPToQUIC(vtep)
 		out = append(out, &entry)
@@ -262,7 +263,6 @@ func protoSnapshotToQUIC(snap *platformv1.GatewaySnapshot) *quic.GatewaySnapshot
 			RemoteMACCount:           overlay.GetRemoteMacCount(),
 			PrefixCount:              overlay.GetPrefixCount(),
 			RefusedBindings:          overlay.GetRefusedBindings(),
-			RefusedReplays:           overlay.GetRefusedReplays(),
 			L3VNI:                    overlay.GetL3Vni(),
 			ARPSuppressionEnabled:    overlay.GetArpSuppressionEnabled(),
 			AnycastGatewayConfigured: overlay.GetAnycastGatewayConfigured(),
@@ -286,8 +286,8 @@ func protoSnapshotToQUIC(snap *platformv1.GatewaySnapshot) *quic.GatewaySnapshot
 	return out
 }
 
-func protoAdmittedVTEPToQUIC(vtep *platformv1.GatewayAdmittedVTEP) quic.GatewayAdmittedVTEPInfo {
-	return quic.GatewayAdmittedVTEPInfo{
+func protoAdmittedVTEPToQUIC(vtep *platformv1.GatewayAdmittedVTEP) quicwire.GatewayAdmittedVTEPInfo {
+	return quicwire.GatewayAdmittedVTEPInfo{
 		VTEP:           vtep.GetVtep(),
 		DeviceID:       vtep.GetDeviceId(),
 		HostID:         vtep.GetHostId(),

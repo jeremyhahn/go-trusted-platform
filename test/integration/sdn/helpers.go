@@ -23,7 +23,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"testing"
 	"time"
 )
 
@@ -32,15 +31,11 @@ import (
 // =============================================================================
 
 const (
-	// EnvIntegrationTest is the environment variable that must be set to run
-	// integration tests. Set INTEGRATION_TEST=1 to enable.
-	EnvIntegrationTest = "INTEGRATION_TEST"
-
 	// EnvPlatformdGRPCEndpoint is the environment variable for platformd gRPC endpoint.
 	// Default: 127.0.0.1:10443
 	EnvPlatformdGRPCEndpoint = "PLATFORMD_GRPC_ENDPOINT"
 
-	// EnvPlatformAPIEndpoint is the environment variable for platform-api REST endpoint.
+	// EnvPlatformAPIEndpoint is the environment variable for the platformd REST endpoint.
 	// Default: 127.0.0.1:8443
 	EnvPlatformAPIEndpoint = "PLATFORM_API_ENDPOINT"
 
@@ -55,18 +50,6 @@ const (
 	// EnvPlatformdSocket is the environment variable for platformd Unix socket.
 	// Default: /run/platformd.sock
 	EnvPlatformdSocket = "PLATFORMD_SOCKET"
-
-	// EnvSDNOVSUnavailable is set when OVS is not available during test setup.
-	EnvSDNOVSUnavailable = "SDN_OVS_UNAVAILABLE"
-
-	// EnvSDNServiceUnavailable is set when SDN service creation failed.
-	EnvSDNServiceUnavailable = "SDN_SERVICE_UNAVAILABLE"
-
-	// EnvSDNOVSConnectionFailed is set when OVS connection failed.
-	EnvSDNOVSConnectionFailed = "SDN_OVS_CONNECTION_FAILED"
-
-	// EnvSDNOVSSocket is set to the OVS socket path when OVS is available.
-	EnvSDNOVSSocket = "SDN_OVS_SOCKET"
 )
 
 // =============================================================================
@@ -77,7 +60,7 @@ const (
 	// DefaultPlatformdGRPCEndpoint is the default platformd gRPC endpoint.
 	DefaultPlatformdGRPCEndpoint = "127.0.0.1:10443"
 
-	// DefaultPlatformAPIEndpoint is the default platform-api REST endpoint.
+	// DefaultPlatformAPIEndpoint is the default platformd REST endpoint.
 	DefaultPlatformAPIEndpoint = "http://127.0.0.1:8443"
 
 	// DefaultPlatformQUICEndpoint is the default platform QUIC endpoint.
@@ -89,59 +72,6 @@ const (
 	// DefaultPlatformdSocket is the default platformd Unix socket.
 	DefaultPlatformdSocket = "/run/platformd.sock"
 )
-
-// =============================================================================
-// Skip Helpers
-// =============================================================================
-
-// SkipIfNotIntegration skips the test if the INTEGRATION_TEST environment
-// variable is not set. This ensures integration tests only run when explicitly
-// requested, preventing accidental execution during normal unit testing.
-// This is an exported version for use by other test packages.
-func SkipIfNotIntegration(t *testing.T) {
-	t.Helper()
-	if os.Getenv(EnvIntegrationTest) == "" {
-		t.Skip("Skipping integration test. Set INTEGRATION_TEST=1 to run.")
-	}
-}
-
-// SkipIfSDNUnavailable skips the test if the SDN service is not available.
-// This checks the environment variables set by setup_test.go to determine
-// if SDN tests can run.
-func SkipIfSDNUnavailable(t *testing.T) {
-	t.Helper()
-
-	if os.Getenv(EnvSDNOVSUnavailable) == "1" {
-		t.Skip("Skipping SDN test: OVS not available. Ensure OVS is running in the devcontainer.")
-	}
-
-	if os.Getenv(EnvSDNServiceUnavailable) == "1" {
-		t.Skip("Skipping SDN test: SDN service creation failed. Check OVS configuration.")
-	}
-
-	if os.Getenv(EnvSDNOVSConnectionFailed) == "1" {
-		t.Skip("Skipping SDN test: OVS connection failed. Ensure OVS daemon is running.")
-	}
-}
-
-// IsSDNAvailable returns true if the SDN service is available for testing.
-func IsSDNAvailable() bool {
-	if os.Getenv(EnvSDNOVSUnavailable) == "1" {
-		return false
-	}
-	if os.Getenv(EnvSDNServiceUnavailable) == "1" {
-		return false
-	}
-	if os.Getenv(EnvSDNOVSConnectionFailed) == "1" {
-		return false
-	}
-	return true
-}
-
-// GetOVSSocketPath returns the OVS socket path if available, empty string otherwise.
-func GetOVSSocketPath() string {
-	return os.Getenv(EnvSDNOVSSocket)
-}
 
 // =============================================================================
 // Endpoint Configuration
@@ -558,6 +488,10 @@ func ShortTestContext() (context.Context, context.CancelFunc) {
 // =============================================================================
 
 // DefaultBridgeOptions returns default options for creating a test bridge.
+// BridgeID and Name are one unique string: every transport identifies a
+// bridge by its OVS name, so a bridge created under one string and then
+// read or deleted under another is never found and leaks into the next
+// transport's run as "bridge already exists".
 func DefaultBridgeOptions(prefix string) BridgeCreateOptions {
 	uniqueID := GenerateUniqueBridgeName(prefix)
 	return BridgeCreateOptions{

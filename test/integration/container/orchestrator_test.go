@@ -33,8 +33,6 @@ import (
 
 // TestContainerOrchestrator runs the complete container orchestrator test suite.
 func TestContainerOrchestrator(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	ctx, cancel := context.WithTimeout(context.Background(), DefaultTestTimeout)
 	defer cancel()
 
@@ -944,7 +942,8 @@ func testAttestationTPMError(t *testing.T) {
 	defer fixtures.Reset()
 
 	// Configure TPM to fail
-	fixtures.TPM.SetFailure(errors.New("TPM error"))
+	tpmErr := errors.New("TPM error")
+	fixtures.TPM.SetFailure(tpmErr)
 
 	orchestrator, err := fixtures.CreateOrchestratorWithAttestation()
 	require.NoError(t, err)
@@ -955,10 +954,18 @@ func testAttestationTPMError(t *testing.T) {
 
 	spec := CreateTestContainerSpec("tpm-error", "alpine:latest")
 
-	// Create should still succeed (TPM errors are logged but not fatal)
+	// A container is measured or it does not run
+	// (docs/compute/container-orchestrator.md, Attestation Flow): a failed
+	// measurement refuses the create and removes the created container.
 	c, err := orchestrator.Create(ctx, spec)
-	require.NoError(t, err)
-	require.NotNil(t, c)
+	require.Error(t, err)
+	assert.Nil(t, c)
+
+	var unmeasured *container.UnmeasuredLaunchError
+	require.ErrorAs(t, err, &unmeasured)
+	assert.ErrorIs(t, err, tpmErr)
+	assert.GreaterOrEqual(t, fixtures.Podman.GetRemoveCalls(), int32(1),
+		"the unmeasured container must be removed")
 }
 
 func testFullAttestationWorkflow(t *testing.T) {

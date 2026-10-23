@@ -1,5 +1,8 @@
 # DHCP Plugins
 
+> **Status: REFERENCE** · Last verified: 2026-10-15
+> The DHCP server's plugins and their options.
+
 ## Overview
 
 The DHCP service uses a plugin-based architecture built on CoreDHCP. This document covers the two platform-specific plugins: the IPAM Plugin for IP allocation and the PXE Plugin for network boot support.
@@ -67,7 +70,7 @@ plugin, err := dhcp.NewIPAMPlugin(
     "internal-pool",              // Pool ID
     dhcp.DHCPOptions{            // DHCP options
         SubnetMask: net.CIDRMask(24, 32),
-        Router:     netip.MustParseAddr("192.168.1.1"),
+        Router:     netip.MustParseAddr("192.0.2.1"),
         DNS:        []netip.Addr{netip.MustParseAddr("8.8.8.8")},
         LeaseTime:  24 * time.Hour,
     },
@@ -354,7 +357,7 @@ import "github.com/jeremyhahn/go-trusted-platform/pkg/sdn/dhcp"
 
 // Create PXE plugin
 pxe, err := dhcp.NewPXEPlugin(
-    net.ParseIP("192.168.1.10"),  // TFTP server
+    net.ParseIP("192.0.2.10"),  // TFTP server
     "pxelinux.0",                  // Default boot file
     dhcp.WithPXELogger(logger),
     dhcp.WithTFTPRoot("/var/lib/tftpboot"),
@@ -478,7 +481,7 @@ func (p *PXEPlugin) Handler4() handler.Handler4 {
 
 ```go
 // Update TFTP server
-if err := pxe.SetNextServer(net.ParseIP("192.168.1.20")); err != nil {
+if err := pxe.SetNextServer(net.ParseIP("192.0.2.20")); err != nil {
     return err
 }
 
@@ -508,7 +511,7 @@ tftpRoot := pxe.GetTFTPRoot()
 
 ```go
 pxe, _ := dhcp.NewPXEPlugin(
-    net.ParseIP("192.168.1.10"),
+    net.ParseIP("192.0.2.10"),
     "pxelinux.0",
     dhcp.WithArchitectureFilters(map[uint16]string{
         dhcp.PXEArchIntelX86: "pxelinux.0",
@@ -520,7 +523,7 @@ pxe, _ := dhcp.NewPXEPlugin(
 
 ```go
 pxe, _ := dhcp.NewPXEPlugin(
-    net.ParseIP("192.168.1.10"),
+    net.ParseIP("192.0.2.10"),
     "shimx64.efi",  // Shim for Secure Boot
     dhcp.WithArchitectureFilters(map[uint16]string{
         dhcp.PXEArchEFIX8664:  "shimx64.efi",   // x64 Secure Boot
@@ -534,7 +537,7 @@ pxe, _ := dhcp.NewPXEPlugin(
 
 ```go
 pxe, _ := dhcp.NewPXEPlugin(
-    net.ParseIP("192.168.1.10"),
+    net.ParseIP("192.0.2.10"),
     "undionly.kpxe",  // iPXE for BIOS
     dhcp.WithArchitectureFilters(map[uint16]string{
         dhcp.PXEArchIntelX86: "undionly.kpxe",  // BIOS iPXE
@@ -547,7 +550,7 @@ pxe, _ := dhcp.NewPXEPlugin(
 
 ```go
 pxe, _ := dhcp.NewPXEPlugin(
-    net.ParseIP("192.168.1.10"),
+    net.ParseIP("192.0.2.10"),
     "http://boot.example.com/boot.efi",
     dhcp.WithArchitectureFilters(map[uint16]string{
         dhcp.PXEArchX8664HTTP: "http://boot.example.com/bootx64.efi",
@@ -589,6 +592,11 @@ Request → IPAM Plugin → PXE Plugin → Response
 ```
 
 The PXE plugin is designed to be non-blocking (`return resp, false`) so it can be chained with other plugins. It only modifies responses for PXE clients and passes through all others unchanged.
+
+The chain above is not built anywhere today: `CoreDHCPServer` calls only the
+IPAM plugin (`pkg/sdn/dhcp/coredhcp.go:243`). An embedder that builds it must
+also note that the IPAM plugin returns `stop = true` with every OFFER, ACK and
+NAK, so a plugin placed after it never sees those replies.
 
 ## Error Handling
 

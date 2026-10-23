@@ -14,7 +14,7 @@
 // Package quicbaas provides a client wrapper for accessing QuicBaaS services
 // through the go-trusted-platform SDK.
 //
-// This package wraps the go-quicbaas SDK to expose all 28 QuicBaaS services
+// This package wraps the go-quicbaas SDK to expose the QuicBaaS services
 // to platform SDK consumers with full multi-transport support (embedded,
 // Unix socket, gRPC, REST, QUIC).
 //
@@ -53,12 +53,31 @@
 //   - Cache: Cache management and stats
 //   - ParameterStore: Hierarchical parameters
 //   - Scheduler: Job scheduling
+//   - Messaging: Notifications and channels
 //   - ObjectStorage: Distributed object storage
 //   - ObjectStorageAdmin: Object storage admin operations
 //   - ObjectTransfer: Peer-to-peer data transfer
 //
 // Identity Services:
 //   - IAM: Full IAM with sub-clients (Tenant, User, Group, Role, Policy, etc.)
+//
+// Agentic Services:
+//   - Orchestrator: Agent fleet management (agents, sessions, tasks, jobs, workflows)
+//   - Project: Agentic project management
+//   - Account: Pooled provider accounts an agent session is spawned against
+//   - SDLC: Forge bindings, project onboarding, conformance and deliveries
+//
+// The container-trust types of the agentic surface (TrustLevel, TrustPolicy,
+// ResolveTrustLevel, ...) are re-exported by the sibling package
+// sdk/go/services/orchestration.
+//
+// The request, response and value types of Cache, Vector, TimeSeries,
+// ObjectStorage, Scheduler, Messaging, Backup, ParameterStore, Operations,
+// ObjectStorageAdmin, ObjectTransfer, Embedding, Ollama and RAG are
+// re-exported by the sibling packages
+// sdk/go/services/{cache,vector,timeseries,objectstorage,scheduler,messaging,
+// backup,parameterstore,operations,objectstorageadmin,objecttransfer,
+// embedding,ollama,rag}.
 //
 // # Usage
 //

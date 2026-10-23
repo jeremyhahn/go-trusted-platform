@@ -18,10 +18,103 @@ import (
 	"log/slog"
 	"testing"
 
+	"github.com/jeremyhahn/go-quicbaas/sdk/go/platformtoken"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/mcp"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/ca/issuance/issuancetest"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
+
+// mcpScopedCtx is the context of an MCP caller whose platform token grants
+// scopes.
+func mcpScopedCtx(scopes ...string) context.Context {
+	return mcp.ContextWithAuthorizedContext(context.Background(), &platformtoken.AuthorizedContext{Subject: "u", Scopes: scopes})
+}
+
+// The MCP caller's token reaches the CA service's ca:sign-csr check: it
+// is what grants the call, and its absence or ca:write alone refuses it.
+func TestMCPServiceProvider_CASignCSR_CarriesTheCallersToken(t *testing.T) {
+	key := issuancetest.RSAKey(t)
+	csr := string(issuancetest.CSR(t, key, "rpi/fleet"))
+	cases := []struct {
+		name string
+		ctx  context.Context
+		code codes.Code
+	}{
+		{"no platform token", context.Background(), codes.PermissionDenied},
+		{"ca:write", mcpScopedCtx("ca:write"), codes.PermissionDenied},
+		{"ca:sign-csr", mcpScopedCtx("ca:sign-csr"), codes.OK},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ca := &csrMockCA{signer: issuancetest.NewCA(t)}
+			provider := NewMCPServiceProvider(&MCPServiceProviderConfig{
+				CAService: NewCAGRPCService(nil, ca, nil).WithKMS(issuancetest.NewKMS(t, "rpi/fleet", &key.PublicKey)),
+				Logger:    slog.Default(),
+			})
+
+			_, err := provider.CASignCSR(tc.ctx, &mcp.CASignCSRRequest{CSRPEM: csr})
+			if status.Code(err) != tc.code {
+				t.Fatalf("code = %v (%v), want %v", status.Code(err), err, tc.code)
+			}
+			if reached := ca.signer.Opts != nil; reached != (tc.code == codes.OK) {
+				t.Errorf("reached the CA = %v", reached)
+			}
+		})
+	}
+}
+
+// ca_sign_csr hands the CSR to the CA's SignCSR, not to IssueCertificate.
+func TestMCPServiceProvider_CASignCSR(t *testing.T) {
+	ca := &csrMockCA{signer: issuancetest.NewCA(t)}
+	key := issuancetest.RSAKey(t)
+	provider := NewMCPServiceProvider(&MCPServiceProviderConfig{
+		CAService: NewCAGRPCService(nil, ca, nil).WithKMS(issuancetest.NewKMS(t, "rpi/fleet", &key.PublicKey)),
+		Logger:    slog.Default(),
+	})
+
+	result, err := provider.CASignCSR(mcpScopedCtx("ca:sign-csr"), &mcp.CASignCSRRequest{
+		CSRPEM:    string(issuancetest.CSR(t, key, "rpi/fleet")),
+		ValidDays: 30,
+	})
+	if err != nil {
+		t.Fatalf("CASignCSR: %v", err)
+	}
+	resp := result.(*platformv1.IssueCertificateResponse)
+	if resp.GetCertificate().GetSubject().GetCommonName() != "rpi/fleet" {
+		t.Errorf("certificate = %+v", resp.GetCertificate())
+	}
+	if ca.signer.Opts == nil || ca.signer.Opts.ValidityDays != 30 {
+		t.Errorf("sign options = %+v", ca.signer.Opts)
+	}
+}
+
+func TestMCPServiceProvider_CASignCSR_Refused(t *testing.T) {
+	ca := &csrMockCA{signer: issuancetest.NewCA(t)}
+	provider := NewMCPServiceProvider(&MCPServiceProviderConfig{
+		CAService: NewCAGRPCService(nil, ca, nil).WithKMS(issuancetest.NewKMS(t, "rpi/fleet", &issuancetest.RSAKey(t).PublicKey)),
+		Logger:    slog.Default(),
+	})
+
+	_, err := provider.CASignCSR(mcpScopedCtx("ca:sign-csr"), &mcp.CASignCSRRequest{
+		CSRPEM: string(issuancetest.CSR(t, issuancetest.RSAKey(t), "rpi/fleet")),
+	})
+	assertGRPCError(t, err, codes.InvalidArgument)
+	if ca.signer.Opts != nil {
+		t.Error("a CSR for another key reached the CA")
+	}
+}
+
+func TestMCPServiceProvider_CASignCSR_NilService(t *testing.T) {
+	provider := NewMCPServiceProvider(&MCPServiceProviderConfig{Logger: slog.Default()})
+
+	_, err := provider.CASignCSR(context.Background(), &mcp.CASignCSRRequest{CSRPEM: "x"})
+	if svcErr, ok := err.(ErrServiceNotAvailable); !ok || svcErr.Service != "ca" {
+		t.Fatalf("err = %v, want ErrServiceNotAvailable{ca}", err)
+	}
+}
 
 // =============================================================================
 // Mock CA gRPC Service for comprehensive CA operations testing
@@ -374,7 +467,7 @@ func TestMCPServiceProvider_CAGet_SuccessExtended(t *testing.T) {
 		Logger: slog.Default(),
 	})
 
-	_, err := provider.CAGet(ctx, "abc123", true)
+	_, err := provider.CAGet(ctx, "abc123", true, false)
 	if err == nil {
 		t.Fatal("expected error for nil CA service")
 	}
@@ -394,7 +487,7 @@ func TestMCPServiceProvider_CAGet_ErrorExtended(t *testing.T) {
 		Logger: slog.Default(),
 	})
 
-	_, err := provider.CAGet(ctx, "nonexistent", false)
+	_, err := provider.CAGet(ctx, "nonexistent", false, false)
 	if err == nil {
 		t.Fatal("expected error from CA service")
 	}
@@ -406,7 +499,7 @@ func TestMCPServiceProvider_CAGet_WithoutPEMExtended(t *testing.T) {
 		Logger: slog.Default(),
 	})
 
-	_, err := provider.CAGet(ctx, "abc123", false)
+	_, err := provider.CAGet(ctx, "abc123", false, false)
 	if err == nil {
 		t.Fatal("expected error for nil CA service")
 	}
@@ -860,33 +953,6 @@ func TestMCPServiceProvider_Health_NilServiceExtended(t *testing.T) {
 	}
 }
 
-func TestMCPServiceProvider_Health_SuccessExtended(t *testing.T) {
-	ctx := context.Background()
-	healthService := createTestHealthServiceForCAExtendedTests(t)
-	if healthService == nil {
-		t.Skip("cannot create health service")
-	}
-
-	provider := NewMCPServiceProvider(&MCPServiceProviderConfig{
-		HealthService: healthService,
-		Logger:        slog.Default(),
-	})
-
-	result, err := provider.Health(ctx)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	resp, ok := result.(map[string]interface{})
-	if !ok {
-		t.Fatalf("expected map[string]interface{}, got %T", result)
-	}
-	status, _ := resp["status"].(string)
-	if status == "" || status == "unspecified" {
-		t.Error("expected specific health status")
-	}
-}
-
 // =============================================================================
 // Liveness Tests
 // =============================================================================
@@ -911,35 +977,6 @@ func TestMCPServiceProvider_Liveness_NilServiceExtended(t *testing.T) {
 	}
 }
 
-func TestMCPServiceProvider_Liveness_SuccessExtended(t *testing.T) {
-	ctx := context.Background()
-	healthService := createTestHealthServiceForCAExtendedTests(t)
-	if healthService == nil {
-		t.Skip("cannot create health service")
-	}
-
-	provider := NewMCPServiceProvider(&MCPServiceProviderConfig{
-		HealthService: healthService,
-		Logger:        slog.Default(),
-	})
-
-	result, err := provider.Liveness(ctx)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	resultMap, ok := result.(map[string]interface{})
-	if !ok {
-		t.Fatalf("expected map[string]interface{}, got %T", result)
-	}
-	if _, exists := resultMap["live"]; !exists {
-		t.Error("expected 'live' key in result")
-	}
-	if _, exists := resultMap["status"]; !exists {
-		t.Error("expected 'status' key in result")
-	}
-}
-
 // =============================================================================
 // Readiness Tests
 // =============================================================================
@@ -961,35 +998,6 @@ func TestMCPServiceProvider_Readiness_NilServiceExtended(t *testing.T) {
 	}
 	if svcErr.Service != "health" {
 		t.Errorf("expected service='health', got %q", svcErr.Service)
-	}
-}
-
-func TestMCPServiceProvider_Readiness_SuccessExtended(t *testing.T) {
-	ctx := context.Background()
-	healthService := createTestHealthServiceForCAExtendedTests(t)
-	if healthService == nil {
-		t.Skip("cannot create health service")
-	}
-
-	provider := NewMCPServiceProvider(&MCPServiceProviderConfig{
-		HealthService: healthService,
-		Logger:        slog.Default(),
-	})
-
-	result, err := provider.Readiness(ctx)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	resultMap, ok := result.(map[string]interface{})
-	if !ok {
-		t.Fatalf("expected map[string]interface{}, got %T", result)
-	}
-	if _, exists := resultMap["ready"]; !exists {
-		t.Error("expected 'ready' key in result")
-	}
-	if _, exists := resultMap["status"]; !exists {
-		t.Error("expected 'status' key in result")
 	}
 }
 
@@ -1029,20 +1037,4 @@ func TestErrServiceNotAvailable_HealthErrorMsg(t *testing.T) {
 	if err.Error() != expected {
 		t.Errorf("expected error message %q, got %q", expected, err.Error())
 	}
-}
-
-// =============================================================================
-// Helper Functions
-// =============================================================================
-
-// createTestHealthServiceForCAExtendedTests creates a real Service using DefaultConfig
-func createTestHealthServiceForCAExtendedTests(t *testing.T) *Service {
-	t.Helper()
-	config := DefaultConfig()
-	svc, err := NewService(config)
-	if err != nil {
-		return nil
-	}
-	svc.MarkReady()
-	return svc
 }

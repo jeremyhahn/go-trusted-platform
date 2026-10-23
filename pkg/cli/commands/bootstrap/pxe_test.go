@@ -26,6 +26,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 	"time"
 
@@ -370,10 +371,12 @@ func TestBoolStatus(t *testing.T) {
 
 func TestCheckNodeHealth_UnreachableHost(t *testing.T) {
 	// Provide a real RootCAs pool from a minted test CA rather than
-	// InsecureSkipVerify. The connection targets 192.0.2.1 (TEST-NET),
-	// which is guaranteed unreachable, so no TLS handshake ever occurs —
-	// the transport fails at TCP dial and the config is never exercised.
-	// The pool makes the tls.Config honest without skipping verification.
+	// InsecureSkipVerify. Every probe port is refused on loopback, so no
+	// TLS handshake ever occurs — the transport fails at TCP dial and the
+	// config is never exercised. The pool makes the tls.Config honest
+	// without skipping verification. Refused ports answer at once, where
+	// an unroutable address made each probe wait out the client timeout
+	// (#284); the timeout stays only as a guard.
 	client := &http.Client{
 		Timeout: 100 * time.Millisecond,
 		Transport: &http.Transport{
@@ -384,8 +387,24 @@ func TestCheckNodeHealth_UnreachableHost(t *testing.T) {
 			},
 		},
 	}
-	result := checkNodeHealth(t.Context(), client, "192.0.2.1") // TEST-NET, unreachable
+	probePorts := (&bootstrap.BootstrapConfig{}).HealthProbePorts()
+	refused := make([]int, len(probePorts))
+	for i := range refused {
+		refused[i] = refusedLoopbackPort(t)
+	}
+	result := checkNodeHealth(t.Context(), client, "127.0.0.1", refused)
 	assert.Equal(t, "unreachable", result)
+}
+
+// refusedLoopbackPort returns a loopback TCP port nothing listens on, so a
+// dial to it is refused immediately.
+func refusedLoopbackPort(t *testing.T) int {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	port := ln.Addr().(*net.TCPAddr).Port
+	require.NoError(t, ln.Close())
+	return port
 }
 
 // newTestTLSHealthServer serves the health endpoint over TLS with a leaf
@@ -466,62 +485,62 @@ func newTestTLSHealthServer(t *testing.T, serverName string, unhealthyHosts ...s
 	return srv.Listener.Addr().String(), pool
 }
 
-// pointHealthPortAt redirects the status probe's candidate ports at the
-// given listener address for the duration of the test and returns its host.
+// pointHealthPortAt splits a listener address into the host to probe and the
+// candidate ports that reach it.
 //
 // The probe tries several ports because the webservice port depends on the
-// node's role (#235); a test listener has exactly one, so the candidate list
-// is replaced rather than extended — otherwise every probe would spend three
-// dial timeouts before reaching it.
-func pointHealthPortAt(t *testing.T, address string) string {
+// node's role (#235); a test listener has exactly one, so it is the only
+// candidate — otherwise every probe would spend three dial timeouts before
+// reaching it.
+func pointHealthPortAt(t *testing.T, address string) (host string, ports []int) {
 	t.Helper()
 	host, port, err := net.SplitHostPort(address)
 	require.NoError(t, err)
-	prev := healthPorts
-	healthPorts = []string{port}
-	t.Cleanup(func() { healthPorts = prev })
-	return host
+	p, err := strconv.Atoi(port)
+	require.NoError(t, err)
+	return host, []int{p}
 }
 
 func TestCheckNodeHealth_ControlPlaneVerifiedByTLSNameNotAddress(t *testing.T) {
 	address, pool := newTestTLSHealthServer(t, "cp.example.test")
-	host := pointHealthPortAt(t, address)
+	host, ports := pointHealthPortAt(t, address)
 
 	// The status command reaches the control plane by address with the
 	// control plane's TLS name; the certificate names only that.
 	named := newHealthClient(pool, "cp.example.test")
-	assert.Equal(t, "healthy", checkNodeHealth(t.Context(), named, host))
+	assert.Equal(t, "healthy", checkNodeHealth(t.Context(), named, host, ports))
 
 	// With the pool but no expected name — what the command did before —
 	// the same healthy node is reported unreachable.
 	unnamed := newHealthClient(pool, "")
-	assert.Equal(t, "unreachable", checkNodeHealth(t.Context(), unnamed, host))
+	assert.Equal(t, "unreachable", checkNodeHealth(t.Context(), unnamed, host, ports))
 }
 
 func TestCheckNodeHealthAny_FirstAnsweringAddressWins(t *testing.T) {
 	// One listener on every loopback address: 127.0.0.1 answers 503,
 	// 127.0.0.2 answers 200, so the candidate order decides the verdict.
 	address, pool := newTestTLSHealthServer(t, "cp.example.test", "127.0.0.1")
-	pointHealthPortAt(t, address)
+	_, ports := pointHealthPortAt(t, address)
 	named := newHealthClient(pool, "cp.example.test")
 
 	// An unresolvable hostname first (a control plane's hostname commonly
 	// does not resolve during bootstrap) is skipped; the first address
 	// that answers is the verdict, even when it says unhealthy.
-	assert.Equal(t, "unhealthy", checkNodeHealthAny(t.Context(), named, []string{"cp-none.invalid", "127.0.0.1", "127.0.0.2"}))
-	assert.Equal(t, "healthy", checkNodeHealthAny(t.Context(), named, []string{"127.0.0.2", "127.0.0.1"}))
-	assert.Equal(t, "unreachable", checkNodeHealthAny(t.Context(), named, []string{"cp-none.invalid"}))
-	assert.Equal(t, "unreachable", checkNodeHealthAny(t.Context(), named, nil))
-	assert.Equal(t, "unknown", checkNodeHealthAny(t.Context(), nil, []string{"127.0.0.2"}))
+	assert.Equal(t, "unhealthy", checkNodeHealthAny(t.Context(), named, []string{"cp-none.invalid", "127.0.0.1", "127.0.0.2"}, ports))
+	assert.Equal(t, "healthy", checkNodeHealthAny(t.Context(), named, []string{"127.0.0.2", "127.0.0.1"}, ports))
+	assert.Equal(t, "unreachable", checkNodeHealthAny(t.Context(), named, []string{"cp-none.invalid"}, ports))
+	assert.Equal(t, "unreachable", checkNodeHealthAny(t.Context(), named, nil, ports))
+	assert.Equal(t, "unknown", checkNodeHealthAny(t.Context(), nil, []string{"127.0.0.2"}, ports))
 }
 
 func TestStatusProber_ControlPlaneUsesNameAndCandidates(t *testing.T) {
 	address, pool := newTestTLSHealthServer(t, "cp.example.test")
-	host := pointHealthPortAt(t, address)
+	host, ports := pointHealthPortAt(t, address)
 	prober := statusProber{
 		nodeClient:  newHealthClient(pool, ""),
 		cpClient:    newHealthClient(pool, "cp.example.test"),
 		cpAddresses: func(*bootstrap.DiscoveredNode) []string { return []string{host} },
+		ports:       ports,
 	}
 	// The node's hostname is not what the certificate names and does not
 	// resolve; only the control-plane path — candidates plus the CP TLS

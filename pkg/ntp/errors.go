@@ -137,6 +137,14 @@ func (e ErrInvalidLocalStratum) Error() string {
 	return "ntp: serve.local-stratum " + strconv.Itoa(e.Stratum) + " out of range (1-15)"
 }
 
+// ErrInvalidNTSKEPort is returned when serve.nts.port is not a TCP port.
+type ErrInvalidNTSKEPort struct{ Port int }
+
+// Error implements the error interface.
+func (e ErrInvalidNTSKEPort) Error() string {
+	return "ntp: serve.nts.port " + strconv.Itoa(e.Port) + " out of range (1-65535)"
+}
+
 // ErrMissingNTSMaterial is returned when NTS serving is enabled without both a
 // certificate and a key reference.
 type ErrMissingNTSMaterial struct{ Field string }
@@ -333,7 +341,7 @@ type ErrDisabled struct{}
 func (ErrDisabled) Error() string { return "ntp: time synchronization is not enabled" }
 
 // ErrUnresolvedNTSMaterial is returned when an NTS certificate or key field
-// still holds a secret reference (kms://, secret://, file://) at the point
+// still holds a secret reference (any <scheme>://, e.g. kms://) at the point
 // chronyd needs the material on disk. Serving unauthenticated time instead
 // would be a silent security downgrade, so this is fatal for the NTP service.
 type ErrUnresolvedNTSMaterial struct {

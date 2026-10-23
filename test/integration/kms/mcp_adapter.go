@@ -26,11 +26,15 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-
-	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
 	"os"
+	"strings"
 	"sync/atomic"
 	"time"
+
+	baasservice "github.com/jeremyhahn/go-quicbaas/sdk/go/service"
+
+	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
+	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers/surface"
 )
 
 // =============================================================================
@@ -311,7 +315,7 @@ func (m *MCPAdapter) sendRequest(ctx context.Context, method string, params inte
 		return ErrMCPRequestFailed{Err: fmt.Errorf("failed to marshal request: %w", err)}
 	}
 
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://"+m.endpoint+"/mcp", bytes.NewReader(reqBody))
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, helpers.MCPEndpointURL(m.endpoint), bytes.NewReader(reqBody))
 	if err != nil {
 		return ErrMCPRequestFailed{Err: fmt.Errorf("failed to create request: %w", err)}
 	}
@@ -392,18 +396,171 @@ func (m *MCPAdapter) callTool(ctx context.Context, toolName string, args map[str
 }
 
 // =============================================================================
+// Tool Surface
+// =============================================================================
+
+// The adapter calls the tools pkg/api/mcp registers (kms_tools_exec.go,
+// tools_exec.go) with their snake_case arguments, and decodes each result
+// into the go-quicbaas SDK type, or the map shape, that
+// pkg/api/daemon.MCPServiceProvider returns for that tool.
+const (
+	// mcpTransport names this transport in surface.ErrNoSurface declarations.
+	mcpTransport = "MCP"
+
+	// mcpNoKeyVersionsTool explains why KeyVersions leaves the MCP matrix.
+	mcpNoKeyVersionsTool = "the MCP tool registry has no key version listing tool (MISSING)"
+
+	// mcpNoKeyStatusTool explains why KeyStatus leaves the MCP matrix.
+	mcpNoKeyStatusTool = "the MCP tool registry has no key enable or disable tool (MISSING)"
+
+	// mcpNoDigestTool explains why hash and HMAC operations leave the MCP matrix.
+	mcpNoDigestTool = "the MCP tool registry has no hash, HMAC or HMAC verify tool (MISSING)"
+
+	// mcpNoDEKTool explains why DEK management leaves the MCP matrix;
+	// kms_generate_data_key is envelope encryption, not DEK management.
+	mcpNoDEKTool = "the MCP tool registry has no DEK management tool (MISSING)"
+
+	// mcpNoSecretVersionTool explains why secret version operations leave the MCP matrix.
+	mcpNoSecretVersionTool = "the MCP tool registry has no secret rotate, version listing, rollback or status tool (MISSING)"
+)
+
+// mcpPurposeUsages maps a test key purpose to the usage names
+// kms_generate_key accepts (parseKMSKeyUsage in pkg/api/daemon/mcp_service.go).
+var mcpPurposeUsages = map[string][]string{
+	"encrypt":    {"encrypt", "decrypt"},
+	"encryption": {"encrypt", "decrypt"},
+	"sign":       {"sign", "verify"},
+	"signing":    {"sign", "verify"},
+	"hmac":       {"generate_mac", "verify_mac"},
+	"mac":        {"generate_mac", "verify_mac"},
+	"wrap":       {"wrap", "unwrap"},
+	"wrapping":   {"wrap", "unwrap"},
+	"derive":     {"derive"},
+	"derivation": {"derive"},
+}
+
+// ErrMCPInvalidOption reports a test option the adapter cannot express as a
+// tool argument.
+type ErrMCPInvalidOption struct {
+	Option string
+	Value  string
+	Err    error
+}
+
+func (e ErrMCPInvalidOption) Error() string {
+	return fmt.Sprintf("invalid MCP option %s=%q: %v", e.Option, e.Value, e.Err)
+}
+
+func (e ErrMCPInvalidOption) Unwrap() error {
+	return e.Err
+}
+
+// mcpNoSurface declares an operation the MCP tool registry does not expose.
+func mcpNoSurface(operation, reason string) error {
+	return surface.ErrNoSurface{Transport: mcpTransport, Operation: operation, Reason: reason}
+}
+
+// mcpKeyListResult is the map MCPServiceProvider.KMSListKeys returns.
+type mcpKeyListResult struct {
+	Keys       []*baasservice.KeyHandle `json:"keys"`
+	TotalCount int32                    `json:"total_count"`
+	HasMore    bool                     `json:"has_more"`
+	NextCursor string                   `json:"next_cursor"`
+}
+
+// mcpDeleteResult is the map kms_delete_key and secret_delete return.
+type mcpDeleteResult struct {
+	Success  bool   `json:"success"`
+	KeyID    string `json:"key_id"`
+	SecretID string `json:"secret_id"`
+}
+
+// mcpAlgorithmsResult is the map kms_supported_algorithms returns.
+type mcpAlgorithmsResult struct {
+	Algorithms []string `json:"algorithms"`
+}
+
+// mcpEncryptResult is the map MCPServiceProvider.KMSEncrypt returns.
+type mcpEncryptResult struct {
+	Ciphertext []byte `json:"ciphertext"`
+	Nonce      []byte `json:"nonce"`
+	KeyVersion uint64 `json:"key_version"`
+}
+
+// mcpDecryptResult is the map MCPServiceProvider.KMSDecrypt returns.
+type mcpDecryptResult struct {
+	Plaintext []byte `json:"plaintext"`
+}
+
+// mcpSignResult is the map MCPServiceProvider.KMSSign returns.
+type mcpSignResult struct {
+	Signature  []byte `json:"signature"`
+	KeyVersion uint64 `json:"key_version"`
+}
+
+// mcpVerifyResult is the map MCPServiceProvider.KMSVerify returns.
+type mcpVerifyResult struct {
+	Valid bool `json:"valid"`
+}
+
+// mcpRandomResult is the map kms_random returns.
+type mcpRandomResult struct {
+	RandomBytes []byte `json:"random_bytes"`
+	NumBytes    int    `json:"num_bytes"`
+}
+
+// mcpStatusName upper-cases an SDK key status ("enabled" -> "ENABLED").
+func mcpStatusName(status baasservice.KeyStatus) string {
+	return strings.ToUpper(string(status))
+}
+
+// mcpUsageNames converts SDK key usages to their names.
+func mcpUsageNames(usages []baasservice.KeyUsage) []string {
+	names := make([]string, 0, len(usages))
+	for _, usage := range usages {
+		names = append(names, string(usage))
+	}
+	return names
+}
+
+// mcpTime dereferences an optional SDK timestamp.
+func mcpTime(t *time.Time) time.Time {
+	if t == nil {
+		return time.Time{}
+	}
+	return *t
+}
+
+// encodeBytes base64-encodes a binary tool argument.
+func encodeBytes(data []byte) string {
+	return base64.StdEncoding.EncodeToString(data)
+}
+
+// keyMetadata reads the metadata kms_generate_key and kms_get_key leave out
+// of the key handle.
+func (m *MCPAdapter) keyMetadata(ctx context.Context, keyID string) (*baasservice.KeyMetadata, error) {
+	var metadata baasservice.KeyMetadata
+	if err := m.callTool(ctx, "kms_get_key_metadata", map[string]interface{}{"key_id": keyID}, &metadata); err != nil {
+		return nil, err
+	}
+	return &metadata, nil
+}
+
+// =============================================================================
 // Key Management Operations
 // =============================================================================
 
-// KeyGenerate generates a new key via MCP tool call.
+// KeyGenerate calls kms_generate_key, then kms_get_key_metadata for the
+// fields the key handle does not carry.
 func (m *MCPAdapter) KeyGenerate(ctx context.Context, opts KeyGenerateOptions) (*KeyGenerateResult, error) {
 	args := map[string]interface{}{
-		"keyId":     opts.KeyID,
-		"algorithm": opts.Algorithm,
-		"purpose":   opts.Purpose,
+		"name":                keyName(opts),
+		"algorithm":           opts.Algorithm,
+		"exportable":          opts.Exportable,
+		"deletion_protection": opts.DeletionProtection,
 	}
-	if opts.Name != "" {
-		args["name"] = opts.Name
+	if usages := mcpPurposeUsages[strings.ToLower(opts.Purpose)]; len(usages) > 0 {
+		args["usage"] = usages
 	}
 	if opts.Description != "" {
 		args["description"] = opts.Description
@@ -411,86 +568,92 @@ func (m *MCPAdapter) KeyGenerate(ctx context.Context, opts KeyGenerateOptions) (
 	if opts.Owner != "" {
 		args["owner"] = opts.Owner
 	}
-	if opts.Exportable {
-		args["exportable"] = true
-	}
-	if opts.DeletionProtection {
-		args["deletionProtection"] = true
-	}
 
-	var resp mcpKeyGenerateResponse
-	if err := m.callTool(ctx, "platform.kms.key.generate", args, &resp); err != nil {
+	var handle baasservice.KeyHandle
+	if err := m.callTool(ctx, "kms_generate_key", args, &handle); err != nil {
 		return nil, err
 	}
 
-	return &KeyGenerateResult{
-		KeyID:              resp.KeyID,
-		Version:            resp.Version,
-		Algorithm:          resp.Algorithm,
-		Status:             resp.Status,
-		CreatedAt:          unixMillisToTime(resp.CreatedAt),
-		Name:               resp.Name,
-		Description:        resp.Description,
-		Exportable:         resp.Exportable,
-		DeletionProtection: resp.DeletionProtection,
-	}, nil
+	metadata, err := m.keyMetadata(ctx, handle.KeyID)
+	if err != nil {
+		return nil, err
+	}
+
+	result := &KeyGenerateResult{
+		KeyID:              handle.KeyID,
+		Version:            handle.Version,
+		Algorithm:          string(handle.Algorithm),
+		Status:             mcpStatusName(handle.Status),
+		CreatedAt:          handle.CreatedAt,
+		Name:               metadata.Name,
+		Description:        metadata.Description,
+		Exportable:         metadata.Exportable,
+		DeletionProtection: metadata.DeletionProtection,
+	}
+	if err := applyKeyDisplay(ctx, m, opts, result); err != nil {
+		return nil, err
+	}
+	return result, nil
 }
 
-// KeyGet retrieves a key via MCP tool call.
+// KeyGet calls kms_get_key, then kms_get_key_metadata for the descriptive fields.
 func (m *MCPAdapter) KeyGet(ctx context.Context, keyID string, version uint64) (*KeyGetResult, error) {
-	args := map[string]interface{}{
-		"keyId": keyID,
-	}
+	args := map[string]interface{}{"key_id": keyID}
 	if version > 0 {
 		args["version"] = version
 	}
 
-	var resp mcpKeyGetResponse
-	if err := m.callTool(ctx, "platform.kms.key.get", args, &resp); err != nil {
+	var handle baasservice.KeyHandle
+	if err := m.callTool(ctx, "kms_get_key", args, &handle); err != nil {
+		return nil, err
+	}
+
+	metadata, err := m.keyMetadata(ctx, keyID)
+	if err != nil {
 		return nil, err
 	}
 
 	return &KeyGetResult{
-		KeyID:              resp.KeyID,
-		Version:            resp.Version,
-		Algorithm:          resp.Algorithm,
-		Status:             resp.Status,
-		CreatedAt:          unixMillisToTime(resp.CreatedAt),
-		UpdatedAt:          unixMillisToTime(resp.UpdatedAt),
-		LastUsedAt:         unixMillisToTime(resp.LastUsedAt),
-		Name:               resp.Name,
-		Description:        resp.Description,
-		Owner:              resp.Owner,
-		Exportable:         resp.Exportable,
-		DeletionProtection: resp.DeletionProtection,
-		Usage:              resp.Usage,
+		KeyID:              handle.KeyID,
+		Version:            handle.Version,
+		Algorithm:          string(handle.Algorithm),
+		Status:             mcpStatusName(handle.Status),
+		CreatedAt:          handle.CreatedAt,
+		UpdatedAt:          metadata.UpdatedAt,
+		LastUsedAt:         mcpTime(metadata.LastUsedAt),
+		Name:               metadata.Name,
+		Description:        metadata.Description,
+		Owner:              metadata.Owner,
+		Exportable:         metadata.Exportable,
+		DeletionProtection: metadata.DeletionProtection,
+		Usage:              mcpUsageNames(metadata.Usage),
 	}, nil
 }
 
-// KeyList lists keys via MCP tool call.
+// KeyList calls kms_list_keys. The tool takes a limit only; it has no cursor.
 func (m *MCPAdapter) KeyList(ctx context.Context, opts KeyListOptions) (*KeyListResult, error) {
 	args := map[string]interface{}{}
 	if opts.Limit > 0 {
 		args["limit"] = opts.Limit
 	}
-	if opts.Cursor != "" {
-		args["cursor"] = opts.Cursor
-	}
 
-	var resp mcpKeyListResponse
-	if err := m.callTool(ctx, "platform.kms.key.list", args, &resp); err != nil {
+	var resp mcpKeyListResult
+	if err := m.callTool(ctx, "kms_list_keys", args, &resp); err != nil {
 		return nil, err
 	}
 
-	keys := make([]KeySummary, len(resp.Keys))
-	for i, k := range resp.Keys {
-		keys[i] = KeySummary{
-			KeyID:     k.KeyID,
-			Version:   k.Version,
-			Algorithm: k.Algorithm,
-			Status:    k.Status,
-			CreatedAt: unixMillisToTime(k.CreatedAt),
+	keys := make([]KeySummary, 0, len(resp.Keys))
+	for _, key := range resp.Keys {
+		if key == nil {
+			continue
 		}
+		keys = append(keys, KeySummary{
+			KeyID:     key.KeyID,
+			Version:   key.Version,
+			Algorithm: string(key.Algorithm),
+			Status:    mcpStatusName(key.Status),
+			CreatedAt: key.CreatedAt,
+		})
 	}
 
 	return &KeyListResult{
@@ -501,39 +664,21 @@ func (m *MCPAdapter) KeyList(ctx context.Context, opts KeyListOptions) (*KeyList
 	}, nil
 }
 
-// KeyDelete deletes a key via MCP tool call.
-func (m *MCPAdapter) KeyDelete(ctx context.Context, keyID string, opts KeyDeleteOptions) (*KeyDeleteResult, error) {
-	args := map[string]interface{}{
-		"keyId": keyID,
-	}
-	if opts.PendingWindowDays > 0 {
-		args["pendingWindowDays"] = opts.PendingWindowDays
-	}
-	if opts.Force {
-		args["force"] = true
-	}
-
-	var resp mcpKeyDeleteResponse
-	if err := m.callTool(ctx, "platform.kms.key.delete", args, &resp); err != nil {
+// KeyDelete calls kms_delete_key. The tool takes the key ID only; it has no
+// pending window or force argument.
+func (m *MCPAdapter) KeyDelete(ctx context.Context, keyID string, _ KeyDeleteOptions) (*KeyDeleteResult, error) {
+	var resp mcpDeleteResult
+	if err := m.callTool(ctx, "kms_delete_key", map[string]interface{}{"key_id": keyID}, &resp); err != nil {
 		return nil, err
 	}
 
-	return &KeyDeleteResult{
-		KeyID:        resp.KeyID,
-		Status:       resp.Status,
-		DeletionDate: unixMillisToTime(resp.DeletionDate),
-	}, nil
+	return &KeyDeleteResult{KeyID: resp.KeyID}, nil
 }
 
-// KeyRotate rotates a key via MCP tool call.
-func (m *MCPAdapter) KeyRotate(ctx context.Context, keyID string, retainOldVersion bool) (*KeyRotateResult, error) {
-	args := map[string]interface{}{
-		"keyId":            keyID,
-		"retainOldVersion": retainOldVersion,
-	}
-
-	var resp mcpKeyRotateResponse
-	if err := m.callTool(ctx, "platform.kms.key.rotate", args, &resp); err != nil {
+// KeyRotate calls kms_rotate_key. The tool has no retain-old-version argument.
+func (m *MCPAdapter) KeyRotate(ctx context.Context, keyID string, _ bool) (*KeyRotateResult, error) {
+	var resp baasservice.RotateKeyResponse
+	if err := m.callTool(ctx, "kms_rotate_key", map[string]interface{}{"key_id": keyID}, &resp); err != nil {
 		return nil, err
 	}
 
@@ -541,133 +686,73 @@ func (m *MCPAdapter) KeyRotate(ctx context.Context, keyID string, retainOldVersi
 		KeyID:      resp.KeyID,
 		OldVersion: resp.OldVersion,
 		NewVersion: resp.NewVersion,
-		RotatedAt:  unixMillisToTime(resp.RotatedAt),
+		RotatedAt:  resp.Timestamp,
 	}, nil
 }
 
-// KeyVersions lists key versions via MCP tool call.
-func (m *MCPAdapter) KeyVersions(ctx context.Context, keyID string, opts KeyVersionsOptions) (*KeyVersionsResult, error) {
-	args := map[string]interface{}{
-		"keyId": keyID,
-	}
-	if opts.Limit > 0 {
-		args["limit"] = opts.Limit
-	}
-	if opts.Cursor != "" {
-		args["cursor"] = opts.Cursor
-	}
-
-	var resp mcpKeyVersionsResponse
-	if err := m.callTool(ctx, "platform.kms.key.versions", args, &resp); err != nil {
-		return nil, err
-	}
-
-	versions := make([]KeyVersionInfo, len(resp.Versions))
-	for i, v := range resp.Versions {
-		versions[i] = KeyVersionInfo{
-			Version:    v.Version,
-			Algorithm:  v.Algorithm,
-			Status:     v.Status,
-			CreatedAt:  unixMillisToTime(v.CreatedAt),
-			DisabledAt: unixMillisToTime(v.DisabledAt),
-		}
-	}
-
-	return &KeyVersionsResult{
-		KeyID:      resp.KeyID,
-		Versions:   versions,
-		HasMore:    resp.HasMore,
-		NextCursor: resp.NextCursor,
-	}, nil
+// KeyVersions has no MCP surface.
+func (m *MCPAdapter) KeyVersions(_ context.Context, _ string, _ KeyVersionsOptions) (*KeyVersionsResult, error) {
+	return nil, mcpNoSurface("KeyVersions", mcpNoKeyVersionsTool)
 }
 
-// KeyStatus updates key status via MCP tool call.
-func (m *MCPAdapter) KeyStatus(ctx context.Context, keyID string, version uint64, enabled bool) (*KeyStatusResult, error) {
-	args := map[string]interface{}{
-		"keyId":   keyID,
-		"version": version,
-		"enabled": enabled,
-	}
-
-	var resp mcpKeyStatusResponse
-	if err := m.callTool(ctx, "platform.kms.key.status", args, &resp); err != nil {
-		return nil, err
-	}
-
-	return &KeyStatusResult{
-		KeyID:     resp.KeyID,
-		Version:   resp.Version,
-		Status:    resp.Status,
-		UpdatedAt: unixMillisToTime(resp.UpdatedAt),
-	}, nil
+// KeyStatus has no MCP surface.
+func (m *MCPAdapter) KeyStatus(_ context.Context, _ string, _ uint64, _ bool) (*KeyStatusResult, error) {
+	return nil, mcpNoSurface("KeyStatus", mcpNoKeyStatusTool)
 }
 
-// KeyRevoke revokes a key via MCP tool call.
+// KeyRevoke calls kms_revoke_key.
 func (m *MCPAdapter) KeyRevoke(ctx context.Context, keyID string, reason string) (*KeyRevokeResult, error) {
-	args := map[string]interface{}{
-		"keyId": keyID,
-	}
-	if reason != "" {
-		args["reason"] = reason
-	}
+	args := map[string]interface{}{"key_id": keyID, "reason": reason}
 
-	var resp mcpKeyRevokeResponse
-	if err := m.callTool(ctx, "platform.kms.key.revoke", args, &resp); err != nil {
+	var resp baasservice.RevokeKeyResponse
+	if err := m.callTool(ctx, "kms_revoke_key", args, &resp); err != nil {
 		return nil, err
 	}
 
 	return &KeyRevokeResult{
 		KeyID:     resp.KeyID,
-		Status:    resp.Status,
-		RevokedAt: unixMillisToTime(resp.RevokedAt),
+		Status:    mcpStatusName(resp.Status),
+		RevokedAt: resp.Timestamp,
 	}, nil
 }
 
-// KeyMetadata retrieves key metadata via MCP tool call.
+// KeyMetadata calls kms_get_key_metadata.
 func (m *MCPAdapter) KeyMetadata(ctx context.Context, keyID string) (*KeyMetadataResult, error) {
-	args := map[string]interface{}{
-		"keyId": keyID,
-	}
-
-	var resp mcpKeyMetadataResponse
-	if err := m.callTool(ctx, "platform.kms.key.metadata", args, &resp); err != nil {
+	metadata, err := m.keyMetadata(ctx, keyID)
+	if err != nil {
 		return nil, err
 	}
 
-	var rotationPolicy *RotationPolicy
-	if resp.RotationPolicy != nil {
-		rotationPolicy = &RotationPolicy{
-			Enabled:         resp.RotationPolicy.Enabled,
-			IntervalSeconds: resp.RotationPolicy.IntervalSeconds,
-			NextRotation:    unixMillisToTime(resp.RotationPolicy.NextRotation),
-			RetainVersions:  resp.RotationPolicy.RetainVersions,
+	result := &KeyMetadataResult{
+		KeyID:              metadata.KeyID,
+		Name:               metadata.Name,
+		Description:        metadata.Description,
+		Algorithm:          string(metadata.Algorithm),
+		Status:             mcpStatusName(metadata.Status),
+		Version:            metadata.Version,
+		Exportable:         metadata.Exportable,
+		DeletionProtection: metadata.DeletionProtection,
+		Usage:              mcpUsageNames(metadata.Usage),
+		Owner:              metadata.Owner,
+		CreatedAt:          metadata.CreatedAt,
+		UpdatedAt:          metadata.UpdatedAt,
+		LastUsedAt:         mcpTime(metadata.LastUsedAt),
+		Tags:               metadata.Tags,
+	}
+	if policy := metadata.RotationPolicy; policy != nil {
+		result.RotationPolicy = &RotationPolicy{
+			Enabled:         policy.Enabled,
+			IntervalSeconds: int64(policy.Interval / time.Second),
+			NextRotation:    policy.NextRotation,
+			RetainVersions:  int32(policy.RetainVersions),
 		}
 	}
-
-	return &KeyMetadataResult{
-		KeyID:              resp.KeyID,
-		Name:               resp.Name,
-		Description:        resp.Description,
-		Algorithm:          resp.Algorithm,
-		Status:             resp.Status,
-		Version:            resp.Version,
-		Exportable:         resp.Exportable,
-		DeletionProtection: resp.DeletionProtection,
-		Usage:              resp.Usage,
-		Owner:              resp.Owner,
-		CreatedAt:          unixMillisToTime(resp.CreatedAt),
-		UpdatedAt:          unixMillisToTime(resp.UpdatedAt),
-		LastUsedAt:         unixMillisToTime(resp.LastUsedAt),
-		Tags:               resp.Tags,
-		RotationPolicy:     rotationPolicy,
-	}, nil
+	return result, nil
 }
 
-// KeyMetadataUpdate updates key metadata via MCP tool call.
+// KeyMetadataUpdate calls kms_update_key_metadata.
 func (m *MCPAdapter) KeyMetadataUpdate(ctx context.Context, keyID string, opts KeyMetadataUpdateOptions) (*KeyMetadataUpdateResult, error) {
-	args := map[string]interface{}{
-		"keyId": keyID,
-	}
+	args := map[string]interface{}{"key_id": keyID}
 	if opts.Name != "" {
 		args["name"] = opts.Name
 	}
@@ -678,1139 +763,385 @@ func (m *MCPAdapter) KeyMetadataUpdate(ctx context.Context, keyID string, opts K
 		args["tags"] = opts.Tags
 	}
 	if len(opts.RemoveTags) > 0 {
-		args["removeTags"] = opts.RemoveTags
+		args["remove_tags"] = opts.RemoveTags
 	}
 
-	var resp mcpKeyMetadataUpdateResponse
-	if err := m.callTool(ctx, "platform.kms.key.metadata.update", args, &resp); err != nil {
+	var metadata baasservice.KeyMetadata
+	if err := m.callTool(ctx, "kms_update_key_metadata", args, &metadata); err != nil {
 		return nil, err
 	}
 
 	return &KeyMetadataUpdateResult{
-		KeyID:     resp.KeyID,
-		Name:      resp.Name,
-		UpdatedAt: unixMillisToTime(resp.UpdatedAt),
-		Tags:      resp.Tags,
+		KeyID:     metadata.KeyID,
+		Name:      metadata.Name,
+		UpdatedAt: metadata.UpdatedAt,
+		Tags:      metadata.Tags,
 	}, nil
 }
 
-// KeyPolicy retrieves key policy via MCP tool call.
+// KeyPolicy calls kms_get_key_policy.
 func (m *MCPAdapter) KeyPolicy(ctx context.Context, keyID string) (*KeyPolicyResult, error) {
-	args := map[string]interface{}{
-		"keyId": keyID,
-	}
-
-	var resp mcpKeyPolicyResponse
-	if err := m.callTool(ctx, "platform.kms.key.policy", args, &resp); err != nil {
+	var policy baasservice.KeyPolicy
+	if err := m.callTool(ctx, "kms_get_key_policy", map[string]interface{}{"key_id": keyID}, &policy); err != nil {
 		return nil, err
 	}
 
-	return &KeyPolicyResult{
-		KeyID:             resp.KeyID,
-		Version:           resp.Version,
-		AllowedOperations: resp.AllowedOperations,
-		AllowedPrincipals: resp.AllowedPrincipals,
-		DeniedPrincipals:  resp.DeniedPrincipals,
-		ExpiresAt:         unixMillisToTime(resp.ExpiresAt),
-		RotationRequired:  resp.RotationRequired,
-		MaxUsageCount:     resp.MaxUsageCount,
-		RequireMFA:        resp.RequireMFA,
-		UpdatedAt:         unixMillisToTime(resp.UpdatedAt),
-	}, nil
+	result := &KeyPolicyResult{
+		KeyID:             policy.KeyID,
+		Version:           int32(policy.Version),
+		AllowedOperations: mcpUsageNames(policy.AllowedOperations),
+		AllowedPrincipals: policy.AllowedPrincipals,
+		DeniedPrincipals:  policy.DeniedPrincipals,
+		ExpiresAt:         mcpTime(policy.ExpiresAt),
+		RotationRequired:  policy.RotationRequired,
+		RequireMFA:        policy.RequireMFA,
+		UpdatedAt:         policy.UpdatedAt,
+	}
+	if policy.MaxUsageCount != nil {
+		result.MaxUsageCount = *policy.MaxUsageCount
+	}
+	return result, nil
 }
 
-// KeyPolicySet sets key policy via MCP tool call.
+// KeyPolicySet calls kms_set_key_policy. ExpiresIn is a Go duration; the tool
+// takes the absolute expiry in Unix seconds.
 func (m *MCPAdapter) KeyPolicySet(ctx context.Context, keyID string, opts KeyPolicySetOptions) (*KeyPolicySetResult, error) {
 	args := map[string]interface{}{
-		"keyId": keyID,
+		"key_id":            keyID,
+		"rotation_required": opts.RotationRequired,
+		"require_mfa":       opts.RequireMFA,
 	}
 	if len(opts.Operations) > 0 {
-		args["operations"] = opts.Operations
+		args["allowed_operations"] = opts.Operations
 	}
 	if len(opts.AllowPrincipals) > 0 {
-		args["allowPrincipals"] = opts.AllowPrincipals
+		args["allowed_principals"] = opts.AllowPrincipals
 	}
 	if len(opts.DenyPrincipals) > 0 {
-		args["denyPrincipals"] = opts.DenyPrincipals
-	}
-	if opts.ExpiresIn != "" {
-		args["expiresIn"] = opts.ExpiresIn
-	}
-	if opts.RotationRequired {
-		args["rotationRequired"] = true
+		args["denied_principals"] = opts.DenyPrincipals
 	}
 	if opts.MaxUsageCount > 0 {
-		args["maxUsageCount"] = opts.MaxUsageCount
+		args["max_usage_count"] = opts.MaxUsageCount
 	}
-	if opts.RequireMFA {
-		args["requireMFA"] = true
+	if opts.ExpiresIn != "" {
+		expiresIn, err := time.ParseDuration(opts.ExpiresIn)
+		if err != nil {
+			return nil, ErrMCPInvalidOption{Option: "ExpiresIn", Value: opts.ExpiresIn, Err: err}
+		}
+		args["expires_at"] = time.Now().Add(expiresIn).Unix()
 	}
 
-	var resp mcpKeyPolicySetResponse
-	if err := m.callTool(ctx, "platform.kms.key.policy.set", args, &resp); err != nil {
+	var resp baasservice.SetKeyPolicyResponse
+	if err := m.callTool(ctx, "kms_set_key_policy", args, &resp); err != nil {
 		return nil, err
 	}
 
 	return &KeyPolicySetResult{
 		KeyID:         resp.KeyID,
-		PolicyVersion: resp.PolicyVersion,
-		UpdatedAt:     unixMillisToTime(resp.UpdatedAt),
+		PolicyVersion: int32(resp.PolicyVersion),
+		UpdatedAt:     resp.Timestamp,
 	}, nil
 }
 
-// KeyAlgorithms lists supported algorithms via MCP tool call.
+// KeyAlgorithms calls kms_supported_algorithms.
 func (m *MCPAdapter) KeyAlgorithms(ctx context.Context) (*KeyAlgorithmsResult, error) {
-	var resp mcpKeyAlgorithmsResponse
-	if err := m.callTool(ctx, "platform.kms.key.algorithms", nil, &resp); err != nil {
+	var resp mcpAlgorithmsResult
+	if err := m.callTool(ctx, "kms_supported_algorithms", map[string]interface{}{}, &resp); err != nil {
 		return nil, err
 	}
 
-	return &KeyAlgorithmsResult{
-		Algorithms: resp.Algorithms,
-	}, nil
+	return &KeyAlgorithmsResult{Algorithms: resp.Algorithms}, nil
 }
 
 // =============================================================================
 // Crypto Operations
 // =============================================================================
 
-// CryptoEncrypt encrypts data via MCP tool call.
+// CryptoEncrypt calls kms_encrypt.
 func (m *MCPAdapter) CryptoEncrypt(ctx context.Context, opts CryptoEncryptOptions) (*CryptoEncryptResult, error) {
 	args := map[string]interface{}{
-		"keyId":     opts.KeyID,
-		"plaintext": base64.StdEncoding.EncodeToString(opts.Plaintext),
+		"key_id":    opts.KeyID,
+		"plaintext": encodeBytes(opts.Plaintext),
 	}
 	if len(opts.Context) > 0 {
-		args["context"] = base64.StdEncoding.EncodeToString(opts.Context)
+		args["context"] = encodeBytes(opts.Context)
 	}
 	if len(opts.Nonce) > 0 {
-		args["nonce"] = base64.StdEncoding.EncodeToString(opts.Nonce)
+		args["nonce"] = encodeBytes(opts.Nonce)
 	}
 
-	var resp mcpCryptoEncryptResponse
-	if err := m.callTool(ctx, "platform.kms.crypto.encrypt", args, &resp); err != nil {
+	var resp mcpEncryptResult
+	if err := m.callTool(ctx, "kms_encrypt", args, &resp); err != nil {
 		return nil, err
-	}
-
-	ciphertext, err := base64.StdEncoding.DecodeString(resp.Ciphertext)
-	if err != nil {
-		return nil, ErrMCPResponseParseFailed{Operation: "CryptoEncrypt", Err: err}
-	}
-
-	var nonce []byte
-	if resp.Nonce != "" {
-		nonce, err = base64.StdEncoding.DecodeString(resp.Nonce)
-		if err != nil {
-			return nil, ErrMCPResponseParseFailed{Operation: "CryptoEncrypt", Err: err}
-		}
 	}
 
 	return &CryptoEncryptResult{
-		KeyID:      resp.KeyID,
+		KeyID:      opts.KeyID,
 		KeyVersion: resp.KeyVersion,
-		Ciphertext: ciphertext,
-		Nonce:      nonce,
-		Timestamp:  unixMillisToTime(resp.Timestamp),
+		Ciphertext: resp.Ciphertext,
+		Nonce:      resp.Nonce,
 	}, nil
 }
 
-// CryptoDecrypt decrypts data via MCP tool call.
+// CryptoDecrypt calls kms_decrypt.
 func (m *MCPAdapter) CryptoDecrypt(ctx context.Context, opts CryptoDecryptOptions) (*CryptoDecryptResult, error) {
 	args := map[string]interface{}{
-		"keyId":      opts.KeyID,
-		"ciphertext": base64.StdEncoding.EncodeToString(opts.Ciphertext),
+		"key_id":     opts.KeyID,
+		"ciphertext": encodeBytes(opts.Ciphertext),
 	}
 	if len(opts.Context) > 0 {
-		args["context"] = base64.StdEncoding.EncodeToString(opts.Context)
+		args["context"] = encodeBytes(opts.Context)
 	}
 	if len(opts.Nonce) > 0 {
-		args["nonce"] = base64.StdEncoding.EncodeToString(opts.Nonce)
+		args["nonce"] = encodeBytes(opts.Nonce)
 	}
 	if opts.KeyVersion > 0 {
-		args["keyVersion"] = opts.KeyVersion
+		args["key_version"] = opts.KeyVersion
 	}
 
-	var resp mcpCryptoDecryptResponse
-	if err := m.callTool(ctx, "platform.kms.crypto.decrypt", args, &resp); err != nil {
+	var resp mcpDecryptResult
+	if err := m.callTool(ctx, "kms_decrypt", args, &resp); err != nil {
 		return nil, err
-	}
-
-	plaintext, err := base64.StdEncoding.DecodeString(resp.Plaintext)
-	if err != nil {
-		return nil, ErrMCPResponseParseFailed{Operation: "CryptoDecrypt", Err: err}
 	}
 
 	return &CryptoDecryptResult{
-		KeyID:      resp.KeyID,
-		KeyVersion: resp.KeyVersion,
-		Plaintext:  plaintext,
-		Timestamp:  unixMillisToTime(resp.Timestamp),
+		KeyID:      opts.KeyID,
+		KeyVersion: opts.KeyVersion,
+		Plaintext:  resp.Plaintext,
 	}, nil
 }
 
-// CryptoSign signs data via MCP tool call.
+// CryptoSign calls kms_sign over the unhashed message.
 func (m *MCPAdapter) CryptoSign(ctx context.Context, opts CryptoSignOptions) (*CryptoSignResult, error) {
 	args := map[string]interface{}{
-		"keyId":   opts.KeyID,
-		"message": base64.StdEncoding.EncodeToString(opts.Message),
+		"key_id":     opts.KeyID,
+		"message":    encodeBytes(opts.Message),
+		"pre_hashed": false,
 	}
 	if opts.HashAlgorithm != "" {
-		args["hashAlgorithm"] = opts.HashAlgorithm
+		args["hash_algorithm"] = opts.HashAlgorithm
 	}
 
-	var resp mcpCryptoSignResponse
-	if err := m.callTool(ctx, "platform.kms.crypto.sign", args, &resp); err != nil {
+	var resp mcpSignResult
+	if err := m.callTool(ctx, "kms_sign", args, &resp); err != nil {
 		return nil, err
 	}
 
-	signature, err := base64.StdEncoding.DecodeString(resp.Signature)
-	if err != nil {
-		return nil, ErrMCPResponseParseFailed{Operation: "CryptoSign", Err: err}
-	}
-
 	return &CryptoSignResult{
-		KeyID:         resp.KeyID,
+		KeyID:         opts.KeyID,
 		KeyVersion:    resp.KeyVersion,
-		Signature:     signature,
-		HashAlgorithm: resp.HashAlgorithm,
-		Timestamp:     unixMillisToTime(resp.Timestamp),
+		Signature:     resp.Signature,
+		HashAlgorithm: opts.HashAlgorithm,
 	}, nil
 }
 
-// CryptoVerify verifies a signature via MCP tool call.
+// CryptoVerify calls kms_verify.
 func (m *MCPAdapter) CryptoVerify(ctx context.Context, opts CryptoVerifyOptions) (*CryptoVerifyResult, error) {
 	args := map[string]interface{}{
-		"keyId":     opts.KeyID,
-		"message":   base64.StdEncoding.EncodeToString(opts.Message),
-		"signature": base64.StdEncoding.EncodeToString(opts.Signature),
+		"key_id":    opts.KeyID,
+		"message":   encodeBytes(opts.Message),
+		"signature": encodeBytes(opts.Signature),
 	}
 	if opts.HashAlgorithm != "" {
-		args["hashAlgorithm"] = opts.HashAlgorithm
+		args["hash_algorithm"] = opts.HashAlgorithm
 	}
 	if opts.KeyVersion > 0 {
-		args["keyVersion"] = opts.KeyVersion
+		args["key_version"] = opts.KeyVersion
 	}
 
-	var resp mcpCryptoVerifyResponse
-	if err := m.callTool(ctx, "platform.kms.crypto.verify", args, &resp); err != nil {
+	var resp mcpVerifyResult
+	if err := m.callTool(ctx, "kms_verify", args, &resp); err != nil {
 		return nil, err
 	}
 
 	return &CryptoVerifyResult{
-		KeyID:      resp.KeyID,
-		KeyVersion: resp.KeyVersion,
+		KeyID:      opts.KeyID,
+		KeyVersion: opts.KeyVersion,
 		Valid:      resp.Valid,
-		Timestamp:  unixMillisToTime(resp.Timestamp),
 	}, nil
 }
 
-// CryptoHash computes a hash via MCP tool call.
-func (m *MCPAdapter) CryptoHash(ctx context.Context, data []byte, algorithm string) (*CryptoHashResult, error) {
-	args := map[string]interface{}{
-		"data":      base64.StdEncoding.EncodeToString(data),
-		"algorithm": algorithm,
-	}
-
-	var resp mcpCryptoHashResponse
-	if err := m.callTool(ctx, "platform.kms.crypto.hash", args, &resp); err != nil {
-		return nil, err
-	}
-
-	hash, err := base64.StdEncoding.DecodeString(resp.Hash)
-	if err != nil {
-		return nil, ErrMCPResponseParseFailed{Operation: "CryptoHash", Err: err}
-	}
-
-	return &CryptoHashResult{
-		Algorithm: resp.Algorithm,
-		Hash:      hash,
-		Timestamp: unixMillisToTime(resp.Timestamp),
-	}, nil
+// CryptoHash has no MCP surface.
+func (m *MCPAdapter) CryptoHash(_ context.Context, _ []byte, _ string) (*CryptoHashResult, error) {
+	return nil, mcpNoSurface("CryptoHash", mcpNoDigestTool)
 }
 
-// CryptoHMAC generates an HMAC via MCP tool call.
-func (m *MCPAdapter) CryptoHMAC(ctx context.Context, opts CryptoHMACOptions) (*CryptoHMACResult, error) {
-	args := map[string]interface{}{
-		"keyId":   opts.KeyID,
-		"message": base64.StdEncoding.EncodeToString(opts.Message),
-	}
-	if opts.HashAlgorithm != "" {
-		args["hashAlgorithm"] = opts.HashAlgorithm
-	}
-
-	var resp mcpCryptoHMACResponse
-	if err := m.callTool(ctx, "platform.kms.crypto.hmac", args, &resp); err != nil {
-		return nil, err
-	}
-
-	hmac, err := base64.StdEncoding.DecodeString(resp.HMAC)
-	if err != nil {
-		return nil, ErrMCPResponseParseFailed{Operation: "CryptoHMAC", Err: err}
-	}
-
-	return &CryptoHMACResult{
-		KeyID:         resp.KeyID,
-		KeyVersion:    resp.KeyVersion,
-		HMAC:          hmac,
-		HashAlgorithm: resp.HashAlgorithm,
-		Timestamp:     unixMillisToTime(resp.Timestamp),
-	}, nil
+// CryptoHMAC has no MCP surface.
+func (m *MCPAdapter) CryptoHMAC(_ context.Context, _ CryptoHMACOptions) (*CryptoHMACResult, error) {
+	return nil, mcpNoSurface("CryptoHMAC", mcpNoDigestTool)
 }
 
-// CryptoVerifyHMAC verifies an HMAC via MCP tool call.
-func (m *MCPAdapter) CryptoVerifyHMAC(ctx context.Context, opts CryptoVerifyHMACOptions) (*CryptoVerifyHMACResult, error) {
-	args := map[string]interface{}{
-		"keyId":   opts.KeyID,
-		"message": base64.StdEncoding.EncodeToString(opts.Message),
-		"hmac":    base64.StdEncoding.EncodeToString(opts.HMAC),
-	}
-	if opts.HashAlgorithm != "" {
-		args["hashAlgorithm"] = opts.HashAlgorithm
-	}
-	if opts.KeyVersion > 0 {
-		args["keyVersion"] = opts.KeyVersion
-	}
-
-	var resp mcpCryptoVerifyHMACResponse
-	if err := m.callTool(ctx, "platform.kms.crypto.hmac.verify", args, &resp); err != nil {
-		return nil, err
-	}
-
-	return &CryptoVerifyHMACResult{
-		KeyID:      resp.KeyID,
-		KeyVersion: resp.KeyVersion,
-		Valid:      resp.Valid,
-		Timestamp:  unixMillisToTime(resp.Timestamp),
-	}, nil
+// CryptoVerifyHMAC has no MCP surface.
+func (m *MCPAdapter) CryptoVerifyHMAC(_ context.Context, _ CryptoVerifyHMACOptions) (*CryptoVerifyHMACResult, error) {
+	return nil, mcpNoSurface("CryptoVerifyHMAC", mcpNoDigestTool)
 }
 
-// CryptoRandom generates random bytes via MCP tool call.
+// CryptoRandom calls kms_random.
 func (m *MCPAdapter) CryptoRandom(ctx context.Context, numBytes int) (*CryptoRandomResult, error) {
-	args := map[string]interface{}{
-		"numBytes": numBytes,
-	}
-
-	var resp mcpCryptoRandomResponse
-	if err := m.callTool(ctx, "platform.kms.crypto.random", args, &resp); err != nil {
+	var resp mcpRandomResult
+	if err := m.callTool(ctx, "kms_random", map[string]interface{}{"num_bytes": numBytes}, &resp); err != nil {
 		return nil, err
 	}
 
-	randomBytes, err := base64.StdEncoding.DecodeString(resp.RandomBytes)
-	if err != nil {
-		return nil, ErrMCPResponseParseFailed{Operation: "CryptoRandom", Err: err}
-	}
-
-	return &CryptoRandomResult{
-		RandomBytes: randomBytes,
-		Timestamp:   unixMillisToTime(resp.Timestamp),
-	}, nil
+	return &CryptoRandomResult{RandomBytes: resp.RandomBytes}, nil
 }
 
 // =============================================================================
 // DEK Operations
 // =============================================================================
 
-// DEKCreate creates a DEK via MCP tool call.
-func (m *MCPAdapter) DEKCreate(ctx context.Context, opts DEKCreateOptions) (*DEKCreateResult, error) {
-	args := map[string]interface{}{
-		"path": opts.Path,
-	}
-	if opts.Algorithm != "" {
-		args["algorithm"] = opts.Algorithm
-	}
-	if opts.Description != "" {
-		args["description"] = opts.Description
-	}
-	if opts.MaxOperations > 0 {
-		args["maxOperations"] = opts.MaxOperations
-	}
-	if opts.MaxBytes > 0 {
-		args["maxBytes"] = opts.MaxBytes
-	}
-	if opts.WarningPercent > 0 {
-		args["warningPercent"] = opts.WarningPercent
-	}
-
-	var resp mcpDEKCreateResponse
-	if err := m.callTool(ctx, "platform.kms.dek.create", args, &resp); err != nil {
-		return nil, err
-	}
-
-	return &DEKCreateResult{
-		Path:        resp.Path,
-		Algorithm:   resp.Algorithm,
-		Version:     resp.Version,
-		CreatedAt:   unixMillisToTime(resp.CreatedAt),
-		Description: resp.Description,
-	}, nil
+// DEKCreate has no MCP surface.
+func (m *MCPAdapter) DEKCreate(_ context.Context, _ DEKCreateOptions) (*DEKCreateResult, error) {
+	return nil, mcpNoSurface("DEKCreate", mcpNoDEKTool)
 }
 
-// DEKGet retrieves a DEK via MCP tool call.
-func (m *MCPAdapter) DEKGet(ctx context.Context, path string) (*DEKGetResult, error) {
-	args := map[string]interface{}{
-		"path": path,
-	}
-
-	var resp mcpDEKGetResponse
-	if err := m.callTool(ctx, "platform.kms.dek.get", args, &resp); err != nil {
-		return nil, err
-	}
-
-	return &DEKGetResult{
-		Path:           resp.Path,
-		Algorithm:      resp.Algorithm,
-		Version:        resp.Version,
-		Status:         resp.Status,
-		IsDefault:      resp.IsDefault,
-		CreatedAt:      unixMillisToTime(resp.CreatedAt),
-		RotatedAt:      unixMillisToTime(resp.RotatedAt),
-		Description:    resp.Description,
-		BackendType:    resp.BackendType,
-		UsageCount:     resp.UsageCount,
-		BytesUsed:      resp.BytesUsed,
-		MaxUsageCount:  resp.MaxUsageCount,
-		MaxBytesUsed:   resp.MaxBytesUsed,
-		WarningPercent: resp.WarningPercent,
-	}, nil
+// DEKGet has no MCP surface.
+func (m *MCPAdapter) DEKGet(_ context.Context, _ string) (*DEKGetResult, error) {
+	return nil, mcpNoSurface("DEKGet", mcpNoDEKTool)
 }
 
-// DEKList lists DEKs via MCP tool call.
-func (m *MCPAdapter) DEKList(ctx context.Context, opts DEKListOptions) (*DEKListResult, error) {
-	args := map[string]interface{}{}
-	if opts.Prefix != "" {
-		args["prefix"] = opts.Prefix
-	}
-	if opts.Recursive {
-		args["recursive"] = true
-	}
-	if opts.Limit > 0 {
-		args["limit"] = opts.Limit
-	}
-	if opts.Cursor != "" {
-		args["cursor"] = opts.Cursor
-	}
-
-	var resp mcpDEKListResponse
-	if err := m.callTool(ctx, "platform.kms.dek.list", args, &resp); err != nil {
-		return nil, err
-	}
-
-	deks := make([]DEKSummary, len(resp.DEKs))
-	for i, d := range resp.DEKs {
-		deks[i] = DEKSummary{
-			Path:      d.Path,
-			Algorithm: d.Algorithm,
-			Version:   d.Version,
-			Status:    d.Status,
-			IsDefault: d.IsDefault,
-			CreatedAt: unixMillisToTime(d.CreatedAt),
-		}
-	}
-
-	return &DEKListResult{
-		DEKs:       deks,
-		HasMore:    resp.HasMore,
-		NextCursor: resp.NextCursor,
-	}, nil
+// DEKList has no MCP surface.
+func (m *MCPAdapter) DEKList(_ context.Context, _ DEKListOptions) (*DEKListResult, error) {
+	return nil, mcpNoSurface("DEKList", mcpNoDEKTool)
 }
 
-// DEKDelete deletes a DEK via MCP tool call.
-func (m *MCPAdapter) DEKDelete(ctx context.Context, path string, opts DEKDeleteOptions) (*DEKDeleteResult, error) {
-	args := map[string]interface{}{
-		"path": path,
-	}
-	if opts.Force {
-		args["force"] = true
-	}
-	if opts.MigrateTo != "" {
-		args["migrateTo"] = opts.MigrateTo
-	}
-
-	var resp mcpDEKDeleteResponse
-	if err := m.callTool(ctx, "platform.kms.dek.delete", args, &resp); err != nil {
-		return nil, err
-	}
-
-	return &DEKDeleteResult{
-		Path:    resp.Path,
-		Deleted: resp.Deleted,
-	}, nil
+// DEKDelete has no MCP surface.
+func (m *MCPAdapter) DEKDelete(_ context.Context, _ string, _ DEKDeleteOptions) (*DEKDeleteResult, error) {
+	return nil, mcpNoSurface("DEKDelete", mcpNoDEKTool)
 }
 
-// DEKRotate rotates a DEK via MCP tool call.
-func (m *MCPAdapter) DEKRotate(ctx context.Context, path string, background bool) (*DEKRotateResult, error) {
-	args := map[string]interface{}{
-		"path":       path,
-		"background": background,
-	}
-
-	var resp mcpDEKRotateResponse
-	if err := m.callTool(ctx, "platform.kms.dek.rotate", args, &resp); err != nil {
-		return nil, err
-	}
-
-	return &DEKRotateResult{
-		Path:       resp.Path,
-		OldVersion: resp.OldVersion,
-		NewVersion: resp.NewVersion,
-	}, nil
+// DEKRotate has no MCP surface.
+func (m *MCPAdapter) DEKRotate(_ context.Context, _ string, _ bool) (*DEKRotateResult, error) {
+	return nil, mcpNoSurface("DEKRotate", mcpNoDEKTool)
 }
 
-// DEKStatus retrieves DEK status via MCP tool call.
-func (m *MCPAdapter) DEKStatus(ctx context.Context, path string) (*DEKStatusResult, error) {
-	args := map[string]interface{}{
-		"path": path,
-	}
-
-	var resp mcpDEKStatusResponse
-	if err := m.callTool(ctx, "platform.kms.dek.status", args, &resp); err != nil {
-		return nil, err
-	}
-
-	return &DEKStatusResult{
-		Path:                   resp.Path,
-		Algorithm:              resp.Algorithm,
-		Version:                resp.Version,
-		Status:                 resp.Status,
-		IsDefault:              resp.IsDefault,
-		CreatedAt:              unixMillisToTime(resp.CreatedAt),
-		RotatedAt:              unixMillisToTime(resp.RotatedAt),
-		Description:            resp.Description,
-		BackendType:            resp.BackendType,
-		UsageCount:             resp.UsageCount,
-		BytesUsed:              resp.BytesUsed,
-		MaxUsageCount:          resp.MaxUsageCount,
-		MaxBytesUsed:           resp.MaxBytesUsed,
-		WarningPercent:         resp.WarningPercent,
-		ReencryptionInProgress: resp.ReencryptionInProgress,
-		ProcessedKeys:          resp.ProcessedKeys,
-		TotalKeys:              resp.TotalKeys,
-		FailedKeys:             resp.FailedKeys,
-		ReencryptionStartedAt:  unixMillisToTime(resp.ReencryptionStartedAt),
-		EstimatedCompletion:    unixMillisToTime(resp.EstimatedCompletion),
-	}, nil
+// DEKStatus has no MCP surface.
+func (m *MCPAdapter) DEKStatus(_ context.Context, _ string) (*DEKStatusResult, error) {
+	return nil, mcpNoSurface("DEKStatus", mcpNoDEKTool)
 }
 
 // =============================================================================
 // Secrets Operations
 // =============================================================================
 
-// SecretsStore stores a secret via MCP tool call.
+// SecretsStore calls secret_store. The description travels as metadata; the
+// tool takes no tenant, key or algorithm argument.
 func (m *MCPAdapter) SecretsStore(ctx context.Context, opts SecretsStoreOptions) (*SecretsStoreResult, error) {
 	args := map[string]interface{}{
-		"name": opts.Name,
-		"data": base64.StdEncoding.EncodeToString(opts.Data),
+		"secret_id": opts.Name,
+		"data":      encodeBytes(opts.Data),
 	}
 	if opts.Description != "" {
-		args["description"] = opts.Description
-	}
-	if opts.TenantID != "" {
-		args["tenantId"] = opts.TenantID
-	}
-	if opts.KeyID != "" {
-		args["keyId"] = opts.KeyID
-	}
-	if opts.Algorithm != "" {
-		args["algorithm"] = opts.Algorithm
+		args["metadata"] = map[string]string{"description": opts.Description}
 	}
 
-	var resp mcpSecretsStoreResponse
-	if err := m.callTool(ctx, "platform.kms.secrets.store", args, &resp); err != nil {
+	var resp baasservice.StoreSecretResponse
+	if err := m.callTool(ctx, "secret_store", args, &resp); err != nil {
 		return nil, err
 	}
 
-	return &SecretsStoreResult{
-		SecretID:  resp.SecretID,
-		Version:   resp.Version,
-		Timestamp: unixMillisToTime(resp.Timestamp),
-	}, nil
+	return &SecretsStoreResult{SecretID: resp.SecretID, Version: resp.Version, Timestamp: resp.Timestamp}, nil
 }
 
-// SecretsGet retrieves a secret via MCP tool call.
+// SecretsGet calls secret_get for the current version.
 func (m *MCPAdapter) SecretsGet(ctx context.Context, name string) (*SecretsGetResult, error) {
-	args := map[string]interface{}{
-		"name": name,
-	}
-
-	var resp mcpSecretsGetResponse
-	if err := m.callTool(ctx, "platform.kms.secrets.get", args, &resp); err != nil {
+	var resp baasservice.GetSecretResponse
+	if err := m.callTool(ctx, "secret_get", map[string]interface{}{"secret_id": name}, &resp); err != nil {
 		return nil, err
-	}
-
-	data, err := base64.StdEncoding.DecodeString(resp.Data)
-	if err != nil {
-		return nil, ErrMCPResponseParseFailed{Operation: "SecretsGet", Err: err}
 	}
 
 	return &SecretsGetResult{
 		SecretID:      resp.SecretID,
 		Version:       resp.Version,
-		Data:          data,
+		Data:          resp.Data,
 		Metadata:      resp.Metadata,
 		Algorithm:     resp.Algorithm,
 		KeyIdentifier: resp.KeyIdentifier,
-		CreatedAt:     unixMillisToTime(resp.CreatedAt),
-		Timestamp:     unixMillisToTime(resp.Timestamp),
+		CreatedAt:     resp.CreatedAt,
+		Timestamp:     resp.Timestamp,
 	}, nil
 }
 
-// SecretsList lists secrets via MCP tool call.
+// SecretsList calls secret_list. The tool takes a limit only; it has no cursor.
 func (m *MCPAdapter) SecretsList(ctx context.Context, opts SecretsListOptions) (*SecretsListResult, error) {
 	args := map[string]interface{}{}
 	if opts.Limit > 0 {
 		args["limit"] = opts.Limit
 	}
-	if opts.Cursor != "" {
-		args["cursor"] = opts.Cursor
-	}
 
-	var resp mcpSecretsListResponse
-	if err := m.callTool(ctx, "platform.kms.secrets.list", args, &resp); err != nil {
+	var resp baasservice.ListSecretsResponse
+	if err := m.callTool(ctx, "secret_list", args, &resp); err != nil {
 		return nil, err
 	}
 
-	secrets := make([]SecretSummary, len(resp.Secrets))
-	for i, s := range resp.Secrets {
-		secrets[i] = SecretSummary{
-			Name:           s.Name,
-			CurrentVersion: s.CurrentVersion,
-			Description:    s.Description,
-			Owner:          s.Owner,
-			CreatedAt:      unixMillisToTime(s.CreatedAt),
-			UpdatedAt:      unixMillisToTime(s.UpdatedAt),
+	secrets := make([]SecretSummary, 0, len(resp.Secrets))
+	for _, secret := range resp.Secrets {
+		if secret == nil {
+			continue
 		}
+		secrets = append(secrets, SecretSummary{
+			Name:           secret.SecretID,
+			CurrentVersion: secret.CurrentVersion,
+			Description:    secret.Description,
+			Owner:          secret.Owner,
+			CreatedAt:      secret.CreatedAt,
+			UpdatedAt:      secret.UpdatedAt,
+		})
 	}
 
 	return &SecretsListResult{
 		Secrets:    secrets,
-		TotalCount: resp.TotalCount,
+		TotalCount: int32(resp.TotalCount),
 		HasMore:    resp.HasMore,
 		NextCursor: resp.NextCursor,
 	}, nil
 }
 
-// SecretsDelete deletes a secret via MCP tool call.
-func (m *MCPAdapter) SecretsDelete(ctx context.Context, name string, permanent bool) (*SecretsDeleteResult, error) {
-	args := map[string]interface{}{
-		"name":      name,
-		"permanent": permanent,
-	}
-
-	var resp mcpSecretsDeleteResponse
-	if err := m.callTool(ctx, "platform.kms.secrets.delete", args, &resp); err != nil {
+// SecretsDelete calls secret_delete. The tool has no permanent argument.
+func (m *MCPAdapter) SecretsDelete(ctx context.Context, name string, _ bool) (*SecretsDeleteResult, error) {
+	var resp mcpDeleteResult
+	if err := m.callTool(ctx, "secret_delete", map[string]interface{}{"secret_id": name}, &resp); err != nil {
 		return nil, err
 	}
 
-	return &SecretsDeleteResult{
-		SecretID:  resp.SecretID,
-		Deleted:   resp.Deleted,
-		Timestamp: unixMillisToTime(resp.Timestamp),
-	}, nil
+	return &SecretsDeleteResult{SecretID: resp.SecretID, Deleted: resp.Success}, nil
 }
 
-// SecretsRotate rotates a secret via MCP tool call.
-func (m *MCPAdapter) SecretsRotate(ctx context.Context, opts SecretsRotateOptions) (*SecretsRotateResult, error) {
-	args := map[string]interface{}{
-		"name":    opts.Name,
-		"newData": base64.StdEncoding.EncodeToString(opts.NewData),
-	}
-	if opts.TenantID != "" {
-		args["tenantId"] = opts.TenantID
-	}
-	if opts.KeyID != "" {
-		args["keyId"] = opts.KeyID
-	}
-	if opts.Algorithm != "" {
-		args["algorithm"] = opts.Algorithm
-	}
-
-	var resp mcpSecretsRotateResponse
-	if err := m.callTool(ctx, "platform.kms.secrets.rotate", args, &resp); err != nil {
-		return nil, err
-	}
-
-	return &SecretsRotateResult{
-		SecretID:   resp.SecretID,
-		OldVersion: resp.OldVersion,
-		NewVersion: resp.NewVersion,
-		Timestamp:  unixMillisToTime(resp.Timestamp),
-	}, nil
+// SecretsRotate has no MCP surface.
+func (m *MCPAdapter) SecretsRotate(_ context.Context, _ SecretsRotateOptions) (*SecretsRotateResult, error) {
+	return nil, mcpNoSurface("SecretsRotate", mcpNoSecretVersionTool)
 }
 
-// SecretsVersions lists secret versions via MCP tool call.
-func (m *MCPAdapter) SecretsVersions(ctx context.Context, name string, opts SecretsVersionsOptions) (*SecretsVersionsResult, error) {
-	args := map[string]interface{}{
-		"name": name,
-	}
-	if opts.Limit > 0 {
-		args["limit"] = opts.Limit
-	}
-	if opts.Cursor != "" {
-		args["cursor"] = opts.Cursor
-	}
-
-	var resp mcpSecretsVersionsResponse
-	if err := m.callTool(ctx, "platform.kms.secrets.versions", args, &resp); err != nil {
-		return nil, err
-	}
-
-	versions := make([]SecretVersionInfo, len(resp.Versions))
-	for i, v := range resp.Versions {
-		versions[i] = SecretVersionInfo{
-			Version:   v.Version,
-			CreatedAt: unixMillisToTime(v.CreatedAt),
-			CreatedBy: v.CreatedBy,
-			ExpiresAt: unixMillisToTime(v.ExpiresAt),
-		}
-	}
-
-	return &SecretsVersionsResult{
-		SecretID:   resp.SecretID,
-		Versions:   versions,
-		HasMore:    resp.HasMore,
-		NextCursor: resp.NextCursor,
-	}, nil
+// SecretsVersions has no MCP surface.
+func (m *MCPAdapter) SecretsVersions(_ context.Context, _ string, _ SecretsVersionsOptions) (*SecretsVersionsResult, error) {
+	return nil, mcpNoSurface("SecretsVersions", mcpNoSecretVersionTool)
 }
 
-// SecretsVersion retrieves a specific secret version via MCP tool call.
+// SecretsVersion calls secret_get for one version.
 func (m *MCPAdapter) SecretsVersion(ctx context.Context, name string, version uint64) (*SecretsVersionResult, error) {
-	args := map[string]interface{}{
-		"name":    name,
-		"version": version,
-	}
+	args := map[string]interface{}{"secret_id": name, "version": version}
 
-	var resp mcpSecretsVersionResponse
-	if err := m.callTool(ctx, "platform.kms.secrets.version", args, &resp); err != nil {
+	var resp baasservice.GetSecretResponse
+	if err := m.callTool(ctx, "secret_get", args, &resp); err != nil {
 		return nil, err
-	}
-
-	data, err := base64.StdEncoding.DecodeString(resp.Data)
-	if err != nil {
-		return nil, ErrMCPResponseParseFailed{Operation: "SecretsVersion", Err: err}
 	}
 
 	return &SecretsVersionResult{
 		SecretID:  resp.SecretID,
 		Version:   resp.Version,
-		Data:      data,
+		Data:      resp.Data,
 		Metadata:  resp.Metadata,
-		CreatedAt: unixMillisToTime(resp.CreatedAt),
-		CreatedBy: resp.CreatedBy,
-		ExpiresAt: unixMillisToTime(resp.ExpiresAt),
-		Timestamp: unixMillisToTime(resp.Timestamp),
+		CreatedAt: resp.CreatedAt,
+		Timestamp: resp.Timestamp,
 	}, nil
 }
 
-// SecretsRollback rolls back a secret to a previous version via MCP tool call.
-func (m *MCPAdapter) SecretsRollback(ctx context.Context, name string, targetVersion uint64) (*SecretsRollbackResult, error) {
-	args := map[string]interface{}{
-		"name":          name,
-		"targetVersion": targetVersion,
-	}
-
-	var resp mcpSecretsRollbackResponse
-	if err := m.callTool(ctx, "platform.kms.secrets.rollback", args, &resp); err != nil {
-		return nil, err
-	}
-
-	return &SecretsRollbackResult{
-		SecretID:   resp.SecretID,
-		NewVersion: resp.NewVersion,
-		Timestamp:  unixMillisToTime(resp.Timestamp),
-	}, nil
+// SecretsRollback has no MCP surface.
+func (m *MCPAdapter) SecretsRollback(_ context.Context, _ string, _ uint64) (*SecretsRollbackResult, error) {
+	return nil, mcpNoSurface("SecretsRollback", mcpNoSecretVersionTool)
 }
 
-// SecretsStatus updates secret status via MCP tool call.
-func (m *MCPAdapter) SecretsStatus(ctx context.Context, name string, enabled bool) (*SecretsStatusResult, error) {
-	args := map[string]interface{}{
-		"name":    name,
-		"enabled": enabled,
-	}
-
-	var resp mcpSecretsStatusResponse
-	if err := m.callTool(ctx, "platform.kms.secrets.status", args, &resp); err != nil {
-		return nil, err
-	}
-
-	return &SecretsStatusResult{
-		SecretID:  resp.SecretID,
-		Status:    resp.Status,
-		Timestamp: unixMillisToTime(resp.Timestamp),
-	}, nil
-}
-
-// =============================================================================
-// MCP Response Types
-// =============================================================================
-
-// Key Management response types
-
-type mcpKeyGenerateResponse struct {
-	KeyID              string `json:"keyId"`
-	Version            uint64 `json:"version"`
-	Algorithm          string `json:"algorithm"`
-	Status             string `json:"status"`
-	CreatedAt          int64  `json:"createdAt"`
-	Name               string `json:"name"`
-	Description        string `json:"description"`
-	Exportable         bool   `json:"exportable"`
-	DeletionProtection bool   `json:"deletionProtection"`
-}
-
-type mcpKeyGetResponse struct {
-	KeyID              string   `json:"keyId"`
-	Version            uint64   `json:"version"`
-	Algorithm          string   `json:"algorithm"`
-	Status             string   `json:"status"`
-	CreatedAt          int64    `json:"createdAt"`
-	UpdatedAt          int64    `json:"updatedAt"`
-	LastUsedAt         int64    `json:"lastUsedAt"`
-	Name               string   `json:"name"`
-	Description        string   `json:"description"`
-	Owner              string   `json:"owner"`
-	Exportable         bool     `json:"exportable"`
-	DeletionProtection bool     `json:"deletionProtection"`
-	Usage              []string `json:"usage"`
-}
-
-type mcpKeyListResponse struct {
-	Keys       []mcpKeySummary `json:"keys"`
-	TotalCount int32           `json:"totalCount"`
-	HasMore    bool            `json:"hasMore"`
-	NextCursor string          `json:"nextCursor"`
-}
-
-type mcpKeySummary struct {
-	KeyID     string `json:"keyId"`
-	Version   uint64 `json:"version"`
-	Algorithm string `json:"algorithm"`
-	Status    string `json:"status"`
-	CreatedAt int64  `json:"createdAt"`
-}
-
-type mcpKeyDeleteResponse struct {
-	KeyID        string `json:"keyId"`
-	Status       string `json:"status"`
-	DeletionDate int64  `json:"deletionDate"`
-}
-
-type mcpKeyRotateResponse struct {
-	KeyID      string `json:"keyId"`
-	OldVersion uint64 `json:"oldVersion"`
-	NewVersion uint64 `json:"newVersion"`
-	RotatedAt  int64  `json:"rotatedAt"`
-}
-
-type mcpKeyVersionsResponse struct {
-	KeyID      string              `json:"keyId"`
-	Versions   []mcpKeyVersionInfo `json:"versions"`
-	HasMore    bool                `json:"hasMore"`
-	NextCursor string              `json:"nextCursor"`
-}
-
-type mcpKeyVersionInfo struct {
-	Version    uint64 `json:"version"`
-	Algorithm  string `json:"algorithm"`
-	Status     string `json:"status"`
-	CreatedAt  int64  `json:"createdAt"`
-	DisabledAt int64  `json:"disabledAt"`
-}
-
-type mcpKeyStatusResponse struct {
-	KeyID     string `json:"keyId"`
-	Version   uint64 `json:"version"`
-	Status    string `json:"status"`
-	UpdatedAt int64  `json:"updatedAt"`
-}
-
-type mcpKeyRevokeResponse struct {
-	KeyID     string `json:"keyId"`
-	Status    string `json:"status"`
-	RevokedAt int64  `json:"revokedAt"`
-}
-
-type mcpKeyMetadataResponse struct {
-	KeyID              string                 `json:"keyId"`
-	Name               string                 `json:"name"`
-	Description        string                 `json:"description"`
-	Algorithm          string                 `json:"algorithm"`
-	Status             string                 `json:"status"`
-	Version            uint64                 `json:"version"`
-	Exportable         bool                   `json:"exportable"`
-	DeletionProtection bool                   `json:"deletionProtection"`
-	Usage              []string               `json:"usage"`
-	Owner              string                 `json:"owner"`
-	CreatedAt          int64                  `json:"createdAt"`
-	UpdatedAt          int64                  `json:"updatedAt"`
-	LastUsedAt         int64                  `json:"lastUsedAt"`
-	Tags               map[string]string      `json:"tags"`
-	RotationPolicy     *mcpRotationPolicyInfo `json:"rotationPolicy,omitempty"`
-}
-
-type mcpRotationPolicyInfo struct {
-	Enabled         bool  `json:"enabled"`
-	IntervalSeconds int64 `json:"intervalSeconds"`
-	NextRotation    int64 `json:"nextRotation"`
-	RetainVersions  int32 `json:"retainVersions"`
-}
-
-type mcpKeyMetadataUpdateResponse struct {
-	KeyID     string            `json:"keyId"`
-	Name      string            `json:"name"`
-	UpdatedAt int64             `json:"updatedAt"`
-	Tags      map[string]string `json:"tags"`
-}
-
-type mcpKeyPolicyResponse struct {
-	KeyID             string   `json:"keyId"`
-	Version           int32    `json:"version"`
-	AllowedOperations []string `json:"allowedOperations"`
-	AllowedPrincipals []string `json:"allowedPrincipals"`
-	DeniedPrincipals  []string `json:"deniedPrincipals"`
-	ExpiresAt         int64    `json:"expiresAt"`
-	RotationRequired  bool     `json:"rotationRequired"`
-	MaxUsageCount     uint64   `json:"maxUsageCount"`
-	RequireMFA        bool     `json:"requireMFA"`
-	UpdatedAt         int64    `json:"updatedAt"`
-}
-
-type mcpKeyPolicySetResponse struct {
-	KeyID         string `json:"keyId"`
-	PolicyVersion int32  `json:"policyVersion"`
-	UpdatedAt     int64  `json:"updatedAt"`
-}
-
-type mcpKeyAlgorithmsResponse struct {
-	Algorithms []string `json:"algorithms"`
-}
-
-// Crypto response types
-
-type mcpCryptoEncryptResponse struct {
-	KeyID      string `json:"keyId"`
-	KeyVersion uint64 `json:"keyVersion"`
-	Ciphertext string `json:"ciphertext"` // base64
-	Nonce      string `json:"nonce"`      // base64
-	Timestamp  int64  `json:"timestamp"`
-}
-
-type mcpCryptoDecryptResponse struct {
-	KeyID      string `json:"keyId"`
-	KeyVersion uint64 `json:"keyVersion"`
-	Plaintext  string `json:"plaintext"` // base64
-	Timestamp  int64  `json:"timestamp"`
-}
-
-type mcpCryptoSignResponse struct {
-	KeyID         string `json:"keyId"`
-	KeyVersion    uint64 `json:"keyVersion"`
-	Signature     string `json:"signature"` // base64
-	HashAlgorithm string `json:"hashAlgorithm"`
-	Timestamp     int64  `json:"timestamp"`
-}
-
-type mcpCryptoVerifyResponse struct {
-	KeyID      string `json:"keyId"`
-	KeyVersion uint64 `json:"keyVersion"`
-	Valid      bool   `json:"valid"`
-	Timestamp  int64  `json:"timestamp"`
-}
-
-type mcpCryptoHashResponse struct {
-	Algorithm string `json:"algorithm"`
-	Hash      string `json:"hash"` // base64
-	Timestamp int64  `json:"timestamp"`
-}
-
-type mcpCryptoHMACResponse struct {
-	KeyID         string `json:"keyId"`
-	KeyVersion    uint64 `json:"keyVersion"`
-	HMAC          string `json:"hmac"` // base64
-	HashAlgorithm string `json:"hashAlgorithm"`
-	Timestamp     int64  `json:"timestamp"`
-}
-
-type mcpCryptoVerifyHMACResponse struct {
-	KeyID      string `json:"keyId"`
-	KeyVersion uint64 `json:"keyVersion"`
-	Valid      bool   `json:"valid"`
-	Timestamp  int64  `json:"timestamp"`
-}
-
-type mcpCryptoRandomResponse struct {
-	RandomBytes string `json:"randomBytes"` // base64
-	Timestamp   int64  `json:"timestamp"`
-}
-
-// DEK response types
-
-type mcpDEKCreateResponse struct {
-	Path        string `json:"path"`
-	Algorithm   string `json:"algorithm"`
-	Version     uint64 `json:"version"`
-	CreatedAt   int64  `json:"createdAt"`
-	Description string `json:"description"`
-}
-
-type mcpDEKGetResponse struct {
-	Path           string `json:"path"`
-	Algorithm      string `json:"algorithm"`
-	Version        uint64 `json:"version"`
-	Status         string `json:"status"`
-	IsDefault      bool   `json:"isDefault"`
-	CreatedAt      int64  `json:"createdAt"`
-	RotatedAt      int64  `json:"rotatedAt"`
-	Description    string `json:"description"`
-	BackendType    string `json:"backendType"`
-	UsageCount     uint64 `json:"usageCount"`
-	BytesUsed      uint64 `json:"bytesUsed"`
-	MaxUsageCount  uint64 `json:"maxUsageCount"`
-	MaxBytesUsed   uint64 `json:"maxBytesUsed"`
-	WarningPercent int32  `json:"warningPercent"`
-}
-
-type mcpDEKListResponse struct {
-	DEKs       []mcpDEKSummary `json:"deks"`
-	HasMore    bool            `json:"hasMore"`
-	NextCursor string          `json:"nextCursor"`
-}
-
-type mcpDEKSummary struct {
-	Path      string `json:"path"`
-	Algorithm string `json:"algorithm"`
-	Version   uint64 `json:"version"`
-	Status    string `json:"status"`
-	IsDefault bool   `json:"isDefault"`
-	CreatedAt int64  `json:"createdAt"`
-}
-
-type mcpDEKDeleteResponse struct {
-	Path    string `json:"path"`
-	Deleted bool   `json:"deleted"`
-}
-
-type mcpDEKRotateResponse struct {
-	Path       string `json:"path"`
-	OldVersion uint64 `json:"oldVersion"`
-	NewVersion uint64 `json:"newVersion"`
-}
-
-type mcpDEKStatusResponse struct {
-	Path                   string `json:"path"`
-	Algorithm              string `json:"algorithm"`
-	Version                uint64 `json:"version"`
-	Status                 string `json:"status"`
-	IsDefault              bool   `json:"isDefault"`
-	CreatedAt              int64  `json:"createdAt"`
-	RotatedAt              int64  `json:"rotatedAt"`
-	Description            string `json:"description"`
-	BackendType            string `json:"backendType"`
-	UsageCount             uint64 `json:"usageCount"`
-	BytesUsed              uint64 `json:"bytesUsed"`
-	MaxUsageCount          uint64 `json:"maxUsageCount"`
-	MaxBytesUsed           uint64 `json:"maxBytesUsed"`
-	WarningPercent         int32  `json:"warningPercent"`
-	ReencryptionInProgress bool   `json:"reencryptionInProgress"`
-	ProcessedKeys          int64  `json:"processedKeys"`
-	TotalKeys              int64  `json:"totalKeys"`
-	FailedKeys             int64  `json:"failedKeys"`
-	ReencryptionStartedAt  int64  `json:"reencryptionStartedAt"`
-	EstimatedCompletion    int64  `json:"estimatedCompletion"`
-}
-
-// Secrets response types
-
-type mcpSecretsStoreResponse struct {
-	SecretID  string `json:"secretId"`
-	Version   uint64 `json:"version"`
-	Timestamp int64  `json:"timestamp"`
-}
-
-type mcpSecretsGetResponse struct {
-	SecretID      string            `json:"secretId"`
-	Version       uint64            `json:"version"`
-	Data          string            `json:"data"` // base64
-	Metadata      map[string]string `json:"metadata"`
-	Algorithm     string            `json:"algorithm"`
-	KeyIdentifier string            `json:"keyIdentifier"`
-	CreatedAt     int64             `json:"createdAt"`
-	Timestamp     int64             `json:"timestamp"`
-}
-
-type mcpSecretsListResponse struct {
-	Secrets    []mcpSecretSummary `json:"secrets"`
-	TotalCount int32              `json:"totalCount"`
-	HasMore    bool               `json:"hasMore"`
-	NextCursor string             `json:"nextCursor"`
-}
-
-type mcpSecretSummary struct {
-	Name           string `json:"name"`
-	CurrentVersion uint64 `json:"currentVersion"`
-	Description    string `json:"description"`
-	Owner          string `json:"owner"`
-	CreatedAt      int64  `json:"createdAt"`
-	UpdatedAt      int64  `json:"updatedAt"`
-}
-
-type mcpSecretsDeleteResponse struct {
-	SecretID  string `json:"secretId"`
-	Deleted   bool   `json:"deleted"`
-	Timestamp int64  `json:"timestamp"`
-}
-
-type mcpSecretsRotateResponse struct {
-	SecretID   string `json:"secretId"`
-	OldVersion uint64 `json:"oldVersion"`
-	NewVersion uint64 `json:"newVersion"`
-	Timestamp  int64  `json:"timestamp"`
-}
-
-type mcpSecretsVersionsResponse struct {
-	SecretID   string                 `json:"secretId"`
-	Versions   []mcpSecretVersionInfo `json:"versions"`
-	HasMore    bool                   `json:"hasMore"`
-	NextCursor string                 `json:"nextCursor"`
-}
-
-type mcpSecretVersionInfo struct {
-	Version   uint64 `json:"version"`
-	CreatedAt int64  `json:"createdAt"`
-	CreatedBy string `json:"createdBy"`
-	ExpiresAt int64  `json:"expiresAt"`
-}
-
-type mcpSecretsVersionResponse struct {
-	SecretID  string            `json:"secretId"`
-	Version   uint64            `json:"version"`
-	Data      string            `json:"data"` // base64
-	Metadata  map[string]string `json:"metadata"`
-	CreatedAt int64             `json:"createdAt"`
-	CreatedBy string            `json:"createdBy"`
-	ExpiresAt int64             `json:"expiresAt"`
-	Timestamp int64             `json:"timestamp"`
-}
-
-type mcpSecretsRollbackResponse struct {
-	SecretID   string `json:"secretId"`
-	NewVersion uint64 `json:"newVersion"`
-	Timestamp  int64  `json:"timestamp"`
-}
-
-type mcpSecretsStatusResponse struct {
-	SecretID  string `json:"secretId"`
-	Status    string `json:"status"`
-	Timestamp int64  `json:"timestamp"`
-}
-
-// =============================================================================
-// Time Conversion Helpers
-// =============================================================================
-
-// unixMillisToTime converts Unix milliseconds to time.Time.
-func unixMillisToTime(ms int64) time.Time {
-	if ms == 0 {
-		return time.Time{}
-	}
-	return time.Unix(ms/1000, (ms%1000)*int64(time.Millisecond))
+// SecretsStatus has no MCP surface.
+func (m *MCPAdapter) SecretsStatus(_ context.Context, _ string, _ bool) (*SecretsStatusResult, error) {
+	return nil, mcpNoSurface("SecretsStatus", mcpNoSecretVersionTool)
 }

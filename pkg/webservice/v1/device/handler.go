@@ -209,7 +209,7 @@ func (h *Handler) Heartbeat(w http.ResponseWriter, r *http.Request) {
 		// An unknown identity is the caller's problem; anything after
 		// resolution (re-read, save) is a storage fault and must not
 		// masquerade as an enrollment failure.
-		var notFound *device.HeartbeatDeviceNotFoundError
+		var notFound *device.IdentityNotFoundError
 		if errors.As(err, &notFound) {
 			h.responseWriter.Error404(w, r, ErrDeviceNotFound{Serial: serial})
 			return

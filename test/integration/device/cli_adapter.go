@@ -3,13 +3,19 @@
 package device
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
+	wsdevice "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/device"
+	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
 )
 
 // CLIAdapterError represents an error from the CLI adapter
@@ -23,9 +29,31 @@ func (e *CLIAdapterError) Error() string {
 	return fmt.Sprintf("CLI adapter error [%s]: %s (output: %s)", e.Operation, e.Message, e.Output)
 }
 
-// CLIAdapter implements DeviceCommands using the platformctl CLI
+// ErrCLINoVerb reports a device operation platformctl has no verb for.
+//
+// The adapter used to shell verbs and flags that do not exist (device update,
+// profile delete, template *, --tenant-id, ...); the suite's skip guard read
+// the resulting "unknown flag" as "not implemented" and the CLI lane reported
+// those operations passing (#493). The error is returned rather than faked so
+// the CLI subtest fails and the gap stays visible. Its wording deliberately
+// avoids the phrases skipIfNotImplemented swallows.
+type ErrCLINoVerb struct {
+	Operation string
+	Reason    string
+}
+
+func (e ErrCLINoVerb) Error() string {
+	return fmt.Sprintf("platformctl has no verb for device operation %s: %s", e.Operation, e.Reason)
+}
+
+// CLIAdapter implements DeviceCommands using the platformctl CLI. It drives
+// the daemon through a local platformctl context Setup writes, so every
+// command reaches the same Unix socket and gRPC endpoint the other adapters
+// test.
 type CLIAdapter struct {
-	cliPath string
+	cliPath    string
+	configDir  string
+	configPath string
 }
 
 // NewCLIAdapter creates a new CLI adapter
@@ -35,22 +63,35 @@ func NewCLIAdapter() *CLIAdapter {
 	}
 }
 
-// Setup prepares the adapter for testing
+// Setup verifies platformctl is installed and writes the platformctl config
+// whose current context targets the integration daemon.
 func (a *CLIAdapter) Setup(ctx context.Context) error {
-	// Verify CLI is available
-	_, err := exec.LookPath(a.cliPath)
-	if err != nil {
+	if _, err := exec.LookPath(a.cliPath); err != nil {
 		return &CLIAdapterError{
 			Operation: "Setup",
 			Message:   "CLI not found",
+			Output:    err.Error(),
 		}
 	}
+	dir, err := os.MkdirTemp("", "platformctl-device-test-*")
+	if err != nil {
+		return err
+	}
+	path, err := helpers.WriteLocalCLIConfig(dir, GetSocketPath(), GetGRPCEndpoint())
+	if err != nil {
+		_ = os.RemoveAll(dir)
+		return err
+	}
+	a.configDir, a.configPath = dir, path
 	return nil
 }
 
-// Teardown cleans up after testing
+// Teardown removes the platformctl config Setup wrote.
 func (a *CLIAdapter) Teardown(ctx context.Context) error {
-	return nil
+	if a.configDir == "" {
+		return nil
+	}
+	return os.RemoveAll(a.configDir)
 }
 
 // Name returns the adapter name
@@ -58,475 +99,467 @@ func (a *CLIAdapter) Name() string {
 	return "CLI"
 }
 
-// runCommand executes a CLI command and returns the output
+// runCommand executes a platformctl command against the integration context
+// with JSON output and returns its stdout. Stderr is kept separate so a
+// warning can never corrupt the JSON the caller decodes.
 func (a *CLIAdapter) runCommand(ctx context.Context, args ...string) ([]byte, error) {
-	cmd := exec.CommandContext(ctx, a.cliPath, args...)
-	output, err := cmd.CombinedOutput()
-	if err != nil {
+	full := append([]string{
+		"--config", a.configPath,
+		"--context", helpers.CLIContextName,
+		"--output", "json",
+	}, args...)
+
+	var stdout, stderr bytes.Buffer
+	cmd := exec.CommandContext(ctx, a.cliPath, full...)
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
 		return nil, &CLIAdapterError{
 			Operation: strings.Join(args, " "),
 			Message:   err.Error(),
+			Output:    stderr.String() + stdout.String(),
+		}
+	}
+	return stdout.Bytes(), nil
+}
+
+// runJSON runs a platformctl command and decodes its JSON output into out.
+func (a *CLIAdapter) runJSON(ctx context.Context, operation string, out any, args ...string) error {
+	output, err := a.runCommand(ctx, args...)
+	if err != nil {
+		return err
+	}
+	if err := json.Unmarshal(output, out); err != nil {
+		return &CLIAdapterError{
+			Operation: operation,
+			Message:   "failed to parse response: " + err.Error(),
 			Output:    string(output),
 		}
 	}
-	return output, nil
+	return nil
+}
+
+// ============================================================================
+// CLI output shapes
+// ============================================================================
+
+// deviceJSON is the device object `device get`, `find-serial` and `register`
+// print (pkg/cli/commands/device buildGetOutput) and the daemon REST API
+// returns (pkg/webservice/v1/device DeviceResponse). entities.Device cannot
+// decode it: its own tags are att_pub and hash_algo. The CLI prints the id as
+// a JSON number and the REST API as a JSON string, so the id takes the
+// webservice's own ID type, which decodes both.
+type deviceJSON struct {
+	ID         wsdevice.ID `json:"id"`
+	Serial     string      `json:"serial"`
+	Model      string      `json:"model"`
+	HashAlgoID uint32      `json:"hash_algo_id"`
+	EKCert     string      `json:"ek_cert"`
+	AttestPub  string      `json:"attest_pub"`
+	AttestCert string      `json:"attest_cert"`
+	SigningPub string      `json:"signing_pub"`
+}
+
+func (d deviceJSON) entity() *entities.Device {
+	return &entities.Device{
+		ID:         d.ID.Uint64(),
+		Serial:     d.Serial,
+		Model:      d.Model,
+		HashAlgoId: d.HashAlgoID,
+		EKCert:     d.EKCert,
+		AttestPub:  d.AttestPub,
+		AttestCert: d.AttestCert,
+		SigningPub: d.SigningPub,
+	}
+}
+
+// cliDeviceList is the page `device list` prints.
+type cliDeviceList struct {
+	Total   int          `json:"total"`
+	Devices []deviceJSON `json:"devices"`
+}
+
+// cliProfile is the profile object the `device profile` verbs print
+// (buildProfileOutput). The ID is a decimal string so a uint64 survives
+// JSON consumers that parse numbers as float64.
+type cliProfile struct {
+	ID            string `json:"id"`
+	Name          string `json:"name"`
+	Model         string `json:"model"`
+	Role          string `json:"role"`
+	Zone          string `json:"zone"`
+	EKSerial      string `json:"ek_serial"`
+	MACAddress    string `json:"mac_address"`
+	EKCert        string `json:"ek_cert"`
+	TLSServerName string `json:"tls_server_name"`
+	Assigned      bool   `json:"assigned"`
+
+	// MatchRules is the match_rules object; its keys are the entity's own
+	// JSON tags (mac_prefix, serial_prefix, model, ...).
+	MatchRules *entities.ProfileMatchRules `json:"match_rules"`
+}
+
+func (p cliProfile) entity(operation string) (*entities.DeviceProfile, error) {
+	id, err := strconv.ParseUint(p.ID, 10, 64)
+	if err != nil {
+		return nil, &CLIAdapterError{
+			Operation: operation,
+			Message:   "profile id is not a decimal uint64: " + err.Error(),
+			Output:    p.ID,
+		}
+	}
+	return &entities.DeviceProfile{
+		ID:            id,
+		Name:          p.Name,
+		Model:         p.Model,
+		Role:          entities.DeviceRole(p.Role),
+		Zone:          p.Zone,
+		EKSerial:      p.EKSerial,
+		MACAddress:    p.MACAddress,
+		EKCert:        p.EKCert,
+		TLSServerName: p.TLSServerName,
+		Assigned:      p.Assigned,
+		MatchRules:    p.MatchRules,
+	}, nil
+}
+
+// cliProfileList is the page `device profile list` prints.
+type cliProfileList struct {
+	Total    int          `json:"total"`
+	Profiles []cliProfile `json:"profiles"`
+}
+
+// cliAttestCertRecord is the result `device attest-cert record` prints.
+type cliAttestCertRecord struct {
+	ID                uint64 `json:"id"`
+	Serial            string `json:"serial"`
+	Model             string `json:"model"`
+	Changed           bool   `json:"changed"`
+	Source            string `json:"source"`
+	SourceDetail      string `json:"source_detail"`
+	Reissued          bool   `json:"reissued"`
+	Subject           string `json:"subject"`
+	CertificateSerial string `json:"certificate_serial"`
+	AttestCert        string `json:"attest_cert"`
+}
+
+// cliDeleted is the result `device profile delete` and `device template
+// delete` print.
+type cliDeleted struct {
+	ID      string `json:"id"`
+	Deleted bool   `json:"deleted"`
+}
+
+// cliTemplate is the template object the `device template` verbs print
+// (buildTemplateOutput). The CLI renders the config only as its length
+// (config_bytes), so the entity's Config stays empty.
+type cliTemplate struct {
+	ID          string                      `json:"id"`
+	Name        string                      `json:"name"`
+	Description string                      `json:"description"`
+	Role        string                      `json:"role"`
+	MatchRules  *entities.ProfileMatchRules `json:"match_rules"`
+}
+
+func (t cliTemplate) entity(operation string) (*entities.DeviceTemplate, error) {
+	id, err := strconv.ParseUint(t.ID, 10, 64)
+	if err != nil {
+		return nil, &CLIAdapterError{
+			Operation: operation,
+			Message:   "template id is not a decimal uint64: " + err.Error(),
+			Output:    t.ID,
+		}
+	}
+	return &entities.DeviceTemplate{
+		ID:          id,
+		Name:        t.Name,
+		Description: t.Description,
+		Role:        entities.DeviceRole(t.Role),
+		MatchRules:  t.MatchRules,
+	}, nil
+}
+
+// cliTemplateList is the page `device template list` prints.
+type cliTemplateList struct {
+	Total     int           `json:"total"`
+	Templates []cliTemplate `json:"templates"`
+}
+
+// pageArgs maps the suite's limit/offset window onto the CLI's 1-based
+// --page/--page-size flags. A zero limit keeps the CLI defaults.
+func pageArgs(limit, offset int) []string {
+	if limit <= 0 {
+		return nil
+	}
+	page := offset/limit + 1
+	return []string{"--page", strconv.Itoa(page), "--page-size", strconv.Itoa(limit)}
+}
+
+// appendFlag appends --name value when value is set.
+func appendFlag(args []string, name, value string) []string {
+	if value == "" {
+		return args
+	}
+	return append(args, name, value)
 }
 
 // ============================================================================
 // Device CRUD Operations
 // ============================================================================
 
-// RegisterDevice registers a new device
+// RegisterDevice creates a device record via `platformctl device register`.
 func (a *CLIAdapter) RegisterDevice(ctx context.Context, opts RegisterDeviceOptions) (*RegisterDeviceResult, error) {
-	args := []string{"device", "register",
-		"--tenant-id", opts.TenantID,
-		"--serial", opts.Serial,
-		"--output", "json",
-	}
-
-	if opts.Model != "" {
-		args = append(args, "--model", opts.Model)
-	}
-	if opts.EKCert != "" {
-		args = append(args, "--ek-cert", opts.EKCert)
-	}
-	if opts.AttestPub != "" {
-		args = append(args, "--attest-pub", opts.AttestPub)
-	}
-	if opts.AttestCert != "" {
-		args = append(args, "--attest-cert", opts.AttestCert)
-	}
-	if opts.SigningPub != "" {
-		args = append(args, "--signing-pub", opts.SigningPub)
-	}
+	args := []string{"device", "register", "--serial", opts.Serial}
+	args = appendFlag(args, "--model", opts.Model)
+	args = appendFlag(args, "--ek-cert", opts.EKCert)
+	args = appendFlag(args, "--attest-pub", opts.AttestPub)
+	args = appendFlag(args, "--attest-cert", opts.AttestCert)
+	args = appendFlag(args, "--signing-pub", opts.SigningPub)
 	if opts.HashAlgoId > 0 {
-		args = append(args, "--hash-algo", fmt.Sprintf("%d", opts.HashAlgoId))
+		args = append(args, "--hash-algo", strconv.FormatUint(uint64(opts.HashAlgoId), 10))
 	}
 
-	output, err := a.runCommand(ctx, args...)
-	if err != nil {
+	var device deviceJSON
+	if err := a.runJSON(ctx, "RegisterDevice", &device, args...); err != nil {
 		return nil, err
 	}
-
-	var device entities.Device
-	if err := json.Unmarshal(output, &device); err != nil {
-		return nil, &CLIAdapterError{
-			Operation: "RegisterDevice",
-			Message:   "failed to parse response",
-			Output:    string(output),
-		}
-	}
-
-	return &RegisterDeviceResult{Device: &device}, nil
+	return &RegisterDeviceResult{Device: device.entity()}, nil
 }
 
-// GetDevice retrieves a device by its key
+// GetDevice retrieves a device via `platformctl device get <id>`.
 func (a *CLIAdapter) GetDevice(ctx context.Context, opts GetDeviceOptions) (*GetDeviceResult, error) {
-	args := []string{"device", "get",
-		"--tenant-id", opts.TenantID,
-		"--device-id", opts.DeviceID,
-		"--output", "json",
-	}
-
-	output, err := a.runCommand(ctx, args...)
-	if err != nil {
+	var device deviceJSON
+	if err := a.runJSON(ctx, "GetDevice", &device, "device", "get", opts.DeviceID); err != nil {
 		return nil, err
 	}
-
-	var device entities.Device
-	if err := json.Unmarshal(output, &device); err != nil {
-		return nil, &CLIAdapterError{
-			Operation: "GetDevice",
-			Message:   "failed to parse response",
-			Output:    string(output),
-		}
-	}
-
-	return &GetDeviceResult{Device: &device}, nil
+	return &GetDeviceResult{Device: device.entity()}, nil
 }
 
-// UpdateDevice updates an existing device
+// UpdateDevice changes a device via `platformctl device update <id>`, which
+// sets only the flagged fields (docs/device/cli.md §2.7a). A zero HashAlgoId
+// means "unchanged" here, so --hash-algo is passed only when it is set.
 func (a *CLIAdapter) UpdateDevice(ctx context.Context, opts UpdateDeviceOptions) (*UpdateDeviceResult, error) {
-	args := []string{"device", "update",
-		"--tenant-id", opts.TenantID,
-		"--device-id", opts.DeviceID,
-		"--output", "json",
-	}
-
-	if opts.Model != "" {
-		args = append(args, "--model", opts.Model)
-	}
-	if opts.EKCert != "" {
-		args = append(args, "--ek-cert", opts.EKCert)
-	}
-	if opts.AttestPub != "" {
-		args = append(args, "--attest-pub", opts.AttestPub)
-	}
-	if opts.AttestCert != "" {
-		args = append(args, "--attest-cert", opts.AttestCert)
-	}
-	if opts.SigningPub != "" {
-		args = append(args, "--signing-pub", opts.SigningPub)
-	}
+	args := []string{"device", "update", opts.DeviceID}
+	args = appendFlag(args, "--model", opts.Model)
+	args = appendFlag(args, "--ek-cert", opts.EKCert)
+	args = appendFlag(args, "--attest-pub", opts.AttestPub)
+	args = appendFlag(args, "--attest-cert", opts.AttestCert)
+	args = appendFlag(args, "--signing-pub", opts.SigningPub)
 	if opts.HashAlgoId > 0 {
-		args = append(args, "--hash-algo", fmt.Sprintf("%d", opts.HashAlgoId))
+		args = append(args, "--hash-algo", strconv.FormatUint(uint64(opts.HashAlgoId), 10))
 	}
 
-	output, err := a.runCommand(ctx, args...)
-	if err != nil {
+	var device deviceJSON
+	if err := a.runJSON(ctx, "UpdateDevice", &device, args...); err != nil {
 		return nil, err
 	}
-
-	var device entities.Device
-	if err := json.Unmarshal(output, &device); err != nil {
-		return nil, &CLIAdapterError{
-			Operation: "UpdateDevice",
-			Message:   "failed to parse response",
-			Output:    string(output),
-		}
-	}
-
-	return &UpdateDeviceResult{Device: &device}, nil
+	return &UpdateDeviceResult{Device: device.entity()}, nil
 }
 
-// DeleteDevice removes a device
+// DeleteDevice removes a device via `platformctl device delete <id>`.
 func (a *CLIAdapter) DeleteDevice(ctx context.Context, opts DeleteDeviceOptions) (*DeleteDeviceResult, error) {
-	args := []string{"device", "delete",
-		"--tenant-id", opts.TenantID,
-		"--device-id", opts.DeviceID,
-		"--output", "json",
+	var result struct {
+		Success bool `json:"success"`
 	}
-
-	_, err := a.runCommand(ctx, args...)
-	if err != nil {
+	if err := a.runJSON(ctx, "DeleteDevice", &result, "device", "delete", opts.DeviceID); err != nil {
 		return nil, err
 	}
-
-	return &DeleteDeviceResult{Success: true}, nil
+	return &DeleteDeviceResult{Success: result.Success}, nil
 }
 
-// ListDevices lists all devices with optional filtering
+// ListDevices lists devices via `platformctl device list`. The CLI, like the
+// server, filters by nothing but the page window, so a ProfileID or Status
+// filter cannot be honoured and is refused.
 func (a *CLIAdapter) ListDevices(ctx context.Context, opts ListDevicesOptions) (*ListDevicesResult, error) {
-	args := []string{"device", "list",
-		"--tenant-id", opts.TenantID,
-		"--output", "json",
+	if opts.ProfileID != "" || opts.Status != "" {
+		return nil, ErrCLINoVerb{Operation: "ListDevices", Reason: "`device list` has no profile or status filter"}
 	}
+	args := append([]string{"device", "list"}, pageArgs(opts.Limit, opts.Offset)...)
 
-	if opts.ProfileID != "" {
-		args = append(args, "--profile-id", opts.ProfileID)
-	}
-	if opts.Status != "" {
-		args = append(args, "--status", opts.Status)
-	}
-	if opts.Limit > 0 {
-		args = append(args, "--limit", fmt.Sprintf("%d", opts.Limit))
-	}
-	if opts.Offset > 0 {
-		args = append(args, "--offset", fmt.Sprintf("%d", opts.Offset))
-	}
-
-	output, err := a.runCommand(ctx, args...)
-	if err != nil {
+	var page cliDeviceList
+	if err := a.runJSON(ctx, "ListDevices", &page, args...); err != nil {
 		return nil, err
 	}
-
-	var result ListDevicesResult
-	if err := json.Unmarshal(output, &result); err != nil {
-		// Try parsing as array
-		var devices []*entities.Device
-		if err := json.Unmarshal(output, &devices); err != nil {
-			return nil, &CLIAdapterError{
-				Operation: "ListDevices",
-				Message:   "failed to parse response",
-				Output:    string(output),
-			}
-		}
-		result.Devices = devices
-		result.Total = len(devices)
+	devices := make([]*entities.Device, 0, len(page.Devices))
+	for _, d := range page.Devices {
+		devices = append(devices, d.entity())
 	}
-
-	return &result, nil
+	return &ListDevicesResult{Devices: devices, Total: page.Total}, nil
 }
 
 // ============================================================================
 // Device Lookups
 // ============================================================================
 
-// FindBySerial finds a device by its serial number
+// FindBySerial finds a device via `platformctl device find-serial <serial>`.
 func (a *CLIAdapter) FindBySerial(ctx context.Context, opts FindBySerialOptions) (*FindBySerialResult, error) {
-	args := []string{"device", "find-by-serial",
-		"--tenant-id", opts.TenantID,
-		"--serial", opts.Serial,
-		"--output", "json",
-	}
-
-	output, err := a.runCommand(ctx, args...)
-	if err != nil {
+	var device deviceJSON
+	if err := a.runJSON(ctx, "FindBySerial", &device, "device", "find-serial", opts.Serial); err != nil {
 		return nil, err
 	}
-
-	var device entities.Device
-	if err := json.Unmarshal(output, &device); err != nil {
-		return nil, &CLIAdapterError{
-			Operation: "FindBySerial",
-			Message:   "failed to parse response",
-			Output:    string(output),
-		}
-	}
-
-	return &FindBySerialResult{Device: &device}, nil
+	return &FindBySerialResult{Device: device.entity()}, nil
 }
 
 // ============================================================================
 // Profile CRUD Operations
 // ============================================================================
 
-// CreateProfile creates a new device profile
+// matchRuleArgs maps the suite's match rules onto the --match-mac-prefix,
+// --match-serial-prefix and --match-model flags (docs/device/cli.md §3.1).
+// A rule set in MatchRules wins over the bare prefix option, as on the RPC
+// adapters. Those three are the only rules the CLI sets, so any other rule
+// is refused rather than silently dropped.
+func matchRuleArgs(operation, macPrefix, serialPrefix string, rules *entities.ProfileMatchRules) ([]string, error) {
+	model := ""
+	if rules != nil {
+		if rules.ModelPattern != "" || rules.SerialPattern != "" || rules.ManufacturerMatch != "" ||
+			rules.TPMVendor != "" || len(rules.CustomAttributes) > 0 {
+			return nil, ErrCLINoVerb{Operation: operation, Reason: "the match-rule flags set only a MAC prefix, a serial prefix and a model"}
+		}
+		if rules.MACPrefix != "" {
+			macPrefix = rules.MACPrefix
+		}
+		if rules.SerialPrefix != "" {
+			serialPrefix = rules.SerialPrefix
+		}
+		model = rules.Model
+	}
+	var args []string
+	args = appendFlag(args, "--match-mac-prefix", macPrefix)
+	args = appendFlag(args, "--match-serial-prefix", serialPrefix)
+	args = appendFlag(args, "--match-model", model)
+	return args, nil
+}
+
+// CreateProfile creates a profile via `platformctl device profile create`.
 func (a *CLIAdapter) CreateProfile(ctx context.Context, opts CreateProfileOptions) (*CreateProfileResult, error) {
-	args := []string{"device", "profile", "create",
-		"--tenant-id", opts.TenantID,
-		"--name", opts.Name,
-		"--output", "json",
-	}
-
-	if opts.Model != "" {
-		args = append(args, "--model", opts.Model)
-	}
-	if opts.Role != "" {
-		args = append(args, "--role", string(opts.Role))
-	}
-	if opts.MACPrefix != "" {
-		args = append(args, "--mac-prefix", opts.MACPrefix)
-	}
-	if opts.SerialPrefix != "" {
-		args = append(args, "--serial-prefix", opts.SerialPrefix)
-	}
-
-	output, err := a.runCommand(ctx, args...)
+	matchArgs, err := matchRuleArgs("CreateProfile", opts.MACPrefix, opts.SerialPrefix, opts.MatchRules)
 	if err != nil {
 		return nil, err
 	}
+	args := []string{"device", "profile", "create"}
+	args = appendFlag(args, "--name", opts.Name)
+	args = appendFlag(args, "--model", opts.Model)
+	args = appendFlag(args, "--role", string(opts.Role))
+	args = append(args, matchArgs...)
 
-	var profile entities.DeviceProfile
-	if err := json.Unmarshal(output, &profile); err != nil {
-		return nil, &CLIAdapterError{
-			Operation: "CreateProfile",
-			Message:   "failed to parse response",
-			Output:    string(output),
-		}
+	profile, err := a.runProfile(ctx, "CreateProfile", args...)
+	if err != nil {
+		return nil, err
 	}
-
-	return &CreateProfileResult{Profile: &profile}, nil
+	return &CreateProfileResult{Profile: profile}, nil
 }
 
-// GetProfile retrieves a profile by its key
+// GetProfile retrieves a profile via `platformctl device profile get <id>`.
 func (a *CLIAdapter) GetProfile(ctx context.Context, opts GetProfileOptions) (*GetProfileResult, error) {
-	args := []string{"device", "profile", "get",
-		"--tenant-id", opts.TenantID,
-		"--profile-id", opts.ProfileID,
-		"--output", "json",
-	}
-
-	output, err := a.runCommand(ctx, args...)
+	profile, err := a.runProfile(ctx, "GetProfile", "device", "profile", "get", opts.ProfileID)
 	if err != nil {
 		return nil, err
 	}
-
-	var profile entities.DeviceProfile
-	if err := json.Unmarshal(output, &profile); err != nil {
-		return nil, &CLIAdapterError{
-			Operation: "GetProfile",
-			Message:   "failed to parse response",
-			Output:    string(output),
-		}
-	}
-
-	return &GetProfileResult{Profile: &profile}, nil
+	return &GetProfileResult{Profile: profile}, nil
 }
 
-// UpdateProfile updates an existing profile
+// UpdateProfile updates a profile via `platformctl device profile update <id>`.
 func (a *CLIAdapter) UpdateProfile(ctx context.Context, opts UpdateProfileOptions) (*UpdateProfileResult, error) {
-	args := []string{"device", "profile", "update",
-		"--tenant-id", opts.TenantID,
-		"--profile-id", opts.ProfileID,
-		"--output", "json",
-	}
-
-	if opts.Name != "" {
-		args = append(args, "--name", opts.Name)
-	}
-	if opts.Model != "" {
-		args = append(args, "--model", opts.Model)
-	}
-	if opts.Role != "" {
-		args = append(args, "--role", string(opts.Role))
-	}
-	if opts.MACPrefix != "" {
-		args = append(args, "--mac-prefix", opts.MACPrefix)
-	}
-	if opts.SerialPrefix != "" {
-		args = append(args, "--serial-prefix", opts.SerialPrefix)
-	}
-
-	output, err := a.runCommand(ctx, args...)
+	matchArgs, err := matchRuleArgs("UpdateProfile", opts.MACPrefix, opts.SerialPrefix, opts.MatchRules)
 	if err != nil {
 		return nil, err
 	}
+	args := []string{"device", "profile", "update", opts.ProfileID}
+	args = appendFlag(args, "--name", opts.Name)
+	args = appendFlag(args, "--model", opts.Model)
+	args = appendFlag(args, "--role", string(opts.Role))
+	args = append(args, matchArgs...)
 
-	var profile entities.DeviceProfile
-	if err := json.Unmarshal(output, &profile); err != nil {
-		return nil, &CLIAdapterError{
-			Operation: "UpdateProfile",
-			Message:   "failed to parse response",
-			Output:    string(output),
-		}
+	profile, err := a.runProfile(ctx, "UpdateProfile", args...)
+	if err != nil {
+		return nil, err
 	}
-
-	return &UpdateProfileResult{Profile: &profile}, nil
+	return &UpdateProfileResult{Profile: profile}, nil
 }
 
-// DeleteProfile removes a profile
+// DeleteProfile removes a profile via `platformctl device profile delete <id>`.
 func (a *CLIAdapter) DeleteProfile(ctx context.Context, opts DeleteProfileOptions) (*DeleteProfileResult, error) {
-	args := []string{"device", "profile", "delete",
-		"--tenant-id", opts.TenantID,
-		"--profile-id", opts.ProfileID,
-		"--output", "json",
-	}
-
-	_, err := a.runCommand(ctx, args...)
-	if err != nil {
+	var result cliDeleted
+	if err := a.runJSON(ctx, "DeleteProfile", &result, "device", "profile", "delete", opts.ProfileID); err != nil {
 		return nil, err
 	}
-
-	return &DeleteProfileResult{Success: true}, nil
+	return &DeleteProfileResult{Success: result.Deleted}, nil
 }
 
-// ListProfiles lists all profiles with optional filtering
+// ListProfiles lists profiles via `platformctl device profile list`. There
+// is no role filter on the CLI or the server, so one is refused.
 func (a *CLIAdapter) ListProfiles(ctx context.Context, opts ListProfilesOptions) (*ListProfilesResult, error) {
-	args := []string{"device", "profile", "list",
-		"--tenant-id", opts.TenantID,
-		"--output", "json",
-	}
-
 	if opts.Role != "" {
-		args = append(args, "--role", string(opts.Role))
+		return nil, ErrCLINoVerb{Operation: "ListProfiles", Reason: "`device profile list` has no role filter"}
 	}
-	if opts.Limit > 0 {
-		args = append(args, "--limit", fmt.Sprintf("%d", opts.Limit))
-	}
-	if opts.Offset > 0 {
-		args = append(args, "--offset", fmt.Sprintf("%d", opts.Offset))
-	}
+	args := append([]string{"device", "profile", "list"}, pageArgs(opts.Limit, opts.Offset)...)
 
-	output, err := a.runCommand(ctx, args...)
-	if err != nil {
+	var page cliProfileList
+	if err := a.runJSON(ctx, "ListProfiles", &page, args...); err != nil {
 		return nil, err
 	}
-
-	var result ListProfilesResult
-	if err := json.Unmarshal(output, &result); err != nil {
-		// Try parsing as array
-		var profiles []*entities.DeviceProfile
-		if err := json.Unmarshal(output, &profiles); err != nil {
-			return nil, &CLIAdapterError{
-				Operation: "ListProfiles",
-				Message:   "failed to parse response",
-				Output:    string(output),
-			}
+	profiles := make([]*entities.DeviceProfile, 0, len(page.Profiles))
+	for _, p := range page.Profiles {
+		profile, err := p.entity("ListProfiles")
+		if err != nil {
+			return nil, err
 		}
-		result.Profiles = profiles
-		result.Total = len(profiles)
+		profiles = append(profiles, profile)
 	}
+	return &ListProfilesResult{Profiles: profiles, Total: page.Total}, nil
+}
 
-	return &result, nil
+// runProfile runs a `device profile` verb that prints one profile.
+func (a *CLIAdapter) runProfile(ctx context.Context, operation string, args ...string) (*entities.DeviceProfile, error) {
+	var profile cliProfile
+	if err := a.runJSON(ctx, operation, &profile, args...); err != nil {
+		return nil, err
+	}
+	return profile.entity(operation)
 }
 
 // ============================================================================
 // Profile Lookups
 // ============================================================================
 
-// FindProfileByMACAddress finds a profile by MAC address prefix
+// FindProfileByMACAddress finds a profile whose MAC prefix rule fits the
+// address via `platformctl device profile match --mac`. The CLI has no
+// separate by-MAC verb; `match` covers it (docs/device/cli.md §3.0a, §6).
 func (a *CLIAdapter) FindProfileByMACAddress(ctx context.Context, opts FindProfileByMACAddressOptions) (*FindProfileByMACAddressResult, error) {
-	args := []string{"device", "profile", "find-by-mac",
-		"--tenant-id", opts.TenantID,
-		"--mac-address", opts.MACAddress,
-		"--output", "json",
-	}
-
-	output, err := a.runCommand(ctx, args...)
+	profile, err := a.matchProfile(ctx, "FindProfileByMACAddress", FindMatchingProfileOptions{MACAddress: opts.MACAddress})
 	if err != nil {
 		return nil, err
 	}
-
-	var profile entities.DeviceProfile
-	if err := json.Unmarshal(output, &profile); err != nil {
-		return nil, &CLIAdapterError{
-			Operation: "FindProfileByMACAddress",
-			Message:   "failed to parse response",
-			Output:    string(output),
-		}
-	}
-
-	return &FindProfileByMACAddressResult{Profile: &profile}, nil
+	return &FindProfileByMACAddressResult{Profile: profile}, nil
 }
 
-// FindProfileBySerial finds a profile by serial pattern
+// FindProfileBySerial finds a profile whose serial prefix rule fits the
+// serial via `platformctl device profile match --serial`.
 func (a *CLIAdapter) FindProfileBySerial(ctx context.Context, opts FindProfileBySerialOptions) (*FindProfileBySerialResult, error) {
-	args := []string{"device", "profile", "find-by-serial",
-		"--tenant-id", opts.TenantID,
-		"--serial", opts.Serial,
-		"--output", "json",
-	}
-
-	output, err := a.runCommand(ctx, args...)
+	profile, err := a.matchProfile(ctx, "FindProfileBySerial", FindMatchingProfileOptions{Serial: opts.Serial})
 	if err != nil {
 		return nil, err
 	}
-
-	var profile entities.DeviceProfile
-	if err := json.Unmarshal(output, &profile); err != nil {
-		return nil, &CLIAdapterError{
-			Operation: "FindProfileBySerial",
-			Message:   "failed to parse response",
-			Output:    string(output),
-		}
-	}
-
-	return &FindProfileBySerialResult{Profile: &profile}, nil
+	return &FindProfileBySerialResult{Profile: profile}, nil
 }
 
-// FindMatchingProfile finds a profile matching device attributes
+// FindMatchingProfile finds a profile via `platformctl device profile match`.
 func (a *CLIAdapter) FindMatchingProfile(ctx context.Context, opts FindMatchingProfileOptions) (*FindMatchingProfileResult, error) {
-	args := []string{"device", "profile", "find-matching",
-		"--tenant-id", opts.TenantID,
-		"--output", "json",
-	}
-
-	if opts.MACAddress != "" {
-		args = append(args, "--mac-address", opts.MACAddress)
-	}
-	if opts.Serial != "" {
-		args = append(args, "--serial", opts.Serial)
-	}
-	if opts.Model != "" {
-		args = append(args, "--model", opts.Model)
-	}
-
-	output, err := a.runCommand(ctx, args...)
+	profile, err := a.matchProfile(ctx, "FindMatchingProfile", opts)
 	if err != nil {
 		return nil, err
 	}
+	return &FindMatchingProfileResult{Profile: profile}, nil
+}
 
-	var profile entities.DeviceProfile
-	if err := json.Unmarshal(output, &profile); err != nil {
-		return nil, &CLIAdapterError{
-			Operation: "FindMatchingProfile",
-			Message:   "failed to parse response",
-			Output:    string(output),
-		}
-	}
-
-	return &FindMatchingProfileResult{Profile: &profile}, nil
+// matchProfile runs `device profile match` with the attributes opts sets.
+func (a *CLIAdapter) matchProfile(ctx context.Context, operation string, opts FindMatchingProfileOptions) (*entities.DeviceProfile, error) {
+	args := []string{"device", "profile", "match"}
+	args = appendFlag(args, "--mac", opts.MACAddress)
+	args = appendFlag(args, "--serial", opts.Serial)
+	args = appendFlag(args, "--model", opts.Model)
+	return a.runProfile(ctx, operation, args...)
 }
 
 // ============================================================================
@@ -536,25 +569,30 @@ func (a *CLIAdapter) FindMatchingProfile(ctx context.Context, opts FindMatchingP
 // RecordAttestCert records the device's attestation certificate via
 // platformctl device attest-cert record.
 func (a *CLIAdapter) RecordAttestCert(ctx context.Context, opts RecordAttestCertOptions) (*RecordAttestCertResult, error) {
-	args := []string{"device", "attest-cert", "record", opts.DeviceID, "--output", "json"}
+	args := []string{"device", "attest-cert", "record", opts.DeviceID}
 	if opts.Reissue {
 		args = append(args, "--reissue")
 	}
+	if opts.ClearOnRefusal {
+		args = append(args, "--clear-on-refusal")
+	}
 
-	output, err := a.runCommand(ctx, args...)
-	if err != nil {
+	var record cliAttestCertRecord
+	if err := a.runJSON(ctx, "RecordAttestCert", &record, args...); err != nil {
 		return nil, err
 	}
-
-	var result RecordAttestCertResult
-	if err := json.Unmarshal(output, &result); err != nil {
-		return nil, &CLIAdapterError{
-			Operation: "RecordAttestCert",
-			Message:   "failed to parse response",
-			Output:    string(output),
-		}
-	}
-	return &result, nil
+	return &RecordAttestCertResult{
+		DeviceID:          strconv.FormatUint(record.ID, 10),
+		Serial:            record.Serial,
+		Model:             record.Model,
+		Changed:           record.Changed,
+		Source:            record.Source,
+		SourceDetail:      record.SourceDetail,
+		Reissued:          record.Reissued,
+		Subject:           record.Subject,
+		CertificateSerial: record.CertificateSerial,
+		AttestCert:        record.AttestCert,
+	}, nil
 }
 
 // AttestDevice reports that platformctl has no device attestation command.
@@ -567,261 +605,250 @@ func (a *CLIAdapter) RecordAttestCert(ctx context.Context, opts RecordAttestCert
 //
 // The error is returned rather than faked so the gap stays visible.
 func (a *CLIAdapter) AttestDevice(ctx context.Context, opts AttestDeviceOptions) (*AttestDeviceResult, error) {
-	return nil, ErrAttestationTransportUnavailable{
-		Transport: "CLI",
-		Reason:    "platformctl has no `device attest` command",
-	}
-}
-
-// ============================================================================
-// Template CRUD Operations
-// ============================================================================
-
-// CreateTemplate creates a new device template
-func (a *CLIAdapter) CreateTemplate(ctx context.Context, opts CreateTemplateOptions) (*CreateTemplateResult, error) {
-	args := []string{"device", "template", "create",
-		"--tenant-id", opts.TenantID,
-		"--name", opts.Name,
-		"--output", "json",
-	}
-
-	if opts.Description != "" {
-		args = append(args, "--description", opts.Description)
-	}
-	if opts.Role != "" {
-		args = append(args, "--role", string(opts.Role))
-	}
-
-	output, err := a.runCommand(ctx, args...)
+	file, err := os.CreateTemp(a.configDir, "attest-evidence-*.json")
 	if err != nil {
 		return nil, err
 	}
-
-	var template entities.DeviceTemplate
-	if err := json.Unmarshal(output, &template); err != nil {
-		return nil, &CLIAdapterError{
-			Operation: "CreateTemplate",
-			Message:   "failed to parse response",
-			Output:    string(output),
-		}
+	path := file.Name()
+	defer func() { _ = os.Remove(path) }()
+	_, writeErr := file.Write(opts.Evidence)
+	closeErr := file.Close()
+	if writeErr != nil || closeErr != nil {
+		return nil, errors.Join(writeErr, closeErr)
 	}
 
-	return &CreateTemplateResult{Template: &template}, nil
-}
-
-// GetTemplate retrieves a template by ID
-func (a *CLIAdapter) GetTemplate(ctx context.Context, opts GetTemplateOptions) (*GetTemplateResult, error) {
-	args := []string{"device", "template", "get",
-		"--tenant-id", opts.TenantID,
-		"--template-id", opts.TemplateID,
-		"--output", "json",
-	}
-
-	output, err := a.runCommand(ctx, args...)
-	if err != nil {
+	var record cliAttestRecord
+	if err := a.runJSON(ctx, "AttestDevice", &record, "device", "attest", opts.DeviceID, "--evidence-file", path); err != nil {
 		return nil, err
 	}
-
-	var template entities.DeviceTemplate
-	if err := json.Unmarshal(output, &template); err != nil {
-		return nil, &CLIAdapterError{
-			Operation: "GetTemplate",
-			Message:   "failed to parse response",
-			Output:    string(output),
-		}
-	}
-
-	return &GetTemplateResult{Template: &template}, nil
+	return &AttestDeviceResult{
+		DeviceID:              strconv.FormatUint(record.DeviceID, 10),
+		Serial:                record.Serial,
+		Verified:              record.Verified,
+		SignatureValid:        record.SignatureValid,
+		NonceValid:            record.NonceValid,
+		PCRsValid:             record.PCRsValid,
+		AKCertificateVerified: record.AKCertificateVerified,
+		AttestationStatus:     record.AttestationStatus,
+		Message:               record.Message,
+	}, nil
 }
 
-// UpdateTemplate updates an existing template
-func (a *CLIAdapter) UpdateTemplate(ctx context.Context, opts UpdateTemplateOptions) (*UpdateTemplateResult, error) {
-	args := []string{"device", "template", "update",
-		"--tenant-id", opts.TenantID,
-		"--template-id", opts.TemplateID,
-		"--output", "json",
-	}
-
-	if opts.Name != "" {
-		args = append(args, "--name", opts.Name)
-	}
-	if opts.Description != "" {
-		args = append(args, "--description", opts.Description)
-	}
-	if opts.Role != "" {
-		args = append(args, "--role", string(opts.Role))
-	}
-
-	output, err := a.runCommand(ctx, args...)
-	if err != nil {
-		return nil, err
-	}
-
-	var template entities.DeviceTemplate
-	if err := json.Unmarshal(output, &template); err != nil {
-		return nil, &CLIAdapterError{
-			Operation: "UpdateTemplate",
-			Message:   "failed to parse response",
-			Output:    string(output),
-		}
-	}
-
-	return &UpdateTemplateResult{Template: &template}, nil
-}
-
-// DeleteTemplate removes a template
-func (a *CLIAdapter) DeleteTemplate(ctx context.Context, opts DeleteTemplateOptions) (*DeleteTemplateResult, error) {
-	args := []string{"device", "template", "delete",
-		"--tenant-id", opts.TenantID,
-		"--template-id", opts.TemplateID,
-		"--output", "json",
-	}
-
-	_, err := a.runCommand(ctx, args...)
-	if err != nil {
-		return nil, err
-	}
-
-	return &DeleteTemplateResult{Success: true}, nil
-}
-
-// ListTemplates lists all templates
-func (a *CLIAdapter) ListTemplates(ctx context.Context, opts ListTemplatesOptions) (*ListTemplatesResult, error) {
-	args := []string{"device", "template", "list",
-		"--tenant-id", opts.TenantID,
-		"--output", "json",
-	}
-
-	if opts.Role != "" {
-		args = append(args, "--role", string(opts.Role))
-	}
-	if opts.Limit > 0 {
-		args = append(args, "--limit", fmt.Sprintf("%d", opts.Limit))
-	}
-	if opts.Offset > 0 {
-		args = append(args, "--offset", fmt.Sprintf("%d", opts.Offset))
-	}
-
-	output, err := a.runCommand(ctx, args...)
-	if err != nil {
-		return nil, err
-	}
-
-	var result ListTemplatesResult
-	if err := json.Unmarshal(output, &result); err != nil {
-		// Try parsing as array
-		var templates []*entities.DeviceTemplate
-		if err := json.Unmarshal(output, &templates); err != nil {
-			return nil, &CLIAdapterError{
-				Operation: "ListTemplates",
-				Message:   "failed to parse response",
-				Output:    string(output),
-			}
-		}
-		result.Templates = templates
-		result.Total = len(templates)
-	}
-
-	return &result, nil
+// cliAttestRecord is the JSON `device attest` prints (docs/device/cli.md).
+type cliAttestRecord struct {
+	DeviceID              uint64 `json:"device_id"`
+	Serial                string `json:"serial"`
+	Verified              bool   `json:"verified"`
+	SignatureValid        bool   `json:"signature_valid"`
+	NonceValid            bool   `json:"nonce_valid"`
+	PCRsValid             bool   `json:"pcrs_valid"`
+	AKCertificateVerified bool   `json:"ak_certificate_verified"`
+	AttestationStatus     string `json:"attestation_status"`
+	Message               string `json:"message"`
 }
 
 // ============================================================================
 // Template Operations
 // ============================================================================
 
-// CreateProfileFromTemplate creates a profile from a template
+// templateArgs builds the flags `device template create` and `update` share
+// (docs/device/cli.md §2.8). A config is written to a file in the adapter's
+// config directory for --config-file; the returned cleanup removes it.
+func (a *CLIAdapter) templateArgs(operation, name, description string, role entities.DeviceRole, config []byte, rules *entities.ProfileMatchRules) ([]string, func(), error) {
+	matchArgs, err := matchRuleArgs(operation, "", "", rules)
+	if err != nil {
+		return nil, nil, err
+	}
+	var args []string
+	args = appendFlag(args, "--name", name)
+	args = appendFlag(args, "--description", description)
+	args = appendFlag(args, "--role", string(role))
+	args = append(args, matchArgs...)
+
+	cleanup := func() {}
+	if len(config) > 0 {
+		file, err := os.CreateTemp(a.configDir, "template-config-*.json")
+		if err != nil {
+			return nil, nil, err
+		}
+		path := file.Name()
+		cleanup = func() { _ = os.Remove(path) }
+		_, writeErr := file.Write(config)
+		closeErr := file.Close()
+		if writeErr != nil || closeErr != nil {
+			cleanup()
+			return nil, nil, errors.Join(writeErr, closeErr)
+		}
+		args = append(args, "--config-file", path)
+	}
+	return args, cleanup, nil
+}
+
+// runTemplate runs a `device template` verb that prints one template.
+func (a *CLIAdapter) runTemplate(ctx context.Context, operation string, args ...string) (*entities.DeviceTemplate, error) {
+	var template cliTemplate
+	if err := a.runJSON(ctx, operation, &template, args...); err != nil {
+		return nil, err
+	}
+	return template.entity(operation)
+}
+
+// CreateTemplate creates a template via `platformctl device template create`.
+func (a *CLIAdapter) CreateTemplate(ctx context.Context, opts CreateTemplateOptions) (*CreateTemplateResult, error) {
+	flags, cleanup, err := a.templateArgs("CreateTemplate", opts.Name, opts.Description, opts.Role, opts.Config, opts.MatchRules)
+	if err != nil {
+		return nil, err
+	}
+	defer cleanup()
+
+	template, err := a.runTemplate(ctx, "CreateTemplate", append([]string{"device", "template", "create"}, flags...)...)
+	if err != nil {
+		return nil, err
+	}
+	return &CreateTemplateResult{Template: template}, nil
+}
+
+// GetTemplate retrieves a template via `platformctl device template get <id>`.
+func (a *CLIAdapter) GetTemplate(ctx context.Context, opts GetTemplateOptions) (*GetTemplateResult, error) {
+	template, err := a.runTemplate(ctx, "GetTemplate", "device", "template", "get", opts.TemplateID)
+	if err != nil {
+		return nil, err
+	}
+	return &GetTemplateResult{Template: template}, nil
+}
+
+// UpdateTemplate changes a template via `platformctl device template update
+// <id>`, which sets only the flagged fields and keeps the rest.
+func (a *CLIAdapter) UpdateTemplate(ctx context.Context, opts UpdateTemplateOptions) (*UpdateTemplateResult, error) {
+	flags, cleanup, err := a.templateArgs("UpdateTemplate", opts.Name, opts.Description, opts.Role, opts.Config, opts.MatchRules)
+	if err != nil {
+		return nil, err
+	}
+	defer cleanup()
+
+	template, err := a.runTemplate(ctx, "UpdateTemplate", append([]string{"device", "template", "update", opts.TemplateID}, flags...)...)
+	if err != nil {
+		return nil, err
+	}
+	return &UpdateTemplateResult{Template: template}, nil
+}
+
+// DeleteTemplate removes a template via `platformctl device template delete <id>`.
+func (a *CLIAdapter) DeleteTemplate(ctx context.Context, opts DeleteTemplateOptions) (*DeleteTemplateResult, error) {
+	var result cliDeleted
+	if err := a.runJSON(ctx, "DeleteTemplate", &result, "device", "template", "delete", opts.TemplateID); err != nil {
+		return nil, err
+	}
+	return &DeleteTemplateResult{Success: result.Deleted}, nil
+}
+
+// ListTemplates lists templates via `platformctl device template list`. The
+// CLI filters by nothing but the page window, so a role filter is refused.
+func (a *CLIAdapter) ListTemplates(ctx context.Context, opts ListTemplatesOptions) (*ListTemplatesResult, error) {
+	if opts.Role != "" {
+		return nil, ErrCLINoVerb{Operation: "ListTemplates", Reason: "`device template list` has no role filter"}
+	}
+	args := append([]string{"device", "template", "list"}, pageArgs(opts.Limit, opts.Offset)...)
+
+	var page cliTemplateList
+	if err := a.runJSON(ctx, "ListTemplates", &page, args...); err != nil {
+		return nil, err
+	}
+	templates := make([]*entities.DeviceTemplate, 0, len(page.Templates))
+	for _, t := range page.Templates {
+		template, err := t.entity("ListTemplates")
+		if err != nil {
+			return nil, err
+		}
+		templates = append(templates, template)
+	}
+	return &ListTemplatesResult{Templates: templates, Total: page.Total}, nil
+}
+
+// CreateProfileFromTemplate builds a profile via `platformctl device template
+// create-profile <template-id>`; the name, EK serial and MAC bind it.
 func (a *CLIAdapter) CreateProfileFromTemplate(ctx context.Context, opts CreateProfileFromTemplateOptions) (*CreateProfileResult, error) {
-	args := []string{"device", "template", "create-profile",
-		"--tenant-id", opts.TenantID,
-		"--template-id", opts.TemplateID,
-		"--output", "json",
-	}
+	args := []string{"device", "template", "create-profile", opts.TemplateID}
+	args = appendFlag(args, "--name", opts.Name)
+	args = appendFlag(args, "--ek-serial", opts.EKSerial)
+	args = appendFlag(args, "--mac", opts.MACAddress)
 
-	if opts.Name != "" {
-		args = append(args, "--name", opts.Name)
-	}
-	if opts.EKSerial != "" {
-		args = append(args, "--ek-serial", opts.EKSerial)
-	}
-	if opts.MACAddress != "" {
-		args = append(args, "--mac-address", opts.MACAddress)
-	}
-
-	output, err := a.runCommand(ctx, args...)
+	profile, err := a.runProfile(ctx, "CreateProfileFromTemplate", args...)
 	if err != nil {
 		return nil, err
 	}
-
-	var profile entities.DeviceProfile
-	if err := json.Unmarshal(output, &profile); err != nil {
-		return nil, &CLIAdapterError{
-			Operation: "CreateProfileFromTemplate",
-			Message:   "failed to parse response",
-			Output:    string(output),
-		}
-	}
-
-	return &CreateProfileResult{Profile: &profile}, nil
+	return &CreateProfileResult{Profile: profile}, nil
 }
 
-// FindConfigForDevice finds the config for a device by EK serial or MAC
+// FindConfigForDevice reports that platformctl has no find-config verb.
 func (a *CLIAdapter) FindConfigForDevice(ctx context.Context, opts FindConfigForDeviceOptions) (*FindConfigForDeviceResult, error) {
-	args := []string{"device", "profile", "find-config",
-		"--tenant-id", opts.TenantID,
-		"--output", "json",
-	}
-
-	if opts.EKSerial != "" {
-		args = append(args, "--ek-serial", opts.EKSerial)
-	}
-	if opts.MACAddress != "" {
-		args = append(args, "--mac-address", opts.MACAddress)
-	}
-
-	output, err := a.runCommand(ctx, args...)
+	args := []string{"device", "profile", "find-config"}
+	args = appendFlag(args, "--ek-serial", opts.EKSerial)
+	args = appendFlag(args, "--mac", opts.MACAddress)
+	profile, err := a.runProfile(ctx, "FindConfigForDevice", args...)
 	if err != nil {
 		return nil, err
 	}
-
-	var profile entities.DeviceProfile
-	if err := json.Unmarshal(output, &profile); err != nil {
-		return nil, &CLIAdapterError{
-			Operation: "FindConfigForDevice",
-			Message:   "failed to parse response",
-			Output:    string(output),
-		}
-	}
-
-	return &FindConfigForDeviceResult{Profile: &profile}, nil
+	return &FindConfigForDeviceResult{Profile: profile}, nil
 }
 
-// AssignProfileToDevice assigns a profile to a device identity
+// AssignProfileToDevice binds a profile to a device identity via
+// `platformctl device profile assign <profile-id> --ek-serial <serial>`.
 func (a *CLIAdapter) AssignProfileToDevice(ctx context.Context, opts AssignProfileToDeviceOptions) (*AssignProfileToDeviceResult, error) {
-	args := []string{"device", "profile", "assign",
-		"--tenant-id", opts.TenantID,
-		"--profile-id", opts.ProfileID,
-		"--output", "json",
-	}
+	args := []string{"device", "profile", "assign", opts.ProfileID}
+	args = appendFlag(args, "--ek-serial", opts.EKSerial)
 
-	if opts.EKSerial != "" {
-		args = append(args, "--ek-serial", opts.EKSerial)
+	profile, err := a.runProfile(ctx, "AssignProfileToDevice", args...)
+	if err != nil {
+		return nil, err
 	}
+	return &AssignProfileToDeviceResult{Profile: profile}, nil
+}
 
+// cliLifecycleOutput is the JSON platformctl device disable/enable prints.
+type cliLifecycleOutput struct {
+	ID                     uint64 `json:"id"`
+	State                  string `json:"state"`
+	PreviousState          string `json:"previous_state"`
+	StateReason            string `json:"state_reason"`
+	ReattestationRequested bool   `json:"reattestation_requested"`
+}
+
+// DisableDevice runs platformctl device disable.
+func (a *CLIAdapter) DisableDevice(ctx context.Context, opts DisableDeviceOptions) (*DeviceLifecycleResult, error) {
+	args := []string{"device", "disable", opts.DeviceID, "--output", "json"}
+	if opts.Reason != "" {
+		args = append(args, "--reason", opts.Reason)
+	}
+	return a.deviceLifecycle(ctx, "DisableDevice", args)
+}
+
+// EnableDevice runs platformctl device enable.
+func (a *CLIAdapter) EnableDevice(ctx context.Context, opts EnableDeviceOptions) (*DeviceLifecycleResult, error) {
+	return a.deviceLifecycle(ctx, "EnableDevice", []string{"device", "enable", opts.DeviceID, "--output", "json"})
+}
+
+func (a *CLIAdapter) deviceLifecycle(ctx context.Context, op string, args []string) (*DeviceLifecycleResult, error) {
 	output, err := a.runCommand(ctx, args...)
 	if err != nil {
 		return nil, err
 	}
 
-	var profile entities.DeviceProfile
-	if err := json.Unmarshal(output, &profile); err != nil {
+	var out cliLifecycleOutput
+	if err := json.Unmarshal(output, &out); err != nil {
 		return nil, &CLIAdapterError{
-			Operation: "AssignProfileToDevice",
+			Operation: op,
 			Message:   "failed to parse response",
 			Output:    string(output),
 		}
 	}
-
-	return &AssignProfileToDeviceResult{Profile: &profile}, nil
+	return &DeviceLifecycleResult{
+		DeviceID:               strconv.FormatUint(out.ID, 10),
+		State:                  out.State,
+		PreviousState:          out.PreviousState,
+		StateReason:            out.StateReason,
+		ReattestationRequested: out.ReattestationRequested,
+	}, nil
 }
 
 // Verify CLIAdapter implements DeviceCommands

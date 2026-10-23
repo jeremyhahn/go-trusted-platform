@@ -222,23 +222,12 @@ func (b *PIVBackend) Generate(ctx context.Context, req *daemon.PIVGenerateReques
 	}, nil
 }
 
-// Import stores an external certificate. Note that xkms does not currently
-// expose a public key-import path (software key generators hold the key
-// internally); the Import service method maps onto certificate import only.
-func (b *PIVBackend) Import(ctx context.Context, req *daemon.PIVImportRequest) error {
-	if err := b.ensureInitialised(); err != nil {
-		return err
-	}
-	// The PEM slice is borrowed from the request's locked memory for the
-	// duration of the call; StorePIVCertificate must not retain it.
-	return req.WithPrivateKeyPEM(func(pem []byte) error {
-		return xkmsbackend.StorePIVCertificate(ctx, &xkmstransport.StorePIVCertificateRequest{
-			Backend:     b.defaultBackend,
-			Slot:        req.Slot,
-			Certificate: pem,
-			Format:      "pem",
-		})
-	})
+// Import fails closed with daemon.ErrPIVKeyImportUnsupported and writes
+// nothing. go-xkms has ImportPIVKey, but the go-quicbaas SDK does not
+// re-export it yet; storing the private key PEM through
+// StorePIVCertificate would file key material in a certificate slot.
+func (b *PIVBackend) Import(_ context.Context, _ *daemon.PIVImportRequest) error {
+	return daemon.ErrPIVKeyImportUnsupported
 }
 
 // Sign signs the supplied payload with the slot's private key. It delegates

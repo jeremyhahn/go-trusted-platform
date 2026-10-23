@@ -15,6 +15,7 @@ package ovs
 
 import (
 	"context"
+	"math"
 	"path/filepath"
 	"testing"
 
@@ -393,6 +394,94 @@ func TestClient_SetPortState(t *testing.T) {
 		require.Error(t, err)
 		assert.ErrorIs(t, err, ErrPortNotFound)
 	})
+}
+
+func TestClient_SetIngressPolicing(t *testing.T) {
+	client, server := setupPortTest(t)
+	defer server.Close()
+	defer client.Close()
+
+	ctx := context.Background()
+
+	_, err := client.AddPort(ctx, "br-port-test", "eth-police")
+	require.NoError(t, err)
+
+	lastInterfaceUpdate := func(t *testing.T) Operation {
+		t.Helper()
+		ops := server.TransactOps()
+		for i := len(ops) - 1; i >= 0; i-- {
+			if ops[i].Op == "update" && ops[i].Table == interfaceTable {
+				return ops[i]
+			}
+		}
+		t.Fatal("no Interface update recorded")
+		return Operation{}
+	}
+
+	t.Run("writes rate and burst to the interface in kbps and kb", func(t *testing.T) {
+		require.NoError(t, client.SetIngressPolicing(ctx, "eth-police", 10_000_000, 1_000_000))
+
+		op := lastInterfaceUpdate(t)
+		assert.EqualValues(t, 10_000, op.Row["ingress_policing_rate"])
+		assert.EqualValues(t, 1_000, op.Row["ingress_policing_burst"])
+	})
+
+	t.Run("rate zero disables policing", func(t *testing.T) {
+		require.NoError(t, client.SetIngressPolicing(ctx, "eth-police", 0, 0))
+
+		op := lastInterfaceUpdate(t)
+		assert.EqualValues(t, 0, op.Row["ingress_policing_rate"])
+	})
+
+	t.Run("empty name", func(t *testing.T) {
+		err := client.SetIngressPolicing(ctx, "", 1000, 0)
+		assert.ErrorIs(t, err, ErrInvalidPortName)
+	})
+
+	t.Run("invalid rate is refused before any transaction", func(t *testing.T) {
+		server.ResetTransactOps()
+		err := client.SetIngressPolicing(ctx, "eth-police", 1500, 0)
+		var invalid *ErrInvalidPolicing
+		require.ErrorAs(t, err, &invalid)
+		assert.Equal(t, uint64(1500), invalid.RateBps)
+		assert.Empty(t, server.TransactOps())
+	})
+
+	t.Run("unknown interface", func(t *testing.T) {
+		err := client.SetIngressPolicing(ctx, "eth-nonexist", 1000, 0)
+		assert.ErrorIs(t, err, ErrInterfaceNotFound)
+	})
+}
+
+func TestValidateIngressPolicing(t *testing.T) {
+	valid := []struct{ rate, burst uint64 }{
+		{0, 0},
+		{1000, 0},
+		{5_000_000, 500_000},
+		{math.MaxUint64 - math.MaxUint64%1000, 0},
+	}
+	for _, v := range valid {
+		assert.NoError(t, ValidateIngressPolicing(v.rate, v.burst), "rate %d burst %d", v.rate, v.burst)
+	}
+
+	invalid := []struct {
+		name        string
+		rate, burst uint64
+	}{
+		{"rate below 1 kbps", 999, 0},
+		{"rate not a whole kbps", 1500, 0},
+		{"burst not a whole kb", 1000, 1},
+		{"burst without a rate", 0, 1000},
+	}
+	for _, tt := range invalid {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateIngressPolicing(tt.rate, tt.burst)
+			var policing *ErrInvalidPolicing
+			require.ErrorAs(t, err, &policing)
+			assert.Equal(t, tt.rate, policing.RateBps)
+			assert.Equal(t, tt.burst, policing.BurstBits)
+		})
+	}
 }
 
 func TestClient_GetInterface(t *testing.T) {

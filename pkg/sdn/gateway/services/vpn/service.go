@@ -37,6 +37,13 @@ type Health struct {
 	Admissions        uint64
 	Refusals          uint64
 	LastRefusal       string
+	// Revocations counts the revoked leases by RevokeReason.
+	Revocations map[RevokeReason]uint64
+	// PostureViolations counts the posture rules that refused an admission
+	// or a renewal, by rule name.
+	PostureViolations map[string]uint64
+	// Reattest is how long the renewal re-attestations took to verify.
+	Reattest DurationHistogram
 }
 
 // Service is the attested remote-access service. It has the same lifecycle
@@ -59,9 +66,27 @@ type Service struct {
 	// instant they expire.
 	nonces map[string]time.Time
 
-	admissions  atomic.Uint64
-	refusals    atomic.Uint64
-	lastRefusal atomic.Pointer[string]
+	// enrolments is the control plane's peer set; nil until the first
+	// delivery, which refuses every admission.
+	enrolments atomic.Pointer[enrolmentSet]
+	// enrolGate makes a lease commit atomic with an enrolment update.
+	// SetEnrolments holds it exclusively while it publishes a set and sweeps
+	// the leases that set no longer covers; Admit holds it shared from its
+	// final enrolment check to the lease write. Order: enrolGate before a
+	// device lock, never the reverse.
+	enrolGate sync.RWMutex
+	// rejectedEnrolments holds the peers of the last delivered set this
+	// gateway refused (a zone it does not serve).
+	rejectedEnrolments atomic.Pointer[[]EnrolmentRejection]
+	// tenantPosture holds the compiled tenant posture policies, by tenant.
+	tenantPosture atomic.Pointer[map[string]tenantPosture]
+
+	admissions        atomic.Uint64
+	refusals          atomic.Uint64
+	lastRefusal       atomic.Pointer[string]
+	revocations       labelledCounters
+	postureViolations labelledCounters
+	reattest          *durationHistogram
 }
 
 // New validates the configuration and dependencies and returns a stopped
@@ -87,6 +112,11 @@ func New(deps Deps, cfg Config) (*Service, error) {
 		logger:  deps.Logger.With(slog.String("service", "vpn")),
 		nonces:  make(map[string]time.Time),
 		devices: newKeyLock(),
+		postureViolations: labelledCounters{
+			limit:    maxPostureRuleLabels,
+			overflow: OtherPostureRule,
+		},
+		reattest: newDurationHistogram(reattestBuckets),
 	}, nil
 }
 
@@ -149,9 +179,17 @@ func (s *Service) Health() Health {
 		LeasesByDataPlane: map[DataPlaneKind]int{},
 		Admissions:        s.admissions.Load(),
 		Refusals:          s.refusals.Load(),
+		PostureViolations: s.postureViolations.snapshot(),
+		Reattest:          s.reattest.snapshot(),
 	}
 	if p := s.lastRefusal.Load(); p != nil {
 		h.LastRefusal = *p
+	}
+	if counts := s.revocations.snapshot(); counts != nil {
+		h.Revocations = make(map[RevokeReason]uint64, len(counts))
+		for reason, n := range counts {
+			h.Revocations[RevokeReason(reason)] = n
+		}
 	}
 	leases, err := s.deps.Leases.List(context.Background())
 	if err != nil {
@@ -216,6 +254,7 @@ func (s *Service) sweepLoop(ctx context.Context, done chan struct{}) {
 
 // Sweep revokes every lease past its expiry and forgets expired nonces. It
 // is exported so a caller with its own schedule (and tests) can drive it.
+// A store with pending deletions (PendingDeleteStore) retries them first.
 func (s *Service) Sweep(ctx context.Context) {
 	now := s.deps.Clock.Now()
 	s.mu.Lock()
@@ -226,6 +265,11 @@ func (s *Service) Sweep(ctx context.Context) {
 	}
 	s.mu.Unlock()
 
+	if pending, ok := s.deps.Leases.(PendingDeleteStore); ok {
+		if err := pending.RetryPendingDeletes(ctx); err != nil {
+			s.logger.Warn("vpn lease sweep: a pending lease deletion failed again", slog.Any("error", err))
+		}
+	}
 	leases, err := s.deps.Leases.List(ctx)
 	if err != nil {
 		s.logger.Warn("vpn lease sweep: listing leases failed", slog.Any("error", err))
@@ -239,6 +283,10 @@ func (s *Service) Sweep(ctx context.Context) {
 		// Re-read under the lock: a renewal may have landed since List.
 		current, err := s.deps.Leases.Get(ctx, l.ID)
 		if err == nil && current.Expired(now) {
+			s.logger.Info("vpn.lease.expire",
+				slog.String("lease", string(current.ID)),
+				slog.String("device", current.DeviceID),
+				slog.Time("expired_at", current.ExpiresAt))
 			if err := s.revoke(ctx, current, RevokeExpired); err != nil {
 				s.logger.Warn("vpn lease expiry revoke incomplete", slog.String("lease", string(l.ID)), slog.Any("error", err))
 			}

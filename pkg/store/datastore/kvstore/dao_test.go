@@ -41,7 +41,7 @@ func TestInvitationDAO_GetByToken(t *testing.T) {
 		dao := NewInvitationDAO(storage, logger)
 		ctx := context.Background()
 
-		inv, err := entities.NewInvitation("tenant-1", "user@test.com", "member", 1, 24*time.Hour)
+		inv, err := entities.NewInvitation("tenant-1", "user@test.com", "member", 1, 24*time.Hour, time.Now())
 		require.NoError(t, err)
 
 		require.NoError(t, dao.Save(ctx, inv))
@@ -76,7 +76,7 @@ func TestInvitationDAO_GetByToken(t *testing.T) {
 		dao := NewInvitationDAO(storage, logger)
 		ctx := context.Background()
 
-		inv, err := entities.NewInvitation("tenant-1", "indexed@test.com", "member", 1, 24*time.Hour)
+		inv, err := entities.NewInvitation("tenant-1", "indexed@test.com", "member", 1, 24*time.Hour, time.Now())
 		require.NoError(t, err)
 		require.NoError(t, dao.Save(ctx, inv))
 
@@ -96,7 +96,7 @@ func TestInvitationDAO_GetByEmail(t *testing.T) {
 		dao := NewInvitationDAO(storage, logger)
 		ctx := context.Background()
 
-		inv, err := entities.NewInvitation("tenant-1", "find@test.com", "admin", 1, 24*time.Hour)
+		inv, err := entities.NewInvitation("tenant-1", "find@test.com", "admin", 1, 24*time.Hour, time.Now())
 		require.NoError(t, err)
 
 		require.NoError(t, dao.Save(ctx, inv))
@@ -130,7 +130,7 @@ func TestInvitationDAO_GetByEmail(t *testing.T) {
 		dao := NewInvitationDAO(storage, logger)
 		ctx := context.Background()
 
-		inv, err := entities.NewInvitation("tenant-1", "query@test.com", "member", 1, 24*time.Hour)
+		inv, err := entities.NewInvitation("tenant-1", "query@test.com", "member", 1, 24*time.Hour, time.Now())
 		require.NoError(t, err)
 		require.NoError(t, dao.Save(ctx, inv))
 
@@ -149,15 +149,15 @@ func TestInvitationDAO_GetByTenant(t *testing.T) {
 		dao := NewInvitationDAO(storage, logger)
 		ctx := context.Background()
 
-		inv1, err := entities.NewInvitation("tenant-A", "a@test.com", "member", 1, 24*time.Hour)
+		inv1, err := entities.NewInvitation("tenant-A", "a@test.com", "member", 1, 24*time.Hour, time.Now())
 		require.NoError(t, err)
 		require.NoError(t, dao.Save(ctx, inv1))
 
-		inv2, err := entities.NewInvitation("tenant-A", "b@test.com", "admin", 1, 24*time.Hour)
+		inv2, err := entities.NewInvitation("tenant-A", "b@test.com", "admin", 1, 24*time.Hour, time.Now())
 		require.NoError(t, err)
 		require.NoError(t, dao.Save(ctx, inv2))
 
-		inv3, err := entities.NewInvitation("tenant-B", "c@test.com", "member", 1, 24*time.Hour)
+		inv3, err := entities.NewInvitation("tenant-B", "c@test.com", "member", 1, 24*time.Hour, time.Now())
 		require.NoError(t, err)
 		require.NoError(t, dao.Save(ctx, inv3))
 
@@ -190,14 +190,14 @@ func TestInvitationDAO_GetPendingByTenant(t *testing.T) {
 		ctx := context.Background()
 
 		// Create pending invitation
-		inv1, err := entities.NewInvitation("tenant-1", "pending@test.com", "member", 1, 24*time.Hour)
+		inv1, err := entities.NewInvitation("tenant-1", "pending@test.com", "member", 1, 24*time.Hour, time.Now())
 		require.NoError(t, err)
 		require.NoError(t, dao.Save(ctx, inv1))
 
 		// Create accepted invitation
-		inv2, err := entities.NewInvitation("tenant-1", "accepted@test.com", "member", 1, 24*time.Hour)
+		inv2, err := entities.NewInvitation("tenant-1", "accepted@test.com", "member", 1, 24*time.Hour, time.Now())
 		require.NoError(t, err)
-		inv2.Accept()
+		inv2.Accept(time.Now())
 		require.NoError(t, dao.Save(ctx, inv2))
 
 		results, err := dao.GetPendingByTenant(ctx, "tenant-1")
@@ -262,7 +262,7 @@ func TestInvitationDAO_GetByTenant_DeserializationError(t *testing.T) {
 	require.NoError(t, storage.Put(ctx, entityTypeInvitation, 123, []byte("{bad"), 0))
 
 	// Also store a valid one for the tenant
-	inv, err := entities.NewInvitation("t1", "ok@test.com", "member", 1, 24*time.Hour)
+	inv, err := entities.NewInvitation("t1", "ok@test.com", "member", 1, 24*time.Hour, time.Now())
 	require.NoError(t, err)
 	invData, err := json.Marshal(inv)
 	require.NoError(t, err)

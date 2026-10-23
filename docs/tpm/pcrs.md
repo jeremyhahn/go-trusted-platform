@@ -1,5 +1,8 @@
 # TPM Platform Configuration Registers (PCRs)
 
+> **Status: REFERENCE** · Last verified: 2026-10-15
+> PCR allocation and measurement sources, by platform.
+
 This document provides a comprehensive reference for TPM Platform Configuration Registers (PCRs), including their allocation, measurement sources, and usage across different platforms.
 
 ## PCR Overview
@@ -118,10 +121,11 @@ tpm2_pcrread
 
 # Read specific PCRs
 tpm2_pcrread sha256:0,1,2,3,7
-
-# Using platformctl
-platformctl tpm pcr read --indices 0,1,2,3,7 --bank SHA256
 ```
+
+`platformctl tpm` has no PCR read command; read the platform TPM's PCRs
+through the `TPMService.GetPCRs` RPC below. `platformctl vtpm pcr read` reads a
+vTPM bundle's PCRs.
 
 ### Programmatic Access
 

@@ -4,7 +4,6 @@ import {
   createTenantMemberSession,
 } from './fixtures/auth-setup';
 import { mockTenantApi, ApiError } from './fixtures/api-mock';
-import type { DeviceRole } from 'trusted-platform-sdk';
 
 /**
  * Device Management E2E Tests
@@ -1029,9 +1028,9 @@ test.describe('Device Profiles', () => {
 
     test('should display profiles list', async ({ page }) => {
       const profiles = [
-        createMockProfile({ id: 1, name: 'Production Server Profile', role: 'SERVER' as DeviceRole }),
-        createMockProfile({ id: 2, name: 'Development Workstation', role: 'WORKSTATION' as DeviceRole }),
-        createMockProfile({ id: 3, name: 'IoT Sensor Profile', role: 'IOT' as DeviceRole }),
+        createMockProfile({ id: 1, name: 'Production Server Profile', role: 'server' }),
+        createMockProfile({ id: 2, name: 'Development Workstation', role: 'workstation' }),
+        createMockProfile({ id: 3, name: 'IoT Sensor Profile', role: 'iot' }),
       ];
 
       await mockProfileApi(page, { initialProfiles: profiles });
@@ -1058,11 +1057,11 @@ test.describe('Device Profiles', () => {
 
     test('should show statistics cards', async ({ page }) => {
       const profiles = [
-        createMockProfile({ id: 1, name: 'Server-1', role: 'SERVER' as DeviceRole }),
-        createMockProfile({ id: 2, name: 'Server-2', role: 'SERVER' as DeviceRole }),
-        createMockProfile({ id: 3, name: 'Workstation-1', role: 'WORKSTATION' as DeviceRole }),
-        createMockProfile({ id: 4, name: 'IoT-1', role: 'IOT' as DeviceRole }),
-        createMockProfile({ id: 5, name: 'IoT-2', role: 'IOT' as DeviceRole }),
+        createMockProfile({ id: 1, name: 'Server-1', role: 'server' }),
+        createMockProfile({ id: 2, name: 'Server-2', role: 'server' }),
+        createMockProfile({ id: 3, name: 'Workstation-1', role: 'workstation' }),
+        createMockProfile({ id: 4, name: 'IoT-1', role: 'iot' }),
+        createMockProfile({ id: 5, name: 'IoT-2', role: 'iot' }),
       ];
 
       await mockProfileApi(page, { initialProfiles: profiles });
@@ -1147,9 +1146,9 @@ test.describe('Device Profiles', () => {
 
     test('should filter profiles by role', async ({ page }) => {
       const profiles = [
-        createMockProfile({ id: 1, name: 'Server-Profile', role: 'SERVER' as DeviceRole }),
-        createMockProfile({ id: 2, name: 'Workstation-Profile', role: 'WORKSTATION' as DeviceRole }),
-        createMockProfile({ id: 3, name: 'IoT-Profile', role: 'IOT' as DeviceRole }),
+        createMockProfile({ id: 1, name: 'Server-Profile', role: 'server' }),
+        createMockProfile({ id: 2, name: 'Workstation-Profile', role: 'workstation' }),
+        createMockProfile({ id: 3, name: 'IoT-Profile', role: 'iot' }),
       ];
 
       await mockProfileApi(page, { initialProfiles: profiles });
@@ -1175,9 +1174,9 @@ test.describe('Device Profiles', () => {
 
     test('should search profiles', async ({ page }) => {
       const profiles = [
-        createMockProfile({ id: 1, name: 'Production-Server', role: 'SERVER' as DeviceRole }),
-        createMockProfile({ id: 2, name: 'Development-Server', role: 'SERVER' as DeviceRole }),
-        createMockProfile({ id: 3, name: 'Test-Workstation', role: 'WORKSTATION' as DeviceRole }),
+        createMockProfile({ id: 1, name: 'Production-Server', role: 'server' }),
+        createMockProfile({ id: 2, name: 'Development-Server', role: 'server' }),
+        createMockProfile({ id: 3, name: 'Test-Workstation', role: 'workstation' }),
       ];
 
       await mockProfileApi(page, { initialProfiles: profiles });
@@ -1198,7 +1197,7 @@ test.describe('Device Profiles', () => {
     });
 
     test('should delete profile with confirmation', async ({ page }) => {
-      const profile = createMockProfile({ id: 1, name: 'Delete-Me-Profile', role: 'SERVER' as DeviceRole });
+      const profile = createMockProfile({ id: 1, name: 'Delete-Me-Profile', role: 'server' });
 
       const mockApi = await mockProfileApi(page, { initialProfiles: [profile] });
       await mockTenantApi(page);
@@ -1229,7 +1228,7 @@ test.describe('Device Profiles', () => {
     });
 
     test('should duplicate profile', async ({ page }) => {
-      const profile = createMockProfile({ id: 1, name: 'Original-Profile', model: 'Test-Model', role: 'SERVER' as DeviceRole });
+      const profile = createMockProfile({ id: 1, name: 'Original-Profile', model: 'Test-Model', role: 'server' });
 
       const mockApi = await mockProfileApi(page, { initialProfiles: [profile] });
       await mockTenantApi(page);
@@ -1292,7 +1291,7 @@ test.describe('Device Profiles', () => {
     });
 
     test('should navigate to profile details', async ({ page }) => {
-      const profile = createMockProfile({ id: 1, name: 'View-Profile', role: 'SERVER' as DeviceRole });
+      const profile = createMockProfile({ id: 1, name: 'View-Profile', role: 'server' });
 
       await mockProfileApi(page, { initialProfiles: [profile] });
       await mockTenantApi(page);
@@ -1326,7 +1325,7 @@ test.describe('Device Profiles', () => {
     });
 
     test('should navigate to edit profile', async ({ page }) => {
-      const profile = createMockProfile({ id: 1, name: 'Edit-Profile', role: 'SERVER' as DeviceRole });
+      const profile = createMockProfile({ id: 1, name: 'Edit-Profile', role: 'server' });
 
       await mockProfileApi(page, { initialProfiles: [profile] });
       await mockTenantApi(page);
@@ -1356,7 +1355,7 @@ test.describe('Device Profiles', () => {
     });
 
     test('should cancel delete when dialog is dismissed', async ({ page }) => {
-      const profile = createMockProfile({ id: 1, name: 'Keep-Profile', role: 'SERVER' as DeviceRole });
+      const profile = createMockProfile({ id: 1, name: 'Keep-Profile', role: 'server' });
 
       await mockProfileApi(page, { initialProfiles: [profile] });
       await mockTenantApi(page);
@@ -1380,7 +1379,7 @@ test.describe('Device Profiles', () => {
       const profile = createMockProfile({
         id: 1,
         name: 'Network-Profile',
-        role: 'SERVER' as DeviceRole,
+        role: 'server',
         networks: {
           provisioning: { vlan: 100 },
           trusted: { vlan: 200 },
@@ -1412,7 +1411,7 @@ test.describe('Device Profiles', () => {
       const profile = createMockProfile({
         id: 1,
         name: 'DMZ-Profile',
-        role: 'SERVER' as DeviceRole,
+        role: 'server',
         networks: { 'lab-dmz': { vlan: 42 } },
       });
 
@@ -1432,7 +1431,7 @@ test.describe('Device Profiles', () => {
       const profile = createMockProfile({
         id: 1,
         name: 'Selector-Profile',
-        role: 'SERVER' as DeviceRole,
+        role: 'server',
         networks: {
           trusted: { vlan: 200 },
           backup: { vlan: 201 },
@@ -1456,7 +1455,7 @@ test.describe('Device Profiles', () => {
       const profile = createMockProfile({
         id: 1,
         name: 'No-Network-Profile',
-        role: 'SERVER' as DeviceRole,
+        role: 'server',
         networks: undefined,
       });
 
@@ -1471,9 +1470,9 @@ test.describe('Device Profiles', () => {
 
     test('should show role badges correctly', async ({ page }) => {
       const profiles = [
-        createMockProfile({ id: 1, name: 'Profile-A', role: 'SERVER' as DeviceRole }),
-        createMockProfile({ id: 2, name: 'Profile-B', role: 'IOT' as DeviceRole }),
-        createMockProfile({ id: 3, name: 'Profile-C', role: 'GATEWAY' as DeviceRole }),
+        createMockProfile({ id: 1, name: 'Profile-A', role: 'server' }),
+        createMockProfile({ id: 2, name: 'Profile-B', role: 'iot' }),
+        createMockProfile({ id: 3, name: 'Profile-C', role: 'gateway' }),
       ];
 
       await mockProfileApi(page, { initialProfiles: profiles });
@@ -1520,7 +1519,7 @@ test.describe('Device Profiles', () => {
     });
 
     test('should handle delete profile error', async ({ page }) => {
-      const profile = createMockProfile({ id: 1, name: 'Error-Delete-Profile', role: 'SERVER' as DeviceRole });
+      const profile = createMockProfile({ id: 1, name: 'Error-Delete-Profile', role: 'server' });
 
       await mockProfileApi(page, {
         initialProfiles: [profile],
@@ -1548,7 +1547,7 @@ test.describe('Device Profiles', () => {
 
     test('should refresh profiles list', async ({ page }) => {
       const profiles = [
-        createMockProfile({ id: 1, name: 'Initial-Profile', role: 'SERVER' as DeviceRole }),
+        createMockProfile({ id: 1, name: 'Initial-Profile', role: 'server' }),
       ];
 
       await mockProfileApi(page, { initialProfiles: profiles });
@@ -1568,8 +1567,8 @@ test.describe('Device Profiles', () => {
 
     test('should clear filters', async ({ page }) => {
       const profiles = [
-        createMockProfile({ id: 1, name: 'Profile-1', role: 'SERVER' as DeviceRole }),
-        createMockProfile({ id: 2, name: 'Profile-2', role: 'WORKSTATION' as DeviceRole }),
+        createMockProfile({ id: 1, name: 'Profile-1', role: 'server' }),
+        createMockProfile({ id: 2, name: 'Profile-2', role: 'workstation' }),
       ];
 
       await mockProfileApi(page, { initialProfiles: profiles });
@@ -1601,7 +1600,7 @@ test.describe('Device Profiles', () => {
 
     test('should show loading state', async ({ page }) => {
       // Add delay to API to see loading state
-      await page.route('**/api/v1/devices/profiles', async (route) => {
+      await page.route('**/api/v1/device/profiles', async (route) => {
         await new Promise((resolve) => setTimeout(resolve, 500));
         await route.fulfill({
           status: 200,
@@ -1642,7 +1641,7 @@ test.describe('Device Profiles', () => {
       await createTenantMemberSession(page.context());
 
       const profiles = [
-        createMockProfile({ id: 1, name: 'Visible-Profile', role: 'SERVER' as DeviceRole }),
+        createMockProfile({ id: 1, name: 'Visible-Profile', role: 'server' }),
       ];
 
       await mockProfileApi(page, { initialProfiles: profiles });

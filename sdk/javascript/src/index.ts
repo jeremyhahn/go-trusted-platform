@@ -94,6 +94,7 @@ export {
   TenantService,
   TPMService,
   VTPMService,
+  VPNService,
   InvitationService,
   EABService,
   // QuicBaaS Services (28 services)
@@ -148,6 +149,17 @@ export {
   SERVICE_NOT_CONFIGURED,
   isServiceNotConfigured,
 } from './errors/index.js';
+
+// =============================================================================
+// Attestation Quote Binding (#482)
+// =============================================================================
+
+export {
+  checkQuoteBinding,
+  quotedData,
+  QuoteBindingError,
+  type QuoteBindingReason,
+} from './attestation/quote-binding.js';
 
 // =============================================================================
 // API Type Exports
@@ -339,6 +351,7 @@ export type {
 export type {
   TPMVersion,
   PCRBank,
+  PCRBankName,
   TPMManufacturer,
   TPMCapability,
   NVIndex,
@@ -439,6 +452,11 @@ export type {
   ActivateDeviceRequest,
   DeviceAttestRequest,
   DeviceAttestResponse,
+  DisableDeviceRequest,
+  DeviceLifecycleResponse,
+  AttestCertSource,
+  RecordAttestCertRequest,
+  RecordAttestCertResponse,
   DeviceStatus,
   DevicePaginationResponse,
   CreateDeviceResponse,
@@ -973,6 +991,27 @@ export type {
   GetVTPMInstanceEKFingerprintResponse,
 } from './types/vtpm.js';
 
+// VPN types
+export type {
+  VPNPeer,
+  VPNPosturePolicy,
+  VPNLease,
+  VPNRejectedPeer,
+  VPNGatewayStatus,
+  VPNDurationHistogram,
+  VPNHistogramBucket,
+  EnrolVPNPeerRequest,
+  EnrolVPNPeerResponse,
+  ListVPNPeersResponse,
+  RevokeVPNPeerResponse,
+  GetVPNStatusResponse,
+  SetVPNPosturePolicyRequest,
+  GetVPNPosturePolicyResponse,
+  SetVPNPosturePolicyResponse,
+  DeleteVPNPosturePolicyResponse,
+  ListVPNPosturePoliciesResponse,
+} from './types/vpn.js';
+
 // =============================================================================
 // QuicBaaS Type Exports (28 services)
 // =============================================================================
@@ -1007,6 +1046,7 @@ export {
   useTenant,
   useTPM,
   useVTPM,
+  useVPN,
   // Invitation hooks
   useInvitation,
   useInvitationList,

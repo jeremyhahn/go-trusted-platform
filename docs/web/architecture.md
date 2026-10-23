@@ -101,7 +101,7 @@ error would surface as a JSON parse failure instead of a 404.
 | Service registry and its status endpoint | `pkg/webservice/v1/service_registry.go` | this repo |
 | CORS, mTLS, IAM and tenant middleware | `pkg/webservice/v1/middleware/` | this repo |
 | Browser JWT issue / refresh | `pkg/webservice/v1/jwt/` | this repo |
-| Response envelope | `pkg/webservice/v1/response/` | this repo |
+| Response envelope | `sdk/go/wire/restwire/` (type), `pkg/webservice/v1/response/` (writer) | this repo |
 | Embed switch | `pkg/webserver/embed/embed.go`, `embed_web.go` | this repo |
 | Control-panel frontend | `web/src/` | this repo |
 | JavaScript/TypeScript SDK | `sdk/javascript` (`trusted-platform-sdk`) | this repo, separate feature |
@@ -164,7 +164,7 @@ and vendors Swagger UI into `public_html/swagger/`; the embed path
 1. **Listener.** Plain HTTP on `port` (a redirect to the TLS port, #535);
    when `tls-port > 0`, additionally HTTPS on TCP **and HTTP/3 on UDP at the
    same port number**. ALPN is `["h3", "h2", "http/1.1"]`; every response
-   carries `Alt-Svc: h3=":443"; ma=86400`. Each TCP listener is capped at
+   carries `Alt-Svc: h3=":<tls-port>"; ma=86400`. Each TCP listener is capped at
    `max-connections` when set (always on an edge surface). **Residual risk:**
    the cap counts TCP connections only; QUIC connections over UDP are not
    counted (quic-go exposes no server-side connection cap), so an edge
@@ -201,6 +201,16 @@ and vendors Swagger UI into `public_html/swagger/`; the embed path
    host would mount nothing and refuses to start (`ErrEdgeSurfaceEmpty`); an
    unknown `surface` value refuses to start (`ErrUnknownSurface`).
 
+   **`surface: provisioning`** (#177) mounts only the unauthenticated
+   boot-time `GET /api/v1/devices/config` and the plaintext redirect. Every
+   other path gets the unknown-route `404`, and no other surface mounts that
+   route. Its address is its trust boundary. Startup refuses the listener
+   unless `bind-host` is an IP literal inside the provisioning zone that
+   `sdn.environment` numbers (`ErrProvisioningBindHostOutsideZone` and its
+   siblings in `pkg/webservice/provisioning.go`). It takes the edge limits and
+   registers no virtual hosts. Without a device-profile service it would mount
+   nothing, and it refuses to start (`ErrProvisioningSurfaceEmpty`).
+
 Static serving resolves in this order: rewrite rules → exact file → directory
 index → non-SPA exclusion (JSON or plain 404) → `__placeholder__` fallback →
 SPA index → 404.
@@ -218,7 +228,9 @@ SPA index → 404.
 4. `AuthProvider` (`src/contexts/AuthContext.tsx`) reads that cookie, decodes
    the JWT **without verifying the signature**, and exposes
    `{id, email, tenantId, isTenantOwner, roles}` plus `isAuthenticated`,
-   `isLoading`, `login`, `logout`.
+   `isLoading`, `login`, `logout`. It is the console's only auth
+   implementation: `@/hooks` re-exports `useAuth` and `AuthProvider` from it, so
+   every import path reaches the same React context.
 5. `AuthGuard` renders nothing and `replace`s to `/auth/webauthn` whenever the
    decode yields no user.
 6. Every API call goes through `PlatformProvider` with `baseUrl: "/api"` and

@@ -1,5 +1,8 @@
 # Trusted Platform ISO
 
+> **Status: REFERENCE** · Last verified: 2026-10-13
+> Building the installer ISO with `platformctl iso create`; the full flag reference is [cli.md](cli.md) §3.
+
 The Trusted Platform ISO is built using the `platformctl iso` command, which provides a complete CLI for downloading, customizing, and building bootable Alpine Linux ISO images with platform-specific components.
 
 
@@ -56,7 +59,7 @@ is what lets firmware in enforcing mode boot the installer at all.
 **What is not.** The kernel and initrd on the ISO are **not** signed, and there
 is no shim in the chain, so nothing verifies them once GRUB is running.
 Firmware verifies the loader, not the system. Tracked in
-[#354](../../issues/354) — do not read a successful enforcing boot of the
+issue #354 — do not read a successful enforcing boot of the
 installer as end-to-end verification of the installer's payload.
 
 **Failure is fatal, deliberately.** A media-signing build whose bootloader
@@ -79,6 +82,8 @@ explicit deployment step rather than something the ISO can do for you.
 
 ### Command Flags
 
+Selected flags; [cli.md](cli.md) §3.1 lists them all.
+
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--alpine-version` | 3.22.2 | Alpine Linux version to download |
@@ -88,7 +93,6 @@ explicit deployment step rather than something the ISO can do for you.
 | `--platform-config` | single-node/default | Path to platformd.yaml template (baked into ISO). Default: `configs/platform/templates/single-node/default.yaml` |
 | `--overrides` | (none) | Path to override YAML (deep-merged onto `--platform-config` template before baking) |
 | `--config-server` | (none) | Base URL for dynamic config fetch at install time. Bakes `platform_config=<URL>` into kernel cmdline. See §Config Delivery Modes below |
-| `--installer-config` | configs/installer/default.yaml | Path to installer config file |
 | `--secure-boot` | true | Enable Secure Boot support. SINGLE SOURCE OF TRUTH for the baked config: the customize step forces `secure-boot.enabled` in the baked platform config to match this flag (adding a media-staged DB signing reference when the config carries none — an existing `db` ref and `resign-mode`, e.g. remote/KMS signing, are preserved untouched), so the ISO can never generate-and-enroll keys while shipping an unsigned UKI, or the reverse. A baked `secure-boot.enforce: true` additionally makes the build fail-closed on enrollment material: the staged media must carry the PK/KEK enrollment certificates the installer will enroll (validated as X.509, named by the baked `pk`/`kek` media cert-uris or the `PK.crt`/`KEK.crt` convention) — the installer warns past their absence at install time, so the build is the only gate against an enforce-requested node without enforcement. The override pass also mirrors `SecureBootConfig.Validate` for enforcing configs — `pk`/`kek` `key-uri` present with a `kms://` or `file://` scheme — so a config the target would deterministically reject fails the build instead; staged enrollment certificates may be PEM or DER (the installer parses both). Staging always REPLACES the ISO's `secure-boot-keys` directory (a stale private key from a previous build can never survive a switch to remote signing; a `--keys-dir` overlapping the staging directory is rejected before anything is removed), a media-signing build validates the staged DB pair as usable signing material — parseable key + certificate with matching public keys (`authenticode.LoadSigningPair`, the same loader the installer uses), not merely present files — and a remote/KMS-signing build never runs local key generation — neither in staging nor in the `iso create` Step-3 orchestration, which classifies the platform config's db reference first (`SecureBootRemoteSigning`): no local private signing key is needed or produced. A media-signing build also **signs the ISO's own EFI bootloader** with the staged DB key, so firmware already enforcing Secure Boot will load the installer instead of refusing it with `Access Denied` — see *Secure Boot on the installer media* below |
 | `--tpm-unseal` | true | Enable TPM auto-unseal |
 | `--luks` | true | Enable LUKS encryption |
@@ -96,7 +100,7 @@ explicit deployment step rather than something the ISO can do for you.
 | `--fido2` | false | Enable FIDO2 security key support |
 | `--keys-dir` | work/secure-boot-keys | Secure Boot keys directory |
 | `--generate-keys` | true | Generate Secure Boot keys if they don't exist |
-| `--key-backend` | file | Key backend: file, software, pkcs11, tpm2, yubikey, awskms, azurekv, gcpkms, vault |
+| `--key-backend` | file | Key backend: file, software, pkcs11, tpm2, awskms, azurekv, gcpkms, vault |
 | `--output` | auto-generated | Output ISO filename |
 | `--webui` | auto-detected | Path to WebUI directory or tarball |
 | `--work-dir` | work | Working directory for ISO operations |
@@ -108,7 +112,8 @@ The output filename defaults to: `trusted-alpine-<version>-<arch>.iso` (or with 
 
 ## Individual Commands
 
-For more control over the build process, each step can be executed individually:
+`download`, `extract`, `customize` and `build` run the four steps of
+`iso create` one at a time, locally ([cli.md](cli.md) §3.4, §4):
 
 ```bash
 # Download Alpine ISO
@@ -120,6 +125,7 @@ platformctl iso extract --iso work/alpine-standard-3.22.2-x86_64.iso
 # Customize ISO (integrates platform binaries and configuration)
 platformctl iso customize --iso-dir work/iso \
   --platformd-binary ./platformd-static \
+  --platform-config configs/platform/templates/single-node/default.yaml \
   --keys-dir secure-boot-keys
 
 # Build final bootable ISO
@@ -148,7 +154,7 @@ platformctl iso download --force
 
 ### Build Command
 
-Builds a hybrid BIOS/UEFI bootable ISO image using xorriso:
+Builds a UEFI-only bootable ISO image using xorriso:
 
 ```bash
 # Build with default settings
@@ -158,15 +164,14 @@ platformctl iso build --iso-dir work/iso --output platform.iso
 platformctl iso build --iso-dir work/iso --output platform.iso --label MY_PLATFORM
 ```
 
-The resulting ISO can boot via:
-- Legacy BIOS (using isolinux/syslinux)
-- UEFI (using grub EFI bootloader)
-- USB/HDD (via isohybrid MBR)
+The ISO boots through UEFI only (the El Torito `boot/grub/efi.img`); there
+is no legacy BIOS path. It is a GPT hybrid (`-isohybrid-gpt-basdat`), so the
+same file boots from USB.
 
 
 ## Installation Profiles
 
-The `platformctl iso profile` command manages installation configuration profiles:
+The `platformctl iso profile` verbs run locally ([cli.md](cli.md) §4):
 
 ```bash
 # List available profiles
@@ -226,6 +231,7 @@ platformctl iso test all --iso trusted-alpine-1.0.0-x86_64.iso
 | `--fido2` | false | Enable FIDO2/CanoKey device emulation |
 | `--fido2-mode` | canokey | FIDO2 mode: canokey, u2f-emulated, or u2f-passthru |
 | `--network` | auto | Network mode: user, bridge, or none |
+| `--timeout` | 0 (none) | Stop QEMU and the software TPM and fail when the guest has not powered off within this duration (per VM run); headless runs set it |
 
 
 ### UEFI / OVMF
@@ -235,7 +241,7 @@ Secure Boot keys are enrolled into the OVMF_VARS UEFI NVRAM file using native Go
 
 ## Booting the OS
 
-The installed Operating System writes a custom compiled and signed kernel with EFI stub support to `/EFI/debian/kernel.efi` and copies it to the default EFI location `EFI/Boot/bootx64.efi`. This allows default systems that honor the default path to boot without any custom UEFI boot entries.
+The installer writes the signed UKI (kernel with EFI stub, initramfs and cmdline) to the default EFI location `/EFI/BOOT/BOOTX64.EFI` (`BOOTAA64.EFI` on arm64) and registers it as a UEFI boot entry. Firmware that honors the default path boots it without that entry.
 
 
 ### Bare Metal
@@ -251,8 +257,8 @@ QEMU supports [Direct Kernel Boot](https://qemu-project.gitlab.io/qemu/system/li
 ## Config Delivery Modes
 
 `platformctl iso create` supports four config-delivery modes. Pick based
-on your deployment topology. See `docs/bootstrap/config-delivery.md`
-for the full architecture.
+on your deployment topology. What the orchestrator publishes per MAC is
+`docs/bootstrap/architecture.md` (Phase 3 · Control plane).
 
 ### 1. Default baked (no flags)
 
@@ -322,9 +328,10 @@ See `docs/installer/autoinstall.md` for implementation detail.
 
 ## Network Zone Identity
 
-When a device profile is embedded into the ISO via `platformctl iso customize`
-(or `platformctl iso create` with a `--platform-config` that includes
-network phase configs), the ISO customizer bakes the SDN zone name into every
+**No build path calls this today.** `Customizer.EmbedDeviceProfileNetworkConfig`
+has no caller outside its tests, so neither `iso create` nor the `iso
+customize` stub writes the artifacts below. When it is called with a device
+profile, the ISO customizer bakes the SDN zone name into every
 network artifact so the installed OS knows its zone at firstboot without
 querying an external API.
 
@@ -337,7 +344,7 @@ a fallback when the per-network `zone:` is absent.
 
 ### Baked artifacts
 
-`platformctl iso create` (via `pkg/iso.Customizer.EmbedDeviceProfileNetworkConfig`)
+`EmbedDeviceProfileNetworkConfig` (`pkg/iso/customize_profile.go`)
 writes the following zone-aware artifacts into the ISO overlay
 (`<overlay>/etc/platformd/network/`):
 
@@ -356,16 +363,20 @@ correct vehicle).
 ### `TP_NETWORK_ZONE`
 
 `TP_NETWORK_ZONE` is set to the admitted phase's zone name in
-`/etc/platformd/network/network.env`. This file is sourced by
-`trusted-platform-network.service` at firstboot. The value is the SDN zone
+`/etc/platformd/network/network.env`. The value is the SDN zone
 the device operates in after successful enrollment (e.g. `"control-plane"`).
+Nothing on the image reads the file today: its one reader,
+`configs/os/trusted-platform-network.sh`, was removed with #149, because it
+repeated platformd's post-enrollment activation with a PEM IDevID key file
+nothing writes. platformd fetches the profile and activates with the
+TPM-resident IDevID ([device architecture §4.4](../device/architecture.md#44-activation-identity-becomes-network-access)).
 
 `TP_NETWORK_ZONE` is NOT a kernel cmdline parameter — it does not appear
 in the kernel cmdline and is not listed in `docs/reference/kernel-cmdline.md`.
 It reaches the running OS exclusively through the baked artifact and through
 the live API response (`zone` field in the `admittedNetwork` object of
-`GET /api/v1/device/profile`) fetched
-by `configs/os/trusted-platform-network.sh`.
+`GET /api/v1/device/profile`) that platformd fetches over mTLS with the
+TPM-resident IDevID.
 
 ### Missing zone semantics
 
@@ -379,13 +390,8 @@ and the artifact is still written.
 
 ## Makefile Integration
 
-For convenience, Makefile targets wrap the CLI commands:
+One Makefile target wraps the CLI:
 
 | Makefile Target | CLI Command |
 |-----------------|-------------|
-| `make download-iso` | `platformctl iso download` |
-| `make extract-iso` | `platformctl iso extract` |
-| `make customize-iso` | `platformctl iso customize` |
-| `make build-iso` | `platformctl iso build` |
-| `make iso` | `platformctl iso create` |
-| `make test-install` | `platformctl iso test install` |
+| `make isos` | `bin/platformctl iso create --output bin/$(ISO_NAME)` |

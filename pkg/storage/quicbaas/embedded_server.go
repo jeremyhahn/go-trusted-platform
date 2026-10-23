@@ -65,6 +65,13 @@ type EmbeddedServer struct {
 	// PublishDANE dispatches through it.
 	danePublisher *DANEPublisherAdapter
 
+	// containerAttestor is the registered container attestor. It is
+	// created with the server and refuses until the platform installs its
+	// fleet attestor, which needs the device registry, the attestation
+	// service and the host TPM. Security().Attestation().AttestContainer
+	// dispatches through it.
+	containerAttestor *ContainerAttestorAdapter
+
 	started atomic.Bool
 	closed  atomic.Bool
 	mu      sync.RWMutex
@@ -83,6 +90,7 @@ func NewEmbeddedServer(config *Config, logger *logging.Logger) (*EmbeddedServer,
 	}
 	srv.ceremonyCA = NewCeremonyCAAdapter(srv.loadActiveCA)
 	srv.danePublisher = NewDANEPublisherAdapter(nil)
+	srv.containerAttestor = NewContainerAttestorAdapter()
 	return srv, nil
 }
 
@@ -136,6 +144,10 @@ func (s *EmbeddedServer) Start(ctx context.Context) error {
 	if s.danePublisher != nil {
 		serverOpts = append(serverOpts, quicbaassdk.WithDANEPublisher(s.danePublisher))
 		s.logger.Debug("QuicBaaS embedded server using DANE publisher")
+	}
+	if s.containerAttestor != nil {
+		serverOpts = append(serverOpts, quicbaassdk.WithContainerAttestor(s.containerAttestor))
+		s.logger.Debug("QuicBaaS embedded server using the platform container attestor")
 	}
 
 	// Create the server with options
@@ -320,6 +332,17 @@ func (s *EmbeddedServer) DANEPublisher() *DANEPublisherAdapter {
 		return nil
 	}
 	return s.danePublisher
+}
+
+// ContainerAttestor returns the container attestor adapter registered with
+// the embedded QuicBaaS server. The platform installs its fleet attestor via
+// the adapter's SetAttestor once the attestation surface is wired. Returns
+// nil only when the embedded server failed to construct.
+func (s *EmbeddedServer) ContainerAttestor() *ContainerAttestorAdapter {
+	if s == nil {
+		return nil
+	}
+	return s.containerAttestor
 }
 
 // SetCA replaces the Certificate Authority used by the running embedded

@@ -154,6 +154,10 @@ type ImageManager struct {
 
 	// closed indicates if the manager has been closed.
 	closed atomic.Bool
+
+	// now is time.Now in production; tests replace it to cross the cache
+	// TTL without sleeping (#284).
+	now func() time.Time
 }
 
 // NewImageManager creates a new ImageManager with the given configuration.
@@ -165,6 +169,7 @@ func NewImageManager(config ImageManagerConfig, opts ...ImageManagerOption) (*Im
 	m := &ImageManager{
 		config: config,
 		logger: config.Logger,
+		now:    time.Now,
 	}
 
 	for _, opt := range opts {
@@ -286,7 +291,7 @@ func (m *ImageManager) VerifyImage(ctx context.Context, ref string) (*ImageVerif
 			Verified:      result.Verified,
 			Signer:        result.Signer,
 			SignatureType: result.SignatureType,
-			Timestamp:     time.Now(),
+			Timestamp:     m.now(),
 			Certificate:   result.Certificate,
 			Annotations:   result.Annotations,
 		}
@@ -298,7 +303,7 @@ func (m *ImageManager) VerifyImage(ctx context.Context, ref string) (*ImageVerif
 			ImageRef:  ref,
 			Digest:    digest,
 			Verified:  false,
-			Timestamp: time.Now(),
+			Timestamp: m.now(),
 		}
 	}
 
@@ -485,7 +490,7 @@ func (m *ImageManager) getVerificationFromCache(ref string) (*ImageVerification,
 	}
 
 	entry := value.(*verificationCacheEntry)
-	if time.Now().After(entry.expiresAt) {
+	if m.now().After(entry.expiresAt) {
 		m.verificationCache.Delete(ref)
 		return nil, false
 	}
@@ -497,7 +502,7 @@ func (m *ImageManager) getVerificationFromCache(ref string) (*ImageVerification,
 func (m *ImageManager) cacheVerification(ref string, result *ImageVerification) {
 	entry := &verificationCacheEntry{
 		result:    result,
-		expiresAt: time.Now().Add(m.config.CacheTTL),
+		expiresAt: m.now().Add(m.config.CacheTTL),
 	}
 	m.verificationCache.Store(ref, entry)
 
@@ -507,7 +512,7 @@ func (m *ImageManager) cacheVerification(ref string, result *ImageVerification) 
 
 // evictOldEntries removes expired cache entries.
 func (m *ImageManager) evictOldEntries() {
-	now := time.Now()
+	now := m.now()
 	count := 0
 
 	m.verificationCache.Range(func(key, value interface{}) bool {

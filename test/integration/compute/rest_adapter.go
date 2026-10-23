@@ -18,13 +18,25 @@ package compute_test
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
+	"strconv"
 
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/proto"
+
+	pb "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
+	computesvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/compute"
 	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
 )
+
+// computeVMsPath is the daemon REST route serving the VM collection.
+const computeVMsPath = "/api/v1/compute/vms"
 
 // =============================================================================
 // Error Types
@@ -43,6 +55,31 @@ func (e ErrRESTRequestFailed) Error() string {
 		e.Operation, e.Message, e.StatusCode, e.Body)
 }
 
+// restStatusCodes inverts the daemon's gRPC-code-to-HTTP-status mapping
+// (pkg/webservice/v1/rest/internal/protorest.WriteError), so a REST refusal
+// carries the same gRPC code the other transports report.
+var restStatusCodes = map[int]codes.Code{
+	http.StatusBadRequest:         codes.InvalidArgument,
+	http.StatusUnauthorized:       codes.Unauthenticated,
+	http.StatusForbidden:          codes.PermissionDenied,
+	http.StatusNotFound:           codes.NotFound,
+	http.StatusConflict:           codes.AlreadyExists,
+	http.StatusTooManyRequests:    codes.ResourceExhausted,
+	http.StatusNotImplemented:     codes.Unimplemented,
+	http.StatusServiceUnavailable: codes.Unavailable,
+	http.StatusGatewayTimeout:     codes.DeadlineExceeded,
+}
+
+// GRPCStatus lets status.Code read the refusal's gRPC code through the SDK
+// client's wrapping error. A status the daemon does not emit is Unknown.
+func (e ErrRESTRequestFailed) GRPCStatus() *status.Status {
+	code, ok := restStatusCodes[e.StatusCode]
+	if !ok {
+		code = codes.Unknown
+	}
+	return status.New(code, e.Error())
+}
+
 // ErrRESTSetupFailed indicates the REST endpoint is unreachable.
 type ErrRESTSetupFailed struct {
 	Endpoint string
@@ -54,86 +91,30 @@ func (e ErrRESTSetupFailed) Error() string {
 }
 
 // =============================================================================
-// REST Request/Response Types
-// =============================================================================
-
-// restCreateVMRequest represents the JSON body for creating a VM.
-type restCreateVMRequest struct {
-	Name       string            `json:"name"`
-	CPUs       uint32            `json:"cpus"`
-	MemoryMB   uint64            `json:"memory_mb"`
-	DiskSizeGB uint64            `json:"disk_size_gb"`
-	Firmware   string            `json:"firmware,omitempty"`
-	SecureBoot bool              `json:"secure_boot,omitempty"`
-	TPM        bool              `json:"tpm,omitempty"`
-	Start      bool              `json:"start,omitempty"`
-	Labels     map[string]string `json:"labels,omitempty"`
-}
-
-// restStopVMRequest represents the JSON body for stopping a VM.
-type restStopVMRequest struct {
-	Force          bool   `json:"force,omitempty"`
-	TimeoutSeconds uint32 `json:"timeout_seconds,omitempty"`
-}
-
-// restDeleteVMQuery represents query parameters for deleting a VM.
-type restDeleteVMQuery struct {
-	DeleteDisks bool `json:"delete_disks,omitempty"`
-}
-
-// restVMResponse represents a VM in the REST API response.
-type restVMResponse struct {
-	ID       string            `json:"id"`
-	Name     string            `json:"name"`
-	State    string            `json:"state"`
-	CPUs     uint32            `json:"cpus"`
-	MemoryMB uint64            `json:"memory_mb"`
-	Labels   map[string]string `json:"labels,omitempty"`
-}
-
-// restStatusResponse represents a status response from the REST API.
-type restStatusResponse struct {
-	Success bool   `json:"success"`
-	Message string `json:"message,omitempty"`
-}
-
-// restCreateResponse represents the response from creating a VM.
-type restCreateResponse struct {
-	Status *restStatusResponse `json:"status,omitempty"`
-	VM     *restVMResponse     `json:"vm,omitempty"`
-}
-
-// restGetResponse represents the response from getting a VM.
-type restGetResponse struct {
-	VM *restVMResponse `json:"vm,omitempty"`
-}
-
-// restListResponse represents the response from listing VMs.
-type restListResponse struct {
-	VMs        []restVMResponse `json:"vms"`
-	TotalItems uint64           `json:"total_items"`
-}
-
-// =============================================================================
 // REST Adapter
 // =============================================================================
 
-// RESTAdapter implements ComputeCommands using the REST API.
+// RESTAdapter implements ComputeCommands using the REST API. It drives the
+// Go SDK compute client, whose requests travel as protobuf JSON over the
+// daemon's REST routes, so REST is held to the same contract as gRPC.
 type RESTAdapter struct {
-	endpoint string
-	client   *http.Client
+	endpoint   string
+	httpClient *http.Client
+	client     *computesvc.Client
 }
 
 // NewRESTAdapter creates a new REST adapter.
 func NewRESTAdapter() *RESTAdapter {
-	return &RESTAdapter{
+	adapter := &RESTAdapter{
 		endpoint: GetRESTEndpoint(),
-		client: &http.Client{
+		httpClient: &http.Client{
 			Transport: &http.Transport{
 				TLSClientConfig: helpers.TLSConfigOrInsecure(),
 			},
 		},
 	}
+	adapter.client = computesvc.NewClientFromGRPC(&restComputeClient{adapter: adapter})
+	return adapter
 }
 
 // Setup verifies the REST endpoint is reachable.
@@ -146,7 +127,7 @@ func (a *RESTAdapter) Setup(ctx context.Context) error {
 		}
 	}
 
-	resp, err := a.client.Do(req)
+	resp, err := a.httpClient.Do(req)
 	if err != nil {
 		return ErrRESTSetupFailed{
 			Endpoint: a.endpoint,
@@ -168,45 +149,41 @@ func (a *RESTAdapter) Name() string {
 	return "REST"
 }
 
-// doJSON sends a JSON request and decodes the response body.
-func (a *RESTAdapter) doJSON(ctx context.Context, method, path string, body interface{}, result interface{}) error {
+// call sends in as protobuf JSON (when non-nil) with query appended to the
+// route, and decodes a 2xx reply into out with protojson.
+func (a *RESTAdapter) call(ctx context.Context, method, path string, query url.Values, in, out proto.Message) error {
+	operation := method + " " + path
 	var bodyReader io.Reader
-	if body != nil {
-		data, err := json.Marshal(body)
+	if in != nil {
+		data, err := protojson.Marshal(in)
 		if err != nil {
-			return ErrRESTRequestFailed{
-				Operation: method + " " + path,
-				Message:   "failed to marshal request: " + err.Error(),
-			}
+			return ErrRESTRequestFailed{Operation: operation, Message: "failed to marshal request: " + err.Error()}
 		}
 		bodyReader = bytes.NewReader(data)
+	}
+	if len(query) > 0 {
+		path += "?" + query.Encode()
 	}
 
 	req, err := http.NewRequestWithContext(ctx, method, a.endpoint+path, bodyReader)
 	if err != nil {
-		return ErrRESTRequestFailed{
-			Operation: method + " " + path,
-			Message:   "failed to create request: " + err.Error(),
-		}
+		return ErrRESTRequestFailed{Operation: operation, Message: "failed to create request: " + err.Error()}
 	}
-	if body != nil {
+	if in != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
 	req.Header.Set("Accept", "application/json")
 
-	resp, err := a.client.Do(req)
+	resp, err := a.httpClient.Do(req)
 	if err != nil {
-		return ErrRESTRequestFailed{
-			Operation: method + " " + path,
-			Message:   "request failed: " + err.Error(),
-		}
+		return ErrRESTRequestFailed{Operation: operation, Message: "request failed: " + err.Error()}
 	}
 	defer resp.Body.Close()
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return ErrRESTRequestFailed{
-			Operation:  method + " " + path,
+			Operation:  operation,
 			StatusCode: resp.StatusCode,
 			Message:    "failed to read response: " + err.Error(),
 		}
@@ -214,25 +191,165 @@ func (a *RESTAdapter) doJSON(ctx context.Context, method, path string, body inte
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return ErrRESTRequestFailed{
-			Operation:  method + " " + path,
+			Operation:  operation,
 			StatusCode: resp.StatusCode,
 			Message:    "unexpected status code",
 			Body:       string(respBody),
 		}
 	}
 
-	if result != nil {
-		if err := json.Unmarshal(respBody, result); err != nil {
-			return ErrRESTRequestFailed{
-				Operation:  method + " " + path,
-				StatusCode: resp.StatusCode,
-				Message:    "failed to parse response: " + err.Error(),
-				Body:       string(respBody),
-			}
+	if err := protojson.Unmarshal(respBody, out); err != nil {
+		return ErrRESTRequestFailed{
+			Operation:  operation,
+			StatusCode: resp.StatusCode,
+			Message:    "failed to parse response: " + err.Error(),
+			Body:       string(respBody),
 		}
 	}
 
 	return nil
+}
+
+// restRPC runs one compute RPC over REST and returns its decoded reply.
+func restRPC[Resp any, PResp interface {
+	*Resp
+	proto.Message
+}](ctx context.Context, a *RESTAdapter, method, path string, query url.Values, in proto.Message) (PResp, error) {
+	out := PResp(new(Resp))
+	if err := a.call(ctx, method, path, query, in, out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// vmPath is the REST route of one VM, or of an action on it when action is
+// non-empty.
+func vmPath(id, action string) string {
+	path := computeVMsPath + "/" + url.PathEscape(id)
+	if action != "" {
+		path += "/" + action
+	}
+	return path
+}
+
+// listVMsQuery names each set ListVMsRequest field as the query parameter
+// the daemon decodes into it.
+func listVMsQuery(in *pb.ListVMsRequest) url.Values {
+	query := url.Values{}
+	for _, state := range in.GetStates() {
+		query.Add("states", state.String())
+	}
+	if page := in.GetPagination().GetPage(); page > 0 {
+		query.Set("pagination.page", strconv.FormatUint(uint64(page), 10))
+	}
+	if pageSize := in.GetPagination().GetPageSize(); pageSize > 0 {
+		query.Set("pagination.pageSize", strconv.FormatUint(uint64(pageSize), 10))
+	}
+	for key, value := range in.GetSelector().GetMatchLabels() {
+		query.Set("selector.matchLabels."+key, value)
+	}
+	return query
+}
+
+// restComputeClient carries the Go SDK compute client's VM RPCs over the
+// daemon REST surface: each sends the SDK's own request message to the route
+// that serves its RPC. ComputeCommands drives only the nine VM RPCs below; the
+// embedded interface is nil and never reached.
+type restComputeClient struct {
+	// The embedded client is nil: it only completes the interface. Every
+	// RPC a RESTAdapter method calls must have a REST method below, or the
+	// call dereferences the nil client and panics.
+	pb.ComputeServiceClient
+
+	adapter *RESTAdapter
+}
+
+func (c *restComputeClient) CreateVM(ctx context.Context, in *pb.CreateVMRequest, _ ...grpc.CallOption) (*pb.CreateVMResponse, error) {
+	return restRPC[pb.CreateVMResponse](ctx, c.adapter, http.MethodPost, computeVMsPath, nil, in)
+}
+
+func (c *restComputeClient) StartVM(ctx context.Context, in *pb.StartVMRequest, _ ...grpc.CallOption) (*pb.StartVMResponse, error) {
+	return restRPC[pb.StartVMResponse](ctx, c.adapter, http.MethodPost, vmPath(in.GetId(), "start"), nil, in)
+}
+
+func (c *restComputeClient) StopVM(ctx context.Context, in *pb.StopVMRequest, _ ...grpc.CallOption) (*pb.StopVMResponse, error) {
+	return restRPC[pb.StopVMResponse](ctx, c.adapter, http.MethodPost, vmPath(in.GetId(), "stop"), nil, in)
+}
+
+func (c *restComputeClient) RebootVM(ctx context.Context, in *pb.RebootVMRequest, _ ...grpc.CallOption) (*pb.RebootVMResponse, error) {
+	return restRPC[pb.RebootVMResponse](ctx, c.adapter, http.MethodPost, vmPath(in.GetId(), "reboot"), nil, in)
+}
+
+func (c *restComputeClient) SuspendVM(ctx context.Context, in *pb.SuspendVMRequest, _ ...grpc.CallOption) (*pb.SuspendVMResponse, error) {
+	return restRPC[pb.SuspendVMResponse](ctx, c.adapter, http.MethodPost, vmPath(in.GetId(), "suspend"), nil, in)
+}
+
+func (c *restComputeClient) ResumeVM(ctx context.Context, in *pb.ResumeVMRequest, _ ...grpc.CallOption) (*pb.ResumeVMResponse, error) {
+	return restRPC[pb.ResumeVMResponse](ctx, c.adapter, http.MethodPost, vmPath(in.GetId(), "resume"), nil, in)
+}
+
+func (c *restComputeClient) DeleteVM(ctx context.Context, in *pb.DeleteVMRequest, _ ...grpc.CallOption) (*pb.DeleteVMResponse, error) {
+	return restRPC[pb.DeleteVMResponse](ctx, c.adapter, http.MethodDelete, vmPath(in.GetId(), ""), nil, in)
+}
+
+func (c *restComputeClient) GetVM(ctx context.Context, in *pb.GetVMRequest, _ ...grpc.CallOption) (*pb.GetVMResponse, error) {
+	return restRPC[pb.GetVMResponse](ctx, c.adapter, http.MethodGet, vmPath(in.GetId(), ""), nil, nil)
+}
+
+func (c *restComputeClient) ListVMs(ctx context.Context, in *pb.ListVMsRequest, _ ...grpc.CallOption) (*pb.ListVMsResponse, error) {
+	return restRPC[pb.ListVMsResponse](ctx, c.adapter, http.MethodGet, computeVMsPath, listVMsQuery(in), nil)
+}
+
+// computeMigrationsPath is the REST root of the migration receiver routes.
+const computeMigrationsPath = "/api/v1/compute/migrations"
+
+// snapshotPath builds /api/v1/compute/vms/{id}/snapshots[/{snapshotId}[/action]].
+func snapshotPath(vmID, snapshotID, action string) string {
+	path := vmPath(vmID, "snapshots")
+	if snapshotID != "" {
+		path += "/" + url.PathEscape(snapshotID)
+	}
+	if action != "" {
+		path += "/" + action
+	}
+	return path
+}
+
+func (c *restComputeClient) CreateSnapshot(ctx context.Context, in *pb.CreateSnapshotRequest, _ ...grpc.CallOption) (*pb.CreateSnapshotResponse, error) {
+	return restRPC[pb.CreateSnapshotResponse](ctx, c.adapter, http.MethodPost, snapshotPath(in.GetVmId(), "", ""), nil, in)
+}
+
+func (c *restComputeClient) RestoreSnapshot(ctx context.Context, in *pb.RestoreSnapshotRequest, _ ...grpc.CallOption) (*pb.RestoreSnapshotResponse, error) {
+	return restRPC[pb.RestoreSnapshotResponse](ctx, c.adapter, http.MethodPost, snapshotPath(in.GetVmId(), in.GetSnapshotId(), "restore"), nil, nil)
+}
+
+func (c *restComputeClient) DeleteSnapshot(ctx context.Context, in *pb.DeleteSnapshotRequest, _ ...grpc.CallOption) (*pb.DeleteSnapshotResponse, error) {
+	return restRPC[pb.DeleteSnapshotResponse](ctx, c.adapter, http.MethodDelete, snapshotPath(in.GetVmId(), in.GetSnapshotId(), ""), nil, nil)
+}
+
+func (c *restComputeClient) ListSnapshots(ctx context.Context, in *pb.ListSnapshotsRequest, _ ...grpc.CallOption) (*pb.ListSnapshotsResponse, error) {
+	return restRPC[pb.ListSnapshotsResponse](ctx, c.adapter, http.MethodGet, snapshotPath(in.GetVmId(), "", ""), nil, nil)
+}
+
+func (c *restComputeClient) GetSnapshot(ctx context.Context, in *pb.GetSnapshotRequest, _ ...grpc.CallOption) (*pb.GetSnapshotResponse, error) {
+	return restRPC[pb.GetSnapshotResponse](ctx, c.adapter, http.MethodGet, snapshotPath(in.GetVmId(), in.GetSnapshotId(), ""), nil, nil)
+}
+
+func (c *restComputeClient) PrepareMigration(ctx context.Context, in *pb.PrepareMigrationRequest, _ ...grpc.CallOption) (*pb.PrepareMigrationResponse, error) {
+	return restRPC[pb.PrepareMigrationResponse](ctx, c.adapter, http.MethodPost, computeMigrationsPath+"/prepare", nil, in)
+}
+
+func (c *restComputeClient) FinalizeMigration(ctx context.Context, in *pb.FinalizeMigrationRequest, _ ...grpc.CallOption) (*pb.FinalizeMigrationResponse, error) {
+	path := computeMigrationsPath + "/" + url.PathEscape(in.GetReceiverId()) + "/finalize"
+	return restRPC[pb.FinalizeMigrationResponse](ctx, c.adapter, http.MethodPost, path, nil, in)
+}
+
+func (c *restComputeClient) AttestVM(ctx context.Context, in *pb.AttestVMRequest, _ ...grpc.CallOption) (*pb.AttestVMResponse, error) {
+	return restRPC[pb.AttestVMResponse](ctx, c.adapter, http.MethodPost, vmPath(in.GetVmId(), "attest"), nil, in)
+}
+
+func (c *restComputeClient) VerifyVMAttestation(ctx context.Context, in *pb.VerifyVMAttestationRequest, _ ...grpc.CallOption) (*pb.VerifyVMAttestationResponse, error) {
+	return restRPC[pb.VerifyVMAttestationResponse](ctx, c.adapter, http.MethodPost, vmPath(in.GetVmId(), "attest/verify"), nil, in)
 }
 
 // =============================================================================
@@ -241,148 +358,200 @@ func (a *RESTAdapter) doJSON(ctx context.Context, method, path string, body inte
 
 // CreateVM creates a virtual machine via REST.
 func (a *RESTAdapter) CreateVM(ctx context.Context, opts CreateVMOptions) (*CreateVMResult, error) {
-	reqBody := restCreateVMRequest{
-		Name:       opts.Name,
-		CPUs:       opts.CPUs,
-		MemoryMB:   opts.MemoryMB,
-		DiskSizeGB: opts.DiskSizeGB,
-		Firmware:   opts.Firmware,
-		SecureBoot: opts.SecureBoot,
-		TPM:        opts.TPM,
-		Start:      opts.Start,
-		Labels:     opts.Labels,
-	}
-
-	var resp restCreateResponse
-	if err := a.doJSON(ctx, http.MethodPost, "/api/v1/compute/vms", reqBody, &resp); err != nil {
+	vm, err := a.client.CreateVMDomain(ctx, createVMParamsFromOptions(opts))
+	if err != nil {
 		return nil, err
 	}
-
-	result := &CreateVMResult{}
-	if resp.Status != nil {
-		result.Success = resp.Status.Success
-	}
-	if resp.VM != nil {
-		result.VMID = resp.VM.ID
-		result.Name = resp.VM.Name
-		result.State = resp.VM.State
-		result.Labels = resp.VM.Labels
-	}
-
-	return result, nil
+	return createVMResultFromDomain(vm), nil
 }
 
 // StartVM starts a virtual machine via REST.
 func (a *RESTAdapter) StartVM(ctx context.Context, opts StartVMOptions) (*StartVMResult, error) {
-	var resp restStatusResponse
-	path := fmt.Sprintf("/api/v1/compute/vms/%s/start", opts.VMID)
-
-	if err := a.doJSON(ctx, http.MethodPost, path, nil, &resp); err != nil {
+	status, err := a.client.StartVMDomain(ctx, opts.VMID)
+	if err != nil {
 		return nil, err
 	}
 
-	return &StartVMResult{
-		Success: resp.Success,
-		Message: resp.Message,
-	}, nil
+	result := &StartVMResult{}
+	if status != nil {
+		result.Success = status.Success
+		result.Message = status.Message
+	}
+	return result, nil
 }
 
 // StopVM stops a virtual machine via REST.
 func (a *RESTAdapter) StopVM(ctx context.Context, opts StopVMOptions) (*StopVMResult, error) {
-	reqBody := restStopVMRequest{
+	status, err := a.client.StopVMDomain(ctx, &computesvc.StopVMParams{
+		ID:             opts.VMID,
 		Force:          opts.Force,
 		TimeoutSeconds: opts.TimeoutSeconds,
-	}
-
-	var resp restStatusResponse
-	path := fmt.Sprintf("/api/v1/compute/vms/%s/stop", opts.VMID)
-
-	if err := a.doJSON(ctx, http.MethodPost, path, reqBody, &resp); err != nil {
+	})
+	if err != nil {
 		return nil, err
 	}
 
-	return &StopVMResult{
-		Success: resp.Success,
-		Message: resp.Message,
-	}, nil
+	result := &StopVMResult{}
+	if status != nil {
+		result.Success = status.Success
+		result.Message = status.Message
+	}
+	return result, nil
+}
+
+// RebootVM restarts a running virtual machine via REST.
+func (a *RESTAdapter) RebootVM(ctx context.Context, opts RebootVMOptions) (*RebootVMResult, error) {
+	status, err := a.client.RebootVMDomain(ctx, opts.VMID, opts.Force)
+	if err != nil {
+		return nil, err
+	}
+
+	result := &RebootVMResult{}
+	if status != nil {
+		result.Success = status.Success
+		result.Message = status.Message
+	}
+	return result, nil
+}
+
+// SuspendVM pauses a running virtual machine via REST.
+func (a *RESTAdapter) SuspendVM(ctx context.Context, opts SuspendVMOptions) (*SuspendVMResult, error) {
+	status, err := a.client.SuspendVMDomain(ctx, opts.VMID)
+	if err != nil {
+		return nil, err
+	}
+
+	result := &SuspendVMResult{}
+	if status != nil {
+		result.Success = status.Success
+		result.Message = status.Message
+	}
+	return result, nil
+}
+
+// ResumeVM continues a suspended virtual machine via REST.
+func (a *RESTAdapter) ResumeVM(ctx context.Context, opts ResumeVMOptions) (*ResumeVMResult, error) {
+	status, err := a.client.ResumeVMDomain(ctx, opts.VMID)
+	if err != nil {
+		return nil, err
+	}
+
+	result := &ResumeVMResult{}
+	if status != nil {
+		result.Success = status.Success
+		result.Message = status.Message
+	}
+	return result, nil
 }
 
 // DeleteVM deletes a virtual machine via REST.
 func (a *RESTAdapter) DeleteVM(ctx context.Context, opts DeleteVMOptions) (*DeleteVMResult, error) {
-	path := fmt.Sprintf("/api/v1/compute/vms/%s", opts.VMID)
-	if opts.DeleteDisks {
-		path += "?delete_disks=true"
-	}
-
-	var resp restStatusResponse
-	if err := a.doJSON(ctx, http.MethodDelete, path, nil, &resp); err != nil {
+	status, err := a.client.DeleteVMDomain(ctx, &computesvc.DeleteVMParams{
+		ID:          opts.VMID,
+		DeleteDisks: opts.DeleteDisks,
+	})
+	if err != nil {
 		return nil, err
 	}
 
-	return &DeleteVMResult{
-		Success: resp.Success,
-		Message: resp.Message,
-	}, nil
+	result := &DeleteVMResult{}
+	if status != nil {
+		result.Success = status.Success
+		result.Message = status.Message
+	}
+	return result, nil
 }
 
 // GetVM retrieves a virtual machine via REST.
 func (a *RESTAdapter) GetVM(ctx context.Context, opts GetVMOptions) (*GetVMResult, error) {
-	path := fmt.Sprintf("/api/v1/compute/vms/%s", opts.VMID)
-
-	var resp restGetResponse
-	if err := a.doJSON(ctx, http.MethodGet, path, nil, &resp); err != nil {
+	vm, err := a.client.GetVMDomain(ctx, opts.VMID)
+	if err != nil {
 		return nil, err
 	}
-
-	if resp.VM == nil {
-		return nil, ErrVMNotFound{VMID: opts.VMID}
+	if vm == nil {
+		return nil, ErrVMNotFound(opts)
 	}
-
-	return &GetVMResult{
-		VMID:     resp.VM.ID,
-		Name:     resp.VM.Name,
-		State:    resp.VM.State,
-		CPUs:     resp.VM.CPUs,
-		MemoryMB: resp.VM.MemoryMB,
-		Labels:   resp.VM.Labels,
-	}, nil
+	return getVMResultFromDomain(vm), nil
 }
 
 // ListVMs lists virtual machines via REST.
 func (a *RESTAdapter) ListVMs(ctx context.Context, opts ListVMsOptions) (*ListVMsResult, error) {
-	path := "/api/v1/compute/vms"
-	sep := "?"
+	domainResult, err := a.client.ListVMsDomain(ctx, listVMsParamsFromOptions(opts))
+	if err != nil {
+		return nil, err
+	}
+	return listVMsResultFromDomain(domainResult), nil
+}
 
-	if opts.StateFilter != "" {
-		path += sep + "state=" + opts.StateFilter
-		sep = "&"
-	}
-	if opts.PageSize > 0 {
-		path += sep + fmt.Sprintf("page_size=%d", opts.PageSize)
-		sep = "&"
-	}
-	for k, v := range opts.Labels {
-		path += sep + "label=" + k + "=" + v
-		sep = "&"
-	}
-
-	var resp restListResponse
-	if err := a.doJSON(ctx, http.MethodGet, path, nil, &resp); err != nil {
+// CreateSnapshot snapshots a running VM via the REST SDK client.
+func (a *RESTAdapter) CreateSnapshot(ctx context.Context, opts CreateSnapshotOptions) (*SnapshotSummary, error) {
+	snapshot, err := a.client.CreateSnapshot(ctx, opts.VMID, fullSnapshotConfig(opts))
+	if err != nil {
 		return nil, err
 	}
 
-	vms := make([]VMSummary, len(resp.VMs))
-	for i, vm := range resp.VMs {
-		vms[i] = VMSummary{
-			VMID:   vm.ID,
-			Name:   vm.Name,
-			State:  vm.State,
-			Labels: vm.Labels,
-		}
+	summary := snapshotSummary(snapshot)
+	return &summary, nil
+}
+
+// RestoreSnapshot restores a VM from a snapshot via the REST SDK client.
+func (a *RESTAdapter) RestoreSnapshot(ctx context.Context, opts SnapshotOptions) error {
+	return a.client.RestoreSnapshot(ctx, opts.VMID, opts.SnapshotID)
+}
+
+// GetSnapshot returns one VM snapshot via the REST SDK client.
+func (a *RESTAdapter) GetSnapshot(ctx context.Context, opts SnapshotOptions) (*SnapshotSummary, error) {
+	snapshot, err := a.client.GetSnapshot(ctx, opts.VMID, opts.SnapshotID)
+	if err != nil {
+		return nil, err
 	}
 
-	return &ListVMsResult{
-		VMs:        vms,
-		TotalItems: resp.TotalItems,
-	}, nil
+	summary := snapshotSummary(snapshot)
+	return &summary, nil
+}
+
+// PrepareMigration starts a migration receiver via the REST SDK client.
+func (a *RESTAdapter) PrepareMigration(ctx context.Context, opts PrepareMigrationOptions) (*MigrationReceiverSummary, error) {
+	resp, err := a.client.PrepareMigration(ctx, prepareMigrationRequest(opts))
+	if err != nil {
+		return nil, err
+	}
+	return migrationReceiverSummary(resp), nil
+}
+
+// FinalizeMigration commits or aborts a migration receiver via the REST SDK client.
+func (a *RESTAdapter) FinalizeMigration(ctx context.Context, receiverID string, commit bool) error {
+	return a.client.FinalizeMigration(ctx, receiverID, commit)
+}
+
+// DeleteSnapshot deletes a VM snapshot via the REST SDK client.
+func (a *RESTAdapter) DeleteSnapshot(ctx context.Context, opts SnapshotOptions) error {
+	return a.client.DeleteSnapshot(ctx, opts.VMID, opts.SnapshotID)
+}
+
+// ListSnapshots lists a VM's snapshots via the REST SDK client.
+func (a *RESTAdapter) ListSnapshots(ctx context.Context, vmID string) ([]SnapshotSummary, error) {
+	snapshots, err := a.client.ListSnapshots(ctx, vmID)
+	if err != nil {
+		return nil, err
+	}
+	return snapshotSummaries(snapshots), nil
+}
+
+// AttestVM generates a VM's vTPM quote via the REST SDK client.
+func (a *RESTAdapter) AttestVM(ctx context.Context, opts AttestVMOptions) (*VMQuote, error) {
+	resp, err := a.client.AttestVM(ctx, opts.VMID, opts.Nonce, opts.PCRIndices, pb.PCRBank_PCR_BANK_SHA256)
+	if err != nil {
+		return nil, err
+	}
+	return vmQuote(resp), nil
+}
+
+// VerifyVMAttestation verifies VM quote evidence via the REST SDK client.
+func (a *RESTAdapter) VerifyVMAttestation(ctx context.Context, opts VerifyVMAttestationOptions) (bool, error) {
+	resp, err := a.client.VerifyVMAttestation(ctx, verifyVMAttestationRequest(opts))
+	if err != nil {
+		return false, err
+	}
+	return resp.GetVerified(), nil
 }

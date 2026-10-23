@@ -31,7 +31,8 @@ import (
 // Linux. It is the script the fleet's gateway node already runs
 // (hand-installed before #66), reproduced by the repo: gatewayd starts
 // after platformd, which brings up the OVS bridge the datapath services
-// program, and logs beside it.
+// program, and logs beside it. The constant stops inside start_pre;
+// renderGatewaydInitScript closes it.
 const gatewaydOpenRCScript = `#!/sbin/openrc-run
 # OpenRC init script for the Trusted Platform gateway daemon (gatewayd).
 # Written by platformd firstboot for gateway-role nodes (#66).
@@ -55,8 +56,50 @@ depend() {
 start_pre() {
     checkpath --directory --owner root:root --mode 0755 /var/log/trusted-platform
     checkpath --directory --owner root:root --mode 0700 /etc/gatewayd
-}
 `
+
+// gatewaydJoolModprobe loads the Jool NAT64 kernel module ahead of a gateway
+// whose nat64: section is enabled (#603). The module comes from Alpine's
+// jool-modules-lts and is built for one linux-lts version; a kernel upgrade
+// that outruns the package leaves it unloadable. The failure is a warning, not
+// a failed start: gatewayd still runs its other services and refuses the
+// section with ErrNAT64ModuleUnavailable, so no traffic passes untranslated.
+const gatewaydJoolModprobe = `    # nat64: is enabled. The module follows linux-lts (jool-modules-lts); if it
+    # does not load, gatewayd refuses the section (ErrNAT64ModuleUnavailable).
+    if ! modprobe jool; then
+        ewarn "jool kernel module did not load; gatewayd will refuse the nat64 section"
+    fi
+`
+
+// renderGatewaydInitScript returns the gatewayd OpenRC script, with the Jool
+// module load in start_pre when loadJool is set.
+func renderGatewaydInitScript(loadJool bool) string {
+	script := gatewaydOpenRCScript
+	if loadJool {
+		script += gatewaydJoolModprobe
+	}
+	return script + "}\n"
+}
+
+// gatewaydNAT64Probe is the minimal shape of the gateway's nat64: section the
+// init script decision needs. The rest belongs to gatewayd.
+type gatewaydNAT64Probe struct {
+	Gateway *struct {
+		NAT64 *struct {
+			Enabled bool `yaml:"enabled"`
+		} `yaml:"nat64"`
+	} `yaml:"gateway"`
+}
+
+// gatewaydNAT64Enabled reports whether a platform configuration enables the
+// gateway's nat64: section — the one case gatewayd runs the Jool translator.
+func gatewaydNAT64Enabled(platformConfig []byte) (bool, error) {
+	var probe gatewaydNAT64Probe
+	if err := yaml.Unmarshal(platformConfig, &probe); err != nil {
+		return false, &tpconfig.ErrPlatformConfigUnreadable{Cause: err}
+	}
+	return probe.Gateway != nil && probe.Gateway.NAT64 != nil && probe.Gateway.NAT64.Enabled, nil
+}
 
 // Paths gatewayd is packaged at. They are variables so tests can point
 // the install at a temporary root; production never changes them.
@@ -216,13 +259,17 @@ func installGatewaydServiceAt(platformConfig []byte, paths gatewaydInstallPaths,
 	}
 	info("Rendered gatewayd config", "path", configPath)
 
+	loadJool, err := gatewaydNAT64Enabled(platformConfig)
+	if err != nil {
+		return err
+	}
 	if err := os.MkdirAll(filepath.Dir(paths.initScript), 0755); err != nil {
 		return &WrappedError{Msg: "failed to create the init.d directory", Err: err}
 	}
-	if err := os.WriteFile(paths.initScript, []byte(gatewaydOpenRCScript), 0755); err != nil {
+	if err := os.WriteFile(paths.initScript, []byte(renderGatewaydInitScript(loadJool)), 0755); err != nil {
 		return &WrappedError{Msg: fmt.Sprintf("failed to write init script %s", paths.initScript), Err: err}
 	}
-	info("Created gatewayd OpenRC init script", "path", paths.initScript)
+	info("Created gatewayd OpenRC init script", "path", paths.initScript, "loads_jool", loadJool)
 
 	if output, err := run("rc-update", "add", "gatewayd", "default"); err != nil {
 		return &CommandOutputError{Msg: "failed to enable gatewayd service", Err: err, Detail: fmt.Sprintf(" (output: %s)", string(output))}

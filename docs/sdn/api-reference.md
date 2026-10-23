@@ -1,8 +1,15 @@
 # SDN API Reference
 
+> **Status: REFERENCE** · Last verified: 2026-10-15
+> Index of the SDN service's transports.
+
 ## Overview
 
-The SDN subsystem provides network management through multiple protocols for maximum interoperability. All operations are available via REST, gRPC, QUIC, MCP, and Unix Socket.
+The SDN subsystem provides network management through multiple protocols.
+The operations below are the gRPC `SDNService`'s (Unix socket included).
+Not every operation is on every transport: the QUIC opcodes and the MCP
+tools are listed on their pages, `GetPortState` has no gRPC method, and
+`StreamFlowLogs` is gRPC only.
 
 ## Protocol-Specific Documentation
 
@@ -33,8 +40,8 @@ The SDN subsystem provides network management through multiple protocols for max
 | DeletePort | Remove port from bridge |
 | GetPort | Get port details |
 | ListPorts | List ports on a bridge |
-| GetPortState | Get port admin state |
-| SetPortState | Set port admin state |
+| GetPortState | Get port admin state (REST, QUIC, MCP) |
+| SetPortState | Set port admin state and ingress policing |
 | GetPortStats | Get port statistics |
 
 ### Flow Operations
@@ -46,6 +53,7 @@ The SDN subsystem provides network management through multiple protocols for max
 | ListFlows | List flows on bridge |
 | FlushFlows | Delete all flows on a bridge |
 | GetFlowStats | Get flow statistics |
+| StreamFlowLogs | gRPC only: every second, one entry per flow on the bridge (cookie, actions, bytes) |
 
 ### VLAN Operations
 
@@ -59,8 +67,12 @@ The SDN subsystem provides network management through multiple protocols for max
 
 | Operation | Description |
 |-----------|-------------|
-| AuthenticatePort | Authenticate a port with a device certificate (802.1X-style) |
-| RevokePortAuth | Revoke port authentication |
+| AuthenticatePort | Refused (`FailedPrecondition`): authenticate a port with a device certificate (802.1X-style) |
+| RevokePortAuth | Refused (`FailedPrecondition`): revoke port authentication |
+
+Both operations are refused on every transport with
+`policy.ErrPortAuthNotEnforced` until the switch enforces port authentication;
+[api.md](api.md) §4 names what is missing and what each transport answers.
 
 ### Policy Operations
 
@@ -94,6 +106,9 @@ full message set.
 
 ## Error Codes
 
+The MCP tools fail with these codes (`pkg/api/mcp/sdn_tools.go`); gRPC
+answers status codes and REST HTTP statuses (see the protocol pages).
+
 | Code | Description |
 |------|-------------|
 | SDN_SERVICE_UNAVAILABLE | SDN service is not available |
@@ -102,12 +117,19 @@ full message set.
 | SDN_FLOW_NOT_FOUND | Flow does not exist |
 | SDN_POLICY_NOT_FOUND | Policy does not exist |
 | SDN_BRIDGE_NAME_REQUIRED | Bridge name/ID missing from request |
+| SDN_PORT_NAME_REQUIRED | Port name missing from request |
+| SDN_FLOW_ID_REQUIRED | Flow ID missing from request |
+| SDN_POLICY_NAME_REQUIRED, SDN_POLICY_ID_REQUIRED, SDN_POLICY_RULES_REQUIRED | Policy name, ID or rules missing |
 | SDN_FLOW_MATCH_REQUIRED | Flow match criteria missing |
 | SDN_FLOW_ACTIONS_REQUIRED | Flow actions missing |
 
 ## Authentication
 
-All protocols require mTLS authentication. Clients must present valid certificates signed by the platform CA.
+The TCP transports require mTLS: clients present a certificate signed by
+the platform CA. The Unix socket authenticates the caller by its peer
+credentials (SO_PEERCRED). The webservice REST stack takes a platform
+session with the `admin` role.
+
 
 ## Network Zone Management
 

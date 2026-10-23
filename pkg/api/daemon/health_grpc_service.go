@@ -297,7 +297,7 @@ type registryHealthChecker struct {
 // codes.NotFound for any name it does not hold, so registering per-service
 // names would let a caller enumerate the daemon's service inventory by
 // guessing -- and on the TCP listener that caller is unauthenticated,
-// because "/grpc.health.v1.Health/Check" sits in the gRPC skipMethods list.
+// because "/grpc.health.v1.Health/Check" sits in grpcTCPSkipMethods.
 // Registering only through RegisterHealthChecker keeps the services map
 // empty, so every name gets the same NOT_FOUND answer. See #337.
 func NewRegistryHealthChecker(registry health.Registry) HealthChecker {

@@ -22,6 +22,7 @@ func TestAttestCertEvent_ValidateAcceptsConsistentEvents(t *testing.T) {
 	for name, ev := range map[string]AttestCertEvent{
 		"recorded": {DeviceID: 1, Recorded: true, Source: "ca", Subject: "CN=x"},
 		"refused":  {DeviceID: 1, Reason: "does not chain"},
+		"cleared":  {DeviceID: 1, Cleared: true, Subject: "CN=x", Reason: "lacks tcg-cap-verifiedTPMRestricted"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			if err := ev.Validate(); err != nil {
@@ -37,6 +38,8 @@ func TestAttestCertEvent_ValidateRefusesInconsistentEvents(t *testing.T) {
 		"recorded with reason":    {DeviceID: 1, Recorded: true, Source: "ca", Reason: "x"},
 		"recorded without source": {DeviceID: 1, Recorded: true},
 		"refused without reason":  {DeviceID: 1},
+		"recorded and cleared":    {DeviceID: 1, Recorded: true, Cleared: true, Source: "ca"},
+		"cleared without reason":  {DeviceID: 1, Cleared: true},
 	} {
 		t.Run(name, func(t *testing.T) {
 			err := ev.Validate()

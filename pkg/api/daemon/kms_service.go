@@ -25,7 +25,9 @@ import (
 
 	pb "github.com/jeremyhahn/go-quicbaas/api/proto"
 	quicbaas "github.com/jeremyhahn/go-quicbaas/sdk/go"
+	dekclient "github.com/jeremyhahn/go-quicbaas/sdk/go/client/dek"
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/client/kms"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/api/errclass"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/app"
 	dbfactory "github.com/jeremyhahn/go-trusted-platform/pkg/storage/quicbaas"
 )
@@ -96,7 +98,7 @@ func (s *KMSService) initializeServers() error {
 	s.kmsAdapter = NewKMSServerAdapter(sdkClient.Security().KMS(), s.logger)
 	s.secretsServer = NewSecretsServerAdapter(sdkClient.Security().Secrets(), s.logger)
 	s.cryptoServer = NewCryptoServerAdapter(sdkClient.Security().Crypto(), s.logger)
-	s.dekServer = NewDEKServerAdapter(sdkClient.Security().KMS(), s.logger)
+	s.dekServer = NewDEKServerAdapter(sdkClient.Security().DEK(), s.logger)
 
 	s.initialized.Store(true)
 	return nil
@@ -202,32 +204,62 @@ func (a *KMSServerAdapter) GenerateKey(ctx context.Context, req *pb.GenerateKeyR
 		return nil, status.Error(codes.Unavailable, "KMS service unavailable")
 	}
 
-	// Extract algorithm and usage from KeySpec
-	var algorithm kms.KeyAlgorithm
-	var usage []kms.KeyUsage
-
-	if req.GetKeySpec() != nil {
-		algorithm = pbAlgorithmToSDK(req.GetKeySpec().GetAlgorithm())
-		usage = pbUsagesToSDK(req.GetKeySpec().GetUsage())
-	}
-
+	// The generate request's name is the key ID (docs/kms/api.md §2).
+	spec := req.GetKeySpec()
 	sdkReq := &kms.GenerateKeyRequest{
-		Name:      req.GetName(),
-		Algorithm: algorithm,
-		Usage:     usage,
+		Name:               req.GetName(),
+		Algorithm:          pbAlgorithmToSDK(spec.GetAlgorithm()),
+		Usage:              pbUsagesToSDK(spec.GetUsage()),
+		Exportable:         spec.GetExportable(),
+		DeletionProtection: spec.GetDeletionProtection(),
 	}
 
 	resp, err := a.client.GenerateKey(ctx, sdkReq)
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "key generation failed: %v", err)
+		return nil, status.Errorf(errclass.Code(err), "key generation failed: %v", err)
+	}
+
+	meta, err := recordGeneratedKeyMetadata(ctx, a.client, resp.KeyID, req.GetDescription(), req.GetTags())
+	if err != nil {
+		return nil, err
 	}
 
 	return &pb.GenerateKeyResponse{
 		Key: &pb.KeyHandle{
-			KeyId:   resp.KeyID,
-			Version: uint64(resp.Version),
+			KeyId:     resp.KeyID,
+			Version:   uint64(resp.Version),
+			Algorithm: sdkAlgorithmToPb(resp.Algorithm),
 		},
+		Metadata:  sdkKeyMetadataToPb(meta),
+		Timestamp: time.Now().Unix(),
 	}, nil
+}
+
+// recordGeneratedKeyMetadata applies a generate request's description and
+// tags to the key just generated and returns the metadata the KMS recorded.
+// The SDK GenerateKeyRequest has no description or tags, so they travel as a
+// metadata update; with neither, the metadata is read back as it stands. The
+// SDK has no field for a key owner at all: the owner returned is the one the
+// KMS recorded, never the requested one.
+func recordGeneratedKeyMetadata(ctx context.Context, client quicbaas.KMSClient, keyID, description string, tags map[string]string) (*kms.KeyMetadataResponse, error) {
+	var meta *kms.KeyMetadataResponse
+	var err error
+	if description == "" && len(tags) == 0 {
+		meta, err = client.GetKeyMetadata(ctx, keyID)
+	} else {
+		meta, err = client.UpdateKeyMetadata(ctx, &kms.UpdateKeyMetadataRequest{
+			KeyID:       keyID,
+			Description: description,
+			Tags:        tags,
+		})
+	}
+	if err != nil {
+		return nil, ErrKMSGeneratedKeyMetadata{KeyID: keyID, Err: err}
+	}
+	if meta == nil {
+		return nil, ErrKMSGeneratedKeyMetadata{KeyID: keyID, Err: ErrKMSNilMetadata{}}
+	}
+	return meta, nil
 }
 
 // GetKey implements pb.KeyManagementServer.GetKey.
@@ -235,10 +267,13 @@ func (a *KMSServerAdapter) GetKey(ctx context.Context, req *pb.GetKeyRequest) (*
 	if a.client == nil {
 		return nil, status.Error(codes.Unavailable, "KMS service unavailable")
 	}
+	if req.GetKeyId() == "" {
+		return nil, status.Error(codes.InvalidArgument, "key_id is required")
+	}
 
 	keyInfo, err := a.client.GetKey(ctx, req.GetKeyId())
 	if err != nil {
-		return nil, status.Errorf(codes.NotFound, "key not found: %v", err)
+		return nil, status.Errorf(errclass.Code(err), "get key failed: %v", err)
 	}
 
 	return &pb.GetKeyResponse{
@@ -264,7 +299,7 @@ func (a *KMSServerAdapter) ListKeys(ctx context.Context, req *pb.ListKeysRequest
 
 	resp, err := a.client.ListKeys(ctx)
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "list keys failed: %v", err)
+		return nil, status.Errorf(errclass.Code(err), "list keys failed: %v", err)
 	}
 
 	keys := make([]*pb.KeyHandle, 0, len(resp.Keys))
@@ -286,10 +321,13 @@ func (a *KMSServerAdapter) RotateKey(ctx context.Context, req *pb.RotateKeyReque
 	if a.client == nil {
 		return nil, status.Error(codes.Unavailable, "KMS service unavailable")
 	}
+	if req.GetKeyId() == "" {
+		return nil, status.Error(codes.InvalidArgument, "key_id is required")
+	}
 
 	resp, err := a.client.RotateKey(ctx, req.GetKeyId())
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "key rotation failed: %v", err)
+		return nil, status.Errorf(errclass.Code(err), "key rotation failed: %v", err)
 	}
 
 	return &pb.RotateKeyResponse{
@@ -303,10 +341,13 @@ func (a *KMSServerAdapter) DeleteKey(ctx context.Context, req *pb.DeleteKeyReque
 	if a.client == nil {
 		return nil, status.Error(codes.Unavailable, "KMS service unavailable")
 	}
+	if req.GetKeyId() == "" {
+		return nil, status.Error(codes.InvalidArgument, "key_id is required")
+	}
 
 	err := a.client.DeleteKey(ctx, req.GetKeyId())
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "key deletion failed: %v", err)
+		return nil, status.Errorf(errclass.Code(err), "key deletion failed: %v", err)
 	}
 
 	return &pb.DeleteKeyResponse{
@@ -342,7 +383,7 @@ func (a *KMSServerAdapter) ImportKey(ctx context.Context, req *pb.ImportKeyReque
 
 	resp, err := a.client.ImportKey(ctx, sdkReq)
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "key import failed: %v", err)
+		return nil, status.Errorf(errclass.Code(err), "key import failed: %v", err)
 	}
 
 	return &pb.ImportKeyResponse{
@@ -375,7 +416,7 @@ func (a *KMSServerAdapter) UpdateKeyStatus(ctx context.Context, req *pb.UpdateKe
 		Status:  pbKeyStatusToSDK(req.GetStatus()),
 	})
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "key status update failed: %v", err)
+		return nil, status.Errorf(errclass.Code(err), "key status update failed: %v", err)
 	}
 
 	return &pb.UpdateKeyStatusResponse{
@@ -408,7 +449,7 @@ func (a *KMSServerAdapter) ExportKey(ctx context.Context, req *pb.ExportKeyReque
 		Version:           int(req.GetVersion()),
 	})
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "key export failed: %v", err)
+		return nil, status.Errorf(errclass.Code(err), "key export failed: %v", err)
 	}
 
 	return &pb.ExportKeyResponse{
@@ -434,7 +475,7 @@ func (a *KMSServerAdapter) ListKeyVersions(ctx context.Context, req *pb.ListKeyV
 
 	resp, err := a.client.ListKeyVersions(ctx, req.GetKeyId())
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "list key versions failed: %v", err)
+		return nil, status.Errorf(errclass.Code(err), "list key versions failed: %v", err)
 	}
 
 	versions := make([]*pb.KeyVersionInfo, 0, len(resp.Versions))
@@ -480,6 +521,12 @@ func (a *SecretsServerAdapter) StoreSecret(ctx context.Context, req *pb.StoreSec
 	if a.client == nil {
 		return nil, status.Error(codes.Unavailable, "Secrets service unavailable")
 	}
+	if req.GetSecretId() == "" {
+		return nil, status.Error(codes.InvalidArgument, "secret_id is required")
+	}
+	if len(req.GetData()) == 0 {
+		return nil, status.Error(codes.InvalidArgument, "data is required")
+	}
 
 	// Convert protobuf data to SDK format
 	data := make(map[string]interface{})
@@ -506,6 +553,9 @@ func (a *SecretsServerAdapter) StoreSecret(ctx context.Context, req *pb.StoreSec
 func (a *SecretsServerAdapter) GetSecret(ctx context.Context, req *pb.GetSecretRequest) (*pb.GetSecretResponse, error) {
 	if a.client == nil {
 		return nil, status.Error(codes.Unavailable, "Secrets service unavailable")
+	}
+	if req.GetSecretId() == "" {
+		return nil, status.Error(codes.InvalidArgument, "secret_id is required")
 	}
 
 	var opts []quicbaas.SecretOption
@@ -561,6 +611,9 @@ func (a *SecretsServerAdapter) DeleteSecret(ctx context.Context, req *pb.DeleteS
 	if a.client == nil {
 		return nil, status.Error(codes.Unavailable, "Secrets service unavailable")
 	}
+	if req.GetSecretId() == "" {
+		return nil, status.Error(codes.InvalidArgument, "secret_id is required")
+	}
 
 	err := a.client.Delete(ctx, req.GetSecretId())
 	if err != nil {
@@ -592,6 +645,12 @@ func (a *CryptoServerAdapter) Encrypt(ctx context.Context, req *pb.CryptoEncrypt
 	if a.client == nil {
 		return nil, status.Error(codes.Unavailable, "Crypto service unavailable")
 	}
+	if req.GetKeyId() == "" {
+		return nil, status.Error(codes.InvalidArgument, "key_id is required")
+	}
+	if len(req.GetPlaintext()) == 0 {
+		return nil, status.Error(codes.InvalidArgument, "plaintext is required")
+	}
 
 	sdkReq := &quicbaas.EncryptRequest{
 		KeyID:     req.GetKeyId(),
@@ -601,7 +660,7 @@ func (a *CryptoServerAdapter) Encrypt(ctx context.Context, req *pb.CryptoEncrypt
 
 	resp, err := a.client.Encrypt(ctx, sdkReq)
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "encryption failed: %v", err)
+		return nil, status.Errorf(errclass.Code(err), "encryption failed: %v", err)
 	}
 
 	return &pb.CryptoEncryptResponse{
@@ -615,6 +674,12 @@ func (a *CryptoServerAdapter) Decrypt(ctx context.Context, req *pb.CryptoDecrypt
 	if a.client == nil {
 		return nil, status.Error(codes.Unavailable, "Crypto service unavailable")
 	}
+	if req.GetKeyId() == "" {
+		return nil, status.Error(codes.InvalidArgument, "key_id is required")
+	}
+	if len(req.GetCiphertext()) == 0 {
+		return nil, status.Error(codes.InvalidArgument, "ciphertext is required")
+	}
 
 	sdkReq := &quicbaas.DecryptRequest{
 		KeyID:      req.GetKeyId(),
@@ -624,7 +689,7 @@ func (a *CryptoServerAdapter) Decrypt(ctx context.Context, req *pb.CryptoDecrypt
 
 	resp, err := a.client.Decrypt(ctx, sdkReq)
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "decryption failed: %v", err)
+		return nil, status.Errorf(errclass.Code(err), "decryption failed: %v", err)
 	}
 
 	return &pb.CryptoDecryptResponse{
@@ -758,7 +823,7 @@ func (a *CryptoServerAdapter) Rewrap(ctx context.Context, req *pb.RewrapRequest)
 
 	decryptResp, err := a.client.Decrypt(ctx, decryptReq)
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "rewrap decryption failed: %v", err)
+		return nil, status.Errorf(errclass.Code(err), "rewrap decryption failed: %v", err)
 	}
 
 	// Step 2: Re-encrypt with the latest key version
@@ -771,7 +836,7 @@ func (a *CryptoServerAdapter) Rewrap(ctx context.Context, req *pb.RewrapRequest)
 
 	encryptResp, err := a.client.Encrypt(ctx, encryptReq)
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "rewrap encryption failed: %v", err)
+		return nil, status.Errorf(errclass.Code(err), "rewrap encryption failed: %v", err)
 	}
 
 	return &pb.RewrapResponse{
@@ -788,6 +853,12 @@ func (a *CryptoServerAdapter) Sign(ctx context.Context, req *pb.SignRequest) (*p
 	if a.client == nil {
 		return nil, status.Error(codes.Unavailable, "Crypto service unavailable")
 	}
+	if req.GetKeyId() == "" {
+		return nil, status.Error(codes.InvalidArgument, "key_id is required")
+	}
+	if len(req.GetMessage()) == 0 {
+		return nil, status.Error(codes.InvalidArgument, "message is required")
+	}
 
 	sdkReq := &quicbaas.SignRequest{
 		KeyID:     req.GetKeyId(),
@@ -798,7 +869,7 @@ func (a *CryptoServerAdapter) Sign(ctx context.Context, req *pb.SignRequest) (*p
 
 	resp, err := a.client.Sign(ctx, sdkReq)
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "signing failed: %v", err)
+		return nil, status.Errorf(errclass.Code(err), "signing failed: %v", err)
 	}
 
 	return &pb.SignResponse{
@@ -812,6 +883,15 @@ func (a *CryptoServerAdapter) Verify(ctx context.Context, req *pb.VerifyRequest)
 	if a.client == nil {
 		return nil, status.Error(codes.Unavailable, "Crypto service unavailable")
 	}
+	if req.GetKeyId() == "" {
+		return nil, status.Error(codes.InvalidArgument, "key_id is required")
+	}
+	if len(req.GetMessage()) == 0 {
+		return nil, status.Error(codes.InvalidArgument, "message is required")
+	}
+	if len(req.GetSignature()) == 0 {
+		return nil, status.Error(codes.InvalidArgument, "signature is required")
+	}
 
 	sdkReq := &quicbaas.VerifyRequest{
 		KeyID:     req.GetKeyId(),
@@ -822,7 +902,7 @@ func (a *CryptoServerAdapter) Verify(ctx context.Context, req *pb.VerifyRequest)
 
 	resp, err := a.client.Verify(ctx, sdkReq)
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "verification failed: %v", err)
+		return nil, status.Errorf(errclass.Code(err), "verification failed: %v", err)
 	}
 
 	return &pb.VerifyResponse{
@@ -857,7 +937,7 @@ func (a *CryptoServerAdapter) Hash(ctx context.Context, req *pb.HashRequest) (*p
 		HashAlg: pbHashAlgorithmToSDK(req.GetAlgorithm()),
 	})
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "hashing failed: %v", err)
+		return nil, status.Errorf(errclass.Code(err), "hashing failed: %v", err)
 	}
 
 	return &pb.HashResponse{
@@ -898,7 +978,7 @@ func (a *CryptoServerAdapter) GenerateHMAC(ctx context.Context, req *pb.HMACRequ
 		HashAlg: pbHashAlgorithmToSDK(req.GetHashAlgorithm()),
 	})
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "HMAC generation failed: %v", err)
+		return nil, status.Errorf(errclass.Code(err), "HMAC generation failed: %v", err)
 	}
 
 	return &pb.HMACResponse{
@@ -946,7 +1026,7 @@ func (a *CryptoServerAdapter) VerifyHMAC(ctx context.Context, req *pb.VerifyHMAC
 		KeyVersion: int(req.GetKeyVersion()),
 	})
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "HMAC verification failed: %v", err)
+		return nil, status.Errorf(errclass.Code(err), "HMAC verification failed: %v", err)
 	}
 
 	return &pb.VerifyHMACResponse{
@@ -957,98 +1037,116 @@ func (a *CryptoServerAdapter) VerifyHMAC(ctx context.Context, req *pb.VerifyHMAC
 	}, nil
 }
 
-// DEKServerAdapter implements pb.DEKManagementServer by delegating to the SDK KMSClient.
-// DEK (Data Encryption Key) operations use the KMS client for key management.
+// DEKServerAdapter implements pb.DEKManagementServer by delegating to the SDK
+// DEK client, the same client the REST DEK routes call.
 type DEKServerAdapter struct {
 	pb.UnimplementedDEKManagementServer
-	client quicbaas.KMSClient
+	client dekclient.Client
 	logger *slog.Logger
 }
 
 // NewDEKServerAdapter creates a new DEK server adapter wrapping the SDK client.
-func NewDEKServerAdapter(client quicbaas.KMSClient, logger *slog.Logger) *DEKServerAdapter {
+func NewDEKServerAdapter(client dekclient.Client, logger *slog.Logger) *DEKServerAdapter {
 	return &DEKServerAdapter{
 		client: client,
 		logger: logger,
 	}
 }
 
-// CreateDEK implements pb.DEKManagementServer.CreateDEK.
+// CreateDEK creates a new Data Encryption Key.
 func (a *DEKServerAdapter) CreateDEK(ctx context.Context, req *pb.CreateDEKRequest) (*pb.CreateDEKResponse, error) {
 	if a.client == nil {
 		return nil, status.Error(codes.Unavailable, "DEK service unavailable")
 	}
-
-	// DEK creation uses the KMS GenerateKey with encryption-specific parameters
-	sdkReq := &kms.GenerateKeyRequest{
-		Name:      req.GetPath(),
-		Algorithm: kms.AlgorithmAES256GCM,
-		Usage:     []kms.KeyUsage{kms.KeyUsageEncrypt, kms.KeyUsageDecrypt},
+	if req.GetPath() == "" {
+		return nil, status.Error(codes.InvalidArgument, "path is required")
 	}
 
-	resp, err := a.client.GenerateKey(ctx, sdkReq)
+	resp, err := a.client.CreateDEK(ctx, &dekclient.CreateDEKRequest{
+		Path:           req.GetPath(),
+		Algorithm:      pbAlgorithmToSDK(req.GetAlgorithm()).String(),
+		Description:    req.GetDescription(),
+		MaxOperations:  req.GetMaxOperations(),
+		MaxBytes:       req.GetMaxBytes(),
+		WarningPercent: int(req.GetWarningPercent()),
+	})
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "DEK creation failed: %v", err)
 	}
 
 	return &pb.CreateDEKResponse{
-		Dek: &pb.DEKMetadata{
-			Path:    req.GetPath(),
-			Version: uint64(resp.Version),
-		},
+		Dek:       dekInfoToPb(resp.DEK),
+		Timestamp: time.Now().Unix(),
 	}, nil
 }
 
-// GetDEK implements pb.DEKManagementServer.GetDEK.
+// GetDEK retrieves DEK metadata by path.
 func (a *DEKServerAdapter) GetDEK(ctx context.Context, req *pb.GetDEKRequest) (*pb.GetDEKResponse, error) {
 	if a.client == nil {
 		return nil, status.Error(codes.Unavailable, "DEK service unavailable")
 	}
+	if req.GetPath() == "" {
+		return nil, status.Error(codes.InvalidArgument, "path is required")
+	}
 
-	keyInfo, err := a.client.GetKey(ctx, req.GetPath())
+	info, err := a.client.GetDEK(ctx, req.GetPath())
 	if err != nil {
 		return nil, status.Errorf(codes.NotFound, "DEK not found: %v", err)
 	}
 
 	return &pb.GetDEKResponse{
-		Dek: &pb.DEKMetadata{
-			Path:    req.GetPath(),
-			Version: uint64(keyInfo.Version),
-		},
+		Dek:       dekInfoToPb(info),
+		Timestamp: time.Now().Unix(),
 	}, nil
 }
 
-// RotateDEK implements pb.DEKManagementServer.RotateDEK.
+// RotateDEK creates a new version of an existing DEK.
 func (a *DEKServerAdapter) RotateDEK(ctx context.Context, req *pb.RotateDEKRequest) (*pb.RotateDEKResponse, error) {
 	if a.client == nil {
 		return nil, status.Error(codes.Unavailable, "DEK service unavailable")
 	}
+	if req.GetPath() == "" {
+		return nil, status.Error(codes.InvalidArgument, "path is required")
+	}
 
-	resp, err := a.client.RotateKey(ctx, req.GetPath())
+	resp, err := a.client.RotateDEK(ctx, &dekclient.RotateDEKRequest{
+		Path:       req.GetPath(),
+		Background: req.GetBackground(),
+	})
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "DEK rotation failed: %v", err)
 	}
 
 	return &pb.RotateDEKResponse{
-		Path:       req.GetPath(),
+		Path:       resp.Path,
+		OldVersion: uint64(resp.OldVersion),
 		NewVersion: uint64(resp.NewVersion),
+		Timestamp:  time.Now().Unix(),
 	}, nil
 }
 
-// DeleteDEK implements pb.DEKManagementServer.DeleteDEK.
+// DeleteDEK removes a DEK.
 func (a *DEKServerAdapter) DeleteDEK(ctx context.Context, req *pb.DeleteDEKRequest) (*pb.DeleteDEKResponse, error) {
 	if a.client == nil {
 		return nil, status.Error(codes.Unavailable, "DEK service unavailable")
 	}
+	if req.GetPath() == "" {
+		return nil, status.Error(codes.InvalidArgument, "path is required")
+	}
 
-	err := a.client.DeleteKey(ctx, req.GetPath())
+	resp, err := a.client.DeleteDEK(ctx, &dekclient.DeleteDEKRequest{
+		Path:      req.GetPath(),
+		Force:     req.GetForce(),
+		MigrateTo: req.GetMigrateTo(),
+	})
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "DEK deletion failed: %v", err)
 	}
 
 	return &pb.DeleteDEKResponse{
-		Path:    req.GetPath(),
-		Deleted: true,
+		Path:      resp.Path,
+		Deleted:   resp.Deleted,
+		Timestamp: time.Now().Unix(),
 	}, nil
 }
 

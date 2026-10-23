@@ -24,6 +24,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"strconv"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -67,19 +68,6 @@ const (
 	// look healthy.
 	healthProbeMinBodyBytes = 2
 )
-
-// healthPorts are the HTTPS ports the status probe tries, in order, because
-// the port depends on the node's role: control-plane and single-node serve
-// 8443, compute 9443 and gateway 443 (configs/platform/templates/**). This
-// probe dialled a fixed 8443, so compute and gateway nodes reported
-// "unreachable" no matter how healthy they were.
-//
-// These are the same candidates pkg/bootstrap/orchestrator.go's
-// httpHealthChecker uses, and for the same reason its comment gives: the port
-// cannot be derived from the discovered node, so it is discovered by trying.
-//
-// A variable so a test can point the probe at an ephemeral listener.
-var healthPorts = []string{"8443", "9443", "443"}
 
 // newStatusCommand creates the status subcommand for checking node health.
 func newStatusCommand(getFlags func() *cli.CommonFlags) *cobra.Command {
@@ -139,7 +127,7 @@ func runStatus(configPath string, commonFlags *cli.CommonFlags) error {
 	// whichever of their addresses answers and verified for the control
 	// plane's TLS name: their certificate names that DNS identity, not
 	// the hostname or address dialed.
-	prober := statusProber{cpAddresses: orch.ControlPlaneAddresses}
+	prober := statusProber{cpAddresses: orch.ControlPlaneAddresses, ports: config.HealthProbePorts()}
 	caPool, caErr := orch.ControlPlaneCAPool(ctx)
 	if caErr != nil {
 		fmt.Fprintf(os.Stderr,
@@ -184,18 +172,26 @@ func runStatus(configPath string, commonFlags *cli.CommonFlags) error {
 // nodes[].hostname is a DNS SAN of the certificate the node serves — a
 // short hostname against an FQDN-only certificate is reported
 // unreachable, the same way the control plane was before #107.
+//
+// ports are the HTTPS ports tried on each address, in order, because the
+// port depends on the node's role and is not carried on the discovered
+// node: the control plane serves platform.control_plane_port (default
+// 8443), compute 9443 and gateway 443 (configs/platform/templates/**). They
+// are the candidates pkg/bootstrap's httpHealthChecker uses, from
+// BootstrapConfig.HealthProbePorts.
 type statusProber struct {
 	nodeClient  *http.Client
 	cpClient    *http.Client
 	cpAddresses func(*bootstrap.DiscoveredNode) []string
+	ports       []int
 }
 
 // health reports one node's health string.
 func (p statusProber) health(ctx context.Context, n *bootstrap.DiscoveredNode) string {
 	if n.Role == bootstrap.RoleControlPlane {
-		return checkNodeHealthAny(ctx, p.cpClient, p.cpAddresses(n))
+		return checkNodeHealthAny(ctx, p.cpClient, p.cpAddresses(n), p.ports)
 	}
-	return checkNodeHealth(ctx, p.nodeClient, n.Hostname)
+	return checkNodeHealth(ctx, p.nodeClient, n.Hostname, p.ports)
 }
 
 // newHealthClient builds the status probe client for the given trust
@@ -216,7 +212,7 @@ func newHealthClient(caPool *x509.CertPool, serverName string) *http.Client {
 
 // checkNodeHealthAny probes each address in turn and reports the first
 // answer that is not "unreachable", or "unreachable" when none answers.
-func checkNodeHealthAny(ctx context.Context, client *http.Client, addresses []string) string {
+func checkNodeHealthAny(ctx context.Context, client *http.Client, addresses []string, ports []int) string {
 	if client == nil {
 		return "unknown"
 	}
@@ -225,7 +221,7 @@ func checkNodeHealthAny(ctx context.Context, client *http.Client, addresses []st
 	}
 	health := "unreachable"
 	for _, address := range addresses {
-		if health = checkNodeHealth(ctx, client, address); health != "unreachable" {
+		if health = checkNodeHealth(ctx, client, address, ports); health != "unreachable" {
 			break
 		}
 	}
@@ -235,7 +231,7 @@ func checkNodeHealthAny(ctx context.Context, client *http.Client, addresses []st
 // checkNodeHealth performs an HTTPS GET against the node's health endpoint.
 // A nil client means no verified trust anchor is available; health is
 // reported as unknown instead of probing over an unverified connection.
-func checkNodeHealth(ctx context.Context, client *http.Client, address string) string {
+func checkNodeHealth(ctx context.Context, client *http.Client, address string, ports []int) string {
 	if client == nil {
 		return "unknown"
 	}
@@ -245,8 +241,8 @@ func checkNodeHealth(ctx context.Context, client *http.Client, address string) s
 	// says nothing about the others; any other verdict is that node's answer
 	// and ends the search.
 	health := "unreachable"
-	for _, port := range healthPorts {
-		if health = probeNodeHealth(ctx, client, net.JoinHostPort(address, port)); health != "unreachable" {
+	for _, port := range ports {
+		if health = probeNodeHealth(ctx, client, net.JoinHostPort(address, strconv.Itoa(port))); health != "unreachable" {
 			return health
 		}
 	}

@@ -21,6 +21,7 @@ import (
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/compute"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/qemu"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -81,6 +82,7 @@ func TestPrepareMigration_HappyPath(t *testing.T) {
 			TpmEnabled:  true,
 			NetworkMode: "bridge",
 			MacAddress:  "52:54:00:12:34:56",
+			Arch:        "aarch64",
 		},
 	})
 	require.NoError(t, err)
@@ -92,6 +94,7 @@ func TestPrepareMigration_HappyPath(t *testing.T) {
 	// The wire spec is projected onto the compute migration spec.
 	assert.Equal(t, "guest", recv.gotSpec.VMName)
 	assert.Equal(t, compute.MigrateModeCold, recv.gotSpec.Mode)
+	assert.Equal(t, qemu.ArchAArch64, recv.gotSpec.Arch)
 	require.NotNil(t, recv.gotSpec.Config)
 	assert.Equal(t, 2048, recv.gotSpec.Config.Memory)
 	assert.Equal(t, 2, recv.gotSpec.Config.CPUs)
@@ -121,6 +124,41 @@ func TestPrepareMigration_ReceiveFailure(t *testing.T) {
 	})
 	require.Error(t, err)
 	assert.Equal(t, codes.FailedPrecondition, status.Code(err))
+}
+
+// A destination of another guest architecture is a precondition the source
+// cannot fix by retrying: FailedPrecondition, naming both architectures.
+func TestPrepareMigration_ArchMismatch(t *testing.T) {
+	recv := &migrationReceiverOrchestrator{
+		grpcMockOrchestrator: newGRPCMockOrchestrator(),
+		receiveErr:           &compute.MigrationArchMismatchError{Source: qemu.ArchX86_64, Destination: qemu.ArchAArch64},
+	}
+	svc := newMigrationReceiverService(recv)
+
+	_, err := svc.PrepareMigration(context.Background(), &platformv1.PrepareMigrationRequest{
+		VmName: "guest",
+		Spec:   &platformv1.VMMigrationSpec{MemoryMb: 1024, Arch: "x86_64"},
+	})
+	require.Error(t, err)
+	assert.Equal(t, codes.FailedPrecondition, status.Code(err))
+	assert.Contains(t, status.Convert(err).Message(), `"aarch64"`)
+	assert.Equal(t, qemu.ArchX86_64, recv.gotSpec.Arch)
+}
+
+func TestPrepareMigration_UndeterminedListenAddress(t *testing.T) {
+	recv := &migrationReceiverOrchestrator{
+		grpcMockOrchestrator: newGRPCMockOrchestrator(),
+		receiveErr:           &compute.MigrationListenAddressError{Address: "eth0:0", Reason: "is not an IP:port address"},
+	}
+	svc := newMigrationReceiverService(recv)
+
+	_, err := svc.PrepareMigration(context.Background(), &platformv1.PrepareMigrationRequest{
+		VmName: "guest",
+		Spec:   &platformv1.VMMigrationSpec{MemoryMb: 1024},
+	})
+	require.Error(t, err)
+	assert.Equal(t, codes.FailedPrecondition, status.Code(err), "a destination without a listen address is misconfigured")
+	assert.Contains(t, status.Convert(err).Message(), "compute.migration_listen_address")
 }
 
 func TestPrepareMigration_NotSupported(t *testing.T) {

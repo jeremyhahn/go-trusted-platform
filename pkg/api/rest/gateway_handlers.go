@@ -398,6 +398,7 @@ type IPAllocationResponse struct {
 	PoolID      string    `json:"pool_id"`
 	DeviceID    string    `json:"device_id"`
 	Hostname    string    `json:"hostname,omitempty"`
+	Status      string    `json:"status"`
 	AllocatedAt time.Time `json:"allocated_at"`
 	ExpiresAt   time.Time `json:"expires_at,omitempty"`
 }
@@ -526,7 +527,9 @@ func (h *GatewayHandlers) RegisterRoutes(router *mux.Router) {
 	router.HandleFunc("/api/v1/sdn/gateway/bgp/status", h.handleGetBGPStatus).Methods(http.MethodGet)
 	router.HandleFunc("/api/v1/sdn/gateway/bgp/peers", h.handleListBGPPeers).Methods(http.MethodGet)
 	router.HandleFunc("/api/v1/sdn/gateway/bgp/prefixes", h.handleAnnouncePrefix).Methods(http.MethodPost)
-	router.HandleFunc("/api/v1/sdn/gateway/bgp/prefixes/{prefix}", h.handleWithdrawPrefix).Methods(http.MethodDelete)
+	// A prefix carries a "/" (203.0.113.0/24), and the router matches the
+	// decoded path, so the variable spans the rest of the path.
+	router.HandleFunc("/api/v1/sdn/gateway/bgp/prefixes/{prefix:.+}", h.handleWithdrawPrefix).Methods(http.MethodDelete)
 	router.HandleFunc("/api/v1/sdn/gateway/bgp/prefixes", h.handleListAnnouncedPrefixes).Methods(http.MethodGet)
 
 	// IPAM pool CRUD — pools collection
@@ -595,9 +598,9 @@ func (h *GatewayHandlers) handleSetGatewayMode(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	// Validate mode bitmask
+	// Validate mode bitmask: at least one mode, and no undefined bit.
 	validModes := uint32(GatewayModeOverlay | GatewayModeEdge | GatewayModeTransit)
-	if req.Modes > validModes {
+	if req.Modes == 0 || req.Modes&^validModes != 0 {
 		h.writeError(w, http.StatusBadRequest, ErrInvalidGatewayMode{Mode: req.Modes})
 		return
 	}

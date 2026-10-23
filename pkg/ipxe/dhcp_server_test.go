@@ -1674,6 +1674,34 @@ func TestDHCPServer_HandleDHCP(t *testing.T) {
 		assert.NotNil(t, mockConn.writtenData)
 	})
 
+	t.Run("ignores PXE discover from the all-zero MAC", func(t *testing.T) {
+		server := createTestDHCPServer(t)
+		mockConn := &mockPacketConn{}
+
+		req := createPXEDiscoverRequest(t)
+		req.ClientHWAddr = net.HardwareAddr{0, 0, 0, 0, 0, 0}
+		peer := &net.UDPAddr{IP: net.ParseIP("192.168.1.50"), Port: 68}
+
+		server.handleDHCP(mockConn, peer, req)
+
+		assert.Nil(t, mockConn.writtenData, "no offer for a zero chaddr")
+		assert.Empty(t, server.leases, "no lease keyed on a zero chaddr")
+	})
+
+	t.Run("ignores PXE discover with an empty MAC", func(t *testing.T) {
+		server := createTestDHCPServer(t)
+		mockConn := &mockPacketConn{}
+
+		req := createPXEDiscoverRequest(t)
+		req.ClientHWAddr = nil
+		peer := &net.UDPAddr{IP: net.ParseIP("192.168.1.50"), Port: 68}
+
+		server.handleDHCP(mockConn, peer, req)
+
+		assert.Nil(t, mockConn.writtenData, "no offer for an empty chaddr")
+		assert.Empty(t, server.leases, "no lease keyed on an empty chaddr")
+	})
+
 	t.Run("ignores non-PXE discover", func(t *testing.T) {
 		server := createTestDHCPServer(t)
 		mockConn := &mockPacketConn{}
@@ -1722,6 +1750,25 @@ func TestDHCPServer_HandleDHCP(t *testing.T) {
 		// No response should be sent
 		assert.Nil(t, mockConn.writtenData)
 	})
+}
+
+func TestHasClientHWAddr(t *testing.T) {
+	tests := []struct {
+		name string
+		mac  net.HardwareAddr
+		want bool
+	}{
+		{name: "ethernet MAC", mac: net.HardwareAddr{0x00, 0x11, 0x22, 0x33, 0x44, 0x55}, want: true},
+		{name: "only the last byte set", mac: net.HardwareAddr{0, 0, 0, 0, 0, 1}, want: true},
+		{name: "all zero", mac: net.HardwareAddr{0, 0, 0, 0, 0, 0}, want: false},
+		{name: "empty", mac: net.HardwareAddr{}, want: false},
+		{name: "nil", mac: nil, want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, hasClientHWAddr(tt.mac))
+		})
+	}
 }
 
 // TestDHCPServer_HandleDiscover tests DHCP discover handling.
@@ -1821,6 +1868,97 @@ func TestDHCPServer_HandleRequest(t *testing.T) {
 
 		assert.Nil(t, mockConn.writtenData)
 	})
+}
+
+// TestServer_GatewayDecidesRouterOption: the server advertises a router
+// (option 3) only when it is given a gateway. The bootstrap image's
+// no-router setting passes none, and an isolated provisioning VLAN must
+// then get no router in either the offer or the ack.
+func TestServer_GatewayDecidesRouterOption(t *testing.T) {
+	for _, tt := range []struct {
+		name    string
+		gateway string
+	}{
+		{name: "no gateway", gateway: ""},
+		{name: "gateway", gateway: "192.168.1.1"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			server, err := NewServer(&ServerConfig{
+				HTTPPort:       18080,
+				TFTPPort:       10069,
+				LocalFilesDir:  t.TempDir(),
+				EnableDHCP:     true,
+				DHCPServerIP:   "127.0.0.1",
+				DHCPInterface:  "lo",
+				DHCPRangeStart: "192.168.1.100",
+				DHCPRangeEnd:   "192.168.1.200",
+				DHCPSubnetMask: "255.255.255.0",
+				DHCPLeaseTime:  time.Hour,
+				DHCPGateway:    tt.gateway,
+				BootEntries: []BootEntry{
+					{Name: "test", Description: "Test", Kernel: "http://example.com/kernel"},
+				},
+			}, logging.DefaultLogger())
+			require.NoError(t, err)
+
+			peer := &net.UDPAddr{IP: net.ParseIP("192.168.1.50"), Port: 68}
+			offerConn := &mockPacketConn{}
+			server.dhcpServer.handleDiscover(offerConn, peer, createPXEDiscoverRequest(t))
+			ackConn := &mockPacketConn{}
+			server.dhcpServer.handleRequest(ackConn, peer, createPXERequestRequest(t, net.ParseIP("192.168.1.100")))
+
+			for kind, conn := range map[string]*mockPacketConn{"offer": offerConn, "ack": ackConn} {
+				resp, err := dhcpv4.FromBytes(conn.writtenData)
+				require.NoError(t, err, kind)
+				router := resp.Router()
+				if tt.gateway == "" {
+					assert.False(t, resp.Options.Has(dhcpv4.OptionRouter), "%s must carry no router option", kind)
+					continue
+				}
+				require.Len(t, router, 1, kind)
+				assert.Equal(t, tt.gateway, router[0].String(), kind)
+			}
+		})
+	}
+}
+
+// TestServer_DNSOptionCarriesEveryServer: option 6 in both the offer and
+// the ack lists every configured DNS server, in order, not only the first.
+func TestServer_DNSOptionCarriesEveryServer(t *testing.T) {
+	servers := []string{"192.0.2.1", "1.1.1.1", "9.9.9.9"}
+	server, err := NewServer(&ServerConfig{
+		HTTPPort:       18080,
+		TFTPPort:       10069,
+		LocalFilesDir:  t.TempDir(),
+		EnableDHCP:     true,
+		DHCPServerIP:   "127.0.0.1",
+		DHCPInterface:  "lo",
+		DHCPRangeStart: "192.168.1.100",
+		DHCPRangeEnd:   "192.168.1.200",
+		DHCPSubnetMask: "255.255.255.0",
+		DHCPLeaseTime:  time.Hour,
+		DHCPDNS:        servers,
+		BootEntries: []BootEntry{
+			{Name: "test", Description: "Test", Kernel: "http://example.com/kernel"},
+		},
+	}, logging.DefaultLogger())
+	require.NoError(t, err)
+
+	peer := &net.UDPAddr{IP: net.ParseIP("192.168.1.50"), Port: 68}
+	offerConn := &mockPacketConn{}
+	server.dhcpServer.handleDiscover(offerConn, peer, createPXEDiscoverRequest(t))
+	ackConn := &mockPacketConn{}
+	server.dhcpServer.handleRequest(ackConn, peer, createPXERequestRequest(t, net.ParseIP("192.168.1.100")))
+
+	for kind, conn := range map[string]*mockPacketConn{"offer": offerConn, "ack": ackConn} {
+		resp, err := dhcpv4.FromBytes(conn.writtenData)
+		require.NoError(t, err, kind)
+		var got []string
+		for _, ip := range resp.DNS() {
+			got = append(got, ip.String())
+		}
+		assert.Equal(t, servers, got, kind)
+	}
 }
 
 // TestDHCPServer_ThreadSafety tests concurrent access to leases.

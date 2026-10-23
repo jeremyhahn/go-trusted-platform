@@ -19,9 +19,9 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
-	"github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/dns"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 )
 
 // =============================================================================
@@ -73,11 +73,23 @@ import (
 // double), dnsGRPC stays nil and the delegated handlers report the service as
 // unavailable.
 func (h *QUICServiceHandler) rebuildDNSGRPC() {
-	if full, ok := h.dnsService.(dns.DNSService); ok {
+	if full := fullDNSService(h.dnsService); full != nil {
 		h.dnsGRPC = NewDNSServiceServer(full, h.logger.Slog())
 	} else {
 		h.dnsGRPC = nil
 	}
+}
+
+// fullDNSService returns the full dns.DNSService behind the narrow DNSService
+// the daemon config carries, or nil when svc is nil or does not implement it.
+// The gRPC/Unix servicer and the QUIC delegate both resolve the backend
+// through it, so every transport reaches the same instance.
+func fullDNSService(svc DNSService) dns.DNSService {
+	full, ok := svc.(dns.DNSService)
+	if !ok {
+		return nil
+	}
+	return full
 }
 
 // =============================================================================
@@ -87,22 +99,22 @@ func (h *QUICServiceHandler) rebuildDNSGRPC() {
 // dnsGRPCCodeToQUICStatus maps the gRPC status codes produced by the shared
 // DNSServiceServer to QUIC status bytes.
 var dnsGRPCCodeToQUICStatus = map[codes.Code]byte{
-	codes.InvalidArgument:    quic.StatusInvalidArgument,
-	codes.Unauthenticated:    quic.StatusUnauthorized,
-	codes.PermissionDenied:   quic.StatusPermissionDenied,
-	codes.NotFound:           quic.StatusNotFound,
-	codes.AlreadyExists:      quic.StatusAlreadyExists,
-	codes.FailedPrecondition: quic.StatusInvalidRequest,
-	codes.Unavailable:        quic.StatusUnavailable,
-	codes.Internal:           quic.StatusInternalError,
+	codes.InvalidArgument:    quicwire.StatusInvalidArgument,
+	codes.Unauthenticated:    quicwire.StatusUnauthorized,
+	codes.PermissionDenied:   quicwire.StatusPermissionDenied,
+	codes.NotFound:           quicwire.StatusNotFound,
+	codes.AlreadyExists:      quicwire.StatusAlreadyExists,
+	codes.FailedPrecondition: quicwire.StatusInvalidRequest,
+	codes.Unavailable:        quicwire.StatusUnavailable,
+	codes.Internal:           quicwire.StatusInternalError,
 }
 
 // dnsErrorToQUICResponse converts a gRPC status error from the shared
 // DNSServiceServer into a QUIC error response, preserving the status-code
 // semantics established by the gRPC service. Unknown codes map to
 // StatusInternalError.
-func (h *QUICServiceHandler) dnsErrorToQUICResponse(op string, err error) *quic.Response {
-	quicStatus := quic.StatusInternalError
+func (h *QUICServiceHandler) dnsErrorToQUICResponse(op string, err error) *quicwire.Response {
+	quicStatus := quicwire.StatusInternalError
 	if mapped, ok := dnsGRPCCodeToQUICStatus[status.Code(err)]; ok {
 		quicStatus = mapped
 	}
@@ -111,13 +123,13 @@ func (h *QUICServiceHandler) dnsErrorToQUICResponse(op string, err error) *quic.
 
 // encodeDNSResponse encodes v (a platform.v1 pb response or a DNS mirror wire
 // struct) as a StatusOK QUIC response.
-func (h *QUICServiceHandler) encodeDNSResponse(v interface{}) *quic.Response {
-	payload, err := quic.EncodePayload(v)
+func (h *QUICServiceHandler) encodeDNSResponse(v interface{}) *quicwire.Response {
+	payload, err := quicwire.EncodePayload(v)
 	if err != nil {
-		return h.errorResponse(quic.StatusInternalError, ErrQUICEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrQUICEncodingFailed{Cause: err})
 	}
-	return &quic.Response{
-		Status:  quic.StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
@@ -312,20 +324,20 @@ func dnsResolveResponseFromProto(pb *platformv1.ResolveResponse) *dnsResolveResp
 // cannot decode directly), delegates to the shared DNSServiceServer, and
 // encodes the pb response (AddRecordResponse carries a Zone with no oneof, so
 // it round-trips as raw pb).
-func (h *QUICServiceHandler) handleDNSAddRecord(ctx context.Context, req *quic.Request) *quic.Response {
+func (h *QUICServiceHandler) handleDNSAddRecord(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.dnsGRPC == nil {
-		return h.errorResponse(quic.StatusUnavailable, ErrDNSServiceNotAvailable{})
+		return h.errorResponse(quicwire.StatusUnavailable, ErrDNSServiceNotAvailable{})
 	}
 
 	var wire dnsAddRecordRequestWire
-	if err := quic.DecodePayload(req.Payload, &wire); err != nil {
-		return h.errorResponse(quic.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &wire); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
 	}
 	if wire.ZoneName == "" {
-		return h.errorResponse(quic.StatusInvalidArgument, ErrQUICMissingField{Field: "zone_name"})
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrQUICMissingField{Field: "zone_name"})
 	}
 	if wire.Record == nil {
-		return h.errorResponse(quic.StatusInvalidArgument, ErrQUICMissingField{Field: "record"})
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrQUICMissingField{Field: "record"})
 	}
 
 	pbResp, err := h.dnsGRPC.AddRecord(ctx, &platformv1.AddRecordRequest{
@@ -341,20 +353,20 @@ func (h *QUICServiceHandler) handleDNSAddRecord(ctx context.Context, req *quic.R
 
 // handleDNSDeleteRecord decodes the pb DeleteRecordRequest (no oneof — codec
 // safe), delegates, and encodes the pb response.
-func (h *QUICServiceHandler) handleDNSDeleteRecord(ctx context.Context, req *quic.Request) *quic.Response {
+func (h *QUICServiceHandler) handleDNSDeleteRecord(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.dnsGRPC == nil {
-		return h.errorResponse(quic.StatusUnavailable, ErrDNSServiceNotAvailable{})
+		return h.errorResponse(quicwire.StatusUnavailable, ErrDNSServiceNotAvailable{})
 	}
 
 	var delReq platformv1.DeleteRecordRequest
-	if err := quic.DecodePayload(req.Payload, &delReq); err != nil {
-		return h.errorResponse(quic.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &delReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
 	}
 	if delReq.GetZoneName() == "" {
-		return h.errorResponse(quic.StatusInvalidArgument, ErrQUICMissingField{Field: "zone_name"})
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrQUICMissingField{Field: "zone_name"})
 	}
 	if delReq.GetName() == "" {
-		return h.errorResponse(quic.StatusInvalidArgument, ErrQUICMissingField{Field: "name"})
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrQUICMissingField{Field: "name"})
 	}
 
 	pbResp, err := h.dnsGRPC.DeleteRecord(ctx, &delReq)
@@ -369,19 +381,19 @@ func (h *QUICServiceHandler) handleDNSDeleteRecord(ctx context.Context, req *qui
 // delegates, and encodes the FLATTENED mirror response because the pb
 // ListRecordsResponse carries oneof-bearing Records that would panic the SDK
 // decoder.
-func (h *QUICServiceHandler) handleDNSListRecords(ctx context.Context, req *quic.Request) *quic.Response {
+func (h *QUICServiceHandler) handleDNSListRecords(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.dnsGRPC == nil {
-		return h.errorResponse(quic.StatusUnavailable, ErrDNSServiceNotAvailable{})
+		return h.errorResponse(quicwire.StatusUnavailable, ErrDNSServiceNotAvailable{})
 	}
 
 	var listReq platformv1.ListRecordsRequest
 	if len(req.Payload) > 0 {
-		if err := quic.DecodePayload(req.Payload, &listReq); err != nil {
-			return h.errorResponse(quic.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
+		if err := quicwire.DecodePayload(req.Payload, &listReq); err != nil {
+			return h.errorResponse(quicwire.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
 		}
 	}
 	if listReq.GetZoneName() == "" {
-		return h.errorResponse(quic.StatusInvalidArgument, ErrQUICMissingField{Field: "zone_name"})
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrQUICMissingField{Field: "zone_name"})
 	}
 
 	pbResp, err := h.dnsGRPC.ListRecords(ctx, &listReq)
@@ -394,17 +406,17 @@ func (h *QUICServiceHandler) handleDNSListRecords(ctx context.Context, req *quic
 
 // handleDNSAddZone decodes the pb CreateZoneRequest (no oneof), delegates, and
 // encodes the pb response.
-func (h *QUICServiceHandler) handleDNSAddZone(ctx context.Context, req *quic.Request) *quic.Response {
+func (h *QUICServiceHandler) handleDNSAddZone(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.dnsGRPC == nil {
-		return h.errorResponse(quic.StatusUnavailable, ErrDNSServiceNotAvailable{})
+		return h.errorResponse(quicwire.StatusUnavailable, ErrDNSServiceNotAvailable{})
 	}
 
 	var createReq platformv1.CreateZoneRequest
-	if err := quic.DecodePayload(req.Payload, &createReq); err != nil {
-		return h.errorResponse(quic.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &createReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
 	}
 	if createReq.GetName() == "" {
-		return h.errorResponse(quic.StatusInvalidArgument, ErrQUICMissingField{Field: "name"})
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrQUICMissingField{Field: "name"})
 	}
 
 	pbResp, err := h.dnsGRPC.CreateZone(ctx, &createReq)
@@ -417,17 +429,17 @@ func (h *QUICServiceHandler) handleDNSAddZone(ctx context.Context, req *quic.Req
 
 // handleDNSDeleteZone decodes the pb DeleteZoneRequest (no oneof), delegates,
 // and encodes the pb response.
-func (h *QUICServiceHandler) handleDNSDeleteZone(ctx context.Context, req *quic.Request) *quic.Response {
+func (h *QUICServiceHandler) handleDNSDeleteZone(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.dnsGRPC == nil {
-		return h.errorResponse(quic.StatusUnavailable, ErrDNSServiceNotAvailable{})
+		return h.errorResponse(quicwire.StatusUnavailable, ErrDNSServiceNotAvailable{})
 	}
 
 	var delReq platformv1.DeleteZoneRequest
-	if err := quic.DecodePayload(req.Payload, &delReq); err != nil {
-		return h.errorResponse(quic.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &delReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
 	}
 	if delReq.GetName() == "" {
-		return h.errorResponse(quic.StatusInvalidArgument, ErrQUICMissingField{Field: "name"})
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrQUICMissingField{Field: "name"})
 	}
 
 	pbResp, err := h.dnsGRPC.DeleteZone(ctx, &delReq)
@@ -442,15 +454,15 @@ func (h *QUICServiceHandler) handleDNSDeleteZone(ctx context.Context, req *quic.
 // and encodes the pb response. ListZonesResponse carries Zones whose nested
 // RecordSet uses explicit typed slices (no oneof), so it round-trips as raw
 // pb.
-func (h *QUICServiceHandler) handleDNSListZones(ctx context.Context, req *quic.Request) *quic.Response {
+func (h *QUICServiceHandler) handleDNSListZones(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.dnsGRPC == nil {
-		return h.errorResponse(quic.StatusUnavailable, ErrDNSServiceNotAvailable{})
+		return h.errorResponse(quicwire.StatusUnavailable, ErrDNSServiceNotAvailable{})
 	}
 
 	var listReq platformv1.ListZonesRequest
 	if len(req.Payload) > 0 {
-		if err := quic.DecodePayload(req.Payload, &listReq); err != nil {
-			return h.errorResponse(quic.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
+		if err := quicwire.DecodePayload(req.Payload, &listReq); err != nil {
+			return h.errorResponse(quicwire.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
 		}
 	}
 
@@ -465,17 +477,17 @@ func (h *QUICServiceHandler) handleDNSListZones(ctx context.Context, req *quic.R
 // handleDNSResolve decodes the pb ResolveRequest (no oneof), delegates, and
 // encodes the FLATTENED mirror response because ResolveResponse carries
 // oneof-bearing Records.
-func (h *QUICServiceHandler) handleDNSResolve(ctx context.Context, req *quic.Request) *quic.Response {
+func (h *QUICServiceHandler) handleDNSResolve(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.dnsGRPC == nil {
-		return h.errorResponse(quic.StatusUnavailable, ErrDNSServiceNotAvailable{})
+		return h.errorResponse(quicwire.StatusUnavailable, ErrDNSServiceNotAvailable{})
 	}
 
 	var resolveReq platformv1.ResolveRequest
-	if err := quic.DecodePayload(req.Payload, &resolveReq); err != nil {
-		return h.errorResponse(quic.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &resolveReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
 	}
 	if resolveReq.GetFqdn() == "" {
-		return h.errorResponse(quic.StatusInvalidArgument, ErrQUICMissingField{Field: "fqdn"})
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrQUICMissingField{Field: "fqdn"})
 	}
 
 	pbResp, err := h.dnsGRPC.Resolve(ctx, &resolveReq)

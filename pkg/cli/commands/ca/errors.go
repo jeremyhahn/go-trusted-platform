@@ -211,6 +211,36 @@ func (e ErrIssueCertificateFailed) Error() string {
 	return fmt.Sprintf("failed to issue certificate: %s", e.Reason)
 }
 
+// ErrReadCSRFailed is returned when the certificate signing request file
+// cannot be read.
+type ErrReadCSRFailed struct {
+	Path   string
+	Reason string
+}
+
+func (e ErrReadCSRFailed) Error() string {
+	return fmt.Sprintf("failed to read certificate signing request %s: %s", e.Path, e.Reason)
+}
+
+// ErrNoCertificateIssued is returned when the CA answers a request without
+// a certificate.
+type ErrNoCertificateIssued struct{}
+
+func (e ErrNoCertificateIssued) Error() string {
+	return "the CA returned no certificate"
+}
+
+// ErrWriteCertificateFailed is returned when the issued certificate cannot
+// be written to its output file.
+type ErrWriteCertificateFailed struct {
+	Path   string
+	Reason string
+}
+
+func (e ErrWriteCertificateFailed) Error() string {
+	return fmt.Sprintf("failed to write certificate to %s: %s", e.Path, e.Reason)
+}
+
 // ErrGetCertificateFailed is returned when getting a certificate fails.
 type ErrGetCertificateFailed struct {
 	Reason string

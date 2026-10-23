@@ -432,7 +432,7 @@ func TestFlowManager_AddPortRule_Concurrent(t *testing.T) {
 	for i := 0; i < 10; i++ {
 		go func(id int) {
 			rule := &FlowRule{
-				ID:     generateRuleID("eth0", "test", string(rune(id))),
+				ID:     generateRuleID(),
 				PortID: "eth0",
 				Type:   FlowRuleTypeDrop,
 			}

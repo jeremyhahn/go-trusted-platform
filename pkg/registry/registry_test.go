@@ -843,7 +843,7 @@ func TestRegistrySessionManagement(t *testing.T) {
 func TestRegistrySessionExpiration(t *testing.T) {
 	cfg := validTestConfig()
 	cfg.Attestation.RequireAttestation = true
-	cfg.Attestation.CacheSessionDuration = 1 * time.Millisecond // Very short duration
+	cfg.Attestation.CacheSessionDuration = time.Minute
 
 	reg, err := NewRegistry(cfg, testLogger())
 	if err != nil {
@@ -851,11 +851,14 @@ func TestRegistrySessionExpiration(t *testing.T) {
 	}
 	defer func() { _ = reg.Close() }()
 
+	current := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	reg.now = func() time.Time { return current }
+
 	// Verify a client
 	attestation := &AttestationEvidence{
 		ClientID:  "client-1",
 		AIK:       []byte("aik-1-bytes-here"),
-		Timestamp: time.Now(),
+		Timestamp: current,
 		PCRs:      map[int][]byte{},
 	}
 
@@ -864,13 +867,24 @@ func TestRegistrySessionExpiration(t *testing.T) {
 		t.Fatalf("failed to verify client: %v", err)
 	}
 
-	// Wait for session to expire
-	time.Sleep(10 * time.Millisecond)
+	// Still valid at exactly the session duration: expiry is strictly after
+	// ValidUntil.
+	current = current.Add(time.Minute)
+	session, ok := reg.GetSession("client-1")
+	if !ok {
+		t.Fatal("expected session to be valid at exactly its duration")
+	}
+	if !session.ValidUntil.Equal(current) {
+		t.Errorf("ValidUntil = %v, want %v", session.ValidUntil, current)
+	}
 
-	// Session should be expired
-	_, ok := reg.GetSession("client-1")
-	if ok {
+	// Expired one tick later, and evicted on that read.
+	current = current.Add(time.Nanosecond)
+	if _, ok := reg.GetSession("client-1"); ok {
 		t.Error("expected session to be expired")
+	}
+	if _, ok := reg.sessions.Load("client-1"); ok {
+		t.Error("expected expired session to be evicted")
 	}
 }
 

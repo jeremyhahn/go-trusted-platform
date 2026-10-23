@@ -22,18 +22,18 @@ import (
 	"testing"
 	"time"
 
-	aggeneric "github.com/jeremyhahn/arduino-generic/sdk/go"
+	tfw "github.com/jeremyhahn/trusted-firmware/sdk/go"
 )
 
 // The tests in this package talk to a FAKE LINK and the REAL CODEC.
 //
 // Every byte a test sends is framed by the SDK's own EncodeResponse and every
 // byte this package sends is parsed by the SDK's own Decode, so what is under
-// test is this package against the protocol as arduino-generic implements it.
-// Mocking *aggeneric.Device instead would replace the one thing worth
+// test is this package against the protocol as trusted-firmware implements it.
+// Mocking *tfw.Device instead would replace the one thing worth
 // exercising — a reply's layout, a status code's meaning, the width a command
 // needs — with this package's own opinion of it, and the tests would pass for
-// a device that does not exist. The shape follows arduino-generic's own
+// a device that does not exist. The shape follows trusted-firmware's own
 // cannedLink and go-xkms's pkg/backend/avr harness, which are the precedent.
 
 // linkTimeout bounds one command in a test. It is short because these tests
@@ -46,7 +46,7 @@ const testTenant = "acme"
 
 // reply is one canned response.
 type reply struct {
-	status  aggeneric.Status
+	status  tfw.Status
 	payload []byte
 }
 
@@ -58,40 +58,40 @@ type reply struct {
 // a firmware built without that feature actually does: the absence of a reply
 // in the table models the absence of a handler in the image.
 type fakeLink struct {
-	replies map[aggeneric.Cmd]reply
+	replies map[tfw.Cmd]reply
 
 	// pagedReplies answers successive requests for one command with
 	// successive entries, which is how a paged command reads on the wire.
-	pagedReplies map[aggeneric.Cmd][][]byte
-	pageCursor   map[aggeneric.Cmd]int
+	pagedReplies map[tfw.Cmd][][]byte
+	pageCursor   map[tfw.Cmd]int
 
 	// requests records what this package asked for, so a test can assert
 	// that a refusal cost no round trip.
-	requests []aggeneric.Frame
+	requests []tfw.Frame
 
 	rx bytes.Buffer
 }
 
 func newFakeLink() *fakeLink {
 	return &fakeLink{
-		replies:      map[aggeneric.Cmd]reply{},
-		pagedReplies: map[aggeneric.Cmd][][]byte{},
-		pageCursor:   map[aggeneric.Cmd]int{},
+		replies:      map[tfw.Cmd]reply{},
+		pagedReplies: map[tfw.Cmd][][]byte{},
+		pageCursor:   map[tfw.Cmd]int{},
 	}
 }
 
-func (l *fakeLink) answer(cmd aggeneric.Cmd, payload []byte) *fakeLink {
+func (l *fakeLink) answer(cmd tfw.Cmd, payload []byte) *fakeLink {
 	l.replies[cmd] = reply{payload: payload}
 	return l
 }
 
-func (l *fakeLink) refuse(cmd aggeneric.Cmd, status aggeneric.Status) *fakeLink {
+func (l *fakeLink) refuse(cmd tfw.Cmd, status tfw.Status) *fakeLink {
 	l.replies[cmd] = reply{status: status}
 	return l
 }
 
 // commandCount reports how many requests carried a given command.
-func (l *fakeLink) commandCount(cmd aggeneric.Cmd) int {
+func (l *fakeLink) commandCount(cmd tfw.Cmd) int {
 	n := 0
 	for _, f := range l.requests {
 		if f.Cmd() == cmd {
@@ -102,7 +102,7 @@ func (l *fakeLink) commandCount(cmd aggeneric.Cmd) int {
 }
 
 func (l *fakeLink) Write(p []byte) (int, error) {
-	f, _, err := aggeneric.Decode(p)
+	f, _, err := tfw.Decode(p)
 	if err != nil {
 		return 0, err
 	}
@@ -115,16 +115,16 @@ func (l *fakeLink) Write(p []byte) (int, error) {
 			if at >= len(pages) {
 				// Past the end the device answers a range error rather
 				// than an empty success, so a host cannot loop forever.
-				r = reply{status: aggeneric.StatusErrRange}
+				r = reply{status: tfw.StatusErrRange}
 			} else {
 				r = reply{payload: pages[at]}
 				l.pageCursor[f.Cmd()] = at + 1
 			}
 		} else {
-			r = reply{status: aggeneric.StatusErrUnknownCmd}
+			r = reply{status: tfw.StatusErrUnknownCmd}
 		}
 	}
-	resp, err := aggeneric.EncodeResponse(f.Seq, f.Cmd(), r.status, r.payload)
+	resp, err := tfw.EncodeResponse(f.Seq, f.Cmd(), r.status, r.payload)
 	if err != nil {
 		return 0, err
 	}
@@ -144,16 +144,16 @@ func (l *fakeLink) Read(p []byte) (int, error) {
 }
 
 // capsPayload builds the board header a current firmware sends, mirroring the
-// layout in include/ag/protocol.h: the fourteen-byte header every version has,
+// layout in include/tfw/protocol.h: the fourteen-byte header every version has,
 // then the algorithm bitmap appended after it.
-func capsPayload(tier aggeneric.CryptoTier, features uint32, algorithms aggeneric.AlgorithmSet) []byte {
+func capsPayload(tier tfw.CryptoTier, features uint32, algorithms tfw.AlgorithmSet) []byte {
 	p := make([]byte, 16)
-	p[0], p[1] = 1, 0 // protocol 1.0
+	p[0], p[1] = tfw.ProtoVersionMajor, tfw.ProtoVersionMinor
 	p[2], p[3], p[4] = 0, 2, 0
 	p[5] = 0x01 // board id
 	p[6] = 22   // pin count
 	p[7] = 8    // scheduler slots
-	p[8] = aggeneric.MaxPayload
+	p[8] = tfw.MaxPayload
 	p[9] = byte(tier)
 	binary.LittleEndian.PutUint32(p[10:14], features)
 	binary.LittleEndian.PutUint16(p[14:16], uint16(algorithms))
@@ -189,9 +189,9 @@ type frameOpts struct {
 }
 
 // buildFrame renders a 164-byte evidence frame at the offsets
-// include/ag/protocol.h defines.
+// include/tfw/protocol.h defines.
 func buildFrame(o frameOpts) []byte {
-	raw := make([]byte, aggeneric.EvidenceLen)
+	raw := make([]byte, tfw.EvidenceLen)
 	raw[offFrameVersion] = o.version
 	copy(raw[offFrameNonce:], o.nonce)
 	copy(raw[offFrameDevice:offFrameDevice+lenFrameDeviceID], o.deviceID)
@@ -219,32 +219,36 @@ func defaultFrame(nonce []byte) []byte {
 		fwHash:    goldenFWHash,
 		bootCount: 7,
 		uptimeMs:  123456,
-		algorithm: 0x01, // AG_ALG_ECDSA_P256_SHA256
+		algorithm: 0x01, // TFW_ALG_ECDSA_P256_SHA256
 		signature: bytes.Repeat([]byte{0x5A}, lenFrameSig),
 	})
 }
 
 // answerAttest loads a whole evidence frame into the link, paged the way the
 // device pages it: page 0 is the answer to the nonce, later pages answer a
-// one-byte page request.
+// one-byte page request, and every page carries the [page:1][total:1] header
+// src/caps/attest.c puts ahead of the evidence.
 func (l *fakeLink) answerAttest(raw []byte) *fakeLink {
-	const page = 48 // AG_ATTEST_PAGE
+	const page = 48 // TFW_ATTEST_PAGE
 	var pages [][]byte
 	for off := 0; off < len(raw); off += page {
 		end := off + page
 		if end > len(raw) {
 			end = len(raw)
 		}
-		pages = append(pages, raw[off:end])
+		hdr := make([]byte, 2, 2+end-off)
+		hdr[0] = byte(off / page)
+		hdr[1] = byte(len(raw))
+		pages = append(pages, append(hdr, raw[off:end]...))
 	}
-	l.pagedReplies[aggeneric.CmdAttest] = pages
+	l.pagedReplies[tfw.CmdAttest] = pages
 	return l
 }
 
 // answerAttestCert loads a whole certificate into the link, paged the way the
 // device pages it: [page:1][total:2 little-endian][bytes].
 func (l *fakeLink) answerAttestCert(der []byte) *fakeLink {
-	const page = 60 // AG_ALIAS_PAGE
+	const page = 60 // TFW_ALIAS_PAGE
 	var pages [][]byte
 	for off := 0; off < len(der); off += page {
 		end := off + page
@@ -256,7 +260,7 @@ func (l *fakeLink) answerAttestCert(der []byte) *fakeLink {
 		binary.LittleEndian.PutUint16(hdr[1:3], uint16(len(der)))
 		pages = append(pages, append(hdr, der[off:end]...))
 	}
-	l.pagedReplies[aggeneric.CmdAttestCert] = pages
+	l.pagedReplies[tfw.CmdAttestCert] = pages
 	return l
 }
 
@@ -265,28 +269,28 @@ func (l *fakeLink) answerAttestCert(der []byte) *fakeLink {
 // and — as the ATECC608A really is — no Ed25519.
 func secureElementLink() *fakeLink {
 	return newFakeLink().
-		answer(aggeneric.CmdCaps, capsPayload(
-			aggeneric.CryptoSecureElement,
-			aggeneric.FeatureGPIO|aggeneric.FeatureAttest,
-			aggeneric.AlgECDSAP256SHA256|aggeneric.AlgHMACSHA256,
+		answer(tfw.CmdCaps, capsPayload(
+			tfw.CryptoSecureElement,
+			tfw.FeatureGPIO|tfw.FeatureAttest,
+			tfw.AlgECDSAP256SHA256|tfw.AlgHMACSHA256,
 		)).
-		answer(aggeneric.CmdProvInfo, provInfoPayload(testSerial))
+		answer(tfw.CmdProvInfo, provInfoPayload(testSerial))
 }
 
 // softwareLink is a software-tier device with attestation compiled in. It has
 // no element, so construction asks it nothing about one.
 func softwareLink() *fakeLink {
-	return newFakeLink().answer(aggeneric.CmdCaps, capsPayload(
-		aggeneric.CryptoSoftware,
-		aggeneric.FeatureGPIO|aggeneric.FeatureAttest,
-		aggeneric.AlgECDSAP256SHA256,
+	return newFakeLink().answer(tfw.CmdCaps, capsPayload(
+		tfw.CryptoSoftware,
+		tfw.FeatureGPIO|tfw.FeatureAttest,
+		tfw.AlgECDSAP256SHA256,
 	))
 }
 
 // newTestDevice wraps a link in an SDK Device with a deadline short enough
 // for a unit test.
-func newTestDevice(link io.ReadWriter) *aggeneric.Device {
-	return aggeneric.New(link, aggeneric.WithTimeout(linkTimeout), aggeneric.WithBootWait(0))
+func newTestDevice(link io.ReadWriter) *tfw.Device {
+	return tfw.New(link, tfw.WithTimeout(linkTimeout), tfw.WithBootWait(0))
 }
 
 // testConfig is a valid configuration with a frozen clock, so the age rule is
@@ -359,5 +363,5 @@ func aliasCertificate(t *testing.T, withUCCS bool) []byte {
 }
 
 // attestNonce and aliasNonce are challenges of the two widths.
-func attestNonce(fill byte) []byte { return bytes.Repeat([]byte{fill}, aggeneric.AttestNonceLen) }
-func aliasNonce(fill byte) []byte  { return bytes.Repeat([]byte{fill}, aggeneric.AliasNonceLen) }
+func attestNonce(fill byte) []byte { return bytes.Repeat([]byte{fill}, tfw.AttestNonceLen) }
+func aliasNonce(fill byte) []byte  { return bytes.Repeat([]byte{fill}, tfw.AliasNonceLen) }

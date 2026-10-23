@@ -15,13 +15,13 @@ package network
 
 import (
 	"context"
-	"crypto/sha256"
 	"crypto/x509"
-	"encoding/hex"
 	"log/slog"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 // NetworkAuthService provides certificate-based network port authentication
@@ -270,7 +270,7 @@ func (s *networkAuthService) Authenticate(ctx context.Context, request *PortAuth
 		State:     AuthStateQuarantine,
 		VLAN:      s.config.QuarantineVLAN,
 		Timestamp: time.Now().UTC(),
-		SessionID: generateSessionID(request.PortID),
+		SessionID: generateSessionID(),
 	}
 
 	// Apply timeout if specified
@@ -776,8 +776,6 @@ func (s *networkAuthService) updatePortState(portID string, result *AuthResult, 
 }
 
 // generateSessionID generates a unique session ID.
-func generateSessionID(portID string) string {
-	data := portID + time.Now().Format(time.RFC3339Nano)
-	hash := sha256.Sum256([]byte(data))
-	return hex.EncodeToString(hash[:16])
+func generateSessionID() string {
+	return uuid.NewString()
 }

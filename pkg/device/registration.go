@@ -53,15 +53,18 @@ type Registration struct {
 	// registry's identity for find-or-create and is required.
 	Model  string
 	Serial string
-	// Hostname is the IDevID Common Name. Optional: the ACME path leaves it
-	// to the DNS registration hook, the control plane sets it from its own
-	// IDevID certificate.
+	// Hostname is the IDevID Common Name. Optional: the ACME path sets it
+	// from the issued certificate, the control plane from its own IDevID
+	// certificate. It is the name a diskless node looks itself up by (#690).
 	Hostname string
 	// EKCertPEM is the PEM endorsement certificate.
 	EKCertPEM string
 	// AttestCertPEM is the PEM attestation (IAK) certificate the CA issued.
 	// It is the trust anchor the device quote verifier uses (#374, #404).
 	AttestCertPEM string
+	// IDevIDCertPEM is the PEM IDevID certificate chain (leaf first) the CA
+	// issued. A diskless node fetches it back on every boot (#690).
+	IDevIDCertPEM string
 	// AttestPub is the attestation key's TPMT_PUBLIC public area.
 	AttestPub []byte
 	// SigningPub is the IDevID signing key's TPMT_PUBLIC public area.
@@ -110,6 +113,9 @@ func Register(ctx context.Context, registrar Registrar, reg Registration, now ti
 		return nil, ErrRegistrationNoSerial{}
 	}
 	reg.Serial = serial
+	if err := reg.verifyEKIdentityClaim(); err != nil {
+		return nil, err
+	}
 	if now.IsZero() {
 		now = time.Now().UTC()
 	}
@@ -150,6 +156,36 @@ func Register(ctx context.Context, registrar Registrar, reg Registration, now ti
 		return nil, ErrRegistrationSaveFailed{Serial: serial, Cause: err}
 	}
 	return &RegistrationResult{Device: dev, Created: true, LookupWarning: warning, AttestCertWarning: attestWarning}, nil
+}
+
+// verifyEKIdentityClaim refuses a serial or Common Name claiming an EK-derived
+// node identity unless it is the identity of the EK certificate this
+// enrollment carries, the EK the CA's credential activation proved the
+// enrolling TPM holds. A diskless node takes that name from its own EK
+// because the image it boots names every node alike (#690); this is where
+// the record bound to the TPM's EK gets the name, rather than from anything
+// the image said. Names without the prefix are operator-chosen and pass.
+func (r Registration) verifyEKIdentityClaim() error {
+	for _, claimed := range []string{r.Serial, r.Hostname} {
+		if !entities.IsEKNodeIdentity(claimed) {
+			continue
+		}
+		if r.EKCertPEM == "" {
+			return ErrRegistrationEKIdentityUnbound{Claimed: claimed, Reason: "the enrollment carries no EK certificate"}
+		}
+		ekCert, err := entities.ParseEKCertPEM(r.EKCertPEM)
+		if err != nil {
+			return ErrRegistrationEKIdentityUnbound{Claimed: claimed, Reason: "the EK certificate does not parse", Cause: err}
+		}
+		derived, err := entities.EKNodeIdentity(ekCert.PublicKey)
+		if err != nil {
+			return ErrRegistrationEKIdentityUnbound{Claimed: claimed, Reason: "no identity derives from the EK", Cause: err}
+		}
+		if derived != claimed {
+			return ErrRegistrationEKIdentityUnbound{Claimed: claimed, Reason: "the EK's identity is " + strconv.Quote(derived)}
+		}
+	}
+	return nil
 }
 
 // AttestCertNotRestrictedWarning is what a caller logs when an enrollment
@@ -230,6 +266,9 @@ func (r Registration) apply(dev *entities.Device, now time.Time) {
 	}
 	if r.AttestCertPEM != "" {
 		dev.AttestCert = r.AttestCertPEM
+	}
+	if r.IDevIDCertPEM != "" {
+		dev.IDevIDCert = r.IDevIDCertPEM
 	}
 	if len(r.AttestPub) > 0 {
 		dev.AttestPub = hex.EncodeToString(r.AttestPub)

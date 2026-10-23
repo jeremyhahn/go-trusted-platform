@@ -33,21 +33,76 @@ import (
 // ErrTFTPClientNotInitialized indicates the TFTP client is not initialized.
 var ErrTFTPClientNotInitialized = errors.New("TFTP client not initialized")
 
-// ErrHTTPClientNotInitialized indicates the HTTP client is not initialized.
-var ErrHTTPClientNotInitialized = errors.New("HTTP client not initialized")
+// ErrServerNotReady indicates the suite's iPXE server did not bind every
+// listener before the setup deadline.
+var ErrServerNotReady = errors.New("iPXE server not ready")
 
-// ErrDHCPClientNotInitialized indicates the DHCP client is not initialized.
-var ErrDHCPClientNotInitialized = errors.New("DHCP client not initialized")
+// SuiteSetupError reports which step of TestMain's suite setup failed.
+type SuiteSetupError struct {
+	// Step names the failed step, e.g. "start iPXE server".
+	Step string
+	// Err is the underlying cause.
+	Err error
+}
+
+// Error implements the error interface.
+func (e *SuiteSetupError) Error() string {
+	return e.Step + ": " + e.Err.Error()
+}
+
+// Unwrap returns the underlying cause.
+func (e *SuiteSetupError) Unwrap() error {
+	return e.Err
+}
+
+// ErrServerUnhealthy indicates the iPXE HTTP server's /health endpoint did
+// not answer 200.
+var ErrServerUnhealthy = errors.New("iPXE HTTP server unhealthy")
+
+// AdapterSetupError reports which protocol adapter failed to set up.
+type AdapterSetupError struct {
+	// Protocol names the adapter, e.g. "HTTP".
+	Protocol string
+	// Err is the underlying cause.
+	Err error
+}
+
+// Error implements the error interface.
+func (e *AdapterSetupError) Error() string {
+	return e.Protocol + " adapter setup: " + e.Err.Error()
+}
+
+// Unwrap returns the underlying cause.
+func (e *AdapterSetupError) Unwrap() error {
+	return e.Err
+}
+
+// ErrDHCPNak indicates the DHCP server answered a REQUEST with a NAK.
+var ErrDHCPNak = errors.New("DHCP server sent NAK")
+
+// DHCPExchangeError reports which step of a DHCP client exchange failed.
+type DHCPExchangeError struct {
+	// Step names the failed step, e.g. "send DISCOVER".
+	Step string
+	// Err is the underlying cause.
+	Err error
+}
+
+// Error implements the error interface.
+func (e *DHCPExchangeError) Error() string {
+	return "DHCP " + e.Step + ": " + e.Err.Error()
+}
+
+// Unwrap returns the underlying cause.
+func (e *DHCPExchangeError) Unwrap() error {
+	return e.Err
+}
 
 // =============================================================================
 // Environment Variable Constants
 // =============================================================================
 
 const (
-	// EnvIntegrationTest is the environment variable that must be set to run
-	// integration tests. Set INTEGRATION_TEST=1 to enable.
-	EnvIntegrationTest = "INTEGRATION_TEST"
-
 	// EnvIPXEServerIP is the environment variable for the iPXE server IP.
 	EnvIPXEServerIP = "IPXE_SERVER_IP"
 
@@ -57,14 +112,13 @@ const (
 	// EnvIPXETFTPPort is the environment variable for the TFTP port.
 	EnvIPXETFTPPort = "IPXE_TFTP_PORT"
 
-	// EnvIPXEDHCPEnabled is the environment variable for DHCP enablement.
+	// EnvIPXEDHCPEnabled starts the suite's DHCP server when set to "1".
+	// The DHCP tests fail, never skip, without it.
 	EnvIPXEDHCPEnabled = "IPXE_DHCP_ENABLED"
 
-	// EnvIPXENetworkInterface is the environment variable for the network interface.
-	EnvIPXENetworkInterface = "IPXE_NETWORK_INTERFACE"
-
-	// EnvIPXETestNetwork is the environment variable for the test network CIDR.
-	EnvIPXETestNetwork = "IPXE_TEST_NETWORK"
+	// EnvIPXEDHCPPort is the UDP port the suite's DHCP server listens on.
+	// TestMain sets it; the server and the client both read it.
+	EnvIPXEDHCPPort = "IPXE_DHCP_PORT"
 )
 
 // =============================================================================
@@ -101,53 +155,36 @@ const (
 
 	// DefaultHTTPTimeout is the default timeout for HTTP operations.
 	DefaultHTTPTimeout = 10 * time.Second
+
+	// DHCPTestInterface is the interface the suite's DHCP server and client
+	// both bind. It is loopback because only loopback hands a host's own
+	// broadcast OFFER back to it: the server and the client share one
+	// process, and the server's replies go to 255.255.255.255:68.
+	DHCPTestInterface = "lo"
+
+	// DHCPClientPort is the port DHCP servers send replies to (RFC 2131).
+	// Binding it needs root or CAP_NET_BIND_SERVICE.
+	DHCPClientPort = 68
 )
 
 // =============================================================================
 // PXE Client Architecture Constants
 // =============================================================================
 
-const (
-	// ArchBIOSx86 is the BIOS x86 client architecture (legacy).
-	ArchBIOSx86 = uint16(0x0000)
-
-	// ArchEFIx64 is the EFI x64 client architecture.
-	ArchEFIx64 = uint16(0x0007)
-
-	// ArchEFIx86 is the EFI x86 client architecture.
-	ArchEFIx86 = uint16(0x0006)
-
-	// ArchEFIBC is the EFI byte code architecture.
-	ArchEFIBC = uint16(0x0009)
-)
+// ArchEFIx64 is the EFI x64 client architecture (DHCP option 93).
+const ArchEFIx64 = uint16(0x0007)
 
 // =============================================================================
-// Skip Helpers
+// Server Helpers
 // =============================================================================
 
-// SkipIfNotIntegration skips the test if the INTEGRATION_TEST environment
-// variable is not set. This ensures integration tests only run when explicitly
-// requested, preventing accidental execution during normal unit testing.
-func SkipIfNotIntegration(t *testing.T) {
+// RequireDHCPServer fails the test unless TestMain started the suite's DHCP
+// server. A DHCP test that reaches here without it was selected by mistake:
+// the runner sets IPXE_DHCP_ENABLED=1 for every target that runs one.
+func RequireDHCPServer(t *testing.T, cfg TestServerConfig) {
 	t.Helper()
-	if os.Getenv(EnvIntegrationTest) == "" {
-		t.Skip("Skipping integration test. Set INTEGRATION_TEST=1 to run.")
-	}
-}
-
-// SkipIfNoDHCP skips the test if DHCP testing is not enabled.
-func SkipIfNoDHCP(t *testing.T) {
-	t.Helper()
-	if os.Getenv(EnvIPXEDHCPEnabled) != "1" {
-		t.Skip("Skipping DHCP test. Set IPXE_DHCP_ENABLED=1 to run.")
-	}
-}
-
-// SkipIfNoNetworkPrivileges skips the test if running without network privileges.
-func SkipIfNoNetworkPrivileges(t *testing.T) {
-	t.Helper()
-	if os.Geteuid() != 0 {
-		t.Skip("Skipping test requiring network privileges. Run as root or with CAP_NET_ADMIN.")
+	if !cfg.DHCPEnabled || cfg.DHCPPort == 0 {
+		t.Fatalf("DHCP server not running: set %s=1 so TestMain starts it", EnvIPXEDHCPEnabled)
 	}
 }
 
@@ -168,6 +205,7 @@ func GetTestServerConfig() TestServerConfig {
 		HTTPPort:       httpPort,
 		TFTPPort:       tftpPort,
 		DHCPEnabled:    os.Getenv(EnvIPXEDHCPEnabled) == "1",
+		DHCPPort:       getEnvIntOrDefault(EnvIPXEDHCPPort, 0),
 		DHCPRangeStart: net.ParseIP(DefaultDHCPRangeStart),
 		DHCPRangeEnd:   net.ParseIP(DefaultDHCPRangeEnd),
 		SubnetMask:     net.IPv4Mask(255, 255, 255, 0),
@@ -265,83 +303,6 @@ func GenerateTestMAC(index int) net.HardwareAddr {
 }
 
 // =============================================================================
-// Network Helpers
-// =============================================================================
-
-// WaitForPort waits for a TCP port to become available.
-func WaitForPort(ctx context.Context, host string, port int) error {
-	addr := net.JoinHostPort(host, fmt.Sprintf("%d", port))
-	ticker := time.NewTicker(100 * time.Millisecond)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-ticker.C:
-			conn, err := net.DialTimeout("tcp", addr, 500*time.Millisecond)
-			if err == nil {
-				conn.Close()
-				return nil
-			}
-		}
-	}
-}
-
-// WaitForUDP waits for a UDP port to become available.
-func WaitForUDP(ctx context.Context, host string, port int) error {
-	addr := net.JoinHostPort(host, fmt.Sprintf("%d", port))
-	ticker := time.NewTicker(100 * time.Millisecond)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-ticker.C:
-			conn, err := net.Dial("udp", addr)
-			if err == nil {
-				conn.Close()
-				return nil
-			}
-		}
-	}
-}
-
-// IsPortAvailable checks if a TCP port is available for binding.
-func IsPortAvailable(host string, port int) bool {
-	addr := net.JoinHostPort(host, fmt.Sprintf("%d", port))
-	ln, err := net.Listen("tcp", addr)
-	if err != nil {
-		return false
-	}
-	ln.Close()
-	return true
-}
-
-// =============================================================================
-// Test Data Helpers
-// =============================================================================
-
-// GenerateTestBootEntries generates test boot entries for integration testing.
-func GenerateTestBootEntries() []BootEntryConfig {
-	return []BootEntryConfig{
-		{
-			Name:        "alpine-standard",
-			Description: "Alpine Linux Standard",
-			ISOURL:      "https://dl-cdn.alpinelinux.org/alpine/v3.20/releases/x86_64/alpine-standard-3.20.0-x86_64.iso",
-		},
-		{
-			Name:        "test-kernel",
-			Description: "Test Kernel Boot",
-			Kernel:      "/files/vmlinuz",
-			Initrd:      "/files/initrd.img",
-			Args:        "console=ttyS0",
-		},
-	}
-}
-
-// =============================================================================
 // Assertion Helpers
 // =============================================================================
 
@@ -382,76 +343,4 @@ func AssertIPInRange(t *testing.T, ip, rangeStart, rangeEnd net.IP, description 
 // ipToUint32 converts an IPv4 address to a uint32 for comparison.
 func ipToUint32(ip net.IP) uint32 {
 	return uint32(ip[0])<<24 | uint32(ip[1])<<16 | uint32(ip[2])<<8 | uint32(ip[3])
-}
-
-// AssertContains checks if a string contains a substring.
-func AssertContains(t *testing.T, haystack, needle, description string) {
-	t.Helper()
-	if haystack == "" {
-		t.Errorf("%s: string is empty", description)
-		return
-	}
-	for i := 0; i <= len(haystack)-len(needle); i++ {
-		if haystack[i:i+len(needle)] == needle {
-			return
-		}
-	}
-	t.Errorf("%s: expected to contain %q, got %q", description, needle, haystack)
-}
-
-// =============================================================================
-// Retry Helpers
-// =============================================================================
-
-// RetryConfig configures retry behavior for operations.
-type RetryConfig struct {
-	MaxAttempts int
-	InitialWait time.Duration
-	MaxWait     time.Duration
-	Multiplier  float64
-}
-
-// DefaultRetryConfig returns sensible defaults for retry operations.
-func DefaultRetryConfig() RetryConfig {
-	return RetryConfig{
-		MaxAttempts: 5,
-		InitialWait: 500 * time.Millisecond,
-		MaxWait:     5 * time.Second,
-		Multiplier:  1.5,
-	}
-}
-
-// Retry executes an operation with exponential backoff retry.
-func Retry(ctx context.Context, cfg RetryConfig, operation func() error) error {
-	var lastErr error
-	wait := cfg.InitialWait
-
-	for attempt := 1; attempt <= cfg.MaxAttempts; attempt++ {
-		lastErr = operation()
-		if lastErr == nil {
-			return nil
-		}
-
-		// Check context cancellation
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
-
-		// Do not wait after last attempt
-		if attempt < cfg.MaxAttempts {
-			select {
-			case <-time.After(wait):
-			case <-ctx.Done():
-				return ctx.Err()
-			}
-
-			// Exponential backoff
-			wait = time.Duration(float64(wait) * cfg.Multiplier)
-			if wait > cfg.MaxWait {
-				wait = cfg.MaxWait
-			}
-		}
-	}
-
-	return fmt.Errorf("operation failed after %d attempts: %w", cfg.MaxAttempts, lastErr)
 }

@@ -20,7 +20,6 @@ import (
 
 	quicbaas "github.com/jeremyhahn/go-quicbaas/sdk/go"
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/client/query"
-	quicbaasErrors "github.com/jeremyhahn/go-quicbaas/sdk/go/errors"
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/service"
 )
 
@@ -109,7 +108,7 @@ func (s *SDKStorage) Get(ctx context.Context, entityType string, id uint64, shar
 		// Convert to the Storage interface convention: found=false, no error.
 		// Check both typed errors and string patterns since errors may be
 		// wrapped through multiple transport layers.
-		if quicbaasErrors.IsNotFound(err) || isNotFoundString(err) {
+		if IsNotFound(err) || isNotFoundString(err) {
 			return nil, false, nil
 		}
 		return nil, false, err

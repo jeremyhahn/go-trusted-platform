@@ -39,7 +39,7 @@ func TestBridgeManagement(t *testing.T) {
 
 	err = client.Connect(ctx)
 	if err != nil {
-		t.Skipf("Skipping test: cannot connect to OVSDB: %v", err)
+		t.Fatal(missing("a connection to OVSDB", err))
 	}
 
 	t.Run("CreateProvisioningBridge", func(t *testing.T) {
@@ -148,7 +148,7 @@ func TestPortManagement(t *testing.T) {
 
 	err = client.Connect(ctx)
 	if err != nil {
-		t.Skipf("Skipping test: cannot connect to OVSDB: %v", err)
+		t.Fatal(missing("a connection to OVSDB", err))
 	}
 
 	// Setup test bridge
@@ -300,7 +300,7 @@ func TestPortStateManagement(t *testing.T) {
 
 	err = client.Connect(ctx)
 	if err != nil {
-		t.Skipf("Skipping test: cannot connect to OVSDB: %v", err)
+		t.Fatal(missing("a connection to OVSDB", err))
 	}
 
 	bridgeName := "br-state-test"
@@ -378,7 +378,7 @@ func TestVLANConfiguration(t *testing.T) {
 
 	err = client.Connect(ctx)
 	if err != nil {
-		t.Skipf("Skipping test: cannot connect to OVSDB: %v", err)
+		t.Fatal(missing("a connection to OVSDB", err))
 	}
 
 	bridgeName := "br-vlan-test"

@@ -52,6 +52,9 @@ var (
 	// ErrEmptyUsername indicates an empty username was provided.
 	ErrEmptyUsername = errors.New("barrier: empty username")
 
+	// ErrEmptyCSR indicates an empty certificate signing request was provided.
+	ErrEmptyCSR = errors.New("barrier: empty certificate signing request")
+
 	// ErrEmptyNonce indicates an empty nonce was provided.
 	ErrEmptyNonce = errors.New("barrier: empty nonce")
 

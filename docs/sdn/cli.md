@@ -1,9 +1,9 @@
 # SDN — CLI
 
-> **Status: NORMATIVE** · Scope: `platformctl sdn`, `platformctl switch` · Last verified: 2026-08-18
+> **Status: NORMATIVE** · Scope: `platformctl sdn`, `platformctl switch` · Last verified: 2026-10-15
 > Conflicts with this document are defects. Fix them here first.
 > Read out of `pkg/cli/commands/sdn/` and `pkg/cli/commands/switch/` on
-> 2026-08-18.
+> 2026-10-15.
 
 ---
 
@@ -14,22 +14,22 @@ platformctl sdn        Software-defined networking
 platformctl switch     Physical switch management
 ```
 
-`platformctl sdn` has ten subgroups. **Four of them belong to the edge gateway,
+`platformctl sdn` has nine subgroups. **Two of them belong to the edge gateway,
 not to SDN proper**, and are documented in [`docs/gateway/cli.md`](../gateway/cli.md):
 
 | Subgroup | Feature |
 |---|---|
 | `bridge`, `port`, `flow`, `vlan`, `policy`, `zone` | SDN — this document |
 | `overlay` | SDN — this document (§8) |
-| `gateway`, `lb`, `perf`, `ipam` | Edge gateway — [`docs/gateway/`](../gateway/) |
+| `gateway` (with `lb`, `nat64`, `perf` beneath it), `ipam` | Edge gateway — [`docs/gateway/`](../gateway/) |
 
 **There is no top-level `platformctl gateway` command.** The gateway CLI lives
 under `platformctl sdn gateway`. `pkg/cli/commands/root.go` registers `sdn`,
-`proxy` and `switch` as top-level groups; `gateway` is not among the 41.
+`proxy` and `switch` as top-level groups; `gateway` is not among the 48.
 
 ### Global flags
 
-`platformctl` persistent flags (`pkg/cli/commands/root.go:125`), precedence
+`platformctl` persistent flags (`pkg/cli/commands/root.go:133`), precedence
 **flag > environment > config file > default**:
 
 | Flag | Short | Default | Environment |
@@ -44,8 +44,9 @@ under `platformctl sdn gateway`. `pkg/cli/commands/root.go` registers `sdn`,
 | `--no-color` | | `false` | `NO_COLOR` |
 
 Every verb below needs a reachable daemon. `--transport embedded` runs the
-services in-process — except for `platformctl switch`, which has no embedded
-route ([api.md](api.md) §7).
+services in-process — except for `platformctl switch`, whose client
+(`sdk/go/services/switch`) speaks REST only; the embedded route exists for the
+SDK's `Client.Switch()` ([api.md](api.md) §7).
 
 ---
 
@@ -117,7 +118,16 @@ Every verb requires `--bridge <bridge-id>`.
 | `--mtu` | int | | MTU |
 | `--admin-state` | string | | `up` or `down` |
 
-**`set-state`** takes `--bridge` and `--admin-state`.
+**`set-state`**
+
+| Flag | Type | Required | Meaning |
+|---|---|---|---|
+| `--bridge` | string | **yes** | Bridge ID |
+| `--admin-state` | string | **yes** | `up` or `down` |
+| `--ingress-rate` | uint | | Ingress policing rate in bps, a whole multiple of 1000; `0` leaves policing unchanged |
+| `--ingress-burst` | uint | | Ingress policing burst in bits, a whole multiple of 1000; needs `--ingress-rate` |
+| `--egress-rate` | uint | | Egress shaping rate in bps; `0` leaves shaping unchanged |
+| `--egress-burst` | uint | | Egress shaping burst in bits; needs `--egress-rate` |
 
 **Administrative state is not authentication state.** `--admin-state up|down`
 controls whether the port is administratively enabled. The eight-value
@@ -217,10 +227,12 @@ platformctl sdn vlan list --bridge br-tenant-a
 | `--description` | string | | Free text |
 | `--enabled` | bool | | Enable immediately (default `false`) |
 
-**`--enabled` defaults to `false`.** An applied policy does nothing until it is
-enabled. That is deliberate — it lets you stage a policy set and turn it on
-together — but it also means "I applied it and nothing changed" is expected, not
-a bug.
+**`--enabled` defaults to `false`, and it is only recorded.** The daemon
+installs a policy's rules on the target bridges when it is applied, whatever
+`enabled` says. `policy apply` has no flag for rules, so a policy applied from
+the CLI installs no flows: it records the name, type, priority and bridge.
+Rules arrive through the API's `rules` field. The daemon keeps policies in
+memory; they do not survive a restart.
 
 **`list`**: `--type`, `--target`, `--limit`, `--cursor`.
 
@@ -290,24 +302,29 @@ VXLAN/EVPN overlay inspection and VNI management.
 | `overlay status` | Overlay controller status |
 | `overlay vtep list` / `get <node-id>` | VXLAN tunnel endpoints |
 | `overlay vni list` / `create` / `delete <vni>` | Virtual network identifiers |
-| `overlay tunnel list` | Active tunnels |
+| `overlay tunnel list` | Tunnels |
 | `overlay mac list` / `forget <mac>` | Remote MAC table |
 
-`overlay mac forget <mac>` drops a learned remote MAC so it is relearned. Reach
-for it when a workload moved hosts and traffic is still going to the old VTEP.
+On platformd the overlay controller holds the local VTEP and the VNIs only:
+nothing feeds it remote VTEPs, tunnels or learned MACs, so `tunnel list` and
+`mac list` print nothing and `mac forget` answers not found. The remote VTEPs
+and MACs EVPN delivers are the gateway's, read with
+`platformctl sdn gateway overlay vteps` and `platformctl sdn gateway snapshot`
+([overlay/operations.md](overlay/operations.md)).
 
 ---
 
 ## 9. `platformctl switch`
 
-Physical switch management — six verbs, deliberately narrow.
+Physical switch management — five verbs (`list-ports`, `port-status`,
+`set-vlan`, `enable-port`, `disable-port`), deliberately narrow.
 
 ```bash
 platformctl switch --help
 ```
 
 The surface is exactly the five `SwitchService` RPCs (list ports, get port
-status, set port VLAN, enable port, disable port) plus the group itself. Detail
+status, set port VLAN, enable port, disable port). Detail
 is in [`docs/switch/`](../switch/).
 
 ---
@@ -316,5 +333,6 @@ is in [`docs/switch/`](../switch/).
 
 `conventions/feature-docs.md` §4 requires every verb here to have a
 `CommandDefinition` in the integration parity suite. **No `CommandDefinition`
-type exists in this repository** (grepped 2026-08-18), so the requirement is
+type exists in this repository** (searched 2026-10-15), so the requirement is
+
 unmet repo-wide. Raised as an owner question in the migration report.

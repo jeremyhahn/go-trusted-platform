@@ -121,6 +121,7 @@ type recordingLUKSBackend struct {
 	inner      LUKSBackend
 	removeHit  int
 	changeHit  int
+	unlockHit  int
 	lastEnroll *LUKSEnrollTPMRequest
 }
 
@@ -151,6 +152,7 @@ func (r *recordingLUKSBackend) RemoveKey(ctx context.Context, req *LUKSRemoveKey
 	return r.inner.RemoveKey(ctx, req)
 }
 func (r *recordingLUKSBackend) TestUnlock(ctx context.Context, req *LUKSTestUnlockRequest) (bool, error) {
+	r.unlockHit++
 	return r.inner.TestUnlock(ctx, req)
 }
 func (r *recordingLUKSBackend) ChangePassphrase(ctx context.Context, req *LUKSChangePassphraseRequest) error {
@@ -310,16 +312,21 @@ func TestPhase35Provider_CeremonyDelegation(t *testing.T) {
 	p.SetPhase35Services(Phase35Services{Ceremony: NewCeremonyService(nil, cb)})
 	ctx := context.Background()
 
-	// Init: args pass through.
-	if _, err := p.CeremonyInit(ctx, map[string]interface{}{
+	// Init: args pass through and the admin bundle comes back.
+	initOut, err := p.CeremonyInit(ctx, map[string]interface{}{
 		"so_pin":                   "1234",
 		"user_pin":                 "5678",
 		"threshold":                "2-of-3",
 		"hostname":                 "cp01.lan",
 		"sans":                     []interface{}{"a.lan", "b.lan"},
 		"credential_seal_strategy": "tpm",
-	}); err != nil {
+	})
+	if err != nil {
 		t.Fatalf("CeremonyInit: %v", err)
+	}
+	initMap := initOut.(map[string]interface{})
+	if initMap["admin_cert_pem"] != "ADMIN-CERT" || initMap["admin_key_pem"] != "ADMIN-KEY" || initMap["spki_pin"] != "PIN" {
+		t.Errorf("CeremonyInit: admin bundle not returned: %+v", initMap)
 	}
 	if cb.lastInit == nil || cb.lastInit.SOPIN != "1234" || cb.lastInit.Threshold != "2-of-3" {
 		t.Errorf("CeremonyInit: bad request translation: %+v", cb.lastInit)
@@ -423,6 +430,9 @@ func TestPhase35Provider_PIVDelegation(t *testing.T) {
 	if _, err := p.PIVSlotInfo(ctx, "yk5", "9a"); err != nil {
 		t.Fatalf("PIVSlotInfo: %v", err)
 	}
+	if pb.lastSlotDev != "yk5" {
+		t.Errorf("SlotInfo: device not passed, got %q", pb.lastSlotDev)
+	}
 	if pb.lastSlotID != "9a" {
 		t.Errorf("SlotInfo: slot not passed, got %q", pb.lastSlotID)
 	}
@@ -504,7 +514,7 @@ func TestPhase35Provider_LUKSDelegation(t *testing.T) {
 		t.Fatalf("LUKSEnrollPassphrase: %v", err)
 	}
 	if _, err := p.LUKSEnrollFIDO2(ctx, map[string]interface{}{
-		"device": "/dev/x", "existing_passphrase": "a", "credential_id": "c", "require_pin": true,
+		"device": "/dev/x", "existing_passphrase": "a", "credential_id": "c", "require_uv": true,
 	}); err != nil {
 		t.Fatalf("LUKSEnrollFIDO2: %v", err)
 	}
@@ -527,14 +537,6 @@ func TestPhase35Provider_LUKSDelegation(t *testing.T) {
 	}
 	if lb.removeHit != 1 {
 		t.Errorf("RemoveKey: want 1 call, got %d", lb.removeHit)
-	}
-	res, err := p.LUKSTestUnlock(ctx, map[string]interface{}{"device": "/dev/x", "slot": float64(2)})
-	if err != nil {
-		t.Fatalf("LUKSTestUnlock: %v", err)
-	}
-	m := res.(map[string]interface{})
-	if m["unlocked"] != true {
-		t.Errorf("TestUnlock: want unlocked=true, got %v", m)
 	}
 	if _, err := p.LUKSChangePassphrase(ctx, map[string]interface{}{
 		"device": "/dev/x", "slot": float64(1), "old_passphrase": "a", "new_passphrase": "b",

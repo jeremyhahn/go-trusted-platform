@@ -42,11 +42,16 @@ var (
 
 type TokenClaims struct {
 	Services []uint64 `json:"svcs"`
-	UserID   uint64   `json:"uid"`
-	// UserIDStr mirrors UserID as a decimal string under the standard
-	// "user_id" claim so JS/TS consumers (and any other library that
-	// expects a string identifier) can read it without dealing with
-	// JSON-number precision loss on uint64.
+	// UID is the PLATFORM user-store key as a decimal string. User ids are
+	// xxhash64 values, almost all above 2^53, so a JSON number would reach
+	// every schemaless decoder (MapClaims, the console's JSON.parse) as a
+	// float64 naming a different user (#642). It is empty in a
+	// backbone-issued session (see IssueSession); read it with
+	// PlatformUserID.
+	UID string `json:"uid,omitempty"`
+	// UserIDStr is the session principal under the standard "user_id"
+	// claim: the platform user id in a platform-issued token, the
+	// backbone's subject in a backbone-issued session.
 	UserIDStr string `json:"user_id"`
 	// Email is exposed under the standard "email" claim so the frontend
 	// AuthContext can populate the user object after a successful login.
@@ -62,6 +67,21 @@ type TokenClaims struct {
 	// have been assigned yet.
 	Roles []string `json:"roles,omitempty"`
 	jwt.RegisteredClaims
+}
+
+// PlatformUserID returns the platform user-store key carried in the "uid"
+// claim. A token without one (a backbone-issued session) or with anything
+// but a decimal uint64 returns ErrInvalidUserClaim, so a route that
+// re-reads the platform user fails closed instead of resolving user 0.
+func (claims *TokenClaims) PlatformUserID() (uint64, error) {
+	if claims.UID == "" {
+		return 0, ErrInvalidUserClaim
+	}
+	id, err := strconv.ParseUint(claims.UID, 10, 64)
+	if err != nil {
+		return 0, ErrInvalidUserClaim
+	}
+	return id, nil
 }
 
 type ServiceParams struct {
@@ -119,7 +139,7 @@ func (service *Service) GenerateToken(user *entities.User) (string, error) {
 		}
 	}
 	token := jwt.NewWithClaims(service.signingMethod, TokenClaims{
-		UserID:        user.ID,
+		UID:           strconv.FormatUint(user.ID, 10),
 		UserIDStr:     strconv.FormatUint(user.ID, 10),
 		Email:         user.Email,
 		TenantID:      tenantID,
@@ -235,23 +255,38 @@ func (service *Service) Verify(token *jwt.Token) error {
 
 // VerifyToken parses and validates a token string. Returns true when the
 // token is valid (signature checks out and claims pass validation),
-// false otherwise. Satisfies the daemon's PlatformJWTVerifier interface
-// so gRPC/QUIC/MCP transports can accept platform-issued JWTs.
+// false otherwise.
 func (service *Service) VerifyToken(tokenString string) (bool, error) {
+	if _, err := service.VerifyTokenClaims(tokenString); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// VerifyTokenClaims parses and validates a token string exactly as
+// VerifyToken does and returns its verified claims, so a transport can
+// authorize the principal the token names (user, tenant, roles). Satisfies
+// the daemon's PlatformJWTVerifier interface so gRPC/QUIC/MCP transports can
+// accept platform-issued JWTs.
+func (service *Service) VerifyTokenClaims(tokenString string) (*TokenClaims, error) {
 	if service == nil {
-		return false, ErrInvalidToken
+		return nil, ErrInvalidToken
 	}
 	tokenString = strings.TrimPrefix(tokenString, "Bearer ")
 	tokenString = strings.TrimSpace(tokenString)
 	if tokenString == "" {
-		return false, ErrInvalidToken
+		return nil, ErrInvalidToken
 	}
 	token, err := service.ParseTokenString(tokenString)
 	if err != nil {
-		return false, err
+		return nil, err
 	}
 	if err := service.Verify(token); err != nil {
-		return false, err
+		return nil, err
 	}
-	return true, nil
+	claims, ok := token.Claims.(*TokenClaims)
+	if !ok {
+		return nil, ErrInvalidToken
+	}
+	return claims, nil
 }

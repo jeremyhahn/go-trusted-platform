@@ -81,6 +81,21 @@ remotely, so the signing key stays on the platform rather than being placed on
 the machine being provisioned. `pkg/provisioning/configdelivery/sign.go` and
 `pkg/installer/remote_sign_client.go` are the two ends.
 
+**The boot-time config fetch is a different route.**
+`GET /api/v1/devices/config?mac=…|serial=…` (`pkg/webservice/v1/rest/device`)
+carries no EAB, no nonce and no session. It returns the matching profile's
+config as YAML to any caller. That is safe only where the caller is a machine
+on the provisioning VLAN. So only a webservice with `surface: provisioning`
+mounts it, and startup refuses that listener unless its `bind-host` is inside
+the provisioning zone (#177; [`docs/web/engineering.md`](../web/engineering.md)
+§`surface`, [`docs/device/architecture.md`](../device/architecture.md) §4.2).
+
+### Planned
+
+| Item | Status | Requirement |
+|---|---|---|
+| EK-bound challenge on `GET /api/v1/devices/config` (#177 follow-up) | PLANNED | The provisioning listener releases a profile's config only to the machine whose EK that profile names. The caller answers a challenge that only the TPM holding that EK can answer. Until this lands, the provisioning VLAN is the only boundary: a host on that VLAN that knows or guesses a MAC or serial reads that profile's config. **Blocked on the SDK (measured 2026-10-15 against go-quicbaas `sdk/go` v0.12.0-alpha):** the server half exists — `TrustedPlatformModule.MakeCredentialWithExternalEK(ekCert, iakPub, secret)` in `sdk/go/xkms`, which needs an EK *certificate*, the device's IAK public area, and the server's own TPM. The device half does not: `TrustedPlatformModule.ActivateCredential` always activates against the device's persistent IAK. The device fetches this config from the installer environment (`autoinstall.sh` in `pkg/iso/customize.go`), before firstboot creates the IAK, and the installer deliberately leaves the TPM unprovisioned (`pkg/installer/installer.go`, `NewInstaller`). Two things are needed: an SDK activation entry that does not need a provisioned IAK, or a ruling that the installer provisions the TPM early. The SDK also has no check of an EK certificate against manufacturer roots. |
+
 ## 4. The installer
 
 `pkg/installer/` is a full OS installer, not a script wrapper:
@@ -142,17 +157,22 @@ reachable by unidentified machines and is rate-limited for that reason.
 | Unit | `pkg/provisioning/**/*_test.go`, `pkg/installer/*_test.go` | Session state, nonce handling, config generation, UKI rebuild |
 | Integration | `test/integration/provision/`, `test/integration/pxe/`, `test/integration/ipxe/`, `test/integration/iso/` | Real boot flows |
 
-**Two known holes in the integration suite** (measured 2026-08-18):
+**Known holes in the integration suite:**
 
-- `test/integration/pxe/grpc_adapter.go` contains **15 occurrences** of
-  *"TODO: Implement when proto definitions are available"* — the adapter is
-  hollow, so the PXE integration tests that use it exercise nothing.
+- `test/integration/pxe/` drives every transport through real clients: the
+  REST, CLI and Unix adapters, and the shared `SDKAdapter` (`sdk_adapter.go`)
+  pinned to gRPC, QUIC or MCP with `platform.WithOnlyProtocol`. But no
+  production code constructs a `pkg/compute/pxe.Service`, so platformd's
+  `PXEGRPCService` has no backend (`pkg/api/daemon/daemon.go:975-979`) and every
+  PXE call answers `SERVICE_NOT_CONFIGURED`. Against the shared integration
+  platformd the suite fails at adapter setup on every transport, so it is
+  kept out of `make integration-test`'s default set and runs by name with
+  `make integration-test-pxe`.
 - `test/integration/authenticode/multiprotocol_test.go:68-72` has **all five
-  protocol adapters commented out** — a multi-protocol conformance test that
-  exercises no protocol.
+  protocol adapters commented out**: a multi-protocol conformance test that
+  exercises the CLI alone.
 
-Both are recorded here rather than left to be rediscovered. A green run of
-either suite currently means less than it appears to.
+Both are recorded here rather than left to be rediscovered.
 
 **Known repo-wide gap:** no `CommandDefinition` type exists in this repository
 (grepped 2026-08-18), so the CLI parity requirement in

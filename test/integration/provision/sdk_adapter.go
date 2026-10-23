@@ -157,18 +157,16 @@ func NewQUICAdapter() *SDKAdapter {
 }
 
 // NewMCPAdapter returns an adapter pinned to the MCP transport. The MCP
-// server serves plain HTTP on its dedicated port, so no TLS config is set.
+// server serves TLS 1.3 only (#844), so it shares the mTLS option set.
 func NewMCPAdapter() *SDKAdapter {
 	endpoint := mcpEndpoint()
 	return &SDKAdapter{
 		name:     "MCP",
 		endpoint: endpoint,
-		options: func() ([]platform.Option, error) {
-			return []platform.Option{
-				platform.WithOnlyProtocol(platform.ProtocolMCP),
-				platform.WithMCPAddr(endpoint),
-			}, nil
-		},
+		options: mtlsOptions("MCP",
+			platform.WithOnlyProtocol(platform.ProtocolMCP),
+			platform.WithMCPAddr(endpoint),
+		),
 	}
 }
 

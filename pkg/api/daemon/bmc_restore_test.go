@@ -16,6 +16,7 @@ package daemon
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -30,14 +31,31 @@ import (
 
 // fakeBMCRestorer records calls and returns configured responses.
 type fakeBMCRestorer struct {
+	// mu guards restoreCalls; see fakeBMCService.mu.
+	mu sync.Mutex
+	restoreCalls
+
 	restoreResult *app.BMCRestoreResult
 	restoreErr    error
 	tlsProvider   bmc.TLSProvider
-	lastDeviceID  uint64
-	lastBMCCfg    *bmc.Config
+}
+
+// restoreCalls is what fakeBMCRestorer records of the restore it serves.
+type restoreCalls struct {
+	lastDeviceID uint64
+	lastBMCCfg   *bmc.Config
+}
+
+// calls returns a copy of the recorded restore, taken under the lock.
+func (f *fakeBMCRestorer) calls() restoreCalls {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.restoreCalls
 }
 
 func (f *fakeBMCRestorer) RestoreBMC(_ context.Context, deviceID uint64, bmcCfg *bmc.Config) (*app.BMCRestoreResult, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.lastDeviceID = deviceID
 	f.lastBMCCfg = bmcCfg
 	return f.restoreResult, f.restoreErr

@@ -27,8 +27,9 @@ import (
 
 	"github.com/jeremyhahn/go-codec"
 	"github.com/jeremyhahn/go-codec/pkg/factory"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
+	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers/surface"
 	quicgo "github.com/quic-go/quic-go"
 )
 
@@ -196,6 +197,11 @@ type quicCAIssueReq struct {
 	ExtKeyUsage  []string       `codec:"ext_key_usage"`
 	IsCA         bool           `codec:"is_ca"`
 	MaxPathLen   int32          `codec:"max_path_len"`
+}
+
+type quicCASignCSRReq struct {
+	CsrPem    string `codec:"csr_pem"`
+	ValidDays int32  `codec:"valid_days"`
 }
 
 type quicCAIssueResp struct {
@@ -380,14 +386,6 @@ func (q *QUICAdapter) Teardown() error {
 
 // sendRequest sends a QUIC request and returns the response.
 func (q *QUICAdapter) sendRequest(ctx context.Context, opcode byte, payload interface{}) (*quicCAResponse, error) {
-	q.mu.RLock()
-	if q.closed {
-		q.mu.RUnlock()
-		return nil, ErrQUICCAClientClosed{}
-	}
-	conn := q.conn
-	q.mu.RUnlock()
-
 	var payloadBytes []byte
 	if payload != nil {
 		var err error
@@ -396,6 +394,19 @@ func (q *QUICAdapter) sendRequest(ctx context.Context, opcode byte, payload inte
 			return nil, ErrQUICCAEncodeFailed{Operation: caOpcodeToString(opcode), Err: err}
 		}
 	}
+	return q.sendRaw(ctx, opcode, payloadBytes)
+}
+
+// sendRaw sends an already-encoded payload, which category opcodes need for
+// their sub-opcode prefix, and returns the response.
+func (q *QUICAdapter) sendRaw(ctx context.Context, opcode byte, payloadBytes []byte) (*quicCAResponse, error) {
+	q.mu.RLock()
+	if q.closed {
+		q.mu.RUnlock()
+		return nil, ErrQUICCAClientClosed{}
+	}
+	conn := q.conn
+	q.mu.RUnlock()
 
 	stream, err := conn.OpenStreamSync(ctx)
 	if err != nil {
@@ -550,15 +561,15 @@ func decodeCAPayload(data []byte, entity interface{}) error {
 // caOpcodeToString returns a human-readable name for a CA opcode.
 func caOpcodeToString(opcode byte) string {
 	opcodeNames := map[byte]string{
-		quic.OpCAInfo:   "CAInfo",
-		quic.OpCAIssue:  "CAIssue",
-		quic.OpCARevoke: "CARevoke",
-		quic.OpCARenew:  "CARenew",
-		quic.OpCAGet:    "CAGet",
-		quic.OpCAList:   "CAList",
-		quic.OpCAVerify: "CAVerify",
-		quic.OpCACRL:    "CACRL",
-		quic.OpCABundle: "CABundle",
+		quicwire.OpCAInfo:   "CAInfo",
+		quicwire.OpCAIssue:  "CAIssue",
+		quicwire.OpCARevoke: "CARevoke",
+		quicwire.OpCARenew:  "CARenew",
+		quicwire.OpCAGet:    "CAGet",
+		quicwire.OpCAList:   "CAList",
+		quicwire.OpCAVerify: "CAVerify",
+		quicwire.OpCACRL:    "CACRL",
+		quicwire.OpCABundle: "CABundle",
 	}
 	if name, ok := opcodeNames[opcode]; ok {
 		return name
@@ -572,7 +583,7 @@ func caOpcodeToString(opcode byte) string {
 
 // Info retrieves CA information via QUIC.
 func (q *QUICAdapter) Info(ctx context.Context) (*InfoResult, error) {
-	resp, err := q.sendRequest(ctx, quic.OpCAInfo, nil)
+	resp, err := q.sendRequest(ctx, quicwire.OpCAInfo, nil)
 	if err != nil {
 		return nil, ErrCallFailed{Protocol: "QUIC", Method: "CAInfo", Err: err}
 	}
@@ -610,7 +621,7 @@ func (q *QUICAdapter) Info(ctx context.Context) (*InfoResult, error) {
 // Init initializes the CA via QUIC.
 // Note: CA initialization is done during daemon startup, not via QUIC.
 func (q *QUICAdapter) Init(ctx context.Context, opts InitOptions) (*InitResult, error) {
-	return nil, ErrNotImplemented{Feature: "CA init via QUIC"}
+	return nil, surface.ErrNoSurface{Transport: "QUIC", Operation: "CA init"}
 }
 
 // =============================================================================
@@ -640,14 +651,33 @@ func (q *QUICAdapter) IssueCertificate(ctx context.Context, opts IssueCertificat
 		}
 	}
 
-	resp, err := q.sendRequest(ctx, quic.OpCAIssue, req)
+	resp, err := q.sendRequest(ctx, quicwire.OpCAIssue, req)
 	if err != nil {
 		return nil, ErrCallFailed{Protocol: "QUIC", Method: "CAIssue", Err: err}
 	}
+	return quicIssueResult(resp, "CAIssue")
+}
 
+// SignCSR certifies a KMS key for code signing via QUIC: sub-opcode
+// KMSSubSignCSR under the KMS extended category.
+func (q *QUICAdapter) SignCSR(ctx context.Context, opts SignCSROptions) (*IssueCertificateResult, error) {
+	body, err := encodeCAPayload(&quicCASignCSRReq{CsrPem: opts.CSRPEM, ValidDays: opts.ValidDays})
+	if err != nil {
+		return nil, ErrQUICCAEncodeFailed{Operation: "CASignCSR", Err: err}
+	}
+
+	resp, err := q.sendRaw(ctx, quicwire.OpKMSExtendedCategory, append([]byte{quicwire.KMSSubSignCSR}, body...))
+	if err != nil {
+		return nil, ErrCallFailed{Protocol: "QUIC", Method: "CASignCSR", Err: err}
+	}
+	return quicIssueResult(resp, "CASignCSR")
+}
+
+// quicIssueResult decodes the response both issue and sign-CSR return.
+func quicIssueResult(resp *quicCAResponse, operation string) (*IssueCertificateResult, error) {
 	var issueResp quicCAIssueResp
 	if err := decodeCAPayload(resp.Payload, &issueResp); err != nil {
-		return nil, ErrQUICCADecodeFailed{Operation: "CAIssue", Err: err}
+		return nil, ErrQUICCADecodeFailed{Operation: operation, Err: err}
 	}
 
 	result := &IssueCertificateResult{
@@ -681,7 +711,7 @@ func (q *QUICAdapter) GetCertificate(ctx context.Context, opts GetCertificateOpt
 		IncludePem: opts.IncludePEM,
 	}
 
-	resp, err := q.sendRequest(ctx, quic.OpCAGet, req)
+	resp, err := q.sendRequest(ctx, quicwire.OpCAGet, req)
 	if err != nil {
 		return nil, ErrCallFailed{Protocol: "QUIC", Method: "CAGet", Err: err}
 	}
@@ -709,7 +739,7 @@ func (q *QUICAdapter) ListCertificates(ctx context.Context, opts ListCertificate
 		Limit: opts.Limit,
 	}
 
-	resp, err := q.sendRequest(ctx, quic.OpCAList, req)
+	resp, err := q.sendRequest(ctx, quicwire.OpCAList, req)
 	if err != nil {
 		return nil, ErrCallFailed{Protocol: "QUIC", Method: "CAList", Err: err}
 	}
@@ -744,7 +774,7 @@ func (q *QUICAdapter) VerifyCertificate(ctx context.Context, opts VerifyCertific
 		CheckRevoked:   opts.CheckCRL,
 	}
 
-	resp, err := q.sendRequest(ctx, quic.OpCAVerify, req)
+	resp, err := q.sendRequest(ctx, quicwire.OpCAVerify, req)
 	if err != nil {
 		return nil, ErrCallFailed{Protocol: "QUIC", Method: "CAVerify", Err: err}
 	}
@@ -785,7 +815,7 @@ func (q *QUICAdapter) RevokeCertificate(ctx context.Context, opts RevokeCertific
 		DeleteKeys: opts.DeleteKeys,
 	}
 
-	resp, err := q.sendRequest(ctx, quic.OpCARevoke, req)
+	resp, err := q.sendRequest(ctx, quicwire.OpCARevoke, req)
 	if err != nil {
 		return nil, ErrCallFailed{Protocol: "QUIC", Method: "CARevoke", Err: err}
 	}
@@ -816,7 +846,7 @@ func (q *QUICAdapter) RenewCertificate(ctx context.Context, opts RenewCertificat
 		PreserveAttrs: opts.PreserveSANs,
 	}
 
-	resp, err := q.sendRequest(ctx, quic.OpCARenew, req)
+	resp, err := q.sendRequest(ctx, quicwire.OpCARenew, req)
 	if err != nil {
 		return nil, ErrCallFailed{Protocol: "QUIC", Method: "CARenew", Err: err}
 	}
@@ -843,7 +873,7 @@ func (q *QUICAdapter) RenewCertificate(ctx context.Context, opts RenewCertificat
 
 // GetCRL retrieves the CRL via QUIC.
 func (q *QUICAdapter) GetCRL(ctx context.Context, opts GetCRLOptions) (*GetCRLResult, error) {
-	resp, err := q.sendRequest(ctx, quic.OpCACRL, nil)
+	resp, err := q.sendRequest(ctx, quicwire.OpCACRL, nil)
 	if err != nil {
 		return nil, ErrCallFailed{Protocol: "QUIC", Method: "CACRL", Err: err}
 	}
@@ -870,12 +900,16 @@ func (q *QUICAdapter) GetCRL(ctx context.Context, opts GetCRLOptions) (*GetCRLRe
 		}
 	}
 
+	if err := result.setIssuerFromData("QUIC"); err != nil {
+		return nil, err
+	}
+
 	return result, nil
 }
 
 // GenerateCRL generates a new CRL via QUIC.
 func (q *QUICAdapter) GenerateCRL(ctx context.Context) (*GenerateCRLResult, error) {
-	resp, err := q.sendRequest(ctx, quic.OpCACRL, nil)
+	resp, err := q.sendRequest(ctx, quicwire.OpCACRL, nil)
 	if err != nil {
 		return nil, ErrCallFailed{Protocol: "QUIC", Method: "GenerateCRL", Err: err}
 	}
@@ -897,7 +931,7 @@ func (q *QUICAdapter) GenerateCRL(ctx context.Context) (*GenerateCRLResult, erro
 // ExportCRL exports the CRL via QUIC.
 // Note: CRL export to file is a CLI operation, not exposed via QUIC.
 func (q *QUICAdapter) ExportCRL(ctx context.Context, output string) (*ExportCRLResult, error) {
-	return nil, ErrNotImplemented{Feature: "CRL export via QUIC"}
+	return nil, surface.ErrNoSurface{Transport: "QUIC", Operation: "CRL export"}
 }
 
 // =============================================================================
@@ -908,7 +942,7 @@ func (q *QUICAdapter) ExportCRL(ctx context.Context, output string) (*ExportCRLR
 func (q *QUICAdapter) ExportBundle(ctx context.Context, output string) (*ExportBundleResult, error) {
 	req := &quicCABundleReq{}
 
-	resp, err := q.sendRequest(ctx, quic.OpCABundle, req)
+	resp, err := q.sendRequest(ctx, quicwire.OpCABundle, req)
 	if err != nil {
 		return nil, ErrCallFailed{Protocol: "QUIC", Method: "CABundle", Err: err}
 	}
@@ -941,13 +975,13 @@ func (q *QUICAdapter) ExportBundle(ctx context.Context, output string) (*ExportB
 // InstallCACertificates installs CA certificates via QUIC.
 // Note: CA certificate installation is a local OS operation, not exposed via QUIC.
 func (q *QUICAdapter) InstallCACertificates(ctx context.Context) (*InstallCACertificatesResult, error) {
-	return nil, ErrNotImplemented{Feature: "install CA certificates via QUIC"}
+	return nil, surface.ErrNoSurface{Transport: "QUIC", Operation: "install CA certificates"}
 }
 
 // UninstallCACertificates uninstalls CA certificates via QUIC.
 // Note: CA certificate uninstallation is a local OS operation, not exposed via QUIC.
 func (q *QUICAdapter) UninstallCACertificates(ctx context.Context) (*UninstallCACertificatesResult, error) {
-	return nil, ErrNotImplemented{Feature: "uninstall CA certificates via QUIC"}
+	return nil, surface.ErrNoSurface{Transport: "QUIC", Operation: "uninstall CA certificates"}
 }
 
 // =============================================================================

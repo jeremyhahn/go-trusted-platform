@@ -14,6 +14,9 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WORKSPACE_DIR="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 
+# The tags come from the Makefile, never a hand-written list.
+BUILD_TAGS="${BUILD_TAGS:-integration $(make -s -C "$WORKSPACE_DIR" print-build-tags)}"
+
 # Colors for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -142,8 +145,8 @@ run_tests() {
     cd "$WORKSPACE_DIR"
 
     log_info "Running network authentication integration tests..."
-    INTEGRATION_TEST=1 go test -v -timeout 10m \
-        -tags integration \
+    go test -v -timeout 10m \
+        -tags "$BUILD_TAGS" \
         ./test/integration/network/... \
         -count=1
 

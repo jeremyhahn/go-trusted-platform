@@ -20,13 +20,16 @@ import (
 	"encoding/hex"
 	"encoding/pem"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/client/objectstorage"
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	quicbaasca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/ca"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/ca/issuance"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/util/peercred"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -40,6 +43,16 @@ type ErrNilCAService struct{}
 
 func (e ErrNilCAService) Error() string {
 	return "ca service is nil"
+}
+
+// ErrSignCSRNotRoot is a SignCSR call over the Unix socket from a user
+// other than root.
+type ErrSignCSRNotRoot struct {
+	UID uint32
+}
+
+func (e ErrSignCSRNotRoot) Error() string {
+	return "signing a CSR over the Unix socket requires root, but the caller is uid " + strconv.FormatUint(uint64(e.UID), 10)
 }
 
 // ErrMissingSerial is returned when a serial number is required but not provided.
@@ -115,9 +128,18 @@ type CAGRPCService struct {
 	logger     *logging.Logger
 	ca         quicbaasca.CACertificateAuthority
 	objStorage objectstorage.Client
+	// kms holds the keys SignCSR certifies; without it SignCSR fails closed.
+	kms issuance.KMS
+}
+
+// WithKMS sets the KMS whose keys SignCSR certifies, and returns s.
+func (s *CAGRPCService) WithKMS(kms issuance.KMS) *CAGRPCService {
+	s.kms = kms
+	return s
 }
 
 // NewCAGRPCService creates a new CAGRPCService instance.
+// Kept with no caller: docs/ca names this file as the CAService surface the daemon's InitCA/Install/Uninstall stubs still shadow.
 func NewCAGRPCService(
 	logger *logging.Logger,
 	ca quicbaasca.CACertificateAuthority,
@@ -227,9 +249,9 @@ func (s *CAGRPCService) IssueCertificate(
 	}
 
 	// Set key attributes
-	storeType := xkmssdk.ParseStoreType(certReq.GetStoreType())
-	if storeType == xkmssdk.StoreUnknown {
-		storeType = xkmssdk.StoreSoftware
+	storeType, err := issuance.StoreType(certReq.GetStoreType())
+	if err != nil {
+		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
 
 	caReq.KeyAttributes = &xkmssdk.KeyAttributes{
@@ -252,6 +274,57 @@ func (s *CAGRPCService) IssueCertificate(
 		Certificate: s.certToProto(cert, true, false),
 		Timestamp:   timestamppb.Now(),
 	}, nil
+}
+
+// SignCSR certifies a KMS key for code signing from a CSR the KMS signed.
+// The method is authorized by its own scope, ca:sign-csr, which ca:write
+// does not grant; issuance.SignCSR decides which CSRs are certified.
+func (s *CAGRPCService) SignCSR(ctx context.Context, req *platformv1.SignCSRRequest) (*platformv1.IssueCertificateResponse, error) {
+	if err := AuthorizeSignCSR(ctx); err != nil {
+		return nil, err
+	}
+	if s.ca == nil {
+		return nil, status.Error(codes.FailedPrecondition, ErrNilCAService{}.Error())
+	}
+	cert, err := issuance.SignCSR(ctx, s.ca, s.kms, &issuance.CSR{
+		PEM:       []byte(req.GetCsrPem()),
+		ValidDays: int(req.GetValidDays()),
+	})
+	if err != nil {
+		if issuance.IsInvalidRequest(err) {
+			return nil, status.Error(codes.InvalidArgument, err.Error())
+		}
+		s.logger.Error(err, "failed to sign CSR")
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+
+	return &platformv1.IssueCertificateResponse{
+		Status:      caSuccessStatusGRPC("certificate issued successfully"),
+		Certificate: s.certToProto(cert, true, false),
+		Timestamp:   timestamppb.Now(),
+	}, nil
+}
+
+// AuthorizeSignCSR admits a SignCSR call from the platform admin only: a
+// platform token granting ca:sign-csr, or root on the daemon's Unix socket,
+// whose peer credentials the kernel vouches for. A caller authenticated any
+// other way (an mTLS certificate, a legacy token validator) carries no
+// scopes and is refused, so certifying a code-signing key never rides on
+// authentication alone. Every gRPC CA service calls it.
+func AuthorizeSignCSR(ctx context.Context) error {
+	if authCtx, ok := AuthorizedContextFromContext(ctx); ok {
+		if err := issuance.AuthorizeSignCSR(authCtx); err != nil {
+			return status.Error(codes.PermissionDenied, err.Error())
+		}
+		return nil
+	}
+	if creds, ok := peercred.UnixCredentialsFromContext(ctx); ok {
+		if !creds.IsRoot() {
+			return status.Error(codes.PermissionDenied, ErrSignCSRNotRoot{UID: creds.UID}.Error())
+		}
+		return nil
+	}
+	return status.Error(codes.PermissionDenied, issuance.AuthorizeSignCSR(nil).Error())
 }
 
 // GetCertificate retrieves a certificate by serial number or common name.

@@ -55,9 +55,11 @@ func newSeededTemplateMux(t *testing.T) *mux.Router {
 
 	writer := response.NewResponseWriter(logger, nil)
 	m := mux.NewRouter()
-	NewDeviceRouter(&MockMTLSMiddleware{}, nil,
+	deviceRouter, err := NewDeviceRouter(&MockMTLSMiddleware{}, nil,
 		wsdevice.NewCRUDHandler(logger, writer, nil, profiles),
-		wsdevice.NewTemplateHandler(logger, writer, templates, profiles, nil), nil, nil).RegisterRoutes(m)
+		wsdevice.NewTemplateHandler(logger, writer, templates, profiles, nil), nil, nil)
+	require.NoError(t, err)
+	deviceRouter.RegisterRoutes(m)
 	restdevice.NewDeviceRouter(logger, writer, templates, profiles).RegisterRoutes(m)
 	return m
 }
@@ -116,7 +118,7 @@ func TestDeviceRouter_SeededTemplatesListWithNameAndRole(t *testing.T) {
 	}
 
 	rec := httptest.NewRecorder()
-	m.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/devices/templates", nil))
+	m.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/device/templates", nil))
 	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
 
 	var list struct {
@@ -155,7 +157,7 @@ func TestDeviceRouter_SeededTemplateUnknownRoleRejected(t *testing.T) {
 	assert.Equal(t, http.StatusBadRequest, rec.Code, rec.Body.String())
 
 	rec = httptest.NewRecorder()
-	m.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/devices/templates", nil))
+	m.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/device/templates", nil))
 	require.Equal(t, http.StatusOK, rec.Code)
 	assert.Contains(t, rec.Body.String(), `"templates":[]`)
 }

@@ -13,7 +13,7 @@ services:
   # Cluster Node 1 - Bootstrap node (initial leader)
   # ============================================================================
   cluster-node-1:
-    image: go-trusted-platform-dev:latest
+    image: ${DEVCONTAINER_IMAGE:-trusted-platform-dev:latest}
     container_name: cluster-node-1
     hostname: cluster-node-1
 
@@ -58,9 +58,6 @@ services:
       GOMODCACHE: /go/pkg/mod
       CGO_ENABLED: "1"
 
-      # Integration test flags
-      INTEGRATION_TEST: "1"
-
     networks:
       cluster-net:
         ipv4_address: 172.30.0.11
@@ -92,7 +89,7 @@ services:
   # Cluster Node 2 - Follower node
   # ============================================================================
   cluster-node-2:
-    image: go-trusted-platform-dev:latest
+    image: ${DEVCONTAINER_IMAGE:-trusted-platform-dev:latest}
     container_name: cluster-node-2
     hostname: cluster-node-2
 
@@ -132,7 +129,6 @@ services:
       GOCACHE: /root/.cache/go-build
       GOMODCACHE: /go/pkg/mod
       CGO_ENABLED: "1"
-      INTEGRATION_TEST: "1"
 
     networks:
       cluster-net:
@@ -170,7 +166,7 @@ services:
   # Cluster Node 3 - Follower node
   # ============================================================================
   cluster-node-3:
-    image: go-trusted-platform-dev:latest
+    image: ${DEVCONTAINER_IMAGE:-trusted-platform-dev:latest}
     container_name: cluster-node-3
     hostname: cluster-node-3
 
@@ -210,7 +206,6 @@ services:
       GOCACHE: /root/.cache/go-build
       GOMODCACHE: /go/pkg/mod
       CGO_ENABLED: "1"
-      INTEGRATION_TEST: "1"
 
     networks:
       cluster-net:
@@ -251,7 +246,7 @@ services:
   # Test Runner - Executes integration tests against the cluster
   # ============================================================================
   test-runner:
-    image: go-trusted-platform-dev:latest
+    image: ${DEVCONTAINER_IMAGE:-trusted-platform-dev:latest}
     container_name: cluster-test-runner
     hostname: cluster-test-runner
 
@@ -291,7 +286,8 @@ services:
       GOCACHE: /root/.cache/go-build
       GOMODCACHE: /go/pkg/mod
       CGO_ENABLED: "1"
-      INTEGRATION_TEST: "1"
+      # Optional override; unset, the command derives the tags from make.
+      BUILD_TAGS: ${BUILD_TAGS:-}
 
     networks:
       cluster-net:
@@ -338,11 +334,11 @@ services:
 
         # Run the cluster integration tests
         go test -v -timeout $${TEST_TIMEOUT:-10m} \
-          -tags=integration \
+          -tags \"$${BUILD_TAGS:-integration $$(make -s -C /workspace print-build-tags)}\" \
           ./test/integration/cluster/... \
           2>&1 | tee /workspace/test/integration/cluster/results/test-output.log;
 
-        EXIT_CODE=$$?;
+        EXIT_CODE=$${PIPESTATUS[0]};
         echo '';
         echo \"Tests completed with exit code: $$EXIT_CODE\";
         exit $$EXIT_CODE;

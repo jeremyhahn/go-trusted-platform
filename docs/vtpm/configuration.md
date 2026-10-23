@@ -1,5 +1,8 @@
 # vTPM Configuration
 
+> **Status: REFERENCE** · Last verified: 2026-10-13
+> The `vtpm:` section of the platformd config (`pkg/vtpm/config.go`, `App.VTPMConfig` in `pkg/app/app.go:488`).
+
 ## Configuration File
 
 Add the `vtpm` section to your platform configuration file:
@@ -45,9 +48,12 @@ Directory structure:
 | `ovmf-vars` | string | `/usr/share/OVMF/OVMF_VARS_4M.fd` | NVRAM template |
 
 **Notes:**
-- `ovmf-code` is used when Secure Boot is disabled
-- `ovmf-code-secure` is used when Secure Boot is enabled
-- `ovmf-vars` is copied for each bundle's NVRAM
+- The vTPM service reads only `ovmf-vars`: it is copied into each bundle's
+  NVRAM, and Secure Boot keys are enrolled into that copy
+  (`pkg/vtpm/service.go:235`, `:476`).
+- `ovmf-code` and `ovmf-code-secure` are not read by the vTPM service. The
+  firmware a VM boots comes from the compute service's own OVMF settings
+  (`pkg/compute/config.go:306`).
 
 ### PCR Banks
 
@@ -75,12 +81,14 @@ Supported values:
 - Minimum: 2048 bits
 - Recommended: 2048 or 4096 bits
 
-**Using Existing Keys:**
+**Key location:**
 
-If `secure-boot-keys-dir` is specified, the service uses existing keys instead of generating new ones:
+`secure-boot-keys-dir` is only checked for existence by `Validate`; the service
+reads no keys from it. Every bundle gets freshly generated keys in its own
+`secure-boot-keys/` directory (`pkg/vtpm/service.go:184`):
 
 ```
-{secure-boot-keys-dir}/
+{base-dir}/bundles/{id}/secure-boot-keys/
 ├── PK.key
 ├── PK.crt
 ├── KEK.key
@@ -107,16 +115,8 @@ Values:
 
 ## Environment Variables
 
-Configuration can be overridden with environment variables:
-
-| Variable | Configuration Option |
-|----------|---------------------|
-| `VTPM_BASE_DIR` | `base-dir` |
-| `VTPM_OVMF_CODE` | `ovmf-code` |
-| `VTPM_OVMF_CODE_SECURE` | `ovmf-code-secure` |
-| `VTPM_OVMF_VARS` | `ovmf-vars` |
-| `VTPM_EK_ALGORITHM` | `ek-algorithm` |
-| `VTPM_DEBUG` | `debug` |
+No environment variable overrides these keys; nothing reads a `VTPM_*`
+variable for them.
 
 ## Example Configurations
 
@@ -153,6 +153,9 @@ vtpm:
 ```
 
 ### Shared Secure Boot Keys
+
+This loads, but shares nothing: `secure-boot-keys-dir` is validated and never
+read, so each bundle still gets its own keys (see Key location above).
 
 ```yaml
 vtpm:
@@ -213,12 +216,11 @@ The configuration is validated before service initialization:
 | Field | Requirement |
 |-------|-------------|
 | `BaseDir` | Cannot be empty |
-| `OVMFCode` | Cannot be empty, file must exist |
-| `OVMFVars` | Cannot be empty, file must exist |
-| `OVMFCodeSecure` | If specified, file must exist |
+| `OVMFCode` | Cannot be empty (the file is not checked) |
+| `OVMFVars` | Cannot be empty (the file is not checked) |
 | `PCRBanks` | At least one valid bank required |
 | `SecureBootKeySize` | Must be at least 2048 |
-| `EKAlgorithm` | Must be "RSA" or "ECC" |
+| `EKAlgorithm` | Must be "RSA" or "ECC"; a request may use any case, anything else is `ErrInvalidEKAlgorithm` |
 | `SecureBootKeysDir` | If specified, directory must exist |
 
 ## Dependencies

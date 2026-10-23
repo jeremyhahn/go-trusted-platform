@@ -16,12 +16,12 @@ package attestation
 
 import (
 	"context"
-	"strings"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/quotebind"
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/services/common"
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/transport"
 )
@@ -98,19 +98,34 @@ func (c *Client) DeleteManifest(ctx context.Context, id string) error {
 	return nil
 }
 
-// GetAttestationQuote generates a TPM quote for the specified PCRs.
-func (c *Client) GetAttestationQuote(ctx context.Context, config *platformv1.AttestationQuoteConfig, nonce []byte) (*platformv1.AttestationQuote, error) {
+// GetAttestationQuote asks the node for a quote over nonce bound to the
+// connection the call travels on (#482). The node quotes
+// SHA-256(nonce || channel_binding), channel_binding being the TLS exporter
+// of that connection (label EXPORTER-attested-peer), and echoes the
+// binding. The response is returned only if the echo and the signed quote
+// both match the binding this end derives, so a quote relayed from another
+// connection is refused with *quotebind.ErrQuoteNotBound. Pass the
+// response's channel_binding with the nonce to VerifyAttestationQuote.
+// Transports with no TLS 1.3 connection (Unix socket, MCP, embedded)
+// refuse the call.
+func (c *Client) GetAttestationQuote(ctx context.Context, config *platformv1.AttestationQuoteConfig, nonce []byte) (*platformv1.GetAttestationQuoteResponse, error) {
+	var capture quotebind.Capture
 	resp, err := c.grpc.GetAttestationQuote(ctx, &platformv1.GetAttestationQuoteRequest{
 		Config: config,
 		Nonce:  nonce,
-	})
+	}, capture.Option())
 	if err != nil {
 		return nil, &ErrGetQuoteFailed{Cause: err}
 	}
-	return resp.Quote, nil
+	if err := capture.CheckEcho(nonce, resp.GetChannelBinding(), resp.GetQuote().GetQuoteData()); err != nil {
+		return nil, &ErrGetQuoteFailed{Cause: err}
+	}
+	return resp, nil
 }
 
 // VerifyAttestationQuote verifies a TPM quote against expected values.
+// For a quote GetAttestationQuote returned, set channel_binding to the
+// binding it echoed: the daemon then expects SHA-256(nonce || binding).
 func (c *Client) VerifyAttestationQuote(ctx context.Context, req *platformv1.VerifyAttestationQuoteRequest) (*platformv1.VerifyAttestationQuoteResponse, error) {
 	resp, err := c.grpc.VerifyAttestationQuote(ctx, req)
 	if err != nil {
@@ -119,13 +134,20 @@ func (c *Client) VerifyAttestationQuote(ctx context.Context, req *platformv1.Ver
 	return resp, nil
 }
 
-// CollectHostAttestation collects attestation data from the host TPM.
+// CollectHostAttestation collects attestation data from the host TPM,
+// bound to the connection the call travels on exactly as
+// GetAttestationQuote is: the attestation is returned only if its signed
+// quote carries SHA-256(nonce || binding) for this end's binding.
 func (c *Client) CollectHostAttestation(ctx context.Context, config *platformv1.AttestationQuoteConfig, nonce []byte) (*platformv1.HostAttestation, error) {
+	var capture quotebind.Capture
 	resp, err := c.grpc.CollectHostAttestation(ctx, &platformv1.CollectHostAttestationRequest{
 		Config: config,
 		Nonce:  nonce,
-	})
+	}, capture.Option())
 	if err != nil {
+		return nil, &ErrCollectHostAttestationFailed{Cause: err}
+	}
+	if err := capture.Check(nonce, resp.GetAttestation().GetQuoteData()); err != nil {
 		return nil, &ErrCollectHostAttestationFailed{Cause: err}
 	}
 	return resp.Attestation, nil
@@ -227,22 +249,9 @@ func (c *Client) StreamDeviceVerdicts(ctx context.Context) (DeviceVerdictStream,
 	return stream, nil
 }
 
-// neverCollectedMarker is the text every transport's server puts in its
-// never-collected error (pkg/api/daemon GetDeviceReport, the webservice
-// ErrNoReport and the MCP ErrNoDeviceReport share it).
-const neverCollectedMarker = "no report has been collected for device"
-
-// isNeverCollected recognises the never-collected state on every transport.
-// gRPC, Unix and REST answer NotFound. The MCP server collapses every tool
-// error to InternalError, so over MCP the server's message is the only
-// signal left, and it is matched on the shared marker text.
+// isNeverCollected recognises the never-collected state, which every
+// transport answers as NotFound (MCP since #505 decodes its NotFound code to
+// the same status).
 func isNeverCollected(err error) bool {
-	st, ok := status.FromError(err)
-	if !ok {
-		return false
-	}
-	if st.Code() == codes.NotFound {
-		return true
-	}
-	return strings.Contains(st.Message(), neverCollectedMarker)
+	return status.Code(err) == codes.NotFound
 }

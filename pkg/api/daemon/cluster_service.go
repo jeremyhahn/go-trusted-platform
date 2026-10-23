@@ -54,6 +54,7 @@ type ClusterService struct {
 // NewClusterService creates a new cluster service that wraps the cluster.Coordinator.
 // Returns an error if the app doesn't have QuicBaaS configured or cluster coordination
 // is not available.
+// Kept with no caller: the cluster registration lane wires it to clear the ClusterService stubs (docs/cluster/engineering.md).
 func NewClusterService(application *app.App, logger *slog.Logger) (*ClusterService, error) {
 	if application == nil {
 		return nil, ErrInvalidConfig{Reason: "application is required for cluster service"}

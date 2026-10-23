@@ -27,6 +27,8 @@ import (
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
+	kmssdk "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/kms"
 
 	cryptoclient "github.com/jeremyhahn/go-quicbaas/sdk/go/client/crypto"
 	dekclient "github.com/jeremyhahn/go-quicbaas/sdk/go/client/dek"
@@ -215,7 +217,7 @@ func parseHashAlgorithm(s string) cryptoclient.HashAlgorithm {
 
 func (h *Handlers) ensureKMS(w http.ResponseWriter, r *http.Request) bool {
 	if h.kms == nil {
-		h.respWriter.Error500(w, r, &ErrServiceUnavailable{Service: "key-management"})
+		h.respWriter.Error503(w, r, &ErrServiceUnavailable{Service: "key-management"})
 		return false
 	}
 	return true
@@ -693,7 +695,7 @@ func keyPolicyToResponse(pol *kmsclient.KeyPolicy) *KeyPolicyResponse {
 
 func (h *Handlers) ensureCrypto(w http.ResponseWriter, r *http.Request) bool {
 	if h.crypto == nil {
-		h.respWriter.Error500(w, r, &ErrServiceUnavailable{Service: "crypto"})
+		h.respWriter.Error503(w, r, &ErrServiceUnavailable{Service: "crypto"})
 		return false
 	}
 	return true
@@ -735,6 +737,10 @@ func (h *Handlers) Decrypt(w http.ResponseWriter, r *http.Request) {
 	var req DecryptRequest
 	if err := h.decodeJSON(r, &req); err != nil {
 		h.respWriter.Error400(w, r, err)
+		return
+	}
+	if req.Version != 0 {
+		h.respWriter.Error400(w, r, &ErrKeyVersionUnsupported{Version: req.Version})
 		return
 	}
 	ctx, cancel := h.ctx(r)
@@ -902,13 +908,121 @@ func (h *Handlers) GenerateRandom(w http.ResponseWriter, r *http.Request) {
 	h.success200(w, r, &GenerateRandomResponse{Bytes: resp.RandomBytes})
 }
 
+// GenerateDataKey handles POST /api/v1/kms/data-keys. It mints a data key
+// wrapped by the named key-encryption key and returns both forms; unlike
+// POST /deks it stores nothing.
+func (h *Handlers) GenerateDataKey(w http.ResponseWriter, r *http.Request) {
+	if !h.ensureCrypto(w, r) {
+		return
+	}
+	var req GenerateDataKeyRequest
+	if err := h.decodeJSON(r, &req); err != nil {
+		h.respWriter.Error400(w, r, err)
+		return
+	}
+	if err := validateDataKeyRequest("key_id", req.KeyID, req.Algorithm, req.KeySize); err != nil {
+		h.respWriter.Error400(w, r, err)
+		return
+	}
+	ctx, cancel := h.ctx(r)
+	defer cancel()
+	resp, err := h.crypto.GenerateDataKey(ctx, &cryptoclient.GenerateDataKeyRequest{
+		KeyID:   req.KeyID,
+		KeySize: int(req.KeySize),
+		Context: req.Context,
+	})
+	if err != nil {
+		h.fail(w, r, err)
+		return
+	}
+	h.success200(w, r, &GenerateDataKeyResponse{
+		KeyID:        req.KeyID,
+		PlaintextKey: resp.Plaintext,
+		EncryptedKey: resp.CiphertextBlob,
+	})
+}
+
+// GenerateWrappedDataKey handles POST /api/v1/kms/data-keys/wrapped. It mints
+// a data key and returns only its wrapped form; the plaintext never leaves the
+// service.
+func (h *Handlers) GenerateWrappedDataKey(w http.ResponseWriter, r *http.Request) {
+	if !h.ensureCrypto(w, r) {
+		return
+	}
+	var req GenerateWrappedDataKeyRequest
+	if err := h.decodeJSON(r, &req); err != nil {
+		h.respWriter.Error400(w, r, err)
+		return
+	}
+	if err := validateDataKeyRequest("wrapping_key_id", req.WrappingKeyID, req.KeyAlgorithm, req.KeySize); err != nil {
+		h.respWriter.Error400(w, r, err)
+		return
+	}
+	ctx, cancel := h.ctx(r)
+	defer cancel()
+	resp, err := h.crypto.GenerateWrappedDataKey(ctx, &cryptoclient.GenerateWrappedDataKeyRequest{
+		KeyID:   req.WrappingKeyID,
+		KeySize: int(req.KeySize),
+		Context: req.Context,
+	})
+	if err != nil {
+		h.fail(w, r, err)
+		return
+	}
+	h.success200(w, r, &GenerateWrappedDataKeyResponse{
+		WrappingKeyID: req.WrappingKeyID,
+		WrappedKey:    resp.CiphertextBlob,
+	})
+}
+
+// validateDataKeyRequest checks the fields both data-key routes share: the
+// wrapping key is named, and the algorithm and key_size (in bits) resolve,
+// by the rule gRPC mints under, to a size the SDK call can carry. The SDK
+// crypto client sends neither field, so the service mints its 256-bit
+// default; any other size is refused rather than silently replaced.
+func validateDataKeyRequest(keyField, keyID, algorithm string, keySize int32) error {
+	if keyID == "" {
+		return &ErrInvalidRequest{Field: keyField, Reason: "is required"}
+	}
+	alg, err := parseDataKeyAlgorithm(algorithm)
+	if err != nil {
+		return err
+	}
+	_, bits, err := kmssdk.ResolveDataKey(alg, keySize)
+	if err != nil {
+		return err
+	}
+	if bits != kmssdk.DefaultDataKeyBits {
+		return &ErrDataKeySizeNotCarried{Bits: bits}
+	}
+	return nil
+}
+
+// kmsKeyAlgorithmPrefix is the prefix every proto KMSKeyAlgorithm name carries.
+const kmsKeyAlgorithmPrefix = "KMS_KEY_ALGORITHM_"
+
+// parseDataKeyAlgorithm reads a proto KMSKeyAlgorithm name, with or
+// without its KMS_KEY_ALGORITHM_ prefix and with dashes for underscores
+// ("aes-256", as the CLI spells it). An empty name is unspecified.
+func parseDataKeyAlgorithm(s string) (platformv1.KMSKeyAlgorithm, error) {
+	name := strings.ReplaceAll(strings.ToUpper(strings.TrimSpace(s)), "-", "_")
+	if name == "" {
+		return platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_UNSPECIFIED, nil
+	}
+	value, ok := platformv1.KMSKeyAlgorithm_value[kmsKeyAlgorithmPrefix+strings.TrimPrefix(name, kmsKeyAlgorithmPrefix)]
+	if !ok {
+		return platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_UNSPECIFIED, &ErrUnknownAlgorithm{Algorithm: s}
+	}
+	return platformv1.KMSKeyAlgorithm(value), nil
+}
+
 // =============================================================================
 // DEKs (dek.Client)
 // =============================================================================
 
 func (h *Handlers) ensureDEK(w http.ResponseWriter, r *http.Request) bool {
 	if h.dek == nil {
-		h.respWriter.Error500(w, r, &ErrServiceUnavailable{Service: "dek"})
+		h.respWriter.Error503(w, r, &ErrServiceUnavailable{Service: "dek"})
 		return false
 	}
 	return true
@@ -1068,7 +1182,7 @@ func (h *Handlers) GetDEKStatus(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handlers) ensureSecrets(w http.ResponseWriter, r *http.Request) bool {
 	if h.secrets == nil {
-		h.respWriter.Error500(w, r, &ErrServiceUnavailable{Service: "secrets"})
+		h.respWriter.Error503(w, r, &ErrServiceUnavailable{Service: "secrets"})
 		return false
 	}
 	return true

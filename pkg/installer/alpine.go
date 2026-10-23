@@ -22,6 +22,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
@@ -513,7 +514,7 @@ func (ai *alpineInstaller) ConfigureSystem(ctx context.Context, rootPath string,
 	// Add EFI partition (mount at /boot/efi to match reference Alpine architecture)
 	if diskInfo.EFIPartition != "" {
 		fstabLines = append(fstabLines,
-			"LABEL=EFI /boot/efi vfat defaults 0 2")
+			espFstabSource(diskInfo)+" /boot/efi vfat defaults 0 2")
 	}
 
 	// Add root partition
@@ -922,7 +923,8 @@ func (ai *alpineInstaller) SetRootPassword(ctx context.Context, rootPath, passwo
 	return nil
 }
 
-// EnableServices adds the installed openRCServices to their runlevels.
+// EnableServices adds the installed openRCServices, and the configured
+// OSConfig.Services, to their runlevels.
 func (ai *alpineInstaller) EnableServices(ctx context.Context, rootPath string) error {
 	ai.logger.Info("[ALPINE] Enabling essential OpenRC services")
 
@@ -937,26 +939,13 @@ func (ai *alpineInstaller) EnableServices(ctx context.Context, rootPath string) 
 		ai.logger.Warn("[ALPINE] Failed to configure kernel modules", "error", err)
 	}
 
-	for _, svc := range installedServices(rootPath, ai.config != nil && ai.config.OverlayIPsecEnabled) {
+	for _, svc := range installedServices(rootPath, ai.config.Services) {
 		cmd := exec.CommandContext(ctx, "chroot", rootPath, "rc-update", "add", svc.name, svc.runlevel)
 		if output, err := cmd.CombinedOutput(); err != nil {
-			enableErr := &ErrOpenRCServiceEnable{
-				Service:  svc.name,
-				Runlevel: svc.runlevel,
-				Output:   string(output),
-				Err:      err,
-			}
-			if svc.name == "charon" || svc.name == "xkms-p11-kit" {
-				ai.logger.Error(enableErr, "[ALPINE] Failed to enable overlay IPsec service",
-					"service", svc.name,
-					"runlevel", svc.runlevel,
-					"output", string(output))
-				return enableErr
-			}
 			ai.logger.Warn("[ALPINE] Failed to enable service",
 				"service", svc.name,
 				"runlevel", svc.runlevel,
-				"error", enableErr,
+				"error", err,
 				"output", string(output))
 			// Don't fail installation if service enablement fails
 			continue
@@ -985,9 +974,9 @@ type openRCService struct {
 // default runlevel's services (networking, platformd) need it.
 //
 // xkms-p11-kit and charon, from the -openrc packages of the overlay's IPsec
-// transport (pkg/iso PlatformPackages), go into the default runlevel only
-// when overlay IPsec is enabled so the VICI socket exists after every boot.
-// charon needs xkms-p11-kit, its key store, and platformd starts after charon.
+// transport (pkg/iso PlatformPackages), go into the default runlevel so the
+// VICI socket exists after every boot. charon needs xkms-p11-kit, its key
+// store, and platformd starts after charon.
 var openRCServices = []openRCService{
 	{name: "ovs-modules", runlevel: "boot"},
 	{name: "ovsdb-server", runlevel: "boot"},
@@ -1000,14 +989,15 @@ var openRCServices = []openRCService{
 	{name: "charon", runlevel: "default"},
 }
 
-// installedServices returns the openRCServices whose init scripts are
-// installed under rootPath.
-func installedServices(rootPath string, overlayIPsecEnabled bool) []openRCService {
+// installedServices returns the openRCServices, then the extra services in
+// the default runlevel, whose init scripts are installed under rootPath.
+func installedServices(rootPath string, extra []string) []openRCService {
+	services := slices.Clone(openRCServices)
+	for _, name := range extra {
+		services = append(services, openRCService{name: name, runlevel: "default"})
+	}
 	var installed []openRCService
-	for _, svc := range openRCServices {
-		if (svc.name == "charon" || svc.name == "xkms-p11-kit") && !overlayIPsecEnabled {
-			continue
-		}
+	for _, svc := range services {
 		if _, err := os.Stat(filepath.Join(rootPath, "etc", "init.d", svc.name)); err != nil {
 			continue
 		}
@@ -1919,7 +1909,7 @@ func (ai *alpineInstaller) configureDNSMasqFromConfig(ctx context.Context, rootP
 	}
 
 	confPath := filepath.Join(rootPath, "etc", "dnsmasq.conf")
-	if err := os.WriteFile(confPath, []byte(buildDNSMasqConf(dnsmasq)), 0644); err != nil {
+	if err := os.WriteFile(confPath, []byte(BuildDNSMasqConf(dnsmasq)), 0644); err != nil {
 		return &WrappedError{Msg: "failed to write dnsmasq.conf", Err: err}
 	}
 	ai.logger.Info("[ALPINE] Wrote dnsmasq.conf", "path", confPath)
@@ -1967,7 +1957,9 @@ func (ai *alpineInstaller) configureDNSMasqFromConfig(ctx context.Context, rootP
 	return nil
 }
 
-// buildDNSMasqConf renders /etc/dnsmasq.conf for the node-local forwarder.
+// BuildDNSMasqConf renders /etc/dnsmasq.conf for the node-local forwarder.
+// It is exported so the installer integration suite runs a real dnsmasq on
+// exactly what the installer writes (test/integration/installer, #131).
 //
 // `local=/<domain>/` makes dnsmasq authoritative for the domain — answers
 // come from /etc/hosts and DHCP data only and are NEVER forwarded
@@ -1981,7 +1973,7 @@ func (ai *alpineInstaller) configureDNSMasqFromConfig(ctx context.Context, rootP
 // templates that pin the internal zone to a specific upstream carry the
 // domain-scoped `/example.com/ip#port` form in upstream-servers — a form
 // local= defeats.
-func buildDNSMasqConf(dnsmasq *DNSMasqConfig) string {
+func BuildDNSMasqConf(dnsmasq *DNSMasqConfig) string {
 	var conf strings.Builder
 	conf.WriteString("# /etc/dnsmasq.conf\n")
 	conf.WriteString("# Generated by Trusted Platform installer\n\n")

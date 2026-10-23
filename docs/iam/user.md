@@ -148,6 +148,18 @@ That mirror is a synchronisation point. If a user exists in one surface and not
 the other — registered successfully but absent from `iam user list` — the mirror
 is the first thing to check.
 
+For a new registration (the user who creates the tenant), the mirror is not
+optional. If the IAM tenant cannot take the user, the registration fails, and
+nothing is left behind to clean up: no platform user and no tenant. The user
+can retry once IAM is reachable.
+
+Users registered while the mirror was failing are repaired when the daemon
+starts: it mirrors every platform user missing from its IAM tenant, in the
+background. The log line `IAM user reconcile finished` reports how many users
+were scanned, already present, mirrored and failed; each failure has its own
+`IAM reconcile failed to mirror user` line with the `user_id`. Restarting the
+daemon retries the failures and leaves everyone else alone.
+
 ---
 
 ## Troubleshooting
@@ -160,7 +172,15 @@ It is. Use the REST route or the MCP tool.
 
 **A user registered but does not appear in `iam user list`.**
 The WebAuthn mirror. The mirror and the REST IAM router must be given the same
-IAM client, or the two surfaces diverge.
+IAM client, or the two surfaces diverge. A daemon restart runs the startup
+reconcile, which mirrors the missing user; if it does not, its
+`IAM reconcile failed to mirror user` log line names the user and the cause.
+
+**Registration fails with "failed to mirror user ... into IAM tenant".**
+The IAM tenant refused the new owner, and the registration was rolled back. The
+daemon log line `failed to mirror new owner into IAM tenant` carries the cause.
+An `iam.role: not_found` cause means the tenant is missing its default roles,
+which every new tenant is now given at creation.
 
 **A REST call operated on the wrong tenant.**
 The unscoped routes (`/api/v1/iam/users` and friends) get their tenant from
@@ -182,13 +202,16 @@ document.
 ## One thing to be aware of
 
 Every `PlatformIAMService` gRPC method requires an `iam` scope — 41 of them, the
-largest entry in the scope catalog. **No `iam_*` MCP tool requires anything**
-beyond a valid token.
+largest entry in the scope catalog. **Each `iam_*` MCP tool requires the scope
+of the gRPC method it answers through** (`iam:read`, `iam:write` or
+`iam:delete`), and a caller bound to one tenant is served only from that
+tenant, except for creating and listing tenant records. `iam_create_token`
+and `iam_revoke_token` need `iam:write` and `iam_authenticate` is open, as its
+QUIC twin is, but all three refuse every caller ([api.md](api.md) §8).
 
-That includes `iam_create_token`, which mints credentials, and
-`iam_assign_role`, which grants privileges. An MCP client holding any valid
-token can escalate itself. Recorded in [api.md](api.md) §8 and raised for the
-owner.
+Tokens are never issued or revoked through IAM. `iam_create_token` and
+`iam_revoke_token`, and their gRPC and QUIC twins, refuse with "handled via
+OIDC flows"; platform tokens come from the broker ([api.md](api.md) §6).
 
 ---
 

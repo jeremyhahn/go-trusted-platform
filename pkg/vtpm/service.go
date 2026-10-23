@@ -117,7 +117,7 @@ func (s *Service) CreateBundle(ctx context.Context, opts *CreateBundleOptions) (
 		return nil, ErrInvalidConfig{Field: "Hostname", Reason: "required for pre-assigned mode"}
 	}
 	if !opts.EKAlgorithm.IsValid() {
-		return nil, ErrInvalidConfig{Field: "EKAlgorithm", Reason: fmt.Sprintf("invalid algorithm: %s", opts.EKAlgorithm)}
+		return nil, ErrInvalidEKAlgorithm{Algorithm: string(opts.EKAlgorithm)}
 	}
 
 	// Generate bundle ID
@@ -294,7 +294,7 @@ func (s *Service) injectEKCertificate(ctx context.Context, socketPath string, op
 		"algorithm", opts.EKAlgorithm)
 
 	// Step 1: Create TPM operations wrapper with algorithm configuration
-	tpmOps, err := NewTPMOperations(socketPath, opts.EKAlgorithm, s.logger)
+	tpmOps, err := NewTPMOperations(socketPath, opts.EKAlgorithm, opts.Hostname, s.logger)
 	if err != nil {
 		return nil, ErrTPMConnectionFailed{SocketPath: socketPath, Cause: err}
 	}
@@ -763,7 +763,7 @@ func (s *Service) CreateTemplate(ctx context.Context, opts *CreateTemplateOption
 		TPMStateDir:       filepath.Join(newPath, "tpm"),
 		NVRAMPath:         filepath.Join(newPath, "ovmf", "OVMF_VARS.fd"),
 		SecureBootKeysDir: filepath.Join(newPath, "secure-boot-keys"),
-		EKAlgorithm:       opts.EKAlgorithm,
+		EKAlgorithm:       bundleOpts.EKAlgorithm, // resolved: an omitted value took the configured default
 		SecureBootEnabled: opts.SecureBootEnabled,
 		CreatedAt:         bundle.CreatedAt,
 	}
@@ -1054,8 +1054,12 @@ func (s *Service) Start(ctx context.Context, bundleID string) error {
 
 	// Get EK algorithm from bundle manifest (defaults to RSA)
 	ekAlgorithm := EKAlgorithmRSA
-	if bundle.Manifest != nil && bundle.Manifest.EKAlgorithm != "" {
-		ekAlgorithm = bundle.Manifest.EKAlgorithm
+	hostname := ""
+	if bundle.Manifest != nil {
+		if bundle.Manifest.EKAlgorithm != "" {
+			ekAlgorithm = bundle.Manifest.EKAlgorithm
+		}
+		hostname = bundle.Manifest.Hostname
 	}
 
 	bundlePath := s.config.BundlePath(bundleID)
@@ -1091,7 +1095,7 @@ func (s *Service) Start(ctx context.Context, bundleID string) error {
 	}
 
 	// Create TPM operations wrapper for runtime operations
-	tpmOps, err := NewTPMOperations(sw.SocketPath(), ekAlgorithm, s.logger)
+	tpmOps, err := NewTPMOperations(sw.SocketPath(), ekAlgorithm, hostname, s.logger)
 	if err != nil {
 		sw.Stop()
 		return ErrVTPMStartFailed{BundleID: bundleID, Cause: err}

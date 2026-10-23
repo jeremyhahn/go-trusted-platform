@@ -17,14 +17,23 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
+
+	"github.com/gorilla/mux"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	quicbaas "github.com/jeremyhahn/go-quicbaas/sdk/go"
 	sdkcrypto "github.com/jeremyhahn/go-quicbaas/sdk/go/client/crypto"
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/client/kms"
+	sdkerrors "github.com/jeremyhahn/go-quicbaas/sdk/go/errors"
 	grpcapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc"
+	restapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/rest"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/app"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
 
@@ -37,16 +46,18 @@ var errPlatformKMSTest = errors.New("platform kms test error")
 
 // platformMockKMSClient implements kms.Client with overridable functions.
 type platformMockKMSClient struct {
-	generateKeyFn     func(ctx context.Context, req *kms.GenerateKeyRequest) (*kms.GenerateKeyResponse, error)
-	importKeyFn       func(ctx context.Context, req *kms.ImportKeyRequest) (*kms.ImportKeyResponse, error)
-	getKeyMetadataFn  func(ctx context.Context, keyID string) (*kms.KeyMetadataResponse, error)
-	listKeysFn        func(ctx context.Context) (*kms.ListKeysResponse, error)
-	deleteKeyFn       func(ctx context.Context, keyID string) error
-	rotateKeyFn       func(ctx context.Context, keyID string) (*kms.RotateKeyResponse, error)
-	updateKeyStatusFn func(ctx context.Context, req *kms.UpdateKeyStatusRequest) (*kms.UpdateKeyStatusResponse, error)
-	exportKeyFn       func(ctx context.Context, req *kms.ExportKeyRequest) (*kms.ExportKeyResponse, error)
-	listKeyVersionsFn func(ctx context.Context, keyID string) (*kms.ListKeyVersionsResponse, error)
-	backendStatusFn   func(ctx context.Context) (*kms.BackendStatusResponse, error)
+	generateKeyFn    func(ctx context.Context, req *kms.GenerateKeyRequest) (*kms.GenerateKeyResponse, error)
+	importKeyFn      func(ctx context.Context, req *kms.ImportKeyRequest) (*kms.ImportKeyResponse, error)
+	getKeyMetadataFn func(ctx context.Context, keyID string) (*kms.KeyMetadataResponse, error)
+	// updateKeyMetadataFn answers UpdateKeyMetadata; unset, the call fails.
+	updateKeyMetadataFn func(ctx context.Context, req *kms.UpdateKeyMetadataRequest) (*kms.KeyMetadataResponse, error)
+	listKeysFn          func(ctx context.Context) (*kms.ListKeysResponse, error)
+	deleteKeyFn         func(ctx context.Context, keyID string) error
+	rotateKeyFn         func(ctx context.Context, keyID string) (*kms.RotateKeyResponse, error)
+	updateKeyStatusFn   func(ctx context.Context, req *kms.UpdateKeyStatusRequest) (*kms.UpdateKeyStatusResponse, error)
+	exportKeyFn         func(ctx context.Context, req *kms.ExportKeyRequest) (*kms.ExportKeyResponse, error)
+	listKeyVersionsFn   func(ctx context.Context, keyID string) (*kms.ListKeyVersionsResponse, error)
+	backendStatusFn     func(ctx context.Context) (*kms.BackendStatusResponse, error)
 }
 
 func (m *platformMockKMSClient) GenerateKey(ctx context.Context, req *kms.GenerateKeyRequest) (*kms.GenerateKeyResponse, error) {
@@ -125,6 +136,9 @@ func (m *platformMockKMSClient) GetKeyMetadata(ctx context.Context, keyID string
 }
 
 func (m *platformMockKMSClient) UpdateKeyMetadata(ctx context.Context, req *kms.UpdateKeyMetadataRequest) (*kms.KeyMetadataResponse, error) {
+	if m.updateKeyMetadataFn != nil {
+		return m.updateKeyMetadataFn(ctx, req)
+	}
 	return nil, errPlatformKMSTest
 }
 
@@ -297,6 +311,17 @@ func TestPlatformKMSBackendGenerateKey(t *testing.T) {
 					Exportable: req.Exportable,
 				}, nil
 			},
+			updateKeyMetadataFn: func(ctx context.Context, req *kms.UpdateKeyMetadataRequest) (*kms.KeyMetadataResponse, error) {
+				return &kms.KeyMetadataResponse{
+					KeyID:       req.KeyID,
+					Description: req.Description,
+					Algorithm:   kms.AlgorithmRSA2048,
+					Version:     1,
+					Exportable:  true,
+					Tags:        req.Tags,
+					Owner:       "kms-recorded-owner",
+				}, nil
+			},
 		}, &platformMockCryptoClient{})
 
 		resp, err := backend.GenerateKey(ctx, &grpcapi.KMSGenerateKeyRequest{
@@ -331,7 +356,10 @@ func TestPlatformKMSBackendGenerateKey(t *testing.T) {
 		if resp.Key.Algorithm != int32(platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_RSA_2048) {
 			t.Errorf("unexpected algorithm: %d", resp.Key.Algorithm)
 		}
-		if resp.Metadata.Owner != "tester" || resp.Metadata.Tags["env"] != "test" {
+		// The owner is the one the KMS recorded: the SDK cannot carry the
+		// requested one.
+		if resp.Metadata.Owner != "kms-recorded-owner" || resp.Metadata.Tags["env"] != "test" ||
+			resp.Metadata.Description != "test description" || !resp.Metadata.Exportable {
 			t.Errorf("unexpected metadata: %+v", resp.Metadata)
 		}
 	})
@@ -529,6 +557,19 @@ func TestPlatformKMSBackendGetKey(t *testing.T) {
 		_, err := backend.GetKey(ctx, &grpcapi.KMSGetKeyRequest{KeyID: "missing"})
 		if !errors.Is(err, errPlatformKMSTest) {
 			t.Fatalf("expected sdk error, got %v", err)
+		}
+	})
+
+	t.Run("no metadata from the KMS is an internal error", func(t *testing.T) {
+		t.Parallel()
+		backend := newTestPlatformKMSBackend(&platformMockKMSClient{
+			getKeyMetadataFn: func(ctx context.Context, keyID string) (*kms.KeyMetadataResponse, error) {
+				return nil, nil
+			},
+		}, &platformMockCryptoClient{})
+		_, err := backend.GetKey(ctx, &grpcapi.KMSGetKeyRequest{KeyID: "key-1"})
+		if !errors.As(err, new(ErrKMSNilMetadata)) || status.Code(err) != codes.Internal {
+			t.Fatalf("err = %v (code %v), want ErrKMSNilMetadata, Internal", err, status.Code(err))
 		}
 	})
 }
@@ -1050,6 +1091,24 @@ func TestPlatformKMSBackendRewrap(t *testing.T) {
 		_, err := backend.Rewrap(ctx, &grpcapi.KMSRewrapRequest{KeyID: "key-1", Ciphertext: []byte("ct")})
 		if !errors.Is(err, errPlatformKMSTest) {
 			t.Fatalf("expected sdk error, got %v", err)
+		}
+	})
+
+	t.Run("non-zero source version is refused before the sdk is called", func(t *testing.T) {
+		t.Parallel()
+		backend := newTestPlatformKMSBackend(&platformMockKMSClient{}, &platformMockCryptoClient{
+			rewrapFn: func(ctx context.Context, req *quicbaas.RewrapRequest) (*quicbaas.RewrapResponse, error) {
+				t.Error("the SDK must not be called with a source version it cannot carry")
+				return nil, errPlatformKMSTest
+			},
+		})
+		_, err := backend.Rewrap(ctx, &grpcapi.KMSRewrapRequest{KeyID: "key-1", Ciphertext: []byte("ct"), SourceVersion: 2})
+		var refused ErrKMSRewrapSourceVersionUnsupported
+		if !errors.As(err, &refused) || refused.SourceVersion != 2 {
+			t.Fatalf("expected ErrKMSRewrapSourceVersionUnsupported{2}, got %T: %v", err, err)
+		}
+		if got := status.Code(err); got != codes.InvalidArgument {
+			t.Errorf("class = %v, want InvalidArgument", got)
 		}
 	})
 }
@@ -1619,4 +1678,106 @@ func TestFilterKeyInfos(t *testing.T) {
 			t.Fatalf("expected ErrKMSUnsupportedFilter, got %T: %v", err, err)
 		}
 	})
+}
+
+// TestPlatformKMSBackendErrorClasses covers each typed backend error: it
+// carries its own class, so every transport answers it the same way (#304).
+func TestPlatformKMSBackendErrorClasses(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name string
+		err  error
+		want codes.Code
+	}{
+		{"client unavailable", ErrKMSClientUnavailable{Client: "kms"}, codes.Unavailable},
+		{"unsupported value", ErrKMSUnsupportedValue{Kind: "algorithm", Value: 9999}, codes.InvalidArgument},
+		{"invalid cursor", ErrKMSInvalidCursor{Cursor: "x"}, codes.InvalidArgument},
+		{"unsupported filter", ErrKMSUnsupportedFilter{Key: "status"}, codes.InvalidArgument},
+		{"missing request", ErrKMSMissingRequest{Operation: "ListKeys"}, codes.InvalidArgument},
+		{"missing key spec", ErrKMSMissingKeySpec{Operation: "GenerateKey"}, codes.InvalidArgument},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := status.Code(tt.err); got != tt.want {
+				t.Errorf("status.Code(%v) = %v, want %v", tt.err, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestPlatformKMSBackendErrorClassesOverGRPC asks the platform.v1 gRPC
+// service questions the backend refuses, and checks each answer's class.
+func TestPlatformKMSBackendErrorClassesOverGRPC(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	rpc := grpcapi.NewKMSGRPCService(logging.DefaultLogger(),
+		newTestPlatformKMSBackend(&platformMockKMSClient{}, &platformMockCryptoClient{}))
+	unwired := grpcapi.NewKMSGRPCService(logging.DefaultLogger(), newTestPlatformKMSBackend(nil, nil))
+
+	t.Run("bad cursor is InvalidArgument", func(t *testing.T) {
+		t.Parallel()
+		_, err := rpc.ListKeys(ctx, &platformv1.ListKeysRequest{Cursor: "not-a-number"})
+		if got := status.Code(err); got != codes.InvalidArgument {
+			t.Errorf("ListKeys(bad cursor) = %v, want InvalidArgument: %v", got, err)
+		}
+	})
+
+	t.Run("unsupported filter is InvalidArgument", func(t *testing.T) {
+		t.Parallel()
+		_, err := rpc.ListKeys(ctx, &platformv1.ListKeysRequest{Filter: map[string]string{"status": "enabled"}})
+		if got := status.Code(err); got != codes.InvalidArgument {
+			t.Errorf("ListKeys(bad filter) = %v, want InvalidArgument: %v", got, err)
+		}
+	})
+
+	t.Run("unsupported algorithm is InvalidArgument", func(t *testing.T) {
+		t.Parallel()
+		_, err := rpc.GenerateKey(ctx, &platformv1.GenerateKeyRequest{
+			KeySpec: &platformv1.KMSKeySpec{Algorithm: platformv1.KMSKeyAlgorithm(9999)},
+		})
+		if got := status.Code(err); got != codes.InvalidArgument {
+			t.Errorf("GenerateKey(bad algorithm) = %v, want InvalidArgument: %v", got, err)
+		}
+	})
+
+	t.Run("missing SDK client is Unavailable", func(t *testing.T) {
+		t.Parallel()
+		_, err := unwired.ListKeys(ctx, &platformv1.ListKeysRequest{})
+		if got := status.Code(err); got != codes.Unavailable {
+			t.Errorf("ListKeys(no client) = %v, want Unavailable: %v", got, err)
+		}
+	})
+}
+
+// TestPlatformKMSBackendErrorClassesOverREST asks the live REST facade the
+// same questions: each answer carries the HTTP status for the gRPC class.
+func TestPlatformKMSBackendErrorClassesOverREST(t *testing.T) {
+	t.Parallel()
+	backend := newTestPlatformKMSBackend(&platformMockKMSClient{
+		getKeyMetadataFn: func(ctx context.Context, keyID string) (*kms.KeyMetadataResponse, error) {
+			return nil, sdkerrors.NewNotFound("GetKeyMetadata", "no key "+keyID)
+		},
+	}, &platformMockCryptoClient{})
+	router := mux.NewRouter()
+	restapi.NewKMSHandlers(NewPlatformKMSRESTFacade(backend), boostSlogLogger()).RegisterRoutes(router)
+
+	tests := []struct {
+		name string
+		path string
+		want int
+	}{
+		{"missing key is 404", "/api/v1/kms/keys/missing", http.StatusNotFound},
+		{"bad cursor is 400", "/api/v1/kms/keys?cursor=not-a-number", http.StatusBadRequest},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			w := httptest.NewRecorder()
+			router.ServeHTTP(w, httptest.NewRequest(http.MethodGet, tt.path, nil))
+			if w.Code != tt.want {
+				t.Errorf("GET %s = %d, want %d: %s", tt.path, w.Code, tt.want, w.Body.String())
+			}
+		})
+	}
 }

@@ -181,7 +181,7 @@ func (f *FIDO2Unlock) TestUnlock(ctx context.Context) error {
 
 	// Try to unlock with the derived key
 	if err := luks2.Unlock(f.luksDevice, key, testName); err != nil {
-		return &MessageError{Msg: "FIDO2 key test failed: key does not unlock device"}
+		return &WrappedError{Msg: "FIDO2 key test failed: the derived key did not open the device", Err: err}
 	}
 
 	// Immediately close the test mapping

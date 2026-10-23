@@ -19,6 +19,7 @@ import (
 
 	platform "github.com/jeremyhahn/go-trusted-platform/sdk/go"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
+	tpmsvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/tpm"
 )
 
 // TPMBinding exposes TPM service methods to the Wails frontend.
@@ -362,7 +363,9 @@ func (b *TPMBinding) Unseal(cn string, parentHandle uint32,
 	return protoToMap(resp)
 }
 
-// Quote generates a TPM quote for remote attestation.
+// Quote generates a TPM quote for remote attestation. The node quotes
+// SHA-256(nonce || channel_binding) for this connection (#482); the SDK
+// client refuses a quote that is not bound to it.
 func (b *TPMBinding) Quote(akHandle uint32, akPassword string,
 	pcrIndices []uint32, pcrBank string, nonce []byte) (map[string]interface{}, error) {
 
@@ -374,32 +377,31 @@ func (b *TPMBinding) Quote(akHandle uint32, akPassword string,
 	if err != nil {
 		return nil, err
 	}
-	resp, err := cl.TPM().Quote(b.conn.ctx, &platformv1.QuoteRequest{
-		AkHandle:   akHandle,
-		AkPassword: akPassword,
-		PcrIndices: pcrIndices,
-		PcrBank:    bank,
-		Nonce:      nonce,
-	})
+	resp, err := tpmsvc.NewClientFromGRPC(cl.TPM()).Quote(b.conn.ctx, akHandle, akPassword, pcrIndices, bank, nonce)
 	if err != nil {
 		return nil, err
 	}
 	return protoToMap(resp)
 }
 
-// VerifyQuote verifies a TPM quote for remote attestation.
+// VerifyQuote verifies a TPM quote for remote attestation. channelBinding
+// is the binding Quote returned with the quote; when set, the quote must
+// carry SHA-256(nonce || channelBinding). signatureAlgorithm is the scheme
+// Quote declared; the signature is checked under it and fails without it.
 func (b *TPMBinding) VerifyQuote(quote, signature, akPublic,
-	nonce []byte) (map[string]interface{}, error) {
+	nonce, channelBinding []byte, signatureAlgorithm string) (map[string]interface{}, error) {
 
 	cl, err := b.getClient()
 	if err != nil {
 		return nil, err
 	}
-	resp, err := cl.TPM().VerifyQuote(b.conn.ctx, &platformv1.VerifyQuoteRequest{
-		Quote:     quote,
-		Signature: signature,
-		AkPublic:  akPublic,
-		Nonce:     nonce,
+	resp, err := tpmsvc.NewClientFromGRPC(cl.TPM()).VerifyQuote(b.conn.ctx, &platformv1.VerifyQuoteRequest{
+		Quote:              quote,
+		Signature:          signature,
+		AkPublic:           akPublic,
+		Nonce:              nonce,
+		ChannelBinding:     channelBinding,
+		SignatureAlgorithm: signatureAlgorithm,
 	})
 	if err != nil {
 		return nil, err

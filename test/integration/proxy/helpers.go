@@ -67,7 +67,7 @@ func GetServiceEndpoints() *ServiceEndpoints {
 		PlatformGRPC: envOr(EnvPlatformGRPCEndpoint, "localhost:10443"),
 		PlatformREST: envOr(EnvPlatformRESTEndpoint, "https://localhost:8443"),
 		PlatformQUIC: envOr(EnvPlatformQUICEndpoint, "localhost:9444"),
-		PlatformMCP:  envOr(EnvPlatformMCPEndpoint, "http://localhost:9445"),
+		PlatformMCP:  envOr(EnvPlatformMCPEndpoint, "https://localhost:9445"),
 		PlatformUnix: envOr(EnvPlatformUnixSocket, "/run/platformd.sock"),
 		PlatformCTL:  envOr(EnvPlatformCTL, "platformctl"),
 	}

@@ -14,8 +14,8 @@
 // Package piv provides SDK types and a client for the platform PIV service
 // (Personal Identity Verification, NIST SP 800-73-4).
 //
-// The Phase 3 implementation is a scaffolding-only SDK: all client methods
-// return ErrNotYetWired until the server-side PIV handlers land in Phase 3.5.
+// Requests and responses are transported through the platform SDK PIV client;
+// device-side operations are implemented by the composed security stack.
 package piv
 
 // Algorithm enumerates the key algorithms PIV supports.

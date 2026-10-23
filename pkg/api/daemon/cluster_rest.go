@@ -17,14 +17,14 @@ import (
 )
 
 // clusterRESTHandlers is the REST adapter for the Cluster gRPC service.
-// It reuses the gRPC handler implementation so REST and gRPC remain
-// behaviorally identical (e.g., both report the same "Unimplemented"
-// state when no cluster coordinator is wired).
+// It calls the registered gRPC service so REST and gRPC stay behaviorally
+// identical (e.g., both report the service as unavailable when no cluster
+// coordinator is wired).
 type clusterRESTHandlers struct {
-	service *ClusterGRPCService
+	service platformv1.ClusterServiceServer
 }
 
-func newClusterRESTHandlers(svc *ClusterGRPCService) *clusterRESTHandlers {
+func newClusterRESTHandlers(svc platformv1.ClusterServiceServer) *clusterRESTHandlers {
 	return &clusterRESTHandlers{service: svc}
 }
 

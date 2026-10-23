@@ -142,6 +142,27 @@ func TestFindESPPrefersSiblingOverLabelAndProbe(t *testing.T) {
 	}
 }
 
+// A diskless-nbd node's sealed key and pcr-banks live in the metadata
+// partition of its NBD export (docs/installer/engineering.md). The unseal code
+// finds it from the root, /dev/nbd0p2, even when a local SD card carries an
+// EFI-labelled partition of its own.
+func TestFindESPNBDExportMetadataPartition(t *testing.T) {
+	stat := blockDevices([]string{"/dev/nbd0p1", "/dev/mmcblk0p1"})
+	localLabel := func(path string) (string, error) {
+		if path == "/dev/disk/by-label/EFI" {
+			return "/dev/mmcblk0p1", nil
+		}
+		return "", os.ErrNotExist
+	}
+	got, err := FindESP("/dev/nbd0p2", WithStat(stat), WithEvalSymlinks(localLabel))
+	if err != nil {
+		t.Fatalf("FindESP error: %v", err)
+	}
+	if got != "/dev/nbd0p1" {
+		t.Errorf("FindESP = %q, want the export's metadata partition /dev/nbd0p1", got)
+	}
+}
+
 func TestFindESPByLabelWhenRootIsDeviceMapper(t *testing.T) {
 	stat := blockDevices([]string{"/dev/mmcblk1p1"})
 	eval := func(path string) (string, error) {

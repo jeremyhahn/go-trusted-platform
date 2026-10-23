@@ -26,6 +26,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ovs"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/testenv"
+	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers/boundedexec"
 )
 
 // TestOpenFlowRulesForNetworkPhases tests OpenFlow rule installation
@@ -42,58 +44,40 @@ func TestOpenFlowRulesForNetworkPhases(t *testing.T) {
 
 	err = client.Connect(ctx)
 	if err != nil {
-		t.Skipf("Skipping test: cannot connect to OVSDB: %v", err)
+		t.Fatal(missing("a connection to OVSDB", err))
 	}
 
 	bridgeName := "br-phases-test"
 	// Cleanup any existing bridge
-	exec.Command("ovs-vsctl", "--if-exists", "del-br", bridgeName).Run()
-	defer exec.Command("ovs-vsctl", "--if-exists", "del-br", bridgeName).Run()
+	boundedexec.Command("ovs-vsctl", "--if-exists", "del-br", bridgeName).Run()
+	defer boundedexec.Command("ovs-vsctl", "--if-exists", "del-br", bridgeName).Run()
 
 	// Create bridge via ovs-vsctl which properly creates management socket
-	cmd := exec.Command("ovs-vsctl", "add-br", bridgeName)
+	cmd := boundedexec.Command("ovs-vsctl", "add-br", bridgeName)
 	output, err := cmd.CombinedOutput()
 	require.NoError(t, err, "Failed to create bridge: %s", output)
 
 	// Configure bridge for OpenFlow
-	cmd = exec.Command("ovs-vsctl", "set", "bridge", bridgeName, "protocols=OpenFlow13")
+	cmd = boundedexec.Command("ovs-vsctl", "set", "bridge", bridgeName, "protocols=OpenFlow13")
 	output, err = cmd.CombinedOutput()
 	require.NoError(t, err, "Failed to set protocols: %s", output)
 
-	cmd = exec.Command("ovs-vsctl", "set", "bridge", bridgeName, "fail_mode=secure")
+	cmd = boundedexec.Command("ovs-vsctl", "set", "bridge", bridgeName, "fail_mode=secure")
 	output, err = cmd.CombinedOutput()
 	require.NoError(t, err, "Failed to set fail_mode: %s", output)
 
 	portName := "test-phase-port"
 	// Use ovs-vsctl to add port (more reliable than OVSDB for internal ports)
-	cmd = exec.Command("ovs-vsctl", "add-port", bridgeName, portName, "--", "set", "interface", portName, "type=internal")
+	cmd = boundedexec.Command("ovs-vsctl", "add-port", bridgeName, portName, "--", "set", "interface", portName, "type=internal")
 	output, err = cmd.CombinedOutput()
 	require.NoError(t, err, "Failed to add port: %s", output)
 
 	// Wait for OVS to create the internal port interface in the kernel and bring it up
-	var linkUpErr error
-	for i := 0; i < 10; i++ {
-		time.Sleep(100 * time.Millisecond)
-		cmd = exec.Command("ip", "link", "set", portName, "up")
-		output, linkUpErr = cmd.CombinedOutput()
-		if linkUpErr == nil {
-			break
-		}
-	}
+	output, linkUpErr := bringInternalPortUp(ctx, portName)
 	require.NoError(t, linkUpErr, "Failed to bring up interface %s after retries: %s", portName, output)
 
-	// Wait for OVS to assign ofport with retry logic
-	var ofport int32
-	for i := 0; i < 10; i++ {
-		time.Sleep(200 * time.Millisecond)
-		cmd = exec.Command("ovs-vsctl", "get", "interface", portName, "ofport")
-		output, err = cmd.CombinedOutput()
-		require.NoError(t, err, "Failed to get ofport: %s", output)
-		fmt.Sscanf(string(output), "%d", &ofport)
-		if ofport > 0 {
-			break
-		}
-	}
+	// Wait for OVS to assign ofport
+	ofport := waitForOFPort(ctx, t, portName)
 	require.Greater(t, ofport, int32(0), "ofport should be positive after retries")
 
 	t.Run("ProvisioningPhaseRules", func(t *testing.T) {
@@ -291,53 +275,35 @@ func TestACLToOpenFlowTranslation(t *testing.T) {
 
 	err = client.Connect(ctx)
 	if err != nil {
-		t.Skipf("Skipping test: cannot connect to OVSDB: %v", err)
+		t.Fatal(missing("a connection to OVSDB", err))
 	}
 
 	bridgeName := "br-acl-test"
 	// Cleanup any existing bridge
-	exec.Command("ovs-vsctl", "--if-exists", "del-br", bridgeName).Run()
-	defer exec.Command("ovs-vsctl", "--if-exists", "del-br", bridgeName).Run()
+	boundedexec.Command("ovs-vsctl", "--if-exists", "del-br", bridgeName).Run()
+	defer boundedexec.Command("ovs-vsctl", "--if-exists", "del-br", bridgeName).Run()
 
 	// Create bridge via ovs-vsctl
-	cmd := exec.Command("ovs-vsctl", "add-br", bridgeName)
+	cmd := boundedexec.Command("ovs-vsctl", "add-br", bridgeName)
 	output, err := cmd.CombinedOutput()
 	require.NoError(t, err, "Failed to create bridge: %s", output)
 
-	cmd = exec.Command("ovs-vsctl", "set", "bridge", bridgeName, "protocols=OpenFlow13")
+	cmd = boundedexec.Command("ovs-vsctl", "set", "bridge", bridgeName, "protocols=OpenFlow13")
 	output, err = cmd.CombinedOutput()
 	require.NoError(t, err, "Failed to set protocols: %s", output)
 
 	portName := "test-acl-port"
 	// Use ovs-vsctl to add port (more reliable than OVSDB for internal ports)
-	cmd = exec.Command("ovs-vsctl", "add-port", bridgeName, portName, "--", "set", "interface", portName, "type=internal")
+	cmd = boundedexec.Command("ovs-vsctl", "add-port", bridgeName, portName, "--", "set", "interface", portName, "type=internal")
 	output, err = cmd.CombinedOutput()
 	require.NoError(t, err, "Failed to add port: %s", output)
 
 	// Wait for OVS to create the internal port interface in the kernel and bring it up
-	var linkUpErr error
-	for i := 0; i < 10; i++ {
-		time.Sleep(100 * time.Millisecond)
-		cmd = exec.Command("ip", "link", "set", portName, "up")
-		output, linkUpErr = cmd.CombinedOutput()
-		if linkUpErr == nil {
-			break
-		}
-	}
+	output, linkUpErr := bringInternalPortUp(ctx, portName)
 	require.NoError(t, linkUpErr, "Failed to bring up interface %s after retries: %s", portName, output)
 
-	// Wait for OVS to assign ofport with retry logic
-	var ofport int32
-	for i := 0; i < 10; i++ {
-		time.Sleep(200 * time.Millisecond)
-		cmd = exec.Command("ovs-vsctl", "get", "interface", portName, "ofport")
-		output, err = cmd.CombinedOutput()
-		require.NoError(t, err, "Failed to get ofport: %s", output)
-		fmt.Sscanf(string(output), "%d", &ofport)
-		if ofport > 0 {
-			break
-		}
-	}
+	// Wait for OVS to assign ofport
+	ofport := waitForOFPort(ctx, t, portName)
 	require.Greater(t, ofport, int32(0), "ofport should be positive after retries")
 
 	t.Run("TCPPortACL", func(t *testing.T) {
@@ -430,53 +396,35 @@ func TestFlowModificationAndRemoval(t *testing.T) {
 
 	err = client.Connect(ctx)
 	if err != nil {
-		t.Skipf("Skipping test: cannot connect to OVSDB: %v", err)
+		t.Fatal(missing("a connection to OVSDB", err))
 	}
 
 	bridgeName := "br-mod-test"
 	// Cleanup any existing bridge
-	exec.Command("ovs-vsctl", "--if-exists", "del-br", bridgeName).Run()
-	defer exec.Command("ovs-vsctl", "--if-exists", "del-br", bridgeName).Run()
+	boundedexec.Command("ovs-vsctl", "--if-exists", "del-br", bridgeName).Run()
+	defer boundedexec.Command("ovs-vsctl", "--if-exists", "del-br", bridgeName).Run()
 
 	// Create bridge via ovs-vsctl
-	cmd := exec.Command("ovs-vsctl", "add-br", bridgeName)
+	cmd := boundedexec.Command("ovs-vsctl", "add-br", bridgeName)
 	output, err := cmd.CombinedOutput()
 	require.NoError(t, err, "Failed to create bridge: %s", output)
 
-	cmd = exec.Command("ovs-vsctl", "set", "bridge", bridgeName, "protocols=OpenFlow13")
+	cmd = boundedexec.Command("ovs-vsctl", "set", "bridge", bridgeName, "protocols=OpenFlow13")
 	output, err = cmd.CombinedOutput()
 	require.NoError(t, err, "Failed to set protocols: %s", output)
 
 	portName := "test-mod-port"
 	// Use ovs-vsctl to add port (more reliable than OVSDB for internal ports)
-	cmd = exec.Command("ovs-vsctl", "add-port", bridgeName, portName, "--", "set", "interface", portName, "type=internal")
+	cmd = boundedexec.Command("ovs-vsctl", "add-port", bridgeName, portName, "--", "set", "interface", portName, "type=internal")
 	output, err = cmd.CombinedOutput()
 	require.NoError(t, err, "Failed to add port: %s", output)
 
 	// Wait for OVS to create the internal port interface in the kernel and bring it up
-	var linkUpErr error
-	for i := 0; i < 10; i++ {
-		time.Sleep(100 * time.Millisecond)
-		cmd = exec.Command("ip", "link", "set", portName, "up")
-		output, linkUpErr = cmd.CombinedOutput()
-		if linkUpErr == nil {
-			break
-		}
-	}
+	output, linkUpErr := bringInternalPortUp(ctx, portName)
 	require.NoError(t, linkUpErr, "Failed to bring up interface %s after retries: %s", portName, output)
 
-	// Wait for OVS to assign ofport with retry logic
-	var ofport int32
-	for i := 0; i < 10; i++ {
-		time.Sleep(200 * time.Millisecond)
-		cmd = exec.Command("ovs-vsctl", "get", "interface", portName, "ofport")
-		output, err = cmd.CombinedOutput()
-		require.NoError(t, err, "Failed to get ofport: %s", output)
-		fmt.Sscanf(string(output), "%d", &ofport)
-		if ofport > 0 {
-			break
-		}
-	}
+	// Wait for OVS to assign ofport
+	ofport := waitForOFPort(ctx, t, portName)
 	require.Greater(t, ofport, int32(0), "ofport should be positive after retries")
 
 	t.Run("AddAndDeleteFlow", func(t *testing.T) {
@@ -573,20 +521,20 @@ func TestVLANFlowManipulation(t *testing.T) {
 
 	err = client.Connect(ctx)
 	if err != nil {
-		t.Skipf("Skipping test: cannot connect to OVSDB: %v", err)
+		t.Fatal(missing("a connection to OVSDB", err))
 	}
 
 	bridgeName := "br-vlan-flow-test"
 	// Cleanup any existing bridge
-	exec.Command("ovs-vsctl", "--if-exists", "del-br", bridgeName).Run()
-	defer exec.Command("ovs-vsctl", "--if-exists", "del-br", bridgeName).Run()
+	boundedexec.Command("ovs-vsctl", "--if-exists", "del-br", bridgeName).Run()
+	defer boundedexec.Command("ovs-vsctl", "--if-exists", "del-br", bridgeName).Run()
 
 	// Create bridge via ovs-vsctl
-	cmd := exec.Command("ovs-vsctl", "add-br", bridgeName)
+	cmd := boundedexec.Command("ovs-vsctl", "add-br", bridgeName)
 	output, err := cmd.CombinedOutput()
 	require.NoError(t, err, "Failed to create bridge: %s", output)
 
-	cmd = exec.Command("ovs-vsctl", "set", "bridge", bridgeName, "protocols=OpenFlow13")
+	cmd = boundedexec.Command("ovs-vsctl", "set", "bridge", bridgeName, "protocols=OpenFlow13")
 	output, err = cmd.CombinedOutput()
 	require.NoError(t, err, "Failed to set protocols: %s", output)
 
@@ -595,34 +543,16 @@ func TestVLANFlowManipulation(t *testing.T) {
 	exec.Command("ip", "link", "delete", portName).Run()
 
 	// Use ovs-vsctl to add port (more reliable than OVSDB for internal ports)
-	cmd = exec.Command("ovs-vsctl", "add-port", bridgeName, portName, "--", "set", "interface", portName, "type=internal")
+	cmd = boundedexec.Command("ovs-vsctl", "add-port", bridgeName, portName, "--", "set", "interface", portName, "type=internal")
 	output, err = cmd.CombinedOutput()
 	require.NoError(t, err, "Failed to add port: %s", output)
 
 	// Wait for OVS to create the internal port interface in the kernel and bring it up
-	var linkUpErr error
-	for i := 0; i < 10; i++ {
-		time.Sleep(100 * time.Millisecond)
-		cmd = exec.Command("ip", "link", "set", portName, "up")
-		output, linkUpErr = cmd.CombinedOutput()
-		if linkUpErr == nil {
-			break
-		}
-	}
+	output, linkUpErr := bringInternalPortUp(ctx, portName)
 	require.NoError(t, linkUpErr, "Failed to bring up interface %s after retries: %s", portName, output)
 
-	// Wait for OVS to assign ofport with retry logic
-	var ofport int32
-	for i := 0; i < 10; i++ {
-		time.Sleep(200 * time.Millisecond)
-		cmd = exec.Command("ovs-vsctl", "get", "interface", portName, "ofport")
-		output, err = cmd.CombinedOutput()
-		require.NoError(t, err, "Failed to get ofport: %s", output)
-		fmt.Sscanf(string(output), "%d", &ofport)
-		if ofport > 0 {
-			break
-		}
-	}
+	// Wait for OVS to assign ofport
+	ofport := waitForOFPort(ctx, t, portName)
 	require.Greater(t, ofport, int32(0), "ofport should be positive after retries")
 
 	t.Run("AddVLANTag", func(t *testing.T) {
@@ -676,4 +606,25 @@ func TestVLANFlowManipulation(t *testing.T) {
 		err := client.AddFlow(ctx, bridgeName, flowMod)
 		require.NoError(t, err)
 	})
+}
+
+// waitForOFPort polls ovs-vsctl until OVS assigns port a positive OpenFlow
+// port number and returns it; on timeout it logs and returns the last value
+// read, leaving the caller's assertion to fail.
+func waitForOFPort(ctx context.Context, t *testing.T, port string) int32 {
+	t.Helper()
+
+	var ofport int32
+	assigned := func() bool {
+		output, err := boundedexec.CommandContext(ctx, "ovs-vsctl", "get", "interface", port, "ofport").CombinedOutput()
+		require.NoError(t, err, "Failed to get ofport: %s", output)
+		if _, err := fmt.Sscanf(string(output), "%d", &ofport); err != nil {
+			return false
+		}
+		return ofport > 0
+	}
+	if err := testenv.WaitUntil(ctx, ofportTimeout, "ofport for "+port, assigned); err != nil {
+		t.Logf("%v", err)
+	}
+	return ofport
 }

@@ -41,7 +41,7 @@ func (s *BMCGRPCService) SetEnroller(enroller BMCEnroller, profileSvc device.Dev
 // EnrollBMC performs the BMC enrollment ceremony for the device profile.
 func (s *BMCGRPCService) EnrollBMC(ctx context.Context, req *platformv1.BMCEnrollRequest) (*platformv1.BMCEnrollResponse, error) {
 	if s.enroller == nil {
-		return nil, status.Error(codes.FailedPrecondition, ErrBMCEnrollerNotConfigured{}.Error())
+		return nil, bmcNotConfigured(ErrBMCEnrollerNotConfigured{})
 	}
 	if req.GetProfileId() == 0 {
 		return nil, status.Error(codes.InvalidArgument, ErrInvalidProfileID{}.Error())

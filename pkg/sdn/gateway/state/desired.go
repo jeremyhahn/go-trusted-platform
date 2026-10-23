@@ -40,6 +40,128 @@ type DesiredConfig struct {
 	Version      string               `json:"version,omitempty" yaml:"version,omitempty" mapstructure:"version"`
 	LoadBalancer *DesiredLoadBalancer `json:"load_balancer,omitempty" yaml:"load-balancer,omitempty" mapstructure:"load-balancer"`
 	NAT          *DesiredNAT          `json:"nat,omitempty" yaml:"nat,omitempty" mapstructure:"nat"`
+	VPN          *DesiredVPN          `json:"vpn,omitempty" yaml:"vpn,omitempty" mapstructure:"vpn"`
+}
+
+// DesiredVPN is the control plane's remote-access VPN state for one gateway:
+// the enrolled peers and the tenant posture policies (docs/vpn/). The
+// gateway admits only enrolled peers, so an empty Peers list admits nobody.
+type DesiredVPN struct {
+	Peers           []DesiredVPNPeer          `json:"peers,omitempty" yaml:"peers,omitempty" mapstructure:"peers"`
+	PosturePolicies []DesiredVPNPosturePolicy `json:"posture_policies,omitempty" yaml:"posture-policies,omitempty" mapstructure:"posture-policies"`
+	// Leases are the leases this gateway issued and wrote through, which
+	// it rebuilds its lease projection from on start. They are the
+	// gateway's own record, not desired state: ContentVersion leaves them
+	// out, so a write-through never reads as a configuration change.
+	Leases []DesiredVPNLease `json:"leases,omitempty" yaml:"leases,omitempty" mapstructure:"leases"`
+}
+
+// DesiredVPNLease is one lease a gateway issued, as the control plane keeps
+// it. It holds no secret: the WireGuard public key and the SHA-256
+// fingerprint of the admitting client certificate are public material.
+type DesiredVPNLease struct {
+	ID                      string            `json:"id" yaml:"id" mapstructure:"id"`
+	TenantID                string            `json:"tenant_id" yaml:"tenant-id" mapstructure:"tenant-id"`
+	DeviceID                string            `json:"device_id" yaml:"device-id" mapstructure:"device-id"`
+	Address                 string            `json:"address" yaml:"address" mapstructure:"address"`
+	Zones                   []string          `json:"zones,omitempty" yaml:"zones,omitempty" mapstructure:"zones"`
+	DataPlane               string            `json:"data_plane" yaml:"data-plane" mapstructure:"data-plane"`
+	WireGuardPublicKey      []byte            `json:"wireguard_public_key,omitempty" yaml:"wireguard-public-key,omitempty" mapstructure:"wireguard-public-key"`
+	ClientCertificateSHA256 []byte            `json:"client_certificate_sha256,omitempty" yaml:"client-certificate-sha256,omitempty" mapstructure:"client-certificate-sha256"`
+	IssuedAt                time.Time         `json:"issued_at" yaml:"issued-at" mapstructure:"issued-at"`
+	ExpiresAt               time.Time         `json:"expires_at" yaml:"expires-at" mapstructure:"expires-at"`
+	Renewals                int               `json:"renewals,omitempty" yaml:"renewals,omitempty" mapstructure:"renewals"`
+	Verdict                 DesiredVPNVerdict `json:"verdict" yaml:"verdict" mapstructure:"verdict"`
+}
+
+// DesiredVPNVerdict is the outcome of the attestation a lease was admitted or
+// last renewed under.
+type DesiredVPNVerdict struct {
+	Passed        bool   `json:"passed" yaml:"passed" mapstructure:"passed"`
+	Cryptographic bool   `json:"cryptographic" yaml:"cryptographic" mapstructure:"cryptographic"`
+	ProfileID     uint64 `json:"profile_id,omitempty" yaml:"profile-id,omitempty" mapstructure:"profile-id"`
+}
+
+// DesiredVPNPeer is one enrolled device of a tenant.
+type DesiredVPNPeer struct {
+	TenantID string   `json:"tenant_id" yaml:"tenant-id" mapstructure:"tenant-id"`
+	DeviceID string   `json:"device_id" yaml:"device-id" mapstructure:"device-id"`
+	Zones    []string `json:"zones,omitempty" yaml:"zones,omitempty" mapstructure:"zones"`
+}
+
+// DesiredVPNPosturePolicy is one tenant posture policy (a Rego module).
+type DesiredVPNPosturePolicy struct {
+	TenantID string `json:"tenant_id" yaml:"tenant-id" mapstructure:"tenant-id"`
+	Name     string `json:"name" yaml:"name" mapstructure:"name"`
+	Module   string `json:"module" yaml:"module" mapstructure:"module"`
+}
+
+// validate checks each peer and policy names its tenant and is unique.
+func (v *DesiredVPN) validate() error {
+	// Keys keep tenant and name apart: a joined "tenant/name" string would
+	// make ("a/b", "c") and ("a", "b/c") the same peer.
+	peers := map[[2]string]bool{}
+	for i, p := range v.Peers {
+		field := SectionVPN + ".peers[" + itoa(i) + "]"
+		if p.TenantID == "" {
+			return &ErrDesiredConfigInvalid{Field: field + ".tenant_id", Reason: "required"}
+		}
+		if p.DeviceID == "" {
+			return &ErrDesiredConfigInvalid{Field: field + ".device_id", Reason: "required"}
+		}
+		key := [2]string{p.TenantID, p.DeviceID}
+		if peers[key] {
+			return &ErrDesiredConfigInvalid{Field: field, Reason: "duplicate peer " + strconv.Quote(p.DeviceID) + " of tenant " + strconv.Quote(p.TenantID)}
+		}
+		peers[key] = true
+	}
+	policies := map[[2]string]bool{}
+	for i, p := range v.PosturePolicies {
+		field := SectionVPN + ".posture_policies[" + itoa(i) + "]"
+		switch {
+		case p.TenantID == "":
+			return &ErrDesiredConfigInvalid{Field: field + ".tenant_id", Reason: "required"}
+		case p.Name == "":
+			return &ErrDesiredConfigInvalid{Field: field + ".name", Reason: "required"}
+		case p.Module == "":
+			return &ErrDesiredConfigInvalid{Field: field + ".module", Reason: "required"}
+		}
+		key := [2]string{p.TenantID, p.Name}
+		if policies[key] {
+			return &ErrDesiredConfigInvalid{Field: field, Reason: "duplicate posture policy " + strconv.Quote(p.Name) + " of tenant " + strconv.Quote(p.TenantID)}
+		}
+		policies[key] = true
+	}
+	return v.validateLeases()
+}
+
+// validateLeases checks each lease is complete and unique within its tenant.
+func (v *DesiredVPN) validateLeases() error {
+	leases := map[[2]string]bool{}
+	for i, l := range v.Leases {
+		field := SectionVPN + ".leases[" + itoa(i) + "]"
+		switch {
+		case l.ID == "":
+			return &ErrDesiredConfigInvalid{Field: field + ".id", Reason: "required"}
+		case l.TenantID == "":
+			return &ErrDesiredConfigInvalid{Field: field + ".tenant_id", Reason: "required"}
+		case l.DeviceID == "":
+			return &ErrDesiredConfigInvalid{Field: field + ".device_id", Reason: "required"}
+		case l.DataPlane == "":
+			return &ErrDesiredConfigInvalid{Field: field + ".data_plane", Reason: "required"}
+		case !l.ExpiresAt.After(l.IssuedAt):
+			return &ErrDesiredConfigInvalid{Field: field + ".expires_at", Reason: "not after issued_at"}
+		}
+		if _, err := netip.ParsePrefix(l.Address); err != nil {
+			return &ErrDesiredConfigInvalid{Field: field + ".address", Reason: err.Error()}
+		}
+		key := [2]string{l.TenantID, l.ID}
+		if leases[key] {
+			return &ErrDesiredConfigInvalid{Field: field, Reason: "duplicate lease " + strconv.Quote(l.ID) + " of tenant " + strconv.Quote(l.TenantID)}
+		}
+		leases[key] = true
+	}
+	return nil
 }
 
 // DesiredLoadBalancer is the complete set of virtual IPs the gateway's
@@ -101,6 +223,7 @@ type DesiredConfigState struct {
 const (
 	SectionLoadBalancer = "load_balancer"
 	SectionNAT          = "nat"
+	SectionVPN          = "vpn"
 )
 
 // DecodeDesiredConfig parses the JSON document the control plane served.
@@ -134,6 +257,7 @@ var knownDesiredSections = map[string]bool{
 	"version":       true,
 	"load_balancer": true,
 	"nat":           true,
+	"vpn":           true,
 }
 
 // Validate checks every address and identity the document carries, so a
@@ -171,6 +295,11 @@ func (d *DesiredConfig) Validate() error {
 				return &ErrDesiredConfigInvalid{Field: dnatField(i, "external"), Reason: "duplicate DNAT " + key}
 			}
 			seen[key] = true
+		}
+	}
+	if d.VPN != nil {
+		if err := d.VPN.validate(); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -232,6 +361,13 @@ func (r DesiredDNAT) validate(i int) error {
 func (d *DesiredConfig) ContentVersion() string {
 	clone := *d
 	clone.Version = ""
+	if d.VPN != nil {
+		// A gateway's own leases are its record, not desired state: they
+		// change on every admission and must not version the config.
+		vpn := *d.VPN
+		vpn.Leases = nil
+		clone.VPN = &vpn
+	}
 	data, err := json.Marshal(&clone)
 	if err != nil {
 		// Marshalling a struct of strings and integers cannot fail; a

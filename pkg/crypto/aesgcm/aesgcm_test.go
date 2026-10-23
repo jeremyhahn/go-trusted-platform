@@ -50,7 +50,7 @@ func TestSealWithoutAdditionalData(t *testing.T) {
 	secret := []byte("my-secret")
 	ciphertext, err := aesgcm.Seal(key, secret, nil)
 	assert.Nil(t, err)
-	assert.Equal(t, nonceSize+len(secret)+tagSize, len(ciphertext))
+	assert.Equal(t, NonceSize+len(secret)+TagSize, len(ciphertext))
 	assert.NotContains(t, string(ciphertext), string(secret))
 
 	decrypted, err := aesgcm.Open(key, ciphertext, nil)
@@ -148,7 +148,7 @@ func TestOpenWithInvalidKey(t *testing.T) {
 
 	// Test with invalid key size
 	invalidKey := []byte("short")
-	ciphertext := make([]byte, nonceSize+tagSize)
+	ciphertext := make([]byte, NonceSize+TagSize)
 
 	_, err := aesgcm.Open(invalidKey, ciphertext, nil)
 	assert.NotNil(t, err)
@@ -158,14 +158,26 @@ func TestOpenWithInvalidKey(t *testing.T) {
 func TestOpenWithInvalidCiphertext(t *testing.T) {
 	aesgcm := NewAESGCM(nil)
 
-	// Generate a valid key
 	key := make([]byte, 32)
 	_, err := io.ReadFull(rand.Reader, key)
 	assert.Nil(t, err)
 
-	// Too short to hold even a nonce and a tag
-	_, err = aesgcm.Open(key, []byte("short"), nil)
-	assert.NotNil(t, err)
+	sealed, err := aesgcm.Seal(key, []byte("secret"), nil)
+	assert.Nil(t, err)
+
+	t.Run("a blob shorter than nonce and tag is a typed error", func(t *testing.T) {
+		_, err := aesgcm.Open(key, sealed[:NonceSize+TagSize-1], nil)
+		var tooShort ErrCiphertextTooShort
+		assert.ErrorAs(t, err, &tooShort)
+		assert.Equal(t, NonceSize+TagSize-1, tooShort.Length)
+	})
+
+	t.Run("a blob of exactly nonce and tag reaches authentication", func(t *testing.T) {
+		_, err := aesgcm.Open(key, sealed[:NonceSize+TagSize], nil)
+		assert.Error(t, err)
+		var tooShort ErrCiphertextTooShort
+		assert.False(t, errors.As(err, &tooShort))
+	})
 }
 
 func TestNewAESGCMWithCustomReader(t *testing.T) {
@@ -189,18 +201,8 @@ func TestNewAESGCMWithCustomReader(t *testing.T) {
 	assert.Equal(t, secret, decrypted)
 }
 
-// TestMessageError covers the error type Open's panic guard reports through.
-// That guard is defence in depth rather than a reachable path today: since
-// #209 Open passes a nil nonce and a nil destination, so neither of
-// crypto/cipher's panic conditions — a non-empty nonce, an overlapping buffer —
-// can arise. It is kept because Open handles attacker-supplied ciphertext, and
-// a crashed daemon is a worse outcome than a returned error if a future stdlib
-// revision panics somewhere new.
-func TestMessageError(t *testing.T) {
-	err := &MessageError{Msg: "cipher: message authentication failed"}
-	assert.EqualError(t, err, "cipher: message authentication failed")
-
-	var target *MessageError
-	assert.ErrorAs(t, error(err), &target)
-	assert.Equal(t, err.Msg, target.Msg)
+func TestErrCiphertextTooShort(t *testing.T) {
+	err := ErrCiphertextTooShort{Length: 5}
+	assert.EqualError(t, err,
+		"aesgcm: ciphertext of 5 bytes is shorter than nonce and tag (28 bytes)")
 }

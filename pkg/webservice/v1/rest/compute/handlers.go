@@ -73,12 +73,18 @@ func (h *Handlers) CreateVM(w http.ResponseWriter, r *http.Request) {
 	protorest.WriteSuccessStatus(w, r, h.respWriter, http.StatusCreated, resp)
 }
 
-// ListVMs handles GET /api/v1/compute/vms.
+// ListVMs handles GET /api/v1/compute/vms. The JSON body is the
+// ListVMsRequest the Go SDK sends; page and page_size query parameters, when
+// given, replace the body's page and page size.
 func (h *Handlers) ListVMs(w http.ResponseWriter, r *http.Request) {
 	if !h.ensureAvailable(w, r) {
 		return
 	}
 	req := &platformv1.ListVMsRequest{}
+	if err := protorest.DecodeRequest(r, req); err != nil {
+		h.respWriter.Error400(w, r, err)
+		return
+	}
 	if r.URL.Query().Get("page") != "" || r.URL.Query().Get("page_size") != "" {
 		page, err := protorest.QueryUint32(r, "page")
 		if err != nil {
@@ -90,7 +96,11 @@ func (h *Handlers) ListVMs(w http.ResponseWriter, r *http.Request) {
 			h.respWriter.Error400(w, r, err)
 			return
 		}
-		req.Pagination = &platformv1.PaginationRequest{Page: page, PageSize: size}
+		// The query pages; sort_by and ascending stay as the body set them.
+		if req.Pagination == nil {
+			req.Pagination = &platformv1.PaginationRequest{}
+		}
+		req.Pagination.Page, req.Pagination.PageSize = page, size
 	}
 	resp, err := h.server.ListVMs(r.Context(), req)
 	if err != nil {
@@ -186,6 +196,32 @@ func (h *Handlers) RebootVM(w http.ResponseWriter, r *http.Request) {
 	protorest.WriteSuccess(w, r, h.respWriter, resp)
 }
 
+// SuspendVM handles POST /api/v1/compute/vms/{id}/suspend.
+func (h *Handlers) SuspendVM(w http.ResponseWriter, r *http.Request) {
+	if !h.ensureAvailable(w, r) {
+		return
+	}
+	resp, err := h.server.SuspendVM(r.Context(), &platformv1.SuspendVMRequest{Id: mux.Vars(r)["id"]})
+	if err != nil {
+		protorest.WriteError(w, r, h.respWriter, err)
+		return
+	}
+	protorest.WriteSuccess(w, r, h.respWriter, resp)
+}
+
+// ResumeVM handles POST /api/v1/compute/vms/{id}/resume.
+func (h *Handlers) ResumeVM(w http.ResponseWriter, r *http.Request) {
+	if !h.ensureAvailable(w, r) {
+		return
+	}
+	resp, err := h.server.ResumeVM(r.Context(), &platformv1.ResumeVMRequest{Id: mux.Vars(r)["id"]})
+	if err != nil {
+		protorest.WriteError(w, r, h.respWriter, err)
+		return
+	}
+	protorest.WriteSuccess(w, r, h.respWriter, resp)
+}
+
 // GetVMMetrics handles GET /api/v1/compute/vms/{id}/metrics.
 func (h *Handlers) GetVMMetrics(w http.ResponseWriter, r *http.Request) {
 	if !h.ensureAvailable(w, r) {
@@ -211,6 +247,46 @@ func (h *Handlers) MigrateVM(w http.ResponseWriter, r *http.Request) {
 	}
 	req.VmId = mux.Vars(r)["id"]
 	resp, err := h.server.MigrateVM(r.Context(), req)
+	if err != nil {
+		protorest.WriteError(w, r, h.respWriter, err)
+		return
+	}
+	protorest.WriteSuccess(w, r, h.respWriter, resp)
+}
+
+// PrepareMigration handles POST /api/v1/compute/migrations/prepare: it
+// stands up a receiver for an inbound migration (the destination half of
+// MigrateVM).
+func (h *Handlers) PrepareMigration(w http.ResponseWriter, r *http.Request) {
+	if !h.ensureAvailable(w, r) {
+		return
+	}
+	req := &platformv1.PrepareMigrationRequest{}
+	if err := protorest.DecodeRequest(r, req); err != nil {
+		h.respWriter.Error400(w, r, err)
+		return
+	}
+	resp, err := h.server.PrepareMigration(r.Context(), req)
+	if err != nil {
+		protorest.WriteError(w, r, h.respWriter, err)
+		return
+	}
+	protorest.WriteSuccess(w, r, h.respWriter, resp)
+}
+
+// FinalizeMigration handles POST /api/v1/compute/migrations/{receiverId}/finalize:
+// it commits or aborts the receiver PrepareMigration returned.
+func (h *Handlers) FinalizeMigration(w http.ResponseWriter, r *http.Request) {
+	if !h.ensureAvailable(w, r) {
+		return
+	}
+	req := &platformv1.FinalizeMigrationRequest{}
+	if err := protorest.DecodeRequest(r, req); err != nil {
+		h.respWriter.Error400(w, r, err)
+		return
+	}
+	req.ReceiverId = mux.Vars(r)["receiverId"]
+	resp, err := h.server.FinalizeMigration(r.Context(), req)
 	if err != nil {
 		protorest.WriteError(w, r, h.respWriter, err)
 		return
@@ -300,6 +376,23 @@ func (h *Handlers) ListSnapshots(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	resp, err := h.server.ListSnapshots(r.Context(), &platformv1.ListSnapshotsRequest{VmId: mux.Vars(r)["id"]})
+	if err != nil {
+		protorest.WriteError(w, r, h.respWriter, err)
+		return
+	}
+	protorest.WriteSuccess(w, r, h.respWriter, resp)
+}
+
+// GetSnapshot handles GET /api/v1/compute/vms/{id}/snapshots/{snapshotId}.
+func (h *Handlers) GetSnapshot(w http.ResponseWriter, r *http.Request) {
+	if !h.ensureAvailable(w, r) {
+		return
+	}
+	vars := mux.Vars(r)
+	resp, err := h.server.GetSnapshot(r.Context(), &platformv1.GetSnapshotRequest{
+		VmId:       vars["id"],
+		SnapshotId: vars["snapshotId"],
+	})
 	if err != nil {
 		protorest.WriteError(w, r, h.respWriter, err)
 		return
@@ -483,6 +576,27 @@ func (h *Handlers) GetContainerMetrics(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	resp, err := h.server.GetContainerMetrics(r.Context(), &platformv1.GetContainerMetricsRequest{Id: mux.Vars(r)["id"]})
+	if err != nil {
+		protorest.WriteError(w, r, h.respWriter, err)
+		return
+	}
+	protorest.WriteSuccess(w, r, h.respWriter, resp)
+}
+
+// AttestContainer handles POST /api/v1/compute/containers/{id}/attest.
+// The body carries the nonce and PCR selection; the container ID comes
+// from the path.
+func (h *Handlers) AttestContainer(w http.ResponseWriter, r *http.Request) {
+	if !h.ensureAvailable(w, r) {
+		return
+	}
+	req := &platformv1.AttestContainerRequest{}
+	if err := protorest.DecodeRequest(r, req); err != nil {
+		h.respWriter.Error400(w, r, err)
+		return
+	}
+	req.Id = mux.Vars(r)["id"]
+	resp, err := h.server.AttestContainer(r.Context(), req)
 	if err != nil {
 		protorest.WriteError(w, r, h.respWriter, err)
 		return

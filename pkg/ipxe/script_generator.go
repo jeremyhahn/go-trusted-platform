@@ -48,6 +48,12 @@ type DeviceBootInfo struct {
 	// "arm64"), when the lookup knows it; the kernel and initrd URLs must
 	// be for it.
 	Architecture string
+
+	// BootImageURL, when set, is a signed UKI the device boots instead of
+	// the kernel and initrd: an installed diskless-nbd node's, read out of
+	// its export. It is booted with no arguments, so the command line
+	// signed into it is the one it runs.
+	BootImageURL string
 }
 
 // ScriptGenerator produces per-device iPXE boot scripts.
@@ -91,7 +97,11 @@ func (g *ScriptGenerator) GenerateScript(info *DeviceBootInfo) string {
 	var sb strings.Builder
 	sb.WriteString("#!ipxe\n")
 	sb.WriteString(architectureGuard(info.Architecture, "/menu.ipxe"))
-	sb.WriteString(bootBlock("", description, info.KernelURL, strings.Join(args, " "), info.InitrdURL))
+	if info.BootImageURL != "" {
+		sb.WriteString(bootBlock("", description, info.BootImageURL, "", ""))
+	} else {
+		sb.WriteString(bootBlock("", description, info.KernelURL, strings.Join(args, " "), info.InitrdURL))
+	}
 
 	g.logger.Debug("generated device boot script",
 		"mac", info.MAC,
@@ -136,6 +146,11 @@ func bootBlock(label, description, kernelURL, args, initrdURL string) string {
 	if args != "" {
 		kernel += " " + args
 	}
+	// A UKI carries its own initrd, so it is fetched alone.
+	initrd := ""
+	if initrdURL != "" {
+		initrd = fmt.Sprintf("initrd %s || goto %s_failed\n", initrdURL, l)
+	}
 	return fmt.Sprintf(`echo Booting %[1]s...
 echo
 set attempts:int32 0
@@ -143,8 +158,7 @@ set attempts:int32 0
 inc attempts
 echo Boot attempt ${attempts}...
 %[3]s || goto %[2]s_failed
-initrd %[4]s || goto %[2]s_failed
-boot || goto %[2]s_failed
+%[4]sboot || goto %[2]s_failed
 :%[2]s_failed
 iseq ${attempts} %[5]d && goto %[2]s_giveup ||
 echo Boot fetch failed (attempt ${attempts}); retrying in 3s...
@@ -153,7 +167,7 @@ goto %[2]s_retry
 :%[2]s_giveup
 echo Giving up after ${attempts} attempts; dropping to iPXE shell
 shell
-`, description, l, kernel, initrdURL, bootMaxAttempts)
+`, description, l, kernel, initrd, bootMaxAttempts)
 }
 
 // GenerateDefaultMenu produces the fallback boot menu for unknown devices.

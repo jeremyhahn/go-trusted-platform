@@ -16,6 +16,7 @@ package daemon
 import (
 	"context"
 	"log/slog"
+	"strings"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -33,7 +34,9 @@ type DNSServiceServer struct {
 	logger  *slog.Logger
 }
 
-// NewDNSServiceServer creates a new DNSServiceServer.
+// NewDNSServiceServer creates a new DNSServiceServer. A nil service is a
+// node without a dns: section: every handler then answers requireService's
+// not-configured error.
 func NewDNSServiceServer(service dns.DNSService, logger *slog.Logger) *DNSServiceServer {
 	return &DNSServiceServer{
 		service: service,
@@ -41,8 +44,23 @@ func NewDNSServiceServer(service dns.DNSService, logger *slog.Logger) *DNSServic
 	}
 }
 
+// requireService returns the canonical not-configured error when this node
+// has no DNS backend: codes.Unavailable (REST 503) carrying the
+// SERVICE_NOT_CONFIGURED discriminator for service "dns", the answer the PXE
+// service gives. Every handler checks it before any other work.
+func (s *DNSServiceServer) requireService() error {
+	if s.service == nil {
+		return ErrDNSServiceNotAvailable{}.GRPCStatus().Err()
+	}
+	return nil
+}
+
 // CreateZone creates a new DNS zone.
 func (s *DNSServiceServer) CreateZone(ctx context.Context, req *platformv1.CreateZoneRequest) (*platformv1.CreateZoneResponse, error) {
+	if err := s.requireService(); err != nil {
+		return nil, err
+	}
+
 	if req.GetName() == "" {
 		return nil, status.Error(codes.InvalidArgument, "zone name is required")
 	}
@@ -100,6 +118,10 @@ func (s *DNSServiceServer) CreateZone(ctx context.Context, req *platformv1.Creat
 
 // GetZone retrieves a DNS zone by name.
 func (s *DNSServiceServer) GetZone(ctx context.Context, req *platformv1.GetZoneRequest) (*platformv1.GetZoneResponse, error) {
+	if err := s.requireService(); err != nil {
+		return nil, err
+	}
+
 	if req.GetName() == "" {
 		return nil, status.Error(codes.InvalidArgument, "zone name is required")
 	}
@@ -117,6 +139,10 @@ func (s *DNSServiceServer) GetZone(ctx context.Context, req *platformv1.GetZoneR
 
 // UpdateZone updates an existing DNS zone.
 func (s *DNSServiceServer) UpdateZone(ctx context.Context, req *platformv1.UpdateZoneRequest) (*platformv1.UpdateZoneResponse, error) {
+	if err := s.requireService(); err != nil {
+		return nil, err
+	}
+
 	if req.GetName() == "" {
 		return nil, status.Error(codes.InvalidArgument, "zone name is required")
 	}
@@ -150,6 +176,10 @@ func (s *DNSServiceServer) UpdateZone(ctx context.Context, req *platformv1.Updat
 
 // DeleteZone deletes a DNS zone.
 func (s *DNSServiceServer) DeleteZone(ctx context.Context, req *platformv1.DeleteZoneRequest) (*platformv1.DeleteZoneResponse, error) {
+	if err := s.requireService(); err != nil {
+		return nil, err
+	}
+
 	if req.GetName() == "" {
 		return nil, status.Error(codes.InvalidArgument, "zone name is required")
 	}
@@ -175,6 +205,10 @@ func (s *DNSServiceServer) DeleteZone(ctx context.Context, req *platformv1.Delet
 
 // ListZones lists all DNS zones.
 func (s *DNSServiceServer) ListZones(ctx context.Context, req *platformv1.ListZonesRequest) (*platformv1.ListZonesResponse, error) {
+	if err := s.requireService(); err != nil {
+		return nil, err
+	}
+
 	zones, err := s.service.ListZones(ctx)
 	if err != nil {
 		s.logger.Error("failed to list zones", slog.String("error", err.Error()))
@@ -200,6 +234,10 @@ func (s *DNSServiceServer) ListZones(ctx context.Context, req *platformv1.ListZo
 
 // AddRecord adds a record to a zone.
 func (s *DNSServiceServer) AddRecord(ctx context.Context, req *platformv1.AddRecordRequest) (*platformv1.AddRecordResponse, error) {
+	if err := s.requireService(); err != nil {
+		return nil, err
+	}
+
 	if req.GetZoneName() == "" {
 		return nil, status.Error(codes.InvalidArgument, "zone name is required")
 	}
@@ -234,6 +272,10 @@ func (s *DNSServiceServer) AddRecord(ctx context.Context, req *platformv1.AddRec
 
 // DeleteRecord deletes a record from a zone.
 func (s *DNSServiceServer) DeleteRecord(ctx context.Context, req *platformv1.DeleteRecordRequest) (*platformv1.DeleteRecordResponse, error) {
+	if err := s.requireService(); err != nil {
+		return nil, err
+	}
+
 	if req.GetZoneName() == "" {
 		return nil, status.Error(codes.InvalidArgument, "zone name is required")
 	}
@@ -266,6 +308,10 @@ func (s *DNSServiceServer) DeleteRecord(ctx context.Context, req *platformv1.Del
 
 // UpdateRecord updates a record in a zone.
 func (s *DNSServiceServer) UpdateRecord(ctx context.Context, req *platformv1.UpdateRecordRequest) (*platformv1.UpdateRecordResponse, error) {
+	if err := s.requireService(); err != nil {
+		return nil, err
+	}
+
 	if req.GetZoneName() == "" {
 		return nil, status.Error(codes.InvalidArgument, "zone name is required")
 	}
@@ -303,6 +349,10 @@ func (s *DNSServiceServer) UpdateRecord(ctx context.Context, req *platformv1.Upd
 
 // ListRecords lists records in a zone.
 func (s *DNSServiceServer) ListRecords(ctx context.Context, req *platformv1.ListRecordsRequest) (*platformv1.ListRecordsResponse, error) {
+	if err := s.requireService(); err != nil {
+		return nil, err
+	}
+
 	if req.GetZoneName() == "" {
 		return nil, status.Error(codes.InvalidArgument, "zone name is required")
 	}
@@ -313,7 +363,7 @@ func (s *DNSServiceServer) ListRecords(ctx context.Context, req *platformv1.List
 		return nil, status.Error(codes.NotFound, err.Error())
 	}
 
-	records := s.extractRecords(zone, req.GetType())
+	records := s.extractRecords(&zone.RecordSet, req.GetType())
 
 	return &platformv1.ListRecordsResponse{
 		Records: records,
@@ -322,6 +372,10 @@ func (s *DNSServiceServer) ListRecords(ctx context.Context, req *platformv1.List
 
 // SignZone signs a zone with DNSSEC.
 func (s *DNSServiceServer) SignZone(ctx context.Context, req *platformv1.SignZoneRequest) (*platformv1.SignZoneResponse, error) {
+	if err := s.requireService(); err != nil {
+		return nil, err
+	}
+
 	if req.GetZoneName() == "" {
 		return nil, status.Error(codes.InvalidArgument, "zone name is required")
 	}
@@ -353,6 +407,10 @@ func (s *DNSServiceServer) SignZone(ctx context.Context, req *platformv1.SignZon
 
 // GetDNSSECStatus returns the DNSSEC status for a zone.
 func (s *DNSServiceServer) GetDNSSECStatus(ctx context.Context, req *platformv1.GetDNSSECStatusRequest) (*platformv1.GetDNSSECStatusResponse, error) {
+	if err := s.requireService(); err != nil {
+		return nil, err
+	}
+
 	if req.GetZoneName() == "" {
 		return nil, status.Error(codes.InvalidArgument, "zone name is required")
 	}
@@ -397,33 +455,44 @@ func (s *DNSServiceServer) GetDNSSECStatus(ctx context.Context, req *platformv1.
 	}, nil
 }
 
-// Resolve resolves a DNS query.
+// Resolve answers a name from the managed zones through dns.ResolveName, the
+// resolution every transport serves. QUIC and Unix reach it through this
+// server; a type resolution does not serve is InvalidArgument.
 func (s *DNSServiceServer) Resolve(ctx context.Context, req *platformv1.ResolveRequest) (*platformv1.ResolveResponse, error) {
+	if err := s.requireService(); err != nil {
+		return nil, err
+	}
+
 	if req.GetFqdn() == "" {
 		return nil, status.Error(codes.InvalidArgument, "fqdn is required")
 	}
 
-	// For now, we only support resolving from zones we manage
-	// This could be extended to use the DNS resolver
-	zone, err := s.service.Zone(ctx, req.GetFqdn())
+	resolution, err := dns.ResolveName(ctx, s.service, req.GetFqdn(), resolveRecordType(req.GetType()))
 	if err != nil {
-		// Zone not found, return empty response
-		return &platformv1.ResolveResponse{
-			Records:       nil,
-			Authoritative: false,
-		}, nil
+		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
 
-	records := s.extractRecords(zone, req.GetType())
-
 	return &platformv1.ResolveResponse{
-		Records:       records,
-		Authoritative: true,
+		Records:       s.extractRecords(&resolution.Records, platformv1.RecordType_RECORD_TYPE_UNSPECIFIED),
+		Authoritative: resolution.Authoritative,
 	}, nil
+}
+
+// resolveRecordType names a proto record type by the mnemonic dns.ResolveName
+// filters on; unspecified is every type.
+func resolveRecordType(recordType platformv1.RecordType) string {
+	if recordType == platformv1.RecordType_RECORD_TYPE_UNSPECIFIED {
+		return ""
+	}
+	return strings.TrimPrefix(recordType.String(), "RECORD_TYPE_")
 }
 
 // Register registers a new DNS record or zone.
 func (s *DNSServiceServer) Register(ctx context.Context, req *platformv1.RegisterRequest) (*platformv1.RegisterResponse, error) {
+	if err := s.requireService(); err != nil {
+		return nil, err
+	}
+
 	if req.GetFqdn() == "" {
 		return nil, status.Error(codes.InvalidArgument, "fqdn is required")
 	}
@@ -594,6 +663,7 @@ func (s *DNSServiceServer) recordSetToProto(rs *entities.RecordSet) *platformv1.
 
 	for _, r := range rs.RRSIGRecords {
 		protoRS.RrsigRecords = append(protoRS.RrsigRecords, &platformv1.RRSIGRecord{
+			Name:        r.Name,
 			TypeCovered: r.TypeCovered,
 			Algorithm:   uint32(r.Algorithm),
 			Labels:      uint32(r.Labels),
@@ -763,60 +833,60 @@ func (s *DNSServiceServer) getRecordName(record *platformv1.Record) string {
 	return ""
 }
 
-func (s *DNSServiceServer) extractRecords(zone *entities.Zone, recordType platformv1.RecordType) []*platformv1.Record {
+func (s *DNSServiceServer) extractRecords(rs *entities.RecordSet, recordType platformv1.RecordType) []*platformv1.Record {
 	var records []*platformv1.Record
 
 	// If unspecified, return all record types
 	if recordType == platformv1.RecordType_RECORD_TYPE_UNSPECIFIED {
-		for _, r := range zone.RecordSet.ARecords {
+		for _, r := range rs.ARecords {
 			records = append(records, &platformv1.Record{
 				Type:   platformv1.RecordType_RECORD_TYPE_A,
 				Record: &platformv1.Record_A{A: &platformv1.ARecord{Name: r.Name, Value: r.Value, Ttl: r.TTL}},
 			})
 		}
-		for _, r := range zone.RecordSet.AAAARecords {
+		for _, r := range rs.AAAARecords {
 			records = append(records, &platformv1.Record{
 				Type:   platformv1.RecordType_RECORD_TYPE_AAAA,
 				Record: &platformv1.Record_Aaaa{Aaaa: &platformv1.AAAARecord{Name: r.Name, Value: r.Value, Ttl: r.TTL}},
 			})
 		}
-		for _, r := range zone.RecordSet.CNAMERecords {
+		for _, r := range rs.CNAMERecords {
 			records = append(records, &platformv1.Record{
 				Type:   platformv1.RecordType_RECORD_TYPE_CNAME,
 				Record: &platformv1.Record_Cname{Cname: &platformv1.CNAMERecord{Name: r.Name, Value: r.Value, Ttl: r.TTL}},
 			})
 		}
-		for _, r := range zone.RecordSet.MXRecords {
+		for _, r := range rs.MXRecords {
 			records = append(records, &platformv1.Record{
 				Type:   platformv1.RecordType_RECORD_TYPE_MX,
 				Record: &platformv1.Record_Mx{Mx: &platformv1.MXRecord{Name: r.Name, Value: r.Value, Priority: uint32(r.Priority), Ttl: r.TTL}},
 			})
 		}
-		for _, r := range zone.RecordSet.NSRecords {
+		for _, r := range rs.NSRecords {
 			records = append(records, &platformv1.Record{
 				Type:   platformv1.RecordType_RECORD_TYPE_NS,
 				Record: &platformv1.Record_Ns{Ns: &platformv1.NSRecord{Name: r.Name, Value: r.Value, Ttl: r.TTL}},
 			})
 		}
-		for _, r := range zone.RecordSet.TXTRecords {
+		for _, r := range rs.TXTRecords {
 			records = append(records, &platformv1.Record{
 				Type:   platformv1.RecordType_RECORD_TYPE_TXT,
 				Record: &platformv1.Record_Txt{Txt: &platformv1.TXTRecord{Name: r.Name, Value: r.Value, Ttl: r.TTL}},
 			})
 		}
-		for _, r := range zone.RecordSet.SRVRecords {
+		for _, r := range rs.SRVRecords {
 			records = append(records, &platformv1.Record{
 				Type:   platformv1.RecordType_RECORD_TYPE_SRV,
 				Record: &platformv1.Record_Srv{Srv: &platformv1.SRVRecord{Name: r.Name, Target: r.Target, Port: uint32(r.Port), Priority: uint32(r.Priority), Weight: uint32(r.Weight), Ttl: r.TTL}},
 			})
 		}
-		for _, r := range zone.RecordSet.CAARecords {
+		for _, r := range rs.CAARecords {
 			records = append(records, &platformv1.Record{
 				Type:   platformv1.RecordType_RECORD_TYPE_CAA,
 				Record: &platformv1.Record_Caa{Caa: &platformv1.CAARecord{Name: r.Name, Flags: uint32(r.Flags), Tag: r.Tag, Value: r.Value, Ttl: r.TTL}},
 			})
 		}
-		for _, r := range zone.RecordSet.TLSARecords {
+		for _, r := range rs.TLSARecords {
 			records = append(records, &platformv1.Record{
 				Type:   platformv1.RecordType_RECORD_TYPE_TLSA,
 				Record: &platformv1.Record_Tlsa{Tlsa: &platformv1.TLSARecord{Name: r.Name, Usage: uint32(r.Usage), Selector: uint32(r.Selector), MatchingType: uint32(r.MatchingType), Data: r.Data, Ttl: r.TTL}},
@@ -828,63 +898,63 @@ func (s *DNSServiceServer) extractRecords(zone *entities.Zone, recordType platfo
 	// Filter by specific type
 	switch recordType {
 	case platformv1.RecordType_RECORD_TYPE_A:
-		for _, r := range zone.RecordSet.ARecords {
+		for _, r := range rs.ARecords {
 			records = append(records, &platformv1.Record{
 				Type:   platformv1.RecordType_RECORD_TYPE_A,
 				Record: &platformv1.Record_A{A: &platformv1.ARecord{Name: r.Name, Value: r.Value, Ttl: r.TTL}},
 			})
 		}
 	case platformv1.RecordType_RECORD_TYPE_AAAA:
-		for _, r := range zone.RecordSet.AAAARecords {
+		for _, r := range rs.AAAARecords {
 			records = append(records, &platformv1.Record{
 				Type:   platformv1.RecordType_RECORD_TYPE_AAAA,
 				Record: &platformv1.Record_Aaaa{Aaaa: &platformv1.AAAARecord{Name: r.Name, Value: r.Value, Ttl: r.TTL}},
 			})
 		}
 	case platformv1.RecordType_RECORD_TYPE_CNAME:
-		for _, r := range zone.RecordSet.CNAMERecords {
+		for _, r := range rs.CNAMERecords {
 			records = append(records, &platformv1.Record{
 				Type:   platformv1.RecordType_RECORD_TYPE_CNAME,
 				Record: &platformv1.Record_Cname{Cname: &platformv1.CNAMERecord{Name: r.Name, Value: r.Value, Ttl: r.TTL}},
 			})
 		}
 	case platformv1.RecordType_RECORD_TYPE_MX:
-		for _, r := range zone.RecordSet.MXRecords {
+		for _, r := range rs.MXRecords {
 			records = append(records, &platformv1.Record{
 				Type:   platformv1.RecordType_RECORD_TYPE_MX,
 				Record: &platformv1.Record_Mx{Mx: &platformv1.MXRecord{Name: r.Name, Value: r.Value, Priority: uint32(r.Priority), Ttl: r.TTL}},
 			})
 		}
 	case platformv1.RecordType_RECORD_TYPE_NS:
-		for _, r := range zone.RecordSet.NSRecords {
+		for _, r := range rs.NSRecords {
 			records = append(records, &platformv1.Record{
 				Type:   platformv1.RecordType_RECORD_TYPE_NS,
 				Record: &platformv1.Record_Ns{Ns: &platformv1.NSRecord{Name: r.Name, Value: r.Value, Ttl: r.TTL}},
 			})
 		}
 	case platformv1.RecordType_RECORD_TYPE_TXT:
-		for _, r := range zone.RecordSet.TXTRecords {
+		for _, r := range rs.TXTRecords {
 			records = append(records, &platformv1.Record{
 				Type:   platformv1.RecordType_RECORD_TYPE_TXT,
 				Record: &platformv1.Record_Txt{Txt: &platformv1.TXTRecord{Name: r.Name, Value: r.Value, Ttl: r.TTL}},
 			})
 		}
 	case platformv1.RecordType_RECORD_TYPE_SRV:
-		for _, r := range zone.RecordSet.SRVRecords {
+		for _, r := range rs.SRVRecords {
 			records = append(records, &platformv1.Record{
 				Type:   platformv1.RecordType_RECORD_TYPE_SRV,
 				Record: &platformv1.Record_Srv{Srv: &platformv1.SRVRecord{Name: r.Name, Target: r.Target, Port: uint32(r.Port), Priority: uint32(r.Priority), Weight: uint32(r.Weight), Ttl: r.TTL}},
 			})
 		}
 	case platformv1.RecordType_RECORD_TYPE_CAA:
-		for _, r := range zone.RecordSet.CAARecords {
+		for _, r := range rs.CAARecords {
 			records = append(records, &platformv1.Record{
 				Type:   platformv1.RecordType_RECORD_TYPE_CAA,
 				Record: &platformv1.Record_Caa{Caa: &platformv1.CAARecord{Name: r.Name, Flags: uint32(r.Flags), Tag: r.Tag, Value: r.Value, Ttl: r.TTL}},
 			})
 		}
 	case platformv1.RecordType_RECORD_TYPE_TLSA:
-		for _, r := range zone.RecordSet.TLSARecords {
+		for _, r := range rs.TLSARecords {
 			records = append(records, &platformv1.Record{
 				Type:   platformv1.RecordType_RECORD_TYPE_TLSA,
 				Record: &platformv1.Record_Tlsa{Tlsa: &platformv1.TLSARecord{Name: r.Name, Usage: uint32(r.Usage), Selector: uint32(r.Selector), MatchingType: uint32(r.MatchingType), Data: r.Data, Ttl: r.TTL}},

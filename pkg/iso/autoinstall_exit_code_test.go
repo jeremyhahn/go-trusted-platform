@@ -14,6 +14,7 @@
 package iso
 
 import (
+	"os/exec"
 	"strings"
 	"testing"
 )
@@ -100,6 +101,35 @@ func TestAutoinstallScript_FailedInstallDoesNotReboot(t *testing.T) {
 			// And it must actually fail: error() ends with exit 1.
 			if !strings.Contains(branch, `error "Installation failed"`) {
 				t.Errorf("the failure branch does not call error(); the wrapper would exit 0 on a failed install\nbranch:\n%s", branch)
+			}
+		})
+	}
+}
+
+// The live environment runs the whole script or none of it: one syntax error
+// anywhere and no install starts. An image with no security flag configured
+// once emitted an empty if-body for them, which does not parse.
+func TestAutoinstallScript_Parses(t *testing.T) {
+	for name, security := range map[string]SecurityConfig{
+		"no security flags": {},
+		"every security flag": {
+			FIPS:         true,
+			Lockdown:     true,
+			LockdownMode: "integrity",
+			TPM:          TPMConfig{AutoUpgradeSeal: true},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			c := &Customizer{config: &PlatformISOConfig{
+				Alpine:   AlpineConfig{Version: "3.22.2"},
+				Platform: PlatformConfig{AfterInstallAction: "poweroff"},
+				Security: security,
+			}}
+
+			out, err := exec.Command("sh", "-n", "-c", c.buildAutoinstallScript()).CombinedOutput()
+
+			if err != nil {
+				t.Fatalf("the autoinstall script does not parse: %v: %s", err, out)
 			}
 		})
 	}

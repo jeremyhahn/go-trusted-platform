@@ -227,16 +227,30 @@ func TestTPMToolExecution(t *testing.T) {
 		}
 	})
 
-	t.Run("executeTPMDeleteIAK success", func(t *testing.T) {
+	// platform_tpm_iak_delete names the same key as iak_delete, so it must
+	// reach the same IAKDelete call and hand back the same refusal.
+	t.Run("platform_tpm_iak_delete answers as iak_delete", func(t *testing.T) {
 		svc := newMockServiceProvider()
+		calls := 0
+		svc.iakDeleteFunc = func(ctx context.Context) error {
+			calls++
+			return ErrMockServiceError
+		}
 		registry := NewToolRegistry(svc, log)
 
-		result, err := registry.ExecuteTool(ctx, "platform_tpm_iak_delete", map[string]interface{}{})
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
+		tpmResult, tpmErr := registry.ExecuteTool(ctx, "platform_tpm_iak_delete", map[string]interface{}{})
+		_, idevidErr := registry.ExecuteTool(ctx, "iak_delete", map[string]interface{}{})
+		if tpmErr == nil || idevidErr == nil {
+			t.Fatalf("both tools must refuse, got %v and %v", tpmErr, idevidErr)
 		}
-		if result == nil {
-			t.Fatal("result should not be nil")
+		if tpmResult != nil {
+			t.Errorf("a refusal returns no result, got %v", tpmResult)
+		}
+		if tpmErr.Error() != idevidErr.Error() {
+			t.Errorf("platform_tpm_iak_delete error %q differs from iak_delete error %q", tpmErr, idevidErr)
+		}
+		if calls != 2 {
+			t.Errorf("IAKDelete calls = %d, want 2 (one per tool)", calls)
 		}
 	})
 
@@ -290,6 +304,28 @@ func TestTPMToolExecution(t *testing.T) {
 		registry := NewToolRegistry(svc, log)
 
 		result, err := registry.ExecuteTool(ctx, "platform_tpm_verify_quote", map[string]interface{}{
+			"quote":               base64.StdEncoding.EncodeToString([]byte("quote-data")),
+			"signature":           base64.StdEncoding.EncodeToString([]byte("sig-data")),
+			"nonce":               base64.StdEncoding.EncodeToString([]byte("nonce-data")),
+			"signature_algorithm": "SHA256-RSAPSS",
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		out, ok := result.(map[string]interface{})
+		if !ok {
+			t.Fatalf("result = %T, want a map", result)
+		}
+		if got := out["signature_algorithm"]; got != "SHA256-RSAPSS" {
+			t.Errorf("service received signature_algorithm %v, want SHA256-RSAPSS", got)
+		}
+	})
+
+	t.Run("executeTPMVerifyQuote without a scheme passes none", func(t *testing.T) {
+		svc := newMockServiceProvider()
+		registry := NewToolRegistry(svc, log)
+
+		result, err := registry.ExecuteTool(ctx, "platform_tpm_verify_quote", map[string]interface{}{
 			"quote":     base64.StdEncoding.EncodeToString([]byte("quote-data")),
 			"signature": base64.StdEncoding.EncodeToString([]byte("sig-data")),
 			"nonce":     base64.StdEncoding.EncodeToString([]byte("nonce-data")),
@@ -297,8 +333,54 @@ func TestTPMToolExecution(t *testing.T) {
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		if result == nil {
-			t.Fatal("result should not be nil")
+		out, ok := result.(map[string]interface{})
+		if !ok {
+			t.Fatalf("result = %T, want a map", result)
+		}
+		if got := out["signature_algorithm"]; got != "" {
+			t.Errorf("service received signature_algorithm %q, want none for the verifier to refuse", got)
+		}
+		if got := out["ak_public"]; got != "" {
+			t.Errorf("service received ak_public %q, want none so the platform IAK verifies", got)
+		}
+	})
+
+	t.Run("executeTPMVerifyQuote passes ak_public", func(t *testing.T) {
+		svc := newMockServiceProvider()
+		registry := NewToolRegistry(svc, log)
+
+		result, err := registry.ExecuteTool(ctx, "platform_tpm_verify_quote", map[string]interface{}{
+			"quote":               base64.StdEncoding.EncodeToString([]byte("quote-data")),
+			"signature":           base64.StdEncoding.EncodeToString([]byte("sig-data")),
+			"nonce":               base64.StdEncoding.EncodeToString([]byte("nonce-data")),
+			"ak_public":           base64.StdEncoding.EncodeToString([]byte("ak-der")),
+			"signature_algorithm": "SHA256-RSAPSS",
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		out, ok := result.(map[string]interface{})
+		if !ok {
+			t.Fatalf("result = %T, want a map", result)
+		}
+		if got := out["ak_public"]; got != "ak-der" {
+			t.Errorf("service received ak_public %v, want the decoded key", got)
+		}
+	})
+
+	t.Run("executeTPMVerifyQuote invalid ak_public base64", func(t *testing.T) {
+		svc := newMockServiceProvider()
+		registry := NewToolRegistry(svc, log)
+
+		_, err := registry.ExecuteTool(ctx, "platform_tpm_verify_quote", map[string]interface{}{
+			"quote":               base64.StdEncoding.EncodeToString([]byte("quote-data")),
+			"signature":           base64.StdEncoding.EncodeToString([]byte("sig-data")),
+			"nonce":               base64.StdEncoding.EncodeToString([]byte("nonce-data")),
+			"ak_public":           "!!!not-base64!!!",
+			"signature_algorithm": "SHA256-RSAPSS",
+		})
+		if err != ErrTPMInvalidData {
+			t.Fatalf("expected ErrTPMInvalidData, got %v", err)
 		}
 	})
 
@@ -397,37 +479,6 @@ func TestTPMToolExecution(t *testing.T) {
 		}
 		if result == nil {
 			t.Fatal("result should not be nil")
-		}
-	})
-
-	t.Run("executeTPMExtendPCR invalid pcr index too high", func(t *testing.T) {
-		svc := newMockServiceProvider()
-		registry := NewToolRegistry(svc, log)
-
-		_, err := registry.ExecuteTool(ctx, "platform_tpm_pcr_extend", map[string]interface{}{
-			"pcr_index": float64(24),
-			"data":      base64.StdEncoding.EncodeToString([]byte("data")),
-		})
-		if err == nil {
-			t.Fatal("expected error for invalid PCR index")
-		}
-		if err != ErrTPMInvalidPCRIndex {
-			t.Fatalf("expected ErrTPMInvalidPCRIndex, got %v", err)
-		}
-	})
-
-	t.Run("executeTPMExtendPCR missing data", func(t *testing.T) {
-		svc := newMockServiceProvider()
-		registry := NewToolRegistry(svc, log)
-
-		_, err := registry.ExecuteTool(ctx, "platform_tpm_pcr_extend", map[string]interface{}{
-			"pcr_index": float64(7),
-		})
-		if err == nil {
-			t.Fatal("expected error for missing data")
-		}
-		if err != ErrTPMDataRequired {
-			t.Fatalf("expected ErrTPMDataRequired, got %v", err)
 		}
 	})
 
@@ -589,21 +640,6 @@ func TestTPMToolExecution(t *testing.T) {
 		}
 	})
 
-	t.Run("executeTPMCertify success", func(t *testing.T) {
-		svc := newMockServiceProvider()
-		registry := NewToolRegistry(svc, log)
-
-		result, err := registry.ExecuteTool(ctx, "platform_tpm_certify", map[string]interface{}{
-			"key_handle": float64(0x81000001),
-		})
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if result == nil {
-			t.Fatal("result should not be nil")
-		}
-	})
-
 	t.Run("executeTPMNVList success", func(t *testing.T) {
 		svc := newMockServiceProvider()
 		registry := NewToolRegistry(svc, log)
@@ -650,21 +686,6 @@ func TestTPMToolExecution(t *testing.T) {
 		}
 		if result == nil {
 			t.Fatal("result should not be nil")
-		}
-	})
-
-	t.Run("executeTPMNVWrite missing data", func(t *testing.T) {
-		svc := newMockServiceProvider()
-		registry := NewToolRegistry(svc, log)
-
-		_, err := registry.ExecuteTool(ctx, "platform_tpm_nv_write", map[string]interface{}{
-			"index": float64(0x01500000),
-		})
-		if err == nil {
-			t.Fatal("expected error for missing data")
-		}
-		if err != ErrTPMDataRequired {
-			t.Fatalf("expected ErrTPMDataRequired, got %v", err)
 		}
 	})
 

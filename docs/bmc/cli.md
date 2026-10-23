@@ -66,9 +66,11 @@ built-in default**.
 | `--verbose` | `-v` | `false` | | Verbose output |
 | `--no-color` | | `false` | `NO_COLOR` | Disable colour |
 
-**`--transport embedded` cannot reach any BMC verb.** The embedded
-`ServiceRegistry` has no `BMC` field ([api.md](api.md) §2). Use `--bmc-host`
-standalone mode when there is no daemon.
+**`--transport embedded` reaches the SDK-path verbs only** (`cert`, `enroll`,
+`user`): they call the `platformd` that `platformctl` hosts in-process, whose
+`ServiceRegistry.BMC` carries every `BMCService` RPC ([api.md](api.md) §2). The
+raw-HTTP verbs do not use `--transport`. Use `--bmc-host` standalone mode when
+there is no daemon to host.
 
 ### Daemon-mode flags (raw-HTTP path)
 
@@ -248,8 +250,8 @@ platformctl bmc provision \
 
 **This returns an error on a stock daemon.** `pkg/api/daemon/daemon.go`
 constructs the BMC gRPC service with a nil baremetal orchestrator, so
-`Provision` and `ProvisionStatus` return `FailedPrecondition` until one is
-wired via `SetBaremetalService`.
+`Provision` and `ProvisionStatus` answer `Unavailable` (service not configured)
+until one is wired via `SetBaremetalService`.
 
 ---
 

@@ -44,12 +44,14 @@ import (
 // Multi-Protocol Test Entry Point
 // =============================================================================
 
+// adapterBudget bounds one transport's whole run, setup included. Six
+// transports at this budget finish inside go test's 10-minute limit.
+const adapterBudget = 90 * time.Second
+
 // TestSecretsMultiProtocol runs the complete Secrets test suite against all protocol adapters.
 // Each adapter implements the SecretsCommands interface, enabling unified testing across
 // CLI, REST, and future protocols (gRPC, QUIC, MCP, Socket).
 func TestSecretsMultiProtocol(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 
@@ -67,6 +69,14 @@ func TestSecretsMultiProtocol(t *testing.T) {
 	for _, adapter := range adapters {
 		adapter := adapter // Capture for closure
 		t.Run(adapter.Name(), func(t *testing.T) {
+			// Each transport runs on its own budget. Every operation already
+			// has a 60-second deadline, but a transport that never answers
+			// spent one on each of its operations and ran the package past
+			// go test's 10-minute limit, which killed every transport's
+			// results. With the budget spent, the rest fail at once.
+			ctx, cancel := context.WithTimeout(ctx, adapterBudget)
+			defer cancel()
+
 			gate.RequireSetup(t, adapter.Name(), adapter.Setup(ctx))
 			defer func() {
 				if err := adapter.Teardown(); err != nil {

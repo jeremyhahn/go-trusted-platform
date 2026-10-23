@@ -14,6 +14,7 @@
 package v1
 
 import (
+	"crypto/x509"
 	"reflect"
 	"regexp"
 	"runtime"
@@ -24,6 +25,8 @@ import (
 	"github.com/gorilla/mux"
 	"github.com/stretchr/testify/require"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/middleware"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
 	sdkrest "github.com/jeremyhahn/go-trusted-platform/sdk/go/transport/rest"
 )
 
@@ -84,13 +87,12 @@ var getListCollisions = map[string]bool{
 	// path existed on no generated client and could never be produced. The
 	// collision did not get fixed; the claims making it stopped existing.
 	//
-	// One remains, because the server serves NO singular route for it and
-	// there is nothing to point at: platform_dns.proto has no GetRecord rpc
-	// and records live only under /dns/zones/{zone}/records.
+	// The sixteenth -- GET /api/v1/dns/records, GetRecord against
+	// ListRecords -- went with #452, which moved the DNS claims to the
+	// zone-scoped item routes the server serves and deleted the GetRecord
+	// claim: platform_dns.proto declares no GetRecord rpc.
 	//
-	// It shrinks when that route exists, not before -- repointing it at a path
-	// that 404s would turn a wrong answer into a failure that reads as fixed.
-	"GET /api/v1/dns/records": true,
+	// The list is empty and stays that way: any new pair fails the test above.
 }
 
 // minimumResolvedHandlers is a vacuity floor.
@@ -136,7 +138,14 @@ func handlerName(h any) (string, bool) {
 func builtHandlers(t *testing.T) (resolved map[string]string, wrapped []string) {
 	t.Helper()
 
-	router := newGatedTestRouter(t, &testHandlerRegistry{tokenHandler: &anonymousAuth{}})
+	// The diskless per-boot routes register only with a boot handler, and
+	// POST /device/boot sits behind the mTLS middleware.
+	logger := testLogger()
+	router := newGatedTestRouter(t, &testHandlerRegistry{
+		tokenHandler: &anonymousAuth{},
+		bootHandler:  &probeBootHandler{},
+		mtls:         middleware.NewMTLSMiddleware(logger, response.NewResponseWriter(logger, nil), x509.NewCertPool()),
+	})
 	resolved = map[string]string{}
 
 	require.NoError(t, router.Walk(func(route *mux.Route, _ *mux.Router, _ []*mux.Route) error {
@@ -218,6 +227,104 @@ func TestSDKRouteClaims_NoGetResolvesToList(t *testing.T) {
 				"List* handler -- it resolves to %q. Remove the entry; this list "+
 				"only shrinks", grpcMethod, why, handler)
 		}
+	}
+}
+
+// deviceServiceHandlers names the handler each DeviceService SDK claim must
+// dispatch to on the built router (#321). The SDK test
+// TestDeviceServiceRoutes_MatchTheServerRouter requires a claim for every
+// method in the generated descriptor; this map requires each of those claims
+// to land on its own operation here, so the two together pin every method.
+var deviceServiceHandlers = map[string]string{
+	"CreateDevice":                 "CreateDevice",
+	"GetDevice":                    "GetDevice",
+	"UpdateDevice":                 "UpdateDevice",
+	"DeleteDevice":                 "DeleteDevice",
+	"ListDevices":                  "ListDevices",
+	"FindDeviceBySerial":           "FindDeviceBySerial",
+	"CountDevices":                 "CountDevices",
+	"CreateProfile":                "CreateProfile",
+	"GetProfile":                   "GetProfileByID",
+	"UpdateProfile":                "UpdateProfile",
+	"DeleteProfile":                "DeleteProfile",
+	"ListProfiles":                 "ListProfiles",
+	"FindProfileByMACAddress":      "FindProfileByMAC",
+	"FindProfileBySerial":          "FindProfileBySerial",
+	"FindMatchingProfile":          "FindMatchingProfile",
+	"CountProfiles":                "CountProfiles",
+	"ActivateDevice":               "ActivateDevice",
+	"AttestDevice":                 "HandleAttestDevice",
+	"RecordAttestationCertificate": "HandleRecordAttestCert",
+	"CreateTemplate":               "CreateTemplate",
+	"GetTemplate":                  "GetTemplate",
+	"ListTemplates":                "ListTemplates",
+	"UpdateTemplate":               "UpdateTemplate",
+	"DeleteTemplate":               "DeleteTemplate",
+	"CreateProfileFromTemplate":    "CreateProfileFromTemplate",
+	"FindConfigForDevice":          "FindConfigForDevice",
+	"AssignProfileToDevice":        "AssignProfileToDevice",
+	"UnassignProfileFromDevice":    "UnassignProfileFromDevice",
+	"BootCertificate":              "HandleBootCertificate",
+	"DisableDevice":                "HandleDisable",
+	"EnableDevice":                 "HandleEnable",
+}
+
+// deviceServiceWrappedRoutes lists the DeviceService claims whose route sits
+// behind middleware, so the built router yields no handler name for it. The
+// claim must still land on that registered route; the handler the middleware
+// reaches is pinned by the router package's own tests.
+var deviceServiceWrappedRoutes = map[string]string{
+	"BootDelivery": "POST /api/v1/device/boot",
+}
+
+// TestSDKRouteClaims_DeviceServiceDispatchesToItsHandler resolves every
+// DeviceService SDK claim on the router built in-process and checks the
+// handler it reaches. A claim on a path or verb the server does not register,
+// or on another operation's route, fails; so does a claim with no row here.
+func TestSDKRouteClaims_DeviceServiceDispatchesToItsHandler(t *testing.T) {
+	resolved, wrapped := builtHandlers(t)
+	behindMiddleware := map[string]bool{}
+	for _, route := range wrapped {
+		behindMiddleware[route] = true
+	}
+
+	const prefix = "/platform.v1.DeviceService/"
+	claimed := map[string]bool{}
+	for _, claim := range sdkrest.RouteClaims() {
+		if !strings.HasPrefix(claim.GRPCMethod, prefix) {
+			continue
+		}
+		method := strings.TrimPrefix(claim.GRPCMethod, prefix)
+		claimed[method] = true
+
+		if wantRoute, ok := deviceServiceWrappedRoutes[method]; ok {
+			route := claim.Method + " " + normalisePath(claim.Path)
+			require.Equalf(t, wantRoute, route, "%s claims the wrong route", claim.GRPCMethod)
+			require.Truef(t, behindMiddleware[route],
+				"%s claims %q, which the built router does not register behind middleware", claim.GRPCMethod, route)
+			continue
+		}
+
+		want, ok := deviceServiceHandlers[method]
+		if !ok {
+			t.Errorf("%s has an SDK claim but no row in deviceServiceHandlers", claim.GRPCMethod)
+			continue
+		}
+		route := claim.Method + " " + normalisePath(claim.Path)
+		got, ok := resolved[route]
+		if !ok {
+			t.Errorf("%s claims %q, which the built router does not register", claim.GRPCMethod, route)
+			continue
+		}
+		require.Equalf(t, want, got, "%s claims %q, which dispatches to the wrong handler",
+			claim.GRPCMethod, route)
+	}
+
+	for method := range deviceServiceHandlers {
+		require.Truef(t, claimed[method], "%s%s has no SDK route claim", prefix, method)
+	}
+	for method := range deviceServiceWrappedRoutes {
+		require.Truef(t, claimed[method], "%s%s has no SDK route claim", prefix, method)
 	}
 }
 

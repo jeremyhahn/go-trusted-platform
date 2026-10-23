@@ -332,8 +332,10 @@ func TestOPAEvaluator_Evaluate(t *testing.T) {
 	})
 
 	t.Run("context cancellation", func(t *testing.T) {
+		// The server never answers; the handler returns once the client
+		// abandons the request, so server.Close does not wait on it.
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			time.Sleep(time.Second)
+			<-r.Context().Done()
 		}))
 		defer server.Close()
 

@@ -1,12 +1,13 @@
 # Reference Network Architecture
 
+> **Status: REFERENCE** · Last verified: 2026-10-13
+> The approved reference network: zones, VLANs, subnets, port classes and overlays (#708).
+
 This is the reference network for go-trusted-platform: how a deployment lays out its VLANs, subnets,
 switch ports and overlays. The same model applies to every topology, from a single box to an HA
 cluster.
 
-> **Status.** The design was approved by the owner on 2026-09-26, with the routing and platform-VRF
-> rulings of 2026-09-30 and the gateway exemption confirmed on 2026-10-01. The zone model, the
-> addressing, the port classes and host addressing by role are implemented (#708): every number
+> **Implementation.** The zone model, the addressing, the port classes and host addressing by role are implemented (#708): every number
 > below is derived by `pkg/sdn/netplan`. The EVPN overlay service is #709, tenant VRFs and the
 > platform VRF's overlay attachment follow it, and gateway HA is #596 and #710. Where a section
 > depends on one of those, it says so.
@@ -230,13 +231,13 @@ A host holds an address **only on the zones it uses**. There is no multi-homing 
 |-----------|----------------------|
 | control-plane | `fabric` (its VTEP), `control-plane`, and `hypervisor` and `storage` when it hosts VMs or mounts storage |
 | compute | `fabric` (its VTEP), `hypervisor`, and `storage` when it mounts storage |
-| gateway | Exempt: it routes and NATs by role (owner, 2026-10-01) |
+| gateway | Exempt: it routes and NATs by role |
 
 - Every non-gateway host has a fabric address, and no address on the VLANs it only passes through
   to guests.
 - IP forwarding is off on every host except gateways, and the host firewall drops traffic between
   its interfaces.
-- **Platform VRF** (owner, 2026-09-30): each attested host has exactly one platform-VRF address,
+- **Platform VRF**: each attested host has exactly one platform-VRF address,
   from the platform-VRF hosts range, held in a Linux VRF on the host rather than on an underlay
   interface. Platform services reach hosts there, so hosts stay single-homed on the underlay. The
   VRF reaches the network through the fabric VTEP once the platform overlay lands (#709).
@@ -261,8 +262,10 @@ tenant networks and workload networks.
 - **Isolation.** Overlays are isolated from each other. Traffic between VRFs, and between an overlay
   and a zone, passes the gateway's policy.
 - **One public network.** All of the platform's internet exposure collapses into a single `public`
-  overlay that the gateways announce over BGP. Lighting it needs the overlay service (#709) and
-  gateway HA (#596, #710).
+  overlay that the gateways announce over BGP. Only the platform exposes services to the internet,
+  and only through `public`: an internal or site network beside the platform runs no DMZ of its
+  own. Lighting it needs the overlay service (#709) and gateway HA (#596,
+  #710).
 
 On a host, the physical trunk rides the OVS bridge **`br-fabric`**, which also holds the host's own
 zone addresses as internal ports. Workload ports sit on a separate integration bridge, **`br-int`**,
@@ -272,7 +275,7 @@ which never carries the trunk.
 
 | Threat | Control | Status |
 |--------|---------|--------|
-| A rogue host joins the fabric VLAN and injects VXLAN or BGP | VTEP admission requires an attested IDevID; overlay traffic is IPsec-protected between VTEPs | #709 |
+| A rogue host joins the fabric VLAN and injects VXLAN or BGP | VTEP admission requires an attested IDevID; overlay traffic is IPsec-protected between VTEPs | Admission and VTEP-to-VTEP IPsec implemented (platformd and gatewayd); IPsec certificates derived from the IDevID are #709 |
 | A compromised workload sends tagged or spoofed frames into the underlay | Workload ports are on `br-int`, which never carries the trunk | Implemented (#708); per-port tag and source hygiene on `br-int` is #709 |
 | A tenant reaches another tenant with overlapping addresses | Each tenant is its own VRF; only the gateway routes between VRFs | Tenant VRFs follow #709 |
 | A host is used as a router between zones | Forwarding is off and the host firewall drops inter-interface traffic on every non-gateway host | Implemented (#708) |
@@ -402,5 +405,5 @@ See [SDN configuration](../sdn/configuration.md) for every key, and the profile 
 
 - [Deployment Reference](deployment-reference.md): topologies, node roles, bootstrap
 - [Gateway](../gateway/architecture.md): gateway services, HA, overlay status
-- [Security Model](security-model.md): trust boundaries and threat model
+- [Security Model](../security/architecture.md): trust boundaries and threat model
 - [SDN](../sdn/README.md): bridges, ports, flows, port authentication

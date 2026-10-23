@@ -21,7 +21,6 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
-	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/deviceverdict"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway"
 	gwcommands "github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/commands"
 	gwstate "github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/state"
@@ -54,9 +53,10 @@ const (
 // platformd reaches the gateway over the event stream and withdraws the
 // device's VTEP.
 //
-// The admit half needs a passing verdict, which needs a TPM quote under an
-// attestation certificate chained to the platform CA; no suite fixture
-// produces one yet.
+// The admit half needs a passing verdict against a signed PCR baseline, and
+// platformd's verifier records only trust-on-first-use baselines; the admit
+// path is covered by TestGatewayOverlayWithdrawalRemovesDecapFlows, which
+// serves a signed verdict alongside platformd's allocation and device record.
 func TestGatewayOverlayAdmissionFollowsPlatformdVerdicts(t *testing.T) {
 	ctx, cancel := LongRunningTestContext()
 	t.Cleanup(cancel)
@@ -86,24 +86,6 @@ func TestGatewayOverlayAdmissionFollowsPlatformdVerdicts(t *testing.T) {
 			testOverlayAdmissionFollowsVerdicts(t, ctx, client)
 		})
 	}
-}
-
-func connectGatewayOverlayAdmissionClient(t *testing.T, ctx context.Context) platform.Client {
-	t.Helper()
-	client, err := platform.Connect(ctx, platform.NewOptions(
-		platform.WithOnlyProtocol(platform.ProtocolGRPC),
-		platform.WithGRPCAddr(helpers.GetGRPCEndpoint()),
-		platform.WithTLSConfig(helpers.TLSConfigOrInsecure()),
-	))
-	if err != nil {
-		t.Fatalf("connect to platformd over gRPC: %v", err)
-	}
-	t.Cleanup(func() {
-		if err := client.Close(); err != nil {
-			t.Errorf("close platformd client: %v", err)
-		}
-	})
-	return client
 }
 
 func testOverlayAdmissionFollowsVerdicts(t *testing.T, ctx context.Context, client platform.Client) {
@@ -196,12 +178,6 @@ func (w *vtepWithdrawals) ReplayVTEP(context.Context, netip.Addr) error { return
 // and that address. Everything is removed when the test ends.
 func enrollFabricDevice(t *testing.T, ctx context.Context, client platform.Client) (uint64, netip.Addr) {
 	t.Helper()
-	device, vtep := enrollFabricDeviceRecord(t, ctx, client)
-	return device.GetId(), vtep
-}
-
-func enrollFabricDeviceRecord(t *testing.T, ctx context.Context, client platform.Client) (*platformv1.Device, netip.Addr) {
-	t.Helper()
 	devices := sdkdevice.NewClientFromGRPC(client.Device())
 	ipam := sdkgateway.NewClientFromGRPC(client.Gateway())
 	suffix := strconv.FormatUint(rand.Uint64(), 36)
@@ -245,56 +221,7 @@ func enrollFabricDeviceRecord(t *testing.T, ctx context.Context, client platform
 	if err != nil {
 		t.Fatalf("fabric allocation address %q: %v", allocation.GetIp(), err)
 	}
-	return device, vtep
-}
-
-type signedOverlayVerdictReader struct {
-	gateway.OverlayVerdictReader
-	deviceID uint64
-	verdict  deviceverdict.RecordedDeviceVerdict
-}
-
-func (r signedOverlayVerdictReader) LatestDeviceVerdict(ctx context.Context, deviceID uint64) (*deviceverdict.RecordedDeviceVerdict, error) {
-	if deviceID == r.deviceID {
-		verdict := r.verdict
-		return &verdict, nil
-	}
-	return r.OverlayVerdictReader.LatestDeviceVerdict(ctx, deviceID)
-}
-
-func newSignedOverlayAdmitter(t *testing.T, ctx context.Context, client platform.Client) (*gateway.VTEPAdmitter, netip.Addr) {
-	t.Helper()
-	device, vtep := enrollFabricDeviceRecord(t, ctx, client)
-
-	runtime := &gateway.GatewayRuntime{}
-	gwcommands.WireOverlayPlatform(runtime, client)
-	withdrawals := &vtepWithdrawals{watched: vtep, withdrawn: make(chan struct{}, 1)}
-	admitter, err := gateway.NewVTEPAdmitter(gateway.VTEPAdmissionConfig{
-		IPAM:    runtime.OverlayIPAM,
-		Devices: runtime.OverlayDevices,
-		Verdicts: signedOverlayVerdictReader{
-			OverlayVerdictReader: runtime.OverlayVerdicts,
-			deviceID:             device.GetId(),
-			verdict: deviceverdict.RecordedDeviceVerdict{
-				Verdict: deviceverdict.DeviceVerdict{
-					DeviceID:       device.GetId(),
-					HostID:         device.GetHostname(),
-					Serial:         device.GetSerial(),
-					Passed:         true,
-					BaselineSource: "signed",
-					ProfileID:      709,
-				},
-				EventID:    "overlay-withdrawal-signed-verdict",
-				RecordedAt: time.Now().UTC(),
-			},
-		},
-		Revoker:  withdrawals,
-		Replayer: withdrawals,
-	})
-	if err != nil {
-		t.Fatalf("NewVTEPAdmitter: %v", err)
-	}
-	return admitter, vtep
+	return device.GetId(), vtep
 }
 
 // recordFailedVerdict submits a quote for deviceID that platformd's verifier

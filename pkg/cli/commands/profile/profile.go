@@ -11,31 +11,27 @@
 // 2. Commercial License
 //    Contact licensing@automatethethings.com for commercial licensing options.
 
-// Package profile provides CLI commands for device profile management
-// including listing, retrieving, deleting, and matching device profiles.
+// Package profile is the top-level `platformctl profile` group.
 package profile
 
 import (
 	"github.com/spf13/cobra"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/cli/commands/device"
 )
 
-// NewCommand creates the profile root command for device profile operations
+// NewCommand creates the profile root command. Its verbs are the
+// `platformctl device profile` get, list, delete and match commands, so the
+// two trees share one implementation; `device profile` is canonical.
 func NewCommand(getFlags func() *cli.CommonFlags) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "profile",
 		Short: "Device profile management",
-		Long: `Manage device profiles for provisioning and network assignment.
+		Long: `Read, match and delete device profiles on the control plane.
 
-The profile subsystem provides device profile management:
-  - List all device profiles with pagination
-  - Get profile details by ID
-  - Delete profiles by ID
-  - Match devices to profiles by MAC, serial, or model
-
-Device profiles define provisioning and network configurations
-for devices based on matching rules.
+These are the get, list, delete and match verbs of 'platformctl device
+profile', which also creates, updates, assigns and unassigns profiles.
 
 Examples:
   # List all profiles
@@ -54,11 +50,7 @@ Examples:
   platformctl profile match --mac 00:11:22:33:44:55`,
 	}
 
-	// Add subcommands
-	cmd.AddCommand(newListCommand(getFlags))
-	cmd.AddCommand(newGetCommand(getFlags))
-	cmd.AddCommand(newDeleteCommand(getFlags))
-	cmd.AddCommand(newMatchCommand(getFlags))
+	cmd.AddCommand(device.NewProfileLookupCommands(getFlags)...)
 
 	return cmd
 }

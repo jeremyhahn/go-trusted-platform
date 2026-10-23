@@ -1,5 +1,8 @@
 # Device QUIC API Reference
 
+> **Status: REFERENCE** · Last verified: 2026-10-13
+> The device QUIC opcodes, the `0xCF` sub-opcodes, their scopes and status mapping.
+
 Endpoint: `localhost:9444` (UDP, TLS 1.3, ALPN `platform-quic`)
 
 ## Overview
@@ -46,6 +49,10 @@ unreachable daemon. Reference the constant rather than repeating the string.
 | `0x3B` | Activate device | `ActivateDeviceRequest` | `ActivateDeviceResponse` |
 | `0x3D` | Get device state | `{Id}` | daemon-native `DeviceStateResponse` (domain-only state field, no pb counterpart) |
 
+`0x3C` and `0x3E` (formerly Deactivate and GetMetrics, never implemented) are
+retired: the guard refuses them as unclassified with `StatusPermissionDenied`
+([api.md §2](api.md#2-devices)).
+
 Profile assignment has no opcode of its own; it is multiplexed under
 `OpProvisioningCategory` (`0xCF`) and documented under *Profile Assignment*
 below.
@@ -59,15 +66,19 @@ Union opcodes:
   returns the full list response with `pagination.total_items`
   populated, and the SDK projects `Count*Response.count` from it.
 
-Profile messages are the pb `DeviceProfile` (`docs/device/api-reference-grpc.md`),
+Profile messages are the pb `DeviceProfile` (`pkg/api/grpc/proto/device.proto`),
 so `0x35`–`0x38` carry `tls_server_name` (writable) and the read-only
 `pcr_baseline` exactly as gRPC does: a `0x36` / `0x38` payload that names
 `pcr_baseline` is ignored, and one that omits `tls_server_name` keeps the
-stored value. The daemon-native dark QUIC handler (`pkg/api/quic`) mirrors
-this on its own `ProfileInfo` (`tls_server_name`, `pcr_baseline` with hex
-digests keyed by register index and a Unix `recorded_at`).
+stored value; an `UpdateProfileRequest` clears it only with
+`clear_tls_server_name = true` (`docs/device/api.md` §3.2). The
+daemon-native dark QUIC handler (`pkg/api/quic`) mirrors this on its own
+`ProfileInfo` (`tls_server_name`, `pcr_baseline` with hex digests keyed by
+register index and a Unix `recorded_at`); its `ProfileUpdateRequest` carries
+`tls_server_name` as a pointer, so an omitted name keeps the stored one and
+an explicit `""` clears it.
 
-## Profile Assignment and Attestation Certificate (sub-opcodes under 0xCF)
+## Profile Assignment, Attestation Certificate and Templates (sub-opcodes under 0xCF)
 
 The single-byte opcode space is fully allocated, so profile assignment
 is multiplexed under the provisioning category opcode `0xCF` (same
@@ -78,7 +89,28 @@ precedent as the EAB sub-range): `payload[0]` is the sub-opcode and
 |------------|-----------|-----------------|------------------|
 | `0x20` | Assign profile to device | `AssignProfileToDeviceRequest` | `AssignProfileToDeviceResponse` |
 | `0x21` | Unassign profile from device | `UnassignProfileFromDeviceRequest` | `UnassignProfileFromDeviceResponse` |
-| `0x22` | Record the device's attestation certificate without re-enrolling ([api.md §4.5](api.md#45-recording-the-attestation-certificate-without-re-enrolling-473)); a refusal is status `0x01` with the reason | `RecordAttestationCertificateRequest` | `RecordAttestationCertificateResponse` |
+| `0x22` | Record the device's attestation certificate without re-enrolling ([api.md §4.5](api.md#45-recording-the-attestation-certificate-without-re-enrolling-473)); a refusal is status `0x01` with the reason, and a `clear_on_refusal` clear that lost its compare-and-clear is `0x06` | `RecordAttestationCertificateRequest` | `RecordAttestationCertificateResponse` |
+| `0x23` | Boot certificate: a diskless node's proof-of-possession request for its recorded IDevID chain ([api.md §4.6](api.md#46-diskless-boot-delivery-690)) | `BootCertificateRequest` | `BootCertificateResponse` |
+| `0x24` | Boot delivery: attestation evidence in, network profile and CA bundle out ([api.md §4.6](api.md#46-diskless-boot-delivery-690)) | `BootDeliveryRequest` | `BootDeliveryResponse` |
+| `0x25` | Disable the device: block its port, record it `suspended` ([api.md §4.7](api.md#47-operator-disable-and-enable-250)); a refusal is status `0x01` | `DisableDeviceRequest` | `DeviceLifecycleResponse` |
+| `0x26` | Enable a `suspended` device into quarantine and request re-attestation; a refusal is status `0x01` | `EnableDeviceRequest` | `DeviceLifecycleResponse` |
+| `0x27` | Create a device template ([api.md §4](api.md#4-device-templates)); not a vTPM template | `DeviceTemplateCreateRequest` | `DeviceTemplateCreateResponse` |
+| `0x28` | Build and save a profile from a stored device template | `CreateProfileFromTemplateRequest` | `CreateProfileResponse` |
+| `0x29` | Find the profile whose match rules fit a MAC, serial or model; no match is status `NotFound` | `FindMatchingProfileRequest` | `FindMatchingProfileResponse` |
+| `0x2A` | Get a device template; an unknown id is status `NotFound` | `DeviceTemplateGetRequest` | `DeviceTemplateGetResponse` |
+| `0x2B` | List device templates, paged by `pagination` | `DeviceTemplateListRequest` | `DeviceTemplateListResponse` |
+| `0x2C` | Replace a stored device template; a zero id is status `0x09`, an unknown id `NotFound` | `DeviceTemplateUpdateRequest` | `DeviceTemplateUpdateResponse` |
+| `0x2D` | Delete a device template; an unknown id is status `NotFound` | `DeviceTemplateDeleteRequest` | `DeviceTemplateDeleteResponse` |
+
+Sub-opcodes `0x23` and `0x24` are exempt from token authentication: a
+diskless node holds no token, and the service authenticates every request
+itself. The proof and the evidence are bound to a nonce exported from the
+QUIC connection's TLS 1.3 session, so input computed for another connection
+is refused. A refusal of the request is status `0x09` (invalid argument) or
+`0x07` (permission denied); a service that is not configured is `Unavailable`.
+
+The template sub-opcodes answer `Unavailable` when the daemon runs without
+the template or the profile service, as gRPC and REST do.
 
 `AssignProfileToDeviceRequest` binds the profile to a device identity
 (`ek_serial` and/or `mac_address`) and may prestage the device's
@@ -87,8 +119,53 @@ vTPM or physical hardware TPM). Unassign clears the EK serial, MAC
 address, prestaged EK certificate, and assignment state.
 
 The SDK adapter emits this framing automatically for
-`DeviceService/AssignProfileToDevice` and
-`DeviceService/UnassignProfileFromDevice`.
+`DeviceService/AssignProfileToDevice`,
+`DeviceService/UnassignProfileFromDevice`,
+`DeviceService/RecordAttestationCertificate`,
+`DeviceService/BootCertificate`,
+`DeviceService/BootDelivery`,
+`DeviceService/DisableDevice`,
+`DeviceService/EnableDevice`,
+`DeviceService/CreateTemplate`,
+`DeviceService/GetTemplate`,
+`DeviceService/ListTemplates`,
+`DeviceService/UpdateTemplate`,
+`DeviceService/DeleteTemplate`,
+`DeviceService/CreateProfileFromTemplate` and
+`DeviceService/FindMatchingProfile`.
+
+## Authorization
+
+Behind the platform-token middleware every device opcode and sub-opcode
+requires a `device:*` scope, the same scope its gRPC method takes. The
+catalogs are `opcodePermissions` (top-level opcodes) and
+`categoryPermissions` (sub-opcodes under `0xCF`, keyed by `payload[0]`) in
+`pkg/api/quic/opcode_permissions.go`; `AuthMiddleware.GuardRequest`
+resolves them through `LookupOperationPermission` after the token
+validates. A token without the scope gets `StatusPermissionDenied`; a
+request without a token gets `StatusUnauthorized`; an operation absent from
+the catalogs is refused, so a new sub-opcode without an entry fails closed.
+
+| Scope | Opcodes |
+|-------|---------|
+| `device:read` | `0x32`, `0x33`, `0x35`, `0x37`, `0x3D`; sub-opcodes `0x29`, `0x2A`, `0x2B` |
+| `device:write` | `0x30`, `0x34`, `0x36`, `0x38`, `0x3A`, `0x3B`; sub-opcodes `0x20`–`0x22`, `0x25`–`0x28`, `0x2C` |
+| `device:delete` | `0x31`, `0x39`; sub-opcode `0x2D` |
+
+The boot sub-opcodes `0x23` and `0x24` are pre-auth (above), and the other
+`0xCF` sub-ranges carry no scope. Config delivery (`0x01`–`0x07`)
+is machine bootstrap: the device has no platform token, which is why its
+gRPC `ConfigDeliveryService` is not in the scope catalog either. EAB
+credential management (`0x10`–`0x1A`) is unscoped on gRPC and MCP as well;
+see [`docs/eab/api.md`](../eab/api.md) §5.
+
+Under mTLS-only QUIC, or with IAM validation skipped, the daemon installs
+no token middleware (`selectQUICAuth`), so these scopes are not enforced.
+
+`pkg/api/daemon/quic_device_authz_test.go` sends every device write
+opcode and sub-opcode through the daemon's QUIC handler and asserts that a
+`device:read` token and a missing token are refused while `device:write`
+reaches the handler.
 
 ## Go Client Example
 
@@ -140,4 +217,4 @@ device service:
 | `StatusInvalidRequest` | `FAILED_PRECONDITION` / payload decode failure |
 | `StatusInternalError` | `INTERNAL` |
 
-See [api-reference.md](api-reference.md) for the transport overview.
+See [api.md](api.md) for the transport overview.

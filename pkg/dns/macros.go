@@ -25,32 +25,39 @@ import (
 
 var (
 	macros = map[string]string{
-		"PUBLIC_IPv4":   "",
-		"PUBLIC_IPv6":   "",
-		"PRIVATE_IPv4":  "",
-		"PRIVATE_IPv6":  "",
-		"HOSTNAME":      "",
-		"PUBLIC_DOMAIN": "",
-		"PRVATE_DOMAIN": "",
-		"PUBLIC_FQDN":   "",
-		"PRIVATE_FQDN":  "",
+		"PUBLIC_IPv4":    "",
+		"PUBLIC_IPv6":    "",
+		"PRIVATE_IPv4":   "",
+		"PRIVATE_IPv6":   "",
+		"HOSTNAME":       "",
+		"PUBLIC_DOMAIN":  "",
+		"PRIVATE_DOMAIN": "",
+		"PUBLIC_FQDN":    "",
+		"PRIVATE_FQDN":   "",
 	}
 
 	ErrMacroNotFound = errors.New("dns: macro not found")
+
+	// ErrHostnameLookup reports that the local hostname, which the HOSTNAME
+	// and *_FQDN macros expand to, could not be read.
+	ErrHostnameLookup = errors.New("dns: unable to get the local hostname")
+
+	// lookupHostname reads the local hostname; tests replace it.
+	lookupHostname = os.Hostname
 )
 
-func setupMacros() {
+func setupMacros() error {
+
+	hostname, err := lookupHostname()
+	if err != nil {
+		return &SentinelCauseError{Sentinel: ErrHostnameLookup, Cause: err}
+	}
 
 	macros["PRIVATE_IPv4"] = Configuration.PrivateIPv4
 	macros["PRIVATE_IPv6"] = Configuration.PrivateIPv6
 	macros["PUBLIC_IPv4"] = Configuration.PublicIPv4
 	macros["PUBLIC_IPv6"] = Configuration.PublicIPv6
 	macros["PREFERRED_IP"] = util.PreferredIPv4().String()
-
-	hostname, err := os.Hostname()
-	if err != nil {
-		panic("Unable to get the local hostname")
-	}
 	macros["HOSTNAME"] = hostname
 
 	if Configuration.PublicServer != nil {
@@ -63,6 +70,7 @@ func setupMacros() {
 		macros["PRIVATE_FQDN"] = fmt.Sprintf("%s.%s",
 			hostname, Configuration.InternalServer.Zone.Name)
 	}
+	return nil
 }
 
 func ExpandVar(env string) string {

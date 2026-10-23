@@ -36,9 +36,13 @@ configured twice and drifting.
 You will find `platformctl sdn gateway mode set --modes ...`, a
 `SetGatewayMode` RPC, and a `gateway_mode_set` MCP tool. They drive a deprecated
 three-value bitmask that can express only `overlay`, `edge` and `transit`. It
-is retained for compatibility during migration.
+is retained for compatibility during migration. Asked of `platformd`, it
+answers "not configured", as `gateway status` and the `gateway bgp` verbs do:
+those read a gateway in the daemon's own process, and the control plane runs
+none.
 
-Configure a gateway by its service sections.
+Configure a gateway by its service sections. To see what a gateway is doing,
+use `platformctl sdn gateway snapshot`.
 
 ---
 
@@ -60,7 +64,7 @@ Configure a gateway by its service sections.
 3. **Zones defined** ([`docs/sdn/`](../sdn/)). IPAM pools and proxy routes are
    both checked against them.
 4. **The management VPN, ideally.** IPsec in FIPS builds, WireGuard only in
-   non-FIPS builds (owner design decision 2026-09-26; today the config defines
+   non-FIPS builds (today the config defines
    only `wireguard` and the section is refused, #558), and gateways should
    expose it by default, so administrators reach management endpoints through an
    authenticated tunnel instead of putting an operator workstation on a data
@@ -152,8 +156,10 @@ gateway is reporting.
 
 An enabled section reports **active** only while its backend is running:
 `overlay`, `firewall`, `nat`, `nat64`, `load-balancer`, `hostfw`, `tunnels`,
-`transit` (or a `bgp:` section) and `proxy` have backends today. Enabling
-`edge`, `dhcp`, `pxe` or `management-vpn` stops the daemon at startup with
+`transit` (or a `bgp:` section), `proxy` and `management-vpn` have backends
+today; `management-vpn` also needs the assembly's VPN runtime, which gatewayd
+does not supply yet ([../vpn/user.md](../vpn/user.md)). Enabling
+`edge`, `dhcp` or `pxe` stops the daemon at startup with
 `gateway service "<name>" is enabled but cannot run: <reason>` — those sections
 have no implementation behind them yet and the gateway refuses to claim
 otherwise. When `overlay` is enabled, gatewayd admits only VTEPs backed by IPAM
@@ -164,10 +170,31 @@ daemon opens.
 
 ### IPv6-only clients (`nat64:`)
 
-A `nat64:` section gives an IPv6-only client zone the IPv4 internet. The
-gateway owns a Jool kernel instance and hands it the frames addressed to the
-translation prefix; the translation itself happens in the kernel, not in the
-OVS pipeline, because OpenFlow cannot rewrite between address families.
+A `nat64:` section under `gateway:` gives an IPv6-only client zone the IPv4
+internet. The gateway owns a Jool kernel instance and hands it the frames
+addressed to the translation prefix; the translation itself happens in the
+kernel, not in the OVS pipeline, because OpenFlow cannot rewrite between
+address families.
+
+**Installing it.** The translator is Alpine's Jool, three packages a gateway
+node needs and no other node does:
+
+1. List `jool-modules-lts`, `jool-tools` and `jool-tools-openrc` in the
+   gateway template's `os.packages`. The shipped gateway templates
+   (`configs/platform/templates/dedicated/*/*/gateway.yaml`) already do; an
+   ISO built for a gateway-role config also carries them in its offline
+   repository.
+2. Add the `nat64:` section below to the gateway's config. The x10 profile's
+   `gatewayd.yaml` carries it commented out; uncommenting it gives a section
+   the gateway accepts, ready for your own addresses and translator port.
+3. Install or re-provision the node. The gatewayd init script platformd
+   writes at first boot runs `modprobe jool` in `start_pre` when
+   `nat64.enabled` is true, and loads nothing otherwise. A module that does
+   not load is a warning there, not a failed `start_pre`: gatewayd is still
+   launched, and it refuses the `nat64:` section with
+   `ErrNAT64ModuleUnavailable` — a refused start with the reason in the log,
+   like any enabled section it cannot run, never a translator reported as
+   running.
 
 ```yaml
 nat64:
@@ -186,10 +213,11 @@ nat64:
 
 Three things refuse the start rather than half-working:
 
-- **The kernel module has to be there.** Alpine packages it as
-  `jool-modules-lts` and `jool-tools`. A kernel upgrade that outruns the
-  module package shows up as a refused section, never as traffic silently
-  passing untranslated.
+- **The kernel module has to be there.** `jool-modules-lts` is built for
+  exactly one `linux-lts` release, so its version follows the kernel's.
+  Upgrade the two together: a kernel upgrade that outruns the module package
+  leaves `jool` unloadable, and that shows up as a refused section, never as
+  traffic silently passing untranslated.
 - **`translator-port` has no default.** It is an OVS internal port on the
   bridge (`ovs-vsctl add-port <bridge> nat640 -- set interface nat640
   type=internal`, then `ip link set nat640 up`) — the host interface the
@@ -314,6 +342,79 @@ VRRP: every gateway answers for the anycast gateway address locally (EVPN
 distributed anycast gateway). NAT failover is stateless first (#596);
 conntrack state sync is #710.
 
+## Running services in separate processes (`process:`)
+
+On an internet edge, the parsers that face the internet should not share a
+process with the datapath. The `process:` section turns on the supervised
+model (#557): `gatewayd serve` starts each supervised process as a child,
+dropped to its own privilege class, and restarts it with backoff if it dies.
+Four processes move: `routing` (`transit`, the BGP speaker), `proxy` (the
+authenticating reverse proxy, when `proxy:` enables it) and `provisioning`
+(`edge`, `dhcp`, `pxe`) each run as the service account and hold
+`CAP_NET_BIND_SERVICE` alone; `datapath` (`firewall`, `nat`, `load-balancer`,
+`nat64`, `hostfw`, `tunnels`, `overlay`) stays root but keeps only
+`CAP_NET_ADMIN` and `CAP_NET_RAW`, and is the one process that opens OVSDB.
+Only the management VPN stays in the main process. A desired configuration
+pushed to the gateway goes to the `datapath` process, and a restarted
+`datapath` process gets the last one again and reprograms its flows from it.
+The provisioning sections have no backend yet, so enabling one still
+stops the daemon with the section's reason, which now comes from the
+`provisioning` child.
+
+```yaml
+process:
+  enabled: true
+  user: gatewayd              # the account the parser processes drop to
+  group: gatewayd             # empty: the user's primary group
+  runtime-dir: /run/gatewayd  # per-process control sockets
+  cgroup-parent: gatewayd     # "" runs without cgroup limits
+  ready-timeout: 10s
+  stop-timeout: 10s
+  restart-budget: 5           # restarts allowed within restart-window
+  restart-window: 5m
+  platform-uids: []           # non-root platformd uids admitted to the
+                              # datapath child's live LB/NAT64/perf calls
+```
+
+The values shown are the defaults; `cgroup-root` defaults to `/sys/fs/cgroup`.
+platformd reads the load balancer, NAT64 and perf live from the `datapath`
+process's socket (`<runtime-dir>/datapath.sock`, #660). A root platformd is
+admitted as the supervisor's uid; a platformd running as another account
+needs its uid in `platform-uids` and membership of the socket's group.
+platformd finds the socket through `datapath-socket` in the `gateway`
+section of **its own** `sdn:` configuration:
+
+```yaml
+# platformd configuration
+sdn:
+  gateway:
+    enabled: true
+    datapath-socket: /run/gatewayd/datapath.sock  # <runtime-dir>/datapath.sock
+```
+
+It has no default. Unset (single-process mode), the load-balancer and NAT64
+verbs answer "unavailable" and perf is measured by platformd's own OVS
+connection. Set, platformd dials the socket lazily: it starts before
+gatewayd, and a call that cannot reach the `datapath` process answers
+"unavailable" until it does.
+gatewayd enables the `memory` and `cpu` controllers in each `cgroup-parent`
+directory it creates; the `cgroup-root` itself must already offer them to its
+children (`cgroup.subtree_control`), which systemd does on a host and a
+container needs delegated.
+The account must exist, and **the configuration file and every file it names
+must be readable by it**: the child reads them after it drops privileges, and
+it exits with an error rather than start without them. For the proxy that
+includes its TLS certificate, key and client CAs, and — when a `trust:` scope
+uses `tofu` — the pin directory `<data-dir>/trust/tofu-pins`, which the
+account must own. A process that has
+used up its restart budget stays down, and the gateway status reports it.
+The gateway snapshot still shows the BGP peers, read from the routing
+process; if that process cannot be reached, the snapshot's `bgp.error` says
+why rather than showing a speaker with no peers. The firewall, NAT, host
+filter, tunnel, overlay and pipeline sections are read from the `datapath`
+process; if it cannot be reached they are left out, and the gateway status
+reports those services unhealthy.
+
 ## Checking a gateway
 
 ```bash
@@ -405,30 +506,11 @@ Standing a gateway up beside existing routers for the first time — tunnels and
 sessions against the live relays, announcing nothing — is its own procedure:
 [`docs/operations/gateway-bringup.md`](../operations/gateway-bringup.md).
 
-
-```bash
-platformctl sdn gateway bgp status
-platformctl sdn gateway bgp peers
-platformctl sdn gateway bgp announce --prefix 203.0.113.0/24 --next-hop 198.51.100.1
-platformctl sdn gateway bgp routes
-platformctl sdn gateway bgp withdraw --prefix 203.0.113.0/24
-```
-
-`--next-hop` is optional on announce; omit it to use the session's default.
-
-A BGP session accepts routes from an external speaker, which makes prefix
-filtering the control that matters. That is configuration, not a CLI flag.
-
-**Which relay carries the traffic is also configuration.** A peer's
-`policy.import` and `policy.export` blocks carry the path attributes that rank
-one session against another: `local-pref` on import decides which relay this
-gateway prefers, and `med`, `prepend` and communities on export tell the far side
-how to rank what it receives. Leave them out and the sessions still come up — but
-with more than one relay reachable, the path that wins is whichever one GoBGP's
-tie-breaks pick, which is not a choice anyone made. Anything the speaker cannot
-program is refused when the configuration loads rather than dropped silently on
-the wire. Field reference and the full refusal list:
-[`docs/sdn/bgp/configuration.md`](../sdn/bgp/configuration.md).
+The transit speaker announces nothing on main, and the `platformctl sdn
+gateway bgp` verbs answer "not configured" because `platformd` holds no
+speaker. Peering, prefix filtering, ranking one relay against another with
+`local-pref`, `med` and `prepend`, and checking session state are in the
+[BGP user guide](../bgp/user.md).
 
 ---
 
@@ -495,23 +577,28 @@ Then reference values from it:
 gateway:
   bgp:
     peers:
-      - name: vps-primary
+      - name: relay-ispa
         auth-type: md5                                   # non-FIPS builds only
-        auth-key-ref: kms://platform/gateway/bgp/vps-primary
+        auth-key-ref: kms://platform/gateway/bgp/relay-ispa
   tunnels:
-    - name: ipsec-primary
+    - name: gre-relay-ispa
       transport: ipsec
       ipsec:
-        key-ref: kms://platform/gateway/tunnel/primary/out?enc=base64
-        peer-key-ref: kms://platform/gateway/tunnel/primary/in?enc=base64
+        key-ref: kms://platform/gateway/tunnel/relay-ispa/out?enc=base64
+        peer-key-ref: kms://platform/gateway/tunnel/relay-ispa/in?enc=base64
 ```
 
-A reference is `kms://<path>` or `secret://<path>` — the same store under two
-spellings, so use whichever reads better. `<path>` is the secret's path as
+A reference is `kms://<path>`. `<path>` is the secret's path as
 `platformctl secrets` shows it. Two options refine it: `?enc=base64` (or
 `?enc=hex`) decodes the stored text into bytes, which is what a 36-byte ESP key
 or a 32-byte WireGuard key needs, and `#<field>` picks one field out of a secret
 that holds several. Without `#<field>` the secret must hold exactly one.
+
+`kms://` is the only scheme. The second spelling the gateway once accepted for
+the same store was removed (#659); a reference that still uses it is refused at
+service start with `secrets.ErrSchemeRemoved`, whose message gives the `kms://`
+form to write instead. Any other scheme, and a bare value, is refused with
+`secrets.ErrSchemeUnsupported`.
 
 Store a key with `platformctl secrets`. To mint one, generate it there — the
 gateway only reads.
@@ -532,12 +619,28 @@ Everything about this fails closed, on purpose:
   This is gatewayd's platform anchor: it verifies every platform service the
   gateway talks to — the store, platformd over grpc, the proxy's mTLS callers
   and `trust-class: platform` backends, the control-plane reporter. It is not a
-  `trust:` class; there is no strategy to choose. Verification is one-way today
-  — the gateway checks the store, the store does not yet get a client
-  certificate from the gateway (#658). Both shipped gateway templates set it;
-  removing it means commenting `secret-store:` out too. The file is read at
-  each verification, so a rotated bundle needs no restart; a bundle not yet
-  delivered fails the verification naming the path.
+  `trust:` class; there is no strategy to choose. Both shipped gateway
+  templates set it; removing it means commenting `secret-store:` out too. The
+  file is read at each verification, so a rotated bundle needs no restart; a
+  bundle not yet delivered fails the verification naming the path.
+- A `secret-store:` without the node identity is refused
+  (`secrets.ErrClientIdentityRequired`). The session is mutual: the gateway
+  checks the store against the platform CA, and the store checks the gateway
+  by its provisioned mTLS node identity, so a store that requires a client
+  certificate knows which node is reading. That identity is the
+  `control-plane:` pair, the same certificate the telemetry reporter presents;
+  `secret-store:` has no credential of its own. The pair is needed whether or
+  not `control-plane.enabled` is on:
+
+  ```yaml
+  control-plane:
+    cert-file: /etc/gatewayd/client.pem       # the node identity
+    key-file: /etc/gatewayd/client-key.pem
+  ```
+
+  A pair that does not load (`proxysvc.ErrCertificateLoadFailed`, naming the
+  cert-file) also refuses the start. Like the reporter, gatewayd reads the
+  pair once at start: a renewed node certificate takes effect on restart.
 - A reference that does not resolve, or that resolves to nothing, refuses the
   service. An empty password is not a password.
 - A bare value where a reference belongs is refused rather than used as the
@@ -549,27 +652,61 @@ Resolved material is handed to the kernel or to the BGP speaker and then wiped.
 
 ## Load balancing
 
+A VIP is identified by protocol, address and port, so every VIP verb except
+`list` takes `--address` and `--port` (`--protocol` defaults to `tcp`):
+
 ```bash
-platformctl sdn lb vip add --address 203.0.113.10 --protocol tcp \
+platformctl sdn gateway lb vip add --protocol tcp --address 203.0.113.10 --port 443 \
     --algorithm round-robin \
     --backend 10.20.0.11:8443:2 --backend 10.20.0.12:8443:1
 
-platformctl sdn lb vip list
-platformctl sdn lb status
+platformctl sdn gateway lb vip list
+platformctl sdn gateway lb vip get --address 203.0.113.10 --port 443
+platformctl sdn gateway lb status
 ```
 
-Backends are `address:port[:weight]` and `--backend` repeats. `--algorithm` is
-`hash` or `round-robin`; omitting it uses the service default.
+Backends are `address:port[:weight]` and `--backend` repeats; weight defaults
+to 1. `--algorithm` is `hash` or `round-robin`; omitting it uses the service
+default. Both spread connections by hash across the weighted backends — there
+is no `least-conn`, because the OVS datapath cannot implement it.
 
 **`set-backends` replaces the entire set**, it does not add to it:
 
 ```bash
-platformctl sdn lb vip set-backends --address 203.0.113.10 \
+platformctl sdn gateway lb vip set-backends --address 203.0.113.10 --port 443 \
     --backend 10.20.0.11:8443 --backend 10.20.0.13:8443
 ```
 
-The load balancer has **no REST API** — gRPC, Unix, QUIC, MCP and the CLI only.
-A REST-only client cannot see a VIP.
+The same verbs are on every transport, REST included
+(`/api/v1/sdn/gateway/lb/...`, [api.md §5](api.md#5-load-balancer)).
+
+**Backends are health-probed.** Each TCP backend is probed with a TCP connect;
+UDP backends are not probed and are treated as always healthy. A backend leaves
+the rotation after `health-check-fall` consecutive failures (default 3) and
+returns after `health-check-rise` consecutive successes (default 2);
+`vip get` shows each backend's `healthy` flag. The section must set
+`health-check-interval`, a `health-check-timeout` shorter than it, and
+`max-backends` (the per-VIP cap); `gatewayd` refuses the section without them.
+VIPs can also be declared in the section itself and are installed when the
+service starts:
+
+```yaml
+load-balancer:
+  enabled: true
+  algorithm: hash
+  health-check-interval: 5s
+  health-check-timeout: 2s
+  health-check-rise: 2
+  health-check-fall: 3
+  max-backends: 64
+  vips:
+    - address: 203.0.113.10
+      port: 443
+      protocol: tcp
+      backends:
+        - { address: 10.20.0.11, port: 8443, weight: 2 }
+        - { address: 10.20.0.12, port: 8443 }
+```
 
 **Clients on the backends' own network need `hairpin-prefixes`.** A backend
 replies to whatever source address it sees. For a client elsewhere that is
@@ -613,7 +750,7 @@ re-read a file from disk. That is how consumers learn there is a new version.
 Routes and pools you add this way are persisted through the platform database
 and survive a control-plane restart (#570). Routes you want under version
 control go in the control plane's `proxy:` section
-(`docs/proxy/configuration.md`); it is seeded at startup as the base layer and
+(`docs/proxy/engineering.md` §8); it is seeded at startup as the base layer and
 never overwrites a route the API changed. The gateway templates' webservice
 virtual hosts no longer proxy anything — the trusted proxy is the proxy.
 
@@ -666,18 +803,23 @@ running the auth chain is the reason this proxy exists.
 ## Measuring the datapath
 
 ```bash
-platformctl sdn perf flows --bridge br-tenant-a --batch
-platformctl sdn perf datapath --bridge br-tenant-a
-platformctl sdn perf conntrack
+platformctl sdn gateway perf flows --count 1000 --batch --bridge br-tenant-a
+platformctl sdn gateway perf datapath --bridge br-tenant-a
+platformctl sdn gateway perf conntrack --zone 12
 ```
 
+`perf flows` writes to the bridge: it installs `--count` throwaway flows into
+table 250, times the install and deletes them again, so it needs `sdn:write`.
+The flows sit above every pipeline table and never match traffic.
+
 `perf flows` with and without `--batch` measure different things — batched
-installation behind one barrier versus per-flow barriers. Do not compare the two
+installation behind one barrier versus one flow at a time. Do not compare the two
 numbers.
 
-If these return "unavailable" rather than zeroes, the perf backend is not wired
-in. That is a different problem from an idle datapath, and the status code tells
-you which you have.
+If these return "unavailable" rather than zeroes, platformd cannot reach the
+perf backend: with `datapath-socket` set, the `datapath` process is down or
+refuses platformd's uid (see `platform-uids` above). That is a different
+problem from an idle datapath, and the status code tells you which you have.
 
 ---
 
@@ -688,8 +830,10 @@ Check the spelling in configuration. `load-balancer` and `management-vpn` are
 hyphenated; the other section names are single words.
 
 **Startup fails with `is enabled but cannot run`.**
-The section names a service with no implementation (`edge`, `dhcp`, `pxe`,
-`management-vpn`) or an enabled service is missing its runtime dependencies. The
+The section names a service with no implementation (`edge`, `dhcp`, `pxe`)
+or an enabled service is missing its runtime dependencies (`management-vpn`
+without a VPN runtime fails with `enabled without injected runtime
+dependencies`). The
 message carries the blocker and the tracking issue when one exists. Disable the
 section or supply the missing runtime wiring. The gateway will not start a
 service it cannot back.
@@ -709,11 +853,6 @@ service at all — a control plane, not a gateway.
 Starting a running service or stopping a stopped one. Both are reported rather
 than silently ignored.
 
-**A peer is rejected with "reputation too low", "age too young" or "uptime too
-low".**
-Peer-admission gates on the edge/P2P path. They only fire where that path is
-enabled.
-
 **Gateway configuration keeps reverting.**
 It is supposed to. The control plane authors desired configuration and the
 gateway fetches it. Change it at the control plane.
@@ -724,6 +863,5 @@ gateway fetches it. Change it at the control plane.
 
 - [cli.md](cli.md) — every verb and flag
 - [api.md](api.md) — every capability on every transport, and the gaps
-  (IPAM pool CRUD and the entire load balancer are missing from REST)
 - [architecture.md](architecture.md) — the service sections, the proxy auth chain, trust boundaries
 - [`docs/sdn/`](../sdn/) — bridges, ports, port authentication, zones, overlay

@@ -14,14 +14,13 @@
 package v1
 
 import (
-	"net/http/httptest"
 	"sort"
 	"strings"
 	"testing"
 
-	"github.com/gorilla/mux"
 	"github.com/stretchr/testify/require"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/testutil"
 	sdkrest "github.com/jeremyhahn/go-trusted-platform/sdk/go/transport/rest"
 )
 
@@ -54,6 +53,7 @@ import (
 // the body. Sharing is only a defect when one side of it is a List.
 func TestSDKRouteClaims_SingularAccessorDoesNotLandOnItsCollectionRoute(t *testing.T) {
 	router := newGatedTestRouter(t, &testHandlerRegistry{tokenHandler: &anonymousAuth{}})
+	built := testutil.WalkRoutes(t, router)
 
 	claims := sdkrest.RouteClaims()
 	// 280, lowered from 300 by #333: deleting 20 ghost route-map entries took
@@ -73,15 +73,14 @@ func TestSDKRouteClaims_SingularAccessorDoesNotLandOnItsCollectionRoute(t *testi
 	for _, c := range claims {
 		service, method := splitClaimMethod(t, c.GRPCMethod)
 
-		req := httptest.NewRequest(c.Method, concreteFor(c.Path), nil)
-		var match mux.RouteMatch
-		if !router.Match(req, &match) || match.MatchErr != nil || match.Route == nil {
+		route, ok := testutil.MatchClaim(router, c.Method, c.Path, built)
+		if !ok {
 			// Unresolvable claims are TestSDKRouteClaims_ResolveAgainstBuiltRoutes'
 			// finding, not this test's. Reporting them here too would make one
 			// defect fail two tests and read as two.
 			continue
 		}
-		template, err := match.Route.GetPathTemplate()
+		template, err := route.GetPathTemplate()
 		if err != nil {
 			continue
 		}

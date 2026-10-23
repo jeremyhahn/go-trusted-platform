@@ -19,21 +19,19 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
+	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers/surface"
 )
 
 // TestColdStartMultiProtocol walks the canonical cold-start lifecycle
 // against every supported transport. Steps that depend on stubs blocked
 // by other tasks (#143-b FIDO2 stub authenticator, #143-c PIV stub,
-// #142 App.CA threading) are explicitly skipped with t.Skip pointing at
-// the blocking task.
+// #142 App.CA threading) fail with a typed error naming the blocking
+// task.
 func TestColdStartMultiProtocol(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	t.Cleanup(cancel)
 
@@ -80,9 +78,9 @@ func TestColdStartMultiProtocol(t *testing.T) {
 		if err := assertRemoteTransportsAccept(ctx, cfg); err != nil {
 			t.Fatalf("step 4: remote transports should accept after unseal: %v", err)
 		}
-		// Cert-chain assertion against App.CA is blocked on #142 (App.CA
-		// threading), so the deeper trust-chain check is deferred.
-		t.Skip("cert-chain-to-App.CA assertion blocked by #142")
+		// The cert-chain assertion against App.CA needs #142 (App.CA
+		// threading); until then the step fails naming that prerequisite.
+		t.Fatalf("missing prerequisite: %v", &ErrAppCAUnreachable{})
 	})
 
 	// Steps 5-10 run per-adapter so we exercise every protocol.
@@ -131,9 +129,9 @@ func TestColdStartMultiProtocol(t *testing.T) {
 }
 
 // runColdStartScenario walks steps 5-10 against a single adapter. The
-// adapter implementations gracefully report "not yet wired" for steps
-// that depend on follow-up tasks (#143-b/c); the scenario translates
-// those into t.Skip rather than fail.
+// adapter implementations report surface.ErrNoSurface for steps that
+// depend on follow-up tasks (#143-b/c); the scenario fails those steps
+// with the gap as the missing prerequisite.
 func runColdStartScenario(t *testing.T, ctx context.Context, cmd ColdStartCommands, adminBundle string) {
 	t.Helper()
 
@@ -145,8 +143,7 @@ func runColdStartScenario(t *testing.T, ctx context.Context, cmd ColdStartComman
 		// asserts the daemon is reachable through the adapter.
 		snap, err := cmd.Health(ctx)
 		if err != nil {
-			t.Skipf("step 5 health probe failed for %s: %v", cmd.Name(), err)
-			return
+			t.Fatalf("step 5: health probe failed for %s: %v (the harness-started platformd must answer every adapter)", cmd.Name(), err)
 		}
 		if !snap.Ready {
 			t.Errorf("step 5: %s reports daemon not ready: %+v", cmd.Name(), snap)
@@ -160,27 +157,25 @@ func runColdStartScenario(t *testing.T, ctx context.Context, cmd ColdStartComman
 				t.Fatalf("mint mTLS cert: %v", err)
 			}
 			err = cmd.AddMTLSFactor(ctx, testUser, result.BundlePath, "primary-mtls")
-			if isNotWired(err) {
-				t.Skipf("blocked by upstream auth-factor wiring: %v", err)
-				return
+			if surface.IsNotImplemented(err) {
+				t.Fatalf("missing prerequisite: %v", err)
 			}
 			if err != nil {
 				t.Fatalf("step 6 mTLS add: %v", err)
 			}
 		})
 		t.Run("FIDO2", func(t *testing.T) {
-			t.Skip("blocked by #143-b — FIDO2 stub authenticator not implemented")
+			t.Fatalf("missing prerequisite: %v", FIDO2StubAdd())
 		})
 		t.Run("PIV", func(t *testing.T) {
-			t.Skip("blocked by #143-c — PIV stub authenticator not implemented")
+			t.Fatalf("missing prerequisite: %v", PIVStubAdd())
 		})
 	})
 
 	t.Run("Step07_ListFactors", func(t *testing.T) {
 		records, err := cmd.ListFactors(ctx, testUser)
-		if isNotWired(err) {
-			t.Skipf("blocked by upstream auth-factor wiring: %v", err)
-			return
+		if surface.IsNotImplemented(err) {
+			t.Fatalf("missing prerequisite: %v", err)
 		}
 		if err != nil {
 			t.Fatalf("step 7 list: %v", err)
@@ -193,9 +188,8 @@ func runColdStartScenario(t *testing.T, ctx context.Context, cmd ColdStartComman
 	t.Run("Step08_Login", func(t *testing.T) {
 		t.Run("mTLS", func(t *testing.T) {
 			snap, err := cmd.LoginMTLS(ctx, testUser, adminBundle)
-			if isNotWired(err) {
-				t.Skipf("blocked by upstream auth wiring: %v", err)
-				return
+			if surface.IsNotImplemented(err) {
+				t.Fatalf("missing prerequisite: %v", err)
 			}
 			if err != nil {
 				t.Fatalf("step 8 login: %v", err)
@@ -205,10 +199,10 @@ func runColdStartScenario(t *testing.T, ctx context.Context, cmd ColdStartComman
 			}
 		})
 		t.Run("FIDO2", func(t *testing.T) {
-			t.Skip("blocked by #143-b — FIDO2 stub authenticator not implemented")
+			t.Fatalf("missing prerequisite: %v", FIDO2StubLogin())
 		})
 		t.Run("PIV", func(t *testing.T) {
-			t.Skip("blocked by #143-c — PIV stub authenticator not implemented")
+			t.Fatalf("missing prerequisite: %v", PIVStubLogin())
 		})
 	})
 
@@ -228,9 +222,8 @@ func runColdStartScenario(t *testing.T, ctx context.Context, cmd ColdStartComman
 				t.Fatalf("mint mTLS cert: %v", err)
 			}
 			_, err = cmd.RotateMTLSFactor(ctx, testUser, "primary-mtls", fresh.BundlePath)
-			if isNotWired(err) {
-				t.Skipf("blocked by upstream auth wiring: %v", err)
-				return
+			if surface.IsNotImplemented(err) {
+				t.Fatalf("missing prerequisite: %v", err)
 			}
 			if err != nil {
 				t.Fatalf("step 10 rotate: %v", err)
@@ -238,9 +231,8 @@ func runColdStartScenario(t *testing.T, ctx context.Context, cmd ColdStartComman
 		})
 		t.Run("LastFactorEnforced", func(t *testing.T) {
 			err := cmd.RemoveFactor(ctx, testUser, "primary-mtls")
-			if isNotWired(err) {
-				t.Skipf("blocked by upstream auth wiring: %v", err)
-				return
+			if surface.IsNotImplemented(err) {
+				t.Fatalf("missing prerequisite: %v", err)
 			}
 			var last *ErrLastFactor
 			if !errors.As(err, &last) {
@@ -248,19 +240,4 @@ func runColdStartScenario(t *testing.T, ctx context.Context, cmd ColdStartComman
 			}
 		})
 	})
-}
-
-// isNotWired returns true when the error matches the canonical "not yet
-// wired" surface emitted by every stub adapter method.
-func isNotWired(err error) bool {
-	if err == nil {
-		return false
-	}
-	msg := strings.ToLower(err.Error())
-	for _, needle := range []string{"not yet wired", "not implemented", "stub authenticator"} {
-		if strings.Contains(msg, needle) {
-			return true
-		}
-	}
-	return false
 }

@@ -25,29 +25,26 @@ import (
 
 // MockPodmanBackend is a mock implementation of PodmanBackend for testing.
 type MockPodmanBackend struct {
-	mu             sync.Mutex
-	connected      bool
-	containers     map[string]*PodmanContainer
-	images         map[string]*PodmanImage
-	pullError      error
-	createError    error
-	startError     error
-	stopError      error
-	removeError    error
-	inspectError   error
-	listError      error
-	logsError      error
-	waitError      error
-	waitExitCode   int
-	pullCalled     int
-	createCalled   int
-	startCalled    int
-	stopCalled     int
-	removeCalled   int
-	inspectCalled  int
-	listCalled     int
-	logsCalled     int
-	containerIDSeq int
+	mu           sync.Mutex
+	connected    bool
+	containers   map[string]*PodmanContainer
+	images       map[string]*PodmanImage
+	pullError    error
+	createError  error
+	startError   error
+	stopError    error
+	removeError  error
+	inspectError error
+	listError    error
+	logsError    error
+	waitError    error
+	waitExitCode int
+	pullCalled   int
+	createCalled int
+	startCalled  int
+	stopCalled   int
+	removeCalled int
+	logsCalled   int
 
 	// createConfig records the effective launch configuration the backend was
 	// handed, so a test can re-derive the measurement from the very value the
@@ -136,7 +133,6 @@ func (m *MockPodmanBackend) CreateContainer(ctx context.Context, config *PodmanC
 	if m.createError != nil {
 		return nil, m.createError
 	}
-	m.containerIDSeq++
 	id := "ctr-" + config.Name
 	container := &PodmanContainer{
 		ID:        id,
@@ -204,7 +200,6 @@ func (m *MockPodmanBackend) RemoveContainer(ctx context.Context, id string, forc
 func (m *MockPodmanBackend) InspectContainer(ctx context.Context, id string) (*PodmanContainer, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.inspectCalled++
 	if m.inspectError != nil {
 		return nil, m.inspectError
 	}
@@ -218,7 +213,6 @@ func (m *MockPodmanBackend) InspectContainer(ctx context.Context, id string) (*P
 func (m *MockPodmanBackend) ListContainers(ctx context.Context, all bool) ([]*PodmanContainer, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.listCalled++
 	if m.listError != nil {
 		return nil, m.listError
 	}
@@ -1192,6 +1186,7 @@ func TestOrchestratorClose(t *testing.T) {
 	t.Run("close orchestrator", func(t *testing.T) {
 		config := OrchestratorConfig{Logger: testLogger()}
 		podman := NewMockPodmanBackend()
+		podman.connected = true
 		orch, _ := NewOrchestrator(config, WithPodmanBackend(podman))
 
 		err := orch.Close()
@@ -1202,6 +1197,11 @@ func TestOrchestratorClose(t *testing.T) {
 		// Verify closed state
 		if orch.IsConnected() {
 			t.Error("expected orchestrator to be disconnected after close")
+		}
+		// The orchestrator owns the backend, so closing it must release
+		// the Podman connection.
+		if podman.connected {
+			t.Error("expected Podman backend to be closed with the orchestrator")
 		}
 
 		// Try operation after close

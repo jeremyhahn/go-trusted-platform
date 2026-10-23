@@ -19,12 +19,17 @@ import (
 	"crypto/tls"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
+
+	"github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 )
 
 // hostAttestationPath is the node-side quote endpoint (docs/attestation/api.md
@@ -76,9 +81,6 @@ type NodeQuoteSource struct {
 	timeout   time.Duration
 	pcrs      []int
 	logger    *slog.Logger
-	// newTransport is a test seam for the HTTP transport; nil uses a fresh
-	// http.Transport per endpoint so no connection outlives a collection.
-	newTransport func(cfg *tls.Config) http.RoundTripper
 }
 
 // NewNodeQuoteSource fails closed on a missing resolver or dialer.
@@ -118,25 +120,22 @@ func (s *NodeQuoteSource) Collect(ctx context.Context, deviceID string, nonce []
 	ctx, cancel := context.WithTimeout(ctx, s.timeout)
 	defer cancel()
 
-	body, err := s.requestBody(nonce)
-	if err != nil {
-		return nil, err
-	}
-
 	var attempts []string
+	var causes []error
 	for _, ep := range endpoints {
-		evidence, err := s.collectFrom(ctx, ep, body, nonce)
+		evidence, err := s.collectFrom(ctx, ep, nonce)
 		if err == nil {
 			return evidence.Encode()
 		}
 		attempts = append(attempts, ep.Address+" ("+ep.Source+"): "+err.Error())
+		causes = append(causes, err)
 		s.logger.Debug("attestation reporting: endpoint did not yield evidence",
 			"device_id", deviceID, "endpoint", ep.Address, "source", ep.Source, "error", err)
 		if ctx.Err() != nil {
 			break
 		}
 	}
-	return nil, ErrNodeUnreachable{DeviceID: deviceID, Attempts: attempts}
+	return nil, ErrNodeUnreachable{DeviceID: deviceID, Attempts: attempts, Causes: causes}
 }
 
 // requestBody encodes the CollectHostAttestation request the node's REST
@@ -160,12 +159,46 @@ func (s *NodeQuoteSource) requestBody(nonce []byte) ([]byte, error) {
 	return b, nil
 }
 
-func (s *NodeQuoteSource) collectFrom(ctx context.Context, ep Endpoint, body, nonce []byte) (*Evidence, error) {
-	payload, err := s.request(ctx, ep, http.MethodPost, hostAttestationPath, body)
+// collectFrom asks one endpoint for a quote bound to the connection it is
+// asked over. It sends the bare nonce; the node derives the TLS exporter
+// binding from its own end of the connection and quotes
+// QualifyingData(nonce, binding) (#482). The collector derives the binding
+// from its end and accepts only that value. A relay that forwards the nonce
+// to a healthy node over a second connection gets a quote bound to the
+// second connection, which is refused here with ErrQuoteNotBound.
+func (s *NodeQuoteSource) collectFrom(ctx context.Context, ep Endpoint, nonce []byte) (*Evidence, error) {
+	conn, err := s.dial(ctx, ep)
 	if err != nil {
 		return nil, err
 	}
-	return decodeHostAttestation(payload, nonce)
+	defer s.closeConn(conn)
+
+	state := conn.ConnectionState()
+	binding, err := xkms.PeerChannelBinding(&state)
+	if err != nil {
+		return nil, ErrChannelBinding{Endpoint: ep.Address, Cause: err}
+	}
+	qualifying := xkms.PeerQualifyingData(nonce, binding)
+
+	body, err := s.requestBody(nonce)
+	if err != nil {
+		return nil, err
+	}
+	payload, err := s.exchange(ctx, ep, conn, http.MethodPost, hostAttestationPath, body)
+	if err != nil {
+		return nil, err
+	}
+	evidence, err := decodeHostAttestation(payload, qualifying)
+	var mismatch ErrNonceMismatch
+	if errors.As(err, &mismatch) {
+		return nil, ErrQuoteNotBound{Endpoint: ep.Address}
+	}
+	if err != nil {
+		return nil, err
+	}
+	evidence.Nonce = nonce
+	evidence.ChannelBinding = binding
+	return evidence, nil
 }
 
 // ClockSynced implements ClockSource: it asks the node whether its own time
@@ -198,11 +231,23 @@ func (s *NodeQuoteSource) ClockSynced(ctx context.Context, deviceID string) (boo
 	return false, ErrClockStateUnavailable{DeviceID: deviceID, Attempts: attempts}
 }
 
-// request performs one mTLS request against a node endpoint and returns the
-// body. It holds the transport policy both node calls share: the collector's
-// identity, a verified handshake, no connection reuse, no redirects, and a
-// bounded read.
+// request performs one mTLS request against a node endpoint on a fresh
+// connection and returns the body.
 func (s *NodeQuoteSource) request(ctx context.Context, ep Endpoint, method, path string, body []byte) ([]byte, error) {
+	conn, err := s.dial(ctx, ep)
+	if err != nil {
+		return nil, err
+	}
+	defer s.closeConn(conn)
+	return s.exchange(ctx, ep, conn, method, path, body)
+}
+
+// dial opens one verified mTLS connection to a node endpoint. It holds the
+// TLS policy both node calls share: the collector's identity, a verified
+// handshake, and HTTP/1.1 only, because exchange speaks HTTP/1.1 over the
+// connection it is handed. The handshake completes here so the caller can
+// derive the channel binding before any request is sent.
+func (s *NodeQuoteSource) dial(ctx context.Context, ep Endpoint) (*tls.Conn, error) {
 	tlsCfg, err := s.tls(ctx, ep)
 	if err != nil {
 		return nil, err
@@ -222,16 +267,40 @@ func (s *NodeQuoteSource) request(ctx context.Context, ep Endpoint, method, path
 	if tlsCfg.MinVersion == 0 {
 		tlsCfg.MinVersion = tls.VersionTLS12
 	}
+	tlsCfg.NextProtos = []string{"http/1.1"}
 
-	var rt http.RoundTripper
-	if s.newTransport != nil {
-		rt = s.newTransport(tlsCfg)
-	} else {
-		transport := &http.Transport{TLSClientConfig: tlsCfg, DisableKeepAlives: true}
-		defer transport.CloseIdleConnections()
-		rt = transport
+	var dialer net.Dialer
+	raw, err := dialer.DialContext(ctx, "tcp", ep.Address)
+	if err != nil {
+		return nil, err
 	}
-	client := &http.Client{Transport: rt, CheckRedirect: func(*http.Request, []*http.Request) error {
+	conn := tls.Client(raw, tlsCfg)
+	if err := conn.HandshakeContext(ctx); err != nil {
+		s.closeConn(conn)
+		return nil, err
+	}
+	return conn, nil
+}
+
+// closeConn closes a node connection. The HTTP transport may already have
+// closed it after the response, which is not worth a log line.
+func (s *NodeQuoteSource) closeConn(conn *tls.Conn) {
+	if err := conn.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
+		s.logger.Debug("attestation reporting: connection close", "error", err)
+	}
+}
+
+// exchange sends one HTTP request over an already-dialled connection and
+// returns the body: no second connection, no redirects, and a bounded read.
+// The request must ride the connection the caller dialled, because that is
+// the connection the channel binding was derived from.
+func (s *NodeQuoteSource) exchange(ctx context.Context, ep Endpoint, conn *tls.Conn, method, path string, body []byte) ([]byte, error) {
+	transport := &http.Transport{
+		DisableKeepAlives: true,
+		DialTLSContext:    singleUseDialer(ep, conn),
+	}
+	defer transport.CloseIdleConnections()
+	client := &http.Client{Transport: transport, CheckRedirect: func(*http.Request, []*http.Request) error {
 		return http.ErrUseLastResponse
 	}}
 
@@ -272,6 +341,19 @@ func (s *NodeQuoteSource) request(ctx context.Context, ep Endpoint, method, path
 }
 
 var _ ClockSource = (*NodeQuoteSource)(nil)
+
+// singleUseDialer hands the HTTP transport one pre-dialled connection and
+// refuses every later dial, so a retry cannot move the request onto a
+// connection the channel binding was not derived from.
+func singleUseDialer(ep Endpoint, conn net.Conn) func(context.Context, string, string) (net.Conn, error) {
+	var handed atomic.Bool
+	return func(context.Context, string, string) (net.Conn, error) {
+		if !handed.CompareAndSwap(false, true) {
+			return nil, ErrConnectionSpent{Endpoint: ep.Address}
+		}
+		return conn, nil
+	}
+}
 
 // summarise keeps the first line of an error body for the audit trail
 // without dragging a whole page into a log line.

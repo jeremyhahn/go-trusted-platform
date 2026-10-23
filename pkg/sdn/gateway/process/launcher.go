@@ -18,8 +18,10 @@ import (
 	"errors"
 	"os"
 	"os/exec"
+	"runtime"
 	"strconv"
 	"syscall"
+	"unsafe"
 
 	"golang.org/x/sys/unix"
 )
@@ -31,10 +33,9 @@ type Spec struct {
 	Definition Definition
 	// Socket is the control socket path the child must listen on.
 	Socket string
-	// ConfigFile is the gatewayd config the child reads. It reads the same
-	// file the supervisor did: a process hosts a subset of the services,
-	// not a subset of the configuration.
-	ConfigFile string
+	// Inherited is the part of the supervisor's own command line the child
+	// is started with, so it resolves the same configuration and state.
+	Inherited Inherited
 	// UID and GID are the credentials an unprivileged child drops to.
 	UID, GID uint32
 	// SocketGID, when non-negative, owns the child's control socket so a
@@ -48,6 +49,60 @@ type Spec struct {
 	// kernel places the child in at clone time (clone3 CLONE_INTO_CGROUP),
 	// so the child is never accounted outside its own limits.
 	CgroupFD int
+}
+
+// Inherited holds the gatewayd root flags a child is started with. A child
+// is a fresh gatewayd invocation that resolves these the way the supervisor
+// did, so anything the supervisor was given on its command line and not
+// passed on here silently falls back to the flag default in the child.
+type Inherited struct {
+	// ConfigFile is the gatewayd config the child reads. It reads the same
+	// file the supervisor did: a process hosts a subset of the services,
+	// not a subset of the configuration.
+	ConfigFile string
+	// DataDir is the gatewayd state directory (--data-dir). The proxy's
+	// TOFU pin store lives under it, so a child resolving the default
+	// instead would open a different store and trust peers afresh.
+	DataDir string
+	// LogFormat and Debug select the child's log handler and level, so
+	// every process of one gatewayd logs the same way.
+	LogFormat string
+	Debug     bool
+}
+
+// args returns the root flags that carry the inherited settings. An empty
+// value is left out, so the child applies the same default the supervisor
+// did.
+func (in Inherited) args() []string {
+	var args []string
+	if in.ConfigFile != "" {
+		args = append(args, "--config", in.ConfigFile)
+	}
+	if in.DataDir != "" {
+		args = append(args, "--data-dir", in.DataDir)
+	}
+	if in.LogFormat != "" {
+		args = append(args, "--log-format", in.LogFormat)
+	}
+	if in.Debug {
+		args = append(args, "--debug")
+	}
+	return args
+}
+
+// Args returns the child's command line after the executable: the fixed
+// `service run` verb, the per-process control arguments, then the root
+// flags the child inherits from the supervisor.
+func (spec Spec) Args() []string {
+	args := []string{
+		"service", "run", spec.Definition.Name,
+		"--ipc-socket", spec.Socket,
+		"--socket-group", strconv.Itoa(spec.SocketGID),
+		"--supervisor-uid", strconv.FormatUint(uint64(spec.SupervisorUID), 10),
+		"--uid", strconv.FormatUint(uint64(spec.UID), 10),
+		"--gid", strconv.FormatUint(uint64(spec.GID), 10),
+	}
+	return append(args, spec.Inherited.args()...)
 }
 
 // Child is a launched process the supervisor watches.
@@ -96,17 +151,7 @@ func (l *ExecLauncher) Launch(ctx context.Context, spec Spec) (Child, error) {
 	if err != nil {
 		return nil, &ErrProcessLaunch{Process: spec.Definition.Name, Cause: err}
 	}
-	args := []string{
-		"service", "run", spec.Definition.Name,
-		"--ipc-socket", spec.Socket,
-		"--socket-group", strconv.Itoa(spec.SocketGID),
-		"--supervisor-uid", strconv.FormatUint(uint64(spec.SupervisorUID), 10),
-		"--uid", strconv.FormatUint(uint64(spec.UID), 10),
-		"--gid", strconv.FormatUint(uint64(spec.GID), 10),
-	}
-	if spec.ConfigFile != "" {
-		args = append(args, "--config", spec.ConfigFile)
-	}
+	args := spec.Args()
 	// The binary is this process's own executable unless a deployment names
 	// another; the arguments are a fixed verb plus paths from the daemon's
 	// own configuration. Nothing here comes from the network.
@@ -139,14 +184,23 @@ func (l *ExecLauncher) Launch(ctx context.Context, spec Spec) (Child, error) {
 	return &execChild{cmd: cmd}, nil
 }
 
+// parentDeathSignal is what the kernel sends a child when its supervisor
+// dies. It is SIGKILL, not SIGTERM: a child that is terminated runs its
+// stop path, and the datapath's stop path withdraws every flow, route and
+// rule it installed, so a supervisor crash would take the forwarding plane
+// down with it. A killed child leaves its kernel state where it is; the
+// successor supervisor's datapath adopts it through the cookie-scoped
+// reconcile, and BGP peers see a dropped session rather than a Cease, so
+// graceful restart keeps their routes. A planned stop still signals SIGTERM.
+const parentDeathSignal = syscall.SIGKILL
+
 // sysProcAttr builds the child's clone attributes: the ambient capability
-// set the class keeps, the cgroup leaf to be born into, and Pdeathsig so a
-// supervisor that dies never leaves orphaned children programming the
-// kernel.
+// set the class keeps, the cgroup leaf to be born into, and the parent-death
+// signal so a supervisor that dies never leaves orphaned children running.
 func sysProcAttr(spec Spec) *syscall.SysProcAttr {
 	attr := &syscall.SysProcAttr{
 		Setpgid:   true,
-		Pdeathsig: syscall.SIGTERM,
+		Pdeathsig: parentDeathSignal,
 	}
 	if len(spec.Definition.Capabilities) > 0 {
 		attr.AmbientCaps = append([]uintptr(nil), spec.Definition.Capabilities...)
@@ -179,6 +233,7 @@ type hardenOps interface {
 	setresgid(rgid, egid, sgid int) error
 	setresuid(ruid, euid, suid int) error
 	capset(header *unix.CapUserHeader, data *[2]unix.CapUserData) error
+	seccomp(filter []unix.SockFilter) error
 	getppid() int
 }
 
@@ -207,9 +262,31 @@ func (kernelHardenOps) capset(header *unix.CapUserHeader, data *[2]unix.CapUserD
 	return unix.Capset(header, &data[0])
 }
 
+// seccomp installs filter on every thread of the process at once
+// (SECCOMP_FILTER_FLAG_TSYNC). A filter on the calling thread alone would
+// leave the threads the Go runtime already started unconfined, the #657
+// problem again. On a synchronisation failure the kernel returns the id of
+// the thread it could not move and installs the filter on none.
+func (kernelHardenOps) seccomp(filter []unix.SockFilter) error {
+	if len(filter) == 0 || len(filter) > unix.BPF_MAXINSNS {
+		return unix.EINVAL
+	}
+	program := unix.SockFprog{Len: uint16(len(filter)), Filter: &filter[0]}
+	thread, _, errno := unix.Syscall(unix.SYS_SECCOMP, unix.SECCOMP_SET_MODE_FILTER,
+		unix.SECCOMP_FILTER_FLAG_TSYNC, uintptr(unsafe.Pointer(&program)))
+	runtime.KeepAlive(filter)
+	if errno != 0 {
+		return errno
+	}
+	if thread != 0 {
+		return &ErrSeccompThreadNotSynced{Thread: int(thread)}
+	}
+	return nil
+}
+
 func (kernelHardenOps) getppid() int { return os.Getppid() }
 
-// Harden applies the child-side half of the privilege drop.
+// harden applies the child-side half of the privilege drop.
 //
 // The order is the one the kernel requires, and every step exists:
 //
@@ -246,10 +323,9 @@ func (kernelHardenOps) getppid() int { return os.Getppid() }
 //
 // A failure at any step is fatal to the child: running with more privilege
 // than the class allows is the thing this model exists to prevent.
-func Harden(def Definition, uid, gid uint32) error {
-	return harden(def, uid, gid, kernelHardenOps{})
-}
-
+//
+// Every step changes the calling thread only; EnterHardened is what turns
+// the one hardened thread into a hardened process.
 func harden(def Definition, uid, gid uint32, ops hardenOps) error {
 	// Read before anything drops privilege, so the re-arm below can tell
 	// whether the supervisor died inside the window where nothing was armed.
@@ -299,7 +375,7 @@ func dropCredentials(uid, gid uint32, ops hardenOps) error {
 // rearmParentDeath re-arms the parent-death signal the privilege drop cleared
 // and refuses to continue if the supervisor died while it was disarmed.
 func rearmParentDeath(parent int, ops hardenOps) error {
-	if err := ops.prctl(unix.PR_SET_PDEATHSIG, uintptr(syscall.SIGTERM), 0, 0, 0); err != nil {
+	if err := ops.prctl(unix.PR_SET_PDEATHSIG, uintptr(parentDeathSignal), 0, 0, 0); err != nil {
 		return &ErrHardening{Step: "re-arm the parent-death signal", Cause: err}
 	}
 	// Between the credential change that disarmed the signal and the re-arm
@@ -342,14 +418,12 @@ func dropBoundingSet(def Definition, ops hardenOps) error {
 // unprivileged parser holding a permitted set it could raise into effective
 // at will.
 func setCapabilities(capabilities []uintptr, ops hardenOps) error {
-	var mask [2]uint32
-	for _, capability := range capabilities {
-		mask[capability>>5] |= 1 << (capability & 31)
-	}
+	mask := capabilityMask(capabilities)
+	low, high := uint32(mask), uint32(mask>>32)
 	header := unix.CapUserHeader{Version: unix.LINUX_CAPABILITY_VERSION_3, Pid: 0}
 	data := [2]unix.CapUserData{
-		{Effective: mask[0], Permitted: mask[0], Inheritable: mask[0]},
-		{Effective: mask[1], Permitted: mask[1], Inheritable: mask[1]},
+		{Effective: low, Permitted: low, Inheritable: low},
+		{Effective: high, Permitted: high, Inheritable: high},
 	}
 	if err := ops.capset(&header, &data); err != nil {
 		return &ErrHardening{Step: "set the class capabilities after the uid drop", Cause: err}

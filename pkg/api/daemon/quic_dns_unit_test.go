@@ -19,9 +19,10 @@ import (
 	"context"
 	"testing"
 
-	"github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/dns"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/dns/entities"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -84,9 +85,9 @@ func TestDNSAddRecord_Delegated(t *testing.T) {
 	t.Run("success adds record and saves zone", func(t *testing.T) {
 		mock := NewMockDNSService()
 		handler := createDNSUnitTestHandler(mock)
-		req := createDNSUnitTestRequest(t, quic.OpDNSAddRecord, pbAddARecord("example.com.", "www", "1.2.3.4"))
+		req := createDNSUnitTestRequest(t, quicwire.OpDNSAddRecord, pbAddARecord("example.com.", "www", "1.2.3.4"))
 		resp := handler.HandleRequest(ctx, req)
-		require.Equal(t, quic.StatusOK, resp.Status, string(resp.Payload))
+		require.Equal(t, quicwire.StatusOK, resp.Status, string(resp.Payload))
 
 		require.NotNil(t, mock.SavedZone, "delegated AddRecord must Save the mutated zone")
 		// Mock Zone() seeds one A record ("test"); the delegate adds "www".
@@ -95,25 +96,25 @@ func TestDNSAddRecord_Delegated(t *testing.T) {
 
 	t.Run("missing zone name", func(t *testing.T) {
 		handler := createDNSUnitTestHandler(NewMockDNSService())
-		req := createDNSUnitTestRequest(t, quic.OpDNSAddRecord, &platformv1.AddRecordRequest{
+		req := createDNSUnitTestRequest(t, quicwire.OpDNSAddRecord, &platformv1.AddRecordRequest{
 			Record: &platformv1.Record{Type: platformv1.RecordType_RECORD_TYPE_A, Record: &platformv1.Record_A{A: &platformv1.ARecord{Name: "www"}}},
 		})
 		resp := handler.HandleRequest(ctx, req)
-		assert.Equal(t, quic.StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 
 	t.Run("missing record", func(t *testing.T) {
 		handler := createDNSUnitTestHandler(NewMockDNSService())
-		req := createDNSUnitTestRequest(t, quic.OpDNSAddRecord, &platformv1.AddRecordRequest{ZoneName: "example.com."})
+		req := createDNSUnitTestRequest(t, quicwire.OpDNSAddRecord, &platformv1.AddRecordRequest{ZoneName: "example.com."})
 		resp := handler.HandleRequest(ctx, req)
-		assert.Equal(t, quic.StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 
 	t.Run("service unavailable when delegate missing", func(t *testing.T) {
 		handler := createDNSUnitTestHandler(partialDNSService{})
-		req := createDNSUnitTestRequest(t, quic.OpDNSAddRecord, pbAddARecord("example.com.", "www", "1.2.3.4"))
+		req := createDNSUnitTestRequest(t, quicwire.OpDNSAddRecord, pbAddARecord("example.com.", "www", "1.2.3.4"))
 		resp := handler.HandleRequest(ctx, req)
-		assert.Equal(t, quic.StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 }
 
@@ -127,26 +128,26 @@ func TestDNSDeleteRecord_Delegated(t *testing.T) {
 	t.Run("success", func(t *testing.T) {
 		mock := NewMockDNSService()
 		handler := createDNSUnitTestHandler(mock)
-		req := createDNSUnitTestRequest(t, quic.OpDNSDeleteRecord, &platformv1.DeleteRecordRequest{
+		req := createDNSUnitTestRequest(t, quicwire.OpDNSDeleteRecord, &platformv1.DeleteRecordRequest{
 			ZoneName: "example.com.", Type: platformv1.RecordType_RECORD_TYPE_A, Name: "www",
 		})
 		resp := handler.HandleRequest(ctx, req)
-		require.Equal(t, quic.StatusOK, resp.Status, string(resp.Payload))
+		require.Equal(t, quicwire.StatusOK, resp.Status, string(resp.Payload))
 		assert.GreaterOrEqual(t, mock.CallCount("Save"), 1)
 	})
 
 	t.Run("missing zone name", func(t *testing.T) {
 		handler := createDNSUnitTestHandler(NewMockDNSService())
-		req := createDNSUnitTestRequest(t, quic.OpDNSDeleteRecord, &platformv1.DeleteRecordRequest{Name: "www"})
+		req := createDNSUnitTestRequest(t, quicwire.OpDNSDeleteRecord, &platformv1.DeleteRecordRequest{Name: "www"})
 		resp := handler.HandleRequest(ctx, req)
-		assert.Equal(t, quic.StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 
 	t.Run("missing name", func(t *testing.T) {
 		handler := createDNSUnitTestHandler(NewMockDNSService())
-		req := createDNSUnitTestRequest(t, quic.OpDNSDeleteRecord, &platformv1.DeleteRecordRequest{ZoneName: "example.com."})
+		req := createDNSUnitTestRequest(t, quicwire.OpDNSDeleteRecord, &platformv1.DeleteRecordRequest{ZoneName: "example.com."})
 		resp := handler.HandleRequest(ctx, req)
-		assert.Equal(t, quic.StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 }
 
@@ -159,12 +160,12 @@ func TestDNSListRecords_Delegated(t *testing.T) {
 
 	t.Run("success returns oneof-safe records", func(t *testing.T) {
 		handler := createDNSUnitTestHandler(NewMockDNSService())
-		req := createDNSUnitTestRequest(t, quic.OpDNSListRecords, &platformv1.ListRecordsRequest{ZoneName: "example.com."})
+		req := createDNSUnitTestRequest(t, quicwire.OpDNSListRecords, &platformv1.ListRecordsRequest{ZoneName: "example.com."})
 		resp := handler.HandleRequest(ctx, req)
-		require.Equal(t, quic.StatusOK, resp.Status, string(resp.Payload))
+		require.Equal(t, quicwire.StatusOK, resp.Status, string(resp.Payload))
 
 		var result dnsListRecordsResponseWire
-		require.NoError(t, quic.DecodePayload(resp.Payload, &result))
+		require.NoError(t, quicwire.DecodePayload(resp.Payload, &result))
 		// Mock Zone() seeds a single A record.
 		require.Len(t, result.Records, 1)
 		rec := result.Records[0].toProto()
@@ -174,9 +175,9 @@ func TestDNSListRecords_Delegated(t *testing.T) {
 
 	t.Run("missing zone name", func(t *testing.T) {
 		handler := createDNSUnitTestHandler(NewMockDNSService())
-		req := createDNSUnitTestRequest(t, quic.OpDNSListRecords, &platformv1.ListRecordsRequest{})
+		req := createDNSUnitTestRequest(t, quicwire.OpDNSListRecords, &platformv1.ListRecordsRequest{})
 		resp := handler.HandleRequest(ctx, req)
-		assert.Equal(t, quic.StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 }
 
@@ -190,17 +191,17 @@ func TestDNSAddZone_Delegated(t *testing.T) {
 	t.Run("success", func(t *testing.T) {
 		mock := NewMockDNSService()
 		handler := createDNSUnitTestHandler(mock)
-		req := createDNSUnitTestRequest(t, quic.OpDNSAddZone, &platformv1.CreateZoneRequest{Name: "example.com.", Ttl: 3600})
+		req := createDNSUnitTestRequest(t, quicwire.OpDNSAddZone, &platformv1.CreateZoneRequest{Name: "example.com.", Ttl: 3600})
 		resp := handler.HandleRequest(ctx, req)
-		require.Equal(t, quic.StatusOK, resp.Status, string(resp.Payload))
+		require.Equal(t, quicwire.StatusOK, resp.Status, string(resp.Payload))
 		assert.GreaterOrEqual(t, mock.CallCount("Save"), 1)
 	})
 
 	t.Run("missing name", func(t *testing.T) {
 		handler := createDNSUnitTestHandler(NewMockDNSService())
-		req := createDNSUnitTestRequest(t, quic.OpDNSAddZone, &platformv1.CreateZoneRequest{Ttl: 3600})
+		req := createDNSUnitTestRequest(t, quicwire.OpDNSAddZone, &platformv1.CreateZoneRequest{Ttl: 3600})
 		resp := handler.HandleRequest(ctx, req)
-		assert.Equal(t, quic.StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 }
 
@@ -214,17 +215,17 @@ func TestDNSDeleteZone_Delegated(t *testing.T) {
 	t.Run("success", func(t *testing.T) {
 		mock := NewMockDNSService()
 		handler := createDNSUnitTestHandler(mock)
-		req := createDNSUnitTestRequest(t, quic.OpDNSDeleteZone, &platformv1.DeleteZoneRequest{Name: "example.com."})
+		req := createDNSUnitTestRequest(t, quicwire.OpDNSDeleteZone, &platformv1.DeleteZoneRequest{Name: "example.com."})
 		resp := handler.HandleRequest(ctx, req)
-		require.Equal(t, quic.StatusOK, resp.Status, string(resp.Payload))
+		require.Equal(t, quicwire.StatusOK, resp.Status, string(resp.Payload))
 		assert.GreaterOrEqual(t, mock.CallCount("Delete"), 1)
 	})
 
 	t.Run("missing name", func(t *testing.T) {
 		handler := createDNSUnitTestHandler(NewMockDNSService())
-		req := createDNSUnitTestRequest(t, quic.OpDNSDeleteZone, &platformv1.DeleteZoneRequest{})
+		req := createDNSUnitTestRequest(t, quicwire.OpDNSDeleteZone, &platformv1.DeleteZoneRequest{})
 		resp := handler.HandleRequest(ctx, req)
-		assert.Equal(t, quic.StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 }
 
@@ -237,23 +238,23 @@ func TestDNSListZones_Delegated(t *testing.T) {
 
 	t.Run("success returns all zones", func(t *testing.T) {
 		handler := createDNSUnitTestHandler(NewMockDNSService())
-		req := createDNSUnitTestRequest(t, quic.OpDNSListZones, &platformv1.ListZonesRequest{})
+		req := createDNSUnitTestRequest(t, quicwire.OpDNSListZones, &platformv1.ListZonesRequest{})
 		resp := handler.HandleRequest(ctx, req)
-		require.Equal(t, quic.StatusOK, resp.Status, string(resp.Payload))
+		require.Equal(t, quicwire.StatusOK, resp.Status, string(resp.Payload))
 
 		var result platformv1.ListZonesResponse
-		require.NoError(t, quic.DecodePayload(resp.Payload, &result))
+		require.NoError(t, quicwire.DecodePayload(resp.Payload, &result))
 		assert.Len(t, result.GetZones(), 2)
 	})
 
 	t.Run("internal-only filter", func(t *testing.T) {
 		handler := createDNSUnitTestHandler(NewMockDNSService())
-		req := createDNSUnitTestRequest(t, quic.OpDNSListZones, &platformv1.ListZonesRequest{InternalOnly: true})
+		req := createDNSUnitTestRequest(t, quicwire.OpDNSListZones, &platformv1.ListZonesRequest{InternalOnly: true})
 		resp := handler.HandleRequest(ctx, req)
-		require.Equal(t, quic.StatusOK, resp.Status, string(resp.Payload))
+		require.Equal(t, quicwire.StatusOK, resp.Status, string(resp.Payload))
 
 		var result platformv1.ListZonesResponse
-		require.NoError(t, quic.DecodePayload(resp.Payload, &result))
+		require.NoError(t, quicwire.DecodePayload(resp.Payload, &result))
 		assert.Len(t, result.GetZones(), 1)
 	})
 }
@@ -266,22 +267,32 @@ func TestDNSResolve_Delegated(t *testing.T) {
 	ctx := context.Background()
 
 	t.Run("success returns authoritative records", func(t *testing.T) {
-		handler := createDNSUnitTestHandler(NewMockDNSService())
-		req := createDNSUnitTestRequest(t, quic.OpDNSResolve, &platformv1.ResolveRequest{Fqdn: "example.com.", Type: platformv1.RecordType_RECORD_TYPE_A})
+		svc := NewMockDNSService()
+		svc.ZoneFunc = func(ctx context.Context, zoneName string) (*entities.Zone, error) {
+			if zoneName != "example.com." {
+				return nil, dns.ErrZoneNotFound
+			}
+			return &entities.Zone{Name: zoneName, RecordSet: entities.RecordSet{ARecords: []*entities.ARecord{
+				{Name: "@", Value: "192.168.1.2"},
+				{Name: "test", Value: "192.168.1.1"},
+			}}}, nil
+		}
+		handler := createDNSUnitTestHandler(svc)
+		req := createDNSUnitTestRequest(t, quicwire.OpDNSResolve, &platformv1.ResolveRequest{Fqdn: "test.example.com.", Type: platformv1.RecordType_RECORD_TYPE_A})
 		resp := handler.HandleRequest(ctx, req)
-		require.Equal(t, quic.StatusOK, resp.Status, string(resp.Payload))
+		require.Equal(t, quicwire.StatusOK, resp.Status, string(resp.Payload))
 
 		var result dnsResolveResponseWire
-		require.NoError(t, quic.DecodePayload(resp.Payload, &result))
+		require.NoError(t, quicwire.DecodePayload(resp.Payload, &result))
 		assert.True(t, result.Authoritative)
 		require.Len(t, result.Records, 1)
-		assert.Equal(t, platformv1.RecordType_RECORD_TYPE_A, result.Records[0].toProto().GetType())
+		assert.Equal(t, "192.168.1.1", result.Records[0].toProto().GetA().GetValue())
 	})
 
 	t.Run("missing fqdn", func(t *testing.T) {
 		handler := createDNSUnitTestHandler(NewMockDNSService())
-		req := createDNSUnitTestRequest(t, quic.OpDNSResolve, &platformv1.ResolveRequest{})
+		req := createDNSUnitTestRequest(t, quicwire.OpDNSResolve, &platformv1.ResolveRequest{})
 		resp := handler.HandleRequest(ctx, req)
-		assert.Equal(t, quic.StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 }

@@ -174,7 +174,7 @@ platformctl iam app rotate-secret tenant-a c-9a3f
 |---|---|
 | Group membership add / remove | REST, gRPC, QUIC, MCP |
 | Authenticate | gRPC, QUIC, MCP |
-| Create / verify / revoke a token | gRPC, QUIC (`0x90`–`0x97`), MCP |
+| Create / verify / revoke a token | gRPC, QUIC (`0xF9`–`0xFB`), MCP |
 | Check a permission | gRPC, QUIC, MCP |
 | Tenant CRUD (IAM scoping) | REST `/api/v1/iam/tenants`, gRPC, MCP |
 

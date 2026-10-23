@@ -87,15 +87,6 @@ func (e ErrUnixSDNRPCFailed) Unwrap() error {
 	return e.Err
 }
 
-// ErrUnixSDNNotImplemented indicates a method is not yet implemented.
-type ErrUnixSDNNotImplemented struct {
-	Method string
-}
-
-func (e ErrUnixSDNNotImplemented) Error() string {
-	return fmt.Sprintf("Unix method %s not implemented", e.Method)
-}
-
 // =============================================================================
 // Unix Adapter
 // =============================================================================

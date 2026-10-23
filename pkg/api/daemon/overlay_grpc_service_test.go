@@ -26,6 +26,8 @@ import (
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // mockOverlayController implements OverlayControllerInterface for testing.
@@ -337,6 +339,7 @@ func TestOverlayService_CreateVNI(t *testing.T) {
 		config        *platformv1.VNIConfig
 		setupMock     func() *mockOverlayController
 		expectError   bool
+		errorCode     codes.Code
 		errorContains string
 	}{
 		{
@@ -372,6 +375,18 @@ func TestOverlayService_CreateVNI(t *testing.T) {
 			setupMock:     newMockOverlayController,
 			expectError:   true,
 			errorContains: "vni must not exceed",
+		},
+		{
+			// 65636 would wrap to VLAN 100 if it reached the uint16 VNIConfig.
+			name: "VLAN exceeds max",
+			config: &platformv1.VNIConfig{
+				Vni:  1000,
+				Vlan: 65636,
+			},
+			setupMock:     newMockOverlayController,
+			expectError:   true,
+			errorCode:     codes.InvalidArgument,
+			errorContains: "vlan must not exceed 4094",
 		},
 		{
 			name: "controller error",
@@ -416,6 +431,9 @@ func TestOverlayService_CreateVNI(t *testing.T) {
 				assert.Nil(t, resp)
 				if tt.errorContains != "" {
 					assert.Contains(t, err.Error(), tt.errorContains)
+				}
+				if tt.errorCode != codes.OK {
+					assert.Equal(t, tt.errorCode, status.Code(err))
 				}
 			} else {
 				assert.NoError(t, err)

@@ -66,14 +66,23 @@ func resolveSurface(cfg *v1.Config) (string, error) {
 		return v1.SurfaceFull, nil
 	case v1.SurfaceEdge:
 		return v1.SurfaceEdge, nil
+	case v1.SurfaceProvisioning:
+		return v1.SurfaceProvisioning, nil
 	default:
 		return "", &ErrUnknownSurface{Name: cfg.Name, Surface: cfg.Surface}
 	}
 }
 
+// boundedSurface reports whether a surface answers callers that present no
+// credential — the public edge and the provisioning listener (#177) — and so
+// takes the edge defaults for every limit the config leaves zero.
+func boundedSurface(surface string) bool {
+	return surface == v1.SurfaceEdge || surface == v1.SurfaceProvisioning
+}
+
 // resolveLimits fills the listener limits from the config, taking the edge
-// defaults for zero fields on an edge surface and the historical server
-// timeouts on a full one.
+// defaults for zero fields on a bounded surface (edge, provisioning) and the
+// historical server timeouts on a full one.
 func resolveLimits(cfg *v1.Config, surface string) ListenerLimits {
 	l := ListenerLimits{
 		MaxHeaderBytes: cfg.MaxHeaderBytes,
@@ -92,7 +101,7 @@ func resolveLimits(cfg *v1.Config, surface string) ListenerLimits {
 	if l.IdleTimeout <= 0 {
 		l.IdleTimeout = HTTP_SERVER_IDLE_TIMEOUT
 	}
-	if surface == v1.SurfaceEdge {
+	if boundedSurface(surface) {
 		if l.MaxHeaderBytes <= 0 {
 			l.MaxHeaderBytes = EdgeMaxHeaderBytes
 		}
@@ -192,10 +201,10 @@ func (l ListenerLimits) retryAfter() string {
 const EdgeMaxIncomingStreams = 100
 
 // quicConfig returns the QUIC settings for the HTTP/3 listener: the stream
-// bound above on an edge surface, defaults otherwise.
+// bound above on a bounded surface, defaults otherwise.
 func (l ListenerLimits) quicConfig(surface string) *quic.Config {
 	cfg := &quic.Config{}
-	if surface == v1.SurfaceEdge {
+	if boundedSurface(surface) {
 		cfg.MaxIncomingStreams = EdgeMaxIncomingStreams
 		cfg.MaxIncomingUniStreams = EdgeMaxIncomingStreams
 	}
@@ -261,8 +270,8 @@ type ErrUnknownSurface struct {
 
 // Error implements the error interface.
 func (e *ErrUnknownSurface) Error() string {
-	return fmt.Sprintf("webservice %q: unknown surface %q (want %q or %q)",
-		e.Name, e.Surface, v1.SurfaceFull, v1.SurfaceEdge)
+	return fmt.Sprintf("webservice %q: unknown surface %q (want %q, %q or %q)",
+		e.Name, e.Surface, v1.SurfaceFull, v1.SurfaceEdge, v1.SurfaceProvisioning)
 }
 
 // ErrEdgeSurfaceEmpty is the startup refusal for an edge surface with no

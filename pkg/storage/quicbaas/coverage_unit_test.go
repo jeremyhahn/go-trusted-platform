@@ -1101,6 +1101,37 @@ func TestDeviceProfileDAO_FindMatchingProfile_BySerial(t *testing.T) {
 	assert.Equal(t, "SerialServer", retrieved.Model)
 }
 
+// A stored prefix matches whatever case it was written in: the scan compares
+// MAC prefixes lowercase and serial prefixes uppercase on both sides, as
+// FindByMACPrefix and FindBySerialPrefix do.
+func TestDeviceProfileDAO_FindMatchingProfile_StoredPrefixCaseIgnored(t *testing.T) {
+	dao, mock := setupMockDeviceProfileDAO(t)
+	defer mock.Stop(context.Background())
+
+	ctx := context.Background()
+	require.NoError(t, dao.Save(ctx, &deventities.DeviceProfile{
+		ID:         1,
+		Model:      "MixedCaseMAC",
+		MatchRules: &deventities.ProfileMatchRules{MACPrefix: "AA:BB:ce"},
+	}))
+	require.NoError(t, dao.Save(ctx, &deventities.DeviceProfile{
+		ID:         2,
+		Model:      "MixedCaseSerial",
+		MatchRules: &deventities.ProfileMatchRules{SerialPrefix: "sn-ab12-"},
+	}))
+
+	byMAC, err := dao.FindMatchingProfile(ctx, "AA:BB:CE:DD:EE:FF", "", "")
+	require.NoError(t, err)
+	assert.Equal(t, "MixedCaseMAC", byMAC.Model)
+
+	bySerial, err := dao.FindMatchingProfile(ctx, "", "SN-AB12-12345", "")
+	require.NoError(t, err)
+	assert.Equal(t, "MixedCaseSerial", bySerial.Model)
+
+	_, err = dao.FindMatchingProfile(ctx, "aa:bb:cf:00:00:00", "", "")
+	require.Error(t, err)
+}
+
 func TestDeviceProfileDAO_FindMatchingProfile_ByModel(t *testing.T) {
 	dao, mock := setupMockDeviceProfileDAO(t)
 	defer mock.Stop(context.Background())
@@ -1337,24 +1368,6 @@ func TestInvitationDAO_GetPendingByTenant_InvalidJSON_Skipped(t *testing.T) {
 	invitations, err := dao.GetPendingByTenant(ctx, "tenant-abc")
 	require.NoError(t, err)
 	assert.Len(t, invitations, 1)
-}
-
-// =============================================================================
-// Config edge cases: ToQuicBaaSConfig JoinAddresses
-// =============================================================================
-
-func TestConfig_ToQuicBaaSConfig_WithJoinAddresses(t *testing.T) {
-	cfg := TestConfig(t)
-	cfg.JoinAddresses = []string{"peer1:63000", "peer2:63000"}
-	dbCfg := cfg.ToQuicBaaSConfig()
-	assert.Equal(t, []string{"peer1:63000", "peer2:63000"}, dbCfg.Raft.JoinAddresses)
-}
-
-func TestConfig_ToQuicBaaSConfig_WithoutJoinAddresses(t *testing.T) {
-	cfg := TestConfig(t)
-	cfg.JoinAddresses = nil
-	dbCfg := cfg.ToQuicBaaSConfig()
-	assert.Nil(t, dbCfg.Raft.JoinAddresses)
 }
 
 func TestConfig_ToQuicBaaSConfig_EmptyStorageBackend(t *testing.T) {

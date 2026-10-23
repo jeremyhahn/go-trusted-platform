@@ -95,6 +95,7 @@ type IPAllocationResponse struct {
 	PoolID      string     `json:"pool_id"`
 	DeviceID    string     `json:"device_id,omitempty"`
 	Hostname    string     `json:"hostname,omitempty"`
+	Status      string     `json:"status"`
 	AllocatedAt *time.Time `json:"allocated_at,omitempty"`
 	ExpiresAt   *time.Time `json:"expires_at,omitempty"`
 }
@@ -205,6 +206,7 @@ func allocationProtoToResponse(alloc *platformv1.IPAllocation) IPAllocationRespo
 		PoolID:   alloc.GetPoolId(),
 		DeviceID: alloc.GetDeviceId(),
 		Hostname: alloc.GetHostname(),
+		Status:   alloc.GetStatus(),
 	}
 	if ts := alloc.GetAllocatedAt(); ts != nil {
 		t := ts.AsTime()

@@ -130,8 +130,8 @@ func TestRevoke_ConcurrentWithRenewResolvesToRevoked(t *testing.T) {
 
 func TestKeyLock_EntriesAreReleased(t *testing.T) {
 	k := newKeyLock()
-	unlockA := k.lock("a")
-	unlockB := k.lock("b")
+	unlockA := k.lock(deviceKey("t", "a"))
+	unlockB := k.lock(deviceKey("t", "b"))
 	k.mu.Lock()
 	assert.Len(t, k.locks, 2)
 	k.mu.Unlock()

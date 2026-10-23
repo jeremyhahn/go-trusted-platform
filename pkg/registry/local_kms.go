@@ -15,8 +15,6 @@ package registry
 
 import (
 	"context"
-	"crypto/aes"
-	"crypto/cipher"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/json"
@@ -26,6 +24,8 @@ import (
 	"path/filepath"
 	"sync"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 // LocalKMSClient is a single-node KMSClient that persists encryption
@@ -113,7 +113,10 @@ func (c *LocalKMSClient) GenerateKey(ctx context.Context, name, algorithm string
 	if _, err := io.ReadFull(rand.Reader, key); err != nil {
 		return "", &WrappedError{Msg: "registry: generate key", Err: err}
 	}
-	keyID := fmt.Sprintf("local-%x", sha256.Sum256([]byte(name+time.Now().Format(time.RFC3339Nano))))[:24]
+	// Random, not derived from name and time: two keys of the same name made
+	// within one clock tick would otherwise share an ID and the second would
+	// overwrite the first key file (#284).
+	keyID := "local-" + uuid.NewString()
 	path := c.keyPath(keyID)
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -174,22 +177,14 @@ func (c *LocalKMSClient) Encrypt(ctx context.Context, keyID string, plaintext, a
 	if err != nil {
 		return nil, 0, err
 	}
-	block, err := aes.NewCipher(key)
+	// Wire format: nonce || ciphertext || tag, unchanged since this was
+	// assembled by hand from cipher.NewGCM plus an explicit rand nonce, so
+	// every stored DEK still opens (TestLocalKMS_WireFormatUnchanged).
+	sealed, err := gcm.Seal(key, plaintext, aad)
 	if err != nil {
 		return nil, 0, err
 	}
-	gcm, err := cipher.NewGCMWithRandomNonce(block)
-	if err != nil {
-		return nil, 0, err
-	}
-	// Wire format: nonce || ciphertext || tag, unchanged. This used to be
-	// assembled by hand from cipher.NewGCM plus an explicit rand nonce;
-	// NewGCMWithRandomNonce emits exactly the same layout with the same
-	// 12-byte nonce, so ciphertexts written before and after this change are
-	// interchangeable in both directions (TestLocalKMS_WireFormatUnchanged).
-	// The swap is required because cipher.NewGCM itself fails under
-	// GODEBUG=fips140=only, which took this path down in a FIPS build (#209).
-	return gcm.Seal(nil, nil, plaintext, aad), 1, nil
+	return sealed, 1, nil
 }
 
 // Decrypt unwraps a ciphertext produced by Encrypt under keyID.
@@ -201,23 +196,9 @@ func (c *LocalKMSClient) Decrypt(ctx context.Context, keyID string, ciphertext, 
 	if err != nil {
 		return nil, err
 	}
-	block, err := aes.NewCipher(key)
-	if err != nil {
-		return nil, err
-	}
-	gcm, err := cipher.NewGCMWithRandomNonce(block)
-	if err != nil {
-		return nil, err
-	}
-	// The length check stays explicit so a truncated blob keeps reporting a
-	// typed platform error rather than the stdlib's opaque "message
-	// authentication failed", which is what an undersized input would
-	// otherwise produce.
-	if len(ciphertext) < NonceSize+TagSize {
-		return nil, &MessageError{Msg: "registry: ciphertext too short"}
-	}
-	// Open splits the nonce prefix itself; the nonce argument must be empty.
-	return gcm.Open(nil, nil, ciphertext, aad)
+	// A blob shorter than nonce + tag is refused with the typed
+	// aesgcm.ErrCiphertextTooShort before any decryption is attempted.
+	return gcm.Open(key, ciphertext, aad)
 }
 
 // ErrKeyNotFoundLocal is returned when GetKey is asked about a key

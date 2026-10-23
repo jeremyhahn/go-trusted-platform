@@ -15,8 +15,10 @@ package iso
 
 import (
 	"context"
+	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -357,6 +359,85 @@ func TestExtract7z_NotAvailable(t *testing.T) {
 	// Try extraction - will fail gracefully if 7z not found or file is not valid
 	err := extract7z(ctx, isoPath, destDir)
 	_ = err // Behavior depends on whether 7z is installed
+}
+
+// fakeExtractorTool installs an executable named tool as the only entry on
+// PATH. It prints a banner to stdout (7z's begins "7-Zip", which broke
+// `platformctl iso extract -o json`) and exits with exitCode.
+func fakeExtractorTool(t *testing.T, tool string, exitCode int) {
+	t.Helper()
+
+	binDir := t.TempDir()
+	script := "#!/bin/sh\necho '" + tool + " banner on stdout'\nexit " + strconv.Itoa(exitCode) + "\n"
+	require.NoError(t, os.WriteFile(filepath.Join(binDir, tool), []byte(script), 0o755))
+	t.Setenv("PATH", binDir)
+}
+
+// captureStdio swaps os.Stdout and os.Stderr for pipes while fn runs and
+// returns what each received.
+func captureStdio(t *testing.T, fn func()) (stdout, stderr string) {
+	t.Helper()
+
+	outR, outW, err := os.Pipe()
+	require.NoError(t, err)
+	errR, errW, err := os.Pipe()
+	require.NoError(t, err)
+
+	origOut, origErr := os.Stdout, os.Stderr
+	os.Stdout, os.Stderr = outW, errW
+	defer func() { os.Stdout, os.Stderr = origOut, origErr }()
+
+	fn()
+
+	require.NoError(t, outW.Close())
+	require.NoError(t, errW.Close())
+	outBytes, err := io.ReadAll(outR)
+	require.NoError(t, err)
+	errBytes, err := io.ReadAll(errR)
+	require.NoError(t, err)
+	return string(outBytes), string(errBytes)
+}
+
+// TestExtractors_ToolOutputStaysOffStdout pins that an extraction tool's
+// stdout goes to stderr: stdout carries only the CLI verb's result object
+// (docs/installer/cli.md §4).
+func TestExtractors_ToolOutputStaysOffStdout(t *testing.T) {
+	extractors := map[string]func(context.Context, string, string) error{
+		"7z":      extract7z,
+		"bsdtar":  extractBsdtar,
+		"xorriso": extractOsirrox,
+	}
+
+	for tool, extract := range extractors {
+		t.Run(tool+"/Success", func(t *testing.T) {
+			fakeExtractorTool(t, tool, 0)
+			dir := t.TempDir()
+
+			var extractErr error
+			stdout, stderr := captureStdio(t, func() {
+				extractErr = extract(context.Background(), filepath.Join(dir, "in.iso"), filepath.Join(dir, "out"))
+			})
+
+			require.NoError(t, extractErr)
+			assert.Empty(t, stdout, "tool output must not reach stdout")
+			assert.Contains(t, stderr, tool+" banner on stdout")
+		})
+
+		t.Run(tool+"/ToolFails", func(t *testing.T) {
+			fakeExtractorTool(t, tool, 2)
+			dir := t.TempDir()
+
+			var extractErr error
+			stdout, _ := captureStdio(t, func() {
+				extractErr = extract(context.Background(), filepath.Join(dir, "in.iso"), filepath.Join(dir, "out"))
+			})
+
+			var wrapped *WrappedError
+			require.ErrorAs(t, extractErr, &wrapped)
+			assert.Contains(t, wrapped.Msg, "extraction failed")
+			assert.Empty(t, stdout, "tool output must not reach stdout on failure either")
+		})
+	}
 }
 
 // Test configuration validation for extraction

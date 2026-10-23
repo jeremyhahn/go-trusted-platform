@@ -6,6 +6,8 @@
 > 2026-08-18. Flags mentioned only in a command's help text but never registered
 > are listed in §6 as defects, not documented as if they worked.
 
+Replaces `docs/man/tpm/*.md` and `docs/man/platform/*.md`, removed in 3ddd4fa19 (`git show 3ddd4fa19^:<path>`).
+
 ---
 
 ## 1. Command group
@@ -19,6 +21,7 @@ platformctl tpm iak        Manage IAK (Initial Attestation Key) keys
 platformctl tpm ek         Endorsement Key operations
 platformctl tpm srk        Storage Root Key operations
 platformctl tpm nvram      NVRAM operations
+platformctl tpm certify    Key certification (TPM2_Certify)
 platformctl tpm device     TPM device information
 ```
 
@@ -84,7 +87,7 @@ OBJECT         HANDLE         CERTIFICATE                                NOTES
 ----------------------------------------------------------------------------------------------------
 EK             present        present (PEM)
 SSRK           present        n/a                                        0x81000001
-PlatformSRK    present        n/a                                        0x81000002; default handle assumed (daemon config not exposed); override with --platform-srk-handle
+PlatformSRK    present        n/a                                        0x81000005; handle from daemon config
 IAK            present        present (cert lacks verifiedTPMRestricted) 0x81010002; issuer ca01.cp.example.com
 IDevID         present        present                                    0x81020000; issuer ca01.cp.example.com
 ```
@@ -107,10 +110,12 @@ How to read a row:
 - **`NOTES`** carries the handle, the certificate issuer CN and
   `verifiedTPMRestricted` when present; the remedy (`tpm iak generate` …) when
   absent.
-- **`PlatformSRK`** is probed at `0x81000002`, platformd's default for
-  `tpm.platform-srk.handle`, because the daemon does not expose the configured
-  value over the API. A node configured with a different handle must be probed
-  with `--platform-srk-handle 0x8100XXXX`; the row says which handle it used.
+- **`PlatformSRK`** is probed at the handle the daemon reports in its `Info`
+  properties (`platform_srk_handle`, from `tpm.platform-srk.handle`); the NOTES
+  say `handle from daemon config`. `--platform-srk-handle 0x8100XXXX` overrides
+  it (`handle from --platform-srk-handle`). Only against a daemon that does not
+  report the property does the CLI fall back to `0x81000002` and say
+  `default handle assumed`.
 
 `-o json` / `-o yaml` keep the pre-#471 keys (`name`, `role`, `handle_present`,
 `cert_present`, `cert_format`, `error`) and add, when known, `handle`,
@@ -165,6 +170,10 @@ immediately. Use it when the TPM is in DA lockout or its hierarchy auth is
 unknown — the two cases where `TPM2_Clear` cannot work. If the auto-reboot
 fails it tells you to reboot manually; the clear is already scheduled either way.
 
+`TPM2_Clear` is TPM 2.0 Library Part 3; the hierarchy and provisioning model is
+the TCG TPM v2.0 Provisioning Guidance. Both are in
+[docs/reference/tpm2/](../reference/tpm2/).
+
 ---
 
 ## 4. Keys
@@ -215,6 +224,31 @@ platformctl tpm srk create --algorithm ECDSA-P256 --parent 0x81010001
 platformctl tpm srk info --handle 0x81000002        # the PlatformSRK
 ```
 
+### `platformctl tpm certify`
+
+| Flag | Type | Default | Meaning |
+|---|---|---|---|
+| `--handle` | string | | Persistent key handle, `0x` hex or decimal (**required**) |
+| `--password` | string | `""` | Authorization of the key being certified |
+| `--nonce` | string | `""` | Verifier nonce as hex, at most 64 bytes |
+
+The IAK signs a `TPMS_ATTEST` naming the key (TPM2_Certify), over the nonce,
+so a verifier holding the IAK public key can prove the key is resident in this
+TPM. It calls the SDK `Certify`, so it works on every transport ([api.md](api.md)
+§5) and needs `tpm:read`.
+
+```bash
+platformctl tpm certify --handle 0x81000001
+platformctl tpm certify --handle 0x81000001 --nonce 0011aabb -o json
+```
+
+**Byte fields print as hex**: `certify_info`, `signature`,
+`attesting_key_public` and `attested_key_public` (PKIX DER) and `nonce`, beside
+`key_handle` and `signature_algorithm`. A handle that does not parse
+(`ErrInvalidTPMHandle`) or a nonce that is not hex (`ErrInvalidCertifyNonce`)
+fails before any RPC; a transient handle or a nonce over 64 bytes is refused by
+the daemon (`ErrCertifyFailed`).
+
 ---
 
 ## 5. Sealing, NVRAM and the event log
@@ -231,7 +265,6 @@ platformctl tpm srk info --handle 0x81000002        # the PlatformSRK
 | `--pcrs` | int slice | none | PCR indices to bind to, comma-separated |
 | `--pcr-bank` | string | `sha256` | `sha1`, `sha256`, `sha384`, `sha512` |
 | `--overwrite` | bool | `false` | Replace existing sealed data with this CN |
-| `--policy` | bool | `true` | **Parsed and discarded — see §6** |
 
 **`unseal`**
 
@@ -315,7 +348,7 @@ Two consequences worth stating plainly:
 - **The platform PCR cannot be extended from the CLI.** `tpm extend` is the verb
   for it and it does not work. The extension happens automatically in
   `App.OpenTPM` on every boot; on QUIC it is `SubOpTPM2ExtendPCR`, and on MCP it
-  is `platform_tpm_pcr_extend`.
+  is `platform_tpm_pcr_extend` — both through `pkg/api/tpmpcr` ([api.md](api.md) §5).
 - **ACME device enrollment cannot be driven from `platformctl tpm`.** Build the
   CSR with `tpm idevid csr` / `tpm iak csr` and complete enrollment through the
   CA surface.
@@ -334,7 +367,7 @@ wired: PCR binding is `--pcrs`, and the sealed object's auth is `--password`.
 |---|---|
 | `generate` | `--algorithm` (default `ECDSA-P256`), `--overwrite` |
 | `info` | — |
-| `delete` | — |
+| `delete` | — (refused, see below) |
 | `csr` | `--common-name`, `--organization`, `--country`, `--state`, `--locality`, `--organizational-unit` |
 | `install` | `--cert-file` (**required** — `MarkFlagRequired`, PEM) |
 | `certificate` (alias `cert`) | — |
@@ -342,6 +375,13 @@ wired: PCR binding is `--pcrs`, and the sealed object's auth is `--password`.
 **`--common-name` on `csr` is described as required in its help text but is not
 marked required by the parser.** Omitting it produces a server-side failure, not
 a usage error. `--cert-file` on `install` *is* enforced locally.
+
+**`delete` is refused until the owner rules on eviction.** The key is
+TPM-resident and the daemon does not evict it: every transport answers
+`FailedPrecondition` and changes nothing — no key, no certificate, no state
+(#304). The command prints nothing on stdout, writes
+`Error: IDevID key delete refused: the key is TPM-resident and is not evicted; nothing was changed`
+to stderr and exits `1`. The same holds for `tpm iak delete`.
 
 ### `platformctl tpm iak`
 
@@ -400,14 +440,14 @@ is the only LDevID verb.
 
 | Capability | Reach it with |
 |---|---|
-| Quote the physical TPM | **No CLI verb anywhere.** There is no `platformctl attestation` group; the only attest verb is `platformctl container attest`, which quotes a container's measurement ([`docs/attestation/cli.md`](../attestation/cli.md) §1). Direct quoting is gRPC `Quote`, REST `POST /api/v1/tpm/quote`, QUIC `0x0F`, MCP `platform_tpm_quote` |
+| Quote the physical TPM | **No CLI verb anywhere.** There is no `platformctl attestation` group; the only attest verb is `platformctl container attest`, which quotes a container's measurement ([`docs/attestation/cli.md`](../attestation/cli.md) §1). Direct quoting is gRPC `Quote`, REST `POST /api/v1/tpm/quote`, QUIC `0x0F`, MCP `platform_tpm_quote` — over TLS only, bound to the connection ([api.md](api.md) §5) |
 | Verify a quote | gRPC `VerifyQuote`, REST `POST /api/v1/tpm/quote/verify`, QUIC `0x10`, MCP `platform_tpm_verify_quote` |
-| Read or extend physical PCRs | REST `GET /api/v1/tpm/pcrs` (read); extend is QUIC `0x12` or MCP `platform_tpm_pcr_extend` only |
-| Attestation key (AK/IAK) create, get, delete on the *TPMService* surface | gRPC `CreateAK`/`GetAK`/`DeleteAK`, REST `/api/v1/tpm/ak`, QUIC `0x0C`–`0x0E` (named IAK), MCP `platform_tpm_iak*` |
+| Read or extend physical PCRs | REST `GET /api/v1/tpm/pcrs` (read); extend is QUIC `0x12` only |
+| Attestation key (AK/IAK) create, get on the *TPMService* surface (delete is refused, [api.md](api.md) §8) | gRPC `CreateAK`/`GetAK`/`DeleteAK`, REST `/api/v1/tpm/ak`, QUIC `0x0C`–`0x0E` (named IAK), MCP `platform_tpm_iak*` |
 | Import an EK certificate | gRPC `ImportEKCertificate`, REST `POST /api/v1/tpm/ek/certificate`, QUIC `0x08`, MCP `platform_tpm_ek_import_cert` |
 | Get random bytes from the TPM | gRPC `GetRandom`, REST `POST /api/v1/tpm/random`, QUIC `0x14`, MCP `platform_tpm_random` |
-| MakeCredential / ActivateCredential | gRPC, QUIC `0x20`/`0x21`, MCP — **not REST** |
-| TPM capabilities, NV index listing, platform attributes, certify | QUIC and MCP only |
+| MakeCredential / ActivateCredential | gRPC, QUIC `0x20`/`0x21`, MCP; also the daemon REST listener's `POST /api/v1/tpm/make-credential` and `POST /api/v1/tpm/activate-credential` ([api.md](api.md) §1) |
+| TPM capabilities, NV index listing, platform attributes | QUIC and MCP only (NV listing: QUIC `0x1B`, MCP `platform_tpm_nv_list`) |
 | Virtual TPMs | `platformctl vtpm` — [`docs/vtpm/cli.md`](../vtpm/cli.md) |
 
 ---

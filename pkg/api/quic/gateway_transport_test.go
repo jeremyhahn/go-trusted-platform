@@ -54,6 +54,7 @@ import (
 	"github.com/jeremyhahn/go-codec"
 	"github.com/jeremyhahn/go-codec/pkg/factory"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 )
 
 // =============================================================================
@@ -75,15 +76,15 @@ func (s *testTransportGatewayService) ListSnapshots(_ context.Context) ([]*Gatew
 	return nil, ErrGatewayFeatureNotConfigured
 }
 
-func (s *testTransportGatewayService) GetAdmittedVTEP(_ context.Context, _, _ string) (*GatewayAdmittedVTEPInfo, error) {
+func (s *testTransportGatewayService) GetAdmittedVTEP(_ context.Context, _, _ string) (*quicwire.GatewayAdmittedVTEPInfo, error) {
 	return nil, ErrGatewayFeatureNotConfigured
 }
 
-func (s *testTransportGatewayService) ListAdmittedVTEPs(_ context.Context, _ string) ([]*GatewayAdmittedVTEPInfo, error) {
+func (s *testTransportGatewayService) ListAdmittedVTEPs(_ context.Context, _ string) ([]*quicwire.GatewayAdmittedVTEPInfo, error) {
 	return nil, ErrGatewayFeatureNotConfigured
 }
-func (s *testTransportGatewayService) SetMode(_ context.Context, _ string) error {
-	return ErrGatewayFeatureNotConfigured
+func (s *testTransportGatewayService) SetModes(_ context.Context, _ uint32) (*GatewayStatusInfo, error) {
+	return nil, ErrGatewayFeatureNotConfigured
 }
 func (s *testTransportGatewayService) BGPStatus(_ context.Context) (*BGPStatusInfo, error) {
 	return nil, ErrGatewayFeatureNotConfigured
@@ -173,8 +174,8 @@ func (s *testTransportGatewayService) LBStatus(_ context.Context) (*LBStatusInfo
 	return nil, ErrGatewayFeatureNotConfigured
 }
 
-func (s *testTransportGatewayService) NAT64Status(_ context.Context) (*NAT64StatusInfo, error) {
-	return &NAT64StatusInfo{Active: true, InstancePresent: true}, nil
+func (s *testTransportGatewayService) NAT64Status(_ context.Context) (*quicwire.NAT64StatusInfo, error) {
+	return &quicwire.NAT64StatusInfo{Active: true, InstancePresent: true}, nil
 }
 
 var _ GatewayServiceInterface = (*testTransportGatewayService)(nil)
@@ -191,19 +192,19 @@ type gatewayCategoryHandler struct {
 	gwHandler *GatewayHandler
 }
 
-func (h *gatewayCategoryHandler) HandleRequest(ctx context.Context, req *Request) *Response {
+func (h *gatewayCategoryHandler) HandleRequest(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if req == nil {
-		return &Response{Status: StatusInvalidRequest, Payload: []byte("nil request")}
+		return &quicwire.Response{Status: quicwire.StatusInvalidRequest, Payload: []byte("nil request")}
 	}
-	if req.Opcode != OpGatewayCategory {
-		return &Response{Status: StatusInvalidRequest, Payload: []byte("expected OpGatewayCategory")}
+	if req.Opcode != quicwire.OpGatewayCategory {
+		return &quicwire.Response{Status: quicwire.StatusInvalidRequest, Payload: []byte("expected OpGatewayCategory")}
 	}
 	if len(req.Payload) == 0 {
-		return &Response{Status: StatusInvalidRequest, Payload: []byte("missing sub_opcode")}
+		return &quicwire.Response{Status: quicwire.StatusInvalidRequest, Payload: []byte("missing sub_opcode")}
 	}
 	subOpcode := req.Payload[0]
 	subPayload := req.Payload[1:]
-	subReq := &Request{
+	subReq := &quicwire.Request{
 		Opcode:  subOpcode,
 		Token:   req.Token,
 		Payload: subPayload,
@@ -255,7 +256,7 @@ func writeTestRequest(w io.Writer, opcode byte, payload []byte) error {
 func readTestResponse(r io.Reader) (status byte, payload []byte, err error) {
 	header := make([]byte, 5)
 	if _, err = io.ReadFull(r, header); err != nil {
-		return 0, nil, &WrappedError{Msg: "read header", Err: err}
+		return 0, nil, &quicwire.WrappedError{Msg: "read header", Err: err}
 	}
 	status = header[0]
 	payloadLen := binary.BigEndian.Uint32(header[1:5])
@@ -264,7 +265,7 @@ func readTestResponse(r io.Reader) (status byte, payload []byte, err error) {
 	}
 	payload = make([]byte, payloadLen)
 	if _, err = io.ReadFull(r, payload); err != nil {
-		return status, nil, &WrappedError{Msg: "read payload", Err: err}
+		return status, nil, &quicwire.WrappedError{Msg: "read payload", Err: err}
 	}
 	return status, payload, nil
 }
@@ -309,7 +310,7 @@ func startGatewayTransportServer(t *testing.T) (srv *Server, addr string, client
 		t.Fatalf("Server.Start: %v", err)
 	}
 
-	addr = srv.listener.Addr().String()
+	addr = srv.ListenAddr()
 
 	// Build client TLS that trusts the server's self-signed cert — no InsecureSkipVerify.
 	serverCertDER := serverTLS.Certificates[0].Certificate[0]
@@ -361,7 +362,7 @@ func TestGatewayTransport_ListNetworkZones_FullRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("encode request body: %v", err)
 	}
-	payload := append([]byte{OpGatewayListNetworkZones}, bodyBytes...)
+	payload := append([]byte{quicwire.OpGatewayListNetworkZones}, bodyBytes...)
 
 	stream, err := conn.OpenStreamSync(ctx)
 	if err != nil {
@@ -369,7 +370,7 @@ func TestGatewayTransport_ListNetworkZones_FullRoundTrip(t *testing.T) {
 	}
 	defer stream.Close()
 
-	if err := writeTestRequest(stream, OpGatewayCategory, payload); err != nil {
+	if err := writeTestRequest(stream, quicwire.OpGatewayCategory, payload); err != nil {
 		t.Fatalf("write request: %v", err)
 	}
 
@@ -377,7 +378,7 @@ func TestGatewayTransport_ListNetworkZones_FullRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read response: %v", err) // was: "read payload: EOF" before the fix
 	}
-	if status != StatusOK {
+	if status != quicwire.StatusOK {
 		t.Fatalf("expected StatusOK (0x00), got 0x%02x: %s", status, respPayload)
 	}
 
@@ -429,14 +430,14 @@ func TestGatewayTransport_ListNetworkZones_BackToBack(t *testing.T) {
 		if err != nil {
 			t.Fatalf("iteration %d: encode: %v", i, err)
 		}
-		payload := append([]byte{OpGatewayListNetworkZones}, bodyBytes...)
+		payload := append([]byte{quicwire.OpGatewayListNetworkZones}, bodyBytes...)
 
 		stream, err := conn.OpenStreamSync(ctx)
 		if err != nil {
 			t.Fatalf("iteration %d: OpenStreamSync: %v", i, err)
 		}
 
-		if err := writeTestRequest(stream, OpGatewayCategory, payload); err != nil {
+		if err := writeTestRequest(stream, quicwire.OpGatewayCategory, payload); err != nil {
 			_ = stream.Close()
 			t.Fatalf("iteration %d: write request: %v", i, err)
 		}
@@ -446,7 +447,7 @@ func TestGatewayTransport_ListNetworkZones_BackToBack(t *testing.T) {
 		if err != nil {
 			t.Fatalf("iteration %d: read response: %v (truncation bug)", i, err)
 		}
-		if status != StatusOK {
+		if status != quicwire.StatusOK {
 			t.Fatalf("iteration %d: expected StatusOK, got 0x%02x: %s", i, status, respPayload)
 		}
 
@@ -465,13 +466,13 @@ func TestGatewayTransport_ListNetworkZones_BackToBack(t *testing.T) {
 // guards against future refactors that might re-introduce multi-write splits.
 func TestGatewayTransport_WriteResponseAtomic(t *testing.T) {
 	payload := bytes.Repeat([]byte("Z"), 512) // typical zone list size
-	resp := &Response{
-		Status:  StatusOK,
+	resp := &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 
 	var buf bytes.Buffer
-	if err := WriteResponse(&buf, resp); err != nil {
+	if err := quicwire.WriteResponse(&buf, resp); err != nil {
 		t.Fatalf("WriteResponse: %v", err)
 	}
 
@@ -488,8 +489,8 @@ func TestGatewayTransport_WriteResponseAtomic(t *testing.T) {
 	if err != nil {
 		t.Fatalf("readTestResponse: %v", err)
 	}
-	if status != StatusOK {
-		t.Errorf("status: got 0x%02x, want 0x%02x", status, StatusOK)
+	if status != quicwire.StatusOK {
+		t.Errorf("status: got 0x%02x, want 0x%02x", status, quicwire.StatusOK)
 	}
 	if !bytes.Equal(readPayload, payload) {
 		t.Errorf("payload mismatch: got %d bytes, want %d", len(readPayload), len(payload))
@@ -517,7 +518,7 @@ func TestGatewayTransport_ErrorResponse(t *testing.T) {
 
 	// Request gateway status — the test service returns ErrGatewayFeatureNotConfigured
 	// which maps to StatusUnavailable with a non-empty error message payload.
-	payload := []byte{OpGatewayStatus}
+	payload := []byte{quicwire.OpGatewayStatus}
 
 	stream, err := conn.OpenStreamSync(ctx)
 	if err != nil {
@@ -525,7 +526,7 @@ func TestGatewayTransport_ErrorResponse(t *testing.T) {
 	}
 	defer stream.Close()
 
-	if err := writeTestRequest(stream, OpGatewayCategory, payload); err != nil {
+	if err := writeTestRequest(stream, quicwire.OpGatewayCategory, payload); err != nil {
 		t.Fatalf("write request: %v", err)
 	}
 
@@ -533,8 +534,8 @@ func TestGatewayTransport_ErrorResponse(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read response: %v", err)
 	}
-	if status != StatusUnavailable {
-		t.Errorf("expected StatusUnavailable (0x%02x), got 0x%02x", StatusUnavailable, status)
+	if status != quicwire.StatusUnavailable {
+		t.Errorf("expected StatusUnavailable (0x%02x), got 0x%02x", quicwire.StatusUnavailable, status)
 	}
 	if len(respPayload) == 0 {
 		t.Error("expected non-empty error message in response payload")

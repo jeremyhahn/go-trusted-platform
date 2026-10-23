@@ -22,7 +22,7 @@ func TestCommandTree(t *testing.T) {
 	for _, sub := range cmd.Commands() {
 		names[sub.Name()] = sub.Hidden
 	}
-	for _, name := range []string{"assemble", "netboot-initfs"} {
+	for _, name := range []string{"assemble", "netboot-initfs", "diskless-root"} {
 		if hidden, ok := names[name]; !ok || !hidden {
 			t.Errorf("%s missing or not hidden: %v", name, names)
 		}
@@ -129,6 +129,20 @@ func TestLoadInstallerConfig(t *testing.T) {
 	}
 }
 
+// TestLoadInstallerConfigAcceptsSecretReferences is the regression for #778: a
+// platform config whose CA key passwords are kms:// references must load, as it
+// does in platformd, instead of failing to decode into secret.SecretValue.
+func TestLoadInstallerConfigAcceptsSecretReferences(t *testing.T) {
+	platform := filepath.Join("testdata", "platform-secret-refs.yaml")
+	cfg, err := loadInstallerConfig(&assembleFlags{platformConfig: platform})
+	if err != nil {
+		t.Fatalf("platform config with kms:// references: %v", err)
+	}
+	if cfg.Disk.Device != "/dev/mmcblk0" {
+		t.Errorf("disk device = %q", cfg.Disk.Device)
+	}
+}
+
 func TestBuildConfigResolvesBinariesAndOverrides(t *testing.T) {
 	dir := t.TempDir()
 	bins := filepath.Join(dir, "aarch64")
@@ -186,6 +200,106 @@ func TestBuildConfigRefusesPlatformAPKDirWithoutPreFetch(t *testing.T) {
 	var notFound ErrBinariesNotFound
 	if _, err := buildConfig(flags); !errors.As(err, &notFound) {
 		t.Errorf("buildConfig with pre-fetch = %v, want it past the check to the binaries", err)
+	}
+}
+
+// rpiBinaries writes a stand-in aarch64 platformd and returns its directory.
+func rpiBinaries(t *testing.T) string {
+	t.Helper()
+	bins := filepath.Join(t.TempDir(), "aarch64")
+	if err := os.MkdirAll(bins, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(bins, "platformd"), []byte("elf"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return bins
+}
+
+// The template lookups are relative to the repository root, where
+// platformctl diskimage create runs, so these tests run from there and
+// resolve the shipped templates.
+const repoRoot = "../../../.."
+
+// --role builds the shipped dedicated-profile template for the role, and
+// nothing else: the single-node default is not a fallback.
+func TestBuildConfigRoleBuildsTheDedicatedTemplate(t *testing.T) {
+	t.Chdir(repoRoot)
+	// rpi5 is experimental but builds through the same path as rpi4.
+	builds := []struct{ model, role string }{
+		{"rpi4", "compute"},
+		{"rpi5", "compute"},
+		{"cm4", "control-plane"},
+		{"rpi4", "control-plane"},
+	}
+	for _, b := range builds {
+		t.Run(b.model+"/"+b.role, func(t *testing.T) {
+			flags := &createFlags{target: "rpi", model: b.model, role: b.role, binariesDir: rpiBinaries(t)}
+			cfg, err := buildConfig(flags)
+			if err != nil {
+				t.Fatalf("buildConfig: %v", err)
+			}
+			want := filepath.Join("configs", "platform", "templates", "dedicated", "raspberrypi", b.model, b.role+".yaml")
+			if cfg.PlatformConfigFile != want {
+				t.Errorf("platform config = %q, want %q", cfg.PlatformConfigFile, want)
+			}
+		})
+	}
+}
+
+// Without --role the rpi image stays the single-node one.
+func TestBuildConfigWithoutRoleBuildsSingleNode(t *testing.T) {
+	t.Chdir(repoRoot)
+	cfg, err := buildConfig(&createFlags{target: "rpi", binariesDir: rpiBinaries(t)})
+	if err != nil {
+		t.Fatalf("buildConfig: %v", err)
+	}
+	want := filepath.Join("configs", "platform", "templates", "single-node", "raspberrypi", "rpi4", "default.yaml")
+	if cfg.PlatformConfigFile != want {
+		t.Errorf("platform config = %q, want %q", cfg.PlatformConfigFile, want)
+	}
+}
+
+// A role the builder cannot build is refused rather than built as
+// single-node: no template for it, a name that is not a host role, a
+// target other than rpi, or a --platform-config that already chose the
+// template.
+func TestBuildConfigRefusesRoleItCannotBuild(t *testing.T) {
+	t.Chdir(repoRoot)
+	bins := rpiBinaries(t)
+	cases := map[string]*createFlags{
+		"no template":     {target: "rpi", model: "rpi4", role: "gateway", binariesDir: bins},
+		"model without":   {target: "rpi", model: "cm4", role: "compute", binariesDir: bins},
+		"unknown model":   {target: "rpi", model: "rpi2", role: "compute", binariesDir: bins},
+		"model as a path": {target: "rpi", model: "../supermicro/x10", role: "compute", binariesDir: bins},
+		"rpi5 gateway":    {target: "rpi", model: "rpi5", role: "gateway", binariesDir: bins},
+		"rpi5 cp":         {target: "rpi", model: "rpi5", role: "control-plane", binariesDir: bins},
+		"overrides":       {target: "rpi", model: "cm4", role: "desk-overrides", binariesDir: bins},
+		"role as a path":  {target: "rpi", model: "rpi4", role: "../cm4/control-plane", binariesDir: bins},
+		"qemu-virt":       {target: "qemu-virt", role: "compute", binariesDir: bins},
+		"platform-config": {target: "rpi", role: "compute", binariesDir: bins, mediaFlags: mediaFlags{platformConfig: "node.yaml"}},
+	}
+	for name, flags := range cases {
+		t.Run(name, func(t *testing.T) {
+			var refused ErrRoleTemplate
+			if _, err := buildConfig(flags); !errors.As(err, &refused) {
+				t.Fatalf("buildConfig = %v, want ErrRoleTemplate", err)
+			}
+			if refused.Role != flags.role {
+				t.Errorf("refused role = %q, want %q", refused.Role, flags.role)
+			}
+		})
+	}
+}
+
+// The --model help names the experimental boards as such, and only those.
+func TestJoinModelsMarksExperimental(t *testing.T) {
+	got := joinModels()
+	if !strings.Contains(got, "rpi5 (experimental)") {
+		t.Errorf("joinModels() = %q, want rpi5 marked experimental", got)
+	}
+	if strings.Contains(got, "rpi4 (experimental)") {
+		t.Errorf("joinModels() = %q, rpi4 is not experimental", got)
 	}
 }
 

@@ -60,7 +60,10 @@ func runInfo(commonFlags *cli.CommonFlags, f *infoFlags) error {
 	}
 	defer base.Close()
 
-	client := pivsvc.NewClient()
+	client, err := newService(base.Client())
+	if err != nil {
+		return err
+	}
 	resp, err := client.SlotInfo(base.Context(), &pivsvc.SlotInfoRequest{Slot: f.slot, Device: f.device})
 	if err != nil {
 		return err

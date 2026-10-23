@@ -39,7 +39,6 @@ func InitResultFromProto(resp *platformv1.BarrierInitResponse) *InitResult {
 	}
 	result := &InitResult{
 		Strategy:    StrategyFromProto(resp.Strategy),
-		RootToken:   resp.RootToken,
 		Threshold:   resp.Threshold,
 		SharesTotal: resp.SharesTotal,
 		ShareCount:  resp.ShareCount,
@@ -57,12 +56,11 @@ func StatusResultFromProto(resp *platformv1.BarrierStatusResponse) *StatusResult
 		return nil
 	}
 	result := &StatusResult{
-		Initialized:    resp.Initialized,
-		Sealed:         resp.Sealed,
-		Strategy:       StrategyFromProto(resp.Strategy),
-		Threshold:      resp.Threshold,
-		SharesTotal:    resp.SharesTotal,
-		SharesProvided: resp.SharesProvided,
+		Initialized: resp.Initialized,
+		Sealed:      resp.Sealed,
+		Strategy:    StrategyFromProto(resp.Strategy),
+		Threshold:   resp.Threshold,
+		SharesTotal: resp.SharesTotal,
 	}
 	if resp.InitializedAt != nil {
 		t := resp.InitializedAt.AsTime()

@@ -26,7 +26,7 @@
 // Resolve) carry the protobuf oneof, which cannot decode into raw pb — the
 // daemon encodes a flat mirror, so this adapter decodes the same mirror shape.
 //
-// UpdateZone has NO QUIC opcode (the 0x20-0x2D space is fully allocated and
+// UpdateZone has NO QUIC opcode (the 0x20-0x2D space is allocated or retired and
 // the gRPC UpdateZone RPC is not SDK-mapped over QUIC); it returns a typed
 // unsupported error.
 
@@ -69,7 +69,7 @@ const (
 	MaxQUICTokenSize uint16 = 8 * 1024
 )
 
-// QUIC status codes (pkg/api/quic/protocol.go).
+// QUIC status codes (sdk/go/wire/quicwire/protocol.go).
 const (
 	QUICStatusOK              byte = 0x00
 	QUICStatusInvalidRequest  byte = 0x01
@@ -82,7 +82,7 @@ const (
 	QUICStatusNotImplemented  byte = 0x0B
 )
 
-// DNS opcodes — MUST match pkg/api/quic/protocol.go.
+// DNS opcodes — MUST match sdk/go/wire/quicwire/protocol.go.
 const (
 	OpDNSAddRecord    byte = 0x20
 	OpDNSDeleteRecord byte = 0x21
@@ -546,7 +546,7 @@ func (q *QUICAdapter) GetZone(ctx context.Context, zoneName string) (*GetZoneRes
 }
 
 // UpdateZone has no QUIC opcode (not SDK-mapped and the 0x20-0x2D space is
-// fully allocated). It reports the operation as unsupported over QUIC.
+// allocated or retired). It reports the operation as unsupported over QUIC.
 func (q *QUICAdapter) UpdateZone(ctx context.Context, zoneName string, opts UpdateZoneOptions) (*UpdateZoneResult, error) {
 	return nil, ErrQUICDNSUnsupported{Method: "UpdateZone"}
 }

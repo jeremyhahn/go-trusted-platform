@@ -33,6 +33,7 @@ import { ServiceUnavailableState } from '@/components/features/platform';
 import { isServiceNotConfigured } from 'trusted-platform-sdk';
 import { useApi, useCompute, useMutation, useToast } from '@/hooks';
 import type { Snapshot, VM } from 'trusted-platform-sdk';
+import { vmStateName } from '@/lib/compute-state';
 
 // Extended snapshot type with source name
 interface SnapshotWithSource extends Snapshot {
@@ -367,7 +368,7 @@ export default function SnapshotsPage() {
                   </TableCell>
                   <TableCell>
                     <Badge variant="outline" className="text-xs">
-                      {snapshot.vmState || 'UNKNOWN'}
+                      {vmStateName(snapshot.vmState) || 'UNKNOWN'}
                     </Badge>
                   </TableCell>
                   <TableCell>{formatSize(snapshot.sizeBytes || 0)}</TableCell>

@@ -8,10 +8,11 @@ import type { ApiClient } from '../client/api-client.js';
 import type { Transport } from '../transport/transport.js';
 import type { ApiResponse } from '../types/api.js';
 import { BaseService } from './base-service.js';
+import { TPM_BASE_PATH } from './tpm-service.js';
+import type { TPMInfoResponse } from '../types/tpm.js';
 import type {
   GetVersionResponse,
   GetSystemInfoResponse,
-  GetTPMInfoResponse,
   GetHealthRequest,
   GetHealthResponse,
   GetConfigRequest,
@@ -38,9 +39,11 @@ import type {
  *   console.error('Platform unhealthy!');
  * }
  *
- * // Get TPM info
+ * // Get TPM info; a successful response means a TPM is available
  * const tpm = await client.platform.getTPMInfo();
- * console.log(`TPM available: ${tpm.data.tpm.available}`);
+ * if (tpm.success) {
+ *   console.log(`TPM: ${tpm.data.version}, ${tpm.data.manufacturer?.name ?? 'unknown vendor'}`);
+ * }
  * ```
  */
 export class PlatformService extends BaseService {
@@ -80,8 +83,8 @@ export class PlatformService extends BaseService {
    *
    * @returns TPM information
    */
-  async getTPMInfo(): Promise<ApiResponse<GetTPMInfoResponse>> {
-    return this.client.get<GetTPMInfoResponse>(this.buildUrl('/tpm'));
+  async getTPMInfo(): Promise<ApiResponse<TPMInfoResponse>> {
+    return this.client.get<TPMInfoResponse>(this.buildUrlUnder(TPM_BASE_PATH, '/info'));
   }
 
   // =========================================================================

@@ -23,9 +23,9 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
-	quic "github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 )
 
 func TestDeviceGRPCService_AttestDevice_Success(t *testing.T) {
@@ -107,33 +107,6 @@ func TestDeviceGRPCService_AttestDevice_RejectsIncompleteRequests(t *testing.T) 
 	}
 }
 
-func TestDeviceGRPCService_AttestDevice_MatchesTheProviderVerdict(t *testing.T) {
-	f := newQuoteFixture(t)
-	evidence := f.evidence(t, []byte("fresh-nonce-000003"), goldenPCRs())
-
-	grpcSvc := f.grpcService(t)
-	provider, providerID := enrolledDeviceProvider(t, f)
-
-	grpcResp, err := grpcSvc.AttestDevice(context.Background(), &platformv1.AttestDeviceRequest{
-		DeviceId: itoa(f.device.ID),
-		Evidence: evidence,
-	})
-	require.NoError(t, err)
-
-	raw, err := provider.DeviceAttest(context.Background(), itoa(providerID), evidence)
-	require.NoError(t, err)
-	providerResult, ok := raw.(*DeviceAttestationResult)
-	require.True(t, ok)
-
-	assert.Equal(t, providerResult.Verified, grpcResp.GetVerified())
-	assert.Equal(t, providerResult.AKCertificateVerified, grpcResp.GetAkCertificateVerified())
-	assert.Equal(t, providerResult.SignatureValid, grpcResp.GetSignatureValid())
-	assert.Equal(t, providerResult.NonceValid, grpcResp.GetNonceValid())
-	assert.Equal(t, providerResult.PCRsValid, grpcResp.GetPcrsValid())
-	assert.Equal(t, providerResult.PCRBaselineSource, grpcResp.GetPcrBaselineSource())
-	assert.Equal(t, providerResult.Status, grpcResp.GetAttestationStatus())
-}
-
 func TestQUICDeviceAttest_IsNoLongerNotImplemented(t *testing.T) {
 	f := newQuoteFixture(t)
 
@@ -146,24 +119,59 @@ func TestQUICDeviceAttest_IsNoLongerNotImplemented(t *testing.T) {
 	h.SetDeviceVerdictSink(f.sink)
 	h.deviceGRPC.verifier.now = func() time.Time { return f.now }
 
-	payload, err := quic.EncodePayload(&platformv1.AttestDeviceRequest{
+	payload, err := quicwire.EncodePayload(&platformv1.AttestDeviceRequest{
 		DeviceId: itoa(f.device.ID),
 		Evidence: f.evidence(t, []byte("fresh-nonce-000004"), goldenPCRs()),
 	})
 	require.NoError(t, err)
 
-	resp := h.handleDeviceOperation(context.Background(), &quic.Request{
-		Opcode:  quic.OpDeviceAttest,
+	resp := h.handleDeviceOperation(context.Background(), &quicwire.Request{
+		Opcode:  quicwire.OpDeviceAttest,
 		Payload: payload,
 	})
 
 	require.NotNil(t, resp)
-	assert.NotEqual(t, quic.StatusNotImplemented, resp.Status,
+	assert.NotEqual(t, quicwire.StatusNotImplemented, resp.Status,
 		"OpDeviceAttest must not answer StatusNotImplemented on the live dispatcher")
-	assert.Equal(t, quic.StatusOK, resp.Status)
+	assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 	var decoded platformv1.AttestDeviceResponse
-	require.NoError(t, quic.DecodePayload(resp.Payload, &decoded))
+	require.NoError(t, quicwire.DecodePayload(resp.Payload, &decoded))
 	assert.True(t, decoded.GetVerified(), "QUIC must reach the same verdict as gRPC over the same verifier")
 	assert.True(t, decoded.GetAkCertificateVerified())
+}
+
+// TestQUICDeviceDispatcher_RetiredOpcodesAreUnknown pins #317: the device
+// dispatcher has no stub for Deactivate (0x3C) or GetMetrics (0x3E), which
+// no transport ever implemented and which are retired, nor for 0x6D, which
+// the IDevID handler owns. Each answers the generic unknown-opcode error.
+func TestQUICDeviceDispatcher_RetiredOpcodesAreUnknown(t *testing.T) {
+	h := &QUICServiceHandler{logger: logging.DefaultLogger()}
+
+	for _, opcode := range []byte{0x3C, 0x3E, quicwire.OpDeviceAttributes} {
+		resp := h.handleDeviceOperation(context.Background(), &quicwire.Request{Opcode: opcode})
+
+		require.NotNil(t, resp)
+		assert.Equal(t, quicwire.StatusNotImplemented, resp.Status, "opcode 0x%02X", opcode)
+		assert.Equal(t, ErrQUICUnknownOpcode{Opcode: opcode}.Error(), string(resp.Payload), "opcode 0x%02X", opcode)
+	}
+}
+
+// TestQUICDeviceDispatcher_LiveOpcodeReachesItsHandler is the counterpart:
+// OpDeviceGetState, the device range's last opcode, still reaches its
+// handler, which refuses a request without a device id.
+func TestQUICDeviceDispatcher_LiveOpcodeReachesItsHandler(t *testing.T) {
+	h := &QUICServiceHandler{logger: logging.DefaultLogger()}
+
+	payload, err := quicwire.EncodePayload(&deviceGetWireRequest{})
+	require.NoError(t, err)
+
+	resp := h.handleDeviceOperation(context.Background(), &quicwire.Request{
+		Opcode:  quicwire.OpDeviceGetState,
+		Payload: payload,
+	})
+
+	require.NotNil(t, resp)
+	assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
+	assert.Equal(t, ErrQUICMissingField{Field: "id"}.Error(), string(resp.Payload))
 }

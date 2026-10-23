@@ -65,12 +65,14 @@ func (s *admittedVTEPService) ListAdmittedVTEPs(_ context.Context, gatewayID str
 func sdkGatewayAgainstRoutes(t *testing.T, svc *admittedVTEPService) *sdkgateway.Client {
 	t.Helper()
 	router := mux.NewRouter()
-	router.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
+	router.HandleFunc("/health/live", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
 	NewGatewayHandlers(svc, slog.Default()).RegisterRoutes(router)
-	server := httptest.NewServer(router)
+	server := httptest.NewTLSServer(router)
 	t.Cleanup(server.Close)
 
-	adapter, err := sdkrest.Connect(context.Background(), platform.NewOptions(platform.WithRESTAddr(server.URL)))
+	// The SDK refuses plaintext REST; trust the test server's certificate.
+	trustServer := platform.WithTLSConfig(server.Client().Transport.(*http.Transport).TLSClientConfig.Clone())
+	adapter, err := sdkrest.Connect(context.Background(), platform.NewOptions(platform.WithRESTAddr(server.URL), trustServer))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = adapter.Close() })
 	return sdkgateway.NewClientFromGRPC(platformv1.NewGatewayServiceClient(adapter.Connection()))

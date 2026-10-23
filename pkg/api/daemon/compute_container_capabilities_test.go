@@ -28,6 +28,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/compute/container"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
@@ -440,7 +441,7 @@ func TestQUICComputeExtendedCategory_ContainerSubOpcodes(t *testing.T) {
 		adapter, err := NewOrchestratorAdapter(orchestrator)
 		require.NoError(t, err)
 
-		handler := NewQUICServiceHandler(logging.DefaultLogger())
+		handler := newTestQUICServiceHandler(logging.DefaultLogger())
 		handler.SetContainerOrchestrator(adapter)
 		return handler, orchestrator
 	}
@@ -448,20 +449,20 @@ func TestQUICComputeExtendedCategory_ContainerSubOpcodes(t *testing.T) {
 	t.Run("routes container attest sub-opcode to container handler", func(t *testing.T) {
 		handler, orchestrator := newHandlerWithContainers(t)
 
-		inner, err := quic.EncodePayload(&quic.ContainerAttestRequest{ID: "container-1"})
+		inner, err := quicwire.EncodePayload(&quic.ContainerAttestRequest{ID: "container-1"})
 		require.NoError(t, err)
 
-		resp := handler.HandleRequest(ctx, &quic.Request{
-			Opcode:  quic.OpVMExtendedCategory,
-			Payload: append([]byte{quic.OpContainerAttest}, inner...),
+		resp := handler.HandleRequest(ctx, &quicwire.Request{
+			Opcode:  quicwire.OpVMExtendedCategory,
+			Payload: append([]byte{quicwire.OpContainerAttest}, inner...),
 		})
 
 		require.NotNil(t, resp)
-		assert.Equal(t, quic.StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 		assert.Equal(t, 1, orchestrator.attestCalls)
 
 		var attestResp quic.ContainerAttestResponse
-		require.NoError(t, quic.DecodePayload(resp.Payload, &attestResp))
+		require.NoError(t, quicwire.DecodePayload(resp.Payload, &attestResp))
 		assert.Equal(t, "container-1", attestResp.ContainerID)
 		assert.True(t, attestResp.Verified)
 	})
@@ -469,67 +470,67 @@ func TestQUICComputeExtendedCategory_ContainerSubOpcodes(t *testing.T) {
 	t.Run("routes container logs sub-opcode to container handler", func(t *testing.T) {
 		handler, orchestrator := newHandlerWithContainers(t)
 
-		inner, err := quic.EncodePayload(&quic.ContainerLogsRequest{ID: "container-1", Stdout: true, Stderr: true})
+		inner, err := quicwire.EncodePayload(&quic.ContainerLogsRequest{ID: "container-1", Stdout: true, Stderr: true})
 		require.NoError(t, err)
 
-		resp := handler.HandleRequest(ctx, &quic.Request{
-			Opcode:  quic.OpVMExtendedCategory,
-			Payload: append([]byte{quic.OpContainerLogs}, inner...),
+		resp := handler.HandleRequest(ctx, &quicwire.Request{
+			Opcode:  quicwire.OpVMExtendedCategory,
+			Payload: append([]byte{quicwire.OpContainerLogs}, inner...),
 		})
 
 		require.NotNil(t, resp)
-		assert.Equal(t, quic.StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 		assert.Equal(t, 1, orchestrator.logsCalls)
 
 		var logsResp quic.ContainerLogsResponse
-		require.NoError(t, quic.DecodePayload(resp.Payload, &logsResp))
+		require.NoError(t, quicwire.DecodePayload(resp.Payload, &logsResp))
 		assert.Equal(t, "container log line\n", string(logsResp.Logs))
 	})
 
 	t.Run("returns unavailable when container handler missing", func(t *testing.T) {
-		handler := NewQUICServiceHandler(logging.DefaultLogger())
+		handler := newTestQUICServiceHandler(logging.DefaultLogger())
 
-		inner, err := quic.EncodePayload(&quic.ContainerAttestRequest{ID: "container-1"})
+		inner, err := quicwire.EncodePayload(&quic.ContainerAttestRequest{ID: "container-1"})
 		require.NoError(t, err)
 
-		resp := handler.HandleRequest(ctx, &quic.Request{
-			Opcode:  quic.OpVMExtendedCategory,
-			Payload: append([]byte{quic.OpContainerAttest}, inner...),
+		resp := handler.HandleRequest(ctx, &quicwire.Request{
+			Opcode:  quicwire.OpVMExtendedCategory,
+			Payload: append([]byte{quicwire.OpContainerAttest}, inner...),
 		})
 
 		require.NotNil(t, resp)
-		assert.Equal(t, quic.StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 
-	t.Run("non-container sub-opcodes fall through to VM handler", func(t *testing.T) {
+	t.Run("non-container sub-opcodes route to the VM path", func(t *testing.T) {
 		handler, _ := newHandlerWithContainers(t)
 
-		// OpVMRestart (0xB6) is a VM extended sub-opcode. With no VM
-		// handler configured, the dispatcher must report the VM service
-		// unavailable rather than routing to the container handler.
-		resp := handler.HandleRequest(ctx, &quic.Request{
-			Opcode:  quic.OpVMExtendedCategory,
-			Payload: []byte{quic.OpVMRestart},
+		// OpVMRestart (0xB6) is a VM sub-opcode. With no compute service
+		// wired, the dispatcher must report the VM service unavailable
+		// rather than routing to the container handler.
+		resp := handler.HandleRequest(ctx, &quicwire.Request{
+			Opcode:  quicwire.OpVMExtendedCategory,
+			Payload: []byte{quicwire.OpVMRestart},
 		})
 
 		require.NotNil(t, resp)
-		assert.Equal(t, quic.StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 }
 
 func TestIsContainerSubOpcode(t *testing.T) {
 	t.Run("accepts all container opcodes", func(t *testing.T) {
 		for _, op := range []byte{
-			quic.OpContainerCreate, quic.OpContainerStart, quic.OpContainerStop,
-			quic.OpContainerRemove, quic.OpContainerGet, quic.OpContainerList,
-			quic.OpContainerLogs, quic.OpContainerAttest,
+			quicwire.OpContainerCreate, quicwire.OpContainerStart, quicwire.OpContainerStop,
+			quicwire.OpContainerRemove, quicwire.OpContainerGet, quicwire.OpContainerList,
+			quicwire.OpContainerLogs, quicwire.OpContainerAttest,
 		} {
 			assert.True(t, quic.IsContainerSubOpcode(op), "opcode 0x%02X", op)
 		}
 	})
 
 	t.Run("rejects VM extended sub-opcodes", func(t *testing.T) {
-		assert.False(t, quic.IsContainerSubOpcode(quic.OpVMRestart))
-		assert.False(t, quic.IsContainerSubOpcode(quic.OpVMSnapshotList))
+		assert.False(t, quic.IsContainerSubOpcode(quicwire.OpVMRestart))
+		assert.False(t, quic.IsContainerSubOpcode(quicwire.OpVMMetrics))
 	})
 }

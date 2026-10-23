@@ -52,7 +52,7 @@ func newProbeCommand(getFlags func() *cli.CommonFlags) *cobra.Command {
 		Long: `Speak a network boot client's protocol to the boot server on a segment
 and report what the client would have seen, without the client.`,
 	}
-	cmd.AddCommand(newProbeRPiCommand(getFlags))
+	cmd.AddCommand(newProbeRPiCommand(getFlags), newProbeRPiHTTPCommand(getFlags))
 	return cmd
 }
 

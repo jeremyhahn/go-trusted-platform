@@ -15,6 +15,8 @@ service ComputeService {
   rpc StartVM(StartVMRequest) returns (StartVMResponse);
   rpc StopVM(StopVMRequest) returns (StopVMResponse);
   rpc RebootVM(RebootVMRequest) returns (RebootVMResponse);
+  rpc SuspendVM(SuspendVMRequest) returns (SuspendVMResponse);
+  rpc ResumeVM(ResumeVMRequest) returns (ResumeVMResponse);
   rpc DeleteVM(DeleteVMRequest) returns (DeleteVMResponse);
   rpc GetVM(GetVMRequest) returns (GetVMResponse);
   rpc ListVMs(ListVMsRequest) returns (ListVMsResponse);
@@ -35,6 +37,7 @@ service ComputeService {
   rpc RestoreSnapshot(RestoreSnapshotRequest) returns (RestoreSnapshotResponse);
   rpc DeleteSnapshot(DeleteSnapshotRequest) returns (DeleteSnapshotResponse);
   rpc ListSnapshots(ListSnapshotsRequest) returns (ListSnapshotsResponse);
+  rpc GetSnapshot(GetSnapshotRequest) returns (GetSnapshotResponse);
 
   // VM migration
   rpc MigrateVM(MigrateVMRequest) returns (MigrateVMResponse);
@@ -402,6 +405,24 @@ message RebootVMResponse {
   Status status = 1;
 }
 
+// SuspendVM pauses a running VM in memory (QMP stop).
+message SuspendVMRequest {
+  string id = 1;
+}
+
+message SuspendVMResponse {
+  Status status = 1;
+}
+
+// ResumeVM continues a suspended VM (QMP cont).
+message ResumeVMRequest {
+  string id = 1;
+}
+
+message ResumeVMResponse {
+  Status status = 1;
+}
+
 message DeleteVMRequest {
   string id = 1;
   bool delete_disks = 2;
@@ -518,6 +539,15 @@ message ListSnapshotsResponse {
   repeated Snapshot snapshots = 1;
 }
 
+message GetSnapshotRequest {
+  string vm_id = 1;
+  string snapshot_id = 2;
+}
+
+message GetSnapshotResponse {
+  Snapshot snapshot = 1;
+}
+
 // Migration request/response
 message MigrateVMRequest {
   string vm_id = 1;
@@ -540,6 +570,7 @@ message VMMigrationSpec {
   bool   tpm_enabled  = 7;
   string network_mode = 8;
   string mac_address  = 9;
+  string arch         = 10;  // source guest arch: "x86_64" | "aarch64"; empty = x86_64. A mismatched destination refuses.
 }
 
 message PrepareMigrationRequest {
@@ -685,6 +716,9 @@ message AttestVMResponse {
   repeated PCRValue pcr_values = 4;
   bytes event_log = 5;
   bytes ak_public = 6;
+  // The x509.SignatureAlgorithm name of the scheme the AK signed the quote
+  // under (e.g. "SHA256-RSAPSS"); the signature itself is bare bytes.
+  string signature_algorithm = 7;
 }
 
 message VerifyVMAttestationRequest {
@@ -693,6 +727,9 @@ message VerifyVMAttestationRequest {
   bytes signature = 3;
   bytes nonce = 4;
   repeated PCRValue expected_pcrs = 5;
+  // The scheme the quote declares (AttestVMResponse.signature_algorithm).
+  // The quote is verified under it alone; absent or unknown fails.
+  string signature_algorithm = 6;
 }
 
 message VerifyVMAttestationResponse {

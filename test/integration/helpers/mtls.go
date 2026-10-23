@@ -25,9 +25,9 @@ import (
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
-	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/credentials/local"
 
-	"github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 )
 
 // Environment variable names for mTLS client certificate configuration.
@@ -35,13 +35,46 @@ const (
 	EnvClientCert = "PLATFORM_CLIENT_CERT"
 	EnvClientKey  = "PLATFORM_CLIENT_KEY"
 	EnvCACert     = "PLATFORM_CA_CERT"
+
+	// EnvTenantClientCert and EnvTenantClientKey name the harness
+	// credential bound to ForeignTenantID (tenant-client-bundle.pem). It
+	// chains to the same CA as the admin credential.
+	EnvTenantClientCert = "PLATFORM_TENANT_CLIENT_CERT"
+	EnvTenantClientKey  = "PLATFORM_TENANT_CLIENT_KEY"
 )
 
-// LoadMTLSConfig loads mTLS client certificates from environment variables.
-// Returns nil if the mTLS environment variables are not set.
+// HarnessTenantID is the tenant of the harness admin credential
+// (PLATFORM_CLIENT_CERT): platformd issues it with the root admin request
+// (pkg/app/backends.AdminCertificateRequest), whose subject O is the system
+// tenant (app.SystemTenantID), and the mTLS transports bind the caller to
+// the tenant its subject O names. A request that names any other tenant on a
+// tenant-bound service is refused, so tests name this one.
+const HarnessTenantID = "system"
+
+// ForeignTenantID is the tenant of the second harness credential
+// (PLATFORM_TENANT_CLIENT_CERT). platformd issues it with the same admin
+// request, its subject O replaced by this tenant, so a test can prove what
+// a caller outside the system tenant is refused.
+const ForeignTenantID = "harness-tenant"
+
+// LoadMTLSConfig loads the harness admin mTLS client certificate from
+// environment variables. Returns nil if the variables are not set.
 func LoadMTLSConfig() *tls.Config {
-	certFile := os.Getenv(EnvClientCert)
-	keyFile := os.Getenv(EnvClientKey)
+	return loadMTLSConfig(EnvClientCert, EnvClientKey)
+}
+
+// LoadTenantMTLSConfig loads the ForeignTenantID mTLS client certificate
+// from environment variables. Returns nil if the variables are not set.
+func LoadTenantMTLSConfig() *tls.Config {
+	return loadMTLSConfig(EnvTenantClientCert, EnvTenantClientKey)
+}
+
+// loadMTLSConfig builds a client TLS config from the certificate and key
+// files named by certEnv and keyEnv, trusting the CA named by EnvCACert.
+// Returns nil if any variable is unset or any file fails to load.
+func loadMTLSConfig(certEnv, keyEnv string) *tls.Config {
+	certFile := os.Getenv(certEnv)
+	keyFile := os.Getenv(keyEnv)
 	caFile := os.Getenv(EnvCACert)
 
 	if certFile == "" || keyFile == "" || caFile == "" {
@@ -69,6 +102,16 @@ func LoadMTLSConfig() *tls.Config {
 	}
 }
 
+// requireTLS13 returns tlsConfig pinned to TLS 1.3. mTLS is mandatory for
+// integration tests, so a nil config (variables unset) panics naming them.
+func requireTLS13(tlsConfig *tls.Config, certEnv, keyEnv string) *tls.Config {
+	if tlsConfig == nil {
+		panic("mtls: mTLS environment variables not configured; set " + certEnv + ", " + keyEnv + ", and " + EnvCACert)
+	}
+	tlsConfig.MinVersion = tls.VersionTLS13
+	return tlsConfig
+}
+
 // MTLSEnabled returns true if mTLS environment variables are configured.
 func MTLSEnabled() bool {
 	return LoadMTLSConfig() != nil
@@ -78,19 +121,20 @@ func MTLSEnabled() bool {
 // mTLS is mandatory for integration tests; this function panics if the
 // required environment variables are not configured.
 func TLSConfigOrInsecure() *tls.Config {
-	tlsConfig := LoadMTLSConfig()
-	if tlsConfig == nil {
-		panic("mtls: mTLS environment variables not configured; set PLATFORM_CLIENT_CERT, PLATFORM_CLIENT_KEY, and PLATFORM_CA_CERT")
-	}
-	tlsConfig.MinVersion = tls.VersionTLS13
-	return tlsConfig
+	return requireTLS13(LoadMTLSConfig(), EnvClientCert, EnvClientKey)
+}
+
+// TenantTLSConfig returns the ForeignTenantID mTLS config pinned to TLS 1.3;
+// it panics if the tenant credential variables are not configured.
+func TenantTLSConfig() *tls.Config {
+	return requireTLS13(LoadTenantMTLSConfig(), EnvTenantClientCert, EnvTenantClientKey)
 }
 
 // QUICTLSConfig returns a TLS config for QUIC connections with mTLS
 // certificates if available, defaulting NextProtos to the ALPN protocol the
 // daemon actually advertises.
 //
-// Called with no arguments it offers quic.ALPNProtocol -- the single protocol
+// Called with no arguments it offers quicwire.ALPNProtocol -- the single protocol
 // pkg/api/quic/config.go advertises -- so an adapter cannot offer a wrong one
 // by writing a string. Four adapters did exactly that (attestation-quic,
 // device-quic, iam-quic, tenant-quic) and failed the handshake with
@@ -103,32 +147,41 @@ func TLSConfigOrInsecure() *tls.Config {
 // able to offer a deliberately wrong protocol: a helper that makes the bug
 // unconstructible must not also make the test for the bug unwritable.
 func QUICTLSConfig(overrideALPN ...string) *tls.Config {
-	tlsConfig := TLSConfigOrInsecure()
-	tlsConfig.NextProtos = []string{quic.ALPNProtocol}
+	return withQUICALPN(TLSConfigOrInsecure(), overrideALPN)
+}
+
+// TenantQUICTLSConfig is QUICTLSConfig for the ForeignTenantID credential.
+func TenantQUICTLSConfig() *tls.Config {
+	return withQUICALPN(TenantTLSConfig(), nil)
+}
+
+// withQUICALPN offers quicwire.ALPNProtocol on tlsConfig, or overrideALPN
+// when one is given.
+func withQUICALPN(tlsConfig *tls.Config, overrideALPN []string) *tls.Config {
+	tlsConfig.NextProtos = []string{quicwire.ALPNProtocol}
 	if len(overrideALPN) > 0 {
 		tlsConfig.NextProtos = overrideALPN
 	}
-	tlsConfig.MinVersion = tls.VersionTLS13
 	return tlsConfig
 }
 
 // NewHTTPClient creates an HTTP client configured with mTLS certificates.
 // mTLS is mandatory for integration tests.
 func NewHTTPClient(timeout time.Duration) *http.Client {
+	return newHTTPClient(timeout, TLSConfigOrInsecure())
+}
+
+// NewTenantHTTPClient is NewHTTPClient for the ForeignTenantID credential.
+func NewTenantHTTPClient(timeout time.Duration) *http.Client {
+	return newHTTPClient(timeout, TenantTLSConfig())
+}
+
+func newHTTPClient(timeout time.Duration, tlsConfig *tls.Config) *http.Client {
 	return &http.Client{
 		Timeout: timeout,
 		Transport: &http.Transport{
-			TLSClientConfig: TLSConfigOrInsecure(),
+			TLSClientConfig: tlsConfig,
 		},
-	}
-}
-
-// NewPlainHTTPClient creates an HTTP client without TLS configuration,
-// suitable for connecting to plain HTTP endpoints such as the MCP server.
-func NewPlainHTTPClient(timeout time.Duration) *http.Client {
-	return &http.Client{
-		Timeout:   timeout,
-		Transport: &http.Transport{},
 	}
 }
 
@@ -136,29 +189,50 @@ func NewPlainHTTPClient(timeout time.Duration) *http.Client {
 // mTLS. mTLS is mandatory for integration tests; this function panics if the
 // required environment variables are not configured.
 func GRPCTransportCredentials() grpc.DialOption {
-	tlsConfig := LoadMTLSConfig()
-	if tlsConfig == nil {
-		panic("mtls: mTLS environment variables not configured; set PLATFORM_CLIENT_CERT, PLATFORM_CLIENT_KEY, and PLATFORM_CA_CERT")
-	}
-	tlsConfig.MinVersion = tls.VersionTLS13
-	return grpc.WithTransportCredentials(credentials.NewTLS(tlsConfig))
+	return grpc.WithTransportCredentials(credentials.NewTLS(TLSConfigOrInsecure()))
 }
 
-// GRPCUnixCredentials returns insecure gRPC transport credentials for use
-// with Unix domain sockets. Unix sockets do not use TLS since they provide
-// kernel-level access control through file system permissions.
+// GRPCUnixCredentials returns the gRPC transport credentials for platformd's
+// Unix domain socket. The UDS is the daemon's one sanctioned non-TLS transport:
+// it authenticates the caller by SO_PEERCRED and is scoped by file-system
+// permissions (docs/daemon/architecture.md), so a TLS dial fails its handshake
+// against it (#532). Local credentials send no handshake bytes, like insecure
+// ones, but refuse to carry a dial that is not to a local address, so a
+// misrouted adapter fails instead of speaking plaintext over the network.
 func GRPCUnixCredentials() grpc.DialOption {
-	return grpc.WithTransportCredentials(insecure.NewCredentials())
+	return grpc.WithTransportCredentials(local.NewCredentials())
 }
 
-// MCPEndpointURL constructs the full MCP endpoint URL. The MCP server always
-// serves plain HTTP (not HTTPS), so this function always uses the http scheme.
-// Even when mTLS is enabled for other protocols, the MCP server operates over
-// plain HTTP on its dedicated port.
-func MCPEndpointURL(endpoint string) string {
-	// If the endpoint already has a scheme, return it with /mcp appended
+// MCPBaseURL returns the MCP server base URL for endpoint. platformd serves
+// MCP over TLS 1.3 only (#844), so an endpoint without a scheme gets https://.
+// An explicit scheme is kept as given, so a negative test can still dial
+// http:// and assert the refusal.
+func MCPBaseURL(endpoint string) string {
+	return httpsBaseURL(endpoint)
+}
+
+// RESTBaseURL returns the REST API base URL for endpoint. platformd serves
+// REST over mTLS, and the harness exports PLATFORM_REST_ENDPOINT with its
+// https:// scheme, so an endpoint is taken with or without one: a bare
+// host:port gets https://, an explicit scheme is kept as given. Prepending a
+// scheme to the exported value dialled http://https://localhost:8443 and left
+// every REST subtest unreachable. A trailing slash is dropped so callers can
+// append paths that start with one.
+func RESTBaseURL(endpoint string) string {
+	return strings.TrimRight(httpsBaseURL(endpoint), "/")
+}
+
+// httpsBaseURL keeps an explicit http:// or https:// scheme on endpoint and
+// gives https:// to one without a scheme.
+func httpsBaseURL(endpoint string) string {
 	if strings.HasPrefix(endpoint, "http://") || strings.HasPrefix(endpoint, "https://") {
-		return endpoint + "/mcp"
+		return endpoint
 	}
-	return "http://" + endpoint + "/mcp"
+	return "https://" + endpoint
+}
+
+// MCPEndpointURL returns the full MCP JSON-RPC URL for endpoint; see
+// MCPBaseURL for the scheme rules. Pair it with NewHTTPClient.
+func MCPEndpointURL(endpoint string) string {
+	return MCPBaseURL(endpoint) + "/mcp"
 }

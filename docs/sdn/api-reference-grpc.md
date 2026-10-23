@@ -1,5 +1,9 @@
 # SDN gRPC API Reference
 
+> **Status: REFERENCE** · Last verified: 2026-10-15
+
+> `platform.v1.SDNService` over gRPC (`pkg/api/grpc/proto/sdn.proto`).
+
 Endpoint: `localhost:10443`
 
 Requires mTLS authentication. The service and all message definitions
@@ -34,7 +38,7 @@ service SDNService {
   rpc DeleteVLAN(DeleteVLANRequest) returns (DeleteVLANResponse);
   rpc ListVLANs(ListVLANsRequest) returns (ListVLANsResponse);
 
-  // Port authentication (802.1X-style)
+  // Port authentication (802.1X-style); both refused, FAILED_PRECONDITION
   rpc AuthenticatePort(AuthenticatePortRequest) returns (AuthenticatePortResponse);
   rpc RevokePortAuth(RevokePortAuthRequest) returns (RevokePortAuthResponse);
 
@@ -131,6 +135,10 @@ gRPC status codes:
 - `INVALID_ARGUMENT`: Invalid request parameters
 - `INTERNAL`: Server error
 - `UNAUTHENTICATED`: Missing or invalid credentials
+- `FAILED_PRECONDITION`: `AuthenticatePort` and `RevokePortAuth`, always
+  (`policy.ErrPortAuthNotEnforced`): nothing enforces port authentication on
+  the switch, so the service refuses both and records nothing. Both need
+  `sdn:write`. [api.md](api.md) §4 names what is missing.
 
 ## Network Zone RPC
 

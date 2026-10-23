@@ -23,7 +23,9 @@ import (
 	grpcapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/app"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/ca/issuance"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/compute"
+	tpconfig "github.com/jeremyhahn/go-trusted-platform/pkg/config"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/tenant"
@@ -52,6 +54,12 @@ type Config struct {
 	// In-memory TLS certificate (takes precedence over cert/key files)
 	// When set, the daemon uses this directly instead of loading from disk.
 	TLSCertificate *tls.Certificate
+
+	// TLSIdentity is a renewable in-memory certificate and takes precedence
+	// over TLSCertificate. Listeners present whatever it holds at handshake
+	// time, so storing a renewed certificate reaches gRPC, QUIC, REST and
+	// MCP-HTTP without a restart (#36).
+	TLSIdentity *ServingCertificate
 
 	// gRPC Unix Domain Socket configuration
 	EnableGRPCUDS  bool   `yaml:"enable_grpc_uds"`
@@ -99,9 +107,21 @@ type Config struct {
 	// When set, the daemon will register the device gRPC service.
 	DeviceService device.DeviceService
 
+	// DeviceLifecycle is the operator Enable/Disable Device flow (#250).
+	// Nil on a control plane without an SDN policy engine: DisableDevice and
+	// EnableDevice then answer FailedPrecondition on every transport, since
+	// nothing would enforce the state they record.
+	DeviceLifecycle DeviceLifecycle
+
 	// DeviceProfileService is the device profile service implementation.
 	// Used for device provisioning and profile management.
 	DeviceProfileService device.DeviceProfileService
+
+	// DeviceTemplateService is the device template service the REST
+	// template handlers use. It backs DeviceService.CreateTemplate and
+	// CreateProfileFromTemplate on gRPC, Unix, QUIC and MCP; nil answers
+	// Unavailable.
+	DeviceTemplateService device.DeviceTemplateService
 
 	// PlatformToken configures the shared broker platform-token validator used
 	// across the gRPC, QUIC, and MCP inbound transports. When Enabled, those
@@ -125,6 +145,12 @@ type Config struct {
 	// (via SetTenantHandlers) so every transport — REST, gRPC, QUIC, MCP,
 	// Unix — shares the same tenant manager instance.
 	PlatformTenantManager *tenant.Manager
+
+	// PlatformTenantID is the platform's operating (system) tenant: the one
+	// tenant the TenantService lets act on other tenants and call its
+	// cross-tenant methods, as the REST tenant guards do. Empty admits no
+	// tenant-bound caller as the system tenant.
+	PlatformTenantID string
 
 	// DNSService is the DNS service implementation.
 	// When set, the daemon will register DNS operations on QUIC and MCP.
@@ -151,6 +177,25 @@ type Config struct {
 	// When set, the daemon will initialize the SDN service and register
 	// SDN, Overlay, and Gateway gRPC services.
 	OVSSocketPath string `yaml:"ovs_socket_path"`
+
+	// GatewayDatapathSocket is the control socket of gatewayd's datapath
+	// child (the gateway section's datapath-socket). When set, the daemon
+	// serves the gateway load-balancer, NAT64 and perf verbs from gatewayd
+	// over live IPC (#660); empty leaves them unavailable.
+	GatewayDatapathSocket string `yaml:"gateway_datapath_socket"`
+}
+
+// csrKMS returns the platform KMS a CSR's key is checked against before the
+// CA certifies it, or nil when the daemon runs without one — CSR signing then
+// fails closed.
+func (c *Config) csrKMS() issuance.KMS {
+	if c.App == nil {
+		return nil
+	}
+	if kms := c.App.KMS(); kms != nil {
+		return kms
+	}
+	return nil
 }
 
 // MCPConfig holds MCP server configuration
@@ -180,7 +225,7 @@ func DefaultMCPConfig() *MCPConfig {
 		ServerName:            "Trusted Platform MCP Server",
 		ServerVersion:         "1.0.0",
 		Transport:             "http",
-		HTTPAddr:              "127.0.0.1:8000",
+		HTTPAddr:              tpconfig.DefaultDaemonListeners().MCP.Address(),
 		RequestTimeout:        30 * time.Second,
 		MaxConcurrentRequests: 100,
 	}
@@ -256,23 +301,24 @@ type ServiceConfig struct {
 // `daemon:` section (file, environment, flags); a transport reaches an
 // interface only because an operator named it (#552).
 func DefaultConfig() *Config {
+	listeners := tpconfig.DefaultDaemonListeners()
 	return &Config{
 		SocketPath:      "/run/platformd.sock",
 		SocketGroup:     "trusted-platform",
 		SocketMode:      0660,
 		EnableGRPCTCP:   true,
-		GRPCListenAddr:  "127.0.0.1:10443",
+		GRPCListenAddr:  listeners.GRPC.Address(),
 		GRPCTLSCertFile: "",
 		GRPCTLSKeyFile:  "",
 		EnableGRPCUDS:   true,
 		GRPCSocketPath:  "/run/platformd.sock",
 		EnableQUIC:      false,
-		QUICListenAddr:  "127.0.0.1:11443",
+		QUICListenAddr:  listeners.QUIC.Address(),
 		QUICConfig:      nil,
 		EnableMCP:       false,
 		MCPConfig:       DefaultMCPConfig(),
 		EnableREST:      true,
-		RESTListenAddr:  "127.0.0.1:8443",
+		RESTListenAddr:  listeners.REST.Address(),
 		RESTTLSCertFile: "",
 		RESTTLSKeyFile:  "",
 		RESTConfig:      DefaultRESTServerConfig(),
@@ -368,7 +414,16 @@ func tlsCertificateUsable(cert *tls.Certificate) bool {
 // (#32) — both sides of the fail-closed contract share one definition of
 // "material present".
 func (c *Config) grpcTLSMaterialPresent() bool {
-	return tlsCertificateUsable(c.TLSCertificate) || (c.GRPCTLSCertFile != "" && c.GRPCTLSKeyFile != "")
+	return tlsCertificateUsable(c.inMemoryCertificate()) || (c.GRPCTLSCertFile != "" && c.GRPCTLSKeyFile != "")
+}
+
+// inMemoryCertificate returns the in-memory certificate the listeners serve:
+// the one TLSIdentity currently holds when it is set, else TLSCertificate.
+func (c *Config) inMemoryCertificate() *tls.Certificate {
+	if c.TLSIdentity != nil {
+		return c.TLSIdentity.Current()
+	}
+	return c.TLSCertificate
 }
 
 // quicTLSMaterialPresent reports whether the QUIC transport has a TLS
@@ -453,6 +508,57 @@ func (c *Config) Validate() error {
 	}
 
 	return nil
+}
+
+// validateGRPCAuthorization refuses a gRPC TCP listener that could authorize
+// nothing: one that would send every scoped call to the IAM policy
+// enforcement point while that point is the embedded quicbaas SDK, which
+// answers every Check ServiceNotConfigured. daemon.New runs it at startup;
+// NewService does not, because it serves no listener.
+func (c *Config) validateGRPCAuthorization() error {
+	if c.grpcAuthorizesThroughPEP() && c.quicbaasEmbedded() {
+		return ErrEmbeddedPEPUnavailable{Transport: transportGRPCTCP}
+	}
+	return nil
+}
+
+// grpcAuthorizesThroughPEP reports whether the gRPC TCP listener will hand
+// every scoped call to the IAM policy enforcement point. That is the
+// selectGRPCTCPAuth path left when neither mTLS, platform tokens nor the
+// testing-only SkipIAMValidation opt-out is in force.
+func (c *Config) grpcAuthorizesThroughPEP() bool {
+	return c.EnableGRPCTCP && !c.EnableMTLS && !c.SkipIAMValidation && !c.PlatformToken.Enabled
+}
+
+// quicbaasEmbedded reports whether the IAM service, and so its policy
+// enforcement point, runs on the embedded quicbaas SDK. An absent quicbaas
+// section is the embedded default. Without an App there is no IAM service at
+// all, which selectGRPCTCPAuth refuses on its own.
+func (c *Config) quicbaasEmbedded() bool {
+	if c.App == nil {
+		return false
+	}
+	return c.App.QuicBaaSConfig == nil || c.App.QuicBaaSConfig.IsEmbedded()
+}
+
+// MCPServesHTTP reports whether the MCP server is enabled on its HTTP
+// transport. That transport binds a network listener and serves TLS 1.3
+// only, so it needs the daemon TLS identity just as REST and gRPC do
+// (#844); stdio does not. A nil MCPConfig means the default, which is HTTP.
+func (c *Config) MCPServesHTTP() bool {
+	if !c.EnableMCP {
+		return false
+	}
+	return c.effectiveMCPConfig().Transport == "http"
+}
+
+// effectiveMCPConfig returns the MCP configuration the daemon runs with:
+// MCPConfig when set, otherwise DefaultMCPConfig.
+func (c *Config) effectiveMCPConfig() *MCPConfig {
+	if c.MCPConfig == nil {
+		return DefaultMCPConfig()
+	}
+	return c.MCPConfig
 }
 
 // validateMCPConfig validates MCP-specific configuration

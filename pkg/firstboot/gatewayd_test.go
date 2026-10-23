@@ -181,7 +181,8 @@ func TestRenderGatewaydConfig_UnparseableConfig(t *testing.T) {
 // runs: the binary path, the config path, the log, and the ordering after
 // platformd. A change here changes how every gateway boots.
 func TestGatewaydOpenRCScript_MatchesTheFleet(t *testing.T) {
-	assert.True(t, strings.HasPrefix(gatewaydOpenRCScript, "#!/sbin/openrc-run\n"))
+	script := renderGatewaydInitScript(false)
+	assert.True(t, strings.HasPrefix(script, "#!/sbin/openrc-run\n"))
 	for _, want := range []string{
 		`command="/usr/sbin/gatewayd"`,
 		`command_args="serve --config /etc/gatewayd/config.yaml"`,
@@ -191,8 +192,76 @@ func TestGatewaydOpenRCScript_MatchesTheFleet(t *testing.T) {
 		"after platformd",
 		"keyword -shutdown",
 	} {
-		assert.Contains(t, gatewaydOpenRCScript, want)
+		assert.Contains(t, script, want)
 	}
+}
+
+// gatewayNAT64PlatformConfig enables the gateway's nat64: section (#603).
+const gatewayNAT64PlatformConfig = `gateway:
+  enabled: true
+  id: node-01-gateway
+  nat64:
+    enabled: true
+    translator-port: nat640
+    pool4:
+      addresses: ["203.0.113.64/29"]
+`
+
+// TestRenderGatewaydInitScript_NAT64LoadsJool pins the module load: an
+// enabled nat64: section needs the Jool kernel module before gatewayd
+// starts, and a module that will not load must not stop the daemon — the
+// section is refused with ErrNAT64ModuleUnavailable instead (#603).
+func TestRenderGatewaydInitScript_NAT64LoadsJool(t *testing.T) {
+	loadJool, err := gatewaydNAT64Enabled([]byte(gatewayNAT64PlatformConfig))
+	require.NoError(t, err)
+	require.True(t, loadJool)
+
+	script := renderGatewaydInitScript(loadJool)
+	startPreAt := strings.Index(script, "start_pre() {")
+	require.NotEqual(t, -1, startPreAt, "the init script defines start_pre")
+	startPre := script[startPreAt:]
+	assert.Contains(t, startPre, "if ! modprobe jool; then",
+		"a failed modprobe is guarded so start_pre still succeeds")
+	assert.Contains(t, startPre, "ewarn ")
+	assert.True(t, strings.HasSuffix(script, "    fi\n}\n"), "the module load ends start_pre")
+}
+
+func TestRenderGatewaydInitScript_NoNAT64LoadsNothing(t *testing.T) {
+	disabled := strings.Replace(gatewayNAT64PlatformConfig, "    enabled: true\n    translator-port", "    enabled: false\n    translator-port", 1)
+	for name, config := range map[string]string{
+		"no nat64 section":       gatewayPlatformConfig,
+		"disabled nat64 section": disabled,
+		"null nat64 section":     "gateway:\n  enabled: true\n  nat64:\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			loadJool, err := gatewaydNAT64Enabled([]byte(config))
+			require.NoError(t, err)
+			assert.False(t, loadJool)
+			assert.NotContains(t, renderGatewaydInitScript(loadJool), "modprobe")
+		})
+	}
+}
+
+func TestGatewaydNAT64Enabled_UnparseableConfig(t *testing.T) {
+	_, err := gatewaydNAT64Enabled([]byte("gateway: [x"))
+	var unreadable *tpconfig.ErrPlatformConfigUnreadable
+	assert.ErrorAs(t, err, &unreadable)
+}
+
+func TestInstallGatewaydService_NAT64ScriptLoadsJool(t *testing.T) {
+	paths := testPaths(t)
+	rc := &rcRecorder{}
+	err := installGatewaydServiceAt([]byte(gatewayNAT64PlatformConfig), paths, allPresent, rc.run, noLog, noLog)
+	require.NoError(t, err)
+
+	script, err := os.ReadFile(paths.initScript)
+	require.NoError(t, err)
+	assert.Equal(t, renderGatewaydInitScript(true), string(script))
+	assert.Contains(t, string(script), "modprobe jool", "modprobe runs on the node, never in the generator")
+	assert.Equal(t, [][]string{
+		{"rc-update", "add", "gatewayd", "default"},
+		{"rc-service", "gatewayd", "start"},
+	}, rc.calls)
 }
 
 type rcRecorder struct {
@@ -228,7 +297,8 @@ func TestInstallGatewaydService_GatewayRoleInstallsEverything(t *testing.T) {
 
 	script, err := os.ReadFile(paths.initScript)
 	require.NoError(t, err)
-	assert.Equal(t, gatewaydOpenRCScript, string(script))
+	assert.Equal(t, renderGatewaydInitScript(false), string(script))
+	assert.NotContains(t, string(script), "modprobe", "no nat64: section, no module load")
 	stat, err := os.Stat(paths.initScript)
 	require.NoError(t, err)
 	assert.Equal(t, os.FileMode(0755), stat.Mode().Perm())

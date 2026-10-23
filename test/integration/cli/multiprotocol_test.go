@@ -48,8 +48,6 @@ import (
 // Each adapter implements the CLICommands interface, enabling unified testing across
 // CLI, REST, gRPC, QUIC, MCP, and Unix protocols.
 func TestCLIMultiProtocol(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 
@@ -248,8 +246,11 @@ func testConfigCommands(t *testing.T, ctx context.Context, cmd CLICommands) {
 	t.Run("ConfigGetSection", func(t *testing.T) {
 		// First get all sections to find a valid section name
 		allResult, err := cmd.ConfigGet(testCtx, "")
-		if err != nil || len(allResult.Sections) == 0 {
-			t.Skip("No config sections available to test")
+		if err != nil {
+			t.Fatalf("Setup: ConfigGet of all sections failed: %v", err)
+		}
+		if len(allResult.Sections) == 0 {
+			t.Fatal("Setup: ConfigGet returned no sections; platformd must run with test/integration/config.yaml")
 		}
 
 		sectionName := allResult.Sections[0].Section
@@ -473,7 +474,7 @@ func testServiceCommands(t *testing.T, ctx context.Context, cmd CLICommands) {
 		// Get current status
 		statusResult, err := cmd.ServiceStatus(testCtx, serviceType)
 		if err != nil {
-			t.Skipf("Skipping service lifecycle test: service %s not available", serviceType)
+			t.Fatalf("Setup: ServiceStatus(%s) failed; platformd must serve the REST webservice: %v", serviceType, err)
 		}
 
 		originalStatus := ""
@@ -575,8 +576,6 @@ func testCompletionCommands(t *testing.T, ctx context.Context, cmd CLICommands) 
 // =============================================================================
 
 func TestCLIEdgeCases(t *testing.T) {
-	SkipIfNotIntegration(t)
-
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 

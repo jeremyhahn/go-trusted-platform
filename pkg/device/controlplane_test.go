@@ -146,6 +146,7 @@ func TestControlPlaneRegistrar_WritesTheSameRecordAnEnrollmentWould(t *testing.T
 	assert.Equal(t, "node-02-idevid", dev.Hostname, "the hostname is the IDevID Common Name")
 	assert.Equal(t, EncodeCertificatePEM(f.tpm.ekCert), dev.EKCert)
 	assert.Equal(t, EncodeCertificatePEM(f.tpm.iakCert), dev.AttestCert)
+	assert.Equal(t, EncodeCertificatePEM(f.tpm.idevid), dev.IDevIDCert)
 	assert.Equal(t, []byte("binary_bios_measurements"), dev.EventLog)
 	assert.Equal(t, entities.DeviceStateRegistered, dev.State)
 
@@ -219,6 +220,7 @@ func TestControlPlaneRegistrar_OptionalMaterialIsBestEffort(t *testing.T) {
 	assert.Equal(t, "", result.Device.EKCert)
 	assert.Equal(t, "", result.Device.AttestCert)
 	assert.Equal(t, "", result.Device.Hostname)
+	assert.Equal(t, "", result.Device.IDevIDCert)
 	assert.Equal(t, "", result.Device.SigningPub)
 	assert.Empty(t, result.Device.EventLog)
 	assert.NotEmpty(t, result.Device.AttestPub)

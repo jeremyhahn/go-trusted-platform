@@ -17,6 +17,7 @@ import (
 	"context"
 	"net/netip"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -24,6 +25,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ipam"
 	ipamBackends "github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ipam/backends"
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
 
 // newQUICIPAMAdapter returns the daemon's QUIC gateway adapter over a real
@@ -35,7 +37,7 @@ func newQUICIPAMAdapter(t *testing.T) (*fullGatewayQUICAdapter, ipam.Allocator) 
 	ctx := context.Background()
 	require.NoError(t, alloc.CreatePool(ctx, &ipam.Pool{ID: "p1", Name: "p1", CIDR: netip.MustParsePrefix("10.9.0.0/29")}))
 	require.NoError(t, alloc.CreatePool(ctx, &ipam.Pool{ID: "p2", Name: "p2", CIDR: netip.MustParsePrefix("10.9.1.0/29")}))
-	return newFullGatewayQUICAdapter(alloc, nil, nil), alloc
+	return newFullGatewayQUICAdapter(alloc, nil, nil, nil, nil, nil), alloc
 }
 
 // TestQUICAllocateRelease_RoundTrip is the #730 regression: QUIC allocate and
@@ -148,5 +150,41 @@ func TestActiveAllocations_ExcludesReleased(t *testing.T) {
 	assert.ElementsMatch(t, []netip.Addr{kept.IP, other.IP}, ips)
 
 	_, err = activeAllocations(ctx, alloc, "nope")
+	assert.ErrorIs(t, err, ipam.ErrPoolNotFound)
+}
+
+// An allocation IPAM expired for inactivity keeps a zero ExpiresAt, so only
+// its status says the address is free. It must not be listed, and every
+// listed allocation must carry its real status on the gRPC wire (#765).
+func TestActiveAllocations_ExcludesExpired(t *testing.T) {
+	ctx := context.Background()
+	_, alloc := newQUICIPAMAdapter(t)
+	require.NoError(t, alloc.CreatePool(ctx, &ipam.Pool{
+		ID: "idle", Name: "idle", CIDR: netip.MustParsePrefix("10.9.2.0/29"), InactivityTimeout: time.Nanosecond,
+	}))
+
+	kept, err := alloc.Allocate(ctx, &ipam.AllocationRequest{PoolID: "p1", DeviceID: "a"})
+	require.NoError(t, err)
+	idle, err := alloc.Allocate(ctx, &ipam.AllocationRequest{PoolID: "idle", DeviceID: "b"})
+	require.NoError(t, err)
+	expired, err := alloc.ExpireInactive(ctx, "idle")
+	require.NoError(t, err)
+	require.Len(t, expired, 1)
+	require.Equal(t, idle.IP, expired[0].IP)
+	require.True(t, expired[0].ExpiresAt.IsZero(), "expiry for inactivity leaves ExpiresAt zero")
+
+	inPool, err := activeAllocations(ctx, alloc, "idle")
+	require.NoError(t, err)
+	assert.Empty(t, inPool)
+
+	svc := NewGatewayService()
+	svc.SetIPAMAllocator(alloc)
+	resp, err := svc.ListAllocations(ctx, &platformv1.ListAllocationsRequest{})
+	require.NoError(t, err)
+	require.Len(t, resp.GetAllocations(), 1)
+	assert.Equal(t, kept.IP.String(), resp.GetAllocations()[0].GetIp())
+	assert.Equal(t, string(ipam.AllocationStatusActive), resp.GetAllocations()[0].GetStatus())
+
+	_, err = alloc.ExpireInactive(ctx, "nope")
 	assert.ErrorIs(t, err, ipam.ErrPoolNotFound)
 }

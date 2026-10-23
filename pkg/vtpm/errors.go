@@ -223,6 +223,20 @@ func (e ErrNVRAMWriteFailed) Unwrap() error {
 	return e.Cause
 }
 
+// ErrNVBufferMaxUnavailable indicates the TPM did not report a usable
+// TPM_PT_NV_BUFFER_MAX, so no NV transfer size can be chosen.
+type ErrNVBufferMaxUnavailable struct {
+	Cause error
+}
+
+func (e ErrNVBufferMaxUnavailable) Error() string {
+	return fmt.Sprintf("vtpm: TPM_PT_NV_BUFFER_MAX unavailable: %v", e.Cause)
+}
+
+func (e ErrNVBufferMaxUnavailable) Unwrap() error {
+	return e.Cause
+}
+
 // =============================================================================
 // Archive Errors
 // =============================================================================
@@ -269,6 +283,16 @@ type ErrInvalidConfig struct {
 
 func (e ErrInvalidConfig) Error() string {
 	return fmt.Sprintf("vtpm: invalid config for %s: %s", e.Field, e.Reason)
+}
+
+// ErrInvalidEKAlgorithm indicates a requested EK algorithm is neither RSA
+// nor ECC.
+type ErrInvalidEKAlgorithm struct {
+	Algorithm string
+}
+
+func (e ErrInvalidEKAlgorithm) Error() string {
+	return fmt.Sprintf("vtpm: invalid EK algorithm %q (must be RSA or ECC)", e.Algorithm)
 }
 
 // ErrChecksumMismatch indicates a file checksum does not match the manifest.

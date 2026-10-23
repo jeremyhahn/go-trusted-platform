@@ -24,6 +24,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ipsec/config"
 )
 
 func TestTunnelIdentityValidate(t *testing.T) {
@@ -108,7 +110,7 @@ func TestFileIdentity(t *testing.T) {
 	if len(id.Chain) != 2 || !id.Chain[0].Equal(pki.leaf) || !id.Chain[1].Equal(pki.ca) {
 		t.Fatalf("chain of %d, want the leaf then the CA, other blocks skipped", len(id.Chain))
 	}
-	if id.Token.Slot != 3 || string(id.Token.KeyID) != "ipsec" || id.Token.Module != DefaultTokenModule {
+	if id.Token.Slot != 3 || string(id.Token.KeyID) != "ipsec" || id.Token.Module != config.DefaultTokenModule {
 		t.Fatalf("token = %+v", id.Token)
 	}
 
@@ -157,14 +159,14 @@ func TestNewFileIdentityRejects(t *testing.T) {
 	chain := writeFile(t, "tunnel.pem", pemChain(newTestPKI(t).leaf))
 	tests := []struct {
 		name   string
-		mutate func(c *Config)
+		mutate func(c *config.Config)
 		field  string
 		want   error
 	}{
-		{"no certificate file", func(c *Config) { c.CertificateFile = "" }, "certificate-file", ErrRequired},
-		{"handle not hex", func(c *Config) { c.Token.Handle = "zz" }, "token.handle", ErrInvalidHandle},
-		{"missing PIN file", func(c *Config) { c.Token.PINFile = filepath.Join(t.TempDir(), "absent") }, "token.pin-file", fs.ErrNotExist},
-		{"empty PIN", func(c *Config) { c.Token.PINFile = writeFile(t, "token.pin", []byte("\nsecond line\n")) }, "token.pin-file", ErrRequired},
+		{"no certificate file", func(c *config.Config) { c.CertificateFile = "" }, "certificate-file", config.ErrRequired},
+		{"handle not hex", func(c *config.Config) { c.Token.Handle = "zz" }, "token.handle", config.ErrInvalidHandle},
+		{"missing PIN file", func(c *config.Config) { c.Token.PINFile = filepath.Join(t.TempDir(), "absent") }, "token.pin-file", fs.ErrNotExist},
+		{"empty PIN", func(c *config.Config) { c.Token.PINFile = writeFile(t, "token.pin", []byte("\nsecond line\n")) }, "token.pin-file", config.ErrRequired},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -172,13 +174,13 @@ func TestNewFileIdentityRejects(t *testing.T) {
 			cfg.CertificateFile = chain
 			tt.mutate(cfg)
 			_, err := NewFileIdentity(cfg)
-			var cfgErr *ConfigError
+			var cfgErr *config.ConfigError
 			if !errors.As(err, &cfgErr) || cfgErr.Field != tt.field || !errors.Is(err, tt.want) {
 				t.Fatalf("err = %v, want %v on %q", err, tt.want, tt.field)
 			}
 		})
 	}
-	if _, err := NewFileIdentity(&Config{}); !errors.Is(err, ErrNotEnabled) {
+	if _, err := NewFileIdentity(&config.Config{}); !errors.Is(err, config.ErrNotEnabled) {
 		t.Fatalf("disabled section: err = %v", err)
 	}
 }
@@ -198,7 +200,7 @@ func TestReadChainRejects(t *testing.T) {
 		}
 	}
 	garbage := writeFile(t, "bad.pem", pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: []byte{1, 2, 3}}))
-	var cfgErr *ConfigError
+	var cfgErr *config.ConfigError
 	if _, err := readChain(garbage); !errors.As(err, &cfgErr) || cfgErr.Field != "certificate-file" {
 		t.Fatalf("unparsable certificate: err = %v", err)
 	}

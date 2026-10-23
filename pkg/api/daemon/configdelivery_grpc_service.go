@@ -388,6 +388,7 @@ var sessionErrorMatchers = []configDeliveryErrorMatcher{
 	matchConfigDeliveryError[configdelivery.ErrProfileNotFound](codes.NotFound),
 	matchConfigDeliveryError[configdelivery.ErrSessionExpired](codes.InvalidArgument),
 	matchConfigDeliveryError[configdelivery.ErrSessionAlreadyFulfilled](codes.InvalidArgument),
+	matchConfigDeliveryError[configdelivery.ErrProfileIDRequired](codes.InvalidArgument),
 	// A session fulfilled without a resolved profile is an invalid
 	// server-side state (REST 500) -> Internal, pinned explicitly.
 	matchConfigDeliveryError[configdelivery.ErrSessionProfileMissing](codes.Internal),
@@ -397,12 +398,25 @@ var sessionErrorMatchers = []configDeliveryErrorMatcher{
 // status using the supplied ordered matcher table; unknown errors map to
 // Internal (the REST handler's 500 default).
 func configDeliveryErrorToStatus(err error, matchers []configDeliveryErrorMatcher) error {
+	return status.Error(configDeliveryErrorClass(err, matchers), err.Error())
+}
+
+// configDeliveryErrorClass returns the code of the first matcher that binds
+// err, or Internal when none does. The gRPC service and the MCP bridge both
+// classify through it, so the two transports answer one error class.
+func configDeliveryErrorClass(err error, matchers []configDeliveryErrorMatcher) codes.Code {
 	for _, match := range matchers {
 		if code, ok := match(err); ok {
-			return status.Error(code, err.Error())
+			return code
 		}
 	}
-	return status.Error(codes.Internal, err.Error())
+	return codes.Internal
+}
+
+// classifyConfigDeliveryError wraps err with the code the gRPC service
+// answers it with, for the MCP bridge.
+func classifyConfigDeliveryError(err error, matchers []configDeliveryErrorMatcher) error {
+	return ErrConfigDeliveryClassified{Code: configDeliveryErrorClass(err, matchers), Err: err}
 }
 
 // Ensure ConfigDeliveryGRPCService implements the generated server interface.
