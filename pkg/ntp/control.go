@@ -16,6 +16,7 @@ package ntp
 import (
 	"context"
 	"encoding/csv"
+	"errors"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -96,6 +97,11 @@ type Controller interface {
 // chronycBinary is the control client shipped with the chrony package.
 const chronycBinary = "chronyc"
 
+// chronyFailureReply is the reply chronyc prints when chronyd answered a
+// command and could not carry it out (STT_FAILED), as opposed to not
+// answering at all.
+const chronyFailureReply = "500 Failure"
+
 // trackingFieldCount is the number of CSV columns `chronyc -c tracking`
 // emits.
 const trackingFieldCount = 14
@@ -162,6 +168,10 @@ func (c *chronyc) Sources(ctx context.Context) ([]Source, error) {
 // MakeStep asks chronyd to correct the clock with an immediate step.
 func (c *chronyc) MakeStep(ctx context.Context) error {
 	_, err := c.run(ctx, "makestep")
+	var failed ErrControlUnavailable
+	if errors.As(err, &failed) && strings.HasPrefix(strings.TrimSpace(failed.Output), chronyFailureReply) {
+		return ErrStepRefused{Output: failed.Output}
+	}
 	return err
 }
 

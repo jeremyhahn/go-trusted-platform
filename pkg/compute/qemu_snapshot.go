@@ -212,6 +212,13 @@ func (o *QEMUOrchestrator) DeleteSnapshot(ctx context.Context, instanceID, snaps
 	qemuInst.mu.Lock()
 	defer qemuInst.mu.Unlock()
 
+	// QEMU's delvm succeeds for a name no disk holds, so a snapshot that is
+	// already gone would read as deleted: look it up first and answer
+	// NotFound instead.
+	if _, err := ops.Get(ctx, snapshotName); err != nil {
+		return translateSnapshotError(err)
+	}
+
 	if err := ops.Delete(ctx, snapshotName); err != nil {
 		return translateSnapshotError(err)
 	}

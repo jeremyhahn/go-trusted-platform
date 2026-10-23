@@ -186,6 +186,33 @@ func TestControllerSurfacesUnavailableSocket(t *testing.T) {
 	}
 }
 
+func TestControllerMakeStepSeparatesRefusalFromUnavailable(t *testing.T) {
+	ctx := context.Background()
+
+	// chronyd answered and could not step: it does not control the clock.
+	refusing := newFakeRunner(map[string]fakeResponse{
+		"makestep": {Output: "500 Failure\n", Err: errors.New("exit status 1")},
+	})
+	var refused ErrStepRefused
+	err := NewController("", refusing).MakeStep(ctx)
+	if !errors.As(err, &refused) {
+		t.Fatalf("MakeStep() error = %v, want ErrStepRefused", err)
+	}
+	if !strings.Contains(refused.Error(), "500 Failure") {
+		t.Fatalf("Error() = %q, want chronyc's reply carried", refused.Error())
+	}
+
+	// chronyd never answered: the control socket is unavailable.
+	silent := newFakeRunner(map[string]fakeResponse{
+		"makestep": {Output: "506 Cannot talk to daemon\n", Err: errors.New("exit status 1")},
+	})
+	err = NewController("", silent).MakeStep(ctx)
+	var unavailable ErrControlUnavailable
+	if !errors.As(err, &unavailable) || errors.As(err, &refused) {
+		t.Fatalf("MakeStep() error = %v, want ErrControlUnavailable only", err)
+	}
+}
+
 func TestParseTrackingRejectsMalformedOutput(t *testing.T) {
 	cases := map[string]string{
 		"empty output":  "",

@@ -22,7 +22,6 @@ import (
 	"strings"
 	"time"
 
-	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/storage/luks"
 	"golang.org/x/term"
 )
@@ -464,9 +463,13 @@ func (m *initrdManager) reorderForRecovery() {
 	}
 }
 
-// ResealKeys attempts to reseal TPM keys to new PCR values
-// This is useful after a kernel update or system recovery
-func (m *initrdManager) ResealKeys(ctx context.Context) error {
+// ResealKeys would reseal the TPM-PCR LUKS key to the current PCR values.
+// The TPM-PCR unlock reads that seal from the EFI partition files first boot
+// writes (pcrPublicFile, pcrPrivateFile), and the initrd has no writer for
+// them, so a resealed key would be discarded. ResealKeys therefore checks
+// that there is a slot to reseal and then refuses with ResealStoreError,
+// before it unseals anything, rather than report a reseal it did not achieve.
+func (m *initrdManager) ResealKeys(_ context.Context) error {
 	m.logger.Info("Attempting to reseal TPM keys to current PCR values")
 
 	// Get current PCR values
@@ -489,72 +492,31 @@ func (m *initrdManager) ResealKeys(ctx context.Context) error {
 		return &WrappedError{Msg: "failed to build volume config", Err: err}
 	}
 
-	// Find TPM-PCR strategy
-	var tpmPCRStrategy *TPMPCRStrategy
-	for _, strategy := range m.chain.List() {
-		if s, ok := strategy.(*TPMPCRStrategy); ok {
-			tpmPCRStrategy = s
-			break
-		}
-	}
-
-	if tpmPCRStrategy == nil {
+	if !m.chainHasTPMPCR() {
 		return &MessageError{Msg: "TPM-PCR strategy not found"}
 	}
 
-	// Reseal keys for each TPM-PCR slot
-	for i, slot := range volume.KeySlots {
-		if slot.Type != luks.UnlockTPMPCR || slot.Attrs == nil {
-			continue
+	var slots []int
+	for _, slot := range volume.KeySlots {
+		if slot.Type == luks.UnlockTPMPCR {
+			slots = append(slots, slot.Index)
 		}
-
-		if slot.SealedData == nil {
-			m.logger.Warnf("No sealed data for slot %d, skipping reseal", slot.Index)
-			continue
-		}
-
-		m.logger.Infof("Resealing key in slot %d to current PCR values", slot.Index)
-
-		// Get the backend for retrieving/storing sealed data
-		var backend interface{}
-		if m.platform.XKMS != nil {
-			backend = m.platform.XKMS.Backend()
-		} else if m.platform.Backend != nil {
-			backend = m.platform.Backend
-		}
-
-		// First unseal the key with current sealed data
-		unsealOpts := &xkmssdk.UnsealOptions{
-			KeyAttributes: slot.Attrs,
-			Backend:       backend,
-		}
-		key, err := m.platform.TPM.Unseal(ctx, slot.SealedData, unsealOpts)
-		if err != nil {
-			m.logger.Errorf("Failed to unseal key from slot %d: %v", slot.Index, err)
-			continue
-		}
-
-		// Enable platform policy for reseal
-		slot.Attrs.PlatformPolicy = true
-
-		// Reseal the key with new PCR values
-		sealOpts := &xkmssdk.SealOptions{
-			KeyAttributes: slot.Attrs,
-			Backend:       backend,
-		}
-		sealedData, err := m.platform.TPM.Seal(ctx, key, sealOpts)
-		if err != nil {
-			m.logger.Errorf("Failed to reseal key in slot %d: %v", slot.Index, err)
-			continue
-		}
-
-		volume.KeySlots[i].Attrs = slot.Attrs
-		volume.KeySlots[i].SealedData = sealedData
-		m.logger.Infof("Successfully resealed key in slot %d", slot.Index)
+	}
+	if len(slots) == 0 {
+		return &ResealNoSlotError{DevicePath: volume.DevicePath}
 	}
 
-	m.logger.Info("Key resealing completed")
-	return nil
+	return &ResealStoreError{Slots: slots}
+}
+
+// chainHasTPMPCR reports whether the unlock chain holds the TPM-PCR strategy.
+func (m *initrdManager) chainHasTPMPCR() bool {
+	for _, strategy := range m.chain.List() {
+		if _, ok := strategy.(*TPMPCRStrategy); ok {
+			return true
+		}
+	}
+	return false
 }
 
 // readUserChoice reads a single integer choice from stdin

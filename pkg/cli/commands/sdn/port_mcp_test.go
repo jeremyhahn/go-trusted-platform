@@ -44,7 +44,11 @@ func mcpStandIn(t *testing.T, results map[string]interface{}, calls *[]mcpToolCa
 			name, _ := params["name"].(string)
 			args, _ := params["arguments"].(map[string]interface{})
 			*calls = append(*calls, mcpToolCall{Name: name, Arguments: args})
-			resp.Result = results[name]
+			result, err := mcpwire.NewCallToolResult(results[name])
+			if err != nil {
+				t.Errorf("encode %s output: %v", name, err)
+			}
+			resp.Result = result
 		default:
 			w.WriteHeader(http.StatusNotFound)
 			return

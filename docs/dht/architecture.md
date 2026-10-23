@@ -1,6 +1,6 @@
 # Trusted DHT — Architecture
 
-> **Status: PLANNED** · Scope: design only, no implementation · Last verified: 2026-08-18
+> **Status: NORMATIVE** · Scope: the planned `dht` feature (docs/SPEC.md:53); design only, no code exists · Last verified: 2026-10-22
 > Conflicts with this document are defects. Fix them here first.
 > The feature folder is: architecture (this file) · [engineering.md](engineering.md) ·
 > [cli.md](cli.md) · [api.md](api.md) · [user.md](user.md).

@@ -428,7 +428,7 @@ func TestDoRequestContextDeadline(t *testing.T) {
 		Method:  "initialize",
 	}
 
-	_, err := client.doRequest(ctx, req, "")
+	_, err := client.doRequest(ctx, client.httpClient, req, "")
 	if err == nil {
 		t.Log("Request may or may not timeout depending on timing")
 	}
@@ -457,7 +457,7 @@ func TestDoRequestServerError(t *testing.T) {
 		Method:  "test",
 	}
 
-	_, err := client.doRequest(ctx, req, "")
+	_, err := client.doRequest(ctx, client.httpClient, req, "")
 	if err == nil {
 		t.Error("expected error for server error")
 	}
@@ -487,7 +487,7 @@ func TestDoRequestInvalidJSON(t *testing.T) {
 		Method:  "test",
 	}
 
-	_, err := client.doRequest(ctx, req, "")
+	_, err := client.doRequest(ctx, client.httpClient, req, "")
 	if err == nil {
 		t.Error("expected error for invalid JSON response")
 	}
@@ -522,7 +522,7 @@ func TestDoRequestWithToken(t *testing.T) {
 		Method:  "test",
 	}
 
-	_, err := client.doRequest(ctx, req, "test-token")
+	_, err := client.doRequest(ctx, client.httpClient, req, "test-token")
 	if err != nil {
 		t.Errorf("unexpected error: %v", err)
 	}
@@ -552,7 +552,7 @@ func TestDoRequestEmptyResponse(t *testing.T) {
 		Method:  "test",
 	}
 
-	_, err := client.doRequest(ctx, req, "")
+	_, err := client.doRequest(ctx, client.httpClient, req, "")
 	if err == nil {
 		t.Error("expected error for empty response")
 	}
@@ -576,7 +576,7 @@ func TestDoRequestNetworkError(t *testing.T) {
 		Method:  "test",
 	}
 
-	_, err := client.doRequest(ctx, req, "")
+	_, err := client.doRequest(ctx, client.httpClient, req, "")
 	if err == nil {
 		t.Error("expected error for network failure")
 	}
@@ -609,7 +609,7 @@ func TestDoRequestReadBodyError(t *testing.T) {
 		Method:  "test",
 	}
 
-	_, err := client.doRequest(ctx, req, "")
+	_, err := client.doRequest(ctx, client.httpClient, req, "")
 	// This might result in either read error or JSON parse error
 	if err == nil {
 		t.Log("Expected error but may vary based on timing")

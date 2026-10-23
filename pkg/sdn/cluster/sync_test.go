@@ -249,6 +249,10 @@ func (m *mockOVSClient) AddPort(ctx context.Context, bridgeName, portName string
 	return port, nil
 }
 
+func (m *mockOVSClient) AddPortWithType(ctx context.Context, bridgeName, portName, _ string) (*ovs.Port, error) {
+	return m.AddPort(ctx, bridgeName, portName)
+}
+
 func (m *mockOVSClient) DeletePort(ctx context.Context, bridgeName, portName string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()

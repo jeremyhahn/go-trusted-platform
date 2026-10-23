@@ -15,6 +15,10 @@ verbs either.
 Authoritative DNS is reachable only through the SDK, REST, gRPC, Unix, QUIC and
 MCP. [api.md](api.md) has the full matrix.
 
+The integration suite's CLI leg (`test/integration/dns/`) asserts this refusal:
+every DNS operation returns the typed `ErrCLINoCommandGroup` naming #954, and the
+leg fails once `platformctl --help` lists a `dns` group.
+
 **This is a gap, not a design decision.** DNS is a Tier 1 platform capability
 that an operator cannot exercise from a shell: no way to list zones, add a
 record or sign a zone without writing a client. It is raised in

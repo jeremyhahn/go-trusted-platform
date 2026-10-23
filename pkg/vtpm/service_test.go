@@ -4171,7 +4171,7 @@ func TestTPMProvider_CloseAll_Empty(t *testing.T) {
 }
 
 func TestNewTPMOperations_NonexistentSocket(t *testing.T) {
-	_, err := NewTPMOperations("/nonexistent/socket/path.sock", EKAlgorithmRSA, "vm-01", nil)
+	_, err := NewTPMOperations("/nonexistent/socket/path.sock", t.TempDir(), EKAlgorithmRSA, "vm-01", nil)
 	if err == nil {
 		t.Error("NewTPMOperations should fail for nonexistent socket")
 	}
@@ -4183,7 +4183,7 @@ func TestNewTPMOperations_NonexistentSocket(t *testing.T) {
 }
 
 func TestNewTPMOperations_ECCAlgorithm(t *testing.T) {
-	_, err := NewTPMOperations("/nonexistent/socket/path.sock", EKAlgorithmECC, "vm-01", nil)
+	_, err := NewTPMOperations("/nonexistent/socket/path.sock", t.TempDir(), EKAlgorithmECC, "vm-01", nil)
 	if err == nil {
 		t.Error("NewTPMOperations should fail for nonexistent socket (even with ECC)")
 	}
@@ -4191,7 +4191,7 @@ func TestNewTPMOperations_ECCAlgorithm(t *testing.T) {
 
 func TestNewTPMOperations_DefaultLogger(t *testing.T) {
 	// Test that nil logger is handled gracefully by checking the error message
-	_, err := NewTPMOperations("/nonexistent/socket/path.sock", EKAlgorithmRSA, "vm-01", nil)
+	_, err := NewTPMOperations("/nonexistent/socket/path.sock", t.TempDir(), EKAlgorithmRSA, "vm-01", nil)
 	if err == nil {
 		t.Error("NewTPMOperations should fail for nonexistent socket")
 	}

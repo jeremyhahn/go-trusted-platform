@@ -288,7 +288,8 @@ type dnsAddRecordRequestWire struct {
 // carries the flattened Record mirrors so the response round-trips through the
 // codec without hitting the oneof panic.
 type dnsListRecordsResponseWire struct {
-	Records []*dnsRecordWire `codec:"Records"`
+	Records    []*dnsRecordWire               `codec:"Records"`
+	Pagination *platformv1.PaginationResponse `codec:"Pagination"`
 }
 
 // dnsResolveResponseWire mirrors platformv1.ResolveResponse.
@@ -300,7 +301,7 @@ type dnsResolveResponseWire struct {
 // dnsListRecordsResponseFromProto flattens a pb ListRecordsResponse onto the
 // mirror.
 func dnsListRecordsResponseFromProto(pb *platformv1.ListRecordsResponse) *dnsListRecordsResponseWire {
-	out := &dnsListRecordsResponseWire{}
+	out := &dnsListRecordsResponseWire{Pagination: pb.GetPagination()}
 	for _, r := range pb.GetRecords() {
 		out.Records = append(out.Records, recordToWire(r))
 	}

@@ -195,10 +195,15 @@ func mapCeremonyState(s string) daemon.CeremonyStateValue {
 }
 
 // ceremonyStateMap routes upstream state strings to the typed service values.
-// Keys cover both go-qrdb's canonical spellings and common aliases.
+// Keys cover go-qrdb's canonical spellings (its ceremony.CeremonyState values
+// awaiting_init, enrolling and operational, which the embedded transport
+// reports verbatim) and common aliases.
 var ceremonyStateMap = map[string]daemon.CeremonyStateValue{
 	"":              daemon.CeremonyStateUnknown,
 	"unknown":       daemon.CeremonyStateUnknown,
+	"awaiting_init": daemon.CeremonyStateUninitialized,
+	"enrolling":     daemon.CeremonyStateInProgress,
+	"operational":   daemon.CeremonyStateComplete,
 	"uninitialized": daemon.CeremonyStateUninitialized,
 	"uninit":        daemon.CeremonyStateUninitialized,
 	"in_progress":   daemon.CeremonyStateInProgress,

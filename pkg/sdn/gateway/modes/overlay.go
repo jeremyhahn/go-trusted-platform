@@ -283,6 +283,12 @@ type OverlayModeConfig struct {
 	// it, so an SA runs to exactly the VTEPs this node exchanges frames with.
 	FloodPeers bgp.EVPNRouteHandler
 
+	// NDFallbackHoldDown is how long every solicitation floods after the
+	// first ND fallback; zero takes the 30-second default. Repeated
+	// fallbacks double it up to the 8-minute cap, so it must not exceed
+	// that cap.
+	NDFallbackHoldDown time.Duration
+
 	// Logger for logging operations.
 	Logger *slog.Logger
 }
@@ -306,6 +312,9 @@ func (c *OverlayModeConfig) Validate() error {
 	}
 	if c.Logger == nil {
 		return ErrLoggerNil
+	}
+	if c.NDFallbackHoldDown < 0 || c.NDFallbackHoldDown > overlayNDFallbackHoldDownMax {
+		return ErrNDFallbackHoldDownInvalid
 	}
 	if c.EVPNConfig != nil && c.Admitter == nil {
 		return ErrAdmitterNil

@@ -37,9 +37,14 @@ set -uo pipefail
 # shellcheck source=build/docker/devcontainer/swtpm-provision.sh
 source "$(dirname "${BASH_SOURCE[0]}")/swtpm-provision.sh"
 
-# Known target keywords mapped to their Go test package paths. A single-word
-# first argument matching a key here selects that target; anything else is
-# treated as the legacy BUILD_TAGS argument.
+# Known target keywords mapped to their Go test package paths, one or more
+# separated by spaces. A single-word first argument matching a key here
+# selects that target; anything else is treated as the legacy BUILD_TAGS
+# argument. sdn names its packages one by one to leave out sdn/stress: the
+# stress generators keep every CPU busy for over four minutes, and run beside
+# the sdn package (go test runs packages in parallel) they starved
+# ovs-vswitchd, platformd and platformctl until the sdn package ran out of
+# its 5 minutes (#973). sdn-stress runs them on their own.
 declare -A TARGET_PACKAGES=(
     [all]=""
     [bmc]="./test/integration/bmc/..."
@@ -56,7 +61,8 @@ declare -A TARGET_PACKAGES=(
     [cold-start]="./test/integration/cold_start/..."
     [barrier-gate]="./test/integration/barrier_gate/..."
     [restroutes]="./test/integration/restroutes/..."
-    [sdn]="./test/integration/sdn/..."
+    [sdn]="./test/integration/sdn/ ./test/integration/sdn/mock_bgp/..."
+    [sdn-stress]="./test/integration/sdn/stress/..."
     [proxy]="./test/integration/proxy/..."
     [ntp]="./test/integration/ntp/..."
     [objectstorage]="./test/integration/objectstorage/..."
@@ -129,13 +135,24 @@ declare -A TARGET_ENV=(
 # diskimage suite boots an aarch64 guest under TCG emulation, where a first
 # boot through firstboot provisioning takes tens of minutes. The root package
 # and testenv-enrollment carry the enrollment test's own 30-minute context;
-# e2e carries a 45-minute one. sdn gets 5 minutes: every ovs-vsctl and
-# ovs-ofctl call it makes has a 30-second deadline (test/integration/helpers/
-# boundedexec), so a wedged OVS fails the call instead of eating the default.
+# e2e carries a 45-minute one. sdn gets 15 minutes. Its tests run one at a
+# time (-parallel 1), in file order, and passing they take more than 5: on
+# #983 (job 267894) the files up to nat_dual_uplink_test.go used all 300 s
+# with no test hung, and on main (run 62224) TestSDNMultiProtocol alone ran
+# over 2m24s, about 27 s per transport, after 2m36s of earlier files. The
+# files from network_provisioning_test.go on (openflow, overlay
+# multi-protocol, overlay ND, perf, policy, state transition, tap, the
+# tunnel netns suites, zone) were never reached; their estimate, from their
+# waits and transport count, is another 5 to 6 minutes, so about 11 in all.
+# A hang still fails fast: every ovs-vsctl and ovs-ofctl call has a
+# 30-second deadline (test/integration/helpers/boundedexec) and every
+# transport adapter a client timeout and a context deadline.
 # iso gets 35 minutes: the 20-minute install budget (vmInstallTimeout) plus the
 # ISO build and customize steps; a guest stuck at its GRUB menu fails in 2.
+# sdn-stress gets the 30 minutes `make stress-sdn` gives the same package.
 declare -A TARGET_TIMEOUTS=(
-    [sdn]="5m"
+    [sdn]="15m"
+    [sdn-stress]="30m"
     [iso]="35m"
     [diskimage]="90m"
     [netboot]="40m"
@@ -200,12 +217,15 @@ declare -A TARGET_NO_DAEMON=(
 # both), so it answers every VM spec "not supported" (#949). `all` ends with
 # it, after tpm, on a fresh swtpm and a platformd started on the local QEMU
 # provider, as the compute target does.
+# sdn-stress needs no daemon but is not in TARGET_NO_DAEMON: the daemon-free
+# suites run all at once, and its generators would starve them the way they
+# starved sdn. In the daemon-backed list it runs alone, after sdn.
 ALL_TARGETS=(
     helpers datastore quicbaas sdk cluster cmd ipxe installer e2e
     root acme attestation authenticode ca ceremony cli
     container daemon device dns fido2 iam iso kms luks network
     ntp objectstorage piv provision proxy quic registry restroutes sdn
-    secrets tenant vpn vtpm tpm
+    sdn-stress secrets tenant vpn vtpm tpm
 )
 
 RUN_TARGET="all"
@@ -405,9 +425,14 @@ setup_devices() {
         chmod 666 /dev/net/tun
     fi
 
-    # KVM permissions
+    # KVM permissions. Without /dev/kvm every QEMU guest runs TCG (pkg/qemu
+    # logs "KVM requested but unusable, running TCG"), and the iso install
+    # suite does not finish inside its 20-minute bound: say which it is.
     if [ -e /dev/kvm ]; then
         chmod 666 /dev/kvm
+        echo "/dev/kvm: available (QEMU guests run KVM)"
+    else
+        echo "WARNING: /dev/kvm NOT AVAILABLE: QEMU guests run TCG; the iso install suite will exceed its bound"
     fi
 
     # Load kernel modules (best effort)
@@ -600,7 +625,9 @@ build_binaries() {
 compile_check() {
     local target="$1"
     local pkg="${TARGET_PACKAGES[$target]}"
-    if ! go vet -tags "${BUILD_TAGS}" "$pkg"; then
+    local pkgs=()
+    read -r -a pkgs <<< "$pkg"
+    if ! go vet -tags "${BUILD_TAGS}" "${pkgs[@]}"; then
         echo "ERROR: $pkg ($target) does not compile (see above)"
         return 1
     fi
@@ -950,9 +977,34 @@ start_platformd() {
     done
 
     echo "FATAL: platformd never created its socket at ${PLATFORMD_SOCK_PATH}"
-    echo "platformd logs:"
-    tail -50 "${PLATFORMD_STARTUP_LOG}" 2>/dev/null || true
+    report_platformd_startup_failure
     return 1
+}
+
+# report_platformd_startup_failure says why platformd is not serving: its exit
+# status (or that it is still running), appended to PLATFORMD_STARTUP_LOG so
+# the log carries it, then the tail of the startup and application logs. A
+# missing log is reported as missing rather than printed as nothing.
+report_platformd_startup_failure() {
+    local app_log="/tmp/platformd-integration/log/trusted-platform.log"
+    local status_line
+    if kill -0 "$PLATFORMD_PID" 2>/dev/null; then
+        status_line="platformd (PID ${PLATFORMD_PID}) is still running without its socket"
+    else
+        wait "$PLATFORMD_PID"
+        status_line="platformd (PID ${PLATFORMD_PID}) exited with status $?"
+    fi
+    echo "${status_line}"
+    echo "${status_line}" >> "${PLATFORMD_STARTUP_LOG}"
+
+    echo "=== platformd startup log (${PLATFORMD_STARTUP_LOG}, stdout/stderr) ==="
+    tail -50 "${PLATFORMD_STARTUP_LOG}"
+    echo "=== platformd app log (${app_log}) ==="
+    if [ -f "${app_log}" ]; then
+        tail -50 "${app_log}"
+    else
+        echo "(missing)"
+    fi
 }
 
 # abort_no_daemon ends the run when platformd did not come up.
@@ -1270,6 +1322,8 @@ run_test() {
         return 1
     fi
     local timeout="${TARGET_TIMEOUTS[$target]:-10m}"
+    local pkgs=()
+    read -r -a pkgs <<< "$pkg"
     local run_args=()
     if [ -n "${TARGET_RUN[$target]:-}" ]; then
         run_args=(-run "${TARGET_RUN[$target]}")
@@ -1278,7 +1332,7 @@ run_test() {
     if [ -n "${TARGET_ENV[$target]:-}" ]; then
         read -r -a target_env <<< "${TARGET_ENV[$target]}"
     fi
-    if env "${target_env[@]}" go test -v -tags "${BUILD_TAGS}" -count=1 -parallel 1 -timeout "$timeout" "${run_args[@]}" "$pkg"; then
+    if env "${target_env[@]}" go test -v -tags "${BUILD_TAGS}" -count=1 -parallel 1 -timeout "$timeout" "${run_args[@]}" "${pkgs[@]}"; then
         echo "--- PASS: $pkg ---"
     else
         echo "--- FAIL: $pkg ---"

@@ -9,6 +9,7 @@
 | Protocol | JSON-RPC 2.0, `tools/call` |
 | HTTP transport | `POST https://<host>:9445/mcp` (TLS only, no plaintext mode) |
 | stdio transport | JSON-RPC over stdin/stdout |
+| Result | `CallToolResult`; the output below is its text block ([daemon api.md](../daemon/api.md) §1 "MCP tool results") |
 | Authorization | each tool requires a `dns:read`, `dns:write` or `dns:delete` scope |
 
 There are no DNS resources (`resources/read`); everything is a tool.
@@ -27,8 +28,8 @@ The response carries proto field names; gRPC status codes pass through.
 | `dns_zone_update` | `UpdateZone` | `dns:write` | `name` |
 | `dns_zone_delete` | `DeleteZone` | `dns:delete` | `name` |
 | `dns_record_create` | `AddRecord` | `dns:write` | `zone_name`, `record` |
-| `dns_record_get` | `ListRecords`, filtered | `dns:read` | `zone_name`, `type`, `name` |
-| `dns_record_list` | `ListRecords` | `dns:read` | `zone_name` |
+| `dns_record_get` | `ListRecords`, filtered, every page | `dns:read` | `zone_name`, `type`, `name` |
+| `dns_record_list` | `ListRecords` | `dns:read` | `zone_name` (optional `type`, `pagination`) |
 | `dns_record_update` | `UpdateRecord` | `dns:write` | `zone_name`, `old_record`, `new_record` |
 | `dns_record_delete` | `DeleteRecord` | `dns:delete` | `zone_name`, `name` |
 | `dns_lookup` | `Resolve` | `dns:read` | `fqdn` |

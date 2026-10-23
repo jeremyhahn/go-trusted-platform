@@ -80,6 +80,16 @@ func protoRPC[Svc any, Req any, PReq interface {
 	*Req
 	proto.Message
 }, Resp proto.Message](out protoResponder, service func() (Svc, error), rpc func(Svc, context.Context, PReq) (Resp, error)) http.HandlerFunc {
+	return protoRPCPrepared(out, service, nil, rpc)
+}
+
+// protoRPCPrepared serves one unary RPC as protoRPC does, and runs prepare,
+// when set, on the decoded request before the RPC: a route whose reply may
+// outlive the server's write timeout moves its write deadline there.
+func protoRPCPrepared[Svc any, Req any, PReq interface {
+	*Req
+	proto.Message
+}, Resp proto.Message](out protoResponder, service func() (Svc, error), prepare func(http.ResponseWriter, PReq), rpc func(Svc, context.Context, PReq) (Resp, error)) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		svc, err := service()
 		if err != nil {
@@ -97,6 +107,9 @@ func protoRPC[Svc any, Req any, PReq interface {
 		if err := decodeProtoParams(params, req.ProtoReflect()); err != nil {
 			out.writeError(w, http.StatusBadRequest, err)
 			return
+		}
+		if prepare != nil {
+			prepare(w, req)
 		}
 		ctx := channelbind.WithConnectionTLS(r.Context(), channelbind.TransportREST, r.TLS)
 		resp, err := rpc(svc, ctx, req)

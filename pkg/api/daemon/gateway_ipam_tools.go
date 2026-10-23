@@ -103,12 +103,14 @@ func (t gatewayIPAMTools) GatewayIPAMRelease(ctx context.Context, ipStr string) 
 	return t.ipam.Release(ctx, addr)
 }
 
-// GatewayIPAMAllocations lists all IP address allocations for a pool.
+// GatewayIPAMAllocations lists the live (active or reserved) allocations of
+// one pool, or of every pool when poolID is empty, the same set REST, gRPC
+// and QUIC list.
 func (t gatewayIPAMTools) GatewayIPAMAllocations(ctx context.Context, poolID string) ([]interface{}, error) {
 	if err := t.requireIPAM(); err != nil {
 		return nil, err
 	}
-	allocs, err := t.ipam.GetAllocationsByPool(ctx, poolID)
+	allocs, err := activeAllocations(ctx, t.ipam, poolID)
 	if err != nil {
 		return nil, err
 	}

@@ -182,3 +182,24 @@ func TestDetectorRunWatchedReturnsTheOutputOfACommandThatExits(t *testing.T) {
 		t.Errorf("output = %q, want %q", output, "installed\n")
 	}
 }
+
+func TestDetectorRunWatchedQuotesTheOutputTailOfAFailedCommand(t *testing.T) {
+	adapter := &CLIAdapter{binaryPath: "/bin/sh"}
+	script := "i=0; while [ $i -lt 50 ]; do echo serial line $i; i=$((i+1)); done; echo 'Error: failed to setup TPM' >&2; exit 1"
+
+	_, err := adapter.runWatched(context.Background(), time.Minute, newGRUBMenuDetector(time.Minute), "-c", script)
+
+	var verbErr ErrVerbFailed
+	if !errors.As(err, &verbErr) {
+		t.Fatalf("err = %v (%T), want ErrVerbFailed", err, err)
+	}
+	if !strings.HasSuffix(verbErr.Stderr, "Error: failed to setup TPM") {
+		t.Errorf("Stderr = %q, want it to end with the command's error", verbErr.Stderr)
+	}
+	if strings.Contains(verbErr.Stderr, "serial line 0\n") {
+		t.Errorf("Stderr = %q, want only the last %d lines", verbErr.Stderr, serialTailLines)
+	}
+	if got := strings.Count(verbErr.Stderr, "\n") + 1; got != serialTailLines {
+		t.Errorf("Stderr quotes %d lines, want %d", got, serialTailLines)
+	}
+}

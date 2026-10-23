@@ -14,6 +14,7 @@
 package vtpm
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
@@ -33,6 +34,21 @@ func testGetFlags() func() *cli.CommonFlags {
 }
 
 // TestNewCommand tests the vtpm root command creation
+// assertRunErr compares a run function's error with the table's. A
+// connection failure must carry the setup error that caused it, so it is
+// matched by type and a non-nil cause, not by value.
+func assertRunErr(t *testing.T, want, got error) {
+	t.Helper()
+	var wantConn ErrDaemonConnectionRequired
+	if errors.As(want, &wantConn) {
+		var gotConn ErrDaemonConnectionRequired
+		require.ErrorAs(t, got, &gotConn)
+		require.Error(t, gotConn.Err, "the connection error must carry the setup failure")
+		return
+	}
+	assert.Equal(t, want, got)
+}
+
 func TestNewCommand(t *testing.T) {
 	cmd := NewCommand(testGetFlags())
 
@@ -211,7 +227,7 @@ func TestRunClone(t *testing.T) {
 			// Match actual function signature: runClone(flags, templateID, hostname, labels)
 			err := runClone(flags, tt.templateID, tt.hostname, tt.labels)
 			require.Error(t, err)
-			assert.Equal(t, tt.expectErr, err)
+			assertRunErr(t, tt.expectErr, err)
 		})
 	}
 }
@@ -266,7 +282,7 @@ func TestRunList(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			err := runList(flags, tt.mode, 0, 0)
 			require.Error(t, err)
-			assert.Equal(t, tt.expectErr, err)
+			assertRunErr(t, tt.expectErr, err)
 		})
 	}
 }
@@ -338,7 +354,7 @@ func TestRunInfo(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			err := runInfo(flags, tt.bundleID)
 			require.Error(t, err)
-			assert.Equal(t, tt.expectErr, err)
+			assertRunErr(t, tt.expectErr, err)
 		})
 	}
 }
@@ -396,7 +412,7 @@ func TestRunDelete(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			err := runDelete(flags, tt.bundleID, tt.force)
 			require.Error(t, err)
-			assert.Equal(t, tt.expectErr, err)
+			assertRunErr(t, tt.expectErr, err)
 		})
 	}
 }
@@ -459,7 +475,7 @@ func TestRunExport(t *testing.T) {
 			// Match actual function signature: runExport(flags, bundleID, output, overwrite)
 			err := runExport(flags, tt.bundleID, tt.output, tt.overwrite)
 			require.Error(t, err)
-			assert.Equal(t, tt.expectErr, err)
+			assertRunErr(t, tt.expectErr, err)
 		})
 	}
 }
@@ -502,7 +518,7 @@ func TestRunImport(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			err := runImport(flags, tt.archivePath)
 			require.Error(t, err)
-			assert.Equal(t, tt.expectErr, err)
+			assertRunErr(t, tt.expectErr, err)
 		})
 	}
 }
@@ -641,7 +657,7 @@ func TestRunTemplateList(t *testing.T) {
 
 	err := runTemplateList(flags)
 	require.Error(t, err)
-	assert.Equal(t, ErrDaemonConnectionRequired{}, err)
+	assertRunErr(t, ErrDaemonConnectionRequired{}, err)
 }
 
 // TestNewTemplateDeleteCommand tests the template delete command structure
@@ -697,7 +713,7 @@ func TestRunTemplateDelete(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			err := runTemplateDelete(flags, tt.templateID, tt.force)
 			require.Error(t, err)
-			assert.Equal(t, tt.expectErr, err)
+			assertRunErr(t, tt.expectErr, err)
 		})
 	}
 }
@@ -1099,6 +1115,13 @@ func TestErrorTypes(t *testing.T) {
 		assert.Equal(t, "daemon connection required: this command requires a running platformd daemon", err.Error())
 		var target ErrDaemonConnectionRequired
 		assert.ErrorAs(t, err, &target)
+	})
+
+	t.Run("ErrDaemonConnectionRequired carries its cause", func(t *testing.T) {
+		cause := errors.New("dial unix /run/platformd.sock: connect: no such file or directory")
+		err := ErrDaemonConnectionRequired{Err: cause}
+		assert.Equal(t, "daemon connection required: this command requires a running platformd daemon: "+cause.Error(), err.Error())
+		assert.ErrorIs(t, err, cause)
 	})
 
 	t.Run("ErrBundleNotFound", func(t *testing.T) {

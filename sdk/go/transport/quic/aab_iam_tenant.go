@@ -34,6 +34,8 @@ var iamTenantMethodOpcodes = map[string]byte{
 	platformv1.PlatformIAMService_ListTenants_FullMethodName:  quicwire.OpIAMCategory,
 	platformv1.PlatformIAMService_UpdateTenant_FullMethodName: quicwire.OpIAMCategory,
 	platformv1.PlatformIAMService_DeleteTenant_FullMethodName: quicwire.OpIAMCategory,
+	platformv1.PlatformIAMService_UpdateGroup_FullMethodName:  quicwire.OpIAMCategory,
+	platformv1.PlatformIAMService_UpdateRole_FullMethodName:   quicwire.OpIAMCategory,
 }
 
 // iamTenantSubOpcodes routes the IAM tenant methods to their sub-opcode byte.
@@ -43,6 +45,8 @@ var iamTenantSubOpcodes = map[string]byte{
 	platformv1.PlatformIAMService_ListTenants_FullMethodName:  quicwire.IAMSubTenantList,
 	platformv1.PlatformIAMService_UpdateTenant_FullMethodName: quicwire.IAMSubTenantUpdate,
 	platformv1.PlatformIAMService_DeleteTenant_FullMethodName: quicwire.IAMSubTenantDelete,
+	platformv1.PlatformIAMService_UpdateGroup_FullMethodName:  quicwire.IAMSubGroupUpdate,
+	platformv1.PlatformIAMService_UpdateRole_FullMethodName:   quicwire.IAMSubRoleUpdate,
 }
 
 // init merges the IAM tenant wire mapping into the shared adapter tables. The

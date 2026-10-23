@@ -177,14 +177,63 @@ func TestConfig_Save_CreatesDirectory(t *testing.T) {
 }
 
 func TestConfig_Save_EmptyPath(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
 	config := DefaultConfig()
+	if err := config.Save(""); err != nil {
+		t.Fatalf("Save(\"\") failed: %v", err)
+	}
 
-	// Save to default path - this might fail in test environment
-	// but should not panic
-	err := config.Save("")
+	if _, err := os.Stat(filepath.Join(home, ".platformctl", "config.yaml")); err != nil {
+		t.Errorf("an unloaded config must save to the default path: %v", err)
+	}
+}
 
-	// Don't assert success or failure, just that it doesn't panic
-	_ = err
+func TestConfig_Save_EmptyPathWritesLoadedFile(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	if err := DefaultConfig().Save(configPath); err != nil {
+		t.Fatalf("failed to create test config: %v", err)
+	}
+
+	config, err := LoadConfig(configPath)
+	if err != nil {
+		t.Fatalf("LoadConfig failed: %v", err)
+	}
+	config.AddContext(&Context{Name: "added", Type: ContextTypeEmbedded})
+	if err := config.Save(""); err != nil {
+		t.Fatalf("Save(\"\") failed: %v", err)
+	}
+
+	reloaded, err := LoadConfig(configPath)
+	if err != nil {
+		t.Fatalf("reload failed: %v", err)
+	}
+	if _, err := reloaded.GetContext("added"); err != nil {
+		t.Errorf("Save(\"\") must write back to the loaded file: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".platformctl", "config.yaml")); !os.IsNotExist(err) {
+		t.Errorf("Save(\"\") of a loaded config must not write the default path, stat err = %v", err)
+	}
+}
+
+func TestConfig_Save_EmptyPathWritesMissingLoadedFile(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	configPath := filepath.Join(t.TempDir(), "absent", "config.yaml")
+
+	config, err := LoadConfig(configPath)
+	if err != nil {
+		t.Fatalf("LoadConfig of a missing file failed: %v", err)
+	}
+	if err := config.Save(""); err != nil {
+		t.Fatalf("Save(\"\") failed: %v", err)
+	}
+
+	if _, err := os.Stat(configPath); err != nil {
+		t.Errorf("Save(\"\") must create the file LoadConfig was asked for: %v", err)
+	}
 }
 
 func TestConfig_GetCurrentContext_Success(t *testing.T) {

@@ -40,11 +40,6 @@ import (
 	sdkmcp "github.com/jeremyhahn/go-trusted-platform/sdk/go/transport/mcp"
 )
 
-// wiredIAMGRPCService is the gRPC IAM service on an in-memory IAM client.
-func wiredIAMGRPCService(iam *memIAM) *IAMGRPCService {
-	return NewIAMGRPCService(slog.Default(), iam, iam.PEP())
-}
-
 // wiredIAMToolRegistry is the MCP tool registry on an in-memory IAM client,
 // built the way createMCPServer builds it.
 func wiredIAMToolRegistry(iam *memIAM) *mcp.ToolRegistry {
@@ -81,6 +76,9 @@ func iamUsersScript(ctx context.Context, t *testing.T, c *platformiam.Client) []
 	require.NoError(t, err)
 	got, err := c.GetUser(ctx, "acme", alice.GetId())
 	require.NoError(t, err)
+	updated, err := c.UpdateUser(ctx, &platformv1.UpdateIAMUserRequest{TenantId: "acme", UserId: alice.GetId(), Name: "Alice Ops"})
+	require.NoError(t, err)
+	require.Equal(t, "Alice Ops", updated.GetName(), "the update reached the IAM client")
 	listReq := &platformv1.ListIAMUsersRequest{TenantId: "acme", Pagination: &platformv1.PaginationRequest{Page: 1, PageSize: 10}}
 	listed, total, err := c.ListUsers(ctx, listReq)
 	require.NoError(t, err)
@@ -88,7 +86,7 @@ func iamUsersScript(ctx context.Context, t *testing.T, c *platformiam.Client) []
 	remaining, remainingTotal, err := c.ListUsers(ctx, listReq)
 	require.NoError(t, err)
 
-	answers := []proto.Message{alice, bob, got, wrapperspb.Int64(total)}
+	answers := []proto.Message{alice, bob, got, updated, wrapperspb.Int64(total)}
 	for _, user := range listed {
 		answers = append(answers, user)
 	}
@@ -128,6 +126,9 @@ func iamRolesScript(ctx context.Context, t *testing.T, c *platformiam.Client) []
 	require.NoError(t, err)
 	got, err := c.GetRole(ctx, "acme", "admin")
 	require.NoError(t, err)
+	updated, err := c.UpdateRole(ctx, &platformv1.UpdateIAMRoleRequest{TenantId: "acme", RoleId: "admin", Description: "all of it, audited"})
+	require.NoError(t, err)
+	require.Equal(t, "all of it, audited", updated.GetDescription(), "the update reached the IAM client")
 	alice, err := c.CreateUser(ctx, &platformv1.CreateIAMUserRequest{TenantId: "acme", Email: "alice@acme.test"})
 	require.NoError(t, err)
 	require.NoError(t, c.AssignRole(ctx, "acme", alice.GetId(), "admin"))
@@ -144,7 +145,7 @@ func iamRolesScript(ctx context.Context, t *testing.T, c *platformiam.Client) []
 	_, remainingTotal, err := c.ListRoles(ctx, listReq)
 	require.NoError(t, err)
 
-	answers := []proto.Message{admin, got, assigned, revoked, wrapperspb.Int64(total), wrapperspb.Int64(remainingTotal)}
+	answers := []proto.Message{admin, got, updated, assigned, revoked, wrapperspb.Int64(total), wrapperspb.Int64(remainingTotal)}
 	for _, role := range listed {
 		answers = append(answers, role)
 	}
@@ -154,6 +155,9 @@ func iamRolesScript(ctx context.Context, t *testing.T, c *platformiam.Client) []
 func iamGroupsScript(ctx context.Context, t *testing.T, c *platformiam.Client) []proto.Message {
 	ops, err := c.CreateGroup(ctx, &platformv1.CreateIAMGroupRequest{TenantId: "acme", Id: "ops", Name: "Ops", Description: "on call"})
 	require.NoError(t, err)
+	renamed, err := c.UpdateGroup(ctx, &platformv1.UpdateIAMGroupRequest{TenantId: "acme", GroupId: "ops", Description: "on call, nights"})
+	require.NoError(t, err)
+	require.Equal(t, "on call, nights", renamed.GetDescription(), "the update reached the IAM client")
 	alice, err := c.CreateUser(ctx, &platformv1.CreateIAMUserRequest{TenantId: "acme", Email: "alice@acme.test"})
 	require.NoError(t, err)
 	require.NoError(t, c.AddGroupMember(ctx, "acme", "ops", alice.GetId()))
@@ -172,7 +176,7 @@ func iamGroupsScript(ctx context.Context, t *testing.T, c *platformiam.Client) [
 	_, remainingTotal, err := c.ListGroups(ctx, listReq)
 	require.NoError(t, err)
 
-	answers := []proto.Message{ops, member, withMember, removed, wrapperspb.Int64(total), wrapperspb.Int64(remainingTotal)}
+	answers := []proto.Message{ops, renamed, member, withMember, removed, wrapperspb.Int64(total), wrapperspb.Int64(remainingTotal)}
 	for _, group := range listed {
 		answers = append(answers, group)
 	}
@@ -279,6 +283,46 @@ func iamErrorCases() map[string]iamErrorCase {
 				return err
 			},
 			tool: "iam_delete_user", args: map[string]interface{}{"tenant_id": "acme", "user_id": "nobody"},
+			want: codes.NotFound,
+		},
+		"users/update not found": {
+			grpc: func(ctx context.Context, svc *IAMGRPCService) error {
+				_, err := svc.UpdateUser(ctx, &platformv1.UpdateIAMUserRequest{TenantId: "acme", UserId: "nobody", Name: "N"})
+				return err
+			},
+			tool: "iam_update_user", args: map[string]interface{}{"tenant_id": "acme", "user_id": "nobody", "name": "N"},
+			want: codes.NotFound,
+		},
+		"users/update no user id": {
+			grpc: func(ctx context.Context, svc *IAMGRPCService) error {
+				_, err := svc.UpdateUser(ctx, &platformv1.UpdateIAMUserRequest{TenantId: "acme", Name: "N"})
+				return err
+			},
+			tool: "iam_update_user", args: map[string]interface{}{"tenant_id": "acme", "name": "N"},
+			want: codes.InvalidArgument,
+		},
+		"roles/update not found": {
+			grpc: func(ctx context.Context, svc *IAMGRPCService) error {
+				_, err := svc.UpdateRole(ctx, &platformv1.UpdateIAMRoleRequest{TenantId: "acme", RoleId: "nobody", Name: "N"})
+				return err
+			},
+			tool: "iam_update_role", args: map[string]interface{}{"tenant_id": "acme", "role_id": "nobody", "name": "N"},
+			want: codes.NotFound,
+		},
+		"roles/update no role id": {
+			grpc: func(ctx context.Context, svc *IAMGRPCService) error {
+				_, err := svc.UpdateRole(ctx, &platformv1.UpdateIAMRoleRequest{TenantId: "acme", Name: "N"})
+				return err
+			},
+			tool: "iam_update_role", args: map[string]interface{}{"tenant_id": "acme", "name": "N"},
+			want: codes.InvalidArgument,
+		},
+		"groups/update not found": {
+			grpc: func(ctx context.Context, svc *IAMGRPCService) error {
+				_, err := svc.UpdateGroup(ctx, &platformv1.UpdateIAMGroupRequest{TenantId: "acme", GroupId: "nobody", Name: "N"})
+				return err
+			},
+			tool: "iam_update_group", args: map[string]interface{}{"tenant_id": "acme", "group_id": "nobody", "name": "N"},
 			want: codes.NotFound,
 		},
 		"users/no tenant": {
@@ -435,6 +479,44 @@ func TestIAMGRPCService_WrapError(t *testing.T) {
 		"SDK unavailable":    {sdkerrors.NewUnavailable("op", "down"), codes.Unavailable},
 		"SDK internal":       {sdkerrors.NewInternal("op", "boom"), codes.Internal},
 		"plain error":        {errLivenessUnreachable{}, codes.Internal},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			assert.Equal(t, tc.want, status.Code(svc.wrapError(tc.err)))
+		})
+	}
+}
+
+// upstreamTestCode and upstreamTestError have the shape of the QuicBaaS
+// server's structured error, which the embedded transport hands through
+// untranslated and which the platform may not import.
+type upstreamTestCode string
+
+func (c upstreamTestCode) String() string { return string(c) }
+
+type upstreamTestError struct {
+	Code upstreamTestCode
+	Op   string
+	Err  error
+}
+
+func (e *upstreamTestError) Error() string { return e.Op + ": " + e.Code.String() }
+func (e *upstreamTestError) Unwrap() error { return e.Err }
+
+// An invalid role permission refused by the in-process server is the
+// caller's fault: InvalidArgument, never Internal (#973 CreateRole).
+func TestIAMGRPCService_WrapError_UpstreamServerError(t *testing.T) {
+	svc := NewIAMGRPCService(slog.Default(), nil, nil)
+	invalid := &upstreamTestError{Code: "invalid_input", Op: "iam.role.qrdb.create"}
+	cases := map[string]struct {
+		err  error
+		want codes.Code
+	}{
+		"invalid input":         {&upstreamTestError{Code: "invalid_input", Op: "api.create role", Err: invalid}, codes.InvalidArgument},
+		"wrapped invalid input": {&upstreamTestError{Code: "storage", Op: "api", Err: invalid}, codes.InvalidArgument},
+		"not found":             {&upstreamTestError{Code: "not_found", Op: "api.get role"}, codes.NotFound},
+		"already exists":        {&upstreamTestError{Code: "already_exists", Op: "api.create role"}, codes.AlreadyExists},
+		"unclassified code":     {&upstreamTestError{Code: "split_brain", Op: "api"}, codes.Internal},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {

@@ -77,3 +77,21 @@ type ResourceDefinition struct {
 	Description string `json:"description"`
 	MimeType    string `json:"mimeType,omitempty"`
 }
+
+// ContentTypeText is the type of a text content block.
+const ContentTypeText = "text"
+
+// CallToolResult is the result of tools/call (MCP 2024-11-05, Tools,
+// "Calling Tools"): a tool's output travels in content blocks. The platform
+// sends one text block holding the output's JSON encoding, and reports a
+// failed call as a JSON-RPC error carrying its error class, never isError.
+type CallToolResult struct {
+	Content []ContentBlock `json:"content"`
+	IsError bool           `json:"isError,omitempty"`
+}
+
+// ContentBlock is one MCP content item. The platform sends only text blocks.
+type ContentBlock struct {
+	Type string `json:"type"`
+	Text string `json:"text"`
+}

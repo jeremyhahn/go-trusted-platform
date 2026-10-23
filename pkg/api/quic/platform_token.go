@@ -58,6 +58,21 @@ func AuthorizedContextFromContext(ctx context.Context) (*platformtoken.Authorize
 	return authCtx, ok
 }
 
+// tokenAuthorizedContext returns the AuthorizedContext only when a platform
+// token produced it. A peer authenticated by its client certificate alone
+// carries an AuthorizedContext too, under the same key, but no token; an
+// operation that needs a token's grant reads it through here.
+func tokenAuthorizedContext(ctx context.Context) *platformtoken.AuthorizedContext {
+	if token, ok := TokenFromContext(ctx); !ok || token == "" {
+		return nil
+	}
+	authCtx, ok := AuthorizedContextFromContext(ctx)
+	if !ok {
+		return nil
+	}
+	return authCtx
+}
+
 // scopeForOperation maps a QUIC resource/action permission pair to the platform
 // token scope convention: the qrdb-canonical colon "resource:action" (e.g.
 // "dns:write"). This is the QUIC projection of the operation catalog

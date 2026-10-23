@@ -500,13 +500,7 @@ func (a *QUICAdapter) CheckQuota(ctx context.Context, opts CheckQuotaOptions) (*
 		Amount:   opts.Amount,
 	})
 	if err != nil {
-		return &CheckQuotaResult{
-			TenantID: opts.TenantID,
-			Resource: opts.Resource,
-			Amount:   opts.Amount,
-			Allowed:  false,
-			Message:  err.Error(),
-		}, nil
+		return nil, err
 	}
 	var resp platformv1.CheckQuotaResponse
 	if err := tqDecode(raw, &resp); err != nil {

@@ -130,11 +130,11 @@ func TestNewCommand_SubcommandDetails(t *testing.T) {
 		},
 		{
 			name:          "dek",
-			expectedShort: "Data Encryption Key operations (not yet implemented)",
+			expectedShort: "Data Encryption Key operations",
 		},
 		{
 			name:          "secrets",
-			expectedShort: "Secrets management operations (not yet implemented)",
+			expectedShort: "Secrets management operations",
 		},
 		{
 			name:          "status",

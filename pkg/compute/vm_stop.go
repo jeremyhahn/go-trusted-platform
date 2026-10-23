@@ -17,11 +17,18 @@ import (
 	"context"
 	"errors"
 	"time"
+
+	"github.com/jeremyhahn/go-trusted-platform/pkg/qemu"
+	computesvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/compute"
 )
 
 // MaxStopTimeout bounds StopOptions.Timeout. The instance stays locked while
 // its guest is given time to power down, so the wait cannot be unbounded.
 const MaxStopTimeout = time.Hour
+
+// DefaultStopTimeout is how long a guest gets to power down when
+// StopOptions.Timeout is zero.
+const DefaultStopTimeout = qemu.DefaultGracefulShutdownTimeout
 
 // ErrInvalidStopOptions is returned when StopOptions carry a value no
 // orchestrator can honour.
@@ -42,6 +49,34 @@ type StopOptions struct {
 // IsDefault reports whether opts asks for nothing beyond a default stop.
 func (opts StopOptions) IsDefault() bool {
 	return opts == StopOptions{}
+}
+
+// GuestWait is the longest a stop with these options waits for the guest to
+// power down before it terminates it: nothing when forced, otherwise Timeout
+// or DefaultStopTimeout.
+func (opts StopOptions) GuestWait() time.Duration {
+	switch {
+	case opts.Force:
+		return 0
+	case opts.Timeout > 0:
+		return opts.Timeout
+	default:
+		return DefaultStopTimeout
+	}
+}
+
+// stopReplyMargin is the time a stop or reboot gets beyond the guest's
+// power-down window to answer: the process exit, a reboot's start and the
+// reply itself. The SDK owns it, so a client waits exactly as long as the
+// daemon holds the reply open (docs/compute/api.md §2).
+const stopReplyMargin = computesvc.StopReplyMargin
+
+// ReplyWindow is the longest a stop or reboot with these options takes to
+// answer: GuestWait plus the margin for the process exit, a reboot's start
+// and the reply. A transport whose write timeout is shorter moves the reply's
+// write deadline to this window, so a graceful stop is not cut off.
+func (opts StopOptions) ReplyWindow() time.Duration {
+	return opts.GuestWait() + stopReplyMargin
 }
 
 // Validate refuses a negative or over-long timeout, and a timeout on a

@@ -30,6 +30,12 @@ import (
 // mcpScopedCtx is the context of an MCP caller whose platform token grants
 // scopes.
 func mcpScopedCtx(scopes ...string) context.Context {
+	return mcp.ContextWithToken(mcpPeerCtx(scopes...), "platform-token")
+}
+
+// mcpPeerCtx is what the peer authorizer leaves for a client certificate
+// presented with no token: an AuthorizedContext and no token.
+func mcpPeerCtx(scopes ...string) context.Context {
 	return mcp.ContextWithAuthorizedContext(context.Background(), &platformtoken.AuthorizedContext{Subject: "u", Scopes: scopes})
 }
 
@@ -45,6 +51,7 @@ func TestMCPServiceProvider_CASignCSR_CarriesTheCallersToken(t *testing.T) {
 	}{
 		{"no platform token", context.Background(), codes.PermissionDenied},
 		{"ca:write", mcpScopedCtx("ca:write"), codes.PermissionDenied},
+		{"operator certificate, no token", mcpPeerCtx("*:*"), codes.PermissionDenied},
 		{"ca:sign-csr", mcpScopedCtx("ca:sign-csr"), codes.OK},
 	}
 	for _, tc := range cases {

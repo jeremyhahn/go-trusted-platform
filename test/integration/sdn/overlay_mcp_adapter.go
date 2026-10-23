@@ -24,11 +24,13 @@ import (
 	"net"
 	"net/http"
 
-	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
 	"net/netip"
 	"os"
 	"sync/atomic"
 	"time"
+
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/mcpwire"
+	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
 )
 
 // =============================================================================
@@ -212,18 +214,6 @@ type mcpOverlayCallToolParams struct {
 	Arguments map[string]interface{} `json:"arguments,omitempty"`
 }
 
-// mcpOverlayCallToolResult represents the result of tools/call.
-type mcpOverlayCallToolResult struct {
-	Content []mcpOverlayContent `json:"content"`
-	IsError bool                `json:"isError,omitempty"`
-}
-
-// mcpOverlayContent represents content in an MCP response.
-type mcpOverlayContent struct {
-	Type string `json:"type"`
-	Text string `json:"text,omitempty"`
-}
-
 // =============================================================================
 // Overlay MCP Adapter
 // =============================================================================
@@ -360,40 +350,16 @@ func (m *OverlayMCPAdapter) callTool(ctx context.Context, toolName string, args 
 		return err
 	}
 
-	if result == nil || len(rawResult) == 0 {
-		return nil
+	// The tool output is JSON in the CallToolResult's text block.
+	var err error
+	if result == nil {
+		_, err = mcpwire.ToolOutputJSON(rawResult)
+	} else {
+		err = mcpwire.DecodeToolOutput(rawResult, result)
 	}
-
-	// Try MCP content-wrapped format first: {"content":[{"type":"text","text":"..."}],"isError":false}
-	var toolResult mcpOverlayCallToolResult
-	if unmarshalErr := json.Unmarshal(rawResult, &toolResult); unmarshalErr == nil && len(toolResult.Content) > 0 {
-		if toolResult.IsError {
-			var errMsg string
-			for _, item := range toolResult.Content {
-				if item.Type == "text" {
-					errMsg = item.Text
-					break
-				}
-			}
-			return ErrMCPOverlayToolCallFailed{Tool: toolName, Code: mcpOverlayJSONRPCInternalError, Message: errMsg}
-		}
-
-		for _, item := range toolResult.Content {
-			if item.Type == "text" && item.Text != "" {
-				if parseErr := json.Unmarshal([]byte(item.Text), result); parseErr != nil {
-					return ErrMCPOverlayResponseParseFailed{Tool: toolName, Err: parseErr}
-				}
-				return nil
-			}
-		}
-		return nil
+	if err != nil {
+		return ErrMCPOverlayResponseParseFailed{Tool: toolName, Err: err}
 	}
-
-	// Server returned result directly as a raw map (not wrapped in content items).
-	if unmarshalErr := json.Unmarshal(rawResult, result); unmarshalErr != nil {
-		return ErrMCPOverlayResponseParseFailed{Tool: toolName, Err: unmarshalErr}
-	}
-
 	return nil
 }
 

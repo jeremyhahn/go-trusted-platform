@@ -19,9 +19,13 @@ import (
 
 	"github.com/spf13/viper"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/api/daemon"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/app"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	gwstate "github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/state"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/vpn"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
+	restgateway "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/gateway"
 )
 
 // gatewayControlPlane bundles the two halves of the CP-side gateway
@@ -52,6 +56,54 @@ func initGatewayControlPlane(logger *logging.Logger, a *app.App) *gatewayControl
 		Store:      store,
 		DesiredCfg: &viperDesiredConfigSource{v: viper.GetViper()},
 	}
+}
+
+// gatewayControlDaemon is the part of the daemon the gateway control plane
+// is wired into.
+type gatewayControlDaemon interface {
+	GatewayGRPCService() *daemon.GatewayService
+	VPNControlPlane() *vpn.Service
+	RESTServer() *daemon.RESTServer
+}
+
+// wireGatewayControlPlane connects the gateway control plane to the daemon.
+// The telemetry store backs the snapshot RPCs on every transport, so the
+// control plane answers `GetGatewaySnapshot` from the same reports
+// POST /gateway/telemetry writes (#594). VPN session status reads the vpn
+// section of the same reports, and the enrolment set and posture policies
+// reach the gateways as the vpn section of their desired configuration.
+//
+// When the daemon serves REST itself (no webservice listener), the
+// gatewayd-facing routes are mounted on it, so the gateways' reports still
+// have somewhere to land (docs/gateway/api.md). A nil control plane wires
+// nothing.
+func wireGatewayControlPlane(logger *logging.Logger, d gatewayControlDaemon, gw *gatewayControlPlane) {
+	if gw == nil || gw.Store == nil {
+		return
+	}
+	if svc := d.GatewayGRPCService(); svc != nil {
+		svc.SetGatewaySnapshotStore(gw.Store)
+	}
+	vpnControl := d.VPNControlPlane()
+	if vpnControl != nil {
+		vpnControl.SetGatewaySnapshotStore(gw.Store)
+		if gw.DesiredCfg != nil {
+			gw.DesiredCfg.SetVPNSource(vpnControl)
+		}
+	}
+	rest := d.RESTServer()
+	if rest == nil {
+		return
+	}
+	var cfgSource restgateway.DesiredConfigSource
+	if gw.DesiredCfg != nil {
+		cfgSource = gw.DesiredCfg
+	}
+	cp := restgateway.NewControlPlane(logger, gw.Store, cfgSource, response.NewResponseWriter(logger, nil))
+	if vpnControl != nil {
+		cp.SetVPNLeaseSink(vpnControl)
+	}
+	rest.SetGatewayControlPlane(cp)
 }
 
 // viperDesiredConfigSource resolves the control plane's intended

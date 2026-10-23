@@ -1,6 +1,7 @@
 # Trusted DHT Design Documentation
 
-> **Status: PLANNED** · Scope: design only, no implementation · Last verified: 2026-10-20
+> **Status: NORMATIVE** · Scope: the planned `dht` feature (docs/SPEC.md:53); design only, no code exists · Last verified: 2026-10-21
+> Conflicts with this document are defects. Fix them here first.
 
 Part of [go-trusted-platform](https://github.com/jeremyhahn/go-trusted-platform) - implemented in `pkg/dht/`.
 

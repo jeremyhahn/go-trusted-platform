@@ -56,12 +56,19 @@ const (
 	// come, once the controller has already accounted for the solicitation.
 	ovlNDNoAnswerWait = 2 * time.Second
 
-	// ovlNDHoldDownWait outlasts the controller's first fallback hold-down
-	// (30s) by a poll and a punt refresh, and ovlNDDoubledHoldDownWait the
-	// doubled one that follows a second fallback inside the quiet period
+	// ovlNDHoldDown is the controller's first fallback hold-down here. The
+	// 30-second default would spend 90 seconds of the package's budget
+	// waiting out it and the doubled one; the back-off itself is unit
+	// tested on a fake clock. It stays well above the no-answer check a
+	// fallen-back subtest makes before the hold-down ends.
+	ovlNDHoldDown = 10 * time.Second
+
+	// ovlNDHoldDownWait outlasts the first fallback hold-down by a poll and
+	// a punt refresh, and ovlNDDoubledHoldDownWait the doubled one that
+	// follows a second fallback inside the quiet period
 	// (docs/sdn/overlay/architecture.md, ND suppression).
-	ovlNDHoldDownWait        = 45 * time.Second
-	ovlNDDoubledHoldDownWait = 80 * time.Second
+	ovlNDHoldDownWait        = ovlNDHoldDown + 15*time.Second
+	ovlNDDoubledHoldDownWait = 2*ovlNDHoldDown + 20*time.Second
 
 	// ovlNDBurst solicitations far exceed the punt meter's 64 kb burst.
 	ovlNDBurst = 2000
@@ -290,9 +297,10 @@ func startOverlay(ctx context.Context, t *testing.T, bridge string, localIP neti
 			UnderlayMTU:   vxlan.MinimumUnderlayMTU,
 			VXLANPort:     vxlan.DefaultVXLANPort,
 		},
-		BridgeName: bridge,
-		AccessPort: accessPort,
-		Logger:     slog.Default(),
+		BridgeName:         bridge,
+		AccessPort:         accessPort,
+		NDFallbackHoldDown: ovlNDHoldDown,
+		Logger:             slog.Default(),
 	}
 	handler, err := modes.NewOverlayModeHandler(cfg, ovsClient, ofClient)
 	require.NoError(t, err)

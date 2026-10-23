@@ -105,6 +105,11 @@ index and the SDK leaves a zero value out of the request; an absent
 `pkg/webservice/v1/rest/vtpm/runtime.go` and call the same `vtpm.VTPMService`
 as gRPC and QUIC.
 
+The daemon REST server (`pkg/api/rest/vtpm_handlers.go`) answers the same
+routes with a flat body. Its start and stop replies are `bundle_id`, `action`,
+`success` and `message`; start adds `running` and `socket_path`, the socket a
+guest VM attaches to.
+
 Six operations (get state, verify quote, get EK, get AK, create AK, get random)
 are **QUIC-only** — no gRPC, no REST, no MCP.
 
@@ -145,6 +150,13 @@ answers `ErrServiceNotAvailable` (`Unavailable`), never success; gRPC leaves
 Both names take the options gRPC carries: `secure_boot_enabled` and `labels` on
 create, and `mode`, `labels`, `limit` and `offset` on list. Seal and unseal take
 `auth_value`. An absent `limit` lists every bundle, as gRPC does.
+
+The runtime tools answer with the gRPC reply's field names, and every answer
+names its bundle in `bundle_id`. Start adds `running` and `socket_path`; stop
+adds `stopped`; quote adds `quote`, `signature`, `pcr_values` and
+`hash_algorithm`; seal adds `sealed_data`; unseal adds `data`; extend adds
+`pcr_index` and `extended`; read adds `pcr_index` and `value`. Bytes are
+base64.
 
 The tools with no duplicate carry the scope of their gRPC method (#304), and
 fail with the same gRPC class as that method:
@@ -220,7 +232,8 @@ The REST runtime routes (§4) also return:
 
 - 404 for `ErrBundleNotFound`.
 - 409 for `ErrVTPMNotRunning` or `ErrVTPMAlreadyRunning`: the bundle is not in
-  the state the operation needs.
+  the state the operation needs. gRPC answers `FailedPrecondition` for both,
+  never `Internal`.
 - 400 for `ErrInvalidNonce`, `ErrInvalidPCRIndex`, or a `pcr_index` query value
   that is not an integer.
 

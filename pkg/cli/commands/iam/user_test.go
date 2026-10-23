@@ -507,6 +507,9 @@ func TestUserListCommand_AllFlags(t *testing.T) {
 		{"tenant", ""},
 		{"page", "1"},
 		{"page-size", "50"},
+		{"email", ""},
+		{"role", ""},
+		{"group", ""},
 	}
 
 	for _, ef := range expectedFlags {

@@ -471,14 +471,15 @@ func TestGetSignerError(t *testing.T) {
 	assert.Contains(t, err.Error(), "failed to get key")
 }
 
-// TestCloseWhenNotInitialized tests Close on uninitialized manager
+// TestCloseWhenNotInitialized tests Close on a manager that never got a backend
 func TestCloseWhenNotInitialized(t *testing.T) {
-	km := &XKMSManager{
-		initialized: false,
-	}
+	km := &XKMSManager{}
 
 	err := km.Close()
 	assert.NoError(t, err)
+
+	_, err = km.GetSigner(t.Context(), KeyTypePK)
+	assert.ErrorIs(t, err, ErrManagerClosed)
 }
 
 // TestCloseError tests error handling in Close
@@ -497,11 +498,16 @@ func TestCloseError(t *testing.T) {
 	// Close should work fine
 	err = km.Close()
 	assert.NoError(t, err)
-	assert.False(t, km.initialized)
+	assert.Nil(t, km.ks)
 
 	// Second close should also work (already closed)
 	err = km.Close()
 	assert.NoError(t, err)
+
+	// A closed manager refuses key operations instead of panicking
+	_, err = km.GetSigner(context.Background(), KeyTypePK)
+	assert.ErrorIs(t, err, ErrManagerClosed)
+	assert.ErrorIs(t, km.GeneratePlatformKey(context.Background()), ErrManagerClosed)
 }
 
 // TestInitializeServiceReinitialization tests reinitializing the service
@@ -514,17 +520,21 @@ func TestInitializeServiceReinitialization(t *testing.T) {
 		ExportKeys: true,
 	}
 
-	// First initialization
+	// First manager generates the keys
 	km1, err := NewXKMSManager(config, nil)
 	require.NoError(t, err)
-	assert.True(t, km1.initialized)
-	km1.Close()
+	require.NotNil(t, km1.ks)
+	require.NoError(t, km1.GenerateAll(context.Background()))
+	require.NoError(t, km1.Close())
 
-	// Second initialization (service was reset)
+	// A second manager on the same directory reads the keys back
 	km2, err := NewXKMSManager(config, nil)
 	require.NoError(t, err)
-	assert.True(t, km2.initialized)
-	km2.Close()
+	require.NotNil(t, km2.ks)
+	signer, err := km2.GetSigner(context.Background(), KeyTypeDB)
+	require.NoError(t, err)
+	assert.NotNil(t, signer.Public())
+	require.NoError(t, km2.Close())
 }
 
 // TestCreateXKMSBackendUnsupported tests unsupported backend types
@@ -542,12 +552,6 @@ func TestCreateXKMSBackendUnsupported(t *testing.T) {
 
 	for _, backend := range unsupportedBackends {
 		t.Run(string(backend), func(t *testing.T) {
-			// Reset XKMS service for each test
-			if xkmssdk.ServiceIsInitialized() {
-				xkmssdk.ServiceClose()
-				xkmssdk.ServiceReset()
-			}
-
 			config := &XKMSConfig{
 				KeysDir: tmpDir,
 				Backend: backend,
@@ -773,9 +777,8 @@ func TestCreateXKMSBackendErrors(t *testing.T) {
 	}
 
 	km := &XKMSManager{
-		config:      config,
-		logger:      nil,
-		backendName: "test",
+		config: config,
+		logger: nil,
 	}
 
 	_, err = km.createXKMSBackend()
@@ -798,16 +801,9 @@ func TestInitializeServiceError(t *testing.T) {
 		Backend: BackendFile,
 	}
 
-	// Reset XKMS service
-	if xkmssdk.ServiceIsInitialized() {
-		xkmssdk.ServiceClose()
-		xkmssdk.ServiceReset()
-	}
-
 	km := &XKMSManager{
-		config:      config,
-		logger:      logging.DefaultLogger(),
-		backendName: "test",
+		config: config,
+		logger: logging.DefaultLogger(),
 	}
 
 	err = km.initializeService()
@@ -871,7 +867,7 @@ func TestCloseWithError(t *testing.T) {
 	// Normal close
 	err = km.Close()
 	assert.NoError(t, err)
-	assert.False(t, km.initialized)
+	assert.Nil(t, km.ks)
 
 	// Try to close again (should return no error)
 	err = km.Close()
@@ -906,33 +902,42 @@ func TestGenerateKeyWithExistingKey(t *testing.T) {
 	require.NoError(t, err)
 }
 
-// TestInitializeServiceAlreadyInitialized tests the service reset path
-func TestInitializeServiceAlreadyInitialized(t *testing.T) {
-	tmpDir := t.TempDir()
+// TestXKMSManagerLeavesProcessServiceAlone guards the vtpm CreateBundle
+// failure: platformd's process-wide go-xkms service holds the embedded
+// go-quicbaas KMS keys the platform CA signs with, and a Secure Boot manager
+// that reset or closed it left the CA with "keystore: not initialized".
+func TestXKMSManagerLeavesProcessServiceAlone(t *testing.T) {
+	storage := xkmssdk.NewStorageMemory()
+	backend, err := xkmssdk.NewSoftwareBackend(&xkmssdk.SoftwareBackendConfig{KeyStorage: storage})
+	require.NoError(t, err)
+	processKS, err := xkmssdk.NewServiceBackend(&xkmssdk.ServiceBackendConfig{
+		Backend:     backend,
+		CertStorage: storage,
+	})
+	require.NoError(t, err)
 
-	config := &XKMSConfig{
-		KeysDir:    tmpDir,
-		Backend:    BackendFile,
-		ExportKeys: true,
+	if xkmssdk.ServiceIsInitialized() {
+		require.NoError(t, xkmssdk.ServiceClose())
+		xkmssdk.ServiceReset()
 	}
+	require.NoError(t, xkmssdk.ServiceInitialize(&xkmssdk.ServiceConfig{
+		Backends:       map[string]xkmssdk.ServiceBackend{"software": processKS},
+		DefaultBackend: "software",
+	}))
+	t.Cleanup(func() {
+		assert.NoError(t, xkmssdk.ServiceClose())
+		xkmssdk.ServiceReset()
+	})
 
-	// First manager initializes the service
-	km1, err := NewXKMSManager(config, nil)
+	km, err := NewXKMSManager(&XKMSConfig{KeysDir: t.TempDir(), Backend: BackendFile}, nil)
 	require.NoError(t, err)
+	require.NoError(t, km.GenerateAll(context.Background()))
+	require.NoError(t, km.Close())
 
-	// Don't close km1 yet - service is still initialized
-	assert.True(t, xkmssdk.ServiceIsInitialized())
-
-	// Now close it
-	err = km1.Close()
+	require.True(t, xkmssdk.ServiceIsInitialized())
+	got, err := xkmssdk.ServiceGetBackend("software")
 	require.NoError(t, err)
-	assert.False(t, xkmssdk.ServiceIsInitialized())
-
-	// Create another manager - should reset and reinitialize
-	km2, err := NewXKMSManager(config, nil)
-	require.NoError(t, err)
-	assert.True(t, km2.initialized)
-	km2.Close()
+	assert.Same(t, processKS, got)
 }
 
 // TestGenerateCertificateWithAllFields tests certificate generation with all optional fields
@@ -1258,9 +1263,8 @@ func TestCreateBackendDefaultCase(t *testing.T) {
 	}
 
 	km := &XKMSManager{
-		config:      config,
-		logger:      logging.DefaultLogger(),
-		backendName: "test",
+		config: config,
+		logger: logging.DefaultLogger(),
 	}
 
 	_, err := km.createXKMSBackend()
@@ -1431,9 +1435,8 @@ func TestCreateXKMSBackendCertStorageError(t *testing.T) {
 	}
 
 	km := &XKMSManager{
-		config:      config,
-		logger:      logging.DefaultLogger(),
-		backendName: "test",
+		config: config,
+		logger: logging.DefaultLogger(),
 	}
 
 	_, err = km.createXKMSBackend()
@@ -1696,12 +1699,6 @@ func TestGenerateAllMkdirError(t *testing.T) {
 		KeysDir:    keysDir,
 		Backend:    BackendFile,
 		ExportKeys: true,
-	}
-
-	// Reset XKMS first
-	if xkmssdk.ServiceIsInitialized() {
-		xkmssdk.ServiceClose()
-		xkmssdk.ServiceReset()
 	}
 
 	// This will fail during NewXKMSManager because the path is invalid

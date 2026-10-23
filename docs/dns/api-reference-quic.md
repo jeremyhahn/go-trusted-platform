@@ -23,10 +23,10 @@ encoded payload; each response is one status byte and one encoded payload.
 | `0x21` | `OpDNSDeleteRecord` | `DeleteRecordRequest` | `DeleteRecordResponse` |
 | `0x22` | `OpDNSUpdateRecord` | `zone`, `name`, `record_type`, `value`, `ttl`, `priority` | `success`, `zone`, `name`, `timestamp` |
 | `0x23` | `OpDNSGetRecord` | `zone`, `name`, `record_type` | `record`, `zone`, `timestamp` |
-| `0x24` | `OpDNSListRecords` | `ListRecordsRequest` | `Records` |
+| `0x24` | `OpDNSListRecords` | `ListRecordsRequest` (`ZoneName`, `Type`, `Pagination`) | `Records`, `Pagination` |
 | `0x25` | `OpDNSAddZone` | `CreateZoneRequest` | `CreateZoneResponse` |
 | `0x26` | `OpDNSDeleteZone` | `DeleteZoneRequest` | `DeleteZoneResponse` |
-| `0x27` | `OpDNSGetZone` | `zone` | `zone` (`id`, `name`, `ttl`, `description`, `internal`, `record_count`), `timestamp` |
+| `0x27` | `OpDNSGetZone` | `zone` | `zone` (`id`, `name`, `ttl`, `description`, `internal`, `record_count`, `soa` (`name`, `mname`, `rname`, `serial`, `refresh`, `retry`, `expire`, `minimum_ttl`, `ttl`)), `timestamp` |
 | `0x28` | `OpDNSListZones` | `ListZonesRequest`, or empty | `ListZonesResponse` |
 | `0x29` | `OpDNSResolve` | `ResolveRequest` | `Records`, `Authoritative` |
 | `0x2A` | `OpDNSGetConfig` | empty | `config` (`internal_domain`, `public_domain`, `dnssec_enabled`, `allow_registration`), `timestamp` |

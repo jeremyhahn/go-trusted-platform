@@ -17,10 +17,12 @@ import (
 	"context"
 	"log/slog"
 	"net/http"
+	"time"
 
 	"github.com/gorilla/mux"
 	"google.golang.org/protobuf/proto"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/compute"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
 
@@ -103,8 +105,8 @@ func (h *ComputeHandlers) routes() []computeRoute {
 		{http.MethodGet, "/vms/{id}", scopeVMRead, computeRPC(h, platformv1.ComputeServiceServer.GetVM)},
 		{http.MethodDelete, "/vms/{id}", scopeVMDelete, computeRPC(h, platformv1.ComputeServiceServer.DeleteVM)},
 		{http.MethodPost, "/vms/{id}/start", scopeVMWrite, computeRPC(h, platformv1.ComputeServiceServer.StartVM)},
-		{http.MethodPost, "/vms/{id}/stop", scopeVMWrite, computeRPC(h, platformv1.ComputeServiceServer.StopVM)},
-		{http.MethodPost, "/vms/{id}/reboot", scopeVMWrite, computeRPC(h, platformv1.ComputeServiceServer.RebootVM)},
+		{http.MethodPost, "/vms/{id}/stop", scopeVMWrite, vmPowerRPC(h, stopVMOptions, platformv1.ComputeServiceServer.StopVM)},
+		{http.MethodPost, "/vms/{id}/reboot", scopeVMWrite, vmPowerRPC(h, rebootVMOptions, platformv1.ComputeServiceServer.RebootVM)},
 		{http.MethodPost, "/vms/{id}/suspend", scopeVMWrite, computeRPC(h, platformv1.ComputeServiceServer.SuspendVM)},
 		{http.MethodPost, "/vms/{id}/resume", scopeVMWrite, computeRPC(h, platformv1.ComputeServiceServer.ResumeVM)},
 		{http.MethodGet, "/vms/{id}/metrics", scopeVMRead, computeRPC(h, platformv1.ComputeServiceServer.GetVMMetrics)},
@@ -149,6 +151,37 @@ func computeRPC[Req any, PReq interface {
 	proto.Message
 }, Resp proto.Message](h *ComputeHandlers, rpc func(platformv1.ComputeServiceServer, context.Context, PReq) (Resp, error)) http.HandlerFunc {
 	return protoRPC(h.protoResponder, h.computeService, rpc)
+}
+
+// vmPowerRPC serves StopVM or RebootVM as computeRPC does, and first moves the
+// reply's write deadline to the stop's reply window (docs/compute/api.md). A
+// graceful stop waits up to the guest's power-down window, which is as long
+// as the server's default write timeout, so without this the server closes
+// the connection before the VM has stopped and the client sees EOF.
+func vmPowerRPC[Req any, PReq interface {
+	*Req
+	proto.Message
+}, Resp proto.Message](h *ComputeHandlers, options func(PReq) compute.StopOptions, rpc func(platformv1.ComputeServiceServer, context.Context, PReq) (Resp, error)) http.HandlerFunc {
+	extend := func(w http.ResponseWriter, req PReq) {
+		deadline := time.Now().Add(options(req).ReplyWindow())
+		if err := http.NewResponseController(w).SetWriteDeadline(deadline); err != nil {
+			h.logger.Warn("compute: cannot extend the reply deadline", "error", err)
+		}
+	}
+	return protoRPCPrepared(h.protoResponder, h.computeService, extend, rpc)
+}
+
+// stopVMOptions is the stop a StopVMRequest asks for.
+func stopVMOptions(req *platformv1.StopVMRequest) compute.StopOptions {
+	return compute.StopOptions{
+		Force:   req.GetForce(),
+		Timeout: time.Duration(req.GetTimeoutSeconds()) * time.Second,
+	}
+}
+
+// rebootVMOptions is the stop half of the reboot a RebootVMRequest asks for.
+func rebootVMOptions(req *platformv1.RebootVMRequest) compute.StopOptions {
+	return compute.StopOptions{Force: req.GetForce()}
 }
 
 // computeService returns the compute service, or ErrComputeServiceNotAvailable

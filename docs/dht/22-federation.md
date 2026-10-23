@@ -1,6 +1,7 @@
 # Federation Protocol for P2P Mode
 
-> **Status: PLANNED** · Scope: design only, no implementation · Last verified: 2026-10-20
+> **Status: NORMATIVE** · Scope: the planned `dht` feature (docs/SPEC.md:53); design only, no code exists · Last verified: 2026-10-21
+> Conflicts with this document are defects. Fix them here first.
 
 ## 1. Overview
 
@@ -1045,8 +1046,8 @@ platform:
   # DHT network configuration
   dht:
     bootstrap_peers:
-      - "/ip4/192.168.1.100/tcp/9444/p2p/QmBootstrap1"
-      - "/ip4/192.168.1.101/tcp/9444/p2p/QmBootstrap2"
+      - "/ip4/192.0.2.10/tcp/9444/p2p/QmBootstrap1"
+      - "/ip4/192.0.2.11/tcp/9444/p2p/QmBootstrap2"
       - "/dns4/bootstrap.trusted-dht.io/tcp/9444/p2p/QmBootstrap3"
     listen_addresses:
       - "/ip4/0.0.0.0/tcp/9444"

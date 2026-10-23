@@ -379,6 +379,21 @@ func (e ErrVTPMStopFailed) Unwrap() error {
 }
 
 // ErrTPMQuoteFailed indicates a TPM quote operation failed.
+// ErrVTPMAttestationKeyMissing indicates a provisioned vTPM holds no usable
+// IAK at its persistent handle, so it cannot sign a quote.
+type ErrVTPMAttestationKeyMissing struct {
+	SocketPath string
+	Cause      error
+}
+
+func (e ErrVTPMAttestationKeyMissing) Error() string {
+	return fmt.Sprintf("vtpm: the provisioned vTPM at %s has no attestation key: %v", e.SocketPath, e.Cause)
+}
+
+func (e ErrVTPMAttestationKeyMissing) Unwrap() error {
+	return e.Cause
+}
+
 type ErrTPMQuoteFailed struct {
 	BundleID string
 	Cause    error

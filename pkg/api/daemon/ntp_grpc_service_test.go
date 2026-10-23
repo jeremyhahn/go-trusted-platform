@@ -195,6 +195,10 @@ func TestNTPGRPCServiceMapsDomainErrorsToStatusCodes(t *testing.T) {
 			err:  ntp.ErrNoReachableSource{Total: 2},
 			want: codes.Aborted,
 		},
+		"step chronyd refuses is a conflict": {
+			err:  ntp.ErrStepRefused{Output: "500 Failure"},
+			want: codes.Aborted,
+		},
 		"control socket down is unavailable": {
 			err:  ntp.ErrControlUnavailable{Command: "tracking", Cause: errors.New("no socket")},
 			want: codes.Unavailable,

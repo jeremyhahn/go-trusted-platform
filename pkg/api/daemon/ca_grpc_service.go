@@ -19,6 +19,7 @@ import (
 	"crypto/x509"
 	"encoding/hex"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -388,47 +389,12 @@ func (s *CAGRPCService) RenewCertificate(ctx context.Context, req *platformv1.Re
 		return nil, status.Error(codes.NotFound, "certificate not found: "+serial)
 	}
 
-	// Build a new certificate request based on the existing certificate
-	caReq := &quicbaasca.CACertificateRequest{
-		Subject: quicbaasca.CASubject{
-			CommonName:         existingCert.Subject.CommonName,
-			Organization:       firstOrEmpty(existingCert.Subject.Organization),
-			OrganizationalUnit: firstOrEmpty(existingCert.Subject.OrganizationalUnit),
-			Country:            firstOrEmpty(existingCert.Subject.Country),
-			Province:           firstOrEmpty(existingCert.Subject.Province),
-			Locality:           firstOrEmpty(existingCert.Subject.Locality),
-			Address:            firstOrEmpty(existingCert.Subject.StreetAddress),
-			PostalCode:         firstOrEmpty(existingCert.Subject.PostalCode),
-		},
-		Valid:       int(validDays),
-		IsCA:        existingCert.IsCA,
-		MaxPathLen:  existingCert.MaxPathLen,
-		KeyUsage:    existingCert.KeyUsage,
-		ExtKeyUsage: existingCert.ExtKeyUsage,
+	renewOpts := issuance.RenewOptions{
+		ValidDays:    int(validDays),
+		PreserveSANs: req.GetPreserveSans(),
 	}
-
-	// Handle SANs based on request flags
-	if req.GetPreserveSans() {
-		// Preserve SANs from existing certificate
-		if len(existingCert.DNSNames) > 0 || len(existingCert.IPAddresses) > 0 ||
-			len(existingCert.EmailAddresses) > 0 || len(existingCert.URIs) > 0 {
-			caReq.SANS = &quicbaasca.CASubjectAlternativeNames{
-				DNS:   existingCert.DNSNames,
-				Email: existingCert.EmailAddresses,
-			}
-			for _, ip := range existingCert.IPAddresses {
-				caReq.SANS.IPs = append(caReq.SANS.IPs, ip.String())
-			}
-			for _, uri := range existingCert.URIs {
-				caReq.SANS.URIs = append(caReq.SANS.URIs, uri.String())
-			}
-		}
-	}
-
-	// Apply new SANs if provided
-	newSans := req.GetNewSans()
-	if newSans != nil {
-		caReq.SANS = &quicbaasca.CASubjectAlternativeNames{
+	if newSans := req.GetNewSans(); newSans != nil {
+		renewOpts.NewSANs = &quicbaasca.CASubjectAlternativeNames{
 			DNS:   newSans.GetDnsNames(),
 			IPs:   newSans.GetIpAddresses(),
 			Email: newSans.GetEmailAddresses(),
@@ -436,33 +402,16 @@ func (s *CAGRPCService) RenewCertificate(ctx context.Context, req *platformv1.Re
 		}
 	}
 
-	// Set key attributes
-	caReq.KeyAttributes = &xkmssdk.KeyAttributes{
-		CN:           existingCert.Subject.CommonName,
-		KeyAlgorithm: existingCert.PublicKeyAlgorithm,
-		StoreType:    xkmssdk.StoreSoftware,
-		KeyType:      xkmssdk.KeyTypeTLS,
-	}
-
-	// Supersede the existing certificate before issuing the renewal.
-	// DeleteKeys must be true: it is what removes the old cert-store entry
-	// (and the leaf's namespaced key) — without it IssueCertificate still
-	// fails with ErrCertificateAlreadyExists. Leaf keys are CN-namespaced,
-	// so this can never touch the CA signing key.
-	revokeErr := s.ca.RevokeCert(ctx, existingCert, quicbaasca.RevokeOptions{DeleteKeys: true})
-	if revokeErr != nil {
-		s.logger.Error(revokeErr, "failed to revoke old certificate during renewal")
-		return nil, status.Error(codes.Internal, "failed to renew certificate: "+revokeErr.Error())
-	}
-
-	// Issue the renewed certificate
-	issuedRenew, err := s.ca.IssueCertificate(ctx, caReq)
+	newCert, err := issuance.Renew(ctx, s.ca, existingCert, renewOpts)
 	if err != nil {
 		s.logger.Error(err, "failed to renew certificate")
+		var storesErr *issuance.RenewStoresUnavailableError
+		if errors.As(err, &storesErr) {
+			return nil, status.Error(codes.FailedPrecondition, "failed to renew certificate: "+err.Error())
+		}
 		return nil, status.Error(codes.Internal, "failed to renew certificate: "+err.Error())
 	}
 
-	newCert := issuedRenew.Certificate
 	return &platformv1.RenewCertificateResponse{
 		Status: &platformv1.Status{
 			Success: true,

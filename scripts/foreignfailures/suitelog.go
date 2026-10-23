@@ -11,11 +11,13 @@ import (
 // and summary lines are printed by build/docker/devcontainer/
 // run-integration-tests.sh; the rest by go test -v.
 var (
-	// sectionStartRe opens one target's section (run_test). The package is
-	// the target's pattern, often ./test/integration/<dir>/...
-	sectionStartRe = regexp.MustCompile(`^--- Testing (\S+) \((\S+)\) ---$`)
-	// sectionEndRe closes it with the target's go test outcome (run_test).
-	sectionEndRe = regexp.MustCompile(`^--- (PASS|FAIL): (\S+) ---$`)
+	// sectionStartRe opens one target's section (run_test). The packages are
+	// the target's patterns, one or more separated by a space, often
+	// ./test/integration/<dir>/... (the sdn target prints two).
+	sectionStartRe = regexp.MustCompile(`^--- Testing (\S+(?: \S+)*) \((\S+)\) ---$`)
+	// sectionEndRe closes it with the target's go test outcome (run_test),
+	// repeating the same patterns.
+	sectionEndRe = regexp.MustCompile(`^--- (PASS|FAIL): (\S+(?: \S+)*) ---$`)
 	// testFailRe is one failed test or subtest, at any depth.
 	testFailRe = regexp.MustCompile(`^\s*--- FAIL: (\S+) \(\d+(\.\d+)?s\)$`)
 	// packageFailRe is go test's result line for a package whose test binary
@@ -56,8 +58,10 @@ type packageResult struct {
 // section is one target's output, from the runner's "--- Testing" line to its
 // "--- PASS/FAIL" line. One target may cover several Go packages.
 type section struct {
-	Target  string
-	Pattern string // the target's package pattern, without the leading "./"
+	Target string
+	// Pattern is the target's package patterns as packagePatterns
+	// normalizes them: each without its leading "./", joined by one space.
+	Pattern string
 	Ended   bool
 	// Failed are the packages go test reported FAIL, in output order.
 	Failed []*packageResult
@@ -101,12 +105,12 @@ func parseSuiteLog(name, module string, r io.Reader) (*suiteLog, error) {
 			if open != nil {
 				open.close("the section ended without the runner's PASS/FAIL line")
 			}
-			open = &section{Target: m[2], Pattern: strings.TrimPrefix(m[1], "./"), module: module}
+			open = &section{Target: m[2], Pattern: packagePatterns(m[1]), module: module}
 			log.sections[open.Target] = open
 			continue
 		}
 		if open != nil {
-			if m := sectionEndRe.FindStringSubmatch(line); len(m) == 3 && strings.TrimPrefix(m[2], "./") == open.Pattern {
+			if m := sectionEndRe.FindStringSubmatch(line); len(m) == 3 && packagePatterns(m[2]) == open.Pattern {
 				open.Ended = true
 				open.close("")
 				open = nil
@@ -144,6 +148,18 @@ func parseSuiteLog(name, module string, r io.Reader) (*suiteLog, error) {
 		open.close("the log ended inside the section")
 	}
 	return log, nil
+}
+
+// packagePatterns normalizes the package patterns run_test prints on a
+// section's start and end lines: each space-separated pattern loses its
+// leading "./" and they are joined by one space, so the two lines compare
+// equal. An empty or blank argument gives "".
+func packagePatterns(raw string) string {
+	fields := strings.Fields(raw)
+	for i, field := range fields {
+		fields[i] = strings.TrimPrefix(field, "./")
+	}
+	return strings.Join(fields, " ")
 }
 
 // read records one line of a target's go test output.

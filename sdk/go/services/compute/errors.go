@@ -335,6 +335,18 @@ func (e *ErrCreateContainerFailed) Unwrap() error {
 	return e.Cause
 }
 
+// ErrContainerCreateIncomplete is returned when the daemon created a container
+// but reported the creation as failed, as when attest-on-create could not
+// attest it. The container exists; ID names it.
+type ErrContainerCreateIncomplete struct {
+	ID      string
+	Message string
+}
+
+func (e *ErrContainerCreateIncomplete) Error() string {
+	return fmt.Sprintf("container %s was created but the create failed: %s", e.ID, e.Message)
+}
+
 // ErrStartContainerFailed is returned when starting a container fails.
 type ErrStartContainerFailed struct {
 	ID    string

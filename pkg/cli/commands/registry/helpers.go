@@ -14,6 +14,7 @@
 package registry
 
 import (
+	"encoding/json"
 	"fmt"
 	"regexp"
 	"time"
@@ -27,7 +28,21 @@ import (
 // - With registry: registry.example.com/myrepo/myimage:v1
 // - With port: localhost:5000/myimage:v1
 // - With digest: myrepo/myimage@sha256:abc123...
-var imageRefRegex = regexp.MustCompile(`^(?:(?:[a-z0-9]+(?:[._-][a-z0-9]+)*(?::[0-9]+)?)/)?[a-z0-9]+(?:[._-][a-z0-9]+)*(?:/[a-z0-9]+(?:[._-][a-z0-9]+)*)*(?::[a-zA-Z0-9_][a-zA-Z0-9._-]*)?(?:@sha256:[a-f0-9]{64})?$`)
+//
+// Repository path components and tags follow the OCI distribution-spec
+// grammar ("Pulling manifests"): a component is
+// [a-z0-9]+((\.|_|__|-+)[a-z0-9]+)* and a tag is
+// [a-zA-Z0-9_][a-zA-Z0-9._-]{0,127}.
+var imageRefRegex = regexp.MustCompile(`^(?:(?:[a-z0-9]+(?:[._-][a-z0-9]+)*(?::[0-9]+)?)/)?` +
+	ociPathComponent + `(?:/` + ociPathComponent + `)*` +
+	`(?::` + ociTag + `)?(?:@sha256:[a-f0-9]{64})?$`)
+
+const (
+	// ociPathComponent is one OCI distribution-spec repository path component.
+	ociPathComponent = `[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*`
+	// ociTag is an OCI distribution-spec tag (at most 128 characters).
+	ociTag = `[a-zA-Z0-9_][a-zA-Z0-9._-]{0,127}`
+)
 
 // validateImageRef validates an image reference format
 func validateImageRef(ref string) error {
@@ -54,6 +69,26 @@ func formatTimestamp(ts int64) string {
 		return "N/A"
 	}
 	return time.Unix(ts, 0).UTC().Format(time.RFC3339)
+}
+
+// unixSeconds is a Unix timestamp in seconds that renders as an RFC 3339 UTC
+// string in --output json and yaml, the form every platformctl timestamp
+// takes; the table renderer formats it with formatTimestamp.
+type unixSeconds int64
+
+// rfc3339 returns the timestamp as an RFC 3339 UTC string.
+func (s unixSeconds) rfc3339() string {
+	return time.Unix(int64(s), 0).UTC().Format(time.RFC3339)
+}
+
+// MarshalJSON renders the timestamp as an RFC 3339 JSON string.
+func (s unixSeconds) MarshalJSON() ([]byte, error) {
+	return json.Marshal(s.rfc3339())
+}
+
+// MarshalYAML renders the timestamp as an RFC 3339 YAML string.
+func (s unixSeconds) MarshalYAML() (interface{}, error) {
+	return s.rfc3339(), nil
 }
 
 // formatTimePtr formats a time pointer for display

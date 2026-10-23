@@ -349,19 +349,18 @@ func (c *CLIAdapter) ConfigGet(ctx context.Context, section string) (*ConfigGetR
 		return nil, ErrCallFailed{Protocol: "CLI", Method: "config get", Err: err}
 	}
 
-	var resp struct {
-		Sections []struct {
-			Section string            `json:"section"`
-			Values  map[string]string `json:"values"`
-		} `json:"sections"`
+	// config get -o json prints a bare array of sections (docs/daemon/cli.md §4.5).
+	var sections []struct {
+		Section string            `json:"section"`
+		Values  map[string]string `json:"values"`
 	}
 
-	if err := json.Unmarshal(output, &resp); err != nil {
+	if err := json.Unmarshal(output, &sections); err != nil {
 		return nil, ErrCallFailed{Protocol: "CLI", Method: "config get", Err: err}
 	}
 
 	result := &ConfigGetResult{}
-	for _, sec := range resp.Sections {
+	for _, sec := range sections {
 		result.Sections = append(result.Sections, ConfigSection{
 			Section: sec.Section,
 			Values:  sec.Values,
@@ -425,7 +424,8 @@ func (c *CLIAdapter) ContextList(ctx context.Context) (*ContextListResult, error
 		return nil, ErrCallFailed{Protocol: "CLI", Method: "context list", Err: err}
 	}
 
-	// Parse table output - context list outputs as table
+	// context list prints a table, columns CURRENT NAME TYPE PROTOCOL TARGET
+	// (docs/daemon/cli.md §4.6).
 	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
 	result := &ContextListResult{}
 
@@ -451,8 +451,8 @@ func (c *CLIAdapter) ContextList(ctx context.Context) (*ContextListResult, error
 			if len(fields) > offset+1 {
 				info.Type = fields[offset+1]
 			}
-			if len(fields) > offset+2 {
-				info.Target = fields[offset+2]
+			if len(fields) > offset+3 {
+				info.Target = fields[offset+3]
 			}
 
 			result.Contexts = append(result.Contexts, info)
@@ -579,23 +579,22 @@ func (c *CLIAdapter) ServiceList(ctx context.Context) (*ServiceListResult, error
 		return nil, ErrCallFailed{Protocol: "CLI", Method: "service list", Err: err}
 	}
 
-	var resp struct {
-		Services []struct {
-			Name          string `json:"name"`
-			Type          string `json:"type"`
-			Status        string `json:"status"`
-			Health        string `json:"health"`
-			UptimeSeconds int64  `json:"uptime_seconds"`
-			Version       string `json:"version"`
-		} `json:"services"`
+	// service list -o json prints a bare array of services (docs/daemon/cli.md §4.4).
+	var services []struct {
+		Name          string `json:"name"`
+		Type          string `json:"type"`
+		Status        string `json:"status"`
+		Health        string `json:"health"`
+		UptimeSeconds int64  `json:"uptime_seconds"`
+		Version       string `json:"version"`
 	}
 
-	if err := json.Unmarshal(output, &resp); err != nil {
+	if err := json.Unmarshal(output, &services); err != nil {
 		return nil, ErrCallFailed{Protocol: "CLI", Method: "service list", Err: err}
 	}
 
 	result := &ServiceListResult{}
-	for _, svc := range resp.Services {
+	for _, svc := range services {
 		result.Services = append(result.Services, ServiceInfo{
 			Name:          svc.Name,
 			Type:          svc.Type,
@@ -615,31 +614,34 @@ func (c *CLIAdapter) ServiceStatus(ctx context.Context, serviceType string) (*Se
 	if err != nil {
 		return nil, ErrCallFailed{Protocol: "CLI", Method: "service status", Err: err}
 	}
+	return parseServiceStatusJSON(output)
+}
 
-	var resp struct {
-		Service *struct {
-			Name          string `json:"name"`
-			Type          string `json:"type"`
-			Status        string `json:"status"`
-			Health        string `json:"health"`
-			UptimeSeconds int64  `json:"uptime_seconds"`
-			Version       string `json:"version"`
-		} `json:"service"`
+// parseServiceStatusJSON decodes `service status -o json`, which prints the
+// service as a bare object with no wrapping key (docs/daemon/cli.md §4.4).
+func parseServiceStatusJSON(output []byte) (*ServiceStatusResult, error) {
+	var svc *struct {
+		Name          string `json:"name"`
+		Type          string `json:"type"`
+		Status        string `json:"status"`
+		Health        string `json:"health"`
+		UptimeSeconds int64  `json:"uptime_seconds"`
+		Version       string `json:"version"`
 	}
 
-	if err := json.Unmarshal(output, &resp); err != nil {
+	if err := json.Unmarshal(output, &svc); err != nil {
 		return nil, ErrCallFailed{Protocol: "CLI", Method: "service status", Err: err}
 	}
 
 	result := &ServiceStatusResult{}
-	if resp.Service != nil {
+	if svc != nil {
 		result.Service = &ServiceInfo{
-			Name:          resp.Service.Name,
-			Type:          resp.Service.Type,
-			Status:        resp.Service.Status,
-			Health:        resp.Service.Health,
-			UptimeSeconds: resp.Service.UptimeSeconds,
-			Version:       resp.Service.Version,
+			Name:          svc.Name,
+			Type:          svc.Type,
+			Status:        svc.Status,
+			Health:        svc.Health,
+			UptimeSeconds: svc.UptimeSeconds,
+			Version:       svc.Version,
 		}
 	}
 
