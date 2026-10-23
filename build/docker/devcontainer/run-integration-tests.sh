@@ -135,14 +135,23 @@ declare -A TARGET_ENV=(
 # diskimage suite boots an aarch64 guest under TCG emulation, where a first
 # boot through firstboot provisioning takes tens of minutes. The root package
 # and testenv-enrollment carry the enrollment test's own 30-minute context;
-# e2e carries a 45-minute one. sdn gets 5 minutes: every ovs-vsctl and
-# ovs-ofctl call it makes has a 30-second deadline (test/integration/helpers/
-# boundedexec), so a wedged OVS fails the call instead of eating the default.
+# e2e carries a 45-minute one. sdn gets 15 minutes. Its tests run one at a
+# time (-parallel 1), in file order, and passing they take more than 5: on
+# #983 (job 267894) the files up to nat_dual_uplink_test.go used all 300 s
+# with no test hung, and on main (run 62224) TestSDNMultiProtocol alone ran
+# over 2m24s, about 27 s per transport, after 2m36s of earlier files. The
+# files from network_provisioning_test.go on (openflow, overlay
+# multi-protocol, overlay ND, perf, policy, state transition, tap, the
+# tunnel netns suites, zone) were never reached; their estimate, from their
+# waits and transport count, is another 5 to 6 minutes, so about 11 in all.
+# A hang still fails fast: every ovs-vsctl and ovs-ofctl call has a
+# 30-second deadline (test/integration/helpers/boundedexec) and every
+# transport adapter a client timeout and a context deadline.
 # iso gets 35 minutes: the 20-minute install budget (vmInstallTimeout) plus the
 # ISO build and customize steps; a guest stuck at its GRUB menu fails in 2.
 # sdn-stress gets the 30 minutes `make stress-sdn` gives the same package.
 declare -A TARGET_TIMEOUTS=(
-    [sdn]="5m"
+    [sdn]="15m"
     [sdn-stress]="30m"
     [iso]="35m"
     [diskimage]="90m"
