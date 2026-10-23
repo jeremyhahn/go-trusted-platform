@@ -716,6 +716,67 @@ The file is tab-separated, with the columns `kind`, `package`, `name`,
 **Removing an entry:** a row is removed in the PR that adopts its
 `closing_release`.
 
+#### The FIPS baseline
+
+The FIPS job (`fips` in `ci.yml` and `nightly.yml`, both one `make test-fips`
+call, outside `ci-gate`'s needs) has its own baseline, the sibling file
+`.github/foreign-failures-fips.tsv`. It is a separate file rather than a
+`kind` in the Integration file for three reasons:
+
+- The two jobs fail differently. The Integration suites fail one leaf test
+  at a time. Under `GODEBUG=fips140=only`, the Go runtime enforces by panic,
+  and a panic kills the whole test binary.
+- A FIPS row needs two columns the Integration rows do not: the stack
+  `frame` and the panic `message`.
+- Each job reads only its own file, and each reader refuses the other
+  file's rows. A FIPS row therefore can never excuse an Integration failure,
+  and an Integration row can never excuse a FIPS one.
+
+`make test-fips` always consults the FIPS baseline. The unit tests' output
+also goes to `FIPS_LOG`. When `make test` fails,
+`scripts/foreignfailures -job fips` decides the result. A failure is foreign
+only when **all** of these hold:
+
+- The panicking test is exactly a row's package and top-level test name.
+  There are no wildcards and no subtests.
+- Every `panic:` line's message is exactly the row's message.
+- The panicking goroutine's stack passes through the row's `frame`, and
+  through the listed test function itself.
+- That test is its package's only failure, and nothing else in the run
+  fails. Another failing test, a build failure, a timeout, a killed binary,
+  or a run without go test's closing `FAIL` all gate. So does a plain
+  failure of a listed test: `panic` is the only kind.
+
+A recovered panic inside a passing package, such as the deliberate one
+`pkg/api/daemon`'s recover-guard test logs, is not a failure.
+
+**The rest of a panicked package still gates.** A panic stops every test
+after it in that binary. So, for each attributed package, the checker runs
+all of its other top-level tests again:
+
+1. It lists them with `go test -list .`.
+2. It runs them by explicit name with `-run '^(A|B|...)$'`, under the same
+   `GOFIPS140`/`fips140=only` environment and the same derived build tags.
+   The checker refuses to run outside `fips140=only`.
+
+The job passes only when that rerun passes and runs every name. No `t.Skip`,
+`-short` or build tag is involved. The rerun passes no `-skip` either: the
+names `make test`'s `TEST_SKIP` drops, passed in as `-skip-tests`, are left
+out of the explicit list, exactly as the run left them out. Each rerun's
+output and a `rerun:` line are printed in the job log.
+
+The columns are `kind` (always `panic`), `package`, `name`, `upstream`,
+`closing_release`, `frame` (a Go function as a stack trace names it, without
+its arguments, e.g. `github.com/google/go-tpm/tpm2.(*policySession).Authorize`)
+and `message` (last, because it holds spaces). Rows are added and removed as
+for the Integration file.
+
+The rows today are the two go-tpm HMAC panics (go-quicbaas#1389, removed by
+the go-quicbaas v0.16.0-alpha adoption):
+
+- `pkg/vpn/agent` `TestXKMSTPM_IDevIDSignerSignsWithTheTPMKey`
+- `pkg/app` `TestDeviceActivation_IDevIDOverMTLS`
+
 ## Protocol Parity Assertions
 
 Integration tests must verify identical behavior across all protocols:

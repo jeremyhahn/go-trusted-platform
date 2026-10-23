@@ -541,7 +541,10 @@ jobs:
   # it reports `CI / FIPS (push)` on main without turning main's CI Gate red.
   # pkg/arch/citiers_test.go fails `make test` if it is ever gated, or if its
   # `if:` lets a pull_request in. Its steps match nightly.yml's `fips` job;
-  # change the suite in the Makefile (`make test-fips`), not here.
+  # change the suite in the Makefile (`make test-fips`), not here. That target
+  # also applies the FIPS foreign-failure baseline (ruling 125,
+  # .github/foreign-failures-fips.tsv); nightly.yml's header lists what it
+  # tolerates.
   fips:
     name: FIPS
     runs-on: ubuntu-latest
