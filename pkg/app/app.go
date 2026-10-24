@@ -640,6 +640,13 @@ func (app *App) Init(ctx context.Context, initParams *AppInitParams) (*App, erro
 		return nil, &WrappedError{Msg: "nts key provisioning", Err: err}
 	}
 
+	// Store the SO PIN firstboot took TPM ownership with at its kms:// path
+	// before ProcessSecrets resolves platform.so-pin, so the resolver
+	// returns that PIN instead of generating another.
+	if err := app.ConsumeSOPINHandoff(ctx); err != nil {
+		return nil, &WrappedError{Msg: "SO PIN handoff", Err: err}
+	}
+
 	// Resolve kms:// URIs in config before platform services consume them.
 	// EnsureSecret provides the generate-on-first-boot / stable-on-reboot
 	// semantics — no local cache file is needed. Must run after

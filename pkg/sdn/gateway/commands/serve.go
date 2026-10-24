@@ -96,14 +96,26 @@ func childInheritance(cfg *ServeConfig, configFile string) process.Inherited {
 }
 
 func runServe(cmd *cobra.Command, args []string) error {
-	logger := buildServeLogger()
+	// SIGINT and SIGTERM are taken before anything starts. Until a process
+	// registers for them, Go's default action terminates it on the spot: a
+	// stop sent while the gateway was still starting would skip gw.Stop and
+	// the supervisor's shutdown, and gatewayd would die by the signal.
+	signals := make(chan os.Signal, 1)
+	signal.Notify(signals, syscall.SIGINT, syscall.SIGTERM)
+	defer signal.Stop(signals)
+	return serve(viper.GetViper(), buildServeLogger(), signals)
+}
 
+// serve runs the gateway daemon on the configuration in v until signals
+// delivers a stop, then shuts it down. A signal already waiting when the
+// gateway finishes starting stops it as soon as it has started.
+func serve(v *viper.Viper, logger *slog.Logger, signals <-chan os.Signal) error {
 	logger.Info("Starting gateway daemon",
-		slog.String("data_dir", viper.GetString("data-dir")),
-		slog.String("config", viper.ConfigFileUsed()),
+		slog.String("data_dir", v.GetString("data-dir")),
+		slog.String("config", v.ConfigFileUsed()),
 	)
 
-	cfg, err := LoadServeConfig(viper.GetViper())
+	cfg, err := LoadServeConfig(v)
 	if err != nil {
 		return err
 	}
@@ -111,7 +123,7 @@ func runServe(cmd *cobra.Command, args []string) error {
 	// With the `process:` section enabled, the supervised services run in
 	// child processes. The children outlive gw.Stop, which stops the
 	// services they host, so they are shut down after it on every exit path.
-	supervisor, err := BuildSupervisor(cfg, childInheritance(cfg, viper.ConfigFileUsed()), logger)
+	supervisor, err := BuildSupervisor(cfg, childInheritance(cfg, v.ConfigFileUsed()), logger)
 	if err != nil {
 		return err
 	}
@@ -200,9 +212,7 @@ func runServe(cmd *cobra.Command, args []string) error {
 	}
 
 	// Block until SIGINT/SIGTERM.
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-	sig := <-sigCh
+	sig := <-signals
 	logger.Info("Received signal, shutting down", slog.String("signal", sig.String()))
 
 	// Stop the reporter first so no telemetry posts race the teardown,

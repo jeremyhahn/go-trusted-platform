@@ -80,6 +80,16 @@ func TestRemoteSignInstallerOptions(t *testing.T) {
 			t.Fatal("expected an error for a missing CA bundle")
 		}
 	})
+
+	t.Run("missing ek cert => typed error, no options", func(t *testing.T) {
+		cfg := &installer.Config{SecureBoot: remoteSB()}
+		flags := &systemFlags{provisionServerURL: "https://cp", eabKID: "k", eabHMAC: "h", ekCertPath: filepath.Join(t.TempDir(), "absent.pem")}
+		opts, err := remoteSignInstallerOptions(cfg, flags)
+		var e ErrEKCertRead
+		if !errors.As(err, &e) || opts != nil {
+			t.Fatalf("expected (nil, ErrEKCertRead), got opts=%v err=%v", opts, err)
+		}
+	})
 }
 
 // TestBuildVerifiedHTTPClient verifies a CA-bundle-backed client is built without

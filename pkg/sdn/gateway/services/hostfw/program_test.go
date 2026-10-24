@@ -196,7 +196,7 @@ func TestBuildExprs_Shapes(t *testing.T) {
 		want []string
 	}{
 		"loopback":    {Rule{Kind: RuleLoopback, Interface: "lo"}, []string{"meta", "cmp", "verdict"}},
-		"established": {Rule{Kind: RuleEstablished}, []string{"ct", "bitwise", "cmp", "verdict"}},
+		"established": {Rule{Kind: RuleEstablished}, []string{"meta", "cmp", "cmp", "ct", "bitwise", "cmp", "verdict"}},
 		"invalid":     {Rule{Kind: RuleInvalid}, []string{"ct", "bitwise", "cmp", "verdict"}},
 		"unfiltered":  {Rule{Kind: RuleUnfiltered, Interface: "eth1"}, []string{"meta", "cmp", "verdict"}},
 		"icmpv4":      {Rule{Kind: RuleICMPv4}, []string{"meta", "cmp", "meta", "cmp", "limit", "verdict"}},
@@ -275,6 +275,19 @@ func TestBuildExprs_Values(t *testing.T) {
 		r := exprs[5].(*expr.Range)
 		assert.Equal(t, []byte{133}, r.FromData)
 		assert.Equal(t, []byte{137}, r.ToData)
+	})
+	t.Run("conntrack never admits tunnel encapsulation", func(t *testing.T) {
+		// A host that has sent GRE or ESP to an address holds a conntrack
+		// entry for it, so that address's GRE or ESP is "established". Only
+		// the peer allowance may admit it.
+		exprs, err := buildExprs(Rule{Kind: RuleEstablished}, DefaultICMPRateLimit)
+		require.NoError(t, err)
+		assert.Equal(t, expr.MetaKeyL4PROTO, exprs[0].(*expr.Meta).Key)
+		for i, proto := range []byte{ipProtoGRE, ipProtoESP} {
+			cmp := exprs[1+i].(*expr.Cmp)
+			assert.Equal(t, expr.CmpOpNeq, cmp.Op)
+			assert.Equal(t, []byte{proto}, cmp.Data)
+		}
 	})
 	t.Run("gre peer protocol", func(t *testing.T) {
 		exprs, err := buildExprs(Rule{Kind: RulePeer, Interface: "wan0", Family: 4, Peer: netip.MustParseAddr("192.0.2.100"), IPProto: ipProtoGRE}, DefaultICMPRateLimit)

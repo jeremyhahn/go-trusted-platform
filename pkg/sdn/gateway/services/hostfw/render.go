@@ -194,7 +194,10 @@ func ruleText(r Rule, icmp RateLimit) string {
 	case RuleLoopback, RuleUnfiltered:
 		parts = append(parts, "accept")
 	case RuleEstablished:
-		parts = append(parts, "ct state established,related accept")
+		// GRE and ESP are admitted only by a peer allowance: once the host
+		// has sent either to an address, conntrack calls that address's
+		// packets established, whether or not it is a declared peer.
+		parts = append(parts, "meta l4proto != { gre, esp } ct state established,related accept")
 	case RuleInvalid:
 		parts = append(parts, "ct state invalid drop")
 	case RuleICMPv4:

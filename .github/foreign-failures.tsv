@@ -15,7 +15,9 @@
 # is the open issue, repo#number (several joined by +); closing_release is the
 # release whose adoption fixes it. A row is removed in the PR that adopts its
 # closing release. arm-merge stays the one gate; nothing is admin-merged.
-# docs/test/integration.md describes the baseline.
+# The FIPS job's panics are NOT listed here: they live in the sibling
+# foreign-failures-fips.tsv, in its own row format, and neither job's reader
+# accepts the other's rows. docs/test/integration.md describes both baselines.
 #
 # kind	package	name	upstream	closing_release
 test	test/integration	TestMultiProtocolMatrix/iam/gRPC-TCP/CreateRole	go-quicbaas#1778	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1778

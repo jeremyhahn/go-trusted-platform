@@ -499,7 +499,7 @@ func TestStaleEntriesAreReportedNotFailed(t *testing.T) {
 	assert.Equal(t, "TestKMS/gRPC/HMAC", v.Stale[1].Name)
 
 	var stdout, stderr bytes.Buffer
-	assert.Equal(t, exitOK, report(v, &stdout, &stderr))
+	assert.Equal(t, exitOK, report(v, jobs["integration"], &stdout, &stderr))
 	assert.Contains(t, stdout.String(), "notice: 2 baseline entries did not fail in this run")
 	assert.Empty(t, stderr.String())
 }

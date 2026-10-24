@@ -31,6 +31,7 @@ import (
 	_ "github.com/jeremyhahn/go-trusted-platform/sdk/go/transport/grpc"
 	_ "github.com/jeremyhahn/go-trusted-platform/sdk/go/transport/mcp"
 	_ "github.com/jeremyhahn/go-trusted-platform/sdk/go/transport/quic"
+	_ "github.com/jeremyhahn/go-trusted-platform/sdk/go/transport/rest"
 	_ "github.com/jeremyhahn/go-trusted-platform/sdk/go/transport/unix"
 )
 
@@ -47,8 +48,12 @@ type SDKAdapter struct {
 	name     string
 	endpoint string
 	options  func() *platform.Options
-	client   platform.Client
-	pxe      platformv1.PXEServiceClient
+	// bearer, when set, supplies the bearer the transport presents: the
+	// REST adapter reaches the admin-gated webservice routes with the
+	// harness admin session's bearer.
+	bearer func(ctx context.Context) (string, error)
+	client platform.Client
+	pxe    platformv1.PXEServiceClient
 }
 
 // Name returns the protocol adapter identifier.
@@ -56,7 +61,15 @@ func (a *SDKAdapter) Name() string { return a.name }
 
 // Setup connects the platform SDK client over the selected transport.
 func (a *SDKAdapter) Setup(ctx context.Context) error {
-	client, err := platform.Connect(ctx, a.options())
+	options := a.options()
+	if a.bearer != nil {
+		token, err := a.bearer(ctx)
+		if err != nil {
+			return ErrConnectionFailed{Protocol: a.name, Endpoint: a.endpoint, Err: err}
+		}
+		options.BearerToken = token
+	}
+	client, err := platform.Connect(ctx, options)
 	if err != nil {
 		return ErrConnectionFailed{Protocol: a.name, Endpoint: a.endpoint, Err: err}
 	}

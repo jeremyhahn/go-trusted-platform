@@ -37,42 +37,9 @@ func newRouter() (*TPMRouter, *mux.Router) {
 
 func TestTPMRouter_RoutesRegistered(t *testing.T) {
 	_, parent := newRouter()
-	cases := []struct{ method, path string }{
-		{http.MethodGet, "/api/v1/tpm/info"},
-		{http.MethodPost, "/api/v1/tpm/provision"},
-		{http.MethodPost, "/api/v1/tpm/clear"},
-		{http.MethodGet, "/api/v1/tpm/capabilities"},
-		{http.MethodGet, "/api/v1/tpm/platform"},
-		{http.MethodGet, "/api/v1/tpm/ek"},
-		{http.MethodPost, "/api/v1/tpm/ek"},
-		{http.MethodDelete, "/api/v1/tpm/ek"},
-		{http.MethodGet, "/api/v1/tpm/ek/certificate"},
-		{http.MethodPost, "/api/v1/tpm/ek/certificate"},
-		{http.MethodGet, "/api/v1/tpm/srk"},
-		{http.MethodPost, "/api/v1/tpm/srk"},
-		{http.MethodDelete, "/api/v1/tpm/srk"},
-		{http.MethodGet, "/api/v1/tpm/ak"},
-		{http.MethodPost, "/api/v1/tpm/ak"},
-		{http.MethodDelete, "/api/v1/tpm/ak"},
-		{http.MethodPost, "/api/v1/tpm/seal"},
-		{http.MethodPost, "/api/v1/tpm/unseal"},
-		{http.MethodPost, "/api/v1/tpm/quote"},
-		{http.MethodPost, "/api/v1/tpm/quote/verify"},
-		{http.MethodPost, "/api/v1/tpm/certify"},
-		{http.MethodPost, "/api/v1/tpm/make-credential"},
-		{http.MethodPost, "/api/v1/tpm/activate-credential"},
-		{http.MethodGet, "/api/v1/tpm/eventlog"},
-		{http.MethodGet, "/api/v1/tpm/pcrs"},
-		{http.MethodPost, "/api/v1/tpm/pcrs/extend"},
-		{http.MethodPost, "/api/v1/tpm/nvram"},
-		{http.MethodGet, "/api/v1/tpm/nvram/0x1c00002"},
-		{http.MethodPut, "/api/v1/tpm/nvram/0x1c00002"},
-		{http.MethodDelete, "/api/v1/tpm/nvram/0x1c00002"},
-		{http.MethodPost, "/api/v1/tpm/random"},
-	}
-	for _, tc := range cases {
-		t.Run(tc.method+" "+tc.path, func(t *testing.T) {
-			req := httptest.NewRequest(tc.method, tc.path, nil)
+	for _, rt := range tpmRoutes {
+		t.Run(rt.method+" "+rt.path, func(t *testing.T) {
+			req := httptest.NewRequest(rt.method, rt.path, nil)
 			var match mux.RouteMatch
 			assert.True(t, parent.Match(req, &match))
 		})

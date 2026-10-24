@@ -36,7 +36,7 @@ func recordOverREST(t *testing.T, payload string) (*Adapter, *sentRequest) {
 			w.WriteHeader(http.StatusOK)
 			return
 		}
-		sent.method, sent.path = r.Method, r.URL.EscapedPath()
+		sent.method, sent.path, sent.query = r.Method, r.URL.EscapedPath(), r.URL.RawQuery
 		raw, err := io.ReadAll(r.Body)
 		if err != nil {
 			w.WriteHeader(http.StatusBadRequest)

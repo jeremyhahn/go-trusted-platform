@@ -23,6 +23,18 @@ func (e *ErrUnknownDeviceState) Error() string {
 	return "unknown provisioning state: " + e.State
 }
 
+// ErrInvalidDeviceFilter is returned when a ListDevices query parameter
+// cannot be a PXEDeviceFilter value.
+type ErrInvalidDeviceFilter struct {
+	Parameter string
+	Value     string
+	Reason    string
+}
+
+func (e *ErrInvalidDeviceFilter) Error() string {
+	return "invalid device filter " + e.Parameter + "=" + e.Value + ": " + e.Reason
+}
+
 // ErrInvalidInstallStatus is returned when an install-complete report
 // carries a status other than "success" or "failure".
 type ErrInvalidInstallStatus struct {

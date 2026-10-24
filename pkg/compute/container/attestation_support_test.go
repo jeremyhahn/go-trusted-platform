@@ -440,7 +440,7 @@ func (m *mockHostTPM) resetExtendCalls() {
 }
 
 // newTestAttestingRuntime builds the real SDK attesting runtime over tpm.
-func newTestAttestingRuntime(t *testing.T, tpm orchestration.HostTPM) *orchestration.TPMAttestingRuntime {
+func newTestAttestingRuntime(t testing.TB, tpm orchestration.HostTPM) *orchestration.TPMAttestingRuntime {
 	t.Helper()
 	rt, err := orchestration.NewTPMAttestingRuntime(&stubContainerRuntime{}, tpm, newSDKLogger(slog.Default()))
 	if err != nil {

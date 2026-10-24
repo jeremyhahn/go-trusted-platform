@@ -21,6 +21,8 @@ type verdict struct {
 	Hits []*entry
 	// Stale are baseline entries that did not fail in this run.
 	Stale []*entry
+	// Reran are the FIPS job's reruns of panicked packages, one line each.
+	Reran []string
 }
 
 // gating reports whether the suite's failure stands.
@@ -51,6 +53,13 @@ func decide(log *suiteLog, b *baseline) *verdict {
 	if log.summarySeen && failedTargets == 0 {
 		v.Unattributable = append(v.Unattributable, "the summary lists no failed target: the suite failed outside its tests")
 	}
+	v.settle(b, hit)
+	return v
+}
+
+// settle splits b's entries into those that failed in this run and those
+// that did not.
+func (v *verdict) settle(b *baseline, hit map[*entry]bool) {
 	for _, e := range b.entries {
 		if hit[e] {
 			v.Hits = append(v.Hits, e)
@@ -58,7 +67,6 @@ func decide(log *suiteLog, b *baseline) *verdict {
 			v.Stale = append(v.Stale, e)
 		}
 	}
-	return v
 }
 
 // decideTarget attributes one failed target's section.

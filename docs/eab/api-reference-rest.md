@@ -1,6 +1,6 @@
 # EAB REST API Reference
 
-> **Status: REFERENCE** · Last verified: 2026-10-13
+> **Status: REFERENCE** · Last verified: 2026-10-19
 > The `/api/v1/eab` routes and list filters.
 
 | Property | Value |
@@ -43,6 +43,8 @@
 - protojson renders uint64 identifiers (`id`, `profile_id`) as decimal
   strings.
 - The HMAC key appears only in the `CreateCredential` response.
+- `qrcode?size=N` takes `0` (server default) to `2147483647`; a larger or
+  non-numeric `size` is refused with 400, as is an `{id}` beyond uint64.
 - When the EAB backend is not configured the handlers return the
   structured 503 "service unavailable" envelope.
 - The SDK REST adapter (`sdk/go/transport/rest`) maps

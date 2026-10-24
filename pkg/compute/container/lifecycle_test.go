@@ -18,6 +18,7 @@ import (
 	"errors"
 	"log/slog"
 	"os"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -1070,6 +1071,24 @@ func TestOrchestratorAttest(t *testing.T) {
 		}
 		if len(report.Quote) == 0 {
 			t.Error("expected quote data")
+		}
+		if report.ContainerName != spec.Name {
+			t.Errorf("expected container name %q, got %q", spec.Name, report.ContainerName)
+		}
+		if len(report.Signature) == 0 {
+			t.Error("expected signature data")
+		}
+		if report.Log == nil || len(report.Log.Entries) == 0 {
+			t.Error("expected a measurement log with the create entry")
+		}
+		if !strings.HasPrefix(report.ImageDigest, "sha256:") {
+			t.Errorf("expected a sha256 image digest, got %q", report.ImageDigest)
+		}
+		if !strings.HasPrefix(report.ConfigDigest, "sha256:") {
+			t.Errorf("expected a sha256 config digest, got %q", report.ConfigDigest)
+		}
+		if report.Timestamp.IsZero() {
+			t.Error("expected a non-zero timestamp")
 		}
 	})
 
@@ -2516,6 +2535,165 @@ func TestOrchestratorPolicyEvaluatorError(t *testing.T) {
 		_, err := orch.Create(context.Background(), spec)
 		if err == nil {
 			t.Fatal("expected error from failed policy evaluation")
+		}
+	})
+}
+
+// TestOrchestratorLifecycleErrors pins the typed error each lifecycle
+// operation returns, so callers can branch with errors.Is.
+func TestOrchestratorLifecycleErrors(t *testing.T) {
+	newOrch := func(t *testing.T) *Orchestrator {
+		t.Helper()
+		orch, err := NewOrchestrator(OrchestratorConfig{Logger: testLogger()},
+			WithPodmanBackend(NewMockPodmanBackend()))
+		if err != nil {
+			t.Fatalf("NewOrchestrator: %v", err)
+		}
+		t.Cleanup(func() { orch.Close() })
+		return orch
+	}
+	ctx := context.Background()
+
+	t.Run("create with nil spec returns ErrInvalidSpec", func(t *testing.T) {
+		_, err := newOrch(t).Create(ctx, nil)
+		if !errors.Is(err, ErrInvalidSpec) {
+			t.Fatalf("expected ErrInvalidSpec, got %v", err)
+		}
+	})
+
+	t.Run("create with empty image returns ErrInvalidImage", func(t *testing.T) {
+		_, err := newOrch(t).Create(ctx, &OrchestratorContainerSpec{Name: "no-image"})
+		if !errors.Is(err, ErrInvalidImage) {
+			t.Fatalf("expected ErrInvalidImage, got %v", err)
+		}
+	})
+
+	t.Run("create after close returns ErrOrchestratorClosed", func(t *testing.T) {
+		orch := newOrch(t)
+		if err := orch.Close(); err != nil {
+			t.Fatalf("Close: %v", err)
+		}
+		_, err := orch.Create(ctx, &OrchestratorContainerSpec{Name: "closed", Image: "alpine:latest"})
+		if !errors.Is(err, ErrOrchestratorClosed) {
+			t.Fatalf("expected ErrOrchestratorClosed, got %v", err)
+		}
+	})
+
+	t.Run("unknown ID returns ErrContainerNotFound", func(t *testing.T) {
+		orch := newOrch(t)
+		const id = "does-not-exist"
+		ops := map[string]func() error{
+			"start":  func() error { return orch.Start(ctx, id) },
+			"stop":   func() error { return orch.Stop(ctx, id, time.Second) },
+			"remove": func() error { return orch.Remove(ctx, id, false) },
+			"get": func() error {
+				_, err := orch.Get(ctx, id)
+				return err
+			},
+		}
+		for name, op := range ops {
+			if err := op(); !errors.Is(err, ErrContainerNotFound) {
+				t.Errorf("%s: expected ErrContainerNotFound, got %v", name, err)
+			}
+		}
+	})
+
+	t.Run("stop of a created container returns ErrContainerStopped", func(t *testing.T) {
+		orch := newOrch(t)
+		container, err := orch.Create(ctx, &OrchestratorContainerSpec{Name: "never-started", Image: "alpine:latest"})
+		if err != nil {
+			t.Fatalf("Create: %v", err)
+		}
+		if err := orch.Stop(ctx, container.ID, time.Second); !errors.Is(err, ErrContainerStopped) {
+			t.Fatalf("expected ErrContainerStopped, got %v", err)
+		}
+	})
+
+	t.Run("removed containers are gone from get and list", func(t *testing.T) {
+		orch := newOrch(t)
+		var ids []string
+		for _, name := range []string{"gone-1", "gone-2"} {
+			container, err := orch.Create(ctx, &OrchestratorContainerSpec{Name: name, Image: "alpine:latest"})
+			if err != nil {
+				t.Fatalf("Create %s: %v", name, err)
+			}
+			ids = append(ids, container.ID)
+		}
+		for _, id := range ids {
+			if err := orch.Remove(ctx, id, false); err != nil {
+				t.Fatalf("Remove %s: %v", id, err)
+			}
+			if _, err := orch.Get(ctx, id); !errors.Is(err, ErrContainerNotFound) {
+				t.Errorf("Get after Remove: expected ErrContainerNotFound, got %v", err)
+			}
+		}
+		list, err := orch.List(ctx, ListOptions{})
+		if err != nil {
+			t.Fatalf("List: %v", err)
+		}
+		if len(list) != 0 {
+			t.Errorf("expected empty list after removing all containers, got %d", len(list))
+		}
+	})
+}
+
+// TestOrchestratorDisabledFeatures checks that a wired policy evaluator or
+// attestor is not consulted while its feature flag is off.
+func TestOrchestratorDisabledFeatures(t *testing.T) {
+	spec := func(name string) *OrchestratorContainerSpec {
+		return &OrchestratorContainerSpec{Name: name, Image: "alpine:latest"}
+	}
+
+	t.Run("policy evaluator is skipped when EnablePolicy is false", func(t *testing.T) {
+		policy := NewMockLifecyclePolicyEvaluator(false)
+		orch, err := NewOrchestrator(OrchestratorConfig{Logger: testLogger()},
+			WithPodmanBackend(NewMockPodmanBackend()),
+			WithLifecyclePolicyEvaluator(policy),
+		)
+		if err != nil {
+			t.Fatalf("NewOrchestrator: %v", err)
+		}
+		defer orch.Close()
+
+		if _, err := orch.Create(context.Background(), spec("policy-off")); err != nil {
+			t.Fatalf("Create: %v", err)
+		}
+		if policy.evalCount != 0 {
+			t.Errorf("expected evalCount=0, got %d", policy.evalCount)
+		}
+	})
+
+	t.Run("attestor is skipped when EnableAttestation is false", func(t *testing.T) {
+		tpm := NewMockTPMProvider()
+		attestor, err := NewContainerAttestor(tpm, WithAttestingRuntime(newTestAttestingRuntime(t, tpm)))
+		if err != nil {
+			t.Fatalf("NewContainerAttestor: %v", err)
+		}
+		orch, err := NewOrchestrator(OrchestratorConfig{Logger: testLogger()},
+			WithPodmanBackend(NewMockPodmanBackend()),
+			WithAttestor(attestor),
+		)
+		if err != nil {
+			t.Fatalf("NewOrchestrator: %v", err)
+		}
+		defer orch.Close()
+
+		ctx := context.Background()
+		container, err := orch.Create(ctx, spec("attest-off"))
+		if err != nil {
+			t.Fatalf("Create: %v", err)
+		}
+		if err := orch.Start(ctx, container.ID); err != nil {
+			t.Fatalf("Start: %v", err)
+		}
+		if err := orch.Stop(ctx, container.ID, time.Second); err != nil {
+			t.Fatalf("Stop: %v", err)
+		}
+		if err := orch.Remove(ctx, container.ID, false); err != nil {
+			t.Fatalf("Remove: %v", err)
+		}
+		if calls := len(tpm.getExtendCalls()); calls != 0 {
+			t.Errorf("expected no PCR extends, got %d", calls)
 		}
 	})
 }

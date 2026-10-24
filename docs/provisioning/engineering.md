@@ -160,19 +160,39 @@ reachable by unidentified machines and is rate-limited for that reason.
 **Known holes in the integration suite:**
 
 - `test/integration/pxe/` drives every transport through real clients: the
-  REST, CLI and Unix adapters, and the shared `SDKAdapter` (`sdk_adapter.go`)
-  pinned to gRPC, QUIC or MCP with `platform.WithOnlyProtocol`. But no
+  CLI and Unix adapters, and the shared `SDKAdapter` (`sdk_adapter.go`)
+  pinned to REST, gRPC, QUIC or MCP with `platform.WithOnlyProtocol`. But no
   production code constructs a `pkg/compute/pxe.Service`, so platformd's
   `PXEGRPCService` has no backend (`pkg/api/daemon/daemon.go:975-979`) and every
   PXE call answers `SERVICE_NOT_CONFIGURED`. Against the shared integration
   platformd the suite fails at adapter setup on every transport, so it is
   kept out of `make integration-test`'s default set and runs by name with
   `make integration-test-pxe`.
+- Over REST the suite drives all fourteen PXEService RPCs: the twelve
+  `PXECommands` methods in `TestPXEMultiProtocol`, and `StartService` and
+  `StopService` in `TestPXERESTGRPCParity` (`rest_adapter_test.go`). It
+  refuses `StartService` on the running service with `FailedPrecondition`
+  over REST and gRPC alike, checks that every `ListDevices` filter returns
+  the same devices on both, then stops the service over REST, starts it
+  again over REST, and requires both transports to list the same devices
+  from the restarted service. `pxe.Service.Start` runs a fresh
+  `ipxe.Server` on each start (the server is single-use, `pkg/ipxe/server.go`)
+  under a context of its own, so a stopped service starts again and the
+  server outlives the `StartService` request.
 - `test/integration/authenticode/multiprotocol_test.go:68-72` has **all five
   protocol adapters commented out**: a multi-protocol conformance test that
   exercises the CLI alone.
+- The PXE suite's CLI leg asserts a declared gap, never a skip: there is no
+  `platformctl pxe` group, PXE device lifecycle is API-only
+  (`docs/daemon/cli.md:223`). `testPXEProtocol` routes the `*CLIAdapter` into
+  `assertPXECLIGap`, which runs the real binary once and requires the
+  unknown-command non-zero exit, and checks the CLI adapter methods return
+  the typed `ErrCLIPXENotImplemented` refusal. When a `platformctl pxe`
+  group is added (the department question on #975 question 2), the leg flips:
+  `assertPXECLIGap` is deleted, the CLI branch in `testPXEProtocol` drops, and
+  the adapter drives the group.
 
-Both are recorded here rather than left to be rediscovered.
+All three are recorded here rather than left to be rediscovered.
 
 **Known repo-wide gap:** no `CommandDefinition` type exists in this repository
 (grepped 2026-08-18), so the CLI parity requirement in

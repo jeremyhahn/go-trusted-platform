@@ -358,20 +358,43 @@ func TestIPAMRoutes_ErrorMapping(t *testing.T) {
 func TestIPAMRoutes_NilServerAnswers503(t *testing.T) {
 	mr := newIPAMTestRouter(t, nil)
 
-	rec := httptest.NewRecorder()
-	mr.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/sdn/gateway/ipam/pools", nil))
-	if rec.Code != http.StatusServiceUnavailable {
-		t.Fatalf("status = %d, want 503 (body=%s)", rec.Code, rec.Body.String())
+	for _, route := range []struct{ method, path string }{
+		{http.MethodPost, "/sdn/gateway/ipam/pools"},
+		{http.MethodGet, "/sdn/gateway/ipam/pools"},
+		{http.MethodGet, "/sdn/gateway/ipam/pools/prod-v4"},
+		{http.MethodPut, "/sdn/gateway/ipam/pools/prod-v4"},
+		{http.MethodDelete, "/sdn/gateway/ipam/pools/prod-v4"},
+		{http.MethodPost, "/sdn/gateway/ipam/allocations"},
+		{http.MethodGet, "/sdn/gateway/ipam/allocations"},
+		{http.MethodDelete, "/sdn/gateway/ipam/allocations/10.0.0.11"},
+	} {
+		t.Run(route.method+" "+route.path, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			mr.ServeHTTP(rec, httptest.NewRequest(route.method, route.path, bytes.NewBufferString(`{}`)))
+			if rec.Code != http.StatusServiceUnavailable {
+				t.Fatalf("status = %d, want 503 (body=%s)", rec.Code, rec.Body.String())
+			}
+		})
 	}
 }
 
 func TestIPAMRoutes_InvalidBodyAnswers400(t *testing.T) {
+	// The empty mock answers every RPC with Unimplemented, so a body that
+	// reached the service would surface as something other than 400.
 	mr := newIPAMTestRouter(t, &mockIPAMGatewayService{})
 
-	rec := httptest.NewRecorder()
-	mr.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/sdn/gateway/ipam/pools", bytes.NewBufferString("{not json")))
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d, want 400 (body=%s)", rec.Code, rec.Body.String())
+	for _, route := range []struct{ method, path string }{
+		{http.MethodPost, "/sdn/gateway/ipam/pools"},
+		{http.MethodPut, "/sdn/gateway/ipam/pools/prod-v4"},
+		{http.MethodPost, "/sdn/gateway/ipam/allocations"},
+	} {
+		t.Run(route.method+" "+route.path, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			mr.ServeHTTP(rec, httptest.NewRequest(route.method, route.path, bytes.NewBufferString("{not json")))
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want 400 (body=%s)", rec.Code, rec.Body.String())
+			}
+		})
 	}
 }
 
@@ -518,5 +541,183 @@ func TestDerefString(t *testing.T) {
 	s := "x"
 	if derefString(&s) != "x" || derefString(nil) != "" {
 		t.Fatal("derefString")
+	}
+}
+
+func TestIPAMRoutes_GetPool(t *testing.T) {
+	var gotID string
+	mr := newIPAMTestRouter(t, &mockIPAMGatewayService{
+		getPoolFunc: func(_ context.Context, req *platformv1.GetIPAMPoolRequest) (*platformv1.GetIPAMPoolResponse, error) {
+			gotID = req.GetId()
+			if req.GetId() != "prod-v4" {
+				return nil, status.Error(codes.NotFound, "pool not found")
+			}
+			return &platformv1.GetIPAMPoolResponse{Pool: testPoolProto("prod-v4")}, nil
+		},
+	})
+
+	rec := httptest.NewRecorder()
+	mr.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/sdn/gateway/ipam/pools/prod-v4", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body=%s)", rec.Code, rec.Body.String())
+	}
+	if gotID != "prod-v4" {
+		t.Fatalf("pool id = %q, want prod-v4", gotID)
+	}
+	var pool IPAMPoolResponse
+	if err := json.Unmarshal(decodeIPAMEnvelope(t, rec).Payload, &pool); err != nil {
+		t.Fatalf("decode payload: %v", err)
+	}
+	if pool.ID != "prod-v4" || pool.CIDR != "10.0.0.0/24" || pool.Available != 251 {
+		t.Fatalf("pool wrong: %+v", pool)
+	}
+
+	rec = httptest.NewRecorder()
+	mr.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/sdn/gateway/ipam/pools/missing", nil))
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("missing pool status = %d, want 404 (body=%s)", rec.Code, rec.Body.String())
+	}
+}
+
+// failingIPAMService answers every IPAM RPC with err.
+func failingIPAMService(err error) *mockIPAMGatewayService {
+	return &mockIPAMGatewayService{
+		createPoolFunc: func(context.Context, *platformv1.CreateIPAMPoolRequest) (*platformv1.CreateIPAMPoolResponse, error) {
+			return nil, err
+		},
+		getPoolFunc: func(context.Context, *platformv1.GetIPAMPoolRequest) (*platformv1.GetIPAMPoolResponse, error) {
+			return nil, err
+		},
+		updatePoolFunc: func(context.Context, *platformv1.UpdateIPAMPoolRequest) (*platformv1.UpdateIPAMPoolResponse, error) {
+			return nil, err
+		},
+		deletePoolFunc: func(context.Context, *platformv1.DeleteIPAMPoolRequest) (*platformv1.DeleteIPAMPoolResponse, error) {
+			return nil, err
+		},
+		allocateFunc: func(context.Context, *platformv1.AllocateIPRequest) (*platformv1.AllocateIPResponse, error) {
+			return nil, err
+		},
+		releaseFunc: func(context.Context, *platformv1.ReleaseIPRequest) (*platformv1.ReleaseIPResponse, error) {
+			return nil, err
+		},
+		listAllocsFunc: func(context.Context, *platformv1.ListAllocationsRequest) (*platformv1.ListAllocationsResponse, error) {
+			return nil, err
+		},
+	}
+}
+
+func TestIPAMRoutes_ServiceErrorsReachTheCaller(t *testing.T) {
+	cases := []struct {
+		name   string
+		method string
+		path   string
+		body   string
+		code   codes.Code
+		want   int
+	}{
+		{"create pool conflict", http.MethodPost, "/sdn/gateway/ipam/pools", `{"id":"prod-v4","cidr":"10.0.0.0/24"}`, codes.AlreadyExists, http.StatusConflict},
+		{"update unknown pool", http.MethodPut, "/sdn/gateway/ipam/pools/missing", `{"name":"renamed"}`, codes.NotFound, http.StatusNotFound},
+		{"delete unknown pool", http.MethodDelete, "/sdn/gateway/ipam/pools/missing", "", codes.NotFound, http.StatusNotFound},
+		{"allocate from exhausted pool", http.MethodPost, "/sdn/gateway/ipam/allocations", `{"pool_id":"prod-v4"}`, codes.ResourceExhausted, http.StatusTooManyRequests},
+		{"list allocations unavailable", http.MethodGet, "/sdn/gateway/ipam/allocations", "", codes.Unavailable, http.StatusServiceUnavailable},
+		{"release unknown ip", http.MethodDelete, "/sdn/gateway/ipam/allocations/10.0.0.99", "", codes.NotFound, http.StatusNotFound},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			mr := newIPAMTestRouter(t, failingIPAMService(status.Error(tc.code, "ipam backend says no")))
+			rec := httptest.NewRecorder()
+			mr.ServeHTTP(rec, httptest.NewRequest(tc.method, tc.path, bytes.NewBufferString(tc.body)))
+			if rec.Code != tc.want {
+				t.Fatalf("status = %d, want %d (body=%s)", rec.Code, tc.want, rec.Body.String())
+			}
+			if env := decodeIPAMEnvelope(t, rec); env.Success {
+				t.Fatalf("envelope reports success for a failed call: %+v", env)
+			}
+		})
+	}
+}
+
+func TestIPAMRoutes_UpdatePoolRejectedByService(t *testing.T) {
+	// The merge read succeeds; the update itself is refused, and that
+	// refusal is what the caller sees.
+	mr := newIPAMTestRouter(t, &mockIPAMGatewayService{
+		getPoolFunc: func(context.Context, *platformv1.GetIPAMPoolRequest) (*platformv1.GetIPAMPoolResponse, error) {
+			return &platformv1.GetIPAMPoolResponse{Pool: testPoolProto("prod-v4")}, nil
+		},
+		updatePoolFunc: func(context.Context, *platformv1.UpdateIPAMPoolRequest) (*platformv1.UpdateIPAMPoolResponse, error) {
+			return nil, status.Error(codes.InvalidArgument, "gateway outside the pool CIDR")
+		},
+	})
+
+	rec := httptest.NewRecorder()
+	mr.ServeHTTP(rec, httptest.NewRequest(http.MethodPut, "/sdn/gateway/ipam/pools/prod-v4", bytes.NewBufferString(`{"gateway":"192.0.2.1"}`)))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 (body=%s)", rec.Code, rec.Body.String())
+	}
+}
+
+func TestIPAMRoutes_UpdatePoolAppliesEveryProvidedField(t *testing.T) {
+	var gotUpdate *platformv1.UpdateIPAMPoolRequest
+	mr := newIPAMTestRouter(t, &mockIPAMGatewayService{
+		getPoolFunc: func(context.Context, *platformv1.GetIPAMPoolRequest) (*platformv1.GetIPAMPoolResponse, error) {
+			return &platformv1.GetIPAMPoolResponse{Pool: testPoolProto("prod-v4")}, nil
+		},
+		updatePoolFunc: func(_ context.Context, req *platformv1.UpdateIPAMPoolRequest) (*platformv1.UpdateIPAMPoolResponse, error) {
+			gotUpdate = req
+			return &platformv1.UpdateIPAMPoolResponse{Pool: testPoolProto("prod-v4")}, nil
+		},
+	})
+
+	body := `{"gateway":"10.0.0.254","zone":"edge","description":"edge IPv4",` +
+		`"default_lease_duration_nanos":7200000000000,"inactivity_timeout_nanos":600000000000}`
+	rec := httptest.NewRecorder()
+	mr.ServeHTTP(rec, httptest.NewRequest(http.MethodPut, "/sdn/gateway/ipam/pools/prod-v4", bytes.NewBufferString(body)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body=%s)", rec.Code, rec.Body.String())
+	}
+	if gotUpdate.GetName() != "prod-v4" {
+		t.Fatalf("omitted name was not preserved: %q", gotUpdate.GetName())
+	}
+	if gotUpdate.GetGateway() != "10.0.0.254" ||
+		gotUpdate.GetZone() != "edge" ||
+		gotUpdate.GetDescription() != "edge IPv4" ||
+		gotUpdate.GetDefaultLeaseDurationNanos() != 7200e9 ||
+		gotUpdate.GetInactivityTimeoutNanos() != 600e9 {
+		t.Fatalf("provided fields were not applied: %+v", gotUpdate)
+	}
+	if gotUpdate.GetUpdateWindow() {
+		t.Fatal("a body without window fields must not replace the window")
+	}
+}
+
+func TestIPAMRoutes_AllocateReportsLeaseTimes(t *testing.T) {
+	allocatedAt := timestamppb.Now()
+	expiresAt := timestamppb.New(allocatedAt.AsTime().Add(86400e9))
+	mr := newIPAMTestRouter(t, &mockIPAMGatewayService{
+		allocateFunc: func(_ context.Context, req *platformv1.AllocateIPRequest) (*platformv1.AllocateIPResponse, error) {
+			return &platformv1.AllocateIPResponse{Allocation: &platformv1.IPAllocation{
+				Ip: "10.0.0.12", PoolId: req.GetPoolId(), DeviceId: req.GetDeviceId(), Status: "active",
+				AllocatedAt: allocatedAt, ExpiresAt: expiresAt,
+			}}, nil
+		},
+	})
+
+	rec := httptest.NewRecorder()
+	mr.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/sdn/gateway/ipam/allocations", bytes.NewBufferString(`{"pool_id":"prod-v4","device_id":"dev-7"}`)))
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201 (body=%s)", rec.Code, rec.Body.String())
+	}
+	var alloc IPAllocationResponse
+	if err := json.Unmarshal(decodeIPAMEnvelope(t, rec).Payload, &alloc); err != nil {
+		t.Fatalf("decode payload: %v", err)
+	}
+	if alloc.IP != "10.0.0.12" || alloc.PoolID != "prod-v4" || alloc.DeviceID != "dev-7" {
+		t.Fatalf("allocation wrong: %+v", alloc)
+	}
+	if alloc.AllocatedAt == nil || !alloc.AllocatedAt.Equal(allocatedAt.AsTime()) {
+		t.Fatalf("allocated_at = %v, want %v", alloc.AllocatedAt, allocatedAt.AsTime())
+	}
+	if alloc.ExpiresAt == nil || !alloc.ExpiresAt.Equal(expiresAt.AsTime()) {
+		t.Fatalf("expires_at = %v, want %v", alloc.ExpiresAt, expiresAt.AsTime())
 	}
 }
