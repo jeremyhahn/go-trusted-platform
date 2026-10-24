@@ -280,11 +280,31 @@ jobs:
     timeout-minutes: 120
     env:
       IT_IMAGE: go-trusted-platform-ci-it:${{ github.run_id }}-${{ github.run_attempt }}-image
+      # The project's own BuildKit builder (Makefile BUILDX_BUILDER). Its
+      # cache is this project's alone: `docker image rm` frees the image, and
+      # `docker buildx prune --builder` trims what the build left behind,
+      # never another project's cache (ruling 108 (b)). Shared by the image
+      # and integration jobs and by every run, so the cached tools, modules
+      # and apt layers stay warm up to BUILDKIT_KEEP_STORAGE.
+      BUILDX_BUILDER: go-trusted-platform-ci
+      BUILDKIT_KEEP_STORAGE: 40gb
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
 
       - name: Reap stale CI stacks
         run: scripts/reap-stale-ci-stacks.sh go-trusted-platform-ci-
+
+      # Creates the builder once per daemon and reuses it after; a second
+      # create or bootstrap racing a concurrent job's is retried. The prune
+      # also bounds what a cancelled run, whose teardown never ran, left.
+      - name: Prepare the project's BuildKit builder
+        run: |
+          docker buildx inspect "$BUILDX_BUILDER" >/dev/null 2>&1 ||
+            docker buildx create --name "$BUILDX_BUILDER" --driver docker-container >/dev/null ||
+            docker buildx inspect "$BUILDX_BUILDER" >/dev/null
+          docker buildx inspect --bootstrap "$BUILDX_BUILDER" >/dev/null ||
+            docker buildx inspect --bootstrap "$BUILDX_BUILDER" >/dev/null
+          docker buildx prune --builder "$BUILDX_BUILDER" --force --keep-storage "$BUILDKIT_KEEP_STORAGE"
 
       # As in the integration job: the forge credentials reach the build only
       # as the gomodauth BuildKit secret, from a file outside the context.
@@ -343,6 +363,7 @@ jobs:
         run: |
           rm -f "$RUNNER_TEMP/gomodauth.env" it-image.tar
           docker image rm "$IT_IMAGE" || true
+          docker buildx prune --builder "$BUILDX_BUILDER" --force --keep-storage "$BUILDKIT_KEEP_STORAGE" || true
 
   # CUSTOMIZE (build job): this repository is build-tag driven, so an untagged
   # `go build ./...` compiles very little of it. The binaries build with the
@@ -499,11 +520,23 @@ jobs:
     env:
       IT_PROJECT: go-trusted-platform-ci-${{ github.run_id }}-${{ github.run_attempt }}
       IT_IMAGE: go-trusted-platform-ci-it:${{ github.run_id }}-${{ github.run_attempt }}
+      # The image job's builder (see there).
+      BUILDX_BUILDER: go-trusted-platform-ci
+      BUILDKIT_KEEP_STORAGE: 40gb
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
 
       - name: Reap stale CI stacks
         run: scripts/reap-stale-ci-stacks.sh go-trusted-platform-ci-
+
+      - name: Prepare the project's BuildKit builder
+        run: |
+          docker buildx inspect "$BUILDX_BUILDER" >/dev/null 2>&1 ||
+            docker buildx create --name "$BUILDX_BUILDER" --driver docker-container >/dev/null ||
+            docker buildx inspect "$BUILDX_BUILDER" >/dev/null
+          docker buildx inspect --bootstrap "$BUILDX_BUILDER" >/dev/null ||
+            docker buildx inspect --bootstrap "$BUILDX_BUILDER" >/dev/null
+          docker buildx prune --builder "$BUILDX_BUILDER" --force --keep-storage "$BUILDKIT_KEEP_STORAGE"
 
       # The forge credentials the runner injects (dependency-resolution.md §6)
       # reach the image build only as the gomodauth BuildKit secret, from a
@@ -538,6 +571,7 @@ jobs:
           rm -f "$RUNNER_TEMP/gomodauth.env"
           GO_TRUSTED_PLATFORM_IT_IMAGE="$IT_IMAGE" docker compose -f build/docker/devcontainer/compose.yaml -p "$IT_PROJECT" down --volumes || true
           docker image rm "$IT_IMAGE" || true
+          docker buildx prune --builder "$BUILDX_BUILDER" --force --keep-storage "$BUILDKIT_KEEP_STORAGE" || true
 
   # CUSTOMIZE (FIPS 140-3, #853): the main-only, ungated job. It runs on push
   # to main and on workflow_dispatch, and NEVER on a pull_request, not even

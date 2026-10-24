@@ -629,7 +629,15 @@ CanoKey QEMU build, autotools, tpm2-abrmd, yubikey-manager, the Secure Boot
 signing tools, the X server and the legacy network tools were dropped because
 nothing called them, and the `trivy image` step scans every package left. The toolchain image is tagged with a hash of its inputs
 (`make -s toolchain-image`). Forge credentials reach the build only as the
-`gomodauth` BuildKit secret, from `MODULE_ENV_FILE`. Every job that starts
+`gomodauth` BuildKit secret, from `MODULE_ENV_FILE`. The integration image is
+tagged per run and job (`go-trusted-platform-ci-it:<run>-<attempt>`, `-image`
+in the `image` job) and removed at job end. Both jobs build on the project's
+own `docker-container` BuildKit builder, `go-trusted-platform-ci`
+(`BUILDX_BUILDER`, which `make docker-build` honours; empty uses the daemon's
+builder), so the build cache is this project's alone: each job prunes it to
+`BUILDKIT_KEEP_STORAGE` (40 GB) before its build and at teardown, never with a
+global `docker builder prune` (ruling 108). A cancelled run whose teardown did
+not run leaves its image tag; its cache is trimmed by the next job. Every job that starts
 containers first runs `scripts/reap-stale-ci-stacks.sh go-trusted-platform-ci-`,
 which removes the stacks a runner that died mid-job left behind.
 

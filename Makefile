@@ -2218,15 +2218,22 @@ DEVCONTAINER_BUILD_ARGS = --build-arg GO_IMAGE=$(GO_IMAGE) \
 	$(if $(wildcard $(MODULE_ENV_FILE)),--secret id=gomodauth$(comma)src=$(MODULE_ENV_FILE)) \
 	-f $(DEVCONTAINER_DOCKERFILE)
 
+# The BuildKit builder the devcontainer images build on. Empty builds on the
+# daemon's own builder. CI names this project's docker-container builder, so
+# its build cache is this project's alone and can be pruned without touching
+# another project's; --load copies the image into the daemon.
+BUILDX_BUILDER ?=
+DEVCONTAINER_BUILD = $(if $(BUILDX_BUILDER),docker buildx build --builder $(BUILDX_BUILDER) --load,DOCKER_BUILDKIT=1 docker build)
+
 .PHONY: docker-build
 ## docker-build: Build the toolchain image and the integration image
 docker-build: docker-build-it
-	DOCKER_BUILDKIT=1 docker build $(DEVCONTAINER_BUILD_ARGS) --target toolchain -t $(TOOLCHAIN_IMAGE) .
+	$(DEVCONTAINER_BUILD) $(DEVCONTAINER_BUILD_ARGS) --target toolchain -t $(TOOLCHAIN_IMAGE) .
 
 .PHONY: docker-build-it
 ## docker-build-it: Build the integration image as $(IT_IMAGE)
 docker-build-it:
-	DOCKER_BUILDKIT=1 docker build $(DEVCONTAINER_BUILD_ARGS) --target integration -t $(IT_IMAGE) .
+	$(DEVCONTAINER_BUILD) $(DEVCONTAINER_BUILD_ARGS) --target integration -t $(IT_IMAGE) .
 
 .PHONY: toolchain-image
 ## toolchain-image: Print the toolchain image tag (CI reads it with make -s)
