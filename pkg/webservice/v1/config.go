@@ -224,4 +224,13 @@ type WebAuthn struct {
 	RPDisplayName string   `yaml:"display-name" json:"display_name" mapstructure:"display-name"`
 	RPID          string   `yaml:"id" json:"id" mapstructure:"id"`
 	RPOrigins     []string `yaml:"origins" json:"origins" mapstructure:"origins"`
+
+	// Assurance is the embedded go-quicbaas IAM's WebAuthn attestation
+	// policy (iam.webauthn.assurance). Empty keeps the upstream "hardware"
+	// default, which refuses software authenticators for administrators.
+	// "insecure-allow-software-administrators" is for automated test
+	// environments only. The value is passed through unvalidated: the SDK
+	// does not expose the parser, and the embedded server refuses an
+	// unknown value at start.
+	Assurance string `yaml:"assurance" json:"assurance" mapstructure:"assurance"`
 }

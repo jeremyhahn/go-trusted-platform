@@ -1482,6 +1482,7 @@ func (app *App) mirrorWebAuthnRelyingParty() {
 	}
 	app.QuicBaaSConfig.WebAuthnRPID = primary.WebAuthn.RPID
 	app.QuicBaaSConfig.WebAuthnRPDisplayName = primary.WebAuthn.RPDisplayName
+	app.QuicBaaSConfig.WebAuthnAssurance = primary.WebAuthn.Assurance
 
 	seen := make(map[string]bool)
 	origins := make([]string, 0, len(primary.WebAuthn.RPOrigins))

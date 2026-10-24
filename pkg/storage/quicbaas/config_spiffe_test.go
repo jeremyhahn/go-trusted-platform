@@ -150,3 +150,28 @@ func TestToQuicBaaSConfig_WebAuthnResidentKeyWithoutRP(t *testing.T) {
 	require.Empty(t, cfg.IAM.WebAuthn.RPID, "the RP is left to upstream derivation")
 	assert.Equal(t, "required", cfg.IAM.WebAuthn.ResidentKeyRequirement)
 }
+
+// TestToQuicBaaSConfig_WebAuthnAssurance proves the mirrored attestation
+// policy reaches the embedded IAM (iam.webauthn.assurance), so a test
+// harness can admit a software authenticator for its administrator.
+func TestToQuicBaaSConfig_WebAuthnAssurance(t *testing.T) {
+	c := &Config{
+		DataDir:           t.TempDir(),
+		SPIFFETrustDomain: "example.internal",
+		WebAuthnRPID:      "cp.example.com",
+		WebAuthnAssurance: "insecure-allow-software-administrators",
+	}
+	c.SetDefaults()
+	cfg := c.ToQuicBaaSConfig()
+	assert.Equal(t, "insecure-allow-software-administrators", cfg.IAM.WebAuthn.Assurance)
+}
+
+// TestToQuicBaaSConfig_WebAuthnAssuranceDefaultEmpty proves an unset policy
+// stays empty, which the embedded IAM reads as its "hardware" default: the
+// platform never weakens attestation on its own.
+func TestToQuicBaaSConfig_WebAuthnAssuranceDefaultEmpty(t *testing.T) {
+	c := &Config{DataDir: t.TempDir(), SPIFFETrustDomain: "example.internal"}
+	c.SetDefaults()
+	cfg := c.ToQuicBaaSConfig()
+	assert.Empty(t, cfg.IAM.WebAuthn.Assurance)
+}

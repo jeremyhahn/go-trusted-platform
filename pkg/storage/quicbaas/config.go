@@ -179,6 +179,12 @@ type Config struct {
 	WebAuthnRPDisplayName string   `yaml:"-" json:"-" mapstructure:"-"`
 	WebAuthnRPOrigins     []string `yaml:"-" json:"-" mapstructure:"-"`
 
+	// WebAuthnAssurance is the embedded IAM's WebAuthn attestation policy
+	// (iam.webauthn.assurance), mirrored from the primary listener's
+	// webauthn section like the RP fields. Empty keeps the upstream
+	// "hardware" default.
+	WebAuthnAssurance string `yaml:"-" json:"-" mapstructure:"-"`
+
 	// BarrierSealStrategy, BarrierShamirThreshold and BarrierShamirShares
 	// select the embedded server's data-plane barrier strategy. Only
 	// "shamir" is passed through (seal.strategy: shamir, with the M-of-N
@@ -544,6 +550,7 @@ func (c *Config) ToQuicBaaSConfig() *quicbaas.ServerFullConfig {
 	cfg.IAM.WebAuthn.RPID = c.WebAuthnRPID
 	cfg.IAM.WebAuthn.RPDisplayName = c.WebAuthnRPDisplayName
 	cfg.IAM.WebAuthn.RPOrigins = c.WebAuthnRPOrigins
+	cfg.IAM.WebAuthn.Assurance = c.WebAuthnAssurance
 
 	// Browser login is usernameless: the authenticator must find the
 	// credential on its own, so a credential registered without a resident

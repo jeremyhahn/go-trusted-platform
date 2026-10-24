@@ -20,6 +20,7 @@ import (
 	quicbaas "github.com/jeremyhahn/go-trusted-platform/pkg/storage/quicbaas"
 	v1 "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // TestMirrorWebAuthnRelyingParty_AggregatesSameRPOrigins proves the
@@ -94,4 +95,41 @@ func TestMirrorWebAuthnRelyingParty_NoWebAuthnConfigured(t *testing.T) {
 	app.mirrorWebAuthnRelyingParty()
 	assert.Empty(t, app.QuicBaaSConfig.WebAuthnRPID)
 	assert.Empty(t, app.QuicBaaSConfig.WebAuthnRPOrigins)
+}
+
+// TestMirrorWebAuthnRelyingParty_CopiesAssurance proves the primary
+// listener's attestation policy is mirrored into the embedded SDK config.
+func TestMirrorWebAuthnRelyingParty_CopiesAssurance(t *testing.T) {
+	app := &App{
+		Logger:         logging.DefaultLogger(),
+		QuicBaaSConfig: &quicbaas.Config{},
+		WebServices: []*v1.Config{
+			{WebAuthn: &v1.WebAuthn{
+				RPID:      "cp.example.com",
+				RPOrigins: []string{"https://cp.example.com:8443"},
+				Assurance: "insecure-allow-software-administrators",
+			}},
+		},
+	}
+	app.mirrorWebAuthnRelyingParty()
+	assert.Equal(t, "insecure-allow-software-administrators", app.QuicBaaSConfig.WebAuthnAssurance)
+}
+
+// TestMirrorWebAuthnRelyingParty_EmptyAssuranceStaysEmpty proves an unset
+// policy is not replaced by any platform value, so the embedded IAM keeps
+// its "hardware" default.
+func TestMirrorWebAuthnRelyingParty_EmptyAssuranceStaysEmpty(t *testing.T) {
+	app := &App{
+		Logger:         logging.DefaultLogger(),
+		QuicBaaSConfig: &quicbaas.Config{},
+		WebServices: []*v1.Config{
+			{WebAuthn: &v1.WebAuthn{
+				RPID:      "cp.example.com",
+				RPOrigins: []string{"https://cp.example.com:8443"},
+			}},
+		},
+	}
+	app.mirrorWebAuthnRelyingParty()
+	require.Equal(t, "cp.example.com", app.QuicBaaSConfig.WebAuthnRPID)
+	assert.Empty(t, app.QuicBaaSConfig.WebAuthnAssurance)
 }
