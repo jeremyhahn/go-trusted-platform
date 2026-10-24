@@ -18,7 +18,6 @@ package iam
 import (
 	"context"
 	"os"
-	"strings"
 	"testing"
 	"time"
 
@@ -128,38 +127,6 @@ func CleanupRole(t *testing.T, ctx context.Context, adapter IAMCommands, tenantI
 			t.Errorf("cleanup: delete IAM role %s: %v", roleID, err)
 		}
 	})
-}
-
-// RequireUnregisteredPermissionRefused asserts the declared SDK gap for a
-// role carrying the platform's device scopes: CreateRole refuses the first
-// permission the permission registry does not know, naming it.
-//
-// Gap: the platform authorizes on device:read and device:write
-// (pkg/webservice/v1/router/device.go, pkg/webservice/v1/daemon_routes.go,
-// pkg/api/mcp/authz.go), but go-quicbaas sdk/go does not re-export
-// RegisterPermissions / RegisterPermissionRoleGrant, so the platform has no
-// sanctioned way to register the device vocabulary and go-qrdb's role store
-// answers RoleInvalidPermissionError ("role: invalid permission: <perm>"),
-// which go-quicbaas maps to invalid input.
-//
-// When the gap closes CreateRole succeeds: the role is cleaned up and the
-// test fails, so the role-dependent assertions are restored rather than left
-// unrun. Callers return after this helper; the steps that need the role are
-// never run against a role that was not created.
-func RequireUnregisteredPermissionRefused(t *testing.T, ctx context.Context, adapter IAMCommands, opts CreateRoleOptions, wantPermission string) {
-	t.Helper()
-	gap := helpers.GapIAMPermissionRegistration
-	want := "invalid permission: " + wantPermission
-	_, err := adapter.CreateRole(ctx, opts)
-	if err == nil {
-		CleanupRole(t, ctx, adapter, opts.TenantID, opts.ID)
-		gap.Defect(t, "CreateRole", false, "refuses "+wantPermission+" with "+want, "role created")
-		t.FailNow()
-	}
-	if !strings.Contains(err.Error(), want) {
-		t.Fatalf("CreateRole error = %v, want the %s refusal %q", err, gap.Issue, want)
-	}
-	t.Logf("CreateRole refused %q (declared gap: %s); role-dependent steps not run", wantPermission, gap.Issue)
 }
 
 // GenerateTestGroupName generates a unique group name for testing

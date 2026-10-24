@@ -790,6 +790,16 @@ no `rd.luks.*` or `rd.lvm.*`.
     first position and blanks are dropped (`Orchestrator.setSearchDomains`). It
     was once built from a Go map, so its order changed from run to run.
 
+23. **A rollover never leaves the served certificate without a TLSA record**
+    (RFC 7671 §8.1). Completion removes the old records at the name and keeps
+    the one pre-published for the new certificate. If the new certificate
+    cannot be loaded, the server keeps the old one, so the rollover is
+    withdrawn: the pre-published record is removed, the old records stay, and
+    `Wait` returns `ErrCertReloadFailed`. With key reuse the new record is
+    published before the old ones are removed; a reload or publish failure
+    leaves the zone as it was and is returned by both `BeginRollover` and
+    `Wait`.
+
 ## 4. Error semantics
 
 Every error in this feature is a typed struct or a package sentinel;

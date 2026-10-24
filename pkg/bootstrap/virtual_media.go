@@ -827,6 +827,9 @@ func (o *Orchestrator) postInstallPowerOn(ctx context.Context, client bmc.Client
 	defer postVerifyStop()
 
 	postVerified := false
+	// lastState is the last state the BMC actually reported, so a
+	// verification failure names what was seen rather than assuming off.
+	lastState := bmc.PowerStateUnknown
 	for attempt := 1; attempt <= powerVerifyRetries; attempt++ {
 		select {
 		case <-ctx.Done():
@@ -841,6 +844,7 @@ func (o *Orchestrator) postInstallPowerOn(ctx context.Context, client bmc.Client
 				slog.String("error", stErr.Error()))
 			continue
 		}
+		lastState = st
 		if st == bmc.PowerStateOn {
 			o.logger.Info("bootstrap: post-install power state verified on",
 				slog.String("hostname", hostname),
@@ -854,14 +858,19 @@ func (o *Orchestrator) postInstallPowerOn(ctx context.Context, client bmc.Client
 			slog.String("state", string(st)))
 		// Retry power on if still off.
 		if st == bmc.PowerStateOff {
-			_ = postVerifyClient.PowerOn(ctx)
+			if onErr := postVerifyClient.PowerOn(ctx); onErr != nil {
+				o.logger.Warn("bootstrap: post-install PowerOn retry failed",
+					slog.String("hostname", hostname),
+					slog.Int("attempt", attempt),
+					slog.String("error", onErr.Error()))
+			}
 		}
 	}
 	if !postVerified {
 		return ErrPowerStateVerificationFailed{
 			Hostname: hostname,
 			Expected: string(bmc.PowerStateOn),
-			Actual:   string(bmc.PowerStateOff),
+			Actual:   string(lastState),
 			Retries:  powerVerifyRetries,
 		}
 	}
