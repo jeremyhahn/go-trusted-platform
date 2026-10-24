@@ -61,6 +61,12 @@ var (
 	// request without checking its context, so a KV Put on a context already
 	// cancelled still writes.
 	GapEmbeddedKVCancelledContext = DeclaredGap{Issue: "go-quicbaas embedded cancelled context (issue not yet filed)", Service: "quicbaas.KV"}
+
+	// GapIAMPermissionRegistration: go-quicbaas sdk/go does not re-export
+	// RegisterPermissions / RegisterPermissionRoleGrant, so the platform
+	// cannot register the device:read / device:write vocabulary it
+	// authorizes on, and IAM CreateRole refuses it as an invalid permission.
+	GapIAMPermissionRegistration = DeclaredGap{Issue: "go-quicbaas sdk/go RegisterPermissions re-export (issue not yet filed)", Service: "quicbaas.IAM"}
 )
 
 // DeclaredGapClosedError reports that a call did not fail the way its

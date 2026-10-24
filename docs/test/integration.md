@@ -1090,6 +1090,13 @@ unrouted (go-quicbaas #1533), embedded Transaction request type mismatch
 the pinned SDK (#1404, fixed on go-quicbaas main), embedded
 `quicbaas.ParameterStore` unrouted in the pinned SDK and in v0.14.0-alpha, and
 the embedded transport dispatching a KV `Put` on an already-cancelled context.
+The iam suite declares one: go-quicbaas `sdk/go` does not re-export
+`RegisterPermissions` / `RegisterPermissionRoleGrant`, so the platform cannot
+register the `device:read` / `device:write` scopes it authorizes on, and
+`CreateRole` refuses them with `role: invalid permission: <perm>`
+(`GapIAMPermissionRegistration`). Every iam subtest that creates a role with a
+device scope asserts that refusal naming the permission, then returns; the
+fixtures are never widened to `device:*`.
 
 ## Best Practices
 

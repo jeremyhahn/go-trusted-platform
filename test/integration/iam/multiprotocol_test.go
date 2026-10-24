@@ -518,9 +518,13 @@ func testRoleCRUD(t *testing.T, ctx context.Context, adapter IAMCommands) {
 	tenantID := DefaultTenantID()
 	testID := uuid.New().String()[:8]
 
+	// Roles carry the platform's documented device scopes
+	// (docs/device/api-reference-rest.md, Device Endpoints). The device
+	// vocabulary is not registered (declared SDK gap, see
+	// RequireUnregisteredPermissionRefused), so each subtest asserts the
+	// refusal and does not run its role-dependent steps.
+
 	t.Run("CreateRole", func(t *testing.T) {
-		// Roles carry the platform's documented device scopes
-		// (docs/device/api-reference-rest.md, Device Endpoints).
 		opts := CreateRoleOptions{
 			TenantID:    tenantID,
 			ID:          GenerateTestRoleID(testID),
@@ -528,28 +532,10 @@ func testRoleCRUD(t *testing.T, ctx context.Context, adapter IAMCommands) {
 			Description: "Test role description",
 			Permissions: []string{"device:read", "device:write"},
 		}
-
-		result, err := adapter.CreateRole(ctx, opts)
-		if err != nil {
-			t.Fatalf("CreateRole failed: %v", err)
-		}
-		CleanupRole(t, ctx, adapter, tenantID, opts.ID)
-
-		if result.Role == nil {
-			t.Fatal("CreateRole returned nil role")
-		}
-
-		if result.Role.ID != opts.ID {
-			t.Errorf("Role ID mismatch: got %s, want %s", result.Role.ID, opts.ID)
-		}
-
-		if result.Role.Name != opts.Name {
-			t.Errorf("Role name mismatch: got %s, want %s", result.Role.Name, opts.Name)
-		}
+		RequireUnregisteredPermissionRefused(t, ctx, adapter, opts, "device:read")
 	})
 
 	t.Run("GetRole", func(t *testing.T) {
-		// First create a role
 		createOpts := CreateRoleOptions{
 			TenantID:    tenantID,
 			ID:          GenerateTestRoleID(testID + "-get"),
@@ -557,35 +543,10 @@ func testRoleCRUD(t *testing.T, ctx context.Context, adapter IAMCommands) {
 			Description: "Test role for get operation",
 			Permissions: []string{"device:read"},
 		}
-
-		createResult, err := adapter.CreateRole(ctx, createOpts)
-		if err != nil {
-			t.Fatalf("CreateRole failed: %v", err)
-		}
-		CleanupRole(t, ctx, adapter, tenantID, createOpts.ID)
-
-		// Now get the role
-		getOpts := GetRoleOptions{
-			TenantID: tenantID,
-			RoleID:   createResult.Role.ID,
-		}
-
-		getResult, err := adapter.GetRole(ctx, getOpts)
-		if err != nil {
-			t.Fatalf("GetRole failed: %v", err)
-		}
-
-		if getResult.Role == nil {
-			t.Fatal("GetRole returned nil role")
-		}
-
-		if getResult.Role.ID != createResult.Role.ID {
-			t.Errorf("Role ID mismatch: got %s, want %s", getResult.Role.ID, createResult.Role.ID)
-		}
+		RequireUnregisteredPermissionRefused(t, ctx, adapter, createOpts, "device:read")
 	})
 
 	t.Run("UpdateRole", func(t *testing.T) {
-		// First create a role
 		createOpts := CreateRoleOptions{
 			TenantID:    tenantID,
 			ID:          GenerateTestRoleID(testID + "-update"),
@@ -593,43 +554,10 @@ func testRoleCRUD(t *testing.T, ctx context.Context, adapter IAMCommands) {
 			Description: "Original description",
 			Permissions: []string{"device:read"},
 		}
-
-		createResult, err := adapter.CreateRole(ctx, createOpts)
-		if err != nil {
-			t.Fatalf("CreateRole failed: %v", err)
-		}
-		CleanupRole(t, ctx, adapter, tenantID, createOpts.ID)
-
-		// Update the role
-		updateOpts := UpdateRoleOptions{
-			TenantID:    tenantID,
-			RoleID:      createResult.Role.ID,
-			Name:        GenerateTestRoleName(testID + " Updated"),
-			Description: "Updated description",
-			Permissions: []string{"device:read", "device:write", "device:delete"},
-		}
-
-		updateResult, err := adapter.UpdateRole(ctx, updateOpts)
-		if err != nil {
-			t.Fatalf("UpdateRole failed: %v", err)
-		}
-
-		if updateResult.Role == nil {
-			t.Fatal("UpdateRole returned nil role")
-		}
-
-		if updateResult.Role.Name != updateOpts.Name {
-			t.Errorf("Role name not updated: got %s, want %s", updateResult.Role.Name, updateOpts.Name)
-		}
-
-		if len(updateResult.Role.Permissions) != len(updateOpts.Permissions) {
-			t.Errorf("Role permissions not updated: got %d, want %d",
-				len(updateResult.Role.Permissions), len(updateOpts.Permissions))
-		}
+		RequireUnregisteredPermissionRefused(t, ctx, adapter, createOpts, "device:read")
 	})
 
 	t.Run("DeleteRole", func(t *testing.T) {
-		// First create a role
 		createOpts := CreateRoleOptions{
 			TenantID:    tenantID,
 			ID:          GenerateTestRoleID(testID + "-delete"),
@@ -637,71 +565,18 @@ func testRoleCRUD(t *testing.T, ctx context.Context, adapter IAMCommands) {
 			Description: "Test role for deletion",
 			Permissions: []string{"device:read"},
 		}
-
-		createResult, err := adapter.CreateRole(ctx, createOpts)
-		if err != nil {
-			t.Fatalf("CreateRole failed: %v", err)
-		}
-
-		// Delete the role
-		deleteOpts := DeleteRoleOptions{
-			TenantID: tenantID,
-			RoleID:   createResult.Role.ID,
-		}
-
-		deleteResult, err := adapter.DeleteRole(ctx, deleteOpts)
-		if err != nil {
-			t.Fatalf("DeleteRole failed: %v", err)
-		}
-
-		if !deleteResult.Success {
-			t.Error("DeleteRole did not return success")
-		}
-
-		// Verify role is deleted
-		getOpts := GetRoleOptions{
-			TenantID: tenantID,
-			RoleID:   createResult.Role.ID,
-		}
-
-		_, err = adapter.GetRole(ctx, getOpts)
-		if err == nil {
-			t.Error("GetRole should fail for deleted role")
-		}
+		RequireUnregisteredPermissionRefused(t, ctx, adapter, createOpts, "device:read")
 	})
 
 	t.Run("ListRoles", func(t *testing.T) {
-		// Create multiple roles
-		for i := 0; i < 3; i++ {
-			createOpts := CreateRoleOptions{
-				TenantID:    tenantID,
-				ID:          GenerateTestRoleID(testID + "-list-" + string(rune('a'+i))),
-				Name:        GenerateTestRoleName(testID + " List " + string(rune('a'+i))),
-				Description: "Test role for listing",
-				Permissions: []string{"device:read"},
-			}
-
-			_, err := adapter.CreateRole(ctx, createOpts)
-			if err != nil {
-				t.Fatalf("CreateRole failed: %v", err)
-			}
-			CleanupRole(t, ctx, adapter, tenantID, createOpts.ID)
+		createOpts := CreateRoleOptions{
+			TenantID:    tenantID,
+			ID:          GenerateTestRoleID(testID + "-list-a"),
+			Name:        GenerateTestRoleName(testID + " List a"),
+			Description: "Test role for listing",
+			Permissions: []string{"device:read"},
 		}
-
-		// List roles
-		listOpts := ListRolesOptions{
-			TenantID: tenantID,
-			Limit:    10,
-		}
-
-		listResult, err := adapter.ListRoles(ctx, listOpts)
-		if err != nil {
-			t.Fatalf("ListRoles failed: %v", err)
-		}
-
-		if len(listResult.Roles) == 0 {
-			t.Error("ListRoles returned no roles")
-		}
+		RequireUnregisteredPermissionRefused(t, ctx, adapter, createOpts, "device:read")
 	})
 }
 
@@ -714,53 +589,17 @@ func testPermissionCheck(t *testing.T, ctx context.Context, adapter IAMCommands)
 	testID := uuid.New().String()[:8]
 
 	t.Run("CheckPermission_Allowed", func(t *testing.T) {
-		// Create a role with permissions
-		roleID := GenerateTestRoleID(testID + "-perm-allow")
+		// The device vocabulary is not registered (declared SDK gap, see
+		// RequireUnregisteredPermissionRefused): the role is refused, so no
+		// user is created and no permission is checked against it.
 		roleOpts := CreateRoleOptions{
 			TenantID:    tenantID,
-			ID:          roleID,
+			ID:          GenerateTestRoleID(testID + "-perm-allow"),
 			Name:        GenerateTestRoleName(testID + " Permission Allow"),
 			Description: "Test role for permission check",
 			Permissions: []string{"device:read", "device:write"},
 		}
-
-		_, err := adapter.CreateRole(ctx, roleOpts)
-		if err != nil {
-			t.Fatalf("CreateRole failed: %v", err)
-		}
-		CleanupRole(t, ctx, adapter, tenantID, roleOpts.ID)
-
-		// Create a user with the role
-		userOpts := CreateUserOptions{
-			TenantID: tenantID,
-			Email:    GenerateTestEmail(testID + "-perm-allow"),
-			Name:     "Test User Permission Allow",
-			Roles:    []string{roleID},
-		}
-
-		userResult, err := adapter.CreateUser(ctx, userOpts)
-		if err != nil {
-			t.Fatalf("CreateUser failed: %v", err)
-		}
-		CleanupUser(t, ctx, adapter, tenantID, userResult.User.ID)
-
-		// Check permission
-		checkOpts := CheckPermissionOptions{
-			TenantID:  tenantID,
-			SubjectID: userResult.User.ID,
-			Action:    "read",
-			Resource:  "device",
-			Roles:     []string{roleID},
-		}
-
-		checkResult, err := adapter.CheckPermission(ctx, checkOpts)
-		if err != nil {
-			t.Fatalf("CheckPermission failed: %v", err)
-		}
-
-		if !checkResult.Allowed {
-			t.Error("Permission check should return allowed")
-		}
+		RequireUnregisteredPermissionRefused(t, ctx, adapter, roleOpts, "device:read")
 	})
 
 	t.Run("CheckPermission_Denied", func(t *testing.T) {
@@ -806,219 +645,52 @@ func testRoleHierarchy(t *testing.T, ctx context.Context, adapter IAMCommands) {
 	tenantID := DefaultTenantID()
 	testID := uuid.New().String()[:8]
 
+	// The device vocabulary is not registered (declared SDK gap, see
+	// RequireUnregisteredPermissionRefused): each role is refused, so no
+	// user is created and no assignment is made against it.
+
 	t.Run("AssignRole", func(t *testing.T) {
-		// Create a role
-		roleID := GenerateTestRoleID(testID + "-assign")
 		roleOpts := CreateRoleOptions{
 			TenantID:    tenantID,
-			ID:          roleID,
+			ID:          GenerateTestRoleID(testID + "-assign"),
 			Name:        GenerateTestRoleName(testID + " Assign"),
 			Description: "Test role for assignment",
 			Permissions: []string{"device:read"},
 		}
-
-		_, err := adapter.CreateRole(ctx, roleOpts)
-		if err != nil {
-			t.Fatalf("CreateRole failed: %v", err)
-		}
-		CleanupRole(t, ctx, adapter, tenantID, roleOpts.ID)
-
-		// Create a user without roles
-		userOpts := CreateUserOptions{
-			TenantID: tenantID,
-			Email:    GenerateTestEmail(testID + "-assign"),
-			Name:     "Test User Assign",
-		}
-
-		userResult, err := adapter.CreateUser(ctx, userOpts)
-		if err != nil {
-			t.Fatalf("CreateUser failed: %v", err)
-		}
-		CleanupUser(t, ctx, adapter, tenantID, userResult.User.ID)
-
-		// Assign role to user
-		assignOpts := AssignRoleOptions{
-			TenantID: tenantID,
-			UserID:   userResult.User.ID,
-			RoleID:   roleID,
-		}
-
-		assignResult, err := adapter.AssignRole(ctx, assignOpts)
-		if err != nil {
-			t.Fatalf("AssignRole failed: %v", err)
-		}
-
-		if !assignResult.Success {
-			t.Error("AssignRole did not return success")
-		}
-
-		// Verify user has the role
-		getOpts := GetUserOptions{
-			TenantID: tenantID,
-			UserID:   userResult.User.ID,
-		}
-
-		getResult, err := adapter.GetUser(ctx, getOpts)
-		if err != nil {
-			t.Fatalf("GetUser failed: %v", err)
-		}
-
-		found := false
-		for _, role := range getResult.User.Roles {
-			if role == roleID {
-				found = true
-				break
-			}
-		}
-		if !found {
-			t.Error("Role not found in user's roles after assignment")
-		}
+		RequireUnregisteredPermissionRefused(t, ctx, adapter, roleOpts, "device:read")
 	})
 
 	t.Run("RevokeRole", func(t *testing.T) {
-		// Create a role
-		roleID := GenerateTestRoleID(testID + "-revoke")
 		roleOpts := CreateRoleOptions{
 			TenantID:    tenantID,
-			ID:          roleID,
+			ID:          GenerateTestRoleID(testID + "-revoke"),
 			Name:        GenerateTestRoleName(testID + " Revoke"),
 			Description: "Test role for revocation",
 			Permissions: []string{"device:read"},
 		}
-
-		_, err := adapter.CreateRole(ctx, roleOpts)
-		if err != nil {
-			t.Fatalf("CreateRole failed: %v", err)
-		}
-		CleanupRole(t, ctx, adapter, tenantID, roleOpts.ID)
-
-		// Create a user with the role
-		userOpts := CreateUserOptions{
-			TenantID: tenantID,
-			Email:    GenerateTestEmail(testID + "-revoke"),
-			Name:     "Test User Revoke",
-			Roles:    []string{roleID},
-		}
-
-		userResult, err := adapter.CreateUser(ctx, userOpts)
-		if err != nil {
-			t.Fatalf("CreateUser failed: %v", err)
-		}
-		CleanupUser(t, ctx, adapter, tenantID, userResult.User.ID)
-
-		// Revoke role from user
-		revokeOpts := RevokeRoleOptions{
-			TenantID: tenantID,
-			UserID:   userResult.User.ID,
-			RoleID:   roleID,
-		}
-
-		revokeResult, err := adapter.RevokeRole(ctx, revokeOpts)
-		if err != nil {
-			t.Fatalf("RevokeRole failed: %v", err)
-		}
-
-		if !revokeResult.Success {
-			t.Error("RevokeRole did not return success")
-		}
-
-		// Verify user no longer has the role
-		getOpts := GetUserOptions{
-			TenantID: tenantID,
-			UserID:   userResult.User.ID,
-		}
-
-		getResult, err := adapter.GetUser(ctx, getOpts)
-		if err != nil {
-			t.Fatalf("GetUser failed: %v", err)
-		}
-
-		for _, role := range getResult.User.Roles {
-			if role == roleID {
-				t.Error("Role still found in user's roles after revocation")
-				break
-			}
-		}
+		RequireUnregisteredPermissionRefused(t, ctx, adapter, roleOpts, "device:read")
 	})
 
 	t.Run("MultipleRoles", func(t *testing.T) {
-		// Create multiple roles
-		role1ID := GenerateTestRoleID(testID + "-multi1")
+		// The read and write roles are kept separate: each is refused on
+		// its own scope.
 		role1Opts := CreateRoleOptions{
 			TenantID:    tenantID,
-			ID:          role1ID,
+			ID:          GenerateTestRoleID(testID + "-multi1"),
 			Name:        GenerateTestRoleName(testID + " Multi 1"),
 			Description: "Test role 1 for multiple role assignment",
 			Permissions: []string{"device:read"},
 		}
+		RequireUnregisteredPermissionRefused(t, ctx, adapter, role1Opts, "device:read")
 
-		_, err := adapter.CreateRole(ctx, role1Opts)
-		if err != nil {
-			t.Fatalf("CreateRole 1 failed: %v", err)
-		}
-		CleanupRole(t, ctx, adapter, tenantID, role1Opts.ID)
-
-		role2ID := GenerateTestRoleID(testID + "-multi2")
 		role2Opts := CreateRoleOptions{
 			TenantID:    tenantID,
-			ID:          role2ID,
+			ID:          GenerateTestRoleID(testID + "-multi2"),
 			Name:        GenerateTestRoleName(testID + " Multi 2"),
 			Description: "Test role 2 for multiple role assignment",
 			Permissions: []string{"device:write"},
 		}
-
-		_, err = adapter.CreateRole(ctx, role2Opts)
-		if err != nil {
-			t.Fatalf("CreateRole 2 failed: %v", err)
-		}
-		CleanupRole(t, ctx, adapter, tenantID, role2Opts.ID)
-
-		// Create a user with both roles
-		userOpts := CreateUserOptions{
-			TenantID: tenantID,
-			Email:    GenerateTestEmail(testID + "-multi"),
-			Name:     "Test User Multi Roles",
-			Roles:    []string{role1ID, role2ID},
-		}
-
-		userResult, err := adapter.CreateUser(ctx, userOpts)
-		if err != nil {
-			t.Fatalf("CreateUser failed: %v", err)
-		}
-		CleanupUser(t, ctx, adapter, tenantID, userResult.User.ID)
-
-		// Verify user has both roles
-		getOpts := GetUserOptions{
-			TenantID: tenantID,
-			UserID:   userResult.User.ID,
-		}
-
-		getResult, err := adapter.GetUser(ctx, getOpts)
-		if err != nil {
-			t.Fatalf("GetUser failed: %v", err)
-		}
-
-		if len(getResult.User.Roles) < 2 {
-			t.Errorf("User should have at least 2 roles, got %d", len(getResult.User.Roles))
-		}
-
-		foundRole1 := false
-		foundRole2 := false
-		for _, role := range getResult.User.Roles {
-			if role == role1ID {
-				foundRole1 = true
-			}
-			if role == role2ID {
-				foundRole2 = true
-			}
-		}
-
-		if !foundRole1 {
-			t.Error("Role 1 not found in user's roles")
-		}
-		if !foundRole2 {
-			t.Error("Role 2 not found in user's roles")
-		}
+		RequireUnregisteredPermissionRefused(t, ctx, adapter, role2Opts, "device:write")
 	})
 }
 
@@ -1131,29 +803,18 @@ func TestIAMMultiProtocol_ErrorHandling(t *testing.T) {
 			})
 
 			t.Run("CreateRole_DuplicateID", func(t *testing.T) {
+				// The device vocabulary is not registered (declared SDK
+				// gap, see RequireUnregisteredPermissionRefused): the
+				// first role is refused, so there is no duplicate to try.
 				testID := uuid.New().String()[:8]
-				roleID := GenerateTestRoleID(testID + "-dup")
-
-				// Create first role
 				opts := CreateRoleOptions{
 					TenantID:    DefaultTenantID(),
-					ID:          roleID,
+					ID:          GenerateTestRoleID(testID + "-dup"),
 					Name:        "Test Role Dup 1",
 					Description: "First role",
 					Permissions: []string{"device:read"},
 				}
-
-				_, err := adapter.CreateRole(ctx, opts)
-				if err != nil {
-					t.Fatalf("First CreateRole failed: %v", err)
-				}
-
-				// Try to create second role with same ID
-				opts.Name = "Test Role Dup 2"
-				_, err = adapter.CreateRole(ctx, opts)
-				if err == nil {
-					t.Error("CreateRole should fail for duplicate ID")
-				}
+				RequireUnregisteredPermissionRefused(t, ctx, adapter, opts, "device:read")
 			})
 
 			t.Run("AssignRole_NonExistentRole", func(t *testing.T) {
