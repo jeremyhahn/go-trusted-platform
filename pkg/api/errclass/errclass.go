@@ -19,10 +19,12 @@
 package errclass
 
 import (
+	"errors"
 	"net/http"
 
 	quicbaas "github.com/jeremyhahn/go-quicbaas/sdk/go"
 	sdkerrors "github.com/jeremyhahn/go-quicbaas/sdk/go/errors"
+	"github.com/jeremyhahn/go-quicbaas/sdk/go/transport/embedded"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
@@ -34,6 +36,7 @@ import (
 var classifiers = []func(error) (codes.Code, bool){
 	statusClass,
 	sdkClass,
+	embeddedClass,
 	databaseClass,
 }
 
@@ -152,6 +155,17 @@ func statusClass(err error) (codes.Code, bool) {
 func sdkClass(err error) (codes.Code, bool) {
 	class, ok := sdkClasses[sdkerrors.Code(err)]
 	return class, ok
+}
+
+// embeddedClass classifies the SDK embedded transport's refusal of a method
+// it has no handler for. The refusal carries no SDK error code, yet it is
+// the SDK saying the operation is not implemented, so it is Unimplemented.
+func embeddedClass(err error) (codes.Code, bool) {
+	var unknown *embedded.UnknownMethodError
+	if errors.As(err, &unknown) {
+		return codes.Unimplemented, true
+	}
+	return codes.Unknown, false
 }
 
 // databaseClass classifies a database error, which the SDK's embedded

@@ -38,6 +38,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
+	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers/surface"
 )
 
 // =============================================================================
@@ -313,6 +314,33 @@ func testDelete(t *testing.T, ctx context.Context, cmd SecretsCommands, prefix s
 // Version Management Tests
 // =============================================================================
 
+// embeddedGapAdapters are the adapters whose daemon handlers reach the
+// secrets service through the SDK's embedded transport. At the pinned
+// go-quicbaas that transport serves only quicbaas.Secrets/{Store,Get,List,
+// Delete,Ensure} and answers GetVersion, ListVersions, Rotate, Rollback,
+// UpdateStatus, SetRotationPolicy and GetRotationPolicy with
+// *embedded.UnknownMethodError, which the daemon returns as Unimplemented.
+var embeddedGapAdapters = map[string]bool{
+	"gRPC": true,
+	"Unix": true,
+}
+
+// requireSecretsGapRefusal reports true, so the leaf returns, when err is
+// the declared SDK refusal of a versioned secrets method: the CLI's typed
+// ErrCLIUpstreamGap, or Unimplemented from an embedded-transport adapter.
+// Any other answer, success included, reports false and the leaf's own
+// assertions decide.
+func requireSecretsGapRefusal(t *testing.T, adapter string, err error) bool {
+	if helpers.RequireCLIRefusal(t, adapter, err, helpers.ErrCLIUpstreamGap{}) {
+		return true
+	}
+	if !embeddedGapAdapters[adapter] || !surface.IsNotImplemented(err) {
+		return false
+	}
+	t.Logf("%s: the go-quicbaas SDK does not serve this secrets method (%s): %v", adapter, helpers.SecretsSDKGapIssue, err)
+	return true
+}
+
 func testRotate(t *testing.T, ctx context.Context, cmd SecretsCommands, prefix string) {
 	testCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
@@ -330,14 +358,14 @@ func testRotate(t *testing.T, ctx context.Context, cmd SecretsCommands, prefix s
 	defer CleanupSecret(cmd, testCtx, secretName)
 
 	// wantData is what Get must answer after the rotate: the new data, or the
-	// original data when the CLI's rotate is the declared SDK refusal.
+	// original data when the rotate is the declared SDK refusal.
 	wantData := []byte("new-rotated-secret-data")
 
 	t.Run("RotateSecret", func(t *testing.T) {
 		newData := []byte("new-rotated-secret-data")
 
 		result, err := cmd.Rotate(testCtx, secretName, newData)
-		if helpers.RequireCLIRefusal(t, cmd.Name(), err, helpers.ErrCLIUpstreamGap{}) {
+		if requireSecretsGapRefusal(t, cmd.Name(), err) {
 			wantData = originalData
 			return
 		}
@@ -355,7 +383,7 @@ func testRotate(t *testing.T, ctx context.Context, cmd SecretsCommands, prefix s
 
 	t.Run("RotateNonexistentSecretFails", func(t *testing.T) {
 		_, err := cmd.Rotate(testCtx, prefix+"-nonexistent-rotate", []byte("data"))
-		if helpers.RequireCLIRefusal(t, cmd.Name(), err, helpers.ErrCLIUpstreamGap{}) {
+		if requireSecretsGapRefusal(t, cmd.Name(), err) {
 			return
 		}
 		require.Error(t, err, "Rotate should fail for nonexistent secret")
@@ -379,14 +407,14 @@ func testVersions(t *testing.T, ctx context.Context, cmd SecretsCommands, prefix
 	// Rotate a few times
 	for i := 2; i <= 3; i++ {
 		_, err := cmd.Rotate(testCtx, secretName, []byte(fmt.Sprintf("version-%d-data", i)))
-		if !helpers.RequireCLIRefusal(t, cmd.Name(), err, helpers.ErrCLIUpstreamGap{}) {
+		if !requireSecretsGapRefusal(t, cmd.Name(), err) {
 			require.NoError(t, err, "Setup: Rotate should succeed")
 		}
 	}
 
 	t.Run("ListSecretVersions", func(t *testing.T) {
 		result, err := cmd.Versions(testCtx, secretName)
-		if helpers.RequireCLIRefusal(t, cmd.Name(), err, helpers.ErrCLIUpstreamGap{}) {
+		if requireSecretsGapRefusal(t, cmd.Name(), err) {
 			return
 		}
 		require.NoError(t, err, "Versions should succeed")
@@ -411,13 +439,13 @@ func testVersion(t *testing.T, ctx context.Context, cmd SecretsCommands, prefix 
 
 	// Rotate once
 	_, err = cmd.Rotate(testCtx, secretName, []byte("version-2-data"))
-	if !helpers.RequireCLIRefusal(t, cmd.Name(), err, helpers.ErrCLIUpstreamGap{}) {
+	if !requireSecretsGapRefusal(t, cmd.Name(), err) {
 		require.NoError(t, err, "Setup: Rotate should succeed")
 	}
 
 	t.Run("GetSpecificVersion", func(t *testing.T) {
 		result, err := cmd.Version(testCtx, secretName, 1)
-		if helpers.RequireCLIRefusal(t, cmd.Name(), err, helpers.ErrCLIUpstreamGap{}) {
+		if requireSecretsGapRefusal(t, cmd.Name(), err) {
 			return
 		}
 		require.NoError(t, err, "Version should succeed")
@@ -428,7 +456,7 @@ func testVersion(t *testing.T, ctx context.Context, cmd SecretsCommands, prefix 
 
 	t.Run("GetLatestVersion", func(t *testing.T) {
 		result, err := cmd.Version(testCtx, secretName, 2)
-		if helpers.RequireCLIRefusal(t, cmd.Name(), err, helpers.ErrCLIUpstreamGap{}) {
+		if requireSecretsGapRefusal(t, cmd.Name(), err) {
 			return
 		}
 		require.NoError(t, err, "Version should succeed")
@@ -455,13 +483,13 @@ func testRollback(t *testing.T, ctx context.Context, cmd SecretsCommands, prefix
 
 	// Rotate to create version 2
 	_, err = cmd.Rotate(testCtx, secretName, []byte("rotated-data"))
-	if !helpers.RequireCLIRefusal(t, cmd.Name(), err, helpers.ErrCLIUpstreamGap{}) {
+	if !requireSecretsGapRefusal(t, cmd.Name(), err) {
 		require.NoError(t, err, "Setup: Rotate should succeed")
 	}
 
 	t.Run("RollbackToVersion1", func(t *testing.T) {
 		result, err := cmd.Rollback(testCtx, secretName, 1)
-		if helpers.RequireCLIRefusal(t, cmd.Name(), err, helpers.ErrCLIUpstreamGap{}) {
+		if requireSecretsGapRefusal(t, cmd.Name(), err) {
 			return
 		}
 		require.NoError(t, err, "Rollback should succeed")
@@ -496,7 +524,7 @@ func testStatus(t *testing.T, ctx context.Context, cmd SecretsCommands, prefix s
 
 	t.Run("DisableSecret", func(t *testing.T) {
 		result, err := cmd.Status(testCtx, secretName, false)
-		if helpers.RequireCLIRefusal(t, cmd.Name(), err, helpers.ErrCLIUpstreamGap{}) {
+		if requireSecretsGapRefusal(t, cmd.Name(), err) {
 			return
 		}
 		require.NoError(t, err, "Status (disable) should succeed")
@@ -506,7 +534,7 @@ func testStatus(t *testing.T, ctx context.Context, cmd SecretsCommands, prefix s
 
 	t.Run("EnableSecret", func(t *testing.T) {
 		result, err := cmd.Status(testCtx, secretName, true)
-		if helpers.RequireCLIRefusal(t, cmd.Name(), err, helpers.ErrCLIUpstreamGap{}) {
+		if requireSecretsGapRefusal(t, cmd.Name(), err) {
 			return
 		}
 		require.NoError(t, err, "Status (enable) should succeed")
@@ -537,7 +565,7 @@ func testPolicy(t *testing.T, ctx context.Context, cmd SecretsCommands, prefix s
 		}
 
 		result, err := cmd.PolicySet(testCtx, secretName, policyOpts)
-		if helpers.RequireCLIRefusal(t, cmd.Name(), err, helpers.ErrCLIUpstreamGap{}) {
+		if requireSecretsGapRefusal(t, cmd.Name(), err) {
 			return
 		}
 		require.NoError(t, err, "PolicySet should succeed")
@@ -546,7 +574,7 @@ func testPolicy(t *testing.T, ctx context.Context, cmd SecretsCommands, prefix s
 
 	t.Run("GetRotationPolicy", func(t *testing.T) {
 		result, err := cmd.Policy(testCtx, secretName)
-		if helpers.RequireCLIRefusal(t, cmd.Name(), err, helpers.ErrCLIUpstreamGap{}) {
+		if requireSecretsGapRefusal(t, cmd.Name(), err) {
 			return
 		}
 		require.NoError(t, err, "Policy should succeed")
@@ -562,7 +590,7 @@ func testPolicy(t *testing.T, ctx context.Context, cmd SecretsCommands, prefix s
 		}
 
 		result, err := cmd.PolicySet(testCtx, secretName, policyOpts)
-		if helpers.RequireCLIRefusal(t, cmd.Name(), err, helpers.ErrCLIUpstreamGap{}) {
+		if requireSecretsGapRefusal(t, cmd.Name(), err) {
 			return
 		}
 		require.NoError(t, err, "PolicySet should succeed")
