@@ -23,6 +23,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"sync/atomic"
 	"time"
 )
 
@@ -118,12 +119,23 @@ func GenerateUniqueBridgeName(prefix string) string {
 	return fmt.Sprintf("%s-%s-%09d", prefix, now.Format("20060102150405"), now.Nanosecond())
 }
 
-// GenerateUniqueVLANID generates a unique VLAN ID for testing.
-// Uses timestamp-based approach to avoid conflicts.
+// Test VLAN IDs are drawn from 100-4094: IEEE 802.1Q makes 4095 reserved, and
+// IDs below 100 are left to fixtures that name a VLAN explicitly.
+const (
+	testVLANIDFirst = 100
+	testVLANIDLast  = 4094
+)
+
+// vlanIDCounter is the number of VLAN IDs GenerateUniqueVLANID has handed out.
+var vlanIDCounter atomic.Uint32
+
+// GenerateUniqueVLANID returns the next VLAN ID in testVLANIDFirst-testVLANIDLast.
+// IDs come from a process-wide atomic counter, so no two calls in a test
+// process return the same ID until the range's 3995 IDs are exhausted.
 func GenerateUniqueVLANID() int32 {
-	now := time.Now()
-	// Use last 12 bits of nanoseconds modulo 4000 + 100 to get VLAN in range 100-4095
-	return int32((now.Nanosecond() % 4000) + 100)
+	const span = testVLANIDLast - testVLANIDFirst + 1
+	n := vlanIDCounter.Add(1) - 1
+	return int32(testVLANIDFirst + n%span)
 }
 
 // GenerateTestMAC generates a deterministic test MAC address.

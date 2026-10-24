@@ -202,6 +202,57 @@ func TestHTTPServer_BindHostNotOnHost(t *testing.T) {
 	assert.Error(t, startHTTPServer(t, cfg), "binding an address the host does not hold must fail")
 }
 
+// TestHTTPServer_StartReleasesPortOnReturn pins the shutdown contract a
+// restart depends on: once Start has returned after its context was
+// cancelled, the port is free again. Cancelling straight after the bind
+// signal is the race that left the listener open: Shutdown ran before
+// Serve had tracked the listener, so only Serve's own deferred Close,
+// still pending when Start returned, released the port.
+func TestHTTPServer_StartReleasesPortOnReturn(t *testing.T) {
+	port := freeTCPPort(t)
+	addr := net.JoinHostPort("127.0.0.1", strconv.Itoa(port))
+	cfg := DefaultServerConfig()
+	cfg.BindHost = "127.0.0.1"
+	cfg.HTTPPort = port
+
+	for i := 0; i < 50; i++ {
+		ctx, cancel := context.WithCancel(context.Background())
+		server := NewHTTPServer(cfg, logging.DefaultLogger())
+		bound := newBoundSignal()
+		errCh := make(chan error, 1)
+		go func() { errCh <- server.Start(ctx, bound) }()
+
+		select {
+		case <-bound:
+		case err := <-errCh:
+			cancel()
+			require.NoError(t, err, "iteration %d: Start failed before binding", i)
+		}
+		cancel()
+		require.NoError(t, <-errCh, "iteration %d: Start must shut down cleanly", i)
+
+		ln, err := net.Listen("tcp", addr)
+		require.NoError(t, err, "iteration %d: the port must be free once Start has returned", i)
+		require.NoError(t, ln.Close())
+	}
+}
+
+// TestHTTPServer_StartBindConflict covers the error path: a port that is
+// already held fails Start synchronously, before any bind signal.
+func TestHTTPServer_StartBindConflict(t *testing.T) {
+	held, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, held.Close()) })
+
+	cfg := DefaultServerConfig()
+	cfg.BindHost = "127.0.0.1"
+	cfg.HTTPPort = held.Addr().(*net.TCPAddr).Port
+
+	err = NewHTTPServer(cfg, logging.DefaultLogger()).Start(context.Background(), newBoundSignal())
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "failed to bind")
+}
+
 func TestTFTPServer_BindsBindHost(t *testing.T) {
 	tests := []struct {
 		name          string
