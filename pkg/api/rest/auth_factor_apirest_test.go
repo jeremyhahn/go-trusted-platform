@@ -1,11 +1,9 @@
 package rest
 
 import (
-	"bytes"
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
-	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -18,6 +16,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	quicbaasca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/ca"
+
+	"github.com/jeremyhahn/go-trusted-platform/pkg/common"
 )
 
 func authFactorErrorMessage(t *testing.T, rec *httptest.ResponseRecorder) string {
@@ -60,8 +60,9 @@ func TestAuthFactorAPIRest_MTLSProbeWithCA(t *testing.T) {
 
 func TestAuthFactorAPIRest_IssueCertErrors(t *testing.T) {
 	t.Run("malformed body", func(t *testing.T) {
-		router := registerRoutes(newHandlerWithCA(newAuthTestCA(t)))
+		router := registerRoutes(guardedHandlerWithCA(newAuthTestCA(t), nil))
 		req := httptest.NewRequest(http.MethodPost, "/api/v1/users/alice/factors/mtls/issue-cert", strings.NewReader(`{"csr_pem":`))
+		withCallerCert(req, selfSignedClientCert(t, "alice"))
 		rec := httptest.NewRecorder()
 		router.ServeHTTP(rec, req)
 
@@ -72,12 +73,8 @@ func TestAuthFactorAPIRest_IssueCertErrors(t *testing.T) {
 	t.Run("CA refuses the CSR", func(t *testing.T) {
 		testCA := newAuthTestCA(t)
 		testCA.signErr = errors.New("profile client disabled")
-		router := registerRoutes(newHandlerWithCA(testCA))
-		body, err := json.Marshal(IssueMTLSCertRequest{CSRPEM: generateAuthTestCSRPEM(t)})
-		require.NoError(t, err)
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/users/alice/factors/mtls/issue-cert", bytes.NewReader(body))
-		rec := httptest.NewRecorder()
-		router.ServeHTTP(rec, req)
+		h := guardedHandlerWithCA(testCA, nil)
+		rec := serveIssueCert(h, issueCertRequest(t, "alice", "alice", selfSignedClientCert(t, "alice")))
 
 		require.Equal(t, http.StatusBadRequest, rec.Code)
 		assert.Equal(t, ErrCertIssueFailed{Reason: "profile client disabled"}.Error(), authFactorErrorMessage(t, rec))
@@ -103,27 +100,42 @@ func TestAuthFactorAPIRest_EmptyID(t *testing.T) {
 	}
 }
 
-func TestAuthFactorAPIRest_CallerAuthorized(t *testing.T) {
-	h := NewAuthFactorHandlers(nil, nil)
+// Admin comes from the caller's role, never from a common name or
+// organizational unit the certificate's holder chose.
+func TestAuthFactorAPIRest_AuthorizeCaller(t *testing.T) {
+	h := guardedHandlerWithCA(nil, certPrincipals{"ops": {common.ROLE_ADMIN}})
 	cases := []struct {
-		name    string
-		subject *pkix.Name
-		want    bool
+		name       string
+		subject    *pkix.Name
+		wantStatus int
+		wantErr    error
 	}{
-		{"no client certificate", nil, true},
-		{"the user themselves", &pkix.Name{CommonName: "alice"}, true},
-		{"admin common name", &pkix.Name{CommonName: "admin"}, true},
-		{"admin-prefixed common name", &pkix.Name{CommonName: "admin-ops"}, true},
-		{"admin organizational unit", &pkix.Name{CommonName: "carol", OrganizationalUnit: []string{"eng", "ADMIN"}}, true},
-		{"another user", &pkix.Name{CommonName: "bob", OrganizationalUnit: []string{"eng"}}, false},
+		{"no client certificate", nil, http.StatusUnauthorized, nil},
+		{"the user themselves", &pkix.Name{CommonName: "alice"}, http.StatusOK, nil},
+		{"admin role", &pkix.Name{CommonName: "ops"}, http.StatusOK, nil},
+		{"admin common name without the role", &pkix.Name{CommonName: "admin"}, http.StatusForbidden, ErrForbiddenUserID{}},
+		{"admin-prefixed common name without the role", &pkix.Name{CommonName: "admin-ops"}, http.StatusForbidden, ErrForbiddenUserID{}},
+		{"admin organizational unit without the role", &pkix.Name{CommonName: "carol", OrganizationalUnit: []string{"eng", "ADMIN"}}, http.StatusForbidden, ErrForbiddenUserID{}},
+		{"another user", &pkix.Name{CommonName: "bob", OrganizationalUnit: []string{"eng"}}, http.StatusForbidden, ErrForbiddenUserID{}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			req := httptest.NewRequest(http.MethodPost, "/", nil)
 			if tc.subject != nil {
-				req.TLS = &tls.ConnectionState{PeerCertificates: []*x509.Certificate{{Subject: *tc.subject}}}
+				withCallerCert(req, selfSignedClientCertWithSubject(t, *tc.subject))
 			}
-			assert.Equal(t, tc.want, h.callerAuthorized(req, "alice"))
+			caller, status, err := h.authorizeCaller(req, "alice")
+			assert.Equal(t, tc.wantStatus, status)
+			if tc.wantStatus == http.StatusOK {
+				require.NoError(t, err)
+				assert.NotNil(t, caller)
+				return
+			}
+			assert.Nil(t, caller)
+			require.Error(t, err)
+			if tc.wantErr != nil {
+				assert.Equal(t, tc.wantErr, err)
+			}
 		})
 	}
 }

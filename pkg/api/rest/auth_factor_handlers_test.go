@@ -334,13 +334,20 @@ func issueCertRequestForSubject(t *testing.T, userID string, subject pkix.Name, 
 	require.NoError(t, err)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/users/"+userID+"/factors/mtls/issue-cert", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-	if caller != nil {
-		req.TLS = &tls.ConnectionState{
-			PeerCertificates: []*x509.Certificate{caller},
-			VerifiedChains:   [][]*x509.Certificate{{caller}},
-		}
-	}
+	withCallerCert(req, caller)
 	return req
+}
+
+// withCallerCert presents caller as the request's verified mTLS client
+// certificate; a nil caller leaves the request unauthenticated.
+func withCallerCert(req *http.Request, caller *x509.Certificate) {
+	if caller == nil {
+		return
+	}
+	req.TLS = &tls.ConnectionState{
+		PeerCertificates: []*x509.Certificate{caller},
+		VerifiedChains:   [][]*x509.Certificate{{caller}},
+	}
 }
 
 func serveIssueCert(h *AuthFactorHandlers, req *http.Request) *httptest.ResponseRecorder {
