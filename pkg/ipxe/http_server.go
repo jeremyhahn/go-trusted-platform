@@ -174,7 +174,19 @@ func (s *HTTPServer) Start(ctx context.Context, bound chan<- struct{}) error {
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		s.logger.Info("HTTP server shutting down")
-		return s.server.Shutdown(shutdownCtx)
+		shutdownErr := s.server.Shutdown(shutdownCtx)
+		// Shutdown closes only the listeners Serve has tracked. When the
+		// cancel lands before Serve has tracked ln, Serve's own deferred
+		// Close releases the port, so Start returns only after Serve has.
+		// A restart on the same port would otherwise race that Close.
+		serveErr := <-errChan
+		if shutdownErr != nil {
+			return shutdownErr
+		}
+		if serveErr != http.ErrServerClosed {
+			return &WrappedError{Msg: "HTTP server failed", Err: serveErr}
+		}
+		return nil
 	case err := <-errChan:
 		if err == http.ErrServerClosed {
 			return nil

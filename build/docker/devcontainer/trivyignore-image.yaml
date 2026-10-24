@@ -46,3 +46,8 @@ vulnerabilities:
       - "usr/local/lib/node_modules/npm/node_modules/undici/package.json"
     statement: "Alias of CVE-2026-19534; see that entry"
     expired_at: 2027-01-16
+  - id: CVE-2026-109869
+    paths:
+      - "usr/local/lib/node_modules/npm/node_modules/undici/package.json"
+    statement: "undici 6.28.0 bundled by npm in the dev/CI devcontainer, not a shipped artifact: DoS in npm's HTTP client; waits for npm 12.2.2 or 11.21.2 (bundling undici >= 6.29.1; 12.2.1 and 11.21.1 bundle 6.29.0); the npm pin lands and this entry is removed in the same PR when the fix ships (#1025; CA m1115, ruling 125)"
+    expired_at: 2026-10-31
