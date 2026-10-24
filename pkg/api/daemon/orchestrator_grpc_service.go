@@ -72,12 +72,40 @@ func orchestratorErrToGRPC(err error) error {
 
 // orchestratorCall runs one service operation and converts its error.
 func orchestratorCall[Req, Resp any](ctx context.Context, req Req, op func(context.Context, Req) (Resp, error)) (Resp, error) {
+	if err := authorizeOrchestratorTenant(ctx, req); err != nil {
+		var zero Resp
+		return zero, err
+	}
 	resp, err := op(ctx, req)
 	if err != nil {
 		var zero Resp
 		return zero, orchestratorErrToGRPC(err)
 	}
 	return resp, nil
+}
+
+// tenantScopedRequest is every OrchestratorService request that names the
+// tenant it acts on.
+type tenantScopedRequest interface {
+	GetTenantId() string
+}
+
+// authorizeOrchestratorTenant refuses a tenant-scoped request that names a
+// tenant other than the authenticated caller's own, with
+// codes.PermissionDenied, as authorizeIAMTenant does for IAM. A caller with
+// no tenant-bound identity (the Unix-socket operator, the in-process
+// webservice, which applies its own tenant rule) is admitted, as
+// callerTenant documents.
+func authorizeOrchestratorTenant(ctx context.Context, req any) error {
+	scoped, ok := req.(tenantScopedRequest)
+	if !ok {
+		return nil
+	}
+	caller, bound := callerTenant(ctx)
+	if !bound || caller == scoped.GetTenantId() {
+		return nil
+	}
+	return status.Error(codes.PermissionDenied, ErrOrchestratorTenantForbidden{Requested: scoped.GetTenantId()}.Error())
 }
 
 // Health implements OrchestratorService.Health.

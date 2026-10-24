@@ -1202,6 +1202,17 @@ func (e ErrIAMTenantForbidden) Error() string {
 	return fmt.Sprintf("IAM request names tenant %q: caller may not act on another tenant", e.Requested)
 }
 
+// ErrOrchestratorTenantForbidden is returned when an orchestrator request
+// names a tenant other than the one the authenticated caller is bound to. It
+// is the gRPC, QUIC, MCP and Unix twin of the webservice REST tenant rule.
+type ErrOrchestratorTenantForbidden struct {
+	Requested string
+}
+
+func (e ErrOrchestratorTenantForbidden) Error() string {
+	return fmt.Sprintf("orchestrator request names tenant %q: caller may not act on another tenant", e.Requested)
+}
+
 // ErrTenantBarrierShamirUnsupported is returned when InitTenantBarrier asks
 // for Shamir sharing. The per-tenant barrier initializes with its
 // deterministic credential only, and the init returns no shares, so

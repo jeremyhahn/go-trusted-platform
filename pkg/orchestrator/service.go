@@ -22,6 +22,8 @@ package orchestrator
 import (
 	"context"
 
+	sdktransport "github.com/jeremyhahn/go-quicbaas/sdk/go/transport"
+
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	sdkorch "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/orchestrator"
 )
@@ -96,7 +98,7 @@ func (s *Service) ListAgents(ctx context.Context, req *platformv1.ListOrchestrat
 	if sdkReq.Limit, sdkReq.Offset, err = pageParams(req.GetPage()); err != nil {
 		return nil, err
 	}
-	resp, err := client.ListAgents(ctx, sdkReq)
+	resp, err := client.ListAgents(tenantContext(ctx, req.GetTenantId()), sdkReq)
 	if err != nil {
 		return nil, &OperationError{Op: "ListAgents", Err: err}
 	}
@@ -119,7 +121,7 @@ func (s *Service) GetAgent(ctx context.Context, req *platformv1.GetOrchestratorA
 	if err := tenantAndID(req.GetTenantId(), "agent_id", req.GetAgentId()); err != nil {
 		return nil, err
 	}
-	agent, err := client.GetAgent(ctx, &sdkorch.GetAgentRequest{TenantID: req.GetTenantId(), AgentID: req.GetAgentId()})
+	agent, err := client.GetAgent(tenantContext(ctx, req.GetTenantId()), &sdkorch.GetAgentRequest{TenantID: req.GetTenantId(), AgentID: req.GetAgentId()})
 	if err != nil {
 		return nil, &OperationError{Op: "GetAgent", Err: err}
 	}
@@ -135,7 +137,7 @@ func (s *Service) DisableAgent(ctx context.Context, req *platformv1.DisableOrche
 	if err := tenantAndID(req.GetTenantId(), "agent_id", req.GetAgentId()); err != nil {
 		return nil, err
 	}
-	resp, err := client.DisableAgent(ctx, &sdkorch.DisableAgentRequest{TenantID: req.GetTenantId(), AgentID: req.GetAgentId()})
+	resp, err := client.DisableAgent(tenantContext(ctx, req.GetTenantId()), &sdkorch.DisableAgentRequest{TenantID: req.GetTenantId(), AgentID: req.GetAgentId()})
 	if err != nil {
 		return nil, &OperationError{Op: "DisableAgent", Err: err}
 	}
@@ -155,7 +157,7 @@ func (s *Service) EnableAgent(ctx context.Context, req *platformv1.EnableOrchest
 	if err := tenantAndID(req.GetTenantId(), "agent_id", req.GetAgentId()); err != nil {
 		return nil, err
 	}
-	resp, err := client.EnableAgent(ctx, &sdkorch.EnableAgentRequest{TenantID: req.GetTenantId(), AgentID: req.GetAgentId()})
+	resp, err := client.EnableAgent(tenantContext(ctx, req.GetTenantId()), &sdkorch.EnableAgentRequest{TenantID: req.GetTenantId(), AgentID: req.GetAgentId()})
 	if err != nil {
 		return nil, &OperationError{Op: "EnableAgent", Err: err}
 	}
@@ -219,7 +221,7 @@ func (s *Service) ListJobs(ctx context.Context, req *platformv1.ListOrchestrator
 	if sdkReq.Limit, sdkReq.Offset, err = pageParams(req.GetPage()); err != nil {
 		return nil, err
 	}
-	resp, err := client.ListJobs(ctx, sdkReq)
+	resp, err := client.ListJobs(tenantContext(ctx, req.GetTenantId()), sdkReq)
 	if err != nil {
 		return nil, &OperationError{Op: "ListJobs", Err: err}
 	}
@@ -242,7 +244,7 @@ func (s *Service) GetJob(ctx context.Context, req *platformv1.GetOrchestratorJob
 	if err := tenantAndID(req.GetTenantId(), "job_id", req.GetJobId()); err != nil {
 		return nil, err
 	}
-	job, err := client.GetJobStatus(ctx, &sdkorch.GetJobStatusRequest{TenantID: req.GetTenantId(), JobID: req.GetJobId()})
+	job, err := client.GetJobStatus(tenantContext(ctx, req.GetTenantId()), &sdkorch.GetJobStatusRequest{TenantID: req.GetTenantId(), JobID: req.GetJobId()})
 	if err != nil {
 		return nil, &OperationError{Op: "GetJob", Err: err}
 	}
@@ -258,7 +260,7 @@ func (s *Service) CancelJob(ctx context.Context, req *platformv1.CancelOrchestra
 	if err := tenantAndID(req.GetTenantId(), "job_id", req.GetJobId()); err != nil {
 		return nil, err
 	}
-	resp, err := client.CancelJob(ctx, &sdkorch.CancelJobRequest{TenantID: req.GetTenantId(), JobID: req.GetJobId()})
+	resp, err := client.CancelJob(tenantContext(ctx, req.GetTenantId()), &sdkorch.CancelJobRequest{TenantID: req.GetTenantId(), JobID: req.GetJobId()})
 	if err != nil {
 		return nil, &OperationError{Op: "CancelJob", Err: err}
 	}
@@ -270,4 +272,12 @@ func tenantAndID(tenantID, idField, id string) error {
 		return err
 	}
 	return required(idField, id)
+}
+
+// tenantContext names tenantID on ctx for the SDK call, the way every
+// tenant-scoped SDK route does (pkg/webservice/v1/webauthn/webauthn.go,
+// fido2Context): the go-quicbaas orchestration service checks the context's
+// tenant, not only the request body's, and refuses an unscoped call.
+func tenantContext(ctx context.Context, tenantID string) context.Context {
+	return sdktransport.ContextWithTenant(ctx, tenantID)
 }

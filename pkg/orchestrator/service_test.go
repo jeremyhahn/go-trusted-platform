@@ -20,6 +20,7 @@ import (
 	"time"
 
 	sdkerrors "github.com/jeremyhahn/go-quicbaas/sdk/go/errors"
+	sdktransport "github.com/jeremyhahn/go-quicbaas/sdk/go/transport"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	sdkorch "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/orchestrator"
 )
@@ -33,6 +34,10 @@ type fakeClient struct {
 	listAgentsReq   *sdkorch.ListAgentsRequest
 	listSessionsReq *sdkorch.ListSessionsRequest
 	listJobsReq     *sdkorch.ListJobsRequest
+
+	// ctxTenant is the tenant the last tenant-scoped call carried on its
+	// context, where the go-quicbaas transport reads it.
+	ctxTenant string
 }
 
 var disabledAt = time.Unix(1700000000, 0)
@@ -48,7 +53,8 @@ func (f *fakeClient) Health(context.Context) (*sdkorch.HealthCheckReport, error)
 	return &sdkorch.HealthCheckReport{Healthy: true, Status: "ok", Components: map[string]string{"raft": "ok"}, Timestamp: 42}, nil
 }
 
-func (f *fakeClient) ListAgents(_ context.Context, req *sdkorch.ListAgentsRequest) (*sdkorch.ListAgentsResponse, error) {
+func (f *fakeClient) ListAgents(ctx context.Context, req *sdkorch.ListAgentsRequest) (*sdkorch.ListAgentsResponse, error) {
+	f.ctxTenant = sdktransport.TenantFromContext(ctx)
 	f.listAgentsReq = req
 	if f.err != nil {
 		return nil, f.err
@@ -58,21 +64,24 @@ func (f *fakeClient) ListAgents(_ context.Context, req *sdkorch.ListAgentsReques
 	return resp, nil
 }
 
-func (f *fakeClient) GetAgent(_ context.Context, req *sdkorch.GetAgentRequest) (*sdkorch.AgentRegistration, error) {
+func (f *fakeClient) GetAgent(ctx context.Context, req *sdkorch.GetAgentRequest) (*sdkorch.AgentRegistration, error) {
+	f.ctxTenant = sdktransport.TenantFromContext(ctx)
 	if f.err != nil {
 		return nil, f.err
 	}
 	return &sdkorch.AgentRegistration{ID: req.AgentID, TenantID: req.TenantID, Name: "builder", Metadata: map[string]string{"k": "v"}}, nil
 }
 
-func (f *fakeClient) DisableAgent(_ context.Context, req *sdkorch.DisableAgentRequest) (*sdkorch.DisableAgentResponse, error) {
+func (f *fakeClient) DisableAgent(ctx context.Context, req *sdkorch.DisableAgentRequest) (*sdkorch.DisableAgentResponse, error) {
+	f.ctxTenant = sdktransport.TenantFromContext(ctx)
 	if f.err != nil {
 		return nil, f.err
 	}
 	return &sdkorch.DisableAgentResponse{AgentID: req.AgentID, Disabled: true, DisabledAt: disabledAt}, nil
 }
 
-func (f *fakeClient) EnableAgent(_ context.Context, req *sdkorch.EnableAgentRequest) (*sdkorch.EnableAgentResponse, error) {
+func (f *fakeClient) EnableAgent(ctx context.Context, req *sdkorch.EnableAgentRequest) (*sdkorch.EnableAgentResponse, error) {
+	f.ctxTenant = sdktransport.TenantFromContext(ctx)
 	if f.err != nil {
 		return nil, f.err
 	}
@@ -96,7 +105,8 @@ func (f *fakeClient) CloseSession(_ context.Context, req *sdkorch.CloseSessionRe
 	return &sdkorch.CloseSessionResponse{SessionID: req.SessionID, Closed: true}, nil
 }
 
-func (f *fakeClient) ListJobs(_ context.Context, req *sdkorch.ListJobsRequest) (*sdkorch.ListJobsResponse, error) {
+func (f *fakeClient) ListJobs(ctx context.Context, req *sdkorch.ListJobsRequest) (*sdkorch.ListJobsResponse, error) {
+	f.ctxTenant = sdktransport.TenantFromContext(ctx)
 	f.listJobsReq = req
 	if f.err != nil {
 		return nil, f.err
@@ -106,14 +116,16 @@ func (f *fakeClient) ListJobs(_ context.Context, req *sdkorch.ListJobsRequest) (
 	return resp, nil
 }
 
-func (f *fakeClient) GetJobStatus(_ context.Context, req *sdkorch.GetJobStatusRequest) (*sdkorch.JobStatus, error) {
+func (f *fakeClient) GetJobStatus(ctx context.Context, req *sdkorch.GetJobStatusRequest) (*sdkorch.JobStatus, error) {
+	f.ctxTenant = sdktransport.TenantFromContext(ctx)
 	if f.err != nil {
 		return nil, f.err
 	}
 	return &sdkorch.JobStatus{JobID: req.JobID, State: "running", Runner: "sdlc", Failed: 2}, nil
 }
 
-func (f *fakeClient) CancelJob(_ context.Context, req *sdkorch.CancelJobRequest) (*sdkorch.CancelJobResponse, error) {
+func (f *fakeClient) CancelJob(ctx context.Context, req *sdkorch.CancelJobRequest) (*sdkorch.CancelJobResponse, error) {
+	f.ctxTenant = sdktransport.TenantFromContext(ctx)
 	if f.err != nil {
 		return nil, f.err
 	}
@@ -202,7 +214,8 @@ func TestService_EveryOperationWrapsSDKError(t *testing.T) {
 
 func TestService_MissingFields(t *testing.T) {
 	ctx := context.Background()
-	s := serviceOver(&fakeClient{})
+	fake := &fakeClient{}
+	s := serviceOver(fake)
 	cases := map[string]struct {
 		run   func() error
 		field string
@@ -249,6 +262,28 @@ func TestService_MissingFields(t *testing.T) {
 			}
 			if Classify(err) != KindInvalidArgument {
 				t.Fatalf("Classify = %v, want KindInvalidArgument", Classify(err))
+			}
+			if fake.ctxTenant != "" {
+				t.Fatalf("refused request reached the SDK with tenant %q", fake.ctxTenant)
+			}
+		})
+	}
+}
+
+// TestService_TenantScopedCallsCarryTheTenant pins the fix for the
+// "orchestration: tenant ID required" refusal: every tenant-scoped call
+// hands the SDK a context that names the request's tenant, not only the
+// request field.
+func TestService_TenantScopedCallsCarryTheTenant(t *testing.T) {
+	scoped := []string{"ListAgents", "GetAgent", "DisableAgent", "EnableAgent", "ListJobs", "GetJob", "CancelJob"}
+	for _, name := range scoped {
+		t.Run(name, func(t *testing.T) {
+			fake := &fakeClient{}
+			if err := validCalls[name](context.Background(), serviceOver(fake)); err != nil {
+				t.Fatalf("%s: %v", name, err)
+			}
+			if fake.ctxTenant != "t1" {
+				t.Fatalf("SDK context tenant = %q, want t1", fake.ctxTenant)
 			}
 		})
 	}

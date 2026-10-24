@@ -76,6 +76,35 @@ func TestOrchestratorGRPC_CancelJob(t *testing.T) {
 	}
 }
 
+// TestOrchestratorGRPC_TenantRule pins the caller-tenant rule every
+// non-REST orchestrator transport shares: a caller bound to one tenant
+// may not name another, while its own tenant and an unbound caller pass.
+func TestOrchestratorGRPC_TenantRule(t *testing.T) {
+	svc := orchestratorGRPCOver(&orchestratorTestClient{})
+	req := &platformv1.CancelOrchestratorJobRequest{TenantId: "t1", JobId: "j1"}
+
+	_, err := svc.CancelJob(tokenCallerContext("t2"), req)
+	if status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("other tenant: code = %v (%v), want PermissionDenied", status.Code(err), err)
+	}
+
+	admitted := map[string]context.Context{
+		"own tenant":     tokenCallerContext("t1"),
+		"unbound caller": context.Background(),
+	}
+	for name, ctx := range admitted {
+		t.Run(name, func(t *testing.T) {
+			if _, err := svc.CancelJob(ctx, req); err != nil {
+				t.Fatalf("CancelJob: %v", err)
+			}
+		})
+	}
+
+	if err := authorizeOrchestratorTenant(tokenCallerContext("t2"), &platformv1.OrchestratorHealthRequest{}); err != nil {
+		t.Fatalf("Health names no tenant and must pass: %v", err)
+	}
+}
+
 func TestOrchestratorGRPC_ErrorCodes(t *testing.T) {
 	client := &orchestratorTestClient{agent: &sdkorch.AgentRegistration{ID: "a1"}}
 	tests := []struct {
