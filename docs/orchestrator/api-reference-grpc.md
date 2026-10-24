@@ -44,7 +44,9 @@
 
 See [api-reference.md §Errors](api-reference.md#errors). A missing required
 field is `INVALID_ARGUMENT` whose message names it
-(`orchestrator: tenant_id is required`).
+(`orchestrator: tenant_id is required`). A `tenant_id` other than the
+token's tenant is `PERMISSION_DENIED` unless the token is the system
+tenant's ([api-reference.md §Tenant rule](api-reference.md#tenant-rule)).
 
 ## SDK Usage
 

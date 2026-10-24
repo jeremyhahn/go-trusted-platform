@@ -81,6 +81,7 @@ func TestOrchestratorGRPC_CancelJob(t *testing.T) {
 // may not name another, while its own tenant and an unbound caller pass.
 func TestOrchestratorGRPC_TenantRule(t *testing.T) {
 	svc := orchestratorGRPCOver(&orchestratorTestClient{})
+	svc.SetSystemTenant("sys")
 	req := &platformv1.CancelOrchestratorJobRequest{TenantId: "t1", JobId: "j1"}
 
 	_, err := svc.CancelJob(tokenCallerContext("t2"), req)
@@ -90,6 +91,7 @@ func TestOrchestratorGRPC_TenantRule(t *testing.T) {
 
 	admitted := map[string]context.Context{
 		"own tenant":     tokenCallerContext("t1"),
+		"system tenant":  tokenCallerContext("sys"),
 		"unbound caller": context.Background(),
 	}
 	for name, ctx := range admitted {
@@ -100,8 +102,21 @@ func TestOrchestratorGRPC_TenantRule(t *testing.T) {
 		})
 	}
 
-	if err := authorizeOrchestratorTenant(tokenCallerContext("t2"), &platformv1.OrchestratorHealthRequest{}); err != nil {
+	if err := svc.authorizeTenant(tokenCallerContext("t2"), &platformv1.OrchestratorHealthRequest{}); err != nil {
 		t.Fatalf("Health names no tenant and must pass: %v", err)
+	}
+}
+
+// TestOrchestratorGRPC_TenantRuleWithoutSystemTenant proves the fail-closed
+// reading: with no system tenant set, a caller named "sys" is an ordinary
+// tenant and is refused another tenant's request.
+func TestOrchestratorGRPC_TenantRuleWithoutSystemTenant(t *testing.T) {
+	svc := orchestratorGRPCOver(&orchestratorTestClient{})
+	req := &platformv1.CancelOrchestratorJobRequest{TenantId: "t1", JobId: "j1"}
+
+	_, err := svc.CancelJob(tokenCallerContext("sys"), req)
+	if status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("code = %v (%v), want PermissionDenied", status.Code(err), err)
 	}
 }
 

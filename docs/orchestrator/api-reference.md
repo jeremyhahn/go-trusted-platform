@@ -57,11 +57,24 @@ takes the server's default; a negative `limit` or `offset` is refused.
 `ListAgents` filters on `status`, `host` and `backend`; `ListSessions` on
 `status`, `job_id` and `agent_id`; `ListJobs` on any of `statuses`.
 
+## Tenant rule
+
+Every transport applies one rule to a request's `tenant_id`,
+`tenant.AuthorizeTenantAccess` ([tenant API](../tenant/api.md)): a caller
+may name its own tenant, and a caller of the system tenant
+(`PlatformTenantID`) may name any tenant. A request naming any other tenant
+is refused with `PERMISSION_DENIED` (`403` on REST) before it reaches the SDK.
+gRPC, QUIC, MCP and Unix share `OrchestratorGRPCService`, which takes the
+caller's tenant from its token; REST takes it from the session. A caller
+with no tenant-bound identity (the Unix-socket operator) is admitted. With
+no system tenant configured, no caller is the system tenant.
+
 ## Errors
 
 | Cause | gRPC status |
 |-------|-------------|
 | The node has no go-quicbaas orchestrator client (`orchestrator.ErrNotConfigured`) | `UNAVAILABLE` |
+| `tenant_id` names another tenant and the caller is not the system tenant ([§Tenant rule](#tenant-rule)) | `PERMISSION_DENIED` |
 | A required field is empty (`ErrMissingField`) or a page is negative (`ErrInvalidPage`) | `INVALID_ARGUMENT`, naming the field |
 | The SDK answers invalid input | `INVALID_ARGUMENT` |
 | The SDK answers not found | `NOT_FOUND` |

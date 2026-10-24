@@ -17,6 +17,7 @@ import (
 	"context"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/orchestrator"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/tenant"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	sdkorch "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/orchestrator"
 	"google.golang.org/grpc/codes"
@@ -31,6 +32,16 @@ type OrchestratorGRPCService struct {
 	platformv1.UnimplementedOrchestratorServiceServer
 
 	service *orchestrator.Service
+
+	// systemTenantID is the platform's system tenant, which may name any
+	// tenant; "" admits no caller as system (tenant.IsSystemTenant).
+	systemTenantID string
+}
+
+// SetSystemTenant sets the platform's system tenant, as
+// TenantGRPCServer.SetSystemTenant does. Call it before serving.
+func (s *OrchestratorGRPCService) SetSystemTenant(tenantID string) {
+	s.systemTenantID = tenantID
 }
 
 // NewOrchestratorGRPCService returns the gRPC service over service. A nil
@@ -71,8 +82,8 @@ func orchestratorErrToGRPC(err error) error {
 }
 
 // orchestratorCall runs one service operation and converts its error.
-func orchestratorCall[Req, Resp any](ctx context.Context, req Req, op func(context.Context, Req) (Resp, error)) (Resp, error) {
-	if err := authorizeOrchestratorTenant(ctx, req); err != nil {
+func orchestratorCall[Req, Resp any](ctx context.Context, s *OrchestratorGRPCService, req Req, op func(context.Context, Req) (Resp, error)) (Resp, error) {
+	if err := s.authorizeTenant(ctx, req); err != nil {
 		var zero Resp
 		return zero, err
 	}
@@ -90,70 +101,75 @@ type tenantScopedRequest interface {
 	GetTenantId() string
 }
 
-// authorizeOrchestratorTenant refuses a tenant-scoped request that names a
-// tenant other than the authenticated caller's own, with
-// codes.PermissionDenied, as authorizeIAMTenant does for IAM. A caller with
+// authorizeTenant applies the platform tenant rule, tenant.AuthorizeTenantAccess,
+// the one REST applies too: the system tenant may name any tenant, any other
+// caller its own tenant only, and a request naming another tenant is refused
+// with codes.PermissionDenied, as authorizeIAMTenant does for IAM. A caller with
 // no tenant-bound identity (the Unix-socket operator, the in-process
 // webservice, which applies its own tenant rule) is admitted, as
 // callerTenant documents.
-func authorizeOrchestratorTenant(ctx context.Context, req any) error {
+func (s *OrchestratorGRPCService) authorizeTenant(ctx context.Context, req any) error {
 	scoped, ok := req.(tenantScopedRequest)
 	if !ok {
 		return nil
 	}
 	caller, bound := callerTenant(ctx)
-	if !bound || caller == scoped.GetTenantId() {
+	if !bound {
 		return nil
 	}
-	return status.Error(codes.PermissionDenied, ErrOrchestratorTenantForbidden{Requested: scoped.GetTenantId()}.Error())
+	isSystem := tenant.IsSystemTenant(s.systemTenantID, caller)
+	if err := tenant.AuthorizeTenantAccess(caller, isSystem, scoped.GetTenantId()); err != nil {
+		return status.Error(codes.PermissionDenied, ErrOrchestratorTenantForbidden{Requested: scoped.GetTenantId()}.Error())
+	}
+	return nil
 }
 
 // Health implements OrchestratorService.Health.
 func (s *OrchestratorGRPCService) Health(ctx context.Context, req *platformv1.OrchestratorHealthRequest) (*platformv1.OrchestratorHealthResponse, error) {
-	return orchestratorCall(ctx, req, s.service.Health)
+	return orchestratorCall(ctx, s, req, s.service.Health)
 }
 
 // ListAgents implements OrchestratorService.ListAgents.
 func (s *OrchestratorGRPCService) ListAgents(ctx context.Context, req *platformv1.ListOrchestratorAgentsRequest) (*platformv1.ListOrchestratorAgentsResponse, error) {
-	return orchestratorCall(ctx, req, s.service.ListAgents)
+	return orchestratorCall(ctx, s, req, s.service.ListAgents)
 }
 
 // GetAgent implements OrchestratorService.GetAgent.
 func (s *OrchestratorGRPCService) GetAgent(ctx context.Context, req *platformv1.GetOrchestratorAgentRequest) (*platformv1.GetOrchestratorAgentResponse, error) {
-	return orchestratorCall(ctx, req, s.service.GetAgent)
+	return orchestratorCall(ctx, s, req, s.service.GetAgent)
 }
 
 // DisableAgent implements OrchestratorService.DisableAgent.
 func (s *OrchestratorGRPCService) DisableAgent(ctx context.Context, req *platformv1.DisableOrchestratorAgentRequest) (*platformv1.DisableOrchestratorAgentResponse, error) {
-	return orchestratorCall(ctx, req, s.service.DisableAgent)
+	return orchestratorCall(ctx, s, req, s.service.DisableAgent)
 }
 
 // EnableAgent implements OrchestratorService.EnableAgent.
 func (s *OrchestratorGRPCService) EnableAgent(ctx context.Context, req *platformv1.EnableOrchestratorAgentRequest) (*platformv1.EnableOrchestratorAgentResponse, error) {
-	return orchestratorCall(ctx, req, s.service.EnableAgent)
+	return orchestratorCall(ctx, s, req, s.service.EnableAgent)
 }
 
 // ListSessions implements OrchestratorService.ListSessions.
 func (s *OrchestratorGRPCService) ListSessions(ctx context.Context, req *platformv1.ListOrchestratorSessionsRequest) (*platformv1.ListOrchestratorSessionsResponse, error) {
-	return orchestratorCall(ctx, req, s.service.ListSessions)
+	return orchestratorCall(ctx, s, req, s.service.ListSessions)
 }
 
 // CloseSession implements OrchestratorService.CloseSession.
 func (s *OrchestratorGRPCService) CloseSession(ctx context.Context, req *platformv1.CloseOrchestratorSessionRequest) (*platformv1.CloseOrchestratorSessionResponse, error) {
-	return orchestratorCall(ctx, req, s.service.CloseSession)
+	return orchestratorCall(ctx, s, req, s.service.CloseSession)
 }
 
 // ListJobs implements OrchestratorService.ListJobs.
 func (s *OrchestratorGRPCService) ListJobs(ctx context.Context, req *platformv1.ListOrchestratorJobsRequest) (*platformv1.ListOrchestratorJobsResponse, error) {
-	return orchestratorCall(ctx, req, s.service.ListJobs)
+	return orchestratorCall(ctx, s, req, s.service.ListJobs)
 }
 
 // GetJob implements OrchestratorService.GetJob.
 func (s *OrchestratorGRPCService) GetJob(ctx context.Context, req *platformv1.GetOrchestratorJobRequest) (*platformv1.GetOrchestratorJobResponse, error) {
-	return orchestratorCall(ctx, req, s.service.GetJob)
+	return orchestratorCall(ctx, s, req, s.service.GetJob)
 }
 
 // CancelJob implements OrchestratorService.CancelJob.
 func (s *OrchestratorGRPCService) CancelJob(ctx context.Context, req *platformv1.CancelOrchestratorJobRequest) (*platformv1.CancelOrchestratorJobResponse, error) {
-	return orchestratorCall(ctx, req, s.service.CancelJob)
+	return orchestratorCall(ctx, s, req, s.service.CancelJob)
 }

@@ -1027,6 +1027,7 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 	// until the quicbaas factory has an SDK client every RPC returns a typed
 	// Unavailable error on every transport.
 	orchestratorGRPCService := NewOrchestratorGRPCService(orchestrator.NewService(orchestratorClientResolver(config)))
+	orchestratorGRPCService.SetSystemTenant(config.PlatformTenantID)
 	if grpcServer != nil {
 		platformv1.RegisterOrchestratorServiceServer(grpcServer, orchestratorGRPCService)
 	}
