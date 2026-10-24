@@ -363,6 +363,8 @@ webservices:
           - localhost
     webauthn:
       display-name: Trusted Platform Integration Tests
+      # The harness drives a software authenticator for its admin session.
+      assurance: insecure-allow-software-administrators
       id: localhost
       origins:
         - https://localhost:8443

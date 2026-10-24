@@ -269,6 +269,14 @@ webservices:
       origins:
         - https://example.com
         - https://api.example.com
+      # Authenticator assurance, passed through to go-quicbaas
+      # iam.webauthn.assurance, which enforces it:
+      #   hardware (default when empty) - hardware authenticators only
+      #   any - tenant users may use software authenticators;
+      #         administrators still need hardware
+      #   insecure-allow-software-administrators - automated test
+      #         environments only
+      assurance: hardware
 
     cors:
       allowed-origins:
