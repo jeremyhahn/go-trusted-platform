@@ -81,6 +81,7 @@ The trusted-computing platform product and control plane: provisioning, node and
 
 ## Dependencies
 - Upstream go-quicbaas: pinned v0.12.0-alpha; needed the tag that carries [go-xkms#1443](../../../go-xkms/issues/1443) step 3, [go-xkms#1442](../../../go-xkms/issues/1442) and the [go-quicbaas#1171](../../../go-quicbaas/issues/1171) re-exports (#720, #682, #688), [go-quicbaas#1150](../../../go-quicbaas/issues/1150) (#175, #232, #412), and the release that composes trusted-firmware's `xkms` adapter after [trusted-firmware#28](../../../trusted-firmware/issues/28) phases B and C (#771, #772).
+- Upstream go-quicbaas: consume the configurable bootstrap admin email from [go-quicbaas#1823](../../../go-quicbaas/issues/1823) through the SDK, and remove the adminclaim placeholder constant (`bootstrapPlaceholderEmail` in `pkg/webservice/v1/adminclaim/`) (#949).
 - Upstream go-qrdb: an arm64 release, reached through go-quicbaas, for Pi control-plane nodes.
 - Upstream go-luks2: pinned v0.2.0-alpha; needed v1.0.0-rc.2 (#746).
 - Standards watch: draft-ietf-rats-corim-11, pinned at revision -11, implemented in `pkg/attestation/`; a new revision or its RFC updates [docs/reference/rats/](docs/reference/rats/) and the code.
