@@ -340,7 +340,12 @@ func (h *AuthFactorHandlers) handleMTLSProbe(w http.ResponseWriter, r *http.Requ
 			h.logger.Warn("mTLS probe: failed to obtain trusted root pool", "error", err)
 			// Degrade gracefully: accept the cert without chain validation.
 		} else if pool != nil {
-			_, verifyErr := leaf.Verify(x509.VerifyOptions{Roots: pool})
+			// KeyUsages must be explicit: an empty list means serverAuth,
+			// which rejects every clientAuth certificate the probe exists for.
+			_, verifyErr := leaf.Verify(x509.VerifyOptions{
+				Roots:     pool,
+				KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
+			})
 			if verifyErr != nil {
 				h.logger.Debug("mTLS probe: cert validation failed", "error", verifyErr)
 				w.WriteHeader(http.StatusUnauthorized)
