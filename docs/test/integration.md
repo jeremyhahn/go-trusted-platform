@@ -497,7 +497,11 @@ reuse it, refresh it through `/api/v1/login/refresh` when less than 30 minutes
 remain, and claim again only when the cache is for another webservice or the
 daemon is fresh. The claim closes once taken, so an expired cache on a
 claimed daemon fails with `ErrAdminAlreadyClaimed`; every platformd start wipes
-`/tmp/platformd-integration`, cache included.
+`/tmp/platformd-integration`, cache included. A claim token from verify is
+spent only by passkey finish, and each one holds one of the daemon's 64
+outstanding claim secrets for its 10-minute TTL, so a session whose begin
+fails keeps the token and offers it again on its next attempt; only a 403 from
+begin (a claim the daemon no longer knows) or finish drops it.
 
 The two client bundles live in `/tmp/platformd-integration/tls/`. platformd
 writes both on first start (`pkg/daemon/commands/harness_admin_bundle_integration.go`,

@@ -59,6 +59,7 @@ type fakeClaimServer struct {
 	mu             sync.Mutex
 	claimed        bool
 	challengeFails int
+	beginFails     int
 	refreshFails   int
 	issued         string
 	refreshed      string
@@ -97,6 +98,11 @@ func (f *fakeClaimServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case adminVerifyPath:
 		f.verify(w, r)
 	case adminBeginPath:
+		if f.beginFails != 0 {
+			w.WriteHeader(f.beginFails)
+			f.write(w, []byte(`{"error":"begin refused"}`))
+			return
+		}
 		if r.Header.Get(adminClaimTokenHeader) != fakeClaimToken {
 			w.WriteHeader(http.StatusForbidden)
 			return
@@ -136,7 +142,7 @@ func (f *fakeClaimServer) verify(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusForbidden)
 		return
 	}
-	f.writeEnvelope(w, map[string]any{"claim_token": fakeClaimToken})
+	f.writeEnvelope(w, map[string]any{"claim_token": fakeClaimToken, "expires_at": time.Now().Add(10 * time.Minute)})
 }
 
 func (f *fakeClaimServer) finish(w http.ResponseWriter, r *http.Request) {
@@ -315,6 +321,54 @@ func TestAdminSessionRefusedChallengeReportsStepAndBody(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "claim refused") {
 		t.Errorf("message %q does not carry the server's body", err)
+	}
+}
+
+// A claim that stopped at begin is still unspent on the daemon, so the next
+// attempt reuses it: proving again on every retry left one live claim
+// secret per attempt and drove the daemon to its outstanding-claim cap.
+func TestAdminSessionFailedBeginReusesTheProvedClaim(t *testing.T) {
+	bundleDir, cert := writeAdminBundle(t)
+	fake, server := newFakeClaimServer(t, cert)
+	fake.configure(func(f *fakeClaimServer) { f.beginFails = http.StatusInternalServerError })
+	session := NewAdminSession(server.URL, bundleDir, filepath.Join(t.TempDir(), "s.json"), server.Client())
+
+	for range 3 {
+		_, err := session.Bearer(context.Background())
+		var stepErr ErrAdminClaimStep
+		if !errors.As(err, &stepErr) || stepErr.Step != AdminStepBegin || stepErr.Status != http.StatusInternalServerError {
+			t.Fatalf("err = %v, want the begin step's 500", err)
+		}
+	}
+	fake.configure(func(f *fakeClaimServer) { f.beginFails = 0 })
+	if _, err := session.Bearer(context.Background()); err != nil {
+		t.Fatalf("Bearer after begin recovered: %v", err)
+	}
+	if got := fake.count(adminVerifyPath); got != 1 {
+		t.Errorf("verify called %d times, want 1: a failed begin must not prove a new claim", got)
+	}
+	if got := fake.count(adminBeginPath); got != 4 {
+		t.Errorf("begin called %d times, want 4", got)
+	}
+}
+
+// A begin the daemon refuses with 403 rejected the claim itself (a
+// restarted daemon no longer knows it), so the next attempt proves anew.
+func TestAdminSessionRefusedBeginProvesANewClaim(t *testing.T) {
+	bundleDir, cert := writeAdminBundle(t)
+	fake, server := newFakeClaimServer(t, cert)
+	fake.configure(func(f *fakeClaimServer) { f.beginFails = http.StatusForbidden })
+	session := NewAdminSession(server.URL, bundleDir, filepath.Join(t.TempDir(), "s.json"), server.Client())
+
+	if _, err := session.Bearer(context.Background()); err == nil {
+		t.Fatal("Bearer succeeded against a refused begin")
+	}
+	fake.configure(func(f *fakeClaimServer) { f.beginFails = 0 })
+	if _, err := session.Bearer(context.Background()); err != nil {
+		t.Fatalf("Bearer after begin recovered: %v", err)
+	}
+	if got := fake.count(adminVerifyPath); got != 2 {
+		t.Errorf("verify called %d times, want 2: a refused claim must not be reused", got)
 	}
 }
 

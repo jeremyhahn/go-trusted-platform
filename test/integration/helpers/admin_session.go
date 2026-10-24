@@ -204,6 +204,13 @@ type AdminSession struct {
 	mu        sync.Mutex
 	token     string
 	expiresAt time.Time
+	// claimToken is a proved claim the daemon has not spent yet. Only the
+	// passkey finish step spends one, so a claim that stopped at begin is
+	// reused by the next attempt instead of proving a new one: every proof
+	// holds a daemon claim secret for its whole TTL, and a suite that
+	// retries on each failure would otherwise exhaust the daemon's cap.
+	claimToken          string
+	claimTokenExpiresAt time.Time
 }
 
 // NewAdminSession returns a session against the webservice at baseURL,
@@ -398,6 +405,63 @@ func (s *AdminSession) claimed(ctx context.Context) (bool, error) {
 // software authenticator, and take the console session the finish step
 // issues.
 func (s *AdminSession) claim(ctx context.Context) (string, error) {
+	claimToken, err := s.proveClaim(ctx)
+	if err != nil {
+		return "", err
+	}
+
+	claimHeader := http.Header{adminClaimTokenHeader: {claimToken}}
+	// The begin step answers with the bare CredentialCreation, not the
+	// response envelope, so the browser API can take it as is.
+	beginRaw, err := s.call(ctx, AdminStepBegin, http.MethodPost, adminBeginPath, claimHeader, nil)
+	if err != nil {
+		// Begin only reads the claim; it stays reusable unless the daemon
+		// refused it (403), as a restarted daemon does.
+		var stepErr ErrAdminClaimStep
+		if errors.As(err, &stepErr) && stepErr.Status == http.StatusForbidden {
+			s.claimToken = ""
+		}
+		return "", err
+	}
+	var options creationOptions
+	if err := json.Unmarshal(beginRaw, &options); err != nil {
+		return "", ErrAdminClaimStep{Step: AdminStepBegin, Cause: err}
+	}
+
+	authenticator, err := newSoftwareAuthenticator()
+	if err != nil {
+		return "", ErrAdminClaimStep{Step: AdminStepRegister, Cause: err}
+	}
+	registration, err := authenticator.register(options, s.baseURL)
+	if err != nil {
+		return "", ErrAdminClaimStep{Step: AdminStepRegister, Cause: err}
+	}
+
+	// Finish spends the claim whatever its outcome, so it is never offered
+	// to the daemon again.
+	s.claimToken = ""
+	finishHeader := http.Header{
+		adminClaimTokenHeader: {claimToken},
+		adminSessionIDHeader:  {options.SessionID},
+	}
+	var session struct {
+		Token string `json:"token"`
+	}
+	if err := s.callEnveloped(ctx, AdminStepFinish, http.MethodPost, adminFinishPath, finishHeader, registration, &session); err != nil {
+		return "", err
+	}
+	return session.Token, nil
+}
+
+// proveClaim returns the unspent claim token from an earlier attempt while
+// it has at least adminClaimTimeout of life left, and otherwise proves
+// possession of the admin key (challenge, sign, verify) for a new one.
+func (s *AdminSession) proveClaim(ctx context.Context) (string, error) {
+	if s.claimToken != "" && time.Until(s.claimTokenExpiresAt) > adminClaimTimeout {
+		return s.claimToken, nil
+	}
+	s.claimToken = ""
+
 	certPEM, signer, err := s.loadBundle()
 	if err != nil {
 		return "", err
@@ -422,44 +486,15 @@ func (s *AdminSession) claim(ctx context.Context) (string, error) {
 		return "", ErrAdminClaimStep{Step: AdminStepVerify, Cause: err}
 	}
 	var verified struct {
-		ClaimToken string `json:"claim_token"`
+		ClaimToken string    `json:"claim_token"`
+		ExpiresAt  time.Time `json:"expires_at"`
 	}
 	if err := s.callEnveloped(ctx, AdminStepVerify, http.MethodPost, adminVerifyPath, nil, verifyBody, &verified); err != nil {
 		return "", err
 	}
-
-	claimHeader := http.Header{adminClaimTokenHeader: {verified.ClaimToken}}
-	// The begin step answers with the bare CredentialCreation, not the
-	// response envelope, so the browser API can take it as is.
-	beginRaw, err := s.call(ctx, AdminStepBegin, http.MethodPost, adminBeginPath, claimHeader, nil)
-	if err != nil {
-		return "", err
-	}
-	var options creationOptions
-	if err := json.Unmarshal(beginRaw, &options); err != nil {
-		return "", ErrAdminClaimStep{Step: AdminStepBegin, Cause: err}
-	}
-
-	authenticator, err := newSoftwareAuthenticator()
-	if err != nil {
-		return "", ErrAdminClaimStep{Step: AdminStepRegister, Cause: err}
-	}
-	registration, err := authenticator.register(options, s.baseURL)
-	if err != nil {
-		return "", ErrAdminClaimStep{Step: AdminStepRegister, Cause: err}
-	}
-
-	finishHeader := http.Header{
-		adminClaimTokenHeader: {verified.ClaimToken},
-		adminSessionIDHeader:  {options.SessionID},
-	}
-	var session struct {
-		Token string `json:"token"`
-	}
-	if err := s.callEnveloped(ctx, AdminStepFinish, http.MethodPost, adminFinishPath, finishHeader, registration, &session); err != nil {
-		return "", err
-	}
-	return session.Token, nil
+	s.claimToken = verified.ClaimToken
+	s.claimTokenExpiresAt = verified.ExpiresAt
+	return verified.ClaimToken, nil
 }
 
 // loadBundle reads the admin certificate PEM and its private key.
