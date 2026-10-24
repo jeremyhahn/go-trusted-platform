@@ -186,7 +186,13 @@ var handlerCases = []handlerCase{
 	},
 	{
 		method: http.MethodGet, path: "/api/v1/pxe/devices",
-		rpc: "ListDevices", wantReq: &platformv1.ListPXEDevicesRequest{},
+		rpc: "ListDevices", wantReq: &platformv1.ListPXEDevicesRequest{Filter: &platformv1.PXEDeviceFilter{}},
+		resp:     &platformv1.ListPXEDevicesResponse{Devices: []*platformv1.PXEDeviceInfo{handlerDevice}, TotalCount: 1},
+		wantCode: http.StatusOK,
+	},
+	{
+		method: http.MethodGet, path: "/api/v1/pxe/devices?limit=10&offset=20",
+		rpc: "ListDevices", wantReq: &platformv1.ListPXEDevicesRequest{Filter: &platformv1.PXEDeviceFilter{Limit: 10, Offset: 20}},
 		resp:     &platformv1.ListPXEDevicesResponse{Devices: []*platformv1.PXEDeviceInfo{handlerDevice}, TotalCount: 1},
 		wantCode: http.StatusOK,
 	},
