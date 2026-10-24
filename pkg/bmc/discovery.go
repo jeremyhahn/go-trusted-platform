@@ -102,12 +102,15 @@ func DiscoverMACs(ctx context.Context, config *Config, logger *slog.Logger) ([]s
 		return nil, ErrNilConfig{}
 	}
 
-	protocol := config.Protocol
-	if protocol == "" {
-		protocol = ProtocolRedfish
+	// An unset protocol means Redfish. The Redfish client validates the
+	// protocol its config names, so the walk gets a copy that names it.
+	if config.Protocol == "" {
+		redfishConfig := *config
+		redfishConfig.Protocol = ProtocolRedfish
+		config = &redfishConfig
 	}
 
-	switch protocol {
+	switch config.Protocol {
 	case ProtocolRedfish:
 		return discoverMACsRedfish(ctx, config, logger)
 	case ProtocolIPMI:
@@ -138,7 +141,7 @@ func DiscoverMACs(ctx context.Context, config *Config, logger *slog.Logger) ([]s
 			slog.String("error", err.Error()))
 		return nil, ErrMACDiscoveryUnsupported{Protocol: ProtocolIPMI}
 	default:
-		return nil, ErrInvalidConfig{Field: "protocol", Reason: "unsupported protocol: " + string(protocol)}
+		return nil, ErrInvalidConfig{Field: "protocol", Reason: "unsupported protocol: " + string(config.Protocol)}
 	}
 }
 
@@ -271,6 +274,12 @@ func DetectProtocol(ctx context.Context, address string, timeout time.Duration) 
 // running on an ephemeral port without rewriting the production path.
 var redfishProbePort = 443
 
+// ipmiProbePort is the UDP port DetectProtocol's RMCP presence ping goes
+// to. Defaults to the IANA-assigned RMCP port 623. Exposed as a
+// package-level variable for the same reason as redfishProbePort: tests
+// answer the ping from a loopback socket on an ephemeral port.
+var ipmiProbePort = "623"
+
 // probeRedfish attempts an HTTPS connection to the Redfish service root on
 // redfishProbePort. The dial performs standard certificate verification —
 // no InsecureSkipVerify. Two outcomes report "Redfish present":
@@ -331,7 +340,7 @@ func isCertVerificationError(err error) bool {
 
 // probeIPMI attempts a UDP connection to the standard IPMI/RMCP port.
 func probeIPMI(_ context.Context, address string, timeout time.Duration) bool {
-	conn, err := net.DialTimeout("udp", net.JoinHostPort(address, "623"), timeout)
+	conn, err := net.DialTimeout("udp", net.JoinHostPort(address, ipmiProbePort), timeout)
 	if err != nil {
 		return false
 	}
