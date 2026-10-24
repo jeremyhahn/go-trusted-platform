@@ -578,6 +578,30 @@ func TestBeginPasskey_RefusesConflictingEmail(t *testing.T) {
 	assert.Zero(t, h.ceremony.beginCalls)
 }
 
+func TestBeginPasskey_ReplacesBootstrapPlaceholderEmail(t *testing.T) {
+	h := newHarness(t)
+	h.accounts.pages[0].Users[1].Email = "admin@system.qrdb.local"
+	token := h.claimTo(t)
+
+	_, err := h.svc.BeginPasskey(context.Background(), token)
+	require.NoError(t, err)
+	assert.Equal(t, map[string]string{"42": testAdminEmail}, h.accounts.updated)
+	assert.Equal(t, 1, h.ceremony.beginCalls)
+}
+
+func TestBeginPasskey_RefusesNearPlaceholderEmail(t *testing.T) {
+	h := newHarness(t)
+	h.accounts.pages[0].Users[1].Email = "admin@system.qrdb.local.example.com"
+	token := h.claimTo(t)
+
+	_, err := h.svc.BeginPasskey(context.Background(), token)
+	var conflict ErrAdminEmailConflict
+	require.ErrorAs(t, err, &conflict)
+	assert.Equal(t, "admin@system.qrdb.local.example.com", conflict.Account)
+	assert.Empty(t, h.accounts.updated)
+	assert.Zero(t, h.ceremony.beginCalls)
+}
+
 func TestBeginPasskey_WrapsAccountClientErrors(t *testing.T) {
 	cause := errors.New("iam unavailable")
 	cases := map[string]struct {

@@ -480,10 +480,12 @@ the `webauthn` relying party in `test/integration/config.yaml`. The webservice
 registry builds those routes only when the config names the firstboot admin
 account: `admin-email: admin@system.qrdb.local` in
 `test/integration/config.yaml`, the email the embedded quicbaas bootstrap gives
-the system tenant's `admin` account (`<username>@<tenant>.qrdb.local`). Any
-other address fails passkey begin with HTTP 500 `ErrAdminEmailConflict`
-(`admin-email … does not match the admin account's email …`), and
-`TestIntegrationConfig_AdminEmailIsBootstrapAccount` pins it. Without it platformd logs
+the system tenant's `admin` account (`<username>@<tenant>.qrdb.local`), and
+`TestIntegrationConfig_AdminEmailIsBootstrapAccount` pins it. Until
+go-quicbaas#1823 makes that bootstrap email configurable, adminclaim counts the
+placeholder as unset, so another address would replace it rather than fail
+passkey begin with HTTP 500 `ErrAdminEmailConflict`; an account email that is
+neither the placeholder nor `admin-email` still fails that way. Without it platformd logs
 `adminclaim: admin email is required`, leaves the routes unregistered, and
 every REST leg fails its first call with a 404 on `/api/v1/admin/claim/status`.
 `TestIntegrationConfig_RunMode` (`pkg/app/integration_config_test.go`) fails

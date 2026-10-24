@@ -585,8 +585,10 @@ self-service registration off it refuses any other with "public registration
 is disabled". So passkey begin first gives the backbone `admin` account the
 configured `admin-email` through the IAM user API (the authorized
 user-creation path), then begins registration. An account that already has
-that email (any case) is left alone. A different email on it is refused
-(`ErrAdminEmailConflict`), as is a tenant with no `admin` account
+that email (any case) is left alone. The go-quicbaas bootstrap placeholder
+`admin@system.qrdb.local` counts as unset and is replaced, until
+go-quicbaas#1823 makes the bootstrap admin email configurable. Any other email
+on it is refused (`ErrAdminEmailConflict`), as is a tenant with no `admin` account
 (`ErrAdminAccountMissing`), and neither starts a ceremony. Self-service
 registration stays off.
 

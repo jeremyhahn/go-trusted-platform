@@ -464,6 +464,14 @@ func (s *Service) BeginPasskey(
 // adminAccountPageSize bounds each page of the admin-account lookup.
 const adminAccountPageSize = 100
 
+// bootstrapPlaceholderEmail is the email go-quicbaas gives the bootstrap
+// admin account when it creates it (pkg/server/iam_init.go builds it from
+// the system tenant ID). The claim treats it as unset and replaces it with
+// the configured admin-email. Stopgap until go-quicbaas#1823 makes the
+// bootstrap admin email configurable and the platform passes admin-email
+// through the SDK; the ROADMAP consumer row removes this constant.
+const bootstrapPlaceholderEmail = "admin@" + quicbaassdk.SystemTenantID + ".qrdb.local"
+
 // provisionAdminEmail makes the firstboot admin account resolvable by the
 // configured admin-email before the ceremony looks it up (see
 // AdminAccounts). An account that already carries that email is left
@@ -477,7 +485,7 @@ func (s *Service) provisionAdminEmail(ctx context.Context) error {
 	switch {
 	case strings.EqualFold(account.Email, s.adminEmail):
 		return nil
-	case account.Email != "":
+	case account.Email != "" && account.Email != bootstrapPlaceholderEmail:
 		return ErrAdminEmailConflict{Configured: s.adminEmail, Account: account.Email}
 	}
 	if _, err := s.accounts.UpdateUser(ctx, s.tenantID, account.ID,
