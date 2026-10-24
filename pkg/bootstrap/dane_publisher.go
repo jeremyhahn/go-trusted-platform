@@ -128,6 +128,67 @@ func (p *DANEPublisher) RemoveForHostname(
 	zoneName string,
 ) error {
 
+	removeAll := func(*entities.TLSARecord) bool { return true }
+	return p.removeTLSA(ctx, hostname, port, zoneName, removeAll)
+}
+
+// retireForHostname removes every TLSA record for hostname:port except one
+// DANE-EE record for current, the certificate now being served. It ends an
+// RFC 7671 §8.1 rollover: the old records go, the pre-published one stays.
+func (p *DANEPublisher) retireForHostname(
+	ctx context.Context,
+	current *x509.Certificate,
+	hostname string,
+	port uint16,
+	zoneName string,
+) error {
+
+	keep, err := p.rolloverRecord(current, hostname, port)
+	if err != nil {
+		return err
+	}
+	kept := false
+	remove := func(record *entities.TLSARecord) bool {
+		if !kept && sameTLSAData(record, keep) {
+			kept = true
+			return false
+		}
+		return true
+	}
+	return p.removeTLSA(ctx, hostname, port, zoneName, remove)
+}
+
+// withdrawRollover removes the DANE-EE record PrePublishRollover published for
+// newCert, leaving every other record for hostname:port in place. It undoes a
+// rollover whose new certificate could not be activated.
+func (p *DANEPublisher) withdrawRollover(
+	ctx context.Context,
+	newCert *x509.Certificate,
+	hostname string,
+	port uint16,
+	zoneName string,
+) error {
+
+	withdrawn, err := p.rolloverRecord(newCert, hostname, port)
+	if err != nil {
+		return err
+	}
+	remove := func(record *entities.TLSARecord) bool {
+		return sameTLSAData(record, withdrawn)
+	}
+	return p.removeTLSA(ctx, hostname, port, zoneName, remove)
+}
+
+// removeTLSA removes the TLSA records for hostname:port for which remove
+// returns true, then re-signs the zone.
+func (p *DANEPublisher) removeTLSA(
+	ctx context.Context,
+	hostname string,
+	port uint16,
+	zoneName string,
+	remove func(*entities.TLSARecord) bool,
+) error {
+
 	zone, err := p.dnsService.Zone(ctx, zoneName)
 	if err != nil {
 		return ErrDANEPublishFailed{Zone: zoneName, Cause: err}
@@ -135,11 +196,11 @@ func (p *DANEPublisher) RemoveForHostname(
 
 	name := tlsaRecordName(hostname, port)
 
-	// Remove all TLSA records matching the name. The entity RemoveTLSARecord
-	// only removes the first match, so filter the entire slice instead.
+	// The entity RemoveTLSARecord only removes the first match, so filter the
+	// entire slice instead.
 	filtered := make([]*entities.TLSARecord, 0, len(zone.RecordSet.TLSARecords))
 	for _, record := range zone.RecordSet.TLSARecords {
-		if record.Name != name {
+		if record.Name != name || !remove(record) {
 			filtered = append(filtered, record)
 		}
 	}
@@ -159,6 +220,14 @@ func (p *DANEPublisher) RemoveForHostname(
 	return nil
 }
 
+// sameTLSAData reports whether two TLSA records carry the same association.
+func sameTLSAData(a, b *entities.TLSARecord) bool {
+	return a.Usage == b.Usage &&
+		a.Selector == b.Selector &&
+		a.MatchingType == b.MatchingType &&
+		a.Data == b.Data
+}
+
 // PrePublishRollover adds a new DANE-EE TLSA record for the new certificate
 // alongside any existing records. This implements the RFC 7671 pre-publication
 // rollover pattern where both old and new records coexist during the transition
@@ -172,30 +241,9 @@ func (p *DANEPublisher) PrePublishRollover(
 	zoneName string,
 ) error {
 
-	if newCert == nil {
-		return ErrTLSAComputeFailed{
-			CN:    hostname,
-			Cause: dane.ErrInvalidCertificate,
-		}
-	}
-
-	name := tlsaRecordName(hostname, port)
-
-	ttl := p.rolloverTTL()
-
-	data, err := dane.ComputeTLSAData(
-		newCert, p.config.DefaultSelector, p.config.DefaultMatchingType)
+	record, err := p.rolloverRecord(newCert, hostname, port)
 	if err != nil {
-		return ErrTLSAComputeFailed{CN: hostname, Cause: err}
-	}
-
-	record := &entities.TLSARecord{
-		Name:         name,
-		Usage:        dane.UsageDANEEE,
-		Selector:     p.config.DefaultSelector,
-		MatchingType: p.config.DefaultMatchingType,
-		Data:         hex.EncodeToString(data),
-		TTL:          ttl,
+		return err
 	}
 
 	if err := p.addRecord(ctx, zoneName, record); err != nil {
@@ -215,10 +263,41 @@ func (p *DANEPublisher) PrePublishRollover(
 		slog.String("hostname", hostname),
 		slog.Int("port", int(port)),
 		slog.String("zone", zoneName),
-		slog.Uint64("ttl", uint64(ttl)),
+		slog.Uint64("ttl", uint64(record.TTL)),
 	)
 
 	return nil
+}
+
+// rolloverRecord derives the DANE-EE record PrePublishRollover publishes for
+// cert at hostname:port.
+func (p *DANEPublisher) rolloverRecord(
+	cert *x509.Certificate,
+	hostname string,
+	port uint16,
+) (*entities.TLSARecord, error) {
+
+	if cert == nil {
+		return nil, ErrTLSAComputeFailed{
+			CN:    hostname,
+			Cause: dane.ErrInvalidCertificate,
+		}
+	}
+
+	data, err := dane.ComputeTLSAData(
+		cert, p.config.DefaultSelector, p.config.DefaultMatchingType)
+	if err != nil {
+		return nil, ErrTLSAComputeFailed{CN: hostname, Cause: err}
+	}
+
+	return &entities.TLSARecord{
+		Name:         tlsaRecordName(hostname, port),
+		Usage:        dane.UsageDANEEE,
+		Selector:     p.config.DefaultSelector,
+		MatchingType: p.config.DefaultMatchingType,
+		Data:         hex.EncodeToString(data),
+		TTL:          p.rolloverTTL(),
+	}, nil
 }
 
 // publishRecord computes TLSA data for the given certificate and publishes it
