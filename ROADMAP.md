@@ -51,7 +51,7 @@ The trusted-computing platform product and control plane: provisioning, node and
 - **bootstrap** — every NBD package behind one build tag, omitted from a client binary that does not use NBD — [#883](../../issues/883) — open
 - **installer** — the initrd brings up the WireGuard overlay and attaches the NBD root inside it — [#883](../../issues/883) — open
 - **attestation** — the SDK peer verifier replaces the VM verifier and the DevID validator — [#666](../../issues/666) — open
-- **auth** — users held in go-quicbaas IAM, no user store of the platform's own — [#644](../../issues/644) — open
+- **auth** — users held in go-quicbaas IAM, no user store of the platform's own; ruling 133: the daemon REST plane authenticates and authorises only through the go-quicbaas SDK (IAM, JWT, WebAuthn, PIV, mTLS, RBAC/ABAC), with no auth model, route guard or token format of its own — [#644](../../issues/644) — open
 - **bootstrap** — the FIPS Noise bootstrap listener — [#518](../../issues/518) — open
 - **daemon** — MCP refuses anonymous enumeration and every tool has a permission — [#412](../../issues/412) — open
 - **installer** — root seal on `luks-root` and offline unseal from the `.tpmpolicy` binding record — [#720](../../issues/720) — blocked: waits on the go-quicbaas tag that carries go-xkms#1443 step 3
