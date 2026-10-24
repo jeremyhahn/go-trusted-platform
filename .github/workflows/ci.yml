@@ -55,12 +55,20 @@ on:
   workflow_dispatch:
 
 # Cancel superseded runs. Keyed on the ref so a branch only supersedes itself,
-# and set at workflow level so the whole superseded pipeline goes.
-# cancel-in-progress is the literal `true` because Gitea does not evaluate
-# expressions there. ci-gate treats `cancelled` as a failure, which never
-# blocks a merge: only a superseded commit gets cancelled (#510).
+# and set at workflow level so the whole superseded pipeline goes. ci-gate
+# treats `cancelled` as a failure, which never blocks a merge: only a
+# superseded PR commit gets cancelled (#510).
+#
+# On main the group is the commit instead (DS-3465): every main commit needs
+# its own Gate result, so the next push to main is a new group and never
+# cancels the run in progress. Gitea 1.27.1 evaluates expressions in `group`
+# but not in `cancel-in-progress`, which stays the literal true. The sha, not
+# run_id: the sha comes from the event, so it is known whenever Gitea evaluates
+# the group. Each push to main has a new sha, so only a re-run or dispatch of
+# the same main commit shares its group.
+# pkg/arch/citiers_test.go holds the policy.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.ref == 'refs/heads/main' && github.sha || github.ref }}
   cancel-in-progress: true
 
 permissions:

@@ -79,8 +79,11 @@ const (
 	fullTierEnvValue = "${{ " + fullTierIf + " }}"
 
 	// supersededGroup keys a run by workflow AND ref, so a push to a PR cancels
-	// only that PR's older run (#510).
-	supersededGroup = "${{ github.workflow }}-${{ github.ref }}"
+	// only that PR's older run (#510). On main it keys by commit instead, so
+	// the next push to main is a new group and never cancels the run in
+	// progress (DS-3465): Gitea 1.27.1 evaluates expressions in `group`, not
+	// in `cancel-in-progress`.
+	supersededGroup = "${{ github.workflow }}-${{ github.ref == 'refs/heads/main' && github.sha || github.ref }}"
 )
 
 // prTriggerTypes are ci.yml's pull_request activity types. `ci:full` takes
@@ -487,7 +490,8 @@ func workflowTriggers(doc *yaml.Node) []string {
 }
 
 // concurrencyFindings reports a pull_request-triggered workflow that does not
-// cancel its superseded runs. pull_request_target is deliberately not held to
+// cancel its superseded PR runs, or that lets a push to main cancel the main
+// run in progress. pull_request_target is deliberately not held to
 // this: its github.ref is the BASE branch, so a ref-keyed group would put every
 // PR in one group and let each cancel the others; those workflows key by PR.
 func concurrencyFindings(wf ciWorkflow) []error {
@@ -503,7 +507,7 @@ func concurrencyFindings(wf ciWorkflow) []error {
 	}
 	var findings []error
 	if group := mappingValue(block, "group"); group == nil || group.Value != supersededGroup {
-		findings = append(findings, fail(block.Line, "group must be "+supersededGroup+", one group per workflow and ref")...)
+		findings = append(findings, fail(block.Line, "group must be "+supersededGroup+": one group per workflow and ref, so a PR push supersedes only its own run, and one per commit on main, so no push cancels a main run")...)
 	}
 	cancel := mappingValue(block, "cancel-in-progress")
 	if cancel == nil || cancel.ShortTag() != "!!bool" || cancel.Value != "true" {
@@ -632,7 +636,7 @@ const fixtureTieredCI = `on:
   pull_request:
     types: [opened, synchronize, reopened]
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.ref == 'refs/heads/main' && github.sha || github.ref }}
   cancel-in-progress: true
 jobs:
   lint:
@@ -752,9 +756,15 @@ func TestConcurrencyFindingsRejectAnUncancellableGroup(t *testing.T) {
 		want string
 	}{
 		{"an expression for cancel-in-progress", `cancel-in-progress: true`, `cancel-in-progress: ${{ true }}`, "must be the literal true"},
+		{"a main-only expression for cancel-in-progress", `cancel-in-progress: true`, `cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}`, "must be the literal true"},
 		{"cancel-in-progress false", `cancel-in-progress: true`, `cancel-in-progress: false`, "must be the literal true"},
-		{"a group with no ref", `group: ${{ github.workflow }}-${{ github.ref }}`, `group: ${{ github.workflow }}`, "group must be"},
-		{"no concurrency block", "concurrency:\n  group: ${{ github.workflow }}-${{ github.ref }}\n  cancel-in-progress: true\n", "", "has no concurrency block"},
+		{"a group with no ref", supersededGroup, `${{ github.workflow }}`, "group must be"},
+		{"a ref-only group lets a main push cancel main", supersededGroup, `${{ github.workflow }}-${{ github.ref }}`, "group must be"},
+		{"a sha-only group never supersedes a PR run", supersededGroup, `${{ github.workflow }}-${{ github.sha }}`, "group must be"},
+		{"a run_id group on main", supersededGroup, `${{ github.workflow }}-${{ github.ref == 'refs/heads/main' && github.run_id || github.ref }}`, "group must be"},
+		{"a per-commit group on a branch other than main", `'refs/heads/main'`, `'refs/heads/dev'`, "group must be"},
+		{"a per-ref group on main with a per-commit group elsewhere", supersededGroup, `${{ github.workflow }}-${{ github.ref != 'refs/heads/main' && github.sha || github.ref }}`, "group must be"},
+		{"no concurrency block", "concurrency:\n  group: " + supersededGroup + "\n  cancel-in-progress: true\n", "", "has no concurrency block"},
 		{"a labeled trigger", `reopened]`, `reopened, labeled]`, "types include labeled"},
 		{"an unlabeled trigger", `reopened]`, `reopened, unlabeled]`, "types include unlabeled"},
 	}
