@@ -26,11 +26,13 @@ import (
 
 	platform "github.com/jeremyhahn/go-trusted-platform/sdk/go"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
+	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
 
 	// Register the sdk/go transports the SDK adapters select by protocol.
 	_ "github.com/jeremyhahn/go-trusted-platform/sdk/go/transport/grpc"
 	_ "github.com/jeremyhahn/go-trusted-platform/sdk/go/transport/mcp"
 	_ "github.com/jeremyhahn/go-trusted-platform/sdk/go/transport/quic"
+	_ "github.com/jeremyhahn/go-trusted-platform/sdk/go/transport/rest"
 	_ "github.com/jeremyhahn/go-trusted-platform/sdk/go/transport/unix"
 )
 
@@ -47,8 +49,13 @@ type SDKAdapter struct {
 	name     string
 	endpoint string
 	options  func() *platform.Options
-	client   platform.Client
-	pxe      platformv1.PXEServiceClient
+	// adminBearer adds the harness admin console bearer to the options:
+	// the webservice serves the PXE REST routes behind the admin role
+	// gate, which takes a console session, not the client certificate
+	// (docs/test/integration.md, "Admin session").
+	adminBearer bool
+	client      platform.Client
+	pxe         platformv1.PXEServiceClient
 }
 
 // Name returns the protocol adapter identifier.
@@ -56,7 +63,15 @@ func (a *SDKAdapter) Name() string { return a.name }
 
 // Setup connects the platform SDK client over the selected transport.
 func (a *SDKAdapter) Setup(ctx context.Context) error {
-	client, err := platform.Connect(ctx, a.options())
+	options := a.options()
+	if a.adminBearer {
+		token, err := helpers.HarnessAdminSession().Bearer(ctx)
+		if err != nil {
+			return ErrConnectionFailed{Protocol: a.name, Endpoint: a.endpoint, Err: err}
+		}
+		platform.WithBearerToken(token)(options)
+	}
+	client, err := platform.Connect(ctx, options)
 	if err != nil {
 		return ErrConnectionFailed{Protocol: a.name, Endpoint: a.endpoint, Err: err}
 	}

@@ -102,6 +102,24 @@ func dialWithin(ns netns.NsHandle, t *testing.T, target string) error {
 	return err
 }
 
+// sendWithin sends one UDP datagram to target from inside ns.
+func sendWithin(ns netns.NsHandle, t *testing.T, target string) error {
+	t.Helper()
+	var err error
+	inNS(t, ns, func() {
+		var c net.Conn
+		c, err = net.Dial("udp", target)
+		if err != nil {
+			return
+		}
+		_, err = c.Write([]byte{0})
+		if cerr := c.Close(); err == nil {
+			err = cerr
+		}
+	})
+	return err
+}
+
 // listenWithin opens a TCP listener inside ns that accepts and closes
 // every connection, and closes it when the test ends.
 func listenWithin(ns netns.NsHandle, t *testing.T, addr string) {
@@ -193,6 +211,12 @@ func TestHostFW_NetNS_OnlyDeclaredListenersAnswer(t *testing.T) {
 		require.True(t, errors.As(err, &nerr) && nerr.Timeout(), "a drop looks like a timeout, not a refusal: %v", err)
 	})
 	t.Run("gre from an undeclared source is dropped", func(t *testing.T) {
+		// The host sends GRE to the peer first, so conntrack holds an entry
+		// that makes the peer's GRE a reply. Kernels that send IPv6 MLD or
+		// router solicitations over hgre0 create the same entry on their own,
+		// and the dial then passed on conntrack alone (#730). Doing it here
+		// proves on every kernel that only the peer allowance admits GRE.
+		require.NoError(t, sendWithin(hostNS, t, net.JoinHostPort(hostfwTunPeer, "9")))
 		err := dialWithin(peerNS, t, net.JoinHostPort(hostfwTunHost, strconv.Itoa(int(hostfw.PortBGP))))
 		require.Error(t, err, "the outer GRE from 10.99.0.2 is not in the allowance yet")
 	})

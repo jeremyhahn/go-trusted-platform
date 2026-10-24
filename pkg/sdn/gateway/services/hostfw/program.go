@@ -164,6 +164,7 @@ func buildExprs(r Rule, icmp RateLimit) ([]expr.Any, error) {
 	case RuleLoopback, RuleUnfiltered:
 		e = append(e, accept())
 	case RuleEstablished:
+		e = append(e, exprNotL4Proto(ipProtoGRE, ipProtoESP)...)
 		e = append(e, exprCtState(expr.CtStateBitESTABLISHED|expr.CtStateBitRELATED)...)
 		e = append(e, accept())
 	case RuleInvalid:
@@ -235,6 +236,15 @@ func exprL4Proto(proto uint8) []expr.Any {
 		&expr.Meta{Key: expr.MetaKeyL4PROTO, Register: 1},
 		&expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: []byte{proto}},
 	}
+}
+
+// exprNotL4Proto matches a packet whose layer-4 protocol is none of protos.
+func exprNotL4Proto(protos ...uint8) []expr.Any {
+	e := []expr.Any{&expr.Meta{Key: expr.MetaKeyL4PROTO, Register: 1}}
+	for _, proto := range protos {
+		e = append(e, &expr.Cmp{Op: expr.CmpOpNeq, Register: 1, Data: []byte{proto}})
+	}
+	return e
 }
 
 func exprDport(port uint16) []expr.Any {

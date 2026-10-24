@@ -105,7 +105,8 @@ func TestRender_PolicyShape(t *testing.T) {
 	assert.Contains(t, text, "delete table inet tp_host\n")
 	assert.Contains(t, text, "type filter hook input priority filter; policy drop;")
 	assert.Contains(t, text, `iifname "lo" accept`)
-	assert.Contains(t, text, "ct state established,related accept")
+	assert.Contains(t, text, "meta l4proto != { gre, esp } ct state established,related accept",
+		"GRE and ESP are admitted only by a peer allowance, never by conntrack")
 	assert.Contains(t, text, "ct state invalid drop")
 	assert.Contains(t, text, "meta l4proto icmp limit rate 50/second burst 100 packets accept")
 	assert.Contains(t, text, "nd-neighbor-solicit")

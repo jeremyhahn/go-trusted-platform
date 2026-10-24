@@ -382,8 +382,8 @@ func TestRunSignCSR_MissingFile(t *testing.T) {
 }
 
 func TestRunSignCSR_ReadsFile(t *testing.T) {
-	// We cannot actually drive the full runSignCSR successfully without a real
-	// context, but we can still exercise the file read path.
+	// Without a context the dial fails after the file is read; the full
+	// dispatch is covered by TestRunCommands_InProcess.
 	tmp := t.TempDir()
 	path := filepath.Join(tmp, "csr.pem")
 	if err := os.WriteFile(path, []byte("-----BEGIN CERTIFICATE REQUEST-----\nxx\n-----END CERTIFICATE REQUEST-----\n"), 0o600); err != nil {

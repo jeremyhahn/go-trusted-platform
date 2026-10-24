@@ -266,7 +266,7 @@ jobs:
   # now runs on every PR.
   image:
     name: Devcontainer image [build, test, security, deps-check, trivy image]
-    runs-on: bigdisk
+    runs-on: ${{ github.server_url == 'https://github.com' && 'ubuntu-latest' || 'bigdisk' }}
     if: needs.changes.outputs.docs_only != 'true'
     needs: [changes]
     timeout-minutes: 120
@@ -475,7 +475,7 @@ jobs:
 
   integration:
     name: Integration [build tag integration]
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.server_url == 'https://github.com' && 'ubuntu-latest' || 'bigdisk' }}
     if: github.event_name == 'push' || github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'ci:full')
     # `needs: test` keeps the heavy jobs off the runner at the same time.
     needs: [test]
@@ -541,7 +541,10 @@ jobs:
   # it reports `CI / FIPS (push)` on main without turning main's CI Gate red.
   # pkg/arch/citiers_test.go fails `make test` if it is ever gated, or if its
   # `if:` lets a pull_request in. Its steps match nightly.yml's `fips` job;
-  # change the suite in the Makefile (`make test-fips`), not here.
+  # change the suite in the Makefile (`make test-fips`), not here. That target
+  # also applies the FIPS foreign-failure baseline (ruling 125,
+  # .github/foreign-failures-fips.tsv); nightly.yml's header lists what it
+  # tolerates.
   fips:
     name: FIPS
     runs-on: ubuntu-latest

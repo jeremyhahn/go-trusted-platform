@@ -28,7 +28,6 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
-	"github.com/jeremyhahn/go-quicbaas/sdk/go/client/objectstorage"
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	quicbaasca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/ca"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/ca/issuance"
@@ -53,7 +52,6 @@ type CAHandlers struct {
 	logger     *logging.Logger
 	ca         quicbaasca.CACertificateAuthority
 	respWriter response.HttpWriter
-	objStorage objectstorage.Client
 	kms        issuance.KMS
 	service    platformv1.CAServiceServer
 }
@@ -71,18 +69,15 @@ const (
 )
 
 // NewCAHandlers creates a new CAHandlers instance.
-// objStorage may be nil; if nil, the revocation object-store check is skipped.
 func NewCAHandlers(
 	logger *logging.Logger,
 	ca quicbaasca.CACertificateAuthority,
 	respWriter response.HttpWriter,
-	objStorage objectstorage.Client,
 ) *CAHandlers {
 	return &CAHandlers{
 		logger:     logger,
 		ca:         ca,
 		respWriter: respWriter,
-		objStorage: objStorage,
 	}
 }
 

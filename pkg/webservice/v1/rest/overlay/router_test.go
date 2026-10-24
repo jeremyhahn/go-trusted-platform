@@ -35,21 +35,23 @@ func newRouter() (*OverlayRouter, *mux.Router) {
 	return r, parent
 }
 
+// overlayRoutes is every route RegisterRoutes mounts.
+var overlayRoutes = []struct{ method, path string }{
+	{http.MethodGet, "/api/v1/overlay/status"},
+	{http.MethodGet, "/api/v1/overlay/vteps"},
+	{http.MethodGet, "/api/v1/overlay/vteps/n1"},
+	{http.MethodGet, "/api/v1/overlay/vnis"},
+	{http.MethodPost, "/api/v1/overlay/vnis"},
+	{http.MethodDelete, "/api/v1/overlay/vnis/100"},
+	{http.MethodGet, "/api/v1/overlay/tunnels"},
+	{http.MethodGet, "/api/v1/overlay/tunnels/stats"},
+	{http.MethodGet, "/api/v1/overlay/macs"},
+	{http.MethodDelete, "/api/v1/overlay/macs"},
+}
+
 func TestOverlayRouter_RoutesRegistered(t *testing.T) {
 	_, parent := newRouter()
-	cases := []struct{ method, path string }{
-		{http.MethodGet, "/api/v1/overlay/status"},
-		{http.MethodGet, "/api/v1/overlay/vteps"},
-		{http.MethodGet, "/api/v1/overlay/vteps/n1"},
-		{http.MethodGet, "/api/v1/overlay/vnis"},
-		{http.MethodPost, "/api/v1/overlay/vnis"},
-		{http.MethodDelete, "/api/v1/overlay/vnis/100"},
-		{http.MethodGet, "/api/v1/overlay/tunnels"},
-		{http.MethodGet, "/api/v1/overlay/tunnels/stats"},
-		{http.MethodGet, "/api/v1/overlay/macs"},
-		{http.MethodDelete, "/api/v1/overlay/macs"},
-	}
-	for _, tc := range cases {
+	for _, tc := range overlayRoutes {
 		t.Run(tc.method+" "+tc.path, func(t *testing.T) {
 			req := httptest.NewRequest(tc.method, tc.path, nil)
 			var match mux.RouteMatch
@@ -60,9 +62,13 @@ func TestOverlayRouter_RoutesRegistered(t *testing.T) {
 
 func TestOverlayRouter_NilServer(t *testing.T) {
 	_, parent := newRouter()
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/overlay/status", nil)
-	rec := httptest.NewRecorder()
-	parent.ServeHTTP(rec, req)
-	assert.Equal(t, http.StatusServiceUnavailable, rec.Code)
-	assert.Contains(t, rec.Body.String(), "overlay service is not available")
+	for _, tc := range overlayRoutes {
+		t.Run(tc.method+" "+tc.path, func(t *testing.T) {
+			req := httptest.NewRequest(tc.method, tc.path, nil)
+			rec := httptest.NewRecorder()
+			parent.ServeHTTP(rec, req)
+			assert.Equal(t, http.StatusServiceUnavailable, rec.Code)
+			assert.Contains(t, rec.Body.String(), "overlay service is not available")
+		})
+	}
 }

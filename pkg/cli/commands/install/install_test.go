@@ -1666,6 +1666,20 @@ func TestRunSystemInstall_InstallerCreationFailed(t *testing.T) {
 	// depending on how the installer handles the invalid OS
 }
 
+func TestRunSystemInstall_ConfigLoadFailed(t *testing.T) {
+	// A config file that exists but does not decode is a hard failure; only
+	// an absent file falls back to the command-line flags.
+	cmd := newSystemCommand(getTestFlagsWithFormat(cli.OutputFormatJSON))
+	cfgPath := filepath.Join(t.TempDir(), "install.yaml")
+	require.NoError(t, os.WriteFile(cfgPath, []byte("os: [unclosed\n"), 0o644))
+
+	err := runSystemInstall(cmd, &cli.CommonFlags{}, &systemFlags{config: cfgPath})
+
+	var loadErr ErrConfigLoadFailed
+	require.ErrorAs(t, err, &loadErr)
+	require.Equal(t, cfgPath, loadErr.Path)
+}
+
 // ============================================================================
 // Additional UKI Tests for Code Coverage
 // ============================================================================

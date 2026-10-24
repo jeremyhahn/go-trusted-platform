@@ -113,6 +113,35 @@ fields and decodes the reply into `key` and `metadata`. It refuses an algorithm
 or usage outside those lists as InvalidArgument before sending, because the
 route would answer 400.
 
+The daemon REST server's generate (`POST /api/v1/kms/keys`) and import
+(`POST /api/v1/kms/keys/import`) read `key_spec.algorithm` and `key_spec.usage`
+as names and send the KMS their `platform.v1` numbers
+(`pkg/api/rest/kms_handlers.go` `kmsAlgorithmNumbers`, `kmsUsageNumbers`):
+
+| `key_spec.algorithm` | `platform.v1` `KMSKeyAlgorithm` |
+|---|---|
+| `AES-128-GCM`, `AES-192-GCM`, `AES-256-GCM` | `AES_128` (20), `AES_192` (21), `AES_256` (22) |
+| `CHACHA20-POLY1305` | `CHACHA20_POLY1305` (23) |
+| `RSA-2048`, `RSA-3072`, `RSA-4096` | `RSA_2048` (1), `RSA_3072` (2), `RSA_4096` (3) |
+| `ECDSA-P256`, `ECDSA-P384`, `ECDSA-P521` | `ECDSA_P256` (4), `ECDSA_P384` (5), `ECDSA_P521` (6) |
+| `ED25519` | `ED25519` (7) |
+| `HMAC-SHA256`, `HMAC-SHA384`, `HMAC-SHA512` | `HMAC_SHA256` (30), `HMAC_SHA384` (31), `HMAC_SHA512` (32) |
+
+| `key_spec.usage` | `platform.v1` `KeyUsage` |
+|---|---|
+| `ENCRYPT`, `DECRYPT`, `SIGN`, `VERIFY` | `ENCRYPT` (1), `DECRYPT` (2), `SIGN` (3), `VERIFY` (4) |
+| `WRAP` or `WRAP_KEY`, `UNWRAP` or `UNWRAP_KEY` | `WRAP` (5), `UNWRAP` (6) |
+| `DERIVE_KEY` | `DERIVE` (7) |
+| `GENERATE_MAC`, `VERIFY_MAC` | `HMAC` (8) |
+
+Algorithm names accept underscores for dashes; names are upper case. Any other
+name answers 400 before the KMS is called: `invalid algorithm: <name>`
+(`ErrKMSInvalidAlgorithm`) or `invalid key usage: <name>`
+(`ErrKMSInvalidKeyUsage`). That includes `XCHACHA20-POLY1305`, `ED448`,
+`X25519` and `X448`, which have no `platform.v1` number; the Dilithium numbers
+have no REST name. The replies carry `algorithm` and `usage` as the
+`platform.v1` numbers, never as names.
+
 ---
 
 ## 3. Cryptographic operations

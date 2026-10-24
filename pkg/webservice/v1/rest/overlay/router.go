@@ -54,9 +54,9 @@ func NewOverlayRouter(
 //	GET    /api/v1/overlay/vnis                         - ListVNIs
 //	POST   /api/v1/overlay/vnis                         - CreateVNI
 //	DELETE /api/v1/overlay/vnis/{vni:[0-9]+}            - DeleteVNI
-//	GET    /api/v1/overlay/tunnels                      - ListTunnels
-//	GET    /api/v1/overlay/tunnels/stats                - GetTunnelStats
-//	GET    /api/v1/overlay/macs                         - ListRemoteMACs
+//	GET    /api/v1/overlay/tunnels                      - ListTunnels (?vni=)
+//	GET    /api/v1/overlay/tunnels/stats                - GetTunnelStats (?remote_vtep=&vni=)
+//	GET    /api/v1/overlay/macs                         - ListRemoteMACs (?vni=)
 //	DELETE /api/v1/overlay/macs                         - ForgetMAC (?mac=&vni=)
 func (r *OverlayRouter) RegisterRoutes(parent *mux.Router) {
 	sr := parent.PathPrefix(basePath).Subrouter()
@@ -167,9 +167,14 @@ func (r *OverlayRouter) listTunnels(w http.ResponseWriter, req *http.Request) {
 	if !r.ensure(w, req) {
 		return
 	}
-	resp, err := r.server.ListTunnels(req.Context(), &platformv1.ListTunnelsRequest{})
+	vni, err := protorest.QueryUint32(req, "vni")
 	if err != nil {
-		protorest.WriteError(w, req, r.respWriter, err)
+		r.respWriter.Error400(w, req, err)
+		return
+	}
+	resp, srvErr := r.server.ListTunnels(req.Context(), &platformv1.ListTunnelsRequest{Vni: vni})
+	if srvErr != nil {
+		protorest.WriteError(w, req, r.respWriter, srvErr)
 		return
 	}
 	protorest.WriteSuccess(w, req, r.respWriter, resp)
@@ -199,9 +204,14 @@ func (r *OverlayRouter) listMACs(w http.ResponseWriter, req *http.Request) {
 	if !r.ensure(w, req) {
 		return
 	}
-	resp, err := r.server.ListRemoteMACs(req.Context(), &platformv1.ListRemoteMACsRequest{})
+	vni, err := protorest.QueryUint32(req, "vni")
 	if err != nil {
-		protorest.WriteError(w, req, r.respWriter, err)
+		r.respWriter.Error400(w, req, err)
+		return
+	}
+	resp, srvErr := r.server.ListRemoteMACs(req.Context(), &platformv1.ListRemoteMACsRequest{Vni: vni})
+	if srvErr != nil {
+		protorest.WriteError(w, req, r.respWriter, srvErr)
 		return
 	}
 	protorest.WriteSuccess(w, req, r.respWriter, resp)

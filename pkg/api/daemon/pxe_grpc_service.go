@@ -696,8 +696,16 @@ func (s *PXEGRPCService) filterFromProto(filter *platformv1.PXEDeviceFilter) *px
 		return nil
 	}
 
+	// An unset state means "any state". stateFromProto answers
+	// StateUnknown for it, which would narrow a VLAN- or MAC-only
+	// filter to devices in the "unknown" state and return none (#975).
+	var state pxe.ProvisioningState
+	if filter.GetState() != platformv1.ProvisioningState_PROVISIONING_STATE_UNSPECIFIED {
+		state = s.stateFromProto(filter.GetState())
+	}
+
 	return &pxe.DeviceFilter{
-		State:      s.stateFromProto(filter.GetState()),
+		State:      state,
 		MACAddress: filter.GetMacAddress(),
 		VLAN:       uint16(filter.GetVlan()),
 		Limit:      int(filter.GetLimit()),

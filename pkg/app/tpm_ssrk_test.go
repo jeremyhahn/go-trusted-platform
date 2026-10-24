@@ -48,7 +48,7 @@ func TestEnsureSSRK_FreshTPMCreatesSSRK(t *testing.T) {
 	attrs, err := a.TPM.SSRKAttributes()
 	require.NoError(t, err)
 	require.Equal(t, harnessSSRKHandle, attrs.TPMAttributes.Handle)
-	require.True(t, hierarchyAuthState(t, sim).ownerAuthSet, "ownership is still taken after the SSRK exists")
+	require.True(t, hierarchyAuthState(t, sim).OwnerAuthSet, "ownership is still taken after the SSRK exists")
 	require.NoError(t, ownerAuthorizes(t, sim, harnessSOPIN))
 }
 
@@ -82,7 +82,7 @@ func TestEnsureSSRK_CreateFault(t *testing.T) {
 	require.ErrorAs(t, err, &createErr)
 	require.Equal(t, uint32(harnessSSRKHandle), createErr.Handle)
 	require.ErrorIs(t, err, errInjectedTPMFault)
-	require.False(t, hierarchyAuthState(t, sim).ownerAuthSet)
+	require.False(t, hierarchyAuthState(t, sim).OwnerAuthSet)
 }
 
 // A read failure other than an empty handle is reported, not taken for a

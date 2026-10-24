@@ -59,6 +59,27 @@ REST base path `/api/v1/pxe` (`pkg/webservice/v1/rest/pxe/router.go`).
 **This is the most complete capability set in the platform** — fifteen
 capabilities, all fifteen on five transports.
 
+**`ListDevices` filters on every transport (#975).** The `PXEDeviceFilter`
+fields `state`, `mac_address` and `vlan` narrow the list, and `limit` and
+`offset` page it; a field left unset matches every device. On REST they are
+the query parameters of `GET /api/v1/pxe/devices`
+(`pkg/webservice/v1/rest/pxe/filter.go`):
+
+| Parameter | Value | Refused with `400` |
+|---|---|---|
+| `state` | a `ProvisioningState` name, with or without its `PROVISIONING_STATE_` prefix (`quarantined`, `PROVISIONING_STATE_QUARANTINED`) | an unknown name, or `unspecified` |
+| `mac_address` | a colon-separated MAC address, or a prefix of one (`52:54:00`) | any character but hex digits and `:`, or longer than 17 |
+| `vlan` | an 802.1Q VLAN ID | anything but an integer from 1 to 4094 |
+| `limit`, `offset` | a count; `0` is no limit, no offset | a negative number, or anything but an integer that fits 32 bits |
+
+An absent or empty parameter is no filter. A refused value never reaches the
+service. Until #975, REST ignored the query and listed every device, and gRPC
+read an unset `state` as `PROVISIONING_STATE_UNKNOWN`, so a VLAN- or MAC-only
+filter matched nothing. The SDK REST transport sends the filter as these
+parameters: `state` as the enum name, and unset fields left out
+(`sdk/go/transport/rest/adapter.go`). Before #975 it mapped only eight of the
+fifteen methods; it now maps all fifteen (`docs/ipxe/api.md` §4).
+
 `Authorize` and `Quarantine` are separate operations, and the presence of
 `Quarantine` is the design point: a device that fails a check goes to an
 isolated state rather than being left in an ambiguous one. `Retry` is how it
@@ -280,7 +301,11 @@ reachable by machines with no identity, so it is rate-limited by design
 
 **503 from `/api/v1/pxe/*` may mean the PXE service is simply stopped** —
 `StartService` and `StopService` exist, so "not running" is a state, not a
-fault.
+fault. `StartService` returns once every iPXE listener has bound, and the
+server then runs until `StopService` or platformd shuts down; it does not
+end with the request that started it. An `ipxe.Server` is single-use
+(`pkg/ipxe/server.go`), so each `StartService` runs a fresh one and a
+stopped service starts again.
 
 ---
 

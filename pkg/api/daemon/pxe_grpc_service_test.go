@@ -1304,6 +1304,17 @@ func TestPXEGRPCService_FilterFromProto(t *testing.T) {
 		assert.Equal(t, 10, result.Limit)
 		assert.Equal(t, 5, result.Offset)
 	})
+
+	t.Run("unset state matches any state", func(t *testing.T) {
+		result := svc.filterFromProto(&platformv1.PXEDeviceFilter{Vlan: 100})
+
+		require.NotNil(t, result)
+		assert.Empty(t, result.State, "an unset state must not narrow to the unknown state")
+		mac, err := net.ParseMAC("00:11:22:33:44:55")
+		require.NoError(t, err)
+		discovered := &pxe.DeviceInfo{MACAddress: mac, State: pxe.StateDiscovered, CurrentVLAN: 100}
+		assert.True(t, result.Matches(discovered))
+	})
 }
 
 // TestPXEGRPCService_DeviceToProto tests device conversion to proto.

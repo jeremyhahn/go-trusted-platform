@@ -306,9 +306,11 @@ stateless node's PIN material lives across boots is an open owner decision
    `InitTPM` detects **SRK policy drift** — a stored `AuthPolicy` that no longer
    matches the current `PlatformPolicyDigest` — and re-provisions rather than
    letting every subsequent seal fail obscurely.
-3. **Hierarchy auth.** The SO PIN is the Endorsement and Storage hierarchy
-   authorization. It is resolved through the secret-reference resolver, mirrored
-   into `TPMConfig`, and never logged.
+3. **Hierarchy auth.** The SO PIN is the Storage (owner) hierarchy
+   authorization, set by firstboot on an installed node and by platformd on a
+   TPM it finds unowned; the Endorsement and lockout auth stay empty
+   ([engineering.md](engineering.md) §4 item 5). It is resolved through the
+   secret-reference resolver, mirrored into `TPMConfig`, and never logged.
 4. **Transport → device.** Every transport reaches the *same* TPM with the
    *same* authority. There is no per-caller TPM identity, so transport
    authorization is the only thing standing between a token holder and

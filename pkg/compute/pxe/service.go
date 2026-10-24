@@ -61,8 +61,15 @@ type Service interface {
 
 // service implements the Service interface.
 type service struct {
-	config       *ServiceConfig
-	ipxeServer   *ipxe.Server
+	config *ServiceConfig
+
+	// ipxeServer is the server the next Start runs, or the one running.
+	// ipxeRun is its run once it has been started: an ipxe.Server is
+	// single-use (pkg/ipxe/server.go), so Start builds a fresh one when
+	// ipxeServer has already run.
+	ipxeServer *ipxe.Server
+	ipxeRun    *ipxeRun
+
 	stateManager *StateManager
 	vlanManager  VLANIntegration
 	logger       *logging.Logger
@@ -71,7 +78,20 @@ type service struct {
 	initialized atomic.Bool
 	startTime   time.Time
 
-	mu sync.RWMutex
+	// lifecycle serialises Start and Stop, so two concurrent StartService
+	// calls cannot both run a server.
+	lifecycle sync.Mutex
+	mu        sync.RWMutex
+}
+
+// ipxeRun is one run of an iPXE server, from Start until it exits.
+type ipxeRun struct {
+	server *ipxe.Server
+	cancel context.CancelFunc
+	// exited closes when server.Start returns; err is what it returned
+	// and is read only after exited has closed.
+	exited chan struct{}
+	err    error
 }
 
 // ServiceOption defines a functional option for configuring the service.
@@ -169,48 +189,138 @@ func (s *service) Initialize(ctx context.Context, config *ServiceConfig) error {
 	return nil
 }
 
-// Start starts the PXE provisioning service.
+// Start starts the PXE provisioning service and returns once every iPXE
+// listener has bound. The server runs until Stop or Close, not until ctx
+// ends: a StartService RPC's context ends with the RPC. ctx bounds only the
+// wait for the listeners.
 func (s *service) Start(ctx context.Context) error {
 	if !s.initialized.Load() {
 		return ErrServiceNotInitialized{}
 	}
 
+	s.lifecycle.Lock()
+	defer s.lifecycle.Unlock()
+
 	if s.running.Load() {
 		return ErrServiceAlreadyRunning{}
+	}
+
+	// A request that has already ended starts nothing.
+	if err := ctx.Err(); err != nil {
+		return ErrProvisioningFailed{Reason: "start cancelled before the iPXE server was ready", Cause: err}
+	}
+
+	server, err := s.unstartedIPXEServer()
+	if err != nil {
+		return err
+	}
+
+	s.logger.Info("Starting PXE provisioning service")
+
+	runCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
+	run := &ipxeRun{server: server, cancel: cancel, exited: make(chan struct{})}
+	s.mu.Lock()
+	s.ipxeRun = run
+	s.mu.Unlock()
+
+	go func() {
+		defer close(run.exited)
+		run.err = server.Start(runCtx)
+	}()
+
+	select {
+	case <-server.Ready():
+	case <-run.exited:
+		cancel()
+		cause := run.err
+		if cause == nil {
+			cause = ErrIPXEServerExited{}
+		}
+		return ErrProvisioningFailed{Reason: "failed to start iPXE server", Cause: cause}
+	case <-ctx.Done():
+		cancel()
+		<-run.exited
+		return ErrProvisioningFailed{Reason: "start cancelled before the iPXE server was ready", Cause: ctx.Err()}
 	}
 
 	s.mu.Lock()
 	s.startTime = time.Now()
 	s.mu.Unlock()
-
 	s.running.Store(true)
 
-	s.logger.Info("Starting PXE provisioning service")
-
-	if err := s.ipxeServer.Start(ctx); err != nil {
-		s.running.Store(false)
-		return ErrProvisioningFailed{
-			Reason: "failed to start iPXE server",
-			Cause:  err,
-		}
-	}
+	go s.watchIPXERun(run)
 
 	return nil
 }
 
-// Stop stops the PXE provisioning service.
+// unstartedIPXEServer returns the server the next Start runs: the current
+// one if it has never run, otherwise a fresh one built from the config,
+// because an ipxe.Server is single-use. The caller holds s.lifecycle.
+func (s *service) unstartedIPXEServer() (*ipxe.Server, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.ipxeServer != nil && s.ipxeRun == nil {
+		return s.ipxeServer, nil
+	}
+
+	server, err := ipxe.NewServer(s.config.IPXEConfig, s.logger)
+	if err != nil {
+		return nil, ErrProvisioningFailed{
+			Reason: "failed to create iPXE server",
+			Cause:  err,
+		}
+	}
+	s.ipxeServer = server
+	s.ipxeRun = nil
+	return server, nil
+}
+
+// watchIPXERun marks the service stopped when run's server exits on its
+// own, as it does when a listener fails after binding. A run that Stop
+// ended, or that a later Start replaced, is left alone.
+func (s *service) watchIPXERun(run *ipxeRun) {
+	<-run.exited
+
+	s.lifecycle.Lock()
+	defer s.lifecycle.Unlock()
+
+	if s.ipxeRun != run || !s.running.Load() {
+		return
+	}
+	s.running.Store(false)
+	if run.err != nil {
+		s.logger.Error(&WrappedError{Msg: "iPXE server exited", Err: run.err})
+		return
+	}
+	s.logger.Warn("iPXE server exited; PXE provisioning service stopped")
+}
+
+// Stop stops the PXE provisioning service and waits for the iPXE server
+// to exit. ctx bounds the wait.
 func (s *service) Stop(ctx context.Context) error {
+	s.lifecycle.Lock()
+	defer s.lifecycle.Unlock()
+
 	if !s.running.Load() {
 		return ErrServiceNotRunning{}
 	}
 
 	s.logger.Info("Stopping PXE provisioning service")
 
-	if err := s.ipxeServer.Stop(); err != nil {
+	run := s.ipxeRun
+	if err := run.server.Stop(); err != nil {
 		return ErrProvisioningFailed{
 			Reason: "failed to stop iPXE server",
 			Cause:  err,
 		}
+	}
+	run.cancel()
+
+	select {
+	case <-run.exited:
+	case <-ctx.Done():
+		return ErrProvisioningFailed{Reason: "stop cancelled before the iPXE server exited", Cause: ctx.Err()}
 	}
 
 	s.running.Store(false)
@@ -232,12 +342,15 @@ func (s *service) Close() error {
 		}
 	}
 
+	s.lifecycle.Lock()
+	defer s.lifecycle.Unlock()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	s.initialized.Store(false)
 	s.config = nil
 	s.ipxeServer = nil
+	s.ipxeRun = nil
 
 	s.logger.Info("PXE provisioning service closed")
 

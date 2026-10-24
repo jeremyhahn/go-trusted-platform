@@ -59,12 +59,44 @@ func (f *fakeInvitationServer) DeleteInvitation(_ context.Context, r *platformv1
 	return &platformv1.DeleteInvitationResponse{}, f.err
 }
 
+func (f *fakeInvitationServer) ListInvitations(_ context.Context, r *platformv1.ListInvitationsRequest) (*platformv1.ListInvitationsResponse, error) {
+	f.last = r
+	return &platformv1.ListInvitationsResponse{
+		Invitations: []*platformv1.Invitation{
+			{Id: 1, TenantId: r.GetTenantId(), Email: "a@example.com"},
+			{Id: 2, TenantId: r.GetTenantId(), Email: "b@example.com"},
+		},
+		Total: 2,
+	}, f.err
+}
+
+func (f *fakeInvitationServer) CreateInvitation(_ context.Context, r *platformv1.CreateInvitationRequest) (*platformv1.CreateInvitationResponse, error) {
+	f.last = r
+	return &platformv1.CreateInvitationResponse{
+		Invitation: &platformv1.Invitation{Id: 21, TenantId: r.GetTenantId(), Email: r.GetEmail(), Role: r.GetRole()},
+	}, f.err
+}
+
+func (f *fakeInvitationServer) GetInvitation(_ context.Context, r *platformv1.GetInvitationRequest) (*platformv1.GetInvitationResponse, error) {
+	f.last = r
+	return &platformv1.GetInvitationResponse{
+		Invitation: &platformv1.Invitation{Id: r.GetInvitationId(), Email: "invitee@example.com"},
+	}, f.err
+}
+
+func (f *fakeInvitationServer) AcceptInvitation(_ context.Context, r *platformv1.AcceptInvitationRequest) (*platformv1.AcceptInvitationResponse, error) {
+	f.last = r
+	return &platformv1.AcceptInvitationResponse{
+		Invitation: &platformv1.Invitation{Id: 17, Token: r.GetToken()},
+	}, f.err
+}
+
 // serveInvitations serves both halves of the invitation router over TLS, as
 // the webservice mounts them, and returns the server and the SDK invitation
 // client dialed through the REST transport.
-func serveInvitations(t *testing.T, srv platformv1.InvitationServiceServer) (*httptest.Server, platformv1.InvitationServiceClient) {
-	t.Helper()
-
+// invitationMux mounts both invitation halves under /api/v1 the way the
+// webservice does, over srv.
+func invitationMux(srv platformv1.InvitationServiceServer) *mux.Router {
 	logger := logging.NewLogger(slog.LevelError, io.Discard)
 	r := NewInvitationRouter(logger, srv, response.NewResponseWriter(logger, nil))
 	root := mux.NewRouter()
@@ -74,8 +106,13 @@ func serveInvitations(t *testing.T, srv platformv1.InvitationServiceServer) (*ht
 	sub := root.PathPrefix("/api/v1").Subrouter()
 	r.RegisterInviteeRoutes(sub)
 	r.RegisterRoutes(sub)
+	return root
+}
 
-	server := httptest.NewTLSServer(root)
+func serveInvitations(t *testing.T, srv platformv1.InvitationServiceServer) (*httptest.Server, platformv1.InvitationServiceClient) {
+	t.Helper()
+
+	server := httptest.NewTLSServer(invitationMux(srv))
 	t.Cleanup(server.Close)
 
 	tlsConfig := server.Client().Transport.(*http.Transport).TLSClientConfig.Clone()

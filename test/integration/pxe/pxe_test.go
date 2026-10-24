@@ -28,8 +28,11 @@
 package pxe
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"os"
+	"os/exec"
 	"testing"
 	"time"
 
@@ -82,6 +85,14 @@ func testPXEProtocol(t *testing.T, ctx context.Context, cmd PXECommands) {
 	// Generate unique test prefix for this protocol run
 	prefix := fmt.Sprintf("%s-%d", cmd.Name(), time.Now().Unix())
 
+	// The PXE device lifecycle is API-only (docs/daemon/cli.md:223), so the
+	// CLI leg asserts the documented refusal instead of the device flow. On
+	// every other transport the assertions below are unchanged.
+	if cliAdapter, ok := cmd.(*CLIAdapter); ok {
+		assertPXECLIGap(t, cliAdapter)
+		return
+	}
+
 	t.Run("DeviceManagement", func(t *testing.T) {
 		testDeviceRegister(t, ctx, cmd, prefix)
 		testDeviceGet(t, ctx, cmd, prefix)
@@ -111,6 +122,78 @@ func testPXEProtocol(t *testing.T, ctx context.Context, cmd PXECommands) {
 		testNonexistentDevice(t, ctx, cmd, prefix)
 		testInvalidStateTransition(t, ctx, cmd, prefix)
 		testDuplicateRegistration(t, ctx, cmd, prefix)
+	})
+}
+
+// =============================================================================
+// CLI Declared Gap: the PXE device lifecycle is API-only
+// =============================================================================
+
+// runPXECLIBinaryOnce executes one real `platformctl pxe ...` command. The
+// subcommand tree past `pxe` is irrelevant: the refusal happens at the
+// group level, because there is no `pxe` group (docs/daemon/cli.md:223).
+// It returns the process error and stderr so the caller can assert either
+// the documented refusal or its flip.
+func runPXECLIBinaryOnce(t *testing.T, ctx context.Context) (error, string) {
+	t.Helper()
+
+	path := os.Getenv(EnvPlatformctlBinary)
+	if path == "" {
+		path = DefaultPlatformctlBinary
+	}
+	if _, err := exec.LookPath(path); err != nil {
+		t.Fatalf("platformctl binary %q not found: %v", path, err)
+	}
+
+	cmd := exec.CommandContext(ctx, path,
+		"--output", "json", "pxe", "device", "list")
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+
+	err := cmd.Run()
+	return err, stderr.String()
+}
+
+// assertPXECLIGap is the CLI leg of TestPXEMultiProtocol. Per CA m588 (1),
+// a capability that is documented but missing asserts its typed refusal:
+// green on declared behavior, red when the gap closes, never skipped.
+//
+// docs/daemon/cli.md:223: "There is no `dns`, no `pxe`, no `gateway` and no
+// `cluster` top-level group ... PXE device lifecycle is API-only".
+// Option (b) of the #975 ruling kept that architecture and sent option (a),
+// building a `platformctl pxe` group, to the department as a question.
+//
+// The leg performs two assertions: it runs the real binary once and requires
+// the unknown-command refusal, and it checks that the CLI adapter's methods
+// carry the same typed refusal so a future implementation cannot fake a
+// success. When a `platformctl pxe` group is added, delete this function,
+// drop the CLIAdapter branch in testPXEProtocol, and have the adapter drive
+// the group.
+func assertPXECLIGap(t *testing.T, cli *CLIAdapter) {
+	t.Helper()
+
+	testCtx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	t.Run("BinaryRefusesThePXEGroup", func(t *testing.T) {
+		err, stderr := runPXECLIBinaryOnce(t, testCtx)
+		var exitErr *exec.ExitError
+		require.Error(t, err,
+			"platformctl pxe exited 0, so the documented API-only refusal "+
+				"(docs/daemon/cli.md:223) is no longer the behaviour: the "+
+				"platformctl pxe group exists, so delete this gap check and "+
+				"have the CLI adapter drive it")
+		require.ErrorAs(t, err, &exitErr, "platformctl pxe did not exit non-zero: %v", err)
+		assert.Contains(t, stderr, "unknown command",
+			"want the unknown-command refusal of the absent pxe group, got: %s", stderr)
+	})
+
+	t.Run("AdapterCarriesTheTypedRefusal", func(t *testing.T) {
+		_, err := cli.ListDevices(testCtx, ListDevicesOptions{Limit: 10})
+		var notImpl ErrCLIPXENotImplemented
+		require.ErrorAs(t, err, &notImpl,
+			"want the declared API-only refusal, got: %v", err)
+		assert.Equal(t, "ListDevices", notImpl.Method, "declared method")
 	})
 }
 

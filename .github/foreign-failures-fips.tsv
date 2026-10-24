@@ -1,0 +1,44 @@
+# FIPS foreign-failure baseline (Company Agent ruling 125, rulings.md 9589c37).
+#
+# The FIPS job's (ci.yml and nightly.yml `fips`, both `make test-fips`)
+# counterpart of foreign-failures.tsv, kept in its own file with its own row
+# format: scripts/foreignfailures -job fips reads only this file and only kind
+# panic rows, and the Integration job's reader refuses both, so a FIPS row can
+# never excuse an Integration failure, nor the reverse.
+#
+# Under GODEBUG=fips140=only the Go runtime enforces by PANIC. A panic is
+# foreign only when ALL of these hold, and otherwise it still gates:
+#   - the panicking test is exactly a row's package and top-level test name
+#     (no wildcards, no subtests: a panic kills the whole binary);
+#   - every `panic:` line's message is exactly the row's message;
+#   - the panicking goroutine's stack passes through the row's frame, and
+#     through the listed test function itself;
+#   - that test is the package's only failure, and no other package, build
+#     or run fails (a plain failure of a listed test gates too: kind panic is
+#     the only kind).
+# The panic killed the test binary, so every test after it never ran. For
+# each attributed package the checker therefore runs ALL of its other
+# top-level tests again, by explicit name (`go test -list`, then `-run
+# '^(A|B|...)$'`; no -skip, no -short, no build tag), under the same
+# GOFIPS140/fips140=only environment and derived build tags, and the job
+# passes only when that rerun passes and runs every name. Names `make test`'s
+# TEST_SKIP drops are left out of the rerun exactly as they were from the run.
+# A rerun repeats: when a round fails only by another listed test's panic
+# that meets every rule above, the next round excludes that test too, with
+# the same guards. The rounds are bounded by the package's number of rows
+# (one per test it can exclude); a round past the bound gates, as does any
+# other round failure. Every round is printed as a `rerun:` line.
+#
+# Only ruling-104 foreign classes may be listed. upstream is the open issue,
+# repo#number (several joined by +); closing_release is the release whose
+# adoption fixes it. A row is removed in the PR that adopts its closing
+# release. frame is a Go function as a stack trace names it, without its
+# arguments; message is the panic's text, last because it holds spaces.
+# docs/test/integration.md describes both baselines.
+#
+# kind	package	name	upstream	closing_release	frame	message
+panic	pkg/vpn/agent	TestXKMSTPM_IDevIDSignerSignsWithTheTPMKey	go-quicbaas#1389+go-trusted-platform#937	go-quicbaas v0.16.0-alpha (its adoption PR removes these rows)	github.com/google/go-tpm/tpm2.(*policySession).Authorize	crypto/hmac: use of keys shorter than 112 bits is not allowed in FIPS 140-only mode
+panic	pkg/app	TestDeviceActivation_IDevIDOverMTLS	go-quicbaas#1389+go-trusted-platform#937	go-quicbaas v0.16.0-alpha (its adoption PR removes these rows)	github.com/google/go-tpm/tpm2.(*policySession).Authorize	crypto/hmac: use of keys shorter than 112 bits is not allowed in FIPS 140-only mode
+panic	pkg/app	TestFetchProfileAndActivate_IDevIDOverMTLS	go-quicbaas#1389+go-trusted-platform#937	go-quicbaas v0.16.0-alpha (its adoption PR removes these rows)	github.com/google/go-tpm/tpm2.(*policySession).Authorize	crypto/hmac: use of keys shorter than 112 bits is not allowed in FIPS 140-only mode
+panic	pkg/app	TestIDevIDSigner_NilPublicKey	go-quicbaas#1389+go-trusted-platform#937	go-quicbaas v0.16.0-alpha (its adoption PR removes these rows)	github.com/google/go-tpm/tpm2.(*policySession).Authorize	crypto/hmac: use of keys shorter than 112 bits is not allowed in FIPS 140-only mode
+panic	pkg/app	TestTPMSigner_IDevIDSignsTLS13ClientCertificateVerify	go-quicbaas#1389+go-trusted-platform#937	go-quicbaas v0.16.0-alpha (its adoption PR removes these rows)	github.com/google/go-tpm/tpm2.(*policySession).Authorize	crypto/hmac: use of keys shorter than 112 bits is not allowed in FIPS 140-only mode

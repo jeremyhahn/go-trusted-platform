@@ -259,6 +259,7 @@ REST or MCP, and will not be — it is not a gap to close by adding a route.
 |---|---|---|
 | Unit | `pkg/compute/*_test.go` | Config validation, placement, port auth, lifecycle, QEMU argument construction |
 | Example | `example_swtpm_test.go` | Documented swtpm wiring |
+| Bench | `pkg/compute/container/lifecycle_bench_test.go` | Container orchestrator create, lifecycle, get, list and attest; `make bench-compute` |
 | Integration | `test/integration/compute/`, `test/integration/container/`, `test/integration/compute-aws/` | Real VMs and containers |
 
 `pkg/compute/podman` is one of the package trees `make test` excludes because it

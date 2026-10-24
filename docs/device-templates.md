@@ -211,6 +211,23 @@ To remove a template section, set it to `null`; to remove every VLAN or
 bond, set the list to `[]`. A keyed list cannot lose one entry by merge;
 give the whole file with `--platform-config` instead.
 
+### Example: a TPM Without an EK Certificate
+
+Firstboot refuses a TPM that carries no EK certificate. A node whose TPM cannot
+have one (swtpm, a vTPM, a part shipped without one) needs this override:
+
+```yaml
+disk:
+  encryption:
+    tpm:
+      allow-missing-ek-certificate: true
+```
+
+The default, `false`, is what every reference template uses. With `true`,
+firstboot provisions the TPM without an IDevID and logs a warning naming the
+key ([installer architecture](installer/architecture.md), "First provision,
+the EK and recovery").
+
 ### Example: Raspberry Pi 4 on a Flat DHCP Network
 
 The rpi4 compute template is a rack node: `eth0` is a trunk carrying the

@@ -1,6 +1,6 @@
 # TPM Factory Reset on First Boot
 
-> **Status: REFERENCE** · Last verified: 2026-10-13
+> **Status: REFERENCE** · Last verified: 2026-10-22
 > The `factory-reset-on-firstboot` and `recovery-key-strategy` installer settings: what each does to the TPM and the recovery passphrase.
 
 ## What it is
@@ -11,7 +11,7 @@ provisioning the platform's TPM keys.
 
 | | Behaviour |
 |---|---|
-| `factory-reset-on-firstboot: false` (Go default) | `firstboot` calls `FactoryReset(ownerAuth)`. Each persistent handle is evicted using the supplied owner auth. **Fails with `TPM_RC_BAD_AUTH`** if a previous failed run set the owner hierarchy auth to a value the current run doesn't know. |
+| `factory-reset-on-firstboot: false` (Go default) | `firstboot` calls `FactoryReset(ownerAuth)`. On a TPM a previous install owned, `tpmowner.Prepare` first proves the SO PIN and returns the owner auth to empty; each persistent handle is then evicted under that empty auth. **Fails with `tpmowner.OwnerAuthRejectedError`** if the owner hierarchy auth is a value the configured SO PIN does not match. |
 | `factory-reset-on-firstboot: true` (reference templates default) | `firstboot` calls `FactoryResetWithClear(ownerAuth)`. **TPM2_Clear via the LOCKOUT hierarchy with empty auth runs FIRST**, then the regular eviction pass. The Clear resets owner / endorsement / lockout hierarchy auths to empty AND wipes all persistent objects in those hierarchies. Manufacturer EK certificates in the Platform hierarchy are preserved (TCG spec). |
 
 ## Why two modes
@@ -107,25 +107,30 @@ At this point the TPM has NOT been touched. No sealing has happened.
    - `/boot/efi/tpm2/installer.luks` exists (set in Phase A)
    - no sealed-blob files exist yet
 2. Opens the installer container, reads the LUKS key and recovery passphrase
-3. Runs `provisionInsideInstaller()` → calls `FactoryReset` or
-   `FactoryResetWithClear` per `factory-reset-on-firstboot`, then `Install()`
-   with empty hierarchy auths (EK + SSRK + platform policy + IAK + IDevID),
-   and creates the **Platform KeyStore SRK** (default `0x81000002`) through
-   the same `pkg/platform` keychain path platformd uses — platformd then
-   adopts the fully-provisioned TPM instead of re-provisioning it (#61)
+3. Runs `provisionInsideInstaller()`:
+   - resolves the SO PIN from `platform.so-pin`, the one platformd presents:
+     a literal as configured, or a `kms://…?ensure=true&enc=numeric&len=<n>`
+     reference generated and staged at `/run/platform/firstboot-handoff/so-pin`
+     for platformd to store at its kms path
+   - calls `FactoryReset` or `FactoryResetWithClear` per
+     `factory-reset-on-firstboot`; on a TPM a previous install owned,
+     `tpmowner.Prepare` first proves the SO PIN and returns the owner auth to
+     empty
+   - `Install()` with a nil SO PIN (EK + SSRK + platform policy + IAK +
+     IDevID), and creates the **Platform KeyStore SRK** (default
+     `0x81000002`) through the same `pkg/platform` keychain path platformd
+     uses — platformd then adopts the fully-provisioned TPM instead of
+     re-provisioning it (#61)
+   - sets the owner hierarchy auth to the SO PIN with
+     `TPM2_HierarchyChangeAuth` (`tpmowner.TakeOwnership`); the endorsement
+     and lockout auth stay empty
+     ([TPM engineering](../tpm/engineering.md) §4 item 5)
 4. Seals the LUKS key **under the Platform KeyStore SRK** to **live
    production PCRs** via `sealKeyToTPM()` (correct environment because we
    are inside the production UKI)
 5. Unlocks the LUKS root partition using the LUKS key
 6. Copies installer state to the root filesystem
 7. Applies `recovery-key-strategy` (see next section)
-
-The empty hierarchy auths of step 3 are superseded: firstboot sets the owner hierarchy auth to the SO PIN with
-`TPM2_HierarchyChangeAuth` and hands the PIN to `platformd` over the firstboot
-tmpfs handoff, and recovery means a seal that existed and broke
-([architecture.md](architecture.md), "First provision, the EK and recovery").
-The implementation is tracked by #951; until it lands, step 3 is what the code
-does.
 8. `closeInstaller()` securely wipes `installer.luks` via `luks2.Wipe`
    (random overwrite + TRIM + unlink)
 
@@ -275,8 +280,10 @@ complete on subsequent boots.
 ## Recovery from a stuck TPM without changing the flag
 
 If a node was deployed with the flag set to `false` and the install failed
-because the TPM has stale owner auth, you can recover from the running OS
-without re-deploying:
+because the TPM has stale owner auth — including a reboot between firstboot
+and platformd's first start, which loses a generated SO PIN still on the
+firstboot tmpfs handoff ([TPM engineering](../tpm/engineering.md) §4
+item 5) — you can recover from the running OS without re-deploying:
 
 ```bash
 # Pure-Go path (recommended):

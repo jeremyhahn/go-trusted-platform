@@ -281,6 +281,7 @@ func gatewaySnapshotToProto(snap *gwstate.Snapshot) *platformv1.GatewaySnapshot 
 			RemoteMacCount:           uint32(overlay.RemoteMACCount),
 			PrefixCount:              uint32(overlay.PrefixCount),
 			RefusedBindings:          overlay.RefusedBindings,
+			RefusedReplays:           overlay.RefusedReplays,
 			L3Vni:                    overlay.L3VNI,
 			ArpSuppressionEnabled:    overlay.ARPSuppressionEnabled,
 			AnycastGatewayConfigured: overlay.AnycastGatewayConfigured,

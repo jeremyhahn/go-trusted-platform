@@ -32,6 +32,7 @@ import (
 type sentRequest struct {
 	method string
 	path   string
+	query  string
 	body   map[string]interface{}
 }
 

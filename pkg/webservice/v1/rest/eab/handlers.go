@@ -14,6 +14,7 @@
 package eab
 
 import (
+	"math"
 	"net/http"
 	"strconv"
 
@@ -34,6 +35,16 @@ type ErrUnknownStatusFilter struct {
 // Error implements the error interface.
 func (e *ErrUnknownStatusFilter) Error() string {
 	return "eab: unknown status filter: " + e.Value
+}
+
+// ErrQRCodeSizeOutOfRange reports a `size` query parameter larger than the
+// int32 wire field can carry.
+type ErrQRCodeSizeOutOfRange struct {
+	Value string
+}
+
+func (e *ErrQRCodeSizeOutOfRange) Error() string {
+	return "eab: qrcode size out of range: " + e.Value
 }
 
 // Handlers serves /api/v1/eab.
@@ -254,20 +265,39 @@ func (h *Handlers) GetCredentialQRCode(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	size, err := protorest.QueryUint32(r, "size")
+	size, err := qrCodeSizeFromQuery(r)
 	if err != nil {
 		h.respWriter.Error400(w, r, err)
 		return
 	}
 	resp, err := h.server.GetCredentialQRCode(r.Context(), &platformv1.GetEABCredentialQRCodeRequest{
 		CredentialId: id,
-		Size:         int32(size),
+		Size:         size,
 	})
 	if err != nil {
 		protorest.WriteError(w, r, h.respWriter, err)
 		return
 	}
 	protorest.WriteSuccess(w, r, h.respWriter, resp)
+}
+
+// qrCodeSizeFromQuery reads the optional `size` query parameter. The wire
+// field is an int32, so a value above math.MaxInt32 is refused rather than
+// wrapped into a negative size.
+func qrCodeSizeFromQuery(r *http.Request) (int32, error) {
+	size, err := protorest.QueryUint32(r, "size")
+	if err != nil {
+		return 0, err
+	}
+	if size > math.MaxInt32 {
+		raw := r.URL.Query().Get("size")
+		return 0, &protorest.ErrInvalidQuery{
+			Name:  "size",
+			Value: raw,
+			Cause: &ErrQRCodeSizeOutOfRange{Value: raw},
+		}
+	}
+	return int32(size), nil
 }
 
 // GetEnrollmentURL handles GET /api/v1/eab/credentials/{id}/url.

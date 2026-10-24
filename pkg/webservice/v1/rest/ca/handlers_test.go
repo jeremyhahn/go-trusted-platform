@@ -390,7 +390,7 @@ func newTestLogger() *logging.Logger {
 func newTestHandlers(ca xkmsca.TCGCA) (*CAHandlers, *mockHttpWriter) {
 	logger := newTestLogger()
 	writer := &mockHttpWriter{}
-	handlers := NewCAHandlers(logger, ca, writer, nil)
+	handlers := NewCAHandlers(logger, ca, writer)
 	return handlers, writer
 }
 
@@ -510,7 +510,7 @@ func TestNewCAHandlers(t *testing.T) {
 		mockCA := &mockCertificateAuthority{}
 		writer := &mockHttpWriter{}
 
-		handlers := NewCAHandlers(logger, mockCA, writer, nil)
+		handlers := NewCAHandlers(logger, mockCA, writer)
 
 		require.NotNil(t, handlers)
 		assert.NotNil(t, handlers.logger)
@@ -522,7 +522,7 @@ func TestNewCAHandlers(t *testing.T) {
 		logger := newTestLogger()
 		writer := &mockHttpWriter{}
 
-		handlers := NewCAHandlers(logger, nil, writer, nil)
+		handlers := NewCAHandlers(logger, nil, writer)
 
 		require.NotNil(t, handlers)
 		assert.Nil(t, handlers.ca)
@@ -1458,7 +1458,7 @@ func TestGetCRL_Success(t *testing.T) {
 
 		logger := newTestLogger()
 		writer := &mockHttpWriter{}
-		handlers := NewCAHandlers(logger, mockCA, writer, nil)
+		handlers := NewCAHandlers(logger, mockCA, writer)
 
 		req := httptest.NewRequest(http.MethodGet, "/api/v1/ca/crl", nil)
 		rec := httptest.NewRecorder()
@@ -1515,7 +1515,7 @@ func TestGetCRL_Error(t *testing.T) {
 
 		logger := newTestLogger()
 		writer := &mockHttpWriter{}
-		handlers := NewCAHandlers(logger, mockCA, writer, nil)
+		handlers := NewCAHandlers(logger, mockCA, writer)
 
 		req := httptest.NewRequest(http.MethodGet, "/api/v1/ca/crl", nil)
 		rec := httptest.NewRecorder()
@@ -1537,7 +1537,7 @@ func TestGetCRL_Error(t *testing.T) {
 
 		logger := newTestLogger()
 		writer := &mockHttpWriter{}
-		handlers := NewCAHandlers(logger, mockCA, writer, nil)
+		handlers := NewCAHandlers(logger, mockCA, writer)
 
 		req := httptest.NewRequest(http.MethodGet, "/api/v1/ca/crl", nil)
 		rec := httptest.NewRecorder()

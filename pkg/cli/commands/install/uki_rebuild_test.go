@@ -14,12 +14,15 @@
 package install
 
 import (
+	"context"
 	"errors"
+	"net"
 	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/installer"
 )
 
 func TestIsFileURI(t *testing.T) {
@@ -81,4 +84,130 @@ func TestRunUKIRebuild_DisabledSecureBootNoop(t *testing.T) {
 	if err != nil {
 		t.Fatalf("runUKIRebuild with Secure Boot disabled should be a no-op, got: %v", err)
 	}
+}
+
+// writeUKIRebuildConfig writes a platform config enabling Secure Boot with the
+// given resign-mode and DB key-uri, and returns its path.
+func writeUKIRebuildConfig(t *testing.T, resignMode, keyURI string) string {
+	t.Helper()
+	cfg := "os:\n  hostname: test\nsecure-boot:\n  enabled: true\n" +
+		"  resign-mode: " + resignMode + "\n" +
+		"  db:\n    key-uri: \"" + keyURI + "\"\n"
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte(cfg), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	return path
+}
+
+func TestRunUKIRebuild_RemoteModeWithoutKMSKeyRef(t *testing.T) {
+	// resign-mode remote needs a KMS key identifier; an empty key-uri or a
+	// bare "kms://" scheme is refused before any SDK connection is attempted.
+	for _, keyURI := range []string{"", "kms://"} {
+		t.Run(keyURI, func(t *testing.T) {
+			cfgPath := writeUKIRebuildConfig(t, installer.SecureBootResignModeRemote, keyURI)
+			err := runUKIRebuild(&cli.CommonFlags{}, &ukiRebuildFlags{config: cfgPath})
+			var refErr ErrRemoteSignKeyRef
+			if !errors.As(err, &refErr) {
+				t.Fatalf("expected ErrRemoteSignKeyRef, got %T: %v", err, err)
+			}
+			if refErr.KeyURI != keyURI {
+				t.Errorf("KeyURI = %q, want %q", refErr.KeyURI, keyURI)
+			}
+		})
+	}
+}
+
+func TestRunUKIRebuild_RemoteModeWithoutContext(t *testing.T) {
+	// A kms:// DB key in remote mode needs the platform SDK client; with no CLI
+	// context the setup fails with the typed error wrapping the CLI cause.
+	cfgPath := writeUKIRebuildConfig(t, installer.SecureBootResignModeRemote, "kms://platform/secureboot/db")
+	err := runUKIRebuild(&cli.CommonFlags{}, &ukiRebuildFlags{config: cfgPath})
+	var setupErr ErrRemoteSignerSetup
+	if !errors.As(err, &setupErr) {
+		t.Fatalf("expected ErrRemoteSignerSetup, got %T: %v", err, err)
+	}
+	var noCtx cli.ErrNoContextSet
+	if !errors.As(err, &noCtx) {
+		t.Fatalf("expected the wrapped cli.ErrNoContextSet, got %v", err)
+	}
+}
+
+func TestRunUKIRebuild_FailureLeavesExistingUKI(t *testing.T) {
+	// A local file:// DB key needs no SDK connection. The kernel version does
+	// not exist and the key file is absent, so the rebuild must fail before it
+	// writes anything, leaving the installed UKI untouched.
+	keyPath := filepath.Join(t.TempDir(), "DB.key")
+	cfgPath := writeUKIRebuildConfig(t, installer.SecureBootResignModeLocal, "file://"+keyPath)
+	espUKI := filepath.Join(t.TempDir(), "platform.efi")
+	original := []byte("installed UKI")
+	if err := os.WriteFile(espUKI, original, 0o644); err != nil {
+		t.Fatalf("write ESP UKI: %v", err)
+	}
+
+	err := runUKIRebuild(&cli.CommonFlags{}, &ukiRebuildFlags{
+		config:     cfgPath,
+		kver:       "0.0.0-uki-rebuild-test-absent",
+		espUKIPath: espUKI,
+	})
+	if err == nil {
+		t.Fatal("expected the rebuild to fail without a kernel or DB key")
+	}
+	got, readErr := os.ReadFile(espUKI)
+	if readErr != nil {
+		t.Fatalf("read ESP UKI: %v", readErr)
+	}
+	if string(got) != string(original) {
+		t.Fatalf("ESP UKI was modified on failure: %q", got)
+	}
+}
+
+func TestNewRemoteSignerSeam(t *testing.T) {
+	sb := &installer.SecureBootConfig{
+		Enabled:    true,
+		ResignMode: installer.SecureBootResignModeRemote,
+		DB:         installer.SecureBootKeyRef{KeyURI: "kms://platform/secureboot/db"},
+	}
+
+	t.Run("nil flags => setup error", func(t *testing.T) {
+		seam, closeFn, err := newRemoteSignerSeam(nil, sb)
+		var setupErr ErrRemoteSignerSetup
+		if !errors.As(err, &setupErr) || seam != nil || closeFn != nil {
+			t.Fatalf("newRemoteSignerSeam(nil) = %v, %v, %v", seam != nil, closeFn != nil, err)
+		}
+	})
+
+	t.Run("a context yields a seam bound to the SDK client", func(t *testing.T) {
+		socket := filepath.Join(t.TempDir(), "platformd.sock")
+		listener, err := net.Listen("unix", socket)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer listener.Close()
+		flags := &cli.CommonFlags{GetContext: func() (*cli.Context, error) {
+			return &cli.Context{Name: "local", Type: cli.ContextTypeLocal, Local: &cli.LocalContext{SocketPath: socket}}, nil
+		}}
+
+		seam, closeFn, err := newRemoteSignerSeam(flags, sb)
+		if err != nil {
+			t.Fatalf("newRemoteSignerSeam: %v", err)
+		}
+		if seam == nil || closeFn == nil {
+			t.Fatal("expected a seam and a close function")
+		}
+		defer func() {
+			if err := closeFn(); err != nil {
+				t.Errorf("close: %v", err)
+			}
+		}()
+
+		// The seam resolves the signer over the SDK client; a cancelled
+		// context must surface as an error, never a nil signer.
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		signer, cert, err := seam(ctx, nil)
+		if err == nil || signer != nil || cert != nil {
+			t.Fatalf("seam(cancelled) = %v, %v, %v", signer, cert, err)
+		}
+	})
 }
