@@ -14,7 +14,6 @@
 package process
 
 import (
-	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -25,26 +24,14 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// errImageReplaced stands in for an exec that succeeded: the real one never
-// returns, so the fake returns this and the test reads what it was given.
-var errImageReplaced = errors.New("image replaced")
-
-// fakeStages records the exec and serves canned thread statuses.
+// fakeStages serves canned thread statuses and a syscall table.
 type fakeStages struct {
 	harden *recordingHardenOps
 
-	execPath string
-	execArgv []string
-	execEnv  []string
-	execs    int
-
-	statuses      map[string]string
-	statusErr     error
-	statusReads   int
-	executable    string
-	execErr       error
-	executableErr error
-	syscallsErr   error
+	statuses    map[string]string
+	statusErr   error
+	statusReads int
+	syscallsErr error
 }
 
 // testSeccompTable stands in for the native table, so the stage tests do
@@ -52,26 +39,12 @@ type fakeStages struct {
 var testSeccompTable = seccompTable{arch: 1, denied: []uint32{2}, exec: []uint32{3}, clone: 4, clone3: 5, socket: 6, socketpair: 7}
 
 func newFakeStages() *fakeStages {
-	return &fakeStages{
-		harden:     newRecordingHardenOps(),
-		executable: "/usr/sbin/gatewayd",
-		execErr:    errImageReplaced,
-	}
+	return &fakeStages{harden: newRecordingHardenOps()}
 }
 
-func (f *fakeStages) ops(environ []string) childOps {
+func (f *fakeStages) ops() childOps {
 	return childOps{
 		harden: f.harden,
-		executable: func() (string, error) {
-			return f.executable, f.executableErr
-		},
-		exec: func(path string, argv, env []string) error {
-			f.execs++
-			f.execPath, f.execArgv, f.execEnv = path, argv, env
-			return f.execErr
-		},
-		args:    []string{"gatewayd", "service", "run", "routing"},
-		environ: environ,
 		taskStatuses: func() (map[string]string, error) {
 			f.statusReads++
 			return f.statuses, f.statusErr
@@ -107,114 +80,70 @@ func routing(t *testing.T) Definition {
 	return def
 }
 
-func TestEnterHardened_FirstStageHardensTheThreadThenReexecutesWithTheMarker(t *testing.T) {
-	child := newFakeStages()
-
-	err := enterHardened(routing(t), 1000, 1000, child.ops([]string{"PATH=/usr/bin"}))
-
-	// The fake exec "returns", which the real one never does on success.
-	var hardening *ErrHardening
-	require.ErrorAs(t, err, &hardening)
-	assert.ErrorIs(t, err, errImageReplaced)
-	assert.Equal(t, 1, child.execs)
-	assert.Equal(t, "/usr/sbin/gatewayd", child.execPath)
-	assert.Equal(t, []string{"gatewayd", "service", "run", "routing"}, child.execArgv)
-	assert.Equal(t, []string{"PATH=/usr/bin", "GATEWAYD_HARDENED_PARENT=4242"}, child.execEnv)
-	// The whole drop ran on this thread before the exec.
-	assert.Equal(t, 1000, child.harden.uid)
-	assert.Equal(t, 1000, child.harden.gid)
-	assert.Contains(t, child.harden.calls, "pdeathsig")
-	assert.Zero(t, child.statusReads, "the first stage verifies nothing; the exec has not happened")
-}
-
-func TestEnterHardened_FirstStageRefusesWithoutTheExecutable(t *testing.T) {
-	child := newFakeStages()
-	child.executableErr = os.ErrNotExist
-
-	err := enterHardened(routing(t), 1000, 1000, child.ops(nil))
-
-	var hardening *ErrHardening
-	require.ErrorAs(t, err, &hardening)
-	assert.Equal(t, "resolve the executable to re-execute", hardening.Step)
-	assert.Empty(t, child.harden.calls, "nothing is dropped when the re-exec cannot follow")
-	assert.Zero(t, child.execs)
-}
-
-func TestEnterHardened_FirstStageStopsWhenTheDropFails(t *testing.T) {
-	child := newFakeStages()
-	child.harden.failAt = "setresuid"
-	child.harden.failWith = unix.EPERM
-
-	err := enterHardened(routing(t), 1000, 1000, child.ops(nil))
-
-	var hardening *ErrHardening
-	require.ErrorAs(t, err, &hardening)
-	assert.Equal(t, "drop uid", hardening.Step)
-	assert.Zero(t, child.execs, "a half-hardened thread is never re-executed")
-}
-
-func TestEnterHardened_FirstStageReportsAFailedExec(t *testing.T) {
-	child := newFakeStages()
-	child.execErr = unix.EACCES
-
-	err := enterHardened(routing(t), 1000, 1000, child.ops(nil))
-
-	var hardening *ErrHardening
-	require.ErrorAs(t, err, &hardening)
-	assert.Equal(t, "re-execute from the hardened thread", hardening.Step)
-	assert.ErrorIs(t, err, unix.EACCES)
-}
-
-func TestEnterHardened_SecondStageVerifiesEveryThreadAndRearms(t *testing.T) {
+func TestEnterHardened_DropsThenConfinesThenVerifiesEveryThread(t *testing.T) {
 	child := newFakeStages()
 	child.statuses = map[string]string{
 		"100": procStatus("1", routingCaps, "1000", "1000"),
 		"101": procStatus("1", routingCaps, "1000", "1000"),
 	}
 
-	err := enterHardened(routing(t), 1000, 1000, child.ops([]string{"GATEWAYD_HARDENED_PARENT=4242"}))
+	require.NoError(t, enterHardened(routing(t), 1000, 1000, child.ops()))
 
-	require.NoError(t, err)
-	assert.Equal(t, []string{"seccomp", "pdeathsig"}, child.harden.calls,
-		"the second stage drops no credential; it confines syscalls, then re-arms")
+	assert.Equal(t, []string{
+		"no_new_privs", "capbset_drop", "setgroups", "keepcaps=1",
+		"setresgid", "setresuid", "capset", "cap_ambient_raise", "keepcaps=0",
+		"pdeathsig", "seccomp",
+	}, child.harden.calls, "the whole drop, then the filter; nothing is re-executed")
 	want, err := seccompFilter(testSeccompTable, routing(t))
 	require.NoError(t, err)
 	assert.Equal(t, want, child.harden.filter, "the routing process's filter is the one installed")
-	assert.Zero(t, child.execs)
+	assert.Equal(t, 1, child.statusReads, "every thread is read back after the filter is on")
 }
 
-func TestEnterHardened_SecondStageRefusesWithoutASyscallTable(t *testing.T) {
+func TestEnterHardened_StopsWhenTheDropFails(t *testing.T) {
+	child := newFakeStages()
+	child.harden.failAt, child.harden.failWith = "setresuid", unix.EPERM
+
+	err := enterHardened(routing(t), 1000, 1000, child.ops())
+
+	var hardening *ErrHardening
+	require.ErrorAs(t, err, &hardening)
+	assert.Equal(t, "drop uid", hardening.Step)
+	assert.NotContains(t, child.harden.calls, "seccomp")
+	assert.Zero(t, child.statusReads)
+}
+
+func TestEnterHardened_RefusesWithoutASyscallTable(t *testing.T) {
 	child := newFakeStages()
 	child.syscallsErr = &ErrSeccompUnsupportedArch{Arch: "riscv64"}
 	child.statuses = map[string]string{"100": procStatus("1", routingCaps, "1000", "1000")}
 
-	err := enterHardened(routing(t), 1000, 1000, child.ops([]string{"GATEWAYD_HARDENED_PARENT=4242"}))
+	err := enterHardened(routing(t), 1000, 1000, child.ops())
 
 	var hardening *ErrHardening
 	require.ErrorAs(t, err, &hardening)
 	assert.Equal(t, "build the seccomp filter", hardening.Step)
 	var unsupported *ErrSeccompUnsupportedArch
 	require.ErrorAs(t, err, &unsupported)
-	assert.Empty(t, child.harden.calls, "a child with no filter neither installs one nor re-arms")
+	assert.NotContains(t, child.harden.calls, "seccomp", "a child with no filter installs none")
 	assert.Zero(t, child.statusReads)
 }
 
-func TestEnterHardened_SecondStageStopsWhenTheFilterIsRefused(t *testing.T) {
+func TestEnterHardened_StopsWhenTheFilterIsRefused(t *testing.T) {
 	child := newFakeStages()
 	child.harden.failAt, child.harden.failWith = "seccomp", unix.EACCES
 	child.statuses = map[string]string{"100": procStatus("1", routingCaps, "1000", "1000")}
 
-	err := enterHardened(routing(t), 1000, 1000, child.ops([]string{"GATEWAYD_HARDENED_PARENT=4242"}))
+	err := enterHardened(routing(t), 1000, 1000, child.ops())
 
 	var hardening *ErrHardening
 	require.ErrorAs(t, err, &hardening)
 	assert.Equal(t, "install the seccomp filter", hardening.Step)
 	require.ErrorIs(t, err, unix.EACCES)
-	assert.Equal(t, []string{"seccomp"}, child.harden.calls, "nothing is re-armed for an unconfined process")
-	assert.Zero(t, child.statusReads)
+	assert.Zero(t, child.statusReads, "an unconfined process is not verified, it is refused")
 }
 
-func TestEnterHardened_SecondStageAcceptsARootKernelClass(t *testing.T) {
+func TestEnterHardened_AcceptsARootKernelClass(t *testing.T) {
 	def, err := DefinitionByName("datapath")
 	require.NoError(t, err)
 	child := newFakeStages()
@@ -222,34 +151,23 @@ func TestEnterHardened_SecondStageAcceptsARootKernelClass(t *testing.T) {
 	// change, so a root uid is not a finding.
 	child.statuses = map[string]string{"7": procStatus("1", "0000000000003000", "0", "0")}
 
-	require.NoError(t, enterHardened(def, 1000, 1000, child.ops([]string{"GATEWAYD_HARDENED_PARENT=4242"})))
+	require.NoError(t, enterHardened(def, 1000, 1000, child.ops()))
 }
 
-func TestEnterHardened_SecondStageRefusesWhenTheSupervisorDiedAcrossTheExec(t *testing.T) {
+func TestEnterHardened_RefusesWhenTheSupervisorDiedDuringTheDrop(t *testing.T) {
 	child := newFakeStages()
-	child.harden.ppid = 1
+	child.harden.ppid, child.harden.ppidAfter = 4242, 1
 	child.statuses = map[string]string{"100": procStatus("1", routingCaps, "1000", "1000")}
 
-	err := enterHardened(routing(t), 1000, 1000, child.ops([]string{"GATEWAYD_HARDENED_PARENT=4242"}))
+	err := enterHardened(routing(t), 1000, 1000, child.ops())
 
 	var exited *ErrSupervisorExited
 	require.ErrorAs(t, err, &exited)
 	assert.Equal(t, 4242, exited.Parent)
+	assert.NotContains(t, child.harden.calls, "seccomp", "an orphan goes no further")
 }
 
-func TestEnterHardened_SecondStageRejectsAMalformedMarker(t *testing.T) {
-	child := newFakeStages()
-
-	err := enterHardened(routing(t), 1000, 1000, child.ops([]string{"GATEWAYD_HARDENED_PARENT=supervisor"}))
-
-	var hardening *ErrHardening
-	require.ErrorAs(t, err, &hardening)
-	assert.Equal(t, "read the hardened-stage marker", hardening.Step)
-	assert.Zero(t, child.statusReads)
-	assert.Empty(t, child.harden.calls)
-}
-
-func TestEnterHardened_SecondStageRefusesWithoutThreadCredentials(t *testing.T) {
+func TestEnterHardened_RefusesWithoutThreadCredentials(t *testing.T) {
 	for name, child := range map[string]*fakeStages{
 		"read error": func() *fakeStages {
 			child := newFakeStages()
@@ -259,17 +177,16 @@ func TestEnterHardened_SecondStageRefusesWithoutThreadCredentials(t *testing.T) 
 		"no threads": newFakeStages(),
 	} {
 		t.Run(name, func(t *testing.T) {
-			err := enterHardened(routing(t), 1000, 1000, child.ops([]string{"GATEWAYD_HARDENED_PARENT=4242"}))
+			err := enterHardened(routing(t), 1000, 1000, child.ops())
 
 			var hardening *ErrHardening
 			require.ErrorAs(t, err, &hardening)
 			assert.Equal(t, "read the thread credentials", hardening.Step)
-			assert.Equal(t, []string{"seccomp"}, child.harden.calls, "nothing is re-armed for an unverified process")
 		})
 	}
 }
 
-func TestEnterHardened_SecondStageRejectsAThreadOutsideTheClass(t *testing.T) {
+func TestEnterHardened_RejectsAThreadOutsideTheClass(t *testing.T) {
 	cases := map[string]struct {
 		status string
 		field  string
@@ -293,13 +210,12 @@ func TestEnterHardened_SecondStageRejectsAThreadOutsideTheClass(t *testing.T) {
 				"200": tc.status,
 			}
 
-			err := enterHardened(routing(t), 1000, 1000, child.ops([]string{"GATEWAYD_HARDENED_PARENT=4242"}))
+			err := enterHardened(routing(t), 1000, 1000, child.ops())
 
 			var notHeld *ErrPrivilegeNotHeld
 			require.ErrorAs(t, err, &notHeld)
 			assert.Equal(t, "200", notHeld.Task)
 			assert.Equal(t, tc.field, notHeld.Field)
-			assert.Equal(t, []string{"seccomp"}, child.harden.calls, "nothing is re-armed for a thread outside the class")
 		})
 	}
 }
@@ -337,17 +253,6 @@ func TestCapabilityMask(t *testing.T) {
 
 func TestCapabilityMask_NoCapabilitiesIsTheEmptySet(t *testing.T) {
 	assert.Zero(t, capabilityMask(nil))
-}
-
-func TestLookupEnv(t *testing.T) {
-	value, ok := lookupEnv([]string{"A=1", "GATEWAYD_HARDENED_PARENT=9"}, hardenedParentEnv)
-	assert.True(t, ok)
-	assert.Equal(t, "9", value)
-}
-
-func TestLookupEnv_PrefixOfAnotherKeyIsNotAMatch(t *testing.T) {
-	_, ok := lookupEnv([]string{"GATEWAYD_HARDENED_PARENT_X=9"}, hardenedParentEnv)
-	assert.False(t, ok)
 }
 
 func TestTaskStatusesIn_ReadsEveryThreadAndSkipsOnesThatExited(t *testing.T) {

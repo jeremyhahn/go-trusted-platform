@@ -316,7 +316,7 @@ func (e *ErrSupervisorExited) Error() string {
 	return fmt.Sprintf("gatewayd service: the supervisor (pid %d) exited during the privilege drop; reparented to pid %d", e.Parent, e.Now)
 }
 
-// ErrPrivilegeNotHeld is a re-executed child whose credentials do not match
+// ErrPrivilegeNotHeld is a hardened child whose credentials do not match
 // its class: a thread kept a capability, a uid or a group the class does not
 // allow, or no_new_privs is unset. The child refuses to start rather than
 // run with more privilege than the class table gives it.
@@ -333,8 +333,6 @@ func (e *ErrPrivilegeNotHeld) Error() string {
 	return fmt.Sprintf("gatewayd service: thread %s: %s is %q, the class requires %q", e.Task, e.Field, e.Got, e.Want)
 }
 
-// ErrSocketDir reports a control-socket directory the supervisor could not
-// create or secure.
 // ErrSeccompUnsupportedArch is a child on an architecture the seccomp
 // filter has no syscall table for. The child refuses to start rather than
 // run unconfined: a filter written against another architecture's syscall
@@ -360,6 +358,8 @@ func (e *ErrSeccompThreadNotSynced) Error() string {
 	return fmt.Sprintf("gatewayd service: seccomp could not synchronise thread %d", e.Thread)
 }
 
+// ErrSocketDir reports a control-socket directory the supervisor could not
+// create or secure.
 type ErrSocketDir struct {
 	Path  string
 	Op    string

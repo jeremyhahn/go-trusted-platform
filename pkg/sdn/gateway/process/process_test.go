@@ -2414,7 +2414,7 @@ func (o *recordingHardenOps) setresuid(ruid, _, _ int) error {
 	return o.record("setresuid")
 }
 
-func (o *recordingHardenOps) capset(_ *unix.CapUserHeader, data *[2]unix.CapUserData) error {
+func (o *recordingHardenOps) capset(data *[2]unix.CapUserData) error {
 	o.sets = *data
 	return o.record("capset")
 }

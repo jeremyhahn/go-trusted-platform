@@ -90,6 +90,7 @@ require (
 	google.golang.org/protobuf v1.36.12
 	gopkg.in/yaml.v2 v2.4.0
 	gopkg.in/yaml.v3 v3.0.1
+	kernel.org/pub/linux/libs/security/libcap/cap v1.2.78
 )
 
 require (
@@ -444,6 +445,7 @@ require (
 	google.golang.org/genproto/googleapis/api v0.0.0-20260819154853-08b0e4226688 // indirect
 	gopkg.in/natefinch/lumberjack.v2 v2.2.1 // indirect
 	gopkg.in/src-d/go-errors.v1 v1.0.0 // indirect
+	kernel.org/pub/linux/libs/security/libcap/psx v1.2.78 // indirect
 	lukechampine.com/blake3 v1.4.1 // indirect
 	sigs.k8s.io/yaml v1.6.0 // indirect
 	software.sslmate.com/src/go-pkcs12 v0.7.3 // indirect

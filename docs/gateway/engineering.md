@@ -867,7 +867,7 @@ together with stateless NAT failover. Conntrack/NAT state sync is #710.
 | `Config`, `Settings` | the supervisor's wiring, and the `process:` YAML section that builds it |
 | `Launcher`, `Spec`, `Child`, `ExecLauncher` | how a child is started; tests substitute a launcher whose children are in-process IPC servers |
 | `CgroupManager` | one cgroup v2 leaf per process; `+memory`/`+cpu` enabled in the `cgroup.subtree_control` of every `cgroup-parent` directory, then `memory.max` and `cpu.max` written before the child exists, and a `memory.swap.max` the leaf carries reset to `max` (the class table sets no swap limit); `Remove` waits for `populated 0` in the leaf's `cgroup.events` before the rmdir, and `Memory` reads `memory.current`, `memory.peak` and the `memory.events` counters |
-| `EnterHardened` | the child-side privilege drop: harden one thread, re-execute from it, install the class's seccomp filter on every thread, verify every thread |
+| `EnterHardened` | the child-side privilege drop: every step on every thread of the process (libcap `psx`), then the class's seccomp filter on every thread, then every thread verified |
 
 **The class table is not configuration.** `definitions` in `class.go` is the
 one place a service's class, capabilities and limits are decided. An operator
@@ -882,11 +882,12 @@ process therefore fails the test, which is how `nat64` was caught after it
 landed (#631 review); it runs in `datapath`, the one process holding
 `CAP_NET_ADMIN`.
 
-**The privilege drop is split across the exec on purpose.** The parent sets
-the ambient capability set and the cgroup at clone time (`SysProcAttr`:
+**The privilege drop is split between the parent and the child.** The parent
+sets the ambient capability set and the cgroup at clone time (`SysProcAttr`:
 `AmbientCaps`, `UseCgroupFD`, `Pdeathsig`). The child calls `EnterHardened`
-before it reads the configuration or opens a socket; its first stage runs these
-steps on one locked OS thread, in the order the kernel requires:
+before it reads the configuration or opens a socket. It runs these steps in the
+order the kernel requires, each one on every thread of the process (see
+"Every thread, not one" below):
 
 1. `no_new_privs`, so nothing it later execs can regain privilege.
 2. the bounding set reduced to the class's capabilities — **before** the uid
@@ -965,30 +966,41 @@ supervisor shutdown, death by the signal.
 stopped a successor whose children answered the test's probes before the
 supervisor had finished starting.
 
-**Every thread, not one: the drop re-executes (#657).**
-`prctl` and `capset` apply to the calling thread only, while the Go runtime
-has started several threads before `main` runs, so the steps above harden one
-thread out of many. `EnterHardened` closes that by re-executing gatewayd from
-the hardened thread: `execve` keeps the calling thread's credentials and
-discards every other thread, and every thread the new runtime starts is cloned
-from the hardened one. The goroutine is locked to its thread first and never
-unlocked, so nothing else runs on a half-hardened thread. Across the exec the
-kernel derives the new sets from the old: an unprivileged child's ambient set
-becomes its permitted and effective sets; a root kernel-class child's
-permitted set becomes its bounding set (already the class mask) and its
-effective set follows. `no_new_privs` survives the exec, so a setuid or
-file-capability image cannot raise anything.
+**Every thread, not one: the drop is process-wide through libcap `psx` (#657).**
+Linux credentials belong to a thread, not a process: `prctl` and `capset`
+change the calling thread only, and the Go runtime has started several threads
+before `main` runs. A drop made with plain syscalls would harden one thread out
+of many. Every step therefore reaches every thread:
 
-The second stage is recognised by `GATEWAYD_HARDENED_PARENT`, which carries
-the supervisor's pid across the exec. The marker grants nothing. The second
-stage first installs the class's seccomp filter (below), then reads
-`/proc/self/task/*/status` and refuses unless **every** thread has
-`NoNewPrivs` set, `Seccomp` at 2 (filter mode), and `CapPrm`, `CapEff` and
-`CapBnd` equal to the class mask — and, for an unprivileged class, all four
-uids and gids equal to the service account and no supplementary group but its
-own (`ErrPrivilegeNotHeld`, naming the thread and the field). It then re-arms
-the parent-death signal against the pid the first stage saw, so a supervisor
-that died across the exec is `ErrSupervisorExited`, not an orphan.
+- the uid, gid and supplementary groups go through the Go standard library
+  (`syscall.Setgroups`, `unix.Setresgid`, `unix.Setresuid`), which already
+  applies them to every thread: `syscall.AllThreadsSyscall` in the static
+  build, libc's set-id broadcast in the cgo build;
+- every `prctl` (`no_new_privs`, the bounding drop, `PR_SET_KEEPCAPS`, the
+  ambient raise, the parent-death signal) goes through libcap's `cap.Prctlw`,
+  and the capability sets through `cap.Set.SetProc`. Both run the syscall on
+  every thread through libcap's `psx` package. In the cgo build `psx` is the C
+  `libpsx`, which tracks every pthread and kills the process if any thread's
+  result differs. In the static build it is `syscall.AllThreadsSyscall`, which
+  panics on a difference. A thread that did not take a step can therefore
+  never run on.
+
+These calls sit in `kernelHardenOps` (`launcher.go`), behind the same
+`hardenOps` seam, so the order above is unchanged and stays a unit test.
+`TestKernelHardenOps_DropReachesEveryThread` re-executes the test binary as a
+real child, pins goroutines to threads of their own, and requires
+`NoNewPrivs` and the cleared capability sets on every task. It fails against a
+plain `unix.Prctl`. With root, the integration suite does the same through
+`EnterHardened` and checks the full proxy credentials on every thread
+(`TestEnterHardened_EveryThreadHoldsTheProxyCredentials`,
+`make integration-test-proxy`).
+
+After the drop, `EnterHardened` installs the class's seccomp filter (below).
+It then reads `/proc/self/task/*/status` and refuses unless **every** thread
+has `NoNewPrivs` set, `Seccomp` at 2 (filter mode), and `CapPrm`, `CapEff` and
+`CapBnd` equal to the class mask. For an unprivileged class, all four uids and
+gids must also equal the service account, with no supplementary group but its
+own. The refusal is `ErrPrivilegeNotHeld`, naming the thread and the field.
 
 **Seccomp, where the class allows (`seccomp.go`).** Capabilities bound what a
 child may do with privilege; much kernel surface needs none (a user namespace,
@@ -1027,19 +1039,32 @@ than run unfiltered. The program's logic is unit-tested in the `x/net/bpf`
 VM; the filter on a real kernel is exercised by every supervised child in
 `make integration-test-proxy`.
 
-The re-exec was chosen over the alternatives #657 listed:
-`syscall.AllThreadsSyscall` returns `ENOTSUP` under cgo and gatewayd is built
-both ways; libcap's Go bindings add a dependency for the same per-thread
-replay; dropping before the runtime starts threads would need C that runs
-before the Go runtime, which a pure-Go build does not have.
-It is an **owner call taken reversibly**: the choice is contained in
-`process/child.go`, and replacing it changes no caller.
+libcap's Go bindings are the owner's ruling among the alternatives #657
+listed (option 2). `syscall.AllThreadsSyscall` alone returns `ENOTSUP` under
+cgo, and gatewayd is built both ways: `make build-gatewayd` builds it with
+`CGO_ENABLED=1` (`Makefile:802`), and the static build uses `CGO_ENABLED=0`
+(`Makefile:855`). Dropping before the runtime starts threads would need C that
+runs before the Go runtime, which a pure-Go build does not have. An earlier
+stand-in re-executed gatewayd from one hardened thread. `psx` replaces it, so
+the second exec stage and its `GATEWAYD_HARDENED_PARENT` marker are gone.
+
+**Dependency reading (doc 00).** `kernel.org/pub/linux/libs/security/libcap/cap`
+and `.../psx` (v1.2.78) are one new direct dependency: the Go binding of
+libcap, a Linux system library (the kernel.org capability library every
+distribution ships), not a portfolio project and not a layer of the stack. Doc 00 L1 assigns capabilities to portfolio
+projects only, and its "Layer 0 libraries" paragraph names the in-house
+libraries consumed as ordinary Go libraries. L3 and L5 bound what the platform
+imports *from the stack* (`go-quicbaas/sdk/go` plus those Layer 0 libraries).
+As a system library binding libcap owns no portfolio capability and sits
+beside Layer 0 rather than in it: it is neither a Layer 0 library nor a lower
+layer. So L2 and L3 do not route it through an SDK, and it is imported
+directly, like `golang.org/x/sys`. It needs no §R row.
 
 Hardening before the config read also means a parser never opens a file as
 root that it could not open as itself, so a permission bug surfaces on the
-first start rather than the first restart. (The root command's own config read
-in the first stage is the same parse the supervisor already made of the same
-file; the services are built only from the read the second stage makes.)
+first start rather than the first restart. (The root command's own config read,
+made before `EnterHardened`, is the same parse the supervisor already made of
+the same file; the services are built only from the read made after the drop.)
 
 **Restarts.** A child that exits while the parent still wants services from it
 is relaunched after a doubling backoff (`RestartBackoff` → `RestartBackoffMax`),
