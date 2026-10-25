@@ -61,7 +61,6 @@ declare -A TARGET_PACKAGES=(
     [tpm]="./test/integration/tpm/..."
     [cold-start]="./test/integration/cold_start/..."
     [barrier-gate]="./test/integration/barrier_gate/..."
-    [restroutes]="./test/integration/restroutes/..."
     [sdn]="./test/integration/sdn/ ./test/integration/sdn/mock_bgp/..."
     [sdn-stress]="./test/integration/sdn/stress/..."
     [proxy]="./test/integration/proxy/..."
@@ -222,7 +221,7 @@ ALL_TARGETS=(
     helpers datastore quicbaas sdk cluster cmd ipxe installer e2e
     root acme attestation authenticode ca ceremony cli
     container daemon device dns fido2 iam iso kms luks network
-    ntp objectstorage piv provision proxy quic registry restroutes sdn
+    ntp objectstorage piv provision proxy quic registry sdn
     sdn-stress secrets tenant vpn vtpm tpm
 )
 

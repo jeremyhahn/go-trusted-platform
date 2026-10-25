@@ -320,7 +320,7 @@ They cover these cases:
 |---|---|---|
 | Unit | `pkg/api/daemon/*_test.go` and per-transport tests | Service behaviour, interceptors, adapters |
 | **Architecture** | `pkg/arch/layerguard_test.go`, `pkg/arch/gatewayguard_test.go`, `pkg/arch/dispatch_*_test.go` | Import boundaries; no served stubs — **normative** |
-| Integration | `test/integration/daemon/`, `cmd/`, `cli/`, `quic/`, `restroutes/`, `multi_protocol_test.go` | Cross-transport behaviour |
+| Integration | `test/integration/daemon/`, `cmd/`, `cli/`, `quic/`, `multi_protocol_test.go` | Cross-transport behaviour |
 
 `pkg/arch/layerguard_test.go` runs in `make test` and forbids direct imports of
 the four lower-layer modules, including in `_test.go` files.

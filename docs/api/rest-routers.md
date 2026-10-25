@@ -188,8 +188,9 @@ justification, route by route.
      `parent.PathPrefix("/api/v1").Subrouter()`.
    - Confirms a nil server triggers the
      `service is not available` envelope.
-8. Add an entry under `test/integration/restroutes/routes_smoke_test.go`
-   so CI verifies platformd actually mounts the route.
+8. Add the console's concrete request to `webUIRoutes` in
+   `pkg/webservice/v1/route_smoke_test.go` so the unit suite verifies the
+   built router matches it.
 
 ## Error mapping
 

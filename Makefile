@@ -1814,11 +1814,6 @@ integration-test-tpm: build-devcontainer
 integration-test-bootstrap: build-devcontainer
 	$(call run-integration-suite,bootstrap)
 
-## integration-test-restroutes: Verify every WebUI REST endpoint is registered on platformd
-.PHONY: integration-test-restroutes
-integration-test-restroutes: build-devcontainer
-	$(call run-integration-suite,restroutes)
-
 # NTP (time synchronization) Tests
 #
 # NTP_TAGS pins the tag set the time-synchronization surface actually needs:
