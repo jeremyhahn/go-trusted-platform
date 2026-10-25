@@ -571,6 +571,43 @@ func TestFilterEviction(t *testing.T) {
 	}
 }
 
+// TestFilterEvictionOfALivePeer evicts a peer whose ESP and IKE the applied
+// filter accepts: the evicted-peer rules must come before the ESP and IKE
+// accepts, in and out, and lifting the eviction admits them again.
+func TestFilterEvictionOfALivePeer(t *testing.T) {
+	ctx := context.Background()
+	f, conn := appliedFilter(t, validConfig())
+	peer := addr(peer4)
+
+	flows := []struct {
+		name  string
+		chain string
+		p     packet
+	}{
+		{"ESP from the peer", chainInput, esp(peer4, local4).on("bond0")},
+		{"ESP to the peer", chainOutput, esp(local4, peer4).out("bond0")},
+		{"IKE from the peer", chainInput, udp(peer4, local4, 500, 500).on("bond0")},
+	}
+	requireVerdict := func(want expr.VerdictKind, when string) {
+		t.Helper()
+		for _, fl := range flows {
+			if got := conn.verdict(t, fl.chain, fl.p, map[string]int{}); got != want {
+				t.Errorf("%s %s: %v, want %v", fl.name, when, got, want)
+			}
+		}
+	}
+
+	requireVerdict(expr.VerdictAccept, "before the eviction")
+	if err := f.Drop(ctx, peer); err != nil {
+		t.Fatalf("Drop: %v", err)
+	}
+	requireVerdict(expr.VerdictDrop, "after the eviction")
+	if err := f.Undrop(ctx, peer); err != nil {
+		t.Fatalf("Undrop: %v", err)
+	}
+	requireVerdict(expr.VerdictAccept, "once the eviction is lifted")
+}
+
 func TestFilterEvictionFailures(t *testing.T) {
 	ctx := context.Background()
 	f, conn := appliedFilter(t, validConfig())
