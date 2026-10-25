@@ -559,8 +559,17 @@ compose project `IT_PROJECT`. The service's entrypoint is the runner, so the
 Makefile passes it only `all` and the tags; the service carries the define's
 flags (privileged, `/dev/net/tun`, an exec `/tmp`, `GOWORK=off`). The image
 bakes the source and the module cache with `GOPROXY=off`, so nothing is
-bind-mounted and nothing is fetched. The target tears the stack down on every
-exit and exits with the suites' status.
+bind-mounted and nothing is fetched. The target tears the stack down
+(`down --volumes --remove-orphans`) from an EXIT trap, so a failed run, Ctrl-C
+or a SIGTERM tears it down as well, reports a teardown that fails, and exits
+with the suites' status. CI's `Tear down` step repeats the same `down` under
+`if: always()`. Neither runs when the job is killed outright (a cancellation
+that ends in SIGKILL, a dead runner or daemon); the reaper below covers that.
+
+The service runs on its project's own bridge network, not the host's: it has
+no `network_mode` and publishes no `ports:`, so platformd's listeners
+(REST on 8443 and the rest) are private to the container, and two
+integration jobs on one runner never share a port.
 
 ### CI
 
@@ -635,7 +644,15 @@ builder), so the build cache is this project's alone: each job prunes it to
 global `docker builder prune` (ruling 108). A cancelled run whose teardown did
 not run leaves its image tag; its cache is trimmed by the next job. Every job that starts
 containers first runs `scripts/reap-stale-ci-stacks.sh go-trusted-platform-ci-`,
-which removes the stacks a runner that died mid-job left behind.
+which removes the stacks a runner that died mid-job left behind: a project
+whose containers are all stopped longer than the min-age (3h05m) goes with
+its networks and volumes. A network or volume that outlived its project's
+containers (a cancelled job's teardown never ran; m1250 found nine such
+networks on one runner, the last of them on a `192.168.0.0/16` block that
+covered the monitoring VLAN) is removed as well, when no container of any
+state uses it and it was created longer than the min-age ago. A failed
+removal is reported and skipped; `REAP_DRY_RUN=1` only prints. The tests in
+`pkg/arch/reapstale_test.go` run the script against a fake `docker`.
 
 The toolchain container writes in four places: the checkout at `/src`, the
 build cache at `/gocache` (a named volume under compose, the container's own

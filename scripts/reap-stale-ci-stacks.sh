@@ -14,6 +14,9 @@
 #   - a compose project (label com.docker.compose.project) whose name starts
 #     with <prefix>, when EVERY container in it is stale; then the project's
 #     networks and volumes (same label);
+#   - a network or volume of such a project that outlived its containers (a
+#     cancelled job's teardown never ran), when no container of any state uses
+#     it and it was created at least <min-age-seconds> ago;
 #   - a container outside compose whose name starts with <prefix>, when stale,
 #     with its anonymous volumes.
 # Stale: exited or dead and finished at least <min-age-seconds> ago, or
@@ -56,16 +59,26 @@ stale() {
     created) t=$created ;;
     *) return 1 ;;
   esac
-  t=$(date -d "$t" +%s 2>/dev/null) || return 1
+  old "$t"
+}
+
+# old <timestamp>: 0 when <timestamp> is at least <min-age-seconds> ago, 1 when
+# it is younger or does not parse.
+old() {
+  local t
+  t=$(date -d "$1" +%s 2>/dev/null) || return 1
   [ $((now - t)) -ge "$min_age" ]
 }
 
 reaped=0
+# The projects the loop below saw with containers, space separated.
+seen=" "
 
 # Compose projects.
 for project in $(docker ps -a --filter label=com.docker.compose.project \
     --format '{{.Label "com.docker.compose.project"}}' | sort -u); do
   case $project in "$prefix"*) ;; *) continue ;; esac
+  seen="$seen$project "
   ids=$(docker ps -aq --filter "label=com.docker.compose.project=$project")
   keep=0
   for id in $ids; do stale "$id" || { keep=1; break; }; done
@@ -86,6 +99,55 @@ for project in $(docker ps -a --filter label=com.docker.compose.project \
   reaped=$((reaped + 1))
 done
 
+# Networks and volumes a compose project left without containers. A cancelled
+# job need not run its teardown, and once its containers are gone the loop
+# above never sees the project, so its network stays and holds an address
+# block of the daemon's pools (m1250). One is removed only when no container
+# of any state uses it and it was created at least <min-age-seconds> ago.
+orphans=0
+
+# reap_orphan network|volume <name> <created> [project]: remove one leftover.
+reap_orphan() {
+  local kind=$1 name=$2 created=$3 project=${4:-} users
+  case $project in "$prefix"*) ;; *) return 0 ;; esac
+  case $seen in *" $project "*) return 0 ;; esac
+  if ! users=$(docker ps -aq --filter "$kind=$name"); then
+    echo "warn  $kind $name: cannot list its containers, kept"
+    return 0
+  fi
+  if [ -n "$users" ]; then
+    echo "keep  $kind $name (a container uses it)"
+    return 0
+  fi
+  if ! old "$created"; then
+    echo "keep  $kind $name (created within ${min_age}s)"
+    return 0
+  fi
+  echo "reap  $kind $name ($project, no containers)"
+  if run docker "$kind" rm "$name"; then
+    orphans=$((orphans + 1))
+  else
+    echo "warn  $kind $name not removed"
+  fi
+}
+
+# A network's Created is a Go time.Time, which a bare {{.Created}} prints with
+# spaces in it ("2006-01-02 15:04:05.999 +0000 UTC") and splits across read's
+# fields, so it is formatted RFC 3339. A container's and a volume's times are
+# already RFC 3339 strings.
+for net in $(docker network ls -q --filter label=com.docker.compose.project); do
+  read -r name created project < <(docker network inspect \
+    -f '{{.Name}} {{.Created.Format "2006-01-02T15:04:05Z07:00"}} {{index .Labels "com.docker.compose.project"}}' "$net" 2>/dev/null) ||
+    { echo "warn  network $net: inspect failed, kept"; continue; }
+  reap_orphan network "$name" "$created" "$project"
+done
+for vol in $(docker volume ls -q --filter label=com.docker.compose.project); do
+  read -r created project < <(docker volume inspect \
+    -f '{{.CreatedAt}} {{index .Labels "com.docker.compose.project"}}' "$vol" 2>/dev/null) ||
+    { echo "warn  volume $vol: inspect failed, kept"; continue; }
+  reap_orphan volume "$vol" "$created" "$project"
+done
+
 # Containers outside compose.
 docker ps -a --filter "name=^$prefix" \
     --format '{{.ID}} {{.Names}} {{.Label "com.docker.compose.project"}}' |
@@ -99,5 +161,5 @@ docker ps -a --filter "name=^$prefix" \
   done
 
 if [ "${REAP_DRY_RUN:-0}" = 1 ]; then done_as="would be removed"; else done_as=removed; fi
-echo "reaper: $reaped compose project(s) $done_as for prefix '$prefix'"
+echo "reaper: $reaped compose project(s) and $orphans orphaned network(s) or volume(s) $done_as for prefix '$prefix'"
 exit 0

@@ -2061,8 +2061,9 @@ endef
 ## integration stage of build/docker/devcontainer/Dockerfile as $(IT_IMAGE) and
 ## runs compose.yaml's integration service under the project $(IT_PROJECT):
 ## its entrypoint is the suite runner, which starts OVS, swtpm and platformd,
-## and `all` selects the runner's ALL_TARGETS. The stack is torn down on every
-## exit and the target exits with the suites' status. CI passes a per-run
+## and `all` selects the runner's ALL_TARGETS. The stack is torn down
+## (`down --volumes --remove-orphans`) by an EXIT trap, so an error, Ctrl-C or
+## SIGTERM tears it down too, and the target exits with the suites' status. CI passes a per-run
 ## IT_PROJECT and IT_IMAGE so two runs on one daemon never collide.
 ## Set WITH_CODEC_* or other WITH_* flags for additional build tags.
 ## CUSTOMIZE (ruling 125): IT_FOREIGN_BASELINE=1 (CI sets it) also writes the
@@ -2075,11 +2076,15 @@ integration-test: SHELL := /bin/bash
 integration-test: docker-build-it
 	@echo "Build tags: $(TEST_BUILD_TAGS)"
 	@set -o pipefail; status=0; \
-	GO_TRUSTED_PLATFORM_IT_IMAGE=$(IT_IMAGE) HOST_UID=$$(id -u) HOST_GID=$$(id -g) \
+	export GO_TRUSTED_PLATFORM_IT_IMAGE=$(IT_IMAGE); \
+	teardown() { \
+		docker compose -f $(DEVCONTAINER_COMPOSE) -p $(IT_PROJECT) down --volumes --remove-orphans || \
+			echo "warning: teardown of $(IT_PROJECT) failed; scripts/reap-stale-ci-stacks.sh removes what is left" >&2; \
+	}; \
+	trap teardown EXIT; trap 'exit 130' INT; trap 'exit 143' TERM; \
+	HOST_UID=$$(id -u) HOST_GID=$$(id -g) \
 		docker compose -f $(DEVCONTAINER_COMPOSE) -p $(IT_PROJECT) \
 		run --rm integration all "$(strip $(TEST_BUILD_TAGS))" $(if $(IT_FOREIGN_BASELINE),2>&1 | tee "$(IT_LOG)") || status=$$?; \
-	GO_TRUSTED_PLATFORM_IT_IMAGE=$(IT_IMAGE) \
-		docker compose -f $(DEVCONTAINER_COMPOSE) -p $(IT_PROJECT) down --volumes; \
 	if [ $$status -ne 0 ] && [ -n "$(IT_FOREIGN_BASELINE)" ]; then \
 		echo "Integration suites failed (status $$status); checking the failures against $(FOREIGN_BASELINE) (ruling 125)"; \
 		status=0; \
