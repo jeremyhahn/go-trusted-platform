@@ -50,7 +50,6 @@ source "$(dirname "${BASH_SOURCE[0]}")/wait-for.sh"
 declare -A TARGET_PACKAGES=(
     [all]=""
     [bmc]="./test/integration/bmc/..."
-    [bootstrap]="./test/integration/bootstrap/..."
     [ca]="./test/integration/ca/..."
     [ceremony]="./test/integration/ceremony/..."
     [piv]="./test/integration/piv/..."
@@ -201,10 +200,7 @@ declare -A TARGET_NO_DAEMON=(
 # build on the host; lb, testenv-enrollment and ipxe-* are slices of
 # packages already listed (sdn, root, ipxe). pxe stays runnable by name but
 # is out of the default set: platformd builds its PXE service with no
-# backend, so every PXE call answers SERVICE_NOT_CONFIGURED. bootstrap stays
-# runnable by name but is out of the default set too: its DANE tests need TLSA
-# records for _8443._tcp.localhost., and the shared daemon-only platformd
-# publishes none (no webservices, DANE off, no zone holds localhost.).
+# backend, so every PXE call answers SERVICE_NOT_CONFIGURED.
 # secureboot stays runnable by name but is out of the default set as well: its
 # FIPS-kernel test needs a prebuilt kernel, modules and signing key that only
 # the caller supplies (FIPS_KERNEL_IMAGE, FIPS_MODULES_TAR,
