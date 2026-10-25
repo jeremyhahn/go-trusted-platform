@@ -56,7 +56,8 @@ func TestWaitGRPCReady_ReadyWhenServerListens(t *testing.T) {
 	go func() { served <- server.Serve(lis) }()
 	t.Cleanup(func() {
 		server.Stop()
-		if err := <-served; err != nil {
+		// Stop can win the race with Serve's start; Serve then returns ErrServerStopped, its other clean-shutdown result.
+		if err := <-served; err != nil && !errors.Is(err, grpc.ErrServerStopped) {
 			t.Errorf("Serve: %v", err)
 		}
 	})

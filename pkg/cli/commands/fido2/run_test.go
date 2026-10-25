@@ -155,7 +155,10 @@ func startFIDO2Server(t *testing.T, srv *fakeFIDO2Server) func(args ...string) (
 	go func() { served <- gs.Serve(lis) }()
 	t.Cleanup(func() {
 		gs.Stop()
-		require.NoError(t, <-served)
+		// Stop can win the race with Serve's start; Serve then returns ErrServerStopped, its other clean-shutdown result.
+		if err := <-served; !errors.Is(err, grpc.ErrServerStopped) {
+			require.NoError(t, err)
+		}
 	})
 
 	getFlags := func() *cli.CommonFlags {

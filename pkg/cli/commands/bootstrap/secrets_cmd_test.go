@@ -100,7 +100,10 @@ func newSocketFlags(t *testing.T, format cli.OutputFormat, kms platformv1.KeyMan
 	go func() { served <- server.Serve(listener) }()
 	t.Cleanup(func() {
 		server.Stop()
-		assert.NoError(t, <-served)
+		// Stop can win the race with Serve's start; Serve then returns ErrServerStopped, its other clean-shutdown result.
+		if err := <-served; !errors.Is(err, grpc.ErrServerStopped) {
+			assert.NoError(t, err)
+		}
 	})
 
 	cliContext := &cli.Context{

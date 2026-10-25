@@ -246,7 +246,10 @@ func grpcLifecycleOver(t *testing.T, svc *Service, lis net.Listener, target stri
 	go func() { served <- server.Serve(lis) }()
 	t.Cleanup(func() {
 		server.Stop()
-		assert.NoError(t, <-served)
+		// Stop can win the race with Serve's start; Serve then returns ErrServerStopped, its other clean-shutdown result.
+		if err := <-served; !errors.Is(err, grpc.ErrServerStopped) {
+			assert.NoError(t, err)
+		}
 	})
 
 	// Local credentials refuse any dial that is not loopback or a Unix socket.

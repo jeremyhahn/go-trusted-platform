@@ -18,6 +18,7 @@ package helpers
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"net"
 	"os"
 	"path/filepath"
@@ -77,7 +78,8 @@ func startPeercredUDSServer(t *testing.T) (string, <-chan credentials.AuthInfo) 
 	go func() { served <- server.Serve(listener) }()
 	t.Cleanup(func() {
 		server.Stop()
-		if err := <-served; err != nil {
+		// Stop can win the race with Serve's start; Serve then returns ErrServerStopped, its other clean-shutdown result.
+		if err := <-served; err != nil && !errors.Is(err, grpc.ErrServerStopped) {
 			t.Errorf("serve: %v", err)
 		}
 	})
