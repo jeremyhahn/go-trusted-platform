@@ -22,6 +22,14 @@ set -e
 # =============================================================================
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Bounded readiness polls (#964): the image copy, else the repository's.
+WAIT_FOR_SH=/usr/local/lib/devcontainer/wait-for.sh
+if [ ! -f "$WAIT_FOR_SH" ]; then
+    WAIT_FOR_SH="$SCRIPT_DIR/../../../build/docker/devcontainer/wait-for.sh"
+fi
+# shellcheck source=build/docker/devcontainer/wait-for.sh
+source "$WAIT_FOR_SH"
 TOPOLOGY_WORK_DIR="${TOPOLOGY_WORK_DIR:-/tmp/sdn-topology}"
 COMPOSE_PROJECT="${COMPOSE_PROJECT:-sdn-test}"
 
@@ -76,7 +84,7 @@ setup_ovs() {
             --pidfile=/var/run/openvswitch/ovsdb-server.pid \
             --detach \
             --log-file=/var/log/openvswitch/ovsdb-server.log
-        sleep 2
+        wait_for 10 "ovsdb-server on db.sock" ovs-vsctl --no-wait --timeout=1 show || return 1
     else
         info "ovsdb-server already running"
     fi
@@ -91,7 +99,7 @@ setup_ovs() {
         ovs-vswitchd --pidfile=/var/run/openvswitch/ovs-vswitchd.pid \
             --detach \
             --log-file=/var/log/openvswitch/ovs-vswitchd.log
-        sleep 2
+        wait_for 10 "ovs-vswitchd control socket" ovs-appctl -t ovs-vswitchd version || return 1
     else
         info "ovs-vswitchd already running"
     fi
