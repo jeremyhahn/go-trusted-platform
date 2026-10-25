@@ -18,6 +18,11 @@
 # network. The root filesystem is writable only because `docker cp` cannot
 # write into a read-only one.
 #
+# The pids bound counts threads (cgroup v2). 4096 was too low on the 80-thread
+# CI hosts: gosec's package loading forks `go` processes whose threads passed
+# it, and the fork failed with "resource temporarily unavailable" (runs on
+# ci-node-2-c and ci-node-1-b, 2026-10-24). 16384 keeps it bounded.
+#
 # IN_IMAGE_NETWORK=bridge gives the container a network, for the stages that
 # must reach one: `make deps-check` asks the module proxy for the newest
 # releases, and `make security` fetches the vulnerability databases. Only then
@@ -49,7 +54,7 @@ args=(
   --init
   --cap-drop ALL
   --security-opt no-new-privileges:true
-  --pids-limit 4096
+  --pids-limit 16384
   --ulimit memlock=67108864:67108864
   --ulimit core=1048576:1048576
   --ulimit nofile=65536:65536
