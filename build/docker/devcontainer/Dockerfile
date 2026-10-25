@@ -350,6 +350,7 @@ RUN echo "=== Installation Verification ===" && \
 # `make build-public-html` runs swag by this path.
 COPY --from=tools /out-integration/swag /go/bin/swag
 COPY build/docker/devcontainer/swtpm-provision.sh /usr/local/lib/devcontainer/swtpm-provision.sh
+COPY build/docker/devcontainer/wait-for.sh /usr/local/lib/devcontainer/wait-for.sh
 COPY build/docker/devcontainer/entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
 

@@ -36,6 +36,8 @@ set -uo pipefail
 
 # shellcheck source=build/docker/devcontainer/swtpm-provision.sh
 source "$(dirname "${BASH_SOURCE[0]}")/swtpm-provision.sh"
+# shellcheck source=build/docker/devcontainer/wait-for.sh
+source "$(dirname "${BASH_SOURCE[0]}")/wait-for.sh"
 
 # Known target keywords mapped to their Go test package paths, one or more
 # separated by spaces. A single-word first argument matching a key here
@@ -468,7 +470,7 @@ start_ovs() {
             --detach \
             --log-file=/var/log/openvswitch/ovsdb-server.log \
             /etc/openvswitch/conf.db
-        sleep 2
+        wait_for 10 "ovsdb-server on db.sock" ovs-vsctl --no-wait --timeout=1 show || true
         ovs-vsctl --no-wait init || true
     fi
 
@@ -479,7 +481,7 @@ start_ovs() {
             --pidfile=/var/run/openvswitch/ovs-vswitchd.pid \
             --detach \
             --log-file=/var/log/openvswitch/ovs-vswitchd.log
-        sleep 2
+        wait_for 10 "ovs-vswitchd control socket" ovs-appctl -t ovs-vswitchd version || true
     fi
 
     # Verify OVS is operational
@@ -513,7 +515,7 @@ start_swtpm() {
 
     # Kill any existing swtpm
     pkill -9 -f 'swtpm socket' 2>/dev/null || true
-    sleep 1
+    wait_for 5 "the old swtpm to exit" no_process_matching 'swtpm socket' || exit 1
 
     rm -rf /tmp/swtpm
     mkdir -p /tmp/swtpm
@@ -534,9 +536,8 @@ start_swtpm() {
             --ctrl type=unixio,path=/tmp/swtpm/swtpm.sock.ctrl \
             --flags startup-clear,not-need-init \
             --log level=1,file=/tmp/swtpm/swtpm.log &
-        sleep 2
 
-        if [ -S /tmp/swtpm/swtpm.sock ]; then
+        if wait_for 10 "swtpm socket /tmp/swtpm/swtpm.sock" test -S /tmp/swtpm/swtpm.sock; then
             echo "swtpm started successfully"
         else
             echo "WARNING: swtpm socket not found"

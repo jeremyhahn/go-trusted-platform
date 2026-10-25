@@ -12,6 +12,8 @@ set -e
 
 # shellcheck source=build/docker/devcontainer/swtpm-provision.sh
 source /usr/local/lib/devcontainer/swtpm-provision.sh
+# shellcheck source=build/docker/devcontainer/wait-for.sh
+source /usr/local/lib/devcontainer/wait-for.sh
 
 # =============================================================================
 # Environment Setup
@@ -48,7 +50,7 @@ start_ovs() {
             --detach \
             --log-file=/var/log/openvswitch/ovsdb-server.log
 
-        sleep 2
+        wait_for 10 "ovsdb-server on db.sock" ovs-vsctl --no-wait --timeout=1 show || return 1
 
         # Initialize OVS
         echo "Initializing Open vSwitch..."
@@ -64,7 +66,7 @@ start_ovs() {
             --detach \
             --log-file=/var/log/openvswitch/ovs-vswitchd.log
 
-        sleep 2
+        wait_for 10 "ovs-vswitchd control socket" ovs-appctl -t ovs-vswitchd version || return 1
     else
         echo "ovs-vswitchd already running"
     fi
@@ -204,9 +206,10 @@ stop_web_dev() {
         PID=$(cat /run/nextjs.pid)
         if kill -0 "$PID" 2>/dev/null; then
             kill "$PID" 2>/dev/null || true
-            sleep 2
             # Force kill if still running
-            kill -9 "$PID" 2>/dev/null || true
+            if ! wait_for 2 "PID $PID to exit after SIGTERM" process_gone "$PID"; then
+                kill -9 "$PID" 2>/dev/null || true
+            fi
         fi
         rm -f /run/nextjs.pid
     fi
@@ -222,7 +225,7 @@ start_swtpm() {
 
     # Kill any existing swtpm
     pkill -9 -f 'swtpm socket' 2>/dev/null || true
-    sleep 1
+    wait_for 5 "the old swtpm to exit" no_process_matching 'swtpm socket' || return 1
 
     # Setup swtpm directories
     rm -rf /tmp/swtpm
@@ -246,10 +249,9 @@ start_swtpm() {
 
     SWTPM_PID=$!
     echo $SWTPM_PID > /run/swtpm.pid
-    sleep 2
 
     # Verify swtpm is running
-    if [ -S /tmp/swtpm/swtpm.sock ]; then
+    if wait_for 10 "swtpm socket /tmp/swtpm/swtpm.sock" test -S /tmp/swtpm/swtpm.sock; then
         echo "swtpm started successfully (PID: $SWTPM_PID)"
         echo "=== Software TPM Started ==="
         return 0
@@ -326,7 +328,10 @@ start_platformd_web() {
 
     # Kill any existing platformd processes
     pkill -9 -f 'platformd' 2>/dev/null || true
-    sleep 1
+    # Not fatal: an unreaped zombie still matches the pattern but holds no
+    # port or socket, so startup goes on, as it did after the old fixed wait.
+    wait_for 5 "the old platformd to exit" no_process_matching 'platformd' ||
+        echo "WARNING: a process matching 'platformd' remains; continuing"
 
     # Start swtpm first
     start_swtpm || return 1
@@ -406,9 +411,10 @@ stop_platformd() {
         PID=$(cat /run/platformd.pid)
         if kill -0 "$PID" 2>/dev/null; then
             kill "$PID" 2>/dev/null || true
-            sleep 2
             # Force kill if still running
-            kill -9 "$PID" 2>/dev/null || true
+            if ! wait_for 2 "PID $PID to exit after SIGTERM" process_gone "$PID"; then
+                kill -9 "$PID" 2>/dev/null || true
+            fi
         fi
         rm -f /run/platformd.pid
     fi
