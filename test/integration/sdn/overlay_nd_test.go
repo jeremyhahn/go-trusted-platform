@@ -262,10 +262,22 @@ func TestOverlayND_SuppressesKnownTargets(t *testing.T) {
 
 		ovlNDSettle(t)
 		floods := ovlNDFloodPackets(ctx, t, ovsClient)
+		// A failed flood wait shows whether a punt or a meter was back by then.
+		flooded := false
+		t.Cleanup(func() {
+			if flooded || !t.Failed() {
+				return
+			}
+			t.Logf("table 50 at the failed flood wait:\n%s",
+				runCmd(t, "ovs-ofctl", "-O", "OpenFlow13", "dump-flows", bridge.name, "table=50"))
+			t.Logf("meters at the failed flood wait:\n%s",
+				runCmd(t, "ovs-ofctl", "-O", "OpenFlow13", "dump-meters", bridge.name))
+		})
 		sendNDFrame(t, conn, solicitation)
 		waitFor(ctx, t, "the known target's solicitation to flood", 50*time.Millisecond, 10*time.Second, func() bool {
 			return ovlNDFloodPackets(ctx, t, ovsClient) > floods
 		})
+		flooded = true
 
 		// The second fallback inside the quiet period holds down twice as long.
 		waitFor(ctx, t, "suppression to resume after the hold-down", 500*time.Millisecond, ovlNDDoubledHoldDownWait, func() bool {
