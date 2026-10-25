@@ -1629,6 +1629,55 @@ func TestSDNEnrollmentHook_BuildPortPolicy_ACLProtocols(t *testing.T) {
 	}
 }
 
+// TestSDNEnrollmentHook_BuildPortPolicy_CarriesACLFields verifies that a
+// profile's post-enrollment ACLs reach the port policy with their priority,
+// destination port (TCP or UDP) and allow action intact, under the
+// certificate's tenant and the profile's VLAN.
+func TestSDNEnrollmentHook_BuildPortPolicy_CarriesACLFields(t *testing.T) {
+	hook, err := NewSDNEnrollmentHook(SDNEnrollmentHookConfig{
+		Logger:       slog.Default(),
+		PolicyEngine: &MockPolicyEngine{},
+		ProfileDAO:   &MockDeviceProfileDAO{},
+	})
+	require.NoError(t, err)
+
+	cert := createEnrollmentCertificate(t, "TestOrg")
+	profile := &entities.DeviceProfile{
+		ID:   1,
+		Name: "conversion-test",
+		Role: entities.DeviceRoleServer,
+		Networks: map[string]*entities.NetworkPhaseConfig{
+			entities.DefaultPostEnrollmentNetwork: {
+				VLAN: 200,
+				ACLs: []entities.ACLConfig{
+					{Priority: 100, Protocol: "tcp", SrcIP: "0.0.0.0/0", DstIP: "10.0.200.2/32", DstPort: 443, Action: "allow"},
+					{Priority: 90, Protocol: "udp", SrcIP: "0.0.0.0/0", DstIP: "10.0.200.2/32", DstPort: 53, Action: "allow"},
+				},
+			},
+		},
+		MatchRules: &entities.ProfileMatchRules{MACPrefix: "52:54:00"},
+	}
+
+	policy, err := hook.buildPortPolicy(profile, cert)
+	require.NoError(t, err)
+	require.NotNil(t, policy)
+	assert.Equal(t, "TestOrg", policy.TenantID)
+	assert.Equal(t, uint16(200), policy.VLAN)
+	require.Len(t, policy.ACLs, 2)
+
+	tcp := policy.ACLs[0]
+	assert.Equal(t, 100, tcp.Priority)
+	assert.Equal(t, uint16(443), tcp.Match.TCPDst)
+	assert.Zero(t, tcp.Match.UDPDst)
+	assert.Equal(t, FlowActionAllow, tcp.Action.Type)
+
+	udp := policy.ACLs[1]
+	assert.Equal(t, 90, udp.Priority)
+	assert.Equal(t, uint16(53), udp.Match.UDPDst)
+	assert.Zero(t, udp.Match.TCPDst)
+	assert.Equal(t, FlowActionAllow, udp.Action.Type)
+}
+
 func TestSDNEnrollmentHook_Concurrency(t *testing.T) {
 	mockEngine := &MockPolicyEngine{}
 	mockDAO := &MockDeviceProfileDAO{}

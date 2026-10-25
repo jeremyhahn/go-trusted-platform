@@ -909,6 +909,11 @@ func TestDeviceRole_IsValid(t *testing.T) {
 			role: DeviceRoleGateway,
 			want: true,
 		},
+		{name: "valid workstation role", role: DeviceRoleWorkstation, want: true},
+		{name: "valid edge role", role: DeviceRoleEdge, want: true},
+		{name: "valid iot role", role: DeviceRoleIoT, want: true},
+		{name: "valid load-balancer role", role: DeviceRoleLoadBalancer, want: true},
+		{name: "valid unknown role", role: DeviceRoleUnknown, want: true},
 		{
 			name: "invalid role",
 			role: DeviceRole("invalid"),

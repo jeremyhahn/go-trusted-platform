@@ -6,75 +6,15 @@ This document summarizes the integration tests created to verify the end-to-end 
 
 ## Test Files Created
 
-### 1. `/test/integration/iso/network_integration_test.go`
+### 1. Device profile network checks (moved, #964 step b)
 
-Tests the integration between device profiles and network configuration:
-
-#### Test: TestDeviceProfileNetworkConfigExtraction
-- **Status**: PASSING
-- **Purpose**: Verifies that network configurations can be correctly extracted from device profiles
-- **Coverage**:
-  - Full network configuration (provisioning, production, quarantine)
-  - Client profile with provisioning and production only
-  - VLAN assignment verification
-  - ACL rule extraction
-  - DHCP pool configuration
-  - Static IP configuration
-
-#### Test: TestNetworkPhaseACLValidation
-- **Status**: PASSING
-- **Purpose**: Verifies ACL configuration validation
-- **Coverage**:
-  - Valid TCP ACLs
-  - Valid UDP ACLs
-  - Valid ICMP ACLs
-  - Valid "any" protocol ACLs
-  - Valid deny ACLs
-  - Invalid protocol detection
-  - Invalid action detection
-
-#### Test: TestSDNPolicyConversion
-- **Status**: PASSING
-- **Purpose**: Verifies conversion from device profile network config to SDN policy structures
-- **Coverage**:
-  - Provisioning network to SDN policy conversion
-  - Production network to SDN policy conversion
-  - ACL rule translation
-  - Protocol mapping (TCP/UDP/ICMP)
-
-#### Test: TestProvisioningToProductionTransition
-- **Status**: PASSING
-- **Purpose**: Verifies the state transition when a device moves from provisioning to production network
-- **Coverage**:
-  - VLAN change during transition (100 -> 200)
-  - Gateway change during transition
-  - DNS server change during transition
-
-#### Test: TestAuthMethodValidation
-- **Status**: PASSING
-- **Purpose**: Verifies authentication method validation
-- **Coverage**:
-  - None authentication
-  - 802.1X authentication
-  - Invalid authentication method detection
-
-#### Test: TestDeviceRoleValidation
-- **Status**: PASSING
-- **Purpose**: Verifies device role validation
-- **Coverage**:
-  - Server, Client, Workstation roles
-  - Edge, IoT, Gateway roles
-  - Load Balancer role
-  - Unknown role
-  - Invalid role detection
-
-#### Test: TestDHCPPoolConfiguration
-- **Status**: PASSING
-- **Purpose**: Verifies DHCP pool configuration
-- **Coverage**:
-  - DHCP network range verification
-  - Lease time validation
-  - Start/end IP range verification
+The seven service-layer tests that lived in
+`network_integration_test.go` asserted nothing a live service was needed
+for. Profile-to-policy conversion is now
+`TestSDNEnrollmentHook_BuildPortPolicy_CarriesACLFields` in
+`pkg/sdn/policy/enrollment_hook_test.go`; role, auth-method and ACL
+validity are `TestDeviceRole_IsValid`, `TestAuthMethod_IsValid` and
+`TestACLConfig_IsValid` in `pkg/device/entities/profile_test.go`.
 
 ### 2. `/test/integration/sdn/state_transition_integration_test.go`
 
