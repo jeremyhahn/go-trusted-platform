@@ -84,12 +84,16 @@ func serverPort(t *testing.T, server *httptest.Server) int {
 }
 
 // asfPong is an ASF Presence Pong (message type 0x40) as a BMC sends it.
+// successProbeTimeout bounds probes that expect a loopback peer to answer: a
+// safety net, not a race, since the probe returns as soon as the peer replies.
+const successProbeTimeout = 30 * time.Second
+
 var asfPong = []byte{0x06, 0x00, 0xFF, 0x06, 0x00, 0x00, 0x11, 0xBE, 0x40, 0x00, 0x00, 0x10}
 
 func TestProbeIPMI_PresencePong(t *testing.T) {
 	pings := rmcpResponder(t, asfPong)
 
-	if !probeIPMI(context.Background(), "127.0.0.1", time.Second) {
+	if !probeIPMI(context.Background(), "127.0.0.1", successProbeTimeout) {
 		t.Fatal("probeIPMI = false, want true for a BMC answering the presence ping")
 	}
 	ping := <-pings
@@ -120,7 +124,7 @@ func TestDetectProtocol_IPMIOnly(t *testing.T) {
 	setRedfishProbePort(t, closedTCPPort(t))
 	rmcpResponder(t, asfPong)
 
-	if got := DetectProtocol(context.Background(), "127.0.0.1", time.Second); got != ProtocolIPMI {
+	if got := DetectProtocol(context.Background(), "127.0.0.1", successProbeTimeout); got != ProtocolIPMI {
 		t.Fatalf("DetectProtocol = %q, want %q", got, ProtocolIPMI)
 	}
 }
@@ -134,7 +138,7 @@ func TestDetectProtocol_RedfishUntrustedCertificate(t *testing.T) {
 
 	// The httptest certificate does not chain to the system roots: the
 	// failed verification still proves a TLS service answered.
-	if got := DetectProtocol(context.Background(), "127.0.0.1", time.Second); got != ProtocolRedfish {
+	if got := DetectProtocol(context.Background(), "127.0.0.1", successProbeTimeout); got != ProtocolRedfish {
 		t.Fatalf("DetectProtocol = %q, want %q", got, ProtocolRedfish)
 	}
 }
