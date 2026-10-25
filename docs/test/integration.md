@@ -357,8 +357,8 @@ provider, as `make integration-test-compute` does.
 
 The keys in the runner's `TARGET_NO_DAEMON` map skip the shared `platformd`:
 their suites start their own daemon or cluster, or test something that needs
-none (`datastore`, `quicbaas`, `sdk`, `cluster`, `cmd`, `installer`, `lb`,
-`e2e`, `ipxe` and its slices, `testenv-enrollment`, `helpers`). `helpers` runs
+none (`datastore`, `sdk`, `cluster`, `cmd`, `installer`, `lb`, `e2e`,
+`ipxe` and its slices, `testenv-enrollment`, `helpers`). `helpers` runs
 the integration-tagged tests of the harness library itself; its untagged
 tests run in `make test`.
 
@@ -376,7 +376,7 @@ generators would starve them too; it runs alone, in `ALL_TARGETS` order right
 after `sdn`.
 
 Under `make integration-test` the daemon-free keys of `ALL_TARGETS` (`helpers`,
-`datastore`, `quicbaas`, `sdk`, `cluster`, `cmd`, `ipxe`, `installer`, `e2e`)
+`datastore`, `sdk`, `cluster`, `cmd`, `ipxe`, `installer`, `e2e`)
 run concurrently. Each writes its own log under `/tmp/integration-logs/`, and
 the runner prints that log whole when the suite ends, so the `-v` output of two
 suites never interleaves. The daemon-backed keys then run one at a time, in

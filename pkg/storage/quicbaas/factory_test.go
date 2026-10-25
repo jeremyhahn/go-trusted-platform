@@ -21,6 +21,7 @@ import (
 	"testing"
 	"time"
 
+	quicbaassdk "github.com/jeremyhahn/go-quicbaas/sdk/go"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/serializer"
 	"github.com/stretchr/testify/assert"
@@ -109,6 +110,86 @@ func TestFactory_Stop_Idempotent(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.True(t, factory.IsClosed())
+}
+
+// TestFactory_SDK_FollowsLifecycle asserts the factory hands out a working
+// SDK client only between Start and Stop.
+func TestFactory_SDK_FollowsLifecycle(t *testing.T) {
+	factory, err := NewFactory(TestConfig(t), logging.DefaultLogger(), nil)
+	require.NoError(t, err)
+	assert.Nil(t, factory.SDK(), "SDK must be nil before Start")
+
+	require.NoError(t, factory.Start(context.Background()))
+
+	sdk := factory.SDK()
+	require.NotNil(t, sdk, "SDK must be available after Start")
+	require.NoError(t, sdk.Health().Ping(context.Background()))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	require.NoError(t, factory.Stop(ctx))
+
+	assert.Nil(t, factory.SDK(), "SDK must be nil after Stop")
+}
+
+// TestFactory_Start_AfterStopReturnsErrFactoryClosed asserts a stopped
+// factory cannot be restarted.
+func TestFactory_Start_AfterStopReturnsErrFactoryClosed(t *testing.T) {
+	factory, cleanup := newTestFactory(t)
+	cleanup()
+
+	err := factory.Start(context.Background())
+
+	var target ErrFactoryClosed
+	assert.ErrorAs(t, err, &target)
+	assert.False(t, factory.IsStarted())
+}
+
+// TestFactory_Start_ServesEveryStorageBackend asserts the embedded factory
+// starts and serves KV on each storage backend its test configs select.
+func TestFactory_Start_ServesEveryStorageBackend(t *testing.T) {
+	tests := []struct {
+		name   string
+		config func(t TestingT) *Config
+	}{
+		{name: "Pebble", config: TestConfig},
+		{name: "Memory", config: MemoryTestConfig},
+		{name: "File", config: FileTestConfig},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			factory, err := NewFactory(tc.config(t), logging.DefaultLogger(), nil)
+			require.NoError(t, err)
+			require.NoError(t, factory.Start(context.Background()))
+			defer func() {
+				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+				defer cancel()
+				require.NoError(t, factory.Stop(ctx))
+			}()
+
+			sdk := factory.SDK()
+			require.NotNil(t, sdk)
+
+			ctx := context.Background()
+			require.NoError(t, sdk.Health().Ping(ctx))
+
+			data := []byte(`{"backend":"` + tc.name + `"}`)
+			put, err := sdk.KV().Put(ctx, &quicbaassdk.PutRequest{
+				EntityType: "factory-backend",
+				Data:       data,
+			})
+			require.NoError(t, err)
+
+			got, err := sdk.KV().Get(ctx, &quicbaassdk.GetRequest{
+				EntityType: "factory-backend",
+				ID:         put.ID,
+			})
+			require.NoError(t, err)
+			assert.True(t, got.Found)
+			assert.Equal(t, data, got.Data)
+		})
+	}
 }
 
 func TestFactory_UserDAO_Success(t *testing.T) {

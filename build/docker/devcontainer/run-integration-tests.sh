@@ -99,7 +99,6 @@ declare -A TARGET_PACKAGES=(
     [network]="./test/integration/network/..."
     [pxe]="./test/integration/pxe/..."
     [quic]="./test/integration/quic/..."
-    [quicbaas]="./test/integration/quicbaas/..."
     [registry]="./test/integration/registry/..."
     [sdk]="./test/integration/sdk/..."
     [secrets]="./test/integration/secrets/..."
@@ -169,7 +168,7 @@ declare -A TARGET_TIMEOUTS=(
 # lb drives OVS directly; installer runs a real dnsmasq against a stub
 # upstream it starts; the ipxe suites start their own iPXE server on
 # 127.0.0.1; testenv-enrollment and e2e boot their own QEMU guests;
-# datastore, quicbaas, sdk, cluster and cmd embed what they test; helpers
+# datastore, sdk, cluster and cmd embed what they test; helpers
 # tests the shared harness library in-process. The
 # targets that do more than skip the daemon -- cold-start, barrier-gate, bmc
 # and the host-built-input suites -- have their own branch in Main.
@@ -186,7 +185,6 @@ declare -A TARGET_NO_DAEMON=(
     [ipxe-dhcp]=1
     [ipxe-tftp]=1
     [ipxe-http]=1
-    [quicbaas]=1
     [sdk]=1
 )
 
@@ -218,7 +216,7 @@ declare -A TARGET_NO_DAEMON=(
 # suites run all at once, and its generators would starve them the way they
 # starved sdn. In the daemon-backed list it runs alone, after sdn.
 ALL_TARGETS=(
-    helpers datastore quicbaas sdk cluster cmd ipxe installer e2e
+    helpers datastore sdk cluster cmd ipxe installer e2e
     root acme attestation authenticode ca ceremony cli
     container daemon device dns fido2 iam iso kms luks network
     ntp objectstorage piv provision proxy quic registry sdn

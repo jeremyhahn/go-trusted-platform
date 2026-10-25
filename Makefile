@@ -1496,7 +1496,7 @@ test-quicbaas:
 .PHONY: test-quicbaas-coverage
 test-quicbaas-coverage:
 	@echo "Running QuicBaaS unit tests with coverage (fast, no Raft)..."
-	@echo "Note: client.go and factory.go (0%) require Raft - tested via integration-test-quicbaas"
+	@echo "Note: client.go and factory.go (0%) require Raft - tested via test-quicbaas-coverage-full"
 	go test -count=1 -tags "$(BUILD_TAGS)" -run "Test.*_Mock|^TestMockStorage|^TestErr|^TestDefault|^TestConfig|^TestConsistency|^TestParse|^TestGetFree|^TestAllErrors" -coverprofile=/tmp/quicbaas.cover ./pkg/storage/quicbaas/...
 	go tool cover -func=/tmp/quicbaas.cover | tail -1
 
@@ -1514,12 +1514,7 @@ test-quicbaas-all:
 	@echo "Running all QuicBaaS tests (includes Raft, serial, ~3 min)..."
 	go test -v -count=1 -tags "$(BUILD_TAGS)" -parallel 1 -timeout 10m ./pkg/storage/quicbaas/...
 
-# QuicBaaS and Datastore Integration Tests (using devcontainer)
-.PHONY: integration-test-quicbaas
-## integration-test-quicbaas: Run the QuicBaaS SDK integration suite (test/integration/quicbaas) in the devcontainer
-integration-test-quicbaas: build-devcontainer
-	$(call run-integration-suite,quicbaas)
-
+# Datastore Integration Tests (using devcontainer)
 .PHONY: integration-test-datastore
 ## integration-test-datastore: Run the datastore integration suite (test/integration/datastore) in the devcontainer
 integration-test-datastore: build-devcontainer
