@@ -461,12 +461,50 @@ func (g *supervisedGatewayd) launch(t *testing.T) {
 		close(exited)
 	}()
 
-	WaitFor(t, 60*time.Second, 200*time.Millisecond, "the datapath, proxy and routing children to serve", func() bool {
+	what := fmt.Sprintf("gatewayd (pid %d) datapath, proxy and routing children to serve", cmd.Process.Pid)
+	waitUntil(t, 60*time.Second, what, func() string {
 		g.requireRunning(t)
 		children := g.children(t)
-		return children["datapath"] != 0 && children["proxy"] != 0 && children["routing"] != 0 &&
-			g.datapathProgrammed() && g.proxyServes() && g.bgpListens()
+		for _, name := range []string{"datapath", "proxy", "routing"} {
+			if children[name] == 0 {
+				return "no " + name + " child running"
+			}
+		}
+		switch {
+		case !g.datapathProgrammed():
+			return "datapath has not programmed bridge " + supervisedBridge
+		case !g.proxyServes():
+			return "proxy not answering at " + g.baseURL
+		case !g.bgpListens():
+			return "routing not listening on " + g.bgpAddress
+		}
+		return ""
 	})
+}
+
+// waitUntil polls pending until it reports nothing left. On the deadline it
+// fails naming the wait, the deadline and what was still pending, so a
+// timed-out wait says why rather than only that it waited.
+func waitUntil(t *testing.T, timeout time.Duration, what string, pending func() string) {
+	t.Helper()
+	last := pending()
+	if last == "" {
+		return
+	}
+	deadline := time.NewTimer(timeout)
+	defer deadline.Stop()
+	ticker := time.NewTicker(200 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-deadline.C:
+			t.Fatalf("timed out after %v waiting for %s: still %s", timeout, what, last)
+		case <-ticker.C:
+			if last = pending(); last == "" {
+				return
+			}
+		}
+	}
 }
 
 // awaitRelaunch waits, within relaunchBound, for a new child of the given
@@ -866,12 +904,11 @@ func (g *supervisedGatewayd) stop(t *testing.T) {
 		select {
 		case <-g.exited:
 			if g.exitErr != nil {
-				// "signal: terminated" means gatewayd had no SIGTERM handler
-				// yet and Go's default action killed it mid-start.
-				t.Errorf("gatewayd shutdown on SIGTERM: %v, want exit status 0 from its stop path", g.exitErr)
+				t.Errorf("teardown: gatewayd (pid %d) did not shut down cleanly on SIGTERM: %v%s",
+					g.cmd.Process.Pid, g.exitErr, killedBySignal(g.exitErr))
 			}
 		case <-deadline.C:
-			t.Errorf("gatewayd did not stop within 30s of SIGTERM")
+			t.Errorf("teardown: gatewayd (pid %d) did not stop within 30s of SIGTERM", g.cmd.Process.Pid)
 			if err := g.cmd.Process.Kill(); err != nil {
 				t.Errorf("kill gatewayd: %v", err)
 			}
@@ -882,6 +919,21 @@ func (g *supervisedGatewayd) stop(t *testing.T) {
 		t.Logf("gatewayd log:\n%s", g.log(t))
 	}
 	g.removeCgroups(t)
+}
+
+// killedBySignal explains an exit by a signal's default action: gatewayd
+// handles SIGTERM, so dying of it means the handler was not installed when
+// the signal arrived.
+func killedBySignal(err error) string {
+	var exitErr *exec.ExitError
+	if !errors.As(err, &exitErr) {
+		return ""
+	}
+	status, ok := exitErr.Sys().(syscall.WaitStatus)
+	if !ok || !status.Signaled() {
+		return ""
+	}
+	return fmt.Sprintf(" (killed by the default action of %v: no handler for it was installed yet)", status.Signal())
 }
 
 // removeCgroups removes the test's cgroup parent. A reaped child leaves
