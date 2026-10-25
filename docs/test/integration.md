@@ -948,7 +948,8 @@ printed a warning saying so. For
 `integration-test-vtpm` a swtpm that does not start ends the run.
 
 That swtpm is the daemon's TPM: `test/integration/config.yaml` and
-`test/integration/barrier_gate/config.yaml` set `tpm.device` to
+`test/integration/barrier_gate/config.yaml` (the config of that suite's one
+test, `TestM6_WarmBoot_UnsealThenTransitions`) set `tpm.device` to
 `/tmp/swtpm/swtpm.sock`, the socket `start_swtpm` serves, with only the SHA-256
 PCR bank active. The integration container is privileged and sees the host's
 `/dev/tpmrm0`, so a config naming that device runs `platformd` on the CI host's
