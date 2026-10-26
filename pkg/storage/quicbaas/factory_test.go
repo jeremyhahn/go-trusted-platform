@@ -17,13 +17,17 @@ package quicbaas
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
 
 	quicbaassdk "github.com/jeremyhahn/go-quicbaas/sdk/go"
+	dnsEntities "github.com/jeremyhahn/go-trusted-platform/pkg/dns/entities"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/serializer"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore/entities"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -382,4 +386,231 @@ func TestFactory_AllDAOs_Integration(t *testing.T) {
 	assert.NotNil(t, roleDAO)
 	assert.NotNil(t, regDAO)
 	assert.NotNil(t, webAuthnDAO)
+}
+
+// listPartition lists the stored bytes of every entity of one type the way
+// the db dump reads them (pkg/api/daemon DumpEntityType): through the
+// factory's client, by the entity type's partition name.
+func listPartition(t *testing.T, factory *Factory, entityType string) map[uint64][]byte {
+	t.Helper()
+
+	listed, nextToken, err := factory.Client().List(context.Background(), entityType, 100, "", 0)
+	require.NoError(t, err)
+	require.Empty(t, nextToken, "the %s partition must fit one page", entityType)
+
+	byID := make(map[uint64][]byte, len(listed))
+	for _, entity := range listed {
+		byID[entity.ID] = entity.Data
+	}
+	return byID
+}
+
+// decodeObject decodes stored entity bytes as the JSON object the db dump
+// writes to disk.
+func decodeObject(t *testing.T, data []byte) map[string]interface{} {
+	t.Helper()
+
+	var object map[string]interface{}
+	require.NoError(t, json.Unmarshal(data, &object), "stored entity must be a JSON object")
+	return object
+}
+
+// TestFactory_DAOSavedEntities_ListedByTypeName asserts that an entity saved
+// through a factory DAO is listed under its type name as JSON keyed by the
+// entity's json tags, and that each partition holds only its own type.
+func TestFactory_DAOSavedEntities_ListedByTypeName(t *testing.T) {
+	factory, cleanup := newTestFactory(t)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	roleDAO, err := factory.RoleDAO()
+	require.NoError(t, err)
+	role := &entities.Role{Name: "dump-role"}
+	require.NoError(t, roleDAO.Save(ctx, role))
+	require.NotZero(t, role.ID)
+
+	userDAO, err := factory.UserDAO()
+	require.NoError(t, err)
+	user := entities.NewUser("dump@example.com")
+	require.NoError(t, userDAO.Save(ctx, user))
+	require.NotZero(t, user.ID)
+
+	zoneDAO, err := factory.ZoneDAO()
+	require.NoError(t, err)
+	zone := &dnsEntities.Zone{
+		Name:        "dump.example.com.",
+		TTL:         3600,
+		Description: "zone for the dump read path",
+		RecordSet: dnsEntities.RecordSet{
+			ARecords: []*dnsEntities.ARecord{
+				{Name: "www", Value: "192.168.1.1", TTL: 300},
+				{Name: "api", Value: "192.168.1.2", TTL: 300},
+				{Name: "mail", Value: "192.168.1.3", TTL: 300},
+			},
+		},
+	}
+	require.NoError(t, zoneDAO.Save(ctx, zone))
+	require.NotZero(t, zone.ID)
+
+	roles := listPartition(t, factory, "Role")
+	require.Contains(t, roles, role.ID)
+	roleObject := decodeObject(t, roles[role.ID])
+	assert.Equal(t, "dump-role", roleObject["name"])
+
+	users := listPartition(t, factory, "User")
+	require.Contains(t, users, user.ID)
+	assert.Equal(t, "dump@example.com", decodeObject(t, users[user.ID])["email"])
+
+	zones := listPartition(t, factory, "Zone")
+	require.Len(t, zones, 1, "the Zone partition must hold only the saved zone")
+	require.Contains(t, zones, zone.ID)
+	zoneObject := decodeObject(t, zones[zone.ID])
+	assert.Equal(t, "dump.example.com.", zoneObject["name"])
+	assert.Equal(t, float64(3600), zoneObject["ttl"])
+	assert.Equal(t, "zone for the dump read path", zoneObject["description"])
+	records, ok := zoneObject["records"].(map[string]interface{})
+	require.True(t, ok, "zone records must be a JSON object")
+	aRecords, ok := records["a"].([]interface{})
+	require.True(t, ok, "zone A records must be a JSON array under \"a\"")
+	assert.Len(t, aRecords, 3)
+
+	for id, data := range roles {
+		assert.NotContains(t, decodeObject(t, data), "records", "Role partition holds a zone at ID %d", id)
+	}
+}
+
+// TestFactory_DAOSavedZone_GetRoundTrips asserts that the bytes the client
+// returns for a DAO-saved zone decode back to the zone that was saved,
+// including text that JSON must escape.
+func TestFactory_DAOSavedZone_GetRoundTrips(t *testing.T) {
+	tests := []struct {
+		name string
+		zone *dnsEntities.Zone
+	}{
+		{
+			name: "FieldsAndSOA",
+			zone: &dnsEntities.Zone{
+				Name:        "integrity.example.com.",
+				TTL:         7200,
+				Description: "data integrity zone",
+				Internal:    true,
+				RecordSet: dnsEntities.RecordSet{
+					SOARecord: dnsEntities.SOARecord{
+						Name:       "integrity.example.com.",
+						MName:      "ns1.integrity.example.com.",
+						RName:      "admin.integrity.example.com.",
+						Serial:     2024123102,
+						Refresh:    3600,
+						Retry:      1800,
+						Expire:     604800,
+						MinimumTTL: 43200,
+						TTL:        7200,
+					},
+					ARecords: []*dnsEntities.ARecord{
+						{Name: "test", Value: "10.0.0.1", TTL: 600},
+					},
+				},
+			},
+		},
+		{
+			name: "SpecialCharacters",
+			zone: &dnsEntities.Zone{
+				Name:        "special.example.com.",
+				TTL:         3600,
+				Description: "special chars: \"quotes\", 'apostrophes', <angle>, &ampersand, newline\nhere",
+				RecordSet: dnsEntities.RecordSet{
+					TXTRecords: []*dnsEntities.TXTRecord{
+						{Name: "special.example.com.", Value: "text with spaces and \"quotes\"", TTL: 300},
+					},
+				},
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			factory, cleanup := newTestFactory(t)
+			defer cleanup()
+
+			ctx := context.Background()
+			zoneDAO, err := factory.ZoneDAO()
+			require.NoError(t, err)
+			require.NoError(t, zoneDAO.Save(ctx, tc.zone))
+
+			data, found, err := factory.Client().Get(ctx, "Zone", tc.zone.ID, 0)
+			require.NoError(t, err)
+			require.True(t, found)
+
+			var stored dnsEntities.Zone
+			require.NoError(t, json.Unmarshal(data, &stored))
+			assert.Equal(t, tc.zone.Name, stored.Name)
+			assert.Equal(t, tc.zone.TTL, stored.TTL)
+			assert.Equal(t, tc.zone.Description, stored.Description)
+			assert.Equal(t, tc.zone.Internal, stored.Internal)
+			assert.Equal(t, tc.zone.RecordSet.SOARecord, stored.RecordSet.SOARecord)
+			assert.Equal(t, tc.zone.RecordSet.ARecords, stored.RecordSet.ARecords)
+			assert.Equal(t, tc.zone.RecordSet.TXTRecords, stored.RecordSet.TXTRecords)
+		})
+	}
+}
+
+// TestFactory_List_UnpopulatedTypeIsEmpty asserts that listing a type nothing
+// was saved under succeeds with no entities, so the dump skips it.
+func TestFactory_List_UnpopulatedTypeIsEmpty(t *testing.T) {
+	factory, cleanup := newTestFactory(t)
+	defer cleanup()
+
+	assert.Empty(t, listPartition(t, factory, "DeviceProfile"))
+}
+
+// TestFactory_List_ReturnsEverySavedRole asserts that one listing page
+// returns every DAO-saved role, and keeps doing so under concurrent readers.
+func TestFactory_List_ReturnsEverySavedRole(t *testing.T) {
+	factory, cleanup := newTestFactory(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	roleDAO, err := factory.RoleDAO()
+	require.NoError(t, err)
+
+	const numRoles = 20
+	saved := make([]uint64, 0, numRoles)
+	for i := 0; i < numRoles; i++ {
+		role := &entities.Role{Name: fmt.Sprintf("bulk-role-%d", i)}
+		require.NoError(t, roleDAO.Save(ctx, role))
+		saved = append(saved, role.ID)
+	}
+
+	roles := listPartition(t, factory, "Role")
+	for _, id := range saved {
+		assert.Contains(t, roles, id)
+	}
+
+	const numReaders = 3
+	var wg sync.WaitGroup
+	results := make(chan int, numReaders)
+	errs := make(chan error, numReaders)
+	for i := 0; i < numReaders; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			listed, _, err := factory.Client().List(ctx, "Role", 100, "", 0)
+			if err != nil {
+				errs <- err
+				return
+			}
+			results <- len(listed)
+		}()
+	}
+	wg.Wait()
+	close(results)
+	close(errs)
+
+	for err := range errs {
+		t.Errorf("concurrent list failed: %v", err)
+	}
+	for count := range results {
+		assert.Equal(t, len(roles), count, "a concurrent reader saw a different Role partition")
+	}
 }

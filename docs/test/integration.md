@@ -357,11 +357,24 @@ provider, as `make integration-test-compute` does.
 
 The keys in the runner's `TARGET_NO_DAEMON` map skip the shared `platformd`:
 their suites start their own daemon or cluster, or test something that needs
-none (`datastore`, `sdk`, `cmd`, `installer`, `lb`, `e2e`,
-`ipxe` and its slices, `testenv-enrollment`, `helpers`). `helpers` runs
+none (`sdk`, `installer`, `lb`, `e2e`, `ipxe`
+and its slices, `testenv-enrollment`, `helpers`). `helpers` runs
 the integration-tagged tests of the harness library itself; its untagged
 tests run in `make test`. So do the untagged tests of the `tenant` suite's CLI
 adapter (`cli_exec_test.go`), which need no daemon.
+
+`iso` is split the same way (#964 step b). `runner.go` (the CLI adapter and
+the process-group command runner) and `grub_detector.go` carry no build tag,
+and their tests (`runner_test.go`, `grub_detector_test.go`) run in `make test`
+through `TEST_UNIT_PKGS`; `make integration-test-iso` runs the
+integration-tagged `multiprotocol_test.go` against `platformd`. The `device`
+suite keeps only its daemon-backed tests: the adapter decode tests that
+exercised the harness and no server were removed, and the wrong-ALPN handshake
+check is `TestServerRefusesAWrongALPNAtTheHandshake` in `pkg/api/quic`.
+
+The bmc suite's simulators, `bmc/vbmc` and
+`bmc/rmcpsim`, carry no build tag, and their self-tests run in `make test`
+as well (httptest and 127.0.0.1 UDP, no daemon).
 
 The `sdn` key runs `./test/integration/sdn/` and
 `./test/integration/sdn/mock_bgp/...` within its 15 minutes (its tests run
@@ -377,7 +390,7 @@ generators would starve them too; it runs alone, in `ALL_TARGETS` order right
 after `sdn`.
 
 Under `make integration-test` the daemon-free keys of `ALL_TARGETS` (`helpers`,
-`datastore`, `sdk`, `cmd`, `ipxe`, `installer`, `e2e`)
+`sdk`, `ipxe`, `installer`, `e2e`)
 run concurrently. Each writes its own log under `/tmp/integration-logs/`, and
 the runner prints that log whole when the suite ends, so the `-v` output of two
 suites never interleaves. The daemon-backed keys then run one at a time, in
@@ -398,7 +411,7 @@ Kept out of the runner, or out of its default set:
 | Directory | Why | How it runs |
 |-----------|-----|-------------|
 | `pxe` | platformd constructs its PXE service with a nil backend (`pkg/api/daemon/daemon.go:979`), and nothing outside tests calls `SetPXEService` or `pkg/compute/pxe.NewService`, so every transport answers `SERVICE_NOT_CONFIGURED` and the suite fails at adapter setup. Its six adapters are real; it rejoins `ALL_TARGETS` when platformd has a PXE backend | `make integration-test-pxe` |
-| `secureboot` | `TestFIPSKernelModuleSignatureEnforcement` fails without a prebuilt FIPS kernel, its modules tarball and the module-signing key it was built with (`test/integration/secureboot/fipskernel_test.go:210-212`, `helpers.go:61-71`), which only the caller supplies through `FIPS_KERNEL_IMAGE`, `FIPS_MODULES_TAR` and `FIPS_MODULE_SIGNING_KEY`; the runner sets none of them. `docs/firmware/secure-boot.md:513-514` already keeps the target out of the `all` sweep | `make integration-test-secureboot` with the three variables set |
+| `secureboot` | `TestFIPSKernelModuleSignatureEnforcement` fails without a prebuilt FIPS kernel, its modules tarball and the module-signing key it was built with (`test/integration/secureboot/fipskernel_test.go:210-212`, `helpers.go:84-94`), which only the caller supplies through `FIPS_KERNEL_IMAGE`, `FIPS_MODULES_TAR` and `FIPS_MODULE_SIGNING_KEY`; the runner sets none of them. `docs/firmware/secure-boot.md:539-540` already keeps the target out of the `all` sweep | `make integration-test-secureboot` with the three variables set |
 | `secureboot/hardware` | Real TPM and efivarfs on the node; disabled unless `TP_HW_TPM`/`TP_HW_EFIVARS` is `1` | `make integration-test-secureboot-hw` on the node |
 | `sdn/topology` | The multi-node topology tests start their nodes with docker-compose (`test/integration/sdn/topology/docker-compose.tmpl`), and the devcontainer has neither docker-compose nor a Docker daemon. The `topology` build tag keeps them out of the `sdn` and `sdn-stress` keys' packages; run anywhere else, they fail with `ErrDockerComposeMissing` | `make integration-test-sdn-topology` on a host with docker-compose |
 | `compute-aws` | A Floci emulator compose file, not a suite; the tests are in `pkg/compute/aws` | `make integration-test-compute-aws` on the host |

@@ -38,6 +38,9 @@ const (
 
 	// vmBootTimeout bounds each firmware boot under TCG emulation.
 	vmBootTimeout = 4 * time.Minute
+
+	// sbverifyTimeout bounds each sbverify invocation.
+	sbverifyTimeout = 30 * time.Second
 )
 
 // enrollOVMFVars generates a Secure Boot key set with the platform generator,
@@ -169,7 +172,7 @@ func TestOVMFSecureBootEnforcement(t *testing.T) {
 		requireTool(t, "sbverify", "independently verify Authenticode signatures")
 		dbCertPEM := filepath.Join(keysDir, "DB.crt")
 
-		vctx, cancel := context.WithTimeout(ctx, opensslTimeout)
+		vctx, cancel := context.WithTimeout(ctx, sbverifyTimeout)
 		defer cancel()
 		if _, err := runCommand(t, vctx, false, "sbverify", "--cert", dbCertPEM, signedPath); err != nil {
 			t.Fatalf("sbverify rejected the DB-signed payload: %v", err)

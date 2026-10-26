@@ -1514,12 +1514,6 @@ test-quicbaas-all:
 	@echo "Running all QuicBaaS tests (includes Raft, serial, ~3 min)..."
 	go test -v -count=1 -tags "$(BUILD_TAGS)" -parallel 1 -timeout 10m ./pkg/storage/quicbaas/...
 
-# Datastore Integration Tests (using devcontainer)
-.PHONY: integration-test-datastore
-## integration-test-datastore: Run the datastore integration suite (test/integration/datastore) in the devcontainer
-integration-test-datastore: build-devcontainer
-	$(call run-integration-suite,datastore)
-
 .PHONY: integration-test-ca-quicbaas-adapter
 ## integration-test-ca-quicbaas-adapter: Run CA QuicBaaS adapter integration tests in development container
 integration-test-ca-quicbaas-adapter: build-devcontainer
@@ -1926,11 +1920,6 @@ integration-test-authenticode: build-devcontainer
 .PHONY: integration-test-cli
 integration-test-cli: build-devcontainer
 	$(call run-integration-suite,cli)
-
-## integration-test-cmd: Run the command suites (test/integration/cmd) in devcontainer, no shared platformd
-.PHONY: integration-test-cmd
-integration-test-cmd: build-devcontainer
-	$(call run-integration-suite,cmd)
 
 ## integration-test-compute: Run the compute VM multi-protocol suite (test/integration/compute) in devcontainer, platformd on local-qemu
 .PHONY: integration-test-compute
@@ -2536,8 +2525,7 @@ integration-test-compose-full: devcontainer-compose-up
 	@docker exec -e CGO_ENABLED=0 -w /workspace $(DEVCONTAINER_NAME) \
 		go test -v $(TEST_BUILD_TAGS_ARG) -count=1 -parallel 1 -timeout 30m \
 		./test/integration/sdn/... \
-		./test/integration/vtpm/... \
-		./test/integration/datastore/...
+		./test/integration/vtpm/...
 	@$(MAKE) devcontainer-compose-down
 
 .PHONY: integration-test-web
@@ -2817,14 +2805,6 @@ integration-test-ipxe-tftp: build-devcontainer
 integration-test-ipxe-http: build-devcontainer
 	$(call run-integration-suite,ipxe-http)
 
-# =============================================================================
-# Network Authentication Integration Tests
-# =============================================================================
-.PHONY: integration-test-network
-## integration-test-network: Run network authentication integration tests in development container
-integration-test-network: build-devcontainer
-	$(call run-integration-suite,network)
-
 # vTPM Coverage
 .PHONY: coverage-vtpm
 ## coverage-vtpm: Generate vTPM package coverage report
@@ -2868,8 +2848,9 @@ coverage-vtpm:
 #   below; the regex entry stays because that mechanism is deliberately additive.
 # - pkg/compute$$: Requires swtpm and OVS
 # - pkg/qemu$$: Requires swtpm
-# - pkg/swtpm$$: Requires swtpm binary
-# - pkg/vtpm$$: Requires swtpm
+# - pkg/swtpm$$, pkg/vtpm$$: STALE as of 2026-10-25 (#964) — their own tests
+#   replace swtpm with a stand-in on PATH or serve the in-memory simulator on a
+#   unix socket. Re-added to the unit suite through TEST_UNIT_PKGS below.
 # - pkg/sdn/netlink$$: Requires root privileges and netlink
 # - pkg/ipxe$$: Requires network services
 # - pkg/testenv$$: Test helper utilities (not production code)
@@ -2969,6 +2950,11 @@ TEST_EXCLUDE := test/integration|sdk/go/gen|pkg/api/grpc/proto|pkg/api/grpc$$|cm
 # shared endpoint helpers read the variables run-integration-tests.sh exports,
 # built from the ports it gives platformd. Every other file keeps the tag.
 #
+# test/integration/iso added 2026-10-25 (#964 step b): without the integration
+# tag the package is runner.go and grub_detector.go with their tests, which
+# drive the process-group command runner and the GRUB menu detector over local
+# processes, with no platformd. Every other file keeps the tag.
+#
 # scripts/depscheck added 2026-10-15 (#927): `make deps-check`'s parse and
 # decision logic, tested over testdata fixtures with no network. Discovery
 # lists only ./pkg/... and ./cmd/..., so without this entry it would run in no
@@ -2983,7 +2969,17 @@ TEST_EXCLUDE := test/integration|sdk/go/gen|pkg/api/grpc/proto|pkg/api/grpc$$|cm
 # integration tag the package is cli_exec.go, commands.go and cli_exec_test.go,
 # the CLI adapter's argument rendering and output parsing, tested with no
 # daemon. Every other file keeps the tag.
-TEST_UNIT_PKGS := ./pkg/app/ ./pkg/daemon/commands/ ./pkg/cli/commands/bootstrap/ ./pkg/webservice/v1/ ./pkg/dns/ ./pkg/cli/commands/admin/ ./pkg/platform/ ./test/integration/helpers/surface/ ./test/integration/helpers/ ./test/integration/tenant/ ./scripts/depscheck/ ./scripts/foreignfailures/
+# pkg/swtpm and pkg/vtpm added 2026-10-25 (#964 step b): green on a host with
+# no swtpm and no QEMU. The swtpm tests put a stand-in swtpm on PATH; the vtpm
+# tests run the EK certificate injector against the in-memory TPM simulator
+# served on a unix socket. The real-swtpm checks stay in test/integration/vtpm.
+# test/integration/bmc/vbmc and test/integration/bmc/rmcpsim added 2026-10-25
+# (#964 step b): the self-tests of the bmc suite's two simulators, the Redfish
+# vBMC and the IPMI RMCP+ responder. Neither package carries a build tag; the
+# vbmc tests drive its routes through httptest and the rmcpsim tests talk to
+# the responder over 127.0.0.1 UDP, so they need no daemon, container or root.
+# TEST_EXCLUDE's test/integration entry kept them out of every unit stage.
+TEST_UNIT_PKGS := ./pkg/app/ ./pkg/daemon/commands/ ./pkg/cli/commands/bootstrap/ ./pkg/webservice/v1/ ./pkg/dns/ ./pkg/cli/commands/admin/ ./pkg/platform/ ./pkg/swtpm/ ./pkg/vtpm/ ./test/integration/helpers/surface/ ./test/integration/helpers/ ./test/integration/bmc/vbmc/ ./test/integration/bmc/rmcpsim/ ./test/integration/iso/ ./test/integration/tenant/ ./scripts/depscheck/ ./scripts/foreignfailures/
 
 # RACE_EXCLUDE: packages with data races that are KNOWN and TRACKED. The race
 # gate must be green to be a gate, so a package lands here only with an issue

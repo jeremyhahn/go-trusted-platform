@@ -493,17 +493,23 @@ func testCustomizeOperations(t *testing.T, ctx context.Context, cmd ISOCommands,
 		require.NoError(t, os.MkdirAll(filepath.Join(overlayDir, "etc"), 0o755))
 		require.NoError(t, os.WriteFile(filepath.Join(overlayDir, "etc", "test-overlay"), []byte("test content\n"), 0o644))
 
+		// The pre-fetch reads the local mirror, not dl-cdn.alpinelinux.org:
+		// nothing installs from this tree, so the fixture packages suffice.
+		mirror := newAlpineMirror(t)
 		platformdPath, platformConfig := customizeInputs(t)
 		result, err := cmd.Customize(testCtx, CustomizeOptions{
 			ISODir:         isoDir,
 			Overlay:        overlayDir,
 			PlatformdPath:  platformdPath,
 			PlatformConfig: platformConfig,
+			ConfigFile:     mirror.writeBuildConfig(t, workDir),
 			WorkDir:        workDir,
 		})
 		require.NoError(t, err)
 		assert.True(t, result.Success)
 		assert.Equal(t, isoDir, result.ISODir)
+		require.NoError(t, requireOfflineRepository(isoDir))
+		mirror.requireServedPreFetch(t)
 	})
 }
 

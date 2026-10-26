@@ -16,6 +16,15 @@ for. Profile-to-policy conversion is now
 validity are `TestDeviceRole_IsValid`, `TestAuthMethod_IsValid` and
 `TestACLConfig_IsValid` in `pkg/device/entities/profile_test.go`.
 
+### 1a. ISO runner and GRUB detector (unit suite, #964 step b)
+
+`runner.go` (`CLIAdapter`, `runCommand`, `runCommandWithTimeout` and their
+error types) and `grub_detector.go` carry no build tag. Their tests,
+`runner_test.go` and `grub_detector_test.go`, need no daemon and run in
+`make test` through the Makefile's `TEST_UNIT_PKGS`. `cli_adapter.go`,
+`commands.go`, `helpers.go` and `multiprotocol_test.go` keep the
+`integration` tag.
+
 ### 2. `/test/integration/sdn/state_transition_integration_test.go`
 
 Tests the SDN policy engine state transitions with device profiles:
@@ -210,9 +219,14 @@ Implements the `policy.FlowController` interface for testing:
 
 ## Test Execution
 
+### Run the ISO unit tests (runner, GRUB detector):
+```bash
+make test-pkg PKG=./test/integration/iso/
+```
+
 ### Run all ISO integration tests:
 ```bash
-go test -v ./test/integration/iso/...
+make integration-test-iso
 ```
 
 ### Run all SDN integration tests:

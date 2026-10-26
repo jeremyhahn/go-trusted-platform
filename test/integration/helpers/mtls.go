@@ -141,27 +141,21 @@ func TenantTLSConfig() *tls.Config {
 // no_application_protocol BEFORE opening a stream, so their request framing
 // never executed and every call failed in a way that looked like a refusal
 // (#486, #480). Taking the protocol from the server's own constant makes the
-// wrong value unconstructible rather than merely detectable.
-//
-// An explicit override is still accepted, because a negative test must be
-// able to offer a deliberately wrong protocol: a helper that makes the bug
-// unconstructible must not also make the test for the bug unwritable.
-func QUICTLSConfig(overrideALPN ...string) *tls.Config {
-	return withQUICALPN(TLSConfigOrInsecure(), overrideALPN)
+// wrong value unconstructible rather than merely detectable. The server's
+// refusal of a wrong protocol is TestServerRefusesAWrongALPNAtTheHandshake in
+// pkg/api/quic.
+func QUICTLSConfig() *tls.Config {
+	return withQUICALPN(TLSConfigOrInsecure())
 }
 
 // TenantQUICTLSConfig is QUICTLSConfig for the ForeignTenantID credential.
 func TenantQUICTLSConfig() *tls.Config {
-	return withQUICALPN(TenantTLSConfig(), nil)
+	return withQUICALPN(TenantTLSConfig())
 }
 
-// withQUICALPN offers quicwire.ALPNProtocol on tlsConfig, or overrideALPN
-// when one is given.
-func withQUICALPN(tlsConfig *tls.Config, overrideALPN []string) *tls.Config {
+// withQUICALPN offers quicwire.ALPNProtocol on tlsConfig.
+func withQUICALPN(tlsConfig *tls.Config) *tls.Config {
 	tlsConfig.NextProtos = []string{quicwire.ALPNProtocol}
-	if len(overrideALPN) > 0 {
-		tlsConfig.NextProtos = overrideALPN
-	}
 	return tlsConfig
 }
 

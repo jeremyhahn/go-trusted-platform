@@ -754,9 +754,11 @@ What the integration tier proves:
 |---|---|
 | `TestOVMFSecureBootEnforcement` | Platform-generated PK/KEK/DB enrolled into a real OVMF store; a DB-signed EFI payload **boots**; unsigned and wrongly-signed payloads are refused by the firmware with `Access Denied` |
 | `TestModuleSignOpenSSLInterop` | The detached CMS is valid to OpenSSL — an independent implementation — over the exact module bytes, with the correct trailer and magic |
-| `TestModuleSignCorruptedSignatureFailsVerify` / `TestModuleSignTamperedContentFailsVerify` | Signature and content binding |
-| `TestUnsignedModuleLacksTrailer` | The precise condition `CONFIG_MODULE_SIG_FORCE` rejects |
 | `TestFIPSKernelModuleSignatureEnforcement` | A real FIPS kernel rejects an unsigned module at `insmod` with `ENOKEY`, loads the build-signed module, and loads the same module re-signed by `pkg/modulesign` |
+
+`pkg/modulesign`'s unit suite covers in memory what needs no external
+verifier: the signer lookup by issuer and serial, and which check rejects a
+tampered module or a corrupted signature.
 
 **Seams for fault injection.** `uefi.EfivarsPath` is a package var;
 `EnrollKeysToEfivarsDir` and `ReadSecureBootStatusFromDir` take an explicit

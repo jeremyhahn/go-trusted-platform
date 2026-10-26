@@ -110,6 +110,39 @@ func TestAttestationToken_IsValidFor(t *testing.T) {
 			valid:     true,
 		},
 		{
+			name: "valid - match on a later list entry",
+			token: &AttestationToken{
+				Expires:           time.Now().Add(time.Hour),
+				AllowedOperations: []string{"A", "AAAA", "TLSA"},
+				AllowedZones:      []string{"example.com.", "test.org."},
+			},
+			operation: "AAAA",
+			zone:      "test.org.",
+			valid:     true,
+		},
+		{
+			name: "invalid - wildcard operation, zone not allowed",
+			token: &AttestationToken{
+				Expires:           time.Now().Add(time.Hour),
+				AllowedOperations: []string{"*"},
+				AllowedZones:      []string{"example.com."},
+			},
+			operation: "A",
+			zone:      "other.com.",
+			valid:     false,
+		},
+		{
+			name: "invalid - wildcard zone, operation not allowed",
+			token: &AttestationToken{
+				Expires:           time.Now().Add(time.Hour),
+				AllowedOperations: []string{"A"},
+				AllowedZones:      []string{"*"},
+			},
+			operation: "MX",
+			zone:      "any-domain.com.",
+			valid:     false,
+		},
+		{
 			name: "invalid - operation not allowed",
 			token: &AttestationToken{
 				Expires:           time.Now().Add(time.Hour),

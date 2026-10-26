@@ -81,11 +81,9 @@ declare -A TARGET_PACKAGES=(
     [acme]="./test/integration/acme/..."
     [authenticode]="./test/integration/authenticode/..."
     [cli]="./test/integration/cli/..."
-    [cmd]="./test/integration/cmd/..."
     [compute]="./test/integration/compute/..."
     [container]="./test/integration/container/..."
     [daemon]="./test/integration/daemon/..."
-    [datastore]="./test/integration/datastore/..."
     [dns]="./test/integration/dns/..."
     [e2e]="./test/integration/e2e/..."
     [helpers]="./test/integration/helpers/..."
@@ -95,7 +93,6 @@ declare -A TARGET_PACKAGES=(
     [ipxe-http]="./test/integration/ipxe/..."
     [iso]="./test/integration/iso/..."
     [kms]="./test/integration/kms/..."
-    [network]="./test/integration/network/..."
     [pxe]="./test/integration/pxe/..."
     [registry]="./test/integration/registry/..."
     [sdk]="./test/integration/sdk/..."
@@ -165,7 +162,7 @@ declare -A TARGET_TIMEOUTS=(
 # lb drives OVS directly; installer runs a real dnsmasq against a stub
 # upstream it starts; the ipxe suites start their own iPXE server on
 # 127.0.0.1; testenv-enrollment and e2e boot their own QEMU guests;
-# datastore, sdk and cmd embed what they test; helpers
+# sdk embeds what it tests; helpers
 # tests the shared harness library in-process. The
 # targets that do more than skip the daemon -- cold-start, barrier-gate, bmc
 # and the host-built-input suites -- have their own branch in Main.
@@ -173,8 +170,6 @@ declare -A TARGET_NO_DAEMON=(
     [lb]=1
     [installer]=1
     [testenv-enrollment]=1
-    [cmd]=1
-    [datastore]=1
     [e2e]=1
     [helpers]=1
     [ipxe]=1
@@ -212,9 +207,9 @@ declare -A TARGET_NO_DAEMON=(
 # suites run all at once, and its generators would starve them the way they
 # starved sdn. In the daemon-backed list it runs alone, after sdn.
 ALL_TARGETS=(
-    helpers datastore sdk cmd ipxe installer e2e
+    helpers sdk ipxe installer e2e
     root acme attestation authenticode ca ceremony cli
-    container daemon device dns fido2 iam iso kms luks network
+    container daemon device dns fido2 iam iso kms luks
     ntp objectstorage piv provision proxy registry sdn
     sdn-stress secrets tenant vpn vtpm tpm
 )
@@ -1145,7 +1140,7 @@ fi
 # Phase 2: Setup infrastructure
 setup_devices
 
-# OVS backs the SDN, network, lb, compute and e2e suites.
+# OVS backs the SDN, lb, compute and e2e suites.
 start_ovs || echo "WARNING: OVS setup failed; the suites that need OVS have none"
 
 # swtpm backs the shared platformd's TPM and every vTPM suite. The vtpm
