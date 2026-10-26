@@ -81,7 +81,6 @@ declare -A TARGET_PACKAGES=(
     [acme]="./test/integration/acme/..."
     [authenticode]="./test/integration/authenticode/..."
     [cli]="./test/integration/cli/..."
-    [cluster]="./test/integration/cluster/..."
     [cmd]="./test/integration/cmd/..."
     [compute]="./test/integration/compute/..."
     [container]="./test/integration/container/..."
@@ -161,14 +160,13 @@ declare -A TARGET_TIMEOUTS=(
     [testenv-enrollment]="40m"
     [e2e]="50m"
     [compute]="30m"
-    [cluster]="15m"
 )
 
 # Targets that run without the shared platformd. Each suite needs no daemon:
 # lb drives OVS directly; installer runs a real dnsmasq against a stub
 # upstream it starts; the ipxe suites start their own iPXE server on
 # 127.0.0.1; testenv-enrollment and e2e boot their own QEMU guests;
-# datastore, sdk, cluster and cmd embed what they test; helpers
+# datastore, sdk and cmd embed what they test; helpers
 # tests the shared harness library in-process. The
 # targets that do more than skip the daemon -- cold-start, barrier-gate, bmc
 # and the host-built-input suites -- have their own branch in Main.
@@ -176,7 +174,6 @@ declare -A TARGET_NO_DAEMON=(
     [lb]=1
     [installer]=1
     [testenv-enrollment]=1
-    [cluster]=1
     [cmd]=1
     [datastore]=1
     [e2e]=1
@@ -216,7 +213,7 @@ declare -A TARGET_NO_DAEMON=(
 # suites run all at once, and its generators would starve them the way they
 # starved sdn. In the daemon-backed list it runs alone, after sdn.
 ALL_TARGETS=(
-    helpers datastore sdk cluster cmd ipxe installer e2e
+    helpers datastore sdk cmd ipxe installer e2e
     root acme attestation authenticode ca ceremony cli
     container daemon device dns fido2 iam iso kms luks network
     ntp objectstorage piv provision proxy quic registry sdn

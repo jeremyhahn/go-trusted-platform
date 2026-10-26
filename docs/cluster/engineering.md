@@ -537,21 +537,21 @@ their schema, compatibility and migration rules are go-qrdb's.
 | Unit | `pkg/cluster/node_test.go` | `ExtendedNode*` types and the registry |
 | Unit | `pkg/cluster/state_test.go` | The transition table and `RaftStateManager` |
 | Unit | `pkg/cluster/errors_test.go` | Message formatting and `Unwrap` |
+| Unit | `pkg/cluster/multinode_test.go` | Real coordinators and membership managers over one shared in-memory Raft group: formation, discovery, follower and majority loss, rejoin, leader failover |
+| Unit | `pkg/sdn/cluster/multinode_test.go` | Per-node state managers over one store: concurrent reads agree, state outlives the writing node |
 | Bench | `pkg/cluster/benchmark_test.go` | |
 | Unit | `pkg/cli/commands/cluster/*_test.go` | Command wiring, flag validation, formatting helpers |
-| Integration | `test/integration/cluster/` | Multi-node Raft, consensus, failover |
 
 Make targets:
 
 ```sh
-make integration-test-cluster            # 3-node cluster in the devcontainer
-make integration-test-cluster-consensus  # -run '.*Consensus.*'
-make integration-test-cluster-failover
+make test-pkg PKG=./pkg/cluster/
+make test-pkg PKG=./pkg/sdn/cluster/
 make stress-sdn-cluster                  # -run TestCluster ./stress/...
 ```
 
-The suite runs on the integration build tags alone: no environment variable
-gates its replication tests.
+There is no cluster integration suite: the multi-node tests run in memory in
+`make test`, with the leader-check ticks on `testing/synctest` time.
 
 **Fault-injection seams.** `RaftOperator` is the seam: a fake that returns
 `ErrClusterUnavailable`, an empty node list, no leader, or a leader that flips
