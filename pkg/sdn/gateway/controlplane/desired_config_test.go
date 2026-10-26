@@ -11,9 +11,7 @@
 // 2. Commercial License
 //    Contact licensing@automatethethings.com for commercial licensing options.
 
-//go:build integration
-
-package proxy
+package controlplane
 
 import (
 	"context"
@@ -38,7 +36,6 @@ import (
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/controlplane"
 	gwstate "github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/state"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
 	restgateway "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/gateway"
@@ -120,16 +117,22 @@ func newControlPlaneTLS(t *testing.T, gatewayID string) controlPlaneTLS {
 	}
 }
 
+type snapshotOf struct{ gw *gateway.Gateway }
+
+func (s snapshotOf) Collect(context.Context) (*gwstate.Snapshot, error) { return s.gw.Snapshot(), nil }
+
 // TestDesiredConfigReachesTheGateway drives the real control loop end to
 // end (#555): the platform's control-plane router serves a typed desired
-// config over mTLS, the gateway's reporter fetches it, the reconciler
-// applies it through a real gateway node, and the gateway's telemetry
-// snapshot — posted back over the same mTLS session and stored by the
-// control plane — reports the version it converged on. A second document
-// carrying a section this gateway does not run is observed as a typed
-// apply failure on the control plane, with the previous version retained.
+// config over mTLS on loopback, the gateway's reporter fetches it, the
+// reconciler applies it through a real gateway node, and the gateway's
+// telemetry snapshot — posted back over the same mTLS session and stored by
+// the control plane — reports the version it converged on. A second
+// document carrying a section this gateway does not run is observed as a
+// typed apply failure on the control plane, with the previous version
+// retained.
 func TestDesiredConfigReachesTheGateway(t *testing.T) {
 	const gatewayID = "gw-desired-config"
+	const loopInterval = 20 * time.Millisecond
 	tlsFix := newControlPlaneTLS(t, gatewayID)
 	logger := logging.NewLogger(slog.LevelError, io.Discard)
 
@@ -170,27 +173,31 @@ func TestDesiredConfigReachesTheGateway(t *testing.T) {
 	client := &http.Client{Timeout: 10 * time.Second, Transport: &http.Transport{TLSClientConfig: &tls.Config{
 		Certificates: []tls.Certificate{tlsFix.client}, RootCAs: tlsFix.pool, MinVersion: tls.VersionTLS12,
 	}}}
-	reporter, err := controlplane.NewReporter(controlplane.ReporterConfig{
-		CPBaseURL: srv.URL, GatewayID: gatewayID, Interval: 200 * time.Millisecond,
+	reporter, err := NewReporter(ReporterConfig{
+		CPBaseURL: srv.URL, GatewayID: gatewayID, Interval: loopInterval,
 		HTTPClient: client, Collector: snapshotOf{gw},
 	})
 	if err != nil {
 		t.Fatalf("NewReporter: %v", err)
 	}
-	reconciler, err := controlplane.NewReconciler(controlplane.ReconcilerConfig{
-		Fetcher: reporter, Applier: gw, Interval: 200 * time.Millisecond,
+	reconciler, err := NewReconciler(ReconcilerConfig{
+		Fetcher: reporter, Applier: gw, Interval: loopInterval,
 	})
 	if err != nil {
 		t.Fatalf("NewReconciler: %v", err)
 	}
-	go func() { _ = reporter.Start(ctx) }()
-	go func() { _ = reconciler.Start(ctx) }()
+	var loops sync.WaitGroup
+	loops.Add(2)
+	go func() { defer loops.Done(); _ = reporter.Start(ctx) }()
+	go func() { defer loops.Done(); _ = reconciler.Start(ctx) }()
+	defer loops.Wait()
+	defer cancel()
 
 	observed := func(pred func(*gwstate.Snapshot) bool) *gwstate.Snapshot {
 		t.Helper()
 		deadline := time.NewTimer(20 * time.Second)
 		defer deadline.Stop()
-		tick := time.NewTicker(100 * time.Millisecond)
+		tick := time.NewTicker(loopInterval / 2)
 		defer tick.Stop()
 		for {
 			select {
@@ -224,7 +231,7 @@ func TestDesiredConfigReachesTheGateway(t *testing.T) {
 	if second.DesiredConfig.Version != "rev-1" {
 		t.Fatalf("a failed apply must not advance the version: %+v", second.DesiredConfig)
 	}
-	if want := gwstate.SectionLoadBalancer; !contains(second.DesiredConfig.LastError, want) {
+	if want := gwstate.SectionLoadBalancer; !strings.Contains(second.DesiredConfig.LastError, want) {
 		t.Fatalf("LastError should name the failing section %q: %q", want, second.DesiredConfig.LastError)
 	}
 
@@ -234,12 +241,4 @@ func TestDesiredConfigReachesTheGateway(t *testing.T) {
 	if third.DesiredConfig.LastError != "" {
 		t.Fatalf("rev-3 should have applied cleanly: %+v", third.DesiredConfig)
 	}
-}
-
-type snapshotOf struct{ gw *gateway.Gateway }
-
-func (s snapshotOf) Collect(context.Context) (*gwstate.Snapshot, error) { return s.gw.Snapshot(), nil }
-
-func contains(haystack, needle string) bool {
-	return strings.Contains(haystack, needle)
 }

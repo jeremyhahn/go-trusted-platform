@@ -562,7 +562,7 @@ Prometheus exporter in `pkg/proxy`** — the snapshot is the interface.
 | Unit | `pkg/api/daemon/proxy_store_test.go`, `proxy_grpc_service_test.go`, `proxy_mcp_test.go` | Store semantics and error mapping |
 | Unit | `pkg/api/rest/proxy_handlers_test.go`, `pkg/api/quic/proxy_handlers_test.go`, `pkg/api/grpc/proxy_service_test.go` | Per-transport adapters |
 | Unit | `pkg/policy/opa/proxy_authz_test.go` | The embedded `proxy_authz` policy |
-| Integration | `test/integration/proxy/` (`//go:build integration`) | `gatewayd_test.go` — real `BuildProxyHandler` assembly; `multiprotocol_test.go` — the parity suite |
+| Integration | `test/integration/proxy/` (`//go:build integration`) | `multiprotocol_test.go` — the parity suite; the real `BuildProxyHandler` mTLS traffic check is the unit test `TestBuildProxyHandler_ServesMTLSTrafficOverARealHandshake` in `pkg/sdn/gateway/commands`, and the desired-config control loop is `TestDesiredConfigReachesTheGateway` in `pkg/sdn/gateway/controlplane` |
 
 **Fault-injection seams**: the four one-method interfaces, plus
 `proxysvc.DialFunc` / `AttestationDialFunc` / `AuditDialFunc` for connection
