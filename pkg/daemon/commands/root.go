@@ -124,7 +124,6 @@ func init() {
 	rootCmd.PersistentFlags().StringVarP(&InitParams.ConfigFile, "config", "c", "", "Path to specific config file (overrides config-dir)")
 	rootCmd.PersistentFlags().StringVarP(&InitParams.LogDir, "log-dir", "", "trusted-data/log", "Platform logs directory")
 	rootCmd.PersistentFlags().StringVarP(&InitParams.CADir, "ca-dir", "", "trusted-data/ca", "Certificate Authority data directory")
-	rootCmd.PersistentFlags().StringVarP(&InitParams.RuntimeUser, "setuid", "", "root", "The operating system user to run as")
 	rootCmd.PersistentFlags().IntVarP(&InitParams.PlatformCA, "intermediate", "", 1, "The target Certificate Authority index")
 	rootCmd.PersistentFlags().BoolVar(&bSOPin, "so-pin", false, "Security Officer PIN / password")
 	rootCmd.PersistentFlags().BoolVar(&bPin, "pin", false, "Platform Administrator or user PIN / password")

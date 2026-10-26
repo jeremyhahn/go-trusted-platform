@@ -374,7 +374,6 @@ type App struct {
 	PrivateIPv4      net.IP                        `yaml:"-" json:"-" mapstructure:"-"`
 	PrivateIPv6      net.IP                        `yaml:"-" json:"-" mapstructure:"-"`
 	Random           io.Reader                     `yaml:"-" json:"-" mapstructure:"-"`
-	RuntimeUser      string                        `yaml:"runtime-user" json:"runtime_user" mapstructure:"runtime-user"`
 	TenantID         string                        `yaml:"tenant-id" json:"tenant_id" mapstructure:"tenant-id"`
 	ShutdownChan     chan bool                     `yaml:"-" json:"-" mapstructure:"-"`
 	TPM              xkmssdk.TrustedPlatformModule `yaml:"-" json:"-" mapstructure:"-"`
@@ -545,7 +544,6 @@ type AppInitParams struct {
 	PlatformDir  string
 	LogDir       string
 	Pin          []byte
-	RuntimeUser  string
 	SOPin        []byte
 }
 

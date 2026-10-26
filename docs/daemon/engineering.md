@@ -147,32 +147,12 @@ it is REST-only.
    the OS cannot supply one. `pkg/app` calls no `log.Fatal`, `Fatalf` or
    `panic` on these paths, and neither does the test helper
    `TestConfigWithStorage`, which returns `(*App, error)`.
-9. **The log file belongs to the runtime user before the UID changes.**
-   `App.DropPrivileges` (`pkg/app/privileges.go`, still without a production
-   caller, #349) looks up `--setuid`, then prepares the log file **while still
-   root**, then sets groups, GID and UID. After `setuid` the process could
-   neither create the file in a root-owned directory nor hand it over.
-   `InitLogFile(uid, gid)` chowns the file when its owner differs from
-   `uid:gid` and always sets its mode (0644; 0777 with `--debug`). It does not
-   probe capabilities: the kernel decides whether the process may chown (root,
-   or `CAP_CHOWN`), and a refusal is `LogFileChownError`, because a log the
-   runtime user cannot write is a start-up failure. Only the file changes
-   hands; the directory is left as the operator made it, since `--log-dir` may
-   name a shared directory such as `/var/log`. Nothing after the open is done
-   by path: the directory is opened with `O_DIRECTORY|O_NOFOLLOW`, the file
-   relative to that descriptor with `O_NOFOLLOW` (created `0600`), and the
-   owner check, `fchown` and `fchmod` all act on the file's descriptor. A
-   symlink at `--log-dir` or at the log file is refused (`LogFileOpenError`,
-   `ENOTDIR` / `ELOOP`), and one swapped in after the open cannot redirect
-   root's chown or chmod to its target. Anything but a regular file (a FIFO,
-   a device node) is `LogFileNotRegularError` and is left untouched; a failed
-   close of the prepared file is `LogFileCloseError`. UIDs and GIDs are unsigned
-   decimals in `0..4294967294`: a sign, a value beyond 32 bits, or the
-   kernel's "leave unchanged" value 4294967295 is a `RuntimeUserUIDError` /
-   `RuntimeUserGIDError` before anything changes (`ParseInt` used to accept
-   `-1`), and `InitLogFile` refuses such an owner with `LogFileOwnerError`.
-   The OS calls are injected (`hostOps`), so `privileges_test.go` covers every
-   step and its order without changing credentials or touching the host.
+9. **systemd owns the runtime user (#349).** `platformd` does not change its
+   own credentials: there is no `--setuid` flag and no privilege drop. The
+   unit's `User=` sets the user it runs as; both shipped units
+   (`configs/os/platformd.service`, `configs/os/trusted-platform.service`) run
+   `User=root`, because the daemon needs root for the TPM, OVS and network
+   namespaces. The log file is created by whoever starts the process.
 
 ## 6. Authorization
 

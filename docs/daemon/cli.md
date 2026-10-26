@@ -586,7 +586,6 @@ Persistent flags:
 | `--so-pin` | | bool | `false` | Supply the Security Officer PIN interactively |
 | `--raw-pin` | | string | | User PIN, non-interactive |
 | `--raw-so-pin` | | string | | Security Officer PIN, non-interactive |
-| `--setuid` | | string | `root` | User to drop to when started as root. Parsed but not yet applied: no startup path calls `App.DropPrivileges`, which prepares the log file for that user while still root, then drops groups, GID and UID, and returns a typed error (user lookup, a UID/GID outside `0..4294967294`, log file, setgroups/setgid/setuid) rather than exiting; see [engineering.md](engineering.md) §5 |
 
 `platformd serve` flags. Each bind host and port also has a config key
 `daemon.<proto>.bind-host` / `daemon.<proto>.port` and an environment variable
