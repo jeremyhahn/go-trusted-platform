@@ -43,7 +43,7 @@ file plus coverage files. The core packages:
 | `pkg/sdn/openflow` | Client against a mock switch (`client_test.go`, `client_batch_test.go`), message encoding (`messages_test.go`, `protocol_test.go`), groups, meters, conntrack, Nicira extensions, tunnels |
 | `pkg/sdn/ovs` | OVSDB client against a mock server (`client_test.go`), bridges, ports, flows and flow grammar, QoS, VXLAN, `ovs-appctl` (`appctl_test.go`), types |
 | `pkg/sdn/netlink` | Links and TAP devices, with mock netlink handles (`mock_netlink_test.go`, `tap_mock_test.go`) |
-| `pkg/sdn/policy` | Engine, state machine (`state_test.go`), certificate extraction, monitor, enrollment hook, quarantine, admission, zone flows |
+| `pkg/sdn/policy` | Engine, state machine (`state_test.go`), port state transitions across network phases against a recording flow controller (`state_transition_test.go`), certificate extraction, monitor, enrollment hook, quarantine, admission, zone flows |
 
 ### Mock Servers
 
@@ -83,7 +83,7 @@ are generated in the tests.
 | `arp_native_test.go` | The pure Go ARP reader against the kernel table (`TestNativeARP_*`) |
 | `ovsdb_test.go`, `bridge_test.go`, `port_test.go`, `bridge_port_management_test.go`, `tap_test.go` | OVSDB, bridges, ports, TAP/veth/patch ports |
 | `flow_test.go`, `flow_batch_test.go`, `openflow_rules_test.go` | Flow install, removal, priorities, per-phase rules |
-| `policy_engine_integration_test.go`, `state_transition_integration_test.go`, `network_provisioning_test.go` | Policy engine, port state transitions, provisioning |
+| `policy_engine_integration_test.go`, `network_provisioning_test.go` | Policy engine, provisioning |
 | `multiprotocol_test.go`, `overlay_multiprotocol_test.go`, `ipam_test.go`, `zone_test.go`, `nat64_surface_test.go`, `perf_cli_test.go` | The SDN, overlay, IPAM, zone, NAT64 and perf surfaces over CLI, REST, gRPC, QUIC, MCP and Unix |
 | `gateway_*_test.go`, `ct_firewall_test.go`, `nat_dual_uplink_test.go`, `group_lb_test.go`, `nat64_*_test.go` | The gateway datapath |
 | `*_netns_test.go`, `overlay_nd_test.go` | Network-namespace tests: FHRP, host firewall, tunnels, ND suppression |

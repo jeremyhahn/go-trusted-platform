@@ -358,9 +358,10 @@ BUILD_TAGS_ARG          := $(if $(strip $(BUILD_TAGS)),-tags '$(strip $(BUILD_TA
 # Integration tests always need codec tags for QUIC protocol support.
 # The go-codec library uses build tags to compile real codecs vs stubs.
 INTEGRATION_CODEC_TAGS  := codec_msgpack codec_json codec_cbor
-# Integration builds carry the vector service (the WITH_VECTOR=1 tags) so the
-# quicbaas and sdk suites' Vector assertions run against a real vector store;
-# pkg/storage/quicbaas.TestConfig enables it in exactly such a build.
+# Integration builds carry the vector service (the WITH_VECTOR=1 tags), and
+# pkg/storage/quicbaas.TestConfig enables it in exactly such a build. The
+# factory's Vector assertion runs as a unit test; add these tags through
+# GO_BUILD_TAGS to run it against a real vector store.
 INTEGRATION_VECTOR_TAGS := vector qrdb_vector
 TEST_BUILD_TAGS         := integration $(INTEGRATION_CODEC_TAGS) $(INTEGRATION_VECTOR_TAGS) $(strip $(BUILD_TAGS))
 TEST_BUILD_TAGS_ARG     := -tags '$(strip $(TEST_BUILD_TAGS))'
@@ -1946,11 +1947,6 @@ integration-test-pxe: build-devcontainer
 integration-test-registry: build-devcontainer
 	$(call run-integration-suite,registry)
 
-## integration-test-sdk: Run the SDK suite (test/integration/sdk) in devcontainer, no shared platformd
-.PHONY: integration-test-sdk
-integration-test-sdk: build-devcontainer
-	$(call run-integration-suite,sdk)
-
 ## bench-ntp: Run time-synchronization benchmarks
 .PHONY: bench-ntp
 bench-ntp:
@@ -2172,6 +2168,11 @@ DEVCONTAINER_DOCKERFILE := build/docker/devcontainer/Dockerfile
 DEVCONTAINER_COMPOSE := build/docker/devcontainer/compose.yaml
 DEVCONTAINER_IMAGE := trusted-platform-dev:latest
 DEVCONTAINER_NAME := trusted-platform-devcontainer
+
+# DEVCONTAINER_WAIT_FOR loads the harness's bounded readiness polls (wait_for,
+# no_process_matching) into a `docker exec ... bash -c` script, from the
+# checkout the devcontainer mounts at /workspace (#964).
+DEVCONTAINER_WAIT_FOR := source /workspace/build/docker/devcontainer/wait-for.sh
 
 # The toolchain image is tagged with a hash of everything baked into it, so a
 # change to the Dockerfile, a pin or a module list builds a new tag and an
@@ -2516,9 +2517,8 @@ stress-sdn-local:
 ## devcontainer-compose-up: Start all integration test services via docker-compose
 devcontainer-compose-up: build-devcontainer
 	@echo "Starting integration test environment with docker-compose..."
-	@cd build/docker/devcontainer && docker compose up -d
-	@echo "Waiting for services to be ready..."
-	@sleep 5
+	@echo "Waiting for services to be running (healthy, where a healthcheck is defined)..."
+	@cd build/docker/devcontainer && docker compose up -d --wait --wait-timeout 120
 	@cd build/docker/devcontainer && docker compose ps
 
 .PHONY: devcontainer-compose-down
@@ -2559,7 +2559,9 @@ integration-test-web: devcontainer-compose-up
 	-@docker exec $(DEVCONTAINER_NAME) pkill -9 -f 'platformd-web-test' 2>/dev/null || true
 	-@docker exec $(DEVCONTAINER_NAME) pkill -9 -f 'next dev' 2>/dev/null || true
 	-@docker exec $(DEVCONTAINER_NAME) pkill -9 -f 'node.*next' 2>/dev/null || true
-	@sleep 1
+	@docker exec $(DEVCONTAINER_NAME) bash -c "$(DEVCONTAINER_WAIT_FOR) && \
+		wait_for 10 'the previous web test processes to exit' \
+			no_process_matching '[p]latformd-web-test|[n]ext dev|[n]ode.*next'"
 	@echo "$(YELLOW)→ Initializing swtpm (Software TPM)...$(RESET)"
 	-@docker exec $(DEVCONTAINER_NAME) pkill -f 'swtpm socket' 2>/dev/null || true
 	@docker exec $(DEVCONTAINER_NAME) rm -rf /tmp/swtpm
@@ -2572,7 +2574,8 @@ integration-test-web: devcontainer-compose-up
 		--ctrl type=unixio,path=/tmp/swtpm/swtpm.sock.ctrl \
 		--flags startup-clear,not-need-init \
 		--log level=5,file=/tmp/swtpm/swtpm.log
-	@sleep 2
+	@docker exec $(DEVCONTAINER_NAME) bash -c "$(DEVCONTAINER_WAIT_FOR) && \
+		wait_for 10 'swtpm socket /tmp/swtpm/swtpm.sock' test -S /tmp/swtpm/swtpm.sock"
 	@docker exec $(DEVCONTAINER_NAME) ls -la /tmp/swtpm/
 	@docker exec $(DEVCONTAINER_NAME) pgrep -la swtpm || (echo "swtpm failed to start" && exit 1)
 	@echo ""
@@ -2591,14 +2594,12 @@ integration-test-web: devcontainer-compose-up
 	@docker exec -d $(DEVCONTAINER_NAME) bash -c "\
 		cd /workspace/pkg && \
 		../bin/platformd-web-test --config config.yaml --raw-so-pin 123456 --raw-pin 123456 --intermediate 0 --init serve > /tmp/platformd.log 2>&1"
-	@sleep 5
-	@echo "$(YELLOW)→ Checking backend status...$(RESET)"
-	@docker exec $(DEVCONTAINER_NAME) bash -c "\
-		for i in 1 2 3 4 5 6; do \
-			curl -sk -X POST -H 'Content-Type: application/json' -d '{\"username\":\"healthcheck\"}' https://localhost:8443/api/v1/webauthn/login/begin 2>&1 | grep -q 'entity not found' && echo 'Backend is ready' && exit 0; \
-			echo 'Waiting for backend... attempt '\$$i; \
-			sleep 3; \
-		done; \
+	@echo "$(YELLOW)→ Waiting for the backend web API...$(RESET)"
+	@docker exec $(DEVCONTAINER_NAME) bash -c "$(DEVCONTAINER_WAIT_FOR) || exit 1; \
+		backend_ready() { curl -sk -X POST -H 'Content-Type: application/json' -d '{\"username\":\"healthcheck\"}' https://localhost:8443/api/v1/webauthn/login/begin 2>&1 | grep -q 'entity not found'; }; \
+		if wait_for 60 'platformd web API on https://localhost:8443' backend_ready; then \
+			echo 'Backend is ready'; exit 0; \
+		fi; \
 		echo 'Backend failed to start, showing logs:'; \
 		tail -100 /tmp/platformd.log; \
 		echo '--- swtpm logs ---'; \
@@ -2620,13 +2621,10 @@ integration-test-web: devcontainer-compose-up
 		cd /workspace/web && \
 		npm run dev > /tmp/nextjs.log 2>&1"
 	@echo "$(YELLOW)→ Waiting for dev server to start...$(RESET)"
-	@sleep 5
-	@docker exec $(DEVCONTAINER_NAME) bash -c "\
-		for i in 1 2 3 4 5 6 7 8 9 10; do \
-			curl -s http://localhost:3000 >/dev/null 2>&1 && echo 'Dev server is ready' && exit 0; \
-			echo 'Waiting for dev server... attempt '\$$i; \
-			sleep 2; \
-		done; \
+	@docker exec $(DEVCONTAINER_NAME) bash -c "$(DEVCONTAINER_WAIT_FOR) || exit 1; \
+		if wait_for 60 'Next.js dev server on http://localhost:3000' curl -s http://localhost:3000; then \
+			echo 'Dev server is ready'; exit 0; \
+		fi; \
 		echo 'Dev server failed to start, showing logs:'; \
 		cat /tmp/nextjs.log; \
 		exit 1"
@@ -2671,7 +2669,9 @@ integration-test-web-shell: devcontainer-compose-up
 	@docker exec -d $(DEVCONTAINER_NAME) bash -c "\
 		cd /workspace/pkg && \
 		../bin/platformd-debug --config config.yaml --raw-so-pin 123456 --raw-pin 123456 --init serve > /tmp/platformd.log 2>&1"
-	@sleep 3
+	@docker exec $(DEVCONTAINER_NAME) bash -c "$(DEVCONTAINER_WAIT_FOR) && \
+		wait_for 120 'platformd REST on https://localhost:8443' curl -sk -o /dev/null https://localhost:8443/" || \
+		(docker exec $(DEVCONTAINER_NAME) tail -50 /tmp/platformd.log; exit 1)
 	@echo ""
 	@echo "$(YELLOW)→ Installing frontend dependencies...$(RESET)"
 	@docker exec $(DEVCONTAINER_NAME) bash -c "\
@@ -2814,16 +2814,6 @@ integration-test-ipxe-local:
 ## (TARGET_ENV); without it the DHCP tests fail, they do not skip.
 integration-test-ipxe-dhcp: build-devcontainer
 	$(call run-integration-suite,ipxe-dhcp)
-
-.PHONY: integration-test-ipxe-tftp
-## integration-test-ipxe-tftp: Run only TFTP protocol tests
-integration-test-ipxe-tftp: build-devcontainer
-	$(call run-integration-suite,ipxe-tftp)
-
-.PHONY: integration-test-ipxe-http
-## integration-test-ipxe-http: Run only HTTP boot script tests
-integration-test-ipxe-http: build-devcontainer
-	$(call run-integration-suite,ipxe-http)
 
 # vTPM Coverage
 .PHONY: coverage-vtpm

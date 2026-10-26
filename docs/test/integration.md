@@ -300,15 +300,14 @@ test/integration/
 
 ### Build Tags
 
-The targets build with `TEST_BUILD_TAGS` (Makefile:365): `integration`,
+The targets build with `TEST_BUILD_TAGS` (Makefile:366): `integration`,
 `INTEGRATION_CODEC_TAGS` (`codec_msgpack codec_json codec_cbor`),
 `INTEGRATION_VECTOR_TAGS` (`vector qrdb_vector`, the `WITH_VECTOR=1` tags) and
 the full `BUILD_TAGS` list, which includes any `GO_BUILD_TAGS` passed to `make`
 ([build-tags.md](../configuration/build-tags.md#go_build_tags)).
 `integration` marks a file as needing the devcontainer; the codecs carry the
 QUIC wire protocol and the REST/MCP bodies; the vector tags let the embedded
-`quicbaas.TestConfig` serve the Vector service that the quicbaas and sdk suites
-assert against.
+`quicbaas.TestConfig` serve the Vector service.
 
 Never type the tag list by hand. Outside `make`, derive it:
 
@@ -347,8 +346,8 @@ every key except `cold-start` and `barrier-gate` (each needs the shared
 `netboot`, `nat64` and `ipsec` (each needs inputs built on the host first),
 `pxe` (platformd has no PXE backend) and `secureboot` (needs prebuilt FIPS-kernel
 artifacts), all three in the table below, and the keys that
-only run part of a suite already in the list (`lb`, `ipxe-dhcp`, `ipxe-tftp`,
-`ipxe-http`, `testenv-enrollment`). `tpm` is the last suite on the shared
+only run part of a suite already in the list (`lb`, `ipxe-dhcp`,
+`testenv-enrollment`). `tpm` is the last suite on the shared
 daemon: its Clear case issues `TPM2_Clear` on the shared daemon's swtpm,
 which flushes the SRKs sealing the daemon's platform-policy key passwords, so
 no gRPC, QUIC or MCP handshake succeeds after it. `compute` is not in the
@@ -360,7 +359,7 @@ provider, as `make integration-test-compute` does.
 
 The keys in the runner's `TARGET_NO_DAEMON` map skip the shared `platformd`:
 their suites start their own daemon or cluster, or test something that needs
-none (`sdk`, `installer`, `lb`, `e2e`, `ipxe`
+none (`installer`, `lb`, `e2e`, `ipxe`
 and its slices, `testenv-enrollment`, `helpers`). `helpers` runs
 the integration-tagged tests of the harness library itself; its untagged
 tests run in `make test`. So do the untagged tests of the `tenant` suite's CLI
@@ -393,7 +392,7 @@ generators would starve them too; it runs alone, in `ALL_TARGETS` order right
 after `sdn`.
 
 Under `make integration-test` the daemon-free keys of `ALL_TARGETS` (`helpers`,
-`sdk`, `ipxe`, `installer`, `e2e`)
+`ipxe`, `installer`, `e2e`)
 run concurrently. Each writes its own log under `/tmp/integration-logs/`, and
 the runner prints that log whole when the suite ends, so the `-v` output of two
 suites never interleaves. The daemon-backed keys then run one at a time, in
@@ -421,7 +420,7 @@ Each leg also pays about 5 minutes of image, binary and daemon bring-up.
 | 1 | `acme`, `authenticode`, `ca`, `iso` | 11 + 5 min (`iso` builds an ISO and installs it in a VM) |
 | 2 | `ceremony`, `cli`, `container`, `sdn` | 12 + 5 min (`sdn` runs one test at a time, about 10) |
 | 3 | `daemon`, `device`, `dns`, `sdn-stress` | 7 + 5 min (`sdn-stress` keeps every CPU busy, about 5) |
-| 4 | `helpers`, `sdk`, `ipxe`, `installer`, `e2e`, `root`, `attestation`, `fido2`, `iam`, `kms`, `luks`, `ntp`, `objectstorage` | 10 + 5 min |
+| 4 | `helpers`, `ipxe`, `installer`, `e2e`, `root`, `attestation`, `fido2`, `iam`, `kms`, `luks`, `ntp`, `objectstorage` | 10 + 5 min |
 | 5 | `piv`, `provision`, `proxy`, `registry`, `secrets`, `tenant`, `vpn`, `vtpm`, `tpm`, `compute` | 11 + 5 min (`compute` boots VMs on its own daemon) |
 
 `bash build/docker/devcontainer/run-integration-tests.sh legs` prints
@@ -458,7 +457,7 @@ The runner's `TARGET_ENV` map sets `IPXE_DHCP_ENABLED=1` for `ipxe` and
 `ipxe-dhcp`; with it, the suite's `TestMain` starts the platform DHCP server on
 loopback at a free UDP port, and the DHCP tests exchange real DISCOVER/OFFER
 and REQUEST/ACK with it. Without the variable those tests fail rather than
-skip; `ipxe-http` and `ipxe-tftp` keep them out with their `-run` patterns.
+skip.
 The iPXE suite has no skips at all: its firmware upstream and HTTPS proxy
 upstream are local fixture servers, so it needs no outside network.
 `integration-test-testenv-enrollment` and `integration-test-e2e` pass
@@ -1094,13 +1093,20 @@ the go-quicbaas issue that fixes it. The subtest asserts the typed refusal
 `InvalidRequestTypeError`) or the recorded behaviour (`Defect`), then returns
 before its success path. When a pin bump carries the fix, the assertion fails
 with the issue's name; deleting the gap check restores the success path. The
-quicbaas and sdk suites declare seven today: embedded `quicbaas.Batch/Execute`
+harness declares seven today: embedded `quicbaas.Batch/Execute`
 unrouted (go-quicbaas #1533), embedded Transaction request type mismatch
 (#1319), embedded KV List ignoring `PageSize` (#1534), embedded
 `quicbaas.Ollama` unrouted (#1535), embedded `quicbaas.Vector` unrouted in
 the pinned SDK (#1404, fixed on go-quicbaas main), embedded
 `quicbaas.ParameterStore` unrouted in the pinned SDK and in v0.14.0-alpha, and
 the embedded transport dispatching a KV `Put` on an already-cancelled context.
+
+The Batch, Transaction, Vector and ParameterStore gaps were asserted by the
+in-process `sdk` suite, which moved to `pkg/storage/quicbaas`'s unit suite
+(#964 step b): its `TestFactory_SDKClient_*` tests drive the platform SDK
+client over the factory's embedded SDK, and `checkUnserved` / `checkMistyped`
+in `factory_test.go` assert the same typed refusals and fail when a pin bump
+closes the gap.
 
 ## Best Practices
 

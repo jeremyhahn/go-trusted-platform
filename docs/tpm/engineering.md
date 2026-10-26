@@ -553,6 +553,7 @@ unseal fail.
 | Unit | `pkg/api/tpmnv/nv_test.go` | NV command construction and attribute parsing |
 | Unit | `pkg/api/quic/tpm_handlers_test.go`, `tpm_credential_test.go` | Sub-opcode dispatch, MakeCredential/ActivateCredential |
 | Unit | `pkg/webservice/v1/rest/tpm/router_test.go` | Route registration |
+| Unit | `pkg/api/daemon/tpm_attrs_simulator_test.go` | Capabilities, platform attributes, PCR extend and MakeCredential/ActivateCredential through the gRPC service and the MCP provider, on an in-memory TPM 2.0 simulator: an extend changes the PCR, a refused one leaves it alone, and a credential made for another key's name does not activate |
 | Unit | `sdk/go/services/tpm/converters_info_test.go` | Proto ⇄ domain conversion, with `fakeTPMClient` |
 | Integration | `test/integration/tpm/` | **The six-transport parity suite** |
 

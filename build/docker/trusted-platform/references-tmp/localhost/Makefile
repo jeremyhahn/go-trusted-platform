@@ -81,7 +81,13 @@ build-app:
 
 
 .PHONY: copy-files
-copy-files: copy-binary copy-public-html
+copy-files: copy-binary copy-public-html copy-wait-for
+
+# The entrypoints poll swtpm's port with the harness's wait_for helper.
+.PHONY: copy-wait-for
+copy-wait-for:
+	@cp $(PROJECT_ROOT)/build/docker/devcontainer/wait-for.sh server/wait-for.sh
+	@cp $(PROJECT_ROOT)/build/docker/devcontainer/wait-for.sh client/wait-for.sh
 
 .PHONY: copy-binary
 copy-binary:
@@ -296,6 +302,7 @@ clean: clean-hosts
 	@echo "$(YELLOW)Cleaning up...$(NC)"
 	@docker compose down -v 2>/dev/null || true
 	@rm -f server/platformd server/config.yaml client/platformd client/config.yaml
+	@rm -f server/wait-for.sh client/wait-for.sh
 	@rm -rf server/public_html client/public_html
 	@rm -rf server/trusted-data client/trusted-data
 	@rm -rf firefox

@@ -107,6 +107,23 @@ log()  { [ "${QUIET}" -eq 1 ] || echo "[trusted-browser] $*" >&2; }
 warn() { echo "[trusted-browser] WARN: $*" >&2; }
 err()  { echo "[trusted-browser] ERROR: $*" >&2; exit 1; }
 
+# Bounded readiness polls (wait_for) from the repository's shared helper.
+# shellcheck source=build/docker/devcontainer/wait-for.sh
+source "$(dirname "${BASH_SOURCE[0]}")/../build/docker/devcontainer/wait-for.sh"
+
+# no_process_matching_any <pattern...> succeeds once no process command line
+# matches any pattern (pgrep -f, one pattern at a time; see
+# kill_running_browser for why patterns are not combined).
+no_process_matching_any() {
+	local p
+	for p in "$@"; do
+		if pgrep -f "${p}" >/dev/null 2>&1; then
+			return 1
+		fi
+	done
+	return 0
+}
+
 confirm() {
 	local prompt="$1"
 	if [ "${ASSUME_YES}" -eq 1 ]; then return 0; fi
@@ -278,19 +295,7 @@ kill_running_browser() {
 	# Wait up to 10 seconds for processes to exit and release the DB
 	# lock. Poll instead of fixed-sleep so a fast quit doesn't waste
 	# time and a slow one doesn't trip certutil with SEC_ERROR_INVALID_ARGS.
-	local waited=0
-	while [ "${waited}" -lt 10 ]; do
-		local still_alive=0
-		for p in "${patterns[@]}"; do
-			if pgrep -f "${p}" >/dev/null 2>&1; then
-				still_alive=1
-				break
-			fi
-		done
-		[ "${still_alive}" -eq 0 ] && break
-		sleep 1
-		waited=$((waited + 1))
-	done
+	wait_for 10 "${human_name} to exit after TERM" no_process_matching_any "${patterns[@]}" || true
 
 	# If they're still hanging on, escalate to KILL.
 	for p in "${patterns[@]}"; do
@@ -299,7 +304,11 @@ kill_running_browser() {
 			pkill -KILL -f "${p}" 2>/dev/null || true
 		fi
 	done
-	sleep 1
+
+	# KILL is asynchronous too: the NSS DB lock is released only once the
+	# processes are gone.
+	wait_for 5 "${human_name} to exit after KILL" no_process_matching_any "${patterns[@]}" ||
+		err "${human_name} is still running; its NSS DB stays locked"
 }
 
 install_chrome_trust() {

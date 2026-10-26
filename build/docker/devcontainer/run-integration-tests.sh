@@ -93,13 +93,10 @@ declare -A TARGET_PACKAGES=(
     [helpers]="./test/integration/helpers/..."
     [ipxe]="./test/integration/ipxe/..."
     [ipxe-dhcp]="./test/integration/ipxe/..."
-    [ipxe-tftp]="./test/integration/ipxe/..."
-    [ipxe-http]="./test/integration/ipxe/..."
     [iso]="./test/integration/iso/..."
     [kms]="./test/integration/kms/..."
     [pxe]="./test/integration/pxe/..."
     [registry]="./test/integration/registry/..."
-    [sdk]="./test/integration/sdk/..."
     [secrets]="./test/integration/secrets/..."
     [vtpm]="./test/integration/vtpm/..."
 )
@@ -109,15 +106,13 @@ declare -A TARGET_PACKAGES=(
 # network namespaces, and nothing from the shared platformd.
 # testenv-enrollment is the two-VM ACME enrollment test of the root package;
 # it runs its full mode when INTEGRATION_TEST_SERVER_ISO and
-# INTEGRATION_TEST_CLIENT_ISO name pre-built ISOs. The ipxe-* targets are
-# the protocol slices of the ipxe suite. ipxe-http selects ^TestHTTP so it
-# leaves TestIPXEDHCPToHTTPChain to ipxe-dhcp, which starts a DHCP server.
+# INTEGRATION_TEST_CLIENT_ISO name pre-built ISOs. ipxe-dhcp is the DHCP
+# slice of the ipxe suite; it starts a DHCP server for
+# TestIPXEDHCPToHTTPChain.
 declare -A TARGET_RUN=(
     [lb]='^TestGroupLoadBalancer$'
     [testenv-enrollment]='^TestEnrollmentIntegration$'
     [ipxe-dhcp]='.*DHCP.*'
-    [ipxe-tftp]='.*TFTP.*'
-    [ipxe-http]='^TestHTTP'
 )
 
 # Per-target environment, NAME=value words passed to `env` before go test.
@@ -166,8 +161,7 @@ declare -A TARGET_TIMEOUTS=(
 # lb drives OVS directly; installer runs a real dnsmasq against a stub
 # upstream it starts; the ipxe suites start their own iPXE server on
 # 127.0.0.1; testenv-enrollment and e2e boot their own QEMU guests;
-# sdk embeds what it tests; helpers
-# tests the shared harness library in-process. The
+# helpers tests the shared harness library in-process. The
 # targets that do more than skip the daemon -- cold-start, barrier-gate, bmc
 # and the host-built-input suites -- have their own branch in Main.
 declare -A TARGET_NO_DAEMON=(
@@ -178,9 +172,6 @@ declare -A TARGET_NO_DAEMON=(
     [helpers]=1
     [ipxe]=1
     [ipxe-dhcp]=1
-    [ipxe-tftp]=1
-    [ipxe-http]=1
-    [sdk]=1
 )
 
 # The suites `all` runs on the one shared platformd: the daemon-free suites
@@ -211,7 +202,7 @@ declare -A TARGET_NO_DAEMON=(
 # suites run all at once, and its generators would starve them the way they
 # starved sdn. In the daemon-backed list it runs alone, after sdn.
 ALL_TARGETS=(
-    helpers sdk ipxe installer e2e
+    helpers ipxe installer e2e
     root acme attestation authenticode ca ceremony cli
     container daemon device dns fido2 iam iso kms luks
     ntp objectstorage piv provision proxy registry sdn
@@ -229,7 +220,7 @@ INTEGRATION_LEGS=(
     "acme authenticode ca iso"
     "ceremony cli container sdn"
     "daemon device dns sdn-stress"
-    "helpers sdk ipxe installer e2e root attestation fido2 iam kms luks ntp objectstorage"
+    "helpers ipxe installer e2e root attestation fido2 iam kms luks ntp objectstorage"
     "piv provision proxy registry secrets tenant vpn vtpm tpm compute"
 )
 
