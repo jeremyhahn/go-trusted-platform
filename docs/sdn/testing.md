@@ -1,6 +1,6 @@
 # SDN Testing Strategy
 
-> **Status: REFERENCE** · Last verified: 2026-10-15
+> **Status: REFERENCE** · Last verified: 2026-10-26
 > How the SDN packages are tested.
 
 ## Overview
@@ -14,7 +14,7 @@ devcontainer with real OVS infrastructure.
 | Layer | Location | Dependencies | Run by |
 |-------|----------|--------------|--------|
 | Unit | `pkg/sdn/*/` | None (mocks) | `make test` (CI Gate) |
-| Integration | `test/integration/sdn/` | OVS, swtpm and platformd in the devcontainer | `make integration-test-sdn` (no CI workflow) |
+| Integration | `test/integration/sdn/` | OVS, swtpm and platformd in the devcontainer | `make integration-test-sdn`; CI's full-tier `integration` job |
 | Stress | `test/integration/sdn/stress/` | Privileged devcontainer | `make stress-sdn` |
 | Benchmark | `pkg/sdn/*/benchmark_test.go` | None | `make bench-sdn` |
 
@@ -169,9 +169,13 @@ sudo platformctl iso test client-server --use-ovs
 The CI Gate runs `make test` on every PR but a docs-only one (every changed
 file markdown or under `docs/`), which runs Lint and the Gate only unless it
 is labelled `ci:full`. `make test-race` runs in the full tier: pushes to main
-and PRs labelled `ci:full`. No workflow runs
-`make integration-test-sdn`; run it in the devcontainer before merging SDN
-changes.
+and PRs labelled `ci:full`. The full tier's `integration` job runs
+`make integration-test`, whose runner targets include `sdn`, so the SDN
+suite runs on every push to main, on `workflow_dispatch` and on a `ci:full`
+PR. A failed leaf test fails the job unless `.github/foreign-failures.tsv`
+lists it (see [docs/test/integration.md](../test/integration.md)). Run
+`make integration-test-sdn` in the devcontainer before merging SDN changes;
+an unlabelled PR does not run it.
 
 ## Performance Testing
 
