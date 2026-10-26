@@ -101,24 +101,11 @@ type ServiceConfig struct {
 
 	// WebhookEnabled mounts the install-completion webhook,
 	// POST /api/v1/pxe/webhook/complete (default: false). When false the
-	// route is not served at all. When true it is served WITHOUT
-	// authentication -- see WebhookSecret and #238.
+	// route is not served at all. When true the calling node is
+	// authenticated by its device certificate over mTLS: the record whose
+	// enrolled CertificateSerial is the serial of the verified client
+	// certificate is the one updated, on every transport (#238).
 	WebhookEnabled bool
-
-	// WebhookSecret is reserved for authenticating install-completion
-	// webhooks. It is NOT CURRENTLY USED.
-	//
-	// Setting it protects nothing today: no code reads this field beyond the
-	// validation below, and POST /api/v1/pxe/webhook/complete authenticates
-	// nobody -- the handler identifies the device by a MAC address taken from
-	// the request body, and MACs are not secrets. Configuring a value here
-	// must not be read as evidence the endpoint is authenticated.
-	//
-	// The field is retained rather than removed because what a booting node
-	// should present -- an HMAC over the body using this secret, IDevID over
-	// mTLS, or a provisioning-session token -- is an open architecture
-	// decision. See #238.
-	WebhookSecret string
 }
 
 // FirmwareConfig holds configuration for UEFI firmware verification.
@@ -169,7 +156,6 @@ func NewServiceConfig(plan *netplan.Plan) (*ServiceConfig, error) {
 		EnrollmentTimeout:    DefaultEnrollmentTimeout,
 		EnableAutoQuarantine: true,
 		WebhookEnabled:       false,
-		WebhookSecret:        "",
 	}, nil
 }
 
@@ -229,23 +215,6 @@ func (c *ServiceConfig) Validate() error {
 	// Validate MaxRetries is non-negative
 	if c.MaxRetries < 0 {
 		return &SentinelCauseError{Sentinel: ErrInvalidConfig, Cause: &MessageError{Msg: "MaxRetries must be non-negative"}}
-	}
-
-	// Require WebhookSecret when webhooks are enabled.
-	//
-	// This requirement is currently a placeholder, and the message says so.
-	// Demanding a credential the platform never checks tells an operator the
-	// endpoint is protected when it is not -- a false assurance is worse than
-	// an obviously open endpoint, because it stops the reader looking. The
-	// requirement is kept so that configurations already carrying a secret
-	// stay valid for whatever #238 decides.
-	if c.WebhookEnabled && c.WebhookSecret == "" {
-		return &SentinelCauseError{Sentinel: ErrInvalidConfig, Cause: &MessageError{
-			Msg: "WebhookSecret is required when WebhookEnabled is true. " +
-				"NOTE: this secret is not yet enforced -- the install-completion " +
-				"webhook currently authenticates no caller and identifies the device " +
-				"by a MAC address from the request body. Setting it does not protect " +
-				"the endpoint (see #238)"}}
 	}
 
 	return nil

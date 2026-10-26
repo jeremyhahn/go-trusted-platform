@@ -25,6 +25,7 @@ import (
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/mcp"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/testutil"
 	platform "github.com/jeremyhahn/go-trusted-platform/sdk/go"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	sdkmcp "github.com/jeremyhahn/go-trusted-platform/sdk/go/transport/mcp"
@@ -69,14 +70,36 @@ func serveMCPConfig(t *testing.T, provider *MCPServiceProvider, config *mcp.Conf
 
 	// The daemon serves MCP over TLS 1.3 only, and the SDK sends a bearer
 	// token over https:// only.
+	server := startMCPServer(t, provider, config, &tls.Config{MinVersion: tls.VersionTLS13})
+	return connectMCPAdapter(t, server.URL, phase35ClientTLS(server))
+}
+
+// serveMCPConfigMTLS is serveMCPConfig over mutual TLS: the SDK presents
+// testutil's client certificate and the server verifies it, for a method
+// that takes the caller's identity from the connection.
+func serveMCPConfigMTLS(t *testing.T, provider *MCPServiceProvider, config *mcp.Config) *sdkmcp.Adapter {
+	t.Helper()
+	bundle := testutil.GenerateTestTLSBundle(t)
+	server := startMCPServer(t, provider, config, bundle.ServerTLSConfig())
+	return connectMCPAdapter(t, server.URL, bundle.ClientTLSConfig())
+}
+
+// startMCPServer serves the daemon's MCP handler over TLS with serverTLS.
+func startMCPServer(t *testing.T, provider *MCPServiceProvider, config *mcp.Config, serverTLS *tls.Config) *httptest.Server {
+	t.Helper()
 	server := httptest.NewUnstartedServer(mcp.NewServer(provider, config, logging.DefaultLogger()).Handler())
-	server.TLS = &tls.Config{MinVersion: tls.VersionTLS13}
+	server.TLS = serverTLS
 	server.StartTLS()
 	t.Cleanup(server.Close)
+	return server
+}
 
+// connectMCPAdapter connects the SDK's MCP adapter to addr with clientTLS.
+func connectMCPAdapter(t *testing.T, addr string, clientTLS *tls.Config) *sdkmcp.Adapter {
+	t.Helper()
 	conn, err := sdkmcp.Connect(context.Background(), platform.NewOptions(
-		platform.WithMCPAddr(server.URL),
-		platform.WithTLSConfig(phase35ClientTLS(server)),
+		platform.WithMCPAddr(addr),
+		platform.WithTLSConfig(clientTLS),
 		platform.WithBearerToken(phase35MCPToken),
 	))
 	if err != nil {

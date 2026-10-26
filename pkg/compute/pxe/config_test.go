@@ -43,7 +43,6 @@ func TestDefaultServiceConfig(t *testing.T) {
 	assert.Equal(t, DefaultEnrollmentTimeout, cfg.EnrollmentTimeout)
 	assert.True(t, cfg.EnableAutoQuarantine)
 	assert.False(t, cfg.WebhookEnabled)
-	assert.Equal(t, "", cfg.WebhookSecret)
 }
 
 func TestDefaultFirmwareConfig(t *testing.T) {
@@ -201,23 +200,13 @@ func TestServiceConfig_Validate_NegativeMaxRetries(t *testing.T) {
 	assert.Contains(t, err.Error(), "MaxRetries")
 }
 
-func TestServiceConfig_Validate_WebhookEnabledNoSecret(t *testing.T) {
+// TestServiceConfig_Validate_WebhookEnabledNeedsNoSecret pins #238: the
+// webhook authenticates the node by its mTLS device certificate, so enabling
+// it takes no shared secret.
+func TestServiceConfig_Validate_WebhookEnabledNeedsNoSecret(t *testing.T) {
 	cfg := testServiceConfig()
 	cfg.BridgeName = "br-int"
 	cfg.WebhookEnabled = true
-	cfg.WebhookSecret = ""
-
-	err := cfg.Validate()
-	assert.Error(t, err)
-	assert.True(t, errors.Is(err, ErrInvalidConfig))
-	assert.Contains(t, err.Error(), "WebhookSecret")
-}
-
-func TestServiceConfig_Validate_WebhookEnabledWithSecret(t *testing.T) {
-	cfg := testServiceConfig()
-	cfg.BridgeName = "br-int"
-	cfg.WebhookEnabled = true
-	cfg.WebhookSecret = "supersecret"
 
 	err := cfg.Validate()
 	assert.NoError(t, err)
@@ -402,48 +391,8 @@ func TestServiceConfig_WithAllFieldsSet(t *testing.T) {
 		EnrollmentTimeout:    10 * time.Minute,
 		EnableAutoQuarantine: false,
 		WebhookEnabled:       true,
-		WebhookSecret:        "secret123",
 	}
 
 	err := cfg.Validate()
 	assert.NoError(t, err)
-}
-
-// TestServiceConfig_WebhookSecretMessageSaysItIsNotEnforced guards the honesty
-// of the validation message, not the validation.
-//
-// The requirement itself is a placeholder: WebhookSecret is read nowhere but
-// the check that demands it, and POST /api/v1/pxe/webhook/complete
-// authenticates no caller (#238). An operator who sets a secret because the
-// platform refused to start without one has been told the endpoint is
-// protected. It is not.
-//
-// So the message must keep saying so. If someone shortens it back to a bare
-// "WebhookSecret is required" -- a reasonable-looking tidy-up -- the false
-// assurance returns, and nothing else in the tree would notice. That is what
-// this test exists to stop.
-//
-// Delete this test only together with the requirement, or when the secret is
-// actually enforced.
-func TestServiceConfig_WebhookSecretMessageSaysItIsNotEnforced(t *testing.T) {
-	cfg := testServiceConfig()
-	cfg.BridgeName = "br-int"
-	cfg.WebhookEnabled = true
-	cfg.WebhookSecret = ""
-
-	err := cfg.Validate()
-	assert.Error(t, err)
-
-	msg := err.Error()
-	for _, want := range []string{
-		"not yet enforced",
-		"authenticates no caller",
-		"#238",
-	} {
-		assert.Containsf(t, msg, want,
-			"the validation message must not imply the webhook is protected; "+
-				"it is missing %q. See #238 -- if the secret is now genuinely "+
-				"enforced, remove this test with the placeholder, do not weaken it",
-			want)
-	}
 }

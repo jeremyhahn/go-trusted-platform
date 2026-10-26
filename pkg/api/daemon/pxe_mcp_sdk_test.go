@@ -35,7 +35,9 @@ func connectPXEMCP(t *testing.T, server platformv1.PXEServiceServer, scopes ...s
 		Subject: "operator",
 		Scopes:  scopes,
 	}}}
-	return serveMCPConfig(t, provider, config).Connection()
+	// mTLS, because the install-completion webhook authenticates the node by
+	// its verified client certificate (#238).
+	return serveMCPConfigMTLS(t, provider, config).Connection()
 }
 
 // TestSDKMCP_PXEMethods drives every PXEService method through the SDK's MCP

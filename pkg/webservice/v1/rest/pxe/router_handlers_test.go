@@ -15,9 +15,13 @@ package pxe
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/json"
 	"io"
 	"log/slog"
+	"math/big"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -128,13 +132,28 @@ func handlerRoot(server platformv1.PXEServiceServer) *mux.Router {
 }
 
 func serveHandler(router *mux.Router, method, path, body string) *httptest.ResponseRecorder {
+	return serveHandlerTLS(router, method, path, body, verifiedNodeTLS())
+}
+
+// serveHandlerTLS serves one request that arrived on a connection with state:
+// nil is plain HTTP.
+func serveHandlerTLS(router *mux.Router, method, path, body string, state *tls.ConnectionState) *httptest.ResponseRecorder {
 	var reader io.Reader
 	if body != "" {
 		reader = strings.NewReader(body)
 	}
+	req := httptest.NewRequest(method, path, reader)
+	req.TLS = state
 	rec := httptest.NewRecorder()
-	router.ServeHTTP(rec, httptest.NewRequest(method, path, reader))
+	router.ServeHTTP(rec, req)
 	return rec
+}
+
+// verifiedNodeTLS is a connection whose client certificate the TLS stack
+// verified: a node presenting its device certificate over mTLS (#238).
+func verifiedNodeTLS() *tls.ConnectionState {
+	leaf := &x509.Certificate{SerialNumber: big.NewInt(7), Subject: pkix.Name{CommonName: "node"}}
+	return &tls.ConnectionState{VerifiedChains: [][]*x509.Certificate{{leaf}}}
 }
 
 // envelope is the restwire.WebServiceResponse every handler answers with.
@@ -382,6 +401,27 @@ func TestWebhookComplete_NilServerAnswersUnavailable(t *testing.T) {
 
 	assert.Equal(t, http.StatusServiceUnavailable, rec.Code)
 	assert.Contains(t, rec.Body.String(), "pxe service is not available")
+}
+
+// TestWebhookComplete_RefusesAConnectionWithoutAVerifiedCertificate checks
+// the webhook answers 401 to a node that presents no verified client
+// certificate (#238), before the body is read or the service is called.
+func TestWebhookComplete_RefusesAConnectionWithoutAVerifiedCertificate(t *testing.T) {
+	leaf := &x509.Certificate{SerialNumber: big.NewInt(7)}
+	for name, state := range map[string]*tls.ConnectionState{
+		"plain HTTP":             nil,
+		"no client certificate":  {},
+		"unverified certificate": {PeerCertificates: []*x509.Certificate{leaf}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			server := &operatorPXE{resp: &platformv1.PXEWebhookCompleteResponse{Status: handlerOK}}
+			rec := serveHandlerTLS(handlerRoot(server), http.MethodPost, "/api/v1/pxe/webhook/complete",
+				`{"macAddress":"aa:bb:cc:dd:ee:ff","success":true}`, state)
+
+			assert.Equal(t, http.StatusUnauthorized, rec.Code, rec.Body.String())
+			assert.Empty(t, server.rpc, "the webhook reached the service without a verified certificate")
+		})
+	}
 }
 
 // cmpProto returns the difference between two proto messages, empty when

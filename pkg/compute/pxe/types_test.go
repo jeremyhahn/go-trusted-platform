@@ -250,6 +250,8 @@ func TestDeviceFilter_Matches(t *testing.T) {
 		UpdatedAt:      now,
 		StateChangedAt: now,
 	}
+	enrolled := copyDeviceInfo(device)
+	enrolled.CertificateSerial = "4242"
 
 	tests := []struct {
 		name     string
@@ -328,6 +330,25 @@ func TestDeviceFilter_Matches(t *testing.T) {
 			filter:   &DeviceFilter{VLAN: 0},
 			device:   device,
 			expected: true,
+		},
+		{
+			name:     "certificate_serial_filter_match",
+			filter:   &DeviceFilter{CertificateSerial: "4242"},
+			device:   enrolled,
+			expected: true,
+		},
+		{
+			// Exact match only: a serial is not a prefix of another.
+			name:     "certificate_serial_filter_no_prefix_match",
+			filter:   &DeviceFilter{CertificateSerial: "42"},
+			device:   enrolled,
+			expected: false,
+		},
+		{
+			name:     "certificate_serial_filter_excludes_unenrolled",
+			filter:   &DeviceFilter{CertificateSerial: "4242"},
+			device:   device,
+			expected: false,
 		},
 	}
 

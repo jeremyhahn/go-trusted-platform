@@ -470,12 +470,13 @@ func (s *AttestationServiceServer) CollectHostAttestation(
 // connection.
 const quoteTransportEmbedded = "embedded"
 
-// quoteChannel returns the TLS state of the connection a quote request
-// arrived on and the transport it arrived over. REST and MCP over HTTP record
-// their request's state in the context; QUIC, gRPC and the Unix socket carry
-// theirs where connectionTLS reads it. A request with neither came through
-// the embedded transport, which has no connection to bind a quote to.
-func quoteChannel(ctx context.Context) (*tls.ConnectionState, string) {
+// requestChannel returns the TLS state of the connection a request arrived
+// on and the transport it arrived over: a quote request, or the PXE
+// install-completion webhook. REST and MCP over HTTP record their request's
+// state in the context; QUIC, gRPC and the Unix socket carry theirs where
+// connectionTLS reads it. A request with neither came through the embedded
+// transport, which has no connection at all.
+func requestChannel(ctx context.Context) (*tls.ConnectionState, string) {
 	if state, transport, ok := channelbind.ConnectionTLS(ctx); ok {
 		return state, transport
 	}
@@ -491,7 +492,7 @@ func quoteChannel(ctx context.Context) (*tls.ConnectionState, string) {
 // that second connection, which the caller refuses. A request with no TLS
 // connection to bind to is refused rather than quoted bare.
 func bindQuote(ctx context.Context, nonce []byte) (channelbind.Bound, error) {
-	state, transport := quoteChannel(ctx)
+	state, transport := requestChannel(ctx)
 	return channelbind.Bind(state, transport, nonce)
 }
 

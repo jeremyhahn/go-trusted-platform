@@ -214,9 +214,9 @@ where the scope sits on top of the admin role. Signing a Secure Boot digest is
 pre-auth on gRPC: the machine proves itself inside the request (single-use
 nonce, EAB HMAC, EK-certificate binding), not with a platform token. On MCP the
 BMC tools are mapped; the `provision_*` tools are not, so every caller is
-refused them, and no `pxe_*` tool is registered. **One open path remains:** the
-install-completion webhook `POST /api/v1/pxe/webhook/complete` presents no
-credential (#238). See [api.md](api.md) §6 and
+refused them, and no `pxe_*` tool is registered. The install-completion webhook
+`POST /api/v1/pxe/webhook/complete` is authenticated by the node's mTLS device
+certificate (#238). See [api.md](api.md) §6 and
 [`docs/ipxe/api.md`](../ipxe/api.md) §5.
 
 **Test coverage.** Two provisioning integration suites do not exercise what they

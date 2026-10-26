@@ -20,7 +20,9 @@ import (
 	"github.com/gorilla/mux"
 
 	grpcapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/channelbind"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/tlspeer"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/middleware"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/internal/protorest"
@@ -83,8 +85,9 @@ func NewPXERouter(
 // quarantine, retry and the provisioning-state write. Each route also takes
 // the scope its PXEService RPC takes on gRPC.
 //
-// The install-completion webhook is NOT here — see
-// RegisterMachineFacingRoutes, and #238.
+// The install-completion webhook is NOT here: its caller is a booting node,
+// authenticated by its device certificate over mTLS rather than an operator
+// session — see RegisterMachineFacingRoutes.
 func (r *PXERouter) RegisterRoutes(parent *mux.Router) {
 	r.mount(parent.PathPrefix(basePath).Subrouter(), r.operatorRoutes())
 }
@@ -158,25 +161,18 @@ func (r *PXERouter) requireScope(scope string, handler http.HandlerFunc) http.Ha
 // It registers nothing unless the operator enabled the webhook
 // (pxe.ServiceConfig.WebhookEnabled, false by default): a disabled webhook is
 // an unknown path, answered 404, and the service's WebhookComplete is never
-// reached. Off is the default because of what follows.
+// reached.
 //
 // It is ungated because its caller is a booting node with no operator
-// session — and, unlike the gateway's telemetry pair or the EAB-authenticated
-// provisioning routes, **it presents no credential and the server checks
-// none**: the handler decodes the body and the service identifies the device
-// by a MAC address taken from it. `pkg/compute/pxe/config.go` declares and
-// REQUIRES a `WebhookSecret` described as "the HMAC secret for webhook
-// authentication" which nothing ever reads.
-//
-// That is tracked as #238 and is deliberately not fixed here. Choosing what a
-// booting node presents — HMAC over the body with the secret that already
-// exists, IDevID over mTLS as gatewayd uses, or a provisioning-session token
-// — is an architecture decision, and inventing one inside a gating change
-// would build a second authentication mechanism nobody ratified.
-//
-// So this method is not an endorsement: it is the boundary of what #165 can
-// close, drawn explicitly so the route is not mistaken for one this campaign
-// has certified.
+// session. The node authenticates with its device certificate over mTLS, as
+// gatewayd does on its control plane (#238): the handler refuses a request
+// with no verified client certificate, and passes the connection's TLS state
+// to the service, which takes the identity from the
+// verified client certificate chain only and updates the record whose
+// enrolled certificate serial it is. A request with no verified client
+// certificate is answered 401; one whose certificate belongs to no enrolled
+// device, or whose body names another device's MAC, is answered 403. The
+// device state changes in neither case.
 func (r *PXERouter) RegisterMachineFacingRoutes(parent *mux.Router) {
 	if !r.webhookEnabled {
 		return
@@ -399,12 +395,21 @@ func (r *PXERouter) webhookComplete(w http.ResponseWriter, req *http.Request) {
 	if !r.ensure(w, req) {
 		return
 	}
+	// The node authenticates by the verified client certificate of this
+	// connection (#238). A request with none is refused here, before the
+	// body is read; the service then binds the certificate to the device,
+	// as it does on every transport.
+	if _, err := tlspeer.VerifiedLeaf(req.TLS); err != nil {
+		r.respWriter.Error401(w, req, err)
+		return
+	}
 	pbReq := &platformv1.PXEWebhookCompleteRequest{}
 	if err := protorest.DecodeRequest(req, pbReq); err != nil {
 		r.respWriter.Error400(w, req, err)
 		return
 	}
-	resp, err := r.server.WebhookComplete(req.Context(), pbReq)
+	ctx := channelbind.WithConnectionTLS(req.Context(), channelbind.TransportREST, req.TLS)
+	resp, err := r.server.WebhookComplete(ctx, pbReq)
 	if err != nil {
 		protorest.WriteError(w, req, r.respWriter, err)
 		return

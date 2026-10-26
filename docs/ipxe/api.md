@@ -263,10 +263,12 @@ who arrived here can find them:
 
 **The install-complete webhook route exists only when the operator sets
 `pxe.ServiceConfig.WebhookEnabled`** (default `false`). Disabled, the path is
-not registered and answers 404 like any unknown path. Enabled, it is
-**unauthenticated**: the caller is a booting node that presents no credential,
-and the device is identified by the MAC in the request body. What a booting
-node should present is #238; `WebhookSecret` is reserved for it and unused.
+not registered and answers 404 like any unknown path. Enabled, the node
+**authenticates by its device certificate over mTLS** (#238): the device is the
+one registered with the serial of the leaf of the verified client chain, and a
+MAC in the request body must match it. No verified client certificate is 401;
+a certificate no device carries, or a mismatched MAC, is 403. Transports with
+no peer certificate — Unix, MCP stdio, embedded — refuse the call.
 
 **The `REST base` column is a locator, not the contract.** It gives the prefix a
 route hangs under; it does not give the route. The normative per-route path
@@ -366,8 +368,8 @@ the role gate alone applies.
 | `GET /api/v1/pxe/devices/{id}/events` | `GetEvents` | `pxe:read` |
 
 `POST /api/v1/pxe/webhook/complete` takes neither the admin gate nor a scope:
-its caller is a booting node, and it presents no credential (#238). It is the
-one PXE route wider than its RPC, `WebhookComplete`, which needs `pxe:write`. [`docs/provisioning/api.md`](../provisioning/api.md) §6
+its caller is a booting node, authenticated by its mTLS device certificate
+rather than an operator credential (#238). [`docs/provisioning/api.md`](../provisioning/api.md) §6
 covers the provisioning half of the control plane.
 
 ---

@@ -914,14 +914,15 @@ func (v1Router *Router) pxeRoutes() {
 	// authorize, quarantine, retry, state — are operator work and take the
 	// admin gate, then per route the pxe:* scope its RPC takes on gRPC. The
 	// install-completion webhook stays off both because its caller is a
-	// booting node; it presents and checks no credential at all (#238), so
-	// it is mounted only when the operator enabled it.
+	// booting node with no operator session: it authenticates by its device
+	// certificate over mTLS (#238), and it is mounted only when the operator
+	// enabled it.
 	//
 	// The provisioning gateway's device reports (register, state, install
 	// complete) under /provisioning/devices/{mac}: the admin gate, then
 	// provisioning:write per route, as on gRPC. The install-complete report
-	// is the webhook's operation behind a credential, so it does not widen
-	// #238.
+	// records the webhook's state change through the operator RPCs, by the
+	// MAC the gateway names.
 	//
 	// Under the legacy JWT handler, which carries roles and no scopes, the
 	// role gate alone applies (docs/ipxe/api.md §5).

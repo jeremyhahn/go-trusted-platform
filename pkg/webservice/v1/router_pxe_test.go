@@ -15,6 +15,10 @@ package v1
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"math/big"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -35,7 +39,7 @@ const (
 
 // recordingPXEServer holds one device mid-install. A completion that
 // reaches it moves the device to installed, the state change an
-// anonymous caller could force through the unauthenticated webhook.
+// unauthenticated caller must not be able to force through the webhook.
 type recordingPXEServer struct {
 	platformv1.UnimplementedPXEServiceServer
 	state string
@@ -53,7 +57,7 @@ func (s *recordingPXEServer) WebhookComplete(
 
 // postPXEWebhook builds the web service router with the webhook switch set
 // as given and posts one install completion to it, as a booting node would.
-func postPXEWebhook(t *testing.T, server *recordingPXEServer, enabled bool) int {
+func postPXEWebhook(t *testing.T, server *recordingPXEServer, enabled bool, state *tls.ConnectionState) int {
 	t.Helper()
 
 	logger := testLogger()
@@ -71,18 +75,26 @@ func postPXEWebhook(t *testing.T, server *recordingPXEServer, enabled bool) int 
 	body := strings.NewReader(`{"mac_address":"52:54:00:12:34:56","success":true}`)
 	req := httptest.NewRequest(http.MethodPost, pxeWebhookPath, body)
 	req.Header.Set("Content-Type", "application/json")
+	req.TLS = state
 	rec := httptest.NewRecorder()
 	root.ServeHTTP(rec, req)
 	return rec.Code
 }
 
-// TestPXEWebhook_DisabledIsNotServed pins #238: the webhook authenticates
-// nobody, so unless the operator enabled it the path is unknown and the
-// device cannot be moved by it.
+// nodeTLS is the connection of a node presenting its device certificate over
+// mTLS, verified by the TLS stack.
+func nodeTLS() *tls.ConnectionState {
+	leaf := &x509.Certificate{SerialNumber: big.NewInt(7), Subject: pkix.Name{CommonName: "node"}}
+	return &tls.ConnectionState{VerifiedChains: [][]*x509.Certificate{{leaf}}}
+}
+
+// TestPXEWebhook_DisabledIsNotServed checks the webhook is off by default:
+// unless the operator enabled it the path is unknown and the device cannot be
+// moved by it, even by a node with a verified certificate.
 func TestPXEWebhook_DisabledIsNotServed(t *testing.T) {
 	server := &recordingPXEServer{state: pxeInstalling}
 
-	code := postPXEWebhook(t, server, false)
+	code := postPXEWebhook(t, server, false, nodeTLS())
 
 	assert.Equal(t, http.StatusNotFound, code)
 	assert.Zero(t, server.calls, "a disabled webhook reached WebhookComplete")
@@ -92,9 +104,22 @@ func TestPXEWebhook_DisabledIsNotServed(t *testing.T) {
 func TestPXEWebhook_EnabledReachesTheHandler(t *testing.T) {
 	server := &recordingPXEServer{state: pxeInstalling}
 
-	code := postPXEWebhook(t, server, true)
+	code := postPXEWebhook(t, server, true, nodeTLS())
 
 	assert.Equal(t, http.StatusOK, code)
 	assert.Equal(t, 1, server.calls)
 	assert.Equal(t, pxeInstalled, server.state)
+}
+
+// TestPXEWebhook_EnabledRefusesACallerWithNoCertificate checks the enabled
+// webhook, as the v1 router mounts it, answers 401 to a caller presenting no
+// client certificate and leaves the device where it was (#238).
+func TestPXEWebhook_EnabledRefusesACallerWithNoCertificate(t *testing.T) {
+	server := &recordingPXEServer{state: pxeInstalling}
+
+	code := postPXEWebhook(t, server, true, &tls.ConnectionState{})
+
+	assert.Equal(t, http.StatusUnauthorized, code)
+	assert.Zero(t, server.calls, "a caller with no certificate reached WebhookComplete")
+	assert.Equal(t, pxeInstalling, server.state)
 }
