@@ -1517,39 +1517,6 @@ func (r *ToolRegistry) executeContainerList(ctx context.Context, args map[string
 	return map[string]interface{}{"containers": containers}, nil
 }
 
-func (r *ToolRegistry) executeContainerLogs(ctx context.Context, args map[string]interface{}) (interface{}, error) {
-	id := getString(args, "id")
-	if id == "" {
-		return nil, ErrContainerIDRequired
-	}
-
-	// follow is not used for the synchronous API call
-	follow := false
-	stdout := true
-	stderr := true
-	tail := "100"
-	timestamps := false
-
-	if _, ok := args["stdout"]; ok {
-		stdout = getBool(args, "stdout")
-	}
-	if _, ok := args["stderr"]; ok {
-		stderr = getBool(args, "stderr")
-	}
-	if t := getString(args, "tail"); t != "" {
-		tail = t
-	}
-	if _, ok := args["timestamps"]; ok {
-		timestamps = getBool(args, "timestamps")
-	}
-
-	logs, err := r.service.ContainerLogs(ctx, id, follow, stdout, stderr, tail, timestamps)
-	if err != nil {
-		return nil, err
-	}
-	return map[string]interface{}{"logs": logs}, nil
-}
-
 func (r *ToolRegistry) executeContainerAttest(ctx context.Context, args map[string]interface{}) (interface{}, error) {
 	id := getString(args, "id")
 	if id == "" {

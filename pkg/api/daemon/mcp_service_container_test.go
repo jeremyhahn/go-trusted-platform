@@ -644,21 +644,6 @@ func TestMCPContainerList_OrchestratorError(t *testing.T) {
 	mockOrchestrator.AssertExpectations(t)
 }
 
-func TestMCPContainerLogs_NotSupported(t *testing.T) {
-	mockOrchestrator := new(MockComputeOrchestrator)
-	provider := NewMCPServiceProvider(&MCPServiceProviderConfig{
-		ComputeOrchestrator: mockOrchestrator,
-		Logger:              slog.Default(),
-	})
-
-	result, err := provider.ContainerLogs(context.Background(), "container-123", false, true, true, "100", false)
-
-	assert.Empty(t, result)
-	assert.Error(t, err)
-	var logsErr ErrContainerLogsNotSupported
-	assert.True(t, errors.As(err, &logsErr))
-}
-
 func TestMCPContainerAttest_NotSupported(t *testing.T) {
 	mockOrchestrator := new(MockComputeOrchestrator)
 	provider := NewMCPServiceProvider(&MCPServiceProviderConfig{

@@ -112,12 +112,6 @@ func (e ErrContainerInvalidParameter) GRPCStatus() *status.Status {
 	return status.New(codes.InvalidArgument, e.Error())
 }
 
-// GRPCStatus classifies a missing log capability as ComputeService does:
-// Unimplemented.
-func (e ErrContainerLogsNotSupported) GRPCStatus() *status.Status {
-	return status.New(codes.Unimplemented, e.Error())
-}
-
 // GRPCStatus classifies a missing attestation capability as ComputeService
 // does: Unimplemented.
 func (e ErrContainerAttestNotSupported) GRPCStatus() *status.Status {

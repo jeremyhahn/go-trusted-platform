@@ -48,7 +48,6 @@ type ContainerCommands interface {
 	Remove(ctx context.Context, id string, force bool) error
 	Get(ctx context.Context, id string) (*Container, error)
 	List(ctx context.Context, opts ListOptions) ([]*Container, error)
-	Logs(ctx context.Context, id string, opts LogOptions) ([]string, error)
 	Attest(ctx context.Context, id string) (*AttestationReport, error)
 }
 
@@ -228,27 +227,6 @@ type ListOptions struct {
 
 	// NameFilter filters by container name prefix.
 	NameFilter string `json:"name_filter,omitempty"`
-}
-
-// LogOptions contains options for retrieving container logs.
-type LogOptions struct {
-	// Stdout includes stdout logs.
-	Stdout bool `json:"stdout,omitempty"`
-
-	// Stderr includes stderr logs.
-	Stderr bool `json:"stderr,omitempty"`
-
-	// Since returns logs since this time.
-	Since time.Time `json:"since,omitempty"`
-
-	// Until returns logs until this time.
-	Until time.Time `json:"until,omitempty"`
-
-	// Tail returns only the last N lines.
-	Tail int `json:"tail,omitempty"`
-
-	// Timestamps includes timestamps in the output.
-	Timestamps bool `json:"timestamps,omitempty"`
 }
 
 // =============================================================================

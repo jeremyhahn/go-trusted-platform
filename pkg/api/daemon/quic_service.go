@@ -690,8 +690,8 @@ func (h *QUICServiceHandler) HandleRequest(ctx context.Context, req *quicwire.Re
 	case req.Opcode >= quicwire.OpIAMUserCreate && req.Opcode <= quicwire.OpIAMUserUpdate:
 		return h.handleIAMOperation(ctx, req)
 
-	// Container List (0xAE) and Container Logs (0xAF)
-	case req.Opcode == quicwire.OpContainerList || req.Opcode == quicwire.OpContainerLogs:
+	// Container List (0xAE)
+	case req.Opcode == quicwire.OpContainerList:
 		return h.handleContainerOperation(ctx, req)
 
 	// SDN Extended Operations (0xB0-0xB4) - CreateBridge to DeletePolicy

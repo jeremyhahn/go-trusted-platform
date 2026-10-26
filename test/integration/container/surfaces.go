@@ -19,14 +19,11 @@ import "github.com/jeremyhahn/go-trusted-platform/test/integration/helpers/surfa
 
 // Container operations, named as ContainerCommands names them.
 const (
-	opLogs   = "Logs"
 	opAttest = "Attest"
 )
 
 // Why a transport has no surface for an operation.
 const (
-	reasonRESTLogs = "platformd serves no REST container logs route: the SDK maps GetContainerLogs to " +
-		"GET /api/v1/compute/containers/logs, which pkg/api/rest/compute_handlers.go does not register"
 	reasonQUICAttest = "the SDK QUIC transport maps no AttestContainer RPC (sdk/go/transport/quic/adapter.go); " +
 		"the daemon's OpContainerAttest is reached only by the flat container handler"
 	reasonMCPAttest = "the SDK MCP transport maps no AttestContainer RPC (sdk/go/transport/mcp/adapter.go); " +
@@ -36,7 +33,6 @@ const (
 // missingSurfaces lists, per transport, the operations it has no surface for
 // and why. It is the one table both the adapters and the tests read.
 var missingSurfaces = map[string]map[string]string{
-	"REST": {opLogs: reasonRESTLogs},
 	"QUIC": {opAttest: reasonQUICAttest},
 	"MCP":  {opAttest: reasonMCPAttest},
 }

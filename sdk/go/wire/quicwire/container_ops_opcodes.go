@@ -18,7 +18,7 @@ package quicwire
 // sub-opcodes in payload[0], never at the top level of the daemon dispatcher,
 // so their byte values live in the container sub-opcode namespace and only need
 // to be unique among containerSubOpcodes — the same overlap the existing
-// container opcodes (0xFC-0xFF, 0x6F, 0xAE, 0xAF, 0xEC) already rely on.
+// container opcodes (0xFC-0xFF, 0x6F, 0xAE, 0xEC) already rely on.
 //
 // Both operations are unary: they decode the platform.v1 pb request and
 // delegate to the shared *ComputeGRPCService (see handleContainerPB). The

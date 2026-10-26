@@ -43,11 +43,6 @@ func init() {
 // =============================================================================
 
 func TestContainerErrorTypes_ErrorMethods(t *testing.T) {
-	t.Run("ErrContainerLogsNotSupported", func(t *testing.T) {
-		err := ErrContainerLogsNotSupported{}
-		assert.Equal(t, "container logs not supported via orchestrator", err.Error())
-	})
-
 	t.Run("ErrContainerAttestNotSupported", func(t *testing.T) {
 		err := ErrContainerAttestNotSupported{}
 		assert.Equal(t, "container attestation not implemented", err.Error())

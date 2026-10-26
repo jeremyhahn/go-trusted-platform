@@ -485,16 +485,6 @@ type ContainerMetrics struct {
 	UptimeSeconds uint32 `json:"uptime_seconds" yaml:"uptime_seconds"`
 }
 
-// LogEntry represents a container log entry.
-type LogEntry struct {
-	// Timestamp is when the log entry was generated.
-	Timestamp time.Time `json:"timestamp" yaml:"timestamp"`
-	// Stream is the log stream (stdout, stderr).
-	Stream string `json:"stream,omitempty" yaml:"stream,omitempty"`
-	// Message is the log message.
-	Message string `json:"message" yaml:"message"`
-}
-
 // ContainerStatus represents the status response from a container operation.
 type ContainerStatus struct {
 	// Success indicates whether the operation succeeded.

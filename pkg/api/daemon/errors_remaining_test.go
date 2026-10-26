@@ -151,14 +151,6 @@ func TestErrContainerOperationFailed(t *testing.T) {
 	}
 }
 
-func TestErrContainerLogsNotSupported(t *testing.T) {
-	err := ErrContainerLogsNotSupported{}
-	expected := "container logs not supported via orchestrator"
-	if got := err.Error(); got != expected {
-		t.Errorf("Error() = %q, want %q", got, expected)
-	}
-}
-
 func TestErrContainerAttestNotSupported(t *testing.T) {
 	err := ErrContainerAttestNotSupported{}
 	expected := "container attestation not implemented"

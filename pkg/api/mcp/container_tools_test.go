@@ -388,44 +388,6 @@ func TestExecuteContainerList_DefaultLimit(t *testing.T) {
 	}
 }
 
-func TestExecuteContainerLogs_Success(t *testing.T) {
-	ctx := context.Background()
-	svc := newMockServiceProvider()
-	registry := NewToolRegistry(svc, newTestLogger())
-
-	args := map[string]interface{}{
-		"id":         "container-123",
-		"stdout":     true,
-		"stderr":     true,
-		"tail":       "50",
-		"timestamps": true,
-	}
-
-	result, err := registry.executeContainerLogs(ctx, args)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	resultMap, ok := result.(map[string]interface{})
-	if !ok {
-		t.Fatal("expected map result")
-	}
-	if _, ok := resultMap["logs"]; !ok {
-		t.Error("expected logs in result")
-	}
-}
-
-func TestExecuteContainerLogs_MissingID(t *testing.T) {
-	ctx := context.Background()
-	svc := newMockServiceProvider()
-	registry := NewToolRegistry(svc, newTestLogger())
-
-	_, err := registry.executeContainerLogs(ctx, map[string]interface{}{})
-	if err != ErrContainerIDRequired {
-		t.Errorf("expected ErrContainerIDRequired, got %v", err)
-	}
-}
-
 func TestExecuteContainerAttest_Success(t *testing.T) {
 	ctx := context.Background()
 	svc := newMockServiceProvider()
@@ -631,7 +593,6 @@ func TestRegisterContainerTools(t *testing.T) {
 		"container_remove",
 		"container_get",
 		"container_list",
-		"container_logs",
 		"container_attest",
 	}
 

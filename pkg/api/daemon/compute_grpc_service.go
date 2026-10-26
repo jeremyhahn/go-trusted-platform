@@ -18,7 +18,6 @@ import (
 	"errors"
 	"io"
 	"sort"
-	"strconv"
 	"time"
 
 	grpcapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc"
@@ -1138,95 +1137,6 @@ func (s *ComputeGRPCService) ExecContainer(ctx context.Context, req *platformv1.
 	}
 
 	return execResultToProto(result), nil
-}
-
-// GetContainerLogs streams container logs (server streaming). It delegates
-// to the orchestrator's Logs verb — the same service logic the REST
-// GET /api/v1/containers/{id}/logs route uses — and streams the log data as
-// LogEntry messages.
-func (s *ComputeGRPCService) GetContainerLogs(req *platformv1.GetContainerLogsRequest, stream grpc.ServerStreamingServer[platformv1.LogEntry]) error {
-	if s.orchestrator == nil {
-		return status.Error(codes.FailedPrecondition, "compute orchestrator not initialized")
-	}
-
-	containerID := req.GetId()
-	if containerID == "" {
-		return status.Error(codes.InvalidArgument, "container ID is required")
-	}
-
-	streamer, ok := s.orchestrator.(containerLogStreamer)
-	if !ok {
-		return status.Error(codes.Unimplemented, "container logs not supported by this orchestrator")
-	}
-
-	opts := container.LogOptions{
-		Follow:     req.GetFollow(),
-		Stdout:     req.GetStdout(),
-		Stderr:     req.GetStderr(),
-		Timestamps: req.GetTimestamps(),
-	}
-	if !opts.Stdout && !opts.Stderr {
-		// Default to both streams.
-		opts.Stdout = true
-		opts.Stderr = true
-	}
-	if req.GetTailLines() > 0 {
-		opts.Tail = strconv.FormatUint(uint64(req.GetTailLines()), 10)
-	}
-	if req.GetSince() != nil {
-		opts.Since = req.GetSince().AsTime()
-	}
-	if req.GetUntil() != nil {
-		opts.Until = req.GetUntil().AsTime()
-	}
-
-	reader, err := streamer.Logs(stream.Context(), containerID, opts)
-	if err != nil {
-		s.logger.Error(err, "Failed to open container logs", "container_id", containerID)
-		return containerLogsErrToStatus(err)
-	}
-	defer reader.Close()
-
-	buf := make([]byte, 4096)
-	for {
-		select {
-		case <-stream.Context().Done():
-			return stream.Context().Err()
-		default:
-			n, readErr := reader.Read(buf)
-			if n > 0 {
-				entry := &platformv1.LogEntry{
-					Timestamp: timestamppb.Now(),
-					Level:     "INFO",
-					Message:   string(buf[:n]),
-					Source:    containerID,
-				}
-				if sendErr := stream.Send(entry); sendErr != nil {
-					return status.Error(codes.Internal, "failed to send log entry: "+sendErr.Error())
-				}
-			}
-			if readErr != nil {
-				if errors.Is(readErr, io.EOF) {
-					return nil
-				}
-				return containerLogsErrToStatus(readErr)
-			}
-		}
-	}
-}
-
-// containerLogsErrToStatus maps container log errors onto gRPC status codes.
-func containerLogsErrToStatus(err error) error {
-	switch {
-	case errors.Is(err, container.ErrContainerNotFound),
-		errors.Is(err, compute.ErrInstanceNotFound):
-		return status.Error(codes.NotFound, err.Error())
-	case errors.Is(err, container.ErrInvalidContainerID),
-		errors.Is(err, compute.ErrInvalidInstanceID):
-		return status.Error(codes.InvalidArgument, err.Error())
-	default:
-		return status.Error(codes.Internal, err.Error())
-	}
 }
 
 // GetContainerMetrics retrieves a container's resource-usage metrics. It

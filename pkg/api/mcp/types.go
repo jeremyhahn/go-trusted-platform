@@ -953,7 +953,6 @@ type ServiceProvider interface {
 	ContainerRemove(ctx context.Context, id string, force bool) error
 	ContainerGet(ctx context.Context, id string) (interface{}, error)
 	ContainerList(ctx context.Context, all bool, filters map[string][]string, limit int) ([]interface{}, error)
-	ContainerLogs(ctx context.Context, id string, follow bool, stdout bool, stderr bool, tail string, timestamps bool) (string, error)
 	ContainerAttest(ctx context.Context, id string) (interface{}, error)
 
 	// IDevID operations (IEEE 802.1AR device identity)

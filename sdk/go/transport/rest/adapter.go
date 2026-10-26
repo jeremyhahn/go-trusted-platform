@@ -1566,9 +1566,8 @@ var grpcMethodToRESTMap = map[string]struct {
 	// Switch Service routes are templated: see switches.go.
 
 	// Compute Service
-	"/platform.v1.ComputeService/CreateContainer":  {"/api/v1/compute/containers", http.MethodPost},
-	"/platform.v1.ComputeService/ListContainers":   {"/api/v1/compute/containers", http.MethodGet},
-	"/platform.v1.ComputeService/GetContainerLogs": {"/api/v1/compute/containers/logs", http.MethodGet},
+	"/platform.v1.ComputeService/CreateContainer": {"/api/v1/compute/containers", http.MethodPost},
+	"/platform.v1.ComputeService/ListContainers":  {"/api/v1/compute/containers", http.MethodGet},
 	// ListVMs sends its whole request (states, selector, pagination) as the
 	// JSON body, which both REST servers decode on this GET.
 	"/platform.v1.ComputeService/ListVMs": {"/api/v1/compute/vms", http.MethodGet},

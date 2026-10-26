@@ -24,7 +24,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"strconv"
 	"strings"
@@ -2664,49 +2663,6 @@ func (m *MCPServiceProvider) ContainerList(ctx context.Context, all bool, filter
 	}
 
 	return result, nil
-}
-
-// ContainerLogs retrieves container logs. The MCP tool response model is a
-// single string, so logs are returned as a snapshot; the follow flag is
-// ignored (streaming is available on the gRPC and REST transports).
-func (m *MCPServiceProvider) ContainerLogs(ctx context.Context, id string, follow bool, stdout bool, stderr bool, tail string, timestamps bool) (string, error) {
-	if m.computeOrchestrator == nil {
-		return "", ErrContainerServiceNotAvailable{}
-	}
-
-	if id == "" {
-		return "", ErrContainerInvalidParameter{Parameter: "id", Reason: "container ID is required"}
-	}
-
-	streamer, ok := m.computeOrchestrator.(containerLogStreamer)
-	if !ok {
-		return "", ErrContainerLogsNotSupported{}
-	}
-
-	opts := computecontainer.LogOptions{
-		Stdout:     stdout,
-		Stderr:     stderr,
-		Tail:       tail,
-		Timestamps: timestamps,
-	}
-	if !opts.Stdout && !opts.Stderr {
-		opts.Stdout = true
-		opts.Stderr = true
-	}
-
-	reader, err := streamer.Logs(ctx, id, opts)
-	if err != nil {
-		m.logger.Error("failed to get container logs", "container_id", id, "error", err)
-		return "", classifyComputeErr(ErrContainerOperationFailed{Operation: "logs", Cause: err}, containerLogsErrToStatus)
-	}
-	defer reader.Close()
-
-	data, err := io.ReadAll(reader)
-	if err != nil {
-		return "", ErrContainerOperationFailed{Operation: "logs", Cause: err}
-	}
-
-	return string(data), nil
 }
 
 // ContainerAttest performs quote-based TPM attestation for a container. It

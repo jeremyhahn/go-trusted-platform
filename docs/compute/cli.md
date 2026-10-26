@@ -171,7 +171,6 @@ platformctl compute migrate web-01 --destination worker-02.example.com:9443 --li
 | `start` | `<container-id>` | Start |
 | `stop` | `<container-id>` | Stop |
 | `remove` | `<container-id>` | Remove |
-| `logs` | `<container-id>` | Get logs |
 | `attest` | `<container-id>` | **Attest container integrity** |
 
 ### `container create`
@@ -209,18 +208,6 @@ platformctl container create --name api --image registry.example.com/apps/api:1.
 
 `--all` / `-a` shows all containers; the default shows only running.
 `--filter` / `-f` is repeatable.
-
-### `container logs`
-
-| Flag | Short | Type | Default |
-|---|---|---|---|
-| `--follow` | `-f` | bool | `false` |
-| `--timestamps` | `-t` | bool | `false` |
-| `--stdout` | | bool | **`true`** |
-| `--stderr` | | bool | **`true`** |
-
-`--stdout` and `--stderr` both default to **true** — pass `--stdout=false` to
-suppress one; passing `--stdout` alone changes nothing.
 
 ### `container remove`
 

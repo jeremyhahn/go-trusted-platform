@@ -19,7 +19,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
 	"time"
@@ -115,13 +114,6 @@ type ContainerActionResponse struct {
 	Message     string `json:"message,omitempty"`
 }
 
-// ContainerLogsResponse represents container logs.
-type ContainerLogsResponse struct {
-	ContainerID string    `json:"container_id"`
-	Logs        string    `json:"logs"`
-	Timestamp   time.Time `json:"timestamp"`
-}
-
 // AttestContainerRequest represents a container attestation request.
 type AttestContainerRequest struct {
 	Nonce           string `json:"nonce,omitempty"`
@@ -180,12 +172,9 @@ type ContainerOrchestratorInterface interface {
 	GetState(ctx context.Context, instanceID string) (compute.InstanceState, error)
 }
 
-// ExtendedContainerOrchestrator extends the basic interface with logs and attestation.
+// ExtendedContainerOrchestrator extends the basic interface with attestation.
 type ExtendedContainerOrchestrator interface {
 	ContainerOrchestratorInterface
-
-	// Logs returns container logs
-	Logs(ctx context.Context, id string, opts container.LogOptions) (io.ReadCloser, error)
 
 	// Attest performs TPM attestation for a container
 	Attest(ctx context.Context, id string) (*container.AttestationReport, error)
@@ -216,7 +205,6 @@ func (h *ContainerHandlers) RegisterRoutes(router *mux.Router) {
 	router.HandleFunc("/api/v1/containers/{id}/stop", h.handleStopContainer).Methods(http.MethodPost)
 
 	// Container logs
-	router.HandleFunc("/api/v1/containers/{id}/logs", h.handleGetContainerLogs).Methods(http.MethodGet)
 
 	// Container attestation
 	router.HandleFunc("/api/v1/containers/{id}/attest", h.handleAttestContainer).Methods(http.MethodPost)
@@ -422,119 +410,6 @@ func (h *ContainerHandlers) handleRemoveContainer(w http.ResponseWriter, r *http
 	h.writeJSON(w, http.StatusOK, resp)
 }
 
-// handleGetContainerLogs handles GET /api/v1/containers/{id}/logs
-func (h *ContainerHandlers) handleGetContainerLogs(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-
-	if h.orchestrator == nil {
-		h.writeError(w, http.StatusServiceUnavailable, ErrContainerOrchestratorNotAvailable{})
-		return
-	}
-
-	vars := mux.Vars(r)
-	containerID := vars["id"]
-	if containerID == "" {
-		h.writeError(w, http.StatusBadRequest, ErrInvalidContainerID{})
-		return
-	}
-
-	// Check if orchestrator supports logs
-	extOrch, ok := h.orchestrator.(ExtendedContainerOrchestrator)
-	if !ok {
-		h.writeError(w, http.StatusNotImplemented, ErrContainerOperationFailed{
-			Operation: "logs",
-			Cause:     errors.New("logs not supported by this orchestrator"),
-		})
-		return
-	}
-
-	// Parse log options from query parameters
-	opts := h.parseLogOptions(r)
-
-	// Check for streaming
-	follow := r.URL.Query().Get("follow") == "true"
-	if follow {
-		h.streamContainerLogs(ctx, w, extOrch, containerID, opts)
-		return
-	}
-
-	// Non-streaming: read all logs and return
-	reader, err := extOrch.Logs(ctx, containerID, opts)
-	if err != nil {
-		h.logger.Error("Failed to get container logs", "error", err, "id", containerID)
-		h.writeContainerError(w, "logs", err)
-		return
-	}
-	defer reader.Close()
-
-	logs, err := io.ReadAll(reader)
-	if err != nil {
-		h.logger.Error("Failed to read container logs", "error", err, "id", containerID)
-		h.writeContainerError(w, "logs", err)
-		return
-	}
-
-	resp := ContainerLogsResponse{
-		ContainerID: containerID,
-		Logs:        string(logs),
-		Timestamp:   time.Now().UTC(),
-	}
-
-	h.writeJSON(w, http.StatusOK, resp)
-}
-
-// streamContainerLogs streams logs using Server-Sent Events.
-func (h *ContainerHandlers) streamContainerLogs(ctx context.Context, w http.ResponseWriter, orch ExtendedContainerOrchestrator, containerID string, opts container.LogOptions) {
-	opts.Follow = true
-
-	reader, err := orch.Logs(ctx, containerID, opts)
-	if err != nil {
-		h.logger.Error("Failed to get container logs stream", "error", err, "id", containerID)
-		h.writeContainerError(w, "logs", err)
-		return
-	}
-	defer reader.Close()
-
-	// The writer is checked before the SSE headers go out: once a 200 is
-	// sent, the refusal below could no longer reach the client as an error.
-	flusher, ok := w.(http.Flusher)
-	if !ok {
-		h.writeError(w, http.StatusInternalServerError, ErrContainerOperationFailed{
-			Operation: "logs",
-			Cause:     errors.New("streaming not supported"),
-		})
-		return
-	}
-
-	// Set up SSE headers
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Connection", "keep-alive")
-	w.Header().Set("X-Accel-Buffering", "no")
-	w.WriteHeader(http.StatusOK)
-
-	buf := make([]byte, 4096)
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		default:
-			n, err := reader.Read(buf)
-			if n > 0 {
-				fmt.Fprintf(w, "data: %s\n\n", string(buf[:n]))
-				flusher.Flush()
-			}
-			if err != nil {
-				if err == io.EOF {
-					fmt.Fprintf(w, "event: end\ndata: stream ended\n\n")
-					flusher.Flush()
-				}
-				return
-			}
-		}
-	}
-}
-
 // handleAttestContainer handles POST /api/v1/containers/{id}/attest
 func (h *ContainerHandlers) handleAttestContainer(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
@@ -623,41 +498,6 @@ func (h *ContainerHandlers) parseListFilter(r *http.Request) *compute.InstanceFi
 	filter.Type = &containerType
 
 	return filter
-}
-
-// parseLogOptions parses query parameters into LogOptions.
-func (h *ContainerHandlers) parseLogOptions(r *http.Request) container.LogOptions {
-	query := r.URL.Query()
-
-	opts := container.LogOptions{
-		Stdout: true,
-		Stderr: true,
-	}
-
-	if query.Get("stdout") == "false" {
-		opts.Stdout = false
-	}
-	if query.Get("stderr") == "false" {
-		opts.Stderr = false
-	}
-	if tail := query.Get("tail"); tail != "" {
-		opts.Tail = tail
-	}
-	if query.Get("timestamps") == "true" {
-		opts.Timestamps = true
-	}
-	if since := query.Get("since"); since != "" {
-		if t, err := time.Parse(time.RFC3339, since); err == nil {
-			opts.Since = t
-		}
-	}
-	if until := query.Get("until"); until != "" {
-		if t, err := time.Parse(time.RFC3339, until); err == nil {
-			opts.Until = t
-		}
-	}
-
-	return opts
 }
 
 // instanceToResponse converts a compute.Instance to ContainerResponse.

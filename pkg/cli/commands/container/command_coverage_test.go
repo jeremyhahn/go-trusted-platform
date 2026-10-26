@@ -215,43 +215,6 @@ func TestNewListCommand_FlagUsage(t *testing.T) {
 	}
 }
 
-// Tests for newLogsCommand edge cases
-func TestNewLogsCommand_RunEHandler(t *testing.T) {
-	getFlags := func() *cli.CommonFlags {
-		return &cli.CommonFlags{
-			OutputFormat: cli.OutputFormatJSON,
-		}
-	}
-
-	cmd := newLogsCommand(getFlags)
-
-	// Verify RunE is set
-	if cmd.RunE == nil {
-		t.Error("RunE should be set on logs command")
-	}
-}
-
-func TestNewLogsCommand_FlagUsage(t *testing.T) {
-	getFlags := func() *cli.CommonFlags {
-		return &cli.CommonFlags{}
-	}
-
-	cmd := newLogsCommand(getFlags)
-
-	expectedFlags := []string{"follow", "tail", "timestamps", "stdout", "stderr"}
-
-	for _, flagName := range expectedFlags {
-		flag := cmd.Flags().Lookup(flagName)
-		if flag == nil {
-			t.Errorf("flag %q not found", flagName)
-			continue
-		}
-		if flag.Usage == "" {
-			t.Errorf("flag %q has no usage string", flagName)
-		}
-	}
-}
-
 // Tests for newAttestCommand edge cases
 func TestNewAttestCommand_RunEHandler(t *testing.T) {
 	getFlags := func() *cli.CommonFlags {
@@ -411,30 +374,6 @@ func TestRunCreate_MissingImage(t *testing.T) {
 	}
 }
 
-// Test for runLogs with missing container ID validation
-func TestRunLogs_MissingContainerID(t *testing.T) {
-	flags := &cli.CommonFlags{
-		OutputFormat: cli.OutputFormatTable,
-	}
-
-	opts := &logsOptions{
-		follow:     false,
-		tail:       0,
-		timestamps: false,
-		stdout:     true,
-		stderr:     true,
-	}
-
-	err := runLogs(flags, "", opts)
-	if err == nil {
-		t.Error("expected error for missing container ID")
-	}
-
-	if _, ok := err.(ErrInvalidContainerConfig); !ok {
-		t.Errorf("expected ErrInvalidContainerConfig, got %T", err)
-	}
-}
-
 // Test for runGet with missing container ID validation
 func TestRunGet_MissingContainerID(t *testing.T) {
 	flags := &cli.CommonFlags{
@@ -544,7 +483,6 @@ func TestAllCommands_HaveLongDescriptions(t *testing.T) {
 		{"stop", newStopCommand},
 		{"remove", newRemoveCommand},
 		{"list", newListCommand},
-		{"logs", newLogsCommand},
 		{"attest", newAttestCommand},
 		{"get", newGetCommand},
 	}
@@ -575,7 +513,6 @@ func TestCommandsWithArgs_HaveArgsValidation(t *testing.T) {
 		{"start", newStartCommand},
 		{"stop", newStopCommand},
 		{"remove", newRemoveCommand},
-		{"logs", newLogsCommand},
 		{"attest", newAttestCommand},
 		{"get", newGetCommand},
 	}

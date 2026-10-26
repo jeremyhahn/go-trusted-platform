@@ -750,7 +750,6 @@ func buildGRPCMethodPermissions() map[string]string {
 		"/platform.v1.ComputeService/DeleteContainer":     scope(container, del),
 		"/platform.v1.ComputeService/GetContainer":        scope(container, read),
 		"/platform.v1.ComputeService/ListContainers":      scope(container, read),
-		"/platform.v1.ComputeService/GetContainerLogs":    scope(container, read),
 		"/platform.v1.ComputeService/GetContainerMetrics": scope(container, read),
 		"/platform.v1.ComputeService/ExecContainer":       scope(container, write),
 		"/platform.v1.ComputeService/AttachContainer":     scope(container, write),

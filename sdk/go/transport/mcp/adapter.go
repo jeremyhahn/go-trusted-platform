@@ -417,13 +417,12 @@ var grpcMethodToMCPToolMap = map[string]string{
 	// Tenant — proto: pkg/api/grpc/proto/tenant.proto; registered in tenant.go.
 
 	// Compute / Container — proto: pkg/api/grpc/proto/compute.proto
-	"/platform.v1.ComputeService/CreateContainer":  "container_create",
-	"/platform.v1.ComputeService/DeleteContainer":  "container_remove",
-	"/platform.v1.ComputeService/StartContainer":   "container_start",
-	"/platform.v1.ComputeService/StopContainer":    "container_stop",
-	"/platform.v1.ComputeService/ListContainers":   "container_list",
-	"/platform.v1.ComputeService/GetContainer":     "container_get",
-	"/platform.v1.ComputeService/GetContainerLogs": "container_logs",
+	"/platform.v1.ComputeService/CreateContainer": "container_create",
+	"/platform.v1.ComputeService/DeleteContainer": "container_remove",
+	"/platform.v1.ComputeService/StartContainer":  "container_start",
+	"/platform.v1.ComputeService/StopContainer":   "container_stop",
+	"/platform.v1.ComputeService/ListContainers":  "container_list",
+	"/platform.v1.ComputeService/GetContainer":    "container_get",
 
 	// Proxy Service — proto: pkg/api/grpc/proto/proxy.proto
 	// Server registrations live in pkg/api/mcp/proxy_tools.go.

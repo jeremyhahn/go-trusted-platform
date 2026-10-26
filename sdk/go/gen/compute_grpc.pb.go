@@ -51,7 +51,6 @@ const (
 	ComputeService_ListContainers_FullMethodName      = "/platform.v1.ComputeService/ListContainers"
 	ComputeService_AttachContainer_FullMethodName     = "/platform.v1.ComputeService/AttachContainer"
 	ComputeService_ExecContainer_FullMethodName       = "/platform.v1.ComputeService/ExecContainer"
-	ComputeService_GetContainerLogs_FullMethodName    = "/platform.v1.ComputeService/GetContainerLogs"
 	ComputeService_GetContainerMetrics_FullMethodName = "/platform.v1.ComputeService/GetContainerMetrics"
 	ComputeService_AttestVM_FullMethodName            = "/platform.v1.ComputeService/AttestVM"
 	ComputeService_VerifyVMAttestation_FullMethodName = "/platform.v1.ComputeService/VerifyVMAttestation"
@@ -104,7 +103,6 @@ type ComputeServiceClient interface {
 	// Container console and monitoring
 	AttachContainer(ctx context.Context, in *AttachContainerRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[ConsoleOutput], error)
 	ExecContainer(ctx context.Context, in *ExecContainerRequest, opts ...grpc.CallOption) (*ExecContainerResponse, error)
-	GetContainerLogs(ctx context.Context, in *GetContainerLogsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[LogEntry], error)
 	GetContainerMetrics(ctx context.Context, in *GetContainerMetricsRequest, opts ...grpc.CallOption) (*ContainerMetricsResponse, error)
 	// VM attestation
 	AttestVM(ctx context.Context, in *AttestVMRequest, opts ...grpc.CallOption) (*AttestVMResponse, error)
@@ -471,25 +469,6 @@ func (c *computeServiceClient) ExecContainer(ctx context.Context, in *ExecContai
 	return out, nil
 }
 
-func (c *computeServiceClient) GetContainerLogs(ctx context.Context, in *GetContainerLogsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[LogEntry], error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	stream, err := c.cc.NewStream(ctx, &ComputeService_ServiceDesc.Streams[4], ComputeService_GetContainerLogs_FullMethodName, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	x := &grpc.GenericClientStream[GetContainerLogsRequest, LogEntry]{ClientStream: stream}
-	if err := x.ClientStream.SendMsg(in); err != nil {
-		return nil, err
-	}
-	if err := x.ClientStream.CloseSend(); err != nil {
-		return nil, err
-	}
-	return x, nil
-}
-
-// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
-type ComputeService_GetContainerLogsClient = grpc.ServerStreamingClient[LogEntry]
-
 func (c *computeServiceClient) GetContainerMetrics(ctx context.Context, in *GetContainerMetricsRequest, opts ...grpc.CallOption) (*ContainerMetricsResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ContainerMetricsResponse)
@@ -576,7 +555,6 @@ type ComputeServiceServer interface {
 	// Container console and monitoring
 	AttachContainer(*AttachContainerRequest, grpc.ServerStreamingServer[ConsoleOutput]) error
 	ExecContainer(context.Context, *ExecContainerRequest) (*ExecContainerResponse, error)
-	GetContainerLogs(*GetContainerLogsRequest, grpc.ServerStreamingServer[LogEntry]) error
 	GetContainerMetrics(context.Context, *GetContainerMetricsRequest) (*ContainerMetricsResponse, error)
 	// VM attestation
 	AttestVM(context.Context, *AttestVMRequest) (*AttestVMResponse, error)
@@ -688,9 +666,6 @@ func (UnimplementedComputeServiceServer) AttachContainer(*AttachContainerRequest
 }
 func (UnimplementedComputeServiceServer) ExecContainer(context.Context, *ExecContainerRequest) (*ExecContainerResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ExecContainer not implemented")
-}
-func (UnimplementedComputeServiceServer) GetContainerLogs(*GetContainerLogsRequest, grpc.ServerStreamingServer[LogEntry]) error {
-	return status.Error(codes.Unimplemented, "method GetContainerLogs not implemented")
 }
 func (UnimplementedComputeServiceServer) GetContainerMetrics(context.Context, *GetContainerMetricsRequest) (*ContainerMetricsResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetContainerMetrics not implemented")
@@ -1269,17 +1244,6 @@ func _ComputeService_ExecContainer_Handler(srv interface{}, ctx context.Context,
 	return interceptor(ctx, in, info, handler)
 }
 
-func _ComputeService_GetContainerLogs_Handler(srv interface{}, stream grpc.ServerStream) error {
-	m := new(GetContainerLogsRequest)
-	if err := stream.RecvMsg(m); err != nil {
-		return err
-	}
-	return srv.(ComputeServiceServer).GetContainerLogs(m, &grpc.GenericServerStream[GetContainerLogsRequest, LogEntry]{ServerStream: stream})
-}
-
-// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
-type ComputeService_GetContainerLogsServer = grpc.ServerStreamingServer[LogEntry]
-
 func _ComputeService_GetContainerMetrics_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(GetContainerMetricsRequest)
 	if err := dec(in); err != nil {
@@ -1507,11 +1471,6 @@ var ComputeService_ServiceDesc = grpc.ServiceDesc{
 		{
 			StreamName:    "AttachContainer",
 			Handler:       _ComputeService_AttachContainer_Handler,
-			ServerStreams: true,
-		},
-		{
-			StreamName:    "GetContainerLogs",
-			Handler:       _ComputeService_GetContainerLogs_Handler,
 			ServerStreams: true,
 		},
 	},

@@ -1700,8 +1700,6 @@ func (r *ToolRegistry) ExecuteTool(ctx context.Context, name string, args map[st
 		return r.executeContainerGet(ctx, args)
 	case "container_list":
 		return r.executeContainerList(ctx, args)
-	case "container_logs":
-		return r.executeContainerLogs(ctx, args)
 	case "container_attest":
 		return r.executeContainerAttest(ctx, args)
 	case "container_exec":

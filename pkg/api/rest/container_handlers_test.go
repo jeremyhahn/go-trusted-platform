@@ -47,9 +47,7 @@ type mockOrchestrator struct {
 	listErr        error
 	getErr         error
 	getStateErr    error
-	logsErr        error
 	attestErr      error
-	logsContent    string
 	attestReport   *container.AttestationReport
 	createResponse *compute.Instance
 }
@@ -157,21 +155,6 @@ func (m *mockOrchestrator) GetState(ctx context.Context, instanceID string) (com
 	return inst.State, nil
 }
 
-// Implement ExtendedContainerOrchestrator interface
-func (m *mockOrchestrator) Logs(ctx context.Context, id string, opts container.LogOptions) (io.ReadCloser, error) {
-	if m.logsErr != nil {
-		return nil, m.logsErr
-	}
-	if _, ok := m.instances[id]; !ok {
-		return nil, compute.ErrInstanceNotFound
-	}
-	content := m.logsContent
-	if content == "" {
-		content = "test log line 1\ntest log line 2\n"
-	}
-	return io.NopCloser(strings.NewReader(content)), nil
-}
-
 func (m *mockOrchestrator) Attest(ctx context.Context, id string) (*container.AttestationReport, error) {
 	if m.attestErr != nil {
 		return nil, m.attestErr
@@ -215,37 +198,6 @@ func (m *mockOrchestrator) addTestInstance(id, name string, state compute.Instan
 // =============================================================================
 // Mock Orchestrator with Streaming Support
 // =============================================================================
-
-// streamingMockOrchestrator provides streaming log support for testing SSE
-type streamingMockOrchestrator struct {
-	mockOrchestrator
-	logsReader io.ReadCloser
-}
-
-func newStreamingMockOrchestrator() *streamingMockOrchestrator {
-	return &streamingMockOrchestrator{
-		mockOrchestrator: mockOrchestrator{
-			instances: make(map[string]*compute.Instance),
-		},
-	}
-}
-
-func (m *streamingMockOrchestrator) Logs(ctx context.Context, id string, opts container.LogOptions) (io.ReadCloser, error) {
-	if m.logsErr != nil {
-		return nil, m.logsErr
-	}
-	if _, ok := m.instances[id]; !ok {
-		return nil, compute.ErrInstanceNotFound
-	}
-	if m.logsReader != nil {
-		return m.logsReader, nil
-	}
-	content := m.logsContent
-	if content == "" {
-		content = "test log line 1\ntest log line 2\n"
-	}
-	return io.NopCloser(strings.NewReader(content)), nil
-}
 
 // =============================================================================
 // Test Helpers
@@ -341,7 +293,6 @@ func TestRegisterRoutes(t *testing.T) {
 			{http.MethodDelete, "/api/v1/containers/test-id"},
 			{http.MethodPost, "/api/v1/containers/test-id/start"},
 			{http.MethodPost, "/api/v1/containers/test-id/stop"},
-			{http.MethodGet, "/api/v1/containers/test-id/logs"},
 			{http.MethodPost, "/api/v1/containers/test-id/attest"},
 		}
 
@@ -873,214 +824,6 @@ func TestHandleRemoveContainer(t *testing.T) {
 }
 
 // =============================================================================
-// Container Logs Tests
-// =============================================================================
-
-func TestHandleGetContainerLogs(t *testing.T) {
-	t.Run("returns container logs", func(t *testing.T) {
-		orch := newMockOrchestrator()
-		orch.addTestInstance("test-id", "test-container", compute.StateRunning)
-		orch.logsContent = "log line 1\nlog line 2\n"
-		_, router := setupTestHandler(orch)
-
-		req := httptest.NewRequest(http.MethodGet, "/api/v1/containers/test-id/logs", nil)
-		w := httptest.NewRecorder()
-
-		router.ServeHTTP(w, req)
-
-		resp := w.Result()
-		defer resp.Body.Close()
-
-		assert.Equal(t, http.StatusOK, resp.StatusCode)
-
-		var logsResp ContainerLogsResponse
-		decodeResponse(t, resp.Body, &logsResp)
-		assert.Equal(t, "test-id", logsResp.ContainerID)
-		assert.Contains(t, logsResp.Logs, "log line 1")
-		assert.Contains(t, logsResp.Logs, "log line 2")
-	})
-
-	t.Run("returns error for non-existent container", func(t *testing.T) {
-		orch := newMockOrchestrator()
-		_, router := setupTestHandler(orch)
-
-		req := httptest.NewRequest(http.MethodGet, "/api/v1/containers/nonexistent/logs", nil)
-		w := httptest.NewRecorder()
-
-		router.ServeHTTP(w, req)
-
-		resp := w.Result()
-		defer resp.Body.Close()
-
-		assert.Equal(t, http.StatusNotFound, resp.StatusCode)
-	})
-
-	t.Run("returns error when logs fetch fails", func(t *testing.T) {
-		orch := newMockOrchestrator()
-		orch.addTestInstance("test-id", "test-container", compute.StateRunning)
-		orch.logsErr = errors.New("logs unavailable")
-		_, router := setupTestHandler(orch)
-
-		req := httptest.NewRequest(http.MethodGet, "/api/v1/containers/test-id/logs", nil)
-		w := httptest.NewRecorder()
-
-		router.ServeHTTP(w, req)
-
-		resp := w.Result()
-		defer resp.Body.Close()
-
-		assert.Equal(t, http.StatusInternalServerError, resp.StatusCode)
-	})
-
-	t.Run("respects query parameters", func(t *testing.T) {
-		orch := newMockOrchestrator()
-		orch.addTestInstance("test-id", "test-container", compute.StateRunning)
-		_, router := setupTestHandler(orch)
-
-		req := httptest.NewRequest(http.MethodGet, "/api/v1/containers/test-id/logs?tail=100&timestamps=true&stdout=true&stderr=false", nil)
-		w := httptest.NewRecorder()
-
-		router.ServeHTTP(w, req)
-
-		resp := w.Result()
-		defer resp.Body.Close()
-
-		assert.Equal(t, http.StatusOK, resp.StatusCode)
-	})
-
-	t.Run("returns error when orchestrator not available", func(t *testing.T) {
-		handlers := NewContainerHandlers(nil, slog.Default())
-		router := mux.NewRouter()
-		handlers.RegisterRoutes(router)
-
-		req := httptest.NewRequest(http.MethodGet, "/api/v1/containers/test-id/logs", nil)
-		w := httptest.NewRecorder()
-
-		router.ServeHTTP(w, req)
-
-		resp := w.Result()
-		defer resp.Body.Close()
-
-		assert.Equal(t, http.StatusServiceUnavailable, resp.StatusCode)
-	})
-}
-
-// =============================================================================
-// Container Logs Streaming Tests
-// =============================================================================
-
-// errorReader returns an error when Read is called after the first read
-type errorReader struct {
-	firstRead bool
-	content   string
-}
-
-func (r *errorReader) Read(p []byte) (n int, err error) {
-	if !r.firstRead {
-		r.firstRead = true
-		copy(p, r.content)
-		return len(r.content), nil
-	}
-	return 0, io.EOF
-}
-
-func (r *errorReader) Close() error {
-	return nil
-}
-
-func TestStreamContainerLogs(t *testing.T) {
-	t.Run("streams logs with follow parameter", func(t *testing.T) {
-		orch := newStreamingMockOrchestrator()
-		orch.addTestInstance("test-id", "test-container", compute.StateRunning)
-		orch.logsReader = &errorReader{content: "streaming log\n"}
-
-		handlers := NewContainerHandlers(orch, slog.Default())
-		router := mux.NewRouter()
-		handlers.RegisterRoutes(router)
-
-		req := httptest.NewRequest(http.MethodGet, "/api/v1/containers/test-id/logs?follow=true", nil)
-		w := httptest.NewRecorder()
-
-		router.ServeHTTP(w, req)
-
-		resp := w.Result()
-		defer resp.Body.Close()
-
-		assert.Equal(t, http.StatusOK, resp.StatusCode)
-		assert.Equal(t, "text/event-stream", resp.Header.Get("Content-Type"))
-		assert.Equal(t, "no-cache", resp.Header.Get("Cache-Control"))
-		assert.Equal(t, "keep-alive", resp.Header.Get("Connection"))
-	})
-
-	t.Run("streams logs error on initial fetch", func(t *testing.T) {
-		orch := newStreamingMockOrchestrator()
-		orch.addTestInstance("test-id", "test-container", compute.StateRunning)
-		orch.logsErr = errors.New("stream error")
-
-		handlers := NewContainerHandlers(orch, slog.Default())
-		router := mux.NewRouter()
-		handlers.RegisterRoutes(router)
-
-		req := httptest.NewRequest(http.MethodGet, "/api/v1/containers/test-id/logs?follow=true", nil)
-		w := httptest.NewRecorder()
-
-		router.ServeHTTP(w, req)
-
-		resp := w.Result()
-		defer resp.Body.Close()
-
-		assert.Equal(t, http.StatusInternalServerError, resp.StatusCode)
-	})
-
-	t.Run("streaming logs with context cancellation", func(t *testing.T) {
-		orch := newStreamingMockOrchestrator()
-		orch.addTestInstance("test-id", "test-container", compute.StateRunning)
-
-		// Create a reader that blocks until context is canceled
-		pr, pw := io.Pipe()
-		orch.logsReader = pr
-
-		handlers := NewContainerHandlers(orch, slog.Default())
-		router := mux.NewRouter()
-		handlers.RegisterRoutes(router)
-
-		ctx, cancel := context.WithCancel(context.Background())
-		req := httptest.NewRequest(http.MethodGet, "/api/v1/containers/test-id/logs?follow=true", nil)
-		req = req.WithContext(ctx)
-		w := httptest.NewRecorder()
-
-		streamed := make(chan error, 2)
-		go func() {
-			// A pipe write returns only once the handler has read it, so
-			// the stream loop is live when the context is cancelled.
-			_, err := pw.Write([]byte("line 1\n"))
-			streamed <- err
-			cancel()
-			// A handler blocked in Read takes this line and then sees the
-			// cancelled context; one that already returned closed the
-			// reader, which fails the write with io.ErrClosedPipe.
-			_, err = pw.Write([]byte("line 2\n"))
-			streamed <- err
-		}()
-
-		router.ServeHTTP(w, req)
-
-		resp := w.Result()
-		defer resp.Body.Close()
-
-		assert.NoError(t, <-streamed)
-		if err := <-streamed; err != nil {
-			assert.ErrorIs(t, err, io.ErrClosedPipe)
-		}
-
-		// Response should be OK because we set up SSE headers before
-		// streaming, and the stream ends on the context, not on EOF.
-		assert.Equal(t, http.StatusOK, resp.StatusCode)
-		assert.NotContains(t, w.Body.String(), "event: end")
-	})
-}
-
-// =============================================================================
 // Container Attestation Tests
 // =============================================================================
 
@@ -1279,72 +1022,6 @@ func TestParseListFilter(t *testing.T) {
 		filter := handlers.parseListFilter(req)
 
 		assert.Nil(t, filter.State)
-	})
-}
-
-func TestParseLogOptions(t *testing.T) {
-	handlers := NewContainerHandlers(nil, nil)
-
-	t.Run("default options", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodGet, "/api/v1/containers/test/logs", nil)
-		opts := handlers.parseLogOptions(req)
-
-		assert.True(t, opts.Stdout)
-		assert.True(t, opts.Stderr)
-	})
-
-	t.Run("parses stdout false", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodGet, "/api/v1/containers/test/logs?stdout=false", nil)
-		opts := handlers.parseLogOptions(req)
-
-		assert.False(t, opts.Stdout)
-		assert.True(t, opts.Stderr)
-	})
-
-	t.Run("parses stderr false", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodGet, "/api/v1/containers/test/logs?stderr=false", nil)
-		opts := handlers.parseLogOptions(req)
-
-		assert.True(t, opts.Stdout)
-		assert.False(t, opts.Stderr)
-	})
-
-	t.Run("parses tail", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodGet, "/api/v1/containers/test/logs?tail=100", nil)
-		opts := handlers.parseLogOptions(req)
-
-		assert.Equal(t, "100", opts.Tail)
-	})
-
-	t.Run("parses timestamps", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodGet, "/api/v1/containers/test/logs?timestamps=true", nil)
-		opts := handlers.parseLogOptions(req)
-
-		assert.True(t, opts.Timestamps)
-	})
-
-	t.Run("parses since and until", func(t *testing.T) {
-		since := time.Now().Add(-1 * time.Hour).Format(time.RFC3339)
-		until := time.Now().Format(time.RFC3339)
-		req := httptest.NewRequest(http.MethodGet, "/api/v1/containers/test/logs?since="+since+"&until="+until, nil)
-		opts := handlers.parseLogOptions(req)
-
-		assert.False(t, opts.Since.IsZero())
-		assert.False(t, opts.Until.IsZero())
-	})
-
-	t.Run("ignores invalid since", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodGet, "/api/v1/containers/test/logs?since=invalid", nil)
-		opts := handlers.parseLogOptions(req)
-
-		assert.True(t, opts.Since.IsZero())
-	})
-
-	t.Run("ignores invalid until", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodGet, "/api/v1/containers/test/logs?until=invalid", nil)
-		opts := handlers.parseLogOptions(req)
-
-		assert.True(t, opts.Until.IsZero())
 	})
 }
 
@@ -1606,26 +1283,6 @@ func (m *basicMockOrchestrator) addTestInstance(id, name string, state compute.I
 	}
 }
 
-func TestLogsNotImplemented(t *testing.T) {
-	t.Run("returns not implemented for basic orchestrator", func(t *testing.T) {
-		orch := newBasicMockOrchestrator()
-		orch.addTestInstance("test-id", "test-container", compute.StateRunning)
-		handlers := NewContainerHandlers(orch, slog.Default())
-		router := mux.NewRouter()
-		handlers.RegisterRoutes(router)
-
-		req := httptest.NewRequest(http.MethodGet, "/api/v1/containers/test-id/logs", nil)
-		w := httptest.NewRecorder()
-
-		router.ServeHTTP(w, req)
-
-		resp := w.Result()
-		defer resp.Body.Close()
-
-		assert.Equal(t, http.StatusNotImplemented, resp.StatusCode)
-	})
-}
-
 func TestAttestNotImplemented(t *testing.T) {
 	t.Run("returns not implemented for basic orchestrator", func(t *testing.T) {
 		orch := newBasicMockOrchestrator()
@@ -1801,37 +1458,3 @@ func TestBuildProfileFromRequest(t *testing.T) {
 // =============================================================================
 // Read Error Handling Tests
 // =============================================================================
-
-// failingReader returns an error when Read is called
-type failingReader struct{}
-
-func (r *failingReader) Read(p []byte) (n int, err error) {
-	return 0, errors.New("read error")
-}
-
-func (r *failingReader) Close() error {
-	return nil
-}
-
-func TestLogsReadError(t *testing.T) {
-	t.Run("handles read error from logs reader", func(t *testing.T) {
-		orch := newStreamingMockOrchestrator()
-		orch.addTestInstance("test-id", "test-container", compute.StateRunning)
-		orch.logsReader = &failingReader{}
-
-		handlers := NewContainerHandlers(orch, slog.Default())
-		router := mux.NewRouter()
-		handlers.RegisterRoutes(router)
-
-		req := httptest.NewRequest(http.MethodGet, "/api/v1/containers/test-id/logs", nil)
-		w := httptest.NewRecorder()
-
-		router.ServeHTTP(w, req)
-
-		resp := w.Result()
-		defer resp.Body.Close()
-
-		// Should return error because ReadAll fails
-		assert.Equal(t, http.StatusInternalServerError, resp.StatusCode)
-	})
-}

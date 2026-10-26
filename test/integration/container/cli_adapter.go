@@ -311,48 +311,6 @@ func (c *CLIAdapter) List(ctx context.Context, opts ListOptions) ([]*Container, 
 }
 
 // =============================================================================
-// Container Logs
-// =============================================================================
-
-// Logs retrieves container logs via CLI.
-// Supports: stdout, stderr, tail, and timestamps options.
-func (c *CLIAdapter) Logs(ctx context.Context, id string, opts LogOptions) ([]string, error) {
-	if id == "" {
-		return nil, ErrCommandFailed{Command: "container logs", Output: "container ID is required", Err: fmt.Errorf("empty id")}
-	}
-
-	args := []string{"container", "logs", id}
-
-	if opts.Tail > 0 {
-		args = append(args, "--tail", strconv.Itoa(opts.Tail))
-	}
-
-	if opts.Timestamps {
-		args = append(args, "--timestamps")
-	}
-
-	if !opts.Stdout && opts.Stderr {
-		args = append(args, "--stderr-only")
-	}
-
-	if opts.Stdout && !opts.Stderr {
-		args = append(args, "--stdout-only")
-	}
-
-	output, err := c.runCommand(ctx, args...)
-	if err != nil {
-		return nil, err
-	}
-
-	var result cliLogsResponse
-	if err := json.Unmarshal(output, &result); err != nil {
-		return nil, ErrInvalidResponse{Operation: "Logs", Err: err}
-	}
-
-	return result.Lines, nil
-}
-
-// =============================================================================
 // Container Attestation
 // =============================================================================
 

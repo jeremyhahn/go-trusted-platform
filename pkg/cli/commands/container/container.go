@@ -29,7 +29,7 @@ func NewCommand(getFlags func() *cli.CommonFlags) *cobra.Command {
 The container subsystem provides comprehensive container lifecycle management including:
   - Create and configure containers with security policies
   - Start, stop, and remove containers
-  - View container logs and status
+  - View container status
   - Attest container integrity using TPM measurements
   - Manage container networking and resources
 
@@ -42,9 +42,6 @@ Examples:
 
   # Start a container
   platformctl container start myapp
-
-  # View container logs
-  platformctl container logs myapp --follow
 
   # Attest container integrity
   platformctl container attest myapp --pcrs 0,1,2,3
@@ -59,7 +56,6 @@ Examples:
 	cmd.AddCommand(newStopCommand(getFlags))
 	cmd.AddCommand(newRemoveCommand(getFlags))
 	cmd.AddCommand(newListCommand(getFlags))
-	cmd.AddCommand(newLogsCommand(getFlags))
 	cmd.AddCommand(newAttestCommand(getFlags))
 	cmd.AddCommand(newGetCommand(getFlags))
 

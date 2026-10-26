@@ -426,7 +426,6 @@ a running daemon.
 | Stop container | `POST /api/v1/compute/containers/{id}/stop` | `StopContainer` | `OpContainerStop` (`0xFE`) | `container_stop` | ✅ |
 | Exec in container | `POST /api/v1/compute/containers/{id}/exec` | `ExecContainer` | `OpContainerExec` (`0xCA`) | `container_exec` | ✅ |
 | Container metrics | `GET /api/v1/compute/containers/{id}/metrics` | `GetContainerMetrics` | `OpContainerMetrics` (`0xCB`) | `container_metrics` | ✅ |
-| Container logs | `MISSING` — streaming, §5 | `GetContainerLogs` (server stream) | `OpContainerLogs` (`0xAF`) | `container_logs` | ✅ |
 | Attach to container | `MISSING` — streaming, §5 | `AttachContainer` (server stream) | `MISSING` — streaming | `MISSING` | ✅ |
 
 Containers are the most evenly covered capability set in this feature.
@@ -486,8 +485,8 @@ and the reason in `message`. A client therefore echoes Attest VM's
 
 ### Streaming capabilities are transport-limited by design
 
-`AttachVMConsole`, `SendVMConsoleInput`, `AttachContainer`, `GetVMLogs` and
-`GetContainerLogs` are gRPC streams with **no unary equivalent**. The QUIC
+`AttachVMConsole`, `SendVMConsoleInput`, `AttachContainer` and `GetVMLogs`
+are gRPC streams with **no unary equivalent**. The QUIC
 layer's own comment records the decision: *"interactive console and log-follow
 remain streaming-only and daemon-native"*
 (`sdk/go/wire/quicwire/vm_ops_opcodes.go`). These are **not** gaps to close by adding a
@@ -558,7 +557,7 @@ under two resources:
 
 | Permission | RPCs |
 |---|---|
-| `container:read` | `GetContainer`, `ListContainers`, `GetContainerLogs`, `GetContainerMetrics`, `AttestContainer` |
+| `container:read` | `GetContainer`, `ListContainers`, `GetContainerMetrics`, `AttestContainer` |
 | `container:write` | `CreateContainer`, `StartContainer`, `StopContainer`, `ExecContainer`, `AttachContainer` |
 | `container:delete` | `DeleteContainer` |
 | `vm:read` | `GetVM`, `ListVMs`, `GetVMLogs`, `GetVMMetrics`, `ListSnapshots`, `GetSnapshot`, `AttestVM`, `VerifyVMAttestation` |
@@ -574,7 +573,7 @@ backend:
 
 | Permission | MCP tools |
 |---|---|
-| `container:read` | `container_get`, `container_list`, `container_logs`, `container_metrics`, `container_attest` |
+| `container:read` | `container_get`, `container_list`, `container_metrics`, `container_attest` |
 | `container:write` | `container_create`, `container_start`, `container_stop`, `container_exec` |
 | `container:delete` | `container_remove` |
 | `vm:read` | `vm_list`, `vm_get`, `vm_snapshot_list`, `vm_snapshot_get`, `vm_attest`, `vm_attest_verify`, `vm_metrics`, `vm_logs` |

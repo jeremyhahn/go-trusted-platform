@@ -257,7 +257,6 @@ type mockServiceProvider struct {
 	containerRemoveFunc func(ctx context.Context, id string, force bool) error
 	containerGetFunc    func(ctx context.Context, id string) (interface{}, error)
 	containerListFunc   func(ctx context.Context, all bool, filters map[string][]string, limit int) ([]interface{}, error)
-	containerLogsFunc   func(ctx context.Context, id string, follow bool, stdout bool, stderr bool, tail string, timestamps bool) (string, error)
 	containerAttestFunc func(ctx context.Context, id string) (interface{}, error)
 
 	// KMS Data Key
@@ -2114,13 +2113,6 @@ func (m *mockServiceProvider) ContainerList(ctx context.Context, all bool, filte
 		map[string]interface{}{"id": "container-1", "name": "web", "state": "running"},
 		map[string]interface{}{"id": "container-2", "name": "db", "state": "running"},
 	}, nil
-}
-
-func (m *mockServiceProvider) ContainerLogs(ctx context.Context, id string, follow bool, stdout bool, stderr bool, tail string, timestamps bool) (string, error) {
-	if m.containerLogsFunc != nil {
-		return m.containerLogsFunc(ctx, id, follow, stdout, stderr, tail, timestamps)
-	}
-	return "container log output line 1\ncontainer log output line 2\n", nil
 }
 
 func (m *mockServiceProvider) ContainerAttest(ctx context.Context, id string) (interface{}, error) {

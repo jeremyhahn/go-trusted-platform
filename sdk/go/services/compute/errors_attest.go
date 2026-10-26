@@ -13,7 +13,13 @@
 
 package compute
 
-import "fmt"
+import (
+	"errors"
+	"fmt"
+)
+
+// ErrContainerIDRequired indicates that a container ID is required.
+var ErrContainerIDRequired = errors.New("container ID is required")
 
 // ErrAttestContainerFailed is returned when container attestation fails.
 type ErrAttestContainerFailed struct {

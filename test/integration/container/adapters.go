@@ -187,11 +187,6 @@ func (r *RESTAdapter) Setup(ctx context.Context) error {
 	)
 }
 
-// Logs has no REST route.
-func (r *RESTAdapter) Logs(ctx context.Context, id string, opts LogOptions) ([]string, error) {
-	return nil, noSurface(r.Name(), opLogs)
-}
-
 // =============================================================================
 // gRPC Adapter Implementation
 // =============================================================================
@@ -357,34 +352,6 @@ func (g *GRPCAdapter) List(ctx context.Context, opts ListOptions) ([]*Container,
 		containers = append(containers, containerFromDomain(c))
 	}
 	return containers, nil
-}
-
-// Logs retrieves container logs via the SDK client over gRPC.
-func (g *GRPCAdapter) Logs(ctx context.Context, id string, opts LogOptions) ([]string, error) {
-	params := &computesvc.GetContainerLogsParams{
-		ID:         id,
-		Stdout:     opts.Stdout,
-		Stderr:     opts.Stderr,
-		Since:      opts.Since,
-		Until:      opts.Until,
-		Timestamps: opts.Timestamps,
-	}
-	if opts.Tail > 0 {
-		params.TailLines = uint32(opts.Tail)
-	}
-
-	entries, err := g.client.GetContainerLogsBatch(ctx, params)
-	if err != nil {
-		return nil, ErrCommandFailed{Command: g.transport + " GetContainerLogs", Err: err}
-	}
-
-	lines := make([]string, 0, len(entries))
-	for _, entry := range entries {
-		if entry != nil {
-			lines = append(lines, entry.Message)
-		}
-	}
-	return lines, nil
 }
 
 // Attest performs quote-based container attestation via the SDK client
@@ -701,12 +668,6 @@ func (r *cliContainerResponse) toContainer() *Container {
 type cliContainerListResponse struct {
 	Containers []cliContainerResponse `json:"containers"`
 	Count      int                    `json:"count"`
-}
-
-// cliLogsResponse represents CLI JSON output for container logs.
-type cliLogsResponse struct {
-	ContainerID string   `json:"container_id"`
-	Lines       []string `json:"lines"`
 }
 
 // cliAttestationResponse represents CLI JSON output for attestation.

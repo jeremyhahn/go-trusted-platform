@@ -46,7 +46,7 @@ import (
 //	0x30-0x3D device            0x9F      bmc category
 //	0x3F      ipam category     0xA0-0xA8 ca
 //	0x40-0x4F sdn               0xA9-0xAD iam users
-//	0x50      ntp category      0xAE-0xAF container
+//	0x50      ntp category      0xAE      container
 //	0x51      iam category
 //	0x52      vpn category
 //	0x53      cache category
@@ -240,7 +240,8 @@ var quicWireOwners = []struct {
 	{0x9F, 0x9F, "bmc"},
 	{0xA0, 0xA8, "ca"},
 	{0xA9, 0xAD, "iam"},
-	{0xAE, 0xAF, "container"},
+	{0xAE, 0xAE, "container"},
+	{0xAF, 0xAF, "reserved"}, // retired ContainerLogs (#452), unclassified
 	{0xB0, 0xB4, "sdn"},
 	{0xB5, 0xBF, "iam"},
 	{0xC0, 0xCB, "kms"},
@@ -488,7 +489,6 @@ var quicDispatchOpcodeIntents = map[string]dispatchOpcodeIntent{
 	"OpIAMUserList":               {value: quicwire.OpIAMUserList, mode: wireDirect, family: "iam"},
 	"OpIAMUserUpdate":             {value: quicwire.OpIAMUserUpdate, mode: wireDirect, family: "iam"},
 	"OpContainerList":             {value: quicwire.OpContainerList, mode: wireDirect, family: "container"},
-	"OpContainerLogs":             {value: quicwire.OpContainerLogs, mode: wireDirect, family: "container"},
 	"OpSDNCreateBridge":           {value: quicwire.OpSDNCreateBridge, mode: wireDirect, family: "sdn"},
 	"OpSDNDeleteBridge":           {value: quicwire.OpSDNDeleteBridge, mode: wireDirect, family: "sdn"},
 	"OpSDNCreatePort":             {value: quicwire.OpSDNCreatePort, mode: wireDirect, family: "sdn"},

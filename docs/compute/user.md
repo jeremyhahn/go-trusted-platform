@@ -81,7 +81,6 @@ platformctl container create --name api \
     --start
 
 platformctl container list --all
-platformctl container logs api --follow --timestamps
 ```
 
 Images come from the platform's attestation-gated registry
@@ -208,10 +207,6 @@ and never will — or the host has not attested.
 **A container will not pull its image on one node but will on another.**
 Registry access is attestation-gated. The difference is usually the node's
 attestation state, not the image.
-
-**`--stdout` on `container logs` seems to do nothing.**
-It already defaults to true, as does `--stderr`. To suppress one, pass
-`--stdout=false`.
 
 **A VM you created does not appear in `list`.**
 `list` shows only running VMs by default. Pass `--all`.

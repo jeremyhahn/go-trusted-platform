@@ -17,7 +17,6 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"io"
 	"testing"
 	"time"
 
@@ -36,10 +35,6 @@ type fakeComputeClient struct {
 	attestResp *platformv1.AttestContainerResponse
 	attestErr  error
 
-	logsReq     *platformv1.GetContainerLogsRequest
-	logsEntries []*platformv1.LogEntry
-	logsErr     error
-
 	createResp *platformv1.CreateContainerResponse
 }
 
@@ -53,30 +48,6 @@ func (f *fakeComputeClient) AttestContainer(ctx context.Context, in *platformv1.
 		return nil, f.attestErr
 	}
 	return f.attestResp, nil
-}
-
-// fakeLogsStream implements platformv1.ComputeService_GetContainerLogsClient.
-type fakeLogsStream struct {
-	grpc.ClientStream
-	entries []*platformv1.LogEntry
-	pos     int
-}
-
-func (f *fakeLogsStream) Recv() (*platformv1.LogEntry, error) {
-	if f.pos >= len(f.entries) {
-		return nil, io.EOF
-	}
-	entry := f.entries[f.pos]
-	f.pos++
-	return entry, nil
-}
-
-func (f *fakeComputeClient) GetContainerLogs(ctx context.Context, in *platformv1.GetContainerLogsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[platformv1.LogEntry], error) {
-	f.logsReq = in
-	if f.logsErr != nil {
-		return nil, f.logsErr
-	}
-	return &fakeLogsStream{entries: f.logsEntries}, nil
 }
 
 func TestAttestContainer_Success(t *testing.T) {

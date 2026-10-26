@@ -25,8 +25,6 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
-
-	"github.com/jeremyhahn/go-trusted-platform/pkg/testenv"
 )
 
 // =============================================================================
@@ -191,24 +189,6 @@ func CleanupContainersByPrefix(t *testing.T, ctx context.Context, cmd ContainerC
 	for _, c := range containers {
 		CleanupContainer(t, ctx, cmd, c.ID)
 	}
-}
-
-// =============================================================================
-// Wait Helpers
-// =============================================================================
-
-// containerLogsTimeout bounds the wait for a started container's first output.
-const containerLogsTimeout = 10 * time.Second
-
-// WaitForContainerLogs waits until the container's stdout or stderr holds at
-// least one line. A Logs error counts as no output yet; the caller's own Logs
-// call reports any error that persists.
-func WaitForContainerLogs(ctx context.Context, cmd ContainerCommands, id string) error {
-	hasOutput := func() bool {
-		logs, err := cmd.Logs(ctx, id, LogOptions{Stdout: true, Stderr: true})
-		return err == nil && len(logs) > 0
-	}
-	return testenv.WaitUntil(ctx, containerLogsTimeout, "container "+id+" output", hasOutput)
 }
 
 // =============================================================================

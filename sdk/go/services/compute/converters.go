@@ -723,18 +723,6 @@ func containerStatusFromProto(p *platformv1.Status) *ContainerStatus {
 	}
 }
 
-// logEntryFromProto converts a platformv1.LogEntry to a domain LogEntry.
-func logEntryFromProto(p *platformv1.LogEntry) *LogEntry {
-	if p == nil {
-		return nil
-	}
-	return &LogEntry{
-		Timestamp: timestampToTime(p.Timestamp),
-		Stream:    p.Source,
-		Message:   p.Message,
-	}
-}
-
 // Container Domain-to-proto converters
 
 // createContainerParamsToProto converts CreateContainerParams to a platformv1.CreateContainerRequest.
