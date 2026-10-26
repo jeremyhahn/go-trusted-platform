@@ -581,8 +581,8 @@ Access to the DNS management API is described in
 
 ## Testing and Diagnostics
 
-There is no `platformctl dns` command group (#954, [cli.md](cli.md)): the DNS
-server is managed through the [DNS API](api.md). Test DoT and DoH with standard
+The DNS server is managed with `platformctl dns` ([cli.md](cli.md)) or the
+[DNS API](api.md). Test DoT and DoH with standard
 clients:
 
 ```bash

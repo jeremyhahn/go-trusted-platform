@@ -730,7 +730,7 @@ read the log, then retry with `platformctl bmc enroll`.
 | BMC enrollment outside a bootstrap run | `platformctl bmc` — [`docs/bmc/`](../bmc/) |
 | Building or customising the ISO | `platformctl iso` — [`docs/provisioning/cli.md`](../provisioning/cli.md) |
 | Device templates and profiles outside seeding | `platformctl device` — [`docs/device/`](../device/) |
-| DANE TLSA record management | The DNS API — there is no `platformctl dns` group (#954) — [`docs/dns/cli.md`](../dns/cli.md) |
+| DANE TLSA record management | `platformctl dns record add --type tlsa` — [`docs/dns/cli.md`](../dns/cli.md) |
 | Running bootstrap remotely | Nothing. There is no bootstrap service on any transport — [api.md](api.md) §5 |
 
 ---

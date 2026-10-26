@@ -1,7 +1,7 @@
 # DNS Troubleshooting Guide
 
 > **Status: REFERENCE** · Last verified: 2026-10-18
-> Symptoms of the platform's DNS server (`pkg/dns`) and what causes them in the code. There is no `platformctl dns` group (#954): checks use `dig` and the [DNS API](api.md).
+> Symptoms of the platform's DNS server (`pkg/dns`) and what causes them in the code. Checks use `dig`, `platformctl dns` ([cli.md](cli.md)) and the [DNS API](api.md).
 
 ## Quick checks
 
@@ -84,7 +84,7 @@ There are no DNS-specific logging keys and no separate DNS log file.
 
 ## Not available
 
-No `platformctl dns` commands, zone export or import, cache to flush,
+No zone export or import, cache to flush,
 signature-expiry monitor, emergency key rollover or key revocation, rate
 limits, or performance keys exist.
 
