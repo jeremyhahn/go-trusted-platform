@@ -751,6 +751,17 @@ func (e ErrInvalidFlowConfig) Error() string {
 	return fmt.Sprintf("invalid flow config: %v", e.Cause)
 }
 
+// ErrUnencodableFlow reports a FlowConfig field the OVS flow grammar cannot
+// install exactly as written (sdn_flow_codec.go).
+type ErrUnencodableFlow struct {
+	Field  string
+	Reason string
+}
+
+func (e ErrUnencodableFlow) Error() string {
+	return fmt.Sprintf("invalid flow %s: %s", e.Field, e.Reason)
+}
+
 func (e ErrInvalidFlowConfig) Unwrap() error {
 	return e.Cause
 }

@@ -34,7 +34,7 @@ REST base path `/api/v1/sdn` (`pkg/webservice/v1/rest/sdn/router.go`).
 | Delete bridge | `DELETE /api/v1/sdn/bridges/{name}` | `DeleteBridge` | `OpSDNDeleteBridge` (`0xB1`) | `sdn_delete_bridge` | ✅ |
 | Add port | `POST /api/v1/sdn/bridges/{name}/ports` | `AddPort` | `OpSDNCreatePort` (`0xB2`) | `sdn_add_port` | ✅ |
 | List ports | `GET /api/v1/sdn/bridges/{name}/ports` | `ListPorts` | `OpSDNListPorts` (`0x42`) | `MISSING — docs/13 G7` | ✅ |
-| Get port | `MISSING — docs/13 G7` | `GetPort` | `OpSDNGetPort` (`0x4F`) | `sdn_get_port_state` | ✅ |
+| Get port | `GET /api/v1/sdn/bridges/{name}/ports/{port}/state` (webservice) | `GetPort` | `OpSDNGetPort` (`0x4F`) | `sdn_get_port_state` | ✅ |
 | Delete port | `DELETE /api/v1/sdn/bridges/{name}/ports/{port}` | `DeletePort` | `OpSDNDeletePort` (`0xB3`) | `sdn_delete_port` | ✅ |
 | Get port state | `GET /api/v1/sdn/bridges/{name}/ports/{port}/state` | (via `GetPort`) | `OpSDNGetPortState` (`0x40`) | `sdn_get_port_state` | ✅ |
 | Set port state | `PUT /api/v1/sdn/bridges/{name}/ports/{port}/state` | `SetPortState` | `OpSDNSetPortState` (`0x41`) | `sdn_set_port_state` | ✅ |
@@ -53,6 +53,20 @@ Bridge-scoped and global flow routes both exist in REST
 bridges. `DELETE /api/v1/sdn/flows` takes its selector in the body, which is why
 it is not a path-parameter route.
 
+**The webservice REST routes speak the proto wire shape (#445).** Each bridge,
+port, flow, policy and VLAN route on the webservice router decodes its
+`SDNService` method's request message from the body, fills in the bridge and
+port the path names, calls the gRPC `SDNService` server and answers its
+response message as the envelope `payload`, both as protojson (lowerCamelCase
+fields, enum names, 64-bit integers as strings, bytes as base64). The REST
+handlers hold no SDN logic of their own; a service error keeps its gRPC code
+and maps to HTTP (`400`, `404`, `409`, `503`, else `500`).
+[api-reference-rest.md](api-reference-rest.md) names each route's messages.
+Until #445 these routes answered flat REST documents and read flattened
+bodies, and list and get policy answered without calling the service. The
+zone routes (§5) keep their REST document, and the daemon-only REST server
+(`serve --enable-rest`) keeps its own bodies.
+
 **A flow's ID is its cookie, on every transport.** Adding a flow stamps it with
 a fresh cookie under the `0xA9F1` owner prefix (or the cookie the request names)
 and returns `flow-0x<cookie>`; listing reports the same ID; delete and flow
@@ -68,8 +82,9 @@ transport.** `ingress_rate`
 policing (`ovs.Client.SetIngressPolicing`); a zero rate leaves it unchanged.
 Each must be 0 or a whole multiple of 1000 and a burst needs a rate, otherwise
 the request is refused before anything changes (`400` / `InvalidArgument`,
-`ovs.ErrInvalidPolicing`). REST validates and applies through the OVS client;
-gRPC, Unix, QUIC and MCP go through `SDNService.SetPortState`, and the CLI's
+`ovs.ErrInvalidPolicing`). The daemon-only REST server validates and applies
+through the OVS client; the webservice REST routes, gRPC, Unix, QUIC and MCP go
+through `SDNService.SetPortState`, and the CLI's
 `--ingress-rate`/`--ingress-burst` call that RPC. Until #730 every transport
 accepted `ingress_rate` and dropped it, MCP handed `up`/`down` to the 802.1X
 engine (which refused both), and `platformctl sdn port set-state` changed
@@ -155,13 +170,15 @@ other transport saw. The REST policy object no longer carries `labels` — the
 gRPC `Policy` has no such field. The webservice still has no policy delete
 route.
 
-The webservice's apply route takes the same body, calls the same
-`ApplyPolicy` and answers `201` with the same policy object; it reports a
-duplicate name as `400`, not `409`. The SDK's REST client sends `ApplyPolicy`
-there in this form, through the policy codec its MCP client uses
-(`sdk/go/services/sdn/policy_wire.go`). Until #452 it posted the gRPC request
-to `/api/v1/sdn/policies/apply`, which no server serves, and the webservice
-route answered a made-up policy without calling the service.
+The webservice's apply, list and get routes take the proto wire shape (§2):
+apply reads an `ApplyPolicyRequest`, calls the same `ApplyPolicy` and answers
+`201` with the `ApplyPolicyResponse`; list and get call `ListPolicies` and
+`GetPolicy`. A service refusal keeps its code, so a duplicate name is the
+status the service gives it. The SDK's REST client sends `ApplyPolicy` there as
+protojson. Until #452 it posted the gRPC request to
+`/api/v1/sdn/policies/apply`, which no server serves, and the webservice route
+answered a made-up policy without calling the service; until #445 the SDK sent
+the REST policy document and list and get answered nothing from the service.
 
 **The MCP policy tools are the same operations.** `sdn_apply_policy`,
 `sdn_get_policy`, `sdn_list_policies` and `sdn_delete_policy` call the same
@@ -175,19 +192,22 @@ daemon's standalone REST server.** `POST` and `DELETE` on
 `/api/v1/sdn/bridges/{name}/ports/{port}/auth` call `SDNService.AuthenticatePort`
 and `RevokePortAuth` behind the webservice's admin gate. Authenticate takes
 `{"certificate": <base64 PEM or DER>, "format": "DER"}` (`format` defaults to
-PEM); a missing bridge, port or certificate is `400` before the service is
-called. The service then refuses both calls (below). The SDK's QUIC and MCP
+PEM) — the `AuthenticatePortRequest` in protojson. The service refuses both
+calls (below). The SDK's QUIC and MCP
 transports map neither call and answer `Unimplemented` without sending
 anything.
 
 **The SDK's REST transport puts every bridge and port ID in the path.**
-`DeleteBridge`, `AddPort`, `DeletePort`, `AuthenticatePort` and
-`RevokePortAuth` call the templated routes in the tables above
-(`sdk/go/transport/rest/sdn.go`); the body carries only the remaining fields,
-and an empty bridge or port ID is refused before the call (`InvalidArgument`).
-`AddPort` sends the REST port document (`type` as the short type name) and
-refuses a port type it does not know. Until #452 these five calls went to flat
-routes no server registers.
+`GetBridge`, `DeleteBridge`, `AddPort`, `ListPorts`, `DeletePort`, `GetPort`,
+`SetPortState`, `GetPortStats`, `AuthenticatePort` and `RevokePortAuth` call
+the templated routes in the tables above, and `ListVLANs` puts `bridge_id` in
+the query (`sdk/go/transport/rest/sdn.go`); an empty bridge or port ID is
+refused before the call (`InvalidArgument`). Every SDN request except the zone
+calls is sent as its protojson body, with the path and query fields cleared,
+and every reply is read as the proto response — the webservice's wire shape
+(§2). Until #452 five of these calls went to flat routes no server registers;
+until #445 the transport sent and read flat REST documents (`AddPort` the
+REST port document, `ApplyPolicy` the REST policy document).
 
 **This is IDevID-certificate authentication, not EAP/RADIUS.** `AuthenticatePort`
 validates a device certificate; there is no RADIUS exchange behind it.

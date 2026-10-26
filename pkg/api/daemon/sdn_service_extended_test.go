@@ -399,7 +399,8 @@ func TestSDNService_pbToOvsFlowMod_Extended(t *testing.T) {
 			Actions:  []*platformv1.FlowAction{},
 		}
 
-		flowMod := svc.pbToOvsFlowMod(config)
+		flowMod, err := svc.pbToOvsFlowMod(config)
+		require.NoError(t, err)
 
 		require.NotNil(t, flowMod)
 		assert.Equal(t, 100, flowMod.Priority)
@@ -415,7 +416,8 @@ func TestSDNService_pbToOvsFlowMod_Extended(t *testing.T) {
 			},
 		}
 
-		flowMod := svc.pbToOvsFlowMod(config)
+		flowMod, err := svc.pbToOvsFlowMod(config)
+		require.NoError(t, err)
 
 		require.NotNil(t, flowMod)
 		assert.Equal(t, "in_port=1", flowMod.Match)
@@ -430,7 +432,8 @@ func TestSDNService_pbToOvsFlowMod_Extended(t *testing.T) {
 			},
 		}
 
-		flowMod := svc.pbToOvsFlowMod(config)
+		flowMod, err := svc.pbToOvsFlowMod(config)
+		require.NoError(t, err)
 
 		require.NotNil(t, flowMod)
 		assert.Contains(t, flowMod.Match, "dl_vlan=100")
@@ -444,7 +447,8 @@ func TestSDNService_pbToOvsFlowMod_Extended(t *testing.T) {
 			},
 		}
 
-		flowMod := svc.pbToOvsFlowMod(config)
+		flowMod, err := svc.pbToOvsFlowMod(config)
+		require.NoError(t, err)
 
 		require.NotNil(t, flowMod)
 		assert.Contains(t, flowMod.Match, "dl_src=00:11:22:33:44:55")
@@ -458,7 +462,8 @@ func TestSDNService_pbToOvsFlowMod_Extended(t *testing.T) {
 			},
 		}
 
-		flowMod := svc.pbToOvsFlowMod(config)
+		flowMod, err := svc.pbToOvsFlowMod(config)
+		require.NoError(t, err)
 
 		require.NotNil(t, flowMod)
 		assert.Contains(t, flowMod.Match, "dl_dst=66:77:88:99:aa:bb")
@@ -471,7 +476,8 @@ func TestSDNService_pbToOvsFlowMod_Extended(t *testing.T) {
 			Actions:  []*platformv1.FlowAction{},
 		}
 
-		flowMod := svc.pbToOvsFlowMod(config)
+		flowMod, err := svc.pbToOvsFlowMod(config)
+		require.NoError(t, err)
 
 		require.NotNil(t, flowMod)
 		assert.Empty(t, flowMod.Actions)
@@ -488,7 +494,8 @@ func TestSDNService_pbToOvsFlowMod_Extended(t *testing.T) {
 			},
 		}
 
-		flowMod := svc.pbToOvsFlowMod(config)
+		flowMod, err := svc.pbToOvsFlowMod(config)
+		require.NoError(t, err)
 
 		require.NotNil(t, flowMod)
 		assert.Equal(t, "output:3", flowMod.Actions)
@@ -504,7 +511,8 @@ func TestSDNService_pbToOvsFlowMod_Extended(t *testing.T) {
 			},
 		}
 
-		flowMod := svc.pbToOvsFlowMod(config)
+		flowMod, err := svc.pbToOvsFlowMod(config)
+		require.NoError(t, err)
 
 		require.NotNil(t, flowMod)
 		assert.Equal(t, "drop", flowMod.Actions)
@@ -521,7 +529,8 @@ func TestSDNService_pbToOvsFlowMod_Extended(t *testing.T) {
 			},
 		}
 
-		flowMod := svc.pbToOvsFlowMod(config)
+		flowMod, err := svc.pbToOvsFlowMod(config)
+		require.NoError(t, err)
 
 		require.NotNil(t, flowMod)
 		assert.Equal(t, "mod_vlan_vid:200", flowMod.Actions)
@@ -537,7 +546,8 @@ func TestSDNService_pbToOvsFlowMod_Extended(t *testing.T) {
 			},
 		}
 
-		flowMod := svc.pbToOvsFlowMod(config)
+		flowMod, err := svc.pbToOvsFlowMod(config)
+		require.NoError(t, err)
 
 		require.NotNil(t, flowMod)
 		assert.Equal(t, "strip_vlan", flowMod.Actions)
@@ -559,7 +569,8 @@ func TestSDNService_pbToOvsFlowMod_Extended(t *testing.T) {
 				Table:    tc.table,
 			}
 
-			flowMod := svc.pbToOvsFlowMod(config)
+			flowMod, err := svc.pbToOvsFlowMod(config)
+			require.NoError(t, err)
 
 			require.NotNil(t, flowMod)
 			assert.Equal(t, tc.expected, flowMod.Table)
@@ -578,7 +589,8 @@ func TestSDNService_pbToOvsFlowMod_Extended(t *testing.T) {
 			},
 		}
 
-		flowMod := svc.pbToOvsFlowMod(config)
+		flowMod, err := svc.pbToOvsFlowMod(config)
+		require.NoError(t, err)
 
 		require.NotNil(t, flowMod)
 		assert.Contains(t, flowMod.Match, "in_port=1")
@@ -598,7 +610,8 @@ func TestSDNService_pbToOvsFlowMod_Extended(t *testing.T) {
 			},
 		}
 
-		flowMod := svc.pbToOvsFlowMod(config)
+		flowMod, err := svc.pbToOvsFlowMod(config)
+		require.NoError(t, err)
 
 		require.NotNil(t, flowMod)
 		assert.Contains(t, flowMod.Actions, "output:2")
@@ -613,7 +626,8 @@ func TestSDNService_pbToOvsFlowMod_Extended(t *testing.T) {
 			Priority: 65535, // Max OpenFlow priority
 		}
 
-		flowMod := svc.pbToOvsFlowMod(config)
+		flowMod, err := svc.pbToOvsFlowMod(config)
+		require.NoError(t, err)
 
 		require.NotNil(t, flowMod)
 		assert.Equal(t, 65535, flowMod.Priority)
@@ -626,7 +640,8 @@ func TestSDNService_pbToOvsFlowMod_Extended(t *testing.T) {
 			Actions:  nil,
 		}
 
-		flowMod := svc.pbToOvsFlowMod(config)
+		flowMod, err := svc.pbToOvsFlowMod(config)
+		require.NoError(t, err)
 
 		require.NotNil(t, flowMod)
 		assert.Empty(t, flowMod.Actions)

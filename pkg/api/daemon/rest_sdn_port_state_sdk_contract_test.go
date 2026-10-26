@@ -10,13 +10,14 @@
 //
 //  2. Commercial License
 //     Contact licensing@automatethethings.com for commercial licensing options.
-package rest
+package daemon
 
 import (
 	"context"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc/codes"
@@ -29,14 +30,52 @@ import (
 	sdkrest "github.com/jeremyhahn/go-trusted-platform/sdk/go/transport/rest"
 )
 
-// sdkSDNAgainstRoutes serves the real SDN routes over TLS and returns the SDK
-// SDN client talking to them through the SDK REST adapter, so a route the SDK
-// names and the server does not serve fails here (#730).
-func sdkSDNAgainstRoutes(t *testing.T) (*mockSDNService, *sdksdn.Client) {
+// portStateOVS records what the SDN service asked Open vSwitch to do to each
+// port.
+type portStateOVS struct {
+	portStates map[string]ovs.PortState
+	policing   map[string][2]uint64
+	shaping    map[string][2]uint64
+}
+
+// portStateCalls reads the recorded calls back off the OVS mock.
+func portStateCalls(t *testing.T, mock *ConfigurableMockOVSClient) portStateOVS {
 	t.Helper()
-	svc, router := portStateRouter()
-	router.HandleFunc("/health/live", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
-	server := httptest.NewTLSServer(router)
+	got := portStateOVS{
+		portStates: map[string]ovs.PortState{},
+		policing:   map[string][2]uint64{},
+		shaping:    map[string][2]uint64{},
+	}
+	for _, call := range mock.GetCalls("SetPortState") {
+		got.portStates[call.Args[0].(string)] = call.Args[1].(ovs.PortState)
+	}
+	for _, call := range mock.GetCalls("SetIngressPolicing") {
+		got.policing[call.Args[0].(string)] = [2]uint64{call.Args[1].(uint64), call.Args[2].(uint64)}
+	}
+	for _, call := range mock.GetCalls("SetEgressShaping") {
+		got.shaping[call.Args[0].(string)] = [2]uint64{call.Args[1].(uint64), call.Args[2].(uint64)}
+	}
+	return got
+}
+
+// sdkSDNAgainstRoutes serves the daemon's REST router, wired to an SDN service
+// over the OVS mock holding port eth0 on br-int, over TLS, and returns the
+// SDK SDN client talking to it through the SDK REST adapter, so a route or
+// wire shape the SDK uses and the daemon does not serve fails here (#730,
+// #445).
+func sdkSDNAgainstRoutes(t *testing.T) (*ConfigurableMockOVSClient, *sdksdn.Client) {
+	t.Helper()
+	mock := NewConfigurableMockOVSClient()
+	svc := newTestSDNService(mock)
+	svc.bridges["br-int"] = &bridgeResource{id: "br-int", name: "br-int", createdAt: time.Now()}
+	svc.ports["eth0"] = &portResource{
+		id: "eth0", name: "eth0", bridgeID: "br-int",
+		portType: platformv1.PortType_PORT_TYPE_INTERNAL, createdAt: time.Now(),
+	}
+	rest := newTestRESTServerForPhase35(t)
+	rest.SetSDNService(svc)
+	rest.router.HandleFunc("/health/live", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
+	server := httptest.NewTLSServer(rest.router)
 	t.Cleanup(server.Close)
 
 	// The SDK refuses plaintext REST; trust the test server's certificate.
@@ -44,11 +83,11 @@ func sdkSDNAgainstRoutes(t *testing.T) (*mockSDNService, *sdksdn.Client) {
 	adapter, err := sdkrest.Connect(context.Background(), platform.NewOptions(platform.WithRESTAddr(server.URL), trustServer))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = adapter.Close() })
-	return svc, sdksdn.NewClientFromGRPC(platformv1.NewSDNServiceClient(adapter.Connection()))
+	return mock, sdksdn.NewClientFromGRPC(platformv1.NewSDNServiceClient(adapter.Connection()))
 }
 
 func TestSDNPortStateRoute_SDKSetPortStateReachesTheHandler(t *testing.T) {
-	svc, client := sdkSDNAgainstRoutes(t)
+	mock, client := sdkSDNAgainstRoutes(t)
 
 	port, err := client.SetPortState(context.Background(), &platformv1.SetPortStateRequest{
 		BridgeId:     "br-int",
@@ -60,6 +99,7 @@ func TestSDNPortStateRoute_SDKSetPortStateReachesTheHandler(t *testing.T) {
 		EgressBurst:  2_000_000,
 	})
 	require.NoError(t, err)
+	svc := portStateCalls(t, mock)
 
 	require.Equal(t, ovs.PortStateDown, svc.portStates["eth0"])
 	require.Equal(t, [2]uint64{10_000_000, 1_000_000}, svc.policing["eth0"])
@@ -70,13 +110,13 @@ func TestSDNPortStateRoute_SDKSetPortStateReachesTheHandler(t *testing.T) {
 }
 
 func TestSDNPortStateRoute_SDKSeesTheRefusalCodes(t *testing.T) {
-	svc, client := sdkSDNAgainstRoutes(t)
+	mock, client := sdkSDNAgainstRoutes(t)
 
 	_, err := client.SetPortState(context.Background(), &platformv1.SetPortStateRequest{
 		BridgeId: "br-int", PortId: "eth0", AdminState: "sideways",
 	})
 	require.Equal(t, codes.InvalidArgument, status.Code(err), "got %v", err)
-	require.Empty(t, svc.portStates, "a refused state reached Open vSwitch")
+	require.Empty(t, portStateCalls(t, mock).portStates, "a refused state reached Open vSwitch")
 
 	_, err = client.SetPortState(context.Background(), &platformv1.SetPortStateRequest{
 		BridgeId: "br-int", PortId: "eth9", AdminState: "up",

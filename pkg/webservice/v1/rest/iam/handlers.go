@@ -33,6 +33,7 @@ import (
 	iammw "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/middleware/iam"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/internal/protorest"
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/restwire"
 )
 
@@ -418,18 +419,17 @@ func (h *IAMHandlers) ListUsers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	users := make([]UserResponse, 0, len(resp.Users))
+	users := make([]*platformv1.IAMUser, 0, len(resp.Users))
 	for i := range resp.Users {
-		users = append(users, userToResponse(&resp.Users[i]))
+		users = append(users, UserToProto(&resp.Users[i]))
 	}
 
-	h.respWriter.Success200(w, r, ListUsersResponse{
-		PaginatedResponse: PaginatedResponse{
-			Total:  int64(resp.Pagination.TotalCount),
-			Limit:  limit,
-			Offset: offset,
-		},
-		Users: users,
+	total := int64(resp.Pagination.TotalCount)
+	protorest.WriteSuccess(w, r, h.respWriter, &platformv1.ListIAMUsersResponse{
+		Users:      users,
+		Pagination: ListPagination(limit, offset, total),
+		Total:      total,
+		Timestamp:  timestamppb.Now(),
 	})
 }
 
@@ -526,9 +526,9 @@ func (h *IAMHandlers) DeleteUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.respWriter.Success200(w, r, SuccessResponse{
-		Success: true,
-		Message: "user deleted successfully",
+	protorest.WriteSuccess(w, r, h.respWriter, &platformv1.DeleteIAMUserResponse{
+		Status:    &platformv1.Status{Success: true, Message: "user deleted successfully"},
+		Timestamp: timestamppb.Now(),
 	})
 }
 
@@ -560,9 +560,9 @@ func (h *IAMHandlers) AssignUserRole(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.respWriter.Success200(w, r, SuccessResponse{
-		Success: true,
-		Message: "role assigned successfully",
+	protorest.WriteSuccess(w, r, h.respWriter, &platformv1.AssignIAMRoleResponse{
+		Status:    &platformv1.Status{Success: true, Message: "role assigned successfully"},
+		Timestamp: timestamppb.Now(),
 	})
 }
 
@@ -594,9 +594,9 @@ func (h *IAMHandlers) RevokeUserRole(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.respWriter.Success200(w, r, SuccessResponse{
-		Success: true,
-		Message: "role revoked successfully",
+	protorest.WriteSuccess(w, r, h.respWriter, &platformv1.RevokeIAMRoleResponse{
+		Status:    &platformv1.Status{Success: true, Message: "role revoked successfully"},
+		Timestamp: timestamppb.Now(),
 	})
 }
 
@@ -694,18 +694,17 @@ func (h *IAMHandlers) ListGroups(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	groups := make([]GroupResponse, 0, len(resp.Groups))
+	groups := make([]*platformv1.IAMGroup, 0, len(resp.Groups))
 	for i := range resp.Groups {
-		groups = append(groups, groupToResponse(&resp.Groups[i]))
+		groups = append(groups, GroupToProto(&resp.Groups[i]))
 	}
 
-	h.respWriter.Success200(w, r, ListGroupsResponse{
-		PaginatedResponse: PaginatedResponse{
-			Total:  int64(resp.Pagination.TotalCount),
-			Limit:  limit,
-			Offset: offset,
-		},
-		Groups: groups,
+	total := int64(resp.Pagination.TotalCount)
+	protorest.WriteSuccess(w, r, h.respWriter, &platformv1.ListIAMGroupsResponse{
+		Groups:     groups,
+		Pagination: ListPagination(limit, offset, total),
+		Total:      total,
+		Timestamp:  timestamppb.Now(),
 	})
 }
 
@@ -794,9 +793,9 @@ func (h *IAMHandlers) DeleteGroup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.respWriter.Success200(w, r, SuccessResponse{
-		Success: true,
-		Message: "group deleted successfully",
+	protorest.WriteSuccess(w, r, h.respWriter, &platformv1.DeleteIAMGroupResponse{
+		Status:    &platformv1.Status{Success: true, Message: "group deleted successfully"},
+		Timestamp: timestamppb.Now(),
 	})
 }
 
@@ -828,9 +827,9 @@ func (h *IAMHandlers) AddGroupMember(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.respWriter.Success200(w, r, SuccessResponse{
-		Success: true,
-		Message: "member added successfully",
+	protorest.WriteSuccess(w, r, h.respWriter, &platformv1.AddGroupMemberResponse{
+		Status:    &platformv1.Status{Success: true, Message: "member added successfully"},
+		Timestamp: timestamppb.Now(),
 	})
 }
 
@@ -862,9 +861,9 @@ func (h *IAMHandlers) RemoveGroupMember(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	h.respWriter.Success200(w, r, SuccessResponse{
-		Success: true,
-		Message: "member removed successfully",
+	protorest.WriteSuccess(w, r, h.respWriter, &platformv1.RemoveGroupMemberResponse{
+		Status:    &platformv1.Status{Success: true, Message: "member removed successfully"},
+		Timestamp: timestamppb.Now(),
 	})
 }
 
@@ -946,18 +945,17 @@ func (h *IAMHandlers) ListRoles(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	roles := make([]RoleResponse, 0, len(resp.Roles))
+	roles := make([]*platformv1.IAMRole, 0, len(resp.Roles))
 	for i := range resp.Roles {
-		roles = append(roles, roleToResponse(&resp.Roles[i]))
+		roles = append(roles, RoleToProto(&resp.Roles[i]))
 	}
 
-	h.respWriter.Success200(w, r, ListRolesResponse{
-		PaginatedResponse: PaginatedResponse{
-			Total:  int64(resp.Pagination.TotalCount),
-			Limit:  limit,
-			Offset: offset,
-		},
-		Roles: roles,
+	total := int64(resp.Pagination.TotalCount)
+	protorest.WriteSuccess(w, r, h.respWriter, &platformv1.ListIAMRolesResponse{
+		Roles:      roles,
+		Pagination: ListPagination(limit, offset, total),
+		Total:      total,
+		Timestamp:  timestamppb.Now(),
 	})
 }
 
@@ -1047,9 +1045,9 @@ func (h *IAMHandlers) DeleteRole(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.respWriter.Success200(w, r, SuccessResponse{
-		Success: true,
-		Message: "role deleted successfully",
+	protorest.WriteSuccess(w, r, h.respWriter, &platformv1.DeleteIAMRoleResponse{
+		Status:    &platformv1.Status{Success: true, Message: "role deleted successfully"},
+		Timestamp: timestamppb.Now(),
 	})
 }
 
@@ -1112,7 +1110,17 @@ func (h *IAMHandlers) ListTenants(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.respWriter.Success200(w, r, resp)
+	tenants := make([]*platformv1.IAMTenant, 0, len(resp.Tenants))
+	for i := range resp.Tenants {
+		tenants = append(tenants, tenantResponseToProto(&resp.Tenants[i]))
+	}
+
+	protorest.WriteSuccess(w, r, h.respWriter, &platformv1.ListIAMTenantsResponse{
+		Tenants:    tenants,
+		Pagination: ListPagination(limit, offset, resp.Total),
+		Total:      resp.Total,
+		Timestamp:  timestamppb.Now(),
+	})
 }
 
 // GetTenant handles GET /api/v1/iam/tenants/{tenant}
@@ -1178,9 +1186,9 @@ func (h *IAMHandlers) DeleteTenant(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.respWriter.Success200(w, r, SuccessResponse{
-		Success: true,
-		Message: "tenant deleted successfully",
+	protorest.WriteSuccess(w, r, h.respWriter, &platformv1.DeleteIAMTenantResponse{
+		Status:    &platformv1.Status{Success: true, Message: "tenant deleted successfully"},
+		Timestamp: timestamppb.Now(),
 	})
 }
 
@@ -1242,7 +1250,17 @@ func (h *IAMHandlers) ListPolicies(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.respWriter.Success200(w, r, resp)
+	policies := make([]*platformv1.IAMPolicy, 0, len(resp.Policies))
+	for i := range resp.Policies {
+		policies = append(policies, policyResponseToProto(&resp.Policies[i]))
+	}
+
+	protorest.WriteSuccess(w, r, h.respWriter, &platformv1.ListIAMPoliciesResponse{
+		Policies:   policies,
+		Pagination: ListPagination(limit, offset, resp.Total),
+		Total:      resp.Total,
+		Timestamp:  timestamppb.Now(),
+	})
 }
 
 // GetPolicy handles GET /api/v1/iam/tenants/{tenant}/policies/{id}
@@ -1325,9 +1343,9 @@ func (h *IAMHandlers) DeletePolicy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.respWriter.Success200(w, r, SuccessResponse{
-		Success: true,
-		Message: "policy deleted successfully",
+	protorest.WriteSuccess(w, r, h.respWriter, &platformv1.DeleteIAMPolicyResponse{
+		Status:    &platformv1.Status{Success: true, Message: "policy deleted successfully"},
+		Timestamp: timestamppb.Now(),
 	})
 }
 
@@ -1539,7 +1557,17 @@ func (h *IAMHandlers) ListApps(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.respWriter.Success200(w, r, resp)
+	apps := make([]*platformv1.IAMApp, 0, len(resp.Apps))
+	for i := range resp.Apps {
+		apps = append(apps, appResponseToProto(&resp.Apps[i]))
+	}
+
+	protorest.WriteSuccess(w, r, h.respWriter, &platformv1.ListIAMAppsResponse{
+		Apps:       apps,
+		Pagination: ListPagination(limit, offset, resp.Total),
+		Total:      resp.Total,
+		Timestamp:  timestamppb.Now(),
+	})
 }
 
 // GetApp handles GET /api/v1/iam/tenants/{tenant}/apps/{id}
@@ -1628,9 +1656,9 @@ func (h *IAMHandlers) DeleteApp(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.respWriter.Success200(w, r, SuccessResponse{
-		Success: true,
-		Message: "app deleted successfully",
+	protorest.WriteSuccess(w, r, h.respWriter, &platformv1.DeleteIAMAppResponse{
+		Status:    &platformv1.Status{Success: true, Message: "app deleted successfully"},
+		Timestamp: timestamppb.Now(),
 	})
 }
 

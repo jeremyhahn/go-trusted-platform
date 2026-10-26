@@ -1502,8 +1502,8 @@ var grpcMethodToRESTMap = map[string]struct {
 	"/platform.v1.DeviceService/BootDelivery":    {"/api/v1/device/boot", http.MethodPost},
 
 	// SDN Service
-	// DeleteBridge, AddPort, DeletePort, AuthenticatePort and RevokePortAuth
-	// are templated in sdn.go.
+	// The bridge- and port-scoped methods and ListVLANs are templated in
+	// sdn.go.
 	"/platform.v1.SDNService/CreateBridge": {"/api/v1/sdn/bridges", http.MethodPost},
 	"/platform.v1.SDNService/ListBridges":  {"/api/v1/sdn/bridges", http.MethodGet},
 	"/platform.v1.SDNService/AddFlow":      {"/api/v1/sdn/flows", http.MethodPost},
@@ -1511,11 +1511,13 @@ var grpcMethodToRESTMap = map[string]struct {
 	"/platform.v1.SDNService/ListFlows":    {"/api/v1/sdn/flows", http.MethodGet},
 	"/platform.v1.SDNService/ApplyPolicy":  {"/api/v1/sdn/policies", http.MethodPost},
 	"/platform.v1.SDNService/ListPolicies": {"/api/v1/sdn/policies", http.MethodGet},
+	"/platform.v1.SDNService/CreateVLAN":   {"/api/v1/sdn/vlans", http.MethodPost},
 
 	// DNS Service. The record, resolve and zone-delete routes are templated
 	// in dns.go.
 	"/platform.v1.DNSService/CreateZone": {"/api/v1/dns/zones", http.MethodPost},
 	"/platform.v1.DNSService/ListZones":  {"/api/v1/dns/zones", http.MethodGet},
+	"/platform.v1.DNSService/Register":   {"/api/v1/dns/register", http.MethodPost},
 
 	// Attestation Service. The keys are the rpcs attestation.proto declares;
 	// the routes are pkg/webservice/v1/rest/attestation/server_router.go's.

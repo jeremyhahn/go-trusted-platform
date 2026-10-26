@@ -1,6 +1,6 @@
 # SDN REST API Reference
 
-> **Status: REFERENCE** · Last verified: 2026-10-15
+> **Status: REFERENCE** · Last verified: 2026-10-26
 > The `/api/v1/sdn` routes of platformd's two REST stacks.
 
 Base URL: `https://localhost:8443/api/v1/sdn`
@@ -11,235 +11,179 @@ platformd starts (the overlay has the same split, see
 
 | Property | Webservice | Daemon-only REST (`serve --enable-rest`) |
 |----------|------------|------------------------------------------|
-| Handlers | `pkg/webservice/v1/rest/sdn/`, backed by the gRPC `SDNService` | `pkg/api/rest/sdn_handlers.go` |
+| Handlers | `pkg/webservice/v1/rest/sdn/` | `pkg/api/rest/sdn_handlers.go` |
 | Authentication | platform session, `admin` role on every route (`pkg/webservice/v1/router.go`) | mTLS |
-| Response body | the platform envelope (`{code, error, success, payload}`) | bare JSON |
+| Response body | the platform envelope (`{code, error, success, payload}`) with the response message as `payload` | the response message itself |
+| Unknown body fields, query parameters | ignored | `400` |
 
-The routes below are the daemon-only stack's unless marked. The webservice
-differs in these ways:
+## Wire Shape (#445)
 
-- Bridges are addressed by name (`/bridges/{name}`). Create takes `name`,
-  `type` (`ovs`, `linux`, `vxlan`), `datapath_id`, `stp_enabled`, `mtu`,
-  `options` and `labels`, and answers `200`.
-- Flows: `POST /flows` and `DELETE /flows` carry `bridge_id` (and the
-  delete's `flow_id`) in the body; `GET /flows?bridge_id=` lists.
-  `POST` and `GET` `/bridges/{name}/flows` take the bridge from the path.
-  There is no `DELETE /flows/{id}` or bridge-scoped flow delete. The flow
-  body is the gRPC shape: `table`, `priority`, a `match` object (`in_port`,
-  `vlan_id`, `eth_src`, `eth_dst`, `eth_type`, `ip_src`, `ip_dst`,
-  `ip_proto`, `tcp_src`, `tcp_dst`, `udp_src`, `udp_dst`), an `actions`
-  list (`type`, `port`, `vlan_id`, `field`, `value`, `table_id`),
-  `idle_timeout`, `hard_timeout` and `metadata`.
-- VLANs: `POST` and `GET` on `/vlans` and `/bridges/{bridge_id}/vlans`;
-  there is no VLAN delete.
-- Policies: apply, list and get; there is no policy delete.
-- No `/topology`.
-- Only the webservice serves the port-authentication routes.
+Both stacks call the daemon's gRPC `SDNService` and speak its `platform.v1`
+messages. Every bridge, port, flow, VLAN and policy route reads the request
+message of its method as its body and answers that method's response
+message, both in the proto JSON mapping (protojson): fields are
+lowerCamelCase (`bridgeId`, `adminState`), enums are their names
+(`BRIDGE_TYPE_OVS`, `POLICY_TYPE_QOS`), 64-bit integers are strings and bytes
+are base64. snake_case field names are read too. A body that is not JSON or
+carries a wrong type is `400` and the service is not called. Path and query
+values fill the request fields of the same name (`bridge_id`, `port_id`,
+`vlan_id`, `policy_id`) and override the body's. On the daemon a dotted query
+name reaches into a message field and a label key follows the map name, so a
+list request pages and selects with `pagination.page`, `pagination.pageSize`
+and `selector.matchLabels.<key>`; the JavaScript SDK sends exactly these, and
+the old `page`, `limit` and `label_<key>` names are `400`. Every route answers `200`,
+creates included. The zone routes keep the REST zone document (see Network
+Zone API). The Go SDK's REST transport uses this table against either stack.
 
-## Bridge Endpoints
+A service error maps to its HTTP status: `InvalidArgument` is `400` (the
+webservice also maps `OutOfRange` to `400`), `NotFound` `404`,
+`AlreadyExists` and `FailedPrecondition` `409` (#665), `Unavailable` (or no SDN
+service) `503`, and anything else `500`. The daemon's error body is
+`{error, code, timestamp}`.
 
-```http
-POST   /api/v1/sdn/bridges          # Create bridge
-GET    /api/v1/sdn/bridges          # List bridges
-GET    /api/v1/sdn/bridges/{id}     # Get bridge
-DELETE /api/v1/sdn/bridges/{id}     # Delete bridge
-```
+| Route | Body | Response | Stack |
+|-------|------|----------|-------|
+| `POST /bridges` | `CreateBridgeRequest` | `CreateBridgeResponse` | both |
+| `GET /bridges` | `ListBridgesRequest` (optional) | `ListBridgesResponse` | both |
+| `GET /bridges/{id}` | — | `GetBridgeResponse` | both |
+| `DELETE /bridges/{id}` | — | `DeleteBridgeResponse` | both |
+| `POST /bridges/{bridge_id}/ports` | `AddPortRequest` | `AddPortResponse` | both |
+| `GET /bridges/{bridge_id}/ports` | `ListPortsRequest` (optional) | `ListPortsResponse` | both |
+| `DELETE /bridges/{bridge_id}/ports/{port_id}` | — | `DeletePortResponse` | both |
+| `GET /bridges/{bridge_id}/ports/{port_id}/state` | — | `GetPortResponse` | both |
+| `PUT /bridges/{bridge_id}/ports/{port_id}/state` | `SetPortStateRequest` | `SetPortStateResponse` | both |
+| `GET /bridges/{bridge_id}/ports/{port_id}/stats` | — | `GetPortStatsResponse` | both |
+| `POST /bridges/{bridge_id}/ports/{port_id}/auth` | `AuthenticatePortRequest` | `AuthenticatePortResponse` | both |
+| `DELETE /bridges/{bridge_id}/ports/{port_id}/auth` | — | `RevokePortAuthResponse` | both |
+| `POST /flows` | `AddFlowRequest` | `AddFlowResponse` | both |
+| `POST /bridges/{name}/flows` | `AddFlowRequest` | `AddFlowResponse` | webservice |
+| `GET /flows?bridge_id=`, `GET /bridges/{bridge_id}/flows` | `ListFlowsRequest` (optional) | `ListFlowsResponse` | both |
+| `DELETE /flows` | `DeleteFlowRequest` | `DeleteFlowResponse` | both |
+| `POST /vlans` | `CreateVLANRequest` | `CreateVLANResponse` | both |
+| `GET /vlans?bridge_id=` | `ListVLANsRequest` (optional) | `ListVLANsResponse` | both |
+| `POST`, `GET` `/bridges/{bridge_id}/vlans` | as `/vlans` | as `/vlans` | webservice |
+| `DELETE /vlans/{vlan_id}?bridge_id=` | — | `DeleteVLANResponse` | daemon |
+| `POST /policies` | `ApplyPolicyRequest` | `ApplyPolicyResponse` | both (webservice answers `201`) |
+| `GET /policies` | `ListPoliciesRequest` (optional) | `ListPoliciesResponse` | both |
+| `GET /policies/{policy_id}` | — | `GetPolicyResponse` | both |
+| `DELETE /policies/{policy_id}` | — | `DeletePolicyResponse` | daemon |
 
-Create body: `name` (required), optional `datapath_type`, `fail_mode`,
-`protocols`, `stp`, `options` and `labels`. The bridge is created with its
-`fail_mode` and `protocols` in one Open vSwitch transaction, so a `secure`
-bridge never runs as a standalone learning switch; an invalid `fail_mode` or
-`protocols` entry is `400` and creates nothing. List takes no query parameters
-and answers `{bridges, count, timestamp}`.
+Until #445 both stacks answered flat REST documents (a bridge as `name`,
+`type` `"ovs"` and `created_at`; a delete as `{success, message}`; the port
+state as `bridge_id`, `port_id` and `admin_state`), read flat REST bodies
+(the daemon refused the SDK's `adminState`), answered creates with `201`, and
+the daemon served `GET /topology`, `DELETE /flows/{id}` and the bridge-scoped
+flow routes, which no client called. Those routes are gone.
 
-## Port Endpoints
+A flow or VLAN created through `/bridges/{name}/flows` or
+`/bridges/{bridge_id}/vlans` must still carry its `config`; the path fills in
+the config's bridge, never the rest of the request.
 
-```http
-POST   /api/v1/sdn/bridges/{id}/ports                 # Add port
-GET    /api/v1/sdn/bridges/{id}/ports                 # List ports
-DELETE /api/v1/sdn/bridges/{id}/ports/{port}          # Remove port
-GET    /api/v1/sdn/bridges/{id}/ports/{port}/state    # Get port state
-PUT    /api/v1/sdn/bridges/{id}/ports/{port}/state    # Set port state
-GET    /api/v1/sdn/bridges/{id}/ports/{port}/stats    # Port statistics
-```
+## Bridges
 
-Add takes `name` (required) and an optional `type`, the Open vSwitch interface
-type (`internal`, `vxlan`, `patch`, ...) written in the same transaction that
-creates the port. An empty `type` attaches the existing kernel device of the
-port's name; a type Open vSwitch does not implement is `400` and adds nothing.
+`CreateBridgeRequest.config` carries the bridge `name` (required), `type`,
+`stpEnabled`, `mtu`, `controllers`, `options` and `labels`. The option
+`fail_mode` is written in the same Open vSwitch transaction that creates the
+bridge, so a `secure` bridge never runs as a standalone learning switch; an
+invalid `fail_mode` is `400` and creates nothing. A bridge is addressed by
+name or UUID.
 
-The state and stats routes read the port's Open vSwitch interface row. State
-answers `port_number` (ofport), `admin_state`, `oper_state` (the link state),
-`link_state`, `speed` and `duplex`. A state Open vSwitch has not recorded (it
-writes `admin_state` and `link_state` only once it has opened the port's
-network device) is `unknown`, the word the webservice router uses for the same
-case. Stats answers the interface counters:
-`rx_`/`tx_` `packets`, `bytes`, `dropped` and `errors`, plus `rx_frame_err`,
-`rx_over_err`, `rx_crc_err` and `collisions`.
+## Ports
 
-Set-state takes `{"admin_state": "up"|"down"}` (case-insensitive; anything else
-is `400`), sets it in Open vSwitch, and answers the state read back. An
-unknown port is `404`.
+`AddPortRequest.config` carries the port `name` (required) and an optional
+`type`, the Open vSwitch interface type written in the same transaction that
+creates the port. `PORT_TYPE_UNSPECIFIED` attaches the existing kernel device
+of the port's name; a type Open vSwitch does not implement adds nothing.
 
-The webservice router (`pkg/webservice/v1/rest/sdn/`) serves the same two state
-routes through the gRPC `SDNService`. It takes the same set-state body and
-answers `bridge_id`, `port_id` and `admin_state`; it has no interface row, so
-the link fields are absent. The Go SDK's REST `SetPortState` uses this route on
-either server and reads those three fields.
+The state and stats routes read the port's Open vSwitch interface row: get
+answers the `Port` with its admin and link state; stats answers the interface
+counters.
 
-The body may also carry `ingress_rate` (bps) and `ingress_burst` (bits). A
-non-zero `ingress_rate` sets the interface's Open vSwitch ingress policing
-(`ingress_policing_rate`/`ingress_policing_burst`, stored in kbps and kb); `0`
-or absent leaves the current policing as it is. Each value must be `0` or a
-whole multiple of 1000, and a burst needs a rate; anything else is `400`
-before any state changes. An interface that disappears before policing is
-applied is `404`.
+`SetPortStateRequest` carries `adminState` (`up` or `down`), `ingressRate`
+and `ingressBurst`, `egressRate` and `egressBurst`. An unknown port is `404`;
+it is checked before the admin state. A non-zero `ingressRate` (bps) sets the
+interface's Open vSwitch ingress policing (`ingress_policing_rate`/
+`ingress_policing_burst`, stored in kbps and kb); `0` leaves the current
+policing as it is. Each value must be `0` or a whole multiple of 1000, and a
+burst needs a rate; anything else is `400` before any state changes.
 
-`egress_rate` (bps) and `egress_burst` (bits) shape what the port transmits.
-A non-zero `egress_rate` gives the port a `linux-htb` Open vSwitch QoS whose
-queue 0 carries the rate and burst, stored as given in bps and bits; `0` or
-absent leaves the current shaping as it is, and `egress_burst` `0` lets Open
-vSwitch pick the burst. Any rate is accepted, but a burst needs a rate; a burst
-without one is `400` before any state changes. Shaping set by an earlier
+A non-zero `egressRate` (bps) gives the port a `linux-htb` Open vSwitch QoS
+whose queue 0 carries the rate and `egressBurst` (bits); `0` leaves the
+current shaping as it is, and a burst `0` lets Open vSwitch pick it. A burst
+without a rate is `400` before any state changes. Shaping set by an earlier
 request is replaced and its rows deleted; a QoS something else attached is
-detached and left in the database. A port that disappears before shaping is
-applied is `404`.
+detached and left in the database. A port that disappears before policing
+or shaping is applied is `404`.
 
-## Port Authentication Endpoints
+## Port Authentication
 
-```http
-POST   /api/v1/sdn/bridges/{name}/ports/{port}/auth   # Authenticate port (refused)
-DELETE /api/v1/sdn/bridges/{name}/ports/{port}/auth   # Revoke port auth (refused)
-```
+The `/auth` routes take an `AuthenticatePortRequest` (`certificate` base64,
+`format`); the path names the bridge and port. Every request is refused with
+`409` and the message `sdn/policy: <operation> is refused: port
+authentication is not enforced on the switch` (`policy.ErrPortAuthNotEnforced`,
+`FailedPrecondition`): nothing enforces port authentication on the switch, so
+nothing is recorded. The Go SDK's REST transport reads that `409` as
+`AlreadyExists` on the `POST` and as `FailedPrecondition` on the `DELETE`, and
+keeps the message. [api.md](api.md) §4 names what is
+missing. Until #304 these routes answered `200` for any certificate inside
+its validity window, and the webservice answered `500` for a
+`FailedPrecondition`; until #445 the daemon did not serve them.
 
-Only the webservice router (`pkg/webservice/v1/rest/sdn/`) serves these
-routes, behind its admin gate. A missing bridge, port or certificate is `400`
-before the service is called. Every other request is refused with `400` and the
-message `sdn/policy: <operation> is refused: port authentication is not
-enforced on the switch` (`policy.ErrPortAuthNotEnforced`, `FailedPrecondition`):
-nothing enforces port authentication on the switch, so nothing is recorded.
-The Go SDK's REST transport reads that `400` as `InvalidArgument` and keeps
-the message. [api.md](api.md) §4 names what is missing. Until #304 these
-routes answered `200` for any certificate inside its validity window, and the
-webservice answered `500` for a `FailedPrecondition`.
+## Flows
 
-## Flow Endpoints
+`AddFlowRequest.config` carries the `bridgeId`, `table`, `priority`, `match`
+and `actions`. A flow's ID is its cookie, so `DELETE /flows` with
+`{"bridgeId": ..., "flowId": ...}` removes exactly that flow; an ID that names
+no flow is `400`.
 
-```http
-POST   /api/v1/sdn/flows                              # Add flow
-GET    /api/v1/sdn/flows                              # List flows
-DELETE /api/v1/sdn/flows/{id}                         # Delete flow
+The service writes every `match` field and action into the Open vSwitch flow
+(`pkg/api/daemon/sdn_flow_codec.go`). IP matches add the `dl_type` their
+address family needs, and a TCP or UDP port implies its `ipProto`. The actions
+are `OUTPUT` (no port means `NORMAL`), `DROP`, `SET_VLAN`, `STRIP_VLAN`,
+`SET_FIELD`, `GOTO_TABLE` (to a later table only) and `CONTROLLER`. A flow
+that OVS cannot install exactly is `400` and nothing is installed. Examples are
+`metadata`, a value out of range, TCP and UDP ports together, and an
+unspecified action. A listed flow carries its table, priority, match, actions,
+timeouts and packet, byte and duration counters. A match term with no proto
+field is returned in `match.metadata`.
 
-# Bridge-scoped aliases
-POST   /api/v1/sdn/bridges/{id}/flows                 # Add flow to bridge
-GET    /api/v1/sdn/bridges/{id}/flows                 # List bridge flows
-DELETE /api/v1/sdn/bridges/{id}/flows/{flow_id}       # Delete bridge flow
-```
+## VLANs
 
-The `/flows` routes take the bridge as the `bridge_id` query parameter. The
-add body is `table`, `priority`, `match` and `actions` as Open vSwitch
-strings (`"in_port=1,dl_type=0x0800"`, `"output:2"`), optional `cookie`,
-`idle_timeout` and `hard_timeout`; `metadata` is accepted and not stored. A flow's ID is its cookie,
-so a delete removes exactly that flow; add answers `201` with the ID.
+`CreateVLANRequest.config` carries `vlanId` (1–4095), `bridgeId` (bridge name
+or ID), optional `name`, `ports` (tagged with the VLAN) and `labels`. The
+daemon deletes with `DELETE /vlans/{vlan_id}?bridge_id=`. Errors: `400` for a
+malformed body, an out-of-range or non-numeric `vlan_id`, or a missing
+bridge; `404` for an unknown bridge or VLAN; `409` when the bridge already
+carries the VLAN ID.
 
-## VLAN Endpoints
+## Policies
 
-```http
-POST   /api/v1/sdn/vlans                              # Create VLAN
-GET    /api/v1/sdn/vlans?bridge_id={bridge}           # List a bridge's VLANs
-DELETE /api/v1/sdn/vlans/{vlan_id}?bridge_id={bridge} # Delete VLAN
-```
-
-These routes call the daemon's `SDNService` — the same operations and state
-as gRPC `CreateVLAN`, `ListVLANs` and `DeleteVLAN`.
-
-Create body: `vlan_id` (1–4095), `bridge_id` (bridge name or ID), optional
-`name`, `ports` (tagged with the VLAN) and `labels`. Create answers `201`
-with the VLAN object; list answers `200` with `{vlans, count, timestamp}`:
+`ApplyPolicyRequest` carries an optional `policyId` and the `config`
+(`PolicyConfig`): `name` (required), `description`, `type`
+(`POLICY_TYPE_ACL`, `POLICY_TYPE_QOS`, ...), `priority`, `enabled`, `rules`,
+`targets` and `schedule`:
 
 ```json
 {
-  "id": "vlan-br0-100",
-  "vlan_id": 100,
-  "name": "tenant-a",
-  "bridge_id": "br0",
-  "ports": ["p1"],
-  "port_count": 1,
-  "created_at": "2026-10-13T12:00:00Z"
+  "config": {
+    "name": "web",
+    "type": "POLICY_TYPE_ACL",
+    "priority": 10,
+    "enabled": true,
+    "rules": [
+      {"ruleId": "r1", "priority": 1,
+       "match": {"sourceIp": "10.0.0.0/24", "destinationPort": 22, "protocol": "tcp"},
+       "action": "POLICY_RULE_ACTION_DENY", "log": true}
+    ],
+    "targets": [{"type": "POLICY_TARGET_TYPE_BRIDGE", "id": "br0", "direction": "ingress"}]
+  }
 }
 ```
 
-Delete answers `200` with
-`{"resource_id": "100", "resource_type": "vlan", "action": "deleted", "success": true, "message": "VLAN deleted successfully"}`.
-
-Errors: `400` for a malformed body, a non-numeric or out-of-range
-`vlan_id`, or a missing `bridge_id`; `404` for an unknown bridge or VLAN;
-`409` when the bridge already carries the VLAN ID; `503` when the daemon
-runs without an SDN service.
-
-## Policy Endpoints
-
-```http
-POST   /api/v1/sdn/policies         # Apply policy
-GET    /api/v1/sdn/policies         # List policies
-GET    /api/v1/sdn/policies/{id}    # Get policy
-DELETE /api/v1/sdn/policies/{id}    # Delete policy
-```
-
-These routes call the daemon's `SDNService` — the same operations and state
-as gRPC `ApplyPolicy`, `ListPolicies`, `GetPolicy` and `DeletePolicy`. The
-webservice serves apply with the same body and answer (a duplicate name is
-`400` there), and the SDK's REST client sends `ApplyPolicy` to it in this form.
-
-Apply body: `name` (required), optional `id`, `description`, `type`
-(`acl`, `qos`, `nat`, `firewall`, `routing`), `priority`, `enabled`,
-`rules`, `targets` and `schedule`:
-
-```json
-{
-  "name": "web",
-  "type": "acl",
-  "priority": 10,
-  "enabled": true,
-  "rules": [
-    {"rule_id": "r1", "priority": 1, "source_ip": "10.0.0.0/24",
-     "destination_port": 22, "protocol": "tcp", "action": "deny", "log": true}
-  ],
-  "targets": [{"type": "bridge", "id": "br0", "direction": "ingress"}],
-  "schedule": {"start_time": "08:00", "end_time": "18:00",
-               "days": ["mon", "tue"], "timezone": "UTC", "enabled": true}
-}
-```
-
-A rule matches on `source_ip`, `destination_ip`, `source_port`,
-`destination_port`, `protocol`, `direction`, `interface`, `vlan_id`, `dscp`
-and `application`, and carries `action` (`allow`, `deny`, `rate-limit`,
-`redirect`, `mirror`, `log`), `action_value`, `log` and `counter`. A target
-`type` is `bridge`, `port`, `vlan` or `interface`. An empty enum is left
-unspecified. The policy object has no `labels`.
-
-Apply answers `201` with the policy object: the body's fields plus `status`,
-`hit_count`, `byte_count`, `created_at` and `updated_at`. List takes optional
-`type` and `target_id` filters and answers `200` with
-`{policies, count, timestamp}`. Get and delete take the policy ID or name;
-delete answers `200` with
-`{"resource_id": "web", "resource_type": "policy", "action": "delete", "success": true, "message": "policy deleted successfully"}`.
-
-Errors: `400` for a malformed body, a missing `name`, or an unknown `type`,
-rule `action` or target `type`; `404` for an unknown policy; `409` when a
-policy with the same name exists; `503` when the daemon runs without an SDN
-service.
-
-## Topology
-
-```http
-GET /api/v1/sdn/topology            # Bridges, ports, and flows summary
-```
-
-Daemon-only. Answers the bridges, `links` (always empty) and
-`statistics` (`total_bridges`, `total_ports`, `total_flows`;
-`total_bytes` and `total_packets` are never filled).
-
+List takes the optional `type` (`acl`, `qos`, ...) and `target_id` query
+parameters. Get and delete take the policy ID or name. Errors: `400` for a
+missing `name`; `404` for an unknown policy; `409` when a policy with the
+same name exists.
 
 ## Error Codes
 

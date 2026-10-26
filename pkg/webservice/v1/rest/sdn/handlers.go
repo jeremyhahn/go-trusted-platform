@@ -14,28 +14,22 @@
 package sdn
 
 import (
-	"context"
-	"encoding/json"
 	"net/http"
-	"strings"
-	"time"
 
 	"github.com/gorilla/mux"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 
-	restapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/rest"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/internal/protorest"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
 
-const (
-	requestTimeout = 30 * time.Second
-)
-
-// SDNHandlers provides REST handlers for SDN operations
+// SDNHandlers serves the SDN REST routes on the SDN gRPC service. Bridge,
+// port, flow, policy and VLAN routes read the proto request as protojson and
+// answer the proto response as protojson, so REST carries the gRPC and SDK
+// wire shape (ruling 189). The service validates every request; a handler
+// only fills in the identifiers the path and query carry.
 type SDNHandlers struct {
 	logger     *logging.Logger
 	sdnService platformv1.SDNServiceServer
@@ -55,1074 +49,297 @@ func NewSDNHandlers(
 	}
 }
 
-// Helper methods
-
-func (h *SDNHandlers) getBridgeName(r *http.Request) string {
-	return mux.Vars(r)["name"]
+// ensureAvailable answers 503 when no SDN service is wired.
+func (h *SDNHandlers) ensureAvailable(w http.ResponseWriter, r *http.Request) bool {
+	if h.sdnService == nil {
+		protorest.WriteError(w, r, h.respWriter, &protorest.ErrServiceUnavailable{Service: "sdn"})
+		return false
+	}
+	return true
 }
 
-func (h *SDNHandlers) getPortName(r *http.Request) string {
-	return mux.Vars(r)["port"]
+// decode reads the protojson body into req, answering 400 when it cannot.
+func (h *SDNHandlers) decode(w http.ResponseWriter, r *http.Request, req proto.Message) bool {
+	if !h.ensureAvailable(w, r) {
+		return false
+	}
+	if err := protorest.DecodeRequest(r, req); err != nil {
+		h.respWriter.Error400(w, r, err)
+		return false
+	}
+	return true
 }
 
-func (h *SDNHandlers) getPolicyID(r *http.Request) string {
-	return mux.Vars(r)["id"]
-}
-
-func (h *SDNHandlers) createContext() (context.Context, context.CancelFunc) {
-	return context.WithTimeout(context.Background(), requestTimeout)
-}
-
-func (h *SDNHandlers) decodeJSON(r *http.Request, v interface{}) error {
-	decoder := json.NewDecoder(r.Body)
-	return decoder.Decode(v)
-}
-
-func (h *SDNHandlers) handleGRPCError(w http.ResponseWriter, r *http.Request, err error) {
-	st, ok := status.FromError(err)
-	if !ok {
-		h.respWriter.Error500(w, r, err)
+// reply writes the service's answer: its error as the mapped HTTP status, or
+// its response as the protojson payload.
+func (h *SDNHandlers) reply(w http.ResponseWriter, r *http.Request, resp proto.Message, err error) {
+	if err != nil {
+		protorest.WriteError(w, r, h.respWriter, err)
 		return
 	}
-
-	switch st.Code() {
-	case codes.NotFound:
-		h.respWriter.Error404(w, r, err)
-	case codes.InvalidArgument:
-		h.respWriter.Error400(w, r, err)
-	case codes.FailedPrecondition:
-		protorest.WriteError(w, r, h.respWriter, err)
-	case codes.PermissionDenied, codes.Unauthenticated:
-		h.respWriter.Error401(w, r, err)
-	case codes.AlreadyExists:
-		h.respWriter.Error400(w, r, err)
-	default:
-		h.respWriter.Error500(w, r, err)
-	}
+	protorest.WriteSuccess(w, r, h.respWriter, resp)
 }
 
-func timeFromTimestamp(ts interface{ AsTime() time.Time }) *time.Time {
-	if ts == nil {
-		return nil
+// bridgeScope is the bridge a route addresses: the path's, else the
+// bridge_id query parameter, else the one the body carried.
+func bridgeScope(r *http.Request, fromBody string) string {
+	vars := mux.Vars(r)
+	if name := vars["name"]; name != "" {
+		return name
 	}
-	t := ts.AsTime()
-	return &t
+	if id := vars["bridge_id"]; id != "" {
+		return id
+	}
+	if id := r.URL.Query().Get("bridge_id"); id != "" {
+		return id
+	}
+	return fromBody
+}
+
+// portPath is the bridge and port a /bridges/{name}/ports/{port} route names.
+func portPath(r *http.Request) (bridgeID, portID string) {
+	vars := mux.Vars(r)
+	return vars["name"], vars["port"]
 }
 
 // Bridge Handlers
 
-// CreateBridge handles POST /api/v1/sdn/bridges
+// CreateBridge handles POST /api/v1/sdn/bridges with a CreateBridgeRequest.
 func (h *SDNHandlers) CreateBridge(w http.ResponseWriter, r *http.Request) {
-	var req CreateBridgeRequest
-	if err := h.decodeJSON(r, &req); err != nil {
-		h.respWriter.Error400(w, r, ErrInvalidRequestBody{Reason: err.Error()})
+	req := &platformv1.CreateBridgeRequest{}
+	if !h.decode(w, r, req) {
 		return
 	}
-
-	if req.Name == "" {
-		h.respWriter.Error400(w, r, ErrMissingBridgeName{})
-		return
-	}
-
-	ctx, cancel := h.createContext()
-	defer cancel()
-
-	grpcReq := &platformv1.CreateBridgeRequest{
-		Config: &platformv1.BridgeConfig{
-			Name:       req.Name,
-			Type:       h.parseBridgeType(req.Type),
-			DatapathId: req.DatapathID,
-			StpEnabled: req.StpEnabled,
-			Mtu:        req.MTU,
-			Options:    req.Options,
-			Labels:     req.Labels,
-		},
-	}
-
-	resp, err := h.sdnService.CreateBridge(ctx, grpcReq)
-	if err != nil {
-		h.handleGRPCError(w, r, err)
-		return
-	}
-
-	h.respWriter.Success200(w, r, h.bridgeToResponse(resp.Bridge))
+	resp, err := h.sdnService.CreateBridge(r.Context(), req)
+	h.reply(w, r, resp, err)
 }
 
-// ListBridges handles GET /api/v1/sdn/bridges
+// ListBridges handles GET /api/v1/sdn/bridges; an optional body carries the
+// ListBridgesRequest selector and pagination.
 func (h *SDNHandlers) ListBridges(w http.ResponseWriter, r *http.Request) {
-	ctx, cancel := h.createContext()
-	defer cancel()
-
-	grpcReq := &platformv1.ListBridgesRequest{}
-
-	resp, err := h.sdnService.ListBridges(ctx, grpcReq)
-	if err != nil {
-		h.handleGRPCError(w, r, err)
+	req := &platformv1.ListBridgesRequest{}
+	if !h.decode(w, r, req) {
 		return
 	}
-
-	bridges := make([]BridgeResponse, 0, len(resp.Bridges))
-	for _, b := range resp.Bridges {
-		bridges = append(bridges, h.bridgeToResponse(b))
-	}
-
-	h.respWriter.Success200(w, r, ListBridgesResponse{Bridges: bridges})
+	resp, err := h.sdnService.ListBridges(r.Context(), req)
+	h.reply(w, r, resp, err)
 }
 
-// GetBridge handles GET /api/v1/sdn/bridges/{name}
+// GetBridge handles GET /api/v1/sdn/bridges/{name}.
 func (h *SDNHandlers) GetBridge(w http.ResponseWriter, r *http.Request) {
-	bridgeName := h.getBridgeName(r)
-	if bridgeName == "" {
-		h.respWriter.Error400(w, r, ErrMissingBridgeName{})
+	if !h.ensureAvailable(w, r) {
 		return
 	}
-
-	ctx, cancel := h.createContext()
-	defer cancel()
-
-	grpcReq := &platformv1.GetBridgeRequest{
-		Id: bridgeName,
-	}
-
-	resp, err := h.sdnService.GetBridge(ctx, grpcReq)
-	if err != nil {
-		h.handleGRPCError(w, r, err)
-		return
-	}
-
-	h.respWriter.Success200(w, r, h.bridgeToResponse(resp.Bridge))
+	req := &platformv1.GetBridgeRequest{Id: mux.Vars(r)["name"]}
+	resp, err := h.sdnService.GetBridge(r.Context(), req)
+	h.reply(w, r, resp, err)
 }
 
-// DeleteBridge handles DELETE /api/v1/sdn/bridges/{name}
+// DeleteBridge handles DELETE /api/v1/sdn/bridges/{name}.
 func (h *SDNHandlers) DeleteBridge(w http.ResponseWriter, r *http.Request) {
-	bridgeName := h.getBridgeName(r)
-	if bridgeName == "" {
-		h.respWriter.Error400(w, r, ErrMissingBridgeName{})
+	if !h.ensureAvailable(w, r) {
 		return
 	}
-
-	ctx, cancel := h.createContext()
-	defer cancel()
-
-	grpcReq := &platformv1.DeleteBridgeRequest{
-		Id: bridgeName,
-	}
-
-	resp, err := h.sdnService.DeleteBridge(ctx, grpcReq)
-	if err != nil {
-		h.handleGRPCError(w, r, err)
-		return
-	}
-
-	h.respWriter.Success200(w, r, SuccessResponse{
-		Success: resp.Status.Success,
-		Message: resp.Status.Message,
-	})
-}
-
-func (h *SDNHandlers) bridgeToResponse(b *platformv1.Bridge) BridgeResponse {
-	if b == nil {
-		return BridgeResponse{}
-	}
-	resp := BridgeResponse{
-		ID:     b.Id,
-		Status: h.bridgeStatusToString(b.Status),
-	}
-	if b.Config != nil {
-		resp.Name = b.Config.Name
-		resp.Type = h.bridgeTypeToString(b.Config.Type)
-		resp.Options = b.Config.Options
-		resp.Labels = b.Config.Labels
-	}
-	if b.CreatedAt != nil {
-		resp.CreatedAt = timeFromTimestamp(b.CreatedAt)
-	}
-	if b.UpdatedAt != nil {
-		resp.UpdatedAt = timeFromTimestamp(b.UpdatedAt)
-	}
-	return resp
-}
-
-func (h *SDNHandlers) parseBridgeType(t string) platformv1.BridgeType {
-	switch t {
-	case "ovs":
-		return platformv1.BridgeType_BRIDGE_TYPE_OVS
-	case "linux":
-		return platformv1.BridgeType_BRIDGE_TYPE_LINUX
-	case "vxlan":
-		return platformv1.BridgeType_BRIDGE_TYPE_VXLAN
-	default:
-		return platformv1.BridgeType_BRIDGE_TYPE_OVS
-	}
-}
-
-func (h *SDNHandlers) bridgeTypeToString(t platformv1.BridgeType) string {
-	switch t {
-	case platformv1.BridgeType_BRIDGE_TYPE_OVS:
-		return "ovs"
-	case platformv1.BridgeType_BRIDGE_TYPE_LINUX:
-		return "linux"
-	case platformv1.BridgeType_BRIDGE_TYPE_VXLAN:
-		return "vxlan"
-	default:
-		return "unknown"
-	}
-}
-
-func (h *SDNHandlers) bridgeStatusToString(s platformv1.BridgeStatus) string {
-	switch s {
-	case platformv1.BridgeStatus_BRIDGE_STATUS_UP:
-		return "up"
-	case platformv1.BridgeStatus_BRIDGE_STATUS_DOWN:
-		return "down"
-	case platformv1.BridgeStatus_BRIDGE_STATUS_ERROR:
-		return "error"
-	default:
-		return "unknown"
-	}
+	req := &platformv1.DeleteBridgeRequest{Id: mux.Vars(r)["name"]}
+	resp, err := h.sdnService.DeleteBridge(r.Context(), req)
+	h.reply(w, r, resp, err)
 }
 
 // Port Handlers
 
-// AddPort handles POST /api/v1/sdn/bridges/{name}/ports
+// AddPort handles POST /api/v1/sdn/bridges/{name}/ports with an
+// AddPortRequest; the path names the bridge.
 func (h *SDNHandlers) AddPort(w http.ResponseWriter, r *http.Request) {
-	bridgeName := h.getBridgeName(r)
-	if bridgeName == "" {
-		h.respWriter.Error400(w, r, ErrMissingBridgeName{})
+	req := &platformv1.AddPortRequest{}
+	if !h.decode(w, r, req) {
 		return
 	}
-
-	var req AddPortRequest
-	if err := h.decodeJSON(r, &req); err != nil {
-		h.respWriter.Error400(w, r, ErrInvalidRequestBody{Reason: err.Error()})
-		return
-	}
-
-	if req.Name == "" {
-		h.respWriter.Error400(w, r, ErrMissingPortName{})
-		return
-	}
-
-	ctx, cancel := h.createContext()
-	defer cancel()
-
-	grpcReq := &platformv1.AddPortRequest{
-		BridgeId: bridgeName,
-		Config: &platformv1.PortConfig{
-			Name:        req.Name,
-			Type:        h.parsePortType(req.Type),
-			Vlan:        req.VLAN,
-			TrunkVlans:  req.TrunkVLANs,
-			MacAddress:  req.MACAddress,
-			Mtu:         req.MTU,
-			Promiscuous: req.Promiscuous,
-			Options:     req.Options,
-			Labels:      req.Labels,
-		},
-	}
-
-	resp, err := h.sdnService.AddPort(ctx, grpcReq)
-	if err != nil {
-		h.handleGRPCError(w, r, err)
-		return
-	}
-
-	h.respWriter.Success200(w, r, h.portToResponse(resp.Port))
-}
-
-// DeletePort handles DELETE /api/v1/sdn/bridges/{name}/ports/{port}
-func (h *SDNHandlers) DeletePort(w http.ResponseWriter, r *http.Request) {
-	bridgeName := h.getBridgeName(r)
-	portName := h.getPortName(r)
-
-	if bridgeName == "" {
-		h.respWriter.Error400(w, r, ErrMissingBridgeName{})
-		return
-	}
-	if portName == "" {
-		h.respWriter.Error400(w, r, ErrMissingPortName{})
-		return
-	}
-
-	ctx, cancel := h.createContext()
-	defer cancel()
-
-	grpcReq := &platformv1.DeletePortRequest{
-		BridgeId: bridgeName,
-		PortId:   portName,
-	}
-
-	resp, err := h.sdnService.DeletePort(ctx, grpcReq)
-	if err != nil {
-		h.handleGRPCError(w, r, err)
-		return
-	}
-
-	h.respWriter.Success200(w, r, SuccessResponse{
-		Success: resp.Status.Success,
-		Message: resp.Status.Message,
-	})
-}
-
-// AuthenticatePort authenticates a port with a client certificate
-func (h *SDNHandlers) AuthenticatePort(w http.ResponseWriter, r *http.Request) {
-	bridgeName := h.getBridgeName(r)
-	portName := h.getPortName(r)
-
-	if bridgeName == "" {
-		h.respWriter.Error400(w, r, ErrMissingBridgeName{})
-		return
-	}
-	if portName == "" {
-		h.respWriter.Error400(w, r, ErrMissingPortName{})
-		return
-	}
-
-	var req AuthenticatePortRequest
-	if err := h.decodeJSON(r, &req); err != nil {
-		h.respWriter.Error400(w, r, ErrInvalidRequestBody{Reason: err.Error()})
-		return
-	}
-
-	ctx, cancel := h.createContext()
-	defer cancel()
-
-	grpcReq := &platformv1.AuthenticatePortRequest{
-		BridgeId:    bridgeName,
-		PortId:      portName,
-		Certificate: req.Certificate,
-		Format:      req.Format,
-	}
-
-	resp, err := h.sdnService.AuthenticatePort(ctx, grpcReq)
-	if err != nil {
-		h.handleGRPCError(w, r, err)
-		return
-	}
-
-	h.respWriter.Success200(w, r, portAuthToResponse(bridgeName, portName, resp.Auth))
-}
-
-// RevokePortAuth revokes a port's certificate authentication
-func (h *SDNHandlers) RevokePortAuth(w http.ResponseWriter, r *http.Request) {
-	bridgeName := h.getBridgeName(r)
-	portName := h.getPortName(r)
-
-	if bridgeName == "" {
-		h.respWriter.Error400(w, r, ErrMissingBridgeName{})
-		return
-	}
-	if portName == "" {
-		h.respWriter.Error400(w, r, ErrMissingPortName{})
-		return
-	}
-
-	ctx, cancel := h.createContext()
-	defer cancel()
-
-	grpcReq := &platformv1.RevokePortAuthRequest{
-		BridgeId: bridgeName,
-		PortId:   portName,
-	}
-
-	resp, err := h.sdnService.RevokePortAuth(ctx, grpcReq)
-	if err != nil {
-		h.handleGRPCError(w, r, err)
-		return
-	}
-
-	h.respWriter.Success200(w, r, SuccessResponse{
-		Success: resp.Status.Success,
-		Message: resp.Status.Message,
-	})
-}
-
-// portAuthToResponse converts a port's gRPC authentication state to its REST
-// answer. A nil auth answers an unauthenticated port.
-func portAuthToResponse(bridgeName, portName string, auth *platformv1.PortAuth) PortAuthResponse {
-	resp := PortAuthResponse{BridgeID: bridgeName, PortID: portName}
-	if auth == nil {
-		return resp
-	}
-	resp.Authenticated = auth.Authenticated
-	resp.CertificateCN = auth.CertificateCn
-	resp.AuthorizedVLANs = auth.AuthorizedVlans
-	if auth.AuthenticatedAt != nil {
-		resp.AuthenticatedAt = timeFromTimestamp(auth.AuthenticatedAt)
-	}
-	if auth.ExpiresAt != nil {
-		resp.ExpiresAt = timeFromTimestamp(auth.ExpiresAt)
-	}
-	return resp
-}
-
-// GetPortState handles GET /api/v1/sdn/bridges/{name}/ports/{port}/state
-func (h *SDNHandlers) GetPortState(w http.ResponseWriter, r *http.Request) {
-	bridgeName := h.getBridgeName(r)
-	portName := h.getPortName(r)
-
-	if bridgeName == "" {
-		h.respWriter.Error400(w, r, ErrMissingBridgeName{})
-		return
-	}
-	if portName == "" {
-		h.respWriter.Error400(w, r, ErrMissingPortName{})
-		return
-	}
-
-	ctx, cancel := h.createContext()
-	defer cancel()
-
-	grpcReq := &platformv1.GetPortRequest{
-		BridgeId: bridgeName,
-		PortId:   portName,
-	}
-
-	resp, err := h.sdnService.GetPort(ctx, grpcReq)
-	if err != nil {
-		h.handleGRPCError(w, r, err)
-		return
-	}
-
-	state := "unknown"
-	if resp.Port != nil {
-		state = h.portStatusToString(resp.Port.Status)
-	}
-
-	h.respWriter.Success200(w, r, PortStateResponse{
-		BridgeID:   bridgeName,
-		PortID:     portName,
-		AdminState: state,
-	})
-}
-
-// SetPortState handles PUT /api/v1/sdn/bridges/{name}/ports/{port}/state
-func (h *SDNHandlers) SetPortState(w http.ResponseWriter, r *http.Request) {
-	bridgeName := h.getBridgeName(r)
-	portName := h.getPortName(r)
-
-	if bridgeName == "" {
-		h.respWriter.Error400(w, r, ErrMissingBridgeName{})
-		return
-	}
-	if portName == "" {
-		h.respWriter.Error400(w, r, ErrMissingPortName{})
-		return
-	}
-
-	var req SetPortStateRequest
-	if err := h.decodeJSON(r, &req); err != nil {
-		h.respWriter.Error400(w, r, ErrInvalidRequestBody{Reason: err.Error()})
-		return
-	}
-
-	adminState := strings.ToLower(req.AdminState)
-	if adminState != "up" && adminState != "down" {
-		h.respWriter.Error400(w, r, ErrInvalidPortState{State: req.AdminState})
-		return
-	}
-
-	ctx, cancel := h.createContext()
-	defer cancel()
-
-	resp, err := h.sdnService.SetPortState(ctx, &platformv1.SetPortStateRequest{
-		BridgeId:     bridgeName,
-		PortId:       portName,
-		AdminState:   adminState,
-		IngressRate:  req.IngressRate,
-		IngressBurst: req.IngressBurst,
-		EgressRate:   req.EgressRate,
-		EgressBurst:  req.EgressBurst,
-	})
-	if err != nil {
-		h.handleGRPCError(w, r, err)
-		return
-	}
-
-	h.respWriter.Success200(w, r, PortStateResponse{
-		BridgeID:   bridgeName,
-		PortID:     portName,
-		AdminState: h.portStatusToString(resp.GetPort().GetStatus()),
-	})
+	req.BridgeId = mux.Vars(r)["name"]
+	resp, err := h.sdnService.AddPort(r.Context(), req)
+	h.reply(w, r, resp, err)
 }
 
 // ListPorts handles GET /api/v1/sdn/bridges/{name}/ports.
-//
-// The bridge identifier may be either the OVS bridge name or a UUID;
-// findBridgeName resolves both via the SDN service.
 func (h *SDNHandlers) ListPorts(w http.ResponseWriter, r *http.Request) {
-	bridgeID := h.getBridgeName(r)
-	if bridgeID == "" {
-		h.respWriter.Error400(w, r, ErrMissingBridgeName{})
+	req := &platformv1.ListPortsRequest{}
+	if !h.decode(w, r, req) {
 		return
 	}
+	req.BridgeId = mux.Vars(r)["name"]
+	resp, err := h.sdnService.ListPorts(r.Context(), req)
+	h.reply(w, r, resp, err)
+}
 
-	ctx, cancel := h.createContext()
-	defer cancel()
-
-	resp, err := h.sdnService.ListPorts(ctx, &platformv1.ListPortsRequest{
-		BridgeId: bridgeID,
-	})
-	if err != nil {
-		h.handleGRPCError(w, r, err)
+// DeletePort handles DELETE /api/v1/sdn/bridges/{name}/ports/{port}.
+func (h *SDNHandlers) DeletePort(w http.ResponseWriter, r *http.Request) {
+	if !h.ensureAvailable(w, r) {
 		return
 	}
-
-	ports := make([]PortResponse, 0, len(resp.Ports))
-	for _, p := range resp.Ports {
-		ports = append(ports, h.portToResponse(p))
-	}
-
-	h.respWriter.Success200(w, r, ListPortsResponse{Ports: ports})
+	bridgeID, portID := portPath(r)
+	req := &platformv1.DeletePortRequest{BridgeId: bridgeID, PortId: portID}
+	resp, err := h.sdnService.DeletePort(r.Context(), req)
+	h.reply(w, r, resp, err)
 }
 
-func (h *SDNHandlers) portToResponse(p *platformv1.Port) PortResponse {
-	if p == nil {
-		return PortResponse{}
+// GetPortState handles GET /api/v1/sdn/bridges/{name}/ports/{port}/state;
+// it answers the GetPortResponse, whose port carries the state.
+func (h *SDNHandlers) GetPortState(w http.ResponseWriter, r *http.Request) {
+	if !h.ensureAvailable(w, r) {
+		return
 	}
-	resp := PortResponse{
-		ID:       p.Id,
-		BridgeID: p.BridgeId,
-		Status:   h.portStatusToString(p.Status),
-	}
-	if p.Config != nil {
-		resp.Name = p.Config.Name
-		resp.Type = h.portTypeToString(p.Config.Type)
-		resp.VLAN = p.Config.Vlan
-		resp.Options = p.Config.Options
-		resp.Labels = p.Config.Labels
-	}
-	if p.CreatedAt != nil {
-		resp.CreatedAt = timeFromTimestamp(p.CreatedAt)
-	}
-	if p.UpdatedAt != nil {
-		resp.UpdatedAt = timeFromTimestamp(p.UpdatedAt)
-	}
-	return resp
+	bridgeID, portID := portPath(r)
+	req := &platformv1.GetPortRequest{BridgeId: bridgeID, PortId: portID}
+	resp, err := h.sdnService.GetPort(r.Context(), req)
+	h.reply(w, r, resp, err)
 }
 
-func (h *SDNHandlers) parsePortType(t string) platformv1.PortType {
-	switch t {
-	case "internal":
-		return platformv1.PortType_PORT_TYPE_INTERNAL
-	case "physical":
-		return platformv1.PortType_PORT_TYPE_PHYSICAL
-	case "tap":
-		return platformv1.PortType_PORT_TYPE_TAP
-	case "veth":
-		return platformv1.PortType_PORT_TYPE_VETH
-	case "vxlan":
-		return platformv1.PortType_PORT_TYPE_VXLAN
-	case "gre":
-		return platformv1.PortType_PORT_TYPE_GRE
-	default:
-		return platformv1.PortType_PORT_TYPE_INTERNAL
+// SetPortState handles PUT /api/v1/sdn/bridges/{name}/ports/{port}/state
+// with a SetPortStateRequest; the path names the bridge and port.
+func (h *SDNHandlers) SetPortState(w http.ResponseWriter, r *http.Request) {
+	req := &platformv1.SetPortStateRequest{}
+	if !h.decode(w, r, req) {
+		return
 	}
+	req.BridgeId, req.PortId = portPath(r)
+	resp, err := h.sdnService.SetPortState(r.Context(), req)
+	h.reply(w, r, resp, err)
 }
 
-func (h *SDNHandlers) portTypeToString(t platformv1.PortType) string {
-	switch t {
-	case platformv1.PortType_PORT_TYPE_INTERNAL:
-		return "internal"
-	case platformv1.PortType_PORT_TYPE_PHYSICAL:
-		return "physical"
-	case platformv1.PortType_PORT_TYPE_TAP:
-		return "tap"
-	case platformv1.PortType_PORT_TYPE_VETH:
-		return "veth"
-	case platformv1.PortType_PORT_TYPE_VXLAN:
-		return "vxlan"
-	case platformv1.PortType_PORT_TYPE_GRE:
-		return "gre"
-	default:
-		return "unknown"
+// GetPortStats handles GET /api/v1/sdn/bridges/{name}/ports/{port}/stats.
+func (h *SDNHandlers) GetPortStats(w http.ResponseWriter, r *http.Request) {
+	if !h.ensureAvailable(w, r) {
+		return
 	}
+	bridgeID, portID := portPath(r)
+	req := &platformv1.GetPortStatsRequest{BridgeId: bridgeID, PortId: portID}
+	resp, err := h.sdnService.GetPortStats(r.Context(), req)
+	h.reply(w, r, resp, err)
 }
 
-func (h *SDNHandlers) portStatusToString(s platformv1.PortStatus) string {
-	switch s {
-	case platformv1.PortStatus_PORT_STATUS_UP:
-		return "up"
-	case platformv1.PortStatus_PORT_STATUS_DOWN:
-		return "down"
-	case platformv1.PortStatus_PORT_STATUS_BLOCKED:
-		return "blocked"
-	case platformv1.PortStatus_PORT_STATUS_LEARNING:
-		return "learning"
-	case platformv1.PortStatus_PORT_STATUS_FORWARDING:
-		return "forwarding"
-	default:
-		return "unknown"
+// AuthenticatePort handles POST /api/v1/sdn/bridges/{name}/ports/{port}/auth
+// with an AuthenticatePortRequest; the path names the bridge and port.
+func (h *SDNHandlers) AuthenticatePort(w http.ResponseWriter, r *http.Request) {
+	req := &platformv1.AuthenticatePortRequest{}
+	if !h.decode(w, r, req) {
+		return
 	}
+	req.BridgeId, req.PortId = portPath(r)
+	resp, err := h.sdnService.AuthenticatePort(r.Context(), req)
+	h.reply(w, r, resp, err)
+}
+
+// RevokePortAuth handles DELETE /api/v1/sdn/bridges/{name}/ports/{port}/auth.
+func (h *SDNHandlers) RevokePortAuth(w http.ResponseWriter, r *http.Request) {
+	if !h.ensureAvailable(w, r) {
+		return
+	}
+	bridgeID, portID := portPath(r)
+	req := &platformv1.RevokePortAuthRequest{BridgeId: bridgeID, PortId: portID}
+	resp, err := h.sdnService.RevokePortAuth(r.Context(), req)
+	h.reply(w, r, resp, err)
 }
 
 // Flow Handlers
 
-// AddFlow handles POST /api/v1/sdn/flows and the nested
-// POST /api/v1/sdn/bridges/{name}/flows variant.
+// AddFlow handles POST /api/v1/sdn/flows and /api/v1/sdn/bridges/{name}/flows
+// with an AddFlowRequest; a bridge in the path is the flow's bridge.
 func (h *SDNHandlers) AddFlow(w http.ResponseWriter, r *http.Request) {
-	var req AddFlowRequest
-	if err := h.decodeJSON(r, &req); err != nil {
-		h.respWriter.Error400(w, r, ErrInvalidRequestBody{Reason: err.Error()})
+	req := &platformv1.AddFlowRequest{}
+	if !h.decode(w, r, req) {
 		return
 	}
-
-	if pathBridge := mux.Vars(r)["name"]; pathBridge != "" {
-		req.BridgeID = pathBridge
+	if config := req.GetConfig(); config != nil {
+		config.BridgeId = bridgeScope(r, config.GetBridgeId())
 	}
-	if req.BridgeID == "" {
-		h.respWriter.Error400(w, r, ErrMissingBridgeID{})
-		return
-	}
-
-	ctx, cancel := h.createContext()
-	defer cancel()
-
-	grpcReq := &platformv1.AddFlowRequest{
-		Config: &platformv1.FlowConfig{
-			BridgeId:    req.BridgeID,
-			Table:       h.parseFlowTable(req.Table),
-			Priority:    req.Priority,
-			Match:       h.flowMatchToProto(req.Match),
-			Actions:     h.flowActionsToProto(req.Actions),
-			IdleTimeout: req.IdleTimeout,
-			HardTimeout: req.HardTimeout,
-			Metadata:    req.Metadata,
-		},
-	}
-
-	resp, err := h.sdnService.AddFlow(ctx, grpcReq)
-	if err != nil {
-		h.handleGRPCError(w, r, err)
-		return
-	}
-
-	h.respWriter.Success200(w, r, h.flowToResponse(resp.Flow))
+	resp, err := h.sdnService.AddFlow(r.Context(), req)
+	h.reply(w, r, resp, err)
 }
 
-// DeleteFlow handles DELETE /api/v1/sdn/flows
+// DeleteFlow handles DELETE /api/v1/sdn/flows with a DeleteFlowRequest body.
 func (h *SDNHandlers) DeleteFlow(w http.ResponseWriter, r *http.Request) {
-	var req DeleteFlowRequest
-	if err := h.decodeJSON(r, &req); err != nil {
-		h.respWriter.Error400(w, r, ErrInvalidRequestBody{Reason: err.Error()})
+	req := &platformv1.DeleteFlowRequest{}
+	if !h.decode(w, r, req) {
 		return
 	}
-
-	if req.BridgeID == "" {
-		h.respWriter.Error400(w, r, ErrMissingBridgeID{})
-		return
-	}
-	if req.FlowID == "" {
-		h.respWriter.Error400(w, r, ErrMissingFlowID{})
-		return
-	}
-
-	ctx, cancel := h.createContext()
-	defer cancel()
-
-	grpcReq := &platformv1.DeleteFlowRequest{
-		BridgeId: req.BridgeID,
-		FlowId:   req.FlowID,
-	}
-
-	resp, err := h.sdnService.DeleteFlow(ctx, grpcReq)
-	if err != nil {
-		h.handleGRPCError(w, r, err)
-		return
-	}
-
-	h.respWriter.Success200(w, r, SuccessResponse{
-		Success: resp.Status.Success,
-		Message: resp.Status.Message,
-	})
+	resp, err := h.sdnService.DeleteFlow(r.Context(), req)
+	h.reply(w, r, resp, err)
 }
 
-// ListFlows handles GET /api/v1/sdn/flows
-// ListFlows handles GET /api/v1/sdn/flows?bridge_id=… and the nested
-// GET /api/v1/sdn/bridges/{name}/flows variant.
+// ListFlows handles GET /api/v1/sdn/flows?bridge_id= and
+// /api/v1/sdn/bridges/{name}/flows.
 func (h *SDNHandlers) ListFlows(w http.ResponseWriter, r *http.Request) {
-	bridgeID := mux.Vars(r)["name"]
-	if bridgeID == "" {
-		bridgeID = r.URL.Query().Get("bridge_id")
-	}
-	if bridgeID == "" {
-		h.respWriter.Error400(w, r, ErrMissingBridgeID{})
+	req := &platformv1.ListFlowsRequest{}
+	if !h.decode(w, r, req) {
 		return
 	}
-
-	ctx, cancel := h.createContext()
-	defer cancel()
-
-	grpcReq := &platformv1.ListFlowsRequest{
-		BridgeId: bridgeID,
-	}
-
-	resp, err := h.sdnService.ListFlows(ctx, grpcReq)
-	if err != nil {
-		h.handleGRPCError(w, r, err)
-		return
-	}
-
-	flows := make([]FlowResponse, 0, len(resp.Flows))
-	for _, f := range resp.Flows {
-		flows = append(flows, h.flowToResponse(f))
-	}
-
-	h.respWriter.Success200(w, r, ListFlowsResponse{Flows: flows})
-}
-
-func (h *SDNHandlers) flowToResponse(f *platformv1.Flow) FlowResponse {
-	if f == nil {
-		return FlowResponse{}
-	}
-	resp := FlowResponse{
-		ID: f.Id,
-	}
-	if f.Config != nil {
-		resp.BridgeID = f.Config.BridgeId
-		resp.Table = uint32(f.Config.Table)
-		resp.Priority = f.Config.Priority
-		resp.Match = h.protoToFlowMatch(f.Config.Match)
-		resp.Actions = h.protoToFlowActions(f.Config.Actions)
-		resp.Metadata = f.Config.Metadata
-	}
-	if f.CreatedAt != nil {
-		resp.CreatedAt = timeFromTimestamp(f.CreatedAt)
-	}
-	if f.Stats != nil {
-		resp.Stats = &FlowStats{
-			PacketCount:     f.Stats.PacketCount,
-			ByteCount:       f.Stats.ByteCount,
-			DurationSeconds: f.Stats.DurationSeconds,
-		}
-	}
-	return resp
-}
-
-func (h *SDNHandlers) parseFlowTable(t uint32) platformv1.FlowTable {
-	switch t {
-	case 0:
-		return platformv1.FlowTable_FLOW_TABLE_0
-	case 1:
-		return platformv1.FlowTable_FLOW_TABLE_1
-	case 2:
-		return platformv1.FlowTable_FLOW_TABLE_2
-	case 3:
-		return platformv1.FlowTable_FLOW_TABLE_3
-	case 255:
-		return platformv1.FlowTable_FLOW_TABLE_DROP
-	default:
-		return platformv1.FlowTable_FLOW_TABLE_0
-	}
-}
-
-func (h *SDNHandlers) flowMatchToProto(m *FlowMatch) *platformv1.FlowMatch {
-	if m == nil {
-		return nil
-	}
-	return &platformv1.FlowMatch{
-		InPort:  m.InPort,
-		VlanId:  m.VlanID,
-		EthSrc:  m.EthSrc,
-		EthDst:  m.EthDst,
-		EthType: m.EthType,
-		IpSrc:   m.IPSrc,
-		IpDst:   m.IPDst,
-		IpProto: m.IPProto,
-		TcpSrc:  m.TCPSrc,
-		TcpDst:  m.TCPDst,
-		UdpSrc:  m.UDPSrc,
-		UdpDst:  m.UDPDst,
-	}
-}
-
-func (h *SDNHandlers) protoToFlowMatch(m *platformv1.FlowMatch) *FlowMatch {
-	if m == nil {
-		return nil
-	}
-	return &FlowMatch{
-		InPort:  m.InPort,
-		VlanID:  m.VlanId,
-		EthSrc:  m.EthSrc,
-		EthDst:  m.EthDst,
-		EthType: m.EthType,
-		IPSrc:   m.IpSrc,
-		IPDst:   m.IpDst,
-		IPProto: m.IpProto,
-		TCPSrc:  m.TcpSrc,
-		TCPDst:  m.TcpDst,
-		UDPSrc:  m.UdpSrc,
-		UDPDst:  m.UdpDst,
-	}
-}
-
-func (h *SDNHandlers) flowActionsToProto(actions []*FlowAction) []*platformv1.FlowAction {
-	if actions == nil {
-		return nil
-	}
-	result := make([]*platformv1.FlowAction, 0, len(actions))
-	for _, a := range actions {
-		result = append(result, &platformv1.FlowAction{
-			Type:    h.parseFlowActionType(a.Type),
-			Port:    a.Port,
-			VlanId:  a.VlanID,
-			Field:   a.Field,
-			Value:   a.Value,
-			TableId: a.TableID,
-		})
-	}
-	return result
-}
-
-func (h *SDNHandlers) protoToFlowActions(actions []*platformv1.FlowAction) []*FlowAction {
-	if actions == nil {
-		return nil
-	}
-	result := make([]*FlowAction, 0, len(actions))
-	for _, a := range actions {
-		result = append(result, &FlowAction{
-			Type:    h.flowActionTypeToString(a.Type),
-			Port:    a.Port,
-			VlanID:  a.VlanId,
-			Field:   a.Field,
-			Value:   a.Value,
-			TableID: a.TableId,
-		})
-	}
-	return result
-}
-
-func (h *SDNHandlers) parseFlowActionType(t string) platformv1.FlowActionType {
-	switch t {
-	case "output":
-		return platformv1.FlowActionType_FLOW_ACTION_OUTPUT
-	case "drop":
-		return platformv1.FlowActionType_FLOW_ACTION_DROP
-	case "set_vlan":
-		return platformv1.FlowActionType_FLOW_ACTION_SET_VLAN
-	case "strip_vlan":
-		return platformv1.FlowActionType_FLOW_ACTION_STRIP_VLAN
-	case "set_field":
-		return platformv1.FlowActionType_FLOW_ACTION_SET_FIELD
-	case "goto_table":
-		return platformv1.FlowActionType_FLOW_ACTION_GOTO_TABLE
-	case "controller":
-		return platformv1.FlowActionType_FLOW_ACTION_CONTROLLER
-	default:
-		return platformv1.FlowActionType_FLOW_ACTION_UNSPECIFIED
-	}
-}
-
-func (h *SDNHandlers) flowActionTypeToString(t platformv1.FlowActionType) string {
-	switch t {
-	case platformv1.FlowActionType_FLOW_ACTION_OUTPUT:
-		return "output"
-	case platformv1.FlowActionType_FLOW_ACTION_DROP:
-		return "drop"
-	case platformv1.FlowActionType_FLOW_ACTION_SET_VLAN:
-		return "set_vlan"
-	case platformv1.FlowActionType_FLOW_ACTION_STRIP_VLAN:
-		return "strip_vlan"
-	case platformv1.FlowActionType_FLOW_ACTION_SET_FIELD:
-		return "set_field"
-	case platformv1.FlowActionType_FLOW_ACTION_GOTO_TABLE:
-		return "goto_table"
-	case platformv1.FlowActionType_FLOW_ACTION_CONTROLLER:
-		return "controller"
-	default:
-		return "unknown"
-	}
+	req.BridgeId = bridgeScope(r, req.GetBridgeId())
+	resp, err := h.sdnService.ListFlows(r.Context(), req)
+	h.reply(w, r, resp, err)
 }
 
 // Policy Handlers
 
-// ApplyPolicy handles POST /api/v1/sdn/policies. The body is the daemon REST
-// policy contract (pkg/api/rest CreatePolicyRequest) the SDK sends: the config
-// flattened, policy_id as id, the enums as lowercase names. It answers 201
-// with the applied policy in the same form. The service owns validation.
+// ApplyPolicy handles POST /api/v1/sdn/policies with an ApplyPolicyRequest
+// and answers 201 with the ApplyPolicyResponse.
 func (h *SDNHandlers) ApplyPolicy(w http.ResponseWriter, r *http.Request) {
-	var req restapi.CreatePolicyRequest
-	if err := h.decodeJSON(r, &req); err != nil {
-		h.respWriter.Error400(w, r, ErrInvalidRequestBody{Reason: err.Error()})
+	req := &platformv1.ApplyPolicyRequest{}
+	if !h.decode(w, r, req) {
 		return
 	}
-
-	grpcReq, err := restapi.PolicyRequestToProto(req)
+	resp, err := h.sdnService.ApplyPolicy(r.Context(), req)
 	if err != nil {
-		h.respWriter.Error400(w, r, err)
+		protorest.WriteError(w, r, h.respWriter, err)
 		return
 	}
-
-	ctx, cancel := h.createContext()
-	defer cancel()
-
-	resp, err := h.sdnService.ApplyPolicy(ctx, grpcReq)
-	if err != nil {
-		h.handleGRPCError(w, r, err)
-		return
-	}
-
-	h.respWriter.Success201(w, r, restapi.PolicyToResponse(resp.GetPolicy()))
+	protorest.WriteSuccessStatus(w, r, h.respWriter, http.StatusCreated, resp)
 }
 
-// ListPolicies handles GET /api/v1/sdn/policies
+// ListPolicies handles GET /api/v1/sdn/policies; an optional body carries the
+// ListPoliciesRequest filters.
 func (h *SDNHandlers) ListPolicies(w http.ResponseWriter, r *http.Request) {
-	// Policy listing would be implemented through a policy store
-	// For now, return empty list
-	h.respWriter.Success200(w, r, ListPoliciesResponse{
-		Policies: []PolicyResponse{},
-	})
-}
-
-// GetPolicy handles GET /api/v1/sdn/policies/{id}
-func (h *SDNHandlers) GetPolicy(w http.ResponseWriter, r *http.Request) {
-	policyID := h.getPolicyID(r)
-	if policyID == "" {
-		h.respWriter.Error400(w, r, ErrMissingPolicyID{})
+	req := &platformv1.ListPoliciesRequest{}
+	if !h.decode(w, r, req) {
 		return
 	}
+	resp, err := h.sdnService.ListPolicies(r.Context(), req)
+	h.reply(w, r, resp, err)
+}
 
-	// Policy retrieval would be implemented through a policy store
-	h.respWriter.Error404(w, r, ErrPolicyNotFound{PolicyID: policyID})
+// GetPolicy handles GET /api/v1/sdn/policies/{id}.
+func (h *SDNHandlers) GetPolicy(w http.ResponseWriter, r *http.Request) {
+	if !h.ensureAvailable(w, r) {
+		return
+	}
+	req := &platformv1.GetPolicyRequest{PolicyId: mux.Vars(r)["id"]}
+	resp, err := h.sdnService.GetPolicy(r.Context(), req)
+	h.reply(w, r, resp, err)
 }
 
 // VLAN Handlers
 
-// CreateVLAN handles POST /api/v1/sdn/vlans and the nested
-// POST /api/v1/sdn/bridges/{bridge_id}/vlans variant. When a bridge ID
-// is present in the path it overrides any value in the body so callers
-// can omit BridgeID from JSON for nested URLs.
+// CreateVLAN handles POST /api/v1/sdn/vlans and
+// /api/v1/sdn/bridges/{bridge_id}/vlans with a CreateVLANRequest; a bridge in
+// the path is the VLAN's bridge.
 func (h *SDNHandlers) CreateVLAN(w http.ResponseWriter, r *http.Request) {
-	var req CreateVLANRequest
-	if err := h.decodeJSON(r, &req); err != nil {
-		h.respWriter.Error400(w, r, ErrInvalidRequestBody{Reason: err.Error()})
+	req := &platformv1.CreateVLANRequest{}
+	if !h.decode(w, r, req) {
 		return
 	}
-
-	if pathBridge := mux.Vars(r)["bridge_id"]; pathBridge != "" {
-		req.BridgeID = pathBridge
+	if config := req.GetConfig(); config != nil {
+		config.BridgeId = bridgeScope(r, config.GetBridgeId())
 	}
-	if req.BridgeID == "" {
-		h.respWriter.Error400(w, r, ErrMissingBridgeID{})
-		return
-	}
-	if req.VlanID == 0 || req.VlanID > 4095 {
-		h.respWriter.Error400(w, r, ErrInvalidVLANID{Reason: "must be between 1 and 4095"})
-		return
-	}
-
-	ctx, cancel := h.createContext()
-	defer cancel()
-
-	grpcReq := &platformv1.CreateVLANRequest{
-		Config: &platformv1.VLANConfig{
-			VlanId:   req.VlanID,
-			Name:     req.Name,
-			BridgeId: req.BridgeID,
-			Ports:    req.Ports,
-			Labels:   req.Labels,
-		},
-	}
-
-	resp, err := h.sdnService.CreateVLAN(ctx, grpcReq)
-	if err != nil {
-		h.handleGRPCError(w, r, err)
-		return
-	}
-
-	h.respWriter.Success200(w, r, h.vlanToResponse(resp.Vlan))
+	resp, err := h.sdnService.CreateVLAN(r.Context(), req)
+	h.reply(w, r, resp, err)
 }
 
-// ListVLANs handles GET /api/v1/sdn/vlans and the nested
-// GET /api/v1/sdn/bridges/{bridge_id}/vlans variant.
+// ListVLANs handles GET /api/v1/sdn/vlans?bridge_id= and
+// /api/v1/sdn/bridges/{bridge_id}/vlans.
 func (h *SDNHandlers) ListVLANs(w http.ResponseWriter, r *http.Request) {
-	bridgeID := mux.Vars(r)["bridge_id"]
-	if bridgeID == "" {
-		bridgeID = r.URL.Query().Get("bridge_id")
-	}
-	if bridgeID == "" {
-		h.respWriter.Error400(w, r, ErrMissingBridgeID{})
+	req := &platformv1.ListVLANsRequest{}
+	if !h.decode(w, r, req) {
 		return
 	}
-
-	ctx, cancel := h.createContext()
-	defer cancel()
-
-	grpcReq := &platformv1.ListVLANsRequest{
-		BridgeId: bridgeID,
-	}
-
-	resp, err := h.sdnService.ListVLANs(ctx, grpcReq)
-	if err != nil {
-		h.handleGRPCError(w, r, err)
-		return
-	}
-
-	vlans := make([]VLANResponse, 0, len(resp.Vlans))
-	for _, v := range resp.Vlans {
-		vlans = append(vlans, h.vlanToResponse(v))
-	}
-
-	h.respWriter.Success200(w, r, ListVLANsResponse{VLANs: vlans})
-}
-
-func (h *SDNHandlers) vlanToResponse(v *platformv1.VLAN) VLANResponse {
-	if v == nil {
-		return VLANResponse{}
-	}
-	resp := VLANResponse{
-		ID: v.Id,
-	}
-	if v.Config != nil {
-		resp.VlanID = v.Config.VlanId
-		resp.Name = v.Config.Name
-		resp.BridgeID = v.Config.BridgeId
-		resp.Ports = v.Config.Ports
-		resp.Labels = v.Config.Labels
-	}
-	if v.CreatedAt != nil {
-		resp.CreatedAt = timeFromTimestamp(v.CreatedAt)
-	}
-	return resp
-}
-
-// Statistics Handlers
-
-// GetPortStats handles GET /api/v1/sdn/bridges/{name}/ports/{port}/stats
-func (h *SDNHandlers) GetPortStats(w http.ResponseWriter, r *http.Request) {
-	bridgeName := h.getBridgeName(r)
-	portName := h.getPortName(r)
-
-	if bridgeName == "" {
-		h.respWriter.Error400(w, r, ErrMissingBridgeName{})
-		return
-	}
-	if portName == "" {
-		h.respWriter.Error400(w, r, ErrMissingPortName{})
-		return
-	}
-
-	ctx, cancel := h.createContext()
-	defer cancel()
-
-	grpcReq := &platformv1.GetPortStatsRequest{
-		BridgeId: bridgeName,
-		PortId:   portName,
-	}
-
-	resp, err := h.sdnService.GetPortStats(ctx, grpcReq)
-	if err != nil {
-		h.handleGRPCError(w, r, err)
-		return
-	}
-
-	h.respWriter.Success200(w, r, PortStatsResponse{
-		PortID:          portName,
-		PacketsReceived: resp.Stats.PacketsReceived,
-		PacketsSent:     resp.Stats.PacketsSent,
-		BytesReceived:   resp.Stats.BytesReceived,
-		BytesSent:       resp.Stats.BytesSent,
-		Errors:          resp.Stats.Errors,
-		Dropped:         resp.Stats.Dropped,
-	})
+	req.BridgeId = bridgeScope(r, req.GetBridgeId())
+	resp, err := h.sdnService.ListVLANs(r.Context(), req)
+	h.reply(w, r, resp, err)
 }

@@ -16,31 +16,32 @@ package dns
 import (
 	"github.com/gorilla/mux"
 
-	"github.com/jeremyhahn/go-trusted-platform/pkg/dns"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/router"
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
 
 const (
 	basePath = "/dns"
 )
 
-// DNSRouter provides REST routing for DNS operations.
-// All handlers delegate to the dns.DNSService interface (service layer).
+// DNSRouter provides REST routing for DNS operations. Every handler delegates
+// to the DNSServiceServer gRPC serves, so REST speaks the proto/SDK wire shape.
 type DNSRouter struct {
 	handlers *DNSHandlers
 	router.WebServiceRouter
 }
 
-// NewDNSRouter creates a new DNSRouter instance.
+// NewDNSRouter constructs a router that delegates to the supplied gRPC server
+// implementation.
 func NewDNSRouter(
 	logger *logging.Logger,
-	service dns.DNSService,
+	server platformv1.DNSServiceServer,
 	respWriter response.HttpWriter,
 ) *DNSRouter {
 	return &DNSRouter{
-		handlers: NewDNSHandlers(logger, service, respWriter),
+		handlers: NewDNSHandlers(logger, server, respWriter),
 	}
 }
 
@@ -76,11 +77,13 @@ func (r *DNSRouter) registerZoneRoutes(router *mux.Router) {
 
 // registerRecordRoutes registers record management endpoints
 // POST   /api/v1/dns/zones/{zone}/records              - Add record
+// PUT    /api/v1/dns/zones/{zone}/records              - Update record
 // GET    /api/v1/dns/zones/{zone}/records              - List records
 // GET    /api/v1/dns/zones/{zone}/records/{type}/{name} - Get record
 // DELETE /api/v1/dns/zones/{zone}/records/{type}/{name} - Delete record
 func (r *DNSRouter) registerRecordRoutes(router *mux.Router) {
 	router.HandleFunc("/zones/{zone}/records", r.handlers.AddRecord).Methods("POST")
+	router.HandleFunc("/zones/{zone}/records", r.handlers.UpdateRecord).Methods("PUT")
 	router.HandleFunc("/zones/{zone}/records", r.handlers.ListRecords).Methods("GET")
 	router.HandleFunc("/zones/{zone}/records/{type}/{name}", r.handlers.GetRecord).Methods("GET")
 	router.HandleFunc("/zones/{zone}/records/{type}/{name}", r.handlers.DeleteRecord).Methods("DELETE")
