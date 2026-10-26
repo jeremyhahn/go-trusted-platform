@@ -7,6 +7,7 @@
 package backends
 
 import (
+	"crypto/fips140"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -24,7 +25,7 @@ func TestFIPSAddKeyOptionsApplyPolicy(t *testing.T) {
 	if opts == nil {
 		t.Fatal("options must never be nil — a nil AddKeyOptions is exactly what let go-luks2 default to argon2id")
 	}
-	if fips.IsEnabled() {
+	if luksFIPSActive() {
 		if opts.KDFType != fips.KDFPBKDF2 {
 			t.Errorf("under FIPS the KDF must be resolved to %q, got %q", fips.KDFPBKDF2, opts.KDFType)
 		}
@@ -36,9 +37,34 @@ func TestFIPSAddKeyOptionsApplyPolicy(t *testing.T) {
 	if err := fipsRecoveryKeyPolicy(&kdf); err != nil {
 		t.Fatalf("recovery-key policy must succeed: %v", err)
 	}
-	if fips.IsEnabled() && kdf != fips.KDFPBKDF2 {
+	if luksFIPSActive() && kdf != fips.KDFPBKDF2 {
 		t.Errorf("under FIPS a recovery keyslot must resolve to %q, got %q", fips.KDFPBKDF2, kdf)
 	}
+}
+
+// TestResolveLUKSKeyslotPolicy covers the backend's wrapper over the platform
+// policy: an unset KDF resolves to PBKDF2 whenever the Go cryptographic module
+// is in FIPS 140-3 mode, whatever the kernel indicator says, and a KDF the
+// policy does not know is still refused.
+func TestResolveLUKSKeyslotPolicy(t *testing.T) {
+	t.Run("unset KDF follows the module's FIPS mode", func(t *testing.T) {
+		var kdf, hash string
+		if err := resolveLUKSKeyslotPolicy(&kdf, &hash); err != nil {
+			t.Fatalf("resolving an unset KDF must succeed: %v", err)
+		}
+		if fips140.Enabled() && kdf != fips.KDFPBKDF2 {
+			t.Errorf("with the module in FIPS 140-3 mode the KDF must be %q, got %q", fips.KDFPBKDF2, kdf)
+		}
+		if !luksFIPSActive() && kdf != "" {
+			t.Errorf("outside FIPS the KDF must stay unset, got %q", kdf)
+		}
+	})
+	t.Run("unknown KDF is refused", func(t *testing.T) {
+		kdf, hash := "not-a-kdf", ""
+		if err := resolveLUKSKeyslotPolicy(&kdf, &hash); err == nil {
+			t.Fatal("an unknown KDF must be refused")
+		}
+	})
 }
 
 // TestEveryEnrollmentAppliesFIPSPolicy is the guard the hosted review asked for.

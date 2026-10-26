@@ -60,7 +60,13 @@
 4. **Every new keyslot passes the FIPS keyslot policy.** `fipsAddKeyOptions` and
    `fipsRecoveryKeyPolicy` (`luks_fips.go`) resolve the KDF and PRF through
    `pkg/fips.ResolveKeyslotPolicy`: on a FIPS host an empty KDF becomes PBKDF2
-   with an approved PRF; otherwise go-luks2's defaults apply.
+   with an approved PRF; otherwise go-luks2's defaults apply (argon2id).
+   "FIPS" here means the kernel indicator is set **or** the Go cryptographic
+   module runs in FIPS 140-3 mode (`crypto/fips140.Enabled()`, e.g.
+   `GODEBUG=fips140=only`): the module refuses Argon2 whatever the kernel says,
+   so in that mode an unset KDF also becomes PBKDF2 (go-luks2's SHA-256 PRF).
+   A recovery keyslot is covered the same way; `RecoveryKeyOptions` has no hash
+   or iteration-time field, so its PBKDF2 cost is go-luks2's calibrated default.
    `pkg/arch/luks_keyslot_policy_test.go` fails the build if a keyslot call
    bypasses it.
 5. **New slot detection.** After `AddKey`, the backend reports the slot that was
