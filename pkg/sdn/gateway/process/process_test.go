@@ -451,6 +451,9 @@ type fakeLauncher struct {
 	// mute makes a child start and never serve the socket the supervisor
 	// dialled, the way a child that dies between exec and listen does.
 	mute bool
+	// listenGate, when set, makes the next child listen only once it is
+	// closed; see deferNextListen.
+	listenGate chan struct{}
 	// events is an ordered log of what the supervisor did to its children,
 	// so a test can assert the ORDER of a signal and a cancellation rather
 	// than only that both happened.
@@ -471,6 +474,16 @@ func (l *fakeLauncher) eventLog() []string {
 
 func newFakeLauncher(t *testing.T) *fakeLauncher {
 	return &fakeLauncher{t: t, nodes: map[string]*fakeNode{}, nextPID: 1000}
+}
+
+// deferNextListen makes the next launched child start without listening on
+// its socket until the returned channel is closed, so the supervisor's first
+// dial of it fails.
+func (l *fakeLauncher) deferNextListen() chan struct{} {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.listenGate = make(chan struct{})
+	return l.listenGate
 }
 
 // node returns (creating on first use) the scripted node for a process, so a
@@ -537,18 +550,34 @@ func (l *fakeLauncher) Launch(ctx context.Context, spec Spec) (Child, error) {
 		// a readiness check catches it.
 		socket = filepath.Join(l.t.TempDir(), "unreachable.sock")
 	}
-	if err := server.Listen(socket, 0o600, -1); err != nil {
-		return nil, err
-	}
 	l.mu.Lock()
 	stubborn := l.stubborn
+	listenGate := l.listenGate
+	l.listenGate = nil
 	l.mu.Unlock()
 	child := &fakeChild{pid: pid, server: server, done: make(chan struct{}), stubborn: stubborn, launcher: l}
-	go func() {
+	serve := func() {
 		if err := server.Serve(); err != nil {
 			l.t.Errorf("child %s serve: %v", spec.Definition.Name, err)
 		}
-	}()
+	}
+	if listenGate == nil {
+		if err := server.Listen(socket, 0o600, -1); err != nil {
+			return nil, err
+		}
+		go serve()
+	} else {
+		// The child is running but listens only once the test opens the
+		// gate, the way a real child binds its socket some time after exec.
+		go func() {
+			<-listenGate
+			if err := server.Listen(socket, 0o600, -1); err != nil {
+				l.t.Errorf("child %s late listen: %v", spec.Definition.Name, err)
+				return
+			}
+			serve()
+		}()
+	}
 
 	l.mu.Lock()
 	l.children = append(l.children, child)
@@ -1223,6 +1252,68 @@ func TestCrashedProcess_IsRestartedWithGrowingBackoff(t *testing.T) {
 	// recovers on its own.
 	require.Eventually(t, func() bool { return supervisor.ServiceActive(gateway.ServiceFirewall) },
 		20*time.Second, 10*time.Millisecond)
+}
+
+// pollSignalClock is the wall clock, except that once armed it closes polled
+// at the supervisor's next readiness poll: the point a Status call to the
+// child it awaits has just failed.
+type pollSignalClock struct {
+	mu     sync.Mutex
+	polled chan struct{}
+}
+
+func (c *pollSignalClock) Now() time.Time { return time.Now() }
+
+func (c *pollSignalClock) After(d time.Duration) <-chan time.Time {
+	if d == readyPollInterval {
+		c.mu.Lock()
+		if c.polled != nil {
+			close(c.polled)
+			c.polled = nil
+		}
+		c.mu.Unlock()
+	}
+	return time.After(d)
+}
+
+func (c *pollSignalClock) arm() <-chan struct{} {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.polled = make(chan struct{})
+	return c.polled
+}
+
+// A relaunched child binds its socket some time after exec, so the
+// supervisor's first dial of it fails. With gRPC's default reconnect backoff
+// the next attempt came 1s or more later, and the datapath relaunch in the
+// proxy suite overran its 10.5s bound (#955). The successor must be reached
+// within the ipc client's 200ms reconnect ceiling of it listening.
+func TestRelaunch_ReachesASuccessorThatListensAfterAFailedDial(t *testing.T) {
+	const reachBound = 600 * time.Millisecond
+	clock := &pollSignalClock{}
+	supervisor, launcher, _ := newSupervisor(t, func(c *Config) {
+		c.Clock = clock
+		c.ReadyTimeout = 5 * time.Second
+		c.RestartBackoff = time.Millisecond
+	})
+	ctx := testContext(t)
+	require.NoError(t, supervisor.StartService(ctx, gateway.ServiceFirewall))
+
+	listen := launcher.deferNextListen()
+	polled := clock.arm()
+	launcher.lastChild().exit(errors.New("signal: killed"))
+	select {
+	case <-polled:
+	case <-ctx.Done():
+		t.Fatal("the supervisor never polled the relaunched child")
+	}
+
+	listened := time.Now()
+	close(listen)
+	awaitRelaunch(t, supervisor, launcher, "datapath", 2)
+	reached := time.Since(listened)
+	assert.Less(t, reached, reachBound, "the relaunched child is reached soon after it listens")
+	assert.True(t, supervisor.ServiceActive(gateway.ServiceFirewall))
 }
 
 func TestCrashLoop_StopsAtTheRestartBudget(t *testing.T) {

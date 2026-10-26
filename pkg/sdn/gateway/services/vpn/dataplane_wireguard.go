@@ -25,7 +25,7 @@ import (
 // DataPlaneWireGuard is the kernel WireGuard plane. It exists only in
 // non-FIPS builds: WireGuard's primitives are not FIPS-approved, so the fips
 // tag compiles the plane out and Config.Validate refuses the kind.
-const DataPlaneWireGuard DataPlaneKind = "wireguard"
+const DataPlaneWireGuard = wireGuardKind
 
 // wireGuardKeyLen is a Curve25519 public key.
 const wireGuardKeyLen = 32

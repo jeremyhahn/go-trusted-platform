@@ -111,7 +111,7 @@
 | `FileStateStore` (`/run/platformctl/vpn.json`, 0600 in a 0700 directory, atomic rename) | The held lease and the local session; no secrets |
 | `ExitCode(err)`: 0, 4 refused, 5 posture violation, 6 not connected, 1 otherwise | The exit codes of [cli.md](cli.md). A refusal met while rolling back never decides the code |
 | `VPNService` (`sdk/javascript/src/services/vpn-service.ts`), `PlatformClient.vpn`, `useVPN` | The JS client over the REST routes: the same eight operations, with the protojson field names and string 64-bit integers ([api.md](api.md) §2) |
-| `web/src/app/(dashboard)/networking/vpn/page.tsx` (Networking → VPN) | The operator page over `useVPN`: gateway status and sessions, enrolled peers with revoke, posture policies listed, viewed and edited. A node without the control plane shows the not-available state; a daemon without gateway telemetry still lists peers and policies |
+| `web/src/app/(dashboard)/networking/vpn/page.tsx` (Networking → VPN) | The operator page over `useVPN`: gateway status and sessions, enrolled peers with enrol (`enrolPeer`; the zone field is comma-separated, empty for every allowed zone) and revoke, posture policies listed, viewed, edited and deleted after a confirmation (`deletePosturePolicy`). A refused enrolment, revoke, save or delete keeps its dialog open. A node without the control plane shows the not-available state; a daemon without gateway telemetry still lists peers and policies |
 | `New` without a `Device` or `DataPlanes`; `ErrNoDevice` | Posture, state store and dialer are required; the device and the planes are not, so a host without them still reads its lease. `Connect` and `Disconnect` then fail with `ErrNoDevice` before any gateway is dialled (exit 1) |
 | `platformctl vpn connect`, `disconnect`, `lease`, `posture`, `renew` (`pkg/cli/commands/vpn/client.go`) | The client verbs over `pkg/vpn/agent` ([cli.md](cli.md)). `--ca-file` gives the gateway's roots. `connect`, `renew` and `disconnect` open the host's `TPMDevice` (`OpenHostDevice`; `--device-id`, `--idevid-cert`) and close it on return; a host without one exits 1 with `ErrNoDevice`, and `disconnect` still tears down and forgets the local lease. `connect --foreground` runs `KeepAlive` under a SIGINT/SIGTERM context and disconnects when it ends. `clientDataPlanes` gives the agent WireGuard (absent under `fips`) on every verb that brings a plane up or down, and MASQUE only where its TUN can be held or ended: `connect --foreground`, `renew` and `disconnect` (in a process that holds no tunnel its `Down` is a no-op; the gateway's revoke ends the session). `connect --data-plane masque` without `--foreground` is `ErrForegroundRequired` (exit 1) before the TPM is opened. `connect` and `renew` build a `FIDO2Signer` from `--fido2-rp-id` / `--fido2-credential-id` before the TPM is opened (a bad flag exits 1 there); without them the agent has no signer and refuses a person factor, so `renew` of a fido2 lease takes the same flags, since the state records only the factor kind. `lease` and `posture` get no plane. The verbs are tested against an `httptest` server standing in for the admission listener |
 | `NewWireGuardPlane(logger)`, `WireGuardInterface` (`vpn-wg0`) (`!fips`) | The client WireGuard plane over `tunnel.WireGuardClient`. `Prepare` makes a fresh key pair per admission and sends the public half; `Up` keys `vpn-wg0` with it (the key is zeroized whether or not the bring-up succeeds and never used twice), peers it with the lease's gateway key and endpoint (a host name is resolved), addresses it with the lease address and routes the lease's routes. The link is a kernel object, so it outlives the command and `disconnect` removes it by name. A lease it cannot use is `ErrLeaseUnusable`; `Up` without a prepared key is `ErrNotPrepared` |
@@ -207,24 +207,36 @@ the policy lives beside `pkg/policy/opa/policies/host.rego` as
 
 Gateway config, `gateway.management_vpn`: `enabled` beside the core
 `vpn.Config` keys, inlined. Key names are hyphenated like the rest of the
-gateway section. The `wireguard.*` and `masque.*` keys are *(planned)*: the
-gateway does not parse them yet, and the assembly that will build the planes
-from them is the planned `VPNRuntime` row in §1.
+gateway section. The `wireguard.*` and `masque.*` keys are parsed and
+validated per offered plane (`Config.Validate`); the assembly that builds the
+planes from them is the planned `VPNRuntime` row in §1.
 
 | Key | Type | Default | Notes |
 |---|---|---|---|
 | `enabled` | bool | `false` | |
 | `listener` | `{bind-host, port}` | `""`, `4433` | admission listener, mTLS-only; the host-filter inventory learns it from here |
 | `data-planes` | list of `wireguard \| masque` | `[masque]` | `wireguard` refused under `fips` |
-| `wireguard.listen-port` *(planned)* | int | `51820` | `!fips` only |
-| `masque.template` *(planned)* | string | `https://{host}:{port}/.well-known/masque/ip/` | RFC 9484 URI template. IP flow forwarding (`{target}`/`{ipproto}` variables) is not offered: the proxy carries whole IP packets, so the template takes no variables |
-| `masque.routes` *(planned)* | prefixes | from the zone matrix | Advertised to an admitted client as RFC 9484 address ranges. At least one is required — a session with no route can carry nothing |
+| `wireguard.listen-port` | int | `51820` when `wireguard` is offered | 1-65535. `!fips` only: set without `wireguard` in `data-planes` (always so under `fips`) it is refused |
+| `masque.template` | string | required when `masque` is offered | RFC 9484 §3 URI template: an absolute `https` URL with a host and a path. IP flow forwarding (`{target}`/`{ipproto}` variables) is not offered: the proxy carries whole IP packets, so the template takes no variables |
+| `masque.routes` | prefixes | required when `masque` is offered | Advertised to an admitted client as RFC 9484 §4.6 address ranges. At least one is required — a client may send only to an advertised range, so a session with no route can carry nothing |
 | `pool` | IPAM pool name | required | `Allocator.GetPoolByName` |
 | `lease-ttl` | duration | `8h` | [5m, 24h] |
 | `renew-window` | duration | `30m` | < `lease-ttl` |
 | `require-person-factor` | `{on-admit, on-renew}` | `{true, false}` | |
 | `posture-policy` | name | `vpn_posture` | tenant override via API |
 | `allow-to` | zone names | existing `ManagementVPNConfig.AllowTo` | |
+
+`masque` is the default plane, so a section that names no data planes still
+needs `masque.template` and `masque.routes`. Each plane's keys are refused when
+that plane is not in `data-planes`, rather than silently ignored. Every refusal
+is an `*ErrInvalidConfig` naming the key:
+
+| `Field` | Cause |
+|---|---|
+| `wireguard.listen-port` | set while `wireguard` is not offered (every `fips` build), or outside 1-65535 |
+| `masque` | `masque.template` or `masque.routes` set while `masque` is not offered |
+| `masque.template` | missing; not a URI template; has variables; not an absolute `https` URL with a host; no path (RFC 9484 §3) |
+| `masque.routes` | empty, or a prefix that is not valid (RFC 9484 §4.6) |
 
 Secrets are references, never values: the WireGuard server key and the MASQUE
 TLS identity are `kms://` references resolved through `Security().KMS()`. The

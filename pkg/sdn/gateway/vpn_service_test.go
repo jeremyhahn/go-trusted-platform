@@ -43,7 +43,14 @@ import (
 func validVPNServiceConfig() *ManagementVPNServiceConfig {
 	return &ManagementVPNServiceConfig{
 		Enabled: true,
-		Config:  vpn.Config{Pool: "remote-access", AllowTo: []string{"management"}},
+		Config: vpn.Config{
+			Pool:    "remote-access",
+			AllowTo: []string{"management"},
+			MASQUE: vpn.MASQUESettings{
+				Template: "https://gw.example:4433/.well-known/masque/ip/",
+				Routes:   []netip.Prefix{netip.MustParsePrefix("10.0.0.0/8")},
+			},
+		},
 	}
 }
 
