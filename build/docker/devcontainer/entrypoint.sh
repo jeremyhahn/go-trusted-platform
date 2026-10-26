@@ -323,88 +323,6 @@ start_platformd() {
 }
 
 # Start platformd with swtpm for web development
-start_platformd_web() {
-    echo "=== Starting Platform Daemon for Web Development ==="
-
-    # Kill any existing platformd processes
-    pkill -9 -f 'platformd' 2>/dev/null || true
-    # Not fatal: an unreaped zombie still matches the pattern but holds no
-    # port or socket, so startup goes on, as it did after the old fixed wait.
-    wait_for 5 "the old platformd to exit" no_process_matching 'platformd' ||
-        echo "WARNING: a process matching 'platformd' remains; continuing"
-
-    # Start swtpm first
-    start_swtpm || return 1
-
-    # Build platformd-web-test if not already built
-    if [ ! -f /workspace/bin/platformd-web-test ]; then
-        echo "Building platformd-web-test..."
-        cd /workspace || return 1
-        local build_tags
-        build_tags="$(make -s print-build-tags)" || return 1
-        go build -tags "$build_tags" -o bin/platformd-web-test ./cmd/platformd/ || return 1
-    fi
-
-    # Setup config
-    echo "Setting up web-test configuration..."
-    cp /workspace/configs/platform/standalone/web-test.example.yaml /workspace/pkg/config.yaml
-    rm -rf /workspace/pkg/trusted-data
-    mkdir -p /workspace/pkg/trusted-data/etc
-
-    # Start platformd in background
-    echo "Starting platformd-web-test..."
-    cd /workspace/pkg
-    ../bin/platformd-web-test \
-        --config config.yaml \
-        --raw-so-pin 123456 \
-        --raw-pin 123456 \
-        --intermediate 0 \
-        --init serve > /var/log/platformd.log 2>&1 &
-
-    PLATFORMD_PID=$!
-    echo $PLATFORMD_PID > /run/platformd.pid
-    cd /workspace
-
-    # Wait for web API to be ready
-    echo "Waiting for platform web API to be ready..."
-    for i in $(seq 1 60); do
-        # Check if platformd is still running
-        if ! kill -0 "$PLATFORMD_PID" 2>/dev/null; then
-            echo "ERROR: platformd process died (PID: $PLATFORMD_PID)"
-            echo "Last 30 lines of log:"
-            tail -30 /var/log/platformd.log
-            return 1
-        fi
-
-        # Try health check - accept "invalid user" (after fix) or "entity not found" (old) or any JSON response
-        RESPONSE=$(curl -sk -X POST -H 'Content-Type: application/json' \
-            -d '{"username":"healthcheck"}' \
-            https://localhost:8443/api/v1/webauthn/login/begin 2>&1) || true
-
-        # Show first 5 attempts for debugging
-        if [ "$i" -le 5 ]; then
-            echo "  Attempt $i: ${RESPONSE:0:80}"
-        fi
-
-        if echo "$RESPONSE" | grep -qE '(invalid user|entity not found|"code":)'; then
-            echo "Platform web API started successfully (PID: $PLATFORMD_PID)"
-            echo "=== Platform Daemon for Web Started ==="
-            return 0
-        fi
-
-        # Show progress every 10 seconds
-        if [ $((i % 5)) -eq 0 ] && [ "$i" -gt 5 ]; then
-            echo "  Still waiting... (${i}/60) - Last response: ${RESPONSE:0:100}"
-        fi
-        sleep 2
-    done
-
-    echo "WARNING: Platform web API not ready after 120 seconds"
-    echo "Check logs at /var/log/platformd.log"
-    tail -50 /var/log/platformd.log
-    return 1
-}
-
 stop_platformd() {
     echo "=== Stopping Platform Daemon ==="
     if [ -f /run/platformd.pid ]; then
@@ -506,7 +424,6 @@ Available Commands:
     web-setup           Install web dependencies and Playwright browsers
     web-start           Start Next.js development server
     web-stop            Stop Next.js development server
-    e2e-shell           Start all services (platformd + Next.js) for E2E tests
     integration-shell   Start all services and drop to shell for integration tests
     bash|sh             Start interactive bash shell
     <any command>       Execute custom command
@@ -529,10 +446,6 @@ Examples:
 
     # Start OVS and run tests
     docker run --rm --privileged --device /dev/net/tun IMAGE ovs-shell
-
-    # Run E2E tests
-    docker run --rm --privileged -p 3000:3000 -p 8443:8443 \\
-        -v \$(pwd):/workspace IMAGE e2e-shell
 
     # Run specific test with OVS
     docker run --rm --privileged --device /dev/net/tun \\
@@ -631,49 +544,6 @@ case "${1:-bash}" in
         ;;
     web-stop)
         stop_web_dev
-        ;;
-    web-dev)
-        # Start backend with swtpm and frontend for web development
-        setup_devices
-        start_ovs
-        start_platformd_web
-        setup_web
-        start_web_dev
-        echo ""
-        echo "=== Web Development Environment Ready ==="
-        echo ""
-        echo "  Frontend:    http://localhost:3000"
-        echo "  Backend:     https://localhost:8443"
-        echo ""
-        echo "  Open in browser: http://localhost:3000/auth/webauthn"
-        echo ""
-        echo "  Logs:"
-        echo "    Backend:  /var/log/platformd.log"
-        echo "    Frontend: /var/log/nextjs-dev.log"
-        echo "    swtpm:    /tmp/swtpm/swtpm.log"
-        echo ""
-        echo "============================================="
-        # Keep container running and show logs
-        tail -f /var/log/platformd.log /var/log/nextjs-dev.log
-        ;;
-    e2e-shell)
-        # Start all services for E2E testing (backend + frontend)
-        setup_devices
-        start_ovs
-        start_platformd_web
-        setup_web
-        start_web_dev
-        echo ""
-        echo "=== E2E Test Environment Ready ==="
-        echo "All services started. Available endpoints:"
-        echo "  Next.js:     http://localhost:3000"
-        echo "  REST/HTTPS:  https://localhost:8443"
-        echo "  gRPC TCP:    localhost:10443"
-        echo "  QUIC UDP:    localhost:9444"
-        echo ""
-        echo "Run E2E tests with: cd web && npm run test:e2e"
-        echo "============================================="
-        exec /bin/bash
         ;;
     integration-shell)
         # Start all services for integration testing
