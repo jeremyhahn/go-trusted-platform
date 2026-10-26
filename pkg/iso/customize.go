@@ -134,34 +134,15 @@ func (c *Customizer) StageMedia(ctx context.Context) error {
 		}
 	}
 
-	// Copy platformctl CLI binaries (optional - for system administration)
-	// If not explicitly specified, look for them alongside platformd
-	// Copy both regular and static versions for compatibility with Alpine/musl
-	platformctlBinary := c.config.Platform.PlatformctlBinary
-	if platformctlBinary == "" && c.config.Platform.PlatformdBinary != "" {
-		// Auto-detect platformctl alongside platformd
-		platformctlBinary = filepath.Join(filepath.Dir(c.config.Platform.PlatformdBinary), "platformctl")
+	// Copy the platformctl CLI binaries: the regular one is the installer's
+	// entry point, the static one serves Alpine/musl. Each is installed only
+	// when the build names it; a named binary that is missing fails the
+	// build (#351). Neither is inferred from PlatformdBinary.
+	if err := c.CopyPlatformctlBinary(ctx, c.config.Platform.PlatformctlBinary); err != nil {
+		return &WrappedError{Msg: "failed to copy platformctl binary", Err: err}
 	}
-	if platformctlBinary != "" {
-		c.logger.Info("Copying platformctl binary", "path", platformctlBinary)
-		if err := c.CopyPlatformctlBinary(ctx, platformctlBinary); err != nil {
-			// platformctl is optional, just warn on failure
-			c.logger.Warn("Failed to copy platformctl binary", "error", err)
-		}
-	}
-
-	// Copy static platformctl binary for Alpine/musl compatibility (REQUIRED for ISO installation)
-	// The static binary is needed because Alpine uses musl libc which is incompatible with glibc
-	platformctlStaticBinary := ""
-	if c.config.Platform.PlatformdBinary != "" {
-		platformctlStaticBinary = filepath.Join(filepath.Dir(c.config.Platform.PlatformdBinary), "platformctl-static")
-	}
-	if platformctlStaticBinary != "" {
-		c.logger.Info("Copying platformctl-static binary", "path", platformctlStaticBinary)
-		if err := c.CopyPlatformctlStaticBinary(ctx, platformctlStaticBinary); err != nil {
-			// Log but continue - we may still have the regular binary
-			c.logger.Warn("Failed to copy platformctl-static binary", "error", err)
-		}
+	if err := c.CopyPlatformctlStaticBinary(ctx, c.config.Platform.PlatformctlStaticBinary); err != nil {
+		return &WrappedError{Msg: "failed to copy platformctl-static binary", Err: err}
 	}
 
 	// Copy platform-initrd binary for boot operations in initramfs (CRITICAL)
@@ -527,9 +508,8 @@ func (c *Customizer) CopyPlatformctlBinary(ctx context.Context, binaryPath strin
 	c.logger.Info("Copying platformctl binary", "source", binaryPath)
 
 	// Validate binary exists
-	if _, err := os.Stat(binaryPath); os.IsNotExist(err) {
-		c.logger.Warn("platformctl binary not found, skipping", "path", binaryPath)
-		return nil
+	if _, err := os.Stat(binaryPath); err != nil {
+		return &MissingInputError{Input: "platformctl binary", Path: binaryPath, Err: err}
 	}
 
 	// Validate binary
@@ -578,9 +558,8 @@ func (c *Customizer) CopyPlatformctlStaticBinary(ctx context.Context, binaryPath
 	c.logger.Info("Copying platformctl-static binary", "source", binaryPath)
 
 	// Validate binary exists
-	if _, err := os.Stat(binaryPath); os.IsNotExist(err) {
-		c.logger.Warn("platformctl-static binary not found, skipping", "path", binaryPath)
-		return nil
+	if _, err := os.Stat(binaryPath); err != nil {
+		return &MissingInputError{Input: "platformctl-static binary", Path: binaryPath, Err: err}
 	}
 
 	// Validate binary

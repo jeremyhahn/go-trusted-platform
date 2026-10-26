@@ -69,6 +69,12 @@ type ISOBuildConfig struct {
 	// Binary path (auto-detected via os.Executable() - binary copies itself)
 	PlatformdBinary string `yaml:"platformd-binary" json:"platformd_binary"`
 
+	// platformctl CLI binaries bundled on the media. Each is installed only
+	// when named here; a named binary that is missing fails the build. They
+	// are never inferred from PlatformdBinary (#351).
+	PlatformctlBinary       string `yaml:"platformctl-binary" json:"platformctl_binary"`
+	PlatformctlStaticBinary string `yaml:"platformctl-static-binary" json:"platformctl_static_binary"`
+
 	// Platform configuration file (platformd.yaml for TPM provisioning)
 	PlatformConfigFile string `yaml:"platform-config-file" json:"platform_config_file"`
 
@@ -510,6 +516,16 @@ func (c *ISOBuildConfig) ResolveBinaries() error {
 	}
 
 	return nil
+}
+
+// UseBinariesDir names platformd, platformctl and platformctl-static in dir,
+// a directory the caller holds all three in (a `make build-arm64` output).
+// It is the caller's explicit choice: pkg/iso never infers one binary's
+// path from another's (#351).
+func (c *ISOBuildConfig) UseBinariesDir(dir string) {
+	c.PlatformdBinary = filepath.Join(dir, "platformd")
+	c.PlatformctlBinary = filepath.Join(dir, "platformctl")
+	c.PlatformctlStaticBinary = filepath.Join(dir, "platformctl-static")
 }
 
 // GetAlpineISOURL returns the download URL

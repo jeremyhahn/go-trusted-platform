@@ -314,7 +314,7 @@ func buildConfig(flags *createFlags) (*pkgiso.ISOBuildConfig, error) {
 	if err != nil {
 		return nil, err
 	}
-	cfg.PlatformdBinary = filepath.Join(binDir, "platformd")
+	cfg.UseBinariesDir(binDir)
 	return cfg, nil
 }
 

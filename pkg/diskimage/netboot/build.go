@@ -434,7 +434,7 @@ func (c *Config) buildSet(ctx context.Context, set Set, work string) (*stagedSet
 func (c *Config) stageMedia(ctx context.Context, set Set, isoBuild *iso.ISOBuildConfig) (*setMedia, error) {
 	if set.Target == "" {
 		isoBuild.Architecture = alpineArch(set.Architecture)
-		isoBuild.PlatformdBinary = filepath.Join(c.binariesDir(set), "platformd")
+		isoBuild.UseBinariesDir(c.binariesDir(set))
 		logger := c.Build.Logger
 		if logger == nil {
 			logger = logging.DefaultLogger()

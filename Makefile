@@ -873,9 +873,9 @@ build-debug-static: build-debug
 # Cross-compile ARM 64-bit: a pure-Go build (CGO_ENABLED=0, same tag set as the
 # native `build` target), so no cross toolchain is required and the result is a
 # statically linked ELF. Output goes to $(ARM64_BIN_DIR), never bin/, so it
-# cannot clobber a native build. platformctl-static is the sibling name that
-# `platformctl iso create` (pkg/iso/customize.go) looks for next to platformd;
-# with CGO disabled it is byte-identical to platformctl, so it is a copy.
+# cannot clobber a native build. platformctl-static is the name
+# `platformctl diskimage --binaries-dir` gives the media's static installer
+# (pkg/iso ISOBuildConfig.UseBinariesDir); with CGO disabled it is byte-identical to platformctl, so it is a copy.
 .PHONY: build-arm64
 ## build-arm64: Cross-compile platformd, platformctl and platformctl-static for linux/arm64 into bin/aarch64
 build-arm64: _web-embed-prepare

@@ -33,32 +33,34 @@ import (
 
 // createFlags holds flags for the create command
 type createFlags struct {
-	alpineVersion   string
-	mirror          string
-	apkMirror       string
-	platformAPKDir  string
-	arch            string
-	platformVersion string
-	platformConfig  string
-	platformType    string
-	secureBoot      bool
-	tpmUnseal       bool
-	luks            bool
-	fips            bool
-	fido2           bool
-	overlay         string
-	output          string
-	keysDir         string
-	generateKeys    bool
-	keyBackend      string
-	force           bool
-	webUI           string
-	configFile      string
-	workDir         string
-	debug           bool
-	verbose         bool
-	preFetch        bool
-	overrides       string
+	alpineVersion         string
+	mirror                string
+	apkMirror             string
+	platformAPKDir        string
+	platformctlPath       string
+	platformctlStaticPath string
+	arch                  string
+	platformVersion       string
+	platformConfig        string
+	platformType          string
+	secureBoot            bool
+	tpmUnseal             bool
+	luks                  bool
+	fips                  bool
+	fido2                 bool
+	overlay               string
+	output                string
+	keysDir               string
+	generateKeys          bool
+	keyBackend            string
+	force                 bool
+	webUI                 string
+	configFile            string
+	workDir               string
+	debug                 bool
+	verbose               bool
+	preFetch              bool
+	overrides             string
 
 	// CA trust configuration
 	caBundle       string
@@ -135,6 +137,8 @@ Examples:
 	// /media/cdrom — can resolve packages at install time. Empty means the
 	// autoinstall repo setup falls back to the public Alpine mirror.
 	cmd.Flags().StringVar(&flags.platformAPKDir, "platform-apk-dir", "", "strongSwan builder output (make strongswan-build) whose apks the ISO carries and installs for the overlay's IPsec transport")
+	cmd.Flags().StringVar(&flags.platformctlPath, "platformctl-binary", "", "platformctl binary the media installs with (default: this platformctl)")
+	cmd.Flags().StringVar(&flags.platformctlStaticPath, "platformctl-static-binary", "", "Static platformctl for Alpine/musl (default: not installed)")
 	cmd.Flags().StringVar(&flags.apkMirror, "apk-mirror", "", "Install-time APK mirror base URL (e.g. http://10.4.6.11:8080); empty falls back to the public Alpine mirror")
 	cmd.Flags().StringVar(&flags.arch, "arch", "x86_64", "Architecture (x86_64 or aarch64)")
 
@@ -377,6 +381,9 @@ func buildISOBuildConfig(flags *createFlags) (*pkgiso.ISOBuildConfig, error) {
 		return nil, err
 	}
 	config.PlatformdBinary = platformdPath
+	if err := namePlatformctlBinaries(config, flags.platformctlPath, flags.platformctlStaticPath); err != nil {
+		return nil, err
+	}
 
 	// Override from flags
 	if flags.alpineVersion != "" {

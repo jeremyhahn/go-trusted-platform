@@ -126,6 +126,9 @@ func BuildCustomISO(ctx context.Context, logger *logging.Logger, cfg *ISOBuilder
 	// Build ISO configuration
 	buildConfig := pkgiso.DefaultISOBuildConfig()
 	buildConfig.PlatformdBinary = platformdPath
+	if err := namePlatformctlBinaries(buildConfig, "", ""); err != nil {
+		return err
+	}
 	buildConfig.WorkDir = cfg.WorkDir
 	buildConfig.OutputISO = cfg.OutputPath
 	buildConfig.EnableFIDO2 = cfg.EnableFIDO2
