@@ -626,11 +626,16 @@ bundles, which no Node or npm release fixes yet.
 
 A fixed Debian package is never suppressed; the image picks it up instead. The
 `base` stage's `apt-get upgrade` layer reads the `APT_REFRESH` build argument,
-which `make docker-build` (the CI image job) sets to the UTC day
-(`date -u +%Y-%m-%d`), so the layer is rebuilt daily; the Dockerfile's dated
-default applies only to a bare `docker build`. Without a key BuildKit reused a
-cached layer that predated a Debian fix, and `trivy image` reported the fixed
-libexpat1 (deb12u4) as HIGH. A new key rebuilds that layer and, through
+which `make docker-build` (the CI image job) sets with
+`scripts/apt-refresh-key.sh`: the newest `Date:` of the `InRelease` files of
+`bookworm`, `bookworm-updates` and `bookworm-security` on the image's Debian
+mirrors, so the layer is rebuilt whenever Debian publishes to any of them. If
+a fetch fails, the key falls back to the UTC date and hour and the script
+prints a warning; the build goes on. The Dockerfile's dated default applies
+only to a bare `docker build`. Without a key BuildKit reused a cached layer
+that predated a Debian fix, and `trivy image` reported the fixed libexpat1
+(deb12u4) as HIGH; a daily key still reused, until midnight, a layer built
+before the day's fix (openssl deb12u2, CVE-2026-84782). A new key rebuilds that layer and, through
 `FROM base`, every apt layer of the toolchain and integration stages; the
 `tools` and `modules` stages stay cached. Pass `APT_REFRESH=<key>` to make to
 rebuild against a fixed key.
