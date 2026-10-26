@@ -48,7 +48,6 @@ export default function CreateProfileClient() {
   const { toast } = useToast();
   const deviceService = useDevice();
 
-  const [hostname, setHostname] = useState('');
   const [staticIp, setStaticIp] = useState('');
   const [ekSerial, setEkSerial] = useState('');
   const [macAddress, setMacAddress] = useState('');
@@ -257,15 +256,6 @@ export default function CreateProfileClient() {
             </CardDescription>
           </CardHeader>
           <CardContent className="grid gap-4">
-            <div className="grid gap-2">
-              <Label htmlFor="hostname">Hostname</Label>
-              <Input
-                id="hostname"
-                value={hostname}
-                onChange={(e) => setHostname(e.target.value)}
-                placeholder="e.g., prod-server-01"
-              />
-            </div>
             <div className="grid gap-2">
               <Label htmlFor="staticIp">Static IP Address</Label>
               <Input
