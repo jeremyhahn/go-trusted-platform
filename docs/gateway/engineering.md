@@ -1520,6 +1520,8 @@ unkillable. It then sets `memory.swap.max` to 0 and lowers the live leaf's
   `memory.current`, `memory.peak` and `memory.events` are logged before the
   limit drops and once the write returns, so the job log shows how far over
   1 MiB the child was;
+- the leaf's `memory.peak` after the kill is over 1 MiB and at least the
+  `memory.current` read before the limit dropped;
 - only that child comes back, with a new PID;
 - the relaunch rewrites the class limit and resets the test's `memory.swap.max`
   of 0 to `max` (`Prepare` runs on every launch);
@@ -1540,7 +1542,12 @@ root before the suite runs (`prepare_gatewayd_supervision`). This works the
 way a systemd host does: the root's processes first move to an `init` leaf,
 because a cgroup holding processes cannot enable controllers for its children.
 Every test's teardown logs each running child's leaf accounting before it
-stops gatewayd, the measured basis for the class `MemoryMax` values. It then
+stops gatewayd, the measured basis for the class `MemoryMax` values, with the
+peak as a percentage of the class value. It asserts every leaf charged a
+non-zero `memory.peak` and has no `oom_kill` beyond the one
+`TestGatewaydSupervisorMemoryMaxRestartsOnlyThatChild` caused: a relaunch keeps
+the leaf, so that kill is still counted, and any other means a class value is
+below what its child needs. It then
 waits, through `CgroupManager.Remove`, for any leaf gatewayd left to report
 `populated 0` before it removes the test's cgroup parent.
 
