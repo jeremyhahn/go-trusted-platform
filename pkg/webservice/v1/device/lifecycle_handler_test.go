@@ -147,7 +147,7 @@ func TestLifecycleHandler_MapsServiceErrors(t *testing.T) {
 		want int
 	}{
 		{"invalid argument", status.Error(codes.InvalidArgument, "reason too long"), http.StatusBadRequest},
-		{"precondition", status.Error(codes.FailedPrecondition, "device is not on the fabric"), http.StatusBadRequest},
+		{"precondition", status.Error(codes.FailedPrecondition, "device is not on the fabric"), http.StatusConflict},
 		{"not found", status.Error(codes.NotFound, "device not found"), http.StatusNotFound},
 		{"internal", status.Error(codes.Internal, "store down"), http.StatusInternalServerError},
 		{"non-status", errors.New("boom"), http.StatusInternalServerError},

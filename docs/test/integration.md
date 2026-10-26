@@ -325,6 +325,9 @@ A hand-written list drops codecs, and the suite then fails with
 # Run every devcontainer-runnable suite (the runner's `all` keyword)
 make integration-test
 
+# Run one leg of it, as one CI matrix job does (see "Legs" below)
+make integration-test-leg LEG=2
+
 # Run one suite: integration-test-<key>, where <key> is a TARGET_PACKAGES key
 make integration-test-ca
 make integration-test-compute
@@ -396,6 +399,37 @@ the runner prints that log whole when the suite ends, so the `-v` output of two
 suites never interleaves. The daemon-backed keys then run one at a time, in
 list order, on the one shared `platformd`. The run fails if any suite fails,
 and the closing summary lists every key with its `PASS` or `FAIL`.
+
+#### Legs
+
+CI runs the suite as parallel legs, one matrix job each, so that no leg runs
+longer than 20 minutes (#1119, ruling 211 (4)); run serially, the suite took
+48. The runner's `INTEGRATION_LEGS` splits `ALL_TARGETS`, with `compute`, into
+legs, and `leg-<n>` runs leg n exactly as `all` runs the whole: in its own
+container, with the same OVS, swtpm and `platformd` bootstrap, its daemon-free
+keys at once, its daemon-backed keys one at a time in `ALL_TARGETS` order (so
+`tpm` stays last on its daemon), and `compute` after them on a restarted
+daemon. Each leg is its own compose project and network namespace, so the legs
+keep the fixed listener ports without colliding.
+
+The legs are balanced by an estimate of each suite's cost, from its size, its
+waits and the VMs it boots; CI's per-leg job times are the measured numbers.
+Each leg also pays about 5 minutes of image, binary and daemon bring-up.
+
+| Leg | Keys | Estimate (suites + bring-up) |
+|-----|------|------------------------------|
+| 1 | `acme`, `authenticode`, `ca`, `iso` | 11 + 5 min (`iso` builds an ISO and installs it in a VM) |
+| 2 | `ceremony`, `cli`, `container`, `sdn` | 12 + 5 min (`sdn` runs one test at a time, about 10) |
+| 3 | `daemon`, `device`, `dns`, `sdn-stress` | 7 + 5 min (`sdn-stress` keeps every CPU busy, about 5) |
+| 4 | `helpers`, `sdk`, `ipxe`, `installer`, `e2e`, `root`, `attestation`, `fido2`, `iam`, `kms`, `luks`, `ntp`, `objectstorage` | 10 + 5 min |
+| 5 | `piv`, `provision`, `proxy`, `registry`, `secrets`, `tenant`, `vpn`, `vtpm`, `tpm`, `compute` | 11 + 5 min (`compute` boots VMs on its own daemon) |
+
+`bash build/docker/devcontainer/run-integration-tests.sh legs` prints
+`ALL_TARGETS` and every leg and starts nothing. `pkg/arch/integration_legs_test.go`
+fails `make test` when a key is in no leg or in two, a leg holds a key `all`
+does not run, or the `integration` job's matrix in `ci.yml` is not the
+runner's legs. To add a suite, add its key to `ALL_TARGETS` and to the leg
+with the most room; a new leg also needs its number in the matrix.
 
 The runner does not pre-compile the whole of `./test/integration/...`. Each
 suite's package is checked with `go vet` under the run's tags, which compiles
@@ -596,7 +630,7 @@ devcontainer image so a developer and CI run the same thing:
 |-----|------|--------------|
 | `changes` | PR | Lists the PR's changed files and sets `docs_only` (below) |
 | `image` | docs | `make docker-build` (toolchain and integration images), then `make build`, `make test`, `make security` and `make deps-check` in the toolchain image through `scripts/in-toolchain-image.sh`, and `trivy image` on the integration image |
-| `integration` | full | `make integration-test` under a per-run `IT_PROJECT` and `IT_IMAGE`, torn down on every exit |
+| `integration` | full | A matrix job per leg: `make integration-test-leg LEG=<n>` under a per-run, per-leg `IT_PROJECT` and `IT_IMAGE`, torn down on every exit (see "Legs") |
 | `lint` | PR | Native-runner checks: format, vet, lint, `check-insecure-tls` |
 | `sdkjs`, `security`, `build`, `test` | docs | Native-runner checks: the JS SDK; gosec with its SARIF upload (GitHub only), govulncheck, module verification; `go build ./...` (root and `sdk/go`), `build-no-web`, the Pi binaries and the `sdk/go` consumer check; `make test` and `make test-sdk-go` |
 | `race`, `web` | full | `make test-race`; the web console's tests, typecheck and build |

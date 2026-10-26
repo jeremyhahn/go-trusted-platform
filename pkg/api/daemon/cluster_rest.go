@@ -69,7 +69,8 @@ func clusterErrorToHTTP(err error) int {
 			return http.StatusUnauthorized
 		case codes.NotFound:
 			return http.StatusNotFound
-		case codes.AlreadyExists:
+		case codes.AlreadyExists, codes.FailedPrecondition:
+			// FailedPrecondition is a conflict with the cluster's state (#665).
 			return http.StatusConflict
 		}
 	}

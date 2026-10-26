@@ -77,8 +77,12 @@ func TestSupervises_OnlyTheMovedProcessIsSupervised(t *testing.T) {
 	for _, service := range datapath.Services {
 		assert.Truef(t, sup.Supervises(service), "%s: datapath is the last process moved out (#557, R14)", service)
 	}
-	// vpn moves once it has a backend; until then it runs in the parent.
-	assert.False(t, sup.Supervises(gateway.ServiceManagementVPN), "vpn has no backend yet and has not moved")
+	assert.True(t, sup.Supervises(gateway.ServiceManagementVPN), "vpn is the fourth process moved out (#557)")
+	vpn, err := DefinitionByName("vpn")
+	require.NoError(t, err)
+	assert.Empty(t, vpn.Capabilities, "the vpn reaches its data plane through the datapath IPC and needs no capability")
+	assert.ElementsMatch(t, []uint32{unix.AF_UNIX, unix.AF_INET, unix.AF_INET6}, vpn.AddressFamilies,
+		"the vpn reads no routes or links, so it opens no netlink socket")
 
 	// Every moved parser drops to the service account. The one moved
 	// process that keeps privilege is the kernel class, and it keeps
@@ -100,6 +104,15 @@ func TestSupervises_OnlyTheMovedProcessIsSupervised(t *testing.T) {
 
 func TestSupervises_AnUnplacedServiceIsNotSupervised(t *testing.T) {
 	assert.False(t, (&Supervisor{}).Supervises("not-a-service"))
+}
+
+func TestClassTable_OnlyTheDatapathAndTheVPNReconcileTheDesiredDocument(t *testing.T) {
+	// The desired document has three sections: load balancer and NAT
+	// (datapath) and vpn. Every other child is sent nothing.
+	for _, def := range Definitions() {
+		want := def.Name == "datapath" || def.Name == "vpn"
+		assert.Equalf(t, want, def.ReconcilesDesired, "process %q", def.Name)
+	}
 }
 
 func TestClassTable_TheTranslatorRunsInTheKernelClass(t *testing.T) {
@@ -1452,6 +1465,146 @@ func TestApply_ReportsTheChildFailureWithItsState(t *testing.T) {
 	var remote *ipc.ErrRemoteApply
 	require.ErrorAs(t, err, &remote)
 	assert.Equal(t, "v1", state.Version, "the child's state travels with its failure")
+}
+
+func TestApply_TheVPNChildIsGivenTheDocumentAtStartAndOnEveryApply(t *testing.T) {
+	supervisor, launcher, _ := newSupervisor(t, nil)
+	ctx := testContext(t)
+	datapath := startDatapath(t, ctx, supervisor, launcher, "v1")
+
+	// Started after v1 was applied: its launch is given v1 (#557).
+	require.NoError(t, supervisor.StartService(ctx, gateway.ServiceManagementVPN))
+	vpn := launcher.node("vpn", nil)
+	assert.Equal(t, []string{"v1"}, vpn.appliedVersions(), "the vpn child holds the document before it is reported up")
+	require.NoError(t, supervisor.ServiceHealth(gateway.ServiceManagementVPN))
+
+	datapath.state = gwstate.DesiredConfigState{Version: "v2"}
+	state, err := supervisor.Apply(ctx, &gwstate.DesiredConfig{GatewayID: "gw", Version: "v2"})
+	require.NoError(t, err)
+	assert.Equal(t, "v2", state.Version, "the datapath child's state is the one reported")
+	assert.Equal(t, []string{"v1", "v2"}, vpn.appliedVersions())
+	assert.Equal(t, []string{"v1", "v2"}, datapath.appliedVersions())
+}
+
+func TestApply_AVPNChildFailureIsJoinedToTheDatapathState(t *testing.T) {
+	supervisor, launcher, _ := newSupervisor(t, nil)
+	ctx := testContext(t)
+	datapath := startDatapath(t, ctx, supervisor, launcher, "")
+	require.NoError(t, supervisor.StartService(ctx, gateway.ServiceManagementVPN))
+	vpn := launcher.node("vpn", nil)
+	vpn.applyErr = errors.New("duplicate peer")
+	datapath.state = gwstate.DesiredConfigState{Version: "v1"}
+
+	state, err := supervisor.Apply(ctx, &gwstate.DesiredConfig{GatewayID: "gw", Version: "v1"})
+	var forward *ErrDesiredForwardFailed
+	require.ErrorAs(t, err, &forward)
+	assert.Equal(t, "vpn", forward.Process)
+	assert.Equal(t, "v1", forward.Version)
+	var remote *ipc.ErrRemoteApply
+	assert.ErrorAs(t, err, &remote, "the child's own failure is the cause")
+	assert.Equal(t, "v1", state.Version, "the datapath child still applied it")
+	assert.Equal(t, []string{"v1"}, datapath.appliedVersions())
+}
+
+// TestGatewayApply_AVPNChildFailureKeepsThePreviousVersionSoTheRetryReachesIt:
+// the datapath child applies the document but the vpn child refuses it once.
+// The gateway's applied version stays at the previous document, so the same
+// document applied again is not taken as already applied and reaches the
+// vpn child again (#1070).
+func TestGatewayApply_AVPNChildFailureKeepsThePreviousVersionSoTheRetryReachesIt(t *testing.T) {
+	supervisor, launcher, _ := newSupervisor(t, nil)
+	ctx := testContext(t)
+	datapath := startDatapath(t, ctx, supervisor, launcher, "")
+	require.NoError(t, supervisor.StartService(ctx, gateway.ServiceManagementVPN))
+	vpn := launcher.node("vpn", nil)
+	gw, err := gateway.NewGateway(&gateway.GatewayConfig{Enabled: true, ID: "gw", Supervisor: supervisor})
+	require.NoError(t, err)
+
+	datapath.state = gwstate.DesiredConfigState{Version: "v1"}
+	require.NoError(t, gw.Apply(ctx, &gwstate.DesiredConfig{GatewayID: "gw", Version: "v1"}))
+	require.Equal(t, "v1", gw.DesiredConfigState().Version)
+	appliedAt := gw.DesiredConfigState().AppliedAt
+
+	vpn.mu.Lock()
+	vpn.applyErr = errors.New("duplicate peer")
+	vpn.applyFailCount = 1
+	vpn.mu.Unlock()
+	datapath.state = gwstate.DesiredConfigState{Version: "v2"}
+	v2 := &gwstate.DesiredConfig{GatewayID: "gw", Version: "v2"}
+
+	err = gw.Apply(ctx, v2)
+	var forward *ErrDesiredForwardFailed
+	require.ErrorAs(t, err, &forward)
+	assert.Equal(t, "vpn", forward.Process)
+	state := gw.DesiredConfigState()
+	assert.Equal(t, "v1", state.Version, "the document is not applied until the vpn child has it too")
+	assert.Equal(t, appliedAt, state.AppliedAt)
+	assert.Contains(t, state.LastError, "duplicate peer")
+
+	require.NoError(t, gw.Apply(ctx, v2), "the retry is not taken as already applied")
+	state = gw.DesiredConfigState()
+	assert.Equal(t, "v2", state.Version)
+	assert.Empty(t, state.LastError)
+	assert.Equal(t, []string{"v1", "v2", "v2"}, vpn.appliedVersions(), "the retry reaches the vpn child")
+}
+
+func TestApply_WithNoDatapathTheVPNChildStillGetsTheDocument(t *testing.T) {
+	supervisor, launcher, _ := newSupervisor(t, nil)
+	ctx := testContext(t)
+	require.NoError(t, supervisor.StartService(ctx, gateway.ServiceManagementVPN))
+	vpn := launcher.node("vpn", nil)
+
+	_, err := supervisor.Apply(ctx, &gwstate.DesiredConfig{GatewayID: "gw", Version: "v1"})
+	var noDatapath *ErrNoDatapathProcess
+	require.ErrorAs(t, err, &noDatapath)
+	assert.Equal(t, []string{"v1"}, vpn.appliedVersions())
+}
+
+func TestStartService_TheVPNChildIsGivenItsStateDirectory(t *testing.T) {
+	// The vpn child runs as the service account and journals its pending
+	// revocations under <data-dir>/vpn; the data directory is root's, so the
+	// supervisor hands it that directory before every launch (#557).
+	dataDir := t.TempDir()
+	stateDir := filepath.Join(dataDir, "vpn")
+	// One left by an earlier gatewayd with a looser mode is tightened.
+	require.NoError(t, os.Mkdir(stateDir, 0o755))
+	supervisor, _, _ := newSupervisor(t, func(cfg *Config) {
+		cfg.Inherited.DataDir = dataDir
+		cfg.UID, cfg.GID = uint32(os.Getuid()), uint32(os.Getgid())
+	})
+	ctx := testContext(t)
+
+	require.NoError(t, supervisor.StartService(ctx, gateway.ServiceManagementVPN))
+	var st unix.Stat_t
+	require.NoError(t, unix.Stat(stateDir, &st))
+	assert.Equal(t, uint32(0o700), st.Mode&0o7777, "the journal decides which leases a restart reinstates")
+	assert.Equal(t, uint32(os.Getuid()), st.Uid, "owned by the uid the child drops to")
+	assert.Equal(t, uint32(os.Getgid()), st.Gid)
+
+	// A process with no state of its own is given nothing.
+	require.NoError(t, supervisor.StartService(ctx, gateway.ServiceProxy))
+	entries, err := os.ReadDir(dataDir)
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+	assert.Equal(t, "vpn", entries[0].Name())
+}
+
+func TestStartService_AStateDirectoryThatCannotBeMadeRefusesTheLaunch(t *testing.T) {
+	// A data directory that is a file: the child would run without its
+	// journal, so it is not launched.
+	dataDir := filepath.Join(t.TempDir(), "data")
+	require.NoError(t, os.WriteFile(dataDir, nil, 0o600))
+	supervisor, launcher, _ := newSupervisor(t, func(cfg *Config) {
+		cfg.Inherited.DataDir = dataDir
+	})
+
+	err := supervisor.StartService(testContext(t), gateway.ServiceManagementVPN)
+	var stateDir *ErrStateDir
+	require.ErrorAs(t, err, &stateDir)
+	assert.Equal(t, "vpn", stateDir.Process)
+	assert.Equal(t, "create", stateDir.Op)
+	assert.Equal(t, filepath.Join(dataDir, "vpn"), stateDir.Path)
+	assert.Zero(t, launcher.launchCount(), "no child is started without its state directory")
 }
 
 // startDatapath starts the datapath process, optionally applies a document

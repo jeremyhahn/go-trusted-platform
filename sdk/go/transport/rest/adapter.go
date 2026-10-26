@@ -377,7 +377,7 @@ func (c *restClientConn) Invoke(ctx context.Context, method string, args interfa
 		if probeVerdict(method, reqErr, reply) {
 			return nil
 		}
-		return translateErrorToGRPC(reqErr)
+		return translateInvokeError(httpMethod, reqErr)
 	}
 	return c.finishInvoke(hasDecoder, decode, raw, reply)
 }
@@ -1528,9 +1528,10 @@ var grpcMethodToRESTMap = map[string]struct {
 	//
 	// Key delete is refused on every transport. DeleteIDevID and DeleteIAK
 	// go to the daemon listener's DELETE /api/v1/tpm/idevid and /tpm/iak
-	// (pkg/api/daemon/rest_idevid.go), which answer 412, the HTTP status of
-	// the gRPC class FailedPrecondition. The web service's DELETE
-	// /api/v1/idevid and /idevid/iak write that class as 400.
+	// (pkg/api/daemon/rest_idevid.go), which answer 409, the HTTP status of
+	// the gRPC class FailedPrecondition (#665); translateInvokeError reads a
+	// DELETE's 409 back as FailedPrecondition. The web service's DELETE
+	// /api/v1/idevid and /idevid/iak write the same 409.
 	platformv1.IDevIDService_DeleteIDevID_FullMethodName:  {"/api/v1/tpm/idevid", http.MethodDelete},
 	platformv1.IDevIDService_DeleteIAK_FullMethodName:     {"/api/v1/tpm/iak", http.MethodDelete},
 	"/platform.v1.IDevIDService/GenerateIDevID":           {"/api/v1/idevid/generate", http.MethodPost},
@@ -1759,6 +1760,19 @@ var httpStatusToGRPCMap = map[int]codes.Code{
 }
 
 // translateErrorToGRPC translates REST errors to gRPC status errors.
+// translateInvokeError translates the error of a REST request sent with
+// httpMethod. The platform answers FailedPrecondition as 409 Conflict (#665),
+// the status it also answers AlreadyExists with. A delete creates nothing, so
+// a 409 on a DELETE is the target's state refusing it: FailedPrecondition.
+// Every other answer takes translateErrorToGRPC.
+func translateInvokeError(httpMethod string, err error) error {
+	var httpErr ErrHTTPStatus
+	if httpMethod == http.MethodDelete && errors.As(err, &httpErr) && httpErr.StatusCode == http.StatusConflict {
+		return status.Error(codes.FailedPrecondition, restErrorMessage(httpErr.Body))
+	}
+	return translateErrorToGRPC(err)
+}
+
 func translateErrorToGRPC(err error) error {
 	if err == nil {
 		return nil

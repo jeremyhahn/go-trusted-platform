@@ -137,8 +137,8 @@ spellings.
 
 | Capability | REST | gRPC / Unix | QUIC | MCP | Embedded |
 |---|---|---|---|---|---|
-| Authenticate port | `POST /api/v1/sdn/bridges/{name}/ports/{port}/auth` (webservice only; refused, `400`) | `AuthenticatePort` (refused) | `MISSING — docs/13 G7` | `sdn_authenticate_port` (refused) | refused |
-| Revoke port auth | `DELETE /api/v1/sdn/bridges/{name}/ports/{port}/auth` (webservice only; refused, `400`) | `RevokePortAuth` (refused) | `MISSING — docs/13 G7` | `sdn_revoke_port_auth` (refused) | refused |
+| Authenticate port | `POST /api/v1/sdn/bridges/{name}/ports/{port}/auth` (webservice only; refused, `409`) | `AuthenticatePort` (refused) | `MISSING — docs/13 G7` | `sdn_authenticate_port` (refused) | refused |
+| Revoke port auth | `DELETE /api/v1/sdn/bridges/{name}/ports/{port}/auth` (webservice only; refused, `409`) | `RevokePortAuth` (refused) | `MISSING — docs/13 G7` | `sdn_revoke_port_auth` (refused) | refused |
 | Apply policy | `POST /api/v1/sdn/policies` | `ApplyPolicy` | `OpSDNApplyPolicy` (`0x47`) | `sdn_apply_policy` | ✅ |
 | List policies | `GET /api/v1/sdn/policies` | `ListPolicies` | `OpSDNListPolicies` (`0x49`) | `sdn_list_policies` | ✅ |
 | Get policy | `GET /api/v1/sdn/policies/{id}` | `GetPolicy` | `OpSDNGetPolicy` (`0x48`) | `sdn_get_policy` | ✅ |
@@ -213,7 +213,7 @@ What each transport answers:
 | Transport | Answer |
 |---|---|
 | gRPC, Unix, Embedded | `FailedPrecondition` |
-| REST (webservice) | `400`, the platform's status for `FailedPrecondition`; the SDK's REST transport reads it as `InvalidArgument` and keeps the message |
+| REST (webservice) | `409`, the platform's status for `FailedPrecondition`; the SDK's REST transport reads it as `AlreadyExists` and keeps the message |
 | MCP tools | JSON-RPC error with the `FailedPrecondition` code, for a caller holding `sdn:write`; without it, `PermissionDenied` |
 | QUIC | no opcode; the SDK answers `Unimplemented` |
 

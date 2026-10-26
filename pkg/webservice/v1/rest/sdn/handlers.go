@@ -27,6 +27,7 @@ import (
 	restapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/rest"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/internal/protorest"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
 
@@ -87,8 +88,10 @@ func (h *SDNHandlers) handleGRPCError(w http.ResponseWriter, r *http.Request, er
 	switch st.Code() {
 	case codes.NotFound:
 		h.respWriter.Error404(w, r, err)
-	case codes.InvalidArgument, codes.FailedPrecondition:
+	case codes.InvalidArgument:
 		h.respWriter.Error400(w, r, err)
+	case codes.FailedPrecondition:
+		protorest.WriteError(w, r, h.respWriter, err)
 	case codes.PermissionDenied, codes.Unauthenticated:
 		h.respWriter.Error401(w, r, err)
 	case codes.AlreadyExists:

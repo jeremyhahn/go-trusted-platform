@@ -320,12 +320,12 @@ func (s stuckPXE) UpdateState(_ context.Context, _ *platformv1.UpdatePXEStateReq
 }
 
 // TestGatewayReportState_RefusedTransition checks a transition the service
-// refuses answers 400 with its reason and leaves the device where it was.
+// refuses answers 409 with its reason (#665) and leaves the device where it was.
 func TestGatewayReportState_RefusedTransition(t *testing.T) {
 	server := stuckPXE{newFakePXE()}
 	rec := post(gatewayRoot(server, nil), devicePath(knownMAC, "state"), `{"state":"booting"}`)
 
-	assert.Equal(t, http.StatusBadRequest, rec.Code)
+	assert.Equal(t, http.StatusConflict, rec.Code)
 	assert.Contains(t, rec.Body.String(), "illegal transition")
 	assert.Equal(t, platformv1.ProvisioningState_PROVISIONING_STATE_DISCOVERED, server.devices[knownMAC].GetState())
 }

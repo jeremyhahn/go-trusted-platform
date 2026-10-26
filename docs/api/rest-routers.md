@@ -197,11 +197,11 @@ justification, route by route.
 | gRPC code | HTTP status |
 |---|---|
 | `OK` | `200` |
-| `InvalidArgument`, `FailedPrecondition`, `OutOfRange` | `400` |
+| `InvalidArgument`, `OutOfRange` | `400` |
 | `Unauthenticated` | `401` |
 | `PermissionDenied` | `403` |
 | `NotFound` | `404` |
-| `AlreadyExists`, `Aborted` | `409` |
+| `AlreadyExists`, `Aborted`, `FailedPrecondition` | `409` |
 | `ResourceExhausted` | `429` |
 | `Unimplemented` | `501` |
 | `Unavailable` | `503` |

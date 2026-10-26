@@ -19,20 +19,10 @@ The integration suite's CLI leg (`test/integration/dns/`) asserts this refusal:
 every DNS operation returns the typed `ErrCLINoCommandGroup` naming #954, and the
 leg fails once `platformctl --help` lists a `dns` group.
 
-**This is a gap, not a design decision.** DNS is a Tier 1 platform capability
-that an operator cannot exercise from a shell: no way to list zones, add a
-record or sign a zone without writing a client. It is raised in
-the migration report as an owner question — whether to build `platformctl dns`
-or to record the omission deliberately.
-
-### A prior document described this CLI as if it existed
-
-The deleted cli-reference.md was a full reference for a
-`platformctl dns` tree — `zone`, `record`, `dnssec`, `dane`, `update`, `delete`,
-`server` subcommand categories, with flags and examples. **None of it exists.**
-That file has been fenced with an ARCHIVE banner rather than deleted, because it
-is a useful specification if the CLI is ever built. Do not treat it as a
-description of the product.
+**This is a recorded omission, not planned scope.** The SPEC dns row names no
+`platformctl dns` group, so the CLI is not built; the omission is recorded in
+[ROADMAP.md](../../ROADMAP.md) under Later (#954). An operator lists zones, adds
+records and signs zones through the [API](api.md).
 
 ---
 

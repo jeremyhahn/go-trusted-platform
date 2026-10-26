@@ -26,7 +26,8 @@ import (
 
 // TestIdentityKeyDelete_RefusalIsFailedPrecondition pins #304 on the SDK REST
 // transport: the IDevID and IAK key deletes reach the daemon's routes, and
-// its 412 refusal comes back as FailedPrecondition with the daemon's message.
+// its 409 refusal (#665) comes back as FailedPrecondition with the daemon's
+// message.
 func TestIdentityKeyDelete_RefusalIsFailedPrecondition(t *testing.T) {
 	const refusal = "idevid: the key is TPM-resident and is not evicted by this service; nothing was deleted"
 	calls := map[string]struct {
@@ -48,8 +49,8 @@ func TestIdentityKeyDelete_RefusalIsFailedPrecondition(t *testing.T) {
 				}
 				gotMethod, gotPath = r.Method, r.URL.Path
 				w.Header().Set("Content-Type", "application/json")
-				w.WriteHeader(http.StatusPreconditionFailed)
-				_, _ = w.Write([]byte(`{"error":"` + refusal + `","code":412}`))
+				w.WriteHeader(http.StatusConflict)
+				_, _ = w.Write([]byte(`{"error":"` + refusal + `","code":409}`))
 			})
 
 			err := a.Connection().Invoke(context.Background(), method, call.req, call.reply)
@@ -82,5 +83,35 @@ func TestIdentityKeyDelete_OtherFailureKeepsItsClass(t *testing.T) {
 		&platformv1.DeleteIDevIDRequest{}, &platformv1.DeleteIDevIDResponse{})
 	if status.Code(err) != codes.Unavailable {
 		t.Fatalf("Invoke error = %v, want Unavailable", err)
+	}
+}
+
+// TestTranslateInvokeError_ConflictFollowsTheMethod pins the readback of the
+// platform's 409 (#665): FailedPrecondition on a DELETE, which creates
+// nothing, and AlreadyExists on every other method. Other statuses keep
+// their class whatever the method.
+func TestTranslateInvokeError_ConflictFollowsTheMethod(t *testing.T) {
+	conflict := ErrHTTPStatus{StatusCode: http.StatusConflict, Body: `{"error":"the key is in use"}`}
+	cases := map[string]struct {
+		method string
+		err    error
+		want   codes.Code
+	}{
+		"409 on DELETE":    {http.MethodDelete, conflict, codes.FailedPrecondition},
+		"409 on POST":      {http.MethodPost, conflict, codes.AlreadyExists},
+		"409 on PUT":       {http.MethodPut, conflict, codes.AlreadyExists},
+		"404 on DELETE":    {http.MethodDelete, ErrHTTPStatus{StatusCode: http.StatusNotFound}, codes.NotFound},
+		"closed on DELETE": {http.MethodDelete, ErrClientClosed{}, codes.Unavailable},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			err := translateInvokeError(tc.method, tc.err)
+			if status.Code(err) != tc.want {
+				t.Fatalf("translateInvokeError(%s) = %v, want %s", tc.method, err, tc.want)
+			}
+		})
+	}
+	if msg := status.Convert(translateInvokeError(http.MethodDelete, conflict)).Message(); msg != "the key is in use" {
+		t.Errorf("message = %q, want the envelope's error", msg)
 	}
 }

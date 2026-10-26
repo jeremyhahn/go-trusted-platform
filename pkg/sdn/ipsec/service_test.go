@@ -102,7 +102,7 @@ func TestNewServiceRejects(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			svc, err := NewService(tt.cfg, nil)
+			svc, err := NewService(tt.cfg, &fakeAnchor{}, nil)
 			if svc != nil || !errors.Is(err, tt.want) {
 				t.Fatalf("NewService = %v, %v; want %v", svc, err, tt.want)
 			}
@@ -349,8 +349,21 @@ func TestStaticPeersOnlyAdmitsNoRoutedVTEP(t *testing.T) {
 }
 
 func TestNewEVPNServiceRejectsNoAdmitter(t *testing.T) {
-	svc, err := NewEVPNService(serviceConfig(t, "tunnel.crl"), nil, nil)
+	svc, err := NewEVPNService(serviceConfig(t, "tunnel.crl"), nil, &fakeAnchor{}, nil)
 	if svc != nil || !errors.Is(err, ErrMissingDependency) {
+		t.Fatalf("NewEVPNService = %v, %v; want %v", svc, err, ErrMissingDependency)
+	}
+}
+
+// A service without the platform anchor would load any tunnel identity
+// the operator supplies: both constructors refuse it before they read the
+// certificate or open netlink.
+func TestNewServiceRejectsNoAnchor(t *testing.T) {
+	cfg := serviceConfig(t, "tunnel.crl")
+	if svc, err := NewService(cfg, nil, nil); svc != nil || !errors.Is(err, ErrMissingDependency) {
+		t.Fatalf("NewService = %v, %v; want %v", svc, err, ErrMissingDependency)
+	}
+	if svc, err := NewEVPNService(cfg, staticPeersOnly{}, nil, nil); svc != nil || !errors.Is(err, ErrMissingDependency) {
 		t.Fatalf("NewEVPNService = %v, %v; want %v", svc, err, ErrMissingDependency)
 	}
 }

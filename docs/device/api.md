@@ -1045,7 +1045,7 @@ refused candidate, `source` and `attest_cert` are empty, and `subject`,
 removed.
 
 `source` is `device`, `ca` or `reissued`. A refusal is `FAILED_PRECONDITION`
-on gRPC/Unix/MCP, QUIC status `0x01`, and `400` on REST, with a message that
+on gRPC/Unix/MCP, QUIC status `0x01`, and `409` on REST, with a message that
 names **every** candidate and why it was refused (`ca[node-03]: … does not
 carry tcg-cap-verifiedTPMRestricted`). `UNAVAILABLE` means no CA is
 configured. Every attempt is audited as an attestation store event —
@@ -1146,9 +1146,10 @@ boot proved freshness and IAK possession, not the expected boot state.
 
 | Status | Cause |
 |---|---|
-| 400 | no identity, a body that is not the JSON above, or a connection with no TLS 1.3 exporter to bind to (`ErrBootChannelRequired`) |
+| 400 | no identity, or a body that is not the JSON above |
 | 403 | certificate: any request that does not prove the recorded IDevID key, one body for all of them. Delivery: wrong or unchained certificate, a quote nonce that is not this connection's, failed or unevaluable attestation, revoked or suspended device |
 | 404 | delivery: identity unknown, or no profile bound to the device |
+| 409 | a connection with no TLS 1.3 exporter to bind to (`ErrBootChannelRequired`, `FailedPrecondition`; #665) |
 | 500 | recorded chain unparseable, CA bundle, storage or verifier fault |
 
 #### Transports
@@ -1192,7 +1193,7 @@ it, before the boot service runs — an empty nonce never reaches it:
 
 | Transport | Refusal for a connection with no channel |
 |---|---|
-| REST | `400` |
+| REST | `409`, the platform's status for `FailedPrecondition` (#665) |
 | gRPC, Unix socket | `FailedPrecondition` |
 | QUIC | `StatusInvalidRequest` |
 | MCP | `-32007` (`FailedPrecondition`): tool error `ErrBootChannelRequired` (Transport `MCP`), from both MCP service providers |
@@ -1277,10 +1278,10 @@ as they were:
 
 | Cause | Error | gRPC / Unix / MCP | QUIC | REST |
 |---|---|---|---|---|
-| The daemon has no SDN policy engine (not SDN-OVS, or no attestation quarantine observer) | `ErrLifecycleUnenforced` | `FAILED_PRECONDITION` | `0x01` | 400 |
-| The device has no `network_port_id` | `ErrDeviceNotOnFabric` | `FAILED_PRECONDITION` | `0x01` | 400 |
-| Disable from `suspended` or `revoked` | `entities.ErrInvalidTransition` | `FAILED_PRECONDITION` | `0x01` | 400 |
-| Enable from anything but `suspended`; no zone with lifecycle role `quarantine`; the engine knows no port for the device | `policy.ErrDeviceNotSuspended`, `ErrNoQuarantineZone`, `ErrUnknownDevicePort` | `FAILED_PRECONDITION` | `0x01` | 400 |
+| The daemon has no SDN policy engine (not SDN-OVS, or no attestation quarantine observer) | `ErrLifecycleUnenforced` | `FAILED_PRECONDITION` | `0x01` | 409 |
+| The device has no `network_port_id` | `ErrDeviceNotOnFabric` | `FAILED_PRECONDITION` | `0x01` | 409 |
+| Disable from `suspended` or `revoked` | `entities.ErrInvalidTransition` | `FAILED_PRECONDITION` | `0x01` | 409 |
+| Enable from anything but `suspended`; no zone with lifecycle role `quarantine`; the engine knows no port for the device | `policy.ErrDeviceNotSuspended`, `ErrNoQuarantineZone`, `ErrUnknownDevicePort` | `FAILED_PRECONDITION` | `0x01` | 409 |
 | `reason` longer than 256 bytes; id missing or `0` | `ErrLifecycleReasonTooLong`; `ErrInvalidDeviceID` | `INVALID_ARGUMENT` | `0x09` | 400 |
 | Unknown device | — | `NOT_FOUND` | `0x02` | 404 |
 
@@ -1476,7 +1477,7 @@ On MCP, all 20 device-related tool names carry a permission — see §6.
 | QUIC byte | Name | REST | Device cause |
 |---|---|---|---|
 | `0x00` | `StatusOK` | 200 | — |
-| `0x01` | `StatusInvalidRequest` | 400 | Payload failed to decode (`ErrQUICDecodingFailed`); a refused operator Disable/Enable (`FAILED_PRECONDITION`, §4.7) |
+| `0x01` | `StatusInvalidRequest` | 400 | Payload failed to decode (`ErrQUICDecodingFailed`); a refused operator Disable/Enable (`FAILED_PRECONDITION`, §4.7; 409 on REST) |
 | `0x02` | `StatusNotFound` | 404 | Unknown device, profile or template; `ErrNoMatchingConfig`; `ErrProfileNotFound` |
 | `0x03` | `StatusUnauthorized` | 401 | Token invalid; missing or unverified mTLS client certificate |
 | `0x04` | `StatusInternalError` | 500 | Storage failure (`*WrappedError`); `ErrARPLookupFailed`; `ErrPortTransitionFailed`; switch VLAN transition failure |

@@ -32,9 +32,9 @@ func (e ErrNAT64NotConfigured) Error() string {
 }
 
 // ErrNAT64ModuleUnavailable reports a kernel that cannot carry the
-// translator. It is a failed precondition on the host (412), not a daemon
-// fault: no retry helps until someone loads the module, which is what
-// gRPC's FailedPrecondition says on the other transports.
+// translator. It is a failed precondition on the host, not a daemon fault:
+// no retry helps until someone loads the module, which is what gRPC's
+// FailedPrecondition says on the other transports and 409 says on REST (#665).
 type ErrNAT64ModuleUnavailable struct {
 	// Detail is the kernel's own reason, which the operator needs.
 	Detail string

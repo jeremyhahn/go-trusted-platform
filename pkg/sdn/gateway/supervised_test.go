@@ -282,6 +282,32 @@ func TestSupervisedSnapshot_CarriesTheDatapathChildsSectionsFromOneRead(t *testi
 	assert.Equal(t, 1, datapathReads, "a child that lists both services is read once")
 }
 
+func TestSupervisedSnapshot_RelaysTheVPNChildsSection(t *testing.T) {
+	sup := newFakeSupervisor()
+	section := &gwstate.VPNState{
+		Running: true, Admissions: 3, Refusals: 1, EnrolledPeers: 2,
+		LeasesByDataPlane: map[string]int{"masque": 2},
+	}
+	sup.snapshots[ServiceManagementVPN] = &gwstate.Snapshot{VPN: section}
+	gw := newSupervisedGateway(t, sup)
+
+	snap := gw.Snapshot()
+
+	assert.Equal(t, section, snap.VPN, "the leases are the vpn child's: this process holds none (#557)")
+	assert.Contains(t, sup.snapshotReads, ServiceManagementVPN)
+}
+
+func TestSupervisedSnapshot_AnUnreadableVPNChildLeavesTheSectionOut(t *testing.T) {
+	sup := newFakeSupervisor()
+	sup.snapshotErr = errors.New("control socket gone")
+	gw := newSupervisedGateway(t, sup)
+
+	snap := gw.Snapshot()
+
+	assert.Nil(t, snap.VPN, "no section rather than one that looks like a VPN with no leases")
+	assert.Contains(t, sup.snapshotReads, ServiceManagementVPN)
+}
+
 func TestSupervisedSnapshot_AnUnreadableDatapathChildLeavesItsSectionsEmpty(t *testing.T) {
 	sup := newFakeSupervisor()
 	sup.snapshotErr = errors.New("control socket gone")
@@ -431,13 +457,17 @@ func TestSupervisedApply_ForwardsTheDocumentAndRecordsTheChildState(t *testing.T
 func TestSupervisedApply_ReportsTheChildFailureWithItsState(t *testing.T) {
 	sup := newFakeSupervisor()
 	sup.applyState = gwstate.DesiredConfigState{Version: "v2"}
-	sup.applyErr = errors.New("gatewayd ipc: datapath apply failed: load balancer not enabled")
 	gw := newSupervisedGateway(t, sup)
+	require.NoError(t, gw.Apply(context.Background(), &gwstate.DesiredConfig{GatewayID: "supervised-gw", Version: "v2"}))
 
+	// The child's state names the failed document: a child that applied it
+	// while another child refused it (#1070).
+	sup.applyState = gwstate.DesiredConfigState{Version: "v4"}
+	sup.applyErr = errors.New("gatewayd ipc: datapath apply failed: load balancer not enabled")
 	err := gw.Apply(context.Background(), &gwstate.DesiredConfig{GatewayID: "supervised-gw", Version: "v4"})
 	require.Error(t, err)
 	state := gw.DesiredConfigState()
-	assert.Equal(t, "v2", state.Version, "the version the child last applied is kept")
+	assert.Equal(t, "v2", state.Version, "the version last applied whole is kept")
 	assert.Contains(t, state.LastError, "load balancer not enabled")
 
 	// An invalid document never reaches the child.

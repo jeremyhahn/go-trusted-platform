@@ -1893,6 +1893,18 @@ func TestHandleGRPCError_AlreadyExists(t *testing.T) {
 	assert.Equal(t, http.StatusBadRequest, writer.lastStatus)
 }
 
+func TestHandleGRPCError_FailedPreconditionIsConflict(t *testing.T) {
+	handlers, writer := newTestHandlers(&mockIAMClient{}, &mockPEPClient{})
+
+	req := httptest.NewRequest(http.MethodGet, "/test", nil)
+	rec := httptest.NewRecorder()
+
+	handlers.handleGRPCError(rec, req, status.Error(codes.FailedPrecondition, "iam service is not available"))
+
+	assert.Equal(t, http.StatusConflict, writer.lastStatus)
+	assert.Contains(t, rec.Body.String(), "iam service is not available")
+}
+
 func TestHandleGRPCError_Internal(t *testing.T) {
 	handlers, writer := newTestHandlers(&mockIAMClient{}, &mockPEPClient{})
 

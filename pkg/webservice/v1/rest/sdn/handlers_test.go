@@ -800,15 +800,19 @@ func TestRevokePortAuth_Success(t *testing.T) {
 }
 
 // The service refuses port authentication with FailedPrecondition while the
-// switch does not enforce it (#304); REST answers 400, the platform's status
-// for that class, not 500.
-func TestPortAuth_RefusalIsBadRequest(t *testing.T) {
+// switch does not enforce it (#304); REST answers 409, the platform's status
+// for that class (#665), not 500.
+func TestPortAuth_RefusalIsConflict(t *testing.T) {
+	refusals := map[string]policy.ErrPortAuthNotEnforced{
+		http.MethodPost:   {Operation: "AuthenticatePort"},
+		http.MethodDelete: {Operation: "RevokePortAuth"},
+	}
 	mock := &mockSDNService{
 		authenticatePortFunc: func(ctx context.Context, req *platformv1.AuthenticatePortRequest) (*platformv1.AuthenticatePortResponse, error) {
-			return nil, policy.ErrPortAuthNotEnforced{Operation: "AuthenticatePort"}
+			return nil, refusals[http.MethodPost]
 		},
 		revokePortAuthFunc: func(ctx context.Context, req *platformv1.RevokePortAuthRequest) (*platformv1.RevokePortAuthResponse, error) {
-			return nil, policy.ErrPortAuthNotEnforced{Operation: "RevokePortAuth"}
+			return nil, refusals[http.MethodDelete]
 		},
 	}
 	handlers, respWriter := createTestHandlers(mock)
@@ -823,12 +827,14 @@ func TestPortAuth_RefusalIsBadRequest(t *testing.T) {
 		t.Run(method, func(t *testing.T) {
 			req := httptest.NewRequest(method, "/api/v1/sdn/bridges/br0/ports/port0/auth", bytes.NewReader(body))
 			req = mux.SetURLVars(req, map[string]string{"name": "br0", "port": "port0"})
+			rec := httptest.NewRecorder()
 
-			handle(httptest.NewRecorder(), req)
+			handle(rec, req)
 
-			assert.Equal(t, http.StatusBadRequest, respWriter.lastStatus)
-			var refusal policy.ErrPortAuthNotEnforced
-			assert.ErrorAs(t, respWriter.lastError, &refusal)
+			assert.Equal(t, http.StatusConflict, respWriter.lastStatus)
+			var answer restwire.WebServiceResponse
+			require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &answer))
+			assert.Equal(t, refusals[method].Error(), answer.Error, "the refusal's own message reaches the caller")
 		})
 	}
 }

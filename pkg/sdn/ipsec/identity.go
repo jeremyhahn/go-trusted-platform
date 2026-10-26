@@ -149,6 +149,62 @@ func (f *FileIdentity) Close() {
 	}
 }
 
+// AnchorSource supplies the platform anchor's CA certificates.
+// *trust.Anchor satisfies it.
+type AnchorSource interface {
+	Certificates(ctx context.Context) ([]*x509.Certificate, error)
+}
+
+// AnchoredIdentity is an IdentityProvider that refuses a tunnel identity
+// whose chain does not end in a certificate of the platform anchor. The
+// controller loads that root as the CA every peer's chain must hold, so a
+// VTEP whose tunnel certificate does not chain to the anchor is refused.
+type AnchoredIdentity struct {
+	inner  closingIdentity
+	anchor AnchorSource
+}
+
+// NewAnchoredIdentity wraps inner, checking each identity it supplies
+// against anchor. Close closes inner.
+func NewAnchoredIdentity(inner closingIdentity, anchor AnchorSource) (*AnchoredIdentity, error) {
+	if inner == nil || anchor == nil {
+		return nil, ErrMissingDependency
+	}
+	return &AnchoredIdentity{inner: inner, anchor: anchor}, nil
+}
+
+// TunnelIdentity returns inner's identity once its chain is signed in
+// order and ends in an anchor certificate. Expiry is not checked here:
+// CertificateStatus reports it.
+func (a *AnchoredIdentity) TunnelIdentity(ctx context.Context) (*TunnelIdentity, error) {
+	id, err := a.inner.TunnelIdentity(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if len(id.Chain) == 0 {
+		return nil, ErrNoCertificate
+	}
+	for i := 0; i+1 < len(id.Chain); i++ {
+		if err := id.Chain[i].CheckSignatureFrom(id.Chain[i+1]); err != nil {
+			return nil, ErrChainBroken
+		}
+	}
+	anchors, err := a.anchor.Certificates(ctx)
+	if err != nil {
+		return nil, &OpError{Op: "platform anchor", Err: err}
+	}
+	root := id.Chain[len(id.Chain)-1]
+	for _, cert := range anchors {
+		if bytes.Equal(cert.Raw, root.Raw) {
+			return id, nil
+		}
+	}
+	return nil, ErrNotAnchored
+}
+
+// Close closes the wrapped identity.
+func (a *AnchoredIdentity) Close() { a.inner.Close() }
+
 // readChain parses the PEM certificates in path, in file order.
 func readChain(path string) ([]*x509.Certificate, error) {
 	data, err := os.ReadFile(path)

@@ -2068,13 +2068,27 @@ integration-test: docker-build-it
 	trap teardown EXIT; trap 'exit 130' INT; trap 'exit 143' TERM; \
 	HOST_UID=$$(id -u) HOST_GID=$$(id -g) \
 		docker compose -f $(DEVCONTAINER_COMPOSE) -p $(IT_PROJECT) \
-		run --rm integration all "$(strip $(TEST_BUILD_TAGS))" $(if $(IT_FOREIGN_BASELINE),2>&1 | tee "$(IT_LOG)") || status=$$?; \
+		run --rm integration $(IT_SELECT) "$(strip $(TEST_BUILD_TAGS))" $(if $(IT_FOREIGN_BASELINE),2>&1 | tee "$(IT_LOG)") || status=$$?; \
 	if [ $$status -ne 0 ] && [ -n "$(IT_FOREIGN_BASELINE)" ]; then \
 		echo "Integration suites failed (status $$status); checking the failures against $(FOREIGN_BASELINE) (ruling 125)"; \
 		status=0; \
 		$(GO) run ./scripts/foreignfailures -job integration -baseline $(FOREIGN_BASELINE) "$(IT_LOG)" || status=$$?; \
 	fi; \
 	exit $$status
+
+.PHONY: integration-test-leg
+## integration-test-leg: Run one leg of the integration suite (LEG=<n>)
+## CI runs the integration job as one parallel job per leg (#1119). A leg is
+## `make integration-test` on that leg's share of the runner's ALL_TARGETS:
+## same image, bootstrap and foreign-failure verdict. The legs and what each
+## holds: `bash build/docker/devcontainer/run-integration-tests.sh legs`.
+integration-test-leg: IT_SELECT = leg-$(LEG)
+integration-test-leg: integration-test
+ifneq ($(filter integration-test-leg,$(MAKECMDGOALS)),)
+ifeq ($(strip $(LEG)),)
+$(error integration-test-leg needs LEG=<n>, a leg of INTEGRATION_LEGS in the suite runner; docs/test/integration.md lists them)
+endif
+endif
 
 .PHONY: integration-test-webservice
 integration-test-webservice: docker-builder-load
@@ -2179,6 +2193,9 @@ IT_PROJECT ?= go-trusted-platform-it
 IT_FOREIGN_BASELINE ?=
 IT_LOG ?= $(or $(TMPDIR),/tmp)/go-trusted-platform-integration.log
 FOREIGN_BASELINE ?= .github/foreign-failures.tsv
+# What `make integration-test` hands the suite runner: `all`, or `leg-<n>` when
+# integration-test-leg runs it (#1119).
+IT_SELECT := all
 # The FIPS job's sibling baseline, always consulted by `make test-fips`.
 FIPS_LOG ?= $(or $(TMPDIR),/tmp)/go-trusted-platform-fips.log
 FIPS_FOREIGN_BASELINE ?= .github/foreign-failures-fips.tsv

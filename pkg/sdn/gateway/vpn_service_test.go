@@ -551,22 +551,19 @@ func TestGatewayApply_TheVPNSectionStaysInProcessBesideASupervisedDatapath(t *te
 	assert.Equal(t, "v1", gw.DesiredConfigState().Version)
 }
 
-// TestGatewayApply_ASupervisedVPNRefusesItsSection: the supervisor forwards
-// the document to the datapath child only, so a supervised VPN would never
-// see its enrolments; the apply fails rather than reporting them applied.
-func TestGatewayApply_ASupervisedVPNRefusesItsSection(t *testing.T) {
+// TestGatewayApply_ASupervisedVPNSectionGoesToTheSupervisor: the supervisor
+// sends the document to the vpn child (#557), so the parent applies nothing
+// of the section itself and reports the document applied.
+func TestGatewayApply_ASupervisedVPNSectionGoesToTheSupervisor(t *testing.T) {
 	ctx := context.Background()
 	sup := newFakeSupervisor()
 	sup.applyState = gwstate.DesiredConfigState{Version: "v1"}
 	gw := newSupervisedGateway(t, sup)
 
-	err := gw.Apply(ctx, &gwstate.DesiredConfig{GatewayID: "supervised-gw", Version: "v1", VPN: laptopSection()})
-	var applyErr *ErrDesiredApplyFailed
-	require.True(t, errors.As(err, &applyErr), "got %v", err)
-	assert.Equal(t, gwstate.SectionVPN, applyErr.Section)
-	var unavailable *ErrServiceUnavailable
-	assert.True(t, errors.As(err, &unavailable))
-	assert.NotNil(t, sup.applied, "the datapath still receives the document")
-	assert.Empty(t, gw.DesiredConfigState().Version, "the version is not reported applied")
-	assert.NotEmpty(t, gw.DesiredConfigState().LastError)
+	desired := &gwstate.DesiredConfig{GatewayID: "supervised-gw", Version: "v1", VPN: laptopSection()}
+	require.NoError(t, gw.Apply(ctx, desired))
+	assert.Same(t, desired, sup.applied, "the supervisor receives the whole document")
+	assert.Nil(t, gw.desiredVPN, "the parent does not hold the supervised section")
+	assert.Equal(t, "v1", gw.DesiredConfigState().Version)
+	assert.Empty(t, gw.DesiredConfigState().LastError)
 }

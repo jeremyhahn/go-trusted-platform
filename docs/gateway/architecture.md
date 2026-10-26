@@ -392,7 +392,11 @@ order still to come is `vpn` once it has a backend;
 Moving `datapath` has two deliberate consequences. `Gateway.Apply` forwards
 the whole desired document to the supervisor and records the state the
 datapath child reports, rather than reconciling anything locally — the
-services it would reconcile are not in this process. The supervisor keeps the
+services it would reconcile are not in this process. A failed apply keeps the
+version and applied time of the last document every child applied: a document
+the datapath child applied but the `vpn` child refused is not applied, so the
+same document applied again is retried rather than taken as already applied.
+The supervisor keeps the
 document and re-sends it to a relaunched child, which reconciles its flows
 from it. And the parent installs no base pipeline: `Runtime` is nil there
 because the datapath child holds the OVSDB connection and owns the bridge.

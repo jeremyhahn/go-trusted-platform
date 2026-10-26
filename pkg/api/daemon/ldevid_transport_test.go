@@ -87,7 +87,7 @@ func TestREST_LDevIDCreate(t *testing.T) {
 		assert.Equal(t, http.StatusBadRequest, w.Code)
 	})
 
-	t.Run("no proven IDevID returns 412", func(t *testing.T) {
+	t.Run("no proven IDevID returns 409", func(t *testing.T) {
 		svc := newLDevIDTestService(t)
 		svc.SetTPM2Service(&ldevidMockTPM{idevidCert: nil, pks: &ldevidMockPKS{}})
 		svc.SetCAService(&ldevidMockCA{})
@@ -95,7 +95,7 @@ func TestREST_LDevIDCreate(t *testing.T) {
 		req := httptest.NewRequest(http.MethodPost, "/api/v1/idevid/ldevid", bytes.NewReader([]byte(`{}`)))
 		w := httptest.NewRecorder()
 		s.handleLDevIDCreate(w, req)
-		assert.Equal(t, http.StatusPreconditionFailed, w.Code)
+		assert.Equal(t, http.StatusConflict, w.Code)
 	})
 }
 

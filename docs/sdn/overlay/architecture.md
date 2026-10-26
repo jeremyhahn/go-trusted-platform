@@ -153,7 +153,7 @@ code never touches key material or ESP.
 | Configuration | `pkg/sdn/ipsec` (`Config`) | the `overlay.ipsec` section and its derived timers |
 | Controller | `pkg/sdn/ipsec` (`Controller`) | the peer set, one charon connection per peer, eviction, the identity check |
 | Fail-closed floor | `pkg/sdn/ipsec` (`Filter`, `BlockPolicy`) | the nftables table and XFRM block policies that leave no cleartext path when charon is down |
-| Tunnel identity | `pkg/sdn/ipsec` (`TunnelIdentity`, `IdentityProvider`; `FileIdentity`) | the tunnel certificate, its chain and the token key charon signs with |
+| Tunnel identity | `pkg/sdn/ipsec` (`TunnelIdentity`, `IdentityProvider`; `FileIdentity`, `AnchoredIdentity`) | the tunnel certificate, its chain and the token key charon signs with, held to the platform anchor |
 | Runner | `pkg/sdn/ipsec` (`Runner`) | the connection to charon: dial, attach, follow events, reconnect |
 | Service | `pkg/sdn/ipsec` (`Service`) | all of the above on a platformd node: the floor at start, then the runner, the fabric interface watch and the CRL feed |
 
@@ -208,6 +208,29 @@ every time, so a renewed certificate is loaded on the next attach.
 from the first line of `token.pin-file`. The identity is refused unless
 the leaf carries the local address as an IP SAN, a key ID is named, and
 the chain ends in a self-signed root.
+
+The service wraps `FileIdentity` in `AnchoredIdentity`, which holds the
+chain to the platform anchor ([trust](../../trust/architecture.md)): each
+certificate must be signed by the one after it (`ErrChainBroken`), and the
+root must be, byte for byte, a certificate of the anchor (`ErrNotAnchored`).
+A root that only shares an anchor certificate's subject is refused. The
+anchor is read on every attach, so a certificate the operator supplies
+from another CA is never loaded, and a renewed anchor applies on the next
+attach.
+
+The controller keeps that root and names it as the CA every peer's chain
+must contain (see [Peer connections](#peer-connections)). charon would
+otherwise accept a peer certificate chaining to any CA it holds; with the
+constraint, a VTEP is authenticated only when it chains to the same root.
+Every VTEP of an overlay must therefore carry a tunnel certificate under
+the same anchor root.
+
+The tunnel certificate is still supplied by the operator as a file: it is
+not issued from the node's enrolled identity (IDevID/LDevID). Issuing it
+needs a signer over the IKE key, which lives in the go-xkms PKCS#11
+module that charon loads, and quicbaas `sdk/go/xkms` v0.12.0-alpha
+re-exports no PKCS#11 backend or signer for it. Until the SDK does, the
+anchor check is what keeps an off-platform certificate out (#709).
 
 | Step | VICI command | Body |
 |------|--------------|------|
@@ -317,9 +340,13 @@ every SA instead of checking only that event.
 
 ### Startup in platformd
 
-`ipsec.NewService` builds everything from the `overlay.ipsec` section:
-the file identity, the floor, the controller, and a runner dialing the
-VICI socket. platformd's `daemon.New` builds it and calls `Install` before
+`ipsec.NewService` builds everything from the `overlay.ipsec` section and
+the platform anchor: the file identity held to the anchor, the floor, the
+controller, and a runner dialing the VICI socket. platformd passes
+`App.PlatformAnchor()`, the root of its IDevID chain; without the App, or
+with a nil anchor, the constructor returns `ErrMissingDependency` before
+it reads a file. gatewayd passes the anchor of its `platform-ca-file`.
+platformd's `daemon.New` builds the service and calls `Install` before
 the overlay controller registers the local VTEP, so nothing is sent on
 the fabric before the floor is in. A section that cannot be built (a
 `ConfigError`; `certificate-file` and `crl-files` are required here) or a
@@ -386,7 +413,7 @@ Each peer gets one connection, `vtep-<address>`, with no wildcard:
 | Setting | Value |
 |---------|-------|
 | IKE | v2, `local_addrs`/`remote_addrs` the two VTEP addresses, `mobike=no`, `unique=replace`, `dpd_delay=30s`, `reauth_time` from [Timers](#timers) |
-| Authentication | `pubkey` on both sides; `local.id` is the local address, and `remote.id` is the peer address with `revocation=strict` |
+| Authentication | `pubkey` on both sides; `local.id` is the local address, and `remote.id` is the peer address with `revocation=strict` and `cacerts` the root of the local tunnel identity, so the peer's chain must contain that anchor root; the local side names no CA |
 | CHILD_SA `overlay` | `mode=transport`, `local_ts`/`remote_ts` `dynamic` (every packet between the pair: VXLAN and BGP tcp/179 alike), `start_action`/`dpd_action`/`close_action` `trap`, `replay_window` from the configuration |
 | IKE proposal | `aes256gcm16-prfsha384-ecp384-ke1_mlkem768`; the `fips` build drops `ke1_mlkem768` |
 | ESP proposal | `aes256gcm16-ecp384-ke1_mlkem768-esn` (the key exchange makes every rekey PFS); the `fips` build drops `ke1_mlkem768` |
@@ -569,6 +596,7 @@ has been renewed at the same mark.
 | `ErrCharonGone` | `ipsec` | a connection to charon ended; the runner reconnects |
 | `ErrInvalidMessage` | `ipsec` | a request lacked what charon needs: a credential without data, a token key without an ID |
 | `ErrNoCertificate`, `ErrCertificateAddress`, `ErrNoKeyID`, `ErrNoRoot` | `ipsec` | the tunnel identity has no certificate, its leaf does not name the local address, it names no key, or its chain does not end in a self-signed root (inside an `OpError`, `identity`) |
+| `ErrChainBroken`, `ErrNotAnchored` | `ipsec` | a certificate of the tunnel identity's chain is not signed by the one after it, or the chain's root is not a platform anchor certificate (inside an `OpError`, `identity`); an anchor that cannot be read is an `OpError`, `platform anchor` |
 | `ErrCRLQueueFull` | `ipsec` | a CRL arrived while there was no identity to verify it against, and the queue already holds 8 issuers (inside an `OpError`, `queue crl`) |
 | `ErrMissingDependency` | `ipsec` | a constructor or `Attach` was handed a nil collaborator |
 | `PeerError` | `ipsec` | a step on one peer failed (`admit`, `load-conn`, `unload-conn`, `drop`, `undrop`, `list-sas`, `terminate`, `evict`, `readmit`); names the peer and wraps the cause |

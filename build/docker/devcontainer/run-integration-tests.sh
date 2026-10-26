@@ -11,7 +11,9 @@
 #   TARGET     - Optional target keyword selecting which package(s) to run.
 #                Known targets: the keys of TARGET_PACKAGES below. `all`
 #                runs the suites in ALL_TARGETS on one shared platformd; every
-#                other key runs one suite.
+#                other key runs one suite. `leg-<n>` runs leg n of
+#                INTEGRATION_LEGS the way `all` runs everything, and `legs`
+#                prints the legs and exits.
 #                If the first argument is not a known target, it is treated
 #                as BUILD_TAGS (backward-compatible with the prior 1-arg form).
 #                Default: all
@@ -28,6 +30,8 @@
 # Examples:
 #   run-integration-tests.sh
 #   run-integration-tests.sh all
+#   run-integration-tests.sh leg-2
+#   run-integration-tests.sh legs
 #   run-integration-tests.sh ceremony
 #   run-integration-tests.sh luks "integration $(make -s print-build-tags)"
 #   run-integration-tests.sh "integration $(make -s print-build-tags)"  # legacy form
@@ -214,9 +218,61 @@ ALL_TARGETS=(
     sdn-stress secrets tenant vpn vtpm tpm
 )
 
+# The legs CI runs as parallel jobs, one container and one shared platformd
+# each (#1119): every ALL_TARGETS entry, and compute, is in exactly one leg
+# (pkg/arch/integration_legs_test.go). `leg-<n>` runs leg n the way `all` runs
+# everything: its daemon-free suites at once, then its daemon-backed ones in
+# ALL_TARGETS order, so tpm stays last on its daemon, and compute after them on
+# a restarted one. The legs are balanced by an estimate of each suite's cost
+# (docs/test/integration.md, "Legs"); iso and sdn, the two longest, are apart.
+INTEGRATION_LEGS=(
+    "acme authenticode ca iso"
+    "ceremony cli container sdn"
+    "daemon device dns sdn-stress"
+    "helpers sdk ipxe installer e2e root attestation fido2 iam kms luks ntp objectstorage"
+    "piv provision proxy registry secrets tenant vpn vtpm tpm compute"
+)
+
 RUN_TARGET="all"
 ARG1="${1:-}"
 ARG2="${2:-}"
+
+# `legs` prints ALL_TARGETS and then each leg, one per line, and exits before
+# anything starts: the partition check and the docs read the legs from here.
+if [ "$ARG1" = "legs" ]; then
+    echo "all ${ALL_TARGETS[*]} compute"
+    for i in "${!INTEGRATION_LEGS[@]}"; do
+        echo "leg-$((i + 1)) ${INTEGRATION_LEGS[$i]}"
+    done
+    exit 0
+fi
+
+# The suites this run takes: every ALL_TARGETS entry and compute for `all`,
+# one leg's share of them for `leg-<n>`.
+SELECTED_TARGETS=("${ALL_TARGETS[@]}")
+RUN_COMPUTE=true
+RUN_LEG=""
+if [[ "$ARG1" =~ ^leg-([0-9]+)$ ]]; then
+    RUN_LEG="${BASH_REMATCH[1]}"
+    if [ "$RUN_LEG" -lt 1 ] || [ "$RUN_LEG" -gt "${#INTEGRATION_LEGS[@]}" ]; then
+        echo "FATAL: no integration leg ${RUN_LEG}; the legs are 1 to ${#INTEGRATION_LEGS[@]}" >&2
+        exit 2
+    fi
+    declare -A LEG_MEMBERS=()
+    for target in ${INTEGRATION_LEGS[$((RUN_LEG - 1))]}; do
+        LEG_MEMBERS[$target]=1
+    done
+    SELECTED_TARGETS=()
+    for target in "${ALL_TARGETS[@]}"; do
+        if [ -n "${LEG_MEMBERS[$target]:-}" ]; then
+            SELECTED_TARGETS+=("$target")
+        fi
+    done
+    if [ -z "${LEG_MEMBERS[compute]:-}" ]; then
+        RUN_COMPUTE=false
+    fi
+    ARG1="all"
+fi
 
 # derive_build_tags prints the tag set when the caller passed none: the
 # Makefile's derived list plus integration, never a hand-written copy of it.
@@ -1123,7 +1179,7 @@ setup_env_vars() {
 echo "============================================="
 echo "  go-trusted-platform Integration Tests"
 echo "============================================="
-echo "Target:     ${RUN_TARGET}"
+echo "Target:     ${RUN_TARGET}${RUN_LEG:+ (leg ${RUN_LEG} of ${#INTEGRATION_LEGS[@]})}"
 echo "Build tags: ${BUILD_TAGS}"
 echo ""
 
@@ -1356,19 +1412,22 @@ run_concurrent() {
 }
 
 if [ "$RUN_TARGET" = "all" ]; then
-    # The daemon-free suites of ALL_TARGETS (TARGET_NO_DAEMON) run at once:
-    # none shares state with another or with platformd. Every daemon-backed
-    # suite then runs alone on the one shared platformd, in list order.
+    # The daemon-free suites of SELECTED_TARGETS (TARGET_NO_DAEMON) run at
+    # once: none shares state with another or with platformd. Every
+    # daemon-backed suite then runs alone on the one shared platformd, in list
+    # order.
     DAEMON_FREE_TARGETS=()
     DAEMON_TARGETS=()
-    for target in "${ALL_TARGETS[@]}"; do
+    for target in "${SELECTED_TARGETS[@]}"; do
         if [ -n "${TARGET_NO_DAEMON[$target]:-}" ]; then
             DAEMON_FREE_TARGETS+=("$target")
         else
             DAEMON_TARGETS+=("$target")
         fi
     done
-    run_concurrent "${DAEMON_FREE_TARGETS[@]}"
+    if [ "${#DAEMON_FREE_TARGETS[@]}" -gt 0 ]; then
+        run_concurrent "${DAEMON_FREE_TARGETS[@]}"
+    fi
     for target in "${DAEMON_TARGETS[@]}"; do
         run_test "$target"
         record_result "$target" "$?"
@@ -1376,14 +1435,16 @@ if [ "$RUN_TARGET" = "all" ]; then
 
     # compute last, on its own daemon: a fresh swtpm (tpm cleared the shared
     # one) and platformd on the local QEMU provider.
-    echo "=== compute: restarting platformd on the local QEMU provider ==="
-    stop_platformd
-    if start_swtpm && prepare_compute_config && start_platformd "${COMPUTE_PLATFORMD_CONFIG}"; then
-        run_test compute
-        record_result compute "$?"
-    else
-        echo "--- FAIL: compute (platformd did not start on the local QEMU provider) ---"
-        record_result compute 1
+    if [ "$RUN_COMPUTE" = true ]; then
+        echo "=== compute: restarting platformd on the local QEMU provider ==="
+        stop_platformd
+        if start_swtpm && prepare_compute_config && start_platformd "${COMPUTE_PLATFORMD_CONFIG}"; then
+            run_test compute
+            record_result compute "$?"
+        else
+            echo "--- FAIL: compute (platformd did not start on the local QEMU provider) ---"
+            record_result compute 1
+        fi
     fi
 else
     run_test "$RUN_TARGET"

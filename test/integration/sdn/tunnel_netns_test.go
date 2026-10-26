@@ -23,6 +23,7 @@ import (
 	"os"
 	"strconv"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -45,6 +46,16 @@ const (
 	espSPIIn     = 0x5002
 	wgHostPort   = 51820
 	wgPeerPort   = 51821
+
+	// wgRekeyTimeout and wgRekeyJitterMax are WireGuard's REKEY_TIMEOUT and
+	// its retransmit jitter (whitepaper §6.1, §6.4): a lost handshake
+	// initiation is resent only after both.
+	wgRekeyTimeout   = 5 * time.Second
+	wgRekeyJitterMax = 333 * time.Millisecond
+	// wgHandshakeWithin covers a lost first initiation and a lost first
+	// retry, so a loaded runner does not fail a tunnel that is correct.
+	wgHandshakeWithin = 2 * (wgRekeyTimeout + wgRekeyJitterMax)
+	wgHandshakePoll   = 50 * time.Millisecond
 )
 
 // staticKeys is the test KeyProvider: fixed AES-256-GCM material for both
@@ -347,6 +358,7 @@ func TestTunnel_NetNS_WireGuardRelaunchAdopts(t *testing.T) {
 
 	// The first manager is never closed: its device stays, as a kill leaves it.
 	ensure()
+	awaitHandshake(t, hostNS, "hwg1", time.Time{})
 	require.NoError(t, dialWithin(hostNS, t, net.JoinHostPort(tunPeerInner, strconv.Itoa(tunEchoPort))))
 	first, err := hh.LinkByName("hwg1")
 	require.NoError(t, err)
@@ -388,13 +400,17 @@ func TestTunnel_NetNS_WireGuardRelaunchAdopts(t *testing.T) {
 		// it. The recreated device sends its first handshake initiation the
 		// moment it comes up (persistent keepalive); a peer that still knew
 		// only the old key would drop it, and WireGuard retries only after
-		// REKEY_TIMEOUT (5s), longer than the dial waits.
+		// REKEY_TIMEOUT (5s), longer than the dial waits. The product brings
+		// the device up only once its key, peer and address are set, but the
+		// initiation is one datagram a loaded runner can still lose, so the
+		// dial waits for the new device's handshake.
 		peerConfigure(t, peerNS, "pwg1", peerKey, rotated.PublicKey())
 		ensure()
 		recreated, err := hh.LinkByName("hwg1")
 		require.NoError(t, err)
 		assert.NotEqual(t, first.Attrs().Index, recreated.Attrs().Index, "a device with another key is not adopted")
 		assert.Equal(t, rotated.PublicKey(), hostDevice(t, hostNS, "hwg1").PublicKey)
+		awaitHandshake(t, hostNS, "hwg1", session)
 
 		// Traffic flows over the new device.
 		require.NoError(t, dialWithin(hostNS, t, net.JoinHostPort(tunPeerInner, strconv.Itoa(tunEchoPort))))
@@ -434,6 +450,30 @@ func hostDevice(t *testing.T, hostNS netns.NsHandle, name string) *wgtypes.Devic
 		require.NoError(t, err)
 	})
 	return device
+}
+
+// awaitHandshake waits until the host device's only peer has completed a
+// handshake later than since, and returns that handshake's time. The first
+// initiation of a new device is one UDP datagram; when it is lost WireGuard
+// resends it only after REKEY_TIMEOUT, longer than a single dial waits.
+func awaitHandshake(t *testing.T, hostNS netns.NsHandle, name string, since time.Time) time.Time {
+	t.Helper()
+	deadline := time.NewTimer(wgHandshakeWithin)
+	defer deadline.Stop()
+	poll := time.NewTicker(wgHandshakePoll)
+	defer poll.Stop()
+	for {
+		device := hostDevice(t, hostNS, name)
+		require.Len(t, device.Peers, 1)
+		if last := device.Peers[0].LastHandshakeTime; last.After(since) {
+			return last
+		}
+		select {
+		case <-deadline.C:
+			require.FailNowf(t, "no handshake", "%s completed no handshake after %s within %s", name, since, wgHandshakeWithin)
+		case <-poll.C:
+		}
+	}
 }
 
 func twoNamespaces(t *testing.T, tag string) (hostNS, peerNS netns.NsHandle, hh, ph *netlink.Handle) {
