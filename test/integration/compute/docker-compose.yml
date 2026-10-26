@@ -54,7 +54,14 @@ services:
     command: >
       sh -c "
         echo 'Waiting for OVS to start...';
-        sleep 5;
+        start=$$(date +%s);
+        until ovs-appctl -t ovs-vswitchd version >/dev/null 2>&1; do
+          if [ $$(( $$(date +%s) - start )) -ge 30 ]; then
+            echo 'ovs-vswitchd control socket not ready after 30s' >&2;
+            exit 1;
+          fi;
+          sleep 0.2;
+        done;
         echo 'Running compute integration tests...';
         TAGS=$${BUILD_TAGS:-integration $$(make -s -C /workspace print-build-tags)};
         go test -v -tags \"$$TAGS\" -timeout 30m ./...

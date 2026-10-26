@@ -14,6 +14,16 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WORKSPACE_DIR="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 
+# Bounded readiness polls (wait_for, process_gone): the image installs the
+# helper; outside the image it comes from the repository.
+if [ -f /usr/local/lib/devcontainer/wait-for.sh ]; then
+    # shellcheck source=build/docker/devcontainer/wait-for.sh
+    source /usr/local/lib/devcontainer/wait-for.sh
+else
+    # shellcheck source=build/docker/devcontainer/wait-for.sh
+    source "$$WORKSPACE_DIR/build/docker/devcontainer/wait-for.sh"
+fi
+
 # The tags come from the Makefile, never a hand-written list.
 BUILD_TAGS="${BUILD_TAGS:-integration $(make -s -C "$WORKSPACE_DIR" print-build-tags)}"
 
@@ -71,7 +81,8 @@ setup_ovs() {
             --detach \
             --log-file=/var/log/openvswitch/ovsdb-server.log
 
-        sleep 2
+        wait_for 10 "ovsdb-server on db.sock" sudo ovs-vsctl --no-wait --timeout=1 show ||
+            log_warn "ovsdb-server is not answering on db.sock"
     fi
 
     # Initialize OVS
@@ -88,7 +99,8 @@ setup_ovs() {
             --detach \
             --log-file=/var/log/openvswitch/ovs-vswitchd.log
 
-        sleep 2
+        wait_for 10 "ovs-vswitchd control socket" sudo ovs-appctl -t ovs-vswitchd version ||
+            log_warn "ovs-vswitchd is not answering on its control socket"
     fi
 
     # Verify OVS is running
