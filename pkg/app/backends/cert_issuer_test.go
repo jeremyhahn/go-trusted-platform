@@ -59,6 +59,9 @@ type signingCA struct {
 	root    *x509.Certificate
 	rootKey *ecdsa.PrivateKey
 	err     error
+	// csr and opts record the last signing request.
+	csr  *x509.CertificateRequest
+	opts *quicbaasca.SignOptions
 }
 
 func newSigningCA(t *testing.T) *signingCA {
@@ -96,6 +99,7 @@ func (c *signingCA) SignCSR(_ context.Context, csrPEM []byte, opts *quicbaasca.S
 	if err != nil {
 		return nil, err
 	}
+	c.csr, c.opts = csr, opts
 	tpl := &x509.Certificate{
 		SerialNumber: big.NewInt(2),
 		Subject:      csr.Subject,

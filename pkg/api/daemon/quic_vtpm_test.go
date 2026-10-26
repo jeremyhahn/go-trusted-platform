@@ -355,6 +355,23 @@ func TestVTPMGetBundle_MissingID(t *testing.T) {
 	}
 }
 
+// TestVTPMGetState_MissingID: the state opcode shares the bundle lookup, so a
+// request that names no bundle is refused as invalid input, not looked up.
+func TestVTPMGetState_MissingID(t *testing.T) {
+	handler, _ := createQUICTestHandler()
+	ctx := context.Background()
+
+	payload, err := quicwire.EncodePayload(&VTPMGetBundleRequest{ID: ""})
+	if err != nil {
+		t.Fatalf("failed to encode payload: %v", err)
+	}
+
+	resp := handler.HandleRequest(ctx, &quicwire.Request{Opcode: quicwire.OpVTPMGetState, Payload: payload})
+	if resp.Status != quicwire.StatusInvalidArgument {
+		t.Errorf("expected status InvalidArgument, got %s", quicwire.StatusToString(resp.Status))
+	}
+}
+
 func TestVTPMStart_Success(t *testing.T) {
 	handler, mockSvc := createQUICTestHandler()
 	ctx := context.Background()

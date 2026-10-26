@@ -76,8 +76,8 @@ func TestQUICVMAttest_AttestReturnsTheQuote(t *testing.T) {
 	assert.Equal(t, x509.SHA256WithRSAPSS.String(), got.GetSignatureAlgorithm())
 	assert.Equal(t, []byte("ak-public"), got.GetAkPublic())
 	assert.Len(t, got.GetPcrValues(), 2)
-	assert.Equal(t, []byte("nonce"), orch.lastAttestNonce)
-	assert.Equal(t, []int{0, 7}, orch.lastAttestPCRs)
+	assert.Equal(t, []byte("nonce"), orch.recordedAttestNonce())
+	assert.Equal(t, []int{0, 7}, orch.recordedAttestPCRs())
 }
 
 func TestQUICVMAttest_VerifyPassesTheEvidence(t *testing.T) {
@@ -92,10 +92,10 @@ func TestQUICVMAttest_VerifyPassesTheEvidence(t *testing.T) {
 	assert.True(t, got.GetVerified())
 	assert.Equal(t, "attestation verified", got.GetMessage())
 	require.Len(t, got.GetActualPcrs(), 1)
-	require.NotNil(t, orch.lastEvidence)
-	assert.Equal(t, []byte("quote"), orch.lastEvidence.Quote)
-	assert.Equal(t, x509.SHA256WithRSAPSS.String(), orch.lastEvidence.SignatureAlgorithm)
-	assert.Equal(t, []byte{0x01}, orch.lastEvidence.ExpectedPCRs[0])
+	require.NotNil(t, orch.recordedEvidence())
+	assert.Equal(t, []byte("quote"), orch.recordedEvidence().Quote)
+	assert.Equal(t, x509.SHA256WithRSAPSS.String(), orch.recordedEvidence().SignatureAlgorithm)
+	assert.Equal(t, []byte{0x01}, orch.recordedEvidence().ExpectedPCRs[0])
 }
 
 // TestQUICVMAttest_ErrorClasses checks each orchestrator refusal answers
@@ -154,8 +154,8 @@ func TestQUICVMAttest_UnsupportedPCRBankIsInvalidArgument(t *testing.T) {
 		resp := sendVMLifecycle(t, h, opcode, encodeVMLifecycle(t, request))
 
 		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status, "opcode 0x%02x: %s", opcode, resp.Payload)
-		assert.Nil(t, orch.lastAttestNonce, "a refused request must not reach the orchestrator")
-		assert.Nil(t, orch.lastEvidence, "a refused request must not reach the orchestrator")
+		assert.Nil(t, orch.recordedAttestNonce(), "a refused request must not reach the orchestrator")
+		assert.Nil(t, orch.recordedEvidence(), "a refused request must not reach the orchestrator")
 	}
 }
 

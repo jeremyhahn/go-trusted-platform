@@ -53,7 +53,7 @@ func TestQUICVMMigration_PrepareReturnsTheReceiver(t *testing.T) {
 	assert.Equal(t, "recv-1", got.GetReceiverId())
 	assert.Equal(t, int32(49200), got.GetPort())
 	assert.Equal(t, "dest.example", got.GetTlsHostname())
-	assert.Equal(t, "guest", recv.gotSpec.VMName)
+	assert.Equal(t, "guest", recv.recordedSpec().VMName)
 }
 
 func TestQUICVMMigration_FinalizeCommitsTheReceiver(t *testing.T) {
@@ -64,8 +64,8 @@ func TestQUICVMMigration_FinalizeCommitsTheReceiver(t *testing.T) {
 		encodeVMLifecycle(t, &platformv1.FinalizeMigrationRequest{ReceiverId: "recv-1", Commit: true}))
 
 	require.Equal(t, quicwire.StatusOK, resp.Status, string(resp.Payload))
-	assert.Equal(t, "recv-1", recv.lastReceiverID)
-	assert.True(t, recv.lastCommit)
+	assert.Equal(t, "recv-1", recv.recordedReceiverID())
+	assert.True(t, recv.recordedCommit())
 }
 
 // TestQUICVMMigration_ErrorClasses proves the daemon's gRPC status reaches

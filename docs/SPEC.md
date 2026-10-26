@@ -169,6 +169,7 @@ Each shipped feature has no open release defect:
 - cluster: the cluster gRPC and MCP surfaces are not stubs (#334).
 - device: no unauthenticated device-config disclosure (#177); restricted IDevID keys serve device mTLS, the IDevID issued by the same bootstrap CA, the go-xkms CA re-exported through the go-quicbaas SDK (`sdk/go/xkms/ca`) (#149); no stubbed profile assignment in the adapters (#488).
 - dns: a persisted zone picks up configuration changes (#220).
+- dns: UpdateZone over QUIC at 0x61/0x30, parity with gRPC/REST/MCP (CA m622, m625, m1094).
 - provisioning: E2E provisioning Phases 2 and 3 assert what they report (#372).
 - sdk-javascript: attest response types and test assertions match the declared types (#499, #246).
 - sdn: the SDN integration suite is green on main (#730).

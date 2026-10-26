@@ -163,60 +163,36 @@ func (e ErrRequestEncodeFailed) Unwrap() error {
 	return e.Cause
 }
 
-// ErrHostRequired is returned when the --host flag is not provided.
-type ErrHostRequired struct{}
-
-func (e ErrHostRequired) Error() string {
-	return "bmc: --host is required"
+// ErrOutputWriteFailed is returned when JSON output cannot be written to the
+// operator's terminal or pipe.
+type ErrOutputWriteFailed struct {
+	Cause error
 }
 
-// ErrUserRequired is returned when the --user flag is not provided.
-type ErrUserRequired struct{}
-
-func (e ErrUserRequired) Error() string {
-	return "bmc: --user is required"
+func (e ErrOutputWriteFailed) Error() string {
+	return fmt.Sprintf("bmc: failed to write output: %v", e.Cause)
 }
 
-// ErrPasswordRequired is returned when the --password flag is not provided.
-type ErrPasswordRequired struct{}
+func (e ErrOutputWriteFailed) Unwrap() error {
+	return e.Cause
+}
+
+// ErrPasswordRequired is returned when the new BMC password cannot be read
+// from the terminal prompt, or the operator enters an empty one. Passwords
+// are never flags, so the prompt is the only source.
+type ErrPasswordRequired struct {
+	Cause error
+}
 
 func (e ErrPasswordRequired) Error() string {
-	return "bmc: --password is required"
-}
-
-// ErrConsoleConnectionFailed is returned when the SOL console connection fails.
-type ErrConsoleConnectionFailed struct {
-	Cause error
-}
-
-func (e ErrConsoleConnectionFailed) Error() string {
-	msg := "bmc: console connection failed"
+	msg := "bmc: a non-empty password is required at the terminal prompt"
 	if e.Cause != nil {
-		msg = fmt.Sprintf("%s: %v", msg, e.Cause)
+		msg += ": " + e.Cause.Error()
 	}
 	return msg
 }
 
-func (e ErrConsoleConnectionFailed) Unwrap() error {
-	return e.Cause
-}
-
-// ErrConsoleTerminalFailed is returned when terminal raw mode setup fails.
-type ErrConsoleTerminalFailed struct {
-	Cause error
-}
-
-func (e ErrConsoleTerminalFailed) Error() string {
-	msg := "bmc: failed to configure terminal"
-	if e.Cause != nil {
-		msg = fmt.Sprintf("%s: %v", msg, e.Cause)
-	}
-	return msg
-}
-
-func (e ErrConsoleTerminalFailed) Unwrap() error {
-	return e.Cause
-}
+func (e ErrPasswordRequired) Unwrap() error { return e.Cause }
 
 // =============================================================================
 // Standalone-mode errors
@@ -482,11 +458,14 @@ func (e ErrInvalidRole) Error() string {
 	return fmt.Sprintf("bmc: invalid role %q (valid: administrator, operator, user, callback, no-access)", e.Role)
 }
 
-// ErrSlotRequired is returned when the --slot flag is not provided.
-type ErrSlotRequired struct{}
+// ErrUserNotFound is returned when no BMC account carries the requested
+// username, so its slot cannot be resolved.
+type ErrUserNotFound struct {
+	Username string
+}
 
-func (e ErrSlotRequired) Error() string {
-	return "bmc: --slot is required"
+func (e ErrUserNotFound) Error() string {
+	return fmt.Sprintf("bmc: no BMC user named %q", e.Username)
 }
 
 // ErrProfileIDParseFailed is returned when the profile ID cannot be parsed as uint64.

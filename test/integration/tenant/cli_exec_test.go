@@ -1,5 +1,3 @@
-//go:build integration
-
 // Copyright (c) 2025 Jeremy Hahn
 // Copyright (c) 2025 Automate The Things, LLC
 //
@@ -18,6 +16,8 @@ package tenant
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -108,4 +108,25 @@ func TestCLIAdapterRunJSON_NotJSON(t *testing.T) {
 	require.True(t, errors.As(err, &failed))
 	assert.Equal(t, "Echo", failed.Operation)
 	assert.Contains(t, failed.Output, "hello --output json")
+}
+
+func TestCLIAdapterTeardown_RemovesConfigDir(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "config")
+	require.NoError(t, os.MkdirAll(dir, 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "config.yaml"), []byte("x"), 0o600))
+
+	a := &CLIAdapter{configDir: dir}
+	require.NoError(t, a.Teardown(context.Background()))
+	_, err := os.Stat(dir)
+	assert.True(t, errors.Is(err, os.ErrNotExist))
+}
+
+func TestCLIAdapterTeardown_NoConfigDir(t *testing.T) {
+	cwd, err := os.Getwd()
+	require.NoError(t, err)
+
+	a := &CLIAdapter{}
+	require.NoError(t, a.Teardown(context.Background()))
+	_, err = os.Stat(cwd)
+	assert.NoError(t, err, "Teardown without a config dir must not remove anything")
 }

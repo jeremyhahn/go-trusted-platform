@@ -22,8 +22,11 @@ and every transport answers the not-configured error (§5).
 
 gRPC: `DNSService`, 13 RPCs (`pkg/api/grpc/proto/platform_dns.proto`).
 REST: base path `/api/v1/dns` (`pkg/webservice/v1/rest/dns/router.go`).
-QUIC: top-level opcodes `0x20`–`0x2C` — no category indirection. `0x2B` and
-`0x2D` are retired (#317) — see §2.
+QUIC: top-level opcodes `0x20`–`0x2C`, and the DNS category `OpDNSCategory`
+(`0x61`) for operations past that full block: the sub-opcode (`0x30`–`0x3F`)
+is `payload[0]`, as under the Gateway category `0x2F`
+(`sdk/go/wire/quicwire/dns_opcodes.go`). `0x2B` and `0x2D` are retired (#317)
+and stay do-not-reuse — see §2.
 MCP: **two parallel tool families** — see §3.
 
 ---
@@ -35,7 +38,7 @@ MCP: **two parallel tool families** — see §3.
 | Create zone | `POST /api/v1/dns/zones` | `CreateZone` | `OpDNSAddZone` (`0x25`) | `dns_create_zone`, `dns_zone_create` | ✅ |
 | List zones | `GET /api/v1/dns/zones` | `ListZones` | `OpDNSListZones` (`0x28`) | `dns_list_zones`, `dns_zone_list` | ✅ |
 | Get zone | `GET /api/v1/dns/zones/{zone}` | `GetZone` | `OpDNSGetZone` (`0x27`) | `dns_zone_get` | ✅ |
-| Update zone | `PUT /api/v1/dns/zones/{zone}` | `UpdateZone` | `MISSING — docs/13 G7` | `dns_zone_update` | ✅ |
+| Update zone | `PUT /api/v1/dns/zones/{zone}` | `UpdateZone` | `OpDNSCategory` (`0x61`) / `OpDNSUpdateZone` (`0x30`) | `dns_zone_update` | ✅ |
 | Delete zone | `DELETE /api/v1/dns/zones/{zone}` | `DeleteZone` | `OpDNSDeleteZone` (`0x26`) | `dns_delete_zone`, `dns_zone_delete` | ✅ |
 | Add record | `POST /api/v1/dns/zones/{zone}/records` | `AddRecord` | `OpDNSAddRecord` (`0x20`) | `dns_add_record`, `dns_record_create` | ✅ |
 | List records | `GET /api/v1/dns/zones/{zone}/records` | `ListRecords` | `OpDNSListRecords` (`0x24`) | `dns_list_records`, `dns_record_list` | ✅ |
@@ -62,7 +65,8 @@ Two shapes stand out:
   and the platform's DNS server keeps no cache. The only cache is the dnsmasq
   local forwarder's (`cache-size`, `pkg/dns/resolver.go`), which no platform
   API controls. #317 retired both bytes; the wire refuses them as unclassified
-  (`StatusPermissionDenied`). Do not reuse them. A flush verb needs a dnsmasq
+  (`StatusPermissionDenied`). They are do-not-reuse: a new DNS verb takes a
+  sub-opcode under `OpDNSCategory` (`0x61`), never `0x2B` or `0x2D`. A flush verb needs a dnsmasq
   control path in the DNS service layer, served on every transport.
 
 `DELETE /api/v1/dns/zones/{zone}/records/{type}/{name}` keys a record by type

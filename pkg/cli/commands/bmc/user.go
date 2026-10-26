@@ -16,6 +16,7 @@ package bmc
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"strconv"
 	"strings"
@@ -757,42 +758,39 @@ func runStandaloneUserUpdateAccess(cmd *cobra.Command, standalone *standaloneBMC
 // Shared helpers
 // =============================================================================
 
-// withStandaloneUserManager creates a standalone UserManager and runs fn.
+// withStandaloneUserManager builds the connection from the standalone flag set
+// (protocol detection, port default and TLS trust as for every standalone
+// subcommand), opens the user manager for that protocol and runs fn.
 func withStandaloneUserManager(cmd *cobra.Command, standalone *standaloneBMCFlags, fn func(bmc.UserManager) error) error {
-	pw, err := loadStandalonePassword(standalone)
+	cfg, err := newStandaloneConfig(cmd.Context(), standalone)
 	if err != nil {
 		return err
 	}
 
-	if standalone.user == "" {
-		return ErrBMCMissingCredential{Field: "username (set --bmc-user)"}
+	newManager, ok := standaloneUserManagers[cfg.Protocol]
+	if !ok {
+		return ErrBMCInvalidProtocol{Value: string(cfg.Protocol)}
 	}
-
-	port := standalone.port
-	if port == 0 {
-		port = 443
-	}
-	tlsProvider, err := standaloneTLSProvider(cmd.Context(), standalone, port)
-	if err != nil {
-		return err
-	}
-
-	cfg := &bmc.Config{
-		Address:  standalone.host,
-		Port:     port,
-		Protocol: bmc.Protocol(standalone.protocol),
-		Username: standalone.user,
-		Password: pw,
-		TLS:      tlsProvider,
-	}
-
-	mgr, err := bmc.NewUserManager(cmd.Context(), cfg, standaloneLogger())
+	mgr, err := newManager(cmd.Context(), cfg, standaloneLogger())
 	if err != nil {
 		return err
 	}
 	defer mgr.Close()
 
 	return fn(mgr)
+}
+
+// standaloneUserManagerFunc opens a user manager against one BMC.
+type standaloneUserManagerFunc func(ctx context.Context, cfg *bmc.Config, logger *slog.Logger) (bmc.ManagedUserManager, error)
+
+// standaloneUserManagers maps the protocol the standalone flags resolved to
+// onto its user manager: IPMI 2.0 user slots over RMCP+, or the Redfish
+// AccountService over HTTPS. Tests replace an entry to run without a BMC.
+var standaloneUserManagers = map[bmc.Protocol]standaloneUserManagerFunc{
+	bmc.ProtocolIPMI: bmc.NewUserManager,
+	bmc.ProtocolRedfish: func(_ context.Context, cfg *bmc.Config, logger *slog.Logger) (bmc.ManagedUserManager, error) {
+		return bmc.NewRedfishUserManager(cfg, logger)
+	},
 }
 
 // resolveUserSlot finds the IPMI slot for a username by listing users.
@@ -806,7 +804,7 @@ func resolveUserSlot(ctx context.Context, client *bmcsvc.Client, profileID uint6
 			return u.Slot, nil
 		}
 	}
-	return 0, ErrBMCMissingCredential{Field: "user " + username + " not found"}
+	return 0, ErrUserNotFound{Username: username}
 }
 
 // resolveStandaloneUserSlot finds the IPMI slot for a username via standalone UserManager.
@@ -820,7 +818,7 @@ func resolveStandaloneUserSlot(ctx context.Context, mgr bmc.UserManager, usernam
 			return u.Slot, nil
 		}
 	}
-	return 0, ErrBMCMissingCredential{Field: "user " + username + " not found"}
+	return 0, ErrUserNotFound{Username: username}
 }
 
 // parseRole maps a CLI role name to an SDK Privilege.
@@ -848,6 +846,7 @@ func parseRoleToBMCPrivilege(role string) (bmc.Privilege, bool) {
 		"user":          bmc.PrivilegeUser,
 		"callback":      bmc.PrivilegeCallback,
 		"no-access":     bmc.PrivilegeNoAccess,
+		"no_access":     bmc.PrivilegeNoAccess,
 	}
 	priv, ok := roleMap[normalized]
 	return priv, ok
@@ -909,10 +908,17 @@ func printUserList(flags *cli.CommonFlags, users []bmcsvc.User) error {
 // promptPassword prompts the user for a password securely via the terminal.
 func promptPassword(prompt string) (string, error) {
 	fmt.Fprint(os.Stderr, prompt)
-	raw, err := term.ReadPassword(int(os.Stdin.Fd()))
+	raw, err := readPassword(int(os.Stdin.Fd()))
 	fmt.Fprintln(os.Stderr)
 	if err != nil {
+		return "", ErrPasswordRequired{Cause: err}
+	}
+	if len(raw) == 0 {
 		return "", ErrPasswordRequired{}
 	}
 	return string(raw), nil
 }
+
+// readPassword reads a line from the terminal without echo. Tests replace it
+// to answer the prompt.
+var readPassword = term.ReadPassword

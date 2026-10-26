@@ -75,6 +75,7 @@ func appQUICOperations() []appQUICOperation {
 		{"switch.SetPortVLAN", quicwire.OpSwitchCategory, quicwire.SwitchSubSetPortVLAN, &platformv1.SetSwitchPortVLANRequest{SwitchName: "core-1", PortName: "eth1", VlanId: 20}},
 		{"switch.EnablePort", quicwire.OpSwitchCategory, quicwire.SwitchSubEnablePort, &platformv1.EnableSwitchPortRequest{SwitchName: "core-1", PortName: "eth1"}},
 		{"switch.DisablePort", quicwire.OpSwitchCategory, quicwire.SwitchSubDisablePort, &platformv1.DisableSwitchPortRequest{SwitchName: "core-1", PortName: "eth1"}},
+		{"dns.UpdateZone", quicwire.OpDNSCategory, quicwire.OpDNSUpdateZone, &platformv1.UpdateZoneRequest{Name: "example.com.", Ttl: 600}},
 	}
 }
 
@@ -91,6 +92,7 @@ func newAppQUICHandler(servers appServiceServers) *QUICServiceHandler {
 	handler := newTestQUICServiceHandler(logging.DefaultLogger())
 	handler.SetAppServices(servers)
 	handler.SetSwitchServer(NewSwitchGRPCService(logging.DefaultLogger(), newFakeSwitchService()))
+	handler.SetDNSService(NewMockDNSService())
 	return handler
 }
 
@@ -142,9 +144,11 @@ func TestQUICAppServices_DecodeReplies(t *testing.T) {
 }
 
 func TestQUICAppServices_NotConfiguredIsUnavailable(t *testing.T) {
-	// A daemon whose DAO factory has no SDK and that has no switch backend.
+	// A daemon whose DAO factory has no SDK and that has no switch or DNS
+	// backend.
 	handler := newAppQUICHandler(newAppServiceServers(nil, nil))
 	handler.SetSwitchServer(NewSwitchGRPCService(logging.DefaultLogger(), nil))
+	handler.SetDNSService(nil)
 	for _, op := range appQUICOperations() {
 		resp := handler.HandleRequest(context.Background(), appQUICRequest(t, op.opcode, op.sub, op.request))
 		assert.Equal(t, quicwire.StatusUnavailable, resp.Status, "%s: payload %q", op.name, resp.Payload)
@@ -154,6 +158,7 @@ func TestQUICAppServices_NotConfiguredIsUnavailable(t *testing.T) {
 func TestQUICAppServices_UnwiredCategoryIsUnavailable(t *testing.T) {
 	handler := newAppQUICHandler(appServiceServers{})
 	handler.SetSwitchServer(nil)
+	handler.SetDNSService(nil)
 	for opcode, category := range appQUICCategories {
 		for sub := range category.handlers {
 			resp := handler.HandleRequest(context.Background(), &quicwire.Request{Opcode: opcode, Payload: []byte{sub}})

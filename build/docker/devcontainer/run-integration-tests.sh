@@ -97,7 +97,6 @@ declare -A TARGET_PACKAGES=(
     [kms]="./test/integration/kms/..."
     [network]="./test/integration/network/..."
     [pxe]="./test/integration/pxe/..."
-    [quic]="./test/integration/quic/..."
     [registry]="./test/integration/registry/..."
     [sdk]="./test/integration/sdk/..."
     [secrets]="./test/integration/secrets/..."
@@ -216,7 +215,7 @@ ALL_TARGETS=(
     helpers datastore sdk cmd ipxe installer e2e
     root acme attestation authenticode ca ceremony cli
     container daemon device dns fido2 iam iso kms luks network
-    ntp objectstorage piv provision proxy quic registry sdn
+    ntp objectstorage piv provision proxy registry sdn
     sdn-stress secrets tenant vpn vtpm tpm
 )
 

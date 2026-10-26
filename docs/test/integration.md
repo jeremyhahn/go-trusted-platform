@@ -360,7 +360,8 @@ their suites start their own daemon or cluster, or test something that needs
 none (`datastore`, `sdk`, `cmd`, `installer`, `lb`, `e2e`,
 `ipxe` and its slices, `testenv-enrollment`, `helpers`). `helpers` runs
 the integration-tagged tests of the harness library itself; its untagged
-tests run in `make test`.
+tests run in `make test`. So do the untagged tests of the `tenant` suite's CLI
+adapter (`cli_exec_test.go`), which need no daemon.
 
 The `sdn` key runs `./test/integration/sdn/` and
 `./test/integration/sdn/mock_bgp/...` within its 15 minutes (its tests run

@@ -2818,20 +2818,6 @@ integration-test-ipxe-http: build-devcontainer
 	$(call run-integration-suite,ipxe-http)
 
 # =============================================================================
-# QUIC Protocol Integration Tests
-# =============================================================================
-.PHONY: integration-test-quic
-## integration-test-quic: Run QUIC protocol integration tests in development container
-integration-test-quic: build-devcontainer
-	$(call run-integration-suite,quic)
-
-.PHONY: integration-test-quic-local
-## integration-test-quic-local: Run QUIC integration tests locally (requires QUIC server running)
-integration-test-quic-local:
-	@echo "Running QUIC integration tests locally..."
-	go test -v $(TEST_BUILD_TAGS_ARG) -count=1 -timeout=10m ./test/integration/quic/...
-
-# =============================================================================
 # Network Authentication Integration Tests
 # =============================================================================
 .PHONY: integration-test-network
@@ -2992,7 +2978,12 @@ TEST_EXCLUDE := test/integration|sdk/go/gen|pkg/api/grpc/proto|pkg/api/grpc$$|cm
 # baseline checker the Integration job runs on a failed suite, and the test
 # that holds .github/foreign-failures.tsv to the ruling. Same reason as
 # depscheck: discovery would not reach it.
-TEST_UNIT_PKGS := ./pkg/app/ ./pkg/daemon/commands/ ./pkg/cli/commands/bootstrap/ ./pkg/webservice/v1/ ./pkg/dns/ ./pkg/cli/commands/admin/ ./pkg/platform/ ./test/integration/helpers/surface/ ./test/integration/helpers/ ./scripts/depscheck/ ./scripts/foreignfailures/
+#
+# test/integration/tenant added 2026-10-25 (#964 step b): without the
+# integration tag the package is cli_exec.go, commands.go and cli_exec_test.go,
+# the CLI adapter's argument rendering and output parsing, tested with no
+# daemon. Every other file keeps the tag.
+TEST_UNIT_PKGS := ./pkg/app/ ./pkg/daemon/commands/ ./pkg/cli/commands/bootstrap/ ./pkg/webservice/v1/ ./pkg/dns/ ./pkg/cli/commands/admin/ ./pkg/platform/ ./test/integration/helpers/surface/ ./test/integration/helpers/ ./test/integration/tenant/ ./scripts/depscheck/ ./scripts/foreignfailures/
 
 # RACE_EXCLUDE: packages with data races that are KNOWN and TRACKED. The race
 # gate must be green to be a gate, so a package lands here only with an issue

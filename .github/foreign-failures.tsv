@@ -153,7 +153,6 @@ test	test/integration/kms	TestKMSMultiProtocol/MCP/CryptoOperations/GenerateVeri
 test	test/integration/kms	TestKMSMultiProtocol/Unix/CryptoOperations/GenerateVerifyHMAC	go-quicbaas#1778	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1778
 test	test/integration/kms	TestKMSMultiProtocol/Unix/SecretsManagement/RotateSecret	go-trusted-platform#906	go-quicbaas v0.16.0-alpha (the v0.16 bump PR removes these rows)
 test	test/integration/kms	TestKMSMultiProtocol/Unix/SecretsManagement/VerifyRotatedSecret	go-trusted-platform#906	go-quicbaas v0.16.0-alpha (the v0.16 bump PR removes these rows)
-test	test/integration/quic	TestQUICIAM/IAM_CheckPermission_validates_access	go-quicbaas#1810	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1810
 test	test/integration/secrets	TestSecretsMultiProtocol/gRPC/VersionManagement/RotateSecret	go-trusted-platform#906	go-quicbaas v0.16.0-alpha (the v0.16 bump PR removes these rows)
 test	test/integration/secrets	TestSecretsMultiProtocol/gRPC/VersionManagement/VerifyRotatedSecret	go-trusted-platform#906	go-quicbaas v0.16.0-alpha (the v0.16 bump PR removes these rows)
 test	test/integration/secrets	TestSecretsMultiProtocol/gRPC/StatusAndPolicy/DisableSecret	go-trusted-platform#906	go-quicbaas v0.16.0-alpha (the v0.16 bump PR removes these rows)

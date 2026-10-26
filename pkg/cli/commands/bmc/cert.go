@@ -14,10 +14,13 @@
 package bmc
 
 import (
+	"context"
 	"crypto/sha256"
 	"crypto/x509"
 	"encoding/hex"
 	"fmt"
+	"io"
+	"log/slog"
 	"math"
 	"os"
 	"strconv"
@@ -336,40 +339,50 @@ func runStandaloneCertReplace(cmd *cobra.Command, standalone *standaloneBMCFlags
 
 // withStandaloneCertManager creates a standalone CertificateManager and runs fn.
 func withStandaloneCertManager(cmd *cobra.Command, standalone *standaloneBMCFlags, fn func(bmc.CertificateManager) error) error {
-	pw, err := loadStandalonePassword(standalone)
+	cfg, err := newStandaloneHTTPSConfig(cmd.Context(), standalone)
 	if err != nil {
 		return err
 	}
 
-	if standalone.user == "" {
-		return ErrBMCMissingCredential{Field: "username (set --bmc-user)"}
-	}
-
-	port := standalone.port
-	if port == 0 {
-		port = 443
-	}
-	tlsProvider, err := standaloneTLSProvider(cmd.Context(), standalone, port)
-	if err != nil {
-		return err
-	}
-
-	cfg := &bmc.Config{
-		Address:  standalone.host,
-		Port:     port,
-		Protocol: bmc.Protocol(standalone.protocol),
-		Username: standalone.user,
-		Password: pw,
-		TLS:      tlsProvider,
-	}
-
-	mgr, err := bmc.NewAutoCertManager(cfg, bmc.CertBackendAuto, standaloneLogger())
+	mgr, err := newStandaloneCertManager(cfg, standaloneLogger())
 	if err != nil {
 		return err
 	}
 	defer mgr.Close()
 
 	return fn(mgr)
+}
+
+// newStandaloneHTTPSConfig builds the connection to the BMC's HTTPS web
+// server, which serves the web certificate whatever protocol --bmc-protocol
+// selects for the other subcommands: the port defaults to 443 and the TLS
+// connection is verified by the trust flags.
+func newStandaloneHTTPSConfig(ctx context.Context, f *standaloneBMCFlags) (*bmc.Config, error) {
+	switch f.protocol {
+	case "", "auto", string(bmc.ProtocolIPMI), string(bmc.ProtocolRedfish):
+	default:
+		return nil, ErrBMCInvalidProtocol{Value: f.protocol}
+	}
+	https := *f
+	https.protocol = string(bmc.ProtocolRedfish)
+	return newStandaloneConfig(ctx, &https)
+}
+
+// standaloneCertManager is the web-certificate manager the standalone cert
+// subcommands drive.
+type standaloneCertManager interface {
+	bmc.CertificateManager
+	io.Closer
+}
+
+// newStandaloneCertManager opens the auto-probing web-certificate manager.
+// Tests replace it to run without a BMC.
+var newStandaloneCertManager = func(cfg *bmc.Config, logger *slog.Logger) (standaloneCertManager, error) {
+	mgr, err := bmc.NewAutoCertManager(cfg, bmc.CertBackendAuto, logger)
+	if err != nil {
+		return nil, err
+	}
+	return mgr, nil
 }
 
 // printCertInfo prints certificate info in the appropriate format.

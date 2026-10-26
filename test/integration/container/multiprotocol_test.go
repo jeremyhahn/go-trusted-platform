@@ -243,6 +243,9 @@ func runContainerCreateTests(t *testing.T, ctx context.Context, cmd ContainerCom
 			Labels: map[string]string{
 				"test": "true",
 			},
+			Environment: map[string]string{
+				"TEST_VAR": "basic",
+			},
 		}
 
 		container, err := cmd.Create(testCtx, opts)
@@ -251,6 +254,10 @@ func runContainerCreateTests(t *testing.T, ctx context.Context, cmd ContainerCom
 		assert.NotEmpty(t, container.ID, "Container ID should not be empty")
 		assert.Equal(t, containerName, container.Name, "Container name should match")
 		assert.Equal(t, opts.Image, container.Image, "Container image should match")
+		assert.Equal(t, StateCreated, container.State, "Initial state should be created")
+		assert.False(t, container.CreatedAt.IsZero(), "CreatedAt should be set")
+		assert.NotNil(t, container.Labels, "Labels should not be nil")
+		assert.NotNil(t, container.Environment, "Environment should not be nil")
 
 		// Cleanup
 		multiprotoCleanupContainer(t, testCtx, cmd, container.ID)
@@ -392,6 +399,12 @@ func runContainerStartTests(t *testing.T, ctx context.Context, cmd ContainerComm
 		container, err := cmd.Get(testCtx, created.ID)
 		require.NoError(t, err, "Get should succeed after start")
 		assert.True(t, container.State.IsRunning(), "Container should be running after start")
+		assert.False(t, container.StartedAt.IsZero(), "StartedAt should be set after start")
+	})
+
+	t.Run("StartRunningContainerFails", func(t *testing.T) {
+		err := cmd.Start(testCtx, created.ID)
+		require.Error(t, err, "Start should fail for an already running container")
 	})
 
 	t.Run("StartNonexistentContainerFails", func(t *testing.T) {
@@ -431,6 +444,19 @@ func runContainerStopTests(t *testing.T, ctx context.Context, cmd ContainerComma
 		container, err := cmd.Get(testCtx, created.ID)
 		require.NoError(t, err, "Get should succeed after stop")
 		assert.True(t, container.State.IsStopped(), "Container should be stopped after stop")
+		assert.False(t, container.StoppedAt.IsZero(), "StoppedAt should be set after stop")
+	})
+
+	t.Run("StopCreatedContainerFails", func(t *testing.T) {
+		notStarted, err := cmd.Create(testCtx, CreateOptions{
+			Name:  containerName + "-not-started",
+			Image: "docker.io/library/alpine:latest",
+		})
+		require.NoError(t, err, "Setup: Create should succeed")
+		defer multiprotoCleanupContainer(t, testCtx, cmd, notStarted.ID)
+
+		err = cmd.Stop(testCtx, notStarted.ID, 10*time.Second)
+		require.Error(t, err, "Stop should fail for a container that was never started")
 	})
 
 	t.Run("StopNonexistentContainerFails", func(t *testing.T) {
@@ -532,6 +558,14 @@ func runContainerListTests(t *testing.T, ctx context.Context, cmd ContainerComma
 		require.NoError(t, err, "List should succeed")
 		require.NotNil(t, containers, "Containers should not be nil")
 		assert.GreaterOrEqual(t, len(containers), 3, "Should have at least 3 containers")
+
+		listed := make(map[string]bool, len(containers))
+		for _, c := range containers {
+			listed[c.ID] = true
+		}
+		for _, id := range containerIDs {
+			assert.True(t, listed[id], "Created container %s should be in the list", id)
+		}
 	})
 
 	t.Run("ListContainersWithLimit", func(t *testing.T) {
@@ -699,6 +733,7 @@ func runContainerAttestTests(t *testing.T, ctx context.Context, cmd ContainerCom
 		assert.NotEmpty(t, report.Signature, "Signature should not be empty")
 		assert.NotEmpty(t, report.ImageDigest, "Image digest should not be empty")
 		assert.NotEmpty(t, report.ConfigDigest, "Config digest should not be empty")
+		assert.NotNil(t, report.PCRValues, "PCRValues should not be nil")
 		assert.False(t, report.Timestamp.IsZero(), "Timestamp should be set")
 	})
 

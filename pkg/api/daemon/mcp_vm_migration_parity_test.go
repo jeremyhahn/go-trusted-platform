@@ -92,9 +92,9 @@ func TestMigrationParity_Replies(t *testing.T) {
 			got, err := json.Marshal(mcpResult)
 			require.NoError(t, err)
 			assert.JSONEq(t, string(want), string(got))
-			assert.Equal(t, grpcRecv.gotSpec, mcpRecv.gotSpec)
-			assert.Equal(t, grpcRecv.lastReceiverID, mcpRecv.lastReceiverID)
-			assert.Equal(t, grpcRecv.lastCommit, mcpRecv.lastCommit)
+			assert.Equal(t, grpcRecv.recordedSpec(), mcpRecv.recordedSpec())
+			assert.Equal(t, grpcRecv.recordedReceiverID(), mcpRecv.recordedReceiverID())
+			assert.Equal(t, grpcRecv.recordedCommit(), mcpRecv.recordedCommit())
 		})
 	}
 }

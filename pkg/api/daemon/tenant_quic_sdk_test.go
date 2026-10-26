@@ -70,6 +70,18 @@ func TestSDKQUIC_TenantCheckQuota(t *testing.T) {
 	require.Equal(t, codes.InvalidArgument, status.Code(err), "err = %v", err)
 }
 
+// TestSDKQUIC_TenantGetUnknownTenant: a GetTenant for an id no tenant has
+// crosses the platform ALPN handshake and the framing to the tenant handler,
+// which answers NotFound on the response frame rather than a transport error.
+func TestSDKQUIC_TenantGetUnknownTenant(t *testing.T) {
+	h := newTenantParityHarness(t)
+	conn := connectTenantQUIC(t, h, true)
+
+	err := conn.Invoke(context.Background(), platformv1.TenantService_GetTenant_FullMethodName,
+		&platformv1.GetTenantRequest{TenantId: parityGhostTenant}, &platformv1.GetTenantResponse{})
+	require.Equal(t, codes.NotFound, status.Code(err), "err = %v", err)
+}
+
 func TestSDKQUIC_TenantSync(t *testing.T) {
 	h := newTenantParityHarness(t)
 	conn := connectTenantQUIC(t, h, true)

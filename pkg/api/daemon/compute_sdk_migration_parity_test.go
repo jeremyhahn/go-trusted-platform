@@ -52,11 +52,11 @@ func TestVMMigrationSDKParity_PrepareThenFinalize(t *testing.T) {
 			assert.Equal(t, "recv-1", resp.GetReceiverId())
 			assert.Equal(t, int32(49200), resp.GetPort())
 			assert.Equal(t, "dest.example", resp.GetTlsHostname())
-			assert.Equal(t, "guest", recv.gotSpec.VMName)
+			assert.Equal(t, "guest", recv.recordedSpec().VMName)
 
 			require.NoError(t, client.FinalizeMigration(context.Background(), resp.GetReceiverId(), true))
-			assert.Equal(t, "recv-1", recv.lastReceiverID)
-			assert.True(t, recv.lastCommit)
+			assert.Equal(t, "recv-1", recv.recordedReceiverID())
+			assert.True(t, recv.recordedCommit())
 		})
 	}
 }

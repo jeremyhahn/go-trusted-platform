@@ -162,6 +162,82 @@ func TestClientServerIntegration(t *testing.T) {
 	}
 }
 
+// TestClientServerSequentialAndReconnect: one server answers several clients
+// that connect one after another, and a new client dialled after an earlier
+// one closes is served on a fresh connection.
+func TestClientServerSequentialAndReconnect(t *testing.T) {
+	port, err := getAvailablePort()
+	if err != nil {
+		t.Fatalf("failed to get available port: %v", err)
+	}
+	listenAddr := fmt.Sprintf("127.0.0.1:%d", port)
+
+	serverTLSConfig := generateTestTLSConfig()
+	handler := &mockHandler{
+		response: &quicwire.Response{Status: quicwire.StatusOK, Payload: []byte("pong")},
+	}
+	server, err := NewServer(&ServerConfig{ListenAddr: listenAddr, TLSConfig: serverTLSConfig}, WithHandler(handler))
+	if err != nil {
+		t.Fatalf("failed to create server: %v", err)
+	}
+	if err := server.Start(); err != nil {
+		t.Fatalf("failed to start server: %v", err)
+	}
+	defer server.Stop()
+
+	clientConfig := &quicwire.ClientConfig{
+		ServerAddr: listenAddr,
+		Timeout:    5 * time.Second,
+		TLSConfig:  generateTestClientTLSConfig(serverTLSConfig),
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	// healthCheck dials a new client, asks for health and returns the client
+	// still open so the caller decides when it closes.
+	healthCheck := func(t *testing.T) *quicwire.Client {
+		t.Helper()
+		client, err := quicwire.NewClient(clientConfig, quicwire.WithToken("test-token"))
+		if err != nil {
+			t.Fatalf("failed to create client: %v", err)
+		}
+		resp, err := client.SendRequest(ctx, quicwire.OpHealth, nil)
+		if err != nil {
+			client.Close()
+			t.Fatalf("SendRequest failed: %v", err)
+		}
+		if resp.Status != quicwire.StatusOK {
+			client.Close()
+			t.Fatalf("expected status OK, got %d", resp.Status)
+		}
+		return client
+	}
+
+	t.Run("sequential clients", func(t *testing.T) {
+		for i := 0; i < 3; i++ {
+			if err := healthCheck(t).Close(); err != nil {
+				t.Fatalf("client %d Close failed: %v", i, err)
+			}
+		}
+	})
+
+	t.Run("new client after close", func(t *testing.T) {
+		first := healthCheck(t)
+		if err := first.Close(); err != nil {
+			t.Fatalf("Close failed: %v", err)
+		}
+		if _, err := first.SendRequest(ctx, quicwire.OpHealth, nil); err == nil {
+			t.Fatal("closed client answered a request, want an error")
+		}
+
+		second := healthCheck(t)
+		defer second.Close()
+		if !second.IsConnected() {
+			t.Fatal("expected the new client to be connected")
+		}
+	})
+}
+
 // TestClientSendMethod tests the Send convenience method
 func TestClientSendMethod(t *testing.T) {
 	// Find an available port

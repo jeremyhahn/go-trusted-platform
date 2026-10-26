@@ -111,7 +111,8 @@ var objectStorageQUICHandlers = map[byte]appQUICHandler{
 }
 
 // appQUICCategories routes the category opcodes whose sub-opcodes all call
-// one gRPC servicer: the application services and the switch service.
+// one gRPC servicer: the application services, the DNS category and the
+// switch service.
 var appQUICCategories = map[byte]appQUICCategory{
 	quicwire.OpCacheCategory: {
 		service:  appservices.ServiceCache,
@@ -132,6 +133,11 @@ var appQUICCategories = map[byte]appQUICCategory{
 		service:  appservices.ServiceObjectStorage,
 		wired:    func(h *QUICServiceHandler) bool { return h.objectStorageService != nil },
 		handlers: objectStorageQUICHandlers,
+	},
+	quicwire.OpDNSCategory: {
+		service:  "dns",
+		wired:    func(h *QUICServiceHandler) bool { return h.dnsGRPC != nil },
+		handlers: dnsQUICHandlers,
 	},
 	quicwire.OpSwitchCategory: {
 		service:  "switch",

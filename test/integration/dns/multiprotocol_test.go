@@ -332,9 +332,6 @@ func testZoneUpdate(t *testing.T, ctx context.Context, cmd DNSCommands, prefix s
 		}
 
 		result, err := cmd.UpdateZone(testCtx, zoneName, updateOpts)
-		if requireQUICUpdateZoneGap(t, cmd, err) {
-			return
-		}
 		require.NoError(t, err, "UpdateZone should succeed")
 		require.NotNil(t, result, "Result should not be nil")
 		assert.Equal(t, zoneName, result.Name, "Zone name should match")
@@ -348,9 +345,6 @@ func testZoneUpdate(t *testing.T, ctx context.Context, cmd DNSCommands, prefix s
 		}
 
 		result, err := cmd.UpdateZone(testCtx, zoneName, updateOpts)
-		if requireQUICUpdateZoneGap(t, cmd, err) {
-			return
-		}
 		require.NoError(t, err, "UpdateZone should succeed")
 		require.NotNil(t, result, "Result should not be nil")
 
@@ -366,28 +360,8 @@ func testZoneUpdate(t *testing.T, ctx context.Context, cmd DNSCommands, prefix s
 		}
 
 		_, err := cmd.UpdateZone(testCtx, prefix+"-nonexistent.test.", updateOpts)
-		if requireQUICUpdateZoneGap(t, cmd, err) {
-			return
-		}
 		require.Error(t, err, "UpdateZone should fail for nonexistent zone")
 	})
-}
-
-// requireQUICUpdateZoneGap records the declared QUIC UpdateZone gap: QUIC has
-// no zone-update opcode (owner-queue 90; the docs/dns/api.md transport table reads MISSING), so
-// the QUIC adapter refuses with ErrQUICDNSUnsupported. On QUIC it asserts that
-// typed refusal and reports true; every other transport reports false and keeps
-// the success assertions. When the opcode lands, drop this check so QUIC runs
-// the success path too.
-func requireQUICUpdateZoneGap(t *testing.T, cmd DNSCommands, err error) bool {
-	t.Helper()
-	if cmd.Name() != "QUIC" {
-		return false
-	}
-	var unsupported ErrQUICDNSUnsupported
-	require.ErrorAs(t, err, &unsupported, "QUIC UpdateZone is a declared gap (owner-queue 90)")
-	assert.Equal(t, "UpdateZone", unsupported.Method, "declared method")
-	return true
 }
 
 func testZoneList(t *testing.T, ctx context.Context, cmd DNSCommands, prefix string) {

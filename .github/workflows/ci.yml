@@ -452,7 +452,7 @@ jobs:
   # Race detection is sampling, not proof: a ratchet against reintroduction.
   race:
     name: Race
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.server_url == 'https://github.com' && 'ubuntu-latest' || 'bigdisk' }}
     if: github.event_name == 'push' || github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'ci:full')
     timeout-minutes: 60
     steps:
