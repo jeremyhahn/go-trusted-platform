@@ -87,7 +87,9 @@ func (rr *rerunner) round(ctx context.Context, r rerun) ([]string, *entry, error
 	}
 	run := "^(" + strings.Join(names, "|") + ")$"
 	out, err = rr.goCmd(ctx, "test", "-tags", rr.tags, "-count=1", "-v", "-run", run, importPath)
-	fmt.Fprintf(rr.stdout, "rerun of %s under fips140=only, -run %s:\n%s", r.Package, run, out)
+	if _, werr := fmt.Fprintf(rr.stdout, "rerun of %s under fips140=only, -run %s:\n%s", r.Package, run, out); werr != nil {
+		return nil, nil, &WriteError{Err: werr}
+	}
 	if err != nil {
 		e, reason := rr.attribute(r, out)
 		if e == nil {

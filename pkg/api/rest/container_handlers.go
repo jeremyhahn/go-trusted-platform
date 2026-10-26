@@ -521,12 +521,18 @@ func (h *ContainerHandlers) streamContainerLogs(ctx context.Context, w http.Resp
 		default:
 			n, err := reader.Read(buf)
 			if n > 0 {
-				fmt.Fprintf(w, "data: %s\n\n", string(buf[:n]))
+				if _, werr := fmt.Fprintf(w, "data: %s\n\n", string(buf[:n])); werr != nil {
+					h.logger.Warn("Container log stream write failed", "error", werr, "id", containerID)
+					return
+				}
 				flusher.Flush()
 			}
 			if err != nil {
 				if err == io.EOF {
-					fmt.Fprintf(w, "event: end\ndata: stream ended\n\n")
+					if _, werr := fmt.Fprintf(w, "event: end\ndata: stream ended\n\n"); werr != nil {
+						h.logger.Warn("Container log stream write failed", "error", werr, "id", containerID)
+						return
+					}
 					flusher.Flush()
 				}
 				return
