@@ -579,45 +579,13 @@ Access to the DNS management API is described in
 | Health endpoints | Readiness/liveness probes | Planned |
 | Performance tuning | Optimization and benchmarks | Planned |
 
-## CLI Commands (Planned)
+## Testing and Diagnostics
 
-There is no `platformctl dns` command group today (#954).
-
-### Server Management
-
-```bash
-# Start DoT/DoH servers
-platformctl dns server start --dot --doh
-
-# Check server status
-platformctl dns server status
-
-# Reload TLS certificates
-platformctl dns server reload --tls
-```
-
-### Certificate Management
+There is no `platformctl dns` command group (#954, [cli.md](cli.md)): the DNS
+server is managed through the [DNS API](api.md). Test DoT and DoH with standard
+clients:
 
 ```bash
-# Issue certificate for DNS server
-platformctl dns tls issue --hostname dns.example.com
-
-# Show current certificate
-platformctl dns tls show
-
-# Renew certificate
-platformctl dns tls renew
-```
-
-### Testing and Diagnostics
-
-```bash
-# Test DoT connection
-platformctl dns test --dot --server dns.example.com:853
-
-# Test DoH connection
-platformctl dns test --doh --server https://dns.example.com/dns-query
-
 # Query via DoT
 dig @dns.example.com +tls www.example.com A
 
