@@ -95,23 +95,14 @@ is always dynamic. `GET .../allocations?pool_id=<id>` filters by pool;
 ## Error Codes
 
 Webservice HTTP status codes: 400 (invalid CIDR/parameters, a reserved address, a
-reserved prefix or range that does not fit the pool, **and deleting a pool
-that still has allocations**), 404 (pool or allocation not found), 409
-(pool already exists, pool name taken, CIDR overlaps, IP already
-allocated), 429 (pool exhausted), 503 (gateway service not available).
-
-A pool that still has allocations is reported as **400, not 409**. The
-service returns `ErrPoolHasAllocations` as gRPC `FailedPrecondition`
-(`pkg/api/daemon/gateway_grpc_service.go`), and the shared REST mapping
-groups `FailedPrecondition` with `InvalidArgument` onto 400
-(`pkg/webservice/v1/rest/internal/protorest/protorest.go`). The 409 codes
-above all come from `AlreadyExists`. Changing this to 409 would mean
-changing that shared mapping for every REST surface in the platform, not
-just IPAM — see issue #665.
+reserved prefix or range that does not fit the pool), 404 (pool or allocation
+not found), 409 (pool already exists, pool name taken, CIDR overlaps, IP
+already allocated, deleting a pool that still has allocations), 429 (pool
+exhausted), 503 (gateway service not available).
 
 The daemon stack maps errors itself (`writeGatewayError`,
-`pkg/api/rest/gateway_handlers.go:1103`) and differs in two places: a pool that
-still has allocations is **409**, and an exhausted pool is **503**.
+`pkg/api/rest/gateway_handlers.go:1103`) and differs in one place: an
+exhausted pool is **503**.
 
 ## See Also
 

@@ -114,7 +114,7 @@ func TestHTTPStatus(t *testing.T) {
 		{codes.NotFound, http.StatusNotFound},
 		{codes.AlreadyExists, http.StatusConflict},
 		{codes.Aborted, http.StatusConflict},
-		{codes.FailedPrecondition, http.StatusPreconditionFailed},
+		{codes.FailedPrecondition, http.StatusConflict},
 		{codes.ResourceExhausted, http.StatusTooManyRequests},
 		{codes.Unimplemented, http.StatusNotImplemented},
 		{codes.Unavailable, http.StatusServiceUnavailable},

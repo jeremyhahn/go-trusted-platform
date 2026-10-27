@@ -69,6 +69,36 @@ unscoped form, but they carry the request's `tenant_id` in the body, so a
 foreign tenant is refused there and surfaces as `PermissionDenied`, as on
 gRPC; an empty one acts on the session's tenant.
 
+The status-only operations — Delete on users, roles, groups, tenants, policies
+and apps, AssignRole, RevokeRole, AddGroupMember and RemoveGroupMember — answer
+their proto reply as the envelope payload, `{"status": {"success": true,
+"message": "..."}, "timestamp": "..."}`, the shape the gRPC service returns and
+the SDK decodes (#445). They previously answered a bare `{"success", "message"}`
+that the SDK decoded as an empty status.
+
+The six list operations — ListUsers, ListGroups, ListRoles, ListTenants,
+ListPolicies and ListApps — answer their proto reply (`ListIAMUsersResponse`,
+...) as the envelope payload, in camelCase protojson, the shape the gRPC
+service returns (#445):
+
+```json
+{"users": [{"id": "...", "tenantId": "...", "createdAt": "..."}],
+ "pagination": {"page": 1, "pageSize": 50, "totalPages": 1, "totalItems": 3},
+ "total": "3", "timestamp": "..."}
+```
+
+The items key is the resource plural (`users`, `groups`, `roles`, `tenants`,
+`policies`, `apps`), each item the `IAM*` message gRPC returns; REST and gRPC
+build both from the same converters (`pkg/webservice/v1/rest/iam/proto.go`).
+`page` is the page `?offset=` falls on, `pageSize` the applied `?limit=`
+(default 50, at most 1000), `totalPages` and `totalItems` the totals;
+`total` repeats `totalItems` as a protojson int64 string, and protojson omits
+a zero field. They previously answered `{"total", "limit", "offset"}` with
+snake_case items, a shape the SDK's generated replies do not carry. The Go SDK's REST
+transport routes ListUsers, ListGroups, ListRoles and ListTenants with no
+query parameters, so it reads page 1 of 50; ListPolicies and ListApps have
+no SDK REST route.
+
 Rows below give the unscoped path; the tenant-scoped equivalent always exists.
 
 ---

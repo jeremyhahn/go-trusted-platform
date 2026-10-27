@@ -42,7 +42,6 @@ keys have no effect ([configuration.md](configuration.md#attestation)).
 - A DDNS client that sends UPDATE to another server, so DS records are never
   pushed to a parent zone ([dnssec-rollover.md](dnssec-rollover.md)).
 - TSIG (RFC 8945) or SIG(0) authentication of updates.
-- A `platformctl dns` command group (#954).
 
 ## See also
 

@@ -420,7 +420,11 @@ fix the config and rerun.
 **"enrollment: refusing to attach the NBD export".**
 A `diskless-nbd` node did not enrol, so it holds no IDevID to attach its export
 with: no enrollment client is configured, enrollment failed (the client's own
-error follows), or it returned no certificate. Nothing was touched.
+error follows), or it returned no certificate. Nothing was touched. An install
+configured by flags alone has no enrollment client; one configured from the
+platform configuration enrols through `acme.client.enrollment`. Until the live
+environment opens the TPM for enrollment, the client's error is
+`an open TPM is missing`.
 
 **No TPM detected.**
 The installer logs *"TPM sealing enabled but no TPM device found, continuing

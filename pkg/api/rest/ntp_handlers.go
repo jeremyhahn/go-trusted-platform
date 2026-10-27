@@ -136,12 +136,12 @@ func (h *NTPHandlers) handleStep(w http.ResponseWriter, r *http.Request) {
 var protorestHTTPStatus = map[codes.Code]int{
 	codes.OK:                 http.StatusOK,
 	codes.InvalidArgument:    http.StatusBadRequest,
-	codes.FailedPrecondition: http.StatusBadRequest,
 	codes.Unauthenticated:    http.StatusUnauthorized,
 	codes.PermissionDenied:   http.StatusForbidden,
 	codes.NotFound:           http.StatusNotFound,
 	codes.Aborted:            http.StatusConflict,
 	codes.AlreadyExists:      http.StatusConflict,
+	codes.FailedPrecondition: http.StatusConflict,
 	codes.Unavailable:        http.StatusServiceUnavailable,
 	codes.DeadlineExceeded:   http.StatusGatewayTimeout,
 	codes.Unimplemented:      http.StatusNotImplemented,

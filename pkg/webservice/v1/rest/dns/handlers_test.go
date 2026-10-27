@@ -14,2121 +14,463 @@
 package dns
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"sort"
+	"strings"
 	"testing"
 
 	"github.com/gorilla/mux"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/proto"
 
-	"github.com/jeremyhahn/go-trusted-platform/pkg/dns"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/dns/entities"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/restwire"
 )
 
-// mockDNSService implements dns.DNSService for testing
-type mockDNSService struct {
-	zones          map[string]*entities.Zone
-	dnssecEnabled  bool
-	saveErr        error
-	deleteErr      error
-	signErr        error
-	registerErr    error
-	listZonesErr   error
-	registerResult *entities.Zone
+// scriptedDNSServer records the request a handler hands the DNS service and
+// answers with resp, or with err when it is set.
+type scriptedDNSServer struct {
+	platformv1.UnimplementedDNSServiceServer
+	got  proto.Message
+	resp proto.Message
+	err  error
 }
 
-func newMockDNSService() *mockDNSService {
-	return &mockDNSService{
-		zones:         make(map[string]*entities.Zone),
-		dnssecEnabled: false,
+func answer[T proto.Message](s *scriptedDNSServer, req proto.Message) (T, error) {
+	s.got = req
+	var zero T
+	if s.err != nil {
+		return zero, s.err
 	}
+	return s.resp.(T), nil
 }
 
-func (m *mockDNSService) Save(ctx context.Context, zone *entities.Zone) error {
-	if m.saveErr != nil {
-		return m.saveErr
-	}
-	m.zones[zone.Name] = zone
-	return nil
+func (s *scriptedDNSServer) CreateZone(_ context.Context, req *platformv1.CreateZoneRequest) (*platformv1.CreateZoneResponse, error) {
+	return answer[*platformv1.CreateZoneResponse](s, req)
 }
 
-func (m *mockDNSService) SaveAndSign(ctx context.Context, zone *entities.Zone) error {
-	return m.Save(ctx, zone)
+func (s *scriptedDNSServer) GetZone(_ context.Context, req *platformv1.GetZoneRequest) (*platformv1.GetZoneResponse, error) {
+	return answer[*platformv1.GetZoneResponse](s, req)
 }
 
-func (m *mockDNSService) SignZone(zone *entities.Zone) error {
-	if m.signErr != nil {
-		return m.signErr
-	}
-	// Add mock DNSKEY record
-	zone.AddDNSKEYRecord(&entities.DNSKEYRecord{
-		Name:      zone.Name,
-		Flags:     257,
-		Protocol:  3,
-		Algorithm: 13,
-		Key:       "mock-key",
-		TTL:       3600,
-	})
-	return nil
+func (s *scriptedDNSServer) UpdateZone(_ context.Context, req *platformv1.UpdateZoneRequest) (*platformv1.UpdateZoneResponse, error) {
+	return answer[*platformv1.UpdateZoneResponse](s, req)
 }
 
-func (m *mockDNSService) Delete(ctx context.Context, zone *entities.Zone) error {
-	if m.deleteErr != nil {
-		return m.deleteErr
-	}
-	delete(m.zones, zone.Name)
-	return nil
+func (s *scriptedDNSServer) DeleteZone(_ context.Context, req *platformv1.DeleteZoneRequest) (*platformv1.DeleteZoneResponse, error) {
+	return answer[*platformv1.DeleteZoneResponse](s, req)
 }
 
-func (m *mockDNSService) Zone(ctx context.Context, zoneName string) (*entities.Zone, error) {
-	zone, ok := m.zones[zoneName]
-	if !ok {
-		return nil, dns.ErrZoneNotFound
-	}
-	return zone, nil
+func (s *scriptedDNSServer) ListZones(_ context.Context, req *platformv1.ListZonesRequest) (*platformv1.ListZonesResponse, error) {
+	return answer[*platformv1.ListZonesResponse](s, req)
 }
 
-func (m *mockDNSService) ListZones(ctx context.Context) ([]*entities.Zone, error) {
-	if m.listZonesErr != nil {
-		return nil, m.listZonesErr
-	}
-	var zones []*entities.Zone
-	for _, z := range m.zones {
-		zones = append(zones, z)
-	}
-	return zones, nil
+func (s *scriptedDNSServer) AddRecord(_ context.Context, req *platformv1.AddRecordRequest) (*platformv1.AddRecordResponse, error) {
+	return answer[*platformv1.AddRecordResponse](s, req)
 }
 
-func (m *mockDNSService) Register(ctx context.Context, fqdn, ip string) (*entities.Zone, error) {
-	if m.registerErr != nil {
-		return nil, m.registerErr
-	}
-	return m.registerResult, nil
+func (s *scriptedDNSServer) DeleteRecord(_ context.Context, req *platformv1.DeleteRecordRequest) (*platformv1.DeleteRecordResponse, error) {
+	return answer[*platformv1.DeleteRecordResponse](s, req)
 }
 
-func (m *mockDNSService) AddTLSARecord(ctx context.Context, zoneName string, record *entities.TLSARecord) error {
-	zone, ok := m.zones[zoneName]
-	if !ok {
-		return dns.ErrZoneNotFound
-	}
-	zone.AddTLSARecord(record)
-	return nil
+func (s *scriptedDNSServer) UpdateRecord(_ context.Context, req *platformv1.UpdateRecordRequest) (*platformv1.UpdateRecordResponse, error) {
+	return answer[*platformv1.UpdateRecordResponse](s, req)
 }
 
-func (m *mockDNSService) InternalZone(ctx context.Context) (*entities.Zone, error) {
-	return m.Zone(ctx, "internal.")
+func (s *scriptedDNSServer) ListRecords(_ context.Context, req *platformv1.ListRecordsRequest) (*platformv1.ListRecordsResponse, error) {
+	return answer[*platformv1.ListRecordsResponse](s, req)
 }
 
-func (m *mockDNSService) PublicZone(ctx context.Context) (*entities.Zone, error) {
-	return m.Zone(ctx, "public.")
+func (s *scriptedDNSServer) SignZone(_ context.Context, req *platformv1.SignZoneRequest) (*platformv1.SignZoneResponse, error) {
+	return answer[*platformv1.SignZoneResponse](s, req)
 }
 
-func (m *mockDNSService) InternalDomain() string {
-	return "internal."
+func (s *scriptedDNSServer) GetDNSSECStatus(_ context.Context, req *platformv1.GetDNSSECStatusRequest) (*platformv1.GetDNSSECStatusResponse, error) {
+	return answer[*platformv1.GetDNSSECStatusResponse](s, req)
 }
 
-func (m *mockDNSService) PublicDomain() string {
-	return "public."
+func (s *scriptedDNSServer) Resolve(_ context.Context, req *platformv1.ResolveRequest) (*platformv1.ResolveResponse, error) {
+	return answer[*platformv1.ResolveResponse](s, req)
 }
 
-func (m *mockDNSService) DNSSECService() *dns.DNSSECService {
-	return nil
+func (s *scriptedDNSServer) Register(_ context.Context, req *platformv1.RegisterRequest) (*platformv1.RegisterResponse, error) {
+	return answer[*platformv1.RegisterResponse](s, req)
 }
-
-func (m *mockDNSService) IsDNSSECEnabled() bool {
-	return m.dnssecEnabled
-}
-
-func (m *mockDNSService) CreateZone(ctx context.Context, zoneName string) error {
-	return m.Save(ctx, &entities.Zone{Name: zoneName, TTL: 3600})
-}
-
-func (m *mockDNSService) DeleteZone(ctx context.Context, zoneName string) error {
-	zone, err := m.Zone(ctx, zoneName)
-	if err != nil {
-		return err
-	}
-	return m.Delete(ctx, zone)
-}
-
-func (m *mockDNSService) AddRecord(ctx context.Context, name, recordType, value string, ttl int) error {
-	return nil
-}
-
-func (m *mockDNSService) DeleteRecord(ctx context.Context, name, recordType string) error {
-	return nil
-}
-
-func (m *mockDNSService) GetRecord(ctx context.Context, name, recordType string) (interface{}, error) {
-	return nil, nil
-}
-
-func (m *mockDNSService) ListRecords(ctx context.Context, zone string) ([]interface{}, error) {
-	return nil, nil
-}
-
-func (m *mockDNSService) Resolve(ctx context.Context, name, recordType string) ([]string, error) {
-	return nil, nil
-}
-
-func (m *mockDNSService) RegisterWithNetworkZone(ctx context.Context, host, networkZone, ip string) error {
-	return nil
-}
-
-// mockHttpWriter implements response.HttpWriter for testing
-type mockHttpWriter struct {
-	lastStatus  int
-	lastPayload interface{}
-	lastError   error
-}
-
-func (m *mockHttpWriter) Write(w http.ResponseWriter, r *http.Request, status int, resp interface{}) {
-	m.lastStatus = status
-	m.lastPayload = resp
-	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(resp)
-}
-
-func (m *mockHttpWriter) WriteYaml(w http.ResponseWriter, status int, resp interface{}) {
-	m.lastStatus = status
-	m.lastPayload = resp
-	w.WriteHeader(status)
-}
-
-func (m *mockHttpWriter) WriteJson(w http.ResponseWriter, status int, resp interface{}) {
-	m.lastStatus = status
-	m.lastPayload = resp
-	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(resp)
-}
-
-func (m *mockHttpWriter) Success200(w http.ResponseWriter, r *http.Request, payload interface{}) {
-	m.lastStatus = http.StatusOK
-	m.lastPayload = payload
-	w.WriteHeader(http.StatusOK)
-	resp := restwire.WebServiceResponse{Code: 200, Success: true, Payload: payload}
-	json.NewEncoder(w).Encode(resp)
-}
-
-func (m *mockHttpWriter) Success201(w http.ResponseWriter, r *http.Request, payload interface{}) {
-	m.lastStatus = http.StatusCreated
-	m.lastPayload = payload
-	w.WriteHeader(http.StatusCreated)
-	resp := restwire.WebServiceResponse{Code: 201, Success: true, Payload: payload}
-	json.NewEncoder(w).Encode(resp)
-}
-
-func (m *mockHttpWriter) Success404(w http.ResponseWriter, r *http.Request, payload interface{}, err error) {
-	m.lastStatus = http.StatusNotFound
-	m.lastPayload = payload
-	m.lastError = err
-	w.WriteHeader(http.StatusNotFound)
-}
-
-func (m *mockHttpWriter) Error200(w http.ResponseWriter, r *http.Request, err error) {
-	m.lastStatus = http.StatusOK
-	m.lastError = err
-	w.WriteHeader(http.StatusOK)
-}
-
-func (m *mockHttpWriter) Error400(w http.ResponseWriter, r *http.Request, err error) {
-	m.lastStatus = http.StatusBadRequest
-	m.lastError = err
-	w.WriteHeader(http.StatusBadRequest)
-	resp := restwire.WebServiceResponse{Code: 400, Success: false, Error: err.Error()}
-	json.NewEncoder(w).Encode(resp)
-}
-
-func (m *mockHttpWriter) Error401(w http.ResponseWriter, r *http.Request, err error) {
-	m.lastStatus = http.StatusUnauthorized
-	m.lastError = err
-	w.WriteHeader(http.StatusUnauthorized)
-}
-
-func (m *mockHttpWriter) Error403(w http.ResponseWriter, r *http.Request, err error, payload interface{}) {
-	m.lastStatus = http.StatusForbidden
-	m.lastError = err
-	m.lastPayload = payload
-	w.WriteHeader(http.StatusForbidden)
-}
-
-func (m *mockHttpWriter) Error404(w http.ResponseWriter, r *http.Request, err error) {
-	m.lastStatus = http.StatusNotFound
-	m.lastError = err
-	w.WriteHeader(http.StatusNotFound)
-	resp := restwire.WebServiceResponse{Code: 404, Success: false, Error: err.Error()}
-	json.NewEncoder(w).Encode(resp)
-}
-
-func (m *mockHttpWriter) Error500(w http.ResponseWriter, r *http.Request, err error) {
-	m.lastStatus = http.StatusInternalServerError
-	m.lastError = err
-	w.WriteHeader(http.StatusInternalServerError)
-	resp := restwire.WebServiceResponse{Code: 500, Success: false, Error: err.Error()}
-	json.NewEncoder(w).Encode(resp)
-}
-
-func (m *mockHttpWriter) Error503(w http.ResponseWriter, r *http.Request, err error) {
-	m.lastStatus = http.StatusServiceUnavailable
-	m.lastError = err
-	w.WriteHeader(http.StatusServiceUnavailable)
-	resp := restwire.WebServiceResponse{Code: 503, Success: false, Error: err.Error()}
-	json.NewEncoder(w).Encode(resp)
-}
-
-// Helper functions
 
 func newTestLogger() *logging.Logger {
-	return logging.NewLogger(slog.LevelDebug, os.Stdout)
+	return logging.NewLogger(slog.LevelError, io.Discard)
 }
 
-func newTestHandlers(service *mockDNSService) (*DNSHandlers, *mockHttpWriter) {
+// newTestRouter mounts the DNS routes under /api/v1 on server, with the
+// production response writer so the envelope is the one clients read.
+func newTestRouter(server platformv1.DNSServiceServer) *mux.Router {
 	logger := newTestLogger()
-	writer := &mockHttpWriter{}
-	handlers := NewDNSHandlers(logger, service, writer)
-	return handlers, writer
+	root := mux.NewRouter()
+	NewDNSRouter(logger, server, response.NewResponseWriter(logger, nil)).
+		RegisterRoutes(root.PathPrefix("/api/v1").Subrouter())
+	return root
 }
 
-func createRequest(method, path string, body interface{}) *http.Request {
-	var reqBody bytes.Buffer
-	if body != nil {
-		json.NewEncoder(&reqBody).Encode(body)
-	}
-
-	req := httptest.NewRequest(method, path, &reqBody)
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "application/json")
-
-	return req
-}
-
-func createRequestWithVars(method, path string, body interface{}, vars map[string]string) *http.Request {
-	req := createRequest(method, path, body)
-	if vars != nil {
-		req = mux.SetURLVars(req, vars)
-	}
-	return req
-}
-
-func createTestZone(name string) *entities.Zone {
-	return &entities.Zone{
-		ID:          1,
-		Name:        name,
-		TTL:         3600,
-		Description: "Test zone",
-		Internal:    false,
-		RecordSet: entities.RecordSet{
-			SOARecord: entities.SOARecord{
-				Name:       name,
-				MName:      "ns1." + name,
-				RName:      "admin." + name,
-				Serial:     1,
-				Refresh:    7200,
-				Retry:      3600,
-				Expire:     1209600,
-				MinimumTTL: 3600,
-				TTL:        3600,
-			},
-		},
-	}
-}
-
-// Test NewDNSHandlers
-
-func TestNewDNSHandlers(t *testing.T) {
-	logger := newTestLogger()
-	service := newMockDNSService()
-	writer := &mockHttpWriter{}
-
-	handlers := NewDNSHandlers(logger, service, writer)
-
-	require.NotNil(t, handlers)
-	assert.NotNil(t, handlers.logger)
-	assert.NotNil(t, handlers.service)
-	assert.NotNil(t, handlers.respWriter)
-}
-
-// Test CreateZone
-
-func TestCreateZone_Success(t *testing.T) {
-	service := newMockDNSService()
-	handlers, writer := newTestHandlers(service)
-
-	body := CreateZoneRequest{
-		Name:        "example.com.",
-		TTL:         3600,
-		Description: "Test zone",
-		Internal:    false,
-		SOA: &SOARequest{
-			Name:       "example.com.",
-			MName:      "ns1.example.com.",
-			RName:      "admin.example.com.",
-			Serial:     1,
-			Refresh:    7200,
-			Retry:      3600,
-			Expire:     1209600,
-			MinimumTTL: 3600,
-			TTL:        3600,
-		},
-		NSRecords: []*NSRequest{
-			{Name: "@", Value: "ns1.example.com.", TTL: 3600},
-		},
-	}
-
-	req := createRequest(http.MethodPost, "/api/v1/dns/zones", body)
-	rec := httptest.NewRecorder()
-
-	handlers.CreateZone(rec, req)
-
-	assert.Equal(t, http.StatusOK, writer.lastStatus)
-	payload, ok := writer.lastPayload.(ZoneResponse)
-	require.True(t, ok)
-	assert.Equal(t, "example.com.", payload.Name)
-}
-
-func TestCreateZone_MissingName(t *testing.T) {
-	service := newMockDNSService()
-	handlers, writer := newTestHandlers(service)
-
-	body := CreateZoneRequest{
-		TTL: 3600,
-	}
-
-	req := createRequest(http.MethodPost, "/api/v1/dns/zones", body)
-	rec := httptest.NewRecorder()
-
-	handlers.CreateZone(rec, req)
-
-	assert.Equal(t, http.StatusBadRequest, writer.lastStatus)
-	_, ok := writer.lastError.(ErrMissingZoneName)
-	assert.True(t, ok)
-}
-
-func TestCreateZone_InvalidRequestBody(t *testing.T) {
-	service := newMockDNSService()
-	handlers, writer := newTestHandlers(service)
-
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/dns/zones", bytes.NewBufferString("invalid json"))
+// serve sends one request through the DNS routes.
+func serve(server platformv1.DNSServiceServer, method, target, body string) *httptest.ResponseRecorder {
+	req := httptest.NewRequest(method, target, strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
-
-	handlers.CreateZone(rec, req)
-
-	assert.Equal(t, http.StatusBadRequest, writer.lastStatus)
-	_, ok := writer.lastError.(ErrInvalidRequestBody)
-	assert.True(t, ok)
+	newTestRouter(server).ServeHTTP(rec, req)
+	return rec
 }
 
-func TestCreateZone_SaveError(t *testing.T) {
-	service := newMockDNSService()
-	service.saveErr = errors.New("database error")
-	handlers, writer := newTestHandlers(service)
+// payload decodes the envelope's payload into msg with protojson, the way
+// the SDK REST transport does.
+func payload(t *testing.T, rec *httptest.ResponseRecorder, msg proto.Message) {
+	t.Helper()
+	var envelope struct {
+		Success bool            `json:"success"`
+		Payload json.RawMessage `json:"payload"`
+	}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &envelope), rec.Body.String())
+	require.True(t, envelope.Success, rec.Body.String())
+	require.NoError(t, protojson.Unmarshal(envelope.Payload, msg), string(envelope.Payload))
+}
 
-	body := CreateZoneRequest{
+func testZone() *platformv1.Zone {
+	return &platformv1.Zone{
+		Id:   1,
 		Name: "example.com.",
-		TTL:  3600,
-	}
-
-	req := createRequest(http.MethodPost, "/api/v1/dns/zones", body)
-	rec := httptest.NewRecorder()
-
-	handlers.CreateZone(rec, req)
-
-	assert.Equal(t, http.StatusInternalServerError, writer.lastStatus)
-}
-
-// Test GetZone
-
-func TestGetZone_Success(t *testing.T) {
-	service := newMockDNSService()
-	testZone := createTestZone("example.com.")
-	service.zones["example.com."] = testZone
-	handlers, writer := newTestHandlers(service)
-
-	req := createRequestWithVars(http.MethodGet, "/api/v1/dns/zones/example.com.", nil, map[string]string{"zone": "example.com."})
-	rec := httptest.NewRecorder()
-
-	handlers.GetZone(rec, req)
-
-	assert.Equal(t, http.StatusOK, writer.lastStatus)
-	payload, ok := writer.lastPayload.(ZoneResponse)
-	require.True(t, ok)
-	assert.Equal(t, "example.com.", payload.Name)
-}
-
-func TestGetZone_MissingZoneName(t *testing.T) {
-	service := newMockDNSService()
-	handlers, writer := newTestHandlers(service)
-
-	req := createRequestWithVars(http.MethodGet, "/api/v1/dns/zones/", nil, map[string]string{})
-	rec := httptest.NewRecorder()
-
-	handlers.GetZone(rec, req)
-
-	assert.Equal(t, http.StatusBadRequest, writer.lastStatus)
-	_, ok := writer.lastError.(ErrMissingZoneName)
-	assert.True(t, ok)
-}
-
-func TestGetZone_NotFound(t *testing.T) {
-	service := newMockDNSService()
-	handlers, writer := newTestHandlers(service)
-
-	req := createRequestWithVars(http.MethodGet, "/api/v1/dns/zones/nonexistent.com.", nil, map[string]string{"zone": "nonexistent.com."})
-	rec := httptest.NewRecorder()
-
-	handlers.GetZone(rec, req)
-
-	assert.Equal(t, http.StatusNotFound, writer.lastStatus)
-}
-
-// Test UpdateZone
-
-func TestUpdateZone_Success(t *testing.T) {
-	service := newMockDNSService()
-	testZone := createTestZone("example.com.")
-	service.zones["example.com."] = testZone
-	handlers, writer := newTestHandlers(service)
-
-	body := UpdateZoneRequest{
-		TTL:         7200,
-		Description: "Updated description",
-	}
-
-	req := createRequestWithVars(http.MethodPut, "/api/v1/dns/zones/example.com.", body, map[string]string{"zone": "example.com."})
-	rec := httptest.NewRecorder()
-
-	handlers.UpdateZone(rec, req)
-
-	assert.Equal(t, http.StatusOK, writer.lastStatus)
-	payload, ok := writer.lastPayload.(ZoneResponse)
-	require.True(t, ok)
-	assert.Equal(t, uint32(7200), payload.TTL)
-	assert.Equal(t, "Updated description", payload.Description)
-}
-
-func TestUpdateZone_MissingZoneName(t *testing.T) {
-	service := newMockDNSService()
-	handlers, writer := newTestHandlers(service)
-
-	body := UpdateZoneRequest{TTL: 7200}
-	req := createRequestWithVars(http.MethodPut, "/api/v1/dns/zones/", body, map[string]string{})
-	rec := httptest.NewRecorder()
-
-	handlers.UpdateZone(rec, req)
-
-	assert.Equal(t, http.StatusBadRequest, writer.lastStatus)
-}
-
-func TestUpdateZone_InvalidRequestBody(t *testing.T) {
-	service := newMockDNSService()
-	handlers, writer := newTestHandlers(service)
-
-	req := httptest.NewRequest(http.MethodPut, "/api/v1/dns/zones/example.com.", bytes.NewBufferString("invalid json"))
-	req.Header.Set("Content-Type", "application/json")
-	req = mux.SetURLVars(req, map[string]string{"zone": "example.com."})
-	rec := httptest.NewRecorder()
-
-	handlers.UpdateZone(rec, req)
-
-	assert.Equal(t, http.StatusBadRequest, writer.lastStatus)
-}
-
-func TestUpdateZone_NotFound(t *testing.T) {
-	service := newMockDNSService()
-	handlers, writer := newTestHandlers(service)
-
-	body := UpdateZoneRequest{TTL: 7200}
-	req := createRequestWithVars(http.MethodPut, "/api/v1/dns/zones/nonexistent.com.", body, map[string]string{"zone": "nonexistent.com."})
-	rec := httptest.NewRecorder()
-
-	handlers.UpdateZone(rec, req)
-
-	assert.Equal(t, http.StatusNotFound, writer.lastStatus)
-}
-
-func TestUpdateZone_SaveError(t *testing.T) {
-	service := newMockDNSService()
-	testZone := createTestZone("example.com.")
-	service.zones["example.com."] = testZone
-	service.saveErr = errors.New("database error")
-	handlers, writer := newTestHandlers(service)
-
-	body := UpdateZoneRequest{TTL: 7200}
-	req := createRequestWithVars(http.MethodPut, "/api/v1/dns/zones/example.com.", body, map[string]string{"zone": "example.com."})
-	rec := httptest.NewRecorder()
-
-	handlers.UpdateZone(rec, req)
-
-	assert.Equal(t, http.StatusInternalServerError, writer.lastStatus)
-}
-
-// Test DeleteZone
-
-func TestDeleteZone_Success(t *testing.T) {
-	service := newMockDNSService()
-	testZone := createTestZone("example.com.")
-	service.zones["example.com."] = testZone
-	handlers, writer := newTestHandlers(service)
-
-	req := createRequestWithVars(http.MethodDelete, "/api/v1/dns/zones/example.com.", nil, map[string]string{"zone": "example.com."})
-	rec := httptest.NewRecorder()
-
-	handlers.DeleteZone(rec, req)
-
-	assert.Equal(t, http.StatusOK, writer.lastStatus)
-	payload, ok := writer.lastPayload.(SuccessResponse)
-	require.True(t, ok)
-	assert.True(t, payload.Success)
-	assert.Equal(t, "zone deleted successfully", payload.Message)
-}
-
-func TestDeleteZone_MissingZoneName(t *testing.T) {
-	service := newMockDNSService()
-	handlers, writer := newTestHandlers(service)
-
-	req := createRequestWithVars(http.MethodDelete, "/api/v1/dns/zones/", nil, map[string]string{})
-	rec := httptest.NewRecorder()
-
-	handlers.DeleteZone(rec, req)
-
-	assert.Equal(t, http.StatusBadRequest, writer.lastStatus)
-}
-
-func TestDeleteZone_NotFound(t *testing.T) {
-	service := newMockDNSService()
-	handlers, writer := newTestHandlers(service)
-
-	req := createRequestWithVars(http.MethodDelete, "/api/v1/dns/zones/nonexistent.com.", nil, map[string]string{"zone": "nonexistent.com."})
-	rec := httptest.NewRecorder()
-
-	handlers.DeleteZone(rec, req)
-
-	assert.Equal(t, http.StatusNotFound, writer.lastStatus)
-}
-
-func TestDeleteZone_DeleteError(t *testing.T) {
-	service := newMockDNSService()
-	testZone := createTestZone("example.com.")
-	service.zones["example.com."] = testZone
-	service.deleteErr = errors.New("database error")
-	handlers, writer := newTestHandlers(service)
-
-	req := createRequestWithVars(http.MethodDelete, "/api/v1/dns/zones/example.com.", nil, map[string]string{"zone": "example.com."})
-	rec := httptest.NewRecorder()
-
-	handlers.DeleteZone(rec, req)
-
-	assert.Equal(t, http.StatusInternalServerError, writer.lastStatus)
-}
-
-// Test ListZones
-
-func TestListZones_Success(t *testing.T) {
-	service := newMockDNSService()
-	service.zones["example.com."] = createTestZone("example.com.")
-	service.zones["test.com."] = createTestZone("test.com.")
-	handlers, writer := newTestHandlers(service)
-
-	req := createRequest(http.MethodGet, "/api/v1/dns/zones", nil)
-	rec := httptest.NewRecorder()
-
-	handlers.ListZones(rec, req)
-
-	assert.Equal(t, http.StatusOK, writer.lastStatus)
-	payload, ok := writer.lastPayload.(ListZonesResponse)
-	require.True(t, ok)
-	assert.Equal(t, int64(2), payload.Total)
-	assert.Len(t, payload.Zones, 2)
-}
-
-func TestListZones_Empty(t *testing.T) {
-	service := newMockDNSService()
-	handlers, writer := newTestHandlers(service)
-
-	req := createRequest(http.MethodGet, "/api/v1/dns/zones", nil)
-	rec := httptest.NewRecorder()
-
-	handlers.ListZones(rec, req)
-
-	assert.Equal(t, http.StatusOK, writer.lastStatus)
-	payload, ok := writer.lastPayload.(ListZonesResponse)
-	require.True(t, ok)
-	assert.Equal(t, int64(0), payload.Total)
-}
-
-func TestListZones_InternalFilter(t *testing.T) {
-	service := newMockDNSService()
-	internalZone := createTestZone("internal.local.")
-	internalZone.Internal = true
-	service.zones["internal.local."] = internalZone
-	service.zones["public.com."] = createTestZone("public.com.")
-	handlers, writer := newTestHandlers(service)
-
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/dns/zones?internal=true", nil)
-	req.Header.Set("Accept", "application/json")
-	rec := httptest.NewRecorder()
-
-	handlers.ListZones(rec, req)
-
-	assert.Equal(t, http.StatusOK, writer.lastStatus)
-	payload, ok := writer.lastPayload.(ListZonesResponse)
-	require.True(t, ok)
-	assert.Equal(t, int64(1), payload.Total)
-	assert.Equal(t, "internal.local.", payload.Zones[0].Name)
-}
-
-func TestListZones_PublicFilter(t *testing.T) {
-	service := newMockDNSService()
-	internalZone := createTestZone("internal.local.")
-	internalZone.Internal = true
-	service.zones["internal.local."] = internalZone
-	service.zones["public.com."] = createTestZone("public.com.")
-	handlers, writer := newTestHandlers(service)
-
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/dns/zones?public=true", nil)
-	req.Header.Set("Accept", "application/json")
-	rec := httptest.NewRecorder()
-
-	handlers.ListZones(rec, req)
-
-	assert.Equal(t, http.StatusOK, writer.lastStatus)
-	payload, ok := writer.lastPayload.(ListZonesResponse)
-	require.True(t, ok)
-	assert.Equal(t, int64(1), payload.Total)
-	assert.Equal(t, "public.com.", payload.Zones[0].Name)
-}
-
-func TestListZones_ServiceError(t *testing.T) {
-	service := newMockDNSService()
-	service.listZonesErr = errors.New("database error")
-	handlers, writer := newTestHandlers(service)
-
-	req := createRequest(http.MethodGet, "/api/v1/dns/zones", nil)
-	rec := httptest.NewRecorder()
-
-	handlers.ListZones(rec, req)
-
-	assert.Equal(t, http.StatusInternalServerError, writer.lastStatus)
-}
-
-func TestListZones_Pagination(t *testing.T) {
-	service := newMockDNSService()
-	service.zones["example.com."] = createTestZone("example.com.")
-	handlers, writer := newTestHandlers(service)
-
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/dns/zones?limit=10&offset=5", nil)
-	req.Header.Set("Accept", "application/json")
-	rec := httptest.NewRecorder()
-
-	handlers.ListZones(rec, req)
-
-	assert.Equal(t, http.StatusOK, writer.lastStatus)
-	payload, ok := writer.lastPayload.(ListZonesResponse)
-	require.True(t, ok)
-	assert.Equal(t, int32(10), payload.Limit)
-	assert.Equal(t, int32(5), payload.Offset)
-}
-
-// TestListZones_LimitBoundsThePage is the regression for the handler that
-// echoed limit and offset but answered every zone.
-func TestListZones_LimitBoundsThePage(t *testing.T) {
-	service := newMockDNSService()
-	for _, name := range []string{"a.com.", "b.com.", "c.com."} {
-		service.zones[name] = createTestZone(name)
-	}
-	handlers, writer := newTestHandlers(service)
-
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/dns/zones?limit=2", nil)
-	handlers.ListZones(httptest.NewRecorder(), req)
-
-	payload, ok := writer.lastPayload.(ListZonesResponse)
-	require.True(t, ok)
-	assert.Len(t, payload.Zones, 2)
-	assert.Equal(t, int64(3), payload.Total)
-}
-
-func TestListZones_OffsetPastTheEndAnswersAnEmptyPage(t *testing.T) {
-	service := newMockDNSService()
-	service.zones["example.com."] = createTestZone("example.com.")
-	handlers, writer := newTestHandlers(service)
-
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/dns/zones?limit=10&offset=5", nil)
-	handlers.ListZones(httptest.NewRecorder(), req)
-
-	payload, ok := writer.lastPayload.(ListZonesResponse)
-	require.True(t, ok)
-	assert.Empty(t, payload.Zones)
-	assert.Equal(t, int64(1), payload.Total)
-}
-
-// Test AddRecord
-
-func TestAddRecord_ARecord_Success(t *testing.T) {
-	service := newMockDNSService()
-	service.zones["example.com."] = createTestZone("example.com.")
-	handlers, writer := newTestHandlers(service)
-
-	body := AddRecordRequest{
-		Type: "A",
-		A: &ARequest{
-			Name:  "www",
-			Value: "192.168.1.1",
-			TTL:   3600,
+		Ttl:  3600,
+		Records: &platformv1.RecordSet{
+			ARecords: []*platformv1.ARecord{{Name: "www", Value: "192.0.2.1", Ttl: 300}},
 		},
 	}
-
-	req := createRequestWithVars(http.MethodPost, "/api/v1/dns/zones/example.com./records", body, map[string]string{"zone": "example.com."})
-	rec := httptest.NewRecorder()
-
-	handlers.AddRecord(rec, req)
-
-	assert.Equal(t, http.StatusOK, writer.lastStatus)
-	zone := service.zones["example.com."]
-	require.Len(t, zone.RecordSet.ARecords, 1)
-	assert.Equal(t, "www", zone.RecordSet.ARecords[0].Name)
 }
 
-func TestAddRecord_AAAARecord_Success(t *testing.T) {
-	service := newMockDNSService()
-	service.zones["example.com."] = createTestZone("example.com.")
-	handlers, writer := newTestHandlers(service)
-
-	body := AddRecordRequest{
-		Type: "AAAA",
-		AAAA: &AAAARequest{
-			Name:  "www",
-			Value: "2001:db8::1",
-			TTL:   3600,
-		},
+// TestRoutesDecodeTheProtoRequest: every route hands the service the proto
+// request its JSON body, path and query make, and answers the proto
+// response in the envelope.
+func TestRoutesDecodeTheProtoRequest(t *testing.T) {
+	ok := &platformv1.Status{Success: true}
+	aRecord := &platformv1.Record{
+		Type:   platformv1.RecordType_RECORD_TYPE_A,
+		Record: &platformv1.Record_A{A: &platformv1.ARecord{Name: "www", Value: "192.0.2.1", Ttl: 300}},
 	}
-
-	req := createRequestWithVars(http.MethodPost, "/api/v1/dns/zones/example.com./records", body, map[string]string{"zone": "example.com."})
-	rec := httptest.NewRecorder()
-
-	handlers.AddRecord(rec, req)
-
-	assert.Equal(t, http.StatusOK, writer.lastStatus)
-}
-
-func TestAddRecord_CNAMERecord_Success(t *testing.T) {
-	service := newMockDNSService()
-	service.zones["example.com."] = createTestZone("example.com.")
-	handlers, writer := newTestHandlers(service)
-
-	body := AddRecordRequest{
-		Type: "CNAME",
-		CNAME: &CNAMERequest{
-			Name:  "alias",
-			Value: "www.example.com.",
-			TTL:   3600,
-		},
+	newRecord := &platformv1.Record{
+		Type:   platformv1.RecordType_RECORD_TYPE_A,
+		Record: &platformv1.Record_A{A: &platformv1.ARecord{Name: "www", Value: "192.0.2.2", Ttl: 300}},
 	}
-
-	req := createRequestWithVars(http.MethodPost, "/api/v1/dns/zones/example.com./records", body, map[string]string{"zone": "example.com."})
-	rec := httptest.NewRecorder()
-
-	handlers.AddRecord(rec, req)
-
-	assert.Equal(t, http.StatusOK, writer.lastStatus)
-}
-
-func TestAddRecord_MXRecord_Success(t *testing.T) {
-	service := newMockDNSService()
-	service.zones["example.com."] = createTestZone("example.com.")
-	handlers, writer := newTestHandlers(service)
-
-	body := AddRecordRequest{
-		Type: "MX",
-		MX: &MXRequest{
-			Name:     "@",
-			Value:    "mail.example.com.",
-			Priority: 10,
-			TTL:      3600,
-		},
-	}
-
-	req := createRequestWithVars(http.MethodPost, "/api/v1/dns/zones/example.com./records", body, map[string]string{"zone": "example.com."})
-	rec := httptest.NewRecorder()
-
-	handlers.AddRecord(rec, req)
-
-	assert.Equal(t, http.StatusOK, writer.lastStatus)
-}
-
-func TestAddRecord_NSRecord_Success(t *testing.T) {
-	service := newMockDNSService()
-	service.zones["example.com."] = createTestZone("example.com.")
-	handlers, writer := newTestHandlers(service)
-
-	body := AddRecordRequest{
-		Type: "NS",
-		NS: &NSRequest{
-			Name:  "@",
-			Value: "ns2.example.com.",
-			TTL:   3600,
-		},
-	}
-
-	req := createRequestWithVars(http.MethodPost, "/api/v1/dns/zones/example.com./records", body, map[string]string{"zone": "example.com."})
-	rec := httptest.NewRecorder()
-
-	handlers.AddRecord(rec, req)
-
-	assert.Equal(t, http.StatusOK, writer.lastStatus)
-}
-
-func TestAddRecord_TXTRecord_Success(t *testing.T) {
-	service := newMockDNSService()
-	service.zones["example.com."] = createTestZone("example.com.")
-	handlers, writer := newTestHandlers(service)
-
-	body := AddRecordRequest{
-		Type: "TXT",
-		TXT: &TXTRequest{
-			Name:  "_dmarc",
-			Value: "v=DMARC1; p=reject",
-			TTL:   3600,
-		},
-	}
-
-	req := createRequestWithVars(http.MethodPost, "/api/v1/dns/zones/example.com./records", body, map[string]string{"zone": "example.com."})
-	rec := httptest.NewRecorder()
-
-	handlers.AddRecord(rec, req)
-
-	assert.Equal(t, http.StatusOK, writer.lastStatus)
-}
-
-func TestAddRecord_SRVRecord_Success(t *testing.T) {
-	service := newMockDNSService()
-	service.zones["example.com."] = createTestZone("example.com.")
-	handlers, writer := newTestHandlers(service)
-
-	body := AddRecordRequest{
-		Type: "SRV",
-		SRV: &SRVRequest{
-			Name:     "_sip._tcp",
-			Target:   "sip.example.com.",
-			Port:     5060,
-			Priority: 10,
-			Weight:   100,
-			TTL:      3600,
-		},
-	}
-
-	req := createRequestWithVars(http.MethodPost, "/api/v1/dns/zones/example.com./records", body, map[string]string{"zone": "example.com."})
-	rec := httptest.NewRecorder()
-
-	handlers.AddRecord(rec, req)
-
-	assert.Equal(t, http.StatusOK, writer.lastStatus)
-}
-
-func TestAddRecord_CAARecord_Success(t *testing.T) {
-	service := newMockDNSService()
-	service.zones["example.com."] = createTestZone("example.com.")
-	handlers, writer := newTestHandlers(service)
-
-	body := AddRecordRequest{
-		Type: "CAA",
-		CAA: &CAARequest{
-			Name:  "@",
-			Flags: 0,
-			Tag:   "issue",
-			Value: "letsencrypt.org",
-			TTL:   3600,
-		},
-	}
-
-	req := createRequestWithVars(http.MethodPost, "/api/v1/dns/zones/example.com./records", body, map[string]string{"zone": "example.com."})
-	rec := httptest.NewRecorder()
-
-	handlers.AddRecord(rec, req)
-
-	assert.Equal(t, http.StatusOK, writer.lastStatus)
-}
-
-func TestAddRecord_TLSARecord_Success(t *testing.T) {
-	service := newMockDNSService()
-	service.zones["example.com."] = createTestZone("example.com.")
-	handlers, writer := newTestHandlers(service)
-
-	body := AddRecordRequest{
-		Type: "TLSA",
-		TLSA: &TLSARequest{
-			Name:         "_443._tcp.www",
-			Usage:        3,
-			Selector:     1,
-			MatchingType: 1,
-			Data:         "abc123",
-			TTL:          3600,
-		},
-	}
-
-	req := createRequestWithVars(http.MethodPost, "/api/v1/dns/zones/example.com./records", body, map[string]string{"zone": "example.com."})
-	rec := httptest.NewRecorder()
-
-	handlers.AddRecord(rec, req)
-
-	assert.Equal(t, http.StatusOK, writer.lastStatus)
-}
-
-func TestAddRecord_MissingZoneName(t *testing.T) {
-	service := newMockDNSService()
-	handlers, writer := newTestHandlers(service)
-
-	body := AddRecordRequest{Type: "A"}
-	req := createRequestWithVars(http.MethodPost, "/api/v1/dns/zones//records", body, map[string]string{})
-	rec := httptest.NewRecorder()
-
-	handlers.AddRecord(rec, req)
-
-	assert.Equal(t, http.StatusBadRequest, writer.lastStatus)
-}
-
-func TestAddRecord_MissingRecordType(t *testing.T) {
-	service := newMockDNSService()
-	service.zones["example.com."] = createTestZone("example.com.")
-	handlers, writer := newTestHandlers(service)
-
-	body := AddRecordRequest{}
-	req := createRequestWithVars(http.MethodPost, "/api/v1/dns/zones/example.com./records", body, map[string]string{"zone": "example.com."})
-	rec := httptest.NewRecorder()
-
-	handlers.AddRecord(rec, req)
-
-	assert.Equal(t, http.StatusBadRequest, writer.lastStatus)
-	_, ok := writer.lastError.(ErrMissingRecordType)
-	assert.True(t, ok)
-}
-
-func TestAddRecord_InvalidRecordType(t *testing.T) {
-	service := newMockDNSService()
-	service.zones["example.com."] = createTestZone("example.com.")
-	handlers, writer := newTestHandlers(service)
-
-	body := AddRecordRequest{Type: "INVALID"}
-	req := createRequestWithVars(http.MethodPost, "/api/v1/dns/zones/example.com./records", body, map[string]string{"zone": "example.com."})
-	rec := httptest.NewRecorder()
-
-	handlers.AddRecord(rec, req)
-
-	assert.Equal(t, http.StatusBadRequest, writer.lastStatus)
-	_, ok := writer.lastError.(ErrInvalidRecordType)
-	assert.True(t, ok)
-}
-
-func TestAddRecord_ZoneNotFound(t *testing.T) {
-	service := newMockDNSService()
-	handlers, writer := newTestHandlers(service)
-
-	body := AddRecordRequest{
-		Type: "A",
-		A:    &ARequest{Name: "www", Value: "192.168.1.1", TTL: 3600},
-	}
-	req := createRequestWithVars(http.MethodPost, "/api/v1/dns/zones/nonexistent.com./records", body, map[string]string{"zone": "nonexistent.com."})
-	rec := httptest.NewRecorder()
-
-	handlers.AddRecord(rec, req)
-
-	assert.Equal(t, http.StatusNotFound, writer.lastStatus)
-}
-
-func TestAddRecord_InvalidRequestBody(t *testing.T) {
-	service := newMockDNSService()
-	handlers, writer := newTestHandlers(service)
-
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/dns/zones/example.com./records", bytes.NewBufferString("invalid json"))
-	req.Header.Set("Content-Type", "application/json")
-	req = mux.SetURLVars(req, map[string]string{"zone": "example.com."})
-	rec := httptest.NewRecorder()
-
-	handlers.AddRecord(rec, req)
-
-	assert.Equal(t, http.StatusBadRequest, writer.lastStatus)
-}
-
-func TestAddRecord_SaveError(t *testing.T) {
-	service := newMockDNSService()
-	service.zones["example.com."] = createTestZone("example.com.")
-	service.saveErr = errors.New("database error")
-	handlers, writer := newTestHandlers(service)
-
-	body := AddRecordRequest{
-		Type: "A",
-		A:    &ARequest{Name: "www", Value: "192.168.1.1", TTL: 3600},
-	}
-	req := createRequestWithVars(http.MethodPost, "/api/v1/dns/zones/example.com./records", body, map[string]string{"zone": "example.com."})
-	rec := httptest.NewRecorder()
-
-	handlers.AddRecord(rec, req)
-
-	assert.Equal(t, http.StatusInternalServerError, writer.lastStatus)
-}
-
-// Test DeleteRecord
-
-func TestDeleteRecord_ARecord_Success(t *testing.T) {
-	service := newMockDNSService()
-	zone := createTestZone("example.com.")
-	zone.AddARecord(&entities.ARecord{Name: "www", Value: "192.168.1.1", TTL: 3600})
-	service.zones["example.com."] = zone
-	handlers, writer := newTestHandlers(service)
-
-	req := createRequestWithVars(http.MethodDelete, "/api/v1/dns/zones/example.com./records/A/www", nil, map[string]string{
-		"zone": "example.com.",
-		"type": "A",
-		"name": "www",
-	})
-	rec := httptest.NewRecorder()
-
-	handlers.DeleteRecord(rec, req)
-
-	assert.Equal(t, http.StatusOK, writer.lastStatus)
-}
-
-func TestDeleteRecord_AAAARecord_Success(t *testing.T) {
-	service := newMockDNSService()
-	zone := createTestZone("example.com.")
-	zone.AddAAAARecord(&entities.AAAARecord{Name: "www", Value: "2001:db8::1", TTL: 3600})
-	service.zones["example.com."] = zone
-	handlers, writer := newTestHandlers(service)
-
-	req := createRequestWithVars(http.MethodDelete, "/api/v1/dns/zones/example.com./records/AAAA/www", nil, map[string]string{
-		"zone": "example.com.",
-		"type": "AAAA",
-		"name": "www",
-	})
-	rec := httptest.NewRecorder()
-
-	handlers.DeleteRecord(rec, req)
-
-	assert.Equal(t, http.StatusOK, writer.lastStatus)
-}
-
-func TestDeleteRecord_CNAMERecord_Success(t *testing.T) {
-	service := newMockDNSService()
-	zone := createTestZone("example.com.")
-	zone.AddCNAMERecord(&entities.CNAMERecord{Name: "alias", Value: "www.example.com.", TTL: 3600})
-	service.zones["example.com."] = zone
-	handlers, writer := newTestHandlers(service)
-
-	req := createRequestWithVars(http.MethodDelete, "/api/v1/dns/zones/example.com./records/CNAME/alias", nil, map[string]string{
-		"zone": "example.com.",
-		"type": "CNAME",
-		"name": "alias",
-	})
-	rec := httptest.NewRecorder()
-
-	handlers.DeleteRecord(rec, req)
-
-	assert.Equal(t, http.StatusOK, writer.lastStatus)
-}
-
-func TestDeleteRecord_MXRecord_Success(t *testing.T) {
-	service := newMockDNSService()
-	zone := createTestZone("example.com.")
-	zone.AddMXRecord(&entities.MXRecord{Name: "@", Value: "mail.example.com.", Priority: 10, TTL: 3600})
-	service.zones["example.com."] = zone
-	handlers, writer := newTestHandlers(service)
-
-	req := createRequestWithVars(http.MethodDelete, "/api/v1/dns/zones/example.com./records/MX/@", nil, map[string]string{
-		"zone": "example.com.",
-		"type": "MX",
-		"name": "@",
-	})
-	rec := httptest.NewRecorder()
-
-	handlers.DeleteRecord(rec, req)
-
-	assert.Equal(t, http.StatusOK, writer.lastStatus)
-}
-
-func TestDeleteRecord_NSRecord_Success(t *testing.T) {
-	service := newMockDNSService()
-	zone := createTestZone("example.com.")
-	zone.AddNSRecord(&entities.NSRecord{Name: "@", Value: "ns1.example.com.", TTL: 3600})
-	service.zones["example.com."] = zone
-	handlers, writer := newTestHandlers(service)
-
-	req := createRequestWithVars(http.MethodDelete, "/api/v1/dns/zones/example.com./records/NS/@", nil, map[string]string{
-		"zone": "example.com.",
-		"type": "NS",
-		"name": "@",
-	})
-	rec := httptest.NewRecorder()
-
-	handlers.DeleteRecord(rec, req)
-
-	assert.Equal(t, http.StatusOK, writer.lastStatus)
-}
-
-func TestDeleteRecord_TXTRecord_Success(t *testing.T) {
-	service := newMockDNSService()
-	zone := createTestZone("example.com.")
-	zone.AddTXTRecord(&entities.TXTRecord{Name: "_dmarc", Value: "v=DMARC1", TTL: 3600})
-	service.zones["example.com."] = zone
-	handlers, writer := newTestHandlers(service)
-
-	req := createRequestWithVars(http.MethodDelete, "/api/v1/dns/zones/example.com./records/TXT/_dmarc", nil, map[string]string{
-		"zone": "example.com.",
-		"type": "TXT",
-		"name": "_dmarc",
-	})
-	rec := httptest.NewRecorder()
-
-	handlers.DeleteRecord(rec, req)
-
-	assert.Equal(t, http.StatusOK, writer.lastStatus)
-}
-
-func TestDeleteRecord_SRVRecord_Success(t *testing.T) {
-	service := newMockDNSService()
-	zone := createTestZone("example.com.")
-	zone.AddSRVRecord(&entities.SRVRecord{Name: "_sip._tcp", Target: "sip.example.com.", Port: 5060, TTL: 3600})
-	service.zones["example.com."] = zone
-	handlers, writer := newTestHandlers(service)
-
-	req := createRequestWithVars(http.MethodDelete, "/api/v1/dns/zones/example.com./records/SRV/_sip._tcp", nil, map[string]string{
-		"zone": "example.com.",
-		"type": "SRV",
-		"name": "_sip._tcp",
-	})
-	rec := httptest.NewRecorder()
-
-	handlers.DeleteRecord(rec, req)
-
-	assert.Equal(t, http.StatusOK, writer.lastStatus)
-}
-
-func TestDeleteRecord_CAARecord_Success(t *testing.T) {
-	service := newMockDNSService()
-	zone := createTestZone("example.com.")
-	zone.AddCAARecord(&entities.CAARecord{Name: "@", Flags: 0, Tag: "issue", Value: "letsencrypt.org", TTL: 3600})
-	service.zones["example.com."] = zone
-	handlers, writer := newTestHandlers(service)
-
-	req := createRequestWithVars(http.MethodDelete, "/api/v1/dns/zones/example.com./records/CAA/@", nil, map[string]string{
-		"zone": "example.com.",
-		"type": "CAA",
-		"name": "@",
-	})
-	rec := httptest.NewRecorder()
-
-	handlers.DeleteRecord(rec, req)
-
-	assert.Equal(t, http.StatusOK, writer.lastStatus)
-}
-
-func TestDeleteRecord_TLSARecord_Success(t *testing.T) {
-	service := newMockDNSService()
-	zone := createTestZone("example.com.")
-	zone.AddTLSARecord(&entities.TLSARecord{Name: "_443._tcp.www", Usage: 3, Selector: 1, MatchingType: 1, Data: "abc123", TTL: 3600})
-	service.zones["example.com."] = zone
-	handlers, writer := newTestHandlers(service)
-
-	req := createRequestWithVars(http.MethodDelete, "/api/v1/dns/zones/example.com./records/TLSA/_443._tcp.www", nil, map[string]string{
-		"zone": "example.com.",
-		"type": "TLSA",
-		"name": "_443._tcp.www",
-	})
-	rec := httptest.NewRecorder()
-
-	handlers.DeleteRecord(rec, req)
-
-	assert.Equal(t, http.StatusOK, writer.lastStatus)
-}
-
-func TestDeleteRecord_MissingZoneName(t *testing.T) {
-	service := newMockDNSService()
-	handlers, writer := newTestHandlers(service)
-
-	req := createRequestWithVars(http.MethodDelete, "/api/v1/dns/zones//records/A/www", nil, map[string]string{
-		"type": "A",
-		"name": "www",
-	})
-	rec := httptest.NewRecorder()
-
-	handlers.DeleteRecord(rec, req)
-
-	assert.Equal(t, http.StatusBadRequest, writer.lastStatus)
-}
-
-func TestDeleteRecord_MissingRecordType(t *testing.T) {
-	service := newMockDNSService()
-	handlers, writer := newTestHandlers(service)
-
-	req := createRequestWithVars(http.MethodDelete, "/api/v1/dns/zones/example.com./records//www", nil, map[string]string{
-		"zone": "example.com.",
-		"name": "www",
-	})
-	rec := httptest.NewRecorder()
-
-	handlers.DeleteRecord(rec, req)
-
-	assert.Equal(t, http.StatusBadRequest, writer.lastStatus)
-}
-
-func TestDeleteRecord_MissingRecordName(t *testing.T) {
-	service := newMockDNSService()
-	handlers, writer := newTestHandlers(service)
-
-	req := createRequestWithVars(http.MethodDelete, "/api/v1/dns/zones/example.com./records/A/", nil, map[string]string{
-		"zone": "example.com.",
-		"type": "A",
-	})
-	rec := httptest.NewRecorder()
-
-	handlers.DeleteRecord(rec, req)
-
-	assert.Equal(t, http.StatusBadRequest, writer.lastStatus)
-}
-
-func TestDeleteRecord_InvalidRecordType(t *testing.T) {
-	service := newMockDNSService()
-	service.zones["example.com."] = createTestZone("example.com.")
-	handlers, writer := newTestHandlers(service)
-
-	req := createRequestWithVars(http.MethodDelete, "/api/v1/dns/zones/example.com./records/INVALID/www", nil, map[string]string{
-		"zone": "example.com.",
-		"type": "INVALID",
-		"name": "www",
-	})
-	rec := httptest.NewRecorder()
-
-	handlers.DeleteRecord(rec, req)
-
-	assert.Equal(t, http.StatusBadRequest, writer.lastStatus)
-}
-
-func TestDeleteRecord_ZoneNotFound(t *testing.T) {
-	service := newMockDNSService()
-	handlers, writer := newTestHandlers(service)
-
-	req := createRequestWithVars(http.MethodDelete, "/api/v1/dns/zones/nonexistent.com./records/A/www", nil, map[string]string{
-		"zone": "nonexistent.com.",
-		"type": "A",
-		"name": "www",
-	})
-	rec := httptest.NewRecorder()
-
-	handlers.DeleteRecord(rec, req)
-
-	assert.Equal(t, http.StatusNotFound, writer.lastStatus)
-}
-
-func TestDeleteRecord_SaveError(t *testing.T) {
-	service := newMockDNSService()
-	zone := createTestZone("example.com.")
-	zone.AddARecord(&entities.ARecord{Name: "www", Value: "192.168.1.1", TTL: 3600})
-	service.zones["example.com."] = zone
-	service.saveErr = errors.New("database error")
-	handlers, writer := newTestHandlers(service)
-
-	req := createRequestWithVars(http.MethodDelete, "/api/v1/dns/zones/example.com./records/A/www", nil, map[string]string{
-		"zone": "example.com.",
-		"type": "A",
-		"name": "www",
-	})
-	rec := httptest.NewRecorder()
-
-	handlers.DeleteRecord(rec, req)
-
-	assert.Equal(t, http.StatusInternalServerError, writer.lastStatus)
-}
-
-// Test ListRecords
-
-func TestListRecords_Success(t *testing.T) {
-	service := newMockDNSService()
-	zone := createTestZone("example.com.")
-	zone.AddARecord(&entities.ARecord{Name: "www", Value: "192.168.1.1", TTL: 3600})
-	zone.AddAAAARecord(&entities.AAAARecord{Name: "www", Value: "2001:db8::1", TTL: 3600})
-	zone.AddMXRecord(&entities.MXRecord{Name: "@", Value: "mail.example.com.", Priority: 10, TTL: 3600})
-	service.zones["example.com."] = zone
-	handlers, writer := newTestHandlers(service)
-
-	req := createRequestWithVars(http.MethodGet, "/api/v1/dns/zones/example.com./records", nil, map[string]string{"zone": "example.com."})
-	rec := httptest.NewRecorder()
-
-	handlers.ListRecords(rec, req)
-
-	assert.Equal(t, http.StatusOK, writer.lastStatus)
-	payload, ok := writer.lastPayload.(ListRecordsResponse)
-	require.True(t, ok)
-	assert.Len(t, payload.Records, 3)
-}
-
-func TestListRecords_FilterByType(t *testing.T) {
-	service := newMockDNSService()
-	zone := createTestZone("example.com.")
-	zone.AddARecord(&entities.ARecord{Name: "www", Value: "192.168.1.1", TTL: 3600})
-	zone.AddAAAARecord(&entities.AAAARecord{Name: "www", Value: "2001:db8::1", TTL: 3600})
-	service.zones["example.com."] = zone
-	handlers, writer := newTestHandlers(service)
-
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/dns/zones/example.com./records?type=A", nil)
-	req.Header.Set("Accept", "application/json")
-	req = mux.SetURLVars(req, map[string]string{"zone": "example.com."})
-	rec := httptest.NewRecorder()
-
-	handlers.ListRecords(rec, req)
-
-	assert.Equal(t, http.StatusOK, writer.lastStatus)
-	payload, ok := writer.lastPayload.(ListRecordsResponse)
-	require.True(t, ok)
-	assert.Len(t, payload.Records, 1)
-	assert.Equal(t, "A", payload.Records[0].Type)
-}
-
-func TestListRecords_AllRecordTypes(t *testing.T) {
-	service := newMockDNSService()
-	zone := createTestZone("example.com.")
-	zone.AddARecord(&entities.ARecord{Name: "www", Value: "192.168.1.1", TTL: 3600})
-	zone.AddAAAARecord(&entities.AAAARecord{Name: "www", Value: "2001:db8::1", TTL: 3600})
-	zone.AddCNAMERecord(&entities.CNAMERecord{Name: "alias", Value: "www.example.com.", TTL: 3600})
-	zone.AddMXRecord(&entities.MXRecord{Name: "@", Value: "mail.example.com.", Priority: 10, TTL: 3600})
-	zone.AddNSRecord(&entities.NSRecord{Name: "@", Value: "ns1.example.com.", TTL: 3600})
-	zone.AddTXTRecord(&entities.TXTRecord{Name: "_dmarc", Value: "v=DMARC1", TTL: 3600})
-	zone.AddSRVRecord(&entities.SRVRecord{Name: "_sip._tcp", Target: "sip.example.com.", Port: 5060, TTL: 3600})
-	zone.AddCAARecord(&entities.CAARecord{Name: "@", Flags: 0, Tag: "issue", Value: "letsencrypt.org", TTL: 3600})
-	zone.AddTLSARecord(&entities.TLSARecord{Name: "_443._tcp.www", Usage: 3, Selector: 1, MatchingType: 1, Data: "abc", TTL: 3600})
-	service.zones["example.com."] = zone
-	handlers, writer := newTestHandlers(service)
-
-	req := createRequestWithVars(http.MethodGet, "/api/v1/dns/zones/example.com./records", nil, map[string]string{"zone": "example.com."})
-	rec := httptest.NewRecorder()
-
-	handlers.ListRecords(rec, req)
-
-	assert.Equal(t, http.StatusOK, writer.lastStatus)
-	payload, ok := writer.lastPayload.(ListRecordsResponse)
-	require.True(t, ok)
-	assert.Len(t, payload.Records, 9)
-}
-
-func TestListRecords_MissingZoneName(t *testing.T) {
-	service := newMockDNSService()
-	handlers, writer := newTestHandlers(service)
-
-	req := createRequestWithVars(http.MethodGet, "/api/v1/dns/zones//records", nil, map[string]string{})
-	rec := httptest.NewRecorder()
-
-	handlers.ListRecords(rec, req)
-
-	assert.Equal(t, http.StatusBadRequest, writer.lastStatus)
-}
-
-func TestListRecords_ZoneNotFound(t *testing.T) {
-	service := newMockDNSService()
-	handlers, writer := newTestHandlers(service)
-
-	req := createRequestWithVars(http.MethodGet, "/api/v1/dns/zones/nonexistent.com./records", nil, map[string]string{"zone": "nonexistent.com."})
-	rec := httptest.NewRecorder()
-
-	handlers.ListRecords(rec, req)
-
-	assert.Equal(t, http.StatusNotFound, writer.lastStatus)
-}
-
-// recordLookupZone holds a name in two types so a lookup that ignores the
-// type, or the name, answers the wrong record.
-func recordLookupZone() *entities.Zone {
-	zone := createTestZone("example.com.")
-	zone.AddARecord(&entities.ARecord{Name: "api", Value: "192.168.1.9", TTL: 300})
-	zone.AddARecord(&entities.ARecord{Name: "www", Value: "192.168.1.1", TTL: 3600})
-	zone.AddAAAARecord(&entities.AAAARecord{Name: "www", Value: "2001:db8::1", TTL: 3600})
-	zone.AddMXRecord(&entities.MXRecord{Name: "@", Value: "mail.example.com.", Priority: 10, TTL: 3600})
-	return zone
-}
-
-func TestGetRecord_Success(t *testing.T) {
-	service := newMockDNSService()
-	service.zones["example.com."] = recordLookupZone()
-	handlers, writer := newTestHandlers(service)
-
 	tests := []struct {
-		name       string
-		recordType string
-		recordName string
-		want       RecordResponse
+		name   string
+		method string
+		target string
+		body   string
+		want   proto.Message
+		resp   proto.Message
+		reply  proto.Message
 	}{
-		{"A", "A", "www", RecordResponse{Type: "A", A: &AResponse{Name: "www", Value: "192.168.1.1", TTL: 3600}}},
-		{"lowercase type", "aaaa", "www", RecordResponse{Type: "AAAA", AAAA: &AAAAResponse{Name: "www", Value: "2001:db8::1", TTL: 3600}}},
-		{"MX", "MX", "@", RecordResponse{Type: "MX", MX: &MXResponse{Name: "@", Value: "mail.example.com.", Priority: 10, TTL: 3600}}},
+		{
+			name: "CreateZone", method: http.MethodPost, target: "/api/v1/dns/zones",
+			body: `{"name":"example.com.","ttl":3600,"internal":true,"nsRecords":[{"name":"@","value":"ns1.example.com.","ttl":3600}]}`,
+			want: &platformv1.CreateZoneRequest{Name: "example.com.", Ttl: 3600, Internal: true,
+				NsRecords: []*platformv1.NSRecord{{Name: "@", Value: "ns1.example.com.", Ttl: 3600}}},
+			resp: &platformv1.CreateZoneResponse{Status: ok, Zone: testZone()}, reply: &platformv1.CreateZoneResponse{},
+		},
+		{
+			name: "ListZones", method: http.MethodGet, target: "/api/v1/dns/zones?internal=true&page=2&page_size=10",
+			want: &platformv1.ListZonesRequest{InternalOnly: true, Pagination: &platformv1.PaginationRequest{Page: 2, PageSize: 10}},
+			resp: &platformv1.ListZonesResponse{Zones: []*platformv1.Zone{testZone()},
+				Pagination: &platformv1.PaginationResponse{Page: 2, PageSize: 10, TotalPages: 2, TotalItems: 11}},
+			reply: &platformv1.ListZonesResponse{},
+		},
+		{
+			name: "ListZonesPublicFromTheBody", method: http.MethodGet, target: "/api/v1/dns/zones?public=true",
+			body:  `{"pagination":{"page":1,"pageSize":5,"sortBy":"name"}}`,
+			want:  &platformv1.ListZonesRequest{PublicOnly: true, Pagination: &platformv1.PaginationRequest{Page: 1, PageSize: 5, SortBy: "name"}},
+			resp:  &platformv1.ListZonesResponse{},
+			reply: &platformv1.ListZonesResponse{},
+		},
+		{
+			name: "GetZone", method: http.MethodGet, target: "/api/v1/dns/zones/example.com.",
+			want: &platformv1.GetZoneRequest{Name: "example.com."},
+			resp: &platformv1.GetZoneResponse{Zone: testZone()}, reply: &platformv1.GetZoneResponse{},
+		},
+		{
+			name: "UpdateZone", method: http.MethodPut, target: "/api/v1/dns/zones/example.com.",
+			body: `{"name":"ignored.com.","ttl":7200,"description":"lab"}`,
+			want: &platformv1.UpdateZoneRequest{Name: "example.com.", Ttl: 7200, Description: "lab"},
+			resp: &platformv1.UpdateZoneResponse{Status: ok, Zone: testZone()}, reply: &platformv1.UpdateZoneResponse{},
+		},
+		{
+			name: "DeleteZone", method: http.MethodDelete, target: "/api/v1/dns/zones/example.com.",
+			want: &platformv1.DeleteZoneRequest{Name: "example.com."},
+			resp: &platformv1.DeleteZoneResponse{Status: ok}, reply: &platformv1.DeleteZoneResponse{},
+		},
+		{
+			name: "AddRecord", method: http.MethodPost, target: "/api/v1/dns/zones/example.com./records",
+			body: `{"record":{"type":"RECORD_TYPE_A","a":{"name":"www","value":"192.0.2.1","ttl":300}}}`,
+			want: &platformv1.AddRecordRequest{ZoneName: "example.com.", Record: aRecord},
+			resp: &platformv1.AddRecordResponse{Status: ok, Zone: testZone()}, reply: &platformv1.AddRecordResponse{},
+		},
+		{
+			name: "UpdateRecord", method: http.MethodPut, target: "/api/v1/dns/zones/example.com./records",
+			body: `{"oldRecord":{"type":"RECORD_TYPE_A","a":{"name":"www","value":"192.0.2.1","ttl":300}},` +
+				`"newRecord":{"type":"RECORD_TYPE_A","a":{"name":"www","value":"192.0.2.2","ttl":300}}}`,
+			want: &platformv1.UpdateRecordRequest{ZoneName: "example.com.", OldRecord: aRecord, NewRecord: newRecord},
+			resp: &platformv1.UpdateRecordResponse{Status: ok, Zone: testZone()}, reply: &platformv1.UpdateRecordResponse{},
+		},
+		{
+			name: "ListRecords", method: http.MethodGet, target: "/api/v1/dns/zones/example.com./records?type=a&page=1&page_size=50",
+			want: &platformv1.ListRecordsRequest{ZoneName: "example.com.", Type: platformv1.RecordType_RECORD_TYPE_A,
+				Pagination: &platformv1.PaginationRequest{Page: 1, PageSize: 50}},
+			resp: &platformv1.ListRecordsResponse{Records: []*platformv1.Record{aRecord}}, reply: &platformv1.ListRecordsResponse{},
+		},
+		{
+			name: "ListRecordsTypeFromTheBody", method: http.MethodGet, target: "/api/v1/dns/zones/example.com./records",
+			body:  `{"type":"RECORD_TYPE_MX"}`,
+			want:  &platformv1.ListRecordsRequest{ZoneName: "example.com.", Type: platformv1.RecordType_RECORD_TYPE_MX},
+			resp:  &platformv1.ListRecordsResponse{},
+			reply: &platformv1.ListRecordsResponse{},
+		},
+		{
+			name: "DeleteRecord", method: http.MethodDelete, target: "/api/v1/dns/zones/example.com./records/A/www",
+			want: &platformv1.DeleteRecordRequest{ZoneName: "example.com.", Type: platformv1.RecordType_RECORD_TYPE_A, Name: "www"},
+			resp: &platformv1.DeleteRecordResponse{Status: ok, Zone: testZone()}, reply: &platformv1.DeleteRecordResponse{},
+		},
+		{
+			name: "Resolve", method: http.MethodGet, target: "/api/v1/dns/resolve?fqdn=www.example.com.&type=RECORD_TYPE_AAAA",
+			want: &platformv1.ResolveRequest{Fqdn: "www.example.com.", Type: platformv1.RecordType_RECORD_TYPE_AAAA},
+			resp: &platformv1.ResolveResponse{Records: []*platformv1.Record{aRecord}, Authoritative: true}, reply: &platformv1.ResolveResponse{},
+		},
+		{
+			name: "SignZone", method: http.MethodPost, target: "/api/v1/dns/zones/example.com./sign",
+			want: &platformv1.SignZoneRequest{ZoneName: "example.com."},
+			resp: &platformv1.SignZoneResponse{Status: ok, Zone: testZone()}, reply: &platformv1.SignZoneResponse{},
+		},
+		{
+			name: "GetDNSSECStatus", method: http.MethodGet, target: "/api/v1/dns/zones/example.com./dnssec",
+			want:  &platformv1.GetDNSSECStatusRequest{ZoneName: "example.com."},
+			resp:  &platformv1.GetDNSSECStatusResponse{Status: &platformv1.DNSSECStatus{Enabled: true, ZoneSigned: true, Algorithm: "ECDSAP256SHA256"}},
+			reply: &platformv1.GetDNSSECStatusResponse{},
+		},
+		{
+			name: "Register", method: http.MethodPost, target: "/api/v1/dns/register",
+			body: `{"fqdn":"host.example.com.","ip":"192.0.2.9"}`,
+			want: &platformv1.RegisterRequest{Fqdn: "host.example.com.", Ip: "192.0.2.9"},
+			resp: &platformv1.RegisterResponse{Status: ok, Zone: testZone()}, reply: &platformv1.RegisterResponse{},
+		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			req := createRequestWithVars(http.MethodGet, "/api/v1/dns/zones/example.com./records/"+tc.recordType+"/"+tc.recordName, nil, map[string]string{
-				"zone": "example.com.",
-				"type": tc.recordType,
-				"name": tc.recordName,
-			})
+			server := &scriptedDNSServer{resp: tc.resp}
+			rec := serve(server, tc.method, tc.target, tc.body)
 
-			handlers.GetRecord(httptest.NewRecorder(), req)
-
-			require.Equal(t, http.StatusOK, writer.lastStatus)
-			assert.Equal(t, tc.want, writer.lastPayload)
+			require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+			assert.True(t, proto.Equal(tc.want, server.got), "request = %v, want %v", server.got, tc.want)
+			payload(t, rec, tc.reply)
+			assert.True(t, proto.Equal(tc.resp, tc.reply), "reply = %v, want %v", tc.reply, tc.resp)
 		})
 	}
 }
 
-func TestGetRecord_NotFound(t *testing.T) {
-	service := newMockDNSService()
-	service.zones["example.com."] = recordLookupZone()
-	handlers, writer := newTestHandlers(service)
+// TestZoneReplyIsTheProtoJSONShape: the payload carries the proto JSON
+// names (aRecords, RECORD_TYPE_ enums) and emits unpopulated fields, not the
+// retired REST shape.
+func TestZoneReplyIsTheProtoJSONShape(t *testing.T) {
+	server := &scriptedDNSServer{resp: &platformv1.GetZoneResponse{Zone: testZone()}}
+	rec := serve(server, http.MethodGet, "/api/v1/dns/zones/example.com.", "")
 
+	require.Equal(t, http.StatusOK, rec.Code)
+	var envelope struct {
+		Payload struct {
+			Zone map[string]json.RawMessage `json:"zone"`
+		} `json:"payload"`
+	}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &envelope))
+	zone := envelope.Payload.Zone
+	assert.Contains(t, zone, "internal", "unpopulated fields are emitted")
+	assert.NotContains(t, zone, "createdAt")
+	var records map[string]json.RawMessage
+	require.NoError(t, json.Unmarshal(zone["records"], &records))
+	assert.Contains(t, records, "aRecords")
+	assert.NotContains(t, records, "a")
+}
+
+// TestServiceErrorsMapToHTTP: a gRPC status from the service is the HTTP
+// status the other proto-shaped routes answer.
+func TestServiceErrorsMapToHTTP(t *testing.T) {
 	tests := []struct {
-		name    string
-		vars    map[string]string
-		wantErr error
+		name string
+		err  error
+		want int
 	}{
-		{"unknown zone", map[string]string{"zone": "nonexistent.com.", "type": "A", "name": "www"}, dns.ErrZoneNotFound},
-		{"unknown name", map[string]string{"zone": "example.com.", "type": "A", "name": "ftp"}, ErrRecordNotFound{Type: "A", Name: "ftp"}},
-		{"name held only in another type", map[string]string{"zone": "example.com.", "type": "AAAA", "name": "api"}, ErrRecordNotFound{Type: "AAAA", Name: "api"}},
+		{"InvalidArgument", status.Error(codes.InvalidArgument, "zone name is required"), http.StatusBadRequest},
+		{"NotFound", status.Error(codes.NotFound, "zone not found"), http.StatusNotFound},
+		{"AlreadyExists", status.Error(codes.AlreadyExists, "zone exists"), http.StatusConflict},
+		{"Internal", status.Error(codes.Internal, "save failed"), http.StatusInternalServerError},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			req := createRequestWithVars(http.MethodGet, "/api/v1/dns/zones/x/records/y/z", nil, tc.vars)
-
-			handlers.GetRecord(httptest.NewRecorder(), req)
-
-			assert.Equal(t, http.StatusNotFound, writer.lastStatus)
-			assert.Equal(t, tc.wantErr, writer.lastError)
+			rec := serve(&scriptedDNSServer{err: tc.err}, http.MethodGet, "/api/v1/dns/zones/example.com.", "")
+			assert.Equal(t, tc.want, rec.Code, rec.Body.String())
 		})
 	}
 }
 
-func TestGetRecord_BadPath(t *testing.T) {
-	service := newMockDNSService()
-	service.zones["example.com."] = recordLookupZone()
-	handlers, writer := newTestHandlers(service)
+// TestNoServerIsServiceUnavailable: every route answers 503 when the DNS
+// service is not wired.
+// everyRoute is one request to each DNS route.
+var everyRoute = []struct{ method, target string }{
+	{http.MethodPost, "/api/v1/dns/zones"},
+	{http.MethodGet, "/api/v1/dns/zones"},
+	{http.MethodGet, "/api/v1/dns/zones/example.com."},
+	{http.MethodPut, "/api/v1/dns/zones/example.com."},
+	{http.MethodDelete, "/api/v1/dns/zones/example.com."},
+	{http.MethodPost, "/api/v1/dns/zones/example.com./records"},
+	{http.MethodPut, "/api/v1/dns/zones/example.com./records"},
+	{http.MethodGet, "/api/v1/dns/zones/example.com./records"},
+	{http.MethodGet, "/api/v1/dns/zones/example.com./records/A/www"},
+	{http.MethodDelete, "/api/v1/dns/zones/example.com./records/A/www"},
+	{http.MethodGet, "/api/v1/dns/resolve?fqdn=www.example.com."},
+	{http.MethodPost, "/api/v1/dns/zones/example.com./sign"},
+	{http.MethodGet, "/api/v1/dns/zones/example.com./dnssec"},
+	{http.MethodPost, "/api/v1/dns/register"},
+}
 
+func TestNoServerIsServiceUnavailable(t *testing.T) {
+	for _, route := range everyRoute {
+		t.Run(route.method+" "+route.target, func(t *testing.T) {
+			rec := serve(nil, route.method, route.target, "")
+			assert.Equal(t, http.StatusServiceUnavailable, rec.Code, rec.Body.String())
+		})
+	}
+}
+
+// TestEveryRouteWritesTheServiceError: each route answers a service error
+// with its status, not a payload.
+func TestEveryRouteWritesTheServiceError(t *testing.T) {
+	for _, route := range everyRoute {
+		t.Run(route.method+" "+route.target, func(t *testing.T) {
+			server := &scriptedDNSServer{err: status.Error(codes.NotFound, "zone not found")}
+			rec := serve(server, route.method, route.target, "")
+			assert.Equal(t, http.StatusNotFound, rec.Code, rec.Body.String())
+			assert.NotNil(t, server.got, "the route did not reach the service")
+		})
+	}
+}
+
+// TestBadInputIsBadRequest: a body, query or path value the route cannot
+// decode is a 400 and never reaches the service.
+func TestBadInputIsBadRequest(t *testing.T) {
 	tests := []struct {
-		name    string
-		vars    map[string]string
-		wantErr error
+		name, method, target, body string
 	}{
-		{"missing zone", map[string]string{"type": "A", "name": "www"}, ErrMissingZoneName{}},
-		{"missing type", map[string]string{"zone": "example.com.", "name": "www"}, ErrMissingRecordType{}},
-		{"unknown type", map[string]string{"zone": "example.com.", "type": "BOGUS", "name": "www"}, ErrInvalidRecordType{Type: "BOGUS"}},
-		{"missing name", map[string]string{"zone": "example.com.", "type": "A"}, ErrMissingRecordName{}},
+		{"BodyIsNotJSON", http.MethodPost, "/api/v1/dns/zones", `{"name":`},
+		{"InternalIsNotABool", http.MethodGet, "/api/v1/dns/zones?internal=maybe", ""},
+		{"PublicIsNotABool", http.MethodGet, "/api/v1/dns/zones?public=maybe", ""},
+		{"PageIsNotANumber", http.MethodGet, "/api/v1/dns/zones?page=one", ""},
+		{"PageSizeIsNotANumber", http.MethodGet, "/api/v1/dns/zones/example.com./records?page_size=-1", ""},
+		{"ListTypeIsUnknown", http.MethodGet, "/api/v1/dns/zones/example.com./records?type=BOGUS", ""},
+		{"DeleteTypeIsUnknown", http.MethodDelete, "/api/v1/dns/zones/example.com./records/BOGUS/www", ""},
+		{"GetTypeIsUnknown", http.MethodGet, "/api/v1/dns/zones/example.com./records/BOGUS/www", ""},
+		{"ResolveTypeIsUnknown", http.MethodGet, "/api/v1/dns/resolve?fqdn=www.example.com.&type=BOGUS", ""},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			req := createRequestWithVars(http.MethodGet, "/api/v1/dns/zones/x/records/y/z", nil, tc.vars)
-
-			handlers.GetRecord(httptest.NewRecorder(), req)
-
-			assert.Equal(t, http.StatusBadRequest, writer.lastStatus)
-			assert.Equal(t, tc.wantErr, writer.lastError)
+			server := &scriptedDNSServer{}
+			rec := serve(server, tc.method, tc.target, tc.body)
+			assert.Equal(t, http.StatusBadRequest, rec.Code, rec.Body.String())
+			assert.Nil(t, server.got, "the service was called")
 		})
 	}
 }
 
-func TestResolve_ManagedZone(t *testing.T) {
-	service := newMockDNSService()
-	service.zones["example.com."] = recordLookupZone()
-	handlers, writer := newTestHandlers(service)
-
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/dns/resolve?fqdn=www.example.com.&type=aaaa", nil)
-
-	handlers.Resolve(httptest.NewRecorder(), req)
-
-	require.Equal(t, http.StatusOK, writer.lastStatus)
-	assert.Equal(t, ResolveResponse{
-		Records:       []RecordResponse{{Type: "AAAA", AAAA: &AAAAResponse{Name: "www", Value: "2001:db8::1", TTL: 3600}}},
-		Authoritative: true,
-	}, writer.lastPayload)
-}
-
-// TestResolve_AnswersOnlyTheQueriedOwner: the REST resolve answers through
-// dns.ResolveName — the longest managed zone suffix, the queried owner's
-// records only, filtered by type (docs/dns/resolution.md, "API resolve").
-func TestResolve_AnswersOnlyTheQueriedOwner(t *testing.T) {
-	cases := []struct {
-		name          string
-		query         string
-		authoritative bool
-		want          []string
-	}{
-		{"OwnerInsideZone", "fqdn=www.example.com.", true, []string{"A 192.168.1.1", "AAAA 2001:db8::1"}},
-		{"ApexOnlyApexRecords", "fqdn=example.com.", true, []string{"MX mail.example.com."}},
-		{"TypeFilter", "fqdn=www.example.com.&type=A", true, []string{"A 192.168.1.1"}},
-		{"UnknownOwnerInsideZone", "fqdn=nope.example.com.&type=A", true, []string{}},
-		{"OutsideEveryZone", "fqdn=www.example.org.&type=A", false, []string{}},
-		{"CaseAndNoTrailingDot", "fqdn=API.Example.COM&type=a", true, []string{"A 192.168.1.9"}},
-		{"NestedZoneLongestMatch", "fqdn=host.sub.example.com.&type=A", true, []string{"A 10.0.1.2"}},
+// TestGetRecord: the single-record route answers the Record of that type and
+// name from ListRecords.
+func TestGetRecord(t *testing.T) {
+	www := &platformv1.Record{
+		Type:   platformv1.RecordType_RECORD_TYPE_A,
+		Record: &platformv1.Record_A{A: &platformv1.ARecord{Name: "www", Value: "192.0.2.1", Ttl: 300}},
 	}
-
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			service := newMockDNSService()
-			service.zones["example.com."] = recordLookupZone()
-			service.zones["example.com."].AddARecord(&entities.ARecord{Name: "host.sub", Value: "10.0.0.99", TTL: 300})
-			nested := createTestZone("sub.example.com.")
-			nested.AddARecord(&entities.ARecord{Name: "host", Value: "10.0.1.2", TTL: 300})
-			service.zones["sub.example.com."] = nested
-			handlers, writer := newTestHandlers(service)
-
-			handlers.Resolve(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/api/v1/dns/resolve?"+tc.query, nil))
-
-			require.Equal(t, http.StatusOK, writer.lastStatus)
-			resp, ok := writer.lastPayload.(ResolveResponse)
-			require.True(t, ok)
-			require.NotNil(t, resp.Records, "records must encode as [], never null")
-			assert.Equal(t, tc.authoritative, resp.Authoritative)
-			assert.Equal(t, tc.want, restRecordValues(resp.Records))
-		})
+	api := &platformv1.Record{
+		Type:   platformv1.RecordType_RECORD_TYPE_A,
+		Record: &platformv1.Record_A{A: &platformv1.ARecord{Name: "api", Value: "192.0.2.2", Ttl: 300}},
 	}
+	server := &scriptedDNSServer{resp: &platformv1.ListRecordsResponse{Records: []*platformv1.Record{api, www}}}
+	rec := serve(server, http.MethodGet, "/api/v1/dns/zones/example.com./records/a/www", "")
+
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	assert.True(t, proto.Equal(&platformv1.ListRecordsRequest{ZoneName: "example.com.", Type: platformv1.RecordType_RECORD_TYPE_A}, server.got))
+	got := &platformv1.Record{}
+	payload(t, rec, got)
+	assert.True(t, proto.Equal(www, got), "record = %v", got)
 }
 
-// TestResolve_UnservedRecordType: a type resolution does not answer is a 400
-// naming the type, not an empty answer.
-func TestResolve_UnservedRecordType(t *testing.T) {
-	service := newMockDNSService()
-	service.zones["example.com."] = recordLookupZone()
-	handlers, writer := newTestHandlers(service)
+func TestGetRecordNotInTheZoneIsNotFound(t *testing.T) {
+	server := &scriptedDNSServer{resp: &platformv1.ListRecordsResponse{}}
+	rec := serve(server, http.MethodGet, "/api/v1/dns/zones/example.com./records/A/missing", "")
 
-	handlers.Resolve(httptest.NewRecorder(),
-		httptest.NewRequest(http.MethodGet, "/api/v1/dns/resolve?fqdn=example.com.&type=SOA", nil))
-
-	assert.Equal(t, http.StatusBadRequest, writer.lastStatus)
-	assert.Equal(t, ErrInvalidRecordType{Type: "SOA"}, writer.lastError)
+	assert.Equal(t, http.StatusNotFound, rec.Code)
+	assert.Contains(t, rec.Body.String(), "record not found: A missing")
 }
 
-// restRecordValues flattens resolved records to sorted "TYPE value" lines.
-func restRecordValues(records []RecordResponse) []string {
-	values := []string{}
-	for _, r := range records {
-		switch {
-		case r.A != nil:
-			values = append(values, "A "+r.A.Value)
-		case r.AAAA != nil:
-			values = append(values, "AAAA "+r.AAAA.Value)
-		case r.MX != nil:
-			values = append(values, "MX "+r.MX.Value)
-		default:
-			values = append(values, r.Type)
-		}
-	}
-	sort.Strings(values)
-	return values
+func TestGetRecordOfAnUnknownZoneIsNotFound(t *testing.T) {
+	server := &scriptedDNSServer{err: status.Error(codes.NotFound, "zone not found")}
+	rec := serve(server, http.MethodGet, "/api/v1/dns/zones/missing.com./records/A/www", "")
+
+	assert.Equal(t, http.StatusNotFound, rec.Code)
 }
 
-func TestResolve_UnmanagedNameIsEmptyAndNotAuthoritative(t *testing.T) {
-	handlers, writer := newTestHandlers(newMockDNSService())
-
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/dns/resolve?fqdn=elsewhere.org.", nil)
-
-	handlers.Resolve(httptest.NewRecorder(), req)
-
-	require.Equal(t, http.StatusOK, writer.lastStatus)
-	assert.Equal(t, ResolveResponse{Records: []RecordResponse{}}, writer.lastPayload)
-}
-
-func TestResolve_MissingFQDN(t *testing.T) {
-	handlers, writer := newTestHandlers(newMockDNSService())
-
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/dns/resolve?type=A", nil)
-
-	handlers.Resolve(httptest.NewRecorder(), req)
-
-	assert.Equal(t, http.StatusBadRequest, writer.lastStatus)
-	assert.Equal(t, ErrMissingFQDN{}, writer.lastError)
-}
-
-// Test SignZone
-
-func TestSignZone_Success(t *testing.T) {
-	service := newMockDNSService()
-	service.zones["example.com."] = createTestZone("example.com.")
-	handlers, writer := newTestHandlers(service)
-
-	req := createRequestWithVars(http.MethodPost, "/api/v1/dns/zones/example.com./sign", nil, map[string]string{"zone": "example.com."})
-	rec := httptest.NewRecorder()
-
-	handlers.SignZone(rec, req)
-
-	assert.Equal(t, http.StatusOK, writer.lastStatus)
-	payload, ok := writer.lastPayload.(ZoneResponse)
-	require.True(t, ok)
-	require.NotNil(t, payload.Records)
-	assert.NotEmpty(t, payload.Records.DNSKEY)
-}
-
-func TestSignZone_MissingZoneName(t *testing.T) {
-	service := newMockDNSService()
-	handlers, writer := newTestHandlers(service)
-
-	req := createRequestWithVars(http.MethodPost, "/api/v1/dns/zones//sign", nil, map[string]string{})
-	rec := httptest.NewRecorder()
-
-	handlers.SignZone(rec, req)
-
-	assert.Equal(t, http.StatusBadRequest, writer.lastStatus)
-}
-
-func TestSignZone_ZoneNotFound(t *testing.T) {
-	service := newMockDNSService()
-	handlers, writer := newTestHandlers(service)
-
-	req := createRequestWithVars(http.MethodPost, "/api/v1/dns/zones/nonexistent.com./sign", nil, map[string]string{"zone": "nonexistent.com."})
-	rec := httptest.NewRecorder()
-
-	handlers.SignZone(rec, req)
-
-	assert.Equal(t, http.StatusNotFound, writer.lastStatus)
-}
-
-func TestSignZone_SignError(t *testing.T) {
-	service := newMockDNSService()
-	service.zones["example.com."] = createTestZone("example.com.")
-	service.signErr = errors.New("DNSSEC not enabled")
-	handlers, writer := newTestHandlers(service)
-
-	req := createRequestWithVars(http.MethodPost, "/api/v1/dns/zones/example.com./sign", nil, map[string]string{"zone": "example.com."})
-	rec := httptest.NewRecorder()
-
-	handlers.SignZone(rec, req)
-
-	assert.Equal(t, http.StatusInternalServerError, writer.lastStatus)
-}
-
-func TestSignZone_SaveError(t *testing.T) {
-	service := newMockDNSService()
-	service.zones["example.com."] = createTestZone("example.com.")
-	service.saveErr = errors.New("database error")
-	handlers, writer := newTestHandlers(service)
-
-	req := createRequestWithVars(http.MethodPost, "/api/v1/dns/zones/example.com./sign", nil, map[string]string{"zone": "example.com."})
-	rec := httptest.NewRecorder()
-
-	handlers.SignZone(rec, req)
-
-	assert.Equal(t, http.StatusInternalServerError, writer.lastStatus)
-}
-
-// Test GetDNSSECStatus
-
-func TestGetDNSSECStatus_Success(t *testing.T) {
-	service := newMockDNSService()
-	service.dnssecEnabled = true
-	zone := createTestZone("example.com.")
-	zone.AddDNSKEYRecord(&entities.DNSKEYRecord{
-		Name:      "example.com.",
-		Flags:     257,
-		Protocol:  3,
-		Algorithm: 13,
-		Key:       "test-key",
-		TTL:       3600,
-	})
-	zone.AddDSRecord(&entities.DSRecord{
-		Name:       "example.com.",
-		KeyTag:     12345,
-		Algorithm:  13,
-		DigestType: 2,
-		Digest:     "abcd1234",
-		TTL:        3600,
-	})
-	service.zones["example.com."] = zone
-	handlers, writer := newTestHandlers(service)
-
-	req := createRequestWithVars(http.MethodGet, "/api/v1/dns/zones/example.com./dnssec", nil, map[string]string{"zone": "example.com."})
-	rec := httptest.NewRecorder()
-
-	handlers.GetDNSSECStatus(rec, req)
-
-	assert.Equal(t, http.StatusOK, writer.lastStatus)
-	payload, ok := writer.lastPayload.(DNSSECStatusResponse)
-	require.True(t, ok)
-	assert.True(t, payload.Enabled)
-	assert.True(t, payload.ZoneSigned)
-	assert.Len(t, payload.Keys, 1)
-	assert.Len(t, payload.DSRecords, 1)
-}
-
-func TestGetDNSSECStatus_Disabled(t *testing.T) {
-	service := newMockDNSService()
-	service.dnssecEnabled = false
-	service.zones["example.com."] = createTestZone("example.com.")
-	handlers, writer := newTestHandlers(service)
-
-	req := createRequestWithVars(http.MethodGet, "/api/v1/dns/zones/example.com./dnssec", nil, map[string]string{"zone": "example.com."})
-	rec := httptest.NewRecorder()
-
-	handlers.GetDNSSECStatus(rec, req)
-
-	assert.Equal(t, http.StatusOK, writer.lastStatus)
-	payload, ok := writer.lastPayload.(DNSSECStatusResponse)
-	require.True(t, ok)
-	assert.False(t, payload.Enabled)
-	assert.False(t, payload.ZoneSigned)
-}
-
-func TestGetDNSSECStatus_MissingZoneName(t *testing.T) {
-	service := newMockDNSService()
-	handlers, writer := newTestHandlers(service)
-
-	req := createRequestWithVars(http.MethodGet, "/api/v1/dns/zones//dnssec", nil, map[string]string{})
-	rec := httptest.NewRecorder()
-
-	handlers.GetDNSSECStatus(rec, req)
-
-	assert.Equal(t, http.StatusBadRequest, writer.lastStatus)
-}
-
-func TestGetDNSSECStatus_ZoneNotFound(t *testing.T) {
-	service := newMockDNSService()
-	handlers, writer := newTestHandlers(service)
-
-	req := createRequestWithVars(http.MethodGet, "/api/v1/dns/zones/nonexistent.com./dnssec", nil, map[string]string{"zone": "nonexistent.com."})
-	rec := httptest.NewRecorder()
-
-	handlers.GetDNSSECStatus(rec, req)
-
-	assert.Equal(t, http.StatusNotFound, writer.lastStatus)
-}
-
-// Test Register
-
-func TestRegister_Success(t *testing.T) {
-	service := newMockDNSService()
-	service.registerResult = createTestZone("device.local.")
-	handlers, writer := newTestHandlers(service)
-
-	body := RegisterRequest{
-		FQDN: "device.local.",
-		IP:   "192.168.1.100",
-	}
-
-	req := createRequest(http.MethodPost, "/api/v1/dns/register", body)
-	rec := httptest.NewRecorder()
-
-	handlers.Register(rec, req)
-
-	assert.Equal(t, http.StatusOK, writer.lastStatus)
-}
-
-func TestRegister_SuccessWithNilZone(t *testing.T) {
-	service := newMockDNSService()
-	service.registerResult = nil
-	handlers, writer := newTestHandlers(service)
-
-	body := RegisterRequest{
-		FQDN: "device.local.",
-		IP:   "192.168.1.100",
-	}
-
-	req := createRequest(http.MethodPost, "/api/v1/dns/register", body)
-	rec := httptest.NewRecorder()
-
-	handlers.Register(rec, req)
-
-	assert.Equal(t, http.StatusOK, writer.lastStatus)
-}
-
-func TestRegister_MissingFQDN(t *testing.T) {
-	service := newMockDNSService()
-	handlers, writer := newTestHandlers(service)
-
-	body := RegisterRequest{
-		IP: "192.168.1.100",
-	}
-
-	req := createRequest(http.MethodPost, "/api/v1/dns/register", body)
-	rec := httptest.NewRecorder()
-
-	handlers.Register(rec, req)
-
-	assert.Equal(t, http.StatusBadRequest, writer.lastStatus)
-	_, ok := writer.lastError.(ErrMissingFQDN)
-	assert.True(t, ok)
-}
-
-func TestRegister_MissingIP(t *testing.T) {
-	service := newMockDNSService()
-	handlers, writer := newTestHandlers(service)
-
-	body := RegisterRequest{
-		FQDN: "device.local.",
-	}
-
-	req := createRequest(http.MethodPost, "/api/v1/dns/register", body)
-	rec := httptest.NewRecorder()
-
-	handlers.Register(rec, req)
-
-	assert.Equal(t, http.StatusBadRequest, writer.lastStatus)
-	_, ok := writer.lastError.(ErrMissingIP)
-	assert.True(t, ok)
-}
-
-func TestRegister_InvalidRequestBody(t *testing.T) {
-	service := newMockDNSService()
-	handlers, writer := newTestHandlers(service)
-
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/dns/register", bytes.NewBufferString("invalid json"))
-	req.Header.Set("Content-Type", "application/json")
-	rec := httptest.NewRecorder()
-
-	handlers.Register(rec, req)
-
-	assert.Equal(t, http.StatusBadRequest, writer.lastStatus)
-}
-
-func TestRegister_ServiceError(t *testing.T) {
-	service := newMockDNSService()
-	service.registerErr = errors.New("registration failed")
-	handlers, writer := newTestHandlers(service)
-
-	body := RegisterRequest{
-		FQDN: "device.local.",
-		IP:   "192.168.1.100",
-	}
-
-	req := createRequest(http.MethodPost, "/api/v1/dns/register", body)
-	rec := httptest.NewRecorder()
-
-	handlers.Register(rec, req)
-
-	assert.Equal(t, http.StatusInternalServerError, writer.lastStatus)
-}
-
-// Test helper methods
-
-func TestGetPaginationParams_Defaults(t *testing.T) {
-	service := newMockDNSService()
-	handlers, _ := newTestHandlers(service)
-
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/dns/zones", nil)
-	limit, offset := handlers.getPaginationParams(req)
-
-	assert.Equal(t, int32(50), limit)
-	assert.Equal(t, int32(0), offset)
-}
-
-func TestGetPaginationParams_Custom(t *testing.T) {
-	service := newMockDNSService()
-	handlers, _ := newTestHandlers(service)
-
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/dns/zones?limit=25&offset=10", nil)
-	limit, offset := handlers.getPaginationParams(req)
-
-	assert.Equal(t, int32(25), limit)
-	assert.Equal(t, int32(10), offset)
-}
-
-func TestGetPaginationParams_MaxLimit(t *testing.T) {
-	service := newMockDNSService()
-	handlers, _ := newTestHandlers(service)
-
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/dns/zones?limit=5000", nil)
-	limit, _ := handlers.getPaginationParams(req)
-
-	assert.Equal(t, int32(1000), limit)
-}
-
-func TestGetPaginationParams_InvalidLimit(t *testing.T) {
-	service := newMockDNSService()
-	handlers, _ := newTestHandlers(service)
-
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/dns/zones?limit=0", nil)
-	limit, _ := handlers.getPaginationParams(req)
-
-	assert.Equal(t, int32(50), limit)
-}
-
-func TestGetPaginationParams_NegativeOffset(t *testing.T) {
-	service := newMockDNSService()
-	handlers, _ := newTestHandlers(service)
-
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/dns/zones?offset=-5", nil)
-	_, offset := handlers.getPaginationParams(req)
-
-	assert.Equal(t, int32(0), offset)
-}
-
-func TestGetPaginationParams_InvalidStrings(t *testing.T) {
-	service := newMockDNSService()
-	handlers, _ := newTestHandlers(service)
-
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/dns/zones?limit=abc&offset=xyz", nil)
-	limit, offset := handlers.getPaginationParams(req)
-
-	assert.Equal(t, int32(50), limit)
-	assert.Equal(t, int32(0), offset)
-}
-
-// Test zoneToResponse with nil zone
-
-func TestZoneToResponse_NilZone(t *testing.T) {
-	service := newMockDNSService()
-	handlers, _ := newTestHandlers(service)
-
-	resp := handlers.zoneToResponse(nil)
-
-	assert.Equal(t, ZoneResponse{}, resp)
-}
-
-// Test recordSetToResponse with nil recordset
-
-func TestRecordSetToResponse_NilRecordSet(t *testing.T) {
-	service := newMockDNSService()
-	handlers, _ := newTestHandlers(service)
-
-	resp := handlers.recordSetToResponse(nil)
-
-	assert.Nil(t, resp)
-}
-
-// Test extractRecords with various record types
-
-func TestExtractRecords_FilteredByType(t *testing.T) {
-	service := newMockDNSService()
-	handlers, _ := newTestHandlers(service)
-
-	zone := createTestZone("example.com.")
-	zone.AddARecord(&entities.ARecord{Name: "www", Value: "192.168.1.1", TTL: 3600})
-	zone.AddAAAARecord(&entities.AAAARecord{Name: "www", Value: "2001:db8::1", TTL: 3600})
-	zone.AddCNAMERecord(&entities.CNAMERecord{Name: "alias", Value: "www.example.com.", TTL: 3600})
-	zone.AddMXRecord(&entities.MXRecord{Name: "@", Value: "mail.example.com.", Priority: 10, TTL: 3600})
-	zone.AddNSRecord(&entities.NSRecord{Name: "@", Value: "ns1.example.com.", TTL: 3600})
-	zone.AddTXTRecord(&entities.TXTRecord{Name: "_dmarc", Value: "v=DMARC1", TTL: 3600})
-	zone.AddSRVRecord(&entities.SRVRecord{Name: "_sip._tcp", Target: "sip.example.com.", Port: 5060, TTL: 3600})
-	zone.AddCAARecord(&entities.CAARecord{Name: "@", Flags: 0, Tag: "issue", Value: "letsencrypt.org", TTL: 3600})
-	zone.AddTLSARecord(&entities.TLSARecord{Name: "_443._tcp.www", Usage: 3, Selector: 1, MatchingType: 1, Data: "abc", TTL: 3600})
-
-	// Test each record type filter
+func TestParseRecordType(t *testing.T) {
 	tests := []struct {
-		typeFilter    string
-		expectedCount int
+		value string
+		want  platformv1.RecordType
 	}{
-		{"A", 1},
-		{"AAAA", 1},
-		{"CNAME", 1},
-		{"MX", 1},
-		{"NS", 1},
-		{"TXT", 1},
-		{"SRV", 1},
-		{"CAA", 1},
-		{"TLSA", 1},
-		{"", 9}, // No filter - all records
+		{"", platformv1.RecordType_RECORD_TYPE_UNSPECIFIED},
+		{"A", platformv1.RecordType_RECORD_TYPE_A},
+		{"aaaa", platformv1.RecordType_RECORD_TYPE_AAAA},
+		{"RECORD_TYPE_TLSA", platformv1.RecordType_RECORD_TYPE_TLSA},
+		{"record_type_mx", platformv1.RecordType_RECORD_TYPE_MX},
 	}
-
 	for _, tc := range tests {
-		t.Run("Filter_"+tc.typeFilter, func(t *testing.T) {
-			records := handlers.extractRecords(&zone.RecordSet, tc.typeFilter)
-			assert.Len(t, records, tc.expectedCount)
-		})
+		got, err := parseRecordType(tc.value)
+		require.NoError(t, err, tc.value)
+		assert.Equal(t, tc.want, got, tc.value)
 	}
 }
 
-// Test decodeJSON error handling
-
-func TestDecodeJSON_UnknownFields(t *testing.T) {
-	service := newMockDNSService()
-	handlers, _ := newTestHandlers(service)
-
-	body := `{"name": "test.com.", "unknown_field": "value"}`
-	req := httptest.NewRequest(http.MethodPost, "/test", bytes.NewBufferString(body))
-
-	var reqData CreateZoneRequest
-	err := handlers.decodeJSON(req, &reqData)
-
-	assert.Error(t, err)
-}
-
-// Test createContext
-
-func TestCreateContext(t *testing.T) {
-	service := newMockDNSService()
-	handlers, _ := newTestHandlers(service)
-
-	ctx, cancel := handlers.createContext()
-	defer cancel()
-
-	assert.NotNil(t, ctx)
-	deadline, ok := ctx.Deadline()
-	assert.True(t, ok)
-	assert.False(t, deadline.IsZero())
-}
-
-// Test handler getters
-
-func TestGetZoneName(t *testing.T) {
-	service := newMockDNSService()
-	handlers, _ := newTestHandlers(service)
-
-	req := createRequestWithVars(http.MethodGet, "/test", nil, map[string]string{"zone": "example.com."})
-	zoneName := handlers.getZoneName(req)
-
-	assert.Equal(t, "example.com.", zoneName)
-}
-
-func TestGetRecordType(t *testing.T) {
-	service := newMockDNSService()
-	handlers, _ := newTestHandlers(service)
-
-	req := createRequestWithVars(http.MethodGet, "/test", nil, map[string]string{"type": "A"})
-	recordType := handlers.getRecordType(req)
-
-	assert.Equal(t, "A", recordType)
-}
-
-func TestGetRecordName(t *testing.T) {
-	service := newMockDNSService()
-	handlers, _ := newTestHandlers(service)
-
-	req := createRequestWithVars(http.MethodGet, "/test", nil, map[string]string{"name": "www"})
-	recordName := handlers.getRecordName(req)
-
-	assert.Equal(t, "www", recordName)
-}
-
-// Table-driven tests for AddRecord with nil record data
-
-func TestAddRecord_NilRecordData(t *testing.T) {
-	tests := []struct {
-		name       string
-		recordType string
-	}{
-		{"A_nil", "A"},
-		{"AAAA_nil", "AAAA"},
-		{"CNAME_nil", "CNAME"},
-		{"MX_nil", "MX"},
-		{"NS_nil", "NS"},
-		{"TXT_nil", "TXT"},
-		{"SRV_nil", "SRV"},
-		{"CAA_nil", "CAA"},
-		{"TLSA_nil", "TLSA"},
+func TestParseRecordTypeRejectsUnknownNames(t *testing.T) {
+	for _, value := range []string{"BOGUS", "UNSPECIFIED", "RECORD_TYPE_UNSPECIFIED", "RECORD_TYPE_"} {
+		_, err := parseRecordType(value)
+		var invalid *ErrInvalidRecordType
+		require.ErrorAs(t, err, &invalid, value)
+		assert.Equal(t, value, invalid.Type)
 	}
+}
 
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			service := newMockDNSService()
-			service.zones["example.com."] = createTestZone("example.com.")
-			handlers, writer := newTestHandlers(service)
+func TestRecordName(t *testing.T) {
+	srv := &platformv1.Record{Record: &platformv1.Record_Srv{Srv: &platformv1.SRVRecord{Name: "_sip._tcp"}}}
+	assert.Equal(t, "_sip._tcp", recordName(srv))
+}
 
-			body := AddRecordRequest{Type: tc.recordType}
-			req := createRequestWithVars(http.MethodPost, "/api/v1/dns/zones/example.com./records", body, map[string]string{"zone": "example.com."})
-			rec := httptest.NewRecorder()
+func TestRecordNameOfAnEmptyRecordIsEmpty(t *testing.T) {
+	assert.Equal(t, "", recordName(&platformv1.Record{Type: platformv1.RecordType_RECORD_TYPE_A}))
+}
 
-			handlers.AddRecord(rec, req)
+// TestEnvelopeIsTheRestWireShape: the reply decodes as the shared envelope.
+func TestEnvelopeIsTheRestWireShape(t *testing.T) {
+	server := &scriptedDNSServer{resp: &platformv1.DeleteZoneResponse{Status: &platformv1.Status{Success: true}}}
+	rec := serve(server, http.MethodDelete, "/api/v1/dns/zones/example.com.", "")
 
-			// Should succeed but not add any records since record data is nil
-			assert.Equal(t, http.StatusOK, writer.lastStatus)
-		})
-	}
+	var envelope restwire.WebServiceResponse
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &envelope))
+	assert.True(t, envelope.Success)
+	assert.Equal(t, http.StatusOK, envelope.Code)
 }

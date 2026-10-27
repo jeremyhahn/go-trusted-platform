@@ -36,9 +36,160 @@ func openVolume(t *testing.T, store *volumeStore, identity string) *volume {
 	return vol
 }
 
+// localStore is the export server's volume store over local files in dir.
+func localStore(t *testing.T, dir string, size int64) *volumeStore {
+	t.Helper()
+	return newVolumeStore(localVolumes(t, dir), size)
+}
+
+// localVolumes is the local-file VolumeProvider rooted at dir.
+func localVolumes(t *testing.T, dir string) *LocalVolumes {
+	t.Helper()
+	volumes, err := NewLocalVolumes(dir)
+	if err != nil {
+		t.Fatalf("NewLocalVolumes: %v", err)
+	}
+	return volumes
+}
+
+// recordingVolumes is a VolumeProvider that serves one file wherever it
+// lives, the way a block-device store hands out a device path, and records
+// what the server asked of it.
+type recordingVolumes struct {
+	path      string
+	createErr error
+	attachErr error
+	created   []int64
+	attached  []string
+}
+
+func (r *recordingVolumes) Create(identity string, size int64) error {
+	r.created = append(r.created, size)
+	return r.createErr
+}
+
+func (r *recordingVolumes) Attach(identity string) (string, error) {
+	r.attached = append(r.attached, identity)
+	return r.path, r.attachErr
+}
+
+func TestVolumeStore_ReachesTheVolumeThroughItsProvider(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "drbd-like-device")
+	if err := os.WriteFile(path, make([]byte, 8192), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	provider := &recordingVolumes{path: path}
+
+	vol := openVolume(t, newVolumeStore(provider, 4096), "node-01")
+	if vol.size != 8192 {
+		t.Fatalf("size = %d, want the provider volume's 8192", vol.size)
+	}
+	if len(provider.created) != 1 || provider.created[0] != 4096 {
+		t.Fatalf("Create sizes = %v, want [4096]", provider.created)
+	}
+	if len(provider.attached) != 1 || provider.attached[0] != "node-01" {
+		t.Fatalf("Attach identities = %v, want [node-01]", provider.attached)
+	}
+}
+
+func TestVolumeStore_ReturnsTheProviderRefusal(t *testing.T) {
+	createErr := ErrVolume{Identity: "node-01", Op: "promote", Cause: fs.ErrPermission}
+	provider := &recordingVolumes{createErr: createErr}
+	if _, err := newVolumeStore(provider, 4096).open("node-01"); !errors.Is(err, createErr) {
+		t.Fatalf("open = %v, want the Create refusal", err)
+	}
+	if len(provider.attached) != 0 {
+		t.Fatal("Attach was called after Create refused")
+	}
+
+	attachErr := ErrVolume{Identity: "node-01", Op: "attach", Cause: fs.ErrNotExist}
+	provider = &recordingVolumes{attachErr: attachErr}
+	if _, err := newVolumeStore(provider, 4096).open("node-01"); !errors.Is(err, attachErr) {
+		t.Fatalf("open = %v, want the Attach refusal", err)
+	}
+}
+
+func TestNewLocalVolumes_RefusesAnEmptyDirectory(t *testing.T) {
+	var invalid ErrInvalidConfig
+	if _, err := NewLocalVolumes(""); !errors.As(err, &invalid) || invalid.Field != "VolumeDir" {
+		t.Fatalf("NewLocalVolumes(\"\") = %v, want ErrInvalidConfig VolumeDir", err)
+	}
+}
+
+func TestLocalVolumes_CreateRefusesASizeThatIsNotWholeSectors(t *testing.T) {
+	volumes, err := NewLocalVolumes(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewLocalVolumes: %v", err)
+	}
+	for _, size := range []int64{0, -512, 1000} {
+		var refused ErrVolume
+		if err := volumes.Create("node-01", size); !errors.As(err, &refused) || refused.Op != "size" {
+			t.Errorf("Create(size %d) = %v, want ErrVolume size", size, err)
+		}
+	}
+	if _, err := volumes.Attach("node-01"); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("a refused Create left a volume: Attach = %v", err)
+	}
+}
+
+func TestLocalVolumes_AttachReturnsTheCreatedFile(t *testing.T) {
+	dir := t.TempDir()
+	volumes, err := NewLocalVolumes(dir)
+	if err != nil {
+		t.Fatalf("NewLocalVolumes: %v", err)
+	}
+	if err := volumes.Create("node-01", 4096); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	path, err := volumes.Attach("node-01")
+	if err != nil {
+		t.Fatalf("Attach: %v", err)
+	}
+	if want := filepath.Join(dir, "node-01"+volumeSuffix); path != want {
+		t.Fatalf("Attach = %q, want %q", path, want)
+	}
+}
+
+func TestLocalVolumes_AttachRefusesAMissingVolumeAndABadIdentity(t *testing.T) {
+	volumes, err := NewLocalVolumes(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewLocalVolumes: %v", err)
+	}
+	var refused ErrVolume
+	if _, err := volumes.Attach("node-01"); !errors.As(err, &refused) || refused.Op != "attach" || !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("Attach(missing) = %v, want ErrVolume attach wrapping fs.ErrNotExist", err)
+	}
+	if _, err := volumes.Attach("../escape"); !errors.As(err, &refused) || refused.Op != "validate" {
+		t.Fatalf("Attach(../escape) = %v, want ErrVolume validate", err)
+	}
+}
+
+func TestVolumeSize_SeeksToTheEnd(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "volume")
+	if err := os.WriteFile(path, make([]byte, 1536), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	size, err := volumeSize("node-01", file)
+	if err != nil || size != 1536 {
+		t.Fatalf("volumeSize = %d, %v; want 1536", size, err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	var refused ErrVolume
+	if _, err := volumeSize("node-01", file); !errors.As(err, &refused) || refused.Op != "size" {
+		t.Fatalf("volumeSize on a closed file = %v, want ErrVolume size", err)
+	}
+}
+
 func TestVolumeStore_CreatesOnFirstAttach(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "volumes")
-	store := newVolumeStore(dir, 4096)
+	store := localStore(t, dir, 4096)
 
 	vol := openVolume(t, store, "node-01")
 	if vol.size != 4096 {
@@ -67,7 +218,7 @@ func TestVolumeStore_ExistingVolumeKeepsItsSizeAndData(t *testing.T) {
 		t.Fatalf("write: %v", err)
 	}
 
-	vol := openVolume(t, newVolumeStore(dir, 4096), "node-01")
+	vol := openVolume(t, localStore(t, dir, 4096), "node-01")
 	if vol.size != 1024 {
 		t.Fatalf("size = %d, want the existing 1024", vol.size)
 	}
@@ -78,7 +229,7 @@ func TestVolumeStore_ExistingVolumeKeepsItsSizeAndData(t *testing.T) {
 }
 
 func TestVolumeStore_RefusesBadIdentityAndDirectory(t *testing.T) {
-	store := newVolumeStore(t.TempDir(), 4096)
+	store := localStore(t, t.TempDir(), 4096)
 	var refused ErrVolume
 	if _, err := store.open("../escape"); !errors.As(err, &refused) || refused.Op != "validate" {
 		t.Fatalf("open(../escape) = %v, want ErrVolume validate", err)
@@ -88,7 +239,7 @@ func TestVolumeStore_RefusesBadIdentityAndDirectory(t *testing.T) {
 	if err := os.WriteFile(blocker, nil, 0o600); err != nil {
 		t.Fatalf("write: %v", err)
 	}
-	if _, err := newVolumeStore(blocker, 4096).open("node-01"); !errors.As(err, &refused) || refused.Op != "create directory" {
+	if _, err := localStore(t, blocker, 4096).open("node-01"); !errors.As(err, &refused) || refused.Op != "create directory" {
 		t.Fatalf("open under a file = %v, want ErrVolume create directory", err)
 	}
 }
@@ -101,7 +252,7 @@ func TestVolumeStore_UnopenableVolumeIsReported(t *testing.T) {
 		t.Fatalf("mkdir: %v", err)
 	}
 	var refused ErrVolume
-	if _, err := newVolumeStore(dir, 4096).open("node-01"); !errors.As(err, &refused) || refused.Op != "open" {
+	if _, err := localStore(t, dir, 4096).open("node-01"); !errors.As(err, &refused) || refused.Op != "open" {
 		t.Fatalf("open = %v, want ErrVolume open", err)
 	}
 }
@@ -128,7 +279,7 @@ func TestVolume_InRange(t *testing.T) {
 }
 
 func TestVolume_TrimZeroesTheRange(t *testing.T) {
-	vol := openVolume(t, newVolumeStore(t.TempDir(), 1<<20), "node-01")
+	vol := openVolume(t, localStore(t, t.TempDir(), 1<<20), "node-01")
 	if _, err := vol.file.WriteAt(bytes.Repeat([]byte{0xff}, 3*4096), 0); err != nil {
 		t.Fatalf("write: %v", err)
 	}
@@ -180,7 +331,7 @@ func TestZeroRange(t *testing.T) {
 }
 
 func TestVolume_TrimFailsOnAClosedFile(t *testing.T) {
-	store := newVolumeStore(t.TempDir(), 4096)
+	store := localStore(t, t.TempDir(), 4096)
 	vol, err := store.open("node-01")
 	if err != nil {
 		t.Fatalf("open: %v", err)

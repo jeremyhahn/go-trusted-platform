@@ -114,18 +114,13 @@ func TestNewService(t *testing.T) {
 	}
 }
 
-func TestNewService_NilConfig(t *testing.T) {
-	// NewService with nil config should use defaults, but will fail
-	// because default OVMF paths don't exist in test environment
-	_, err := NewService(nil, nil, &mockCA{})
-	if err == nil {
-		t.Error("NewService with nil config should fail (OVMF files don't exist)")
-	}
-}
-
 func TestNewService_InvalidConfig(t *testing.T) {
+	// ApplyDefaults fills an empty field, so the config is made invalid by a
+	// value it keeps: an unknown PCR bank. The base directory is a temporary
+	// one, so the result does not depend on whether /var/lib is writable.
 	config := &Config{
-		BaseDir: "", // Invalid: empty
+		BaseDir:  t.TempDir(),
+		PCRBanks: []string{"md5"},
 	}
 
 	_, err := NewService(config, nil, &mockCA{})

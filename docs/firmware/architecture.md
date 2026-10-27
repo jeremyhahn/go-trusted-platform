@@ -286,7 +286,7 @@ what it is.
 - **It does not offer a remote enrollment RPC.** By design — see §3.
 - **It does not sign modules anywhere in the production path.** `pkg/modulesign`
   is complete and proven against OpenSSL and a real FIPS kernel, but the only
-  callers today are the integration tests; in-tree modules are signed by the
+  callers today are the tests; in-tree modules are signed by the
   kernel build itself. Out-of-tree module signing is a library capability with
   no CLI verb. **PLANNED** surface.
 - **It does not support embedded or mobile firmware.** No AVR, no Raspberry Pi

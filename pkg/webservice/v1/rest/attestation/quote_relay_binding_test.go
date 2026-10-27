@@ -125,7 +125,7 @@ func TestGetAttestationQuote_RefusesPlainHTTP(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, resp.Body.Close()) })
 
-	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+	assert.Equal(t, http.StatusConflict, resp.StatusCode)
 	reason, err := io.ReadAll(resp.Body)
 	require.NoError(t, err)
 	assert.Contains(t, string(reason), "this REST request has none", "refused for the missing binding, not a bad body")

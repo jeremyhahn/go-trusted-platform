@@ -58,7 +58,7 @@ func testConfig(t *testing.T, bundle *testutil.TestTLSBundle) Config {
 		Certificate: bundle.ServerCert,
 		Anchor:      staticAnchor(t, bundle.CACert),
 		Identities:  []string{testIdentity},
-		VolumeDir:   t.TempDir(),
+		Volumes:     localVolumes(t, t.TempDir()),
 		VolumeSize:  testVolumeSize,
 		Logger:      slog.New(slog.DiscardHandler),
 	}

@@ -140,9 +140,12 @@ func TestVMWithTPM(t *testing.T) {
 }
 ```
 
-### 3. Device Profile Tests (`test/integration/sdn/state_transition_integration_test.go`)
+### 3. Device Profile Tests (`test/integration/sdn/network_provisioning_test.go`)
 
 **Purpose**: Validate network state transitions during device lifecycle
+(`TestDeviceProfileToNetworkConfig`). The policy engine's port
+state-machine transitions run in memory as unit tests in
+`pkg/sdn/policy/state_transition_test.go` (#964).
 
 **What's Tested**:
 - Provisioning network setup

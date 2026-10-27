@@ -279,8 +279,10 @@ create, get and list, to their sub-opcodes (`sdk/go/transport/quic/adapter.go`).
 Every adapter returns the client's typed error (`ErrStartVMFailed`, ...,
 `sdk/go/services/compute/errors.go`) wrapping the transport status: an unknown VM
 is NotFound everywhere. A VM in the wrong state is FailedPrecondition, except
-over REST, where it is InvalidArgument because both REST servers render
-FailedPrecondition as HTTP 400. `TestVMLifecycleSDKParity_*`
+over REST on any method but `DELETE`, where it is AlreadyExists: both REST
+servers render FailedPrecondition as HTTP 409 Conflict (#665), and the SDK
+reads a 409 as AlreadyExists unless the request was a `DELETE` (a snapshot
+delete stays FailedPrecondition). `TestVMLifecycleSDKParity_*`
 (`pkg/api/daemon/compute_sdk_parity_test.go`) holds this over REST, MCP, QUIC,
 gRPC, the Unix socket and the embedded transport.
 
@@ -681,7 +683,7 @@ permission of the RPC it calls (`computeRouteScopes`,
 | `0x09` | `StatusInvalidArgument` | 400 | `ErrNoNetworkInZone` |
 | `0x0A` | `StatusUnavailable` | 503 | Compute not wired into the daemon |
 | `0x0B` | `StatusNotImplemented` | 501 | `ErrComputeProviderNotCompiled` |
-| `0x0C` | `StatusFailedPrecondition` | 400 | VM in the wrong state for the verb |
+| `0x0C` | `StatusFailedPrecondition` | 409 | VM in the wrong state for the verb |
 
 **501 means the binary was built without the provider's build tag** (`awscompute`,
 `azurecompute`, `gcpcompute`) — not that the feature is unfinished.

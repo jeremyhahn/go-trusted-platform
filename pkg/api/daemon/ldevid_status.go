@@ -41,11 +41,12 @@ func idevidGRPCToHTTPStatus(err error) int {
 		return http.StatusOK
 	case codes.InvalidArgument:
 		return http.StatusBadRequest
-	case codes.FailedPrecondition:
-		return http.StatusPreconditionFailed
 	case codes.NotFound:
 		return http.StatusNotFound
-	case codes.AlreadyExists:
+	case codes.AlreadyExists, codes.FailedPrecondition:
+		// FailedPrecondition is 409, as protorest sends it platform-wide
+		// (#665); the SDK reads a 409 on the key DELETE back as
+		// FailedPrecondition.
 		return http.StatusConflict
 	case codes.PermissionDenied:
 		return http.StatusForbidden

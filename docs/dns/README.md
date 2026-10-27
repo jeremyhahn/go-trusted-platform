@@ -144,8 +144,8 @@ dig @localhost -p 9053 example.internal SOA
 
 ### Register a Device
 
-There is no `platformctl dns` command group ([cli.md](cli.md)). Devices
-register through the REST API:
+Devices register with `platformctl dns register <fqdn> <ip>` ([cli.md](cli.md))
+or through the REST API:
 
 ```bash
 curl -X POST https://localhost:8443/api/v1/dns/register \
@@ -230,7 +230,7 @@ The DNS subsystem supports dynamic macro expansion in zone configurations:
 | [Zone Transfer](zone-transfer.md) | Outbound AXFR to TSIG-authenticated secondaries |
 | [ACME Integration](acme-integration.md) | DNS-01 challenge support |
 | [Configuration](configuration.md) | Complete configuration reference |
-| [CLI](cli.md) | Why there is no `platformctl dns` group, and what to use instead |
+| [CLI](cli.md) | `platformctl dns` verbs and flags |
 | [Security](security.md) | Security model and best practices |
 | [Operations](operations.md) | Operations, monitoring, and capacity planning |
 | [API Reference](api-reference.md) | REST and gRPC API documentation |

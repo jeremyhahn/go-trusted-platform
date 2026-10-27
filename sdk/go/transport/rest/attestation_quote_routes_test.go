@@ -103,17 +103,17 @@ func TestAttestationQuoteRoutes_RouteAndDecode(t *testing.T) {
 
 // TestAttestationQuoteRoutes_ServerRefusalIsTranslated pins the error half:
 // the node refusing an unbound quote (FailedPrecondition, which protorest
-// writes as 400) reaches the caller as an error carrying the refusal, never
-// as a decoded empty quote.
+// writes as 409, #665) reaches the caller as an error carrying the refusal,
+// never as a decoded empty quote.
 func TestAttestationQuoteRoutes_ServerRefusalIsTranslated(t *testing.T) {
 	var captured capturedRequest
-	a := attestationServer(t, http.StatusBadRequest,
-		`{"code":400,"error":"channel binding required","success":false}`, &captured)
+	a := attestationServer(t, http.StatusConflict,
+		`{"code":409,"error":"channel binding required","success":false}`, &captured)
 
 	err := a.Connection().Invoke(context.Background(), platformv1.AttestationService_GetAttestationQuote_FullMethodName,
 		&platformv1.GetAttestationQuoteRequest{Nonce: []byte{9}}, &platformv1.GetAttestationQuoteResponse{})
-	if status.Code(err) != codes.InvalidArgument || !strings.Contains(err.Error(), "channel binding required") {
-		t.Fatalf("Invoke error = %v, want InvalidArgument carrying the refusal", err)
+	if status.Code(err) != codes.AlreadyExists || !strings.Contains(err.Error(), "channel binding required") {
+		t.Fatalf("Invoke error = %v, want AlreadyExists carrying the refusal", err)
 	}
 	if captured.path != "/api/v1/attestation/quote" {
 		t.Errorf("path = %s, want /api/v1/attestation/quote", captured.path)

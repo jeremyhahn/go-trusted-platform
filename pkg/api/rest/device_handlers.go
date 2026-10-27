@@ -972,8 +972,10 @@ func (h *DeviceHandlers) writeAttestationError(w http.ResponseWriter, err error)
 	switch status.Code(err) {
 	case codes.NotFound:
 		h.writeError(w, http.StatusNotFound, ErrDeviceAttestationRejected{Reason: statusMessage(err)})
-	case codes.InvalidArgument, codes.FailedPrecondition:
+	case codes.InvalidArgument:
 		h.writeError(w, http.StatusBadRequest, ErrDeviceAttestationRejected{Reason: statusMessage(err)})
+	case codes.FailedPrecondition:
+		h.writeError(w, http.StatusConflict, ErrDeviceAttestationRejected{Reason: statusMessage(err)})
 	case codes.Unavailable:
 		h.writeError(w, http.StatusServiceUnavailable, ErrDeviceAttestationRejected{Reason: statusMessage(err)})
 	default:

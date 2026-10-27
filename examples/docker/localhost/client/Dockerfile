@@ -26,7 +26,8 @@ COPY public_html /opt/trusted-platform/public_html
 # Copy configuration
 COPY config.yaml /opt/trusted-platform/config.yaml
 
-# Copy entrypoint script
+# Copy the bounded readiness helper (wait_for) and the entrypoint script
+COPY wait-for.sh /usr/local/lib/wait-for.sh
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
 

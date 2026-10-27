@@ -14,6 +14,8 @@
 package sdn
 
 import (
+	"context"
+	"encoding/json"
 	"net/http"
 	"time"
 
@@ -22,6 +24,21 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/internal/protorest"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
+
+// The zone routes keep their REST shape (NetworkZoneSpec): the web console's
+// zones page reads it. They are not yet on the proto wire shape the other
+// SDN routes serve.
+
+// zoneRequestTimeout bounds one zone call to the SDN service.
+const zoneRequestTimeout = 30 * time.Second
+
+func (h *SDNHandlers) createContext() (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.Background(), zoneRequestTimeout)
+}
+
+func (h *SDNHandlers) decodeJSON(r *http.Request, v interface{}) error {
+	return json.NewDecoder(r.Body).Decode(v)
+}
 
 // NetworkZonePathSpec declares a directed egress path from one zone to
 // another, optionally scoped to a service allowlist.

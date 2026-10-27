@@ -66,8 +66,8 @@ func TestErrServiceNotConfigured_GRPCStatus(t *testing.T) {
 	st := ErrServiceNotConfigured{Service: "pxe", Detail: "PXE is dark"}.GRPCStatus()
 
 	// Unavailable, not FailedPrecondition: the REST layer maps
-	// FailedPrecondition to 400, which is indistinguishable from a
-	// malformed request.
+	// FailedPrecondition to 409, a conflict with the resource's state,
+	// not a service that is absent on this node.
 	assert.Equal(t, codes.Unavailable, st.Code())
 	assert.Equal(t, "PXE is dark", st.Message())
 	assert.Equal(t, "pxe", notConfiguredServiceName(t, st))

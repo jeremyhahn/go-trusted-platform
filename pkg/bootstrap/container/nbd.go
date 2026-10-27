@@ -61,14 +61,30 @@ func newNBDServer(config *ServerConfig, manifest *Manifest, logger *slog.Logger)
 		return nil, ErrServerStartFailed{Cause: err}
 	}
 
+	volumes, err := nbdVolumes(config)
+	if err != nil {
+		return nil, err
+	}
+
 	return nbd.NewServer(nbd.Config{
 		Certificate: certificate,
 		Anchor:      anchor,
 		Identities:  identities,
-		VolumeDir:   config.NBD.VolumeDir,
+		Volumes:     volumes,
 		VolumeSize:  config.NBD.VolumeSize,
 		Logger:      logger,
 	})
+}
+
+// nbdVolumes is the store behind the diskless-nbd exports, and the one place
+// it is chosen: local files under NBDConfig.VolumeDir on this boot node. The
+// export server and the installed-UKI route both reach volumes through it.
+func nbdVolumes(config *ServerConfig) (nbd.VolumeProvider, error) {
+	volumes, err := nbd.NewLocalVolumes(config.NBD.VolumeDir)
+	if err != nil {
+		return nil, err
+	}
+	return volumes, nil
 }
 
 // nbdServerAddr is the address a diskless-nbd node attaches its root from:

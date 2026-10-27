@@ -348,15 +348,17 @@ On an internet edge, the parsers that face the internet should not share a
 process with the datapath. The `process:` section turns on the supervised
 model (#557): `gatewayd serve` starts each supervised process as a child,
 dropped to its own privilege class, and restarts it with backoff if it dies.
-Four processes move: `routing` (`transit`, the BGP speaker), `proxy` (the
+Five processes move: `routing` (`transit`, the BGP speaker), `proxy` (the
 authenticating reverse proxy, when `proxy:` enables it) and `provisioning`
 (`edge`, `dhcp`, `pxe`) each run as the service account and hold
 `CAP_NET_BIND_SERVICE` alone; `datapath` (`firewall`, `nat`, `load-balancer`,
 `nat64`, `hostfw`, `tunnels`, `overlay`) stays root but keeps only
-`CAP_NET_ADMIN` and `CAP_NET_RAW`, and is the one process that opens OVSDB.
-Only the management VPN stays in the main process. A desired configuration
-pushed to the gateway goes to the `datapath` process, and a restarted
-`datapath` process gets the last one again and reprograms its flows from it.
+`CAP_NET_ADMIN` and `CAP_NET_RAW`, and is the one process that opens OVSDB;
+`vpn` (the management VPN) runs as the service account with no capability,
+so its admission listener needs a port of 1024 or above (the default is
+4433). A desired configuration pushed to the gateway goes to the `datapath`
+and `vpn` processes, and a restarted one gets the last one again: `datapath`
+reprograms its flows from it, `vpn` re-applies its enrolments and policies.
 The provisioning sections have no backend yet, so enabling one still
 stops the daemon with the section's reason, which now comes from the
 `provisioning` child.

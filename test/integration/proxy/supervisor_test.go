@@ -168,6 +168,10 @@ type supervisedGatewayd struct {
 	// programmed is the bridge as the datapath child left it before the
 	// current kill; datapathReconciled compares the successor against it.
 	programmed bridgeState
+
+	// oomKills is the memory.events oom_kill count a test caused on purpose,
+	// by child name; teardown expects every other leaf to have none.
+	oomKills map[string]int64
 }
 
 func TestGatewaydSupervisorKillUnderLoad(t *testing.T) {
@@ -278,6 +282,13 @@ func TestGatewaydSupervisorMemoryMaxRestartsOnlyThatChild(t *testing.T) {
 	if usageAfter.OOMKill <= usageBefore.OOMKill {
 		t.Fatalf("%s memory.events oom_kill = %d, want more than %d: the 1 MiB limit did not OOM-kill it", victim, usageAfter.OOMKill, usageBefore.OOMKill)
 	}
+	// memory.peak keeps the most the leaf ever held, so it still shows the
+	// charge the kill took away: over the 1 MiB limit, and at least what the
+	// child held just before the limit dropped.
+	if usageAfter.Peak <= 1<<20 || usageAfter.Peak < usageBefore.Current {
+		t.Errorf("%s memory.peak = %d, want over 1 MiB and at least the %d memory.current before the limit", victim, usageAfter.Peak, usageBefore.Current)
+	}
+	gw.oomKills = map[string]int64{victim: usageAfter.OOMKill}
 
 	after := gw.awaitRelaunch(t, victim, before, probes[victim])
 	if limit := readTrimmed(t, filepath.Join(leaf, "memory.max")); limit != strconv.FormatInt(def.MemoryMax, 10) {
@@ -895,6 +906,22 @@ func (g *supervisedGatewayd) stop(t *testing.T) {
 				continue
 			}
 			logMemory(t, name, "at teardown", usage)
+			def, err := process.DefinitionByName(name)
+			if err != nil {
+				t.Errorf("definition %s: %v", name, err)
+				continue
+			}
+			// A leaf that charged nothing measured nothing. One the kernel
+			// OOM-killed in, beyond what the test did on purpose, means
+			// the class value is below what the child needs; the relaunch
+			// keeps the leaf, so a purposeful kill is still counted here.
+			if usage.Peak <= 0 {
+				t.Errorf("%s memory.peak at teardown = %d, want the bytes the child charged", name, usage.Peak)
+			}
+			if want := g.oomKills[name]; usage.OOMKill != want {
+				t.Errorf("%s memory.events oom_kill at teardown = %d, want %d: the class MemoryMax %d killed it", name, usage.OOMKill, want, def.MemoryMax)
+			}
+			t.Logf("%s memory.peak %d is %.1f%% of the class MemoryMax %d", name, usage.Peak, 100*float64(usage.Peak)/float64(def.MemoryMax), def.MemoryMax)
 		}
 		if err := g.cmd.Process.Signal(syscall.SIGTERM); err != nil {
 			t.Errorf("signal gatewayd: %v", err)

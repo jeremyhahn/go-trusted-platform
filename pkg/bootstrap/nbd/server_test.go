@@ -17,6 +17,7 @@ import (
 	"context"
 	"errors"
 	"net"
+	"sync"
 	"testing"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/testutil"
@@ -89,6 +90,104 @@ func TestServe_ListenerFailureIsReported(t *testing.T) {
 	var failed ErrServeFailed
 	if err := server.Serve(t.Context(), ln); !errors.As(err, &failed) || !errors.Is(err, net.ErrClosed) {
 		t.Fatalf("Serve = %v, want ErrServeFailed wrapping net.ErrClosed", err)
+	}
+}
+
+func TestClose_WaitsForTheListenerAndTheAcceptLoop(t *testing.T) {
+	bundle := testutil.GenerateTestTLSBundle(t)
+	server := newTestServer(t, testConfig(t, bundle))
+	ln := newGatedListener()
+	result := make(chan error, 1)
+	go func() { result <- server.Serve(t.Context(), ln) }()
+	awaitSignal(t, ln.accepting, "Serve never reached its accept loop")
+
+	closed := make(chan error, 1)
+	go func() { closed <- server.Close() }()
+	awaitSignal(t, ln.closing, "Close never closed the listener")
+	awaitSignal(t, ln.acceptDone, "the accept loop never saw the listener close")
+	select {
+	case err := <-closed:
+		t.Fatalf("Close returned (%v) while the listener was still closing", err)
+	default:
+	}
+
+	close(ln.release)
+	if err := awaitResult(t, closed); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if err := awaitResult(t, result); err != nil {
+		t.Fatalf("Serve = %v, want nil on Close", err)
+	}
+}
+
+func TestServe_AfterCloseClosesTheListenerWithoutAccepting(t *testing.T) {
+	bundle := testutil.GenerateTestTLSBundle(t)
+	server := newTestServer(t, testConfig(t, bundle))
+	if err := server.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	ln := newGatedListener()
+	close(ln.release)
+
+	if err := server.Serve(t.Context(), ln); err != nil {
+		t.Fatalf("Serve after Close = %v, want nil", err)
+	}
+	select {
+	case <-ln.closing:
+	default:
+		t.Fatal("Serve after Close left the listener open")
+	}
+	select {
+	case <-ln.accepting:
+		t.Fatal("Serve after Close accepted connections")
+	default:
+	}
+}
+
+// gatedListener is an in-memory net.Listener whose Close blocks until
+// release is closed, so a test can hold the listener mid-close and see
+// what its owner does meanwhile.
+type gatedListener struct {
+	accepting  chan struct{} // closed when Accept is first entered
+	acceptDone chan struct{} // closed when Accept returns
+	closing    chan struct{} // closed when Close is entered
+	release    chan struct{} // Close returns once this is closed
+	acceptOnce sync.Once
+	closeOnce  sync.Once
+}
+
+func newGatedListener() *gatedListener {
+	return &gatedListener{
+		accepting:  make(chan struct{}),
+		acceptDone: make(chan struct{}),
+		closing:    make(chan struct{}),
+		release:    make(chan struct{}),
+	}
+}
+
+func (l *gatedListener) Accept() (net.Conn, error) {
+	l.acceptOnce.Do(func() { close(l.accepting) })
+	<-l.closing
+	close(l.acceptDone)
+	return nil, net.ErrClosed
+}
+
+func (l *gatedListener) Close() error {
+	l.closeOnce.Do(func() { close(l.closing) })
+	<-l.release
+	return nil
+}
+
+func (l *gatedListener) Addr() net.Addr {
+	return &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1)}
+}
+
+func awaitSignal(t *testing.T, signal <-chan struct{}, failure string) {
+	t.Helper()
+	select {
+	case <-signal:
+	case <-untilDeadline(t):
+		t.Fatal(failure)
 	}
 }
 

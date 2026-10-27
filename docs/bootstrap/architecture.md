@@ -201,9 +201,11 @@ other model, `diskless`, is unchanged.
   manifest. That identity is the node's only export. An empty export name
   means that export, and the node's own identity names it too. Any other name
   is refused (`NBD_REP_ERR_POLICY`).
-- **Volumes.** One file per device, `<volume-dir>/<identity>.img`. It is
-  created sparse at the configured size on first attach, and kept at its size
-  afterwards. The node LUKS-encrypts it (#685), so the server holds ciphertext
+- **Volumes.** The server reaches each device's volume only through a
+  `VolumeProvider`, so the server is the same whatever the store. The store
+  built today is local files on a single boot node: one file per device,
+  `<volume-dir>/<identity>.img`. It is created sparse at the configured size
+  on first attach, and kept at its size afterwards. The node LUKS-encrypts it (#685), so the server holds ciphertext
   only.
 - **Commands.** `READ`, `WRITE` (with `FUA`), `FLUSH`, `TRIM` and `DISC`.
   A command that fails is answered with an NBD error code. Only a malformed

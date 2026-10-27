@@ -1360,6 +1360,7 @@ func TestHandleAttestDevice(t *testing.T) {
 		}{
 			{"unknown device", status.Error(codes.NotFound, "device not found"), http.StatusNotFound},
 			{"malformed evidence", status.Error(codes.InvalidArgument, "evidence is required"), http.StatusBadRequest},
+			{"state refuses", status.Error(codes.FailedPrecondition, "no trustworthy attestation key"), http.StatusConflict},
 			{"no dependency", status.Error(codes.Unavailable, "device service unavailable"), http.StatusServiceUnavailable},
 			{"unclassified", errors.New("boom"), http.StatusInternalServerError},
 		}

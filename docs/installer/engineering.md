@@ -889,13 +889,25 @@ install stops with no disk changed:
 A refusal of the export after a successful enrollment stays
 `ErrorTypeNBDTarget`, so the two failures are told apart.
 
-The live environment does not supply an enroller yet (**Planned**), so a
-`diskless-nbd` install is refused at this step. The enrollment client runs
-inside `platformd`'s first-boot provisioning (`InitTPM`,
-`ProvisionPlatform`, `CompletePlatformIdentity`). That provisioning needs the
-TPM's PINs and writes the platform datastore, and on a `diskless-nbd` node
-both belong on the export, which the node can attach only after it enrols.
-Where the live environment keeps them until then is not decided.
+`platformctl install system` supplies the enroller when it loads a unified
+platform configuration: the `App` itself (`identityEnroller`,
+`pkg/cli/commands/install/system.go`). Its `EnrollIdentity`
+(`pkg/app/enroll_identity.go`) is the same enrollment step
+`CompletePlatformIdentity` runs; there is one method with two callers.
+`EnrollIdentity` needs `acme.client.enrollment`, an open TPM and the platform
+CA. When the `App` lacks any of them, it returns
+`app.ErrEnrollmentUnavailable{Missing}` before it builds a client, and the
+installer refuses with `enrollment failed`. An install configured by flags
+alone has no platform configuration and so no enroller (`no enrollment client
+is configured`).
+
+The live environment does not open the TPM or the platform CA for that `App`
+yet (**Planned**), so a `diskless-nbd` install is still refused at this step,
+with `an open TPM is missing`. Opening them is `platformd`'s first-boot
+provisioning (`InitTPM`, `ProvisionPlatform`), which needs the TPM's PINs and
+writes the platform datastore. On a `diskless-nbd` node both belong on the
+export, which the node can attach only after it enrols, and where the live
+environment keeps them until then is not decided.
 
 ### Attaching before the install
 
@@ -997,9 +1009,10 @@ LUKS2 ciphertext; neither is useful without the node's TPM.
 The boot server reads one file from the area: the installed UKI, which it
 serves the node at every boot after the install (see
 [bootstrap engineering](../bootstrap/engineering.md#the-diskless-nbd-runtime-path)).
-`nbd.OpenMetadataFile(volumeDir, identity, name)` (`pkg/bootstrap/nbd/metadata.go`)
-reads it from `<volume_dir>/<identity>.img` without mounting or attaching
-anything. It finds the GPT header at LBA 1 for 512-, 1024-, 2048- or
+`nbd.OpenMetadataFile(volumes, identity, name)` (`pkg/bootstrap/nbd/metadata.go`)
+reaches the volume through the export server's `VolumeProvider` `Attach`
+(on a single boot node, `<volume_dir>/<identity>.img`) and reads it without
+mounting it or attaching an NBD client. It finds the GPT header at LBA 1 for 512-, 1024-, 2048- or
 4096-byte sectors, checks the header and entry-array CRC32s, takes partition 1
 only if it lies inside the volume, checks the FAT32 boot sector, reads the
 first FAT whole (16 MiB at most), and follows cluster chains, refusing a free,

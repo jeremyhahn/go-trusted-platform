@@ -118,15 +118,6 @@ func TestRequireCLIRefusalFailsOnTheWrongRefusal(t *testing.T) {
 	assert.True(t, success.failed, "a CLI success where a refusal is expected fails the leaf")
 }
 
-func TestErrCLINoCommandGroupMatchesByType(t *testing.T) {
-	err := ErrCLINoCommandGroup{Group: "dns", Operation: "CreateZone", Issue: "#954"}
-
-	require.ErrorIs(t, err, ErrCLINoCommandGroup{})
-	assert.False(t, errors.Is(err, ErrCLINoFlag{}), "a missing group is not a missing flag")
-	assert.False(t, errors.Is(err, ErrCLIUpstreamGap{}), "a missing group is not an SDK gap")
-	assert.Equal(t, "platformctl has no dns command group, so CreateZone has no CLI (#954)", err.Error())
-}
-
 const platformctlHelp = `platformctl drives platformd.
 
 Usage:

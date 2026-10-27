@@ -197,9 +197,9 @@ func TestVMLifecycleRoutes_EmptyIDRejectedBeforeTheWire(t *testing.T) {
 	}
 }
 
-// Both REST servers answer an unknown VM 404 and a VM in the wrong state 400
-// (FailedPrecondition renders as 400 there), so the adapter returns NotFound
-// and InvalidArgument.
+// Both REST servers answer an unknown VM 404 and a VM in the wrong state 409
+// (FailedPrecondition renders as 409 there, #665), so the adapter returns
+// NotFound and AlreadyExists.
 func TestVMLifecycleRoutes_ServerErrorsKeepTheirClass(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -208,7 +208,7 @@ func TestVMLifecycleRoutes_ServerErrorsKeepTheirClass(t *testing.T) {
 		want     codes.Code
 	}{
 		{"unknown VM", http.StatusNotFound, `{"code":404,"success":false,"error":"vm not found"}`, codes.NotFound},
-		{"wrong state", http.StatusBadRequest, `{"code":400,"success":false,"error":"instance not running"}`, codes.InvalidArgument},
+		{"wrong state", http.StatusConflict, `{"code":409,"success":false,"error":"instance not running"}`, codes.AlreadyExists},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

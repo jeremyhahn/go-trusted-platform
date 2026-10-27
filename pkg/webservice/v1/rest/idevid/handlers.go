@@ -114,7 +114,7 @@ func (h *Handlers) DeleteIDevID(w http.ResponseWriter, r *http.Request) {
 	}
 	resp, err := h.server.DeleteIDevID(r.Context(), &platformv1.DeleteIDevIDRequest{})
 	if err != nil {
-		protorest.WriteIdentityDeleteError(w, r, h.respWriter, err)
+		protorest.WriteError(w, r, h.respWriter, err)
 		return
 	}
 	protorest.WriteSuccess(w, r, h.respWriter, resp)
@@ -171,7 +171,7 @@ func (h *Handlers) DeleteIAK(w http.ResponseWriter, r *http.Request) {
 	}
 	resp, err := h.server.DeleteIAK(r.Context(), &platformv1.DeleteIAKRequest{})
 	if err != nil {
-		protorest.WriteIdentityDeleteError(w, r, h.respWriter, err)
+		protorest.WriteError(w, r, h.respWriter, err)
 		return
 	}
 	protorest.WriteSuccess(w, r, h.respWriter, resp)
@@ -301,7 +301,7 @@ func (h *Handlers) DeleteIDevIDCertificate(w http.ResponseWriter, r *http.Reques
 	}
 	resp, err := h.server.DeleteIDevIDCertificate(r.Context(), &platformv1.DeleteIDevIDCertificateRequest{})
 	if err != nil {
-		protorest.WriteIdentityDeleteError(w, r, h.respWriter, err)
+		protorest.WriteError(w, r, h.respWriter, err)
 		return
 	}
 	protorest.WriteSuccess(w, r, h.respWriter, resp)
@@ -314,7 +314,7 @@ func (h *Handlers) DeleteIAKCertificate(w http.ResponseWriter, r *http.Request) 
 	}
 	resp, err := h.server.DeleteIAKCertificate(r.Context(), &platformv1.DeleteIAKCertificateRequest{})
 	if err != nil {
-		protorest.WriteIdentityDeleteError(w, r, h.respWriter, err)
+		protorest.WriteError(w, r, h.respWriter, err)
 		return
 	}
 	protorest.WriteSuccess(w, r, h.respWriter, resp)

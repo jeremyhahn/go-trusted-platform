@@ -41,7 +41,7 @@ func TestRootCommandPersistentFlags(t *testing.T) {
 	expectedFlags := []string{
 		"debug", "debug-secrets", "env",
 		"platform-dir", "config-dir", "config",
-		"log-dir", "ca-dir", "setuid",
+		"log-dir", "ca-dir",
 		"intermediate", "so-pin", "pin", "init",
 		"raw-so-pin", "raw-pin",
 	}

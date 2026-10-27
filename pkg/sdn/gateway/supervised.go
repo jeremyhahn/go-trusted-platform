@@ -50,7 +50,8 @@ type ServiceSupervisor interface {
 	// in the child reaches this process's snapshot.
 	ServiceSnapshot(ctx context.Context, service string) (*gwstate.Snapshot, error)
 	// Apply forwards the control plane's desired configuration to the
-	// datapath process and returns the reconciliation state it reports.
+	// datapath and vpn processes and returns the reconciliation state the
+	// datapath process reports.
 	Apply(ctx context.Context, desired *gwstate.DesiredConfig) (gwstate.DesiredConfigState, error)
 }
 

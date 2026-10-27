@@ -184,15 +184,12 @@ start_web_dev() {
 
     # Wait for server to be ready
     echo "Waiting for Next.js dev server to be ready..."
-    for i in $(seq 1 60); do
-        if curl -s http://localhost:3000 > /dev/null 2>&1; then
-            echo "Next.js dev server started successfully (PID: $NEXTJS_PID)"
-            echo "=== Next.js Development Server Started ==="
-            cd /workspace
-            return 0
-        fi
-        sleep 2
-    done
+    if wait_for 120 "Next.js dev server on http://localhost:3000" curl -s http://localhost:3000; then
+        echo "Next.js dev server started successfully (PID: $NEXTJS_PID)"
+        echo "=== Next.js Development Server Started ==="
+        cd /workspace
+        return 0
+    fi
 
     echo "WARNING: Next.js dev server not ready after 120 seconds"
     echo "Check logs at /var/log/nextjs-dev.log"
@@ -308,18 +305,32 @@ start_platformd() {
 
     # Wait for socket to be ready
     echo "Waiting for platform daemon to be ready..."
-    for i in $(seq 1 30); do
-        if [ -S "${PLATFORM_SOCKET_PATH:-/run/platformd.sock}" ]; then
-            echo "Platform daemon started successfully (PID: $PLATFORMD_PID)"
-            echo "=== Platform Daemon Started ==="
-            return 0
-        fi
-        sleep 1
-    done
+    local socket="${PLATFORM_SOCKET_PATH:-/run/platformd.sock}"
+    if wait_for 30 "platformd socket ${socket}" test -S "$socket"; then
+        echo "Platform daemon started successfully (PID: $PLATFORMD_PID)"
+        echo "=== Platform Daemon Started ==="
+        return 0
+    fi
 
     echo "WARNING: Platform daemon socket not ready after 30 seconds"
     echo "=== Platform Daemon Start May Have Failed ==="
     return 1
+}
+
+# platformd_web_ready succeeds once the WebAuthn login endpoint answers with a
+# platform error body ("invalid user", "entity not found" or any JSON error
+# code): the web API is serving requests.
+platformd_web_ready() {
+    curl -sk -X POST -H 'Content-Type: application/json' \
+        -d '{"username":"healthcheck"}' \
+        https://localhost:8443/api/v1/webauthn/login/begin 2>&1 |
+        grep -qE '(invalid user|entity not found|"code":)'
+}
+
+# platformd_web_ready_or_exited <pid> succeeds once the web API is ready or
+# platformd (pid) has exited, so a crashed daemon ends the wait at once.
+platformd_web_ready_or_exited() {
+    process_gone "$1" || platformd_web_ready
 }
 
 # Start platformd with swtpm for web development
@@ -367,37 +378,17 @@ start_platformd_web() {
 
     # Wait for web API to be ready
     echo "Waiting for platform web API to be ready..."
-    for i in $(seq 1 60); do
-        # Check if platformd is still running
-        if ! kill -0 "$PLATFORMD_PID" 2>/dev/null; then
+    if wait_for 120 "platform web API on https://localhost:8443" platformd_web_ready_or_exited "$PLATFORMD_PID"; then
+        if process_gone "$PLATFORMD_PID"; then
             echo "ERROR: platformd process died (PID: $PLATFORMD_PID)"
             echo "Last 30 lines of log:"
             tail -30 /var/log/platformd.log
             return 1
         fi
-
-        # Try health check - accept "invalid user" (after fix) or "entity not found" (old) or any JSON response
-        RESPONSE=$(curl -sk -X POST -H 'Content-Type: application/json' \
-            -d '{"username":"healthcheck"}' \
-            https://localhost:8443/api/v1/webauthn/login/begin 2>&1) || true
-
-        # Show first 5 attempts for debugging
-        if [ "$i" -le 5 ]; then
-            echo "  Attempt $i: ${RESPONSE:0:80}"
-        fi
-
-        if echo "$RESPONSE" | grep -qE '(invalid user|entity not found|"code":)'; then
-            echo "Platform web API started successfully (PID: $PLATFORMD_PID)"
-            echo "=== Platform Daemon for Web Started ==="
-            return 0
-        fi
-
-        # Show progress every 10 seconds
-        if [ $((i % 5)) -eq 0 ] && [ "$i" -gt 5 ]; then
-            echo "  Still waiting... (${i}/60) - Last response: ${RESPONSE:0:100}"
-        fi
-        sleep 2
-    done
+        echo "Platform web API started successfully (PID: $PLATFORMD_PID)"
+        echo "=== Platform Daemon for Web Started ==="
+        return 0
+    fi
 
     echo "WARNING: Platform web API not ready after 120 seconds"
     echo "Check logs at /var/log/platformd.log"

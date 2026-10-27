@@ -374,10 +374,12 @@ type App struct {
 	PrivateIPv4      net.IP                        `yaml:"-" json:"-" mapstructure:"-"`
 	PrivateIPv6      net.IP                        `yaml:"-" json:"-" mapstructure:"-"`
 	Random           io.Reader                     `yaml:"-" json:"-" mapstructure:"-"`
-	RuntimeUser      string                        `yaml:"runtime-user" json:"runtime_user" mapstructure:"runtime-user"`
 	TenantID         string                        `yaml:"tenant-id" json:"tenant_id" mapstructure:"tenant-id"`
 	ShutdownChan     chan bool                     `yaml:"-" json:"-" mapstructure:"-"`
 	TPM              xkmssdk.TrustedPlatformModule `yaml:"-" json:"-" mapstructure:"-"`
+	// enrollDevice replaces ACMEClient.EnrollDevice in EnrollIdentity; nil
+	// in production.
+	enrollDevice deviceEnrollFunc
 	// nodeIdentity is a diskless node's EK-derived identity
 	// (applyDisklessNodeIdentity). Every node built from one media set boots
 	// the same hostname, so a diskless node enrolls and recovers its
@@ -545,7 +547,6 @@ type AppInitParams struct {
 	PlatformDir  string
 	LogDir       string
 	Pin          []byte
-	RuntimeUser  string
 	SOPin        []byte
 }
 
@@ -2794,108 +2795,8 @@ func (app *App) CompletePlatformIdentity(
 				}
 			}
 
-			// Create context with timeout for enrollment
-			enrollCtx, cancelEnroll := context.WithTimeout(ctx, 5*time.Minute)
-			defer cancelEnroll()
-			// Convert YAML enrollment config to runtime enrollment config
-			// Wrap go-xkms's TPM with the ACME client adapter
-
-			// Resolve ${PREFERRED_IP} macro before passing to go-trusted-ca
-			// go-trusted-ca accepts plain IP addresses
-			enrollmentIP := app.ACMEConfig.Client.Enrollment.IPAddress
-			if enrollmentIP == "${PREFERRED_IP}" {
-				enrollmentIP = util.PreferredIPv4().String()
-				app.Logger.Info("Resolved PREFERRED_IP for ACME enrollment", "ip", enrollmentIP)
-			}
-
-			enrollConfig := &trustedca.ACMEEnrollmentConfig{
-				Challenge:  app.ACMEConfig.Client.Enrollment.Challenge,
-				IPAddress:  enrollmentIP,
-				TPMModule:  trustedca.NewACMEXKMSTPMAdapter(app.TPM),
-				CommonName: app.enrollmentName(),
-			}
-			enrollResult, err := app.ACMEClient.EnrollDevice(enrollCtx, enrollConfig)
-			if err != nil {
+			if _, err := app.EnrollIdentity(ctx); err != nil {
 				return nil, err
-			}
-
-			// Persist the CA that issued this device's identity, BEFORE the
-			// leaves below, so their issuer is resolvable the moment they
-			// land.
-			//
-			// The IAK and IDevID are issued by the ENROLLMENT SERVER's CA --
-			// the control plane, acting as the enterprise/privacy CA -- not
-			// by anything this node holds. CA.RootCertificate walks only the
-			// local certificate store plus this CA's own cached root and
-			// intermediate, so without the issuing chain in that store it
-			// returns ErrRootNotFound for the node's own certificate. Three
-			// callers depend on resolving it and all failed identically:
-			// caller admission for attestation (every enrolled node compiled
-			// a policy admitting nobody), the post-enrollment provisioning
-			// TLS pool, and heartbeat.
-			//
-			// The chain arrives because enroll-01 now returns it after the
-			// end-entity certificates, per RFC 8555 section 7.4.2
-			// (go-xkms#556, released in v0.12.0-alpha). An older enrollment
-			// server sends none, leaving Chain empty -- which is why this is
-			// tolerant rather than fatal: the node still enrolls, and the
-			// anchor gap surfaces where it is diagnosable.
-			for _, issuer := range enrollResult.Chain {
-				app.Logger.Info("Importing issuing chain certificate from ACME enrollment",
-					slog.String("subject", issuer.Subject.CommonName),
-					slog.String("issuer", issuer.Issuer.CommonName))
-				if err := app.CA.ImportCertificate(ctx, issuer); err != nil {
-					app.Logger.Error(err, slog.String("context", "Failed to import issuing chain certificate"),
-						slog.String("subject", issuer.Subject.CommonName))
-				}
-			}
-			if len(enrollResult.Chain) == 0 {
-				app.Logger.Warn("ACME enrollment returned no issuing chain; this node cannot resolve the CA that issued its own IDevID",
-					slog.String("remedy", "the enrollment server predates go-xkms v0.12.0-alpha (go-xkms#556)"))
-			}
-
-			// Import the IAK certificate from ACME enrollment
-			if enrollResult.IAKCertificate != nil {
-				app.Logger.Info("Importing IAK certificate from ACME enrollment",
-					slog.String("subject", enrollResult.IAKCertificate.Subject.CommonName))
-				if err := app.CA.ImportCertificate(ctx, enrollResult.IAKCertificate); err != nil {
-					app.Logger.Error(err, slog.String("context", "Failed to import IAK certificate"))
-				}
-				// Persist to the TPM certificate store: the daemon's IDevID
-				// API surface reads it from there, and its presence is what
-				// marks the platform identity complete on later boots.
-				if err := app.TPM.ProvisionIAKCert(enrollResult.IAKCertificate); err != nil {
-					return nil, &WrappedError{Msg: "failed to store IAK certificate in the TPM certificate store", Err: err}
-				}
-				fmt.Println("IAK Certificate:")
-				fmt.Println(localcertstore.ToString(enrollResult.IAKCertificate))
-			}
-
-			// Import the IDevID certificate from ACME enrollment
-			if enrollResult.IDevIDCertificate != nil {
-				app.Logger.Info("Importing IDevID certificate from ACME enrollment",
-					slog.String("subject", enrollResult.IDevIDCertificate.Subject.CommonName))
-				if err := app.CA.ImportCertificate(ctx, enrollResult.IDevIDCertificate); err != nil {
-					app.Logger.Error(err, slog.String("context", "Failed to import IDevID certificate"))
-				}
-				if err := app.TPM.ProvisionIDevIDCert(enrollResult.IDevIDCertificate); err != nil {
-					return nil, &WrappedError{Msg: "failed to store IDevID certificate in the TPM certificate store", Err: err}
-				}
-				fmt.Println("IDevID Certificate:")
-				fmt.Println(localcertstore.ToString(enrollResult.IDevIDCertificate))
-
-				// Perform post-enrollment provisioning: fetch profile and activate
-				// This uses mTLS with the IDevID certificate to authenticate
-				profile, activateResp, provErr := app.FetchProfileAndActivate(ctx, enrollResult.IDevIDCertificate)
-				if provErr != nil {
-					app.Logger.Warn("Post-enrollment provisioning failed (non-fatal)",
-						slog.String("error", provErr.Error()))
-				} else if profile != nil && activateResp != nil {
-					app.Logger.Info("Post-enrollment provisioning completed",
-						slog.String("serial", profile.SerialNumber),
-						slog.Int("admitted_vlan", int(profile.AdmittedNetwork.VLAN)),
-						slog.String("activation_status", activateResp.Status))
-				}
 			}
 
 		} else { // No ACME client config, create IAK and IDevID certificates using local CA

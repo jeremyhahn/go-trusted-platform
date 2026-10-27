@@ -480,7 +480,7 @@ way to reach it is HTTP.
 service's route above** (`sdk/go/transport/rest/adapter.go`; `CreateLDevID` in
 `ldevid.go`) except `DeleteIDevID` and `DeleteIAK`, which go to the daemon
 listener's `DELETE /api/v1/tpm/idevid` / `/api/v1/tpm/iak` so the refusal
-below arrives as `412` and keeps its class. For every other RPC, `platformv1.NewIDevIDServiceClient` over
+below arrives as `409` and keeps its class. For every other RPC, `platformv1.NewIDevIDServiceClient` over
 REST reaches the same
 handlers a browser does (`TestSDKREST_*`,
 `pkg/webservice/v1/rest/idevid/ldevid_test.go`). Until #452 the table named
@@ -504,11 +504,12 @@ which evicts nothing from a persistent handle, and reported success. Both REST s
 paths: the daemon listener and the web service, which also keeps its own
 `DELETE /api/v1/idevid` / `DELETE /api/v1/idevid/iak` on the same handlers,
 behind the admin role gate. On the wire the class is QUIC status `0x0C`
-(`StatusFailedPrecondition`) and HTTP `412` on both REST servers: the daemon
-listener's IDevID-family mapping, shared with LDevID, and on the web service
-the identity-delete handlers' own mapping (`protorest.WriteIdentityDeleteError`),
-because `protorest`'s shared `400` (#665) reaches the SDK as `InvalidArgument`,
-not the refusal. The SDK returns
+(`StatusFailedPrecondition`) and HTTP `409` on both REST servers, the
+platform's status for `FailedPrecondition` (#665): the daemon listener's
+IDevID-family mapping, shared with LDevID, and on the web service `protorest`'s
+shared mapping. The SDK's REST transport reads a `409` on a `DELETE` back as
+`FailedPrecondition` (a delete cannot collide with an existing resource) and on
+any other method as `AlreadyExists`, so the refusal keeps its class. The SDK returns
 `*idevid.ErrIdentityKeyNotDeletable`, and `platformctl tpm idevid delete` /
 `platformctl tpm iak delete` exit `1` with the refusal.
 
@@ -516,7 +517,7 @@ The certificate deletes (Delete IDevID Certificate, Delete IAK Certificate)
 are real on every transport and answer in gRPC's classes (#704): daemon REST
 `DELETE /api/v1/tpm/idevid/cert` / `DELETE /api/v1/tpm/iak/cert` and QUIC
 `0x7A` / `0x7B` call the shared IDevID service, as gRPC, Unix and MCP do. No
-TPM is `FailedPrecondition` (QUIC `0x0C`, HTTP `412` on both REST servers), a
+TPM is `FailedPrecondition` (QUIC `0x0C`, HTTP `409` on both REST servers), a
 missing certificate `NotFound` (`404`), a bad NV index `InvalidArgument`
 (`400`) and any other TPM failure `Internal` (`500`); with no IDevID service
 wired the daemon REST and QUIC handlers answer `Unavailable` (`503`). Until
@@ -592,7 +593,7 @@ QUIC status bytes are the platform-wide vocabulary
 | `0x07` | `StatusPermissionDenied` | 403 | `PermissionDenied` | upstream text matching `permission` / `denied` / `unauthorized` / `forbidden` / `authorization` |
 | `0x0A` | `StatusUnavailable` | 503 | `Unavailable` | `ErrTPM2ServiceNotAvailable` — **the daemon has no TPM handle** |
 | `0x0B` | `StatusNotImplemented` | 501 | `Unimplemented` | `ErrTPM2UnknownSubOpcode` |
-| `0x01` | `StatusInvalidRequest` | 400 | `FailedPrecondition` | `tpmek.ErrNotConfigured` / `tpmek.ErrAlgorithm` (Create EK when `tpm.ek` names no handle, or an algorithm with no EK template); on gRPC and MCP also upstream text matching `TPM` / `tpm` / `handle` |
+| `0x01` | `StatusInvalidRequest` | 409 (#665) | `FailedPrecondition` | `tpmek.ErrNotConfigured` / `tpmek.ErrAlgorithm` (Create EK when `tpm.ek` names no handle, or an algorithm with no EK template); on gRPC and MCP also upstream text matching `TPM` / `tpm` / `handle` |
 
 **503 on any TPM operation means the daemon has no TPM**, not that the operation
 failed. Check `platformctl tpm status` and the `"TPM target resolved"` log line
