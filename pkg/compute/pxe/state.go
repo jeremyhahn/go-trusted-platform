@@ -247,6 +247,13 @@ func (sm *StateManager) List(filter *DeviceFilter) []*DeviceInfo {
 // Transition changes a device's state and emits an event.
 // Returns an error if the device is not found or the transition is invalid.
 func (sm *StateManager) Transition(deviceID string, newState ProvisioningState, reason string) error {
+	return sm.TransitionWith(deviceID, newState, reason, nil)
+}
+
+// TransitionWith changes a device's state and applies apply to the device in
+// the same atomic swap, so the change lands only with an accepted transition.
+// A nil apply makes it a plain Transition.
+func (sm *StateManager) TransitionWith(deviceID string, newState ProvisioningState, reason string, apply func(*DeviceInfo)) error {
 	if deviceID == "" {
 		return ErrDeviceNotFound{DeviceID: deviceID}
 	}
@@ -285,6 +292,9 @@ func (sm *StateManager) Transition(deviceID string, newState ProvisioningState, 
 		// Create updated device
 		now := sm.now()
 		updatedDevice := copyDeviceInfo(currentEntry.device)
+		if apply != nil {
+			apply(updatedDevice)
+		}
 		updatedDevice.State = newState
 		updatedDevice.StateReason = reason
 		updatedDevice.UpdatedAt = now

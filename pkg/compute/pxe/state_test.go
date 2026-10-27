@@ -614,6 +614,39 @@ func TestStateManager_Transition_InvalidTransition(t *testing.T) {
 	assert.True(t, errors.As(err, &transitionErr))
 }
 
+func TestStateManager_TransitionWith_AppliesWithTheTransition(t *testing.T) {
+	sm := NewStateManager()
+	mac, _ := net.ParseMAC("00:11:22:33:44:55")
+	require.NoError(t, sm.Register(&DeviceInfo{ID: "device-123", MACAddress: mac, State: StateDiscovered}))
+
+	err := sm.TransitionWith("device-123", StateBooting, "booting", func(d *DeviceInfo) {
+		d.PortID = "port-7"
+	})
+	require.NoError(t, err)
+
+	retrieved, err := sm.Get("device-123")
+	require.NoError(t, err)
+	assert.Equal(t, StateBooting, retrieved.State)
+	assert.Equal(t, "port-7", retrieved.PortID)
+}
+
+func TestStateManager_TransitionWith_RefusedTransitionAppliesNothing(t *testing.T) {
+	sm := NewStateManager()
+	mac, _ := net.ParseMAC("00:11:22:33:44:55")
+	require.NoError(t, sm.Register(&DeviceInfo{ID: "device-123", MACAddress: mac, State: StateDiscovered}))
+
+	err := sm.TransitionWith("device-123", StateAuthorized, "skip", func(d *DeviceInfo) {
+		d.PortID = "port-7"
+	})
+	var transitionErr ErrInvalidStateTransition
+	require.True(t, errors.As(err, &transitionErr))
+
+	retrieved, err := sm.Get("device-123")
+	require.NoError(t, err)
+	assert.Equal(t, StateDiscovered, retrieved.State)
+	assert.Empty(t, retrieved.PortID)
+}
+
 func TestStateManager_UpdateDevice(t *testing.T) {
 	sm := NewStateManager()
 	mac, _ := net.ParseMAC("00:11:22:33:44:55")

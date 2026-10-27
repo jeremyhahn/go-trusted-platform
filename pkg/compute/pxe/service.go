@@ -652,19 +652,10 @@ func (s *service) SetDeviceInstalling(ctx context.Context, deviceID, installCert
 		)
 	}
 
-	updateErr := s.stateManager.UpdateDevice(deviceID, func(d *DeviceInfo) error {
-		d.InstallCertificateSHA256 = fingerprint
-		return nil
-	})
-	if updateErr != nil {
-		return ErrProvisioningFailed{
-			DeviceID: deviceID,
-			Reason:   "failed to bind installer certificate",
-			Cause:    updateErr,
-		}
-	}
-
-	if err := s.stateManager.Transition(deviceID, StateInstalling, reason); err != nil {
+	// The binding lands in the same swap as the transition: a call that loses
+	// the race to installing must not rebind the webhook's identity.
+	bind := func(d *DeviceInfo) { d.InstallCertificateSHA256 = fingerprint }
+	if err := s.stateManager.TransitionWith(deviceID, StateInstalling, reason, bind); err != nil {
 		return ErrProvisioningFailed{
 			DeviceID: deviceID,
 			Reason:   "failed to transition to installing state",

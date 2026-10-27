@@ -16,6 +16,7 @@ package pxe
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"strings"
 	"sync"
@@ -560,6 +561,49 @@ func TestService_SetDeviceInstalling_BindsTheInstallerCertificate(t *testing.T) 
 	require.NoError(t, err)
 	require.Len(t, found, 1)
 	assert.Equal(t, device.ID, found[0].ID)
+}
+
+// TestService_SetDeviceInstalling_RejectedCallKeepsTheAcceptedBinding races
+// installers with different certificates against one booting device. Only one
+// call may move the device to installing, and the bound certificate must be
+// that call's: a rejected call must not rebind the webhook's identity.
+func TestService_SetDeviceInstalling_RejectedCallKeepsTheAcceptedBinding(t *testing.T) {
+	svc, _ := initializeTestService(t)
+	ctx := context.Background()
+	const rounds = 50
+	const installers = 16
+
+	for round := 0; round < rounds; round++ {
+		mac := fmt.Sprintf("02:00:00:00:%02x:%02x", round/256, round%256)
+		device, err := svc.RegisterDevice(ctx, mac, "port-1")
+		require.NoError(t, err)
+		require.NoError(t, svc.UpdateDeviceState(ctx, device.ID, StateBooting, "booting"))
+
+		start := make(chan struct{})
+		accepted := make(chan string, installers)
+		var wg sync.WaitGroup
+		for i := 0; i < installers; i++ {
+			fingerprint := CertificateSHA256([]byte(fmt.Sprintf("installer %d/%d", round, i)))
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				<-start
+				if svc.SetDeviceInstalling(ctx, device.ID, fingerprint, "installing") == nil {
+					accepted <- fingerprint
+				}
+			}()
+		}
+		close(start)
+		wg.Wait()
+		close(accepted)
+
+		require.Len(t, accepted, 1, "round %d", round)
+		winner := <-accepted
+		retrieved, err := svc.GetDevice(ctx, device.ID)
+		require.NoError(t, err)
+		assert.Equal(t, StateInstalling, retrieved.State)
+		require.Equal(t, winner, retrieved.InstallCertificateSHA256, "round %d", round)
+	}
 }
 
 func TestService_SetDeviceInstalling_Refusals(t *testing.T) {
