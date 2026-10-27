@@ -17,6 +17,7 @@ import (
 	"context"
 	"errors"
 	"net"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -538,6 +539,80 @@ func TestService_SetDeviceEnrolled_InvalidTransition(t *testing.T) {
 
 	var transitionErr ErrInvalidStateTransition
 	assert.True(t, errors.As(err, &transitionErr))
+}
+
+func TestService_SetDeviceInstalling_BindsTheInstallerCertificate(t *testing.T) {
+	svc, _ := initializeTestService(t)
+	ctx := context.Background()
+	device, err := svc.RegisterDevice(ctx, "00:11:22:33:44:55", "port-1")
+	require.NoError(t, err)
+	require.NoError(t, svc.UpdateDeviceState(ctx, device.ID, StateBooting, "booting"))
+	fingerprint := CertificateSHA256([]byte("installer certificate"))
+
+	// An upper-case fingerprint is stored in the form the webhook computes.
+	require.NoError(t, svc.SetDeviceInstalling(ctx, device.ID, strings.ToUpper(fingerprint), "installing"))
+
+	retrieved, err := svc.GetDevice(ctx, device.ID)
+	require.NoError(t, err)
+	assert.Equal(t, StateInstalling, retrieved.State)
+	assert.Equal(t, fingerprint, retrieved.InstallCertificateSHA256)
+	found, err := svc.ListDevices(ctx, &DeviceFilter{InstallCertificateSHA256: fingerprint})
+	require.NoError(t, err)
+	require.Len(t, found, 1)
+	assert.Equal(t, device.ID, found[0].ID)
+}
+
+func TestService_SetDeviceInstalling_Refusals(t *testing.T) {
+	fingerprint := CertificateSHA256([]byte("installer certificate"))
+	cases := map[string]struct {
+		fingerprint string
+		booted      bool
+		deviceID    string
+		wantErr     error
+	}{
+		"not hex":            {fingerprint: strings.Repeat("zz", 32), booted: true, wantErr: ErrInvalidCertificateFingerprint{}},
+		"wrong length":       {fingerprint: fingerprint[:62], booted: true, wantErr: ErrInvalidCertificateFingerprint{}},
+		"empty":              {fingerprint: "", booted: true, wantErr: ErrInvalidCertificateFingerprint{}},
+		"device not booting": {fingerprint: fingerprint, booted: false, wantErr: ErrInvalidStateTransition{}},
+		"unknown device":     {fingerprint: fingerprint, booted: true, deviceID: "nonexistent", wantErr: ErrDeviceNotFound{}},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			svc, _ := initializeTestService(t)
+			ctx := context.Background()
+			device, err := svc.RegisterDevice(ctx, "00:11:22:33:44:55", "port-1")
+			require.NoError(t, err)
+			if tc.booted {
+				require.NoError(t, svc.UpdateDeviceState(ctx, device.ID, StateBooting, "booting"))
+			}
+			deviceID := device.ID
+			if tc.deviceID != "" {
+				deviceID = tc.deviceID
+			}
+
+			err = svc.SetDeviceInstalling(ctx, deviceID, tc.fingerprint, "installing")
+
+			require.Error(t, err)
+			assert.IsType(t, tc.wantErr, err)
+			retrieved, getErr := svc.GetDevice(ctx, device.ID)
+			require.NoError(t, getErr)
+			assert.Empty(t, retrieved.InstallCertificateSHA256, "a refused call must not bind a certificate")
+			assert.NotEqual(t, StateInstalling, retrieved.State)
+		})
+	}
+}
+
+func TestService_SetDeviceInstalling_NotInitialized(t *testing.T) {
+	svc := NewService()
+
+	err := svc.SetDeviceInstalling(context.Background(), "device-123", CertificateSHA256([]byte("c")), "installing")
+
+	assert.IsType(t, ErrServiceNotInitialized{}, err)
+}
+
+func TestCertificateSHA256_IsTheLowercaseDigestOfTheDER(t *testing.T) {
+	assert.Equal(t, "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", CertificateSHA256(nil))
+	assert.NotEqual(t, CertificateSHA256([]byte("a")), CertificateSHA256([]byte("b")))
 }
 
 func TestService_AuthorizeDevice_NotInitialized(t *testing.T) {

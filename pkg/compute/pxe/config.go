@@ -102,9 +102,10 @@ type ServiceConfig struct {
 	// WebhookEnabled mounts the install-completion webhook,
 	// POST /api/v1/pxe/webhook/complete (default: false). When false the
 	// route is not served at all. When true the calling node is
-	// authenticated by its device certificate over mTLS: the record whose
-	// enrolled CertificateSerial is the serial of the verified client
-	// certificate is the one updated, on every transport (#238).
+	// authenticated by its certificate over mTLS: the record whose
+	// InstallCertificateSHA256, bound when the device entered installing,
+	// is the SHA-256 of the verified client certificate is the one
+	// updated, on every transport (#238).
 	WebhookEnabled bool
 }
 

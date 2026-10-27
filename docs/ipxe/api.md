@@ -264,11 +264,14 @@ who arrived here can find them:
 **The install-complete webhook route exists only when the operator sets
 `pxe.ServiceConfig.WebhookEnabled`** (default `false`). Disabled, the path is
 not registered and answers 404 like any unknown path. Enabled, the node
-**authenticates by its device certificate over mTLS** (#238): the device is the
-one registered with the serial of the leaf of the verified client chain, and a
-MAC in the request body must match it. No verified client certificate is 401;
-a certificate no device carries, or a mismatched MAC, is 403. Transports with
-no peer certificate — Unix, MCP stdio, embedded — refuse the call.
+**authenticates by its installer certificate over mTLS** (#238): the device is
+the one whose `install_certificate_sha256` is the SHA-256 of the leaf of the
+verified client chain, and a MAC in the request body must match it. The
+operator binds that fingerprint when the device enters installing (`UpdateState`
+with `install_certificate_sha256`); a serial is not used, because it is unique
+only per issuer. No verified client certificate is 401; a certificate no device
+carries, or a mismatched MAC, is 403. Transports with no peer certificate —
+Unix, MCP stdio, embedded — refuse the call.
 
 **The `REST base` column is a locator, not the contract.** It gives the prefix a
 route hangs under; it does not give the route. The normative per-route path

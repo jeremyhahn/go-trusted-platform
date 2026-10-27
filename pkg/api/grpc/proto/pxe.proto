@@ -113,6 +113,10 @@ message PXEDeviceInfo {
 
   // Audit trail of provisioning events.
   repeated ProvisioningEvent events = 14;
+
+  // Lowercase hex SHA-256 of the DER certificate the installer presents to
+  // the install-completion webhook, bound when the device enters installing.
+  string install_certificate_sha256 = 15;
 }
 
 // PXEDeviceFilter provides filtering options for listing devices.
@@ -230,6 +234,10 @@ message UpdatePXEStateRequest {
   string device_id = 1;
   ProvisioningState state = 2;
   string reason = 3;
+  // Hex SHA-256 of the DER certificate the installer will present to the
+  // install-completion webhook. Accepted only with state INSTALLING; the
+  // webhook is refused for a device that has none bound.
+  string install_certificate_sha256 = 4;
 }
 
 message UpdatePXEStateResponse {

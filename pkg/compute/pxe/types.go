@@ -133,6 +133,13 @@ type DeviceInfo struct {
 	// CertificateSerial is the serial number of the certificate after enrollment
 	CertificateSerial string `json:"certificate_serial,omitempty" yaml:"certificate_serial,omitempty"`
 
+	// InstallCertificateSHA256 is the lowercase hex SHA-256 of the DER
+	// certificate the installer presents to the install-completion webhook.
+	// It is bound when the device enters StateInstalling, before any
+	// enrollment certificate exists, and names the whole certificate rather
+	// than a serial that is unique only within one issuer.
+	InstallCertificateSHA256 string `json:"install_certificate_sha256,omitempty" yaml:"install_certificate_sha256,omitempty"`
+
 	// CurrentVLAN is the VLAN the device is currently assigned to
 	CurrentVLAN uint16 `json:"current_vlan" yaml:"current_vlan"`
 
@@ -166,10 +173,11 @@ type DeviceFilter struct {
 	// VLAN filters by current VLAN assignment
 	VLAN uint16 `json:"vlan,omitempty" yaml:"vlan,omitempty"`
 
-	// CertificateSerial filters by the enrolled certificate serial (exact
-	// match). The install-completion webhook finds the calling node's record
-	// by the serial of its verified client certificate.
-	CertificateSerial string `json:"certificate_serial,omitempty" yaml:"certificate_serial,omitempty"`
+	// InstallCertificateSHA256 filters by the bound installer certificate
+	// fingerprint (exact match). The install-completion webhook finds the
+	// calling node's record by the fingerprint of its verified client
+	// certificate.
+	InstallCertificateSHA256 string `json:"install_certificate_sha256,omitempty" yaml:"install_certificate_sha256,omitempty"`
 
 	// Limit is the maximum number of results to return
 	Limit int `json:"limit,omitempty" yaml:"limit,omitempty"`
@@ -199,7 +207,7 @@ func (f *DeviceFilter) Matches(device *DeviceInfo) bool {
 		return false
 	}
 
-	if f.CertificateSerial != "" && device.CertificateSerial != f.CertificateSerial {
+	if f.InstallCertificateSHA256 != "" && device.InstallCertificateSHA256 != f.InstallCertificateSHA256 {
 		return false
 	}
 

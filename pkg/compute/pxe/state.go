@@ -493,18 +493,19 @@ func copyDeviceInfo(src *DeviceInfo) *DeviceInfo {
 	}
 
 	dst := &DeviceInfo{
-		ID:                src.ID,
-		PortID:            src.PortID,
-		State:             src.State,
-		StateReason:       src.StateReason,
-		Profile:           src.Profile, // Shallow copy - profiles should be immutable
-		CertificateSerial: src.CertificateSerial,
-		CurrentVLAN:       src.CurrentVLAN,
-		TargetVLAN:        src.TargetVLAN,
-		CreatedAt:         src.CreatedAt,
-		UpdatedAt:         src.UpdatedAt,
-		StateChangedAt:    src.StateChangedAt,
-		RetryCount:        src.RetryCount,
+		ID:                       src.ID,
+		PortID:                   src.PortID,
+		State:                    src.State,
+		StateReason:              src.StateReason,
+		Profile:                  src.Profile, // Shallow copy - profiles should be immutable
+		CertificateSerial:        src.CertificateSerial,
+		InstallCertificateSHA256: src.InstallCertificateSHA256,
+		CurrentVLAN:              src.CurrentVLAN,
+		TargetVLAN:               src.TargetVLAN,
+		CreatedAt:                src.CreatedAt,
+		UpdatedAt:                src.UpdatedAt,
+		StateChangedAt:           src.StateChangedAt,
+		RetryCount:               src.RetryCount,
 	}
 
 	// Copy MAC address

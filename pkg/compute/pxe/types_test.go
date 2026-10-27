@@ -250,8 +250,9 @@ func TestDeviceFilter_Matches(t *testing.T) {
 		UpdatedAt:      now,
 		StateChangedAt: now,
 	}
-	enrolled := copyDeviceInfo(device)
-	enrolled.CertificateSerial = "4242"
+	installCert := CertificateSHA256([]byte("installer certificate"))
+	bound := copyDeviceInfo(device)
+	bound.InstallCertificateSHA256 = installCert
 
 	tests := []struct {
 		name     string
@@ -332,21 +333,21 @@ func TestDeviceFilter_Matches(t *testing.T) {
 			expected: true,
 		},
 		{
-			name:     "certificate_serial_filter_match",
-			filter:   &DeviceFilter{CertificateSerial: "4242"},
-			device:   enrolled,
+			name:     "install_certificate_filter_match",
+			filter:   &DeviceFilter{InstallCertificateSHA256: installCert},
+			device:   bound,
 			expected: true,
 		},
 		{
-			// Exact match only: a serial is not a prefix of another.
-			name:     "certificate_serial_filter_no_prefix_match",
-			filter:   &DeviceFilter{CertificateSerial: "42"},
-			device:   enrolled,
+			// Exact match only: a fingerprint is not a prefix of another.
+			name:     "install_certificate_filter_no_prefix_match",
+			filter:   &DeviceFilter{InstallCertificateSHA256: installCert[:8]},
+			device:   bound,
 			expected: false,
 		},
 		{
-			name:     "certificate_serial_filter_excludes_unenrolled",
-			filter:   &DeviceFilter{CertificateSerial: "4242"},
+			name:     "install_certificate_filter_excludes_unbound",
+			filter:   &DeviceFilter{InstallCertificateSHA256: installCert},
 			device:   device,
 			expected: false,
 		},

@@ -47,6 +47,10 @@ type Service interface {
 	// State Transitions
 	UpdateDeviceState(ctx context.Context, deviceID string, state ProvisioningState, reason string) error
 	SetDeviceEnrolled(ctx context.Context, deviceID, certSerial string) error
+	// SetDeviceInstalling moves the device to StateInstalling and binds the
+	// hex SHA-256 of the certificate its installer will present to the
+	// install-completion webhook.
+	SetDeviceInstalling(ctx context.Context, deviceID, installCertSHA256, reason string) error
 	AuthorizeDevice(ctx context.Context, deviceID string, targetVLAN uint16) error
 	QuarantineDevice(ctx context.Context, deviceID string, reason string) error
 	RetryDevice(ctx context.Context, deviceID string) error
@@ -607,6 +611,70 @@ func (s *service) SetDeviceEnrolled(ctx context.Context, deviceID, certSerial st
 	s.logger.Info("Device enrolled",
 		"device_id", deviceID,
 		"certificate_serial", certSerial,
+	)
+
+	return nil
+}
+
+// SetDeviceInstalling binds the installer certificate fingerprint and moves
+// the device to StateInstalling. The binding is the identity the
+// install-completion webhook authenticates: the enrolled certificate does not
+// exist yet, because enrollment follows install_complete.
+func (s *service) SetDeviceInstalling(ctx context.Context, deviceID, installCertSHA256, reason string) error {
+	if !s.initialized.Load() {
+		return ErrServiceNotInitialized{}
+	}
+
+	fingerprint, err := normalizeCertificateSHA256(deviceID, installCertSHA256)
+	if err != nil {
+		return err
+	}
+
+	device, err := s.stateManager.Get(deviceID)
+	if err != nil {
+		return ErrDeviceNotFound{DeviceID: deviceID}
+	}
+
+	if !device.State.CanTransitionTo(StateInstalling) {
+		return ErrInvalidStateTransition{
+			DeviceID:  deviceID,
+			FromState: string(device.State),
+			ToState:   string(StateInstalling),
+			Reason:    "device must be booting",
+		}
+	}
+
+	if err := s.applyVLANForState(ctx, device, StateInstalling); err != nil {
+		s.logger.Warn("Failed to apply VLAN for state transition",
+			"device_id", deviceID,
+			"state", StateInstalling,
+			"error", err.Error(),
+		)
+	}
+
+	updateErr := s.stateManager.UpdateDevice(deviceID, func(d *DeviceInfo) error {
+		d.InstallCertificateSHA256 = fingerprint
+		return nil
+	})
+	if updateErr != nil {
+		return ErrProvisioningFailed{
+			DeviceID: deviceID,
+			Reason:   "failed to bind installer certificate",
+			Cause:    updateErr,
+		}
+	}
+
+	if err := s.stateManager.Transition(deviceID, StateInstalling, reason); err != nil {
+		return ErrProvisioningFailed{
+			DeviceID: deviceID,
+			Reason:   "failed to transition to installing state",
+			Cause:    err,
+		}
+	}
+
+	s.logger.Info("Device installing",
+		"device_id", deviceID,
+		"install_certificate_sha256", fingerprint,
 	)
 
 	return nil
