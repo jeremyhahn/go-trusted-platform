@@ -1,26 +1,75 @@
-# actionlint configuration, read by `make lint`.
+# actionlint-template: v7 — fleet self-hosted runner labels for actionlint.
+# Source of truth: software/templates/github-actions/actionlint.yaml in the
+# automatethethings repo. Copy to <repo>/.github/actionlint.yaml.
 #
-# The custom labels of our Gitea runners:
+# Without this file actionlint reports every self-hosted label as an unknown
+# runner (runner-label), which trains readers to ignore its output — the
+# signal-integrity failure mode. With it, a MISSPELLED label is still caught.
 #
-# - `ci-gate` is the reserved label of the 1-CPU gate runners the CI Gate job
-#   in ci.yml runs on (DS-2273); that job takes no checkout and no `uses:`.
-# - `batch` is the self-hosted label of the batch runners batch.yml runs on
-#   (#860); nothing else uses it.
-# - `bigdisk` is the label of the Dell/omega runners with the large disks; the
-#   Devcontainer image and Integration jobs in ci.yml run on it on Gitea
-#   (DS-2467, DS-3381); on github.com they fall back to ubuntu-latest.
-# - `codex` and `qwen` are the review runners code-review.yml runs on: Codex
-#   on `codex`, the advisory opencode review on `qwen` (ci-node-2), handbook
-#   code-review template v5.3 (m826).
+# Labels must match the live Gitea runner fleet. `codex`, `claude` and
+# `code-review-qwen` are restricted labels (review workflows only — they carry
+# credential mounts, conventions/sdlc.md); listing them here affects linting
+# only, not policy.
+#
+# v2 (2026-09-05, go-truststrap #46): add `code-review-qwen`, the label of
+# the GPU host's code-review Gitea runner (id 48), introduced with the label-driven
+# qwen review pilot. The runner was live and completing jobs while this
+# allowlist still omitted it, so actionlint correctly reported an unknown
+# runner and took `Lint` — and with it the whole staged gate — red on main.
+# Adding a self-hosted label to a workflow means adding it here in the same
+# change.
+#
+# v3 (2026-09-07): `code-review-qwen` -> `code-review`. Runner 48 was renamed
+# and this file was not, so the TEMPLATE said one thing while every repo copy
+# said another — go-sysmon's `.github/actionlint.yaml` already carried
+# `code-review`, matching the live fleet. Any repo that had copied the template
+# verbatim would have taken `Lint` red on the very label v2 was written to fix.
+# The dead name is removed rather than kept alongside: an allowlist that still
+# accepts a label no runner has cannot catch that label as a typo.
+#
+# v4 (2026-10-12): `batch`, the label of the batch runners Infrastructure
+# registers for batch.yml (owner order 10:43 EDT: more work for the fleet).
+#
+# v5 (2026-10-18, ci-template v1.21): `bigdisk`, where the image job builds the
+# devcontainer images and runs the stages in them, and `ci-gate`, where CI Gate runs
+# (Company Agent m386). go-quicraft's ci.yml has used both since v1.18.
+#
+# v6 (2026-10-20, Company Agent m867 (1), decision 96): `qwen`, where
+# code-review.yml's opencode review job runs, and `dells`, the label of the Dell
+# runners a repo's ci.yml may name. The ruling: fix the template, not the
+# project. The template ships every self-hosted label, so a repo copies it
+# verbatim and takes no per-project waiver; v6 also drops the one lab hostname
+# the v2 note named.
+#
+# v7 (2026-10-25, Company Agent m1258 (6)): `release`, the label of the
+# release-only runner. A release-only job names it in the server-conditional
+# form ci.yml uses for `bigdisk` and `ci-gate`,
+# `${{ github.server_url == 'https://github.com' && 'ubuntu-latest' || 'release' }}`,
+# never plain `runs-on: release`, so a github.com copy still runs
+# (conventions/ci-standard.md §3).
+#
+# Verify against the fleet, not against this comment:
+#   curl -sH "Authorization: token $TOK" \
+#     "$GITEA/api/v1/admin/actions/runners" \
+#     | jq -r '.runners[] | select(.status=="online")
+#              | "\(.name)\t\(.labels|map(.name)|join(","))"'
 self-hosted-runner:
   labels:
-    - ci-gate
+    - ubuntu-latest
+    - ubuntu-22.04
+    - codex
+    - codex-task
+    - claude
+    - code-review
     - batch
     - bigdisk
-    - codex
+    - ci-gate
     - qwen
+    - dells
+    - release
 
-# The ignore is deliberate and scoped to one file and one message:
+# CUSTOMIZE (this project): the ignore is deliberate and scoped to one file
+# and one message:
 paths:
   # Gitea's act runner implements the v3 artifact protocol only; v4 needs the
   # GitHub artifact service and fails on this runner (#776).

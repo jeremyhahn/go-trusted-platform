@@ -3282,6 +3282,10 @@ ifndef GO_BUILD_TAGS_PROBING
 	@echo "$(GREEN)✓ GO_BUILD_TAGS reaches every ci-template target$(RESET)"
 endif
 
+.PHONY: lint-gates
+## lint-gates: The repo's grep gates; CI runs them in the Lint Gates job beside Lint (ci-template v1.27)
+lint-gates: check-insecure-tls
+
 .PHONY: check-insecure-tls
 ## check-insecure-tls: Enforce InsecureSkipVerify allowlist (fails on unapproved use)
 check-insecure-tls:

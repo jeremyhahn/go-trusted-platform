@@ -479,7 +479,8 @@ deliberate exception. They run on the host against services the caller has
 already started, they say so in their help text, and they are not what CI or a
 lane runs.
 
-CI runs `make integration-test` in its full tier (see CI below). The other
+CI runs `make integration-test` in its full tier, and loops it in the nightly
+`soak` job (see CI below). The other
 workflow that touches tests is `.github/workflows/batch.yml` (#860): a `workflow_dispatch`-only workflow, dispatched on
 `main` and never part of a merge gate, that runs on the self-hosted `batch`
 runners. It fuzzes every `Fuzz*` target, runs the `make test-race` package set
@@ -627,24 +628,77 @@ devcontainer image so a developer and CI run the same thing:
 
 | Job | Tier | What it runs |
 |-----|------|--------------|
-| `changes` | PR | Lists the PR's changed files and sets `docs_only` (below) |
-| `image` | docs | `make docker-build` (toolchain and integration images), then `make build`, `make test`, `make security` and `make deps-check` in the toolchain image through `scripts/in-toolchain-image.sh`, and `trivy image` on the integration image |
-| `integration` | full | A matrix job per leg: `make integration-test-leg LEG=<n>` under a per-run, per-leg `IT_PROJECT` and `IT_IMAGE`, torn down on every exit (see "Legs") |
-| `lint` | PR | Native-runner checks: format, vet, lint, `check-insecure-tls` |
-| `sdkjs`, `security`, `build`, `test` | docs | Native-runner checks: the JS SDK; gosec with its SARIF upload (GitHub only), govulncheck, module verification; `go build ./...` (root and `sdk/go`), `build-no-web`, the Pi binaries and the `sdk/go` consumer check; `make test` and `make test-sdk-go` |
-| `race`, `web` | full | `make test-race`; the web console's tests, typecheck and build |
-| `fips` | main only | `make test-fips`; outside the gate |
+| `changes` | PR | Lists the PR's changed files and sets `docs_only` (below) (`ci.yml:162`) |
+| `image` | PR | `make docker-build` (toolchain and integration images, `ci.yml:261-264`), then, in the toolchain image through `scripts/in-toolchain-image.sh`: `make fmt-check`, `make vet` and `make lint` (`:271-281`); the releasability test on a docs-only PR (`:285-287`); off a docs-only PR, `make build build-no-web rpi-binaries`, `go build ./...`, the `sdk/go` build and consumer check, `make test test-sdk-go` and `make test-race` (`:294-326`); on every event, a docs-only PR included, `make deps-check` (ci-template v1.28, `:344-348`); in the full tier, `make security` (`:333-337`) and `trivy image` on the integration image (`:358-367`) |
+| `lint-gates` | PR | `make lint-gates`, the repo's grep gates (today `check-insecure-tls`), on the runner (`ci.yml:381`) |
+| `arch-gates` | PR | No direct go-objstore import outside a storage seam (this repo has none) (`ci.yml:412`) |
+| `sdkjs` | docs | The JS SDK's unit tests and lint, on the runner (`ci.yml:441`) |
+| `web` | full | The web console's tests, typecheck and build (`ci.yml:481-507`) |
+| `integration` | full | A matrix job per leg: `make integration-test-leg LEG=<n>` under a per-run, per-leg `IT_PROJECT` and `IT_IMAGE`, torn down on every exit (see "Legs"); needs `image` (`ci.yml:516-592`) |
+| `soak` | nightly | `make integration-test` looped for `SOAK_MINUTES` (below) (`ci.yml:615-696`) |
+| `fips` | full | `make test-fips`; outside the gate (`ci.yml:711-727`) |
 
-The full tier runs on every push to `main`, on `workflow_dispatch`, and on a PR
-labelled `ci:full`. The docs tier runs on every run except a docs-only PR: one
-whose every changed file is markdown or under `docs/` (`DOCS_ONLY_PATTERN`),
-none of them a page a unit test reads (`DOCS_TESTED_PATTERN`, today
-`docs/daemon/` and `docs/web/`). A docs-only PR runs `lint` and `CI Gate`
-only; `ci:full` overrides it, and so does any doubt in the diff. `CI Gate`
-passes when every PR-tier job passed, every docs-tier job passed or skipped on
-a docs-only PR (`docs_only` reading exactly `true`), and every full-tier job
-passed or was not selected. `pkg/arch/citiers_test.go` holds the tiers, the
-gate's `needs` and its check lines to one another.
+The tiers follow ci-template v1.28 (handbook `ci-standard.md` §8; the header
+of `ci.yml:63-72`). The PR tier is the `changes`, `image`, `lint-gates` and
+`arch-gates` jobs; from v1.28 it includes the `image` job's `make deps-check`,
+a lint-class gate that runs on every event, as `make lint` does. The docs tier
+is `sdkjs` and the `image` job's build and test steps. The full tier adds
+`web`, `integration`, `fips` and the `image` job's security and trivy steps;
+it runs on every push to `main`, on `workflow_dispatch`, on the schedule, and
+on a PR labelled `ci:full`. The workflow env `CI_FULL_TIER` (`ci.yml:143`)
+holds that selection for steps and `CI Gate`. The nightly tier is the `soak`
+job, on the schedule and `workflow_dispatch` only (`ci.yml:617`), never on a
+push to `main` or on `ci:full`. The schedule is one daily cron, `0 4 * * *`
+(04:00 UTC, `ci.yml:110-111`), and runs on the default branch: `main`'s full
+tier and the soak. `ci.yml` is the repository's one scheduler; `nightly.yml`
+and `batch.yml` are dispatch-only (`ci.yml:106-108`).
+
+The docs tier runs on every run except a docs-only PR: one whose every changed
+file is markdown or under `docs/` (`DOCS_ONLY_PATTERN`, `ci.yml:146`), none of
+them a page a unit test reads (`DOCS_TESTED_PATTERN`, `ci.yml:151`, today
+`docs/daemon/` and `docs/web/`). A docs-only PR runs the `changes`,
+`lint-gates` and `arch-gates` jobs, the `image` job's image build, lint steps,
+`make deps-check` and releasability test, and `CI Gate` only (`ci.yml:79-81`,
+`:198-201`); `ci:full` overrides it, and so does any doubt in the diff.
+
+`integration` needs `image` (`ci.yml:523`) for isolation, not for its output:
+the privileged integration suite and the `image` job's unit and race suites
+starve a shared runner when they overlap (`ci.yml:520-522`), so `integration`
+starts when `image` ends, as five parallel legs (see "Legs"). Every other job
+but `CI Gate` needs at most `changes`.
+
+`CI Gate` needs `changes`, `image`, `lint-gates`, `arch-gates`, `sdkjs`, `web`,
+`integration` and `soak` (`ci.yml:752`) and checks each with its tier
+(`ci.yml:810-817`). It passes when every PR-tier job passed, every docs-tier
+job passed or skipped on a docs-only PR (`docs_only` reading exactly `true`),
+every full-tier job passed or was not selected, and `soak` passed or skipped
+off the schedule and dispatch (`ci.yml:743-744`). `fips` is in none of its
+`needs`, env or check lines.
+
+The `soak` job (ci-template v1.23, `ci.yml:592-681`) builds its own per-run
+integration image (`-soak` tag) and loops `make integration-test`
+(`SOAK_TARGET`) until `SOAK_MINUTES` (30) have passed, under a 90-minute job
+timeout. Each iteration is its own compose project
+(`go-trusted-platform-ci-<run>-<attempt>-soak-<i>`), torn down before the next,
+and the first red iteration fails the job. Each iteration applies the
+foreign-failure baseline (below) with its own `IT_LOG`, as the `integration`
+job does (`ci.yml:650-663`): an iteration whose only failures are baseline
+rows passes and the soak goes on.
+
+`RELEASABILITY_TEST` (`ci.yml:142-145`) holds the `go test` arguments of the
+test that proves a release still builds. A docs-only PR skips the test stage,
+so ci-template v1.26.1 runs that test alone there (`ci.yml:273-277`); every
+other run gets it from the test stage. It is empty because this repository has
+no releasability test yet, so the step skips; a docs-only PR is then proved by
+its lint steps and the gates alone.
+
+A draft PR runs no CI: every job's `if:` skips on a draft and `CI Gate` fails
+on one. There is no `ready_for_review` or `labeled` trigger, so marking a PR
+ready or adding `ci:full` takes effect on its next push. On `main` each push
+is its own concurrency group (keyed on the event and the commit), so no push
+cancels a run in progress; on a PR branch a new push cancels the superseded
+run. `pkg/arch/citiers_test.go` holds the tiers, the draft guard, the gate's
+`needs` and its check lines to one another.
 
 The `image` job's `trivy image` step fails on any CRITICAL or HIGH finding in
 the integration image that has a fix (`--severity CRITICAL,HIGH --exit-code 1
@@ -688,7 +742,9 @@ nothing called them, and the `trivy image` step scans every package left. The to
 (`make -s toolchain-image`). Forge credentials reach the build only as the
 `gomodauth` BuildKit secret, from `MODULE_ENV_FILE`. The integration image is
 tagged per run and job (`go-trusted-platform-ci-it:<run>-<attempt>`, `-image`
-in the `image` job) and removed at job end. Both jobs build on the project's
+in the `image` job, `-leg<n>` in each `integration` leg, `-soak` in the `soak`
+job; `ci.yml:203`, `:524`, `:609`)
+and removed at job end. The three jobs build on the project's
 own `docker-container` BuildKit builder, `go-trusted-platform-ci`
 (`BUILDX_BUILDER`, which `make docker-build` honours; empty uses the daemon's
 builder), so the build cache is this project's alone: each job prunes it to
@@ -747,7 +803,8 @@ on an open upstream issue) does not block a merge. Such failures are listed in
 `.github/foreign-failures.tsv`, beside CI. arm-merge stays the one gate, and
 nothing is admin-merged.
 
-CI runs `make integration-test IT_FOREIGN_BASELINE=1`. The suites' output
+CI runs `make integration-test IT_FOREIGN_BASELINE=1` in the `integration` job
+(`ci.yml:577`) and in each `soak` iteration (`ci.yml:663`). The suites' output
 still goes to the job log, and is also written to `IT_LOG`. When the suites
 pass, nothing else happens. When they fail, `scripts/foreignfailures` decides
 the step's result instead:
@@ -791,7 +848,7 @@ The file is tab-separated, with the columns `kind`, `package`, `name`,
 
 #### The FIPS baseline
 
-The FIPS job (`fips` in `ci.yml` and `nightly.yml`, both one `make test-fips`
+The FIPS job (`fips` in `ci.yml:696-712` and `nightly.yml`, both one `make test-fips`
 call, outside `ci-gate`'s needs) has its own baseline, the sibling file
 `.github/foreign-failures-fips.tsv`. It is a separate file rather than a
 `kind` in the Integration file for three reasons:
