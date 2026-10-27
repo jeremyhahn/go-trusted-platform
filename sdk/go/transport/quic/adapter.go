@@ -1010,7 +1010,6 @@ var grpcMethodToOpcodeMap = map[string]byte{
 	"/platform.v1.ComputeService/StopContainer":       quicwire.OpVMExtendedCategory,
 	"/platform.v1.ComputeService/ListContainers":      quicwire.OpVMExtendedCategory,
 	"/platform.v1.ComputeService/GetContainer":        quicwire.OpVMExtendedCategory,
-	"/platform.v1.ComputeService/GetContainerLogs":    quicwire.OpContainerLogs,
 	"/platform.v1.ComputeService/CreateVM":            quicwire.OpVMExtendedCategory,
 	"/platform.v1.ComputeService/GetVM":               quicwire.OpVMExtendedCategory,
 	"/platform.v1.ComputeService/ListVMs":             quicwire.OpVMExtendedCategory,

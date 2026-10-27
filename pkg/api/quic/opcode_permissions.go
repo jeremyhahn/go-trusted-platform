@@ -421,7 +421,6 @@ var opcodePermissions = map[byte]OpcodePermission{
 	// Containers routed on their own byte
 	quicwire.OpContainerGet:  containerRead,
 	quicwire.OpContainerList: containerRead,
-	quicwire.OpContainerLogs: containerRead,
 
 	// Attestation (MCP attestation_* tools: reads are attestation:read,
 	// anything that collects fresh evidence is attestation:write). A quote
@@ -747,7 +746,6 @@ var categoryPermissions = map[byte]map[byte]OpcodePermission{
 		quicwire.OpContainerRemove:  containerDelete,
 		quicwire.OpContainerGet:     containerRead,
 		quicwire.OpContainerList:    containerRead,
-		quicwire.OpContainerLogs:    containerRead,
 		quicwire.OpContainerAttest:  containerRead,
 		quicwire.OpContainerExec:    containerWrite,
 		quicwire.OpContainerMetrics: containerRead,

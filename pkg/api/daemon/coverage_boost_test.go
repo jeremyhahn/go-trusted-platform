@@ -720,13 +720,6 @@ func TestBoost_ComputeGRPCService_StreamingStubs(t *testing.T) {
 			t.Fatal("expected error")
 		}
 	})
-
-	t.Run("GetContainerLogs", func(t *testing.T) {
-		err := svc.GetContainerLogs(nil, nil)
-		if err == nil {
-			t.Fatal("expected error")
-		}
-	})
 }
 
 // =============================================================================

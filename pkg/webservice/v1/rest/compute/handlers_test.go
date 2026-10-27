@@ -484,6 +484,20 @@ func TestComputeHandlers_MapServiceErrorsToHTTPStatus(t *testing.T) {
 	}
 }
 
+// TestComputeHandlers_ContainerLogsPathIsAContainerLookup pins #452: the
+// platform serves no container logs, so GET /api/v1/compute/containers/logs
+// is the container item route with id "logs", answered as not found.
+func TestComputeHandlers_ContainerLogsPathIsAContainerLookup(t *testing.T) {
+	server := &scriptedComputeServer{err: status.Error(codes.NotFound, "container logs not found")}
+
+	rec := serveCompute(t, server, http.MethodGet, "/api/v1/compute/containers/logs", "")
+
+	require.Equal(t, http.StatusNotFound, rec.Code, rec.Body.String())
+	got, ok := server.got.(*platformv1.GetContainerRequest)
+	require.True(t, ok, "the request must reach GetContainer, got %T", server.got)
+	assert.Equal(t, "logs", got.GetId())
+}
+
 func TestComputeHandlers_RefuseEveryRouteWithoutAComputeService(t *testing.T) {
 	for _, route := range computeRoutes {
 		t.Run(route.name, func(t *testing.T) {

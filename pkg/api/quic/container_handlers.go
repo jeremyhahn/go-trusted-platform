@@ -16,7 +16,6 @@ package quic
 import (
 	"context"
 	"errors"
-	"io"
 	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/compute/container"
@@ -33,7 +32,6 @@ var containerSubOpcodes = map[byte]bool{
 	quicwire.OpContainerRemove: true,
 	quicwire.OpContainerGet:    true,
 	quicwire.OpContainerList:   true,
-	quicwire.OpContainerLogs:   true,
 	quicwire.OpContainerAttest: true,
 
 	quicwire.OpContainerExec:    true,
@@ -104,8 +102,6 @@ func (h *ContainerHandler) HandleRequest(ctx context.Context, req *quicwire.Requ
 		return h.handleGet(ctx, req)
 	case quicwire.OpContainerList:
 		return h.handleList(ctx, req)
-	case quicwire.OpContainerLogs:
-		return h.handleLogs(ctx, req)
 	case quicwire.OpContainerAttest:
 		return h.handleAttest(ctx, req)
 	default:
@@ -264,25 +260,6 @@ type ContainerListResponse struct {
 	Containers []*ContainerInfo `codec:"containers"`
 	Count      int32            `codec:"count"`
 	Timestamp  int64            `codec:"timestamp"`
-}
-
-// ContainerLogsRequest represents a container logs request
-type ContainerLogsRequest struct {
-	ID         string `codec:"id"`
-	Follow     bool   `codec:"follow"`
-	Stdout     bool   `codec:"stdout"`
-	Stderr     bool   `codec:"stderr"`
-	Since      int64  `codec:"since"`
-	Until      int64  `codec:"until"`
-	Tail       string `codec:"tail"`
-	Timestamps bool   `codec:"timestamps"`
-}
-
-// ContainerLogsResponse represents a container logs response
-type ContainerLogsResponse struct {
-	ID        string `codec:"id"`
-	Logs      []byte `codec:"logs"`
-	Timestamp int64  `codec:"timestamp"`
 }
 
 // ContainerAttestRequest represents a container attestation request
@@ -555,74 +532,6 @@ func (h *ContainerHandler) handleList(ctx context.Context, req *quicwire.Request
 		Containers: containerInfos,
 		Count:      int32(len(containerInfos)),
 		Timestamp:  time.Now().Unix(),
-	}
-
-	payload, err := quicwire.EncodePayload(resp)
-	if err != nil {
-		return h.errorResponse(quicwire.StatusInternalError, ErrContainerEncodingFailed{Cause: err})
-	}
-
-	return &quicwire.Response{
-		Status:  quicwire.StatusOK,
-		Payload: payload,
-	}
-}
-
-// handleLogs retrieves container logs
-func (h *ContainerHandler) handleLogs(ctx context.Context, req *quicwire.Request) *quicwire.Response {
-	if h.orchestrator == nil {
-		return h.errorResponse(quicwire.StatusUnavailable, ErrContainerOrchestratorNotAvailable)
-	}
-
-	var logsReq ContainerLogsRequest
-	if err := quicwire.DecodePayload(req.Payload, &logsReq); err != nil {
-		return h.errorResponse(quicwire.StatusInvalidRequest, ErrContainerDecodingFailed{Cause: err})
-	}
-
-	if logsReq.ID == "" {
-		return h.errorResponse(quicwire.StatusInvalidArgument, ErrContainerMissingID)
-	}
-
-	// Build log options
-	opts := container.LogOptions{
-		Follow:     logsReq.Follow,
-		Stdout:     logsReq.Stdout,
-		Stderr:     logsReq.Stderr,
-		Tail:       logsReq.Tail,
-		Timestamps: logsReq.Timestamps,
-	}
-
-	// Default to both stdout and stderr if neither specified
-	if !opts.Stdout && !opts.Stderr {
-		opts.Stdout = true
-		opts.Stderr = true
-	}
-
-	if logsReq.Since > 0 {
-		opts.Since = time.Unix(logsReq.Since, 0)
-	}
-	if logsReq.Until > 0 {
-		opts.Until = time.Unix(logsReq.Until, 0)
-	}
-
-	reader, err := h.orchestrator.Logs(ctx, logsReq.ID, opts)
-	if err != nil {
-		h.logger.Error(err, "failed to get container logs")
-		return h.containerErrorResponse(err)
-	}
-	defer reader.Close()
-
-	// Read all logs (for non-streaming response)
-	logs, err := io.ReadAll(reader)
-	if err != nil {
-		h.logger.Error(err, "failed to read container logs")
-		return h.containerErrorResponse(err)
-	}
-
-	resp := &ContainerLogsResponse{
-		ID:        logsReq.ID,
-		Logs:      logs,
-		Timestamp: time.Now().Unix(),
 	}
 
 	payload, err := quicwire.EncodePayload(resp)

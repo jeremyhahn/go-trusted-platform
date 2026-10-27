@@ -1651,13 +1651,6 @@ func (e ErrContainerOperationFailed) Unwrap() error {
 	return e.Cause
 }
 
-// ErrContainerLogsNotSupported is returned when container log retrieval is not supported
-type ErrContainerLogsNotSupported struct{}
-
-func (e ErrContainerLogsNotSupported) Error() string {
-	return "container logs not supported via orchestrator"
-}
-
 // ErrContainerAttestNotSupported is returned when container attestation is not supported
 type ErrContainerAttestNotSupported struct{}
 

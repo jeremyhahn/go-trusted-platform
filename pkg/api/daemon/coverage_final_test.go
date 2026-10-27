@@ -53,7 +53,6 @@ func TestCoverageFinalUncoveredErrors(t *testing.T) {
 		{"ErrContainerServiceNotAvailable", ErrContainerServiceNotAvailable{}, "container service not available"},
 		{"ErrContainerNotFound", ErrContainerNotFound{ContainerID: "c-1"}, "container not found: c-1"},
 		{"ErrContainerOperationFailed", ErrContainerOperationFailed{Operation: "start", Cause: sentinel}, "container operation start failed"},
-		{"ErrContainerLogsNotSupported", ErrContainerLogsNotSupported{}, "container logs not supported"},
 		{"ErrContainerAttestNotSupported", ErrContainerAttestNotSupported{}, "container attestation not implemented"},
 		{"ErrContainerInvalidParameter", ErrContainerInvalidParameter{Parameter: "image", Reason: "empty"}, "invalid container parameter image: empty"},
 

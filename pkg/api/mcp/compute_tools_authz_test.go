@@ -184,11 +184,6 @@ func (p *computeRecordingProvider) ContainerList(context.Context, bool, map[stri
 	return []interface{}{p.record("ContainerList")}, nil
 }
 
-func (p *computeRecordingProvider) ContainerLogs(context.Context, string, bool, bool, bool, string, bool) (string, error) {
-	p.record("ContainerLogs")
-	return "log line", nil
-}
-
 func (p *computeRecordingProvider) ContainerAttest(context.Context, string) (interface{}, error) {
 	return p.record("ContainerAttest"), nil
 }
@@ -253,7 +248,6 @@ var computeToolCases = []computeToolCase{
 	{"container_remove", "container", "delete", map[string]interface{}{"id": "c-1"}, "ContainerRemove"},
 	{"container_get", "container", "read", map[string]interface{}{"id": "c-1"}, "ContainerGet"},
 	{"container_list", "container", "read", map[string]interface{}{}, "ContainerList"},
-	{"container_logs", "container", "read", map[string]interface{}{"id": "c-1"}, "ContainerLogs"},
 	{"container_metrics", "container", "read", map[string]interface{}{"id": "c-1"}, "ContainerMetrics"},
 	{"container_attest", "container", "read", map[string]interface{}{"id": "c-1"}, "ContainerAttest"},
 }

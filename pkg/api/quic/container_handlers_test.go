@@ -1081,147 +1081,6 @@ func TestHandleList(t *testing.T) {
 }
 
 // =============================================================================
-// Test: GetContainerLogs
-// =============================================================================
-
-func TestHandleLogs(t *testing.T) {
-	ctx := context.Background()
-
-	t.Run("gets container logs successfully", func(t *testing.T) {
-		handler, orchestrator := createTestContainerHandler()
-		createTestContainer(orchestrator, "container-1", "test-container")
-		orchestrator.logsContent = "log line 1\nlog line 2\n"
-
-		logsReq := &ContainerLogsRequest{
-			ID:     "container-1",
-			Stdout: true,
-			Stderr: true,
-		}
-
-		payload, err := quicwire.EncodePayload(logsReq)
-		require.NoError(t, err)
-
-		req := &quicwire.Request{
-			Opcode:  quicwire.OpContainerLogs,
-			Payload: payload,
-		}
-
-		resp := handler.HandleRequest(ctx, req)
-
-		assert.Equal(t, quicwire.StatusOK, resp.Status)
-
-		var logsResp ContainerLogsResponse
-		err = quicwire.DecodePayload(resp.Payload, &logsResp)
-		require.NoError(t, err)
-
-		assert.Equal(t, "container-1", logsResp.ID)
-		assert.Equal(t, "log line 1\nlog line 2\n", string(logsResp.Logs))
-	})
-
-	t.Run("defaults to stdout and stderr", func(t *testing.T) {
-		handler, orchestrator := createTestContainerHandler()
-		createTestContainer(orchestrator, "container-1", "test-container")
-
-		logsReq := &ContainerLogsRequest{
-			ID: "container-1",
-		}
-
-		payload, err := quicwire.EncodePayload(logsReq)
-		require.NoError(t, err)
-
-		req := &quicwire.Request{
-			Opcode:  quicwire.OpContainerLogs,
-			Payload: payload,
-		}
-
-		resp := handler.HandleRequest(ctx, req)
-
-		assert.Equal(t, quicwire.StatusOK, resp.Status)
-	})
-
-	t.Run("respects since and until parameters", func(t *testing.T) {
-		handler, orchestrator := createTestContainerHandler()
-		createTestContainer(orchestrator, "container-1", "test-container")
-
-		logsReq := &ContainerLogsRequest{
-			ID:    "container-1",
-			Since: time.Now().Add(-1 * time.Hour).Unix(),
-			Until: time.Now().Unix(),
-		}
-
-		payload, err := quicwire.EncodePayload(logsReq)
-		require.NoError(t, err)
-
-		req := &quicwire.Request{
-			Opcode:  quicwire.OpContainerLogs,
-			Payload: payload,
-		}
-
-		resp := handler.HandleRequest(ctx, req)
-
-		assert.Equal(t, quicwire.StatusOK, resp.Status)
-	})
-
-	t.Run("returns error when orchestrator unavailable", func(t *testing.T) {
-		handler := NewContainerHandler(newTestLogger(), nil)
-
-		logsReq := &ContainerLogsRequest{
-			ID: "container-1",
-		}
-
-		payload, err := quicwire.EncodePayload(logsReq)
-		require.NoError(t, err)
-
-		req := &quicwire.Request{
-			Opcode:  quicwire.OpContainerLogs,
-			Payload: payload,
-		}
-
-		resp := handler.HandleRequest(ctx, req)
-
-		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
-	})
-
-	t.Run("returns error for missing ID", func(t *testing.T) {
-		handler, _ := createTestContainerHandler()
-
-		logsReq := &ContainerLogsRequest{}
-
-		payload, err := quicwire.EncodePayload(logsReq)
-		require.NoError(t, err)
-
-		req := &quicwire.Request{
-			Opcode:  quicwire.OpContainerLogs,
-			Payload: payload,
-		}
-
-		resp := handler.HandleRequest(ctx, req)
-
-		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
-	})
-
-	t.Run("returns error for container not found", func(t *testing.T) {
-		handler, _ := createTestContainerHandler()
-
-		logsReq := &ContainerLogsRequest{
-			ID: "nonexistent",
-		}
-
-		payload, err := quicwire.EncodePayload(logsReq)
-		require.NoError(t, err)
-
-		req := &quicwire.Request{
-			Opcode:  quicwire.OpContainerLogs,
-			Payload: payload,
-		}
-
-		resp := handler.HandleRequest(ctx, req)
-
-		assert.Equal(t, quicwire.StatusNotFound, resp.Status)
-	})
-}
-
-// =============================================================================
 // Test: AttestContainer
 // =============================================================================
 
@@ -1604,7 +1463,6 @@ func TestOpcodeConstants(t *testing.T) {
 		{"OpContainerRemove", quicwire.OpContainerRemove},
 		{"OpContainerGet", quicwire.OpContainerGet},
 		{"OpContainerList", quicwire.OpContainerList},
-		{"OpContainerLogs", quicwire.OpContainerLogs},
 		{"OpContainerAttest", quicwire.OpContainerAttest},
 	}
 
@@ -1731,32 +1589,6 @@ func TestContainerHandlerGetErrors(t *testing.T) {
 
 		req := &quicwire.Request{
 			Opcode:  quicwire.OpContainerGet,
-			Payload: payload,
-		}
-
-		resp := handler.HandleRequest(ctx, req)
-
-		assert.Equal(t, quicwire.StatusInternalError, resp.Status)
-	})
-}
-
-func TestContainerHandlerLogsErrors(t *testing.T) {
-	ctx := context.Background()
-
-	t.Run("returns error when logs fails", func(t *testing.T) {
-		handler, orch := createTestContainerHandler()
-		createTestContainer(orch, "container-1", "test-container")
-		orch.logsError = errors.New("logs failed")
-
-		logsReq := &ContainerLogsRequest{
-			ID: "container-1",
-		}
-
-		payload, err := quicwire.EncodePayload(logsReq)
-		require.NoError(t, err)
-
-		req := &quicwire.Request{
-			Opcode:  quicwire.OpContainerLogs,
 			Payload: payload,
 		}
 

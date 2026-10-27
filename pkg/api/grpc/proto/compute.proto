@@ -57,7 +57,6 @@ service ComputeService {
   // Container console and monitoring
   rpc AttachContainer(AttachContainerRequest) returns (stream ConsoleOutput);
   rpc ExecContainer(ExecContainerRequest) returns (ExecContainerResponse);
-  rpc GetContainerLogs(GetContainerLogsRequest) returns (stream LogEntry);
   rpc GetContainerMetrics(GetContainerMetricsRequest) returns (ContainerMetricsResponse);
 
   // VM attestation
@@ -678,18 +677,6 @@ message ExecContainerResponse {
   int32 exit_code = 2;
   bytes stdout = 3;
   bytes stderr = 4;
-}
-
-// Container logs request
-message GetContainerLogsRequest {
-  string id = 1;
-  bool follow = 2;
-  uint32 tail_lines = 3;
-  google.protobuf.Timestamp since = 4;
-  bool stdout = 5;
-  bool stderr = 6;
-  google.protobuf.Timestamp until = 7;
-  bool timestamps = 8; // Prefix each log line with its timestamp
 }
 
 // Container metrics request/response

@@ -16,7 +16,6 @@
 package daemon
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"io"
@@ -27,19 +26,15 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/compute/container"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"google.golang.org/grpc"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 )
 
 // Compile-time proofs that the production consolidated orchestrator
 // (container.ComputeOrchestrator) satisfies every capability interface the
 // daemon RPC layer type-asserts on the compute.Orchestrator value. If any
-// of these break, AttestContainer / GetContainerLogs / the adapter
+// of these break, AttestContainer / the adapter
 // forwarding silently degrade to Unimplemented in production.
 var (
 	_ containerAttester        = (*container.ComputeOrchestrator)(nil)
@@ -131,108 +126,6 @@ func (m *richCapableMockOrchestrator) VerifyImage(ctx context.Context, ref strin
 	return &container.ImageVerification{ImageRef: ref, Verified: true, Timestamp: time.Now()}, nil
 }
 
-// mockLogEntryStream is a mock gRPC server stream for LogEntry messages.
-type mockLogEntryStream struct {
-	grpc.ServerStream
-	ctx     context.Context
-	entries []*platformv1.LogEntry
-	sendErr error
-}
-
-func newMockLogEntryStream(ctx context.Context) *mockLogEntryStream {
-	return &mockLogEntryStream{ctx: ctx}
-}
-
-func (s *mockLogEntryStream) Context() context.Context {
-	return s.ctx
-}
-
-func (s *mockLogEntryStream) Send(entry *platformv1.LogEntry) error {
-	if s.sendErr != nil {
-		return s.sendErr
-	}
-	s.entries = append(s.entries, entry)
-	return nil
-}
-
-// =============================================================================
-// gRPC GetContainerLogs streaming
-// =============================================================================
-
-func TestComputeGRPCService_GetContainerLogs(t *testing.T) {
-	ctx := context.Background()
-
-	t.Run("streams log entries from rich orchestrator", func(t *testing.T) {
-		orchestrator := newRichCapableMockOrchestrator()
-		svc := NewComputeGRPCService(logging.DefaultLogger(), orchestrator)
-		stream := newMockLogEntryStream(ctx)
-
-		err := svc.GetContainerLogs(&platformv1.GetContainerLogsRequest{Id: "container-1"}, stream)
-
-		require.NoError(t, err)
-		require.Len(t, stream.entries, 1)
-		assert.Equal(t, "container log line\n", stream.entries[0].GetMessage())
-		assert.Equal(t, "container-1", stream.entries[0].GetSource())
-		assert.Equal(t, 1, orchestrator.logsCalls)
-	})
-
-	t.Run("defaults to both stdout and stderr", func(t *testing.T) {
-		orchestrator := newRichCapableMockOrchestrator()
-		var captured container.LogOptions
-		orchestrator.logsFunc = func(ctx context.Context, id string, opts container.LogOptions) (io.ReadCloser, error) {
-			captured = opts
-			return io.NopCloser(bytes.NewReader(nil)), nil
-		}
-		svc := NewComputeGRPCService(logging.DefaultLogger(), orchestrator)
-
-		err := svc.GetContainerLogs(&platformv1.GetContainerLogsRequest{Id: "container-1"}, newMockLogEntryStream(ctx))
-
-		require.NoError(t, err)
-		assert.True(t, captured.Stdout)
-		assert.True(t, captured.Stderr)
-	})
-
-	t.Run("returns error when orchestrator not initialized", func(t *testing.T) {
-		svc := createTestComputeServiceNoOrchestrator(t)
-
-		err := svc.GetContainerLogs(&platformv1.GetContainerLogsRequest{Id: "container-1"}, newMockLogEntryStream(ctx))
-
-		require.Error(t, err)
-		st, ok := status.FromError(err)
-		require.True(t, ok)
-		assert.Equal(t, codes.FailedPrecondition, st.Code())
-	})
-
-	t.Run("maps not-found error", func(t *testing.T) {
-		orchestrator := newRichCapableMockOrchestrator()
-		orchestrator.logsFunc = func(ctx context.Context, id string, opts container.LogOptions) (io.ReadCloser, error) {
-			return nil, container.ErrContainerNotFound
-		}
-		svc := NewComputeGRPCService(logging.DefaultLogger(), orchestrator)
-
-		err := svc.GetContainerLogs(&platformv1.GetContainerLogsRequest{Id: "missing"}, newMockLogEntryStream(ctx))
-
-		require.Error(t, err)
-		st, ok := status.FromError(err)
-		require.True(t, ok)
-		assert.Equal(t, codes.NotFound, st.Code())
-	})
-
-	t.Run("maps stream send failure to internal error", func(t *testing.T) {
-		orchestrator := newRichCapableMockOrchestrator()
-		svc := NewComputeGRPCService(logging.DefaultLogger(), orchestrator)
-		stream := newMockLogEntryStream(ctx)
-		stream.sendErr = errors.New("stream broken")
-
-		err := svc.GetContainerLogs(&platformv1.GetContainerLogsRequest{Id: "container-1"}, stream)
-
-		require.Error(t, err)
-		st, ok := status.FromError(err)
-		require.True(t, ok)
-		assert.Equal(t, codes.Internal, st.Code())
-	})
-}
-
 // =============================================================================
 // OrchestratorAdapter capability forwarding
 // =============================================================================
@@ -311,61 +204,8 @@ func TestOrchestratorAdapter_CapabilityForwarding(t *testing.T) {
 }
 
 // =============================================================================
-// MCP provider container logs + attest
+// MCP provider container attest
 // =============================================================================
-
-func TestMCPServiceProvider_ContainerLogs(t *testing.T) {
-	ctx := context.Background()
-
-	t.Run("returns log snapshot from rich orchestrator", func(t *testing.T) {
-		orchestrator := newRichCapableMockOrchestrator()
-		provider := NewMCPServiceProvider(&MCPServiceProviderConfig{ComputeOrchestrator: orchestrator})
-
-		logs, err := provider.ContainerLogs(ctx, "container-1", false, true, true, "", false)
-
-		require.NoError(t, err)
-		assert.Equal(t, "container log line\n", logs)
-		assert.Equal(t, 1, orchestrator.logsCalls)
-	})
-
-	t.Run("returns error when orchestrator missing", func(t *testing.T) {
-		provider := NewMCPServiceProvider(&MCPServiceProviderConfig{})
-
-		_, err := provider.ContainerLogs(ctx, "container-1", false, true, true, "", false)
-
-		assert.ErrorAs(t, err, &ErrContainerServiceNotAvailable{})
-	})
-
-	t.Run("requires container ID", func(t *testing.T) {
-		provider := NewMCPServiceProvider(&MCPServiceProviderConfig{ComputeOrchestrator: newRichCapableMockOrchestrator()})
-
-		_, err := provider.ContainerLogs(ctx, "", false, true, true, "", false)
-
-		var target ErrContainerInvalidParameter
-		assert.ErrorAs(t, err, &target)
-	})
-
-	t.Run("returns typed error when orchestrator lacks log capability", func(t *testing.T) {
-		provider := NewMCPServiceProvider(&MCPServiceProviderConfig{ComputeOrchestrator: newGRPCMockOrchestrator()})
-
-		_, err := provider.ContainerLogs(ctx, "container-1", false, true, true, "", false)
-
-		assert.ErrorAs(t, err, &ErrContainerLogsNotSupported{})
-	})
-
-	t.Run("wraps orchestrator log failure", func(t *testing.T) {
-		orchestrator := newRichCapableMockOrchestrator()
-		orchestrator.logsFunc = func(ctx context.Context, id string, opts container.LogOptions) (io.ReadCloser, error) {
-			return nil, errors.New("logs failed")
-		}
-		provider := NewMCPServiceProvider(&MCPServiceProviderConfig{ComputeOrchestrator: orchestrator})
-
-		_, err := provider.ContainerLogs(ctx, "container-1", false, true, true, "", false)
-
-		var target ErrContainerOperationFailed
-		assert.ErrorAs(t, err, &target)
-	})
-}
 
 func TestMCPServiceProvider_ContainerAttest(t *testing.T) {
 	ctx := context.Background()
@@ -467,26 +307,6 @@ func TestQUICComputeExtendedCategory_ContainerSubOpcodes(t *testing.T) {
 		assert.True(t, attestResp.Verified)
 	})
 
-	t.Run("routes container logs sub-opcode to container handler", func(t *testing.T) {
-		handler, orchestrator := newHandlerWithContainers(t)
-
-		inner, err := quicwire.EncodePayload(&quic.ContainerLogsRequest{ID: "container-1", Stdout: true, Stderr: true})
-		require.NoError(t, err)
-
-		resp := handler.HandleRequest(ctx, &quicwire.Request{
-			Opcode:  quicwire.OpVMExtendedCategory,
-			Payload: append([]byte{quicwire.OpContainerLogs}, inner...),
-		})
-
-		require.NotNil(t, resp)
-		assert.Equal(t, quicwire.StatusOK, resp.Status)
-		assert.Equal(t, 1, orchestrator.logsCalls)
-
-		var logsResp quic.ContainerLogsResponse
-		require.NoError(t, quicwire.DecodePayload(resp.Payload, &logsResp))
-		assert.Equal(t, "container log line\n", string(logsResp.Logs))
-	})
-
 	t.Run("returns unavailable when container handler missing", func(t *testing.T) {
 		handler := newTestQUICServiceHandler(logging.DefaultLogger())
 
@@ -523,7 +343,7 @@ func TestIsContainerSubOpcode(t *testing.T) {
 		for _, op := range []byte{
 			quicwire.OpContainerCreate, quicwire.OpContainerStart, quicwire.OpContainerStop,
 			quicwire.OpContainerRemove, quicwire.OpContainerGet, quicwire.OpContainerList,
-			quicwire.OpContainerLogs, quicwire.OpContainerAttest,
+			quicwire.OpContainerAttest,
 		} {
 			assert.True(t, quic.IsContainerSubOpcode(op), "opcode 0x%02X", op)
 		}

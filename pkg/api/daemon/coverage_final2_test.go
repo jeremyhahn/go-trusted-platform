@@ -747,16 +747,6 @@ func TestCoverageFinal2QUICHandlerAttestPolicy(t *testing.T) {
 // Container Logs
 // =============================================================================
 
-func TestCoverageFinal2QUICHandlerContainerLogs(t *testing.T) {
-	t.Parallel()
-
-	h := newTestQUICServiceHandler(logging.DefaultLogger())
-	resp := h.HandleRequest(context.Background(), &quicwire.Request{Opcode: quicwire.OpContainerLogs, Payload: []byte{}})
-	if resp == nil {
-		t.Fatal("response should not be nil")
-	}
-}
-
 // =============================================================================
 // Helpers
 // =============================================================================

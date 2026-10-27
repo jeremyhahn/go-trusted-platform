@@ -162,12 +162,6 @@ func TestMCPServiceContainerOperations(t *testing.T) {
 		assert.Error(t, err)
 	})
 
-	t.Run("ContainerLogs returns not implemented", func(t *testing.T) {
-		result, err := provider.ContainerLogs(ctx, "id", false, true, true, "100", false)
-		assert.Empty(t, result)
-		assert.Error(t, err)
-	})
-
 	t.Run("ContainerAttest returns not implemented", func(t *testing.T) {
 		result, err := provider.ContainerAttest(ctx, "id")
 		assert.Nil(t, result)

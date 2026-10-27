@@ -110,10 +110,6 @@ func runContainerProtocolTests(t *testing.T, ctx context.Context, cmd ContainerC
 		runContainerListWithFiltersTests(t, ctx, cmd, prefix)
 	})
 
-	t.Run("Logs", func(t *testing.T) {
-		runContainerLogsTests(t, ctx, cmd, prefix)
-	})
-
 	t.Run("Attestation", func(t *testing.T) {
 		runContainerAttestTests(t, ctx, cmd, prefix)
 	})
@@ -198,10 +194,6 @@ func runContainerLaunchRefusedTests(t *testing.T, ctx context.Context, cmd Conta
 
 // surfaceProbes calls each operation a transport may lack a surface for.
 var surfaceProbes = map[string]func(context.Context, ContainerCommands) error{
-	opLogs: func(ctx context.Context, cmd ContainerCommands) error {
-		_, err := cmd.Logs(ctx, "nonexistent-container-id-12345", LogOptions{Stdout: true})
-		return err
-	},
 	opAttest: func(ctx context.Context, cmd ContainerCommands) error {
 		_, err := cmd.Attest(ctx, "nonexistent-container-id-12345")
 		return err
@@ -645,57 +637,6 @@ func runContainerListWithFiltersTests(t *testing.T, ctx context.Context, cmd Con
 }
 
 // =============================================================================
-// Container Logs Tests
-// =============================================================================
-
-func runContainerLogsTests(t *testing.T, ctx context.Context, cmd ContainerCommands, prefix string) {
-	testCtx, cancel := context.WithTimeout(ctx, 90*time.Second)
-	defer cancel()
-
-	if declaredMissing(t, testCtx, cmd, opLogs) {
-		return
-	}
-
-	// Create a container that produces output
-	containerName := prefix + "-logs-test"
-	opts := CreateOptions{
-		Name:    containerName,
-		Image:   "docker.io/library/alpine:latest",
-		Command: []string{"sh", "-c", "echo 'Line 1'; echo 'Line 2'; echo 'Line 3'; sleep 5"},
-	}
-	created, err := cmd.Create(testCtx, opts)
-	require.NoError(t, err, "Setup: Create should succeed")
-	defer multiprotoCleanupContainer(t, testCtx, cmd, created.ID)
-
-	err = cmd.Start(testCtx, created.ID)
-	require.NoError(t, err, "Setup: Start should succeed")
-
-	// Wait for container to produce output; the subtests below assert on it
-	if err := WaitForContainerLogs(testCtx, cmd, created.ID); err != nil {
-		t.Logf("%v", err)
-	}
-
-	t.Run("GetContainerLogs", func(t *testing.T) {
-		logs, err := cmd.Logs(testCtx, created.ID, LogOptions{Stdout: true, Stderr: true})
-		require.NoError(t, err, "Logs should succeed")
-		require.NotNil(t, logs, "Logs should not be nil")
-		assert.NotEmpty(t, logs, "Logs should not be empty")
-	})
-
-	t.Run("GetContainerLogsWithTail", func(t *testing.T) {
-		logs, err := cmd.Logs(testCtx, created.ID, LogOptions{Stdout: true, Tail: 2})
-		require.NoError(t, err, "Logs with tail should succeed")
-		require.NotNil(t, logs, "Logs should not be nil")
-		assert.LessOrEqual(t, len(logs), 2, "Should return at most 2 lines")
-	})
-
-	t.Run("GetLogsNonexistentContainerFails", func(t *testing.T) {
-		_, err := cmd.Logs(testCtx, "nonexistent-container-id-12345", LogOptions{Stdout: true})
-		require.Error(t, err, "Logs should fail for nonexistent container")
-	})
-}
-
-// =============================================================================
 // Container Attestation Tests
 // =============================================================================
 
@@ -771,11 +712,6 @@ func runContainerNotFoundTests(t *testing.T, ctx context.Context, cmd ContainerC
 	t.Run("RemoveNotFound", func(t *testing.T) {
 		err := cmd.Remove(testCtx, nonexistentID, false)
 		require.Error(t, err, "Remove should fail for nonexistent container")
-	})
-
-	t.Run("LogsNotFound", func(t *testing.T) {
-		_, err := cmd.Logs(testCtx, nonexistentID, LogOptions{Stdout: true})
-		require.Error(t, err, "Logs should fail for nonexistent container")
 	})
 
 	t.Run("AttestNotFound", func(t *testing.T) {
@@ -881,15 +817,6 @@ func runContainerFullLifecycleTests(t *testing.T, ctx context.Context, cmd Conta
 		require.NoError(t, err, "Get should succeed after start")
 		assert.True(t, retrieved.State.IsRunning(), "Container should be running")
 		t.Logf("Container state after start: %s", retrieved.State)
-
-		// Phase 4: Get logs
-		t.Log("=== Phase 4: Get Logs ===")
-		if err := WaitForContainerLogs(testCtx, cmd, containerID); err != nil {
-			t.Logf("%v", err)
-		}
-		logs, err := cmd.Logs(testCtx, containerID, LogOptions{Stdout: true, Stderr: true})
-		require.NoError(t, err, "Logs should succeed")
-		t.Logf("Retrieved %d log lines", len(logs))
 
 		// Phase 5: Perform attestation
 		t.Log("=== Phase 5: Perform Attestation ===")

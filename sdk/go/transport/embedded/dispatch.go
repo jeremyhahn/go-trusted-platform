@@ -859,8 +859,8 @@ func registerComputeHandlers(m map[string]handlerFunc, reg *ServiceRegistry) {
 	m[platformv1.ComputeService_VerifyVMAttestation_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
 		return svc.VerifyVMAttestation(ctx, req.(*platformv1.VerifyVMAttestationRequest))
 	}
-	// Note: AttachVMConsole, GetVMLogs, AttachContainer, GetContainerLogs
-	// are server-streaming and not supported by Invoke.
+	// Note: AttachVMConsole, GetVMLogs and AttachContainer are
+	// server-streaming and not supported by Invoke.
 }
 
 // registerIDevIDHandlers registers IDevIDService handlers.

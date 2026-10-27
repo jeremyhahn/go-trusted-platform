@@ -70,7 +70,6 @@ func TestNewCommand_HasAllSubcommands(t *testing.T) {
 		"stop",
 		"remove",
 		"list",
-		"logs",
 		"attest",
 		"get",
 	}
@@ -103,7 +102,7 @@ func TestNewCommand_SubcommandCount(t *testing.T) {
 	cmd := NewCommand(getFlags)
 	subcommands := cmd.Commands()
 
-	expectedCount := 8
+	expectedCount := 7
 	if len(subcommands) != expectedCount {
 		t.Errorf("expected exactly %d subcommands, got %d", expectedCount, len(subcommands))
 		for _, subcmd := range subcommands {
@@ -142,10 +141,6 @@ func TestNewCommand_SubcommandDetails(t *testing.T) {
 		{
 			name:          "list",
 			expectedShort: "List containers",
-		},
-		{
-			name:          "logs",
-			expectedShort: "Get container logs",
 		},
 		{
 			name:          "attest",
@@ -193,8 +188,8 @@ func TestNewCommand_NilGetFlagsHandling(t *testing.T) {
 		t.Fatal("NewCommand should create command even with nil-returning getFlags")
 	}
 
-	if len(cmd.Commands()) != 8 {
-		t.Errorf("expected 8 subcommands, got %d", len(cmd.Commands()))
+	if len(cmd.Commands()) != 7 {
+		t.Errorf("expected 7 subcommands, got %d", len(cmd.Commands()))
 	}
 }
 

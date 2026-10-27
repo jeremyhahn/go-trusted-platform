@@ -40,7 +40,7 @@ import (
 // (0x69); see handleVMServiceOperation. The interactive AttachVMConsole /
 // SendVMConsoleInput and the streaming GetVMLogs RPCs are server-streaming and
 // are NOT carried over the unary QUIC transport — they remain gRPC/daemon-native
-// (mirroring GetContainerLogs / AttachContainer).
+// (mirroring AttachContainer).
 //
 // The CRUD and lifecycle verbs CreateVM, GetVM, ListVMs, StartVM, StopVM,
 // DeleteVM (OpVMCreate..OpVMList, 0x60-0x65), RebootVM, SuspendVM and

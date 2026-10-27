@@ -2020,24 +2020,6 @@ func TestExecuteContainerList_ServiceError(t *testing.T) {
 	}
 }
 
-func TestExecuteContainerLogs_ServiceError(t *testing.T) {
-	ctx := context.Background()
-	svc := newMockServiceProvider()
-	svc.containerLogsFunc = func(ctx context.Context, id string, follow bool, stdout bool, stderr bool, tail string, timestamps bool) (string, error) {
-		return "", ErrMockServiceError
-	}
-	registry := NewToolRegistry(svc, newTestLogger())
-
-	args := map[string]interface{}{
-		"id": "container-123",
-	}
-
-	_, err := registry.ExecuteTool(ctx, "container_logs", args)
-	if err == nil {
-		t.Error("expected error from service")
-	}
-}
-
 func TestExecuteContainerAttest_ServiceError(t *testing.T) {
 	ctx := context.Background()
 	svc := newMockServiceProvider()

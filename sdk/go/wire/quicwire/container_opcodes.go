@@ -34,9 +34,6 @@ const (
 	// OpContainerList lists containers
 	OpContainerList byte = 0xAE
 
-	// OpContainerLogs retrieves container logs
-	OpContainerLogs byte = 0xAF
-
 	// OpContainerAttest performs TPM attestation for a container
 	OpContainerAttest byte = 0xEC
 )

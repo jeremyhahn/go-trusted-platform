@@ -46,10 +46,9 @@ import (
 // path the gRPC transport uses). Create/Start/Stop/Remove/Get/List plus the
 // operational Exec and Metrics verbs are all unary and converge here.
 //
-// AttachContainer and GetContainerLogs are server-streaming RPCs that the QUIC
-// adapter does not carry (the QUIC request/response transport has no NewStream
-// primitive for a fanned console/log stream); both remain daemon-native and
-// are forwarded to the flat ContainerHandler exercised by the local CLI and the
+// AttachContainer is a server-streaming RPC that the QUIC adapter does not
+// carry (the QUIC request/response transport has no NewStream primitive for a
+// fanned console stream); it remains daemon-native and is forwarded to the flat ContainerHandler exercised by the local CLI and the
 // integration harness only. OpContainerAttest (TPM attestation) has no SDK QUIC
 // client and is likewise daemon-native.
 
@@ -69,8 +68,8 @@ func (h *QUICServiceHandler) handleContainerOperation(ctx context.Context, req *
 
 // handleContainerPB decodes the pb request for a converged unary container
 // opcode and delegates to the shared *ComputeGRPCService, returning
-// handled=true. For daemon-native opcodes (GetContainerLogs streaming,
-// AttachContainer streaming, OpContainerAttest) it returns (nil, false) so the
+// handled=true. For daemon-native opcodes (AttachContainer streaming,
+// OpContainerAttest) it returns (nil, false) so the
 // caller forwards the request to the flat ContainerHandler. payload carries the
 // marshalled pb request body (already stripped of any category sub-opcode
 // prefix).
@@ -191,8 +190,8 @@ func (h *QUICServiceHandler) handleContainerPB(ctx context.Context, opcode byte,
 		return h.encodeQUICOK(resp), true
 
 	default:
-		// GetContainerLogs and AttachContainer (server-streaming, not carried
-		// over the unary QUIC transport) and OpContainerAttest are
+		// AttachContainer (server-streaming, not carried over the unary
+		// QUIC transport) and OpContainerAttest are
 		// daemon-native; the caller forwards them to the flat ContainerHandler.
 		return nil, false
 	}

@@ -284,7 +284,6 @@ failed precondition, as `PrepareMigration` and `FinalizeMigration` do on gRPC.
 | `container_remove` | `id` | `force` (false) |
 | `container_get` | `id` | — |
 | `container_list` | — | `all` (false), `filters` (object), `limit` (50) |
-| `container_logs` | `id` | `stdout` (true), `stderr` (true), `tail` ("100"), `timestamps` (false) |
 | `container_exec` | `id`, `command` | `env` (object), `working_dir`, `tty` (false) |
 | `container_metrics` | `id` | — |
 | `container_attest` | `id` | — |

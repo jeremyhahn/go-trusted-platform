@@ -196,10 +196,6 @@ func (m *MockComputeClient) ExecContainer(ctx context.Context, in *platformv1.Ex
 	return nil, errNotImplemented
 }
 
-func (m *MockComputeClient) GetContainerLogs(ctx context.Context, in *platformv1.GetContainerLogsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[platformv1.LogEntry], error) {
-	return nil, errNotImplemented
-}
-
 func (m *MockComputeClient) GetContainerMetrics(ctx context.Context, in *platformv1.GetContainerMetricsRequest, opts ...grpc.CallOption) (*platformv1.ContainerMetricsResponse, error) {
 	return nil, errNotImplemented
 }

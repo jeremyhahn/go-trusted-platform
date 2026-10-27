@@ -246,7 +246,6 @@ Four gRPC RPCs stream and have **no non-streaming equivalent**:
 - `SendVMConsoleInput` → client-streaming
 - `GetVMLogs` → `stream LogEntry`
 - `AttachContainer` → `stream ConsoleOutput`
-- `GetContainerLogs` → `stream LogEntry`
 
 The QUIC layer's own comment records the consequence: *"interactive console and
 log-follow remain streaming-only and daemon-native"*
@@ -273,9 +272,10 @@ Cloud integration tests need both `cloud_integration` and the provider tag.
 
 ## 8. Observability
 
-`GetVMMetrics` and `GetContainerMetrics` are unary; `GetVMLogs` and
-`GetContainerLogs` stream. `qemu_metrics.go` and `qemu_logs.go` are the QEMU-side
-implementations.
+`GetVMMetrics` and `GetContainerMetrics` are unary; `GetVMLogs` streams.
+`qemu_metrics.go` and `qemu_logs.go` are the QEMU-side implementations.
+Container logs have no API surface (#452): the orchestrator's `Logs` is an
+internal capability.
 
 VM attestation results are observable through the attestation feature's event
 surface, not through compute.

@@ -1336,22 +1336,6 @@ func TestComputeGRPCService_UnimplementedOperations(t *testing.T) {
 		assert.Equal(t, codes.Unimplemented, st.Code())
 	})
 
-	t.Run("GetContainerLogs requires container ID", func(t *testing.T) {
-		err := svc.GetContainerLogs(&platformv1.GetContainerLogsRequest{}, nil)
-		require.Error(t, err)
-		st, ok := status.FromError(err)
-		require.True(t, ok)
-		assert.Equal(t, codes.InvalidArgument, st.Code())
-	})
-
-	t.Run("GetContainerLogs returns unimplemented when orchestrator lacks log capability", func(t *testing.T) {
-		err := svc.GetContainerLogs(&platformv1.GetContainerLogsRequest{Id: "container-1"}, nil)
-		require.Error(t, err)
-		st, ok := status.FromError(err)
-		require.True(t, ok)
-		assert.Equal(t, codes.Unimplemented, st.Code())
-	})
-
 	t.Run("GetContainerMetrics returns unimplemented when orchestrator lacks capability", func(t *testing.T) {
 		resp, err := svc.GetContainerMetrics(ctx, &platformv1.GetContainerMetricsRequest{Id: "container-1"})
 		assert.Nil(t, resp)

@@ -83,7 +83,6 @@ type MockContainerClient struct {
 	DeleteContainerFunc     func(ctx context.Context, in *platformv1.DeleteContainerRequest, opts ...grpc.CallOption) (*platformv1.DeleteContainerResponse, error)
 	GetContainerFunc        func(ctx context.Context, in *platformv1.GetContainerRequest, opts ...grpc.CallOption) (*platformv1.GetContainerResponse, error)
 	ListContainersFunc      func(ctx context.Context, in *platformv1.ListContainersRequest, opts ...grpc.CallOption) (*platformv1.ListContainersResponse, error)
-	GetContainerLogsFunc    func(ctx context.Context, in *platformv1.GetContainerLogsRequest, opts ...grpc.CallOption) (platformv1.ComputeService_GetContainerLogsClient, error)
 	GetContainerMetricsFunc func(ctx context.Context, in *platformv1.GetContainerMetricsRequest, opts ...grpc.CallOption) (*platformv1.ContainerMetricsResponse, error)
 }
 
@@ -125,13 +124,6 @@ func (m *MockContainerClient) GetContainer(ctx context.Context, in *platformv1.G
 func (m *MockContainerClient) ListContainers(ctx context.Context, in *platformv1.ListContainersRequest, opts ...grpc.CallOption) (*platformv1.ListContainersResponse, error) {
 	if m.ListContainersFunc != nil {
 		return m.ListContainersFunc(ctx, in, opts...)
-	}
-	return nil, errors.New("not implemented")
-}
-
-func (m *MockContainerClient) GetContainerLogs(ctx context.Context, in *platformv1.GetContainerLogsRequest, opts ...grpc.CallOption) (platformv1.ComputeService_GetContainerLogsClient, error) {
-	if m.GetContainerLogsFunc != nil {
-		return m.GetContainerLogsFunc(ctx, in, opts...)
 	}
 	return nil, errors.New("not implemented")
 }

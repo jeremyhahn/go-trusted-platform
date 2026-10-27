@@ -320,7 +320,6 @@ func toolPermissionCatalog() map[string]string {
 	permissions["container_remove"] = "container:delete"
 	permissions["container_get"] = "container:read"
 	permissions["container_list"] = "container:read"
-	permissions["container_logs"] = "container:read"
 	permissions["container_metrics"] = "container:read"
 	permissions["container_attest"] = "container:read"
 

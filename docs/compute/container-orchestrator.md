@@ -123,7 +123,10 @@ Live container RPCs per protocol:
 |-----------|------|------|------|-----|
 | Create/Start/Stop/Delete/Get/List | ComputeService RPCs | `/api/v1/compute/containers*` | direct + category sub-opcodes | `container_*` tools |
 | Attest (incl. attest-on-create) | `AttestContainer` | `POST .../{id}/attest` | `OpContainerAttest` (0xEC) sub-opcode under compute extended category 0x69 | `container_attest` |
-| Logs (streaming) | `GetContainerLogs` (server streaming) | `GET .../{id}/logs` (SSE with `follow=true`) | `OpContainerLogs` (0xAF direct, also via category) | `container_logs` (snapshot) |
+
+Container logs have no API surface: the orchestrator's log stream is an
+internal capability, and the QUIC byte 0xAF that carried `OpContainerLogs` is
+retired (#452).
 
 QUIC note: the direct container opcodes 0xEC and 0xFC-0xFF are shadowed by
 the PXE ranges in the top-level dispatcher, so remote clients send them as

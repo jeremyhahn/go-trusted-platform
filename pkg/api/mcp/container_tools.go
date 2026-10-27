@@ -307,41 +307,6 @@ func (r *ToolRegistry) registerContainerTools() {
 	})
 
 	r.addTool(mcpwire.ToolDefinition{
-		Name:        "container_logs",
-		Description: "Get logs from a container",
-		InputSchema: map[string]interface{}{
-			"type": "object",
-			"properties": map[string]interface{}{
-				"id": map[string]interface{}{
-					"type":        "string",
-					"description": "Container ID or name",
-				},
-				"stdout": map[string]interface{}{
-					"type":        "boolean",
-					"description": "Include stdout",
-					"default":     true,
-				},
-				"stderr": map[string]interface{}{
-					"type":        "boolean",
-					"description": "Include stderr",
-					"default":     true,
-				},
-				"tail": map[string]interface{}{
-					"type":        "string",
-					"description": "Number of lines from the end (e.g., '100' or 'all')",
-					"default":     "100",
-				},
-				"timestamps": map[string]interface{}{
-					"type":        "boolean",
-					"description": "Include timestamps in output",
-					"default":     false,
-				},
-			},
-			"required": []string{"id"},
-		},
-	})
-
-	r.addTool(mcpwire.ToolDefinition{
 		Name:        "container_attest",
 		Description: "Perform TPM attestation for a container, generating a cryptographic proof of its integrity",
 		InputSchema: map[string]interface{}{
