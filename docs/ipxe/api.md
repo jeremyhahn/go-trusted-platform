@@ -265,10 +265,20 @@ who arrived here can find them:
 `pxe.ServiceConfig.WebhookEnabled`** (default `false`). Disabled, the path is
 not registered and answers 404 like any unknown path. Enabled, the node
 **authenticates by its device certificate over mTLS** (#238): the device is the
-one registered with the serial of the leaf of the verified client chain, and a
-MAC in the request body must match it. No verified client certificate is 401;
-a certificate no device carries, or a mismatched MAC, is 403. Transports with
-no peer certificate — Unix, MCP stdio, embedded — refuse the call.
+one whose enrolled `certificate_fingerprint` is the SHA-256 of the DER of the
+leaf of the verified client chain
+(`pkg/api/daemon/pxe_grpc_service.go:551-552`, `pkg/compute/pxe/fingerprint.go:27`),
+and a MAC in the request body must match it. The serial is not the key: it is
+unique only within its issuer (RFC 5280 §4.1.2.2), and the listener trusts more
+than one issuer. `SetDeviceEnrolled` records the fingerprint (hex, case and
+colons ignored, `pkg/compute/pxe/service.go:576`); a device enrolled without one
+cannot complete through the webhook. No verified client certificate is 401; a
+certificate no device carries, one carried by more than one device, or a
+mismatched MAC is 403. Transports with no peer certificate — Unix, MCP stdio,
+embedded — refuse the call. On gRPC, QUIC and MCP the call is also scoped
+`pxe:write` (`pkg/api/grpc/method_permissions.go:904`), so a node needs a token
+there as well as its certificate. Only REST serves it certificate-only, and only
+when `WebhookEnabled` mounts the route (`pkg/webservice/v1/rest/pxe/router.go:176`).
 
 **The `REST base` column is a locator, not the contract.** It gives the prefix a
 route hangs under; it does not give the route. The normative per-route path

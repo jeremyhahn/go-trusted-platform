@@ -14,6 +14,7 @@
 package pxe
 
 import (
+	"crypto/x509"
 	"net"
 	"testing"
 	"time"
@@ -251,7 +252,9 @@ func TestDeviceFilter_Matches(t *testing.T) {
 		StateChangedAt: now,
 	}
 	enrolled := copyDeviceInfo(device)
+	enrolledFingerprint := CertificateFingerprintOf(&x509.Certificate{Raw: []byte("platform CA/4242")})
 	enrolled.CertificateSerial = "4242"
+	enrolled.CertificateFingerprint = enrolledFingerprint
 
 	tests := []struct {
 		name     string
@@ -332,21 +335,29 @@ func TestDeviceFilter_Matches(t *testing.T) {
 			expected: true,
 		},
 		{
-			name:     "certificate_serial_filter_match",
-			filter:   &DeviceFilter{CertificateSerial: "4242"},
+			name:     "certificate_fingerprint_filter_match",
+			filter:   &DeviceFilter{CertificateFingerprint: enrolledFingerprint},
 			device:   enrolled,
 			expected: true,
 		},
 		{
-			// Exact match only: a serial is not a prefix of another.
-			name:     "certificate_serial_filter_no_prefix_match",
-			filter:   &DeviceFilter{CertificateSerial: "42"},
+			// Exact match only: a fingerprint is not a prefix of another.
+			name:     "certificate_fingerprint_filter_no_prefix_match",
+			filter:   &DeviceFilter{CertificateFingerprint: enrolledFingerprint[:8]},
 			device:   enrolled,
 			expected: false,
 		},
 		{
-			name:     "certificate_serial_filter_excludes_unenrolled",
-			filter:   &DeviceFilter{CertificateSerial: "4242"},
+			// The serial is not the key: an equal serial with another
+			// fingerprint (another issuer's certificate) does not match.
+			name:     "certificate_fingerprint_filter_ignores_serial",
+			filter:   &DeviceFilter{CertificateFingerprint: CertificateFingerprintOf(&x509.Certificate{Raw: []byte("other issuer/4242")})},
+			device:   enrolled,
+			expected: false,
+		},
+		{
+			name:     "certificate_fingerprint_filter_excludes_unenrolled",
+			filter:   &DeviceFilter{CertificateFingerprint: enrolledFingerprint},
 			device:   device,
 			expected: false,
 		},

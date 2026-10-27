@@ -230,10 +230,10 @@ func (f *recordingPXEService) UpdateDeviceState(_ context.Context, deviceID stri
 	return nil
 }
 
-func (f *recordingPXEService) SetDeviceEnrolled(_ context.Context, deviceID, certSerial string) error {
+func (f *recordingPXEService) SetDeviceEnrolled(_ context.Context, deviceID, certSerial, certFingerprint string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.record("SetDeviceEnrolled", deviceID, certSerial)
+	f.record("SetDeviceEnrolled", deviceID, certSerial, certFingerprint)
 	device, err := f.lookup(deviceID)
 	if err != nil {
 		return err
@@ -359,13 +359,29 @@ func invokePXEServer(t *testing.T, server platformv1.PXEServiceServer, method st
 	return invokeGRPCMethodContext(grpcContext(pxeSDKClientState(t)), &platformv1.PXEService_ServiceDesc, server, method, req)
 }
 
+var (
+	pxeSDKBundleOnce  sync.Once
+	pxeSDKBundleValue *testutil.TestTLSBundle
+)
+
+// pxeSDKBundle is the one TLS bundle every PXE SDK transport and the direct
+// gRPC call present. The webhook looks the node up by the SHA-256 of its
+// client certificate (#238), and each generated bundle has a fresh key, so
+// the direct and the SDK call agree only when they share one certificate.
+func pxeSDKBundle(t *testing.T) *testutil.TestTLSBundle {
+	t.Helper()
+	pxeSDKBundleOnce.Do(func() { pxeSDKBundleValue = testutil.GenerateTestTLSBundle(t) })
+	require.NotNil(t, pxeSDKBundleValue, "the shared PXE SDK TLS bundle was not generated")
+	return pxeSDKBundleValue
+}
+
 // pxeSDKClientState is the TLS state of a gRPC connection from the client the
 // SDK transports present: testutil's client certificate, verified. The
 // webhook takes the node's identity from it (#238), so the direct call and
-// the SDK call look up the same certificate serial.
+// the SDK call look up the same certificate fingerprint.
 func pxeSDKClientState(t *testing.T) *tls.ConnectionState {
 	t.Helper()
-	bundle := testutil.GenerateTestTLSBundle(t)
+	bundle := pxeSDKBundle(t)
 	leaf, err := x509.ParseCertificate(bundle.ClientCert.Certificate[0])
 	require.NoError(t, err)
 	return &tls.ConnectionState{VerifiedChains: [][]*x509.Certificate{{leaf, bundle.CACert}}}

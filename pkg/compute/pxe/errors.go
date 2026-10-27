@@ -132,6 +132,17 @@ func (e ErrInvalidMACAddress) Error() string {
 }
 
 // ErrInvalidState indicates an invalid provisioning state.
+// ErrInvalidCertificateFingerprint is returned when an enrollment names a
+// certificate fingerprint that is not a hex SHA-256 digest.
+type ErrInvalidCertificateFingerprint struct {
+	Fingerprint string
+	Reason      string
+}
+
+func (e ErrInvalidCertificateFingerprint) Error() string {
+	return fmt.Sprintf("pxe: invalid certificate fingerprint %q: %s", e.Fingerprint, e.Reason)
+}
+
 type ErrInvalidState struct {
 	DeviceID string
 	State    string

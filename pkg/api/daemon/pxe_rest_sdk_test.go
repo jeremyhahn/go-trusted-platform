@@ -27,7 +27,6 @@ import (
 
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/platformtoken"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/testutil"
 	iammw "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/middleware/iam"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
 	pxerest "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/pxe"
@@ -72,7 +71,7 @@ func connectPXEREST(t *testing.T, server platformv1.PXEServiceServer, scopes ...
 	routes.Handle("POST /api/v1/pxe/webhook/complete", machine)
 	routes.Handle("/", tokens.Handler(operator))
 
-	bundle := testutil.GenerateTestTLSBundle(t)
+	bundle := pxeSDKBundle(t)
 	srv := httptest.NewUnstartedServer(routes)
 	srv.TLS = bundle.ServerTLSConfig()
 	srv.StartTLS()

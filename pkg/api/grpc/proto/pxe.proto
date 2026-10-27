@@ -113,6 +113,9 @@ message PXEDeviceInfo {
 
   // Audit trail of provisioning events.
   repeated ProvisioningEvent events = 14;
+
+  // SHA-256 of the enrolled certificate's DER encoding, lowercase hex.
+  string certificate_fingerprint = 15;
 }
 
 // PXEDeviceFilter provides filtering options for listing devices.
@@ -240,6 +243,13 @@ message UpdatePXEStateResponse {
 message SetPXEDeviceEnrolledRequest {
   string device_id = 1;
   string certificate_serial = 2;
+
+  // SHA-256 of the enrolled certificate's DER encoding, in hex (case and
+  // colon separators are ignored). It is the identity the install-completion
+  // webhook binds its caller to (#238): a serial is unique only within its
+  // issuer, a fingerprint names one certificate. Optional; a device enrolled
+  // without one cannot complete through the webhook.
+  string certificate_fingerprint = 3;
 }
 
 message SetPXEDeviceEnrolledResponse {

@@ -206,9 +206,11 @@ type PXEDeviceInfo struct {
 	// Number of retry attempts.
 	RetryCount int32 `protobuf:"varint,13,opt,name=retry_count,json=retryCount,proto3" json:"retry_count,omitempty"`
 	// Audit trail of provisioning events.
-	Events        []*ProvisioningEvent `protobuf:"bytes,14,rep,name=events,proto3" json:"events,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	Events []*ProvisioningEvent `protobuf:"bytes,14,rep,name=events,proto3" json:"events,omitempty"`
+	// SHA-256 of the enrolled certificate's DER encoding, lowercase hex.
+	CertificateFingerprint string `protobuf:"bytes,15,opt,name=certificate_fingerprint,json=certificateFingerprint,proto3" json:"certificate_fingerprint,omitempty"`
+	unknownFields          protoimpl.UnknownFields
+	sizeCache              protoimpl.SizeCache
 }
 
 func (x *PXEDeviceInfo) Reset() {
@@ -337,6 +339,13 @@ func (x *PXEDeviceInfo) GetEvents() []*ProvisioningEvent {
 		return x.Events
 	}
 	return nil
+}
+
+func (x *PXEDeviceInfo) GetCertificateFingerprint() string {
+	if x != nil {
+		return x.CertificateFingerprint
+	}
+	return ""
 }
 
 // PXEDeviceFilter provides filtering options for listing devices.
@@ -1201,8 +1210,14 @@ type SetPXEDeviceEnrolledRequest struct {
 	state             protoimpl.MessageState `protogen:"open.v1"`
 	DeviceId          string                 `protobuf:"bytes,1,opt,name=device_id,json=deviceId,proto3" json:"device_id,omitempty"`
 	CertificateSerial string                 `protobuf:"bytes,2,opt,name=certificate_serial,json=certificateSerial,proto3" json:"certificate_serial,omitempty"`
-	unknownFields     protoimpl.UnknownFields
-	sizeCache         protoimpl.SizeCache
+	// SHA-256 of the enrolled certificate's DER encoding, in hex (case and
+	// colon separators are ignored). It is the identity the install-completion
+	// webhook binds its caller to (#238): a serial is unique only within its
+	// issuer, a fingerprint names one certificate. Optional; a device enrolled
+	// without one cannot complete through the webhook.
+	CertificateFingerprint string `protobuf:"bytes,3,opt,name=certificate_fingerprint,json=certificateFingerprint,proto3" json:"certificate_fingerprint,omitempty"`
+	unknownFields          protoimpl.UnknownFields
+	sizeCache              protoimpl.SizeCache
 }
 
 func (x *SetPXEDeviceEnrolledRequest) Reset() {
@@ -1245,6 +1260,13 @@ func (x *SetPXEDeviceEnrolledRequest) GetDeviceId() string {
 func (x *SetPXEDeviceEnrolledRequest) GetCertificateSerial() string {
 	if x != nil {
 		return x.CertificateSerial
+	}
+	return ""
+}
+
+func (x *SetPXEDeviceEnrolledRequest) GetCertificateFingerprint() string {
+	if x != nil {
+		return x.CertificateFingerprint
 	}
 	return ""
 }
@@ -2049,7 +2071,7 @@ var File_pxe_proto protoreflect.FileDescriptor
 
 const file_pxe_proto_rawDesc = "" +
 	"\n" +
-	"\tpxe.proto\x12\vplatform.v1\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\fcommon.proto\x1a\fdevice.proto\"\xf0\x04\n" +
+	"\tpxe.proto\x12\vplatform.v1\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\fcommon.proto\x1a\fdevice.proto\"\xa9\x05\n" +
 	"\rPXEDeviceInfo\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x1f\n" +
 	"\vmac_address\x18\x02 \x01(\tR\n" +
@@ -2070,7 +2092,8 @@ const file_pxe_proto_rawDesc = "" +
 	"\x10state_changed_at\x18\f \x01(\v2\x1a.google.protobuf.TimestampR\x0estateChangedAt\x12\x1f\n" +
 	"\vretry_count\x18\r \x01(\x05R\n" +
 	"retryCount\x126\n" +
-	"\x06events\x18\x0e \x03(\v2\x1e.platform.v1.ProvisioningEventR\x06events\"\xaa\x01\n" +
+	"\x06events\x18\x0e \x03(\v2\x1e.platform.v1.ProvisioningEventR\x06events\x127\n" +
+	"\x17certificate_fingerprint\x18\x0f \x01(\tR\x16certificateFingerprint\"\xaa\x01\n" +
 	"\x0fPXEDeviceFilter\x124\n" +
 	"\x05state\x18\x01 \x01(\x0e2\x1e.platform.v1.ProvisioningStateR\x05state\x12\x1f\n" +
 	"\vmac_address\x18\x02 \x01(\tR\n" +
@@ -2132,10 +2155,11 @@ const file_pxe_proto_rawDesc = "" +
 	"\x06reason\x18\x03 \x01(\tR\x06reason\"y\n" +
 	"\x16UpdatePXEStateResponse\x12+\n" +
 	"\x06status\x18\x01 \x01(\v2\x13.platform.v1.StatusR\x06status\x122\n" +
-	"\x06device\x18\x02 \x01(\v2\x1a.platform.v1.PXEDeviceInfoR\x06device\"i\n" +
+	"\x06device\x18\x02 \x01(\v2\x1a.platform.v1.PXEDeviceInfoR\x06device\"\xa2\x01\n" +
 	"\x1bSetPXEDeviceEnrolledRequest\x12\x1b\n" +
 	"\tdevice_id\x18\x01 \x01(\tR\bdeviceId\x12-\n" +
-	"\x12certificate_serial\x18\x02 \x01(\tR\x11certificateSerial\"\x7f\n" +
+	"\x12certificate_serial\x18\x02 \x01(\tR\x11certificateSerial\x127\n" +
+	"\x17certificate_fingerprint\x18\x03 \x01(\tR\x16certificateFingerprint\"\x7f\n" +
 	"\x1cSetPXEDeviceEnrolledResponse\x12+\n" +
 	"\x06status\x18\x01 \x01(\v2\x13.platform.v1.StatusR\x06status\x122\n" +
 	"\x06device\x18\x02 \x01(\v2\x1a.platform.v1.PXEDeviceInfoR\x06device\"Y\n" +

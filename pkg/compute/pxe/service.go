@@ -46,7 +46,7 @@ type Service interface {
 
 	// State Transitions
 	UpdateDeviceState(ctx context.Context, deviceID string, state ProvisioningState, reason string) error
-	SetDeviceEnrolled(ctx context.Context, deviceID, certSerial string) error
+	SetDeviceEnrolled(ctx context.Context, deviceID, certSerial, certFingerprint string) error
 	AuthorizeDevice(ctx context.Context, deviceID string, targetVLAN uint16) error
 	QuarantineDevice(ctx context.Context, deviceID string, reason string) error
 	RetryDevice(ctx context.Context, deviceID string) error
@@ -564,10 +564,18 @@ func (s *service) UpdateDeviceState(ctx context.Context, deviceID string, state 
 	return nil
 }
 
-// SetDeviceEnrolled marks a device as enrolled with the provided certificate serial.
-func (s *service) SetDeviceEnrolled(ctx context.Context, deviceID, certSerial string) error {
+// SetDeviceEnrolled marks a device as enrolled with the provided certificate
+// serial and, optionally, the certificate's SHA-256 fingerprint
+// (NormalizeCertificateFingerprint), which the install-completion webhook
+// binds its caller to.
+func (s *service) SetDeviceEnrolled(ctx context.Context, deviceID, certSerial, certFingerprint string) error {
 	if !s.initialized.Load() {
 		return ErrServiceNotInitialized{}
+	}
+
+	fingerprint, err := NormalizeCertificateFingerprint(certFingerprint)
+	if err != nil {
+		return err
 	}
 
 	device, err := s.stateManager.Get(deviceID)
@@ -586,6 +594,7 @@ func (s *service) SetDeviceEnrolled(ctx context.Context, deviceID, certSerial st
 
 	updateErr := s.stateManager.UpdateDevice(deviceID, func(d *DeviceInfo) error {
 		d.CertificateSerial = certSerial
+		d.CertificateFingerprint = fingerprint
 		return nil
 	})
 	if updateErr != nil {

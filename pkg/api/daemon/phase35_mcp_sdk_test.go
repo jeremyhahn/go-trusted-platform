@@ -77,9 +77,8 @@ func serveMCPConfig(t *testing.T, provider *MCPServiceProvider, config *mcp.Conf
 // serveMCPConfigMTLS is serveMCPConfig over mutual TLS: the SDK presents
 // testutil's client certificate and the server verifies it, for a method
 // that takes the caller's identity from the connection.
-func serveMCPConfigMTLS(t *testing.T, provider *MCPServiceProvider, config *mcp.Config) *sdkmcp.Adapter {
+func serveMCPConfigMTLS(t *testing.T, provider *MCPServiceProvider, config *mcp.Config, bundle *testutil.TestTLSBundle) *sdkmcp.Adapter {
 	t.Helper()
-	bundle := testutil.GenerateTestTLSBundle(t)
 	server := startMCPServer(t, provider, config, bundle.ServerTLSConfig())
 	return connectMCPAdapter(t, server.URL, bundle.ClientTLSConfig())
 }

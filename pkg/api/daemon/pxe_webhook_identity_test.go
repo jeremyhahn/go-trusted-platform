@@ -54,6 +54,24 @@ const (
 	webhookOtherSerial = "7777"
 )
 
+// webhookCert is a certificate with the given serial from the named issuer.
+// Raw stands in for the DER encoding the fingerprint is taken over: two
+// certificates from different issuers differ in it even when their serials
+// are equal, as real DER does through the issuer and signature fields.
+func webhookCert(serial int64, issuer string) *x509.Certificate {
+	return &x509.Certificate{
+		SerialNumber: big.NewInt(serial),
+		Subject:      pkix.Name{CommonName: "node"},
+		Issuer:       pkix.Name{CommonName: issuer},
+		Raw:          []byte(issuer + "/" + big.NewInt(serial).String()),
+	}
+}
+
+var (
+	webhookNodeCert  = webhookCert(4242, "platform CA")
+	webhookOtherCert = webhookCert(7777, "platform CA")
+)
+
 // webhookFixture is a PXE service holding two enrolled nodes, the one whose
 // certificate the tests present and a second one it must not be able to
 // complete.
@@ -66,10 +84,17 @@ func newWebhookFixture(t *testing.T) *webhookFixture {
 	t.Helper()
 	mock := newMockPXEService()
 	ctx := context.Background()
-	for mac, serial := range map[string]string{webhookNodeMAC: webhookNodeSerial, webhookOtherMAC: webhookOtherSerial} {
+	enrolled := map[string]struct {
+		serial string
+		cert   *x509.Certificate
+	}{
+		webhookNodeMAC:  {serial: webhookNodeSerial, cert: webhookNodeCert},
+		webhookOtherMAC: {serial: webhookOtherSerial, cert: webhookOtherCert},
+	}
+	for mac, e := range enrolled {
 		device, err := mock.RegisterDevice(ctx, mac, "port-1")
 		require.NoError(t, err)
-		require.NoError(t, mock.SetDeviceEnrolled(ctx, device.ID, serial))
+		require.NoError(t, mock.SetDeviceEnrolled(ctx, device.ID, e.serial, pxe.CertificateFingerprintOf(e.cert)))
 	}
 	return &webhookFixture{mock: mock, svc: NewPXEGRPCService(logging.DefaultLogger(), mock)}
 }
@@ -79,16 +104,14 @@ func (f *webhookFixture) state(mac string) pxe.ProvisioningState {
 }
 
 // verifiedState is a connection whose client chain the TLS stack verified.
-func verifiedState(serial int64) *tls.ConnectionState {
-	leaf := &x509.Certificate{SerialNumber: big.NewInt(serial), Subject: pkix.Name{CommonName: "node"}}
+func verifiedState(leaf *x509.Certificate) *tls.ConnectionState {
 	return &tls.ConnectionState{VerifiedChains: [][]*x509.Certificate{{leaf}}}
 }
 
 // unverifiedState is a connection that sent the node's certificate but whose
 // chain was never verified: PeerCertificates is attacker-controlled.
 func unverifiedState() *tls.ConnectionState {
-	leaf := &x509.Certificate{SerialNumber: big.NewInt(4242), Subject: pkix.Name{CommonName: "node"}}
-	return &tls.ConnectionState{PeerCertificates: []*x509.Certificate{leaf}}
+	return &tls.ConnectionState{PeerCertificates: []*x509.Certificate{webhookNodeCert}}
 }
 
 // webhookCaller sends one webhook request carrying the given connection state
@@ -165,8 +188,13 @@ func TestWebhookComplete_RefusesWithoutTheNodesVerifiedIdentity(t *testing.T) {
 	}{
 		"no certificate":         {state: nil, mac: webhookNodeMAC, want: codes.Unauthenticated},
 		"unverified certificate": {state: unverifiedState(), mac: webhookNodeMAC, want: codes.Unauthenticated},
-		"unknown certificate":    {state: verifiedState(9999), mac: webhookNodeMAC, want: codes.PermissionDenied},
-		"another node's MAC":     {state: verifiedState(4242), mac: webhookOtherMAC, want: codes.PermissionDenied},
+		"unknown certificate":    {state: verifiedState(webhookCert(9999, "platform CA")), mac: webhookNodeMAC, want: codes.PermissionDenied},
+		"another node's MAC":     {state: verifiedState(webhookNodeCert), mac: webhookOtherMAC, want: codes.PermissionDenied},
+		// Codex review on #1100: a serial is unique only within its issuer, so
+		// a certificate from another trusted issuer that reuses the node's
+		// serial must not stand in for the node, with or without its MAC.
+		"node's serial, other issuer":         {state: verifiedState(webhookCert(4242, "caller anchor")), mac: webhookNodeMAC, want: codes.PermissionDenied},
+		"node's serial, other issuer, no MAC": {state: verifiedState(webhookCert(4242, "caller anchor")), mac: "", want: codes.PermissionDenied},
 	}
 	for transport, call := range webhookTransports() {
 		for name, tc := range cases {
@@ -201,7 +229,7 @@ func TestWebhookComplete_CompletesTheCertificatesNode(t *testing.T) {
 			t.Run(transport+"/"+name, func(t *testing.T) {
 				f := newWebhookFixture(t)
 
-				got := call(t, f, verifiedState(4242), &platformv1.PXEWebhookCompleteRequest{MacAddress: tc.mac, Success: tc.success})
+				got := call(t, f, verifiedState(webhookNodeCert), &platformv1.PXEWebhookCompleteRequest{MacAddress: tc.mac, Success: tc.success})
 
 				assert.Equal(t, codes.OK, got)
 				assert.Equal(t, tc.want, f.state(webhookNodeMAC))
@@ -243,7 +271,7 @@ func TestWebhookComplete_ErrorPaths(t *testing.T) {
 	t.Run("malformed MAC", func(t *testing.T) {
 		f := newWebhookFixture(t)
 
-		_, err := f.svc.WebhookComplete(grpcContext(verifiedState(4242)),
+		_, err := f.svc.WebhookComplete(grpcContext(verifiedState(webhookNodeCert)),
 			&platformv1.PXEWebhookCompleteRequest{MacAddress: "not-a-mac", Success: true})
 
 		assert.Equal(t, codes.InvalidArgument, status.Code(err))
@@ -252,29 +280,20 @@ func TestWebhookComplete_ErrorPaths(t *testing.T) {
 
 	t.Run("certificate on two records", func(t *testing.T) {
 		f := newWebhookFixture(t)
-		require.NoError(t, f.mock.SetDeviceEnrolled(context.Background(), "device-"+webhookOtherMAC, webhookNodeSerial))
+		require.NoError(t, f.mock.SetDeviceEnrolled(context.Background(), "device-"+webhookOtherMAC, webhookNodeSerial, pxe.CertificateFingerprintOf(webhookNodeCert)))
 
-		_, err := f.svc.WebhookComplete(grpcContext(verifiedState(4242)),
+		_, err := f.svc.WebhookComplete(grpcContext(verifiedState(webhookNodeCert)),
 			&platformv1.PXEWebhookCompleteRequest{Success: true})
 
 		assert.Equal(t, codes.PermissionDenied, status.Code(err))
 		assert.Equal(t, pxe.StateEnrolled, f.state(webhookNodeMAC))
 	})
 
-	t.Run("certificate without a serial", func(t *testing.T) {
-		f := newWebhookFixture(t)
-		state := &tls.ConnectionState{VerifiedChains: [][]*x509.Certificate{{{}}}}
-
-		_, err := f.svc.WebhookComplete(grpcContext(state), &platformv1.PXEWebhookCompleteRequest{Success: true})
-
-		assert.Equal(t, codes.Unauthenticated, status.Code(err))
-	})
-
 	t.Run("lookup fails", func(t *testing.T) {
 		f := newWebhookFixture(t)
 		f.mock.listErr = pxe.ErrServiceNotRunning{}
 
-		_, err := f.svc.WebhookComplete(grpcContext(verifiedState(4242)),
+		_, err := f.svc.WebhookComplete(grpcContext(verifiedState(webhookNodeCert)),
 			&platformv1.PXEWebhookCompleteRequest{Success: true})
 
 		require.Error(t, err)
@@ -285,7 +304,7 @@ func TestWebhookComplete_ErrorPaths(t *testing.T) {
 		f := newWebhookFixture(t)
 		f.mock.updateStateErr = pxe.ErrServiceNotRunning{}
 
-		_, err := f.svc.WebhookComplete(grpcContext(verifiedState(4242)),
+		_, err := f.svc.WebhookComplete(grpcContext(verifiedState(webhookNodeCert)),
 			&platformv1.PXEWebhookCompleteRequest{Success: true})
 
 		require.Error(t, err)
@@ -295,7 +314,7 @@ func TestWebhookComplete_ErrorPaths(t *testing.T) {
 	t.Run("no PXE service", func(t *testing.T) {
 		svc := NewPXEGRPCService(logging.DefaultLogger(), nil)
 
-		_, err := svc.WebhookComplete(grpcContext(verifiedState(4242)), &platformv1.PXEWebhookCompleteRequest{Success: true})
+		_, err := svc.WebhookComplete(grpcContext(verifiedState(webhookNodeCert)), &platformv1.PXEWebhookCompleteRequest{Success: true})
 
 		assert.Equal(t, codes.Unavailable, status.Code(err))
 	})

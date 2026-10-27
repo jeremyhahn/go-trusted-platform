@@ -493,25 +493,25 @@ func (e ErrPXEWebhookIdentityRequired) Error() string {
 // ErrPXEWebhookUnknownIdentity is returned when the webhook's verified
 // certificate is not the enrolled certificate of exactly one PXE device.
 type ErrPXEWebhookUnknownIdentity struct {
-	CertificateSerial string
-	Matches           int
+	CertificateFingerprint string
+	Matches                int
 }
 
 func (e ErrPXEWebhookUnknownIdentity) Error() string {
-	return fmt.Sprintf("pxe webhook certificate serial %s is enrolled on %d devices, want exactly 1",
-		e.CertificateSerial, e.Matches)
+	return fmt.Sprintf("pxe webhook certificate sha256:%s is enrolled on %d devices, want exactly 1",
+		e.CertificateFingerprint, e.Matches)
 }
 
 // ErrPXEWebhookIdentityMismatch is returned when the webhook body names a MAC
 // address other than that of the device the verified certificate belongs to.
 type ErrPXEWebhookIdentityMismatch struct {
-	CertificateSerial string
-	MACAddress        string
+	CertificateFingerprint string
+	MACAddress             string
 }
 
 func (e ErrPXEWebhookIdentityMismatch) Error() string {
 	return "pxe webhook body MAC " + e.MACAddress +
-		" is not the device of certificate serial " + e.CertificateSerial
+		" is not the device of certificate sha256:" + e.CertificateFingerprint
 }
 
 // ErrQUICHandlerPanic is returned when a handler sub-function panics.

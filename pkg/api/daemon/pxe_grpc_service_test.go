@@ -16,6 +16,7 @@ package daemon
 import (
 	"context"
 	"net"
+	"strings"
 	"testing"
 	"time"
 
@@ -176,7 +177,7 @@ func (m *mockPXEService) UpdateDeviceState(ctx context.Context, deviceID string,
 	return nil
 }
 
-func (m *mockPXEService) SetDeviceEnrolled(ctx context.Context, deviceID, certSerial string) error {
+func (m *mockPXEService) SetDeviceEnrolled(ctx context.Context, deviceID, certSerial, certFingerprint string) error {
 	if m.enrollErr != nil {
 		return m.enrollErr
 	}
@@ -184,7 +185,12 @@ func (m *mockPXEService) SetDeviceEnrolled(ctx context.Context, deviceID, certSe
 	if !exists {
 		return pxe.ErrDeviceNotFound{DeviceID: deviceID}
 	}
+	fingerprint, err := pxe.NormalizeCertificateFingerprint(certFingerprint)
+	if err != nil {
+		return err
+	}
 	device.CertificateSerial = certSerial
+	device.CertificateFingerprint = fingerprint
 	device.State = pxe.StateEnrolled
 	device.UpdatedAt = time.Now()
 	return nil
@@ -661,6 +667,29 @@ func TestPXEGRPCService_SetDeviceEnrolled(t *testing.T) {
 		require.NotNil(t, resp)
 		assert.True(t, resp.GetStatus().GetSuccess())
 		assert.Equal(t, "ABCD1234", resp.GetDevice().GetCertificateSerial())
+	})
+
+	t.Run("fingerprint is stored normalized", func(t *testing.T) {
+		resp, err := svc.SetDeviceEnrolled(ctx, &platformv1.SetPXEDeviceEnrolledRequest{
+			DeviceId:               deviceID,
+			CertificateSerial:      "ABCD1234",
+			CertificateFingerprint: "AB:" + strings.Repeat("CD", 31),
+		})
+
+		require.NoError(t, err)
+		assert.Equal(t, "ab"+strings.Repeat("cd", 31), resp.GetDevice().GetCertificateFingerprint())
+	})
+
+	t.Run("malformed fingerprint", func(t *testing.T) {
+		resp, err := svc.SetDeviceEnrolled(ctx, &platformv1.SetPXEDeviceEnrolledRequest{
+			DeviceId:               deviceID,
+			CertificateSerial:      "ABCD1234",
+			CertificateFingerprint: "abcd",
+		})
+
+		require.Error(t, err)
+		assert.Nil(t, resp)
+		assert.Equal(t, codes.InvalidArgument, status.Code(err))
 	})
 
 	t.Run("missing device ID", func(t *testing.T) {
