@@ -619,6 +619,7 @@ signal, `VendorUnknown` otherwise.
 | Unit (CLI) | `pkg/cli/commands/bmc/*_test.go` | Flag validation, mode conflict, standalone config construction, enroll option tri-state |
 | Unit (API) | `pkg/webservice/v1/bmc/*_test.go`, `pkg/api/mcp/bmc_dispatch_test.go`, `pkg/api/daemon/quic_dispatch_guard_test.go` | Handler status codes, MCP tool dispatch, QUIC opcode routing |
 | Unit (SDK parity) | `pkg/api/daemon/bmc_{quic,mcp,embedded}_sdk_test.go` (drivers in `bmc_sdk_parity_test.go`) | Every `BMCService` method through the SDK's QUIC, MCP and embedded adapters against the daemon's handlers; the gRPC scope and not-found refusals |
+| Unit (simulators) | `test/integration/bmc/vbmc/main_test.go`, `test/integration/bmc/rmcpsim/simulator_test.go` | The harness's own simulators: vBMC config loading and Redfish identity routes (httptest), the RMCP+ responder's handshake, credential rotation, IPMI handlers and malformed-packet silence (127.0.0.1 UDP). Untagged; `make test` runs them through `TEST_UNIT_PKGS` |
 | Integration | `test/integration/bmc/` | Real containerized vBMC responders |
 
 Make targets: `make test-bmc` (runs `./pkg/bmc/...`,

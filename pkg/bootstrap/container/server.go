@@ -553,7 +553,11 @@ func (s *Server) openInstalledUKI(entry *ManifestEntry, set MediaSet) (*nbd.Meta
 	if err != nil {
 		return nil, err
 	}
-	return nbd.OpenMetadataFile(s.config.NBD.VolumeDir, entry.Hostname, installedUKIDir+bootFile)
+	volumes, err := nbdVolumes(s.config)
+	if err != nil {
+		return nil, err
+	}
+	return nbd.OpenMetadataFile(volumes, entry.Hostname, installedUKIDir+bootFile)
 }
 
 // nbdInstalled reports whether entry's export holds an install whose UKI the

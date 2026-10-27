@@ -85,22 +85,59 @@ func (rr *rerunner) round(ctx context.Context, r rerun) ([]string, *entry, error
 	if err != nil || len(names) == 0 {
 		return nil, nil, err
 	}
-	run := "^(" + strings.Join(names, "|") + ")$"
-	out, err = rr.goCmd(ctx, "test", "-tags", rr.tags, "-count=1", "-v", "-run", run, importPath)
-	if _, werr := fmt.Fprintf(rr.stdout, "rerun of %s under fips140=only, -run %s:\n%s", r.Package, run, out); werr != nil {
-		return nil, nil, &WriteError{Err: werr}
-	}
-	if err != nil {
-		e, reason := rr.attribute(r, out)
-		if e == nil {
-			return nil, nil, &RerunError{Package: r.Package, Reason: fmt.Sprintf("failed (%v)%s", err, reason)}
+	for _, batch := range runBatches(names, maxRunPatternBytes) {
+		run := runPattern(batch)
+		out, err = rr.goCmd(ctx, "test", "-tags", rr.tags, "-count=1", "-v", "-run", run, importPath)
+		if _, werr := fmt.Fprintf(rr.stdout, "rerun of %s under fips140=only, -run %s:\n%s", r.Package, run, out); werr != nil {
+			return nil, nil, &WriteError{Err: werr}
 		}
-		return names, e, nil
-	}
-	if err := checkRerun(r, importPath, names, out); err != nil {
-		return nil, nil, err
+		if err != nil {
+			e, reason := rr.attribute(r, out)
+			if e == nil {
+				return nil, nil, &RerunError{Package: r.Package, Reason: fmt.Sprintf("failed (%v)%s", err, reason)}
+			}
+			return names, e, nil
+		}
+		if err := checkRerun(r, importPath, batch, out); err != nil {
+			return nil, nil, err
+		}
 	}
 	return names, nil, nil
+}
+
+// maxRunPatternBytes bounds one rerun's -run pattern. Linux refuses a
+// single exec argument past MAX_ARG_STRLEN (128 KiB) with "argument list
+// too long", and pkg/api/daemon alone lists more than that in test names.
+const maxRunPatternBytes = 64 << 10
+
+// runPattern is the -run pattern that runs exactly names.
+func runPattern(names []string) string {
+	return "^(" + strings.Join(names, "|") + ")$"
+}
+
+// runBatches splits names, in order, into batches whose runPattern stays
+// within limit bytes. A name too long for limit on its own gets a batch
+// to itself, so every name is run exactly once.
+func runBatches(names []string, limit int) [][]string {
+	var batches [][]string
+	var batch []string
+	size := len(runPattern(nil))
+	for _, name := range names {
+		grown := size + len(name)
+		if len(batch) > 0 {
+			grown++ // the "|" before it
+		}
+		if len(batch) > 0 && grown > limit {
+			batches = append(batches, batch)
+			batch, grown = nil, len(runPattern(nil))+len(name)
+		}
+		batch = append(batch, name)
+		size = grown
+	}
+	if len(batch) > 0 {
+		batches = append(batches, batch)
+	}
+	return batches
 }
 
 // attribute decides a failed round by the run's own rules: the row of the

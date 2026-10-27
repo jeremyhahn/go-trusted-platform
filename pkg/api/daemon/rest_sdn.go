@@ -17,6 +17,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/rest"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ipam"
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
 
 // SetSDNService wires the shared SDN service into the REST handlers.
@@ -27,11 +28,13 @@ import (
 // (registered unconditionally in RegisterRoutes) are available; the SDN
 // routes return 503.
 func (s *RESTServer) SetSDNService(svc *SDNService) {
-	sdnHandlers := rest.NewSDNHandlers(nil, s.logger)
+	// A nil *SDNService must reach the handlers as a nil interface, so the
+	// routes answer 503 rather than dereference it.
+	var server platformv1.SDNServiceServer
 	if svc != nil {
-		sdnHandlers = rest.NewSDNHandlers(svc.OVSClient(), s.logger)
-		sdnHandlers.SetControlService(svc)
+		server = svc
 	}
+	sdnHandlers := rest.NewSDNHandlers(server, s.logger)
 	sdnHandlers.RegisterRoutes(s.router)
 	s.sdnHandlers = sdnHandlers
 }

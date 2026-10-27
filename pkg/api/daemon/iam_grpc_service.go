@@ -227,7 +227,7 @@ func (s *IAMGRPCService) CreateUser(ctx context.Context, req *platformv1.CreateI
 	}
 
 	return &platformv1.IAMUserResponse{
-		User:      sdkUserToPlatformUser(resp),
+		User:      restiam.UserToProto(resp),
 		Timestamp: timestamppb.Now(),
 	}, nil
 }
@@ -263,7 +263,7 @@ func (s *IAMGRPCService) GetUser(ctx context.Context, req *platformv1.GetIAMUser
 	}
 
 	return &platformv1.IAMUserResponse{
-		User:      sdkUserToPlatformUser(resp),
+		User:      restiam.UserToProto(resp),
 		Timestamp: timestamppb.Now(),
 	}, nil
 }
@@ -308,20 +308,16 @@ func (s *IAMGRPCService) ListUsers(ctx context.Context, req *platformv1.ListIAMU
 
 	users := make([]*platformv1.IAMUser, 0, len(resp.Users))
 	for i := range resp.Users {
-		users = append(users, sdkUserToPlatformUser(&resp.Users[i]))
+		users = append(users, restiam.UserToProto(&resp.Users[i]))
 	}
 
 	totalCount := int64(resp.Pagination.TotalCount)
 
 	return &platformv1.ListIAMUsersResponse{
-		Users: users,
-		Pagination: &platformv1.PaginationResponse{
-			Page:       uint32(offset/limit) + 1,
-			PageSize:   uint32(limit),
-			TotalItems: uint64(totalCount),
-		},
-		Total:     totalCount,
-		Timestamp: timestamppb.Now(),
+		Users:      users,
+		Pagination: restiam.ListPagination(limit, offset, totalCount),
+		Total:      totalCount,
+		Timestamp:  timestamppb.Now(),
 	}, nil
 }
 
@@ -370,7 +366,7 @@ func (s *IAMGRPCService) UpdateUser(ctx context.Context, req *platformv1.UpdateI
 	}
 
 	return &platformv1.IAMUserResponse{
-		User:      sdkUserToPlatformUser(resp),
+		User:      restiam.UserToProto(resp),
 		Timestamp: timestamppb.Now(),
 	}, nil
 }
@@ -457,7 +453,7 @@ func (s *IAMGRPCService) CreateRole(ctx context.Context, req *platformv1.CreateI
 	}
 
 	return &platformv1.IAMRoleResponse{
-		Role:      sdkRoleToPlatformRole(resp),
+		Role:      restiam.RoleToProto(resp),
 		Timestamp: timestamppb.Now(),
 	}, nil
 }
@@ -493,7 +489,7 @@ func (s *IAMGRPCService) GetRole(ctx context.Context, req *platformv1.GetIAMRole
 	}
 
 	return &platformv1.IAMRoleResponse{
-		Role:      sdkRoleToPlatformRole(resp),
+		Role:      restiam.RoleToProto(resp),
 		Timestamp: timestamppb.Now(),
 	}, nil
 }
@@ -531,20 +527,16 @@ func (s *IAMGRPCService) ListRoles(ctx context.Context, req *platformv1.ListIAMR
 
 	roles := make([]*platformv1.IAMRole, 0, len(resp.Roles))
 	for i := range resp.Roles {
-		roles = append(roles, sdkRoleToPlatformRole(&resp.Roles[i]))
+		roles = append(roles, restiam.RoleToProto(&resp.Roles[i]))
 	}
 
 	totalCount := int64(resp.Pagination.TotalCount)
 
 	return &platformv1.ListIAMRolesResponse{
-		Roles: roles,
-		Pagination: &platformv1.PaginationResponse{
-			Page:       uint32(offset/limit) + 1,
-			PageSize:   uint32(limit),
-			TotalItems: uint64(totalCount),
-		},
-		Total:     totalCount,
-		Timestamp: timestamppb.Now(),
+		Roles:      roles,
+		Pagination: restiam.ListPagination(limit, offset, totalCount),
+		Total:      totalCount,
+		Timestamp:  timestamppb.Now(),
 	}, nil
 }
 
@@ -585,7 +577,7 @@ func (s *IAMGRPCService) UpdateRole(ctx context.Context, req *platformv1.UpdateI
 	}
 
 	return &platformv1.IAMRoleResponse{
-		Role:      sdkRoleToPlatformRole(resp),
+		Role:      restiam.RoleToProto(resp),
 		Timestamp: timestamppb.Now(),
 	}, nil
 }
@@ -767,7 +759,7 @@ func (s *IAMGRPCService) CreateGroup(ctx context.Context, req *platformv1.Create
 	}
 
 	return &platformv1.IAMGroupResponse{
-		Group:     sdkGroupToPlatformGroup(resp),
+		Group:     restiam.GroupToProto(resp),
 		Timestamp: timestamppb.Now(),
 	}, nil
 }
@@ -803,7 +795,7 @@ func (s *IAMGRPCService) GetGroup(ctx context.Context, req *platformv1.GetIAMGro
 	}
 
 	return &platformv1.IAMGroupResponse{
-		Group:     sdkGroupToPlatformGroup(resp),
+		Group:     restiam.GroupToProto(resp),
 		Timestamp: timestamppb.Now(),
 	}, nil
 }
@@ -841,20 +833,16 @@ func (s *IAMGRPCService) ListGroups(ctx context.Context, req *platformv1.ListIAM
 
 	groups := make([]*platformv1.IAMGroup, 0, len(resp.Groups))
 	for i := range resp.Groups {
-		groups = append(groups, sdkGroupToPlatformGroup(&resp.Groups[i]))
+		groups = append(groups, restiam.GroupToProto(&resp.Groups[i]))
 	}
 
 	totalCount := int64(resp.Pagination.TotalCount)
 
 	return &platformv1.ListIAMGroupsResponse{
-		Groups: groups,
-		Pagination: &platformv1.PaginationResponse{
-			Page:       uint32(offset/limit) + 1,
-			PageSize:   uint32(limit),
-			TotalItems: uint64(totalCount),
-		},
-		Total:     totalCount,
-		Timestamp: timestamppb.Now(),
+		Groups:     groups,
+		Pagination: restiam.ListPagination(limit, offset, totalCount),
+		Total:      totalCount,
+		Timestamp:  timestamppb.Now(),
 	}, nil
 }
 
@@ -892,7 +880,7 @@ func (s *IAMGRPCService) UpdateGroup(ctx context.Context, req *platformv1.Update
 	}
 
 	return &platformv1.IAMGroupResponse{
-		Group:     sdkGroupToPlatformGroup(resp),
+		Group:     restiam.GroupToProto(resp),
 		Timestamp: timestamppb.Now(),
 	}, nil
 }
@@ -1214,7 +1202,7 @@ func (s *IAMGRPCService) CreateTenant(ctx context.Context, req *platformv1.Creat
 	}
 
 	return &platformv1.IAMTenantResponse{
-		Tenant:    sdkTenantToPlatformTenant(resp),
+		Tenant:    restiam.TenantToProto(resp),
 		Timestamp: timestamppb.Now(),
 	}, nil
 }
@@ -1247,7 +1235,7 @@ func (s *IAMGRPCService) GetTenant(ctx context.Context, req *platformv1.GetIAMTe
 	}
 
 	return &platformv1.IAMTenantResponse{
-		Tenant:    sdkTenantToPlatformTenant(resp),
+		Tenant:    restiam.TenantToProto(resp),
 		Timestamp: timestamppb.Now(),
 	}, nil
 }
@@ -1280,20 +1268,16 @@ func (s *IAMGRPCService) ListTenants(ctx context.Context, req *platformv1.ListIA
 
 	tenants := make([]*platformv1.IAMTenant, 0, len(resp.Tenants))
 	for i := range resp.Tenants {
-		tenants = append(tenants, sdkTenantToPlatformTenant(&resp.Tenants[i]))
+		tenants = append(tenants, restiam.TenantToProto(&resp.Tenants[i]))
 	}
 
 	totalCount := int64(resp.Pagination.TotalCount)
 
 	return &platformv1.ListIAMTenantsResponse{
-		Tenants: tenants,
-		Pagination: &platformv1.PaginationResponse{
-			Page:       uint32(offset/limit) + 1,
-			PageSize:   uint32(limit),
-			TotalItems: uint64(totalCount),
-		},
-		Total:     totalCount,
-		Timestamp: timestamppb.Now(),
+		Tenants:    tenants,
+		Pagination: restiam.ListPagination(limit, offset, totalCount),
+		Total:      totalCount,
+		Timestamp:  timestamppb.Now(),
 	}, nil
 }
 
@@ -1336,7 +1320,7 @@ func (s *IAMGRPCService) UpdateTenant(ctx context.Context, req *platformv1.Updat
 	}
 
 	return &platformv1.IAMTenantResponse{
-		Tenant:    sdkTenantToPlatformTenant(resp),
+		Tenant:    restiam.TenantToProto(resp),
 		Timestamp: timestamppb.Now(),
 	}, nil
 }
@@ -1424,7 +1408,7 @@ func (s *IAMGRPCService) CreatePolicy(ctx context.Context, req *platformv1.Creat
 	}
 
 	return &platformv1.IAMPolicyResponse{
-		Policy:    sdkPolicyToPlatformPolicy(resp),
+		Policy:    restiam.PolicyToProto(resp),
 		Timestamp: timestamppb.Now(),
 	}, nil
 }
@@ -1460,7 +1444,7 @@ func (s *IAMGRPCService) GetPolicy(ctx context.Context, req *platformv1.GetIAMPo
 	}
 
 	return &platformv1.IAMPolicyResponse{
-		Policy:    sdkPolicyToPlatformPolicy(resp),
+		Policy:    restiam.PolicyToProto(resp),
 		Timestamp: timestamppb.Now(),
 	}, nil
 }
@@ -1498,20 +1482,16 @@ func (s *IAMGRPCService) ListPolicies(ctx context.Context, req *platformv1.ListI
 
 	policies := make([]*platformv1.IAMPolicy, 0, len(resp.Policies))
 	for i := range resp.Policies {
-		policies = append(policies, sdkPolicyToPlatformPolicy(&resp.Policies[i]))
+		policies = append(policies, restiam.PolicyToProto(&resp.Policies[i]))
 	}
 
 	totalCount := resp.TotalCount
 
 	return &platformv1.ListIAMPoliciesResponse{
-		Policies: policies,
-		Pagination: &platformv1.PaginationResponse{
-			Page:       uint32(offset/limit) + 1,
-			PageSize:   uint32(limit),
-			TotalItems: uint64(totalCount),
-		},
-		Total:     totalCount,
-		Timestamp: timestamppb.Now(),
+		Policies:   policies,
+		Pagination: restiam.ListPagination(limit, offset, totalCount),
+		Total:      totalCount,
+		Timestamp:  timestamppb.Now(),
 	}, nil
 }
 
@@ -1555,7 +1535,7 @@ func (s *IAMGRPCService) UpdatePolicy(ctx context.Context, req *platformv1.Updat
 	}
 
 	return &platformv1.IAMPolicyResponse{
-		Policy:    sdkPolicyToPlatformPolicy(resp),
+		Policy:    restiam.PolicyToProto(resp),
 		Timestamp: timestamppb.Now(),
 	}, nil
 }
@@ -1787,7 +1767,7 @@ func (s *IAMGRPCService) RegisterApp(ctx context.Context, req *platformv1.Regist
 	}
 
 	return &platformv1.IAMAppResponse{
-		App:       sdkAppToPlatformApp(resp),
+		App:       restiam.AppToProto(resp),
 		Timestamp: timestamppb.Now(),
 	}, nil
 }
@@ -1823,7 +1803,7 @@ func (s *IAMGRPCService) GetApp(ctx context.Context, req *platformv1.GetIAMAppRe
 	}
 
 	return &platformv1.IAMAppResponse{
-		App:       sdkAppToPlatformApp(resp),
+		App:       restiam.AppToProto(resp),
 		Timestamp: timestamppb.Now(),
 	}, nil
 }
@@ -1857,20 +1837,16 @@ func (s *IAMGRPCService) ListApps(ctx context.Context, req *platformv1.ListIAMAp
 
 	apps := make([]*platformv1.IAMApp, 0, len(resp.Applications))
 	for i := range resp.Applications {
-		apps = append(apps, sdkAppToPlatformApp(&resp.Applications[i]))
+		apps = append(apps, restiam.AppToProto(&resp.Applications[i]))
 	}
 
 	totalCount := int64(resp.TotalCount)
 
 	return &platformv1.ListIAMAppsResponse{
-		Apps: apps,
-		Pagination: &platformv1.PaginationResponse{
-			Page:       uint32(offset/limit) + 1,
-			PageSize:   uint32(limit),
-			TotalItems: uint64(totalCount),
-		},
-		Total:     totalCount,
-		Timestamp: timestamppb.Now(),
+		Apps:       apps,
+		Pagination: restiam.ListPagination(limit, offset, totalCount),
+		Total:      totalCount,
+		Timestamp:  timestamppb.Now(),
 	}, nil
 }
 
@@ -1916,7 +1892,7 @@ func (s *IAMGRPCService) UpdateApp(ctx context.Context, req *platformv1.UpdateIA
 	}
 
 	return &platformv1.IAMAppResponse{
-		App:       sdkAppToPlatformApp(resp),
+		App:       restiam.AppToProto(resp),
 		Timestamp: timestamppb.Now(),
 	}, nil
 }
@@ -2139,137 +2115,4 @@ func upstreamErrorCode(err error) (codes.Code, bool) {
 		}
 	}
 	return codes.Unknown, false
-}
-
-// =============================================================================
-// SDK-to-Platform Type Conversion Functions
-// =============================================================================
-
-// sdkUserToPlatformUser converts a QuicBaaS SDK user to a platform user.
-//
-// Returns nil if the input is nil, enabling safe chaining.
-func sdkUserToPlatformUser(u *sdkiam.User) *platformv1.IAMUser {
-	if u == nil {
-		return nil
-	}
-
-	// Convert Metadata (map[string]string) to Attributes for platform compatibility
-	result := &platformv1.IAMUser{
-		Id:          u.ID,
-		TenantId:    u.TenantID,
-		Email:       u.Email,
-		Name:        u.DisplayName,
-		Roles:       u.Roles,
-		Groups:      u.Groups,
-		Attributes:  u.Metadata,
-		MfaVerified: len(u.AuthMethods) > 0,
-		CreatedAt:   timestamppb.New(u.CreatedAt),
-		UpdatedAt:   timestamppb.New(u.UpdatedAt),
-	}
-	if u.LastLoginAt != nil {
-		result.LastAuth = timestamppb.New(*u.LastLoginAt)
-	}
-	return result
-}
-
-// sdkRoleToPlatformRole converts a QuicBaaS SDK role to a platform role.
-//
-// Returns nil if the input is nil, enabling safe chaining.
-func sdkRoleToPlatformRole(r *sdkiam.Role) *platformv1.IAMRole {
-	if r == nil {
-		return nil
-	}
-	return &platformv1.IAMRole{
-		Id:          r.ID,
-		TenantId:    r.TenantID,
-		Name:        r.Name,
-		Description: r.Description,
-		Permissions: r.Permissions,
-		CreatedAt:   timestamppb.New(r.CreatedAt),
-		UpdatedAt:   timestamppb.New(r.UpdatedAt),
-	}
-}
-
-// sdkGroupToPlatformGroup converts a QuicBaaS SDK group to a platform group.
-//
-// Returns nil if the input is nil, enabling safe chaining.
-func sdkGroupToPlatformGroup(g *sdkiam.Group) *platformv1.IAMGroup {
-	if g == nil {
-		return nil
-	}
-	return &platformv1.IAMGroup{
-		Id:          g.ID,
-		TenantId:    g.TenantID,
-		Name:        g.Name,
-		Description: g.Description,
-		CreatedAt:   timestamppb.New(g.CreatedAt),
-		UpdatedAt:   timestamppb.New(g.UpdatedAt),
-	}
-}
-
-// sdkTenantToPlatformTenant converts a QuicBaaS SDK tenant to a platform tenant.
-//
-// Returns nil if the input is nil, enabling safe chaining.
-func sdkTenantToPlatformTenant(t *sdkiam.Tenant) *platformv1.IAMTenant {
-	if t == nil {
-		return nil
-	}
-	tenant := &platformv1.IAMTenant{
-		Id:        t.ID,
-		Name:      t.Name,
-		CreatedAt: timestamppb.New(t.CreatedAt),
-		UpdatedAt: timestamppb.New(t.UpdatedAt),
-	}
-	if t.Settings != nil {
-		tenant.Settings = &platformv1.IAMTenantSettings{
-			MfaRequired: t.Settings["mfa_required"] == "true",
-		}
-	}
-	return tenant
-}
-
-// sdkPolicyToPlatformPolicy converts a QuicBaaS SDK policy to a platform policy.
-//
-// Returns nil if the input is nil, enabling safe chaining.
-func sdkPolicyToPlatformPolicy(p *sdkiam.Policy) *platformv1.IAMPolicy {
-	if p == nil {
-		return nil
-	}
-	return &platformv1.IAMPolicy{
-		Name:        p.Name,
-		TenantId:    p.TenantID,
-		Description: p.Description,
-		Priority:    int32(p.Priority),
-		SpecYaml:    p.SpecYAML,
-		Labels:      p.Labels,
-		CreatedAt:   timestamppb.New(p.CreatedAt),
-		UpdatedAt:   timestamppb.New(p.UpdatedAt),
-	}
-}
-
-// sdkAppToPlatformApp converts a QuicBaaS SDK application to a platform application.
-//
-// Returns nil if the input is nil, enabling safe chaining.
-func sdkAppToPlatformApp(a *sdkiam.Application) *platformv1.IAMApp {
-	if a == nil {
-		return nil
-	}
-
-	// Convert grant types to string representation
-	grantTypes := make([]string, 0, len(a.GrantTypes))
-	for _, gt := range a.GrantTypes {
-		grantTypes = append(grantTypes, gt.String())
-	}
-
-	return &platformv1.IAMApp{
-		ClientId:      a.ClientID,
-		ClientSecret:  a.ClientSecret,
-		TenantId:      a.TenantID,
-		Name:          a.Name,
-		RedirectUris:  a.RedirectURIs,
-		GrantTypes:    grantTypes,
-		ResponseTypes: a.ResponseTypes,
-		CreatedAt:     timestamppb.New(a.CreatedAt),
-		UpdatedAt:     timestamppb.New(a.UpdatedAt),
-	}
 }

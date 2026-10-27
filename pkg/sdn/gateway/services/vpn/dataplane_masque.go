@@ -72,19 +72,7 @@ func (c MASQUEConfig) validate() error {
 	if c.Port < 0 || c.Port > 65535 {
 		return &ErrInvalidConfig{Field: "masque.port", Reason: "must be 0-65535"}
 	}
-	if len(c.Routes) == 0 {
-		// A session with no advertised route can carry nothing: RFC 9484
-		// requires the destination of a proxied packet to fall inside a
-		// range the proxy advertised. Refuse the configuration rather than
-		// admit clients into a tunnel that silently drops every packet.
-		return &ErrInvalidConfig{Field: "masque.routes", Reason: "at least one reachable route is required"}
-	}
-	for _, r := range c.Routes {
-		if !r.IsValid() {
-			return &ErrInvalidConfig{Field: "masque.routes", Reason: "route prefix is not valid"}
-		}
-	}
-	return nil
+	return validateMASQUERoutes(c.Routes)
 }
 
 // PacketDevice is the host-side end of the MASQUE plane: a layer-3 device

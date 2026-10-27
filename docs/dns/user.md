@@ -15,11 +15,11 @@ state rather than hand-maintained.
 
 ---
 
-## Before anything else: there is no `platformctl dns`
+## The CLI and the API
 
-Every task below is an API call. The CLI group does not exist
-([cli.md](cli.md)), and a deleted document
-(cli-reference.md) described one that was never built. Use REST or gRPC.
+Every task below is shown as an API call. Each one also has a
+`platformctl dns` verb ([cli.md](cli.md)) that sends the same `DNSService`
+RPC.
 
 ---
 

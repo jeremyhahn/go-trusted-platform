@@ -204,7 +204,8 @@ HTTP → gRPC status mapping (REST, and a non-2xx answer on MCP):
 | 401 | `Unauthenticated` |
 | 403 | `PermissionDenied` |
 | 404 | `NotFound` |
-| 409 | `AlreadyExists` |
+| 409 | `AlreadyExists`; on a `DELETE`, `FailedPrecondition` (a delete cannot collide with an existing resource, #665) |
+| 412 | `FailedPrecondition` |
 | 429 | `ResourceExhausted` |
 | 500 | `Internal` |
 | 501 | `Unimplemented` |

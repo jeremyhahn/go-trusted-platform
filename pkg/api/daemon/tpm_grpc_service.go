@@ -1749,6 +1749,12 @@ func activateCredential(
 	tpm quicbaassdk.TrustedPlatformModule,
 	credentialBlob, encryptedSecret []byte,
 ) ([]byte, error) {
+	if len(credentialBlob) == 0 {
+		return nil, ErrActivateCredentialFieldRequired{Field: "credential_blob"}
+	}
+	if len(encryptedSecret) == 0 {
+		return nil, ErrActivateCredentialFieldRequired{Field: "encrypted_secret"}
+	}
 	return tpm.ActivateCredential(credentialBlob, encryptedSecret)
 }
 

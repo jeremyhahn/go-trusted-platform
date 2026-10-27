@@ -330,7 +330,7 @@ general switch-configuration API.
 | Layer | Location | Covers |
 |---|---|---|
 | Unit | `pkg/sdn/**/*_test.go`, `pkg/switch/*_test.go` | State machine transitions, config validation, flow generation, IPAM allocation |
-| Integration | `test/integration/sdn/`, `test/integration/network/` | OVS bridges, flows, port auth against a real datapath |
+| Integration | `test/integration/sdn/` | OVS bridges, flows, port auth against a real datapath |
 | Unit, real GoBGP | `pkg/sdn/bgp/rtc_dynamic_gobgp_test.go` | RT-Constrain filtering of EVPN routes; dynamic neighbours admitted only from the fabric prefix (§9.4) |
 | Integration | `test/integration/ipsec/` (`make integration-test-ipsec`) | musl charon peers in netns, IKEv2 through the go-xkms PKCS#11 module, ESP checked with `ip xfrm` (§9.3) |
 | Unit | `pkg/sdn/ipsec/filter_test.go`, `pkg/sdn/ipsec/xfrm_test.go` | the fail-closed floor, eviction and IKE limiter, evaluated in memory against the nftables rules and XFRM policies the package writes (§9.3) |

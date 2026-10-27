@@ -11,7 +11,9 @@
 #   TARGET     - Optional target keyword selecting which package(s) to run.
 #                Known targets: the keys of TARGET_PACKAGES below. `all`
 #                runs the suites in ALL_TARGETS on one shared platformd; every
-#                other key runs one suite.
+#                other key runs one suite. `leg-<n>` runs leg n of
+#                INTEGRATION_LEGS the way `all` runs everything, and `legs`
+#                prints the legs and exits.
 #                If the first argument is not a known target, it is treated
 #                as BUILD_TAGS (backward-compatible with the prior 1-arg form).
 #                Default: all
@@ -28,6 +30,8 @@
 # Examples:
 #   run-integration-tests.sh
 #   run-integration-tests.sh all
+#   run-integration-tests.sh leg-2
+#   run-integration-tests.sh legs
 #   run-integration-tests.sh ceremony
 #   run-integration-tests.sh luks "integration $(make -s print-build-tags)"
 #   run-integration-tests.sh "integration $(make -s print-build-tags)"  # legacy form
@@ -81,24 +85,18 @@ declare -A TARGET_PACKAGES=(
     [acme]="./test/integration/acme/..."
     [authenticode]="./test/integration/authenticode/..."
     [cli]="./test/integration/cli/..."
-    [cmd]="./test/integration/cmd/..."
     [compute]="./test/integration/compute/..."
     [container]="./test/integration/container/..."
     [daemon]="./test/integration/daemon/..."
-    [datastore]="./test/integration/datastore/..."
     [dns]="./test/integration/dns/..."
     [e2e]="./test/integration/e2e/..."
     [helpers]="./test/integration/helpers/..."
     [ipxe]="./test/integration/ipxe/..."
     [ipxe-dhcp]="./test/integration/ipxe/..."
-    [ipxe-tftp]="./test/integration/ipxe/..."
-    [ipxe-http]="./test/integration/ipxe/..."
     [iso]="./test/integration/iso/..."
     [kms]="./test/integration/kms/..."
-    [network]="./test/integration/network/..."
     [pxe]="./test/integration/pxe/..."
     [registry]="./test/integration/registry/..."
-    [sdk]="./test/integration/sdk/..."
     [secrets]="./test/integration/secrets/..."
     [vtpm]="./test/integration/vtpm/..."
 )
@@ -108,15 +106,13 @@ declare -A TARGET_PACKAGES=(
 # network namespaces, and nothing from the shared platformd.
 # testenv-enrollment is the two-VM ACME enrollment test of the root package;
 # it runs its full mode when INTEGRATION_TEST_SERVER_ISO and
-# INTEGRATION_TEST_CLIENT_ISO name pre-built ISOs. The ipxe-* targets are
-# the protocol slices of the ipxe suite. ipxe-http selects ^TestHTTP so it
-# leaves TestIPXEDHCPToHTTPChain to ipxe-dhcp, which starts a DHCP server.
+# INTEGRATION_TEST_CLIENT_ISO name pre-built ISOs. ipxe-dhcp is the DHCP
+# slice of the ipxe suite; it starts a DHCP server for
+# TestIPXEDHCPToHTTPChain.
 declare -A TARGET_RUN=(
     [lb]='^TestGroupLoadBalancer$'
     [testenv-enrollment]='^TestEnrollmentIntegration$'
     [ipxe-dhcp]='.*DHCP.*'
-    [ipxe-tftp]='.*TFTP.*'
-    [ipxe-http]='^TestHTTP'
 )
 
 # Per-target environment, NAME=value words passed to `env` before go test.
@@ -165,23 +161,17 @@ declare -A TARGET_TIMEOUTS=(
 # lb drives OVS directly; installer runs a real dnsmasq against a stub
 # upstream it starts; the ipxe suites start their own iPXE server on
 # 127.0.0.1; testenv-enrollment and e2e boot their own QEMU guests;
-# datastore, sdk and cmd embed what they test; helpers
-# tests the shared harness library in-process. The
+# helpers tests the shared harness library in-process. The
 # targets that do more than skip the daemon -- cold-start, barrier-gate, bmc
 # and the host-built-input suites -- have their own branch in Main.
 declare -A TARGET_NO_DAEMON=(
     [lb]=1
     [installer]=1
     [testenv-enrollment]=1
-    [cmd]=1
-    [datastore]=1
     [e2e]=1
     [helpers]=1
     [ipxe]=1
     [ipxe-dhcp]=1
-    [ipxe-tftp]=1
-    [ipxe-http]=1
-    [sdk]=1
 )
 
 # The suites `all` runs on the one shared platformd: the daemon-free suites
@@ -212,16 +202,68 @@ declare -A TARGET_NO_DAEMON=(
 # suites run all at once, and its generators would starve them the way they
 # starved sdn. In the daemon-backed list it runs alone, after sdn.
 ALL_TARGETS=(
-    helpers datastore sdk cmd ipxe installer e2e
+    helpers ipxe installer e2e
     root acme attestation authenticode ca ceremony cli
-    container daemon device dns fido2 iam iso kms luks network
+    container daemon device dns fido2 iam iso kms luks
     ntp objectstorage piv provision proxy registry sdn
     sdn-stress secrets tenant vpn vtpm tpm
+)
+
+# The legs CI runs as parallel jobs, one container and one shared platformd
+# each (#1119): every ALL_TARGETS entry, and compute, is in exactly one leg
+# (pkg/arch/integration_legs_test.go). `leg-<n>` runs leg n the way `all` runs
+# everything: its daemon-free suites at once, then its daemon-backed ones in
+# ALL_TARGETS order, so tpm stays last on its daemon, and compute after them on
+# a restarted one. The legs are balanced by an estimate of each suite's cost
+# (docs/test/integration.md, "Legs"); iso and sdn, the two longest, are apart.
+INTEGRATION_LEGS=(
+    "acme authenticode ca iso"
+    "ceremony cli container sdn"
+    "daemon device dns sdn-stress"
+    "helpers ipxe installer e2e root attestation fido2 iam kms luks ntp objectstorage"
+    "piv provision proxy registry secrets tenant vpn vtpm tpm compute"
 )
 
 RUN_TARGET="all"
 ARG1="${1:-}"
 ARG2="${2:-}"
+
+# `legs` prints ALL_TARGETS and then each leg, one per line, and exits before
+# anything starts: the partition check and the docs read the legs from here.
+if [ "$ARG1" = "legs" ]; then
+    echo "all ${ALL_TARGETS[*]} compute"
+    for i in "${!INTEGRATION_LEGS[@]}"; do
+        echo "leg-$((i + 1)) ${INTEGRATION_LEGS[$i]}"
+    done
+    exit 0
+fi
+
+# The suites this run takes: every ALL_TARGETS entry and compute for `all`,
+# one leg's share of them for `leg-<n>`.
+SELECTED_TARGETS=("${ALL_TARGETS[@]}")
+RUN_COMPUTE=true
+RUN_LEG=""
+if [[ "$ARG1" =~ ^leg-([0-9]+)$ ]]; then
+    RUN_LEG="${BASH_REMATCH[1]}"
+    if [ "$RUN_LEG" -lt 1 ] || [ "$RUN_LEG" -gt "${#INTEGRATION_LEGS[@]}" ]; then
+        echo "FATAL: no integration leg ${RUN_LEG}; the legs are 1 to ${#INTEGRATION_LEGS[@]}" >&2
+        exit 2
+    fi
+    declare -A LEG_MEMBERS=()
+    for target in ${INTEGRATION_LEGS[$((RUN_LEG - 1))]}; do
+        LEG_MEMBERS[$target]=1
+    done
+    SELECTED_TARGETS=()
+    for target in "${ALL_TARGETS[@]}"; do
+        if [ -n "${LEG_MEMBERS[$target]:-}" ]; then
+            SELECTED_TARGETS+=("$target")
+        fi
+    done
+    if [ -z "${LEG_MEMBERS[compute]:-}" ]; then
+        RUN_COMPUTE=false
+    fi
+    ARG1="all"
+fi
 
 # derive_build_tags prints the tag set when the caller passed none: the
 # Makefile's derived list plus integration, never a hand-written copy of it.
@@ -1128,7 +1170,7 @@ setup_env_vars() {
 echo "============================================="
 echo "  go-trusted-platform Integration Tests"
 echo "============================================="
-echo "Target:     ${RUN_TARGET}"
+echo "Target:     ${RUN_TARGET}${RUN_LEG:+ (leg ${RUN_LEG} of ${#INTEGRATION_LEGS[@]})}"
 echo "Build tags: ${BUILD_TAGS}"
 echo ""
 
@@ -1145,7 +1187,7 @@ fi
 # Phase 2: Setup infrastructure
 setup_devices
 
-# OVS backs the SDN, network, lb, compute and e2e suites.
+# OVS backs the SDN, lb, compute and e2e suites.
 start_ovs || echo "WARNING: OVS setup failed; the suites that need OVS have none"
 
 # swtpm backs the shared platformd's TPM and every vTPM suite. The vtpm
@@ -1361,19 +1403,22 @@ run_concurrent() {
 }
 
 if [ "$RUN_TARGET" = "all" ]; then
-    # The daemon-free suites of ALL_TARGETS (TARGET_NO_DAEMON) run at once:
-    # none shares state with another or with platformd. Every daemon-backed
-    # suite then runs alone on the one shared platformd, in list order.
+    # The daemon-free suites of SELECTED_TARGETS (TARGET_NO_DAEMON) run at
+    # once: none shares state with another or with platformd. Every
+    # daemon-backed suite then runs alone on the one shared platformd, in list
+    # order.
     DAEMON_FREE_TARGETS=()
     DAEMON_TARGETS=()
-    for target in "${ALL_TARGETS[@]}"; do
+    for target in "${SELECTED_TARGETS[@]}"; do
         if [ -n "${TARGET_NO_DAEMON[$target]:-}" ]; then
             DAEMON_FREE_TARGETS+=("$target")
         else
             DAEMON_TARGETS+=("$target")
         fi
     done
-    run_concurrent "${DAEMON_FREE_TARGETS[@]}"
+    if [ "${#DAEMON_FREE_TARGETS[@]}" -gt 0 ]; then
+        run_concurrent "${DAEMON_FREE_TARGETS[@]}"
+    fi
     for target in "${DAEMON_TARGETS[@]}"; do
         run_test "$target"
         record_result "$target" "$?"
@@ -1381,14 +1426,16 @@ if [ "$RUN_TARGET" = "all" ]; then
 
     # compute last, on its own daemon: a fresh swtpm (tpm cleared the shared
     # one) and platformd on the local QEMU provider.
-    echo "=== compute: restarting platformd on the local QEMU provider ==="
-    stop_platformd
-    if start_swtpm && prepare_compute_config && start_platformd "${COMPUTE_PLATFORMD_CONFIG}"; then
-        run_test compute
-        record_result compute "$?"
-    else
-        echo "--- FAIL: compute (platformd did not start on the local QEMU provider) ---"
-        record_result compute 1
+    if [ "$RUN_COMPUTE" = true ]; then
+        echo "=== compute: restarting platformd on the local QEMU provider ==="
+        stop_platformd
+        if start_swtpm && prepare_compute_config && start_platformd "${COMPUTE_PLATFORMD_CONFIG}"; then
+            run_test compute
+            record_result compute "$?"
+        else
+            echo "--- FAIL: compute (platformd did not start on the local QEMU provider) ---"
+            record_result compute 1
+        fi
     fi
 else
     run_test "$RUN_TARGET"

@@ -129,6 +129,17 @@ func signedAttrsSET(t *testing.T, si signerInfo) []byte {
 
 func messageDigestAttr(t *testing.T, si signerInfo) []byte {
 	t.Helper()
+	var digest []byte
+	if _, err := asn1.Unmarshal(signedAttrValue(t, si, oidAttributeMessageDigest), &digest); err != nil {
+		t.Fatalf("unmarshal messageDigest value: %v", err)
+	}
+	return digest
+}
+
+// signedAttrValue returns the DER of the single value of the signed attribute
+// of type oid, failing the test when the attribute is absent.
+func signedAttrValue(t *testing.T, si signerInfo, oid asn1.ObjectIdentifier) []byte {
+	t.Helper()
 	// Wrap the [0] IMPLICIT content in a SEQUENCE so it can be decoded as a slice
 	// of attributes (SET OF and SEQUENCE OF share identical element encodings).
 	seq, err := asn1.Marshal(asn1.RawValue{
@@ -145,17 +156,57 @@ func messageDigestAttr(t *testing.T, si signerInfo) []byte {
 		t.Fatalf("unmarshal attributes: %v", err)
 	}
 	for _, a := range attrs {
-		if !a.Type.Equal(oidAttributeMessageDigest) {
-			continue
+		if a.Type.Equal(oid) {
+			return a.Values.Bytes
 		}
-		var digest []byte
-		if _, err := asn1.Unmarshal(a.Values.Bytes, &digest); err != nil {
-			t.Fatalf("unmarshal messageDigest value: %v", err)
-		}
-		return digest
 	}
-	t.Fatal("messageDigest attribute not found")
+	t.Fatalf("signed attribute %v not found", oid)
 	return nil
+}
+
+// verifyFailure names the check a detached module signature failed;
+// verifyOK means every check passed.
+type verifyFailure string
+
+const (
+	verifyOK             verifyFailure = ""
+	verifyBadSigner      verifyFailure = "signer identifier does not name the certificate"
+	verifyBadContentType verifyFailure = "contentType attribute is not id-data"
+	verifyBadDigest      verifyFailure = "messageDigest does not match the content"
+	verifyBadSignature   verifyFailure = "signature does not verify under the certificate key"
+)
+
+// verifyDetached checks a detached module CMS against content and the signer
+// certificate the way `openssl cms -verify -certfile cert` and the kernel's
+// PKCS#7 parser do (RFC 5652 §5.4, §5.6, §11.1): the CMS carries no
+// certificates, so the signer is matched by issuer and serial number; the
+// signed attributes must bind id-data and the content's SHA-256; and the
+// signature over the attributes must verify under the certificate's key.
+func verifyDetached(t *testing.T, content, cmsDER []byte, cert *x509.Certificate) verifyFailure {
+	t.Helper()
+	_, si := parseCMS(t, cmsDER)
+
+	if !bytes.Equal(si.SID.Issuer.FullBytes, cert.RawIssuer) || si.SID.SerialNumber.Cmp(cert.SerialNumber) != 0 {
+		return verifyBadSigner
+	}
+
+	var contentType asn1.ObjectIdentifier
+	if _, err := asn1.Unmarshal(signedAttrValue(t, si, oidAttributeContentType), &contentType); err != nil {
+		t.Fatalf("unmarshal contentType value: %v", err)
+	}
+	if !contentType.Equal(oidData) {
+		return verifyBadContentType
+	}
+
+	digest := sha256.Sum256(content)
+	if !bytes.Equal(messageDigestAttr(t, si), digest[:]) {
+		return verifyBadDigest
+	}
+
+	if err := cert.CheckSignature(x509.SHA256WithRSA, signedAttrsSET(t, si), si.Signature); err != nil {
+		return verifyBadSignature
+	}
+	return verifyOK
 }
 
 // --- tests -------------------------------------------------------------------
@@ -239,6 +290,39 @@ func TestBuildModuleSignatureRoundTrip(t *testing.T) {
 	want := sha256.Sum256(content)
 	if got := messageDigestAttr(t, si); !bytes.Equal(got, want[:]) {
 		t.Errorf("messageDigest = %x, want %x", got, want)
+	}
+}
+
+// TestBuildModuleSignatureVerifiesAgainstSignerCertificate verifies a module
+// signature given only the signer certificate, as the kernel does, and checks
+// that a tampered module and a corrupted signature are each rejected by the
+// check that guards them.
+func TestBuildModuleSignatureVerifiesAgainstSignerCertificate(t *testing.T) {
+	key, cert := rsaFixture(t)
+	content := []byte("\x7fELF module image the kernel will verify")
+
+	out, err := BuildModuleSignature(content, key, cert)
+	if err != nil {
+		t.Fatalf("BuildModuleSignature: %v", err)
+	}
+	cmsDER, _, _ := splitEnvelope(t, out)
+
+	if got := verifyDetached(t, content, cmsDER, cert); got != verifyOK {
+		t.Fatalf("valid signature rejected: %s", got)
+	}
+
+	tampered := append([]byte{}, content...)
+	tampered[len(tampered)/2] ^= 0x01
+	if got := verifyDetached(t, tampered, cmsDER, cert); got != verifyBadDigest {
+		t.Errorf("tampered content: got %q, want %q", got, verifyBadDigest)
+	}
+
+	// Flip a byte near the end of the envelope: the signature value is the
+	// last field of the SignerInfo, so the DER still parses.
+	corrupted := append([]byte{}, cmsDER...)
+	corrupted[len(corrupted)-10] ^= 0xFF
+	if got := verifyDetached(t, content, corrupted, cert); got != verifyBadSignature {
+		t.Errorf("corrupted signature: got %q, want %q", got, verifyBadSignature)
 	}
 }
 

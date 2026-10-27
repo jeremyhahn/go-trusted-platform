@@ -29,6 +29,23 @@
   `PrivateKey`, read through `WithPIN` / `WithPrivateKeyPEM`. The plain field
   is read only when no enclave was supplied; a destroyed enclave fails closed
   with `memguard.ErrDestroyed`. The wire contract is unchanged.
+- REST (behaviour change, #665): a gRPC `FailedPrecondition` is now HTTP 409
+  Conflict instead of 400, platform-wide, on both the web service and the
+  daemon listener. 400 stays for `InvalidArgument` and `OutOfRange`. A REST
+  caller that matched 400 for a refused state (a VM in the wrong state, a pool
+  that still has allocations, a refused device lifecycle or service control
+  call, an unbound attestation quote) now gets 409, which the SDK's REST
+  transport reads as `AlreadyExists` instead of `InvalidArgument`. The writers
+  that bypassed the shared mapping now answer 409 too: diskless boot on a
+  connection with no TLS 1.3 exporter (`ErrBootChannelRequired`, was 400), the
+  NAT64 module being unavailable (was 412), the KMS routes' `FailedPrecondition`
+  (was 412), and the IDevID, IAK and AK key deletes, the IDevID and IAK
+  certificate deletes with no TPM, and LDevID on the daemon listener (were
+  412). The SDK's REST transport reads a 409 on a `DELETE`
+  as `FailedPrecondition` (a delete cannot collide with an existing resource),
+  so `idevid.ErrIdentityKeyNotDeletable` keeps its class; a 409 on any other
+  method stays `AlreadyExists`. A 412 still reads as `FailedPrecondition`.
+  gRPC, QUIC, MCP and the Unix socket are unchanged.
 - BREAKING (gatewayd, #659): the `secret://` scheme is removed from gatewayd's
   secret-store references; use `kms://` (same path, same `?enc=` and
   `#<field>`). A `secret://` reference is now refused at service start with

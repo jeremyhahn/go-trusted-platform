@@ -201,6 +201,16 @@ func (f *fakeIdentity) TunnelIdentity(context.Context) (*TunnelIdentity, error) 
 
 func (f *fakeIdentity) Close() { f.closed = true }
 
+// fakeAnchor is an AnchorSource holding certs, or failing with err.
+type fakeAnchor struct {
+	certs []*x509.Certificate
+	err   error
+}
+
+func (f *fakeAnchor) Certificates(context.Context) ([]*x509.Certificate, error) {
+	return f.certs, f.err
+}
+
 // testPKI is a CA and a tunnel certificate it issued for 10.20.0.11, the
 // local address of validConfig. ca is a root, or, under root, an
 // intermediate.

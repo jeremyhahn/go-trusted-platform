@@ -87,7 +87,7 @@ curl -s -X POST https://platform.example.com/api/v1/platform/services/dns/restar
 `compute`, `dns`, `acme`, `webservice` and `attestation` are built once by
 `platformd serve` and live as long as the process, so each verb answers
 `service <name> cannot be started or stopped at runtime: <reason>` and changes
-nothing (400 on REST, `FailedPrecondition` on gRPC and the Unix socket,
+nothing (409 on REST, `FailedPrecondition` on gRPC and the Unix socket,
 `StatusInvalidRequest` on QUIC, `-32007` on MCP). Restart the daemon instead:
 `systemctl restart platformd`. `list` and `get` report what is actually
 running, read from the subsystem itself. The reasons per service are in

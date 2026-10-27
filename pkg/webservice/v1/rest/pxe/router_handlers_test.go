@@ -325,7 +325,7 @@ func TestOperatorHandlers_MapServiceErrorsToHTTPStatus(t *testing.T) {
 		wantCode int
 	}{
 		{codes.NotFound, http.StatusNotFound},
-		{codes.FailedPrecondition, http.StatusBadRequest},
+		{codes.FailedPrecondition, http.StatusConflict},
 		{codes.Internal, http.StatusInternalServerError},
 	}
 	for _, c := range handlerCases {

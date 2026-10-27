@@ -1145,7 +1145,7 @@ func (h *GatewayHandlers) writeGatewayError(w http.ResponseWriter, operation str
 	case ErrNAT64NotConfigured:
 		statusCode = http.StatusServiceUnavailable
 	case ErrNAT64ModuleUnavailable:
-		statusCode = http.StatusPreconditionFailed
+		statusCode = http.StatusConflict
 	case ErrLBNotConfigured:
 		statusCode = http.StatusServiceUnavailable
 	case ErrLBVIPNotFound:

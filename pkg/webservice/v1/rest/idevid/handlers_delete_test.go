@@ -41,12 +41,13 @@ func newServedRouter(server platformv1.IDevIDServiceServer) *mux.Router {
 	return parent
 }
 
-// TestKeyDelete_RefusedWith412OnEveryPath drives the daemon's own
+// TestKeyDelete_RefusedWith409OnEveryPath drives the daemon's own
 // IDevIDGRPCService through every web-service key-delete path. The refusal
 // comes from the service, and each path answers it as the daemon listener
-// does (pkg/api/daemon/rest_idevid.go): 412 carrying the typed error's
-// message, which the SDK's REST transport reads back as FailedPrecondition.
-func TestKeyDelete_RefusedWith412OnEveryPath(t *testing.T) {
+// does (pkg/api/daemon/rest_idevid.go): 409 carrying the typed error's
+// message, which the SDK's REST transport reads back on a DELETE as
+// FailedPrecondition (#665).
+func TestKeyDelete_RefusedWith409OnEveryPath(t *testing.T) {
 	router := newServedRouter(daemon.NewIDevIDGRPCService(logging.NewLogger(slog.LevelError, io.Discard)))
 
 	cases := []struct {
@@ -63,17 +64,17 @@ func TestKeyDelete_RefusedWith412OnEveryPath(t *testing.T) {
 			rec := httptest.NewRecorder()
 			router.ServeHTTP(rec, httptest.NewRequest(http.MethodDelete, tc.path, nil))
 
-			require.Equal(t, http.StatusPreconditionFailed, rec.Code)
+			require.Equal(t, http.StatusConflict, rec.Code)
 			var body restwire.WebServiceResponse
 			require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
-			assert.Equal(t, http.StatusPreconditionFailed, body.Code)
+			assert.Equal(t, http.StatusConflict, body.Code)
 			assert.False(t, body.Success)
 			assert.Equal(t, daemon.ErrDeviceIdentityKeyNotDeletable{Key: tc.key}.Error(), body.Error)
 		})
 	}
 }
 
-// TestKeyDelete_OtherFailuresKeepTheSharedMapping pins the 412 to the
+// TestKeyDelete_OtherFailuresKeepTheSharedMapping pins the 409 to the
 // refusal alone: any other error from the service is answered by protorest's
 // shared mapping, here Unimplemented as 501.
 func TestKeyDelete_OtherFailuresKeepTheSharedMapping(t *testing.T) {
@@ -104,8 +105,8 @@ func TestKeyDelete_NilServerIsUnavailable(t *testing.T) {
 
 // TestCertDelete_NoTPMIsPreconditionFailed drives the certificate deletes
 // against the daemon's IDevIDGRPCService with no TPM. The service answers
-// FailedPrecondition, and the routes carry it as 412, as the daemon listener
-// does, so the SDK reads back gRPC's class rather than InvalidArgument.
+// FailedPrecondition, and the routes carry it as 409, as the daemon listener
+// does, which the SDK reads back on a DELETE as gRPC's class.
 func TestCertDelete_NoTPMIsPreconditionFailed(t *testing.T) {
 	router := newServedRouter(daemon.NewIDevIDGRPCService(logging.NewLogger(slog.LevelError, io.Discard)))
 
@@ -113,12 +114,12 @@ func TestCertDelete_NoTPMIsPreconditionFailed(t *testing.T) {
 		t.Run(path, func(t *testing.T) {
 			rec := httptest.NewRecorder()
 			router.ServeHTTP(rec, httptest.NewRequest(http.MethodDelete, path, nil))
-			assert.Equal(t, http.StatusPreconditionFailed, rec.Code)
+			assert.Equal(t, http.StatusConflict, rec.Code)
 		})
 	}
 }
 
-// TestCertDelete_OtherFailuresKeepTheSharedMapping pins the 412 to
+// TestCertDelete_OtherFailuresKeepTheSharedMapping pins the 409 to
 // FailedPrecondition alone: Unimplemented keeps protorest's shared 501.
 func TestCertDelete_OtherFailuresKeepTheSharedMapping(t *testing.T) {
 	router := newServedRouter(platformv1.UnimplementedIDevIDServiceServer{})

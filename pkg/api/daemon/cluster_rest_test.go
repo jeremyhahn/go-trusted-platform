@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"testing"
 
+	grpcapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 )
 
@@ -135,5 +136,19 @@ func TestRESTServer_ClusterRoutes_Errors(t *testing.T) {
 	}
 	if fake.leaveCalled != 0 {
 		t.Errorf("Leave called %d times for another node, want 0", fake.leaveCalled)
+	}
+}
+
+// TestRESTServer_ClusterRoutes_FailedPreconditionIsConflict checks the
+// cluster routes answer a FailedPrecondition (here, a cluster that is not
+// initialised) with 409 Conflict, as every other REST writer does (#665),
+// not as an internal error.
+func TestRESTServer_ClusterRoutes_FailedPreconditionIsConflict(t *testing.T) {
+	fake := &fakeClusterServicer{nodeID: 1, statusErr: grpcapi.ErrClusterNotInitialized{}}
+	s := newClusterRESTServer(t, fake)
+
+	code, body := doJSON(t, s, http.MethodGet, "/api/v1/cluster/status", nil)
+	if code != http.StatusConflict {
+		t.Errorf("want %d, got %d (body=%s)", http.StatusConflict, code, body)
 	}
 }

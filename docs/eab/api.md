@@ -176,7 +176,7 @@ the MCP tool ignored `tenant_id` and swept every tenant.
 | `0x03` | `StatusUnauthorized` | `Unauthenticated` | 401 | Token invalid |
 | `0x04` | `StatusInternalError` | `Internal` | 500 | `ErrKeyGenerationFailed`, `ErrQRCodeGenerationFailed`, `ErrFileExportFailed`, any unmatched error |
 | `0x07` | `StatusPermissionDenied` | `PermissionDenied` | 403 | Missing `eab:*` scope (§5) |
-| `0x09` | `StatusInvalidArgument` | `InvalidArgument` | 400 | `ErrInvalidCredential`, `ErrInvalidProfileID`, `ErrInvalidTenantID`, `ErrInvalidExpiresAt`, `ErrCredentialExpired`, `ErrCredentialRevoked`, `ErrCredentialAlreadyUsed` (the last three as `FailedPrecondition`) |
+| `0x09` | `StatusInvalidArgument` | `InvalidArgument` | 400 | `ErrInvalidCredential`, `ErrInvalidProfileID`, `ErrInvalidTenantID`, `ErrInvalidExpiresAt`, `ErrCredentialExpired`, `ErrCredentialRevoked`, `ErrCredentialAlreadyUsed` (the last three as `FailedPrecondition`, which REST answers 409) |
 | `0x0A` | `StatusUnavailable` | `Unavailable` | 503 | `ErrEABNotConfigured`, `ErrEABDeliveryNotConfigured` |
 
 **503 on every EAB call means the platform is not QuicBaaS-backed** — the

@@ -94,3 +94,23 @@ func TestNewDatapathPlane_RefusesWireGuardUnderFIPS(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, DataPlaneMASQUE, p.Kind())
 }
+
+// TestConfig_WireGuardKeysRefusedUnderFIPS: a FIPS build cannot offer
+// WireGuard, so a configuration carrying `wireguard.*` keys is refused by
+// name rather than silently ignored.
+func TestConfig_WireGuardKeysRefusedUnderFIPS(t *testing.T) {
+	cfg := parseVPNConfig(t, `
+pool: vpn-clients
+allow-to: [management]
+masque:
+  template: https://gw.example:4433/.well-known/masque/ip/
+  routes: [10.0.0.0/8]
+wireguard:
+  listen-port: 51820
+`)
+	assertInvalidField(t, cfg.Validate(), "wireguard.listen-port")
+
+	cfg.WireGuard = WireGuardSettings{}
+	require.NoError(t, cfg.Validate())
+	assert.Zero(t, cfg.WithDefaults().WireGuard.ListenPort, "no WireGuard default in a FIPS build")
+}

@@ -37,8 +37,9 @@ type Config struct {
 	// Identities are the hostnames of the diskless-nbd nodes this server
 	// exports a volume for.
 	Identities []string
-	// VolumeDir holds one volume file per identity.
-	VolumeDir string
+	// Volumes is the store that holds each identity's volume. The server
+	// reaches volumes only through it.
+	Volumes VolumeProvider
 	// VolumeSize is the size, in bytes, a volume is created at.
 	VolumeSize int64
 	// HandshakeTimeout bounds negotiation; zero means DefaultHandshakeTimeout.
@@ -63,8 +64,8 @@ func (c *Config) Validate() error {
 			return ErrInvalidConfig{Field: "Identities", Reason: "not a DNS hostname: " + identity}
 		}
 	}
-	if c.VolumeDir == "" {
-		return ErrInvalidConfig{Field: "VolumeDir", Reason: "a volume directory is required"}
+	if c.Volumes == nil {
+		return ErrInvalidConfig{Field: "Volumes", Reason: "a volume provider is required"}
 	}
 	if c.VolumeSize <= 0 || c.VolumeSize%sectorSize != 0 {
 		return ErrInvalidConfig{Field: "VolumeSize", Reason: "must be a positive multiple of 512 bytes"}

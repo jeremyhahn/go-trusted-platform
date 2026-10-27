@@ -245,7 +245,7 @@ All services are connected to `trusted-platform-net` bridge network (172.28.0.0/
 ## Integration Test Structure
 
 Each directory under `test/integration/` holds one suite (`sdn/`, `vtpm/`,
-`datastore/`, ...). Every `make integration-test-<key>` target runs its suite
+`dns/`, ...). Every `make integration-test-<key>` target runs its suite
 through `run-integration-tests.sh` in this container, which:
 1. Sets up required services (OVS, swtpm, a shared `platformd` unless the key
    is in `TARGET_NO_DAEMON`)

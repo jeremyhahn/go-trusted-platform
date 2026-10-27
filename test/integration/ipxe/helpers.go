@@ -150,9 +150,6 @@ const (
 	// DefaultDHCPTimeout is the default timeout for DHCP operations.
 	DefaultDHCPTimeout = 5 * time.Second
 
-	// DefaultTFTPTimeout is the default timeout for TFTP operations.
-	DefaultTFTPTimeout = 30 * time.Second
-
 	// DefaultHTTPTimeout is the default timeout for HTTP operations.
 	DefaultHTTPTimeout = 10 * time.Second
 
@@ -256,15 +253,7 @@ func DefaultTestContext() (context.Context, context.CancelFunc) {
 }
 
 // DHCPTestContext returns a context with timeout suitable for DHCP operations.
-func DHCPTestContext() (context.Context, context.CancelFunc) {
-	return context.WithTimeout(context.Background(), DefaultDHCPTimeout)
-}
-
 // TFTPTestContext returns a context with timeout suitable for TFTP operations.
-func TFTPTestContext() (context.Context, context.CancelFunc) {
-	return context.WithTimeout(context.Background(), DefaultTFTPTimeout)
-}
-
 // HTTPTestContext returns a context with timeout suitable for HTTP operations.
 func HTTPTestContext() (context.Context, context.CancelFunc) {
 	return context.WithTimeout(context.Background(), DefaultHTTPTimeout)
@@ -293,54 +282,10 @@ func GenerateRandomMAC() net.HardwareAddr {
 }
 
 // GenerateTestMAC generates a deterministic MAC address for testing based on index.
-func GenerateTestMAC(index int) net.HardwareAddr {
-	return net.HardwareAddr{
-		0x52, 0x54, 0x00, // QEMU OUI
-		byte(index >> 16),
-		byte(index >> 8),
-		byte(index),
-	}
-}
-
 // =============================================================================
 // Assertion Helpers
 // =============================================================================
 
 // AssertValidIP checks if the IP address is valid and not nil.
-func AssertValidIP(t *testing.T, ip net.IP, description string) {
-	t.Helper()
-	if ip == nil || ip.IsUnspecified() {
-		t.Errorf("%s: expected valid IP address, got %v", description, ip)
-	}
-}
-
 // AssertIPInRange checks if the IP address is within the expected range.
-func AssertIPInRange(t *testing.T, ip, rangeStart, rangeEnd net.IP, description string) {
-	t.Helper()
-	if ip == nil {
-		t.Errorf("%s: IP is nil", description)
-		return
-	}
-
-	ip4 := ip.To4()
-	start4 := rangeStart.To4()
-	end4 := rangeEnd.To4()
-
-	if ip4 == nil || start4 == nil || end4 == nil {
-		t.Errorf("%s: invalid IPv4 addresses", description)
-		return
-	}
-
-	ipVal := ipToUint32(ip4)
-	startVal := ipToUint32(start4)
-	endVal := ipToUint32(end4)
-
-	if ipVal < startVal || ipVal > endVal {
-		t.Errorf("%s: IP %v not in range [%v, %v]", description, ip, rangeStart, rangeEnd)
-	}
-}
-
 // ipToUint32 converts an IPv4 address to a uint32 for comparison.
-func ipToUint32(ip net.IP) uint32 {
-	return uint32(ip[0])<<24 | uint32(ip[1])<<16 | uint32(ip[2])<<8 | uint32(ip[3])
-}

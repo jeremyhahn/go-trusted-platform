@@ -638,8 +638,8 @@ a:
 
 ## Records Without a CLI
 
-There is no `platformctl dns` command group ([cli.md](cli.md)). Records are
-added, listed, read and deleted through REST `/api/v1/dns/zones/{zone}/records`
+`platformctl dns record` ([cli.md](cli.md)) adds, updates, lists, reads and
+deletes records. The API equivalents are REST `/api/v1/dns/zones/{zone}/records`
 or gRPC `DNSService`; [api-reference-rest.md](api-reference-rest.md) has the
 request bodies. REST has no record update route: delete and re-add.
 

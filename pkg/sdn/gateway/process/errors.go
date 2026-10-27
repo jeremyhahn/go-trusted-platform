@@ -93,6 +93,22 @@ func (e *ErrDesiredRestoreFailed) Error() string {
 
 func (e *ErrDesiredRestoreFailed) Unwrap() error { return e.Cause }
 
+// ErrDesiredForwardFailed reports a parser child that reconciles a section of
+// the desired document (the vpn child) and did not apply the document it was
+// sent. The document stays recorded for it, and its next launch is given it.
+type ErrDesiredForwardFailed struct {
+	Process string
+	Version string
+	Cause   error
+}
+
+func (e *ErrDesiredForwardFailed) Error() string {
+	return fmt.Sprintf("gatewayd supervisor: applying desired config %q in process %q: %v",
+		e.Version, e.Process, e.Cause)
+}
+
+func (e *ErrDesiredForwardFailed) Unwrap() error { return e.Cause }
+
 // ErrDesiredPending reports a desired document that arrived while the
 // datapath process had no child serving it — in its restart backoff,
 // mid-relaunch, or stopped. The document is recorded and is the one the next
@@ -371,3 +387,20 @@ func (e *ErrSocketDir) Error() string {
 }
 
 func (e *ErrSocketDir) Unwrap() error { return e.Cause }
+
+// ErrStateDir reports a process's state directory under the data directory
+// that the supervisor could not create or hand to the process's credentials.
+// The process is not launched: an unprivileged child that cannot write its
+// state would run without it.
+type ErrStateDir struct {
+	Process string
+	Path    string
+	Op      string
+	Cause   error
+}
+
+func (e *ErrStateDir) Error() string {
+	return fmt.Sprintf("gatewayd supervisor: process %q state directory %s %q: %v", e.Process, e.Op, e.Path, e.Cause)
+}
+
+func (e *ErrStateDir) Unwrap() error { return e.Cause }

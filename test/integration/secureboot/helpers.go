@@ -13,6 +13,28 @@
 
 //go:build integration
 
+// Package secureboot proves the platform's Secure Boot chain against real
+// external verifiers, real firmware and a real kernel:
+//
+//   - pkg/modulesign signatures verify with OpenSSL's independent CMS
+//     implementation and follow the kernel's appended-signature contract
+//     (TestModuleSignOpenSSLInterop).
+//   - pkg/secureboot + pkg/uefi + pkg/authenticode produce a key set,
+//     OVMF-file enrollment and an Authenticode-signed EFI payload that real
+//     OVMF firmware BOOTS, while unsigned / wrongly-signed payloads are
+//     REJECTED by the firmware (TestOVMFSecureBootEnforcement).
+//   - The FIPS kernel (CONFIG_MODULE_SIG_FORCE) rejects unsigned modules at
+//     insmod and loads pkg/modulesign-signed modules
+//     (TestFIPSKernelModuleSignatureEnforcement — requires prebuilt
+//     artifacts via FIPS_KERNEL_IMAGE / FIPS_MODULES_TAR /
+//     FIPS_MODULE_SIGNING_KEY).
+//
+// The pkg/modulesign signer lookup and its rejection of corrupted
+// signatures and tampered content are unit tests in pkg/modulesign.
+//
+// Run via:
+//
+//	make integration-test-secureboot
 package secureboot
 
 import (

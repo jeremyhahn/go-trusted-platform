@@ -115,8 +115,10 @@ ENV GOTOOLCHAIN=local \
 # libssl-dev: go-tpm-tools' simulator compiles the reference TPM against
 # OpenSSL (#149).
 # APT_REFRESH keys the apt layer, which BuildKit would otherwise cache forever.
-# `make docker-build` (CI's image job) passes the UTC day, so the layer is
-# rebuilt daily and `apt-get upgrade` takes Debian's fixes before `trivy image`
+# `make docker-build` (CI's image job) passes the newest Date: of the InRelease
+# files of bookworm, bookworm-updates and bookworm-security
+# (scripts/apt-refresh-key.sh), so the layer is rebuilt whenever Debian
+# publishes and `apt-get upgrade` takes Debian's fixes before `trivy image`
 # scans for them (libexpat CVE-2025-59375 / CVE-2026-77214, PR #991). The dated
 # default applies only to a build that passes nothing. A new key rebuilds this
 # layer and, through FROM base, every apt layer of toolchain and integration.

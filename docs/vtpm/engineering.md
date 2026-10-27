@@ -127,11 +127,16 @@ socket, and the errors in §3 are what a mismatch produces.
 
 | Layer | Location | Covers |
 |---|---|---|
-| Unit | `pkg/vtpm/*_test.go`, `pkg/swtpm/*_test.go` | Target resolution, bundle generation, archive round-trip |
-| Integration | `test/integration/` vTPM paths | Real swtpm processes |
+| Unit | `pkg/vtpm/*_test.go`, `pkg/swtpm/*_test.go` | Target resolution, bundle generation, archive round-trip, EK certificate injection over a socket, swtpm daemon lifecycle |
+| Integration | `test/integration/vtpm/` | Real swtpm processes |
 
-`pkg/vtpm` and `pkg/swtpm` are both excluded from `make test` — they need a real
-swtpm binary — and are covered by `make integration-test`.
+`make test` runs both packages through `TEST_UNIT_PKGS` on a host with no swtpm
+and no QEMU. The `pkg/swtpm` tests put a stand-in `swtpm` on `PATH`; the
+`pkg/vtpm` EK certificate tests serve the in-memory TPM simulator on a unix
+socket, so `InjectCertificate`, `ReadCertificate` and `VerifyCertificate` run
+end to end. `test/integration/vtpm/` keeps what needs the real binaries:
+`swtpm_setup` accepting several PCR banks, the daemon creating its socket,
+EK certificate persistence across a restart, and the QEMU paths.
 
 **Known repo-wide gap:** no `CommandDefinition` type exists in this repository
 (grepped 2026-08-18), so the CLI parity requirement in

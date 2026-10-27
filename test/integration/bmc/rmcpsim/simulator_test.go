@@ -27,6 +27,18 @@ import (
 
 // TestNew_EmptyAddress ensures New rejects a zero-value Addr and
 // returns ErrInvalidAddress.
+// The credentials of every test that completes an RMCP+ handshake are at
+// least 14 bytes: under FIPS activation pkg/bmc refuses a shorter IPMI
+// password as an HMAC key (FIPS 140-3, SP 800-131A's 112-bit floor), and
+// these tests exercise the simulator, not that policy, so they run unchanged
+// in the FIPS and non-FIPS builds. The refusal itself is tested in
+// pkg/bmc/rmcp_fips_keys_test.go.
+const (
+	simPassword    = "rmcpsim-password"
+	simOldPassword = "rmcpsim-old-password"
+	simNewPassword = "rmcpsim-new-password"
+)
+
 func TestNew_EmptyAddress(t *testing.T) {
 	_, err := rmcpsim.New(rmcpsim.Options{Username: "u", Password: "p"})
 	if err == nil {
@@ -139,7 +151,7 @@ func TestSimulator_HandshakeAndPowerStatus(t *testing.T) {
 	sim, err := rmcpsim.New(rmcpsim.Options{
 		Addr:     "127.0.0.1:0",
 		Username: "admin",
-		Password: "password",
+		Password: simPassword,
 		Logger:   slog.Default(),
 	})
 	if err != nil {
@@ -154,7 +166,7 @@ func TestSimulator_HandshakeAndPowerStatus(t *testing.T) {
 		Address:  sim.LocalAddr().IP.String(),
 		Port:     sim.LocalAddr().Port,
 		Username: "admin",
-		Password: "password",
+		Password: simPassword,
 		Protocol: bmc.ProtocolIPMI,
 	}
 
@@ -181,7 +193,7 @@ func TestSimulator_CredentialRotation(t *testing.T) {
 	sim, err := rmcpsim.New(rmcpsim.Options{
 		Addr:     "127.0.0.1:0",
 		Username: "admin",
-		Password: "old_password",
+		Password: simOldPassword,
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -192,14 +204,14 @@ func TestSimulator_CredentialRotation(t *testing.T) {
 	defer sim.Stop()
 
 	// Rotate credentials before any client connects.
-	sim.SetCredentials("admin", "new_password")
+	sim.SetCredentials("admin", simNewPassword)
 
 	// Client using NEW password must succeed.
 	cfg := &bmc.Config{
 		Address:  sim.LocalAddr().IP.String(),
 		Port:     sim.LocalAddr().Port,
 		Username: "admin",
-		Password: "new_password",
+		Password: simNewPassword,
 		Protocol: bmc.ProtocolIPMI,
 	}
 	factory := bmc.NewIPMIClientFactory(slog.Default())
@@ -278,7 +290,7 @@ func TestHandlePacket_BadRMCPHeader(t *testing.T) {
 	sim, err := rmcpsim.New(rmcpsim.Options{
 		Addr:     "127.0.0.1:0",
 		Username: "admin",
-		Password: "password",
+		Password: simPassword,
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -308,7 +320,7 @@ func TestHandlePacket_UnknownPayloadType(t *testing.T) {
 	sim, err := rmcpsim.New(rmcpsim.Options{
 		Addr:     "127.0.0.1:0",
 		Username: "admin",
-		Password: "password",
+		Password: simPassword,
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -331,7 +343,7 @@ func TestHandlePacket_ShortPacket(t *testing.T) {
 	sim, err := rmcpsim.New(rmcpsim.Options{
 		Addr:     "127.0.0.1:0",
 		Username: "admin",
-		Password: "password",
+		Password: simPassword,
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -350,7 +362,7 @@ func TestHandlePacket_MalformedOpenSession(t *testing.T) {
 	sim, err := rmcpsim.New(rmcpsim.Options{
 		Addr:     "127.0.0.1:0",
 		Username: "admin",
-		Password: "password",
+		Password: simPassword,
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -376,7 +388,7 @@ func TestHandleIPMI_MalformedPayloadLength(t *testing.T) {
 	sim, err := rmcpsim.New(rmcpsim.Options{
 		Addr:     "127.0.0.1:0",
 		Username: "admin",
-		Password: "password",
+		Password: simPassword,
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -405,7 +417,7 @@ func TestSimulator_AllIPMIHandlers(t *testing.T) {
 	sim, err := rmcpsim.New(rmcpsim.Options{
 		Addr:     "127.0.0.1:0",
 		Username: "admin",
-		Password: "password",
+		Password: simPassword,
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -419,7 +431,7 @@ func TestSimulator_AllIPMIHandlers(t *testing.T) {
 		Address:  sim.LocalAddr().IP.String(),
 		Port:     sim.LocalAddr().Port,
 		Username: "admin",
-		Password: "password",
+		Password: simPassword,
 		Protocol: bmc.ProtocolIPMI,
 	}
 	factory := bmc.NewIPMIClientFactory(slog.Default())
@@ -465,7 +477,7 @@ func TestHandleIPMI_UnknownSession(t *testing.T) {
 	sim, err := rmcpsim.New(rmcpsim.Options{
 		Addr:     "127.0.0.1:0",
 		Username: "admin",
-		Password: "password",
+		Password: simPassword,
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -508,7 +520,7 @@ func TestHandleIPMI_ShortPayload(t *testing.T) {
 	sim, err := rmcpsim.New(rmcpsim.Options{
 		Addr:     "127.0.0.1:0",
 		Username: "admin",
-		Password: "password",
+		Password: simPassword,
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)

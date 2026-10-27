@@ -367,9 +367,10 @@ func (g *Gateway) applyVPN(ctx context.Context, section *gwstate.DesiredVPN) err
 	if section == nil || g.config.ManagementVPN == nil || !g.config.ManagementVPN.Enabled {
 		return nil
 	}
-	if g.supervises(ServiceManagementVPN) {
-		return &ErrServiceUnavailable{Service: ServiceManagementVPN,
-			Reason: "the supervised vpn process does not receive the desired configuration"}
+	if g.supervises(ServiceManagementVPN) || !g.config.Hosts(ServiceManagementVPN) {
+		// The supervisor sends the document to the vpn child, which
+		// applies this section there (#557).
+		return nil
 	}
 	g.vpnMu.Lock()
 	defer g.vpnMu.Unlock()
@@ -380,9 +381,12 @@ func (g *Gateway) applyVPN(ctx context.Context, section *gwstate.DesiredVPN) err
 	return g.vpn.apply(ctx, section)
 }
 
-// collectVPN is the snapshot's vpn section; nil when the service is not
-// running here.
+// collectVPN is the snapshot's vpn section, relayed from the vpn child when
+// it is supervised; nil when the service is not running.
 func (g *Gateway) collectVPN(ctx context.Context) *gwstate.VPNState {
+	if g.supervisedHandler(ServiceManagementVPN) {
+		return g.collectSupervisedVPN(ctx)
+	}
 	g.vpnMu.Lock()
 	backend := g.vpn
 	g.vpnMu.Unlock()
@@ -394,4 +398,20 @@ func (g *Gateway) collectVPN(ctx context.Context) *gwstate.VPNState {
 		g.logSnapshot("vpn leases unavailable for the snapshot", err)
 	}
 	return out
+}
+
+// collectSupervisedVPN relays the vpn section of the supervised vpn child's
+// snapshot (#557). A child that cannot be read leaves the section out and
+// logs why, as a backend that cannot report its leases does.
+func (g *Gateway) collectSupervisedVPN(ctx context.Context) *gwstate.VPNState {
+	child, err := g.config.Supervisor.ServiceSnapshot(ctx, ServiceManagementVPN)
+	if err != nil {
+		g.logSnapshot("vpn leases unavailable for the snapshot",
+			&ErrSupervisedSnapshot{Service: ServiceManagementVPN, Cause: err})
+		return nil
+	}
+	if child == nil {
+		return nil
+	}
+	return child.VPN
 }

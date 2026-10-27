@@ -225,9 +225,13 @@ go test -v ./pkg/swtpm/...
 ```
 
 The unit tests need neither `swtpm` nor `swtpm_setup`: they replace both
-binaries with an in-memory fake and never skip. The tests that drive the real
-daemon live in `test/integration/vtpm/swtpm_test.go` and run in the
-devcontainer with `make integration-test-vtpm`; a missing binary fails them.
+binaries with a stand-in and never skip. They cover the daemon lifecycle:
+start, a refused second start, several instances, a daemon killed from
+outside, `StopExisting`, and `SendStartup` against a socket that answers like
+swtpm. `make test` runs them. The tests that need the real binaries
+(`swtpm_setup` with several PCR banks, the daemon creating its socket) live in
+`test/integration/vtpm/swtpm_test.go` and run in the devcontainer with
+`make integration-test-vtpm`; a missing binary fails them.
 
 ## Architecture
 
