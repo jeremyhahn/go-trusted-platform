@@ -56,3 +56,60 @@ func TestNamePlatformctlBinaries_KeepsConfigFileValues(t *testing.T) {
 	assert.Equal(t, "/from/config/platformctl", config.PlatformctlBinary)
 	assert.Equal(t, "/from/config/platformctl-static", config.PlatformctlStaticBinary)
 }
+
+// writeISOConfigFile writes an `iso create --config` file and returns its path.
+func writeISOConfigFile(t *testing.T, body string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "iso.yaml")
+	require.NoError(t, os.WriteFile(path, []byte(body), 0o600))
+	return path
+}
+
+// The --config merge must not drop the file's platformctl binaries (Codex
+// review on #1107): media without them cannot run the installer.
+func TestApplyConfigFile_KeepsConfigFileBinaries(t *testing.T) {
+	flags := &createFlags{configFile: writeISOConfigFile(t,
+		"platformctl-binary: /from/config/platformctl\n"+
+			"platformctl-static-binary: /from/config/platformctl-static\n")}
+
+	config, err := applyConfigFile(pkgiso.DefaultISOBuildConfig(), flags)
+	require.NoError(t, err)
+	assert.Equal(t, "/from/config/platformctl", config.PlatformctlBinary)
+	assert.Equal(t, "/from/config/platformctl-static", config.PlatformctlStaticBinary)
+}
+
+func TestApplyConfigFile_FlagsOverrideConfigFile(t *testing.T) {
+	flags := &createFlags{
+		configFile:            writeISOConfigFile(t, "platformctl-binary: /from/config/platformctl\n"),
+		platformctlPath:       "/flag/platformctl",
+		platformctlStaticPath: "/flag/platformctl-static",
+	}
+
+	config, err := applyConfigFile(pkgiso.DefaultISOBuildConfig(), flags)
+	require.NoError(t, err)
+	assert.Equal(t, "/flag/platformctl", config.PlatformctlBinary)
+	assert.Equal(t, "/flag/platformctl-static", config.PlatformctlStaticBinary)
+}
+
+func TestApplyConfigFile_DefaultsToThisPlatformctl(t *testing.T) {
+	flags := &createFlags{configFile: writeISOConfigFile(t, "alpine-version: 3.22.2\n")}
+
+	config, err := applyConfigFile(pkgiso.DefaultISOBuildConfig(), flags)
+	require.NoError(t, err)
+	self, err := os.Executable()
+	require.NoError(t, err)
+	self, err = filepath.EvalSymlinks(self)
+	require.NoError(t, err)
+	assert.Equal(t, self, config.PlatformctlBinary, "a config file naming no platformctl keeps the running one")
+	assert.Empty(t, config.PlatformctlStaticBinary)
+}
+
+func TestApplyConfigFile_RejectsUnreadableConfigFile(t *testing.T) {
+	flags := &createFlags{configFile: filepath.Join(t.TempDir(), "missing.yaml")}
+
+	config, err := applyConfigFile(pkgiso.DefaultISOBuildConfig(), flags)
+	require.Error(t, err)
+	assert.Nil(t, config)
+	var wrapped *WrappedError
+	assert.ErrorAs(t, err, &wrapped)
+}

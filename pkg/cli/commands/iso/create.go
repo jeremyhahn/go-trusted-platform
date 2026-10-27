@@ -381,9 +381,6 @@ func buildISOBuildConfig(flags *createFlags) (*pkgiso.ISOBuildConfig, error) {
 		return nil, err
 	}
 	config.PlatformdBinary = platformdPath
-	if err := namePlatformctlBinaries(config, flags.platformctlPath, flags.platformctlStaticPath); err != nil {
-		return nil, err
-	}
 
 	// Override from flags
 	if flags.alpineVersion != "" {
@@ -508,14 +505,9 @@ func buildISOBuildConfig(flags *createFlags) (*pkgiso.ISOBuildConfig, error) {
 		config.CAKeyAlgorithm = flags.caKeyAlgorithm
 	}
 
-	// Load config file if specified
-	if flags.configFile != "" {
-		loadedConfig, err := pkgiso.LoadISOBuildConfig(flags.configFile)
-		if err != nil {
-			return nil, &WrappedError{Msg: "failed to load config file", Err: err}
-		}
-		// Merge loaded config with flag overrides
-		config = mergeConfigs(loadedConfig, config)
+	config, err = applyConfigFile(config, flags)
+	if err != nil {
+		return nil, err
 	}
 
 	// Read platform version from VERSION file if not specified
@@ -648,6 +640,25 @@ func getCreateLogger(flags *createFlags) *logging.Logger {
 }
 
 // mergeConfigs merges two configurations, with override taking precedence
+// applyConfigFile merges the --config file under the flag-built config, then
+// names the platformctl binaries. Naming them after the merge keeps a
+// config file's platformctl-binary and platformctl-static-binary unless a
+// flag overrides them, and defaults platformctl to this one only when
+// neither names it (#351).
+func applyConfigFile(config *pkgiso.ISOBuildConfig, flags *createFlags) (*pkgiso.ISOBuildConfig, error) {
+	if flags.configFile != "" {
+		loadedConfig, err := pkgiso.LoadISOBuildConfig(flags.configFile)
+		if err != nil {
+			return nil, &WrappedError{Msg: "failed to load config file", Err: err}
+		}
+		config = mergeConfigs(loadedConfig, config)
+	}
+	if err := namePlatformctlBinaries(config, flags.platformctlPath, flags.platformctlStaticPath); err != nil {
+		return nil, err
+	}
+	return config, nil
+}
+
 func mergeConfigs(base, override *pkgiso.ISOBuildConfig) *pkgiso.ISOBuildConfig {
 	result := *base
 

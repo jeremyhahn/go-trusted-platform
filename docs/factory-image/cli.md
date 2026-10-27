@@ -135,7 +135,7 @@ per MAC replaces it at install), and:
 |---|---|---|---|
 | `--output` | string | `<work-dir>/netboot-media` | output directory; replaced |
 | `--cache-dir` | string | `<output>.cache/alpine` | pinned Alpine netboot releases |
-| `--x86-binaries-dir` | string | next to this binary | x86_64 `platformd`, `platformctl`, `platform-initrd`, `gatewayd` |
+| `--x86-binaries-dir` | string | next to this binary | x86_64 `platformd`, `platformctl`, `platformctl-static`, `platform-initrd`, `gatewayd` (`make build` writes `bin/platformctl-static`; a missing one fails the set with `iso.MissingInputError`) |
 | `--arm64-binaries-dir` | string | `aarch64/` next to this binary | the arm64 set |
 | `--ipxe` | string | `build/docker/ipxe-builder/output/bin-arm64-efi/snponly.efi` | the arm64 iPXE to sign (`make ipxe-build`; checked against its `SHA256SUMS`) |
 | `--model` | string | `rpi4` | board the TFTP tree's `config.txt` is written for |

@@ -247,8 +247,8 @@ Build:
 | `--debug` / `--verbose` | bool | `false` | Output verbosity |
 | `--pre-fetch` | bool | **`true`** | Pre-download all packages into the ISO for offline install. **Unavailable in a `fips`-tagged build** — see the note below |
 | `--platform-apk-dir` | string | `""` | strongSwan builder output (`make strongswan-build`; one `x86_64/` and `aarch64/` directory each) whose apks go into the offline repository and are installed for the overlay's IPsec transport. Requires `--pre-fetch` and an embedded platform config; empty = the media carry none of them. See below |
-| `--platformctl-binary` | string | `""` → this `platformctl` | The `platformctl` the media install with (`platformd-bin/platformctl`). Named and missing fails the build |
-| `--platformctl-static-binary` | string | `""` | Static `platformctl` for Alpine/musl (`platformd-bin/platformctl-static`); empty = not installed. Named and missing fails the build |
+| `--platformctl-binary` | string | `""` → the `--config` file's `platformctl-binary`, else this `platformctl` | The `platformctl` the media install with (`platformd-bin/platformctl`). Named and missing fails the build |
+| `--platformctl-static-binary` | string | `""` → the `--config` file's `platformctl-static-binary`, else not installed | Static `platformctl` for Alpine/musl (`platformd-bin/platformctl-static`). Named and missing fails the build |
 
 **Customize inputs: unset is not installed, named-but-missing fails the
 build (#351).** An optional input the build leaves empty is skipped (logged at
