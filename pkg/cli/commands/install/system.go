@@ -151,7 +151,7 @@ func runSystemInstall(cmd *cobra.Command, _ *cli.CommonFlags, cmdFlags *systemFl
 	logger.Info("Starting system installation")
 
 	// Load configuration
-	config, err := loadConfig(logger, cmd, cmdFlags)
+	config, platform, err := loadConfig(logger, cmd, cmdFlags)
 	if err != nil {
 		return ErrConfigLoadFailed{Path: cmdFlags.config, Err: err}
 	}
@@ -187,6 +187,10 @@ func runSystemInstall(cmd *cobra.Command, _ *cli.CommonFlags, cmdFlags *systemFl
 	opts, err := remoteSignInstallerOptions(config, cmdFlags)
 	if err != nil {
 		return err
+	}
+	// A diskless-nbd install enrols through the platform's own client first.
+	if enroller := identityEnroller(platform); enroller != nil {
+		opts = append(opts, installer.WithIdentityEnroller(enroller))
 	}
 	inst, err := installer.NewInstaller(logger, config, opts...)
 	if err != nil {
@@ -227,8 +231,9 @@ func getInstallLogger(verbose, debug bool) *logging.Logger {
 
 // loadConfig loads the configuration from file or creates from flags.
 // Uses unified App config format (with seal-pcrs field).
-func loadConfig(logger *logging.Logger, cmd *cobra.Command, cmdFlags *systemFlags) (*installer.Config, error) {
+func loadConfig(logger *logging.Logger, cmd *cobra.Command, cmdFlags *systemFlags) (*installer.Config, *app.App, error) {
 	var config *installer.Config
+	var platform *app.App
 	var err error
 
 	// Determine config file path
@@ -241,9 +246,15 @@ func loadConfig(logger *logging.Logger, cmd *cobra.Command, cmdFlags *systemFlag
 	if _, statErr := os.Stat(configPath); statErr == nil {
 		logger.Debug("Loading config from file", "path", configPath)
 
-		config, err = loadUnifiedConfig(logger, configPath)
+		platform, err = decodePlatformConfig(logger, configPath)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
+		}
+		// Extract installer.Config from App, with the network plan of the
+		// node's environment (sdn.environment).
+		config, err = platform.GetInstallerConfig()
+		if err != nil {
+			return nil, nil, err
 		}
 	} else {
 		// No config file, create from flags
@@ -254,12 +265,23 @@ func loadConfig(logger *logging.Logger, cmd *cobra.Command, cmdFlags *systemFlag
 	// Apply flag overrides to config
 	applyFlagOverrides(logger, config, cmd, cmdFlags)
 
-	return config, nil
+	return config, platform, nil
 }
 
 // loadUnifiedConfig loads config as a unified App config.
 // Returns installer.Config extracted from App.
 func loadUnifiedConfig(logger *logging.Logger, configPath string) (*installer.Config, error) {
+	platform, err := decodePlatformConfig(logger, configPath)
+	if err != nil {
+		return nil, err
+	}
+	// Extract installer.Config from App, with the network plan of the
+	// node's environment (sdn.environment).
+	return platform.GetInstallerConfig()
+}
+
+// decodePlatformConfig reads the unified platform configuration (the App).
+func decodePlatformConfig(logger *logging.Logger, configPath string) (*app.App, error) {
 	data, err := os.ReadFile(configPath)
 	if err != nil {
 		return nil, err
@@ -274,10 +296,18 @@ func loadUnifiedConfig(logger *logging.Logger, configPath string) (*installer.Co
 	}
 
 	logger.Info("Loaded App config", "path", configPath, "seal-pcrs", appConfig.SealPCRs)
+	return &appConfig, nil
+}
 
-	// Extract installer.Config from App, with the network plan of the
-	// node's environment (sdn.environment).
-	return appConfig.GetInstallerConfig()
+// identityEnroller is the enrollment client a diskless-nbd install runs: the
+// platform's own, App.EnrollIdentity, which platformd runs on a disk node's
+// first boot. Without a platform configuration there is none, and the
+// installer refuses a diskless-nbd install.
+func identityEnroller(platform *app.App) installer.IdentityEnroller {
+	if platform == nil {
+		return nil
+	}
+	return platform
 }
 
 // createConfigFromFlags builds a config from current flag values

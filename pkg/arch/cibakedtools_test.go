@@ -54,10 +54,10 @@ var bakedRunnerTools = []bakedTool{
 
 // bakedToolInstallKept names the baked tools a workflow still installs over
 // the network, each with the reason the baked copy cannot serve yet. An entry
-// whose install is gone is itself a finding, so the list only shrinks.
-var bakedToolInstallKept = map[string]string{
-	"golang.org/x/vuln/cmd/govulncheck": "the image bakes v1.7.0; make vuln was last verified with v1.8.0 on the Go 1.27 line",
-}
+// whose install is gone is itself a finding, so the list only shrinks. It is
+// empty since the security runner job folded into the image job (#927): make
+// security runs the image's baked govulncheck there.
+var bakedToolInstallKept = map[string]string{}
 
 // goInstallRe matches `go install [flags] <package>@<version>` in a script line.
 var goInstallRe = regexp.MustCompile(`\bgo\s+install\s+(?:-\S+\s+)*([^\s@]+)@(\S+)`)
@@ -108,14 +108,14 @@ func workflowGoInstalls(wf ciWorkflow) []goInstall {
 
 // bakedToolInstallFindings reports each install in wf of a baked tool that
 // bakedToolInstallKept does not justify.
-func bakedToolInstallFindings(wf ciWorkflow) []BakedToolInstallError {
+func bakedToolInstallFindings(wf ciWorkflow, kept map[string]string) []BakedToolInstallError {
 	var findings []BakedToolInstallError
 	for _, in := range workflowGoInstalls(wf) {
 		i := slices.IndexFunc(bakedRunnerTools, func(t bakedTool) bool { return t.Package == in.Package })
 		if i < 0 {
 			continue
 		}
-		if _, kept := bakedToolInstallKept[in.Package]; kept {
+		if _, ok := kept[in.Package]; ok {
 			continue
 		}
 		tool := bakedRunnerTools[i]
@@ -132,9 +132,9 @@ func bakedToolInstallFindings(wf ciWorkflow) []BakedToolInstallError {
 
 // staleBakedToolKeeps reports each bakedToolInstallKept entry that no
 // workflow installs, given the set of packages the workflows do install.
-func staleBakedToolKeeps(installed map[string]bool) []BakedToolInstallError {
+func staleBakedToolKeeps(kept map[string]string, installed map[string]bool) []BakedToolInstallError {
 	var findings []BakedToolInstallError
-	for pkg := range bakedToolInstallKept {
+	for pkg := range kept {
 		if !installed[pkg] {
 			findings = append(findings, BakedToolInstallError{
 				Package: pkg,
@@ -160,13 +160,19 @@ func TestCIWorkflowsDoNotInstallBakedTools(t *testing.T) {
 		for _, in := range workflowGoInstalls(wf) {
 			installed[in.Package] = true
 		}
-		for _, finding := range bakedToolInstallFindings(wf) {
+		for _, finding := range bakedToolInstallFindings(wf, bakedToolInstallKept) {
 			t.Error(finding)
 		}
 	}
-	for _, finding := range staleBakedToolKeeps(installed) {
+	for _, finding := range staleBakedToolKeeps(bakedToolInstallKept, installed) {
 		t.Error(finding)
 	}
+}
+
+// fixtureKept keeps the fixtures' govulncheck install, so they hold a kept
+// install apart from a rejected one whatever bakedToolInstallKept holds.
+var fixtureKept = map[string]string{
+	"golang.org/x/vuln/cmd/govulncheck": "a fixture's kept install",
 }
 
 const fixtureBakedInstalls = `on: push
@@ -190,7 +196,7 @@ func TestBakedToolInstallFindingsRejectEachBakedInstall(t *testing.T) {
 	wf, err := parseCIWorkflow("ci.yml", []byte(fixtureBakedInstalls))
 	require.NoError(t, err)
 
-	findings := bakedToolInstallFindings(wf)
+	findings := bakedToolInstallFindings(wf, fixtureKept)
 	require.Len(t, findings, 2)
 
 	require.Equal(t, 7, findings[0].Line)
@@ -213,14 +219,14 @@ func TestBakedToolInstallFindingsAcceptKeptAndUnbakedInstalls(t *testing.T) {
 	wf, err := parseCIWorkflow("ci.yml", []byte(data))
 	require.NoError(t, err)
 
-	require.Empty(t, bakedToolInstallFindings(wf))
+	require.Empty(t, bakedToolInstallFindings(wf, fixtureKept))
 	require.Len(t, workflowGoInstalls(wf), 2)
 }
 
 func TestStaleBakedToolKeepsRejectAnUnusedEntry(t *testing.T) {
-	require.Empty(t, staleBakedToolKeeps(map[string]bool{"golang.org/x/vuln/cmd/govulncheck": true}))
+	require.Empty(t, staleBakedToolKeeps(fixtureKept, map[string]bool{"golang.org/x/vuln/cmd/govulncheck": true}))
 
-	findings := staleBakedToolKeeps(map[string]bool{})
+	findings := staleBakedToolKeeps(fixtureKept, map[string]bool{})
 	require.Len(t, findings, 1)
 	require.Equal(t, "golang.org/x/vuln/cmd/govulncheck", findings[0].Package)
 	require.Contains(t, findings[0].Error(), "delete the entry")

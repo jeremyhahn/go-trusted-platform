@@ -241,8 +241,8 @@ transport:
 | Transport | Answer | Where |
 |---|---|---|
 | gRPC, Unix | `FailedPrecondition` | `ErrServiceNotControllable.GRPCStatus` (`errors.go`) |
-| REST, daemon server (`/api/v1/services/{service}/…`) | 400 | `restServiceRefusalStatus` (`rest_service.go`) |
-| REST, web services (`/api/v1/platform/services/{service}/…`) | 400 | `writeServiceError` (`pkg/webservice/v1/rest/platform/services.go`) through `protorest.WriteError` |
+| REST, daemon server (`/api/v1/services/{service}/…`) | 409 | `restServiceRefusalStatus` (`rest_service.go`) |
+| REST, web services (`/api/v1/platform/services/{service}/…`) | 409 | `writeServiceError` (`pkg/webservice/v1/rest/platform/services.go`) through `protorest.WriteError` |
 | QUIC | `StatusInvalidRequest` | `grpcDelegateErrorToQUIC` (`quic_grpc_delegates.go`) |
 | MCP | `-32007` (`FailedPrecondition`) | `toolErrorCode` (`pkg/api/mcp/error_class.go`) |
 

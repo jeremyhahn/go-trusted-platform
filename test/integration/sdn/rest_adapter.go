@@ -18,17 +18,19 @@ package sdn
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
-	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
 	"io"
 	"net/http"
 	"net/url"
 	"os"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
+
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
+	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
+	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/proto"
 )
 
 // =============================================================================
@@ -62,6 +64,19 @@ func (e ErrRESTConnectionFailed) Unwrap() error {
 	return e.Err
 }
 
+// ErrRESTEncodeFailed indicates a request message that did not encode as JSON.
+type ErrRESTEncodeFailed struct {
+	Err error
+}
+
+func (e ErrRESTEncodeFailed) Error() string {
+	return fmt.Sprintf("REST encode failed: %v", e.Err)
+}
+
+func (e ErrRESTEncodeFailed) Unwrap() error {
+	return e.Err
+}
+
 // ErrRESTDecodeFailed indicates a JSON decoding failure.
 type ErrRESTDecodeFailed struct {
 	Operation string
@@ -80,19 +95,13 @@ func (e ErrRESTDecodeFailed) Unwrap() error {
 // REST Adapter
 // =============================================================================
 
-// RESTAdapter implements SDNCommands using REST API calls.
-// This adapter makes HTTP requests to the platform REST API for testing
-// the REST interface consistency with other protocol adapters.
+// RESTAdapter implements SDNCommands using REST API calls. It speaks the
+// proto/SDK wire shape the SDN routes serve (docs/sdn/api-reference-rest.md):
+// platformv1 request and reply messages in their protojson form.
 type RESTAdapter struct {
 	baseURL   string
 	client    *http.Client
 	authToken string
-
-	// mu guards bridgeMTUs: TestSDNStressOperations drives one adapter from
-	// concurrent goroutines, and unguarded writes crashed the whole package
-	// with "concurrent map writes" (#730).
-	mu         sync.Mutex
-	bridgeMTUs map[string]int32
 }
 
 // NewRESTAdapter creates a new REST adapter with default settings.
@@ -110,7 +119,6 @@ func NewRESTAdapter() *RESTAdapter {
 				TLSClientConfig: helpers.TLSConfigOrInsecure(),
 			},
 		},
-		bridgeMTUs: make(map[string]int32),
 	}
 }
 
@@ -121,29 +129,8 @@ func (r *RESTAdapter) Name() string {
 
 // Setup verifies connectivity to the REST API.
 func (r *RESTAdapter) Setup(ctx context.Context) error {
-	// Perform health check
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, r.baseURL+"/health", nil)
-	if err != nil {
-		return ErrRESTConnectionFailed{Endpoint: r.baseURL, Err: err}
-	}
-
-	resp, err := r.client.Do(req)
-	if err != nil {
-		return ErrRESTConnectionFailed{Endpoint: r.baseURL, Err: err}
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return ErrRESTRequestFailed{
-			Method:     http.MethodGet,
-			URL:        r.baseURL + "/health",
-			StatusCode: resp.StatusCode,
-			Body:       string(body),
-		}
-	}
-
-	return nil
+	_, err := r.doRequest(ctx, http.MethodGet, "/health", nil)
+	return err
 }
 
 // Teardown performs any cleanup (none needed for REST).
@@ -155,23 +142,46 @@ func (r *RESTAdapter) Teardown() error {
 // Internal Helpers
 // =============================================================================
 
-// doRequest performs an HTTP request and returns the response body.
-func (r *RESTAdapter) doRequest(ctx context.Context, method, path string, body interface{}) ([]byte, error) {
+// restProtoJSON writes request bodies as the SDK's REST transport sends them
+// (sdk/go/transport/rest/sdn.go): the proto JSON mapping, with lowerCamelCase
+// field names and enums as their names.
+var restProtoJSON = protojson.MarshalOptions{}
+
+// call sends req to the route method and path as its protojson body and reads
+// the reply message into resp. The path carries the request fields the route
+// table puts in the path or query, so req holds only the rest; a request with
+// nothing left goes without a body. Every SDN route answers 200, creates
+// included (pkg/api/rest/protorest.go); any other status is an error.
+func (r *RESTAdapter) call(ctx context.Context, method, path string, req, resp proto.Message) error {
 	var reqBody io.Reader
-	if body != nil {
-		data, err := json.Marshal(body)
+	if req != nil && proto.Size(req) > 0 {
+		data, err := restProtoJSON.Marshal(req)
 		if err != nil {
-			return nil, fmt.Errorf("failed to marshal request body: %w", err)
+			return ErrRESTEncodeFailed{Err: err}
 		}
 		reqBody = bytes.NewReader(data)
 	}
 
+	respBody, err := r.doRequest(ctx, method, path, reqBody)
+	if err != nil {
+		return err
+	}
+	if err := protojson.Unmarshal(respBody, resp); err != nil {
+		return ErrRESTDecodeFailed{Operation: method + " " + path, Err: err}
+	}
+	return nil
+}
+
+// doRequest performs an HTTP request and returns the body of its 200 reply.
+func (r *RESTAdapter) doRequest(ctx context.Context, method, path string, reqBody io.Reader) ([]byte, error) {
 	req, err := http.NewRequestWithContext(ctx, method, r.baseURL+path, reqBody)
 	if err != nil {
 		return nil, ErrRESTConnectionFailed{Endpoint: r.baseURL, Err: err}
 	}
 
-	req.Header.Set("Content-Type", "application/json")
+	if reqBody != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
 	req.Header.Set("Accept", "application/json")
 	if r.authToken != "" {
 		req.Header.Set("Authorization", "Bearer "+r.authToken)
@@ -185,10 +195,10 @@ func (r *RESTAdapter) doRequest(ctx context.Context, method, path string, body i
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read response body: %w", err)
+		return nil, ErrRESTConnectionFailed{Endpoint: r.baseURL, Err: err}
 	}
 
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+	if resp.StatusCode != http.StatusOK {
 		return nil, ErrRESTRequestFailed{
 			Method:     method,
 			URL:        r.baseURL + path,
@@ -200,244 +210,123 @@ func (r *RESTAdapter) doRequest(ctx context.Context, method, path string, body i
 	return respBody, nil
 }
 
-// parseResponse parses a JSON response into the target struct.
-func (r *RESTAdapter) parseResponse(data []byte, v interface{}) error {
-	if err := json.Unmarshal(data, v); err != nil {
-		return ErrRESTDecodeFailed{Err: err}
+// bridgePath is the route of one bridge, followed by suffix.
+func bridgePath(bridgeID, suffix string) string {
+	return "/api/v1/sdn/bridges/" + url.PathEscape(bridgeID) + suffix
+}
+
+// portPath is the route of one port on a bridge, followed by suffix.
+func portPath(bridgeID, portID, suffix string) string {
+	return bridgePath(bridgeID, "/ports/"+url.PathEscape(portID)+suffix)
+}
+
+// listPage reads a list reply's pagination; a reply without one carries all
+// count items.
+func listPage(p *platformv1.PaginationResponse, count int) (totalCount int32, hasMore bool, nextCursor string) {
+	if p == nil {
+		return int32(count), false, ""
 	}
-	return nil
+	return int32(p.GetTotalItems()), p.GetPage() < p.GetTotalPages(), strconv.FormatUint(uint64(p.GetPage())+1, 10)
+}
+
+// pageRequest asks for limit items, or the server's default when limit is 0.
+func pageRequest(limit int32) *platformv1.PaginationRequest {
+	if limit <= 0 {
+		return nil
+	}
+	return &platformv1.PaginationRequest{PageSize: uint32(limit)}
 }
 
 // =============================================================================
 // Bridge Commands
 // =============================================================================
 
-// BridgeCreate creates a new bridge via REST API.
+// BridgeCreate creates a new bridge with POST /api/v1/sdn/bridges.
 func (r *RESTAdapter) BridgeCreate(ctx context.Context, opts BridgeCreateOptions) (*BridgeCreateResult, error) {
-	// Server expects CreateBridgeRequest format
-	reqBody := map[string]interface{}{
-		"name":          opts.Name,
-		"datapath_type": opts.DatapathID,
-		"fail_mode":     opts.FailMode,
-		"stp":           opts.STP,
-	}
-	if opts.MTU > 0 {
-		reqBody["mtu"] = opts.MTU
-	}
-	if opts.Tags != nil {
-		reqBody["labels"] = opts.Tags
+	bridgeType, ok := bridgeTypeFromString[strings.ToLower(opts.Type)]
+	if !ok {
+		bridgeType = platformv1.BridgeType_BRIDGE_TYPE_UNSPECIFIED
 	}
 
-	respBody, err := r.doRequest(ctx, http.MethodPost, "/api/v1/sdn/bridges", reqBody)
-	if err != nil {
+	req := &platformv1.CreateBridgeRequest{
+		Config: &platformv1.BridgeConfig{
+			Name:       opts.Name,
+			Type:       bridgeType,
+			DatapathId: opts.DatapathID,
+			StpEnabled: opts.STP,
+			Mtu:        uint32(opts.MTU),
+			Labels:     opts.Tags,
+		},
+	}
+
+	var resp platformv1.CreateBridgeResponse
+	if err := r.call(ctx, http.MethodPost, "/api/v1/sdn/bridges", req, &resp); err != nil {
 		return nil, err
 	}
 
-	var result struct {
-		ID           string            `json:"id"`
-		Name         string            `json:"name"`
-		DatapathType string            `json:"datapath_type"`
-		FailMode     string            `json:"fail_mode"`
-		STP          bool              `json:"stp"`
-		Status       string            `json:"status"`
-		Ports        []string          `json:"ports"`
-		ExternalIDs  map[string]string `json:"external_ids"`
-		OtherConfig  map[string]string `json:"other_config"`
-		CreatedAt    string            `json:"created_at"`
+	bridge := resp.GetBridge()
+	if bridge == nil {
+		return &BridgeCreateResult{
+			BridgeID: opts.BridgeID,
+			Name:     opts.Name,
+			Type:     opts.Type,
+		}, nil
 	}
-
-	if err := r.parseResponse(respBody, &result); err != nil {
-		return nil, err
-	}
-
-	createdAt, _ := time.Parse(time.RFC3339, result.CreatedAt)
-
-	// Use bridge name as the bridge ID (matches OVS convention and test expectations)
-	bridgeID := result.Name
-	if bridgeID == "" {
-		bridgeID = result.ID
-	}
-
-	// Store MTU for later retrieval (REST server does not track bridge MTU)
-	if opts.MTU > 0 {
-		r.mu.Lock()
-		r.bridgeMTUs[bridgeID] = opts.MTU
-		r.mu.Unlock()
-	}
-
-	return &BridgeCreateResult{
-		BridgeID:   bridgeID,
-		Name:       result.Name,
-		Type:       "ovs",
-		DatapathID: result.DatapathType,
-		Status:     result.Status,
-		CreatedAt:  createdAt,
-		PortCount:  int32(len(result.Ports)),
-	}, nil
+	return bridgeToCreateResult(bridge), nil
 }
 
-// BridgeGet retrieves a bridge by ID via REST API.
+// BridgeGet retrieves a bridge with GET /api/v1/sdn/bridges/{id}.
 func (r *RESTAdapter) BridgeGet(ctx context.Context, bridgeID string) (*BridgeGetResult, error) {
-	respBody, err := r.doRequest(ctx, http.MethodGet, "/api/v1/sdn/bridges/"+url.PathEscape(bridgeID), nil)
-	if err != nil {
+	var resp platformv1.GetBridgeResponse
+	if err := r.call(ctx, http.MethodGet, bridgePath(bridgeID, ""), nil, &resp); err != nil {
 		return nil, err
 	}
 
-	// Server returns BridgeResponse format with "id" (UUID) and "name"
-	var result struct {
-		ID           string            `json:"id"`
-		Name         string            `json:"name"`
-		DatapathType string            `json:"datapath_type"`
-		FailMode     string            `json:"fail_mode"`
-		Protocols    []string          `json:"protocols"`
-		STP          bool              `json:"stp"`
-		Status       string            `json:"status"`
-		Ports        []string          `json:"ports"`
-		ExternalIDs  map[string]string `json:"external_ids"`
-		OtherConfig  map[string]string `json:"other_config"`
-		CreatedAt    string            `json:"created_at"`
+	bridge := resp.GetBridge()
+	if bridge == nil {
+		return &BridgeGetResult{BridgeID: bridgeID}, nil
 	}
-
-	if err := r.parseResponse(respBody, &result); err != nil {
-		return nil, err
-	}
-
-	createdAt, _ := time.Parse(time.RFC3339, result.CreatedAt)
-
-	resolvedID := result.Name
-	if resolvedID == "" {
-		resolvedID = result.ID
-	}
-
-	// Retrieve stored MTU (REST server does not track bridge MTU natively)
-	r.mu.Lock()
-	mtu := r.bridgeMTUs[resolvedID]
-	r.mu.Unlock()
-
-	return &BridgeGetResult{
-		BridgeID:   resolvedID,
-		Name:       result.Name,
-		Type:       "ovs",
-		DatapathID: result.DatapathType,
-		Status:     result.Status,
-		FailMode:   result.FailMode,
-		STP:        result.STP,
-		MTU:        mtu,
-		PortCount:  int32(len(result.Ports)),
-		Tags:       result.ExternalIDs,
-		CreatedAt:  createdAt,
-	}, nil
+	return bridgeToGetResult(bridge), nil
 }
 
-// BridgeDelete deletes a bridge via REST API.
+// BridgeDelete deletes a bridge with DELETE /api/v1/sdn/bridges/{id}?force=.
 func (r *RESTAdapter) BridgeDelete(ctx context.Context, bridgeID string, opts BridgeDeleteOptions) (*BridgeDeleteResult, error) {
-	// bridgeID is the bridge name in OVS; URL-encode it
-	path := "/api/v1/sdn/bridges/" + url.PathEscape(bridgeID)
-	params := url.Values{}
+	path := bridgePath(bridgeID, "")
 	if opts.Force {
-		params.Set("force", "true")
-	}
-	if opts.DeletePorts {
-		params.Set("delete_ports", "true")
-	}
-	if opts.DeleteFlows {
-		params.Set("delete_flows", "true")
-	}
-	if len(params) > 0 {
-		path += "?" + params.Encode()
+		path += "?force=true"
 	}
 
-	respBody, err := r.doRequest(ctx, http.MethodDelete, path, nil)
-	if err != nil {
-		return nil, err
-	}
-
-	// Server returns SDNActionResponse format
-	var result struct {
-		ResourceID   string `json:"resource_id"`
-		ResourceType string `json:"resource_type"`
-		Action       string `json:"action"`
-		Success      bool   `json:"success"`
-		Message      string `json:"message"`
-	}
-
-	if err := r.parseResponse(respBody, &result); err != nil {
+	var resp platformv1.DeleteBridgeResponse
+	if err := r.call(ctx, http.MethodDelete, path, nil, &resp); err != nil {
 		return nil, err
 	}
 
 	return &BridgeDeleteResult{
-		BridgeID: result.ResourceID,
-		Deleted:  result.Success,
+		BridgeID: bridgeID,
+		Deleted:  resp.GetStatus().GetSuccess(),
 	}, nil
 }
 
-// BridgeList lists bridges via REST API.
+// BridgeList lists bridges with GET /api/v1/sdn/bridges.
 func (r *RESTAdapter) BridgeList(ctx context.Context, opts BridgeListOptions) (*BridgeListResult, error) {
-	path := "/api/v1/sdn/bridges"
-	params := url.Values{}
-	if opts.Type != "" {
-		params.Set("type", opts.Type)
-	}
-	if opts.Status != "" {
-		params.Set("status", opts.Status)
-	}
-	if opts.Limit > 0 {
-		params.Set("limit", strconv.Itoa(int(opts.Limit)))
-	}
-	if opts.Cursor != "" {
-		params.Set("cursor", opts.Cursor)
-	}
-	if len(params) > 0 {
-		path += "?" + params.Encode()
-	}
+	req := &platformv1.ListBridgesRequest{Pagination: pageRequest(opts.Limit)}
 
-	respBody, err := r.doRequest(ctx, http.MethodGet, path, nil)
-	if err != nil {
+	var resp platformv1.ListBridgesResponse
+	if err := r.call(ctx, http.MethodGet, "/api/v1/sdn/bridges", req, &resp); err != nil {
 		return nil, err
 	}
 
-	// Server returns BridgeListResponse with "bridges" array and "count"
-	var result struct {
-		Bridges []struct {
-			ID           string            `json:"id"`
-			Name         string            `json:"name"`
-			DatapathType string            `json:"datapath_type"`
-			FailMode     string            `json:"fail_mode"`
-			STP          bool              `json:"stp"`
-			Status       string            `json:"status"`
-			Ports        []string          `json:"ports"`
-			ExternalIDs  map[string]string `json:"external_ids"`
-			CreatedAt    string            `json:"created_at"`
-		} `json:"bridges"`
-		Count     int    `json:"count"`
-		Timestamp string `json:"timestamp"`
+	bridges := make([]BridgeSummary, 0, len(resp.GetBridges()))
+	for _, b := range resp.GetBridges() {
+		bridges = append(bridges, bridgeToSummary(b))
 	}
 
-	if err := r.parseResponse(respBody, &result); err != nil {
-		return nil, err
-	}
-
-	bridges := make([]BridgeSummary, len(result.Bridges))
-	for i, b := range result.Bridges {
-		createdAt, _ := time.Parse(time.RFC3339, b.CreatedAt)
-		bridgeID := b.Name
-		if bridgeID == "" {
-			bridgeID = b.ID
-		}
-		bridges[i] = BridgeSummary{
-			BridgeID:   bridgeID,
-			Name:       b.Name,
-			Type:       "ovs",
-			Status:     b.Status,
-			PortCount:  int32(len(b.Ports)),
-			DatapathID: b.DatapathType,
-			CreatedAt:  createdAt,
-		}
-	}
-
+	totalCount, hasMore, nextCursor := listPage(resp.GetPagination(), len(bridges))
 	return &BridgeListResult{
 		Bridges:    bridges,
-		TotalCount: int32(result.Count),
+		TotalCount: totalCount,
+		HasMore:    hasMore,
+		NextCursor: nextCursor,
 	}, nil
 }
 
@@ -445,243 +334,115 @@ func (r *RESTAdapter) BridgeList(ctx context.Context, opts BridgeListOptions) (*
 // Port Commands
 // =============================================================================
 
-// PortAdd adds a port to a bridge via REST API.
+// PortAdd adds a port with POST /api/v1/sdn/bridges/{bridge_id}/ports.
 func (r *RESTAdapter) PortAdd(ctx context.Context, opts PortAddOptions) (*PortAddResult, error) {
-	// Server expects AddPortRequest format
-	reqBody := map[string]interface{}{
-		"name": opts.Name,
-		"type": opts.Type,
-	}
-	if opts.Tag > 0 {
-		reqBody["vlan"] = opts.Tag
-	}
-	if opts.MAC != "" {
-		reqBody["mac_address"] = opts.MAC
+	portType, ok := portTypeFromString[strings.ToLower(opts.Type)]
+	if !ok {
+		portType = platformv1.PortType_PORT_TYPE_UNSPECIFIED
 	}
 
-	path := "/api/v1/sdn/bridges/" + url.PathEscape(opts.BridgeID) + "/ports"
-	respBody, err := r.doRequest(ctx, http.MethodPost, path, reqBody)
-	if err != nil {
+	trunks := make([]uint32, len(opts.Trunks))
+	for i, t := range opts.Trunks {
+		trunks[i] = uint32(t)
+	}
+
+	req := &platformv1.AddPortRequest{
+		Config: &platformv1.PortConfig{
+			Name:       opts.Name,
+			Type:       portType,
+			Vlan:       uint32(opts.Tag),
+			TrunkVlans: trunks,
+			MacAddress: opts.MAC,
+			Mtu:        uint32(opts.MTU),
+			Options:    opts.Options,
+		},
+	}
+
+	var resp platformv1.AddPortResponse
+	if err := r.call(ctx, http.MethodPost, bridgePath(opts.BridgeID, "/ports"), req, &resp); err != nil {
 		return nil, err
 	}
 
-	// Server returns PortResponse format
-	var result struct {
-		ID          string            `json:"id"`
-		Name        string            `json:"name"`
-		BridgeID    string            `json:"bridge_id"`
-		Type        string            `json:"type"`
-		VLAN        int64             `json:"vlan"`
-		MACAddress  string            `json:"mac_address"`
-		Status      string            `json:"status"`
-		ExternalIDs map[string]string `json:"external_ids"`
-		CreatedAt   string            `json:"created_at"`
+	port := resp.GetPort()
+	if port == nil {
+		return &PortAddResult{
+			BridgeID: opts.BridgeID,
+			PortID:   opts.PortID,
+			Name:     opts.Name,
+			Type:     opts.Type,
+		}, nil
 	}
-
-	if err := r.parseResponse(respBody, &result); err != nil {
-		return nil, err
-	}
-
-	createdAt, _ := time.Parse(time.RFC3339, result.CreatedAt)
-
-	// Use the test-provided port ID since the server returns a UUID
-	portID := opts.PortID
-
-	return &PortAddResult{
-		BridgeID:  result.BridgeID,
-		PortID:    portID,
-		Name:      result.Name,
-		Type:      result.Type,
-		MAC:       result.MACAddress,
-		Status:    result.Status,
-		CreatedAt: createdAt,
-	}, nil
+	return portToAddResult(port), nil
 }
 
-// PortDelete deletes a port from a bridge via REST API.
+// PortDelete deletes a port with DELETE /api/v1/sdn/bridges/{bridge_id}/ports/{port_id}.
 func (r *RESTAdapter) PortDelete(ctx context.Context, bridgeID, portID string) (*PortDeleteResult, error) {
-	path := "/api/v1/sdn/bridges/" + url.PathEscape(bridgeID) + "/ports/" + url.PathEscape(portID)
-	respBody, err := r.doRequest(ctx, http.MethodDelete, path, nil)
-	if err != nil {
-		return nil, err
-	}
-
-	// Server returns SDNActionResponse format
-	var result struct {
-		ResourceID   string `json:"resource_id"`
-		ResourceType string `json:"resource_type"`
-		Action       string `json:"action"`
-		Success      bool   `json:"success"`
-		Message      string `json:"message"`
-	}
-
-	if err := r.parseResponse(respBody, &result); err != nil {
+	var resp platformv1.DeletePortResponse
+	if err := r.call(ctx, http.MethodDelete, portPath(bridgeID, portID, ""), nil, &resp); err != nil {
 		return nil, err
 	}
 
 	return &PortDeleteResult{
 		BridgeID: bridgeID,
-		PortID:   result.ResourceID,
-		Deleted:  result.Success,
+		PortID:   portID,
+		Deleted:  resp.GetStatus().GetSuccess(),
 	}, nil
 }
 
-// PortGetState gets the state of a port via REST API.
+// PortGetState gets a port's state with GET .../ports/{port_id}/state.
 func (r *RESTAdapter) PortGetState(ctx context.Context, bridgeID, portID string) (*PortStateResult, error) {
-	path := "/api/v1/sdn/bridges/" + url.PathEscape(bridgeID) + "/ports/" + url.PathEscape(portID) + "/state"
-	respBody, err := r.doRequest(ctx, http.MethodGet, path, nil)
-	if err != nil {
+	var resp platformv1.GetPortResponse
+	if err := r.call(ctx, http.MethodGet, portPath(bridgeID, portID, "/state"), nil, &resp); err != nil {
 		return nil, err
 	}
 
-	var result struct {
-		BridgeID     string `json:"bridge_id"`
-		PortID       string `json:"port_id"`
-		PortNumber   int32  `json:"port_number"`
-		AdminState   string `json:"admin_state"`
-		OperState    string `json:"oper_state"`
-		LinkState    string `json:"link_state"`
-		Speed        uint64 `json:"speed"`
-		Duplex       string `json:"duplex"`
-		IngressRate  uint64 `json:"ingress_rate"`
-		EgressRate   uint64 `json:"egress_rate"`
-		IngressBurst uint64 `json:"ingress_burst"`
-		EgressBurst  uint64 `json:"egress_burst"`
-		UpdatedAt    string `json:"updated_at"`
+	port := resp.GetPort()
+	if port == nil {
+		return &PortStateResult{BridgeID: bridgeID, PortID: portID}, nil
 	}
-
-	if err := r.parseResponse(respBody, &result); err != nil {
-		return nil, err
-	}
-
-	updatedAt, _ := time.Parse(time.RFC3339, result.UpdatedAt)
-
-	return &PortStateResult{
-		BridgeID:     result.BridgeID,
-		PortID:       result.PortID,
-		PortNumber:   result.PortNumber,
-		AdminState:   result.AdminState,
-		OperState:    result.OperState,
-		LinkState:    result.LinkState,
-		Speed:        result.Speed,
-		Duplex:       result.Duplex,
-		IngressRate:  result.IngressRate,
-		EgressRate:   result.EgressRate,
-		IngressBurst: result.IngressBurst,
-		EgressBurst:  result.EgressBurst,
-		UpdatedAt:    updatedAt,
-	}, nil
+	return portToStateResult(port), nil
 }
 
-// PortSetState sets the state of a port via REST API.
+// PortSetState sets a port's state with PUT .../ports/{port_id}/state.
 func (r *RESTAdapter) PortSetState(ctx context.Context, bridgeID, portID string, opts PortSetStateOptions) (*PortStateResult, error) {
-	reqBody := map[string]interface{}{
-		"admin_state":   opts.AdminState,
-		"ingress_rate":  opts.IngressRate,
-		"egress_rate":   opts.EgressRate,
-		"ingress_burst": opts.IngressBurst,
-		"egress_burst":  opts.EgressBurst,
+	req := &platformv1.SetPortStateRequest{
+		AdminState:   opts.AdminState,
+		IngressRate:  opts.IngressRate,
+		EgressRate:   opts.EgressRate,
+		IngressBurst: opts.IngressBurst,
+		EgressBurst:  opts.EgressBurst,
 	}
 
-	path := "/api/v1/sdn/bridges/" + url.PathEscape(bridgeID) + "/ports/" + url.PathEscape(portID) + "/state"
-	respBody, err := r.doRequest(ctx, http.MethodPut, path, reqBody)
-	if err != nil {
+	var resp platformv1.SetPortStateResponse
+	if err := r.call(ctx, http.MethodPut, portPath(bridgeID, portID, "/state"), req, &resp); err != nil {
 		return nil, err
 	}
 
-	var result struct {
-		BridgeID     string `json:"bridge_id"`
-		PortID       string `json:"port_id"`
-		PortNumber   int32  `json:"port_number"`
-		AdminState   string `json:"admin_state"`
-		OperState    string `json:"oper_state"`
-		LinkState    string `json:"link_state"`
-		Speed        uint64 `json:"speed"`
-		Duplex       string `json:"duplex"`
-		IngressRate  uint64 `json:"ingress_rate"`
-		EgressRate   uint64 `json:"egress_rate"`
-		IngressBurst uint64 `json:"ingress_burst"`
-		EgressBurst  uint64 `json:"egress_burst"`
-		UpdatedAt    string `json:"updated_at"`
+	port := resp.GetPort()
+	if port == nil {
+		return &PortStateResult{BridgeID: bridgeID, PortID: portID}, nil
 	}
-
-	if err := r.parseResponse(respBody, &result); err != nil {
-		return nil, err
-	}
-
-	updatedAt, _ := time.Parse(time.RFC3339, result.UpdatedAt)
-
-	return &PortStateResult{
-		BridgeID:     result.BridgeID,
-		PortID:       result.PortID,
-		PortNumber:   result.PortNumber,
-		AdminState:   result.AdminState,
-		OperState:    result.OperState,
-		LinkState:    result.LinkState,
-		Speed:        result.Speed,
-		Duplex:       result.Duplex,
-		IngressRate:  result.IngressRate,
-		EgressRate:   result.EgressRate,
-		IngressBurst: result.IngressBurst,
-		EgressBurst:  result.EgressBurst,
-		UpdatedAt:    updatedAt,
-	}, nil
+	return portToStateResult(port), nil
 }
 
-// PortGetStats gets statistics for a port via REST API.
+// PortGetStats gets a port's counters with GET .../ports/{port_id}/stats.
 func (r *RESTAdapter) PortGetStats(ctx context.Context, bridgeID, portID string) (*PortStatsResult, error) {
-	path := "/api/v1/sdn/bridges/" + url.PathEscape(bridgeID) + "/ports/" + url.PathEscape(portID) + "/stats"
-	respBody, err := r.doRequest(ctx, http.MethodGet, path, nil)
-	if err != nil {
+	var resp platformv1.GetPortStatsResponse
+	if err := r.call(ctx, http.MethodGet, portPath(bridgeID, portID, "/stats"), nil, &resp); err != nil {
 		return nil, err
 	}
 
-	var result struct {
-		BridgeID     string `json:"bridge_id"`
-		PortID       string `json:"port_id"`
-		PortNumber   int32  `json:"port_number"`
-		RxPackets    uint64 `json:"rx_packets"`
-		TxPackets    uint64 `json:"tx_packets"`
-		RxBytes      uint64 `json:"rx_bytes"`
-		TxBytes      uint64 `json:"tx_bytes"`
-		RxDropped    uint64 `json:"rx_dropped"`
-		TxDropped    uint64 `json:"tx_dropped"`
-		RxErrors     uint64 `json:"rx_errors"`
-		TxErrors     uint64 `json:"tx_errors"`
-		RxFrameErr   uint64 `json:"rx_frame_err"`
-		RxOverErr    uint64 `json:"rx_over_err"`
-		RxCRCErr     uint64 `json:"rx_crc_err"`
-		Collisions   uint64 `json:"collisions"`
-		Duration     int64  `json:"duration"`
-		DurationNsec int64  `json:"duration_nsec"`
-		RetrievedAt  string `json:"retrieved_at"`
-	}
-
-	if err := r.parseResponse(respBody, &result); err != nil {
-		return nil, err
-	}
-
-	retrievedAt, _ := time.Parse(time.RFC3339, result.RetrievedAt)
-
+	stats := resp.GetStats()
 	return &PortStatsResult{
-		BridgeID:     result.BridgeID,
-		PortID:       result.PortID,
-		PortNumber:   result.PortNumber,
-		RxPackets:    result.RxPackets,
-		TxPackets:    result.TxPackets,
-		RxBytes:      result.RxBytes,
-		TxBytes:      result.TxBytes,
-		RxDropped:    result.RxDropped,
-		TxDropped:    result.TxDropped,
-		RxErrors:     result.RxErrors,
-		TxErrors:     result.TxErrors,
-		RxFrameErr:   result.RxFrameErr,
-		RxOverErr:    result.RxOverErr,
-		RxCRCErr:     result.RxCRCErr,
-		Collisions:   result.Collisions,
-		Duration:     result.Duration,
-		DurationNsec: result.DurationNsec,
-		RetrievedAt:  retrievedAt,
+		BridgeID:    bridgeID,
+		PortID:      portID,
+		RxPackets:   stats.GetPacketsReceived(),
+		TxPackets:   stats.GetPacketsSent(),
+		RxBytes:     stats.GetBytesReceived(),
+		TxBytes:     stats.GetBytesSent(),
+		RxErrors:    stats.GetErrors(),
+		RxDropped:   stats.GetDropped(),
+		RetrievedAt: time.Now(),
 	}, nil
 }
 
@@ -689,158 +450,85 @@ func (r *RESTAdapter) PortGetStats(ctx context.Context, bridgeID, portID string)
 // Flow Commands
 // =============================================================================
 
-// FlowAdd adds a flow to a bridge via REST API.
-// The REST server expects match and actions as OVS-style strings (e.g.,
-// "in_port=1,dl_src=00:11:22:33:44:55" and "output:2,drop").
+// FlowAdd adds a flow with POST /api/v1/sdn/flows; the config names the bridge.
 func (r *RESTAdapter) FlowAdd(ctx context.Context, opts FlowAddOptions) (*FlowAddResult, error) {
-	// Convert match to OVS-style match string
-	matchStr := flowMatchToString(opts.Match)
-
-	// Convert actions to OVS-style actions string
-	actionsStr := flowActionsToString(opts.Actions)
-
-	reqBody := map[string]interface{}{
-		"table":        opts.Table,
-		"priority":     opts.Priority,
-		"match":        matchStr,
-		"actions":      actionsStr,
-		"idle_timeout": opts.IdleTimeout,
-		"hard_timeout": opts.HardTimeout,
-	}
-	if opts.Cookie > 0 {
-		reqBody["cookie"] = fmt.Sprintf("0x%x", opts.Cookie)
+	actions := make([]*platformv1.FlowAction, 0, len(opts.Actions))
+	for _, a := range opts.Actions {
+		actions = append(actions, flowActionToProto(a))
 	}
 
-	path := "/api/v1/sdn/bridges/" + url.PathEscape(opts.BridgeID) + "/flows"
-	respBody, err := r.doRequest(ctx, http.MethodPost, path, reqBody)
-	if err != nil {
+	req := &platformv1.AddFlowRequest{
+		Config: &platformv1.FlowConfig{
+			BridgeId:    opts.BridgeID,
+			Table:       platformv1.FlowTable(opts.Table),
+			Priority:    uint32(opts.Priority),
+			Match:       flowMatchToProto(opts.Match),
+			Actions:     actions,
+			IdleTimeout: uint32(opts.IdleTimeout),
+			HardTimeout: uint32(opts.HardTimeout),
+		},
+	}
+
+	var resp platformv1.AddFlowResponse
+	if err := r.call(ctx, http.MethodPost, "/api/v1/sdn/flows", req, &resp); err != nil {
 		return nil, err
 	}
 
-	var result struct {
-		ID        string `json:"id"`
-		BridgeID  string `json:"bridge_id"`
-		Table     int32  `json:"table"`
-		Priority  int32  `json:"priority"`
-		Cookie    string `json:"cookie"`
-		CreatedAt string `json:"created_at"`
+	flow := resp.GetFlow()
+	if flow == nil {
+		return &FlowAddResult{
+			BridgeID: opts.BridgeID,
+			FlowID:   opts.FlowID,
+			Table:    opts.Table,
+			Priority: opts.Priority,
+		}, nil
 	}
-
-	if err := r.parseResponse(respBody, &result); err != nil {
-		return nil, err
-	}
-
-	createdAt, _ := time.Parse(time.RFC3339, result.CreatedAt)
-
-	flowID := result.ID
-	if flowID == "" {
-		flowID = opts.FlowID
-	}
-
-	return &FlowAddResult{
-		BridgeID:  result.BridgeID,
-		FlowID:    flowID,
-		Table:     result.Table,
-		Priority:  result.Priority,
-		CreatedAt: createdAt,
-	}, nil
+	return flowToAddResult(flow, opts.BridgeID), nil
 }
 
-// FlowDelete deletes a flow from a bridge via REST API.
+// FlowDelete deletes a flow with DELETE /api/v1/sdn/flows, whose body names
+// the bridge and the flow.
 func (r *RESTAdapter) FlowDelete(ctx context.Context, bridgeID, flowID string) (*FlowDeleteResult, error) {
-	path := "/api/v1/sdn/bridges/" + url.PathEscape(bridgeID) + "/flows/" + url.PathEscape(flowID)
-	respBody, err := r.doRequest(ctx, http.MethodDelete, path, nil)
-	if err != nil {
-		return nil, err
-	}
+	req := &platformv1.DeleteFlowRequest{BridgeId: bridgeID, FlowId: flowID}
 
-	// Server returns SDNActionResponse format
-	var result struct {
-		ResourceID   string `json:"resource_id"`
-		ResourceType string `json:"resource_type"`
-		Action       string `json:"action"`
-		Success      bool   `json:"success"`
-		Message      string `json:"message"`
-	}
-
-	if err := r.parseResponse(respBody, &result); err != nil {
+	var resp platformv1.DeleteFlowResponse
+	if err := r.call(ctx, http.MethodDelete, "/api/v1/sdn/flows", req, &resp); err != nil {
 		return nil, err
 	}
 
 	return &FlowDeleteResult{
 		BridgeID: bridgeID,
-		FlowID:   result.ResourceID,
-		Deleted:  result.Success,
+		FlowID:   flowID,
+		Deleted:  resp.GetStatus().GetSuccess(),
 	}, nil
 }
 
-// FlowList lists flows on a bridge via REST API.
+// FlowList lists a bridge's flows with GET /api/v1/sdn/flows, whose body
+// names the bridge.
 func (r *RESTAdapter) FlowList(ctx context.Context, bridgeID string, opts FlowListOptions) (*FlowListResult, error) {
-	path := "/api/v1/sdn/bridges/" + url.PathEscape(bridgeID) + "/flows"
-	params := url.Values{}
-	if opts.Table >= 0 {
-		params.Set("table", strconv.Itoa(int(opts.Table)))
-	}
-	if opts.Limit > 0 {
-		params.Set("limit", strconv.Itoa(int(opts.Limit)))
-	}
-	if opts.Cursor != "" {
-		params.Set("cursor", opts.Cursor)
-	}
-	if len(params) > 0 {
-		path += "?" + params.Encode()
+	req := &platformv1.ListFlowsRequest{
+		BridgeId:   bridgeID,
+		Table:      platformv1.FlowTable(opts.Table),
+		Pagination: pageRequest(opts.Limit),
 	}
 
-	respBody, err := r.doRequest(ctx, http.MethodGet, path, nil)
-	if err != nil {
+	var resp platformv1.ListFlowsResponse
+	if err := r.call(ctx, http.MethodGet, "/api/v1/sdn/flows", req, &resp); err != nil {
 		return nil, err
 	}
 
-	var result struct {
-		BridgeID string `json:"bridge_id"`
-		// The REST flow list is rest.FlowResponse: the ID is "id" and the
-		// cookie a hex string ("0x..."), which the ID carries too.
-		Flows []struct {
-			FlowID      string `json:"id"`
-			Table       int32  `json:"table"`
-			Priority    int32  `json:"priority"`
-			Cookie      string `json:"cookie"`
-			PacketCount uint64 `json:"packet_count"`
-			ByteCount   uint64 `json:"byte_count"`
-			Duration    int64  `json:"duration"`
-			IdleAge     int64  `json:"idle_age"`
-			HardAge     int64  `json:"hard_age"`
-		} `json:"flows"`
-		TotalCount int32  `json:"total_count"`
-		HasMore    bool   `json:"has_more"`
-		NextCursor string `json:"next_cursor"`
+	flows := make([]FlowSummary, 0, len(resp.GetFlows()))
+	for _, f := range resp.GetFlows() {
+		flows = append(flows, flowToSummary(f))
 	}
 
-	if err := r.parseResponse(respBody, &result); err != nil {
-		return nil, err
-	}
-
-	flows := make([]FlowSummary, len(result.Flows))
-	for i, f := range result.Flows {
-		flows[i] = FlowSummary{
-			FlowID:      f.FlowID,
-			Table:       f.Table,
-			Priority:    f.Priority,
-			Cookie:      restFlowCookie(f.Cookie),
-			PacketCount: f.PacketCount,
-			ByteCount:   f.ByteCount,
-			Duration:    f.Duration,
-			IdleAge:     f.IdleAge,
-			HardAge:     f.HardAge,
-		}
-	}
-
+	totalCount, hasMore, nextCursor := listPage(resp.GetPagination(), len(flows))
 	return &FlowListResult{
-		BridgeID:   result.BridgeID,
+		BridgeID:   bridgeID,
 		Flows:      flows,
-		TotalCount: result.TotalCount,
-		HasMore:    result.HasMore,
-		NextCursor: result.NextCursor,
+		TotalCount: totalCount,
+		HasMore:    hasMore,
+		NextCursor: nextCursor,
 	}, nil
 }
 
@@ -848,9 +536,9 @@ func (r *RESTAdapter) FlowList(ctx context.Context, bridgeID string, opts FlowLi
 // VLAN Commands
 // =============================================================================
 
-// VLANCreate creates a VLAN via REST API.
+// VLANCreate creates a VLAN with POST /api/v1/sdn/vlans. The route, like
+// gRPC, places a VLAN on one bridge.
 func (r *RESTAdapter) VLANCreate(ctx context.Context, opts VLANCreateOptions) (*VLANCreateResult, error) {
-	// The REST route, like gRPC, places a VLAN on one bridge.
 	var bridgeID string
 	if len(opts.BridgeIDs) > 0 {
 		bridgeID = opts.BridgeIDs[0]
@@ -860,81 +548,65 @@ func (r *RESTAdapter) VLANCreate(ctx context.Context, opts VLANCreateOptions) (*
 	ports = append(ports, opts.Tagged...)
 	ports = append(ports, opts.Untagged...)
 
-	reqBody := map[string]interface{}{
-		"vlan_id":   opts.VLANID,
-		"name":      opts.Name,
-		"bridge_id": bridgeID,
-		"ports":     ports,
+	req := &platformv1.CreateVLANRequest{
+		Config: &platformv1.VLANConfig{
+			VlanId:   uint32(opts.VLANID),
+			Name:     opts.Name,
+			BridgeId: bridgeID,
+			Ports:    ports,
+		},
 	}
 
-	respBody, err := r.doRequest(ctx, http.MethodPost, "/api/v1/sdn/vlans", reqBody)
-	if err != nil {
+	var resp platformv1.CreateVLANResponse
+	if err := r.call(ctx, http.MethodPost, "/api/v1/sdn/vlans", req, &resp); err != nil {
 		return nil, err
 	}
 
-	var result restVLAN
-	if err := r.parseResponse(respBody, &result); err != nil {
-		return nil, err
+	vlan := resp.GetVlan()
+	if vlan == nil {
+		return &VLANCreateResult{
+			VLANID:      opts.VLANID,
+			Name:        opts.Name,
+			Description: opts.Description,
+		}, nil
 	}
-
-	return &VLANCreateResult{
-		VLANID:      int32(result.VLANID),
-		Name:        result.Name,
-		Description: opts.Description,
-		Status:      "active",
-		PortCount:   int32(result.PortCount),
-		CreatedAt:   result.CreatedAt,
-	}, nil
+	return vlanToCreateResult(vlan, opts.Description), nil
 }
 
-// VLANDelete deletes a VLAN from a bridge via REST.
+// VLANDelete deletes a VLAN with DELETE /api/v1/sdn/vlans/{vlan_id}?bridge_id=.
 func (r *RESTAdapter) VLANDelete(ctx context.Context, bridgeID string, vlanID int32) (*VLANDeleteResult, error) {
 	params := url.Values{}
 	params.Set("bridge_id", bridgeID)
 	path := "/api/v1/sdn/vlans/" + strconv.Itoa(int(vlanID)) + "?" + params.Encode()
-	respBody, err := r.doRequest(ctx, http.MethodDelete, path, nil)
-	if err != nil {
-		return nil, err
-	}
 
-	var result struct {
-		Success bool `json:"success"`
-	}
-	if err := r.parseResponse(respBody, &result); err != nil {
+	var resp platformv1.DeleteVLANResponse
+	if err := r.call(ctx, http.MethodDelete, path, nil, &resp); err != nil {
 		return nil, err
 	}
 
 	return &VLANDeleteResult{
 		VLANID:  vlanID,
-		Deleted: result.Success,
+		Deleted: resp.GetStatus().GetSuccess(),
 	}, nil
 }
 
-// VLANList lists the VLANs on a bridge via REST.
+// VLANList lists a bridge's VLANs with GET /api/v1/sdn/vlans?bridge_id=.
 func (r *RESTAdapter) VLANList(ctx context.Context, opts VLANListOptions) (*VLANListResult, error) {
-	params := url.Values{}
-	params.Set("bridge_id", opts.BridgeID)
-	respBody, err := r.doRequest(ctx, http.MethodGet, "/api/v1/sdn/vlans?"+params.Encode(), nil)
-	if err != nil {
+	path := "/api/v1/sdn/vlans"
+	if opts.BridgeID != "" {
+		params := url.Values{}
+		params.Set("bridge_id", opts.BridgeID)
+		path += "?" + params.Encode()
+	}
+
+	var resp platformv1.ListVLANsResponse
+	if err := r.call(ctx, http.MethodGet, path, nil, &resp); err != nil {
 		return nil, err
 	}
 
-	var result struct {
-		VLANs []restVLAN `json:"vlans"`
-	}
-	if err := r.parseResponse(respBody, &result); err != nil {
-		return nil, err
-	}
-
-	vlans := make([]VLANSummary, 0, len(result.VLANs))
-	for _, v := range result.VLANs {
-		vlans = append(vlans, VLANSummary{
-			VLANID:    int32(v.VLANID),
-			Name:      v.Name,
-			Status:    "active",
-			PortCount: int32(v.PortCount),
-			CreatedAt: v.CreatedAt,
-		})
+	vlans := make([]VLANSummary, 0, len(resp.GetVlans()))
+	for _, v := range resp.GetVlans() {
+		vlans = append(vlans, vlanToSummary(v))
 	}
 
 	return &VLANListResult{
@@ -943,34 +615,64 @@ func (r *RESTAdapter) VLANList(ctx context.Context, opts VLANListOptions) (*VLAN
 	}, nil
 }
 
-// restVLAN is the VLAN object the REST VLAN routes return.
-type restVLAN struct {
-	VLANID    uint32    `json:"vlan_id"`
-	Name      string    `json:"name"`
-	PortCount uint32    `json:"port_count"`
-	CreatedAt time.Time `json:"created_at"`
-}
-
 // =============================================================================
 // Policy Commands
 // =============================================================================
 
-// PolicyApply applies a network policy via REST API.
+// PolicyApply applies a network policy with POST /api/v1/sdn/policies.
 func (r *RESTAdapter) PolicyApply(ctx context.Context, opts PolicyApplyOptions) (*PolicyApplyResult, error) {
-	respBody, err := r.doRequest(ctx, http.MethodPost, "/api/v1/sdn/policies", newRESTPolicyBody(opts))
-	if err != nil {
+	policyType, ok := policyTypeFromString[strings.ToLower(opts.Type)]
+	if !ok {
+		policyType = platformv1.PolicyType_POLICY_TYPE_UNSPECIFIED
+	}
+
+	rules := make([]*platformv1.PolicyRule, 0, len(opts.Rules))
+	for _, rule := range opts.Rules {
+		rules = append(rules, policyRuleToProto(rule))
+	}
+
+	targets := make([]*platformv1.PolicyTarget, 0, len(opts.Targets))
+	for _, t := range opts.Targets {
+		targets = append(targets, policyTargetToProto(t))
+	}
+
+	var schedule *platformv1.PolicySchedule
+	if opts.Schedule != nil {
+		schedule = policyScheduleToProto(opts.Schedule)
+	}
+
+	req := &platformv1.ApplyPolicyRequest{
+		PolicyId: opts.PolicyID,
+		Config: &platformv1.PolicyConfig{
+			Name:        opts.Name,
+			Description: opts.Description,
+			Type:        policyType,
+			Priority:    opts.Priority,
+			Enabled:     opts.Enabled,
+			Rules:       rules,
+			Targets:     targets,
+			Schedule:    schedule,
+		},
+	}
+
+	var resp platformv1.ApplyPolicyResponse
+	if err := r.call(ctx, http.MethodPost, "/api/v1/sdn/policies", req, &resp); err != nil {
 		return nil, err
 	}
 
-	var result restPolicy
-	if err := r.parseResponse(respBody, &result); err != nil {
-		return nil, err
+	policy := resp.GetPolicy()
+	if policy == nil {
+		return &PolicyApplyResult{
+			PolicyID: opts.PolicyID,
+			Name:     opts.Name,
+			Type:     opts.Type,
+		}, nil
 	}
-	return result.applyResult(), nil
+	return policyToApplyResult(policy), nil
 }
 
 // newPolicyBody builds the create-policy request from opts. QUIC sends it as
-// is; REST and MCP send it as newRESTPolicyBody.
+// is; MCP sends it as newRESTPolicyBody.
 func newPolicyBody(opts PolicyApplyOptions) sdnPolicyBody {
 	rules := make([]restPolicyRule, 0, len(opts.Rules))
 	for _, rule := range opts.Rules {
@@ -1020,62 +722,47 @@ func newRESTPolicyBody(opts PolicyApplyOptions) map[string]interface{} {
 	return body
 }
 
-// PolicyGet retrieves a policy by ID via REST API.
+// PolicyGet retrieves a policy with GET /api/v1/sdn/policies/{policy_id}.
 func (r *RESTAdapter) PolicyGet(ctx context.Context, policyID string) (*PolicyGetResult, error) {
 	path := "/api/v1/sdn/policies/" + url.PathEscape(policyID)
-	respBody, err := r.doRequest(ctx, http.MethodGet, path, nil)
-	if err != nil {
+
+	var resp platformv1.GetPolicyResponse
+	if err := r.call(ctx, http.MethodGet, path, nil, &resp); err != nil {
 		return nil, err
 	}
 
-	var result restPolicy
-	if err := r.parseResponse(respBody, &result); err != nil {
-		return nil, err
+	policy := resp.GetPolicy()
+	if policy == nil {
+		return &PolicyGetResult{PolicyID: policyID}, nil
 	}
-	return result.getResult(), nil
+	return policyToGetResult(policy), nil
 }
 
-// PolicyList lists policies via REST API.
+// PolicyList lists policies with GET /api/v1/sdn/policies, whose body carries
+// the filters.
 func (r *RESTAdapter) PolicyList(ctx context.Context, opts PolicyListOptions) (*PolicyListResult, error) {
-	path := "/api/v1/sdn/policies"
-	params := url.Values{}
-	if opts.Type != "" {
-		params.Set("type", opts.Type)
-	}
-	if opts.TargetID != "" {
-		params.Set("target_id", opts.TargetID)
-	}
-	if opts.Limit > 0 {
-		params.Set("limit", strconv.Itoa(int(opts.Limit)))
-	}
-	if opts.Cursor != "" {
-		params.Set("cursor", opts.Cursor)
-	}
-	if len(params) > 0 {
-		path += "?" + params.Encode()
+	req := &platformv1.ListPoliciesRequest{
+		Type:       opts.Type,
+		TargetId:   opts.TargetID,
+		Pagination: pageRequest(opts.Limit),
 	}
 
-	respBody, err := r.doRequest(ctx, http.MethodGet, path, nil)
-	if err != nil {
+	var resp platformv1.ListPoliciesResponse
+	if err := r.call(ctx, http.MethodGet, "/api/v1/sdn/policies", req, &resp); err != nil {
 		return nil, err
 	}
 
-	var result struct {
-		Policies []restPolicy `json:"policies"`
-		Count    int          `json:"count"`
-	}
-	if err := r.parseResponse(respBody, &result); err != nil {
-		return nil, err
+	policies := make([]PolicySummary, 0, len(resp.GetPolicies()))
+	for _, p := range resp.GetPolicies() {
+		policies = append(policies, policyToSummary(p))
 	}
 
-	policies := make([]PolicySummary, len(result.Policies))
-	for i, p := range result.Policies {
-		policies[i] = p.summary()
-	}
-
+	totalCount, hasMore, nextCursor := listPage(resp.GetPagination(), len(policies))
 	return &PolicyListResult{
 		Policies:   policies,
-		TotalCount: int32(result.Count),
+		TotalCount: totalCount,
+		HasMore:    hasMore,
+		NextCursor: nextCursor,
 	}, nil
 }
 
@@ -1239,97 +926,8 @@ func (r restPolicyRule) policyRule() PolicyRule {
 }
 
 // =============================================================================
-// Flow Format Helpers
-// =============================================================================
-
-// flowMatchToString converts a FlowMatch to an OVS-style match string.
-// Example output: "in_port=1,dl_src=00:11:22:33:44:55,nw_src=10.0.0.1"
-func flowMatchToString(m FlowMatch) string {
-	parts := make([]string, 0, 10)
-	if m.InPort > 0 {
-		parts = append(parts, "in_port="+strconv.Itoa(int(m.InPort)))
-	}
-	if m.DlSrc != "" {
-		parts = append(parts, "dl_src="+m.DlSrc)
-	}
-	if m.DlDst != "" {
-		parts = append(parts, "dl_dst="+m.DlDst)
-	}
-	if m.DlType > 0 {
-		parts = append(parts, "dl_type="+fmt.Sprintf("0x%04x", m.DlType))
-	}
-	if m.DlVLAN > 0 {
-		parts = append(parts, "dl_vlan="+strconv.Itoa(int(m.DlVLAN)))
-	}
-	if m.NwSrc != "" {
-		parts = append(parts, "nw_src="+m.NwSrc)
-	}
-	if m.NwDst != "" {
-		parts = append(parts, "nw_dst="+m.NwDst)
-	}
-	if m.NwProto > 0 {
-		parts = append(parts, "nw_proto="+strconv.Itoa(int(m.NwProto)))
-	}
-	if m.TpSrc > 0 {
-		parts = append(parts, "tp_src="+strconv.Itoa(int(m.TpSrc)))
-	}
-	if m.TpDst > 0 {
-		parts = append(parts, "tp_dst="+strconv.Itoa(int(m.TpDst)))
-	}
-	return strings.Join(parts, ",")
-}
-
-// flowActionsToString converts a slice of FlowAction to an OVS-style actions string.
-// Example output: "output:1" or "drop" or "output:2,set_field:00:11:22:33:44:55->eth_src"
-func flowActionsToString(actions []FlowAction) string {
-	parts := make([]string, 0, len(actions))
-	for _, a := range actions {
-		switch a.Type {
-		case "output":
-			if a.Port > 0 {
-				parts = append(parts, "output:"+strconv.Itoa(int(a.Port)))
-			} else {
-				parts = append(parts, "output:all")
-			}
-		case "set_field":
-			if a.Field != "" && a.Value != "" {
-				parts = append(parts, "set_field:"+a.Value+"->"+a.Field)
-			}
-		case "push_vlan":
-			parts = append(parts, "push_vlan:0x8100")
-		case "pop_vlan":
-			parts = append(parts, "pop_vlan")
-		case "goto_table":
-			if a.TableID > 0 {
-				parts = append(parts, "goto_table:"+strconv.Itoa(int(a.TableID)))
-			}
-		case "group":
-			if a.GroupID > 0 {
-				parts = append(parts, "group:"+strconv.Itoa(int(a.GroupID)))
-			}
-		default:
-			parts = append(parts, a.Type)
-		}
-	}
-	if len(parts) == 0 {
-		return "drop"
-	}
-	return strings.Join(parts, ",")
-}
-
-// =============================================================================
 // Compile-time Interface Verification
 // =============================================================================
 
 // Ensure RESTAdapter implements SDNCommands interface.
 var _ SDNCommands = (*RESTAdapter)(nil)
-
-// restFlowCookie reads the REST flow list's hex cookie string; a cookie
-// that does not parse is reported as 0, which no API-added flow carries.
-func restFlowCookie(s string) uint64 {
-	v, err := strconv.ParseUint(strings.TrimPrefix(strings.ToLower(s), "0x"), 16, 64)
-	if err != nil {
-		return 0
-	}
-	return v
-}

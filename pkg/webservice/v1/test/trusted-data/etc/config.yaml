@@ -72,7 +72,6 @@ hostmaster: ""
 log-dir: trusted-data/log
 log-format: json
 platform-dir: trusted-data
-runtime-user: ""
 tenant-id: ""
 tpm:
   device: /dev/tpmrm0

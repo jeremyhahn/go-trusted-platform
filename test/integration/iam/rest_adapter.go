@@ -24,7 +24,39 @@ import (
 	"io"
 	"net/http"
 	"time"
+
+	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/proto"
+
+	pb "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
+
+// listReplyJSON decodes the protojson list replies the REST API writes,
+// ignoring fields newer than this suite.
+var listReplyJSON = protojson.UnmarshalOptions{DiscardUnknown: true}
+
+// decodeListReply decodes an IAM list reply (the items, pagination, total
+// and timestamp, camelCase protojson) into reply.
+func decodeListReply(operation string, body []byte, reply proto.Message) error {
+	if err := listReplyJSON.Unmarshal(body, reply); err != nil {
+		return &RESTAdapterError{
+			Operation: operation,
+			Message:   "failed to parse response: " + err.Error(),
+			Body:      string(body),
+		}
+	}
+	return nil
+}
+
+// listWindow is the limit and offset a list reply's pagination describes:
+// the page size, and the first item of the page it reports.
+func listWindow(pagination *pb.PaginationResponse) (limit, offset int32) {
+	limit = int32(pagination.GetPageSize())
+	if pagination.GetPage() > 1 {
+		offset = int32(pagination.GetPage()-1) * limit
+	}
+	return limit, offset
+}
 
 // RESTAdapterError represents an error from the REST adapter
 type RESTAdapterError struct {
@@ -351,14 +383,6 @@ func (a *RESTAdapter) DeleteUser(ctx context.Context, opts DeleteUserOptions) (*
 	return &DeleteUserResult{Success: resp.Success}, nil
 }
 
-// listUsersResponse represents the response for listing users
-type listUsersResponse struct {
-	Total  int64          `json:"total"`
-	Limit  int32          `json:"limit"`
-	Offset int32          `json:"offset"`
-	Users  []userResponse `json:"users"`
-}
-
 // ListUsers lists all users with optional filtering
 func (a *RESTAdapter) ListUsers(ctx context.Context, opts ListUsersOptions) (*ListUsersResult, error) {
 	path := fmt.Sprintf("/api/v1/iam/tenants/%s/users", opts.TenantID)
@@ -388,34 +412,20 @@ func (a *RESTAdapter) ListUsers(ctx context.Context, opts ListUsersOptions) (*Li
 		return nil, err
 	}
 
-	var resp listUsersResponse
-	if err := json.Unmarshal(body, &resp); err != nil {
-		var users []userResponse
-		if err := json.Unmarshal(body, &users); err != nil {
-			return nil, &RESTAdapterError{
-				Operation: "ListUsers",
-				Message:   "failed to parse response: " + err.Error(),
-				Body:      string(body),
-			}
-		}
-		result := &ListUsersResult{
-			Users: make([]*User, 0, len(users)),
-			Total: int64(len(users)),
-		}
-		for _, u := range users {
-			result.Users = append(result.Users, u.toUser())
-		}
-		return result, nil
+	var resp pb.ListIAMUsersResponse
+	if err := decodeListReply("ListUsers", body, &resp); err != nil {
+		return nil, err
 	}
 
+	limit, offset := listWindow(resp.GetPagination())
 	result := &ListUsersResult{
-		Users:  make([]*User, 0, len(resp.Users)),
-		Total:  resp.Total,
-		Limit:  resp.Limit,
-		Offset: resp.Offset,
+		Users:  make([]*User, 0, len(resp.GetUsers())),
+		Total:  resp.GetTotal(),
+		Limit:  limit,
+		Offset: offset,
 	}
-	for _, u := range resp.Users {
-		result.Users = append(result.Users, u.toUser())
+	for _, u := range resp.GetUsers() {
+		result.Users = append(result.Users, protoToUser(u))
 	}
 
 	return result, nil
@@ -579,14 +589,6 @@ func (a *RESTAdapter) DeleteGroup(ctx context.Context, opts DeleteGroupOptions) 
 	return &DeleteGroupResult{Success: resp.Success}, nil
 }
 
-// listGroupsResponse represents the response for listing groups
-type listGroupsResponse struct {
-	Total  int64           `json:"total"`
-	Limit  int32           `json:"limit"`
-	Offset int32           `json:"offset"`
-	Groups []groupResponse `json:"groups"`
-}
-
 // ListGroups lists all groups with optional filtering
 func (a *RESTAdapter) ListGroups(ctx context.Context, opts ListGroupsOptions) (*ListGroupsResult, error) {
 	path := fmt.Sprintf("/api/v1/iam/tenants/%s/groups", opts.TenantID)
@@ -607,34 +609,20 @@ func (a *RESTAdapter) ListGroups(ctx context.Context, opts ListGroupsOptions) (*
 		return nil, err
 	}
 
-	var resp listGroupsResponse
-	if err := json.Unmarshal(body, &resp); err != nil {
-		var groups []groupResponse
-		if err := json.Unmarshal(body, &groups); err != nil {
-			return nil, &RESTAdapterError{
-				Operation: "ListGroups",
-				Message:   "failed to parse response: " + err.Error(),
-				Body:      string(body),
-			}
-		}
-		result := &ListGroupsResult{
-			Groups: make([]*Group, 0, len(groups)),
-			Total:  int64(len(groups)),
-		}
-		for _, g := range groups {
-			result.Groups = append(result.Groups, g.toGroup())
-		}
-		return result, nil
+	var resp pb.ListIAMGroupsResponse
+	if err := decodeListReply("ListGroups", body, &resp); err != nil {
+		return nil, err
 	}
 
+	limit, offset := listWindow(resp.GetPagination())
 	result := &ListGroupsResult{
-		Groups: make([]*Group, 0, len(resp.Groups)),
-		Total:  resp.Total,
-		Limit:  resp.Limit,
-		Offset: resp.Offset,
+		Groups: make([]*Group, 0, len(resp.GetGroups())),
+		Total:  resp.GetTotal(),
+		Limit:  limit,
+		Offset: offset,
 	}
-	for _, g := range resp.Groups {
-		result.Groups = append(result.Groups, g.toGroup())
+	for _, g := range resp.GetGroups() {
+		result.Groups = append(result.Groups, protoToGroup(g))
 	}
 
 	return result, nil
@@ -802,14 +790,6 @@ func (a *RESTAdapter) DeleteRole(ctx context.Context, opts DeleteRoleOptions) (*
 	return &DeleteRoleResult{Success: resp.Success}, nil
 }
 
-// listRolesResponse represents the response for listing roles
-type listRolesResponse struct {
-	Total  int64          `json:"total"`
-	Limit  int32          `json:"limit"`
-	Offset int32          `json:"offset"`
-	Roles  []roleResponse `json:"roles"`
-}
-
 // ListRoles lists all roles with optional filtering
 func (a *RESTAdapter) ListRoles(ctx context.Context, opts ListRolesOptions) (*ListRolesResult, error) {
 	path := fmt.Sprintf("/api/v1/iam/tenants/%s/roles", opts.TenantID)
@@ -830,34 +810,20 @@ func (a *RESTAdapter) ListRoles(ctx context.Context, opts ListRolesOptions) (*Li
 		return nil, err
 	}
 
-	var resp listRolesResponse
-	if err := json.Unmarshal(body, &resp); err != nil {
-		var roles []roleResponse
-		if err := json.Unmarshal(body, &roles); err != nil {
-			return nil, &RESTAdapterError{
-				Operation: "ListRoles",
-				Message:   "failed to parse response: " + err.Error(),
-				Body:      string(body),
-			}
-		}
-		result := &ListRolesResult{
-			Roles: make([]*Role, 0, len(roles)),
-			Total: int64(len(roles)),
-		}
-		for _, r := range roles {
-			result.Roles = append(result.Roles, r.toRole())
-		}
-		return result, nil
+	var resp pb.ListIAMRolesResponse
+	if err := decodeListReply("ListRoles", body, &resp); err != nil {
+		return nil, err
 	}
 
+	limit, offset := listWindow(resp.GetPagination())
 	result := &ListRolesResult{
-		Roles:  make([]*Role, 0, len(resp.Roles)),
-		Total:  resp.Total,
-		Limit:  resp.Limit,
-		Offset: resp.Offset,
+		Roles:  make([]*Role, 0, len(resp.GetRoles())),
+		Total:  resp.GetTotal(),
+		Limit:  limit,
+		Offset: offset,
 	}
-	for _, r := range resp.Roles {
-		result.Roles = append(result.Roles, r.toRole())
+	for _, r := range resp.GetRoles() {
+		result.Roles = append(result.Roles, protoToRole(r))
 	}
 
 	return result, nil

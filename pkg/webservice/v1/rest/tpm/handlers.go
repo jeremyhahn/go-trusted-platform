@@ -340,8 +340,8 @@ func (h *Handlers) DeleteAK(w http.ResponseWriter, r *http.Request) {
 	}
 	resp, err := h.server.DeleteAK(r.Context(), req)
 	if err != nil {
-		// DeleteAK refuses (the IAK is not evicted); the refusal is 412.
-		protorest.WriteIdentityDeleteError(w, r, h.respWriter, err)
+		// DeleteAK refuses (the IAK is not evicted); the refusal is FailedPrecondition, a 409 (#665).
+		protorest.WriteError(w, r, h.respWriter, err)
 		return
 	}
 	protorest.WriteSuccess(w, r, h.respWriter, resp)

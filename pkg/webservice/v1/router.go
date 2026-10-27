@@ -555,6 +555,9 @@ func (v1Router *Router) deviceRoutes() {
 	}
 }
 
+// dnsRoutes mounts /dns when a DNS backend is configured. The routes call
+// the DNSService gRPC server, so REST and gRPC share one service path and one
+// wire shape.
 func (v1Router *Router) dnsRoutes() {
 	dnsService := v1Router.restHandlerRegistry.DNSService()
 	v1Router.serviceRegistry.requireService(
@@ -562,7 +565,7 @@ func (v1Router *Router) dnsRoutes() {
 		func() {
 			dnsRouter := restdns.NewDNSRouter(
 				v1Router.logger,
-				dnsService,
+				v1Router.restHandlerRegistry.DNSServiceServer(),
 				v1Router.responseWriter)
 			// Authoritative zone and record CRUD plus DNSSEC signing.
 			// Zone contents are the platform's internal name map, so the

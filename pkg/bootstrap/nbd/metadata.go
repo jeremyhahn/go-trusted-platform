@@ -73,28 +73,28 @@ func (f *MetadataFile) Close() error {
 }
 
 // OpenMetadataFile opens name, a slash-separated path matched without regard
-// to case as FAT does, in the metadata area of identity's volume under
-// volumeDir. A volume that does not exist, or holds no partition table, is
+// to case as FAT does, in the metadata area of identity's volume, which it
+// attaches through volumes as the export server does. A volume that does not exist, or holds no partition table, is
 // ErrNotInstalled; one that is partitioned but does not hold name in a
 // readable metadata area is ErrMetadataArea.
-func OpenMetadataFile(volumeDir, identity, name string) (*MetadataFile, error) {
-	if !validIdentity(identity) {
-		return nil, ErrVolume{Identity: identity, Op: "validate", Cause: fs.ErrInvalid}
-	}
-	store := &volumeStore{dir: volumeDir}
-	volume, err := os.Open(store.path(identity))
+func OpenMetadataFile(volumes VolumeProvider, identity, name string) (*MetadataFile, error) {
+	path, err := volumes.Attach(identity)
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil, ErrNotInstalled{Identity: identity}
 	}
 	if err != nil {
+		return nil, err
+	}
+	volume, err := os.Open(path)
+	if err != nil {
 		return nil, ErrVolume{Identity: identity, Op: "open", Cause: err}
 	}
-	info, err := volume.Stat()
+	size, err := volumeSize(identity, volume)
 	if err != nil {
-		return nil, closeAfter(identity, volume, ErrVolume{Identity: identity, Op: "stat", Cause: err})
+		return nil, closeAfter(identity, volume, err)
 	}
 
-	area := &metadataReader{identity: identity, volume: volume, size: info.Size()}
+	area := &metadataReader{identity: identity, volume: volume, size: size}
 	reader, size, err := area.open(name)
 	if err != nil {
 		return nil, closeAfter(identity, volume, err)

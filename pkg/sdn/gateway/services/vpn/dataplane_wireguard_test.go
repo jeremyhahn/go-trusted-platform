@@ -260,3 +260,60 @@ func TestDatapathPlane_ForwardsAWireGuardPeer(t *testing.T) {
 	plane.installErr = &ErrPeerKeyInvalid{Kind: DataPlaneWireGuard, Reason: "the public key is not 32 bytes"}
 	assert.Equal(t, plane.installErr, p.InstallPeer(context.Background(), lease))
 }
+
+// TestConfig_WireGuardKeysOutsideFIPS pins the `wireguard.*` keys where the
+// plane exists: read from YAML, defaulted only when wireguard is offered,
+// range-checked, and the `masque.*` keys refused when masque is not offered.
+func TestConfig_WireGuardKeysOutsideFIPS(t *testing.T) {
+	t.Run("the listen port defaults for an offered plane", func(t *testing.T) {
+		cfg := parseVPNConfig(t, `
+pool: vpn-clients
+allow-to: [management]
+data-planes: [wireguard]
+`)
+		require.NoError(t, cfg.Validate())
+		assert.Equal(t, DefaultWireGuardListenPort, cfg.WireGuard.ListenPort)
+	})
+	t.Run("the listen port is read", func(t *testing.T) {
+		cfg := parseVPNConfig(t, `
+pool: vpn-clients
+allow-to: [management]
+data-planes: [wireguard]
+wireguard:
+  listen-port: 51821
+`)
+		require.NoError(t, cfg.Validate())
+		assert.Equal(t, 51821, cfg.WireGuard.ListenPort)
+	})
+	t.Run("a listen port out of range is refused", func(t *testing.T) {
+		cfg := testConfig()
+		cfg.DataPlanes = []DataPlaneKind{DataPlaneWireGuard}
+		cfg.MASQUE = MASQUESettings{}
+		cfg.WireGuard.ListenPort = 65536
+		assertInvalidField(t, cfg.WithDefaults().Validate(), "wireguard.listen-port")
+		cfg.WireGuard.ListenPort = -1
+		assertInvalidField(t, cfg.WithDefaults().Validate(), "wireguard.listen-port")
+	})
+	t.Run("masque keys without the masque plane are refused", func(t *testing.T) {
+		for name, set := range map[string]func(*MASQUESettings){
+			"template": func(m *MASQUESettings) { m.Routes = nil },
+			"routes":   func(m *MASQUESettings) { m.Template = "" },
+		} {
+			t.Run(name, func(t *testing.T) {
+				cfg := testConfig()
+				cfg.DataPlanes = []DataPlaneKind{DataPlaneWireGuard}
+				set(&cfg.MASQUE)
+				assertInvalidField(t, cfg.WithDefaults().Validate(), "masque")
+			})
+		}
+	})
+	t.Run("both planes need both key groups", func(t *testing.T) {
+		cfg := testConfig()
+		cfg.DataPlanes = []DataPlaneKind{DataPlaneMASQUE, DataPlaneWireGuard}
+		cfg = cfg.WithDefaults()
+		require.NoError(t, cfg.Validate())
+		assert.Equal(t, DefaultWireGuardListenPort, cfg.WireGuard.ListenPort)
+		cfg.MASQUE.Routes = nil
+		assertInvalidField(t, cfg.Validate(), "masque.routes")
+	})
+}

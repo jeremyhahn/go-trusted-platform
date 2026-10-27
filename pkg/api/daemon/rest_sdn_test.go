@@ -5,16 +5,16 @@ package daemon
 
 import (
 	"context"
-	"encoding/json"
 	"net/http"
 	"testing"
 
-	restapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/rest"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/proto"
 )
 
 // newRESTServerWithSDN wires a test SDN service holding bridge br0 into a
@@ -28,13 +28,23 @@ func newRESTServerWithSDN(t *testing.T) (*RESTServer, *SDNService) {
 	return server, svc
 }
 
-func listRESTVLANs(t *testing.T, server *RESTServer) restapi.VLANListResponse {
+// decodeREST decodes a protojson response body the SDN routes wrote.
+func decodeREST(t *testing.T, body []byte, msg proto.Message) {
+	t.Helper()
+	require.NoError(t, protojson.Unmarshal(body, msg), string(body))
+}
+
+func listRESTVLANs(t *testing.T, server *RESTServer) []*platformv1.VLAN {
 	t.Helper()
 	code, body := doJSON(t, server, http.MethodGet, "/api/v1/sdn/vlans?bridge_id=br0", nil)
 	require.Equal(t, http.StatusOK, code, string(body))
-	var resp restapi.VLANListResponse
-	require.NoError(t, json.Unmarshal(body, &resp))
-	return resp
+	var resp platformv1.ListVLANsResponse
+	decodeREST(t, body, &resp)
+	return resp.GetVlans()
+}
+
+func vlanBody(config map[string]interface{}) map[string]interface{} {
+	return map[string]interface{}{"config": config}
 }
 
 func TestRESTServer_SetSDNService_SharesVLANState(t *testing.T) {
@@ -42,8 +52,11 @@ func TestRESTServer_SetSDNService_SharesVLANState(t *testing.T) {
 	ctx := context.Background()
 
 	code, body := doJSON(t, server, http.MethodPost, "/api/v1/sdn/vlans",
-		map[string]interface{}{"vlan_id": 100, "name": "tenant-a", "bridge_id": "br0"})
-	require.Equal(t, http.StatusCreated, code, string(body))
+		vlanBody(map[string]interface{}{"vlanId": 100, "name": "tenant-a", "bridgeId": "br0"}))
+	require.Equal(t, http.StatusOK, code, string(body))
+	var created platformv1.CreateVLANResponse
+	decodeREST(t, body, &created)
+	assert.Equal(t, uint32(100), created.GetVlan().GetConfig().GetVlanId())
 
 	grpcList, err := svc.ListVLANs(ctx, &platformv1.ListVLANsRequest{BridgeId: "br0"})
 	require.NoError(t, err)
@@ -54,17 +67,17 @@ func TestRESTServer_SetSDNService_SharesVLANState(t *testing.T) {
 		Config: &platformv1.VLANConfig{VlanId: 200, BridgeId: "br0"},
 	})
 	require.NoError(t, err)
-	assert.Equal(t, 2, listRESTVLANs(t, server).Count, "a VLAN created over gRPC is visible over REST")
+	assert.Len(t, listRESTVLANs(t, server), 2, "a VLAN created over gRPC is visible over REST")
 
 	code, body = doJSON(t, server, http.MethodPost, "/api/v1/sdn/vlans",
-		map[string]interface{}{"vlan_id": 100, "bridge_id": "br0"})
+		vlanBody(map[string]interface{}{"vlanId": 100, "bridgeId": "br0"}))
 	assert.Equal(t, http.StatusConflict, code, string(body))
 
 	code, body = doJSON(t, server, http.MethodDelete, "/api/v1/sdn/vlans/100?bridge_id=br0", nil)
 	require.Equal(t, http.StatusOK, code, string(body))
 	remaining := listRESTVLANs(t, server)
-	require.Equal(t, 1, remaining.Count)
-	assert.Equal(t, uint32(200), remaining.VLANs[0].VLANID)
+	require.Len(t, remaining, 1)
+	assert.Equal(t, uint32(200), remaining[0].GetConfig().GetVlanId())
 
 	code, body = doJSON(t, server, http.MethodDelete, "/api/v1/sdn/vlans/100?bridge_id=br0", nil)
 	assert.Equal(t, http.StatusNotFound, code, string(body))
@@ -74,23 +87,23 @@ func TestRESTServer_SetSDNService_RejectsWhatGRPCRejects(t *testing.T) {
 	server, _ := newRESTServerWithSDN(t)
 
 	cases := []struct {
-		name string
-		body map[string]interface{}
-		want int
+		name   string
+		config map[string]interface{}
+		want   int
 	}{
-		{"VLAN ID zero", map[string]interface{}{"vlan_id": 0, "bridge_id": "br0"}, http.StatusBadRequest},
-		{"VLAN ID above 4095", map[string]interface{}{"vlan_id": 4096, "bridge_id": "br0"}, http.StatusBadRequest},
-		{"missing bridge", map[string]interface{}{"vlan_id": 10}, http.StatusBadRequest},
-		{"unknown bridge", map[string]interface{}{"vlan_id": 10, "bridge_id": "br-missing"}, http.StatusNotFound},
+		{"VLAN ID zero", map[string]interface{}{"vlanId": 0, "bridgeId": "br0"}, http.StatusBadRequest},
+		{"VLAN ID above 4095", map[string]interface{}{"vlanId": 4096, "bridgeId": "br0"}, http.StatusBadRequest},
+		{"missing bridge", map[string]interface{}{"vlanId": 10}, http.StatusBadRequest},
+		{"unknown bridge", map[string]interface{}{"vlanId": 10, "bridgeId": "br-missing"}, http.StatusNotFound},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			code, body := doJSON(t, server, http.MethodPost, "/api/v1/sdn/vlans", tc.body)
+			code, body := doJSON(t, server, http.MethodPost, "/api/v1/sdn/vlans", vlanBody(tc.config))
 			assert.Equal(t, tc.want, code, string(body))
 		})
 	}
 
-	assert.Equal(t, 0, listRESTVLANs(t, server).Count)
+	assert.Empty(t, listRESTVLANs(t, server))
 }
 
 func TestRESTServer_SetSDNService_SharesPolicyState(t *testing.T) {
@@ -98,16 +111,20 @@ func TestRESTServer_SetSDNService_SharesPolicyState(t *testing.T) {
 	ctx := context.Background()
 
 	code, body := doJSON(t, server, http.MethodPost, "/api/v1/sdn/policies", map[string]interface{}{
-		"name":    "web",
-		"type":    "acl",
-		"rules":   []map[string]interface{}{{"action": "deny", "protocol": "tcp", "destination_port": 22}},
-		"targets": []map[string]interface{}{{"type": "bridge", "id": "br0"}},
+		"config": map[string]interface{}{
+			"name":    "web",
+			"type":    "POLICY_TYPE_ACL",
+			"rules":   []map[string]interface{}{{"action": "POLICY_RULE_ACTION_DENY", "match": map[string]interface{}{"protocol": "tcp", "destinationPort": 22}}},
+			"targets": []map[string]interface{}{{"type": "POLICY_TARGET_TYPE_BRIDGE", "id": "br0"}},
+		},
 	})
-	require.Equal(t, http.StatusCreated, code, string(body))
-	var created restapi.PolicyResponse
-	require.NoError(t, json.Unmarshal(body, &created))
+	require.Equal(t, http.StatusOK, code, string(body))
+	var created platformv1.ApplyPolicyResponse
+	decodeREST(t, body, &created)
+	policyID := created.GetPolicy().GetId()
+	require.NotEmpty(t, policyID)
 
-	got, err := svc.GetPolicy(ctx, &platformv1.GetPolicyRequest{PolicyId: created.ID})
+	got, err := svc.GetPolicy(ctx, &platformv1.GetPolicyRequest{PolicyId: policyID})
 	require.NoError(t, err, "a policy applied over REST is visible over gRPC")
 	assert.Equal(t, platformv1.PolicyType_POLICY_TYPE_ACL, got.GetPolicy().GetConfig().GetType())
 	require.Len(t, got.GetPolicy().GetConfig().GetRules(), 1)
@@ -121,22 +138,24 @@ func TestRESTServer_SetSDNService_SharesPolicyState(t *testing.T) {
 	require.Equal(t, http.StatusOK, code, "a policy applied over gRPC is visible over REST: %s", body)
 	code, body = doJSON(t, server, http.MethodGet, "/api/v1/sdn/policies?type=acl", nil)
 	require.Equal(t, http.StatusOK, code, string(body))
-	var listed restapi.SDNPolicyListResponse
-	require.NoError(t, json.Unmarshal(body, &listed))
-	require.Equal(t, 1, listed.Count, "the type filter reaches the service")
-	assert.Equal(t, "web", listed.Policies[0].Name)
+	var listed platformv1.ListPoliciesResponse
+	decodeREST(t, body, &listed)
+	require.Len(t, listed.GetPolicies(), 1, "the type filter reaches the service")
+	assert.Equal(t, "web", listed.GetPolicies()[0].GetConfig().GetName())
 
-	code, body = doJSON(t, server, http.MethodPost, "/api/v1/sdn/policies", map[string]interface{}{"name": "web"})
+	code, body = doJSON(t, server, http.MethodPost, "/api/v1/sdn/policies",
+		map[string]interface{}{"config": map[string]interface{}{"name": "web"}})
 	assert.Equal(t, http.StatusConflict, code, string(body))
-	code, body = doJSON(t, server, http.MethodPost, "/api/v1/sdn/policies", map[string]interface{}{"type": "acl"})
+	code, body = doJSON(t, server, http.MethodPost, "/api/v1/sdn/policies",
+		map[string]interface{}{"config": map[string]interface{}{"type": "POLICY_TYPE_ACL"}})
 	assert.Equal(t, http.StatusBadRequest, code, "a nameless policy is rejected as gRPC rejects it: %s", body)
 
-	code, body = doJSON(t, server, http.MethodDelete, "/api/v1/sdn/policies/"+created.ID, nil)
+	code, body = doJSON(t, server, http.MethodDelete, "/api/v1/sdn/policies/"+policyID, nil)
 	require.Equal(t, http.StatusOK, code, string(body))
-	_, err = svc.GetPolicy(ctx, &platformv1.GetPolicyRequest{PolicyId: created.ID})
+	_, err = svc.GetPolicy(ctx, &platformv1.GetPolicyRequest{PolicyId: policyID})
 	assert.Equal(t, codes.NotFound, status.Code(err), "a policy deleted over REST is gone over gRPC")
 
-	code, body = doJSON(t, server, http.MethodDelete, "/api/v1/sdn/policies/"+created.ID, nil)
+	code, body = doJSON(t, server, http.MethodDelete, "/api/v1/sdn/policies/"+policyID, nil)
 	assert.Equal(t, http.StatusNotFound, code, string(body))
 }
 
@@ -145,7 +164,7 @@ func TestRESTServer_SetSDNService_NilServiceAnswers503(t *testing.T) {
 	server.SetSDNService(nil)
 
 	code, _ := doJSON(t, server, http.MethodPost, "/api/v1/sdn/vlans",
-		map[string]interface{}{"vlan_id": 100, "bridge_id": "br0"})
+		vlanBody(map[string]interface{}{"vlanId": 100, "bridgeId": "br0"}))
 	assert.Equal(t, http.StatusServiceUnavailable, code)
 
 	code, _ = doJSON(t, server, http.MethodGet, "/api/v1/sdn/vlans?bridge_id=br0", nil)

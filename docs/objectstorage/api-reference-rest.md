@@ -43,11 +43,11 @@ Content-Type: application/json
 
 | gRPC status | HTTP |
 |-------------|------|
-| `INVALID_ARGUMENT`, `FAILED_PRECONDITION`, undecodable body or query | `400` |
+| `INVALID_ARGUMENT`, undecodable body or query | `400` |
 | `UNAUTHENTICATED` | `401` |
 | `PERMISSION_DENIED` | `403` |
 | `NOT_FOUND` | `404` |
-| `ALREADY_EXISTS`, `ABORTED` | `409` |
+| `ALREADY_EXISTS`, `ABORTED`, `FAILED_PRECONDITION` | `409` |
 | `UNAVAILABLE` (service not configured) | `503` |
 | `DEADLINE_EXCEEDED` | `504` |
 | anything unmapped | `500` |

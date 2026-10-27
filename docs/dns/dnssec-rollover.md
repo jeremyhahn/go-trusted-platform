@@ -41,7 +41,7 @@ There is no supported procedure for changing a zone's keys today.
 | Key timing states and scheduling from `lifetime` | RFC 7583 |
 | CDS/CDNSKEY publication for the parent | RFC 7344 |
 | DS update at the parent over DNS UPDATE | RFC 2136 (no UPDATE support, see [dynamic-dns.md](dynamic-dns.md)) |
-| Rollover CLI or API | none (there is no `platformctl dns` group) |
+| Rollover CLI or API | none (`platformctl dns dnssec` signs and reports, it does not roll keys) |
 
 ## See also
 

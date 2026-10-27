@@ -24,14 +24,14 @@ scope ([api.md](api.md) §9):
 the listener's device-identity routes (`pkg/api/daemon/rest_idevid.go`); they
 take no token and are not described here, except for one rule: `DELETE /idevid`
 and `DELETE /iak` are refused until the owner rules on eviction. They answer
-`412 Precondition Failed` — the listener's status for the gRPC class
-`FailedPrecondition`, the class every other transport returns — and change
+`409 Conflict` — the platform's status for the gRPC class
+`FailedPrecondition` (#665), the class every other transport returns — and change
 nothing: no key, no certificate, no state (#304). The certificates have their
 own `DELETE /idevid/cert` and `DELETE /iak/cert`, which do delete and answer
-in gRPC's classes (#704): no TPM is `412`, a missing certificate `404`, any
+in gRPC's classes (#704): no TPM is `409`, a missing certificate `404`, any
 other TPM failure `500` (api.md §8). The web
 service serves the same two `DELETE` paths, behind its admin role gate, with
-the same `412` and the same error message
+the same `409` and the same error message
 (`pkg/webservice/v1/rest/idevid/router.go`).
 
 The listener also serves `POST /api/v1/idevid/ldevid` (`CreateLDevID`,
@@ -83,7 +83,7 @@ Unix and embedded call — and speaks that RPC's messages
 | `DELETE /srk`, `DELETE /srk/{handle}` | `DeleteSRK` | `handle`, `algorithm`, `password` |
 | `GET /ak` | `GetAK` | `?algorithm=&handle=` |
 | `POST /ak` | `CreateAK` | `attributes`, `persistent`, `parentHandle`, `parentPassword` |
-| `DELETE /ak`, `DELETE /ak/{handle}` | `DeleteAK` (refused, `412`) | `handle`, `algorithm`, `password` (ignored) |
+| `DELETE /ak`, `DELETE /ak/{handle}` | `DeleteAK` (refused, `409`) | `handle`, `algorithm`, `password` (ignored) |
 | `POST /make-credential` | `MakeCredential` | `akName`, `secret`, `ekCert`, `iakPub` |
 | `POST /activate-credential` | `ActivateCredential` | `credentialBlob`, `encryptedSecret` |
 | `POST /quote` | `Quote` | `akHandle`, `akPassword`, `pcrIndices`, `pcrBank`, `nonce` |
@@ -108,9 +108,8 @@ fields in the body — the web service serves only that form.
 
 `DELETE /ak` and `DELETE /ak/{handle}` are refused: `DeleteAK` names the IAK,
 which is not evicted, so it answers `FailedPrecondition` as `DELETE
-/api/v1/tpm/iak` does, and both REST servers send it as `412` with the typed
-error's message rather than the shared `400` (#704). Any other `DeleteAK`
-failure takes the shared mapping. The TPM is not touched.
+/api/v1/tpm/iak` does, and both REST servers send it as `409` with the typed
+error's message through the shared mapping (#704, #665). The TPM is not touched.
 
 ### Info
 
@@ -165,12 +164,11 @@ A refused request, or an RPC error, is the standard error body:
 
 | Status | Cause |
 |--------|-------|
-| `400 Bad Request` | A malformed or unknown body field (`ErrInvalidRequestBody`) or URL parameter (`ErrInvalidQueryParameter`); the RPC's `InvalidArgument` or `FailedPrecondition` |
+| `400 Bad Request` | A malformed or unknown body field (`ErrInvalidRequestBody`) or URL parameter (`ErrInvalidQueryParameter`); the RPC's `InvalidArgument` |
 | `401 Unauthorized` | Neither a bearer token nor a verified client certificate, or a token the validator rejects (`ErrRouteUnauthenticated`); the RPC's `Unauthenticated` |
 | `403 Forbidden` | The token lacks the route's scope, or the listener has no scope guard (`ErrRouteForbidden`); the RPC's `PermissionDenied` |
 | `404 Not Found` | The RPC's `NotFound` |
-| `409 Conflict` | The RPC's `AlreadyExists` or `Aborted` |
-| `412 Precondition Failed` | `DELETE /ak` and `DELETE /ak/{handle}`: the RPC's `FailedPrecondition` |
+| `409 Conflict` | The RPC's `AlreadyExists`, `Aborted` or `FailedPrecondition`, including the refused `DELETE /ak` and `DELETE /ak/{handle}` |
 | `500 Internal Server Error` | Any other RPC error, or a response that cannot be encoded |
 | `501 Not Implemented` | The RPC's `Unimplemented` |
 | `503 Service Unavailable` | No TPM service (`ErrTPMServiceNotAvailable`), or the RPC's `Unavailable` |

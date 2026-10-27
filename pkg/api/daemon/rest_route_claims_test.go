@@ -140,10 +140,6 @@ var daemonDivergentClaims = map[string]string{
 	"/platform.v1.ProvisioningGateway/RegisterPXEDevice":     pxeGatewayOnWebservice,
 	"/platform.v1.ProvisioningGateway/ReportDeviceState":     pxeGatewayOnWebservice,
 
-	"/platform.v1.SDNService/AuthenticatePort": "#452: the daemon's SDN routes have no port auth",
-	"/platform.v1.SDNService/RevokePortAuth":   "#452: the daemon's SDN routes have no port auth",
-	"/platform.v1.SDNService/DeleteFlow":       "#452: the daemon deletes at DELETE /api/v1/sdn/flows/{id}; the claim is the webservice's collection path",
-
 	"/platform.v1.TenantService/CheckQuota":             "#452 (claim from #304): the daemon checks at POST /api/v1/tenants/{id}/check-quota with its own JSON; the claim is the webservice's /quota-check (sdk_rest_roundtrip_test.go)",
 	"/platform.v1.TenantService/GetTenantBarrierStatus": "#452: the daemon serves GET /api/v1/tenants/{id}/barrier/status (docs/tenant/api.md); the claim is the webservice's /barrier",
 	"/platform.v1.TenantService/GetTenantByName":        "#452 (claim from #304): the daemon looks up at GET /api/v1/tenants/name/{name}; the claim is the webservice's system-only /by-name/{name} (sdk_rest_roundtrip_test.go)",

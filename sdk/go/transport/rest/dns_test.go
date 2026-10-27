@@ -22,6 +22,8 @@ import (
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/proto"
 
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
@@ -54,77 +56,164 @@ func dnsOverREST(t *testing.T, payload string) (platformv1.DNSServiceClient, *dn
 	return platformv1.NewDNSServiceClient(a.Connection()), sent
 }
 
-const dnsZonePayload = `{"id":7,"name":"example.com.","ttl":3600,"internal":true,` +
-	`"created_at":"2026-10-14T00:00:00Z","records":{` +
+// dnsZoneJSON is a Zone as the server's protojson writes it.
+const dnsZoneJSON = `{"id":7,"name":"example.com.","ttl":3600,"description":"","internal":true,"records":{` +
 	`"soa":{"name":"@","mname":"ns1.example.com.","rname":"admin.example.com.","serial":2026101401,"ttl":3600},` +
-	`"a":[{"name":"www","value":"10.0.0.1","ttl":300}],` +
-	`"mx":[{"name":"@","value":"mail.example.com.","priority":10,"ttl":300}]}}`
+	`"aRecords":[{"name":"www","value":"10.0.0.1","ttl":300}],` +
+	`"mxRecords":[{"name":"@","value":"mail.example.com.","priority":10,"ttl":300}]}}`
 
-const dnsRecordsPayload = `{"records":[` +
-	`{"type":"A","a":{"name":"www","value":"10.0.0.1","ttl":300}},` +
-	`{"type":"MX","mx":{"name":"@","value":"mail.example.com.","priority":10,"ttl":300}}],` +
+// dnsRecordsJSON is a records reply as the server's protojson writes it.
+const dnsRecordsJSON = `{"records":[` +
+	`{"type":"RECORD_TYPE_A","a":{"name":"www","value":"10.0.0.1","ttl":300}},` +
+	`{"type":"RECORD_TYPE_MX","mx":{"name":"@","value":"mail.example.com.","priority":10,"ttl":300}}],` +
 	`"authoritative":true}`
 
-// TestDNS_SDKOverREST_IdentifiersTravelInThePath: each record and zone call
-// reaches the route the webservice serves, with the zone, record type and
-// record name in the path and the filters in the query.
-func TestDNS_SDKOverREST_IdentifiersTravelInThePath(t *testing.T) {
+var dnsTestRecord = &platformv1.Record{
+	Type:   platformv1.RecordType_RECORD_TYPE_A,
+	Record: &platformv1.Record_A{A: &platformv1.ARecord{Name: "www", Value: "10.0.0.1", Ttl: 300}},
+}
+
+// TestDNS_SDKOverREST_EveryCallReachesItsRoute: each DNS call reaches the
+// route the webservice serves, with the zone, record type and record name in
+// the path, the filters in the query, and the rest of the proto request as
+// the body.
+func TestDNS_SDKOverREST_EveryCallReachesItsRoute(t *testing.T) {
+	ctx := context.Background()
 	cases := []struct {
-		name      string
-		payload   string
-		call      func(platformv1.DNSServiceClient) error
-		method    string
-		path      string
-		query     string
-		bodyEmpty bool
+		name    string
+		payload string
+		call    func(platformv1.DNSServiceClient) error
+		method  string
+		path    string
+		query   string
+		body    map[string]interface{}
 	}{
 		{
-			name:    "DeleteZone",
-			payload: `{"success":true,"message":"zone deleted successfully"}`,
+			name: "CreateZone", payload: `{"status":{"success":true},"zone":` + dnsZoneJSON + `}`,
 			call: func(c platformv1.DNSServiceClient) error {
-				_, err := c.DeleteZone(context.Background(), &platformv1.DeleteZoneRequest{Name: "example.com."})
+				_, err := c.CreateZone(ctx, &platformv1.CreateZoneRequest{Name: "example.com.", Ttl: 3600})
 				return err
 			},
-			method: http.MethodDelete, path: "/api/v1/dns/zones/example.com.", bodyEmpty: true,
+			method: http.MethodPost, path: "/api/v1/dns/zones",
+			body: map[string]interface{}{"name": "example.com.", "ttl": float64(3600)},
 		},
 		{
-			name:    "DeleteRecord",
-			payload: dnsZonePayload,
+			name: "ListZones", payload: `{"zones":[` + dnsZoneJSON + `]}`,
 			call: func(c platformv1.DNSServiceClient) error {
-				_, err := c.DeleteRecord(context.Background(), &platformv1.DeleteRecordRequest{
-					ZoneName: "example.com.", Type: platformv1.RecordType_RECORD_TYPE_AAAA, Name: "www"})
+				_, err := c.ListZones(ctx, &platformv1.ListZonesRequest{InternalOnly: true})
 				return err
 			},
-			method: http.MethodDelete, path: "/api/v1/dns/zones/example.com./records/AAAA/www", bodyEmpty: true,
+			method: http.MethodGet, path: "/api/v1/dns/zones",
+			body: map[string]interface{}{"internalOnly": true},
 		},
 		{
-			name:    "ListRecords filtered",
-			payload: dnsRecordsPayload,
+			name: "GetZone", payload: `{"zone":` + dnsZoneJSON + `}`,
 			call: func(c platformv1.DNSServiceClient) error {
-				_, err := c.ListRecords(context.Background(), &platformv1.ListRecordsRequest{
+				_, err := c.GetZone(ctx, &platformv1.GetZoneRequest{Name: "example.com."})
+				return err
+			},
+			method: http.MethodGet, path: "/api/v1/dns/zones/example.com.",
+		},
+		{
+			name: "UpdateZone", payload: `{"status":{"success":true},"zone":` + dnsZoneJSON + `}`,
+			call: func(c platformv1.DNSServiceClient) error {
+				_, err := c.UpdateZone(ctx, &platformv1.UpdateZoneRequest{Name: "example.com.", Ttl: 7200})
+				return err
+			},
+			method: http.MethodPut, path: "/api/v1/dns/zones/example.com.",
+			body: map[string]interface{}{"ttl": float64(7200)},
+		},
+		{
+			name: "DeleteZone", payload: `{"status":{"success":true}}`,
+			call: func(c platformv1.DNSServiceClient) error {
+				_, err := c.DeleteZone(ctx, &platformv1.DeleteZoneRequest{Name: "example.com."})
+				return err
+			},
+			method: http.MethodDelete, path: "/api/v1/dns/zones/example.com.",
+		},
+		{
+			name: "AddRecord", payload: `{"status":{"success":true},"zone":` + dnsZoneJSON + `}`,
+			call: func(c platformv1.DNSServiceClient) error {
+				_, err := c.AddRecord(ctx, &platformv1.AddRecordRequest{ZoneName: "example.com.", Record: dnsTestRecord})
+				return err
+			},
+			method: http.MethodPost, path: "/api/v1/dns/zones/example.com./records",
+			body: map[string]interface{}{"record": map[string]interface{}{
+				"type": "RECORD_TYPE_A",
+				"a":    map[string]interface{}{"name": "www", "value": "10.0.0.1", "ttl": float64(300)},
+			}},
+		},
+		{
+			name: "UpdateRecord", payload: `{"status":{"success":true},"zone":` + dnsZoneJSON + `}`,
+			call: func(c platformv1.DNSServiceClient) error {
+				_, err := c.UpdateRecord(ctx, &platformv1.UpdateRecordRequest{ZoneName: "example.com.", NewRecord: dnsTestRecord})
+				return err
+			},
+			method: http.MethodPut, path: "/api/v1/dns/zones/example.com./records",
+			body: map[string]interface{}{"newRecord": map[string]interface{}{
+				"type": "RECORD_TYPE_A",
+				"a":    map[string]interface{}{"name": "www", "value": "10.0.0.1", "ttl": float64(300)},
+			}},
+		},
+		{
+			name: "ListRecords filtered", payload: dnsRecordsJSON,
+			call: func(c platformv1.DNSServiceClient) error {
+				_, err := c.ListRecords(ctx, &platformv1.ListRecordsRequest{
 					ZoneName: "example.com.", Type: platformv1.RecordType_RECORD_TYPE_MX})
 				return err
 			},
-			method: http.MethodGet, path: "/api/v1/dns/zones/example.com./records", query: "type=MX", bodyEmpty: true,
+			method: http.MethodGet, path: "/api/v1/dns/zones/example.com./records", query: "type=MX",
 		},
 		{
-			name:    "ListRecords unfiltered",
-			payload: dnsRecordsPayload,
+			name: "ListRecords unfiltered", payload: dnsRecordsJSON,
 			call: func(c platformv1.DNSServiceClient) error {
-				_, err := c.ListRecords(context.Background(), &platformv1.ListRecordsRequest{ZoneName: "example.com."})
+				_, err := c.ListRecords(ctx, &platformv1.ListRecordsRequest{ZoneName: "example.com."})
 				return err
 			},
-			method: http.MethodGet, path: "/api/v1/dns/zones/example.com./records", bodyEmpty: true,
+			method: http.MethodGet, path: "/api/v1/dns/zones/example.com./records",
 		},
 		{
-			name:    "Resolve",
-			payload: dnsRecordsPayload,
+			name: "DeleteRecord", payload: `{"status":{"success":true},"zone":` + dnsZoneJSON + `}`,
 			call: func(c platformv1.DNSServiceClient) error {
-				_, err := c.Resolve(context.Background(), &platformv1.ResolveRequest{
+				_, err := c.DeleteRecord(ctx, &platformv1.DeleteRecordRequest{
+					ZoneName: "example.com.", Type: platformv1.RecordType_RECORD_TYPE_AAAA, Name: "www"})
+				return err
+			},
+			method: http.MethodDelete, path: "/api/v1/dns/zones/example.com./records/AAAA/www",
+		},
+		{
+			name: "SignZone", payload: `{"status":{"success":true},"zone":` + dnsZoneJSON + `}`,
+			call: func(c platformv1.DNSServiceClient) error {
+				_, err := c.SignZone(ctx, &platformv1.SignZoneRequest{ZoneName: "example.com."})
+				return err
+			},
+			method: http.MethodPost, path: "/api/v1/dns/zones/example.com./sign",
+		},
+		{
+			name: "GetDNSSECStatus", payload: `{"status":{"enabled":true,"zoneSigned":true}}`,
+			call: func(c platformv1.DNSServiceClient) error {
+				_, err := c.GetDNSSECStatus(ctx, &platformv1.GetDNSSECStatusRequest{ZoneName: "example.com."})
+				return err
+			},
+			method: http.MethodGet, path: "/api/v1/dns/zones/example.com./dnssec",
+		},
+		{
+			name: "Resolve", payload: dnsRecordsJSON,
+			call: func(c platformv1.DNSServiceClient) error {
+				_, err := c.Resolve(ctx, &platformv1.ResolveRequest{
 					Fqdn: "www.example.com.", Type: platformv1.RecordType_RECORD_TYPE_A})
 				return err
 			},
-			method: http.MethodGet, path: "/api/v1/dns/resolve", query: "fqdn=www.example.com.&type=A", bodyEmpty: true,
+			method: http.MethodGet, path: "/api/v1/dns/resolve", query: "fqdn=www.example.com.&type=A",
+		},
+		{
+			name: "Register", payload: `{"status":{"success":true},"zone":` + dnsZoneJSON + `}`,
+			call: func(c platformv1.DNSServiceClient) error {
+				_, err := c.Register(ctx, &platformv1.RegisterRequest{Fqdn: "host.example.com.", Ip: "10.0.0.9"})
+				return err
+			},
+			method: http.MethodPost, path: "/api/v1/dns/register",
+			body: map[string]interface{}{"fqdn": "host.example.com.", "ip": "10.0.0.9"},
 		},
 	}
 	for _, tc := range cases {
@@ -136,66 +225,84 @@ func TestDNS_SDKOverREST_IdentifiersTravelInThePath(t *testing.T) {
 			if sent.method != tc.method || sent.path != tc.path || sent.query != tc.query {
 				t.Errorf("sent %s %s?%s, want %s %s?%s", sent.method, sent.path, sent.query, tc.method, tc.path, tc.query)
 			}
-			if tc.bodyEmpty && len(sent.body) != 0 {
-				t.Errorf("body = %v, want no fields: every identifier travels in the URL", sent.body)
+			for field, want := range tc.body {
+				got, _ := json.Marshal(sent.body[field])
+				wantJSON, _ := json.Marshal(want)
+				if string(got) != string(wantJSON) {
+					t.Errorf("body[%s] = %s, want %s", field, got, wantJSON)
+				}
+			}
+			if len(tc.body) == 0 {
+				for field, value := range sent.body {
+					if value != "" && value != nil && value != float64(0) && value != false {
+						t.Errorf("body[%s] = %v: every identifier travels in the URL", field, value)
+					}
+				}
 			}
 		})
 	}
 }
 
-// TestDNS_SDKOverREST_AddRecord: the zone travels in the path and the record
-// as the server's AddRecordRequest, its type spelled as the mnemonic.
-func TestDNS_SDKOverREST_AddRecord(t *testing.T) {
-	client, sent := dnsOverREST(t, dnsZonePayload)
-
-	resp, err := client.AddRecord(context.Background(), &platformv1.AddRecordRequest{
-		ZoneName: "example.com.",
-		Record: &platformv1.Record{
-			Type:   platformv1.RecordType_RECORD_TYPE_A,
-			Record: &platformv1.Record_A{A: &platformv1.ARecord{Name: "www", Value: "10.0.0.1", Ttl: 300}},
-		},
-	})
+// TestDNS_SDKOverREST_RepliesAreTheProto: the server's protojson reply is
+// the gRPC reply, with no translation.
+func TestDNS_SDKOverREST_RepliesAreTheProto(t *testing.T) {
+	client, _ := dnsOverREST(t, `{"zone":`+dnsZoneJSON+`}`)
+	zone, err := client.GetZone(context.Background(), &platformv1.GetZoneRequest{Name: "example.com."})
 	if err != nil {
-		t.Fatalf("AddRecord over REST: %v", err)
+		t.Fatalf("GetZone over REST: %v", err)
+	}
+	records := zone.GetZone().GetRecords()
+	if zone.GetZone().GetId() != 7 || !zone.GetZone().GetInternal() || records.GetSoa().GetSerial() != 2026101401 {
+		t.Errorf("zone = %v", zone.GetZone())
+	}
+	if len(records.GetARecords()) != 1 || len(records.GetMxRecords()) != 1 || records.GetMxRecords()[0].GetPriority() != 10 {
+		t.Errorf("records = %v", records)
 	}
 
-	if sent.method != http.MethodPost || sent.path != "/api/v1/dns/zones/example.com./records" {
-		t.Errorf("sent %s %s, want POST /api/v1/dns/zones/example.com./records", sent.method, sent.path)
+	client, _ = dnsOverREST(t, dnsRecordsJSON)
+	resolved, err := client.Resolve(context.Background(), &platformv1.ResolveRequest{Fqdn: "www.example.com."})
+	if err != nil {
+		t.Fatalf("Resolve over REST: %v", err)
 	}
-	a, _ := sent.body["a"].(map[string]interface{})
-	if sent.body["type"] != "A" || a["name"] != "www" || a["value"] != "10.0.0.1" || a["ttl"] != float64(300) {
-		t.Errorf("body = %v, want type A and the A record", sent.body)
+	if !resolved.GetAuthoritative() || len(resolved.GetRecords()) != 2 || !proto.Equal(resolved.GetRecords()[0], dnsTestRecord) {
+		t.Errorf("reply = %v", resolved)
 	}
-	if _, ok := sent.body["zone_name"]; ok {
-		t.Errorf("body = %v: the zone travels in the path, not the body", sent.body)
-	}
-	if !resp.GetStatus().GetSuccess() || resp.GetZone().GetName() != "example.com." {
-		t.Errorf("reply = %v, want success and the example.com. zone", resp)
+	if resolved.GetRecords()[1].GetType() != platformv1.RecordType_RECORD_TYPE_MX {
+		t.Errorf("records[1] = %v", resolved.GetRecords()[1])
 	}
 }
 
-// TestDNS_SDKOverREST_RefusesARequestTheRouteCannotCarry: a record request
-// without its type is refused before anything is sent.
+// TestDNS_SDKOverREST_RefusesARequestTheRouteCannotCarry: a request whose
+// path identifier is unset is refused before anything is sent.
 func TestDNS_SDKOverREST_RefusesARequestTheRouteCannotCarry(t *testing.T) {
+	ctx := context.Background()
 	cases := []struct {
 		name string
 		call func(platformv1.DNSServiceClient) error
 	}{
 		{"DeleteRecord without type", func(c platformv1.DNSServiceClient) error {
-			_, err := c.DeleteRecord(context.Background(), &platformv1.DeleteRecordRequest{ZoneName: "example.com.", Name: "www"})
+			_, err := c.DeleteRecord(ctx, &platformv1.DeleteRecordRequest{ZoneName: "example.com.", Name: "www"})
 			return err
 		}},
 		{"DeleteRecord without name", func(c platformv1.DNSServiceClient) error {
-			_, err := c.DeleteRecord(context.Background(), &platformv1.DeleteRecordRequest{
+			_, err := c.DeleteRecord(ctx, &platformv1.DeleteRecordRequest{
 				ZoneName: "example.com.", Type: platformv1.RecordType_RECORD_TYPE_A})
 			return err
 		}},
 		{"DeleteZone without name", func(c platformv1.DNSServiceClient) error {
-			_, err := c.DeleteZone(context.Background(), &platformv1.DeleteZoneRequest{})
+			_, err := c.DeleteZone(ctx, &platformv1.DeleteZoneRequest{})
 			return err
 		}},
-		{"AddRecord without record", func(c platformv1.DNSServiceClient) error {
-			_, err := c.AddRecord(context.Background(), &platformv1.AddRecordRequest{ZoneName: "example.com."})
+		{"GetZone without name", func(c platformv1.DNSServiceClient) error {
+			_, err := c.GetZone(ctx, &platformv1.GetZoneRequest{})
+			return err
+		}},
+		{"AddRecord without zone", func(c platformv1.DNSServiceClient) error {
+			_, err := c.AddRecord(ctx, &platformv1.AddRecordRequest{Record: dnsTestRecord})
+			return err
+		}},
+		{"SignZone without zone", func(c platformv1.DNSServiceClient) error {
+			_, err := c.SignZone(ctx, &platformv1.SignZoneRequest{})
 			return err
 		}},
 	}
@@ -213,124 +320,39 @@ func TestDNS_SDKOverREST_RefusesARequestTheRouteCannotCarry(t *testing.T) {
 	}
 }
 
-func TestEncodeDNSAddRecord_RequiresAType(t *testing.T) {
-	_, err := encodeDNSAddRecord(&platformv1.AddRecordRequest{Record: &platformv1.Record{
-		Record: &platformv1.Record_A{A: &platformv1.ARecord{Name: "www"}},
-	}})
-	var want ErrDNSRecordTypeRequired
-	if !errors.As(err, &want) {
-		t.Fatalf("err = %v, want ErrDNSRecordTypeRequired", err)
+// TestDNSBodyEncoder_SendsProtoJSON: the body is the proto JSON mapping, so
+// a record's oneof and type enum reach the server as protojson spells them.
+func TestDNSBodyEncoder_SendsProtoJSON(t *testing.T) {
+	encode := restRequestEncoders[platformv1.DNSService_AddRecord_FullMethodName]
+	body, err := encode(&platformv1.AddRecordRequest{Record: dnsTestRecord})
+	if err != nil {
+		t.Fatalf("encode: %v", err)
 	}
-	if want.Error() == "" {
-		t.Error("ErrDNSRecordTypeRequired has an empty message")
+	raw, ok := body.(json.RawMessage)
+	if !ok {
+		t.Fatalf("body = %T, want json.RawMessage", body)
+	}
+	decoded := &platformv1.AddRecordRequest{}
+	if err := protojson.Unmarshal(raw, decoded); err != nil || !proto.Equal(decoded.GetRecord(), dnsTestRecord) {
+		t.Errorf("body %s decodes to %v (err %v), want the record", raw, decoded, err)
 	}
 }
 
-// TestDecodeDNSAddRecord_ReadsTheZone: the server's record-set lists land on
-// the proto RecordSet fields, and fields the reply does not carry are dropped.
-func TestDecodeDNSAddRecord_ReadsTheZone(t *testing.T) {
-	resp, err := decodeDNSAddRecord([]byte(dnsZonePayload))
-	if err != nil {
-		t.Fatalf("decode: %v", err)
-	}
-	zone := resp.GetZone()
-	if zone.GetId() != 7 || zone.GetName() != "example.com." || zone.GetTtl() != 3600 || !zone.GetInternal() {
-		t.Errorf("zone = %v", zone)
-	}
-	records := zone.GetRecords()
-	if records.GetSoa().GetMname() != "ns1.example.com." || records.GetSoa().GetSerial() != 2026101401 {
-		t.Errorf("soa = %v", records.GetSoa())
-	}
-	if len(records.GetARecords()) != 1 || records.GetARecords()[0].GetValue() != "10.0.0.1" {
-		t.Errorf("a_records = %v", records.GetARecords())
-	}
-	if len(records.GetMxRecords()) != 1 || records.GetMxRecords()[0].GetPriority() != 10 {
-		t.Errorf("mx_records = %v", records.GetMxRecords())
-	}
-	if !resp.GetStatus().GetSuccess() {
-		t.Errorf("status = %v, want success", resp.GetStatus())
-	}
-}
-
-// TestDecodeDNSResolve_ReadsRecordTypes: the mnemonic becomes the RecordType
-// and the matching oneof is set; a type the proto does not define is
-// UNSPECIFIED rather than an error.
-func TestDecodeDNSResolve_ReadsRecordTypes(t *testing.T) {
-	resp, err := decodeDNSResolve([]byte(dnsRecordsPayload))
-	if err != nil {
-		t.Fatalf("decode: %v", err)
-	}
-	got := resp.GetRecords()
-	if len(got) != 2 || !resp.GetAuthoritative() {
-		t.Fatalf("reply = %v, want 2 records, authoritative", resp)
-	}
-	if got[0].GetType() != platformv1.RecordType_RECORD_TYPE_A || got[0].GetA().GetName() != "www" {
-		t.Errorf("records[0] = %v", got[0])
-	}
-	if got[1].GetType() != platformv1.RecordType_RECORD_TYPE_MX || got[1].GetMx().GetValue() != "mail.example.com." {
-		t.Errorf("records[1] = %v", got[1])
-	}
-
-	unknown, err := decodeDNSListRecords([]byte(`{"records":[{"type":"LOC"}]}`))
-	if err != nil {
-		t.Fatalf("decode unknown type: %v", err)
-	}
-	if unknown.GetRecords()[0].GetType() != platformv1.RecordType_RECORD_TYPE_UNSPECIFIED {
-		t.Errorf("type = %v, want UNSPECIFIED", unknown.GetRecords()[0].GetType())
-	}
-}
-
-func TestDecodeDNSDeleteZone_ReadsTheStatus(t *testing.T) {
-	resp, err := decodeDNSDeleteZone([]byte(`{"success":true,"message":"zone deleted successfully"}`))
-	if err != nil {
-		t.Fatalf("decode: %v", err)
-	}
-	if !resp.GetStatus().GetSuccess() || resp.GetStatus().GetMessage() != "zone deleted successfully" {
-		t.Errorf("status = %v", resp.GetStatus())
-	}
-}
-
-// TestDNSDecoders_RejectMalformedAnswers: every decoder reports an answer it
-// cannot read as ErrUnmarshalFailed, never as an empty reply.
-func TestDNSDecoders_RejectMalformedAnswers(t *testing.T) {
-	cases := map[string]struct {
-		method string
-		raw    string
-		reply  interface{}
-	}{
-		"DeleteZone not JSON":   {platformv1.DNSService_DeleteZone_FullMethodName, `nope`, &platformv1.DeleteZoneResponse{}},
-		"AddRecord not JSON":    {platformv1.DNSService_AddRecord_FullMethodName, `nope`, &platformv1.AddRecordResponse{}},
-		"AddRecord bad set":     {platformv1.DNSService_AddRecord_FullMethodName, `{"records":[1]}`, &platformv1.AddRecordResponse{}},
-		"AddRecord bad field":   {platformv1.DNSService_AddRecord_FullMethodName, `{"ttl":"x"}`, &platformv1.AddRecordResponse{}},
-		"DeleteRecord bad zone": {platformv1.DNSService_DeleteRecord_FullMethodName, `[]`, &platformv1.DeleteRecordResponse{}},
-		"ListRecords not JSON":  {platformv1.DNSService_ListRecords_FullMethodName, `nope`, &platformv1.ListRecordsResponse{}},
-		"ListRecords bad type":  {platformv1.DNSService_ListRecords_FullMethodName, `{"records":[{"type":1}]}`, &platformv1.ListRecordsResponse{}},
-		"ListRecords bad item":  {platformv1.DNSService_ListRecords_FullMethodName, `{"records":[1]}`, &platformv1.ListRecordsResponse{}},
-		"Resolve bad record":    {platformv1.DNSService_Resolve_FullMethodName, `{"records":[{"a":{"ttl":"x"}}]}`, &platformv1.ResolveResponse{}},
-	}
-	for name, tc := range cases {
+// TestDNSBodyEncoder_RefusesABodyThatIsNotTheRequest: a DNS method's encoder
+// sends only that method's request message.
+func TestDNSBodyEncoder_RefusesABodyThatIsNotTheRequest(t *testing.T) {
+	encode := restRequestEncoders[platformv1.DNSService_AddRecord_FullMethodName]
+	for name, body := range map[string]interface{}{
+		"not a proto":     map[string]string{},
+		"another request": &platformv1.DeleteRecordRequest{ZoneName: "example.com."},
+		"no body":         nil,
+	} {
 		t.Run(name, func(t *testing.T) {
-			err := restResponseDecoders[tc.method]([]byte(tc.raw), tc.reply)
-			var want ErrUnmarshalFailed
-			if !errors.As(err, &want) {
-				t.Fatalf("err = %v, want ErrUnmarshalFailed", err)
+			_, err := encode(body)
+			var want ErrUnexpectedRequestType
+			if !errors.As(err, &want) || want.Method != platformv1.DNSService_AddRecord_FullMethodName {
+				t.Fatalf("err = %v, want ErrUnexpectedRequestType for AddRecord", err)
 			}
 		})
-	}
-}
-
-func TestDNSDecoders_RejectTheWrongReplyType(t *testing.T) {
-	for _, method := range []string{
-		platformv1.DNSService_DeleteZone_FullMethodName,
-		platformv1.DNSService_AddRecord_FullMethodName,
-		platformv1.DNSService_DeleteRecord_FullMethodName,
-		platformv1.DNSService_ListRecords_FullMethodName,
-		platformv1.DNSService_Resolve_FullMethodName,
-	} {
-		err := restResponseDecoders[method]([]byte(`{}`), &platformv1.Status{})
-		var want ErrUnexpectedReplyType
-		if !errors.As(err, &want) || want.Method != method {
-			t.Errorf("%s: err = %v, want ErrUnexpectedReplyType", method, err)
-		}
 	}
 }

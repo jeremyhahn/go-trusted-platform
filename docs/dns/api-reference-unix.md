@@ -13,8 +13,8 @@
 
 The socket carries the gRPC service, not the REST routes and not HTTP/1.1.
 Every RPC, message and status code is the one in
-[api-reference-grpc.md](api-reference-grpc.md); only the dial differs. There
-is no `platformctl dns` command group.
+[api-reference-grpc.md](api-reference-grpc.md); only the dial differs. `platformctl
+--transport unix dns ...` drives the same calls ([cli.md](cli.md)).
 
 ## Go Client
 

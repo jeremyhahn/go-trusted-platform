@@ -78,8 +78,11 @@ the missing build or the disabled setting.
 
 Integration builds (`TEST_BUILD_TAGS`, used by `make integration-test` and every
 `make integration-test-<suite>`) always carry `vector qrdb_vector`, and
-`quicbaas.TestConfig` enables the service in such a build. That way the
-quicbaas and sdk suites' Vector assertions run against a real vector store.
+`quicbaas.TestConfig` enables the service in such a build. The factory's
+Vector assertion (`TestFactory_SDKClient_VectorOperations` in
+`pkg/storage/quicbaas`) is a unit test: `make test` runs it without the service
+and asserts `ErrVectorUnavailable`; `make test-pkg PKG=./pkg/storage/quicbaas/
+GO_BUILD_TAGS='vector qrdb_vector'` runs it against a real vector store.
 
 ## qrdb Optional Feature Tags
 

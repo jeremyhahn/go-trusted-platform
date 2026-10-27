@@ -248,9 +248,9 @@ sentinels: `ErrEABNotConfigured`, `ErrEABCredentialIDRequired`,
 | `ErrInvalidTenantID` | `InvalidArgument` | 400 |
 | `ErrInvalidExpiresAt` | `InvalidArgument` | 400 |
 | `ErrInvalidCredential` | `InvalidArgument` | 400 |
-| `ErrCredentialExpired` | `FailedPrecondition` | 400 |
-| `ErrCredentialRevoked` | `FailedPrecondition` | 400 |
-| `ErrCredentialAlreadyUsed` | `FailedPrecondition` | 400 |
+| `ErrCredentialExpired` | `FailedPrecondition` | 409 |
+| `ErrCredentialRevoked` | `FailedPrecondition` | 409 |
+| `ErrCredentialAlreadyUsed` | `FailedPrecondition` | 409 |
 | `ErrKeyGenerationFailed` | `Internal` | 500 |
 | `ErrQRCodeGenerationFailed` | `Internal` | 500 |
 | service nil | `Unavailable` | 503 |

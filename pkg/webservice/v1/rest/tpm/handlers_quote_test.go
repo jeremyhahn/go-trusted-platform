@@ -123,7 +123,7 @@ func TestQuote_RefusesPlainHTTP(t *testing.T) {
 
 	resp := postQuote(t, node.Client(), node.URL, []byte("tpm-nonce"))
 
-	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+	assert.Equal(t, http.StatusConflict, resp.StatusCode)
 	reason, err := io.ReadAll(resp.Body)
 	require.NoError(t, err)
 	assert.Contains(t, string(reason), "this REST request has none", "refused for the missing binding, not a bad body")

@@ -241,7 +241,7 @@ its own (`TestCollectHost_RelayedQuoteIsRejected`,
 
 | Transport | Binding taken from | No binding available |
 |---|---|---|
-| REST | the request's `http.Request.TLS` | plain HTTP, or an exporter that refuses → `400` |
+| REST | the request's `http.Request.TLS` | plain HTTP, or an exporter that refuses → `409` |
 | gRPC | the peer's `credentials.TLSInfo` | exporter refuses → `FailedPrecondition` |
 | QUIC | the QUIC connection's TLS state | exporter refuses → `StatusInvalidRequest` |
 | MCP over HTTPS | the request's `http.Request.TLS` | plain HTTP → tool error |
@@ -487,7 +487,7 @@ envelope's `payload`, proto field names over MCP.
 | Cursor the feed never issued; malformed `wait_ms` | `INVALID_ARGUMENT` | `400` | `StatusInvalidArgument` |
 | Caller not admitted | `PERMISSION_DENIED` | `403` | `StatusPermissionDenied` |
 | platformd shutting down | `UNAVAILABLE` | `503` | `StatusUnavailable` |
-| No feed on this node (attestation service cannot hand out verdicts) | `FAILED_PRECONDITION` | `400`; `503` when the route has no poller at all | `StatusInvalidRequest`; `StatusUnavailable` with no attestation service |
+| No feed on this node (attestation service cannot hand out verdicts) | `FAILED_PRECONDITION` | `409`; `503` when the route has no poller at all | `StatusInvalidRequest`; `StatusUnavailable` with no attestation service |
 
 The Go SDK (`sdk/go/transport/pollstream`) answers `StreamDeviceVerdicts` on
 the REST, QUIC, MCP and embedded connections by running these polls: one head
@@ -509,7 +509,7 @@ verdicts follow` ([cli.md](cli.md) §3.5) is thin over this call.
 | QUIC byte | Name | REST | Attestation cause |
 |---|---|---|---|
 | `0x00` | `StatusOK` | 200 | — |
-| `0x01` | `StatusInvalidRequest` | 400 | `ErrInvalidManifest`, `ErrEmptyManifest`, `ErrInvalidVMIdentity`, `ErrChannelBindingRequired` (gRPC `FailedPrecondition`, §5.1a) |
+| `0x01` | `StatusInvalidRequest` | 400 | `ErrInvalidManifest`, `ErrEmptyManifest`, `ErrInvalidVMIdentity`, `ErrChannelBindingRequired` (gRPC `FailedPrecondition`, §5.1a; 409 on REST) |
 | `0x02` | `StatusNotFound` | 404 | `ErrManifestNotFound`, `ErrAKNotFound`, `ErrAIKNotFound` |
 | `0x03` | `StatusUnauthorized` | 401 | `ErrAuthFailed` |
 | `0x04` | `StatusInternalError` | 500 | `ErrQuoteGenerationFailed`, `ErrSerializationFailed` |

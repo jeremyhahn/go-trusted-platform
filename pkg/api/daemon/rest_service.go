@@ -63,9 +63,9 @@ var serviceStatusStringMap = map[platformv1.ServiceStatus]string{
 // a human-readable string using the protobuf ServiceStatus enum.
 // restServiceRefusalStatus answers ErrServiceNotControllable. The refusal is
 // FailedPrecondition, which the platform webservice REST mapper
-// (protorest.WriteError) sends as 400; this server matches it so both REST
-// surfaces answer the same refusal the same way.
-const restServiceRefusalStatus = http.StatusBadRequest
+// (protorest.WriteError) sends as 409 Conflict (#665); this server matches it
+// so both REST surfaces answer the same refusal the same way.
+const restServiceRefusalStatus = http.StatusConflict
 
 func serviceStatusToString(rawStatus int32) string {
 	s, ok := serviceStatusStringMap[platformv1.ServiceStatus(rawStatus)]

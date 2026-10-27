@@ -14,7 +14,6 @@
 package sdn
 
 import (
-	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -23,90 +22,31 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
 )
 
 func TestNewSDNRouter(t *testing.T) {
-	logger := logging.NewLogger(slog.LevelInfo, nil)
-	mock := &mockSDNService{}
-	respWriter := &mockResponseWriter{}
-
-	router := NewSDNRouter(logger, mock, respWriter)
+	logger := newTestLogger()
+	router := NewSDNRouter(logger, &scriptedSDNServer{}, response.NewResponseWriter(logger, nil))
 
 	require.NotNil(t, router)
 	require.NotNil(t, router.handlers)
 }
 
+// TestRegisterRoutes: every SDN route, zones included, is mounted.
 func TestRegisterRoutes(t *testing.T) {
-	logger := logging.NewLogger(slog.LevelInfo, nil)
-	mock := &mockSDNService{}
-	respWriter := &mockResponseWriter{}
+	router := newTestRouter(&scriptedSDNServer{})
+	routes := append([]struct{ method, target string }{
+		{http.MethodPost, "/api/v1/sdn/zones"},
+		{http.MethodGet, "/api/v1/sdn/zones"},
+		{http.MethodPut, "/api/v1/sdn/zones/lab"},
+		{http.MethodDelete, "/api/v1/sdn/zones/lab"},
+	}, everyRoute...)
 
-	sdnRouter := NewSDNRouter(logger, mock, respWriter)
-	router := mux.NewRouter()
-
-	sdnRouter.RegisterRoutes(router.PathPrefix("/api/v1").Subrouter())
-
-	// Test that routes are registered by checking if they match
-
-	tests := []struct {
-		name   string
-		method string
-		path   string
-	}{
-		// Bridge routes
-		{"CreateBridge", http.MethodPost, "/api/v1/sdn/bridges"},
-		{"ListBridges", http.MethodGet, "/api/v1/sdn/bridges"},
-		{"GetBridge", http.MethodGet, "/api/v1/sdn/bridges/br0"},
-		{"DeleteBridge", http.MethodDelete, "/api/v1/sdn/bridges/br0"},
-
-		// Port routes
-		{"AddPort", http.MethodPost, "/api/v1/sdn/bridges/br0/ports"},
-		{"DeletePort", http.MethodDelete, "/api/v1/sdn/bridges/br0/ports/port0"},
-		{"GetPortState", http.MethodGet, "/api/v1/sdn/bridges/br0/ports/port0/state"},
-		{"SetPortState", http.MethodPut, "/api/v1/sdn/bridges/br0/ports/port0/state"},
-		{"GetPortStats", http.MethodGet, "/api/v1/sdn/bridges/br0/ports/port0/stats"},
-
-		// Flow routes
-		{"AddFlow", http.MethodPost, "/api/v1/sdn/flows"},
-		{"DeleteFlow", http.MethodDelete, "/api/v1/sdn/flows"},
-		{"ListFlows", http.MethodGet, "/api/v1/sdn/flows"},
-
-		// Policy routes
-		{"ApplyPolicy", http.MethodPost, "/api/v1/sdn/policies"},
-		{"ListPolicies", http.MethodGet, "/api/v1/sdn/policies"},
-		{"GetPolicy", http.MethodGet, "/api/v1/sdn/policies/policy-1"},
-
-		// VLAN routes
-		{"CreateVLAN", http.MethodPost, "/api/v1/sdn/vlans"},
-		{"ListVLANs", http.MethodGet, "/api/v1/sdn/vlans"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			req := httptest.NewRequest(tt.method, tt.path, nil)
+	for _, route := range routes {
+		t.Run(route.method+" "+route.target, func(t *testing.T) {
 			var match mux.RouteMatch
-			matched := router.Match(req, &match)
-			assert.True(t, matched, "Route %s %s should match", tt.method, tt.path)
+			assert.True(t, router.Match(httptest.NewRequest(route.method, route.target, nil), &match))
 		})
 	}
-}
-
-func TestRouterHandlerExecution(t *testing.T) {
-	logger := logging.NewLogger(slog.LevelInfo, nil)
-	mock := &mockSDNService{}
-	respWriter := &mockResponseWriter{}
-
-	sdnRouter := NewSDNRouter(logger, mock, respWriter)
-	router := mux.NewRouter()
-	sdnRouter.RegisterRoutes(router.PathPrefix("/api/v1").Subrouter())
-
-	// Test that a route can actually be executed
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/sdn/policies", nil)
-	w := httptest.NewRecorder()
-
-	router.ServeHTTP(w, req)
-
-	// ListPolicies returns 200 with empty list
-	assert.Equal(t, http.StatusOK, w.Code)
 }

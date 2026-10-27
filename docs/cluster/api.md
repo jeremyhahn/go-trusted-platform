@@ -274,6 +274,7 @@ validates (§6).
 | `PermissionDenied` | 403 |
 | `NotFound` | 404 |
 | `AlreadyExists` | 409 |
+| `FailedPrecondition` (`ErrClusterNotInitialized`, `ErrCannotLeaveAsLeader`) | 409 (#665) |
 | anything else | 500 |
 
 **Today every cluster REST call returns 503**, because no servicer is set and

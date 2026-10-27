@@ -183,8 +183,9 @@ request is the body. The webservice routes
 | `NotifyInstallComplete` | `POST /api/v1/provisioning/devices/{mac}/install-complete` | admin role + `provisioning:write` | `PXEService.GetDeviceByMAC`, then `UpdateState` to `INSTALL_COMPLETE` (`success`) or `FAILED` (`failure`) |
 | `GetBootConfig` | none | — | no per-MAC boot configuration exists in platformd to answer it from; the SDK's `GET /api/v1/provisioning/devices/{mac}/boot-config` claim stays in the route ledger |
 
-An unknown MAC answers `404`, a bad `state` or `status` `400`, and a token
-without `provisioning:write` `403`. Under the legacy JWT handler the role gate
+An unknown MAC answers `404`, a bad `state` or `status` `400`, a transition the
+PXE service refuses (`FailedPrecondition`) `409` (#665), and a token without
+`provisioning:write` `403`. Under the legacy JWT handler the role gate
 alone applies.
 
 `NotifyInstallComplete` records the same outcome as the booting node's

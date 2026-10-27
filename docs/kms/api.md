@@ -427,7 +427,7 @@ error before answering it.
 | `NotFound` | 404 | `0x02` `StatusNotFound` | `-32005` NotFound | Unknown key, DEK or secret |
 | `AlreadyExists` | 409 | `0x06` `StatusAlreadyExists` | `-32006` AlreadyExists | Key name in use |
 | `Aborted` | 409 | `0x06` `StatusAlreadyExists` | `-32603` InternalError | SDK conflict |
-| `FailedPrecondition` | 412 | `0x0C` `StatusFailedPrecondition` | `-32007` FailedPrecondition | Barrier or service not initialized |
+| `FailedPrecondition` | 409 | `0x0C` `StatusFailedPrecondition` | `-32007` FailedPrecondition | Barrier or service not initialized |
 | `ResourceExhausted` | 429 | `0x08` `StatusResourceExhausted` | `-32603` InternalError | **AEAD safety limit reached**, rate limited |
 | `Unimplemented` | 501 | `0x0B` `StatusNotImplemented` | `-32603` InternalError | The unimplemented CLI/service areas in [engineering.md](engineering.md) §2 |
 | `Unavailable` | 503 | `0x0A` `StatusUnavailable` | `-32004` ServiceUnavailable | KMS not wired into the daemon, barrier sealed, SDK connection lost |

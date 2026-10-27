@@ -58,9 +58,9 @@ func (s *PXEGRPCService) SetPXEService(svc pxe.Service) {
 // the SERVICE_NOT_CONFIGURED discriminator, so a client can render the
 // role state instead of an alarm.
 //
-// It was previously codes.FailedPrecondition, which REST maps to 400 —
-// indistinguishable from a malformed request, and impossible to tell
-// apart from a genuine precondition failure without reading the prose.
+// It was previously codes.FailedPrecondition, which REST maps to 409 —
+// a conflict with the resource's state, impossible to tell apart from a
+// genuine precondition failure without reading the prose.
 func (s *PXEGRPCService) requireService() error {
 	if s.pxeService == nil {
 		return serviceNotConfigured("pxe", "PXE service is not configured on this node")

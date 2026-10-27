@@ -78,11 +78,6 @@ func TestDNSMultiProtocol(t *testing.T) {
 
 // testDNSProtocol runs the complete DNS test suite against a single protocol adapter.
 func testDNSProtocol(t *testing.T, ctx context.Context, cmd DNSCommands) {
-	if cmd.Name() == "CLI" {
-		testCLINoDNSGroup(t, ctx, cmd)
-		return
-	}
-
 	// Generate unique test prefix for this protocol run
 	prefix := fmt.Sprintf("%s-%d", cmd.Name(), time.Now().Unix())
 
@@ -118,71 +113,6 @@ func testDNSProtocol(t *testing.T, ctx context.Context, cmd DNSCommands) {
 	t.Run("TLSA", func(t *testing.T) {
 		testTLSARecord(t, ctx, cmd, prefix)
 	})
-}
-
-// testCLINoDNSGroup is the CLI leg: platformctl has no dns command group
-// (#954), so every operation the other legs run is a typed refusal. The
-// adapter's Setup fails once platformctl lists a dns group.
-func testCLINoDNSGroup(t *testing.T, ctx context.Context, cmd DNSCommands) {
-	refused := helpers.ErrCLINoCommandGroup{}
-	calls := map[string]func() error{
-		"CreateZone": func() error {
-			_, err := cmd.CreateZone(ctx, CreateZoneOptions{Name: "cli-gap.test.", TTL: 3600})
-			return err
-		},
-		"GetZone": func() error {
-			_, err := cmd.GetZone(ctx, "cli-gap.test.")
-			return err
-		},
-		"UpdateZone": func() error {
-			_, err := cmd.UpdateZone(ctx, "cli-gap.test.", UpdateZoneOptions{TTL: 7200})
-			return err
-		},
-		"DeleteZone": func() error {
-			_, err := cmd.DeleteZone(ctx, "cli-gap.test.")
-			return err
-		},
-		"ListZones": func() error {
-			_, err := cmd.ListZones(ctx, ListZonesOptions{})
-			return err
-		},
-		"AddRecord": func() error {
-			_, err := cmd.AddRecord(ctx, AddRecordOptions{ZoneName: "cli-gap.test.", Name: "www", RecordType: "A", Value: "192.0.2.1"})
-			return err
-		},
-		"GetRecord": func() error {
-			_, err := cmd.GetRecord(ctx, "www.cli-gap.test.", "A")
-			return err
-		},
-		"UpdateRecord": func() error {
-			_, err := cmd.UpdateRecord(ctx, UpdateRecordOptions{ZoneName: "cli-gap.test.", Name: "www", RecordType: "A", Value: "192.0.2.2"})
-			return err
-		},
-		"DeleteRecord": func() error {
-			_, err := cmd.DeleteRecord(ctx, "www.cli-gap.test.", "A")
-			return err
-		},
-		"ListRecords": func() error {
-			_, err := cmd.ListRecords(ctx, "cli-gap.test.", ListRecordsOptions{})
-			return err
-		},
-		"Resolve": func() error {
-			_, err := cmd.Resolve(ctx, "www.cli-gap.test.", "A")
-			return err
-		},
-		"AddTLSARecord": func() error {
-			_, err := cmd.AddTLSARecord(ctx, AddTLSARecordOptions{ZoneName: "cli-gap.test.", Name: "_443._tcp", Usage: 3, Selector: 1, MatchingType: 1, Data: "00"})
-			return err
-		},
-	}
-	for operation, call := range calls {
-		err := call()
-		require.ErrorIs(t, err, refused, "%s is a declared CLI gap (%s)", operation, DNSCLIGapIssue)
-		var gap helpers.ErrCLINoCommandGroup
-		require.ErrorAs(t, err, &gap)
-		assert.Equal(t, operation, gap.Operation, "refusal names the operation")
-		assert.Equal(t, "dns", gap.Group, "refusal names the missing group")
-	}
 }
 
 // =============================================================================
