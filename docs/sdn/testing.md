@@ -166,14 +166,18 @@ sudo platformctl iso test client-server --use-ovs
 
 ## CI
 
-The CI Gate runs `make test` on every PR but a docs-only one (every changed
-file markdown or under `docs/`), which runs Lint and the Gate only unless it
-is labelled `ci:full`. `make test-race` runs in the full tier: pushes to main
-and PRs labelled `ci:full`. The full tier's `integration` job runs
-`make integration-test`, whose runner targets include `sdn`, so the SDN
-suite runs on every push to main, on `workflow_dispatch` and on a `ci:full`
-PR. A failed leaf test fails the job unless `.github/foreign-failures.tsv`
-lists it (see [docs/test/integration.md](../test/integration.md)). Run
+CI's `image` job runs `make test` and `make test-race` on every run but a
+docs-only PR (every changed file markdown or under `docs/`), which runs only
+the lint steps and the gates unless it is labelled `ci:full`
+(`.github/workflows/ci.yml:301-315`). The full tier's `integration` job runs
+the suite `make integration-test` runs, split into five parallel legs
+(`make integration-test-leg`, `ci.yml:515-518` and `:576`); every runner
+target, `sdn` included, is in exactly one leg
+(`build/docker/devcontainer/run-integration-tests.sh:221-233`). The job runs
+on every push to main, on `workflow_dispatch`, on the schedule and on a
+`ci:full` PR (`ci.yml:85-99` and `:503`). A failed leaf test fails the job
+unless `.github/foreign-failures.tsv` lists it (`ci.yml:568-576`; see
+[docs/test/integration.md](../test/integration.md)). Run
 `make integration-test-sdn` in the devcontainer before merging SDN changes;
 an unlabelled PR does not run it.
 
