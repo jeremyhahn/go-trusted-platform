@@ -2217,9 +2217,14 @@ MODULE_ENV_FILE ?= .devcontainer/.env
 # to rebuild against a fixed key.
 APT_REFRESH ?= $(eval APT_REFRESH := $$(shell scripts/apt-refresh-key.sh))$(APT_REFRESH)
 
+# GO_BUILD_PROXY comes from the caller (handbook devcontainer.md section 4): an
+# explicit GO_BUILD_PROXY, else the caller's GOPROXY, which on the CI runners is
+# the fleet Athens first (m1544, ruling 236(3)); unset, the Dockerfile default
+# applies. The shell expands $$GOPROXY, quoted, because the runners' value uses
+# the | separator.
 DEVCONTAINER_BUILD_ARGS = --build-arg GO_IMAGE=$(GO_IMAGE) \
 	--build-arg APT_REFRESH=$(APT_REFRESH) \
-	$(if $(GO_BUILD_PROXY),--build-arg GO_BUILD_PROXY=$(GO_BUILD_PROXY)) \
+	$(if $(GO_BUILD_PROXY),--build-arg GO_BUILD_PROXY="$(GO_BUILD_PROXY)",$(if $(GOPROXY),--build-arg GO_BUILD_PROXY="$$GOPROXY")) \
 	$(if $(wildcard $(MODULE_ENV_FILE)),--secret id=gomodauth$(comma)src=$(MODULE_ENV_FILE)) \
 	-f $(DEVCONTAINER_DOCKERFILE)
 
