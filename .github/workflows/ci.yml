@@ -378,10 +378,13 @@ jobs:
   # verdict never waits on golangci-lint. A repo without the target passes.
   # CUSTOMIZE: on the runner, not the toolchain image (the Makefile has no
   # it-image target, and no gate compiles).
+  # 108 repair (DS-4142, Company Agent ruling 226(6)): the job runs on the
+  # bigdisk label, as the template places it, after it wrote 10.6 GB into its
+  # container layer on a small worker node and filled that disk.
   lint-gates:
     name: Lint Gates
     if: ${{ !github.event.pull_request.draft }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.server_url == 'https://github.com' && 'ubuntu-latest' || 'bigdisk' }}
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
