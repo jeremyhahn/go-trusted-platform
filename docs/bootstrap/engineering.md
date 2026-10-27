@@ -290,7 +290,13 @@ func (s *Server) Close() error
 func Attach(ctx context.Context, conn net.Conn, cfg ClientConfig) (*Export, error)
 func ServerFromCmdline(cmdline string) (ServerAddr, bool, error)
 func NewClientConfig(ctx context.Context, server ServerAddr, anchor *trust.Anchor, idevid tls.Certificate) (ClientConfig, error)
-func OpenMetadataFile(volumeDir, identity, name string) (*MetadataFile, error)
+func OpenMetadataFile(volumes VolumeProvider, identity, name string) (*MetadataFile, error)
+
+type VolumeProvider interface {
+    Create(identity string, size int64) error
+    Attach(identity string) (string, error)
+}
+func NewLocalVolumes(dir string) (*LocalVolumes, error)
 ```
 
 `Attach` is the node's side of the negotiation below. It is specified with the
@@ -307,8 +313,8 @@ refuses with `ErrCmdline`; the installer's `nbd` target calls it.
 - `Certificate`: the server's TLS certificate.
 - `Anchor`: a `*trust.Anchor`, the platform anchor.
 - `Identities`: the hostnames of the manifest's `diskless-nbd` entries.
-- `VolumeDir` and `VolumeSize`: where volumes live and the size each is
-  created at.
+- `Volumes` and `VolumeSize`: the `VolumeProvider` that holds the volumes,
+  and the size each is created at.
 - `HandshakeTimeout`: default 30 s. It bounds the whole negotiation, the TLS
   handshake included; transmission has no deadline.
 - `Logger`.
@@ -366,13 +372,35 @@ SEND_FUA | SEND_TRIM`. The largest payload is 32 MiB.
 | `DISC` | fsyncs, closes the volume and the connection; no reply | — (a failed fsync ends the session with `ErrVolume`) |
 | any other | — | `EINVAL` |
 
-**Volumes.** A volume lives at `<VolumeDir>/<identity>.img`. The directory is
-`0700` and each file `0600`. It is created with `O_EXCL` and truncated to
-`VolumeSize` on the first attach. After that it keeps its own size, so changing
-`VolumeSize` affects only new devices. Creation is serialised so that two first
-attaches cannot race. `VolumeSize` must be positive and a multiple of 512. An
-identity is accepted only as a DNS hostname (letters, digits, `-` and `.`), so
-it can never name a path outside `VolumeDir`.
+**Volumes.** The server reaches a volume only through `Config.Volumes`, a
+`VolumeProvider`. On every `GO`, `INFO` or `EXPORT_NAME` it calls
+`Create(identity, VolumeSize)`, which makes the volume if it does not exist
+and leaves an existing one as it is, then `Attach(identity)`, which returns
+the path of a regular file or block device. The server opens that path
+read-write and takes the export size by seeking to its end, which a block
+device needs: its `stat` size is 0. A provider refusal is answered
+`NBD_REP_ERR_PLATFORM`, as any `ErrVolume`. The installed-UKI read
+(`OpenMetadataFile`) attaches through the same provider; an `Attach` error
+wrapping `fs.ErrNotExist` is `ErrNotInstalled` there.
+
+| Operation | Built |
+|---|---|
+| create, at the configured size | yes (`Create`) |
+| attach to a device path | yes (`Attach`) |
+| grow-only resize, promote, demote | no: the store built today is local files on one boot node, which has no replica to promote and no resize |
+
+`LocalVolumes` (`NewLocalVolumes(dir)`; an empty `dir` is `ErrInvalidConfig`
+on `VolumeDir`) is that store: a volume lives at `<dir>/<identity>.img`. The
+directory is `0700` and each file `0600`. `Create` makes it with `O_EXCL` and
+truncates it to the size, so changing `VolumeSize` affects only new devices,
+and a size that is not a positive multiple of 512 is `ErrVolume` (`size`).
+Creation is serialised so that two first attaches cannot race. An identity is
+accepted only as a DNS hostname (letters, digits, `-` and `.`), so it can
+never name a path outside `dir`. `Attach` on a missing volume is `ErrVolume`
+(`attach`) wrapping `fs.ErrNotExist`. The container builds the one
+`LocalVolumes` over `NBDConfig.VolumeDir` in `nbdVolumes`
+(`pkg/bootstrap/container/nbd.go`), for the export server and the
+installed-UKI route alike.
 
 **Container wiring.** `container.NewServer` builds the export server only when
 the manifest has a `diskless-nbd` entry; the identities are those entries'
@@ -398,7 +426,10 @@ key with `ErrNBDCredentials`, and a value the export server refuses with
 listeners and before the device-script port, so the port the deploy gate
 probes answers only once a `diskless-nbd` root is reachable; a failed bind is
 `ErrServerStartFailed` and the device-script port never opens. `Stop` closes
-the export server.
+the export server and returns only once its listener is closed and its accept
+loop has exited (`nbd.Server.Close` waits for every running `Serve`), so the
+NBD port no longer answers when `Stop` or a cancelled `Start` returns. A
+`Serve` called after `Close` closes its listener and returns nil at once.
 
 `bootstrap.yaml` accepts `boot_model: diskless-nbd` on a Raspberry Pi
 (`BootModelDisklessNBD`, in `validPiBootModels`); a generic node is refused
@@ -425,7 +456,7 @@ A `diskless-nbd` node boots the installer until its export holds an install,
 then boots the UKI the install wrote. Its device script decides which on every
 request (`deviceBootInfo`, `pkg/bootstrap/container/server.go`) by reading the
 export's [metadata area](../installer/engineering.md#the-nbd-metadata-area)
-with `nbd.OpenMetadataFile(NBDConfig.VolumeDir, <hostname>, "EFI/BOOT/<file>")`,
+with `nbd.OpenMetadataFile(<the container's VolumeProvider>, <hostname>, "EFI/BOOT/<file>")`,
 where `<file>` is `uki.BootFileName` for the media set's architecture
 (`BOOTX64.EFI`, `BOOTAA64.EFI`):
 

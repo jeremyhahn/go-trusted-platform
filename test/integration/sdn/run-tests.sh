@@ -12,7 +12,6 @@
 #   ./run-tests.sh policy    # Run policy engine tests
 #   ./run-tests.sh bridge    # Run bridge/port management tests
 #   ./run-tests.sh flows     # Run OpenFlow rules tests
-#   ./run-tests.sh state     # Run state transition tests
 
 set -e
 
@@ -230,19 +229,6 @@ run_openflow_tests() {
     log_info "=== OpenFlow Tests Complete ==="
 }
 
-run_state_transition_tests() {
-    log_info "=== Running State Transition Tests ==="
-    setup_ovs
-    cleanup_test_bridges
-
-    cd "$SCRIPT_DIR"
-    log_info "Running state transition tests..."
-    go test -v -timeout 10m -run TestProvisioning ./... -count=1
-
-    cleanup_test_bridges
-    log_info "=== State Transition Tests Complete ==="
-}
-
 show_test_status() {
     log_info "=== Test Environment Status ==="
 
@@ -284,7 +270,6 @@ Commands:
     policy           Run policy engine tests
     bridge           Run bridge/port management tests
     flows            Run OpenFlow rules tests
-    state            Run state transition tests
 
     help             Show this help message
 
@@ -329,9 +314,6 @@ case "${1:-test}" in
         ;;
     flows|openflow|acl)
         run_openflow_tests
-        ;;
-    state|transition)
-        run_state_transition_tests
         ;;
     help|--help|-h)
         show_help

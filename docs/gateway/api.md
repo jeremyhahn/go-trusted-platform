@@ -267,7 +267,7 @@ Error mapping, the same on every transport:
 | Cause | gRPC / Unix | REST | QUIC | MCP |
 |---|---|---|---|---|
 | Section not running (may be starting, or refused and fixable in configuration) | `Unavailable` | 503 | `StatusUnavailable` | "service not available" |
-| Kernel cannot carry the translator (no retry helps until someone loads the module) | `FailedPrecondition` | 412 | `StatusInvalidRequest` | the error, with the kernel's reason |
+| Kernel cannot carry the translator (no retry helps until someone loads the module) | `FailedPrecondition` | 409 | `StatusInvalidRequest` | the error, with the kernel's reason |
 | Anything else | `Internal` | 500 | `StatusInternalError` | the error |
 
 QUIC has no failed-precondition byte. It carries this case as
@@ -500,7 +500,7 @@ positions described above are unchanged. See
 | QUIC byte | Name | REST | Gateway cause |
 |---|---|---|---|
 | `0x00` | `StatusOK` | 200 | — |
-| `0x01` | `StatusInvalidRequest` | 400 | Malformed prefix, pool, VIP or route; on REST a host precondition is 412 instead (the NAT64 module, §5a) |
+| `0x01` | `StatusInvalidRequest` | 400 | Malformed prefix, pool, VIP or route; on REST a host precondition is 409 instead (the NAT64 module, §5a) |
 | `0x02` | `StatusNotFound` | 404 | Unknown pool, VIP, route or gateway ID |
 | `0x03` | `StatusUnauthorized` | 401 | Proxy auth chain rejected the request |
 | `0x04` | `StatusInternalError` | 500 | BGP speaker or datapath failure |

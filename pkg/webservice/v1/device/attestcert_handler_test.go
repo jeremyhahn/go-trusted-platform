@@ -177,7 +177,7 @@ func TestAttestCertHandler_MalformedBodyIs400(t *testing.T) {
 
 func TestAttestCertHandler_StatusMapping(t *testing.T) {
 	cases := map[codes.Code]int{
-		codes.FailedPrecondition: http.StatusBadRequest,
+		codes.FailedPrecondition: http.StatusConflict,
 		codes.InvalidArgument:    http.StatusBadRequest,
 		codes.NotFound:           http.StatusNotFound,
 		codes.Aborted:            http.StatusConflict,

@@ -343,7 +343,7 @@ console shows the refusal as an error toast:
 | `... device 42 is not suspended (state=attested); only a disabled device can be re-enabled` | Enable on a device that is not suspended. |
 | `... no zone carries lifecycle role quarantine` | Enable needs a zone with the quarantine role to re-admit the port into. |
 
-Each refusal is a `400` on REST and `FAILED_PRECONDITION` on gRPC and the Unix
+Each refusal is a `409` on REST and `FAILED_PRECONDITION` on gRPC and the Unix
 socket. Nothing is recorded and the port is not touched.
 
 ---

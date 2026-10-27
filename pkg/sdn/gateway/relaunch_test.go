@@ -75,17 +75,27 @@ type gatewayLauncher struct {
 	// runtime builds each child's datapath runtime; nil gives every child
 	// its own fake one.
 	runtime func() *gateway.GatewayRuntime
+	// build makes each child's gateway; nil builds the load-balancer and
+	// NAT one over runtime.
+	build func() (*gateway.Gateway, error)
 
 	mu       sync.Mutex
 	children []*gatewayChild
 }
 
-func (l *gatewayLauncher) Launch(_ context.Context, spec process.Spec) (process.Child, error) {
+func (l *gatewayLauncher) newGateway() (*gateway.Gateway, error) {
+	if l.build != nil {
+		return l.build()
+	}
 	config := relaunchGatewayConfig()
 	if l.runtime != nil {
 		config.Runtime = l.runtime()
 	}
-	gw, err := gateway.NewGateway(config)
+	return gateway.NewGateway(config)
+}
+
+func (l *gatewayLauncher) Launch(_ context.Context, spec process.Spec) (process.Child, error) {
+	gw, err := l.newGateway()
 	if err != nil {
 		return nil, err
 	}
@@ -178,10 +188,10 @@ func heldDNAT(gw *gateway.Gateway) []string {
 	return out
 }
 
-// startRelaunchSupervisor supervises the datapath child launcher builds,
-// with its load balancer and NAT started and the relaunch document applied,
-// and returns the first child.
-func startRelaunchSupervisor(t *testing.T, ctx context.Context, launcher *gatewayLauncher) (*process.Supervisor, *gatewayChild) {
+// newRelaunchSupervisor is a supervisor over launcher that relaunches a dead
+// child at once. The children drop to this test's own credentials, and
+// inherit the data directory in inherited.
+func newRelaunchSupervisor(t *testing.T, launcher *gatewayLauncher, inherited process.Inherited) *process.Supervisor {
 	t.Helper()
 	dir, err := os.MkdirTemp("/tmp", "gwrl")
 	require.NoError(t, err)
@@ -190,10 +200,13 @@ func startRelaunchSupervisor(t *testing.T, ctx context.Context, launcher *gatewa
 			t.Errorf("remove runtime dir: %v", err)
 		}
 	})
+	inherited.ConfigFile = filepath.Join(dir, "config.yaml")
 	supervisor := process.New(process.Config{
 		Launcher:       launcher,
 		RuntimeDir:     dir,
-		Inherited:      process.Inherited{ConfigFile: filepath.Join(dir, "config.yaml")},
+		Inherited:      inherited,
+		UID:            uint32(os.Getuid()),
+		GID:            uint32(os.Getgid()),
 		SocketGID:      -1,
 		ReadyTimeout:   5 * time.Second,
 		StopTimeout:    2 * time.Second,
@@ -205,7 +218,15 @@ func startRelaunchSupervisor(t *testing.T, ctx context.Context, launcher *gatewa
 			t.Errorf("shutdown: %v", err)
 		}
 	})
+	return supervisor
+}
 
+// startRelaunchSupervisor supervises the datapath child launcher builds,
+// with its load balancer and NAT started and the relaunch document applied,
+// and returns the first child.
+func startRelaunchSupervisor(t *testing.T, ctx context.Context, launcher *gatewayLauncher) (*process.Supervisor, *gatewayChild) {
+	t.Helper()
+	supervisor := newRelaunchSupervisor(t, launcher, process.Inherited{})
 	require.NoError(t, supervisor.StartService(ctx, gateway.ServiceLoadBalancer))
 	require.NoError(t, supervisor.StartService(ctx, gateway.ServiceNAT))
 	desired := &gwstate.DesiredConfig{
@@ -220,7 +241,7 @@ func startRelaunchSupervisor(t *testing.T, ctx context.Context, launcher *gatewa
 			DNAT:             []gwstate.DesiredDNAT{{Protocol: "tcp", External: "203.0.113.10:2222", Internal: "10.0.100.5:22"}},
 		},
 	}
-	_, err = supervisor.Apply(ctx, desired)
+	_, err := supervisor.Apply(ctx, desired)
 	require.NoError(t, err)
 	first := launcher.child(1)
 	require.NotNil(t, first)
@@ -229,13 +250,19 @@ func startRelaunchSupervisor(t *testing.T, ctx context.Context, launcher *gatewa
 
 // awaitRelaunch waits until the supervisor reports the relaunched child up,
 // which it does only once the child holds its document again, and returns
-// that child.
-func awaitRelaunch(t *testing.T, supervisor *process.Supervisor, launcher *gatewayLauncher) *gatewayChild {
+// that child. Every one of services is reported up.
+func awaitRelaunch(t *testing.T, supervisor *process.Supervisor, launcher *gatewayLauncher, services ...string) *gatewayChild {
 	t.Helper()
 	require.Eventually(t, func() bool {
-		return launcher.child(2) != nil &&
-			supervisor.ServiceHealth(gateway.ServiceLoadBalancer) == nil &&
-			supervisor.ServiceHealth(gateway.ServiceNAT) == nil
+		if launcher.child(2) == nil {
+			return false
+		}
+		for _, service := range services {
+			if supervisor.ServiceHealth(service) != nil {
+				return false
+			}
+		}
+		return true
 	}, 15*time.Second, 10*time.Millisecond, "the relaunched child is reported up once it holds its document")
 	return launcher.child(2)
 }
@@ -254,7 +281,7 @@ func TestSupervisedRelaunch_TheNewChildHoldsTheDesiredVIPsAndDNATRules(t *testin
 
 	first.exit(errors.New("signal: killed"))
 
-	second := awaitRelaunch(t, supervisor, launcher)
+	second := awaitRelaunch(t, supervisor, launcher, gateway.ServiceLoadBalancer, gateway.ServiceNAT)
 	assert.ElementsMatch(t, []string{"10.100.0.20:80"}, heldVIPs(second.gw),
 		"the desired VIP is back on the relaunched child")
 	assert.Equal(t, []string{"10.0.100.5:22"}, heldDNAT(second.gw),
@@ -282,7 +309,7 @@ func TestSupervisedRelaunch_AKilledChildsSuccessorReconcilesTheBridgeItLeft(t *t
 	first.kill(t)
 	require.Equal(t, before, bridge.State(), "a killed child withdraws nothing")
 
-	awaitRelaunch(t, supervisor, launcher)
+	awaitRelaunch(t, supervisor, launcher, gateway.ServiceLoadBalancer, gateway.ServiceNAT)
 	assert.Equal(t, before, bridge.State(), "the successor holds what the killed child held")
 	generations := bridge.Generations()
 	require.Len(t, generations, len(firstGenerations))
@@ -290,4 +317,75 @@ func TestSupervisedRelaunch_AKilledChildsSuccessorReconcilesTheBridgeItLeft(t *t
 		require.Len(t, held, 1, "owner 0x%x keeps one generation, the successor's", owner)
 		assert.NotEqual(t, firstGenerations[owner], held, "owner 0x%x carries the successor's generation", owner)
 	}
+}
+
+// heldVPNLeases lists the lease IDs gw's management VPN holds.
+func heldVPNLeases(gw *gateway.Gateway) []string {
+	snap := gw.Snapshot()
+	if snap.VPN == nil {
+		return nil
+	}
+	var out []string
+	for _, lease := range snap.VPN.Leases {
+		out = append(out, lease.ID)
+	}
+	return out
+}
+
+func TestSupervisedRelaunch_AKilledVPNChildKeepsItsLeasesAndPendingRevocations(t *testing.T) {
+	// The control plane records lease-1 and lease-2 and refuses every
+	// DELETE. lease-1 is revoked before the kill, so only the journal
+	// under <data-dir>/vpn keeps the relaunched child from reinstating it
+	// from that record (#557).
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	vpnDef, err := process.DefinitionByName("vpn")
+	require.NoError(t, err)
+	dataDir := t.TempDir()
+	stateDir := filepath.Join(dataDir, vpnDef.StateDir)
+	journal := filepath.Join(stateDir, "pending-revocations.json")
+	control := gateway.NewDeleteRefusingLeaseControl()
+	// Built here, on the test goroutine, and handed out one per launch.
+	gateways := make(chan *gateway.Gateway, 2)
+	gateways <- gateway.NewVPNChildGateway(t, control, journal)
+	gateways <- gateway.NewVPNChildGateway(t, control, journal)
+	launcher := &gatewayLauncher{t: t, build: func() (*gateway.Gateway, error) {
+		select {
+		case gw := <-gateways:
+			return gw, nil
+		default:
+			return nil, errors.New("no gateway left for a third launch")
+		}
+	}}
+	supervisor := newRelaunchSupervisor(t, launcher, process.Inherited{DataDir: dataDir})
+
+	require.NoError(t, supervisor.StartService(ctx, gateway.ServiceManagementVPN))
+	info, err := os.Stat(stateDir)
+	require.NoError(t, err, "the supervisor lays out the child's state directory before it starts")
+	assert.Equal(t, os.FileMode(0o700), info.Mode().Perm())
+	desired := &gwstate.DesiredConfig{GatewayID: "vpn-gw", Version: "rev-1", VPN: gateway.TwoLaptopVPNSection()}
+	_, err = supervisor.Apply(ctx, desired)
+	var noDatapath *process.ErrNoDatapathProcess
+	require.ErrorAs(t, err, &noDatapath, "the document still reaches the vpn child")
+	first := launcher.child(1)
+	require.NotNil(t, first)
+	require.Equal(t, "rev-1", first.gw.DesiredConfigState().Version)
+	require.ElementsMatch(t, []string{"lease-1", "lease-2"}, heldVPNLeases(first.gw))
+
+	require.Error(t, gateway.RevokeVPNLease(ctx, first.gw, "lease-1"), "the control plane refused the DELETE")
+	pending, err := gateway.PendingVPNRevocations(journal)
+	require.NoError(t, err)
+	require.Equal(t, []string{"lease-1"}, pending, "the unprivileged child journaled it in its state directory")
+	require.Equal(t, []string{"lease-2"}, heldVPNLeases(first.gw))
+
+	first.kill(t)
+
+	second := awaitRelaunch(t, supervisor, launcher, gateway.ServiceManagementVPN)
+	assert.Equal(t, []string{"lease-2"}, heldVPNLeases(second.gw),
+		"the admitted lease is held again and the revoked one is not reinstated")
+	pending, err = gateway.PendingVPNRevocations(journal)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"lease-1"}, pending, "the refused revocation is still pending")
+	assert.Equal(t, "rev-1", second.gw.DesiredConfigState().Version,
+		"the relaunched child is given the last desired document")
 }

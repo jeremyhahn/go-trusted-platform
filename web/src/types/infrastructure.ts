@@ -234,7 +234,15 @@ export interface FlowRule {
 }
 
 export interface FlowAction {
-  type: 'output' | 'drop' | 'mod_vlan_vid' | 'strip_vlan' | 'set_field' | 'goto_table';
+  type:
+    | 'output'
+    | 'drop'
+    | 'mod_vlan_vid'
+    | 'strip_vlan'
+    | 'set_field'
+    | 'goto_table'
+    | 'controller'
+    | 'unspecified';
   value?: string | number;
 }
 

@@ -179,9 +179,9 @@ quicbaas connection's TLS files `quicbaas_ca_cert`, `quicbaas_client_cert` and
 
 ## 3. The command tree
 
-`root.go` registers **44 top-level commands** in a default build: 11 root verbs
-and 33 feature groups. A build with the `pkcs11` tag adds `pkcs11`
-(`root_pkcs11.go`), for **45**. `help` is Cobra's own and is not counted.
+`root.go` registers **45 top-level commands** in a default build: 11 root verbs
+and 34 feature groups. A build with the `pkcs11` tag adds `pkcs11`
+(`root_pkcs11.go`), for **46**. `help` is Cobra's own and is not counted.
 
 ### 3.1 Root verbs — documented here (§4)
 
@@ -220,9 +220,10 @@ and 33 feature groups. A build with the `pkcs11` tag adds `pkcs11`
 | `tpm` | [`tpm/cli.md`](../tpm/cli.md) |
 | `vtpm` | [`vtpm/cli.md`](../vtpm/cli.md) |
 | `pkcs11` (`pkcs11` tag) | this document, §6 |
+| `dns` | [`dns/cli.md`](../dns/cli.md) |
 
-**There is no `dns`, no `pxe`, no `gateway` and no `cluster` top-level group.**
-DNS has essentially no CLI ([`dns/cli.md`](../dns/cli.md)); PXE device lifecycle
+**There is no `pxe`, no `gateway` and no `cluster` top-level group.**
+PXE device lifecycle
 is API-only; the gateway lives under `platformctl sdn gateway`. The secure-boot
 group is spelled `secure-boot`.
 

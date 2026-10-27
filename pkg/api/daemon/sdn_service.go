@@ -543,7 +543,10 @@ func (s *SDNService) AddFlow(ctx context.Context, req *platformv1.AddFlowRequest
 	// Convert proto flow config to OVS flow mod. The flow's cookie is its
 	// identity: the ID returned below is the cookie, so DeleteFlow removes
 	// exactly this flow and ListFlows reports the same ID.
-	flowMod := s.pbToOvsFlowMod(config)
+	flowMod, err := s.pbToOvsFlowMod(config)
+	if err != nil {
+		return nil, status.Error(codes.InvalidArgument, err.Error())
+	}
 	cookie, err := ovs.NewAPIFlowCookie()
 	if err != nil {
 		return nil, status.Error(codes.Internal, fmt.Sprintf("failed to allocate a flow cookie: %v", err))
@@ -1593,66 +1596,41 @@ func (s *SDNService) portStatus(ctx context.Context, client ovs.ClientInterface,
 }
 
 func (s *SDNService) ovsFlowToPb(ovsFlow *ovs.Flow, bridgeID string) *platformv1.Flow {
-	// Simplified conversion - real implementation would parse OVS flow details
 	return &platformv1.Flow{
-		Id: fmt.Sprintf("flow-%s", ovsFlow.Cookie),
+		Id: ovs.FlowIDPrefix + ovsFlow.Cookie,
 		Config: &platformv1.FlowConfig{
 			BridgeId: bridgeID,
+			// The inverse of pbToOvsFlowMod's table mapping.
+			Table:       platformv1.FlowTable(ovsFlow.Table),
+			Priority:    uint32(ovsFlow.Priority),
+			Match:       ovsMatchToPb(ovsFlow.Match),
+			Actions:     ovsActionsToPb(ovsFlow.Actions),
+			IdleTimeout: uint32(ovsFlow.IdleAge),
+			HardTimeout: uint32(ovsFlow.HardAge),
+		},
+		Stats: &platformv1.FlowStats{
+			PacketCount:     uint64(ovsFlow.PacketCount),
+			ByteCount:       uint64(ovsFlow.ByteCount),
+			DurationSeconds: uint32(ovsFlow.Duration),
 		},
 		CreatedAt: timestamppb.New(time.Now()),
 	}
 }
 
-func (s *SDNService) pbToOvsFlowMod(config *platformv1.FlowConfig) *ovs.FlowMod {
-	flowMod := &ovs.FlowMod{
-		Priority: int(config.GetPriority()),
-		Table:    int(config.GetTable()),
+func (s *SDNService) pbToOvsFlowMod(config *platformv1.FlowConfig) (*ovs.FlowMod, error) {
+	table := int(config.GetTable())
+	match, actions, err := flowConfigToOVSTerms(config, table)
+	if err != nil {
+		return nil, err
 	}
-
-	// Build match string from criteria
-	var matchParts []string
-	if match := config.GetMatch(); match != nil {
-		if match.GetInPort() != "" {
-			matchParts = append(matchParts, fmt.Sprintf("in_port=%s", match.GetInPort()))
-		}
-		if match.GetVlanId() > 0 {
-			matchParts = append(matchParts, fmt.Sprintf("dl_vlan=%d", match.GetVlanId()))
-		}
-		if match.GetEthSrc() != "" {
-			matchParts = append(matchParts, fmt.Sprintf("dl_src=%s", match.GetEthSrc()))
-		}
-		if match.GetEthDst() != "" {
-			matchParts = append(matchParts, fmt.Sprintf("dl_dst=%s", match.GetEthDst()))
-		}
-	}
-	if len(matchParts) > 0 {
-		flowMod.Match = strings.Join(matchParts, ",")
-	}
-
-	// Build actions string
-	var actionParts []string
-	for _, action := range config.GetActions() {
-		switch action.GetType() {
-		case platformv1.FlowActionType_FLOW_ACTION_OUTPUT:
-			if action.GetPort() == "" {
-				// Empty port means NORMAL forwarding (L2/L3 pipeline)
-				actionParts = append(actionParts, "NORMAL")
-			} else {
-				actionParts = append(actionParts, fmt.Sprintf("output:%s", action.GetPort()))
-			}
-		case platformv1.FlowActionType_FLOW_ACTION_DROP:
-			actionParts = append(actionParts, "drop")
-		case platformv1.FlowActionType_FLOW_ACTION_SET_VLAN:
-			actionParts = append(actionParts, fmt.Sprintf("mod_vlan_vid:%d", action.GetVlanId()))
-		case platformv1.FlowActionType_FLOW_ACTION_STRIP_VLAN:
-			actionParts = append(actionParts, "strip_vlan")
-		}
-	}
-	if len(actionParts) > 0 {
-		flowMod.Actions = strings.Join(actionParts, ",")
-	}
-
-	return flowMod
+	return &ovs.FlowMod{
+		Table:       table,
+		Priority:    int(config.GetPriority()),
+		Match:       match,
+		Actions:     actions,
+		IdleTimeout: int(config.GetIdleTimeout()),
+		HardTimeout: int(config.GetHardTimeout()),
+	}, nil
 }
 
 // =============================================================================

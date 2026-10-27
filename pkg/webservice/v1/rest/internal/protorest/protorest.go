@@ -187,7 +187,7 @@ func WriteError(w http.ResponseWriter, r *http.Request, writer response.HttpWrit
 	switch st.Code() {
 	case codes.OK:
 		writer.Success200(w, r, nil)
-	case codes.InvalidArgument, codes.FailedPrecondition, codes.OutOfRange:
+	case codes.InvalidArgument, codes.OutOfRange:
 		writer.Error400(w, r, err)
 	case codes.Unauthenticated:
 		writer.Error401(w, r, err)
@@ -195,7 +195,9 @@ func WriteError(w http.ResponseWriter, r *http.Request, writer response.HttpWrit
 		writer.Error403(w, r, err, nil)
 	case codes.NotFound:
 		writer.Error404(w, r, err)
-	case codes.AlreadyExists, codes.Aborted:
+	case codes.AlreadyExists, codes.Aborted, codes.FailedPrecondition:
+		// FailedPrecondition is a request the resource's current state
+		// refuses — a conflict with that state, not a malformed request (#665).
 		writer.Write(w, r, http.StatusConflict, restwire.WebServiceResponse{
 			Code:    http.StatusConflict,
 			Error:   err.Error(),
@@ -232,25 +234,6 @@ func WriteError(w http.ResponseWriter, r *http.Request, writer response.HttpWrit
 	default:
 		writer.Error500(w, r, err)
 	}
-}
-
-// WriteIdentityDeleteError answers a failed device-identity delete: the key
-// deletes (IDevID DeleteIDevID / DeleteIAK, TPM DeleteAK) and the certificate
-// deletes (DeleteIDevIDCertificate / DeleteIAKCertificate). FailedPrecondition
-// — the key refusal ErrDeviceIdentityKeyNotDeletable, or no TPM — is 412, as on
-// the daemon listener: the SDK's REST transport reads 412 back as
-// FailedPrecondition, the gRPC class, where WriteError's shared 400 (#665)
-// would read as InvalidArgument. Every other error takes the shared mapping.
-func WriteIdentityDeleteError(w http.ResponseWriter, r *http.Request, writer response.HttpWriter, err error) {
-	if status.Code(err) != codes.FailedPrecondition {
-		WriteError(w, r, writer, err)
-		return
-	}
-	writer.Write(w, r, http.StatusPreconditionFailed, restwire.WebServiceResponse{
-		Code:    http.StatusPreconditionFailed,
-		Error:   err.Error(),
-		Success: false,
-	})
 }
 
 // QueryUint32 reads a query parameter and parses it as a uint32. Returns 0

@@ -41,25 +41,25 @@ func newTPMServedRouter(server platformv1.TPMServiceServer) *mux.Router {
 	return parent
 }
 
-// TestDeleteAK_RefusedWith412 drives the daemon's own TPMGRPCService through
+// TestDeleteAK_RefusedWith409 drives the daemon's own TPMGRPCService through
 // DELETE /api/v1/tpm/ak. DeleteAK names the IAK, which is not evicted, so the
-// service refuses and the route answers as the IAK delete route does: 412
+// service refuses and the route answers as the IAK delete route does: 409
 // carrying the typed error's message.
-func TestDeleteAK_RefusedWith412(t *testing.T) {
+func TestDeleteAK_RefusedWith409(t *testing.T) {
 	router := newTPMServedRouter(daemon.NewTPMGRPCService(logging.NewLogger(slog.LevelError, io.Discard)))
 
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, httptest.NewRequest(http.MethodDelete, "/api/v1/tpm/ak", nil))
 
-	require.Equal(t, http.StatusPreconditionFailed, rec.Code)
+	require.Equal(t, http.StatusConflict, rec.Code)
 	var body restwire.WebServiceResponse
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
-	assert.Equal(t, http.StatusPreconditionFailed, body.Code)
+	assert.Equal(t, http.StatusConflict, body.Code)
 	assert.False(t, body.Success)
 	assert.Equal(t, daemon.ErrDeviceIdentityKeyNotDeletable{Key: "IAK"}.Error(), body.Error)
 }
 
-// TestDeleteAK_OtherFailuresKeepTheSharedMapping pins the 412 to the refusal
+// TestDeleteAK_OtherFailuresKeepTheSharedMapping pins the 409 to the refusal
 // alone: any other error from the service takes protorest's shared mapping,
 // here Unimplemented as 501.
 func TestDeleteAK_OtherFailuresKeepTheSharedMapping(t *testing.T) {

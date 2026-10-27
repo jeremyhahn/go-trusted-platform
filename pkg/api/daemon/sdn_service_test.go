@@ -1044,7 +1044,8 @@ func TestSDNService_ConversionHelpers(t *testing.T) {
 			},
 		}
 
-		flowMod := svc.pbToOvsFlowMod(config)
+		flowMod, err := svc.pbToOvsFlowMod(config)
+		require.NoError(t, err)
 
 		require.NotNil(t, flowMod)
 		assert.Equal(t, 100, flowMod.Priority)
@@ -1065,7 +1066,8 @@ func TestSDNService_ConversionHelpers(t *testing.T) {
 			Priority: 100,
 		}
 
-		flowMod := svc.pbToOvsFlowMod(config)
+		flowMod, err := svc.pbToOvsFlowMod(config)
+		require.NoError(t, err)
 
 		require.NotNil(t, flowMod)
 		assert.Equal(t, 100, flowMod.Priority)

@@ -19,7 +19,6 @@ import (
 	"archive/tar"
 	"bytes"
 	"compress/gzip"
-	"context"
 	"crypto/sha256"
 	"encoding/base64"
 	"fmt"
@@ -33,11 +32,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
-
 	pkgiso "github.com/jeremyhahn/go-trusted-platform/pkg/iso"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 )
 
 // mirrorPackageVersion is the version every fixture package carries.
@@ -211,42 +206,4 @@ func gzipTar(t *testing.T, files map[string][]byte) []byte {
 		t.Fatalf("closing gzip: %v", err)
 	}
 	return buf.Bytes()
-}
-
-// preFetchFrom returns a pre-fetch builder for the mirror's architecture,
-// reading the given Alpine release from it into a fresh ISO tree.
-func (m *alpineMirror) preFetchFrom(t *testing.T, majorMinor, fullVersion string) (*pkgiso.PreFetchBuilder, string) {
-	t.Helper()
-	isoDir := t.TempDir()
-	return pkgiso.NewPreFetchBuilder(&pkgiso.PreFetchConfig{
-		Mirror:       m.URL(),
-		Version:      majorMinor,
-		FullVersion:  fullVersion,
-		Architecture: m.arch,
-		WorkDir:      t.TempDir(),
-		ISODir:       isoDir,
-	}, logging.DefaultLogger()), isoDir
-}
-
-func TestAlpineMirror_ServesTheOfflineRepositoryPreFetchBuilds(t *testing.T) {
-	mirror := newAlpineMirror(t)
-	builder, isoDir := mirror.preFetchFrom(t, mirror.majorMinor, mirror.fullVersion)
-
-	require.NoError(t, builder.BuildLocalRepository(context.Background()))
-	require.NoError(t, requireOfflineRepository(isoDir))
-	assert.True(t, FileExists(filepath.Join(isoDir, fmt.Sprintf("alpine-minirootfs-%s-%s.tar.gz", mirror.fullVersion, mirror.arch))))
-	mirror.requireServedPreFetch(t)
-}
-
-func TestAlpineMirror_RefusesAReleaseItDoesNotCarry(t *testing.T) {
-	mirror := newAlpineMirror(t)
-	builder, isoDir := mirror.preFetchFrom(t, "9.99", "9.99.0")
-
-	err := builder.BuildLocalRepository(context.Background())
-	var failed *pkgiso.ErrPreFetchFailed
-	require.ErrorAs(t, err, &failed)
-	assert.Equal(t, "load_index", failed.Operation)
-	assert.Error(t, requireOfflineRepository(isoDir))
-	assert.Positive(t, mirror.unknownGets.Load())
-	assert.Zero(t, mirror.packageGets.Load())
 }

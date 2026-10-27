@@ -143,7 +143,9 @@ jobs:
           FUZZTIME: ${{ inputs.fuzztime }}
         run: |
           mkdir -p fuzz-logs
-          # shellcheck disable=SC2329 # xargs calls it through bash -c
+          # xargs calls it through bash -c: shellcheck 0.11+ reports the
+          # never-invoked function as SC2329, 0.9.0 (the toolchain image) as SC2317.
+          # shellcheck disable=SC2317,SC2329
           fuzz_one() {
             pkg=$1 target=$2 log="fuzz-logs/$(echo "$pkg" | tr / _).$target.log"
             if go test -tags="$FUZZ_TAGS" -run='^$' -fuzz="^${target}\$" \

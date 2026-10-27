@@ -78,6 +78,7 @@ type Controller struct {
 	unloadedCRLs map[crlIssuer]struct{}             // issuers whose held CRL charon failed to load
 	pendingCRLs  map[crlIssuer]*x509.RevocationList // issuer → its newest CRL awaiting a tunnel identity
 	cert         *x509.Certificate                  // the tunnel certificate last loaded
+	root         *x509.Certificate                  // the root of the chain last loaded, every peer's chain must hold it
 	cmd          Session                            // nil while detached
 }
 
@@ -210,6 +211,7 @@ func (c *Controller) loadIdentity(ctx context.Context, sess Session) (*TunnelIde
 		return nil, &OpError{Op: "load-token", Err: err}
 	}
 	c.cert = id.Chain[0]
+	c.root = id.Chain[len(id.Chain)-1]
 	return id, nil
 }
 
@@ -729,7 +731,7 @@ func (c *Controller) sync(ctx context.Context, peer netip.Addr) error {
 
 // load pushes peer's connection. Callers hold mu and a session.
 func (c *Controller) load(ctx context.Context, peer netip.Addr) error {
-	if err := c.cmd.LoadConn(ctx, connName(peer), c.cfg.connection(peer)); err != nil {
+	if err := c.cmd.LoadConn(ctx, connName(peer), c.cfg.connection(peer, c.root)); err != nil {
 		return &PeerError{Peer: peer, Op: "load-conn", Err: err}
 	}
 	c.loaded[peer] = struct{}{}

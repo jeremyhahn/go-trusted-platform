@@ -861,7 +861,7 @@ together with stateless NAT failover. Conntrack/NAT state sync is #710.
 
 | Type | What it is |
 |---|---|
-| `Class`, `Definition` | a privilege class (`ClassKernel`, `ClassParser`) and one process: name, class, hosted services, capabilities, `AddressFamilies`, `MemoryMax`, `CPUMax`, `Unprivileged`, `Supervised` |
+| `Class`, `Definition` | a privilege class (`ClassKernel`, `ClassParser`) and one process: name, class, hosted services, capabilities, `AddressFamilies`, `MemoryMax`, `CPUMax`, `Unprivileged`, `Supervised`, `ReconcilesDesired` (the process applies a section of the desired document: `datapath` the load-balancer and NAT sections, `vpn` the vpn section), and `StateDir` (the directory under `--data-dir` the process keeps its own state in: `vpn` for the vpn child's revocation journal) |
 | `DefinitionForService`, `DefinitionByName`, `Definitions`, `Processes` | the class table's lookups; `Processes(enabled)` returns only the processes those services need, each carrying only the enabled ones |
 | `Supervisor` | implements `gateway.ServiceSupervisor`: `Supervises`, `StartService`, `StopService`, `ServiceActive`, `ServiceHealth`, `ServiceSnapshot`, `Apply`, plus `Snapshot` and `Shutdown` |
 | `Config`, `Settings` | the supervisor's wiring, and the `process:` YAML section that builds it |
@@ -1258,7 +1258,8 @@ accounting (`process memory`); every `process down, restarting` line carries
 the same fields, so an OOM kill is on record next to the restart it caused.
 
 **An ambiguous datapath is refused, not resolved.** `Apply` and `Snapshot` go
-to the kernel-class process through `datapathClient()`. The class table has one
+to the kernel-class process through `datapathClient()` (`Apply` also to the
+`vpn` child, below). The class table has one
 today, but it is data rather than a type: two would make map iteration order
 decide where the desired configuration lands. Two live kernel-class processes
 are `ErrAmbiguousDatapath` naming both.
@@ -1272,6 +1273,17 @@ kernel keeps a setgid bit only for a caller in the directory's group or holding
 `CAP_FSETID` — and one the service group still cannot write, or one without
 the setgid bit while a socket group is configured (`ErrSocketDirNotSetgid`), is
 a refusal naming the directory.
+
+**The supervisor creates a process's `StateDir`** under `--data-dir` before
+every launch of that process (`ensureStateDir`): mode `0700`, owned by the
+uid and gid an `Unprivileged` child runs as. The data directory belongs to
+root, so the unprivileged `vpn` child could not create `<data-dir>/vpn` for its
+revocation journal itself. An existing directory has its owner and mode set
+again rather than assumed. A directory that cannot be created, chowned or
+chmodded is `ErrStateDir{Process, Path, Op, Cause}` and the process is not
+launched, because a child that cannot write its state would run without it.
+With no `--data-dir` the child resolves its own default and nothing is laid
+out.
 
 The setgid bit is how every control socket gets the service group. The
 datapath child stays uid 0, but `harden` leaves it exactly `CAP_NET_ADMIN` and
@@ -1304,7 +1316,7 @@ been reaped. Every path that ends a child goes through the same
 graceful-then-kill `terminate`, so none of them can wait on a wedged child
 forever.
 
-**Processes move one at a time — `routing`, then `proxy`, then `provisioning`, then `datapath`.**
+**Processes move one at a time — `routing`, then `proxy`, then `provisioning`, then `datapath`, then `vpn`.**
 `Definition.Supervised` marks the processes that have left `gatewayd serve`;
 `Supervisor.Supervises` answers from it, and the gateway (`handlers.go`)
 registers a supervised handler only for those services. Every other service
@@ -1355,6 +1367,26 @@ and, for the VPN peer methods only, the service account the parsers share;
 `ApplyDesired` is the supervisor's alone. No parser process programs the
 kernel in-process: their backends (the BGP speaker, the proxy, the
 provisioning refusals) use no netlink and no OVS.
+
+`vpn` (`management-vpn`) moved after `datapath`, with the smallest set of all:
+no capability. Its data plane is programmed through the datapath child's
+`DatapathService` VPN peer methods (`DatapathPlane` →
+`ipc.Client.InstallVPNPeer`), so it needs no `CAP_NET_ADMIN`, and its
+admission listener's default port, 4433, needs no `CAP_NET_BIND_SERVICE`. It
+opens `AF_UNIX`, `AF_INET` and `AF_INET6` only — no `AF_NETLINK`, as it reads
+no routes or links (`TestSupervises_OnlyTheMovedProcessIsSupervised`). Its
+section of the desired document is the one section outside the datapath, so
+`Definition.ReconcilesDesired` marks both processes and `Supervisor.Apply`
+sends the whole document to each: the `vpn` child is given the last document
+at every launch and on every apply, and a failure there joins the datapath
+child's result as `ErrDesiredForwardFailed`
+(`TestApply_TheVPNChildIsGivenTheDocumentAtStartAndOnEveryApply`). A child
+applies only the sections of the services it hosts, so the `vpn` child leaves
+the load-balancer and NAT sections to `datapath`
+(`TestApply_AChildAppliesOnlyTheSectionsOfItsServices`). The snapshot's `vpn`
+section is relayed from the child through `ServiceSnapshot`; a child that
+cannot be read leaves the section out and logs why
+(`TestSupervisedSnapshot_RelaysTheVPNChildsSection`).
 
 **The wiring in `cmd/gatewayd`** (`pkg/sdn/gateway/commands`):
 
@@ -1488,6 +1520,8 @@ unkillable. It then sets `memory.swap.max` to 0 and lowers the live leaf's
   `memory.current`, `memory.peak` and `memory.events` are logged before the
   limit drops and once the write returns, so the job log shows how far over
   1 MiB the child was;
+- the leaf's `memory.peak` after the kill is over 1 MiB and at least the
+  `memory.current` read before the limit dropped;
 - only that child comes back, with a new PID;
 - the relaunch rewrites the class limit and resets the test's `memory.swap.max`
   of 0 to `max` (`Prepare` runs on every launch);
@@ -1508,7 +1542,12 @@ root before the suite runs (`prepare_gatewayd_supervision`). This works the
 way a systemd host does: the root's processes first move to an `init` leaf,
 because a cgroup holding processes cannot enable controllers for its children.
 Every test's teardown logs each running child's leaf accounting before it
-stops gatewayd, the measured basis for the class `MemoryMax` values. It then
+stops gatewayd, the measured basis for the class `MemoryMax` values, with the
+peak as a percentage of the class value. It asserts every leaf charged a
+non-zero `memory.peak` and has no `oom_kill` beyond the one
+`TestGatewaydSupervisorMemoryMaxRestartsOnlyThatChild` caused: a relaunch keeps
+the leaf, so that kill is still counted, and any other means a class value is
+below what its child needs. It then
 waits, through `CgroupManager.Remove`, for any leaf gatewayd left to report
 `populated 0` before it removes the test's cgroup parent.
 
@@ -1539,9 +1578,20 @@ same generation sweep (unit-tested in
 `TestSupervisedRelaunch_AKilledChildsSuccessorReconcilesTheBridgeItLeft` for
 the load balancer and NAT).
 
-**Still pending:** `vpn`, once it has a backend (the management VPN is a
-refused section today, #558). Its move must route the snapshot sections its
-service owns through `ServiceSnapshot` the same way.
+**The `vpn` child's relaunch keeps its leases and pending revocations.**
+`TestSupervisedRelaunch_AKilledVPNChildKeepsItsLeasesAndPendingRevocations`
+(`pkg/sdn/gateway/relaunch_test.go`) runs the `vpn` child under the
+supervisor against a control plane that records two leases and refuses every
+DELETE, with the revocation journal at `<data-dir>/vpn/pending-revocations.json`.
+The supervisor lays out that directory at mode `0700` before the first launch.
+The child is given a desired document, holds both leases, and has one revoked;
+the refused DELETE leaves that revocation journaled. The test then kills the
+child. The relaunched child holds the admitted lease again, does not reinstate
+the revoked one from the control plane's record, keeps the revocation pending
+in the journal, and is given the last desired document. A known gap remains:
+`serveProcess` does not yet call `SetVPNLeaseControl` in the `vpn` child, so a
+production `vpn` child runs with no lease control plane or journal until the
+VPNRuntime assembly in #584 wires it.
 
 ### Supervisor IPC — `pkg/sdn/gateway/ipc` (#557)
 
@@ -2523,8 +2573,13 @@ Start installs the floor before the handler starts; a failed start closes the
 service and Stop closes it after the speaker. Neither removes the floor, so a
 node whose IPsec has stopped carries no plaintext VTEP traffic. The IPsec
 identity is the same file identity platformd uses (`token`,
-`certificate-file`); a certificate derived from the node's IDevID is not yet
-wired.
+`certificate-file`), held to the platform anchor of `platform-ca-file`: a
+chain whose root is not an anchor certificate is refused, and each peer's
+chain must contain that root ([tunnel identity](../sdn/overlay/architecture.md#tunnel-identity)).
+A gatewayd without `platform-ca-file` builds no overlay IPsec
+(`ipsec.ErrMissingDependency`). A certificate issued from the node's
+enrolled identity is not yet wired: the SDK re-exports no signer over the
+PKCS#11 IKE key.
 
 #### Trust assumptions
 

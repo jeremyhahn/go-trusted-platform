@@ -1,11 +1,19 @@
 #!/bin/bash
 
+# shellcheck source=build/docker/devcontainer/wait-for.sh
+source /usr/local/lib/wait-for.sh
+
+# swtpm_listening succeeds once swtpm accepts a connection on its TPM port.
+swtpm_listening() {
+    : < /dev/tcp/127.0.0.1/2321
+}
+
 # Start TPM simulator in background if enabled
 if [ "${TPM_SIMULATOR}" = "true" ]; then
     echo "Starting TPM simulator..."
     mkdir -p /tmp/tpm
     swtpm socket --tpmstate dir=/tmp/tpm --tpm2 --ctrl type=tcp,port=2322 --server type=tcp,port=2321 --flags not-need-init &
-    sleep 2
+    wait_for 10 "swtpm on 127.0.0.1:2321" swtpm_listening || exit 1
     export TPM2TOOLS_TCTI="swtpm:host=127.0.0.1,port=2321"
 fi
 
@@ -36,8 +44,6 @@ fi
 
 # Run the webservice
 echo "Starting webservice..."
-# Add a small delay to ensure clean startup
-sleep 2
 
 # Check if we were successfully initialized
 if [ -d /opt/trusted-platform/trusted-data/platform ]; then

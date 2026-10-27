@@ -37,6 +37,8 @@ type vmSnapshotSDKVerb struct {
 	typed func(err error) bool
 	// fail makes the orchestrator answer the verb with err.
 	fail func(orch *computeParityOrchestrator, err error)
+	// deletes marks the verb whose REST route is a DELETE.
+	deletes bool
 }
 
 var vmSnapshotSDKVerbs = []vmSnapshotSDKVerb{
@@ -62,8 +64,9 @@ var vmSnapshotSDKVerbs = []vmSnapshotSDKVerb{
 		call: func(ctx context.Context, c *sdkcompute.Client, vmID string) error {
 			return c.DeleteSnapshot(ctx, vmID, "nightly")
 		},
-		typed: typedAs[*sdkcompute.ErrDeleteSnapshotFailed],
-		fail:  func(orch *computeParityOrchestrator, err error) { orch.deleteErr = err },
+		typed:   typedAs[*sdkcompute.ErrDeleteSnapshotFailed],
+		fail:    func(orch *computeParityOrchestrator, err error) { orch.deleteErr = err },
+		deletes: true,
 	},
 	{
 		name: "list",
@@ -155,7 +158,7 @@ func TestVMSnapshotSDKParity_VMNotRunning(t *testing.T) {
 
 				err := verb.call(context.Background(), client, "vm-1")
 				assert.True(t, verb.typed(err), "err = %T, want the client's typed %s error", err, verb.name)
-				assert.Equal(t, transport.wrongState, status.Code(err), "err = %v", err)
+				assert.Equal(t, transport.wrongStateOf(verb.deletes), status.Code(err), "err = %v", err)
 			})
 		}
 	}

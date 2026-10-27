@@ -79,7 +79,9 @@ var databaseClasses = map[int]codes.Code{
 }
 
 // httpStatuses is the REST answer for each class; the platform SDK's REST
-// transport decodes these back to the same class.
+// transport decodes these back to the same class. FailedPrecondition is 409,
+// as protorest sends it platform-wide (#665): the SDK reads a 409 on a DELETE
+// back as FailedPrecondition and on any other method as AlreadyExists.
 var httpStatuses = map[codes.Code]int{
 	codes.InvalidArgument:    http.StatusBadRequest,
 	codes.Unauthenticated:    http.StatusUnauthorized,
@@ -87,7 +89,7 @@ var httpStatuses = map[codes.Code]int{
 	codes.NotFound:           http.StatusNotFound,
 	codes.AlreadyExists:      http.StatusConflict,
 	codes.Aborted:            http.StatusConflict,
-	codes.FailedPrecondition: http.StatusPreconditionFailed,
+	codes.FailedPrecondition: http.StatusConflict,
 	codes.ResourceExhausted:  http.StatusTooManyRequests,
 	codes.Unimplemented:      http.StatusNotImplemented,
 	codes.Unavailable:        http.StatusServiceUnavailable,

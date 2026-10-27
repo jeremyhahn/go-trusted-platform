@@ -212,16 +212,11 @@ func restTPMIAKDelete(t *testing.T, service platformv1.TPMServiceServer) tpmIAKD
 	token := key.sign(t, "operator", "", []string{"tpm:delete"})
 	server := newTPMTestRESTServer(t)
 	server.SetTPMHandlers(service, tokenScopeGuard(validator))
-	classify := func(httpStatus int) codes.Code {
-		return classOf(httpStatus, func(c codes.Code) int {
-			return idevidGRPCToHTTPStatus(status.Error(c, ""))
-		})
-	}
 	return func(t *testing.T) codes.Code {
 		byHandle := serveTPMRoute(server, http.MethodDelete, "/api/v1/tpm/ak/0x81010003", token)
 		rr := serveTPMRoute(server, http.MethodDelete, "/api/v1/tpm/ak", token)
 		assert.Equal(t, rr.Code, byHandle.Code, "both AK paths answer alike")
-		return classify(rr.Code)
+		return restDeleteClassOf(rr.Code)
 	}
 }
 
@@ -328,9 +323,7 @@ func restIdentityKeyDelete(t *testing.T, tpm *identityRecordingTPM) identityKeyD
 	paths := map[string]string{"IDevID": "/api/v1/tpm/idevid", "IAK": "/api/v1/tpm/iak"}
 	return func(t *testing.T, key string) codes.Code {
 		rr := executeRESTRequest(t, server, http.MethodDelete, paths[key], nil)
-		return classOf(rr.Code, func(c codes.Code) int {
-			return idevidGRPCToHTTPStatus(status.Error(c, ""))
-		})
+		return restDeleteClassOf(rr.Code)
 	}
 }
 
@@ -382,9 +375,7 @@ func restIdentityCertDelete(t *testing.T, svc *IDevIDGRPCService) identityCertDe
 	paths := map[string]string{"IDevID": "/api/v1/tpm/idevid/cert", "IAK": "/api/v1/tpm/iak/cert"}
 	return func(t *testing.T, key string) codes.Code {
 		rr := executeRESTRequest(t, server, http.MethodDelete, paths[key], nil)
-		return classOf(rr.Code, func(c codes.Code) int {
-			return idevidGRPCToHTTPStatus(status.Error(c, ""))
-		})
+		return restDeleteClassOf(rr.Code)
 	}
 }
 
@@ -417,4 +408,17 @@ func classOf[T comparable](got T, encode func(codes.Code) T) codes.Code {
 		return codes.Unknown
 	}
 	return match
+}
+
+// restDeleteClassOf reads a REST DELETE's status back as a gRPC code.
+// 409 Conflict carries both AlreadyExists and FailedPrecondition (#665), and
+// a delete cannot collide with an existing resource, so a DELETE's 409 is a
+// FailedPrecondition: the same reading as the SDK's REST adapter.
+func restDeleteClassOf(httpStatus int) codes.Code {
+	if httpStatus == http.StatusConflict {
+		return codes.FailedPrecondition
+	}
+	return classOf(httpStatus, func(c codes.Code) int {
+		return idevidGRPCToHTTPStatus(status.Error(c, ""))
+	})
 }

@@ -2850,7 +2850,7 @@ func TestWriteKMSError_Classes(t *testing.T) {
 		{"database not found", quicbaas.NewDatabaseError(quicbaas.ErrNotFound, "GetKey", "no key"), http.StatusNotFound},
 		{"sdk invalid input", sdkerrors.NewInvalidInput("GetKey", "bad id"), http.StatusBadRequest},
 		{"sdk already exists", sdkerrors.NewAlreadyExists("ImportKey", "dup"), http.StatusConflict},
-		{"sdk precondition", sdkerrors.NewPreconditionFailed("DeleteKey", "in use"), http.StatusPreconditionFailed},
+		{"sdk precondition", sdkerrors.NewPreconditionFailed("DeleteKey", "in use"), http.StatusConflict},
 		{"sdk forbidden", sdkerrors.NewForbidden("ExportKey", "no"), http.StatusForbidden},
 		{"sdk unimplemented", sdkerrors.NewUnimplemented("Rewrap", "later"), http.StatusNotImplemented},
 		{"sdk unavailable", sdkerrors.NewUnavailable("GetKey", "down"), http.StatusServiceUnavailable},

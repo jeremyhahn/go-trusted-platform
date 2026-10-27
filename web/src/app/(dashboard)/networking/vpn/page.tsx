@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { AlertCircle, FileCode, Loader2, Plus, RefreshCw, Shield, Users } from 'lucide-react';
+import { AlertCircle, FileCode, Loader2, Plus, RefreshCw, Shield, Trash2, Users } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import {
@@ -38,6 +38,21 @@ interface PolicyDraft {
   isNew: boolean;
 }
 
+/** A peer in the enrol dialog; `zones` is the comma-separated text the operator types. */
+interface PeerDraft {
+  tenantId: string;
+  deviceId: string;
+  zones: string;
+}
+
+/** Splits the comma-separated zone list; an empty list means every allowed zone. */
+function parseZones(text: string): string[] {
+  return text
+    .split(',')
+    .map((zone) => zone.trim())
+    .filter((zone) => zone !== '');
+}
+
 /** Renders a protojson Unix-seconds string; zero means the field is unset. */
 function formatUnix(seconds: string): string {
   const value = Number(seconds);
@@ -61,6 +76,10 @@ export default function VPNPage() {
   const [revokeSubmitting, setRevokeSubmitting] = useState(false);
   const [draft, setDraft] = useState<PolicyDraft | null>(null);
   const [draftSubmitting, setDraftSubmitting] = useState(false);
+  const [enrolling, setEnrolling] = useState<PeerDraft | null>(null);
+  const [enrolSubmitting, setEnrolSubmitting] = useState(false);
+  const [deleting, setDeleting] = useState<VPNPosturePolicy | null>(null);
+  const [deleteSubmitting, setDeleteSubmitting] = useState(false);
 
   const notConfiguredQuiet = (title: string) => ({
     onError: (err: Error) => {
@@ -132,6 +151,50 @@ export default function VPNPage() {
       });
     } finally {
       setRevokeSubmitting(false);
+    }
+  };
+
+  const enrolPeer = async (peer: PeerDraft) => {
+    setEnrolSubmitting(true);
+    try {
+      // Enrolling an enrolled device replaces its zones and keeps its first
+      // enrolment time (docs/vpn/cli.md).
+      throwOnError(
+        await vpn.enrolPeer({
+          tenantId: peer.tenantId.trim(),
+          deviceId: peer.deviceId.trim(),
+          zones: parseZones(peer.zones),
+        })
+      );
+      toast({ title: `Enrolled ${peer.deviceId.trim()}`, variant: 'success' });
+      setEnrolling(null);
+      refetchPeers();
+    } catch (err) {
+      toast({
+        title: 'Failed to enrol peer',
+        description: err instanceof Error ? err.message : 'Unknown error',
+        variant: 'destructive',
+      });
+    } finally {
+      setEnrolSubmitting(false);
+    }
+  };
+
+  const deletePolicy = async (policy: VPNPosturePolicy) => {
+    setDeleteSubmitting(true);
+    try {
+      throwOnError(await vpn.deletePosturePolicy(policy.tenantId, policy.name));
+      toast({ title: `Deleted posture policy ${policy.name}`, variant: 'success' });
+      setDeleting(null);
+      refetchPolicies();
+    } catch (err) {
+      toast({
+        title: 'Failed to delete posture policy',
+        description: err instanceof Error ? err.message : 'Unknown error',
+        variant: 'destructive',
+      });
+    } finally {
+      setDeleteSubmitting(false);
     }
   };
 
@@ -347,10 +410,16 @@ export default function VPNPage() {
 
       <Card>
         <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <Users className="h-5 w-5" />
-            Enrolled Peers
-          </CardTitle>
+          <div className="flex items-center justify-between">
+            <CardTitle className="flex items-center gap-2">
+              <Users className="h-5 w-5" />
+              Enrolled Peers
+            </CardTitle>
+            <Button size="sm" onClick={() => setEnrolling({ tenantId: '', deviceId: '', zones: '' })}>
+              <Plus className="mr-2 h-4 w-4" />
+              Enrol Peer
+            </Button>
+          </div>
         </CardHeader>
         <CardContent>
           {peers.length === 0 ? (
@@ -435,6 +504,15 @@ export default function VPNPage() {
                       >
                         View / Edit
                       </Button>
+                      <Button
+                        variant="destructive"
+                        size="sm"
+                        className="ml-2"
+                        onClick={() => setDeleting(policy)}
+                        aria-label={`Delete ${policy.name}`}
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </Button>
                     </TableCell>
                   </TableRow>
                 ))}
@@ -465,6 +543,89 @@ export default function VPNPage() {
             >
               {revokeSubmitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
               Confirm Revoke
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={enrolling !== null} onOpenChange={(open) => !open && setEnrolling(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Enrol VPN Peer</DialogTitle>
+            <DialogDescription>
+              Enrolling a device that is already enrolled replaces its zones. The gateways take the
+              change on their next pull.
+            </DialogDescription>
+          </DialogHeader>
+          {enrolling && (
+            <div className="space-y-4">
+              <div className="grid gap-4 md:grid-cols-2">
+                <div className="space-y-2">
+                  <Label htmlFor="vpn-peer-tenant">Tenant *</Label>
+                  <Input
+                    id="vpn-peer-tenant"
+                    value={enrolling.tenantId}
+                    onChange={(e) => setEnrolling({ ...enrolling, tenantId: e.target.value })}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="vpn-peer-device">Device ID *</Label>
+                  <Input
+                    id="vpn-peer-device"
+                    value={enrolling.deviceId}
+                    onChange={(e) => setEnrolling({ ...enrolling, deviceId: e.target.value })}
+                  />
+                </div>
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="vpn-peer-zones">Zones</Label>
+                <Input
+                  id="vpn-peer-zones"
+                  placeholder="management, storage (empty: every allowed zone)"
+                  value={enrolling.zones}
+                  onChange={(e) => setEnrolling({ ...enrolling, zones: e.target.value })}
+                />
+              </div>
+            </div>
+          )}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setEnrolling(null)}>
+              Cancel
+            </Button>
+            <Button
+              disabled={
+                !enrolling || !enrolling.tenantId.trim() || !enrolling.deviceId.trim() || enrolSubmitting
+              }
+              onClick={() => enrolling && enrolPeer(enrolling)}
+            >
+              {enrolSubmitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              Enrol
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={deleting !== null} onOpenChange={(open) => !open && setDeleting(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Delete Posture Policy</DialogTitle>
+            <DialogDescription>
+              {deleting
+                ? `Delete posture policy ${deleting.name} of tenant ${deleting.tenantId}? The gateways stop applying it on their next pull.`
+                : ''}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDeleting(null)}>
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              disabled={deleteSubmitting}
+              onClick={() => deleting && deletePolicy(deleting)}
+            >
+              {deleteSubmitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              Confirm Delete
             </Button>
           </DialogFooter>
         </DialogContent>

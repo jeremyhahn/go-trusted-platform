@@ -1,5 +1,3 @@
-//go:build integration
-
 // Copyright (c) 2025 Jeremy Hahn
 // Copyright (c) 2025 Automate The Things, LLC
 //
@@ -13,7 +11,7 @@
 // 2. Commercial License
 //    Contact licensing@automatethethings.com for commercial licensing options.
 
-package sdn
+package policy_test
 
 import (
 	"context"
@@ -29,28 +27,35 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/policy/zoneflows"
 )
 
-// MockFlowController implements the FlowController interface for testing
-type MockFlowController struct {
-	installedFlows []FlowRecord
+// The engine's port state machine across the network phases a device moves
+// through (provisioning, enrolled, authorized, quarantined), driven in memory
+// against a flow controller that records what the engine installs and
+// deletes. These moved from test/integration/sdn (#964): nothing in them
+// touches OVS.
+
+// recordingFlowController implements policy.FlowController and the OVS port
+// controller in memory, recording every flow the engine installs and deletes.
+type recordingFlowController struct {
+	installedFlows []flowRecord
 	deletedFlows   []string
 }
 
-type FlowRecord struct {
+type flowRecord struct {
 	Bridge   string
 	Priority int
 	Match    string
 	Actions  string
 }
 
-func NewMockFlowController() *MockFlowController {
-	return &MockFlowController{
-		installedFlows: make([]FlowRecord, 0),
+func newRecordingFlowController() *recordingFlowController {
+	return &recordingFlowController{
+		installedFlows: make([]flowRecord, 0),
 		deletedFlows:   make([]string, 0),
 	}
 }
 
-func (m *MockFlowController) InstallFlow(bridgeName string, priority int, match string, actions string) error {
-	m.installedFlows = append(m.installedFlows, FlowRecord{
+func (m *recordingFlowController) InstallFlow(bridgeName string, priority int, match string, actions string) error {
+	m.installedFlows = append(m.installedFlows, flowRecord{
 		Bridge:   bridgeName,
 		Priority: priority,
 		Match:    match,
@@ -61,9 +66,9 @@ func (m *MockFlowController) InstallFlow(bridgeName string, priority int, match 
 
 // InstallFlows records a batch install, matching the canonical
 // policy.FlowController contract.
-func (m *MockFlowController) InstallFlows(bridgeName string, rules []zoneflows.FlowRule) error {
+func (m *recordingFlowController) InstallFlows(bridgeName string, rules []zoneflows.FlowRule) error {
 	for _, rule := range rules {
-		m.installedFlows = append(m.installedFlows, FlowRecord{
+		m.installedFlows = append(m.installedFlows, flowRecord{
 			Bridge:   bridgeName,
 			Priority: rule.Priority,
 			Match:    rule.Match,
@@ -73,17 +78,17 @@ func (m *MockFlowController) InstallFlows(bridgeName string, rules []zoneflows.F
 	return nil
 }
 
-func (m *MockFlowController) DeleteFlow(bridgeName string, match string) error {
+func (m *recordingFlowController) DeleteFlow(bridgeName string, match string) error {
 	m.deletedFlows = append(m.deletedFlows, match)
 	return nil
 }
 
-func (m *MockFlowController) DeleteFlowsByPort(bridgeName string, portID string) error {
+func (m *recordingFlowController) DeleteFlowsByPort(bridgeName string, portID string) error {
 	m.deletedFlows = append(m.deletedFlows, portID)
 	return nil
 }
 
-func (m *MockFlowController) ListFlows(bridgeName string) ([]string, error) {
+func (m *recordingFlowController) ListFlows(bridgeName string) ([]string, error) {
 	flows := make([]string, 0, len(m.installedFlows))
 	for _, f := range m.installedFlows {
 		flows = append(flows, f.Match)
@@ -91,35 +96,35 @@ func (m *MockFlowController) ListFlows(bridgeName string) ([]string, error) {
 	return flows, nil
 }
 
-func (m *MockFlowController) Reset() {
-	m.installedFlows = make([]FlowRecord, 0)
+func (m *recordingFlowController) Reset() {
+	m.installedFlows = make([]flowRecord, 0)
 	m.deletedFlows = make([]string, 0)
 }
 
-// SetPortVLAN implements OVSPortController interface
-func (m *MockFlowController) SetPortVLAN(ctx context.Context, portName string, vlan int64) error {
+// SetPortVLAN implements the OVS port controller interface.
+func (m *recordingFlowController) SetPortVLAN(ctx context.Context, portName string, vlan int64) error {
 	return nil
 }
 
-// SetPortTrunk implements OVSPortController interface
-func (m *MockFlowController) SetPortTrunk(ctx context.Context, portName string, allowed []uint16, native uint16) error {
+// SetPortTrunk implements the OVS port controller interface.
+func (m *recordingFlowController) SetPortTrunk(ctx context.Context, portName string, allowed []uint16, native uint16) error {
 	return nil
 }
 
-// SetPortState implements OVSPortController interface
-func (m *MockFlowController) SetPortState(ctx context.Context, portName string, state ovs.PortState) error {
+// SetPortState implements the OVS port controller interface.
+func (m *recordingFlowController) SetPortState(ctx context.Context, portName string, state ovs.PortState) error {
 	return nil
 }
 
-// GetOFPort implements OVSPortController interface
-func (m *MockFlowController) GetOFPort(ctx context.Context, portName string) (int32, error) {
+// GetOFPort implements the OVS port controller interface.
+func (m *recordingFlowController) GetOFPort(ctx context.Context, portName string) (int32, error) {
 	return 1, nil
 }
 
 // TestProvisioningToEnrolledTransition verifies the state transition from
 // provisioning to enrolled state
 func TestProvisioningToEnrolledTransition(t *testing.T) {
-	mockFC := NewMockFlowController()
+	mockFC := newRecordingFlowController()
 
 	engine, err := policy.NewEngine(policy.Config{
 		BridgeName:     "br0",
@@ -159,7 +164,7 @@ func TestProvisioningToEnrolledTransition(t *testing.T) {
 // TestEnrolledToAuthorizedTransition verifies the transition from enrolled
 // to authorized state (production network activation)
 func TestEnrolledToAuthorizedTransition(t *testing.T) {
-	mockFC := NewMockFlowController()
+	mockFC := newRecordingFlowController()
 
 	engine, err := policy.NewEngine(policy.Config{
 		BridgeName:     "br0",
@@ -217,7 +222,7 @@ func TestEnrolledToAuthorizedTransition(t *testing.T) {
 // TestProvisioningVLANToProductionVLANTransition verifies VLAN changes
 // during network phase transitions
 func TestProvisioningVLANToProductionVLANTransition(t *testing.T) {
-	mockFC := NewMockFlowController()
+	mockFC := newRecordingFlowController()
 
 	engine, err := policy.NewEngine(policy.Config{
 		BridgeName:     "br0",
@@ -282,7 +287,7 @@ func TestProvisioningVLANToProductionVLANTransition(t *testing.T) {
 
 // TestACLRulesTransition verifies ACL rule changes during phase transitions
 func TestACLRulesTransition(t *testing.T) {
-	mockFC := NewMockFlowController()
+	mockFC := newRecordingFlowController()
 
 	engine, err := policy.NewEngine(policy.Config{
 		BridgeName:     "br0",
@@ -376,7 +381,7 @@ func TestACLRulesTransition(t *testing.T) {
 
 // TestQuarantineNetworkTransition verifies transitions to/from quarantine state
 func TestQuarantineNetworkTransition(t *testing.T) {
-	mockFC := NewMockFlowController()
+	mockFC := newRecordingFlowController()
 
 	engine, err := policy.NewEngine(policy.Config{
 		BridgeName:     "br0",
@@ -461,7 +466,7 @@ func TestQuarantineNetworkTransition(t *testing.T) {
 // TestDeviceProfileToSDNPolicyIntegration verifies end-to-end integration
 // from device profile to SDN policy enforcement
 func TestDeviceProfileToSDNPolicyIntegration(t *testing.T) {
-	mockFC := NewMockFlowController()
+	mockFC := newRecordingFlowController()
 
 	engine, err := policy.NewEngine(policy.Config{
 		BridgeName:     "br0",
@@ -689,7 +694,7 @@ func TestCertificateBasedPolicyExtraction(t *testing.T) {
 
 // TestStateTransitionValidation verifies that invalid state transitions are rejected
 func TestStateTransitionValidation(t *testing.T) {
-	mockFC := NewMockFlowController()
+	mockFC := newRecordingFlowController()
 
 	engine, err := policy.NewEngine(policy.Config{
 		BridgeName:     "br0",
