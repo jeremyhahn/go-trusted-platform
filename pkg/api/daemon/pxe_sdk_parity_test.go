@@ -230,16 +230,28 @@ func (f *recordingPXEService) UpdateDeviceState(_ context.Context, deviceID stri
 	return nil
 }
 
-func (f *recordingPXEService) SetDeviceEnrolled(_ context.Context, deviceID, certSerial, certFingerprint string) error {
+func (f *recordingPXEService) SetDeviceEnrolled(_ context.Context, deviceID, certSerial string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.record("SetDeviceEnrolled", deviceID, certSerial, certFingerprint)
+	f.record("SetDeviceEnrolled", deviceID, certSerial)
 	device, err := f.lookup(deviceID)
 	if err != nil {
 		return err
 	}
 	device.CertificateSerial = certSerial
 	f.changed(device, pxe.StateEnrolled, "enrolled")
+	return nil
+}
+
+func (f *recordingPXEService) BindDeviceCertificate(_ context.Context, deviceID, certFingerprint string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.record("BindDeviceCertificate", deviceID, certFingerprint)
+	device, err := f.lookup(deviceID)
+	if err != nil {
+		return err
+	}
+	device.CertificateFingerprint = certFingerprint
 	return nil
 }
 
@@ -336,6 +348,9 @@ func pxeSDKRequests() map[string]proto.Message {
 		},
 		platformv1.PXEService_SetDeviceEnrolled_FullMethodName: &platformv1.SetPXEDeviceEnrolledRequest{
 			DeviceId: pxeSDKDeviceID, CertificateSerial: "0A1B",
+		},
+		platformv1.PXEService_BindDeviceCertificate_FullMethodName: &platformv1.BindPXEDeviceCertificateRequest{
+			DeviceId: pxeSDKDeviceID, CertificateFingerprint: "abababababababababababababababababababababababababababababababab",
 		},
 		platformv1.PXEService_Authorize_FullMethodName: &platformv1.AuthorizePXEDeviceRequest{DeviceId: pxeSDKDeviceID, TargetVlan: 120},
 		platformv1.PXEService_Quarantine_FullMethodName: &platformv1.QuarantinePXEDeviceRequest{

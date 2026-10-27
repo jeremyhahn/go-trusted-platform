@@ -170,9 +170,10 @@ func (r *PXERouter) requireScope(scope string, handler http.HandlerFunc) http.Ha
 // gatewayd does on its control plane (#238): the handler refuses a request
 // with no verified client certificate, and passes the connection's TLS state
 // to the service, which takes the identity from the
-// verified client certificate chain only and updates the record whose
-// enrolled certificate serial it is. A request with no verified client
-// certificate is answered 401; one whose certificate belongs to no enrolled
+// verified client certificate chain only and updates the record whose bound
+// certificate fingerprint (POST /devices/{id}/certificate,
+// BindDeviceCertificate) it is. A request with no verified client
+// certificate is answered 401; one whose certificate is bound to no
 // device, or whose body names another device's MAC, is answered 403. The
 // device state changes in neither case.
 func (r *PXERouter) RegisterMachineFacingRoutes(parent *mux.Router) {

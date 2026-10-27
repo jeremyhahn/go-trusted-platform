@@ -89,6 +89,12 @@ export interface PXEDeviceInfo {
   profile?: DeviceProfile;
   /** Certificate serial */
   certificateSerial?: string;
+  /**
+   * SHA-256 of the installer certificate's DER encoding, lowercase hex, bound
+   * by bindDeviceCertificate; the install-completion webhook authenticates
+   * the node by it.
+   */
+  certificateFingerprint?: string;
   /** Current VLAN */
   currentVlan?: number;
   /** Target VLAN */
@@ -205,6 +211,18 @@ export interface SetPXEDeviceEnrolledRequest {
   deviceId: string;
   /** Certificate serial */
   certificateSerial: string;
+}
+
+/**
+ * Binds the certificate the device's installer presents over mTLS to the
+ * install-completion webhook. Accepted only while the device is discovered,
+ * booting or installing; the device state does not change.
+ */
+export interface BindPXEDeviceCertificateRequest {
+  /** Device ID */
+  deviceId: string;
+  /** SHA-256 of the certificate's DER encoding, hex (case and colons ignored) */
+  certificateFingerprint: string;
 }
 
 /**
@@ -350,6 +368,13 @@ export interface UpdatePXEStateResponse {
  * Set device enrolled response
  */
 export interface SetPXEDeviceEnrolledResponse {
+  /** Operation status */
+  status: PXEStatus;
+  /** Updated device */
+  device?: PXEDeviceInfo;
+}
+
+export interface BindPXEDeviceCertificateResponse {
   /** Operation status */
   status: PXEStatus;
   /** Updated device */

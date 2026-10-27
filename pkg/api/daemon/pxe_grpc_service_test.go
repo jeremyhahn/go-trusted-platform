@@ -45,6 +45,7 @@ type mockPXEService struct {
 	retryErr       error
 	eventsErr      error
 	enrollErr      error
+	bindErr        error
 }
 
 func newMockPXEService() *mockPXEService {
@@ -177,9 +178,23 @@ func (m *mockPXEService) UpdateDeviceState(ctx context.Context, deviceID string,
 	return nil
 }
 
-func (m *mockPXEService) SetDeviceEnrolled(ctx context.Context, deviceID, certSerial, certFingerprint string) error {
+func (m *mockPXEService) SetDeviceEnrolled(ctx context.Context, deviceID, certSerial string) error {
 	if m.enrollErr != nil {
 		return m.enrollErr
+	}
+	device, exists := m.devices[deviceID]
+	if !exists {
+		return pxe.ErrDeviceNotFound{DeviceID: deviceID}
+	}
+	device.CertificateSerial = certSerial
+	device.State = pxe.StateEnrolled
+	device.UpdatedAt = time.Now()
+	return nil
+}
+
+func (m *mockPXEService) BindDeviceCertificate(ctx context.Context, deviceID, certFingerprint string) error {
+	if m.bindErr != nil {
+		return m.bindErr
 	}
 	device, exists := m.devices[deviceID]
 	if !exists {
@@ -189,9 +204,7 @@ func (m *mockPXEService) SetDeviceEnrolled(ctx context.Context, deviceID, certSe
 	if err != nil {
 		return err
 	}
-	device.CertificateSerial = certSerial
 	device.CertificateFingerprint = fingerprint
-	device.State = pxe.StateEnrolled
 	device.UpdatedAt = time.Now()
 	return nil
 }
@@ -669,29 +682,6 @@ func TestPXEGRPCService_SetDeviceEnrolled(t *testing.T) {
 		assert.Equal(t, "ABCD1234", resp.GetDevice().GetCertificateSerial())
 	})
 
-	t.Run("fingerprint is stored normalized", func(t *testing.T) {
-		resp, err := svc.SetDeviceEnrolled(ctx, &platformv1.SetPXEDeviceEnrolledRequest{
-			DeviceId:               deviceID,
-			CertificateSerial:      "ABCD1234",
-			CertificateFingerprint: "AB:" + strings.Repeat("CD", 31),
-		})
-
-		require.NoError(t, err)
-		assert.Equal(t, "ab"+strings.Repeat("cd", 31), resp.GetDevice().GetCertificateFingerprint())
-	})
-
-	t.Run("malformed fingerprint", func(t *testing.T) {
-		resp, err := svc.SetDeviceEnrolled(ctx, &platformv1.SetPXEDeviceEnrolledRequest{
-			DeviceId:               deviceID,
-			CertificateSerial:      "ABCD1234",
-			CertificateFingerprint: "abcd",
-		})
-
-		require.Error(t, err)
-		assert.Nil(t, resp)
-		assert.Equal(t, codes.InvalidArgument, status.Code(err))
-	})
-
 	t.Run("missing device ID", func(t *testing.T) {
 		req := &platformv1.SetPXEDeviceEnrolledRequest{
 			CertificateSerial: "ABCD1234",
@@ -718,6 +708,107 @@ func TestPXEGRPCService_SetDeviceEnrolled(t *testing.T) {
 		st, ok := status.FromError(err)
 		require.True(t, ok)
 		assert.Equal(t, codes.InvalidArgument, st.Code())
+	})
+}
+
+// TestPXEGRPCService_BindDeviceCertificate runs against the production PXE
+// service so the state and uniqueness refusals are the real ones.
+func TestPXEGRPCService_BindDeviceCertificate(t *testing.T) {
+	ctx := context.Background()
+	fingerprint := "ab" + strings.Repeat("cd", 31)
+
+	newInstalling := func(t *testing.T, svc *PXEGRPCService, mac string) string {
+		t.Helper()
+		reg, err := svc.RegisterDevice(ctx, &platformv1.RegisterPXEDeviceRequest{MacAddress: mac, PortId: "port-1"})
+		require.NoError(t, err)
+		deviceID := reg.GetDevice().GetId()
+		for _, state := range []platformv1.ProvisioningState{
+			platformv1.ProvisioningState_PROVISIONING_STATE_BOOTING,
+			platformv1.ProvisioningState_PROVISIONING_STATE_INSTALLING,
+		} {
+			_, err := svc.UpdateState(ctx, &platformv1.UpdatePXEStateRequest{DeviceId: deviceID, State: state, Reason: "test"})
+			require.NoError(t, err)
+		}
+		return deviceID
+	}
+
+	t.Run("success stores the fingerprint normalized and keeps the state", func(t *testing.T) {
+		svc := NewPXEGRPCService(logging.DefaultLogger(), newRealPXEService(t))
+		deviceID := newInstalling(t, svc, "00:11:22:33:55:01")
+
+		resp, err := svc.BindDeviceCertificate(ctx, &platformv1.BindPXEDeviceCertificateRequest{
+			DeviceId:               deviceID,
+			CertificateFingerprint: "AB:" + strings.Repeat("CD", 31),
+		})
+
+		require.NoError(t, err)
+		assert.True(t, resp.GetStatus().GetSuccess())
+		assert.Equal(t, fingerprint, resp.GetDevice().GetCertificateFingerprint())
+		assert.Equal(t, platformv1.ProvisioningState_PROVISIONING_STATE_INSTALLING, resp.GetDevice().GetState())
+	})
+
+	t.Run("missing device ID", func(t *testing.T) {
+		svc := NewPXEGRPCService(logging.DefaultLogger(), newRealPXEService(t))
+
+		resp, err := svc.BindDeviceCertificate(ctx, &platformv1.BindPXEDeviceCertificateRequest{CertificateFingerprint: fingerprint})
+
+		assert.Nil(t, resp)
+		assert.Equal(t, codes.InvalidArgument, status.Code(err))
+	})
+
+	t.Run("malformed fingerprint", func(t *testing.T) {
+		svc := NewPXEGRPCService(logging.DefaultLogger(), newRealPXEService(t))
+		deviceID := newInstalling(t, svc, "00:11:22:33:55:02")
+
+		resp, err := svc.BindDeviceCertificate(ctx, &platformv1.BindPXEDeviceCertificateRequest{DeviceId: deviceID, CertificateFingerprint: "abcd"})
+
+		assert.Nil(t, resp)
+		assert.Equal(t, codes.InvalidArgument, status.Code(err))
+	})
+
+	t.Run("device not found", func(t *testing.T) {
+		svc := NewPXEGRPCService(logging.DefaultLogger(), newRealPXEService(t))
+
+		resp, err := svc.BindDeviceCertificate(ctx, &platformv1.BindPXEDeviceCertificateRequest{DeviceId: "no-such-device", CertificateFingerprint: fingerprint})
+
+		assert.Nil(t, resp)
+		assert.Equal(t, codes.NotFound, status.Code(err))
+	})
+
+	t.Run("installation already complete is FailedPrecondition", func(t *testing.T) {
+		svc := NewPXEGRPCService(logging.DefaultLogger(), newRealPXEService(t))
+		deviceID := newInstalling(t, svc, "00:11:22:33:55:03")
+		_, err := svc.UpdateState(ctx, &platformv1.UpdatePXEStateRequest{
+			DeviceId: deviceID, State: platformv1.ProvisioningState_PROVISIONING_STATE_INSTALL_COMPLETE, Reason: "test",
+		})
+		require.NoError(t, err)
+
+		resp, err := svc.BindDeviceCertificate(ctx, &platformv1.BindPXEDeviceCertificateRequest{DeviceId: deviceID, CertificateFingerprint: fingerprint})
+
+		assert.Nil(t, resp)
+		assert.Equal(t, codes.FailedPrecondition, status.Code(err))
+	})
+
+	t.Run("fingerprint bound to another device is AlreadyExists", func(t *testing.T) {
+		svc := NewPXEGRPCService(logging.DefaultLogger(), newRealPXEService(t))
+		first := newInstalling(t, svc, "00:11:22:33:55:04")
+		second := newInstalling(t, svc, "00:11:22:33:55:05")
+		_, err := svc.BindDeviceCertificate(ctx, &platformv1.BindPXEDeviceCertificateRequest{DeviceId: first, CertificateFingerprint: fingerprint})
+		require.NoError(t, err)
+
+		resp, err := svc.BindDeviceCertificate(ctx, &platformv1.BindPXEDeviceCertificateRequest{DeviceId: second, CertificateFingerprint: fingerprint})
+
+		assert.Nil(t, resp)
+		assert.Equal(t, codes.AlreadyExists, status.Code(err))
+	})
+
+	t.Run("no PXE service", func(t *testing.T) {
+		svc := NewPXEGRPCService(logging.DefaultLogger(), nil)
+
+		resp, err := svc.BindDeviceCertificate(ctx, &platformv1.BindPXEDeviceCertificateRequest{DeviceId: "device-1", CertificateFingerprint: fingerprint})
+
+		assert.Nil(t, resp)
+		assert.Equal(t, codes.Unavailable, status.Code(err))
 	})
 }
 

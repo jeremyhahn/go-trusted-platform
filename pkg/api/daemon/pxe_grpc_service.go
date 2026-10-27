@@ -565,13 +565,16 @@ func (s *PXEGRPCService) WebhookComplete(ctx context.Context, req *platformv1.PX
 // webhookDevice returns the device the install-completion webhook is from.
 // The identity is the verified client certificate of the connection (#238),
 // resolved the same way on every transport by requestChannel; the device is
-// the one whose enrolled certificate fingerprint (SetDeviceEnrolled) is the
-// SHA-256 of the leaf's DER encoding. The serial is not the key: a serial is
+// the one whose bound certificate fingerprint is the SHA-256 of the leaf's DER
+// encoding. The binding is made by BindDeviceCertificate while the device is
+// still discovered, booting or installing, so it exists before the webhook
+// moves the device to InstallComplete; SetDeviceEnrolled comes later in the
+// lifecycle and plays no part here. The serial is not the key: a serial is
 // unique only within its issuer (RFC 5280 §4.1.2.2), and a listener that
-// trusts several issuers would let another issuer's certificate with an
-// enrolled serial stand in for the device. The body MAC is never an
+// trusts several issuers would let another issuer's certificate with a
+// known serial stand in for the device. The body MAC is never an
 // identity: when present it must be that device's MAC. A connection without a
-// verified certificate is Unauthenticated; an unenrolled certificate or a
+// verified certificate is Unauthenticated; an unbound certificate or a
 // mismatched MAC is PermissionDenied. Every refusal happens before any state
 // is written.
 func (s *PXEGRPCService) webhookDevice(ctx context.Context, bodyMAC string) (*pxe.DeviceInfo, error) {
