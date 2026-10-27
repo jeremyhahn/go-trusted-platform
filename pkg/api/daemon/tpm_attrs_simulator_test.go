@@ -209,23 +209,68 @@ func TestTPMSimulator_Attrs(t *testing.T) {
 		_, err := svc.ActivateCredential(ctx, &platformv1.TPMActivateCredentialRequest{EncryptedSecret: []byte("encrypted-secret")})
 		assert.Equal(t, codes.InvalidArgument, status.Code(err), "an activation needs a credential blob")
 		_, err = mcp.TPMActivateCredential(ctx, nil, []byte("encrypted-secret"))
-		assert.Error(t, err, "an activation needs a credential blob")
+		assert.Equal(t, codes.InvalidArgument, status.Code(err), "an activation needs a credential blob over MCP")
+		assert.ErrorContains(t, err, ErrActivateCredentialFieldRequired{Field: "credential_blob"}.Error(),
+			"the refusal comes before the TPM call")
 	})
 
-	t.Run("ActivateCredentialRefusesAForeignCredential", func(t *testing.T) {
-		secret := sha256.Sum256([]byte("foreign-secret"))
-		challenge, err := svc.MakeCredential(ctx, &platformv1.MakeCredentialRequest{AkName: simulatedAKName("foreign"), Secret: secret[:]})
-		require.NoError(t, err)
-
-		recovered, err := svc.ActivateCredential(ctx, &platformv1.TPMActivateCredentialRequest{
-			CredentialBlob:  challenge.GetCredentialBlob(),
-			EncryptedSecret: challenge.GetEncryptedSecret(),
-		})
-		assert.Error(t, err, "a credential made for another key's name must not activate")
-		assert.NotEqual(t, secret[:], recovered.GetSecret(), "the secret must not be released")
-
-		mcpRecovered, err := mcp.TPMActivateCredential(ctx, challenge.GetCredentialBlob(), challenge.GetEncryptedSecret())
-		assert.Error(t, err, "a credential made for another key's name must not activate over MCP")
-		assert.Nil(t, mcpRecovered, "the secret must not be released over MCP")
+	t.Run("ActivateCredentialRefusesAMissingSecret", func(t *testing.T) {
+		_, err := svc.ActivateCredential(ctx, &platformv1.TPMActivateCredentialRequest{CredentialBlob: []byte("credential-blob")})
+		assert.Equal(t, codes.InvalidArgument, status.Code(err), "an activation needs an encrypted secret")
+		_, err = mcp.TPMActivateCredential(ctx, []byte("credential-blob"), nil)
+		assert.Equal(t, codes.InvalidArgument, status.Code(err), "an activation needs an encrypted secret over MCP")
+		assert.ErrorContains(t, err, ErrActivateCredentialFieldRequired{Field: "encrypted_secret"}.Error(),
+			"the refusal comes before the TPM call")
 	})
+}
+
+// TestTPMSimulator_ActivateCredentialRefusesAForeignCredential is a
+// top-level test, not a TestTPMSimulator_Attrs subtest: a well-formed pair
+// reaches go-tpm, whose policy session HMAC panics under
+// GODEBUG=fips140=only (go-quicbaas#1389), and the FIPS foreign-failure
+// baseline can only list, and rerun around, a top-level test.
+func TestTPMSimulator_ActivateCredentialRefusesAForeignCredential(t *testing.T) {
+	tpm := newSimulatedTPM(t)
+	svc := newTPMGRPCServiceWith(tpm)
+	mcp := newMCPProviderWithTPM(tpm)
+	ctx := context.Background()
+
+	secret := sha256.Sum256([]byte("foreign-secret"))
+	challenge, err := svc.MakeCredential(ctx, &platformv1.MakeCredentialRequest{AkName: simulatedAKName("foreign"), Secret: secret[:]})
+	require.NoError(t, err)
+
+	recovered, grpcErr := svc.ActivateCredential(ctx, &platformv1.TPMActivateCredentialRequest{
+		CredentialBlob:  challenge.GetCredentialBlob(),
+		EncryptedSecret: challenge.GetEncryptedSecret(),
+	})
+	assert.Error(t, grpcErr, "a credential made for another key's name must not activate")
+	assert.NotEqual(t, secret[:], recovered.GetSecret(), "the secret must not be released")
+
+	mcpRecovered, err := mcp.TPMActivateCredential(ctx, challenge.GetCredentialBlob(), challenge.GetEncryptedSecret())
+	assert.Error(t, err, "a credential made for another key's name must not activate over MCP")
+	assert.Nil(t, mcpRecovered, "the secret must not be released over MCP")
+	assert.NotErrorAs(t, err, new(ErrActivateCredentialFieldRequired),
+		"a well-formed pair reaches the TPM, which makes the refusal")
+
+	// The transports map errors to gRPC status and drop their type, so the
+	// TPM's refusal is pinned by its exact status: the TPM's own message,
+	// never the guard's field-name refusal.
+	tpmRefusal := xkmssdk.ErrTPMInvalidActivationCredential.Error()
+	for name, transportErr := range map[string]error{"gRPC": grpcErr, "MCP": err} {
+		st, ok := status.FromError(transportErr)
+		require.True(t, ok, "%s returns a gRPC status", name)
+		assert.Equal(t, codes.InvalidArgument, st.Code(), "%s status code", name)
+		assert.Equal(t, tpmRefusal, st.Message(), "%s carries the TPM's refusal", name)
+		assert.NotContains(t, st.Message(), "credential_blob", "%s is not the guard's refusal", name)
+		assert.NotContains(t, st.Message(), "encrypted_secret", "%s is not the guard's refusal", name)
+	}
+
+	// The shared helper, before any transport maps it: the TPM sentinel,
+	// not the guard's typed error.
+	helperSecret, helperErr := activateCredential(tpm, challenge.GetCredentialBlob(), challenge.GetEncryptedSecret())
+	assert.Nil(t, helperSecret, "the helper must not release the secret")
+	assert.NotErrorAs(t, helperErr, new(ErrActivateCredentialFieldRequired),
+		"the guard must pass a well-formed pair through to the TPM")
+	assert.ErrorIs(t, helperErr, xkmssdk.ErrTPMInvalidActivationCredential,
+		"the TPM refuses a credential made for another key's name")
 }

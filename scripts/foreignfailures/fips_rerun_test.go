@@ -217,3 +217,70 @@ func TestASecondRoundExcludesOnlyNamesTheListingCarries(t *testing.T) {
 	require.ErrorAs(t, err, &re)
 	assert.Contains(t, err.Error(), "could not exclude TestGone: go test -list does not name it")
 }
+
+// manyTestNames returns n distinct top-level test names.
+func manyTestNames(n int) []string {
+	names := make([]string, n)
+	for i := range names {
+		names[i] = "TestEveryTransportReachesTheSameServiceMethod_" + strings.Repeat("x", i%7) + "_" + strings.Repeat("y", i/7%11) + "_" + string(rune('A'+i%26)) + string(rune('A'+i/26%26)) + string(rune('A'+i/676%26))
+	}
+	return names
+}
+
+func TestRunBatchesKeepsEveryNameOnceWithinTheLimit(t *testing.T) {
+	names := manyTestNames(500)
+	batches := runBatches(names, 4096)
+	require.Greater(t, len(batches), 1, "500 long names do not fit one 4 KiB pattern")
+	var joined []string
+	for _, batch := range batches {
+		require.NotEmpty(t, batch)
+		assert.LessOrEqual(t, len(runPattern(batch)), 4096)
+		joined = append(joined, batch...)
+	}
+	assert.Equal(t, names, joined, "every name, once, in order")
+	assert.Equal(t, [][]string{{"TestA", "TestB"}}, runBatches([]string{"TestA", "TestB"}, maxRunPatternBytes))
+	assert.Empty(t, runBatches(nil, maxRunPatternBytes))
+}
+
+func TestRunBatchesGivesAnOversizedNameABatchOfItsOwn(t *testing.T) {
+	long := "Test" + strings.Repeat("L", 64)
+	batches := runBatches([]string{"TestA", long, "TestB"}, 32)
+	assert.Equal(t, [][]string{{"TestA"}, {long}, {"TestB"}}, batches)
+}
+
+func TestALargePackageRerunsInBatchesUnderTheArgumentLimit(t *testing.T) {
+	names := manyTestNames(4000)
+	f := newFakeGo()
+	f.lists[app] = listing(app, append([]string{appPanic}, names...)...)
+	rr := &rerunner{goCmd: f.command, module: defaultModule, stdout: &bytes.Buffer{}}
+	ran, hidden, err := rr.round(context.Background(), rerun{Package: "pkg/app", Exclude: appPanic})
+	require.NoError(t, err)
+	assert.Nil(t, hidden)
+	assert.Equal(t, names, ran)
+
+	patterns := f.runPatterns(app)
+	require.Greater(t, len(patterns), 1, "the names exceed one exec argument, so the round runs in batches")
+	for _, pattern := range patterns {
+		assert.LessOrEqual(t, len(pattern), maxRunPatternBytes)
+		assert.NotContains(t, pattern, appPanic, "no batch runs the excluded test")
+	}
+}
+
+func TestAFailingLaterBatchGatesTheRound(t *testing.T) {
+	names := manyTestNames(4000)
+	batches := runBatches(names, maxRunPatternBytes)
+	require.Greater(t, len(batches), 1)
+	f := newFakeGo()
+	f.lists[app] = listing(app, append([]string{appPanic}, names...)...)
+	failing := "=== RUN   " + batches[1][0] + "\n--- FAIL: " + batches[1][0] + " (0.00s)\nFAIL\nFAIL\t" + app + "\t0.104s\nFAIL\n"
+	f.rounds = map[string][]fakeRound{app: {
+		{out: passingRun(app, runPattern(batches[0]))},
+		{out: failing, err: errExit},
+	}}
+	rr := &rerunner{goCmd: f.command, module: defaultModule, baseline: hiddenPanicRows(t), stdout: &bytes.Buffer{}}
+	_, _, err := rr.round(context.Background(), rerun{Package: "pkg/app", Exclude: appPanic})
+	var re *RerunError
+	require.ErrorAs(t, err, &re)
+	assert.Contains(t, err.Error(), "failed (exit status 1)")
+	assert.Len(t, f.runPatterns(app), 2, "the round stops at the failing batch")
+}

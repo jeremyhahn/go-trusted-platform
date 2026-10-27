@@ -1597,6 +1597,26 @@ func (e ErrTPM2OperationFailed) Unwrap() error {
 	return e.Cause
 }
 
+// ErrActivateCredentialFieldRequired is returned when a credential
+// activation arrives without its credential blob or its encrypted
+// secret. The request is refused before the TPM is touched: an empty
+// blob cannot be a TPM2_ActivateCredential challenge, and the session
+// HMAC go-tpm computes over it panics under GODEBUG=fips140=only.
+type ErrActivateCredentialFieldRequired struct {
+	// Field names the missing request field.
+	Field string
+}
+
+// Error implements the error interface.
+func (e ErrActivateCredentialFieldRequired) Error() string {
+	return e.Field + " is required"
+}
+
+// GRPCStatus classifies the refusal as InvalidArgument.
+func (e ErrActivateCredentialFieldRequired) GRPCStatus() *status.Status {
+	return status.New(codes.InvalidArgument, e.Error())
+}
+
 // =============================================================================
 // Container Service Errors
 // =============================================================================

@@ -830,6 +830,8 @@ all of its other top-level tests again:
 1. It lists them with `go test -list .`.
 2. It runs them by explicit name with `-run '^(A|B|...)$'`, under the same
    `GOFIPS140`/`fips140=only` environment and the same derived build tags.
+   A package with too many tests for one exec argument (Linux caps one at
+   128 KiB) runs in batches, each pattern under 64 KiB; every batch must pass.
    The checker refuses to run outside `fips140=only`.
 
 The job passes only when that rerun passes and runs every name. No `t.Skip`,
