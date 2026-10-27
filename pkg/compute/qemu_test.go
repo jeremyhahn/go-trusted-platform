@@ -15,6 +15,7 @@ package compute
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -467,7 +468,17 @@ func TestQEMUOrchestrator_AttachNetwork_Errors(t *testing.T) {
 	}
 	defer orch.Close()
 
+	profile := &entities.DeviceProfile{
+		ID:   1,
+		Name: "test-vm-attach-error",
+	}
+
 	ctx := context.Background()
+
+	instance, err := orch.Create(ctx, profile)
+	if err != nil {
+		t.Fatalf("Failed to create instance: %v", err)
+	}
 
 	t.Run("Attach with empty instance ID", func(t *testing.T) {
 		err := orch.AttachNetwork(ctx, "", "test-port")
@@ -477,9 +488,9 @@ func TestQEMUOrchestrator_AttachNetwork_Errors(t *testing.T) {
 	})
 
 	t.Run("Attach with empty port name", func(t *testing.T) {
-		err := orch.AttachNetwork(ctx, "test-instance", "")
-		if err == nil || err == ErrInvalidInstanceID {
-			t.Errorf("Expected error for empty port name, got %v", err)
+		err := orch.AttachNetwork(ctx, instance.ID, "")
+		if !errors.Is(err, ErrNetworkAttachmentFailed) {
+			t.Errorf("Expected ErrNetworkAttachmentFailed for empty port name, got %v", err)
 		}
 	})
 
@@ -524,9 +535,9 @@ func TestQEMUOrchestrator_DetachNetwork_Errors(t *testing.T) {
 	})
 
 	t.Run("Detach with empty port name", func(t *testing.T) {
-		err := orch.DetachNetwork(ctx, "test-instance", "")
-		if err == nil || err == ErrInvalidInstanceID {
-			t.Errorf("Expected error for empty port name, got %v", err)
+		err := orch.DetachNetwork(ctx, instance.ID, "")
+		if !errors.Is(err, ErrNetworkDetachmentFailed) {
+			t.Errorf("Expected ErrNetworkDetachmentFailed for empty port name, got %v", err)
 		}
 	})
 
@@ -539,8 +550,8 @@ func TestQEMUOrchestrator_DetachNetwork_Errors(t *testing.T) {
 
 	t.Run("Detach when no network attached", func(t *testing.T) {
 		err := orch.DetachNetwork(ctx, instance.ID, "test-port")
-		if err == nil {
-			t.Error("Expected error when no network is attached")
+		if !errors.Is(err, ErrNetworkDetachmentFailed) {
+			t.Errorf("Expected ErrNetworkDetachmentFailed when no network is attached, got %v", err)
 		}
 	})
 }

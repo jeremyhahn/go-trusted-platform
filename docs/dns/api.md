@@ -1,6 +1,6 @@
 # DNS — API
 
-> **Status: NORMATIVE** · Scope: DNS routes on every transport · Last verified: 2026-10-15
+> **Status: NORMATIVE** · Scope: DNS routes on every transport · Last verified: 2026-10-26
 > Conflicts with this document are defects. Fix them here first.
 > One row per capability across all six transports. A transport that does not
 > carry a capability is written `MISSING`, never omitted.
@@ -16,8 +16,10 @@ over a Unix domain socket**, so gRPC and Unix share a column.
 
 **One backend serves every transport.** platformd starts one DNS service from
 the `dns:` section. gRPC, Unix and embedded share one `DNSServiceServer` over
-it (`Daemon.DNSGRPCServiceServer`, `pkg/api/daemon/daemon.go`); QUIC, MCP and
-REST hold the same `*dns.Service`. With no `dns:` section there is no backend,
+it (`Daemon.DNSGRPCServiceServer`, `pkg/api/daemon/daemon.go`). REST calls
+that same `DNSServiceServer` and serves its proto messages in protojson, so a
+REST body is the gRPC message (#445). QUIC and MCP hold the same
+`*dns.Service`. With no `dns:` section there is no backend,
 and every transport answers the not-configured error (§5).
 
 gRPC: `DNSService`, 13 RPCs (`pkg/api/grpc/proto/platform_dns.proto`).
@@ -43,7 +45,7 @@ MCP: **two parallel tool families** — see §3.
 | Add record | `POST /api/v1/dns/zones/{zone}/records` | `AddRecord` | `OpDNSAddRecord` (`0x20`) | `dns_add_record`, `dns_record_create` | ✅ |
 | List records | `GET /api/v1/dns/zones/{zone}/records` | `ListRecords` | `OpDNSListRecords` (`0x24`) | `dns_list_records`, `dns_record_list` | ✅ |
 | Get record | `GET /api/v1/dns/zones/{zone}/records/{type}/{name}` | `MISSING — docs/13 G7` | `OpDNSGetRecord` (`0x23`) | `dns_get_record`, `dns_record_get` | — |
-| Update record | `MISSING — docs/13 G7` | `UpdateRecord` | `OpDNSUpdateRecord` (`0x22`) | `dns_record_update` | ✅ |
+| Update record | `PUT /api/v1/dns/zones/{zone}/records` | `UpdateRecord` | `OpDNSUpdateRecord` (`0x22`) | `dns_record_update` | ✅ |
 | Delete record | `DELETE /api/v1/dns/zones/{zone}/records/{type}/{name}` | `DeleteRecord` | `OpDNSDeleteRecord` (`0x21`) | `dns_delete_record`, `dns_record_delete` | ✅ |
 | Sign zone | `POST /api/v1/dns/zones/{zone}/sign` | `SignZone` | `MISSING — docs/13 G7` | `dns_zone_sign` | ✅ |
 | DNSSEC status | `GET /api/v1/dns/zones/{zone}/dnssec` | `GetDNSSECStatus` | `MISSING — docs/13 G7` | `dns_zone_dnssec_status` | ✅ |
@@ -77,9 +79,11 @@ name); `GET /api/v1/dns/zones/{zone}/records` lists the zone, optionally
 filtered by `?type=`. The two are distinct routes with distinct answers.
 
 The SDK REST client (`sdk/go/transport/rest/dns.go`) calls these routes with
-the zone, record type and record name in the path, never in the body; the type
-travels as its mnemonic (`A`, `AAAA`, `MX`), and a record call without a type
-is refused before it is sent. Get record is served on REST, and on MCP by
+the zone, record type and record name in the path and query, and sends the
+rest of the request message as protojson; the type travels as its mnemonic
+(`A`, `AAAA`, `MX`). A call missing a value its path needs — a zone, or a
+record's type or name — is refused with `InvalidArgument` before it is sent.
+The reply is the RPC's response message, decoded as it is on gRPC. Get record is served on REST, and on MCP by
 `dns_record_get` from `ListRecords` (§3). The SDK cannot call it, because
 `DNSService` declares no `GetRecord` rpc (docs/13 G7).
 

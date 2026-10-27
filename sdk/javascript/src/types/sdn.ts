@@ -13,66 +13,66 @@
  * Bridge type
  */
 export type BridgeType =
-  | 'UNSPECIFIED'
-  | 'OVS'
-  | 'LINUX'
-  | 'VXLAN';
+  | 'BRIDGE_TYPE_UNSPECIFIED'
+  | 'BRIDGE_TYPE_OVS'
+  | 'BRIDGE_TYPE_LINUX'
+  | 'BRIDGE_TYPE_VXLAN';
 
 /**
  * Port type
  */
 export type PortType =
-  | 'UNSPECIFIED'
-  | 'INTERNAL'
-  | 'PHYSICAL'
-  | 'TAP'
-  | 'VETH'
-  | 'VXLAN'
-  | 'GRE';
+  | 'PORT_TYPE_UNSPECIFIED'
+  | 'PORT_TYPE_INTERNAL'
+  | 'PORT_TYPE_PHYSICAL'
+  | 'PORT_TYPE_TAP'
+  | 'PORT_TYPE_VETH'
+  | 'PORT_TYPE_VXLAN'
+  | 'PORT_TYPE_GRE';
 
 /**
  * Bridge status
  */
 export type BridgeStatus =
-  | 'UNSPECIFIED'
-  | 'UP'
-  | 'DOWN'
-  | 'ERROR';
+  | 'BRIDGE_STATUS_UNSPECIFIED'
+  | 'BRIDGE_STATUS_UP'
+  | 'BRIDGE_STATUS_DOWN'
+  | 'BRIDGE_STATUS_ERROR';
 
 /**
  * Port status
  */
 export type PortStatus =
-  | 'UNSPECIFIED'
-  | 'UP'
-  | 'DOWN'
-  | 'BLOCKED'
-  | 'LEARNING'
-  | 'FORWARDING';
+  | 'PORT_STATUS_UNSPECIFIED'
+  | 'PORT_STATUS_UP'
+  | 'PORT_STATUS_DOWN'
+  | 'PORT_STATUS_BLOCKED'
+  | 'PORT_STATUS_LEARNING'
+  | 'PORT_STATUS_FORWARDING';
 
 /**
  * Flow action type
  */
 export type FlowActionType =
-  | 'UNSPECIFIED'
-  | 'OUTPUT'
-  | 'DROP'
-  | 'SET_VLAN'
-  | 'STRIP_VLAN'
-  | 'SET_FIELD'
-  | 'GOTO_TABLE'
-  | 'CONTROLLER';
+  | 'FLOW_ACTION_UNSPECIFIED'
+  | 'FLOW_ACTION_OUTPUT'
+  | 'FLOW_ACTION_DROP'
+  | 'FLOW_ACTION_SET_VLAN'
+  | 'FLOW_ACTION_STRIP_VLAN'
+  | 'FLOW_ACTION_SET_FIELD'
+  | 'FLOW_ACTION_GOTO_TABLE'
+  | 'FLOW_ACTION_CONTROLLER';
 
 /**
  * Flow table
  */
 export type FlowTable =
-  | 'UNSPECIFIED'
-  | 'TABLE_0'
-  | 'TABLE_1'
-  | 'TABLE_2'
-  | 'TABLE_3'
-  | 'TABLE_DROP';
+  | 'FLOW_TABLE_UNSPECIFIED'
+  | 'FLOW_TABLE_0'
+  | 'FLOW_TABLE_1'
+  | 'FLOW_TABLE_2'
+  | 'FLOW_TABLE_3'
+  | 'FLOW_TABLE_DROP';
 
 /**
  * Flow priority
@@ -114,20 +114,20 @@ export interface BridgeConfig {
  * Bridge statistics
  */
 export interface BridgeStats {
-  /** Total ports */
-  totalPorts: number;
+  /** Total ports (uint64: a decimal string in protojson) */
+  totalPorts: string;
   /** Total flows */
-  totalFlows: number;
+  totalFlows: string;
   /** Packets received */
-  packetsReceived: number;
+  packetsReceived: string;
   /** Packets sent */
-  packetsSent: number;
+  packetsSent: string;
   /** Bytes received */
-  bytesReceived: number;
+  bytesReceived: string;
   /** Bytes sent */
-  bytesSent: number;
+  bytesSent: string;
   /** Errors */
-  errors: number;
+  errors: string;
 }
 
 /**
@@ -178,18 +178,18 @@ export interface PortConfig {
  * Port statistics
  */
 export interface PortStats {
-  /** Packets received */
-  packetsReceived: number;
+  /** Packets received (uint64: a decimal string in protojson) */
+  packetsReceived: string;
   /** Packets sent */
-  packetsSent: number;
+  packetsSent: string;
   /** Bytes received */
-  bytesReceived: number;
+  bytesReceived: string;
   /** Bytes sent */
-  bytesSent: number;
+  bytesSent: string;
   /** Errors */
-  errors: number;
+  errors: string;
   /** Dropped */
-  dropped: number;
+  dropped: string;
 }
 
 /**
@@ -308,10 +308,10 @@ export interface FlowConfig {
  * Flow statistics
  */
 export interface FlowStats {
-  /** Packet count */
-  packetCount: number;
-  /** Byte count */
-  byteCount: number;
+  /** Packet count (uint64: a decimal string in protojson) */
+  packetCount: string;
+  /** Byte count (uint64: a decimal string in protojson) */
+  byteCount: string;
   /** Duration in seconds */
   durationSeconds: number;
 }
@@ -352,10 +352,10 @@ export interface VLANConfig {
 export interface VLANStats {
   /** Port count */
   portCount: number;
-  /** Packets */
-  packets: number;
-  /** Bytes */
-  bytes: number;
+  /** Packets (uint64: a decimal string in protojson) */
+  packets: string;
+  /** Bytes (uint64: a decimal string in protojson) */
+  bytes: string;
 }
 
 /**

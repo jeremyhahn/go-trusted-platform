@@ -1016,7 +1016,7 @@ func TestLoadConfig_ConfigFileNotFound(t *testing.T) {
 	}
 
 	logger := getInstallLogger(false, false)
-	config, err := loadConfig(logger, cmd, cmdFlags)
+	config, _, err := loadConfig(logger, cmd, cmdFlags)
 
 	// When config file doesn't exist but was explicitly specified, should succeed
 	// and create config from flags (since stat will fail)
@@ -1045,7 +1045,7 @@ func TestLoadConfig_CreatesFromFlagsWhenNoConfigFile(t *testing.T) {
 	}
 
 	logger := getInstallLogger(false, false)
-	config, err := loadConfig(logger, cmd, cmdFlags)
+	config, _, err := loadConfig(logger, cmd, cmdFlags)
 
 	// Default config file (/etc/platformd/install.yaml) likely doesn't exist
 	// so it should create from flags
@@ -1083,7 +1083,7 @@ os:
 	}
 
 	logger := getInstallLogger(false, false)
-	config, err := loadConfig(logger, cmd, cmdFlags)
+	config, _, err := loadConfig(logger, cmd, cmdFlags)
 
 	require.NoError(t, err)
 	require.NotNil(t, config)

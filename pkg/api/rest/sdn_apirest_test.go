@@ -11,7 +11,6 @@ import (
 
 	"github.com/gorilla/mux"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ovs"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/zone"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -60,84 +59,33 @@ type zoneStoreFaultError struct{}
 
 func (zoneStoreFaultError) Error() string { return "zone store unavailable" }
 
-// The router never yields an empty path variable; the handlers still refuse
-// one when called directly, so a mis-registered route cannot reach OVS with
-// an empty bridge, port or flow.
-func TestSDNAPIRest_EmptyPathVariables(t *testing.T) {
+// The router never yields an empty path variable; the zone handlers still
+// refuse one when called directly, so a mis-registered route cannot reach the
+// zone store with an empty name.
+func TestSDNAPIRest_EmptyZoneName(t *testing.T) {
 	t.Parallel()
-	svc := newMockSDNService()
-	h, _ := setupSDNTestHandler(svc)
+	h := NewSDNHandlers(nil, slog.Default())
 	h.SetZoneService(zoneStoreFault{err: zoneStoreFaultError{}})
-
-	bridgeOrPort := ErrMissingRequiredField{Field: "bridge_id or port_id"}.Error()
-	zoneName := (&MessageError{Msg: "zone name is required"}).Error()
+	want := (&MessageError{Msg: "zone name is required"}).Error()
 
 	tests := []struct {
 		name    string
 		handler http.HandlerFunc
-		vars    map[string]string
-		want    string
 	}{
-		{"get bridge", h.handleGetBridge, map[string]string{"id": ""}, ErrInvalidBridgeID{}.Error()},
-		{"delete bridge", h.handleDeleteBridge, map[string]string{"id": ""}, ErrInvalidBridgeID{}.Error()},
-		{"add port", h.handleAddPort, map[string]string{"id": ""}, ErrInvalidBridgeID{}.Error()},
-		{"list ports", h.handleListPorts, map[string]string{"id": ""}, ErrInvalidBridgeID{}.Error()},
-		{"remove port without bridge", h.handleRemovePort, map[string]string{"id": "", "port": "p"}, ErrInvalidBridgeID{}.Error()},
-		{"remove port without port", h.handleRemovePort, map[string]string{"id": "br0", "port": ""}, ErrInvalidPortID{}.Error()},
-		{"delete flow", h.handleDeleteFlow, map[string]string{"id": ""}, ErrInvalidFlowID{}.Error()},
-		{"get port state", h.handleGetPortState, map[string]string{"id": "br0", "port": ""}, bridgeOrPort},
-		{"set port state", h.handleSetPortState, map[string]string{"id": "", "port": "p"}, bridgeOrPort},
-		{"get port stats", h.handleGetPortStats, map[string]string{"id": "br0", "port": ""}, bridgeOrPort},
-		{"add bridge flow", h.handleAddFlowForBridge, map[string]string{"id": ""}, ErrMissingRequiredField{Field: "bridge_id"}.Error()},
-		{"list bridge flows", h.handleListFlowsForBridge, map[string]string{"id": ""}, ErrMissingRequiredField{Field: "bridge_id"}.Error()},
-		{"delete bridge flow", h.handleDeleteFlowForBridge, map[string]string{"id": "br0", "flow_id": ""}, ErrMissingRequiredField{Field: "bridge_id or flow_id"}.Error()},
-		{"update zone", h.handleUpdateNetworkZone, map[string]string{"name": ""}, zoneName},
-		{"delete zone", h.handleDeleteNetworkZone, map[string]string{"name": ""}, zoneName},
+		{"update zone", h.handleUpdateNetworkZone},
+		{"delete zone", h.handleDeleteNetworkZone},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			req := mux.SetURLVars(httptest.NewRequest(http.MethodPost, "/", strings.NewReader("{}")), tc.vars)
+			req := mux.SetURLVars(httptest.NewRequest(http.MethodPost, "/", strings.NewReader("{}")), map[string]string{"name": ""})
 			rec := httptest.NewRecorder()
 
 			tc.handler(rec, req)
 
 			assert.Equal(t, http.StatusBadRequest, rec.Code)
-			assert.Equal(t, tc.want, sdnErrorMessage(t, rec))
+			assert.Equal(t, want, sdnErrorMessage(t, rec))
 		})
 	}
-	assert.Empty(t, svc.deletedCookies, "no refused request reaches OVS")
-	assert.Empty(t, svc.portStates, "no refused request reaches OVS")
-}
-
-func TestSDNAPIRest_MalformedFlowIDs(t *testing.T) {
-	t.Parallel()
-	svc := newMockSDNService()
-	_, router := setupSDNTestHandler(svc)
-
-	t.Run("delete flow", func(t *testing.T) {
-		_, want := ovs.ParseFlowID("bogus")
-		require.Error(t, want)
-
-		rec := sdnServe(router, http.MethodDelete, "/api/v1/sdn/flows/bogus?bridge_id=br0", "")
-
-		assert.Equal(t, http.StatusBadRequest, rec.Code)
-		assert.Equal(t, want.Error(), sdnErrorMessage(t, rec))
-	})
-
-	t.Run("add bridge flow with a bad cookie", func(t *testing.T) {
-		_, want := ovs.ParseFlowID(ovs.FlowIDPrefix + "zz")
-		require.Error(t, want)
-		body, err := json.Marshal(AddFlowRequest{Cookie: "zz", Match: "in_port=1", Actions: "drop"})
-		require.NoError(t, err)
-
-		rec := sdnServe(router, http.MethodPost, "/api/v1/sdn/bridges/br0/flows", string(body))
-
-		assert.Equal(t, http.StatusBadRequest, rec.Code)
-		assert.Equal(t, want.Error(), sdnErrorMessage(t, rec))
-	})
-
-	assert.Empty(t, svc.deletedCookies, "a malformed flow ID never deletes a flow")
-	assert.Empty(t, svc.flows["br0"], "a malformed cookie never adds a flow")
 }
 
 func TestSDNAPIRest_ZoneStoreFault(t *testing.T) {
@@ -171,7 +119,7 @@ func TestSDNAPIRest_ZoneStoreFault(t *testing.T) {
 
 func TestSDNAPIRest_WriteJSONEncodeFailure(t *testing.T) {
 	t.Parallel()
-	h, _ := setupSDNTestHandler(newMockSDNService())
+	h := NewSDNHandlers(nil, slog.Default())
 	rec := httptest.NewRecorder()
 
 	h.writeJSON(rec, http.StatusCreated, map[string]interface{}{"ch": make(chan int)})

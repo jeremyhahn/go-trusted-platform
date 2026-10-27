@@ -1,72 +1,145 @@
 # DNS — CLI
 
-> **Status: NORMATIVE** · Scope: DNS verbs in `platformctl` · Last verified: 2026-08-18
+> **Status: NORMATIVE** · Scope: DNS verbs in `platformctl` · Last verified: 2026-10-26
 > Conflicts with this document are defects. Fix them here first.
 
 ---
 
-## No CLI surface
+## The `platformctl dns` group
 
-**There is no `platformctl dns` command group.** `pkg/cli/commands/` has no
-`dns` directory, and `pkg/cli/commands/root.go` registers no DNS group among its
-44 top-level commands (verified 2026-10-11; [`docs/daemon/cli.md`](../daemon/cli.md) §3). Nothing else in the CLI carries DNS
-verbs either.
+`platformctl dns` (`pkg/cli/commands/dns/`) drives the `DNSService` through the
+SDK client. It works on any transport chosen with `--transport`. Each verb
+calls exactly one RPC from `pkg/api/grpc/proto/platform_dns.proto`. The only
+exception is `record get`, described below.
 
-Authoritative DNS is reachable only through the SDK, REST, gRPC, Unix, QUIC and
-MCP. [api.md](api.md) has the full matrix.
+```
+platformctl dns
+├── zone     create | get | update | delete | list
+├── record   add | update | delete | list | get
+├── dnssec   sign | status
+├── resolve  <fqdn>
+└── register <fqdn> <ip>
+```
 
-The integration suite's CLI leg (`test/integration/dns/`) asserts this refusal:
-every DNS operation returns the typed `ErrCLINoCommandGroup` naming #954, and the
-leg fails once `platformctl --help` lists a `dns` group.
-
-**This is a gap, not a design decision.** DNS is a Tier 1 platform capability
-that an operator cannot exercise from a shell: no way to list zones, add a
-record or sign a zone without writing a client. It is raised in
-the migration report as an owner question — whether to build `platformctl dns`
-or to record the omission deliberately.
-
-### A prior document described this CLI as if it existed
-
-The deleted cli-reference.md was a full reference for a
-`platformctl dns` tree — `zone`, `record`, `dnssec`, `dane`, `update`, `delete`,
-`server` subcommand categories, with flags and examples. **None of it exists.**
-That file has been fenced with an ARCHIVE banner rather than deleted, because it
-is a useful specification if the CLI is ever built. Do not treat it as a
-description of the product.
+Global flags apply as usual: `--config`, `--transport`, and `-o table|json|yaml`.
+`table` is a human summary. `json` and `yaml` print the RPC's response
+message in protojson form with proto field names (`zone_name`, `soa`,
+`ds_records`). The REST and gRPC references therefore describe the same
+document ([api.md](api.md)).
 
 ---
 
-## What to use instead, today
+## Zones
 
-| Task | Reach it with |
+| Verb | RPC | Flags |
+|---|---|---|
+| `zone create <zone>` | `CreateZone` | `--ttl` (3600), `--description`, `--internal`, `--ns` (repeatable), `--soa-mname`, `--soa-rname`, `--soa-serial` (1), `--soa-refresh` (86400), `--soa-retry` (7200), `--soa-expire` (86400), `--soa-minimum-ttl` (3600) |
+| `zone get <zone>` | `GetZone` | — |
+| `zone update <zone>` | `UpdateZone` | `--ttl`, `--description` |
+| `zone delete <zone>` | `DeleteZone` | — |
+| `zone list` | `ListZones` | `--internal-only` \| `--public-only`, `--page`, `--page-size` |
+
+`zone create` sends an SOA only when `--soa-mname` or `--soa-rname` is set.
+Without either, the server writes its own SOA. `--internal-only` and
+`--public-only` cannot be combined. Pagination is sent only when `--page` or
+`--page-size` is greater than zero.
+
+```sh
+platformctl dns zone create example.test. --soa-mname ns1.example.test. \
+    --soa-rname hostmaster.example.test. --ns ns1.example.test.
+platformctl dns zone list --internal-only -o json
+```
+
+---
+
+## Records
+
+| Verb | RPC | Flags |
+|---|---|---|
+| `record add <zone>` | `AddRecord` | `--type`, `--name`, `--value`, `--ttl` (3600), plus the type's fields below |
+| `record update <zone>` | `UpdateRecord` | as `add`; the record of that type and name is replaced |
+| `record delete <zone>` | `DeleteRecord` | `--type`, `--name` |
+| `record list <zone>` | `ListRecords` | `--type`, `--page`, `--page-size` |
+| `record get <zone>` | `ListRecords` | `--type`, `--name` |
+
+`--type` is case-insensitive. The writable types and the fields each one
+takes:
+
+| Type | `--value` holds | Extra flags |
+|---|---|---|
+| A, AAAA | address | — |
+| CNAME, NS | target name | — |
+| TXT | text | — |
+| MX | exchange | `--priority` |
+| SRV | target | `--priority`, `--weight`, `--port` |
+| CAA | value | `--flags`, `--tag` |
+| TLSA | certificate data (hex) | `--usage`, `--selector`, `--matching-type` |
+
+SOA, DNSKEY, DS, RRSIG and the NSEC family are produced by the server (zone
+creation and `dnssec sign`). Writing one returns `ErrRecordTypeNotWritable`.
+These types can still be read with `record list --type`.
+
+The proto has no single-record read, so `record get` lists the zone's records
+of `--type` and keeps the ones named `--name`. If none match, it returns
+`ErrRecordNotFound`.
+
+```sh
+platformctl dns record add example.test. --type a --name www --value 192.0.2.10
+platformctl dns record add example.test. --type srv --name _sip._tcp \
+    --value sip.example.test. --priority 10 --weight 5 --port 5060
+platformctl dns record get example.test. --type a --name www -o yaml
+```
+
+---
+
+## DNSSEC, resolution and registration
+
+| Verb | RPC | Output |
+|---|---|---|
+| `dnssec sign <zone>` | `SignZone` | the signed zone |
+| `dnssec status <zone>` | `GetDNSSECStatus` | enabled, signed, algorithm, key size, key count, one `ds` row per DS (`keytag alg digest-type digest`) |
+| `resolve <fqdn> [--type]` | `Resolve` | matching records. Without `--type`, every type is returned |
+| `register <fqdn> <ip>` | `Register` | the zone the address was registered in |
+
+`dnssec status` is where the parent-zone DS records come from
+([dnssec.md](dnssec.md)).
+
+---
+
+## Transport coverage
+
+The CLI never chooses a transport per verb. A verb fails on a transport that
+does not carry its RPC, and the transport returns the error ([api.md](api.md) §2):
+
+| Verb | Not carried by |
 |---|---|
-| Zone and record CRUD | REST `/api/v1/dns/zones/...`, or gRPC `DNSService` |
-| Sign a zone / DNSSEC status | REST or gRPC only — no QUIC, no MCP |
-| Resolve a name | gRPC `Resolve`, QUIC `OpDNSResolve` (`0x29`), MCP `dns_resolve` |
-| Read DNS metrics | **QUIC only** — `OpDNSGetMetrics` (`0x2C`) |
-| Read DNS config | **QUIC only** — `OpDNSGetConfig` (`0x2A`) |
+| `dnssec sign`, `dnssec status`, `register` | QUIC |
+| `record update` | REST |
 
-The two QUIC-only rows are the operational reads. No transport changes DNS
-config at runtime or flushes a cache ([api.md](api.md) §2).
+Every other verb works on all transports.
+
+---
+
+## Errors
+
+Flag and argument errors come back as typed errors before any RPC is sent:
+`ErrUnknownRecordType`, `ErrRecordTypeNotWritable`, `ErrFlagRequired`. A failed
+RPC is wrapped in `WrappedError` together with the operation and zone. A
+failure to encode the `-o json|yaml` output is `ErrRenderFailed`.
 
 ---
 
 ## Adjacent CLI that touches DNS
 
-DNS-adjacent behaviour does appear in other command groups:
-
-- **ACME DNS-01 challenges** — `platformctl acme` ([`docs/ca/`](../ca/)) uses
-  DNS records to answer challenges; see [acme-integration.md](acme-integration.md).
-- **DANE** — `platformctl tpm` / trust verbs consume TLSA records published by
-  this feature; see [dane.md](dane.md).
-
-Neither is a DNS management surface.
+- **ACME DNS-01 challenges**: `platformctl acme` ([`docs/ca/`](../ca/)) answers
+  challenges with DNS records; see [acme-integration.md](acme-integration.md).
+- **DANE**: TLSA records are published with `record add --type tlsa` or by the
+  platform itself; see [dane.md](dane.md).
 
 ---
 
-## Parity gap
+## Integration parity
 
-`conventions/feature-docs.md` §4 requires every `cli.md` verb to have a
-`CommandDefinition` in the integration parity suite. There are no verbs here,
-and **no `CommandDefinition` type exists in this repository at all** (grepped
-2026-08-18) — so the requirement is unmet repo-wide as well as vacuous here.
+The CLI leg of `test/integration/dns/` runs the same assertions as the gRPC leg.
+Its adapter (`cli_adapter.go`) carries every `DNSService` RPC over these verbs
+with `-o json` and decodes the protojson output.

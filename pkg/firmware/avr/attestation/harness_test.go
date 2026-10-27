@@ -36,10 +36,16 @@ import (
 // a device that does not exist. The shape follows trusted-firmware's own
 // cannedLink and go-xkms's pkg/backend/avr harness, which are the precedent.
 
-// linkTimeout bounds one command in a test. It is short because these tests
-// must never block: the SDK's read loop spins until its deadline when a link
-// returns a non-EOF error, and seconds of that is not a unit test.
-const linkTimeout = 50 * time.Millisecond
+// linkTimeout is the deadline these tests give the backend and the SDK. No
+// exchange here ever waits on it: fakeLink queues its reply inside Write,
+// before the SDK reads, and reports EOF once drained, so a test that goes
+// wrong returns at once. What the deadline does measure is wall time — the
+// backend's over a whole paged conversation, the SDK's between writing a
+// command and decoding its reply — and a loaded CI runner under -race can
+// stall a goroutine past any few milliseconds. A deadline short enough to
+// matter would fail a correct exchange for the scheduler's sake, so this one
+// sits far above any stall and only stops a test that has truly hung.
+const linkTimeout = time.Minute
 
 // testTenant is the tenant every backend in these tests is bound to.
 const testTenant = "acme"
@@ -287,8 +293,8 @@ func softwareLink() *fakeLink {
 	))
 }
 
-// newTestDevice wraps a link in an SDK Device with a deadline short enough
-// for a unit test.
+// newTestDevice wraps a link in an SDK Device with the tests' deadline; see
+// linkTimeout for why it cannot expire on a correct exchange.
 func newTestDevice(link io.ReadWriter) *tfw.Device {
 	return tfw.New(link, tfw.WithTimeout(linkTimeout), tfw.WithBootWait(0))
 }

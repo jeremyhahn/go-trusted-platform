@@ -48,6 +48,7 @@ func TestNewGuard(t *testing.T) {
 		assert.False(t, config.Required)
 		assert.Equal(t, 10*time.Minute, config.MaxAge)
 		assert.Equal(t, "custom-policy", config.PCRPolicy)
+		assert.Equal(t, FallbackAllowWithWarning, config.Fallback)
 	})
 }
 
@@ -109,6 +110,24 @@ func TestGuard_RemoveZoneConfig(t *testing.T) {
 
 	retrieved := guard.GetZoneConfig("example.com.")
 	assert.Equal(t, guard.DefaultConfig(), retrieved)
+}
+
+func TestGuard_MultipleZoneConfigs(t *testing.T) {
+	guard := NewGuard(&ZoneAttestationConfig{Required: true, MaxAge: 5 * time.Minute})
+
+	zones := map[string]*ZoneAttestationConfig{
+		"public.example.com.": {Required: true, MaxAge: 2 * time.Minute, Fallback: FallbackDeny},
+		"internal.local.":     {Required: false, MaxAge: 10 * time.Minute, Fallback: FallbackAllowWithWarning},
+		"secure.corp.":        {Required: true, MaxAge: 1 * time.Minute, Fallback: FallbackDeny},
+	}
+	for zone, config := range zones {
+		guard.SetZoneConfig(zone, config)
+	}
+
+	assert.Equal(t, 3, guard.ZoneCount())
+	for zone, expected := range zones {
+		assert.Equal(t, expected, guard.GetZoneConfig(zone), zone)
+	}
 }
 
 func TestGuard_VerifyForUpdate_AttestationNotRequired(t *testing.T) {
@@ -361,6 +380,7 @@ func TestGuard_VerifyForQuery(t *testing.T) {
 		}
 		result := guard.VerifyForQuery(ctx, "example.com.", "A", token)
 		assert.True(t, result.Allowed)
+		assert.Equal(t, token, result.Token)
 		assert.Equal(t, "query with valid attestation", result.Message)
 	})
 

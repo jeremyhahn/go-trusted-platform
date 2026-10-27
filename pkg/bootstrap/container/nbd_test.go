@@ -177,6 +177,28 @@ func TestNewNBDServer_NoneWithoutDisklessNBDNodes(t *testing.T) {
 	assert.Nil(t, server)
 }
 
+// TestNBDVolumes_LocalFilesUnderVolumeDir pins the store this boot node
+// uses: one file per device under NBDConfig.VolumeDir, which the installed
+// UKI route reads through the same provider the export server writes.
+func TestNBDVolumes_LocalFilesUnderVolumeDir(t *testing.T) {
+	dir := t.TempDir()
+	volumes, err := nbdVolumes(&ServerConfig{NBD: NBDConfig{VolumeDir: dir}})
+	require.NoError(t, err)
+
+	require.NoError(t, volumes.Create("nbd-01", 4096))
+	path, err := volumes.Attach("nbd-01")
+	require.NoError(t, err)
+	assert.Equal(t, filepath.Join(dir, "nbd-01.img"), path)
+}
+
+func TestNBDVolumes_RefusesAnEmptyVolumeDir(t *testing.T) {
+	volumes, err := nbdVolumes(&ServerConfig{})
+	var invalid nbd.ErrInvalidConfig
+	require.ErrorAs(t, err, &invalid)
+	assert.Equal(t, "VolumeDir", invalid.Field)
+	assert.Nil(t, volumes)
+}
+
 func TestNewNBDServer_Errors(t *testing.T) {
 	manifest := &Manifest{Nodes: []ManifestEntry{{MAC: "dc:a6:32:01:36:c2", Hostname: "nbd-01", BootModel: nbd.BootModel}}}
 
@@ -301,25 +323,8 @@ func nbdStartConfig(t *testing.T, nbdListen string) (config *ServerConfig, devic
 // that the NBD export server answers on its address with the newstyle
 // greeting, and that stopping the container closes it.
 func TestStart_ServesNBDForDisklessNBDNodes(t *testing.T) {
-	config, _ := nbdStartConfig(t, "")
-	nbdAddr := config.NBD.ListenAddr
-	listening := newLogSignal("nbd export server listening")
-	srv, err := NewServer(config, slog.New(listening))
-	require.NoError(t, err)
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	startErr := make(chan error, 1)
-	go func() { startErr <- srv.Start(ctx) }()
-
+	_, nbdAddr, cancel, startErr := startNBDContainer(t)
 	deadline := time.After(5 * time.Second)
-	select {
-	case <-listening.seen:
-	case err := <-startErr:
-		t.Fatalf("Start returned before the NBD server listened: %v", err)
-	case <-deadline:
-		t.Fatal("the NBD server never listened")
-	}
 
 	conn, err := net.Dial("tcp", nbdAddr)
 	require.NoError(t, err)
@@ -341,6 +346,49 @@ func TestStart_ServesNBDForDisklessNBDNodes(t *testing.T) {
 		_ = conn.Close()
 		t.Fatal("the NBD listener outlived the container")
 	}
+}
+
+func TestStop_ClosesTheNBDListenerBeforeItReturns(t *testing.T) {
+	srv, nbdAddr, cancel, startErr := startNBDContainer(t)
+
+	require.NoError(t, srv.Stop())
+	if conn, err := net.Dial("tcp", nbdAddr); err == nil {
+		_ = conn.Close()
+		t.Fatal("the NBD listener outlived Stop")
+	}
+
+	cancel()
+	select {
+	case err := <-startErr:
+		require.NoError(t, err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("Start did not return after its context was cancelled")
+	}
+}
+
+// startNBDContainer starts a container serving one diskless-nbd node and
+// returns once its NBD export server listens. cancel stops Start, whose
+// result arrives on startErr.
+func startNBDContainer(t *testing.T) (srv *Server, nbdAddr string, cancel context.CancelFunc, startErr <-chan error) {
+	t.Helper()
+	config, _ := nbdStartConfig(t, "")
+	listening := newLogSignal("nbd export server listening")
+	srv, err := NewServer(config, slog.New(listening))
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	result := make(chan error, 1)
+	go func() { result <- srv.Start(ctx) }()
+
+	select {
+	case <-listening.seen:
+	case err := <-result:
+		t.Fatalf("Start returned before the NBD server listened: %v", err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("the NBD server never listened")
+	}
+	return srv, config.NBD.ListenAddr, cancel, result
 }
 
 // TestStart_NBDBindFailureKeepsDeviceScriptDown: the device-script port is

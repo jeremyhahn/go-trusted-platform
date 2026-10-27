@@ -14,6 +14,7 @@
 package ipsec
 
 import (
+	"encoding/pem"
 	"net/netip"
 	"reflect"
 	"slices"
@@ -44,7 +45,9 @@ func TestConnectionRendering(t *testing.T) {
 		reauthTime:   36 * time.Hour,
 		replayWindow: 4096,
 	}
-	conn := s.connection(netip.MustParseAddr("10.20.0.30"))
+	root := newTestPKI(t).ca
+	conn := s.connection(netip.MustParseAddr("10.20.0.30"), root)
+	rootPEM := string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: root.Raw}))
 
 	want := &Connection{
 		Version:     "2",
@@ -55,7 +58,7 @@ func TestConnectionRendering(t *testing.T) {
 		ReauthTime:  "129600s",
 		DPDDelay:    "30s",
 		Local:       ConnAuth{Auth: "pubkey", ID: "10.20.0.11"},
-		Remote:      ConnAuth{Auth: "pubkey", ID: "10.20.0.30", Revocation: "strict"},
+		Remote:      ConnAuth{Auth: "pubkey", ID: "10.20.0.30", Revocation: "strict", CACerts: []string{rootPEM}},
 		Children: map[string]ChildSA{childName: {
 			Mode:         "transport",
 			StartAction:  "trap",
@@ -77,7 +80,8 @@ func TestConnectionRendering(t *testing.T) {
 // option is left out rather than sent empty.
 func TestConnectionMessage(t *testing.T) {
 	s := &settings{local: netip.MustParseAddr("10.20.0.11"), reauthTime: time.Hour, replayWindow: 1024}
-	m, err := govici.MarshalMessage(s.connection(netip.MustParseAddr("10.20.0.30")))
+	root := newTestPKI(t).ca
+	m, err := govici.MarshalMessage(s.connection(netip.MustParseAddr("10.20.0.30"), root))
 	if err != nil {
 		t.Fatalf("MarshalMessage: %v", err)
 	}
@@ -95,6 +99,15 @@ func TestConnectionMessage(t *testing.T) {
 	}
 	if got := section(t, m, "remote").Get("revocation"); got != "strict" {
 		t.Errorf("remote revocation = %v, want strict", got)
+	}
+	// Only the peer's chain is constrained to the root: the local side
+	// names no CA, so charon does not narrow its own certificate choice.
+	if local.Get("cacerts") != nil {
+		t.Error("a local cacerts constraint was sent")
+	}
+	wantCA := []string{string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: root.Raw}))}
+	if got, _ := section(t, m, "remote").Get("cacerts").([]string); !slices.Equal(got, wantCA) {
+		t.Errorf("remote cacerts = %v, want the root's PEM", got)
 	}
 	child := section(t, section(t, m, "children"), childName)
 	if got := child.Get("replay_window"); got != "1024" {

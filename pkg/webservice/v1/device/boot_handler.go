@@ -154,7 +154,9 @@ func (h *bootHandler) writeError(w http.ResponseWriter, r *http.Request, err err
 		h.responseWriter.Error400(w, r, err)
 	case errors.As(err, &channel):
 		h.logger.Warn("diskless boot connection cannot be bound", "transport", channel.Transport, "reason", channel.Cause)
-		h.responseWriter.Error400(w, r, err)
+		// The connection, not the request, lacks the binding: the refusal is
+		// FailedPrecondition on every transport and a 409 here (#665).
+		writeGRPCStatusError(h.responseWriter, w, r, err)
 	case errors.As(err, &certRefused):
 		h.logger.Warn("diskless boot certificate refused", "identity", certRefused.Identity, "reason", certRefused.Cause)
 		h.responseWriter.Error403(w, r, err, nil)

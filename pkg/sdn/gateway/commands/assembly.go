@@ -822,18 +822,25 @@ func wireOverlayRuntime(ctx context.Context, cfg *ServeConfig, anchor *trust.Anc
 		return err
 	}
 	WireOverlayPlatform(runtime, client)
-	runtime.OverlayIPsec = newOverlayIPsec
+	runtime.OverlayIPsec = newOverlayIPsec(anchor)
 	return nil
 }
 
-// newOverlayIPsec builds the overlay's IPsec: an ipsec.Service that follows
-// the overlay's flood lists, as platformd's follows its static peers.
-func newOverlayIPsec(cfg *ipsecconfig.Config, admitter modes.VTEPAdmitter, logger *slog.Logger) (gateway.OverlayIPsec, error) {
-	svc, err := ipsec.NewEVPNService(cfg, admitter, logger)
-	if err != nil {
-		return nil, err
+// newOverlayIPsec returns the builder of the overlay's IPsec: an
+// ipsec.Service that follows the overlay's flood lists, as platformd's
+// follows its static peers. Its tunnel identity must chain to anchor; a
+// gatewayd without a platform-ca-file builds none.
+func newOverlayIPsec(anchor *trust.Anchor) func(*ipsecconfig.Config, modes.VTEPAdmitter, *slog.Logger) (gateway.OverlayIPsec, error) {
+	return func(cfg *ipsecconfig.Config, admitter modes.VTEPAdmitter, logger *slog.Logger) (gateway.OverlayIPsec, error) {
+		if anchor == nil {
+			return nil, ipsec.ErrMissingDependency
+		}
+		svc, err := ipsec.NewEVPNService(cfg, admitter, anchor, logger)
+		if err != nil {
+			return nil, err
+		}
+		return svc, nil
 	}
-	return svc, nil
 }
 
 // WireOverlayPlatform points the overlay admission inputs of runtime at

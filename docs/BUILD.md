@@ -74,7 +74,12 @@ To perform a container build, use the Makefile `docker-builder-load` and `releas
 ### CI Stage Targets
 
 CI runs the five stages of the handbook's `ci-standard.md` §1, each a `make`
-target (`devops.md` §4):
+target (`devops.md` §4). The `image` job runs `make build` and `make test`
+(`.github/workflows/ci.yml:294-319`), `make deps-check` on every event, a
+docs-only PR included (ci-template v1.28, `:344-348`), and in the full tier
+`make security` (`:333-337`); the `integration` job runs
+`make integration-test` (`:591`). [test/integration.md](test/integration.md#ci)
+lists every job and tier.
 
 | Target | Stage |
 |--------|-------|

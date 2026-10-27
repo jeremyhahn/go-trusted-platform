@@ -1,7 +1,7 @@
 # DNS Operations Guide
 
 > **Status: REFERENCE** · Last verified: 2026-10-18
-> What an operator can observe and maintain in the platform's DNS server (`pkg/dns`) today. There is no `platformctl dns` group (#954): every task below goes through the [DNS API](api.md) or `dig`.
+> What an operator can observe and maintain in the platform's DNS server (`pkg/dns`) today. Every task below goes through `platformctl dns` ([cli.md](cli.md)), the [DNS API](api.md) or `dig`.
 
 ## What runs
 

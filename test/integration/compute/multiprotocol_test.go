@@ -356,11 +356,12 @@ func testVMAttestation(t *testing.T, ctx context.Context, adapter attestAdapter)
 }
 
 // sdkWrongStateCode is the class a VM in the wrong state reaches an SDK
-// adapter as. The REST server renders FailedPrecondition as 400, which the
-// SDK REST transport reads back as InvalidArgument.
+// adapter as. The REST server renders FailedPrecondition as 409 Conflict
+// (#665), which the SDK REST transport reads back as AlreadyExists on
+// every method but DELETE (AttestVM is a POST).
 func sdkWrongStateCode(adapter string) codes.Code {
 	if adapter == "REST" {
-		return codes.InvalidArgument
+		return codes.AlreadyExists
 	}
 	return codes.FailedPrecondition
 }
@@ -757,8 +758,8 @@ type errorClass func(err error) bool
 
 // wrongStateClasses maps each adapter to its wrong-state error class. gRPC,
 // Unix, QUIC and MCP carry the FailedPrecondition code (the SDK MCP transport
-// turns the JSON-RPC code of that class back into it), REST answers 400 and
-// the CLI exits non-zero with the gRPC code in its output.
+// turns the JSON-RPC code of that class back into it), REST answers 409
+// Conflict (#665) and the CLI exits non-zero with the gRPC code in its output.
 var wrongStateClasses = map[string]errorClass{
 	"gRPC": isFailedPrecondition,
 	"Unix": isFailedPrecondition,
@@ -766,7 +767,7 @@ var wrongStateClasses = map[string]errorClass{
 	"MCP":  isFailedPrecondition,
 	"REST": func(err error) bool {
 		var restErr ErrRESTRequestFailed
-		return errors.As(err, &restErr) && restErr.StatusCode == http.StatusBadRequest
+		return errors.As(err, &restErr) && restErr.StatusCode == http.StatusConflict
 	},
 	"CLI": func(err error) bool {
 		var cliErr ErrCLIExecution

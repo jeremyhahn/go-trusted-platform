@@ -205,3 +205,71 @@ func TestReadChainRejects(t *testing.T) {
 		t.Fatalf("unparsable certificate: err = %v", err)
 	}
 }
+
+// An identity whose chain ends in a platform anchor certificate is
+// supplied as is, through an intermediate.
+func TestAnchoredIdentity(t *testing.T) {
+	root := newTestPKI(t)
+	pki := root.intermediate(t, "tunnel intermediate")
+	inner := &fakeIdentity{id: pki.identity(nil)}
+	other := newTestPKI(t).ca
+	a, err := NewAnchoredIdentity(inner, &fakeAnchor{certs: []*x509.Certificate{other, root.ca}})
+	if err != nil {
+		t.Fatalf("NewAnchoredIdentity: %v", err)
+	}
+	id, err := a.TunnelIdentity(context.Background())
+	if err != nil {
+		t.Fatalf("TunnelIdentity: %v", err)
+	}
+	if id != inner.id {
+		t.Fatalf("TunnelIdentity = %+v, want the wrapped identity", id)
+	}
+	a.Close()
+	if !inner.closed {
+		t.Fatal("Close did not close the wrapped identity")
+	}
+}
+
+func TestAnchoredIdentityRefuses(t *testing.T) {
+	pki := newTestPKI(t)
+	// impostor has the anchor root's subject but its own key: only the
+	// certificate itself, not its name, admits a chain.
+	impostor := newTestPKI(t)
+	anchorErr := errors.New("anchor unreadable")
+	innerErr := errors.New("token unreadable")
+	tests := []struct {
+		name   string
+		id     *TunnelIdentity
+		inner  error
+		anchor *fakeAnchor
+		want   error
+	}{
+		{"root not in the anchor", impostor.identity(nil), nil, &fakeAnchor{certs: []*x509.Certificate{pki.ca}}, ErrNotAnchored},
+		{"empty anchor", pki.identity(nil), nil, &fakeAnchor{}, ErrNotAnchored},
+		{"broken chain", &TunnelIdentity{Chain: []*x509.Certificate{impostor.leaf, pki.ca}}, nil, &fakeAnchor{certs: []*x509.Certificate{pki.ca}}, ErrChainBroken},
+		{"empty chain", &TunnelIdentity{}, nil, &fakeAnchor{certs: []*x509.Certificate{pki.ca}}, ErrNoCertificate},
+		{"anchor error", pki.identity(nil), nil, &fakeAnchor{err: anchorErr}, anchorErr},
+		{"inner error", nil, innerErr, &fakeAnchor{certs: []*x509.Certificate{pki.ca}}, innerErr},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			a, err := NewAnchoredIdentity(&fakeIdentity{id: tt.id, err: tt.inner}, tt.anchor)
+			if err != nil {
+				t.Fatalf("NewAnchoredIdentity: %v", err)
+			}
+			id, err := a.TunnelIdentity(context.Background())
+			if id != nil || !errors.Is(err, tt.want) {
+				t.Fatalf("TunnelIdentity = %v, %v; want %v", id, err, tt.want)
+			}
+		})
+	}
+}
+
+func TestNewAnchoredIdentityRejectsMissingDependency(t *testing.T) {
+	if a, err := NewAnchoredIdentity(nil, &fakeAnchor{}); a != nil || !errors.Is(err, ErrMissingDependency) {
+		t.Fatalf("NewAnchoredIdentity(nil inner) = %v, %v; want %v", a, err, ErrMissingDependency)
+	}
+	if a, err := NewAnchoredIdentity(&fakeIdentity{}, nil); a != nil || !errors.Is(err, ErrMissingDependency) {
+		t.Fatalf("NewAnchoredIdentity(nil anchor) = %v, %v; want %v", a, err, ErrMissingDependency)
+	}
+}

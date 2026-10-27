@@ -618,7 +618,7 @@ func TestComputeRPC(t *testing.T) {
 	}{
 		{status.Error(codes.InvalidArgument, "vm_id is required"), http.StatusBadRequest},
 		{status.Error(codes.NotFound, "no such vm"), http.StatusNotFound},
-		{status.Error(codes.FailedPrecondition, "vm is running"), http.StatusBadRequest},
+		{status.Error(codes.FailedPrecondition, "vm is running"), http.StatusConflict},
 		{status.Error(codes.PermissionDenied, "denied"), http.StatusForbidden},
 		{status.Error(codes.Unimplemented, "no VM backend"), http.StatusNotImplemented},
 		{status.Error(codes.Unavailable, "no orchestrator"), http.StatusServiceUnavailable},

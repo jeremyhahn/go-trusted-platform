@@ -83,17 +83,17 @@ func TestNAT64StatusResponse_AnErrorIsNotAStatus(t *testing.T) {
 
 // TestNAT64Status_HTTPStatusFollowsTheCause pins the NAT64 error contract
 // on REST: a translator that is not running is 503 (retryable, maybe
-// starting), a kernel that cannot carry it is 412 (operator action on the
-// host), and anything else is a daemon fault. The 412 case answered 500
-// before the #661 review, which told a REST caller to retry or escalate a
-// missing kernel module.
+// starting), a kernel that cannot carry it is 409, FailedPrecondition's REST
+// status (operator action on the host, #665), and anything else is a daemon
+// fault. The module case answered 500 before the #661 review, which told a
+// REST caller to retry or escalate a missing kernel module.
 func TestNAT64Status_HTTPStatusFollowsTheCause(t *testing.T) {
 	for name, tc := range map[string]struct {
 		err  error
 		want int
 	}{
 		"not running":        {ErrNAT64NotConfigured{}, http.StatusServiceUnavailable},
-		"module unavailable": {ErrNAT64ModuleUnavailable{Detail: "module jool not found"}, http.StatusPreconditionFailed},
+		"module unavailable": {ErrNAT64ModuleUnavailable{Detail: "module jool not found"}, http.StatusConflict},
 		"anything else":      {errors.New("boom"), http.StatusInternalServerError},
 	} {
 		t.Run(name, func(t *testing.T) {

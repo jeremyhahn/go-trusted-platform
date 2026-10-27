@@ -23,6 +23,7 @@ import { Label } from '@/components/ui/label';
 import { useToast } from '@/hooks/use-toast';
 import { useSDN, useApi } from '@/hooks';
 import type { Flow, FlowMatch, FlowAction } from 'trusted-platform-sdk';
+import { flowActionKind, flowTableNumber, readUint64 } from '@/lib/sdn-wire';
 
 // Types for OpenFlow flow management
 interface OpenFlowRule {
@@ -41,15 +42,6 @@ interface OpenFlowRule {
   hardTimeout: number;
   cookie: string;
   createdAt: string;
-}
-
-// Convert FlowTable enum to number
-function flowTableToNumber(table: string | undefined): number {
-  if (!table || table === 'UNSPECIFIED') return 0;
-  const match = table.match(/TABLE_(\d+)/);
-  if (match) return parseInt(match[1], 10);
-  if (table === 'TABLE_DROP') return 255;
-  return 0;
 }
 
 function formatBytes(bytes: number): string {
@@ -91,19 +83,20 @@ function formatMatchConditions(match: FlowMatch | undefined | null): string {
 function formatActions(actions: FlowAction[] | undefined | null): string {
   if (!actions || !Array.isArray(actions)) return '-';
   return actions.map((a) => {
+    const kind = flowActionKind(a.type);
     if (a.port !== undefined) {
-      return `${a.type}(${a.port})`;
+      return `${kind}(${a.port})`;
     }
     if (a.vlanId !== undefined) {
-      return `${a.type}(vlan:${a.vlanId})`;
+      return `${kind}(vlan:${a.vlanId})`;
     }
     if (a.tableId !== undefined) {
-      return `${a.type}(table:${a.tableId})`;
+      return `${kind}(table:${a.tableId})`;
     }
     if (a.field !== undefined && a.value !== undefined) {
-      return `${a.type}(${a.field}=${a.value})`;
+      return `${kind}(${a.field}=${a.value})`;
     }
-    return a.type;
+    return kind;
   }).join(', ');
 }
 
@@ -168,13 +161,13 @@ export default function OpenFlowsPage() {
       id: flow.id,
       name: flow.config?.metadata?.['name'] || flow.id,
       switch: selectedBridgeId,
-      table: flowTableToNumber(flow.config?.table),
+      table: flowTableNumber(flow.config?.table),
       priority: flow.config?.priority || 0,
       match: flow.config?.match || {} as FlowMatch,
       actions: flow.config?.actions || [],
       status: 'active' as const,
-      packets: flow.stats?.packetCount || 0,
-      bytes: flow.stats?.byteCount || 0,
+      packets: readUint64(flow.stats?.packetCount),
+      bytes: readUint64(flow.stats?.byteCount),
       duration: flow.stats?.durationSeconds || 0,
       idleTimeout: flow.config?.idleTimeout || 0,
       hardTimeout: flow.config?.hardTimeout || 0,
@@ -512,16 +505,15 @@ export default function OpenFlowsPage() {
               onClick={async () => {
                 setCreateSubmitting(true);
                 try {
-                  // Reads the REST wire shape, which differs from the SDK/proto declaration — #445; typed once that contract is decided.
-                  const match: any = {};
-                  if (createInPort) match.inPort = Number.parseInt(createInPort, 10);
+                  const match: FlowMatch = {};
+                  if (createInPort) match.inPort = createInPort;
                   await sdn.addFlow({
                     config: {
                       bridgeId: selectedBridgeId,
                       priority: Number.parseInt(createPriority, 10) || 100,
                       match,
-                      // Reads the REST wire shape, which differs from the SDK/proto declaration — #445; typed once that contract is decided.
-                      actions: [{ type: 'NORMAL' as any }],
+                      // An output action with no port is NORMAL forwarding.
+                      actions: [{ type: 'FLOW_ACTION_OUTPUT' }],
                     },
                   });
                   toast({ title: 'Flow rule added', variant: 'success' });

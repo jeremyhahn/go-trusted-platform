@@ -529,6 +529,41 @@ func waitForSocket(t *testing.T, socketPath string) {
 	}
 }
 
+func setupSWTPM(t *testing.T, ctx context.Context, stateDir, socketPath string) *swtpm.SWTPM {
+	t.Helper()
+
+	config := &swtpm.Config{
+		StateDir:   stateDir,
+		SocketPath: socketPath,
+		PCRBanks:   []string{"sha256"},
+	}
+
+	sw, err := swtpm.NewSWTPM(config, nil)
+	require.NoError(t, err, "Failed to create SWTPM instance")
+
+	err = sw.Initialize(ctx)
+	require.NoError(t, err, "Failed to initialize SWTPM")
+
+	err = sw.Start(ctx)
+	require.NoError(t, err, "Failed to start SWTPM")
+
+	// Wait for socket to be ready
+	waitForSocket(t, socketPath)
+
+	// Verify socket exists
+	_, err = os.Stat(socketPath)
+	require.NoError(t, err, "SWTPM socket not created")
+
+	return sw
+}
+
+func cleanupSWTPM(t *testing.T, sw *swtpm.SWTPM) {
+	t.Helper()
+	if sw != nil {
+		sw.Stop()
+	}
+}
+
 // vmFirmware returns the OVMF code and vars images the VM boot test uses,
 // or ErrMissingPrerequisite when QEMU or OVMF is absent. The devcontainer
 // installs both (build/docker/devcontainer/Dockerfile: qemu-system-x86, ovmf).
