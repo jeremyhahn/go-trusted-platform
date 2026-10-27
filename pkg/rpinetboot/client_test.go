@@ -120,6 +120,16 @@ func (s *fakeDHCPServer) serve() {
 	}
 }
 
+// plainPacketConn hides the *net.UDPConn from the TFTP server. Given a
+// UDPConn, pin/tftp reads each request's control message and calls
+// net.InterfaceByIndex, a netlink dump of every link that waits on the
+// kernel's RTNL lock; on a CI host busy creating and removing containers
+// that wait outlasts the client's retry budget (#1174). Without it the
+// server answers from the address the kernel routes to the client.
+type plainPacketConn struct {
+	net.PacketConn
+}
+
 // tftpTree serves dir on a loopback TFTP server and returns its port.
 func tftpTree(t *testing.T, dir string) int {
 	t.Helper()
@@ -132,10 +142,16 @@ func tftpTree(t *testing.T, dir string) int {
 		_, err = rf.ReadFrom(f)
 		return err
 	}, nil)
-	conn, err := net.ListenPacket("udp", "127.0.0.1:0")
+	// The socket is bound before Serve starts, so a request sent before
+	// Serve reads it waits in the socket buffer: the server is ready now.
+	conn, err := net.ListenPacket("udp4", "127.0.0.1:0")
 	require.NoError(t, err)
-	go func() { _ = srv.Serve(conn) }()
-	t.Cleanup(srv.Shutdown)
+	served := make(chan error, 1)
+	go func() { served <- srv.Serve(plainPacketConn{conn}) }()
+	t.Cleanup(func() {
+		srv.Shutdown()
+		require.NoError(t, <-served)
+	})
 	return conn.LocalAddr().(*net.UDPAddr).Port
 }
 
@@ -172,10 +188,14 @@ func loopbackOptions(t *testing.T, server *fakeDHCPServer, tftpPort int) Options
 		TFTPPort:           tftpPort,
 		DHCPTimeout:        3 * time.Second,
 		DHCPRequestTimeout: 300 * time.Millisecond,
-		TFTPFileTimeout:    5 * time.Second,
-		TFTPRetries:        1,
-		TFTPRetryInterval:  time.Second,
-		DHCPServerAddr:     server.addr(),
+		// The bootloader's TFTP budget, not a tighter one: these bound a
+		// failure, never a pass, so a late reply on a loaded runner is
+		// retransmitted instead of failing the file (#1174). A test that
+		// wants a TFTP failure sets its own timeout.
+		TFTPFileTimeout:   TFTPFileTimeout,
+		TFTPRetries:       TFTPRetries,
+		TFTPRetryInterval: TFTPRetryInterval,
+		DHCPServerAddr:    server.addr(),
 		DialDHCP: func(string) (net.PacketConn, error) {
 			return net.ListenPacket("udp4", "127.0.0.1:0")
 		},
