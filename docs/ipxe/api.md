@@ -268,10 +268,20 @@ not registered and answers 404 like any unknown path. Enabled, the node
 the one whose `install_certificate_sha256` is the SHA-256 of the leaf of the
 verified client chain, and a MAC in the request body must match it. The
 operator binds that fingerprint when the device enters installing (`UpdateState`
-with `install_certificate_sha256`); a serial is not used, because it is unique
+with `install_certificate_sha256`, or the Go SDK's `pxe.Client.SetDeviceInstalling`,
+`sdk/go/services/pxe/client.go:113`); a serial is not used, because it is unique
 only per issuer. No verified client certificate is 401; a certificate no device
 carries, or a mismatched MAC, is 403. Transports with no peer certificate —
 Unix, MCP stdio, embedded — refuse the call.
+
+**The certificate ends only the installation it was bound to.** The webhook
+moves the device to `install_complete` or `failed` in one compare-and-swap
+that admits only `installing` under that fingerprint
+(`pkg/compute/pxe/service.go:681`, `pkg/compute/pxe/state.go:268`). Every
+transition out of `installing` clears the binding, so a callback that arrives
+after the installation ended — replayed, or after enrollment, authorization or
+quarantine — finds no device and is 403 (`PermissionDenied`,
+`pkg/api/daemon/pxe_grpc_service.go:791`).
 
 **The `REST base` column is a locator, not the contract.** It gives the prefix a
 route hangs under; it does not give the route. The normative per-route path

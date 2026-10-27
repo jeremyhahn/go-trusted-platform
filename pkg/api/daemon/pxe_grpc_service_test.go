@@ -205,6 +205,27 @@ func (m *mockPXEService) SetDeviceInstalling(ctx context.Context, deviceID, inst
 	return nil
 }
 
+func (m *mockPXEService) CompleteInstallation(ctx context.Context, deviceID, installCertSHA256 string, success bool, reason string) error {
+	if m.updateStateErr != nil {
+		return m.updateStateErr
+	}
+	device, exists := m.devices[deviceID]
+	if !exists {
+		return pxe.ErrDeviceNotFound{DeviceID: deviceID}
+	}
+	if device.State != pxe.StateInstalling || device.InstallCertificateSHA256 != installCertSHA256 {
+		return pxe.ErrInstallationNotBound{DeviceID: deviceID, State: string(device.State), CertificateSHA256: installCertSHA256}
+	}
+	device.State = pxe.StateFailed
+	if success {
+		device.State = pxe.StateInstallComplete
+	}
+	device.InstallCertificateSHA256 = ""
+	device.StateReason = reason
+	device.UpdatedAt = time.Now()
+	return nil
+}
+
 func (m *mockPXEService) AuthorizeDevice(ctx context.Context, deviceID string, targetVLAN uint16) error {
 	if m.authorizeErr != nil {
 		return m.authorizeErr

@@ -256,6 +256,25 @@ func (f *recordingPXEService) SetDeviceInstalling(_ context.Context, deviceID, i
 	return nil
 }
 
+func (f *recordingPXEService) CompleteInstallation(_ context.Context, deviceID, installCertSHA256 string, success bool, reason string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.record("CompleteInstallation", deviceID, installCertSHA256, success)
+	device, err := f.lookup(deviceID)
+	if err != nil {
+		return err
+	}
+	// The binding refusal is the service's; pkg/compute/pxe and
+	// pxe_webhook_identity_test.go cover it. Here only transport parity counts.
+	device.InstallCertificateSHA256 = ""
+	if success {
+		f.changed(device, pxe.StateInstallComplete, reason)
+	} else {
+		f.changed(device, pxe.StateFailed, reason)
+	}
+	return nil
+}
+
 func (f *recordingPXEService) AuthorizeDevice(_ context.Context, deviceID string, targetVLAN uint16) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()

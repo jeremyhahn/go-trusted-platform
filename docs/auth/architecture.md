@@ -1121,7 +1121,11 @@ is 401; a certificate no device carries, or a mismatched MAC, is 403. The
 fingerprint, not the serial, is the key: a serial is unique only per issuer,
 and the listener trusts more than one CA, so two issuers can sign the same
 serial. Unix, MCP stdio and the embedded transport carry no peer certificate
-and refuse the call. The route is still mounted only when `pxe.ServiceConfig.WebhookEnabled`
+and refuse the call. The certificate authorizes only the installation it was
+bound to: completion is one compare-and-swap admitted only from `installing`
+under that fingerprint (`pkg/compute/pxe/service.go:681`), and leaving
+`installing` clears the binding (`pkg/compute/pxe/state.go:268`), so a late
+or replayed callback is 403. The route is still mounted only when `pxe.ServiceConfig.WebhookEnabled`
 is true (default false).
 
 #### #171: the unverified decoders are deleted, not corrected

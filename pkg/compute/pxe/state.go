@@ -254,6 +254,19 @@ func (sm *StateManager) Transition(deviceID string, newState ProvisioningState, 
 // the same atomic swap, so the change lands only with an accepted transition.
 // A nil apply makes it a plain Transition.
 func (sm *StateManager) TransitionWith(deviceID string, newState ProvisioningState, reason string, apply func(*DeviceInfo)) error {
+	return sm.TransitionIf(deviceID, newState, reason, nil, apply)
+}
+
+// TransitionIf is TransitionWith that also requires admit to accept the
+// device. admit sees the entry each swap attempt would replace, so a concurrent
+// change it refuses cannot land between the check and the swap. admit is the
+// caller's precondition, so it is asked before the transition table and its
+// error is returned as is. A nil admit makes it a plain TransitionWith.
+//
+// Every transition out of StateInstalling clears InstallCertificateSHA256 in
+// the same swap: the installer certificate authorizes only the installation
+// it was bound for (SetDeviceInstalling), never a later state of the device.
+func (sm *StateManager) TransitionIf(deviceID string, newState ProvisioningState, reason string, admit func(*DeviceInfo) error, apply func(*DeviceInfo)) error {
 	if deviceID == "" {
 		return ErrDeviceNotFound{DeviceID: deviceID}
 	}
@@ -266,32 +279,36 @@ func (sm *StateManager) TransitionWith(deviceID string, newState ProvisioningSta
 		}
 	}
 
-	entryVal, loaded := sm.devices.Load(deviceID)
-	if !loaded {
-		return ErrDeviceNotFound{DeviceID: deviceID}
-	}
-
-	entry := entryVal.(*deviceEntry)
-	currentState := entry.device.State
-
-	// Validate the transition
-	if !IsValidTransition(currentState, newState) {
-		return ErrInvalidStateTransition{
-			DeviceID:  deviceID,
-			FromState: string(currentState),
-			ToState:   string(newState),
-			Reason:    "transition not allowed",
-		}
-	}
-
-	// Update state atomically using CAS pattern
+	// Update state atomically using CAS pattern, validating against the
+	// entry each attempt replaces.
 	for {
-		currentEntry := entry
-		currentVersion := currentEntry.version
+		entryVal, loaded := sm.devices.Load(deviceID)
+		if !loaded {
+			return ErrDeviceNotFound{DeviceID: deviceID}
+		}
+		currentEntry := entryVal.(*deviceEntry)
+		currentState := currentEntry.device.State
+
+		if admit != nil {
+			if err := admit(currentEntry.device); err != nil {
+				return err
+			}
+		}
+		if !IsValidTransition(currentState, newState) {
+			return ErrInvalidStateTransition{
+				DeviceID:  deviceID,
+				FromState: string(currentState),
+				ToState:   string(newState),
+				Reason:    "transition not allowed",
+			}
+		}
 
 		// Create updated device
 		now := sm.now()
 		updatedDevice := copyDeviceInfo(currentEntry.device)
+		if currentState == StateInstalling {
+			updatedDevice.InstallCertificateSHA256 = ""
+		}
 		if apply != nil {
 			apply(updatedDevice)
 		}
@@ -303,35 +320,14 @@ func (sm *StateManager) TransitionWith(deviceID string, newState ProvisioningSta
 		// Create new entry with incremented version
 		newEntry := &deviceEntry{
 			device:  updatedDevice,
-			version: currentVersion + 1,
+			version: currentEntry.version + 1,
 		}
 
-		// Attempt atomic swap
+		// Attempt atomic swap; on failure reload and retry
 		if sm.devices.CompareAndSwap(deviceID, currentEntry, newEntry) {
-			// Generate and emit event
 			event := sm.createTransitionEvent(deviceID, currentState, newState, reason)
 			sm.emitEvent(event)
 			return nil
-		}
-
-		// Reload and retry if CAS failed
-		entryVal, loaded = sm.devices.Load(deviceID)
-		if !loaded {
-			return ErrDeviceNotFound{DeviceID: deviceID}
-		}
-		entry = entryVal.(*deviceEntry)
-
-		// Re-validate transition with new state
-		if entry.device.State != currentState {
-			if !IsValidTransition(entry.device.State, newState) {
-				return ErrInvalidStateTransition{
-					DeviceID:  deviceID,
-					FromState: string(entry.device.State),
-					ToState:   string(newState),
-					Reason:    "transition not allowed after concurrent modification",
-				}
-			}
-			currentState = entry.device.State
 		}
 	}
 }

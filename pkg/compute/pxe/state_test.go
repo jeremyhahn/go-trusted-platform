@@ -647,6 +647,57 @@ func TestStateManager_TransitionWith_RefusedTransitionAppliesNothing(t *testing.
 	assert.Empty(t, retrieved.PortID)
 }
 
+func TestStateManager_TransitionIf_RefusalByAdmitChangesNothing(t *testing.T) {
+	sm := NewStateManager()
+	mac, _ := net.ParseMAC("00:11:22:33:44:55")
+	require.NoError(t, sm.Register(&DeviceInfo{ID: "device-123", MACAddress: mac, State: StateInstalling, InstallCertificateSHA256: "bound"}))
+	refused := ErrInstallationNotBound{DeviceID: "device-123"}
+
+	err := sm.TransitionIf("device-123", StateFailed, "failed", func(d *DeviceInfo) error {
+		assert.Equal(t, StateInstalling, d.State, "admit must see the entry the swap replaces")
+		return refused
+	}, nil)
+	assert.Equal(t, refused, err)
+
+	retrieved, err := sm.Get("device-123")
+	require.NoError(t, err)
+	assert.Equal(t, StateInstalling, retrieved.State)
+	assert.Equal(t, "bound", retrieved.InstallCertificateSHA256)
+}
+
+// Every way out of installing ends the installation the certificate was
+// bound for, so each clears the binding; other transitions keep it.
+func TestStateManager_Transition_LeavingInstallingClearsTheBinding(t *testing.T) {
+	for _, next := range []ProvisioningState{StateInstallComplete, StateFailed, StateQuarantined} {
+		t.Run(string(next), func(t *testing.T) {
+			sm := NewStateManager()
+			mac, _ := net.ParseMAC("00:11:22:33:44:55")
+			require.NoError(t, sm.Register(&DeviceInfo{ID: "device-123", MACAddress: mac, State: StateInstalling, InstallCertificateSHA256: "bound"}))
+
+			require.NoError(t, sm.Transition("device-123", next, "installation ended"))
+
+			retrieved, err := sm.Get("device-123")
+			require.NoError(t, err)
+			assert.Equal(t, next, retrieved.State)
+			assert.Empty(t, retrieved.InstallCertificateSHA256)
+		})
+	}
+
+	t.Run("entering installing binds", func(t *testing.T) {
+		sm := NewStateManager()
+		mac, _ := net.ParseMAC("00:11:22:33:44:55")
+		require.NoError(t, sm.Register(&DeviceInfo{ID: "device-123", MACAddress: mac, State: StateBooting}))
+
+		require.NoError(t, sm.TransitionWith("device-123", StateInstalling, "installing", func(d *DeviceInfo) {
+			d.InstallCertificateSHA256 = "bound"
+		}))
+
+		retrieved, err := sm.Get("device-123")
+		require.NoError(t, err)
+		assert.Equal(t, "bound", retrieved.InstallCertificateSHA256)
+	})
+}
+
 func TestStateManager_UpdateDevice(t *testing.T) {
 	sm := NewStateManager()
 	mac, _ := net.ParseMAC("00:11:22:33:44:55")

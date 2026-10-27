@@ -495,30 +495,23 @@ func (s *PXEGRPCService) WebhookComplete(ctx context.Context, req *platformv1.PX
 		return nil, err
 	}
 
-	device, err := s.webhookDevice(ctx, req.GetMacAddress())
+	device, fingerprint, err := s.webhookDevice(ctx, req.GetMacAddress())
 	if err != nil {
 		s.logger.Error(err, "Refused PXE webhook", "mac_address", req.GetMacAddress())
 		return nil, err
 	}
 
-	var newState pxe.ProvisioningState
-	var reason string
-
+	reason := "OS installation failed"
 	if req.GetSuccess() {
-		newState = pxe.StateInstallComplete
 		reason = "OS installation completed successfully"
-		if req.GetMessage() != "" {
-			reason = reason + ": " + req.GetMessage()
-		}
-	} else {
-		newState = pxe.StateFailed
-		reason = "OS installation failed"
-		if req.GetMessage() != "" {
-			reason = reason + ": " + req.GetMessage()
-		}
+	}
+	if req.GetMessage() != "" {
+		reason = reason + ": " + req.GetMessage()
 	}
 
-	if err := s.pxeService.UpdateDeviceState(ctx, device.ID, newState, reason); err != nil {
+	// The certificate completes only the installation it was bound to: a
+	// callback after the device left installing is refused, whatever it says.
+	if err := s.pxeService.CompleteInstallation(ctx, device.ID, fingerprint, req.GetSuccess(), reason); err != nil {
 		s.logger.Error(err, "Failed to update device state from webhook", "device_id", device.ID)
 		return nil, s.mapPXEError(err, "update state from webhook")
 	}
@@ -538,7 +531,8 @@ func (s *PXEGRPCService) WebhookComplete(ctx context.Context, req *platformv1.PX
 	}, nil
 }
 
-// webhookDevice returns the device the install-completion webhook is from.
+// webhookDevice returns the device the install-completion webhook is from and
+// the fingerprint that identified it.
 // The identity is the verified client certificate of the connection (#238),
 // resolved the same way on every transport by requestChannel; the device is
 // the one whose installer certificate fingerprint, bound by UpdateState as the
@@ -547,16 +541,18 @@ func (s *PXEGRPCService) WebhookComplete(ctx context.Context, req *platformv1.PX
 // body MAC is never an identity: when present it must be that device's MAC. A
 // connection without a verified certificate is Unauthenticated; an unbound
 // certificate or a mismatched MAC is
-// PermissionDenied. Every refusal happens before any state is written.
-func (s *PXEGRPCService) webhookDevice(ctx context.Context, bodyMAC string) (*pxe.DeviceInfo, error) {
+// PermissionDenied. Every refusal happens before any state is written. Leaving
+// installing clears the binding, so a certificate whose installation has ended
+// identifies no device.
+func (s *PXEGRPCService) webhookDevice(ctx context.Context, bodyMAC string) (*pxe.DeviceInfo, string, error) {
 	state, transport := requestChannel(ctx)
 	leaf, err := tlspeer.VerifiedLeaf(state)
 	if err != nil {
-		return nil, status.Error(codes.Unauthenticated,
+		return nil, "", status.Error(codes.Unauthenticated,
 			ErrPXEWebhookIdentityRequired{Transport: transport, Reason: err.Error()}.Error())
 	}
 	if len(leaf.Raw) == 0 {
-		return nil, status.Error(codes.Unauthenticated,
+		return nil, "", status.Error(codes.Unauthenticated,
 			ErrPXEWebhookIdentityRequired{Transport: transport, Reason: "the verified certificate has no DER encoding"}.Error())
 	}
 
@@ -565,27 +561,27 @@ func (s *PXEGRPCService) webhookDevice(ctx context.Context, bodyMAC string) (*px
 	fingerprint := pxe.CertificateSHA256(leaf.Raw)
 	devices, err := s.pxeService.ListDevices(ctx, &pxe.DeviceFilter{InstallCertificateSHA256: fingerprint})
 	if err != nil {
-		return nil, s.mapPXEError(err, "find device for webhook")
+		return nil, "", s.mapPXEError(err, "find device for webhook")
 	}
 	if len(devices) != 1 {
-		return nil, status.Error(codes.PermissionDenied,
+		return nil, "", status.Error(codes.PermissionDenied,
 			ErrPXEWebhookUnknownIdentity{CertificateSHA256: fingerprint, Matches: len(devices)}.Error())
 	}
 	device := devices[0]
 
 	if bodyMAC == "" {
-		return device, nil
+		return device, fingerprint, nil
 	}
 	mac, err := net.ParseMAC(bodyMAC)
 	if err != nil {
-		return nil, status.Error(codes.InvalidArgument,
+		return nil, "", status.Error(codes.InvalidArgument,
 			pxe.ErrInvalidMACAddress{MACAddress: bodyMAC, Reason: err.Error()}.Error())
 	}
 	if !bytes.Equal(mac, device.MACAddress) {
-		return nil, status.Error(codes.PermissionDenied,
+		return nil, "", status.Error(codes.PermissionDenied,
 			ErrPXEWebhookIdentityMismatch{CertificateSHA256: fingerprint, MACAddress: bodyMAC}.Error())
 	}
-	return device, nil
+	return device, fingerprint, nil
 }
 
 // =============================================================================
@@ -793,6 +789,8 @@ func (s *PXEGRPCService) mapPXEError(err error, operation string) error {
 		return status.Errorf(codes.InvalidArgument, "invalid state: %s", e.Reason)
 	case pxe.ErrInvalidCertificateFingerprint:
 		return status.Error(codes.InvalidArgument, e.Error())
+	case pxe.ErrInstallationNotBound:
+		return status.Error(codes.PermissionDenied, e.Error())
 	case pxe.ErrInvalidStateTransition:
 		return status.Errorf(codes.FailedPrecondition, "invalid state transition from %s to %s: %s",
 			e.FromState, e.ToState, e.Reason)

@@ -52,3 +52,9 @@ func TestSDKMCP_PXEMethodsRefuse(t *testing.T) {
 	testSDKPXERefusesScope(t, "MCP", connectPXEMCP)
 	testSDKPXERefusesNotFound(t, "MCP", connectPXEMCP)
 }
+
+// TestSDKMCP_PXEWebhookCompletesAnSDKInstallation binds the installer
+// certificate through the public client over MCP and completes it by webhook.
+func TestSDKMCP_PXEWebhookCompletesAnSDKInstallation(t *testing.T) {
+	testWebhookCompleteThroughSDKClient(t, connectPXEMCP)
+}

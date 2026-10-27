@@ -145,6 +145,20 @@ func normalizeCertificateSHA256(deviceID, fingerprint string) (string, error) {
 	return hex.EncodeToString(raw), nil
 }
 
+// ErrInstallationNotBound is returned when an installation completion names a
+// device that is not installing under that installer certificate: the device
+// left installing, which clears the binding, or another certificate is bound.
+type ErrInstallationNotBound struct {
+	DeviceID          string
+	State             string
+	CertificateSHA256 string
+}
+
+func (e ErrInstallationNotBound) Error() string {
+	return fmt.Sprintf("pxe: device %s (%s) is not installing under installer certificate %s",
+		e.DeviceID, e.State, e.CertificateSHA256)
+}
+
 // ErrInvalidMACAddress indicates an invalid MAC address format.
 type ErrInvalidMACAddress struct {
 	MACAddress string

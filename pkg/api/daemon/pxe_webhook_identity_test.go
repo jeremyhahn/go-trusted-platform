@@ -21,6 +21,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"fmt"
 	"math/big"
 	"net"
 	"net/http"
@@ -32,6 +33,7 @@ import (
 	"github.com/gorilla/mux"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/peer"
@@ -47,6 +49,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
 	pxerest "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/pxe"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
+	pxeclient "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/pxe"
 )
 
 // The install-completion webhook (#238) takes the node's identity from the
@@ -337,8 +340,112 @@ func TestWebhookComplete_FirstInstallReachesEnrollment(t *testing.T) {
 
 	_, err = f.svc.WebhookComplete(grpcContext(verifiedState(f.node)),
 		&platformv1.PXEWebhookCompleteRequest{MacAddress: webhookNodeMAC, Success: true})
-	assert.Equal(t, codes.FailedPrecondition, status.Code(err), "a replayed webhook must not move an enrolled node")
+	assert.Equal(t, codes.PermissionDenied, status.Code(err), "a replayed webhook must not move an enrolled node")
 	assert.Equal(t, pxe.StateEnrolled, f.state(t, webhookNodeMAC))
+}
+
+// The installer certificate authorizes only the installation it was bound
+// to: once the device has moved on, neither a success nor a failure callback
+// moves it, so a replayed failure cannot fail or quarantine a provisioned node.
+func TestWebhookComplete_RefusesCallbacksAfterTheInstallationEnded(t *testing.T) {
+	ctx := context.Background()
+	stages := []struct {
+		name  string
+		state pxe.ProvisioningState
+		reach []pxe.ProvisioningState
+	}{
+		{"enrolled", pxe.StateEnrolled, []pxe.ProvisioningState{pxe.StateEnrolling, pxe.StateEnrolled}},
+		{"authorized", pxe.StateAuthorized, []pxe.ProvisioningState{pxe.StateEnrolling, pxe.StateEnrolled, pxe.StateAuthorizing, pxe.StateAuthorized}},
+		{"install failed", pxe.StateFailed, nil},
+	}
+	for _, stage := range stages {
+		for _, success := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/success=%t", stage.name, success), func(t *testing.T) {
+				f := newWebhookFixture(t)
+				_, err := f.svc.WebhookComplete(grpcContext(verifiedState(f.node)),
+					&platformv1.PXEWebhookCompleteRequest{MacAddress: webhookNodeMAC, Success: stage.reach != nil})
+				require.NoError(t, err)
+				device, err := f.backend.GetDeviceByMAC(ctx, webhookNodeMAC)
+				require.NoError(t, err)
+				assert.Empty(t, device.InstallCertificateSHA256, "ending the installation must clear the binding")
+				for _, next := range stage.reach {
+					require.NoError(t, f.backend.UpdateDeviceState(ctx, device.ID, next, "provisioning"))
+				}
+				require.Equal(t, stage.state, f.state(t, webhookNodeMAC))
+
+				_, err = f.svc.WebhookComplete(grpcContext(verifiedState(f.node)),
+					&platformv1.PXEWebhookCompleteRequest{MacAddress: webhookNodeMAC, Success: success})
+
+				assert.Equal(t, codes.PermissionDenied, status.Code(err))
+				assert.Equal(t, stage.state, f.state(t, webhookNodeMAC))
+			})
+		}
+	}
+}
+
+// A device moved out of installing by another path, here a quarantine, loses
+// its binding with the move, so the installer cannot complete it afterwards.
+func TestWebhookComplete_RefusesAfterQuarantineDuringInstall(t *testing.T) {
+	f := newWebhookFixture(t)
+	ctx := context.Background()
+	device, err := f.backend.GetDeviceByMAC(ctx, webhookNodeMAC)
+	require.NoError(t, err)
+	require.NoError(t, f.backend.QuarantineDevice(ctx, device.ID, "operator"))
+
+	_, err = f.svc.WebhookComplete(grpcContext(verifiedState(f.node)),
+		&platformv1.PXEWebhookCompleteRequest{MacAddress: webhookNodeMAC, Success: false})
+
+	assert.Equal(t, codes.PermissionDenied, status.Code(err))
+	assert.Equal(t, pxe.StateQuarantined, f.state(t, webhookNodeMAC))
+}
+
+// pxeConnAdapter presents one SDK transport connection as the
+// transport.Adapter the public PXE service client is built on.
+type pxeConnAdapter struct{ conn grpc.ClientConnInterface }
+
+func (a pxeConnAdapter) Connection() grpc.ClientConnInterface { return a.conn }
+func (a pxeConnAdapter) Close() error                         { return nil }
+func (a pxeConnAdapter) IsConnected() bool                    { return true }
+func (a pxeConnAdapter) Target() string                       { return "pxe-test" }
+
+// testWebhookCompleteThroughSDKClient proves the public PXE service client
+// binds the installer certificate as it moves the device to installing over
+// one SDK transport, and that the binding is what lets the installer's webhook
+// complete the installation. Each transport's _sdk_test.go file calls it.
+func testWebhookCompleteThroughSDKClient(t *testing.T, connect pxeSDKConnect) {
+	t.Run("completes", func(t *testing.T) {
+		f := newWebhookFixture(t)
+		ctx := context.Background()
+		device, err := f.backend.RegisterDevice(ctx, "00:11:22:33:44:c4", "port-c4")
+		require.NoError(t, err)
+		require.NoError(t, f.backend.UpdateDeviceState(ctx, device.ID, pxe.StateBooting, "netboot"))
+		installer := f.issuerB.issue(t, webhookSerial+2)
+
+		client, err := pxeclient.NewClient(pxeConnAdapter{conn: connect(t, f.svc, "pxe:write")})
+		require.NoError(t, err)
+		installing, err := client.SetDeviceInstalling(ctx, device.ID, pxe.CertificateSHA256(installer.Raw), "installer booted")
+		require.NoError(t, err)
+		assert.Equal(t, platformv1.ProvisioningState_PROVISIONING_STATE_INSTALLING, installing.GetState())
+		assert.Equal(t, pxe.CertificateSHA256(installer.Raw), installing.GetInstallCertificateSha256())
+
+		_, err = f.svc.WebhookComplete(grpcContext(verifiedState(installer)),
+			&platformv1.PXEWebhookCompleteRequest{MacAddress: "00:11:22:33:44:c4", Success: true})
+		require.NoError(t, err)
+		assert.Equal(t, pxe.StateInstallComplete, f.state(t, "00:11:22:33:44:c4"))
+	})
+
+	t.Run("refusal", func(t *testing.T) {
+		f := newWebhookFixture(t)
+		client, err := pxeclient.NewClient(pxeConnAdapter{conn: connect(t, f.svc, "pxe:write")})
+		require.NoError(t, err)
+
+		_, err = client.SetDeviceInstalling(context.Background(), "nonexistent", pxe.CertificateSHA256(f.node.Raw), "installer booted")
+
+		var failed *pxeclient.ErrSetInstallingFailed
+		require.ErrorAs(t, err, &failed)
+		assert.Equal(t, "nonexistent", failed.ID)
+		assert.Equal(t, codes.NotFound, status.Code(failed.Cause))
+	})
 }
 
 // TestWebhookComplete_RefusesTransportsWithoutAPeerCertificate pins that the

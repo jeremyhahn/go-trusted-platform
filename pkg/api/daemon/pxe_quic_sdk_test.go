@@ -51,3 +51,9 @@ func TestSDKQUIC_PXEMethodsRefuse(t *testing.T) {
 	testSDKPXERefusesScope(t, "QUIC", connectPXEQUIC)
 	testSDKPXERefusesNotFound(t, "QUIC", connectPXEQUIC)
 }
+
+// TestSDKQUIC_PXEWebhookCompletesAnSDKInstallation binds the installer
+// certificate through the public client over QUIC and completes it by webhook.
+func TestSDKQUIC_PXEWebhookCompletesAnSDKInstallation(t *testing.T) {
+	testWebhookCompleteThroughSDKClient(t, connectPXEQUIC)
+}

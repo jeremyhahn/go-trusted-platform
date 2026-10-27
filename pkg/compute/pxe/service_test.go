@@ -654,6 +654,142 @@ func TestService_SetDeviceInstalling_NotInitialized(t *testing.T) {
 	assert.IsType(t, ErrServiceNotInitialized{}, err)
 }
 
+// installingTestDevice registers a device and moves it to installing under
+// the installer certificate fingerprint.
+func installingTestDevice(t *testing.T, svc Service, fingerprint string) *DeviceInfo {
+	t.Helper()
+	ctx := context.Background()
+	device, err := svc.RegisterDevice(ctx, "00:11:22:33:44:55", "port-1")
+	require.NoError(t, err)
+	require.NoError(t, svc.UpdateDeviceState(ctx, device.ID, StateBooting, "booting"))
+	require.NoError(t, svc.SetDeviceInstalling(ctx, device.ID, fingerprint, "installing"))
+	return device
+}
+
+func TestService_CompleteInstallation_EndsTheBoundInstallation(t *testing.T) {
+	fingerprint := CertificateSHA256([]byte("installer certificate"))
+	outcomes := map[bool]ProvisioningState{true: StateInstallComplete, false: StateFailed}
+	for success, want := range outcomes {
+		t.Run(string(want), func(t *testing.T) {
+			svc, _ := initializeTestService(t)
+			ctx := context.Background()
+			device := installingTestDevice(t, svc, fingerprint)
+
+			require.NoError(t, svc.CompleteInstallation(ctx, device.ID, strings.ToUpper(fingerprint), success, "done"))
+
+			retrieved, err := svc.GetDevice(ctx, device.ID)
+			require.NoError(t, err)
+			assert.Equal(t, want, retrieved.State)
+			assert.Empty(t, retrieved.InstallCertificateSHA256, "the ended installation's binding must be cleared")
+			found, err := svc.ListDevices(ctx, &DeviceFilter{InstallCertificateSHA256: fingerprint})
+			require.NoError(t, err)
+			assert.Empty(t, found)
+
+			// The same certificate cannot end it again, either way.
+			for _, again := range []bool{true, false} {
+				var notBound ErrInstallationNotBound
+				require.ErrorAs(t, svc.CompleteInstallation(ctx, device.ID, fingerprint, again, "replay"), &notBound)
+			}
+			retrieved, err = svc.GetDevice(ctx, device.ID)
+			require.NoError(t, err)
+			assert.Equal(t, want, retrieved.State)
+		})
+	}
+}
+
+func TestService_CompleteInstallation_Refusals(t *testing.T) {
+	fingerprint := CertificateSHA256([]byte("installer certificate"))
+	other := CertificateSHA256([]byte("another installer certificate"))
+
+	t.Run("another certificate", func(t *testing.T) {
+		svc, _ := initializeTestService(t)
+		device := installingTestDevice(t, svc, fingerprint)
+
+		err := svc.CompleteInstallation(context.Background(), device.ID, other, false, "failed")
+
+		var notBound ErrInstallationNotBound
+		require.ErrorAs(t, err, &notBound)
+		retrieved, err := svc.GetDevice(context.Background(), device.ID)
+		require.NoError(t, err)
+		assert.Equal(t, StateInstalling, retrieved.State)
+		assert.Equal(t, fingerprint, retrieved.InstallCertificateSHA256)
+	})
+
+	t.Run("not installing", func(t *testing.T) {
+		svc, _ := initializeTestService(t)
+		ctx := context.Background()
+		device, err := svc.RegisterDevice(ctx, "00:11:22:33:44:55", "port-1")
+		require.NoError(t, err)
+
+		err = svc.CompleteInstallation(ctx, device.ID, fingerprint, false, "failed")
+
+		var notBound ErrInstallationNotBound
+		require.ErrorAs(t, err, &notBound)
+		assert.Equal(t, string(StateDiscovered), notBound.State)
+	})
+
+	t.Run("malformed fingerprint", func(t *testing.T) {
+		svc, _ := initializeTestService(t)
+		device := installingTestDevice(t, svc, fingerprint)
+
+		err := svc.CompleteInstallation(context.Background(), device.ID, "not-hex", true, "done")
+
+		assert.IsType(t, ErrInvalidCertificateFingerprint{}, err)
+	})
+
+	t.Run("unknown device", func(t *testing.T) {
+		svc, _ := initializeTestService(t)
+
+		err := svc.CompleteInstallation(context.Background(), "nonexistent", fingerprint, true, "done")
+
+		assert.IsType(t, ErrDeviceNotFound{}, err)
+	})
+
+	t.Run("not initialized", func(t *testing.T) {
+		err := NewService().CompleteInstallation(context.Background(), "device-123", fingerprint, true, "done")
+
+		assert.IsType(t, ErrServiceNotInitialized{}, err)
+	})
+}
+
+// Concurrent completions of one installation: exactly one ends it, and the
+// state is the winner's outcome.
+func TestService_CompleteInstallation_OneConcurrentCompletionWins(t *testing.T) {
+	fingerprint := CertificateSHA256([]byte("installer certificate"))
+	for round := 0; round < 20; round++ {
+		svc, _ := initializeTestService(t)
+		ctx := context.Background()
+		device := installingTestDevice(t, svc, fingerprint)
+
+		results := make([]error, 8)
+		var wg sync.WaitGroup
+		for i := range results {
+			wg.Add(1)
+			go func(i int) {
+				defer wg.Done()
+				results[i] = svc.CompleteInstallation(ctx, device.ID, fingerprint, i%2 == 0, "done")
+			}(i)
+		}
+		wg.Wait()
+
+		winners := 0
+		var winnerState ProvisioningState
+		for i, err := range results {
+			if err == nil {
+				winners++
+				winnerState = map[bool]ProvisioningState{true: StateInstallComplete, false: StateFailed}[i%2 == 0]
+				continue
+			}
+			var notBound ErrInstallationNotBound
+			require.ErrorAs(t, err, &notBound, "round %d", round)
+		}
+		require.Equal(t, 1, winners, "round %d", round)
+		retrieved, err := svc.GetDevice(ctx, device.ID)
+		require.NoError(t, err)
+		assert.Equal(t, winnerState, retrieved.State, "round %d", round)
+	}
+}
+
 func TestCertificateSHA256_IsTheLowercaseDigestOfTheDER(t *testing.T) {
 	assert.Equal(t, "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", CertificateSHA256(nil))
 	assert.NotEqual(t, CertificateSHA256([]byte("a")), CertificateSHA256([]byte("b")))
