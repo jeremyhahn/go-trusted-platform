@@ -74,16 +74,10 @@ func serveMCPConfig(t *testing.T, provider *MCPServiceProvider, config *mcp.Conf
 	return connectMCPAdapter(t, server.URL, phase35ClientTLS(server))
 }
 
-// serveMCPConfigMTLS is serveMCPConfig over mutual TLS: the SDK presents
-// testutil's client certificate and the server verifies it, for a method
-// that takes the caller's identity from the connection.
-func serveMCPConfigMTLS(t *testing.T, provider *MCPServiceProvider, config *mcp.Config) *sdkmcp.Adapter {
-	t.Helper()
-	return serveMCPConfigBundle(t, provider, config, testutil.GenerateTestTLSBundle(t))
-}
-
-// serveMCPConfigBundle is serveMCPConfigMTLS over a caller's bundle, for a
-// test that must present the same client certificate elsewhere.
+// serveMCPConfigBundle is serveMCPConfig over mutual TLS: the SDK presents
+// the bundle's client certificate and the server verifies it, for a method
+// that takes the caller's identity from the connection and a test that must
+// present the same client certificate elsewhere.
 func serveMCPConfigBundle(t *testing.T, provider *MCPServiceProvider, config *mcp.Config, bundle *testutil.TestTLSBundle) *sdkmcp.Adapter {
 	t.Helper()
 	server := startMCPServer(t, provider, config, bundle.ServerTLSConfig())
