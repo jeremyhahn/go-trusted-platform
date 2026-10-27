@@ -58,6 +58,38 @@ describe('PXEService device routes', () => {
     });
   });
 
+  describe('bindDeviceCertificate', () => {
+    const fingerprint = 'ab'.repeat(32);
+
+    it('posts only the fingerprint to /devices/{id}/certificate', async () => {
+      vi.mocked(mockClient.post).mockResolvedValue({
+        success: true,
+        data: { status: 'ok', device: { id: 'dev/1', certificateFingerprint: fingerprint } },
+      });
+
+      const request = { deviceId: 'dev/1', certificateFingerprint: fingerprint, extra: 'dropped' };
+      const result = await service.bindDeviceCertificate(request);
+
+      expect(result.success).toBe(true);
+      expect(mockClient.post).toHaveBeenCalledTimes(1);
+      expect(mockClient.post).toHaveBeenCalledWith('/v1/pxe/devices/dev%2F1/certificate', {
+        certificateFingerprint: fingerprint,
+      });
+    });
+
+    it('propagates a transport error unchanged', async () => {
+      const failure = new Error('409 Conflict: pxe: certificate already bound to another device');
+      vi.mocked(mockClient.post).mockRejectedValue(failure);
+
+      await expect(
+        service.bindDeviceCertificate({ deviceId: 'dev-1', certificateFingerprint: fingerprint })
+      ).rejects.toBe(failure);
+      expect(mockClient.post).toHaveBeenCalledWith('/v1/pxe/devices/dev-1/certificate', {
+        certificateFingerprint: fingerprint,
+      });
+    });
+  });
+
   describe('updateState', () => {
     const request: UpdatePXEStateRequest = {
       deviceId: 'node-3',

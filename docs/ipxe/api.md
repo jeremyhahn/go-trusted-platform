@@ -248,13 +248,13 @@ not apply here — nothing on this surface speaks QUIC.
 
 ## 4. The PXE control plane — owned elsewhere
 
-Fifteen capabilities on five transports, documented row by row in
+Sixteen capabilities on five transports, documented row by row in
 [`docs/provisioning/api.md`](../provisioning/api.md) §2. Summarised so a reader
 who arrived here can find them:
 
 | Capability group | REST base | gRPC | QUIC | MCP |
 |---|---|---|---|---|
-| Device lifecycle — register, list, get, get-by-MAC, remove, update state, set enrolled | `/api/v1/pxe/devices` | `PXEService` | `0xEC`–`0xEF`, remove `0xFF`; get-by-MAC and set-enrolled `0xCF` subs `0x30`, `0x31` | `pxe_*` |
+| Device lifecycle — register, list, get, get-by-MAC, remove, update state, set enrolled, bind certificate | `/api/v1/pxe/devices` | `PXEService` | `0xEC`–`0xEF`, remove `0xFF`; get-by-MAC, set-enrolled and bind-certificate `0xCF` subs `0x30`, `0x31`, `0x37` | `pxe_*` |
 | **Authorize / quarantine / retry** | `/api/v1/pxe/devices/{id}/…` | `PXEService` | `0xFC`, `0xFD`, `0xFE` | `pxe_authorize_device`, `pxe_quarantine_device`, `pxe_retry_device` |
 | Events | `GET /api/v1/pxe/devices/{id}/events` | `GetEvents` | `0xCF` sub `0x32` | `pxe_get_device_events` |
 | Service status / start / stop | `/api/v1/pxe/status`, `/start`, `/stop` | `GetStatus`, `StartService`, `StopService` | `0xCF` subs `0x33`, `0x34`, `0x35` | `pxe_service_status`, `pxe_start_service`, `pxe_stop_service` |
@@ -265,14 +265,26 @@ who arrived here can find them:
 `pxe.ServiceConfig.WebhookEnabled`** (default `false`). Disabled, the path is
 not registered and answers 404 like any unknown path. Enabled, the node
 **authenticates by its device certificate over mTLS** (#238): the device is the
-one whose enrolled `certificate_fingerprint` is the SHA-256 of the DER of the
+one whose bound `certificate_fingerprint` is the SHA-256 of the DER of the
 leaf of the verified client chain
-(`pkg/api/daemon/pxe_grpc_service.go:551-552`, `pkg/compute/pxe/fingerprint.go:27`),
+(`pkg/api/daemon/pxe_grpc_service.go:587`, `pkg/compute/pxe/fingerprint.go:26`),
 and a MAC in the request body must match it. The serial is not the key: it is
 unique only within its issuer (RFC 5280 §4.1.2.2), and the listener trusts more
-than one issuer. `SetDeviceEnrolled` records the fingerprint (hex, case and
-colons ignored, `pkg/compute/pxe/service.go:576`); a device enrolled without one
-cannot complete through the webhook. No verified client certificate is 401; a
+than one issuer. **The binding is made before installation completes**, by
+`BindDeviceCertificate` (`POST /api/v1/pxe/devices/{id}/certificate`, body
+`{"certificateFingerprint": "<hex>"}`, scope `pxe:write`;
+`pkg/compute/pxe/service.go:633`). It records the fingerprint (hex, case and
+colons ignored) without changing the device's state, and is accepted only while
+the device is `discovered`, `booting` or `installing`
+(`pkg/compute/pxe/service.go:620-624`); the operator binds the installer's
+certificate once it is issued, then the node calls the webhook. A fingerprint
+already bound to another device (gRPC `AlreadyExists`) and a device past
+`installing` (`FailedPrecondition`) are both REST 409, a malformed fingerprint is
+400 (`pkg/api/daemon/pxe_grpc_service.go:814-819`,
+`pkg/webservice/v1/rest/internal/protorest/protorest.go:197`). `SetDeviceEnrolled` no longer
+carries a fingerprint: it runs after install completion, too late to
+authenticate the webhook. A device with no binding cannot complete through the
+webhook. No verified client certificate is 401; a
 certificate no device carries, one carried by more than one device, or a
 mismatched MAC is 403. Transports with no peer certificate — Unix, MCP stdio,
 embedded — refuse the call. On gRPC, QUIC and MCP the call is also scoped
@@ -282,9 +294,9 @@ when `WebhookEnabled` mounts the route (`pkg/webservice/v1/rest/pxe/router.go:17
 
 **The `REST base` column is a locator, not the contract.** It gives the prefix a
 route hangs under; it does not give the route. The normative per-route path
-**and HTTP method** for all fifteen are the first column of
+**and HTTP method** for all sixteen are the first column of
 [`docs/provisioning/api.md`](../provisioning/api.md) §2, which is `Status:
-NORMATIVE` — conflicts with it are defects. Two of the fifteen matter here
+NORMATIVE` — conflicts with it are defects. Two of the sixteen matter here
 because a client read this summary and guessed the rest:
 
 | Capability | Normative route | Guessed instead |
@@ -307,23 +319,23 @@ paths. It now claims the normative item routes. The device id travels only in
 the path (the templated rows in `sdk/go/transport/rest/adapter.go`), and a
 request without one is refused with `InvalidArgument` before it is sent.
 
-**The SDK REST transport carries all fifteen (#975).** Until then it mapped
+**The SDK REST transport carries all sixteen (#975).** Until then it mapped
 eight. `StartService`, `StopService`, `GetDeviceByMAC`, `RemoveDevice`,
 `SetDeviceEnrolled`, `Retry` and `GetEvents` had no route, so the SDK failed
 them before sending anything. The MAC and the device id travel only in the
 path. `ListDevices` sends its filter as the query parameters
 [`docs/provisioning/api.md`](../provisioning/api.md) §2 defines: `state` as the
 enum name, then `mac_address`, `vlan`, `limit` and `offset`. Unset fields are
-left out. `pkg/api/daemon/pxe_rest_sdk_test.go` drives all fifteen through the
+left out. `pkg/api/daemon/pxe_rest_sdk_test.go` drives all sixteen through the
 SDK against the PXE router. It requires the same reply and service call as
 gRPC, and the same refusals.
 
-**QUIC carries all fifteen (#704).** Eight methods have a direct opcode in
+**QUIC carries all sixteen (#704).** Eight methods have a direct opcode in
 `sdk/go/wire/quicwire/protocol.go` (`0xEC`–`0xEF`, `0xFC`–`0xFF`); the other
-seven ride the provisioning category `0xCF` as subs `0x30`–`0x36`
+eight ride the provisioning category `0xCF` as subs `0x30`–`0x37`
 (`sdk/go/wire/quicwire/pxe_opcodes.go`). The daemon dispatches every one through
 a map to the gRPC servicer (`pkg/api/daemon/quic_pxe.go`), and the SDK QUIC
-adapter maps all fifteen (`sdk/go/transport/quic/aab_pxe.go`). The per-method
+adapter maps all sixteen (`sdk/go/transport/quic/aab_pxe.go`). The per-method
 opcode is in [`docs/provisioning/api.md`](../provisioning/api.md) §2.
 
 ---
@@ -350,7 +362,7 @@ Authorizing or quarantining a PXE device therefore needs `pxe:write`.
 
 **QUIC and MCP take the same scopes (#704).** Each QUIC opcode and `0xCF` sub
 carries the scope of its RPC (`pkg/api/quic/opcode_permissions.go`), and each of
-the fifteen `pxe_*` MCP tools is classified with it (`pkg/api/mcp/pxe_tools.go`);
+the sixteen `pxe_*` MCP tools is classified with it (`pkg/api/mcp/pxe_tools.go`);
 a caller without the scope is refused before the service is reached.
 
 **REST takes the same scopes (#452).** Behind the platform-token middleware each
@@ -372,6 +384,7 @@ the role gate alone applies.
 | `DELETE /api/v1/pxe/devices/{id}` | `RemoveDevice` | `pxe:delete` |
 | `PUT /api/v1/pxe/devices/{id}/state` | `UpdateState` | `pxe:write` |
 | `POST /api/v1/pxe/devices/{id}/enrolled` | `SetDeviceEnrolled` | `pxe:write` |
+| `POST /api/v1/pxe/devices/{id}/certificate` | `BindDeviceCertificate` | `pxe:write` |
 | `POST /api/v1/pxe/devices/{id}/authorize` | `Authorize` | `pxe:write` |
 | `POST /api/v1/pxe/devices/{id}/quarantine` | `Quarantine` | `pxe:write` |
 | `POST /api/v1/pxe/devices/{id}/retry` | `Retry` | `pxe:write` |

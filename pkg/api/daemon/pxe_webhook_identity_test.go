@@ -36,6 +36,7 @@ import (
 	apiquic "github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/channelbind"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/compute/pxe"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/ipxe"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/netplan"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/zone"
@@ -329,6 +330,18 @@ func newRealPXEService(t *testing.T) pxe.Service {
 	cfg, err := pxe.NewServiceConfig(plan)
 	require.NoError(t, err)
 	cfg.BridgeName = "br-test"
+	// Initialize builds the iPXE server without opening listeners. The
+	// server config still validates, so it gets hermetic directories, offline
+	// firmware and one boot entry; nothing here touches the network.
+	ipxeCfg := ipxe.DefaultServerConfig()
+	ipxeCfg.LocalFilesDir = t.TempDir()
+	ipxeCfg.InstallsDir = t.TempDir()
+	ipxeCfg.FirmwareDir = t.TempDir()
+	ipxeCfg.FirmwareOffline = true
+	ipxeCfg.BootEntries = []ipxe.BootEntry{
+		{Name: "test", Description: "Test Entry", Kernel: "http://example.com/kernel"},
+	}
+	cfg.IPXEConfig = ipxeCfg
 	svc := pxe.NewService(pxe.WithVLANIntegration(pxe.NewNoopVLANIntegration(plan)))
 	require.NoError(t, svc.Initialize(context.Background(), cfg))
 	t.Cleanup(func() { require.NoError(t, svc.Close()) })
