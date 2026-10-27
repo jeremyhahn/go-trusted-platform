@@ -29,34 +29,28 @@ import (
 // TestMarkDisconnected_Connected verifies markDisconnected sets connected to
 // false when the client is connected and not closed.
 func TestMarkDisconnected_Connected(t *testing.T) {
-	c := &Client{
-		connected: true,
-		closed:    false,
-	}
+	c := &Client{}
+	c.connected.Store(true)
 	c.markDisconnected()
-	assert.False(t, c.connected)
+	assert.False(t, c.connected.Load())
 }
 
 // TestMarkDisconnected_AlreadyDisconnected verifies markDisconnected is a
 // no-op when already disconnected.
 func TestMarkDisconnected_AlreadyDisconnected(t *testing.T) {
-	c := &Client{
-		connected: false,
-		closed:    false,
-	}
+	c := &Client{}
 	c.markDisconnected()
-	assert.False(t, c.connected)
+	assert.False(t, c.connected.Load())
 }
 
 // TestMarkDisconnected_Closed verifies markDisconnected does not change state
 // when the client is closed.
 func TestMarkDisconnected_Closed(t *testing.T) {
-	c := &Client{
-		connected: true,
-		closed:    true,
-	}
+	c := &Client{}
+	c.connected.Store(true)
+	c.closed.Store(true)
 	c.markDisconnected()
-	assert.True(t, c.connected)
+	assert.True(t, c.connected.Load())
 }
 
 // TestHandleRequest_CancelledContext verifies that handleRequest returns
@@ -106,7 +100,7 @@ func TestHandleRequest_EncodeError(t *testing.T) {
 	res := <-result
 	require.Error(t, res.err)
 	assert.Contains(t, res.err.Error(), "failed to send request")
-	assert.False(t, c.connected)
+	assert.False(t, c.connected.Load())
 }
 
 // TestHandleRequest_SuccessResponse verifies handleRequest processes a valid
@@ -339,10 +333,10 @@ func TestCloseOpenFlowClient_Empty(t *testing.T) {
 // TestDisconnect_AlreadyClosed verifies Disconnect handles already-closed state.
 func TestDisconnect_AlreadyClosed(t *testing.T) {
 	c := &Client{
-		closed:    true,
 		done:      make(chan struct{}),
 		ofClients: make(map[string]*openflow.Client),
 	}
+	c.closed.Store(true)
 	err := c.Disconnect()
 	assert.NoError(t, err)
 }
