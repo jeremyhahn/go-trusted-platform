@@ -494,7 +494,7 @@ func TestService_SetDeviceEnrolled_NotInitialized(t *testing.T) {
 	svc := NewService()
 	ctx := context.Background()
 
-	err := svc.SetDeviceEnrolled(ctx, "device-123", "serial-123", "")
+	err := svc.SetDeviceEnrolled(ctx, "device-123", "serial-123")
 	assert.Error(t, err)
 
 	var notInitErr ErrServiceNotInitialized
@@ -518,7 +518,7 @@ func TestService_SetDeviceEnrolled_Valid(t *testing.T) {
 	err = svc.UpdateDeviceState(ctx, device.ID, StateEnrolling, "enrolling")
 	require.NoError(t, err)
 
-	err = svc.SetDeviceEnrolled(ctx, device.ID, "serial-123", "")
+	err = svc.SetDeviceEnrolled(ctx, device.ID, "serial-123")
 	assert.NoError(t, err)
 
 	retrieved, err := svc.GetDevice(ctx, device.ID)
@@ -527,47 +527,102 @@ func TestService_SetDeviceEnrolled_Valid(t *testing.T) {
 	assert.Equal(t, "serial-123", retrieved.CertificateSerial)
 }
 
-// enrollingDevice registers a device and walks it to StateEnrolling.
-func enrollingDevice(t *testing.T, svc Service) *DeviceInfo {
+// deviceWalkedTo registers a device and walks it through the given states.
+func deviceWalkedTo(t *testing.T, svc Service, mac string, states ...ProvisioningState) *DeviceInfo {
 	t.Helper()
 	ctx := context.Background()
-	device, err := svc.RegisterDevice(ctx, "00:11:22:33:44:55", "port-1")
+	device, err := svc.RegisterDevice(ctx, mac, "port-1")
 	require.NoError(t, err)
-	for _, state := range []ProvisioningState{StateBooting, StateInstalling, StateInstallComplete, StateEnrolling} {
+	for _, state := range states {
 		require.NoError(t, svc.UpdateDeviceState(ctx, device.ID, state, string(state)))
 	}
 	return device
 }
 
-func TestService_SetDeviceEnrolled_StoresTheFingerprintNormalized(t *testing.T) {
-	svc, _ := initializeTestService(t)
-	ctx := context.Background()
-	device := enrollingDevice(t, svc)
-	cert := &x509.Certificate{Raw: []byte("node certificate")}
+func TestService_BindDeviceCertificate_StoresTheFingerprintWithoutATransition(t *testing.T) {
+	cert := &x509.Certificate{Raw: []byte("installer certificate")}
 	want := CertificateFingerprintOf(cert)
+	cases := map[string][]ProvisioningState{
+		"discovered": nil,
+		"booting":    {StateBooting},
+		"installing": {StateBooting, StateInstalling},
+	}
+	for name, states := range cases {
+		t.Run(name, func(t *testing.T) {
+			svc, _ := initializeTestService(t)
+			ctx := context.Background()
+			device := deviceWalkedTo(t, svc, "00:11:22:33:44:55", states...)
+			before, err := svc.GetDevice(ctx, device.ID)
+			require.NoError(t, err)
 
-	require.NoError(t, svc.SetDeviceEnrolled(ctx, device.ID, "serial-123", strings.ToUpper(want)))
+			require.NoError(t, svc.BindDeviceCertificate(ctx, device.ID, strings.ToUpper(want)))
 
-	matches, err := svc.ListDevices(ctx, &DeviceFilter{CertificateFingerprint: want})
-	require.NoError(t, err)
-	require.Len(t, matches, 1)
-	assert.Equal(t, device.ID, matches[0].ID)
-	assert.Equal(t, want, matches[0].CertificateFingerprint)
+			matches, err := svc.ListDevices(ctx, &DeviceFilter{CertificateFingerprint: want})
+			require.NoError(t, err)
+			require.Len(t, matches, 1)
+			assert.Equal(t, device.ID, matches[0].ID)
+			assert.Equal(t, want, matches[0].CertificateFingerprint)
+			assert.Equal(t, before.State, matches[0].State, "binding a certificate must not transition the device")
+		})
+	}
 }
 
-func TestService_SetDeviceEnrolled_RefusesAMalformedFingerprint(t *testing.T) {
+func TestService_BindDeviceCertificate_RefusesOnceInstallationCompleted(t *testing.T) {
 	svc, _ := initializeTestService(t)
 	ctx := context.Background()
-	device := enrollingDevice(t, svc)
+	device := deviceWalkedTo(t, svc, "00:11:22:33:44:55", StateBooting, StateInstalling, StateInstallComplete)
+	fingerprint := CertificateFingerprintOf(&x509.Certificate{Raw: []byte("late certificate")})
 
-	err := svc.SetDeviceEnrolled(ctx, device.ID, "serial-123", "not-a-digest")
+	err := svc.BindDeviceCertificate(ctx, device.ID, fingerprint)
 
-	var fpErr ErrInvalidCertificateFingerprint
-	require.True(t, errors.As(err, &fpErr))
+	var stateErr ErrCertificateBindingClosed
+	require.True(t, errors.As(err, &stateErr), "got %v", err)
+	assert.Equal(t, string(StateInstallComplete), stateErr.State)
 	retrieved, err := svc.GetDevice(ctx, device.ID)
 	require.NoError(t, err)
-	assert.Equal(t, StateEnrolling, retrieved.State, "a refused enrollment must not transition the device")
-	assert.Empty(t, retrieved.CertificateSerial)
+	assert.Empty(t, retrieved.CertificateFingerprint)
+}
+
+func TestService_BindDeviceCertificate_RefusesAFingerprintAnotherDeviceCarries(t *testing.T) {
+	svc, _ := initializeTestService(t)
+	ctx := context.Background()
+	first := deviceWalkedTo(t, svc, "00:11:22:33:44:55")
+	second := deviceWalkedTo(t, svc, "00:11:22:33:44:66")
+	fingerprint := CertificateFingerprintOf(&x509.Certificate{Raw: []byte("shared certificate")})
+	require.NoError(t, svc.BindDeviceCertificate(ctx, first.ID, fingerprint))
+
+	err := svc.BindDeviceCertificate(ctx, second.ID, fingerprint)
+
+	var inUse ErrCertificateFingerprintInUse
+	require.True(t, errors.As(err, &inUse), "got %v", err)
+	assert.Equal(t, first.ID, inUse.DeviceID)
+	retrieved, err := svc.GetDevice(ctx, second.ID)
+	require.NoError(t, err)
+	assert.Empty(t, retrieved.CertificateFingerprint)
+	require.NoError(t, svc.BindDeviceCertificate(ctx, first.ID, fingerprint), "rebinding the same device is idempotent")
+}
+
+func TestService_BindDeviceCertificate_ErrorPaths(t *testing.T) {
+	fingerprint := CertificateFingerprintOf(&x509.Certificate{Raw: []byte("certificate")})
+
+	t.Run("not initialized", func(t *testing.T) {
+		svc := NewService()
+		var notInit ErrServiceNotInitialized
+		assert.True(t, errors.As(svc.BindDeviceCertificate(context.Background(), "device-1", fingerprint), &notInit))
+	})
+	t.Run("malformed fingerprint", func(t *testing.T) {
+		svc, _ := initializeTestService(t)
+		device := deviceWalkedTo(t, svc, "00:11:22:33:44:55")
+		for _, in := range []string{"", "not-a-digest"} {
+			var fpErr ErrInvalidCertificateFingerprint
+			assert.True(t, errors.As(svc.BindDeviceCertificate(context.Background(), device.ID, in), &fpErr), "input %q", in)
+		}
+	})
+	t.Run("unknown device", func(t *testing.T) {
+		svc, _ := initializeTestService(t)
+		var notFound ErrDeviceNotFound
+		assert.True(t, errors.As(svc.BindDeviceCertificate(context.Background(), "nonexistent", fingerprint), &notFound))
+	})
 }
 
 func TestService_SetDeviceEnrolled_InvalidTransition(t *testing.T) {
@@ -578,7 +633,7 @@ func TestService_SetDeviceEnrolled_InvalidTransition(t *testing.T) {
 	require.NoError(t, err)
 
 	// Device is in discovered state, cannot go to enrolled
-	err = svc.SetDeviceEnrolled(ctx, device.ID, "serial-123", "")
+	err = svc.SetDeviceEnrolled(ctx, device.ID, "serial-123")
 	assert.Error(t, err)
 
 	var transitionErr ErrInvalidStateTransition
@@ -1019,7 +1074,7 @@ func TestService_SetDeviceEnrolled_NotFound(t *testing.T) {
 	svc, _ := initializeTestService(t)
 	ctx := context.Background()
 
-	err := svc.SetDeviceEnrolled(ctx, "nonexistent", "serial-123", "")
+	err := svc.SetDeviceEnrolled(ctx, "nonexistent", "serial-123")
 	assert.Error(t, err)
 
 	var notFoundErr ErrDeviceNotFound
@@ -1111,7 +1166,7 @@ func TestService_FullProvisioningWorkflow(t *testing.T) {
 	}
 
 	// Complete enrollment
-	err = svc.SetDeviceEnrolled(ctx, device.ID, "cert-serial-12345", "")
+	err = svc.SetDeviceEnrolled(ctx, device.ID, "cert-serial-12345")
 	require.NoError(t, err)
 
 	device, err = svc.GetDevice(ctx, device.ID)

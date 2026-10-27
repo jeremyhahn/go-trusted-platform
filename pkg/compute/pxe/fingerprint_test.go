@@ -36,24 +36,20 @@ func TestCertificateFingerprintOf(t *testing.T) {
 func TestNormalizeCertificateFingerprint(t *testing.T) {
 	want := "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
 	accepted := map[string]string{
-		"lowercase hex":         want,
-		"openssl colon form":    "BA:78:16:BF:8F:01:CF:EA:41:41:40:DE:5D:AE:22:23:B0:03:61:A3:96:17:7A:9C:B4:10:FF:61:F2:00:15:AD",
-		"uppercase, no colons":  strings.ToUpper(want),
-		"empty means no record": "",
+		"lowercase hex":        want,
+		"openssl colon form":   "BA:78:16:BF:8F:01:CF:EA:41:41:40:DE:5D:AE:22:23:B0:03:61:A3:96:17:7A:9C:B4:10:FF:61:F2:00:15:AD",
+		"uppercase, no colons": strings.ToUpper(want),
 	}
 	for name, in := range accepted {
 		t.Run(name, func(t *testing.T) {
 			got, err := NormalizeCertificateFingerprint(in)
 			require.NoError(t, err)
-			if in == "" {
-				assert.Empty(t, got)
-				return
-			}
 			assert.Equal(t, want, got)
 		})
 	}
 
 	refused := map[string]string{
+		"empty":         "",
 		"not hex":       strings.Repeat("zz", 32),
 		"SHA-1 length":  strings.Repeat("ab", 20),
 		"odd length":    want + "a",

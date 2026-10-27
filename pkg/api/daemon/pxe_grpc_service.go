@@ -256,7 +256,7 @@ func (s *PXEGRPCService) SetDeviceEnrolled(ctx context.Context, req *platformv1.
 		return nil, status.Error(codes.InvalidArgument, "certificate serial is required")
 	}
 
-	if err := s.pxeService.SetDeviceEnrolled(ctx, deviceID, certSerial, req.GetCertificateFingerprint()); err != nil {
+	if err := s.pxeService.SetDeviceEnrolled(ctx, deviceID, certSerial); err != nil {
 		s.logger.Error(err, "Failed to set device enrolled", "device_id", deviceID)
 		return nil, s.mapPXEError(err, "set device enrolled")
 	}
@@ -272,6 +272,40 @@ func (s *PXEGRPCService) SetDeviceEnrolled(ctx context.Context, req *platformv1.
 		Status: &platformv1.Status{
 			Success: true,
 			Message: "device enrolled successfully",
+		},
+		Device: s.deviceToProto(device),
+	}, nil
+}
+
+// BindDeviceCertificate records the fingerprint of the certificate the
+// device's installer presents to the install-completion webhook (#238),
+// without changing the device's state.
+func (s *PXEGRPCService) BindDeviceCertificate(ctx context.Context, req *platformv1.BindPXEDeviceCertificateRequest) (*platformv1.BindPXEDeviceCertificateResponse, error) {
+	if err := s.requireService(); err != nil {
+		return nil, err
+	}
+
+	deviceID := req.GetDeviceId()
+	if deviceID == "" {
+		return nil, status.Error(codes.InvalidArgument, "device ID is required")
+	}
+
+	if err := s.pxeService.BindDeviceCertificate(ctx, deviceID, req.GetCertificateFingerprint()); err != nil {
+		s.logger.Error(err, "Failed to bind device certificate", "device_id", deviceID)
+		return nil, s.mapPXEError(err, "bind device certificate")
+	}
+
+	device, err := s.pxeService.GetDevice(ctx, deviceID)
+	if err != nil {
+		return nil, s.mapPXEError(err, "get device after certificate binding")
+	}
+
+	s.logger.Info("Device certificate bound via gRPC", "device_id", deviceID, "certificate_fingerprint", device.CertificateFingerprint)
+
+	return &platformv1.BindPXEDeviceCertificateResponse{
+		Status: &platformv1.Status{
+			Success: true,
+			Message: "device certificate bound",
 		},
 		Device: s.deviceToProto(device),
 	}, nil
@@ -777,6 +811,10 @@ func (s *PXEGRPCService) mapPXEError(err error, operation string) error {
 		return status.Errorf(codes.InvalidArgument, "invalid MAC address: %s", e.MACAddress)
 	case pxe.ErrInvalidCertificateFingerprint:
 		return status.Error(codes.InvalidArgument, e.Error())
+	case pxe.ErrCertificateFingerprintInUse:
+		return status.Error(codes.AlreadyExists, e.Error())
+	case pxe.ErrCertificateBindingClosed:
+		return status.Error(codes.FailedPrecondition, e.Error())
 	case pxe.ErrInvalidState:
 		return status.Errorf(codes.InvalidArgument, "invalid state: %s", e.Reason)
 	case pxe.ErrInvalidStateTransition:

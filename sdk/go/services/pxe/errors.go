@@ -95,6 +95,17 @@ func (e *ErrSetEnrolledFailed) Error() string {
 
 func (e *ErrSetEnrolledFailed) Unwrap() error { return e.Cause }
 
+type ErrBindCertificateFailed struct {
+	ID    string
+	Cause error
+}
+
+func (e *ErrBindCertificateFailed) Error() string {
+	return fmt.Sprintf("failed to bind a certificate to device %s: %v", e.ID, e.Cause)
+}
+
+func (e *ErrBindCertificateFailed) Unwrap() error { return e.Cause }
+
 type ErrAuthorizeFailed struct {
 	ID    string
 	Cause error

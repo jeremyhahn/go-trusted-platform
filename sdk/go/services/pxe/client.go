@@ -106,18 +106,29 @@ func (c *Client) UpdateState(ctx context.Context, deviceID string, state platfor
 	return resp.Device, nil
 }
 
-// SetDeviceEnrolled marks a device as enrolled with a certificate. The
-// fingerprint is the SHA-256 of the certificate's DER encoding in hex; it may
-// be empty, but the install-completion webhook only admits a device enrolled
-// with one.
-func (c *Client) SetDeviceEnrolled(ctx context.Context, deviceID, certificateSerial, certificateFingerprint string) (*platformv1.PXEDeviceInfo, error) {
+// SetDeviceEnrolled marks a device as enrolled with a certificate.
+func (c *Client) SetDeviceEnrolled(ctx context.Context, deviceID, certificateSerial string) (*platformv1.PXEDeviceInfo, error) {
 	resp, err := c.grpc.SetDeviceEnrolled(ctx, &platformv1.SetPXEDeviceEnrolledRequest{
-		DeviceId:               deviceID,
-		CertificateSerial:      certificateSerial,
-		CertificateFingerprint: certificateFingerprint,
+		DeviceId:          deviceID,
+		CertificateSerial: certificateSerial,
 	})
 	if err != nil {
 		return nil, &ErrSetEnrolledFailed{ID: deviceID, Cause: err}
+	}
+	return resp.Device, nil
+}
+
+// BindDeviceCertificate records the certificate the device's installer
+// presents to the install-completion webhook, by the SHA-256 of its DER
+// encoding in hex. It must be called before installation completes; the
+// device's state does not change.
+func (c *Client) BindDeviceCertificate(ctx context.Context, deviceID, certificateFingerprint string) (*platformv1.PXEDeviceInfo, error) {
+	resp, err := c.grpc.BindDeviceCertificate(ctx, &platformv1.BindPXEDeviceCertificateRequest{
+		DeviceId:               deviceID,
+		CertificateFingerprint: certificateFingerprint,
+	})
+	if err != nil {
+		return nil, &ErrBindCertificateFailed{ID: deviceID, Cause: err}
 	}
 	return resp.Device, nil
 }

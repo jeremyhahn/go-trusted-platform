@@ -31,11 +31,11 @@ func CertificateFingerprintOf(cert *x509.Certificate) string {
 
 // NormalizeCertificateFingerprint returns an operator-supplied SHA-256
 // certificate fingerprint in the stored form: colon separators removed,
-// lowercase. An empty input is returned as is (enrollment without a
-// fingerprint); anything that is not 32 bytes of hex is an error.
+// lowercase. Anything that is not 32 bytes of hex, the empty string
+// included, is an error.
 func NormalizeCertificateFingerprint(fingerprint string) (string, error) {
 	if fingerprint == "" {
-		return "", nil
+		return "", ErrInvalidCertificateFingerprint{Fingerprint: fingerprint, Reason: "required"}
 	}
 	normalized := strings.ToLower(strings.ReplaceAll(fingerprint, ":", ""))
 	raw, err := hex.DecodeString(normalized)

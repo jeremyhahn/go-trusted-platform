@@ -73,6 +73,7 @@ func NewPXERouter(
 //	GET    /api/v1/pxe/devices/mac/{mac}          - GetDeviceByMAC
 //	PUT    /api/v1/pxe/devices/{id}/state         - UpdateState
 //	POST   /api/v1/pxe/devices/{id}/enrolled      - SetDeviceEnrolled
+//	POST   /api/v1/pxe/devices/{id}/certificate   - BindDeviceCertificate
 //	POST   /api/v1/pxe/devices/{id}/authorize     - Authorize
 //	POST   /api/v1/pxe/devices/{id}/quarantine    - Quarantine
 //	POST   /api/v1/pxe/devices/{id}/retry         - Retry
@@ -116,6 +117,7 @@ func (r *PXERouter) operatorRoutes() []scopedRoute {
 		{http.MethodDelete, "/devices/{id}", pxeRPC("RemoveDevice"), r.removeDevice},
 		{http.MethodPut, "/devices/{id}/state", pxeRPC("UpdateState"), r.updateState},
 		{http.MethodPost, "/devices/{id}/enrolled", pxeRPC("SetDeviceEnrolled"), r.setEnrolled},
+		{http.MethodPost, "/devices/{id}/certificate", pxeRPC("BindDeviceCertificate"), r.bindCertificate},
 		{http.MethodPost, "/devices/{id}/authorize", pxeRPC("Authorize"), r.authorize},
 		{http.MethodPost, "/devices/{id}/quarantine", pxeRPC("Quarantine"), r.quarantine},
 		{http.MethodPost, "/devices/{id}/retry", pxeRPC("Retry"), r.retry},
@@ -324,6 +326,24 @@ func (r *PXERouter) setEnrolled(w http.ResponseWriter, req *http.Request) {
 	}
 	pbReq.DeviceId = mux.Vars(req)["id"]
 	resp, err := r.server.SetDeviceEnrolled(req.Context(), pbReq)
+	if err != nil {
+		protorest.WriteError(w, req, r.respWriter, err)
+		return
+	}
+	protorest.WriteSuccess(w, req, r.respWriter, resp)
+}
+
+func (r *PXERouter) bindCertificate(w http.ResponseWriter, req *http.Request) {
+	if !r.ensure(w, req) {
+		return
+	}
+	pbReq := &platformv1.BindPXEDeviceCertificateRequest{}
+	if err := protorest.DecodeRequest(req, pbReq); err != nil {
+		r.respWriter.Error400(w, req, err)
+		return
+	}
+	pbReq.DeviceId = mux.Vars(req)["id"]
+	resp, err := r.server.BindDeviceCertificate(req.Context(), pbReq)
 	if err != nil {
 		protorest.WriteError(w, req, r.respWriter, err)
 		return

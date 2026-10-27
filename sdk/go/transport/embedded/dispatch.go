@@ -1058,6 +1058,9 @@ func registerPXEHandlers(m map[string]handlerFunc, reg *ServiceRegistry) {
 	m[platformv1.PXEService_SetDeviceEnrolled_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
 		return svc.SetDeviceEnrolled(ctx, req.(*platformv1.SetPXEDeviceEnrolledRequest))
 	}
+	m[platformv1.PXEService_BindDeviceCertificate_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.BindDeviceCertificate(ctx, req.(*platformv1.BindPXEDeviceCertificateRequest))
+	}
 	m[platformv1.PXEService_Authorize_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
 		return svc.Authorize(ctx, req.(*platformv1.AuthorizePXEDeviceRequest))
 	}
