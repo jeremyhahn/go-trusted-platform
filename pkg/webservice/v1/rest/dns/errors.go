@@ -15,42 +15,13 @@ package dns
 
 import "fmt"
 
-// ErrMissingZoneName is returned when zone name is required but not provided
-type ErrMissingZoneName struct{}
-
-func (e ErrMissingZoneName) Error() string {
-	return "zone name is required"
-}
-
-// ErrMissingRecordName is returned when record name is required but not provided
-type ErrMissingRecordName struct{}
-
-func (e ErrMissingRecordName) Error() string {
-	return "record name is required"
-}
-
-// ErrMissingRecordType is returned when record type is required but not provided
-type ErrMissingRecordType struct{}
-
-func (e ErrMissingRecordType) Error() string {
-	return "record type is required"
-}
-
-// ErrInvalidRequestBody is returned when the request body is invalid
-type ErrInvalidRequestBody struct {
-	Reason string
-}
-
-func (e ErrInvalidRequestBody) Error() string {
-	return fmt.Sprintf("invalid request body: %s", e.Reason)
-}
-
-// ErrInvalidRecordType is returned when an invalid record type is provided
+// ErrInvalidRecordType is returned when a path or query record type names no
+// RecordType.
 type ErrInvalidRecordType struct {
 	Type string
 }
 
-func (e ErrInvalidRecordType) Error() string {
+func (e *ErrInvalidRecordType) Error() string {
 	return fmt.Sprintf("invalid record type: %s", e.Type)
 }
 
@@ -60,20 +31,6 @@ type ErrRecordNotFound struct {
 	Name string
 }
 
-func (e ErrRecordNotFound) Error() string {
+func (e *ErrRecordNotFound) Error() string {
 	return fmt.Sprintf("record not found: %s %s", e.Type, e.Name)
-}
-
-// ErrMissingFQDN is returned when FQDN is required but not provided
-type ErrMissingFQDN struct{}
-
-func (e ErrMissingFQDN) Error() string {
-	return "fqdn is required"
-}
-
-// ErrMissingIP is returned when IP address is required but not provided
-type ErrMissingIP struct{}
-
-func (e ErrMissingIP) Error() string {
-	return "ip address is required"
 }

@@ -156,7 +156,7 @@ func (h *attestCertHandler) HandleRecordAttestCert(w http.ResponseWriter, r *htt
 }
 
 // writeRecordError maps the gRPC status onto the HTTP surface. A preflight
-// refusal is FailedPrecondition on the wire and a 400 here, carrying every
+// refusal is FailedPrecondition on the wire and a 409 here, carrying every
 // candidate and the reason it was refused; the writer has no 412.
 func (h *attestCertHandler) writeRecordError(w http.ResponseWriter, r *http.Request, err error) {
 	writeGRPCStatusError(h.responseWriter, w, r, err)
@@ -164,8 +164,8 @@ func (h *attestCertHandler) writeRecordError(w http.ResponseWriter, r *http.Requ
 
 // writeGRPCStatusError maps a status from the in-process DeviceService onto
 // the HTTP surface, so REST answers with the code every other transport
-// does. FailedPrecondition is a 400 carrying the reason; the writer has no
-// 412.
+// does. FailedPrecondition is a 409 carrying the reason, as protorest sends it
+// platform-wide (#665).
 func writeGRPCStatusError(rw response.HttpWriter, w http.ResponseWriter, r *http.Request, err error) {
 	st, ok := status.FromError(err)
 	if !ok {
@@ -174,12 +174,13 @@ func writeGRPCStatusError(rw response.HttpWriter, w http.ResponseWriter, r *http
 	}
 	wrapped := errors.New(st.Message())
 	switch st.Code() {
-	case codes.InvalidArgument, codes.FailedPrecondition:
+	case codes.InvalidArgument:
 		rw.Error400(w, r, wrapped)
 	case codes.NotFound:
 		rw.Error404(w, r, wrapped)
-	case codes.Aborted:
-		// The certificate changed between the refusal and the clear.
+	case codes.FailedPrecondition, codes.Aborted:
+		// The device's state refuses the request, or the certificate changed
+		// between the refusal and the clear.
 		rw.Write(w, r, http.StatusConflict, restwire.WebServiceResponse{
 			Code:    http.StatusConflict,
 			Error:   wrapped.Error(),

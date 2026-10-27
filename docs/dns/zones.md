@@ -357,8 +357,8 @@ a:
 
 ## Zone Operations Without a CLI
 
-There is no `platformctl dns` command group ([cli.md](cli.md)). Zone and record
-CRUD go through REST `/api/v1/dns/zones` or gRPC `DNSService`; host registration
+`platformctl dns zone` and `platformctl dns record` ([cli.md](cli.md)) manage
+zones and records. The same CRUD is available through REST `/api/v1/dns/zones` or gRPC `DNSService`; host registration
 is `POST /api/v1/dns/register`. [api-reference-rest.md](api-reference-rest.md)
 has the request bodies.
 

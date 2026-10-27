@@ -572,16 +572,16 @@ renames on the wire: `LastSync` (a `time.Time`) becomes `last_sync_unix` (an
 
 **`Aborted` is chosen for `ErrNoReachableSource` specifically because it maps to
 HTTP 409 Conflict** in both REST listeners
-(`protorest`: `case codes.AlreadyExists, codes.Aborted:` → 409;
+(`protorest`: `case codes.AlreadyExists, codes.Aborted, codes.FailedPrecondition:` → 409;
 `pkg/api/rest/ntp_handlers.go`: `codes.Aborted: http.StatusConflict`). That is
 the documented REST contract for "you asked me to step and there is nothing to
 step towards."
 
 **Correction:** the doc comment on `NTPRouter.step`
 (`pkg/webservice/v1/rest/ntp/router.go`) says protorest maps the service's
-*`FailedPrecondition`* status onto 409. It does not — `FailedPrecondition` maps
-to **400**, and the service returns `Aborted`. The behaviour (409) is right; the
-comment names the wrong code. Recorded here; the comment is the defect.
+*`FailedPrecondition`* status onto 409. The service returns `Aborted`, not
+`FailedPrecondition`. Both map to 409 since #665, so the behaviour (409) is
+right either way; the comment names the wrong code. Recorded here; the comment is the defect.
 
 QUIC statuses come from `ntpQUICStatus` (`pkg/api/daemon/quic_ntp.go`), which
 maps `Aborted` → `StatusAlreadyExists`, the wire's conflict status. Full table

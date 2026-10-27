@@ -44,8 +44,8 @@ Every key and its type is in [configuration.md](configuration.md#dane).
 ## What publishes TLSA records
 
 An operator can add a TLSA record through the API (`Service.AddRecord` takes the
-RDATA `usage selector matching-type data`, RFC 6698 §2.2). There is no
-`platformctl dns` command for it ([cli.md](cli.md)). The platform's own TLSA
+RDATA `usage selector matching-type data`, RFC 6698 §2.2). An operator adds
+one with `platformctl dns record add --type tlsa` ([cli.md](cli.md)). The platform's own TLSA
 records come from a zone's configured `tlsa:` list or from one of these paths,
 all gated on `dane.enabled`:
 

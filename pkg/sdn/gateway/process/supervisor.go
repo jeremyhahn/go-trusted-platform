@@ -145,6 +145,11 @@ type Supervisor struct {
 	// document with an older one. It is a channel rather than a mutex so a
 	// caller waiting for it still honours its context.
 	applying chan struct{}
+
+	// desired is the last document Apply was given. A process that
+	// reconciles a section of it and is started after that apply is given
+	// it at launch.
+	desired *gwstate.DesiredConfig
 }
 
 // supervised is one child process the supervisor owns.
@@ -231,6 +236,10 @@ func (s *Supervisor) StartService(ctx context.Context, service string) error {
 	}
 	proc.wanted[service] = true
 	proc.stopping = false
+	if proc.desired == nil && def.ReconcilesDesired {
+		// Started after an apply: its launch is given that document.
+		proc.desired = s.desired
+	}
 	// Claim the launch, or leave it to whoever holds the claim. A caller
 	// that does not launch still waits for the service below: the readiness
 	// poll already tolerates a process mid-launch, so it is the natural
@@ -431,9 +440,41 @@ func bindableByServiceGroup(mode os.FileMode) bool {
 	return mode.Perm()&0o070 == 0o070
 }
 
+// stateDirMode keeps a process's state to the process: the vpn child's
+// revocation journal decides which leases a restart may reinstate.
+const stateDirMode = 0o700
+
+// ensureStateDir makes the process's state directory under the data directory
+// exist and belong to the credentials the process runs with. The data
+// directory belongs to root, so an unprivileged child could not create it
+// itself. With no data directory the child resolves its own default, and
+// there is nothing to lay out.
+func (s *Supervisor) ensureStateDir(def Definition) error {
+	if def.StateDir == "" || s.cfg.Inherited.DataDir == "" {
+		return nil
+	}
+	dir := filepath.Join(s.cfg.Inherited.DataDir, def.StateDir)
+	if err := os.MkdirAll(dir, stateDirMode); err != nil {
+		return &ErrStateDir{Process: def.Name, Path: dir, Op: "create", Cause: err}
+	}
+	if def.Unprivileged {
+		if err := os.Chown(dir, int(s.cfg.UID), int(s.cfg.GID)); err != nil {
+			return &ErrStateDir{Process: def.Name, Path: dir, Op: "chown", Cause: err}
+		}
+	}
+	// MkdirAll leaves an existing directory's mode alone.
+	if err := os.Chmod(dir, stateDirMode); err != nil {
+		return &ErrStateDir{Process: def.Name, Path: dir, Op: "chmod", Cause: err}
+	}
+	return nil
+}
+
 // launch starts the child and its watch goroutine.
 func (s *Supervisor) launch(ctx context.Context, proc *supervised) error {
 	if err := s.ensureRuntimeDir(); err != nil {
+		return err
+	}
+	if err := s.ensureStateDir(proc.def); err != nil {
 		return err
 	}
 	// Cgroups may be nil: CgroupManager's methods take a nil receiver and
@@ -1161,7 +1202,7 @@ func (s *Supervisor) ServiceSnapshot(ctx context.Context, service string) (*gwst
 const statusTimeout = 2 * time.Second
 
 // datapathProcess returns the kernel-class process and its live client, which
-// owns every service that reconciles a desired document.
+// owns the load-balancer and NAT services the desired document reconciles.
 //
 // The class table has exactly one kernel-class process today, but the table
 // is data rather than a type: a second one would make an arbitrary choice
@@ -1229,16 +1270,33 @@ func (s *Supervisor) recordDesired(desired *gwstate.DesiredConfig) error {
 }
 
 // Apply implements gateway.ServiceSupervisor: the desired document goes to
-// the kernel-class process, which owns every service that reconciles it.
-// The process keeps the document, so a child relaunched after a crash is
-// given it again (restoreDesired); the send holds the apply slot so that
-// re-send can never land after it with an older document.
+// every process that reconciles a section of it: the kernel-class process
+// (load balancer, NAT), whose state Apply reports, and the vpn child. Each
+// process keeps the document, so a child relaunched after a crash, or
+// started after this apply, is given it (restoreDesired); the sends hold the
+// apply slot so that re-send can never land after them with an older
+// document. A child that fails the document joins its error to the result.
+// The state is the datapath child's own even then, so with an error it does
+// not say the document is applied: the gateway keeps its previous version
+// until every child has applied it (#1070).
 func (s *Supervisor) Apply(ctx context.Context, desired *gwstate.DesiredConfig) (gwstate.DesiredConfigState, error) {
 	if err := s.acquireApply(ctx); err != nil {
 		return gwstate.DesiredConfigState{}, err
 	}
 	defer s.releaseApply()
 
+	forwardErr := s.forwardDesired(ctx, desired)
+	state, err := s.applyDatapath(ctx, desired)
+	if forwardErr != nil {
+		return state, errors.Join(err, forwardErr)
+	}
+	return state, err
+}
+
+// applyDatapath sends the desired document to the datapath child, whose
+// reconciliation state is the one Apply reports, or records it for the next
+// datapath child when none is serving.
+func (s *Supervisor) applyDatapath(ctx context.Context, desired *gwstate.DesiredConfig) (gwstate.DesiredConfigState, error) {
 	proc, client, err := s.datapathProcess()
 	var noDatapath *ErrNoDatapathProcess
 	if errors.As(err, &noDatapath) {
@@ -1251,6 +1309,43 @@ func (s *Supervisor) Apply(ctx context.Context, desired *gwstate.DesiredConfig) 
 	proc.desired = desired
 	s.mu.Unlock()
 	return client.ApplyDesired(ctx, desired)
+}
+
+// forwardDesired records the desired document for every parser child that
+// reconciles a section of it (the vpn child) and sends it to each one that
+// is serving (#557). One that is not serving yet — stopped, backing off or
+// mid-launch — is given it by its launch's restore, which waits for the
+// apply slot the caller holds. The caller holds the apply slot.
+func (s *Supervisor) forwardDesired(ctx context.Context, desired *gwstate.DesiredConfig) error {
+	type target struct {
+		name   string
+		client *ipc.Client
+	}
+	var targets []target
+	s.mu.Lock()
+	s.desired = desired
+	for _, proc := range s.processes {
+		if proc.def.Class == ClassKernel || !proc.def.ReconcilesDesired {
+			continue
+		}
+		proc.desired = desired
+		if proc.launching {
+			proc.restoring = true
+		}
+		if proc.client != nil {
+			targets = append(targets, target{name: proc.def.Name, client: proc.client})
+		}
+	}
+	s.mu.Unlock()
+
+	var failures []error
+	for _, t := range targets {
+		if _, err := t.client.ApplyDesired(ctx, desired); err != nil {
+			failures = append(failures, &ErrDesiredForwardFailed{
+				Process: t.name, Version: desired.EffectiveVersion(), Cause: err})
+		}
+	}
+	return errors.Join(failures...)
 }
 
 // Snapshot returns the datapath child's telemetry snapshot.

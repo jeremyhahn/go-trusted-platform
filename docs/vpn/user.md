@@ -1,6 +1,6 @@
 # Remote-Access VPN — User Guide
 
-> **Status: REFERENCE** · Last verified: 2026-10-19
+> **Status: REFERENCE** · Last verified: 2026-10-26
 > How an operator and a machine use the remote-access VPN. Partial today: operators can manage enrolment, posture policies and session status today, from the CLI (#584 PR 3) and the web console (#584 PR 4); the client verbs, both tunnels and the gateway's admission listener exist, but a machine cannot connect yet.
 > "Operator tasks" below works now, and so does `platformctl vpn posture`.
 > `platformctl vpn connect` (with `--foreground` to keep the lease renewed),
@@ -86,10 +86,14 @@ the scope listed in [cli.md](cli.md).
 
 The web console's **Networking → VPN** page does the same without the CLI: it
 shows each gateway's status and live sessions (with any refused peer or
-unloadable policy), lists the enrolled peers with a **Revoke** button, and
-lists the posture policies, which open in an editor (**View / Edit**, or
-**New Policy**). A module that does not compile is refused and the editor
-stays open. Enrolling a peer and deleting a policy remain CLI tasks.
+unloadable policy), lists the enrolled peers with a **Revoke** button and
+enrols one with **Enrol Peer** (tenant, device id and an optional
+comma-separated zone list; empty means every allowed zone, and enrolling an
+enrolled device replaces its zones), and lists the posture policies, which
+open in an editor (**View / Edit**, or **New Policy**) and are removed with
+the delete button after a confirmation. A module that does not compile is
+refused and the editor stays open; a refused enrolment or delete leaves its
+dialog open with the reason in a toast.
 
 - **Let a machine in**: `platformctl vpn peer enrol <device-id> --tenant <t>`.
   Add `--zone <name>` (repeatable) to narrow the zones it may reach; without it

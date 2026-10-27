@@ -120,8 +120,13 @@ func TestWriteError_GRPCCodeMapping(t *testing.T) {
 	}{
 		{codes.NotFound, http.StatusNotFound},
 		{codes.InvalidArgument, http.StatusBadRequest},
+		{codes.OutOfRange, http.StatusBadRequest},
 		{codes.Unauthenticated, http.StatusUnauthorized},
 		{codes.AlreadyExists, http.StatusConflict},
+		{codes.Aborted, http.StatusConflict},
+		// A precondition the resource's current state fails is a conflict
+		// with that state, not a malformed request (#665).
+		{codes.FailedPrecondition, http.StatusConflict},
 		{codes.Unavailable, http.StatusServiceUnavailable},
 		{codes.DeadlineExceeded, http.StatusGatewayTimeout},
 		{codes.Unimplemented, http.StatusNotImplemented},

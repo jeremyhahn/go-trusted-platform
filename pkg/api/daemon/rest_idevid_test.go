@@ -459,7 +459,7 @@ func TestRESTHasIDevID_ServiceNotAvailable(t *testing.T) {
 }
 
 // TestRESTIDevIDDelete_RefusedKeyAndCertRemain pins #304: the REST key delete
-// is refused with 412 (the FailedPrecondition class) and touches nothing, so
+// is refused with 409 (the FailedPrecondition class, #665) and touches nothing, so
 // the key and its certificate are both still there afterwards.
 func TestRESTIDevIDDelete_RefusedKeyAndCertRemain(t *testing.T) {
 	mockTPM := &mockTPM2RESTService{hasIDevID: true, hasIDevIDCert: true}
@@ -467,7 +467,7 @@ func TestRESTIDevIDDelete_RefusedKeyAndCertRemain(t *testing.T) {
 
 	rr := executeRESTRequest(t, server, http.MethodDelete, "/api/v1/tpm/idevid", nil)
 
-	assert.Equal(t, http.StatusPreconditionFailed, rr.Code)
+	assert.Equal(t, http.StatusConflict, rr.Code)
 	var errResp ErrorResponse
 	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &errResp))
 	assert.Equal(t, ErrDeviceIdentityKeyNotDeletable{Key: "IDevID"}.Error(), errResp.Error)
@@ -486,7 +486,7 @@ func TestRESTIDevIDDelete_RefusedWithoutTPMService(t *testing.T) {
 
 	rr := executeRESTRequest(t, server, http.MethodDelete, "/api/v1/tpm/idevid", nil)
 
-	assert.Equal(t, http.StatusPreconditionFailed, rr.Code)
+	assert.Equal(t, http.StatusConflict, rr.Code)
 }
 
 func TestRESTIDevIDCSR_Success(t *testing.T) {
@@ -675,7 +675,7 @@ func TestRESTIDevIDDeleteCert_NoTPMIsPreconditionFailed(t *testing.T) {
 
 	rr := executeRESTRequest(t, server, http.MethodDelete, "/api/v1/tpm/idevid/cert", nil)
 
-	assert.Equal(t, http.StatusPreconditionFailed, rr.Code)
+	assert.Equal(t, http.StatusConflict, rr.Code)
 }
 
 func TestRESTIDevIDDeleteCert_ServiceNotConfigured(t *testing.T) {
@@ -829,14 +829,14 @@ func TestRESTHasIAK_NotExists(t *testing.T) {
 }
 
 // TestRESTIAKDelete_RefusedKeyAndCertRemain pins #304 for the IAK: refused
-// with 412 and nothing touched.
+// with 409 and nothing touched.
 func TestRESTIAKDelete_RefusedKeyAndCertRemain(t *testing.T) {
 	mockTPM := &mockTPM2RESTService{hasIAK: true, hasIAKCert: true}
 	server := createTestRESTServer(t, mockTPM)
 
 	rr := executeRESTRequest(t, server, http.MethodDelete, "/api/v1/tpm/iak", nil)
 
-	assert.Equal(t, http.StatusPreconditionFailed, rr.Code)
+	assert.Equal(t, http.StatusConflict, rr.Code)
 	var errResp ErrorResponse
 	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &errResp))
 	assert.Equal(t, ErrDeviceIdentityKeyNotDeletable{Key: "IAK"}.Error(), errResp.Error)
@@ -855,7 +855,7 @@ func TestRESTIAKDelete_RefusedWithoutTPMService(t *testing.T) {
 
 	rr := executeRESTRequest(t, server, http.MethodDelete, "/api/v1/tpm/iak", nil)
 
-	assert.Equal(t, http.StatusPreconditionFailed, rr.Code)
+	assert.Equal(t, http.StatusConflict, rr.Code)
 }
 
 func TestRESTIAKCSR_Success(t *testing.T) {
@@ -1030,7 +1030,7 @@ func TestRESTIAKDeleteCert_NoTPMIsPreconditionFailed(t *testing.T) {
 
 	rr := executeRESTRequest(t, server, http.MethodDelete, "/api/v1/tpm/iak/cert", nil)
 
-	assert.Equal(t, http.StatusPreconditionFailed, rr.Code)
+	assert.Equal(t, http.StatusConflict, rr.Code)
 }
 
 func TestRESTIAKDeleteCert_ServiceNotConfigured(t *testing.T) {

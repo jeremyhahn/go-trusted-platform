@@ -253,7 +253,7 @@ func TestBootHandler_ErrorStatuses(t *testing.T) {
 				req.TLS = nil
 				return req
 			},
-			want: http.StatusBadRequest,
+			want: http.StatusConflict,
 		},
 		"certificate: no identity": {
 			request: func(*bootFixture) *http.Request {
@@ -296,7 +296,7 @@ func TestBootHandler_ErrorStatuses(t *testing.T) {
 				req.TLS.PeerCertificates = []*x509.Certificate{f.pki.leaf} // the IDevID check would pass; only the binding fails
 				return req.WithContext(context.WithValue(req.Context(), ContextKeyDeviceSerial, "node-1.example"))
 			},
-			want: http.StatusBadRequest,
+			want: http.StatusConflict,
 		},
 	}
 	for name, tc := range cases {

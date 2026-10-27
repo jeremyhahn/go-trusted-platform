@@ -116,7 +116,7 @@ func TestCapabilities_ReturnsTheThreeLists(t *testing.T) {
 func TestCapabilities_RefusedListIsAClientError(t *testing.T) {
 	w := serveAttrs(t, &attrsTPM{cmdErr: errCommandsRefused}, http.MethodGet, "/api/v1/tpm/capabilities", "")
 
-	assert.Equal(t, http.StatusBadRequest, w.Code, w.Body.String())
+	assert.Equal(t, http.StatusConflict, w.Code, w.Body.String())
 	assert.Contains(t, w.Body.String(), "commands")
 }
 

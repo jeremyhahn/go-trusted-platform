@@ -26,6 +26,7 @@ import (
 	"time"
 
 	iammw "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/middleware/iam"
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/restwire"
 
 	"github.com/gorilla/mux"
@@ -33,6 +34,8 @@ import (
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	iamsdk "github.com/jeremyhahn/go-quicbaas/sdk/go/client/iam"
@@ -490,6 +493,17 @@ func newTestHandlers(iamClient *mockIAMClient, pepClient *mockPEPClient) (*IAMHa
 	return handlers, writer
 }
 
+// decodeProtoReply decodes the protojson payload a handler wrote through
+// protorest into reply, failing the test when the handler wrote any other shape.
+func decodeProtoReply(t *testing.T, writer *mockHttpWriter, reply proto.Message) {
+	t.Helper()
+	envelope, ok := writer.lastPayload.(restwire.WebServiceResponse)
+	require.True(t, ok, "the handler wrote %T, not a proto reply envelope", writer.lastPayload)
+	raw, ok := envelope.Payload.(json.RawMessage)
+	require.True(t, ok, "the envelope payload is %T, not protojson", envelope.Payload)
+	require.NoError(t, protojson.Unmarshal(raw, reply))
+}
+
 func createRequestWithVars(method, path string, body interface{}, vars map[string]string) *http.Request {
 	var reqBody bytes.Buffer
 	if body != nil {
@@ -629,10 +643,12 @@ func TestListUsers_Success(t *testing.T) {
 	handlers.ListUsers(rec, req)
 
 	assert.Equal(t, http.StatusOK, writer.lastStatus)
-	payload, ok := writer.lastPayload.(ListUsersResponse)
-	require.True(t, ok)
-	assert.Len(t, payload.Users, 2)
-	assert.Equal(t, int64(2), payload.Total)
+	reply := &platformv1.ListIAMUsersResponse{}
+	decodeProtoReply(t, writer, reply)
+	assert.Len(t, reply.GetUsers(), 2)
+	assert.Equal(t, int64(2), reply.GetTotal())
+	assert.Equal(t, uint64(2), reply.GetPagination().GetTotalItems())
+	assert.NotNil(t, reply.GetTimestamp())
 }
 
 func TestListUsers_WithPagination(t *testing.T) {
@@ -656,10 +672,11 @@ func TestListUsers_WithPagination(t *testing.T) {
 	handlers.ListUsers(rec, req)
 
 	assert.Equal(t, http.StatusOK, writer.lastStatus)
-	payload, ok := writer.lastPayload.(ListUsersResponse)
-	require.True(t, ok)
-	assert.Equal(t, int32(25), payload.Limit)
-	assert.Equal(t, int32(50), payload.Offset)
+	reply := &platformv1.ListIAMUsersResponse{}
+	decodeProtoReply(t, writer, reply)
+	// offset 50 at 25 per page falls on page 3.
+	assert.Equal(t, uint32(25), reply.GetPagination().GetPageSize())
+	assert.Equal(t, uint32(3), reply.GetPagination().GetPage())
 }
 
 func TestListUsers_MissingTenantID(t *testing.T) {
@@ -841,9 +858,11 @@ func TestDeleteUser_Success(t *testing.T) {
 	handlers.DeleteUser(rec, req)
 
 	assert.Equal(t, http.StatusOK, writer.lastStatus)
-	payload, ok := writer.lastPayload.(SuccessResponse)
-	require.True(t, ok)
-	assert.True(t, payload.Success)
+	reply := &platformv1.DeleteIAMUserResponse{}
+	decodeProtoReply(t, writer, reply)
+	assert.True(t, reply.GetStatus().GetSuccess())
+	assert.Equal(t, "user deleted successfully", reply.GetStatus().GetMessage())
+	assert.NotNil(t, reply.GetTimestamp())
 }
 
 func TestDeleteUser_NotFound(t *testing.T) {
@@ -878,9 +897,10 @@ func TestAssignUserRole_Success(t *testing.T) {
 	handlers.AssignUserRole(rec, req)
 
 	assert.Equal(t, http.StatusOK, writer.lastStatus)
-	payload, ok := writer.lastPayload.(SuccessResponse)
-	require.True(t, ok)
-	assert.True(t, payload.Success)
+	reply := &platformv1.AssignIAMRoleResponse{}
+	decodeProtoReply(t, writer, reply)
+	assert.True(t, reply.GetStatus().GetSuccess())
+	assert.Equal(t, "role assigned successfully", reply.GetStatus().GetMessage())
 }
 
 func TestAssignUserRole_MissingRole(t *testing.T) {
@@ -993,9 +1013,9 @@ func TestListGroups_Success(t *testing.T) {
 	handlers.ListGroups(rec, req)
 
 	assert.Equal(t, http.StatusOK, writer.lastStatus)
-	payload, ok := writer.lastPayload.(ListGroupsResponse)
-	require.True(t, ok)
-	assert.Len(t, payload.Groups, 2)
+	reply := &platformv1.ListIAMGroupsResponse{}
+	decodeProtoReply(t, writer, reply)
+	assert.Len(t, reply.GetGroups(), 2)
 }
 
 func TestGetGroup_Success(t *testing.T) {
@@ -1891,6 +1911,18 @@ func TestHandleGRPCError_AlreadyExists(t *testing.T) {
 	handlers.handleGRPCError(rec, req, status.Error(codes.AlreadyExists, "exists"))
 
 	assert.Equal(t, http.StatusBadRequest, writer.lastStatus)
+}
+
+func TestHandleGRPCError_FailedPreconditionIsConflict(t *testing.T) {
+	handlers, writer := newTestHandlers(&mockIAMClient{}, &mockPEPClient{})
+
+	req := httptest.NewRequest(http.MethodGet, "/test", nil)
+	rec := httptest.NewRecorder()
+
+	handlers.handleGRPCError(rec, req, status.Error(codes.FailedPrecondition, "iam service is not available"))
+
+	assert.Equal(t, http.StatusConflict, writer.lastStatus)
+	assert.Contains(t, rec.Body.String(), "iam service is not available")
 }
 
 func TestHandleGRPCError_Internal(t *testing.T) {

@@ -82,16 +82,18 @@ func (staticPeersOnly) AdmitVTEP(context.Context, uint32, netip.Addr) error {
 // NewService builds the service for an enabled section that names a
 // certificate-file and crl-files. It opens netlink connections to
 // nf_tables and XFRM in the current network namespace; installing the
-// floor needs CAP_NET_ADMIN. A nil logger discards.
-func NewService(cfg *config.Config, logger *slog.Logger) (*Service, error) {
-	return NewEVPNService(cfg, staticPeersOnly{}, logger)
+// floor needs CAP_NET_ADMIN. The tunnel identity is refused unless its
+// chain ends in a certificate of anchor, the platform anchor; a nil anchor
+// is ErrMissingDependency. A nil logger discards.
+func NewService(cfg *config.Config, anchor AnchorSource, logger *slog.Logger) (*Service, error) {
+	return NewEVPNService(cfg, staticPeersOnly{}, anchor, logger)
 }
 
 // NewEVPNService is NewService for a node whose overlay runs EVPN: the
 // controller asks admitter before it brings an SA up to a VTEP a route
 // names. A nil admitter is ErrMissingDependency.
-func NewEVPNService(cfg *config.Config, admitter Admitter, logger *slog.Logger) (*Service, error) {
-	if admitter == nil {
+func NewEVPNService(cfg *config.Config, admitter Admitter, anchor AnchorSource, logger *slog.Logger) (*Service, error) {
+	if admitter == nil || anchor == nil {
 		return nil, ErrMissingDependency
 	}
 	if _, err := config.EnabledLocal(cfg); err != nil {
@@ -100,8 +102,13 @@ func NewEVPNService(cfg *config.Config, admitter Admitter, logger *slog.Logger) 
 	if len(cfg.CRLFiles) == 0 {
 		return nil, &config.ConfigError{Field: "crl-files", Err: config.ErrRequired}
 	}
-	identity, err := NewFileIdentity(cfg)
+	file, err := NewFileIdentity(cfg)
 	if err != nil {
+		return nil, err
+	}
+	identity, err := NewAnchoredIdentity(file, anchor)
+	if err != nil {
+		file.Close()
 		return nil, err
 	}
 	filter, err := NewFilter(cfg)

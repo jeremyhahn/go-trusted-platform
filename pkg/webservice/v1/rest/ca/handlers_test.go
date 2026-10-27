@@ -741,8 +741,8 @@ func TestListCertificates_Error(t *testing.T) {
 
 		handlers.ListCertificates(rec, req)
 
-		// FailedPrecondition (gRPC) maps to 400 via protorest.WriteError.
-		assert.Equal(t, http.StatusBadRequest, writer.lastStatus)
+		// FailedPrecondition (gRPC) maps to 409 via protorest.WriteError.
+		assert.Equal(t, http.StatusConflict, writer.lastStatus)
 	})
 }
 

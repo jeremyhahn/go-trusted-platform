@@ -248,7 +248,7 @@ func (f *dnsParityFixture) embeddedConn(t *testing.T) grpc.ClientConnInterface {
 func (f *dnsParityFixture) restConn(t *testing.T) grpc.ClientConnInterface {
 	logger := logging.DefaultLogger()
 	router := mux.NewRouter()
-	restdns.NewDNSRouter(logger, f.backend, response.NewResponseWriter(logger, nil)).
+	restdns.NewDNSRouter(logger, f.svc, response.NewResponseWriter(logger, nil)).
 		RegisterRoutes(router.PathPrefix("/api/v1").Subrouter())
 	// The SDK's REST Connect probes GET /health.
 	router.HandleFunc("/health/live", func(w http.ResponseWriter, _ *http.Request) {

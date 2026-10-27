@@ -373,7 +373,7 @@ that each adapter honours or refuses.
 
 | Transport | How the binding is the carrying connection's | Without a channel |
 |---|---|---|
-| REST | The bound call dials a dedicated TLS 1.3 connection (HTTP/1.1, no keep-alive), reads its exporter, and sends exactly one request on it. A second dial of that connection is refused (`ErrBoundConnectionReused`), so the request cannot leave on a pooled connection. | Not https: the SDK refuses. The daemon answers `400`. |
+| REST | The bound call dials a dedicated TLS 1.3 connection (HTTP/1.1, no keep-alive), reads its exporter, and sends exactly one request on it. A second dial of that connection is refused (`ErrBoundConnectionReused`), so the request cannot leave on a pooled connection. | Not https: the SDK refuses. The daemon answers `409` (`FailedPrecondition`, #665). |
 | gRPC (TCP) | The adapter's credentials record each completed handshake; the binding interceptor waits until the client connection is `Ready` and binds to that handshake. If gRPC reconnects between binding and send, the daemon sees a different exporter and refuses the proof — the race fails closed (`PermissionDenied`), never open. | The daemon answers `FailedPrecondition`. |
 | QUIC | One QUIC connection per client: the bound request is sent on it after its exporter is read. | The daemon answers `StatusInvalidRequest`. |
 | Unix socket | No TLS. The SDK refuses with `*transport.ErrChannelBindingUnavailable` before anything is sent. | The daemon recognises the `unix` peer and answers `FailedPrecondition`. |

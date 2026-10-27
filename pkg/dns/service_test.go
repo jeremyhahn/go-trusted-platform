@@ -241,6 +241,12 @@ func TestService_AddTLSARecord_PreservesExistingRecords(t *testing.T) {
 			NSRecords: []*entities.NSRecord{
 				{Name: "ns1", Value: "ns1.example.com.", TTL: 3600},
 			},
+			CAARecords: []*entities.CAARecord{
+				{Name: "@", Tag: "issue", Value: "letsencrypt.org", TTL: 3600},
+			},
+			TXTRecords: []*entities.TXTRecord{
+				{Name: "@", Value: "v=spf1 include:_spf.example.com ~all", TTL: 3600},
+			},
 		},
 	}
 
@@ -273,6 +279,8 @@ func TestService_AddTLSARecord_PreservesExistingRecords(t *testing.T) {
 	assert.Equal(t, "www", retrievedZone.RecordSet.ARecords[0].Name)
 	assert.Len(t, retrievedZone.RecordSet.NSRecords, 1)
 	assert.Equal(t, "ns1", retrievedZone.RecordSet.NSRecords[0].Name)
+	assert.Equal(t, zone.RecordSet.CAARecords, retrievedZone.RecordSet.CAARecords)
+	assert.Equal(t, zone.RecordSet.TXTRecords, retrievedZone.RecordSet.TXTRecords)
 }
 
 // TestNewARecord verifies A record creation with all fields.

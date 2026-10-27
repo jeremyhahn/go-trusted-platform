@@ -14,6 +14,8 @@
 package ipsec
 
 import (
+	"crypto/x509"
+	"encoding/pem"
 	"net/netip"
 	"strconv"
 	"strings"
@@ -62,7 +64,11 @@ func connPeer(name string) (netip.Addr, bool) {
 // The local certificate and key are not named here: charon picks the
 // certificate loaded with load-cert whose subject alternative name is the
 // local address, and the key in the loaded token that matches it.
-func (s *settings) connection(peer netip.Addr) *Connection {
+//
+// The peer's chain must contain root, the root of the tunnel identity
+// loaded: charon refuses a peer certificate that chains only to another
+// CA it happens to hold.
+func (s *settings) connection(peer netip.Addr, root *x509.Certificate) *Connection {
 	return &Connection{
 		Version:     "2",
 		LocalAddrs:  []string{s.local.String()},
@@ -73,7 +79,12 @@ func (s *settings) connection(peer netip.Addr) *Connection {
 		ReauthTime:  seconds(s.reauthTime),
 		DPDDelay:    seconds(dpdDelay),
 		Local:       ConnAuth{Auth: "pubkey", ID: s.local.String()},
-		Remote:      ConnAuth{Auth: "pubkey", ID: peer.String(), Revocation: "strict"},
+		Remote: ConnAuth{
+			Auth:       "pubkey",
+			ID:         peer.String(),
+			Revocation: "strict",
+			CACerts:    []string{string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: root.Raw}))},
+		},
 		Children: map[string]ChildSA{childName: {
 			Mode:         "transport",
 			StartAction:  "trap",

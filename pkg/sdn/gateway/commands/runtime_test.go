@@ -31,6 +31,7 @@ import (
 	ipsecconfig "github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ipsec/config"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/netplan"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/zone"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/trust"
 )
 
 func TestBuildGatewayRuntimeAbsentOrDisabled(t *testing.T) {
@@ -386,7 +387,9 @@ func (admitEvery) AdmitVTEP(context.Context, uint32, netip.Addr) error { return 
 
 // newOverlayIPsec refuses before it opens the token or the certificate: an
 // overlay IPsec without the admitter would bring up an SA to any VTEP a
-// route names, and one without CRLs could not check a peer's revocation.
+// route names, one without the platform anchor would load a tunnel
+// identity from any CA, and one without CRLs could not check a peer's
+// revocation.
 func TestNewOverlayIPsec_RefusesBeforeOpeningAnything(t *testing.T) {
 	cfg := &ipsecconfig.Config{
 		Enabled:         true,
@@ -395,11 +398,20 @@ func TestNewOverlayIPsec_RefusesBeforeOpeningAnything(t *testing.T) {
 		Token:           ipsecconfig.TokenConfig{Handle: "6970736563"},
 	}
 	logger := slog.New(slog.DiscardHandler)
+	anchor, err := trust.NewAnchor(trust.NewFileAnchorSource(filepath.Join(t.TempDir(), "platform-ca.pem")))
+	if err != nil {
+		t.Fatalf("NewAnchor: %v", err)
+	}
 
-	if _, err := newOverlayIPsec(cfg, nil, logger); !errors.Is(err, ipsec.ErrMissingDependency) {
+	// A gatewayd without a platform-ca-file has no anchor to hold the
+	// tunnel identity to.
+	if _, err := newOverlayIPsec(nil)(cfg, admitEvery{}, logger); !errors.Is(err, ipsec.ErrMissingDependency) {
+		t.Errorf("no anchor: err = %v, want ipsec.ErrMissingDependency", err)
+	}
+	if _, err := newOverlayIPsec(anchor)(cfg, nil, logger); !errors.Is(err, ipsec.ErrMissingDependency) {
 		t.Errorf("no admitter: err = %v, want ipsec.ErrMissingDependency", err)
 	}
-	_, err := newOverlayIPsec(cfg, admitEvery{}, logger)
+	_, err = newOverlayIPsec(anchor)(cfg, admitEvery{}, logger)
 	var invalid *ipsecconfig.ConfigError
 	if !errors.As(err, &invalid) || invalid.Field != "crl-files" {
 		t.Errorf("no CRLs: err = %v, want a crl-files *ipsecconfig.ConfigError", err)

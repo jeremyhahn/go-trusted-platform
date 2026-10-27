@@ -74,14 +74,14 @@ func serviceAction(t *testing.T, err error, verb string) *httptest.ResponseRecor
 }
 
 // The daemon's refusal is a FailedPrecondition, which the REST mapper sends as
-// 400 with the refusal's own message, the same answer the daemon REST server
+// 409 Conflict with the refusal's own message, the same answer the daemon REST server
 // gives.
-func TestServiceAction_RefusalIsBadRequest(t *testing.T) {
+func TestServiceAction_RefusalIsConflict(t *testing.T) {
 	refusal := daemon.ErrServiceNotControllable{ServiceName: "tpm", Reason: "owned by the process"}
 	for _, verb := range []string{"start", "stop", "restart"} {
 		rec := serviceAction(t, refusal, verb)
-		if rec.Code != http.StatusBadRequest {
-			t.Errorf("%s: status %d, want %d", verb, rec.Code, http.StatusBadRequest)
+		if rec.Code != http.StatusConflict {
+			t.Errorf("%s: status %d, want %d", verb, rec.Code, http.StatusConflict)
 		}
 		if !strings.Contains(rec.Body.String(), "cannot be started or stopped at runtime") {
 			t.Errorf("%s: body %q does not carry the refusal", verb, rec.Body.String())

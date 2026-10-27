@@ -4,7 +4,7 @@
 package rest
 
 import (
-	"net/http"
+	"encoding/json"
 	"testing"
 	"time"
 
@@ -110,28 +110,16 @@ func testPolicyResponse() PolicyResponse {
 	}
 }
 
-func TestCreatePolicy(t *testing.T) {
-	t.Run("applies the policy through the shared service", func(t *testing.T) {
-		control := &mockSDNControlService{policy: testPolicy()}
+func TestPolicyRequestToProto(t *testing.T) {
+	t.Run("converts every field", func(t *testing.T) {
+		var req CreatePolicyRequest
+		require.NoError(t, json.Unmarshal([]byte(fullPolicyBody), &req))
 
-		w := serveSDN(controlRouter(control), http.MethodPost, "/api/v1/sdn/policies", []byte(fullPolicyBody))
+		got, err := PolicyRequestToProto(req)
 
-		require.Equal(t, http.StatusCreated, w.Code, w.Body.String())
+		require.NoError(t, err)
 		want := &platformv1.ApplyPolicyRequest{PolicyId: "policy-1", Config: testPolicyConfig()}
-		assert.True(t, proto.Equal(want, control.applyPolicyReq), "got %v", control.applyPolicyReq)
-
-		var resp PolicyResponse
-		decodeSDNResponse(t, w.Body, &resp)
-		assert.Equal(t, testPolicyResponse(), resp)
-	})
-
-	t.Run("rejects a malformed body without calling the service", func(t *testing.T) {
-		control := &mockSDNControlService{}
-
-		w := serveSDN(controlRouter(control), http.MethodPost, "/api/v1/sdn/policies", []byte("bad"))
-
-		assert.Equal(t, http.StatusBadRequest, w.Code)
-		assert.Nil(t, control.applyPolicyReq)
+		assert.True(t, proto.Equal(want, got), "got %v", got)
 	})
 
 	invalidBodies := []struct {
@@ -144,151 +132,18 @@ func TestCreatePolicy(t *testing.T) {
 		{"target type", `{"name":"p","targets":[{"type":"zone","id":"z"}]}`, "target type"},
 	}
 	for _, tc := range invalidBodies {
-		t.Run("rejects an unknown "+tc.name+" without calling the service", func(t *testing.T) {
-			control := &mockSDNControlService{}
+		t.Run("rejects an unknown "+tc.name, func(t *testing.T) {
+			var req CreatePolicyRequest
+			require.NoError(t, json.Unmarshal([]byte(tc.body), &req))
 
-			w := serveSDN(controlRouter(control), http.MethodPost, "/api/v1/sdn/policies", []byte(tc.body))
+			got, err := PolicyRequestToProto(req)
 
-			assert.Equal(t, http.StatusBadRequest, w.Code)
-			assert.Contains(t, w.Body.String(), tc.field)
-			assert.Nil(t, control.applyPolicyReq)
+			var fieldErr ErrInvalidPolicyField
+			require.ErrorAs(t, err, &fieldErr)
+			assert.Equal(t, tc.field, fieldErr.Field)
+			assert.Nil(t, got)
 		})
 	}
-
-	for _, tc := range serviceErrorCases {
-		t.Run("maps "+tc.name, func(t *testing.T) {
-			control := &mockSDNControlService{err: tc.err}
-
-			w := serveSDN(controlRouter(control), http.MethodPost, "/api/v1/sdn/policies", []byte(`{"name":"p"}`))
-
-			assert.Equal(t, tc.want, w.Code)
-		})
-	}
-
-	t.Run("answers 503 without the shared service", func(t *testing.T) {
-		w := serveSDN(controlRouter(nil), http.MethodPost, "/api/v1/sdn/policies", []byte(`{"name":"p"}`))
-
-		assert.Equal(t, http.StatusServiceUnavailable, w.Code)
-	})
-}
-
-func TestListPolicies(t *testing.T) {
-	t.Run("lists the service's policies with the query filters", func(t *testing.T) {
-		control := &mockSDNControlService{
-			listPoliciesResp: &platformv1.ListPoliciesResponse{Policies: []*platformv1.Policy{testPolicy()}},
-		}
-
-		w := serveSDN(controlRouter(control), http.MethodGet, "/api/v1/sdn/policies?type=firewall&target_id=br0", nil)
-
-		require.Equal(t, http.StatusOK, w.Code, w.Body.String())
-		require.NotNil(t, control.listPoliciesReq)
-		assert.Equal(t, "firewall", control.listPoliciesReq.GetType())
-		assert.Equal(t, "br0", control.listPoliciesReq.GetTargetId())
-
-		var resp SDNPolicyListResponse
-		decodeSDNResponse(t, w.Body, &resp)
-		assert.Equal(t, 1, resp.Count)
-		assert.Equal(t, []PolicyResponse{testPolicyResponse()}, resp.Policies)
-	})
-
-	t.Run("answers an empty list when the service holds none", func(t *testing.T) {
-		control := &mockSDNControlService{listPoliciesResp: &platformv1.ListPoliciesResponse{}}
-
-		w := serveSDN(controlRouter(control), http.MethodGet, "/api/v1/sdn/policies", nil)
-
-		require.Equal(t, http.StatusOK, w.Code)
-		var resp SDNPolicyListResponse
-		decodeSDNResponse(t, w.Body, &resp)
-		assert.NotNil(t, resp.Policies, "an empty list is [], not null")
-		assert.Empty(t, resp.Policies)
-		assert.Zero(t, resp.Count)
-	})
-
-	for _, tc := range serviceErrorCases {
-		t.Run("maps "+tc.name, func(t *testing.T) {
-			control := &mockSDNControlService{err: tc.err}
-
-			w := serveSDN(controlRouter(control), http.MethodGet, "/api/v1/sdn/policies", nil)
-
-			assert.Equal(t, tc.want, w.Code)
-		})
-	}
-
-	t.Run("answers 503 without the shared service", func(t *testing.T) {
-		w := serveSDN(controlRouter(nil), http.MethodGet, "/api/v1/sdn/policies", nil)
-
-		assert.Equal(t, http.StatusServiceUnavailable, w.Code)
-	})
-}
-
-func TestGetPolicy(t *testing.T) {
-	t.Run("gets the policy from the shared service", func(t *testing.T) {
-		control := &mockSDNControlService{policy: testPolicy()}
-
-		w := serveSDN(controlRouter(control), http.MethodGet, "/api/v1/sdn/policies/web", nil)
-
-		require.Equal(t, http.StatusOK, w.Code, w.Body.String())
-		require.NotNil(t, control.getPolicyReq)
-		assert.Equal(t, "web", control.getPolicyReq.GetPolicyId())
-
-		var resp PolicyResponse
-		decodeSDNResponse(t, w.Body, &resp)
-		assert.Equal(t, testPolicyResponse(), resp)
-	})
-
-	for _, tc := range serviceErrorCases {
-		t.Run("maps "+tc.name, func(t *testing.T) {
-			control := &mockSDNControlService{err: tc.err}
-
-			w := serveSDN(controlRouter(control), http.MethodGet, "/api/v1/sdn/policies/web", nil)
-
-			assert.Equal(t, tc.want, w.Code)
-		})
-	}
-
-	t.Run("answers 503 without the shared service", func(t *testing.T) {
-		w := serveSDN(controlRouter(nil), http.MethodGet, "/api/v1/sdn/policies/web", nil)
-
-		assert.Equal(t, http.StatusServiceUnavailable, w.Code)
-	})
-}
-
-func TestDeletePolicy(t *testing.T) {
-	t.Run("deletes the policy through the shared service", func(t *testing.T) {
-		control := &mockSDNControlService{}
-
-		w := serveSDN(controlRouter(control), http.MethodDelete, "/api/v1/sdn/policies/policy-1", nil)
-
-		require.Equal(t, http.StatusOK, w.Code, w.Body.String())
-		require.NotNil(t, control.deletePolicyReq)
-		assert.Equal(t, "policy-1", control.deletePolicyReq.GetPolicyId())
-
-		var resp SDNActionResponse
-		decodeSDNResponse(t, w.Body, &resp)
-		assert.Equal(t, SDNActionResponse{
-			ResourceID:   "policy-1",
-			ResourceType: "policy",
-			Action:       "delete",
-			Success:      true,
-			Message:      "policy deleted successfully",
-		}, resp)
-	})
-
-	for _, tc := range serviceErrorCases {
-		t.Run("maps "+tc.name, func(t *testing.T) {
-			control := &mockSDNControlService{err: tc.err}
-
-			w := serveSDN(controlRouter(control), http.MethodDelete, "/api/v1/sdn/policies/policy-1", nil)
-
-			assert.Equal(t, tc.want, w.Code)
-		})
-	}
-
-	t.Run("answers 503 without the shared service", func(t *testing.T) {
-		w := serveSDN(controlRouter(nil), http.MethodDelete, "/api/v1/sdn/policies/policy-1", nil)
-
-		assert.Equal(t, http.StatusServiceUnavailable, w.Code)
-	})
 }
 
 func TestProtoEnumValue(t *testing.T) {

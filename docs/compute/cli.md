@@ -135,7 +135,7 @@ the VM then starts again.
 
 No flags. `suspend` needs a running VM and `resume` a suspended one; a VM in
 the wrong state fails with the daemon's error (FailedPrecondition over gRPC,
-QUIC and MCP; HTTP 400, read back as InvalidArgument, over REST).
+QUIC and MCP; HTTP 409, read back as AlreadyExists, over REST).
 
 ### Transports
 

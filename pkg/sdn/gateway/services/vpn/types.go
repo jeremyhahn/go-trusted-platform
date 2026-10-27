@@ -15,7 +15,10 @@ package vpn
 
 import (
 	"net/netip"
+	"net/url"
 	"time"
+
+	"github.com/yosida95/uritemplate/v3"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/calleradmission"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/manifest"
@@ -29,6 +32,11 @@ type DataPlaneKind string
 // DataPlaneMASQUE is CONNECT-IP over HTTP/3 (RFC 9484) on the platform's
 // QUIC stack, FIPS-approved primitives only.
 const DataPlaneMASQUE DataPlaneKind = "masque"
+
+// wireGuardKind names the WireGuard plane in every build, so a FIPS build
+// can still refuse the `wireguard.*` keys; DataPlaneWireGuard is the
+// exported name where the plane exists.
+const wireGuardKind DataPlaneKind = "wireguard"
 
 // dataPlaneKinds is the set of kinds this build offers. The `!fips` file
 // registers WireGuard at init.
@@ -208,11 +216,37 @@ type Config struct {
 	AllowTo             []string           `yaml:"allow-to" json:"allow_to" mapstructure:"allow-to"`
 	// NonceTTL bounds how long an issued challenge may be answered.
 	NonceTTL time.Duration `yaml:"nonce-ttl" json:"nonce_ttl" mapstructure:"nonce-ttl"`
+	// WireGuard is the WireGuard plane's settings; set only when
+	// DataPlanes offers wireguard (never in a FIPS build).
+	WireGuard WireGuardSettings `yaml:"wireguard" json:"wireguard" mapstructure:"wireguard"`
+	// MASQUE is the MASQUE CONNECT-IP plane's settings; required when
+	// DataPlanes offers masque.
+	MASQUE MASQUESettings `yaml:"masque" json:"masque" mapstructure:"masque"`
+}
+
+// WireGuardSettings are the `wireguard.*` keys.
+type WireGuardSettings struct {
+	// ListenPort is the WireGuard UDP port; DefaultWireGuardListenPort
+	// when WireGuard is offered and the key is unset.
+	ListenPort int `yaml:"listen-port" json:"listen_port" mapstructure:"listen-port"`
+}
+
+// MASQUESettings are the `masque.*` keys.
+type MASQUESettings struct {
+	// Template is the RFC 9484 URI template clients request: an absolute
+	// https URL with a path and no variables (RFC 9484 §3: the proxy
+	// carries whole IP packets, so IP flow forwarding is not offered).
+	Template string `yaml:"template" json:"template" mapstructure:"template"`
+	// Routes are advertised to an admitted client as RFC 9484 §4.6
+	// address ranges. At least one is required.
+	Routes []netip.Prefix `yaml:"routes" json:"routes" mapstructure:"routes"`
 }
 
 const (
 	// DefaultListenerPort is the admission listener's default port.
 	DefaultListenerPort = 4433
+	// DefaultWireGuardListenPort is WireGuard's conventional UDP port.
+	DefaultWireGuardListenPort = 51820
 	// DefaultLeaseTTL is the default lease lifetime.
 	DefaultLeaseTTL = 8 * time.Hour
 	// DefaultRenewWindow is the default window before expiry in which a
@@ -246,6 +280,9 @@ func (c Config) WithDefaults() Config {
 	}
 	if c.NonceTTL == 0 {
 		c.NonceTTL = DefaultNonceTTL
+	}
+	if c.WireGuard.ListenPort == 0 && c.Offers(wireGuardKind) {
+		c.WireGuard.ListenPort = DefaultWireGuardListenPort
 	}
 	if !c.RequirePersonFactor.OnAdmit && !c.RequirePersonFactor.OnRenew {
 		c.RequirePersonFactor.OnAdmit = true
@@ -295,7 +332,10 @@ func (c Config) Validate() error {
 			return &ErrInvalidConfig{Field: "allow-to", Reason: "empty zone name"}
 		}
 	}
-	return nil
+	if err := c.validateWireGuard(); err != nil {
+		return err
+	}
+	return c.validateMASQUE()
 }
 
 // Offers reports whether kind is configured on this service.
@@ -306,6 +346,65 @@ func (c Config) Offers(kind DataPlaneKind) bool {
 		}
 	}
 	return false
+}
+
+// validateWireGuard checks the `wireguard.*` keys. They are refused when
+// WireGuard is not offered, so a FIPS build cannot carry them.
+func (c Config) validateWireGuard() error {
+	if !c.Offers(wireGuardKind) {
+		if c.WireGuard.ListenPort != 0 {
+			return &ErrInvalidConfig{Field: "wireguard.listen-port", Reason: "set, but wireguard is not in data-planes"}
+		}
+		return nil
+	}
+	if c.WireGuard.ListenPort <= 0 || c.WireGuard.ListenPort > 65535 {
+		return &ErrInvalidConfig{Field: "wireguard.listen-port", Reason: "must be 1-65535"}
+	}
+	return nil
+}
+
+// validateMASQUE checks the `masque.*` keys against the template every
+// client accepts: an https URL with a host and a path and no variables.
+func (c Config) validateMASQUE() error {
+	if !c.Offers(DataPlaneMASQUE) {
+		if c.MASQUE.Template != "" || len(c.MASQUE.Routes) > 0 {
+			return &ErrInvalidConfig{Field: "masque", Reason: "set, but masque is not in data-planes"}
+		}
+		return nil
+	}
+	if c.MASQUE.Template == "" {
+		return &ErrInvalidConfig{Field: "masque.template", Reason: "required"}
+	}
+	tmpl, err := uritemplate.New(c.MASQUE.Template)
+	if err != nil {
+		return &ErrInvalidConfig{Field: "masque.template", Reason: "not a URI template: " + err.Error()}
+	}
+	if len(tmpl.Varnames()) > 0 {
+		return &ErrInvalidConfig{Field: "masque.template", Reason: "takes no variables: IP flow forwarding is not offered"}
+	}
+	u, err := url.Parse(tmpl.Raw())
+	if err != nil || u.Scheme != "https" || u.Hostname() == "" {
+		return &ErrInvalidConfig{Field: "masque.template", Reason: "must be an absolute https URL"}
+	}
+	if u.Path == "" {
+		return &ErrInvalidConfig{Field: "masque.template", Reason: "template has no path to serve"}
+	}
+	return validateMASQUERoutes(c.MASQUE.Routes)
+}
+
+// validateMASQUERoutes requires at least one valid route: RFC 9484 §4.6
+// lets a client send only to a range the proxy advertised, so a session
+// with no route can carry nothing.
+func validateMASQUERoutes(routes []netip.Prefix) error {
+	if len(routes) == 0 {
+		return &ErrInvalidConfig{Field: "masque.routes", Reason: "at least one reachable route is required"}
+	}
+	for _, r := range routes {
+		if !r.IsValid() {
+			return &ErrInvalidConfig{Field: "masque.routes", Reason: "route prefix is not valid"}
+		}
+	}
+	return nil
 }
 
 // allows reports whether zone is in the allow-to set.

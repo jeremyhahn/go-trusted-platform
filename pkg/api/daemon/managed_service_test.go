@@ -298,8 +298,8 @@ var lifecycleTransports = map[string]lifecycleTransport{
 		rec := httptest.NewRecorder()
 		server.router.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/v1/services/tpm/"+verb, nil))
 		assert.Contains(t, rec.Body.String(), "cannot be started or stopped at runtime")
-		// 400 is how the platform REST mapper sends FailedPrecondition.
-		if rec.Code == http.StatusBadRequest {
+		// 409 is how the platform REST mapper sends FailedPrecondition (#665).
+		if rec.Code == http.StatusConflict {
 			return codes.FailedPrecondition
 		}
 		return codes.Unknown

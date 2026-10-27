@@ -68,14 +68,8 @@ Tests OpenFlow rule installation for different network phases:
 - `TestFlowModificationAndRemoval`: Flow lifecycle management
 - `TestVLANFlowManipulation`: VLAN-related flow operations
 
-### 5. State Transition Tests (`state_transition_integration_test.go`)
-
-Tests the policy engine state machine:
-
-- **Port State Transitions**: All valid state transitions
-- **Invalid Transition Handling**: Error handling for invalid transitions
-- **Policy Application**: State changes when policies are applied
-- **Transition Validation**: Ensures state machine constraints
+The policy engine's port state-transition tests run in memory and live in
+the unit suite, `pkg/sdn/policy/state_transition_test.go` (#964).
 
 ## Network Phases
 
@@ -137,9 +131,6 @@ cd test/integration/sdn
 
 # OpenFlow rules tests
 ./run-tests.sh flows
-
-# State transition tests
-./run-tests.sh state
 ```
 
 ### Manual OVS Setup
@@ -192,7 +183,6 @@ Tests use real OVS client connecting to:
 ### Mock Components
 
 For isolated testing, mocks are provided:
-- `MockFlowController`: In-memory flow tracking
 - `MockPolicyExtractor`: Certificate policy extraction
 - `MockCertificateValidator`: Certificate validation
 

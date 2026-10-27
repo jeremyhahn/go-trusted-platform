@@ -105,6 +105,7 @@ type testHandlerRegistry struct {
 	platformRouter        *platform.PlatformRouter
 	computeService        platformv1.ComputeServiceServer
 	dnsService            dns.DNSService
+	dnsServer             platformv1.DNSServiceServer
 	eabService            platformv1.EABServiceServer
 	ntpService            platformv1.NTPServiceServer
 	vpnService            platformv1.VPNServiceServer
@@ -230,6 +231,10 @@ func (r *testHandlerRegistry) AdminClaimRestHandler() *adminclaim.RestHandler {
 
 func (r *testHandlerRegistry) DNSService() dns.DNSService {
 	return r.dnsService
+}
+
+func (r *testHandlerRegistry) DNSServiceServer() platformv1.DNSServiceServer {
+	return r.dnsServer
 }
 
 func (r *testHandlerRegistry) DeviceService() devicepkg.DeviceService {

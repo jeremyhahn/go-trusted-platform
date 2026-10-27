@@ -415,3 +415,116 @@ func TestZoneDAO_GetByName_ListError_Mock(t *testing.T) {
 
 	require.Error(t, err)
 }
+
+func TestZoneDAO_NewZoneRecordSetReadBySecondInstance_Mock(t *testing.T) {
+	dao, mock := setupMockZoneDAO(t)
+	defer mock.Stop(context.Background())
+
+	ctx := context.Background()
+	zone := &entities.Zone{
+		Name:        "recordset-test.com.",
+		TTL:         3600,
+		Description: "Zone with multiple record types",
+		Internal:    true,
+		RecordSet: entities.RecordSet{
+			SOARecord: entities.SOARecord{
+				Name:       "recordset-test.com.",
+				MName:      "ns1.recordset-test.com.",
+				RName:      "admin.recordset-test.com.",
+				Serial:     2024010101,
+				Refresh:    7200,
+				Retry:      3600,
+				Expire:     1209600,
+				MinimumTTL: 86400,
+				TTL:        3600,
+			},
+			ARecords: []*entities.ARecord{
+				{Name: "www", Value: "192.168.1.1", TTL: 300},
+				{Name: "api", Value: "192.168.1.2", TTL: 300},
+			},
+			AAAARecords: []*entities.AAAARecord{
+				{Name: "www", Value: "2001:db8::1", TTL: 300},
+			},
+			CNAMERecords: []*entities.CNAMERecord{
+				{Name: "blog", Value: "www.recordset-test.com.", TTL: 300},
+			},
+			MXRecords: []*entities.MXRecord{
+				{Name: "recordset-test.com.", Value: "mail.recordset-test.com.", Priority: 10, TTL: 3600},
+			},
+			TXTRecords: []*entities.TXTRecord{
+				{Name: "recordset-test.com.", Value: "v=spf1 include:_spf.example.com ~all", TTL: 3600},
+			},
+			NSRecords: []*entities.NSRecord{
+				{Name: "recordset-test.com.", Value: "ns1.recordset-test.com.", TTL: 86400},
+				{Name: "recordset-test.com.", Value: "ns2.recordset-test.com.", TTL: 86400},
+			},
+		},
+	}
+	assert.Zero(t, zone.ID)
+	require.NoError(t, dao.Save(ctx, zone))
+	assert.NotZero(t, zone.ID, "ID should be auto-generated")
+
+	// A DAO opened later over the same store reads the zone and every record type back.
+	dao2 := NewZoneDAO(mock, logging.DefaultLogger(), WithRequestTimeout(5*time.Second))
+	retrieved, err := dao2.Get(ctx, zone.ID)
+	require.NoError(t, err)
+	assert.Equal(t, zone.Name, retrieved.Name)
+	assert.Equal(t, zone.TTL, retrieved.TTL)
+	assert.Equal(t, zone.Description, retrieved.Description)
+	assert.True(t, retrieved.Internal)
+
+	assert.Equal(t, zone.RecordSet.SOARecord.MName, retrieved.RecordSet.SOARecord.MName)
+	assert.Equal(t, zone.RecordSet.SOARecord.RName, retrieved.RecordSet.SOARecord.RName)
+	assert.Equal(t, zone.RecordSet.SOARecord.Serial, retrieved.RecordSet.SOARecord.Serial)
+	require.Len(t, retrieved.RecordSet.ARecords, 2)
+	assert.Equal(t, "www", retrieved.RecordSet.ARecords[0].Name)
+	assert.Equal(t, "192.168.1.1", retrieved.RecordSet.ARecords[0].Value)
+	require.Len(t, retrieved.RecordSet.AAAARecords, 1)
+	assert.Equal(t, "2001:db8::1", retrieved.RecordSet.AAAARecords[0].Value)
+	require.Len(t, retrieved.RecordSet.CNAMERecords, 1)
+	assert.Equal(t, "blog", retrieved.RecordSet.CNAMERecords[0].Name)
+	require.Len(t, retrieved.RecordSet.MXRecords, 1)
+	assert.Equal(t, uint16(10), retrieved.RecordSet.MXRecords[0].Priority)
+	require.Len(t, retrieved.RecordSet.TXTRecords, 1)
+	assert.Contains(t, retrieved.RecordSet.TXTRecords[0].Value, "v=spf1")
+	assert.Len(t, retrieved.RecordSet.NSRecords, 2)
+
+	byName, err := dao2.GetByName(ctx, "recordset-test.com.")
+	require.NoError(t, err)
+	assert.Equal(t, zone.ID, byName.ID)
+}
+
+func TestZoneDAO_AddRemoveARecordPersists_Mock(t *testing.T) {
+	dao, mock := setupMockZoneDAO(t)
+	defer mock.Stop(context.Background())
+
+	ctx := context.Background()
+	zone := &entities.Zone{
+		Name: "modify-records.com.",
+		TTL:  3600,
+		RecordSet: entities.RecordSet{
+			ARecords: []*entities.ARecord{
+				{Name: "www.modify-records.com.", Value: "192.168.1.10", TTL: 3600},
+				{Name: "mail.modify-records.com.", Value: "192.168.1.20", TTL: 3600},
+			},
+		},
+	}
+	require.NoError(t, dao.Save(ctx, zone))
+
+	zone.AddARecord(&entities.ARecord{Name: "new-host", Value: "192.168.1.200", TTL: 600})
+	require.NoError(t, dao.Save(ctx, zone))
+
+	retrieved, err := dao.Get(ctx, zone.ID)
+	require.NoError(t, err)
+	assert.Len(t, retrieved.RecordSet.ARecords, 3)
+
+	zone.RemoveARecord("www.modify-records.com.")
+	require.NoError(t, dao.Save(ctx, zone))
+
+	retrieved, err = dao.Get(ctx, zone.ID)
+	require.NoError(t, err)
+	require.Len(t, retrieved.RecordSet.ARecords, 2)
+	for _, record := range retrieved.RecordSet.ARecords {
+		assert.NotEqual(t, "www.modify-records.com.", record.Name)
+	}
+}

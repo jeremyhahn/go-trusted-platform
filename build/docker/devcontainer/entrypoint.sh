@@ -184,15 +184,12 @@ start_web_dev() {
 
     # Wait for server to be ready
     echo "Waiting for Next.js dev server to be ready..."
-    for i in $(seq 1 60); do
-        if curl -s http://localhost:3000 > /dev/null 2>&1; then
-            echo "Next.js dev server started successfully (PID: $NEXTJS_PID)"
-            echo "=== Next.js Development Server Started ==="
-            cd /workspace
-            return 0
-        fi
-        sleep 2
-    done
+    if wait_for 120 "Next.js dev server on http://localhost:3000" curl -s http://localhost:3000; then
+        echo "Next.js dev server started successfully (PID: $NEXTJS_PID)"
+        echo "=== Next.js Development Server Started ==="
+        cd /workspace
+        return 0
+    fi
 
     echo "WARNING: Next.js dev server not ready after 120 seconds"
     echo "Check logs at /var/log/nextjs-dev.log"
@@ -308,21 +305,18 @@ start_platformd() {
 
     # Wait for socket to be ready
     echo "Waiting for platform daemon to be ready..."
-    for i in $(seq 1 30); do
-        if [ -S "${PLATFORM_SOCKET_PATH:-/run/platformd.sock}" ]; then
-            echo "Platform daemon started successfully (PID: $PLATFORMD_PID)"
-            echo "=== Platform Daemon Started ==="
-            return 0
-        fi
-        sleep 1
-    done
+    local socket="${PLATFORM_SOCKET_PATH:-/run/platformd.sock}"
+    if wait_for 30 "platformd socket ${socket}" test -S "$socket"; then
+        echo "Platform daemon started successfully (PID: $PLATFORMD_PID)"
+        echo "=== Platform Daemon Started ==="
+        return 0
+    fi
 
     echo "WARNING: Platform daemon socket not ready after 30 seconds"
     echo "=== Platform Daemon Start May Have Failed ==="
     return 1
 }
 
-# Start platformd with swtpm for web development
 stop_platformd() {
     echo "=== Stopping Platform Daemon ==="
     if [ -f /run/platformd.pid ]; then

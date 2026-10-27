@@ -16,11 +16,13 @@ package vpn
 import (
 	"context"
 	"errors"
+	"net/netip"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gopkg.in/yaml.v3"
 )
 
 func TestConfig_DefaultsAndValidation(t *testing.T) {
@@ -39,16 +41,25 @@ func TestConfig_DefaultsAndValidation(t *testing.T) {
 		mutate func(c *Config)
 		field  string
 	}{
-		"port":               {func(c *Config) { c.Listener.Port = 70000 }, "listener.port"},
-		"unknown data plane": {func(c *Config) { c.DataPlanes = []DataPlaneKind{"carrier-pigeon"} }, "data-planes"},
-		"duplicate plane":    {func(c *Config) { c.DataPlanes = []DataPlaneKind{DataPlaneMASQUE, DataPlaneMASQUE} }, "data-planes"},
-		"no pool":            {func(c *Config) { c.Pool = "" }, "pool"},
-		"ttl too short":      {func(c *Config) { c.LeaseTTL = time.Minute }, "lease-ttl"},
-		"ttl too long":       {func(c *Config) { c.LeaseTTL = 48 * time.Hour }, "lease-ttl"},
-		"renew window":       {func(c *Config) { c.RenewWindow = c.LeaseTTL }, "renew-window"},
-		"nonce ttl":          {func(c *Config) { c.NonceTTL = 48 * time.Hour }, "nonce-ttl"},
-		"no zones":           {func(c *Config) { c.AllowTo = nil }, "allow-to"},
-		"empty zone":         {func(c *Config) { c.AllowTo = []string{""} }, "allow-to"},
+		"port":                {func(c *Config) { c.Listener.Port = 70000 }, "listener.port"},
+		"unknown data plane":  {func(c *Config) { c.DataPlanes = []DataPlaneKind{"carrier-pigeon"} }, "data-planes"},
+		"duplicate plane":     {func(c *Config) { c.DataPlanes = []DataPlaneKind{DataPlaneMASQUE, DataPlaneMASQUE} }, "data-planes"},
+		"no pool":             {func(c *Config) { c.Pool = "" }, "pool"},
+		"ttl too short":       {func(c *Config) { c.LeaseTTL = time.Minute }, "lease-ttl"},
+		"ttl too long":        {func(c *Config) { c.LeaseTTL = 48 * time.Hour }, "lease-ttl"},
+		"renew window":        {func(c *Config) { c.RenewWindow = c.LeaseTTL }, "renew-window"},
+		"nonce ttl":           {func(c *Config) { c.NonceTTL = 48 * time.Hour }, "nonce-ttl"},
+		"no zones":            {func(c *Config) { c.AllowTo = nil }, "allow-to"},
+		"empty zone":          {func(c *Config) { c.AllowTo = []string{""} }, "allow-to"},
+		"no masque template":  {func(c *Config) { c.MASQUE.Template = "" }, "masque.template"},
+		"bad template":        {func(c *Config) { c.MASQUE.Template = "https://gw/{" }, "masque.template"},
+		"template variables":  {func(c *Config) { c.MASQUE.Template = "https://gw/masque/{target}/{ipproto}/" }, "masque.template"},
+		"http template":       {func(c *Config) { c.MASQUE.Template = "http://gw/masque/" }, "masque.template"},
+		"no template host":    {func(c *Config) { c.MASQUE.Template = "https:///masque/" }, "masque.template"},
+		"no template path":    {func(c *Config) { c.MASQUE.Template = "https://gw" }, "masque.template"},
+		"no masque routes":    {func(c *Config) { c.MASQUE.Routes = nil }, "masque.routes"},
+		"invalid route":       {func(c *Config) { c.MASQUE.Routes = []netip.Prefix{{}} }, "masque.routes"},
+		"stray wireguard key": {func(c *Config) { c.WireGuard.ListenPort = 51820 }, "wireguard.listen-port"},
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -60,6 +71,60 @@ func TestConfig_DefaultsAndValidation(t *testing.T) {
 			assert.Equal(t, c.field, invalid.Field)
 		})
 	}
+}
+
+// TestConfig_PlaneKeysFollowDataPlanes pins that the `wireguard.*` and
+// `masque.*` keys are read from YAML, defaulted only for an offered plane
+// and refused for a plane the config does not offer.
+func TestConfig_PlaneKeysFollowDataPlanes(t *testing.T) {
+	t.Run("masque keys are read", func(t *testing.T) {
+		cfg := parseVPNConfig(t, `
+pool: vpn-clients
+allow-to: [management]
+data-planes: [masque]
+masque:
+  template: https://gw.example:4433/.well-known/masque/ip/
+  routes: [10.0.0.0/8, "fd00::/8"]
+`)
+		require.NoError(t, cfg.Validate())
+		assert.Equal(t, "https://gw.example:4433/.well-known/masque/ip/", cfg.MASQUE.Template)
+		assert.Equal(t, []netip.Prefix{netip.MustParsePrefix("10.0.0.0/8"), netip.MustParsePrefix("fd00::/8")}, cfg.MASQUE.Routes)
+		assert.Zero(t, cfg.WireGuard.ListenPort, "no default for a plane that is not offered")
+	})
+	t.Run("masque is the default plane and needs its keys", func(t *testing.T) {
+		cfg := parseVPNConfig(t, `
+pool: vpn-clients
+allow-to: [management]
+`)
+		assertInvalidField(t, cfg.Validate(), "masque.template")
+	})
+	t.Run("wireguard keys without the wireguard plane are refused", func(t *testing.T) {
+		cfg := testConfig()
+		cfg.WireGuard.ListenPort = 51821
+		assertInvalidField(t, cfg.WithDefaults().Validate(), "wireguard.listen-port")
+	})
+	t.Run("an invalid route in YAML is refused", func(t *testing.T) {
+		var cfg Config
+		err := yaml.Unmarshal([]byte("masque:\n  routes: [not-a-prefix]\n"), &cfg)
+		require.Error(t, err)
+	})
+}
+
+// parseVPNConfig reads a `management_vpn` body as gatewayd does and applies
+// the defaults.
+func parseVPNConfig(t *testing.T, body string) Config {
+	t.Helper()
+	var cfg Config
+	require.NoError(t, yaml.Unmarshal([]byte(body), &cfg))
+	return cfg.WithDefaults()
+}
+
+// assertInvalidField requires err to be the typed config error for field.
+func assertInvalidField(t *testing.T, err error, field string) {
+	t.Helper()
+	var invalid *ErrInvalidConfig
+	require.True(t, errors.As(err, &invalid), "got %v", err)
+	assert.Equal(t, field, invalid.Field)
 }
 
 func TestNew_RefusesInvalidConfigAndMissingDeps(t *testing.T) {

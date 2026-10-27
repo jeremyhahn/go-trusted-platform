@@ -25,6 +25,7 @@ import (
 	"github.com/jeremyhahn/go-luks2/pkg/luks2"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/daemon"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/fips"
 )
 
 // These tests drive LUKSBackend against a LUKS2 header formatted into a
@@ -491,6 +492,20 @@ func TestLUKSBackend_EnrollRecovery(t *testing.T) {
 	}
 	if res.Slot != 1 || !keyslotIDs(t, device)[1] {
 		t.Fatalf("EnrollRecovery slot = %d, want the new slot 1", res.Slot)
+	}
+	// In FIPS mode the recovery keyslot must use an approved KDF; outside it
+	// go-luks2's argon2id default stands.
+	wantKDF := "argon2id"
+	if luksFIPSActive() {
+		wantKDF = fips.KDFPBKDF2
+	}
+	_, metadata, err := luks2.ReadHeader(device)
+	if err != nil {
+		t.Fatalf("read header: %v", err)
+	}
+	slot := metadata.Keyslots[strconv.Itoa(int(res.Slot))]
+	if slot == nil || slot.KDF == nil || slot.KDF.Type != wantKDF {
+		t.Fatalf("recovery keyslot %d KDF = %+v, want type %q", res.Slot, slot, wantKDF)
 	}
 	// The dashed format groups the key with '-' separators for the operator.
 	if !bytes.Contains([]byte(res.RecoveryKey), []byte("-")) {

@@ -571,6 +571,7 @@ PUT /api/v1/device/profiles/{id:[0-9]+}
 PUT /api/v1/device/templates/{id:[0-9]+}
 PUT /api/v1/devices/{id:[0-9]+}
 PUT /api/v1/dns/zones/{zone}
+PUT /api/v1/dns/zones/{zone}/records
 PUT /api/v1/gateway/vpn-leases/{id}
 PUT /api/v1/iam/apps/{id}
 PUT /api/v1/iam/groups/{id}
