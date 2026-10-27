@@ -39,6 +39,12 @@ type sdkCall struct {
 // handler in desc, the path a direct gRPC call takes once the request is
 // decoded.
 func invokeGRPCMethod(desc *grpc.ServiceDesc, server any, method string, req proto.Message) (proto.Message, error) {
+	return invokeGRPCMethodContext(context.Background(), desc, server, method, req)
+}
+
+// invokeGRPCMethodContext is invokeGRPCMethod with the caller's context, for
+// a method whose service reads the connection from it.
+func invokeGRPCMethodContext(ctx context.Context, desc *grpc.ServiceDesc, server any, method string, req proto.Message) (proto.Message, error) {
 	for _, md := range desc.Methods {
 		if "/"+desc.ServiceName+"/"+md.MethodName != method {
 			continue
@@ -47,7 +53,7 @@ func invokeGRPCMethod(desc *grpc.ServiceDesc, server any, method string, req pro
 			proto.Merge(in.(proto.Message), req)
 			return nil
 		}
-		resp, err := md.Handler(server, context.Background(), decode, nil)
+		resp, err := md.Handler(server, ctx, decode, nil)
 		if err != nil {
 			return nil, err
 		}

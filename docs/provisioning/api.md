@@ -88,7 +88,7 @@ comes back.
 **`WebhookComplete` is an input, not a truth.** It is the machine reporting that
 installation finished; the state machine decides what that means. Its REST route
 is registered only when `pxe.ServiceConfig.WebhookEnabled` is true (default
-false), and is then unauthenticated — see [`docs/ipxe/api.md`](../ipxe/api.md)
+false), and the node then authenticates by its mTLS device certificate — see [`docs/ipxe/api.md`](../ipxe/api.md)
 §4 and #238.
 
 ---
@@ -180,7 +180,7 @@ request is the body. The webservice routes
 |---|---|---|---|
 | `RegisterPXEDevice` | `POST /api/v1/provisioning/devices/{mac}/register` | admin role + `provisioning:write` | `PXEService.RegisterDevice`; a known MAC answers `200` with its ID and `already_registered`, a new one `201` |
 | `ReportDeviceState` | `POST /api/v1/provisioning/devices/{mac}/state` | admin role + `provisioning:write` | `PXEService.GetDeviceByMAC`, then `UpdateState`; `state` is a `ProvisioningState` name without its prefix (`booting`) |
-| `NotifyInstallComplete` | `POST /api/v1/provisioning/devices/{mac}/install-complete` | admin role + `provisioning:write` | `PXEService.WebhookComplete`; `status` is `success` or `failure` |
+| `NotifyInstallComplete` | `POST /api/v1/provisioning/devices/{mac}/install-complete` | admin role + `provisioning:write` | `PXEService.GetDeviceByMAC`, then `UpdateState` to `INSTALL_COMPLETE` (`success`) or `FAILED` (`failure`) |
 | `GetBootConfig` | none | — | no per-MAC boot configuration exists in platformd to answer it from; the SDK's `GET /api/v1/provisioning/devices/{mac}/boot-config` claim stays in the route ledger |
 
 An unknown MAC answers `404`, a bad `state` or `status` `400`, a transition the
@@ -188,10 +188,10 @@ PXE service refuses (`FailedPrecondition`) `409` (#665), and a token without
 `provisioning:write` `403`. Under the legacy JWT handler the role gate
 alone applies.
 
-`NotifyInstallComplete` is the same operation as the booting node's
-`POST /api/v1/pxe/webhook/complete`. That webhook presents no credential
-(#238). The gateway route is not a second open path: it takes the admin gate
-and the scope. The EAB check was not used, because it authenticates a device
+`NotifyInstallComplete` records the same outcome as the booting node's
+`POST /api/v1/pxe/webhook/complete`, but through the operator RPCs: the webhook
+needs the node's own mTLS device certificate (#238), which a gateway does not
+hold. The gateway route takes the admin gate and the scope. The EAB check was not used, because it authenticates a device
 on its own first contact, not a gateway reporting on a device.
 
 **Note the near-duplicate naming.** `ProvisioningGateway.RegisterPXEDevice` and

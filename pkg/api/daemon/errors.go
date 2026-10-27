@@ -478,6 +478,42 @@ func (e ErrClientCertRequired) Error() string {
 	return "a verified client certificate is required for " + e.Operation
 }
 
+// ErrPXEWebhookIdentityRequired is returned when the PXE install-completion
+// webhook arrives without a verified device certificate: over plain TCP, the
+// Unix socket, MCP stdio, the embedded transport, or with an unverified chain.
+type ErrPXEWebhookIdentityRequired struct {
+	Transport string
+	Reason    string
+}
+
+func (e ErrPXEWebhookIdentityRequired) Error() string {
+	return "pxe webhook over " + e.Transport + " requires a verified device certificate: " + e.Reason
+}
+
+// ErrPXEWebhookUnknownIdentity is returned when the webhook's verified
+// certificate is not the enrolled certificate of exactly one PXE device.
+type ErrPXEWebhookUnknownIdentity struct {
+	CertificateSerial string
+	Matches           int
+}
+
+func (e ErrPXEWebhookUnknownIdentity) Error() string {
+	return fmt.Sprintf("pxe webhook certificate serial %s is enrolled on %d devices, want exactly 1",
+		e.CertificateSerial, e.Matches)
+}
+
+// ErrPXEWebhookIdentityMismatch is returned when the webhook body names a MAC
+// address other than that of the device the verified certificate belongs to.
+type ErrPXEWebhookIdentityMismatch struct {
+	CertificateSerial string
+	MACAddress        string
+}
+
+func (e ErrPXEWebhookIdentityMismatch) Error() string {
+	return "pxe webhook body MAC " + e.MACAddress +
+		" is not the device of certificate serial " + e.CertificateSerial
+}
+
 // ErrQUICHandlerPanic is returned when a handler sub-function panics.
 // The recover() guard in QUICServiceHandler.HandleRequest catches the panic,
 // logs a stack trace, and converts it to a StatusInternalError response so the

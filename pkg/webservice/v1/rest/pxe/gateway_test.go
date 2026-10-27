@@ -95,19 +95,6 @@ func (f *fakePXE) UpdateState(_ context.Context, req *platformv1.UpdatePXEStateR
 	return nil, status.Error(codes.NotFound, "device not found")
 }
 
-func (f *fakePXE) WebhookComplete(_ context.Context, req *platformv1.PXEWebhookCompleteRequest) (*platformv1.PXEWebhookCompleteResponse, error) {
-	f.calls++
-	device, ok := f.devices[req.GetMacAddress()]
-	if !ok {
-		return nil, status.Error(codes.NotFound, "device not found")
-	}
-	device.State = platformv1.ProvisioningState_PROVISIONING_STATE_FAILED
-	if req.GetSuccess() {
-		device.State = platformv1.ProvisioningState_PROVISIONING_STATE_INSTALL_COMPLETE
-	}
-	return &platformv1.PXEWebhookCompleteResponse{}, nil
-}
-
 // scopeGrant lets a request through only when the route asks for the one
 // scope it grants.
 type scopeGrant struct {

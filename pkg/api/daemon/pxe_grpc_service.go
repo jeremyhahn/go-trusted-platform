@@ -14,10 +14,13 @@
 package daemon
 
 import (
+	"bytes"
 	"context"
+	"net"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/compute/pxe"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/tlspeer"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 
 	"google.golang.org/grpc/codes"
@@ -482,16 +485,10 @@ func (s *PXEGRPCService) WebhookComplete(ctx context.Context, req *platformv1.PX
 		return nil, err
 	}
 
-	macAddress := req.GetMacAddress()
-	if macAddress == "" {
-		return nil, status.Error(codes.InvalidArgument, "MAC address is required")
-	}
-
-	// Get device by MAC address
-	device, err := s.pxeService.GetDeviceByMAC(ctx, macAddress)
+	device, err := s.webhookDevice(ctx, req.GetMacAddress())
 	if err != nil {
-		s.logger.Error(err, "Webhook received for unknown device", "mac_address", macAddress)
-		return nil, s.mapPXEError(err, "get device for webhook")
+		s.logger.Error(err, "Refused PXE webhook", "mac_address", req.GetMacAddress())
+		return nil, err
 	}
 
 	var newState pxe.ProvisioningState
@@ -518,7 +515,7 @@ func (s *PXEGRPCService) WebhookComplete(ctx context.Context, req *platformv1.PX
 
 	s.logger.Info("Webhook processed",
 		"device_id", device.ID,
-		"mac_address", macAddress,
+		"mac_address", device.MACAddress.String(),
 		"hostname", req.GetHostname(),
 		"success", req.GetSuccess(),
 	)
@@ -529,6 +526,52 @@ func (s *PXEGRPCService) WebhookComplete(ctx context.Context, req *platformv1.PX
 			Message: "webhook processed successfully",
 		},
 	}, nil
+}
+
+// webhookDevice returns the device the install-completion webhook is from.
+// The identity is the verified client certificate of the connection (#238),
+// resolved the same way on every transport by requestChannel; the device is
+// the one whose enrolled certificate serial (SetDeviceEnrolled) is the leaf's
+// serial in decimal. The body MAC is never an identity: when present it must
+// be that device's MAC. A connection without a verified certificate is
+// Unauthenticated; an unenrolled certificate or a mismatched MAC is
+// PermissionDenied. Every refusal happens before any state is written.
+func (s *PXEGRPCService) webhookDevice(ctx context.Context, bodyMAC string) (*pxe.DeviceInfo, error) {
+	state, transport := requestChannel(ctx)
+	leaf, err := tlspeer.VerifiedLeaf(state)
+	if err != nil {
+		return nil, status.Error(codes.Unauthenticated,
+			ErrPXEWebhookIdentityRequired{Transport: transport, Reason: err.Error()}.Error())
+	}
+	if leaf.SerialNumber == nil {
+		return nil, status.Error(codes.Unauthenticated,
+			ErrPXEWebhookIdentityRequired{Transport: transport, Reason: "the verified certificate has no serial number"}.Error())
+	}
+
+	serial := leaf.SerialNumber.String()
+	devices, err := s.pxeService.ListDevices(ctx, &pxe.DeviceFilter{CertificateSerial: serial})
+	if err != nil {
+		return nil, s.mapPXEError(err, "find device for webhook")
+	}
+	if len(devices) != 1 {
+		return nil, status.Error(codes.PermissionDenied,
+			ErrPXEWebhookUnknownIdentity{CertificateSerial: serial, Matches: len(devices)}.Error())
+	}
+	device := devices[0]
+
+	if bodyMAC == "" {
+		return device, nil
+	}
+	mac, err := net.ParseMAC(bodyMAC)
+	if err != nil {
+		return nil, status.Error(codes.InvalidArgument,
+			pxe.ErrInvalidMACAddress{MACAddress: bodyMAC, Reason: err.Error()}.Error())
+	}
+	if !bytes.Equal(mac, device.MACAddress) {
+		return nil, status.Error(codes.PermissionDenied,
+			ErrPXEWebhookIdentityMismatch{CertificateSerial: serial, MACAddress: bodyMAC}.Error())
+	}
+	return device, nil
 }
 
 // =============================================================================

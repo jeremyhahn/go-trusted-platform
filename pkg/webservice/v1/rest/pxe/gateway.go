@@ -47,6 +47,11 @@ const (
 	installSuccess = "success"
 	installFailure = "failure"
 
+	// The reasons an install outcome records on the device, as the node's
+	// own webhook records them.
+	installCompleteReason = "OS installation completed successfully"
+	installFailedReason   = "OS installation failed"
+
 	// provisioningStatePrefix turns a reported state ("booting") into its
 	// ProvisioningState enum name ("PROVISIONING_STATE_BOOTING").
 	provisioningStatePrefix = "PROVISIONING_STATE_"
@@ -127,26 +132,38 @@ func (r *PXERouter) reportDeviceState(w http.ResponseWriter, req *http.Request) 
 		r.respWriter.Error400(w, req, err)
 		return
 	}
-	device, err := r.server.GetDeviceByMAC(req.Context(), &platformv1.GetPXEDeviceByMACRequest{MacAddress: mux.Vars(req)["mac"]})
-	if err != nil {
-		protorest.WriteError(w, req, r.respWriter, err)
-		return
-	}
-	if _, err := r.server.UpdateState(req.Context(), &platformv1.UpdatePXEStateRequest{
-		DeviceId: device.GetDevice().GetId(),
-		State:    state,
-		Reason:   pbReq.GetReason(),
-	}); err != nil {
-		protorest.WriteError(w, req, r.respWriter, err)
+	if !r.updateStateByMAC(w, req, state, pbReq.GetReason()) {
 		return
 	}
 	protorest.WriteSuccess(w, req, r.respWriter, &platformv1.ReportDeviceStateResponse{})
 }
 
-// notifyInstallComplete serves NotifyInstallComplete. It is the operation
-// the booting node's /pxe/webhook/complete performs, relayed by a gateway
-// that holds the admin role and provisioning:write — it does not open the
-// uncredentialed path #238 tracks.
+// updateStateByMAC moves the device the path's {mac} names to state, through
+// the operator RPCs the gateway's admin role and provisioning:write admit. It
+// writes the error response and returns false when either call fails.
+func (r *PXERouter) updateStateByMAC(w http.ResponseWriter, req *http.Request, state platformv1.ProvisioningState, reason string) bool {
+	device, err := r.server.GetDeviceByMAC(req.Context(), &platformv1.GetPXEDeviceByMACRequest{MacAddress: mux.Vars(req)["mac"]})
+	if err != nil {
+		protorest.WriteError(w, req, r.respWriter, err)
+		return false
+	}
+	if _, err := r.server.UpdateState(req.Context(), &platformv1.UpdatePXEStateRequest{
+		DeviceId: device.GetDevice().GetId(),
+		State:    state,
+		Reason:   reason,
+	}); err != nil {
+		protorest.WriteError(w, req, r.respWriter, err)
+		return false
+	}
+	return true
+}
+
+// notifyInstallComplete serves NotifyInstallComplete: a gateway that holds the
+// admin role and provisioning:write reports the outcome of a node's install,
+// naming the node by MAC. It records the same state change as the node's own
+// /pxe/webhook/complete, but through the operator RPCs: the webhook takes the
+// node's identity from the node's mTLS certificate (#238), which a relaying
+// gateway does not hold.
 func (r *PXERouter) notifyInstallComplete(w http.ResponseWriter, req *http.Request) {
 	if !r.ensure(w, req) {
 		return
@@ -161,11 +178,11 @@ func (r *PXERouter) notifyInstallComplete(w http.ResponseWriter, req *http.Reque
 		r.respWriter.Error400(w, req, &ErrInvalidInstallStatus{Status: outcome})
 		return
 	}
-	if _, err := r.server.WebhookComplete(req.Context(), &platformv1.PXEWebhookCompleteRequest{
-		MacAddress: mux.Vars(req)["mac"],
-		Success:    outcome == installSuccess,
-	}); err != nil {
-		protorest.WriteError(w, req, r.respWriter, err)
+	state, reason := platformv1.ProvisioningState_PROVISIONING_STATE_FAILED, installFailedReason
+	if outcome == installSuccess {
+		state, reason = platformv1.ProvisioningState_PROVISIONING_STATE_INSTALL_COMPLETE, installCompleteReason
+	}
+	if !r.updateStateByMAC(w, req, state, reason) {
 		return
 	}
 	protorest.WriteSuccess(w, req, r.respWriter, &platformv1.NotifyInstallCompleteResponse{})

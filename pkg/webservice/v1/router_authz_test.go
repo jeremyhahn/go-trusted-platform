@@ -333,7 +333,8 @@ func newGatedTestRouter(t *testing.T, registry *testHandlerRegistry) *mux.Router
 	registry.configDelivery = &stubConfigDelivery{}
 	registry.pxeService = &stubPXEServer{}
 	// The audit covers every route the platform can serve, so it mounts
-	// the install-completion webhook too; operators turn it on (#238).
+	// the install-completion webhook too, which operators turn on. It must
+	// refuse a caller with no verified device certificate (#238).
 	registry.pxeWebhookEnabled = true
 	registry.attestationService = &stubAttestationServer{}
 	registry.deviceGRPCService = &stubDeviceGRPCServer{}
@@ -561,16 +562,6 @@ var pendingRoutes = map[string]string{
 	// only on the provisioning surface, never on the full one (#177).
 	"POST /api/v1/devices/templates":                            "#121/#176 — bootstrap seeder; ruled to present admin@system over mTLS.",
 	"POST /api/v1/devices/templates/{id:[0-9]+}/create-profile": "#121/#176 — bootstrap seeder; ruled to present admin@system over mTLS. Hidden from the audit until #420 made the probe pattern-aware.",
-
-	// NOT justified — an open defect, listed here rather than in
-	// publicRoutes precisely because it is not defensible. Its caller is a
-	// booting node, but unlike every other machine-facing route this
-	// campaign left open it presents NO credential and the server checks
-	// none: the device is identified by a MAC address taken from the request
-	// body. Choosing what a booting node should present is an architecture
-	// decision, so #165 could not close it. See #238. Until then it is
-	// mounted only when the operator sets pxe.ServiceConfig.WebhookEnabled.
-	"POST /api/v1/pxe/webhook/complete": "#238 — authenticates nobody; identifies the device by an attacker-supplied MAC.",
 
 	// /provisioning was split by principal in slice 3: the session views and
 	// fulfilment took the admin gate, and these stay open because a machine at

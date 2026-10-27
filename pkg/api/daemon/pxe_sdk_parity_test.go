@@ -15,6 +15,8 @@ package daemon
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"fmt"
 	"net"
 	"path"
@@ -31,6 +33,7 @@ import (
 	grpcapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/compute/pxe"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/testutil"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
 
@@ -351,8 +354,21 @@ func pxeSDKRequests() map[string]proto.Message {
 
 // invokePXEServer calls method on server directly, as a gRPC caller reaches
 // it once authorized.
-func invokePXEServer(server platformv1.PXEServiceServer, method string, req proto.Message) (proto.Message, error) {
-	return invokeGRPCMethod(&platformv1.PXEService_ServiceDesc, server, method, req)
+func invokePXEServer(t *testing.T, server platformv1.PXEServiceServer, method string, req proto.Message) (proto.Message, error) {
+	t.Helper()
+	return invokeGRPCMethodContext(grpcContext(pxeSDKClientState(t)), &platformv1.PXEService_ServiceDesc, server, method, req)
+}
+
+// pxeSDKClientState is the TLS state of a gRPC connection from the client the
+// SDK transports present: testutil's client certificate, verified. The
+// webhook takes the node's identity from it (#238), so the direct call and
+// the SDK call look up the same certificate serial.
+func pxeSDKClientState(t *testing.T) *tls.ConnectionState {
+	t.Helper()
+	bundle := testutil.GenerateTestTLSBundle(t)
+	leaf, err := x509.ParseCertificate(bundle.ClientCert.Certificate[0])
+	require.NoError(t, err)
+	return &tls.ConnectionState{VerifiedChains: [][]*x509.Certificate{{leaf, bundle.CACert}}}
 }
 
 // testSDKPXEMethods drives every PXEService method through connect, as a
@@ -367,7 +383,7 @@ func testSDKPXEMethods(t *testing.T, transport string, connect pxeSDKConnect) {
 	for method, req := range requests {
 		t.Run(path.Base(method), func(t *testing.T) {
 			direct := newPXESDKFixture()
-			want, err := invokePXEServer(direct.server, method, req)
+			want, err := invokePXEServer(t, direct.server, method, req)
 			require.NoError(t, err)
 
 			via := newPXESDKFixture()
@@ -447,7 +463,7 @@ func testSDKPXERefusesNotFound(t *testing.T, transport string, connect pxeSDKCon
 		t.Run(tc.class+" of a device not found", func(t *testing.T) {
 			direct := newPXESDKFixture()
 			direct.svc.missing = true
-			_, err := invokePXEServer(direct.server, tc.method, req)
+			_, err := invokePXEServer(t, direct.server, tc.method, req)
 			require.Equal(t, codes.NotFound, status.Code(err), "gRPC: %v", err)
 
 			via := newPXESDKFixture()

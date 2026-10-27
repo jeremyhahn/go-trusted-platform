@@ -1033,7 +1033,7 @@ type RegistryParams struct {
 	OverlayServiceServer     platformv1.OverlayServiceServer
 	PXEServiceServer         platformv1.PXEServiceServer
 	// PXEWebhookEnabled is pxe.ServiceConfig.WebhookEnabled: it mounts the
-	// unauthenticated POST /pxe/webhook/complete (#238). Nothing in the
+	// mTLS-authenticated POST /pxe/webhook/complete (#238). Nothing in the
 	// daemon sets it today, so the route is not served.
 	PXEWebhookEnabled bool
 	NTPServiceServer  platformv1.NTPServiceServer

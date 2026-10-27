@@ -166,6 +166,11 @@ type DeviceFilter struct {
 	// VLAN filters by current VLAN assignment
 	VLAN uint16 `json:"vlan,omitempty" yaml:"vlan,omitempty"`
 
+	// CertificateSerial filters by the enrolled certificate serial (exact
+	// match). The install-completion webhook finds the calling node's record
+	// by the serial of its verified client certificate.
+	CertificateSerial string `json:"certificate_serial,omitempty" yaml:"certificate_serial,omitempty"`
+
 	// Limit is the maximum number of results to return
 	Limit int `json:"limit,omitempty" yaml:"limit,omitempty"`
 
@@ -191,6 +196,10 @@ func (f *DeviceFilter) Matches(device *DeviceInfo) bool {
 	}
 
 	if f.VLAN != 0 && device.CurrentVLAN != f.VLAN {
+		return false
+	}
+
+	if f.CertificateSerial != "" && device.CertificateSerial != f.CertificateSerial {
 		return false
 	}
 

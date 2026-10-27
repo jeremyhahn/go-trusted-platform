@@ -842,7 +842,7 @@ gated. In every case the giveaway was reading the **handler**, not the prefix.
 | `/gateway` | `/gateway/telemetry`, `/gateway/desired-config/{id}`, `/gateway/vpn-leases/**` | A **verified mTLS client certificate**, bound to `gateway_id` |
 | `/provisioning` | `/provisioning/{config,config/nonce,sign}` | **EAB**, plus the EK for the signing route |
 | `/invitations` | `/invitations/{accept,token/{token}}` | The **invitation token itself** — an invitee has no session by construction |
-| `/pxe` | `/pxe/webhook/complete` | **Nothing, and nothing is checked** — see #238 |
+| `/pxe` | `/pxe/webhook/complete` | A **verified mTLS client certificate**, bound to the registered device by its serial (#238) |
 
 **Two of these would have caused an outage** had the prefix been gated:
 `/gateway` stops every gateway in the fleet reporting, and `/invitations`
@@ -1100,7 +1100,7 @@ all three routers carry a half whose caller has no operator session.
 |---|---|---|
 | `invitation` | list, create, read, delete, revoke | `GET /invitations/token/{token}`, `POST /invitations/accept` — **the invitation token is the credential**; the invitee has no session, which is the point of an invitation |
 | `device` | device and profile CRUD, templates, profile assignment, provisioning **session** views and fulfilment | `/device/{profile,activate,heartbeat}` — **verified mTLS client certificate**; `/provisioning/{config,config/nonce}` — **EAB**; `/provisioning/sign` — **EAB + EK**; `/provisioning/sessions/{id}/poll` — polled by the client while it waits |
-| `pxe` | service start/stop/status, and the device lifecycle including **authorize**, **quarantine**, **retry** and the provisioning-state write | `POST /pxe/webhook/complete` — **nothing, and nothing is checked**; see below |
+| `pxe` | service start/stop/status, and the device lifecycle including **authorize**, **quarantine**, **retry** and the provisioning-state write | `POST /pxe/webhook/complete` — **verified mTLS client certificate**, bound to the registered device; see below |
 
 Two of these are worth stating plainly.
 
@@ -1109,15 +1109,16 @@ Two of these are worth stating plainly.
 one, which decides what configuration that machine boots with. It is now
 `admin`.
 
-**The PXE webhook is the one route this campaign left open without being able
-to justify it.** Its caller is a booting node, so it cannot take a role gate —
-but unlike every other machine-facing route above, it presents no credential
-and the server checks none: the device is identified by a MAC address taken
-from the request body, and `pkg/compute/pxe/config.go` *requires* a
-`WebhookSecret` described as the HMAC secret for webhook authentication that
-nothing ever reads. Choosing what a booting node should present is an
-architecture decision, so it is recorded in `pendingRoutes` as an open defect
-rather than in the public list as a justified exception. **#238.**
+**The PXE webhook authenticates the node by its device certificate (#238).**
+Its caller is a booting node, so it cannot take a role gate. It presents the
+device certificate it was enrolled with over mTLS instead: the handler takes
+the leaf of the **verified** client chain (never the unverified peer
+certificates), finds the one registered device carrying that serial, and
+refuses a request body whose MAC is not that device's. No verified certificate
+is 401; a certificate no device carries, or a mismatched MAC, is 403. Unix,
+MCP stdio and the embedded transport carry no peer certificate and refuse the
+call. The route is still mounted only when `pxe.ServiceConfig.WebhookEnabled`
+is true (default false).
 
 #### #171: the unverified decoders are deleted, not corrected
 
@@ -1141,17 +1142,16 @@ a different carrier.
 ### What is NOT gated yet, and why
 
 Measured from the built route table (#165, #420) rather than
-from this section's earlier prose, which had gone stale twice: **seven routes
-answer a request carrying no credential** when every optional route is mounted
-(eight until #177 took `GET /devices/config` off the table), and six by
-default, because the PXE webhook is mounted only when enabled (#238). Every
+from this section's earlier prose, which had gone stale twice: **six routes
+answer a request carrying no credential** (eight until #177 took
+`GET /devices/config` off the table, seven until #238 made the PXE webhook
+refuse a caller with no verified device certificate). Every
 one is either blocked on a decision that is not a lane's or authenticated in
 its handler by design.
 
 | Routes | Why they are open | Blocker / mechanism |
 |---|---|---|
 | `POST /devices/templates`, `POST /devices/templates/{id}/create-profile` | bootstrap seeder (`pkg/webservice/v1/rest/device`); presents `admin@system` over **mTLS** (#121/#176) | go-quicbaas#376 → #28 (SDK bump), then #176 |
-| `POST /pxe/webhook/complete` | authenticates nobody; identifies the device by a MAC from the request body; registered only when `pxe.ServiceConfig.WebhookEnabled` is true (default false) | #238 — what a booting node presents is an architecture decision |
 | `POST /provisioning/config`, `GET /provisioning/config/nonce`, `POST /provisioning/sign`, `GET /provisioning/sessions/{sessionID}/poll` | a machine at boot has no operator session; EAB + single-use nonce (+ EK for signing) are verified **in the handler** (`configdelivery/service.go` `verifyNonceAndEAB`, `verifyEKBinding`; `sign.go`) | by design; what is missing is a direct assertion that the handler refuses without a valid EAB, which the deny audit cannot see |
 
 `GET /devices/config` is not in this table because no general listener mounts

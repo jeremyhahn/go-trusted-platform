@@ -68,10 +68,10 @@ func registeredPXEPaths(register func(*mux.Router)) map[string]bool {
 
 // TestRegisterMachineFacingRoutes_IsOnlyTheWebhook pins the boundary of what
 // #165 could close on this router. The webhook is the ONE PXE route with a
-// non-operator caller, and it is ungated because that caller is a booting
-// node — not because the route is safe. It presents no credential and the
-// server checks none (#238). Any other route drifting in here would be
-// published to anonymous callers with no issue tracking it.
+// non-operator caller, and it is outside the operator gate because that
+// caller is a booting node with no operator session: it authenticates by its
+// device certificate over mTLS instead (#238). Any other route drifting in
+// here would be published without the operator gate.
 func TestRegisterMachineFacingRoutes_IsOnlyTheWebhook(t *testing.T) {
 	w := response.NewResponseWriter(logging.NewLogger(slog.LevelError, io.Discard), nil)
 	r := NewPXERouter(logging.NewLogger(slog.LevelError, io.Discard), nil, w, true)
@@ -81,9 +81,9 @@ func TestRegisterMachineFacingRoutes_IsOnlyTheWebhook(t *testing.T) {
 	}, registeredPXEPaths(r.RegisterMachineFacingRoutes))
 }
 
-// TestRegisterMachineFacingRoutes_DisabledRegistersNothing pins #238: the
-// webhook is unauthenticated, so unless the operator enabled it there is
-// no route for a caller to reach.
+// TestRegisterMachineFacingRoutes_DisabledRegistersNothing checks the webhook
+// is off by default: unless the operator enabled it there is no route for a
+// caller to reach.
 func TestRegisterMachineFacingRoutes_DisabledRegistersNothing(t *testing.T) {
 	w := response.NewResponseWriter(logging.NewLogger(slog.LevelError, io.Discard), nil)
 	r := NewPXERouter(logging.NewLogger(slog.LevelError, io.Discard), nil, w, false)

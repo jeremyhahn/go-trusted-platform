@@ -17,6 +17,8 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+
+	"github.com/jeremyhahn/go-trusted-platform/pkg/tlspeer"
 )
 
 // gatewayPrincipal derives the calling gateway's authenticated identity
@@ -38,28 +40,21 @@ import (
 // put in a server certificate, which is exactly the substitution this
 // check exists to prevent. One field, no fallbacks.
 //
-// # Why VerifiedChains and not PeerCertificates
+// # The certificate is read from the verified chain only
 //
-// PeerCertificates holds whatever the peer sent, verified or not; under
-// tls.VerifyClientCertIfGiven an unverifiable certificate fails the
-// handshake, but reading PeerCertificates would still be reading an
-// attacker-controlled field under any future ClientAuth setting.
-// VerifiedChains is non-empty only after the TLS stack has built and
-// verified a chain to the configured ClientCAs, so it is the only
-// authenticated source of a peer identity. The listener is configured
-// to request the certificate in pkg/webservice/webserver_v1.go
-// (requestOptionalClientCert).
+// The certificate is the leaf tlspeer.VerifiedLeaf returns, which reads
+// VerifiedChains and never PeerCertificates; its package doc says why.
+// The listener is configured to request the certificate in
+// pkg/webservice/webserver_v1.go (requestOptionalClientCert).
 //
 // Every failure path returns an error: a request with no verified client
 // certificate has no gateway identity and is refused, never defaulted.
 func gatewayPrincipal(r *http.Request) (string, error) {
-	if r.TLS == nil {
-		return "", ErrGatewayIdentityRequired{Reason: "connection is not TLS"}
+	leaf, err := tlspeer.VerifiedLeaf(r.TLS)
+	if err != nil {
+		return "", ErrGatewayIdentityRequired{Reason: err.Error()}
 	}
-	if len(r.TLS.VerifiedChains) == 0 || len(r.TLS.VerifiedChains[0]) == 0 {
-		return "", ErrGatewayIdentityRequired{Reason: "no verified client certificate was presented"}
-	}
-	cn := r.TLS.VerifiedChains[0][0].Subject.CommonName
+	cn := leaf.Subject.CommonName
 	if cn == "" {
 		return "", ErrGatewayIdentityRequired{Reason: "client certificate carries no Common Name"}
 	}
