@@ -47,6 +47,7 @@ REST base path `/api/v1/pxe` (`pkg/webservice/v1/rest/pxe/router.go`).
 | Remove device | `DELETE /api/v1/pxe/devices/{id}` | `RemoveDevice` | `0xFF` | `pxe_remove_device` | ✅ |
 | Update state | `PUT /api/v1/pxe/devices/{id}/state` | `UpdateState` | `0xEF` | `pxe_update_state` | ✅ |
 | Set enrolled | `POST /api/v1/pxe/devices/{id}/enrolled` | `SetDeviceEnrolled` | `0xCF` / `0x31` | `pxe_set_device_enrolled` | ✅ |
+| Bind device certificate | `POST /api/v1/pxe/devices/{id}/certificate` | `BindDeviceCertificate` | `0xCF` / `0x37` | `pxe_bind_device_certificate` | ✅ |
 | **Authorize** | `POST /api/v1/pxe/devices/{id}/authorize` | `Authorize` | `0xFC` | `pxe_authorize_device` | ✅ |
 | **Quarantine** | `POST /api/v1/pxe/devices/{id}/quarantine` | `Quarantine` | `0xFD` | `pxe_quarantine_device` | ✅ |
 | Retry | `POST /api/v1/pxe/devices/{id}/retry` | `Retry` | `0xFE` | `pxe_retry_device` | ✅ |
@@ -56,8 +57,8 @@ REST base path `/api/v1/pxe` (`pkg/webservice/v1/rest/pxe/router.go`).
 | Stop service | `POST /api/v1/pxe/stop` | `StopService` | `0xCF` / `0x35` | `pxe_stop_service` | ✅ |
 | Install-complete webhook | `POST /api/v1/pxe/webhook/complete` | `WebhookComplete` | `0xCF` / `0x36` | `pxe_webhook_complete` | ✅ |
 
-**This is the most complete capability set in the platform** — fifteen
-capabilities, all fifteen on five transports.
+**This is the most complete capability set in the platform** — sixteen
+capabilities, all sixteen on five transports.
 
 **`ListDevices` filters on every transport (#975).** The `PXEDeviceFilter`
 fields `state`, `mac_address` and `vlan` narrow the list, and `limit` and
@@ -78,7 +79,7 @@ read an unset `state` as `PROVISIONING_STATE_UNKNOWN`, so a VLAN- or MAC-only
 filter matched nothing. The SDK REST transport sends the filter as these
 parameters: `state` as the enum name, and unset fields left out
 (`sdk/go/transport/rest/adapter.go`). Before #975 it mapped only eight of the
-fifteen methods; it now maps all fifteen (`docs/ipxe/api.md` §4).
+then fifteen methods; it now maps all sixteen (`docs/ipxe/api.md` §4).
 
 `Authorize` and `Quarantine` are separate operations, and the presence of
 `Quarantine` is the design point: a device that fails a check goes to an
@@ -261,7 +262,7 @@ device-facing routes take no scope (§3). The gateway's device reports under
 `/api/v1/provisioning/devices/{mac}` require `provisioning:write` the same way
 (§4).
 
-On MCP, the fifteen `pxe_*` tools take the scopes of their gRPC twin
+On MCP, the sixteen `pxe_*` tools take the scopes of their gRPC twin
 (`pkg/api/mcp/pxe_tools.go`), and the 23 BMC tools are mapped ([`docs/bmc/api.md`](../bmc/api.md) §8).
 The `provision_*` tools take the scopes of their gRPC twin (#304):
 `provision_list_sessions` and `provision_get_session` need `provisioning:read`,

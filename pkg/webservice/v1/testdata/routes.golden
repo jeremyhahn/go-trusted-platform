@@ -497,6 +497,7 @@ POST /api/v1/provisioning/sessions/{sessionID}/fulfill
 POST /api/v1/provisioning/sign
 POST /api/v1/pxe/devices
 POST /api/v1/pxe/devices/{id}/authorize
+POST /api/v1/pxe/devices/{id}/certificate
 POST /api/v1/pxe/devices/{id}/enrolled
 POST /api/v1/pxe/devices/{id}/quarantine
 POST /api/v1/pxe/devices/{id}/retry

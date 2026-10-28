@@ -104,6 +104,7 @@ func TestLookupOperationPermission_CategorySubOpcodes(t *testing.T) {
 		{"device find config", quicwire.OpProvisioningCategory, quicwire.DeviceSubFindConfigForDevice, OpcodePermission{Resource: "device", Action: "read"}},
 		{"pxe get device by mac", quicwire.OpProvisioningCategory, quicwire.PXESubGetDeviceByMAC, OpcodePermission{Resource: "pxe", Action: "read"}},
 		{"pxe set device enrolled", quicwire.OpProvisioningCategory, quicwire.PXESubSetDeviceEnrolled, OpcodePermission{Resource: "pxe", Action: "write"}},
+		{"pxe bind device certificate", quicwire.OpProvisioningCategory, quicwire.PXESubBindDeviceCertificate, OpcodePermission{Resource: "pxe", Action: "write"}},
 		{"pxe get events", quicwire.OpProvisioningCategory, quicwire.PXESubGetEvents, OpcodePermission{Resource: "pxe", Action: "read"}},
 		{"pxe get status", quicwire.OpProvisioningCategory, quicwire.PXESubGetStatus, OpcodePermission{Resource: "pxe", Action: "read"}},
 		{"pxe start service", quicwire.OpProvisioningCategory, quicwire.PXESubStartService, OpcodePermission{Resource: "pxe", Action: "write"}},

@@ -17,6 +17,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"net"
 	"sync"
@@ -47,6 +48,7 @@ type Service interface {
 	// State Transitions
 	UpdateDeviceState(ctx context.Context, deviceID string, state ProvisioningState, reason string) error
 	SetDeviceEnrolled(ctx context.Context, deviceID, certSerial string) error
+	BindDeviceCertificate(ctx context.Context, deviceID, certFingerprint string) error
 	AuthorizeDevice(ctx context.Context, deviceID string, targetVLAN uint16) error
 	QuarantineDevice(ctx context.Context, deviceID string, reason string) error
 	RetryDevice(ctx context.Context, deviceID string) error
@@ -607,6 +609,72 @@ func (s *service) SetDeviceEnrolled(ctx context.Context, deviceID, certSerial st
 	s.logger.Info("Device enrolled",
 		"device_id", deviceID,
 		"certificate_serial", certSerial,
+	)
+
+	return nil
+}
+
+// certificateBindingStates are the states a device's install certificate can
+// be bound in: those before the install-completion webhook moves it to
+// StateInstallComplete (ValidTransitions). A binding made later would admit
+// nothing, because the webhook's transition is no longer allowed.
+var certificateBindingStates = map[ProvisioningState]struct{}{
+	StateDiscovered: {},
+	StateBooting:    {},
+	StateInstalling: {},
+}
+
+// BindDeviceCertificate records the SHA-256 fingerprint of the certificate
+// the device's installer presents over mTLS (NormalizeCertificateFingerprint);
+// the install-completion webhook binds its caller to it (#238). The device's
+// state does not change, and the binding is allowed only before installation
+// completes (certificateBindingStates). A fingerprint another device carries
+// is refused: the webhook admits a caller only when exactly one device carries
+// its certificate's fingerprint.
+func (s *service) BindDeviceCertificate(ctx context.Context, deviceID, certFingerprint string) error {
+	if !s.initialized.Load() {
+		return ErrServiceNotInitialized{}
+	}
+
+	fingerprint, err := NormalizeCertificateFingerprint(certFingerprint)
+	if err != nil {
+		return err
+	}
+
+	if _, err := s.stateManager.Get(deviceID); err != nil {
+		return ErrDeviceNotFound{DeviceID: deviceID}
+	}
+
+	for _, other := range s.stateManager.List(&DeviceFilter{CertificateFingerprint: fingerprint}) {
+		if other.ID != deviceID {
+			return ErrCertificateFingerprintInUse{Fingerprint: fingerprint, DeviceID: other.ID}
+		}
+	}
+
+	// The state is checked inside the compare-and-swap update so a concurrent
+	// transition past StateInstalling cannot slip a binding in after it.
+	updateErr := s.stateManager.UpdateDevice(deviceID, func(d *DeviceInfo) error {
+		if _, ok := certificateBindingStates[d.State]; !ok {
+			return ErrCertificateBindingClosed{DeviceID: deviceID, State: string(d.State)}
+		}
+		d.CertificateFingerprint = fingerprint
+		return nil
+	})
+	var stateErr ErrCertificateBindingClosed
+	if errors.As(updateErr, &stateErr) {
+		return stateErr
+	}
+	if updateErr != nil {
+		return ErrProvisioningFailed{
+			DeviceID: deviceID,
+			Reason:   "failed to bind the device certificate",
+			Cause:    updateErr,
+		}
+	}
+
+	s.logger.Info("Device certificate bound",
+		"device_id", deviceID,
+		"certificate_fingerprint", fingerprint,
 	)
 
 	return nil

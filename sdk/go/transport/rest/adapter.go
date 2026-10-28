@@ -1175,11 +1175,12 @@ var templatedRouteTable = map[string]templatedRoute{
 	// The rest of the PXE control plane (#975): every RPC now rides the
 	// route the web service serves it on, the device id or MAC only in the
 	// path, and the ListDevices filter as the query the server reads.
-	"/platform.v1.PXEService/GetDeviceByMAC":    itemRoute("/api/v1/pxe/devices/mac/{mac}", http.MethodGet, "{mac}", "mac_address"),
-	"/platform.v1.PXEService/RemoveDevice":      itemRoute("/api/v1/pxe/devices/{id}", http.MethodDelete, "{id}", "device_id"),
-	"/platform.v1.PXEService/SetDeviceEnrolled": itemRoute("/api/v1/pxe/devices/{id}/enrolled", http.MethodPost, "{id}", "device_id"),
-	"/platform.v1.PXEService/Retry":             itemRoute("/api/v1/pxe/devices/{id}/retry", http.MethodPost, "{id}", "device_id"),
-	"/platform.v1.PXEService/GetEvents":         itemRoute("/api/v1/pxe/devices/{id}/events", http.MethodGet, "{id}", "device_id"),
+	"/platform.v1.PXEService/GetDeviceByMAC":        itemRoute("/api/v1/pxe/devices/mac/{mac}", http.MethodGet, "{mac}", "mac_address"),
+	"/platform.v1.PXEService/RemoveDevice":          itemRoute("/api/v1/pxe/devices/{id}", http.MethodDelete, "{id}", "device_id"),
+	"/platform.v1.PXEService/SetDeviceEnrolled":     itemRoute("/api/v1/pxe/devices/{id}/enrolled", http.MethodPost, "{id}", "device_id"),
+	"/platform.v1.PXEService/BindDeviceCertificate": itemRoute("/api/v1/pxe/devices/{id}/certificate", http.MethodPost, "{id}", "device_id"),
+	"/platform.v1.PXEService/Retry":                 itemRoute("/api/v1/pxe/devices/{id}/retry", http.MethodPost, "{id}", "device_id"),
+	"/platform.v1.PXEService/GetEvents":             itemRoute("/api/v1/pxe/devices/{id}/events", http.MethodGet, "{id}", "device_id"),
 	"/platform.v1.PXEService/ListDevices": {
 		path:   "/api/v1/pxe/devices",
 		method: http.MethodGet,

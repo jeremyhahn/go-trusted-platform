@@ -133,6 +133,11 @@ type DeviceInfo struct {
 	// CertificateSerial is the serial number of the certificate after enrollment
 	CertificateSerial string `json:"certificate_serial,omitempty" yaml:"certificate_serial,omitempty"`
 
+	// CertificateFingerprint is the SHA-256 of the enrolled certificate's DER
+	// encoding, lowercase hex (CertificateFingerprintOf). It is the identity
+	// the install-completion webhook binds its caller to (#238).
+	CertificateFingerprint string `json:"certificate_fingerprint,omitempty" yaml:"certificate_fingerprint,omitempty"`
+
 	// CurrentVLAN is the VLAN the device is currently assigned to
 	CurrentVLAN uint16 `json:"current_vlan" yaml:"current_vlan"`
 
@@ -166,10 +171,12 @@ type DeviceFilter struct {
 	// VLAN filters by current VLAN assignment
 	VLAN uint16 `json:"vlan,omitempty" yaml:"vlan,omitempty"`
 
-	// CertificateSerial filters by the enrolled certificate serial (exact
-	// match). The install-completion webhook finds the calling node's record
-	// by the serial of its verified client certificate.
-	CertificateSerial string `json:"certificate_serial,omitempty" yaml:"certificate_serial,omitempty"`
+	// CertificateFingerprint filters by the enrolled certificate fingerprint
+	// (exact match). The install-completion webhook finds the calling node's
+	// record by the fingerprint of its verified client certificate: a serial
+	// is unique only within its issuer (RFC 5280 §4.1.2.2), a fingerprint
+	// names one certificate whichever trusted issuer signed it.
+	CertificateFingerprint string `json:"certificate_fingerprint,omitempty" yaml:"certificate_fingerprint,omitempty"`
 
 	// Limit is the maximum number of results to return
 	Limit int `json:"limit,omitempty" yaml:"limit,omitempty"`
@@ -199,7 +206,7 @@ func (f *DeviceFilter) Matches(device *DeviceInfo) bool {
 		return false
 	}
 
-	if f.CertificateSerial != "" && device.CertificateSerial != f.CertificateSerial {
+	if f.CertificateFingerprint != "" && device.CertificateFingerprint != f.CertificateFingerprint {
 		return false
 	}
 

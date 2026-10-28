@@ -20,7 +20,6 @@ import (
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/testutil"
 	platform "github.com/jeremyhahn/go-trusted-platform/sdk/go"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
@@ -37,8 +36,7 @@ func connectPXEQUIC(t *testing.T, server platformv1.PXEServiceServer, scopes ...
 		t.Fatalf("NewQUICServiceHandler: %v", err)
 	}
 	handler.SetPXEServer(server)
-	bundle := testutil.GenerateTestTLSBundle(t)
-	return newPhase35QUICClient(t, handler, bundle, platform.WithBearerToken("operator-token")).Connection()
+	return newPhase35QUICClient(t, handler, pxeSDKBundle(t), platform.WithBearerToken("operator-token")).Connection()
 }
 
 // TestSDKQUIC_PXEMethods drives every PXEService method through the SDK's

@@ -73,6 +73,7 @@ func NewPXERouter(
 //	GET    /api/v1/pxe/devices/mac/{mac}          - GetDeviceByMAC
 //	PUT    /api/v1/pxe/devices/{id}/state         - UpdateState
 //	POST   /api/v1/pxe/devices/{id}/enrolled      - SetDeviceEnrolled
+//	POST   /api/v1/pxe/devices/{id}/certificate   - BindDeviceCertificate
 //	POST   /api/v1/pxe/devices/{id}/authorize     - Authorize
 //	POST   /api/v1/pxe/devices/{id}/quarantine    - Quarantine
 //	POST   /api/v1/pxe/devices/{id}/retry         - Retry
@@ -116,6 +117,7 @@ func (r *PXERouter) operatorRoutes() []scopedRoute {
 		{http.MethodDelete, "/devices/{id}", pxeRPC("RemoveDevice"), r.removeDevice},
 		{http.MethodPut, "/devices/{id}/state", pxeRPC("UpdateState"), r.updateState},
 		{http.MethodPost, "/devices/{id}/enrolled", pxeRPC("SetDeviceEnrolled"), r.setEnrolled},
+		{http.MethodPost, "/devices/{id}/certificate", pxeRPC("BindDeviceCertificate"), r.bindCertificate},
 		{http.MethodPost, "/devices/{id}/authorize", pxeRPC("Authorize"), r.authorize},
 		{http.MethodPost, "/devices/{id}/quarantine", pxeRPC("Quarantine"), r.quarantine},
 		{http.MethodPost, "/devices/{id}/retry", pxeRPC("Retry"), r.retry},
@@ -168,9 +170,10 @@ func (r *PXERouter) requireScope(scope string, handler http.HandlerFunc) http.Ha
 // gatewayd does on its control plane (#238): the handler refuses a request
 // with no verified client certificate, and passes the connection's TLS state
 // to the service, which takes the identity from the
-// verified client certificate chain only and updates the record whose
-// enrolled certificate serial it is. A request with no verified client
-// certificate is answered 401; one whose certificate belongs to no enrolled
+// verified client certificate chain only and updates the record whose bound
+// certificate fingerprint (POST /devices/{id}/certificate,
+// BindDeviceCertificate) it is. A request with no verified client
+// certificate is answered 401; one whose certificate is bound to no
 // device, or whose body names another device's MAC, is answered 403. The
 // device state changes in neither case.
 func (r *PXERouter) RegisterMachineFacingRoutes(parent *mux.Router) {
@@ -324,6 +327,24 @@ func (r *PXERouter) setEnrolled(w http.ResponseWriter, req *http.Request) {
 	}
 	pbReq.DeviceId = mux.Vars(req)["id"]
 	resp, err := r.server.SetDeviceEnrolled(req.Context(), pbReq)
+	if err != nil {
+		protorest.WriteError(w, req, r.respWriter, err)
+		return
+	}
+	protorest.WriteSuccess(w, req, r.respWriter, resp)
+}
+
+func (r *PXERouter) bindCertificate(w http.ResponseWriter, req *http.Request) {
+	if !r.ensure(w, req) {
+		return
+	}
+	pbReq := &platformv1.BindPXEDeviceCertificateRequest{}
+	if err := protorest.DecodeRequest(req, pbReq); err != nil {
+		r.respWriter.Error400(w, req, err)
+		return
+	}
+	pbReq.DeviceId = mux.Vars(req)["id"]
+	resp, err := r.server.BindDeviceCertificate(req.Context(), pbReq)
 	if err != nil {
 		protorest.WriteError(w, req, r.respWriter, err)
 		return

@@ -131,6 +131,42 @@ func (e ErrInvalidMACAddress) Error() string {
 	return msg
 }
 
+// ErrInvalidCertificateFingerprint is returned when a certificate binding
+// names a fingerprint that is not a hex SHA-256 digest.
+type ErrInvalidCertificateFingerprint struct {
+	Fingerprint string
+	Reason      string
+}
+
+func (e ErrInvalidCertificateFingerprint) Error() string {
+	return fmt.Sprintf("pxe: invalid certificate fingerprint %q: %s", e.Fingerprint, e.Reason)
+}
+
+// ErrCertificateFingerprintInUse is returned when a certificate binding names
+// a fingerprint another device already carries: the install-completion
+// webhook admits a caller only when exactly one device carries its
+// certificate's fingerprint.
+type ErrCertificateFingerprintInUse struct {
+	Fingerprint string
+	DeviceID    string
+}
+
+func (e ErrCertificateFingerprintInUse) Error() string {
+	return fmt.Sprintf("pxe: certificate fingerprint %s is already bound to device %s", e.Fingerprint, e.DeviceID)
+}
+
+// ErrCertificateBindingClosed is returned when a certificate is bound to a
+// device whose installation has already completed (or that has left the
+// install path): the install-completion webhook can no longer admit it.
+type ErrCertificateBindingClosed struct {
+	DeviceID string
+	State    string
+}
+
+func (e ErrCertificateBindingClosed) Error() string {
+	return fmt.Sprintf("pxe: device %s is %s; a certificate can be bound only before installation completes", e.DeviceID, e.State)
+}
+
 // ErrInvalidState indicates an invalid provisioning state.
 type ErrInvalidState struct {
 	DeviceID string

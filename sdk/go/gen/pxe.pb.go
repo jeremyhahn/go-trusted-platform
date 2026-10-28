@@ -206,9 +206,12 @@ type PXEDeviceInfo struct {
 	// Number of retry attempts.
 	RetryCount int32 `protobuf:"varint,13,opt,name=retry_count,json=retryCount,proto3" json:"retry_count,omitempty"`
 	// Audit trail of provisioning events.
-	Events        []*ProvisioningEvent `protobuf:"bytes,14,rep,name=events,proto3" json:"events,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	Events []*ProvisioningEvent `protobuf:"bytes,14,rep,name=events,proto3" json:"events,omitempty"`
+	// SHA-256 of the DER encoding of the certificate the installer presents to
+	// the install-completion webhook (BindDeviceCertificate), lowercase hex.
+	CertificateFingerprint string `protobuf:"bytes,15,opt,name=certificate_fingerprint,json=certificateFingerprint,proto3" json:"certificate_fingerprint,omitempty"`
+	unknownFields          protoimpl.UnknownFields
+	sizeCache              protoimpl.SizeCache
 }
 
 func (x *PXEDeviceInfo) Reset() {
@@ -337,6 +340,13 @@ func (x *PXEDeviceInfo) GetEvents() []*ProvisioningEvent {
 		return x.Events
 	}
 	return nil
+}
+
+func (x *PXEDeviceInfo) GetCertificateFingerprint() string {
+	if x != nil {
+		return x.CertificateFingerprint
+	}
+	return ""
 }
 
 // PXEDeviceFilter provides filtering options for listing devices.
@@ -1301,6 +1311,117 @@ func (x *SetPXEDeviceEnrolledResponse) GetDevice() *PXEDeviceInfo {
 	return nil
 }
 
+// BindPXEDeviceCertificateRequest records the certificate the device's
+// installer presents over mTLS to the install-completion webhook (#238). It
+// does not change the device's state and is accepted only before installation
+// completes (discovered, booting, installing).
+type BindPXEDeviceCertificateRequest struct {
+	state    protoimpl.MessageState `protogen:"open.v1"`
+	DeviceId string                 `protobuf:"bytes,1,opt,name=device_id,json=deviceId,proto3" json:"device_id,omitempty"`
+	// SHA-256 of the certificate's DER encoding, in hex (case and colon
+	// separators are ignored). Required. A serial is not used: it is unique only
+	// within its issuer (RFC 5280 §4.1.2.2), a fingerprint names one certificate.
+	CertificateFingerprint string `protobuf:"bytes,2,opt,name=certificate_fingerprint,json=certificateFingerprint,proto3" json:"certificate_fingerprint,omitempty"`
+	unknownFields          protoimpl.UnknownFields
+	sizeCache              protoimpl.SizeCache
+}
+
+func (x *BindPXEDeviceCertificateRequest) Reset() {
+	*x = BindPXEDeviceCertificateRequest{}
+	mi := &file_pxe_proto_msgTypes[18]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *BindPXEDeviceCertificateRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*BindPXEDeviceCertificateRequest) ProtoMessage() {}
+
+func (x *BindPXEDeviceCertificateRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_pxe_proto_msgTypes[18]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use BindPXEDeviceCertificateRequest.ProtoReflect.Descriptor instead.
+func (*BindPXEDeviceCertificateRequest) Descriptor() ([]byte, []int) {
+	return file_pxe_proto_rawDescGZIP(), []int{18}
+}
+
+func (x *BindPXEDeviceCertificateRequest) GetDeviceId() string {
+	if x != nil {
+		return x.DeviceId
+	}
+	return ""
+}
+
+func (x *BindPXEDeviceCertificateRequest) GetCertificateFingerprint() string {
+	if x != nil {
+		return x.CertificateFingerprint
+	}
+	return ""
+}
+
+type BindPXEDeviceCertificateResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Status        *Status                `protobuf:"bytes,1,opt,name=status,proto3" json:"status,omitempty"`
+	Device        *PXEDeviceInfo         `protobuf:"bytes,2,opt,name=device,proto3" json:"device,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *BindPXEDeviceCertificateResponse) Reset() {
+	*x = BindPXEDeviceCertificateResponse{}
+	mi := &file_pxe_proto_msgTypes[19]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *BindPXEDeviceCertificateResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*BindPXEDeviceCertificateResponse) ProtoMessage() {}
+
+func (x *BindPXEDeviceCertificateResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_pxe_proto_msgTypes[19]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use BindPXEDeviceCertificateResponse.ProtoReflect.Descriptor instead.
+func (*BindPXEDeviceCertificateResponse) Descriptor() ([]byte, []int) {
+	return file_pxe_proto_rawDescGZIP(), []int{19}
+}
+
+func (x *BindPXEDeviceCertificateResponse) GetStatus() *Status {
+	if x != nil {
+		return x.Status
+	}
+	return nil
+}
+
+func (x *BindPXEDeviceCertificateResponse) GetDevice() *PXEDeviceInfo {
+	if x != nil {
+		return x.Device
+	}
+	return nil
+}
+
 type AuthorizePXEDeviceRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	DeviceId      string                 `protobuf:"bytes,1,opt,name=device_id,json=deviceId,proto3" json:"device_id,omitempty"`
@@ -1311,7 +1432,7 @@ type AuthorizePXEDeviceRequest struct {
 
 func (x *AuthorizePXEDeviceRequest) Reset() {
 	*x = AuthorizePXEDeviceRequest{}
-	mi := &file_pxe_proto_msgTypes[18]
+	mi := &file_pxe_proto_msgTypes[20]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1323,7 +1444,7 @@ func (x *AuthorizePXEDeviceRequest) String() string {
 func (*AuthorizePXEDeviceRequest) ProtoMessage() {}
 
 func (x *AuthorizePXEDeviceRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_pxe_proto_msgTypes[18]
+	mi := &file_pxe_proto_msgTypes[20]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1336,7 +1457,7 @@ func (x *AuthorizePXEDeviceRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AuthorizePXEDeviceRequest.ProtoReflect.Descriptor instead.
 func (*AuthorizePXEDeviceRequest) Descriptor() ([]byte, []int) {
-	return file_pxe_proto_rawDescGZIP(), []int{18}
+	return file_pxe_proto_rawDescGZIP(), []int{20}
 }
 
 func (x *AuthorizePXEDeviceRequest) GetDeviceId() string {
@@ -1363,7 +1484,7 @@ type AuthorizePXEDeviceResponse struct {
 
 func (x *AuthorizePXEDeviceResponse) Reset() {
 	*x = AuthorizePXEDeviceResponse{}
-	mi := &file_pxe_proto_msgTypes[19]
+	mi := &file_pxe_proto_msgTypes[21]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1375,7 +1496,7 @@ func (x *AuthorizePXEDeviceResponse) String() string {
 func (*AuthorizePXEDeviceResponse) ProtoMessage() {}
 
 func (x *AuthorizePXEDeviceResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_pxe_proto_msgTypes[19]
+	mi := &file_pxe_proto_msgTypes[21]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1388,7 +1509,7 @@ func (x *AuthorizePXEDeviceResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AuthorizePXEDeviceResponse.ProtoReflect.Descriptor instead.
 func (*AuthorizePXEDeviceResponse) Descriptor() ([]byte, []int) {
-	return file_pxe_proto_rawDescGZIP(), []int{19}
+	return file_pxe_proto_rawDescGZIP(), []int{21}
 }
 
 func (x *AuthorizePXEDeviceResponse) GetStatus() *Status {
@@ -1415,7 +1536,7 @@ type QuarantinePXEDeviceRequest struct {
 
 func (x *QuarantinePXEDeviceRequest) Reset() {
 	*x = QuarantinePXEDeviceRequest{}
-	mi := &file_pxe_proto_msgTypes[20]
+	mi := &file_pxe_proto_msgTypes[22]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1427,7 +1548,7 @@ func (x *QuarantinePXEDeviceRequest) String() string {
 func (*QuarantinePXEDeviceRequest) ProtoMessage() {}
 
 func (x *QuarantinePXEDeviceRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_pxe_proto_msgTypes[20]
+	mi := &file_pxe_proto_msgTypes[22]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1440,7 +1561,7 @@ func (x *QuarantinePXEDeviceRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use QuarantinePXEDeviceRequest.ProtoReflect.Descriptor instead.
 func (*QuarantinePXEDeviceRequest) Descriptor() ([]byte, []int) {
-	return file_pxe_proto_rawDescGZIP(), []int{20}
+	return file_pxe_proto_rawDescGZIP(), []int{22}
 }
 
 func (x *QuarantinePXEDeviceRequest) GetDeviceId() string {
@@ -1467,7 +1588,7 @@ type QuarantinePXEDeviceResponse struct {
 
 func (x *QuarantinePXEDeviceResponse) Reset() {
 	*x = QuarantinePXEDeviceResponse{}
-	mi := &file_pxe_proto_msgTypes[21]
+	mi := &file_pxe_proto_msgTypes[23]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1479,7 +1600,7 @@ func (x *QuarantinePXEDeviceResponse) String() string {
 func (*QuarantinePXEDeviceResponse) ProtoMessage() {}
 
 func (x *QuarantinePXEDeviceResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_pxe_proto_msgTypes[21]
+	mi := &file_pxe_proto_msgTypes[23]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1492,7 +1613,7 @@ func (x *QuarantinePXEDeviceResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use QuarantinePXEDeviceResponse.ProtoReflect.Descriptor instead.
 func (*QuarantinePXEDeviceResponse) Descriptor() ([]byte, []int) {
-	return file_pxe_proto_rawDescGZIP(), []int{21}
+	return file_pxe_proto_rawDescGZIP(), []int{23}
 }
 
 func (x *QuarantinePXEDeviceResponse) GetStatus() *Status {
@@ -1518,7 +1639,7 @@ type RetryPXEDeviceRequest struct {
 
 func (x *RetryPXEDeviceRequest) Reset() {
 	*x = RetryPXEDeviceRequest{}
-	mi := &file_pxe_proto_msgTypes[22]
+	mi := &file_pxe_proto_msgTypes[24]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1530,7 +1651,7 @@ func (x *RetryPXEDeviceRequest) String() string {
 func (*RetryPXEDeviceRequest) ProtoMessage() {}
 
 func (x *RetryPXEDeviceRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_pxe_proto_msgTypes[22]
+	mi := &file_pxe_proto_msgTypes[24]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1543,7 +1664,7 @@ func (x *RetryPXEDeviceRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RetryPXEDeviceRequest.ProtoReflect.Descriptor instead.
 func (*RetryPXEDeviceRequest) Descriptor() ([]byte, []int) {
-	return file_pxe_proto_rawDescGZIP(), []int{22}
+	return file_pxe_proto_rawDescGZIP(), []int{24}
 }
 
 func (x *RetryPXEDeviceRequest) GetDeviceId() string {
@@ -1563,7 +1684,7 @@ type RetryPXEDeviceResponse struct {
 
 func (x *RetryPXEDeviceResponse) Reset() {
 	*x = RetryPXEDeviceResponse{}
-	mi := &file_pxe_proto_msgTypes[23]
+	mi := &file_pxe_proto_msgTypes[25]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1575,7 +1696,7 @@ func (x *RetryPXEDeviceResponse) String() string {
 func (*RetryPXEDeviceResponse) ProtoMessage() {}
 
 func (x *RetryPXEDeviceResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_pxe_proto_msgTypes[23]
+	mi := &file_pxe_proto_msgTypes[25]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1588,7 +1709,7 @@ func (x *RetryPXEDeviceResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RetryPXEDeviceResponse.ProtoReflect.Descriptor instead.
 func (*RetryPXEDeviceResponse) Descriptor() ([]byte, []int) {
-	return file_pxe_proto_rawDescGZIP(), []int{23}
+	return file_pxe_proto_rawDescGZIP(), []int{25}
 }
 
 func (x *RetryPXEDeviceResponse) GetStatus() *Status {
@@ -1614,7 +1735,7 @@ type GetPXEEventsRequest struct {
 
 func (x *GetPXEEventsRequest) Reset() {
 	*x = GetPXEEventsRequest{}
-	mi := &file_pxe_proto_msgTypes[24]
+	mi := &file_pxe_proto_msgTypes[26]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1626,7 +1747,7 @@ func (x *GetPXEEventsRequest) String() string {
 func (*GetPXEEventsRequest) ProtoMessage() {}
 
 func (x *GetPXEEventsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_pxe_proto_msgTypes[24]
+	mi := &file_pxe_proto_msgTypes[26]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1639,7 +1760,7 @@ func (x *GetPXEEventsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetPXEEventsRequest.ProtoReflect.Descriptor instead.
 func (*GetPXEEventsRequest) Descriptor() ([]byte, []int) {
-	return file_pxe_proto_rawDescGZIP(), []int{24}
+	return file_pxe_proto_rawDescGZIP(), []int{26}
 }
 
 func (x *GetPXEEventsRequest) GetDeviceId() string {
@@ -1658,7 +1779,7 @@ type GetPXEEventsResponse struct {
 
 func (x *GetPXEEventsResponse) Reset() {
 	*x = GetPXEEventsResponse{}
-	mi := &file_pxe_proto_msgTypes[25]
+	mi := &file_pxe_proto_msgTypes[27]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1670,7 +1791,7 @@ func (x *GetPXEEventsResponse) String() string {
 func (*GetPXEEventsResponse) ProtoMessage() {}
 
 func (x *GetPXEEventsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_pxe_proto_msgTypes[25]
+	mi := &file_pxe_proto_msgTypes[27]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1683,7 +1804,7 @@ func (x *GetPXEEventsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetPXEEventsResponse.ProtoReflect.Descriptor instead.
 func (*GetPXEEventsResponse) Descriptor() ([]byte, []int) {
-	return file_pxe_proto_rawDescGZIP(), []int{25}
+	return file_pxe_proto_rawDescGZIP(), []int{27}
 }
 
 func (x *GetPXEEventsResponse) GetEvents() []*ProvisioningEvent {
@@ -1701,7 +1822,7 @@ type GetPXEStatusRequest struct {
 
 func (x *GetPXEStatusRequest) Reset() {
 	*x = GetPXEStatusRequest{}
-	mi := &file_pxe_proto_msgTypes[26]
+	mi := &file_pxe_proto_msgTypes[28]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1713,7 +1834,7 @@ func (x *GetPXEStatusRequest) String() string {
 func (*GetPXEStatusRequest) ProtoMessage() {}
 
 func (x *GetPXEStatusRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_pxe_proto_msgTypes[26]
+	mi := &file_pxe_proto_msgTypes[28]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1726,7 +1847,7 @@ func (x *GetPXEStatusRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetPXEStatusRequest.ProtoReflect.Descriptor instead.
 func (*GetPXEStatusRequest) Descriptor() ([]byte, []int) {
-	return file_pxe_proto_rawDescGZIP(), []int{26}
+	return file_pxe_proto_rawDescGZIP(), []int{28}
 }
 
 type GetPXEStatusResponse struct {
@@ -1738,7 +1859,7 @@ type GetPXEStatusResponse struct {
 
 func (x *GetPXEStatusResponse) Reset() {
 	*x = GetPXEStatusResponse{}
-	mi := &file_pxe_proto_msgTypes[27]
+	mi := &file_pxe_proto_msgTypes[29]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1750,7 +1871,7 @@ func (x *GetPXEStatusResponse) String() string {
 func (*GetPXEStatusResponse) ProtoMessage() {}
 
 func (x *GetPXEStatusResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_pxe_proto_msgTypes[27]
+	mi := &file_pxe_proto_msgTypes[29]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1763,7 +1884,7 @@ func (x *GetPXEStatusResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetPXEStatusResponse.ProtoReflect.Descriptor instead.
 func (*GetPXEStatusResponse) Descriptor() ([]byte, []int) {
-	return file_pxe_proto_rawDescGZIP(), []int{27}
+	return file_pxe_proto_rawDescGZIP(), []int{29}
 }
 
 func (x *GetPXEStatusResponse) GetStatus() *PXEServiceStatus {
@@ -1781,7 +1902,7 @@ type StartPXEServiceRequest struct {
 
 func (x *StartPXEServiceRequest) Reset() {
 	*x = StartPXEServiceRequest{}
-	mi := &file_pxe_proto_msgTypes[28]
+	mi := &file_pxe_proto_msgTypes[30]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1793,7 +1914,7 @@ func (x *StartPXEServiceRequest) String() string {
 func (*StartPXEServiceRequest) ProtoMessage() {}
 
 func (x *StartPXEServiceRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_pxe_proto_msgTypes[28]
+	mi := &file_pxe_proto_msgTypes[30]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1806,7 +1927,7 @@ func (x *StartPXEServiceRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StartPXEServiceRequest.ProtoReflect.Descriptor instead.
 func (*StartPXEServiceRequest) Descriptor() ([]byte, []int) {
-	return file_pxe_proto_rawDescGZIP(), []int{28}
+	return file_pxe_proto_rawDescGZIP(), []int{30}
 }
 
 type StartPXEServiceResponse struct {
@@ -1818,7 +1939,7 @@ type StartPXEServiceResponse struct {
 
 func (x *StartPXEServiceResponse) Reset() {
 	*x = StartPXEServiceResponse{}
-	mi := &file_pxe_proto_msgTypes[29]
+	mi := &file_pxe_proto_msgTypes[31]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1830,7 +1951,7 @@ func (x *StartPXEServiceResponse) String() string {
 func (*StartPXEServiceResponse) ProtoMessage() {}
 
 func (x *StartPXEServiceResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_pxe_proto_msgTypes[29]
+	mi := &file_pxe_proto_msgTypes[31]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1843,7 +1964,7 @@ func (x *StartPXEServiceResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StartPXEServiceResponse.ProtoReflect.Descriptor instead.
 func (*StartPXEServiceResponse) Descriptor() ([]byte, []int) {
-	return file_pxe_proto_rawDescGZIP(), []int{29}
+	return file_pxe_proto_rawDescGZIP(), []int{31}
 }
 
 func (x *StartPXEServiceResponse) GetStatus() *Status {
@@ -1861,7 +1982,7 @@ type StopPXEServiceRequest struct {
 
 func (x *StopPXEServiceRequest) Reset() {
 	*x = StopPXEServiceRequest{}
-	mi := &file_pxe_proto_msgTypes[30]
+	mi := &file_pxe_proto_msgTypes[32]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1873,7 +1994,7 @@ func (x *StopPXEServiceRequest) String() string {
 func (*StopPXEServiceRequest) ProtoMessage() {}
 
 func (x *StopPXEServiceRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_pxe_proto_msgTypes[30]
+	mi := &file_pxe_proto_msgTypes[32]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1886,7 +2007,7 @@ func (x *StopPXEServiceRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StopPXEServiceRequest.ProtoReflect.Descriptor instead.
 func (*StopPXEServiceRequest) Descriptor() ([]byte, []int) {
-	return file_pxe_proto_rawDescGZIP(), []int{30}
+	return file_pxe_proto_rawDescGZIP(), []int{32}
 }
 
 type StopPXEServiceResponse struct {
@@ -1898,7 +2019,7 @@ type StopPXEServiceResponse struct {
 
 func (x *StopPXEServiceResponse) Reset() {
 	*x = StopPXEServiceResponse{}
-	mi := &file_pxe_proto_msgTypes[31]
+	mi := &file_pxe_proto_msgTypes[33]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1910,7 +2031,7 @@ func (x *StopPXEServiceResponse) String() string {
 func (*StopPXEServiceResponse) ProtoMessage() {}
 
 func (x *StopPXEServiceResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_pxe_proto_msgTypes[31]
+	mi := &file_pxe_proto_msgTypes[33]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1923,7 +2044,7 @@ func (x *StopPXEServiceResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StopPXEServiceResponse.ProtoReflect.Descriptor instead.
 func (*StopPXEServiceResponse) Descriptor() ([]byte, []int) {
-	return file_pxe_proto_rawDescGZIP(), []int{31}
+	return file_pxe_proto_rawDescGZIP(), []int{33}
 }
 
 func (x *StopPXEServiceResponse) GetStatus() *Status {
@@ -1945,7 +2066,7 @@ type PXEWebhookCompleteRequest struct {
 
 func (x *PXEWebhookCompleteRequest) Reset() {
 	*x = PXEWebhookCompleteRequest{}
-	mi := &file_pxe_proto_msgTypes[32]
+	mi := &file_pxe_proto_msgTypes[34]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1957,7 +2078,7 @@ func (x *PXEWebhookCompleteRequest) String() string {
 func (*PXEWebhookCompleteRequest) ProtoMessage() {}
 
 func (x *PXEWebhookCompleteRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_pxe_proto_msgTypes[32]
+	mi := &file_pxe_proto_msgTypes[34]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1970,7 +2091,7 @@ func (x *PXEWebhookCompleteRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PXEWebhookCompleteRequest.ProtoReflect.Descriptor instead.
 func (*PXEWebhookCompleteRequest) Descriptor() ([]byte, []int) {
-	return file_pxe_proto_rawDescGZIP(), []int{32}
+	return file_pxe_proto_rawDescGZIP(), []int{34}
 }
 
 func (x *PXEWebhookCompleteRequest) GetMacAddress() string {
@@ -2010,7 +2131,7 @@ type PXEWebhookCompleteResponse struct {
 
 func (x *PXEWebhookCompleteResponse) Reset() {
 	*x = PXEWebhookCompleteResponse{}
-	mi := &file_pxe_proto_msgTypes[33]
+	mi := &file_pxe_proto_msgTypes[35]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2022,7 +2143,7 @@ func (x *PXEWebhookCompleteResponse) String() string {
 func (*PXEWebhookCompleteResponse) ProtoMessage() {}
 
 func (x *PXEWebhookCompleteResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_pxe_proto_msgTypes[33]
+	mi := &file_pxe_proto_msgTypes[35]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2035,7 +2156,7 @@ func (x *PXEWebhookCompleteResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PXEWebhookCompleteResponse.ProtoReflect.Descriptor instead.
 func (*PXEWebhookCompleteResponse) Descriptor() ([]byte, []int) {
-	return file_pxe_proto_rawDescGZIP(), []int{33}
+	return file_pxe_proto_rawDescGZIP(), []int{35}
 }
 
 func (x *PXEWebhookCompleteResponse) GetStatus() *Status {
@@ -2049,7 +2170,7 @@ var File_pxe_proto protoreflect.FileDescriptor
 
 const file_pxe_proto_rawDesc = "" +
 	"\n" +
-	"\tpxe.proto\x12\vplatform.v1\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\fcommon.proto\x1a\fdevice.proto\"\xf0\x04\n" +
+	"\tpxe.proto\x12\vplatform.v1\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\fcommon.proto\x1a\fdevice.proto\"\xa9\x05\n" +
 	"\rPXEDeviceInfo\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x1f\n" +
 	"\vmac_address\x18\x02 \x01(\tR\n" +
@@ -2070,7 +2191,8 @@ const file_pxe_proto_rawDesc = "" +
 	"\x10state_changed_at\x18\f \x01(\v2\x1a.google.protobuf.TimestampR\x0estateChangedAt\x12\x1f\n" +
 	"\vretry_count\x18\r \x01(\x05R\n" +
 	"retryCount\x126\n" +
-	"\x06events\x18\x0e \x03(\v2\x1e.platform.v1.ProvisioningEventR\x06events\"\xaa\x01\n" +
+	"\x06events\x18\x0e \x03(\v2\x1e.platform.v1.ProvisioningEventR\x06events\x127\n" +
+	"\x17certificate_fingerprint\x18\x0f \x01(\tR\x16certificateFingerprint\"\xaa\x01\n" +
 	"\x0fPXEDeviceFilter\x124\n" +
 	"\x05state\x18\x01 \x01(\x0e2\x1e.platform.v1.ProvisioningStateR\x05state\x12\x1f\n" +
 	"\vmac_address\x18\x02 \x01(\tR\n" +
@@ -2137,6 +2259,12 @@ const file_pxe_proto_rawDesc = "" +
 	"\tdevice_id\x18\x01 \x01(\tR\bdeviceId\x12-\n" +
 	"\x12certificate_serial\x18\x02 \x01(\tR\x11certificateSerial\"\x7f\n" +
 	"\x1cSetPXEDeviceEnrolledResponse\x12+\n" +
+	"\x06status\x18\x01 \x01(\v2\x13.platform.v1.StatusR\x06status\x122\n" +
+	"\x06device\x18\x02 \x01(\v2\x1a.platform.v1.PXEDeviceInfoR\x06device\"w\n" +
+	"\x1fBindPXEDeviceCertificateRequest\x12\x1b\n" +
+	"\tdevice_id\x18\x01 \x01(\tR\bdeviceId\x127\n" +
+	"\x17certificate_fingerprint\x18\x02 \x01(\tR\x16certificateFingerprint\"\x83\x01\n" +
+	" BindPXEDeviceCertificateResponse\x12+\n" +
 	"\x06status\x18\x01 \x01(\v2\x13.platform.v1.StatusR\x06status\x122\n" +
 	"\x06device\x18\x02 \x01(\v2\x1a.platform.v1.PXEDeviceInfoR\x06device\"Y\n" +
 	"\x19AuthorizePXEDeviceRequest\x12\x1b\n" +
@@ -2205,8 +2333,7 @@ const file_pxe_proto_rawDesc = "" +
 	"#PROVISIONING_EVENT_TYPE_QUARANTINED\x10\t\x12\"\n" +
 	"\x1ePROVISIONING_EVENT_TYPE_FAILED\x10\n" +
 	"\x12!\n" +
-	"\x1dPROVISIONING_EVENT_TYPE_RETRY\x10\v2\xe1\n" +
-	"\n" +
+	"\x1dPROVISIONING_EVENT_TYPE_RETRY\x10\v2\xd7\v\n" +
 	"\n" +
 	"PXEService\x12_\n" +
 	"\x0eRegisterDevice\x12%.platform.v1.RegisterPXEDeviceRequest\x1a&.platform.v1.RegisterPXEDeviceResponse\x12P\n" +
@@ -2215,7 +2342,8 @@ const file_pxe_proto_rawDesc = "" +
 	"\vListDevices\x12\".platform.v1.ListPXEDevicesRequest\x1a#.platform.v1.ListPXEDevicesResponse\x12Y\n" +
 	"\fRemoveDevice\x12#.platform.v1.RemovePXEDeviceRequest\x1a$.platform.v1.RemovePXEDeviceResponse\x12V\n" +
 	"\vUpdateState\x12\".platform.v1.UpdatePXEStateRequest\x1a#.platform.v1.UpdatePXEStateResponse\x12h\n" +
-	"\x11SetDeviceEnrolled\x12(.platform.v1.SetPXEDeviceEnrolledRequest\x1a).platform.v1.SetPXEDeviceEnrolledResponse\x12\\\n" +
+	"\x11SetDeviceEnrolled\x12(.platform.v1.SetPXEDeviceEnrolledRequest\x1a).platform.v1.SetPXEDeviceEnrolledResponse\x12t\n" +
+	"\x15BindDeviceCertificate\x12,.platform.v1.BindPXEDeviceCertificateRequest\x1a-.platform.v1.BindPXEDeviceCertificateResponse\x12\\\n" +
 	"\tAuthorize\x12&.platform.v1.AuthorizePXEDeviceRequest\x1a'.platform.v1.AuthorizePXEDeviceResponse\x12_\n" +
 	"\n" +
 	"Quarantine\x12'.platform.v1.QuarantinePXEDeviceRequest\x1a(.platform.v1.QuarantinePXEDeviceResponse\x12P\n" +
@@ -2239,121 +2367,127 @@ func file_pxe_proto_rawDescGZIP() []byte {
 }
 
 var file_pxe_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
-var file_pxe_proto_msgTypes = make([]protoimpl.MessageInfo, 35)
+var file_pxe_proto_msgTypes = make([]protoimpl.MessageInfo, 37)
 var file_pxe_proto_goTypes = []any{
-	(ProvisioningState)(0),               // 0: platform.v1.ProvisioningState
-	(ProvisioningEventType)(0),           // 1: platform.v1.ProvisioningEventType
-	(*PXEDeviceInfo)(nil),                // 2: platform.v1.PXEDeviceInfo
-	(*PXEDeviceFilter)(nil),              // 3: platform.v1.PXEDeviceFilter
-	(*ProvisioningEvent)(nil),            // 4: platform.v1.ProvisioningEvent
-	(*PXEServiceStatus)(nil),             // 5: platform.v1.PXEServiceStatus
-	(*RegisterPXEDeviceRequest)(nil),     // 6: platform.v1.RegisterPXEDeviceRequest
-	(*RegisterPXEDeviceResponse)(nil),    // 7: platform.v1.RegisterPXEDeviceResponse
-	(*GetPXEDeviceRequest)(nil),          // 8: platform.v1.GetPXEDeviceRequest
-	(*GetPXEDeviceResponse)(nil),         // 9: platform.v1.GetPXEDeviceResponse
-	(*GetPXEDeviceByMACRequest)(nil),     // 10: platform.v1.GetPXEDeviceByMACRequest
-	(*GetPXEDeviceByMACResponse)(nil),    // 11: platform.v1.GetPXEDeviceByMACResponse
-	(*ListPXEDevicesRequest)(nil),        // 12: platform.v1.ListPXEDevicesRequest
-	(*ListPXEDevicesResponse)(nil),       // 13: platform.v1.ListPXEDevicesResponse
-	(*RemovePXEDeviceRequest)(nil),       // 14: platform.v1.RemovePXEDeviceRequest
-	(*RemovePXEDeviceResponse)(nil),      // 15: platform.v1.RemovePXEDeviceResponse
-	(*UpdatePXEStateRequest)(nil),        // 16: platform.v1.UpdatePXEStateRequest
-	(*UpdatePXEStateResponse)(nil),       // 17: platform.v1.UpdatePXEStateResponse
-	(*SetPXEDeviceEnrolledRequest)(nil),  // 18: platform.v1.SetPXEDeviceEnrolledRequest
-	(*SetPXEDeviceEnrolledResponse)(nil), // 19: platform.v1.SetPXEDeviceEnrolledResponse
-	(*AuthorizePXEDeviceRequest)(nil),    // 20: platform.v1.AuthorizePXEDeviceRequest
-	(*AuthorizePXEDeviceResponse)(nil),   // 21: platform.v1.AuthorizePXEDeviceResponse
-	(*QuarantinePXEDeviceRequest)(nil),   // 22: platform.v1.QuarantinePXEDeviceRequest
-	(*QuarantinePXEDeviceResponse)(nil),  // 23: platform.v1.QuarantinePXEDeviceResponse
-	(*RetryPXEDeviceRequest)(nil),        // 24: platform.v1.RetryPXEDeviceRequest
-	(*RetryPXEDeviceResponse)(nil),       // 25: platform.v1.RetryPXEDeviceResponse
-	(*GetPXEEventsRequest)(nil),          // 26: platform.v1.GetPXEEventsRequest
-	(*GetPXEEventsResponse)(nil),         // 27: platform.v1.GetPXEEventsResponse
-	(*GetPXEStatusRequest)(nil),          // 28: platform.v1.GetPXEStatusRequest
-	(*GetPXEStatusResponse)(nil),         // 29: platform.v1.GetPXEStatusResponse
-	(*StartPXEServiceRequest)(nil),       // 30: platform.v1.StartPXEServiceRequest
-	(*StartPXEServiceResponse)(nil),      // 31: platform.v1.StartPXEServiceResponse
-	(*StopPXEServiceRequest)(nil),        // 32: platform.v1.StopPXEServiceRequest
-	(*StopPXEServiceResponse)(nil),       // 33: platform.v1.StopPXEServiceResponse
-	(*PXEWebhookCompleteRequest)(nil),    // 34: platform.v1.PXEWebhookCompleteRequest
-	(*PXEWebhookCompleteResponse)(nil),   // 35: platform.v1.PXEWebhookCompleteResponse
-	nil,                                  // 36: platform.v1.ProvisioningEvent.DetailsEntry
-	(*DeviceProfile)(nil),                // 37: platform.v1.DeviceProfile
-	(*timestamppb.Timestamp)(nil),        // 38: google.protobuf.Timestamp
-	(*Status)(nil),                       // 39: platform.v1.Status
+	(ProvisioningState)(0),                   // 0: platform.v1.ProvisioningState
+	(ProvisioningEventType)(0),               // 1: platform.v1.ProvisioningEventType
+	(*PXEDeviceInfo)(nil),                    // 2: platform.v1.PXEDeviceInfo
+	(*PXEDeviceFilter)(nil),                  // 3: platform.v1.PXEDeviceFilter
+	(*ProvisioningEvent)(nil),                // 4: platform.v1.ProvisioningEvent
+	(*PXEServiceStatus)(nil),                 // 5: platform.v1.PXEServiceStatus
+	(*RegisterPXEDeviceRequest)(nil),         // 6: platform.v1.RegisterPXEDeviceRequest
+	(*RegisterPXEDeviceResponse)(nil),        // 7: platform.v1.RegisterPXEDeviceResponse
+	(*GetPXEDeviceRequest)(nil),              // 8: platform.v1.GetPXEDeviceRequest
+	(*GetPXEDeviceResponse)(nil),             // 9: platform.v1.GetPXEDeviceResponse
+	(*GetPXEDeviceByMACRequest)(nil),         // 10: platform.v1.GetPXEDeviceByMACRequest
+	(*GetPXEDeviceByMACResponse)(nil),        // 11: platform.v1.GetPXEDeviceByMACResponse
+	(*ListPXEDevicesRequest)(nil),            // 12: platform.v1.ListPXEDevicesRequest
+	(*ListPXEDevicesResponse)(nil),           // 13: platform.v1.ListPXEDevicesResponse
+	(*RemovePXEDeviceRequest)(nil),           // 14: platform.v1.RemovePXEDeviceRequest
+	(*RemovePXEDeviceResponse)(nil),          // 15: platform.v1.RemovePXEDeviceResponse
+	(*UpdatePXEStateRequest)(nil),            // 16: platform.v1.UpdatePXEStateRequest
+	(*UpdatePXEStateResponse)(nil),           // 17: platform.v1.UpdatePXEStateResponse
+	(*SetPXEDeviceEnrolledRequest)(nil),      // 18: platform.v1.SetPXEDeviceEnrolledRequest
+	(*SetPXEDeviceEnrolledResponse)(nil),     // 19: platform.v1.SetPXEDeviceEnrolledResponse
+	(*BindPXEDeviceCertificateRequest)(nil),  // 20: platform.v1.BindPXEDeviceCertificateRequest
+	(*BindPXEDeviceCertificateResponse)(nil), // 21: platform.v1.BindPXEDeviceCertificateResponse
+	(*AuthorizePXEDeviceRequest)(nil),        // 22: platform.v1.AuthorizePXEDeviceRequest
+	(*AuthorizePXEDeviceResponse)(nil),       // 23: platform.v1.AuthorizePXEDeviceResponse
+	(*QuarantinePXEDeviceRequest)(nil),       // 24: platform.v1.QuarantinePXEDeviceRequest
+	(*QuarantinePXEDeviceResponse)(nil),      // 25: platform.v1.QuarantinePXEDeviceResponse
+	(*RetryPXEDeviceRequest)(nil),            // 26: platform.v1.RetryPXEDeviceRequest
+	(*RetryPXEDeviceResponse)(nil),           // 27: platform.v1.RetryPXEDeviceResponse
+	(*GetPXEEventsRequest)(nil),              // 28: platform.v1.GetPXEEventsRequest
+	(*GetPXEEventsResponse)(nil),             // 29: platform.v1.GetPXEEventsResponse
+	(*GetPXEStatusRequest)(nil),              // 30: platform.v1.GetPXEStatusRequest
+	(*GetPXEStatusResponse)(nil),             // 31: platform.v1.GetPXEStatusResponse
+	(*StartPXEServiceRequest)(nil),           // 32: platform.v1.StartPXEServiceRequest
+	(*StartPXEServiceResponse)(nil),          // 33: platform.v1.StartPXEServiceResponse
+	(*StopPXEServiceRequest)(nil),            // 34: platform.v1.StopPXEServiceRequest
+	(*StopPXEServiceResponse)(nil),           // 35: platform.v1.StopPXEServiceResponse
+	(*PXEWebhookCompleteRequest)(nil),        // 36: platform.v1.PXEWebhookCompleteRequest
+	(*PXEWebhookCompleteResponse)(nil),       // 37: platform.v1.PXEWebhookCompleteResponse
+	nil,                                      // 38: platform.v1.ProvisioningEvent.DetailsEntry
+	(*DeviceProfile)(nil),                    // 39: platform.v1.DeviceProfile
+	(*timestamppb.Timestamp)(nil),            // 40: google.protobuf.Timestamp
+	(*Status)(nil),                           // 41: platform.v1.Status
 }
 var file_pxe_proto_depIdxs = []int32{
 	0,  // 0: platform.v1.PXEDeviceInfo.state:type_name -> platform.v1.ProvisioningState
-	37, // 1: platform.v1.PXEDeviceInfo.profile:type_name -> platform.v1.DeviceProfile
-	38, // 2: platform.v1.PXEDeviceInfo.created_at:type_name -> google.protobuf.Timestamp
-	38, // 3: platform.v1.PXEDeviceInfo.updated_at:type_name -> google.protobuf.Timestamp
-	38, // 4: platform.v1.PXEDeviceInfo.state_changed_at:type_name -> google.protobuf.Timestamp
+	39, // 1: platform.v1.PXEDeviceInfo.profile:type_name -> platform.v1.DeviceProfile
+	40, // 2: platform.v1.PXEDeviceInfo.created_at:type_name -> google.protobuf.Timestamp
+	40, // 3: platform.v1.PXEDeviceInfo.updated_at:type_name -> google.protobuf.Timestamp
+	40, // 4: platform.v1.PXEDeviceInfo.state_changed_at:type_name -> google.protobuf.Timestamp
 	4,  // 5: platform.v1.PXEDeviceInfo.events:type_name -> platform.v1.ProvisioningEvent
 	0,  // 6: platform.v1.PXEDeviceFilter.state:type_name -> platform.v1.ProvisioningState
-	38, // 7: platform.v1.ProvisioningEvent.timestamp:type_name -> google.protobuf.Timestamp
+	40, // 7: platform.v1.ProvisioningEvent.timestamp:type_name -> google.protobuf.Timestamp
 	1,  // 8: platform.v1.ProvisioningEvent.event_type:type_name -> platform.v1.ProvisioningEventType
 	0,  // 9: platform.v1.ProvisioningEvent.from_state:type_name -> platform.v1.ProvisioningState
 	0,  // 10: platform.v1.ProvisioningEvent.to_state:type_name -> platform.v1.ProvisioningState
-	36, // 11: platform.v1.ProvisioningEvent.details:type_name -> platform.v1.ProvisioningEvent.DetailsEntry
-	38, // 12: platform.v1.PXEServiceStatus.start_time:type_name -> google.protobuf.Timestamp
-	39, // 13: platform.v1.RegisterPXEDeviceResponse.status:type_name -> platform.v1.Status
+	38, // 11: platform.v1.ProvisioningEvent.details:type_name -> platform.v1.ProvisioningEvent.DetailsEntry
+	40, // 12: platform.v1.PXEServiceStatus.start_time:type_name -> google.protobuf.Timestamp
+	41, // 13: platform.v1.RegisterPXEDeviceResponse.status:type_name -> platform.v1.Status
 	2,  // 14: platform.v1.RegisterPXEDeviceResponse.device:type_name -> platform.v1.PXEDeviceInfo
 	2,  // 15: platform.v1.GetPXEDeviceResponse.device:type_name -> platform.v1.PXEDeviceInfo
 	2,  // 16: platform.v1.GetPXEDeviceByMACResponse.device:type_name -> platform.v1.PXEDeviceInfo
 	3,  // 17: platform.v1.ListPXEDevicesRequest.filter:type_name -> platform.v1.PXEDeviceFilter
 	2,  // 18: platform.v1.ListPXEDevicesResponse.devices:type_name -> platform.v1.PXEDeviceInfo
-	39, // 19: platform.v1.RemovePXEDeviceResponse.status:type_name -> platform.v1.Status
+	41, // 19: platform.v1.RemovePXEDeviceResponse.status:type_name -> platform.v1.Status
 	0,  // 20: platform.v1.UpdatePXEStateRequest.state:type_name -> platform.v1.ProvisioningState
-	39, // 21: platform.v1.UpdatePXEStateResponse.status:type_name -> platform.v1.Status
+	41, // 21: platform.v1.UpdatePXEStateResponse.status:type_name -> platform.v1.Status
 	2,  // 22: platform.v1.UpdatePXEStateResponse.device:type_name -> platform.v1.PXEDeviceInfo
-	39, // 23: platform.v1.SetPXEDeviceEnrolledResponse.status:type_name -> platform.v1.Status
+	41, // 23: platform.v1.SetPXEDeviceEnrolledResponse.status:type_name -> platform.v1.Status
 	2,  // 24: platform.v1.SetPXEDeviceEnrolledResponse.device:type_name -> platform.v1.PXEDeviceInfo
-	39, // 25: platform.v1.AuthorizePXEDeviceResponse.status:type_name -> platform.v1.Status
-	2,  // 26: platform.v1.AuthorizePXEDeviceResponse.device:type_name -> platform.v1.PXEDeviceInfo
-	39, // 27: platform.v1.QuarantinePXEDeviceResponse.status:type_name -> platform.v1.Status
-	2,  // 28: platform.v1.QuarantinePXEDeviceResponse.device:type_name -> platform.v1.PXEDeviceInfo
-	39, // 29: platform.v1.RetryPXEDeviceResponse.status:type_name -> platform.v1.Status
-	2,  // 30: platform.v1.RetryPXEDeviceResponse.device:type_name -> platform.v1.PXEDeviceInfo
-	4,  // 31: platform.v1.GetPXEEventsResponse.events:type_name -> platform.v1.ProvisioningEvent
-	5,  // 32: platform.v1.GetPXEStatusResponse.status:type_name -> platform.v1.PXEServiceStatus
-	39, // 33: platform.v1.StartPXEServiceResponse.status:type_name -> platform.v1.Status
-	39, // 34: platform.v1.StopPXEServiceResponse.status:type_name -> platform.v1.Status
-	39, // 35: platform.v1.PXEWebhookCompleteResponse.status:type_name -> platform.v1.Status
-	6,  // 36: platform.v1.PXEService.RegisterDevice:input_type -> platform.v1.RegisterPXEDeviceRequest
-	8,  // 37: platform.v1.PXEService.GetDevice:input_type -> platform.v1.GetPXEDeviceRequest
-	10, // 38: platform.v1.PXEService.GetDeviceByMAC:input_type -> platform.v1.GetPXEDeviceByMACRequest
-	12, // 39: platform.v1.PXEService.ListDevices:input_type -> platform.v1.ListPXEDevicesRequest
-	14, // 40: platform.v1.PXEService.RemoveDevice:input_type -> platform.v1.RemovePXEDeviceRequest
-	16, // 41: platform.v1.PXEService.UpdateState:input_type -> platform.v1.UpdatePXEStateRequest
-	18, // 42: platform.v1.PXEService.SetDeviceEnrolled:input_type -> platform.v1.SetPXEDeviceEnrolledRequest
-	20, // 43: platform.v1.PXEService.Authorize:input_type -> platform.v1.AuthorizePXEDeviceRequest
-	22, // 44: platform.v1.PXEService.Quarantine:input_type -> platform.v1.QuarantinePXEDeviceRequest
-	24, // 45: platform.v1.PXEService.Retry:input_type -> platform.v1.RetryPXEDeviceRequest
-	26, // 46: platform.v1.PXEService.GetEvents:input_type -> platform.v1.GetPXEEventsRequest
-	28, // 47: platform.v1.PXEService.GetStatus:input_type -> platform.v1.GetPXEStatusRequest
-	30, // 48: platform.v1.PXEService.StartService:input_type -> platform.v1.StartPXEServiceRequest
-	32, // 49: platform.v1.PXEService.StopService:input_type -> platform.v1.StopPXEServiceRequest
-	34, // 50: platform.v1.PXEService.WebhookComplete:input_type -> platform.v1.PXEWebhookCompleteRequest
-	7,  // 51: platform.v1.PXEService.RegisterDevice:output_type -> platform.v1.RegisterPXEDeviceResponse
-	9,  // 52: platform.v1.PXEService.GetDevice:output_type -> platform.v1.GetPXEDeviceResponse
-	11, // 53: platform.v1.PXEService.GetDeviceByMAC:output_type -> platform.v1.GetPXEDeviceByMACResponse
-	13, // 54: platform.v1.PXEService.ListDevices:output_type -> platform.v1.ListPXEDevicesResponse
-	15, // 55: platform.v1.PXEService.RemoveDevice:output_type -> platform.v1.RemovePXEDeviceResponse
-	17, // 56: platform.v1.PXEService.UpdateState:output_type -> platform.v1.UpdatePXEStateResponse
-	19, // 57: platform.v1.PXEService.SetDeviceEnrolled:output_type -> platform.v1.SetPXEDeviceEnrolledResponse
-	21, // 58: platform.v1.PXEService.Authorize:output_type -> platform.v1.AuthorizePXEDeviceResponse
-	23, // 59: platform.v1.PXEService.Quarantine:output_type -> platform.v1.QuarantinePXEDeviceResponse
-	25, // 60: platform.v1.PXEService.Retry:output_type -> platform.v1.RetryPXEDeviceResponse
-	27, // 61: platform.v1.PXEService.GetEvents:output_type -> platform.v1.GetPXEEventsResponse
-	29, // 62: platform.v1.PXEService.GetStatus:output_type -> platform.v1.GetPXEStatusResponse
-	31, // 63: platform.v1.PXEService.StartService:output_type -> platform.v1.StartPXEServiceResponse
-	33, // 64: platform.v1.PXEService.StopService:output_type -> platform.v1.StopPXEServiceResponse
-	35, // 65: platform.v1.PXEService.WebhookComplete:output_type -> platform.v1.PXEWebhookCompleteResponse
-	51, // [51:66] is the sub-list for method output_type
-	36, // [36:51] is the sub-list for method input_type
-	36, // [36:36] is the sub-list for extension type_name
-	36, // [36:36] is the sub-list for extension extendee
-	0,  // [0:36] is the sub-list for field type_name
+	41, // 25: platform.v1.BindPXEDeviceCertificateResponse.status:type_name -> platform.v1.Status
+	2,  // 26: platform.v1.BindPXEDeviceCertificateResponse.device:type_name -> platform.v1.PXEDeviceInfo
+	41, // 27: platform.v1.AuthorizePXEDeviceResponse.status:type_name -> platform.v1.Status
+	2,  // 28: platform.v1.AuthorizePXEDeviceResponse.device:type_name -> platform.v1.PXEDeviceInfo
+	41, // 29: platform.v1.QuarantinePXEDeviceResponse.status:type_name -> platform.v1.Status
+	2,  // 30: platform.v1.QuarantinePXEDeviceResponse.device:type_name -> platform.v1.PXEDeviceInfo
+	41, // 31: platform.v1.RetryPXEDeviceResponse.status:type_name -> platform.v1.Status
+	2,  // 32: platform.v1.RetryPXEDeviceResponse.device:type_name -> platform.v1.PXEDeviceInfo
+	4,  // 33: platform.v1.GetPXEEventsResponse.events:type_name -> platform.v1.ProvisioningEvent
+	5,  // 34: platform.v1.GetPXEStatusResponse.status:type_name -> platform.v1.PXEServiceStatus
+	41, // 35: platform.v1.StartPXEServiceResponse.status:type_name -> platform.v1.Status
+	41, // 36: platform.v1.StopPXEServiceResponse.status:type_name -> platform.v1.Status
+	41, // 37: platform.v1.PXEWebhookCompleteResponse.status:type_name -> platform.v1.Status
+	6,  // 38: platform.v1.PXEService.RegisterDevice:input_type -> platform.v1.RegisterPXEDeviceRequest
+	8,  // 39: platform.v1.PXEService.GetDevice:input_type -> platform.v1.GetPXEDeviceRequest
+	10, // 40: platform.v1.PXEService.GetDeviceByMAC:input_type -> platform.v1.GetPXEDeviceByMACRequest
+	12, // 41: platform.v1.PXEService.ListDevices:input_type -> platform.v1.ListPXEDevicesRequest
+	14, // 42: platform.v1.PXEService.RemoveDevice:input_type -> platform.v1.RemovePXEDeviceRequest
+	16, // 43: platform.v1.PXEService.UpdateState:input_type -> platform.v1.UpdatePXEStateRequest
+	18, // 44: platform.v1.PXEService.SetDeviceEnrolled:input_type -> platform.v1.SetPXEDeviceEnrolledRequest
+	20, // 45: platform.v1.PXEService.BindDeviceCertificate:input_type -> platform.v1.BindPXEDeviceCertificateRequest
+	22, // 46: platform.v1.PXEService.Authorize:input_type -> platform.v1.AuthorizePXEDeviceRequest
+	24, // 47: platform.v1.PXEService.Quarantine:input_type -> platform.v1.QuarantinePXEDeviceRequest
+	26, // 48: platform.v1.PXEService.Retry:input_type -> platform.v1.RetryPXEDeviceRequest
+	28, // 49: platform.v1.PXEService.GetEvents:input_type -> platform.v1.GetPXEEventsRequest
+	30, // 50: platform.v1.PXEService.GetStatus:input_type -> platform.v1.GetPXEStatusRequest
+	32, // 51: platform.v1.PXEService.StartService:input_type -> platform.v1.StartPXEServiceRequest
+	34, // 52: platform.v1.PXEService.StopService:input_type -> platform.v1.StopPXEServiceRequest
+	36, // 53: platform.v1.PXEService.WebhookComplete:input_type -> platform.v1.PXEWebhookCompleteRequest
+	7,  // 54: platform.v1.PXEService.RegisterDevice:output_type -> platform.v1.RegisterPXEDeviceResponse
+	9,  // 55: platform.v1.PXEService.GetDevice:output_type -> platform.v1.GetPXEDeviceResponse
+	11, // 56: platform.v1.PXEService.GetDeviceByMAC:output_type -> platform.v1.GetPXEDeviceByMACResponse
+	13, // 57: platform.v1.PXEService.ListDevices:output_type -> platform.v1.ListPXEDevicesResponse
+	15, // 58: platform.v1.PXEService.RemoveDevice:output_type -> platform.v1.RemovePXEDeviceResponse
+	17, // 59: platform.v1.PXEService.UpdateState:output_type -> platform.v1.UpdatePXEStateResponse
+	19, // 60: platform.v1.PXEService.SetDeviceEnrolled:output_type -> platform.v1.SetPXEDeviceEnrolledResponse
+	21, // 61: platform.v1.PXEService.BindDeviceCertificate:output_type -> platform.v1.BindPXEDeviceCertificateResponse
+	23, // 62: platform.v1.PXEService.Authorize:output_type -> platform.v1.AuthorizePXEDeviceResponse
+	25, // 63: platform.v1.PXEService.Quarantine:output_type -> platform.v1.QuarantinePXEDeviceResponse
+	27, // 64: platform.v1.PXEService.Retry:output_type -> platform.v1.RetryPXEDeviceResponse
+	29, // 65: platform.v1.PXEService.GetEvents:output_type -> platform.v1.GetPXEEventsResponse
+	31, // 66: platform.v1.PXEService.GetStatus:output_type -> platform.v1.GetPXEStatusResponse
+	33, // 67: platform.v1.PXEService.StartService:output_type -> platform.v1.StartPXEServiceResponse
+	35, // 68: platform.v1.PXEService.StopService:output_type -> platform.v1.StopPXEServiceResponse
+	37, // 69: platform.v1.PXEService.WebhookComplete:output_type -> platform.v1.PXEWebhookCompleteResponse
+	54, // [54:70] is the sub-list for method output_type
+	38, // [38:54] is the sub-list for method input_type
+	38, // [38:38] is the sub-list for extension type_name
+	38, // [38:38] is the sub-list for extension extendee
+	0,  // [0:38] is the sub-list for field type_name
 }
 
 func init() { file_pxe_proto_init() }
@@ -2369,7 +2503,7 @@ func file_pxe_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_pxe_proto_rawDesc), len(file_pxe_proto_rawDesc)),
 			NumEnums:      2,
-			NumMessages:   35,
+			NumMessages:   37,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

@@ -277,6 +277,40 @@ func (s *PXEGRPCService) SetDeviceEnrolled(ctx context.Context, req *platformv1.
 	}, nil
 }
 
+// BindDeviceCertificate records the fingerprint of the certificate the
+// device's installer presents to the install-completion webhook (#238),
+// without changing the device's state.
+func (s *PXEGRPCService) BindDeviceCertificate(ctx context.Context, req *platformv1.BindPXEDeviceCertificateRequest) (*platformv1.BindPXEDeviceCertificateResponse, error) {
+	if err := s.requireService(); err != nil {
+		return nil, err
+	}
+
+	deviceID := req.GetDeviceId()
+	if deviceID == "" {
+		return nil, status.Error(codes.InvalidArgument, "device ID is required")
+	}
+
+	if err := s.pxeService.BindDeviceCertificate(ctx, deviceID, req.GetCertificateFingerprint()); err != nil {
+		s.logger.Error(err, "Failed to bind device certificate", "device_id", deviceID)
+		return nil, s.mapPXEError(err, "bind device certificate")
+	}
+
+	device, err := s.pxeService.GetDevice(ctx, deviceID)
+	if err != nil {
+		return nil, s.mapPXEError(err, "get device after certificate binding")
+	}
+
+	s.logger.Info("Device certificate bound via gRPC", "device_id", deviceID, "certificate_fingerprint", device.CertificateFingerprint)
+
+	return &platformv1.BindPXEDeviceCertificateResponse{
+		Status: &platformv1.Status{
+			Success: true,
+			Message: "device certificate bound",
+		},
+		Device: s.deviceToProto(device),
+	}, nil
+}
+
 // Authorize authorizes a device for production network access.
 func (s *PXEGRPCService) Authorize(ctx context.Context, req *platformv1.AuthorizePXEDeviceRequest) (*platformv1.AuthorizePXEDeviceResponse, error) {
 	if err := s.requireService(); err != nil {
@@ -531,11 +565,18 @@ func (s *PXEGRPCService) WebhookComplete(ctx context.Context, req *platformv1.PX
 // webhookDevice returns the device the install-completion webhook is from.
 // The identity is the verified client certificate of the connection (#238),
 // resolved the same way on every transport by requestChannel; the device is
-// the one whose enrolled certificate serial (SetDeviceEnrolled) is the leaf's
-// serial in decimal. The body MAC is never an identity: when present it must
-// be that device's MAC. A connection without a verified certificate is
-// Unauthenticated; an unenrolled certificate or a mismatched MAC is
-// PermissionDenied. Every refusal happens before any state is written.
+// the one whose bound certificate fingerprint is the SHA-256 of the leaf's DER
+// encoding. The binding is made by BindDeviceCertificate while the device is
+// still discovered, booting or installing, so it exists before the webhook
+// moves the device to InstallComplete; SetDeviceEnrolled comes later in the
+// lifecycle and plays no part here. The serial is not the key: a serial is
+// unique only within its issuer (RFC 5280 §4.1.2.2), and a listener that
+// trusts several issuers would let another issuer's certificate with a
+// known serial stand in for the device. The body MAC is never an
+// identity: when present it must be that device's MAC. A connection without a
+// verified certificate is Unauthenticated; an unbound certificate or a
+// mismatched MAC is PermissionDenied. Every refusal happens before any state
+// is written.
 func (s *PXEGRPCService) webhookDevice(ctx context.Context, bodyMAC string) (*pxe.DeviceInfo, error) {
 	state, transport := requestChannel(ctx)
 	leaf, err := tlspeer.VerifiedLeaf(state)
@@ -543,19 +584,15 @@ func (s *PXEGRPCService) webhookDevice(ctx context.Context, bodyMAC string) (*px
 		return nil, status.Error(codes.Unauthenticated,
 			ErrPXEWebhookIdentityRequired{Transport: transport, Reason: err.Error()}.Error())
 	}
-	if leaf.SerialNumber == nil {
-		return nil, status.Error(codes.Unauthenticated,
-			ErrPXEWebhookIdentityRequired{Transport: transport, Reason: "the verified certificate has no serial number"}.Error())
-	}
 
-	serial := leaf.SerialNumber.String()
-	devices, err := s.pxeService.ListDevices(ctx, &pxe.DeviceFilter{CertificateSerial: serial})
+	fingerprint := pxe.CertificateFingerprintOf(leaf)
+	devices, err := s.pxeService.ListDevices(ctx, &pxe.DeviceFilter{CertificateFingerprint: fingerprint})
 	if err != nil {
 		return nil, s.mapPXEError(err, "find device for webhook")
 	}
 	if len(devices) != 1 {
 		return nil, status.Error(codes.PermissionDenied,
-			ErrPXEWebhookUnknownIdentity{CertificateSerial: serial, Matches: len(devices)}.Error())
+			ErrPXEWebhookUnknownIdentity{CertificateFingerprint: fingerprint, Matches: len(devices)}.Error())
 	}
 	device := devices[0]
 
@@ -569,7 +606,7 @@ func (s *PXEGRPCService) webhookDevice(ctx context.Context, bodyMAC string) (*px
 	}
 	if !bytes.Equal(mac, device.MACAddress) {
 		return nil, status.Error(codes.PermissionDenied,
-			ErrPXEWebhookIdentityMismatch{CertificateSerial: serial, MACAddress: bodyMAC}.Error())
+			ErrPXEWebhookIdentityMismatch{CertificateFingerprint: fingerprint, MACAddress: bodyMAC}.Error())
 	}
 	return device, nil
 }
@@ -585,18 +622,19 @@ func (s *PXEGRPCService) deviceToProto(device *pxe.DeviceInfo) *platformv1.PXEDe
 	}
 
 	info := &platformv1.PXEDeviceInfo{
-		Id:                device.ID,
-		MacAddress:        device.MACAddress.String(),
-		PortId:            device.PortID,
-		State:             s.stateToProto(device.State),
-		StateReason:       device.StateReason,
-		CertificateSerial: device.CertificateSerial,
-		CurrentVlan:       uint32(device.CurrentVLAN),
-		TargetVlan:        uint32(device.TargetVLAN),
-		CreatedAt:         timestamppb.New(device.CreatedAt),
-		UpdatedAt:         timestamppb.New(device.UpdatedAt),
-		StateChangedAt:    timestamppb.New(device.StateChangedAt),
-		RetryCount:        int32(device.RetryCount),
+		Id:                     device.ID,
+		MacAddress:             device.MACAddress.String(),
+		PortId:                 device.PortID,
+		State:                  s.stateToProto(device.State),
+		StateReason:            device.StateReason,
+		CertificateSerial:      device.CertificateSerial,
+		CertificateFingerprint: device.CertificateFingerprint,
+		CurrentVlan:            uint32(device.CurrentVLAN),
+		TargetVlan:             uint32(device.TargetVLAN),
+		CreatedAt:              timestamppb.New(device.CreatedAt),
+		UpdatedAt:              timestamppb.New(device.UpdatedAt),
+		StateChangedAt:         timestamppb.New(device.StateChangedAt),
+		RetryCount:             int32(device.RetryCount),
 	}
 
 	if device.Events != nil {
@@ -774,6 +812,12 @@ func (s *PXEGRPCService) mapPXEError(err error, operation string) error {
 		return status.Errorf(codes.AlreadyExists, "device already exists: %s", e.MACAddress)
 	case pxe.ErrInvalidMACAddress:
 		return status.Errorf(codes.InvalidArgument, "invalid MAC address: %s", e.MACAddress)
+	case pxe.ErrInvalidCertificateFingerprint:
+		return status.Error(codes.InvalidArgument, e.Error())
+	case pxe.ErrCertificateFingerprintInUse:
+		return status.Error(codes.AlreadyExists, e.Error())
+	case pxe.ErrCertificateBindingClosed:
+		return status.Error(codes.FailedPrecondition, e.Error())
 	case pxe.ErrInvalidState:
 		return status.Errorf(codes.InvalidArgument, "invalid state: %s", e.Reason)
 	case pxe.ErrInvalidStateTransition:

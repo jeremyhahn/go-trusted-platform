@@ -118,6 +118,21 @@ func (c *Client) SetDeviceEnrolled(ctx context.Context, deviceID, certificateSer
 	return resp.Device, nil
 }
 
+// BindDeviceCertificate records the certificate the device's installer
+// presents to the install-completion webhook, by the SHA-256 of its DER
+// encoding in hex. It must be called before installation completes; the
+// device's state does not change.
+func (c *Client) BindDeviceCertificate(ctx context.Context, deviceID, certificateFingerprint string) (*platformv1.PXEDeviceInfo, error) {
+	resp, err := c.grpc.BindDeviceCertificate(ctx, &platformv1.BindPXEDeviceCertificateRequest{
+		DeviceId:               deviceID,
+		CertificateFingerprint: certificateFingerprint,
+	})
+	if err != nil {
+		return nil, &ErrBindCertificateFailed{ID: deviceID, Cause: err}
+	}
+	return resp.Device, nil
+}
+
 // Authorize authorizes a device for network access.
 func (c *Client) Authorize(ctx context.Context, deviceID string, targetVLAN uint32) (*platformv1.PXEDeviceInfo, error) {
 	resp, err := c.grpc.Authorize(ctx, &platformv1.AuthorizePXEDeviceRequest{

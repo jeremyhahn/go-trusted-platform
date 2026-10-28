@@ -18,7 +18,7 @@ package quicwire
 // Eight PXEService methods have their own single-byte opcodes (OpPXEListDevices
 // 0xEC through OpPXEUpdateState 0xEF, OpPXEAuthorize 0xFC through
 // OpPXERemoveDevice 0xFF). The single-byte opcode space is fully allocated,
-// so the other seven take the provisioning category, as the EAB (0x10-0x1A)
+// so the other eight take the provisioning category, as the EAB (0x10-0x1A)
 // and device profile (0x20-0x2F) sub-ranges do. Sub-range 0x30-0x3F is
 // reserved for PXE operations.
 //
@@ -46,4 +46,7 @@ const (
 
 	// PXESubWebhookComplete is PXEService.WebhookComplete.
 	PXESubWebhookComplete byte = 0x36
+
+	// PXESubBindDeviceCertificate is PXEService.BindDeviceCertificate.
+	PXESubBindDeviceCertificate byte = 0x37
 )
