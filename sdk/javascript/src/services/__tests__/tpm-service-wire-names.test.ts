@@ -10,6 +10,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { TPMService } from '../tpm-service.js';
 import type { ApiClient } from '../../client/api-client.js';
+import { InvalidEnumValueError } from '../../errors/index.js';
 import type { KeyAlgorithm } from '../../types/ca.js';
 import type { PCRBank } from '../../types/tpm.js';
 
@@ -105,6 +106,33 @@ describe('TPMService request enum names', () => {
         ekAttributes: { cn: 'ek', algorithm: 'KEY_ALGORITHM_RSA_2048' },
         akAttributes: { cn: 'ak', algorithm: 'KEY_ALGORITHM_ECDSA_P256' },
       });
+    });
+  });
+
+  describe('key deletion', () => {
+    // The router serves bare DELETE /ek, /srk and /ak (no /{handle} segment)
+    // and decodes handle, algorithm and password from the body.
+    it.each([
+      ['EK', '/v1/tpm/ek', (s: TPMService) => s.deleteEK({ handle: 0x81010001, algorithm: 'RSA_2048', password: 'pw' })],
+      ['SRK', '/v1/tpm/srk', (s: TPMService) => s.deleteSRK({ handle: 0x81000001, algorithm: 'RSA_2048', password: 'pw' })],
+      ['AK', '/v1/tpm/ak', (s: TPMService) => s.deleteAK({ handle: 0x81010002, algorithm: 'ECDSA_P256', password: 'pw' })],
+    ])('deletes the %s on its served route with the handle in the body', async (_name, path, call) => {
+      vi.mocked(mockClient.delete).mockResolvedValue({ success: true, data: {} });
+
+      await call(service);
+
+      const calls = vi.mocked(mockClient.delete).mock.calls;
+      expect(calls).toHaveLength(1);
+      expect(calls[0]?.[0]).toBe(path);
+      expect(calls[0]?.[2]).toMatchObject({ handle: expect.any(Number) as number, password: 'pw' });
+      expect(String((calls[0]?.[2] as Record<string, unknown>).algorithm)).toMatch(/^KEY_ALGORITHM_/);
+    });
+
+    it('rejects an unknown algorithm with a typed error and sends nothing', async () => {
+      await expect(service.deleteEK({ handle: 1, algorithm: 'BOGUS' as KeyAlgorithm })).rejects.toThrow(
+        InvalidEnumValueError
+      );
+      expect(mockClient.delete).not.toHaveBeenCalled();
     });
   });
 

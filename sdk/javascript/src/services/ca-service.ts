@@ -145,8 +145,11 @@ export class CAService extends BaseService {
    * @returns Revocation result
    */
   async revokeCertificate(request: RevokeCertificateRequest): Promise<ApiResponse<RevokeCertificateResponse>> {
-    return this.client.post<RevokeCertificateResponse>(
-      this.buildUrl(`/certificates/${this.encodePathSegment(request.serial)}/revoke`),
+    // The router serves revocation as DELETE /certificates/{serial} and reads
+    // the reason and deleteKeys from the request body.
+    return this.client.delete<RevokeCertificateResponse>(
+      this.buildUrl(`/certificates/${this.encodePathSegment(request.serial)}`),
+      undefined,
       { reason: encodeEnum('reason', REVOCATION_REASON_PROTO_NAMES, request.reason), deleteKeys: request.deleteKeys }
     );
   }
