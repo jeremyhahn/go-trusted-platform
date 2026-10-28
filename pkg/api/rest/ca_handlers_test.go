@@ -69,6 +69,8 @@ type mockCAService struct {
 	// csrCA certifies CSRs; nil until a test sets it.
 	renewals []issuance.RenewOptions
 	csrCA    *issuancetest.CA
+	// revokedKeyAttrs records the key attributes each successful Revoke got.
+	revokedKeyAttrs []*xkmssdk.KeyAttributes
 }
 
 func newMockCAService() *mockCAService {
@@ -143,6 +145,7 @@ func (m *mockCAService) Revoke(_ context.Context, cert *x509.Certificate, keyAtt
 	if m.revokeErr != nil {
 		return m.revokeErr
 	}
+	m.revokedKeyAttrs = append(m.revokedKeyAttrs, keyAttrs)
 	serial := hex.EncodeToString(cert.SerialNumber.Bytes())
 	delete(m.issuedCerts, serial)
 	delete(m.certStore.certs, serial)
@@ -761,18 +764,14 @@ func TestCAHandlers_GetCertificate_CANotAvailable(t *testing.T) {
 
 func TestCAHandlers_RevokeCertificate_Success(t *testing.T) {
 	ca := newMockCAService()
-	// Issue a certificate first
 	cert := generateTestCertificate("revoke.test.com", false, nil, nil)
 	serial := hex.EncodeToString(cert.SerialNumber.Bytes())
 	ca.certStore.certs[serial] = cert
 
 	_, router := setupCAHandlers(ca)
 
-	reqBody := CertificateRevokeRequest{
-		Reason: 1, // Key compromise
-	}
-	body, _ := json.Marshal(reqBody)
-
+	// The reason is the protobuf enum name, as the JS SDK sends it.
+	body := []byte(`{"reason":"REVOCATION_REASON_KEY_COMPROMISE"}`)
 	req, _ := http.NewRequest(http.MethodDelete, "/api/v1/ca/certificates/"+serial, bytes.NewReader(body))
 	req.Header.Set("Authorization", "Bearer "+adminToken)
 	req.Header.Set("Content-Type", "application/json")
@@ -780,19 +779,54 @@ func TestCAHandlers_RevokeCertificate_Success(t *testing.T) {
 
 	router.ServeHTTP(rr, req)
 
-	assert.Equal(t, http.StatusOK, rr.Code)
+	require.Equal(t, http.StatusOK, rr.Code, rr.Body.String())
 
-	var resp CARevokeCertificateResponse
-	err := json.Unmarshal(rr.Body.Bytes(), &resp)
-	require.NoError(t, err)
-
-	assert.Equal(t, serial, resp.Serial)
-	assert.Equal(t, "REVOKED", resp.Status)
-	assert.Equal(t, 1, resp.Reason)
+	resp := &platformv1.RevokeCertificateResponse{}
+	require.NoError(t, protojson.Unmarshal(rr.Body.Bytes(), resp))
+	assert.True(t, resp.GetStatus().GetSuccess())
+	assert.Equal(t, serial, resp.GetSerial())
+	assert.Equal(t, platformv1.CertificateStatus_CERTIFICATE_STATUS_REVOKED, resp.GetCertificateStatus())
+	assert.Equal(t, platformv1.RevocationReason_REVOCATION_REASON_KEY_COMPROMISE, resp.GetReason())
+	assert.NotNil(t, resp.GetRevokedAt())
+	assert.NotNil(t, resp.GetTimestamp())
 	assert.NotContains(t, ca.certStore.certs, serial, "DELETE must reach CA Revoke")
+	require.Len(t, ca.revokedKeyAttrs, 1)
+	assert.Nil(t, ca.revokedKeyAttrs[0], "keys are kept unless deleteKeys is set")
 }
 
 func TestCAHandlers_RevokeCertificate_WithDeleteKeys(t *testing.T) {
+	// The exact body the JS SDK sends: the enum name and camelCase deleteKeys.
+	// The Go SDK sends delete_keys; protojson accepts both.
+	for name, body := range map[string]string{
+		"JS SDK camelCase":  `{"reason":"REVOCATION_REASON_KEY_COMPROMISE","deleteKeys":true}`,
+		"proto field names": `{"reason":"REVOCATION_REASON_KEY_COMPROMISE","delete_keys":true}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			ca := newMockCAService()
+			cert := generateTestCertificate("revoke.test.com", false, nil, nil)
+			serial := hex.EncodeToString(cert.SerialNumber.Bytes())
+			ca.certStore.certs[serial] = cert
+
+			_, router := setupCAHandlers(ca)
+
+			req, _ := http.NewRequest(http.MethodDelete, "/api/v1/ca/certificates/"+serial, bytes.NewReader([]byte(body)))
+			req.Header.Set("Authorization", "Bearer "+adminToken)
+			req.Header.Set("Content-Type", "application/json")
+			rr := httptest.NewRecorder()
+
+			router.ServeHTTP(rr, req)
+
+			require.Equal(t, http.StatusOK, rr.Code, rr.Body.String())
+			assert.NotContains(t, ca.certStore.certs, serial)
+			require.Len(t, ca.revokedKeyAttrs, 1)
+			require.NotNil(t, ca.revokedKeyAttrs[0], "deleteKeys must reach CA Revoke")
+			assert.Equal(t, "revoke.test.com", ca.revokedKeyAttrs[0].CN)
+		})
+	}
+}
+
+// An empty body is a plain revocation with the reason unspecified.
+func TestCAHandlers_RevokeCertificate_EmptyBody(t *testing.T) {
 	ca := newMockCAService()
 	cert := generateTestCertificate("revoke.test.com", false, nil, nil)
 	serial := hex.EncodeToString(cert.SerialNumber.Bytes())
@@ -800,19 +834,47 @@ func TestCAHandlers_RevokeCertificate_WithDeleteKeys(t *testing.T) {
 
 	_, router := setupCAHandlers(ca)
 
-	reqBody := CertificateRevokeRequest{
-		DeleteKeys: true,
-	}
-	body, _ := json.Marshal(reqBody)
-
-	req, _ := http.NewRequest(http.MethodDelete, "/api/v1/ca/certificates/"+serial, bytes.NewReader(body))
+	req, _ := http.NewRequest(http.MethodDelete, "/api/v1/ca/certificates/"+serial, nil)
 	req.Header.Set("Authorization", "Bearer "+adminToken)
-	req.Header.Set("Content-Type", "application/json")
 	rr := httptest.NewRecorder()
 
 	router.ServeHTTP(rr, req)
 
-	assert.Equal(t, http.StatusOK, rr.Code)
+	require.Equal(t, http.StatusOK, rr.Code, rr.Body.String())
+	resp := &platformv1.RevokeCertificateResponse{}
+	require.NoError(t, protojson.Unmarshal(rr.Body.Bytes(), resp))
+	assert.Equal(t, platformv1.RevocationReason_REVOCATION_REASON_UNSPECIFIED, resp.GetReason())
+	assert.NotContains(t, ca.certStore.certs, serial)
+}
+
+// An unknown enum name, a field the contract lacks, a mistyped value or
+// malformed JSON is a 400 and revokes nothing.
+func TestCAHandlers_RevokeCertificate_RejectsUnknownContract(t *testing.T) {
+	for name, body := range map[string]string{
+		"unknown enum name": `{"reason":"REVOCATION_REASON_BOGUS"}`,
+		"unknown field":     `{"revoke_reason":"REVOCATION_REASON_KEY_COMPROMISE"}`,
+		"wrong type":        `{"deleteKeys":"yes"}`,
+		"malformed":         `{"reason":`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			ca := newMockCAService()
+			cert := generateTestCertificate("revoke.test.com", false, nil, nil)
+			serial := hex.EncodeToString(cert.SerialNumber.Bytes())
+			ca.certStore.certs[serial] = cert
+
+			_, router := setupCAHandlers(ca)
+
+			req, _ := http.NewRequest(http.MethodDelete, "/api/v1/ca/certificates/"+serial, bytes.NewReader([]byte(body)))
+			req.Header.Set("Authorization", "Bearer "+adminToken)
+			req.Header.Set("Content-Type", "application/json")
+			rr := httptest.NewRecorder()
+
+			router.ServeHTTP(rr, req)
+
+			assert.Equal(t, http.StatusBadRequest, rr.Code)
+			assert.Contains(t, ca.certStore.certs, serial, "a rejected request must not revoke")
+		})
+	}
 }
 
 func TestCAHandlers_RevokeCertificate_NotFound(t *testing.T) {

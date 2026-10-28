@@ -104,11 +104,34 @@ digits is refused with 400 before the CA is asked. Verify takes a
 `VerifyCertificateRequest` (`certificate_pem` or `certificate_der`, both
 base64 in proto-JSON) and answers a `VerifyCertificateResponse`.
 
-The daemon REST listener still answers list, revoke, renew and verify with
-its own flat JSON. It revokes at the SDK's shape, `DELETE .../{serial}`, with
-`reason` and `delete_keys` in an optional JSON body, under `certs:revoke`
-(below); it serves no `POST .../revoke` route. The SDK's renew and verify claims
-follow the web service.
+The daemon REST listener answers list, renew and verify with its own flat
+JSON. Revoke speaks the SDK's protobuf contract: `DELETE .../{serial}` under
+`certs:revoke` (below), with no `POST .../revoke` route. The body is an
+optional proto-JSON `RevokeCertificateRequest`; the path serial wins over any
+body `serial`. The reason is the enum name and the key flag is `deleteKeys`
+(the proto name `delete_keys` is accepted too):
+
+```json
+{"reason": "REVOCATION_REASON_KEY_COMPROMISE", "deleteKeys": true}
+```
+
+An empty body revokes with `REVOCATION_REASON_UNSPECIFIED` and keeps the keys.
+The body is decoded strictly: an unknown reason name, an unknown field or a
+mistyped value is refused with 400, so a misspelled reason is never recorded
+as unspecified. The answer is a proto-JSON `RevokeCertificateResponse`:
+
+```json
+{
+  "status": {"success": true, "message": "certificate revoked successfully"},
+  "serial": "1a2b",
+  "certificateStatus": "CERTIFICATE_STATUS_REVOKED",
+  "revokedAt": "2026-10-28T12:00:00Z",
+  "reason": "REVOCATION_REASON_KEY_COMPROMISE",
+  "timestamp": "2026-10-28T12:00:00Z"
+}
+```
+
+The SDK's renew and verify claims follow the web service.
 
 The MCP `ca_issue` tool takes the request flat — subject fields including
 `address` and `postal_code`, SANs as `dns_names` / `ip_addresses` /

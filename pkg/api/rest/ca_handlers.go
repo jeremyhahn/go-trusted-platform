@@ -57,6 +57,11 @@ var caUnmarshalOptions = protojson.UnmarshalOptions{
 	DiscardUnknown: true,
 }
 
+// revokeUnmarshalOptions decodes a revocation strictly: DiscardUnknown would
+// also discard an unknown reason name, and a revocation must not record
+// REVOCATION_REASON_UNSPECIFIED for a reason the caller misspelled.
+var revokeUnmarshalOptions = protojson.UnmarshalOptions{}
+
 const (
 	caDefaultPageSize int32 = 50
 	caMaxPageSize     int32 = 1000
@@ -278,12 +283,6 @@ type CASANsRequest struct {
 	URIs  []string `json:"uris,omitempty"`
 }
 
-// CertificateRevokeRequest is the request body for revoking a certificate.
-type CertificateRevokeRequest struct {
-	Reason     int  `json:"reason,omitempty"`
-	DeleteKeys bool `json:"delete_keys,omitempty"`
-}
-
 // CertificateRenewRequest is the request body for renewing a certificate.
 type CertificateRenewRequest struct {
 	ValidDays    int            `json:"valid_days"`
@@ -354,15 +353,6 @@ type CACertificateListResponse struct {
 	TotalItems   int                    `json:"total_items"`
 	TotalPages   int                    `json:"total_pages"`
 	Timestamp    int64                  `json:"timestamp"`
-}
-
-// CARevokeCertificateResponse is the response for revoking a certificate.
-type CARevokeCertificateResponse struct {
-	Serial    string `json:"serial"`
-	Status    string `json:"status"`
-	RevokedAt int64  `json:"revoked_at"`
-	Reason    int    `json:"reason"`
-	Timestamp int64  `json:"timestamp"`
 }
 
 // CARenewCertificateResponse is the response for renewing a certificate.
@@ -817,63 +807,61 @@ func (h *CAHandlers) handleGetCertificate(w http.ResponseWriter, r *http.Request
 const scopeCertsRevoke = "certs:revoke"
 
 // handleRevokeCertificate handles DELETE /api/v1/ca/certificates/{serial},
-// the shape the Go and JS SDKs send. The optional JSON body carries reason
-// and delete_keys; no body is a plain revocation.
+// the shape the Go and JS SDKs send. The optional body is a protojson
+// platformv1.RevokeCertificateRequest (reason as the enum name, deleteKeys or
+// delete_keys); no body is a plain revocation. The answer is a protojson
+// platformv1.RevokeCertificateResponse, as the webservice's route returns.
 func (h *CAHandlers) handleRevokeCertificate(w http.ResponseWriter, r *http.Request) {
 	if h.ca == nil {
 		h.writeError(w, http.StatusServiceUnavailable, ErrCAServiceNotAvailable{})
 		return
 	}
 
-	vars := mux.Vars(r)
-	serial := vars["serial"]
+	serial := mux.Vars(r)["serial"]
 	if serial == "" {
 		h.writeError(w, http.StatusBadRequest, ErrInvalidSerialNumber{Serial: "", Reason: "serial number is required"})
 		return
 	}
 
-	// Parse optional request body
-	var req CertificateRevokeRequest
-	if r.Body != nil && r.ContentLength > 0 {
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			h.writeError(w, http.StatusBadRequest, ErrInvalidRequestBody{Reason: err.Error()})
-			return
-		}
+	// The body is optional; the path names the certificate.
+	req := &platformv1.RevokeCertificateRequest{}
+	if !h.decodeProtoWith(revokeUnmarshalOptions, w, r, req) {
+		return
 	}
+	req.Serial = serial
 
-	// Find the certificate
 	cert := h.findCertificateBySerial(serial)
 	if cert == nil {
 		h.writeError(w, http.StatusNotFound, ErrCertificateNotFound{Serial: serial})
 		return
 	}
 
-	// Set up key attributes for deletion if requested
 	var keyAttrs *xkmssdk.KeyAttributes
-	if req.DeleteKeys {
+	if req.GetDeleteKeys() {
 		keyAttrs = &xkmssdk.KeyAttributes{
 			CN: cert.Subject.CommonName,
 		}
 	}
 
-	// Revoke the certificate
 	if err := h.ca.Revoke(r.Context(), cert, keyAttrs); err != nil {
 		h.logger.Error("Failed to revoke certificate", "error", err, "serial", serial)
 		h.writeError(w, http.StatusInternalServerError, ErrCertificateRevokeFailed{Serial: serial, Err: err})
 		return
 	}
 
-	now := time.Now().Unix()
-	resp := CARevokeCertificateResponse{
-		Serial:    serial,
-		Status:    "REVOKED",
-		RevokedAt: now,
-		Reason:    req.Reason,
-		Timestamp: now,
-	}
-
 	h.logger.Info("Certificate revoked", "serial", serial)
-	h.writeJSON(w, http.StatusOK, resp)
+	now := timestamppb.Now()
+	h.writeProto(w, http.StatusOK, &platformv1.RevokeCertificateResponse{
+		Status: &platformv1.Status{
+			Success: true,
+			Message: "certificate revoked successfully",
+		},
+		Serial:            serial,
+		CertificateStatus: platformv1.CertificateStatus_CERTIFICATE_STATUS_REVOKED,
+		RevokedAt:         now,
+		Reason:            req.GetReason(),
+		Timestamp:         now,
+	})
 }
 
 // handleRenewCertificate handles POST /api/v1/ca/certificates/{serial}/renew
@@ -1472,6 +1460,15 @@ func protoKeyAlgorithmToX509(alg platformv1.KeyAlgorithm) (x509.PublicKeyAlgorit
 // leaves msg at its zero value. It writes a 400 and reports false when the
 // body cannot be read or decoded.
 func (h *CAHandlers) decodeProto(w http.ResponseWriter, r *http.Request, msg proto.Message) bool {
+	return h.decodeProtoWith(caUnmarshalOptions, w, r, msg)
+}
+
+// decodeProtoWith is decodeProto with the given unmarshal options. A missing
+// or empty body leaves msg at its zero value.
+func (h *CAHandlers) decodeProtoWith(opts protojson.UnmarshalOptions, w http.ResponseWriter, r *http.Request, msg proto.Message) bool {
+	if r.Body == nil {
+		return true
+	}
 	data, err := io.ReadAll(r.Body)
 	if err != nil {
 		h.writeError(w, http.StatusBadRequest, ErrInvalidRequestBody{Reason: err.Error()})
@@ -1480,7 +1477,7 @@ func (h *CAHandlers) decodeProto(w http.ResponseWriter, r *http.Request, msg pro
 	if len(data) == 0 {
 		return true
 	}
-	if err := caUnmarshalOptions.Unmarshal(data, msg); err != nil {
+	if err := opts.Unmarshal(data, msg); err != nil {
 		h.writeError(w, http.StatusBadRequest, ErrInvalidRequestBody{Reason: err.Error()})
 		return false
 	}

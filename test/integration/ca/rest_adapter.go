@@ -172,19 +172,6 @@ type restCAVerifyCertificateResponse struct {
 	Timestamp int64    `json:"timestamp"`
 }
 
-type restCertificateRevokeRequest struct {
-	Reason     int  `json:"reason,omitempty"`
-	DeleteKeys bool `json:"delete_keys,omitempty"`
-}
-
-type restCARevokeCertificateResponse struct {
-	Serial    string `json:"serial"`
-	Status    string `json:"status"`
-	RevokedAt int64  `json:"revoked_at"`
-	Reason    int    `json:"reason"`
-	Timestamp int64  `json:"timestamp"`
-}
-
 type restCertificateRenewRequest struct {
 	ValidDays    int                `json:"valid_days"`
 	PreserveSANs bool               `json:"preserve_sans,omitempty"`
@@ -552,22 +539,30 @@ func (r *RESTAdapter) VerifyCertificate(ctx context.Context, opts VerifyCertific
 func (r *RESTAdapter) RevokeCertificate(ctx context.Context, opts RevokeCertificateOptions) (*RevokeCertificateResult, error) {
 	path := fmt.Sprintf("/api/v1/ca/certificates/%s", url.PathEscape(opts.Serial))
 
-	reqBody := restCertificateRevokeRequest{
-		Reason:     int(opts.Reason),
+	// The serial travels in the path; the daemon ignores a body serial.
+	req := &pb.RevokeCertificateRequest{
+		Reason:     pb.RevocationReason(opts.Reason),
 		DeleteKeys: opts.DeleteKeys,
 	}
 
-	var resp restCARevokeCertificateResponse
-	if err := r.doJSON(ctx, http.MethodDelete, path, reqBody, &resp); err != nil {
+	resp := &pb.RevokeCertificateResponse{}
+	if err := r.doProto(ctx, http.MethodDelete, path, req, resp); err != nil {
 		return nil, ErrCallFailed{Protocol: "REST", Method: "RevokeCertificate", Err: err}
 	}
 
 	result := &RevokeCertificateResult{
-		Success:   true,
-		Serial:    resp.Serial,
-		Status:    CertificateStatusRevoked,
-		RevokedAt: time.Unix(resp.RevokedAt, 0),
-		Reason:    RevocationReason(resp.Reason),
+		Success: resp.Status != nil && resp.Status.Success,
+		Serial:  resp.Serial,
+		Status:  CertificateStatus(resp.CertificateStatus),
+		Reason:  RevocationReason(resp.Reason),
+	}
+
+	if resp.RevokedAt != nil {
+		result.RevokedAt = resp.RevokedAt.AsTime()
+	}
+
+	if resp.Status != nil {
+		result.Message = resp.Status.Message
 	}
 
 	return result, nil
