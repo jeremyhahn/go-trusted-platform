@@ -22,6 +22,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/jeremyhahn/go-trusted-platform/pkg/testenv"
 )
 
 // Paths inside a peer's root filesystem.
@@ -230,7 +232,7 @@ func link(t *testing.T, ctx context.Context, a, b *peer) {
 		})
 	}
 	va, vb := "veth-"+a.name, "veth-"+b.name
-	mustRun(t, ctx, "ip", "link", "add", va, "netns", a.netns, "type", "veth", "peer", "name", vb, "netns", b.netns)
+	mustRun(t, ctx, "ip", testenv.VethNetnsArgs(va, a.netns, vb, b.netns)...)
 	for _, p := range []*peer{a, b} {
 		dev := "veth-" + p.name
 		mustRun(t, ctx, "ip", "-n", p.netns, "addr", "add", p.addr+"/24", "dev", dev)

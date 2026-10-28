@@ -228,9 +228,10 @@ call `t.Parallel`.
 `storage-backend: raft` as the way to enable clustering. It is not.
 `validateEmbeddedConfig` rejects anything but `memory`, `file` and `pebble` with
 *"invalid storage backend: must be 'memory', 'file', or 'pebble'"*, and the code
-comment on `StorageBackend` says explicitly *"Raft consensus is enabled
-separately via server mode, not storage backend."* `RaftTestConfig` confirms it:
-it sets `StorageBackendPebble` with a `RaftAddress`, commented *"Raft uses
+comment on `StorageBackend` says explicitly *"There is no "raft" backend: Raft
+consensus is enabled by JoinAddresses"*. `RaftTestConfig` confirms it: its
+comment says *"Raft consensus is enabled via server mode, not storage
+backend"*, and it sets `StorageBackendPebble` with a `RaftAddress`, commented *"Raft uses
 pebble for storage."*
 
 Clustering additionally requires the **`cluster` build tag**, which is in the
@@ -439,9 +440,9 @@ Declared and never returned by any code path:
 
 The daemon registers `pkg/api/grpc`'s `ClusterGRPCService` on the TCP server
 and the Unix-socket server through `registerClusterGRPCService`
-(`pkg/api/daemon/cluster_grpc_backend.go`, called at `daemon.go:954`), and
-passes the same service to the QUIC category handler (`daemon.go:1284`), the
-REST routes (`daemon.go:1595`) and the MCP provider (`daemon.go:1985`). The
+(`pkg/api/daemon/cluster_grpc_backend.go`, called at `daemon.go:971`), and
+passes the same service to the QUIC category handler (`daemon.go:1316`), the
+REST routes (`daemon.go:1630`) and the MCP provider (`daemon.go:2066`). The
 stub that used to be registered in its place was deleted (#317).
 
 Its `grpc.ClusterService` is `clusterGRPCBackend`, the daemon adapter over

@@ -82,6 +82,11 @@ type Definition struct {
 	// runs with, so an unprivileged child can write there. Empty means the
 	// process keeps no state of its own.
 	StateDir string
+	// StateFiles are the files in StateDir the process reads back. A
+	// gatewayd that ran the process's services unsupervised, as root, left
+	// them root-owned; the supervisor hands each that exists to the
+	// process's credentials before every launch, keeping its content.
+	StateFiles []string
 }
 
 // serviceFamilies are the address families every gateway process opens:
@@ -185,7 +190,8 @@ var definitions = []Definition{
 		// The vpn section.
 		ReconcilesDesired: true,
 		// Its revocation journal, vpn/pending-revocations.json.
-		StateDir: "vpn",
+		StateDir:   "vpn",
+		StateFiles: []string{gateway.VPNRevocationJournalFile},
 	},
 }
 

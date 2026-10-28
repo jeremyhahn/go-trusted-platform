@@ -114,10 +114,10 @@ func (m *mockOpenFlowClient) GetFlowStats(ctx context.Context, match *openflow.M
 // setupTestClient creates a test client with a mock OpenFlow client
 func setupTestClient(t *testing.T) (*Client, *mockOpenFlowClient) {
 	client := &Client{
-		connected:   true,
 		ofClients:   make(map[string]*openflow.Client),
 		ofClientsMu: sync.RWMutex{},
 	}
+	client.connected.Store(true)
 	mockClient := newMockOpenFlowClient()
 	return client, mockClient
 }
@@ -168,7 +168,7 @@ func TestAddFlow(t *testing.T) {
 
 	t.Run("not connected", func(t *testing.T) {
 		client, _ := setupTestClient(t)
-		client.connected = false
+		client.connected.Store(false)
 		flow := &FlowMod{Priority: 100}
 
 		err := client.AddFlow(ctx, "br0", flow)
@@ -211,7 +211,7 @@ func TestDeleteFlow(t *testing.T) {
 
 	t.Run("not connected", func(t *testing.T) {
 		client, _ := setupTestClient(t)
-		client.connected = false
+		client.connected.Store(false)
 
 		err := client.DeleteFlow(ctx, "br0", "in_port=1")
 		assert.ErrorIs(t, err, ErrConnectionFailed)
@@ -271,7 +271,7 @@ func TestListFlows(t *testing.T) {
 
 	t.Run("not connected", func(t *testing.T) {
 		client, _ := setupTestClient(t)
-		client.connected = false
+		client.connected.Store(false)
 
 		flows, err := client.ListFlows(ctx, "br0")
 		assert.ErrorIs(t, err, ErrConnectionFailed)
@@ -300,7 +300,7 @@ func TestDeleteAllFlows(t *testing.T) {
 
 	t.Run("not connected", func(t *testing.T) {
 		client, _ := setupTestClient(t)
-		client.connected = false
+		client.connected.Store(false)
 
 		err := client.DeleteAllFlows(ctx, "br0")
 		assert.ErrorIs(t, err, ErrConnectionFailed)
@@ -346,7 +346,7 @@ func TestModifyFlow(t *testing.T) {
 
 	t.Run("not connected", func(t *testing.T) {
 		client, _ := setupTestClient(t)
-		client.connected = false
+		client.connected.Store(false)
 		flow := &FlowMod{Priority: 100}
 
 		err := client.ModifyFlow(ctx, "br0", flow)
@@ -404,7 +404,7 @@ func TestGetFlowStats(t *testing.T) {
 
 	t.Run("not connected", func(t *testing.T) {
 		client, _ := setupTestClient(t)
-		client.connected = false
+		client.connected.Store(false)
 
 		flows, err := client.GetFlowStats(ctx, "br0", "")
 		assert.ErrorIs(t, err, ErrConnectionFailed)

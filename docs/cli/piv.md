@@ -6,9 +6,12 @@
 PIV (Personal Identity Verification, NIST SP 800-73-4) smartcard operations.
 
 Routes through `platform.Client.PIV()` and the platform SDK PIV service
-adapter. The device implementation remains in the composed security stack;
-the platform repo contains no PIV-side implementation and never imports
-`go-xkms/pkg/piv` directly.
+adapter. The device implementation remains in the composed security stack.
+The platform's only PIV code is the backend adapter
+`pkg/app/backends/piv.go` (`PIVBackend`), which delegates every call to the
+go-xkms PIV manager through the SDK re-export; it never imports
+`go-xkms/pkg/piv` directly, and nothing in the daemon constructs it yet (see
+the known gap below).
 
 **Known gap: platformd does not wire a PIV backend yet**, so every
 subcommand answers `piv: backend not configured`. The backend needs the
@@ -150,21 +153,27 @@ handlers. QUIC uses category opcode `0x9B` with the sub-opcode in `payload[0]`.
 The embedded transport dispatches every RPC in-process through
 `ServiceRegistry.PIV`.
 
-| Subcommand | gRPC method (`platform.v1.PIVService`) | QUIC sub-opcode | Scope |
-|------------|----------------------------------------|-----------------|-------|
-| `piv list-devices` | `ListDevices` | `0x01` | `piv:read` |
-| `piv list-slots` | `ListSlots` | `0x02` | `piv:read` |
-| `piv info` | `SlotInfo` | `0x03` | `piv:read` |
-| `piv generate` | `Generate` | `0x04` | `piv:write` |
-| `piv import` | `Import` | `0x05` | `piv:write` |
-| `piv sign` | `Sign` | `0x06` | `piv:write` |
-| `piv attest` | `Attest` | `0x07` | `piv:read` |
-| `piv reset` | `Reset` | `0x08` | `piv:write` |
+The scope a subcommand needs is not the same on every transport: gRPC
+(`pkg/api/grpc/method_permissions.go`), QUIC
+(`pkg/api/quic/opcode_permissions.go`) and MCP (`pkg/api/mcp/authz.go`)
+each keep their own table, and they disagree for `sign` and `reset`.
+
+| Subcommand | gRPC method (`platform.v1.PIVService`) | QUIC sub-opcode | gRPC scope | QUIC scope | MCP scope |
+|------------|----------------------------------------|-----------------|------------|------------|-----------|
+| `piv list-devices` | `ListDevices` | `0x01` | `piv:read` | `piv:read` | `piv:read` |
+| `piv list-slots` | `ListSlots` | `0x02` | `piv:read` | `piv:read` | `piv:read` |
+| `piv info` | `SlotInfo` | `0x03` | `piv:read` | `piv:read` | `piv:read` |
+| `piv generate` | `Generate` | `0x04` | `piv:write` | `piv:write` | `piv:write` |
+| `piv import` | `Import` | `0x05` | `piv:write` | `piv:write` | `piv:write` |
+| `piv sign` | `Sign` | `0x06` | `piv:use` | `piv:write` | `piv:write` |
+| `piv attest` | `Attest` | `0x07` | `piv:read` | `piv:read` | `piv:read` |
+| `piv reset` | `Reset` | `0x08` | `piv:delete` | `piv:delete` | `piv:write` |
 
 gRPC (TCP), QUIC and MCP refuse a token that lacks the scope (`PermissionDenied`
 / `StatusPermissionDenied`). QUIC refuses a caller with no principal the same
 way; under mTLS the client certificate is the principal and holds every scope
 ([`docs/daemon/api.md`](../daemon/api.md) §5). The Unix socket is local and not
 token-gated. Scopes are minted by the broker from the subject's IAM
-permissions, so a role gains `piv:read` / `piv:write` by being granted those permissions; the admin role needs
-both.
+permissions, so a role gains a PIV scope by being granted that permission. A
+role that runs every subcommand on every transport needs `piv:read`,
+`piv:write`, `piv:use` and `piv:delete`.

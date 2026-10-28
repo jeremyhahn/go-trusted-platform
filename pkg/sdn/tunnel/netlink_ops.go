@@ -39,6 +39,8 @@ type netlinkOps interface {
 	XfrmPolicyUpdate(policy *vnl.XfrmPolicy) error
 	XfrmPolicyDel(policy *vnl.XfrmPolicy) error
 	XfrmPolicyGet(policy *vnl.XfrmPolicy) (*vnl.XfrmPolicy, error)
+	XfrmStateList(family int) ([]vnl.XfrmState, error)
+	XfrmPolicyList(family int) ([]vnl.XfrmPolicy, error)
 
 	// Policy routing: rules and per-table routes.
 	RuleAdd(rule *vnl.Rule) error
@@ -185,6 +187,14 @@ func (r *realNetlinkOps) XfrmPolicyDel(policy *vnl.XfrmPolicy) error {
 
 func (r *realNetlinkOps) XfrmPolicyGet(policy *vnl.XfrmPolicy) (*vnl.XfrmPolicy, error) {
 	return vnl.XfrmPolicyGet(policy)
+}
+
+func (r *realNetlinkOps) XfrmStateList(family int) ([]vnl.XfrmState, error) {
+	return vnl.XfrmStateList(family)
+}
+
+func (r *realNetlinkOps) XfrmPolicyList(family int) ([]vnl.XfrmPolicy, error) {
+	return vnl.XfrmPolicyList(family)
 }
 
 func (r *realNetlinkOps) RuleAdd(rule *vnl.Rule) error {

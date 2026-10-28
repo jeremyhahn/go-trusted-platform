@@ -238,7 +238,8 @@ a `Status` call and the background loop cannot drift apart.
 ### The node cache
 
 `membershipManager` keeps `map[uint64]*Node` with a **5-second TTL**
-(`cacheDuration`, a hard-coded constant, not configuration). `refreshNodeCache`
+(the `cacheDuration` field, which `NewMembershipManager` sets to
+`5 * time.Second`; it is not configuration). `refreshNodeCache`
 merges `RaftOperator.GetNodes()` over it:
 
 - a node present in Raft updates `LastSeen` and its leader flag,

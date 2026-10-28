@@ -249,11 +249,11 @@ func TestGetOpenFlowClientErrorPaths(t *testing.T) {
 
 	t.Run("getOpenFlowClient with disconnected stale client", func(t *testing.T) {
 		client := &Client{
-			connected:   true,
 			ofClients:   make(map[string]*openflow.Client),
 			ofClientsMu: sync.RWMutex{},
 			ofSocketDir: "/tmp/nonexistent-socket-dir",
 		}
+		client.connected.Store(true)
 
 		// Create a client that's not connected
 		staleClient, err := openflow.NewClient("stale-bridge",
@@ -270,11 +270,11 @@ func TestGetOpenFlowClientErrorPaths(t *testing.T) {
 
 	t.Run("getOpenFlowClient creates new client on first call", func(t *testing.T) {
 		client := &Client{
-			connected:   true,
 			ofClients:   make(map[string]*openflow.Client),
 			ofClientsMu: sync.RWMutex{},
 			ofSocketDir: "/tmp/nonexistent-socket-dir",
 		}
+		client.connected.Store(true)
 
 		// First call for a new bridge should attempt to create and connect
 		_, err := client.getOpenFlowClient(ctx, "new-bridge")
@@ -285,7 +285,8 @@ func TestGetOpenFlowClientErrorPaths(t *testing.T) {
 // TestDeleteBridgeNilBridgeCheck tests the nil bridge check in DeleteBridge
 func TestDeleteBridgeNilBridgeCheck(t *testing.T) {
 	t.Run("DeleteBridge with empty name returns ErrInvalidBridgeName", func(t *testing.T) {
-		client := &Client{connected: true}
+		client := &Client{}
+		client.connected.Store(true)
 		ctx := context.Background()
 
 		err := client.DeleteBridge(ctx, "")

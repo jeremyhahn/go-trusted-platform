@@ -67,8 +67,8 @@ another feature.
 
 | Key | Meaning |
 |---|---|
-| `enabled` | Compute on/off |
-| `type` | Provider selection |
+| `type` | Workload kind: `vm` or `container` |
+| `provider` | Provider selection; empty is the local container provider |
 | `work_dir` | Where VM state lives |
 | `enable_kvm` | Hardware acceleration |
 | `default_cpus`, `default_memory`, `default_disk_size` | Defaults for a new VM |
@@ -119,7 +119,7 @@ drive cannot hold an internal snapshot, and a raw pflash cannot.
 | | `x86_64` | `aarch64` |
 |---|---|---|
 | Machine | `q35` (`q35,smm=on` with Secure Boot) | `virt,gic-version=host` under KVM (the host's GIC: GICv2 on a Raspberry Pi 4), `virt,gic-version=3` without |
-| CPU | `host` | `host` under KVM, `cortex-a72` without |
+| CPU | `host` under KVM, `max` without (TCG cannot take `host`) | `host` under KVM, `cortex-a72` without |
 | KVM | on an amd64 host | on an arm64 host |
 | vTPM device | `tpm-tis` | `tpm-tis-device` |
 | Secure Boot pflash | `cfi.pflash01` `secure=on` global | none: `virt` has no SMM |
@@ -240,7 +240,7 @@ different concepts, one key name.
 
 ## 6. Streaming operations are transport-limited
 
-Four gRPC RPCs stream and have **no non-streaming equivalent**:
+Five gRPC RPCs stream and have **no non-streaming equivalent**:
 
 - `AttachVMConsole` → `stream ConsoleOutput`
 - `SendVMConsoleInput` → client-streaming

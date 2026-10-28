@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"net"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/openflow"
@@ -57,17 +58,21 @@ type Client struct {
 	encoder    *json.Encoder
 	decoder    *json.Decoder
 	mu         sync.RWMutex
-	connected  bool
 	timeout    time.Duration
+
+	// connected and closed are atomic so the dispatcher can mark a broken
+	// connection without c.mu: Disconnect holds c.mu while it waits for
+	// the dispatcher to exit (#1183).
+	connected atomic.Bool
+	closed    atomic.Bool
 
 	// Serialized request dispatch channel. The dispatcher goroutine is
 	// the sole reader; callers submit callRequest values to it.
 	requests chan callRequest
 
 	// Shutdown
-	done   chan struct{}
-	wg     sync.WaitGroup
-	closed bool
+	done chan struct{}
+	wg   sync.WaitGroup
 
 	// OpenFlow clients per bridge (pure Go implementation)
 	ofClients   map[string]*openflow.Client
@@ -132,7 +137,7 @@ func (c *Client) Connect(ctx context.Context) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	if c.connected {
+	if c.connected.Load() {
 		return nil
 	}
 
@@ -164,10 +169,12 @@ func (c *Client) Connect(ctx context.Context) error {
 	c.conn = conn
 	c.encoder = json.NewEncoder(conn)
 	c.decoder = json.NewDecoder(bufio.NewReader(conn))
-	c.connected = true
-	c.closed = false
+	c.closed.Store(false)
 	c.done = make(chan struct{})
 	c.requests = make(chan callRequest)
+	// Published last: IsConnected reads it without c.mu, and a caller that
+	// sees true goes on to use done and requests.
+	c.connected.Store(true)
 
 	// Start the dispatcher goroutine that serializes all socket I/O
 	c.wg.Add(1)
@@ -181,12 +188,12 @@ func (c *Client) Disconnect() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	if !c.connected {
+	if !c.connected.Load() {
 		return nil
 	}
 
-	c.connected = false
-	c.closed = true
+	c.closed.Store(true)
+	c.connected.Store(false)
 
 	// Signal shutdown — the dispatcher selects on this channel
 	close(c.done)
@@ -218,9 +225,7 @@ func (c *Client) Disconnect() error {
 
 // IsConnected returns whether the client is connected
 func (c *Client) IsConnected() bool {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.connected
+	return c.connected.Load()
 }
 
 // Close is an alias for Disconnect
@@ -342,11 +347,11 @@ func (c *Client) handleRequest(req callRequest) {
 // markDisconnected sets the client state to disconnected. Safe to call from
 // the dispatcher goroutine only.
 func (c *Client) markDisconnected() {
-	c.mu.Lock()
-	if c.connected && !c.closed {
-		c.connected = false
+	// Never take c.mu here: Disconnect holds it while it waits for this
+	// goroutine to exit (#1183).
+	if !c.closed.Load() {
+		c.connected.Store(false)
 	}
-	c.mu.Unlock()
 }
 
 // call sends a JSON-RPC request and waits for response.

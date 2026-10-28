@@ -193,9 +193,8 @@ func TestListPortsWithContinueOnError(t *testing.T) {
 
 // TestGetInterfaceWithEmptyName tests GetInterface with empty name
 func TestGetInterfaceWithEmptyName(t *testing.T) {
-	client := &Client{
-		connected: true,
-	}
+	client := &Client{}
+	client.connected.Store(true)
 
 	t.Run("GetInterface with empty name", func(t *testing.T) {
 		_, err := client.GetInterface(context.Background(), "")
@@ -255,9 +254,7 @@ func TestDisconnectWithOpenFlowClients(t *testing.T) {
 
 // TestCallNotConnected tests call when not connected
 func TestCallNotConnected(t *testing.T) {
-	client := &Client{
-		connected: false,
-	}
+	client := &Client{}
 
 	t.Run("call when not connected", func(t *testing.T) {
 		ctx := context.Background()
@@ -299,9 +296,7 @@ func TestGetOpenVSwitchUUIDNoRows(t *testing.T) {
 
 // TestListFlowsNotConnected tests ListFlows when not connected
 func TestListFlowsNotConnected(t *testing.T) {
-	client := &Client{
-		connected: false,
-	}
+	client := &Client{}
 
 	t.Run("ListFlows when not connected", func(t *testing.T) {
 		ctx := context.Background()
@@ -320,9 +315,7 @@ func TestListFlowsNotConnected(t *testing.T) {
 
 // TestDeleteFlowNotConnected tests DeleteFlow when not connected
 func TestDeleteFlowNotConnected(t *testing.T) {
-	client := &Client{
-		connected: false,
-	}
+	client := &Client{}
 
 	t.Run("DeleteFlow when not connected", func(t *testing.T) {
 		ctx := context.Background()
@@ -348,9 +341,7 @@ func TestDeleteFlowNotConnected(t *testing.T) {
 
 // TestAddFlowNotConnected tests AddFlow when not connected
 func TestAddFlowNotConnected(t *testing.T) {
-	client := &Client{
-		connected: false,
-	}
+	client := &Client{}
 
 	flow := &FlowMod{
 		Table:    0,
@@ -383,9 +374,7 @@ func TestAddFlowNotConnected(t *testing.T) {
 
 // TestModifyFlowNotConnected tests ModifyFlow when not connected
 func TestModifyFlowNotConnected(t *testing.T) {
-	client := &Client{
-		connected: false,
-	}
+	client := &Client{}
 
 	flow := &FlowMod{
 		Table:    0,
@@ -418,9 +407,7 @@ func TestModifyFlowNotConnected(t *testing.T) {
 
 // TestDeleteAllFlowsNotConnected tests DeleteAllFlows when not connected
 func TestDeleteAllFlowsNotConnected(t *testing.T) {
-	client := &Client{
-		connected: false,
-	}
+	client := &Client{}
 
 	t.Run("DeleteAllFlows when not connected", func(t *testing.T) {
 		ctx := context.Background()

@@ -182,10 +182,13 @@ each time rather than adopting one habit.
 
 ## Troubleshooting
 
-**"compute provider not compiled."**
-The binary was built without `awscompute` / `azurecompute` / `gcpcompute`. A
-build fact, not a runtime failure — a default build genuinely cannot create a
-cloud instance.
+**"compute: provider <name> is not compiled into this build …"**
+The `compute:` config names a cloud provider and the binary was built without
+`awscompute` / `azurecompute` / `gcpcompute`. A build fact, not a runtime
+failure — a default build genuinely cannot create a cloud instance. The daemon
+hits it at start-up, logs *"Compute orchestrator not available (container
+operations will fail)"* with this message as the reason, and runs without a
+compute orchestrator.
 
 **VM creation is refused with a resource error.**
 Tenant quota, or `max_instances`. Check
