@@ -952,13 +952,13 @@ func (h *CAHandlers) RevokeCertificate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	req := &platformv1.RevokeCertificateRequest{}
-	if r.Body != nil && r.ContentLength > 0 {
-		// Strict: DiscardUnknown would turn an unknown reason name into
-		// REVOCATION_REASON_UNSPECIFIED, which the validator accepts.
-		if err := protorest.DecodeRequestStrict(r, req); err != nil {
-			h.respWriter.Error400(w, r, err)
-			return
-		}
+	// Always decode: a chunked body has ContentLength -1, and the decoder
+	// already treats a nil or empty body as an empty request. Strict:
+	// DiscardUnknown would turn an unknown reason name into
+	// REVOCATION_REASON_UNSPECIFIED, which the validator accepts.
+	if err := protorest.DecodeRequestStrict(r, req); err != nil {
+		h.respWriter.Error400(w, r, err)
+		return
 	}
 	req.Serial = serial
 	if err := issuance.ValidateRevocationReason(int(req.GetReason())); err != nil {
@@ -1014,11 +1014,10 @@ func (h *CAHandlers) RenewCertificate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	req := &platformv1.RenewCertificateRequest{}
-	if r.Body != nil && r.ContentLength > 0 {
-		if err := protorest.DecodeRequest(r, req); err != nil {
-			protorest.WriteError(w, r, h.respWriter, status.Error(codes.InvalidArgument, err.Error()))
-			return
-		}
+	// Always decode: a chunked body has ContentLength -1.
+	if err := protorest.DecodeRequest(r, req); err != nil {
+		protorest.WriteError(w, r, h.respWriter, status.Error(codes.InvalidArgument, err.Error()))
+		return
 	}
 	req.Serial = serial
 

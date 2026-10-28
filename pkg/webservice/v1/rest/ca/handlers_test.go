@@ -1381,6 +1381,95 @@ func TestRevokeCertificate_RejectsUnknownReasonName(t *testing.T) {
 	}
 }
 
+// chunkedRevokeRequest builds a revoke request whose body is sent chunked:
+// Go reports ContentLength -1 for it, so a length check would drop the body.
+func chunkedRevokeRequest(body string) *http.Request {
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/ca/certificates/abc123", strings.NewReader(body))
+	req = mux.SetURLVars(req, map[string]string{"serial": "abc123"})
+	req.Header.Set("Content-Type", "application/json")
+	req.ContentLength = -1
+	return req
+}
+
+// TestRevokeCertificate_ChunkedBodyRejectsInvalidReason proves a chunked body
+// is validated like any other: an undefined or unknown reason is a 400 and
+// never reaches the CA as REVOCATION_REASON_UNSPECIFIED.
+func TestRevokeCertificate_ChunkedBodyRejectsInvalidReason(t *testing.T) {
+	bodies := map[string]string{
+		"undefined numeric reason": `{"reason":8}`,
+		"unknown reason name":      `{"reason":"REVOCATION_REASON_BOGUS"}`,
+	}
+	for name, body := range bodies {
+		t.Run(name, func(t *testing.T) {
+			testCert := createTestCertificate("revoke.example.com")
+			mockCA := &mockCertificateAuthority{
+				initialized: true,
+				certStore: &mockCertStore{
+					getCertificateFn: func(string) (*x509.Certificate, error) {
+						return testCert, nil
+					},
+				},
+				revokeFn: func(context.Context, *x509.Certificate, xkmsca.RevokeOptions) error {
+					t.Errorf("chunked body %s reached the CA", body)
+					return nil
+				},
+			}
+			handlers, writer := newTestHandlers(mockCA)
+			rec := httptest.NewRecorder()
+
+			handlers.RevokeCertificate(rec, chunkedRevokeRequest(body))
+
+			assert.Equal(t, http.StatusBadRequest, writer.lastStatus)
+		})
+	}
+}
+
+// TestRevokeCertificate_ChunkedBodyForwardsOptions proves a chunked body's
+// reason and deleteKeys reach the CA, and an empty chunked body still revokes
+// with the default reason.
+func TestRevokeCertificate_ChunkedBodyForwardsOptions(t *testing.T) {
+	cases := []struct {
+		name       string
+		body       string
+		reason     int
+		deleteKeys bool
+	}{
+		// RFC 5280 §5.3.1: keyCompromise is CRLReason 1.
+		{"reason and deleteKeys", `{"reason":"REVOCATION_REASON_KEY_COMPROMISE","deleteKeys":true}`, 1, true},
+		// RFC 5280 §5.3.1: unspecified is CRLReason 0.
+		{"empty body", "", 0, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			testCert := createTestCertificate("revoke.example.com")
+			var called bool
+			var captured xkmsca.RevokeOptions
+			mockCA := &mockCertificateAuthority{
+				initialized: true,
+				certStore: &mockCertStore{
+					getCertificateFn: func(string) (*x509.Certificate, error) {
+						return testCert, nil
+					},
+				},
+				revokeFn: func(_ context.Context, _ *x509.Certificate, opts xkmsca.RevokeOptions) error {
+					called = true
+					captured = opts
+					return nil
+				},
+			}
+			handlers, writer := newTestHandlers(mockCA)
+			rec := httptest.NewRecorder()
+
+			handlers.RevokeCertificate(rec, chunkedRevokeRequest(tc.body))
+
+			assert.Equal(t, http.StatusOK, writer.lastStatus)
+			require.True(t, called, "the CA must be asked to revoke")
+			assert.Equal(t, tc.reason, captured.Reason)
+			assert.Equal(t, tc.deleteKeys, captured.DeleteKeys)
+		})
+	}
+}
+
 // =============================================================================
 // GetBundle Handler Tests
 // =============================================================================

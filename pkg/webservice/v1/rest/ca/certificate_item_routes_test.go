@@ -103,6 +103,23 @@ func TestRenewCertificate_Success(t *testing.T) {
 	assert.Equal(t, "beef02", payload["newCertificate"].(map[string]interface{})["serial"])
 }
 
+// TestRenewCertificate_ChunkedBody proves a chunked body (ContentLength -1)
+// is decoded and its fields reach the service rather than being dropped.
+func TestRenewCertificate_ChunkedBody(t *testing.T) {
+	service := &fakeCAService{}
+	handlers, writer := newTestHandlers(nil)
+	handlers.WithService(service)
+	req := renewRequest("5a17e5", `{"validDays":45}`)
+	req.ContentLength = -1
+	rec := httptest.NewRecorder()
+
+	handlers.RenewCertificate(rec, req)
+
+	assert.Equal(t, http.StatusOK, writer.lastStatus)
+	require.NotNil(t, service.renewReq)
+	assert.Equal(t, int32(45), service.renewReq.GetValidDays())
+}
+
 func TestRenewCertificate_Error(t *testing.T) {
 	t.Run("503 without the CA service", func(t *testing.T) {
 		handlers, writer := newTestHandlers(nil)
