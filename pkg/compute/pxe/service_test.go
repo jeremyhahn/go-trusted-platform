@@ -821,6 +821,43 @@ func TestService_CompleteInstallation_OneConcurrentCompletionWins(t *testing.T) 
 	}
 }
 
+// A retried installation needs a fresh installer certificate, so a late
+// callback from the failed attempt cannot end the new one (Codex review 7979).
+func TestService_RetriedInstallationNeedsAFreshCertificate(t *testing.T) {
+	svc, _ := initializeTestService(t)
+	ctx := context.Background()
+	first := CertificateSHA256([]byte("attempt 1 installer certificate"))
+	second := CertificateSHA256([]byte("attempt 2 installer certificate"))
+	device := installingTestDevice(t, svc, first)
+	require.NoError(t, svc.CompleteInstallation(ctx, device.ID, first, false, "attempt 1 failed"))
+	require.NoError(t, svc.RetryDevice(ctx, device.ID))
+	require.NoError(t, svc.UpdateDeviceState(ctx, device.ID, StateBooting, "netboot"))
+
+	var reused ErrInstallCertificateReused
+	require.ErrorAs(t, svc.SetDeviceInstalling(ctx, device.ID, strings.ToUpper(first), "attempt 2"), &reused)
+	assert.Equal(t, ErrInstallCertificateReused{DeviceID: device.ID, CertificateSHA256: first}, reused)
+	retrieved, err := svc.GetDevice(ctx, device.ID)
+	require.NoError(t, err)
+	assert.Equal(t, StateBooting, retrieved.State)
+	assert.Empty(t, retrieved.InstallCertificateSHA256)
+
+	require.NoError(t, svc.SetDeviceInstalling(ctx, device.ID, second, "attempt 2"))
+	for _, success := range []bool{false, true} {
+		var notBound ErrInstallationNotBound
+		require.ErrorAs(t, svc.CompleteInstallation(ctx, device.ID, first, success, "attempt 1 resent"), &notBound)
+		retrieved, err = svc.GetDevice(ctx, device.ID)
+		require.NoError(t, err)
+		assert.Equal(t, StateInstalling, retrieved.State, "success=%t", success)
+		assert.Equal(t, second, retrieved.InstallCertificateSHA256, "success=%t", success)
+	}
+
+	require.NoError(t, svc.CompleteInstallation(ctx, device.ID, second, true, "attempt 2 done"))
+	retrieved, err = svc.GetDevice(ctx, device.ID)
+	require.NoError(t, err)
+	assert.Equal(t, StateInstallComplete, retrieved.State)
+	assert.Equal(t, []string{first, second}, retrieved.UsedInstallCertificatesSHA256)
+}
+
 func TestCertificateSHA256_IsTheLowercaseDigestOfTheDER(t *testing.T) {
 	assert.Equal(t, "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", CertificateSHA256(nil))
 	assert.NotEqual(t, CertificateSHA256([]byte("a")), CertificateSHA256([]byte("b")))

@@ -287,7 +287,7 @@ fingerprint another device is installing under is refused with
 (`pkg/api/daemon/pxe_grpc_service.go:798`), and the device stays where it was.
 The check holds under concurrency: a swap that changes a device's binding
 claims the fingerprint in a fingerprint-to-device index and writes the device
-in one critical section (`pkg/compute/pxe/state.go:430`), so of two devices
+in one critical section (`pkg/compute/pxe/state.go:433`), so of two devices
 racing to install under one certificate exactly one wins, and the webhook never
 finds two devices carrying it. Leaving `installing` or removing the device
 releases the fingerprint (Codex review 7952).
@@ -295,7 +295,7 @@ releases the fingerprint (Codex review 7952).
 **The certificate ends only the installation it was bound to.** The webhook
 moves the device to `install_complete` or `failed` in one compare-and-swap
 that admits only `installing` under that fingerprint
-(`pkg/compute/pxe/service.go:689`, `pkg/compute/pxe/state.go:295`). Every
+(`pkg/compute/pxe/service.go:702`, `pkg/compute/pxe/state.go:298`). Every
 transition out of `installing` clears the binding, so a callback that arrives
 after the installation ended — replayed, or after enrollment, authorization or
 quarantine — finds no device and is 403 (`PermissionDenied`,
@@ -310,6 +310,22 @@ and one carrying the first device's MAC is 403 because the certificate now
 belongs to another device (`pkg/api/daemon/pxe_grpc_service.go:572`; Codex
 review 7971). The callback is thereby bound to one device and to the
 installation that holds the certificate's binding.
+
+**A retried installation needs a new installer certificate.** The same device,
+retried (`RetryDevice`, then `booting`), would otherwise be bound to the same
+certificate again, and a late callback from the failed attempt — same
+certificate, same MAC — would end the new one. So the swap that takes a device
+out of `installing` also records the attempt's fingerprint in the device's
+`used_install_certificates_sha256` (`pkg/compute/pxe/state.go:576`), and
+binding a recorded fingerprint is refused with `ErrInstallCertificateReused`,
+`FailedPrecondition` on gRPC (`pkg/compute/pxe/service.go:668`,
+`pkg/api/daemon/pxe_grpc_service.go:800`); the device stays `booting`. With a
+fresh certificate bound, the old attempt's callback names a certificate no
+device carries and is 403. The record is per device (a released certificate
+may still be bound to another device, above) and keeps the most recent
+`MaxUsedInstallCertificates` (32) fingerprints, dropping the oldest; retries
+are capped at `MaxRetries` already, so only an operator cycling a device
+through quarantine more than 32 times reaches the bound (Codex review 7979).
 
 **The `REST base` column is a locator, not the contract.** It gives the prefix a
 route hangs under; it does not give the route. The normative per-route path

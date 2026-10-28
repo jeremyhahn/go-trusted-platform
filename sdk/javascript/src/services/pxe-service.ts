@@ -204,7 +204,10 @@ export class PXEService extends BaseService {
   }
 
   /**
-   * Retry provisioning for a failed device
+   * Retry provisioning for a failed device. The retried installation must be
+   * bound to a new installer certificate (`updateState` with a fresh
+   * `installCertificateSha256`); one the device was already installed under
+   * is refused.
    *
    * @param deviceId - Device ID
    * @returns Updated device

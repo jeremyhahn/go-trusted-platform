@@ -16,6 +16,7 @@ package pxe
 import (
 	"context"
 	"net"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -291,6 +292,8 @@ func (sm *StateManager) TransitionWith(deviceID string, newState ProvisioningSta
 // Every transition out of StateInstalling clears InstallCertificateSHA256 in
 // the same swap: the installer certificate authorizes only the installation
 // it was bound for (SetDeviceInstalling), never a later state of the device.
+// The same swap records the fingerprint as used (retireInstallCert), so no
+// later installation of the device can be bound to it again.
 // A binding apply sets is held by one device at a time (swapEntry).
 func (sm *StateManager) TransitionIf(deviceID string, newState ProvisioningState, reason string, admit func(*DeviceInfo) error, apply func(*DeviceInfo)) error {
 	if deviceID == "" {
@@ -333,7 +336,7 @@ func (sm *StateManager) TransitionIf(deviceID string, newState ProvisioningState
 		now := sm.now()
 		updatedDevice := copyDeviceInfo(currentEntry.device)
 		if currentState == StateInstalling {
-			updatedDevice.InstallCertificateSHA256 = ""
+			retireInstallCert(updatedDevice)
 		}
 		if apply != nil {
 			apply(updatedDevice)
@@ -567,6 +570,28 @@ func stateToEventType(state ProvisioningState) ProvisioningEventType {
 }
 
 // copyDeviceInfo creates a deep copy of a DeviceInfo struct.
+// retireInstallCert clears device's installer certificate binding and records
+// its fingerprint in UsedInstallCertificatesSHA256, dropping the oldest entry
+// past MaxUsedInstallCertificates. device must be a copy the caller owns.
+func retireInstallCert(device *DeviceInfo) {
+	fingerprint := device.InstallCertificateSHA256
+	device.InstallCertificateSHA256 = ""
+	if fingerprint == "" {
+		return
+	}
+	used := append(device.UsedInstallCertificatesSHA256, fingerprint)
+	if len(used) > MaxUsedInstallCertificates {
+		used = used[len(used)-MaxUsedInstallCertificates:]
+	}
+	device.UsedInstallCertificatesSHA256 = used
+}
+
+// installCertUsed reports whether device's earlier installations were bound
+// to fingerprint.
+func installCertUsed(device *DeviceInfo, fingerprint string) bool {
+	return slices.Contains(device.UsedInstallCertificatesSHA256, fingerprint)
+}
+
 func copyDeviceInfo(src *DeviceInfo) *DeviceInfo {
 	if src == nil {
 		return nil
@@ -586,6 +611,10 @@ func copyDeviceInfo(src *DeviceInfo) *DeviceInfo {
 		UpdatedAt:                src.UpdatedAt,
 		StateChangedAt:           src.StateChangedAt,
 		RetryCount:               src.RetryCount,
+	}
+
+	if len(src.UsedInstallCertificatesSHA256) > 0 {
+		dst.UsedInstallCertificatesSHA256 = slices.Clone(src.UsedInstallCertificatesSHA256)
 	}
 
 	// Copy MAC address

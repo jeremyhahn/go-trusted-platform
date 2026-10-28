@@ -110,7 +110,9 @@ func (c *Client) UpdateState(ctx context.Context, deviceID string, state platfor
 // installer certificate its install-completion webhook will present:
 // installCertificateSHA256 is the hex SHA-256 of that certificate's DER. The
 // webhook refuses an installation entered without a binding, and the binding
-// cannot be added once the device is installing.
+// cannot be added once the device is installing. A certificate one of the
+// device's earlier installations was bound to is refused (FailedPrecondition):
+// a retried installation needs a new installer certificate.
 func (c *Client) SetDeviceInstalling(ctx context.Context, deviceID, installCertificateSHA256, reason string) (*platformv1.PXEDeviceInfo, error) {
 	// An empty fingerprint would make the request a plain state update: the
 	// device would enter installing unbound, and the webhook could never end it.
@@ -165,7 +167,8 @@ func (c *Client) Quarantine(ctx context.Context, deviceID, reason string) (*plat
 	return resp.Device, nil
 }
 
-// Retry retries provisioning for a failed device.
+// Retry retries provisioning for a failed device. The retried installation
+// must be bound to a new installer certificate (SetDeviceInstalling).
 func (c *Client) Retry(ctx context.Context, deviceID string) (*platformv1.PXEDeviceInfo, error) {
 	resp, err := c.grpc.Retry(ctx, &platformv1.RetryPXEDeviceRequest{DeviceId: deviceID})
 	if err != nil {

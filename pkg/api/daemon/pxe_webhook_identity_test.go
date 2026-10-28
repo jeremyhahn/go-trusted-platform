@@ -445,6 +445,60 @@ func TestWebhookComplete_RefusesACallbackAfterItsCertificateIsRebound(t *testing
 	assert.Equal(t, pxe.StateInstallComplete, f.state(t, otherMAC))
 }
 
+// A retried installation needs a fresh installer certificate: the first
+// attempt's certificate cannot be bound again, and a late callback from the
+// first attempt, with its certificate and the same MAC, cannot end the second
+// (Codex review 7979).
+func TestWebhookComplete_RefusesTheFailedAttemptsCallbackAfterARetry(t *testing.T) {
+	ctx := context.Background()
+	f := newWebhookFixture(t)
+	first := pxe.CertificateSHA256(f.node.Raw)
+	_, err := f.svc.WebhookComplete(grpcContext(verifiedState(f.node)),
+		&platformv1.PXEWebhookCompleteRequest{MacAddress: webhookNodeMAC, Success: false})
+	require.NoError(t, err)
+	device, err := f.backend.GetDeviceByMAC(ctx, webhookNodeMAC)
+	require.NoError(t, err)
+	require.NoError(t, f.backend.RetryDevice(ctx, device.ID))
+	require.NoError(t, f.backend.UpdateDeviceState(ctx, device.ID, pxe.StateBooting, "netboot"))
+
+	installing := func(fingerprint string) error {
+		_, err := f.svc.UpdateState(ctx, &platformv1.UpdatePXEStateRequest{
+			DeviceId:                 device.ID,
+			State:                    platformv1.ProvisioningState_PROVISIONING_STATE_INSTALLING,
+			InstallCertificateSha256: fingerprint,
+		})
+		return err
+	}
+	err = installing(first)
+	assert.Equal(t, codes.FailedPrecondition, status.Code(err))
+	assert.Equal(t, pxe.ErrInstallCertificateReused{DeviceID: device.ID, CertificateSHA256: first}.Error(),
+		status.Convert(err).Message())
+	assert.Equal(t, pxe.StateBooting, f.state(t, webhookNodeMAC))
+
+	retry := f.issuerA.issue(t, webhookSerial+2)
+	second := pxe.CertificateSHA256(retry.Raw)
+	require.NoError(t, installing(second))
+
+	for _, success := range []bool{false, true} {
+		t.Run(fmt.Sprintf("first attempt resent/success=%t", success), func(t *testing.T) {
+			_, err := f.svc.WebhookComplete(grpcContext(verifiedState(f.node)),
+				&platformv1.PXEWebhookCompleteRequest{MacAddress: webhookNodeMAC, Success: success})
+
+			assert.Equal(t, codes.PermissionDenied, status.Code(err))
+			assert.Equal(t, ErrPXEWebhookUnknownIdentity{CertificateSHA256: first}.Error(), status.Convert(err).Message())
+			current, err := f.backend.GetDevice(ctx, device.ID)
+			require.NoError(t, err)
+			assert.Equal(t, pxe.StateInstalling, current.State)
+			assert.Equal(t, second, current.InstallCertificateSHA256)
+		})
+	}
+
+	_, err = f.svc.WebhookComplete(grpcContext(verifiedState(retry)),
+		&platformv1.PXEWebhookCompleteRequest{MacAddress: webhookNodeMAC, Success: true})
+	require.NoError(t, err, "the second attempt's own callback still ends it")
+	assert.Equal(t, pxe.StateInstallComplete, f.state(t, webhookNodeMAC))
+}
+
 // A device moved out of installing by another path, here a quarantine, loses
 // its binding with the move, so the installer cannot complete it afterwards.
 func TestWebhookComplete_RefusesAfterQuarantineDuringInstall(t *testing.T) {

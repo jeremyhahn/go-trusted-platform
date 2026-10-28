@@ -110,6 +110,12 @@ func (s ProvisioningState) CanTransitionTo(target ProvisioningState) bool {
 	return false
 }
 
+// MaxUsedInstallCertificates bounds DeviceInfo.UsedInstallCertificatesSHA256.
+// RetryDevice already caps a device's attempts at ServiceConfig.MaxRetries; an
+// operator can still cycle a device through quarantine, so the record keeps
+// the most recent fingerprints and drops the oldest past this many.
+const MaxUsedInstallCertificates = 32
+
 // DeviceInfo tracks a device through the provisioning workflow
 type DeviceInfo struct {
 	// ID is the unique identifier for this device (typically MAC-based)
@@ -139,6 +145,15 @@ type DeviceInfo struct {
 	// enrollment certificate exists, and names the whole certificate rather
 	// than a serial that is unique only within one issuer.
 	InstallCertificateSHA256 string `json:"install_certificate_sha256,omitempty" yaml:"install_certificate_sha256,omitempty"`
+
+	// UsedInstallCertificatesSHA256 holds the fingerprints of the installer
+	// certificates this device's ended installations were bound to, oldest
+	// first, at most MaxUsedInstallCertificates of them. An attempt's
+	// fingerprint is recorded in the same swap that clears its binding, and
+	// SetDeviceInstalling refuses a recorded one, so every attempt needs a
+	// fresh certificate and a late callback from an earlier attempt can never
+	// match the current binding.
+	UsedInstallCertificatesSHA256 []string `json:"used_install_certificates_sha256,omitempty" yaml:"used_install_certificates_sha256,omitempty"`
 
 	// CurrentVLAN is the VLAN the device is currently assigned to
 	CurrentVLAN uint16 `json:"current_vlan" yaml:"current_vlan"`

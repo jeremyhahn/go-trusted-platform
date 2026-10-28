@@ -1170,6 +1170,11 @@ func TestPXEGRPCService_ErrorMapping(t *testing.T) {
 			wantCode: codes.AlreadyExists,
 		},
 		{
+			name:     "installer certificate used by an earlier installation",
+			err:      pxe.ErrInstallCertificateReused{DeviceID: "a", CertificateSHA256: "f"},
+			wantCode: codes.FailedPrecondition,
+		},
+		{
 			name:     "invalid state transition",
 			err:      pxe.ErrInvalidStateTransition{FromState: "a", ToState: "b"},
 			wantCode: codes.FailedPrecondition,

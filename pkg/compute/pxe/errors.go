@@ -159,6 +159,21 @@ func (e ErrInstallationNotBound) Error() string {
 		e.DeviceID, e.State, e.CertificateSHA256)
 }
 
+// ErrInstallCertificateReused is returned when an installation is bound to an
+// installer certificate one of the device's earlier installations was bound
+// to. Every attempt needs a fresh certificate: a late callback from an earlier
+// attempt carries the same certificate and MAC, so a reused one could end the
+// new installation.
+type ErrInstallCertificateReused struct {
+	DeviceID          string
+	CertificateSHA256 string
+}
+
+func (e ErrInstallCertificateReused) Error() string {
+	return fmt.Sprintf("pxe: device %s already installed under installer certificate %s; a retried installation needs a new certificate",
+		e.DeviceID, e.CertificateSHA256)
+}
+
 // ErrInstallCertificateInUse is returned when an installer certificate is
 // bound to a device while another device holds it. The install-completion
 // webhook admits a caller only when exactly one device carries its

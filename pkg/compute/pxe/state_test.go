@@ -680,6 +680,8 @@ func TestStateManager_Transition_LeavingInstallingClearsTheBinding(t *testing.T)
 			require.NoError(t, err)
 			assert.Equal(t, next, retrieved.State)
 			assert.Empty(t, retrieved.InstallCertificateSHA256)
+			assert.Equal(t, []string{"bound"}, retrieved.UsedInstallCertificatesSHA256,
+				"the ended installation's certificate is recorded as used in the same swap")
 		})
 	}
 
@@ -696,6 +698,36 @@ func TestStateManager_Transition_LeavingInstallingClearsTheBinding(t *testing.T)
 		require.NoError(t, err)
 		assert.Equal(t, "bound", retrieved.InstallCertificateSHA256)
 	})
+}
+
+func TestRetireInstallCert_KeepsTheMostRecentFingerprints(t *testing.T) {
+	device := &DeviceInfo{}
+	for i := 0; i <= MaxUsedInstallCertificates; i++ {
+		device.InstallCertificateSHA256 = fmt.Sprintf("cert-%d", i)
+		retireInstallCert(device)
+	}
+
+	assert.Empty(t, device.InstallCertificateSHA256)
+	require.Len(t, device.UsedInstallCertificatesSHA256, MaxUsedInstallCertificates)
+	assert.False(t, installCertUsed(device, "cert-0"), "the oldest fingerprint is dropped past the bound")
+	assert.True(t, installCertUsed(device, "cert-1"))
+	assert.True(t, installCertUsed(device, fmt.Sprintf("cert-%d", MaxUsedInstallCertificates)))
+}
+
+func TestRetireInstallCert_UnboundDeviceRecordsNothing(t *testing.T) {
+	device := &DeviceInfo{}
+	retireInstallCert(device)
+
+	assert.Empty(t, device.UsedInstallCertificatesSHA256)
+	assert.False(t, installCertUsed(device, ""))
+}
+
+func TestCopyDeviceInfo_UsedInstallCertificatesAreNotShared(t *testing.T) {
+	src := &DeviceInfo{UsedInstallCertificatesSHA256: []string{"cert-0"}}
+	dst := copyDeviceInfo(src)
+	dst.UsedInstallCertificatesSHA256[0] = "changed"
+
+	assert.Equal(t, []string{"cert-0"}, src.UsedInstallCertificatesSHA256)
 }
 
 // registerBooting registers a booting device on a MAC derived from n.
