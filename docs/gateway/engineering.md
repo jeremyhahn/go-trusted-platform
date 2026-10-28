@@ -844,6 +844,17 @@ hop limit 255, version 3, checksum over the RFC 2460 §8.1 pseudo-header for
 both families, our VRID, our address list; anything else is counted in
 `Health.Dropped` and ignored.
 
+The socket (`fhrp.NewRawTransport`, `pkg/sdn/fhrp/transport_linux.go`) is a
+raw protocol-112 socket bound to the group's interface (`SO_BINDTODEVICE`) and
+joined to 224.0.0.18 / ff02::12 (RFC 9568 §5.1.1.2, §5.1.2.2). The IPv4 socket
+is not bound to `source`: Linux hands an IPv4 packet to a raw socket only when
+the socket's bound address is the packet's destination, so a socket bound to
+`source` never hears a peer's advertisement and every backup's Master_Down
+timer expires (two masters). IPv4 advertisements carry `source` per send in
+`IP_PKTINFO` instead, with multicast loopback off so the speaker does not count
+its own advertisements in `Health.Dropped`; the IPv6 socket, whose raw match also accepts a joined
+group, stays bound to `source`.
+
 Typed errors: `ErrInvalidGroupConfig`, `ErrDuplicateGroup`, `ErrInvalidPacket`,
 `ErrTransportRequired`, `ErrTransportFailed`, `ErrAddressOperationFailed`,
 `ErrSpeakerNotRunning`, `ErrSpeakerAlreadyRunning`, `ErrGroupNotFound`
