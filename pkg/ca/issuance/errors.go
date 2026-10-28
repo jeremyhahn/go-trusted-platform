@@ -44,6 +44,19 @@ func (e *UnknownStoreTypeError) Error() string {
 
 func (e *UnknownStoreTypeError) invalidRequest() {}
 
+// UnknownRevocationReasonError is a revocation reason that is not an
+// RFC 5280 §5.3.1 CRLReason code.
+type UnknownRevocationReasonError struct {
+	Code int
+}
+
+func (e *UnknownRevocationReasonError) Error() string {
+	return "unknown revocation reason " + strconv.Itoa(e.Code) +
+		": RFC 5280 §5.3.1 defines codes 0-6 and 8-10"
+}
+
+func (e *UnknownRevocationReasonError) invalidRequest() {}
+
 // CSRError is a CSR the CA cannot certify.
 type CSRError struct {
 	Reason string

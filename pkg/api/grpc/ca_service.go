@@ -477,6 +477,9 @@ func (s *CAGRPCService) RevokeCertificate(
 	if serial == "" {
 		return nil, status.Error(codes.InvalidArgument, ErrMissingSerial{}.Error())
 	}
+	if err := issuance.ValidateRevocationReason(int(req.GetReason())); err != nil {
+		return nil, status.Error(codes.InvalidArgument, err.Error())
+	}
 
 	// Find the certificate by serial or common name
 	cert := s.findCertByIdentifier(serial)

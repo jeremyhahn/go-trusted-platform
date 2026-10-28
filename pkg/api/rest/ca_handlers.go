@@ -840,10 +840,8 @@ func (h *CAHandlers) handleRevokeCertificate(w http.ResponseWriter, r *http.Requ
 	}
 	req.Serial = serial
 
-	// A numeric reason outside the enum (RFC 5280 leaves code 7 unassigned)
-	// would otherwise reach the CRL as a code no relying party can read.
-	if _, known := platformv1.RevocationReason_name[int32(req.GetReason())]; !known {
-		h.writeError(w, http.StatusBadRequest, ErrInvalidRequestBody{Reason: fmt.Sprintf("unknown revocation reason %d", req.GetReason())})
+	if err := issuance.ValidateRevocationReason(int(req.GetReason())); err != nil {
+		h.writeError(w, http.StatusBadRequest, ErrInvalidRequestBody{Reason: err.Error()})
 		return
 	}
 

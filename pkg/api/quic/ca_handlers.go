@@ -580,6 +580,9 @@ func (h *CAHandler) handleRevoke(ctx context.Context, req *quicwire.Request) *qu
 	if revokeReq.Serial == "" {
 		return h.errorResponse(quicwire.StatusInvalidArgument, ErrCAMissingSerial)
 	}
+	if err := issuance.ValidateRevocationReason(int(revokeReq.Reason)); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidArgument, err)
+	}
 
 	cert := h.findCertByIdentifier(revokeReq.Serial)
 	if cert == nil {

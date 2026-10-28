@@ -859,6 +859,8 @@ func TestCAHandlers_RevokeCertificate_RejectsUnknownContract(t *testing.T) {
 	for name, body := range map[string]string{
 		"unknown enum name": `{"reason":"REVOCATION_REASON_BOGUS"}`,
 		"unassigned code 7": `{"reason":7}`,
+		"negative code -1":  `{"reason":-1}`,
+		"undefined code 99": `{"reason":99}`,
 		"unknown field":     `{"revoke_reason":"REVOCATION_REASON_KEY_COMPROMISE"}`,
 		"wrong type":        `{"deleteKeys":"yes"}`,
 		"malformed":         `{"reason":`,

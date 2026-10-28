@@ -907,6 +907,41 @@ func TestRevokeCertificate_Success(t *testing.T) {
 	}
 }
 
+// errTestCARevokeCalled is what the CA fake answers if a revoke reaches it.
+type testCARevokeCalledError struct{}
+
+func (testCARevokeCalledError) Error() string { return "the CA was asked to revoke" }
+
+var errTestCARevokeCalled error = testCARevokeCalledError{}
+
+// A reason outside RFC 5280 §5.3.1 (7 is unassigned) is InvalidArgument and
+// never reaches the CA, which would publish it in the CRL.
+func TestRevokeCertificate_RejectsUndefinedReason(t *testing.T) {
+	t.Parallel()
+
+	rootCA := createTestCAWithKey(t, "Test Root CA")
+	for _, reason := range []int32{7, -1, 99} {
+		cert := createCertSignedByCA(t, "test.example.com", rootCA)
+		serial := hex.EncodeToString(cert.SerialNumber.Bytes())
+		certStore := newMockCertStore()
+		certStore.certs[serial] = cert
+		// A CA call would fail Internal; InvalidArgument proves it never ran.
+		mockCA := &configurableMockCA{
+			certStore: certStore,
+			revokeErr: errTestCARevokeCalled,
+		}
+		svc := NewCAGRPCService(createTestLogger(), mockCA, nil)
+
+		_, err := svc.RevokeCertificate(context.Background(), &platformv1.RevokeCertificateRequest{
+			Serial: serial,
+			Reason: platformv1.RevocationReason(reason),
+		})
+		if status.Code(err) != codes.InvalidArgument {
+			t.Errorf("reason %d: expected InvalidArgument, got %v", reason, err)
+		}
+	}
+}
+
 func TestRevokeCertificate_Error(t *testing.T) {
 	t.Parallel()
 

@@ -43,6 +43,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/tpmpcr"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/tpmsrk"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/verdict"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/ca/issuance"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/compute"
 	computecontainer "github.com/jeremyhahn/go-trusted-platform/pkg/compute/container"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device"
@@ -1600,6 +1601,11 @@ func (p *MCPServiceProvider) CAList(ctx context.Context, limit int, cursor strin
 func (p *MCPServiceProvider) CARevoke(ctx context.Context, serial string, reason int, deleteKeys bool) (interface{}, error) {
 	if p.caService == nil {
 		return nil, ErrServiceNotAvailable{Service: "ca"}
+	}
+	// Checked before the int32 conversion, which would wrap an out-of-range
+	// reason onto a defined code.
+	if err := issuance.ValidateRevocationReason(reason); err != nil {
+		return nil, err
 	}
 	return p.caService.RevokeCertificate(ctx, &platformv1.RevokeCertificateRequest{
 		Serial:     serial,

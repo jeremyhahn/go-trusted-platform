@@ -959,6 +959,10 @@ func (h *CAHandlers) RevokeCertificate(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	req.Serial = serial
+	if err := issuance.ValidateRevocationReason(int(req.GetReason())); err != nil {
+		h.respWriter.Error400(w, r, err)
+		return
+	}
 
 	var cert *x509.Certificate
 	if certStore := h.ca.CertStore(); certStore != nil {

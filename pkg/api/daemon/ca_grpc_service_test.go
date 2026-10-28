@@ -787,6 +787,32 @@ func TestCAGRPCService_RevokeCertificate_Success(t *testing.T) {
 	}
 }
 
+// A reason outside RFC 5280 §5.3.1 (7 is unassigned) is InvalidArgument and
+// never reaches the CA, which would publish it in the CRL.
+func TestCAGRPCService_RevokeCertificate_RejectsUndefinedReason(t *testing.T) {
+	t.Parallel()
+
+	for _, reason := range []int32{7, -1, 99} {
+		cert := createTestCertificate(t)
+		serial := hex.EncodeToString(cert.SerialNumber.Bytes())
+		mockCA := &configurableMockCA{
+			certStore: &mockCertStore{certs: map[string]*x509.Certificate{serial: cert}},
+		}
+		svc := &CAGRPCService{ca: mockCA}
+
+		_, err := svc.RevokeCertificate(context.Background(), &platformv1.RevokeCertificateRequest{
+			Serial: serial,
+			Reason: platformv1.RevocationReason(reason),
+		})
+		if status.Code(err) != codes.InvalidArgument {
+			t.Errorf("reason %d: expected InvalidArgument, got %v", reason, err)
+		}
+		if len(mockCA.revokedOpts) != 0 {
+			t.Errorf("reason %d: the CA was asked to revoke: %+v", reason, mockCA.revokedOpts)
+		}
+	}
+}
+
 func TestCAGRPCService_RevokeCertificate_WithDeleteKeys(t *testing.T) {
 	t.Parallel()
 

@@ -332,6 +332,9 @@ func (s *CAGRPCService) RevokeCertificate(ctx context.Context, req *platformv1.R
 	if serial == "" {
 		return nil, status.Error(codes.InvalidArgument, "serial number is required")
 	}
+	if err := issuance.ValidateRevocationReason(int(req.GetReason())); err != nil {
+		return nil, status.Error(codes.InvalidArgument, err.Error())
+	}
 
 	// Find the certificate by serial or common name
 	cert := s.findCertByIdentifier(serial)
