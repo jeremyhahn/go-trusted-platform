@@ -15,9 +15,9 @@ package quicbaas
 
 import (
 	"context"
-	"encoding/json"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore/entities"
 )
 
@@ -65,7 +65,7 @@ func (d *RoleDAO) GetByName(ctx context.Context, name string) (*entities.Role, e
 	// index is not properly configured or returns all entities
 	for _, result := range results {
 		var role entities.Role
-		if err := json.Unmarshal(result.Data, &role); err != nil {
+		if err := datastore.DecodeEntity(result.Data, &role); err != nil {
 			d.logger.Warn("Failed to deserialize role from query result", "error", err)
 			continue
 		}
@@ -93,7 +93,7 @@ func (d *RoleDAO) getRoleByScan(ctx context.Context, name string) (*entities.Rol
 
 		for _, entity := range svcEntities {
 			var role entities.Role
-			if err := json.Unmarshal(entity.Data, &role); err != nil {
+			if err := datastore.DecodeEntity(entity.Data, &role); err != nil {
 				d.logger.Warn("Failed to deserialize role", "id", entity.ID, "error", err)
 				continue
 			}

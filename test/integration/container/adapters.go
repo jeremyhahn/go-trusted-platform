@@ -47,35 +47,18 @@ const (
 	// EnvPlatformdSocket is the Unix socket path for platformd.
 	EnvPlatformdSocket = "PLATFORMD_SOCKET"
 
-	// EnvPlatformAPIEndpoint is the REST API endpoint.
-	EnvPlatformAPIEndpoint = "PLATFORM_API_ENDPOINT"
-
-	// EnvPlatformdGRPCEndpoint is the gRPC endpoint.
-	EnvPlatformdGRPCEndpoint = "PLATFORMD_GRPC_ENDPOINT"
-
-	// EnvPlatformdQUICEndpoint is the QUIC endpoint.
-	EnvPlatformdQUICEndpoint = "PLATFORMD_QUIC_ENDPOINT"
-
-	// EnvPlatformdMCPEndpoint is the MCP endpoint.
-	EnvPlatformdMCPEndpoint = "PLATFORMD_MCP_ENDPOINT"
+	// The transport endpoints are the variables the runner exports with the
+	// ports it chose for platformd at run time (#997); there are no defaults.
+	EnvPlatformAPIEndpoint   = helpers.EnvAPIEndpoint
+	EnvPlatformdGRPCEndpoint = helpers.EnvGRPCEndpoint
+	EnvPlatformdQUICEndpoint = helpers.EnvQUICEndpoint
+	EnvPlatformdMCPEndpoint  = helpers.EnvMCPEndpoint
 
 	// DefaultPlatformctlBinary is the default binary name.
 	DefaultPlatformctlBinary = "platformctl"
 
 	// DefaultPlatformdSocket is the default Unix socket path.
 	DefaultPlatformdSocket = "/run/platformd.sock"
-
-	// DefaultPlatformAPIEndpoint is the default REST API endpoint.
-	DefaultPlatformAPIEndpoint = "127.0.0.1:8443"
-
-	// DefaultPlatformdGRPCEndpoint is the default gRPC endpoint.
-	DefaultPlatformdGRPCEndpoint = "127.0.0.1:10443"
-
-	// DefaultPlatformdQUICEndpoint is the default QUIC endpoint.
-	DefaultPlatformdQUICEndpoint = "127.0.0.1:9444"
-
-	// DefaultPlatformdMCPEndpoint is the default MCP endpoint.
-	DefaultPlatformdMCPEndpoint = "127.0.0.1:9445"
 
 	// DefaultCommandTimeout is the default timeout for commands.
 	DefaultCommandTimeout = 30 * time.Second
@@ -177,9 +160,9 @@ func (r *RESTAdapter) Name() string {
 
 // Setup connects the SDK over REST (HTTPS with the suite's mTLS identity).
 func (r *RESTAdapter) Setup(ctx context.Context) error {
-	endpoint := os.Getenv(EnvPlatformAPIEndpoint)
-	if endpoint == "" {
-		endpoint = DefaultPlatformAPIEndpoint
+	endpoint, err := helpers.RequireEndpoint(EnvPlatformAPIEndpoint)
+	if err != nil {
+		return err
 	}
 	return r.connectSDK(ctx, r.Name(), endpoint,
 		platform.WithOnlyProtocol(platform.ProtocolREST),
@@ -213,9 +196,9 @@ func (g *GRPCAdapter) Name() string {
 
 // Setup initializes the gRPC connection.
 func (g *GRPCAdapter) Setup(ctx context.Context) error {
-	endpoint := os.Getenv(EnvPlatformdGRPCEndpoint)
-	if endpoint == "" {
-		endpoint = DefaultPlatformdGRPCEndpoint
+	endpoint, err := helpers.RequireEndpoint(EnvPlatformdGRPCEndpoint)
+	if err != nil {
+		return err
 	}
 	g.endpoint = endpoint
 
@@ -512,9 +495,9 @@ func (q *QUICAdapter) Name() string {
 
 // Setup connects the SDK over QUIC.
 func (q *QUICAdapter) Setup(ctx context.Context) error {
-	endpoint := os.Getenv(EnvPlatformdQUICEndpoint)
-	if endpoint == "" {
-		endpoint = DefaultPlatformdQUICEndpoint
+	endpoint, err := helpers.RequireEndpoint(EnvPlatformdQUICEndpoint)
+	if err != nil {
+		return err
 	}
 	return q.connectSDK(ctx, q.Name(), endpoint,
 		platform.WithOnlyProtocol(platform.ProtocolQUIC),
@@ -549,9 +532,9 @@ func (m *MCPAdapter) Name() string {
 
 // Setup connects the SDK over MCP.
 func (m *MCPAdapter) Setup(ctx context.Context) error {
-	endpoint := os.Getenv(EnvPlatformdMCPEndpoint)
-	if endpoint == "" {
-		endpoint = DefaultPlatformdMCPEndpoint
+	endpoint, err := helpers.RequireEndpoint(EnvPlatformdMCPEndpoint)
+	if err != nil {
+		return err
 	}
 	return m.connectSDK(ctx, m.Name(), endpoint,
 		platform.WithOnlyProtocol(platform.ProtocolMCP),

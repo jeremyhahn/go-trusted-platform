@@ -21,7 +21,6 @@ package container
 import (
 	"context"
 	"fmt"
-	"os"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -50,37 +49,6 @@ func ShortTestContext() (context.Context, context.CancelFunc) {
 // =============================================================================
 // Endpoint Configuration
 // =============================================================================
-
-// ServiceEndpoints contains all configured service endpoints for testing.
-type ServiceEndpoints struct {
-	PlatformdSocket string
-	PlatformAPI     string
-	PlatformGRPC    string
-	PlatformQUIC    string
-	PlatformMCP     string
-	PlatformctlBin  string
-}
-
-// GetServiceEndpoints returns service endpoints from environment
-// variables with sensible defaults.
-func GetServiceEndpoints() ServiceEndpoints {
-	return ServiceEndpoints{
-		PlatformdSocket: getEnvOrDefault(EnvPlatformdSocket, DefaultPlatformdSocket),
-		PlatformAPI:     getEnvOrDefault(EnvPlatformAPIEndpoint, DefaultPlatformAPIEndpoint),
-		PlatformGRPC:    getEnvOrDefault(EnvPlatformdGRPCEndpoint, DefaultPlatformdGRPCEndpoint),
-		PlatformQUIC:    getEnvOrDefault(EnvPlatformdQUICEndpoint, DefaultPlatformdQUICEndpoint),
-		PlatformMCP:     getEnvOrDefault(EnvPlatformdMCPEndpoint, DefaultPlatformdMCPEndpoint),
-		PlatformctlBin:  getEnvOrDefault(EnvPlatformctlBinary, DefaultPlatformctlBinary),
-	}
-}
-
-// getEnvOrDefault returns the environment variable value or the default if not set.
-func getEnvOrDefault(key, defaultValue string) string {
-	if value := os.Getenv(key); value != "" {
-		return value
-	}
-	return defaultValue
-}
 
 // =============================================================================
 // Test Name Generator

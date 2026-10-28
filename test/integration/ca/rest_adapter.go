@@ -236,9 +236,9 @@ func (r *RESTAdapter) Name() string {
 
 // Setup initializes the REST adapter and verifies connectivity.
 func (r *RESTAdapter) Setup(ctx context.Context) error {
-	endpoint := os.Getenv(EnvPlatformRESTEndpoint)
-	if endpoint == "" {
-		endpoint = GetServiceEndpoints().PlatformREST
+	endpoint, err := helpers.RequireEndpoint(EnvPlatformRESTEndpoint)
+	if err != nil {
+		return err
 	}
 	r.baseURL = endpoint
 
@@ -250,8 +250,7 @@ func (r *RESTAdapter) Setup(ctx context.Context) error {
 	}
 
 	// Verify connectivity with the CA info endpoint
-	_, err := r.Info(ctx)
-	if err != nil {
+	if _, err := r.Info(ctx); err != nil {
 		return ErrConnectionFailed{Protocol: "REST", Endpoint: r.baseURL, Err: err}
 	}
 

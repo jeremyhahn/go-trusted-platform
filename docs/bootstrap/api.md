@@ -232,7 +232,11 @@ Profile creation takes `{"mac", "hostname", "role", "config", "ek_cert"}` where
 `config` on the profile **verbatim** (it is authoritative — the handler does
 not merge it onto the template again, so keys the seeder replaced stay
 replaced) and delivers it unchanged from `GET /api/v1/devices/config` on the
-provisioning listener. A
+provisioning listener. Numbers in `config` round-trip exactly, at any depth: the
+device store decodes with `UseNumber`, so an integer above 2^53 (for example
+`9007199254740993`) or a fraction comes back with its digits unchanged, and
+the YAML delivery emits it as a plain YAML int or float, not a quoted string
+(#125). A
 `config` that is not a JSON object (an explicit `null` included) is a `400`.
 **`ek_cert` is refused with `400` on this route**: the route carries no caller
 credential today (see *Authorization — pending an upstream capability*

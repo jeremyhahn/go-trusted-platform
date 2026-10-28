@@ -193,12 +193,14 @@ func remoteDBKeyRefs(profile *entities.DeviceProfile, keyRef string) (keyURI, ce
 // template, or *app.App), so the section is recovered by re-serializing the
 // config and decoding the "secure-boot" key into the typed struct. This keeps
 // the platform's single SecureBootConfig definition authoritative rather than
-// re-deriving the field layout here.
+// re-deriving the field layout here. A config read from the profile store
+// holds json.Number values, which entities.MarshalConfigYAML emits as plain
+// YAML numbers so they decode into the struct's integer fields.
 func secureBootFromProfile(profile *entities.DeviceProfile) (*installer.SecureBootConfig, error) {
 	if profile == nil || profile.Config == nil {
 		return nil, ErrRemoteSignNotConfigured{Reason: "device profile has no platform config"}
 	}
-	raw, err := yaml.Marshal(profile.Config)
+	raw, err := entities.MarshalConfigYAML(profile.Config)
 	if err != nil {
 		return nil, ErrRemoteSignNotConfigured{Reason: "platform config is not serializable"}
 	}

@@ -15,11 +15,11 @@ package quicbaas
 
 import (
 	"context"
-	"encoding/json"
 	"strings"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore"
 )
 
 const entityTypeDeviceProfile = "DeviceProfile"
@@ -60,7 +60,7 @@ func (d *DeviceProfileDAO) GetByModel(ctx context.Context, model string) (*entit
 	}
 
 	var profile entities.DeviceProfile
-	if err := json.Unmarshal(results[0].Data, &profile); err != nil {
+	if err := datastore.DecodeEntity(results[0].Data, &profile); err != nil {
 		return nil, ErrDeserializationFailed{EntityType: entityTypeDeviceProfile, Cause: err}
 	}
 
@@ -79,7 +79,7 @@ func (d *DeviceProfileDAO) getProfileByScan(ctx context.Context, model string) (
 
 		for _, entity := range svcEntities {
 			var profile entities.DeviceProfile
-			if err := json.Unmarshal(entity.Data, &profile); err != nil {
+			if err := datastore.DecodeEntity(entity.Data, &profile); err != nil {
 				d.logger.Warn("Failed to deserialize device profile", "id", entity.ID, "error", err)
 				continue
 			}
@@ -120,7 +120,7 @@ func (d *DeviceProfileDAO) FindByMACPrefix(ctx context.Context, macAddr string) 
 
 		for _, entity := range svcEntities {
 			var profile entities.DeviceProfile
-			if err := json.Unmarshal(entity.Data, &profile); err != nil {
+			if err := datastore.DecodeEntity(entity.Data, &profile); err != nil {
 				d.logger.Warn("Failed to deserialize device profile", "id", entity.ID, "error", err)
 				continue
 			}
@@ -164,7 +164,7 @@ func (d *DeviceProfileDAO) FindBySerialPrefix(ctx context.Context, serial string
 
 		for _, entity := range svcEntities {
 			var profile entities.DeviceProfile
-			if err := json.Unmarshal(entity.Data, &profile); err != nil {
+			if err := datastore.DecodeEntity(entity.Data, &profile); err != nil {
 				d.logger.Warn("Failed to deserialize device profile", "id", entity.ID, "error", err)
 				continue
 			}
@@ -210,7 +210,7 @@ func (d *DeviceProfileDAO) FindMatchingProfile(ctx context.Context, macAddr, ser
 
 		for _, entity := range svcEntities {
 			var profile entities.DeviceProfile
-			if err := json.Unmarshal(entity.Data, &profile); err != nil {
+			if err := datastore.DecodeEntity(entity.Data, &profile); err != nil {
 				d.logger.Warn("Failed to deserialize device profile", "id", entity.ID, "error", err)
 				continue
 			}
@@ -261,7 +261,7 @@ func (d *DeviceProfileDAO) FindByEKSerial(ctx context.Context, ekSerial string) 
 
 		for _, entity := range svcEntities {
 			var profile entities.DeviceProfile
-			if err := json.Unmarshal(entity.Data, &profile); err != nil {
+			if err := datastore.DecodeEntity(entity.Data, &profile); err != nil {
 				d.logger.Warn("Failed to deserialize device profile", "id", entity.ID, "error", err)
 				continue
 			}
@@ -300,7 +300,7 @@ func (d *DeviceProfileDAO) FindByExactMAC(ctx context.Context, mac string) (*ent
 
 		for _, entity := range svcEntities {
 			var profile entities.DeviceProfile
-			if err := json.Unmarshal(entity.Data, &profile); err != nil {
+			if err := datastore.DecodeEntity(entity.Data, &profile); err != nil {
 				d.logger.Warn("Failed to deserialize device profile", "id", entity.ID, "error", err)
 				continue
 			}

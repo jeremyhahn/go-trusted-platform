@@ -302,10 +302,19 @@ PLATFORMD_SOCK_PATH="/tmp/platformd-integration/platformd.sock"
 # passes it to `platformd serve` and setup_env_vars() builds every exported
 # endpoint from it, so the daemon and the suites cannot disagree (#502).
 # test/integration/helpers/endpoints_test.go asserts that shape.
-PLATFORMD_REST_PORT="8443"
-PLATFORMD_GRPC_PORT="10443"
-PLATFORMD_QUIC_PORT="9444"
-PLATFORMD_MCP_PORT="9445"
+#
+# The ports are ephemeral, chosen by choose_platformd_ports() after
+# build_binaries, never fixed numbers: every act_runner job container runs
+# with `network: host`, so two Integration jobs on one host share one network
+# namespace, and with a fixed 8443 the second job's suites talked to the first
+# job's daemon (jobs 301360 and 301211, #997). The OVSDB manager's TCP port
+# (OVSDB_TCP_PORT, read by test/integration/sdn through OVSDB_ADDRESS) is
+# chosen in the same call for the same reason.
+PLATFORMD_REST_PORT=""
+PLATFORMD_GRPC_PORT=""
+PLATFORMD_QUIC_PORT=""
+PLATFORMD_MCP_PORT=""
+OVSDB_TCP_PORT=""
 
 # OVS bridge name used by the integration test config (sdn.ovs.bridge).
 # Platformd reads this from test/integration/config.yaml; the bridge is
@@ -479,6 +488,16 @@ setup_devices() {
 # OVS Setup
 # =============================================================================
 
+# ovsdb_listen_tcp makes the running ovsdb-server listen on the OVSDB_TCP_PORT
+# chosen for this run, the port OVSDB_ADDRESS names. It is added at runtime so
+# an ovsdb-server that was already running gets it too: the devcontainer
+# entrypoint (AUTO_START_OVS=true) starts one listening on 6640 only, and
+# without the new remote the SDN suite would dial an unbound port (#997).
+# Adding a remote the server already has is a no-op.
+ovsdb_listen_tcp() {
+    ovs-appctl -t ovsdb-server ovsdb-server/add-remote "ptcp:${OVSDB_TCP_PORT}:127.0.0.1"
+}
+
 start_ovs() {
     echo "=== Starting Open vSwitch ==="
 
@@ -496,14 +515,17 @@ start_ovs() {
         echo "Starting ovsdb-server..."
         ovsdb-server \
             --remote=punix:/var/run/openvswitch/db.sock \
-            --remote=ptcp:6640:127.0.0.1 \
             --pidfile=/var/run/openvswitch/ovsdb-server.pid \
             --detach \
             --log-file=/var/log/openvswitch/ovsdb-server.log \
             /etc/openvswitch/conf.db
         wait_for 10 "ovsdb-server on db.sock" ovs-vsctl --no-wait --timeout=1 show || true
         ovs-vsctl --no-wait init || true
+    else
+        echo "ovsdb-server already running; reusing it"
     fi
+    ovsdb_listen_tcp || return 1
+    echo "OVSDB listening on ${OVSDB_ADDRESS}"
 
     # Start ovs-vswitchd
     if ! pgrep -x ovs-vswitchd > /dev/null; then
@@ -583,6 +605,34 @@ start_swtpm() {
 # =============================================================================
 # platformd Setup
 # =============================================================================
+
+# choose_platformd_ports sets platformd's four listener ports and the OVSDB
+# manager's TCP port from one call to test/integration/helpers/freeport, which
+# binds 127.0.0.1:0 for each and holds them all until every one is bound, so
+# the five are distinct (#997). It runs from PLATFORM_BUILD_DIR, which
+# build_binaries has entered.
+choose_platformd_ports() {
+    echo "=== Choosing platformd's loopback ports ==="
+    if ! go build -buildvcs=false -o /tmp/freeport ./test/integration/helpers/freeport/; then
+        echo "FATAL: freeport build failed"
+        exit 1
+    fi
+    local ports
+    # REST, gRPC, QUIC (UDP), MCP, OVSDB manager.
+    if ! ports="$(/tmp/freeport tcp tcp udp tcp tcp)"; then
+        echo "FATAL: freeport could not bind loopback ports"
+        exit 1
+    fi
+    local -a port_list
+    mapfile -t port_list <<< "$ports"
+    PLATFORMD_REST_PORT="${port_list[0]}"
+    PLATFORMD_GRPC_PORT="${port_list[1]}"
+    PLATFORMD_QUIC_PORT="${port_list[2]}"
+    PLATFORMD_MCP_PORT="${port_list[3]}"
+    OVSDB_TCP_PORT="${port_list[4]}"
+    export OVSDB_ADDRESS="tcp:127.0.0.1:${OVSDB_TCP_PORT}"
+    echo "platformd ports: REST ${PLATFORMD_REST_PORT}, gRPC ${PLATFORMD_GRPC_PORT}, QUIC ${PLATFORMD_QUIC_PORT}/udp, MCP ${PLATFORMD_MCP_PORT}; OVSDB ${OVSDB_TCP_PORT}"
+}
 
 build_binaries() {
     echo "=== Building platformd and platformctl ==="
@@ -1176,6 +1226,7 @@ echo ""
 
 # Phase 1: Build binaries
 build_binaries
+choose_platformd_ports
 
 # A single target's package is checked here, before OVS, swtpm or platformd
 # start, so a compile error ends the run with the file:line first. `all`

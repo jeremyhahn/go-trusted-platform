@@ -283,8 +283,7 @@ match a TPM against (`pkg/device/service.go`), so a device created without one
 could never be claimed. The webservice used to synthesise `dev-<id>` for an
 empty serial, which made `{}` a `201` there and a `400` on the daemon; that
 fallback is gone. The console's register form requires the serial, and the JS
-SDK's `CreateDeviceRequest` and the console's `RegisterDeviceInput` type it as
-required.
+SDK's `CreateDeviceRequest` types it as required.
 
 **A conflict is refused, not resolved.** The flat shape and the proto envelope
 (`CreateDeviceRequest { Device device = 1; }`, mirrored by the JS SDK's
@@ -292,10 +291,8 @@ required.
 field present in both places with different values has no right answer, so the
 request is a `400` instead of quietly taking one side.
 
-**Keys the device has no column for are ignored.** The console sends `name`,
-`type`, `device_type`, `description`, `version`, `tpm_manufacturer`,
-`tpm_version` and `tpm_firmware_version`; `entities.Device` stores none of
-them and `device.Request` does not declare them, so both listeners drop them.
+**Keys the device has no column for are ignored.** `entities.Device` stores
+only what `device.Request` declares, so both listeners drop any other key.
 `manufacturer` is the one key with an effect: it becomes the `model` when no
 `model` is supplied. `name` is deliberately never the serial — reusing it as one
 once wrote a display string where a TPM serial belongs, and on `PUT` overwrote
@@ -304,11 +301,15 @@ a real serial with it (#252). Pinned by
 `TestUpdateDeviceDoesNotOverwriteASerialWithAName`.
 
 **A device has no name.** The proto `Device` and `entities.Device` have no name
-field, so no transport persists one. The console's `web/src/types/device.ts`
-declares its own `Device` and `RegisterDeviceInput` with `name`, `type`,
-`description`, `tags` and `tpmInfo`; those are console-local types describing no
-server state. Whether a device should gain a first-class display name is open
-on #455.
+field, so no transport persists one, and none will: a device is identified by
+its serial and id (#455). The console's register form
+(`web/src/components/features/devices/device-form.tsx`) collects the serial
+alone and posts it in the SDK envelope, `{"device":{"serial":"SN-1"}}`; a
+refusal reaches the operator as the server's message. It has no name, type,
+description or TPM manufacturer/version/firmware field: the create contract
+stores none of them, so a value typed there would be silently dropped (#455).
+The TPM details a device does carry (`ek_cert`, `attest_pub`, `attest_cert`)
+come from enrollment, not from an operator.
 
 **The two listeners still differ on `PUT /api/v1/devices/{id}`.** Both decode
 the body with `device.DecodeRequest`, agree on every status, and leave the

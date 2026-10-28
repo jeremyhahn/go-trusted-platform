@@ -498,8 +498,25 @@ and otherwise from the mount point's own ownership.
 
 ### Environment Variables
 
+The runner gives the shared `platformd` ephemeral loopback ports, not the
+defaults below: every act_runner job container runs with `network: host`, so
+two Integration jobs on one host share one network namespace, and with fixed
+ports one job's suites reached the other job's daemon (#997).
+`choose_platformd_ports` runs right after the binaries build and takes the
+REST, gRPC, QUIC (UDP) and MCP ports, and the OVSDB manager's TCP port, from
+one call to `test/integration/helpers/freeport`, which holds every socket
+until all are bound so the ports are distinct. Each port is written once, and
+every endpoint below is exported from it; `helpers/endpoints_test.go` fails if
+a `PLATFORMD_*_PORT` is ever set to a literal number. `start_ovs` adds the
+OVSDB port to `ovsdb-server` at runtime (`ovsdb-server/add-remote`), so an
+`ovsdb-server` that was already running, such as the devcontainer
+entrypoint's on 6640 under `AUTO_START_OVS=true`, listens on it too;
+`helpers/ovsdb_runner_test.go` covers both cases. The defaults apply only
+when a suite runs outside the runner.
+
 | Variable | Default | Description |
 |----------|---------|-------------|
+| `OVSDB_ADDRESS` | `tcp:127.0.0.1:6640` | OVSDB manager the `sdn` suite connects to |
 | `PLATFORM_REST_ENDPOINT` | `https://localhost:8443` | REST API endpoint |
 | `PLATFORM_GRPC_ENDPOINT` | `localhost:10443` | platformd gRPC endpoint |
 | `PLATFORM_QUIC_ENDPOINT` | `localhost:9444` | QUIC protocol endpoint |

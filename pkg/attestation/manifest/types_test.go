@@ -478,6 +478,62 @@ func TestVMAttestationValidate(t *testing.T) {
 	})
 }
 
+// TestVMAttestationValidateRequiredFields checks that each required field is
+// reported by name when it is missing.
+func TestVMAttestationValidateRequiredFields(t *testing.T) {
+	valid := func() *VMAttestation {
+		return &VMAttestation{
+			VMID:          "vm-1",
+			HostID:        "host-1",
+			QuoteData:     []byte("quote"),
+			Signature:     []byte("sig"),
+			PCRs:          []PCRValue{{Index: 0, Value: []byte("value")}},
+			Nonce:         []byte("nonce"),
+			HashAlgorithm: HashAlgorithmSHA256,
+		}
+	}
+
+	tests := []struct {
+		field  string
+		mutate func(a *VMAttestation)
+	}{
+		{"QuoteData", func(a *VMAttestation) { a.QuoteData = nil }},
+		{"Signature", func(a *VMAttestation) { a.Signature = nil }},
+		{"PCRs", func(a *VMAttestation) { a.PCRs = nil }},
+		{"Nonce", func(a *VMAttestation) { a.Nonce = nil }},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.field, func(t *testing.T) {
+			attestation := valid()
+			tt.mutate(attestation)
+
+			err := attestation.Validate()
+			manifestErr, ok := err.(ErrInvalidManifest)
+			if !ok {
+				t.Fatalf("expected ErrInvalidManifest, got %T: %v", err, err)
+			}
+			if manifestErr.Field != tt.field {
+				t.Errorf("Field = %q, want %q", manifestErr.Field, tt.field)
+			}
+		})
+	}
+
+	t.Run("InvalidHashAlgorithm", func(t *testing.T) {
+		attestation := valid()
+		attestation.HashAlgorithm = "md5"
+
+		err := attestation.Validate()
+		hashErr, ok := err.(ErrInvalidHashAlgorithm)
+		if !ok {
+			t.Fatalf("expected ErrInvalidHashAlgorithm, got %T: %v", err, err)
+		}
+		if hashErr.Algorithm != "md5" {
+			t.Errorf("Algorithm = %q, want %q", hashErr.Algorithm, "md5")
+		}
+	})
+}
+
 func TestContainerAttestationValidate(t *testing.T) {
 	t.Run("Valid", func(t *testing.T) {
 		attestation := &ContainerAttestation{
