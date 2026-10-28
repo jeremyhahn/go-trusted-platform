@@ -14,8 +14,6 @@
 package pxe
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
 )
@@ -114,49 +112,6 @@ func (e ErrDeviceAlreadyExists) Error() string {
 		msg = fmt.Sprintf("%s (MAC=%s)", msg, e.MACAddress)
 	}
 	return msg
-}
-
-// ErrInvalidCertificateFingerprint is returned when an installer certificate
-// fingerprint is not a hex SHA-256 digest.
-type ErrInvalidCertificateFingerprint struct {
-	DeviceID    string
-	Fingerprint string
-}
-
-func (e ErrInvalidCertificateFingerprint) Error() string {
-	return fmt.Sprintf("pxe: device %s: installer certificate fingerprint %q is not a hex SHA-256 digest",
-		e.DeviceID, e.Fingerprint)
-}
-
-// CertificateSHA256 returns the lowercase hex SHA-256 of a certificate's DER
-// encoding: the form InstallCertificateSHA256 is bound and matched in.
-func CertificateSHA256(der []byte) string {
-	sum := sha256.Sum256(der)
-	return hex.EncodeToString(sum[:])
-}
-
-// normalizeCertificateSHA256 validates a hex SHA-256 fingerprint and returns
-// it in lowercase.
-func normalizeCertificateSHA256(deviceID, fingerprint string) (string, error) {
-	raw, err := hex.DecodeString(fingerprint)
-	if err != nil || len(raw) != sha256.Size {
-		return "", ErrInvalidCertificateFingerprint{DeviceID: deviceID, Fingerprint: fingerprint}
-	}
-	return hex.EncodeToString(raw), nil
-}
-
-// ErrInstallationNotBound is returned when an installation completion names a
-// device that is not installing under that installer certificate: the device
-// left installing, which clears the binding, or another certificate is bound.
-type ErrInstallationNotBound struct {
-	DeviceID          string
-	State             string
-	CertificateSHA256 string
-}
-
-func (e ErrInstallationNotBound) Error() string {
-	return fmt.Sprintf("pxe: device %s (%s) is not installing under installer certificate %s",
-		e.DeviceID, e.State, e.CertificateSHA256)
 }
 
 // ErrInvalidMACAddress indicates an invalid MAC address format.

@@ -243,38 +243,6 @@ func (f *recordingPXEService) SetDeviceEnrolled(_ context.Context, deviceID, cer
 	return nil
 }
 
-func (f *recordingPXEService) SetDeviceInstalling(_ context.Context, deviceID, installCertSHA256, reason string) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.record("SetDeviceInstalling", deviceID, installCertSHA256)
-	device, err := f.lookup(deviceID)
-	if err != nil {
-		return err
-	}
-	device.InstallCertificateSHA256 = installCertSHA256
-	f.changed(device, pxe.StateInstalling, reason)
-	return nil
-}
-
-func (f *recordingPXEService) CompleteInstallation(_ context.Context, deviceID, installCertSHA256 string, success bool, reason string) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.record("CompleteInstallation", deviceID, installCertSHA256, success)
-	device, err := f.lookup(deviceID)
-	if err != nil {
-		return err
-	}
-	// The binding refusal is the service's; pkg/compute/pxe and
-	// pxe_webhook_identity_test.go cover it. Here only transport parity counts.
-	device.InstallCertificateSHA256 = ""
-	if success {
-		f.changed(device, pxe.StateInstallComplete, reason)
-	} else {
-		f.changed(device, pxe.StateFailed, reason)
-	}
-	return nil
-}
-
 func (f *recordingPXEService) AuthorizeDevice(_ context.Context, deviceID string, targetVLAN uint16) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -392,34 +360,15 @@ func invokePXEServer(t *testing.T, server platformv1.PXEServiceServer, method st
 }
 
 // pxeSDKClientState is the TLS state of a gRPC connection from the client the
-// SDK transports present: the test's client certificate, verified. The
+// SDK transports present: testutil's client certificate, verified. The
 // webhook takes the node's identity from it (#238), so the direct call and
-// the SDK call look up the same certificate fingerprint.
+// the SDK call look up the same certificate serial.
 func pxeSDKClientState(t *testing.T) *tls.ConnectionState {
 	t.Helper()
-	bundle := pxeSDKBundle(t)
+	bundle := testutil.GenerateTestTLSBundle(t)
 	leaf, err := x509.ParseCertificate(bundle.ClientCert.Certificate[0])
 	require.NoError(t, err)
 	return &tls.ConnectionState{VerifiedChains: [][]*x509.Certificate{{leaf, bundle.CACert}}}
-}
-
-// pxeSDKBundles holds one TLS bundle per running test.
-var pxeSDKBundles sync.Map
-
-// pxeSDKBundle is the TLS bundle every PXE transport in test t presents. A test
-// that calls the server directly and again through the SDK therefore presents
-// one client certificate to both, and the webhook looks up one fingerprint.
-func pxeSDKBundle(t *testing.T) *testutil.TestTLSBundle {
-	t.Helper()
-	if stored, ok := pxeSDKBundles.Load(t); ok {
-		if bundle, ok := stored.(*testutil.TestTLSBundle); ok {
-			return bundle
-		}
-	}
-	bundle := testutil.GenerateTestTLSBundle(t)
-	pxeSDKBundles.Store(t, bundle)
-	t.Cleanup(func() { pxeSDKBundles.Delete(t) })
-	return bundle
 }
 
 // testSDKPXEMethods drives every PXEService method through connect, as a

@@ -20,6 +20,7 @@ import (
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/testutil"
 	platform "github.com/jeremyhahn/go-trusted-platform/sdk/go"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
@@ -36,7 +37,8 @@ func connectPXEQUIC(t *testing.T, server platformv1.PXEServiceServer, scopes ...
 		t.Fatalf("NewQUICServiceHandler: %v", err)
 	}
 	handler.SetPXEServer(server)
-	return newPhase35QUICClient(t, handler, pxeSDKBundle(t), platform.WithBearerToken("operator-token")).Connection()
+	bundle := testutil.GenerateTestTLSBundle(t)
+	return newPhase35QUICClient(t, handler, bundle, platform.WithBearerToken("operator-token")).Connection()
 }
 
 // TestSDKQUIC_PXEMethods drives every PXEService method through the SDK's
@@ -50,10 +52,4 @@ func TestSDKQUIC_PXEMethods(t *testing.T) {
 func TestSDKQUIC_PXEMethodsRefuse(t *testing.T) {
 	testSDKPXERefusesScope(t, "QUIC", connectPXEQUIC)
 	testSDKPXERefusesNotFound(t, "QUIC", connectPXEQUIC)
-}
-
-// TestSDKQUIC_PXEWebhookCompletesAnSDKInstallation binds the installer
-// certificate through the public client over QUIC and completes it by webhook.
-func TestSDKQUIC_PXEWebhookCompletesAnSDKInstallation(t *testing.T) {
-	testWebhookCompleteThroughSDKClient(t, connectPXEQUIC)
 }

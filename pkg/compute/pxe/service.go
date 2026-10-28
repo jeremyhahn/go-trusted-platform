@@ -47,15 +47,6 @@ type Service interface {
 	// State Transitions
 	UpdateDeviceState(ctx context.Context, deviceID string, state ProvisioningState, reason string) error
 	SetDeviceEnrolled(ctx context.Context, deviceID, certSerial string) error
-	// SetDeviceInstalling moves the device to StateInstalling and binds the
-	// hex SHA-256 of the certificate its installer will present to the
-	// install-completion webhook.
-	SetDeviceInstalling(ctx context.Context, deviceID, installCertSHA256, reason string) error
-	// CompleteInstallation ends the installation bound by SetDeviceInstalling:
-	// StateInstallComplete on success, StateFailed otherwise. It is accepted
-	// only while the device is installing under installCertSHA256, and leaving
-	// installing clears the binding.
-	CompleteInstallation(ctx context.Context, deviceID, installCertSHA256 string, success bool, reason string) error
 	AuthorizeDevice(ctx context.Context, deviceID string, targetVLAN uint16) error
 	QuarantineDevice(ctx context.Context, deviceID string, reason string) error
 	RetryDevice(ctx context.Context, deviceID string) error
@@ -616,118 +607,6 @@ func (s *service) SetDeviceEnrolled(ctx context.Context, deviceID, certSerial st
 	s.logger.Info("Device enrolled",
 		"device_id", deviceID,
 		"certificate_serial", certSerial,
-	)
-
-	return nil
-}
-
-// SetDeviceInstalling binds the installer certificate fingerprint and moves
-// the device to StateInstalling. The binding is the identity the
-// install-completion webhook authenticates: the enrolled certificate does not
-// exist yet, because enrollment follows install_complete.
-func (s *service) SetDeviceInstalling(ctx context.Context, deviceID, installCertSHA256, reason string) error {
-	if !s.initialized.Load() {
-		return ErrServiceNotInitialized{}
-	}
-
-	fingerprint, err := normalizeCertificateSHA256(deviceID, installCertSHA256)
-	if err != nil {
-		return err
-	}
-
-	device, err := s.stateManager.Get(deviceID)
-	if err != nil {
-		return ErrDeviceNotFound{DeviceID: deviceID}
-	}
-
-	if !device.State.CanTransitionTo(StateInstalling) {
-		return ErrInvalidStateTransition{
-			DeviceID:  deviceID,
-			FromState: string(device.State),
-			ToState:   string(StateInstalling),
-			Reason:    "device must be booting",
-		}
-	}
-
-	if err := s.applyVLANForState(ctx, device, StateInstalling); err != nil {
-		s.logger.Warn("Failed to apply VLAN for state transition",
-			"device_id", deviceID,
-			"state", StateInstalling,
-			"error", err.Error(),
-		)
-	}
-
-	// The binding lands in the same swap as the transition: a call that loses
-	// the race to installing must not rebind the webhook's identity.
-	bind := func(d *DeviceInfo) { d.InstallCertificateSHA256 = fingerprint }
-	if err := s.stateManager.TransitionWith(deviceID, StateInstalling, reason, bind); err != nil {
-		return ErrProvisioningFailed{
-			DeviceID: deviceID,
-			Reason:   "failed to transition to installing state",
-			Cause:    err,
-		}
-	}
-
-	s.logger.Info("Device installing",
-		"device_id", deviceID,
-		"install_certificate_sha256", fingerprint,
-	)
-
-	return nil
-}
-
-// CompleteInstallation ends the installation installCertSHA256 was bound to.
-// The state and the binding are checked in the transition's own swap, so a
-// completion cannot move a device another call has already moved on.
-func (s *service) CompleteInstallation(ctx context.Context, deviceID, installCertSHA256 string, success bool, reason string) error {
-	if !s.initialized.Load() {
-		return ErrServiceNotInitialized{}
-	}
-
-	fingerprint, err := normalizeCertificateSHA256(deviceID, installCertSHA256)
-	if err != nil {
-		return err
-	}
-
-	device, err := s.stateManager.Get(deviceID)
-	if err != nil {
-		return ErrDeviceNotFound{DeviceID: deviceID}
-	}
-
-	target := StateFailed
-	if success {
-		target = StateInstallComplete
-	}
-	bound := func(d *DeviceInfo) error {
-		if d.State != StateInstalling || d.InstallCertificateSHA256 != fingerprint {
-			return ErrInstallationNotBound{
-				DeviceID:          deviceID,
-				State:             string(d.State),
-				CertificateSHA256: fingerprint,
-			}
-		}
-		return nil
-	}
-	if err := bound(device); err != nil {
-		return err
-	}
-
-	if err := s.applyVLANForState(ctx, device, target); err != nil {
-		s.logger.Warn("Failed to apply VLAN for state transition",
-			"device_id", deviceID,
-			"state", target,
-			"error", err.Error(),
-		)
-	}
-
-	if err := s.stateManager.TransitionIf(deviceID, target, reason, bound, nil); err != nil {
-		return err
-	}
-
-	s.logger.Info("Device installation ended",
-		"device_id", deviceID,
-		"state", target,
-		"install_certificate_sha256", fingerprint,
 	)
 
 	return nil

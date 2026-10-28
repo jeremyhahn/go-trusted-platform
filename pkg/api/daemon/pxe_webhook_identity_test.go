@@ -15,25 +15,19 @@ package daemon
 
 import (
 	"context"
-	"crypto/ecdsa"
-	"crypto/elliptic"
-	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
-	"fmt"
 	"math/big"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/gorilla/mux"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/peer"
@@ -42,149 +36,58 @@ import (
 	apiquic "github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/channelbind"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/compute/pxe"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/ipxe"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/netplan"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/zone"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
 	pxerest "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/pxe"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
-	pxeclient "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/pxe"
 )
 
 // The install-completion webhook (#238) takes the node's identity from the
-// verified client certificate of its connection, never from the body. The
-// installer binds that certificate's SHA-256 when the node enters installing;
-// these tests drive the real PXE state machine through that binding on every
-// transport and assert the device state, not only the answer.
+// verified client certificate of its connection, never from the body. These
+// tests drive every transport the call arrives on with the four identities a
+// caller can present and assert the device state, not only the answer.
 
 const (
-	webhookNodeMAC  = "00:11:22:33:44:a1"
-	webhookOtherMAC = "00:11:22:33:44:b2"
-	webhookSerial   = 4242
+	webhookNodeMAC     = "00:11:22:33:44:a1"
+	webhookNodeSerial  = "4242"
+	webhookOtherMAC    = "00:11:22:33:44:b2"
+	webhookOtherSerial = "7777"
 )
 
-// webhookIssuer is a CA the listener trusts for client certificates.
-type webhookIssuer struct {
-	cert *x509.Certificate
-	key  *ecdsa.PrivateKey
-}
-
-func newWebhookIssuer(t *testing.T, name string) *webhookIssuer {
-	t.Helper()
-	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	require.NoError(t, err)
-	template := &x509.Certificate{
-		SerialNumber:          big.NewInt(1),
-		Subject:               pkix.Name{CommonName: name},
-		NotBefore:             time.Now().Add(-time.Hour),
-		NotAfter:              time.Now().Add(time.Hour),
-		KeyUsage:              x509.KeyUsageCertSign,
-		BasicConstraintsValid: true,
-		IsCA:                  true,
-	}
-	der, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
-	require.NoError(t, err)
-	cert, err := x509.ParseCertificate(der)
-	require.NoError(t, err)
-	return &webhookIssuer{cert: cert, key: key}
-}
-
-// issue signs a node client certificate with the given serial.
-func (i *webhookIssuer) issue(t *testing.T, serial int64) *x509.Certificate {
-	t.Helper()
-	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	require.NoError(t, err)
-	template := &x509.Certificate{
-		SerialNumber: big.NewInt(serial),
-		Subject:      pkix.Name{CommonName: "node"},
-		NotBefore:    i.cert.NotBefore,
-		NotAfter:     i.cert.NotAfter,
-		KeyUsage:     x509.KeyUsageDigitalSignature,
-		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
-	}
-	der, err := x509.CreateCertificate(rand.Reader, template, i.cert, &key.PublicKey, i.key)
-	require.NoError(t, err)
-	cert, err := x509.ParseCertificate(der)
-	require.NoError(t, err)
-	return cert
-}
-
-// webhookFixture is the real PXE service holding two installing nodes, the
-// one whose certificate the tests present and another, each bound to its own
-// installer certificate from issuer A. Issuer B is a second trusted CA.
+// webhookFixture is a PXE service holding two enrolled nodes, the one whose
+// certificate the tests present and a second one it must not be able to
+// complete.
 type webhookFixture struct {
-	backend pxe.Service
-	svc     *PXEGRPCService
-	issuerA *webhookIssuer
-	issuerB *webhookIssuer
-	node    *x509.Certificate
-	other   *x509.Certificate
+	mock *mockPXEService
+	svc  *PXEGRPCService
 }
 
 func newWebhookFixture(t *testing.T) *webhookFixture {
 	t.Helper()
-	plan, err := netplan.New(netplan.Environment{ID: 4}, zone.Defaults())
-	require.NoError(t, err)
-	cfg, err := pxe.NewServiceConfig(plan)
-	require.NoError(t, err)
-	cfg.BridgeName = "br-test"
-	// The iPXE server is constructed but never started: no port is bound.
-	cfg.IPXEConfig = ipxe.DefaultServerConfig()
-	cfg.IPXEConfig.LocalFilesDir = t.TempDir()
-	cfg.IPXEConfig.InstallsDir = t.TempDir()
-	cfg.IPXEConfig.FirmwareDir = t.TempDir()
-	cfg.IPXEConfig.FirmwareOffline = true
-	cfg.IPXEConfig.BootEntries = []ipxe.BootEntry{
-		{Name: "install", Description: "Install", Kernel: "http://example.com/kernel"},
-	}
-	backend := pxe.NewService(pxe.WithVLANIntegration(pxe.NewNoopVLANIntegration(plan)))
-	require.NoError(t, backend.Initialize(context.Background(), cfg))
-
-	f := &webhookFixture{
-		backend: backend,
-		svc:     NewPXEGRPCService(logging.DefaultLogger(), backend),
-		issuerA: newWebhookIssuer(t, "issuer A"),
-		issuerB: newWebhookIssuer(t, "issuer B"),
-	}
-	f.node = f.issuerA.issue(t, webhookSerial)
-	f.other = f.issuerA.issue(t, webhookSerial+1)
-	f.install(t, webhookNodeMAC, f.node)
-	f.install(t, webhookOtherMAC, f.other)
-	return f
-}
-
-// install registers a node, netboots it and binds its installer certificate
-// through UpdateState, the call the installer makes on entering installing.
-func (f *webhookFixture) install(t *testing.T, mac string, cert *x509.Certificate) {
-	t.Helper()
+	mock := newMockPXEService()
 	ctx := context.Background()
-	device, err := f.backend.RegisterDevice(ctx, mac, "port-"+mac)
-	require.NoError(t, err)
-	require.NoError(t, f.backend.UpdateDeviceState(ctx, device.ID, pxe.StateBooting, "netboot"))
-	_, err = f.svc.UpdateState(ctx, &platformv1.UpdatePXEStateRequest{
-		DeviceId:                 device.ID,
-		State:                    platformv1.ProvisioningState_PROVISIONING_STATE_INSTALLING,
-		InstallCertificateSha256: pxe.CertificateSHA256(cert.Raw),
-	})
-	require.NoError(t, err)
+	for mac, serial := range map[string]string{webhookNodeMAC: webhookNodeSerial, webhookOtherMAC: webhookOtherSerial} {
+		device, err := mock.RegisterDevice(ctx, mac, "port-1")
+		require.NoError(t, err)
+		require.NoError(t, mock.SetDeviceEnrolled(ctx, device.ID, serial))
+	}
+	return &webhookFixture{mock: mock, svc: NewPXEGRPCService(logging.DefaultLogger(), mock)}
 }
 
-func (f *webhookFixture) state(t *testing.T, mac string) pxe.ProvisioningState {
-	t.Helper()
-	device, err := f.backend.GetDeviceByMAC(context.Background(), mac)
-	require.NoError(t, err)
-	return device.State
+func (f *webhookFixture) state(mac string) pxe.ProvisioningState {
+	return f.mock.devices["device-"+mac].State
 }
 
 // verifiedState is a connection whose client chain the TLS stack verified.
-func verifiedState(leaf *x509.Certificate) *tls.ConnectionState {
+func verifiedState(serial int64) *tls.ConnectionState {
+	leaf := &x509.Certificate{SerialNumber: big.NewInt(serial), Subject: pkix.Name{CommonName: "node"}}
 	return &tls.ConnectionState{VerifiedChains: [][]*x509.Certificate{{leaf}}}
 }
 
-// unverifiedState is a connection that presented a certificate the TLS stack
-// did not verify.
-func unverifiedState(leaf *x509.Certificate) *tls.ConnectionState {
+// unverifiedState is a connection that sent the node's certificate but whose
+// chain was never verified: PeerCertificates is attacker-controlled.
+func unverifiedState() *tls.ConnectionState {
+	leaf := &x509.Certificate{SerialNumber: big.NewInt(4242), Subject: pkix.Name{CommonName: "node"}}
 	return &tls.ConnectionState{PeerCertificates: []*x509.Certificate{leaf}}
 }
 
@@ -256,37 +159,25 @@ func webhookTransports() map[string]webhookCaller {
 // and that no device changes state.
 func TestWebhookComplete_RefusesWithoutTheNodesVerifiedIdentity(t *testing.T) {
 	cases := map[string]struct {
-		state func(f *webhookFixture) *tls.ConnectionState
+		state *tls.ConnectionState
 		mac   string
 		want  codes.Code
 	}{
-		"no certificate": {
-			state: func(*webhookFixture) *tls.ConnectionState { return nil },
-			mac:   webhookNodeMAC, want: codes.Unauthenticated,
-		},
-		"unverified certificate": {
-			state: func(f *webhookFixture) *tls.ConnectionState { return unverifiedState(f.node) },
-			mac:   webhookNodeMAC, want: codes.Unauthenticated,
-		},
-		"unbound certificate": {
-			state: func(f *webhookFixture) *tls.ConnectionState { return verifiedState(f.issuerA.issue(t, 9999)) },
-			mac:   webhookNodeMAC, want: codes.PermissionDenied,
-		},
-		"another node's MAC": {
-			state: func(f *webhookFixture) *tls.ConnectionState { return verifiedState(f.node) },
-			mac:   webhookOtherMAC, want: codes.PermissionDenied,
-		},
+		"no certificate":         {state: nil, mac: webhookNodeMAC, want: codes.Unauthenticated},
+		"unverified certificate": {state: unverifiedState(), mac: webhookNodeMAC, want: codes.Unauthenticated},
+		"unknown certificate":    {state: verifiedState(9999), mac: webhookNodeMAC, want: codes.PermissionDenied},
+		"another node's MAC":     {state: verifiedState(4242), mac: webhookOtherMAC, want: codes.PermissionDenied},
 	}
 	for transport, call := range webhookTransports() {
 		for name, tc := range cases {
 			t.Run(transport+"/"+name, func(t *testing.T) {
 				f := newWebhookFixture(t)
 
-				got := call(t, f, tc.state(f), &platformv1.PXEWebhookCompleteRequest{MacAddress: tc.mac, Success: true})
+				got := call(t, f, tc.state, &platformv1.PXEWebhookCompleteRequest{MacAddress: tc.mac, Success: true})
 
 				assert.Equal(t, tc.want, got)
-				assert.Equal(t, pxe.StateInstalling, f.state(t, webhookNodeMAC))
-				assert.Equal(t, pxe.StateInstalling, f.state(t, webhookOtherMAC))
+				assert.Equal(t, pxe.StateEnrolled, f.state(webhookNodeMAC))
+				assert.Equal(t, pxe.StateEnrolled, f.state(webhookOtherMAC))
 			})
 		}
 	}
@@ -310,142 +201,14 @@ func TestWebhookComplete_CompletesTheCertificatesNode(t *testing.T) {
 			t.Run(transport+"/"+name, func(t *testing.T) {
 				f := newWebhookFixture(t)
 
-				got := call(t, f, verifiedState(f.node), &platformv1.PXEWebhookCompleteRequest{MacAddress: tc.mac, Success: tc.success})
+				got := call(t, f, verifiedState(4242), &platformv1.PXEWebhookCompleteRequest{MacAddress: tc.mac, Success: tc.success})
 
 				assert.Equal(t, codes.OK, got)
-				assert.Equal(t, tc.want, f.state(t, webhookNodeMAC))
-				assert.Equal(t, pxe.StateInstalling, f.state(t, webhookOtherMAC))
+				assert.Equal(t, tc.want, f.state(webhookNodeMAC))
+				assert.Equal(t, pxe.StateEnrolled, f.state(webhookOtherMAC))
 			})
 		}
 	}
-}
-
-// TestWebhookComplete_FirstInstallReachesEnrollment walks a node through the
-// real state machine in the documented order: the webhook completes the
-// install before the node has enrolled, and enrollment follows it.
-func TestWebhookComplete_FirstInstallReachesEnrollment(t *testing.T) {
-	f := newWebhookFixture(t)
-	ctx := context.Background()
-
-	_, err := f.svc.WebhookComplete(grpcContext(verifiedState(f.node)),
-		&platformv1.PXEWebhookCompleteRequest{MacAddress: webhookNodeMAC, Success: true})
-	require.NoError(t, err)
-
-	device, err := f.backend.GetDeviceByMAC(ctx, webhookNodeMAC)
-	require.NoError(t, err)
-	assert.Empty(t, device.CertificateSerial, "the webhook must not need an enrolled certificate")
-	require.NoError(t, f.backend.UpdateDeviceState(ctx, device.ID, pxe.StateEnrolling, "enrolling"))
-	require.NoError(t, f.backend.SetDeviceEnrolled(ctx, device.ID, "1001"))
-	assert.Equal(t, pxe.StateEnrolled, f.state(t, webhookNodeMAC))
-
-	_, err = f.svc.WebhookComplete(grpcContext(verifiedState(f.node)),
-		&platformv1.PXEWebhookCompleteRequest{MacAddress: webhookNodeMAC, Success: true})
-	assert.Equal(t, codes.PermissionDenied, status.Code(err), "a replayed webhook must not move an enrolled node")
-	assert.Equal(t, pxe.StateEnrolled, f.state(t, webhookNodeMAC))
-}
-
-// The installer certificate authorizes only the installation it was bound
-// to: once the device has moved on, neither a success nor a failure callback
-// moves it, so a replayed failure cannot fail or quarantine a provisioned node.
-func TestWebhookComplete_RefusesCallbacksAfterTheInstallationEnded(t *testing.T) {
-	ctx := context.Background()
-	stages := []struct {
-		name  string
-		state pxe.ProvisioningState
-		reach []pxe.ProvisioningState
-	}{
-		{"enrolled", pxe.StateEnrolled, []pxe.ProvisioningState{pxe.StateEnrolling, pxe.StateEnrolled}},
-		{"authorized", pxe.StateAuthorized, []pxe.ProvisioningState{pxe.StateEnrolling, pxe.StateEnrolled, pxe.StateAuthorizing, pxe.StateAuthorized}},
-		{"install failed", pxe.StateFailed, nil},
-	}
-	for _, stage := range stages {
-		for _, success := range []bool{false, true} {
-			t.Run(fmt.Sprintf("%s/success=%t", stage.name, success), func(t *testing.T) {
-				f := newWebhookFixture(t)
-				_, err := f.svc.WebhookComplete(grpcContext(verifiedState(f.node)),
-					&platformv1.PXEWebhookCompleteRequest{MacAddress: webhookNodeMAC, Success: stage.reach != nil})
-				require.NoError(t, err)
-				device, err := f.backend.GetDeviceByMAC(ctx, webhookNodeMAC)
-				require.NoError(t, err)
-				assert.Empty(t, device.InstallCertificateSHA256, "ending the installation must clear the binding")
-				for _, next := range stage.reach {
-					require.NoError(t, f.backend.UpdateDeviceState(ctx, device.ID, next, "provisioning"))
-				}
-				require.Equal(t, stage.state, f.state(t, webhookNodeMAC))
-
-				_, err = f.svc.WebhookComplete(grpcContext(verifiedState(f.node)),
-					&platformv1.PXEWebhookCompleteRequest{MacAddress: webhookNodeMAC, Success: success})
-
-				assert.Equal(t, codes.PermissionDenied, status.Code(err))
-				assert.Equal(t, stage.state, f.state(t, webhookNodeMAC))
-			})
-		}
-	}
-}
-
-// A device moved out of installing by another path, here a quarantine, loses
-// its binding with the move, so the installer cannot complete it afterwards.
-func TestWebhookComplete_RefusesAfterQuarantineDuringInstall(t *testing.T) {
-	f := newWebhookFixture(t)
-	ctx := context.Background()
-	device, err := f.backend.GetDeviceByMAC(ctx, webhookNodeMAC)
-	require.NoError(t, err)
-	require.NoError(t, f.backend.QuarantineDevice(ctx, device.ID, "operator"))
-
-	_, err = f.svc.WebhookComplete(grpcContext(verifiedState(f.node)),
-		&platformv1.PXEWebhookCompleteRequest{MacAddress: webhookNodeMAC, Success: false})
-
-	assert.Equal(t, codes.PermissionDenied, status.Code(err))
-	assert.Equal(t, pxe.StateQuarantined, f.state(t, webhookNodeMAC))
-}
-
-// pxeConnAdapter presents one SDK transport connection as the
-// transport.Adapter the public PXE service client is built on.
-type pxeConnAdapter struct{ conn grpc.ClientConnInterface }
-
-func (a pxeConnAdapter) Connection() grpc.ClientConnInterface { return a.conn }
-func (a pxeConnAdapter) Close() error                         { return nil }
-func (a pxeConnAdapter) IsConnected() bool                    { return true }
-func (a pxeConnAdapter) Target() string                       { return "pxe-test" }
-
-// testWebhookCompleteThroughSDKClient proves the public PXE service client
-// binds the installer certificate as it moves the device to installing over
-// one SDK transport, and that the binding is what lets the installer's webhook
-// complete the installation. Each transport's _sdk_test.go file calls it.
-func testWebhookCompleteThroughSDKClient(t *testing.T, connect pxeSDKConnect) {
-	t.Run("completes", func(t *testing.T) {
-		f := newWebhookFixture(t)
-		ctx := context.Background()
-		device, err := f.backend.RegisterDevice(ctx, "00:11:22:33:44:c4", "port-c4")
-		require.NoError(t, err)
-		require.NoError(t, f.backend.UpdateDeviceState(ctx, device.ID, pxe.StateBooting, "netboot"))
-		installer := f.issuerB.issue(t, webhookSerial+2)
-
-		client, err := pxeclient.NewClient(pxeConnAdapter{conn: connect(t, f.svc, "pxe:write")})
-		require.NoError(t, err)
-		installing, err := client.SetDeviceInstalling(ctx, device.ID, pxe.CertificateSHA256(installer.Raw), "installer booted")
-		require.NoError(t, err)
-		assert.Equal(t, platformv1.ProvisioningState_PROVISIONING_STATE_INSTALLING, installing.GetState())
-		assert.Equal(t, pxe.CertificateSHA256(installer.Raw), installing.GetInstallCertificateSha256())
-
-		_, err = f.svc.WebhookComplete(grpcContext(verifiedState(installer)),
-			&platformv1.PXEWebhookCompleteRequest{MacAddress: "00:11:22:33:44:c4", Success: true})
-		require.NoError(t, err)
-		assert.Equal(t, pxe.StateInstallComplete, f.state(t, "00:11:22:33:44:c4"))
-	})
-
-	t.Run("refusal", func(t *testing.T) {
-		f := newWebhookFixture(t)
-		client, err := pxeclient.NewClient(pxeConnAdapter{conn: connect(t, f.svc, "pxe:write")})
-		require.NoError(t, err)
-
-		_, err = client.SetDeviceInstalling(context.Background(), "nonexistent", pxe.CertificateSHA256(f.node.Raw), "installer booted")
-
-		var failed *pxeclient.ErrSetInstallingFailed
-		require.ErrorAs(t, err, &failed)
-		assert.Equal(t, "nonexistent", failed.ID)
-		assert.Equal(t, codes.NotFound, status.Code(failed.Cause))
-	})
 }
 
 // TestWebhookComplete_RefusesTransportsWithoutAPeerCertificate pins that the
@@ -468,7 +231,7 @@ func TestWebhookComplete_RefusesTransportsWithoutAPeerCertificate(t *testing.T) 
 
 			assert.Equal(t, codes.Unauthenticated, status.Code(err))
 			assert.Contains(t, status.Convert(err).Message(), "verified device certificate")
-			assert.Equal(t, pxe.StateInstalling, f.state(t, webhookNodeMAC))
+			assert.Equal(t, pxe.StateEnrolled, f.state(webhookNodeMAC))
 		})
 	}
 }
@@ -480,71 +243,59 @@ func TestWebhookComplete_ErrorPaths(t *testing.T) {
 	t.Run("malformed MAC", func(t *testing.T) {
 		f := newWebhookFixture(t)
 
-		_, err := f.svc.WebhookComplete(grpcContext(verifiedState(f.node)),
+		_, err := f.svc.WebhookComplete(grpcContext(verifiedState(4242)),
 			&platformv1.PXEWebhookCompleteRequest{MacAddress: "not-a-mac", Success: true})
 
 		assert.Equal(t, codes.InvalidArgument, status.Code(err))
-		assert.Equal(t, pxe.StateInstalling, f.state(t, webhookNodeMAC))
+		assert.Equal(t, pxe.StateEnrolled, f.state(webhookNodeMAC))
 	})
 
 	t.Run("certificate on two records", func(t *testing.T) {
 		f := newWebhookFixture(t)
-		f.install(t, "00:11:22:33:44:c3", f.node)
+		require.NoError(t, f.mock.SetDeviceEnrolled(context.Background(), "device-"+webhookOtherMAC, webhookNodeSerial))
 
-		_, err := f.svc.WebhookComplete(grpcContext(verifiedState(f.node)),
+		_, err := f.svc.WebhookComplete(grpcContext(verifiedState(4242)),
 			&platformv1.PXEWebhookCompleteRequest{Success: true})
 
 		assert.Equal(t, codes.PermissionDenied, status.Code(err))
-		assert.Equal(t, pxe.StateInstalling, f.state(t, webhookNodeMAC))
+		assert.Equal(t, pxe.StateEnrolled, f.state(webhookNodeMAC))
 	})
 
-	t.Run("certificate without DER", func(t *testing.T) {
+	t.Run("certificate without a serial", func(t *testing.T) {
 		f := newWebhookFixture(t)
+		state := &tls.ConnectionState{VerifiedChains: [][]*x509.Certificate{{{}}}}
 
-		_, err := f.svc.WebhookComplete(grpcContext(verifiedState(&x509.Certificate{})),
-			&platformv1.PXEWebhookCompleteRequest{Success: true})
+		_, err := f.svc.WebhookComplete(grpcContext(state), &platformv1.PXEWebhookCompleteRequest{Success: true})
 
 		assert.Equal(t, codes.Unauthenticated, status.Code(err))
-		assert.Equal(t, pxe.StateInstalling, f.state(t, webhookNodeMAC))
 	})
 
-	// The two failures below cannot be provoked on the real service, so a
-	// mock holding one bound node stands in for it.
-	mockFixture := func(t *testing.T) (*mockPXEService, *PXEGRPCService, *x509.Certificate) {
-		t.Helper()
-		cert := newWebhookIssuer(t, "issuer A").issue(t, webhookSerial)
-		mock := newMockPXEService()
-		device, err := mock.RegisterDevice(context.Background(), webhookNodeMAC, "port-1")
-		require.NoError(t, err)
-		require.NoError(t, mock.SetDeviceInstalling(context.Background(), device.ID, pxe.CertificateSHA256(cert.Raw), "installing"))
-		return mock, NewPXEGRPCService(logging.DefaultLogger(), mock), cert
-	}
-
 	t.Run("lookup fails", func(t *testing.T) {
-		mock, svc, cert := mockFixture(t)
-		mock.listErr = pxe.ErrServiceNotRunning{}
+		f := newWebhookFixture(t)
+		f.mock.listErr = pxe.ErrServiceNotRunning{}
 
-		_, err := svc.WebhookComplete(grpcContext(verifiedState(cert)), &platformv1.PXEWebhookCompleteRequest{Success: true})
+		_, err := f.svc.WebhookComplete(grpcContext(verifiedState(4242)),
+			&platformv1.PXEWebhookCompleteRequest{Success: true})
 
 		require.Error(t, err)
-		assert.Equal(t, pxe.StateInstalling, mock.devices["device-"+webhookNodeMAC].State)
+		assert.Equal(t, pxe.StateEnrolled, f.state(webhookNodeMAC))
 	})
 
 	t.Run("state update fails", func(t *testing.T) {
-		mock, svc, cert := mockFixture(t)
-		mock.updateStateErr = pxe.ErrServiceNotRunning{}
+		f := newWebhookFixture(t)
+		f.mock.updateStateErr = pxe.ErrServiceNotRunning{}
 
-		_, err := svc.WebhookComplete(grpcContext(verifiedState(cert)), &platformv1.PXEWebhookCompleteRequest{Success: true})
+		_, err := f.svc.WebhookComplete(grpcContext(verifiedState(4242)),
+			&platformv1.PXEWebhookCompleteRequest{Success: true})
 
 		require.Error(t, err)
-		assert.Equal(t, pxe.StateInstalling, mock.devices["device-"+webhookNodeMAC].State)
+		assert.Equal(t, pxe.StateEnrolled, f.state(webhookNodeMAC))
 	})
 
 	t.Run("no PXE service", func(t *testing.T) {
 		svc := NewPXEGRPCService(logging.DefaultLogger(), nil)
-		cert := newWebhookIssuer(t, "issuer A").issue(t, webhookSerial)
 
-		_, err := svc.WebhookComplete(grpcContext(verifiedState(cert)), &platformv1.PXEWebhookCompleteRequest{Success: true})
+		_, err := svc.WebhookComplete(grpcContext(verifiedState(4242)), &platformv1.PXEWebhookCompleteRequest{Success: true})
 
 		assert.Equal(t, codes.Unavailable, status.Code(err))
 	})

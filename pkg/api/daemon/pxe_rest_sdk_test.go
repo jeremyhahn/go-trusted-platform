@@ -27,6 +27,7 @@ import (
 
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/platformtoken"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/testutil"
 	iammw "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/middleware/iam"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
 	pxerest "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/pxe"
@@ -71,7 +72,7 @@ func connectPXEREST(t *testing.T, server platformv1.PXEServiceServer, scopes ...
 	routes.Handle("POST /api/v1/pxe/webhook/complete", machine)
 	routes.Handle("/", tokens.Handler(operator))
 
-	bundle := pxeSDKBundle(t)
+	bundle := testutil.GenerateTestTLSBundle(t)
 	srv := httptest.NewUnstartedServer(routes)
 	srv.TLS = bundle.ServerTLSConfig()
 	srv.StartTLS()
@@ -97,10 +98,4 @@ func TestSDKREST_PXEMethods(t *testing.T) {
 func TestSDKREST_PXEMethodsRefuse(t *testing.T) {
 	testSDKPXERefusesScope(t, "REST", connectPXEREST)
 	testSDKPXERefusesNotFound(t, "REST", connectPXEREST)
-}
-
-// TestSDKREST_PXEWebhookCompletesAnSDKInstallation binds the installer
-// certificate through the public client over REST and completes it by webhook.
-func TestSDKREST_PXEWebhookCompletesAnSDKInstallation(t *testing.T) {
-	testWebhookCompleteThroughSDKClient(t, connectPXEREST)
 }

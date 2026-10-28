@@ -37,7 +37,7 @@ func connectPXEMCP(t *testing.T, server platformv1.PXEServiceServer, scopes ...s
 	}}}
 	// mTLS, because the install-completion webhook authenticates the node by
 	// its verified client certificate (#238).
-	return serveMCPConfigBundle(t, provider, config, pxeSDKBundle(t)).Connection()
+	return serveMCPConfigMTLS(t, provider, config).Connection()
 }
 
 // TestSDKMCP_PXEMethods drives every PXEService method through the SDK's MCP
@@ -51,10 +51,4 @@ func TestSDKMCP_PXEMethods(t *testing.T) {
 func TestSDKMCP_PXEMethodsRefuse(t *testing.T) {
 	testSDKPXERefusesScope(t, "MCP", connectPXEMCP)
 	testSDKPXERefusesNotFound(t, "MCP", connectPXEMCP)
-}
-
-// TestSDKMCP_PXEWebhookCompletesAnSDKInstallation binds the installer
-// certificate through the public client over MCP and completes it by webhook.
-func TestSDKMCP_PXEWebhookCompletesAnSDKInstallation(t *testing.T) {
-	testWebhookCompleteThroughSDKClient(t, connectPXEMCP)
 }

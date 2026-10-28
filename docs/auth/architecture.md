@@ -842,7 +842,7 @@ gated. In every case the giveaway was reading the **handler**, not the prefix.
 | `/gateway` | `/gateway/telemetry`, `/gateway/desired-config/{id}`, `/gateway/vpn-leases/**` | A **verified mTLS client certificate**, bound to `gateway_id` |
 | `/provisioning` | `/provisioning/{config,config/nonce,sign}` | **EAB**, plus the EK for the signing route |
 | `/invitations` | `/invitations/{accept,token/{token}}` | The **invitation token itself** — an invitee has no session by construction |
-| `/pxe` | `/pxe/webhook/complete` | A **verified mTLS client certificate**, bound to the registered device by its SHA-256 fingerprint (#238) |
+| `/pxe` | `/pxe/webhook/complete` | A **verified mTLS client certificate**, bound to the registered device by its serial (#238) |
 
 **Two of these would have caused an outage** had the prefix been gated:
 `/gateway` stops every gateway in the fleet reporting, and `/invitations`
@@ -1109,23 +1109,15 @@ Two of these are worth stating plainly.
 one, which decides what configuration that machine boots with. It is now
 `admin`.
 
-**The PXE webhook authenticates the node by its installer certificate (#238).**
-Its caller is a booting node, so it cannot take a role gate, and it is not
-enrolled yet, so it has no device certificate. The operator binds the
-certificate the installer will present when the device enters `installing`
-(`UpdateState` with `install_certificate_sha256`, the SHA-256 of its DER). The
-node presents it over mTLS: the handler takes the leaf of the **verified**
-client chain (never the unverified peer certificates), finds the one
-registered device bound to that leaf's SHA-256, and refuses a request body whose MAC is not that device's. No verified certificate
-is 401; a certificate no device carries, or a mismatched MAC, is 403. The
-fingerprint, not the serial, is the key: a serial is unique only per issuer,
-and the listener trusts more than one CA, so two issuers can sign the same
-serial. Unix, MCP stdio and the embedded transport carry no peer certificate
-and refuse the call. The certificate authorizes only the installation it was
-bound to: completion is one compare-and-swap admitted only from `installing`
-under that fingerprint (`pkg/compute/pxe/service.go:681`), and leaving
-`installing` clears the binding (`pkg/compute/pxe/state.go:268`), so a late
-or replayed callback is 403. The route is still mounted only when `pxe.ServiceConfig.WebhookEnabled`
+**The PXE webhook authenticates the node by its device certificate (#238).**
+Its caller is a booting node, so it cannot take a role gate. It presents the
+device certificate it was enrolled with over mTLS instead: the handler takes
+the leaf of the **verified** client chain (never the unverified peer
+certificates), finds the one registered device carrying that serial, and
+refuses a request body whose MAC is not that device's. No verified certificate
+is 401; a certificate no device carries, or a mismatched MAC, is 403. Unix,
+MCP stdio and the embedded transport carry no peer certificate and refuse the
+call. The route is still mounted only when `pxe.ServiceConfig.WebhookEnabled`
 is true (default false).
 
 #### #171: the unverified decoders are deleted, not corrected
