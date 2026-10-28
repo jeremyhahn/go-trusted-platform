@@ -35,7 +35,39 @@ import type {
   FlushTransientContextsResponse,
   ActivateCredentialRequest,
   ActivateCredentialResponse,
+  IDevIDConfig,
+  IAKConfig,
+  DeviceKeyAlgorithmProtoName,
+  CertStorageTypeProtoName,
 } from '../types/idevid.js';
+import { DEVICE_KEY_ALGORITHM_PROTO_NAMES, CERT_STORAGE_TYPE_PROTO_NAMES } from '../types/idevid.js';
+
+/** A key config as the REST decoder reads it: enums carry their protobuf names. */
+type WireKeyConfig<T extends IDevIDConfig | IAKConfig> = Omit<T, 'algorithm' | 'storage'> & {
+  algorithm?: DeviceKeyAlgorithmProtoName;
+  storage?: CertStorageTypeProtoName;
+};
+
+/**
+ * Maps the config's enums to the protobuf names the server's protojson
+ * decoder reads; it discards a short name such as 'ECDSA_P256'.
+ */
+function toWireKeyConfig<T extends IDevIDConfig | IAKConfig>(config: T): WireKeyConfig<T> {
+  const { algorithm, storage, ...rest } = config;
+  return {
+    ...rest,
+    ...(algorithm !== undefined && { algorithm: DEVICE_KEY_ALGORITHM_PROTO_NAMES[algorithm] }),
+    ...(storage !== undefined && { storage: CERT_STORAGE_TYPE_PROTO_NAMES[storage] }),
+  };
+}
+
+/** Returns a generate request with its config's enums in protobuf form. */
+function withWireKeyConfig<T extends IDevIDConfig | IAKConfig>(request: { config?: T } | undefined): { config?: WireKeyConfig<T> } {
+  if (request?.config === undefined) {
+    return {};
+  }
+  return { config: toWireKeyConfig(request.config) };
+}
 
 /**
  * IDevID Service class
@@ -82,7 +114,7 @@ export class IDevIDService extends BaseService {
    * @returns Generation result
    */
   async generateIDevID(request?: GenerateIDevIDRequest): Promise<ApiResponse<GenerateIDevIDResponse>> {
-    return this.client.post<GenerateIDevIDResponse>(this.buildUrl('/generate'), request ?? {});
+    return this.client.post<GenerateIDevIDResponse>(this.buildUrl('/generate'), withWireKeyConfig(request));
   }
 
   /**
@@ -161,7 +193,7 @@ export class IDevIDService extends BaseService {
    * @returns Generation result
    */
   async generateIAK(request?: GenerateIAKRequest): Promise<ApiResponse<GenerateIAKResponse>> {
-    return this.client.post<GenerateIAKResponse>(this.buildUrl('/iak/generate'), request ?? {});
+    return this.client.post<GenerateIAKResponse>(this.buildUrl('/iak/generate'), withWireKeyConfig(request));
   }
 
   /**
