@@ -729,6 +729,56 @@ func TestHandleGetConfig_ByMAC(t *testing.T) {
 	assert.Contains(t, rr.Body.String(), "interface: eth0")
 }
 
+// TestHandleGetConfig_StoredNumbersArePlainYAML pins #125: a profile read from
+// the store holds its numbers as json.Number. The delivered YAML carries each
+// one unquoted with its digits unchanged, so an integer above 2^53 and a
+// typed int field both decode on the device.
+func TestHandleGetConfig_StoredNumbersArePlainYAML(t *testing.T) {
+	profile := &entities.DeviceProfile{
+		ID: 42,
+		PlatformdConfig: &entities.PlatformdConfigRef{
+			ConfigType: "inline",
+			Inline: map[string]interface{}{
+				"serial-id": json.Number("9007199254740993"),
+				"ratio":     json.Number("1.5"),
+				"vlans":     []interface{}{json.Number("-7"), json.Number("4094")},
+			},
+		},
+	}
+	profSvc := &mockProfileService{findByMAC: profile}
+	handler := NewDeviceTemplateHandlers(testLogger(), testResponseWriter(), nil, profSvc)
+
+	req := httptest.NewRequest(http.MethodGet, "/devices/config?mac=aa:bb:cc:dd:ee:ff", nil)
+	rr := httptest.NewRecorder()
+
+	handler.HandleGetConfig(rr, req)
+
+	require.Equal(t, http.StatusOK, rr.Code)
+	body := rr.Body.String()
+	assert.Contains(t, body, "serial-id: 9007199254740993\n")
+	assert.Contains(t, body, "ratio: 1.5\n")
+	assert.Contains(t, body, "- -7\n")
+	assert.Contains(t, body, "- 4094\n")
+	assert.NotContains(t, body, `"`)
+}
+
+// A stored config whose json.Number holds no number cannot be delivered.
+func TestHandleGetConfig_InvalidStoredNumber(t *testing.T) {
+	profile := &entities.DeviceProfile{
+		ID:     42,
+		Config: map[string]interface{}{"port": json.Number("not-a-number")},
+	}
+	profSvc := &mockProfileService{findByMAC: profile}
+	handler := NewDeviceTemplateHandlers(testLogger(), testResponseWriter(), nil, profSvc)
+
+	req := httptest.NewRequest(http.MethodGet, "/devices/config?mac=aa:bb:cc:dd:ee:ff", nil)
+	rr := httptest.NewRecorder()
+
+	handler.HandleGetConfig(rr, req)
+
+	assert.Equal(t, http.StatusInternalServerError, rr.Code)
+}
+
 // TestHandleGetConfig_BySerial verifies that a config is returned when
 // looking up a profile by serial number (MAC not found).
 func TestHandleGetConfig_BySerial(t *testing.T) {

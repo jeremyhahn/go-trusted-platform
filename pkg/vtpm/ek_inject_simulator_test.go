@@ -37,10 +37,18 @@ import (
 func newSimulatorTransport(t *testing.T) transport.TPM {
 	t.Helper()
 
+	return transport.FromReadWriter(newSimulator(t))
+}
+
+// newSimulator starts the in-memory TPM simulator and closes it when the
+// test ends. Only one simulator runs at a time.
+func newSimulator(t *testing.T) *simulator.Simulator {
+	t.Helper()
+
 	sim, err := simulator.GetWithFixedSeedInsecure(1234567890)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, sim.Close()) })
-	return transport.FromReadWriter(sim)
+	return sim
 }
 
 // newSimulatorTPMOperations returns TPMOperations over a provisioned
