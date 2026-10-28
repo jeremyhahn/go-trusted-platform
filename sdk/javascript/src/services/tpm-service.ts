@@ -58,7 +58,48 @@ import type {
   ReadNVRAMResponse,
   UndefineNVRAMResponse,
   GetRandomResponse,
+  KeyAttributes,
+  PCRBank,
+  PCRBankName,
 } from '../types/tpm.js';
+import { PCR_BANK_PROTO_NAMES } from '../types/tpm.js';
+import { KEY_ALGORITHM_PROTO_NAMES } from '../types/ca.js';
+import type { KeyAlgorithmProtoName } from '../types/ca.js';
+
+/**
+ * Key attributes as the protojson REST decoder reads them: the algorithm is
+ * its full enum name, since protojson discards the short one.
+ */
+type WireKeyAttributes = Omit<KeyAttributes, 'algorithm'> & { algorithm: KeyAlgorithmProtoName };
+
+function toWireKeyAttributes(attributes: KeyAttributes | undefined): WireKeyAttributes | undefined {
+  if (attributes === undefined) {
+    return undefined;
+  }
+  return { ...attributes, algorithm: KEY_ALGORITHM_PROTO_NAMES[attributes.algorithm] };
+}
+
+/** Replaces a request's attributes with their wire form. */
+function withWireAttributes<T extends { attributes?: KeyAttributes }>(
+  request: T,
+): Omit<T, 'attributes'> & { attributes?: WireKeyAttributes } {
+  const { attributes, ...rest } = request;
+  if (attributes === undefined) {
+    return rest;
+  }
+  return { ...rest, attributes: toWireKeyAttributes(attributes) };
+}
+
+/** Replaces a request's short PCR bank with its proto name. */
+function withWirePCRBank<T extends { pcrBank?: PCRBank }>(
+  request: T,
+): Omit<T, 'pcrBank'> & { pcrBank?: PCRBankName } {
+  const { pcrBank, ...rest } = request;
+  if (pcrBank === undefined) {
+    return rest;
+  }
+  return { ...rest, pcrBank: PCR_BANK_PROTO_NAMES[pcrBank] };
+}
 
 /** Base path of the TPM REST API, under the client's `/api` base URL. */
 export const TPM_BASE_PATH = '/v1/tpm';
@@ -111,7 +152,13 @@ export class TPMService extends BaseService {
    * @returns Provisioning result
    */
   async provision(request: TPMProvisionRequest): Promise<ApiResponse<TPMProvisionResponse>> {
-    return this.client.post<TPMProvisionResponse>(this.buildUrl('/provision'), request);
+    const { ekAttributes, srkAttributes, akAttributes, ...rest } = request;
+    return this.client.post<TPMProvisionResponse>(this.buildUrl('/provision'), {
+      ...rest,
+      ...(ekAttributes !== undefined && { ekAttributes: toWireKeyAttributes(ekAttributes) }),
+      ...(srkAttributes !== undefined && { srkAttributes: toWireKeyAttributes(srkAttributes) }),
+      ...(akAttributes !== undefined && { akAttributes: toWireKeyAttributes(akAttributes) }),
+    });
   }
 
   /**
@@ -135,7 +182,7 @@ export class TPMService extends BaseService {
    * @returns Created EK
    */
   async createEK(request?: CreateEKRequest): Promise<ApiResponse<CreateEKResponse>> {
-    return this.client.post<CreateEKResponse>(this.buildUrl('/ek'), request ?? {});
+    return this.client.post<CreateEKResponse>(this.buildUrl('/ek'), withWireAttributes(request ?? {}));
   }
 
   /**
@@ -193,7 +240,7 @@ export class TPMService extends BaseService {
    * @returns Created SRK
    */
   async createSRK(request?: CreateSRKRequest): Promise<ApiResponse<CreateSRKResponse>> {
-    return this.client.post<CreateSRKResponse>(this.buildUrl('/srk'), request ?? {});
+    return this.client.post<CreateSRKResponse>(this.buildUrl('/srk'), withWireAttributes(request ?? {}));
   }
 
   /**
@@ -229,7 +276,7 @@ export class TPMService extends BaseService {
    * @returns Created AK
    */
   async createAK(request?: CreateAKRequest): Promise<ApiResponse<CreateAKResponse>> {
-    return this.client.post<CreateAKResponse>(this.buildUrl('/ak'), request ?? {});
+    return this.client.post<CreateAKResponse>(this.buildUrl('/ak'), withWireAttributes(request ?? {}));
   }
 
   /**
@@ -265,7 +312,7 @@ export class TPMService extends BaseService {
    * @returns Sealed data
    */
   async seal(request: SealRequest): Promise<ApiResponse<SealResponse>> {
-    return this.client.post<SealResponse>(this.buildUrl('/seal'), request);
+    return this.client.post<SealResponse>(this.buildUrl('/seal'), withWirePCRBank(request));
   }
 
   /**
@@ -275,7 +322,7 @@ export class TPMService extends BaseService {
    * @returns Unsealed data
    */
   async unseal(request: UnsealRequest): Promise<ApiResponse<UnsealResponse>> {
-    return this.client.post<UnsealResponse>(this.buildUrl('/unseal'), request);
+    return this.client.post<UnsealResponse>(this.buildUrl('/unseal'), withWirePCRBank(request));
   }
 
   // =========================================================================
@@ -289,7 +336,7 @@ export class TPMService extends BaseService {
    * @returns Quote and signature
    */
   async quote(request: QuoteRequest): Promise<ApiResponse<QuoteResponse>> {
-    return this.client.post<QuoteResponse>(this.buildUrl('/quote'), request);
+    return this.client.post<QuoteResponse>(this.buildUrl('/quote'), withWirePCRBank(request));
   }
 
   /**
