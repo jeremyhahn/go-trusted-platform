@@ -31,6 +31,34 @@ export type RecordType =
   | 'NSEC3'
   | 'NSEC3PARAM';
 
+/** Protobuf enum name of a record type (platform.v1.RecordType). */
+export type RecordTypeProtoName = `RECORD_TYPE_${RecordType}`;
+
+/**
+ * Protobuf enum name of every record type. The REST decoder is protojson,
+ * which accepts only the full enum name: a short name such as 'A' is
+ * discarded, the type arrives unspecified and the record is refused.
+ */
+export const RECORD_TYPE_PROTO_NAMES: Readonly<Record<RecordType, RecordTypeProtoName>> = {
+  UNSPECIFIED: 'RECORD_TYPE_UNSPECIFIED',
+  A: 'RECORD_TYPE_A',
+  AAAA: 'RECORD_TYPE_AAAA',
+  CNAME: 'RECORD_TYPE_CNAME',
+  MX: 'RECORD_TYPE_MX',
+  NS: 'RECORD_TYPE_NS',
+  TXT: 'RECORD_TYPE_TXT',
+  SRV: 'RECORD_TYPE_SRV',
+  SOA: 'RECORD_TYPE_SOA',
+  CAA: 'RECORD_TYPE_CAA',
+  TLSA: 'RECORD_TYPE_TLSA',
+  DNSKEY: 'RECORD_TYPE_DNSKEY',
+  DS: 'RECORD_TYPE_DS',
+  RRSIG: 'RECORD_TYPE_RRSIG',
+  NSEC: 'RECORD_TYPE_NSEC',
+  NSEC3: 'RECORD_TYPE_NSEC3',
+  NSEC3PARAM: 'RECORD_TYPE_NSEC3PARAM',
+};
+
 // =============================================================================
 // Record Types
 // =============================================================================
