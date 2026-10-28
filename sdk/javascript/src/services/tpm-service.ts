@@ -63,6 +63,7 @@ import type {
   PCRBankName,
 } from '../types/tpm.js';
 import { PCR_BANK_PROTO_NAMES } from '../types/tpm.js';
+import { encodeEnum } from './wire-enum.js';
 import { KEY_ALGORITHM_PROTO_NAMES } from '../types/ca.js';
 import type { KeyAlgorithmProtoName } from '../types/ca.js';
 
@@ -73,7 +74,7 @@ import type { KeyAlgorithmProtoName } from '../types/ca.js';
 type WireKeyAttributes = Omit<KeyAttributes, 'algorithm'> & { algorithm: KeyAlgorithmProtoName };
 
 function toWireKeyAttributes(attributes: KeyAttributes): WireKeyAttributes {
-  return { ...attributes, algorithm: KEY_ALGORITHM_PROTO_NAMES[attributes.algorithm] };
+  return { ...attributes, algorithm: encodeEnum('algorithm', KEY_ALGORITHM_PROTO_NAMES, attributes.algorithm) };
 }
 
 /** Replaces a request's attributes with their wire form. */
@@ -95,7 +96,7 @@ function withWirePCRBank<T extends { pcrBank?: PCRBank }>(
   if (pcrBank === undefined) {
     return rest;
   }
-  return { ...rest, pcrBank: PCR_BANK_PROTO_NAMES[pcrBank] };
+  return { ...rest, pcrBank: encodeEnum('pcrBank', PCR_BANK_PROTO_NAMES, pcrBank) };
 }
 
 /** Base path of the TPM REST API, under the client's `/api` base URL. */

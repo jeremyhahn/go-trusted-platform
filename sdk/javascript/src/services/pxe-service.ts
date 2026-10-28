@@ -33,6 +33,7 @@ import type {
   PXEWebhookCompleteResponse,
 } from '../types/pxe.js';
 import { PROVISIONING_STATE_PROTO_NAMES } from '../types/pxe.js';
+import { encodeEnum } from './wire-enum.js';
 
 /**
  * PXE Service class
@@ -158,7 +159,7 @@ export class PXEService extends BaseService {
     return this.client.put<UpdatePXEStateResponse>(
       this.buildUrl(`/devices/${this.encodePathSegment(request.deviceId)}/state`),
       {
-        state: PROVISIONING_STATE_PROTO_NAMES[request.state],
+        state: encodeEnum('state', PROVISIONING_STATE_PROTO_NAMES, request.state),
         reason: request.reason,
         installCertificateSha256: request.installCertificateSha256,
       }

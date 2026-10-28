@@ -63,6 +63,7 @@ const SINGULAR_BASE_PATH = '/v1/device';
 import type { DeviceSelfServiceProfile } from '../types/device-self-service.js';
 import type { NetworkPhaseConfig } from '../types/device.js';
 import { AUTH_METHOD_WIRE_NAMES } from '../types/device.js';
+import { encodeOptionalEnum } from './wire-enum.js';
 
 /** A network phase as pkg/webservice/v1/device/types.go decodes it. */
 type WireNetworkPhase = Omit<NetworkPhaseConfig, 'auth_method' | 'firewallZone'> & {
@@ -77,7 +78,7 @@ type WireProfile = Omit<Partial<DeviceProfile>, 'networks'> & {
 
 function toWireNetworkPhase(phase: NetworkPhaseConfig): WireNetworkPhase {
   const { auth_method: authMethod, firewallZone, ...rest } = phase;
-  const wireAuthMethod = authMethod === undefined ? undefined : AUTH_METHOD_WIRE_NAMES[authMethod];
+  const wireAuthMethod = encodeOptionalEnum('auth_method', AUTH_METHOD_WIRE_NAMES, authMethod);
   return {
     ...rest,
     ...(wireAuthMethod !== undefined && { auth_method: wireAuthMethod }),

@@ -34,10 +34,11 @@ import type {
   DNSRecord,
 } from '../types/dns.js';
 import { RECORD_TYPE_PROTO_NAMES } from '../types/dns.js';
+import { encodeEnum } from './wire-enum.js';
 
 /** A record as the REST body carries it: the type as its protobuf name. */
 function toProtoRecord(record: DNSRecord) {
-  return { ...record, type: RECORD_TYPE_PROTO_NAMES[record.type] };
+  return { ...record, type: encodeEnum('type', RECORD_TYPE_PROTO_NAMES, record.type) };
 }
 
 /**

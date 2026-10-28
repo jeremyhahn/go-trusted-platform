@@ -371,8 +371,11 @@ export interface RecordSet {
  * Generic record wrapper
  */
 export interface DNSRecord {
-  /** Record type */
-  type: RecordType;
+  /**
+   * Record type. Responses carry the protobuf name (RECORD_TYPE_A); requests
+   * accept it or the short name, so a returned record can be sent back as is.
+   */
+  type: RecordType | RecordTypeProtoName;
   /** A record */
   a?: ARecord;
   /** AAAA record */
@@ -514,7 +517,7 @@ export interface DeleteRecordRequest {
   /** Zone name */
   zoneName: string;
   /** Record type */
-  type: RecordType;
+  type: RecordType | RecordTypeProtoName;
   /** Record name */
   name: string;
 }
@@ -538,7 +541,7 @@ export interface ListRecordsRequest {
   /** Zone name */
   zoneName: string;
   /** Record type filter */
-  type?: RecordType;
+  type?: RecordType | RecordTypeProtoName;
 }
 
 /**
@@ -564,7 +567,7 @@ export interface ResolveRequest {
   /** FQDN */
   fqdn: string;
   /** Record type */
-  type: RecordType;
+  type: RecordType | RecordTypeProtoName;
 }
 
 /**

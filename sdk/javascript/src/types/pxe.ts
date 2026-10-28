@@ -85,9 +85,9 @@ export interface ProvisioningEvent {
   /** Event type */
   eventType: ProvisioningEventType;
   /** State before event */
-  fromState?: ProvisioningState;
+  fromState?: ProvisioningState | ProvisioningStateProtoName;
   /** State after event */
-  toState?: ProvisioningState;
+  toState?: ProvisioningState | ProvisioningStateProtoName;
   /** Event details */
   details?: Record<string, string>;
   /** Error message */
@@ -104,8 +104,12 @@ export interface PXEDeviceInfo {
   macAddress: string;
   /** OVS port ID */
   portId?: string;
-  /** Current state */
-  state: ProvisioningState;
+  /**
+   * Current state. Responses carry the protobuf name
+   * (PROVISIONING_STATE_ENROLLED); UpdatePXEStateRequest accepts it or the
+   * short name.
+   */
+  state: ProvisioningState | ProvisioningStateProtoName;
   /** State reason */
   stateReason?: string;
   /** Device profile */
@@ -215,7 +219,7 @@ export interface UpdatePXEStateRequest {
   /** Device ID */
   deviceId: string;
   /** New state */
-  state: ProvisioningState;
+  state: ProvisioningState | ProvisioningStateProtoName;
   /** Reason */
   reason?: string;
   /**
