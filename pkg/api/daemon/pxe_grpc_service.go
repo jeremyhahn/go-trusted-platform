@@ -791,6 +791,8 @@ func (s *PXEGRPCService) mapPXEError(err error, operation string) error {
 		return status.Error(codes.InvalidArgument, e.Error())
 	case pxe.ErrInstallationNotBound:
 		return status.Error(codes.PermissionDenied, e.Error())
+	case pxe.ErrInstallCertificateInUse:
+		return status.Error(codes.AlreadyExists, e.Error())
 	case pxe.ErrInvalidStateTransition:
 		return status.Errorf(codes.FailedPrecondition, "invalid state transition from %s to %s: %s",
 			e.FromState, e.ToState, e.Reason)

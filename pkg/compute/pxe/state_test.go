@@ -698,6 +698,171 @@ func TestStateManager_Transition_LeavingInstallingClearsTheBinding(t *testing.T)
 	})
 }
 
+// registerBooting registers a booting device on a MAC derived from n.
+func registerBooting(t *testing.T, sm *StateManager, id string, n int) {
+	t.Helper()
+	mac, err := net.ParseMAC(fmt.Sprintf("02:00:00:00:%02x:%02x", n/256, n%256))
+	require.NoError(t, err)
+	require.NoError(t, sm.Register(&DeviceInfo{ID: id, MACAddress: mac, State: StateBooting}))
+}
+
+// bindInstalling moves a booting device to installing under installCert.
+func bindInstalling(sm *StateManager, id, installCert string) error {
+	return sm.TransitionWith(id, StateInstalling, "installing", func(d *DeviceInfo) {
+		d.InstallCertificateSHA256 = installCert
+	})
+}
+
+func TestStateManager_InstallCertificate_HeldByOneDevice(t *testing.T) {
+	t.Run("a second device is refused and keeps its state", func(t *testing.T) {
+		sm := NewStateManager()
+		registerBooting(t, sm, "device-a", 1)
+		registerBooting(t, sm, "device-b", 2)
+		require.NoError(t, bindInstalling(sm, "device-a", "bound"))
+
+		var inUse ErrInstallCertificateInUse
+		require.ErrorAs(t, bindInstalling(sm, "device-b", "bound"), &inUse)
+		assert.Equal(t, ErrInstallCertificateInUse{DeviceID: "device-b", OwnerDeviceID: "device-a", CertificateSHA256: "bound"}, inUse)
+
+		retrieved, err := sm.Get("device-b")
+		require.NoError(t, err)
+		assert.Equal(t, StateBooting, retrieved.State)
+		assert.Empty(t, retrieved.InstallCertificateSHA256)
+	})
+
+	t.Run("an update cannot copy another device's binding", func(t *testing.T) {
+		sm := NewStateManager()
+		registerBooting(t, sm, "device-a", 1)
+		registerBooting(t, sm, "device-b", 2)
+		require.NoError(t, bindInstalling(sm, "device-a", "bound"))
+
+		var inUse ErrInstallCertificateInUse
+		require.ErrorAs(t, sm.UpdateDevice("device-b", func(d *DeviceInfo) error {
+			d.InstallCertificateSHA256 = "bound"
+			return nil
+		}), &inUse)
+		assert.Equal(t, "device-a", inUse.OwnerDeviceID)
+	})
+
+	t.Run("registering with a held binding is refused and stores nothing", func(t *testing.T) {
+		sm := NewStateManager()
+		registerBooting(t, sm, "device-a", 1)
+		require.NoError(t, bindInstalling(sm, "device-a", "bound"))
+		mac, err := net.ParseMAC("02:00:00:00:00:02")
+		require.NoError(t, err)
+
+		var inUse ErrInstallCertificateInUse
+		require.ErrorAs(t, sm.Register(&DeviceInfo{ID: "device-b", MACAddress: mac, State: StateInstalling, InstallCertificateSHA256: "bound"}), &inUse)
+		_, err = sm.Get("device-b")
+		require.ErrorAs(t, err, new(ErrDeviceNotFound))
+		_, err = sm.GetByMAC(mac)
+		require.Error(t, err)
+	})
+
+	t.Run("a registered binding is held", func(t *testing.T) {
+		sm := NewStateManager()
+		mac, err := net.ParseMAC("02:00:00:00:00:01")
+		require.NoError(t, err)
+		require.NoError(t, sm.Register(&DeviceInfo{ID: "device-a", MACAddress: mac, State: StateInstalling, InstallCertificateSHA256: "bound"}))
+		registerBooting(t, sm, "device-b", 2)
+
+		require.ErrorAs(t, bindInstalling(sm, "device-b", "bound"), new(ErrInstallCertificateInUse))
+	})
+
+	t.Run("a refused registration on a taken MAC keeps the binding free", func(t *testing.T) {
+		sm := NewStateManager()
+		registerBooting(t, sm, "device-a", 1)
+		mac, err := net.ParseMAC("02:00:00:00:00:01")
+		require.NoError(t, err)
+
+		require.ErrorAs(t, sm.Register(&DeviceInfo{ID: "device-b", MACAddress: mac, State: StateInstalling, InstallCertificateSHA256: "bound"}), new(ErrDeviceAlreadyExists))
+		require.NoError(t, bindInstalling(sm, "device-a", "bound"))
+	})
+}
+
+func TestStateManager_InstallCertificate_Released(t *testing.T) {
+	t.Run("when the installation ends", func(t *testing.T) {
+		sm := NewStateManager()
+		registerBooting(t, sm, "device-a", 1)
+		registerBooting(t, sm, "device-b", 2)
+		require.NoError(t, bindInstalling(sm, "device-a", "bound"))
+		require.NoError(t, sm.Transition("device-a", StateFailed, "installation failed"))
+
+		require.NoError(t, bindInstalling(sm, "device-b", "bound"))
+	})
+
+	t.Run("when the device is removed", func(t *testing.T) {
+		sm := NewStateManager()
+		registerBooting(t, sm, "device-a", 1)
+		registerBooting(t, sm, "device-b", 2)
+		require.NoError(t, bindInstalling(sm, "device-a", "bound"))
+		require.NoError(t, sm.Unregister("device-a"))
+
+		require.NoError(t, bindInstalling(sm, "device-b", "bound"))
+	})
+
+	t.Run("not by a refused claim", func(t *testing.T) {
+		sm := NewStateManager()
+		registerBooting(t, sm, "device-a", 1)
+		registerBooting(t, sm, "device-b", 2)
+		registerBooting(t, sm, "device-c", 3)
+		require.NoError(t, bindInstalling(sm, "device-a", "bound"))
+		require.ErrorAs(t, bindInstalling(sm, "device-b", "bound"), new(ErrInstallCertificateInUse))
+
+		var inUse ErrInstallCertificateInUse
+		require.ErrorAs(t, bindInstalling(sm, "device-c", "bound"), &inUse)
+		assert.Equal(t, "device-a", inUse.OwnerDeviceID)
+	})
+}
+
+// Two devices racing to install under one certificate: exactly one binds it,
+// so the install-completion webhook still finds exactly one device (Codex
+// review 7952).
+func TestStateManager_InstallCertificate_OneConcurrentBindingWins(t *testing.T) {
+	const rounds = 50
+	const devices = 8
+
+	for round := 0; round < rounds; round++ {
+		sm := NewStateManager()
+		for i := 0; i < devices; i++ {
+			registerBooting(t, sm, fmt.Sprintf("device-%d", i), i)
+		}
+
+		start := make(chan struct{})
+		won := make(chan string, devices)
+		refused := make(chan error, devices)
+		var wg sync.WaitGroup
+		for i := 0; i < devices; i++ {
+			id := fmt.Sprintf("device-%d", i)
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				<-start
+				if err := bindInstalling(sm, id, "shared"); err != nil {
+					refused <- err
+					return
+				}
+				won <- id
+			}()
+		}
+		close(start)
+		wg.Wait()
+		close(won)
+		close(refused)
+
+		require.Len(t, won, 1, "round %d", round)
+		winner := <-won
+		for err := range refused {
+			var inUse ErrInstallCertificateInUse
+			require.ErrorAs(t, err, &inUse, "round %d", round)
+			assert.Equal(t, winner, inUse.OwnerDeviceID, "round %d", round)
+		}
+		bound := sm.List(&DeviceFilter{InstallCertificateSHA256: "shared"})
+		require.Len(t, bound, 1, "round %d", round)
+		assert.Equal(t, winner, bound[0].ID, "round %d", round)
+	}
+}
+
 func TestStateManager_UpdateDevice(t *testing.T) {
 	sm := NewStateManager()
 	mac, _ := net.ParseMAC("00:11:22:33:44:55")

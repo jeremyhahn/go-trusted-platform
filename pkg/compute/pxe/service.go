@@ -15,6 +15,7 @@ package pxe
 
 import (
 	"context"
+	"errors"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
@@ -658,9 +659,15 @@ func (s *service) SetDeviceInstalling(ctx context.Context, deviceID, installCert
 	}
 
 	// The binding lands in the same swap as the transition: a call that loses
-	// the race to installing must not rebind the webhook's identity.
+	// the race to installing must not rebind the webhook's identity. The swap
+	// also claims the fingerprint across devices (StateManager.swapEntry), so
+	// a certificate another device is installing under is refused.
 	bind := func(d *DeviceInfo) { d.InstallCertificateSHA256 = fingerprint }
 	if err := s.stateManager.TransitionWith(deviceID, StateInstalling, reason, bind); err != nil {
+		var inUse ErrInstallCertificateInUse
+		if errors.As(err, &inUse) {
+			return inUse
+		}
 		return ErrProvisioningFailed{
 			DeviceID: deviceID,
 			Reason:   "failed to transition to installing state",

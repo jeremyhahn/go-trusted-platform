@@ -269,19 +269,31 @@ the one whose `install_certificate_sha256` is the SHA-256 of the leaf of the
 verified client chain, and a MAC in the request body must match it. The
 operator binds that fingerprint when the device enters installing (`UpdateState`
 with `install_certificate_sha256`, or the Go SDK's `pxe.Client.SetDeviceInstalling`,
-`sdk/go/services/pxe/client.go:113`); a serial is not used, because it is unique
+`sdk/go/services/pxe/client.go:114`); a serial is not used, because it is unique
 only per issuer. No verified client certificate is 401; a certificate no device
-carries, or a mismatched MAC, is 403. Transports with no peer certificate —
-Unix, MCP stdio, embedded — refuse the call.
+carries, or a mismatched MAC, is 403 (`pkg/api/daemon/pxe_grpc_service.go:566`).
+Transports with no peer certificate — Unix, MCP stdio, embedded — refuse the
+call. This binding is the only one: there is no separate certificate-binding RPC.
+
+**One installer certificate is bound to one device at a time.** Binding a
+fingerprint another device is installing under is refused with
+`ErrInstallCertificateInUse`, `AlreadyExists` on gRPC
+(`pkg/api/daemon/pxe_grpc_service.go:794`), and the device stays where it was.
+The check holds under concurrency: a swap that changes a device's binding
+claims the fingerprint in a fingerprint-to-device index and writes the device
+in one critical section (`pkg/compute/pxe/state.go:430`), so of two devices
+racing to install under one certificate exactly one wins, and the webhook never
+finds two devices carrying it. Leaving `installing` or removing the device
+releases the fingerprint (Codex review 7952).
 
 **The certificate ends only the installation it was bound to.** The webhook
 moves the device to `install_complete` or `failed` in one compare-and-swap
 that admits only `installing` under that fingerprint
-(`pkg/compute/pxe/service.go:681`, `pkg/compute/pxe/state.go:268`). Every
+(`pkg/compute/pxe/service.go:689`, `pkg/compute/pxe/state.go:295`). Every
 transition out of `installing` clears the binding, so a callback that arrives
 after the installation ended — replayed, or after enrollment, authorization or
 quarantine — finds no device and is 403 (`PermissionDenied`,
-`pkg/api/daemon/pxe_grpc_service.go:791`).
+`pkg/api/daemon/pxe_grpc_service.go:792`).
 
 **The `REST base` column is a locator, not the contract.** It gives the prefix a
 route hangs under; it does not give the route. The normative per-route path

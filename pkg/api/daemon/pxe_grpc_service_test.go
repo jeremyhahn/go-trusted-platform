@@ -1165,6 +1165,11 @@ func TestPXEGRPCService_ErrorMapping(t *testing.T) {
 			wantCode: codes.InvalidArgument,
 		},
 		{
+			name:     "installer certificate held by another device",
+			err:      pxe.ErrInstallCertificateInUse{DeviceID: "b", OwnerDeviceID: "a", CertificateSHA256: "f"},
+			wantCode: codes.AlreadyExists,
+		},
+		{
 			name:     "invalid state transition",
 			err:      pxe.ErrInvalidStateTransition{FromState: "a", ToState: "b"},
 			wantCode: codes.FailedPrecondition,

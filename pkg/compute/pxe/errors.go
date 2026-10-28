@@ -159,6 +159,21 @@ func (e ErrInstallationNotBound) Error() string {
 		e.DeviceID, e.State, e.CertificateSHA256)
 }
 
+// ErrInstallCertificateInUse is returned when an installer certificate is
+// bound to a device while another device holds it. The install-completion
+// webhook admits a caller only when exactly one device carries its
+// certificate's fingerprint, so a second binding would lock both out.
+type ErrInstallCertificateInUse struct {
+	DeviceID          string
+	OwnerDeviceID     string
+	CertificateSHA256 string
+}
+
+func (e ErrInstallCertificateInUse) Error() string {
+	return fmt.Sprintf("pxe: installer certificate %s is bound to device %s, refusing device %s",
+		e.CertificateSHA256, e.OwnerDeviceID, e.DeviceID)
+}
+
 // ErrInvalidMACAddress indicates an invalid MAC address format.
 type ErrInvalidMACAddress struct {
 	MACAddress string

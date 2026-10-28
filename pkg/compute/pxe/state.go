@@ -53,6 +53,14 @@ type StateManager struct {
 	handlers   []EventHandler // Registered event handlers
 	handlersMu sync.RWMutex   // Protects handlers slice
 
+	// byInstallCert maps a bound installer certificate fingerprint to the one
+	// device that holds it. installCertMu serialises every write that changes
+	// a device's InstallCertificateSHA256 (swapEntry, Register, Unregister),
+	// so the index and the device entries change together: a per-device CAS
+	// alone cannot keep a value unique across devices (Codex review 7952).
+	byInstallCert map[string]string
+	installCertMu sync.Mutex
+
 	// now is the time source for every timestamp the state machine stamps.
 	// time.Now in production; tests inject a clock they step by hand (#284).
 	now func() time.Time
@@ -67,8 +75,9 @@ func NewStateManager() *StateManager {
 // the time from now, so tests can drive the clock.
 func newStateManager(now func() time.Time) *StateManager {
 	return &StateManager{
-		handlers: make([]EventHandler, 0),
-		now:      now,
+		handlers:      make([]EventHandler, 0),
+		byInstallCert: make(map[string]string),
+		now:           now,
 	}
 }
 
@@ -128,6 +137,17 @@ func (sm *StateManager) Register(device *DeviceInfo) error {
 		device.StateChangedAt = now
 	}
 
+	// A device registered with an installer binding claims it the way a
+	// transition into installing does, so the fingerprint stays unique.
+	installCert := device.InstallCertificateSHA256
+	if installCert != "" {
+		sm.installCertMu.Lock()
+		defer sm.installCertMu.Unlock()
+		if owner, claimed := sm.byInstallCert[installCert]; claimed {
+			return ErrInstallCertificateInUse{DeviceID: device.ID, OwnerDeviceID: owner, CertificateSHA256: installCert}
+		}
+	}
+
 	// Create entry with initial version
 	entry := &deviceEntry{
 		device:  device,
@@ -149,6 +169,9 @@ func (sm *StateManager) Register(device *DeviceInfo) error {
 		}
 	}
 
+	if installCert != "" {
+		sm.byInstallCert[installCert] = device.ID
+	}
 	return nil
 }
 
@@ -159,17 +182,19 @@ func (sm *StateManager) Unregister(deviceID string) error {
 		return ErrDeviceNotFound{DeviceID: deviceID}
 	}
 
-	entryVal, loaded := sm.devices.Load(deviceID)
+	// The delete and the release of the device's installer binding happen
+	// under installCertMu, so a concurrent bind cannot outlive the device.
+	sm.installCertMu.Lock()
+	defer sm.installCertMu.Unlock()
+
+	entryVal, loaded := sm.devices.LoadAndDelete(deviceID)
 	if !loaded {
 		return ErrDeviceNotFound{DeviceID: deviceID}
 	}
 
 	entry := entryVal.(*deviceEntry)
-	macKey := entry.device.MACAddress.String()
-
-	// Remove from both maps
-	sm.devices.Delete(deviceID)
-	sm.byMAC.Delete(macKey)
+	sm.byMAC.Delete(entry.device.MACAddress.String())
+	sm.releaseInstallCert(entry.device.InstallCertificateSHA256, deviceID)
 
 	return nil
 }
@@ -266,6 +291,7 @@ func (sm *StateManager) TransitionWith(deviceID string, newState ProvisioningSta
 // Every transition out of StateInstalling clears InstallCertificateSHA256 in
 // the same swap: the installer certificate authorizes only the installation
 // it was bound for (SetDeviceInstalling), never a later state of the device.
+// A binding apply sets is held by one device at a time (swapEntry).
 func (sm *StateManager) TransitionIf(deviceID string, newState ProvisioningState, reason string, admit func(*DeviceInfo) error, apply func(*DeviceInfo)) error {
 	if deviceID == "" {
 		return ErrDeviceNotFound{DeviceID: deviceID}
@@ -324,7 +350,11 @@ func (sm *StateManager) TransitionIf(deviceID string, newState ProvisioningState
 		}
 
 		// Attempt atomic swap; on failure reload and retry
-		if sm.devices.CompareAndSwap(deviceID, currentEntry, newEntry) {
+		swapped, err := sm.swapEntry(deviceID, currentEntry, newEntry)
+		if err != nil {
+			return err
+		}
+		if swapped {
 			event := sm.createTransitionEvent(deviceID, currentState, newState, reason)
 			sm.emitEvent(event)
 			return nil
@@ -373,7 +403,11 @@ func (sm *StateManager) UpdateDevice(deviceID string, fn func(*DeviceInfo) error
 		}
 
 		// Attempt atomic swap
-		if sm.devices.CompareAndSwap(deviceID, entry, newEntry) {
+		swapped, err := sm.swapEntry(deviceID, entry, newEntry)
+		if err != nil {
+			return err
+		}
+		if swapped {
 			return nil
 		}
 		// CAS failed, retry
@@ -383,6 +417,46 @@ func (sm *StateManager) UpdateDevice(deviceID string, fn func(*DeviceInfo) error
 		Operation:  "UpdateDevice",
 		MaxRetries: maxRetries,
 		Reason:     "concurrent modification prevented update",
+	}
+}
+
+// swapEntry replaces current with next in one compare-and-swap. A swap that
+// leaves InstallCertificateSHA256 unchanged stays lock-free. A swap that
+// changes it takes installCertMu, refuses a fingerprint another device holds
+// (ErrInstallCertificateInUse), and claims the new fingerprint and releases
+// the old one in the same critical section as the swap, so of two concurrent
+// bindings of one fingerprint to different devices exactly one succeeds. It
+// reports false when the entry changed underneath, and the caller retries.
+func (sm *StateManager) swapEntry(deviceID string, current, next *deviceEntry) (bool, error) {
+	previous := current.device.InstallCertificateSHA256
+	installCert := next.device.InstallCertificateSHA256
+	if previous == installCert {
+		return sm.devices.CompareAndSwap(deviceID, current, next), nil
+	}
+
+	sm.installCertMu.Lock()
+	defer sm.installCertMu.Unlock()
+
+	if installCert != "" {
+		if owner, claimed := sm.byInstallCert[installCert]; claimed && owner != deviceID {
+			return false, ErrInstallCertificateInUse{DeviceID: deviceID, OwnerDeviceID: owner, CertificateSHA256: installCert}
+		}
+	}
+	if !sm.devices.CompareAndSwap(deviceID, current, next) {
+		return false, nil
+	}
+	sm.releaseInstallCert(previous, deviceID)
+	if installCert != "" {
+		sm.byInstallCert[installCert] = deviceID
+	}
+	return true, nil
+}
+
+// releaseInstallCert drops installCert from the index when deviceID holds it.
+// The caller holds installCertMu.
+func (sm *StateManager) releaseInstallCert(installCert, deviceID string) {
+	if installCert != "" && sm.byInstallCert[installCert] == deviceID {
+		delete(sm.byInstallCert, installCert)
 	}
 }
 

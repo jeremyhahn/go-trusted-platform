@@ -606,6 +606,37 @@ func TestService_SetDeviceInstalling_RejectedCallKeepsTheAcceptedBinding(t *test
 	}
 }
 
+// A certificate another device is installing under is refused with the typed
+// error, so the webhook never finds two devices carrying one fingerprint.
+func TestService_SetDeviceInstalling_RefusesACertificateAnotherDeviceHolds(t *testing.T) {
+	svc, _ := initializeTestService(t)
+	ctx := context.Background()
+	fingerprint := CertificateSHA256([]byte("installer"))
+
+	first, err := svc.RegisterDevice(ctx, "02:00:00:00:00:01", "port-1")
+	require.NoError(t, err)
+	second, err := svc.RegisterDevice(ctx, "02:00:00:00:00:02", "port-2")
+	require.NoError(t, err)
+	for _, id := range []string{first.ID, second.ID} {
+		require.NoError(t, svc.UpdateDeviceState(ctx, id, StateBooting, "booting"))
+	}
+	require.NoError(t, svc.SetDeviceInstalling(ctx, first.ID, fingerprint, "installing"))
+
+	err = svc.SetDeviceInstalling(ctx, second.ID, fingerprint, "installing")
+	var inUse ErrInstallCertificateInUse
+	require.ErrorAs(t, err, &inUse)
+	assert.Equal(t, first.ID, inUse.OwnerDeviceID)
+
+	found, err := svc.ListDevices(ctx, &DeviceFilter{InstallCertificateSHA256: fingerprint})
+	require.NoError(t, err)
+	require.Len(t, found, 1)
+	assert.Equal(t, first.ID, found[0].ID)
+
+	// Ending the first installation frees the certificate for the second.
+	require.NoError(t, svc.CompleteInstallation(ctx, first.ID, fingerprint, true, "installed"))
+	require.NoError(t, svc.SetDeviceInstalling(ctx, second.ID, fingerprint, "installing"))
+}
+
 func TestService_SetDeviceInstalling_Refusals(t *testing.T) {
 	fingerprint := CertificateSHA256([]byte("installer certificate"))
 	cases := map[string]struct {

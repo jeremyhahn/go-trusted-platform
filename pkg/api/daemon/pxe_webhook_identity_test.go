@@ -490,15 +490,30 @@ func TestWebhookComplete_ErrorPaths(t *testing.T) {
 		assert.Equal(t, pxe.StateInstalling, f.state(t, webhookNodeMAC))
 	})
 
+	// A certificate is bound to one device at a time (Codex review 7952): a
+	// second device cannot take the node's binding, so the webhook still
+	// resolves the node's certificate to exactly one record.
 	t.Run("certificate on two records", func(t *testing.T) {
 		f := newWebhookFixture(t)
-		f.install(t, "00:11:22:33:44:c3", f.node)
+		ctx := context.Background()
+		const otherMAC = "00:11:22:33:44:c3"
+		other, err := f.backend.RegisterDevice(ctx, otherMAC, "port-"+otherMAC)
+		require.NoError(t, err)
+		require.NoError(t, f.backend.UpdateDeviceState(ctx, other.ID, pxe.StateBooting, "netboot"))
 
-		_, err := f.svc.WebhookComplete(grpcContext(verifiedState(f.node)),
+		_, err = f.svc.UpdateState(ctx, &platformv1.UpdatePXEStateRequest{
+			DeviceId:                 other.ID,
+			State:                    platformv1.ProvisioningState_PROVISIONING_STATE_INSTALLING,
+			InstallCertificateSha256: pxe.CertificateSHA256(f.node.Raw),
+		})
+		assert.Equal(t, codes.AlreadyExists, status.Code(err))
+		assert.Equal(t, pxe.StateBooting, f.state(t, otherMAC))
+
+		_, err = f.svc.WebhookComplete(grpcContext(verifiedState(f.node)),
 			&platformv1.PXEWebhookCompleteRequest{Success: true})
-
-		assert.Equal(t, codes.PermissionDenied, status.Code(err))
-		assert.Equal(t, pxe.StateInstalling, f.state(t, webhookNodeMAC))
+		require.NoError(t, err)
+		assert.Equal(t, pxe.StateInstallComplete, f.state(t, webhookNodeMAC))
+		assert.Equal(t, pxe.StateBooting, f.state(t, otherMAC))
 	})
 
 	t.Run("certificate without DER", func(t *testing.T) {
