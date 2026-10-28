@@ -231,6 +231,20 @@ FIPS builds because its primitives are not approved). The kernel does the
 cryptography; the platform does the keys, and zeroizes its copy once the kernel
 holds it. Install is fail-closed — protection before carrier — and `Rekey`
 rotates SAs in place so the peer can rotate in lockstep without a session drop.
+A start adopts what a killed predecessor left: matching SAs are kept with their
+replay state, and the SAs and policies the platform installed under SPIs or
+endpoints the configuration no longer names are removed
+(`tunnel.Manager.SweepIPsec`), while an IKE daemon's state is never touched.
+When the last tunnel was dropped, no tunnels service starts, so `gatewayd serve`
+runs the sweep itself before the gateway starts, but only when the record a
+start with tunnels leaves under `--data-dir` (`tunnels-installed`) or the ESP
+inventory (`ipsec-installed.json`) says there can be state to sweep, so a
+gateway that never ran tunnels (BGP only, say) starts without
+`CAP_NET_ADMIN`. A configuration without a `gateway:` section counts as zero
+tunnels, so it sweeps too. The record goes only once every object the
+inventory records is gone, whether or not the pair's outbound SA survived
+the predecessor's kill
+(`sweepDroppedTunnels`, `pkg/sdn/gateway/commands/serve.go`).
 
 Each WAN uplink owns a **routing table** and `ip rule`s (`UplinkManager`): the
 uplink's own addresses and every tunnel's outer endpoint pair are steered into
@@ -381,12 +395,14 @@ address families (`AF_UNIX`, `AF_INET`, `AF_INET6`, `AF_NETLINK`; never
 keeps because `nat64` runs `jool`. If the supervisor
 itself dies, the kernel kills every child (`SIGKILL`, not `SIGTERM`), so the
 datapath never runs its withdraw path: its flows stay in place for the
-successor to adopt (cookie-scoped reconcile for the flow tables, a matching
-GRE tunnel kept; see [engineering.md](engineering.md)), while a planned stop
-still withdraws them.
-Only the
-management VPN, which has no backend yet, keeps its in-process handler. The
-order still to come is `vpn` once it has a backend;
+successor to adopt (cookie-scoped reconcile for the flow tables, `hostfw`
+replaced in one transaction, a matching GRE carrier, WireGuard device or IPsec
+SA kept, and the ESP state under SPIs the configuration no longer names swept;
+see [engineering.md](engineering.md)), while a planned stop still withdraws
+them.
+The management VPN moved with them: `vpn` runs as the service account with no
+capability, takes the `vpn` section of the desired document, and records its
+leases with the control plane from inside the child.
 [`engineering.md`](engineering.md) §The process model carries the state.
 
 Moving `datapath` has two deliberate consequences. `Gateway.Apply` forwards

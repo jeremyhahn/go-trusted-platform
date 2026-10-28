@@ -151,6 +151,12 @@ type HostRuntime struct {
 	// netlink manager built when TunnelManager is nil brings its own
 	// tunnel.UplinkManager and ignores this field.
 	UplinkManager UplinkManager
+	// IPsecInventory is where the netlink tunnel manager built when
+	// TunnelManager is nil records the ESP pairs it installs
+	// (tunnel.WithIPsecInventory): the tunnels start's sweep removes only
+	// the pairs recorded there. Empty means no record, so the sweep removes
+	// nothing a predecessor left.
+	IPsecInventory string
 	// NAT64Driver programs the kernel translator; nil drives the real jool
 	// tool, which needs the module the packaging installs (#601).
 	NAT64Driver nat64.Driver
