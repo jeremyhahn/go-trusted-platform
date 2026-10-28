@@ -96,8 +96,7 @@ check every claim against a built table (#452):
   (`pkg/api/daemon/rest_route_claims_test.go`) checks every claim under a
   prefix the daemon serves against the daemon's table, and requires the
   matched route to have the claim's own shape. Prefixes both servers serve
-  differ in places — IDevID under `/tpm/idevid`, KMS keys in the body, CA
-  revoke as `POST .../revoke`. Each such claim sits in that test's
+  differ in places — IDevID under `/tpm/idevid`, KMS keys in the body. Each such claim sits in that test's
   `daemonDivergentClaims` ledger with its reason until the choice of server
   is made.
 

@@ -385,7 +385,8 @@ func generateTestCRL(issuer *x509.Certificate) ([]byte, error) {
 
 func setupCAHandlers(ca CAServiceInterface) (*CAHandlers, *mux.Router) {
 	logger := slog.Default()
-	handlers := NewCAHandlers(ca, logger, nil)
+	guard := NewScopeGuard(&scopedAuthorizer{scopes: map[string][]string{adminToken: {scopeCertsRevoke}}}, nil, nil)
+	handlers := NewCAHandlers(ca, logger, nil).WithScopeGuard(guard)
 	router := mux.NewRouter()
 	handlers.RegisterRoutes(router)
 	return handlers, router
@@ -772,7 +773,8 @@ func TestCAHandlers_RevokeCertificate_Success(t *testing.T) {
 	}
 	body, _ := json.Marshal(reqBody)
 
-	req, _ := http.NewRequest(http.MethodPost, "/api/v1/ca/certificates/"+serial+"/revoke", bytes.NewReader(body))
+	req, _ := http.NewRequest(http.MethodDelete, "/api/v1/ca/certificates/"+serial, bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+adminToken)
 	req.Header.Set("Content-Type", "application/json")
 	rr := httptest.NewRecorder()
 
@@ -787,6 +789,7 @@ func TestCAHandlers_RevokeCertificate_Success(t *testing.T) {
 	assert.Equal(t, serial, resp.Serial)
 	assert.Equal(t, "REVOKED", resp.Status)
 	assert.Equal(t, 1, resp.Reason)
+	assert.NotContains(t, ca.certStore.certs, serial, "DELETE must reach CA Revoke")
 }
 
 func TestCAHandlers_RevokeCertificate_WithDeleteKeys(t *testing.T) {
@@ -802,7 +805,8 @@ func TestCAHandlers_RevokeCertificate_WithDeleteKeys(t *testing.T) {
 	}
 	body, _ := json.Marshal(reqBody)
 
-	req, _ := http.NewRequest(http.MethodPost, "/api/v1/ca/certificates/"+serial+"/revoke", bytes.NewReader(body))
+	req, _ := http.NewRequest(http.MethodDelete, "/api/v1/ca/certificates/"+serial, bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+adminToken)
 	req.Header.Set("Content-Type", "application/json")
 	rr := httptest.NewRecorder()
 
@@ -815,12 +819,61 @@ func TestCAHandlers_RevokeCertificate_NotFound(t *testing.T) {
 	ca := newMockCAService()
 	_, router := setupCAHandlers(ca)
 
-	req, _ := http.NewRequest(http.MethodPost, "/api/v1/ca/certificates/nonexistent/revoke", nil)
+	req, _ := http.NewRequest(http.MethodDelete, "/api/v1/ca/certificates/nonexistent", nil)
+	req.Header.Set("Authorization", "Bearer "+adminToken)
 	rr := httptest.NewRecorder()
 
 	router.ServeHTTP(rr, req)
 
 	assert.Equal(t, http.StatusNotFound, rr.Code)
+}
+
+// TestCAHandlers_RevokeCertificate_RequiresRevokeScope proves DELETE is
+// refused, and the certificate left unrevoked, for a caller without
+// certs:revoke.
+func TestCAHandlers_RevokeCertificate_RequiresRevokeScope(t *testing.T) {
+	ca := newMockCAService()
+	cert := generateTestCertificate("revoke.test.com", false, nil, nil)
+	serial := hex.EncodeToString(cert.SerialNumber.Bytes())
+	ca.certStore.certs[serial] = cert
+
+	guard := NewScopeGuard(&scopedAuthorizer{scopes: map[string][]string{"reader": {"certs:read"}}}, nil, nil)
+	router := mux.NewRouter()
+	NewCAHandlers(ca, slog.Default(), nil).WithScopeGuard(guard).RegisterRoutes(router)
+
+	for name, token := range map[string]string{"no token": "", "wrong scope": "reader"} {
+		t.Run(name, func(t *testing.T) {
+			req, _ := http.NewRequest(http.MethodDelete, "/api/v1/ca/certificates/"+serial, nil)
+			if token != "" {
+				req.Header.Set("Authorization", "Bearer "+token)
+			}
+			rr := httptest.NewRecorder()
+
+			router.ServeHTTP(rr, req)
+
+			assert.Contains(t, []int{http.StatusUnauthorized, http.StatusForbidden}, rr.Code)
+			assert.Contains(t, ca.certStore.certs, serial, "the certificate must not be revoked")
+		})
+	}
+}
+
+// TestCAHandlers_RevokeCertificate_PostRevokeRouteRemoved proves the old
+// POST .../revoke shape is gone: DELETE is the only revoke route.
+func TestCAHandlers_RevokeCertificate_PostRevokeRouteRemoved(t *testing.T) {
+	ca := newMockCAService()
+	cert := generateTestCertificate("revoke.test.com", false, nil, nil)
+	serial := hex.EncodeToString(cert.SerialNumber.Bytes())
+	ca.certStore.certs[serial] = cert
+	_, router := setupCAHandlers(ca)
+
+	req, _ := http.NewRequest(http.MethodPost, "/api/v1/ca/certificates/"+serial+"/revoke", nil)
+	req.Header.Set("Authorization", "Bearer "+adminToken)
+	rr := httptest.NewRecorder()
+
+	router.ServeHTTP(rr, req)
+
+	assert.Contains(t, []int{http.StatusNotFound, http.StatusMethodNotAllowed}, rr.Code)
+	assert.Contains(t, ca.certStore.certs, serial, "the certificate must not be revoked")
 }
 
 func TestCAHandlers_RevokeCertificate_RevokeFailed(t *testing.T) {
@@ -833,7 +886,8 @@ func TestCAHandlers_RevokeCertificate_RevokeFailed(t *testing.T) {
 
 	_, router := setupCAHandlers(ca)
 
-	req, _ := http.NewRequest(http.MethodPost, "/api/v1/ca/certificates/"+serial+"/revoke", nil)
+	req, _ := http.NewRequest(http.MethodDelete, "/api/v1/ca/certificates/"+serial, nil)
+	req.Header.Set("Authorization", "Bearer "+adminToken)
 	rr := httptest.NewRecorder()
 
 	router.ServeHTTP(rr, req)
@@ -849,7 +903,8 @@ func TestCAHandlers_RevokeCertificate_InvalidBody(t *testing.T) {
 
 	_, router := setupCAHandlers(ca)
 
-	req, _ := http.NewRequest(http.MethodPost, "/api/v1/ca/certificates/"+serial+"/revoke", bytes.NewReader([]byte("invalid")))
+	req, _ := http.NewRequest(http.MethodDelete, "/api/v1/ca/certificates/"+serial, bytes.NewReader([]byte("invalid")))
+	req.Header.Set("Authorization", "Bearer "+adminToken)
 	req.Header.Set("Content-Type", "application/json")
 	rr := httptest.NewRecorder()
 
@@ -1758,14 +1813,13 @@ func TestCAHandlers_RegisterRoutes(t *testing.T) {
 
 	// Verify routes are registered by walking the router
 	expectedRoutes := map[string][]string{
-		"/api/v1/ca/info":                         {http.MethodGet},
-		"/api/v1/ca/certificates":                 {http.MethodPost, http.MethodGet},
-		"/api/v1/ca/certificates/{serial}":        {http.MethodGet},
-		"/api/v1/ca/certificates/{serial}/revoke": {http.MethodPost},
-		"/api/v1/ca/certificates/{serial}/renew":  {http.MethodPost},
-		"/api/v1/ca/certificates/verify":          {http.MethodPost},
-		"/api/v1/ca/crl":                          {http.MethodGet},
-		"/api/v1/ca/bundle":                       {http.MethodGet},
+		"/api/v1/ca/info":                        {http.MethodGet},
+		"/api/v1/ca/certificates":                {http.MethodPost, http.MethodGet},
+		"/api/v1/ca/certificates/{serial}":       {http.MethodGet, http.MethodDelete},
+		"/api/v1/ca/certificates/{serial}/renew": {http.MethodPost},
+		"/api/v1/ca/certificates/verify":         {http.MethodPost},
+		"/api/v1/ca/crl":                         {http.MethodGet},
+		"/api/v1/ca/bundle":                      {http.MethodGet},
 	}
 
 	registeredRoutes := make(map[string][]string)

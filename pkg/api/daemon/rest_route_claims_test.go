@@ -101,8 +101,6 @@ func daemonRouteTable(t *testing.T) (*RESTServer, []string) {
 // webservice's route, is a capability decision (#452). Keyed by gRPC method.
 // TestDaemonDivergentClaims_StillDiverge makes the map shrink-only.
 var daemonDivergentClaims = map[string]string{
-	"/platform.v1.CAService/RevokeCertificate": "#452: the daemon revokes at POST /api/v1/ca/certificates/{serial}/revoke; the claim is the webservice's DELETE shape",
-
 	"/platform.v1.DeviceService/CountDevices":                 "#452: the daemon has no count route; the request lands on GET /api/v1/devices/{id} with id=\"count\"",
 	"/platform.v1.DeviceService/DisableDevice":                "#452: the daemon's device routes (pkg/api/rest) have no disable",
 	"/platform.v1.DeviceService/EnableDevice":                 "#452: the daemon's device routes (pkg/api/rest) have no enable",

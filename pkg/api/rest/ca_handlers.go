@@ -508,7 +508,7 @@ func (h *CAHandlers) RegisterRoutes(router *mux.Router) {
 	router.HandleFunc("/api/v1/ca/certificates", h.handleIssueCertificate).Methods(http.MethodPost)
 	router.HandleFunc("/api/v1/ca/certificates", h.handleListCertificates).Methods(http.MethodGet)
 	router.HandleFunc("/api/v1/ca/certificates/{serial}", h.handleGetCertificate).Methods(http.MethodGet)
-	router.HandleFunc("/api/v1/ca/certificates/{serial}/revoke", h.handleRevokeCertificate).Methods(http.MethodPost)
+	router.HandleFunc("/api/v1/ca/certificates/{serial}", h.guard.Require(scopeCertsRevoke, h.handleRevokeCertificate)).Methods(http.MethodDelete)
 	router.HandleFunc("/api/v1/ca/certificates/{serial}/renew", h.handleRenewCertificate).Methods(http.MethodPost)
 
 	// Code-signing certification of a KMS key from its CSR. A client
@@ -812,7 +812,13 @@ func (h *CAHandlers) handleGetCertificate(w http.ResponseWriter, r *http.Request
 	})
 }
 
-// handleRevokeCertificate handles POST /api/v1/ca/certificates/{serial}/revoke
+// scopeCertsRevoke is the scope the revoke route requires, as the
+// webservice's DELETE /api/v1/ca/certificates/{serial} does.
+const scopeCertsRevoke = "certs:revoke"
+
+// handleRevokeCertificate handles DELETE /api/v1/ca/certificates/{serial},
+// the shape the Go and JS SDKs send. The optional JSON body carries reason
+// and delete_keys; no body is a plain revocation.
 func (h *CAHandlers) handleRevokeCertificate(w http.ResponseWriter, r *http.Request) {
 	if h.ca == nil {
 		h.writeError(w, http.StatusServiceUnavailable, ErrCAServiceNotAvailable{})

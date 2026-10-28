@@ -133,6 +133,11 @@ var ntpRouteScopes = []guardedRoute{
 	{http.MethodPost, "/api/v1/ntp/step", "ntp:write"},
 }
 
+// caRevokeRouteScopes is the daemon's revoke route, the SDK's DELETE shape.
+var caRevokeRouteScopes = []guardedRoute{
+	{http.MethodDelete, "/api/v1/ca/certificates/0a1b", scopeCertsRevoke},
+}
+
 // appServiceRouteScopes is the Cache, Scheduler and Messaging route table of
 // the gRPC method catalog.
 var appServiceRouteScopes = []guardedRoute{
@@ -205,6 +210,7 @@ func guardedRouter(guard *ScopeGuard) *mux.Router {
 	NewNTPHandlers(nil, guard, nil).RegisterRoutes(router)
 	NewAppServiceHandlers(AppServiceServers{}, guard, nil).RegisterRoutes(router)
 	NewComputeHandlers(nil, guard, nil).RegisterRoutes(router)
+	NewCAHandlers(nil, nil, nil).WithScopeGuard(guard).RegisterRoutes(router)
 	return router
 }
 
@@ -228,6 +234,7 @@ func TestScopeGuard_EachRouteAdmitsItsScopeAndRefusesOthers(t *testing.T) {
 		{"ntp", ntpRouteScopes, "vpn:read"},
 		{"app services", appServiceRouteScopes, "vpn:read"},
 		{"compute", computeRouteScopes, "ntp:read"},
+		{"ca revoke", caRevokeRouteScopes, "certs:generate"},
 	} {
 		t.Run(group.name, func(t *testing.T) {
 			for _, route := range group.routes {

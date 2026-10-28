@@ -105,8 +105,10 @@ digits is refused with 400 before the CA is asked. Verify takes a
 base64 in proto-JSON) and answers a `VerifyCertificateResponse`.
 
 The daemon REST listener still answers list, revoke, renew and verify with
-its own flat JSON, and it revokes with `POST .../{serial}/revoke`. The SDK's
-revoke, renew and verify claims follow the web service.
+its own flat JSON. It revokes at the SDK's shape, `DELETE .../{serial}`, with
+`reason` and `delete_keys` in an optional JSON body, under `certs:revoke`
+(below); it serves no `POST .../revoke` route. The SDK's renew and verify claims
+follow the web service.
 
 The MCP `ca_issue` tool takes the request flat — subject fields including
 `address` and `postal_code`, SANs as `dns_names` / `ip_addresses` /
@@ -124,9 +126,8 @@ issues and reads one fully populated certificate over every transport. It
 requires each transport to return the gRPC service's certificate and to ask
 the CA for the same certificate.
 
-**Revocation is `DELETE .../{serial}`, not `POST .../{serial}/revoke`.** An
-earlier planning document specified the `POST` form; the web service
-registers `DELETE`, and the SDK sends it.
+**Revocation is `DELETE .../{serial}`.** The web service and the daemon
+both register it, and the SDK sends it.
 
 ### Issuing from a CSR
 
@@ -305,6 +306,10 @@ of its gRPC twin:
 | `POST /api/v1/ca/certificates/{serial}/renew` | `certs:generate` |
 | `DELETE /api/v1/ca/certificates/{serial}` | `certs:revoke` |
 | `POST /api/v1/ca/certificates/verify` | `certs:read` |
+
+The daemon REST listener serves the same `DELETE /api/v1/ca/certificates/{serial}`
+behind its `ScopeGuard` with the same `certs:revoke` scope
+(`pkg/api/rest/ca_handlers.go`).
 
 Under platform-token auth a request with no token is refused with 401 and a
 token without the scope with 403, before the handler runs. Under the legacy

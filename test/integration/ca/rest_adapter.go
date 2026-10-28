@@ -299,20 +299,26 @@ func (r *RESTAdapter) doGet(ctx context.Context, path string, result interface{}
 
 // doPost sends an HTTP POST request with a JSON body and decodes the response.
 func (r *RESTAdapter) doPost(ctx context.Context, path string, reqBody interface{}, result interface{}) error {
+	return r.doJSON(ctx, http.MethodPost, path, reqBody, result)
+}
+
+// doJSON sends reqBody as JSON with method and decodes the response into
+// result.
+func (r *RESTAdapter) doJSON(ctx context.Context, method, path string, reqBody interface{}, result interface{}) error {
 	var bodyBytes []byte
 	if reqBody != nil {
 		var err error
 		if bodyBytes, err = json.Marshal(reqBody); err != nil {
-			return ErrRESTRequestFailed{Method: http.MethodPost, Path: path, Err: err}
+			return ErrRESTRequestFailed{Method: method, Path: path, Err: err}
 		}
 	}
-	body, err := r.send(ctx, http.MethodPost, path, bodyBytes)
+	body, err := r.send(ctx, method, path, bodyBytes)
 	if err != nil {
 		return err
 	}
 	if result != nil {
 		if err := json.Unmarshal(body, result); err != nil {
-			return ErrRESTResponseParseFailed{Operation: "POST " + path, Err: err}
+			return ErrRESTResponseParseFailed{Operation: method + " " + path, Err: err}
 		}
 	}
 	return nil
@@ -544,7 +550,7 @@ func (r *RESTAdapter) VerifyCertificate(ctx context.Context, opts VerifyCertific
 
 // RevokeCertificate revokes a certificate via REST.
 func (r *RESTAdapter) RevokeCertificate(ctx context.Context, opts RevokeCertificateOptions) (*RevokeCertificateResult, error) {
-	path := fmt.Sprintf("/api/v1/ca/certificates/%s/revoke", url.PathEscape(opts.Serial))
+	path := fmt.Sprintf("/api/v1/ca/certificates/%s", url.PathEscape(opts.Serial))
 
 	reqBody := restCertificateRevokeRequest{
 		Reason:     int(opts.Reason),
@@ -552,7 +558,7 @@ func (r *RESTAdapter) RevokeCertificate(ctx context.Context, opts RevokeCertific
 	}
 
 	var resp restCARevokeCertificateResponse
-	if err := r.doPost(ctx, path, reqBody, &resp); err != nil {
+	if err := r.doJSON(ctx, http.MethodDelete, path, reqBody, &resp); err != nil {
 		return nil, ErrCallFailed{Protocol: "REST", Method: "RevokeCertificate", Err: err}
 	}
 
