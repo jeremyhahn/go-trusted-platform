@@ -35,11 +35,11 @@ require (
 	github.com/codegangsta/negroni v1.0.0
 	github.com/coredhcp/coredhcp v0.0.0-20260117135807-60ec8025cdfc // held: the latest version is not in the module cache and cannot be fetched offline in #933
 	github.com/coredns/caddy v1.1.4-0.20250930002214-15135a999495 // held: the latest version is not in the module cache and cannot be fetched offline in #933
-	github.com/coredns/coredns v1.14.7
+	github.com/coredns/coredns v1.14.7 // held: v1.15.0 is not in the module cache and cannot be fetched offline in #1140
 	github.com/digitalocean/go-qemu v0.0.0-20250212194115-ee9b0668d242
 	github.com/fatih/color v1.19.0
 	github.com/fsnotify/fsnotify v1.10.1
-	github.com/go-jose/go-jose/v4 v4.1.4 // held: the latest version is not in the module cache and cannot be fetched offline in #933
+	github.com/go-jose/go-jose/v4 v4.1.6
 	github.com/go-viper/mapstructure/v2 v2.5.0
 	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/google/go-tpm v0.9.8
