@@ -112,6 +112,11 @@ func (c *Client) UpdateState(ctx context.Context, deviceID string, state platfor
 // webhook refuses an installation entered without a binding, and the binding
 // cannot be added once the device is installing.
 func (c *Client) SetDeviceInstalling(ctx context.Context, deviceID, installCertificateSHA256, reason string) (*platformv1.PXEDeviceInfo, error) {
+	// An empty fingerprint would make the request a plain state update: the
+	// device would enter installing unbound, and the webhook could never end it.
+	if installCertificateSHA256 == "" {
+		return nil, &ErrInstallCertificateRequired{ID: deviceID}
+	}
 	resp, err := c.grpc.UpdateState(ctx, &platformv1.UpdatePXEStateRequest{
 		DeviceId:                 deviceID,
 		State:                    platformv1.ProvisioningState_PROVISIONING_STATE_INSTALLING,

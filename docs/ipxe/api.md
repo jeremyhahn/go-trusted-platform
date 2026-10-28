@@ -269,7 +269,9 @@ the one whose `install_certificate_sha256` is the SHA-256 of the leaf of the
 verified client chain, and the request body must carry that device's MAC. The
 operator binds that fingerprint when the device enters installing (`UpdateState`
 with `install_certificate_sha256`, or the Go SDK's `pxe.Client.SetDeviceInstalling`,
-`sdk/go/services/pxe/client.go:114`); a serial is not used, because it is unique
+`sdk/go/services/pxe/client.go:114`, which refuses an empty fingerprint with
+`ErrInstallCertificateRequired` before sending anything, so the device stays
+`booting`, `sdk/go/services/pxe/client.go:117`); a serial is not used, because it is unique
 only per issuer. No verified client certificate is 401; a certificate no device
 carries, or a mismatched MAC, is 403 (`pkg/api/daemon/pxe_grpc_service.go:566`);
 a body with no MAC is 400 (`InvalidArgument`, `ErrPXEWebhookMACRequired`,

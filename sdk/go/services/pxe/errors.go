@@ -95,6 +95,17 @@ func (e *ErrSetInstallingFailed) Error() string {
 
 func (e *ErrSetInstallingFailed) Unwrap() error { return e.Cause }
 
+// ErrInstallCertificateRequired is returned by SetDeviceInstalling when no
+// installer certificate fingerprint is given: without one the request would
+// move the device to installing with no binding the webhook can match.
+type ErrInstallCertificateRequired struct {
+	ID string
+}
+
+func (e *ErrInstallCertificateRequired) Error() string {
+	return fmt.Sprintf("set device %s installing: an installer certificate SHA-256 is required", e.ID)
+}
+
 type ErrSetEnrolledFailed struct {
 	ID    string
 	Cause error
