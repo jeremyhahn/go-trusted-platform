@@ -42,6 +42,7 @@ func TestErrors_SayWhatStoppedTheBuild(t *testing.T) {
 		{"unpinned release", &UnpinnedReleaseError{Version: "9.9.9", Architecture: "aarch64"}, []string{"9.9.9", "aarch64", "pinned"}},
 		{"build step", &BuildError{Set: "rpi", Step: "placing the kernel", Err: cause}, []string{"rpi: placing the kernel", cause.Error()}},
 		{"build-wide step", &BuildError{Step: "writing the index", Err: cause}, []string{"diskimage/netboot: writing the index"}},
+		{"diskless set", &UnsupportedDisklessSetError{Set: "x86_64"}, []string{"diskless root is not available", "x86_64"}},
 		{"private key", &PrivateKeyMaterialError{File: "secure-boot-keys/DB.key"}, []string{"secure-boot-keys/DB.key", "resign-mode: remote"}},
 	}
 	for _, tc := range cases {

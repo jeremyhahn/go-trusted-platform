@@ -15,9 +15,9 @@ package kvstore
 
 import (
 	"context"
-	"encoding/json"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore/entities"
 )
 
@@ -57,7 +57,7 @@ func (d *RoleDAO) GetByName(ctx context.Context, name string) (*entities.Role, e
 	}
 
 	var role entities.Role
-	if err := json.Unmarshal(results[0].Data, &role); err != nil {
+	if err := datastore.DecodeEntity(results[0].Data, &role); err != nil {
 		return nil, ErrDeserializationFailed{EntityType: entityTypeRole, Cause: err}
 	}
 
@@ -77,7 +77,7 @@ func (d *RoleDAO) getRoleByScan(ctx context.Context, name string) (*entities.Rol
 
 		for _, entity := range svcEntities {
 			var role entities.Role
-			if err := json.Unmarshal(entity.Data, &role); err != nil {
+			if err := datastore.DecodeEntity(entity.Data, &role); err != nil {
 				d.logger.Warn("Failed to deserialize role", "id", entity.ID, "error", err)
 				continue
 			}

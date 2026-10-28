@@ -53,7 +53,7 @@ func TestAddFlows(t *testing.T) {
 
 	t.Run("not connected", func(t *testing.T) {
 		client, _ := setupTestClient(t)
-		client.connected = false
+		client.connected.Store(false)
 		flows := []*FlowMod{{Priority: 100}}
 
 		err := client.AddFlows(ctx, "br0", flows)
@@ -88,10 +88,10 @@ func TestAddFlows(t *testing.T) {
 
 	t.Run("getOpenFlowClient error simulation", func(t *testing.T) {
 		client := &Client{
-			connected:   true,
 			ofClients:   make(map[string]*openflow.Client),
 			ofClientsMu: sync.RWMutex{},
 		}
+		client.connected.Store(true)
 
 		flows := []*FlowMod{{
 			Table:    0,

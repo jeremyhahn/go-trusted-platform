@@ -412,7 +412,8 @@ must be readable by it**: the child reads them after it drops privileges, and
 it exits with an error rather than start without them. For the proxy that
 includes its TLS certificate, key and client CAs, and — when a `trust:` scope
 uses `tofu` — the pin directory `<data-dir>/trust/tofu-pins`, which the
-account must own. A process that has
+account must own. For `vpn` it includes the `control-plane:` certificate and
+key, through which the child records its leases. A process that has
 used up its restart budget stays down, and the gateway status reports it.
 The gateway snapshot still shows the BGP peers, read from the routing
 process; if that process cannot be reached, the snapshot's `bgp.error` says

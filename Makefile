@@ -646,6 +646,10 @@ COVERAGE_THRESHOLD          := 90
 #   G401: MD5/SHA1 - required for certificate thumbprints, PKCS standards
 #   G407: hardcoded nonce - false positive, nonces are random not hardcoded
 #   G505: crypto/sha1 import - required for PKCS standards, WebAuthn
+# How many packages gosec analyzes at once. Each worker type-checks its
+# package, so memory grows with it; CI's make security step passes 2 to keep
+# the stage under its 16g container limit (#1178).
+GOSEC_CONCURRENCY           ?= 4
 GOSEC_EXCLUDE               := G102,G103,G104,G107,G109,G110,G115,G118,G122,G204,G301,G302,G304,G305,G306,G401,G402,G407,G505,G702,G703,G704
 
 # Text colors
@@ -2018,6 +2022,8 @@ define run-integration-suite
 	@echo "Build tags: $(TEST_BUILD_TAGS)"
 	@docker run --rm --privileged \
 		--name go-trusted-platform-$(1)-test \
+		--memory $(IT_MEMORY) --memory-swap $(IT_MEMORY) \
+		$(if $(CI_CGROUP_PARENT),--cgroup-parent $(CI_CGROUP_PARENT)) \
 		--device /dev/net/tun:/dev/net/tun \
 		--tmpfs /tmp:exec,mode=1777 \
 		-v $(PWD):$(SOURCES_BASE)/go-trusted-platform \
@@ -2056,7 +2062,7 @@ integration-test: SHELL := /bin/bash
 integration-test: docker-build-it
 	@echo "Build tags: $(TEST_BUILD_TAGS)"
 	@set -o pipefail; status=0; \
-	export GO_TRUSTED_PLATFORM_IT_IMAGE=$(IT_IMAGE); \
+	export GO_TRUSTED_PLATFORM_IT_IMAGE=$(IT_IMAGE) GO_TRUSTED_PLATFORM_IT_MEMORY=$(IT_MEMORY) CI_CGROUP_PARENT='$(CI_CGROUP_PARENT)'; \
 	teardown() { \
 		docker compose -f $(DEVCONTAINER_COMPOSE) -p $(IT_PROJECT) down --volumes --remove-orphans || \
 			echo "warning: teardown of $(IT_PROJECT) failed; scripts/reap-stale-ci-stacks.sh removes what is left" >&2; \
@@ -2188,6 +2194,21 @@ TOOLCHAIN_IMAGE = go-trusted-platform-toolchain:$(TOOLCHAIN_TAG)
 # CI passes per-run values.
 IT_IMAGE ?= go-trusted-platform-it:local
 IT_PROJECT ?= go-trusted-platform-it
+
+# The integration container's memory limit, swap included (so no swap): the
+# compose integration service (CI's integration legs and soak) and every
+# run-integration-suite container. The legs peaked at 4.5 to 12.9 GB with no
+# limit on ci-node-2 (#1178); 16g is that plus headroom.
+IT_MEMORY ?= 16g
+
+# The cgroup parent of every container CI starts: the run-integration-suite
+# container, the compose integration service (exported to it by
+# integration-test) and scripts/in-toolchain-image.sh's toolchain container,
+# which reads the same variable from its environment. Under ci.slice the runner
+# host bounds them together; without a parent they ran in system.slice, outside
+# it (#1178). Empty passes no parent: `make ... CI_CGROUP_PARENT=` on a host
+# with no ci.slice.
+CI_CGROUP_PARENT ?= ci.slice
 
 # The foreign-failure baseline (ruling 125). IT_FOREIGN_BASELINE is empty by
 # default: only `make integration-test IT_FOREIGN_BASELINE=1` consults it.
@@ -3377,7 +3398,7 @@ gosec: $(GOSEC)
 	@echo "$(CYAN)$(BOLD)→ Running security analysis with gosec $(GOSEC_VERSION)...$(RESET)"
 	@mkdir -p $(BUILD_DIR)
 	@rc=0; \
-	$(GOSEC) -concurrency 4 -exclude=$(GOSEC_EXCLUDE) -severity medium -confidence medium \
+	$(GOSEC) -concurrency $(GOSEC_CONCURRENCY) -exclude=$(GOSEC_EXCLUDE) -severity medium -confidence medium \
 		$(if $(GO_BUILD_TAGS_CSV),-tags=$(GO_BUILD_TAGS_CSV)) \
 		-exclude-dir=test -exclude-dir=testdata -exclude-dir=vendor \
 		-exclude-generated \
@@ -3404,7 +3425,7 @@ gosec-sarif: $(GOSEC)
 	@# Findings do not fail this target (the SARIF file carries them); only a
 	@# run that produced no report at all (type errors, crash) does.
 	@rm -f $(BUILD_DIR)/gosec-results.sarif
-	@$(GOSEC) -concurrency 4 -exclude=$(GOSEC_EXCLUDE) -severity medium -confidence medium \
+	@$(GOSEC) -concurrency $(GOSEC_CONCURRENCY) -exclude=$(GOSEC_EXCLUDE) -severity medium -confidence medium \
 		-exclude-dir=test -exclude-dir=testdata -exclude-dir=vendor \
 		-exclude-generated \
 		-fmt=sarif -out=$(BUILD_DIR)/gosec-results.sarif ./... || true

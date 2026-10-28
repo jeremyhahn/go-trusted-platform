@@ -19,6 +19,7 @@ import (
 	"log/slog"
 	"net"
 	"os/signal"
+	"slices"
 	"syscall"
 
 	"github.com/spf13/cobra"
@@ -84,10 +85,11 @@ type serviceOptions struct {
 // serviceDeps are the steps of serveProcess that touch the operating system
 // or the configuration, so the sequence is a unit test.
 type serviceDeps struct {
-	enterHardened func(def process.Definition, uid, gid uint32) error
-	readConfig    func() error
-	loadConfig    func() (*ServeConfig, error)
-	buildGateway  func(ctx context.Context, cfg *ServeConfig, logger *slog.Logger) (*gateway.Gateway, error)
+	enterHardened   func(def process.Definition, uid, gid uint32) error
+	readConfig      func() error
+	loadConfig      func() (*ServeConfig, error)
+	buildGateway    func(ctx context.Context, cfg *ServeConfig, logger *slog.Logger) (*gateway.Gateway, error)
+	vpnLeaseControl func(ctx context.Context, cfg *ServeConfig, gw *gateway.Gateway, logger *slog.Logger) (gateway.VPNLeaseControl, *gateway.RevocationJournal, error)
 }
 
 func runService(cmd *cobra.Command, args []string) error {
@@ -101,10 +103,11 @@ func runService(cmd *cobra.Command, args []string) error {
 		gid:           serviceGID,
 	}
 	deps := serviceDeps{
-		enterHardened: process.EnterHardened,
-		readConfig:    viper.ReadInConfig,
-		loadConfig:    func() (*ServeConfig, error) { return LoadServeConfig(viper.GetViper()) },
-		buildGateway:  BuildGateway,
+		enterHardened:   process.EnterHardened,
+		readConfig:      viper.ReadInConfig,
+		loadConfig:      func() (*ServeConfig, error) { return LoadServeConfig(viper.GetViper()) },
+		buildGateway:    BuildGateway,
+		vpnLeaseControl: vpnLeaseControl,
 	}
 	return serveProcess(ctx, args[0], opts, deps, buildServeLogger())
 }
@@ -149,6 +152,19 @@ func serveProcess(ctx context.Context, name string, opts serviceOptions, deps se
 		return err
 	}
 	defer closeGatewayRuntime(gw, logger)
+
+	// The management VPN's leases live in this child's gateway, so the
+	// control plane's record of them and the revocation journal are wired
+	// here: the parent's reporter reaches only the parent's gateway.
+	if slices.Contains(hosted, gateway.ServiceManagementVPN) {
+		control, journal, err := deps.vpnLeaseControl(ctx, cfg, gw, logger)
+		if err != nil {
+			return err
+		}
+		if control != nil {
+			gw.SetVPNLeaseControl(control, journal)
+		}
+	}
 
 	services, err := datapathServices(def, gw)
 	if err != nil {
@@ -198,6 +214,23 @@ func serveProcess(ctx context.Context, name string, opts serviceOptions, deps se
 			slog.String("process", def.Name), slog.Any("error", err))
 	}
 	return stopErr
+}
+
+// vpnLeaseControl is the management VPN's lease record for the vpn child:
+// the control plane, reached through the reporter BuildReporter assembles
+// from the `control-plane:` section, and the revocation journal under
+// --data-dir. Without an enabled section there is no record, as in serve:
+// the leases are then held in memory only.
+func vpnLeaseControl(ctx context.Context, cfg *ServeConfig, gw *gateway.Gateway, logger *slog.Logger) (gateway.VPNLeaseControl, *gateway.RevocationJournal, error) {
+	reporter, err := BuildReporter(ctx, cfg, gw, logger)
+	if err != nil {
+		return nil, nil, err
+	}
+	// A nil *Reporter in the interface would read as a control plane.
+	if reporter == nil {
+		return nil, nil, nil
+	}
+	return reporter, vpnRevocationJournal(cfg.DataDir), nil
 }
 
 // servicePolicy admits the supervisor to the control service. Only the

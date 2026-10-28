@@ -14,7 +14,10 @@
 package vm
 
 import (
+	"bytes"
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/sha256"
@@ -689,6 +692,195 @@ func TestVMAttestor_ReadPCR(t *testing.T) {
 			t.Error("Expected error for not initialized")
 		}
 	})
+}
+
+// newInitializedAttestor returns an attestor over a fresh mock vTPM,
+// initialized with config.
+func newInitializedAttestor(t *testing.T, config *AttestorConfig) (*mockVTPMDevice, VMAttestor) {
+	t.Helper()
+	mock := newMockVTPMDevice()
+	attestor := NewVMAttestor(WithVTPMDevice(mock))
+	if err := attestor.Initialize(context.Background(), config); err != nil {
+		t.Fatalf("Initialize failed: %v", err)
+	}
+	return mock, attestor
+}
+
+func TestVMAttestor_ReadPCR_Refusals(t *testing.T) {
+	config := &AttestorConfig{VTPMDevicePath: "/dev/tpm0", DefaultHashAlgorithm: HashAlgorithmSHA256}
+
+	t.Run("context canceled", func(t *testing.T) {
+		_, attestor := newInitializedAttestor(t, config)
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+
+		_, err := attestor.ReadPCR(ctx, 0, HashAlgorithmSHA256)
+		var canceled ErrContextCanceled
+		if !errors.As(err, &canceled) || canceled.Operation != "ReadPCR" {
+			t.Fatalf("want ErrContextCanceled{Operation: ReadPCR}, got %v", err)
+		}
+	})
+
+	t.Run("closed attestor", func(t *testing.T) {
+		_, attestor := newInitializedAttestor(t, config)
+		if err := attestor.Close(); err != nil {
+			t.Fatalf("Close failed: %v", err)
+		}
+
+		_, err := attestor.ReadPCR(context.Background(), 0, HashAlgorithmSHA256)
+		var notInit ErrAttestorNotInitialized
+		if !errors.As(err, &notInit) {
+			t.Fatalf("want ErrAttestorNotInitialized after Close, got %v", err)
+		}
+	})
+
+	t.Run("vTPM read failure carries the PCR and the cause", func(t *testing.T) {
+		mock, attestor := newInitializedAttestor(t, config)
+		cause := errors.New("tpm: TPM_RC_LOCALITY")
+		mock.readPCRErr = cause
+
+		_, err := attestor.ReadPCR(context.Background(), 7, HashAlgorithmSHA256)
+		var readFailed ErrPCRReadFailed
+		if !errors.As(err, &readFailed) || readFailed.PCR != 7 {
+			t.Fatalf("want ErrPCRReadFailed{PCR: 7}, got %v", err)
+		}
+		if !errors.Is(err, cause) {
+			t.Errorf("ErrPCRReadFailed does not wrap the vTPM cause: %v", err)
+		}
+	})
+}
+
+func TestVMAttestor_GetIdentity_Refusals(t *testing.T) {
+	config := &AttestorConfig{VTPMDevicePath: "/dev/tpm0", DefaultHashAlgorithm: HashAlgorithmSHA256}
+
+	t.Run("context canceled", func(t *testing.T) {
+		_, attestor := newInitializedAttestor(t, config)
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+
+		_, err := attestor.GetIdentity(ctx)
+		var canceled ErrContextCanceled
+		if !errors.As(err, &canceled) || canceled.Operation != "GetIdentity" {
+			t.Fatalf("want ErrContextCanceled{Operation: GetIdentity}, got %v", err)
+		}
+	})
+
+	t.Run("closed attestor", func(t *testing.T) {
+		_, attestor := newInitializedAttestor(t, config)
+		if err := attestor.Close(); err != nil {
+			t.Fatalf("Close failed: %v", err)
+		}
+
+		_, err := attestor.GetIdentity(context.Background())
+		var notInit ErrAttestorNotInitialized
+		if !errors.As(err, &notInit) {
+			t.Fatalf("want ErrAttestorNotInitialized after Close, got %v", err)
+		}
+	})
+
+	t.Run("EK certificate CN is not a VM identity", func(t *testing.T) {
+		mock, attestor := newInitializedAttestor(t, config)
+		key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+		if err != nil {
+			t.Fatalf("GenerateKey: %v", err)
+		}
+		template := x509.Certificate{
+			SerialNumber: big.NewInt(2),
+			Subject:      pkix.Name{CommonName: "not-a-vm-identity"},
+			NotBefore:    time.Now(),
+			NotAfter:     time.Now().Add(time.Hour),
+		}
+		der, err := x509.CreateCertificate(rand.Reader, &template, &template, &key.PublicKey, key)
+		if err != nil {
+			t.Fatalf("CreateCertificate: %v", err)
+		}
+		mock.ekCert = der
+
+		_, err = attestor.GetIdentity(context.Background())
+		var invalid ErrInvalidVMIdentity
+		if !errors.As(err, &invalid) {
+			t.Fatalf("want ErrInvalidVMIdentity for a non-VM CN, got %v", err)
+		}
+	})
+}
+
+func TestVMAttestor_GetAttestation_Refusals(t *testing.T) {
+	config := &AttestorConfig{VTPMDevicePath: "/dev/tpm0", DefaultHashAlgorithm: HashAlgorithmSHA256}
+	request := &QuoteRequest{
+		Nonce:         []byte{0x01, 0x02},
+		PCRIndices:    []int{0},
+		HashAlgorithm: HashAlgorithmSHA256,
+	}
+
+	t.Run("context canceled", func(t *testing.T) {
+		_, attestor := newInitializedAttestor(t, config)
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+
+		_, err := attestor.GetAttestation(ctx, request)
+		var canceled ErrContextCanceled
+		if !errors.As(err, &canceled) || canceled.Operation != "GetAttestation" {
+			t.Fatalf("want ErrContextCanceled{Operation: GetAttestation}, got %v", err)
+		}
+	})
+
+	t.Run("identity failure is returned", func(t *testing.T) {
+		mock, attestor := newInitializedAttestor(t, config)
+		mock.getEKCertErr = errors.New("NV index not defined")
+
+		_, err := attestor.GetAttestation(context.Background(), request)
+		var ekInvalid ErrEKCertificateInvalid
+		if !errors.As(err, &ekInvalid) {
+			t.Fatalf("want ErrEKCertificateInvalid, got %v", err)
+		}
+	})
+
+	t.Run("quote failure is returned", func(t *testing.T) {
+		mock, attestor := newInitializedAttestor(t, config)
+		mock.generateQuoteErr = errors.New("TPM_RC_HANDLE")
+
+		_, err := attestor.GetAttestation(context.Background(), request)
+		var quoteFailed ErrQuoteGenerationFailed
+		if !errors.As(err, &quoteFailed) {
+			t.Fatalf("want ErrQuoteGenerationFailed, got %v", err)
+		}
+	})
+}
+
+func TestVMAttestor_GetAttestation_WorkloadPCR(t *testing.T) {
+	tests := []struct {
+		name          string
+		workloadIndex int
+		wantIndex     int
+	}{
+		{name: "default index 14", workloadIndex: 0, wantIndex: DefaultWorkloadPCRIndex},
+		{name: "configured index 16", workloadIndex: 16, wantIndex: 16},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mock, attestor := newInitializedAttestor(t, &AttestorConfig{
+				VTPMDevicePath:       "/dev/tpm0",
+				DefaultHashAlgorithm: HashAlgorithmSHA256,
+				IncludeWorkloadPCR:   true,
+				WorkloadPCRIndex:     tt.workloadIndex,
+			})
+			workload := sha256.Sum256([]byte("workload chain"))
+			mock.SetPCRValue(tt.wantIndex, HashAlgorithmSHA256, workload[:])
+
+			attestation, err := attestor.GetAttestation(context.Background(), &QuoteRequest{
+				Nonce:         []byte{0x0a, 0x0b},
+				PCRIndices:    []int{0, 7},
+				HashAlgorithm: HashAlgorithmSHA256,
+			})
+			if err != nil {
+				t.Fatalf("GetAttestation: %v", err)
+			}
+			if !bytes.Equal(attestation.WorkloadPCR, workload[:]) {
+				t.Errorf("WorkloadPCR = %x, want PCR %d value %x", attestation.WorkloadPCR, tt.wantIndex, workload[:])
+			}
+		})
+	}
 }
 
 func TestVMAttestor_Close(t *testing.T) {

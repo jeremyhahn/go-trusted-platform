@@ -29,6 +29,7 @@ import (
 	"github.com/vishvananda/netns"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/fhrp"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/testenv"
 )
 
 const (
@@ -137,7 +138,7 @@ func TestFHRP_NetNS_TwoSpeakersElectAndFailOver(t *testing.T) {
 	require.NoError(t, err)
 	defer hb.Close()
 
-	require.NoError(t, ha.LinkAdd(&netlink.Veth{LinkAttrs: netlink.LinkAttrs{Name: "vr0"}, PeerName: "vr1"}))
+	require.NoError(t, ha.LinkAdd(testenv.NewVeth("vr0", "vr1")))
 	peer, err := ha.LinkByName("vr1")
 	require.NoError(t, err)
 	require.NoError(t, ha.LinkSetNsFd(peer, int(nsB)))

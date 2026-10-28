@@ -142,7 +142,7 @@ justification, route by route.
 ## Conventions
 
 1. **basePath is relative** to `/api/v1`. The mux subrouter mounted by
-   `webserver_v1.go` already carries the version prefix; routers MUST set
+   `pkg/webservice/webserver_v1.go` already carries the version prefix; routers MUST set
    `basePath = "/<service>"`. Embedding `/api/v1` inside a router's
    `basePath` produces a double prefix and silent 404s — see the bug fix
    commit history.
@@ -156,9 +156,12 @@ justification, route by route.
    - `WriteError(w, r, writer, err)` — gRPC status code → HTTP status
 4. **Path conflicts** between numeric and word-shaped ids are resolved
    with regex constraints (e.g. `{id:[0-9]+}` for integer-only routes).
-5. **Nil-server safety** — every handler calls `ensure*` before
-   dispatch. A nil server returns `500` with the
-   `<service> service is not available` envelope.
+5. **Nil-server safety** — a router registered without its backing
+   server answers `503` with the `<service> service is not available`
+   envelope instead of dispatching. Some routers check in an `ensure` /
+   `ensure*` helper (`compute`, `dns`, `eab`, `idevid`, `invitation`, `kms`,
+   `sdn`, `tenant`, `tpm`); others return `ErrServiceUnavailable` from the
+   handler. `protorest.WriteError` maps `ErrServiceUnavailable` to `503`.
 
 ## Adding a new service
 

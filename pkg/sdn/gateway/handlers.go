@@ -497,6 +497,10 @@ type TunnelManager interface {
 	EnsureTunnel(ctx context.Context, config tunnel.TunnelConfig) error
 	RemoveTunnel(ctx context.Context, name string) error
 	ListTunnels(ctx context.Context) ([]*tunnel.TunnelStatus, error)
+	// SweepIPsec removes the ESP SAs and policies the manager installed
+	// under SPIs no ensured tunnel names any more (a killed predecessor's
+	// leftovers); it never touches state another installer owns.
+	SweepIPsec() error
 	// Uplinks reports the policy-routing state of the uplinks tunnels are
 	// pinned to; empty when the deployment routes through the main table.
 	Uplinks() []tunnel.UplinkStatus
@@ -546,6 +550,13 @@ func (b *tunnelsBackend) Start(ctx context.Context) error {
 			b.closeUplinks()
 			return err
 		}
+	}
+	// Only once every configured tunnel is ensured does the kernel's ESP
+	// state show which SAs nothing names any more. A failed sweep fails the
+	// start but tears nothing down: the configured tunnels are correct, and
+	// the next start ensures them as no-ops and sweeps again.
+	if err := b.manager.SweepIPsec(); err != nil {
+		return err
 	}
 	b.mu.Lock()
 	b.active = true
@@ -644,7 +655,7 @@ func buildTunnels(g *Gateway) (backedService, error) {
 		}
 		netlinkUplinks := tunnel.NewUplinkManager(host.Logger)
 		uplinks = netlinkUplinks
-		opts = append(opts, tunnel.WithUplinks(netlinkUplinks))
+		opts = append(opts, tunnel.WithUplinks(netlinkUplinks), tunnel.WithIPsecInventory(host.IPsecInventory))
 		manager = tunnel.NewManager(host.Logger, opts...)
 	} else if routing && uplinks == nil {
 		return nil, &ErrServiceUnavailable{

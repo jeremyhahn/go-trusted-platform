@@ -14,7 +14,7 @@
 over a Unix domain socket**, so gRPC and Unix share a column.
 `ServiceRegistry.Compute` carries the service in-process.
 
-gRPC: `ComputeService`, 36 RPCs (`pkg/api/grpc/proto/compute.proto`) — the
+gRPC: `ComputeService`, 37 RPCs (`pkg/api/grpc/proto/compute.proto`) — the
 largest service in the platform after IAM.
 REST: base path `/api/v1/compute` — web service
 (`pkg/webservice/v1/rest/compute/router.go`) and platformd's REST listener
@@ -443,8 +443,10 @@ Containers are the most evenly covered capability set in this feature.
 | Verify VM attestation | `POST /api/v1/compute/vms/{id}/attest/verify` | `VerifyVMAttestation` | `OpVMVerifyAttest` (`0xBF`) | `vm_attest_verify` | ✅ |
 | Attest container | `POST /api/v1/compute/containers/{id}/attest` | `AttestContainer` | `OpContainerAttest` (`0xEC`) | `container_attest` | ✅ |
 
-`platformctl container attest` is the only attestation CLI verb in the whole
-platform — see [`docs/attestation/cli.md`](../attestation/cli.md).
+`platformctl container attest` is the only compute attestation CLI verb: VM
+attestation has no `platformctl compute` verb. The platform's other attest
+verbs (`device attest`, `device attest-cert`, `piv attest` and the
+`attestation` group) are not compute verbs — see [`docs/attestation/cli.md`](../attestation/cli.md).
 
 The two VM attestation sub-opcodes carry the RPC's request message
 (`AttestVMRequest`, `VerifyVMAttestationRequest`) and are answered by the same

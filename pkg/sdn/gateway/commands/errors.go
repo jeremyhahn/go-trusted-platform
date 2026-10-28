@@ -308,6 +308,40 @@ func (e *ErrServiceConfigUnreadable) Error() string {
 // Unwrap returns the underlying error.
 func (e *ErrServiceConfigUnreadable) Unwrap() error { return e.Cause }
 
+// ErrStaleTunnelSweep is returned when serve, starting with no tunnel
+// configured, cannot remove the ESP state a killed predecessor's tunnels
+// left behind.
+type ErrStaleTunnelSweep struct {
+	// Cause is the tunnel manager's sweep failure.
+	Cause error
+}
+
+// Error implements the error interface.
+func (e *ErrStaleTunnelSweep) Error() string {
+	return "gatewayd: cannot remove the stale tunnel state of a predecessor: " + e.Cause.Error()
+}
+
+// Unwrap returns the sweep failure.
+func (e *ErrStaleTunnelSweep) Unwrap() error { return e.Cause }
+
+// ErrTunnelsRecord is returned when serve cannot read, write or remove the
+// record under --data-dir that tunnels ran, which decides whether a start
+// without tunnels must sweep their stale state.
+type ErrTunnelsRecord struct {
+	// Path is the record file.
+	Path string
+	// Cause is the filesystem failure.
+	Cause error
+}
+
+// Error implements the error interface.
+func (e *ErrTunnelsRecord) Error() string {
+	return "gatewayd: tunnels record " + e.Path + " unusable: " + e.Cause.Error()
+}
+
+// Unwrap returns the filesystem failure.
+func (e *ErrTunnelsRecord) Unwrap() error { return e.Cause }
+
 // ErrProcessHostsNothing is returned when a supervised child's configuration
 // enables none of the services its process hosts, so there is nothing for it
 // to run.

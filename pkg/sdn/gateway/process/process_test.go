@@ -1680,6 +1680,97 @@ func TestStartService_TheVPNChildIsGivenItsStateDirectory(t *testing.T) {
 	assert.Equal(t, "vpn", entries[0].Name())
 }
 
+func TestStartService_TheVPNChildCanTraverseTheDataDirectory(t *testing.T) {
+	// The data directory is root's and may be 0700 — gatewayd's tunnels
+	// record and the ESP inventory create it so — and the vpn child runs as
+	// the service account: without search permission on the parent it could
+	// not reach <data-dir>/vpn and its journal fails with EACCES (#557).
+	// The child here runs as the directory's owner, whose class already
+	// searches 0700, so nothing is widened; the group and other classes are
+	// covered by TestGrantTraverse_*. vpn/ itself stays 0700.
+	cases := map[string]func(t *testing.T, dataDir string){
+		"missing":       func(t *testing.T, dataDir string) {},
+		"existing 0700": func(t *testing.T, dataDir string) { require.NoError(t, os.Mkdir(dataDir, 0o700)) },
+	}
+	for name, prepare := range cases {
+		t.Run(name, func(t *testing.T) {
+			dataDir := filepath.Join(t.TempDir(), "data")
+			prepare(t, dataDir)
+			supervisor, _, _ := newSupervisor(t, func(cfg *Config) {
+				cfg.Inherited.DataDir = dataDir
+				cfg.UID, cfg.GID = uint32(os.Getuid()), uint32(os.Getgid())
+			})
+
+			require.NoError(t, supervisor.StartService(testContext(t), gateway.ServiceManagementVPN))
+			var st unix.Stat_t
+			require.NoError(t, unix.Stat(dataDir, &st))
+			assert.Equal(t, uint32(0o700), st.Mode&0o7777, "the owner class already traverses; no class is widened")
+			require.NoError(t, unix.Stat(filepath.Join(dataDir, "vpn"), &st))
+			assert.Equal(t, uint32(0o700), st.Mode&0o7777, "the child's own state stays private")
+		})
+	}
+}
+
+func TestStartService_ADataDirectoryAlreadyTraversableKeepsItsMode(t *testing.T) {
+	// An operator's 0751 data directory already lets others through; the
+	// supervisor changes nothing on it.
+	dataDir := filepath.Join(t.TempDir(), "data")
+	require.NoError(t, os.Mkdir(dataDir, 0o700))
+	require.NoError(t, os.Chmod(dataDir, 0o751))
+	supervisor, _, _ := newSupervisor(t, func(cfg *Config) {
+		cfg.Inherited.DataDir = dataDir
+		cfg.UID, cfg.GID = uint32(os.Getuid()), uint32(os.Getgid())
+	})
+
+	require.NoError(t, supervisor.StartService(testContext(t), gateway.ServiceManagementVPN))
+	var st unix.Stat_t
+	require.NoError(t, unix.Stat(dataDir, &st))
+	assert.Equal(t, uint32(0o751), st.Mode&0o7777)
+}
+
+func TestGrantTraverse_AMissingDirectoryIsAnError(t *testing.T) {
+	err := grantTraverse(filepath.Join(t.TempDir(), "absent"), uint32(os.Getuid()), uint32(os.Getgid()))
+	require.ErrorIs(t, err, os.ErrNotExist)
+}
+
+// TestGrantTraverse_SetsSearchInTheClassTheChildMatches holds the one class
+// the kernel checks: the temp directory belongs to the test's uid and gid, and
+// the child's credentials are chosen to match its owner, only its group, or
+// neither (#557, Codex 7973: o+x on a root:<group> 0700 directory leaves a
+// group-matching child without search).
+func TestGrantTraverse_SetsSearchInTheClassTheChildMatches(t *testing.T) {
+	owner, group := uint32(os.Getuid()), uint32(os.Getgid())
+	cases := map[string]struct {
+		uid, gid   uint32
+		mode, want uint32
+	}{
+		"group matches at 0700 gains g+x only":           {uid: owner + 1, gid: group, mode: 0o700, want: 0o710},
+		"neither matches at 0700 gains o+x only":         {uid: owner + 1, gid: group + 1, mode: 0o700, want: 0o701},
+		"owner matches at 0600 gains u+x only":           {uid: owner, gid: group + 1, mode: 0o600, want: 0o700},
+		"owner matches at 0700 is unchanged":             {uid: owner, gid: group, mode: 0o700, want: 0o700},
+		"group already searches at 0750 is unchanged":    {uid: owner + 1, gid: group, mode: 0o750, want: 0o750},
+		"other bits are not consulted for a group match": {uid: owner + 1, gid: group, mode: 0o701, want: 0o711},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			dir := filepath.Join(t.TempDir(), "data")
+			require.NoError(t, os.Mkdir(dir, 0o700))
+			require.NoError(t, unix.Chmod(dir, tc.mode))
+
+			require.NoError(t, grantTraverse(dir, tc.uid, tc.gid))
+			var st unix.Stat_t
+			require.NoError(t, unix.Stat(dir, &st))
+			assert.Equal(t, tc.want, st.Mode&0o7777)
+		})
+	}
+}
+
+func TestTraverseBit_OwnerThenGroupThenOther(t *testing.T) {
+	assert.Equal(t, uint32(0o100), traverseBit(0, 0, 0, 0), "owner wins even when the group also matches")
+	assert.Equal(t, uint32(0o010), traverseBit(0, 990, 990, 990), "root:<group>: the child's group class")
+	assert.Equal(t, uint32(0o001), traverseBit(0, 0, 990, 990), "root:root: the other class")
+}
+
 func TestStartService_AStateDirectoryThatCannotBeMadeRefusesTheLaunch(t *testing.T) {
 	// A data directory that is a file: the child would run without its
 	// journal, so it is not launched.

@@ -455,6 +455,19 @@ Profile-level configuration knobs worth knowing:
   exact equality; `MACPrefix`, `SerialPrefix` and legacy `SerialPattern` are
   prefixes. `ManufacturerMatch`, `TPMVendor` and `CustomAttributes` participate
   in `IsEmpty()` but are **not evaluated** by `Matches`.
+- Every DAO in `pkg/storage/quicbaas/` and `pkg/store/datastore/kvstore/`
+  decodes through one helper, `datastore.DecodeEntity`
+  (`pkg/store/datastore/decode.go`), a `json.Decoder` with `UseNumber` that,
+  like `json.Unmarshal`, refuses data after the document
+  (`datastore.ErrTrailingData`). A number in an `any`-typed field, such as
+  `DeviceProfile.Config` or `Blob.Entity`, therefore
+  reads back as `json.Number`, not `float64`, and an integer above 2^53
+  round-trips exactly (#125). Consumers that re-encode a config as YAML use
+  `entities.MarshalConfigYAML`, which emits each `json.Number` as a plain YAML
+  int or float with its digits unchanged; `yaml.Marshal` alone would quote it.
+  JSON re-encodes need nothing: `json.Number` marshals as the number. The
+  `codec_*` build tags select the SDK wire codec, which carries the stored
+  bytes opaquely, so they do not change this decode.
 - A profile whose stored JSON fails to unmarshal is **skipped with a warning**,
   not fatal (`logger.Warn("Failed to deserialize device profile", …)`). One
   corrupt record does not take out lookup.

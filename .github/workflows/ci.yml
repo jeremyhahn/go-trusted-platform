@@ -270,20 +270,28 @@ jobs:
       # v1.27: `make lint-gates` runs in its own job, never here.
       - name: make fmt-check
         if: ${{ !cancelled() && env.TOOLCHAIN_IMAGE != '' }}
+        env:
+          IN_IMAGE_MEMORY: 4g
         run: scripts/in-toolchain-image.sh "$TOOLCHAIN_IMAGE" make fmt-check
 
       - name: make vet
         if: ${{ !cancelled() && env.TOOLCHAIN_IMAGE != '' }}
+        env:
+          IN_IMAGE_MEMORY: 12g
         run: scripts/in-toolchain-image.sh "$TOOLCHAIN_IMAGE" make vet
 
       - name: make lint
         if: ${{ !cancelled() && env.TOOLCHAIN_IMAGE != '' }}
+        env:
+          IN_IMAGE_MEMORY: 16g
         run: scripts/in-toolchain-image.sh "$TOOLCHAIN_IMAGE" make lint
 
       # v1.26.1: a docs-only PR skips the test stage, so it runs the
       # releasability test alone; any other run gets it from the test stage.
       - name: Releasability test (docs-only PR)
         if: ${{ !cancelled() && env.TOOLCHAIN_IMAGE != '' && env.RELEASABILITY_TEST != '' && needs.changes.outputs.docs_only == 'true' }}
+        env:
+          IN_IMAGE_MEMORY: 8g
         run: scripts/in-toolchain-image.sh "$TOOLCHAIN_IMAGE" "go test -count=1 -tags \"\$(make -s print-build-tags)\" $RELEASABILITY_TEST"
 
       # CUSTOMIZE (build): this repository is build-tag driven. `make build`
@@ -293,10 +301,14 @@ jobs:
       # (docs/factory-image/engineering.md).
       - name: make build, build-no-web, rpi-binaries
         if: ${{ !cancelled() && env.TOOLCHAIN_IMAGE != '' && needs.changes.outputs.docs_only != 'true' }}
+        env:
+          IN_IMAGE_MEMORY: 12g
         run: scripts/in-toolchain-image.sh "$TOOLCHAIN_IMAGE" make build build-no-web rpi-binaries
 
       - name: Build all packages (default tags)
         if: ${{ !cancelled() && env.TOOLCHAIN_IMAGE != '' && needs.changes.outputs.docs_only != 'true' }}
+        env:
+          IN_IMAGE_MEMORY: 12g
         run: scripts/in-toolchain-image.sh "$TOOLCHAIN_IMAGE" go build ./...
 
       # CUSTOMIZE (sdk/go module): a separate module that `./...` from the
@@ -305,6 +317,8 @@ jobs:
       # throwaway module and fails if it reaches a root-module package (#840).
       - name: Build sdk/go, and as a module consumer
         if: ${{ !cancelled() && env.TOOLCHAIN_IMAGE != '' && needs.changes.outputs.docs_only != 'true' }}
+        env:
+          IN_IMAGE_MEMORY: 8g
         run: |
           scripts/in-toolchain-image.sh "$TOOLCHAIN_IMAGE" "cd sdk/go && go build ./..."
           scripts/in-toolchain-image.sh "$TOOLCHAIN_IMAGE" make sdk-consumer-check
@@ -313,9 +327,14 @@ jobs:
       # `go test -tags "$(BUILD_TAGS)"` over ./pkg/... ./cmd/... minus
       # TEST_EXCLUDE, whose every entry carries its reason in the Makefile,
       # and it runs check-go-build-tags first. test-sdk-go is the sdk/go
-      # module, which a package list does not cross into.
+      # module, which a package list does not cross into. Unbounded (-p 80 on
+      # the 80-thread hosts) it passed 24.2 GB; GOMAXPROCS 16 is go test's
+      # -p inside the container and keeps it under 16g (#1178).
       - name: make test, test-sdk-go
         if: ${{ !cancelled() && env.TOOLCHAIN_IMAGE != '' && needs.changes.outputs.docs_only != 'true' }}
+        env:
+          IN_IMAGE_MEMORY: 16g
+          IN_IMAGE_GOMAXPROCS: 16
         run: scripts/in-toolchain-image.sh "$TOOLCHAIN_IMAGE" make test test-sdk-go
 
       # CUSTOMIZE (race): the unit suite under the race detector, minus
@@ -323,18 +342,25 @@ jobs:
       # against reintroduction.
       - name: make test-race
         if: ${{ !cancelled() && env.TOOLCHAIN_IMAGE != '' && needs.changes.outputs.docs_only != 'true' }}
+        env:
+          IN_IMAGE_MEMORY: 16g
+          IN_IMAGE_GOMAXPROCS: 8
         run: scripts/in-toolchain-image.sh "$TOOLCHAIN_IMAGE" make test-race
 
       # make security: gosec, govulncheck, go mod verify and `trivy fs`
       # (devops.md §8), with GOSEC_EXCLUDE, the govulncheck module list and
       # GOVULN_ALLOW single-sourced in the Makefile. security and trivy are
       # full-tier steps (v1.23, ci-standard.md §8), with a network for the
-      # vulnerability databases.
+      # vulnerability databases. Unbounded it reached 17.0 GB; GOMAXPROCS 8 (the
+      # go list compiles gosec loads through) and GOSEC_CONCURRENCY 2 keep it
+      # under 16g (#1178).
       - name: make security
         if: ${{ !cancelled() && env.TOOLCHAIN_IMAGE != '' && env.CI_FULL_TIER == 'true' }}
         env:
           IN_IMAGE_NETWORK: bridge
-        run: scripts/in-toolchain-image.sh "$TOOLCHAIN_IMAGE" make security
+          IN_IMAGE_MEMORY: 16g
+          IN_IMAGE_GOMAXPROCS: 8
+        run: scripts/in-toolchain-image.sh "$TOOLCHAIN_IMAGE" make security GOSEC_CONCURRENCY=2
 
       # Fails when a library, first-party or third-party, is behind its latest
       # release without devops.md §9's documented reason (ci-standard.md §1).
@@ -345,6 +371,7 @@ jobs:
         if: ${{ !cancelled() && env.TOOLCHAIN_IMAGE != '' }}
         env:
           IN_IMAGE_NETWORK: bridge
+          IN_IMAGE_MEMORY: 4g
         run: scripts/in-toolchain-image.sh "$TOOLCHAIN_IMAGE" make deps-check
 
       # Blocks on CRITICAL/HIGH findings that have a fix (#933). CUSTOMIZE:
@@ -359,6 +386,7 @@ jobs:
         if: ${{ !cancelled() && env.TOOLCHAIN_IMAGE != '' && env.CI_FULL_TIER == 'true' }}
         env:
           IN_IMAGE_NETWORK: bridge
+          IN_IMAGE_MEMORY: 8g
         run: |
           docker save -o it-image.tar "$IT_IMAGE"
           scripts/in-toolchain-image.sh "$TOOLCHAIN_IMAGE" \
@@ -540,6 +568,9 @@ jobs:
     env:
       IT_PROJECT: go-trusted-platform-ci-${{ github.run_id }}-${{ github.run_attempt }}-leg${{ matrix.leg }}
       IT_IMAGE: go-trusted-platform-ci-it:${{ github.run_id }}-${{ github.run_attempt }}-leg${{ matrix.leg }}
+      # The integration container's memory limit, swap included (Makefile
+      # IT_MEMORY; compose.yaml mem_limit). The legs peaked at 12.9 GB (#1178).
+      IT_MEMORY: 16g
       # The image job's builder (see there).
       BUILDX_BUILDER: go-trusted-platform-ci
       BUILDKIT_KEEP_STORAGE: 40gb
@@ -625,6 +656,9 @@ jobs:
       SOAK_TARGET: integration-test   # CUSTOMIZE: a make target of the integration image
       IT_PROJECT: go-trusted-platform-ci-${{ github.run_id }}-${{ github.run_attempt }}-soak
       IT_IMAGE: go-trusted-platform-ci-it:${{ github.run_id }}-${{ github.run_attempt }}-soak
+      # The integration container's memory limit, swap included (Makefile
+      # IT_MEMORY; compose.yaml mem_limit). The legs peaked at 12.9 GB (#1178).
+      IT_MEMORY: 16g
       # The image job's builder (see there).
       BUILDX_BUILDER: go-trusted-platform-ci
       BUILDKIT_KEEP_STORAGE: 40gb

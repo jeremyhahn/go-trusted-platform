@@ -22,7 +22,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
 	"sync/atomic"
 	"time"
 
@@ -78,9 +77,9 @@ func (m *MCPAdapter) Name() string {
 
 // Setup opens the MCP session with the initialize handshake.
 func (m *MCPAdapter) Setup(ctx context.Context) error {
-	endpoint := os.Getenv(EnvPlatformdMCPEndpoint)
-	if endpoint == "" {
-		endpoint = helpers.GetMCPEndpoint()
+	endpoint, err := helpers.RequireEndpoint(EnvPlatformdMCPEndpoint)
+	if err != nil {
+		return err
 	}
 	m.endpoint = helpers.MCPEndpointURL(endpoint)
 	m.httpClient = helpers.NewHTTPClient(DefaultCommandTimeout)

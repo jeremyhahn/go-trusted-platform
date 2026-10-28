@@ -436,6 +436,107 @@ func TestManifestBuilderAddContainerAttestation(t *testing.T) {
 	})
 }
 
+// newTestBuilder returns an initialized SHA-256 builder for host-1.
+func newTestBuilder(t *testing.T) ManifestBuilder {
+	t.Helper()
+	builder := NewManifestBuilder()
+	config := &BuilderConfig{HostID: "host-1", HashAlgorithm: HashAlgorithmSHA256, NonceSize: 32}
+	if err := builder.Initialize(context.Background(), config); err != nil {
+		t.Fatalf("Initialize failed: %v", err)
+	}
+	return builder
+}
+
+// TestManifestBuilderAddRejectsInvalidAttestation checks that an attestation
+// failing validation is reported by field and is not added to the manifest.
+func TestManifestBuilderAddRejectsInvalidAttestation(t *testing.T) {
+	t.Run("VM", func(t *testing.T) {
+		builder := newTestBuilder(t)
+		attestation := createValidVMAttestation("vm-1")
+		attestation.QuoteData = nil
+
+		err := builder.AddVMAttestation(context.Background(), attestation)
+		manifestErr, ok := err.(ErrInvalidManifest)
+		if !ok || manifestErr.Field != "QuoteData" {
+			t.Fatalf("expected ErrInvalidManifest{Field: QuoteData}, got %T: %v", err, err)
+		}
+		if builder.GetVMCount() != 0 {
+			t.Errorf("expected 0 VMs after rejection, got %d", builder.GetVMCount())
+		}
+	})
+
+	t.Run("Container", func(t *testing.T) {
+		builder := newTestBuilder(t)
+		attestation := createValidContainerAttestation("container-1")
+		attestation.Digest = nil
+
+		err := builder.AddContainerAttestation(context.Background(), attestation)
+		manifestErr, ok := err.(ErrInvalidManifest)
+		if !ok || manifestErr.Field != "Digest" {
+			t.Fatalf("expected ErrInvalidManifest{Field: Digest}, got %T: %v", err, err)
+		}
+		if builder.GetContainerCount() != 0 {
+			t.Errorf("expected 0 containers after rejection, got %d", builder.GetContainerCount())
+		}
+	})
+}
+
+// TestManifestBuilderClosedAndCanceled checks that every mutating call and
+// Build refuse a closed builder, and that the add calls honour a canceled
+// context.
+func TestManifestBuilderClosedAndCanceled(t *testing.T) {
+	operations := []struct {
+		name string
+		call func(ctx context.Context, b ManifestBuilder) error
+	}{
+		{"SetHostAttestation", func(ctx context.Context, b ManifestBuilder) error {
+			return b.SetHostAttestation(ctx, createValidHostAttestation())
+		}},
+		{"AddVMAttestation", func(ctx context.Context, b ManifestBuilder) error {
+			return b.AddVMAttestation(ctx, createValidVMAttestation("vm-1"))
+		}},
+		{"AddContainerAttestation", func(ctx context.Context, b ManifestBuilder) error {
+			return b.AddContainerAttestation(ctx, createValidContainerAttestation("container-1"))
+		}},
+		{"Build", func(ctx context.Context, b ManifestBuilder) error {
+			_, err := b.Build(ctx)
+			return err
+		}},
+		{"BuildWithNonce", func(ctx context.Context, b ManifestBuilder) error {
+			_, err := b.BuildWithNonce(ctx, make([]byte, 32))
+			return err
+		}},
+	}
+
+	for _, op := range operations {
+		t.Run("Closed/"+op.name, func(t *testing.T) {
+			builder := newTestBuilder(t)
+			if err := builder.Close(); err != nil {
+				t.Fatalf("Close failed: %v", err)
+			}
+
+			err := op.call(context.Background(), builder)
+			if _, ok := err.(ErrBuilderNotInitialized); !ok {
+				t.Fatalf("expected ErrBuilderNotInitialized, got %T: %v", err, err)
+			}
+		})
+	}
+
+	for _, op := range operations[:3] {
+		t.Run("Canceled/"+op.name, func(t *testing.T) {
+			builder := newTestBuilder(t)
+			ctx, cancel := context.WithCancel(context.Background())
+			cancel()
+
+			err := op.call(ctx, builder)
+			canceledErr, ok := err.(ErrContextCanceled)
+			if !ok || canceledErr.Operation != op.name {
+				t.Fatalf("expected ErrContextCanceled{Operation: %s}, got %T: %v", op.name, err, err)
+			}
+		})
+	}
+}
+
 func TestManifestBuilderBuild(t *testing.T) {
 	t.Run("Success", func(t *testing.T) {
 		builder := NewManifestBuilder()

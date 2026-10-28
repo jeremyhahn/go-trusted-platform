@@ -103,6 +103,9 @@ package sdn
 - Run in the privileged devcontainer, never on the host
 - OVS installed and running
 - Root permissions for OVS operations
+- Veth pairs created through `pkg/testenv` (`NewVeth`, `VethArgs`,
+  `VethNetnsArgs`), which give both ends one tx and one rx queue; see
+  [Test Veths Have One Queue Per End](../test/integration.md#test-veths-have-one-queue-per-end)
 
 ## Makefile Targets
 
