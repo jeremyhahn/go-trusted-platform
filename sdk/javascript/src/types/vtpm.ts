@@ -25,6 +25,27 @@ export type EKAlgorithm =
   | 'RSA'
   | 'ECC';
 
+/**
+ * Maps each bundle mode to the string the REST handler parses
+ * (pkg/vtpm/types.go); UNSPECIFIED is sent as no mode, so the server default
+ * applies.
+ */
+export const BUNDLE_MODE_WIRE_NAMES: Readonly<Record<BundleMode, string | undefined>> = {
+  UNSPECIFIED: undefined,
+  TEMPLATE: 'template',
+  PRE_ASSIGNED: 'pre-assigned',
+};
+
+/**
+ * Maps each EK algorithm to the string the REST handler parses; UNSPECIFIED
+ * is sent as no algorithm, so the server default applies.
+ */
+export const EK_ALGORITHM_WIRE_NAMES: Readonly<Record<EKAlgorithm, string | undefined>> = {
+  UNSPECIFIED: undefined,
+  RSA: 'RSA',
+  ECC: 'ECC',
+};
+
 // =============================================================================
 // Data Types
 // =============================================================================

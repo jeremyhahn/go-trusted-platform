@@ -31,7 +31,77 @@ import type {
   GetBundlePathResponse,
   GetTPMSocketPathResponse,
   GetNVRAMPathResponse,
+  CreateBundleOptions,
+  CreateTemplateOptions,
 } from '../types/vtpm.js';
+import { BUNDLE_MODE_WIRE_NAMES, EK_ALGORITHM_WIRE_NAMES } from '../types/vtpm.js';
+
+/** Thrown when a device profile ID is not an unsigned integer the server can read. */
+export class InvalidDeviceProfileIdError extends Error {
+  /** The rejected ID. */
+  public readonly deviceProfileId: string;
+
+  constructor(deviceProfileId: string) {
+    super(`device profile id ${JSON.stringify(deviceProfileId)} is not an unsigned integer`);
+    this.name = 'InvalidDeviceProfileIdError';
+    this.deviceProfileId = deviceProfileId;
+  }
+}
+
+/**
+ * The bundle body pkg/webservice/v1/rest/vtpm/types.go decodes: flat,
+ * snake_case, and unknown fields are refused.
+ */
+interface WireCreateBundleRequest {
+  mode?: string;
+  hostname?: string;
+  ek_algorithm?: string;
+  secure_boot_enabled?: boolean;
+  labels?: Record<string, string>;
+  template_id?: string;
+  device_profile_id?: number;
+}
+
+/** The template body the REST handler decodes. */
+interface WireCreateTemplateRequest {
+  id: string;
+  description?: string;
+  ek_algorithm?: string;
+  secure_boot_enabled?: boolean;
+}
+
+/** Parses a uint64 device profile ID; JSON can carry it exactly only up to 2^53 - 1. */
+function toDeviceProfileId(id: string): number {
+  const parsed = /^\d+$/.test(id) ? Number(id) : Number.NaN;
+  if (!Number.isSafeInteger(parsed)) {
+    throw new InvalidDeviceProfileIdError(id);
+  }
+  return parsed;
+}
+
+function toWireCreateBundle(options: CreateBundleOptions): WireCreateBundleRequest {
+  const mode = options.mode === undefined ? undefined : BUNDLE_MODE_WIRE_NAMES[options.mode];
+  const ekAlgorithm = options.ekAlgorithm === undefined ? undefined : EK_ALGORITHM_WIRE_NAMES[options.ekAlgorithm];
+  return {
+    ...(mode !== undefined && { mode }),
+    ...(options.hostname !== undefined && { hostname: options.hostname }),
+    ...(ekAlgorithm !== undefined && { ek_algorithm: ekAlgorithm }),
+    ...(options.secureBootEnabled !== undefined && { secure_boot_enabled: options.secureBootEnabled }),
+    ...(options.labels !== undefined && { labels: options.labels }),
+    ...(options.templateId !== undefined && { template_id: options.templateId }),
+    ...(options.deviceProfileId !== undefined && { device_profile_id: toDeviceProfileId(options.deviceProfileId) }),
+  };
+}
+
+function toWireCreateTemplate(options: CreateTemplateOptions): WireCreateTemplateRequest {
+  const ekAlgorithm = options.ekAlgorithm === undefined ? undefined : EK_ALGORITHM_WIRE_NAMES[options.ekAlgorithm];
+  return {
+    id: options.id,
+    ...(options.description !== undefined && { description: options.description }),
+    ...(ekAlgorithm !== undefined && { ek_algorithm: ekAlgorithm }),
+    ...(options.secureBootEnabled !== undefined && { secure_boot_enabled: options.secureBootEnabled }),
+  };
+}
 
 /**
  * vTPM Service class
@@ -85,7 +155,7 @@ export class VTPMService extends BaseService {
    * @returns Created bundle
    */
   async createBundle(request: CreateBundleRequest): Promise<ApiResponse<CreateBundleResponse>> {
-    return this.client.post<CreateBundleResponse>(this.buildUrl('/bundles'), request);
+    return this.client.post<CreateBundleResponse>(this.buildUrl('/bundles'), toWireCreateBundle(request.options));
   }
 
   /**
@@ -202,7 +272,7 @@ export class VTPMService extends BaseService {
    * @returns Created template
    */
   async createTemplate(request: CreateTemplateRequest): Promise<ApiResponse<CreateTemplateResponse>> {
-    return this.client.post<CreateTemplateResponse>(this.buildUrl('/templates'), request);
+    return this.client.post<CreateTemplateResponse>(this.buildUrl('/templates'), toWireCreateTemplate(request.options));
   }
 
   /**
