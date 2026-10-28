@@ -33,6 +33,7 @@ import (
 	"golang.zx2c4.com/wireguard/wgctrl/wgtypes"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/tunnel"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/testenv"
 )
 
 const (
@@ -485,7 +486,7 @@ func twoNamespaces(t *testing.T, tag string) (hostNS, peerNS netns.NsHandle, hh,
 	require.NoError(t, err)
 	ph, err = netlink.NewHandleAt(peerNS)
 	require.NoError(t, err)
-	require.NoError(t, hh.LinkAdd(&netlink.Veth{LinkAttrs: netlink.LinkAttrs{Name: "tun0"}, PeerName: "tun1"}))
+	require.NoError(t, hh.LinkAdd(testenv.NewVeth("tun0", "tun1")))
 	peerLink, err := hh.LinkByName("tun1")
 	require.NoError(t, err)
 	require.NoError(t, hh.LinkSetNsFd(peerLink, int(peerNS)))

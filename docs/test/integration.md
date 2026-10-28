@@ -629,14 +629,14 @@ devcontainer image so a developer and CI run the same thing:
 | Job | Tier | What it runs |
 |-----|------|--------------|
 | `changes` | PR | Lists the PR's changed files and sets `docs_only` (below) (`ci.yml:162`) |
-| `image` | PR | `make docker-build` (toolchain and integration images, `ci.yml:261-264`), then, in the toolchain image through `scripts/in-toolchain-image.sh`: `make fmt-check`, `make vet` and `make lint` (`:271-281`); the releasability test on a docs-only PR (`:285-287`); off a docs-only PR, `make build build-no-web rpi-binaries`, `go build ./...`, the `sdk/go` build and consumer check, `make test test-sdk-go` and `make test-race` (`:294-326`); on every event, a docs-only PR included, `make deps-check` (ci-template v1.28, `:344-348`); in the full tier, `make security` (`:333-337`) and `trivy image` on the integration image (`:358-367`) |
-| `lint-gates` | PR | `make lint-gates`, the repo's grep gates (today `check-insecure-tls`), on the runner (`ci.yml:381`) |
-| `arch-gates` | PR | No direct go-objstore import outside a storage seam (this repo has none) (`ci.yml:412`) |
-| `sdkjs` | docs | The JS SDK's unit tests and lint, on the runner (`ci.yml:441`) |
-| `web` | full | The web console's tests, typecheck and build (`ci.yml:481-507`) |
-| `integration` | full | A matrix job per leg: `make integration-test-leg LEG=<n>` under a per-run, per-leg `IT_PROJECT` and `IT_IMAGE`, torn down on every exit (see "Legs"); needs `image` (`ci.yml:516-592`) |
-| `soak` | nightly | `make integration-test` looped for `SOAK_MINUTES` (below) (`ci.yml:615-696`) |
-| `fips` | full | `make test-fips`; outside the gate (`ci.yml:711-727`) |
+| `image` | PR | `make docker-build` (toolchain and integration images, `ci.yml:261-264`), then, in the toolchain image through `scripts/in-toolchain-image.sh`: `make fmt-check`, `make vet` and `make lint` (`:271-287`); the releasability test on a docs-only PR (`:291-295`); off a docs-only PR, `make build build-no-web rpi-binaries`, `go build ./...`, the `sdk/go` build and consumer check, `make test test-sdk-go` and `make test-race` (`:302-348`); on every event, a docs-only PR included, `make deps-check` (ci-template v1.28, `:370-375`); in the full tier, `make security` (`:357-363`) and `trivy image` on the integration image (`:385-395`). Each step's container is memory-limited (see "Memory limits") |
+| `lint-gates` | PR | `make lint-gates`, the repo's grep gates (today `check-insecure-tls`), on the runner (`ci.yml:409`) |
+| `arch-gates` | PR | No direct go-objstore import outside a storage seam (this repo has none) (`ci.yml:440`) |
+| `sdkjs` | docs | The JS SDK's unit tests and lint, on the runner (`ci.yml:469`) |
+| `web` | full | The web console's tests, typecheck and build (`ci.yml:509-535`) |
+| `integration` | full | A matrix job per leg: `make integration-test-leg LEG=<n>` under a per-run, per-leg `IT_PROJECT` and `IT_IMAGE`, torn down on every exit (see "Legs"); needs `image` (`ci.yml:544-623`) |
+| `soak` | nightly | `make integration-test` looped for `SOAK_MINUTES` (below) (`ci.yml:646-730`) |
+| `fips` | full | `make test-fips`; outside the gate (`ci.yml:745-761`) |
 
 The tiers follow ci-template v1.28 (handbook `ci-standard.md` §8; the header
 of `ci.yml:63-72`). The PR tier is the `changes`, `image`, `lint-gates` and
@@ -647,7 +647,7 @@ is `sdkjs` and the `image` job's build and test steps. The full tier adds
 it runs on every push to `main`, on `workflow_dispatch`, on the schedule, and
 on a PR labelled `ci:full`. The workflow env `CI_FULL_TIER` (`ci.yml:143`)
 holds that selection for steps and `CI Gate`. The nightly tier is the `soak`
-job, on the schedule and `workflow_dispatch` only (`ci.yml:617`), never on a
+job, on the schedule and `workflow_dispatch` only (`ci.yml:648`), never on a
 push to `main` or on `ci:full`. The schedule is one daily cron, `0 4 * * *`
 (04:00 UTC, `ci.yml:110-111`), and runs on the default branch: `main`'s full
 tier and the soak. `ci.yml` is the repository's one scheduler; `nightly.yml`
@@ -792,6 +792,72 @@ as well. `scripts/in-toolchain-image.sh` points their writable module cache at
 unpacked) is not written to `$HOME/.cache/trivy`. With both in `/tmp`,
 `make security` failed writing `trivy.db` with `no space left on device`.
 
+#### Memory limits
+
+Every container CI starts has a memory limit, with swap set to the same size,
+so a container that outgrows it is OOM-killed and its step fails instead of
+swapping the shared runner host (#1178). Unbounded, on the 80-thread
+ci-node-2, `make test test-sdk-go` passed 24.2 GB, `make security` reached
+17.0 GB and the integration legs 4.5 to 12.9 GB, and the host swapped.
+
+`scripts/in-toolchain-image.sh` takes the limit from `IN_IMAGE_MEMORY`
+(default `8g`) and passes `--memory` and `--memory-swap`; the `/tmp` tmpfs is
+charged to it. It also sets `GOMAXPROCS` in the container from
+`IN_IMAGE_GOMAXPROCS` (default 16). `GOMAXPROCS` is the default of
+`go build -p` and `go test -p`, so it bounds how many packages compile, link
+and test at once, where the host's 80 threads would otherwise run 80; it
+changes no package set and no test. The integration service in
+`build/docker/devcontainer/compose.yaml` takes `mem_limit` and
+`memswap_limit` from the Makefile's `IT_MEMORY` (default `16g`), which
+`make integration-test` exports, and the Makefile's `run-integration-suite`
+`docker run` (the per-suite targets, nightly's diskimage) carries the same
+limit.
+
+Every one of those containers also runs under the runner host's `ci.slice`
+cgroup parent, so the host bounds them together; without a parent a container
+ran in `system.slice`, outside that bound (#1178). The Makefile's
+`CI_CGROUP_PARENT` (default `ci.slice`) is the one variable: the
+`run-integration-suite` `docker run` passes `--cgroup-parent` from it,
+`make integration-test` exports it to the compose integration service's
+`cgroup_parent` (`${CI_CGROUP_PARENT-ci.slice}`), and
+`scripts/in-toolchain-image.sh` reads it from its environment. Set empty
+(`make integration-test CI_CGROUP_PARENT=`, or `CI_CGROUP_PARENT=` in the
+script's environment), no parent is passed, for a developer host with no
+`ci.slice`. No `ci.yml` step sets it, so every CI container takes `ci.slice`.
+
+Each `ci.yml` step sets its own size:
+
+| Job / step | Container | Before | Memory | `GOMAXPROCS` |
+|------------|-----------|--------|--------|--------------|
+| `image` / `make fmt-check` | toolchain | none | 4g | 16 |
+| `image` / `make vet` | toolchain | none | 12g | 16 |
+| `image` / `make lint` | toolchain | none | 16g | 16 |
+| `image` / releasability test (docs-only PR) | toolchain | none | 8g | 16 |
+| `image` / `make build build-no-web rpi-binaries` | toolchain | none | 12g | 16 |
+| `image` / `go build ./...` | toolchain | none | 12g | 16 |
+| `image` / `sdk/go` build and consumer check | toolchain | none | 8g | 16 |
+| `image` / `make test test-sdk-go` | toolchain | none | 16g | 16 |
+| `image` / `make test-race` | toolchain | none | 16g | 8 |
+| `image` / `make security` | toolchain | none | 16g | 8, and `GOSEC_CONCURRENCY=2` |
+| `image` / `make deps-check` | toolchain | none | 4g | 16 |
+| `image` / `trivy image` | toolchain | none | 8g | 16 |
+| `integration` / each leg | compose `integration` | none | 16g (`IT_MEMORY`) | host |
+| `soak` / each iteration | compose `integration` | none | 16g (`IT_MEMORY`) | host |
+
+`GOSEC_CONCURRENCY` (Makefile, default 4) is how many packages gosec analyzes
+at once; the security step passes 2, and `GOMAXPROCS` 8 bounds the `go list`
+compiles gosec loads through. `pkg/arch/cimemory_test.go` fails when a
+`ci.yml` step that runs `scripts/in-toolchain-image.sh` sets no
+`IN_IMAGE_MEMORY`, or one above 16g; when an integration step's job sets no
+`IT_MEMORY`; when the compose integration service lacks `mem_limit` or its
+`memswap_limit` differs; and when `run-integration-suite` drops the limit. It
+also fails when a launch step, its job or the workflow sets `CI_CGROUP_PARENT`
+empty, when the compose integration service's `cgroup_parent` is not
+`${CI_CGROUP_PARENT-ci.slice}`, and when the Makefile's default or
+`run-integration-suite`'s `--cgroup-parent` goes. It runs the script against a
+fake `docker` to check the flags it passes (`--cgroup-parent ci.slice` by
+default, none when empty) and that it refuses a malformed size or cgroup name.
+
 To run a stage locally as CI does: `make docker-build`, then
 `make docker-run CMD='make test'`.
 
@@ -926,6 +992,33 @@ the go-quicbaas v0.16.0-alpha adoption):
   after the one before and surface only in the rerun's rounds 1 to 3; all
   four `pkg/app` rows reach `CreateIDevID` through `newSimulatedIDevID`, so
   a `pkg/app` rerun is bounded at four rounds
+
+## Test Veths Have One Queue Per End
+
+Every veth pair a test creates gives both ends one tx and one rx queue (#1178).
+The kernel's default is one queue per possible CPU, and each queue raises its
+own uevents when the link is added or removed. On ci-node-1 (80 cores, 112
+queues) that was about 450 uevents per pair, and the SDN, IPsec and netboot
+suites' veth churn drove the host to load 660 in a udev storm.
+
+Create test veths only through `pkg/testenv`:
+
+| Helper | Use |
+|--------|-----|
+| `testenv.NewVeth(name, peer)` | netlink: `handle.LinkAdd(testenv.NewVeth("v0", "v1"))` |
+| `testenv.VethArgs(name, peer)` | ip(8): `exec.Command("ip", testenv.VethArgs("v0", "v1")...)` |
+| `testenv.VethNetnsArgs(name, netns, peer, peerNetns)` | ip(8), each end created straight into a namespace |
+
+The ip(8) form is `ip link add name v0 numtxqueues 1 numrxqueues 1 type veth
+peer name v1 numtxqueues 1 numrxqueues 1`; the peer needs its own counts,
+because the kernel sizes it independently. A shell script that cannot call the
+helpers writes that form out in full.
+
+`pkg/arch/vethguard_test.go` (run by `make test`) enforces it: it fails on a
+netlink `Veth` literal with `PeerName`, a `netlink.NewVeth` call, or an
+`ip ... type veth` in any `_test.go` file, any Go file under `test/` or
+`pkg/testenv/`, or any shell script under `test/`, `scripts/` or `build/`
+that does not pin both ends. Product code creates no veths and is out of scope.
 
 ## Protocol Parity Assertions
 
