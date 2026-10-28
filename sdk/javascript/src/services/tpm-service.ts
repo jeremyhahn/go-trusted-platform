@@ -63,7 +63,7 @@ import type {
   PCRBankName,
 } from '../types/tpm.js';
 import { PCR_BANK_PROTO_NAMES } from '../types/tpm.js';
-import { encodeEnum } from './wire-enum.js';
+import { encodeEnum, encodeOptionalEnum } from './wire-enum.js';
 import { KEY_ALGORITHM_PROTO_NAMES } from '../types/ca.js';
 import type { KeyAlgorithmProtoName } from '../types/ca.js';
 
@@ -97,6 +97,19 @@ function withWirePCRBank<T extends { pcrBank?: PCRBank }>(
     return rest;
   }
   return { ...rest, pcrBank: encodeEnum('pcrBank', PCR_BANK_PROTO_NAMES, pcrBank) };
+}
+
+/**
+ * The DELETE body for the EK, SRK and AK routes. The router serves bare
+ * DELETE /ek, /srk and /ak and decodes handle, algorithm and password from
+ * the body (tpm.proto Delete*Request), so the handle is not a path segment.
+ */
+function toWireDeleteKey(request: DeleteEKRequest | DeleteSRKRequest | DeleteAKRequest): Record<string, unknown> {
+  return {
+    handle: request.handle,
+    algorithm: encodeOptionalEnum('algorithm', KEY_ALGORITHM_PROTO_NAMES, request.algorithm),
+    password: request.password,
+  };
 }
 
 /** Base path of the TPM REST API, under the client's `/api` base URL. */
@@ -224,7 +237,7 @@ export class TPMService extends BaseService {
    * @returns Delete result
    */
   async deleteEK(request: DeleteEKRequest): Promise<ApiResponse<DeleteEKResponse>> {
-    return this.client.delete<DeleteEKResponse>(this.buildUrl(`/ek/${request.handle}`));
+    return this.client.delete<DeleteEKResponse>(this.buildUrl('/ek'), undefined, toWireDeleteKey(request));
   }
 
   // =========================================================================
@@ -260,7 +273,7 @@ export class TPMService extends BaseService {
    * @returns Delete result
    */
   async deleteSRK(request: DeleteSRKRequest): Promise<ApiResponse<DeleteSRKResponse>> {
-    return this.client.delete<DeleteSRKResponse>(this.buildUrl(`/srk/${request.handle}`));
+    return this.client.delete<DeleteSRKResponse>(this.buildUrl('/srk'), undefined, toWireDeleteKey(request));
   }
 
   // =========================================================================
@@ -296,7 +309,7 @@ export class TPMService extends BaseService {
    * @returns Delete result
    */
   async deleteAK(request: DeleteAKRequest): Promise<ApiResponse<DeleteAKResponse>> {
-    return this.client.delete<DeleteAKResponse>(this.buildUrl(`/ak/${request.handle}`));
+    return this.client.delete<DeleteAKResponse>(this.buildUrl('/ak'), undefined, toWireDeleteKey(request));
   }
 
   // =========================================================================

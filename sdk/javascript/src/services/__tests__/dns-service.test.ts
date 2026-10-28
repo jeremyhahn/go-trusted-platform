@@ -10,6 +10,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { DNSService } from '../dns-service.js';
 import type { ApiClient } from '../../client/api-client.js';
+import { InvalidEnumValueError } from '../../errors/index.js';
 import type { DNSRecord, RecordType } from '../../types/dns.js';
 
 function createMockApiClient(): ApiClient {
@@ -90,6 +91,24 @@ describe('DNSService record bodies', () => {
       vi.mocked(mockClient.post).mockRejectedValue(failure);
 
       await expect(service.addRecord({ zoneName: 'example.com', record: aRecord })).rejects.toBe(failure);
+    });
+  });
+
+  describe('resolve', () => {
+    it('sends GET /resolve with fqdn and type in the query, the only method the router serves', async () => {
+      vi.mocked(mockClient.get).mockResolvedValue({ success: true, data: {} });
+
+      await service.resolve({ fqdn: 'www.example.com', type: 'AAAA' });
+
+      expect(mockClient.post).not.toHaveBeenCalled();
+      expect(mockClient.get).toHaveBeenCalledWith('/v1/dns/resolve?fqdn=www.example.com&type=RECORD_TYPE_AAAA');
+    });
+
+    it('rejects an unknown record type with a typed error', async () => {
+      await expect(service.resolve({ fqdn: 'www.example.com', type: 'BOGUS' as never })).rejects.toThrow(
+        InvalidEnumValueError
+      );
+      expect(mockClient.get).not.toHaveBeenCalled();
     });
   });
 

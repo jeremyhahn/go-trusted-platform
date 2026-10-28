@@ -241,7 +241,12 @@ export class DNSService extends BaseService {
    * @returns Resolution result
    */
   async resolve(request: ResolveRequest): Promise<ApiResponse<ResolveResponse>> {
-    return this.client.post<ResolveResponse>(this.buildUrl('/resolve'), request);
+    // The router serves GET /resolve and reads fqdn and type from the query.
+    return this.client.get<ResolveResponse>(
+      this.buildUrl('/resolve', {
+        filters: { fqdn: request.fqdn, type: encodeEnum('type', RECORD_TYPE_PROTO_NAMES, request.type) },
+      })
+    );
   }
 
   /**

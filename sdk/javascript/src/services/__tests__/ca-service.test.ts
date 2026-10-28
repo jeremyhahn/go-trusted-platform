@@ -117,7 +117,9 @@ describe('CAService request bodies', () => {
     ])('sends reason %s as %s', async (reason, protoName) => {
       await service.revokeCertificate({ serial: 'ab12', reason, deleteKeys: true });
 
-      expect(mockClient.post).toHaveBeenCalledWith('/v1/ca/certificates/ab12/revoke', {
+      // DELETE /certificates/{serial} is the only revocation route the router serves.
+      expect(mockClient.post).not.toHaveBeenCalled();
+      expect(mockClient.delete).toHaveBeenCalledWith('/v1/ca/certificates/ab12', undefined, {
         reason: protoName,
         deleteKeys: true,
       });
