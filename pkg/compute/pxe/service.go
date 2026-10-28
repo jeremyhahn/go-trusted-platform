@@ -15,9 +15,9 @@ package pxe
 
 import (
 	"context"
-	"errors"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"net"
 	"sync"
