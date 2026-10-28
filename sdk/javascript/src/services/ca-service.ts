@@ -26,6 +26,31 @@ import type {
   GetCRLResponse,
   GetCABundleResponse,
 } from '../types/ca.js';
+import {
+  CERTIFICATE_TYPE_PROTO_NAMES,
+  KEY_ALGORITHM_PROTO_NAMES,
+  REVOCATION_REASON_PROTO_NAMES,
+} from '../types/ca.js';
+
+/**
+ * The protojson body of a platform.v1.CertificateRequest. The REST decoder
+ * is protojson: enums travel as their full protobuf names and `is_ca` as
+ * `isCa`; anything else is discarded as unknown.
+ */
+function toWireCertificateRequest(request: CertificateRequest): Record<string, unknown> {
+  const { keyAlgorithm, certificateType, isCA, ...rest } = request;
+  const wire: Record<string, unknown> = { ...rest };
+  if (keyAlgorithm !== undefined) {
+    wire.keyAlgorithm = KEY_ALGORITHM_PROTO_NAMES[keyAlgorithm];
+  }
+  if (certificateType !== undefined) {
+    wire.certificateType = CERTIFICATE_TYPE_PROTO_NAMES[certificateType];
+  }
+  if (isCA !== undefined) {
+    wire.isCa = isCA;
+  }
+  return wire;
+}
 
 /**
  * Certificate Authority Service class
@@ -107,7 +132,9 @@ export class CAService extends BaseService {
    * @returns Issued certificate
    */
   async issueCertificate(request: CertificateRequest): Promise<ApiResponse<IssueCertificateResponse>> {
-    return this.client.post<IssueCertificateResponse>(this.buildUrl('/certificates'), request);
+    return this.client.post<IssueCertificateResponse>(this.buildUrl('/certificates'), {
+      request: toWireCertificateRequest(request),
+    });
   }
 
   /**
@@ -119,7 +146,7 @@ export class CAService extends BaseService {
   async revokeCertificate(request: RevokeCertificateRequest): Promise<ApiResponse<RevokeCertificateResponse>> {
     return this.client.post<RevokeCertificateResponse>(
       this.buildUrl(`/certificates/${this.encodePathSegment(request.serial)}/revoke`),
-      { reason: request.reason, deleteKeys: request.deleteKeys }
+      { reason: REVOCATION_REASON_PROTO_NAMES[request.reason], deleteKeys: request.deleteKeys }
     );
   }
 
