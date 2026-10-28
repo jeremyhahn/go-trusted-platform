@@ -273,7 +273,7 @@ with `install_certificate_sha256`, or the Go SDK's `pxe.Client.SetDeviceInstalli
 `ErrInstallCertificateRequired` before sending anything, so the device stays
 `booting`, `sdk/go/services/pxe/client.go:117`; or the JavaScript SDK's
 `PXEService.updateState` with `installCertificateSha256`,
-`sdk/javascript/src/services/pxe-service.ts:156`); a serial is not used, because it is unique
+`sdk/javascript/src/services/pxe-service.ts:157`); a serial is not used, because it is unique
 only per issuer. No verified client certificate is 401; a certificate no device
 carries, or a mismatched MAC, is 403 (`pkg/api/daemon/pxe_grpc_service.go:566`);
 a body with no MAC is 400 (`InvalidArgument`, `ErrPXEWebhookMACRequired`,
@@ -367,6 +367,16 @@ The SDK's own REST transport guessed too, until #452. It sent `UpdateState`,
 paths. It now claims the normative item routes. The device id travels only in
 the path (the templated rows in `sdk/go/transport/rest/adapter.go`), and a
 request without one is refused with `InvalidArgument` before it is sent.
+
+The `PUT …/devices/{id}/state` body is decoded by protojson, so `state` is the
+full enum name, `{"state":"PROVISIONING_STATE_INSTALLING"}`. A short name
+(`"INSTALLING"`) is an unknown enum value: the decoder discards it, the state
+arrives unspecified, and an update carrying `installCertificateSha256` is
+refused with 400 (`ErrPXEInstallCertificateState`). The JavaScript SDK keeps
+the short names in `ProvisioningState` and sends the protobuf name from
+`PROVISIONING_STATE_PROTO_NAMES` (`sdk/javascript/src/types/pxe.ts`; Codex
+review 7999). The list filter (`GET …/devices?state=`) is parsed by hand and
+takes either form.
 
 **The SDK REST transport carries all fifteen (#975).** Until then it mapped
 eight. `StartService`, `StopService`, `GetDeviceByMAC`, `RemoveDevice`,

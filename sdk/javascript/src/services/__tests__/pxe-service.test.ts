@@ -12,7 +12,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { PXEService } from '../pxe-service.js';
 import type { ApiClient } from '../../client/api-client.js';
-import type { UpdatePXEStateRequest } from '../../types/pxe.js';
+import type { ProvisioningState, UpdatePXEStateRequest } from '../../types/pxe.js';
 
 function createMockApiClient(): ApiClient {
   return {
@@ -73,7 +73,7 @@ describe('PXEService device routes', () => {
       expect(result.success).toBe(true);
       expect(mockClient.put).toHaveBeenCalledTimes(1);
       expect(mockClient.put).toHaveBeenCalledWith('/v1/pxe/devices/node-3/state', {
-        state: 'INSTALLING',
+        state: 'PROVISIONING_STATE_INSTALLING',
         reason: 'operator retry',
         installCertificateSha256: undefined,
       });
@@ -95,12 +95,40 @@ describe('PXEService device routes', () => {
       const result = await service.webhookComplete(completion);
 
       expect(mockClient.put).toHaveBeenCalledWith('/v1/pxe/devices/node-3/state', {
-        state: 'INSTALLING',
+        state: 'PROVISIONING_STATE_INSTALLING',
         reason: 'operator retry',
         installCertificateSha256: fingerprint,
       });
       expect(mockClient.post).toHaveBeenCalledWith('/v1/pxe/webhook/complete', completion);
       expect(result.success).toBe(true);
+    });
+
+    // The REST decoder is protojson: a short name such as 'INSTALLING' is
+    // dropped as an unknown enum value, the state arrives unspecified and
+    // a certificate-bearing update is refused (Codex review 7999).
+    it.each([
+      ['UNSPECIFIED', 'PROVISIONING_STATE_UNSPECIFIED'],
+      ['UNKNOWN', 'PROVISIONING_STATE_UNKNOWN'],
+      ['DISCOVERED', 'PROVISIONING_STATE_DISCOVERED'],
+      ['BOOTING', 'PROVISIONING_STATE_BOOTING'],
+      ['INSTALLING', 'PROVISIONING_STATE_INSTALLING'],
+      ['INSTALL_COMPLETE', 'PROVISIONING_STATE_INSTALL_COMPLETE'],
+      ['ENROLLING', 'PROVISIONING_STATE_ENROLLING'],
+      ['ENROLLED', 'PROVISIONING_STATE_ENROLLED'],
+      ['AUTHORIZING', 'PROVISIONING_STATE_AUTHORIZING'],
+      ['AUTHORIZED', 'PROVISIONING_STATE_AUTHORIZED'],
+      ['FAILED', 'PROVISIONING_STATE_FAILED'],
+      ['QUARANTINED', 'PROVISIONING_STATE_QUARANTINED'],
+    ] satisfies Array<[ProvisioningState, string]>)('sends %s as its protobuf name %s', async (state, protoName) => {
+      vi.mocked(mockClient.put).mockResolvedValue({ success: true, data: { device: { id: 'node-3' } } });
+
+      await service.updateState({ deviceId: 'node-3', state });
+
+      expect(mockClient.put).toHaveBeenCalledWith('/v1/pxe/devices/node-3/state', {
+        state: protoName,
+        reason: undefined,
+        installCertificateSha256: undefined,
+      });
     });
 
     it('propagates a transport error unchanged', async () => {
