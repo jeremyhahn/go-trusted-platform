@@ -117,6 +117,7 @@ type mockCA struct {
 	certStore     *mockCertStore
 	keyStore      *rotatingKeyStore
 	revokedCerts  []*x509.Certificate
+	revokedOpts   []xkmsca.RevokeOptions
 	generateCRL   bool
 	privateKey    *ecdsa.PrivateKey
 }
@@ -192,8 +193,9 @@ func (m *mockCA) IssueCertificate(_ context.Context, req *xkmsca.CACertificateRe
 	}
 	return &xkmsca.IssuedCertificate{Certificate: cert}, nil
 }
-func (m *mockCA) RevokeCert(_ context.Context, cert *x509.Certificate, _ xkmsca.RevokeOptions) error {
+func (m *mockCA) RevokeCert(_ context.Context, cert *x509.Certificate, opts xkmsca.RevokeOptions) error {
 	m.revokedCerts = append(m.revokedCerts, cert)
+	m.revokedOpts = append(m.revokedOpts, opts)
 	return nil
 }
 func (m *mockCA) CABundle() ([]byte, error) { return m.rootCert.Raw, nil }
@@ -824,6 +826,8 @@ func TestCAHandler_HandleRevoke_Success(t *testing.T) {
 	assert.Equal(t, int32(1), revokeResp.Reason)
 	require.Len(t, ca.revokedCerts, 1, "a REVOKED reply must mean the CA revoked the certificate")
 	assert.Equal(t, cert.SerialNumber, ca.revokedCerts[0].SerialNumber)
+	require.Len(t, ca.revokedOpts, 1)
+	assert.Equal(t, 1, ca.revokedOpts[0].Reason, "the CA must record the caller's reason")
 }
 
 func TestCAHandler_HandleRevoke_WithDeleteKeys(t *testing.T) {

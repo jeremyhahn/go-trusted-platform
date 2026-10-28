@@ -116,9 +116,12 @@ body `serial`. The reason is the enum name and the key flag is `deleteKeys`
 ```
 
 An empty body revokes with `REVOCATION_REASON_UNSPECIFIED` and keeps the keys.
-The body is decoded strictly: an unknown reason name, an unknown field or a
-mistyped value is refused with 400, so a misspelled reason is never recorded
-as unspecified. The answer is a proto-JSON `RevokeCertificateResponse`:
+The reason is recorded in the CRL entry as its RFC 5280 §5.3.1 CRLReason code
+(the enum values are those codes); every transport (REST, the web service,
+gRPC, QUIC, MCP, Unix) records it the same way. The body is decoded strictly:
+an unknown reason name, a number outside the enum (such as the unassigned
+code 7), an unknown field or a mistyped value is refused with 400, so a
+misspelled reason is never recorded as unspecified. The answer is a proto-JSON `RevokeCertificateResponse`:
 
 ```json
 {

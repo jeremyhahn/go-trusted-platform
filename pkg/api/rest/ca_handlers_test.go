@@ -71,6 +71,8 @@ type mockCAService struct {
 	csrCA    *issuancetest.CA
 	// revokedKeyAttrs records the key attributes each successful Revoke got.
 	revokedKeyAttrs []*xkmssdk.KeyAttributes
+	// revokedReasons records the reason each successful Revoke got.
+	revokedReasons []platformv1.RevocationReason
 }
 
 func newMockCAService() *mockCAService {
@@ -141,11 +143,12 @@ func (m *mockCAService) SignCSR(ctx context.Context, csrPEM []byte, opts *quicba
 	return m.csrCA.SignCSR(ctx, csrPEM, opts)
 }
 
-func (m *mockCAService) Revoke(_ context.Context, cert *x509.Certificate, keyAttrs *xkmssdk.KeyAttributes) error {
+func (m *mockCAService) Revoke(_ context.Context, cert *x509.Certificate, opts CARevokeOptions) error {
 	if m.revokeErr != nil {
 		return m.revokeErr
 	}
-	m.revokedKeyAttrs = append(m.revokedKeyAttrs, keyAttrs)
+	m.revokedKeyAttrs = append(m.revokedKeyAttrs, opts.KeyAttrs)
+	m.revokedReasons = append(m.revokedReasons, opts.Reason)
 	serial := hex.EncodeToString(cert.SerialNumber.Bytes())
 	delete(m.issuedCerts, serial)
 	delete(m.certStore.certs, serial)
@@ -154,7 +157,7 @@ func (m *mockCAService) Revoke(_ context.Context, cert *x509.Certificate, keyAtt
 
 func (m *mockCAService) Renew(ctx context.Context, existing *x509.Certificate, opts issuance.RenewOptions) (*x509.Certificate, error) {
 	m.renewals = append(m.renewals, opts)
-	if err := m.Revoke(ctx, existing, nil); err != nil {
+	if err := m.Revoke(ctx, existing, CARevokeOptions{}); err != nil {
 		return nil, err
 	}
 	return m.IssueCertificate(ctx, &quicbaasca.CACertificateRequest{
@@ -792,6 +795,8 @@ func TestCAHandlers_RevokeCertificate_Success(t *testing.T) {
 	assert.NotContains(t, ca.certStore.certs, serial, "DELETE must reach CA Revoke")
 	require.Len(t, ca.revokedKeyAttrs, 1)
 	assert.Nil(t, ca.revokedKeyAttrs[0], "keys are kept unless deleteKeys is set")
+	assert.Equal(t, []platformv1.RevocationReason{platformv1.RevocationReason_REVOCATION_REASON_KEY_COMPROMISE}, ca.revokedReasons,
+		"the CA must record the caller's reason, not only echo it")
 }
 
 func TestCAHandlers_RevokeCertificate_WithDeleteKeys(t *testing.T) {
@@ -845,6 +850,7 @@ func TestCAHandlers_RevokeCertificate_EmptyBody(t *testing.T) {
 	require.NoError(t, protojson.Unmarshal(rr.Body.Bytes(), resp))
 	assert.Equal(t, platformv1.RevocationReason_REVOCATION_REASON_UNSPECIFIED, resp.GetReason())
 	assert.NotContains(t, ca.certStore.certs, serial)
+	assert.Equal(t, []platformv1.RevocationReason{platformv1.RevocationReason_REVOCATION_REASON_UNSPECIFIED}, ca.revokedReasons)
 }
 
 // An unknown enum name, a field the contract lacks, a mistyped value or
@@ -852,6 +858,7 @@ func TestCAHandlers_RevokeCertificate_EmptyBody(t *testing.T) {
 func TestCAHandlers_RevokeCertificate_RejectsUnknownContract(t *testing.T) {
 	for name, body := range map[string]string{
 		"unknown enum name": `{"reason":"REVOCATION_REASON_BOGUS"}`,
+		"unassigned code 7": `{"reason":7}`,
 		"unknown field":     `{"revoke_reason":"REVOCATION_REASON_KEY_COMPROMISE"}`,
 		"wrong type":        `{"deleteKeys":"yes"}`,
 		"malformed":         `{"reason":`,

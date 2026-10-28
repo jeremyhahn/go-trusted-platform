@@ -1121,9 +1121,14 @@ func TestRevokeCertificate_Success(t *testing.T) {
 			},
 		}
 
+		var capturedReason int
 		mockCA := &mockCertificateAuthority{
 			initialized: true,
 			certStore:   mockCertStore,
+			revokeFn: func(_ context.Context, _ *x509.Certificate, opts xkmsca.RevokeOptions) error {
+				capturedReason = opts.Reason
+				return nil
+			},
 		}
 		handlers, writer := newTestHandlers(mockCA)
 
@@ -1140,6 +1145,8 @@ func TestRevokeCertificate_Success(t *testing.T) {
 		assert.Equal(t, http.StatusOK, writer.lastStatus)
 		payload := decodeProtoBody(t, rec)
 		assert.Equal(t, "REVOCATION_REASON_KEY_COMPROMISE", payload["reason"])
+		// RFC 5280 §5.3.1: keyCompromise is CRLReason 1.
+		assert.Equal(t, 1, capturedReason, "the CA must record the caller's reason")
 	})
 
 	t.Run("revokes certificate and deletes keys", func(t *testing.T) {

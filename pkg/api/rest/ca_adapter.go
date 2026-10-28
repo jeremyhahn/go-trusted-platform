@@ -109,10 +109,13 @@ func (a *CAAuthorityAdapter) SignCSR(ctx context.Context, csrPEM []byte, opts *q
 }
 
 // Revoke revokes a certificate. The production CA exposes RevokeCert(cert,
-// opts); we map the keyAttrs nil/non-nil signal into RevokeOptions.DeleteKeys.
-func (a *CAAuthorityAdapter) Revoke(ctx context.Context, cert *x509.Certificate, keyAttrs *xkmssdk.KeyAttributes) error {
+// opts); we map the KeyAttrs nil/non-nil signal into RevokeOptions.DeleteKeys
+// and the caller's reason into RevokeOptions.Reason. The RevocationReason
+// values are the RFC 5280 §5.3.1 CRLReason codes RevokeOptions.Reason holds.
+func (a *CAAuthorityAdapter) Revoke(ctx context.Context, cert *x509.Certificate, opts CARevokeOptions) error {
 	return a.ca.RevokeCert(ctx, cert, quicbaasca.RevokeOptions{
-		DeleteKeys: keyAttrs != nil,
+		Reason:     int(opts.Reason),
+		DeleteKeys: opts.KeyAttrs != nil,
 	})
 }
 

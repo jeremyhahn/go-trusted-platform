@@ -412,6 +412,16 @@ type CAErrorResponse struct {
 // CA Service Interface
 // =============================================================================
 
+// CARevokeOptions carries a revocation's options to CAServiceInterface.Revoke.
+type CARevokeOptions struct {
+	// KeyAttrs names the certificate's key when the caller asked for it to be
+	// deleted; nil keeps the key.
+	KeyAttrs *xkmssdk.KeyAttributes
+	// Reason is the caller's CRL reason. The RevocationReason values are the
+	// RFC 5280 §5.3.1 CRLReason codes.
+	Reason platformv1.RevocationReason
+}
+
 // CAServiceInterface defines the interface for CA operations.
 type CAServiceInterface interface {
 	// Identity returns the CA identity (common name).
@@ -430,8 +440,8 @@ type CAServiceInterface interface {
 	IssueCertificate(ctx context.Context, req *quicbaasca.CACertificateRequest) (*x509.Certificate, error)
 	// SignCSR certifies the key in a PEM CSR, a key the CA never holds.
 	SignCSR(ctx context.Context, csrPEM []byte, opts *quicbaasca.SignOptions) (*x509.Certificate, error)
-	// Revoke revokes a certificate.
-	Revoke(ctx context.Context, cert *x509.Certificate, keyAttrs *xkmssdk.KeyAttributes) error
+	// Revoke revokes a certificate, recording opts.Reason as its CRL reason.
+	Revoke(ctx context.Context, cert *x509.Certificate, opts CARevokeOptions) error
 	// Renew replaces a certificate with one on re-keyed material.
 	Renew(ctx context.Context, existing *x509.Certificate, opts issuance.RenewOptions) (*x509.Certificate, error)
 	// CertificateStore returns the certificate store.
@@ -830,6 +840,13 @@ func (h *CAHandlers) handleRevokeCertificate(w http.ResponseWriter, r *http.Requ
 	}
 	req.Serial = serial
 
+	// A numeric reason outside the enum (RFC 5280 leaves code 7 unassigned)
+	// would otherwise reach the CRL as a code no relying party can read.
+	if _, known := platformv1.RevocationReason_name[int32(req.GetReason())]; !known {
+		h.writeError(w, http.StatusBadRequest, ErrInvalidRequestBody{Reason: fmt.Sprintf("unknown revocation reason %d", req.GetReason())})
+		return
+	}
+
 	cert := h.findCertificateBySerial(serial)
 	if cert == nil {
 		h.writeError(w, http.StatusNotFound, ErrCertificateNotFound{Serial: serial})
@@ -843,7 +860,7 @@ func (h *CAHandlers) handleRevokeCertificate(w http.ResponseWriter, r *http.Requ
 		}
 	}
 
-	if err := h.ca.Revoke(r.Context(), cert, keyAttrs); err != nil {
+	if err := h.ca.Revoke(r.Context(), cert, CARevokeOptions{KeyAttrs: keyAttrs, Reason: req.GetReason()}); err != nil {
 		h.logger.Error("Failed to revoke certificate", "error", err, "serial", serial)
 		h.writeError(w, http.StatusInternalServerError, ErrCertificateRevokeFailed{Serial: serial, Err: err})
 		return

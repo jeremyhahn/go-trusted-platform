@@ -23,6 +23,7 @@ import (
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	quicbaasca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/ca"
 	xkmsca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/ca"
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -202,7 +203,7 @@ func TestCAAuthorityAdapter_Revoke_DeleteKeysTrue(t *testing.T) {
 	a := NewCAAuthorityAdapter(prod)
 	cert := &x509.Certificate{}
 
-	err := a.Revoke(context.Background(), cert, &xkmssdk.KeyAttributes{CN: "test"})
+	err := a.Revoke(context.Background(), cert, CARevokeOptions{KeyAttrs: &xkmssdk.KeyAttributes{CN: "test"}})
 	require.NoError(t, err)
 	assert.Same(t, cert, prod.revokeCert)
 	assert.True(t, prod.revokeOpts.DeleteKeys, "DeleteKeys should be true when keyAttrs is non-nil")
@@ -213,9 +214,31 @@ func TestCAAuthorityAdapter_Revoke_DeleteKeysFalse(t *testing.T) {
 	a := NewCAAuthorityAdapter(prod)
 	cert := &x509.Certificate{}
 
-	err := a.Revoke(context.Background(), cert, nil)
+	err := a.Revoke(context.Background(), cert, CARevokeOptions{})
 	require.NoError(t, err)
 	assert.False(t, prod.revokeOpts.DeleteKeys, "DeleteKeys should be false when keyAttrs is nil")
+}
+
+func TestCAAuthorityAdapter_Revoke_CarriesReason(t *testing.T) {
+	prod := &fakeProdCA{}
+	a := NewCAAuthorityAdapter(prod)
+
+	err := a.Revoke(context.Background(), &x509.Certificate{}, CARevokeOptions{
+		Reason: platformv1.RevocationReason_REVOCATION_REASON_SUPERSEDED,
+	})
+	require.NoError(t, err)
+	// RFC 5280 §5.3.1: superseded is CRLReason 4.
+	assert.Equal(t, 4, prod.revokeOpts.Reason, "the reason must reach RevokeOptions.Reason as its RFC 5280 code")
+}
+
+func TestCAAuthorityAdapter_Revoke_UnspecifiedReason(t *testing.T) {
+	prod := &fakeProdCA{revokeOpts: xkmsca.RevokeOptions{Reason: -1}}
+	a := NewCAAuthorityAdapter(prod)
+
+	err := a.Revoke(context.Background(), &x509.Certificate{}, CARevokeOptions{})
+	require.NoError(t, err)
+	// RFC 5280 §5.3.1: unspecified is CRLReason 0.
+	assert.Equal(t, 0, prod.revokeOpts.Reason)
 }
 
 func TestCAAuthorityAdapter_Revoke_PropagatesError(t *testing.T) {
@@ -223,7 +246,7 @@ func TestCAAuthorityAdapter_Revoke_PropagatesError(t *testing.T) {
 	prod := &fakeProdCA{revokeErr: prodErr}
 	a := NewCAAuthorityAdapter(prod)
 
-	err := a.Revoke(context.Background(), &x509.Certificate{}, nil)
+	err := a.Revoke(context.Background(), &x509.Certificate{}, CARevokeOptions{})
 	require.Error(t, err)
 	assert.ErrorIs(t, err, prodErr)
 }

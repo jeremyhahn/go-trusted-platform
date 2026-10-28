@@ -593,7 +593,7 @@ func (h *CAHandler) handleRevoke(ctx context.Context, req *quicwire.Request) *qu
 		}
 	}
 
-	if err := h.ca.RevokeCert(ctx, cert, quicbaasca.RevokeOptions{DeleteKeys: keyAttrs != nil}); err != nil {
+	if err := h.ca.RevokeCert(ctx, cert, quicbaasca.RevokeOptions{Reason: int(revokeReq.Reason), DeleteKeys: keyAttrs != nil}); err != nil {
 		h.logger.Error(err, "failed to revoke certificate")
 		return h.errorResponse(quicwire.StatusInternalError, ErrCARevokeFailed{Cause: err})
 	}

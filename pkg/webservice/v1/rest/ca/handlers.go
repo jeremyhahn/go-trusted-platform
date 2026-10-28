@@ -972,7 +972,7 @@ func (h *CAHandlers) RevokeCertificate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.ca.RevokeCert(r.Context(), cert, quicbaasca.RevokeOptions{DeleteKeys: req.GetDeleteKeys()}); err != nil {
+	if err := h.ca.RevokeCert(r.Context(), cert, quicbaasca.RevokeOptions{Reason: int(req.GetReason()), DeleteKeys: req.GetDeleteKeys()}); err != nil {
 		protorest.WriteError(w, r, h.respWriter,
 			status.Error(codes.Internal, err.Error()))
 		return

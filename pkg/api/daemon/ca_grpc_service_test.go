@@ -780,6 +780,11 @@ func TestCAGRPCService_RevokeCertificate_Success(t *testing.T) {
 	if resp.CertificateStatus != platformv1.CertificateStatus_CERTIFICATE_STATUS_REVOKED {
 		t.Error("expected revoked status")
 	}
+	// RFC 5280 §5.3.1: keyCompromise is CRLReason 1. The CA must record the
+	// caller's reason; MCP and the Unix socket reach the CA through this service.
+	if len(mockCA.revokedOpts) != 1 || mockCA.revokedOpts[0].Reason != 1 {
+		t.Errorf("expected one RevokeCert with Reason 1, got %+v", mockCA.revokedOpts)
+	}
 }
 
 func TestCAGRPCService_RevokeCertificate_WithDeleteKeys(t *testing.T) {
@@ -2734,6 +2739,8 @@ func (m *mockCertStore) Close() error {
 // methods each test case exercises.
 type configurableMockCA struct {
 	baseMockCA
+	// revokedOpts records the options each RevokeCert got.
+	revokedOpts            []xkmsca.RevokeOptions
 	keyStore               *rotatingKeyStore
 	isInitialized          bool
 	identity               string
@@ -2805,7 +2812,8 @@ func (m *configurableMockCA) IssueCertificate(_ context.Context, _ *xkmsca.CACer
 	}
 	return &xkmsca.IssuedCertificate{Certificate: m.issuedCert}, nil
 }
-func (m *configurableMockCA) RevokeCert(_ context.Context, _ *x509.Certificate, _ xkmsca.RevokeOptions) error {
+func (m *configurableMockCA) RevokeCert(_ context.Context, _ *x509.Certificate, opts xkmsca.RevokeOptions) error {
+	m.revokedOpts = append(m.revokedOpts, opts)
 	return m.revokeErr
 }
 func (m *configurableMockCA) CertStore() xkmssdk.CertStore { return m.certStore }

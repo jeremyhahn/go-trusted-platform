@@ -493,7 +493,7 @@ func (s *CAGRPCService) RevokeCertificate(
 	}
 
 	// Revoke the certificate
-	if err := s.ca.RevokeCert(ctx, cert, quicbaasca.RevokeOptions{DeleteKeys: keyAttrs != nil}); err != nil {
+	if err := s.ca.RevokeCert(ctx, cert, quicbaasca.RevokeOptions{Reason: int(req.GetReason()), DeleteKeys: keyAttrs != nil}); err != nil {
 		s.logger.Error(err, "failed to revoke certificate")
 		return nil, status.Errorf(codes.Internal, "failed to revoke certificate: %v", err)
 	}
