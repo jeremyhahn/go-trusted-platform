@@ -78,6 +78,31 @@ func TestDecodeRequest_DiscardsUnknownFields(t *testing.T) {
 	assert.Equal(t, uint32(3), msg.Page)
 }
 
+func TestDecodeRequestStrict_ValidBody(t *testing.T) {
+	req := httptest.NewRequest(http.MethodPost, "/x",
+		strings.NewReader(`{"reason":"REVOCATION_REASON_KEY_COMPROMISE","deleteKeys":true}`))
+	msg := &platformv1.RevokeCertificateRequest{}
+	require.NoError(t, protorest.DecodeRequestStrict(req, msg))
+	assert.Equal(t, platformv1.RevocationReason_REVOCATION_REASON_KEY_COMPROMISE, msg.GetReason())
+	assert.True(t, msg.GetDeleteKeys())
+}
+
+func TestDecodeRequestStrict_RejectsUnknownEnumNameAndField(t *testing.T) {
+	bodies := map[string]string{
+		"unknown enum name": `{"reason":"REVOCATION_REASON_BOGUS"}`,
+		"unknown field":     `{"reason":"REVOCATION_REASON_KEY_COMPROMISE","bogus":1}`,
+	}
+	for name, body := range bodies {
+		t.Run(name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, "/x", strings.NewReader(body))
+			msg := &platformv1.RevokeCertificateRequest{}
+			err := protorest.DecodeRequestStrict(req, msg)
+			var typed *protorest.ErrInvalidJSON
+			assert.ErrorAs(t, err, &typed)
+		})
+	}
+}
+
 func TestWriteSuccess_NilEmits200(t *testing.T) {
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/x", nil)

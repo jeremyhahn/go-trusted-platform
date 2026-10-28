@@ -32,6 +32,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -39,6 +40,7 @@ import (
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	xkmsca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/ca"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/internal/protorest"
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/restwire"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -1336,6 +1338,45 @@ func TestRevokeCertificate_RejectsUndefinedReason(t *testing.T) {
 			assert.Equal(t, http.StatusBadRequest, writer.lastStatus)
 			require.NotNil(t, writer.lastError)
 			assert.Contains(t, writer.lastError.Error(), "unknown revocation reason "+reason)
+		})
+	}
+}
+
+// TestRevokeCertificate_RejectsUnknownReasonName proves an unknown reason name
+// or an unknown field is a 400 and never reaches the CA: a lenient decode
+// would turn it into REVOCATION_REASON_UNSPECIFIED and revoke.
+func TestRevokeCertificate_RejectsUnknownReasonName(t *testing.T) {
+	bodies := map[string]string{
+		"unknown reason name": `{"reason":"REVOCATION_REASON_BOGUS"}`,
+		"unknown field":       `{"reason":"REVOCATION_REASON_KEY_COMPROMISE","bogus":true}`,
+	}
+	for name, body := range bodies {
+		t.Run(name, func(t *testing.T) {
+			testCert := createTestCertificate("revoke.example.com")
+			mockCA := &mockCertificateAuthority{
+				initialized: true,
+				certStore: &mockCertStore{
+					getCertificateFn: func(string) (*x509.Certificate, error) {
+						return testCert, nil
+					},
+				},
+				revokeFn: func(context.Context, *x509.Certificate, xkmsca.RevokeOptions) error {
+					t.Errorf("body %s reached the CA", body)
+					return nil
+				},
+			}
+			handlers, writer := newTestHandlers(mockCA)
+
+			req := httptest.NewRequest(http.MethodDelete, "/api/v1/ca/certificates/abc123", strings.NewReader(body))
+			req = mux.SetURLVars(req, map[string]string{"serial": "abc123"})
+			req.Header.Set("Content-Type", "application/json")
+			rec := httptest.NewRecorder()
+
+			handlers.RevokeCertificate(rec, req)
+
+			assert.Equal(t, http.StatusBadRequest, writer.lastStatus)
+			var invalid *protorest.ErrInvalidJSON
+			assert.ErrorAs(t, writer.lastError, &invalid)
 		})
 	}
 }

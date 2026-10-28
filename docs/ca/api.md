@@ -127,7 +127,9 @@ service, `InvalidArgument` on gRPC and QUIC, and an
 `UnknownRevocationReasonError` from the MCP tool. The REST body is decoded
 strictly: an unknown reason name, an unknown field or a mistyped value is
 also refused with 400, so a misspelled reason is never recorded as
-unspecified. The answer is a proto-JSON `RevokeCertificateResponse`:
+unspecified. The web service REST route decodes its body as strictly: an
+unknown reason name, such as `REVOCATION_REASON_BOGUS`, or an unknown field
+is refused with 400 before the CA is called (Codex 8149). The answer is a proto-JSON `RevokeCertificateResponse`:
 
 ```json
 {

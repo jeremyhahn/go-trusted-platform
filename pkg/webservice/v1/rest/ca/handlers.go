@@ -953,7 +953,9 @@ func (h *CAHandlers) RevokeCertificate(w http.ResponseWriter, r *http.Request) {
 
 	req := &platformv1.RevokeCertificateRequest{}
 	if r.Body != nil && r.ContentLength > 0 {
-		if err := protorest.DecodeRequest(r, req); err != nil {
+		// Strict: DiscardUnknown would turn an unknown reason name into
+		// REVOCATION_REASON_UNSPECIFIED, which the validator accepts.
+		if err := protorest.DecodeRequestStrict(r, req); err != nil {
 			h.respWriter.Error400(w, r, err)
 			return
 		}

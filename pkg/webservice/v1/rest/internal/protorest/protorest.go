@@ -56,6 +56,24 @@ var UnmarshalOptions = protojson.UnmarshalOptions{
 // An empty body is treated as the zero-valued message; callers are expected
 // to validate required fields after decoding.
 func DecodeRequest(r *http.Request, msg proto.Message) error {
+	return decodeRequestWith(UnmarshalOptions, r, msg)
+}
+
+// strictUnmarshalOptions is UnmarshalOptions without DiscardUnknown: an
+// unknown field or an unknown enum name is an error instead of a zero value.
+var strictUnmarshalOptions = protojson.UnmarshalOptions{
+	AllowPartial: true,
+}
+
+// DecodeRequestStrict is DecodeRequest for operations where a discarded value
+// changes the outcome: a revocation must not record
+// REVOCATION_REASON_UNSPECIFIED for a reason name the caller misspelled.
+// An unknown field or enum name returns ErrInvalidJSON.
+func DecodeRequestStrict(r *http.Request, msg proto.Message) error {
+	return decodeRequestWith(strictUnmarshalOptions, r, msg)
+}
+
+func decodeRequestWith(opts protojson.UnmarshalOptions, r *http.Request, msg proto.Message) error {
 	if r.Body == nil {
 		return nil
 	}
@@ -67,7 +85,7 @@ func DecodeRequest(r *http.Request, msg proto.Message) error {
 	if len(data) == 0 {
 		return nil
 	}
-	if err := UnmarshalOptions.Unmarshal(data, msg); err != nil {
+	if err := opts.Unmarshal(data, msg); err != nil {
 		return &ErrInvalidJSON{Cause: err}
 	}
 	return nil
