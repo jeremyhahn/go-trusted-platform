@@ -36,6 +36,7 @@ import (
 	"crypto/x509/pkix"
 	"encoding/pem"
 	"fmt"
+	"math/big"
 	"os"
 	"path/filepath"
 	"testing"
@@ -640,6 +641,69 @@ func testRevokeCertificate(t *testing.T, ctx context.Context, cmd CACommands, pr
 		assert.False(t, result.Valid, "Revoked certificate should not be valid")
 		assert.True(t, result.Revoked, "Certificate should be marked as revoked")
 	})
+
+	// RFC 5280 §5.3.1 allows removeFromCRL (8) only in delta CRLs; this CA
+	// publishes complete CRLs, so revoking with 8 is refused and the CRL
+	// carries only the valid revocation (Codex 8144).
+	t.Run("RemoveFromCRLRefused", func(t *testing.T) {
+		require.NotEmpty(t, certPEM, "the superseded certificate's PEM is needed to find its CRL entry")
+		superseded := certificateSerial(t, certPEM)
+
+		refused, err := cmd.IssueCertificate(testCtx, IssueCertificateOptions{
+			CommonName: fmt.Sprintf("%s-remove-from-crl.example.com", prefix),
+			StoreType:  "pkcs8",
+			Algorithm:  "ECDSA-P256",
+			ValidDays:  365,
+		})
+		require.NoError(t, err)
+		require.NotNil(t, refused.Certificate)
+		refusedPEM := refused.Certificate.PEM
+		if len(refusedPEM) == 0 {
+			got, getErr := cmd.GetCertificate(testCtx, GetCertificateOptions{Serial: refused.Certificate.Serial, IncludePEM: true})
+			require.NoError(t, getErr)
+			require.NotNil(t, got.Certificate)
+			refusedPEM = got.Certificate.PEM
+		}
+		require.NotEmpty(t, refusedPEM, "the refused certificate's PEM is needed to check its CRL absence")
+		refusedSerial := certificateSerial(t, refusedPEM)
+
+		result, err := cmd.RevokeCertificate(testCtx, RevokeCertificateOptions{
+			Serial: refused.Certificate.Serial,
+			Reason: RevocationReasonRemoveFromCRL,
+		})
+		if err == nil {
+			require.NotNil(t, result)
+			require.False(t, result.Success, "removeFromCRL must be refused")
+		}
+
+		_, err = cmd.GenerateCRL(testCtx)
+		require.NoError(t, err)
+		crlResult, err := cmd.GetCRL(testCtx, GetCRLOptions{IncludeEntries: true})
+		require.NoError(t, err)
+		crl, err := x509.ParseRevocationList(crlResult.Data)
+		require.NoError(t, err)
+
+		var supersededFound bool
+		for _, entry := range crl.RevokedCertificateEntries {
+			assert.NotEqual(t, int(RevocationReasonRemoveFromCRL), entry.ReasonCode, "serial %s", entry.SerialNumber)
+			assert.NotEqual(t, 0, refusedSerial.Cmp(entry.SerialNumber), "the refused revocation must not reach the CRL")
+			if superseded.Cmp(entry.SerialNumber) == 0 {
+				supersededFound = true
+				assert.Equal(t, int(RevocationReasonSuperseded), entry.ReasonCode)
+			}
+		}
+		assert.True(t, supersededFound, "the valid revocation must be in the CRL")
+	})
+}
+
+// certificateSerial returns the serial number of the PEM certificate.
+func certificateSerial(t *testing.T, certPEM []byte) *big.Int {
+	t.Helper()
+	block, _ := pem.Decode(certPEM)
+	require.NotNil(t, block, "certificate PEM does not decode")
+	cert, err := x509.ParseCertificate(block.Bytes)
+	require.NoError(t, err)
+	return cert.SerialNumber
 }
 
 // =============================================================================

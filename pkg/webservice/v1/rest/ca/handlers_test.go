@@ -1308,7 +1308,7 @@ func TestRevokeCertificate_Error(t *testing.T) {
 // TestRevokeCertificate_RejectsUndefinedReason proves a numeric reason that is
 // not an RFC 5280 §5.3.1 CRLReason code is refused with 400 before the CA.
 func TestRevokeCertificate_RejectsUndefinedReason(t *testing.T) {
-	for _, reason := range []string{"7", "-1", "99"} {
+	for _, reason := range []string{"7", "8", "-1", "99"} {
 		t.Run(reason, func(t *testing.T) {
 			testCert := createTestCertificate("revoke.example.com")
 			mockCA := &mockCertificateAuthority{

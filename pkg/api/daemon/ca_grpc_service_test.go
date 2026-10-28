@@ -792,7 +792,7 @@ func TestCAGRPCService_RevokeCertificate_Success(t *testing.T) {
 func TestCAGRPCService_RevokeCertificate_RejectsUndefinedReason(t *testing.T) {
 	t.Parallel()
 
-	for _, reason := range []int32{7, -1, 99} {
+	for _, reason := range []int32{7, 8, -1, 99} {
 		cert := createTestCertificate(t)
 		serial := hex.EncodeToString(cert.SerialNumber.Bytes())
 		mockCA := &configurableMockCA{

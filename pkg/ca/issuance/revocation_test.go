@@ -6,7 +6,7 @@ import (
 )
 
 func TestValidateRevocationReason_AcceptsEveryCRLReason(t *testing.T) {
-	for _, code := range []int{0, 1, 2, 3, 4, 5, 6, 8, 9, 10} {
+	for _, code := range []int{0, 1, 2, 3, 4, 5, 6, 9, 10} {
 		if err := ValidateRevocationReason(code); err != nil {
 			t.Errorf("reason %d: %v, want nil", code, err)
 		}
@@ -14,7 +14,7 @@ func TestValidateRevocationReason_AcceptsEveryCRLReason(t *testing.T) {
 }
 
 func TestValidateRevocationReason_RefusesAnUndefinedCode(t *testing.T) {
-	for _, code := range []int{7, -1, 11, 99} {
+	for _, code := range []int{7, 8, -1, 11, 99} {
 		err := ValidateRevocationReason(code)
 		var unknown *UnknownRevocationReasonError
 		if !errors.As(err, &unknown) {

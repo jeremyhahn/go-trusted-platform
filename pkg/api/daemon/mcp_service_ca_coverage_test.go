@@ -774,7 +774,7 @@ func TestMCPServiceProvider_CARevoke_SuccessCoverage(t *testing.T) {
 // TestMCPServiceProvider_CARevoke_RejectsUndefinedReason proves a reason that
 // is not an RFC 5280 §5.3.1 CRLReason code is refused before the CA.
 func TestMCPServiceProvider_CARevoke_RejectsUndefinedReason(t *testing.T) {
-	for _, reason := range []int{7, -1, 99} {
+	for _, reason := range []int{7, 8, -1, 99} {
 		mockCA := newMockCAForMCPCoverage()
 		cert := generateTestCertificateForMCPCoverage("revoke.example.com", false, mockCA.intermCert, mockCA.privateKey)
 		mockCA.certStore.StoreCertificate(cert)

@@ -920,7 +920,7 @@ func TestRevokeCertificate_RejectsUndefinedReason(t *testing.T) {
 	t.Parallel()
 
 	rootCA := createTestCAWithKey(t, "Test Root CA")
-	for _, reason := range []int32{7, -1, 99} {
+	for _, reason := range []int32{7, 8, -1, 99} {
 		cert := createCertSignedByCA(t, "test.example.com", rootCA)
 		serial := hex.EncodeToString(cert.SerialNumber.Bytes())
 		certStore := newMockCertStore()

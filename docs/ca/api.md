@@ -118,9 +118,11 @@ body `serial`. The reason is the enum name and the key flag is `deleteKeys`
 An empty body revokes with `REVOCATION_REASON_UNSPECIFIED` and keeps the keys.
 The reason is recorded in the CRL entry as its RFC 5280 §5.3.1 CRLReason code
 (the enum values are those codes); every transport (REST, the web service,
-gRPC, QUIC, MCP, Unix) records it the same way. Every transport refuses a
-code RFC 5280 §5.3.1 does not define (the unassigned 7, a negative number,
-anything above 10) before the CA records anything: 400 on REST and the web
+gRPC, QUIC, MCP, Unix) records it the same way. The accepted codes are 0-6
+and 9-10. Every transport refuses any other code before the CA records
+anything: one RFC 5280 §5.3.1 does not define (the unassigned 7, a negative
+number, anything above 10), and removeFromCRL (8), which §5.3.1 allows only
+in delta CRLs while this CA publishes complete CRLs (Codex 8144): 400 on REST and the web
 service, `InvalidArgument` on gRPC and QUIC, and an
 `UnknownRevocationReasonError` from the MCP tool. The REST body is decoded
 strictly: an unknown reason name, an unknown field or a mistyped value is

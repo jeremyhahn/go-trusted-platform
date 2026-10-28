@@ -834,7 +834,7 @@ func TestCAHandler_HandleRevoke_Success(t *testing.T) {
 // TestCAHandler_HandleRevoke_RejectsUndefinedReason proves a reason that is not
 // an RFC 5280 §5.3.1 CRLReason code is refused before the CA records anything.
 func TestCAHandler_HandleRevoke_RejectsUndefinedReason(t *testing.T) {
-	for _, reason := range []int32{7, -1, 99} {
+	for _, reason := range []int32{7, 8, -1, 99} {
 		t.Run(fmt.Sprint(reason), func(t *testing.T) {
 			ca := newMockCA()
 			handler := NewCAHandler(logging.DefaultLogger(), ca, nil)
