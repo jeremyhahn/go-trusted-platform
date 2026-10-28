@@ -41,6 +41,7 @@ import type {
   CertStorageTypeProtoName,
 } from '../types/idevid.js';
 import { DEVICE_KEY_ALGORITHM_PROTO_NAMES, CERT_STORAGE_TYPE_PROTO_NAMES } from '../types/idevid.js';
+import { encodeEnum } from './wire-enum.js';
 
 /** A key config as the REST decoder reads it: enums carry their protobuf names. */
 type WireKeyConfig<T extends IDevIDConfig | IAKConfig> = Omit<T, 'algorithm' | 'storage'> & {
@@ -56,8 +57,8 @@ function toWireKeyConfig<T extends IDevIDConfig | IAKConfig>(config: T): WireKey
   const { algorithm, storage, ...rest } = config;
   return {
     ...rest,
-    ...(algorithm !== undefined && { algorithm: DEVICE_KEY_ALGORITHM_PROTO_NAMES[algorithm] }),
-    ...(storage !== undefined && { storage: CERT_STORAGE_TYPE_PROTO_NAMES[storage] }),
+    ...(algorithm !== undefined && { algorithm: encodeEnum('algorithm', DEVICE_KEY_ALGORITHM_PROTO_NAMES, algorithm) }),
+    ...(storage !== undefined && { storage: encodeEnum('storage', CERT_STORAGE_TYPE_PROTO_NAMES, storage) }),
   };
 }
 

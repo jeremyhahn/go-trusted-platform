@@ -35,6 +35,7 @@ import type {
   CreateTemplateOptions,
 } from '../types/vtpm.js';
 import { BUNDLE_MODE_WIRE_NAMES, EK_ALGORITHM_WIRE_NAMES } from '../types/vtpm.js';
+import { encodeOptionalEnum } from './wire-enum.js';
 
 /** Thrown when a device profile ID is not an unsigned integer the server can read. */
 export class InvalidDeviceProfileIdError extends Error {
@@ -80,8 +81,8 @@ function toDeviceProfileId(id: string): number {
 }
 
 function toWireCreateBundle(options: CreateBundleOptions): WireCreateBundleRequest {
-  const mode = options.mode === undefined ? undefined : BUNDLE_MODE_WIRE_NAMES[options.mode];
-  const ekAlgorithm = options.ekAlgorithm === undefined ? undefined : EK_ALGORITHM_WIRE_NAMES[options.ekAlgorithm];
+  const mode = encodeOptionalEnum('mode', BUNDLE_MODE_WIRE_NAMES, options.mode);
+  const ekAlgorithm = encodeOptionalEnum('ekAlgorithm', EK_ALGORITHM_WIRE_NAMES, options.ekAlgorithm);
   return {
     ...(mode !== undefined && { mode }),
     ...(options.hostname !== undefined && { hostname: options.hostname }),
@@ -94,7 +95,7 @@ function toWireCreateBundle(options: CreateBundleOptions): WireCreateBundleReque
 }
 
 function toWireCreateTemplate(options: CreateTemplateOptions): WireCreateTemplateRequest {
-  const ekAlgorithm = options.ekAlgorithm === undefined ? undefined : EK_ALGORITHM_WIRE_NAMES[options.ekAlgorithm];
+  const ekAlgorithm = encodeOptionalEnum('ekAlgorithm', EK_ALGORITHM_WIRE_NAMES, options.ekAlgorithm);
   return {
     id: options.id,
     ...(options.description !== undefined && { description: options.description }),

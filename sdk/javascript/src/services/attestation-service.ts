@@ -36,6 +36,7 @@ import type {
   AttestationPCRValue,
 } from '../types/attestation.js';
 import { ATTESTATION_HASH_ALGORITHM_PROTO_NAMES } from '../types/attestation.js';
+import { encodeEnum } from './wire-enum.js';
 
 /**
  * Replaces a config's short hash algorithm with its proto name. The REST
@@ -48,7 +49,7 @@ function withWireHashAlgorithm<T extends { hashAlgorithm?: AttestationHashAlgori
   if (hashAlgorithm === undefined) {
     return rest;
   }
-  return { ...rest, hashAlgorithm: ATTESTATION_HASH_ALGORITHM_PROTO_NAMES[hashAlgorithm] };
+  return { ...rest, hashAlgorithm: encodeEnum('hashAlgorithm', ATTESTATION_HASH_ALGORITHM_PROTO_NAMES, hashAlgorithm) };
 }
 
 /** Replaces a request's config with its wire form, when the request has one. */
@@ -62,7 +63,7 @@ function withWireConfig<T extends { config?: { hashAlgorithm?: AttestationHashAl
 function toWirePCRValue(
   pcr: AttestationPCRValue,
 ): Omit<AttestationPCRValue, 'algorithm'> & { algorithm: AttestationHashAlgorithmProtoName } {
-  return { ...pcr, algorithm: ATTESTATION_HASH_ALGORITHM_PROTO_NAMES[pcr.algorithm] };
+  return { ...pcr, algorithm: encodeEnum('algorithm', ATTESTATION_HASH_ALGORITHM_PROTO_NAMES, pcr.algorithm) };
 }
 
 /**

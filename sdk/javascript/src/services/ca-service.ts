@@ -31,6 +31,7 @@ import {
   KEY_ALGORITHM_PROTO_NAMES,
   REVOCATION_REASON_PROTO_NAMES,
 } from '../types/ca.js';
+import { encodeEnum } from './wire-enum.js';
 
 /**
  * The protojson body of a platform.v1.CertificateRequest. The REST decoder
@@ -41,10 +42,10 @@ function toWireCertificateRequest(request: CertificateRequest): Record<string, u
   const { keyAlgorithm, certificateType, isCA, ...rest } = request;
   const wire: Record<string, unknown> = { ...rest };
   if (keyAlgorithm !== undefined) {
-    wire.keyAlgorithm = KEY_ALGORITHM_PROTO_NAMES[keyAlgorithm];
+    wire.keyAlgorithm = encodeEnum('keyAlgorithm', KEY_ALGORITHM_PROTO_NAMES, keyAlgorithm);
   }
   if (certificateType !== undefined) {
-    wire.certificateType = CERTIFICATE_TYPE_PROTO_NAMES[certificateType];
+    wire.certificateType = encodeEnum('certificateType', CERTIFICATE_TYPE_PROTO_NAMES, certificateType);
   }
   if (isCA !== undefined) {
     wire.isCa = isCA;
@@ -146,7 +147,7 @@ export class CAService extends BaseService {
   async revokeCertificate(request: RevokeCertificateRequest): Promise<ApiResponse<RevokeCertificateResponse>> {
     return this.client.post<RevokeCertificateResponse>(
       this.buildUrl(`/certificates/${this.encodePathSegment(request.serial)}/revoke`),
-      { reason: REVOCATION_REASON_PROTO_NAMES[request.reason], deleteKeys: request.deleteKeys }
+      { reason: encodeEnum('reason', REVOCATION_REASON_PROTO_NAMES, request.reason), deleteKeys: request.deleteKeys }
     );
   }
 
