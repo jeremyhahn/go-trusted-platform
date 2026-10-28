@@ -75,8 +75,32 @@ describe('PXEService device routes', () => {
       expect(mockClient.put).toHaveBeenCalledWith('/v1/pxe/devices/node-3/state', {
         state: 'INSTALLING',
         reason: 'operator retry',
+        installCertificateSha256: undefined,
       });
       expect(mockClient.post).not.toHaveBeenCalled();
+    });
+
+    // The webhook ends only an installation bound to the installer's
+    // certificate, so the binding must reach the server (Codex review 7971).
+    it('sends the installer certificate binding, and the bound node completes', async () => {
+      const fingerprint = 'ab'.repeat(32);
+      vi.mocked(mockClient.put).mockResolvedValue({
+        success: true,
+        data: { device: { id: 'node-3', installCertificateSha256: fingerprint } },
+      });
+      vi.mocked(mockClient.post).mockResolvedValue({ success: true, data: { status: { success: true } } });
+
+      await service.updateState({ ...request, installCertificateSha256: fingerprint });
+      const completion = { macAddress: '00:11:22:33:44:55', success: true, message: 'installed' };
+      const result = await service.webhookComplete(completion);
+
+      expect(mockClient.put).toHaveBeenCalledWith('/v1/pxe/devices/node-3/state', {
+        state: 'INSTALLING',
+        reason: 'operator retry',
+        installCertificateSha256: fingerprint,
+      });
+      expect(mockClient.post).toHaveBeenCalledWith('/v1/pxe/webhook/complete', completion);
+      expect(result.success).toBe(true);
     });
 
     it('propagates a transport error unchanged', async () => {

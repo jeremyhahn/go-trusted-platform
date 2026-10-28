@@ -195,6 +195,12 @@ export interface UpdatePXEStateRequest {
   state: ProvisioningState;
   /** Reason */
   reason?: string;
+  /**
+   * Hex SHA-256 of the DER certificate the installer presents to the
+   * install-completion webhook. Accepted only with state INSTALLING; the
+   * webhook is refused for a device that entered installing without one.
+   */
+  installCertificateSha256?: string;
 }
 
 /**

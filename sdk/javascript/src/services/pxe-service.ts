@@ -156,7 +156,11 @@ export class PXEService extends BaseService {
   async updateState(request: UpdatePXEStateRequest): Promise<ApiResponse<UpdatePXEStateResponse>> {
     return this.client.put<UpdatePXEStateResponse>(
       this.buildUrl(`/devices/${this.encodePathSegment(request.deviceId)}/state`),
-      { state: request.state, reason: request.reason }
+      {
+        state: request.state,
+        reason: request.reason,
+        installCertificateSha256: request.installCertificateSha256,
+      }
     );
   }
 

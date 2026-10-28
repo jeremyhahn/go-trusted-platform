@@ -271,7 +271,9 @@ operator binds that fingerprint when the device enters installing (`UpdateState`
 with `install_certificate_sha256`, or the Go SDK's `pxe.Client.SetDeviceInstalling`,
 `sdk/go/services/pxe/client.go:114`, which refuses an empty fingerprint with
 `ErrInstallCertificateRequired` before sending anything, so the device stays
-`booting`, `sdk/go/services/pxe/client.go:117`); a serial is not used, because it is unique
+`booting`, `sdk/go/services/pxe/client.go:117`; or the JavaScript SDK's
+`PXEService.updateState` with `installCertificateSha256`,
+`sdk/javascript/src/services/pxe-service.ts:156`); a serial is not used, because it is unique
 only per issuer. No verified client certificate is 401; a certificate no device
 carries, or a mismatched MAC, is 403 (`pkg/api/daemon/pxe_grpc_service.go:566`);
 a body with no MAC is 400 (`InvalidArgument`, `ErrPXEWebhookMACRequired`,
