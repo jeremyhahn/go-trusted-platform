@@ -958,14 +958,13 @@ var categoryPermissions = map[byte]map[byte]OpcodePermission{
 		quicwire.DeviceSubFindConfigForDevice: deviceRead,
 
 		// The PXEService methods without a direct opcode, scoped as on gRPC.
-		quicwire.PXESubGetDeviceByMAC:        pxeRead,
-		quicwire.PXESubSetDeviceEnrolled:     pxeWrite,
-		quicwire.PXESubBindDeviceCertificate: pxeWrite,
-		quicwire.PXESubGetEvents:             pxeRead,
-		quicwire.PXESubGetStatus:             pxeRead,
-		quicwire.PXESubStartService:          pxeWrite,
-		quicwire.PXESubStopService:           pxeWrite,
-		quicwire.PXESubWebhookComplete:       pxeWrite,
+		quicwire.PXESubGetDeviceByMAC:    pxeRead,
+		quicwire.PXESubSetDeviceEnrolled: pxeWrite,
+		quicwire.PXESubGetEvents:         pxeRead,
+		quicwire.PXESubGetStatus:         pxeRead,
+		quicwire.PXESubStartService:      pxeWrite,
+		quicwire.PXESubStopService:       pxeWrite,
+		quicwire.PXESubWebhookComplete:   pxeWrite,
 	},
 }
 

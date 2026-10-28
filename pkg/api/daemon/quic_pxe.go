@@ -46,14 +46,13 @@ var pxeQUICHandlers = map[byte]appQUICHandler{
 // pxeQUICSubHandlers maps each PXE sub-opcode of OpProvisioningCategory to
 // its PXEService method.
 var pxeQUICSubHandlers = map[byte]appQUICHandler{
-	quicwire.PXESubGetDeviceByMAC:        appQUICCall("PXEGetDeviceByMAC", quicPXEServer, platformv1.PXEServiceServer.GetDeviceByMAC),
-	quicwire.PXESubSetDeviceEnrolled:     appQUICCall("PXESetDeviceEnrolled", quicPXEServer, platformv1.PXEServiceServer.SetDeviceEnrolled),
-	quicwire.PXESubBindDeviceCertificate: appQUICCall("PXEBindDeviceCertificate", quicPXEServer, platformv1.PXEServiceServer.BindDeviceCertificate),
-	quicwire.PXESubGetEvents:             appQUICCall("PXEGetEvents", quicPXEServer, platformv1.PXEServiceServer.GetEvents),
-	quicwire.PXESubGetStatus:             appQUICCall("PXEGetStatus", quicPXEServer, platformv1.PXEServiceServer.GetStatus),
-	quicwire.PXESubStartService:          appQUICCall("PXEStartService", quicPXEServer, platformv1.PXEServiceServer.StartService),
-	quicwire.PXESubStopService:           appQUICCall("PXEStopService", quicPXEServer, platformv1.PXEServiceServer.StopService),
-	quicwire.PXESubWebhookComplete:       appQUICCall("PXEWebhookComplete", quicPXEServer, platformv1.PXEServiceServer.WebhookComplete),
+	quicwire.PXESubGetDeviceByMAC:    appQUICCall("PXEGetDeviceByMAC", quicPXEServer, platformv1.PXEServiceServer.GetDeviceByMAC),
+	quicwire.PXESubSetDeviceEnrolled: appQUICCall("PXESetDeviceEnrolled", quicPXEServer, platformv1.PXEServiceServer.SetDeviceEnrolled),
+	quicwire.PXESubGetEvents:         appQUICCall("PXEGetEvents", quicPXEServer, platformv1.PXEServiceServer.GetEvents),
+	quicwire.PXESubGetStatus:         appQUICCall("PXEGetStatus", quicPXEServer, platformv1.PXEServiceServer.GetStatus),
+	quicwire.PXESubStartService:      appQUICCall("PXEStartService", quicPXEServer, platformv1.PXEServiceServer.StartService),
+	quicwire.PXESubStopService:       appQUICCall("PXEStopService", quicPXEServer, platformv1.PXEServiceServer.StopService),
+	quicwire.PXESubWebhookComplete:   appQUICCall("PXEWebhookComplete", quicPXEServer, platformv1.PXEServiceServer.WebhookComplete),
 }
 
 func quicPXEServer(h *QUICServiceHandler) platformv1.PXEServiceServer {

@@ -206,7 +206,6 @@ func TestQUICAuthzContract_ScopesMatchGRPC(t *testing.T) {
 		{"/platform.v1.PXEService/RemoveDevice", quicwire.OpPXERemoveDevice, nil},
 		{"/platform.v1.PXEService/GetDeviceByMAC", quicwire.OpProvisioningCategory, []byte{quicwire.PXESubGetDeviceByMAC}},
 		{"/platform.v1.PXEService/SetDeviceEnrolled", quicwire.OpProvisioningCategory, []byte{quicwire.PXESubSetDeviceEnrolled}},
-		{"/platform.v1.PXEService/BindDeviceCertificate", quicwire.OpProvisioningCategory, []byte{quicwire.PXESubBindDeviceCertificate}},
 		{"/platform.v1.PXEService/GetEvents", quicwire.OpProvisioningCategory, []byte{quicwire.PXESubGetEvents}},
 		{"/platform.v1.PXEService/GetStatus", quicwire.OpProvisioningCategory, []byte{quicwire.PXESubGetStatus}},
 		{"/platform.v1.PXEService/StartService", quicwire.OpProvisioningCategory, []byte{quicwire.PXESubStartService}},

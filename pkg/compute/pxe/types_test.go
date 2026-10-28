@@ -14,7 +14,6 @@
 package pxe
 
 import (
-	"crypto/x509"
 	"net"
 	"testing"
 	"time"
@@ -251,10 +250,9 @@ func TestDeviceFilter_Matches(t *testing.T) {
 		UpdatedAt:      now,
 		StateChangedAt: now,
 	}
-	enrolled := copyDeviceInfo(device)
-	enrolledFingerprint := CertificateFingerprintOf(&x509.Certificate{Raw: []byte("platform CA/4242")})
-	enrolled.CertificateSerial = "4242"
-	enrolled.CertificateFingerprint = enrolledFingerprint
+	installCert := CertificateSHA256([]byte("installer certificate"))
+	bound := copyDeviceInfo(device)
+	bound.InstallCertificateSHA256 = installCert
 
 	tests := []struct {
 		name     string
@@ -335,29 +333,21 @@ func TestDeviceFilter_Matches(t *testing.T) {
 			expected: true,
 		},
 		{
-			name:     "certificate_fingerprint_filter_match",
-			filter:   &DeviceFilter{CertificateFingerprint: enrolledFingerprint},
-			device:   enrolled,
+			name:     "install_certificate_filter_match",
+			filter:   &DeviceFilter{InstallCertificateSHA256: installCert},
+			device:   bound,
 			expected: true,
 		},
 		{
 			// Exact match only: a fingerprint is not a prefix of another.
-			name:     "certificate_fingerprint_filter_no_prefix_match",
-			filter:   &DeviceFilter{CertificateFingerprint: enrolledFingerprint[:8]},
-			device:   enrolled,
+			name:     "install_certificate_filter_no_prefix_match",
+			filter:   &DeviceFilter{InstallCertificateSHA256: installCert[:8]},
+			device:   bound,
 			expected: false,
 		},
 		{
-			// The serial is not the key: an equal serial with another
-			// fingerprint (another issuer's certificate) does not match.
-			name:     "certificate_fingerprint_filter_ignores_serial",
-			filter:   &DeviceFilter{CertificateFingerprint: CertificateFingerprintOf(&x509.Certificate{Raw: []byte("other issuer/4242")})},
-			device:   enrolled,
-			expected: false,
-		},
-		{
-			name:     "certificate_fingerprint_filter_excludes_unenrolled",
-			filter:   &DeviceFilter{CertificateFingerprint: enrolledFingerprint},
+			name:     "install_certificate_filter_excludes_unbound",
+			filter:   &DeviceFilter{InstallCertificateSHA256: installCert},
 			device:   device,
 			expected: false,
 		},

@@ -491,27 +491,41 @@ func (e ErrPXEWebhookIdentityRequired) Error() string {
 }
 
 // ErrPXEWebhookUnknownIdentity is returned when the webhook's verified
-// certificate is not the enrolled certificate of exactly one PXE device.
+// certificate is not the bound installer certificate of exactly one PXE
+// device. The match is on the SHA-256 of the whole certificate, never its
+// serial: serials are unique only within one issuer, and the listener trusts
+// more than one.
 type ErrPXEWebhookUnknownIdentity struct {
-	CertificateFingerprint string
-	Matches                int
+	CertificateSHA256 string
+	Matches           int
 }
 
 func (e ErrPXEWebhookUnknownIdentity) Error() string {
-	return fmt.Sprintf("pxe webhook certificate sha256:%s is enrolled on %d devices, want exactly 1",
-		e.CertificateFingerprint, e.Matches)
+	return fmt.Sprintf("pxe webhook certificate sha256 %s is bound to %d devices, want exactly 1",
+		e.CertificateSHA256, e.Matches)
 }
 
 // ErrPXEWebhookIdentityMismatch is returned when the webhook body names a MAC
 // address other than that of the device the verified certificate belongs to.
 type ErrPXEWebhookIdentityMismatch struct {
-	CertificateFingerprint string
-	MACAddress             string
+	CertificateSHA256 string
+	MACAddress        string
 }
 
 func (e ErrPXEWebhookIdentityMismatch) Error() string {
 	return "pxe webhook body MAC " + e.MACAddress +
-		" is not the device of certificate sha256:" + e.CertificateFingerprint
+		" is not the device of certificate sha256 " + e.CertificateSHA256
+}
+
+// ErrPXEInstallCertificateState is returned when UpdateState carries an
+// installer certificate fingerprint with a target state other than
+// installing: the binding is made only as the install begins.
+type ErrPXEInstallCertificateState struct {
+	State string
+}
+
+func (e ErrPXEInstallCertificateState) Error() string {
+	return "pxe install_certificate_sha256 is accepted only with state installing, not " + e.State
 }
 
 // ErrQUICHandlerPanic is returned when a handler sub-function panics.

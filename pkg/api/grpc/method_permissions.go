@@ -887,22 +887,21 @@ func buildGRPCMethodPermissions() map[string]string {
 		// ---------------------------------------------------------------------
 		// PXE (PXEService)
 		// ---------------------------------------------------------------------
-		"/platform.v1.PXEService/GetDevice":             scope(pxe, read),
-		"/platform.v1.PXEService/GetDeviceByMAC":        scope(pxe, read),
-		"/platform.v1.PXEService/GetEvents":             scope(pxe, read),
-		"/platform.v1.PXEService/GetStatus":             scope(pxe, read),
-		"/platform.v1.PXEService/ListDevices":           scope(pxe, read),
-		"/platform.v1.PXEService/Authorize":             scope(pxe, write),
-		"/platform.v1.PXEService/Quarantine":            scope(pxe, write),
-		"/platform.v1.PXEService/RegisterDevice":        scope(pxe, write),
-		"/platform.v1.PXEService/Retry":                 scope(pxe, write),
-		"/platform.v1.PXEService/SetDeviceEnrolled":     scope(pxe, write),
-		"/platform.v1.PXEService/BindDeviceCertificate": scope(pxe, write),
-		"/platform.v1.PXEService/StartService":          scope(pxe, write),
-		"/platform.v1.PXEService/StopService":           scope(pxe, write),
-		"/platform.v1.PXEService/UpdateState":           scope(pxe, write),
-		"/platform.v1.PXEService/WebhookComplete":       scope(pxe, write),
-		"/platform.v1.PXEService/RemoveDevice":          scope(pxe, del),
+		"/platform.v1.PXEService/GetDevice":         scope(pxe, read),
+		"/platform.v1.PXEService/GetDeviceByMAC":    scope(pxe, read),
+		"/platform.v1.PXEService/GetEvents":         scope(pxe, read),
+		"/platform.v1.PXEService/GetStatus":         scope(pxe, read),
+		"/platform.v1.PXEService/ListDevices":       scope(pxe, read),
+		"/platform.v1.PXEService/Authorize":         scope(pxe, write),
+		"/platform.v1.PXEService/Quarantine":        scope(pxe, write),
+		"/platform.v1.PXEService/RegisterDevice":    scope(pxe, write),
+		"/platform.v1.PXEService/Retry":             scope(pxe, write),
+		"/platform.v1.PXEService/SetDeviceEnrolled": scope(pxe, write),
+		"/platform.v1.PXEService/StartService":      scope(pxe, write),
+		"/platform.v1.PXEService/StopService":       scope(pxe, write),
+		"/platform.v1.PXEService/UpdateState":       scope(pxe, write),
+		"/platform.v1.PXEService/WebhookComplete":   scope(pxe, write),
+		"/platform.v1.PXEService/RemoveDevice":      scope(pxe, del),
 
 		// ---------------------------------------------------------------------
 		// OCI registry (RegistryService)

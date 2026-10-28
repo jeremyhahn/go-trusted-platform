@@ -106,6 +106,24 @@ func (c *Client) UpdateState(ctx context.Context, deviceID string, state platfor
 	return resp.Device, nil
 }
 
+// SetDeviceInstalling moves a booting device to installing and binds the
+// installer certificate its install-completion webhook will present:
+// installCertificateSHA256 is the hex SHA-256 of that certificate's DER. The
+// webhook refuses an installation entered without a binding, and the binding
+// cannot be added once the device is installing.
+func (c *Client) SetDeviceInstalling(ctx context.Context, deviceID, installCertificateSHA256, reason string) (*platformv1.PXEDeviceInfo, error) {
+	resp, err := c.grpc.UpdateState(ctx, &platformv1.UpdatePXEStateRequest{
+		DeviceId:                 deviceID,
+		State:                    platformv1.ProvisioningState_PROVISIONING_STATE_INSTALLING,
+		Reason:                   reason,
+		InstallCertificateSha256: installCertificateSHA256,
+	})
+	if err != nil {
+		return nil, &ErrSetInstallingFailed{ID: deviceID, Cause: err}
+	}
+	return resp.Device, nil
+}
+
 // SetDeviceEnrolled marks a device as enrolled with a certificate.
 func (c *Client) SetDeviceEnrolled(ctx context.Context, deviceID, certificateSerial string) (*platformv1.PXEDeviceInfo, error) {
 	resp, err := c.grpc.SetDeviceEnrolled(ctx, &platformv1.SetPXEDeviceEnrolledRequest{
@@ -114,21 +132,6 @@ func (c *Client) SetDeviceEnrolled(ctx context.Context, deviceID, certificateSer
 	})
 	if err != nil {
 		return nil, &ErrSetEnrolledFailed{ID: deviceID, Cause: err}
-	}
-	return resp.Device, nil
-}
-
-// BindDeviceCertificate records the certificate the device's installer
-// presents to the install-completion webhook, by the SHA-256 of its DER
-// encoding in hex. It must be called before installation completes; the
-// device's state does not change.
-func (c *Client) BindDeviceCertificate(ctx context.Context, deviceID, certificateFingerprint string) (*platformv1.PXEDeviceInfo, error) {
-	resp, err := c.grpc.BindDeviceCertificate(ctx, &platformv1.BindPXEDeviceCertificateRequest{
-		DeviceId:               deviceID,
-		CertificateFingerprint: certificateFingerprint,
-	})
-	if err != nil {
-		return nil, &ErrBindCertificateFailed{ID: deviceID, Cause: err}
 	}
 	return resp.Device, nil
 }

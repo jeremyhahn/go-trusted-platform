@@ -20,8 +20,6 @@ import type {
   UpdatePXEStateResponse,
   SetPXEDeviceEnrolledRequest,
   SetPXEDeviceEnrolledResponse,
-  BindPXEDeviceCertificateRequest,
-  BindPXEDeviceCertificateResponse,
   AuthorizePXEDeviceRequest,
   AuthorizePXEDeviceResponse,
   QuarantinePXEDeviceRequest,
@@ -172,22 +170,6 @@ export class PXEService extends BaseService {
     return this.client.post<SetPXEDeviceEnrolledResponse>(
       this.buildUrl(`/devices/${this.encodePathSegment(request.deviceId)}/enrolled`),
       { certificateSerial: request.certificateSerial }
-    );
-  }
-
-  /**
-   * Bind an installing device to its enrolled mTLS certificate.
-   *
-   * The install-completion webhook authenticates the device by the SHA-256
-   * fingerprint of its client certificate, so the binding must be made
-   * while the device is installing, before it reports completion.
-   */
-  async bindDeviceCertificate(
-    request: BindPXEDeviceCertificateRequest
-  ): Promise<ApiResponse<BindPXEDeviceCertificateResponse>> {
-    return this.client.post<BindPXEDeviceCertificateResponse>(
-      this.buildUrl(`/devices/${this.encodePathSegment(request.deviceId)}/certificate`),
-      { certificateFingerprint: request.certificateFingerprint }
     );
   }
 

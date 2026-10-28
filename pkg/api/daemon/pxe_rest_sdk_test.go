@@ -98,3 +98,9 @@ func TestSDKREST_PXEMethodsRefuse(t *testing.T) {
 	testSDKPXERefusesScope(t, "REST", connectPXEREST)
 	testSDKPXERefusesNotFound(t, "REST", connectPXEREST)
 }
+
+// TestSDKREST_PXEWebhookCompletesAnSDKInstallation binds the installer
+// certificate through the public client over REST and completes it by webhook.
+func TestSDKREST_PXEWebhookCompletesAnSDKInstallation(t *testing.T) {
+	testWebhookCompleteThroughSDKClient(t, connectPXEREST)
+}

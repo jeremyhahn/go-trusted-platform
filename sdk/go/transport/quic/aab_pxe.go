@@ -46,14 +46,13 @@ var pxeDirectOpcodes = map[string]byte{
 // pxeSubOpcodes routes each remaining PXEService method to its sub-opcode
 // under OpProvisioningCategory.
 var pxeSubOpcodes = map[string]byte{
-	platformv1.PXEService_GetDeviceByMAC_FullMethodName:        quicwire.PXESubGetDeviceByMAC,
-	platformv1.PXEService_SetDeviceEnrolled_FullMethodName:     quicwire.PXESubSetDeviceEnrolled,
-	platformv1.PXEService_BindDeviceCertificate_FullMethodName: quicwire.PXESubBindDeviceCertificate,
-	platformv1.PXEService_GetEvents_FullMethodName:             quicwire.PXESubGetEvents,
-	platformv1.PXEService_GetStatus_FullMethodName:             quicwire.PXESubGetStatus,
-	platformv1.PXEService_StartService_FullMethodName:          quicwire.PXESubStartService,
-	platformv1.PXEService_StopService_FullMethodName:           quicwire.PXESubStopService,
-	platformv1.PXEService_WebhookComplete_FullMethodName:       quicwire.PXESubWebhookComplete,
+	platformv1.PXEService_GetDeviceByMAC_FullMethodName:    quicwire.PXESubGetDeviceByMAC,
+	platformv1.PXEService_SetDeviceEnrolled_FullMethodName: quicwire.PXESubSetDeviceEnrolled,
+	platformv1.PXEService_GetEvents_FullMethodName:         quicwire.PXESubGetEvents,
+	platformv1.PXEService_GetStatus_FullMethodName:         quicwire.PXESubGetStatus,
+	platformv1.PXEService_StartService_FullMethodName:      quicwire.PXESubStartService,
+	platformv1.PXEService_StopService_FullMethodName:       quicwire.PXESubStopService,
+	platformv1.PXEService_WebhookComplete_FullMethodName:   quicwire.PXESubWebhookComplete,
 }
 
 // init merges the PXE wire mapping into the shared adapter tables. The file

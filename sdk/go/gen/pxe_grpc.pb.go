@@ -19,22 +19,21 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	PXEService_RegisterDevice_FullMethodName        = "/platform.v1.PXEService/RegisterDevice"
-	PXEService_GetDevice_FullMethodName             = "/platform.v1.PXEService/GetDevice"
-	PXEService_GetDeviceByMAC_FullMethodName        = "/platform.v1.PXEService/GetDeviceByMAC"
-	PXEService_ListDevices_FullMethodName           = "/platform.v1.PXEService/ListDevices"
-	PXEService_RemoveDevice_FullMethodName          = "/platform.v1.PXEService/RemoveDevice"
-	PXEService_UpdateState_FullMethodName           = "/platform.v1.PXEService/UpdateState"
-	PXEService_SetDeviceEnrolled_FullMethodName     = "/platform.v1.PXEService/SetDeviceEnrolled"
-	PXEService_BindDeviceCertificate_FullMethodName = "/platform.v1.PXEService/BindDeviceCertificate"
-	PXEService_Authorize_FullMethodName             = "/platform.v1.PXEService/Authorize"
-	PXEService_Quarantine_FullMethodName            = "/platform.v1.PXEService/Quarantine"
-	PXEService_Retry_FullMethodName                 = "/platform.v1.PXEService/Retry"
-	PXEService_GetEvents_FullMethodName             = "/platform.v1.PXEService/GetEvents"
-	PXEService_GetStatus_FullMethodName             = "/platform.v1.PXEService/GetStatus"
-	PXEService_StartService_FullMethodName          = "/platform.v1.PXEService/StartService"
-	PXEService_StopService_FullMethodName           = "/platform.v1.PXEService/StopService"
-	PXEService_WebhookComplete_FullMethodName       = "/platform.v1.PXEService/WebhookComplete"
+	PXEService_RegisterDevice_FullMethodName    = "/platform.v1.PXEService/RegisterDevice"
+	PXEService_GetDevice_FullMethodName         = "/platform.v1.PXEService/GetDevice"
+	PXEService_GetDeviceByMAC_FullMethodName    = "/platform.v1.PXEService/GetDeviceByMAC"
+	PXEService_ListDevices_FullMethodName       = "/platform.v1.PXEService/ListDevices"
+	PXEService_RemoveDevice_FullMethodName      = "/platform.v1.PXEService/RemoveDevice"
+	PXEService_UpdateState_FullMethodName       = "/platform.v1.PXEService/UpdateState"
+	PXEService_SetDeviceEnrolled_FullMethodName = "/platform.v1.PXEService/SetDeviceEnrolled"
+	PXEService_Authorize_FullMethodName         = "/platform.v1.PXEService/Authorize"
+	PXEService_Quarantine_FullMethodName        = "/platform.v1.PXEService/Quarantine"
+	PXEService_Retry_FullMethodName             = "/platform.v1.PXEService/Retry"
+	PXEService_GetEvents_FullMethodName         = "/platform.v1.PXEService/GetEvents"
+	PXEService_GetStatus_FullMethodName         = "/platform.v1.PXEService/GetStatus"
+	PXEService_StartService_FullMethodName      = "/platform.v1.PXEService/StartService"
+	PXEService_StopService_FullMethodName       = "/platform.v1.PXEService/StopService"
+	PXEService_WebhookComplete_FullMethodName   = "/platform.v1.PXEService/WebhookComplete"
 )
 
 // PXEServiceClient is the client API for PXEService service.
@@ -54,7 +53,6 @@ type PXEServiceClient interface {
 	// State transitions
 	UpdateState(ctx context.Context, in *UpdatePXEStateRequest, opts ...grpc.CallOption) (*UpdatePXEStateResponse, error)
 	SetDeviceEnrolled(ctx context.Context, in *SetPXEDeviceEnrolledRequest, opts ...grpc.CallOption) (*SetPXEDeviceEnrolledResponse, error)
-	BindDeviceCertificate(ctx context.Context, in *BindPXEDeviceCertificateRequest, opts ...grpc.CallOption) (*BindPXEDeviceCertificateResponse, error)
 	Authorize(ctx context.Context, in *AuthorizePXEDeviceRequest, opts ...grpc.CallOption) (*AuthorizePXEDeviceResponse, error)
 	Quarantine(ctx context.Context, in *QuarantinePXEDeviceRequest, opts ...grpc.CallOption) (*QuarantinePXEDeviceResponse, error)
 	Retry(ctx context.Context, in *RetryPXEDeviceRequest, opts ...grpc.CallOption) (*RetryPXEDeviceResponse, error)
@@ -140,16 +138,6 @@ func (c *pXEServiceClient) SetDeviceEnrolled(ctx context.Context, in *SetPXEDevi
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(SetPXEDeviceEnrolledResponse)
 	err := c.cc.Invoke(ctx, PXEService_SetDeviceEnrolled_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *pXEServiceClient) BindDeviceCertificate(ctx context.Context, in *BindPXEDeviceCertificateRequest, opts ...grpc.CallOption) (*BindPXEDeviceCertificateResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(BindPXEDeviceCertificateResponse)
-	err := c.cc.Invoke(ctx, PXEService_BindDeviceCertificate_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -253,7 +241,6 @@ type PXEServiceServer interface {
 	// State transitions
 	UpdateState(context.Context, *UpdatePXEStateRequest) (*UpdatePXEStateResponse, error)
 	SetDeviceEnrolled(context.Context, *SetPXEDeviceEnrolledRequest) (*SetPXEDeviceEnrolledResponse, error)
-	BindDeviceCertificate(context.Context, *BindPXEDeviceCertificateRequest) (*BindPXEDeviceCertificateResponse, error)
 	Authorize(context.Context, *AuthorizePXEDeviceRequest) (*AuthorizePXEDeviceResponse, error)
 	Quarantine(context.Context, *QuarantinePXEDeviceRequest) (*QuarantinePXEDeviceResponse, error)
 	Retry(context.Context, *RetryPXEDeviceRequest) (*RetryPXEDeviceResponse, error)
@@ -295,9 +282,6 @@ func (UnimplementedPXEServiceServer) UpdateState(context.Context, *UpdatePXEStat
 }
 func (UnimplementedPXEServiceServer) SetDeviceEnrolled(context.Context, *SetPXEDeviceEnrolledRequest) (*SetPXEDeviceEnrolledResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method SetDeviceEnrolled not implemented")
-}
-func (UnimplementedPXEServiceServer) BindDeviceCertificate(context.Context, *BindPXEDeviceCertificateRequest) (*BindPXEDeviceCertificateResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method BindDeviceCertificate not implemented")
 }
 func (UnimplementedPXEServiceServer) Authorize(context.Context, *AuthorizePXEDeviceRequest) (*AuthorizePXEDeviceResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method Authorize not implemented")
@@ -466,24 +450,6 @@ func _PXEService_SetDeviceEnrolled_Handler(srv interface{}, ctx context.Context,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(PXEServiceServer).SetDeviceEnrolled(ctx, req.(*SetPXEDeviceEnrolledRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _PXEService_BindDeviceCertificate_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(BindPXEDeviceCertificateRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(PXEServiceServer).BindDeviceCertificate(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: PXEService_BindDeviceCertificate_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(PXEServiceServer).BindDeviceCertificate(ctx, req.(*BindPXEDeviceCertificateRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -666,10 +632,6 @@ var PXEService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "SetDeviceEnrolled",
 			Handler:    _PXEService_SetDeviceEnrolled_Handler,
-		},
-		{
-			MethodName: "BindDeviceCertificate",
-			Handler:    _PXEService_BindDeviceCertificate_Handler,
 		},
 		{
 			MethodName: "Authorize",

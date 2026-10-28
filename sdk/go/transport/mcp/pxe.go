@@ -25,22 +25,21 @@ import (
 // pxeToolMap maps each PXEService gRPC method to the platformd MCP tool that
 // serves it.
 var pxeToolMap = map[string]string{
-	platformv1.PXEService_RegisterDevice_FullMethodName:        "pxe_register_device",
-	platformv1.PXEService_GetDevice_FullMethodName:             "pxe_get_device",
-	platformv1.PXEService_GetDeviceByMAC_FullMethodName:        "pxe_get_device_by_mac",
-	platformv1.PXEService_ListDevices_FullMethodName:           "pxe_list_devices",
-	platformv1.PXEService_RemoveDevice_FullMethodName:          "pxe_remove_device",
-	platformv1.PXEService_UpdateState_FullMethodName:           "pxe_update_state",
-	platformv1.PXEService_SetDeviceEnrolled_FullMethodName:     "pxe_set_device_enrolled",
-	platformv1.PXEService_BindDeviceCertificate_FullMethodName: "pxe_bind_device_certificate",
-	platformv1.PXEService_Authorize_FullMethodName:             "pxe_authorize_device",
-	platformv1.PXEService_Quarantine_FullMethodName:            "pxe_quarantine_device",
-	platformv1.PXEService_Retry_FullMethodName:                 "pxe_retry_device",
-	platformv1.PXEService_GetEvents_FullMethodName:             "pxe_get_device_events",
-	platformv1.PXEService_GetStatus_FullMethodName:             "pxe_service_status",
-	platformv1.PXEService_StartService_FullMethodName:          "pxe_start_service",
-	platformv1.PXEService_StopService_FullMethodName:           "pxe_stop_service",
-	platformv1.PXEService_WebhookComplete_FullMethodName:       "pxe_webhook_complete",
+	platformv1.PXEService_RegisterDevice_FullMethodName:    "pxe_register_device",
+	platformv1.PXEService_GetDevice_FullMethodName:         "pxe_get_device",
+	platformv1.PXEService_GetDeviceByMAC_FullMethodName:    "pxe_get_device_by_mac",
+	platformv1.PXEService_ListDevices_FullMethodName:       "pxe_list_devices",
+	platformv1.PXEService_RemoveDevice_FullMethodName:      "pxe_remove_device",
+	platformv1.PXEService_UpdateState_FullMethodName:       "pxe_update_state",
+	platformv1.PXEService_SetDeviceEnrolled_FullMethodName: "pxe_set_device_enrolled",
+	platformv1.PXEService_Authorize_FullMethodName:         "pxe_authorize_device",
+	platformv1.PXEService_Quarantine_FullMethodName:        "pxe_quarantine_device",
+	platformv1.PXEService_Retry_FullMethodName:             "pxe_retry_device",
+	platformv1.PXEService_GetEvents_FullMethodName:         "pxe_get_device_events",
+	platformv1.PXEService_GetStatus_FullMethodName:         "pxe_service_status",
+	platformv1.PXEService_StartService_FullMethodName:      "pxe_start_service",
+	platformv1.PXEService_StopService_FullMethodName:       "pxe_stop_service",
+	platformv1.PXEService_WebhookComplete_FullMethodName:   "pxe_webhook_complete",
 }
 
 func init() {

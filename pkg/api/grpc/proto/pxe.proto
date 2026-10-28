@@ -22,7 +22,6 @@ service PXEService {
   // State transitions
   rpc UpdateState(UpdatePXEStateRequest) returns (UpdatePXEStateResponse);
   rpc SetDeviceEnrolled(SetPXEDeviceEnrolledRequest) returns (SetPXEDeviceEnrolledResponse);
-  rpc BindDeviceCertificate(BindPXEDeviceCertificateRequest) returns (BindPXEDeviceCertificateResponse);
   rpc Authorize(AuthorizePXEDeviceRequest) returns (AuthorizePXEDeviceResponse);
   rpc Quarantine(QuarantinePXEDeviceRequest) returns (QuarantinePXEDeviceResponse);
   rpc Retry(RetryPXEDeviceRequest) returns (RetryPXEDeviceResponse);
@@ -115,9 +114,9 @@ message PXEDeviceInfo {
   // Audit trail of provisioning events.
   repeated ProvisioningEvent events = 14;
 
-  // SHA-256 of the DER encoding of the certificate the installer presents to
-  // the install-completion webhook (BindDeviceCertificate), lowercase hex.
-  string certificate_fingerprint = 15;
+  // Lowercase hex SHA-256 of the DER certificate the installer presents to
+  // the install-completion webhook, bound when the device enters installing.
+  string install_certificate_sha256 = 15;
 }
 
 // PXEDeviceFilter provides filtering options for listing devices.
@@ -235,6 +234,10 @@ message UpdatePXEStateRequest {
   string device_id = 1;
   ProvisioningState state = 2;
   string reason = 3;
+  // Hex SHA-256 of the DER certificate the installer will present to the
+  // install-completion webhook. Accepted only with state INSTALLING; the
+  // webhook is refused for a device that has none bound.
+  string install_certificate_sha256 = 4;
 }
 
 message UpdatePXEStateResponse {
@@ -248,24 +251,6 @@ message SetPXEDeviceEnrolledRequest {
 }
 
 message SetPXEDeviceEnrolledResponse {
-  Status status = 1;
-  PXEDeviceInfo device = 2;
-}
-
-// BindPXEDeviceCertificateRequest records the certificate the device's
-// installer presents over mTLS to the install-completion webhook (#238). It
-// does not change the device's state and is accepted only before installation
-// completes (discovered, booting, installing).
-message BindPXEDeviceCertificateRequest {
-  string device_id = 1;
-
-  // SHA-256 of the certificate's DER encoding, in hex (case and colon
-  // separators are ignored). Required. A serial is not used: it is unique only
-  // within its issuer (RFC 5280 §4.1.2.2), a fingerprint names one certificate.
-  string certificate_fingerprint = 2;
-}
-
-message BindPXEDeviceCertificateResponse {
   Status status = 1;
   PXEDeviceInfo device = 2;
 }

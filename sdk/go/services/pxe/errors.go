@@ -84,6 +84,17 @@ func (e *ErrUpdateStateFailed) Error() string {
 
 func (e *ErrUpdateStateFailed) Unwrap() error { return e.Cause }
 
+type ErrSetInstallingFailed struct {
+	ID    string
+	Cause error
+}
+
+func (e *ErrSetInstallingFailed) Error() string {
+	return fmt.Sprintf("failed to set device %s installing: %v", e.ID, e.Cause)
+}
+
+func (e *ErrSetInstallingFailed) Unwrap() error { return e.Cause }
+
 type ErrSetEnrolledFailed struct {
 	ID    string
 	Cause error
@@ -94,17 +105,6 @@ func (e *ErrSetEnrolledFailed) Error() string {
 }
 
 func (e *ErrSetEnrolledFailed) Unwrap() error { return e.Cause }
-
-type ErrBindCertificateFailed struct {
-	ID    string
-	Cause error
-}
-
-func (e *ErrBindCertificateFailed) Error() string {
-	return fmt.Sprintf("failed to bind a certificate to device %s: %v", e.ID, e.Cause)
-}
-
-func (e *ErrBindCertificateFailed) Unwrap() error { return e.Cause }
 
 type ErrAuthorizeFailed struct {
 	ID    string

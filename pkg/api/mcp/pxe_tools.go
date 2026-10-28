@@ -112,12 +112,6 @@ var pxeTools = map[string]pxeTool{
 		description: "Mark a device enrolled with PKI, recording its certificate serial number",
 		binding:     pxeToolMethod(platformv1.PXEServiceServer.SetDeviceEnrolled, "device_id", "certificate_serial"),
 	},
-	"pxe_bind_device_certificate": {
-		method:      platformv1.PXEService_BindDeviceCertificate_FullMethodName,
-		scope:       "pxe:write",
-		description: "Bind the SHA-256 fingerprint of the certificate a device's installer presents to the install-completion webhook; accepted before installation completes, without a state change",
-		binding:     pxeToolMethod(platformv1.PXEServiceServer.BindDeviceCertificate, "device_id", "certificate_fingerprint"),
-	},
 	"pxe_authorize_device": {
 		method:      platformv1.PXEService_Authorize_FullMethodName,
 		scope:       "pxe:write",
