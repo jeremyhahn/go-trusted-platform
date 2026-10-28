@@ -1126,7 +1126,9 @@ and the listener trusts more than one CA, so two issuers can sign the same
 serial. Unix, MCP stdio and the embedded transport carry no peer certificate
 and refuse the call. The certificate authorizes only the installation it was
 bound to: completion is one compare-and-swap admitted only from `installing`
-under that fingerprint (`pkg/compute/pxe/service.go:689`), and leaving
+under that fingerprint (`pkg/compute/pxe/service.go:764`), whose VLAN flows
+are written only by the winner, after the swap and under the device's
+transition lock (`pkg/compute/pxe/service.go:1078`), and leaving
 `installing` clears the binding (`pkg/compute/pxe/state.go:295`), so a late
 or replayed callback is 403. One certificate is bound to one device at a time:
 the binding is claimed across devices in the same critical section as the

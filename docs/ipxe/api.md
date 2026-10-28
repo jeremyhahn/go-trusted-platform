@@ -295,11 +295,25 @@ releases the fingerprint (Codex review 7952).
 **The certificate ends only the installation it was bound to.** The webhook
 moves the device to `install_complete` or `failed` in one compare-and-swap
 that admits only `installing` under that fingerprint
-(`pkg/compute/pxe/service.go:702`, `pkg/compute/pxe/state.go:298`). Every
+(`pkg/compute/pxe/service.go:764`, `pkg/compute/pxe/state.go:298`). Every
 transition out of `installing` clears the binding, so a callback that arrives
 after the installation ended — replayed, or after enrollment, authorization or
 quarantine — finds no device and is 403 (`PermissionDenied`,
 `pkg/api/daemon/pxe_grpc_service.go:796`).
+
+**Only the completion that wins writes the port's flows.** The VLAN flows of
+`install_complete` (provisioning) or `failed` (quarantine) are written after
+the swap, never before it (`pkg/compute/pxe/service.go:777`), and every
+transition of a device — webhook, `UpdateState`, quarantine, authorize, retry,
+enroll, remove — holds that device's lock from its read of the device to its
+last flow write (`pkg/compute/pxe/service.go:1078`). So a refused callback, a
+second one or one that lost to an operator quarantine, touches no flows, and a
+quarantine that follows a winning completion lands its flows after the
+completion's: the flows always belong to the state the device reports (Codex
+review 7988). If the winner's flow write fails, the webhook answers
+`ErrVLANTransitionFailed` (`Internal` on gRPC); the device stays in the state it
+won, its binding released, on the provisioning flows it had while installing,
+and the operator quarantines it, which re-applies the quarantine flows.
 
 **A callback names its device, and a released certificate cannot end another
 device's installation.** Leaving `installing` releases the fingerprint, and

@@ -92,6 +92,19 @@ type service struct {
 	// calls cannot both run a server.
 	lifecycle sync.Mutex
 	mu        sync.RWMutex
+
+	// deviceLocks serialises every transition of one device with the VLAN
+	// flows it applies (lockDevice), so a transition that loses a race can
+	// never leave its flows on the port of the transition that won.
+	deviceLocksMu sync.Mutex
+	deviceLocks   map[string]*deviceLock
+}
+
+// deviceLock is one device's transition lock. holders counts the callers
+// holding or waiting for it, so the entry is dropped when the last leaves.
+type deviceLock struct {
+	mu      sync.Mutex
+	holders int
 }
 
 // ipxeRun is one run of an iPXE server, from Start until it exits.
@@ -499,6 +512,8 @@ func (s *service) RemoveDevice(ctx context.Context, deviceID string) error {
 		return ErrServiceNotInitialized{}
 	}
 
+	defer s.lockDevice(deviceID)()
+
 	device, err := s.stateManager.Get(deviceID)
 	if err != nil {
 		return ErrDeviceNotFound{DeviceID: deviceID}
@@ -533,6 +548,8 @@ func (s *service) UpdateDeviceState(ctx context.Context, deviceID string, state 
 			Reason:   "invalid state",
 		}
 	}
+
+	defer s.lockDevice(deviceID)()
 
 	device, err := s.stateManager.Get(deviceID)
 	if err != nil {
@@ -579,6 +596,8 @@ func (s *service) SetDeviceEnrolled(ctx context.Context, deviceID, certSerial st
 	if !s.initialized.Load() {
 		return ErrServiceNotInitialized{}
 	}
+
+	defer s.lockDevice(deviceID)()
 
 	device, err := s.stateManager.Get(deviceID)
 	if err != nil {
@@ -635,6 +654,8 @@ func (s *service) SetDeviceInstalling(ctx context.Context, deviceID, installCert
 	if err != nil {
 		return err
 	}
+
+	defer s.lockDevice(deviceID)()
 
 	device, err := s.stateManager.Get(deviceID)
 	if err != nil {
@@ -709,6 +730,8 @@ func (s *service) CompleteInstallation(ctx context.Context, deviceID, installCer
 		return err
 	}
 
+	defer s.lockDevice(deviceID)()
+
 	device, err := s.stateManager.Get(deviceID)
 	if err != nil {
 		return ErrDeviceNotFound{DeviceID: deviceID}
@@ -732,16 +755,32 @@ func (s *service) CompleteInstallation(ctx context.Context, deviceID, installCer
 		return err
 	}
 
-	if err := s.applyVLANForState(ctx, device, target); err != nil {
-		s.logger.Warn("Failed to apply VLAN for state transition",
-			"device_id", deviceID,
-			"state", target,
-			"error", err.Error(),
-		)
-	}
-
+	// The flows follow the transition, never precede it: only the callback
+	// that wins the swap may touch the port, so a refused completion (a
+	// second callback, or one that lost to an operator quarantine) leaves the
+	// flows of the transition that won. The device lock, held since the read
+	// above, keeps every other transition of this device from running
+	// between the swap and the flow write.
 	if err := s.stateManager.TransitionIf(deviceID, target, reason, bound, nil); err != nil {
 		return err
+	}
+
+	// A failed flow write leaves the device in target with its binding
+	// released, on the flows it had while installing; the caller is told, and
+	// the operator moves it on (QuarantineDevice re-applies the quarantine
+	// flows from either target).
+	if err := s.applyVLANForState(ctx, device, target); err != nil {
+		toVLAN := s.config.ProvisioningVLAN
+		if target == StateFailed {
+			toVLAN = s.config.QuarantineVLAN
+		}
+		return ErrVLANTransitionFailed{
+			DeviceID: deviceID,
+			FromVLAN: device.CurrentVLAN,
+			ToVLAN:   toVLAN,
+			Reason:   "installation ended but its VLAN flows were not applied",
+			Cause:    err,
+		}
 	}
 
 	s.logger.Info("Device installation ended",
@@ -766,6 +805,8 @@ func (s *service) AuthorizeDevice(ctx context.Context, deviceID string, targetVL
 			Reason:   "target VLAN out of valid range",
 		}
 	}
+
+	defer s.lockDevice(deviceID)()
 
 	device, err := s.stateManager.Get(deviceID)
 	if err != nil {
@@ -840,6 +881,8 @@ func (s *service) QuarantineDevice(ctx context.Context, deviceID string, reason 
 		return ErrServiceNotInitialized{}
 	}
 
+	defer s.lockDevice(deviceID)()
+
 	device, err := s.stateManager.Get(deviceID)
 	if err != nil {
 		return ErrDeviceNotFound{DeviceID: deviceID}
@@ -900,6 +943,8 @@ func (s *service) RetryDevice(ctx context.Context, deviceID string) error {
 	if !s.initialized.Load() {
 		return ErrServiceNotInitialized{}
 	}
+
+	defer s.lockDevice(deviceID)()
 
 	device, err := s.stateManager.Get(deviceID)
 	if err != nil {
@@ -1022,5 +1067,35 @@ func (s *service) applyVLANForState(ctx context.Context, device *DeviceInfo, sta
 
 	default:
 		return nil
+	}
+}
+
+// lockDevice takes deviceID's transition lock and returns its release.
+// Every method that transitions a device or writes its VLAN flows holds it
+// from the read of the device to the last flow write, so the state a
+// transition admits and the flows it applies are never interleaved with
+// another transition of the same device. Distinct devices do not contend.
+func (s *service) lockDevice(deviceID string) func() {
+	s.deviceLocksMu.Lock()
+	if s.deviceLocks == nil {
+		s.deviceLocks = make(map[string]*deviceLock)
+	}
+	lock, ok := s.deviceLocks[deviceID]
+	if !ok {
+		lock = &deviceLock{}
+		s.deviceLocks[deviceID] = lock
+	}
+	lock.holders++
+	s.deviceLocksMu.Unlock()
+
+	lock.mu.Lock()
+	return func() {
+		lock.mu.Unlock()
+		s.deviceLocksMu.Lock()
+		lock.holders--
+		if lock.holders == 0 {
+			delete(s.deviceLocks, deviceID)
+		}
+		s.deviceLocksMu.Unlock()
 	}
 }
