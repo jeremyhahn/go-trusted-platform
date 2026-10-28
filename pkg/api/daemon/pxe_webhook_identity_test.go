@@ -394,6 +394,9 @@ func TestWebhookComplete_RefusesCallbacksAfterTheInstallationEnded(t *testing.T)
 // the body must name its device, and the certificate must be bound to that
 // device's open installation (Codex review 7971).
 func TestWebhookComplete_RefusesACallbackAfterItsCertificateIsRebound(t *testing.T) {
+	// The first device's installer keeps its key after its installation ends,
+	// so its certificate is never bound to another device: otherwise its
+	// callback naming that device's MAC would end that installation (Codex 8144).
 	ctx := context.Background()
 	f := newWebhookFixture(t)
 	fingerprint := pxe.CertificateSHA256(f.node.Raw)
@@ -410,39 +413,25 @@ func TestWebhookComplete_RefusesACallbackAfterItsCertificateIsRebound(t *testing
 		State:                    platformv1.ProvisioningState_PROVISIONING_STATE_INSTALLING,
 		InstallCertificateSha256: fingerprint,
 	})
-	require.NoError(t, err, "a released certificate may be bound to another device")
+	assert.Equal(t, codes.FailedPrecondition, status.Code(err))
+	assert.Equal(t, pxe.ErrInstallCertificateReused{DeviceID: other.ID, CertificateSHA256: fingerprint}.Error(),
+		status.Convert(err).Message())
 
-	resends := []struct {
-		name string
-		mac  string
-		code codes.Code
-		want error
-	}{
-		{"without a MAC", "", codes.InvalidArgument, ErrPXEWebhookMACRequired{CertificateSHA256: fingerprint}},
-		{"with the first device's MAC", webhookNodeMAC, codes.PermissionDenied,
-			ErrPXEWebhookIdentityMismatch{CertificateSHA256: fingerprint, MACAddress: webhookNodeMAC}},
-	}
-	for _, resend := range resends {
+	for _, mac := range []string{otherMAC, webhookNodeMAC} {
 		for _, success := range []bool{false, true} {
-			t.Run(fmt.Sprintf("%s/success=%t", resend.name, success), func(t *testing.T) {
+			t.Run(fmt.Sprintf("mac=%s/success=%t", mac, success), func(t *testing.T) {
 				_, err := f.svc.WebhookComplete(grpcContext(verifiedState(f.node)),
-					&platformv1.PXEWebhookCompleteRequest{MacAddress: resend.mac, Success: success})
+					&platformv1.PXEWebhookCompleteRequest{MacAddress: mac, Success: success})
 
-				assert.Equal(t, resend.code, status.Code(err))
-				assert.Equal(t, resend.want.Error(), status.Convert(err).Message())
+				assert.Equal(t, codes.PermissionDenied, status.Code(err))
 				device, err := f.backend.GetDevice(ctx, other.ID)
 				require.NoError(t, err)
-				assert.Equal(t, pxe.StateInstalling, device.State)
-				assert.Equal(t, fingerprint, device.InstallCertificateSHA256)
+				assert.Equal(t, pxe.StateBooting, device.State)
+				assert.Empty(t, device.InstallCertificateSHA256)
 				assert.Equal(t, pxe.StateInstallComplete, f.state(t, webhookNodeMAC))
 			})
 		}
 	}
-
-	_, err = f.svc.WebhookComplete(grpcContext(verifiedState(f.node)),
-		&platformv1.PXEWebhookCompleteRequest{MacAddress: otherMAC, Success: true})
-	require.NoError(t, err, "the second device's own callback still ends its installation")
-	assert.Equal(t, pxe.StateInstallComplete, f.state(t, otherMAC))
 }
 
 // A retried installation needs a fresh installer certificate: the first

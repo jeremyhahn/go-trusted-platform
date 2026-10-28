@@ -62,6 +62,16 @@ type StateManager struct {
 	byInstallCert map[string]string
 	installCertMu sync.Mutex
 
+	// retiredInstallCerts holds every installer certificate fingerprint an
+	// ended installation on any device was bound to, guarded by
+	// installCertMu. A retired fingerprint is refused for every later
+	// binding on every device (ErrInstallCertificateReused): the installer
+	// that held it keeps its private key, so rebinding it elsewhere would let
+	// that installer end another device's installation (Codex review 8144).
+	// Register seeds it from a device's UsedInstallCertificatesSHA256, so a
+	// state manager rebuilt from persisted devices refuses them too.
+	retiredInstallCerts map[string]struct{}
+
 	// now is the time source for every timestamp the state machine stamps.
 	// time.Now in production; tests inject a clock they step by hand (#284).
 	now func() time.Time
@@ -76,9 +86,10 @@ func NewStateManager() *StateManager {
 // the time from now, so tests can drive the clock.
 func newStateManager(now func() time.Time) *StateManager {
 	return &StateManager{
-		handlers:      make([]EventHandler, 0),
-		byInstallCert: make(map[string]string),
-		now:           now,
+		handlers:            make([]EventHandler, 0),
+		byInstallCert:       make(map[string]string),
+		retiredInstallCerts: make(map[string]struct{}),
+		now:                 now,
 	}
 }
 
@@ -139,13 +150,19 @@ func (sm *StateManager) Register(device *DeviceInfo) error {
 	}
 
 	// A device registered with an installer binding claims it the way a
-	// transition into installing does, so the fingerprint stays unique.
+	// transition into installing does, so the fingerprint stays unique, and
+	// its ended installations' fingerprints join the retired record.
 	installCert := device.InstallCertificateSHA256
-	if installCert != "" {
+	if installCert != "" || len(device.UsedInstallCertificatesSHA256) > 0 {
 		sm.installCertMu.Lock()
 		defer sm.installCertMu.Unlock()
+	}
+	if installCert != "" {
 		if owner, claimed := sm.byInstallCert[installCert]; claimed {
 			return ErrInstallCertificateInUse{DeviceID: device.ID, OwnerDeviceID: owner, CertificateSHA256: installCert}
+		}
+		if _, retired := sm.retiredInstallCerts[installCert]; retired {
+			return ErrInstallCertificateReused{DeviceID: device.ID, CertificateSHA256: installCert}
 		}
 	}
 
@@ -173,6 +190,9 @@ func (sm *StateManager) Register(device *DeviceInfo) error {
 	if installCert != "" {
 		sm.byInstallCert[installCert] = device.ID
 	}
+	for _, used := range device.UsedInstallCertificatesSHA256 {
+		sm.retiredInstallCerts[used] = struct{}{}
+	}
 	return nil
 }
 
@@ -196,6 +216,9 @@ func (sm *StateManager) Unregister(deviceID string) error {
 	entry := entryVal.(*deviceEntry)
 	sm.byMAC.Delete(entry.device.MACAddress.String())
 	sm.releaseInstallCert(entry.device.InstallCertificateSHA256, deviceID)
+	if installCert := entry.device.InstallCertificateSHA256; installCert != "" {
+		sm.retiredInstallCerts[installCert] = struct{}{}
+	}
 
 	return nil
 }
@@ -426,10 +449,12 @@ func (sm *StateManager) UpdateDevice(deviceID string, fn func(*DeviceInfo) error
 // swapEntry replaces current with next in one compare-and-swap. A swap that
 // leaves InstallCertificateSHA256 unchanged stays lock-free. A swap that
 // changes it takes installCertMu, refuses a fingerprint another device holds
-// (ErrInstallCertificateInUse), and claims the new fingerprint and releases
-// the old one in the same critical section as the swap, so of two concurrent
-// bindings of one fingerprint to different devices exactly one succeeds. It
-// reports false when the entry changed underneath, and the caller retries.
+// (ErrInstallCertificateInUse) or any device's ended installation was bound to
+// (ErrInstallCertificateReused), and claims the new fingerprint and releases
+// and retires the old one in the same critical section as the swap, so of two
+// concurrent bindings of one fingerprint to different devices exactly one
+// succeeds, and no fingerprint is bound twice. It reports false when the entry
+// changed underneath, and the caller retries.
 func (sm *StateManager) swapEntry(deviceID string, current, next *deviceEntry) (bool, error) {
 	previous := current.device.InstallCertificateSHA256
 	installCert := next.device.InstallCertificateSHA256
@@ -444,11 +469,17 @@ func (sm *StateManager) swapEntry(deviceID string, current, next *deviceEntry) (
 		if owner, claimed := sm.byInstallCert[installCert]; claimed && owner != deviceID {
 			return false, ErrInstallCertificateInUse{DeviceID: deviceID, OwnerDeviceID: owner, CertificateSHA256: installCert}
 		}
+		if _, retired := sm.retiredInstallCerts[installCert]; retired {
+			return false, ErrInstallCertificateReused{DeviceID: deviceID, CertificateSHA256: installCert}
+		}
 	}
 	if !sm.devices.CompareAndSwap(deviceID, current, next) {
 		return false, nil
 	}
 	sm.releaseInstallCert(previous, deviceID)
+	if previous != "" {
+		sm.retiredInstallCerts[previous] = struct{}{}
+	}
 	if installCert != "" {
 		sm.byInstallCert[installCert] = deviceID
 	}
@@ -584,12 +615,6 @@ func retireInstallCert(device *DeviceInfo) {
 		used = used[len(used)-MaxUsedInstallCertificates:]
 	}
 	device.UsedInstallCertificatesSHA256 = used
-}
-
-// installCertUsed reports whether device's earlier installations were bound
-// to fingerprint.
-func installCertUsed(device *DeviceInfo, fingerprint string) bool {
-	return slices.Contains(device.UsedInstallCertificatesSHA256, fingerprint)
 }
 
 func copyDeviceInfo(src *DeviceInfo) *DeviceInfo {

@@ -315,31 +315,33 @@ review 7988). If the winner's flow write fails, the webhook answers
 won, its binding released, on the provisioning flows it had while installing,
 and the operator quarantines it, which re-applies the quarantine flows.
 
-**A callback names its device, and a released certificate cannot end another
-device's installation.** Leaving `installing` releases the fingerprint, and
-the operator may then bind it to a second device. The fingerprint alone would
-resolve a resent callback for the first installation to the second device, so
-the body's MAC is required, not optional: a resent callback with no MAC is 400,
-and one carrying the first device's MAC is 403 because the certificate now
-belongs to another device (`pkg/api/daemon/pxe_grpc_service.go:572`; Codex
-review 7971). The callback is thereby bound to one device and to the
-installation that holds the certificate's binding.
+**A callback names its device.** The fingerprint alone would resolve a
+callback to whichever device holds the certificate's binding, so the body's MAC
+is required, not optional: a callback with no MAC is 400, and one whose MAC is
+not the device holding the certificate's binding is 403
+(`pkg/api/daemon/pxe_grpc_service.go:572`; Codex review 7971). The callback is
+thereby bound to one device and to the installation that holds the
+certificate's binding.
 
-**A retried installation needs a new installer certificate.** The same device,
-retried (`RetryDevice`, then `booting`), would otherwise be bound to the same
-certificate again, and a late callback from the failed attempt — same
-certificate, same MAC — would end the new one. So the swap that takes a device
-out of `installing` also records the attempt's fingerprint in the device's
-`used_install_certificates_sha256` (`pkg/compute/pxe/state.go:576`), and
-binding a recorded fingerprint is refused with `ErrInstallCertificateReused`,
-`FailedPrecondition` on gRPC (`pkg/compute/pxe/service.go:668`,
-`pkg/api/daemon/pxe_grpc_service.go:800`); the device stays `booting`. With a
-fresh certificate bound, the old attempt's callback names a certificate no
-device carries and is 403. The record is per device (a released certificate
-may still be bound to another device, above) and keeps the most recent
-`MaxUsedInstallCertificates` (32) fingerprints, dropping the oldest; retries
-are capped at `MaxRetries` already, so only an operator cycling a device
-through quarantine more than 32 times reaches the bound (Codex review 7979).
+**Every installation needs a new installer certificate, across devices.** An
+installer keeps its certificate's private key after its installation ends. Were
+that certificate bound again — to the same device, retried (`RetryDevice`, then
+`booting`), or to another device — the old installer could send a callback
+naming the newly bound device's MAC and end an installation it took no part in.
+So the swap that takes a device out of `installing` (or a removal of an
+installing device) retires the fingerprint in one record that covers every
+device (`retiredInstallCerts`, `pkg/compute/pxe/state.go`), and the swap that
+binds a fingerprint checks that record under the same lock as its claim, so the
+check and the claim are atomic. Binding a retired fingerprint, on any device, is
+refused with `ErrInstallCertificateReused`, `FailedPrecondition` on gRPC
+(`pkg/compute/pxe/state.go` `swapEntry`,
+`pkg/api/daemon/pxe_grpc_service.go:800`); the device stays `booting`. A
+callback under a retired certificate names a certificate no device carries and
+is 403, whatever MAC it carries (Codex reviews 7979, 8144). The swap also
+records the fingerprint in the device's `used_install_certificates_sha256`,
+which keeps the most recent `MaxUsedInstallCertificates` (32) per device;
+`StateManager.Register` seeds the retired record from that history, so a state
+manager rebuilt from persisted devices refuses those fingerprints too.
 
 **The `REST base` column is a locator, not the contract.** It gives the prefix a
 route hangs under; it does not give the route. The normative per-route path

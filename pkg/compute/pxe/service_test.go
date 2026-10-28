@@ -632,9 +632,10 @@ func TestService_SetDeviceInstalling_RefusesACertificateAnotherDeviceHolds(t *te
 	require.Len(t, found, 1)
 	assert.Equal(t, first.ID, found[0].ID)
 
-	// Ending the first installation frees the certificate for the second.
+	// Ending the first installation retires the certificate rather than
+	// freeing it for the second (TestService_EndedInstallCertificateRefusedOnAnotherDevice).
 	require.NoError(t, svc.CompleteInstallation(ctx, first.ID, fingerprint, true, "installed"))
-	require.NoError(t, svc.SetDeviceInstalling(ctx, second.ID, fingerprint, "installing"))
+	require.ErrorAs(t, svc.SetDeviceInstalling(ctx, second.ID, fingerprint, "installing"), new(ErrInstallCertificateReused))
 }
 
 func TestService_SetDeviceInstalling_Refusals(t *testing.T) {
@@ -856,6 +857,36 @@ func TestService_RetriedInstallationNeedsAFreshCertificate(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, StateInstallComplete, retrieved.State)
 	assert.Equal(t, []string{first, second}, retrieved.UsedInstallCertificatesSHA256)
+}
+
+// An installer keeps its certificate's private key after its installation
+// ends, so that certificate is refused for every later installation on any
+// device: otherwise device A's installer could end device B's (Codex 8144).
+func TestService_EndedInstallCertificateRefusedOnAnotherDevice(t *testing.T) {
+	for _, success := range []bool{true, false} {
+		t.Run(fmt.Sprintf("success=%t", success), func(t *testing.T) {
+			svc, _ := initializeTestService(t)
+			ctx := context.Background()
+			certA := CertificateSHA256([]byte("device A installer certificate"))
+			deviceA := installingTestDevice(t, svc, certA)
+			require.NoError(t, svc.CompleteInstallation(ctx, deviceA.ID, certA, success, "device A done"))
+
+			deviceB, err := svc.RegisterDevice(ctx, "00:11:22:33:44:66", "port-2")
+			require.NoError(t, err)
+			require.NoError(t, svc.UpdateDeviceState(ctx, deviceB.ID, StateBooting, "booting"))
+
+			var reused ErrInstallCertificateReused
+			require.ErrorAs(t, svc.SetDeviceInstalling(ctx, deviceB.ID, certA, "installing"), &reused)
+			assert.Equal(t, ErrInstallCertificateReused{DeviceID: deviceB.ID, CertificateSHA256: certA}, reused)
+			retrieved, err := svc.GetDevice(ctx, deviceB.ID)
+			require.NoError(t, err)
+			assert.Equal(t, StateBooting, retrieved.State)
+			assert.Empty(t, retrieved.InstallCertificateSHA256)
+			found, err := svc.ListDevices(ctx, &DeviceFilter{InstallCertificateSHA256: certA})
+			require.NoError(t, err)
+			assert.Empty(t, found)
+		})
+	}
 }
 
 func TestCertificateSHA256_IsTheLowercaseDigestOfTheDER(t *testing.T) {

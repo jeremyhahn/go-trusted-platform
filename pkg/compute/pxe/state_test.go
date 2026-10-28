@@ -709,9 +709,9 @@ func TestRetireInstallCert_KeepsTheMostRecentFingerprints(t *testing.T) {
 
 	assert.Empty(t, device.InstallCertificateSHA256)
 	require.Len(t, device.UsedInstallCertificatesSHA256, MaxUsedInstallCertificates)
-	assert.False(t, installCertUsed(device, "cert-0"), "the oldest fingerprint is dropped past the bound")
-	assert.True(t, installCertUsed(device, "cert-1"))
-	assert.True(t, installCertUsed(device, fmt.Sprintf("cert-%d", MaxUsedInstallCertificates)))
+	assert.NotContains(t, device.UsedInstallCertificatesSHA256, "cert-0", "the oldest fingerprint is dropped past the bound")
+	assert.Equal(t, "cert-1", device.UsedInstallCertificatesSHA256[0])
+	assert.Equal(t, fmt.Sprintf("cert-%d", MaxUsedInstallCertificates), device.UsedInstallCertificatesSHA256[MaxUsedInstallCertificates-1])
 }
 
 func TestRetireInstallCert_UnboundDeviceRecordsNothing(t *testing.T) {
@@ -719,7 +719,6 @@ func TestRetireInstallCert_UnboundDeviceRecordsNothing(t *testing.T) {
 	retireInstallCert(device)
 
 	assert.Empty(t, device.UsedInstallCertificatesSHA256)
-	assert.False(t, installCertUsed(device, ""))
 }
 
 func TestCopyDeviceInfo_UsedInstallCertificatesAreNotShared(t *testing.T) {
@@ -812,7 +811,20 @@ func TestStateManager_InstallCertificate_HeldByOneDevice(t *testing.T) {
 	})
 }
 
-func TestStateManager_InstallCertificate_Released(t *testing.T) {
+func TestStateManager_InstallCertificate_RetiredAcrossDevices(t *testing.T) {
+	// An installer keeps its certificate's private key after its installation
+	// ends, so the fingerprint is never bound again, on any device (Codex 8144).
+	assertRefused := func(t *testing.T, sm *StateManager) {
+		t.Helper()
+		var reused ErrInstallCertificateReused
+		require.ErrorAs(t, bindInstalling(sm, "device-b", "bound"), &reused)
+		assert.Equal(t, ErrInstallCertificateReused{DeviceID: "device-b", CertificateSHA256: "bound"}, reused)
+		retrieved, err := sm.Get("device-b")
+		require.NoError(t, err)
+		assert.Equal(t, StateBooting, retrieved.State)
+		assert.Empty(t, retrieved.InstallCertificateSHA256)
+	}
+
 	t.Run("when the installation ends", func(t *testing.T) {
 		sm := NewStateManager()
 		registerBooting(t, sm, "device-a", 1)
@@ -820,7 +832,7 @@ func TestStateManager_InstallCertificate_Released(t *testing.T) {
 		require.NoError(t, bindInstalling(sm, "device-a", "bound"))
 		require.NoError(t, sm.Transition("device-a", StateFailed, "installation failed"))
 
-		require.NoError(t, bindInstalling(sm, "device-b", "bound"))
+		assertRefused(t, sm)
 	})
 
 	t.Run("when the device is removed", func(t *testing.T) {
@@ -830,7 +842,22 @@ func TestStateManager_InstallCertificate_Released(t *testing.T) {
 		require.NoError(t, bindInstalling(sm, "device-a", "bound"))
 		require.NoError(t, sm.Unregister("device-a"))
 
-		require.NoError(t, bindInstalling(sm, "device-b", "bound"))
+		assertRefused(t, sm)
+	})
+
+	t.Run("when a registered device's history holds it", func(t *testing.T) {
+		sm := NewStateManager()
+		mac := net.HardwareAddr{0x00, 0x11, 0x22, 0x33, 0x44, 0x01}
+		require.NoError(t, sm.Register(&DeviceInfo{ID: "device-a", MACAddress: mac, State: StateInstallComplete, UsedInstallCertificatesSHA256: []string{"bound"}}))
+		registerBooting(t, sm, "device-b", 2)
+
+		assertRefused(t, sm)
+
+		var reused ErrInstallCertificateReused
+		mac = net.HardwareAddr{0x00, 0x11, 0x22, 0x33, 0x44, 0x03}
+		require.ErrorAs(t, sm.Register(&DeviceInfo{ID: "device-c", MACAddress: mac, State: StateInstalling, InstallCertificateSHA256: "bound"}), &reused)
+		_, err := sm.Get("device-c")
+		require.ErrorAs(t, err, new(ErrDeviceNotFound))
 	})
 
 	t.Run("not by a refused claim", func(t *testing.T) {

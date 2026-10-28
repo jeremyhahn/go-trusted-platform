@@ -683,17 +683,13 @@ func (s *service) SetDeviceInstalling(ctx context.Context, deviceID, installCert
 	// the race to installing must not rebind the webhook's identity. The swap
 	// also claims the fingerprint across devices (StateManager.swapEntry), so
 	// a certificate another device is installing under is refused. A
-	// certificate one of this device's ended installations was bound to is
-	// refused too (retireInstallCert): every attempt needs a fresh one, so a
-	// late callback from an earlier attempt cannot match this binding.
-	fresh := func(d *DeviceInfo) error {
-		if installCertUsed(d, fingerprint) {
-			return ErrInstallCertificateReused{DeviceID: deviceID, CertificateSHA256: fingerprint}
-		}
-		return nil
-	}
+	// certificate any ended installation was bound to, on this device or
+	// across devices, is refused too (StateManager.retiredInstallCerts): its
+	// installer keeps the private key, so every attempt needs a fresh
+	// certificate, and neither a late callback from an earlier attempt nor
+	// another device's installer can end this installation.
 	bind := func(d *DeviceInfo) { d.InstallCertificateSHA256 = fingerprint }
-	if err := s.stateManager.TransitionIf(deviceID, StateInstalling, reason, fresh, bind); err != nil {
+	if err := s.stateManager.TransitionIf(deviceID, StateInstalling, reason, nil, bind); err != nil {
 		var inUse ErrInstallCertificateInUse
 		if errors.As(err, &inUse) {
 			return inUse

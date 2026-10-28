@@ -160,17 +160,18 @@ func (e ErrInstallationNotBound) Error() string {
 }
 
 // ErrInstallCertificateReused is returned when an installation is bound to an
-// installer certificate one of the device's earlier installations was bound
-// to. Every attempt needs a fresh certificate: a late callback from an earlier
-// attempt carries the same certificate and MAC, so a reused one could end the
-// new installation.
+// installer certificate an earlier installation, on this device or any other,
+// was bound to. Every attempt needs a fresh certificate: the installer that
+// held it keeps its private key, so a late callback from an earlier attempt,
+// or one naming another device's MAC, could otherwise end the new
+// installation.
 type ErrInstallCertificateReused struct {
 	DeviceID          string
 	CertificateSHA256 string
 }
 
 func (e ErrInstallCertificateReused) Error() string {
-	return fmt.Sprintf("pxe: device %s already installed under installer certificate %s; a retried installation needs a new certificate",
+	return fmt.Sprintf("pxe: device %s: installer certificate %s was already bound to an installation; every installation needs a new certificate",
 		e.DeviceID, e.CertificateSHA256)
 }
 
