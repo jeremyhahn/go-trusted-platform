@@ -33,6 +33,7 @@ import (
 	xkmsbackend "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/backend"
 	xkmsca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/ca"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/mcp"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/ca/issuance"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
@@ -767,6 +768,33 @@ func TestMCPServiceProvider_CARevoke_SuccessCoverage(t *testing.T) {
 	// Verify the certificate was revoked in the mock
 	if len(mockCA.revokedCerts) != 1 {
 		t.Errorf("expected 1 revoked cert, got %d", len(mockCA.revokedCerts))
+	}
+}
+
+// TestMCPServiceProvider_CARevoke_RejectsUndefinedReason proves a reason that
+// is not an RFC 5280 §5.3.1 CRLReason code is refused before the CA.
+func TestMCPServiceProvider_CARevoke_RejectsUndefinedReason(t *testing.T) {
+	for _, reason := range []int{7, -1, 99} {
+		mockCA := newMockCAForMCPCoverage()
+		cert := generateTestCertificateForMCPCoverage("revoke.example.com", false, mockCA.intermCert, mockCA.privateKey)
+		mockCA.certStore.StoreCertificate(cert)
+		provider := NewMCPServiceProvider(&MCPServiceProviderConfig{
+			CAService: createCAGRPCServiceForMCPCoverage(mockCA),
+			Logger:    slog.Default(),
+		})
+
+		_, err := provider.CARevoke(context.Background(), hex.EncodeToString(cert.SerialNumber.Bytes()), reason, false)
+
+		var unknown *issuance.UnknownRevocationReasonError
+		if !errors.As(err, &unknown) {
+			t.Fatalf("reason %d: %v, want *issuance.UnknownRevocationReasonError", reason, err)
+		}
+		if unknown.Code != reason {
+			t.Errorf("reason %d: error carries code %d", reason, unknown.Code)
+		}
+		if len(mockCA.revokedCerts) != 0 {
+			t.Errorf("reason %d reached the CA: %d revoked certs", reason, len(mockCA.revokedCerts))
+		}
 	}
 }
 

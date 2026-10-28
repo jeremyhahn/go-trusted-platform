@@ -1305,6 +1305,41 @@ func TestRevokeCertificate_Error(t *testing.T) {
 	})
 }
 
+// TestRevokeCertificate_RejectsUndefinedReason proves a numeric reason that is
+// not an RFC 5280 §5.3.1 CRLReason code is refused with 400 before the CA.
+func TestRevokeCertificate_RejectsUndefinedReason(t *testing.T) {
+	for _, reason := range []string{"7", "-1", "99"} {
+		t.Run(reason, func(t *testing.T) {
+			testCert := createTestCertificate("revoke.example.com")
+			mockCA := &mockCertificateAuthority{
+				initialized: true,
+				certStore: &mockCertStore{
+					getCertificateFn: func(string) (*x509.Certificate, error) {
+						return testCert, nil
+					},
+				},
+				revokeFn: func(context.Context, *x509.Certificate, xkmsca.RevokeOptions) error {
+					t.Errorf("reason %s reached the CA", reason)
+					return nil
+				},
+			}
+			handlers, writer := newTestHandlers(mockCA)
+
+			body := []byte(`{"reason":` + reason + `}`)
+			req := httptest.NewRequest(http.MethodDelete, "/api/v1/ca/certificates/abc123", bytes.NewReader(body))
+			req = mux.SetURLVars(req, map[string]string{"serial": "abc123"})
+			req.Header.Set("Content-Type", "application/json")
+			rec := httptest.NewRecorder()
+
+			handlers.RevokeCertificate(rec, req)
+
+			assert.Equal(t, http.StatusBadRequest, writer.lastStatus)
+			require.NotNil(t, writer.lastError)
+			assert.Contains(t, writer.lastError.Error(), "unknown revocation reason "+reason)
+		})
+	}
+}
+
 // =============================================================================
 // GetBundle Handler Tests
 // =============================================================================

@@ -194,19 +194,6 @@ func TestErrInvalidValidityPeriod(t *testing.T) {
 	})
 }
 
-func TestErrInvalidRevocationReason(t *testing.T) {
-	t.Run("with invalid reason code", func(t *testing.T) {
-		err := ErrInvalidRevocationReason{Reason: 99}
-		assert.Contains(t, err.Error(), "99")
-		assert.Contains(t, err.Error(), "invalid revocation reason code")
-	})
-
-	t.Run("with negative reason code", func(t *testing.T) {
-		err := ErrInvalidRevocationReason{Reason: -1}
-		assert.Contains(t, err.Error(), "-1")
-	})
-}
-
 func TestErrBundleNotFound(t *testing.T) {
 	t.Run("returns expected error message", func(t *testing.T) {
 		err := ErrBundleNotFound{}
@@ -305,7 +292,6 @@ func TestAllErrorsImplementErrorInterface(t *testing.T) {
 		ErrMissingCommonName{},
 		ErrInvalidKeyAlgorithm{Algorithm: "test"},
 		ErrInvalidValidityPeriod{Days: 1},
-		ErrInvalidRevocationReason{Reason: 1},
 		ErrBundleNotFound{},
 		ErrCRLNotFound{},
 		ErrInvalidStoreType{StoreType: "test"},
@@ -360,13 +346,6 @@ func TestErrorTypeAssertions(t *testing.T) {
 		assert.True(t, ok)
 		assert.Equal(t, 365, e.Days)
 		assert.Equal(t, "too long", e.Reason)
-	})
-
-	t.Run("ErrInvalidRevocationReason type assertion", func(t *testing.T) {
-		var err error = ErrInvalidRevocationReason{Reason: 5}
-		e, ok := err.(ErrInvalidRevocationReason)
-		assert.True(t, ok)
-		assert.Equal(t, 5, e.Reason)
 	})
 }
 

@@ -132,15 +132,6 @@ func (e ErrInvalidValidityPeriod) Error() string {
 	return fmt.Sprintf("invalid validity period: %d days", e.Days)
 }
 
-// ErrInvalidRevocationReason is returned when an invalid revocation reason is specified
-type ErrInvalidRevocationReason struct {
-	Reason int
-}
-
-func (e ErrInvalidRevocationReason) Error() string {
-	return fmt.Sprintf("invalid revocation reason code: %d", e.Reason)
-}
-
 // ErrBundleNotFound is returned when the CA bundle cannot be found
 type ErrBundleNotFound struct{}
 

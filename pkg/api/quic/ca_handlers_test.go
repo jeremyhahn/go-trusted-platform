@@ -27,6 +27,7 @@ import (
 	"encoding/hex"
 	"encoding/pem"
 	"errors"
+	"fmt"
 	"io"
 	"math/big"
 	"net"
@@ -828,6 +829,34 @@ func TestCAHandler_HandleRevoke_Success(t *testing.T) {
 	assert.Equal(t, cert.SerialNumber, ca.revokedCerts[0].SerialNumber)
 	require.Len(t, ca.revokedOpts, 1)
 	assert.Equal(t, 1, ca.revokedOpts[0].Reason, "the CA must record the caller's reason")
+}
+
+// TestCAHandler_HandleRevoke_RejectsUndefinedReason proves a reason that is not
+// an RFC 5280 §5.3.1 CRLReason code is refused before the CA records anything.
+func TestCAHandler_HandleRevoke_RejectsUndefinedReason(t *testing.T) {
+	for _, reason := range []int32{7, -1, 99} {
+		t.Run(fmt.Sprint(reason), func(t *testing.T) {
+			ca := newMockCA()
+			handler := NewCAHandler(logging.DefaultLogger(), ca, nil)
+			cert := generateTestCertificate("test.example.com", false, ca.intermCert, ca.privateKey)
+			ca.certStore.StoreCertificate(cert)
+
+			payload, err := quicwire.EncodePayload(&CARevokeRequest{
+				Serial: cert.SerialNumber.String(),
+				Reason: reason,
+			})
+			require.NoError(t, err)
+
+			resp := handler.HandleRequest(context.Background(), &quicwire.Request{
+				Opcode:  quicwire.OpCARevoke,
+				Payload: payload,
+			})
+
+			assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
+			assert.Empty(t, ca.revokedCerts, "an undefined reason must not reach the CA")
+			assert.Empty(t, ca.revokedOpts, "an undefined reason must not reach the CA")
+		})
+	}
 }
 
 func TestCAHandler_HandleRevoke_WithDeleteKeys(t *testing.T) {
