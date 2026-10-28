@@ -72,10 +72,7 @@ import type { KeyAlgorithmProtoName } from '../types/ca.js';
  */
 type WireKeyAttributes = Omit<KeyAttributes, 'algorithm'> & { algorithm: KeyAlgorithmProtoName };
 
-function toWireKeyAttributes(attributes: KeyAttributes | undefined): WireKeyAttributes | undefined {
-  if (attributes === undefined) {
-    return undefined;
-  }
+function toWireKeyAttributes(attributes: KeyAttributes): WireKeyAttributes {
   return { ...attributes, algorithm: KEY_ALGORITHM_PROTO_NAMES[attributes.algorithm] };
 }
 
