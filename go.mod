@@ -76,7 +76,7 @@ require (
 	github.com/strongswan/govici v0.8.2
 	github.com/vishvananda/netlink v1.3.1
 	github.com/vishvananda/netns v0.0.5
-	github.com/wailsapp/wails/v2 v2.12.0 // held: the latest version is not in the module cache and cannot be fetched offline in #933
+	github.com/wailsapp/wails/v2 v2.14.0 // held: v2.14.0 clears CVE-2026-34157 (fixed in v2.13.0) and is the newest release in the offline module cache; later releases cannot be fetched offline
 	github.com/yosida95/uritemplate/v3 v3.0.2
 	golang.org/x/crypto v0.57.0 // held: the latest version is not in the module cache and cannot be fetched offline in #933
 	golang.org/x/net v0.60.0 // held: the latest version is not in the module cache and cannot be fetched offline in #933
