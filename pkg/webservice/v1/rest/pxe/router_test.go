@@ -166,6 +166,7 @@ var operatorScopeProbes = []struct{ method, path, scope string }{
 	{http.MethodDelete, "/api/v1/pxe/devices/d1", "pxe:delete"},
 	{http.MethodPut, "/api/v1/pxe/devices/d1/state", "pxe:write"},
 	{http.MethodPost, "/api/v1/pxe/devices/d1/enrolled", "pxe:write"},
+	{http.MethodPost, "/api/v1/pxe/devices/d1/certificate", "pxe:write"},
 	{http.MethodPost, "/api/v1/pxe/devices/d1/authorize", "pxe:write"},
 	{http.MethodPost, "/api/v1/pxe/devices/d1/quarantine", "pxe:write"},
 	{http.MethodPost, "/api/v1/pxe/devices/d1/retry", "pxe:write"},

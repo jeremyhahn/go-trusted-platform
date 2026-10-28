@@ -332,8 +332,11 @@ func newRealPXEService(t *testing.T) pxe.Service {
 	cfg.BridgeName = "br-test"
 	// Initialize builds the iPXE server without opening listeners. The
 	// server config still validates, so it gets hermetic directories, offline
-	// firmware and one boot entry; nothing here touches the network.
+	// firmware and one boot entry; nothing here touches the network. A
+	// loopback BindHost is the server IP (ipxe.ServerConfig.GetServerIP), so
+	// Initialize never auto-detects one from the host's interfaces.
 	ipxeCfg := ipxe.DefaultServerConfig()
+	ipxeCfg.BindHost = "127.0.0.1"
 	ipxeCfg.LocalFilesDir = t.TempDir()
 	ipxeCfg.InstallsDir = t.TempDir()
 	ipxeCfg.FirmwareDir = t.TempDir()
