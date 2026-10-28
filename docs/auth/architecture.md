@@ -1117,7 +1117,10 @@ certificate the installer will present when the device enters `installing`
 node presents it over mTLS: the handler takes the leaf of the **verified**
 client chain (never the unverified peer certificates), finds the one
 registered device bound to that leaf's SHA-256, and refuses a request body whose MAC is not that device's. No verified certificate
-is 401; a certificate no device carries, or a mismatched MAC, is 403. The
+is 401; a certificate no device carries, or a mismatched MAC, is 403; a body
+with no MAC is 400, so a callback resent after the certificate was bound to
+another device cannot end that device's installation
+(`pkg/api/daemon/pxe_grpc_service.go:572`). The
 fingerprint, not the serial, is the key: a serial is unique only per issuer,
 and the listener trusts more than one CA, so two issuers can sign the same
 serial. Unix, MCP stdio and the embedded transport carry no peer certificate

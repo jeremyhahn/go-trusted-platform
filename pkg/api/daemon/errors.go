@@ -517,6 +517,16 @@ func (e ErrPXEWebhookIdentityMismatch) Error() string {
 		" is not the device of certificate sha256 " + e.CertificateSHA256
 }
 
+// ErrPXEWebhookMACRequired is returned when the webhook body names no MAC
+// address: the callback must name the device whose installation it ends.
+type ErrPXEWebhookMACRequired struct {
+	CertificateSHA256 string
+}
+
+func (e ErrPXEWebhookMACRequired) Error() string {
+	return "pxe webhook body names no MAC address for certificate sha256 " + e.CertificateSHA256
+}
+
 // ErrPXEInstallCertificateState is returned when UpdateState carries an
 // installer certificate fingerprint with a target state other than
 // installing: the binding is made only as the install begins.

@@ -569,8 +569,12 @@ func (s *PXEGRPCService) webhookDevice(ctx context.Context, bodyMAC string) (*px
 	}
 	device := devices[0]
 
+	// The body must name its device. A fingerprint may be bound again, to
+	// another device, once an installation ends, so a callback that named no
+	// device would complete whichever installation holds the certificate now.
 	if bodyMAC == "" {
-		return device, fingerprint, nil
+		return nil, "", status.Error(codes.InvalidArgument,
+			ErrPXEWebhookMACRequired{CertificateSHA256: fingerprint}.Error())
 	}
 	mac, err := net.ParseMAC(bodyMAC)
 	if err != nil {

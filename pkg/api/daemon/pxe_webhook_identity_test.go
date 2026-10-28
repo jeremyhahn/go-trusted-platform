@@ -279,6 +279,10 @@ func TestWebhookComplete_RefusesWithoutTheNodesVerifiedIdentity(t *testing.T) {
 			state: func(f *webhookFixture) *tls.ConnectionState { return verifiedState(f.node) },
 			mac:   webhookOtherMAC, want: codes.PermissionDenied,
 		},
+		"no MAC in body": {
+			state: func(f *webhookFixture) *tls.ConnectionState { return verifiedState(f.node) },
+			mac:   "", want: codes.InvalidArgument,
+		},
 	}
 	for transport, call := range webhookTransports() {
 		for name, tc := range cases {
@@ -305,7 +309,6 @@ func TestWebhookComplete_CompletesTheCertificatesNode(t *testing.T) {
 		want    pxe.ProvisioningState
 	}{
 		"matching MAC":     {mac: webhookNodeMAC, success: true, want: pxe.StateInstallComplete},
-		"no MAC in body":   {mac: "", success: true, want: pxe.StateInstallComplete},
 		"reported failure": {mac: webhookNodeMAC, success: false, want: pxe.StateFailed},
 	}
 	for transport, call := range webhookTransports() {
@@ -384,6 +387,62 @@ func TestWebhookComplete_RefusesCallbacksAfterTheInstallationEnded(t *testing.T)
 			})
 		}
 	}
+}
+
+// A certificate released by one installation may be bound to another device.
+// A callback resent for the first installation must not end the second one:
+// the body must name its device, and the certificate must be bound to that
+// device's open installation (Codex review 7971).
+func TestWebhookComplete_RefusesACallbackAfterItsCertificateIsRebound(t *testing.T) {
+	ctx := context.Background()
+	f := newWebhookFixture(t)
+	fingerprint := pxe.CertificateSHA256(f.node.Raw)
+	_, err := f.svc.WebhookComplete(grpcContext(verifiedState(f.node)),
+		&platformv1.PXEWebhookCompleteRequest{MacAddress: webhookNodeMAC, Success: true})
+	require.NoError(t, err)
+
+	const otherMAC = "00:11:22:33:44:c5"
+	other, err := f.backend.RegisterDevice(ctx, otherMAC, "port-"+otherMAC)
+	require.NoError(t, err)
+	require.NoError(t, f.backend.UpdateDeviceState(ctx, other.ID, pxe.StateBooting, "netboot"))
+	_, err = f.svc.UpdateState(ctx, &platformv1.UpdatePXEStateRequest{
+		DeviceId:                 other.ID,
+		State:                    platformv1.ProvisioningState_PROVISIONING_STATE_INSTALLING,
+		InstallCertificateSha256: fingerprint,
+	})
+	require.NoError(t, err, "a released certificate may be bound to another device")
+
+	resends := []struct {
+		name string
+		mac  string
+		code codes.Code
+		want error
+	}{
+		{"without a MAC", "", codes.InvalidArgument, ErrPXEWebhookMACRequired{CertificateSHA256: fingerprint}},
+		{"with the first device's MAC", webhookNodeMAC, codes.PermissionDenied,
+			ErrPXEWebhookIdentityMismatch{CertificateSHA256: fingerprint, MACAddress: webhookNodeMAC}},
+	}
+	for _, resend := range resends {
+		for _, success := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/success=%t", resend.name, success), func(t *testing.T) {
+				_, err := f.svc.WebhookComplete(grpcContext(verifiedState(f.node)),
+					&platformv1.PXEWebhookCompleteRequest{MacAddress: resend.mac, Success: success})
+
+				assert.Equal(t, resend.code, status.Code(err))
+				assert.Equal(t, resend.want.Error(), status.Convert(err).Message())
+				device, err := f.backend.GetDevice(ctx, other.ID)
+				require.NoError(t, err)
+				assert.Equal(t, pxe.StateInstalling, device.State)
+				assert.Equal(t, fingerprint, device.InstallCertificateSHA256)
+				assert.Equal(t, pxe.StateInstallComplete, f.state(t, webhookNodeMAC))
+			})
+		}
+	}
+
+	_, err = f.svc.WebhookComplete(grpcContext(verifiedState(f.node)),
+		&platformv1.PXEWebhookCompleteRequest{MacAddress: otherMAC, Success: true})
+	require.NoError(t, err, "the second device's own callback still ends its installation")
+	assert.Equal(t, pxe.StateInstallComplete, f.state(t, otherMAC))
 }
 
 // A device moved out of installing by another path, here a quarantine, loses
@@ -510,7 +569,7 @@ func TestWebhookComplete_ErrorPaths(t *testing.T) {
 		assert.Equal(t, pxe.StateBooting, f.state(t, otherMAC))
 
 		_, err = f.svc.WebhookComplete(grpcContext(verifiedState(f.node)),
-			&platformv1.PXEWebhookCompleteRequest{Success: true})
+			&platformv1.PXEWebhookCompleteRequest{MacAddress: webhookNodeMAC, Success: true})
 		require.NoError(t, err)
 		assert.Equal(t, pxe.StateInstallComplete, f.state(t, webhookNodeMAC))
 		assert.Equal(t, pxe.StateBooting, f.state(t, otherMAC))
@@ -542,7 +601,7 @@ func TestWebhookComplete_ErrorPaths(t *testing.T) {
 		mock, svc, cert := mockFixture(t)
 		mock.listErr = pxe.ErrServiceNotRunning{}
 
-		_, err := svc.WebhookComplete(grpcContext(verifiedState(cert)), &platformv1.PXEWebhookCompleteRequest{Success: true})
+		_, err := svc.WebhookComplete(grpcContext(verifiedState(cert)), &platformv1.PXEWebhookCompleteRequest{MacAddress: webhookNodeMAC, Success: true})
 
 		require.Error(t, err)
 		assert.Equal(t, pxe.StateInstalling, mock.devices["device-"+webhookNodeMAC].State)
@@ -552,7 +611,7 @@ func TestWebhookComplete_ErrorPaths(t *testing.T) {
 		mock, svc, cert := mockFixture(t)
 		mock.updateStateErr = pxe.ErrServiceNotRunning{}
 
-		_, err := svc.WebhookComplete(grpcContext(verifiedState(cert)), &platformv1.PXEWebhookCompleteRequest{Success: true})
+		_, err := svc.WebhookComplete(grpcContext(verifiedState(cert)), &platformv1.PXEWebhookCompleteRequest{MacAddress: webhookNodeMAC, Success: true})
 
 		require.Error(t, err)
 		assert.Equal(t, pxe.StateInstalling, mock.devices["device-"+webhookNodeMAC].State)
