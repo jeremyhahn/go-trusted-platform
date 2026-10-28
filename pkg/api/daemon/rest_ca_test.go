@@ -122,23 +122,25 @@ func TestRESTServer_SetCAHandlers_AllRoutesRegistered(t *testing.T) {
 	// inspect the route table directly. Each route is identified by its
 	// (method, path-template) tuple.
 	expected := map[string]string{
-		"GET /api/v1/ca/info":                          "",
-		"GET /api/v1/ca/certificates":                  "",
-		"POST /api/v1/ca/certificates":                 "",
-		"POST /api/v1/ca/sign-csr":                     "",
-		"GET /api/v1/ca/certificates/{serial}":         "",
-		"POST /api/v1/ca/certificates/{serial}/revoke": "",
-		"POST /api/v1/ca/certificates/{serial}/renew":  "",
-		"POST /api/v1/ca/certificates/verify":          "",
-		"GET /api/v1/ca/crl":                           "",
-		"GET /api/v1/ca/bundle":                        "",
+		"GET /api/v1/ca/info":                         "",
+		"GET /api/v1/ca/certificates":                 "",
+		"POST /api/v1/ca/certificates":                "",
+		"POST /api/v1/ca/sign-csr":                    "",
+		"GET /api/v1/ca/certificates/{serial}":        "",
+		"DELETE /api/v1/ca/certificates/{serial}":     "",
+		"POST /api/v1/ca/certificates/{serial}/renew": "",
+		"POST /api/v1/ca/certificates/verify":         "",
+		"GET /api/v1/ca/crl":                          "",
+		"GET /api/v1/ca/bundle":                       "",
 	}
 	found := map[string]bool{}
+	registered := map[string]bool{}
 	walkErr := server.router.Walk(func(route *mux.Route, _ *mux.Router, _ []*mux.Route) error {
 		tmpl, _ := route.GetPathTemplate()
 		methods, _ := route.GetMethods()
 		for _, m := range methods {
 			key := m + " " + tmpl
+			registered[key] = true
 			if _, ok := expected[key]; ok {
 				found[key] = true
 			}
@@ -150,6 +152,10 @@ func TestRESTServer_SetCAHandlers_AllRoutesRegistered(t *testing.T) {
 	for key := range expected {
 		assert.Truef(t, found[key], "route %q must be registered", key)
 	}
+	// Revocation moved to DELETE /api/v1/ca/certificates/{serial}
+	// under certs:revoke; the old POST route must not come back.
+	assert.False(t, registered["POST /api/v1/ca/certificates/{serial}/revoke"],
+		"the retired POST revoke route must not be registered")
 }
 
 // tokenScopeGuard is the daemon's REST guard with tokens as its only
