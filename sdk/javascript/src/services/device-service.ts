@@ -61,6 +61,46 @@ import type {
  */
 const SINGULAR_BASE_PATH = '/v1/device';
 import type { DeviceSelfServiceProfile } from '../types/device-self-service.js';
+import type { NetworkPhaseConfig } from '../types/device.js';
+import { AUTH_METHOD_WIRE_NAMES } from '../types/device.js';
+
+/** A network phase as pkg/webservice/v1/device/types.go decodes it. */
+type WireNetworkPhase = Omit<NetworkPhaseConfig, 'auth_method' | 'firewallZone'> & {
+  auth_method?: string;
+  zone?: string;
+};
+
+/** A profile as the REST handler decodes it: flat, with wire network phases. */
+type WireProfile = Omit<Partial<DeviceProfile>, 'networks'> & {
+  networks?: Record<string, WireNetworkPhase>;
+};
+
+function toWireNetworkPhase(phase: NetworkPhaseConfig): WireNetworkPhase {
+  const { auth_method: authMethod, firewallZone, ...rest } = phase;
+  const wireAuthMethod = authMethod === undefined ? undefined : AUTH_METHOD_WIRE_NAMES[authMethod];
+  return {
+    ...rest,
+    ...(wireAuthMethod !== undefined && { auth_method: wireAuthMethod }),
+    ...(firewallZone !== undefined && { zone: firewallZone }),
+  };
+}
+
+/**
+ * Builds the flat profile body the REST handler decodes; the request's
+ * `profile` wrapper is not part of it, and the handler ignores what it does
+ * not know, so a wrapped body arrives empty.
+ */
+function toWireProfile(profile: Partial<DeviceProfile>): WireProfile {
+  const { networks, ...rest } = profile;
+  if (networks === undefined) {
+    return rest;
+  }
+  const wireNetworks: Record<string, WireNetworkPhase> = {};
+  for (const [name, phase] of Object.entries(networks)) {
+    wireNetworks[name] = toWireNetworkPhase(phase);
+  }
+  return { ...rest, networks: wireNetworks };
+}
 
 /**
  * Device Service class
@@ -279,7 +319,7 @@ export class DeviceService extends BaseService {
    * @returns Created profile
    */
   async createProfile(request: CreateProfileRequest): Promise<ApiResponse<CreateProfileResponse>> {
-    return this.client.post<CreateProfileResponse>(this.singularUrl('/profiles'), request);
+    return this.client.post<CreateProfileResponse>(this.singularUrl('/profiles'), toWireProfile(request.profile));
   }
 
   /**
@@ -301,7 +341,7 @@ export class DeviceService extends BaseService {
   async updateProfile(request: UpdateProfileRequest): Promise<ApiResponse<UpdateProfileResponse>> {
     return this.client.put<UpdateProfileResponse>(
       this.singularUrl(`/profiles/${request.profile.id}`),
-      request
+      toWireProfile(request.profile)
     );
   }
 
