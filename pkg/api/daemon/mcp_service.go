@@ -3026,12 +3026,12 @@ func (p *MCPServiceProvider) TPMCreateEK(ctx context.Context) (interface{}, erro
 }
 
 // TPMDeleteEK deletes the Endorsement Key.
-func (p *MCPServiceProvider) TPMDeleteEK(ctx context.Context) (interface{}, error) {
+func (p *MCPServiceProvider) TPMDeleteEK(ctx context.Context, requested uint32) (interface{}, error) {
 	if p.tpm2Service == nil {
 		return nil, ErrServiceNotAvailable{Service: "tpm"}
 	}
 
-	handle, err := tpmek.Delete(p.tpm2Service)
+	handle, err := tpmek.Delete(p.tpm2Service, requested)
 	if err != nil {
 		return nil, mapTPMError(err)
 	}

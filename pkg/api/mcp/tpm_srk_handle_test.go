@@ -130,6 +130,24 @@ func TestTPMDeleteSRKPassesTheHandle(t *testing.T) {
 	assert.Equal(t, uint32(0), svc.lastSRKHandle, "a malformed handle must not reach the service")
 }
 
+// TestTPMDeleteEKPassesTheHandle (Codex 8200): the EK delete tool forwards
+// the caller's handle so the daemon can refuse one that is not the
+// configured EK, and a malformed handle is an error rather than a silent zero.
+func TestTPMDeleteEKPassesTheHandle(t *testing.T) {
+	svc := &mockServiceProvider{}
+	r := NewToolRegistry(svc, logging.DefaultLogger())
+
+	_, err := r.executeTPMDeleteEK(context.Background(), map[string]interface{}{"handle": "0x81000002"})
+	require.NoError(t, err)
+	assert.Equal(t, uint32(0x81000002), svc.lastEKHandle,
+		"the tool must pass the caller's handle to the service, not drop it")
+
+	svc.lastEKHandle = 0
+	_, err = r.executeTPMDeleteEK(context.Background(), map[string]interface{}{"handle": "cafe"})
+	assert.Error(t, err, "a malformed handle must be rejected")
+	assert.Equal(t, uint32(0), svc.lastEKHandle, "a malformed handle must not reach the service")
+}
+
 func marshalToString(t *testing.T, v interface{}) string {
 	t.Helper()
 	b, err := json.Marshal(v)

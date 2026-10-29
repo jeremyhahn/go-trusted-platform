@@ -421,7 +421,7 @@ func (s *TPMGRPCService) DeleteEK(
 
 	s.logger.Debug("TPM DeleteEK request received")
 
-	handle, err := tpmek.Delete(tpm)
+	handle, err := tpmek.Delete(tpm, req.GetHandle())
 	if err != nil {
 		return nil, s.mapError(err)
 	}

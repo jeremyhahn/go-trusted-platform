@@ -566,7 +566,7 @@ func (q *QUICAdapter) EKCertificate(ctx context.Context) (*EKCertificateResult, 
 
 // EKDelete deletes the EK via QUIC.
 func (q *QUICAdapter) EKDelete(ctx context.Context, handle uint32, password string) (*EKDeleteResult, error) {
-	resp, err := q.sendCategoryRequest(ctx, quicwire.SubOpTPM2DeleteEK, nil)
+	resp, err := q.sendCategoryRequest(ctx, quicwire.SubOpTPM2DeleteEK, quicapi.TPM2DeleteEKRequest{Handle: handle})
 	if err != nil {
 		return nil, err
 	}
