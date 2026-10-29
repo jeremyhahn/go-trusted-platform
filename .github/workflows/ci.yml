@@ -1122,15 +1122,15 @@ jobs:
           docker buildx prune --builder "$BUILDX_BUILDER" --force --keep-storage "$BUILDKIT_KEEP_STORAGE" || true
           docker volume rm "$IT_CLAIM" >/dev/null 2>&1 || true
 
-  # CUSTOMIZE (FIPS 140-3, #853): the ungated full-tier job. It runs on push
-  # to main, the schedule, workflow_dispatch and a pull_request labelled
-  # `ci:full` (ci-template v1.23, ci-standard.md §8), never on an ordinary PR.
+  # CUSTOMIZE (FIPS 140-3, #853): the ungated job. It runs on push to main,
+  # the schedule and workflow_dispatch, and never on a pull request, `ci:full`
+  # or not (m1355 / DS-3878, DS-4613): its `if:` is not the full tier's.
   #
   # It is deliberately NOT in ci-gate's `needs`: it is still red on causes
   # this repository cannot close (the header of nightly.yml lists them), so
   # it reports `CI / FIPS` without turning CI Gate red.
   # pkg/arch/citiers_test.go fails `make test` if it is ever gated, if a gated
-  # job needs it, or if its `if:` is not the full tier's. Its steps match nightly.yml's `fips` job;
+  # job needs it, or if its `if:` is not exactly the one below. Its steps match nightly.yml's `fips` job;
   # change the suite in the Makefile (`make test-fips`), not here. That target
   # also applies the FIPS foreign-failure baseline (ruling 125,
   # .github/foreign-failures-fips.tsv); nightly.yml's header lists what it
@@ -1138,7 +1138,7 @@ jobs:
   fips:
     name: FIPS
     runs-on: ubuntu-latest
-    if: ${{ (github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'ci:full')) && !github.event.pull_request.draft }}
+    if: ${{ github.event_name != 'pull_request' }}
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6

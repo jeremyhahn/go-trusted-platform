@@ -128,11 +128,11 @@ The kernel and provider builders are `build/docker/fips-kernel-builder/` and
   - `pkg/bmc/rmcp_known_vectors_test.go` and `rmcp_legacy_algorithms_test.go` (`!fips`);
   - `pkg/sdn/gateway/tunnels_fips_test.go`.
 - **Untagged runtime-check tests**: `pkg/dns/config_fips_test.go` drives the NSEC3 refusal through `ValidateForMode` and `NewDNSSECService` (`:29`, `:142`).
-- **`CI / FIPS`** is the `fips` job in `.github/workflows/ci.yml:700-729`:
-  - it runs `make test-fips` in the full tier: on push to `main`, the nightly schedule, `workflow_dispatch` and a pull request labelled `ci:full`, never on an ordinary pull request (`ci.yml:716`);
+- **`CI / FIPS`** is the `fips` job in `.github/workflows/ci.yml:871-900`:
+  - it runs `make test-fips` on push to `main`, the nightly schedule and `workflow_dispatch` only, never on a pull request, `ci:full` or not (m1355 / DS-3878, DS-4613; `ci.yml:887`);
   - it is **not** in `ci-gate`'s `needs`, so it does not block a merge;
-  - `pkg/arch/citiers_test.go` fails `make test` if the job is gated, a gated job needs it, or its `if:` is not the full tier's (`ci.yml:707-708`).
-- **`Nightly / FIPS`** runs the same target (`.github/workflows/nightly.yml:175-207`) on `workflow_dispatch` only, and publishes a non-gating status (`:454`).
+  - `pkg/arch/citiers_test.go` fails `make test` if the job is gated, a gated job needs it, or its `if:` is not exactly `${{ github.event_name != 'pull_request' }}` (`ci.yml:878-879`).
+- **`Nightly / FIPS`** runs the same target (`.github/workflows/nightly.yml:174-207`) on `workflow_dispatch` only, and publishes a non-gating status (`:454`).
   - The header of that file lists what is still red and who owns it.
   - A panic under `fips140=only` aborts the whole test binary, so its failure count is a lower bound.
   - Both jobs inherit the target's foreign-failure verdict: a listed panic of `.github/foreign-failures-fips.tsv` does not fail them ([the FIPS baseline](../test/integration.md#the-fips-baseline)).
@@ -145,4 +145,4 @@ The kernel and provider builders are `build/docker/fips-kernel-builder/` and
 | An approved P-256 suite for the Noise bootstrap listener; a FIPS build refuses the only suite it has | **Planned (#518)** |
 | NSEC3 under FIPS: the refusal stands pending the owner's decision | #249 |
 | Setting `GODEBUG=fips140=only` automatically from the kernel indicator | **Planned** — no issue filed |
-| `CI / FIPS` as a merge gate | **Planned** — off the gate until its upstream failures clear (`ci.yml:704-706`) |
+| `CI / FIPS` as a merge gate | **Planned** — off the gate until its upstream failures clear (`ci.yml:875-877`) |
