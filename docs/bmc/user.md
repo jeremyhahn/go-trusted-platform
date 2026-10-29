@@ -292,8 +292,8 @@ Renewal is automatic once `certificate:` and `key:` are configured for the node:
 the platform registers a recurring renewal job pinned to that node and updates
 the DANE records around each deployment, publishing the new record *before* the
 new certificate goes on so validators never see one with no matching record. The
-validity window comes from `certificate.valid` — 90 days in the shipped
-examples. You should not normally need to intervene.
+validity window comes from `certificate.valid`. You should not normally need to
+intervene.
 
 To install a certificate you obtained yourself:
 
@@ -409,7 +409,7 @@ There is no way to skip BMC certificate verification, and that is the design.
 Supply `--bmc-pin` (get it from `bmc cert get` on a terminal) or
 `--bmc-ca-file`. The two are mutually exclusive.
 
-**"password file has insecure permissions."**
+**"bmc: password file `<path>` has insecure mode `<mode>` (require 0600 or stricter)."**
 `--bmc-pass-file` requires mode `0600` or stricter. `chmod 600` it. The file is
 not read until it is.
 

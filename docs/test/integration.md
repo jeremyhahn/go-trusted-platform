@@ -443,7 +443,7 @@ Kept out of the runner, or out of its default set:
 
 | Directory | Why | How it runs |
 |-----------|-----|-------------|
-| `pxe` | platformd constructs its PXE service with a nil backend (`pkg/api/daemon/daemon.go:979`), and nothing outside tests calls `SetPXEService` or `pkg/compute/pxe.NewService`, so every transport answers `SERVICE_NOT_CONFIGURED` and the suite fails at adapter setup. Its six adapters are real; it rejoins `ALL_TARGETS` when platformd has a PXE backend | `make integration-test-pxe` |
+| `pxe` | platformd constructs its PXE service with a nil backend (`NewPXEGRPCService(logger, nil)` in `pkg/api/daemon/daemon.go`), and nothing outside tests calls `SetPXEService` or `pkg/compute/pxe.NewService`, so every transport answers `SERVICE_NOT_CONFIGURED` and the suite fails at adapter setup. Its six adapters are real; it rejoins `ALL_TARGETS` when platformd has a PXE backend | `make integration-test-pxe` |
 | `secureboot` | `TestFIPSKernelModuleSignatureEnforcement` fails without a prebuilt FIPS kernel, its modules tarball and the module-signing key it was built with (`test/integration/secureboot/fipskernel_test.go:210-212`, `helpers.go:84-94`), which only the caller supplies through `FIPS_KERNEL_IMAGE`, `FIPS_MODULES_TAR` and `FIPS_MODULE_SIGNING_KEY`; the runner sets none of them. `docs/firmware/secure-boot.md:539-540` already keeps the target out of the `all` sweep | `make integration-test-secureboot` with the three variables set |
 | `secureboot/hardware` | Real TPM and efivarfs on the node; disabled unless `TP_HW_TPM`/`TP_HW_EFIVARS` is `1` | `make integration-test-secureboot-hw` on the node |
 | `sdn/topology` | The multi-node topology tests start their nodes with docker-compose (`test/integration/sdn/topology/docker-compose.tmpl`), and the devcontainer has neither docker-compose nor a Docker daemon. The `topology` build tag keeps them out of the `sdn` and `sdn-stress` keys' packages; run anywhere else, they fail with `ErrDockerComposeMissing` | `make integration-test-sdn-topology` on a host with docker-compose |
@@ -998,10 +998,11 @@ its arguments, e.g. `github.com/google/go-tpm/tpm2.(*policySession).Authorize`)
 and `message` (last, because it holds spaces). Rows are added and removed as
 for the Integration file.
 
-The rows today are the go-tpm HMAC panics (go-quicbaas#1389, removed by
-the go-quicbaas v0.16.0-alpha adoption):
+The rows today are the go-tpm HMAC panics (go-quicbaas#1389 and
+go-trusted-platform#937, removed by the go-quicbaas v0.16.0-alpha adoption):
 
 - `pkg/vpn/agent` `TestXKMSTPM_IDevIDSignerSignsWithTheTPMKey`
+- `pkg/api/daemon` `TestTPMSimulator_ActivateCredentialRefusesAForeignCredential`
 - `pkg/app` `TestDeviceActivation_IDevIDOverMTLS`
 - `pkg/app` `TestFetchProfileAndActivate_IDevIDOverMTLS`,
   `TestIDevIDSigner_NilPublicKey` and

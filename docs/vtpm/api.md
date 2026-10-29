@@ -225,8 +225,10 @@ included, which is not an alias — is `ErrInvalidEKAlgorithm`: 400 on REST,
 `StatusInvalidArgument` on QUIC, `InvalidArgument` on gRPC and MCP. Before #460
 an unrecognized value silently became RSA.
 
-**503 on a runtime operation usually means the swtpm daemon is not running**
-(`ErrSwtpmSocketUnavailable`) — start the bundle before quoting it.
+**409 (`FailedPrecondition`) on a runtime operation usually means the bundle
+is not started** (`ErrVTPMNotRunning`) — start it before quoting it. 503
+(`ErrSwtpmSocketUnavailable`) comes from the platform `tpm:` target, not a
+bundle: the configured swtpm socket is not there.
 
 The REST runtime routes (§4) also return:
 

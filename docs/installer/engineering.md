@@ -33,13 +33,20 @@
 | `hwoffload.go` | `CheckHWOffloadSupport` |
 | `postinstall.go` | `PostInstallExecutor` |
 | `diskless.go`, `nbd_target.go` | `checkBootModel`, the diskless root parameters; the `diskless-nbd` target (`useNBDTarget`, `checkNBDAttached`, `nbdCmdlineParams`, `espFstabSource`) |
+| `nbd_enrol.go` | The `diskless-nbd` IDevID enrolment seam (§8) |
+| `release.go`, `completion.go` | Image-target release (`closeInstalledLUKS`); final UKI sync on the ESP, unmount and buffer flush |
+| `mediakernel.go` | `installMediaKernel` — a platform-built kernel from the install medium |
+| `network_role.go`, `alpine_hostnet.go`, `firstboot_network.go` | `HostRole` → zones (`roleZones`), forwarding sysctl, host firewall, platform VRF and bond VLAN config; the first-boot static address |
+| `gatewayd.go` | Copies the `gatewayd` binary from the medium onto a gateway-role target (`ErrGatewaydBinaryMissing`) |
+| `luks_algorithms.go` | `resolveLUKSAlgorithms` — the LUKS KDF and hash under the installer's FIPS policy |
 | `errors.go`, `uki_rebuild_errors.go` | Typed errors |
 
 `pkg/initrd/` — the boot-time unlock engine: `types.go`, `config.go`,
 `initrd.go`, `strategy.go`, `strategy_keyfile.go`, `strategy_tpm_pcr.go`,
 `strategy_tpm_upgrade.go`, `strategy_tpm_nopcr.go`, `strategy_fido2.go`,
 `strategy_password.go`, `boot.go`, `install.go`, `recovery.go`, `partition.go`,
-`multidrive.go`, `tpm_detect.go`, `errors.go`.
+`multidrive.go`, `tpm_detect.go`, `diskless_root.go` (`MountDisklessRoot`:
+fetch, dm-verity and overlay for an image-backed diskless root), `errors.go`.
 
 `pkg/iso/` — media production: `config.go`, `types.go`, `download.go`,
 `extract.go`, `customize.go`, `customize_profile.go`, `build.go`,
@@ -157,7 +164,8 @@ func DefaultConfig() *Config
 func MergeConfig(base, override *Config) *Config
 ```
 
-`Manager`: `Initialize`, `DetectMode`, `Install`, `Boot`, `Recovery`,
+`Manager`: `Initialize`, `DetectMode`, `Install`, `Boot`, `UnlockedWith`
+(the name of the strategy that unlocked the root), `Recovery`,
 `InteractiveRecovery`, `RegisterStrategy`, `UnlockVolumes`, `Close`.
 
 `UnlockStrategy`: `Name() string`, `Priority() int`,
@@ -338,8 +346,8 @@ Strategy constructors: `NewKeyfileStrategy`, `NewTPMPCRStrategy`,
 default (`pkg/initrd/initrd.go:188-189`) and runs every boot: `CanUnlock`
 mounts the ESP, finds no `tpm2/seal-upgrade.pub` / `.priv`, logs
 *"TPM-Upgrade: No upgrade seal files found"* and declines
-(`pkg/initrd/strategy_tpm_upgrade.go:108-118`). `Install` creates nothing
-(`strategy_tpm_upgrade.go:287`), and `CreateUpgradeSeal`
+(`pkg/initrd/strategy_tpm_upgrade.go:108-118`). `Install` creates nothing but the `tpm2` directory
+(`strategy_tpm_upgrade.go:264-289`), and `CreateUpgradeSeal`
 (`strategy_tpm_upgrade.go:304`) is called only from its test. The firstboot
 writer, `writeUpgradeSealedObjects` (`pkg/firstboot/executor.go:763-774`), is
 reached only from `Executor.Run` (`executor.go:357`), which nothing calls:
@@ -347,19 +355,20 @@ reached only from `Executor.Run` (`executor.go:357`), which nothing calls:
 (`pkg/cli/commands/firstboot/firstboot.go:156`) but unlocks through
 `FirstbootSealStrategy` (`firstboot.go:171-189`), whose seal path writes the
 platform seal only and deletes any upgrade seal
-(`pkg/firstboot/strategy.go:1361`). Neither the kernel-update hook
+(`deleteUpgradeSeals`, `pkg/firstboot/strategy.go:1423`). Neither the kernel-update hook
 (`pkg/installer/kernel_hook.go`, `uki_rebuild.go`) nor the
 `tpm-firstboot-seal` OpenRC service re-seals: the service tests for
-`seal-upgrade.*` (`pkg/installer/installer.go:3259`) that never exist, and the
-`platformctl firstboot` it runs (`installer.go:3346`) declines once
-`seal-platform.pub` exists (`pkg/firstboot/strategy.go:131-161`). So a kernel
+`seal-upgrade.*` (`pkg/installer/installer.go:3268`) that never exist, and the
+`platformctl firstboot` it runs (`installer.go:3355`) declines once
+`seal-platform.pub` exists (`FirstbootSealStrategy.CanUnlock`,
+`pkg/firstboot/strategy.go:140-181`). So a kernel
 or firmware change that moves the bound PCRs goes: `TPM-PCR` fails under the
-platform policy (`strategy_tpm_pcr.go:239-246`), `TPM-Upgrade` declines,
+platform policy (`unsealPlatformKeyStore`, `strategy_tpm_pcr.go:249-296`), `TPM-Upgrade` declines,
 `FIDO2` runs only if registered, `Keyfile` finds no `installer.luks`, and
 `Password` prompts. After the passphrase, platformd detects the Platform SRK
-policy drift (`pkg/app/app.go:1927-1934`) beside a present seal and returns
+policy drift (`pkg/app/app.go:1931-1936`) beside a present seal and returns
 `ErrTPMSealPolicyDrift` (`pkg/app/tpm_seal_guard.go:214`,
-`pkg/app/app.go:1970-1972`). The planned upgrade path is
+`pkg/app/app.go:1979-1982`). The planned upgrade path is
 [architecture.md](architecture.md) trust boundary 4.
 
 **`TPMNoPCRStrategy` is constructible but unreachable through
@@ -455,7 +464,7 @@ re-applies only the flags cobra reports as `Changed`.
 | `disk.encryption.password` / `passphrase` | string, `secret:"true"` | — |
 | `disk.encryption.tpm.enabled` | bool | — |
 | `disk.encryption.tpm.handle` | uint32 | `DefaultLUKSTPMHandle` = `0x81000001` (SSRK) |
-| `disk.encryption.tpm.seal-pcrs` | []uint | falls back to top-level `pcrs`; recorded in `pcr-banks` only (`pkg/firstboot/strategy.go:1335`) and never applied to the seal, which uses the platform policy (`strategy.go:1302`) |
+| `disk.encryption.tpm.seal-pcrs` | []uint | falls back to top-level `pcrs`; recorded in `pcr-banks` only and never applied to the seal, which uses the platform policy (`sealKeyToTPM`, `pkg/firstboot/strategy.go:1261-1412`) |
 | `disk.encryption.tpm.pcr-banks` | []string | falls back to the TPM config value |
 | `disk.encryption.tpm.platform-policy` | bool | should be `false` — the initrd unseals before platformd creates the platform policy |
 | `disk.encryption.tpm.factory-reset-on-firstboot` | bool | `false` in Go, `true` in reference templates |
@@ -587,9 +596,10 @@ Upstream entries accept `ip`, `ip#port` (dnsmasq's separator), `host:port` /
 `#` before the port and no IPv6 brackets, so the `:` shorthand and brackets
 are normalized when the `server=` line is emitted
 (`normalizeDNSMasqUpstream`). An entry that does not parse is written
-verbatim — dnsmasq itself rejects the line at startup — and counts as
-remote for the `local=` decision, so a malformed entry can never blackhole
-the zone (`dnsmasqZoneServedLocally`, `dnsmasqUpstreamHost`).
+verbatim — dnsmasq itself rejects the line at startup — and, having no
+`/domain/` scope, counts as an unscoped upstream route for the `local=`
+decision, so a malformed entry can never blackhole the zone
+(`dnsmasqZoneHasUpstreamRoute`, `splitDNSMasqScope`).
 
 ### `initrd.Config`
 
@@ -676,7 +686,7 @@ ESP layout, with the constants that name each file (`pkg/firstboot/types.go`,
 | `/boot/efi/tpm2/installer.luks` | `EFIInstallerFile`, `strategyInstallerContainerFile` | first boot, then until the **first `TPM-PCR` unlock**, which securely wipes it |
 | `/boot/efi/tpm2/seal-platform.pub` | `EFISealPlatformPub`, `strategySealPub` | permanent |
 | `/boot/efi/tpm2/seal-platform.priv` | `EFISealPlatformPriv`, `strategySealPriv` | permanent |
-| `/boot/efi/tpm2/seal-upgrade.pub` / `.priv` | `EFISealUpgradePub` / `Priv` | never written in production (§5); `TPM-Upgrade` would keep them after use (`pkg/initrd/strategy_tpm_upgrade.go:236-252`), and the first-boot seal and a `TPM-PCR` unlock delete them (`pkg/firstboot/strategy.go:1361`, `pkg/initrd/strategy_tpm_pcr.go:227`) |
+| `/boot/efi/tpm2/seal-upgrade.pub` / `.priv` | `EFISealUpgradePub` / `Priv` | never written in production (§5); `TPM-Upgrade` would keep them after use (`pkg/initrd/strategy_tpm_upgrade.go:236-252`), and the first-boot seal and a `TPM-PCR` unlock delete them (`deleteUpgradeSeals`, `pkg/firstboot/strategy.go:1423`; `deleteInsecureUpgradeSeals`, `pkg/initrd/strategy_tpm_pcr.go:313`) |
 | `/boot/efi/tpm2/pcr-banks` | `EFIPCRBanks` | written minimally at install, overwritten authoritatively by firstboot |
 | `/boot/efi/tpm2/pcr-seal-values.txt` | `EFIPCRValues` | permanent |
 | `/boot/efi/tpm2/swtpm-state` | `EFISwtpmStateDir` | swtpm deployments only |

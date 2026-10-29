@@ -870,6 +870,12 @@ together with stateless NAT failover. Conntrack/NAT state sync is #710.
 
 ### The process model — `pkg/sdn/gateway/process` (#557)
 
+> This section describes the code today, where `gatewayd serve` is the
+> supervisor. The target is [supervisor.md](supervisor.md) (#1191, ruling 240
+> item 4): one process per service under `platformd` as the single supervisor.
+> It supersedes #557's open questions about the supervisor (systemd template
+> units).
+
 | Type | What it is |
 |---|---|
 | `Class`, `Definition` | a privilege class (`ClassKernel`, `ClassParser`) and one process: name, class, hosted services, capabilities, `AddressFamilies`, `MemoryMax`, `CPUMax`, `Unprivileged`, `Supervised`, `ReconcilesDesired` (the process applies a section of the desired document: `datapath` the load-balancer and NAT sections, `vpn` the vpn section), and `StateDir` (the directory under `--data-dir` the process keeps its own state in: `vpn` for the vpn child's revocation journal) |

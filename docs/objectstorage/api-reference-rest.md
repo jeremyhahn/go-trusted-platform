@@ -50,9 +50,15 @@ Content-Type: application/json
 | `ALREADY_EXISTS`, `ABORTED`, `FAILED_PRECONDITION` | `409` |
 | `UNAVAILABLE` (service not configured) | `503` |
 | `DEADLINE_EXCEEDED` | `504` |
+| `UNIMPLEMENTED` | `501` |
 | anything unmapped | `500` |
 
 The table is `protorestHTTPStatus` (`pkg/api/rest/ntp_handlers.go`).
 
-Errors use the `{error, code, timestamp}` envelope. A daemon without the
-service mounts none of the routes; one whose server is nil answers `503`.
+Errors use the `{error, code, timestamp}` envelope. The daemon REST listener
+always mounts the routes and always constructs the object storage server, so a
+node without the SDK answers `503` through the `UNAVAILABLE` row above. The
+webservice listener mounts none of the application service routes (`404`)
+only when all four of its cache, scheduler, messaging and object storage
+servers are nil; with any one of them present, a nil object storage server
+answers `503` (`appRESTMethod`).

@@ -17,6 +17,7 @@ Every identifier below was read out of `pkg/health/` and `pkg/api/daemon/` on
 | `pkg/health/registry.go` | `Registry`, `RegistryOption`, `NewRegistry`, unexported `registryImpl` |
 | `pkg/health/types.go` | `HealthStatus`, the four status constants, `ComponentHealth`, `SystemHealth`, `RegistryConfig`, `DefaultRegistryConfig` |
 | `pkg/health/errors.go` | Six typed errors |
+| `pkg/health/probe.go` | `Probe`, `Liveness`, `Readiness`, `Aggregate` — the platform's probe verdicts over the registry |
 
 ## 2. Exported surface
 
@@ -54,6 +55,20 @@ usable `SystemHealth` — see §4.
 `DefaultRegistryConfig() RegistryConfig` returns those two defaults.
 **`MaxCheckers: 0` means unlimited**, and the cap is only enforced when it is
 greater than zero.
+
+### Probes
+
+`probe.go` derives the platform's probe verdicts; each returns a `Probe`
+(`OK`, `Status`, `Timestamp`):
+
+| Function | `OK` when |
+|---|---|
+| `Liveness() Probe` | always |
+| `Readiness(ctx, registry) Probe` | the overall status is not unhealthy |
+| `Aggregate(ctx, registry) Probe` | the overall status is healthy |
+
+A nil registry answers healthy, the documented fail-open for an unwired
+registry.
 
 ### Status
 
@@ -232,7 +247,10 @@ Rules the existing checkers all follow, and a new one must:
   (degraded).** `ServiceHealthChecker` does this: `!IsRunning()` is unhealthy;
   a non-nil `HealthCheckable.HealthCheck` error is degraded.
 - **Nil-guard the wrapped service.** Every checker in `pkg/api/daemon/` returns
-  unhealthy with `"<x> service reference is nil"` rather than dereferencing.
+  unhealthy with `"<x> service reference is nil"` rather than dereferencing —
+  or, where the wrapped thing is not a service, `"ntp backend reference is
+  nil"`, `"QUIC server reference is nil"` / `"REST server …"` /
+  `"MCP server …"`, and `"bridge address conflict reporter reference is nil"`.
 - **Never put secrets in `Details`** ([architecture.md](architecture.md) §5).
 
 ## 6. The registered components
@@ -243,8 +261,9 @@ deployment.
 
 | Name | Constructor | Reports |
 |---|---|---|
-| `ca` | `NewCAServiceHealthChecker(*CAGRPCService)` | initialised, identity, root/intermediate subject and validity window; **degraded within 30 days of root expiry**, unhealthy after |
+| `ca` | `NewCAServiceHealthChecker(*CAGRPCService)` | initialised, identity, root/intermediate subject and validity window; **degraded within 30 days of root expiry**, unhealthy after; degraded while the root is not yet valid (`"Root certificate not yet valid"`); unhealthy once the intermediate has expired (`"Intermediate certificate has expired"`) |
 | `sdn` | `NewSDNServiceHealthChecker(*SDNService)` | OVS client wired; bridge and port counts |
+| `sdn-addressing` | `NewSDNAddressingHealthChecker(BridgeAddressReporter)` (`sdn_address_health_checker.go`) | `conflict_count`, `probe_unavailable_count`; degraded while any bridge address was refused for a conflict or assigned unprobed, healthy otherwise |
 | `ntp` | `NewNTPServiceHealthChecker(NTPBackend)` | synced, stratum, leap status, offset, dispersion, reachable/total sources, anomaly — see [`docs/ntp/`](../ntp/) |
 | `kms` | `NewKMSServiceHealthChecker(*KMSService)` | running; `kms_server_ready` |
 | `iam` | `NewIAMServiceHealthChecker(*IAMService)` | running |
@@ -275,9 +294,14 @@ missing component, not a startup failure. It ends by logging
 
 The registry is injected into the surfaces that publish it:
 `Service.SetHealthRegistry` (gRPC), `PlatformRouter.SetHealthRegistry` (REST),
-`WithQUICHealthRegistry` (QUIC). **Every one of those call sites nil-checks the
-registry and falls back to a static healthy answer**, which is why an unwired
+`WithQUICHealthRegistry` (QUIC). **The REST and QUIC call sites nil-check the
+registry and fall back to a static healthy answer**, which is why an unwired
 daemon reports healthy rather than erroring — recorded in [api.md](api.md) §6.
+gRPC `GetHealth` (`pkg/api/daemon/service.go`) falls back to the service list
+instead: each managed service's observed state becomes a component, and any
+non-healthy one makes the overall status degraded. The MCP health, liveness and
+readiness tools return `ErrServiceNotAvailable{Service: "health"}` when no
+health service is wired (`mcp_service.go`).
 
 `Daemon.Close` calls `healthRegistry.Close()`.
 
@@ -337,8 +361,10 @@ cannot be driven from a test.
 - **Audit records.** None. Health probes are not audited, which is a
   consequence of their being unauthenticated.
 - **The debugging entry point** is `ComponentHealth.Details`. Every shipped
-  checker sets `response_time_ms` on its healthy path, so a slow component is
-  visible without extra instrumentation.
+  checker except `sdn-addressing` sets `response_time_ms` on its healthy path,
+  so a slow component is visible without extra instrumentation;
+  `sdn-addressing` only reads state recorded at bring-up and sets
+  `Duration` alone.
 
 ## 12. Related
 

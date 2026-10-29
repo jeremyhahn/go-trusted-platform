@@ -181,8 +181,10 @@ Authenticode/PKCS#7. Native Go — no `sbsign`/`sbverify` required.
 | `--input` | string | `""` | **yes** | Path to the input PE/COFF file |
 | `--out` | string | `""` | **yes** | Path to write the signed file (named `--out` so the global `-o`/`--output` format flag stays reachable) |
 
-The output file is created fresh and chmodded `0755`; it is removed if signing
-fails. Table output prints a success line; `-o json` / `-o yaml` print
+The signed image is written to a temporary file beside `--out`
+(`.<name>.signing-*`), chmodded `0755` and renamed into place only when signing
+succeeds; on failure the temporary file is removed and an existing `--out` is
+left untouched. Table output prints a success line; `-o json` / `-o yaml` print
 `{input, output, success, message}`.
 
 ```bash
@@ -232,7 +234,7 @@ Build a Unified Kernel Image. The output is **unsigned**; sign it with
 | `--cmdline` | | string | `""` | **yes** | Kernel command line |
 | `--output` | | string | `""` | **yes** | Output path for the UKI |
 | `--osrelease` | | string | `""` | no | Path to an os-release file; a read failure warns and is skipped |
-| `--stub` | | string | `""` | no | Path to the EFI stub; defaults to `/usr/lib/systemd/boot/efi/linuxx64.efi.stub` |
+| `--stub` | | string | `""` | no | Path to the EFI stub for the native builder; defaults to the host architecture's systemd stub (`linuxx64.efi.stub` on x86_64, `linuxaa64.efi.stub` on aarch64). Ignored with `--use-objcopy` |
 | `--use-objcopy` | | bool | `false` | no | Use the objcopy-based builder instead of the native Go PE patcher |
 | `--verbose` | `-v` | bool | `false` | no | Verbose logging |
 | `--debug` | | bool | `false` | no | Debug logging (implies verbose) |
@@ -244,16 +246,27 @@ platformctl install uki \
     --cmdline "root=/dev/mapper/cryptroot ro quiet" \
     --output /boot/efi/EFI/BOOT/BOOTX64.EFI
 
-# objcopy builder, custom stub and os-release
+# native builder, custom stub and os-release
 platformctl install uki \
     --kernel /boot/vmlinuz \
     --initramfs /boot/initramfs \
     --cmdline "root=/dev/mapper/cryptroot ro" \
     --output /boot/efi/EFI/Linux/linux.efi \
-    --use-objcopy \
     --stub /usr/lib/systemd/boot/efi/linuxx64.efi.stub \
     --osrelease /etc/os-release
+
+# objcopy builder (no stub: it ignores --stub)
+platformctl install uki \
+    --kernel /boot/vmlinuz \
+    --initramfs /boot/initramfs \
+    --cmdline "root=/dev/mapper/cryptroot ro" \
+    --output /boot/efi/EFI/Linux/linux.efi \
+    --use-objcopy
 ```
+
+`install uki` declares its own `--output` (the UKI path), which shadows the
+global `-o`/`--output` format flag on this command, just as its `-v` shadows
+the global verbose shorthand.
 
 The default builder patches PE headers in Go and needs no external tools. The
 objcopy builder prefers `llvm-objcopy`, falls back to `objcopy`, then to
@@ -261,9 +274,12 @@ objcopy builder prefers `llvm-objcopy`, falls back to `objcopy`, then to
 if none is found — the failure then surfaces during the build, not at flag
 parsing.
 
-**`--stub` is not architecture-aware.** Both builders read the same default stub
-path regardless of the architecture recorded by `SetArchitecture`; a non-x86_64
-UKI needs an explicit `--stub`.
+**Stub selection.** The native builder picks its default stub from the host
+architecture when it is constructed (`uki.StubPath(uki.HostArchitecture())`);
+`SetArchitecture` records the target architecture but does not change the stub,
+so a cross-architecture UKI needs an explicit `--stub`. The objcopy builder
+never reads a stub: it uses the kernel as the base PE, always records
+`x86_64`, and silently ignores `--stub`.
 
 ---
 
@@ -279,7 +295,7 @@ Secure Boot will not boot.
 |---|---|---|---|---|---|
 | `--kver` | | string | `""` | no | Kernel version to rebuild for; default is the newest under `/lib/modules` |
 | `--config` | | string | `""` | no | Platform config path; falls back to `/etc/platformd/config.yaml` then `/etc/platformd/install.yaml` |
-| `--uki` | | string | `""` | no | Live UKI path to replace; default `/boot/efi/EFI/BOOT/BOOTX64.EFI` |
+| `--uki` | | string | `""` | no | Live UKI path to replace; default is the host architecture's loader under `/boot/efi/EFI/BOOT` (`BOOTX64.EFI` or `BOOTAA64.EFI`) |
 | `--verbose` | `-v` | bool | `false` | no | Verbose logging |
 | `--debug` | | bool | `false` | no | Debug logging (implies verbose) |
 
@@ -292,11 +308,13 @@ Pipeline — never-brick, in this order:
 2. Rebuild the UKI with the persisted kernel cmdline (`/etc/kernel/cmdline`).
 3. Resolve the DB signer exactly as the installer does — `file://` locally, or
    remote hash-signing through the platform SDK. **It never generates a new DB
-   key.**
+   key.** The SDK client is opened only when `secure-boot.resign-mode` is
+   exactly `remote`; unlike the control plane's sign endpoint, which treats an
+   empty mode as remote, `uki-rebuild` opens no SDK client for an empty mode.
 4. Sign, verify the result against the DB certificate, and spot-check the
    freshly installed modules for signature trailers (a bounded sample, 16 files).
 5. Only then swap atomically over the live UKI, keeping the previous image as
-   `BOOTX64.EFI.prev`.
+   `<loader>.prev` (for example `BOOTX64.EFI.prev`).
 
 Any failure aborts the swap, leaves the working UKI in place, and exits
 non-zero so the kernel hook logs it. If `secure-boot.enabled` is false the

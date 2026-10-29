@@ -107,6 +107,16 @@ adapter, err := auth.NewMTLSAdapter(
 )
 ```
 
+`NewMTLSAdapter` (`pkg/auth/mtls.go`) refuses a nil logger with `ErrNilLogger`
+and a nil CA with `ErrNilCA`. With no options, identity comes from the email
+SAN (`IdentityFieldEmail`), the tenant from the Organization field
+(`IdentityFieldOrganization`) and a client certificate is required
+(`DefaultMTLSConfig`, `pkg/auth/interface.go`).
+
+**`TrustedRoots` is optional.** When it is nil, the adapter uses the CA's
+bundle (`CABundleCertPool`); if that read fails it logs a warning and runs with
+no trusted roots. Nothing refuses a missing pool.
+
 ### Identity Field Options
 
 | Field | Value | Certificate Source |
@@ -180,6 +190,7 @@ checkResp, err := iamClient.CheckPermission(ctx, &platformv1.CheckIAMPermissionR
     Resource:   "devices/device-456",
     Roles:      []string{"operator"},
     Groups:     []string{"ops-team"},
+    Context:    map[string]string{"source_ip": "10.0.0.5"},
     Attributes: map[string]string{"department": "engineering"},
 })
 ```
@@ -212,7 +223,8 @@ tenant, err := iamClient.CreateTenant(ctx, &platformv1.CreateIAMTenantRequest{
 
 ## Daemon IAM Configuration
 
-The platformd daemon includes IAM service configuration:
+The platformd daemon includes IAM service configuration (`Config` and
+`ServiceConfig`, `pkg/api/daemon/config.go`):
 
 ```go
 config := &daemon.Config{
@@ -338,7 +350,7 @@ The embedded `quicbaas:` configuration is validated at startup:
 | `quicbaas.raft-address` | Must be routable when `join-addresses` is set |
 | `quicbaas.deployment-id`, `quicbaas.raft-tls-*-file` | Required when `join-addresses` is set |
 | `quicbaas.spiffe-trust-domain` | Required: first-boot IAM seeding needs it |
-| `mTLS.TrustedRoots` | Recommended for production |
+| `mTLS.TrustedRoots` | Not validated; nil falls back to the CA bundle (above). Set it explicitly in production |
 
 `node-id` and `consistency-level` are not validated.
 

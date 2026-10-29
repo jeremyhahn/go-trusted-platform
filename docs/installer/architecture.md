@@ -414,7 +414,8 @@ life. Six boundaries, in the order they are crossed.
    change across today. `TPM-Upgrade` reads a non-PCR upgrade seal, but no
    production path writes one (§5, *Steady state*), so it declines
    (`pkg/initrd/strategy_tpm_upgrade.go:117-118`). The kernel-update hook
-   rebuilds and re-signs the UKI (`pkg/installer/uki_rebuild.go:269-273`)
+   rebuilds and re-signs the UKI (`UKIRebuilder.Rebuild`,
+   `pkg/installer/uki_rebuild.go:218-295`)
    and does not re-seal. A change that moves the bound PCRs
    therefore ends at the `Password` prompt, and after it platformd refuses to
    start with `ErrTPMSealPolicyDrift` (`pkg/app/tpm_seal_guard.go:214`); see

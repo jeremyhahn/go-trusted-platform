@@ -1,6 +1,6 @@
 # Platform Tenancy — API
 
-> **Status: NORMATIVE** · Scope: tenant routes on every transport · Last verified: 2026-10-15
+> **Status: NORMATIVE** · Scope: tenant routes on every transport · Last verified: 2026-10-27
 > Conflicts with this document are defects. Fix them here first.
 > One row per capability across all six transports. A transport that does not
 > carry a capability is written `MISSING`, never omitted.
@@ -77,6 +77,20 @@ rotation, the same `background` field the gRPC `RotateTenantDEKRequest`
 carries, and an empty body rotates in the foreground. The tenant always comes
 from the path (#304).
 
+**On platformd both calls fail today.** The daemon builds the tenant manager
+with `EnableDEKIsolation` off ([configuration.md](configuration.md)), and the
+manager then refuses both with `ErrInvalidRequest` *"DEK isolation is not
+enabled"*, which gRPC returns as `InvalidArgument` (`toGRPCError`,
+`pkg/api/daemon/tenant_grpc_server.go`) and QUIC and MCP pass through. The ✅ marks
+mean the route exists, not that it succeeds on platformd.
+
+QUIC opcodes: rotate `0xEA` (`OpTenantRotateDEK`), status `0xEB`
+(`OpTenantGetDEKStatus`). The §2–3 operations, which do not follow the table order:
+List `0xDB`, Get `0xDC`, GetByName `0xDD`, Create `0xDE`, Update `0xDF`,
+Delete `0xE0`, Suspend `0xE1`, Resume `0xE2`, GetQuotas `0xE3`,
+UpdateQuotas `0xE4`, GetUsage `0xE5`, CheckQuota `0xE6` and Sync `0xE9`
+(`sdk/go/wire/quicwire/protocol.go`).
+
 **Retired by #708.** The per-tenant VLAN range and OVS bridge are gone, and
 with them `ValidateVLAN` / `GetBridgeName` on every transport: the REST routes
 `POST /api/v1/tenants/{id}/vlan/validate` and `GET /api/v1/tenants/{id}/bridge`
@@ -94,7 +108,7 @@ network identity becomes a VRF ([architecture.md](architecture.md)).
 
 QUIC reaches these through the **tenant barrier category opcode `0x9E`**, which
 multiplexes the per-tenant barrier sub-operations
-(`pkg/api/daemon/quic_service.go:616`). The barrier model — lifecycle, seal
+(`pkg/api/daemon/quic_service.go:748`). The barrier model — lifecycle, seal
 strategies, and how a tenant barrier differs from the platform barrier — is in
 [`docs/barrier/`](../barrier/architecture.md#two-barriers).
 

@@ -124,14 +124,16 @@ packet path, the section shape and the follow-up issues are in
 | Supervisor seam | `pkg/sdn/gateway/supervised.go` | `ServiceSupervisor`, the handler that relays a section to a child process, and `ServiceReports` |
 | Supervisor IPC | `pkg/sdn/gateway/ipc/` | gRPC over a Unix socket, `SO_PEERCRED` uid policy; the contract is `ipc/proto/ipc.proto` |
 | Deprecated mode compatibility | `pkg/sdn/gateway/compat.go` | Do not build on it |
-| Overlay mode | `pkg/sdn/gateway/modes/` — `overlay.go`, `overlay_evpn.go`, `overlay_flows.go`, `overlay_flowtable.go` | The only mode handler. `transit` runs the `pkg/sdn/bgp` speaker from `handlers.go`; `edge` and `pxe` are refused |
+| Overlay mode | `pkg/sdn/gateway/modes/` — `overlay.go`, `overlay_evpn.go`, `overlay_flows.go`, `overlay_flowtable.go`, `overlay_nd.go`, `errors.go` | The only mode handler. `transit` runs the `pkg/sdn/bgp` speaker from `handlers.go`; `edge`, `dhcp` and `pxe` are refused |
+| Management VPN builder | `pkg/sdn/gateway/vpn_service.go` | `buildManagementVPN`, the builder-table entry for `management-vpn` |
+| Pipeline ownership | `pkg/sdn/gateway/pipeline.go` | The base pipeline's `CookiePipeline` and `ErrPipelineOwned` when another gateway holds the bridge |
 | Firewall, load balancer, perf | `pkg/sdn/gateway/services/{firewall,loadbalancer,perf}` | |
 | Control-plane liaison | `pkg/sdn/gateway/controlplane/` | State reporting and desired-config fetch |
 | Gateway state | `pkg/sdn/gateway/state/` | |
 | Zone service | `pkg/sdn/gateway/zone_service.go` | Network zones at the edge |
 | P2P discovery | `pkg/sdn/gateway/p2p/` | **Build-tag gated (`platform_p2p`)**; the P2P trusted network is planned, not implemented |
 | Proxy service adapter | `pkg/sdn/gateway/proxysvc/` | |
-| **The trusted reverse proxy** | `pkg/proxy/` | Its own package: `authchain.go`, `attestation.go`, `tokenauth.go`, `policy.go`, `balancer.go`, `router.go`, `listener.go`, `handler.go`, `identity.go`, `audit.go`, `metrics.go`, `transport.go`, `config.go`, `deps.go`, `errors.go` |
+| **The trusted reverse proxy** | `pkg/proxy/` | Its own package: `authchain.go`, `attestation.go`, `tokenauth.go`, `policy.go`, `balancer.go`, `router.go`, `listener.go`, `handler.go`, `identity.go`, `audit.go`, `metrics.go`, `transport.go`, `config.go`, `deps.go`, `errors.go`, `proxy.go`, `proto.go` |
 | Binary | `cmd/gatewayd/main.go` | |
 | **Import closure** | enforced by `pkg/arch/gatewayguard_test.go` | Separate from the layer guard; never weaken it |
 
@@ -297,8 +299,11 @@ media is in [`docs/installer/cli.md`](../installer/cli.md).
 5. **Management VPN.** (Design for the attested remote-access service: [`docs/vpn/`](../vpn/).) `ManagementVPNConfig` exists so administrators
    reach management endpoints through an authenticated tunnel rather than being
    dual-homed onto a data zone. Gateways should expose it by default. It is
-   IPsec in FIPS builds, and WireGuard only in non-FIPS builds. Today the config defines only `wireguard` and the section
-   is refused at start (#558).
+   IPsec in FIPS builds, and WireGuard only in non-FIPS builds. Today the `type` field documents only `wireguard`.
+   The section is not refused: `handlers.go` builds it with
+   `buildManagementVPN` (`vpn_service.go`), and it fails `ErrRuntimeMissing`
+   at start until the assembly supplies a `VPNRuntime` (see the
+   `management-vpn` row below).
 6. **The host itself.** Traffic *to* the gateway's own addresses never crosses
    the OVS pipeline; the nftables host filter (`services/hostfw`) is the only
    control in front of the daemons' listeners and the tunnel endpoints, and it
@@ -332,7 +337,7 @@ the refusal table. There is no third kind.
 | `edge` | — | device onboarding verifies the TPM EK, quote and IDevID through the platform SDK; until it does, gatewayd admits no device (#553) |
 | `dhcp` | — | gatewayd has no IPAM allocator (#553) |
 | `pxe` | — | a gateway PXE service is planned; platformd's iPXE server provisions today (#553) |
-| `management-vpn` | `services/vpn` admission service over the planes and collaborators `GatewayRuntime.VPN` carries, and its mTLS admission listener on `management_vpn.listener`, opened after the service starts and closed first on stop, in the process that runs the service (`gatewayd serve`; the VPN is not a supervised child); enrolments and tenant posture policies arrive as the desired-config `vpn` section | the gatewayd assembly supplies no `VPNRuntime` yet: the person-factor verifier has no SDK verb ([../vpn/engineering.md §1](../vpn/engineering.md)), so the service fails `ErrRuntimeMissing` |
+| `management-vpn` | `services/vpn` admission service over the planes and collaborators `GatewayRuntime.VPN` carries, and its mTLS admission listener on `management_vpn.listener`, opened after the service starts and closed first on stop, in the process that runs the service (the supervised `vpn` child under a `process:` supervisor, `gatewayd serve` otherwise); enrolments and tenant posture policies arrive as the desired-config `vpn` section | the gatewayd assembly supplies no `VPNRuntime` yet: the person-factor verifier has no SDK verb ([../vpn/engineering.md §1](../vpn/engineering.md)), so the service fails `ErrRuntimeMissing` |
 
 A `backedServiceHandler` builds its backend on `Start` and drops it on `Stop`,
 so `IsActive` is true exactly while a backend exists and `Health` is the
@@ -357,6 +362,12 @@ store from the `secret-store:` section, and where it is absent a service that
 names a reference fails closed rather than running unauthenticated.
 
 ## The supervisor seam: a section can be a handler for a child process
+
+> This section describes the code today, where `gatewayd serve` is the
+> supervisor. The target is [supervisor.md](supervisor.md) (#1191, ruling 240
+> item 4): one process per service under `platformd` as the single supervisor,
+> with a zebra-role process owning the kernel routes. It supersedes #557's open
+> questions about the supervisor (systemd template units).
 
 The same registration walk has a third mode, and it is the one an internet
 edge runs in (#557). When `GatewayConfig.Supervisor` is set (the `process:`
@@ -400,9 +411,10 @@ replaced in one transaction, a matching GRE carrier, WireGuard device or IPsec
 SA kept, and the ESP state under SPIs the configuration no longer names swept;
 see [engineering.md](engineering.md)), while a planned stop still withdraws
 them.
-The management VPN moved with them: `vpn` runs as the service account with no
-capability, takes the `vpn` section of the desired document, and records its
-leases with the control plane from inside the child.
+The management VPN moved with them: `process/class.go` defines a `vpn` process
+(parser class, hosting `management-vpn`, state directory `vpn`) that runs as
+the service account with no capability, takes the `vpn` section of the desired
+document, and records its leases with the control plane from inside the child.
 [`engineering.md`](engineering.md) §The process model carries the state.
 
 Moving `datapath` has two deliberate consequences. `Gateway.Apply` forwards

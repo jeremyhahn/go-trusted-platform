@@ -87,7 +87,7 @@ run this from live install media.** It repartitions the target disk.
 | `--fips` | bool | `false` | FIPS mode (forces PBKDF2 over Argon2id) |
 | `--lockdown` | bool | **`true`** | Kernel lockdown |
 | `--lockdown-mode` | string | `confidentiality` | `integrity` or `confidentiality` |
-| `--tpm-auto-upgrade-seal` | bool | **`true`** | Written to `/etc/alpine-tpm.conf` (`pkg/installer/alpine.go:601`) and read by nothing; no automatic reseal exists ([engineering.md §5](engineering.md#5-unlock-strategy-table--as-the-code-registers-it)) |
+| `--tpm-auto-upgrade-seal` | bool | **`true`** | Written to `/etc/alpine-tpm.conf` (`pkg/installer/alpine.go:602`) and read by nothing; no automatic reseal exists ([engineering.md §5](engineering.md#5-unlock-strategy-table--as-the-code-registers-it)) |
 | `--platformd-binary` | string | `""` | Path to the platformd binary to install |
 | `--verbose` / `-v` | bool | `false` | Verbose logging |
 | `--debug` | bool | `false` | Debug logging (implies verbose) |
@@ -142,7 +142,7 @@ Build a Unified Kernel Image.
 | `--cmdline` | string | `""` | Kernel command line |
 | `--output` | string | `""` | Output path for the UKI |
 | `--osrelease` | string | `""` | Path to an os-release file |
-| `--stub` | string | `""` | EFI stub; defaults to `/usr/lib/systemd/boot/efi/linuxx64.efi.stub` |
+| `--stub` | string | `""` | EFI stub; defaults to the host architecture's systemd stub, e.g. `/usr/lib/systemd/boot/efi/linuxx64.efi.stub` |
 | `--use-objcopy` | bool | `false` | Use the objcopy-based builder |
 | `--verbose` / `-v` | bool | `false` | Verbose logging |
 | `--debug` | bool | `false` | Debug logging |
@@ -163,7 +163,7 @@ under enforced Secure Boot with `CONFIG_MODULE_SIG_FORCE`.
 |---|---|---|---|
 | `--kver` | string | `""` | Kernel version; empty = newest under `/lib/modules` |
 | `--config` | string | `""` | Platform config; defaults to `/etc/platformd/config.yaml`, then `/etc/platformd/install.yaml` |
-| `--uki` | string | `""` | Live UKI to replace; defaults to `/boot/efi/EFI/BOOT/BOOTX64.EFI` |
+| `--uki` | string | `""` | Live UKI to replace; defaults to the host architecture's loader under `/boot/efi/EFI/BOOT` (`BOOTX64.EFI` or `BOOTAA64.EFI`) |
 | `--verbose` / `-v` | bool | `false` | Verbose logging |
 | `--debug` | bool | `false` | Debug logging |
 
@@ -287,9 +287,6 @@ Two ways to proceed:
   is a build-host operation — it does not determine whether the *installed
   system* runs in FIPS mode, which is selected by the `ProfileFIPS` install
   profile and the FIPS kernel.
-
-```text
-```
 
 **`--pre-fetch` defaults to `true` and should stay that way** for BMC virtual
 media, air-gapped and PXE installs. `--pre-fetch=false` is only safe when the

@@ -2,6 +2,8 @@
 
 > **Status: NORMATIVE** · Scope: the planned `dht` feature (docs/SPEC.md:53); design only, no code exists · Last verified: 2026-10-21
 > Conflicts with this document are defects. Fix them here first.
+> **Design only:** none of the `platformctl` commands in this document exist
+> (no `dht`, `p2p` or `reputation` group is registered); see [cli.md](cli.md).
 
 This document consolidates operational aspects of the go-trusted-platform network including genesis protocol, partition handling, telemetry, and planned enhancements.
 

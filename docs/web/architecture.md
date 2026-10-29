@@ -1,6 +1,6 @@
 # Web Console and Web Server — Architecture
 
-> **Status: NORMATIVE** · Scope: `pkg/webserver/`, `pkg/webservice/`, `web/` · Last verified: 2026-08-18
+> **Status: NORMATIVE** · Scope: `pkg/webserver/`, `pkg/webservice/`, `web/` · Last verified: 2026-10-27
 > Conflicts with this document are defects. Fix them here first.
 > The feature folder is: [architecture.md](architecture.md) · [engineering.md](engineering.md) · [cli.md](cli.md) · [api.md](api.md) · [user.md](user.md).
 >
@@ -68,9 +68,11 @@ That failure was real and the fallback exists because of it.
 
 ### 2.2 The SPA fallback has an exclusion list
 
-`nonSPAPathPrefixes` — `/api/`, `/_next/`, `/static/` — never fall back to the
-SPA shell. A miss under `/api/` returns a **JSON** 404
-(`{"error","path","message"}`); a miss under the other two returns a plain 404.
+`apiPathPrefixes` — `/api/`, `/v1/`, `/v2/`, `/.well-known/` — and
+`staticAssetPathPrefixes` — `/_next/`, `/static/` — never fall back to the SPA
+shell (`isNonSPAPath`). A miss under an API prefix returns a **JSON** 404
+(`{"error","path","message"}`); a miss under a static-asset prefix returns a
+plain 404.
 Without this the frontend would answer REST calls with HTML, and every client
 error would surface as a JSON parse failure instead of a 404.
 
@@ -84,7 +86,7 @@ error would surface as a JSON parse failure instead of a 404.
 | **Embedding never** | An air-gapped or immutable-root deployment wants exactly one artifact. `WITH_WEB=1` gives it. Both modes exist because both deployments exist. |
 | **Serving the SPA shell for every miss** | REST clients would receive HTML for a mistyped endpoint. §2.2. |
 | **Serving `/index.html` for unmatched dynamic routes** | Users landed back on the dashboard instead of the detail page. §2.1. |
-| **Hand-written `fetch` wrappers per page** | The frontend consumes `trusted-platform-sdk` and its React hooks (`useDevice`, `useCA`, `useKMS`, …) so the API contract lives in one generated place. **Correction:** the pre-migration `control-panel.md` describes a `src/lib/api/` client layer and `api-integration.md` an `apiRequest` helper. Neither exists — `src/lib/` contains only `utils.ts`, and the hooks barrel `src/hooks/index.ts` re-exports 25 SDK hooks. |
+| **Hand-written `fetch` wrappers per page** | The frontend consumes `trusted-platform-sdk` and its React hooks (`useDevice`, `useCA`, `useKMS`, …) so the API contract lives in one generated place. **Correction:** the pre-migration `control-panel.md` describes a `src/lib/api/` client layer and `api-integration.md` an `apiRequest` helper. Neither exists — `src/lib/` holds pure helpers and no API client, and the hooks barrel `src/hooks/index.ts` re-exports 32 SDK hooks. |
 | **Mounting the OCI distribution API under `/api/v1`** | The distribution specification mandates `/v2/` at the host root; under `/api/v1` a `docker pull` against the registry fails. It is registered on the root router before the API subrouter. |
 | **Turbopack for the default dev and build scripts** | The linked local SDK (`file:../sdk/javascript`) resolves more reliably under webpack. `dev` and `build` are `next dev --webpack` / `next build --webpack`; `dev:turbopack` remains available. **Correction:** the pre-migration `configuration.md` and `README.md` document `next dev --turbopack` as the default. |
 
@@ -231,10 +233,12 @@ SPA index → 404.
    `isLoading`, `login`, `logout`. It is the console's only auth
    implementation: `@/hooks` re-exports `useAuth` and `AuthProvider` from it, so
    every import path reaches the same React context.
-5. `AuthGuard` renders nothing and `replace`s to `/auth/webauthn` whenever the
-   decode yields no user.
-6. Every API call goes through `PlatformProvider` with `baseUrl: "/api"` and
-   `credentials: "include"` — same origin, so the cookie rides along.
+5. `AuthGuard` (`src/app/(dashboard)/dashboard-providers.tsx`) renders
+   nothing and `replace`s to `/auth/webauthn` whenever the decode yields no
+   user.
+6. Every API call goes through `PlatformProvider` (`src/app/providers.tsx`)
+   with `baseUrl: getBaseUrl()` — the page's own origin in the browser — and
+   `credentials: "include"`, so the cookie rides along.
 
 ## 6. Trust boundaries
 
@@ -317,9 +321,12 @@ with server-side validation". Seven days is the *cookie*; the token default is
    is enforced **server-side** from the token's `tenant_id`; the console's
    tenant state is display only, and hiding a button hides nothing.
 2. **Virtual-host proxy → backend.** Unauthenticated and unauthorised. §4.1.
-3. **Host header.** `validateHostHeader` accepts a domain (with optional port)
-   or a literal IP. Virtual-host dispatch is by `Host`, so a misconfigured host
-   list is a routing question, not an authorization one.
+3. **Host header.** The `full` surface applies no general `Host` check.
+   Virtual hosts match an allowlist of their configured names
+   (`hostSetMatcher`); the plaintext redirect and the `edge` catch-all answer
+   `421` for a host outside `servedHosts()`. Virtual-host dispatch is by
+   `Host`, so a misconfigured host list is a routing question, not an
+   authorization one.
 4. **Filesystem serving.** Request paths are `filepath.Clean`ed and joined onto
    the configured root; on the embedded path the FS is a `fs.Sub` of the
    compiled `dist/`. Directories outside the root are not reachable through
