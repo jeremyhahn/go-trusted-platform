@@ -1053,7 +1053,7 @@ func (s *CAGRPCService) certToSummary(cert *x509.Certificate) *platformv1.Certif
 		NotBefore:    timestamppb.New(cert.NotBefore),
 		NotAfter:     timestamppb.New(cert.NotAfter),
 		Status:       s.getCertificateStatus(cert),
-		KeyAlgorithm: s.x509AlgorithmToProto(cert.PublicKeyAlgorithm),
+		KeyAlgorithm: issuance.PublicKeyAlgorithm(cert.PublicKey),
 	}
 }
 
@@ -1082,7 +1082,7 @@ func (s *CAGRPCService) certToProto(cert *x509.Certificate, includePEM, includeD
 		NotBefore:          timestamppb.New(cert.NotBefore),
 		NotAfter:           timestamppb.New(cert.NotAfter),
 		Status:             s.getCertificateStatus(cert),
-		KeyAlgorithm:       s.x509AlgorithmToProto(cert.PublicKeyAlgorithm),
+		KeyAlgorithm:       issuance.PublicKeyAlgorithm(cert.PublicKey),
 		SignatureAlgorithm: cert.SignatureAlgorithm.String(),
 		IsCa:               cert.IsCA,
 		MaxPathLen:         int32(cert.MaxPathLen),
@@ -1139,21 +1139,6 @@ func (s *CAGRPCService) keyAlgorithmToString(alg x509.PublicKeyAlgorithm) string
 	}
 }
 
-// x509AlgorithmToProto converts an x509.PublicKeyAlgorithm to a proto KeyAlgorithm.
-func (s *CAGRPCService) x509AlgorithmToProto(alg x509.PublicKeyAlgorithm) platformv1.KeyAlgorithm {
-	switch alg {
-	case x509.RSA:
-		return platformv1.KeyAlgorithm_KEY_ALGORITHM_RSA_2048
-	case x509.ECDSA:
-		return platformv1.KeyAlgorithm_KEY_ALGORITHM_ECDSA_P256
-	case x509.Ed25519:
-		return platformv1.KeyAlgorithm_KEY_ALGORITHM_ED25519
-	default:
-		return platformv1.KeyAlgorithm_KEY_ALGORITHM_UNSPECIFIED
-	}
-}
-
-// protoAlgorithmToX509 converts a proto KeyAlgorithm to x509.PublicKeyAlgorithm.
 // keyUsageToStrings converts x509.KeyUsage to string slice.
 func (s *CAGRPCService) keyUsageToStrings(usage x509.KeyUsage) []string {
 	var usages []string

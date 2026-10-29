@@ -15,9 +15,11 @@ package grpc
 
 import (
 	"context"
+	"crypto"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/rsa"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/hex"
@@ -1533,16 +1535,48 @@ func TestKeyAlgorithmConversions(t *testing.T) {
 	if service.keyAlgorithmToString(x509.DSA) != "UNKNOWN" {
 		t.Error("expected UNKNOWN")
 	}
+}
 
-	// Test x509 to proto
-	if service.x509AlgorithmToProto(x509.RSA) != platformv1.KeyAlgorithm_KEY_ALGORITHM_RSA_2048 {
-		t.Error("expected RSA_2048")
+// TestCertConvertersReportIssuedKeyAlgorithm pins that both certificate
+// converters report the issued key's real size and curve (Codex 8232): an
+// RSA-4096 or ECDSA-P384 certificate was reported as RSA-2048 or ECDSA-P256.
+func TestCertConvertersReportIssuedKeyAlgorithm(t *testing.T) {
+	ecKey, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
+	if err != nil {
+		t.Fatalf("generate P-384 key: %v", err)
 	}
-	if service.x509AlgorithmToProto(x509.ECDSA) != platformv1.KeyAlgorithm_KEY_ALGORITHM_ECDSA_P256 {
-		t.Error("expected ECDSA_P256")
+	// A 4096-bit modulus; the converters read only its size, so no key is generated.
+	rsa4096 := &rsa.PublicKey{N: new(big.Int).Lsh(big.NewInt(1), 4095), E: 65537}
+
+	tests := []struct {
+		name string
+		pub  crypto.PublicKey
+		alg  x509.PublicKeyAlgorithm
+		want platformv1.KeyAlgorithm
+	}{
+		{"RSA-4096", rsa4096, x509.RSA, platformv1.KeyAlgorithm_KEY_ALGORITHM_RSA_4096},
+		{"ECDSA-P384", &ecKey.PublicKey, x509.ECDSA, platformv1.KeyAlgorithm_KEY_ALGORITHM_ECDSA_P384},
+		{"unsupported key type", struct{}{}, x509.DSA, platformv1.KeyAlgorithm_KEY_ALGORITHM_UNSPECIFIED},
+		{"no public key", nil, x509.RSA, platformv1.KeyAlgorithm_KEY_ALGORITHM_UNSPECIFIED},
 	}
-	if service.x509AlgorithmToProto(x509.Ed25519) != platformv1.KeyAlgorithm_KEY_ALGORITHM_ED25519 {
-		t.Error("expected ED25519")
+
+	service := &CAGRPCService{}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cert := &x509.Certificate{
+				SerialNumber:       big.NewInt(1),
+				PublicKey:          tt.pub,
+				PublicKeyAlgorithm: tt.alg,
+				NotBefore:          time.Now().Add(-time.Hour),
+				NotAfter:           time.Now().Add(time.Hour),
+			}
+			if got := service.certToSummary(cert).GetKeyAlgorithm(); got != tt.want {
+				t.Errorf("certToSummary key algorithm = %v, want %v", got, tt.want)
+			}
+			if got := service.certToProto(cert, false, false).GetKeyAlgorithm(); got != tt.want {
+				t.Errorf("certToProto key algorithm = %v, want %v", got, tt.want)
+			}
+		})
 	}
 }
 
