@@ -114,12 +114,12 @@ package sdn
 | `make test` | All unit tests, `pkg/sdn/netlink` excluded |
 | `make test-pkg PKG=./pkg/sdn/openflow/` | One package with the derived build tags; add `TESTFLAGS='-run TestFoo -v'` to narrow it |
 | `make coverage-sdn` | `./pkg/sdn/...` with a coverage profile and HTML report in the coverage directory |
-| `make bench-sdn` | Benchmarks for vxlan, bgp, gateway, ipam, dhcp and openflow |
-| `make bench-sdn-<pkg>` | One of those six |
+| `make bench-sdn` | Benchmarks for vxlan, bgp, gateway, ipam, overlay, dhcp and openflow |
+| `make bench-sdn-<pkg>` | One of those seven; `make bench-sdn-ipam` and `make bench-sdn-overlay` are the IPAM and overlay load profiles (#964) |
 | `make integration-test-sdn` | `./test/integration/sdn/...` through the shared devcontainer runner (OVS, swtpm, platformd) |
 | `make integration-test-sdn-full` | The SDN suite with OVS in a privileged devcontainer |
 | `make integration-test-sdn-shell` | An interactive shell in the SDN devcontainer |
-| `make stress-sdn`, `make stress-sdn-{ipam,bgp,dhcp,overlay,cluster}` | The stress suites |
+| `make stress-sdn`, `make stress-sdn-{bgp,dhcp,cluster}` | The stress suites; IPAM and overlay load moved to `make bench-sdn-ipam` and `make bench-sdn-overlay` (#964) |
 
 There are no per-package `test-sdn-*` targets; use `make test-pkg`. Never
 hand-write the `-tags` list: derive it with `make -s print-build-tags`.

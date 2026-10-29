@@ -2371,6 +2371,9 @@ bench-sdn:
 	@echo "$(CYAN)→ IPAM benchmarks$(RESET)"
 	# tag-independent
 	go test -bench=. -benchmem -run=^$$ ./pkg/sdn/ipam/...
+	@echo "$(CYAN)→ Overlay benchmarks$(RESET)"
+	# tag-independent
+	go test -bench=. -benchmem -run=^$$ ./pkg/sdn/overlay/...
 	@echo "$(CYAN)→ DHCP benchmarks$(RESET)"
 	# tag-independent
 	go test -bench=. -benchmem -run=^$$ ./pkg/sdn/dhcp/...
@@ -2406,6 +2409,13 @@ bench-sdn-ipam:
 	@echo "$(CYAN)Running IPAM benchmarks...$(RESET)"
 	# tag-independent
 	go test -bench=. -benchmem -run=^$$ ./pkg/sdn/ipam/...
+
+.PHONY: bench-sdn-overlay
+## bench-sdn-overlay: Run overlay package benchmarks
+bench-sdn-overlay:
+	@echo "$(CYAN)Running overlay benchmarks...$(RESET)"
+	# tag-independent
+	go test -bench=. -benchmem -run=^$$ ./pkg/sdn/overlay/...
 
 .PHONY: bench-sdn-dhcp
 ## bench-sdn-dhcp: Run DHCP package benchmarks
@@ -2501,19 +2511,6 @@ stress-sdn: build-devcontainer
 		$(DEVCONTAINER_IMAGE) \
 		go test -v $(TEST_BUILD_TAGS_ARG) -timeout=30m ./stress/...
 
-.PHONY: stress-sdn-ipam
-## stress-sdn-ipam: Run IPAM stress tests
-stress-sdn-ipam: build-devcontainer
-	@echo "Running IPAM stress tests..."
-	@docker run --rm --privileged \
-		--name go-trusted-platform-ipam-stress \
-		-e CGO_ENABLED=0 \
-		-v $(PWD):/workspace \
-		$(DOCKER_MODULE_MOUNTS) \
-		-w /workspace/test/integration/sdn \
-		$(DEVCONTAINER_IMAGE) \
-		go test -v $(TEST_BUILD_TAGS_ARG) -timeout=15m -run TestIPAM ./stress/...
-
 .PHONY: stress-sdn-bgp
 ## stress-sdn-bgp: Run BGP stress tests
 stress-sdn-bgp: build-devcontainer
@@ -2539,22 +2536,6 @@ stress-sdn-dhcp: build-devcontainer
 		-w /workspace/test/integration/sdn \
 		$(DEVCONTAINER_IMAGE) \
 		go test -v $(TEST_BUILD_TAGS_ARG) -timeout=15m -run TestDHCP ./stress/...
-
-.PHONY: stress-sdn-overlay
-## stress-sdn-overlay: Run overlay stress tests
-stress-sdn-overlay: build-devcontainer
-	@echo "Running overlay stress tests..."
-	@docker run --rm --privileged \
-		--name go-trusted-platform-overlay-stress \
-		--device /dev/net/tun:/dev/net/tun \
-		--cap-add=NET_ADMIN \
-		-e AUTO_START_OVS=true \
-		-e CGO_ENABLED=0 \
-		-v $(PWD):/workspace \
-		$(DOCKER_MODULE_MOUNTS) \
-		-w /workspace/test/integration/sdn \
-		$(DEVCONTAINER_IMAGE) \
-		go test -v $(TEST_BUILD_TAGS_ARG) -timeout=15m -run TestOverlay ./stress/...
 
 .PHONY: stress-sdn-cluster
 ## stress-sdn-cluster: Run cluster state stress tests
