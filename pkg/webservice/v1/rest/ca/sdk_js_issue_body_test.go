@@ -16,6 +16,7 @@ package ca
 import (
 	"bytes"
 	"context"
+	"crypto/elliptic"
 	"crypto/x509"
 	"net/http"
 	"net/http/httptest"
@@ -56,6 +57,9 @@ func TestIssueCertificate_JavaScriptSDKBody(t *testing.T) {
 	assert.Equal(t, "sub.example.com", issued.Subject.CommonName)
 	require.NotNil(t, issued.KeyAttributes)
 	assert.Equal(t, x509.RSA, issued.KeyAttributes.KeyAlgorithm)
+	require.NotNil(t, issued.KeyAttributes.RSAAttributes, "the RSA size did not reach the key store")
+	assert.Equal(t, 4096, issued.KeyAttributes.RSAAttributes.KeySize)
+	assert.Nil(t, issued.KeyAttributes.ECCAttributes)
 	assert.True(t, issued.IsCA)
 	assert.Equal(t, 1, issued.MaxPathLen)
 	assert.Equal(t, 30, issued.Valid)
@@ -83,4 +87,7 @@ func TestIssueCertificate_ShortEnumNameIsLost(t *testing.T) {
 	require.NotNil(t, issued)
 	require.NotNil(t, issued.KeyAttributes)
 	assert.Equal(t, x509.ECDSA, issued.KeyAttributes.KeyAlgorithm)
+	require.NotNil(t, issued.KeyAttributes.ECCAttributes, "the default curve was not set")
+	assert.Equal(t, elliptic.P256(), issued.KeyAttributes.ECCAttributes.Curve)
+	assert.Nil(t, issued.KeyAttributes.RSAAttributes)
 }

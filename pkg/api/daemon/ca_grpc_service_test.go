@@ -1755,47 +1755,6 @@ func TestCAGRPCService_GetCABundle_WithIntermediates(t *testing.T) {
 	}
 }
 
-func TestCAGRPCService_ProtoKeyAlgorithmToX509(t *testing.T) {
-	t.Parallel()
-
-	svc := &CAGRPCService{}
-
-	tests := []struct {
-		name     string
-		input    platformv1.KeyAlgorithm
-		expected x509.PublicKeyAlgorithm
-		wantErr  bool
-	}{
-		{"RSA 2048", platformv1.KeyAlgorithm_KEY_ALGORITHM_RSA_2048, x509.RSA, false},
-		{"RSA 3072", platformv1.KeyAlgorithm_KEY_ALGORITHM_RSA_3072, x509.RSA, false},
-		{"RSA 4096", platformv1.KeyAlgorithm_KEY_ALGORITHM_RSA_4096, x509.RSA, false},
-		{"ECDSA P256", platformv1.KeyAlgorithm_KEY_ALGORITHM_ECDSA_P256, x509.ECDSA, false},
-		{"ECDSA P384", platformv1.KeyAlgorithm_KEY_ALGORITHM_ECDSA_P384, x509.ECDSA, false},
-		{"ECDSA P521", platformv1.KeyAlgorithm_KEY_ALGORITHM_ECDSA_P521, x509.ECDSA, false},
-		{"ED25519", platformv1.KeyAlgorithm_KEY_ALGORITHM_ED25519, x509.Ed25519, false},
-		{"Unspecified defaults to ECDSA", platformv1.KeyAlgorithm_KEY_ALGORITHM_UNSPECIFIED, x509.ECDSA, false},
-		{"Invalid algorithm", platformv1.KeyAlgorithm(999), 0, true},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			result, err := svc.protoKeyAlgorithmToX509(tc.input)
-			if tc.wantErr {
-				if err == nil {
-					t.Error("expected error")
-				}
-			} else {
-				if err != nil {
-					t.Errorf("unexpected error: %v", err)
-				}
-				if result != tc.expected {
-					t.Errorf("got %v, want %v", result, tc.expected)
-				}
-			}
-		})
-	}
-}
-
 func TestCAGRPCService_KeyAlgorithmToString(t *testing.T) {
 	t.Parallel()
 

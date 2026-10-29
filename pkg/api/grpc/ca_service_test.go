@@ -1544,17 +1544,6 @@ func TestKeyAlgorithmConversions(t *testing.T) {
 	if service.x509AlgorithmToProto(x509.Ed25519) != platformv1.KeyAlgorithm_KEY_ALGORITHM_ED25519 {
 		t.Error("expected ED25519")
 	}
-
-	// Test proto to x509
-	if service.protoAlgorithmToX509(platformv1.KeyAlgorithm_KEY_ALGORITHM_RSA_2048) != x509.RSA {
-		t.Error("expected RSA")
-	}
-	if service.protoAlgorithmToX509(platformv1.KeyAlgorithm_KEY_ALGORITHM_ECDSA_P256) != x509.ECDSA {
-		t.Error("expected ECDSA")
-	}
-	if service.protoAlgorithmToX509(platformv1.KeyAlgorithm_KEY_ALGORITHM_ED25519) != x509.Ed25519 {
-		t.Error("expected Ed25519")
-	}
 }
 
 func TestRevocationReasonToProto(t *testing.T) {

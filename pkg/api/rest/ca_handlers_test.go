@@ -1762,27 +1762,6 @@ func TestKeyAlgorithmToProto(t *testing.T) {
 	assert.Equal(t, platformv1.KeyAlgorithm_KEY_ALGORITHM_UNSPECIFIED, keyAlgorithmToProto(x509.DSA))
 }
 
-func TestProtoKeyAlgorithmToX509(t *testing.T) {
-	cases := map[platformv1.KeyAlgorithm]x509.PublicKeyAlgorithm{
-		platformv1.KeyAlgorithm_KEY_ALGORITHM_UNSPECIFIED: x509.ECDSA,
-		platformv1.KeyAlgorithm_KEY_ALGORITHM_RSA_4096:    x509.RSA,
-		platformv1.KeyAlgorithm_KEY_ALGORITHM_ECDSA_P384:  x509.ECDSA,
-		platformv1.KeyAlgorithm_KEY_ALGORITHM_ED25519:     x509.Ed25519,
-	}
-	for in, want := range cases {
-		got, err := protoKeyAlgorithmToX509(in)
-		require.NoError(t, err, in.String())
-		assert.Equal(t, want, got, in.String())
-	}
-}
-
-func TestProtoKeyAlgorithmToX509_Unsupported(t *testing.T) {
-	_, err := protoKeyAlgorithmToX509(platformv1.KeyAlgorithm_KEY_ALGORITHM_DILITHIUM3)
-	var invalid ErrInvalidKeyAlgorithm
-	require.ErrorAs(t, err, &invalid)
-	assert.Equal(t, "KEY_ALGORITHM_DILITHIUM3", invalid.Algorithm)
-}
-
 // failingBody is a request body whose read fails.
 type failingBody struct{}
 

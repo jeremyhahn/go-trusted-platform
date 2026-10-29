@@ -2608,6 +2608,78 @@ func TestCAHandler_HandleIssue_AllAlgorithms(t *testing.T) {
 	}
 }
 
+// recordingCA keeps the request the handler hands the CA, so a test can see
+// the key the key store is asked to generate.
+type recordingCA struct {
+	*mockCA
+	issued *xkmsca.CACertificateRequest
+}
+
+func (m *recordingCA) IssueCertificate(ctx context.Context, req *xkmsca.CACertificateRequest) (*xkmsca.IssuedCertificate, error) {
+	m.issued = req
+	return m.mockCA.IssueCertificate(ctx, req)
+}
+
+// TestCAHandler_HandleIssue_KeepsKeySizeAndCurve pins that the RSA size and
+// ECDSA curve a QUIC issue request names reach the key store (Codex 8183).
+func TestCAHandler_HandleIssue_KeepsKeySizeAndCurve(t *testing.T) {
+	tests := []struct {
+		alg     string
+		rsaBits int
+		curve   string
+	}{
+		{alg: "RSA-4096", rsaBits: 4096},
+		{alg: "rsa3072", rsaBits: 3072},
+		{alg: "RSA", rsaBits: 2048},
+		{alg: "P384", curve: "P-384"},
+		{alg: "ECDSA-P521", curve: "P-521"},
+		{alg: "", curve: "P-256"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.alg, func(t *testing.T) {
+			ca := &recordingCA{mockCA: newMockCA()}
+			handler := NewCAHandler(logging.DefaultLogger(), ca, nil)
+
+			payload, err := quicwire.EncodePayload(&CAIssueRequest{
+				Subject:      &Subject{CommonName: "test.example.com"},
+				ValidDays:    365,
+				KeyAlgorithm: tt.alg,
+			})
+			require.NoError(t, err)
+
+			resp := handler.HandleRequest(context.Background(), &quicwire.Request{
+				Opcode:  quicwire.OpCAIssue,
+				Payload: payload,
+			})
+			require.Equal(t, quicwire.StatusOK, resp.Status)
+			require.NotNil(t, ca.issued)
+			attrs := ca.issued.KeyAttributes
+			require.NotNil(t, attrs)
+
+			if tt.rsaBits != 0 {
+				assert.Equal(t, x509.RSA, attrs.KeyAlgorithm)
+				require.NotNil(t, attrs.RSAAttributes)
+				assert.Equal(t, tt.rsaBits, attrs.RSAAttributes.KeySize)
+				assert.Nil(t, attrs.ECCAttributes)
+				return
+			}
+			assert.Equal(t, x509.ECDSA, attrs.KeyAlgorithm)
+			require.NotNil(t, attrs.ECCAttributes)
+			require.NotNil(t, attrs.ECCAttributes.Curve)
+			assert.Equal(t, tt.curve, attrs.ECCAttributes.Curve.Params().Name)
+			assert.Nil(t, attrs.RSAAttributes)
+		})
+	}
+}
+
+func TestIssueKeyAlgorithm_UnknownName(t *testing.T) {
+	_, err := issueKeyAlgorithm("DSA")
+	var invalid ErrCAInvalidAlgorithm
+	require.ErrorAs(t, err, &invalid)
+	assert.Equal(t, "DSA", invalid.Algorithm)
+}
+
 // Test CA Bundle with different algorithms
 func TestCAHandler_HandleBundle_AllAlgorithms(t *testing.T) {
 	logger := logging.DefaultLogger()

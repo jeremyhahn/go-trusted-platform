@@ -325,33 +325,3 @@ func TestRevocationReasonToProto(t *testing.T) {
 		})
 	}
 }
-
-func TestProtoKeyAlgorithmToX509(t *testing.T) {
-	handlers, _ := newTestHandlers(nil)
-
-	t.Run("every defined algorithm", func(t *testing.T) {
-		cases := map[platformv1.KeyAlgorithm]x509.PublicKeyAlgorithm{
-			platformv1.KeyAlgorithm_KEY_ALGORITHM_UNSPECIFIED: x509.ECDSA,
-			platformv1.KeyAlgorithm_KEY_ALGORITHM_RSA_2048:    x509.RSA,
-			platformv1.KeyAlgorithm_KEY_ALGORITHM_RSA_3072:    x509.RSA,
-			platformv1.KeyAlgorithm_KEY_ALGORITHM_RSA_4096:    x509.RSA,
-			platformv1.KeyAlgorithm_KEY_ALGORITHM_ECDSA_P256:  x509.ECDSA,
-			platformv1.KeyAlgorithm_KEY_ALGORITHM_ECDSA_P384:  x509.ECDSA,
-			platformv1.KeyAlgorithm_KEY_ALGORITHM_ECDSA_P521:  x509.ECDSA,
-			platformv1.KeyAlgorithm_KEY_ALGORITHM_ED25519:     x509.Ed25519,
-		}
-		for in, want := range cases {
-			got, err := handlers.protoKeyAlgorithmToX509(in)
-			require.NoError(t, err, in.String())
-			assert.Equal(t, want, got, in.String())
-		}
-	})
-
-	t.Run("an undefined algorithm is a typed error", func(t *testing.T) {
-		_, err := handlers.protoKeyAlgorithmToX509(platformv1.KeyAlgorithm(999))
-
-		var invalid ErrInvalidKeyAlgorithm
-		require.ErrorAs(t, err, &invalid)
-		assert.Equal(t, "999", invalid.Algorithm)
-	})
-}

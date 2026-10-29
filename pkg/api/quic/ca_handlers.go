@@ -29,6 +29,7 @@ import (
 	quicbaasca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/ca"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/ca/issuance"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 )
 
@@ -365,7 +366,7 @@ func (h *CAHandler) handleIssue(ctx context.Context, req *quicwire.Request) *qui
 		return h.errorResponse(quicwire.StatusInvalidArgument, ErrCAMissingCommonName)
 	}
 
-	keyAlg, err := h.parseKeyAlgorithm(issueReq.KeyAlgorithm)
+	keyAlg, err := issueKeyAlgorithm(issueReq.KeyAlgorithm)
 	if err != nil {
 		return h.errorResponse(quicwire.StatusInvalidArgument, err)
 	}
@@ -402,11 +403,9 @@ func (h *CAHandler) handleIssue(ctx context.Context, req *quicwire.Request) *qui
 		return h.errorResponse(quicwire.StatusInvalidArgument, err)
 	}
 
-	caReq.KeyAttributes = &xkmssdk.KeyAttributes{
-		CN:           issueReq.Subject.CommonName,
-		KeyAlgorithm: keyAlg,
-		StoreType:    storeType,
-		KeyType:      xkmssdk.KeyTypeTLS,
+	caReq.KeyAttributes, err = issuance.KeyAttributes(keyAlg, issueReq.Subject.CommonName, storeType)
+	if err != nil {
+		return h.errorResponse(quicwire.StatusInvalidArgument, err)
 	}
 
 	issued, err := h.ca.IssueCertificate(ctx, caReq)
@@ -1032,6 +1031,39 @@ func (h *CAHandler) parseKeyAlgorithm(alg string) (x509.PublicKeyAlgorithm, erro
 	default:
 		return 0, ErrCAInvalidAlgorithm{Algorithm: alg}
 	}
+}
+
+// issueKeyAlgorithms maps the key algorithm names a QUIC issue request accepts
+// to the proto algorithm, so the RSA size and ECDSA curve reach the key store.
+// A bare "RSA" or "ECDSA" names the RSA-2048 or P-256 key; an empty name is
+// the documented ECDSA P-256 default.
+var issueKeyAlgorithms = map[string]platformv1.KeyAlgorithm{
+	"":           platformv1.KeyAlgorithm_KEY_ALGORITHM_UNSPECIFIED,
+	"RSA":        platformv1.KeyAlgorithm_KEY_ALGORITHM_RSA_2048,
+	"RSA2048":    platformv1.KeyAlgorithm_KEY_ALGORITHM_RSA_2048,
+	"RSA-2048":   platformv1.KeyAlgorithm_KEY_ALGORITHM_RSA_2048,
+	"RSA3072":    platformv1.KeyAlgorithm_KEY_ALGORITHM_RSA_3072,
+	"RSA-3072":   platformv1.KeyAlgorithm_KEY_ALGORITHM_RSA_3072,
+	"RSA4096":    platformv1.KeyAlgorithm_KEY_ALGORITHM_RSA_4096,
+	"RSA-4096":   platformv1.KeyAlgorithm_KEY_ALGORITHM_RSA_4096,
+	"ECDSA":      platformv1.KeyAlgorithm_KEY_ALGORITHM_ECDSA_P256,
+	"EC":         platformv1.KeyAlgorithm_KEY_ALGORITHM_ECDSA_P256,
+	"ECDSA-P256": platformv1.KeyAlgorithm_KEY_ALGORITHM_ECDSA_P256,
+	"P256":       platformv1.KeyAlgorithm_KEY_ALGORITHM_ECDSA_P256,
+	"ECDSA-P384": platformv1.KeyAlgorithm_KEY_ALGORITHM_ECDSA_P384,
+	"P384":       platformv1.KeyAlgorithm_KEY_ALGORITHM_ECDSA_P384,
+	"ECDSA-P521": platformv1.KeyAlgorithm_KEY_ALGORITHM_ECDSA_P521,
+	"P521":       platformv1.KeyAlgorithm_KEY_ALGORITHM_ECDSA_P521,
+	"ED25519":    platformv1.KeyAlgorithm_KEY_ALGORITHM_ED25519,
+}
+
+// issueKeyAlgorithm resolves the key algorithm name of an issue request.
+func issueKeyAlgorithm(alg string) (platformv1.KeyAlgorithm, error) {
+	keyAlg, ok := issueKeyAlgorithms[strings.ToUpper(alg)]
+	if !ok {
+		return 0, ErrCAInvalidAlgorithm{Algorithm: alg}
+	}
+	return keyAlg, nil
 }
 
 func (h *CAHandler) keyAlgorithmToString(alg x509.PublicKeyAlgorithm) string {
