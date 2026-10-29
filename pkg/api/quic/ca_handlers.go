@@ -1066,6 +1066,30 @@ func issueKeyAlgorithm(alg string) (platformv1.KeyAlgorithm, error) {
 	return keyAlg, nil
 }
 
+// issuedKeyAlgorithmNames names an issued key's algorithm exactly as the
+// SDK's cawire.KeyAlgorithmName writes it into an issue request, so a QUIC
+// response carries the RSA size and ECDSA curve REST and gRPC report as a
+// pb KeyAlgorithm (Codex 8200).
+var issuedKeyAlgorithmNames = map[platformv1.KeyAlgorithm]string{
+	platformv1.KeyAlgorithm_KEY_ALGORITHM_RSA_2048:   "RSA-2048",
+	platformv1.KeyAlgorithm_KEY_ALGORITHM_RSA_3072:   "RSA-3072",
+	platformv1.KeyAlgorithm_KEY_ALGORITHM_RSA_4096:   "RSA-4096",
+	platformv1.KeyAlgorithm_KEY_ALGORITHM_ECDSA_P256: "ECDSA-P256",
+	platformv1.KeyAlgorithm_KEY_ALGORITHM_ECDSA_P384: "ECDSA-P384",
+	platformv1.KeyAlgorithm_KEY_ALGORITHM_ECDSA_P521: "ECDSA-P521",
+	platformv1.KeyAlgorithm_KEY_ALGORITHM_ED25519:    "ED25519",
+}
+
+// issuedKeyAlgorithm names the algorithm of cert's public key; a key of a
+// size or curve the platform does not issue is "UNKNOWN".
+func issuedKeyAlgorithm(cert *x509.Certificate) string {
+	name, ok := issuedKeyAlgorithmNames[issuance.PublicKeyAlgorithm(cert.PublicKey)]
+	if !ok {
+		return "UNKNOWN"
+	}
+	return name
+}
+
 func (h *CAHandler) keyAlgorithmToString(alg x509.PublicKeyAlgorithm) string {
 	switch alg {
 	case x509.RSA:
@@ -1167,7 +1191,7 @@ func (h *CAHandler) certToFull(cert *x509.Certificate, includePEM bool) *Certifi
 		NotBefore:          cert.NotBefore.Unix(),
 		NotAfter:           cert.NotAfter.Unix(),
 		Status:             certStatus,
-		KeyAlgorithm:       h.keyAlgorithmToString(cert.PublicKeyAlgorithm),
+		KeyAlgorithm:       issuedKeyAlgorithm(cert),
 		SignatureAlgorithm: h.signatureAlgorithmToString(cert.SignatureAlgorithm),
 		IsCA:               cert.IsCA,
 		MaxPathLen:         int32(cert.MaxPathLen),
@@ -1273,7 +1297,7 @@ func (h *CAHandler) certToSummary(cert *x509.Certificate) *CertificateSummary {
 		NotBefore:    cert.NotBefore.Unix(),
 		NotAfter:     cert.NotAfter.Unix(),
 		Status:       certStatus,
-		KeyAlgorithm: h.keyAlgorithmToString(cert.PublicKeyAlgorithm),
+		KeyAlgorithm: issuedKeyAlgorithm(cert),
 	}
 }
 

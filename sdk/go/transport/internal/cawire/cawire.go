@@ -34,12 +34,29 @@ var statuses = map[string]platformv1.CertificateStatus{
 	"REVOKED":       platformv1.CertificateStatus_CERTIFICATE_STATUS_REVOKED,
 }
 
-// keyAlgorithms mirrors the gRPC service's x509AlgorithmToProto, which
-// reports the family, not the key size.
-var keyAlgorithms = map[string]platformv1.KeyAlgorithm{
-	"RSA":     platformv1.KeyAlgorithm_KEY_ALGORITHM_RSA_2048,
-	"ECDSA":   platformv1.KeyAlgorithm_KEY_ALGORITHM_ECDSA_P256,
-	"ED25519": platformv1.KeyAlgorithm_KEY_ALGORITHM_ED25519,
+// keyAlgorithms decodes the daemon's key-algorithm strings: the exact names
+// of keyAlgorithmNames, which QUIC and MCP responses carry, and the bare
+// family names an older daemon reported, read as that family's default.
+var keyAlgorithms = decodableKeyAlgorithms()
+
+// legacyKeyAlgorithms are the family names a daemon reported before it
+// named the key size and curve.
+var legacyKeyAlgorithms = map[string]platformv1.KeyAlgorithm{
+	"RSA":   platformv1.KeyAlgorithm_KEY_ALGORITHM_RSA_2048,
+	"ECDSA": platformv1.KeyAlgorithm_KEY_ALGORITHM_ECDSA_P256,
+}
+
+func decodableKeyAlgorithms() map[string]platformv1.KeyAlgorithm {
+	byName := make(map[string]platformv1.KeyAlgorithm, len(keyAlgorithmNames)+len(legacyKeyAlgorithms))
+	for name, alg := range legacyKeyAlgorithms {
+		byName[name] = alg
+	}
+	for alg, name := range keyAlgorithmNames {
+		if name != "" {
+			byName[name] = alg
+		}
+	}
+	return byName
 }
 
 // keyAlgorithmNames names each pb key algorithm the way the daemon's REST,

@@ -1833,7 +1833,7 @@ func TestCAHandler_CertToSummary(t *testing.T) {
 
 	assert.NotNil(t, summary)
 	assert.Equal(t, "test.example.com", summary.CommonName)
-	assert.Equal(t, "ECDSA", summary.KeyAlgorithm)
+	assert.Equal(t, "ECDSA-P256", summary.KeyAlgorithm)
 	assert.Equal(t, "VALID", summary.Status)
 }
 
@@ -1906,7 +1906,7 @@ func TestCAHandler_CertToFull(t *testing.T) {
 
 	assert.NotNil(t, full)
 	assert.Equal(t, "test.example.com", full.Subject.CommonName)
-	assert.Equal(t, "ECDSA", full.KeyAlgorithm)
+	assert.Equal(t, "ECDSA-P256", full.KeyAlgorithm)
 	assert.True(t, full.IsCA)
 	assert.NotEmpty(t, full.Pem)
 }

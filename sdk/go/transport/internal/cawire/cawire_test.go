@@ -43,9 +43,17 @@ func TestStatus_UnknownIsUnspecified(t *testing.T) {
 
 func TestKeyAlgorithm_MapsTheDaemonStrings(t *testing.T) {
 	cases := map[string]platformv1.KeyAlgorithm{
-		"RSA":     platformv1.KeyAlgorithm_KEY_ALGORITHM_RSA_2048,
-		"ECDSA":   platformv1.KeyAlgorithm_KEY_ALGORITHM_ECDSA_P256,
-		"ED25519": platformv1.KeyAlgorithm_KEY_ALGORITHM_ED25519,
+		// The exact names a QUIC or MCP response carries (Codex 8200).
+		"RSA-2048":   platformv1.KeyAlgorithm_KEY_ALGORITHM_RSA_2048,
+		"RSA-3072":   platformv1.KeyAlgorithm_KEY_ALGORITHM_RSA_3072,
+		"RSA-4096":   platformv1.KeyAlgorithm_KEY_ALGORITHM_RSA_4096,
+		"ECDSA-P256": platformv1.KeyAlgorithm_KEY_ALGORITHM_ECDSA_P256,
+		"ECDSA-P384": platformv1.KeyAlgorithm_KEY_ALGORITHM_ECDSA_P384,
+		"ECDSA-P521": platformv1.KeyAlgorithm_KEY_ALGORITHM_ECDSA_P521,
+		"ED25519":    platformv1.KeyAlgorithm_KEY_ALGORITHM_ED25519,
+		// The bare family names an older daemon reported.
+		"RSA":   platformv1.KeyAlgorithm_KEY_ALGORITHM_RSA_2048,
+		"ECDSA": platformv1.KeyAlgorithm_KEY_ALGORITHM_ECDSA_P256,
 	}
 	for in, want := range cases {
 		if got := KeyAlgorithm(in); got != want {
@@ -55,7 +63,7 @@ func TestKeyAlgorithm_MapsTheDaemonStrings(t *testing.T) {
 }
 
 func TestKeyAlgorithm_UnknownIsUnspecified(t *testing.T) {
-	for _, in := range []string{"", "UNKNOWN", "rsa"} {
+	for _, in := range []string{"", "UNKNOWN", "rsa", "rsa-4096", "RSA4096", "P384"} {
 		if got := KeyAlgorithm(in); got != platformv1.KeyAlgorithm_KEY_ALGORITHM_UNSPECIFIED {
 			t.Errorf("KeyAlgorithm(%q) = %v, want UNSPECIFIED", in, got)
 		}
@@ -86,6 +94,19 @@ func TestKeyAlgorithmName_RefusesAnUnknownAlgorithm(t *testing.T) {
 	var unknown ErrUnknownKeyAlgorithm
 	if !errors.As(err, &unknown) || unknown.Algorithm != 99 {
 		t.Fatalf("KeyAlgorithmName(99) error = %v, want ErrUnknownKeyAlgorithm{99}", err)
+	}
+}
+
+// TestKeyAlgorithm_DecodesEveryNameItWrites pins that each name
+// KeyAlgorithmName writes decodes back to the algorithm it named.
+func TestKeyAlgorithm_DecodesEveryNameItWrites(t *testing.T) {
+	for alg, name := range keyAlgorithmNames {
+		if alg == platformv1.KeyAlgorithm_KEY_ALGORITHM_UNSPECIFIED {
+			continue
+		}
+		if got := KeyAlgorithm(name); got != alg {
+			t.Errorf("KeyAlgorithm(%q) = %v, want %v", name, got, alg)
+		}
 	}
 }
 
