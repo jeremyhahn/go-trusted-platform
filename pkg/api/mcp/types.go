@@ -993,7 +993,7 @@ type ServiceProvider interface {
 	// is an error rather than a fall-through to the SSRK (#475).
 	TPMGetSRK(ctx context.Context, handle uint32) (interface{}, error)
 	TPMCreateSRK(ctx context.Context) (interface{}, error)
-	TPMDeleteSRK(ctx context.Context) (interface{}, error)
+	TPMDeleteSRK(ctx context.Context, handle uint32) (interface{}, error)
 	TPMGetIAK(ctx context.Context) (interface{}, error)
 	TPMCreateIAK(ctx context.Context) (interface{}, error)
 	TPMQuote(ctx context.Context, nonce []byte, pcrs []int) (interface{}, error)

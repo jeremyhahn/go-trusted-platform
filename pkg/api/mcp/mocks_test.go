@@ -2602,7 +2602,8 @@ func (m *mockServiceProvider) TPMCreateSRK(ctx context.Context) (interface{}, er
 	return map[string]interface{}{"success": true}, nil
 }
 
-func (m *mockServiceProvider) TPMDeleteSRK(ctx context.Context) (interface{}, error) {
+func (m *mockServiceProvider) TPMDeleteSRK(ctx context.Context, handle uint32) (interface{}, error) {
+	m.lastSRKHandle = handle
 	return map[string]interface{}{"success": true}, nil
 }
 

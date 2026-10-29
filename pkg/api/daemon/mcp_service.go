@@ -3080,12 +3080,12 @@ func (p *MCPServiceProvider) TPMCreateSRK(ctx context.Context) (interface{}, err
 }
 
 // TPMDeleteSRK deletes the Storage Root Key.
-func (p *MCPServiceProvider) TPMDeleteSRK(ctx context.Context) (interface{}, error) {
+func (p *MCPServiceProvider) TPMDeleteSRK(ctx context.Context, requested uint32) (interface{}, error) {
 	if p.tpm2Service == nil {
 		return nil, ErrServiceNotAvailable{Service: "tpm"}
 	}
 
-	handle, err := tpmsrk.Delete(p.tpm2Service)
+	handle, err := tpmsrk.Delete(p.tpm2Service, requested)
 	if err != nil {
 		return nil, mapTPMError(err)
 	}

@@ -213,6 +213,13 @@ type TPM2GetSRKRequest struct {
 	Handle uint32 `codec:"handle"`
 }
 
+// TPM2DeleteSRKRequest names the SRK handle to evict. Only the configured
+// Shared SRK handle is accepted; an absent payload is handle 0 and is
+// refused, never read as "the SSRK".
+type TPM2DeleteSRKRequest struct {
+	Handle uint32 `codec:"handle"`
+}
+
 // TPM2MakeCredentialRequest represents a TPM2_MakeCredential request. When
 // EKCert and IAKPub are both present the verifier path is used; otherwise
 // the local EK is used together with AKName.
@@ -672,9 +679,21 @@ func (h *TPM2Handler) handleCreateSRK(ctx context.Context, payload []byte) *quic
 	})
 }
 
-// handleDeleteSRK evicts the persisted Shared SRK (tpmsrk.Delete).
+// handleDeleteSRK evicts the persisted Shared SRK (tpmsrk.Delete). The
+// payload's handle must name the configured SSRK; any other handle, or none,
+// is InvalidArgument and evicts nothing.
 func (h *TPM2Handler) handleDeleteSRK(ctx context.Context, payload []byte) *quicwire.Response {
-	if _, err := tpmsrk.Delete(h.tpm); err != nil {
+	var req TPM2DeleteSRKRequest
+	if len(payload) > 0 {
+		if err := quicwire.DecodePayload(payload, &req); err != nil {
+			return h.errorResponse(quicwire.StatusInvalidRequest, ErrTPM2OperationFailed{
+				Operation: "DeleteSRK",
+				Cause:     err,
+			})
+		}
+	}
+
+	if _, err := tpmsrk.Delete(h.tpm, req.Handle); err != nil {
 		return h.tpmErrorResponse(err)
 	}
 

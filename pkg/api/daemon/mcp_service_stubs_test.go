@@ -356,7 +356,7 @@ func TestMCPServiceProvider_TPMStubs(t *testing.T) {
 		{"TPMDeleteEK", func() error { _, err := p.TPMDeleteEK(ctx); return err }},
 		{"TPMGetSRK", func() error { _, err := p.TPMGetSRK(ctx, 0); return err }},
 		{"TPMCreateSRK", func() error { _, err := p.TPMCreateSRK(ctx); return err }},
-		{"TPMDeleteSRK", func() error { _, err := p.TPMDeleteSRK(ctx); return err }},
+		{"TPMDeleteSRK", func() error { _, err := p.TPMDeleteSRK(ctx, 0x81000001); return err }},
 		{"TPMGetIAK", func() error { _, err := p.TPMGetIAK(ctx); return err }},
 		{"TPMCreateIAK", func() error { _, err := p.TPMCreateIAK(ctx); return err }},
 		{"TPMQuote", func() error { _, err := p.TPMQuote(ctx, []byte("n"), []int{0}); return err }},

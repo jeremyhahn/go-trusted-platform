@@ -628,7 +628,7 @@ func (q *QUICAdapter) SRKInfo(ctx context.Context, handle uint32) (*SRKInfoResul
 
 // SRKDelete deletes the SRK via QUIC.
 func (q *QUICAdapter) SRKDelete(ctx context.Context, handle uint32, password string) (*SRKDeleteResult, error) {
-	resp, err := q.sendCategoryRequest(ctx, quicwire.SubOpTPM2DeleteSRK, nil)
+	resp, err := q.sendCategoryRequest(ctx, quicwire.SubOpTPM2DeleteSRK, quicapi.TPM2DeleteSRKRequest{Handle: handle})
 	if err != nil {
 		return nil, err
 	}

@@ -316,7 +316,9 @@ Evicts the Shared SRK that `tpm.ssrk` configures from its persistent handle
 `tpm.ssrk` hierarchy auth it was persisted with, so a following `CreateSRK`
 at the same handle succeeds. The status message is `SRK evicted`. An empty
 handle (`TPM_RC_HANDLE`) is `NotFound`; a `tpm.ssrk` without a handle is
-`FailedPrecondition`. The request fields are not read.
+`FailedPrecondition`. `handle` must name the configured `tpm.ssrk` handle:
+any other handle, or none, is `InvalidArgument` and evicts nothing.
+`algorithm` and `password` are not read.
 
 **Request:**
 ```protobuf

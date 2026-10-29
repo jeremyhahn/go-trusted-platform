@@ -681,7 +681,7 @@ func (m *MCPAdapter) SRKInfo(ctx context.Context, handle uint32) (*SRKInfoResult
 
 // SRKDelete deletes the SRK via MCP.
 func (m *MCPAdapter) SRKDelete(ctx context.Context, handle uint32, password string) (*SRKDeleteResult, error) {
-	result, err := m.callTool(ctx, MCPToolTPMSRKDelete, nil)
+	result, err := m.callTool(ctx, MCPToolTPMSRKDelete, map[string]interface{}{"handle": handle})
 	if err != nil {
 		return nil, err
 	}

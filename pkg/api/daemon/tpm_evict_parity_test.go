@@ -75,11 +75,11 @@ func deleteBoth(t *testing.T, tpm *evictTPM, ek bool) (grpcErr, mcpErr error) {
 		_, mcpErr = mcp.TPMDeleteEK(context.Background())
 		return err, mcpErr
 	}
-	resp, err := grpcSvc.DeleteSRK(context.Background(), &platformv1.DeleteSRKRequest{})
+	resp, err := grpcSvc.DeleteSRK(context.Background(), &platformv1.DeleteSRKRequest{Handle: uint32(evictSSRKHandle)})
 	if err == nil {
 		assert.Equal(t, "SRK evicted", resp.GetStatus().GetMessage())
 	}
-	_, mcpErr = mcp.TPMDeleteSRK(context.Background())
+	_, mcpErr = mcp.TPMDeleteSRK(context.Background(), uint32(evictSSRKHandle))
 	return err, mcpErr
 }
 
@@ -131,6 +131,25 @@ func TestTPMDeleteParity_Refusals(t *testing.T) {
 
 			assert.Error(t, grpcErr, "gRPC")
 			assert.Error(t, mcpErr, "MCP")
+		})
+	}
+}
+
+// TestTPMDeleteSRK_RefusesMismatchedHandle (Codex 8183): a DeleteSRK naming
+// any handle but the configured SSRK, a missing one included, is
+// InvalidArgument on gRPC and MCP and evicts nothing.
+func TestTPMDeleteSRK_RefusesMismatchedHandle(t *testing.T) {
+	for name, handle := range map[string]uint32{"PlatformSRK": 0x81000002, "missing": 0} {
+		t.Run(name, func(t *testing.T) {
+			tpm := &evictTPM{persisted: true}
+
+			_, grpcErr := newTPMGRPCServiceWith(tpm).DeleteSRK(context.Background(),
+				&platformv1.DeleteSRKRequest{Handle: handle})
+			_, mcpErr := newMCPProviderWithTPM(tpm).TPMDeleteSRK(context.Background(), handle)
+
+			assert.Equal(t, codes.InvalidArgument, status.Code(grpcErr), "gRPC")
+			assert.Equal(t, codes.InvalidArgument, status.Code(mcpErr), "MCP")
+			assert.Empty(t, tpm.evicted, "a mismatched handle must not evict the SSRK")
 		})
 	}
 }

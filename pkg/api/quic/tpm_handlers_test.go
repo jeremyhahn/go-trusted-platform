@@ -661,13 +661,21 @@ func TestTPM2Handler_HandleCreateSRK(t *testing.T) {
 }
 
 func TestTPM2Handler_HandleDeleteSRK(t *testing.T) {
-	t.Run("evicts the persisted SSRK", func(t *testing.T) {
+	deleteSRK := func(t *testing.T, mock *mockTPM, handle uint32) *quicwire.Response {
+		t.Helper()
 		h := NewTPM2Handler(logging.DefaultLogger())
+		h.SetTPM2Service(mock)
+		encoded, err := quicwire.EncodePayload(TPM2DeleteSRKRequest{Handle: handle})
+		require.NoError(t, err)
+		payload := append([]byte{quicwire.SubOpTPM2DeleteSRK}, encoded...)
+		return h.HandleMessage(context.Background(), &quicwire.Request{Payload: payload})
+	}
+
+	t.Run("evicts the persisted SSRK", func(t *testing.T) {
 		mock := newSSRKMockTPM()
 		mock.persisted = true
-		h.SetTPM2Service(mock)
 
-		resp := h.HandleMessage(context.Background(), &quicwire.Request{Payload: []byte{quicwire.SubOpTPM2DeleteSRK}})
+		resp := deleteSRK(t, mock, 0x81000001)
 
 		require.Equal(t, quicwire.StatusOK, resp.Status)
 		var st TPM2StatusResponse
@@ -677,24 +685,51 @@ func TestTPM2Handler_HandleDeleteSRK(t *testing.T) {
 		assert.Equal(t, tpm2.TPMHandle(0x81000001), mock.deleted.TPMAttributes.Handle)
 		assert.Equal(t, tpm2.TPMHTPersistent, mock.deleted.TPMAttributes.HandleType)
 	})
-	t.Run("empty handle is NotFound", func(t *testing.T) {
+	// Codex 8183: a request naming another handle must not evict the SSRK.
+	t.Run("mismatched handle is refused", func(t *testing.T) {
+		mock := newSSRKMockTPM()
+		mock.persisted = true
+
+		resp := deleteSRK(t, mock, 0x81000002)
+
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
+		assert.Nil(t, mock.deleted, "a mismatched handle must evict nothing")
+	})
+	t.Run("missing handle is refused", func(t *testing.T) {
+		h := NewTPM2Handler(logging.DefaultLogger())
+		mock := newSSRKMockTPM()
+		mock.persisted = true
+		h.SetTPM2Service(mock)
+
+		resp := h.HandleMessage(context.Background(), &quicwire.Request{Payload: []byte{quicwire.SubOpTPM2DeleteSRK}})
+
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
+		assert.Nil(t, mock.deleted)
+	})
+	t.Run("undecodable payload is an invalid request", func(t *testing.T) {
 		h := NewTPM2Handler(logging.DefaultLogger())
 		mock := newSSRKMockTPM()
 		h.SetTPM2Service(mock)
 
-		resp := h.HandleMessage(context.Background(), &quicwire.Request{Payload: []byte{quicwire.SubOpTPM2DeleteSRK}})
+		resp := h.HandleMessage(context.Background(), &quicwire.Request{Payload: []byte{quicwire.SubOpTPM2DeleteSRK, 0xff, 0x00}})
+
+		assert.Equal(t, quicwire.StatusInvalidRequest, resp.Status)
+		assert.Nil(t, mock.deleted)
+	})
+	t.Run("empty handle is NotFound", func(t *testing.T) {
+		mock := newSSRKMockTPM()
+
+		resp := deleteSRK(t, mock, 0x81000001)
 
 		assert.Equal(t, quicwire.StatusNotFound, resp.Status)
 		assert.Nil(t, mock.deleted)
 	})
 	t.Run("eviction failure is an error", func(t *testing.T) {
-		h := NewTPM2Handler(logging.DefaultLogger())
 		mock := newSSRKMockTPM()
 		mock.persisted = true
 		mock.deleteKeyErr = errors.New("TPM_RC_BAD_AUTH")
-		h.SetTPM2Service(mock)
 
-		resp := h.HandleMessage(context.Background(), &quicwire.Request{Payload: []byte{quicwire.SubOpTPM2DeleteSRK}})
+		resp := deleteSRK(t, mock, 0x81000001)
 
 		assert.NotEqual(t, quicwire.StatusOK, resp.Status)
 	})
