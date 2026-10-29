@@ -153,6 +153,10 @@ func TestParseRevocationReason(t *testing.T) {
 		{"privilege-withdrawn", "privilege-withdrawn", casvc.RevocationReasonPrivilegeWithdrawn, false},
 		{"privilegewithdrawn", "privilegewithdrawn", casvc.RevocationReasonPrivilegeWithdrawn, false},
 		{"invalid reason", "bad-reason", casvc.RevocationReasonUnspecified, true},
+		// RFC 5280 §5.3.1 allows removeFromCRL only in delta CRLs, and the
+		// domain has no aACompromise: the CLI refuses both before any call.
+		{"remove-from-crl refused", "remove-from-crl", casvc.RevocationReasonUnspecified, true},
+		{"aa-compromise refused", "aa-compromise", casvc.RevocationReasonUnspecified, true},
 	}
 
 	for _, tt := range tests {

@@ -305,6 +305,33 @@ func parseRevocationReasonString(reason string) RevocationReason {
 	return RevocationReasonUnspecified
 }
 
+// cliRevocationReasonNames maps each RFC 5280 §5.3.1 reason code to the
+// name `platformctl ca revoke --reason` takes. removeFromCRL (8) and
+// aACompromise (10) carry their RFC names: the CLI refuses both, so the
+// refusal is the CLI's own and not the adapter's.
+var cliRevocationReasonNames = map[RevocationReason]string{
+	RevocationReasonUnspecified:          "unspecified",
+	RevocationReasonKeyCompromise:        "key-compromise",
+	RevocationReasonCACompromise:         "ca-compromise",
+	RevocationReasonAffiliationChanged:   "affiliation-changed",
+	RevocationReasonSuperseded:           "superseded",
+	RevocationReasonCessationOfOperation: "cessation",
+	RevocationReasonCertificateHold:      "hold",
+	RevocationReasonRemoveFromCRL:        "remove-from-crl",
+	RevocationReasonPrivilegeWithdrawn:   "privilege-withdrawn",
+	RevocationReasonAACompromise:         "aa-compromise",
+}
+
+// ErrUnmappedRevocationReason is returned when a revocation reason has no
+// CLI name, so no command is run with a reason other than the one asked for.
+type ErrUnmappedRevocationReason struct {
+	Reason RevocationReason
+}
+
+func (e ErrUnmappedRevocationReason) Error() string {
+	return fmt.Sprintf("revocation reason %d has no platformctl name", e.Reason)
+}
+
 // =============================================================================
 // CA Info Operations
 // =============================================================================
@@ -706,7 +733,12 @@ func (c *CLIAdapter) RevokeCertificate(ctx context.Context, opts RevokeCertifica
 		return nil, ErrCallFailed{Protocol: "CLI", Method: "ca revoke", Err: ErrInvalidSerial{Serial: "<empty>"}}
 	}
 
-	args := []string{"ca", "revoke", serial, "--output", "json"}
+	reasonName, ok := cliRevocationReasonNames[opts.Reason]
+	if !ok {
+		return nil, ErrCallFailed{Protocol: "CLI", Method: "ca revoke", Err: ErrUnmappedRevocationReason{Reason: opts.Reason}}
+	}
+
+	args := []string{"ca", "revoke", serial, "--reason", reasonName, "--output", "json"}
 
 	if opts.DeleteKeys {
 		args = append(args, "--delete-keys")
