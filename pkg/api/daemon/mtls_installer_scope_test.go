@@ -26,9 +26,11 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"regexp"
 	"strings"
 	"testing"
 
+	"github.com/gorilla/mux"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
@@ -36,6 +38,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/mcp"
+	restapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/rest"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/app"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/auth"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/common"
@@ -302,6 +305,7 @@ func TestMTLSInstallerScope_RESTCAIssueAndRenewRefuseTheInstaller(t *testing.T) 
 	require.NoError(t, err)
 
 	config := DefaultConfig()
+	config.MTLSOperatorTrustDomain = testOperatorTrustDomain
 	service, err := NewService(config)
 	require.NoError(t, err)
 	server, err := NewRESTServer(config, service, slog.Default())
@@ -323,6 +327,161 @@ func TestMTLSInstallerScope_RESTCAIssueAndRenewRefuseTheInstaller(t *testing.T) 
 		assert.NotEqual(t, http.StatusUnauthorized, operator, "the operator must pass the guard on POST %s", path)
 		assert.NotEqual(t, http.StatusForbidden, operator, "the operator must pass the guard on POST %s", path)
 	}
+}
+
+// boundaryKMS records the keys the REST KMS routes asked it to delete, so a
+// test can prove a refused request never reached the key service.
+type boundaryKMS struct {
+	restapi.KMSService
+	deleted []string
+}
+
+func (k *boundaryKMS) DeleteKey(_ context.Context, req *restapi.KMSDeleteKeyServiceRequest) (*restapi.KMSDeleteKeyServiceResponse, error) {
+	k.deleted = append(k.deleted, req.KeyID)
+	return &restapi.KMSDeleteKeyServiceResponse{KeyID: req.KeyID}, nil
+}
+
+// newInstallerBoundaryServer builds a REST server that knows the operator's
+// trust domain, with one running managed service and a recording KMS.
+func newInstallerBoundaryServer(t *testing.T, f *installerScopeFixture) (*RESTServer, *mockManagedService, *boundaryKMS) {
+	t.Helper()
+	config := DefaultConfig()
+	config.MTLSOperatorTrustDomain = testOperatorTrustDomain
+	service, err := NewService(config)
+	require.NoError(t, err)
+	managed := newMockService("boundary-svc")
+	require.NoError(t, service.RegisterService(managed))
+	server, err := NewRESTServer(config, service, slog.Default())
+	require.NoError(t, err)
+	kms := &boundaryKMS{}
+	server.SetKMSHandlers(kms)
+	server.SetCAHandlers(&fakeRESTCA{}, nil)
+
+	start := serveAs(server, f.operator, http.MethodPost, "/api/v1/services/boundary-svc/start")
+	require.Equal(t, http.StatusOK, start.Code, "the operator starts the service: %s", start.Body.String())
+	return server, managed, kms
+}
+
+// serveAs sends one request through the REST router with leaf as the verified
+// client certificate.
+func serveAs(server *RESTServer, leaf *x509.Certificate, method, path string) *httptest.ResponseRecorder {
+	r := httptest.NewRequest(method, path, strings.NewReader("{}"))
+	r.TLS = verifiedState(leaf)
+	w := httptest.NewRecorder()
+	server.router.ServeHTTP(w, r)
+	return w
+}
+
+func TestMTLSInstallerScope_RESTPrivilegedRoutesRefuseTheInstaller(t *testing.T) {
+	f := newInstallerScopeFixture(t)
+	server, managed, kms := newInstallerBoundaryServer(t, f)
+
+	stop := serveAs(server, f.installer, http.MethodPost, "/api/v1/services/boundary-svc/stop")
+	assert.Equal(t, http.StatusForbidden, stop.Code, "the installer must not stop a service")
+	assert.Zero(t, managed.stopCount.Load(), "a refused stop must leave the service running")
+
+	del := serveAs(server, f.installer, http.MethodDelete, "/api/v1/kms/keys/k1")
+	assert.Equal(t, http.StatusForbidden, del.Code, "the installer must not delete a key")
+	assert.Empty(t, kms.deleted, "a refused delete must leave the key in place")
+}
+
+func TestMTLSInstallerScope_OperatorReachesRESTPrivilegedRoutes(t *testing.T) {
+	f := newInstallerScopeFixture(t)
+	server, managed, kms := newInstallerBoundaryServer(t, f)
+
+	stop := serveAs(server, f.operator, http.MethodPost, "/api/v1/services/boundary-svc/stop")
+	assert.Equal(t, http.StatusOK, stop.Code, "the operator stops the service: %s", stop.Body.String())
+	assert.Equal(t, int32(1), managed.stopCount.Load())
+
+	del := serveAs(server, f.operator, http.MethodDelete, "/api/v1/kms/keys/k1")
+	assert.NotEqual(t, http.StatusForbidden, del.Code, "the operator deletes the key: %s", del.Body.String())
+	assert.Equal(t, []string{"k1"}, kms.deleted)
+}
+
+func TestMTLSInstallerScope_RESTMachineFacingRoutesAdmitTheInstaller(t *testing.T) {
+	f := newInstallerScopeFixture(t)
+	server, _, _ := newInstallerBoundaryServer(t, f)
+
+	for _, path := range []string{"/api/v1/health", "/api/v1/ca/info", "/api/v1/ca/crl", "/api/v1/ca/bundle"} {
+		w, _ := serveRecovering(server, f.installer, http.MethodGet, path)
+		refusal := ErrInstallerRouteForbidden{Method: http.MethodGet, Path: path}.Error()
+		assert.NotContains(t, w.Body.String(), refusal, "the installer must reach GET %s", path)
+	}
+}
+
+// routeVariable matches one gorilla/mux path variable, with or without a
+// pattern, so a template can be turned into a concrete request path.
+var routeVariable = regexp.MustCompile(`\{[^{}]*(\{[^{}]*\}[^{}]*)*\}`)
+
+// TestMTLSInstallerScope_EveryRESTRouteIsAllowlistedOrRefused walks every
+// route the daemon REST listener registers. A route that is not a named
+// machine-facing route must refuse the installer, so a new route added
+// without a decision fails here.
+func TestMTLSInstallerScope_EveryRESTRouteIsAllowlistedOrRefused(t *testing.T) {
+	f := newInstallerScopeFixture(t)
+	server, _ := daemonRouteTable(t)
+	cp, _ := newGatewayControlPlane(t)
+	server.SetGatewayControlPlane(cp)
+	routes := servedRoutes(t, server.Router())
+
+	registered := make(map[string]bool, len(routes))
+	for _, route := range routes {
+		registered[route] = true
+		method, template, _ := strings.Cut(route, " ")
+		path := routeVariable.ReplaceAllString(template, "1")
+		refusal := ErrInstallerRouteForbidden{Method: method, Path: path}.Error()
+
+		w, reachedHandler := serveRecovering(server, f.installer, method, path)
+		if installerMachineRoutes[route] {
+			assert.NotContains(t, w.Body.String(), refusal, "machine-facing %s must admit the installer", route)
+			continue
+		}
+		assert.False(t, reachedHandler, "%s reached its handler for the installer", route)
+		assert.Equal(t, http.StatusForbidden, w.Code, "%s must refuse the installer", route)
+		assert.Contains(t, w.Body.String(), refusal, "%s must refuse at the listener boundary", route)
+	}
+	for route := range installerMachineRoutes {
+		assert.True(t, registered[route], "allowlisted %s is not a registered route", route)
+	}
+}
+
+// serveRecovering is serveAs for route-table fakes whose handlers may panic on
+// an unset dependency; a panic means the request got past the boundary.
+// servedRoutes lists every "METHOD template" with a handler. Subrouter
+// prefixes have none and answer 404 themselves, so they are left out.
+func servedRoutes(t *testing.T, router *mux.Router) []string {
+	t.Helper()
+	var out []string
+	err := router.Walk(func(route *mux.Route, _ *mux.Router, _ []*mux.Route) error {
+		template, err := route.GetPathTemplate()
+		if err != nil || route.GetHandler() == nil {
+			return nil
+		}
+		methods, err := route.GetMethods()
+		if err != nil || len(methods) == 0 {
+			methods = []string{http.MethodGet}
+		}
+		for _, method := range methods {
+			out = append(out, method+" "+template)
+		}
+		return nil
+	})
+	require.NoError(t, err)
+	require.NotEmpty(t, out)
+	return out
+}
+
+func serveRecovering(server *RESTServer, leaf *x509.Certificate, method, path string) (w *httptest.ResponseRecorder, reachedHandler bool) {
+	w = httptest.NewRecorder()
+	defer func() {
+		if recover() != nil {
+			reachedHandler = true
+		}
+	}()
+	r := httptest.NewRequest(method, path, strings.NewReader("{}"))
+	r.TLS = verifiedState(leaf)
+	server.router.ServeHTTP(w, r)
+	return w, false
 }
 
 func TestMTLSInstallerScope_MCPGrantsOnlyTheOperator(t *testing.T) {
