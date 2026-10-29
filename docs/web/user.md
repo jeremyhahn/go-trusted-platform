@@ -1,6 +1,6 @@
 # Web Console — Using It
 
-> **Status: REFERENCE** · Scope: `pkg/webserver/`, `pkg/webservice/`, `web/` · Last verified: 2026-08-18
+> **Status: REFERENCE** · Scope: `pkg/webserver/`, `pkg/webservice/`, `web/` · Last verified: 2026-10-27
 > Conflicts with this document are defects. Fix them here first.
 > The feature folder is: [architecture.md](architecture.md) · [engineering.md](engineering.md) · [cli.md](cli.md) · [api.md](api.md) · [user.md](user.md).
 >
@@ -189,7 +189,7 @@ The authenticated surface is one dashboard with a sidebar. The sidebar footer
 and the header's account menu show the signed-in account — its email and
 tenant, read from the session token's claims. The token carries no display
 name, so there is none to show; without a session the slot is empty rather
-than a placeholder. Roughly seventy pages across:
+than a placeholder. Roughly ninety pages across:
 
 | Area | Covers |
 |---|---|
@@ -211,9 +211,11 @@ than a placeholder. Roughly seventy pages across:
 Dark and light themes follow the system setting by default.
 
 **Some pages are stubs.** A few QuicBaaS-backed surfaces (storage objects, KV,
-time series, vector, backups) are served by placeholder handlers that return
-empty collections and echo back what you submit, so the page renders its empty
-state instead of a 404 banner. They look like they work; the data is not
+time series, vector, backups) are served by placeholder handlers under
+`/api/v1/quicbaas/...` that return empty collections and echo back what you
+submit, so the page renders its empty state instead of a 404 banner. The
+**Account → Security** factor list (`GET /api/v1/users/{id}/factors`) is the
+same kind of placeholder and always reads empty. They look like they work; the data is not
 persisted anywhere. The **Platform → Services** page is the honest view — it
 reports which service surfaces are actually wired.
 
@@ -308,9 +310,9 @@ copied bundle. Confirm the deployed tree still contains its `__placeholder__`
 directories; the export needs them.
 
 **API calls return HTML.** Something is serving the SPA shell for `/api/`
-paths. That should be impossible — `/api/`, `/_next/` and `/static/` are
-excluded from the SPA fallback and get a real 404 — so check whether an
-intermediary in front of the platform is rewriting.
+paths. That should be impossible — `/api/`, `/v1/`, `/v2/`, `/.well-known/`,
+`/_next/` and `/static/` are excluded from the SPA fallback and get a real
+404 — so check whether an intermediary in front of the platform is rewriting.
 
 **A page shows "the requested API endpoint does not exist".** That is the
 server's JSON 404 for an `/api/` path. The service is not wired: open
@@ -333,8 +335,10 @@ reaches that port: open it in the firewall alongside TCP. With `tls-port: 0`
 there is no HTTP/3 and no `Alt-Svc` header. Everything still works over
 HTTP/1.1 and HTTP/2.
 
-**A long-running request is cut off around 30 seconds.** The server's write
-timeout is 30s and applies to every response on this listener.
+**A long-running request is cut off around 30 seconds.** The listener's write
+timeout defaults to 30s and applies to every response on it. Raise
+`write-timeout` on that webservice entry (with `read-timeout` and
+`idle-timeout` beside it, defaults 5s and 120s).
 
 **The UI changed and the browser did not.** Static assets are cached
 aggressively by Next's content hashes; a hard reload usually settles it. If you

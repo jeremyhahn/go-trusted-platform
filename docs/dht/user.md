@@ -71,9 +71,9 @@ boot-manager CLI, not a DHT boot server.
 
 **The seven `api-reference*.md` files describe endpoints, ports, gRPC methods
 and MCP tools that are not served.** Do not point a client at them. The port
-table in particular lists two ports that the platform's web service really does
-use for something else entirely, so a request will connect and then fail in a
-confusing way.
+table in particular lists the platform daemon's own ports (REST 8443, gRPC
+10443, QUIC 9444, MCP 9445), so a request will connect to the platform and
+then fail in a confusing way.
 
 The full list of corrections is [architecture.md](architecture.md) §9.
 
@@ -92,5 +92,6 @@ design contradicts itself about how wide a node identifier is.
   to honour, and the six open questions that block one
 - [cli.md](cli.md) · [api.md](api.md) — both say "nothing here", with the
   evidence
-- [ROADMAP.md](ROADMAP.md) — the milestone plan, status *"Design Complete -
-  Implementation Pending"*
+- [`docs/archive/dht-ROADMAP.md`](../archive/dht-ROADMAP.md) — the milestone
+  plan, status *"Design Complete - Implementation Pending"*
+  ([ROADMAP.md](ROADMAP.md) here is a pointer to it)

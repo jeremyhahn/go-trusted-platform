@@ -16,20 +16,20 @@ template` and the match-rule flags were added on 2026-10-17 (#949).
 ```
 platformctl device            Device management operations
 platformctl device profile    Device profile management
-platformctl device template   Device template management (§2.8)
-platformctl device attest-cert  The attestation certificate on a device record (§2.6)
+platformctl device template   Device template management (§2.11)
+platformctl device attest-cert  The attestation certificate on a device record (§2.7)
 platformctl profile           Device profile get/list/delete/match (§4)
 ```
 
 Both groups are registered on the root command
-(`pkg/cli/commands/root.go:181` and `:192`). `device profile` is canonical; the
+(`pkg/cli/commands/root.go:186` and `:200`). `device profile` is canonical; the
 top-level `profile` group mounts the same `get`, `list`, `delete` and `match`
 commands (`device.NewProfileLookupCommands`), so the two trees run one
 implementation and behave identically (§4).
 
 ### Global flags
 
-`platformctl` persistent flags (`pkg/cli/commands/root.go:126`). Precedence is
+`platformctl` persistent flags (`pkg/cli/commands/root.go:135`). Precedence is
 **flag > environment > config file > built-in default**.
 
 | Flag | Short | Type | Default | Environment | Meaning |
@@ -62,12 +62,15 @@ in-process and is the only way to use them with no daemon listening.
 | `get` | `<id>` | Get a device by id |
 | `find-serial` | `<serial>` | Find a device by serial number |
 | `register` | — | Create a device record (`CreateDevice`) |
-| `update` | `<id>` | Change a device's model and key material, §2.7a |
+| `update` | `<id>` | Change a device's model and key material, §2.10 |
 | `delete` | `<id>` | Delete a device by id |
-| `disable` | `<id>` | Block the device's switch port and record it suspended, §2.7 |
-| `enable` | `<id>` | Re-admit a disabled device to quarantine pending re-attestation, §2.7 |
+| `attest` | `<id>` | Submit attestation evidence for a device, §2.6 |
+| `attest-cert` | — | Sub-group (`record <id>`): the attestation certificate on a device record, §2.7 |
+| `boot` | — | Sub-group (`certificate`, `delivery`), §2.8 |
+| `disable` | `<id>` | Block the device's switch port and record it suspended, §2.9 |
+| `enable` | `<id>` | Re-admit a disabled device to quarantine pending re-attestation, §2.9 |
 | `profile` | — | Sub-group, §3 |
-| `template` | — | Sub-group, §2.8 |
+| `template` | — | Sub-group, §2.11 |
 
 ### 2.1 `device list`
 
@@ -151,7 +154,7 @@ text warns that the operation is irreversible; the command does not ask.
 platformctl device delete 4398046511105
 ```
 
-### 2.5a `device attest <id> --evidence-file <path>`
+### 2.6 `device attest <id> --evidence-file <path>`
 
 Verifies TPM quote evidence the caller supplies against a registered device
 (`AttestDevice`, [api.md](api.md)). It does not ask the device for a fresh
@@ -172,7 +175,7 @@ evidence file <path> is empty`). An unknown device fails with the `NOT_FOUND`
 error of §2; evidence that cannot be evaluated fails with `device attest:
 failed to attest device <id>: <reason>`.
 
-### 2.6 `device attest-cert record <id> [--reissue] [--clear-on-refusal]`
+### 2.7 `device attest-cert record <id> [--reissue] [--clear-on-refusal]`
 
 Records — or re-records — the device's attestation (IAK/AK) certificate on
 its platform record without re-enrolling the device ([api.md §4.5](api.md#45-recording-the-attestation-certificate-without-re-enrolling-473)).
@@ -229,10 +232,10 @@ After a successful record, the attestation collector's next sweep verifies a
 quote against the new certificate and the device's report changes state
 ([attestation/user.md](../attestation/user.md)).
 
-### 2.7 `device boot certificate` and `device boot delivery`
+### 2.8 `device boot certificate` and `device boot delivery`
 
 Send a diskless node's two per-boot requests ([api.md §4.6](api.md#46-diskless-boot-delivery-690))
-over whichever SDK transport `--protocol` selects. The control plane
+over whichever SDK transport `--transport` selects. The control plane
 authenticates both itself; the proof of possession and the attestation
 evidence are bound to a nonce exported from the TLS session of the connection
 that carries them. The commands therefore make the proof only after they have
@@ -254,12 +257,12 @@ All three flags are required. The key is read and parsed before any connection
 is made; an unreadable or non-key file exits non-zero naming the path
 (`ErrBootKeyUnreadable`). A quote program that exits non-zero or prints
 nothing fails the command with its stderr (`ErrBootQuoteCommandFailed`).
-`--protocol unix` and `--protocol mcp` exit non-zero without sending anything:
+`--transport unix` and `--transport mcp` exit non-zero without sending anything:
 those transports carry no TLS connection to bind to. A refusal from the
 control plane exits non-zero with its reason. A diskless node makes the real
 requests itself; the commands exist to exercise the same path by hand.
 
-### 2.8 `device disable <id> [--reason]` and `device enable <id>`
+### 2.9 `device disable <id> [--reason]` and `device enable <id>`
 
 The operator's two lifecycle transitions (#250,
 [architecture.md §4.6](architecture.md#46-operator-disable-and-enable-250)).
@@ -291,7 +294,7 @@ no SDN policy engine, for a device with no switch port, and for a transition
 the lifecycle does not allow — the refusals are tabled in [user.md](user.md)
 and [api.md §4.7](api.md#47-operator-disable-and-enable-250).
 
-### 2.7a `device update <id>`
+### 2.10 `device update <id>`
 
 ```bash
 platformctl device update 123 --model r650
@@ -310,11 +313,11 @@ platformctl device update 123 --ek-cert /var/lib/platform/ek.pem --hash-algo 11
 The command reads the device (`GetDevice`), changes only the fields whose
 flags are given and stores it (`UpdateDevice`); every other field keeps its
 value. The serial is the device's identity and has no flag; a lifecycle state
-changes only through `disable`/`enable` (§2.7). It prints the stored device in
+changes only through `disable`/`enable` (§2.9). It prints the stored device in
 the `device get` shape. A non-numeric id, no change flag at all, or an
 unparseable `--ek-cert` fails before connecting.
 
-### 2.8 `platformctl device template`
+### 2.11 `platformctl device template`
 
 A template is a profile blueprint: a role, a platform config and a match-rule
 set. Six verbs ride the SDK device client over every transport:
@@ -353,7 +356,7 @@ platformctl device template create-profile 456 --name r650-01 --ek-serial 0A1B2C
 
 Eight verbs: `get`, `list`, `delete`, `match`, `create`, `update`, `assign`,
 `unassign`; a profile is also built from a template with `device template
-create-profile` (§2.8). All ride the SDK device client over whichever transport the active
+create-profile` (§2.11). All ride the SDK device client over whichever transport the active
 context selects — `unix`, `grpc`, `rest`, `quic`, `mcp` or `embedded` — so the
 read verbs confirm a write over the transport that made it.
 
@@ -547,7 +550,7 @@ platformctl device profile unassign 123
 Every verb but `list` renders one profile. Table output prints `Profile ID`,
 `Name`, and — when non-empty — `Model`, `Role`, `Zone`, `EK Serial`, `MAC`,
 `EK Cert` (as `prestaged (PEM, N bytes)`), `Config` (as `N bytes (JSON)`),
-`TLS Server Name`, `PCR Baseline` (as `<source> (N registers, recorded
+`TLS Server Name`, `Match Rules`, `PCR Baseline` (as `<source> (N registers, recorded
 <RFC3339>)`), and always `Assigned`. In `--output json` the same two appear as
 `tls_server_name` and a `pcr_baseline` object (`values` hex by register index,
 `source`, `recorded_at`, `recorded_from_device_id` as a decimal string).

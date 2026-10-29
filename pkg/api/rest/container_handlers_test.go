@@ -943,6 +943,47 @@ func TestHandleAttestContainer(t *testing.T) {
 	})
 }
 
+// TestHandleAttestContainerChunkedBody sends the body as net/http presents a
+// Transfer-Encoding: chunked request, with ContentLength -1.
+func TestHandleAttestContainerChunkedBody(t *testing.T) {
+	attest := func(t *testing.T, body string) *httptest.ResponseRecorder {
+		orch := newMockOrchestrator()
+		orch.addTestInstance("test-id", "test-container", compute.StateRunning)
+		_, router := setupTestHandler(orch)
+
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/containers/test-id/attest", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		req.ContentLength = -1
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+		return w
+	}
+
+	t.Run("chunked body attests the container", func(t *testing.T) {
+		body, err := json.Marshal(AttestContainerRequest{Nonce: "test-nonce", IncludePCRs: []int{14, 15}})
+		require.NoError(t, err)
+
+		w := attest(t, string(body))
+
+		assert.Equal(t, http.StatusOK, w.Code)
+		var attestResp AttestContainerResponse
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &attestResp))
+		assert.Equal(t, "test-id", attestResp.ContainerID)
+	})
+
+	t.Run("empty chunked body attests the container", func(t *testing.T) {
+		w := attest(t, "")
+
+		assert.Equal(t, http.StatusOK, w.Code)
+	})
+
+	t.Run("malformed chunked JSON returns 400", func(t *testing.T) {
+		w := attest(t, "{invalid")
+
+		assert.Equal(t, http.StatusBadRequest, w.Code)
+	})
+}
+
 // =============================================================================
 // Error Mapping Tests
 // =============================================================================

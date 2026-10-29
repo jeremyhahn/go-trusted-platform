@@ -41,6 +41,7 @@ read out of the source on 2026-08-18.
 
 ```go
 type DeviceService interface {
+    Create(ctx, *entities.Device) error // assigns the ID when none is given
     Save(ctx, *entities.Device) error
     Get(ctx, id uint64) (*entities.Device, error)
     Delete(ctx, *entities.Device) error
@@ -53,7 +54,9 @@ type DeviceService interface {
 ```
 
 `DeviceProfileService` adds `FindByMACAddress`, `FindBySerial`,
-`FindMatchingProfile`, `AssignToDeviceWithEK`, `UnassignFromDevice`.
+`FindMatchingProfile`, `FindProfileForDevice` (EK binding first, else match
+rules, else `ErrNoProfileForDevice`), `AssignToDeviceWithEK`,
+`UnassignFromDevice`.
 
 `DeviceTemplateService` adds `FindByName(ctx, tenantID, name)`, `ToProfile`,
 `ToProfileWithConfigOverrides`.
@@ -200,8 +203,8 @@ over here.
 
    | group | fields |
    |---|---|
-   | lifecycle / liveness | `State`, `StateReason`, `Hostname`, `NetworkPortID`, `SwitchName`, `SwitchPort`, `LastHeartbeatAt`, `LastAttestedAt`, `ActivatedAt`, `CreatedAt`, `PriorState`, `PriorZone`, `BMCEnrollment` |
-   | identity / enrollment (#252, #404) | `TenantID`, `EKCert`, `AttestPub`, `AttestCert`, `SigningPub`, `EventLog`, `HashAlgoId`, `Model`, `Serial` |
+   | lifecycle / liveness | `State`, `StateReason`, `Hostname`, `NetworkPortID`, `SwitchName`, `SwitchPort`, `LastHeartbeatAt`, `LastHeartbeatAddr`, `LastAttestedAt`, `ActivatedAt`, `CreatedAt`, `PriorState`, `PriorZone`, `PriorPortClass`, `BMCEnrollment` |
+   | identity / enrollment (#252, #404) | `TenantID`, `EKCert`, `AttestPub`, `AttestCert`, `IDevIDCert`, `SigningPub`, `EventLog`, `HashAlgoId`, `Model`, `Serial` |
 
    The second group was missing until #252, so a `PUT /api/v1/devices/{id}`
    that named none of them **erased the device's TPM enrollment material** —
@@ -227,9 +230,10 @@ over here.
    Profiles and templates mint at their own create sites and are unaffected.
 6. **Template timestamps are service-managed.** `TemplateService.Save` sets
    `CreatedAt` if zero and always sets `UpdatedAt`; `Update` sets `UpdatedAt`.
-   The device and profile services do **not** manage timestamps — `Device`
-   carries `CreatedAt`/`UpdatedAt` fields that only `Transition()` touches
-   (`UpdatedAt` only).
+   The profile service does **not** manage timestamps. The device `Service`
+   does: `Create` defaults `UpdatedAt` to `CreatedAt`, and `Update`,
+   `ClearAttestCert` and `RecordHeartbeat` stamp `UpdatedAt`; `Transition()`
+   also stamps it.
 7. **`ToProfile` does not persist.** Its doc comment is explicit: *"It does NOT
    save the profile -- the caller is responsible for saving."* The returned
    profile has no ID unless an override supplied one.
@@ -278,13 +282,14 @@ over here.
     is the single constructor for the bootstrap seeder's upload, served only
     by the seeder router (see `docs/device/api.md` §4.1): `Name` = `Role` =
     the canonical role string, `Config` verbatim, `ID` = `util.NewID(role)`.
-15. **Concurrency is not guaranteed by this package.** Neither `Service`,
-    `ProfileService` nor `TemplateService` holds a lock. Read-modify-write
-    sequences (`Update`, `AssignToDeviceWithEK`, `UnassignFromDevice`) are
-    **not atomic** — two concurrent assignments to the same profile race.
-    **This corrects the legacy `architecture.md`, which claimed "DAOs use mutex
-    protection" and "pagination uses snapshot isolation"; no mutex exists in
-    `pkg/device` or in `pkg/storage/quicbaas/device_profile.go`.**
+15. **Only device writes are serialised.** The device `Service` takes a
+    per-id striped mutex (`writeLock(id)`, `writeLockStripes` stripes) around
+    `Save`, `Delete`, `Update`, `ClearAttestCert` and `RecordHeartbeat`, so
+    writes to one device run one at a time within a process. `ProfileService`
+    and `TemplateService` hold no lock: their read-modify-write sequences
+    (`Update`, `AssignToDeviceWithEK`, `UnassignFromDevice`) are **not
+    atomic** — two concurrent assignments to the same profile race.
+    Pagination has no snapshot isolation.
 
 ## 4. Error semantics
 
@@ -335,11 +340,11 @@ validate either, so refusing here would protect an inconsistency in which
 paths validate rather than an invariant. The failure mode this permits (an
 invalid profile briefly stays stored) is strictly less bad than the one it
 avoids, and activation is independently protected by the runtime guard in
-`transitionSwitchPort`. Do not restore "consistency" by routing unassign
+`prepareSwitchTransition` (`pkg/webservice/v1/device/handler.go`). Do not restore "consistency" by routing unassign
 through `saveValidated`; `TestProfileService_UnassignDoesNotValidate` exists
 to catch that.
 
-Three declared-but-unreturned errors are recorded above rather than omitted:
+Four declared-but-unreturned errors are recorded above rather than omitted:
 they are the vocabulary a future change should use, and a reader who greps for
 them deserves to know they are currently inert.
 
@@ -400,6 +405,7 @@ type Config struct {
 | `quicbaas.data-dir` | string | `trusted-data/quicbaas` |
 | `quicbaas.wal-dir` | string | `trusted-data/quicbaas/wal` |
 | `quicbaas.node-id` | uint64 | `1` |
+| `quicbaas.spiffe-trust-domain` | string | `example.internal` |
 | `quicbaas.cache-size` | int | `64 * 1024 * 1024` |
 | `quicbaas.log-level` | string | `warn` |
 | `quicbaas.consistency-level` | — | `quicbaas.ConsistencyLinearizable` |
@@ -494,10 +500,8 @@ Profile-level configuration knobs worth knowing:
 | Unit — device mTLS identity (#149) | `pkg/app/idevid_mtls_test.go`, `pkg/app/idevid_activation_test.go`, `pkg/platform/keychain_test.go` | On the go-tpm-tools simulator (needs CGO and OpenSSL headers): the IDevID signs a TLS 1.3 `CertificateVerify` (`TestTPMSigner_IDevIDSignsTLS13ClientCertificateVerify`); activation over mTLS through the real router, middleware, handler, enrollment hook and policy engine authorizes the port, and a foreign-issued certificate changes nothing (`TestDeviceActivation_IDevIDOverMTLS`); PSS options reach the TPM; construction-time signer errors |
 | Integration | `test/integration/device/multiprotocol_test.go` `OperatorLifecycle` | Every adapter (CLI, REST, gRPC, QUIC, MCP, Unix) refuses a device with no switch port and leaves its state unchanged. The enforced path needs an OVS port bound to a device and is covered by the unit tests above |
 
-Fault-injection seams: the DAO interfaces in `pkg/device/dao/types.go` (swap a
-fake `DeviceProfileDAO`), and `deviceProfileClient` in
-`pkg/cli/commands/device/profile_assign.go`, which exists *"so tests can
-exercise the derivation logic without a live daemon."*
+Fault-injection seam: the DAO interfaces in `pkg/device/dao/types.go` (swap a
+fake `DeviceProfileDAO`).
 
 **Known repo-wide gap:** no `CommandDefinition` type exists in this repository
 (grepped 2026-08-18), so the CLI parity requirement in
@@ -508,8 +512,9 @@ exercise the derivation logic without a live daemon."*
 - **Logging.** The DAO layer logs deserialisation failures at Warn with the
   entity id. `Handler.Activate` logs at Error for ARP lookup failure, switch
   VLAN transition failure and port-state transition failure, and at Info on
-  success (`"Device %s activated on admitted VLAN %d"`). `commitSwitchTransition`
-  logs the switch, port and VLAN at Info. `LifecycleService` logs every
+  success (`"Device %s activation complete: status=%s vlan=%d zone=%s port=%s"`).
+  `commitSwitchTransition` logs `"Switch port %s/%s moved from VLAN %d to
+  admitted VLAN %d for device %s"` at Info. `LifecycleService` logs every
   operator Disable (`"device disabled by operator"`, with the previous state
   and reason) and Enable (`"device re-enabled by operator into quarantine"`)
   at Info, and a failed re-attestation request at Warn. A refused transition

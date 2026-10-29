@@ -29,6 +29,7 @@ pkg/health/
 ├── types.go      # HealthStatus (SDK alias + StatusUnknown), ComponentHealth, SystemHealth
 ├── errors.go     # Typed registry errors
 ├── checker.go    # HealthChecker interface
+├── probe.go      # Liveness, readiness and aggregate verdicts over the registry
 └── registry.go   # Thread-safe component registry
 ```
 
@@ -49,7 +50,9 @@ fmt.Printf("Status: %s\n", result.Status)
 ```
 
 The daemon exposes the registry through the platform multi-protocol
-health APIs (gRPC `GetHealth`, REST `/api/v1/platform/health`, QUIC).
+health APIs (gRPC `GetHealth`, daemon REST `/api/v1/health`, webservice
+REST `/api/v1/platform/health`, QUIC, MCP) and the root `/health`,
+`/health/live` and `/health/ready` probes.
 
 ## Coverage
 

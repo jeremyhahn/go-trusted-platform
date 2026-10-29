@@ -43,7 +43,9 @@ timeout**, aggregated into a four-state verdict.
   - **readiness** passes unless the overall status is unhealthy, so a degraded
     component or an unanswered check leaves the node in rotation, and a
     closed registry takes it out;
-  - **aggregate** passes only when every component is healthy.
+  - **aggregate** passes only when the overall status is healthy — no
+    component unhealthy or degraded. Unknowns do not move the overall status,
+    so healthy components mixed with unknown ones still pass.
 
 The status vocabulary is **not** this package's. `HealthStatus` is a type alias
 for `quicbaas.HealthCheckStatus`, so healthy/degraded/unhealthy mean the same
@@ -76,10 +78,10 @@ same claim as "the component is broken".
 | Probe verdicts (`Liveness`, `Readiness`, `Aggregate`) | `pkg/health/probe.go` | this repo |
 | **The status vocabulary** (`quicbaas.HealthCheckStatus`) | `go-quicbaas/sdk/go` | **not this repo** |
 | **Liveness / readiness / startup probe primitives** (`quicbaas.HealthChecker`) | `go-quicbaas/sdk/go` | **not this repo** |
-| The concrete checkers (`ca`, `sdn`, `ntp`, `kms`, `iam`, `tenant`, `quic`, `rest`, `mcp`) | `pkg/api/daemon/health_checker.go`, `iam_health_checker.go`, `ntp_health_checker.go` | this repo, daemon feature |
+| The concrete checkers (`ca`, `sdn`, `sdn-addressing`, `ntp`, `kms`, `iam`, `tenant`, `quic`, `rest`, `mcp`) | `pkg/api/daemon/health_checker.go`, `iam_health_checker.go`, `ntp_health_checker.go`, `sdn_address_health_checker.go` | this repo, daemon feature |
 | Registration and lifecycle | `pkg/api/daemon/daemon.go` (`registerHealthCheckers`) | this repo, daemon feature |
 | REST / gRPC / QUIC / MCP exposure | `pkg/api/healthprobe/` (the root REST probes, on both listeners), `pkg/webservice/v1/rest/platform/`, `pkg/api/daemon/` | this repo — see [api.md](api.md) and [`docs/daemon/`](../daemon/) |
-| **`grpc.health.v1` standard health service** | `pkg/api/daemon/health_grpc_service.go` | this repo, **separate mechanism** — see §6 |
+| **`grpc.health.v1` standard health service** | `pkg/api/daemon/health_grpc_service.go` | this repo, **separate interface over this registry** — see §6 |
 
 `pkg/health` imports exactly one thing beyond the standard library:
 `go-quicbaas/sdk/go`. It knows nothing about transports, HTTP, gRPC, or the
@@ -178,16 +180,24 @@ The conservative direction is deliberate: a genuinely fast check that the
 runtime could not observe in time is reported `unknown`, which says "we do not
 know" rather than manufacturing either an outage or an all-clear.
 
-## 6. Two health mechanisms, deliberately separate
+## 6. Two health interfaces over one registry
 
-The daemon serves standard **`grpc.health.v1`** (`HealthGRPCService`) alongside
-this registry. They are different things and neither wraps the other:
+The daemon serves standard **`grpc.health.v1`** (`HealthGRPCService`) beside
+this registry's own surfaces, and it answers from this registry.
+`daemon.go` registers one checker, named `platform`
+(`daemonHealthCheckerName`), that wraps the registry
+(`NewRegistryHealthChecker`): an **unhealthy** overall status answers
+`NOT_SERVING`, while **degraded** (and unknown) stays `SERVING` so a degraded
+node is not drained from a load balancer. `Check` with an empty service name
+returns that overall verdict. No service names are registered, so any named
+`Check` answers `NOT_FOUND` — deliberately, so an unauthenticated caller cannot
+enumerate the daemon's services (#337).
 
 | | `pkg/health` registry | `grpc.health.v1` |
 |---|---|---|
 | Consumer | operators, dashboards, `platformctl health` | load balancers, service meshes, gRPC clients |
 | Vocabulary | healthy / degraded / unhealthy / unknown | SERVING / NOT_SERVING / SERVICE_UNKNOWN / UNKNOWN |
-| Granularity | per component, with `Details` | per gRPC service name, boolean |
+| Granularity | per component, with `Details` | one overall verdict (empty service name), boolean |
 | Interface | `health.HealthChecker` (`Name`, `Check`) | `daemon.HealthChecker` (`HealthCheck(ctx) error`) |
 | Streaming | no | yes (`Watch`, 1 s poll) |
 

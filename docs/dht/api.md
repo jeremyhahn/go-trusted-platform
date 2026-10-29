@@ -19,7 +19,7 @@ Verified against the tree on 2026-08-18:
 | A DHT opcode in `sdk/go/wire/quicwire/protocol.go` | **none** |
 | A DHT tool in `pkg/api/mcp/` | **none** |
 | A `/api/v1/dht` route | **none** |
-| A DHT field on `ServiceRegistry` (`sdk/go/transport/embedded/adapter.go`) | **none** — the registry has 25 fields and none is DHT |
+| A DHT field on `ServiceRegistry` (`sdk/go/transport/embedded/adapter.go`) | **none** — the registry has 34 fields and none is DHT |
 
 The only Kademlia code in the repository is the SDN gateway libp2p host and the
 IPAM DHT allocator, both behind the `platform_p2p` build tag, and neither
@@ -96,13 +96,12 @@ Seven files in this folder read like API references and are not:
 
 **Nothing described in them is served.** Two specific traps:
 
-- `api-reference.md` states *"All protocols provide feature parity."* There is
-  no parity to have; there are no protocols.
-- Its port table lists REST `8443`, gRPC `9443`, QUIC `9444`, MCP `9445` and a
-  Unix socket at `/run/platformd.sock`. `8443` and `9443` are the platform web
-  service's real TLS ports and carry no DHT routes; `9444` and `9445` appear
-  nowhere in the shipped configuration. Pointing a client at any of them will
-  not reach a DHT.
+- `api-reference.md` promises feature parity across protocols. There is no
+  parity to have; there are no protocols.
+- Its port table lists REST `8443`, gRPC `10443`, QUIC `9444`, MCP `9445` and a
+  Unix socket at `/run/platformd.sock`. Those are the platform daemon's own
+  listeners (`pkg/config/daemon.go:52-55`) and carry no DHT routes. Pointing a
+  client at any of them will reach the platform, not a DHT.
 
 The wire format sketch is [wire-protocol.md](wire-protocol.md); it defines no
 generated code in this repository.

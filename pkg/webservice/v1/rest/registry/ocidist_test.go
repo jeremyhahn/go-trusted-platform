@@ -445,6 +445,63 @@ func TestOCIDist_BlobChunkedUpload(t *testing.T) {
 	assert.Equal(t, http.StatusNotFound, rec.Code)
 }
 
+// doChunked sends a request as net/http presents a Transfer-Encoding:
+// chunked one: the length is unknown, so ContentLength is -1.
+func doChunked(router http.Handler, method, target string, body []byte) *httptest.ResponseRecorder {
+	req := httptest.NewRequest(method, target, bytes.NewReader(body))
+	req.ContentLength = -1
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	return rec
+}
+
+func TestOCIDist_BlobCommitChunkedTail(t *testing.T) {
+	backend := newFakeOCIBackend()
+	router := newTestRouter(t, backend, openGates(), OCIDistLimits{})
+	id := startUploadFor(t, router, "apps/web")
+
+	rec := do(router, http.MethodPatch, "/v2/apps/web/blobs/uploads/"+id, []byte("hello "), nil)
+	require.Equal(t, http.StatusAccepted, rec.Code)
+
+	full := []byte("hello world")
+	rec = doChunked(router, http.MethodPut, "/v2/apps/web/blobs/uploads/"+id+"?digest="+sha256Of(full), []byte("world"))
+	require.Equal(t, http.StatusCreated, rec.Code, rec.Body.String())
+
+	got, err := backend.GetBlob(context.Background(), sha256Of(full))
+	require.NoError(t, err)
+	assert.Equal(t, full, got)
+}
+
+func TestOCIDist_BlobCommitChunkedEmptyBody(t *testing.T) {
+	backend := newFakeOCIBackend()
+	router := newTestRouter(t, backend, openGates(), OCIDistLimits{})
+	id := startUploadFor(t, router, "apps/web")
+
+	full := []byte("hello world")
+	rec := do(router, http.MethodPatch, "/v2/apps/web/blobs/uploads/"+id, full, nil)
+	require.Equal(t, http.StatusAccepted, rec.Code)
+
+	rec = doChunked(router, http.MethodPut, "/v2/apps/web/blobs/uploads/"+id+"?digest="+sha256Of(full), nil)
+	require.Equal(t, http.StatusCreated, rec.Code, rec.Body.String())
+
+	got, err := backend.GetBlob(context.Background(), sha256Of(full))
+	require.NoError(t, err)
+	assert.Equal(t, full, got)
+}
+
+func TestOCIDist_BlobCommitChunkedTailTooLarge(t *testing.T) {
+	backend := newFakeOCIBackend()
+	router := newTestRouter(t, backend, openGates(), OCIDistLimits{MaxChunkBytes: 4})
+	id := startUploadFor(t, router, "apps/web")
+
+	full := []byte("hello world")
+	rec := doChunked(router, http.MethodPut, "/v2/apps/web/blobs/uploads/"+id+"?digest="+sha256Of(full), full)
+	assert.Equal(t, http.StatusRequestEntityTooLarge, rec.Code, rec.Body.String())
+
+	_, err := backend.GetBlob(context.Background(), sha256Of(full))
+	assert.Error(t, err)
+}
+
 func TestOCIDist_BlobChunkedUploadErrors(t *testing.T) {
 	router := newTestRouter(t, newFakeOCIBackend(), openGates(), OCIDistLimits{})
 

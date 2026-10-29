@@ -18,7 +18,8 @@ Every identifier below was read out of `pkg/ntp/`, `pkg/app/ntp.go` and
 | `pkg/ntp/control.go` | `Controller`, `CommandRunner`, `Tracking`, `chronyc` CSV parsing |
 | `pkg/ntp/chronyconf.go` | `Paths`, `DefaultPaths`, `Render`, `ManagedHeader` |
 | `pkg/ntp/types.go` | `Status`, `Source`, `SourceState`, `SourceMode`, thresholds |
-| `pkg/ntp/errors.go` | 22 typed errors |
+| `pkg/ntp/servename.go` | `ServeNameFinding`, `NameResolver`, `CheckServeNames` — advertised NTS-KE names versus the allow list |
+| `pkg/ntp/errors.go` | 30 typed errors |
 
 ## 2. Exported surface
 
@@ -58,6 +59,9 @@ client. **Production callers use the defaults**; `pkg/app/ntp.go` passes only
 | `Step(ctx) (*Status, error)` | Refuse if no source is reachable, else `makestep` and re-`Status` |
 | `WaitForSync(ctx) error` | Block until synced or the gate expires. Returns nil immediately when the gate is disabled |
 | `LastStatus() *Status` | The last observed status without contacting chronyd. **nil before the first successful poll** |
+| `RotateNTSMaterial(ctx, key *memguard.MemoryEnclave, certPEM []byte) error` | Deploy renewed NTS-KE material once and restart chronyd (the renewal path, [architecture.md](architecture.md) §3) |
+| `CheckServeNames(ctx, NameResolver) []ServeNameFinding` | Resolve every `serve.nts.server-names` entry and latch the findings `Status` carries |
+| `ServeNameFindings() []ServeNameFinding` | The latched findings, without resolving |
 
 ### Interfaces (the test seams)
 
@@ -76,6 +80,11 @@ type FileSystem interface {
 	ReadFile(path string) ([]byte, error)
 	WriteFile(path string, data []byte, perm os.FileMode) error
 	MkdirAll(path string, perm os.FileMode) error
+	Rename(oldpath, newpath string) error
+	Symlink(oldname, newname string) error
+	Readlink(path string) (string, error)
+	Remove(path string) error
+	RemoveAll(path string) error
 }
 ```
 
@@ -114,6 +123,7 @@ service would refuse to apply.
 | `SourcesTotal` | `uint32` | `sources_total` | |
 | `Anomaly` | `bool` | `anomaly` | Latched, see §6 |
 | `AnomalyReason` | `string` | `anomaly_reason,omitempty` | |
+| `ServeNameFindings` | `[]ServeNameFinding` | `serve_name_findings,omitempty` | Latched by `CheckServeNames`; does **not** affect `Healthy()` |
 
 ```go
 func (s *Status) Healthy() bool {
@@ -210,7 +220,7 @@ ntp:
 | `ntp.serve.nts.cert-uri` | secret ref | when NTS serving | `ErrMissingNTSMaterial` |
 | `ntp.serve.nts.key-uri` | secret ref | when NTS serving | `ErrMissingNTSMaterial` |
 | `ntp.serve.nts.server-names` | []string | — | empty; DNS names only, `ErrInvalidNTSServerName` |
-| `ntp.serve.nts.port` | int 1–65535 | — | `4460` (IANA NTS-KE); `ErrInvalidNTSKEPort` |
+| `ntp.serve.nts.port` | int 0–65535 | — | `4460` (IANA NTS-KE) when `0` or omitted; `ErrInvalidNTSKEPort` |
 | `ntp.rtc.write-back` | bool | — | `false` |
 
 **There are no NTP environment variables.** The section is YAML only; there is
@@ -232,6 +242,7 @@ platform config loader applies to the file as a whole
 | `LocalStratum()` | the configured stratum, or `DefaultLocalStratum` when unset/zero |
 | `NTSServing()` | active **and** serving **and** `serve.nts.enabled` |
 | `NTSKEPort()` | the configured `serve.nts.port`, or `DefaultNTSKEPort` when unset/zero |
+| `NTSServerNames()` | the trimmed, non-empty `serve.nts.server-names` on a node that serves NTS; nil otherwise |
 
 ### Validation rules
 
@@ -405,7 +416,7 @@ fails the rotation closed rather than publishing an empty key file.
 
 ## 5. Error semantics
 
-All 29 are struct types. Match with `errors.As` (or `errors.Is` on a zero-value
+All 30 are struct types. Match with `errors.As` (or `errors.Is` on a zero-value
 struct, which the daemon does for `ErrDisabled{}`). Those wrapping a cause
 implement `Unwrap`.
 
@@ -426,7 +437,7 @@ implement `Unwrap`.
 | `ErrInvalidLocalStratum` | `Stratum` | Outside 1–15 |
 | `ErrMissingNTSMaterial` | `Field` | NTS enabled without cert or key |
 | `ErrInvalidNTSServerName` | `Name`, `Reason` | A `serve.nts.server-names` entry that cannot become a DNS SAN |
-| `ErrInvalidNTSKEPort` | `Port` | `serve.nts.port` outside 1–65535 |
+| `ErrInvalidNTSKEPort` | `Port` | `serve.nts.port` negative or above 65535 (`0` selects `DefaultNTSKEPort`) |
 | `ErrInvalidTimeoutAction` | `Action` | Unknown `on-timeout` |
 | `ErrInvalidGateTimeout` | `Seconds` | Negative gate timeout |
 
@@ -689,6 +700,8 @@ real chronyd.**
 | debug | `ntp: source enumeration failed` | `error` |
 | info | `ntp: system time written back to the hardware clock` | |
 | warn | `ntp: hardware clock write-back failed` | `error` |
+| warn | `ntp: failed to remove superseded NTS material version` | |
+| warn | `ntp: <kind>: <finding>` — one per serve-name finding (`CheckServeNames`) | |
 | error | `NTP: failed to configure chrony: %v` | |
 | warn | `NTP: <timeout> — continuing startup with the node flagged time-unsynced; …` | |
 
@@ -696,7 +709,7 @@ real chronyd.**
 is the only log line that means "a failing oscillator or a hostile time source."
 
 gRPC-side: `NTPGRPCService` logs `ntp status query failed`, `ntp source
-enumeration failed`, and — at info — `ntp clock stepped by operator request`
+enumeration failed`, `ntp manual step failed`, and — at info — `ntp clock stepped by operator request`
 with `stratum` and `offset_seconds`.
 
 ### Metrics
@@ -720,12 +733,17 @@ as `ntp` when `d.ntpGRPCService.Backend() != nil`:
 | `Status.Healthy()` | `healthy` | `clock synchronized` |
 | `Status.Anomaly` | `degraded` | `time-unsynced: <reason>`, plus `details.anomaly = true` |
 | Not synced, no anomaly | `degraded` | `time-unsynced` |
+| `Status.ServeNameFindings` non-empty | `degraded` | one `<kind>: <finding>` reason per finding, e.g. `nts-name-unreachable: …` |
 | Backend call failed | **`unhealthy`** | `time-unsynced: <error>` |
 | Backend reference nil | `unhealthy` | `ntp backend reference is nil` |
 
+The clock reason and the serve-name reasons are independent: when both apply,
+the message joins every reason with `"; "`, so neither hides the other.
+
 `Details` carries `synced`, `stratum`, `leap_status`, `offset_seconds`,
 `root_dispersion`, `sources_reachable`, `sources_total`, `mode`,
-`response_time_ms`.
+`response_time_ms`, and, when there are findings, `serve_name_findings` and
+`serve_names_affected` (the names alone).
 
 `TimeUnsyncedMessage = "time-unsynced"` is the exported constant fleet
 monitoring keys on. `ntpHealthTimeout = 5 * time.Second` bounds the control-socket

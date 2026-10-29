@@ -79,12 +79,11 @@ rolled into go-xkms (`TrustedCA` + ACME), and its repository archived. An agent
 following that table would go looking for a repository that is no longer a live
 dependency.
 
-The identifier `go-trusted-ca` still appears in ten tracked files
-(`pkg/store/certstore/adapter.go`, `pkg/ca/quicbaas/keystore_adapter.go`,
-`pkg/ca/quicbaas/kms_adapter.go`, `pkg/api/quic/ca_handlers.go`,
-`pkg/api/grpc/ca_service.go`, `pkg/api/rest/ca_handlers.go`,
-`pkg/api/daemon/ca_grpc_service.go`, `pkg/store/object/objstore_adapter.go`,
-`pkg/webservice/v1/registry.go`, and `pkg/ca/CLAUDE.md`).
+The identifier `go-trusted-ca` still appears in 24 tracked files outside `docs/`
+and `web/` (`git grep -l go-trusted-ca -- ':!docs' ':!web'` lists them): code
+comments across `pkg/api/`, `pkg/app/`, `pkg/ca/quicbaas/`, `pkg/store/` and
+`pkg/webservice/v1/registry.go`, `internal/ca/adapter.go`, the `Makefile`, three
+docker-compose files, an integration-test README, and `pkg/ca/CLAUDE.md`.
 
 That file is an **agent instruction file with an `AGENTS.md` mirror**, not
 feature documentation, so it is reported here rather than edited in a
@@ -134,14 +133,15 @@ The 13 gRPC RPCs are `GetCAInfo`, `InitCA`, `InstallCACertificates`,
 `ListCertificates`, `RevokeCertificate`, `RenewCertificate`,
 `VerifyCertificate`, `GetCRL`, `GetCABundle`.
 
-**REST carries eight of them.** `RenewCertificate` and `VerifyCertificate` have
-no REST route, and neither do `InitCA`, `InstallCACertificates` or
-`UninstallCACertificates` — see [api.md](api.md). Revocation over REST is
+**REST carries ten of them.** `InitCA`, `InstallCACertificates` and
+`UninstallCACertificates` have no REST route; `RenewCertificate` is
+`POST /api/v1/ca/certificates/{serial}/renew` and `VerifyCertificate` is
+`POST /api/v1/ca/certificates/verify` — see [api.md](api.md). Revocation over REST is
 `DELETE /api/v1/ca/certificates/{serial}`, not a `POST .../revoke`.
 
 ## 6. Known defect
 
-`pkg/webservice/v1/rest/ca/handlers.go:715` carries a `TODO` recording that the
+`pkg/webservice/v1/rest/ca/handlers.go:762` carries a `TODO` recording that the
 proto `IssueCertificateRequest` **has no explicit field** for something the REST
 handler needs. Until that is resolved, the REST issuance path and the gRPC
 message are not fully aligned. Verify against the code before assuming a field

@@ -1,6 +1,6 @@
 # Trust — Engineering
 
-> **Status: NORMATIVE** · Scope: `pkg/trust` implementation contract · Last verified: 2026-10-11
+> **Status: NORMATIVE** · Scope: `pkg/trust` implementation contract · Last verified: 2026-10-27
 > Conflicts with this document are defects. Fix them here first.
 > The feature folder is: [architecture.md](architecture.md) · [engineering.md](engineering.md) · [cli.md](cli.md) · [api.md](api.md) · [user.md](user.md).
 
@@ -84,7 +84,8 @@ At transport boundaries the proxy adapter maps unknown classes to
 
 ## 4. Configuration
 
-The `trust:` section is read into `AppConfig.TrustConfig`. The config decoder
+The `trust:` section is read into the `App.TrustConfig` field
+(`pkg/app/app.go`). The config decoder
 **ignores unknown keys**, so a retired `trust.default` or `trust.internal` loses
 its settings silently; `pkg/trust/shipped_templates_test.go` checks every
 shipped template for both.

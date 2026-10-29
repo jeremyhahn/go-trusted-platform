@@ -15,10 +15,10 @@
 | `pkg/bootstrap/config_writer.go` | `SecretUpdate`, `ConfigWriter` and its atomic YAML rewriting |
 | `pkg/config/secrets/idevid_resolver.go` | `IDevIDResolver` |
 | `pkg/config/secrets/file_resolver.go` | `FileResolver` |
-| `pkg/config/secrets/errors.go` | Ten typed errors shared by both resolvers |
+| `pkg/config/secrets/errors.go` | Eleven typed errors shared by both resolvers |
 | `pkg/app/secrets.go` | `SecretsConfig`, `SetupSecretResolvers`, `ProcessSecrets`, `tpmDecrypter`, `kmsNotAvailableResolver`, `xkmsKMSClientAdapter` |
 | `pkg/app/secrets_resolvers.go` | `DynamicSecretsResolver`, `XKMSSecretsResolver`, `XKMSClient` |
-| `pkg/app/secrets_errors.go` | Twenty-one typed errors |
+| `pkg/app/secrets_errors.go` | Twenty-four typed errors |
 | `pkg/cli/commands/bootstrap/secrets*.go` | The four CLI verbs and their helpers |
 
 **`pkg/bootstrap` is not a resolution engine.** Its package comment states the
@@ -389,7 +389,7 @@ Migration maps a dotted config path to a KMS path as
 | Unit — errors | `pkg/config/secrets/errors_test.go` | Every message and unwrap |
 | Unit — registry | `pkg/app/secrets_test.go`, `secrets_resolvers_test.go`, `app_test.go` | `DefaultSecretsConfig`, nil-config guards, per-flag registration, `dynamic://` and `xkms://` paths, `ProcessSecrets` enabled/disabled |
 | Unit — writer | `pkg/bootstrap/config_writer_test.go` | Backup, restore, dry run, atomic write, path navigation |
-| CLI | **none** — there is no `secrets*_test.go` under `pkg/cli/commands/bootstrap/` (globbed 2026-08-18). The four verbs, their flag binding, `detectScheme`, `maskSecretURI` and `maskValue` are untested. |
+| CLI | `pkg/cli/commands/bootstrap/secrets_cmd_test.go` | The four runners (`status` table and JSON, `verify` dry run and `env://` resolution, `resolve`, `migrate` with and without backup, dry run, nothing-to-migrate, failures) against a fake KMS server; `resolveSecretValue`, `resolveSecretByScheme`, `isResolverAvailable` and the error messages |
 
 Fault-injection seams:
 - `quicbaassecret.SecretResolver` — register a failing resolver.

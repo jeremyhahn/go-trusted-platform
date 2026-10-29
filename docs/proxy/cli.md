@@ -19,7 +19,7 @@ platformctl proxy pool         Proxy backend pool operations
 
 Five direct children: `route`, `pool`, `status`, `reload`, `zone-matrix`
 (`proxy.go: NewCommand`). Registered on the root command at
-`pkg/cli/commands/root.go:189`.
+`pkg/cli/commands/root.go:202`.
 
 **These verbs configure platformd, not a running gatewayd.** platformd is the
 source of truth for routes and pools; gatewayd instances sync it and run the
@@ -28,7 +28,7 @@ effect on that gateway's next sync tick.
 
 ### Global flags
 
-`platformctl` persistent flags (`pkg/cli/commands/root.go:129`), precedence
+`platformctl` persistent flags (`pkg/cli/commands/root.go:135`), precedence
 **flag > environment > config file > built-in default**:
 
 | Flag | Short | Default | Environment | Meaning |
@@ -162,7 +162,7 @@ routes.
 | `--id` | string | `""` | **yes** | Pool identifier |
 | `--backend` | string slice | none | **yes (≥1)** | Backend URL, optionally `URL=WEIGHT`; repeatable |
 | `--balancer` | string | `""` | no | Empty defaults to `round-robin`, the only registered balancer |
-| `--trust-class` | string | `""` | no | `platform` or `bmc` ([`docs/trust/`](../trust/architecture.md)). Unknown → `ErrUnknownTrustClass` |
+| `--trust-class` | string | `""` | no | `platform` or `bmc` ([`docs/trust/`](../trust/architecture.md)). platformd stores any value; a gatewayd asked for an unknown class when it builds the backend TLS config gets `proxysvc.ErrUnknownTrustClass` (`TrustResolverAdapter.ClientTLSConfig`) |
 | `--mtls-client-cert` | bool | `false` | no | Present a client certificate to backends |
 | `--max-idle-conns-per-host` | int | `0` | no | `0` ⇒ engine default 128 |
 | `--idle-conn-timeout` | duration | `0` | no | `0` ⇒ engine default 90s |
