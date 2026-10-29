@@ -578,6 +578,7 @@ func applyDaemonTLSIdentity(ctx context.Context, logger *logging.Logger, a *app.
 	}
 	cfg.TLSIdentity = serving
 	cfg.MTLSClientCAPool = identity.AdminTrustPool
+	cfg.MTLSOperatorTrustDomain = appbackends.PlatformAdminIdentity(a).TrustDomain
 	cfg.MTLSClientCAFile = identity.CABundlePath
 	if cfg.QUICConfig != nil && cfg.QUICConfig.TLSConfig != nil {
 		// Certificates stays empty: crypto/tls prefers it over

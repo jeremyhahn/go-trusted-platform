@@ -281,6 +281,18 @@ a body with no MAC is 400 (`InvalidArgument`, `ErrPXEWebhookMACRequired`,
 Transports with no peer certificate — Unix, MCP stdio, embedded — refuse the
 call. This binding is the only one: there is no separate certificate-binding RPC.
 
+**The installer certificate may call the webhook and nothing else (Codex
+8200).** It is accepted on gRPC (`WebhookComplete`) and on REST
+(`POST /api/v1/pxe/webhook/complete`). The gRPC mTLS interceptor refuses it on
+every other method with `PermissionDenied` (`ErrMTLSInstallerMethodDenied`,
+`pkg/api/daemon/mtls_interceptor.go:190`). On REST, QUIC and MCP it is granted
+no scope (`mtlsGrantFor`, `pkg/api/daemon/transport_auth.go:289`), so every
+scope-guarded operation refuses it. That includes QUIC `0xCF` sub `0x36` and
+`pxe_webhook_complete`, so an installer completes over gRPC or REST, never QUIC
+or MCP. Only the operator's admin certificate, which carries the system tenant
+as O and the admin SPIFFE ID, gets the full API
+([auth architecture](../auth/architecture.md) §5).
+
 **One installer certificate is bound to one device at a time.** Binding a
 fingerprint another device is installing under is refused with
 `ErrInstallCertificateInUse`, `AlreadyExists` on gRPC

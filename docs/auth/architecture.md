@@ -134,6 +134,27 @@ the `auth` entry — reached through `sdk/go/services/auth`.
    `ExtractIdentity` → `ExtractTenant` (or `DefaultTenant`).
 5. The `*auth.Identity` is stored on the context under `ContextKeyIdentity`;
    handlers read it with `daemon.IdentityFromContext`.
+6. The interceptor admits only the operator to every method. Any other
+   certificate is an installer, and it may call only
+   `PXEService/WebhookComplete`. Any other method returns `PermissionDenied`
+   with `ErrMTLSInstallerMethodDenied` (`pkg/api/daemon/mtls_interceptor.go:190`).
+
+#### The two mTLS principals (Codex 8200)
+
+A verified client certificate is one of two principals. They are told apart in
+`isMTLSOperator` (`pkg/api/daemon/transport_auth.go:262`), and
+`mtlsGrantFor` (`:289`) gives each its grant:
+
+| Principal | How it is recognised | gRPC | QUIC, REST, MCP |
+|---|---|---|---|
+| **Operator** | The subject O is exactly the system tenant, and a URI SAN is `spiffe://<trust domain>/tenant/<system tenant>/user/<admin>` | every method | `*:*` |
+| **Installer** | Any other certificate that chains to the client CA | only `PXEService/WebhookComplete` (`mtlsInstallerMethods`) | no scope, so every scope-guarded operation refuses it |
+
+The trust domain is `Config.MTLSOperatorTrustDomain`, which `platformd` sets
+from the platform admin identity (`pkg/daemon/commands/serve.go:580`). If it is
+empty, no certificate is the operator, so the check fails closed. Every
+installer certificate chains to the same CA as the admin certificate, so
+chaining to that CA does not make a certificate the operator.
 
 Nothing is persisted. Nothing crosses a host boundary except the TLS handshake
 itself and, when revocation checking is on, the call to the CA.
@@ -1258,8 +1279,8 @@ been fixed.
 
 | # | Where (file:line) | What it decides | Replaced by |
 |---|---|---|---|
-| A1 | `pkg/api/daemon/transport_auth.go:237`, `:259` (`mtlsOperatorScope`, `mtlsPeerAuthenticator.AuthenticatePeer`) | Every caller with a verified client certificate gets `*:*` on QUIC, REST and MCP | `IAMPEPClient.Check` (`sdk/go`, alias of `client/iam.PEPClient`) for the certificate's principal |
-| A2 | `pkg/api/daemon/mtls_interceptor.go:75`, `:101` | The gRPC mTLS interceptors authenticate the caller and then call the handler, with no per-method check | `IAMPEPClient.Check` per method |
+| A1 | `pkg/api/daemon/transport_auth.go:237`, `:259` (`mtlsOperatorScope`, `mtlsPeerAuthenticator.AuthenticatePeer`) | The operator's admin certificate gets `*:*` on QUIC, REST and MCP, and any other verified certificate gets no scope (`mtlsGrantFor`, Codex 8200) | `IAMPEPClient.Check` (`sdk/go`, alias of `client/iam.PEPClient`) for the certificate's principal |
+| A2 | `pkg/api/daemon/mtls_interceptor.go:75`, `:101` | The gRPC mTLS interceptors authenticate the caller. They admit the operator to every method and an installer certificate only to `PXEService/WebhookComplete`, with no finer per-method check | `IAMPEPClient.Check` per method |
 | A3 | `pkg/api/quic/auth.go:281-304` (`AuthorizeRequest`) | Allows an operation whose scope is empty (`:288-289`), and every request when no checker is wired (`:303-304`) | `IAMPEPClient.Check`. Deny when no decision point is wired |
 | A4 | `pkg/api/grpc/method_permissions.go:54` (`preAuthMethods`), `:113` (`buildGRPCMethodPermissions`) | The platform's own gRPC method → `resource:action` catalogue | No SDK surface yet: per-method declarations in an API module, like `ModuleMCPToolPermissions` (`ModuleGRPCPublicMethods` lists only the public methods) |
 | A5 | `pkg/api/quic/opcode_permissions.go:312` (`opcodePermissions`), `:570` (`categoryPermissions`) | The platform's own QUIC opcode → permission catalogue | No SDK surface yet (same gap as A4) |

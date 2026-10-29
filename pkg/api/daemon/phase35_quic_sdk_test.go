@@ -95,6 +95,7 @@ func newMTLSQUICAuthMiddleware(t *testing.T, bundle *testutil.TestTLSBundle) *qu
 	t.Helper()
 	config := DefaultConfig()
 	config.EnableMTLS = true
+	config.MTLSOperatorTrustDomain = testOperatorTrustDomain
 	mw, _, err := selectQUICAuth(config, nil, bundle.CAPool, logging.DefaultLogger())
 	if err != nil {
 		t.Fatalf("selectQUICAuth: %v", err)
@@ -112,7 +113,7 @@ func mtlsQUICAuth(t *testing.T, bundle *testutil.TestTLSBundle) QUICServiceHandl
 // context the category handlers then run under.
 func mtlsAuthenticatedQUICContext(t *testing.T, req *quicwire.Request) context.Context {
 	t.Helper()
-	bundle := testutil.GenerateTestTLSBundle(t)
+	bundle := operatorTLSBundle(t)
 	state := &tls.ConnectionState{
 		VerifiedChains: [][]*x509.Certificate{{leafOf(t, bundle.ClientCert), bundle.CACert}},
 	}
@@ -142,7 +143,7 @@ func newPhase35QUICHandler(opts ...QUICServiceHandlerOption) *QUICServiceHandler
 // A sub-opcode the daemon does not dispatch, a payload it cannot decode, or a
 // reply the client cannot translate fails here.
 func TestPhase35QUICClientAgainstDaemonHandler(t *testing.T) {
-	bundle := testutil.GenerateTestTLSBundle(t)
+	bundle := operatorTLSBundle(t)
 	h := newPhase35QUICHandler(mtlsQUICAuth(t, bundle))
 
 	runPhase35SDKCases(t, newPhase35QUICClient(t, h, bundle).Connection())
@@ -169,7 +170,7 @@ func TestPhase35QUICClientAgainstDaemonHandler_AnonymousIsRefused(t *testing.T) 
 // daemon without the service answers the QUIC client with an error rather
 // than an empty reply.
 func TestPhase35QUICClientAgainstDaemonHandler_ServerErrorsSurface(t *testing.T) {
-	bundle := testutil.GenerateTestTLSBundle(t)
+	bundle := operatorTLSBundle(t)
 	a := newPhase35QUICClient(t, newTestQUICServiceHandler(logging.DefaultLogger(), mtlsQUICAuth(t, bundle)), bundle)
 
 	err := a.Connection().Invoke(context.Background(), platformv1.PIVService_ListDevices_FullMethodName,

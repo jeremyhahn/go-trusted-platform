@@ -32,7 +32,6 @@ import (
 	"google.golang.org/protobuf/reflect/protoregistry"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/testutil"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/services/scheduler"
 )
@@ -117,10 +116,11 @@ func connectAppServicesREST(t *testing.T, servers appServiceServers) grpc.Client
 // the mTLS scope guard, to a caller holding the operator certificate.
 func appServicesRESTHandler(t *testing.T, servers appServiceServers) http.Handler {
 	t.Helper()
-	bundle := testutil.GenerateTestTLSBundle(t)
+	bundle := operatorTLSBundle(t)
 	config := failClosedConfig()
 	config.EnableMTLS = true
 	config.MTLSClientCAPool = bundle.CAPool
+	config.MTLSOperatorTrustDomain = testOperatorTrustDomain
 	guard, err := newRESTScopeGuard(config, nil, logging.DefaultLogger())
 	require.NoError(t, err)
 
