@@ -124,9 +124,9 @@ The kernel and provider builders are `build/docker/fips-kernel-builder/` and
   - `pkg/bmc/rmcp_known_vectors_test.go` and `rmcp_legacy_algorithms_test.go` (`!fips`);
   - `pkg/sdn/gateway/tunnels_fips_test.go`.
 - **`CI / FIPS`** is the `fips` job in `.github/workflows/ci.yml:666-695`:
-  - it runs `make test-fips` in the full tier: on push to `main`, the nightly schedule, `workflow_dispatch` and a pull request labelled `ci:full`, never on an ordinary pull request (`ci.yml:682`);
+  - it runs `make test-fips` on push to `main`, the nightly schedule and `workflow_dispatch` only, never on a pull request, not even one labelled `ci:full` (DS-4603; `if: ${{ github.event_name != 'pull_request' }}`);
   - it is **not** in `ci-gate`'s `needs`, so it does not block a merge;
-  - `pkg/arch/citiers_test.go` fails `make test` if the job is gated, a gated job needs it, or its `if:` is not the full tier's (`ci.yml:673-674`).
+  - `pkg/arch/citiers_test.go` fails `make test` if the job is gated, a gated job needs it, or its `if:` is not exactly that main-only condition, so a change that puts it back on the PR or full tier fails.
 - **`Nightly / FIPS`** runs the same target (`.github/workflows/nightly.yml:162-186`) on `workflow_dispatch` only, and publishes a non-gating status (`:433`).
   - The header of that file lists what is still red and who owns it.
   - A panic under `fips140=only` aborts the whole test binary, so its failure count is a lower bound.

@@ -40,8 +40,9 @@ import (
 // (ci-template v1.26): every job's `if:` carries the draft guard, and the gate
 // fails on a draft. The nightly tier (ci-template v1.27, ruling 135) runs on
 // main's schedule and on a dispatch: its soak may skip only when the gate's
-// NIGHTLY flag is not `true`. FIPS is the one ungated job (#853): it runs in
-// the full tier but appears in neither the gate's `needs` nor its `check` lines.
+// NIGHTLY flag is not `true`. FIPS is the one ungated job (#853): it runs on
+// main, the schedule and dispatch only, never on a pull request (DS-4603),
+// and appears in neither the gate's `needs` nor its `check` lines.
 
 const (
 	ciWorkflowFile = ".github/workflows/ci.yml"
@@ -97,6 +98,12 @@ const (
 	// character for character.
 	fullTierIf = "${{ (" + fullTierExpr + ") && " + draftGuard + " }}"
 
+	// mainOnlyIf is the `if:` of every ungated job, character for character
+	// (DS-4603): push to main, the schedule and workflow_dispatch, never a
+	// pull_request, `ci:full` or not. A PR event never matches it, so the
+	// draft guard is not repeated.
+	mainOnlyIf = "${{ github.event_name != 'pull_request' }}"
+
 	// ciFullTierEnv is the workflow-level env the steps and the gate read.
 	ciFullTierEnv      = "CI_FULL_TIER"
 	ciFullTierEnvValue = "${{ " + fullTierExpr + " }}"
@@ -119,7 +126,8 @@ const (
 	supersededGroup = "${{ github.workflow }}-${{ github.ref == 'refs/heads/main' && format('main-{0}-{1}', github.event_name, github.sha) || github.ref }}"
 )
 
-// ungatedJobs run in the full tier but report without feeding CI Gate (#853):
+// ungatedJobs run on main, the schedule and dispatch only (mainOnlyIf,
+// DS-4603), never on a pull request, and report without feeding CI Gate (#853):
 // FIPS, still red on causes this repository cannot close (nightly.yml's
 // header lists them).
 var ungatedJobs = []string{"fips"}
@@ -468,6 +476,15 @@ func ciTierFindings(wf ciWorkflow) []error {
 		if j.ID == ciGateJobID {
 			continue
 		}
+		if slices.Contains(ungatedJobs, j.ID) {
+			if j.If != mainOnlyIf {
+				findings = append(findings, CITierError{
+					File: wf.File, Line: j.Line, Job: j.ID,
+					Reason: fmt.Sprintf("an ungated job runs on main, the schedule and dispatch only, never on a pull request: its if: is %q, want exactly %q", j.If, mainOnlyIf),
+				})
+			}
+			continue
+		}
 		tier, known := tierByIf[j.If]
 		if !known {
 			findings = append(findings, CITierError{
@@ -493,9 +510,6 @@ func ciTierFindings(wf ciWorkflow) []error {
 		tier, known := tiers[j.ID]
 		c, gated := checked[j.ID]
 		if slices.Contains(ungatedJobs, j.ID) {
-			if known && tier != tierFull {
-				fail(j.Line, "an ungated job runs in the full tier only: its if: puts it in the "+tier+" tier")
-			}
 			if slices.Contains(gate.Needs, j.ID) {
 				fail(j.Line, "an ungated job: remove it from ci-gate's needs")
 			}
@@ -736,7 +750,7 @@ jobs:
     if: ` + fullTierIf + `
     needs: lint
   fips:
-    if: ` + fullTierIf + `
+    if: ` + mainOnlyIf + `
   soak:
     if: ` + nightlyIf + `
   ci-gate:
@@ -816,8 +830,9 @@ func TestCITierFindingsRejectEachInconsistency(t *testing.T) {
 		{"pull_request without the synchronize type", `synchronize, `, ``, "types are [opened reopened]"},
 		{"an ungated job in the gate's needs", `needs: [lint, changes, build, race, soak]`, `needs: [lint, changes, build, race, fips, soak]`, "fips: an ungated job: remove it from ci-gate's needs"},
 		{"an ungated job with a check line", `check full race "$RESULT_RACE"`, "check full race \"$RESULT_RACE\"\n          check full fips \"$RESULT_RACE\"", "fips: an ungated job: remove its check line"},
-		{"an ungated job on the PR tier", "  fips:\n    if: " + fullTierIf + "\n", "  fips:\n    if: " + prTierIf + "\n", "fips: an ungated job runs in the full tier only"},
-		{"an ungated job whose if: drifted", "  fips:\n    if: " + fullTierIf + "\n", "  fips:\n    if: github.event_name == 'push'\n", "fips: if: "},
+		{"an ungated job on the PR tier", "  fips:\n    if: " + mainOnlyIf + "\n", "  fips:\n    if: " + prTierIf + "\n", "fips: an ungated job runs on main, the schedule and dispatch only, never on a pull request"},
+		{"an ungated job on the full tier", "  fips:\n    if: " + mainOnlyIf + "\n", "  fips:\n    if: " + fullTierIf + "\n", "fips: an ungated job runs on main, the schedule and dispatch only, never on a pull request"},
+		{"an ungated job whose if: drifted", "  fips:\n    if: " + mainOnlyIf + "\n", "  fips:\n    if: github.event_name == 'push'\n", "fips: an ungated job runs on main, the schedule and dispatch only"},
 		{"a gated job needing an ungated job", "    needs: lint\n  fips:", "    needs: [lint, fips]\n  fips:", "race: a gated job needs ungated job fips"},
 		{"a nightly-tier job tagged full", `check nightly soak`, `check full soak`, "soak: tagged full in ci-gate, but its if: puts it in the nightly tier"},
 		{"a full-tier job tagged nightly", `check full race`, `check nightly race`, "race: tagged nightly in ci-gate, but its if: puts it in the full tier"},

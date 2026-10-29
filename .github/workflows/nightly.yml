@@ -9,8 +9,9 @@
 #
 # Repo-specific notes for go-trusted-platform:
 #
-#   fips  — ALSO in ci.yml since #853, on push to main and workflow_dispatch,
-#           outside CI Gate; both jobs run `make test-fips`.
+#   fips  — ALSO in ci.yml since #853, on push to main, its schedule and
+#           workflow_dispatch, never on a pull request, `ci:full` or not
+#           (DS-4603), outside CI Gate; both jobs run `make test-fips`.
 #
 #           STILL RED, on causes this repo cannot close. Retriaged 2026-09-03
 #           (#209), which fixed three of the four causes below plus the

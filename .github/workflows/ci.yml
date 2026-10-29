@@ -40,7 +40,8 @@
 #     tier (pkg/arch/citiers_test.go holds the format).
 #   - integration needs image (isolation, see there) and applies the
 #     foreign-failure baseline (ruling 125); soak applies it per iteration.
-#   - FIPS is kept and ungated (#853, see its comment).
+#   - FIPS is kept and ungated (#853), and runs on main, the schedule and
+#     dispatch only, never on a pull request (DS-4603, see its comment).
 #   - trivy image keeps --ignore-unfixed, --skip-dirs /gomodcache and its
 #     ignorefile. The SARIF upload is gone with the runner security job:
 #     Gitea has no code-scanning ingest.
@@ -67,8 +68,10 @@
 #                 included), lint-gates, arch-gates, and the docs tier:
 #                 sdkjs, and the image job's build and test steps.
 #   Full tier     push to main, workflow_dispatch, the schedule, or a PR
-#                 labelled `ci:full`. web, integration, fips, and the image
-#                 job's security and trivy steps.
+#                 labelled `ci:full`. web, integration, and the image job's
+#                 security and trivy steps.
+#   Main only     push to main, workflow_dispatch and the schedule, never a
+#                 PR, `ci:full` or not (DS-4603). fips, ungated.
 #   Nightly tier  the schedule and workflow_dispatch (v1.24). soak.
 #
 # CI_FULL_TIER (workflow env) is the full-tier selection; a job-level `if:`
@@ -732,15 +735,17 @@ jobs:
           docker image rm "$IT_IMAGE" || true
           docker buildx prune --builder "$BUILDX_BUILDER" --force --keep-storage "$BUILDKIT_KEEP_STORAGE" || true
 
-  # CUSTOMIZE (FIPS 140-3, #853): the ungated full-tier job. It runs on push
-  # to main, the schedule, workflow_dispatch and a pull_request labelled
-  # `ci:full` (ci-template v1.23, ci-standard.md §8), never on an ordinary PR.
+  # CUSTOMIZE (FIPS 140-3, #853): the ungated job. It runs on push to main,
+  # the schedule and workflow_dispatch only, never on a pull_request, not
+  # even one labelled `ci:full` (DS-4603, m1355, DS-3878): a gtp FIPS job
+  # never runs on a PR.
   #
   # It is deliberately NOT in ci-gate's `needs`: it is still red on causes
   # this repository cannot close (the header of nightly.yml lists them), so
   # it reports `CI / FIPS` without turning CI Gate red.
   # pkg/arch/citiers_test.go fails `make test` if it is ever gated, if a gated
-  # job needs it, or if its `if:` is not the full tier's. Its steps match nightly.yml's `fips` job;
+  # job needs it, or if its `if:` is not exactly the main-only one below.
+  # Its steps match nightly.yml's `fips` job;
   # change the suite in the Makefile (`make test-fips`), not here. That target
   # also applies the FIPS foreign-failure baseline (ruling 125,
   # .github/foreign-failures-fips.tsv); nightly.yml's header lists what it
@@ -748,7 +753,7 @@ jobs:
   fips:
     name: FIPS
     runs-on: ubuntu-latest
-    if: ${{ (github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'ci:full')) && !github.event.pull_request.draft }}
+    if: ${{ github.event_name != 'pull_request' }}
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
