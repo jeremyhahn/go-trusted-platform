@@ -16,8 +16,6 @@
 package daemon
 
 import (
-	"context"
-	"crypto/x509"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -25,45 +23,11 @@ import (
 	"testing"
 
 	"github.com/gorilla/mux"
-	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
-	xkmsca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/ca"
 	restapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/rest"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
-
-// =============================================================================
-// Mock CA exposing the xkmsca.TCGCA surface SetCAHandlers needs.
-// =============================================================================
-
-type fakeRESTCA struct {
-	xkmsca.TCGCA // embed for any methods we don't override
-}
-
-func (f *fakeRESTCA) Identity() string                                { return "Test CA" }
-func (f *fakeRESTCA) IsInitialized() bool                             { return true }
-func (f *fakeRESTCA) DefaultKeyAlgorithm() x509.PublicKeyAlgorithm    { return x509.ECDSA }
-func (f *fakeRESTCA) DefaultValidityPeriod() int                      { return 365 }
-func (f *fakeRESTCA) TrustedRoot() (*x509.Certificate, error)         { return nil, nil }
-func (f *fakeRESTCA) TrustedIntermediate() (*x509.Certificate, error) { return nil, nil }
-func (f *fakeRESTCA) IssueCertificate(_ context.Context, req *xkmsca.CACertificateRequest) (*xkmsca.IssuedCertificate, error) {
-	return nil, nil
-}
-
-// IssueCertificateWithProfile issues as IssueCertificate.
-func (f *fakeRESTCA) IssueCertificateWithProfile(ctx context.Context, req *xkmsca.CACertificateRequest, _ string) (*xkmsca.IssuedCertificate, error) {
-	return f.IssueCertificate(ctx, req)
-}
-func (f *fakeRESTCA) RevokeCert(_ context.Context, _ *x509.Certificate, _ xkmsca.RevokeOptions) error {
-	return nil
-}
-func (f *fakeRESTCA) CABundle() ([]byte, error) { return []byte{}, nil }
-func (f *fakeRESTCA) CABundleFiltered(xkmssdk.StoreType, x509.PublicKeyAlgorithm) ([]byte, error) {
-	return []byte{}, nil
-}
-func (f *fakeRESTCA) ParseBundle([]byte) ([]*x509.Certificate, error) { return nil, nil }
-func (f *fakeRESTCA) CertStore() xkmssdk.CertStore                    { return nil }
 
 // =============================================================================
 // Tests

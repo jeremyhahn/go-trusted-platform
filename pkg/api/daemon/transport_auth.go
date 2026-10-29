@@ -17,6 +17,7 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"errors"
 	"net/url"
 	"os"
 	"strings"
@@ -315,10 +316,22 @@ func (a mtlsPeerAuthenticator) AdmitsMethod(method string) bool {
 
 // AuthenticatePeer authenticates the leaf of chain and returns its principal.
 func (a mtlsPeerAuthenticator) AuthenticatePeer(ctx context.Context, chain []*x509.Certificate) (*platformtoken.AuthorizedContext, error) {
+	return a.authenticate(ctx, chain, false)
+}
+
+// AuthenticateInstallerPeer is AuthenticatePeer for a method AdmitsMethod
+// admits: a verified certificate without a subject organization is admitted
+// with no tenant and no scope (authenticateMTLSCertificate). The method's
+// handler still requires the certificate's fingerprint to be bound.
+func (a mtlsPeerAuthenticator) AuthenticateInstallerPeer(ctx context.Context, chain []*x509.Certificate) (*platformtoken.AuthorizedContext, error) {
+	return a.authenticate(ctx, chain, true)
+}
+
+func (a mtlsPeerAuthenticator) authenticate(ctx context.Context, chain []*x509.Certificate, installerMethod bool) (*platformtoken.AuthorizedContext, error) {
 	if len(chain) == 0 {
 		return nil, quic.ErrMissingClientCertificate{}
 	}
-	identity, err := a.authenticator.Authenticate(ctx, chain[0])
+	identity, err := authenticateMTLSCertificate(ctx, a.authenticator, chain[0], installerMethod)
 	if err != nil {
 		return nil, err
 	}
@@ -328,6 +341,26 @@ func (a mtlsPeerAuthenticator) AuthenticatePeer(ctx context.Context, chain []*x5
 		TenantID: identity.TenantID,
 		Scopes:   mtlsGrantFor(chain[0], a.trustDomain),
 	}, nil
+}
+
+// authenticateMTLSCertificate authenticates cert. The installer certificate
+// carries no subject organization, so the authenticator, which takes the
+// tenant from it, refuses it with auth.ErrTenantNotFound after the chain,
+// validity and identity checks have passed. On an installer method
+// (mtlsInstallerMethods) that refusal alone is waived and the certificate is
+// admitted with no tenant: the method's handler admits only the certificate
+// whose fingerprint SetDeviceInstalling bound, as the REST webhook does. On
+// every other method the refusal stands unchanged.
+func authenticateMTLSCertificate(ctx context.Context, authenticator auth.Authenticator, cert *x509.Certificate, installerMethod bool) (*auth.Identity, error) {
+	identity, err := authenticator.Authenticate(ctx, cert)
+	if err == nil || !installerMethod {
+		return identity, err
+	}
+	var noTenant auth.ErrTenantNotFound
+	if !errors.As(err, &noTenant) {
+		return nil, err
+	}
+	return authenticator.ExtractIdentity(cert)
 }
 
 // newRESTScopeGuard builds the guard that checks each daemon REST route's

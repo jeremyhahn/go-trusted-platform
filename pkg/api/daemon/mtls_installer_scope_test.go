@@ -580,6 +580,130 @@ func TestMTLSInstallerScope_InstallerIsRefusedOtherMCPPXEWrites(t *testing.T) {
 	assert.Equal(t, mcp.AuthErrorPermissionDenied, authErr.Type)
 }
 
+// An installer certificate need carry no subject organization, and the mTLS
+// authenticator takes the tenant from it. newWebhookFixture binds f.node, a
+// certificate with only a CN, to webhookNodeMAC; unboundWithoutOrganization
+// is the same kind of certificate, bound to no device.
+
+// unboundWithoutOrganization issues a client certificate with no subject
+// organization from the fixture's trusted issuer, bound to no device.
+func (f *installerScopeFixture) unboundWithoutOrganization(t *testing.T) *x509.Certificate {
+	t.Helper()
+	cert := f.issuerA.issue(t, 900)
+	require.Empty(t, cert.Subject.Organization)
+	return cert
+}
+
+// completeNode sends the install-completion webhook for webhookNodeMAC on ctx.
+func (f *installerScopeFixture) completeNode(ctx context.Context) error {
+	_, err := f.svc.WebhookComplete(ctx, &platformv1.PXEWebhookCompleteRequest{MacAddress: webhookNodeMAC, Success: true})
+	return err
+}
+
+// grpcWebhook runs the install-completion webhook for webhookNodeMAC from leaf
+// through the gRPC mTLS interceptor.
+func (f *installerScopeFixture) grpcWebhook(t *testing.T, leaf *x509.Certificate) error {
+	t.Helper()
+	_, err := f.unary(t)(grpcContext(verifiedState(leaf)),
+		&platformv1.PXEWebhookCompleteRequest{MacAddress: webhookNodeMAC, Success: true},
+		&grpc.UnaryServerInfo{FullMethod: platformv1.PXEService_WebhookComplete_FullMethodName},
+		func(ctx context.Context, req interface{}) (interface{}, error) {
+			return f.svc.WebhookComplete(ctx, req.(*platformv1.PXEWebhookCompleteRequest))
+		})
+	return err
+}
+
+func TestMTLSInstallerScope_InstallerWithoutOrganizationCompletesThroughGRPCWebhook(t *testing.T) {
+	f := newInstallerScopeFixture(t)
+	require.Empty(t, f.node.Subject.Organization)
+
+	require.NoError(t, f.grpcWebhook(t, f.node))
+
+	assert.Equal(t, pxe.StateInstallComplete, f.state(t, webhookNodeMAC))
+	assert.Equal(t, pxe.StateInstalling, f.state(t, webhookOtherMAC))
+}
+
+func TestMTLSInstallerScope_UnboundCertificateWithoutOrganizationIsRefusedOverGRPC(t *testing.T) {
+	f := newInstallerScopeFixture(t)
+	unbound := f.unboundWithoutOrganization(t)
+
+	err := f.grpcWebhook(t, unbound)
+
+	assert.Equal(t, codes.PermissionDenied, status.Code(err))
+	assert.Equal(t, pxe.StateInstalling, f.state(t, webhookNodeMAC))
+}
+
+// Outside the installer methods a certificate without an organization is
+// refused by the authenticator, bound or not, as before.
+func TestMTLSInstallerScope_CertificateWithoutOrganizationIsUnauthenticatedOutsideGRPCWebhook(t *testing.T) {
+	f := newInstallerScopeFixture(t)
+
+	for name, leaf := range map[string]*x509.Certificate{"bound": f.node, "unbound": f.unboundWithoutOrganization(t)} {
+		reached, err := f.updateState(t, leaf, webhookNodeMAC)
+
+		assert.False(t, reached, name)
+		assert.Equal(t, codes.Unauthenticated, status.Code(err), name)
+		assert.Contains(t, status.Convert(err).Message(), auth.ErrTenantNotFound{}.Error(), name)
+	}
+	assert.Equal(t, pxe.StateInstalling, f.state(t, webhookNodeMAC))
+}
+
+func TestMTLSInstallerScope_InstallerWithoutOrganizationCompletesThroughQUICWebhook(t *testing.T) {
+	f := newInstallerScopeFixture(t)
+
+	ctx, resp := f.quicGuard(t)(f.node, quicwire.PXESubWebhookComplete)
+
+	require.Nil(t, resp, "the QUIC guard must admit a bound installer without an organization to WebhookComplete")
+	require.NoError(t, f.completeNode(ctx))
+	assert.Equal(t, pxe.StateInstallComplete, f.state(t, webhookNodeMAC))
+	assert.Equal(t, pxe.StateInstalling, f.state(t, webhookOtherMAC))
+}
+
+func TestMTLSInstallerScope_UnboundCertificateWithoutOrganizationIsRefusedOverQUIC(t *testing.T) {
+	f := newInstallerScopeFixture(t)
+	guard := f.quicGuard(t)
+	unbound := f.unboundWithoutOrganization(t)
+
+	ctx, resp := guard(unbound, quicwire.PXESubWebhookComplete)
+	require.Nil(t, resp)
+	assert.Equal(t, codes.PermissionDenied, status.Code(f.completeNode(ctx)))
+	assert.Equal(t, pxe.StateInstalling, f.state(t, webhookNodeMAC))
+
+	for name, leaf := range map[string]*x509.Certificate{"bound": f.node, "unbound": unbound} {
+		_, resp := guard(leaf, quicwire.PXESubStopService)
+		require.NotNil(t, resp, name)
+		assert.Equal(t, quicwire.StatusUnauthorized, resp.Status, name)
+	}
+}
+
+func TestMTLSInstallerScope_InstallerWithoutOrganizationCompletesThroughMCPWebhook(t *testing.T) {
+	f := newInstallerScopeFixture(t)
+
+	ctx, authErr := f.mcpChecker(t)(f.node, "pxe_webhook_complete")
+
+	require.Nil(t, authErr, "the MCP checker must admit a bound installer without an organization to pxe_webhook_complete")
+	require.NoError(t, f.completeNode(ctx))
+	assert.Equal(t, pxe.StateInstallComplete, f.state(t, webhookNodeMAC))
+	assert.Equal(t, pxe.StateInstalling, f.state(t, webhookOtherMAC))
+}
+
+func TestMTLSInstallerScope_UnboundCertificateWithoutOrganizationIsRefusedOverMCP(t *testing.T) {
+	f := newInstallerScopeFixture(t)
+	checker := f.mcpChecker(t)
+	unbound := f.unboundWithoutOrganization(t)
+
+	ctx, authErr := checker(unbound, "pxe_webhook_complete")
+	require.Nil(t, authErr)
+	assert.Equal(t, codes.PermissionDenied, status.Code(f.completeNode(ctx)))
+	assert.Equal(t, pxe.StateInstalling, f.state(t, webhookNodeMAC))
+
+	for name, leaf := range map[string]*x509.Certificate{"bound": f.node, "unbound": unbound} {
+		_, authErr := checker(leaf, "pxe_stop_service")
+		require.NotNil(t, authErr, name)
+		assert.Equal(t, mcp.AuthErrorInvalidToken, authErr.Type, name)
+	}
+}
+
 func TestMTLSInstallerScope_OperatorReachesMCPPXEWrites(t *testing.T) {
 	f := newInstallerScopeFixture(t)
 	authorize := f.mcpChecker(t)

@@ -50,6 +50,14 @@ type PeerMethodAdmitter interface {
 	AdmitsMethod(method string) bool
 }
 
+// PeerInstallerAuthenticator is implemented by a PeerAuthenticator whose
+// AuthenticatePeer refuses the installer certificate, which carries no
+// tenant. It is asked only for a tool PeerMethodAdmitter admits, and only
+// after AuthenticatePeer refused the chain.
+type PeerInstallerAuthenticator interface {
+	AuthenticateInstallerPeer(ctx context.Context, chain []*x509.Certificate) (*platformtoken.AuthorizedContext, error)
+}
+
 // peerAdmitsTool reports whether the peer authenticator admits the gRPC
 // method toolName serves to a certificate whose scopes do not cover it.
 func (c *AuthorizationChecker) peerAdmitsTool(toolName string) bool {
@@ -75,6 +83,9 @@ func (c *AuthorizationChecker) authorizePeer(ctx context.Context, toolName, perm
 		}
 	}
 	authCtx, err := c.peerAuthenticator.AuthenticatePeer(ctx, state.VerifiedChains[0])
+	if installer, ok := c.peerAuthenticator.(PeerInstallerAuthenticator); ok && err != nil && c.peerAdmitsTool(toolName) {
+		authCtx, err = installer.AuthenticateInstallerPeer(ctx, state.VerifiedChains[0])
+	}
 	if err != nil || authCtx == nil {
 		return ctx, &AuthorizationError{
 			Type:    AuthErrorInvalidToken,

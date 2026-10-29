@@ -212,7 +212,7 @@ func (m *AuthMiddleware) AuthenticateRequest(ctx context.Context, req *quicwire.
 	// credential of a request without a token, and of every request when no
 	// token validator is configured. A presented token is still validated.
 	if m.authenticatesByPeer(req) {
-		return m.authenticatePeer(ctx)
+		return m.authenticatePeer(ctx, req)
 	}
 
 	// The transport verified the peer certificate; a request without a token

@@ -174,7 +174,12 @@ PXE `WebhookComplete` sub-opcode, and on MCP the checker admits it only to the
 `pxe_webhook_complete` tool (Codex 8263); every other PXE operation still
 requires `pxe:write` and refuses it. gRPC, QUIC and MCP read the one list of
 installer methods, `mtlsInstallerMethods` in
-`pkg/api/daemon/transport_auth.go`. Only the operator's admin certificate is
+`pkg/api/daemon/transport_auth.go`. The installer certificate need carry no
+subject organization: on those methods alone the gRPC interceptor, the QUIC
+guard and the MCP checker admit a verified certificate the authenticator
+refused only for having no tenant, and WebhookComplete then admits it only if
+its fingerprint is the one SetDeviceInstalling bound, as REST does. On every
+other method such a certificate is refused as unauthenticated. Only the operator's admin certificate is
 granted the platform API; see
 [`docs/auth/architecture.md`](../auth/architecture.md) §5, *The two mTLS
 principals*.
