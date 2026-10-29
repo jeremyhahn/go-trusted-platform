@@ -287,11 +287,14 @@ call. This binding is the only one: there is no separate certificate-binding RPC
 every other method with `PermissionDenied` (`ErrMTLSInstallerMethodDenied`,
 `pkg/api/daemon/mtls_interceptor.go:190`). On REST, QUIC and MCP it is granted
 no scope (`mtlsGrantFor`, `pkg/api/daemon/transport_auth.go:289`), so every
-scope-guarded operation refuses it. That includes QUIC `0xCF` sub `0x36` and
-`pxe_webhook_complete`, so an installer completes over gRPC or REST, never QUIC
-or MCP. Only the operator's admin certificate, which carries the system tenant
-as O and the admin SPIFFE ID, gets the full API
-([auth architecture](../auth/architecture.md) §5).
+scope-guarded operation refuses it, with one exception: the webhook itself.
+QUIC `0xCF` sub `0x36` and the MCP tool `pxe_webhook_complete` admit it through
+the `PeerMethodAdmitter` exception (`pkg/api/quic/peer_auth.go:70`,
+`pkg/api/mcp/peer_auth.go:49`), including a certificate without an
+organization, so an installer completes over gRPC, REST, QUIC and MCP. Every
+other method stays refused to it on every transport. Only the operator's admin
+certificate, which carries the system tenant as O and the admin SPIFFE ID, gets
+the full API ([auth architecture](../auth/architecture.md) §5).
 
 **One installer certificate is bound to one device at a time.** Binding a
 fingerprint another device is installing under is refused with

@@ -16,6 +16,7 @@ package issuance
 import (
 	"context"
 	"crypto/ecdsa"
+	"crypto/rsa"
 	"crypto/x509"
 
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
@@ -102,9 +103,9 @@ func renewalRequest(existing *x509.Certificate, opts RenewOptions) *quicbaasca.C
 
 // renewalKeyAttributes names the key existing is renewed on: the software-store
 // TLS key under its common name, of its algorithm and, for an ECDSA key, its
-// curve. Renew rotates this key and issues on it, so both see one key; a real
-// go-xkms backend refuses a key without its store type, and an ECDSA key
-// without its curve.
+// curve or, for an RSA key, its modulus size. Renew rotates this key and issues
+// on it, so both see one key; a real go-xkms backend refuses a key without its
+// store type, an ECDSA key without its curve, and an RSA key without its size.
 func renewalKeyAttributes(existing *x509.Certificate) *xkmssdk.KeyAttributes {
 	attrs := &xkmssdk.KeyAttributes{
 		CN:           existing.Subject.CommonName,
@@ -114,6 +115,9 @@ func renewalKeyAttributes(existing *x509.Certificate) *xkmssdk.KeyAttributes {
 	}
 	if pub, ok := existing.PublicKey.(*ecdsa.PublicKey); ok {
 		attrs.ECCAttributes = &xkmssdk.ECCAttributes{Curve: pub.Curve}
+	}
+	if pub, ok := existing.PublicKey.(*rsa.PublicKey); ok {
+		attrs.RSAAttributes = &xkmssdk.RSAAttributes{KeySize: pub.N.BitLen()}
 	}
 	return attrs
 }

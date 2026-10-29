@@ -16,6 +16,7 @@ package issuance
 import (
 	"context"
 	"crypto"
+	"crypto/rsa"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"errors"
@@ -191,4 +192,51 @@ func TestRenew_AFailedIssueIsARenewError(t *testing.T) {
 	require.ErrorAs(t, err, &renewErr)
 	assert.Equal(t, "issue the renewed certificate", renewErr.Step)
 	assert.EqualError(t, err, "failed to issue the renewed certificate: issuer down")
+}
+
+// TestRenew_AnRSALeafRenewsOnARealSoftwareCA issues an RSA leaf on a
+// software-backed go-xkms CA and renews it. The software backend validates the
+// rotation's key attributes, so attributes without the RSA key size fail the
+// renewal after the old certificate is already revoked (Codex 8270 P1).
+func TestRenew_AnRSALeafRenewsOnARealSoftwareCA(t *testing.T) {
+	root := newRenewableRootCA(t)
+	issued, err := Issue(context.Background(), root, &quicbaasca.CACertificateRequest{
+		Subject: quicbaasca.CASubject{CommonName: "renew-rsa.test", Organization: "Test Org", Country: "US"},
+		Valid:   1,
+		KeyAttributes: &xkmssdk.KeyAttributes{
+			CN:            "renew-rsa.test",
+			KeyAlgorithm:  x509.RSA,
+			RSAAttributes: &xkmssdk.RSAAttributes{KeySize: 2048},
+			StoreType:     xkmssdk.StoreSoftware,
+			KeyType:       xkmssdk.KeyTypeTLS,
+		},
+	})
+	require.NoError(t, err)
+	issuedKey, ok := issued.Certificate.PublicKey.(*rsa.PublicKey)
+	require.True(t, ok, "the issued leaf must carry an RSA key")
+
+	renewed, err := Renew(context.Background(), root, issued.Certificate, RenewOptions{ValidDays: 1})
+	require.NoError(t, err)
+	require.NotNil(t, renewed)
+
+	renewedKey, ok := renewed.PublicKey.(*rsa.PublicKey)
+	require.True(t, ok, "the renewed certificate must carry an RSA key")
+	assert.Equal(t, issuedKey.N.BitLen(), renewedKey.N.BitLen(), "renewal must keep the RSA key size")
+	assert.NotEqual(t, 0, issued.Certificate.SerialNumber.Cmp(renewed.SerialNumber), "renewal must issue a new serial")
+}
+
+func TestRenewalKeyAttributes_RSACarriesTheModulusSize(t *testing.T) {
+	modulus := new(big.Int).Lsh(big.NewInt(1), 3071)
+	existing := &x509.Certificate{
+		Subject:            pkix.Name{CommonName: "rsa.test"},
+		PublicKeyAlgorithm: x509.RSA,
+		PublicKey:          &rsa.PublicKey{N: modulus, E: 65537},
+	}
+
+	attrs := renewalKeyAttributes(existing)
+
+	require.NotNil(t, attrs.RSAAttributes, "an RSA certificate must yield RSA attributes")
+	assert.Equal(t, 3072, attrs.RSAAttributes.KeySize)
+	assert.Nil(t, attrs.ECCAttributes, "an RSA certificate must not yield ECC attributes")
+	assert.Equal(t, x509.RSA, attrs.KeyAlgorithm)
 }
