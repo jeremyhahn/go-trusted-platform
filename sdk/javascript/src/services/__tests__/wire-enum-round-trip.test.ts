@@ -199,7 +199,8 @@ describe('server-returned enums round-trip through the write bodies', () => {
     const returned = defined(got.data).bundle;
     await service.createBundle({ options: { mode: returned.mode, ekAlgorithm: returned.manifest.ekAlgorithm } });
 
-    expect(sentBody(client.post)).toEqual({ mode: 'pre-assigned', ek_algorithm: 'ECC' });
+    // createBundle posts a serialized body so a uint64 device profile ID stays exact.
+    expect(JSON.parse(sentBody(client.post) as unknown as string)).toEqual({ mode: 'pre-assigned', ek_algorithm: 'ECC' });
   });
 
   it('PXE: the state getDevice returns is sent back to updateState', async () => {

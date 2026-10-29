@@ -60,7 +60,6 @@ interface WireCreateBundleRequest {
   secure_boot_enabled?: boolean;
   labels?: Record<string, string>;
   template_id?: string;
-  device_profile_id?: number;
 }
 
 /** The template body the REST handler decodes. */
@@ -71,13 +70,26 @@ interface WireCreateTemplateRequest {
   secure_boot_enabled?: boolean;
 }
 
-/** Parses a uint64 device profile ID; JSON can carry it exactly only up to 2^53 - 1. */
-function toDeviceProfileId(id: string): number {
-  const parsed = /^\d+$/.test(id) ? Number(id) : Number.NaN;
-  if (!Number.isSafeInteger(parsed)) {
+/** The largest uint64, the server's device profile ID type, in decimal. */
+const MAX_UINT64_DECIMAL = '18446744073709551615';
+
+/**
+ * Validates a uint64 device profile ID and returns its canonical decimal
+ * digits. The bootstrap seeder assigns 64-bit IDs, past what a JS number holds
+ * exactly (2^53 - 1), so the ID stays a digit string and is never a number.
+ */
+function toDeviceProfileIdDigits(id: string): string {
+  if (!/^\d+$/.test(id)) {
     throw new InvalidDeviceProfileIdError(id);
   }
-  return parsed;
+  const digits = id.replace(/^0+(?=\d)/, '');
+  const fits =
+    digits.length < MAX_UINT64_DECIMAL.length ||
+    (digits.length === MAX_UINT64_DECIMAL.length && digits <= MAX_UINT64_DECIMAL);
+  if (!fits) {
+    throw new InvalidDeviceProfileIdError(id);
+  }
+  return digits;
 }
 
 function toWireCreateBundle(options: CreateBundleOptions): WireCreateBundleRequest {
@@ -90,8 +102,24 @@ function toWireCreateBundle(options: CreateBundleOptions): WireCreateBundleReque
     ...(options.secureBootEnabled !== undefined && { secure_boot_enabled: options.secureBootEnabled }),
     ...(options.labels !== undefined && { labels: options.labels }),
     ...(options.templateId !== undefined && { template_id: options.templateId }),
-    ...(options.deviceProfileId !== undefined && { device_profile_id: toDeviceProfileId(options.deviceProfileId) }),
   };
+}
+
+/**
+ * Serializes the bundle body. The server reads device_profile_id as a JSON
+ * number (a uint64), so its exact digits are written as a number literal
+ * after JSON.stringify of the rest; a JS number would round any ID above
+ * 2^53 - 1.
+ */
+function encodeCreateBundle(options: CreateBundleOptions): string {
+  const digits =
+    options.deviceProfileId !== undefined ? toDeviceProfileIdDigits(options.deviceProfileId) : undefined;
+  const body = JSON.stringify(toWireCreateBundle(options));
+  if (digits === undefined) {
+    return body;
+  }
+  const separator = body === '{}' ? '' : ',';
+  return `${body.slice(0, -1)}${separator}"device_profile_id":${digits}}`;
 }
 
 function toWireCreateTemplate(options: CreateTemplateOptions): WireCreateTemplateRequest {
@@ -156,7 +184,7 @@ export class VTPMService extends BaseService {
    * @returns Created bundle
    */
   async createBundle(request: CreateBundleRequest): Promise<ApiResponse<CreateBundleResponse>> {
-    return this.client.post<CreateBundleResponse>(this.buildUrl('/bundles'), toWireCreateBundle(request.options));
+    return this.client.post<CreateBundleResponse>(this.buildUrl('/bundles'), encodeCreateBundle(request.options));
   }
 
   /**
