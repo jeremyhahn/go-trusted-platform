@@ -1286,8 +1286,8 @@ been fixed.
 
 | # | Where (file:line) | What it decides | Replaced by |
 |---|---|---|---|
-| A1 | `pkg/api/daemon/transport_auth.go:237`, `:259` (`mtlsOperatorScope`, `mtlsPeerAuthenticator.AuthenticatePeer`) | The operator's admin certificate gets `*:*` on QUIC, REST and MCP, and any other verified certificate gets no scope (`mtlsGrantFor`, Codex 8200) | `IAMPEPClient.Check` (`sdk/go`, alias of `client/iam.PEPClient`) for the certificate's principal |
-| A2 | `pkg/api/daemon/mtls_interceptor.go:75`, `:101` | The gRPC mTLS interceptors authenticate the caller. They admit the operator to every method and an installer certificate only to `PXEService/WebhookComplete`, with no finer per-method check | `IAMPEPClient.Check` per method |
+| A1 | `pkg/api/daemon/transport_auth.go:264`, `:372` (`mtlsOperatorScope`, `mtlsPeerAuthenticator.AuthenticatePeer`) | The operator's admin certificate and a tenant principal's certificate get `*:*` on QUIC, REST and MCP, which tenant authorization limits for a tenant principal; an installer certificate, every machine certificate included, gets no scope (`mtlsGrantFor`, `:302`; Codex 8200, 8242) | `IAMPEPClient.Check` (`sdk/go`, alias of `client/iam.PEPClient`) for the certificate's principal |
+| A2 | `pkg/api/daemon/mtls_interceptor.go:91`, `:117` | The gRPC mTLS interceptors authenticate the caller. They admit the operator and a tenant principal to every method (tenant authorization limits the latter), and an installer certificate only to `PXEService/WebhookComplete` (`:198`), with no finer per-method check | `IAMPEPClient.Check` per method |
 | A3 | `pkg/api/quic/auth.go:281-304` (`AuthorizeRequest`) | Allows an operation whose scope is empty (`:288-289`), and every request when no checker is wired (`:303-304`) | `IAMPEPClient.Check`. Deny when no decision point is wired |
 | A4 | `pkg/api/grpc/method_permissions.go:54` (`preAuthMethods`), `:113` (`buildGRPCMethodPermissions`) | The platform's own gRPC method → `resource:action` catalogue | No SDK surface yet: per-method declarations in an API module, like `ModuleMCPToolPermissions` (`ModuleGRPCPublicMethods` lists only the public methods) |
 | A5 | `pkg/api/quic/opcode_permissions.go:312` (`opcodePermissions`), `:570` (`categoryPermissions`) | The platform's own QUIC opcode → permission catalogue | No SDK surface yet (same gap as A4) |
@@ -1318,7 +1318,7 @@ No production path reads the tenant from the OU today. The only code that can
 
 | # | Where (file:line) | Source of the tenant | Used by |
 |---|---|---|---|
-| T1 | `pkg/auth/mtls.go:219` (configured `TenantField`, default O at `pkg/auth/interface.go:204`), `:221-223` (falls back to O), `:119-120` (`DefaultTenant`) | Certificate O, otherwise a configured default | Daemon gRPC mTLS (`transport_auth.go:114`), QUIC (`:194`), the REST and MCP peer authenticator (`:294`), which stamps the tenant into `AuthorizedContext.TenantID` (`:258`) |
+| T1 | `pkg/auth/mtls.go:219` (configured `TenantField`, default O at `pkg/auth/interface.go:204`), `:221-223` (falls back to O), `:119-120` (`DefaultTenant`) | Certificate O, otherwise a configured default | Daemon gRPC mTLS (`selectGRPCTCPAuth`, `transport_auth.go:107`), QUIC (`selectQUICAuth`, `:192`), the REST and MCP peer authenticator (`mtlsPeerAuthenticator.authenticate`, `:384`), which stamps the tenant into `AuthorizedContext.TenantID` (`:395`) |
 | T2 | `pkg/sdn/gateway/commands/assembly.go:690-691` | Certificate O through T1, otherwise the hard-coded `"default"` | gatewayd mTLS |
 | T3 | `pkg/sdn/policy/certificate.go:135-145` (`ExtractTenantID`) | Certificate O, otherwise the first dot-separated component of the CN | SDN port policy |
 | T4 | `pkg/sdn/policy/enrollment_hook.go:898-900` | Certificate O, otherwise `"default"` | SDN enrollment port policy |
