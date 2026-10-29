@@ -195,6 +195,28 @@ A refused CSR is the caller's error: `InvalidArgument` / 400 /
 `platformctl ca sign-csr` (see `cli.md`); the netboot fleet key is certified
 this way.
 
+### Issuance key parameters
+
+Issue certificate generates the key with exactly the size or curve that
+`key_algorithm` asks for. Every transport reads it through one table,
+`issuance.KeyAttributes` in `pkg/ca/issuance/keyalgorithm.go`:
+
+| `key_algorithm` | Key |
+|-----------------|-----|
+| `KEY_ALGORITHM_RSA_2048` | RSA, 2048 bits |
+| `KEY_ALGORITHM_RSA_3072` | RSA, 3072 bits |
+| `KEY_ALGORITHM_RSA_4096` | RSA, 4096 bits |
+| `KEY_ALGORITHM_ECDSA_P256` | ECDSA, P-256 |
+| `KEY_ALGORITHM_ECDSA_P384` | ECDSA, P-384 |
+| `KEY_ALGORITHM_ECDSA_P521` | ECDSA, P-521 |
+| `KEY_ALGORITHM_ED25519` | Ed25519 |
+| unspecified | ECDSA, P-256 — the curve is set explicitly, not left to the backend |
+
+Any other value (for example `KEY_ALGORITHM_DILITHIUM2`) is refused before
+the CA is reached with `issuance.UnsupportedKeyAlgorithmError`:
+`InvalidArgument` / 400 / `StatusInvalidRequest`, and a message that names
+the refused value and lists the supported ones.
+
 ---
 
 ## 3. ACME (RFC 8555)

@@ -545,7 +545,8 @@ func TestCAHandlers_IssueCertificate_InvalidKeyAlgorithm(t *testing.T) {
 	var resp CAErrorResponse
 	err := json.Unmarshal(rr.Body.Bytes(), &resp)
 	require.NoError(t, err)
-	assert.Contains(t, resp.Error, "invalid key algorithm")
+	want := &issuance.UnsupportedKeyAlgorithmError{Algorithm: platformv1.KeyAlgorithm_KEY_ALGORITHM_DILITHIUM2.String()}
+	assert.Equal(t, want.Error(), resp.Error)
 }
 
 func TestCAHandlers_IssueCertificate_InvalidRequestBody(t *testing.T) {
