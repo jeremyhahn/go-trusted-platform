@@ -373,11 +373,16 @@ WEB_EMBED_DIR           := pkg/webserver/embed/dist
 DESKTOP_FRONTEND_SRC    := cmd/platformctl/frontend
 DESKTOP_FRONTEND_DIST   := cmd/platformctl/frontend/dist
 
-ARCH                    := $(shell go env GOARCH)
-OS                      := $(shell go env GOOS)
+# The go command on PATH, or empty. A host without Go (CI's integration legs
+# build the integration image on a runner that has none, #1119) takes the
+# host's GOOS and GOARCH from uname and GOBIN from GO_IMAGE's install path, so
+# a target that only drives docker parses without go.
+GO_CMD                  := $(shell command -v go 2>/dev/null)
+ARCH                    := $(if $(GO_CMD),$(shell go env GOARCH),$(patsubst x86_64,amd64,$(patsubst aarch64,arm64,$(shell uname -m))))
+OS                      := $(if $(GO_CMD),$(shell go env GOOS),$(shell uname -s | tr A-Z a-z))
 LONG_BITS               := $(shell getconf LONG_BIT)
 
-GOBIN                   := $(shell dirname `which go`)
+GOBIN                   := $(if $(GO_CMD),$(patsubst %/,%,$(dir $(GO_CMD))),/usr/local/go/bin)
 PYTHONBIN               ?= /usr/bin/python3.8
 PIPBIN                  ?= pip
 
@@ -1997,8 +2002,10 @@ DOCKER_MODULE_MOUNTS :=
 # The host module cache, mounted into the devcontainer so a suite does not
 # re-download ~12G per run. Read-write on purpose: Go writes lock files into
 # the cache even when every module is already present, so a read-only mount
-# fails. Derived rather than hardcoded so this works off this workstation.
-GO_MODULE_CACHE := $(shell go env GOMODCACHE)
+# fails. Derived rather than hardcoded so this works off this workstation;
+# without go, go's own default (GOMODCACHE, else the first GOPATH entry's
+# pkg/mod, else ~/go/pkg/mod).
+GO_MODULE_CACHE := $(if $(GO_CMD),$(shell go env GOMODCACHE),$(or $(GOMODCACHE),$(if $(GOPATH),$(firstword $(subst :, ,$(GOPATH)))/pkg/mod),$(HOME)/go/pkg/mod))
 
 # One devcontainer invocation for every per-package integration suite.
 #
@@ -2044,7 +2051,8 @@ endef
 .PHONY: integration-test
 ## integration-test: Run all integration suites in the integration image
 ## The CI standard's integration stage (handbook ci-standard.md §1). Builds the
-## integration stage of build/docker/devcontainer/Dockerfile as $(IT_IMAGE) and
+## integration-legs stage of build/docker/devcontainer/Dockerfile (the
+## integration image with a warm build cache) as $(IT_IMAGE) and
 ## runs compose.yaml's integration service under the project $(IT_PROJECT):
 ## its entrypoint is the suite runner, which starts OVS, swtpm and platformd,
 ## and `all` selects the runner's ALL_TARGETS. The stack is torn down
@@ -2058,8 +2066,11 @@ endef
 ## $(FOREIGN_BASELINE), and fails closed on anything it cannot attribute to a
 ## listed test. Unset, the target exits with the suites' own status, so a
 ## developer sees every failure (docs/test/integration.md).
+## IT_PREBUILT=1 runs the suites in an $(IT_IMAGE) already on the daemon and
+## builds nothing: CI's integration legs use the one image the integration-image
+## job built for the run (#1119).
 integration-test: SHELL := /bin/bash
-integration-test: docker-build-it
+integration-test: $(if $(IT_PREBUILT),,docker-build-it)
 	@echo "Build tags: $(TEST_BUILD_TAGS)"
 	@set -o pipefail; status=0; \
 	export GO_TRUSTED_PLATFORM_IT_IMAGE=$(IT_IMAGE) GO_TRUSTED_PLATFORM_IT_MEMORY=$(IT_MEMORY) CI_CGROUP_PARENT='$(CI_CGROUP_PARENT)'; \
@@ -2194,6 +2205,8 @@ TOOLCHAIN_IMAGE = go-trusted-platform-toolchain:$(TOOLCHAIN_TAG)
 # CI passes per-run values.
 IT_IMAGE ?= go-trusted-platform-it:local
 IT_PROJECT ?= go-trusted-platform-it
+# Set to use an $(IT_IMAGE) that is already built (integration-test).
+IT_PREBUILT ?=
 
 # The integration container's memory limit, swap included (so no swap): the
 # compose integration service (CI's integration legs and soak) and every
@@ -2249,17 +2262,49 @@ DEVCONTAINER_BUILD_ARGS = --build-arg GO_IMAGE=$(GO_IMAGE) \
 # its build cache is this project's alone and can be pruned without touching
 # another project's; --load copies the image into the daemon.
 BUILDX_BUILDER ?=
-DEVCONTAINER_BUILD = $(if $(BUILDX_BUILDER),docker buildx build --builder $(BUILDX_BUILDER) --load,DOCKER_BUILDKIT=1 docker build)
+# BUILDX_CLIENT_LOAD=1 makes docker-build-it stream the image to this shell's
+# `docker load` in place of --load, so it lands in the daemon `docker` here
+# talks to, whichever daemon the builder's node runs on. CI's integration legs
+# set it for the build a leg makes on a runner without the run's image (#1119).
+BUILDX_CLIENT_LOAD ?=
+DEVCONTAINER_CLIENT_LOAD = $(and $(BUILDX_BUILDER),$(BUILDX_CLIENT_LOAD))
+DEVCONTAINER_BUILD = $(if $(BUILDX_BUILDER),docker buildx build --builder $(BUILDX_BUILDER) $(if $(DEVCONTAINER_CLIENT_LOAD),--output type=docker$(comma)dest=-,--load),DOCKER_BUILDKIT=1 docker build)
 
-.PHONY: docker-build
-## docker-build: Build the toolchain image and the integration image
-docker-build: docker-build-it
+.PHONY: docker-build docker-build-integration docker-build-toolchain
+## docker-build: Build the integration image and the toolchain image
+docker-build: docker-build-integration docker-build-toolchain
+
+## docker-build-integration: Build the integration image as $(IT_IMAGE)
+## CI's image job gates $(IT_IMAGE) with `trivy image`: the integration stage,
+## without the warm build cache docker-build-it adds.
+## Its own target so CI's image job leases $(IT_IMAGE) before the toolchain
+## build starts (#1146): until a container names it, another job's reaper may
+## remove an image whose cached Created time is past its min-age.
+docker-build-integration:
+	$(DEVCONTAINER_BUILD) $(DEVCONTAINER_BUILD_ARGS) --target integration -t $(IT_IMAGE) .
+
+## docker-build-toolchain: Build the toolchain image as $(TOOLCHAIN_IMAGE)
+docker-build-toolchain:
 	$(DEVCONTAINER_BUILD) $(DEVCONTAINER_BUILD_ARGS) --target toolchain -t $(TOOLCHAIN_IMAGE) .
 
+# IT_WARM_CACHE=0 makes docker-build-it skip the warm build cache: it builds
+# the integration stage, so a suite run compiles from an empty /gocache.
+IT_WARM_CACHE ?= 1
+IT_BUILD_TARGET = $(if $(filter 0,$(IT_WARM_CACHE)),integration,integration-legs)
+
 .PHONY: docker-build-it
-## docker-build-it: Build the integration image as $(IT_IMAGE)
+## docker-build-it: Build the image the integration suites run in as $(IT_IMAGE)
+## The integration-legs stage: the integration image with everything a suite
+## run compiles already in its build cache, built with the tags
+## integration-test passes the runner, so the cache matches (#1119).
+## IT_WARM_CACHE=0 builds the integration stage instead, without the warm build
+## cache: CI's leg fallback build, which the warm took past its timeout (#1146).
+# bash for this recipe alone: BUILDX_CLIENT_LOAD pipes the build into
+# `docker load` under pipefail, which dash (Debian's /bin/sh) does not have.
+docker-build-it: SHELL := /bin/bash
 docker-build-it:
-	$(DEVCONTAINER_BUILD) $(DEVCONTAINER_BUILD_ARGS) --target integration -t $(IT_IMAGE) .
+	$(if $(DEVCONTAINER_CLIENT_LOAD),set -o pipefail; )$(DEVCONTAINER_BUILD) $(DEVCONTAINER_BUILD_ARGS) --target $(IT_BUILD_TARGET) \
+		--build-arg IT_BUILD_TAGS="$(strip $(TEST_BUILD_TAGS))" -t $(IT_IMAGE) . $(if $(DEVCONTAINER_CLIENT_LOAD),| docker load)
 
 .PHONY: toolchain-image
 ## toolchain-image: Print the toolchain image tag (CI reads it with make -s)
@@ -4318,7 +4363,7 @@ DISKIMAGE_MODEL       ?= rpi4
 DISKIMAGE_SIZE_MB     ?= 4096
 DISKIMAGE_OUTPUT      ?= bin/trusted-platform-$(DISKIMAGE_TARGET).img
 DISKIMAGE_BUILDER_IMG ?= trusted-platform-diskimage-builder
-DISKIMAGE_HOST_ARCH   ?= $(shell go env GOARCH)
+DISKIMAGE_HOST_ARCH   ?= $(ARCH)
 DISKIMAGE_FLAGS       ?=
 RPI_SDCARD            ?=
 RPI_SDCARD_CONFIRM    ?=

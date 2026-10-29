@@ -42,7 +42,8 @@
 #     removes another's image. Reaper v3, not v5: pkg/arch/reapstale_test.go
 #     pins v3, and v5's only addition is that image lock.
 #   - No `make -s it-image`: the Makefile has no content-addressed image
-#     name; the image job builds with `make docker-build`.
+#     name; the image job builds with `make docker-build-integration` and
+#     `make docker-build-toolchain`, leasing the first before the second.
 #   - No "Read the Alpine package index" step, no APK_INDEX_SUM and no
 #     scripts/apk-index-sum.sh (v1.29.0): the devcontainer's base images are
 #     Debian bookworm (golang), not Alpine, so the script would print the
@@ -318,9 +319,19 @@ jobs:
     # and the race suite run one after another here.
     timeout-minutes: 240
     env:
-      # CUSTOMIZE (no it-image target, no lease): a per-run tag, so no other
-      # run's reaper or build touches this run's image.
+      # CUSTOMIZE (no it-image target): a per-run tag, so no other run's build
+      # or teardown touches this run's image.
       IT_IMAGE: go-trusted-platform-ci-it:${{ github.run_id }}-${{ github.run_attempt }}-image
+      # Holds IT_IMAGE from its build to the teardown (#1146): another job's
+      # stale-stack reaper removes a prefixed image that no container names
+      # once its Created time is past the min-age, and a warm build cache
+      # can return an image created long before this job, which the trivy
+      # stage saves hours after the build. The runners' 3h job limit ends the
+      # job before the reaper's 3h05m min-age reaches the lease itself.
+      IT_LEASE: go-trusted-platform-ci-${{ github.run_id }}-${{ github.run_attempt }}-image-lease
+      # This job's claim on the run's images, from before the build to the
+      # teardown (see the claim step and scripts/reap-stale-ci-stacks.sh).
+      IT_CLAIM: go-trusted-platform-ci-${{ github.run_id }}-${{ github.run_attempt }}-image-claim
       # CUSTOMIZE (ruling 108 (b)): the project's own BuildKit builder
       # (Makefile BUILDX_BUILDER). Its cache is this project's alone: `docker
       # image rm` frees the image, and `docker buildx prune --builder` trims
@@ -346,6 +357,12 @@ jobs:
       - name: Reap stale CI stacks
         run: scripts/reap-stale-ci-stacks.sh go-trusted-platform-ci-
 
+      # Before any image of this run is tagged or loaded here (#1146): the
+      # reaper keeps every image of a run with a live claim, so it cannot
+      # take a tag in the moment between its publication and its lease.
+      - name: Claim this run's images
+        run: docker volume create --label "ci.claim=${{ github.run_id }}-${{ github.run_attempt }}" "$IT_CLAIM" >/dev/null
+
       # Creates the builder once per daemon and reuses it after; a second
       # create or bootstrap racing a concurrent job's is retried. The prune
       # also bounds what a cancelled run, whose teardown never ran, left.
@@ -368,9 +385,14 @@ jobs:
             if [ -n "${!v:-}" ]; then printf '%s=%s\n' "$v" "${!v}" >> "$RUNNER_TEMP/gomodauth.env"; fi
           done
 
-      - name: Build the toolchain and integration images
+      # The lease is taken the moment the integration image is loaded, before
+      # the toolchain build starts (#1146): an image a warm cache returns can
+      # be past the reaper's min-age already, and only the lease keeps it.
+      - name: Build the integration and toolchain images
         run: |
-          make docker-build MODULE_ENV_FILE="$RUNNER_TEMP/gomodauth.env" IT_IMAGE="$IT_IMAGE"
+          make docker-build-integration MODULE_ENV_FILE="$RUNNER_TEMP/gomodauth.env" IT_IMAGE="$IT_IMAGE"
+          docker create --pull never --name "$IT_LEASE" "$IT_IMAGE" true >/dev/null
+          make docker-build-toolchain MODULE_ENV_FILE="$RUNNER_TEMP/gomodauth.env"
           echo "TOOLCHAIN_IMAGE=$(make -s toolchain-image)" >> "$GITHUB_ENV"
 
       # Lint: gofmt, vet, golangci-lint and actionlint with shellcheck
@@ -508,8 +530,10 @@ jobs:
         if: always()
         run: |
           rm -f "$RUNNER_TEMP/gomodauth.env" it-image.tar
+          docker rm "$IT_LEASE" >/dev/null 2>&1 || true
           docker image rm "$IT_IMAGE" || true
           docker buildx prune --builder "$BUILDX_BUILDER" --force --keep-storage "$BUILDKIT_KEEP_STORAGE" || true
+          docker volume rm "$IT_CLAIM" >/dev/null 2>&1 || true
 
   # v1.27 (lint-gates): the repo's grep gates (`make lint-gates`; today the
   # InsecureSkipVerify allowlist) run beside lint, not after it, so a gate's
@@ -669,6 +693,122 @@ jobs:
       - name: Web console build
         run: make web-build-check
 
+  # One integration image per run for every leg (#1119). Each leg used to build
+  # it itself: five `docker buildx build --load` runs of 6.5 to 7.3 minutes on
+  # main run 67833, the same image five times. This job builds and loads it
+  # once on the project's builder and hands its image id to the legs, which
+  # run in it by that id (see the integration job's lease step).
+  integration-image:
+    name: Integration image
+    runs-on: ${{ github.server_url == 'https://github.com' && 'ubuntu-latest' || 'bigdisk' }}
+    if: ${{ (github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'ci:full')) && !github.event.pull_request.draft && (github.event_name != 'schedule' || needs.schedule-guard.outputs.verdict == 'run') }}
+    # As the legs had: nothing is built for a run whose image job failed, so
+    # no image is left for legs that never run. v1.29.3: schedule-guard as
+    # the template has it, as on every bigdisk job.
+    needs: [image, schedule-guard]
+    timeout-minutes: 60
+    outputs:
+      image_id: ${{ steps.build.outputs.image_id }}
+      # The image's identity on any daemon: a hash of its layers' diff ids,
+      # which `docker save` / `docker load` keep whatever the image store.
+      image_identity: ${{ steps.build.outputs.image_identity }}
+      # The artifact a leg on another runner's daemon loads the image from.
+      # An output, so a re-run of the legs alone finds the attempt's artifact
+      # that built the image they lease.
+      artifact: integration-image-${{ github.run_attempt }}
+    env:
+      IT_IMAGE: go-trusted-platform-ci-it:${{ github.run_id }}-${{ github.run_attempt }}-legs
+      # Holds IT_IMAGE from its build to the teardown, as the image job's
+      # lease does (see there), so no reaper removes it before the save.
+      IT_LEASE: go-trusted-platform-ci-${{ github.run_id }}-${{ github.run_attempt }}-legs-lease
+      # The image job's claim does (see there), but this one outlives the
+      # job: the teardown leaves it, so the image stays claimed for the legs
+      # on this daemon until the reaper expires the claim 3h05m on.
+      IT_CLAIM: go-trusted-platform-ci-${{ github.run_id }}-${{ github.run_attempt }}-legs-claim
+      # The image job's builder (see there).
+      BUILDX_BUILDER: go-trusted-platform-ci
+      BUILDKIT_KEEP_STORAGE: 40gb
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Reap stale CI stacks
+        run: scripts/reap-stale-ci-stacks.sh go-trusted-platform-ci-
+
+      # Before any image of this run is tagged or loaded here (#1146): the
+      # reaper keeps every image of a run with a live claim, so it cannot
+      # take a tag in the moment between its publication and its lease.
+      - name: Claim this run's images
+        run: docker volume create --label "ci.claim=${{ github.run_id }}-${{ github.run_attempt }}" "$IT_CLAIM" >/dev/null
+
+      - name: Prepare the project's BuildKit builder
+        run: |
+          docker buildx inspect "$BUILDX_BUILDER" >/dev/null 2>&1 ||
+            docker buildx create --name "$BUILDX_BUILDER" --driver docker-container >/dev/null ||
+            docker buildx inspect "$BUILDX_BUILDER" >/dev/null
+          docker buildx inspect --bootstrap "$BUILDX_BUILDER" >/dev/null ||
+            docker buildx inspect --bootstrap "$BUILDX_BUILDER" >/dev/null
+          docker buildx prune --builder "$BUILDX_BUILDER" --force --keep-storage "$BUILDKIT_KEEP_STORAGE"
+
+      - name: Write the module credential file
+        run: |
+          umask 077
+          : > "$RUNNER_TEMP/gomodauth.env"
+          for v in GOPRIVATE GIT_CONFIG_COUNT GIT_CONFIG_KEY_0 GIT_CONFIG_VALUE_0; do
+            if [ -n "${!v:-}" ]; then printf '%s=%s\n' "$v" "${!v}" >> "$RUNNER_TEMP/gomodauth.env"; fi
+          done
+
+      # The image stays on the daemon: the legs' teardowns remove it, and
+      # where no leg ran on this daemon (or none ran: the upload failed), the
+      # next job's reaper here removes it once this job's claim is 3h05m old
+      # and the image no longer leased (#1146). The build
+      # streams the image to this step's `docker load` (BUILDX_CLIENT_LOAD), as
+      # a leg's fallback build does: --load imports into the daemon of the
+      # builder's node, which need not be the one this job's `docker save`
+      # asks. The id is read before it is published, so a build that left no
+      # image here fails this step and not the save.
+      - name: Build the integration image
+        id: build
+        run: |
+          make docker-build-it MODULE_ENV_FILE="$RUNNER_TEMP/gomodauth.env" IT_IMAGE="$IT_IMAGE" BUILDX_CLIENT_LOAD=1
+          if ! image_id=$(docker image inspect -f '{{.Id}}' "$IT_IMAGE"); then
+            echo "::error::the build finished but $IT_IMAGE is not on the daemon this job uses (context $(docker context show), DOCKER_HOST=${DOCKER_HOST:-unset}); builder $BUILDX_BUILDER:"
+            docker buildx inspect "$BUILDX_BUILDER" || true
+            exit 1
+          fi
+          docker create --pull never --name "$IT_LEASE" "$image_id" true >/dev/null
+          image_identity=$(docker image inspect -f '{{json .RootFS.Layers}}' "$image_id" | sha256sum | cut -d' ' -f1)
+          echo "image_id=$image_id" >> "$GITHUB_OUTPUT"
+          echo "image_identity=$image_identity" >> "$GITHUB_OUTPUT"
+
+      # The legs share this job's runner label, not its daemon (#1119): a leg
+      # placed on another runner loads the image from this artifact. Gitea
+      # uploads with v3 and github.com with v6 (see batch.yml, ARTIFACTS).
+      - name: Save the integration image
+        run: docker save -o "$RUNNER_TEMP/it-image.tar" "$IT_IMAGE"
+
+      - name: Upload the integration image (Gitea)
+        if: github.server_url != 'https://github.com'
+        uses: actions/upload-artifact@c6a366c94c3e0affe28c06c8df20a878f24da3cf # v3.2.2
+        with:
+          name: integration-image-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/it-image.tar
+          retention-days: 1
+
+      - name: Upload the integration image (GitHub)
+        if: github.server_url == 'https://github.com'
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: integration-image-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/it-image.tar
+          retention-days: 1
+
+      - name: Tear down
+        if: always()
+        run: |
+          rm -f "$RUNNER_TEMP/gomodauth.env" "$RUNNER_TEMP/it-image.tar"
+          docker rm "$IT_LEASE" >/dev/null 2>&1 || true
+          # IT_CLAIM stays: it keeps the image for the legs (see there).
+
   # The suite runs in the devcontainer `integration` image built at this
   # commit, under the compose service in build/docker/devcontainer/
   # compose.yaml (ci-standard.md §2). That service is privileged, not
@@ -684,9 +824,11 @@ jobs:
     if: ${{ (github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'ci:full')) && !github.event.pull_request.draft && (github.event_name != 'schedule' || needs.schedule-guard.outputs.verdict == 'run') }}
     # CUSTOMIZE (isolation, not staging): the privileged integration suite and
     # the image job's unit and race suites starve a shared runner when they
-    # overlap. Neither consumes the other's output. v1.29.3: schedule-guard
-    # as the template has it; the image job skips with the guard already.
-    needs: [image, schedule-guard]
+    # overlap. Neither consumes the other's output. `needs: image` holds
+    # through integration-image, whose image every leg runs in. v1.29.3:
+    # schedule-guard as the template has it; the image job skips with the
+    # guard already.
+    needs: [integration-image, schedule-guard]
     # One job per leg of the suite runner's INTEGRATION_LEGS, in parallel
     # (#1119, ruling 211 (4)): no leg is to run over 20 minutes. Each leg is
     # its own compose project, so its platformd, OVS and swtpm sit in their
@@ -702,7 +844,22 @@ jobs:
     timeout-minutes: 60
     env:
       IT_PROJECT: go-trusted-platform-ci-${{ github.run_id }}-${{ github.run_attempt }}-leg${{ matrix.leg }}
+      # This leg's own tag for the integration-image job's image, the tag its
+      # compose stack runs under (#1146). `docker image rm` untags an image
+      # that has another tag even while containers use it, so a tag every
+      # leg shared could be removed by one leg's teardown under another leg
+      # that had leased the image but not yet started compose. No other leg
+      # removes this one.
       IT_IMAGE: go-trusted-platform-ci-it:${{ github.run_id }}-${{ github.run_attempt }}-leg${{ matrix.leg }}
+      # The integration-image job's tag, which the artifact's `docker load`
+      # restores. No leg runs under it; each teardown drops it.
+      IT_LEGS_IMAGE: go-trusted-platform-ci-it:${{ github.run_id }}-${{ github.run_attempt }}-legs
+      IT_IMAGE_ID: ${{ needs.integration-image.outputs.image_id }}
+      IT_IMAGE_IDENTITY: ${{ needs.integration-image.outputs.image_identity }}
+      IT_LEASE: go-trusted-platform-ci-${{ github.run_id }}-${{ github.run_attempt }}-leg${{ matrix.leg }}-lease
+      # Claims the run's images from before the lease or the load, which
+      # restores IT_LEGS_IMAGE, to the teardown (see the image job's claim).
+      IT_CLAIM: go-trusted-platform-ci-${{ github.run_id }}-${{ github.run_attempt }}-leg${{ matrix.leg }}-claim
       # The integration container's memory limit, swap included (Makefile
       # IT_MEMORY; compose.yaml mem_limit). The legs peaked at 12.9 GB (#1178).
       IT_MEMORY: 16g
@@ -724,6 +881,12 @@ jobs:
       - name: Reap stale CI stacks
         run: scripts/reap-stale-ci-stacks.sh go-trusted-platform-ci-
 
+      # Before any image of this run is tagged or loaded here (#1146): the
+      # reaper keeps every image of a run with a live claim, so it cannot
+      # take a tag in the moment between its publication and its lease.
+      - name: Claim this run's images
+        run: docker volume create --label "ci.claim=${{ github.run_id }}-${{ github.run_attempt }}" "$IT_CLAIM" >/dev/null
+
       - name: Prepare the project's BuildKit builder
         run: |
           docker buildx inspect "$BUILDX_BUILDER" >/dev/null 2>&1 ||
@@ -744,6 +907,80 @@ jobs:
             if [ -n "${!v:-}" ]; then printf '%s=%s\n' "$v" "${!v}" >> "$RUNNER_TEMP/gomodauth.env"; fi
           done
 
+      # Holds the integration-image job's image by its id for this leg: a
+      # created, never-started container names it, and `docker image rm`
+      # refuses an image a container names, so another leg's teardown cannot
+      # remove it while this leg needs it. The leg's own tag is pointed at
+      # that id, so the leg runs in exactly the image the job built.
+      - name: Lease the integration image on this runner's daemon
+        id: lease
+        run: |
+          if docker create --pull never --name "$IT_LEASE" "$IT_IMAGE_ID" true >/dev/null; then
+            docker tag "$IT_IMAGE_ID" "$IT_IMAGE"
+            echo "leased=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::the integration image $IT_IMAGE_ID is not on this runner's daemon; loading it from the run's artifact"
+          fi
+
+      # A leg placed on another runner's daemon (run 68296, legs 1, 2 and 4)
+      # loads the image job's `docker save` of the image.
+      - name: Download the integration image (Gitea)
+        if: steps.lease.outputs.leased != 'true' && github.server_url != 'https://github.com'
+        uses: actions/download-artifact@a9bc5e6ef2cb54c177f32aa5726adaa15e7e2d59 # v3.1.0
+        with:
+          name: ${{ needs.integration-image.outputs.artifact }}
+          path: ${{ runner.temp }}/it-image
+
+      - name: Download the integration image (GitHub)
+        if: steps.lease.outputs.leased != 'true' && github.server_url == 'https://github.com'
+        uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6.0.0
+        with:
+          name: ${{ needs.integration-image.outputs.artifact }}
+          path: ${{ runner.temp }}/it-image
+
+      # The load keeps the image, not its id (run 70938): the id is the
+      # config digest on the classic store and the manifest digest on the
+      # containerd store, so the image job's id names nothing on a daemon
+      # whose store differs. The leg leases the id of the tag the load
+      # restored, IT_LEGS_IMAGE, and checks it against the image job's
+      # identity, a hash of the layers' diff ids, which every store keeps.
+      # Only a load that fails or restores another image makes the leg
+      # build, with a warning: the same commit and build arguments, another
+      # image. That build skips the warm build cache (IT_WARM_CACHE=0): the
+      # warm took a leg past its timeout (run 70938), and a leg compiles
+      # from an empty cache in less. It is tagged for this leg alone, so
+      # another leg's build on the same daemon cannot move the tag before the
+      # lease holds it, and it streams the image to this step's `docker load`
+      # (BUILDX_CLIENT_LOAD): --load imports into the daemon of the builder's
+      # node, which on run 68044 was not the daemon `docker create` asked.
+      - name: Load the integration image
+        if: steps.lease.outputs.leased != 'true'
+        run: |
+          leased=false
+          if docker load -i "$RUNNER_TEMP/it-image/it-image.tar" &&
+            loaded_id=$(docker image inspect -f '{{.Id}}' "$IT_LEGS_IMAGE") &&
+            docker create --pull never --name "$IT_LEASE" "$loaded_id" true >/dev/null; then
+            loaded_identity=$(docker image inspect -f '{{json .RootFS.Layers}}' "$loaded_id" | sha256sum | cut -d' ' -f1)
+            if [ "$loaded_identity" = "$IT_IMAGE_IDENTITY" ]; then
+              docker tag "$loaded_id" "$IT_IMAGE"
+              leased=true
+            else
+              echo "::warning::the run's artifact restored $IT_LEGS_IMAGE as layers $loaded_identity, not the image job's $IT_IMAGE_IDENTITY"
+              docker container rm "$IT_LEASE" >/dev/null
+            fi
+          fi
+          if [ "$leased" != true ]; then
+            echo "::warning::loading the run's artifact left no $IT_LEGS_IMAGE with the image job's layers on this runner's daemon; building $IT_IMAGE for this leg"
+            make docker-build-it MODULE_ENV_FILE="$RUNNER_TEMP/gomodauth.env" IT_IMAGE="$IT_IMAGE" BUILDX_CLIENT_LOAD=1 IT_WARM_CACHE=0
+            if ! docker image inspect "$IT_IMAGE" >/dev/null; then
+              echo "::error::the fallback build finished but $IT_IMAGE is not on the daemon this leg uses (context $(docker context show), DOCKER_HOST=${DOCKER_HOST:-unset}); builder $BUILDX_BUILDER:"
+              docker buildx inspect "$BUILDX_BUILDER" || true
+              exit 1
+            fi
+            docker create --pull never --name "$IT_LEASE" "$IT_IMAGE" true >/dev/null
+          fi
+          rm -rf "$RUNNER_TEMP/it-image"
+
       # CUSTOMIZE (ruling 125): Go on the runner for scripts/foreignfailures.
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
@@ -758,16 +995,22 @@ jobs:
       # to a listed test (a build failure, a panic or timeout, an unreadable
       # log) fails the step. ci-gate reads this job's result unchanged.
       - name: Run integration suite leg ${{ matrix.leg }} in the integration image
-        run: make integration-test-leg LEG="${{ matrix.leg }}" MODULE_ENV_FILE="$RUNNER_TEMP/gomodauth.env" IT_PROJECT="$IT_PROJECT" IT_IMAGE="$IT_IMAGE" IT_FOREIGN_BASELINE=1 IT_LOG="$RUNNER_TEMP/integration-leg${{ matrix.leg }}.log"
+        run: make integration-test-leg LEG="${{ matrix.leg }}" IT_PREBUILT=1 IT_PROJECT="$IT_PROJECT" IT_IMAGE="$IT_IMAGE" IT_FOREIGN_BASELINE=1 IT_LOG="$RUNNER_TEMP/integration-leg${{ matrix.leg }}.log"
 
       - name: Tear down
         if: always()
         run: |
-          rm -f "$RUNNER_TEMP/gomodauth.env"
+          rm -rf "$RUNNER_TEMP/gomodauth.env" "$RUNNER_TEMP/it-image"
           GO_TRUSTED_PLATFORM_IT_IMAGE="$IT_IMAGE" docker compose -f build/docker/devcontainer/compose.yaml -p "$IT_PROJECT" down --volumes --remove-orphans ||
             echo "::warning::teardown of $IT_PROJECT failed; the next job's reaper removes what is left"
+          docker rm "$IT_LEASE" >/dev/null 2>&1 || true
+          # Each untags while another tag names the image, deletes it when it
+          # is the last tag and no lease names it, and is refused otherwise;
+          # the reaper removes a tag left that way once no lease names it.
           docker image rm "$IT_IMAGE" || true
+          docker image rm "$IT_LEGS_IMAGE" >/dev/null 2>&1 || true
           docker buildx prune --builder "$BUILDX_BUILDER" --force --keep-storage "$BUILDKIT_KEEP_STORAGE" || true
+          docker volume rm "$IT_CLAIM" >/dev/null 2>&1 || true
 
   # ==========================================================================
   # The nightly tier
@@ -793,6 +1036,9 @@ jobs:
       SOAK_TARGET: integration-test   # CUSTOMIZE: a make target of the integration image
       IT_PROJECT: go-trusted-platform-ci-${{ github.run_id }}-${{ github.run_attempt }}-soak
       IT_IMAGE: go-trusted-platform-ci-it:${{ github.run_id }}-${{ github.run_attempt }}-soak
+      # Claims the run's images from before the first build to the teardown
+      # (see the image job's claim).
+      IT_CLAIM: go-trusted-platform-ci-${{ github.run_id }}-${{ github.run_attempt }}-soak-claim
       # The integration container's memory limit, swap included (Makefile
       # IT_MEMORY; compose.yaml mem_limit). The legs peaked at 12.9 GB (#1178).
       IT_MEMORY: 16g
@@ -813,6 +1059,12 @@ jobs:
 
       - name: Reap stale CI stacks
         run: scripts/reap-stale-ci-stacks.sh go-trusted-platform-ci-
+
+      # Before any image of this run is tagged or loaded here (#1146): the
+      # reaper keeps every image of a run with a live claim, so it cannot
+      # take a tag in the moment between its publication and its lease.
+      - name: Claim this run's images
+        run: docker volume create --label "ci.claim=${{ github.run_id }}-${{ github.run_attempt }}" "$IT_CLAIM" >/dev/null
 
       - name: Prepare the project's BuildKit builder
         run: |
@@ -868,6 +1120,7 @@ jobs:
           rm -f "$RUNNER_TEMP/soak-project"
           docker image rm "$IT_IMAGE" || true
           docker buildx prune --builder "$BUILDX_BUILDER" --force --keep-storage "$BUILDKIT_KEEP_STORAGE" || true
+          docker volume rm "$IT_CLAIM" >/dev/null 2>&1 || true
 
   # CUSTOMIZE (FIPS 140-3, #853): the ungated full-tier job. It runs on push
   # to main, the schedule, workflow_dispatch and a pull_request labelled
@@ -927,7 +1180,7 @@ jobs:
     # skipped job as `skipped`, not `success`), never a green nightly. Every
     # other verdict, an empty one included, runs it.
     if: ${{ always() && (github.event_name != 'schedule' || needs.schedule-guard.outputs.verdict != 'busy') }}
-    needs: [changes, schedule-guard, image, lint-gates, arch-gates, sdkjs, web, integration, soak]
+    needs: [changes, schedule-guard, image, lint-gates, arch-gates, sdkjs, web, integration-image, integration, soak]
     steps:
       - name: Verify every job succeeded
         env:
@@ -946,6 +1199,7 @@ jobs:
           RESULT_ARCH_GATES: ${{ needs.arch-gates.result }}
           RESULT_SDK_JS: ${{ needs.sdkjs.result }}
           RESULT_WEB: ${{ needs.web.result }}
+          RESULT_INTEGRATION_IMAGE: ${{ needs.integration-image.result }}
           RESULT_INTEGRATION: ${{ needs.integration.result }}
           RESULT_SOAK: ${{ needs.soak.result }}
         run: |
@@ -1002,6 +1256,7 @@ jobs:
           check pr arch-gates "$RESULT_ARCH_GATES"
           check docs sdkjs "$RESULT_SDK_JS"
           check full web "$RESULT_WEB"
+          check full integration-image "$RESULT_INTEGRATION_IMAGE"
           check full integration "$RESULT_INTEGRATION"
           check nightly soak "$RESULT_SOAK"
           exit $status

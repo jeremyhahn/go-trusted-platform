@@ -53,13 +53,13 @@ case "$1 $2" in
     f=${4#*=}; kind=${4%%=*}
     [ -e "$s/users/$kind-$f" ] && cat "$s/users/$kind-$f"
     exit 0 ;;
-  "network ls" | "volume ls") cat "$s/${1}s"; exit 0 ;;
-  "network inspect" | "volume inspect")
+  "network ls" | "volume ls" | "image ls") cat "$s/${1}s"; exit 0 ;;
+  "network inspect" | "volume inspect" | "image inspect")
     out=$4
     while IFS=$'\t' read -r expr val; do out=${out//"{{$expr}}"/"$val"}; done < "$s/$1/${!#}"
     case $out in *"{{"*) echo "fake docker: template: cannot render $out" >&2; exit 64 ;; esac
     printf '%s\n' "$out" ;;
-  "network rm" | "volume rm")
+  "network rm" | "volume rm" | "image rm")
     [ -e "$s/rm-fails/$3" ] && { echo "$1 $3 has active endpoints" >&2; exit 1; }
     echo "$1 rm $3" >> "$s/removed"; exit 0 ;;
   *) echo "fake docker: unexpected call: $*" >&2; exit 64 ;;
@@ -70,29 +70,37 @@ esac
 type reapObject struct {
 	name    string
 	project string
+	// claim is a volume's ci.claim label: the <run id>-<attempt> it claims.
+	claim   string
 	age     time.Duration
 	users   []string
 	rmFails bool
+	// inspectFails leaves the object listed but not inspectable.
+	inspectFails bool
 }
 
 // reapFixture is the Docker host the fake answers for.
 type reapFixture struct {
 	networks []reapObject
 	volumes  []reapObject
-	psFails  bool
+	// images are named by reference (repository:tag); project is unused.
+	images  []reapObject
+	psFails bool
 }
 
 // write lays the fixture out in dir as fakeDocker reads it.
 func (fx reapFixture) write(t *testing.T, dir string) {
 	t.Helper()
 	now := time.Now().UTC()
-	for _, sub := range []string{"network", "volume", "users", "rm-fails"} {
+	for _, sub := range []string{"network", "volume", "image", "users", "rm-fails"} {
 		require.NoError(t, os.MkdirAll(filepath.Join(dir, sub), 0o755))
 	}
 	put := func(rel, content string) {
 		require.NoError(t, os.WriteFile(filepath.Join(dir, rel), []byte(content), 0o644))
 	}
-	list := func(kind string, objs []reapObject, inspect func(reapObject) map[string]string) {
+	// filter is the `docker ps --filter` key that finds a container using
+	// one: the kind itself, but `ancestor` for an image.
+	list := func(kind, filter string, objs []reapObject, inspect func(reapObject) map[string]string) {
 		var names strings.Builder
 		for _, o := range objs {
 			names.WriteString(o.name + "\n")
@@ -100,9 +108,11 @@ func (fx reapFixture) write(t *testing.T, dir string) {
 			for expr, val := range inspect(o) {
 				fields.WriteString(expr + "\t" + val + "\n")
 			}
-			put(filepath.Join(kind, o.name), fields.String())
+			if !o.inspectFails {
+				put(filepath.Join(kind, o.name), fields.String())
+			}
 			if len(o.users) > 0 {
-				put(filepath.Join("users", kind+"-"+o.name), strings.Join(o.users, "\n")+"\n")
+				put(filepath.Join("users", filter+"-"+o.name), strings.Join(o.users, "\n")+"\n")
 			}
 			if o.rmFails {
 				put(filepath.Join("rm-fails", o.name), "")
@@ -114,7 +124,7 @@ func (fx reapFixture) write(t *testing.T, dir string) {
 	// time.Time, printed by its String method with spaces in it unless the
 	// template formats it; a volume's CreatedAt is an RFC 3339 string.
 	project := `index .Labels "com.docker.compose.project"`
-	list("network", fx.networks, func(o reapObject) map[string]string {
+	list("network", "network", fx.networks, func(o reapObject) map[string]string {
 		created := now.Add(-o.age)
 		return map[string]string{
 			".Name":                                  o.name,
@@ -123,11 +133,16 @@ func (fx reapFixture) write(t *testing.T, dir string) {
 			project:                                  o.project,
 		}
 	})
-	list("volume", fx.volumes, func(o reapObject) map[string]string {
+	list("volume", "volume", fx.volumes, func(o reapObject) map[string]string {
 		return map[string]string{
-			".CreatedAt": now.Add(-o.age).Format(time.RFC3339),
-			project:      o.project,
+			".CreatedAt":               now.Add(-o.age).Format(time.RFC3339),
+			project:                    o.project,
+			`index .Labels "ci.claim"`: o.claim,
 		}
+	})
+	// An image's Created is an RFC 3339 string with nanoseconds.
+	list("image", "ancestor", fx.images, func(o reapObject) map[string]string {
+		return map[string]string{".Created": now.Add(-o.age).Format(time.RFC3339Nano)}
 	})
 	if fx.psFails {
 		put("ps-fails", "")
@@ -185,6 +200,86 @@ func TestReaperRemovesOnlyStaleUnusedComposeNetworksAndVolumes(t *testing.T) {
 	require.Contains(t, out, "keep  volume "+reaperPrefix+"65270-1_data (a container uses it)")
 	require.NotContains(t, out, "other-repo-ci-1")
 	require.Contains(t, out, "2 orphaned network(s) or volume(s) removed")
+}
+
+// The integration-image job's copy of a run's image is removed by no leg
+// when every leg ran on another daemon, or when its artifact upload failed
+// and no leg ran (#1146): the next job's reaper on that daemon removes it.
+func TestReaperRemovesOnlyStaleUnusedImages(t *testing.T) {
+	stale := reaperMinAge + time.Hour
+	image := reaperPrefix + "it:"
+	fx := reapFixture{
+		images: []reapObject{
+			{name: image + "68720-1-legs", age: stale},
+			{name: image + "68790-1-legs", age: time.Minute},
+			{name: image + "68750-1-legs", age: stale, users: []string{"9a2b7c4d1e0f"}},
+			{name: image + "68740-1-image", age: stale, rmFails: true},
+			{name: "other-repo-ci-it:68720-1-legs", age: stale},
+		},
+	}
+
+	out, removed, err := runReaper(t, fx, []string{reaperPrefix})
+	require.NoError(t, err, out)
+	require.Equal(t, []string{"image-rm-" + image + "68720-1-legs"}, removed, out)
+	require.Contains(t, out, "keep  image "+image+"68790-1-legs (created within 11100s)")
+	require.Contains(t, out, "keep  image "+image+"68750-1-legs (a container uses it)")
+	require.Contains(t, out, "warn  image "+image+"68740-1-image not removed")
+	require.NotContains(t, out, "other-repo-ci-it")
+	require.Contains(t, out, "reaper: 1 stale image(s) and 0 expired claim(s) removed for prefix '"+reaperPrefix+"'")
+}
+
+// The window #1146's review found: a job tags (or loads) its image and only
+// then creates the lease that names it, and a warm build cache returns an
+// image whose Created is past the min-age. The snapshot below is a reaper
+// running inside that window: the tag is on the daemon, no container names
+// it, Created is stale, and only the job's claim, created before the tag,
+// is there. The claim keeps the tag, and every other tag of its run (a leg
+// loading the integration-image job's tag). An expired claim is removed with
+// the image it claimed.
+func TestReaperKeepsTheImagesOfALiveClaimsRun(t *testing.T) {
+	stale := reaperMinAge + time.Hour
+	image := reaperPrefix + "it:"
+	fx := reapFixture{
+		volumes: []reapObject{
+			{name: reaperPrefix + "68900-1-image-claim", claim: "68900-1", age: time.Minute},
+			{name: reaperPrefix + "68902-1-leg3-claim", claim: "68902-1", age: time.Minute},
+			{name: reaperPrefix + "68800-1-image-claim", claim: "68800-1", age: stale},
+		},
+		images: []reapObject{
+			{name: image + "68900-1-image", age: stale},
+			{name: image + "68902-1-legs", age: stale},
+			{name: image + "68800-1-image", age: stale},
+		},
+	}
+
+	out, removed, err := runReaper(t, fx, []string{reaperPrefix})
+	require.NoError(t, err, out)
+	require.Equal(t, []string{
+		"volume-rm-" + reaperPrefix + "68800-1-image-claim",
+		"image-rm-" + image + "68800-1-image",
+	}, removed, out)
+	require.Contains(t, out, "keep  image "+image+"68900-1-image (run 68900-1 claims it)")
+	require.Contains(t, out, "keep  image "+image+"68902-1-legs (run 68902-1 claims it)")
+	require.Contains(t, out, "reaper: 1 stale image(s) and 1 expired claim(s) removed for prefix '"+reaperPrefix+"'")
+}
+
+// A claim the reaper cannot read might be live, so it keeps every image, and
+// the claim itself, rather than guess which run the claim names.
+func TestReaperKeepsEveryImageWhenAClaimCannotBeRead(t *testing.T) {
+	stale := reaperMinAge + time.Hour
+	image := reaperPrefix + "it:"
+	fx := reapFixture{
+		volumes: []reapObject{
+			{name: reaperPrefix + "68910-1-image-claim", claim: "68910-1", age: stale, inspectFails: true},
+		},
+		images: []reapObject{{name: image + "68910-1-image", age: stale}},
+	}
+
+	out, removed, err := runReaper(t, fx, []string{reaperPrefix})
+	require.NoError(t, err, out)
+	require.Empty(t, removed, out)
+	require.Contains(t, out, "warn  claim "+reaperPrefix+"68910-1-image-claim: inspect failed, kept with every image")
+	require.Contains(t, out, "reaper: 0 stale image(s) and 0 expired claim(s) removed")
 }
 
 func TestReaperHonoursTheMinAgeArgument(t *testing.T) {

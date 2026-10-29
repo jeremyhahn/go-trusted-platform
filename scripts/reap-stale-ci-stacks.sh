@@ -18,7 +18,12 @@
 #     cancelled job's teardown never ran), when no container of any state uses
 #     it and it was created at least <min-age-seconds> ago;
 #   - a container outside compose whose name starts with <prefix>, when stale,
-#     with its anonymous volumes.
+#     with its anonymous volumes;
+#   - a claim volume (label ci.claim) whose name starts with <prefix>, when no
+#     container uses it and it was created at least <min-age-seconds> ago;
+#   - an image whose reference starts with <prefix>, when no container of any
+#     state names it, no live claim names its run and it was created at least
+#     <min-age-seconds> ago.
 # Stale: exited or dead and finished at least <min-age-seconds> ago, or
 # created and never started at least that long ago. A project with any
 # container running, paused, restarting or removing is never touched.
@@ -108,27 +113,36 @@ orphans=0
 
 # reap_orphan network|volume <name> <created> [project]: remove one leftover.
 reap_orphan() {
-  local kind=$1 name=$2 created=$3 project=${4:-} users
+  local kind=$1 name=$2 created=$3 project=${4:-}
   case $project in "$prefix"*) ;; *) return 0 ;; esac
   case $seen in *" $project "*) return 0 ;; esac
-  if ! users=$(docker ps -aq --filter "$kind=$name"); then
+  if reap_unused "$kind" "$kind" "$name" "$created"; then orphans=$((orphans + 1)); fi
+}
+
+# reap_unused network|volume|image <ps-filter> <name> <created>: remove one
+# object that no container of any state uses (`docker ps --filter
+# <ps-filter>=<name>` lists none) and that was created at least
+# <min-age-seconds> ago. 0 when it was removed, 1 when it was kept.
+reap_unused() {
+  local kind=$1 filter=$2 name=$3 created=$4 users
+  if ! users=$(docker ps -aq --filter "$filter=$name"); then
     echo "warn  $kind $name: cannot list its containers, kept"
-    return 0
+    return 1
   fi
   if [ -n "$users" ]; then
     echo "keep  $kind $name (a container uses it)"
-    return 0
+    return 1
   fi
   if ! old "$created"; then
     echo "keep  $kind $name (created within ${min_age}s)"
+    return 1
+  fi
+  echo "reap  $kind $name (no containers)"
+  if run docker "$kind" rm "$name"; then
     return 0
   fi
-  echo "reap  $kind $name ($project, no containers)"
-  if run docker "$kind" rm "$name"; then
-    orphans=$((orphans + 1))
-  else
-    echo "warn  $kind $name not removed"
-  fi
+  echo "warn  $kind $name not removed"
+  return 1
 }
 
 # A network's Created is a Go time.Time, which a bare {{.Created}} prints with
@@ -160,6 +174,69 @@ docker ps -a --filter "name=^$prefix" \
     fi
   done
 
+# Images. Every image whose reference starts with <prefix> is one run's
+# (go-trusted-platform-ci-it:<run id>-<attempt>-<job>), which that run's
+# teardown removes where it can. No teardown reaches the integration-image
+# job's copy when every leg ran on another daemon, or when the artifact upload
+# failed and no leg ran (#1146), and neither --rm nor buildx prune removes a
+# tagged image. One is removed when no container of any state names it (a
+# job's lease is one), no claim of its run is live, and it was created at
+# least <min-age-seconds> ago.
+#
+# A claim is what makes publishing an image safe against this loop (#1146). A
+# warm build cache can return an image created long before the job that
+# tagged it, and a job tags or loads its image before its lease can name it,
+# so neither Created nor the lease covers the moment between the two. Every
+# job that publishes or adopts a <prefix> image therefore first creates a
+# claim: a volume named <prefix>...-claim, labelled ci.claim=<run id>-<attempt>.
+# The tag list is read before the claims, so a tag on it was published after
+# its job's claim, and that claim is on the claim list read afterwards unless
+# its job tore it down, done with the image. A claim older than
+# <min-age-seconds> outlived any job (the 3h runner limit) and is removed.
+images=0
+claims=0
+if ! refs=$(docker image ls --format '{{.Repository}}:{{.Tag}}'); then
+  echo "warn  images: cannot list them, kept"
+  refs=
+fi
+# The live claims' runs, space separated; read only after the tag list. A
+# claim that cannot be listed or read might be live, so then no image is
+# removed this pass.
+claimed=" "
+unread=0
+if ! vols=$(docker volume ls -q --filter label=ci.claim); then
+  echo "warn  claims: cannot list them, every image kept"
+  unread=1
+  vols=
+fi
+for vol in $vols; do
+  case $vol in "$prefix"*) ;; *) continue ;; esac
+  read -r created run < <(docker volume inspect \
+    -f '{{.CreatedAt}} {{index .Labels "ci.claim"}}' "$vol" 2>/dev/null) ||
+    { echo "warn  claim $vol: inspect failed, kept with every image"; unread=1; continue; }
+  [ -n "${run:-}" ] || continue
+  if old "$created"; then
+    if reap_unused volume volume "$vol" "$created"; then claims=$((claims + 1)); continue; fi
+  fi
+  claimed="$claimed$run "
+done
+[ "$unread" = 0 ] || refs=
+for ref in $refs; do
+  case $ref in "$prefix"*) ;; *) continue ;; esac
+  case $ref in *:'<none>') continue ;; esac
+  # <run id>-<attempt> from the tag <run id>-<attempt>-<job>.
+  tag=${ref#*:}
+  rest=${tag#*-}
+  run="${tag%%-*}-${rest%%-*}"
+  case $claimed in
+    *" $run "*) echo "keep  image $ref (run $run claims it)"; continue ;;
+  esac
+  created=$(docker image inspect -f '{{.Created}}' "$ref" 2>/dev/null) ||
+    { echo "warn  image $ref: inspect failed, kept"; continue; }
+  if reap_unused image ancestor "$ref" "$created"; then images=$((images + 1)); fi
+done
+
 if [ "${REAP_DRY_RUN:-0}" = 1 ]; then done_as="would be removed"; else done_as=removed; fi
 echo "reaper: $reaped compose project(s) and $orphans orphaned network(s) or volume(s) $done_as for prefix '$prefix'"
+echo "reaper: $images stale image(s) and $claims expired claim(s) $done_as for prefix '$prefix'"
 exit 0
