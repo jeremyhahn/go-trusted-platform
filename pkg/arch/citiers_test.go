@@ -46,7 +46,37 @@ import (
 const (
 	ciWorkflowFile = ".github/workflows/ci.yml"
 	ciGateJobID    = "ci-gate"
-	ciGateIf       = "always()"
+	// ciGateIf runs the gate after every job, failed or skipped, except on a
+	// schedule run the schedule guard found busy (v1.29.3): that run posts
+	// `skipped`, never a green nightly.
+	ciGateIf = "${{ always() && (github.event_name != 'schedule' || needs.schedule-guard.outputs.verdict != 'busy') }}"
+
+	// scheduleGuardJobID is the job that, on a schedule run, reads whether a
+	// main push run is in flight and sets `verdict` (v1.29.3, ruling
+	// 255(10)/(11)(c)).
+	scheduleGuardJobID = "schedule-guard"
+
+	// bigdiskLabel is the runner label of the jobs the schedule guard holds.
+	bigdiskLabel = "bigdisk"
+
+	// scheduleGuardExpr is the clause every bigdisk job's `if:` carries: off
+	// schedule it is true, on a schedule run only on the guard's `run`.
+	scheduleGuardExpr = "github.event_name != 'schedule' || needs.schedule-guard.outputs.verdict == 'run'"
+
+	// prTierGuardedIf, fullTierGuardedIf and nightlyGuardedIf are the tier
+	// `if:`s of a bigdisk job, character for character: the tier's own
+	// condition and the schedule guard.
+	prTierGuardedIf   = "${{ " + draftGuard + " && (" + scheduleGuardExpr + ") }}"
+	fullTierGuardedIf = "${{ (" + fullTierExpr + ") && " + draftGuard + " && (" + scheduleGuardExpr + ") }}"
+	nightlyGuardedIf  = "${{ (github.event_name == 'schedule' && needs.schedule-guard.outputs.verdict == 'run') || github.event_name == 'workflow_dispatch' }}"
+
+	// scheduleEnv and scheduleGuardEnv are the gate's schedule flag and the
+	// guard's verdict: on a schedule run the gate fails on any verdict but
+	// `run`.
+	scheduleEnv           = "SCHEDULE"
+	scheduleEnvValue      = "${{ github.event_name == 'schedule' }}"
+	scheduleGuardEnv      = "SCHEDULE_GUARD"
+	scheduleGuardEnvValue = "${{ needs.schedule-guard.outputs.verdict }}"
 
 	tierPR   = "pr"
 	tierDocs = "docs"
@@ -114,9 +144,11 @@ const (
 	// only that PR's older run (#510). On main it keys by event and commit
 	// instead (ci-template v1.26.2, ruling 145), so each main run is its own
 	// group: the next push to main never cancels the run in progress
-	// (DS-3465), and a dispatch never shares a group with a push. Gitea 1.27.1
-	// evaluates expressions in `group`, not in `cancel-in-progress`.
-	supersededGroup = "${{ github.workflow }}-${{ github.ref == 'refs/heads/main' && format('main-{0}-{1}', github.event_name, github.sha) || github.ref }}"
+	// (DS-3465), and a dispatch never shares a group with a push. A schedule
+	// run keys by repository alone, tested first (v1.29.3, ruling
+	// 255(10)/(11)(c)), so a repository has one schedule run at a time. Gitea
+	// 1.27.1 evaluates expressions in `group`, not in `cancel-in-progress`.
+	supersededGroup = "${{ github.workflow }}-${{ github.event_name == 'schedule' && format('schedule-{0}', github.repository) || github.ref == 'refs/heads/main' && format('main-{0}-{1}', github.event_name, github.sha) || github.ref }}"
 )
 
 // ungatedJobs run in the full tier but report without feeding CI Gate (#853):
@@ -146,6 +178,17 @@ var tierByIf = map[string]string{
 	docsOnlyIf: tierDocs,
 	fullTierIf: tierFull,
 	nightlyIf:  tierNightly,
+
+	prTierGuardedIf:   tierPR,
+	fullTierGuardedIf: tierFull,
+	nightlyGuardedIf:  tierNightly,
+}
+
+// scheduleGuardedIf holds the `if:`s that read the schedule guard's verdict.
+var scheduleGuardedIf = map[string]bool{
+	prTierGuardedIf:   true,
+	fullTierGuardedIf: true,
+	nightlyGuardedIf:  true,
 }
 
 // gatedTiers are the tiers a gate `check` line may carry.
@@ -199,11 +242,12 @@ type ciStep struct {
 
 // ciJob is one workflow job, reduced to what the tier check reads.
 type ciJob struct {
-	ID    string
-	Line  int
-	If    string
-	Needs []string
-	Steps []ciStep
+	ID     string
+	Line   int
+	If     string
+	RunsOn string
+	Needs  []string
+	Steps  []ciStep
 }
 
 // ciGateCheck is one tagged `check` line in the gate's script.
@@ -280,9 +324,10 @@ func parseCIWorkflow(file string, data []byte) (ciWorkflow, error) {
 // parseCIJob decodes one job from its key and value nodes.
 func parseCIJob(file string, key, value *yaml.Node) (ciJob, error) {
 	var raw struct {
-		If    string    `yaml:"if"`
-		Needs yaml.Node `yaml:"needs"`
-		Steps []struct {
+		If     string    `yaml:"if"`
+		RunsOn yaml.Node `yaml:"runs-on"`
+		Needs  yaml.Node `yaml:"needs"`
+		Steps  []struct {
 			Env map[string]string `yaml:"env"`
 			Run yaml.Node         `yaml:"run"`
 		} `yaml:"steps"`
@@ -291,7 +336,11 @@ func parseCIJob(file string, key, value *yaml.Node) (ciJob, error) {
 		return ciJob{}, TestReachLoadError{File: file, Line: key.Line, Detail: "job " + key.Value + " does not decode", Err: err}
 	}
 
-	job := ciJob{ID: key.Value, Line: key.Line, If: raw.If}
+	job := ciJob{ID: key.Value, Line: key.Line, If: raw.If, RunsOn: raw.RunsOn.Value}
+	// A label list: every label, so a bigdisk label in it is seen.
+	for _, label := range raw.RunsOn.Content {
+		job.RunsOn += " " + label.Value
+	}
 	if raw.Needs.Kind == yaml.ScalarNode {
 		job.Needs = []string{raw.Needs.Value}
 	} else if raw.Needs.Kind != 0 {
@@ -406,6 +455,15 @@ func gateFindings(wf ciWorkflow, gate ciJob, jobs map[string]ciJob) (map[string]
 	if got := step.Env[draftEnv]; got != draftEnvValue {
 		fail(step.RunLine, fmt.Sprintf("$%s is %q, want %q: a draft PR's gate must fail, not pass on its skips", draftEnv, got, draftEnvValue))
 	}
+	if _, ok := jobs[scheduleGuardJobID]; !ok {
+		fail(gate.Line, "the workflow has no "+scheduleGuardJobID+" job: a schedule run's bigdisk jobs would run while main is busy")
+	}
+	if got := step.Env[scheduleEnv]; got != scheduleEnvValue {
+		fail(step.RunLine, fmt.Sprintf("$%s is %q, want %q: without it a schedule run passes on bigdisk jobs the guard skipped", scheduleEnv, got, scheduleEnvValue))
+	}
+	if got := step.Env[scheduleGuardEnv]; got != scheduleGuardEnvValue {
+		fail(step.RunLine, fmt.Sprintf("$%s is %q, want %q: without it a schedule run passes on bigdisk jobs the guard skipped", scheduleGuardEnv, got, scheduleGuardEnvValue))
+	}
 
 	checks, parseErrs := parseGateChecks(wf.File, step)
 	findings = append(findings, parseErrs...)
@@ -492,6 +550,13 @@ func ciTierFindings(wf ciWorkflow) []error {
 		}
 		tier, known := tiers[j.ID]
 		c, gated := checked[j.ID]
+		guarded := scheduleGuardedIf[j.If]
+		if strings.Contains(j.RunsOn, bigdiskLabel) && !guarded {
+			fail(j.Line, "a bigdisk job's if: carries the schedule guard `("+scheduleGuardExpr+")`: without it a schedule run fills the runner while main is busy")
+		}
+		if guarded && !slices.Contains(j.Needs, scheduleGuardJobID) {
+			fail(j.Line, "its if: reads the schedule guard, so it needs "+scheduleGuardJobID+": without it the verdict does not render and a schedule run skips the job")
+		}
 		if slices.Contains(ungatedJobs, j.ID) {
 			if known && tier != tierFull {
 				fail(j.Line, "an ungated job runs in the full tier only: its if: puts it in the "+tier+" tier")
@@ -620,7 +685,9 @@ func TestPullRequestWorkflowsCancelSupersededRuns(t *testing.T) {
 
 // TestCIGateScriptPassesASkipOnlyForAnUnselectedTier runs the real gate
 // script under bash with the results a runner would hand it.
-func TestCIGateScriptPassesASkipOnlyForAnUnselectedTier(t *testing.T) {
+// loadGateStep returns ci.yml's gate step and its check lines.
+func loadGateStep(t *testing.T) (ciStep, []ciGateCheck) {
+	t.Helper()
 	wf := loadCIWorkflow(t, repoRoot(t), ciWorkflowFile)
 	gateIdx := slices.IndexFunc(wf.Jobs, func(j ciJob) bool { return j.ID == ciGateJobID })
 	require.GreaterOrEqual(t, gateIdx, 0, "ci.yml has no ci-gate job")
@@ -628,6 +695,61 @@ func TestCIGateScriptPassesASkipOnlyForAnUnselectedTier(t *testing.T) {
 	require.True(t, ok, "ci-gate has no check lines")
 	checks, findings := parseGateChecks(wf.File, step)
 	require.Empty(t, findings)
+	return step, checks
+}
+
+// TestCIGateScriptFailsAScheduleRunTheGuardDidNotClear runs ci.yml's gate
+// script with every job green: a schedule run passes only on the schedule
+// guard's `run` (v1.29.3). A `busy` verdict never reaches the script, as the
+// gate's if: skips it.
+func TestCIGateScriptFailsAScheduleRunTheGuardDidNotClear(t *testing.T) {
+	step, checks := loadGateStep(t)
+	bash, err := exec.LookPath("bash")
+	require.NoError(t, err)
+
+	cases := []struct {
+		name     string
+		schedule string
+		verdict  string
+		wantPass bool
+	}{
+		{"a schedule run the guard cleared", "true", "run", true},
+		{"a schedule run the guard could not read", "true", "unreadable", false},
+		{"a schedule run whose verdict did not render", "true", "", false},
+		{"a push, which the guard does not check", "false", "run", true},
+		{"a push whose verdict did not render", "false", "", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			env := []string{
+				"PATH=" + os.Getenv("PATH"),
+				fullTierEnv + "=true",
+				docsOnlyEnv + "=false",
+				draftEnv + "=false",
+				nightlyEnv + "=" + tc.schedule,
+				scheduleEnv + "=" + tc.schedule,
+				scheduleGuardEnv + "=" + tc.verdict,
+			}
+			for _, c := range checks {
+				env = append(env, c.EnvVar+"=success")
+			}
+			// -eo pipefail is the runner's default bash invocation for `run:`.
+			cmd := exec.CommandContext(t.Context(), bash, "-eo", "pipefail", "-c", step.Run)
+			cmd.Env = env
+			out, runErr := cmd.CombinedOutput()
+			if tc.wantPass {
+				require.NoError(t, runErr, string(out))
+				return
+			}
+			var exitErr *exec.ExitError
+			require.ErrorAs(t, runErr, &exitErr, "the gate passed:\n%s", out)
+			require.Contains(t, string(out), "FAIL schedule-guard")
+		})
+	}
+}
+
+func TestCIGateScriptPassesASkipOnlyForAnUnselectedTier(t *testing.T) {
+	step, checks := loadGateStep(t)
 
 	varOf := func(tier string) string {
 		idx := slices.IndexFunc(checks, func(c ciGateCheck) bool { return c.Tier == tier })
@@ -739,23 +861,36 @@ jobs:
     if: ` + fullTierIf + `
   soak:
     if: ` + nightlyIf + `
+  schedule-guard:
+    if: ` + prTierIf + `
+    runs-on: x
+  image:
+    if: ` + prTierGuardedIf + `
+    needs: [changes, schedule-guard]
+    runs-on: ${{ github.server_url == 'https://github.com' && 'ubuntu-latest' || 'bigdisk' }}
   ci-gate:
-    if: always()
-    needs: [lint, changes, build, race, soak]
+    if: ` + ciGateIf + `
+    needs: [lint, changes, build, race, soak, schedule-guard, image]
     steps:
       - env:
           FULL_TIER: ` + fullTierEnvValue + `
           DOCS_ONLY: ` + docsOnlyEnvValue + `
           DRAFT: ` + draftEnvValue + `
           NIGHTLY: ` + nightlyEnvValue + `
+          SCHEDULE: ` + scheduleEnvValue + `
+          SCHEDULE_GUARD: ` + scheduleGuardEnvValue + `
           RESULT_LINT: ${{ needs.lint.result }}
           RESULT_CHANGES: ${{ needs.changes.result }}
+          RESULT_SCHEDULE_GUARD: ${{ needs.schedule-guard.result }}
+          RESULT_IMAGE: ${{ needs.image.result }}
           RESULT_BUILD: ${{ needs.build.result }}
           RESULT_RACE: ${{ needs.race.result }}
           RESULT_SOAK: ${{ needs.soak.result }}
         run: |
           check pr lint "$RESULT_LINT"
           check pr changes "$RESULT_CHANGES"
+          check pr schedule-guard "$RESULT_SCHEDULE_GUARD"
+          check pr image "$RESULT_IMAGE"
           check docs build "$RESULT_BUILD"
           check full race "$RESULT_RACE"
           check nightly soak "$RESULT_SOAK"
@@ -786,13 +921,13 @@ func TestCITierFindingsRejectEachInconsistency(t *testing.T) {
 		{"an untagged check line", `check pr lint "$RESULT_LINT"`, `check lint "$RESULT_LINT"`, "check line is not"},
 		{"an unknown tier tag", `check pr lint`, `check fast lint`, `tier tag "fast" is none of`},
 		{"a job with no check line", "          check pr lint \"$RESULT_LINT\"\n", "", "lint: no check line in ci-gate"},
-		{"a job missing from the gate's needs", `needs: [lint, changes, build, race, soak]`, `needs: [lint, changes, build, soak]`, "race: not in ci-gate's needs"},
+		{"a job missing from the gate's needs", `race, soak,`, `soak,`, "race: not in ci-gate's needs"},
 		{"a docs-tier job tagged pr", `check docs build`, `check pr build`, "build: tagged pr in ci-gate, but its if: puts it in the docs tier"},
 		{"a pr-tier job tagged docs", `check pr lint`, `check docs lint`, "lint: tagged docs in ci-gate, but its if: puts it in the pr tier"},
 		{"a docs-only if: that drifted", "!= 'true' &&", "!= true &&", "build: if: "},
 		{"a docs-tier job that does not need changes", "    needs: [changes]\n", "    needs: [lint]\n", "build: a docs-tier job needs changes"},
 		{"a docs tier without a changes job", "  changes:\n    if: " + prTierIf + "\n    runs-on: x\n", "", "the docs tier has no changes job"},
-		{"a changes job missing from the gate's needs", `needs: [lint, changes, build, race, soak]`, `needs: [lint, build, race, soak]`, "changes: not in ci-gate's needs"},
+		{"a changes job missing from the gate's needs", `needs: [lint, changes, build`, `needs: [lint, build`, "changes: not in ci-gate's needs"},
 		{"a changes job with no check line", "          check pr changes \"$RESULT_CHANGES\"\n", "", "changes: no check line in ci-gate"},
 		{"a DOCS_ONLY that reads another output", `DOCS_ONLY: ${{ needs.changes.outputs.docs_only }}`, `DOCS_ONLY: ${{ needs.changes.outputs.docs }}`, "$DOCS_ONLY is"},
 		{"a DOCS_ONLY that is missing", "          DOCS_ONLY: " + docsOnlyEnvValue + "\n", "", "$DOCS_ONLY is \"\""},
@@ -809,12 +944,23 @@ func TestCITierFindingsRejectEachInconsistency(t *testing.T) {
 		{"a pr-tier job without the draft guard", "  lint:\n    if: " + prTierIf + "\n", "  lint:\n", `lint: if: "" is no tier`},
 		{"a docs-tier job without the draft guard", "!= 'true' && " + draftGuard, "!= 'true'", "build: if: "},
 		{"a full-tier job without the draft guard", "    if: " + fullTierIf + "\n    needs: lint", "    if: ${{ " + fullTierExpr + " }}\n    needs: lint", "race: if: "},
-		{"a gate that does not always run", `if: always()`, `if: success()`, `if: is "success()"`},
+		{"a gate that does not always run", "if: " + ciGateIf, `if: success()`, `if: is "success()"`},
+		{"a gate that runs on a busy schedule", "if: " + ciGateIf, `if: always()`, `if: is "always()"`},
+		{"a bigdisk job without the schedule guard", "    if: " + prTierGuardedIf + "\n    needs: [changes, schedule-guard]", "    if: " + prTierIf + "\n    needs: [changes, schedule-guard]", "image: a bigdisk job's if: carries the schedule guard"},
+		{"a bigdisk job whose guard drifted", "needs.schedule-guard.outputs.verdict == 'run') }}\n    needs: [changes", "needs.schedule-guard.outputs.verdict != 'busy') }}\n    needs: [changes", "image: if: "},
+		{"a bigdisk job that does not need the schedule guard", `needs: [changes, schedule-guard]`, `needs: [changes]`, "image: its if: reads the schedule guard, so it needs schedule-guard"},
+		{"a schedule guard missing from the gate's needs", `soak, schedule-guard, image]`, `soak, image]`, "schedule-guard: not in ci-gate's needs"},
+		{"a schedule guard with no check line", "          check pr schedule-guard \"$RESULT_SCHEDULE_GUARD\"\n", "", "schedule-guard: no check line in ci-gate"},
+		{"a workflow without the schedule guard job", "  schedule-guard:\n    if: " + prTierIf + "\n    runs-on: x\n", "", "the workflow has no schedule-guard job"},
+		{"a gate without the schedule flag", "          SCHEDULE: " + scheduleEnvValue + "\n", "", "$SCHEDULE is \"\""},
+		{"a schedule flag that reads another event", "SCHEDULE: " + scheduleEnvValue, "SCHEDULE: ${{ github.event_name == 'push' }}", "$SCHEDULE is"},
+		{"a gate without the schedule guard's verdict", "          SCHEDULE_GUARD: " + scheduleGuardEnvValue + "\n", "", "$SCHEDULE_GUARD is \"\""},
+		{"a verdict that reads the guard's result", "SCHEDULE_GUARD: " + scheduleGuardEnvValue, "SCHEDULE_GUARD: ${{ needs.schedule-guard.result }}", "$SCHEDULE_GUARD is"},
 		{"a gate checking an undefined job", `check full race "$RESULT_RACE"`, "check full race \"$RESULT_RACE\"\n          check pr ghost \"$RESULT_RACE\"", "ghost: ci-gate checks a job the workflow does not define"},
 		{"pull_request with the labeled type", `reopened]`, `reopened, labeled]`, "not on a label event"},
 		{"pull_request with the ready_for_review type", `reopened]`, `reopened, ready_for_review]`, "not on a label event"},
 		{"pull_request without the synchronize type", `synchronize, `, ``, "types are [opened reopened]"},
-		{"an ungated job in the gate's needs", `needs: [lint, changes, build, race, soak]`, `needs: [lint, changes, build, race, fips, soak]`, "fips: an ungated job: remove it from ci-gate's needs"},
+		{"an ungated job in the gate's needs", `race, soak,`, `race, fips, soak,`, "fips: an ungated job: remove it from ci-gate's needs"},
 		{"an ungated job with a check line", `check full race "$RESULT_RACE"`, "check full race \"$RESULT_RACE\"\n          check full fips \"$RESULT_RACE\"", "fips: an ungated job: remove its check line"},
 		{"an ungated job on the PR tier", "  fips:\n    if: " + fullTierIf + "\n", "  fips:\n    if: " + prTierIf + "\n", "fips: an ungated job runs in the full tier only"},
 		{"an ungated job whose if: drifted", "  fips:\n    if: " + fullTierIf + "\n", "  fips:\n    if: github.event_name == 'push'\n", "fips: if: "},
@@ -822,7 +968,7 @@ func TestCITierFindingsRejectEachInconsistency(t *testing.T) {
 		{"a nightly-tier job tagged full", `check nightly soak`, `check full soak`, "soak: tagged full in ci-gate, but its if: puts it in the nightly tier"},
 		{"a full-tier job tagged nightly", `check full race`, `check nightly race`, "race: tagged nightly in ci-gate, but its if: puts it in the full tier"},
 		{"a nightly if: that drifted", "  soak:\n    if: " + nightlyIf + "\n", "  soak:\n    if: ${{ github.event_name == 'schedule' }}\n", "soak: if: "},
-		{"a nightly-tier job missing from the gate's needs", `needs: [lint, changes, build, race, soak]`, `needs: [lint, changes, build, race]`, "soak: not in ci-gate's needs"},
+		{"a nightly-tier job missing from the gate's needs", `race, soak,`, `race,`, "soak: not in ci-gate's needs"},
 		{"a gate without the nightly flag", "          NIGHTLY: " + nightlyEnvValue + "\n", "", "$NIGHTLY is \"\""},
 		{"a nightly flag that reads another event", "NIGHTLY: " + nightlyEnvValue, "NIGHTLY: ${{ github.event_name == 'push' }}", "$NIGHTLY is"},
 		{"a full-tier job needing a nightly-tier job", "    needs: lint\n  fips:", "    needs: [lint, soak]\n  fips:", "a full-tier job needs nightly-tier job soak"},
@@ -872,6 +1018,9 @@ func TestConcurrencyFindingsRejectAnUncancellableGroup(t *testing.T) {
 		{"a main group without the event", "format('main-{0}-{1}', github.event_name, github.sha)", "github.sha", "group must be"},
 		{"a per-commit group on a branch other than main", `'refs/heads/main'`, `'refs/heads/dev'`, "group must be"},
 		{"a per-ref group on main with a per-commit group elsewhere", supersededGroup, `${{ github.workflow }}-${{ github.ref != 'refs/heads/main' && github.sha || github.ref }}`, "group must be"},
+		{"a schedule run that takes a main or ref group", supersededGroup, `${{ github.workflow }}-${{ github.ref == 'refs/heads/main' && format('main-{0}-{1}', github.event_name, github.sha) || github.ref }}`, "group must be"},
+		{"a schedule group keyed by commit", "format('schedule-{0}', github.repository)", "format('schedule-{0}-{1}', github.repository, github.sha)", "group must be"},
+		{"a schedule group tested after the main group", supersededGroup, `${{ github.workflow }}-${{ github.ref == 'refs/heads/main' && format('main-{0}-{1}', github.event_name, github.sha) || github.event_name == 'schedule' && format('schedule-{0}', github.repository) || github.ref }}`, "group must be"},
 		{"no concurrency block", "concurrency:\n  group: " + supersededGroup + "\n  cancel-in-progress: true\n", "", "has no concurrency block"},
 		{"a labeled trigger", `reopened]`, `reopened, labeled]`, "types include labeled"},
 		{"an unlabeled trigger", `reopened]`, `reopened, unlabeled]`, "types include unlabeled"},
