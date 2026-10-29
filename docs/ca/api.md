@@ -373,9 +373,22 @@ of its gRPC twin:
 | `DELETE /api/v1/ca/certificates/{serial}` | `certs:revoke` |
 | `POST /api/v1/ca/certificates/verify` | `certs:read` |
 
-The daemon REST listener serves the same `DELETE /api/v1/ca/certificates/{serial}`
-behind its `ScopeGuard` with the same `certs:revoke` scope
-(`pkg/api/rest/ca_handlers.go`).
+The daemon REST listener serves every CA certificate route behind its
+`ScopeGuard`, each with the scope of its gRPC twin
+(`pkg/api/rest/ca_handlers.go`), so an installer client certificate, which
+holds no scope, is refused issue and renew with 403 (Codex 8238):
+
+| Route | Scope |
+|---|---|
+| `POST /api/v1/ca/certificates` | `certs:generate` |
+| `GET /api/v1/ca/certificates` | `certs:list` |
+| `GET /api/v1/ca/certificates/{serial}` | `certs:read` |
+| `POST /api/v1/ca/certificates/{serial}/renew` | `certs:generate` |
+| `DELETE /api/v1/ca/certificates/{serial}` | `certs:revoke` |
+| `POST /api/v1/ca/certificates/verify` | `certs:read` |
+
+`POST /api/v1/ca/sign-csr` takes a platform token only (`RequireToken`,
+above); `GET /api/v1/ca/info`, `/ca/crl` and `/ca/bundle` are public.
 
 Under platform-token auth a request with no token is refused with 401 and a
 token without the scope with 403, before the handler runs. Under the legacy

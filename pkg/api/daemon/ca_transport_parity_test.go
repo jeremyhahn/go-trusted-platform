@@ -235,6 +235,7 @@ func (f *caParityFixture) restClient(t *testing.T) platformv1.CAServiceClient {
 	adapter, err := sdkrest.Connect(context.Background(), platform.NewOptions(
 		platform.WithRESTAddr(srv.URL),
 		platform.WithTLSConfig(f.tls.ClientTLSConfig()),
+		platform.WithBearerToken(operatorToken),
 	))
 	return connect(t, adapter, err)
 }

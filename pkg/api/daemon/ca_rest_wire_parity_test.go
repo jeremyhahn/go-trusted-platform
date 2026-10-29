@@ -109,6 +109,7 @@ func (s tokenScopes) RequireScope(scope string) func(http.Handler) http.Handler 
 const (
 	signerToken   = "signer"
 	readerToken   = "reader"
+	getterToken   = "getter"
 	renewToken    = "renewer"
 	revokeToken   = "revoker"
 	verifyToken   = "verifier"
@@ -193,9 +194,11 @@ func newCAWireFixture(t *testing.T) *caWireFixture {
 		kms:             issuancetest.NewKMS(t, csrKeyID, &key.PublicKey),
 		tokens: tokenScopes{
 			// The daemon issues under certs:generate and reads under
-			// certs:read, the scopes its gRPC, QUIC and MCP transports check.
+			// certs:read, the scopes its gRPC, QUIC and MCP transports check;
+			// the reader holds only ca:read, so verify still refuses it.
 			signerToken: {issuance.SignCSRScope, "certs:generate"},
-			readerToken: {"ca:read", "certs:read"},
+			readerToken: {"ca:read"},
+			getterToken: {"ca:read", "certs:read"},
 			renewToken:  {restca.RenewScope},
 			revokeToken: {restca.RevokeScope},
 			verifyToken: {restca.VerifyScope},
@@ -261,7 +264,7 @@ func TestCARESTWire_GetCertificate(t *testing.T) {
 	for _, server := range caWireServers {
 		t.Run(server.name, func(t *testing.T) {
 			f := newCAWireFixture(t)
-			client := f.client(t, server, readerToken)
+			client := f.client(t, server, getterToken)
 
 			resp, err := client.GetCertificate(context.Background(), &platformv1.GetCertificateRequest{
 				Serial:     f.serial,
@@ -288,7 +291,7 @@ func TestCARESTWire_GetCertificate_NotFound(t *testing.T) {
 	for _, server := range caWireServers {
 		t.Run(server.name, func(t *testing.T) {
 			f := newCAWireFixture(t)
-			client := f.client(t, server, readerToken)
+			client := f.client(t, server, getterToken)
 
 			_, err := client.GetCertificate(context.Background(), &platformv1.GetCertificateRequest{Serial: "deadbeef"})
 			assert.Equal(t, codes.NotFound, status.Code(err), "an unknown serial: %v", err)
