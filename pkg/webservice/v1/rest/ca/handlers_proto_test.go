@@ -1,9 +1,11 @@
 package ca
 
 import (
+	"crypto"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/rsa"
 	"crypto/sha256"
 	"crypto/x509"
 	"crypto/x509/pkix"
@@ -235,6 +237,42 @@ func TestCertToProto(t *testing.T) {
 	})
 }
 
+// TestCertToProto_ReportsIssuedKeyAlgorithm reports the size and curve of
+// the certificate's own key, not a per-algorithm default.
+func TestCertToProto_ReportsIssuedKeyAlgorithm(t *testing.T) {
+	rsaKey, err := rsa.GenerateKey(rand.Reader, 4096)
+	require.NoError(t, err)
+	ecKey, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
+	require.NoError(t, err)
+
+	handlers, _ := newTestHandlers(&mockCertificateAuthority{})
+	cases := []struct {
+		name   string
+		signer crypto.Signer
+		want   platformv1.KeyAlgorithm
+	}{
+		{"RSA-4096", rsaKey, platformv1.KeyAlgorithm_KEY_ALGORITHM_RSA_4096},
+		{"P-384", ecKey, platformv1.KeyAlgorithm_KEY_ALGORITHM_ECDSA_P384},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			template := &x509.Certificate{
+				SerialNumber: big.NewInt(1),
+				Subject:      pkix.Name{CommonName: "keyalg.test"},
+				NotBefore:    time.Now(),
+				NotAfter:     time.Now().Add(time.Hour),
+			}
+			der, err := x509.CreateCertificate(rand.Reader, template, template, tc.signer.Public(), tc.signer)
+			require.NoError(t, err)
+			cert, err := x509.ParseCertificate(der)
+			require.NoError(t, err)
+
+			assert.Equal(t, tc.want, handlers.certToProto(cert, false, false).GetKeyAlgorithm())
+			assert.Equal(t, tc.want, handlers.certToSummaryProto(cert).GetKeyAlgorithm())
+		})
+	}
+}
+
 func TestKeyUsageToStrings(t *testing.T) {
 	handlers, _ := newTestHandlers(nil)
 
@@ -275,25 +313,6 @@ func TestExtKeyUsageToStrings(t *testing.T) {
 		}))
 		assert.Empty(t, handlers.extKeyUsageToStrings(nil))
 	})
-}
-
-func TestKeyAlgorithmToProto(t *testing.T) {
-	handlers, _ := newTestHandlers(nil)
-	cases := []struct {
-		alg  x509.PublicKeyAlgorithm
-		want platformv1.KeyAlgorithm
-	}{
-		{x509.RSA, platformv1.KeyAlgorithm_KEY_ALGORITHM_RSA_2048},
-		{x509.ECDSA, platformv1.KeyAlgorithm_KEY_ALGORITHM_ECDSA_P256},
-		{x509.Ed25519, platformv1.KeyAlgorithm_KEY_ALGORITHM_ED25519},
-		{x509.DSA, platformv1.KeyAlgorithm_KEY_ALGORITHM_UNSPECIFIED},
-		{x509.UnknownPublicKeyAlgorithm, platformv1.KeyAlgorithm_KEY_ALGORITHM_UNSPECIFIED},
-	}
-	for _, tc := range cases {
-		t.Run(tc.alg.String(), func(t *testing.T) {
-			assert.Equal(t, tc.want, handlers.keyAlgorithmToProto(tc.alg))
-		})
-	}
 }
 
 // TestRevocationReasonToProto maps every CRLReason code of RFC 5280 §5.3.1.

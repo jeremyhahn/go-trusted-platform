@@ -16,9 +16,11 @@ package rest
 import (
 	"bytes"
 	"context"
+	"crypto"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/rsa"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/hex"
@@ -1747,6 +1749,41 @@ func TestCAHandlers_CertToProto_NilCert(t *testing.T) {
 	assert.Nil(t, handlers.certToProto(nil, true, true))
 }
 
+// TestCAHandlers_CertToProto_ReportsIssuedKeyAlgorithm reports the size and
+// curve of the certificate's own key, not a per-algorithm default.
+func TestCAHandlers_CertToProto_ReportsIssuedKeyAlgorithm(t *testing.T) {
+	rsaKey, err := rsa.GenerateKey(rand.Reader, 4096)
+	require.NoError(t, err)
+	ecKey, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
+	require.NoError(t, err)
+
+	handlers := NewCAHandlers(nil, nil, nil)
+	cases := []struct {
+		name   string
+		signer crypto.Signer
+		want   platformv1.KeyAlgorithm
+	}{
+		{"RSA-4096", rsaKey, platformv1.KeyAlgorithm_KEY_ALGORITHM_RSA_4096},
+		{"P-384", ecKey, platformv1.KeyAlgorithm_KEY_ALGORITHM_ECDSA_P384},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			template := &x509.Certificate{
+				SerialNumber: big.NewInt(1),
+				Subject:      pkix.Name{CommonName: "keyalg.test"},
+				NotBefore:    time.Now(),
+				NotAfter:     time.Now().Add(time.Hour),
+			}
+			der, err := x509.CreateCertificate(rand.Reader, template, template, tc.signer.Public(), tc.signer)
+			require.NoError(t, err)
+			cert, err := x509.ParseCertificate(der)
+			require.NoError(t, err)
+
+			assert.Equal(t, tc.want, handlers.certToProto(cert, false, false).GetKeyAlgorithm())
+		})
+	}
+}
+
 func TestCertStatusToProto(t *testing.T) {
 	now := time.Now()
 	cert := &x509.Certificate{NotBefore: now.Add(-time.Hour), NotAfter: now.Add(time.Hour)}
@@ -1754,13 +1791,6 @@ func TestCertStatusToProto(t *testing.T) {
 	assert.Equal(t, platformv1.CertificateStatus_CERTIFICATE_STATUS_VALID, certStatusToProto(cert, now))
 	assert.Equal(t, platformv1.CertificateStatus_CERTIFICATE_STATUS_PENDING, certStatusToProto(cert, now.Add(-2*time.Hour)))
 	assert.Equal(t, platformv1.CertificateStatus_CERTIFICATE_STATUS_EXPIRED, certStatusToProto(cert, now.Add(2*time.Hour)))
-}
-
-func TestKeyAlgorithmToProto(t *testing.T) {
-	assert.Equal(t, platformv1.KeyAlgorithm_KEY_ALGORITHM_RSA_2048, keyAlgorithmToProto(x509.RSA))
-	assert.Equal(t, platformv1.KeyAlgorithm_KEY_ALGORITHM_ECDSA_P256, keyAlgorithmToProto(x509.ECDSA))
-	assert.Equal(t, platformv1.KeyAlgorithm_KEY_ALGORITHM_ED25519, keyAlgorithmToProto(x509.Ed25519))
-	assert.Equal(t, platformv1.KeyAlgorithm_KEY_ALGORITHM_UNSPECIFIED, keyAlgorithmToProto(x509.DSA))
 }
 
 // failingBody is a request body whose read fails.

@@ -1,7 +1,12 @@
 package issuance
 
 import (
+	"crypto"
+	"crypto/ecdsa"
+	"crypto/ed25519"
 	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/rsa"
 	"crypto/x509"
 	"testing"
 
@@ -69,6 +74,46 @@ func TestKeyAttributes_UnsupportedAlgorithm(t *testing.T) {
 			require.ErrorAs(t, err, &unsupported)
 			assert.Equal(t, alg.String(), unsupported.Algorithm)
 			assert.Contains(t, err.Error(), "unsupported key algorithm")
+		})
+	}
+}
+
+// TestPublicKeyAlgorithm reads the algorithm, size and curve from real keys;
+// a size, curve or key type the CA does not issue is UNSPECIFIED.
+func TestPublicKeyAlgorithm(t *testing.T) {
+	rsaKey := func(bits int) crypto.PublicKey {
+		key, err := rsa.GenerateKey(rand.Reader, bits)
+		require.NoError(t, err)
+		return key.Public()
+	}
+	ecKey := func(curve elliptic.Curve) crypto.PublicKey {
+		key, err := ecdsa.GenerateKey(curve, rand.Reader)
+		require.NoError(t, err)
+		return key.Public()
+	}
+	edPub, _, err := ed25519.GenerateKey(rand.Reader)
+	require.NoError(t, err)
+
+	cases := []struct {
+		name string
+		key  crypto.PublicKey
+		want platformv1.KeyAlgorithm
+	}{
+		{"RSA-2048", rsaKey(2048), platformv1.KeyAlgorithm_KEY_ALGORITHM_RSA_2048},
+		{"RSA-3072", rsaKey(3072), platformv1.KeyAlgorithm_KEY_ALGORITHM_RSA_3072},
+		{"RSA-4096", rsaKey(4096), platformv1.KeyAlgorithm_KEY_ALGORITHM_RSA_4096},
+		{"RSA-1024 is not issued", rsaKey(1024), platformv1.KeyAlgorithm_KEY_ALGORITHM_UNSPECIFIED},
+		{"P-256", ecKey(elliptic.P256()), platformv1.KeyAlgorithm_KEY_ALGORITHM_ECDSA_P256},
+		{"P-384", ecKey(elliptic.P384()), platformv1.KeyAlgorithm_KEY_ALGORITHM_ECDSA_P384},
+		{"P-521", ecKey(elliptic.P521()), platformv1.KeyAlgorithm_KEY_ALGORITHM_ECDSA_P521},
+		{"P-224 is not issued", ecKey(elliptic.P224()), platformv1.KeyAlgorithm_KEY_ALGORITHM_UNSPECIFIED},
+		{"Ed25519", edPub, platformv1.KeyAlgorithm_KEY_ALGORITHM_ED25519},
+		{"unknown key type", struct{}{}, platformv1.KeyAlgorithm_KEY_ALGORITHM_UNSPECIFIED},
+		{"nil key", nil, platformv1.KeyAlgorithm_KEY_ALGORITHM_UNSPECIFIED},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, PublicKeyAlgorithm(tc.key))
 		})
 	}
 }

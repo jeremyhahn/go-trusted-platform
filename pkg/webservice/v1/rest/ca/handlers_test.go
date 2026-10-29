@@ -396,6 +396,18 @@ func newTestHandlers(ca xkmsca.TCGCA) (*CAHandlers, *mockHttpWriter) {
 	return handlers, writer
 }
 
+// testCertificateKey is the P-256 key every createTestCertificate fixture
+// carries, so the converters report the key algorithm from a real key.
+var testCertificateKey = mustGenerateP256Key()
+
+func mustGenerateP256Key() *ecdsa.PrivateKey {
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		panic(err)
+	}
+	return key
+}
+
 func createTestCertificate(cn string) *x509.Certificate {
 	serialNumber, _ := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
 	now := time.Now()
@@ -416,6 +428,7 @@ func createTestCertificate(cn string) *x509.Certificate {
 		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 		BasicConstraintsValid: true,
 		PublicKeyAlgorithm:    x509.ECDSA,
+		PublicKey:             testCertificateKey.Public(),
 		SignatureAlgorithm:    x509.ECDSAWithSHA256,
 	}
 }

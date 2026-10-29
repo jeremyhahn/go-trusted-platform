@@ -329,25 +329,8 @@ func (h *CAHandlers) certToSummaryProto(cert *x509.Certificate) *platformv1.Cert
 		NotBefore:    timestamppb.New(cert.NotBefore),
 		NotAfter:     timestamppb.New(cert.NotAfter),
 		Status:       status,
-		KeyAlgorithm: h.keyAlgorithmToProto(cert.PublicKeyAlgorithm),
+		KeyAlgorithm: issuance.PublicKeyAlgorithm(cert.PublicKey),
 	}
-}
-
-// keyAlgorithmToProto maps an x509 public-key algorithm to the proto
-// KeyAlgorithm enum. The proto enum is keyed by both algorithm and key
-// size, but the x509 type only carries the algorithm; we map RSA to its
-// most common 2048-bit form and ECDSA to P-256 to match the platform's
-// default issuance profile (see CertToSummaryProto callers).
-func (h *CAHandlers) keyAlgorithmToProto(alg x509.PublicKeyAlgorithm) platformv1.KeyAlgorithm {
-	switch alg {
-	case x509.RSA:
-		return platformv1.KeyAlgorithm_KEY_ALGORITHM_RSA_2048
-	case x509.ECDSA:
-		return platformv1.KeyAlgorithm_KEY_ALGORITHM_ECDSA_P256
-	case x509.Ed25519:
-		return platformv1.KeyAlgorithm_KEY_ALGORITHM_ED25519
-	}
-	return platformv1.KeyAlgorithm_KEY_ALGORITHM_UNSPECIFIED
 }
 
 // certStatusToProto computes the proto CertificateStatus based on the
@@ -417,7 +400,7 @@ func (h *CAHandlers) certToProto(cert *x509.Certificate, includePEM, includeDER 
 		NotBefore:          timestamppb.New(cert.NotBefore),
 		NotAfter:           timestamppb.New(cert.NotAfter),
 		Status:             h.certStatusToProto(cert),
-		KeyAlgorithm:       h.keyAlgorithmToProto(cert.PublicKeyAlgorithm),
+		KeyAlgorithm:       issuance.PublicKeyAlgorithm(cert.PublicKey),
 		SignatureAlgorithm: cert.SignatureAlgorithm.String(),
 		IsCa:               cert.IsCA,
 		MaxPathLen:         int32(cert.MaxPathLen),

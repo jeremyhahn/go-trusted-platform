@@ -217,6 +217,16 @@ the CA is reached with `issuance.UnsupportedKeyAlgorithmError`:
 `InvalidArgument` / 400 / `StatusInvalidRequest`, and a message that names
 the refused value and lists the supported ones.
 
+The QuicBaaS KMS keystore (`pkg/ca/quicbaas/keystore_adapter.go`) issues
+exactly RSA-2048, RSA-4096, P-256 or P-384. It refuses any other size or
+curve (RSA-3072, P-521 among them) with an `ErrInvalidInput` invalid-input
+error before the KMS is called, instead of substituting a different one.
+
+Every transport reports a certificate's `key_algorithm` from the issued key
+itself — the RSA modulus size, the ECDSA curve, or Ed25519 — through
+`issuance.PublicKeyAlgorithm`, the inverse of the table above. A key the
+table does not hold is reported as `KEY_ALGORITHM_UNSPECIFIED`.
+
 ---
 
 ## 3. ACME (RFC 8555)

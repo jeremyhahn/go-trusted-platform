@@ -1,7 +1,11 @@
 package issuance
 
 import (
+	"crypto"
+	"crypto/ecdsa"
+	"crypto/ed25519"
 	"crypto/elliptic"
+	"crypto/rsa"
 	"crypto/x509"
 
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
@@ -52,4 +56,56 @@ func KeyAttributes(alg platformv1.KeyAlgorithm, cn string, store xkmssdk.StoreTy
 		attrs.ECCAttributes = &xkmssdk.ECCAttributes{Curve: params.curve}
 	}
 	return attrs, nil
+}
+
+// keyShape identifies a public key by its algorithm and its size: the RSA
+// modulus length in bits or the elliptic curve name. Ed25519 has neither.
+type keyShape struct {
+	algorithm x509.PublicKeyAlgorithm
+	rsaBits   int
+	curve     string
+}
+
+// shape is the keyShape the parameters generate.
+func (p keyParams) shape() keyShape {
+	s := keyShape{algorithm: p.algorithm, rsaBits: p.rsaBits}
+	if p.curve != nil {
+		s.curve = p.curve.Params().Name
+	}
+	return s
+}
+
+// keyAlgorithmsByShape inverts keyAlgorithms, so the algorithm reported for
+// an issued key is always the one that would have generated it. The
+// UNSPECIFIED entry is a request default, not a key, and is left out.
+var keyAlgorithmsByShape = invertKeyAlgorithms()
+
+func invertKeyAlgorithms() map[keyShape]platformv1.KeyAlgorithm {
+	byShape := make(map[keyShape]platformv1.KeyAlgorithm, len(keyAlgorithms))
+	for alg, params := range keyAlgorithms {
+		if alg == platformv1.KeyAlgorithm_KEY_ALGORITHM_UNSPECIFIED {
+			continue
+		}
+		byShape[params.shape()] = alg
+	}
+	return byShape
+}
+
+// PublicKeyAlgorithm reports the protobuf key algorithm of a certificate's
+// public key, read from the key itself: the RSA modulus size, the ECDSA
+// curve, or Ed25519. A key type, size or curve the CA does not issue is
+// KEY_ALGORITHM_UNSPECIFIED.
+func PublicKeyAlgorithm(pub crypto.PublicKey) platformv1.KeyAlgorithm {
+	var s keyShape
+	switch key := pub.(type) {
+	case *rsa.PublicKey:
+		s = keyShape{algorithm: x509.RSA, rsaBits: key.N.BitLen()}
+	case *ecdsa.PublicKey:
+		s = keyShape{algorithm: x509.ECDSA, curve: key.Curve.Params().Name}
+	case ed25519.PublicKey:
+		s = keyShape{algorithm: x509.Ed25519}
+	default:
+		return platformv1.KeyAlgorithm_KEY_ALGORITHM_UNSPECIFIED
+	}
+	return keyAlgorithmsByShape[s]
 }

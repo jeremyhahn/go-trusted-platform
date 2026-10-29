@@ -739,19 +739,6 @@ func (s *CAGRPCService) keyAlgorithmToString(alg x509.PublicKeyAlgorithm) string
 	}
 }
 
-func (s *CAGRPCService) x509KeyAlgorithmToProto(alg x509.PublicKeyAlgorithm) platformv1.KeyAlgorithm {
-	switch alg {
-	case x509.RSA:
-		return platformv1.KeyAlgorithm_KEY_ALGORITHM_RSA_2048 // Default to 2048
-	case x509.ECDSA:
-		return platformv1.KeyAlgorithm_KEY_ALGORITHM_ECDSA_P256 // Default to P256
-	case x509.Ed25519:
-		return platformv1.KeyAlgorithm_KEY_ALGORITHM_ED25519
-	default:
-		return platformv1.KeyAlgorithm_KEY_ALGORITHM_UNSPECIFIED
-	}
-}
-
 func (s *CAGRPCService) certStatusToProto(cert *x509.Certificate) platformv1.CertificateStatus {
 	now := time.Now()
 	if now.Before(cert.NotBefore) {
@@ -916,7 +903,7 @@ func (s *CAGRPCService) certToProto(cert *x509.Certificate, includePEM, includeD
 		NotBefore:          timestamppb.New(cert.NotBefore),
 		NotAfter:           timestamppb.New(cert.NotAfter),
 		Status:             s.certStatusToProto(cert),
-		KeyAlgorithm:       s.x509KeyAlgorithmToProto(cert.PublicKeyAlgorithm),
+		KeyAlgorithm:       issuance.PublicKeyAlgorithm(cert.PublicKey),
 		SignatureAlgorithm: cert.SignatureAlgorithm.String(),
 		IsCa:               cert.IsCA,
 		MaxPathLen:         int32(cert.MaxPathLen),
@@ -967,7 +954,7 @@ func (s *CAGRPCService) certToSummaryProto(cert *x509.Certificate) *platformv1.C
 		NotBefore:    timestamppb.New(cert.NotBefore),
 		NotAfter:     timestamppb.New(cert.NotAfter),
 		Status:       s.certStatusToProto(cert),
-		KeyAlgorithm: s.x509KeyAlgorithmToProto(cert.PublicKeyAlgorithm),
+		KeyAlgorithm: issuance.PublicKeyAlgorithm(cert.PublicKey),
 	}
 }
 

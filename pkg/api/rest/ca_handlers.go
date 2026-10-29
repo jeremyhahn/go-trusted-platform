@@ -1381,7 +1381,7 @@ func (h *CAHandlers) certToProto(cert *x509.Certificate, includePEM, includeDER 
 		NotBefore:          timestamppb.New(cert.NotBefore),
 		NotAfter:           timestamppb.New(cert.NotAfter),
 		Status:             certStatusToProto(cert, time.Now()),
-		KeyAlgorithm:       keyAlgorithmToProto(cert.PublicKeyAlgorithm),
+		KeyAlgorithm:       issuance.PublicKeyAlgorithm(cert.PublicKey),
 		SignatureAlgorithm: cert.SignatureAlgorithm.String(),
 		IsCa:               cert.IsCA,
 		MaxPathLen:         int32(cert.MaxPathLen),
@@ -1425,20 +1425,6 @@ func certStatusToProto(cert *x509.Certificate, now time.Time) platformv1.Certifi
 		return platformv1.CertificateStatus_CERTIFICATE_STATUS_EXPIRED
 	}
 	return platformv1.CertificateStatus_CERTIFICATE_STATUS_VALID
-}
-
-// keyAlgorithmToProtoMap names each x509 public-key algorithm by its
-// default protobuf size, matching the gRPC CA service.
-var keyAlgorithmToProtoMap = map[x509.PublicKeyAlgorithm]platformv1.KeyAlgorithm{
-	x509.RSA:     platformv1.KeyAlgorithm_KEY_ALGORITHM_RSA_2048,
-	x509.ECDSA:   platformv1.KeyAlgorithm_KEY_ALGORITHM_ECDSA_P256,
-	x509.Ed25519: platformv1.KeyAlgorithm_KEY_ALGORITHM_ED25519,
-}
-
-// keyAlgorithmToProto maps an x509 public-key algorithm to its protobuf
-// enum; algorithms the CA does not issue map to UNSPECIFIED.
-func keyAlgorithmToProto(alg x509.PublicKeyAlgorithm) platformv1.KeyAlgorithm {
-	return keyAlgorithmToProtoMap[alg]
 }
 
 // decodeProto reads a protojson request body into msg. An empty body

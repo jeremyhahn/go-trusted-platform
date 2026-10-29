@@ -22,6 +22,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"io"
+	"strconv"
 	"strings"
 
 	quicbaassdk "github.com/jeremyhahn/go-quicbaas/sdk/go"
@@ -153,17 +154,43 @@ func (ks *QuicBaaSKeyStore) getPublicKey(ctx context.Context, keyID string) (cry
 	return publicKey, nil
 }
 
-// GenerateRSA generates a new RSA key pair using QuicBaaS KMS.
+// rsaKMSAlgorithms maps an RSA modulus size to the QuicBaaS KMS algorithm
+// that generates exactly that size. A size with no entry is refused: the
+// keystore never substitutes a different size for the one requested.
+var rsaKMSAlgorithms = map[int]kms.KeyAlgorithm{
+	2048: kms.AlgorithmRSA2048,
+	4096: kms.AlgorithmRSA4096,
+}
+
+// ecdsaKMSAlgorithms maps an elliptic curve name to the QuicBaaS KMS
+// algorithm that generates a key on exactly that curve. A curve with no
+// entry (P-521 among them) is refused rather than downgraded.
+var ecdsaKMSAlgorithms = map[string]kms.KeyAlgorithm{
+	"P-256": kms.AlgorithmECDSAP256,
+	"P-384": kms.AlgorithmECDSAP384,
+}
+
+// GenerateRSA generates a new RSA key pair using QuicBaaS KMS. A nil
+// RSAAttributes generates RSA-2048; any other size must have an exact KMS
+// algorithm, or the request is refused before the KMS is called.
 func (ks *QuicBaaSKeyStore) GenerateRSA(ctx context.Context, attrs *xkmssdk.KeyAttributes) (crypto.PrivateKey, error) {
 	if attrs == nil {
 		return nil, ErrInvalidInput{Field: "attrs", Reason: "key attributes are required"}
 	}
 
-	keyID := ks.keyIDFromAttrs(attrs)
 	algorithm := kms.AlgorithmRSA2048
-	if attrs.RSAAttributes != nil && attrs.RSAAttributes.KeySize >= 4096 {
-		algorithm = kms.AlgorithmRSA4096
+	if attrs.RSAAttributes != nil {
+		exact, ok := rsaKMSAlgorithms[attrs.RSAAttributes.KeySize]
+		if !ok {
+			return nil, ErrInvalidInput{
+				Field:  "RSAAttributes.KeySize",
+				Reason: "QuicBaaS KMS has no RSA-" + strconv.Itoa(attrs.RSAAttributes.KeySize) + " key; supported sizes are 2048 and 4096",
+			}
+		}
+		algorithm = exact
 	}
+
+	keyID := ks.keyIDFromAttrs(attrs)
 
 	req := &kms.GenerateKeyRequest{
 		Name:      keyID,
@@ -191,17 +218,31 @@ func (ks *QuicBaaSKeyStore) GenerateRSA(ctx context.Context, attrs *xkmssdk.KeyA
 	}, nil
 }
 
-// GenerateECDSA generates a new ECDSA key pair using QuicBaaS KMS.
+// GenerateECDSA generates a new ECDSA key pair using QuicBaaS KMS. A nil
+// ECCAttributes generates P-256; any other curve must have an exact KMS
+// algorithm, or the request is refused before the KMS is called.
 func (ks *QuicBaaSKeyStore) GenerateECDSA(ctx context.Context, attrs *xkmssdk.KeyAttributes) (crypto.PrivateKey, error) {
 	if attrs == nil {
 		return nil, ErrInvalidInput{Field: "attrs", Reason: "key attributes are required"}
 	}
 
-	keyID := ks.keyIDFromAttrs(attrs)
 	algorithm := kms.AlgorithmECDSAP256
-	if attrs.ECCAttributes != nil && attrs.ECCAttributes.Curve.Params().BitSize >= 384 {
-		algorithm = kms.AlgorithmECDSAP384
+	if attrs.ECCAttributes != nil {
+		if attrs.ECCAttributes.Curve == nil {
+			return nil, ErrInvalidInput{Field: "ECCAttributes.Curve", Reason: "curve is required"}
+		}
+		curve := attrs.ECCAttributes.Curve.Params().Name
+		exact, ok := ecdsaKMSAlgorithms[curve]
+		if !ok {
+			return nil, ErrInvalidInput{
+				Field:  "ECCAttributes.Curve",
+				Reason: "QuicBaaS KMS has no " + curve + " key; supported curves are P-256 and P-384",
+			}
+		}
+		algorithm = exact
 	}
+
+	keyID := ks.keyIDFromAttrs(attrs)
 
 	req := &kms.GenerateKeyRequest{
 		Name:      keyID,

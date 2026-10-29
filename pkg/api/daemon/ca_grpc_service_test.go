@@ -19,6 +19,7 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/rsa"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/hex"
@@ -1778,29 +1779,6 @@ func TestCAGRPCService_KeyAlgorithmToString(t *testing.T) {
 	}
 }
 
-func TestCAGRPCService_X509KeyAlgorithmToProto(t *testing.T) {
-	t.Parallel()
-
-	svc := &CAGRPCService{}
-
-	tests := []struct {
-		input    x509.PublicKeyAlgorithm
-		expected platformv1.KeyAlgorithm
-	}{
-		{x509.RSA, platformv1.KeyAlgorithm_KEY_ALGORITHM_RSA_2048},
-		{x509.ECDSA, platformv1.KeyAlgorithm_KEY_ALGORITHM_ECDSA_P256},
-		{x509.Ed25519, platformv1.KeyAlgorithm_KEY_ALGORITHM_ED25519},
-		{x509.DSA, platformv1.KeyAlgorithm_KEY_ALGORITHM_UNSPECIFIED},
-	}
-
-	for _, tc := range tests {
-		result := svc.x509KeyAlgorithmToProto(tc.input)
-		if result != tc.expected {
-			t.Errorf("x509KeyAlgorithmToProto(%v) = %v, want %v", tc.input, result, tc.expected)
-		}
-	}
-}
-
 func TestCAGRPCService_CertStatusToProto(t *testing.T) {
 	t.Parallel()
 
@@ -2199,6 +2177,60 @@ func TestCAGRPCService_CertToProto(t *testing.T) {
 			t.Error("expected IP addresses")
 		}
 	})
+}
+
+// selfSignedWithKey issues a self-signed certificate for the signer's key.
+func selfSignedWithKey(t *testing.T, signer crypto.Signer) *x509.Certificate {
+	t.Helper()
+	template := &x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject:      pkix.Name{CommonName: "keyalg.test"},
+		NotBefore:    time.Now(),
+		NotAfter:     time.Now().Add(time.Hour),
+	}
+	der, err := x509.CreateCertificate(rand.Reader, template, template, signer.Public(), signer)
+	if err != nil {
+		t.Fatalf("create certificate: %v", err)
+	}
+	cert, err := x509.ParseCertificate(der)
+	if err != nil {
+		t.Fatalf("parse certificate: %v", err)
+	}
+	return cert
+}
+
+// TestCAGRPCService_CertToProto_ReportsIssuedKeyAlgorithm reports the size
+// and curve of the certificate's own key, not a per-algorithm default.
+func TestCAGRPCService_CertToProto_ReportsIssuedKeyAlgorithm(t *testing.T) {
+	t.Parallel()
+
+	rsaKey, err := rsa.GenerateKey(rand.Reader, 4096)
+	if err != nil {
+		t.Fatalf("generate RSA-4096: %v", err)
+	}
+	ecKey, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
+	if err != nil {
+		t.Fatalf("generate P-384: %v", err)
+	}
+
+	svc := &CAGRPCService{}
+	cases := []struct {
+		name   string
+		signer crypto.Signer
+		want   platformv1.KeyAlgorithm
+	}{
+		{"RSA-4096", rsaKey, platformv1.KeyAlgorithm_KEY_ALGORITHM_RSA_4096},
+		{"P-384", ecKey, platformv1.KeyAlgorithm_KEY_ALGORITHM_ECDSA_P384},
+	}
+	for _, tc := range cases {
+		cert := selfSignedWithKey(t, tc.signer)
+		if got := svc.certToProto(cert, false, false).GetKeyAlgorithm(); got != tc.want {
+			t.Errorf("%s: certToProto key algorithm = %v, want %v", tc.name, got, tc.want)
+		}
+		if got := svc.certToSummaryProto(cert).GetKeyAlgorithm(); got != tc.want {
+			t.Errorf("%s: certToSummaryProto key algorithm = %v, want %v", tc.name, got, tc.want)
+		}
+	}
 }
 
 func TestCAGRPCService_CertToSummaryProto(t *testing.T) {
