@@ -3,13 +3,19 @@
  *
  * `pkg/webservice/v1/rest/vtpm/handlers.go` decodes a flat snake_case body
  * with unknown fields refused, and parses the mode and EK algorithm from the
- * strings in pkg/vtpm/types.go. These tests pin that body for every enum value.
+ * strings in pkg/vtpm/types.go. These tests pin that body for every enum value,
+ * and decode the bundle / template the handler writes back through ApiClient.
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { VTPMService, InvalidDeviceProfileIdError } from '../vtpm-service.js';
-import type { ApiClient } from '../../client/api-client.js';
-import type { BundleMode, EKAlgorithm } from '../../types/vtpm.js';
+import { ApiClient } from '../../client/api-client.js';
+import type {
+  BundleMode,
+  CreateBundleResponse,
+  CreateTemplateResponse,
+  EKAlgorithm,
+} from '../../types/vtpm.js';
 
 function createMockApiClient(): ApiClient {
   return {
@@ -126,5 +132,94 @@ describe('VTPMService create request bodies', () => {
       ek_algorithm: 'RSA',
       secure_boot_enabled: false,
     });
+  });
+});
+
+/** An ApiClient whose fetch answers every request with `envelope` as JSON. */
+function apiClientAnswering(envelope: unknown): { client: ApiClient; requests: Request[] } {
+  const requests: Request[] = [];
+  const fetchImpl = ((input: RequestInfo | URL, init?: RequestInit) => {
+    requests.push(new Request(input, init));
+    return Promise.resolve(
+      new Response(JSON.stringify(envelope), { status: 200, headers: { 'content-type': 'application/json' } })
+    );
+  }) as typeof fetch;
+  const client = new ApiClient({ baseUrl: 'https://platform.test', fetch: fetchImpl, retry: { maxRetries: 0 } });
+  return { client, requests };
+}
+
+describe('VTPMService create responses decoded through ApiClient', () => {
+  // The restwire.WebServiceResponse envelope Success200 writes around
+  // h.bundleToResponse / h.templateToResponse (pkg/webservice/v1/rest/vtpm).
+  const bundlePayload = {
+    id: 'test-bundle-123',
+    mode: 'pre-assigned',
+    manifest: {
+      version: '1',
+      id: 'test-bundle-123',
+      mode: 'pre-assigned',
+      hostname: 'h1',
+      created_at: '2026-01-01T00:00:00Z',
+      ek_algorithm: 'ECC',
+      ek_handle: 2164326401,
+      secure_boot_enabled: true,
+      device_profile_id: 9,
+    },
+    tpm_state: { state_dir: '/var/lib/vtpm/bundles/test-bundle-123/tpm', permall_file: 'tpm2-00.permall' },
+    ovmf_state: { nvram_file: 'OVMF_VARS.fd' },
+    created_at: '2026-01-01T00:00:00Z',
+  };
+  const templatePayload = {
+    id: 'test-template',
+    description: 'base',
+    tpm_state_dir: '/var/lib/vtpm/templates/test-template/tpm',
+    nvram_path: '/var/lib/vtpm/templates/test-template/ovmf/OVMF_VARS.fd',
+    ek_algorithm: 'RSA',
+    secure_boot_enabled: false,
+    created_at: '2026-01-01T00:00:00Z',
+  };
+
+  it('createBundle returns the created bundle, its generated ID readable as data.id', async () => {
+    const { client, requests } = apiClientAnswering({ code: 200, error: '', success: true, payload: bundlePayload });
+
+    const response = await new VTPMService(client).createBundle({ options: { hostname: 'h1', deviceProfileId: '9' } });
+
+    expect(requests.map((r) => `${r.method} ${r.url}`)).toEqual(['POST https://platform.test/v1/vtpm/bundles']);
+    expect(response.error).toBeUndefined();
+    const bundle: CreateBundleResponse | undefined = response.data;
+    expect(bundle?.id).toBe('test-bundle-123');
+    expect(bundle?.manifest?.ek_algorithm).toBe('ECC');
+    expect(bundle?.tpm_state?.state_dir).toBe('/var/lib/vtpm/bundles/test-bundle-123/tpm');
+    expect(bundle).toEqual(bundlePayload);
+  });
+
+  it('createTemplate returns the created template, its ID readable as data.id', async () => {
+    const { client, requests } = apiClientAnswering({ code: 200, error: '', success: true, payload: templatePayload });
+
+    const response = await new VTPMService(client).createTemplate({ options: { id: 'test-template' } });
+
+    expect(requests.map((r) => `${r.method} ${r.url}`)).toEqual(['POST https://platform.test/v1/vtpm/templates']);
+    expect(response.error).toBeUndefined();
+    const template: CreateTemplateResponse | undefined = response.data;
+    expect(template?.id).toBe('test-template');
+    expect(template?.nvram_path).toBe('/var/lib/vtpm/templates/test-template/ovmf/OVMF_VARS.fd');
+    expect(template).toEqual(templatePayload);
+  });
+
+  it('createBundle reports a daemon refusal as the error, with no bundle', async () => {
+    const fetchImpl = (() =>
+      Promise.resolve(
+        new Response(JSON.stringify({ code: 400, error: 'hostname is required', success: false, payload: null }), {
+          status: 400,
+          headers: { 'content-type': 'application/json' },
+        })
+      )) as typeof fetch;
+    const client = new ApiClient({ baseUrl: 'https://platform.test', fetch: fetchImpl, retry: { maxRetries: 0 } });
+
+    const response = await new VTPMService(client).createBundle({ options: {} });
+
+    expect(response.data).toBeUndefined();
+    expect(response.error?.status).toBe(400);
+    expect(response.error?.message).toBe('hostname is required');
   });
 });
