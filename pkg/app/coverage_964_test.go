@@ -9,19 +9,19 @@ import (
 	"path/filepath"
 	"testing"
 
+	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	trustedca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/acme"
 	quicbaasca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/ca"
-	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	"github.com/stretchr/testify/require"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/common"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/dns"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/dns/entities"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/storage/quicbaas"
 	localcertstore "github.com/jeremyhahn/go-trusted-platform/pkg/store/certstore"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/object"
 	v1 "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/storage/quicbaas"
 )
 
 // newStoresHarness is the integration template's App with the QuicBaaS
@@ -51,7 +51,6 @@ func newCAHarness(t *testing.T) *App {
 	t.Cleanup(func() { disklessCmdlinePath = restore })
 	disklessCmdlinePath = filepath.Join(t.TempDir(), "cmdline")
 	require.NoError(t, os.WriteFile(disklessCmdlinePath, []byte("console=ttyS0\n"), 0o600))
-
 
 	partition := "objects/tpm2"
 	objects, err := object.NewObjectStore(a.Logger, a.Storage, a.PlatformDir, &partition)
