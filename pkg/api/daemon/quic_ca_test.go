@@ -163,6 +163,11 @@ func (m *mockCAForDaemon) IssueCertificate(_ context.Context, req *xkmsca.CACert
 	}
 	return &xkmsca.IssuedCertificate{Certificate: cert}, nil
 }
+
+// IssueCertificateWithProfile issues as IssueCertificate.
+func (m *mockCAForDaemon) IssueCertificateWithProfile(ctx context.Context, req *xkmsca.CACertificateRequest, _ string) (*xkmsca.IssuedCertificate, error) {
+	return m.IssueCertificate(ctx, req)
+}
 func (m *mockCAForDaemon) RevokeCert(_ context.Context, cert *x509.Certificate, _ xkmsca.RevokeOptions) error {
 	m.revokedCerts = append(m.revokedCerts, cert)
 	return nil
