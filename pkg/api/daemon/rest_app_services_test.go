@@ -124,7 +124,11 @@ func appServicesRESTHandler(t *testing.T, servers appServiceServers) http.Handle
 	guard, err := newRESTScopeGuard(config, nil, logging.DefaultLogger())
 	require.NoError(t, err)
 
-	s := newTestRESTServerForPhase35(t)
+	// The server names the same operator trust domain as the guard, so the
+	// installer boundary admits the operator certificate below.
+	serverConfig := DefaultConfig()
+	serverConfig.MTLSOperatorTrustDomain = testOperatorTrustDomain
+	s := newTestRESTServerWithConfig(t, serverConfig)
 	s.SetAppServiceHandlers(servers.restServers(), guard)
 
 	// The httptest listener does not ask for a client certificate, so the
