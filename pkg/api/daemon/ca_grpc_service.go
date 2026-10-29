@@ -140,12 +140,6 @@ func (s *CAGRPCService) IssueCertificate(ctx context.Context, req *platformv1.Is
 		return nil, status.Error(codes.InvalidArgument, "common name is required")
 	}
 
-	// Parse key algorithm
-	keyAlg, err := s.protoKeyAlgorithmToX509(certReq.GetKeyAlgorithm())
-	if err != nil {
-		return nil, status.Error(codes.InvalidArgument, err.Error())
-	}
-
 	// Build certificate request
 	caReq := &quicbaasca.CACertificateRequest{
 		Subject: quicbaasca.CASubject{
@@ -182,11 +176,9 @@ func (s *CAGRPCService) IssueCertificate(ctx context.Context, req *platformv1.Is
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
 
-	caReq.KeyAttributes = &xkmssdk.KeyAttributes{
-		CN:           subject.GetCommonName(),
-		KeyAlgorithm: keyAlg,
-		StoreType:    storeType,
-		KeyType:      xkmssdk.KeyTypeTLS,
+	caReq.KeyAttributes, err = issuance.KeyAttributes(certReq.GetKeyAlgorithm(), subject.GetCommonName(), storeType)
+	if err != nil {
+		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
 
 	// Issue the certificate
@@ -733,25 +725,6 @@ func (s *CAGRPCService) checkRevocationViaObjectStore(cert *x509.Certificate) bo
 }
 
 // Helper functions
-
-func (s *CAGRPCService) protoKeyAlgorithmToX509(alg platformv1.KeyAlgorithm) (x509.PublicKeyAlgorithm, error) {
-	switch alg {
-	case platformv1.KeyAlgorithm_KEY_ALGORITHM_RSA_2048,
-		platformv1.KeyAlgorithm_KEY_ALGORITHM_RSA_3072,
-		platformv1.KeyAlgorithm_KEY_ALGORITHM_RSA_4096:
-		return x509.RSA, nil
-	case platformv1.KeyAlgorithm_KEY_ALGORITHM_ECDSA_P256,
-		platformv1.KeyAlgorithm_KEY_ALGORITHM_ECDSA_P384,
-		platformv1.KeyAlgorithm_KEY_ALGORITHM_ECDSA_P521:
-		return x509.ECDSA, nil
-	case platformv1.KeyAlgorithm_KEY_ALGORITHM_ED25519:
-		return x509.Ed25519, nil
-	case platformv1.KeyAlgorithm_KEY_ALGORITHM_UNSPECIFIED:
-		return x509.ECDSA, nil // Default to ECDSA
-	default:
-		return 0, ErrInvalidConfig{Reason: "unsupported key algorithm"}
-	}
-}
 
 func (s *CAGRPCService) keyAlgorithmToString(alg x509.PublicKeyAlgorithm) string {
 	switch alg {

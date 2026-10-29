@@ -589,12 +589,6 @@ func (h *CAHandlers) handleIssueCertificate(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	keyAlg, err := protoKeyAlgorithmToX509(certReq.GetKeyAlgorithm())
-	if err != nil {
-		h.writeError(w, http.StatusBadRequest, err)
-		return
-	}
-
 	// Build certificate request
 	caReq := &quicbaasca.CACertificateRequest{
 		Subject: quicbaasca.CASubject{
@@ -631,11 +625,10 @@ func (h *CAHandlers) handleIssueCertificate(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	caReq.KeyAttributes = &xkmssdk.KeyAttributes{
-		CN:           subject.GetCommonName(),
-		KeyAlgorithm: keyAlg,
-		StoreType:    storeType,
-		KeyType:      xkmssdk.KeyTypeTLS,
+	caReq.KeyAttributes, err = issuance.KeyAttributes(certReq.GetKeyAlgorithm(), subject.GetCommonName(), storeType)
+	if err != nil {
+		h.writeError(w, http.StatusBadRequest, err)
+		return
 	}
 
 	// Issue the certificate
@@ -1446,29 +1439,6 @@ var keyAlgorithmToProtoMap = map[x509.PublicKeyAlgorithm]platformv1.KeyAlgorithm
 // enum; algorithms the CA does not issue map to UNSPECIFIED.
 func keyAlgorithmToProto(alg x509.PublicKeyAlgorithm) platformv1.KeyAlgorithm {
 	return keyAlgorithmToProtoMap[alg]
-}
-
-// protoKeyAlgorithmMap maps the protobuf key algorithms the CA can issue to
-// their x509 algorithm. UNSPECIFIED selects the ECDSA default.
-var protoKeyAlgorithmMap = map[platformv1.KeyAlgorithm]x509.PublicKeyAlgorithm{
-	platformv1.KeyAlgorithm_KEY_ALGORITHM_UNSPECIFIED: x509.ECDSA,
-	platformv1.KeyAlgorithm_KEY_ALGORITHM_RSA_2048:    x509.RSA,
-	platformv1.KeyAlgorithm_KEY_ALGORITHM_RSA_3072:    x509.RSA,
-	platformv1.KeyAlgorithm_KEY_ALGORITHM_RSA_4096:    x509.RSA,
-	platformv1.KeyAlgorithm_KEY_ALGORITHM_ECDSA_P256:  x509.ECDSA,
-	platformv1.KeyAlgorithm_KEY_ALGORITHM_ECDSA_P384:  x509.ECDSA,
-	platformv1.KeyAlgorithm_KEY_ALGORITHM_ECDSA_P521:  x509.ECDSA,
-	platformv1.KeyAlgorithm_KEY_ALGORITHM_ED25519:     x509.Ed25519,
-}
-
-// protoKeyAlgorithmToX509 maps a requested protobuf key algorithm to the
-// x509 algorithm the CA issues, rejecting algorithms it cannot issue.
-func protoKeyAlgorithmToX509(alg platformv1.KeyAlgorithm) (x509.PublicKeyAlgorithm, error) {
-	keyAlg, ok := protoKeyAlgorithmMap[alg]
-	if !ok {
-		return x509.UnknownPublicKeyAlgorithm, ErrInvalidKeyAlgorithm{Algorithm: alg.String()}
-	}
-	return keyAlg, nil
 }
 
 // decodeProto reads a protojson request body into msg. An empty body

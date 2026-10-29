@@ -790,13 +790,6 @@ func (h *CAHandlers) IssueCertificate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	keyAlg, err := h.protoKeyAlgorithmToX509(certReq.GetKeyAlgorithm())
-	if err != nil {
-		protorest.WriteError(w, r, h.respWriter,
-			status.Error(codes.InvalidArgument, err.Error()))
-		return
-	}
-
 	caReq := &quicbaasca.CACertificateRequest{
 		Subject: quicbaasca.CASubject{
 			CommonName:         subject.GetCommonName(),
@@ -831,11 +824,11 @@ func (h *CAHandlers) IssueCertificate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	caReq.KeyAttributes = &xkmssdk.KeyAttributes{
-		CN:           subject.GetCommonName(),
-		KeyAlgorithm: keyAlg,
-		StoreType:    storeType,
-		KeyType:      xkmssdk.KeyTypeTLS,
+	caReq.KeyAttributes, err = issuance.KeyAttributes(certReq.GetKeyAlgorithm(), subject.GetCommonName(), storeType)
+	if err != nil {
+		protorest.WriteError(w, r, h.respWriter,
+			status.Error(codes.InvalidArgument, err.Error()))
+		return
 	}
 
 	issued, err := h.ca.IssueCertificate(r.Context(), caReq)
@@ -914,25 +907,6 @@ func (h *CAHandlers) writeIssued(w http.ResponseWriter, r *http.Request, cert *x
 // protoKeyAlgorithmToX509 converts the proto KeyAlgorithm enum back to
 // an x509 PublicKeyAlgorithm. UNSPECIFIED defaults to ECDSA to match the
 // CA's default issuance profile.
-func (h *CAHandlers) protoKeyAlgorithmToX509(alg platformv1.KeyAlgorithm) (x509.PublicKeyAlgorithm, error) {
-	switch alg {
-	case platformv1.KeyAlgorithm_KEY_ALGORITHM_UNSPECIFIED:
-		return x509.ECDSA, nil
-	case platformv1.KeyAlgorithm_KEY_ALGORITHM_RSA_2048,
-		platformv1.KeyAlgorithm_KEY_ALGORITHM_RSA_3072,
-		platformv1.KeyAlgorithm_KEY_ALGORITHM_RSA_4096:
-		return x509.RSA, nil
-	case platformv1.KeyAlgorithm_KEY_ALGORITHM_ECDSA_P256,
-		platformv1.KeyAlgorithm_KEY_ALGORITHM_ECDSA_P384,
-		platformv1.KeyAlgorithm_KEY_ALGORITHM_ECDSA_P521:
-		return x509.ECDSA, nil
-	case platformv1.KeyAlgorithm_KEY_ALGORITHM_ED25519:
-		return x509.Ed25519, nil
-	default:
-		return 0, ErrInvalidKeyAlgorithm{Algorithm: alg.String()}
-	}
-}
-
 // RevokeCertificate handles DELETE /api/v1/ca/certificates/{serial}.
 //
 // Decodes platformv1.RevokeCertificateRequest from the optional body

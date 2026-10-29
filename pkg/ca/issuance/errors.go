@@ -46,6 +46,19 @@ func (e *UnknownStoreTypeError) invalidRequest() {}
 
 // UnknownRevocationReasonError is a revocation reason that is not an
 // RFC 5280 §5.3.1 CRLReason code.
+// UnsupportedKeyAlgorithmError is a requested key algorithm the CA cannot
+// issue a certificate key for.
+type UnsupportedKeyAlgorithmError struct {
+	Algorithm string
+}
+
+func (e *UnsupportedKeyAlgorithmError) Error() string {
+	return "unsupported key algorithm " + strconv.Quote(e.Algorithm) +
+		": use RSA_2048, RSA_3072, RSA_4096, ECDSA_P256, ECDSA_P384, ECDSA_P521 or ED25519"
+}
+
+func (e *UnsupportedKeyAlgorithmError) invalidRequest() {}
+
 type UnknownRevocationReasonError struct {
 	Code int
 }

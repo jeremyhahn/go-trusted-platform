@@ -215,9 +215,6 @@ func (s *CAGRPCService) IssueCertificate(
 		return nil, status.Error(codes.InvalidArgument, ErrMissingCommonName{}.Error())
 	}
 
-	// Parse key algorithm
-	keyAlg := s.protoAlgorithmToX509(certReq.GetKeyAlgorithm())
-
 	// Build certificate request
 	caReq := &quicbaasca.CACertificateRequest{
 		Subject: quicbaasca.CASubject{
@@ -254,11 +251,9 @@ func (s *CAGRPCService) IssueCertificate(
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
 
-	caReq.KeyAttributes = &xkmssdk.KeyAttributes{
-		CN:           subject.GetCommonName(),
-		KeyAlgorithm: keyAlg,
-		StoreType:    storeType,
-		KeyType:      xkmssdk.KeyTypeTLS,
+	caReq.KeyAttributes, err = issuance.KeyAttributes(certReq.GetKeyAlgorithm(), subject.GetCommonName(), storeType)
+	if err != nil {
+		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
 
 	// Issue the certificate
@@ -1159,23 +1154,6 @@ func (s *CAGRPCService) x509AlgorithmToProto(alg x509.PublicKeyAlgorithm) platfo
 }
 
 // protoAlgorithmToX509 converts a proto KeyAlgorithm to x509.PublicKeyAlgorithm.
-func (s *CAGRPCService) protoAlgorithmToX509(alg platformv1.KeyAlgorithm) x509.PublicKeyAlgorithm {
-	switch alg {
-	case platformv1.KeyAlgorithm_KEY_ALGORITHM_RSA_2048,
-		platformv1.KeyAlgorithm_KEY_ALGORITHM_RSA_3072,
-		platformv1.KeyAlgorithm_KEY_ALGORITHM_RSA_4096:
-		return x509.RSA
-	case platformv1.KeyAlgorithm_KEY_ALGORITHM_ECDSA_P256,
-		platformv1.KeyAlgorithm_KEY_ALGORITHM_ECDSA_P384,
-		platformv1.KeyAlgorithm_KEY_ALGORITHM_ECDSA_P521:
-		return x509.ECDSA
-	case platformv1.KeyAlgorithm_KEY_ALGORITHM_ED25519:
-		return x509.Ed25519
-	default:
-		return x509.ECDSA // Default to ECDSA
-	}
-}
-
 // keyUsageToStrings converts x509.KeyUsage to string slice.
 func (s *CAGRPCService) keyUsageToStrings(usage x509.KeyUsage) []string {
 	var usages []string
