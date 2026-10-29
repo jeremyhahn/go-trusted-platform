@@ -148,6 +148,7 @@ function toWireCreateTemplate(options: CreateTemplateOptions): WireCreateTemplat
  *     deviceProfileId: '4242',
  *   }
  * });
+ * // The daemon returns the bundle itself: bundle.data?.id is its generated ID.
  *
  * // Clone from template
  * const cloned = await client.vtpm.cloneTemplate({
