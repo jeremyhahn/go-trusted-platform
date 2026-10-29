@@ -179,10 +179,19 @@ subject organization: on those methods alone the gRPC interceptor, the QUIC
 guard and the MCP checker admit a verified certificate the authenticator
 refused only for having no tenant, and WebhookComplete then admits it only if
 its fingerprint is the one SetDeviceInstalling bound, as REST does. On every
-other method such a certificate is refused as unauthenticated. Only the operator's admin certificate is
-granted the platform API; see
-[`docs/auth/architecture.md`](../auth/architecture.md) §5, *The two mTLS
-principals*.
+other method such a certificate is refused as unauthenticated. A verified client
+certificate falls in one of three classes (Codex 8279 P1-f). The **operator**
+(subject O the system tenant and SPIFFE ID
+`spiffe://<td>/tenant/system/user/admin`) and a **tenant principal** (exactly
+one subject O that is not the system tenant, plus a SPIFFE ID
+`spiffe://<td>/tenant/<that O>/user/<name>` in the operator trust domain) are
+granted the platform API, and tenant authorization then limits the tenant
+principal to its tenant. Every other certificate, every machine certificate
+included, is an **installer** and reaches only the installer methods above. A
+certificate's subject O alone never grants a scope: the daemon's own client
+certificate carries O "Trusted Platform" and no tenant user SPIFFE ID, so it
+stays an installer. See
+[`docs/auth/architecture.md`](../auth/architecture.md) §5.
 
 **The daemon REST listener enforces the boundary itself (Codex 8242).** Many
 daemon REST routes have no scope guard, among them

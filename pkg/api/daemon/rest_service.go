@@ -602,7 +602,7 @@ func (s *RESTServer) installerBoundaryMiddleware(next http.Handler) http.Handler
 			next.ServeHTTP(w, r)
 			return
 		}
-		if isMTLSOperator(r.TLS.VerifiedChains[0][0], s.config.MTLSOperatorTrustDomain) {
+		if isMTLSPrincipal(r.TLS.VerifiedChains[0][0], s.config.MTLSOperatorTrustDomain) {
 			next.ServeHTTP(w, r)
 			return
 		}

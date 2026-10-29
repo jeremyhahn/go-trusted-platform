@@ -385,6 +385,105 @@ func TestMTLSInstallerScope_RESTPrivilegedRoutesRefuseTheInstaller(t *testing.T)
 	assert.Empty(t, kms.deleted, "a refused delete must leave the key in place")
 }
 
+// TestMTLSInstallerScope_TenantPrincipalClasses proves the three mTLS
+// classes (Codex 8279 P1-f). The operator and a tenant principal, named by
+// one non-system subject O and that tenant's user SPIFFE ID, get the
+// platform grant; every other certificate, the daemon's own shape
+// included, stays an installer (Codex 8242).
+func TestMTLSInstallerScope_TenantPrincipalClasses(t *testing.T) {
+	f := newInstallerScopeFixture(t)
+	td := testOperatorTrustDomain
+	spiffeID := func(host, path string) *url.URL {
+		return &url.URL{Scheme: "spiffe", Host: host, Path: path}
+	}
+	acme := pkix.Name{CommonName: "alice", Organization: []string{"acme"}}
+	acmeUser := spiffeID(td, "/tenant/acme/user/alice")
+	rows := []struct {
+		name    string
+		subject pkix.Name
+		uris    []*url.URL
+		want    bool
+	}{
+		{"tenant user", acme, []*url.URL{acmeUser}, true},
+		{"tenant O without URI", acme, nil, false},
+		{"daemon certificate shape", pkix.Name{CommonName: "platformd", Organization: []string{"Trusted Platform"}}, nil, false},
+		{"URI names another tenant", acme, []*url.URL{spiffeID(td, "/tenant/other/user/alice")}, false},
+		{"URI in another trust domain", acme, []*url.URL{spiffeID("wrong.example", "/tenant/acme/user/alice")}, false},
+		{"empty user name", acme, []*url.URL{spiffeID(td, "/tenant/acme/user/")}, false},
+		{"nested user name", acme, []*url.URL{spiffeID(td, "/tenant/acme/user/a/b")}, false},
+		{"two organizations", pkix.Name{CommonName: "alice", Organization: []string{"acme", "beta"}}, []*url.URL{acmeUser}, false},
+		{"system tenant user", pkix.Name{CommonName: "alice", Organization: []string{app.SystemTenantID}},
+			[]*url.URL{spiffeID(td, "/tenant/"+app.SystemTenantID+"/user/alice")}, false},
+	}
+	guard := f.quicGuard(t)
+	check := func(t *testing.T, leaf *x509.Certificate, want bool) {
+		t.Helper()
+		assert.Equal(t, want, isMTLSPrincipal(leaf, td))
+		if want {
+			assert.Equal(t, []string{"*:*"}, mtlsGrantFor(leaf, td))
+		} else {
+			assert.Nil(t, mtlsGrantFor(leaf, td))
+		}
+
+		server, managed, _ := newInstallerBoundaryServer(t, f)
+		stop := serveAs(server, leaf, http.MethodPost, "/api/v1/services/boundary-svc/stop")
+		if want {
+			assert.NotEqual(t, http.StatusForbidden, stop.Code, "a principal must reach a privileged REST route")
+			assert.NotZero(t, managed.stopCount.Load(), "a principal's stop must reach the service")
+		} else {
+			assert.Equal(t, http.StatusForbidden, stop.Code, "an installer must not stop a service")
+			assert.Zero(t, managed.stopCount.Load(), "a refused stop must leave the service running")
+		}
+
+		_, resp := guard(leaf, quicwire.PXESubStopService)
+		if want {
+			assert.Nil(t, resp, "a principal must pass the QUIC guard on a PXE write")
+		} else if assert.NotNil(t, resp, "an installer must not stop the PXE service over QUIC") {
+			assert.Equal(t, quicwire.StatusPermissionDenied, resp.Status)
+		}
+	}
+	for i, row := range rows {
+		t.Run(row.name, func(t *testing.T) {
+			check(t, f.issuerA.issueClient(t, int64(200+i), row.subject, row.uris), row.want)
+		})
+	}
+	t.Run("operator", func(t *testing.T) { check(t, f.operator, true) })
+	t.Run("no trust domain", func(t *testing.T) {
+		leaf := f.issuerA.issueClient(t, 300, acme, []*url.URL{acmeUser})
+		assert.False(t, isMTLSTenantPrincipal(leaf, ""))
+	})
+}
+
+// TestMTLSInstallerScope_GRPCAdmitsTenantPrincipal proves the gRPC
+// interceptor lets a tenant principal reach a method outside the installer
+// list and still refuses a certificate whose subject O alone names a tenant.
+func TestMTLSInstallerScope_GRPCAdmitsTenantPrincipal(t *testing.T) {
+	f := newInstallerScopeFixture(t)
+	call := func(leaf *x509.Certificate) (bool, error) {
+		reached := false
+		_, err := f.unary(t)(grpcContext(verifiedState(leaf)), &platformv1.UpdatePXEStateRequest{},
+			&grpc.UnaryServerInfo{FullMethod: platformv1.PXEService_UpdateState_FullMethodName},
+			func(_ context.Context, _ interface{}) (interface{}, error) {
+				reached = true
+				return nil, nil
+			})
+		return reached, err
+	}
+	acme := pkix.Name{CommonName: "alice", Organization: []string{"acme"}}
+
+	t.Run("tenant principal", func(t *testing.T) {
+		uri := &url.URL{Scheme: "spiffe", Host: testOperatorTrustDomain, Path: "/tenant/acme/user/alice"}
+		reached, err := call(f.issuerA.issueClient(t, 310, acme, []*url.URL{uri}))
+		require.NoError(t, err)
+		assert.True(t, reached, "a tenant principal must reach the handler")
+	})
+	t.Run("organization only", func(t *testing.T) {
+		reached, err := call(f.issuerA.issueClient(t, 311, acme, nil))
+		assert.Equal(t, codes.PermissionDenied, status.Code(err))
+		assert.False(t, reached, "an O-only certificate must not reach the handler")
+	})
+}
+
 func TestMTLSInstallerScope_OperatorReachesRESTPrivilegedRoutes(t *testing.T) {
 	f := newInstallerScopeFixture(t)
 	server, managed, kms := newInstallerBoundaryServer(t, f)

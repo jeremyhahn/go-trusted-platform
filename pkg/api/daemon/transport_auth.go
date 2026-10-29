@@ -242,6 +242,7 @@ func selectQUICAuth(config *Config, shared *platformTokenValidator, clientCAPool
 //     spiffe://<trust domain>/tenant/<system tenant>/user/<admin> and carries
 //     the system tenant as its subject organization. It is granted every
 //     operation (mtlsOperatorScope).
+//
 //   - an installer, holding the certificate the installer presents to complete
 //     an install. Its SHA-256 is bound to one device through PXE UpdateState,
 //     and it authorizes only the install-completion webhook, which checks that
@@ -249,7 +250,17 @@ func selectQUICAuth(config *Config, shared *platformTokenValidator, clientCAPool
 //     and MCP operation refuses it; the gRPC interceptors, the QUIC guard and
 //     the MCP checker admit it only to the methods in mtlsInstallerMethods.
 //
-// Any certificate that is not positively the operator is an installer.
+//   - a tenant principal, holding a tenant admin or user certificate. Its leaf
+//     carries exactly one subject organization, a tenant other than the system
+//     tenant, and names the same tenant in the SPIFFE ID
+//     spiffe://<trust domain>/tenant/<tenant>/user/<name>. It is granted every
+//     operation (mtlsOperatorScope), which tenant authorization then limits to
+//     its own tenant.
+//
+// Any certificate that is positively neither the operator nor a tenant
+// principal is an installer. That includes every machine certificate: the
+// daemon's and the ISO-built certificates carry a non-system organization but
+// no /user/ SPIFFE ID, so a subject organization alone never grants a scope.
 const mtlsOperatorScope = "*:*"
 
 // mtlsInstallerMethods are the only methods an installer certificate may
@@ -287,12 +298,55 @@ func isMTLSOperatorSPIFFEID(uri *url.URL, trustDomain string) bool {
 }
 
 // mtlsGrantFor is the scope grant of the principal leaf authenticates: every
-// operation for the operator, nothing for an installer.
+// operation for the operator and a tenant principal, nothing for an installer.
 func mtlsGrantFor(leaf *x509.Certificate, trustDomain string) []string {
-	if isMTLSOperator(leaf, trustDomain) {
+	if isMTLSPrincipal(leaf, trustDomain) {
 		return []string{mtlsOperatorScope}
 	}
 	return nil
+}
+
+// isMTLSPrincipal reports whether leaf may go beyond the installer methods:
+// it is the operator or a tenant principal for trustDomain.
+func isMTLSPrincipal(leaf *x509.Certificate, trustDomain string) bool {
+	return isMTLSOperator(leaf, trustDomain) || isMTLSTenantPrincipal(leaf, trustDomain)
+}
+
+// isMTLSTenantPrincipal reports whether leaf is a tenant principal for
+// trustDomain: exactly one subject organization, not the system tenant, and a
+// SPIFFE ID spiffe://<trustDomain>/tenant/<that organization>/user/<name>. An
+// empty trustDomain names no principal, so it fails closed.
+func isMTLSTenantPrincipal(leaf *x509.Certificate, trustDomain string) bool {
+	if leaf == nil || trustDomain == "" {
+		return false
+	}
+	if len(leaf.Subject.Organization) != 1 {
+		return false
+	}
+	tenant := leaf.Subject.Organization[0]
+	if tenant == "" || tenant == app.SystemTenantID {
+		return false
+	}
+	for _, uri := range leaf.URIs {
+		if isMTLSTenantUserSPIFFEID(uri, trustDomain, tenant) {
+			return true
+		}
+	}
+	return false
+}
+
+// isMTLSTenantUserSPIFFEID reports whether uri is
+// spiffe://<trustDomain>/tenant/<tenant>/user/<name> with a non-empty name that
+// holds no further path segment.
+func isMTLSTenantUserSPIFFEID(uri *url.URL, trustDomain, tenant string) bool {
+	if uri == nil || !strings.EqualFold(uri.Scheme, "spiffe") || uri.Host != trustDomain {
+		return false
+	}
+	if uri.RawQuery != "" || uri.Fragment != "" {
+		return false
+	}
+	name, ok := strings.CutPrefix(uri.Path, "/tenant/"+tenant+"/user/")
+	return ok && name != "" && !strings.Contains(name, "/")
 }
 
 // mtlsPeerAuthenticator turns the verified client certificate of a QUIC

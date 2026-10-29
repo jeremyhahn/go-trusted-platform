@@ -27,8 +27,6 @@ import (
 	"os"
 	"path/filepath"
 
-	certclient "github.com/jeremyhahn/go-quicbaas/sdk/go/client/certificate"
-
 	appbackends "github.com/jeremyhahn/go-trusted-platform/pkg/app/backends"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 )
@@ -66,40 +64,27 @@ func writeHarnessAdminBundle(ctx context.Context, logger *logging.Logger, issuer
 	}
 	// The tenant bundle is written first: the harness waits for
 	// client-bundle.pem, so once that file exists both bundles do.
-	tenantReq := appbackends.AdminCertificateRequest()
-	tenantReq.Organization = harnessTenantID
-	if err := writeHarnessBundle(ctx, logger, issuer, tenantReq, "tenant admin", filepath.Join(dir, harnessTenantBundleName)); err != nil {
+	tenant := appbackends.AdminIdentity{TrustDomain: identity.TrustDomain, TenantID: harnessTenantID}
+	if err := writeHarnessIdentityBundle(ctx, logger, issuer, tenant, "tenant admin", filepath.Join(dir, harnessTenantBundleName)); err != nil {
 		return err
 	}
-	bundle, err := appbackends.NewAdminBundleIssuer(issuer, identity).IssueAdminBundle(ctx)
-	if err != nil {
-		return ErrProvisionIssue{Role: "admin", Cause: err}
-	}
-	path := filepath.Join(dir, harnessAdminBundleName)
-	if err := writeBundle(path, bundle.CertPEM, bundle.KeyPEM, 0600); err != nil {
-		return ErrProvisionPersist{Path: path, Cause: err}
-	}
-	logger.Warn("integration build: wrote a test-only operator client bundle",
-		"path", path,
-		"tenant", identity.TenantID,
-	)
-	return nil
+	return writeHarnessIdentityBundle(ctx, logger, issuer, identity, "admin", filepath.Join(dir, harnessAdminBundleName))
 }
 
-// writeHarnessBundle issues the certificate req asks for and writes it, key
-// included, to path (mode 0600). role names the bundle in a failure.
-func writeHarnessBundle(ctx context.Context, logger *logging.Logger, issuer appbackends.CertIssuer, req *certclient.IssueCertificateRequest, role, path string) error {
-	resp, err := issuer.IssueCertificate(ctx, req)
+// writeHarnessIdentityBundle issues the admin client bundle for identity and
+// writes it to path. role names the bundle in the error a failed issue
+// returns.
+func writeHarnessIdentityBundle(ctx context.Context, logger *logging.Logger, issuer appbackends.CertIssuer, identity appbackends.AdminIdentity, role, path string) error {
+	bundle, err := appbackends.NewAdminBundleIssuer(issuer, identity).IssueAdminBundle(ctx)
 	if err != nil {
 		return ErrProvisionIssue{Role: role, Cause: err}
 	}
-	if err := writeBundle(path, resp.CertificatePEM, resp.PrivateKeyPEM, 0600); err != nil {
+	if err := writeBundle(path, bundle.CertPEM, bundle.KeyPEM, 0600); err != nil {
 		return ErrProvisionPersist{Path: path, Cause: err}
 	}
-	logger.Warn("integration build: wrote a test-only client bundle",
+	logger.Warn("integration build: wrote a test-only "+role+" client bundle",
 		"path", path,
-		"tenant", req.Organization,
-		"serial", resp.SerialNumber,
+		"tenant", identity.TenantID,
 	)
 	return nil
 }
