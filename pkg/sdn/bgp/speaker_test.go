@@ -1944,3 +1944,167 @@ func TestUpdatePeerError(t *testing.T) {
 }
 
 func boolPtr(b bool) *bool { return &b }
+
+// startConcurrencySpeaker returns a started speaker driving mock, stopped
+// when the test ends.
+func startConcurrencySpeaker(t *testing.T, mock *mockBGPServer) *Speaker {
+	t.Helper()
+	ctx := context.Background()
+	speaker, err := NewSpeaker(speakerTestConfig(), speakerTestLogger(), WithBGPServer(mock))
+	require.NoError(t, err)
+	require.NoError(t, speaker.Start(ctx))
+	t.Cleanup(func() {
+		if stopErr := speaker.Stop(ctx); stopErr != nil {
+			t.Logf("failed to stop speaker: %v", stopErr)
+		}
+	})
+	return speaker
+}
+
+// concurrencyPrefix returns the /32 host prefix a.b.worker.op.
+func concurrencyPrefix(a, b byte, worker, op int) netip.Prefix {
+	return netip.PrefixFrom(netip.AddrFrom4([4]byte{a, b, byte(worker), byte(op)}), 32)
+}
+
+// runConcurrently runs fn(worker, op) for every op of every worker, one
+// goroutine per worker, and returns every error the calls produced.
+func runConcurrently(workers, ops int, fn func(worker, op int) error) []error {
+	errs := make(chan error, workers*ops)
+	var wg sync.WaitGroup
+	for w := 0; w < workers; w++ {
+		wg.Add(1)
+		go func(worker int) {
+			defer wg.Done()
+			for op := 0; op < ops; op++ {
+				if err := fn(worker, op); err != nil {
+					errs <- err
+				}
+			}
+		}(w)
+	}
+	wg.Wait()
+	close(errs)
+
+	collected := make([]error, 0, len(errs))
+	for err := range errs {
+		collected = append(collected, err)
+	}
+	return collected
+}
+
+// TestSpeaker_ConcurrentRouteChurn announces distinct prefixes from many
+// goroutines while withdrawing every third one: every call succeeds, and
+// every announcement reaches the server's RIB.
+func TestSpeaker_ConcurrentRouteChurn(t *testing.T) {
+	const workers, ops = 20, 50
+	ctx := context.Background()
+	mock := newMockBGPServer()
+	speaker := startConcurrencySpeaker(t, mock)
+	nextHop := netip.MustParseAddr("10.0.0.1")
+
+	errs := runConcurrently(workers, ops, func(worker, op int) error {
+		path := &Path{
+			Family:    AFamilyIPv4Unicast,
+			Prefix:    concurrencyPrefix(100, 64, worker, op),
+			NextHop:   nextHop,
+			Origin:    OriginIGP,
+			LocalPref: 100,
+		}
+		if err := speaker.AddPath(ctx, path); err != nil {
+			return err
+		}
+		if op%3 == 0 {
+			return speaker.DeletePath(ctx, path)
+		}
+		return nil
+	})
+	require.Empty(t, errs)
+
+	rib, err := speaker.GetRIB(ctx, AFamilyIPv4Unicast, RIBLocal)
+	require.NoError(t, err)
+	announced := make(map[netip.Prefix]bool, len(rib))
+	for _, path := range rib {
+		announced[path.Prefix] = true
+	}
+	for w := 0; w < workers; w++ {
+		for op := 0; op < ops; op++ {
+			prefix := concurrencyPrefix(100, 64, w, op)
+			assert.True(t, announced[prefix], "announced prefix %s missing from the RIB", prefix)
+		}
+	}
+}
+
+// TestSpeaker_ConcurrentPeerFlap adds and deletes the same peers from many
+// goroutines over several rounds: every call succeeds, all peers are listed
+// while up, and none remain after each delete round.
+func TestSpeaker_ConcurrentPeerFlap(t *testing.T) {
+	const workers, peersPerWorker, rounds = 10, 20, 3
+	ctx := context.Background()
+	mock := newMockBGPServer()
+	speaker := startConcurrencySpeaker(t, mock)
+
+	peerAddr := func(worker, op int) netip.Addr {
+		return netip.AddrFrom4([4]byte{192, 168, byte(worker), byte(op + 1)})
+	}
+
+	for round := 0; round < rounds; round++ {
+		errs := runConcurrently(workers, peersPerWorker, func(worker, op int) error {
+			return speaker.AddPeer(ctx, &NeighborConfig{
+				Address:         peerAddr(worker, op),
+				ASN:             65000 + uint32(op),
+				EnabledFamilies: []AddressFamily{AFamilyIPv4Unicast},
+			})
+		})
+		require.Empty(t, errs, "round %d: add", round)
+
+		peers, err := speaker.ListPeers(ctx)
+		require.NoError(t, err)
+		require.Len(t, peers, workers*peersPerWorker, "round %d: peers after add", round)
+
+		errs = runConcurrently(workers, peersPerWorker, func(worker, op int) error {
+			return speaker.DeletePeer(ctx, peerAddr(worker, op))
+		})
+		require.Empty(t, errs, "round %d: delete", round)
+
+		peers, err = speaker.ListPeers(ctx)
+		require.NoError(t, err)
+		require.Empty(t, peers, "round %d: peers after delete", round)
+	}
+}
+
+// TestSpeaker_ConcurrentAddPathFailuresAreTypedAndRecoverable drives
+// concurrent announcements at a failing server: every failure is an
+// ErrPathOperationFailed and nothing is installed. Once the server recovers,
+// the same speaker installs every announcement.
+func TestSpeaker_ConcurrentAddPathFailuresAreTypedAndRecoverable(t *testing.T) {
+	const workers, ops = 15, 20
+	ctx := context.Background()
+	mock := newMockBGPServer()
+	mock.addPathErr = errors.New("add path failed")
+	speaker := startConcurrencySpeaker(t, mock)
+
+	announce := func(worker, op int) error {
+		return speaker.AddPath(ctx, &Path{
+			Family:  AFamilyIPv4Unicast,
+			Prefix:  concurrencyPrefix(172, 16, worker, op),
+			NextHop: netip.MustParseAddr("10.0.0.1"),
+			Origin:  OriginIGP,
+		})
+	}
+
+	errs := runConcurrently(workers, ops, announce)
+	require.Len(t, errs, workers*ops)
+	for _, err := range errs {
+		var pathErr *ErrPathOperationFailed
+		require.ErrorAs(t, err, &pathErr)
+	}
+	mock.mu.Lock()
+	require.Empty(t, mock.paths)
+	mock.addPathErr = nil
+	mock.mu.Unlock()
+
+	require.Empty(t, runConcurrently(workers, ops, announce))
+	mock.mu.RLock()
+	defer mock.mu.RUnlock()
+	assert.Len(t, mock.paths, workers*ops)
+}

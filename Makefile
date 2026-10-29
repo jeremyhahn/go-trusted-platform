@@ -2511,19 +2511,6 @@ stress-sdn: build-devcontainer
 		$(DEVCONTAINER_IMAGE) \
 		go test -v $(TEST_BUILD_TAGS_ARG) -timeout=30m ./stress/...
 
-.PHONY: stress-sdn-bgp
-## stress-sdn-bgp: Run BGP stress tests
-stress-sdn-bgp: build-devcontainer
-	@echo "Running BGP stress tests..."
-	@docker run --rm --privileged \
-		--name go-trusted-platform-bgp-stress \
-		-e CGO_ENABLED=0 \
-		-v $(PWD):/workspace \
-		$(DOCKER_MODULE_MOUNTS) \
-		-w /workspace/test/integration/sdn \
-		$(DEVCONTAINER_IMAGE) \
-		go test -v $(TEST_BUILD_TAGS_ARG) -timeout=15m -run TestBGP ./stress/...
-
 .PHONY: stress-sdn-cluster
 ## stress-sdn-cluster: Run cluster state stress tests
 stress-sdn-cluster: build-devcontainer
