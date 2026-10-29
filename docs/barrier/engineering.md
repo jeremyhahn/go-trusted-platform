@@ -351,7 +351,7 @@ generation: a waiter blocks until the next signal (the gate's one-second
 | Kind | Where |
 |---|---|
 | Unit | `pkg/barrier/{manager,config,errors,error_codes}_test.go`, `pkg/app/barrier_cov2_test.go`, `pkg/daemon/commands/serve_barrier_gate{,_unseal}_test.go`, `pkg/api/rest/init_handlers_test.go`, `pkg/app/backends/ceremony_test.go`, `pkg/api/daemon/initonly_test.go`, `pkg/api/daemon/barrier_grpc_service_test.go`, `pkg/cli/commands/barrier/barrier_test.go`, `pkg/tenant/barrier_test.go` |
-| Integration | `test/integration/barrier_gate/` — `TestM6_WarmBoot_UnsealThenTransitions`: a real daemon and TPM restart sealed, the gate reports `sealed`, and `POST /unseal` releases it. The gate's serve-until-unsealed contract itself is unit-tested by `pkg/daemon/commands/serve_barrier_gate_unseal_test.go` |
+| Warm boot | The warm-boot unseal (formerly `test/integration/barrier_gate/` `TestM6_WarmBoot_UnsealThenTransitions`) is unit-tested by `TestServeUntilUnsealed_ServesUntilUnsealThenReleases` in `pkg/daemon/commands/serve_barrier_gate_unseal_test.go`: a sealed gate reports `sealed` with `ready` false, holds the production transports back, `POST /unseal` answers `sealed` false, and the gate releases and closes its socket |
 
 Run one package with `make test-pkg PKG=./pkg/barrier/`.
 

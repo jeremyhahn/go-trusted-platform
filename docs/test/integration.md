@@ -341,7 +341,7 @@ the runner's `TARGET_PACKAGES` map and an `integration-test-<key>` target.
 listed below.
 
 `make integration-test` runs the runner's `ALL_TARGETS` list in order:
-every key except `cold-start` and `barrier-gate` (each needs the shared
+every key except `cold-start` (needs the shared
 `platformd` not running), `bmc` (needs the vBMC config), `diskimage`,
 `netboot`, `nat64` and `ipsec` (each needs inputs built on the host first),
 `pxe` (platformd has no PXE backend) and `secureboot` (needs prebuilt FIPS-kernel
@@ -713,7 +713,7 @@ not follow this: they test packages under `pkg/`, not a suite under
 `test/integration`, so the runner has no key for them.
 
 No target hand-writes its own `docker run` of the runner either. A
-hand-written block drifts: `integration-test`, `-sdn` and `-barrier-gate` lost
+hand-written block drifts: `integration-test` and `-sdn` lost
 the define's module-cache mount and `GOWORK=off`, so the container resolved
 every module over the network and the SDN suite never got past building
 `platformd` (#539). `pkg/arch/integrationsuite_test.go` fails `make test` on
@@ -1332,9 +1332,7 @@ run such a failure means that bring-up failed, and the runner has already
 printed a warning saying so. For
 `integration-test-vtpm` a swtpm that does not start ends the run.
 
-That swtpm is the daemon's TPM: `test/integration/config.yaml` and
-`test/integration/barrier_gate/config.yaml` (the config of that suite's one
-test, `TestM6_WarmBoot_UnsealThenTransitions`) set `tpm.device` to
+That swtpm is the daemon's TPM: `test/integration/config.yaml` sets `tpm.device` to
 `/tmp/swtpm/swtpm.sock`, the socket `start_swtpm` serves, with only the SHA-256
 PCR bank active. The integration container is privileged and sees the host's
 `/dev/tpmrm0`, so a config naming that device runs `platformd` on the CI host's
