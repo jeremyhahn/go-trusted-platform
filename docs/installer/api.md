@@ -169,9 +169,12 @@ named. **Do not treat this table as the installer's API.**
 `PXEService/WebhookComplete`, and every other method returns
 `PermissionDenied`. On REST it reaches only `POST /api/v1/pxe/webhook/complete`,
 which authenticates the certificate itself. Every scope-guarded route refuses it
-because it carries no scope. QUIC and MCP have no certificate-bound webhook
-route: their webhook operation is scope-guarded like every other one, so they
-refuse the installer certificate. Only the operator's admin certificate is
+because it carries no scope. On QUIC the guard admits it only to the
+PXE `WebhookComplete` sub-opcode, and on MCP the checker admits it only to the
+`pxe_webhook_complete` tool (Codex 8263); every other PXE operation still
+requires `pxe:write` and refuses it. gRPC, QUIC and MCP read the one list of
+installer methods, `mtlsInstallerMethods` in
+`pkg/api/daemon/transport_auth.go`. Only the operator's admin certificate is
 granted the platform API; see
 [`docs/auth/architecture.md`](../auth/architecture.md) §5, *The two mTLS
 principals*.

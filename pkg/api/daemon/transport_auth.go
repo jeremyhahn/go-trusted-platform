@@ -245,14 +245,15 @@ func selectQUICAuth(config *Config, shared *platformTokenValidator, clientCAPool
 //     an install. Its SHA-256 is bound to one device through PXE UpdateState,
 //     and it authorizes only the install-completion webhook, which checks that
 //     binding itself. It is granted no scope, so every scope-guarded REST, QUIC
-//     and MCP operation refuses it, and the gRPC interceptors admit it only to
-//     the methods in mtlsInstallerMethods.
+//     and MCP operation refuses it; the gRPC interceptors, the QUIC guard and
+//     the MCP checker admit it only to the methods in mtlsInstallerMethods.
 //
 // Any certificate that is not positively the operator is an installer.
 const mtlsOperatorScope = "*:*"
 
-// mtlsInstallerMethods are the only gRPC methods an installer certificate may
-// invoke.
+// mtlsInstallerMethods are the only methods an installer certificate may
+// invoke, named by gRPC full method. It is the one list for every transport:
+// gRPC reads it directly, QUIC and MCP through mtlsPeerAuthenticator.AdmitsMethod.
 var mtlsInstallerMethods = map[string]struct{}{
 	platformv1.PXEService_WebhookComplete_FullMethodName: {},
 }
@@ -301,6 +302,15 @@ type mtlsPeerAuthenticator struct {
 	authenticator auth.Authenticator
 	// trustDomain is the SPIFFE trust domain the operator certificate names.
 	trustDomain string
+}
+
+// AdmitsMethod reports whether method is one an installer certificate may
+// invoke. It is how the QUIC guard and the MCP checker share
+// mtlsInstallerMethods with the gRPC interceptors; the operator never needs
+// it, holding every scope.
+func (a mtlsPeerAuthenticator) AdmitsMethod(method string) bool {
+	_, ok := mtlsInstallerMethods[method]
+	return ok
 }
 
 // AuthenticatePeer authenticates the leaf of chain and returns its principal.

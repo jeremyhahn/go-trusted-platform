@@ -500,6 +500,96 @@ func TestMTLSInstallerScope_MCPGrantsOnlyTheOperator(t *testing.T) {
 	assert.Equal(t, mcp.AuthErrorPermissionDenied, authErr.Type)
 }
 
+// completeInstall runs the PXE WebhookComplete servicer for installerMAC in
+// the context a transport guard admitted, as that transport's handler does.
+func (f *installerScopeFixture) completeInstall(t *testing.T, ctx context.Context) {
+	t.Helper()
+	_, err := f.svc.WebhookComplete(ctx, &platformv1.PXEWebhookCompleteRequest{MacAddress: installerMAC, Success: true})
+	require.NoError(t, err)
+	assert.Equal(t, pxe.StateInstallComplete, f.state(t, installerMAC))
+	assert.Equal(t, pxe.StateInstalling, f.state(t, webhookOtherMAC))
+}
+
+// quicGuard is the production QUIC guard for the fixture's daemon. guard
+// sends one provisioning-category operation as leaf.
+func (f *installerScopeFixture) quicGuard(t *testing.T) func(leaf *x509.Certificate, sub byte) (context.Context, *quicwire.Response) {
+	t.Helper()
+	mw, _, err := selectQUICAuth(f.config, nil, f.config.MTLSClientCAPool, logging.DefaultLogger())
+	require.NoError(t, err)
+	return func(leaf *x509.Certificate, sub byte) (context.Context, *quicwire.Response) {
+		return mw.GuardRequest(quicContext(verifiedState(leaf)),
+			&quicwire.Request{Opcode: quicwire.OpProvisioningCategory, Payload: []byte{sub}})
+	}
+}
+
+// mcpChecker is the production MCP authorization checker for the fixture's
+// daemon, authorizing one tool as leaf.
+func (f *installerScopeFixture) mcpChecker(t *testing.T) func(leaf *x509.Certificate, tool string) (context.Context, *mcp.AuthorizationError) {
+	t.Helper()
+	peers, err := newMCPPeerAuthenticator(f.config, logging.DefaultLogger())
+	require.NoError(t, err)
+	checker := mcp.NewAuthorizationChecker(nil, nil, mcp.WithPeerAuthenticator(peers))
+	return func(leaf *x509.Certificate, tool string) (context.Context, *mcp.AuthorizationError) {
+		return checker.AuthorizeTool(mcpContext(verifiedState(leaf)), tool, "")
+	}
+}
+
+func TestMTLSInstallerScope_InstallerCompletesItsOwnDeviceThroughQUICWebhook(t *testing.T) {
+	f := newInstallerScopeFixture(t)
+
+	ctx, resp := f.quicGuard(t)(f.installer, quicwire.PXESubWebhookComplete)
+
+	require.Nil(t, resp, "the QUIC guard must admit the installer to WebhookComplete")
+	f.completeInstall(t, ctx)
+}
+
+func TestMTLSInstallerScope_InstallerIsRefusedOtherQUICPXEWrites(t *testing.T) {
+	f := newInstallerScopeFixture(t)
+
+	_, resp := f.quicGuard(t)(f.installer, quicwire.PXESubStopService)
+
+	require.NotNil(t, resp, "the installer must not stop the PXE service over QUIC")
+	assert.Equal(t, quicwire.StatusPermissionDenied, resp.Status)
+}
+
+func TestMTLSInstallerScope_OperatorReachesQUICPXEWrites(t *testing.T) {
+	f := newInstallerScopeFixture(t)
+	guard := f.quicGuard(t)
+
+	for _, sub := range []byte{quicwire.PXESubWebhookComplete, quicwire.PXESubStopService} {
+		_, resp := guard(f.operator, sub)
+		assert.Nil(t, resp, "the operator must pass the QUIC guard on PXE sub-opcode %d", sub)
+	}
+}
+
+func TestMTLSInstallerScope_InstallerCompletesItsOwnDeviceThroughMCPWebhook(t *testing.T) {
+	f := newInstallerScopeFixture(t)
+
+	ctx, authErr := f.mcpChecker(t)(f.installer, "pxe_webhook_complete")
+
+	require.Nil(t, authErr, "the MCP checker must admit the installer to pxe_webhook_complete")
+	f.completeInstall(t, ctx)
+}
+
+func TestMTLSInstallerScope_InstallerIsRefusedOtherMCPPXEWrites(t *testing.T) {
+	f := newInstallerScopeFixture(t)
+
+	_, authErr := f.mcpChecker(t)(f.installer, "pxe_stop_service")
+
+	require.NotNil(t, authErr, "the installer must not stop the PXE service over MCP")
+	assert.Equal(t, mcp.AuthErrorPermissionDenied, authErr.Type)
+}
+
+func TestMTLSInstallerScope_OperatorReachesMCPPXEWrites(t *testing.T) {
+	f := newInstallerScopeFixture(t)
+	authorize := f.mcpChecker(t)
+
+	for _, tool := range []string{"pxe_webhook_complete", "pxe_stop_service"} {
+		_, authErr := authorize(f.operator, tool)
+		assert.Nil(t, authErr, "the operator must pass the MCP checker on %s", tool)
+	}
+}
+
 func TestMTLSInstallerScope_RightNameWithoutSPIFFEIDIsNotTheOperator(t *testing.T) {
 	f := newInstallerScopeFixture(t)
 	impostor := f.issuerA.issueClient(t, 102,

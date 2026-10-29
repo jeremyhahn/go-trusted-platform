@@ -180,6 +180,7 @@ func (m *AuthMiddleware) GuardRequest(ctx context.Context, req *quicwire.Request
 		return ctx, nil
 	}
 
+	byPeer := m.authenticatesByPeer(req)
 	ctx, resp := m.AuthenticateRequest(ctx, req)
 	if resp != nil {
 		return ctx, resp
@@ -194,6 +195,11 @@ func (m *AuthMiddleware) GuardRequest(ctx context.Context, req *quicwire.Request
 	}
 
 	if resp := m.AuthorizeRequest(ctx, perm.Resource, perm.Action); resp != nil {
+		// A certificate-authenticated caller outside its scopes may still
+		// call the methods its authenticator admits, as on gRPC.
+		if byPeer && m.peerAdmitsOperation(req) {
+			return ctx, nil
+		}
 		return ctx, resp
 	}
 	return ctx, nil
@@ -205,7 +211,7 @@ func (m *AuthMiddleware) AuthenticateRequest(ctx context.Context, req *quicwire.
 	// Under mTLS the connection's verified client certificate is the
 	// credential of a request without a token, and of every request when no
 	// token validator is configured. A presented token is still validated.
-	if m.peerAuthenticator != nil && (req.Token == "" || m.tokenValidator == nil) {
+	if m.authenticatesByPeer(req) {
 		return m.authenticatePeer(ctx)
 	}
 

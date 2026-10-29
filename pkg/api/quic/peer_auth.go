@@ -19,6 +19,7 @@ import (
 
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/platformtoken"
 
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 )
 
@@ -60,6 +61,40 @@ func WithQUICPeerAuthenticator(a PeerAuthenticator) AuthMiddlewareOption {
 	return func(m *AuthMiddleware) {
 		m.peerAuthenticator = a
 	}
+}
+
+// PeerMethodAdmitter is implemented by a PeerAuthenticator that lets a
+// certificate call a fixed set of RPCs its granted scopes do not cover: the
+// installer certificate completing its own install. Methods are gRPC full
+// method names, so every transport asks the same list.
+type PeerMethodAdmitter interface {
+	AdmitsMethod(method string) bool
+}
+
+// operationMethods names the gRPC method a QUIC operation serves, for the
+// operations a PeerMethodAdmitter may admit, keyed by opcode then sub-opcode.
+var operationMethods = map[byte]map[byte]string{
+	quicwire.OpProvisioningCategory: {
+		quicwire.PXESubWebhookComplete: platformv1.PXEService_WebhookComplete_FullMethodName,
+	},
+}
+
+// authenticatesByPeer reports whether req is authenticated by the
+// connection's verified client certificate: it carries no token, or no
+// token validator is configured.
+func (m *AuthMiddleware) authenticatesByPeer(req *quicwire.Request) bool {
+	return m.peerAuthenticator != nil && (req.Token == "" || m.tokenValidator == nil)
+}
+
+// peerAdmitsOperation reports whether the peer authenticator admits req's
+// operation to a certificate whose scopes do not cover it.
+func (m *AuthMiddleware) peerAdmitsOperation(req *quicwire.Request) bool {
+	admitter, ok := m.peerAuthenticator.(PeerMethodAdmitter)
+	if !ok || len(req.Payload) == 0 {
+		return false
+	}
+	method, ok := operationMethods[req.Opcode][req.Payload[0]]
+	return ok && admitter.AdmitsMethod(method)
 }
 
 // authenticatePeer authenticates the request by the connection's verified
