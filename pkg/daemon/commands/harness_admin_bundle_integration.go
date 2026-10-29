@@ -56,9 +56,11 @@ func init() {
 // writeHarnessAdminBundle issues two CN=admin client certificates and writes
 // each, key included, mode 0600: one in harnessTenantID to
 // <dir>/tenant-client-bundle.pem, then the system tenant's to
-// <dir>/client-bundle.pem. It issues fresh certificates on every start; the
-// harness wipes the directory before each run anyway.
-func writeHarnessAdminBundle(ctx context.Context, logger *logging.Logger, issuer appbackends.CertIssuer, dir string) error {
+// <dir>/client-bundle.pem. The system bundle is minted through the
+// identity-aware admin bundle issuer, so its leaf carries identity's operator
+// SPIFFE URI and passes the mTLS operator check. It issues fresh certificates
+// on every start; the harness wipes the directory before each run anyway.
+func writeHarnessAdminBundle(ctx context.Context, logger *logging.Logger, issuer appbackends.CertIssuer, identity appbackends.AdminIdentity, dir string) error {
 	if issuer == nil {
 		return ErrProvisionMissingSDK{}
 	}
@@ -69,7 +71,19 @@ func writeHarnessAdminBundle(ctx context.Context, logger *logging.Logger, issuer
 	if err := writeHarnessBundle(ctx, logger, issuer, tenantReq, "tenant admin", filepath.Join(dir, harnessTenantBundleName)); err != nil {
 		return err
 	}
-	return writeHarnessBundle(ctx, logger, issuer, appbackends.AdminCertificateRequest(), "admin", filepath.Join(dir, harnessAdminBundleName))
+	bundle, err := appbackends.NewAdminBundleIssuer(issuer, identity).IssueAdminBundle(ctx)
+	if err != nil {
+		return ErrProvisionIssue{Role: "admin", Cause: err}
+	}
+	path := filepath.Join(dir, harnessAdminBundleName)
+	if err := writeBundle(path, bundle.CertPEM, bundle.KeyPEM, 0600); err != nil {
+		return ErrProvisionPersist{Path: path, Cause: err}
+	}
+	logger.Warn("integration build: wrote a test-only operator client bundle",
+		"path", path,
+		"tenant", identity.TenantID,
+	)
+	return nil
 }
 
 // writeHarnessBundle issues the certificate req asks for and writes it, key
