@@ -134,27 +134,34 @@ the `auth` entry — reached through `sdk/go/services/auth`.
    `ExtractIdentity` → `ExtractTenant` (or `DefaultTenant`).
 5. The `*auth.Identity` is stored on the context under `ContextKeyIdentity`;
    handlers read it with `daemon.IdentityFromContext`.
-6. The interceptor admits only the operator to every method. Any other
-   certificate is an installer, and it may call only
+6. The interceptor admits the operator and a tenant principal to every
+   method; tenant authorization limits what a tenant principal may then do.
+   Any other certificate is an installer, and it may call only
    `PXEService/WebhookComplete`. Any other method returns `PermissionDenied`
-   with `ErrMTLSInstallerMethodDenied` (`pkg/api/daemon/mtls_interceptor.go:190`).
+   with `ErrMTLSInstallerMethodDenied` (`pkg/api/daemon/mtls_interceptor.go:198`).
 
-#### The two mTLS principals (Codex 8200)
+#### The three mTLS classes (Codex 8200, 8279 P1-f)
 
-A verified client certificate is one of two principals. They are told apart in
-`isMTLSOperator` (`pkg/api/daemon/transport_auth.go:262`), and
-`mtlsGrantFor` (`:289`) gives each its grant:
+A verified client certificate falls in one of three classes. They are told
+apart in `isMTLSOperator` (`pkg/api/daemon/transport_auth.go:275`) and
+`isMTLSTenantPrincipal` (`:319`), and `mtlsGrantFor` (`:302`) gives each its
+grant:
 
-| Principal | How it is recognised | gRPC | QUIC, REST, MCP |
+| Class | How it is recognised | gRPC | QUIC, REST, MCP |
 |---|---|---|---|
 | **Operator** | The subject O is exactly the system tenant, and a URI SAN is `spiffe://<trust domain>/tenant/<system tenant>/user/<admin>` | every method | `*:*` |
-| **Installer** | Any other certificate that chains to the client CA | only `PXEService/WebhookComplete` (`mtlsInstallerMethods`) | no scope, so every scope-guarded operation refuses it |
+| **Tenant principal** | The subject has exactly one O, which is not the system tenant, and a URI SAN is `spiffe://<trust domain>/tenant/<that O>/user/<name>` | every method, limited by tenant authorization | `*:*`, limited by tenant authorization |
+| **Installer** | Any other certificate that chains to the client CA, every machine certificate included | only `PXEService/WebhookComplete` (`mtlsInstallerMethods`) | no scope, so every scope-guarded operation refuses it; REST admits it only on `installerMachineRoutes` |
+
+A subject O alone never grants a scope: without the matching `/user/` SPIFFE
+ID a certificate is an installer. The daemon's own client certificate carries
+O "Trusted Platform" and no `/user/` URI, so it stays an installer.
 
 The trust domain is `Config.MTLSOperatorTrustDomain`, which `platformd` sets
 from the platform admin identity (`pkg/daemon/commands/serve.go:580`). If it is
-empty, no certificate is the operator, so the check fails closed. Every
-installer certificate chains to the same CA as the admin certificate, so
-chaining to that CA does not make a certificate the operator.
+empty, no certificate is the operator or a tenant principal, so the check fails
+closed. Every installer certificate chains to the same CA as the admin
+certificate, so chaining to that CA does not make a certificate a principal.
 
 Nothing is persisted. Nothing crosses a host boundary except the TLS handshake
 itself and, when revocation checking is on, the call to the CA.
