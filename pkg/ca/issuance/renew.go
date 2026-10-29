@@ -15,6 +15,7 @@ package issuance
 
 import (
 	"context"
+	"crypto/ecdsa"
 	"crypto/x509"
 
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
@@ -49,11 +50,7 @@ func Renew(ctx context.Context, ca quicbaasca.CACertificateAuthority, existing *
 		return nil, &RenewError{Step: "revoke the old certificate", Err: err}
 	}
 
-	rotateAttrs := &xkmssdk.KeyAttributes{
-		CN:           existing.Subject.CommonName,
-		KeyAlgorithm: existing.PublicKeyAlgorithm,
-	}
-	if _, err := keyStore.RotateKey(ctx, rotateAttrs); err != nil {
+	if _, err := keyStore.RotateKey(ctx, renewalKeyAttributes(existing)); err != nil {
 		return nil, &RenewError{Step: "rotate the key", Err: err}
 	}
 
@@ -62,7 +59,9 @@ func Renew(ctx context.Context, ca quicbaasca.CACertificateAuthority, existing *
 		return nil, &RenewError{Step: "remove the old certificate", Err: err}
 	}
 
-	issued, err := ca.IssueCertificate(ctx, renewalRequest(existing, opts))
+	// Issue, not IssueCertificate: a CA certificate must be renewed with the
+	// CA profile, or the replacement would be a leaf.
+	issued, err := Issue(ctx, ca, renewalRequest(existing, opts))
 	if err != nil {
 		return nil, &RenewError{Step: "issue the renewed certificate", Err: err}
 	}
@@ -84,17 +83,12 @@ func renewalRequest(existing *x509.Certificate, opts RenewOptions) *quicbaasca.C
 			Address:            firstOrEmpty(existing.Subject.StreetAddress),
 			PostalCode:         firstOrEmpty(existing.Subject.PostalCode),
 		},
-		Valid:       opts.ValidDays,
-		IsCA:        existing.IsCA,
-		MaxPathLen:  existing.MaxPathLen,
-		KeyUsage:    existing.KeyUsage,
-		ExtKeyUsage: existing.ExtKeyUsage,
-		KeyAttributes: &xkmssdk.KeyAttributes{
-			CN:           existing.Subject.CommonName,
-			KeyAlgorithm: existing.PublicKeyAlgorithm,
-			StoreType:    xkmssdk.StoreSoftware,
-			KeyType:      xkmssdk.KeyTypeTLS,
-		},
+		Valid:         opts.ValidDays,
+		IsCA:          existing.IsCA,
+		MaxPathLen:    existing.MaxPathLen,
+		KeyUsage:      existing.KeyUsage,
+		ExtKeyUsage:   existing.ExtKeyUsage,
+		KeyAttributes: renewalKeyAttributes(existing),
 	}
 
 	switch {
@@ -104,6 +98,24 @@ func renewalRequest(existing *x509.Certificate, opts RenewOptions) *quicbaasca.C
 		req.SANS = existingSANs(existing)
 	}
 	return req
+}
+
+// renewalKeyAttributes names the key existing is renewed on: the software-store
+// TLS key under its common name, of its algorithm and, for an ECDSA key, its
+// curve. Renew rotates this key and issues on it, so both see one key; a real
+// go-xkms backend refuses a key without its store type, and an ECDSA key
+// without its curve.
+func renewalKeyAttributes(existing *x509.Certificate) *xkmssdk.KeyAttributes {
+	attrs := &xkmssdk.KeyAttributes{
+		CN:           existing.Subject.CommonName,
+		KeyAlgorithm: existing.PublicKeyAlgorithm,
+		StoreType:    xkmssdk.StoreSoftware,
+		KeyType:      xkmssdk.KeyTypeTLS,
+	}
+	if pub, ok := existing.PublicKey.(*ecdsa.PublicKey); ok {
+		attrs.ECCAttributes = &xkmssdk.ECCAttributes{Curve: pub.Curve}
+	}
+	return attrs
 }
 
 // existingSANs is existing's subject alternative names, or nil when it has none.
