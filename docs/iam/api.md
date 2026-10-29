@@ -97,7 +97,9 @@ a zero field. They previously answered `{"total", "limit", "offset"}` with
 snake_case items, a shape the SDK's generated replies do not carry. The Go SDK's REST
 transport routes ListUsers, ListGroups, ListRoles and ListTenants with no
 query parameters, so it reads page 1 of 50; ListPolicies and ListApps have
-no SDK REST route.
+no SDK REST route. The web console reads the list replies typed as the
+JavaScript SDK's `ListIAM*Response`; the single-resource Get replies stay the
+bare resource, so the console still accepts both a bare and a wrapped one there.
 
 Rows below give the unscoped path; the tenant-scoped equivalent always exists.
 
