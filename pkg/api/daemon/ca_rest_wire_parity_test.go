@@ -192,8 +192,10 @@ func newCAWireFixture(t *testing.T) *caWireFixture {
 		ca:              &signingCA{recordingCA: f.ca, signer: issuancetest.NewCA(t)},
 		kms:             issuancetest.NewKMS(t, csrKeyID, &key.PublicKey),
 		tokens: tokenScopes{
-			signerToken: {issuance.SignCSRScope},
-			readerToken: {"ca:read"},
+			// The daemon issues under certs:generate and reads under
+			// certs:read, the scopes its gRPC, QUIC and MCP transports check.
+			signerToken: {issuance.SignCSRScope, "certs:generate"},
+			readerToken: {"ca:read", "certs:read"},
 			renewToken:  {restca.RenewScope},
 			revokeToken: {restca.RevokeScope},
 			verifyToken: {restca.VerifyScope},

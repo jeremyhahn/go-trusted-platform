@@ -501,22 +501,27 @@ func NewCAHandlers(ca CAServiceInterface, logger *slog.Logger, objStorage object
 
 // RegisterRoutes registers all CA routes on the provided router.
 func (h *CAHandlers) RegisterRoutes(router *mux.Router) {
-	// CA information
+	// CA information, CRL and bundle serve public material and stay
+	// ungated, as the webservice's RegisterPublicRoutes does: the CRL must
+	// reach relying parties that hold no credential (RFC 5280 §4.2.1.13).
 	router.HandleFunc("/api/v1/ca/info", h.handleGetCAInfo).Methods(http.MethodGet)
 
-	// Certificate CRUD operations
-	router.HandleFunc("/api/v1/ca/certificates", h.handleIssueCertificate).Methods(http.MethodPost)
-	router.HandleFunc("/api/v1/ca/certificates", h.handleListCertificates).Methods(http.MethodGet)
-	router.HandleFunc("/api/v1/ca/certificates/{serial}", h.handleGetCertificate).Methods(http.MethodGet)
+	// Certificate CRUD operations. Each takes the scope the gRPC, QUIC and
+	// MCP transports check for the same operation; renewing issues a
+	// certificate, so it takes the issuing scope. An installer certificate
+	// holds no scope, so it reaches none of them (Codex 8238).
+	router.HandleFunc("/api/v1/ca/certificates", h.guard.Require(scopeCertsGenerate, h.handleIssueCertificate)).Methods(http.MethodPost)
+	router.HandleFunc("/api/v1/ca/certificates", h.guard.Require(scopeCertsList, h.handleListCertificates)).Methods(http.MethodGet)
+	router.HandleFunc("/api/v1/ca/certificates/{serial}", h.guard.Require(scopeCertsRead, h.handleGetCertificate)).Methods(http.MethodGet)
 	router.HandleFunc("/api/v1/ca/certificates/{serial}", h.guard.Require(scopeCertsRevoke, h.handleRevokeCertificate)).Methods(http.MethodDelete)
-	router.HandleFunc("/api/v1/ca/certificates/{serial}/renew", h.handleRenewCertificate).Methods(http.MethodPost)
+	router.HandleFunc("/api/v1/ca/certificates/{serial}/renew", h.guard.Require(scopeCertsGenerate, h.handleRenewCertificate)).Methods(http.MethodPost)
 
 	// Code-signing certification of a KMS key from its CSR. A client
 	// certificate alone never certifies a code-signing key (#691).
 	router.HandleFunc("/api/v1/ca/sign-csr", h.guard.RequireToken(issuance.SignCSRScope, h.handleSignCSR)).Methods(http.MethodPost)
 
 	// Certificate verification
-	router.HandleFunc("/api/v1/ca/certificates/verify", h.handleVerifyCertificate).Methods(http.MethodPost)
+	router.HandleFunc("/api/v1/ca/certificates/verify", h.guard.Require(scopeCertsRead, h.handleVerifyCertificate)).Methods(http.MethodPost)
 
 	// CRL and bundle
 	router.HandleFunc("/api/v1/ca/crl", h.handleGetCRL).Methods(http.MethodGet)
@@ -805,9 +810,19 @@ func (h *CAHandlers) handleGetCertificate(w http.ResponseWriter, r *http.Request
 	})
 }
 
-// scopeCertsRevoke is the scope the revoke route requires, as the
-// webservice's DELETE /api/v1/ca/certificates/{serial} does.
-const scopeCertsRevoke = "certs:revoke"
+// Scopes the CA certificate routes require, the names the gRPC, QUIC and MCP
+// transports check for the same operations (pkg/api/mcp/authz.go).
+const (
+	// scopeCertsGenerate authorizes issuing and renewing a certificate.
+	scopeCertsGenerate = "certs:generate"
+	// scopeCertsList authorizes enumerating issued certificates.
+	scopeCertsList = "certs:list"
+	// scopeCertsRead authorizes reading or verifying one certificate.
+	scopeCertsRead = "certs:read"
+	// scopeCertsRevoke is the scope the revoke route requires, as the
+	// webservice's DELETE /api/v1/ca/certificates/{serial} does.
+	scopeCertsRevoke = "certs:revoke"
+)
 
 // handleRevokeCertificate handles DELETE /api/v1/ca/certificates/{serial},
 // the shape the Go and JS SDKs send. The optional body is a protojson

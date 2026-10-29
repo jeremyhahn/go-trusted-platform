@@ -138,6 +138,18 @@ var caRevokeRouteScopes = []guardedRoute{
 	{http.MethodDelete, "/api/v1/ca/certificates/0a1b", scopeCertsRevoke},
 }
 
+// caCertificateRouteScopes is the rest of the CA certificate route table of
+// docs/ca/api.md: the scope each route takes is the one the gRPC, QUIC and
+// MCP transports check, so an installer certificate reaches none of them
+// (Codex 8238).
+var caCertificateRouteScopes = []guardedRoute{
+	{http.MethodPost, "/api/v1/ca/certificates", scopeCertsGenerate},
+	{http.MethodGet, "/api/v1/ca/certificates", scopeCertsList},
+	{http.MethodGet, "/api/v1/ca/certificates/0a1b", scopeCertsRead},
+	{http.MethodPost, "/api/v1/ca/certificates/0a1b/renew", scopeCertsGenerate},
+	{http.MethodPost, "/api/v1/ca/certificates/verify", scopeCertsRead},
+}
+
 // appServiceRouteScopes is the Cache, Scheduler and Messaging route table of
 // the gRPC method catalog.
 var appServiceRouteScopes = []guardedRoute{
@@ -235,6 +247,7 @@ func TestScopeGuard_EachRouteAdmitsItsScopeAndRefusesOthers(t *testing.T) {
 		{"app services", appServiceRouteScopes, "vpn:read"},
 		{"compute", computeRouteScopes, "ntp:read"},
 		{"ca revoke", caRevokeRouteScopes, "certs:generate"},
+		{"ca certificates", caCertificateRouteScopes, "certs:revoke"},
 	} {
 		t.Run(group.name, func(t *testing.T) {
 			for _, route := range group.routes {

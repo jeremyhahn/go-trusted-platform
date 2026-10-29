@@ -393,11 +393,25 @@ func generateTestCRL(issuer *x509.Certificate) ([]byte, error) {
 
 func setupCAHandlers(ca CAServiceInterface) (*CAHandlers, *mux.Router) {
 	logger := slog.Default()
-	guard := NewScopeGuard(&scopedAuthorizer{scopes: map[string][]string{adminToken: {scopeCertsRevoke}}}, nil, nil)
-	handlers := NewCAHandlers(ca, logger, nil).WithScopeGuard(guard)
+	handlers := NewCAHandlers(ca, logger, nil).WithScopeGuard(caAdminGuard())
 	router := mux.NewRouter()
 	handlers.RegisterRoutes(router)
 	return handlers, router
+}
+
+// caAdminGuard admits adminToken to every guarded CA certificate route, and
+// nothing else: each route still checks its own scope.
+func caAdminGuard() *ScopeGuard {
+	scopes := []string{scopeCertsGenerate, scopeCertsList, scopeCertsRead, scopeCertsRevoke}
+	return NewScopeGuard(&scopedAuthorizer{scopes: map[string][]string{adminToken: scopes}}, nil, nil)
+}
+
+// caAdminRequest builds a request that carries adminToken, the credential
+// caAdminGuard admits.
+func caAdminRequest(method, target string, body io.Reader) *http.Request {
+	req := httptest.NewRequest(method, target, body)
+	req.Header.Set("Authorization", "Bearer "+adminToken)
+	return req
 }
 
 // =============================================================================
@@ -555,7 +569,7 @@ func TestCAHandlers_IssueCertificate_InvalidRequestBody(t *testing.T) {
 	ca := newMockCAService()
 	_, router := setupCAHandlers(ca)
 
-	req, _ := http.NewRequest(http.MethodPost, "/api/v1/ca/certificates", bytes.NewReader([]byte("invalid json")))
+	req := caAdminRequest(http.MethodPost, "/api/v1/ca/certificates", bytes.NewReader([]byte("invalid json")))
 	req.Header.Set("Content-Type", "application/json")
 	rr := httptest.NewRecorder()
 
@@ -598,7 +612,7 @@ func TestCAHandlers_ListCertificates_Success(t *testing.T) {
 	ca := newMockCAService()
 	_, router := setupCAHandlers(ca)
 
-	req, _ := http.NewRequest(http.MethodGet, "/api/v1/ca/certificates", nil)
+	req := caAdminRequest(http.MethodGet, "/api/v1/ca/certificates", nil)
 	rr := httptest.NewRecorder()
 
 	router.ServeHTTP(rr, req)
@@ -619,7 +633,7 @@ func TestCAHandlers_ListCertificates_WithPagination(t *testing.T) {
 	ca := newMockCAService()
 	_, router := setupCAHandlers(ca)
 
-	req, _ := http.NewRequest(http.MethodGet, "/api/v1/ca/certificates?page=1&page_size=10", nil)
+	req := caAdminRequest(http.MethodGet, "/api/v1/ca/certificates?page=1&page_size=10", nil)
 	rr := httptest.NewRecorder()
 
 	router.ServeHTTP(rr, req)
@@ -638,7 +652,7 @@ func TestCAHandlers_ListCertificates_MaxPageSize(t *testing.T) {
 	ca := newMockCAService()
 	_, router := setupCAHandlers(ca)
 
-	req, _ := http.NewRequest(http.MethodGet, "/api/v1/ca/certificates?page_size=5000", nil)
+	req := caAdminRequest(http.MethodGet, "/api/v1/ca/certificates?page_size=5000", nil)
 	rr := httptest.NewRecorder()
 
 	router.ServeHTTP(rr, req)
@@ -655,7 +669,7 @@ func TestCAHandlers_ListCertificates_MaxPageSize(t *testing.T) {
 func TestCAHandlers_ListCertificates_CANotAvailable(t *testing.T) {
 	_, router := setupCAHandlers(nil)
 
-	req, _ := http.NewRequest(http.MethodGet, "/api/v1/ca/certificates", nil)
+	req := caAdminRequest(http.MethodGet, "/api/v1/ca/certificates", nil)
 	rr := httptest.NewRecorder()
 
 	router.ServeHTTP(rr, req)
@@ -672,7 +686,7 @@ func TestCAHandlers_GetCertificate_RootCert(t *testing.T) {
 	_, router := setupCAHandlers(ca)
 
 	serial := hex.EncodeToString(ca.rootCert.SerialNumber.Bytes())
-	req, _ := http.NewRequest(http.MethodGet, "/api/v1/ca/certificates/"+serial, nil)
+	req := caAdminRequest(http.MethodGet, "/api/v1/ca/certificates/"+serial, nil)
 	rr := httptest.NewRecorder()
 
 	router.ServeHTTP(rr, req)
@@ -693,7 +707,7 @@ func TestCAHandlers_GetCertificate_WithPEM(t *testing.T) {
 	_, router := setupCAHandlers(ca)
 
 	serial := hex.EncodeToString(ca.rootCert.SerialNumber.Bytes())
-	req, _ := http.NewRequest(http.MethodGet, "/api/v1/ca/certificates/"+serial+"?include_pem=true", nil)
+	req := caAdminRequest(http.MethodGet, "/api/v1/ca/certificates/"+serial+"?include_pem=true", nil)
 	rr := httptest.NewRecorder()
 
 	router.ServeHTTP(rr, req)
@@ -713,8 +727,7 @@ func TestCAHandlers_GetCertificate_IncludeDer(t *testing.T) {
 	serial := hex.EncodeToString(ca.rootCert.SerialNumber.Bytes())
 
 	get := func(query string) *platformv1.Certificate {
-		req, err := http.NewRequest(http.MethodGet, "/api/v1/ca/certificates/"+serial+query, nil)
-		require.NoError(t, err)
+		req := caAdminRequest(http.MethodGet, "/api/v1/ca/certificates/"+serial+query, nil)
 		rr := httptest.NewRecorder()
 		router.ServeHTTP(rr, req)
 		require.Equal(t, http.StatusOK, rr.Code)
@@ -731,7 +744,7 @@ func TestCAHandlers_GetCertificate_NotFound(t *testing.T) {
 	ca := newMockCAService()
 	_, router := setupCAHandlers(ca)
 
-	req, _ := http.NewRequest(http.MethodGet, "/api/v1/ca/certificates/nonexistent", nil)
+	req := caAdminRequest(http.MethodGet, "/api/v1/ca/certificates/nonexistent", nil)
 	rr := httptest.NewRecorder()
 
 	router.ServeHTTP(rr, req)
@@ -756,7 +769,7 @@ func TestCAHandlers_GetCertificate_EmptySerial(t *testing.T) {
 func TestCAHandlers_GetCertificate_CANotAvailable(t *testing.T) {
 	_, router := setupCAHandlers(nil)
 
-	req, _ := http.NewRequest(http.MethodGet, "/api/v1/ca/certificates/someserial", nil)
+	req := caAdminRequest(http.MethodGet, "/api/v1/ca/certificates/someserial", nil)
 	rr := httptest.NewRecorder()
 
 	router.ServeHTTP(rr, req)
@@ -1004,7 +1017,7 @@ func TestCAHandlers_RenewCertificate_Success(t *testing.T) {
 	}
 	body, _ := json.Marshal(reqBody)
 
-	req, _ := http.NewRequest(http.MethodPost, "/api/v1/ca/certificates/"+serial+"/renew", bytes.NewReader(body))
+	req := caAdminRequest(http.MethodPost, "/api/v1/ca/certificates/"+serial+"/renew", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	rr := httptest.NewRecorder()
 
@@ -1039,7 +1052,7 @@ func TestCAHandlers_RenewCertificate_PreserveSANs(t *testing.T) {
 	}
 	body, _ := json.Marshal(reqBody)
 
-	req, _ := http.NewRequest(http.MethodPost, "/api/v1/ca/certificates/"+serial+"/renew", bytes.NewReader(body))
+	req := caAdminRequest(http.MethodPost, "/api/v1/ca/certificates/"+serial+"/renew", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	rr := httptest.NewRecorder()
 
@@ -1063,7 +1076,7 @@ func TestCAHandlers_RenewCertificate_HandsTheRequestToTheSharedRenewal(t *testin
 		NewSANs:      &CASANsRequest{DNS: []string{"new.renew.test.com"}},
 	})
 	require.NoError(t, err)
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/ca/certificates/"+serial+"/renew", bytes.NewReader(body))
+	req := caAdminRequest(http.MethodPost, "/api/v1/ca/certificates/"+serial+"/renew", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	rr := httptest.NewRecorder()
 	router.ServeHTTP(rr, req)
@@ -1092,7 +1105,7 @@ func TestCAHandlers_RenewCertificate_NewSANs(t *testing.T) {
 	}
 	body, _ := json.Marshal(reqBody)
 
-	req, _ := http.NewRequest(http.MethodPost, "/api/v1/ca/certificates/"+serial+"/renew", bytes.NewReader(body))
+	req := caAdminRequest(http.MethodPost, "/api/v1/ca/certificates/"+serial+"/renew", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	rr := httptest.NewRecorder()
 
@@ -1114,7 +1127,7 @@ func TestCAHandlers_RenewCertificate_InvalidValidDays(t *testing.T) {
 	}
 	body, _ := json.Marshal(reqBody)
 
-	req, _ := http.NewRequest(http.MethodPost, "/api/v1/ca/certificates/"+serial+"/renew", bytes.NewReader(body))
+	req := caAdminRequest(http.MethodPost, "/api/v1/ca/certificates/"+serial+"/renew", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	rr := httptest.NewRecorder()
 
@@ -1132,7 +1145,7 @@ func TestCAHandlers_RenewCertificate_NotFound(t *testing.T) {
 	}
 	body, _ := json.Marshal(reqBody)
 
-	req, _ := http.NewRequest(http.MethodPost, "/api/v1/ca/certificates/nonexistent/renew", bytes.NewReader(body))
+	req := caAdminRequest(http.MethodPost, "/api/v1/ca/certificates/nonexistent/renew", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	rr := httptest.NewRecorder()
 
@@ -1156,7 +1169,7 @@ func TestCAHandlers_RenewCertificate_RenewFailed(t *testing.T) {
 	}
 	body, _ := json.Marshal(reqBody)
 
-	req, _ := http.NewRequest(http.MethodPost, "/api/v1/ca/certificates/"+serial+"/renew", bytes.NewReader(body))
+	req := caAdminRequest(http.MethodPost, "/api/v1/ca/certificates/"+serial+"/renew", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	rr := httptest.NewRecorder()
 
@@ -1185,7 +1198,7 @@ func TestCAHandlers_VerifyCertificate_Success_PEM(t *testing.T) {
 	}
 	body, _ := json.Marshal(reqBody)
 
-	req, _ := http.NewRequest(http.MethodPost, "/api/v1/ca/certificates/verify", bytes.NewReader(body))
+	req := caAdminRequest(http.MethodPost, "/api/v1/ca/certificates/verify", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	rr := httptest.NewRecorder()
 
@@ -1210,7 +1223,7 @@ func TestCAHandlers_VerifyCertificate_Success_DER(t *testing.T) {
 	}
 	body, _ := json.Marshal(reqBody)
 
-	req, _ := http.NewRequest(http.MethodPost, "/api/v1/ca/certificates/verify", bytes.NewReader(body))
+	req := caAdminRequest(http.MethodPost, "/api/v1/ca/certificates/verify", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	rr := httptest.NewRecorder()
 
@@ -1226,7 +1239,7 @@ func TestCAHandlers_VerifyCertificate_MissingCertificate(t *testing.T) {
 	reqBody := CertificateVerifyRequest{}
 	body, _ := json.Marshal(reqBody)
 
-	req, _ := http.NewRequest(http.MethodPost, "/api/v1/ca/certificates/verify", bytes.NewReader(body))
+	req := caAdminRequest(http.MethodPost, "/api/v1/ca/certificates/verify", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	rr := httptest.NewRecorder()
 
@@ -1244,7 +1257,7 @@ func TestCAHandlers_VerifyCertificate_InvalidPEM(t *testing.T) {
 	}
 	body, _ := json.Marshal(reqBody)
 
-	req, _ := http.NewRequest(http.MethodPost, "/api/v1/ca/certificates/verify", bytes.NewReader(body))
+	req := caAdminRequest(http.MethodPost, "/api/v1/ca/certificates/verify", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	rr := httptest.NewRecorder()
 
@@ -1262,7 +1275,7 @@ func TestCAHandlers_VerifyCertificate_InvalidDER(t *testing.T) {
 	}
 	body, _ := json.Marshal(reqBody)
 
-	req, _ := http.NewRequest(http.MethodPost, "/api/v1/ca/certificates/verify", bytes.NewReader(body))
+	req := caAdminRequest(http.MethodPost, "/api/v1/ca/certificates/verify", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	rr := httptest.NewRecorder()
 
@@ -1286,7 +1299,7 @@ func TestCAHandlers_VerifyCertificate_WithTrustedRoots(t *testing.T) {
 	}
 	body, _ := json.Marshal(reqBody)
 
-	req, _ := http.NewRequest(http.MethodPost, "/api/v1/ca/certificates/verify", bytes.NewReader(body))
+	req := caAdminRequest(http.MethodPost, "/api/v1/ca/certificates/verify", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	rr := httptest.NewRecorder()
 

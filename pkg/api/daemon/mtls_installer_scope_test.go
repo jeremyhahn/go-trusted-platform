@@ -21,10 +21,12 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"log/slog"
 	"math/big"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -289,6 +291,38 @@ func TestMTLSInstallerScope_RESTScopeGuardGrantsOnlyTheOperator(t *testing.T) {
 	code, reached = call(f.installer)
 	assert.Equal(t, http.StatusForbidden, code)
 	assert.False(t, reached)
+}
+
+// An installer certificate must not issue or renew a certificate on the
+// daemon's REST CA routes, registered as rest_service.go registers them
+// (Codex 8238); the operator certificate passes the guard.
+func TestMTLSInstallerScope_RESTCAIssueAndRenewRefuseTheInstaller(t *testing.T) {
+	f := newInstallerScopeFixture(t)
+	guard, err := newRESTScopeGuard(f.config, nil, logging.DefaultLogger())
+	require.NoError(t, err)
+
+	config := DefaultConfig()
+	service, err := NewService(config)
+	require.NoError(t, err)
+	server, err := NewRESTServer(config, service, slog.Default())
+	require.NoError(t, err)
+	server.SetCAHandlers(&fakeRESTCA{}, guard)
+
+	for _, path := range []string{"/api/v1/ca/certificates", "/api/v1/ca/certificates/0a1b/renew"} {
+		call := func(leaf *x509.Certificate) int {
+			r := httptest.NewRequest(http.MethodPost, path, strings.NewReader("{}"))
+			r.TLS = verifiedState(leaf)
+			w := httptest.NewRecorder()
+			server.router.ServeHTTP(w, r)
+			return w.Code
+		}
+
+		assert.Equal(t, http.StatusForbidden, call(f.installer), "the installer must be refused POST %s", path)
+
+		operator := call(f.operator)
+		assert.NotEqual(t, http.StatusUnauthorized, operator, "the operator must pass the guard on POST %s", path)
+		assert.NotEqual(t, http.StatusForbidden, operator, "the operator must pass the guard on POST %s", path)
+	}
 }
 
 func TestMTLSInstallerScope_MCPGrantsOnlyTheOperator(t *testing.T) {

@@ -216,7 +216,13 @@ func (f *caParityFixture) unixClient(t *testing.T) platformv1.CAServiceClient {
 
 func (f *caParityFixture) restClient(t *testing.T) platformv1.CAServiceClient {
 	router := mux.NewRouter()
-	restapi.NewCAHandlers(restapi.NewCAAuthorityAdapter(f.ca), nil, nil).RegisterRoutes(router)
+	// Every daemon CA certificate route checks its scope; the client's token
+	// holds the four the CA certificate routes take.
+	const operatorToken = "ca-operator"
+	guard := restapi.NewScopeGuard(tokenScopes{
+		operatorToken: {"certs:generate", "certs:list", "certs:read", "certs:revoke"},
+	}, nil, nil)
+	restapi.NewCAHandlers(restapi.NewCAAuthorityAdapter(f.ca), nil, nil).WithScopeGuard(guard).RegisterRoutes(router)
 	// The SDK's REST Connect probes GET /health, which the daemon serves on
 	// every REST listener.
 	router.HandleFunc("/health/live", func(w http.ResponseWriter, _ *http.Request) {

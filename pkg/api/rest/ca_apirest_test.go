@@ -82,7 +82,7 @@ func caErrorMessage(t *testing.T, rec *httptest.ResponseRecorder) string {
 }
 
 func caServe(router *mux.Router, method, path string, body []byte) *httptest.ResponseRecorder {
-	req := httptest.NewRequest(method, path, bytes.NewReader(body))
+	req := caAdminRequest(method, path, bytes.NewReader(body))
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 	return rec
@@ -298,7 +298,7 @@ func TestCAAPIRest_VerifyCertificate(t *testing.T) {
 	verify := func(t *testing.T, ca CAServiceInterface, objects objectstorage.Client, req CertificateVerifyRequest) CAVerifyCertificateResponse {
 		t.Helper()
 		router := mux.NewRouter()
-		NewCAHandlers(ca, nil, objects).RegisterRoutes(router)
+		NewCAHandlers(ca, nil, objects).WithScopeGuard(caAdminGuard()).RegisterRoutes(router)
 		body, err := json.Marshal(req)
 		require.NoError(t, err)
 		rec := caServe(router, http.MethodPost, "/api/v1/ca/certificates/verify", body)
