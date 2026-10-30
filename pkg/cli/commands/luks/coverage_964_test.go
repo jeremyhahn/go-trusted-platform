@@ -178,12 +178,16 @@ func luksVerbs(recoveryPath string) []verbCase {
 		},
 		{
 			name: "remove-key",
-			run:  func(cf *cli.CommonFlags) error { return runRemoveKey(cf, &removeKeyFlags{device: "/dev/vda2", slot: 3}) },
+			run: func(cf *cli.CommonFlags) error {
+				return runRemoveKey(cf, &removeKeyFlags{device: "/dev/vda2", slot: 3})
+			},
 			want: &platformv1.LUKSRemoveKeyRequest{Device: "/dev/vda2", Slot: 3},
 		},
 		{
 			name: "test-unlock",
-			run:  func(cf *cli.CommonFlags) error { return runTestUnlock(cf, &testUnlockFlags{device: "/dev/vda2", slot: 4}) },
+			run: func(cf *cli.CommonFlags) error {
+				return runTestUnlock(cf, &testUnlockFlags{device: "/dev/vda2", slot: 4})
+			},
 			want: &platformv1.LUKSTestUnlockRequest{Device: "/dev/vda2", Slot: 4},
 		},
 		{
