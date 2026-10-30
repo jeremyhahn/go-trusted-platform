@@ -16,6 +16,10 @@
 #                initramfs tools, Node and the Playwright libraries) and the
 #                source at /workspace. `make integration-test` runs it under the
 #                privileged compose service (compose.yaml beside this file).
+#   integration-legs
+#                integration + a warm build cache: everything a suite run
+#                compiles, compiled once into /gocache. The image the suites run
+#                in; `trivy image` scans integration, which it leaves unchanged.
 #
 # Build with `make docker-build` (both images) or `make build-devcontainer`
 # (the integration image as trusted-platform-dev:latest): they pass GO_IMAGE
@@ -191,6 +195,10 @@ USER dev:dev
 FROM base AS integration
 ARG DEBIAN_FRONTEND=noninteractive
 ARG TARGETARCH
+# The Alpine package index checksum the content tag hashes (ci-standard.md §9,
+# scripts/apk-index-sum.sh). This base is Debian, so CI passes `none`; the
+# base stage's APT_REFRESH is what rebuilds the packages on a Debian fix.
+ARG APK_INDEX_SUM
 SHELL ["/bin/bash", "-c"]
 
 # Networking and process tools the suites and the entrypoint call. Every
@@ -368,3 +376,22 @@ WORKDIR /workspace
 
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
 CMD ["bash"]
+
+# ---------------------------------------------------------------------------
+# The image `make integration-test` and CI's integration legs run (#1119). The
+# runner's `warm` mode compiles platformd, platformctl, gatewayd,
+# platform-initrd and every suite's test package into /gocache, so each leg
+# links and runs instead of compiling the tree from an empty cache. The cache
+# is build output, no package: the stage `trivy image` scans is integration.
+# The cache mount keeps the last build's cache on the project's BuildKit
+# builder, so a build compiles only what its commit changed (warm_build_cache
+# in the runner). IT_BUILD_TAGS is the tag set the Makefile passes the runner,
+# and GOFLAGS and GOWORK are compose.yaml's integration environment: the cache
+# entries a leg finds are the ones its own build asks for only when both match.
+FROM integration AS integration-legs
+ARG IT_BUILD_TAGS
+RUN --mount=type=cache,id=go-trusted-platform-it-gocache,target=/buildcache,sharing=locked \
+    set -eu; \
+    : "${IT_BUILD_TAGS:?pass the Makefile TEST_BUILD_TAGS: make docker-build-it}"; \
+    GOFLAGS="-mod=readonly -buildvcs=false" GOWORK=off \
+      bash build/docker/devcontainer/run-integration-tests.sh warm "${IT_BUILD_TAGS}" /buildcache

@@ -46,6 +46,13 @@
 # container runs in system.slice, outside that bound (#1178). Set it empty to
 # pass no --cgroup-parent (a developer host with no ci.slice).
 #
+# IN_IMAGE_COPY=<host file>:<container path> copies one more file, outside the
+# checkout, into the container before it starts, owned by the run's user: the
+# trivy image step's `docker save` archive (#1272), which is kept out of the
+# checkout so no other step streams it. The container path's directory must
+# exist once the checkout is in (e.g. /src), and must not be under /tmp, whose
+# tmpfs hides what is copied before start. Unset, nothing more is copied.
+#
 # The container is named go-trusted-platform-ci-tc-<pid>-<random>, under the
 # prefix scripts/reap-stale-ci-stacks.sh reaps, and is removed on every exit.
 set -euo pipefail
@@ -75,6 +82,18 @@ cgroup_parent=${CI_CGROUP_PARENT-ci.slice}
 if [ -n "$cgroup_parent" ] && ! [[ $cgroup_parent =~ ^[A-Za-z0-9][A-Za-z0-9_.@:/-]*$ ]]; then
   echo "CI_CGROUP_PARENT must be a cgroup name such as ci.slice, or empty: $cgroup_parent" >&2
   exit 2
+fi
+copy=${IN_IMAGE_COPY:-}
+copy_src=
+copy_dest=
+if [ -n "$copy" ]; then
+  copy_src=${copy%%:*}
+  copy_dest=${copy#*:}
+  if [ "$copy_src" = "$copy" ] || [ ! -f "$copy_src" ] ||
+    ! [[ $copy_dest =~ ^/[A-Za-z0-9_.-]+(/[A-Za-z0-9_.-]+)*$ ]] || [[ $copy_dest == /tmp/* ]]; then
+    echo "IN_IMAGE_COPY must be <host file>:<absolute container path outside /tmp>: $copy" >&2
+    exit 2
+  fi
 fi
 
 uid=10001
@@ -119,4 +138,9 @@ trap cleanup EXIT
 docker create "${args[@]}" "$image" sh -c "$*" >/dev/null
 tar -C "$PWD" --owner="$uid" --group="$uid" --numeric-owner -cf - . |
   docker cp -a - "$name:/src"
+if [ -n "$copy_src" ]; then
+  tar -C "$(dirname "$copy_src")" --owner="$uid" --group="$uid" --numeric-owner \
+    --transform "s|.*|$(basename "$copy_dest")|" -cf - "$(basename "$copy_src")" |
+    docker cp -a - "$name:$(dirname "$copy_dest")"
+fi
 docker start -a "$name"
