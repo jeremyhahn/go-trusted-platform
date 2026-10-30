@@ -176,10 +176,8 @@ func authenticateFromPeer(ctx context.Context, cfg *MTLSInterceptorConfig, metho
 		return nil, status.Error(codes.Unauthenticated, ErrMTLSNoCertificates{}.Error())
 	}
 
-	// Authenticate the leaf certificate. An installer certificate has no
-	// tenant; it is admitted without one on the installer methods only.
-	_, installerMethod := mtlsInstallerMethods[method]
-	identity, err := authenticateMTLSCertificate(ctx, cfg.Authenticator, certs[0], installerMethod)
+	// Authenticate the leaf certificate
+	identity, err := cfg.Authenticator.Authenticate(ctx, certs[0])
 	if err != nil {
 		if cfg.Logger != nil {
 			cfg.Logger.Debug("mtls: authentication failed", "error", err)
@@ -187,11 +185,10 @@ func authenticateFromPeer(ctx context.Context, cfg *MTLSInterceptorConfig, metho
 		return nil, status.Errorf(codes.Unauthenticated, "mtls: %v", err)
 	}
 
-	// Three classes: the operator and a tenant principal may call any method
-	// (tenant authorization limits the latter); an installer certificate,
-	// which is every other one, may call only the install-completion webhook.
-	if !isMTLSPrincipal(certs[0], cfg.OperatorTrustDomain) {
-		if !installerMethod {
+	// Only the operator may call any method; an installer certificate may
+	// call only the install-completion webhook.
+	if !isMTLSOperator(certs[0], cfg.OperatorTrustDomain) {
+		if _, allowed := mtlsInstallerMethods[method]; !allowed {
 			if cfg.Logger != nil {
 				cfg.Logger.Debug("mtls: installer certificate refused", "method", method)
 			}

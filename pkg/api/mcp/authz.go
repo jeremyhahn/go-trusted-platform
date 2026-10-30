@@ -541,9 +541,7 @@ func toolPermissionCatalog() map[string]string {
 	// PXE tools (#704) require the scope of their gRPC PXEService method:
 	// pxe:read observes, pxe:write moves a device through the workflow or
 	// starts and stops the service (WebhookComplete included), pxe:delete
-	// removes a device. Each scope lives on its pxeTools entry. A verified
-	// installer certificate holds no scope and reaches pxe_webhook_complete
-	// alone, through its authenticator's PeerMethodAdmitter (authorizePeer).
+	// removes a device. Each scope lives on its pxeTools entry.
 	for name, tool := range pxeTools {
 		permissions[name] = tool.scope
 	}
@@ -798,7 +796,7 @@ func (c *AuthorizationChecker) AuthorizeTool(ctx context.Context, toolName strin
 	// request, as on REST, gRPC and QUIC. A presented token never takes this
 	// path: it is validated by the token backend below.
 	if token == "" && c.peerAuthenticator != nil {
-		return c.authorizePeer(ctx, toolName, permission)
+		return c.authorizePeer(ctx, permission)
 	}
 
 	// With no authorization backend there is nothing that can grant the

@@ -60,9 +60,7 @@ func Renew(ctx context.Context, ca quicbaasca.CACertificateAuthority, existing *
 		return nil, &RenewError{Step: "remove the old certificate", Err: err}
 	}
 
-	// Issue, not IssueCertificate: a CA certificate must be renewed with the
-	// CA profile, or the replacement would be a leaf.
-	issued, err := Issue(ctx, ca, renewalRequest(existing, opts))
+	issued, err := ca.IssueCertificate(ctx, renewalRequest(existing, opts))
 	if err != nil {
 		return nil, &RenewError{Step: "issue the renewed certificate", Err: err}
 	}

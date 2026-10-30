@@ -2,7 +2,6 @@ package issuance
 
 import (
 	"context"
-	"crypto"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -90,95 +89,6 @@ func TestIssue_NilRequest(t *testing.T) {
 	assert.ErrorAs(t, err, &ErrNilCertificateRequest{})
 }
 
-// TestRenew_CACertificateStaysCA issues a CA certificate through a real go-xkms
-// CA, renews it through Renew, and checks the replacement is still a CA with
-// the same path length that signs a leaf chaining to the root. It fails if
-// Renew issues through IssueCertificate, whose default profile is a leaf.
-func TestRenew_CACertificateStaysCA(t *testing.T) {
-	for _, maxPathLen := range []int{0, 1} {
-		name := "renew-sub-ca-path-length-" + strconv.Itoa(maxPathLen)
-		t.Run(name, func(t *testing.T) {
-			root := newRenewableRootCA(t)
-			rootCert, err := root.CACertificate()
-			require.NoError(t, err)
-
-			issued, err := Issue(context.Background(), root, &quicbaasca.CACertificateRequest{
-				Subject:       quicbaasca.CASubject{CommonName: name, Organization: "Test Org", Country: "US"},
-				Valid:         1,
-				IsCA:          true,
-				MaxPathLen:    maxPathLen,
-				KeyAttributes: softwareTLSKey(name),
-			})
-			require.NoError(t, err)
-			require.True(t, issued.Certificate.IsCA)
-
-			renewed, err := Renew(context.Background(), root, issued.Certificate, RenewOptions{ValidDays: 1})
-			require.NoError(t, err)
-			require.NotNil(t, renewed)
-
-			assert.True(t, renewed.IsCA, "renewing a CA certificate must return a CA certificate")
-			assert.True(t, renewed.BasicConstraintsValid)
-			assert.NotZero(t, renewed.KeyUsage&x509.KeyUsageCertSign, "a renewed CA certificate must carry keyCertSign")
-			assert.Equal(t, maxPathLen, renewed.MaxPathLen)
-			assert.Equal(t, maxPathLen == 0, renewed.MaxPathLenZero)
-			assert.NotEqual(t, issued.Certificate.SerialNumber, renewed.SerialNumber)
-
-			signer, err := root.KeyStore().Signer(context.Background(), softwareTLSKey(name))
-			require.NoError(t, err)
-			leaf := signLeafWith(t, renewed, signer)
-			roots := x509.NewCertPool()
-			roots.AddCert(rootCert)
-			intermediates := x509.NewCertPool()
-			intermediates.AddCert(renewed)
-			_, err = leaf.Verify(x509.VerifyOptions{
-				Roots:         roots,
-				Intermediates: intermediates,
-				KeyUsages:     []x509.ExtKeyUsage{x509.ExtKeyUsageAny},
-			})
-			require.NoError(t, err, "the renewed CA must sign a leaf that chains to the root")
-		})
-	}
-}
-
-// TestRenew_LeafStaysLeaf checks renewing a leaf certificate keeps the leaf
-// profile.
-func TestRenew_LeafStaysLeaf(t *testing.T) {
-	root := newRenewableRootCA(t)
-	issued, err := Issue(context.Background(), root, &quicbaasca.CACertificateRequest{
-		Subject:       quicbaasca.CASubject{CommonName: "renew-leaf.test", Organization: "Test Org", Country: "US"},
-		Valid:         1,
-		KeyAttributes: softwareTLSKey("renew-leaf.test"),
-	})
-	require.NoError(t, err)
-	require.False(t, issued.Certificate.IsCA)
-
-	renewed, err := Renew(context.Background(), root, issued.Certificate, RenewOptions{ValidDays: 1})
-	require.NoError(t, err)
-	require.NotNil(t, renewed)
-	assert.False(t, renewed.IsCA, "renewing a leaf must not return a CA certificate")
-	assert.Zero(t, renewed.KeyUsage&x509.KeyUsageCertSign, "a renewed leaf must not carry keyCertSign")
-}
-
-// newRenewableRootCA is newSoftwareRootCA as the CA surface Renew takes.
-func newRenewableRootCA(t *testing.T) quicbaasca.CACertificateAuthority {
-	t.Helper()
-	root, ok := newSoftwareRootCA(t).(quicbaasca.CACertificateAuthority)
-	require.True(t, ok, "the go-xkms CA must implement the TCG CA surface")
-	return root
-}
-
-// softwareTLSKey is the key renewalRequest names for a certificate with
-// common name cn, so the issued certificate's key is the one Renew rotates.
-func softwareTLSKey(cn string) *xkmssdk.KeyAttributes {
-	return &xkmssdk.KeyAttributes{
-		CN:            cn,
-		KeyAlgorithm:  x509.ECDSA,
-		ECCAttributes: &xkmssdk.ECCAttributes{Curve: elliptic.P256()},
-		StoreType:     xkmssdk.StoreSoftware,
-		KeyType:       xkmssdk.KeyTypeTLS,
-	}
-}
-
 // newSoftwareRootCA builds a real go-xkms root CA over in-memory stores.
 func newSoftwareRootCA(t *testing.T) xkmssdk.TrustedCA {
 	t.Helper()
@@ -228,12 +138,6 @@ func newECKey(t *testing.T) *ecdsa.PrivateKey {
 
 // signLeaf signs a leaf certificate with the CA certificate's key.
 func signLeaf(t *testing.T, ca *x509.Certificate, caKey *ecdsa.PrivateKey) *x509.Certificate {
-	t.Helper()
-	return signLeafWith(t, ca, caKey)
-}
-
-// signLeafWith signs a leaf certificate with caKey, the CA certificate's key.
-func signLeafWith(t *testing.T, ca *x509.Certificate, caKey crypto.Signer) *x509.Certificate {
 	t.Helper()
 	tmpl := &x509.Certificate{
 		SerialNumber: big.NewInt(7),

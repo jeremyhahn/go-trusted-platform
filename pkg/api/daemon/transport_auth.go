@@ -17,7 +17,6 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
-	"errors"
 	"net/url"
 	"os"
 	"strings"
@@ -242,30 +241,18 @@ func selectQUICAuth(config *Config, shared *platformTokenValidator, clientCAPool
 //     spiffe://<trust domain>/tenant/<system tenant>/user/<admin> and carries
 //     the system tenant as its subject organization. It is granted every
 //     operation (mtlsOperatorScope).
-//
 //   - an installer, holding the certificate the installer presents to complete
 //     an install. Its SHA-256 is bound to one device through PXE UpdateState,
 //     and it authorizes only the install-completion webhook, which checks that
 //     binding itself. It is granted no scope, so every scope-guarded REST, QUIC
-//     and MCP operation refuses it; the gRPC interceptors, the QUIC guard and
-//     the MCP checker admit it only to the methods in mtlsInstallerMethods.
+//     and MCP operation refuses it, and the gRPC interceptors admit it only to
+//     the methods in mtlsInstallerMethods.
 //
-//   - a tenant principal, holding a tenant admin or user certificate. Its leaf
-//     carries exactly one subject organization, a tenant other than the system
-//     tenant, and names the same tenant in the SPIFFE ID
-//     spiffe://<trust domain>/tenant/<tenant>/user/<name>. It is granted every
-//     operation (mtlsOperatorScope), which tenant authorization then limits to
-//     its own tenant.
-//
-// Any certificate that is positively neither the operator nor a tenant
-// principal is an installer. That includes every machine certificate: the
-// daemon's and the ISO-built certificates carry a non-system organization but
-// no /user/ SPIFFE ID, so a subject organization alone never grants a scope.
+// Any certificate that is not positively the operator is an installer.
 const mtlsOperatorScope = "*:*"
 
-// mtlsInstallerMethods are the only methods an installer certificate may
-// invoke, named by gRPC full method. It is the one list for every transport:
-// gRPC reads it directly, QUIC and MCP through mtlsPeerAuthenticator.AdmitsMethod.
+// mtlsInstallerMethods are the only gRPC methods an installer certificate may
+// invoke.
 var mtlsInstallerMethods = map[string]struct{}{
 	platformv1.PXEService_WebhookComplete_FullMethodName: {},
 }
@@ -298,55 +285,12 @@ func isMTLSOperatorSPIFFEID(uri *url.URL, trustDomain string) bool {
 }
 
 // mtlsGrantFor is the scope grant of the principal leaf authenticates: every
-// operation for the operator and a tenant principal, nothing for an installer.
+// operation for the operator, nothing for an installer.
 func mtlsGrantFor(leaf *x509.Certificate, trustDomain string) []string {
-	if isMTLSPrincipal(leaf, trustDomain) {
+	if isMTLSOperator(leaf, trustDomain) {
 		return []string{mtlsOperatorScope}
 	}
 	return nil
-}
-
-// isMTLSPrincipal reports whether leaf may go beyond the installer methods:
-// it is the operator or a tenant principal for trustDomain.
-func isMTLSPrincipal(leaf *x509.Certificate, trustDomain string) bool {
-	return isMTLSOperator(leaf, trustDomain) || isMTLSTenantPrincipal(leaf, trustDomain)
-}
-
-// isMTLSTenantPrincipal reports whether leaf is a tenant principal for
-// trustDomain: exactly one subject organization, not the system tenant, and a
-// SPIFFE ID spiffe://<trustDomain>/tenant/<that organization>/user/<name>. An
-// empty trustDomain names no principal, so it fails closed.
-func isMTLSTenantPrincipal(leaf *x509.Certificate, trustDomain string) bool {
-	if leaf == nil || trustDomain == "" {
-		return false
-	}
-	if len(leaf.Subject.Organization) != 1 {
-		return false
-	}
-	tenant := leaf.Subject.Organization[0]
-	if tenant == "" || tenant == app.SystemTenantID {
-		return false
-	}
-	for _, uri := range leaf.URIs {
-		if isMTLSTenantUserSPIFFEID(uri, trustDomain, tenant) {
-			return true
-		}
-	}
-	return false
-}
-
-// isMTLSTenantUserSPIFFEID reports whether uri is
-// spiffe://<trustDomain>/tenant/<tenant>/user/<name> with a non-empty name that
-// holds no further path segment.
-func isMTLSTenantUserSPIFFEID(uri *url.URL, trustDomain, tenant string) bool {
-	if uri == nil || !strings.EqualFold(uri.Scheme, "spiffe") || uri.Host != trustDomain {
-		return false
-	}
-	if uri.RawQuery != "" || uri.Fragment != "" {
-		return false
-	}
-	name, ok := strings.CutPrefix(uri.Path, "/tenant/"+tenant+"/user/")
-	return ok && name != "" && !strings.Contains(name, "/")
 }
 
 // mtlsPeerAuthenticator turns the verified client certificate of a QUIC
@@ -359,33 +303,12 @@ type mtlsPeerAuthenticator struct {
 	trustDomain string
 }
 
-// AdmitsMethod reports whether method is one an installer certificate may
-// invoke. It is how the QUIC guard and the MCP checker share
-// mtlsInstallerMethods with the gRPC interceptors; the operator never needs
-// it, holding every scope.
-func (a mtlsPeerAuthenticator) AdmitsMethod(method string) bool {
-	_, ok := mtlsInstallerMethods[method]
-	return ok
-}
-
 // AuthenticatePeer authenticates the leaf of chain and returns its principal.
 func (a mtlsPeerAuthenticator) AuthenticatePeer(ctx context.Context, chain []*x509.Certificate) (*platformtoken.AuthorizedContext, error) {
-	return a.authenticate(ctx, chain, false)
-}
-
-// AuthenticateInstallerPeer is AuthenticatePeer for a method AdmitsMethod
-// admits: a verified certificate without a subject organization is admitted
-// with no tenant and no scope (authenticateMTLSCertificate). The method's
-// handler still requires the certificate's fingerprint to be bound.
-func (a mtlsPeerAuthenticator) AuthenticateInstallerPeer(ctx context.Context, chain []*x509.Certificate) (*platformtoken.AuthorizedContext, error) {
-	return a.authenticate(ctx, chain, true)
-}
-
-func (a mtlsPeerAuthenticator) authenticate(ctx context.Context, chain []*x509.Certificate, installerMethod bool) (*platformtoken.AuthorizedContext, error) {
 	if len(chain) == 0 {
 		return nil, quic.ErrMissingClientCertificate{}
 	}
-	identity, err := authenticateMTLSCertificate(ctx, a.authenticator, chain[0], installerMethod)
+	identity, err := a.authenticator.Authenticate(ctx, chain[0])
 	if err != nil {
 		return nil, err
 	}
@@ -395,26 +318,6 @@ func (a mtlsPeerAuthenticator) authenticate(ctx context.Context, chain []*x509.C
 		TenantID: identity.TenantID,
 		Scopes:   mtlsGrantFor(chain[0], a.trustDomain),
 	}, nil
-}
-
-// authenticateMTLSCertificate authenticates cert. The installer certificate
-// carries no subject organization, so the authenticator, which takes the
-// tenant from it, refuses it with auth.ErrTenantNotFound after the chain,
-// validity and identity checks have passed. On an installer method
-// (mtlsInstallerMethods) that refusal alone is waived and the certificate is
-// admitted with no tenant: the method's handler admits only the certificate
-// whose fingerprint SetDeviceInstalling bound, as the REST webhook does. On
-// every other method the refusal stands unchanged.
-func authenticateMTLSCertificate(ctx context.Context, authenticator auth.Authenticator, cert *x509.Certificate, installerMethod bool) (*auth.Identity, error) {
-	identity, err := authenticator.Authenticate(ctx, cert)
-	if err == nil || !installerMethod {
-		return identity, err
-	}
-	var noTenant auth.ErrTenantNotFound
-	if !errors.As(err, &noTenant) {
-		return nil, err
-	}
-	return authenticator.ExtractIdentity(cert)
 }
 
 // newRESTScopeGuard builds the guard that checks each daemon REST route's

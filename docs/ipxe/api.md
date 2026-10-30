@@ -285,8 +285,8 @@ call. This binding is the only one: there is no separate certificate-binding RPC
 8200).** It is accepted on gRPC (`WebhookComplete`) and on REST
 (`POST /api/v1/pxe/webhook/complete`). The gRPC mTLS interceptor refuses it on
 every other method with `PermissionDenied` (`ErrMTLSInstallerMethodDenied`,
-`pkg/api/daemon/mtls_interceptor.go:198`). On REST, QUIC and MCP it is granted
-no scope (`mtlsGrantFor`, `pkg/api/daemon/transport_auth.go:302`), so every
+`pkg/api/daemon/mtls_interceptor.go:190`). On REST, QUIC and MCP it is granted
+no scope (`mtlsGrantFor`, `pkg/api/daemon/transport_auth.go:289`), so every
 scope-guarded operation refuses it, with one exception: the webhook itself.
 QUIC `0xCF` sub `0x36` and the MCP tool `pxe_webhook_complete` admit it through
 the `PeerMethodAdmitter` exception (`pkg/api/quic/peer_auth.go:70`,

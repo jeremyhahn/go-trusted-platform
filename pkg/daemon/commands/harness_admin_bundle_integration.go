@@ -27,6 +27,8 @@ import (
 	"os"
 	"path/filepath"
 
+	certclient "github.com/jeremyhahn/go-quicbaas/sdk/go/client/certificate"
+
 	appbackends "github.com/jeremyhahn/go-trusted-platform/pkg/app/backends"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 )
@@ -54,37 +56,36 @@ func init() {
 // writeHarnessAdminBundle issues two CN=admin client certificates and writes
 // each, key included, mode 0600: one in harnessTenantID to
 // <dir>/tenant-client-bundle.pem, then the system tenant's to
-// <dir>/client-bundle.pem. The system bundle is minted through the
-// identity-aware admin bundle issuer, so its leaf carries identity's operator
-// SPIFFE URI and passes the mTLS operator check. It issues fresh certificates
-// on every start; the harness wipes the directory before each run anyway.
-func writeHarnessAdminBundle(ctx context.Context, logger *logging.Logger, issuer appbackends.CertIssuer, identity appbackends.AdminIdentity, dir string) error {
+// <dir>/client-bundle.pem. It issues fresh certificates on every start; the
+// harness wipes the directory before each run anyway.
+func writeHarnessAdminBundle(ctx context.Context, logger *logging.Logger, issuer appbackends.CertIssuer, dir string) error {
 	if issuer == nil {
 		return ErrProvisionMissingSDK{}
 	}
 	// The tenant bundle is written first: the harness waits for
 	// client-bundle.pem, so once that file exists both bundles do.
-	tenant := appbackends.AdminIdentity{TrustDomain: identity.TrustDomain, TenantID: harnessTenantID}
-	if err := writeHarnessIdentityBundle(ctx, logger, issuer, tenant, "tenant admin", filepath.Join(dir, harnessTenantBundleName)); err != nil {
+	tenantReq := appbackends.AdminCertificateRequest()
+	tenantReq.Organization = harnessTenantID
+	if err := writeHarnessBundle(ctx, logger, issuer, tenantReq, "tenant admin", filepath.Join(dir, harnessTenantBundleName)); err != nil {
 		return err
 	}
-	return writeHarnessIdentityBundle(ctx, logger, issuer, identity, "admin", filepath.Join(dir, harnessAdminBundleName))
+	return writeHarnessBundle(ctx, logger, issuer, appbackends.AdminCertificateRequest(), "admin", filepath.Join(dir, harnessAdminBundleName))
 }
 
-// writeHarnessIdentityBundle issues the admin client bundle for identity and
-// writes it to path. role names the bundle in the error a failed issue
-// returns.
-func writeHarnessIdentityBundle(ctx context.Context, logger *logging.Logger, issuer appbackends.CertIssuer, identity appbackends.AdminIdentity, role, path string) error {
-	bundle, err := appbackends.NewAdminBundleIssuer(issuer, identity).IssueAdminBundle(ctx)
+// writeHarnessBundle issues the certificate req asks for and writes it, key
+// included, to path (mode 0600). role names the bundle in a failure.
+func writeHarnessBundle(ctx context.Context, logger *logging.Logger, issuer appbackends.CertIssuer, req *certclient.IssueCertificateRequest, role, path string) error {
+	resp, err := issuer.IssueCertificate(ctx, req)
 	if err != nil {
 		return ErrProvisionIssue{Role: role, Cause: err}
 	}
-	if err := writeBundle(path, bundle.CertPEM, bundle.KeyPEM, 0600); err != nil {
+	if err := writeBundle(path, resp.CertificatePEM, resp.PrivateKeyPEM, 0600); err != nil {
 		return ErrProvisionPersist{Path: path, Cause: err}
 	}
-	logger.Warn("integration build: wrote a test-only "+role+" client bundle",
+	logger.Warn("integration build: wrote a test-only client bundle",
 		"path", path,
-		"tenant", identity.TenantID,
+		"tenant", req.Organization,
+		"serial", resp.SerialNumber,
 	)
 	return nil
 }

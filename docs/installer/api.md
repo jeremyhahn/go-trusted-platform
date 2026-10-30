@@ -169,29 +169,12 @@ named. **Do not treat this table as the installer's API.**
 `PXEService/WebhookComplete`, and every other method returns
 `PermissionDenied`. On REST it reaches only `POST /api/v1/pxe/webhook/complete`,
 which authenticates the certificate itself. Every scope-guarded route refuses it
-because it carries no scope. On QUIC the guard admits it only to the
-PXE `WebhookComplete` sub-opcode, and on MCP the checker admits it only to the
-`pxe_webhook_complete` tool (Codex 8263); every other PXE operation still
-requires `pxe:write` and refuses it. gRPC, QUIC and MCP read the one list of
-installer methods, `mtlsInstallerMethods` in
-`pkg/api/daemon/transport_auth.go`. The installer certificate need carry no
-subject organization: on those methods alone the gRPC interceptor, the QUIC
-guard and the MCP checker admit a verified certificate the authenticator
-refused only for having no tenant, and WebhookComplete then admits it only if
-its fingerprint is the one SetDeviceInstalling bound, as REST does. On every
-other method such a certificate is refused as unauthenticated. A verified client
-certificate falls in one of three classes (Codex 8279 P1-f). The **operator**
-(subject O the system tenant and SPIFFE ID
-`spiffe://<td>/tenant/system/user/admin`) and a **tenant principal** (exactly
-one subject O that is not the system tenant, plus a SPIFFE ID
-`spiffe://<td>/tenant/<that O>/user/<name>` in the operator trust domain) are
-granted the platform API, and tenant authorization then limits the tenant
-principal to its tenant. Every other certificate, every machine certificate
-included, is an **installer** and reaches only the installer methods above. A
-certificate's subject O alone never grants a scope: the daemon's own client
-certificate carries O "Trusted Platform" and no tenant user SPIFFE ID, so it
-stays an installer. See
-[`docs/auth/architecture.md`](../auth/architecture.md) §5.
+because it carries no scope. QUIC and MCP have no certificate-bound webhook
+route: their webhook operation is scope-guarded like every other one, so they
+refuse the installer certificate. Only the operator's admin certificate is
+granted the platform API; see
+[`docs/auth/architecture.md`](../auth/architecture.md) §5, *The two mTLS
+principals*.
 
 **The daemon REST listener enforces the boundary itself (Codex 8242).** Many
 daemon REST routes have no scope guard, among them

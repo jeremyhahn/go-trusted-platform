@@ -268,33 +268,6 @@ func TestAdminBundleIssuer_SDKIssuerGetsTheAdminRequest(t *testing.T) {
 	}
 }
 
-// TestAdminBundleIssuer_TenantBundleNamesItsTenant proves a tenant admin
-// bundle carries its tenant as the one subject O beside its tenant user
-// SPIFFE ID, the pair the mTLS transports admit as a tenant principal
-// (Codex 8279 P1-f).
-func TestAdminBundleIssuer_TenantBundleNamesItsTenant(t *testing.T) {
-	identity := AdminIdentity{TrustDomain: "platform.test", TenantID: "acme"}
-	bundle, err := NewAdminBundleIssuer(PlatformCertIssuer(issuancetest.NewCA(t), nil), identity).IssueAdminBundle(context.Background())
-	if err != nil {
-		t.Fatalf("IssueAdminBundle: %v", err)
-	}
-	certBlock, _ := pem.Decode([]byte(bundle.CertPEM))
-	if certBlock == nil {
-		t.Fatal("tenant admin bundle certificate is not PEM")
-	}
-	cert, err := x509.ParseCertificate(certBlock.Bytes)
-	if err != nil {
-		t.Fatalf("parse tenant admin cert: %v", err)
-	}
-	if org := cert.Subject.Organization; len(org) != 1 || org[0] != "acme" {
-		t.Errorf("Organization = %v, want [acme]", org)
-	}
-	want := "spiffe://platform.test/tenant/acme/user/admin"
-	if len(cert.URIs) != 1 || cert.URIs[0].String() != want {
-		t.Errorf("URIs = %v, want exactly [%s]", cert.URIs, want)
-	}
-}
-
 func TestLocalCACertIssuer_RejectsNilRequest(t *testing.T) {
 	_, err := PlatformCertIssuer(newSigningCA(t), nil).IssueCertificate(context.Background(), nil)
 	var nilReq *ErrCertRequestNil
