@@ -55,6 +55,15 @@
 #
 # The container is named go-trusted-platform-ci-tc-<pid>-<random>, under the
 # prefix scripts/reap-stale-ci-stacks.sh reaps, and is removed on every exit.
+# v4 (ci-template v1.29.4 and v1.29.5, Company Agent rulings 261(c) and
+# 262(a)): Go's build and link scratch
+# (TMPDIR, GOTMPDIR) is an anonymous volume on the image's /var/tmp
+# (IN_IMAGE_SCRATCH overrides), on the daemon's data disk, not the 3 GB /tmp
+# tmpfs, and removed with the container. A scratch directory that is missing or not writable fails
+# the stage by name. A bridge stage's GOPROXY puts DEVCACHE_GOPROXY (Athens)
+# first when the runner sets it: <DEVCACHE_GOPROXY>|https://proxy.golang.org|direct,
+# so any error falls through to the public proxy; GOPRIVATE travels with it.
+#
 set -euo pipefail
 
 if [ "$#" -lt 2 ]; then
@@ -73,6 +82,11 @@ if ! [[ $memory =~ ^[1-9][0-9]*[mg]$ ]]; then
   echo "IN_IMAGE_MEMORY must be a size in m or g, e.g. 16g: $memory" >&2
   exit 2
 fi
+scratch=${IN_IMAGE_SCRATCH:-/var/tmp}
+case $scratch in
+  /*) ;;
+  *) echo "IN_IMAGE_SCRATCH must be an absolute path: $scratch" >&2; exit 2 ;;
+esac
 gomaxprocs=${IN_IMAGE_GOMAXPROCS:-16}
 if ! [[ $gomaxprocs =~ ^[1-9][0-9]*$ ]]; then
   echo "IN_IMAGE_GOMAXPROCS must be a positive integer: $gomaxprocs" >&2
@@ -110,6 +124,10 @@ args=(
   --ulimit core=1048576:1048576
   --ulimit nofile=65536:65536
   --tmpfs "/tmp:rw,exec,nosuid,nodev,size=3g,mode=1777"
+  # Go's build and link scratch on disk, not the tmpfs (v4, above).
+  -v "$scratch"
+  --env TMPDIR="$scratch"
+  --env GOTMPDIR="$scratch"
   --network "$network"
   --user "$uid:$uid"
   --workdir /src
@@ -126,7 +144,7 @@ if [ "$network" = bridge ]; then
   # further fetch more. The writable one starts empty, so a stage downloads
   # its whole graph (gigabytes): it goes beside the build cache on disk, not
   # in the 3g /tmp tmpfs, where it left no room for trivy's DB (#933).
-  args+=(--env "GOPROXY=https://proxy.golang.org,direct" --env GOMODCACHE=/gocache/mod)
+  args+=(--env "GOPROXY=${DEVCACHE_GOPROXY:+$DEVCACHE_GOPROXY|}https://proxy.golang.org|direct" --env GOMODCACHE=/gocache/mod)
   for v in GOPRIVATE GIT_CONFIG_COUNT GIT_CONFIG_KEY_0 GIT_CONFIG_VALUE_0; do
     if [ -n "${!v:-}" ]; then args+=(--env "$v"); fi
   done
@@ -135,7 +153,11 @@ fi
 cleanup() { docker rm -f -v "$name" >/dev/null 2>&1 || true; }
 trap cleanup EXIT
 
-docker create "${args[@]}" "$image" sh -c "$*" >/dev/null
+# The scratch directory is checked in the container first (v4), so a missing
+# or unwritable one fails the stage here by name, not later as ENOSPC or EACCES.
+# shellcheck disable=SC2016 # expands in the container, not here
+guard='[ -d "$TMPDIR" ] && [ -w "$TMPDIR" ] || { echo "in-toolchain-image: scratch directory $TMPDIR is missing or not writable" >&2; exit 2; }'
+docker create "${args[@]}" "$image" sh -c "$guard; $*" >/dev/null
 tar -C "$PWD" --owner="$uid" --group="$uid" --numeric-owner -cf - . |
   docker cp -a - "$name:/src"
 if [ -n "$copy_src" ]; then

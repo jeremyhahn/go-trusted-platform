@@ -2257,9 +2257,12 @@ APT_REFRESH ?= $(eval APT_REFRESH := $$(shell scripts/apt-refresh-key.sh))$(APT_
 # argument is passed so the integration stages take it as the template does.
 APK_INDEX_SUM ?=
 
+# GO_BUILD_PROXY is passed only when the caller sets it, and quoted, because
+# CI's value uses the | separator (handbook devcontainer.md section 4,
+# ci-template v1.29.5).
 DEVCONTAINER_BUILD_ARGS = --build-arg GO_IMAGE=$(GO_IMAGE) \
 	--build-arg APT_REFRESH=$(APT_REFRESH) \
-	$(if $(GO_BUILD_PROXY),--build-arg GO_BUILD_PROXY=$(GO_BUILD_PROXY)) \
+	$(if $(GO_BUILD_PROXY),--build-arg "GO_BUILD_PROXY=$(GO_BUILD_PROXY)") \
 	$(if $(wildcard $(MODULE_ENV_FILE)),--secret id=gomodauth$(comma)src=$(MODULE_ENV_FILE)) \
 	-f $(DEVCONTAINER_DOCKERFILE)
 
