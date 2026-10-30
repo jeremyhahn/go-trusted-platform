@@ -186,6 +186,7 @@ func (s *Service) ListManifests(ctx context.Context, filter *daemon.ListManifest
 	if filter != nil {
 		f.HostID = filter.HostID
 		f.Limit = filter.Limit
+		f.Offset = filter.Offset
 		if filter.StartTime > 0 {
 			f.Since = time.Unix(filter.StartTime, 0)
 		}
@@ -193,11 +194,11 @@ func (s *Service) ListManifests(ctx context.Context, filter *daemon.ListManifest
 			f.Until = time.Unix(filter.EndTime, 0)
 		}
 	}
-	manifests, err := s.store.ListManifests(f)
+	manifests, total, err := s.store.ListManifests(f)
 	if err != nil {
 		return nil, 0, err
 	}
-	return manifests, len(manifests), nil
+	return manifests, total, nil
 }
 
 // DeleteManifest removes a stored manifest and emits a deletion

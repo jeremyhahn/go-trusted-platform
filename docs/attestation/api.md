@@ -46,7 +46,7 @@ refused (§5).
 
 | Capability | REST | gRPC / Unix | QUIC | MCP | Embedded |
 |---|---|---|---|---|---|
-| List manifests | `GET /api/v1/attestation/manifests?host_id=&start_time=&end_time=&limit=&offset=` — times RFC 3339, `limit`/`offset` unsigned 32-bit, each optional; a malformed value or `start_time` after `end_time` is 400 | `ListManifests` | `MISSING — docs/13 G7` | `attestation_list_manifests` (`limit`, `offset` only) | ✅ |
+| List manifests | `GET /api/v1/attestation/manifests?host_id=&start_time=&end_time=&limit=&offset=` — times RFC 3339, `limit`/`offset` unsigned 32-bit, each optional; newest first, `offset` skips that many matches before `limit` applies, an offset at or past the end returns an empty page, and the total is the match count before both; a malformed value or `start_time` after `end_time` is 400 | `ListManifests` | `MISSING — docs/13 G7` | `attestation_list_manifests` (`limit`, `offset` only) | ✅ |
 | Get manifest | `GET /api/v1/attestation/manifests/{id}` | `GetManifest` | `OpAttestGetManifest` (`0x76`) | `attestation_get_manifest` | ✅ |
 | Build manifest | `POST /api/v1/attestation/manifests/build` | `BuildManifest` | `OpAttestBuildManifest` (`0x7C`) | `attestation_create_manifest` | refused — every transport answers `ErrTPMSessionNotConfigured` ([engineering](engineering.md) §3a) |
 | Verify manifest | `POST /api/v1/attestation/manifests/verify` | `VerifyManifest` | `OpAttestVerifyManifest` (`0x7D`) | `attestation_verify_manifest` | ✅ |

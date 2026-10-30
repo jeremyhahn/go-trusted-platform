@@ -80,19 +80,22 @@ func TestFileStore_ListAndFilter(t *testing.T) {
 	_ = s.PutManifest(testManifest("b", "host-2", now.Add(-1*time.Minute)))
 	_ = s.PutManifest(testManifest("c", "host-1", now))
 
-	all, err := s.ListManifests(ListFilter{})
+	all, total, err := s.ListManifests(ListFilter{})
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
-	if len(all) != 3 {
-		t.Errorf("expected 3, got %d", len(all))
+	if len(all) != 3 || total != 3 {
+		t.Errorf("expected 3 of 3, got %d of %d", len(all), total)
 	}
 	// Newest first.
 	if all[0].ID != "c" {
 		t.Errorf("expected newest first, got %s", all[0].ID)
 	}
 
-	byHost, _ := s.ListManifests(ListFilter{HostID: "host-1"})
+	byHost, _, err := s.ListManifests(ListFilter{HostID: "host-1"})
+	if err != nil {
+		t.Fatalf("List by host: %v", err)
+	}
 	if len(byHost) != 2 {
 		t.Errorf("expected 2 host-1 manifests, got %d", len(byHost))
 	}

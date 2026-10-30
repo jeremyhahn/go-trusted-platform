@@ -13,6 +13,8 @@
 
 package store
 
+import "strconv"
+
 // WrappedError wraps an underlying cause with a contextual message while
 // preserving errors.Is / errors.As matching through Unwrap. It replaces
 // inline formatted-error constructions that wrap another error.
@@ -29,4 +31,15 @@ func (e *WrappedError) Error() string {
 // Unwrap returns the wrapped cause.
 func (e *WrappedError) Unwrap() error {
 	return e.Err
+}
+
+// NegativeOffsetError reports a ListManifests query whose Offset is below
+// zero; an offset counts matches to skip, so it cannot be negative.
+type NegativeOffsetError struct {
+	Offset int
+}
+
+// Error implements the error interface.
+func (e *NegativeOffsetError) Error() string {
+	return "attestation store: manifest list offset " + strconv.Itoa(e.Offset) + " is negative"
 }

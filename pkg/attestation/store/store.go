@@ -130,8 +130,11 @@ type Store interface {
 	GetManifest(id string) (*manifest.HostManifest, error)
 
 	// ListManifests returns all manifests, optionally filtered by
-	// host ID + time range. Limit<=0 returns all matches.
-	ListManifests(filter ListFilter) ([]*manifest.HostManifest, error)
+	// host ID + time range, newest first. Offset skips that many matches
+	// (an offset at or past the end yields an empty page) and Limit<=0
+	// returns every match after the offset. The int is the number of
+	// matches before Offset and Limit apply, so a caller can page.
+	ListManifests(filter ListFilter) ([]*manifest.HostManifest, int, error)
 
 	// DeleteManifest removes a manifest by ID.
 	DeleteManifest(id string) error
@@ -150,6 +153,8 @@ type ListFilter struct {
 	Since  time.Time
 	Until  time.Time
 	Limit  int
+	// Offset is the number of matches to skip; it must not be negative.
+	Offset int
 }
 
 // EventFilter narrows a ListEvents query.
@@ -237,15 +242,18 @@ func (s *FileStore) GetManifest(id string) (*manifest.HostManifest, error) {
 // ListManifests walks the manifest directory and decodes every entry.
 // At the volumes Phase 3 ships at this is fine; if the store grows to
 // millions of manifests, a B-tree index lands alongside.
-func (s *FileStore) ListManifests(filter ListFilter) ([]*manifest.HostManifest, error) {
+func (s *FileStore) ListManifests(filter ListFilter) ([]*manifest.HostManifest, int, error) {
+	if filter.Offset < 0 {
+		return nil, 0, &NegativeOffsetError{Offset: filter.Offset}
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	entries, err := os.ReadDir(s.manifests)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return nil, nil
+			return nil, 0, nil
 		}
-		return nil, err
+		return nil, 0, err
 	}
 	out := make([]*manifest.HostManifest, 0, len(entries))
 	for _, e := range entries {
@@ -268,10 +276,15 @@ func (s *FileStore) ListManifests(filter ListFilter) ([]*manifest.HostManifest, 
 	sort.Slice(out, func(i, j int) bool {
 		return out[i].Timestamp.After(out[j].Timestamp)
 	})
+	total := len(out)
+	if filter.Offset >= total {
+		return []*manifest.HostManifest{}, total, nil
+	}
+	out = out[filter.Offset:]
 	if filter.Limit > 0 && len(out) > filter.Limit {
 		out = out[:filter.Limit]
 	}
-	return out, nil
+	return out, total, nil
 }
 
 // DeleteManifest removes a manifest.
