@@ -141,6 +141,20 @@ func BenchmarkController_LearnMACWithIP(b *testing.B) {
 // generator applied.
 func BenchmarkController_CombinedLoad(b *testing.B) {
 	ctrl, ctx := newBenchController(b)
+	// Every VNI starts with a learned entry, so GetRemoteMACs lists a real
+	// table; the workers' MACs start at 1<<24 and never collide with these.
+	for i := uint64(0); i < benchVNICount; i++ {
+		if err := ctrl.LearnMAC(ctx, testMAC(i), benchVNI(i), testVTEPIP(i%254+1)); err != nil {
+			b.Fatalf("LearnMAC() error = %v", err)
+		}
+		macs, err := ctrl.GetRemoteMACs(ctx, benchVNI(i))
+		if err != nil {
+			b.Fatalf("GetRemoteMACs() error = %v", err)
+		}
+		if len(macs) == 0 {
+			b.Fatalf("GetRemoteMACs(%d) listed an empty table", benchVNI(i))
+		}
+	}
 	b.ReportAllocs()
 	b.ResetTimer()
 
@@ -148,7 +162,9 @@ func BenchmarkController_CombinedLoad(b *testing.B) {
 	b.RunParallel(func(pb *testing.PB) {
 		base := worker.Add(1) << 24 // testMAC encodes the low 32 bits
 		for n := base; pb.Next(); n++ {
-			vni := benchVNI(n)
+			// The VNI advances once per four operations, so each operation
+			// visits every VNI instead of the one that n%4 pins it to.
+			vni := benchVNI(n / 4)
 			switch n % 4 {
 			case 0:
 				if err := ctrl.LearnMAC(ctx, testMAC(n), vni, testVTEPIP(n%254+1)); err != nil {

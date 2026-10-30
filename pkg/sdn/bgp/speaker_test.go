@@ -26,6 +26,7 @@ import (
 	api "github.com/osrg/gobgp/v4/api"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -240,7 +241,15 @@ func (m *mockBGPServer) DeletePath(ctx context.Context, req *api.DeletePathReque
 		return m.deletePathErr
 	}
 
-	// In a real implementation, we'd find and remove the path
+	// A withdrawal names the route by family and NLRI, as in GoBGP.
+	kept := make([]*api.Path, 0, len(m.paths))
+	for _, path := range m.paths {
+		if proto.Equal(path.Family, req.Path.Family) && proto.Equal(path.Nlri, req.Path.Nlri) {
+			continue
+		}
+		kept = append(kept, path)
+	}
+	m.paths = kept
 	return nil
 }
 
@@ -2026,12 +2035,19 @@ func TestSpeaker_ConcurrentRouteChurn(t *testing.T) {
 	for _, path := range rib {
 		announced[path.Prefix] = true
 	}
+	kept := 0
 	for w := 0; w < workers; w++ {
 		for op := 0; op < ops; op++ {
 			prefix := concurrencyPrefix(100, 64, w, op)
-			assert.True(t, announced[prefix], "announced prefix %s missing from the RIB", prefix)
+			if op%3 == 0 {
+				assert.False(t, announced[prefix], "withdrawn prefix %s still in the RIB", prefix)
+				continue
+			}
+			kept++
+			assert.True(t, announced[prefix], "kept prefix %s missing from the RIB", prefix)
 		}
 	}
+	assert.Len(t, rib, kept, "the RIB holds exactly the kept prefixes")
 }
 
 // TestSpeaker_ConcurrentPeerFlap adds and deletes the same peers from many

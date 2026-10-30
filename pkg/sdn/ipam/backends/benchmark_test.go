@@ -93,10 +93,12 @@ func BenchmarkMemoryBackend_AllocateParallelPools(b *testing.B) {
 	b.RunParallel(func(pb *testing.PB) {
 		n := nextPool.Add(1)
 		poolID := "pool-" + strconv.Itoa(int(n))
+		// The worker index spans two octets, so 65536 workers stay valid.
+		i := n - 1
 		pool := &ipam.Pool{
 			ID:   poolID,
 			Name: poolID,
-			CIDR: netip.MustParsePrefix(fmt.Sprintf("10.%d.0.0/24", n)),
+			CIDR: netip.MustParsePrefix(fmt.Sprintf("10.%d.%d.0/24", i/256, i%256)),
 		}
 		if err := backend.CreatePool(ctx, pool); err != nil {
 			b.Errorf("create pool %s: %v", poolID, err)
