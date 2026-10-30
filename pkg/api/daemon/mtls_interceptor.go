@@ -187,11 +187,19 @@ func authenticateFromPeer(ctx context.Context, cfg *MTLSInterceptorConfig, metho
 		return nil, status.Errorf(codes.Unauthenticated, "mtls: %v", err)
 	}
 
-	// Three classes: the operator and a tenant principal may call any method
-	// (tenant authorization limits the latter); an installer certificate,
-	// which is every other one, may call only the install-completion webhook.
-	if !isMTLSPrincipal(certs[0], cfg.OperatorTrustDomain) {
-		if !installerMethod {
+	// Four classes: the operator and a tenant principal may call any method
+	// (tenant authorization limits the latter); a service principal may call
+	// the methods its role has scopes for; an installer certificate, which is
+	// every other one, may call only the install-completion webhook.
+	if !isMTLSPrincipal(certs[0], cfg.OperatorTrustDomain) && !installerMethod {
+		if service, ok := mtlsServicePrincipal(certs[0], cfg.OperatorTrustDomain); ok {
+			if !mtlsServiceAdmitsMethod(service, method) {
+				if cfg.Logger != nil {
+					cfg.Logger.Debug("mtls: service principal refused", "service", service, "method", method)
+				}
+				return nil, status.Error(codes.PermissionDenied, ErrMTLSServiceMethodDenied{Service: service, Method: method}.Error())
+			}
+		} else {
 			if cfg.Logger != nil {
 				cfg.Logger.Debug("mtls: installer certificate refused", "method", method)
 			}

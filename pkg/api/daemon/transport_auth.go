@@ -349,6 +349,62 @@ func isMTLSTenantUserSPIFFEID(uri *url.URL, trustDomain, tenant string) bool {
 	return ok && name != "" && !strings.Contains(name, "/")
 }
 
+// mtlsServiceRoles maps each platform service that authenticates to the
+// daemon by a platform-issued certificate to the scopes its role holds. A
+// service principal reaches a gRPC method only when the method's scope in
+// the gRPC catalog (grpccreds.ScopeForMethod) is one of them.
+var mtlsServiceRoles = map[string]map[string]struct{}{
+	// gatewayd: proxy sync (ProxyService/GetProxyConfig, GetZoneMatrix),
+	// the attestation gate and overlay verdicts, overlay IPAM allocations
+	// and overlay device reads. Every one is a read.
+	"gatewayd": {
+		"proxy:read":       {},
+		"attestation:read": {},
+		"sdn:read":         {},
+		"device:read":      {},
+	},
+}
+
+// mtlsServicePrincipal returns the service a certificate names when it is a
+// service principal: its subject O is exactly the system tenant and a URI
+// SAN is spiffe://<trust domain>/service/<name> for a service in
+// mtlsServiceRoles. An empty trust domain makes no certificate a service.
+func mtlsServicePrincipal(leaf *x509.Certificate, trustDomain string) (string, bool) {
+	if leaf == nil || trustDomain == "" {
+		return "", false
+	}
+	if len(leaf.Subject.Organization) != 1 || leaf.Subject.Organization[0] != app.SystemTenantID {
+		return "", false
+	}
+	for _, uri := range leaf.URIs {
+		if uri == nil || !strings.EqualFold(uri.Scheme, "spiffe") || uri.Host != trustDomain {
+			continue
+		}
+		if uri.RawQuery != "" || uri.Fragment != "" {
+			continue
+		}
+		name, ok := strings.CutPrefix(uri.Path, "/service/")
+		if !ok {
+			continue
+		}
+		if _, known := mtlsServiceRoles[name]; known {
+			return name, true
+		}
+	}
+	return "", false
+}
+
+// mtlsServiceAdmitsMethod reports whether a service's role holds the scope
+// the gRPC catalog gives method. A method outside the catalog is refused.
+func mtlsServiceAdmitsMethod(service, method string) bool {
+	scope := grpccreds.ScopeForMethod(method)
+	if scope == "" {
+		return false
+	}
+	_, ok := mtlsServiceRoles[service][scope]
+	return ok
+}
+
 // mtlsPeerAuthenticator turns the verified client certificate of a QUIC
 // connection, REST request or MCP session into the principal it acts as,
 // through the same certificate authenticator the gRPC mTLS interceptor uses,

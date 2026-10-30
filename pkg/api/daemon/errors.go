@@ -502,6 +502,17 @@ func (e ErrPXEWebhookIdentityRequired) Error() string {
 	return "pxe webhook over " + e.Transport + " requires a verified device certificate: " + e.Reason
 }
 
+// ErrMTLSServiceMethodDenied is returned when a service principal calls a
+// gRPC method whose scope its role does not hold.
+type ErrMTLSServiceMethodDenied struct {
+	Service string
+	Method  string
+}
+
+func (e ErrMTLSServiceMethodDenied) Error() string {
+	return "mtls: service " + e.Service + " may not call " + e.Method
+}
+
 // ErrPXEWebhookUnknownIdentity is returned when the webhook's verified
 // certificate is not the bound installer certificate of exactly one PXE
 // device. The match is on the SHA-256 of the whole certificate, never its
