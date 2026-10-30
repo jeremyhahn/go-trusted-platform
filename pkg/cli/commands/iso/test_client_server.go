@@ -314,13 +314,13 @@ func runClientServerTest(commonFlags *cli.CommonFlags, flags *clientServerFlags)
 
 	// Check root privileges (not needed for user-mode networking)
 	if !flags.userNetwork {
-		if err := testenv.CheckRootPrivileges(); err != nil {
+		if err := csCheckRoot(); err != nil {
 			return err
 		}
 	}
 
 	// Check OVS availability if requested
-	if flags.useOVS && !testenv.IsOVSAvailable() {
+	if flags.useOVS && !csOVSAvailable() {
 		return &MessageError{Msg: "OVS is not available (check if openvswitch is installed and running)"}
 	}
 
@@ -387,20 +387,20 @@ func runClientServerTest(commonFlags *cli.CommonFlags, flags *clientServerFlags)
 	}
 
 	// Check if network already exists (for --client-only mode connecting to existing --server-only)
-	networkExists := testenv.NetworkExists(netConfig)
+	networkExists := csNetworkExists(netConfig)
 
 	var network testenv.IsolatedNetwork
 	if flags.clientOnly && networkExists {
 		// Client-only mode with existing network - reuse it
 		printInfo("Reusing existing network (server already running)...")
 		if flags.useOVS {
-			ovsNet, err := testenv.NewOVSIsolatedNetwork(netConfig, nil)
+			ovsNet, err := csNewOVSNetwork(netConfig, nil)
 			if err != nil {
 				return &WrappedError{Msg: "failed to create OVS network", Err: err}
 			}
 			network = ovsNet
 		} else {
-			network = testenv.NewIsolatedNetwork(netConfig)
+			network = csNewLinuxNetwork(netConfig)
 		}
 		// Ensure NAT/forwarding rules are in place (they may have been cleared)
 		printInfo("Ensuring NAT rules are in place...")
@@ -411,7 +411,7 @@ func runClientServerTest(commonFlags *cli.CommonFlags, flags *clientServerFlags)
 	} else {
 		// Clean up stale resources from previous runs
 		printInfo("Cleaning up stale resources...")
-		testenv.CleanupStaleResources(netConfig)
+		csCleanupStale(netConfig)
 
 		// Setup isolated network
 		if flags.useOVS {
@@ -429,7 +429,7 @@ func runClientServerTest(commonFlags *cli.CommonFlags, flags *clientServerFlags)
 						ovsOpts.ProvisioningVLAN = provNet.VLAN
 					}
 				}
-				ovsNet, err := testenv.NewOVSIsolatedNetwork(netConfig, ovsOpts)
+				ovsNet, err := csNewOVSNetwork(netConfig, ovsOpts)
 				if err != nil {
 					return &WrappedError{Msg: "failed to create OVS network", Err: err}
 				}
@@ -447,7 +447,7 @@ func runClientServerTest(commonFlags *cli.CommonFlags, flags *clientServerFlags)
 				printInfo("Using OVS with dynamic network phases")
 			} else {
 				printInfo("Setting up OVS isolated network...")
-				ovsNet, err := testenv.NewOVSIsolatedNetwork(netConfig, nil)
+				ovsNet, err := csNewOVSNetwork(netConfig, nil)
 				if err != nil {
 					return &WrappedError{Msg: "failed to create OVS network", Err: err}
 				}
@@ -459,7 +459,7 @@ func runClientServerTest(commonFlags *cli.CommonFlags, flags *clientServerFlags)
 			}
 		} else {
 			printInfo("Setting up isolated network...")
-			linuxNet := testenv.NewIsolatedNetwork(netConfig)
+			linuxNet := csNewLinuxNetwork(netConfig)
 			if err := linuxNet.Setup(); err != nil {
 				return &WrappedError{Msg: "failed to setup isolated network", Err: err}
 			}
@@ -519,7 +519,7 @@ func runCSServerVM(ctx context.Context, logger *logging.Logger, network testenv.
 	}
 
 	// Clean up any stale QEMU processes using the server TAP device
-	if err := qemu.StopExistingByTap(network.ServerTapName()); err != nil {
+	if err := stopQEMUByTap(network.ServerTapName()); err != nil {
 		logger.Warnf("Failed to stop existing server QEMU processes: %v", err)
 	}
 
@@ -661,14 +661,14 @@ func runCSServerVM(ctx context.Context, logger *logging.Logger, network testenv.
 		qemuConfig.SerialConsole = false
 		qemuConfig.SerialLogFile = filepath.Join(flags.serverWorkDir, "server-serial.log")
 
-		vm, err := qemu.NewVM(qemuConfig, logger)
+		vm, err := newQEMUVM(qemuConfig, logger)
 		if err != nil {
 			stopTestTPM(logger, tpm)
 			return &WrappedError{Msg: "failed to create server VM", Err: err}
 		}
 
 		logger.Info("Starting server VM in background mode...")
-		if err := vm.Start(ctx, string(qemu.BootModeBoot)); err != nil {
+		if err := vmStart(vm, ctx, string(qemu.BootModeBoot)); err != nil {
 			stopTestTPM(logger, tpm)
 			return &WrappedError{Msg: "failed to start server VM", Err: err}
 		}
@@ -717,9 +717,9 @@ func stopCSServerVM(logger *logging.Logger) {
 		return
 	}
 
-	if csServerState.VM != nil && csServerState.VM.IsRunning() {
+	if csServerState.VM != nil && vmIsRunning(csServerState.VM) {
 		logger.Info("Stopping server VM...")
-		if err := csServerState.VM.Stop(); err != nil {
+		if err := vmStop(csServerState.VM); err != nil {
 			logger.Warnf("Failed to stop server VM: %v", err)
 		}
 	}
@@ -734,8 +734,6 @@ func stopCSServerVM(logger *logging.Logger) {
 // waitForCSServerReady waits for the server to be reachable via ping and DNS
 // The server may reboot during firstboot provisioning, so this function handles
 // the server going down and coming back up.
-// csReadyPollInterval is the pause between readiness probes of the server VM.
-const csReadyPollInterval = 2 * time.Second
 
 func waitForCSServerReady(ctx context.Context, logger *logging.Logger, serverIP string, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
@@ -755,7 +753,7 @@ func waitForCSServerReady(ctx context.Context, logger *logging.Logger, serverIP 
 
 		// Check ping reachability
 		cmd := exec.CommandContext(ctx, "ping", "-c", "1", "-W", "2", serverIP)
-		pingOK := cmd.Run() == nil
+		pingOK := runHostCommand(cmd) == nil
 
 		if pingOK {
 			consecutivePingFailures = 0
@@ -785,10 +783,10 @@ func waitForCSServerReady(ctx context.Context, logger *logging.Logger, serverIP 
 			internalPort := strconv.Itoa(dns.DefaultInternalPort)
 
 			portCmd := exec.CommandContext(ctx, "nc", "-z", "-w", "2", serverIP, publicPort)
-			publicOpen := portCmd.Run() == nil
+			publicOpen := runHostCommand(portCmd) == nil
 
 			portCmd2 := exec.CommandContext(ctx, "nc", "-z", "-w", "2", serverIP, internalPort)
-			internalOpen := portCmd2.Run() == nil
+			internalOpen := runHostCommand(portCmd2) == nil
 
 			if !publicOpen && !internalOpen {
 				logger.Debugf("Platformd DNS ports (%s/%s) not open yet, waiting...", publicPort, internalPort)
@@ -796,7 +794,7 @@ func waitForCSServerReady(ctx context.Context, logger *logging.Logger, serverIP 
 				// At least one DNS port is open, try a query on the internal port
 				cmd := exec.CommandContext(ctx, "dig", "+short", "+timeout=2", "+tries=1",
 					fmt.Sprintf("@%s", serverIP), "-p", internalPort, "localhost", "A")
-				output, err := cmd.CombinedOutput()
+				output, err := hostCommandOutput(cmd)
 				// Even if the query returns empty, the port being open means platformd is running
 				if publicOpen || internalOpen {
 					logger.Infof("Server %s platformd DNS service is running (ports: %s=%v, %s=%v)",
@@ -811,7 +809,7 @@ func waitForCSServerReady(ctx context.Context, logger *logging.Logger, serverIP 
 		// Check HTTPS port (8443) - webservice must be ready before we can fetch CA bundle
 		if pingReachable && dnsReady && !httpsReady {
 			portCmd := exec.CommandContext(ctx, "nc", "-z", "-w", "2", serverIP, "8443")
-			port8443Open := portCmd.Run() == nil
+			port8443Open := runHostCommand(portCmd) == nil
 			if port8443Open {
 				logger.Infof("Server %s HTTPS service is running (port 8443)", serverIP)
 				httpsReady = true
@@ -863,7 +861,7 @@ func checkCSPortsAvailable(ctx context.Context, logger *logging.Logger, flags *c
 	var conflicts []string
 	for _, p := range portsToCheck {
 		portCmd := exec.CommandContext(ctx, "nc", "-z", "-w", "1", "127.0.0.1", fmt.Sprintf("%d", p.port))
-		if portCmd.Run() == nil {
+		if runHostCommand(portCmd) == nil {
 			conflicts = append(conflicts, fmt.Sprintf("localhost:%d (%s)", p.port, p.name))
 		}
 	}
@@ -885,7 +883,7 @@ func waitForCSServerReadyUserNetwork(ctx context.Context, logger *logging.Logger
 
 	// Minimum boot time - don't check ports until VM has had time to boot
 	// This prevents false positives from pre-existing listeners on the host
-	minBootTime := 30 * time.Second
+	minBootTime := csMinBootTime
 	bootStart := time.Now()
 
 	logger.Infof("Waiting %v for VM to boot before checking ports...", minBootTime)
@@ -909,7 +907,7 @@ func waitForCSServerReadyUserNetwork(ctx context.Context, logger *logging.Logger
 		// Check HTTPS port (8443) on localhost via port forwarding
 		if !httpsReady {
 			portCmd := exec.CommandContext(ctx, "nc", "-z", "-w", "2", "127.0.0.1", fmt.Sprintf("%d", flags.serverHostPort))
-			if portCmd.Run() == nil {
+			if runHostCommand(portCmd) == nil {
 				logger.Infof("HTTPS port is open (localhost:%d)", flags.serverHostPort)
 				httpsReady = true
 			} else {
@@ -979,7 +977,7 @@ func verifyCSPlatformdStatus(ctx context.Context, logger *logging.Logger, flags 
 		return &WrappedError{Msg: "failed to create request", Err: err}
 	}
 
-	resp, err := client.Do(req)
+	resp, err := csStatusDo(client, req)
 	if err != nil {
 		return &WrappedError{Msg: "failed to connect", Err: err}
 	}
@@ -1100,7 +1098,7 @@ func runCSClientVM(ctx context.Context, logger *logging.Logger, network testenv.
 	}
 
 	// Clean up any stale QEMU processes using the client TAP device
-	if err := qemu.StopExistingByTap(network.ClientTapName()); err != nil {
+	if err := stopQEMUByTap(network.ClientTapName()); err != nil {
 		logger.Warnf("Failed to stop existing client QEMU processes: %v", err)
 	}
 
@@ -1266,7 +1264,7 @@ func runCSClientVM(ctx context.Context, logger *logging.Logger, network testenv.
 
 // createCSQEMUConfig creates a QEMU config for client-server testing
 func createCSQEMUConfig(diskPath, workDir, tapDevice, macAddress string, flags *clientServerFlags) *qemu.Config {
-	config := qemu.DefaultConfig()
+	config := defaultQEMUConfig()
 	config.DiskPath = diskPath
 	config.DiskSize = flags.diskSize
 	config.DiskCache = flags.diskCache
@@ -1439,14 +1437,14 @@ func runCSServerVMUserNetwork(ctx context.Context, logger *logging.Logger, flags
 	qemuConfig.SerialLogFile = filepath.Join(flags.serverWorkDir, "server-boot-serial.log")
 
 	// Start VM in background mode
-	vm, err := qemu.NewVM(qemuConfig, logger)
+	vm, err := newQEMUVM(qemuConfig, logger)
 	if err != nil {
 		stopTestTPM(logger, tpm)
 		return &WrappedError{Msg: "failed to create server VM", Err: err}
 	}
 
 	logger.Info("Starting server VM in background mode...")
-	if err := vm.Start(ctx, string(qemu.BootModeBoot)); err != nil {
+	if err := vmStart(vm, ctx, string(qemu.BootModeBoot)); err != nil {
 		stopTestTPM(logger, tpm)
 		return &WrappedError{Msg: "failed to start server VM", Err: err}
 	}
@@ -1463,7 +1461,7 @@ func runCSServerVMUserNetwork(ctx context.Context, logger *logging.Logger, flags
 	if err := waitForCSServerReadyUserNetwork(ctx, logger, flags, timeout); err != nil {
 		// Cleanup on failure
 		logger.Warn("Server did not become ready, stopping VM...")
-		vm.Stop()
+		vmStop(vm)
 		stopTestTPM(logger, tpm)
 		return &WrappedError{Msg: "server did not become ready", Err: err}
 	}
@@ -1473,7 +1471,7 @@ func runCSServerVMUserNetwork(ctx context.Context, logger *logging.Logger, flags
 
 	// Stop the VM gracefully
 	printInfo("Stopping server VM...")
-	if err := vm.Stop(); err != nil {
+	if err := vmStop(vm); err != nil {
 		logger.Warnf("Failed to stop server VM: %v", err)
 	}
 	stopTestTPM(logger, tpm)
@@ -1484,7 +1482,7 @@ func runCSServerVMUserNetwork(ctx context.Context, logger *logging.Logger, flags
 
 // createCSUserNetworkQEMUConfig creates a QEMU config with user-mode networking and port forwarding
 func createCSUserNetworkQEMUConfig(diskPath, workDir string, flags *clientServerFlags) *qemu.Config {
-	config := qemu.DefaultConfig()
+	config := defaultQEMUConfig()
 	config.DiskPath = diskPath
 	config.DiskSize = flags.diskSize
 	config.DiskCache = flags.diskCache

@@ -411,7 +411,7 @@ func runTestAll(commonFlags *cli.CommonFlags, flags *testFlags) error {
 
 // createTestQEMUConfig creates a QEMU configuration from command flags
 func createTestQEMUConfig(flags *testFlags) *qemu.Config {
-	config := qemu.DefaultConfig()
+	config := defaultQEMUConfig()
 	config.DiskPath = flags.disk
 	config.DiskSize = flags.diskSize
 	config.DiskCache = flags.diskCache
@@ -568,7 +568,7 @@ func createTestDiskImage(ctx context.Context, logger *logging.Logger, diskPath, 
 
 	// Create new disk using qemu-img
 	cmd := exec.CommandContext(ctx, "qemu-img", "create", "-f", "qcow2", diskPath, diskSize)
-	if err := cmd.Run(); err != nil {
+	if err := runHostCommand(cmd); err != nil {
 		return &WrappedError{Msg: "failed to create disk image", Err: err}
 	}
 
@@ -579,7 +579,7 @@ func createTestDiskImage(ctx context.Context, logger *logging.Logger, diskPath, 
 // reports what it did; the harness owns the state-directory reuse that
 // keeps PCR values and sealed data across the boots of one test sequence.
 func setupTestTPM(ctx context.Context, logger *logging.Logger, config *qemu.Config) (harness.TPM, error) {
-	tpm, state, err := harness.StartTPM(ctx, logger, config)
+	tpm, state, err := startTPM(ctx, logger, config)
 	if err != nil {
 		return nil, &WrappedError{Msg: "failed to setup TPM", Err: err}
 	}
@@ -595,7 +595,7 @@ func setupTestTPM(ctx context.Context, logger *logging.Logger, config *qemu.Conf
 
 // stopTestTPM gracefully stops the TPM daemon
 func stopTestTPM(logger *logging.Logger, tpm harness.TPM) {
-	harness.StopTPM(logger, tpm)
+	stopTPM(logger, tpm)
 }
 
 // enrollTestSecureBootKeys enrolls Secure Boot keys into NVRAM for boot tests
@@ -637,7 +637,7 @@ func enrollTestSecureBootKeys(ctx context.Context, logger *logging.Logger, confi
 	}
 
 	// Create enroller
-	enroller, err := qemu.NewSecureBootEnroller(enrollerConfig, logger)
+	enroller, err := newSecureBootEnroller(enrollerConfig, logger)
 	if err != nil {
 		return &WrappedError{Msg: "failed to create Secure Boot enroller", Err: err}
 	}
@@ -662,20 +662,20 @@ func enrollTestSecureBootKeys(ctx context.Context, logger *logging.Logger, confi
 // runTestQEMUInstall runs QEMU for installation
 func runTestQEMUInstall(ctx context.Context, logger *logging.Logger, config *qemu.Config) error {
 	// Create QEMU VM
-	vm, err := qemu.NewVM(config, logger)
+	vm, err := newQEMUVM(config, logger)
 	if err != nil {
 		return &WrappedError{Msg: "failed to create VM", Err: err}
 	}
 
 	// Start VM in install mode
 	logger.Info("Starting QEMU in installation mode...")
-	if err := vm.Start(ctx, string(qemu.BootModeInstall)); err != nil {
+	if err := vmStart(vm, ctx, string(qemu.BootModeInstall)); err != nil {
 		return &WrappedError{Msg: "failed to start VM", Err: err}
 	}
 
 	// Wait for VM to complete
 	logger.Info("VM started, waiting for installation to complete (press Ctrl+C to exit)...")
-	return installWaitResult(ctx, vm.Wait(), config.DiskPath, logger)
+	return installWaitResult(ctx, vmWait(vm), config.DiskPath, logger)
 }
 
 // installWaitResult decides whether an install VM that has exited
@@ -785,18 +785,18 @@ func consoleTail(path string, lines int) string {
 // runTestQEMUBoot runs QEMU for boot test
 func runTestQEMUBoot(ctx context.Context, logger *logging.Logger, config *qemu.Config, expect string) error {
 	// Create QEMU VM
-	vm, err := qemu.NewVM(config, logger)
+	vm, err := newQEMUVM(config, logger)
 	if err != nil {
 		return &WrappedError{Msg: "failed to create VM", Err: err}
 	}
 
 	// Start VM in boot mode
 	logger.Info("Starting QEMU in boot mode...")
-	if err := vm.Start(ctx, string(qemu.BootModeBoot)); err != nil {
+	if err := vmStart(vm, ctx, string(qemu.BootModeBoot)); err != nil {
 		return &WrappedError{Msg: "failed to start VM", Err: err}
 	}
 
-	if err := waitForBoot(ctx, logger, vm, config.SerialLogFile, expect); err != nil {
+	if err := waitForBoot(ctx, logger, seamedVM{vm}, config.SerialLogFile, expect); err != nil {
 		return err
 	}
 

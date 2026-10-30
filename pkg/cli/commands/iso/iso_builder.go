@@ -220,7 +220,7 @@ func BuildCustomISO(ctx context.Context, logger *logging.Logger, cfg *ISOBuilder
 
 	// Step 3: Generate Secure Boot keys if needed — never for a platform
 	// config carrying a remote/KMS db signing reference (round-16 review).
-	decision, err := pkgiso.EnsureSecureBootKeys(ctx, logger, buildConfig)
+	decision, err := isoEnsureSecureBootKeys(ctx, logger, buildConfig)
 	if err != nil {
 		return &WrappedError{Msg: "failed to generate Secure Boot keys", Err: err}
 	}
@@ -299,7 +299,7 @@ func resolveWebUIPath(ctx context.Context, logger *logging.Logger, explicitPath 
 	buildCmd.Stdout = os.Stderr // build chatter is progress; stdout carries the verb's result
 	buildCmd.Stderr = os.Stderr
 
-	if err := buildCmd.Run(); err != nil {
+	if err := runHostCommand(buildCmd); err != nil {
 		return "", &CommandOutputError{Msg: "failed to auto-build WebUI", Err: err, Detail: "\nRun 'make build-public-html' manually to diagnose"}
 	}
 
