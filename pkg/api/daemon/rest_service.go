@@ -1212,37 +1212,46 @@ func (s *RESTServer) SetCeremonyService(svc *CeremonyService) {
 	s.logger.Info("Ceremony REST routes registered")
 }
 
-// SetPIVService wires the PIV service into the REST server and registers its routes.
-func (s *RESTServer) SetPIVService(svc *PIVService) {
-	if svc == nil {
-		return
+// SetPIVService mounts the PIV routes behind guard; each needs the scope the
+// gRPC catalog gives the PIVService method it serves.
+func (s *RESTServer) SetPIVService(svc *PIVService, guard *restapi.ScopeGuard) error {
+	if guard == nil {
+		return ErrPIVRESTUnavailable{Reason: "no REST scope guard"}
 	}
-	h := newPIVRESTHandlers(svc)
-	api := s.router.PathPrefix(restBasePath).Subrouter()
-	h.registerPIVRoutes(api)
+	if svc == nil {
+		return nil
+	}
+	newPIVRESTHandlers(svc).registerPIVRoutes(s.catalogGuardedAPI(guard))
 	s.logger.Info("PIV REST routes registered")
+	return nil
 }
 
-// SetLUKSService wires the LUKS service into the REST server and registers its routes.
-func (s *RESTServer) SetLUKSService(svc *LUKSService) {
-	if svc == nil {
-		return
+// SetLUKSService mounts the LUKS routes behind guard; each needs the scope
+// the gRPC catalog gives the LUKSService method it serves.
+func (s *RESTServer) SetLUKSService(svc *LUKSService, guard *restapi.ScopeGuard) error {
+	if guard == nil {
+		return ErrLUKSRESTUnavailable{Reason: "no REST scope guard"}
 	}
-	h := newLUKSRESTHandlers(svc)
-	api := s.router.PathPrefix(restBasePath).Subrouter()
-	h.registerLUKSRoutes(api)
+	if svc == nil {
+		return nil
+	}
+	newLUKSRESTHandlers(svc).registerLUKSRoutes(s.catalogGuardedAPI(guard))
 	s.logger.Info("LUKS REST routes registered")
+	return nil
 }
 
-// SetFIDO2Service wires the FIDO2 service into the REST server and registers its routes.
-func (s *RESTServer) SetFIDO2Service(svc *FIDO2Service) {
-	if svc == nil {
-		return
+// SetFIDO2Service mounts the FIDO2 routes behind guard; each needs the scope
+// the gRPC catalog gives the FIDO2Service method it serves.
+func (s *RESTServer) SetFIDO2Service(svc *FIDO2Service, guard *restapi.ScopeGuard) error {
+	if guard == nil {
+		return ErrFIDO2RESTUnavailable{Reason: "no REST scope guard"}
 	}
-	h := newFIDO2RESTHandlers(svc)
-	api := s.router.PathPrefix(restBasePath).Subrouter()
-	h.registerFIDO2Routes(api)
+	if svc == nil {
+		return nil
+	}
+	newFIDO2RESTHandlers(svc).registerFIDO2Routes(s.catalogGuardedAPI(guard))
 	s.logger.Info("FIDO2 REST routes registered")
+	return nil
 }
 
 // SetClusterService wires the Cluster gRPC service into the REST server

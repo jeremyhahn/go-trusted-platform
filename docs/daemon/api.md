@@ -428,7 +428,7 @@ pool is refused the same way. The daemon REST server requires and verifies a
 client certificate at every TLS handshake (`tls.RequireAndVerifyClientCert`,
 `newServerTLSConfig` in `pkg/api/daemon/transport_auth.go`). That certificate
 is the only authentication on the routes outside the scope guard below
-(service control, provisioning, BMC, device, LUKS and the rest); the guarded
+(service control, provisioning, BMC, ceremony and the rest); the guarded
 routes also take a `Bearer` token, but only over that mTLS connection. So
 `EnableREST` requires `EnableMTLS`, checked by both `New` and
 `RESTServer.Start`. Before #550 the interceptors were
@@ -605,6 +605,33 @@ service the routes still mount, behind the guard, and the non-zone routes answer
 (`ErrTransportConstructionFailed`). The overlay (`/api/v1/sdn/overlay`) and
 gateway (`/api/v1/sdn/gateway`) routes are separate mounts and still rely on
 mTLS alone.
+
+**The daemon REST PIV, LUKS and FIDO2 routes check the RPC's scope (#997).**
+`SetPIVService`, `SetLUKSService` and `SetFIDO2Service`
+(`pkg/api/daemon/rest_service.go`) mount the `/api/v1/piv`, `/api/v1/luks` and
+`/api/v1/fido2` routes behind the REST scope guard. Several of their `POST`s
+read, delete or use a key, so the HTTP method does not name the action:
+`catalogRouteRPCs` (`pkg/api/daemon/rest_scope.go`) maps each route to the
+gRPC method it serves, and the route needs the scope the gRPC catalog gives
+that method (`grpcapi.ScopeForMethod`). A route missing from the map, or a
+method without a catalog scope, is refused for every caller
+(`ErrRESTRouteUnscoped`), never served open.
+
+| Routes | Scope |
+|--------|-------|
+| `GET /piv/devices`, `GET /piv/devices/{device}/slots`, `GET /piv/slots/{slot}`, `POST /piv/slots/{slot}/attest` | `piv:read` |
+| `POST /piv/slots/{slot}/generate`, `POST /piv/slots/{slot}/import` | `piv:write` |
+| `POST /piv/slots/{slot}/sign` | `piv:use` |
+| `POST /piv/devices/{device}/reset` | `piv:delete` |
+| `GET /luks/status`, `GET /luks/slots`, `GET /luks/info`, `POST /luks/keys/test-unlock` | `luks:read` |
+| `POST /luks/enroll/{passphrase,fido2,tpm,recovery}`, `POST /luks/passphrase/change` | `luks:write` |
+| `POST /luks/keys/remove` | `luks:delete` |
+| `GET /fido2/devices`, `GET /fido2/devices/wait`, `GET /fido2/devices/{device}` | `fido2:read` |
+| `POST /fido2/register`, `POST /fido2/authenticate` | `fido2:write` |
+
+A missing credential answers 401 and a missing scope 403. A failed mount (no
+scope guard: `ErrPIVRESTUnavailable`, `ErrLUKSRESTUnavailable`,
+`ErrFIDO2RESTUnavailable`) stops the daemon (`ErrTransportConstructionFailed`).
 
 `TestDaemonREST_EveryMountedRouteIsGuarded` (`pkg/api/daemon/rest_scope_test.go`)
 walks the daemon REST router and sends every route a request with no

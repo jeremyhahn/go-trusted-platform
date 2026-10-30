@@ -1699,14 +1699,23 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 		if daemon.ceremonyService != nil && daemon.ceremonyService.service != nil {
 			daemon.concreteRestServer.SetCeremonyService(daemon.ceremonyService.service)
 		}
+		// The PIV, LUKS and FIDO2 routes run behind restGuard, each needing
+		// the scope the gRPC catalog gives its rpc. A failed mount stops the
+		// daemon.
+		var mountErr error
 		if daemon.pivService != nil && daemon.pivService.service != nil {
-			daemon.concreteRestServer.SetPIVService(daemon.pivService.service)
+			mountErr = daemon.concreteRestServer.SetPIVService(daemon.pivService.service, restGuard)
 		}
-		if daemon.luksService != nil && daemon.luksService.service != nil {
-			daemon.concreteRestServer.SetLUKSService(daemon.luksService.service)
+		if mountErr == nil && daemon.luksService != nil && daemon.luksService.service != nil {
+			mountErr = daemon.concreteRestServer.SetLUKSService(daemon.luksService.service, restGuard)
 		}
-		if daemon.fido2Service != nil && daemon.fido2Service.service != nil {
-			daemon.concreteRestServer.SetFIDO2Service(daemon.fido2Service.service)
+		if mountErr == nil && daemon.fido2Service != nil && daemon.fido2Service.service != nil {
+			mountErr = daemon.concreteRestServer.SetFIDO2Service(daemon.fido2Service.service, restGuard)
+		}
+		if mountErr != nil {
+			constructErr := ErrTransportConstructionFailed{Transport: transportREST, Cause: mountErr}
+			logger.Error(constructErr, "component", "rest_server")
+			return nil, constructErr
 		}
 		// Cluster REST always mounts; if no coordinator is wired the
 		// handlers return 503 with a clear "not configured" body so the

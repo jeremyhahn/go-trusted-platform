@@ -1248,6 +1248,48 @@ func (e ErrSDNRESTUnavailable) Error() string {
 	return "SDN REST routes unavailable: " + e.Reason
 }
 
+// ErrPIVRESTUnavailable reports that the PIV routes could not be mounted on
+// the daemon REST listener.
+type ErrPIVRESTUnavailable struct {
+	Reason string
+}
+
+func (e ErrPIVRESTUnavailable) Error() string {
+	return "PIV REST routes unavailable: " + e.Reason
+}
+
+// ErrLUKSRESTUnavailable reports that the LUKS routes could not be mounted on
+// the daemon REST listener.
+type ErrLUKSRESTUnavailable struct {
+	Reason string
+}
+
+func (e ErrLUKSRESTUnavailable) Error() string {
+	return "LUKS REST routes unavailable: " + e.Reason
+}
+
+// ErrFIDO2RESTUnavailable reports that the FIDO2 routes could not be mounted
+// on the daemon REST listener.
+type ErrFIDO2RESTUnavailable struct {
+	Reason string
+}
+
+func (e ErrFIDO2RESTUnavailable) Error() string {
+	return "FIDO2 REST routes unavailable: " + e.Reason
+}
+
+// ErrRESTRouteUnscoped reports a daemon REST route the gRPC catalog gives no
+// scope, so the route refuses every caller.
+type ErrRESTRouteUnscoped struct {
+	Method string
+	Route  string
+	Reason string
+}
+
+func (e ErrRESTRouteUnscoped) Error() string {
+	return "REST route " + e.Method + " " + e.Route + " has no scope: " + e.Reason
+}
+
 // ErrPXERESTUnavailable reports that the PXE operator routes could not be
 // mounted on the daemon REST listener.
 type ErrPXERESTUnavailable struct {

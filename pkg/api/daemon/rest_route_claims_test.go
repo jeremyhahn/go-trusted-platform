@@ -97,9 +97,9 @@ func daemonRouteTable(t *testing.T, guard *restapi.ScopeGuard) (*RESTServer, []s
 	s.SetProxyService(routeTableProxy{})
 	s.SetClusterService(nil)
 	s.SetCeremonyService(NewCeremonyService(log, nil))
-	s.SetPIVService(NewPIVService(log, nil))
-	s.SetLUKSService(NewLUKSService(log, nil, RootCheckerFunc(func() bool { return true })))
-	s.SetFIDO2Service(NewFIDO2Service(log, nil))
+	require.NoError(t, s.SetPIVService(NewPIVService(log, nil), guard))
+	require.NoError(t, s.SetLUKSService(NewLUKSService(log, nil, RootCheckerFunc(func() bool { return true })), guard))
+	require.NoError(t, s.SetFIDO2Service(NewFIDO2Service(log, nil), guard))
 
 	return s, testutil.WalkRoutes(t, s.Router())
 }

@@ -135,9 +135,6 @@ var daemonMTLSOnlyRoutes = []string{
 	"/api/v1/proxy",                              // proxy (SetProxyService)
 	"/api/v1/cluster",                            // cluster (SetClusterService)
 	"/api/v1/ceremony",                           // ceremony (SetCeremonyService)
-	"/api/v1/piv",                                // PIV (SetPIVService)
-	"/api/v1/luks",                               // LUKS (SetLUKSService)
-	"/api/v1/fido2",                              // FIDO2 (SetFIDO2Service)
 }
 
 // templateVariable matches a mux path variable, {name} or {name:pattern}.

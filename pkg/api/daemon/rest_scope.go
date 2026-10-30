@@ -7,7 +7,9 @@ import (
 	"github.com/gorilla/mux"
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/platformtoken"
 
+	grpcapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc"
 	restapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/rest"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
 )
 
@@ -69,6 +71,66 @@ func sdnRouteScope(method, route string) (string, error) {
 		return "", err
 	}
 	return sdnScopeResource + ":" + action, nil
+}
+
+// catalogRouteRPCs maps each PIV, LUKS and FIDO2 route on the daemon REST
+// listener, as "METHOD route-template", to the gRPC method it serves. The
+// route needs the scope the gRPC catalog gives that method: several of these
+// POSTs read, delete or use a key, so the HTTP method cannot name the action.
+var catalogRouteRPCs = map[string]string{
+	"GET /api/v1/piv/devices":                 "/platform.v1.PIVService/ListDevices",
+	"GET /api/v1/piv/devices/{device}/slots":  "/platform.v1.PIVService/ListSlots",
+	"GET /api/v1/piv/slots/{slot}":            "/platform.v1.PIVService/SlotInfo",
+	"POST /api/v1/piv/slots/{slot}/attest":    "/platform.v1.PIVService/Attest",
+	"POST /api/v1/piv/slots/{slot}/generate":  "/platform.v1.PIVService/Generate",
+	"POST /api/v1/piv/slots/{slot}/import":    "/platform.v1.PIVService/Import",
+	"POST /api/v1/piv/slots/{slot}/sign":      "/platform.v1.PIVService/Sign",
+	"POST /api/v1/piv/devices/{device}/reset": "/platform.v1.PIVService/Reset",
+
+	"GET /api/v1/luks/status":             "/platform.v1.LUKSService/Status",
+	"GET /api/v1/luks/slots":              "/platform.v1.LUKSService/ListSlots",
+	"GET /api/v1/luks/info":               "/platform.v1.LUKSService/Info",
+	"POST /api/v1/luks/keys/test-unlock":  "/platform.v1.LUKSService/TestUnlock",
+	"POST /api/v1/luks/enroll/passphrase": "/platform.v1.LUKSService/EnrollPassphrase",
+	"POST /api/v1/luks/enroll/fido2":      "/platform.v1.LUKSService/EnrollFIDO2",
+	"POST /api/v1/luks/enroll/tpm":        "/platform.v1.LUKSService/EnrollTPM",
+	"POST /api/v1/luks/enroll/recovery":   "/platform.v1.LUKSService/EnrollRecovery",
+	"POST /api/v1/luks/passphrase/change": "/platform.v1.LUKSService/ChangePassphrase",
+	"POST /api/v1/luks/keys/remove":       "/platform.v1.LUKSService/RemoveKey",
+
+	"GET /api/v1/fido2/devices":          "/platform.v1.FIDO2Service/ListDevices",
+	"GET /api/v1/fido2/devices/wait":     "/platform.v1.FIDO2Service/WaitDevice",
+	"GET /api/v1/fido2/devices/{device}": "/platform.v1.FIDO2Service/Info",
+	"POST /api/v1/fido2/register":        "/platform.v1.FIDO2Service/Register",
+	"POST /api/v1/fido2/authenticate":    "/platform.v1.FIDO2Service/Authenticate",
+}
+
+// catalogRouteScope returns the scope the gRPC catalog gives the method a
+// route serves. A route missing from catalogRouteRPCs, or a method the
+// catalog gives no scope, fails closed.
+func catalogRouteScope(method, route string) (string, error) {
+	rpc, ok := catalogRouteRPCs[method+" "+route]
+	if !ok {
+		return "", ErrRESTRouteUnscoped{Method: method, Route: route, Reason: "the route has no gRPC method"}
+	}
+	scope := grpcapi.ScopeForMethod(rpc)
+	if scope == "" {
+		return "", ErrRESTRouteUnscoped{Method: method, Route: route, Reason: "the gRPC catalog gives " + rpc + " no scope"}
+	}
+	return scope, nil
+}
+
+// catalogGuardedAPI returns a restBasePath subrouter whose routes each run
+// behind guard and need the scope catalogRouteScope gives them.
+func (s *RESTServer) catalogGuardedAPI(guard *restapi.ScopeGuard) *mux.Router {
+	authz := restScopeAuthorization{
+		guard:      guard,
+		respWriter: response.NewResponseWriter(logging.NewFromSlog(s.logger), nil),
+		routeScope: catalogRouteScope,
+	}
+	api := s.router.PathPrefix(restBasePath).Subrouter()
+	api.Use(authz.authorize)
+	return api
 }
 
 // restScopeAuthorization authenticates a daemon REST request through the
