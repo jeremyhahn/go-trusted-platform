@@ -1187,6 +1187,16 @@ func (e ErrIAMTenantForbidden) Error() string {
 	return fmt.Sprintf("IAM request names tenant %q: caller may not act on another tenant", e.Requested)
 }
 
+// ErrIAMRESTUnavailable is returned when the IAM REST routes cannot be
+// mounted on the daemon REST plane because a dependency is missing.
+type ErrIAMRESTUnavailable struct {
+	Reason string
+}
+
+func (e ErrIAMRESTUnavailable) Error() string {
+	return "IAM REST routes unavailable: " + e.Reason
+}
+
 // ErrTenantBarrierShamirUnsupported is returned when InitTenantBarrier asks
 // for Shamir sharing. The per-tenant barrier initializes with its
 // deterministic credential only, and the init returns no shares, so

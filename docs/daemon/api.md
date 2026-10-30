@@ -462,6 +462,28 @@ guard with the `tenant` scopes. They then apply the `TenantService` tenant
 binding to the authenticated caller
 ([`docs/tenant/api.md`](../tenant/api.md) §7).
 
+**The daemon REST plane serves `/api/v1/iam/*` (#997).** `SetIAMHandlers`
+(`pkg/api/daemon/iam_rest.go`) mounts the webservice IAM router
+(`pkg/webservice/v1/rest/iam`, all 71 routes of
+[`docs/iam/api.md`](../iam/api.md) §3–§5) on the daemon listener. The router is
+backed by the SDK IAM client and PEP, and the daemon supplies its
+authorization:
+
+| Router hook | Daemon implementation | Refusal |
+|-------------|-----------------------|---------|
+| `Authenticate` | `ScopeGuard.Authenticate`: the guard's credentials above (`Bearer` platform token, else the verified client certificate as the `*:*` operator) | 401 `ErrRouteUnauthenticated`; 403 with no guard |
+| `RequireAdmin` | the caller's scope for the method: `GET` `iam:read`; `POST`, `PUT`, `PATCH` `iam:write`; `DELETE` `iam:delete`. `POST .../policies/validate`, `POST .../policies/test` and `POST .../permissions/check` change nothing and need `iam:read`. Any other method is refused, never defaulted | 403 |
+| `RequireSystemTenant` | the gRPC rule: the caller is of the system tenant | 403 |
+| `RequireOwnTenant` | the gRPC rule: the request's tenant (the `{tenant}` segment, else `tenant_id`) is the caller's | 403 |
+
+There are no sessions and no role check: the scope is the authorization, and
+the operator's `*:*` passes every method. A caller bound to a tenant must name
+it on a flat route (`tenant_id`); one that names none is refused, as on gRPC.
+Installer and machine certificates are not admitted to these routes: no
+`/api/v1/iam` route is on any installer or machine allowlist (#1153). The
+daemon refuses to start when the IAM service is enabled and the routes cannot
+be mounted.
+
 **QUIC authorizes every request before dispatch (#767).** Before #767 the QUIC
 dispatcher authenticated a token when a middleware was installed and then
 dispatched with no authorization at all: any valid token reached every

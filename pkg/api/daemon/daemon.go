@@ -55,6 +55,7 @@ import (
 	bmcwebsvc "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/bmc"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/jwt"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
+	restiam "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/iam"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 )
@@ -1555,6 +1556,27 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 	// instance is shared across REST, gRPC, QUIC, MCP, and Unix so every
 	// transport sees identical per-tenant state including barrier lifecycle.
 	// REST and gRPC both authorize the caller against the same system tenant.
+	// Wire the IAM REST handlers (#997). /api/v1/iam is the webservice IAM
+	// router authorized by the platform ScopeGuard: the caller's iam:read,
+	// iam:write or iam:delete scope gates each method, and the tenant rules
+	// are the ones the gRPC, QUIC and MCP IAM transports apply.
+	if daemon.concreteRestServer != nil {
+		if iamService == nil {
+			logger.Warn("IAM REST routes not registered: the IAM service is disabled")
+		} else {
+			var iamRESTPEP restiam.PEPClient
+			if sdkPEP := iamService.PEP(); sdkPEP != nil {
+				iamRESTPEP = restiam.NewQuicBaaSPEPAdapter(sdkPEP)
+			}
+			iamErr := daemon.concreteRestServer.SetIAMHandlers(logger, restiam.NewQuicBaaSIAMAdapter(iamService.Client()), iamRESTPEP, restGuard, config.PlatformTenantID)
+			if iamErr != nil {
+				constructErr := ErrTransportConstructionFailed{Transport: transportREST, Cause: iamErr}
+				logger.Error(constructErr, "component", "rest_server")
+				return nil, constructErr
+			}
+		}
+	}
+
 	if config.PlatformTenantManager != nil {
 		if daemon.concreteRestServer != nil {
 			daemon.concreteRestServer.SetTenantHandlers(config.PlatformTenantManager, restGuard, config.PlatformTenantID)
