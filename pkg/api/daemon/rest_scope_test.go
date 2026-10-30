@@ -122,7 +122,6 @@ var daemonMTLSOnlyRoutes = []string{
 	"/api/v1/idevid/ldevid",                      // LDevID issuance (registerIDevIDRoutes)
 	"/api/v1/provisioning/",                      // boot-time config delivery (SetConfigDeliveryHandler)
 	"/api/v1/bmc/",                               // BMC management (SetBMCHandler)
-	"/api/v1/devices",                            // device CRUD, profiles, attest (SetDeviceHandlers); s3 removes it
 	"/api/v1/ca/info",                            // CA routes SetCAHandlers mounts without its guard
 	"/api/v1/ca/certificates",                    // as above
 	"/api/v1/ca/crl",                             // as above

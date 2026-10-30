@@ -5,8 +5,10 @@ import (
 	"strings"
 
 	"github.com/gorilla/mux"
+	"github.com/jeremyhahn/go-quicbaas/sdk/go/platformtoken"
 
 	restapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/rest"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
 )
 
 // restMethodActions maps an HTTP method to the action it performs on a
@@ -47,4 +49,30 @@ func restRouteTemplate(r *http.Request) string {
 		}
 	}
 	return r.URL.Path
+}
+
+// restScopeAuthorization authenticates a daemon REST request through the
+// REST scope guard and requires the scope routeScope gives its method and
+// route template.
+type restScopeAuthorization struct {
+	guard      *restapi.ScopeGuard
+	respWriter response.HttpWriter
+	routeScope func(method, route string) (string, error)
+}
+
+// authorize answers 401 for a missing or invalid credential and 403 for a
+// caller without the route's scope.
+func (a restScopeAuthorization) authorize(next http.Handler) http.Handler {
+	return a.guard.Authenticate(func(w http.ResponseWriter, r *http.Request, caller *platformtoken.AuthorizedContext) {
+		scope, err := a.routeScope(r.Method, restRouteTemplate(r))
+		if err != nil {
+			a.respWriter.Error403(w, r, err, nil)
+			return
+		}
+		if err := caller.RequireScope(scope); err != nil {
+			a.respWriter.Error403(w, r, restapi.ErrRouteForbidden{Scope: scope, Reason: err.Error()}, nil)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }

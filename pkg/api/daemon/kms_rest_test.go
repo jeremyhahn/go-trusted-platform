@@ -282,9 +282,10 @@ func TestSetKMSHandlers_FacadeOnlyPathNeedsScope(t *testing.T) {
 
 // A request whose method has no action is refused before the scope check.
 func TestKMSRESTAuthorization_RefusesAnUnservedMethod(t *testing.T) {
-	authz := kmsRESTAuthorization{
+	authz := restScopeAuthorization{
 		guard:      restapi.NewScopeGuard(kmsRESTCallers, nil, nil),
 		respWriter: response.NewResponseWriter(logging.DefaultLogger(), nil),
+		routeScope: kmsRouteScope,
 	}
 	reached := false
 	next := http.HandlerFunc(func(http.ResponseWriter, *http.Request) { reached = true })

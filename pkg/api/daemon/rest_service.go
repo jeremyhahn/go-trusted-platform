@@ -421,21 +421,29 @@ func (s *RESTServer) SetAppServiceHandlers(servers restapi.AppServiceServers, gu
 // not registered at all. Before #403 the REST package carried its own
 // "verifier" that returned true for any input, so this route reported every
 // device attested.
-func (s *RESTServer) SetDeviceHandlers(
-	deviceSvc restapi.DeviceServiceInterface,
-	profileSvc restapi.ProfileServiceInterface,
-	attestSvc platformv1.DeviceServiceServer,
-) {
+//
+// Every route authenticates through guard and needs the device:* scope the
+// gRPC catalog gives its rpc; a nil guard is an ErrDeviceRESTUnavailable.
+// Without a device or profile service nothing is mounted.
+func (s *RESTServer) SetDeviceHandlers(deviceSvc restapi.DeviceServiceInterface, profileSvc restapi.ProfileServiceInterface, attestSvc platformv1.DeviceServiceServer, guard *restapi.ScopeGuard) error {
+	if guard == nil {
+		return ErrDeviceRESTUnavailable{Reason: "no REST scope guard"}
+	}
 	if deviceSvc == nil && profileSvc == nil {
-		return
+		return nil
 	}
 	opts := []restapi.DeviceHandlerOption{}
 	if attestSvc != nil {
 		opts = append(opts, restapi.WithDeviceAttestService(attestSvc))
 	}
 	handlers := restapi.NewDeviceHandlers(deviceSvc, profileSvc, s.logger, opts...)
-	handlers.RegisterRoutes(s.router)
+	respWriter := response.NewResponseWriter(logging.NewFromSlog(s.logger), nil)
+	authz := restScopeAuthorization{guard: guard, respWriter: respWriter, routeScope: deviceRouteScope}
+	sub := s.router.NewRoute().Subrouter()
+	sub.Use(authz.authorize)
+	handlers.RegisterRoutes(sub)
 	s.logger.Info("Device REST routes registered", "attestation", attestSvc != nil)
+	return nil
 }
 
 // SetTenantHandlers wires the tenant REST handlers onto the daemon's REST
@@ -479,7 +487,7 @@ func (s *RESTServer) SetKMSHandlers(service restapi.KMSService, guard *restapi.S
 		return ErrKMSRESTUnavailable{Reason: "no REST scope guard"}
 	}
 	respWriter := response.NewResponseWriter(logging.NewFromSlog(s.logger), nil)
-	authz := kmsRESTAuthorization{guard: guard, respWriter: respWriter}
+	authz := restScopeAuthorization{guard: guard, respWriter: respWriter, routeScope: kmsRouteScope}
 	// A matcher-less subrouter matches only its own routes, so the KMS router
 	// mounted before it keeps every path the two share. RegisterRoutes
 	// registers full /api/v1/... paths, hence no /api/v1 prefix here.

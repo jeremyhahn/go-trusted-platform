@@ -1,14 +1,12 @@
 package daemon
 
 import (
-	"net/http"
 	"strings"
 
 	cryptoclient "github.com/jeremyhahn/go-quicbaas/sdk/go/client/crypto"
 	dekclient "github.com/jeremyhahn/go-quicbaas/sdk/go/client/dek"
 	kmsclient "github.com/jeremyhahn/go-quicbaas/sdk/go/client/kms"
 	secretsclient "github.com/jeremyhahn/go-quicbaas/sdk/go/client/secrets"
-	"github.com/jeremyhahn/go-quicbaas/sdk/go/platformtoken"
 
 	restapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/rest"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
@@ -56,37 +54,13 @@ func (s *RESTServer) SetKMSRouterHandlers(logger *logging.Logger, kms kmsclient.
 		return ErrKMSRESTUnavailable{Reason: "no REST scope guard"}
 	}
 	respWriter := response.NewResponseWriter(logger, nil)
-	authz := kmsRESTAuthorization{guard: guard, respWriter: respWriter}
+	authz := restScopeAuthorization{guard: guard, respWriter: respWriter, routeScope: kmsRouteScope}
 	parent := s.router.PathPrefix(iamRESTParentPath).Subrouter()
 	parent.Use(authz.authorize)
 	// The KMS router's /kms base path is relative to the /api/v1 parent.
 	restkms.NewKMSRouter(logger, kms, crypto, dek, secrets, respWriter).RegisterRoutes(parent)
 	s.logger.Info("KMS REST routes registered")
 	return nil
-}
-
-// kmsRESTAuthorization authenticates a KMS REST request through the daemon
-// REST scope guard and requires the scope its route and method name.
-type kmsRESTAuthorization struct {
-	guard      *restapi.ScopeGuard
-	respWriter response.HttpWriter
-}
-
-// authorize answers 401 for a missing or invalid credential and 403 for a
-// caller without the route's scope.
-func (a kmsRESTAuthorization) authorize(next http.Handler) http.Handler {
-	return a.guard.Authenticate(func(w http.ResponseWriter, r *http.Request, caller *platformtoken.AuthorizedContext) {
-		scope, err := kmsRouteScope(r.Method, restRouteTemplate(r))
-		if err != nil {
-			a.respWriter.Error403(w, r, err, nil)
-			return
-		}
-		if err := caller.RequireScope(scope); err != nil {
-			a.respWriter.Error403(w, r, restapi.ErrRouteForbidden{Scope: scope, Reason: err.Error()}, nil)
-			return
-		}
-		next.ServeHTTP(w, r)
-	})
 }
 
 // kmsRouteScope is the scope a KMS router request needs: secrets:<action>

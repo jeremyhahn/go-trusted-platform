@@ -1207,6 +1207,27 @@ func (e ErrKMSRESTUnavailable) Error() string {
 	return "KMS REST routes unavailable: " + e.Reason
 }
 
+// ErrAttestationRESTUnavailable reports that the /api/v1/attestation routers
+// (manifests, quote verification, reports and callers) could not be mounted
+// on the daemon REST listener.
+type ErrAttestationRESTUnavailable struct {
+	Reason string
+}
+
+func (e ErrAttestationRESTUnavailable) Error() string {
+	return "attestation REST routes unavailable: " + e.Reason
+}
+
+// ErrDeviceRESTUnavailable reports that the device operator routes could not
+// be mounted on the daemon REST listener.
+type ErrDeviceRESTUnavailable struct {
+	Reason string
+}
+
+func (e ErrDeviceRESTUnavailable) Error() string {
+	return "device REST routes unavailable: " + e.Reason
+}
+
 // ErrTenantBarrierShamirUnsupported is returned when InitTenantBarrier asks
 // for Shamir sharing. The per-tenant barrier initializes with its
 // deterministic credential only, and the init returns no shares, so

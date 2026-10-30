@@ -1509,6 +1509,21 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 		}
 	}
 
+	// The attestation and device routers mount before the device facade:
+	// the first matching route wins, so they serve every path they share
+	// with it. Each one runs behind restGuard, and a failed mount stops the
+	// daemon rather than leaving the routes unserved or unguarded.
+	if daemon.concreteRestServer != nil {
+		var reportingHandles ReportingHandles
+		if config.AttestationReporting != nil {
+			reportingHandles = *config.AttestationReporting
+		}
+		if err := daemon.concreteRestServer.SetAttestationRouterHandlers(logger, attestationService, reportingHandles, restGuard); err != nil {
+			constructErr := ErrTransportConstructionFailed{Transport: transportREST, Cause: err}
+			logger.Error(constructErr, "component", "rest_server")
+			return nil, constructErr
+		}
+	}
 	// Wire device + profile REST handlers if the services are available.
 	// Without this, /api/v1/devices/* would not be served and the REST
 	// adapter for `platformctl --protocol rest device list` would 404.
@@ -1522,7 +1537,16 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 		if deviceService != nil {
 			attestSvc = deviceService
 		}
-		daemon.concreteRestServer.SetDeviceHandlers(config.DeviceService, config.DeviceProfileService, attestSvc)
+		if err := daemon.concreteRestServer.SetDeviceRouterHandlers(logger, config.DeviceService, config.DeviceProfileService, config.DeviceTemplateService, attestSvc, restGuard); err != nil {
+			constructErr := ErrTransportConstructionFailed{Transport: transportREST, Cause: err}
+			logger.Error(constructErr, "component", "rest_server")
+			return nil, constructErr
+		}
+		if err := daemon.concreteRestServer.SetDeviceHandlers(config.DeviceService, config.DeviceProfileService, attestSvc, restGuard); err != nil {
+			constructErr := ErrTransportConstructionFailed{Transport: transportREST, Cause: err}
+			logger.Error(constructErr, "component", "rest_server")
+			return nil, constructErr
+		}
 	}
 
 	// Wire CA REST handlers if the CA service is available. Without this,

@@ -500,7 +500,7 @@ refused. Installer and machine certificates are not admitted: no `/api/v1/kms`
 route is on any installer or machine allowlist (#1153). The daemon refuses to
 start when the KMS service is configured and the routes cannot be mounted.
 [`docs/kms/api.md`](../kms/api.md) §1 lists the paths `SetKMSHandlers` still
-serves. They run behind the same scope guard (`kmsRESTAuthorization`), with
+serves. They run behind the same scope guard (`restScopeAuthorization`), with
 the same 401 and 403 answers:
 
 | Route | Scope |
@@ -511,6 +511,54 @@ the same 401 and 403 answers:
 
 A configured KMS facade that cannot be guarded (no scope guard) stops the
 daemon (`ErrTransportConstructionFailed`); it is never served unguarded.
+
+**The daemon REST plane serves the attestation routers at
+`/api/v1/attestation/*` (#997).** `SetAttestationRouterHandlers`
+(`pkg/api/daemon/attestation_rest.go`) mounts the webservice attestation server
+router (`pkg/webservice/v1/rest/attestation`) over the daemon's
+`AttestationService`, and the reports and callers routers when the node holds a
+report cache:
+
+| Routes | Credential | Scope |
+|--------|------------|-------|
+| `GET /api/v1/attestation/manifests`, `GET .../manifests/{id}` | `ScopeGuard.Authenticate` (platform token or operator certificate) | `attestation:read` |
+| `POST /api/v1/attestation/manifests/verify`, `POST .../quote/verify` | same | `attestation:read` |
+| `POST /api/v1/attestation/manifests/build`, `POST .../vm/{id}`, `POST .../container/{id}` | same | `attestation:write` |
+| `DELETE /api/v1/attestation/manifests/{id}` | same | `attestation:delete` |
+| `GET /api/v1/attestation/reports`, `GET .../reports/{device_id}`, `GET .../callers` (with a report cache) | same | `attestation:read` |
+| `POST /api/v1/attestation/reports/{device_id}/refresh` (with a report cache) | same | `attestation:write` |
+
+Each scope is the one the gRPC catalog gives the matching rpc. A missing
+credential answers 401, a missing scope 403, and any other method is refused.
+The caller-gated quote routes (`POST .../quote`, `POST .../host`) and the
+verdicts route are the webservice's; the daemon does not mount them. The daemon
+refuses to start when the routes cannot be mounted.
+
+**The daemon REST plane serves the device operator routes (#997).**
+`SetDeviceRouterHandlers` (`pkg/api/daemon/device_rest.go`) mounts the
+webservice device router (`pkg/webservice/v1/router`) at `/api/v1` when the
+device, profile and template services are configured: `/devices/**` (CRUD,
+count, serial, attest, `attest-cert/record`, `disable`, `enable`),
+`/device/profiles/**` (CRUD, count, `match`, serial, MAC, `find-config`,
+`assign`, `unassign`), `/device/templates/**` and `/device/activate-json`.
+`SetDeviceHandlers` then mounts the device facade (`pkg/api/rest`) for the
+paths the router does not serve, among them `/api/v1/devices/profiles/**` and
+`/api/v1/devices/{id}/{activate,state}`. Both run behind
+`ScopeGuard.Authenticate`, and the router checks each route's own scope again
+through the guard:
+
+| Routes | Scope |
+|--------|-------|
+| every `GET`, and `POST /api/v1/device/profiles/match` | `device:read` |
+| every other `POST`, and every `PUT` and `PATCH` | `device:write` |
+| every `DELETE` | `device:delete` |
+
+Each scope is the one the gRPC catalog gives the matching `DeviceService` rpc. A
+missing credential answers 401 and a missing scope 403. The machine-facing
+device routes (`/device/profile`, `/device/activate`, `/device/heartbeat`,
+`/device/boot/**`) are not mounted on the daemon, and `/api/v1/provisioning/*`
+stays with `SetConfigDeliveryHandler`. The daemon refuses to start when either
+device mount fails (`ErrTransportConstructionFailed`).
 
 `TestDaemonREST_EveryMountedRouteIsGuarded` (`pkg/api/daemon/rest_scope_test.go`)
 walks the daemon REST router and sends every route a request with no
