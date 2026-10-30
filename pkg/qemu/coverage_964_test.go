@@ -37,8 +37,9 @@ type qmpRequest struct {
 // fakeQMP is an in-process QMP server on a temporary unix socket. It answers
 // each command with the reply registered for it, or {"return":{}}.
 type fakeQMP struct {
-	path      string
-	listener  net.Listener
+	path     string
+	listener net.Listener
+	// handshake is set only before serve starts (see withHandshake).
 	handshake string
 
 	mu       sync.Mutex
@@ -50,7 +51,7 @@ type fakeQMP struct {
 
 // newFakeQMP starts a fake QMP server. The socket directory is kept short
 // because unix socket paths are limited to 108 bytes.
-func newFakeQMP(t *testing.T, replies map[string]string) *fakeQMP {
+func newFakeQMP(t *testing.T, replies map[string]string, opts ...fakeQMPOption) *fakeQMP {
 	t.Helper()
 	dir, err := os.MkdirTemp("", "qmp964")
 	require.NoError(t, err)
@@ -65,8 +66,29 @@ func newFakeQMP(t *testing.T, replies map[string]string) *fakeQMP {
 		replies = map[string]string{}
 	}
 	f := &fakeQMP{path: path, listener: listener, handshake: `{"return":{}}`, replies: replies}
+	// Options are applied before the server goroutine starts, so the
+	// fields they set are never written while it reads them.
+	for _, opt := range opts {
+		opt(f)
+	}
 	go f.serve()
 	return f
+}
+
+// fakeQMPOption configures a fakeQMP before it starts serving.
+type fakeQMPOption func(f *fakeQMP)
+
+// withHandshake sets the reply the server sends to qmp_capabilities.
+func withHandshake(reply string) fakeQMPOption {
+	return func(f *fakeQMP) { f.handshake = reply }
+}
+
+// setOnCommand installs a hook that runs before the server replies to a
+// command. It takes f.mu because the server may already be serving.
+func (f *fakeQMP) setOnCommand(hook func(execute string)) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.onCommand = hook
 }
 
 func (f *fakeQMP) serve() {
@@ -149,8 +171,7 @@ func TestMonitor964_ConnectReportsVersionAndCapabilities(t *testing.T) {
 
 func TestMonitor964_ConnectFailures(t *testing.T) {
 	t.Run("handshake rejected", func(t *testing.T) {
-		srv := newFakeQMP(t, nil)
-		srv.handshake = qmpGenericError
+		srv := newFakeQMP(t, nil, withHandshake(qmpGenericError))
 		m := NewMonitor(srv.path, 2*time.Second, nil)
 
 		var target ErrMonitorHandshakeFailed
@@ -724,12 +745,12 @@ func TestVM964_StopWithTimeoutGracefulViaQMP(t *testing.T) {
 	srv := newFakeQMP(t, nil)
 	vm, cmd, reap := childVM(t, srv.path)
 	// The fake QEMU exits when it receives the ACPI power button event.
-	srv.onCommand = func(execute string) {
+	srv.setOnCommand(func(execute string) {
 		if execute == "system_powerdown" {
 			_ = cmd.Process.Kill()
 			reap()
 		}
-	}
+	})
 	require.NoError(t, vm.ConnectMonitor(context.Background()))
 	assert.Equal(t, cmd.Process.Pid, vm.GetPID())
 
