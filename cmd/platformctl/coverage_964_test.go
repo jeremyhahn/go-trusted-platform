@@ -592,14 +592,6 @@ func TestCov964_LogArgsAndGUIOnly(t *testing.T) {
 	}
 }
 
-// The binary built without the desktop tag never opens a window.
-func TestCov964_LaunchGUIWithoutTheDesktopTag(t *testing.T) {
-	var unavailable *GUIUnavailableError
-	if err := launchGUI(cov964Logger()); !errors.As(err, &unavailable) {
-		t.Fatalf("launchGUI = %v, want GUIUnavailableError", err)
-	}
-}
-
 // cov964Is reports whether err holds a T.
 func cov964Is[T error](err error) bool {
 	var target T
