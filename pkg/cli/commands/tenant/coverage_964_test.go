@@ -1,14 +1,20 @@
 package tenant
 
 import (
+	"context"
 	"encoding/base64"
+	"net"
+	"path/filepath"
+	"sync"
 	"testing"
 
 	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
 
 // TestRunQuotasSet_AllGroupsMergeExisting sets one field in every quota
@@ -105,10 +111,15 @@ func TestRunBarrierUnseal_KeyArguments(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			err := runBarrierUnseal(&cli.CommonFlags{}, "acme", tc.keyHex, tc.keyB64)
+			srv, flags := startUnsealRecordingServer(t)
+			f := flags(cli.OutputFormatJSON)
+			require.NoError(t, runTenantCreate(f, &createTenantOptions{Name: "acme"}))
+
+			err := runBarrierUnseal(f, "acme", tc.keyHex, tc.keyB64)
 			var want ErrInvalidArguments
 			require.ErrorAs(t, err, &want)
 			assert.Contains(t, err.Error(), "invalid arguments: ")
+			assert.Empty(t, srv.unsealRequests(), "a rejected key must not reach the unseal RPC")
 		})
 	}
 }
@@ -116,14 +127,83 @@ func TestRunBarrierUnseal_KeyArguments(t *testing.T) {
 // TestRunBarrierUnseal_Base64Key asserts a base64 key unseals the barrier
 // and that the "0x" hex prefix is accepted.
 func TestRunBarrierUnseal_Base64Key(t *testing.T) {
-	_, flags := startTenantServer(t)
+	srv, flags := startUnsealRecordingServer(t)
 	f := flags(cli.OutputFormatJSON)
 	require.NoError(t, runTenantCreate(f, &createTenantOptions{Name: "b64"}))
+	tenantID := srv.tenantIDByName(t, "b64")
 
-	key := base64.StdEncoding.EncodeToString([]byte{0x00, 0x11, 0x22, 0x33})
+	want := []byte{0x00, 0x11, 0x22, 0x33}
+	key := base64.StdEncoding.EncodeToString(want)
 	require.NoError(t, runBarrierUnseal(f, "b64", "", key))
 	require.NoError(t, runBarrierUnseal(f, "b64", "0x00112233", ""))
 	assert.ErrorAs(t, runBarrierUnseal(f, "ghost", "", key), new(ErrTenantNotFound))
+
+	reqs := srv.unsealRequests()
+	require.Len(t, reqs, 2, "one unseal RPC per accepted key, none for an unknown tenant")
+	for i, input := range []string{"base64", "prefixed hex"} {
+		assert.Equal(t, tenantID, reqs[i].GetTenantId(), "%s: tenant ID", input)
+		assert.Equal(t, want, reqs[i].GetKey(), "%s: decoded key bytes", input)
+	}
+}
+
+// unsealRecordingServer is the in-process tenant server with every
+// UnsealTenantBarrier request recorded, so a test can assert what the CLI
+// actually sent.
+type unsealRecordingServer struct {
+	*inProcTenantServer
+	unsealMu sync.Mutex
+	unseals  []*platformv1.UnsealTenantBarrierRequest
+}
+
+func (s *unsealRecordingServer) UnsealTenantBarrier(ctx context.Context, r *platformv1.UnsealTenantBarrierRequest) (*platformv1.UnsealTenantBarrierResponse, error) {
+	s.unsealMu.Lock()
+	s.unseals = append(s.unseals, r)
+	s.unsealMu.Unlock()
+	return s.inProcTenantServer.UnsealTenantBarrier(ctx, r)
+}
+
+func (s *unsealRecordingServer) unsealRequests() []*platformv1.UnsealTenantBarrierRequest {
+	s.unsealMu.Lock()
+	defer s.unsealMu.Unlock()
+	return append([]*platformv1.UnsealTenantBarrierRequest(nil), s.unseals...)
+}
+
+func (s *unsealRecordingServer) tenantIDByName(t *testing.T, name string) string {
+	t.Helper()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for id, tn := range s.tenants {
+		if tn.GetName() == name {
+			return id
+		}
+	}
+	require.FailNow(t, "tenant not created", name)
+	return ""
+}
+
+// startUnsealRecordingServer is startTenantServer with the recording wrapper
+// registered in place of the bare in-process server.
+func startUnsealRecordingServer(t *testing.T) (*unsealRecordingServer, func(cli.OutputFormat) *cli.CommonFlags) {
+	t.Helper()
+	sock := filepath.Join(t.TempDir(), "platformd.sock")
+	lis, err := net.Listen("unix", sock)
+	require.NoError(t, err)
+	srv := &unsealRecordingServer{inProcTenantServer: &inProcTenantServer{tenants: map[string]*platformv1.Tenant{}}}
+	gs := grpc.NewServer()
+	platformv1.RegisterTenantServiceServer(gs, srv)
+	go func() { _ = gs.Serve(lis) }()
+	t.Cleanup(gs.Stop)
+
+	flags := func(format cli.OutputFormat) *cli.CommonFlags {
+		return &cli.CommonFlags{
+			OutputFormat: format,
+			NoColor:      true,
+			GetContext: func() (*cli.Context, error) {
+				return &cli.Context{Name: "test", Type: cli.ContextTypeLocal, Local: &cli.LocalContext{SocketPath: sock}}, nil
+			},
+		}
+	}
+	return srv, flags
 }
 
 // TestCommands_RunEWiring executes each cobra command against the in-process
