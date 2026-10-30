@@ -423,9 +423,13 @@ func TestCryptoRun964_RejectsBadInputBeforeTheRPC(t *testing.T) {
 		}{
 			{"nonce", func() error { return runCryptoEncrypt(f, &encryptFlags{keyID: "k", inputPath: in, nonce: "%%"}) }},
 			{"nonce", func() error { return runCryptoDecrypt(f, &decryptFlags{keyID: "k", inputPath: in, nonce: "%%"}) }},
-			{"input", func() error { return runCryptoDecrypt(f, &decryptFlags{keyID: "k", inputPath: notBase64, base64In: true}) }},
+			{"input", func() error {
+				return runCryptoDecrypt(f, &decryptFlags{keyID: "k", inputPath: notBase64, base64In: true})
+			}},
 			{"nonce", func() error { return runCryptoRewrap(f, &rewrapFlags{keyID: "k", inputPath: in, nonce: "%%"}) }},
-			{"input", func() error { return runCryptoRewrap(f, &rewrapFlags{keyID: "k", inputPath: notBase64, base64In: true}) }},
+			{"input", func() error {
+				return runCryptoRewrap(f, &rewrapFlags{keyID: "k", inputPath: notBase64, base64In: true})
+			}},
 			{"signature", func() error {
 				return runCryptoVerify(f, &verifyFlags{keyID: "k", inputPath: in, signature: "%%", hashAlgorithm: "sha256"})
 			}},
@@ -466,7 +470,9 @@ func TestCryptoRun964_RejectsBadInputBeforeTheRPC(t *testing.T) {
 				return runCryptoVerify(f, &verifyFlags{keyID: "k", inputPath: in, signature: b64("s"), hashAlgorithm: "md5"})
 			},
 			func() error { return runCryptoHash(f, &hashFlags{inputPath: in, algorithm: "md5"}) },
-			func() error { return runHMACGenerate(f, &hmacGenerateFlags{keyID: "k", inputPath: in, hashAlgorithm: "md5"}) },
+			func() error {
+				return runHMACGenerate(f, &hmacGenerateFlags{keyID: "k", inputPath: in, hashAlgorithm: "md5"})
+			},
 			func() error {
 				return runHMACVerify(f, &hmacVerifyFlags{keyID: "k", inputPath: in, hmac: b64("m"), hashAlgorithm: "md5"})
 			},
@@ -644,8 +650,10 @@ func TestCryptoRun964_RejectsAnUnknownOutputFormat(t *testing.T) {
 		"verify": func() error {
 			return runCryptoVerify(f, &verifyFlags{keyID: "k", inputPath: in, signature: b64("s"), hashAlgorithm: "sha256"})
 		},
-		"hash":        func() error { return runCryptoHash(f, &hashFlags{inputPath: in, algorithm: "sha256"}) },
-		"hmac":        func() error { return runHMACGenerate(f, &hmacGenerateFlags{keyID: "k", inputPath: in, hashAlgorithm: "sha256"}) },
+		"hash": func() error { return runCryptoHash(f, &hashFlags{inputPath: in, algorithm: "sha256"}) },
+		"hmac": func() error {
+			return runHMACGenerate(f, &hmacGenerateFlags{keyID: "k", inputPath: in, hashAlgorithm: "sha256"})
+		},
 		"random":      func() error { return runCryptoRandom(f, &randomFlags{numBytes: 4}) },
 		"data key":    func() error { return runGenerateDataKey(f, &dataKeyFlags{keyID: "k", algorithm: "aes-256"}) },
 		"wrapped key": func() error { return runGenerateWrappedDataKey(f, &dataKeyFlags{keyID: "k", algorithm: "aes-256"}) },
@@ -927,7 +935,9 @@ func TestKeyRun964_GenerateAppliesTheDisplayName(t *testing.T) {
 		}}, nil
 	}))
 
-	out, err := capture964(t, func() error { return runKeyGenerate(f, "tenant-kek", "aes-256", "encrypt", false, false, "Display", "", "") })
+	out, err := capture964(t, func() error {
+		return runKeyGenerate(f, "tenant-kek", "aes-256", "encrypt", false, false, "Display", "", "")
+	})
 	require.NoError(t, err)
 	require.NotNil(t, renamed.Load())
 	assert.Equal(t, "Display", renamed.Load().Name)
