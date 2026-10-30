@@ -514,13 +514,17 @@ func (s *RESTServer) SetComputeHandlers(compute platformv1.ComputeServiceServer,
 // method is a no-op — routes are not mounted, so callers that 404 get a clear
 // signal that the overlay feature is disabled rather than an internal error.
 // Mirrors SetDeviceHandlers / SetTenantHandlers.
-func (s *RESTServer) SetOverlayHandlers(svc restapi.OverlayServiceInterface) {
+func (s *RESTServer) SetOverlayHandlers(svc restapi.OverlayServiceInterface, guard *restapi.ScopeGuard) error {
+	if guard == nil {
+		return ErrOverlayRESTUnavailable{Reason: "no REST scope guard"}
+	}
 	if svc == nil {
-		return
+		return nil
 	}
 	handlers := restapi.NewOverlayHandlers(svc, s.logger)
-	handlers.RegisterRoutes(s.router)
+	handlers.RegisterRoutes(s.catalogGuardedRoot(guard))
 	s.logger.Info("Overlay REST routes registered")
+	return nil
 }
 
 // SetCAHandlers wires the CA REST handlers onto the daemon's REST router so
