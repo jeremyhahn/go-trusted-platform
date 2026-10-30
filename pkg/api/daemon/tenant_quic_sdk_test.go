@@ -23,6 +23,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/testutil"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
 
@@ -32,7 +33,7 @@ import (
 // otherwise the caller is an ordinary tenant that owns none of h's tenants.
 func connectTenantQUIC(t *testing.T, h *tenantParityHarness, asSystem bool) grpc.ClientConnInterface {
 	t.Helper()
-	bundle := operatorTLSBundle(t)
+	bundle := testutil.GenerateTestTLSBundle(t)
 	if asSystem {
 		h.server.SetSystemTenant(leafOf(t, bundle.ClientCert).Subject.Organization[0])
 	}

@@ -254,35 +254,6 @@ func TestCAGRPCService_IssueCertificate_Success(t *testing.T) {
 	}
 }
 
-// TestCAGRPCService_IssueCertificate_CARequestUsesCAProfile checks an is_ca
-// request (gRPC, and MCP through this service) is signed with the go-xkms CA
-// profile, not the default leaf profile.
-func TestCAGRPCService_IssueCertificate_CARequestUsesCAProfile(t *testing.T) {
-	t.Parallel()
-
-	mockCA := &configurableMockCA{issuedCert: createTestCertificate(t)}
-	svc := &CAGRPCService{ca: mockCA}
-
-	resp, err := svc.IssueCertificate(context.Background(), &platformv1.IssueCertificateRequest{
-		Request: &platformv1.CertificateRequest{
-			Subject:      &platformv1.Subject{CommonName: "sub-ca.example.com"},
-			KeyAlgorithm: platformv1.KeyAlgorithm_KEY_ALGORITHM_ECDSA_P256,
-			IsCa:         true,
-			MaxPathLen:   1,
-			StoreType:    "software",
-		},
-	})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if !resp.Status.Success {
-		t.Error("expected success status")
-	}
-	if mockCA.issuedProfile != "ca" {
-		t.Errorf("issued with profile %q, want the CA profile %q", mockCA.issuedProfile, "ca")
-	}
-}
-
 func TestCAGRPCService_IssueCertificate_Error(t *testing.T) {
 	t.Parallel()
 
@@ -1140,11 +1111,6 @@ func (m *renewingMockCA) RevokeCert(ctx context.Context, cert *x509.Certificate,
 func (m *renewingMockCA) IssueCertificate(ctx context.Context, req *xkmsca.CACertificateRequest) (*xkmsca.IssuedCertificate, error) {
 	m.issuedCalls++
 	return m.configurableMockCA.IssueCertificate(ctx, req)
-}
-
-// IssueCertificateWithProfile issues as IssueCertificate.
-func (m *renewingMockCA) IssueCertificateWithProfile(ctx context.Context, req *xkmsca.CACertificateRequest, _ string) (*xkmsca.IssuedCertificate, error) {
-	return m.IssueCertificate(ctx, req)
 }
 
 // The SDK KMS keeps a deleted key's name reserved, so renewal must rotate the
@@ -2790,8 +2756,6 @@ func (m *mockCertStore) Close() error {
 // methods each test case exercises.
 type configurableMockCA struct {
 	baseMockCA
-	// issuedProfile is the profile the last IssueCertificateWithProfile got.
-	issuedProfile string
 	// revokedOpts records the options each RevokeCert got.
 	revokedOpts            []xkmsca.RevokeOptions
 	keyStore               *rotatingKeyStore
@@ -2864,12 +2828,6 @@ func (m *configurableMockCA) IssueCertificate(_ context.Context, _ *xkmsca.CACer
 		return nil, nil
 	}
 	return &xkmsca.IssuedCertificate{Certificate: m.issuedCert}, nil
-}
-
-// IssueCertificateWithProfile records the profile and issues as IssueCertificate.
-func (m *configurableMockCA) IssueCertificateWithProfile(ctx context.Context, req *xkmsca.CACertificateRequest, profile string) (*xkmsca.IssuedCertificate, error) {
-	m.issuedProfile = profile
-	return m.IssueCertificate(ctx, req)
 }
 func (m *configurableMockCA) RevokeCert(_ context.Context, _ *x509.Certificate, opts xkmsca.RevokeOptions) error {
 	m.revokedOpts = append(m.revokedOpts, opts)

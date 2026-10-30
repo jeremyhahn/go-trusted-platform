@@ -50,11 +50,6 @@ func (f *fakeRESTCA) TrustedIntermediate() (*x509.Certificate, error) { return n
 func (f *fakeRESTCA) IssueCertificate(_ context.Context, req *xkmsca.CACertificateRequest) (*xkmsca.IssuedCertificate, error) {
 	return nil, nil
 }
-
-// IssueCertificateWithProfile issues as IssueCertificate.
-func (f *fakeRESTCA) IssueCertificateWithProfile(ctx context.Context, req *xkmsca.CACertificateRequest, _ string) (*xkmsca.IssuedCertificate, error) {
-	return f.IssueCertificate(ctx, req)
-}
 func (f *fakeRESTCA) RevokeCert(_ context.Context, _ *x509.Certificate, _ xkmsca.RevokeOptions) error {
 	return nil
 }

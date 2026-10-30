@@ -30,13 +30,7 @@ import (
 // fast and hermetic.
 func newTestRESTServerForPhase35(t *testing.T) *RESTServer {
 	t.Helper()
-	return newTestRESTServerWithConfig(t, DefaultConfig())
-}
-
-// newTestRESTServerWithConfig builds a REST server from cfg, listening on an
-// ephemeral loopback port.
-func newTestRESTServerWithConfig(t *testing.T, cfg *Config) *RESTServer {
-	t.Helper()
+	cfg := DefaultConfig()
 	cfg.RESTListenAddr = "127.0.0.1:0"
 	svc, err := NewService(cfg)
 	if err != nil {

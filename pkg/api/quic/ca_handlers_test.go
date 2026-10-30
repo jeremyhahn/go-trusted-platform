@@ -108,8 +108,6 @@ func (m *mockCertStore) Close() error { return nil }
 // overrides the methods the QUIC CA handler exercises.
 type mockCA struct {
 	baseMockCA
-	// issuedProfile is the profile the last IssueCertificateWithProfile got.
-	issuedProfile string
 	initialized   bool
 	identity      string
 	rootCert      *x509.Certificate
@@ -195,12 +193,6 @@ func (m *mockCA) IssueCertificate(_ context.Context, req *xkmsca.CACertificateRe
 		m.certStore.StoreCertificate(cert)
 	}
 	return &xkmsca.IssuedCertificate{Certificate: cert}, nil
-}
-
-// IssueCertificateWithProfile records the profile and issues as IssueCertificate.
-func (m *mockCA) IssueCertificateWithProfile(ctx context.Context, req *xkmsca.CACertificateRequest, profile string) (*xkmsca.IssuedCertificate, error) {
-	m.issuedProfile = profile
-	return m.IssueCertificate(ctx, req)
 }
 func (m *mockCA) RevokeCert(_ context.Context, cert *x509.Certificate, opts xkmsca.RevokeOptions) error {
 	m.revokedCerts = append(m.revokedCerts, cert)
@@ -2628,11 +2620,6 @@ func (m *recordingCA) IssueCertificate(ctx context.Context, req *xkmsca.CACertif
 	return m.mockCA.IssueCertificate(ctx, req)
 }
 
-// IssueCertificateWithProfile issues as IssueCertificate.
-func (m *recordingCA) IssueCertificateWithProfile(ctx context.Context, req *xkmsca.CACertificateRequest, _ string) (*xkmsca.IssuedCertificate, error) {
-	return m.IssueCertificate(ctx, req)
-}
-
 // TestCAHandler_HandleIssue_KeepsKeySizeAndCurve pins that the RSA size and
 // ECDSA curve a QUIC issue request names reach the key store (Codex 8183).
 func TestCAHandler_HandleIssue_KeepsKeySizeAndCurve(t *testing.T) {
@@ -2790,7 +2777,6 @@ func TestCAHandler_HandleIssue_CAFlag(t *testing.T) {
 	resp := handler.HandleRequest(context.Background(), req)
 
 	require.Equal(t, quicwire.StatusOK, resp.Status)
-	assert.Equal(t, "ca", ca.issuedProfile, "an isCA request must be signed with the CA profile")
 }
 
 // Test verify with valid chains
@@ -2898,11 +2884,6 @@ func (m *mockCANoCRL) IssueCertificate(_ context.Context, req *xkmsca.CACertific
 	}
 	return &xkmsca.IssuedCertificate{Certificate: cert}, nil
 }
-
-// IssueCertificateWithProfile issues as IssueCertificate.
-func (m *mockCANoCRL) IssueCertificateWithProfile(ctx context.Context, req *xkmsca.CACertificateRequest, _ string) (*xkmsca.IssuedCertificate, error) {
-	return m.IssueCertificate(ctx, req)
-}
 func (m *mockCANoCRL) RevokeCert(_ context.Context, _ *x509.Certificate, _ xkmsca.RevokeOptions) error {
 	return nil
 }
@@ -2947,11 +2928,6 @@ type mockCAIssueFails struct {
 
 func (m *mockCAIssueFails) IssueCertificate(_ context.Context, req *xkmsca.CACertificateRequest) (*xkmsca.IssuedCertificate, error) {
 	return nil, errors.New("certificate issuance failed")
-}
-
-// IssueCertificateWithProfile issues as IssueCertificate.
-func (m *mockCAIssueFails) IssueCertificateWithProfile(ctx context.Context, req *xkmsca.CACertificateRequest, _ string) (*xkmsca.IssuedCertificate, error) {
-	return m.IssueCertificate(ctx, req)
 }
 
 func TestCAHandler_HandleIssue_IssueFails(t *testing.T) {
@@ -3034,11 +3010,6 @@ func (m *mockCARenewFails) IssueCertificate(_ context.Context, req *xkmsca.CACer
 		m.certStore.StoreCertificate(cert)
 	}
 	return &xkmsca.IssuedCertificate{Certificate: cert}, nil
-}
-
-// IssueCertificateWithProfile issues as IssueCertificate.
-func (m *mockCARenewFails) IssueCertificateWithProfile(ctx context.Context, req *xkmsca.CACertificateRequest, _ string) (*xkmsca.IssuedCertificate, error) {
-	return m.IssueCertificate(ctx, req)
 }
 
 func TestCAHandler_HandleRenew_RenewFails(t *testing.T) {

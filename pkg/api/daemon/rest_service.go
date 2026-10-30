@@ -113,7 +113,6 @@ func NewRESTServer(config *Config, service *Service, logger *slog.Logger) (*REST
 	}
 
 	// Register daemon-level REST endpoints
-	router.Use(restServer.installerBoundaryMiddleware)
 	restServer.registerRoutes()
 
 	// Apply middleware
@@ -554,69 +553,6 @@ func (s *RESTServer) SetTPMHandlers(tpm platformv1.TPMServiceServer, guard *rest
 }
 
 // applyMiddleware wraps the router with middleware handlers
-// installerMachineRoutes is the whole set of daemon REST routes a verified
-// client certificate that is not the operator may reach (Codex 8242). Keys are
-// "METHOD template" exactly as gorilla/mux reports the matched route. Every
-// other route answers such a certificate 403 at the listener, whatever its
-// own handler checks. The PXE completion webhook is not here because it is
-// served by the webservice listener, not this one.
-var installerMachineRoutes = map[string]bool{
-	// Liveness and readiness probes: load balancers and the installer's
-	// wait-for-daemon step poll them, and they carry no state.
-	"GET /health":        true,
-	"GET /health/live":   true,
-	"GET /health/ready":  true,
-	"GET /api/v1/health": true,
-
-	// Public CA material: every node needs the chain and the CRL to verify
-	// the platform's certificates, and the routes are public by design.
-	"GET /api/v1/ca/info":   true,
-	"GET /api/v1/ca/crl":    true,
-	"GET /api/v1/ca/bundle": true,
-
-	// gatewayd's control-plane calls. Each handler binds the request to the
-	// gateway its client certificate names, so a gateway reaches only itself.
-	"POST /api/v1/gateway/telemetry":                          true,
-	"GET /api/v1/gateway/desired-config/{id}":                 true,
-	"PUT /api/v1/gateway/vpn-leases/{id}":                     true,
-	"DELETE /api/v1/gateway/vpn-leases/{id}/{tenant}/{lease}": true,
-
-	// Device config delivery at boot. The device proves itself with a signed
-	// nonce or its session ID; the session list, read and fulfil routes stay
-	// operator-only.
-	"GET /api/v1/provisioning/config/nonce":              true,
-	"POST /api/v1/provisioning/config":                   true,
-	"POST /api/v1/provisioning/sign":                     true,
-	"GET /api/v1/provisioning/sessions/{sessionID}/poll": true,
-}
-
-// installerBoundaryMiddleware refuses a verified client certificate that is
-// not the operator on every route outside installerMachineRoutes. A request
-// with no verified certificate (no mTLS, or a bearer-only listener) passes
-// unchanged to the route's own checks. A bearer header does not lift the
-// refusal: most routes here never validate one, so honouring its mere
-// presence would let the installer through.
-func (s *RESTServer) installerBoundaryMiddleware(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.TLS == nil || len(r.TLS.VerifiedChains) == 0 || len(r.TLS.VerifiedChains[0]) == 0 {
-			next.ServeHTTP(w, r)
-			return
-		}
-		if isMTLSOperator(r.TLS.VerifiedChains[0][0], s.config.MTLSOperatorTrustDomain) {
-			next.ServeHTTP(w, r)
-			return
-		}
-		if route := mux.CurrentRoute(r); route != nil {
-			template, err := route.GetPathTemplate()
-			if err == nil && installerMachineRoutes[r.Method+" "+template] {
-				next.ServeHTTP(w, r)
-				return
-			}
-		}
-		s.writeError(w, http.StatusForbidden, ErrInstallerRouteForbidden{Method: r.Method, Path: r.URL.Path})
-	})
-}
-
 func (s *RESTServer) applyMiddleware(handler http.Handler) http.Handler {
 	// Apply CORS middleware if enabled
 	if s.config.RESTConfig.EnableCORS {

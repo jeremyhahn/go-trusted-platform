@@ -47,12 +47,6 @@ type MTLSInterceptorConfig struct {
 	// SkipMethods lists gRPC method names that bypass mTLS authentication.
 	// Health check endpoints are typically skipped.
 	SkipMethods []string
-
-	// OperatorTrustDomain is the SPIFFE trust domain of the operator's admin
-	// certificate. A certificate that is not the operator may call only the
-	// methods in mtlsInstallerMethods. Empty means no certificate is the
-	// operator.
-	OperatorTrustDomain string
 }
 
 // ErrMTLSNoPeerInfo indicates no peer info was found in the gRPC context.
@@ -76,16 +70,6 @@ func (e ErrMTLSNoCertificates) Error() string {
 	return "mtls: no client certificates presented"
 }
 
-// ErrMTLSInstallerMethodDenied indicates a client certificate that is not the
-// operator's called a method other than the install-completion webhook.
-type ErrMTLSInstallerMethodDenied struct {
-	Method string
-}
-
-func (e ErrMTLSInstallerMethodDenied) Error() string {
-	return "mtls: an installer certificate may not call " + e.Method
-}
-
 // MTLSUnaryInterceptor returns a gRPC unary server interceptor that validates
 // client certificates via mTLS and attaches the extracted identity to the context.
 func MTLSUnaryInterceptor(cfg *MTLSInterceptorConfig) grpc.UnaryServerInterceptor {
@@ -103,7 +87,7 @@ func MTLSUnaryInterceptor(cfg *MTLSInterceptorConfig) grpc.UnaryServerIntercepto
 		}
 
 		// Extract and validate client certificate
-		enrichedCtx, err := authenticateFromPeer(ctx, cfg, info.FullMethod)
+		enrichedCtx, err := authenticateFromPeer(ctx, cfg)
 		if err != nil {
 			return nil, err
 		}
@@ -129,7 +113,7 @@ func MTLSStreamInterceptor(cfg *MTLSInterceptorConfig) grpc.StreamServerIntercep
 		}
 
 		// Extract and validate client certificate
-		enrichedCtx, err := authenticateFromPeer(ss.Context(), cfg, info.FullMethod)
+		enrichedCtx, err := authenticateFromPeer(ss.Context(), cfg)
 		if err != nil {
 			return err
 		}
@@ -145,10 +129,8 @@ func MTLSStreamInterceptor(cfg *MTLSInterceptorConfig) grpc.StreamServerIntercep
 }
 
 // authenticateFromPeer extracts the client certificate from the gRPC peer state,
-// validates it using the Authenticator, refuses an installer certificate any
-// method but the install-completion webhook, and returns an enriched context
-// with the identity.
-func authenticateFromPeer(ctx context.Context, cfg *MTLSInterceptorConfig, method string) (context.Context, error) {
+// validates it using the Authenticator, and returns an enriched context with the identity.
+func authenticateFromPeer(ctx context.Context, cfg *MTLSInterceptorConfig) (context.Context, error) {
 	// Extract peer from context
 	p, ok := peer.FromContext(ctx)
 	if !ok {
@@ -183,17 +165,6 @@ func authenticateFromPeer(ctx context.Context, cfg *MTLSInterceptorConfig, metho
 			cfg.Logger.Debug("mtls: authentication failed", "error", err)
 		}
 		return nil, status.Errorf(codes.Unauthenticated, "mtls: %v", err)
-	}
-
-	// Only the operator may call any method; an installer certificate may
-	// call only the install-completion webhook.
-	if !isMTLSOperator(certs[0], cfg.OperatorTrustDomain) {
-		if _, allowed := mtlsInstallerMethods[method]; !allowed {
-			if cfg.Logger != nil {
-				cfg.Logger.Debug("mtls: installer certificate refused", "method", method)
-			}
-			return nil, status.Error(codes.PermissionDenied, ErrMTLSInstallerMethodDenied{Method: method}.Error())
-		}
 	}
 
 	if cfg.Logger != nil {

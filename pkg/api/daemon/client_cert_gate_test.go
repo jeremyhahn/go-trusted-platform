@@ -24,6 +24,7 @@ import (
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/testutil"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 )
@@ -270,9 +271,9 @@ func TestQUICServerMTLS_RefusesWhatItCannotEnforce(t *testing.T) {
 // between the two steps, so a consumer that read it again would fail (#766).
 func TestQUICServerMTLS_SharesTheAuthenticatorsPool(t *testing.T) {
 	logger := logging.DefaultLogger()
-	issuer := newWebhookIssuer(t, "admin CA")
+	bundle := testutil.GenerateTestTLSBundle(t)
 	caFile := filepath.Join(t.TempDir(), "client-ca.pem")
-	caPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: issuer.cert.Raw})
+	caPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: bundle.CACert.Raw})
 	if err := os.WriteFile(caFile, caPEM, 0o600); err != nil {
 		t.Fatalf("write CA file: %v", err)
 	}
@@ -280,7 +281,6 @@ func TestQUICServerMTLS_SharesTheAuthenticatorsPool(t *testing.T) {
 	config.SkipIAMValidation = false
 	config.EnableMTLS = true
 	config.MTLSClientCAFile = caFile
-	config.MTLSOperatorTrustDomain = testOperatorTrustDomain
 
 	pool, err := resolveMTLSClientCAPool(config, transportQUIC)
 	if err != nil {
@@ -295,7 +295,7 @@ func TestQUICServerMTLS_SharesTheAuthenticatorsPool(t *testing.T) {
 		t.Fatalf("selectQUICAuth: %v", err)
 	}
 	verified := quic.WithConnectionTLS(context.Background(), &tls.ConnectionState{
-		VerifiedChains: [][]*x509.Certificate{{issuer.issueOperator(t, 100), issuer.cert}},
+		VerifiedChains: [][]*x509.Certificate{{leafOf(t, bundle.ClientCert), bundle.CACert}},
 	})
 	if _, resp := mw.GuardRequest(verified, &quicwire.Request{Opcode: quicwire.OpKMSDeleteKey}); resp != nil {
 		t.Errorf("authenticator refused a certificate from the pool's CA: status %#x", resp.Status)

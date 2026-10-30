@@ -40,9 +40,6 @@ import (
 type fakeProdCA struct {
 	xkmsca.TCGCA // embed for any unimplemented methods (will panic if called)
 
-	// issuedProfile is the profile the last IssueCertificateWithProfile got.
-	issuedProfile string
-
 	identity        string
 	initialized     bool
 	defaultKeyAlg   x509.PublicKeyAlgorithm
@@ -75,12 +72,6 @@ func (f *fakeProdCA) TrustedRoot() (*x509.Certificate, error)         { return f
 func (f *fakeProdCA) TrustedIntermediate() (*x509.Certificate, error) { return f.intermediate, nil }
 func (f *fakeProdCA) IssueCertificate(_ context.Context, req *xkmsca.CACertificateRequest) (*xkmsca.IssuedCertificate, error) {
 	return f.issued, f.issueErr
-}
-
-// IssueCertificateWithProfile records the profile and issues as IssueCertificate.
-func (f *fakeProdCA) IssueCertificateWithProfile(ctx context.Context, req *xkmsca.CACertificateRequest, profile string) (*xkmsca.IssuedCertificate, error) {
-	f.issuedProfile = profile
-	return f.IssueCertificate(ctx, req)
 }
 func (f *fakeProdCA) SignCSR(_ context.Context, csrPEM []byte, opts *xkmsca.SignOptions) (*x509.Certificate, error) {
 	f.signedCSR = csrPEM
@@ -152,25 +143,6 @@ func TestCAAuthorityAdapter_IssueCertificate_Success(t *testing.T) {
 	got, err := a.IssueCertificate(context.Background(), &quicbaasca.CACertificateRequest{})
 	require.NoError(t, err)
 	assert.Same(t, cert, got)
-}
-
-// TestCAAuthorityAdapter_IssueCertificate_CARequestUsesCAProfile checks the
-// REST adapter signs an isCA request with the go-xkms CA profile and a leaf
-// request with the default profile.
-func TestCAAuthorityAdapter_IssueCertificate_CARequestUsesCAProfile(t *testing.T) {
-	cert := &x509.Certificate{}
-	prod := &fakeProdCA{issued: &xkmsca.IssuedCertificate{Certificate: cert}}
-	a := NewCAAuthorityAdapter(prod)
-
-	got, err := a.IssueCertificate(context.Background(), &quicbaasca.CACertificateRequest{IsCA: true, MaxPathLen: 1})
-	require.NoError(t, err)
-	assert.Same(t, cert, got)
-	assert.Equal(t, "ca", prod.issuedProfile)
-
-	leafProd := &fakeProdCA{issued: &xkmsca.IssuedCertificate{Certificate: cert}}
-	_, err = NewCAAuthorityAdapter(leafProd).IssueCertificate(context.Background(), &quicbaasca.CACertificateRequest{})
-	require.NoError(t, err)
-	assert.Empty(t, leafProd.issuedProfile, "a leaf request keeps the default profile")
 }
 
 func TestCAAuthorityAdapter_IssueCertificate_PropagatesError(t *testing.T) {

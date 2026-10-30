@@ -75,11 +75,6 @@ func (c *recordingCA) IssueCertificate(ctx context.Context, req *xkmsca.CACertif
 	return c.configurableMockCA.IssueCertificate(ctx, req)
 }
 
-// IssueCertificateWithProfile issues as IssueCertificate.
-func (c *recordingCA) IssueCertificateWithProfile(ctx context.Context, req *xkmsca.CACertificateRequest, _ string) (*xkmsca.IssuedCertificate, error) {
-	return c.IssueCertificate(ctx, req)
-}
-
 // caParityFixture is one CA served by the daemon's handler for every
 // transport, and the TLS material the network transports share.
 type caParityFixture struct {

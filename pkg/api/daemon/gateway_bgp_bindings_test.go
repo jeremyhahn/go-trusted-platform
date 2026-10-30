@@ -33,6 +33,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/bgp"
 	ipamBackends "github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ipam/backends"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/testutil"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 )
@@ -633,7 +634,7 @@ func TestGatewayBGP_QUICClientReceivesEveryPeerAndPrefix(t *testing.T) {
 	svc := NewGatewayService()
 	svc.SetBGPSpeaker(speaker)
 	logger := logging.DefaultLogger()
-	bundle := operatorTLSBundle(t)
+	bundle := testutil.GenerateTestTLSBundle(t)
 	handler := newTestQUICServiceHandler(logger, mtlsQUICAuth(t, bundle), WithQUICGatewayHandler(
 		quic.NewGatewayHandler(logger, newFullGatewayQUICAdapter(ipamBackends.NewMemoryBackend(), nil, nil, nil, svc, nil))))
 	conn := newPhase35QUICClient(t, handler, bundle).Connection()

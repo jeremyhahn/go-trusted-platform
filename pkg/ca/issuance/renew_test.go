@@ -30,6 +30,7 @@ import (
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	xkmsbackend "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/backend"
 	quicbaasca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/ca"
+	xkmscertstore "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/certstore"
 )
 
 // renewKeyStore records the keys a renewal rotates.
@@ -200,7 +201,7 @@ func TestRenew_AFailedIssueIsARenewError(t *testing.T) {
 // renewal after the old certificate is already revoked (Codex 8270 P1).
 func TestRenew_AnRSALeafRenewsOnARealSoftwareCA(t *testing.T) {
 	root := newRenewableRootCA(t)
-	issued, err := Issue(context.Background(), root, &quicbaasca.CACertificateRequest{
+	issued, err := root.IssueCertificate(context.Background(), &quicbaasca.CACertificateRequest{
 		Subject: quicbaasca.CASubject{CommonName: "renew-rsa.test", Organization: "Test Org", Country: "US"},
 		Valid:   1,
 		KeyAttributes: &xkmssdk.KeyAttributes{
@@ -239,4 +240,50 @@ func TestRenewalKeyAttributes_RSACarriesTheModulusSize(t *testing.T) {
 	assert.Equal(t, 3072, attrs.RSAAttributes.KeySize)
 	assert.Nil(t, attrs.ECCAttributes, "an RSA certificate must not yield ECC attributes")
 	assert.Equal(t, x509.RSA, attrs.KeyAlgorithm)
+}
+
+func newRenewableRootCA(t *testing.T) quicbaasca.CACertificateAuthority {
+	t.Helper()
+	root, ok := newSoftwareRootCA(t).(quicbaasca.CACertificateAuthority)
+	require.True(t, ok, "the go-xkms CA must implement the TCG CA surface")
+	return root
+}
+
+func newSoftwareRootCA(t *testing.T) xkmssdk.TrustedCA {
+	t.Helper()
+	root, _, err := quicbaasca.NewCA(context.Background(), &quicbaasca.Params{
+		Identity: []quicbaasca.CAIdentity{{
+			Subject: quicbaasca.CASubject{CommonName: "issuance-test-root", Organization: "Test Org", Country: "US"},
+			Valid:   1,
+			Keys: []*xkmssdk.KeyConfig{{
+				KeyAlgorithm:       "RSA",
+				Hash:               "SHA-256",
+				SignatureAlgorithm: "SHA256-RSAPSS",
+				RSAConfig:          &xkmssdk.KeyRSAConfig{KeySize: 2048},
+			}},
+			KeystoreType: xkmssdk.StoreSoftware,
+			IsRoot:       true,
+		}},
+		KeyStoreFactory: func(string) (xkmsbackend.Backend, error) {
+			pkcs8, err := xkmssdk.NewPKCS8Backend(&xkmssdk.PKCS8BackendConfig{
+				KeyStorage:         xkmssdk.NewStorageMemory(),
+				AllowPlaintextKeys: true,
+			})
+			if err != nil {
+				return nil, err
+			}
+			return xkmssdk.NewServiceBackend(&xkmssdk.ServiceBackendConfig{
+				Backend:     pkcs8,
+				CertStorage: xkmssdk.NewStorageMemory(),
+			})
+		},
+		CertStoreFactory: func(string) (xkmscertstore.CertStore, error) {
+			return xkmssdk.NewCertStore(&xkmssdk.CertStoreConfig{
+				CertStorage: xkmssdk.NewStorageCertAdapter(xkmssdk.NewStorageMemory()),
+			})
+		},
+	})
+	require.NoError(t, err)
+	require.NotNil(t, root)
+	return root
 }

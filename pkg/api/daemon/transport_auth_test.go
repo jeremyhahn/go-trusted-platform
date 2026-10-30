@@ -36,7 +36,6 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/app"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/auth"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/common"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/testutil"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/jwt"
@@ -319,17 +318,16 @@ func TestSelectQUICAuth_MTLS_AuthenticatesByCertificate(t *testing.T) {
 	t.Parallel()
 	config := failClosedConfig()
 	config.EnableMTLS = true
-	config.MTLSOperatorTrustDomain = testOperatorTrustDomain
-	issuer := newWebhookIssuer(t, "admin CA")
+	bundle := testutil.GenerateTestTLSBundle(t)
 
-	mw, validator, err := selectQUICAuth(config, nil, issuer.pool(), logging.DefaultLogger())
+	mw, validator, err := selectQUICAuth(config, nil, bundle.CAPool, logging.DefaultLogger())
 	require.NoError(t, err)
 	require.NotNil(t, mw, "the QUIC dispatcher always authorizes; mTLS supplies the identity")
 	assert.Nil(t, validator)
 
-	// The verified operator certificate authenticates a tokenless request...
+	// The verified peer certificate authenticates a tokenless request...
 	verified := quic.WithConnectionTLS(context.Background(), &tls.ConnectionState{
-		VerifiedChains: [][]*x509.Certificate{{issuer.issueOperator(t, 100), issuer.cert}},
+		VerifiedChains: [][]*x509.Certificate{{leafOf(t, bundle.ClientCert), bundle.CACert}},
 	})
 	_, resp := mw.GuardRequest(verified, &quicwire.Request{Opcode: quicwire.OpKMSDeleteKey})
 	assert.Nil(t, resp)
@@ -379,7 +377,7 @@ func newTestMTLSPeerAuthenticator(t *testing.T, roots *x509.CertPool) mtlsPeerAu
 	t.Helper()
 	adapter, err := auth.NewMTLSAdapterFromRoots(logging.DefaultLogger(), roots)
 	require.NoError(t, err)
-	return mtlsPeerAuthenticator{authenticator: adapter, trustDomain: testOperatorTrustDomain}
+	return mtlsPeerAuthenticator{authenticator: adapter}
 }
 
 func leafOf(t *testing.T, cert tls.Certificate) *x509.Certificate {
@@ -391,14 +389,14 @@ func leafOf(t *testing.T, cert tls.Certificate) *x509.Certificate {
 
 func TestMTLSPeerAuthenticator_TrustedCertificate_IsTheOperator(t *testing.T) {
 	t.Parallel()
-	issuer := newWebhookIssuer(t, "admin CA")
-	peer := newTestMTLSPeerAuthenticator(t, issuer.pool())
+	bundle := testutil.GenerateTestTLSBundle(t)
+	peer := newTestMTLSPeerAuthenticator(t, bundle.CAPool)
 
-	authCtx, err := peer.AuthenticatePeer(context.Background(), []*x509.Certificate{issuer.issueOperator(t, 100), issuer.cert})
+	authCtx, err := peer.AuthenticatePeer(context.Background(), []*x509.Certificate{leafOf(t, bundle.ClientCert), bundle.CACert})
 	require.NoError(t, err)
-	assert.Equal(t, common.AdminUsername, authCtx.Subject)
-	assert.Equal(t, common.AdminUsername, authCtx.Username)
-	assert.Equal(t, app.SystemTenantID, authCtx.TenantID)
+	assert.Equal(t, "test-client", authCtx.Subject)
+	assert.Equal(t, "test-client", authCtx.Username)
+	assert.Equal(t, "Test Platform Client", authCtx.TenantID)
 	assert.True(t, authCtx.HasScope("piv:sign"), "an operator certificate holds every scope, as on gRPC and REST")
 	assert.True(t, authCtx.HasScope("ceremony:init"))
 }

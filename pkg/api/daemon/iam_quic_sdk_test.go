@@ -22,6 +22,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/testutil"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
 
@@ -29,7 +30,7 @@ import (
 // platform ALPN handshake and the framing to the IAM handler, which answers
 // NotFound on the response frame rather than a transport error.
 func TestSDKQUIC_IAMGetUnknownUser(t *testing.T) {
-	bundle := operatorTLSBundle(t)
+	bundle := testutil.GenerateTestTLSBundle(t)
 	handler := newTestQUICServiceHandler(logging.DefaultLogger(), mtlsQUICAuth(t, bundle))
 	handler.SetIAMGRPCService(wiredIAMGRPCService(newMemIAM()))
 	conn := newPhase35QUICClient(t, handler, bundle).Connection()

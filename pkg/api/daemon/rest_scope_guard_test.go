@@ -55,18 +55,17 @@ func serveWithChain(router http.Handler, method, target string, chain []*x509.Ce
 // as the operator on every VPN and NTP route, and nothing else.
 func TestNewRESTScopeGuard_MTLS_AdmitsTheOperatorCertificate(t *testing.T) {
 	t.Parallel()
-	trusted := newWebhookIssuer(t, "admin CA")
+	trusted := testutil.GenerateTestTLSBundle(t)
 	foreign := testutil.GenerateTestTLSBundle(t)
 	config := failClosedConfig()
 	config.EnableMTLS = true
-	config.MTLSClientCAPool = trusted.pool()
-	config.MTLSOperatorTrustDomain = testOperatorTrustDomain
+	config.MTLSClientCAPool = trusted.CAPool
 
 	guard, err := newRESTScopeGuard(config, nil, logging.DefaultLogger())
 	require.NoError(t, err)
 	router := guardedVPNRouter(guard)
 
-	operator := []*x509.Certificate{trusted.issueOperator(t, 100), trusted.cert}
+	operator := []*x509.Certificate{leafOf(t, trusted.ClientCert), trusted.CACert}
 	for _, route := range [][2]string{
 		{http.MethodPost, "/api/v1/vpn/peers"},
 		{http.MethodGet, "/api/v1/vpn/status"},

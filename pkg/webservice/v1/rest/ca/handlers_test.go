@@ -52,8 +52,6 @@ import (
 
 type mockCertificateAuthority struct {
 	baseMockCA
-	// issuedProfile is the profile the last IssueCertificateWithProfile got.
-	issuedProfile string
 
 	// Configuration
 	initialized       bool
@@ -148,12 +146,6 @@ func (m *mockCertificateAuthority) IssueCertificate(ctx context.Context, request
 	}
 	cert := createTestCertificate(request.Subject.CommonName)
 	return &xkmsca.IssuedCertificate{Certificate: cert}, nil
-}
-
-// IssueCertificateWithProfile records the profile and issues as IssueCertificate.
-func (m *mockCertificateAuthority) IssueCertificateWithProfile(ctx context.Context, req *xkmsca.CACertificateRequest, profile string) (*xkmsca.IssuedCertificate, error) {
-	m.issuedProfile = profile
-	return m.IssueCertificate(ctx, req)
 }
 func (m *mockCertificateAuthority) RevokeCert(ctx context.Context, cert *x509.Certificate, opts xkmsca.RevokeOptions) error {
 	if m.revokeFn != nil {
@@ -1006,7 +998,6 @@ func TestIssueCertificate_Success(t *testing.T) {
 		handlers.IssueCertificate(rec, req)
 
 		assert.Equal(t, http.StatusCreated, writer.lastStatus)
-		assert.Equal(t, "ca", mockCA.issuedProfile, "an isCa request must be signed with the CA profile")
 	})
 }
 

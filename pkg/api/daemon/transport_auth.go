@@ -17,9 +17,7 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
-	"net/url"
 	"os"
-	"strings"
 
 	quicbaassdk "github.com/jeremyhahn/go-quicbaas/sdk/go"
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/platformtoken"
@@ -29,9 +27,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/mcp"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
 	restapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/rest"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/app"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/auth"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/common"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
@@ -120,10 +116,9 @@ func selectGRPCTCPAuth(config *Config, shared *platformTokenValidator, pep quicb
 			return grpcAuthSelection{}, ErrTLSConfigFailed{Reason: "gRPC mTLS auth: " + err.Error()}
 		}
 		interceptorCfg := &MTLSInterceptorConfig{
-			Authenticator:       mtlsAuth,
-			Logger:              logger,
-			SkipMethods:         skipMethods,
-			OperatorTrustDomain: config.MTLSOperatorTrustDomain,
+			Authenticator: mtlsAuth,
+			Logger:        logger,
+			SkipMethods:   skipMethods,
 		}
 		logger.Info("gRPC TCP server: mTLS authentication enabled")
 		return grpcAuthSelection{
@@ -202,7 +197,7 @@ func selectQUICAuth(config *Config, shared *platformTokenValidator, clientCAPool
 		}
 		logger.Info("QUIC server: mTLS authentication enabled")
 		opts := []quic.AuthMiddlewareOption{
-			quic.WithQUICPeerAuthenticator(mtlsPeerAuthenticator{authenticator: mtlsAuth, trustDomain: config.MTLSOperatorTrustDomain}),
+			quic.WithQUICPeerAuthenticator(mtlsPeerAuthenticator{authenticator: mtlsAuth}),
 			quic.WithQUICRequireAuth(true),
 		}
 		if shared != nil {
@@ -234,76 +229,21 @@ func selectQUICAuth(config *Config, shared *platformTokenValidator, clientCAPool
 	), local, nil
 }
 
-// The daemon's client CA pool admits two principals:
-//
-//   - the operator, holding the admin bundle /init issues. Its leaf names the
-//     platform admin as the SPIFFE ID
-//     spiffe://<trust domain>/tenant/<system tenant>/user/<admin> and carries
-//     the system tenant as its subject organization. It is granted every
-//     operation (mtlsOperatorScope).
-//   - an installer, holding the certificate the installer presents to complete
-//     an install. Its SHA-256 is bound to one device through PXE UpdateState,
-//     and it authorizes only the install-completion webhook, which checks that
-//     binding itself. It is granted no scope, so every scope-guarded REST, QUIC
-//     and MCP operation refuses it, and the gRPC interceptors admit it only to
-//     the methods in mtlsInstallerMethods.
-//
-// Any certificate that is not positively the operator is an installer.
+// mtlsOperatorScope is the grant of a principal authenticated by an mTLS
+// client certificate. The daemon's client CA pool admits only operator
+// certificates (the admin bundle /init issues), and gRPC and REST authorize
+// such a caller for every operation without a scope check, so QUIC grants the
+// same authority rather than refusing the operator its own platform.
 const mtlsOperatorScope = "*:*"
 
-// mtlsInstallerMethods are the only gRPC methods an installer certificate may
-// invoke.
-var mtlsInstallerMethods = map[string]struct{}{
-	platformv1.PXEService_WebhookComplete_FullMethodName: {},
-}
-
-// isMTLSOperator reports whether leaf is the operator's admin certificate for
-// trustDomain. An empty trustDomain names no operator, so it fails closed.
-func isMTLSOperator(leaf *x509.Certificate, trustDomain string) bool {
-	if leaf == nil || trustDomain == "" {
-		return false
-	}
-	if len(leaf.Subject.Organization) != 1 || leaf.Subject.Organization[0] != app.SystemTenantID {
-		return false
-	}
-	for _, uri := range leaf.URIs {
-		if isMTLSOperatorSPIFFEID(uri, trustDomain) {
-			return true
-		}
-	}
-	return false
-}
-
-// isMTLSOperatorSPIFFEID reports whether uri is
-// spiffe://<trustDomain>/tenant/<system tenant>/user/<admin>.
-func isMTLSOperatorSPIFFEID(uri *url.URL, trustDomain string) bool {
-	if uri == nil || !strings.EqualFold(uri.Scheme, "spiffe") || uri.Host != trustDomain {
-		return false
-	}
-	want := "/tenant/" + app.SystemTenantID + "/user/" + common.AdminUsername
-	return uri.Path == want && uri.RawQuery == "" && uri.Fragment == ""
-}
-
-// mtlsGrantFor is the scope grant of the principal leaf authenticates: every
-// operation for the operator, nothing for an installer.
-func mtlsGrantFor(leaf *x509.Certificate, trustDomain string) []string {
-	if isMTLSOperator(leaf, trustDomain) {
-		return []string{mtlsOperatorScope}
-	}
-	return nil
-}
-
 // mtlsPeerAuthenticator turns the verified client certificate of a QUIC
-// connection, REST request or MCP session into the principal it acts as,
-// through the same certificate authenticator the gRPC mTLS interceptor uses,
-// and grants it what mtlsGrantFor decides.
+// connection or REST request into the principal it acts as, through the same
+// certificate authenticator the gRPC mTLS interceptor uses.
 type mtlsPeerAuthenticator struct {
 	authenticator auth.Authenticator
-	// trustDomain is the SPIFFE trust domain the operator certificate names.
-	trustDomain string
 }
 
-// AuthenticatePeer authenticates the leaf of chain and returns its principal.
+// AuthenticatePeer implements quic.PeerAuthenticator.
 func (a mtlsPeerAuthenticator) AuthenticatePeer(ctx context.Context, chain []*x509.Certificate) (*platformtoken.AuthorizedContext, error) {
 	if len(chain) == 0 {
 		return nil, quic.ErrMissingClientCertificate{}
@@ -316,14 +256,14 @@ func (a mtlsPeerAuthenticator) AuthenticatePeer(ctx context.Context, chain []*x5
 		Subject:  identity.ID,
 		Username: identity.Name,
 		TenantID: identity.TenantID,
-		Scopes:   mtlsGrantFor(chain[0], a.trustDomain),
+		Scopes:   []string{mtlsOperatorScope},
 	}, nil
 }
 
 // newRESTScopeGuard builds the guard that checks each daemon REST route's
 // scope. It accepts the same credentials as QUIC: a platform token through
 // the shared validator, else a client certificate verified against the mTLS
-// client CA pool and granted what mtlsGrantFor decides. A credential with no verifier
+// client CA pool, admitted as the operator. A credential with no verifier
 // configured is refused, so the guard never admits by default.
 func newRESTScopeGuard(config *Config, shared *platformTokenValidator, logger *logging.Logger) (*restapi.ScopeGuard, error) {
 	var tokens restapi.TokenAuthorizer
@@ -341,7 +281,7 @@ func newRESTScopeGuard(config *Config, shared *platformTokenValidator, logger *l
 		if authErr != nil {
 			return nil, ErrTLSConfigFailed{Reason: "REST mTLS auth: " + authErr.Error()}
 		}
-		peers = mtlsPeerAuthenticator{authenticator: mtlsAuth, trustDomain: config.MTLSOperatorTrustDomain}
+		peers = mtlsPeerAuthenticator{authenticator: mtlsAuth}
 	}
 	return restapi.NewScopeGuard(tokens, peers, logger.Slog()), nil
 }
@@ -364,7 +304,7 @@ func newMCPPeerAuthenticator(config *Config, logger *logging.Logger) (mcp.PeerAu
 		return nil, ErrTLSConfigFailed{Reason: "MCP mTLS auth: " + err.Error()}
 	}
 	logger.Info("MCP server: mTLS authentication enabled")
-	return mtlsPeerAuthenticator{authenticator: mtlsAuth, trustDomain: config.MTLSOperatorTrustDomain}, nil
+	return mtlsPeerAuthenticator{authenticator: mtlsAuth}, nil
 }
 
 // buildLocalTokenValidator builds the per-transport token validator from the

@@ -164,37 +164,6 @@ named. **Do not treat this table as the installer's API.**
 | Running-system LUKS operations | `LUKSService`, QUIC `0x9C` | [`docs/daemon/api.md`](../daemon/api.md) §4 |
 | BMC virtual-media boot of the ISO | `BMCService`, QUIC `0x9F`, 23 `platform_bmc_*` MCP tools | [`docs/provisioning/api.md`](../provisioning/api.md) §5 |
 
-**The installer certificate authorizes only the install-completion webhook
-(Codex 8200).** On gRPC the mTLS interceptor admits it only to
-`PXEService/WebhookComplete`, and every other method returns
-`PermissionDenied`. On REST it reaches only `POST /api/v1/pxe/webhook/complete`,
-which authenticates the certificate itself. Every scope-guarded route refuses it
-because it carries no scope. QUIC and MCP have no certificate-bound webhook
-route: their webhook operation is scope-guarded like every other one, so they
-refuse the installer certificate. Only the operator's admin certificate is
-granted the platform API; see
-[`docs/auth/architecture.md`](../auth/architecture.md) §5, *The two mTLS
-principals*.
-
-**The daemon REST listener enforces the boundary itself (Codex 8242).** Many
-daemon REST routes have no scope guard, among them
-`POST /api/v1/services/{service}/stop` and `DELETE /api/v1/kms/keys/{id}`, so a
-check that ran only where the guard runs would leave them open. A listener
-middleware (`installerBoundaryMiddleware`, `pkg/api/daemon/rest_service.go`)
-therefore answers 403 to a verified client certificate that is not the operator
-(installer, gateway or device) on every route except the machine-facing
-allowlist `installerMachineRoutes`. That allowlist covers the health and
-readiness probes (`/health`, `/health/live`, `/health/ready`,
-`/api/v1/health`), the public CA material (`/api/v1/ca/info`, `crl`,
-`bundle`), gatewayd's four control-plane routes under `/api/v1/gateway/`, which
-bind the request to the gateway the certificate names, and the device
-config-delivery routes (`provisioning/config/nonce`, `provisioning/config`,
-`provisioning/sign`, `provisioning/sessions/{sessionID}/poll`), which
-authenticate the device themselves. A bearer header does not lift the refusal.
-A request with no verified certificate goes to the route's own checks as
-before. The completion webhook is served by the webservice listener, not this
-one.
-
 ## 8. Errors as they would cross a transport
 
 There is no transport, so there is no wire mapping to record. For the day one

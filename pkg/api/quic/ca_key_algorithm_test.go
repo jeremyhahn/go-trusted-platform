@@ -68,11 +68,6 @@ func (m *keyShapedCA) IssueCertificate(_ context.Context, req *xkmsca.CACertific
 	return &xkmsca.IssuedCertificate{Certificate: cert}, nil
 }
 
-// IssueCertificateWithProfile issues as IssueCertificate.
-func (m *keyShapedCA) IssueCertificateWithProfile(ctx context.Context, req *xkmsca.CACertificateRequest, _ string) (*xkmsca.IssuedCertificate, error) {
-	return m.IssueCertificate(ctx, req)
-}
-
 func shapedKey(attrs *xkmssdk.KeyAttributes) (crypto.Signer, error) {
 	if attrs.RSAAttributes != nil {
 		return rsa.GenerateKey(rand.Reader, attrs.RSAAttributes.KeySize)
