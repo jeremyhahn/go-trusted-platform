@@ -1,7 +1,11 @@
 package iam
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"fmt"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
@@ -13,6 +17,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
+	"gopkg.in/yaml.v3"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
@@ -386,78 +391,334 @@ func startFakeIAM(t *testing.T, srv *fakeIAMServer) func(cli.OutputFormat) *cli.
 // iamRunCase is one CLI run function plus the WrappedError message it
 // reports when the IAM service fails.
 type iamRunCase struct {
-	name    string
-	failMsg string
-	run     func(f *cli.CommonFlags) error
+	name     string
+	failMsg  string
+	run      func(f *cli.CommonFlags) error
+	want     iamWant
+	rejected *iamWant // the rejected server's outcome; nil when it prints the same as want
+}
+
+// iamWant is the outcome one response prints. fields holds top-level
+// JSON/YAML fields, compared through fmt.Sprint so both decoders agree;
+// table holds substrings of the table rendering.
+type iamWant struct {
+	fields map[string]string
+	table  []string
+}
+
+// wantFor returns the outcome expected from the named fake server.
+func (tc iamRunCase) wantFor(srvName string) iamWant {
+	if srvName == "rejected" && tc.rejected != nil {
+		return *tc.rejected
+	}
+	return tc.want
+}
+
+// statusWant is the outcome of a status-bearing command: the Status fields
+// and the one table line its success or failure branch prints.
+func statusWant(success bool, line string) iamWant {
+	return iamWant{
+		fields: map[string]string{"success": fmt.Sprint(success), "message": "done"},
+		table:  []string{line},
+	}
+}
+
+// rejectedStatus is the status outcome the rejected server produces.
+func rejectedStatus(line string) *iamWant {
+	want := statusWant(false, line)
+	return &want
+}
+
+// iamDecoders decode the structured output formats into top-level fields.
+var iamDecoders = map[cli.OutputFormat]func([]byte, any) error{
+	cli.OutputFormatJSON: json.Unmarshal,
+	cli.OutputFormatYAML: yaml.Unmarshal,
+}
+
+// assertIAMOutput checks the printed output against want: substrings for
+// the table format, decoded fields for JSON and YAML.
+func assertIAMOutput(t *testing.T, format cli.OutputFormat, out string, want iamWant) {
+	t.Helper()
+	decode, structured := iamDecoders[format]
+	if !structured {
+		for _, line := range want.table {
+			require.Contains(t, out, line)
+		}
+		return
+	}
+	var got map[string]any
+	require.NoError(t, decode([]byte(out), &got), out)
+	for key, value := range want.fields {
+		require.Contains(t, got, key, out)
+		require.Equal(t, value, fmt.Sprint(got[key]), key)
+	}
+}
+
+// captureStdout runs fn with os.Stdout redirected and returns what it printed.
+func captureStdout(t *testing.T, fn func() error) (string, error) {
+	t.Helper()
+	r, w, err := os.Pipe()
+	require.NoError(t, err)
+	orig := os.Stdout
+	os.Stdout = w
+
+	var buf bytes.Buffer
+	copied := make(chan error, 1)
+	go func() {
+		_, copyErr := io.Copy(&buf, r)
+		copied <- copyErr
+	}()
+
+	runErr := fn()
+	os.Stdout = orig
+	require.NoError(t, w.Close())
+	require.NoError(t, <-copied)
+	require.NoError(t, r.Close())
+	return buf.String(), runErr
 }
 
 func iamRunCases(policyFile string) []iamRunCase {
+	user := map[string]string{"id": "u1", "email": "u1@example.com", "mfa_verified": "true"}
+	role := map[string]string{"id": "r1", "name": "Reader"}
+	group := map[string]string{"id": "g1", "name": "Ops"}
+	tenant := map[string]string{"id": "t1", "name": "Acme"}
+	policy := map[string]string{"name": "p1", "priority": "10"}
+	app := map[string]string{"client_id": "c1", "name": "portal"}
+	listed := map[string]string{"total": "1"}
+
 	return []iamRunCase{
-		{"UserCreate", "failed to create user", func(f *cli.CommonFlags) error {
-			return runUserCreate(f, "t1", "u1@example.com", "User One", "admin", "ops", "dept=eng")
-		}},
-		{"UserGet", "failed to get user", func(f *cli.CommonFlags) error { return runUserGet(f, "t1", "u1") }},
-		{"UserList", "failed to list users", func(f *cli.CommonFlags) error {
-			return runUserList(f, "t1", 1, 10, iamsvc.UserListFilter{})
-		}},
-		{"UserUpdate", "failed to update user", func(f *cli.CommonFlags) error {
-			return runUserUpdate(f, "t1", "u1", "new@example.com", "New", "admin", "ops", "dept=ops")
-		}},
-		{"UserDelete", "failed to delete user", func(f *cli.CommonFlags) error { return runUserDelete(f, "t1", "u1") }},
-		{"UserAssignRole", "failed to assign role", func(f *cli.CommonFlags) error { return runUserAssignRole(f, "t1", "u1", "r1") }},
-		{"UserRevokeRole", "failed to revoke role", func(f *cli.CommonFlags) error { return runUserRevokeRole(f, "t1", "u1", "r1") }},
-		{"RoleCreate", "failed to create role", func(f *cli.CommonFlags) error {
-			return runRoleCreate(f, "t1", "r1", "Reader", "read only", []string{"vm:read"})
-		}},
-		{"RoleGet", "failed to get role", func(f *cli.CommonFlags) error { return runRoleGet(f, "t1", "r1") }},
-		{"RoleList", "failed to list roles", func(f *cli.CommonFlags) error { return runRoleList(f, "t1", 1, 10) }},
-		{"RoleUpdate", "failed to update role", func(f *cli.CommonFlags) error {
-			return runRoleUpdate(f, "t1", "r1", "Reader", "read only", []string{"vm:read"})
-		}},
-		{"RoleDelete", "failed to delete role", func(f *cli.CommonFlags) error { return runRoleDelete(f, "t1", "r1") }},
-		{"GroupCreate", "failed to create group", func(f *cli.CommonFlags) error {
-			return runGroupCreate(f, "t1", "g1", "Ops", "operators")
-		}},
-		{"GroupGet", "failed to get group", func(f *cli.CommonFlags) error { return runGroupGet(f, "t1", "g1") }},
-		{"GroupList", "failed to list groups", func(f *cli.CommonFlags) error { return runGroupList(f, "t1", 1, 10) }},
-		{"GroupUpdate", "failed to update group", func(f *cli.CommonFlags) error {
-			return runGroupUpdate(f, "t1", "g1", "Ops", "operators")
-		}},
-		{"GroupDelete", "failed to delete group", func(f *cli.CommonFlags) error { return runGroupDelete(f, "t1", "g1") }},
-		{"TenantCreate", "failed to create tenant", func(f *cli.CommonFlags) error {
-			return runTenantCreate(f, "t1", "Acme", 25, true)
-		}},
-		{"TenantGet", "failed to get tenant", func(f *cli.CommonFlags) error { return runTenantGet(f, "t1") }},
-		{"TenantList", "failed to list tenants", func(f *cli.CommonFlags) error { return runTenantList(f, 1, 10) }},
-		{"TenantUpdate", "failed to get tenant for update", func(f *cli.CommonFlags) error {
-			return runTenantUpdate(f, "t1", "Acme Corp", 50, false, true)
-		}},
-		{"TenantDelete", "failed to delete tenant", func(f *cli.CommonFlags) error { return runTenantDelete(f, "t1") }},
-		{"PolicyCreate", "failed to create policy", func(f *cli.CommonFlags) error {
-			return runPolicyCreate(f, "t1", "p1", "allow reads", 10, policyFile, "env=dev")
-		}},
-		{"PolicyGet", "failed to get policy", func(f *cli.CommonFlags) error { return runPolicyGet(f, "t1", "p1") }},
-		{"PolicyList", "failed to list policies", func(f *cli.CommonFlags) error { return runPolicyList(f, "t1", 1, 10) }},
-		{"PolicyUpdate", "failed to update policy", func(f *cli.CommonFlags) error {
-			return runPolicyUpdate(f, "t1", "p1", "allow reads", 10, policyFile, "env=dev")
-		}},
-		{"PolicyDelete", "failed to delete policy", func(f *cli.CommonFlags) error { return runPolicyDelete(f, "t1", "p1") }},
-		{"PolicyValidate", "failed to validate policy", func(f *cli.CommonFlags) error { return runPolicyValidate(f, "t1", policyFile) }},
-		{"PolicyTest", "failed to test policy", func(f *cli.CommonFlags) error {
-			return runPolicyTest(f, "t1", "u1", "admin", "ops", "read", "vm/1", "ip=10.0.0.1")
-		}},
-		{"AppRegister", "failed to register application", func(f *cli.CommonFlags) error {
-			return runAppRegister(f, "t1", "portal", "https://portal/cb", "authorization_code", "code", "/portal")
-		}},
-		{"AppGet", "failed to get application", func(f *cli.CommonFlags) error { return runAppGet(f, "t1", "c1") }},
-		{"AppList", "failed to list applications", func(f *cli.CommonFlags) error { return runAppList(f, "t1", 1, 10) }},
-		{"AppUpdate", "failed to update application", func(f *cli.CommonFlags) error {
-			return runAppUpdate(f, "t1", "c1", "portal", "https://portal/cb", "authorization_code", "code", "/portal")
-		}},
-		{"AppDelete", "failed to delete application", func(f *cli.CommonFlags) error { return runAppDelete(f, "t1", "c1") }},
-		{"AppRotateSecret", "failed to rotate application secret", func(f *cli.CommonFlags) error {
-			return runAppRotateSecret(f, "t1", "c1")
-		}},
+		{
+			name: "UserCreate", failMsg: "failed to create user",
+			run: func(f *cli.CommonFlags) error {
+				return runUserCreate(f, "t1", "u1@example.com", "User One", "admin", "ops", "dept=eng")
+			},
+			want: iamWant{user, []string{"[SUCCESS] User created successfully: u1", "u1@example.com"}},
+		},
+		{
+			name: "UserGet", failMsg: "failed to get user",
+			run:  func(f *cli.CommonFlags) error { return runUserGet(f, "t1", "u1") },
+			want: iamWant{user, []string{"u1@example.com"}},
+		},
+		{
+			name: "UserList", failMsg: "failed to list users",
+			run: func(f *cli.CommonFlags) error {
+				return runUserList(f, "t1", 1, 10, iamsvc.UserListFilter{})
+			},
+			want: iamWant{listed, []string{"u1@example.com"}},
+		},
+		{
+			name: "UserUpdate", failMsg: "failed to update user",
+			run: func(f *cli.CommonFlags) error {
+				return runUserUpdate(f, "t1", "u1", "new@example.com", "New", "admin", "ops", "dept=ops")
+			},
+			want: iamWant{user, []string{"[SUCCESS] User updated successfully: u1"}},
+		},
+		{
+			name: "UserDelete", failMsg: "failed to delete user",
+			run:      func(f *cli.CommonFlags) error { return runUserDelete(f, "t1", "u1") },
+			want:     statusWant(true, "[SUCCESS] User u1 deleted successfully"),
+			rejected: rejectedStatus("[ERROR] Failed to delete user u1"),
+		},
+		{
+			name: "UserAssignRole", failMsg: "failed to assign role",
+			run:      func(f *cli.CommonFlags) error { return runUserAssignRole(f, "t1", "u1", "r1") },
+			want:     statusWant(true, "[SUCCESS] Role 'r1' assigned to user u1"),
+			rejected: rejectedStatus("[ERROR] Failed to assign role 'r1' to user u1"),
+		},
+		{
+			name: "UserRevokeRole", failMsg: "failed to revoke role",
+			run:      func(f *cli.CommonFlags) error { return runUserRevokeRole(f, "t1", "u1", "r1") },
+			want:     statusWant(true, "[SUCCESS] Role 'r1' revoked from user u1"),
+			rejected: rejectedStatus("[ERROR] Failed to revoke role 'r1' from user u1"),
+		},
+		{
+			name: "RoleCreate", failMsg: "failed to create role",
+			run: func(f *cli.CommonFlags) error {
+				return runRoleCreate(f, "t1", "r1", "Reader", "read only", []string{"vm:read"})
+			},
+			want: iamWant{role, []string{"[SUCCESS] Role created successfully: r1", "Reader"}},
+		},
+		{
+			name: "RoleGet", failMsg: "failed to get role",
+			run:  func(f *cli.CommonFlags) error { return runRoleGet(f, "t1", "r1") },
+			want: iamWant{role, []string{"Reader", "vm:read"}},
+		},
+		{
+			name: "RoleList", failMsg: "failed to list roles",
+			run:  func(f *cli.CommonFlags) error { return runRoleList(f, "t1", 1, 10) },
+			want: iamWant{listed, []string{"Reader"}},
+		},
+		{
+			name: "RoleUpdate", failMsg: "failed to update role",
+			run: func(f *cli.CommonFlags) error {
+				return runRoleUpdate(f, "t1", "r1", "Reader", "read only", []string{"vm:read"})
+			},
+			want: iamWant{role, []string{"[SUCCESS] Role updated successfully: r1"}},
+		},
+		{
+			name: "RoleDelete", failMsg: "failed to delete role",
+			run:      func(f *cli.CommonFlags) error { return runRoleDelete(f, "t1", "r1") },
+			want:     statusWant(true, "[SUCCESS] Role deleted successfully: r1"),
+			rejected: rejectedStatus("[ERROR] Failed to delete role: r1"),
+		},
+		{
+			name: "GroupCreate", failMsg: "failed to create group",
+			run: func(f *cli.CommonFlags) error {
+				return runGroupCreate(f, "t1", "g1", "Ops", "operators")
+			},
+			want: iamWant{group, []string{"[SUCCESS] Group created successfully: g1", "Ops"}},
+		},
+		{
+			name: "GroupGet", failMsg: "failed to get group",
+			run:  func(f *cli.CommonFlags) error { return runGroupGet(f, "t1", "g1") },
+			want: iamWant{group, []string{"Ops", "operators"}},
+		},
+		{
+			name: "GroupList", failMsg: "failed to list groups",
+			run:  func(f *cli.CommonFlags) error { return runGroupList(f, "t1", 1, 10) },
+			want: iamWant{listed, []string{"Ops"}},
+		},
+		{
+			name: "GroupUpdate", failMsg: "failed to update group",
+			run: func(f *cli.CommonFlags) error {
+				return runGroupUpdate(f, "t1", "g1", "Ops", "operators")
+			},
+			want: iamWant{group, []string{"[SUCCESS] Group updated successfully: g1"}},
+		},
+		{
+			name: "GroupDelete", failMsg: "failed to delete group",
+			run:      func(f *cli.CommonFlags) error { return runGroupDelete(f, "t1", "g1") },
+			want:     statusWant(true, "[SUCCESS] Group deleted successfully: g1"),
+			rejected: rejectedStatus("[ERROR] Failed to delete group: g1"),
+		},
+		{
+			name: "TenantCreate", failMsg: "failed to create tenant",
+			run: func(f *cli.CommonFlags) error {
+				return runTenantCreate(f, "t1", "Acme", 25, true)
+			},
+			want: iamWant{tenant, []string{"[SUCCESS] Tenant created successfully: t1", "Acme"}},
+		},
+		{
+			name: "TenantGet", failMsg: "failed to get tenant",
+			run:  func(f *cli.CommonFlags) error { return runTenantGet(f, "t1") },
+			want: iamWant{tenant, []string{"Acme"}},
+		},
+		{
+			name: "TenantList", failMsg: "failed to list tenants",
+			run:  func(f *cli.CommonFlags) error { return runTenantList(f, 1, 10) },
+			want: iamWant{map[string]string{"total": "2"}, []string{"Acme"}},
+		},
+		{
+			name: "TenantUpdate", failMsg: "failed to get tenant for update",
+			run: func(f *cli.CommonFlags) error {
+				return runTenantUpdate(f, "t1", "Acme Corp", 50, false, true)
+			},
+			want: iamWant{tenant, []string{"[SUCCESS] Tenant updated successfully: t1"}},
+		},
+		{
+			name: "TenantDelete", failMsg: "failed to delete tenant",
+			run:      func(f *cli.CommonFlags) error { return runTenantDelete(f, "t1") },
+			want:     statusWant(true, "[SUCCESS] Tenant t1 deleted successfully"),
+			rejected: rejectedStatus("[ERROR] Failed to delete tenant t1"),
+		},
+		{
+			name: "PolicyCreate", failMsg: "failed to create policy",
+			run: func(f *cli.CommonFlags) error {
+				return runPolicyCreate(f, "t1", "p1", "allow reads", 10, policyFile, "env=dev")
+			},
+			want: iamWant{policy, []string{"[SUCCESS] Policy created successfully: p1", "allow reads"}},
+		},
+		{
+			name: "PolicyGet", failMsg: "failed to get policy",
+			run:  func(f *cli.CommonFlags) error { return runPolicyGet(f, "t1", "p1") },
+			want: iamWant{policy, []string{"allow reads", "Policy Spec: \nrules: []"}},
+		},
+		{
+			name: "PolicyList", failMsg: "failed to list policies",
+			run:  func(f *cli.CommonFlags) error { return runPolicyList(f, "t1", 1, 10) },
+			want: iamWant{listed, []string{"p1", "Total Count: 1"}},
+		},
+		{
+			name: "PolicyUpdate", failMsg: "failed to update policy",
+			run: func(f *cli.CommonFlags) error {
+				return runPolicyUpdate(f, "t1", "p1", "allow reads", 10, policyFile, "env=dev")
+			},
+			want: iamWant{policy, []string{"[SUCCESS] Policy updated successfully: p1"}},
+		},
+		{
+			name: "PolicyDelete", failMsg: "failed to delete policy",
+			run:      func(f *cli.CommonFlags) error { return runPolicyDelete(f, "t1", "p1") },
+			want:     statusWant(true, "[SUCCESS] Policy p1 deleted successfully from tenant t1"),
+			rejected: rejectedStatus("[ERROR] Failed to delete policy p1 from tenant t1"),
+		},
+		{
+			name: "PolicyValidate", failMsg: "failed to validate policy",
+			run:  func(f *cli.CommonFlags) error { return runPolicyValidate(f, "t1", policyFile) },
+			want: iamWant{map[string]string{"valid": "true"}, []string{"[SUCCESS] Policy is valid"}},
+			rejected: &iamWant{
+				map[string]string{"valid": "false", "errors": "[rules: required]"},
+				[]string{"[ERROR] Policy validation failed", "Errors: \n", "  1. rules: required\n"},
+			},
+		},
+		{
+			name: "PolicyTest", failMsg: "failed to test policy",
+			run: func(f *cli.CommonFlags) error {
+				return runPolicyTest(f, "t1", "u1", "admin", "ops", "read", "vm/1", "ip=10.0.0.1")
+			},
+			want: iamWant{
+				map[string]string{
+					"allowed": "true", "matched_policy": "p1", "matched_rule": "allow-read", "evaluation_time_ns": "1200",
+				},
+				[]string{
+					"[SUCCESS] Access ALLOWED", "Subject: u1", "Action: read", "Resource: vm/1",
+					"Matched Policy: p1", "Matched Rule: allow-read", "Evaluation Time: 1.2µs",
+				},
+			},
+			rejected: &iamWant{
+				map[string]string{"allowed": "false", "evaluation_time_ns": "1200"},
+				[]string{"[ERROR] Access DENIED", "Subject: u1", "Resource: vm/1", "Evaluation Time: 1.2µs"},
+			},
+		},
+		{
+			name: "AppRegister", failMsg: "failed to register application",
+			run: func(f *cli.CommonFlags) error {
+				return runAppRegister(f, "t1", "portal", "https://portal/cb", "authorization_code", "code", "/portal")
+			},
+			want: iamWant{app, []string{"[SUCCESS] Application registered successfully: portal", "s3cret"}},
+		},
+		{
+			name: "AppGet", failMsg: "failed to get application",
+			run:  func(f *cli.CommonFlags) error { return runAppGet(f, "t1", "c1") },
+			want: iamWant{app, []string{"portal", "https://portal/cb"}},
+		},
+		{
+			name: "AppList", failMsg: "failed to list applications",
+			run:  func(f *cli.CommonFlags) error { return runAppList(f, "t1", 1, 10) },
+			want: iamWant{listed, []string{"portal"}},
+		},
+		{
+			name: "AppUpdate", failMsg: "failed to update application",
+			run: func(f *cli.CommonFlags) error {
+				return runAppUpdate(f, "t1", "c1", "portal", "https://portal/cb", "authorization_code", "code", "/portal")
+			},
+			want: iamWant{app, []string{"[SUCCESS] Application updated successfully: portal"}},
+		},
+		{
+			name: "AppDelete", failMsg: "failed to delete application",
+			run:      func(f *cli.CommonFlags) error { return runAppDelete(f, "t1", "c1") },
+			want:     statusWant(true, "[SUCCESS] Application deleted successfully: c1"),
+			rejected: rejectedStatus("[WARNING] Application deletion may not have completed: c1"),
+		},
+		{
+			name: "AppRotateSecret", failMsg: "failed to rotate application secret",
+			run: func(f *cli.CommonFlags) error {
+				return runAppRotateSecret(f, "t1", "c1")
+			},
+			want: iamWant{
+				map[string]string{"client_id": "c1", "name": "portal", "client_secret": "n3w"},
+				[]string{"[SUCCESS] Client secret rotated successfully for: portal", "n3w"},
+			},
+		},
 	}
 }
 
@@ -483,7 +744,9 @@ func TestRunCommands964_Success(t *testing.T) {
 		for _, format := range formats {
 			for _, tc := range iamRunCases(policyFile) {
 				t.Run(srvName+"/"+string(format)+"/"+tc.name, func(t *testing.T) {
-					require.NoError(t, tc.run(flags(format)))
+					out, err := captureStdout(t, func() error { return tc.run(flags(format)) })
+					require.NoError(t, err)
+					assertIAMOutput(t, format, out, tc.wantFor(srvName))
 				})
 			}
 		}
