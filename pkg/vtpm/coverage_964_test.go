@@ -16,6 +16,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/google/go-tpm/tpm2"
 	"github.com/google/go-tpm/tpm2/transport"
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 
@@ -779,49 +780,81 @@ func TestCoverage964_ImportRejectsUnusableBundleID(t *testing.T) {
 	require.Equal(t, "import", archiveErr.Operation)
 }
 
-var errBudgetSpent = errors.New("tpm command budget spent")
+var errInjectedFault = errors.New("injected tpm command failure")
 
-// budgetTPM forwards commands to inner until its budget is spent, then
-// fails every command, so a sweep over the budget fails each TPM command of
-// an operation in turn.
-type budgetTPM struct {
-	inner     transport.TPM
-	remaining atomic.Int32
+// faultTPM forwards commands to inner and counts them, failing the one command
+// at position failAt (1-based). A failAt of 0 injects nothing.
+type faultTPM struct {
+	inner  transport.TPM
+	sent   atomic.Int32
+	failAt atomic.Int32
 }
 
-func newBudgetTPM(t *testing.T) *budgetTPM {
+func newFaultTPM(t *testing.T) *faultTPM {
 	t.Helper()
-	budget := &budgetTPM{inner: transport.FromReadWriter(newSimulator(t))}
-	budget.unlimited()
-	return budget
+	return &faultTPM{inner: transport.FromReadWriter(newSimulator(t))}
 }
 
-func (b *budgetTPM) Send(command []byte) ([]byte, error) {
-	if b.remaining.Add(-1) < 0 {
-		return nil, errBudgetSpent
+func (f *faultTPM) Send(command []byte) ([]byte, error) {
+	if f.sent.Add(1) == f.failAt.Load() {
+		return nil, errInjectedFault
 	}
-	return b.inner.Send(command)
+	return f.inner.Send(command)
 }
 
-func (b *budgetTPM) unlimited() { b.remaining.Store(1 << 20) }
+// arm resets the command count and fails the command at position failAt.
+func (f *faultTPM) arm(failAt int32) {
+	f.failAt.Store(failAt)
+	f.sent.Store(0)
+}
 
-// sweepCommandFailures runs op with a budget of 0, 1, 2, ... commands until
-// it succeeds, handing every failure to check. It fails the test if op never
-// succeeds within maxCommands.
-func sweepCommandFailures(t *testing.T, budget *budgetTPM, op func() error, check func(t *testing.T, err error)) {
+// sweepCommandFailures runs op fault-free from the state setup builds, records
+// the number N of TPM commands it issues and hands its result to verify. Then,
+// for every position 1..N, it rebuilds that state, fails the command at the
+// position and requires op to return an error that check accepts: a nil error
+// means op swallowed the failure, and fails the test naming the position.
+func sweepCommandFailures(t *testing.T, tpm *faultTPM, setup func(t *testing.T), op func() error,
+	verify func(t *testing.T), check func(t *testing.T, err error),
+) {
 	t.Helper()
-	defer budget.unlimited()
+	defer tpm.arm(0)
 
-	const maxCommands = 64
-	for commands := int32(0); commands < maxCommands; commands++ {
-		budget.remaining.Store(commands)
+	tpm.arm(0)
+	setup(t)
+	tpm.arm(0)
+	require.NoError(t, op(), "fault-free run")
+	commands := tpm.sent.Load()
+	require.Positive(t, commands, "op issued no TPM commands")
+	verify(t)
+
+	for position := int32(1); position <= commands; position++ {
+		tpm.arm(0)
+		setup(t)
+		tpm.arm(position)
 		err := op()
 		if err == nil {
-			return
+			t.Errorf("failure injected at command %d of %d: op returned nil", position, commands)
+			continue
 		}
 		check(t, err)
 	}
-	t.Fatalf("operation still failing after %d commands", maxCommands)
+	t.Logf("swept %d command positions", commands)
+}
+
+// undefineNVIndex removes nvIndex from the TPM when it is defined.
+func undefineNVIndex(t *testing.T, tpm transport.TPM, nvIndex uint32) {
+	t.Helper()
+	handle := tpm2.TPMHandle(nvIndex)
+	public, err := tpm2.NVReadPublic{NVIndex: handle}.Execute(tpm)
+	if isNVUndefinedError(err) {
+		return
+	}
+	require.NoError(t, err)
+	_, err = tpm2.NVUndefineSpace{
+		AuthHandle: tpm2.TPMRHPlatform,
+		NVIndex:    nvNamedHandle{handle: handle, name: public.NVName},
+	}.Execute(tpm)
+	require.NoError(t, err)
 }
 
 // serveTPMOnSocket serves tpm on a unix socket until the test ends.
@@ -875,65 +908,80 @@ func requireInjectorError(t *testing.T, err error) {
 
 func TestCoverage964_EKCertInjectorCommandFailures(t *testing.T) {
 	ctx := context.Background()
-	budget := newBudgetTPM(t)
-	socketPath := serveTPMOnSocket(t, budget)
+	tpm := newFaultTPM(t)
+	socketPath := serveTPMOnSocket(t, tpm)
 	injector := NewEKCertInjector(socketPath, nil)
 	cert := newTestEKCertificate(t, 0)
+	oldCert := newTestEKCertificate(t, 0)
 	nvIndex := EKAlgorithmRSA.NVIndex()
 
 	directFailure := func(t *testing.T, err error) {
 		requireInjectorError(t, err)
-		require.ErrorIs(t, err, errBudgetSpent)
+		require.ErrorIs(t, err, errInjectedFault)
 	}
 	socketFailure := func(t *testing.T, err error) {
 		var injectErr ErrEKCertInjectionFailed
 		require.ErrorAs(t, err, &injectErr)
 	}
+	undefined := func(t *testing.T) { undefineNVIndex(t, tpm, nvIndex) }
+	holding := func(c *x509.Certificate) func(t *testing.T) {
+		return func(t *testing.T) {
+			require.NoError(t, injector.writeCertificate(tpm, c, EKAlgorithmRSA))
+		}
+	}
+	readsBack := func(t *testing.T) {
+		stored, err := injector.readCertificate(tpm, nvIndex)
+		require.NoError(t, err)
+		require.Equal(t, cert.Raw, stored.Raw)
+	}
+	write := func() error { return injector.writeCertificate(tpm, cert, EKAlgorithmRSA) }
 
 	t.Run("write to an undefined index", func(t *testing.T) {
-		sweepCommandFailures(t, budget, func() error {
-			return injector.writeCertificate(budget, cert, EKAlgorithmRSA)
-		}, directFailure)
+		sweepCommandFailures(t, tpm, undefined, write, readsBack, directFailure)
 	})
 	t.Run("write over a defined index", func(t *testing.T) {
-		sweepCommandFailures(t, budget, func() error {
-			return injector.writeCertificate(budget, cert, EKAlgorithmRSA)
-		}, directFailure)
+		sweepCommandFailures(t, tpm, holding(oldCert), write, readsBack, directFailure)
 	})
 	t.Run("read", func(t *testing.T) {
 		var stored *x509.Certificate
-		sweepCommandFailures(t, budget, func() error {
+		sweepCommandFailures(t, tpm, holding(cert), func() error {
 			var err error
-			stored, err = injector.readCertificate(budget, nvIndex)
+			stored, err = injector.readCertificate(tpm, nvIndex)
 			return err
+		}, func(t *testing.T) {
+			require.Equal(t, cert.Raw, stored.Raw)
 		}, directFailure)
-		require.Equal(t, cert.Raw, stored.Raw)
 	})
 	t.Run("read over the socket", func(t *testing.T) {
-		sweepCommandFailures(t, budget, func() error {
-			_, err := injector.ReadCertificate(ctx, EKAlgorithmRSA)
+		var stored *x509.Certificate
+		sweepCommandFailures(t, tpm, holding(cert), func() error {
+			var err error
+			stored, err = injector.ReadCertificate(ctx, EKAlgorithmRSA)
 			return err
+		}, func(t *testing.T) {
+			require.Equal(t, cert.Raw, stored.Raw)
 		}, socketFailure)
 	})
 	t.Run("exists check over the socket", func(t *testing.T) {
 		var exists bool
 		var stored *x509.Certificate
-		sweepCommandFailures(t, budget, func() error {
+		sweepCommandFailures(t, tpm, holding(cert), func() error {
 			var err error
 			exists, stored, err = injector.CheckEKCertificateExists(ctx, EKAlgorithmRSA)
 			return err
+		}, func(t *testing.T) {
+			require.True(t, exists)
+			require.Equal(t, cert.Raw, stored.Raw)
 		}, socketFailure)
-		require.True(t, exists)
-		require.Equal(t, cert.Raw, stored.Raw)
 	})
 	t.Run("index holding no certificate", func(t *testing.T) {
 		garbage := []byte("not a certificate")
-		require.NoError(t, injector.defineNVSpace(budget, nvIndex, uint16(len(garbage))))
-		name, err := injector.getNVName(budget, nvIndex)
+		require.NoError(t, injector.defineNVSpace(tpm, nvIndex, uint16(len(garbage))))
+		name, err := injector.getNVName(tpm, nvIndex)
 		require.NoError(t, err)
-		require.NoError(t, injector.writeNVData(budget, nvIndex, name, garbage, 1024))
+		require.NoError(t, injector.writeNVData(tpm, nvIndex, name, garbage, 1024))
 
-		_, err = injector.readCertificate(budget, nvIndex)
+		_, err = injector.readCertificate(tpm, nvIndex)
 		var injectErr ErrEKCertInjectionFailed
 		require.ErrorAs(t, err, &injectErr)
 
