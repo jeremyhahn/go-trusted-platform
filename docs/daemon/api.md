@@ -636,9 +636,30 @@ method without a catalog scope, is refused for every caller
 | `GET /fido2/devices`, `GET /fido2/devices/wait`, `GET /fido2/devices/{device}` | `fido2:read` |
 | `POST /fido2/register`, `POST /fido2/authenticate` | `fido2:write` |
 
+**The vTPM, proxy and cluster routes take the same map (#997).**
+`SetVTPMService` (`rest_vtpm.go`), `SetProxyService` (`proxy_rest.go`) and
+`SetClusterService` (`rest_service.go`) mount `/api/v1/vtpm`, `/api/v1/proxy`
+and `/api/v1/cluster` behind the same guard. The vTPM and proxy registrars in
+`pkg/api/rest` register absolute `/api/v1` paths, so they mount on a
+matcher-less guarded subrouter of the root router (`catalogGuardedRoot`): its
+guard runs only for its own routes. Without a cluster backend the cluster
+routes still mount, behind the guard, and answer 503.
+
+| Routes | Scope |
+|--------|-------|
+| `GET /vtpm/bundles`, `GET /vtpm/bundles/{id}`, `GET /vtpm/bundles/{id}/{state,path,tpm-socket,nvram,export}`, `POST /vtpm/bundles/{id}/validate`, `POST /vtpm/bundles/{id}/quote`, `GET /vtpm/bundles/{id}/pcr/{index}`, `POST /vtpm/bundles/{id}/unseal`, `GET /vtpm/templates`, `GET /vtpm/templates/{id}` | `vtpm:read` |
+| `POST /vtpm/bundles`, `POST /vtpm/bundles/{id}/{start,stop,seal}`, `POST /vtpm/bundles/{id}/pcr/{index}/extend`, `POST /vtpm/bundles/import`, `POST /vtpm/templates`, `POST /vtpm/templates/{id}/clone` | `vtpm:write` |
+| `DELETE /vtpm/bundles/{id}`, `DELETE /vtpm/templates/{id}` | `vtpm:delete` |
+| `GET /proxy/routes`, `GET /proxy/routes/{id}`, `GET /proxy/pools`, `GET /proxy/pools/{id}`, `GET /proxy/config`, `GET /proxy/status`, `GET /proxy/zone-matrix` | `proxy:read` |
+| `POST /proxy/routes`, `PUT /proxy/routes/{id}`, `POST /proxy/pools`, `PUT /proxy/pools/{id}`, `POST /proxy/reload` | `proxy:write` |
+| `DELETE /proxy/routes/{id}`, `DELETE /proxy/pools/{id}` | `proxy:delete` |
+| `GET /cluster/status`, `GET /cluster/nodes` | `cluster:read` |
+| `POST /cluster/bootstrap`, `POST /cluster/join`, `POST /cluster/leave` | `cluster:write` |
+
 A missing credential answers 401 and a missing scope 403. A failed mount (no
 scope guard: `ErrCeremonyRESTUnavailable`, `ErrPIVRESTUnavailable`,
-`ErrLUKSRESTUnavailable`, `ErrFIDO2RESTUnavailable`) stops the daemon (`ErrTransportConstructionFailed`).
+`ErrLUKSRESTUnavailable`, `ErrFIDO2RESTUnavailable`, `ErrVTPMRESTUnavailable`,
+`ErrProxyRESTUnavailable`, `ErrClusterRESTUnavailable`) stops the daemon (`ErrTransportConstructionFailed`).
 
 `TestDaemonREST_EveryMountedRouteIsGuarded` (`pkg/api/daemon/rest_scope_test.go`)
 walks the daemon REST router and sends every route a request with no

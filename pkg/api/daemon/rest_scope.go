@@ -73,7 +73,8 @@ func sdnRouteScope(method, route string) (string, error) {
 	return sdnScopeResource + ":" + action, nil
 }
 
-// catalogRouteRPCs maps each ceremony, PIV, LUKS and FIDO2 route on the daemon
+// catalogRouteRPCs maps each ceremony, PIV, LUKS, FIDO2, vTPM, proxy and
+// cluster route on the daemon
 // REST listener, as "METHOD route-template", to the gRPC method it serves. The
 // route needs the scope the gRPC catalog gives that method: several of these
 // POSTs read, delete or use a key, and every ceremony step has its own
@@ -112,6 +113,51 @@ var catalogRouteRPCs = map[string]string{
 	"GET /api/v1/fido2/devices/{device}": "/platform.v1.FIDO2Service/Info",
 	"POST /api/v1/fido2/register":        "/platform.v1.FIDO2Service/Register",
 	"POST /api/v1/fido2/authenticate":    "/platform.v1.FIDO2Service/Authenticate",
+
+	"POST /api/v1/vtpm/bundles":                         "/platform.v1.VTPMService/CreateBundle",
+	"GET /api/v1/vtpm/bundles":                          "/platform.v1.VTPMService/ListBundles",
+	"GET /api/v1/vtpm/bundles/{id}":                     "/platform.v1.VTPMService/GetBundle",
+	"DELETE /api/v1/vtpm/bundles/{id}":                  "/platform.v1.VTPMService/DeleteBundle",
+	"POST /api/v1/vtpm/bundles/{id}/start":              "/platform.v1.VTPMService/StartVTPM",
+	"POST /api/v1/vtpm/bundles/{id}/stop":               "/platform.v1.VTPMService/StopVTPM",
+	"GET /api/v1/vtpm/bundles/{id}/state":               "/platform.v1.VTPMService/IsVTPMRunning",
+	"POST /api/v1/vtpm/bundles/{id}/validate":           "/platform.v1.VTPMService/ValidateBundle",
+	"GET /api/v1/vtpm/bundles/{id}/path":                "/platform.v1.VTPMService/GetBundlePath",
+	"GET /api/v1/vtpm/bundles/{id}/tpm-socket":          "/platform.v1.VTPMService/GetTPMSocketPath",
+	"GET /api/v1/vtpm/bundles/{id}/nvram":               "/platform.v1.VTPMService/GetNVRAMPath",
+	"POST /api/v1/vtpm/bundles/{id}/quote":              "/platform.v1.VTPMService/QuoteVTPM",
+	"GET /api/v1/vtpm/bundles/{id}/pcr/{index}":         "/platform.v1.VTPMService/ReadVTPMPCR",
+	"POST /api/v1/vtpm/bundles/{id}/pcr/{index}/extend": "/platform.v1.VTPMService/ExtendVTPMPCR",
+	"POST /api/v1/vtpm/bundles/{id}/seal":               "/platform.v1.VTPMService/SealVTPM",
+	"POST /api/v1/vtpm/bundles/{id}/unseal":             "/platform.v1.VTPMService/UnsealVTPM",
+	"GET /api/v1/vtpm/bundles/{id}/export":              "/platform.v1.VTPMService/ExportBundle",
+	"POST /api/v1/vtpm/bundles/import":                  "/platform.v1.VTPMService/ImportBundle",
+	"POST /api/v1/vtpm/templates":                       "/platform.v1.VTPMService/CreateTemplate",
+	"GET /api/v1/vtpm/templates":                        "/platform.v1.VTPMService/ListTemplates",
+	"GET /api/v1/vtpm/templates/{id}":                   "/platform.v1.VTPMService/GetTemplate",
+	"DELETE /api/v1/vtpm/templates/{id}":                "/platform.v1.VTPMService/DeleteTemplate",
+	"POST /api/v1/vtpm/templates/{id}/clone":            "/platform.v1.VTPMService/CloneTemplate",
+
+	"POST /api/v1/proxy/routes":        "/platform.v1.ProxyService/CreateRoute",
+	"GET /api/v1/proxy/routes":         "/platform.v1.ProxyService/ListRoutes",
+	"GET /api/v1/proxy/routes/{id}":    "/platform.v1.ProxyService/GetRoute",
+	"PUT /api/v1/proxy/routes/{id}":    "/platform.v1.ProxyService/UpdateRoute",
+	"DELETE /api/v1/proxy/routes/{id}": "/platform.v1.ProxyService/DeleteRoute",
+	"POST /api/v1/proxy/pools":         "/platform.v1.ProxyService/CreatePool",
+	"GET /api/v1/proxy/pools":          "/platform.v1.ProxyService/ListPools",
+	"GET /api/v1/proxy/pools/{id}":     "/platform.v1.ProxyService/GetPool",
+	"PUT /api/v1/proxy/pools/{id}":     "/platform.v1.ProxyService/UpdatePool",
+	"DELETE /api/v1/proxy/pools/{id}":  "/platform.v1.ProxyService/DeletePool",
+	"GET /api/v1/proxy/config":         "/platform.v1.ProxyService/GetProxyConfig",
+	"GET /api/v1/proxy/status":         "/platform.v1.ProxyService/GetProxyStatus",
+	"POST /api/v1/proxy/reload":        "/platform.v1.ProxyService/ReloadProxyConfig",
+	"GET /api/v1/proxy/zone-matrix":    "/platform.v1.ProxyService/GetZoneMatrix",
+
+	"GET /api/v1/cluster/status":     "/platform.v1.ClusterService/GetStatus",
+	"GET /api/v1/cluster/nodes":      "/platform.v1.ClusterService/ListNodes",
+	"POST /api/v1/cluster/bootstrap": "/platform.v1.ClusterService/Bootstrap",
+	"POST /api/v1/cluster/join":      "/platform.v1.ClusterService/Join",
+	"POST /api/v1/cluster/leave":     "/platform.v1.ClusterService/Leave",
 }
 
 // catalogRouteScope returns the scope the gRPC catalog gives the method a
@@ -132,14 +178,27 @@ func catalogRouteScope(method, route string) (string, error) {
 // catalogGuardedAPI returns a restBasePath subrouter whose routes each run
 // behind guard and need the scope catalogRouteScope gives them.
 func (s *RESTServer) catalogGuardedAPI(guard *restapi.ScopeGuard) *mux.Router {
-	authz := restScopeAuthorization{
+	api := s.router.PathPrefix(restBasePath).Subrouter()
+	api.Use(s.catalogAuthorization(guard).authorize)
+	return api
+}
+
+// catalogGuardedRoot returns a matcher-less subrouter of the root router for
+// registrars that mount absolute /api/v1 paths. Its routes run behind guard
+// like catalogGuardedAPI's; gorilla/mux runs its middleware only when one of
+// its own routes matched, so it guards no other path.
+func (s *RESTServer) catalogGuardedRoot(guard *restapi.ScopeGuard) *mux.Router {
+	root := s.router.NewRoute().Subrouter()
+	root.Use(s.catalogAuthorization(guard).authorize)
+	return root
+}
+
+func (s *RESTServer) catalogAuthorization(guard *restapi.ScopeGuard) restScopeAuthorization {
+	return restScopeAuthorization{
 		guard:      guard,
 		respWriter: response.NewResponseWriter(logging.NewFromSlog(s.logger), nil),
 		routeScope: catalogRouteScope,
 	}
-	api := s.router.PathPrefix(restBasePath).Subrouter()
-	api.Use(authz.authorize)
-	return api
 }
 
 // restScopeAuthorization authenticates a daemon REST request through the

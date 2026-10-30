@@ -129,11 +129,8 @@ var daemonMTLSOnlyRoutes = []string{
 	"/api/v1/auth/factors/aaguid-lookup",         // auth factor route SetCAHandlers mounts without its guard
 	"/api/v1/users/{id}/factors/mtls/issue-cert", // as above
 	"/api/v1/tenants/{id}/security/mfa-policy",   // tenant MFA policy, outside the tenant guard
-	"/api/v1/vtpm/",                              // vTPM (SetVTPMService)
 	"/api/v1/sdn/overlay",                        // overlay (SetOverlayHandlers)
 	"/api/v1/sdn/gateway",                        // gateway IPAM and status (SetGatewayIPAMService)
-	"/api/v1/proxy",                              // proxy (SetProxyService)
-	"/api/v1/cluster",                            // cluster (SetClusterService)
 }
 
 // templateVariable matches a mux path variable, {name} or {name:pattern}.

@@ -1478,12 +1478,6 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 		logger.Info("REST server not enabled")
 	}
 
-	// Wire vTPM service into REST server if both are available
-	if daemon.concreteRestServer != nil && config.VTPMService != nil {
-		daemon.concreteRestServer.SetVTPMService(config.VTPMService)
-		logger.Info("vTPM service wired into REST server")
-	}
-
 	// Wire the time-synchronization, VPN control-plane and compute REST
 	// handlers onto the daemon's own REST listener. Without them
 	// /api/v1/ntp/*, /api/v1/vpn/* and /api/v1/compute/* would 404 there.
@@ -1688,19 +1682,20 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 		logger.Info("Gateway IPAM REST service wired into REST server")
 	}
 
-	// Wire proxy REST handlers over the same shared ProxyGRPCService.
-	if daemon.concreteRestServer != nil && daemon.proxyGRPCService != nil {
-		daemon.concreteRestServer.SetProxyService(daemon.proxyGRPCService)
-		logger.Info("Proxy REST service wired into REST server")
-	}
-
-	// Wire Phase 3.5 services (ceremony/piv/luks/fido2) into REST server.
+	// Wire the vTPM, proxy (over the same shared ProxyGRPCService), Phase 3.5
+	// (ceremony/piv/luks/fido2) and cluster services into the REST server.
 	if daemon.concreteRestServer != nil {
-		// The ceremony, PIV, LUKS and FIDO2 routes run behind restGuard, each
-		// needing the scope the gRPC catalog gives its rpc. A failed mount
-		// stops the daemon.
+		// The vTPM, proxy, ceremony, PIV, LUKS, FIDO2 and cluster routes run
+		// behind restGuard, each needing the scope the gRPC catalog gives its
+		// rpc. A failed mount stops the daemon.
 		var mountErr error
-		if daemon.ceremonyService != nil && daemon.ceremonyService.service != nil {
+		if config.VTPMService != nil {
+			mountErr = daemon.concreteRestServer.SetVTPMService(config.VTPMService, restGuard)
+		}
+		if mountErr == nil && daemon.proxyGRPCService != nil {
+			mountErr = daemon.concreteRestServer.SetProxyService(daemon.proxyGRPCService, restGuard)
+		}
+		if mountErr == nil && daemon.ceremonyService != nil && daemon.ceremonyService.service != nil {
 			mountErr = daemon.concreteRestServer.SetCeremonyService(daemon.ceremonyService.service, restGuard)
 		}
 		if mountErr == nil && daemon.pivService != nil && daemon.pivService.service != nil {
@@ -1712,15 +1707,17 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 		if mountErr == nil && daemon.fido2Service != nil && daemon.fido2Service.service != nil {
 			mountErr = daemon.concreteRestServer.SetFIDO2Service(daemon.fido2Service.service, restGuard)
 		}
+		// Cluster REST always mounts; if no coordinator is wired the
+		// handlers return 503 with a clear "not configured" body so the
+		// dashboard can render an actionable empty state rather than 404.
+		if mountErr == nil {
+			mountErr = daemon.concreteRestServer.SetClusterService(clusterGRPCService, restGuard)
+		}
 		if mountErr != nil {
 			constructErr := ErrTransportConstructionFailed{Transport: transportREST, Cause: mountErr}
 			logger.Error(constructErr, "component", "rest_server")
 			return nil, constructErr
 		}
-		// Cluster REST always mounts; if no coordinator is wired the
-		// handlers return 503 with a clear "not configured" body so the
-		// dashboard can render an actionable empty state rather than 404.
-		daemon.concreteRestServer.SetClusterService(clusterGRPCService)
 	}
 
 	// Wire config delivery for pre-enrollment provisioning across the REST and
