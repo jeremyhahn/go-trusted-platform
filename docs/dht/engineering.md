@@ -24,8 +24,9 @@ work is authorised the first PR has something to be reviewed against — and so
 that nobody mistakes a design constant for a Go constant that already exists.
 
 **Do not create any of the identifiers named below to make this document true.**
-They are design intent. They become a contract when the owner approves the work
-and this banner changes to NORMATIVE.
+They are design intent. The NORMATIVE banner covers the design only ("design
+only, no code exists"); the identifiers become a code contract when the owner
+approves the work and the first implementation PR lands.
 
 ## 2. Existing code that must not be confused with this
 
@@ -33,6 +34,18 @@ and this banner changes to NORMATIVE.
 |---|---|---|
 | `pkg/sdn/gateway/p2p` | `platform_p2p` | `Node` — a libp2p host with Kademlia routing for SDN gateway peer discovery. Constants `DefaultListenPort = 4001`, `DefaultBootstrapTimeout = 30s`, `DefaultConnManagerLowWater = 100`, `DefaultConnManagerHighWater = 400`, `DefaultRoutingTableRefreshPeriod = 10m`, `MaxBootstrapPeers = 20`. |
 | `pkg/sdn/ipam/backends/dht.go` | `platform_p2p` | `DHTBackend`, an `ipam.Allocator` over `go-libp2p-kad-dht`. Key prefixes `/ipam/pool/`, `/ipam/alloc/`, `/ipam/device/`; `claimTimeout = 5s`, `claimPropagationDelay = 100ms`, `maxAllocationRetries = 50`, `dhtOperationTimeout = 10s`. Constructor `NewDHTBackend(node *p2p.Node, opts ...ipam.AllocatorOption)`; error `ErrDHTBackendInit`. |
+
+`DHTBackend` is a partial allocator, and the limits matter to anyone who reads
+it as a model for this feature:
+
+- `GetAllocationsByDevice`, `GetAllocationsByPool` and `ExpireInactive` always
+  return an empty list (`dht.go:691`, `:704`, `:720`); no scan of the DHT is
+  attempted.
+- `DeletePool` removes the pool from the local caches only; the DHT record is
+  left to expire (`dht.go:339`).
+- `GetPoolByName` and `GetPoolByCIDR` consult only the local name and CIDR
+  indexes; a pool another node created is `ErrPoolNotFound` here
+  (`dht.go:214`, `:230`).
 
 These are real, they compile, they are tested, and they belong to
 [`docs/gateway/`](../gateway/) and [`docs/sdn/ipam/`](../sdn/ipam/). Changing
@@ -54,7 +67,7 @@ which states that these are to be **compile-time constants, not configuration**.
 | Maximum value size | 1 MB |
 | Node ID | SHA-256 of the public key — **but see §6** |
 
-Required primitives per `ROADMAP.md` §1.1: XOR distance, k-bucket split, LRU
+Required primitives per `docs/archive/dht-ROADMAP.md` §1.1: XOR distance, k-bucket split, LRU
 eviction with liveness check, **concurrent-safe and lock-free preferred**,
 `PING`/`PONG`, `FIND_NODE`, `FIND_VALUE`, `STORE`.
 
@@ -109,7 +122,7 @@ days.
 
 ## 4. Dependency obligations
 
-The design's own dependency table (`ROADMAP.md`), reconciled with this
+The design's own dependency table (`docs/archive/dht-ROADMAP.md`), reconciled with this
 repository's SDK boundary:
 
 | Capability | Owner | How it must be reached |
@@ -142,14 +155,14 @@ rule to state yet. The first implementation PR must establish one.
 These block an implementation and are recorded so the first agent does not
 decide them silently. **Ambiguity in a feature doc is resolved by the owner.**
 
-1. **Node ID width.** `ROADMAP.md` says *"160-bit node IDs"* in its capability
+1. **Node ID width.** `docs/archive/dht-ROADMAP.md` says *"160-bit node IDs"* in its capability
    summary and *"NodeID type (32-byte SHA256 of public key)"* — 256 bits — in
    §1.1. These cannot both be right, and the routing table geometry depends on
    the answer.
 2. **Relationship to `pkg/sdn/gateway/p2p`.** One libp2p host shared between the
    SDN mesh and the Trusted DHT, or two independent stacks? Building either way
    without deciding produces a duplicate that is expensive to unwind.
-3. **libp2p or a bespoke Kademlia.** `ROADMAP.md` §1.1 specifies building the
+3. **libp2p or a bespoke Kademlia.** `docs/archive/dht-ROADMAP.md` §1.1 specifies building the
    routing table, k-buckets and the Kademlia RPCs from scratch; the code already
    in the tree uses `go-libp2p-kad-dht`. The design does not say which wins.
 4. **Which capability rows this feature owns** in `docs/00 §R`, and at what
@@ -188,6 +201,6 @@ pattern already used by `test/integration/tpm/` and its siblings.
 ## 9. Related
 
 - [architecture.md](architecture.md) · [cli.md](cli.md) · [api.md](api.md) · [user.md](user.md)
-- [ROADMAP.md](ROADMAP.md) — the milestone breakdown this contract would be built against
+- [`docs/archive/dht-ROADMAP.md`](../archive/dht-ROADMAP.md) — the milestone breakdown this contract would be built against
 - [00-CONSTANTS.md](00-CONSTANTS.md) — the canonical constant set
 - [`docs/gateway/`](../gateway/) · [`docs/sdn/ipam/`](../sdn/ipam/) — the real libp2p code

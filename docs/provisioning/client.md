@@ -241,7 +241,7 @@ with `errors.Is`.
 | `ErrConnectionFailed` | Request could not be sent (network, TLS, timeout) | Yes |
 | `ErrServerError` | Server answered any status other than 200 | Depends on the status in the message |
 | `ErrInvalidResponse` | Malformed JSON | No |
-| `ErrProfileFetchFailed`, `ErrActivationFailed` | The request could not be built | No |
+| `ErrProfileFetchFailed`, `ErrActivationFailed`, `ErrHeartbeatFailed` | The request could not be built | No |
 
 ## Security
 

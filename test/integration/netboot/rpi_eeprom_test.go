@@ -26,6 +26,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/iso"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/rpinetboot"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/testenv"
 )
 
 const (
@@ -215,7 +216,7 @@ func attachProbeNamespace(t *testing.T, bridge string) string {
 			t.Logf("removing namespace %s: %v: %s", probeNamespace, err, out)
 		}
 	})
-	run("link", "add", probeVeth, "type", "veth", "peer", "name", probeVethPeer)
+	run(testenv.VethArgs(probeVeth, probeVethPeer)...)
 	run("link", "set", probeVethPeer, "master", bridge)
 	run("link", "set", probeVethPeer, "up")
 	run("link", "set", probeVeth, "netns", probeNamespace)

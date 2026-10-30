@@ -36,7 +36,7 @@ platform-initrd boot --device /dev/sda2
 - `--root-mount`: Root mount point for diskless boot (default: /sysroot)
 - `--diskless-work-dir`: Tmpfs work directory for diskless root material (default: /run/platform/diskless-root)
 - `--timeout`: Unlock timeout in seconds (default: 30)
-- `--pcrs`: PCR banks to verify (reads from config if not specified)
+- `--pcrs`: PCR banks to verify (reads from the pcr-banks file if not specified)
 - `--fallback`: Enable fallback unlock methods (default: true)
 - `--emergency`: Drop to emergency shell on failure
 - `--tpm-path`: TPM device path (default: /dev/tpmrm0)

@@ -94,6 +94,66 @@ func TestEndpointHelpersReadTheVariablesTheRunnerExports(t *testing.T) {
 	}
 }
 
+// The runner exports QUIC and gRPC as host:port and REST and MCP as URLs;
+// RequireEndpoint returns each form unchanged.
+func TestRequireEndpointReturnsTheExportedValue(t *testing.T) {
+	values := map[string]string{
+		EnvQUICEndpoint: "localhost:41234",
+		EnvGRPCEndpoint: "127.0.0.1:38001",
+		EnvMCPEndpoint:  "https://localhost:40007",
+		EnvRESTEndpoint: "https://localhost:39999/",
+	}
+	for variable, want := range values {
+		t.Setenv(variable, want)
+		got, err := RequireEndpoint(variable)
+		if err != nil {
+			t.Fatalf("RequireEndpoint(%s) with %q: %v", variable, want, err)
+		}
+		if got != want {
+			t.Errorf("RequireEndpoint(%s) = %q, want %q", variable, got, want)
+		}
+	}
+}
+
+// An unset variable is an error naming it, never a fixed default port.
+func TestRequireEndpointUnsetNamesTheVariable(t *testing.T) {
+	t.Setenv(EnvQUICEndpoint, "")
+	got, err := RequireEndpoint(EnvQUICEndpoint)
+	var unset *EndpointUnsetError
+	if !errors.As(err, &unset) {
+		t.Fatalf("RequireEndpoint with %s unset: got (%q, %v), want *EndpointUnsetError", EnvQUICEndpoint, got, err)
+	}
+	if unset.Variable != EnvQUICEndpoint || !strings.Contains(err.Error(), EnvQUICEndpoint) {
+		t.Errorf("error %q does not name %s", err, EnvQUICEndpoint)
+	}
+	if got != "" {
+		t.Errorf("RequireEndpoint returned %q alongside the error", got)
+	}
+}
+
+func TestRequireEndpointRejectsAValueWithoutHostAndPort(t *testing.T) {
+	for name, value := range map[string]string{
+		"no port":        "localhost",
+		"url no port":    "https://localhost/mcp",
+		"no host":        ":9444",
+		"port zero":      "localhost:0",
+		"port too large": "localhost:70000",
+		"port not digit": "localhost:quic",
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Setenv(EnvMCPEndpoint, value)
+			_, err := RequireEndpoint(EnvMCPEndpoint)
+			var invalid *EndpointInvalidError
+			if !errors.As(err, &invalid) {
+				t.Fatalf("RequireEndpoint with %q: got %v, want *EndpointInvalidError", value, err)
+			}
+			if invalid.Variable != EnvMCPEndpoint || invalid.Value != value {
+				t.Errorf("error names %s=%q, want %s=%q", invalid.Variable, invalid.Value, EnvMCPEndpoint, value)
+			}
+		})
+	}
+}
+
 func TestEndpointHelpersFallBackToTheStandardPortsOutsideTheRunner(t *testing.T) {
 	for _, b := range endpointBindings {
 		t.Setenv(b.env, "")
@@ -147,5 +207,70 @@ func TestCheckRunnerBindingRejectsAMismatchedRunner(t *testing.T) {
 				t.Errorf("error names %q, want %q", bindingErr.env, envQUICEndpoint)
 			}
 		})
+	}
+}
+
+// fixedPortError reports a runner port variable assigned a literal number.
+type fixedPortError struct {
+	variable string
+	value    string
+}
+
+func (e *fixedPortError) Error() string {
+	return runnerScript + ": " + e.variable + " is fixed at " + e.value +
+		"; two Integration jobs on one host-network runner would share it (#997): take it from freeport in choose_platformd_ports"
+}
+
+// fixedPortAssignment matches a platformd or OVSDB port variable assigned a
+// number, quoted or not, with or without export or local.
+var fixedPortAssignment = regexp.MustCompile(`(?m)^\s*(?:export\s+|local\s+)?(PLATFORMD_\w+_PORT|OVSDB_TCP_PORT)=["']?(\d+)`)
+
+// checkRunnerPortsEphemeral returns a *fixedPortError for each port variable
+// the script sets to a literal number.
+func checkRunnerPortsEphemeral(script string) []error {
+	var errs []error
+	for _, match := range fixedPortAssignment.FindAllStringSubmatch(script, -1) {
+		errs = append(errs, &fixedPortError{variable: match[1], value: match[2]})
+	}
+	return errs
+}
+
+func TestRunnerGivesPlatformdNoFixedPort(t *testing.T) {
+	script, err := os.ReadFile(runnerScript)
+	if err != nil {
+		t.Fatalf("read the runner: %v", err)
+	}
+	for _, err := range checkRunnerPortsEphemeral(string(script)) {
+		t.Error(err)
+	}
+}
+
+func TestCheckRunnerPortsEphemeralRejectsALiteralPort(t *testing.T) {
+	cases := map[string]string{
+		"quoted":   "PLATFORMD_REST_PORT=\"8443\"\n",
+		"bare":     "  PLATFORMD_MCP_PORT=9445\n",
+		"exported": "export PLATFORMD_GRPC_PORT='10443'\n",
+		"ovsdb":    "    local OVSDB_TCP_PORT=6640\n",
+	}
+	for name, script := range cases {
+		t.Run(name, func(t *testing.T) {
+			errs := checkRunnerPortsEphemeral(script)
+			if len(errs) != 1 {
+				t.Fatalf("got %v, want one *fixedPortError", errs)
+			}
+			var fixed *fixedPortError
+			if !errors.As(errs[0], &fixed) {
+				t.Fatalf("got %v, want a *fixedPortError", errs[0])
+			}
+		})
+	}
+}
+
+func TestCheckRunnerPortsEphemeralAcceptsAChosenPort(t *testing.T) {
+	script := "PLATFORMD_REST_PORT=\"\"\n" +
+		"    PLATFORMD_REST_PORT=\"${port_list[0]}\"\n" +
+		"        --rest-port=\"${PLATFORMD_REST_PORT}\" \\\n"
+	if errs := checkRunnerPortsEphemeral(script); len(errs) != 0 {
+		t.Errorf("got %v, want none", errs)
 	}
 }

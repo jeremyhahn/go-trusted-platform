@@ -15,6 +15,8 @@ package ovs
 
 import (
 	"context"
+	"encoding/json"
+	"net"
 	"path/filepath"
 	"testing"
 	"time"
@@ -184,7 +186,7 @@ func TestClient_Disconnect(t *testing.T) {
 		err = client.Disconnect()
 		require.NoError(t, err)
 		assert.False(t, client.IsConnected())
-		assert.True(t, client.closed)
+		assert.True(t, client.closed.Load())
 	})
 
 	t.Run("disconnect already disconnected client", func(t *testing.T) {
@@ -208,6 +210,51 @@ func TestClient_Disconnect(t *testing.T) {
 		require.NoError(t, err)
 		assert.False(t, client.IsConnected())
 	})
+}
+
+// TestClient_Disconnect_DoesNotDeadlockAgainstAPendingCall (#1183): Disconnect
+// closes the socket under a call whose reply the dispatcher is still reading.
+// The read fails and the dispatcher marks the client disconnected; that must
+// not need c.mu, which Disconnect holds while it waits for the dispatcher.
+func TestClient_Disconnect_DoesNotDeadlockAgainstAPendingCall(t *testing.T) {
+	socketPath := filepath.Join(t.TempDir(), "db.sock")
+	listener, err := net.Listen("unix", socketPath)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = listener.Close() })
+
+	// The server reads one request and never replies to it.
+	received := make(chan net.Conn, 1)
+	go func() {
+		defer close(received)
+		conn, err := listener.Accept()
+		if err != nil {
+			return
+		}
+		var request map[string]interface{}
+		if err := json.NewDecoder(conn).Decode(&request); err != nil {
+			_ = conn.Close()
+			return
+		}
+		received <- conn
+	}()
+
+	client, err := NewClient(socketPath)
+	require.NoError(t, err)
+	require.NoError(t, client.Connect(context.Background()))
+
+	callErr := make(chan error, 1)
+	go func() {
+		_, err := client.Echo(context.Background(), []interface{}{"pending"})
+		callErr <- err
+	}()
+
+	serverConn, ok := <-received
+	require.True(t, ok, "the server never received the call")
+	t.Cleanup(func() { _ = serverConn.Close() })
+
+	require.NoError(t, client.Disconnect())
+	assert.False(t, client.IsConnected())
+	assert.Error(t, <-callErr, "the pending call must fail once the client disconnects")
 }
 
 func TestClient_ListDatabases(t *testing.T) {

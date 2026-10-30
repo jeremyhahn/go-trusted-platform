@@ -44,8 +44,11 @@ tell you which one you named wrong.
 Directly:
 
 ```bash
-platformctl vtpm create --bundle-id web-01-tpm --hostname web-01 --ek-algorithm ECC
+platformctl vtpm create --hostname web-01 --ek-algorithm ECC
 ```
+
+The daemon names the bundle `<hostname>-<unix-nanoseconds>` and the command
+prints that id. The examples below call it `web-01-tpm`.
 
 Or from a template, which is the better habit when you have a fleet:
 
@@ -75,8 +78,8 @@ platformctl vtpm stop       --bundle-id web-01-tpm
 ```
 
 A bundle can exist without running. **Every runtime operation on a stopped
-bundle fails**, usually with an unavailable/503 that names the swtpm socket —
-that is "not started", not "broken".
+bundle fails** with "vTPM not running" (409 on REST, `FailedPrecondition` on
+gRPC) — that is "not started", not "broken".
 
 ---
 
@@ -124,11 +127,11 @@ will record it.
 ## PCRs
 
 ```bash
-platformctl vtpm pcr read   --bundle-id web-01-tpm
-platformctl vtpm pcr extend --bundle-id web-01-tpm --data deadbeef
+platformctl vtpm pcr read   --bundle-id web-01-tpm --pcr-index 7
+platformctl vtpm pcr extend --bundle-id web-01-tpm --pcr-index 16 --data deadbeef
 ```
 
-`--data` on extend is **hex**.
+`--pcr-index` (0-23) is required on both. `--data` on extend is **hex**.
 
 ---
 
@@ -149,8 +152,12 @@ does not fit in a single message.
 
 ## Troubleshooting
 
-**A runtime operation returns unavailable and mentions the swtpm socket.**
-The daemon is not running for that bundle. `vtpm start --bundle-id ...`.
+**A runtime operation says the vTPM is not running.**
+The swtpm daemon is not running for that bundle. `vtpm start --bundle-id ...`.
+
+**Unavailable, naming the swtpm socket.**
+The platform's own `tpm:` setting names a swtpm socket that is not there. This
+is the node's TPM, not a bundle's.
 
 **"not a character device" or "not a Unix socket".**
 The configured TPM path is the wrong kind of thing — a hardware device path
@@ -193,8 +200,8 @@ where the short names take `name`. The full mapping is in [api.md](api.md) §5.
 ## Where to go next
 
 - [cli.md](cli.md) — every verb and flag
-- [api.md](api.md) — every capability on every transport (**no runtime
-  operation is on REST**)
+- [api.md](api.md) — every capability on every transport (six runtime
+  operations are QUIC-only)
 - [architecture.md](architecture.md) — templates, bundles, target resolution
 - [`docs/attestation/`](../attestation/) · [`docs/compute/`](../compute/) ·
   [`docs/tpm/`](../tpm/)

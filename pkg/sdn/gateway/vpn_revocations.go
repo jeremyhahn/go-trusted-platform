@@ -35,6 +35,11 @@ type RevocationJournal struct {
 	path string
 }
 
+// VPNRevocationJournalFile is the journal's file name in the vpn process's
+// state directory. The supervisor hands it to the vpn child's credentials
+// when an unsupervised gatewayd, running as root, left it behind.
+const VPNRevocationJournalFile = "pending-revocations.json"
+
 // NewRevocationJournal is the journal at path. The file and its directory
 // are created on the first write.
 func NewRevocationJournal(path string) *RevocationJournal {

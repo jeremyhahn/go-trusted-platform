@@ -5,7 +5,6 @@
  * Form for registering new devices
  */
 
-import { useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
@@ -20,26 +19,13 @@ import {
   FormMessage,
 } from '@/components/ui/form';
 import { Input } from '@/components/ui/input';
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select';
-import { Textarea } from '@/components/ui/textarea';
 import { useToast } from '@/hooks/use-toast';
 import { useDevice, useMutation } from '@/hooks';
-import type { RegisterDeviceInput } from '@/types/device';
 
+// The create contract stores the serial alone: a device has no display
+// name, type, description or operator-typed TPM details (#455).
 const deviceFormSchema = z.object({
-  name: z.string().min(1, 'Name is required').max(100),
-  type: z.enum(['physical', 'virtual']),
   serial: z.string().trim().min(1, 'Serial number is required'),
-  description: z.string().optional(),
-  tpmManufacturer: z.string().optional(),
-  tpmVersion: z.string().optional(),
-  tpmFirmwareVersion: z.string().optional(),
 });
 
 type DeviceFormValues = z.infer<typeof deviceFormSchema>;
@@ -56,28 +42,13 @@ export function DeviceForm({ onSuccess, onCancel }: DeviceFormProps) {
   const form = useForm<DeviceFormValues>({
     resolver: zodResolver(deviceFormSchema),
     defaultValues: {
-      name: '',
-      type: 'physical',
       serial: '',
-      description: '',
-      tpmManufacturer: '',
-      tpmVersion: '',
-      tpmFirmwareVersion: '',
     },
   });
 
   const registerMutation = useMutation(
     async (values: DeviceFormValues) => {
-      // Both REST listeners ignore every key here the device has no column for; manufacturer stands in for an absent model — #455, #484.
-      const requestData: any = {
-        device: {
-          serial: values.serial,
-          name: values.name,
-          // Add other device fields as needed
-        }
-      };
-
-      return await device.createDevice(requestData);
+      return await device.createDevice({ device: { serial: values.serial } });
     },
     {
       onSuccess: () => {
@@ -91,7 +62,7 @@ export function DeviceForm({ onSuccess, onCancel }: DeviceFormProps) {
       onError: (error) => {
         toast({
           title: 'Error',
-          description: error instanceof Error ? error.message : 'Failed to register device',
+          description: error.message || 'Failed to register device',
           variant: 'destructive',
         });
       },
@@ -105,48 +76,6 @@ export function DeviceForm({ onSuccess, onCancel }: DeviceFormProps) {
   return (
     <Form {...form}>
       <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-6">
-        <FormField
-          control={form.control}
-          name="name"
-          render={({ field }) => (
-            <FormItem>
-              <FormLabel>Device Name</FormLabel>
-              <FormControl>
-                <Input placeholder="my-device" {...field} />
-              </FormControl>
-              <FormDescription>
-                A unique name to identify this device
-              </FormDescription>
-              <FormMessage />
-            </FormItem>
-          )}
-        />
-
-        <FormField
-          control={form.control}
-          name="type"
-          render={({ field }) => (
-            <FormItem>
-              <FormLabel>Device Type</FormLabel>
-              <Select onValueChange={field.onChange} defaultValue={field.value}>
-                <FormControl>
-                  <SelectTrigger>
-                    <SelectValue placeholder="Select device type" />
-                  </SelectTrigger>
-                </FormControl>
-                <SelectContent>
-                  <SelectItem value="physical">Physical Device</SelectItem>
-                  <SelectItem value="virtual">Virtual Device</SelectItem>
-                </SelectContent>
-              </Select>
-              <FormDescription>
-                Physical hardware or virtual machine
-              </FormDescription>
-              <FormMessage />
-            </FormItem>
-          )}
-        />
-
         <FormField
           control={form.control}
           name="serial"
@@ -163,72 +92,6 @@ export function DeviceForm({ onSuccess, onCancel }: DeviceFormProps) {
             </FormItem>
           )}
         />
-
-        <FormField
-          control={form.control}
-          name="description"
-          render={({ field }) => (
-            <FormItem>
-              <FormLabel>Description (Optional)</FormLabel>
-              <FormControl>
-                <Textarea
-                  placeholder="Additional information about this device"
-                  className="resize-none"
-                  {...field}
-                />
-              </FormControl>
-              <FormMessage />
-            </FormItem>
-          )}
-        />
-
-        <div className="space-y-4 rounded-lg border border-border p-4">
-          <h3 className="text-sm font-medium">TPM Information (Optional)</h3>
-
-          <FormField
-            control={form.control}
-            name="tpmManufacturer"
-            render={({ field }) => (
-              <FormItem>
-                <FormLabel>TPM Manufacturer</FormLabel>
-                <FormControl>
-                  <Input placeholder="e.g., Infineon, STMicroelectronics" {...field} />
-                </FormControl>
-                <FormMessage />
-              </FormItem>
-            )}
-          />
-
-          <div className="grid grid-cols-2 gap-4">
-            <FormField
-              control={form.control}
-              name="tpmVersion"
-              render={({ field }) => (
-                <FormItem>
-                  <FormLabel>TPM Version</FormLabel>
-                  <FormControl>
-                    <Input placeholder="2.0" {...field} />
-                  </FormControl>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
-
-            <FormField
-              control={form.control}
-              name="tpmFirmwareVersion"
-              render={({ field }) => (
-                <FormItem>
-                  <FormLabel>Firmware Version</FormLabel>
-                  <FormControl>
-                    <Input placeholder="7.85" {...field} />
-                  </FormControl>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
-          </div>
-        </div>
 
         <div className="flex justify-end gap-4">
           {onCancel && (

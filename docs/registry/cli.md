@@ -13,12 +13,11 @@
 platformctl registry    Trusted Registry operations
 ```
 
-Seven verbs: `list`, `push`, `pull`, `inspect`, `delete`, `status`, and the
-group itself.
+Six verbs: `list`, `push`, `pull`, `inspect`, `delete` and `status`.
 
 ### Global flags
 
-These are `platformctl` persistent flags (`pkg/cli/commands/root.go:125`) and
+These are `platformctl` persistent flags (`pkg/cli/commands/root.go:135`) and
 apply to every verb below. Precedence is **flag > environment > config file >
 built-in default**.
 
@@ -36,7 +35,7 @@ built-in default**.
 **`-v` is always `--verbose`.** `registry pull --verify` has no short form.
 Prefer the long forms in scripts.
 
-**Which verbs work without a server.** All seven are client verbs: they need a
+**Which verbs work without a server.** All six are client verbs: they need a
 reachable `platformd` on the selected transport. `--transport embedded` runs the
 services in-process and is the only way to use them with no daemon listening.
 

@@ -32,6 +32,7 @@ import (
 	"github.com/vishvananda/netns"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/services/hostfw"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/testenv"
 )
 
 // The host filter is proven in two network namespaces the test creates
@@ -155,7 +156,7 @@ func TestHostFW_NetNS_OnlyDeclaredListenersAnswer(t *testing.T) {
 	defer ph.Close()
 
 	// veth pair: hfw0 stays in host, hfw1 moves to peer.
-	require.NoError(t, hh.LinkAdd(&netlink.Veth{LinkAttrs: netlink.LinkAttrs{Name: "hfw0"}, PeerName: "hfw1"}))
+	require.NoError(t, hh.LinkAdd(testenv.NewVeth("hfw0", "hfw1")))
 	peerLink, err := hh.LinkByName("hfw1")
 	require.NoError(t, err)
 	require.NoError(t, hh.LinkSetNsFd(peerLink, int(peerNS)))

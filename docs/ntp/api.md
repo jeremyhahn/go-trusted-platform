@@ -74,10 +74,13 @@ A client that hard-codes one shape breaks against the other. The comment in
 `pkg/api/rest/ntp_handlers.go` claiming both listeners *"emit byte-identical
 payloads"* is true of the marshalled message and not of the response body.
 
-When the backing server is nil, both answer **503**:
-`protorest.ErrServiceUnavailable{Service: "ntp"}` on the webservice side,
-`ErrNTPUnavailable{}` (`"ntp service is not configured on this node"`) on the
-daemon side.
+When the backing server is nil, the two listeners differ. The webservice's
+`ntpRoutes` (`pkg/webservice/v1/router.go`) does not mount the routes at all,
+so the webservice answers **404**; `restntp.NTPRouter` itself would answer 503
+with `protorest.ErrServiceUnavailable{Service: "ntp"}`, but only a router built
+around a nil server reaches that branch. The daemon listener mounts the routes
+regardless and answers **503** with `ErrNTPUnavailable{}`
+(`"ntp service is not configured on this node"`).
 
 ## 3. Capabilities
 

@@ -40,7 +40,7 @@ into a policy directory.
 
 ---
 
-## The six built-in policies
+## The seven built-in policies
 
 | File name | Rego package | Decides |
 |---|---|---|
@@ -50,6 +50,7 @@ into a policy directory.
 | `image.rego` | `attestation.image` | Whether an image may be admitted |
 | `quote.rego` | `attestation.quote` | Whether a TPM quote is acceptable |
 | `proxy_authz.rego` | `proxy.authz` | Whether a proxied request is authorized |
+| `vpn_posture.rego` | `vpn.posture` | Whether a remote-access VPN client's posture is acceptable; tenants replace it through the posture-policy API ([`docs/vpn/`](../vpn/)) |
 
 The **file name** (without `.rego`) is the policy's name — what a route's
 `auth.opa-policy` refers to. The **Rego package** determines where the engine
@@ -191,11 +192,12 @@ rebuild.
 
 ## One thing to be aware of
 
-`pkg/security/ratelimit` and `pkg/security/validation` are complete,
-well-tested libraries — and **nothing in the platform calls them**. Do not
-assume the platform rate-limits an endpoint or sanitizes an input because those
-packages exist. Whatever protection a given surface has, it has for its own
-reasons. [architecture.md](architecture.md) §3.
+`pkg/security/validation` is a complete, well-tested library — and **nothing
+in the platform calls it**. Do not assume the platform sanitizes an input
+because the package exists. `pkg/security/ratelimit` *is* in use: every
+webservice listener applies a per-source token bucket from its `rate-limit:`
+block (`requests-per-second`, `burst`; `0` disables it), and `POST /init` has
+its own attempt budget. [architecture.md](architecture.md) §3.
 
 The deleted legacy `README.md` also documented a `pkg/security/audit`
 package with an async audit logger and HTTP/gRPC middleware. **That package does

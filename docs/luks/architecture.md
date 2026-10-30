@@ -106,6 +106,7 @@ over whichever transport is active.
 ## 6. Expected change
 
 The platform pins go-luks2 `v0.2.0-alpha`. A move to go-luks2
-`v1.0.0-rc.2` is expected; it changes the library API this backend calls and
+`v1.0.0-rc.4` is expected (held in `go.mod`: it lifts go-enclave under the
+SDK stack); it changes the library API this backend calls and
 will land together with an update to this folder. Everything here describes
 `v0.2.0-alpha`.

@@ -99,9 +99,10 @@ property: the guest never participates in creating its own identity.
 - **It does not verify quotes against policy.** It produces them; attestation
   verifies them.
 - **It does not create VMs.** Compute does, and attaches the socket.
-- **It does not expose runtime operations over REST.** Start, stop, quote, seal
-  and PCR access are absent from REST entirely — recorded as a gap in
-  [api.md](api.md) §4, not a decision.
+- **It does not expose every runtime operation on every transport.** Get
+  state, verify quote, get EK, get AK, create AK and get random are QUIC-only —
+  recorded as a gap in [api.md](api.md) §4, not a decision. Start, stop,
+  quote, seal, unseal and PCR access are on every transport.
 
 ## Overview
 
@@ -161,7 +162,7 @@ parallel surface was **collapsed into `VTPMService`**:
 │       │   └── swtpm.sock        # Runtime socket (when running; see below)
 │       ├── ovmf/
 │       │   └── OVMF_VARS.fd      # UEFI NVRAM
-│       └── secureboot/           # If Secure Boot enabled
+│       └── secure-boot-keys/     # If Secure Boot enabled
 │           ├── PK.key            # Platform Key
 │           ├── PK.crt
 │           ├── KEK.key           # Key Exchange Key
@@ -174,7 +175,7 @@ parallel surface was **collapsed into `VTPMService`**:
         │   └── tpm2-00.permall
         ├── ovmf/
         │   └── OVMF_VARS.fd
-        └── secureboot/
+        └── secure-boot-keys/
             └── ...
 ```
 
@@ -383,7 +384,7 @@ bundle-{id}.vtpm.tar.gz
 │   └── tpm2-00.permall
 ├── ovmf/
 │   └── OVMF_VARS.fd
-└── secureboot/           # If Secure Boot enabled
+└── secure-boot-keys/     # If Secure Boot enabled
     ├── PK.key
     ├── PK.crt
     ├── KEK.key
@@ -397,7 +398,7 @@ bundle-{id}.vtpm.tar.gz
 ```json
 {
   "version": "1.0",
-  "id": "f47ac10b-58cc-4372-a567-0e02b2c3d479",
+  "id": "vm001.example.com-1736937000000000000",
   "mode": "pre-assigned",
   "hostname": "vm001.example.com",
   "created_at": "2025-01-15T10:30:00Z",
@@ -420,8 +421,8 @@ bundle-{id}.vtpm.tar.gz
     "owner_guid": "a0b1c2d3-e4f5-6789-abcd-ef0123456789"
   },
   "checksums": {
-    "tpm2-00.permall": "e3b0c44298fc1c149afbf4c8996fb924...",
-    "OVMF_VARS.fd": "b94d27b9934d3e08a52e52d7da7dabfa..."
+    "tpm/tpm2-00.permall": "e3b0c44298fc1c149afbf4c8996fb924...",
+    "ovmf/OVMF_VARS.fd": "b94d27b9934d3e08a52e52d7da7dabfa..."
   },
   "labels": {
     "environment": "production"

@@ -96,7 +96,7 @@ func createNSEndpoint(t *testing.T, bridge, ns, cidr string, vlan int, extraRout
 	})
 
 	runCmd(t, "ip", "netns", "add", ns)
-	runCmd(t, "ip", "link", "add", hostIf, "type", "veth", "peer", "name", peerIf)
+	runCmd(t, "ip", testenv.VethArgs(hostIf, peerIf)...)
 	runCmd(t, "ip", "link", "set", peerIf, "netns", ns)
 	runCmd(t, "ovs-vsctl", "add-port", bridge, hostIf)
 	runCmd(t, "ip", "link", "set", hostIf, "up")

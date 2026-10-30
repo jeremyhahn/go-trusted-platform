@@ -5,14 +5,14 @@
 
 ## Overview
 
-The Distributed Hash Table (DHT) service exposes its functionality via multiple protocols for maximum interoperability. All protocols provide feature parity, allowing clients to choose the transport best suited to their use case. Whether integrating from a web browser, building high-performance microservices, or developing AI agents, the DHT API provides consistent semantics across all access methods.
+**Design sketch: nothing on this page is served** (see [api.md](api.md) §4). The Distributed Hash Table (DHT) service is designed to expose its functionality via multiple protocols for maximum interoperability. The design calls for feature parity across all protocols, allowing clients to choose the transport best suited to their use case. Whether integrating from a web browser, building high-performance microservices, or developing AI agents, the DHT API provides consistent semantics across all access methods.
 
 ## Supported Protocols
 
 | Protocol | Transport | Port | Use Case |
 |----------|-----------|------|----------|
 | REST | HTTP/HTTPS | 8443 | Web clients, browser extensions, external systems |
-| gRPC | TCP | 9443 | High-performance service-to-service communication |
+| gRPC | TCP | 10443 | High-performance service-to-service communication |
 | QUIC | UDP | 9444 | Low-latency, mobile clients, P2P transport |
 | MCP | stdio/HTTPS | 9445 | AI/LLM integration, agent collaboration |
 | Unix | Unix Socket | /run/platformd.sock | Local IPC, CLI tools |

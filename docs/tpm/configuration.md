@@ -1,6 +1,6 @@
 # TPM Configuration
 
-> **Status: REFERENCE** · Last verified: 2026-10-15
+> **Status: REFERENCE** · Last verified: 2026-10-27
 > The `tpm:` configuration section and its flags.
 
 This document describes the configuration options for the TPM 2.0 integration in go-trusted-platform.
@@ -21,7 +21,7 @@ resolved by a single platform-wide resolver (`vtpm.ResolveTPMTarget`):
 | Configuration | Target | Failure mode |
 |---------------|--------|--------------|
 | `device: /dev/tpmrm0` (or `/dev/tpm0`) | Real hardware TPM character device | `ErrHardwareTPMUnavailable` if the device is absent — never silently downgrades to a software TPM |
-| `device: /path/to/swtpm.sock` | swtpm software TPM over a Unix socket | `ErrSwtpmSocketUnavailable` if the socket is absent — never silently opens a hardware device |
+| `device: /path/to/swtpm.sock` (any path ending in `.sock`) | swtpm software TPM over a Unix socket; any other path is treated as a hardware device | `ErrSwtpmSocketUnavailable` if the socket is absent — never silently opens a hardware device |
 | `device: auto` (or empty) | Runtime detection: swtpm socket, then `/dev/tpmrm0`, then `/dev/tpm0` | `ErrNoTPMDetected` when nothing is found |
 | `simulator: true` | In-process TPM simulator (development only) | Takes precedence over `device` |
 
@@ -52,16 +52,14 @@ tpm:
   # Endorsement Key (EK) - manufacturer-certified identity key
   ek:
     handle: 0x81010001
-    hash: SHA-256
     rsa:
-      size: 2048
+      keysize: 2048
 
   # Shared Storage Root Key (SSRK) - protects storage hierarchy
   ssrk:
     handle: 0x81000001
-    platform-policy: false
     rsa:
-      size: 2048
+      keysize: 2048
 
   # Initial Attestation Key (IAK) - for remote attestation
   iak:
@@ -69,18 +67,18 @@ tpm:
     hash: SHA-256
     signature-algorithm: SHA256-RSA
     rsa:
-      size: 2048
+      keysize: 2048
 
   # Initial Device ID (IDevID) - device identity certificate
   idevid:
     handle: 0x81020000
     cert-handle: 0x01C90000   # currently IGNORED - see "Certificate handles" below
-    model: edge
-    serial: device-serial-001
+    model: control-plane
+    serial: tp-cp-01
     hash: SHA-256
     signature-algorithm: SHA256-RSA
     rsa:
-      size: 2048
+      keysize: 2048
 ```
 
 #### Certificate handles
@@ -153,16 +151,14 @@ tpm:
   # Endorsement Key (EK) - manufacturer-certified identity key
   ek:
     handle: 0x81010001
-    hash: SHA-256
     rsa:
-      size: 2048
+      keysize: 2048
 
   # Shared Storage Root Key (SSRK) - protects storage hierarchy
   ssrk:
     handle: 0x81000001
-    platform-policy: false
     rsa:
-      size: 2048
+      keysize: 2048
 
   # Initial Attestation Key (IAK) - for remote attestation
   iak:
@@ -170,18 +166,18 @@ tpm:
     hash: SHA-256
     signature-algorithm: SHA256-RSA
     rsa:
-      size: 2048
+      keysize: 2048
 
   # Initial Device ID (IDevID) - device identity certificate
   idevid:
     handle: 0x81020000
     cert-handle: 0x01C90000   # currently IGNORED - see "Certificate handles" below
-    model: edge
-    serial: device-serial-001
+    model: control-plane
+    serial: tp-cp-01
     hash: SHA-256
     signature-algorithm: SHA256-RSA
     rsa:
-      size: 2048
+      keysize: 2048
 
   # PCR configuration
   platform-pcr: 23
@@ -194,6 +190,35 @@ tpm:
     srk-auth: "kms://tpm/platform-srk/srk-auth?ensure=true&len=32&enc=raw"
     platform-policy: true
 ```
+
+## Key Reference
+
+Every key the `tpm:` section reads (`xkmssdk.TPMConfig`, re-exported from
+go-xkms `pkg/tpm2`). A key not in this list is ignored without a warning.
+
+| Key | Type | Notes |
+|-----|------|-------|
+| `device` | string | See "Basic TPM Configuration" |
+| `simulator` | bool | In-process simulator; wins over `device` |
+| `encrypt-sessions` | bool | Encrypt TPM command sessions |
+| `entropy` | bool | Use the TPM as an entropy source |
+| `hash` | string | Default hash algorithm, e.g. `SHA-256` |
+| `lockout-auth` | string | Lockout hierarchy authorization |
+| `identity-provisioning` | string | go-xkms setting; no shipped template sets it |
+| `file-integrity` | list of strings | go-xkms setting; the first-boot, boot-command and VPN-agent TPM openers clear it |
+| `golden-pcrs` | list of ints | PCRs bound by the platform policy |
+| `platform-pcr` | int | PCR extended with platform measurements |
+| `platform-pcr-bank` | string | PCR bank of `platform-pcr`, e.g. `sha256` |
+| `command-address`, `platform-address`, `device-string` | string | go-xkms transport settings; no shipped template sets them |
+| `ek.*`, `ssrk.*`, `iak.*`, `idevid.*` | object | Common keys: `handle`, `cn`, `debug`, `password`, `algorithm`, `rsa.keysize`, `ecc.curve` |
+| `ek.cert-handle`, `ek.hierarchy-auth`, `ek.platform-policy` | uint32 / string / bool | EK only |
+| `ssrk.hierarchy-auth` | string | Owner hierarchy authorization (SSRK only) |
+| `iak.cert-handle`, `iak.hash`, `iak.signature-algorithm`, `iak.platform-policy` | | IAK only; `cert-handle` is ignored (below) |
+| `idevid.cert-handle`, `idevid.hash`, `idevid.signature-algorithm`, `idevid.platform-policy`, `idevid.manufacturer`, `idevid.model`, `idevid.serial`, `idevid.version`, `idevid.pad` | | IDevID only; `cert-handle` is ignored (below) |
+| `platform-srk.srk-handle`, `platform-srk.srk-auth`, `platform-srk.platform-policy`, `platform-srk.cn` | | Platform SRK |
+
+The RSA key size key is `rsa.keysize`, not `rsa.size`, and `ek` and `ssrk` have
+no `hash` or (for `ssrk`) `platform-policy` key.
 
 ## Command-Line Flags
 
@@ -301,31 +326,38 @@ From `pkg/cli/commands/tpm/`.
 tpm:
   # A socket path selects swtpm; simulator: true would take precedence
   simulator: false
-  device: /tmp/swtpm-sock
+  device: /tmp/swtpm/swtpm.sock   # must end in .sock to select swtpm
 ```
 
 swtpm itself is started outside the platform; there is no `tpm.swtpm` key.
+The platform connects to the swtpm **server** (command) socket.
 
 ### Starting swtpm
 
 ```bash
 # Create state directory
-mkdir -p /var/lib/swtpm
+mkdir -p /tmp/swtpm
 
-# Start swtpm
+# Start swtpm (as build/docker/devcontainer/entrypoint.sh does)
 swtpm socket \
-  --tpmstate dir=/var/lib/swtpm \
-  --ctrl type=unixio,path=/tmp/swtpm-sock \
+  --tpmstate dir=/tmp/swtpm \
+  --server type=unixio,path=/tmp/swtpm/swtpm.sock \
+  --ctrl type=unixio,path=/tmp/swtpm/swtpm.sock.ctrl \
   --tpm2 \
   --log level=3
 ```
 
 ### QEMU Integration
 
+A guest's vTPM uses its own swtpm instance, started with `--ctrl` only:
+
 ```bash
+# swtpm for the guest (control channel only; QEMU passes the data channel)
+swtpm socket --tpmstate dir=/tmp/vm-tpm --ctrl type=unixio,path=/tmp/vm-tpm/swtpm-sock --tpm2
+
 # Start QEMU with vTPM
 qemu-system-x86_64 \
-  -chardev socket,id=chrtpm,path=/tmp/swtpm-sock \
+  -chardev socket,id=chrtpm,path=/tmp/vm-tpm/swtpm-sock \
   -tpmdev emulator,id=tpm0,chardev=chrtpm \
   -device tpm-tis,tpmdev=tpm0 \
   ...

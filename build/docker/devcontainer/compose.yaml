@@ -37,7 +37,8 @@
 #     runner host.
 #
 # integration is DELIBERATELY NOT hardened (devcontainer.md §3 departs here):
-#   privileged, root, a writable root filesystem and the default network. The
+#   privileged, root, a writable root filesystem and the default network (its
+#   memory is still bounded, by mem_limit = memswap_limit). The
 #   suites start Open vSwitch (kernel datapath, netlink, tap devices), swtpm,
 #   qemu guests and dnsmasq, attach loopback-backed LUKS2 volumes with
 #   cryptsetup, and bind platformd's REST, gRPC, QUIC and MCP listeners
@@ -87,6 +88,14 @@ services:
       - /workspace/build/docker/devcontainer/run-integration-tests.sh
     init: true
     privileged: true
+    # The Makefile's IT_MEMORY, swap included (so no swap): unbounded, the
+    # CI legs reached 12.9 GB and swapped the shared runner host (#1178).
+    mem_limit: ${GO_TRUSTED_PLATFORM_IT_MEMORY:-16g}
+    memswap_limit: ${GO_TRUSTED_PLATFORM_IT_MEMORY:-16g}
+    # The Makefile's CI_CGROUP_PARENT: under ci.slice the runner host bounds
+    # every CI container together (#1178). Set empty, the container takes
+    # Docker's default parent.
+    cgroup_parent: ${CI_CGROUP_PARENT-ci.slice}
     devices:
       - /dev/net/tun:/dev/net/tun
     tmpfs:

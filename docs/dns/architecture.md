@@ -37,13 +37,13 @@ fixed in the DNS code.
 | **Hand-maintained zone files** | Zone content is derived from platform state — device registrations, network zones, service endpoints. A hand-maintained file drifts from the state it is supposed to describe, silently. |
 | **Writing a DNS server from scratch** | CoreDNS already handles the protocol correctly. What the platform adds is authority over content and key custody, not wire-format parsing. |
 | **A single fixed DNSSEC key store** | Key custody is a deployment decision — hardware KMS in one environment, software in another. The key store is an interface with three implementations for that reason. (One of them has a defect: [engineering.md](engineering.md) §3.1.) |
-| **An open record-type set** | Records are constructed by type-specific constructors and parsed by type-specific cases. An open set means a type that can be written and not read. Thirteen types, closed, with `ErrRecordTypeNotSupported` for the rest. |
+| **An open record-type set** | Records are constructed by type-specific constructors and parsed by type-specific cases. An open set means a type that can be written and not read. The set is closed: `RecordType` has 16 values (`platform_dns.proto:49`), nine of them writable through the API (`recordKindOrder`, `pkg/dns/record_kinds.go:43`: A, AAAA, CNAME, MX, NS, TXT, SRV, CAA, TLSA). SOA and the DNSSEC types are written only by zone creation and signing (`ErrRecordTypeNotWritable`); anything else is `ErrRecordTypeNotSupported`. |
 
 ## Component boundaries
 
 | Piece | Package | Owner |
 |---|---|---|
-| Service façade, zones, records | `pkg/dns/service.go`, `dao/`, `entities/` | this repo |
+| Service façade, zones, records | `pkg/dns/service.go`, `dao/` (the `ZoneDAO` interface only), `entities/` | this repo |
 | Resolver and forwarding | `pkg/dns/resolver.go` | this repo |
 | DNSSEC signing and status | `pkg/dns/dnssec.go` | this repo |
 | DNSSEC key stores | `pkg/dns/dnssec_keystore*.go` | this repo — **backed by the stack's KMS** |
@@ -81,8 +81,7 @@ The §R capability row is *"Authoritative DNS / DNSSEC"*, Tier 1, reached throug
 - **It does not translate packets.** DNS64 synthesises the AAAA answers that
   send an IPv6-only client at a NAT64 translator; the translator itself is the
   gateway's, and this half is useless without it.
-- **It has no CLI.** That is a gap ([cli.md](cli.md)), and a document in this
-  folder describing one is fenced as never-implemented.
+- Its CLI is `platformctl dns` ([cli.md](cli.md)), a client of the same API.
 
 ## System Overview
 
@@ -100,8 +99,8 @@ The §R capability row is *"Authoritative DNS / DNSSEC"*, Tier 1, reached throug
 │  │  │    DNS      │  │  Trusted    │  │    Zone     │  │   Query   │ │  │
 │  │  │   Service   │  │  Platform   │  │     DAO     │  │   Parser  │ │  │
 │  │  │             │  │   Plugin    │  │             │  │           │ │  │
-│  │  │ - Register  │  │ - ServeDNS  │  │ - kvstore   │  │ - Validate│ │  │
-│  │  │ - Zones     │  │ - Security  │  │ - objstore  │  │ - Parse RR│ │  │
+│  │  │ - Register  │  │ - ServeDNS  │  │ - GetByName │  │ - Validate│ │  │
+│  │  │ - Zones     │  │ - Security  │  │ - quicbaas  │  │ - Parse RR│ │  │
 │  │  │ - Resolver  │  │ - Logging   │  │ - CRUD      │  │ - RFC 1035│ │  │
 │  │  └─────────────┘  └─────────────┘  └─────────────┘  └───────────┘ │  │
 │  │                                                                   │  │
@@ -137,8 +136,8 @@ The §R capability row is *"Authoritative DNS / DNSSEC"*, Tier 1, reached throug
 │  │                     Datastore (dns/zones)                         │  │
 │  │                                                                   │  │
 │  │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐  ┌───────────┐ │  │
-│  │  │   kvstore   │  │  objstore   │  │    JSON     │  │  Memory   │ │  │
-│  │  │   (LOCAL)   │  │  (Objects)  │  │  Serializer │  │  Backend  │ │  │
+│  │  │   ZoneDAO   │  │  quicbaas   │  │    JSON     │  │  Memory   │ │  │
+│  │  │   (iface)   │  │  (storage)  │  │  Serializer │  │  Backend  │ │  │
 │  │  └─────────────┘  └─────────────┘  └─────────────┘  └───────────┘ │  │
 │  └───────────────────────────────────────────────────────────────────┘  │
 │                                                                         │
@@ -170,17 +169,11 @@ The TrustedPlatformPlugin (`pkg/dns/plugin.go`) integrates with CoreDNS as a cus
 
 ### Zone DAO
 
-Zone Data Access Object provides persistence abstraction:
-
-| Backend | Package | Storage Type |
-|---------|---------|--------------|
-| kvstore | `pkg/dns/dao/kvstore` | Key-value storage |
-| objstore | `pkg/dns/dao/objstore` | Object storage |
-
-Both backends support:
-- Generic CRUD operations via `datastore.GenericDAO`
-- Zone lookup by name via `GetByName`
-- Pagination support
+`pkg/dns/dao` declares only the `ZoneDAO` interface (`dao/types.go:23`):
+`datastore.GenericDAO[*entities.Zone]` plus `GetByName`. There is one
+implementation, the quicbaas-backed `ZoneDAO` in `pkg/storage/quicbaas`, which
+`Datastore.ZoneDAO` returns (`pkg/dns/datastore.go:39`). There is no kvstore or
+objstore backend.
 
 ### Parser
 
@@ -271,24 +264,29 @@ The DNS service implements tenant-based zone isolation to support multi-tenant d
 |---------|-------------|
 | Automatic TenantID Assignment | New zones inherit TenantID from the DNS service |
 | Ownership Verification | All zone operations check tenant ownership |
-| DNSSEC Key Isolation | Keys stored in tenant-scoped paths: `dnssec/{tenant}/{zone}/{key}` |
+| DNSSEC Key Isolation | Key IDs are tenant-scoped: `dnssec_{tenantID}_{zoneName}_{keyType}` (`pkg/dns/dnssec_keystore.go:105`) |
 | Audit Logging | Unauthorized access attempts logged with full context |
 
 ### RecordSet
 
 ```go
 type RecordSet struct {
-    ARecords      []*ARecord      // IPv4 address records
-    AAAARecords   []*AAAARecord   // IPv6 address records
-    CNAMERecords  []*CNAMERecord  // Canonical name records
-    DNSKEYRecords []*DNSKEYRecord // DNSSEC public keys
-    DSRecords     []*DSRecord     // Delegation signer records
-    MXRecords     []*MXRecord     // Mail exchange records
-    NSRecords     []*NSRecord     // Name server records
-    RRSIGRecords  []*RRSIGRecord  // Resource record signatures
-    SOARecord     SOARecord       // Start of authority
-    SRVRecords    []*SRVRecord    // Service records
-    TXTRecords    []*TXTRecord    // Text records
+    ARecords          []*ARecord          // IPv4 address records
+    AAAARecords       []*AAAARecord       // IPv6 address records
+    CAARecords        []*CAARecord        // Certification authority authorization
+    CNAMERecords      []*CNAMERecord      // Canonical name records
+    DNSKEYRecords     []*DNSKEYRecord     // DNSSEC public keys
+    DSRecords         []*DSRecord         // Delegation signer records
+    MXRecords         []*MXRecord         // Mail exchange records
+    NSECRecords       []*NSECRecord       // Authenticated denial (NSEC)
+    NSEC3Records      []*NSEC3Record      // Authenticated denial (NSEC3)
+    NSEC3PARAMRecords []*NSEC3PARAMRecord // NSEC3 parameters
+    NSRecords         []*NSRecord         // Name server records
+    RRSIGRecords      []*RRSIGRecord      // Resource record signatures
+    SOARecord         SOARecord           // Start of authority
+    SRVRecords        []*SRVRecord        // Service records
+    TLSARecords       []*TLSARecord       // DANE certificate association
+    TXTRecords        []*TXTRecord        // Text records
 }
 ```
 
@@ -299,6 +297,9 @@ type RecordSet struct {
 | DNSKEY | Zone signing public key |
 | DS | Delegation signer for chain of trust |
 | RRSIG | Signature over resource record sets |
+| NSEC | Authenticated denial of existence |
+| NSEC3 | Hashed authenticated denial of existence |
+| NSEC3PARAM | NSEC3 hash parameters for the zone |
 
 ### Datastore Partition
 
@@ -401,11 +402,11 @@ Client                  CoreDNS                TrustedPlatformPlugin        Zone
    |<----------------------|<-------------------------|                        |
 ```
 
-## DNSSEC Architecture (Planned)
+## DNSSEC Architecture
 
 ### DNSSECService
 
-Future DNSSEC implementation will provide:
+`DNSSECService` (`pkg/dns/dnssec.go`) implements:
 
 - Zone signing with KSK and ZSK
 - NSEC/NSEC3 authenticated denial of existence
@@ -539,10 +540,10 @@ SecurityLogEntry{
 
 ### ABAC Integration
 
-Future authorization integration:
+Zones are already tenant-scoped: the service refuses a zone another tenant
+owns (`IsOwnedBy`, `pkg/dns/service.go:174`). Still to come:
 
 - Policy-based zone access control
-- Tenant-scoped DNS zones
 - Fine-grained record permissions
 - Audit logging for all operations
 

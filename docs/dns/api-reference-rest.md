@@ -89,7 +89,13 @@ A `Zone` is `id`, `name`, `ttl`, `description`, `internal` and `records`, a
 `RecordSet`: `soa` plus one list per type (`aRecords`, `aaaaRecords`,
 `cnameRecords`, `mxRecords`, `nsRecords`, `txtRecords`, `srvRecords`,
 `caaRecords`, `tlsaRecords`, `dnskeyRecords`, `dsRecords`, `rrsigRecords`,
-`nsecRecords`, `nsec3Records`, `nsec3paramRecords`).
+`nsecRecords`, `nsec3Records`, `nsec3paramRecords`). An unset message field
+(`records`, `soa`) is `null`. The zone carries no timestamps.
+
+The web console reads these messages typed as the SDK's `Zone`,
+`ListZonesResponse` and `GetZoneResponse` (`web/src/lib/dns-wire.ts`); until
+#445 it read them untyped, accepting both the lowercase per-type keys the old
+REST document used (`a`, `mx`, `soa`) and the camelCase ones.
 
 ### ListZones
 

@@ -15,7 +15,7 @@ how to select a transport.
 | `ca init` | Initialize a Certificate Authority. |
 | `ca info` | Display CA configuration, key store status, and trust chain. |
 | `ca issue` | Issue a new x509 certificate. |
-| `ca certificate` | Retrieve a single certificate by serial or common name. |
+| `ca certificate` | Retrieve a single certificate by serial number. |
 | `ca list` | List issued certificates with status filtering and pagination. |
 | `ca verify` | Verify a certificate file against the CA chain (and optionally the CRL). |
 | `ca renew` | Renew an existing certificate, optionally preserving SANs. |
@@ -30,8 +30,7 @@ how to select a transport.
 ## ca bundle
 
 `ca bundle` is the single, consolidated command for retrieving the CA
-trust bundle as concatenated PEM. It replaces the deprecated
-`ca export-bundle` command, which has been removed.
+trust bundle as concatenated PEM.
 
 ```
 platformctl ca bundle [--output <path>] [--intermediates]
@@ -59,24 +58,9 @@ platformctl ca bundle --intermediates=false --output root.pem
 ```
 
 When `--output` is set, the command also prints a short success summary
-and the certificate count (or, when `--output json|yaml` is selected as
-the global format, a structured response).
-
-### Migration from `ca export-bundle`
-
-The old `ca export-bundle` command had a required `--output` flag and a
-duplicated implementation. It has been deleted. Migrate as follows:
-
-```bash
-# Old
-platformctl ca export-bundle --output /etc/ssl/platform-ca.pem
-
-# New (equivalent behavior)
-platformctl ca bundle --output /etc/ssl/platform-ca.pem
-```
-
-The new `ca bundle` command additionally supports stdout output, which
-the old `export-bundle` did not.
+and the certificate count. The local `--output`/`-o` is a file path and
+shadows the global `--output`/`-o` format flag, so `--output json|yaml`
+cannot be selected on `ca bundle`.
 
 ## ca info
 
@@ -102,11 +86,11 @@ status and issuer. Pagination is performed via `--page` / `--page-size`.
 ## ca certificate
 
 ```
-platformctl ca certificate <serial-or-cn> [--pem]
+platformctl ca certificate <serial> [--pem]
 ```
 
-Retrieves a single certificate by either serial number (hex) or common
-name. Pass `--pem` to include the PEM blob in the JSON/YAML output.
+Retrieves a single certificate by serial number (hex). There is no
+common-name lookup. Pass `--pem` to include the PEM blob in the JSON/YAML output.
 
 ## ca verify
 
@@ -128,6 +112,3 @@ note for consumers of `ca bundle`:
 | `ErrCANotInitialized` | The CA has not been initialized; run `ca init` first. |
 | `ErrCABundleFailed` | The bundle could not be retrieved or written. The wrapped reason explains the underlying failure. |
 | `ErrBundleEmpty` | The CA returned a zero-length bundle (likely a misconfigured CA). |
-
-(`ErrExportBundleFailed` was renamed to `ErrCABundleFailed` when
-`export-bundle` was consolidated into `bundle`.)

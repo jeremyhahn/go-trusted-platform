@@ -210,10 +210,6 @@ type ServiceConfig struct {
 
 ```
 ┌─────────────────┐
-│    Creating     │  Container being created
-└────────┬────────┘
-         │
-┌────────▼────────┐
 │     Created     │  Container exists, not running
 └────────┬────────┘
          │ Start()
@@ -226,9 +222,13 @@ type ServiceConfig struct {
 └────────┬────────┘
          │ Remove()
 ┌────────▼────────┐
-│     Removed     │  Container deleted
+│    Removing     │  Container being deleted
 └─────────────────┘
 ```
+
+`ContainerState` (`pkg/compute/container/orchestrator.go`) also has `paused`,
+`restarting`, `exited` and `dead`. A removed container has no state: it is
+gone.
 
 ### Lifecycle Flow
 

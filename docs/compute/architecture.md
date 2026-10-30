@@ -156,6 +156,7 @@ vTPM provisioning and 802.1X-style network access control.
 │   ┌───────▼───────┐       │  stopping     │                             │
 │   │    swtpm      │       │  error        │                             │
 │   │    (vTPM)     │       │  deleting     │                             │
+│   │               │       │  suspended    │                             │
 │   │               │       └───────────────┘                             │
 │   │  • State dir  │                                                     │
 │   │  • Socket     │                                                     │
@@ -193,14 +194,15 @@ Internal representation of a running VM instance.
 
 ```go
 type qemuInstance struct {
-    instance        *Instance
-    swtpm           *swtpm.SWTPM
-    cmd             *exec.Cmd
-    ovsNetwork      *ovsNetwork
-    mu              sync.Mutex
-    cancelFunc      context.CancelFunc
-    waitGroup       sync.WaitGroup
-    networkAttached bool
+    vm                *qemu.VM
+    instance          *Instance
+    ovsNetwork        *qemu.OVSNetwork
+    swtpm             tpmEmulator // *swtpm.SWTPM by default
+    mu                sync.Mutex
+    run               *qemuRun    // cancel func and done channel of the running QEMU
+    networkAttached   bool
+    primaryPortName   string
+    primaryBridgeName string
 }
 ```
 
@@ -210,8 +212,9 @@ Manages instance state transitions with validation.
 
 ```go
 type LifecycleManager struct {
-    mu     sync.RWMutex
-    states map[string]InstanceState
+    mu         sync.RWMutex
+    states     map[string]InstanceState
+    timestamps map[string]time.Time
 }
 ```
 
@@ -221,9 +224,12 @@ unknown    ──▶ creating, error
 creating   ──▶ stopped, error
 stopped    ──▶ starting, deleting, error
 starting   ──▶ running, error
-running    ──▶ stopping, error
+running    ──▶ stopping, suspended, error
+suspended  ──▶ running, stopping, error
 stopping   ──▶ stopped, error
 ```
+
+`error` and `deleting` are terminal.
 
 ## QEMU Integration
 
@@ -240,7 +246,7 @@ via the go-qemu library (github.com/digitalocean/go-qemu).
 │  │  QEMUOrchestrator │                    │   QEMU Process    │         │
 │  │                   │                    │                   │         │
 │  │  ┌─────────────┐  │   Unix Socket      │  ┌─────────────┐  │         │
-│  │  │  QMPMonitor │◄─┼────────────────────┼─►│ QMP Server  │  │         │
+│  │  │ qemu.Monitor│◄─┼────────────────────┼─►│ QMP Server  │  │         │
 │  │  │             │  │  JSON-RPC 2.0      │  │             │  │         │
 │  │  │  • Status   │  │                    │  │ • Commands  │  │         │
 │  │  │  • Shutdown │  │                    │  │ • Events    │  │         │
@@ -365,12 +371,14 @@ Delete VM ──▶ Cleanup swtpm ──▶ Remove TPM State
 ### TPM Configuration
 
 ```go
-type TPMConfig struct {
-    StateDir   string  // {workDir}/tpm/
-    SocketPath string  // {workDir}/tpm/swtpm.sock
-    LogPath    string  // {workDir}/tpm/swtpm.log
-    Version    string  // TPM 2.0
-    PCRBanks   string  // SHA-256
+// pkg/swtpm
+type Config struct {
+    StateDir   string   // TPM state directory
+    SocketPath string   // Socket path for QEMU connection
+    PCRBanks   []string // PCR banks (e.g., ["sha256"])
+    LogLevel   int      // Log level (default: 20)
+    Debug      bool     // Enable debug mode
+    QEMUMode   bool     // Use --ctrl socket for QEMU
 }
 ```
 
@@ -442,7 +450,7 @@ afresh instead of binding in the removed directory.
 │                   │     │                   │     │                   │
 └───────────────────┘     └───────────────────┘     └───────────────────┘
          │                        │                        │
-         │                        │ OnEnrollment           │
+         │                        │ OnEnrollmentComplete   │
          │                        ▼                        │
          │                ┌───────┴───────┐                │
          │                │   Enrolled    │                │
@@ -565,9 +573,9 @@ var (
     ErrNetworkDetachmentFailed  = errors.New("network detachment failed")
     ErrOrchestratorNotInitialized = errors.New("orchestrator not initialized")
     ErrUnsupportedOperation     = errors.New("unsupported operation")
-    ErrInvalidState             = errors.New("invalid state transition")
-    ErrTimeout                  = errors.New("operation timed out")
-    ErrResourceExhausted        = errors.New("resource limit reached")
+    ErrInvalidState             = errors.New("invalid instance state")
+    ErrTimeout                  = errors.New("operation timeout")
+    ErrResourceExhausted        = errors.New("resource exhausted")
     ErrVMExitedDuringStart      = errors.New("QEMU exited during start")
     ErrMonitorNotReady          = errors.New("QMP monitor not ready")
 )
@@ -576,26 +584,21 @@ var (
 ### Rollback on Failure
 
 ```go
-// Example: Start with rollback
-func (o *QEMUOrchestrator) Start(ctx context.Context, id string) error {
-    // Start swtpm
-    if err := inst.swtpm.Start(ctx); err != nil {
-        return err
-    }
-
-    // Wait for socket
-    if err := waitForSocket(inst.swtpm.SocketPath()); err != nil {
-        inst.swtpm.Stop() // Rollback
-        return err
-    }
-
-    // Start QEMU
-    if err := startQEMU(inst); err != nil {
-        inst.swtpm.Stop() // Rollback
-        return err
-    }
-
-    return nil
+// Abridged from QEMUOrchestrator.Start (pkg/compute/qemu.go)
+if err := qemuInst.swtpm.Start(ctx); err != nil {
+    o.lifecycle.SetState(instanceID, StateError)
+    return &WrappedError{Msg: "failed to start swtpm", Err: err}
+}
+if err := qemuInst.swtpm.WaitForSocket(5 * time.Second); err != nil {
+    qemuInst.swtpm.Stop() // Rollback
+    o.lifecycle.SetState(instanceID, StateError)
+    return &WrappedError{Msg: "swtpm socket not ready", Err: err}
+}
+if err := qemuInst.vm.Start(vmCtx, bootMode); err != nil {
+    cancel()
+    qemuInst.swtpm.Stop() // Rollback
+    o.lifecycle.SetState(instanceID, StateError)
+    return &WrappedError{Msg: "failed to start VM", Err: err}
 }
 ```
 
@@ -714,7 +717,7 @@ which wraps the rich container `Orchestrator` engine behind the platform-wide
 `VerifyImage`) for API-layer capability assertions. Container workload
 attestation uses `container.HostTPMProvider`, an adapter from the go-xkms SDK
 `TrustedPlatformModule` (the host TPM, `App.TPM`) to the
-`container.TPMProvider` interface (PCR 14 extend, SHA-256 bank reads,
+`orchestration.HostTPM` interface (PCR 14 extend, SHA-256 bank reads,
 IAK-signed quotes, quote signature verification).
 
 VM RPCs (snapshots, vTPM attestation) reach the daemon through the same
@@ -725,7 +728,7 @@ typed capability-not-supported errors unless a `QEMUOrchestrator` is wired.
 ```go
 type ContainerOrchestrator interface {
     // Lifecycle
-    Create(ctx context.Context, spec *ContainerSpec) (*Container, error)
+    Create(ctx context.Context, spec *OrchestratorContainerSpec) (*Container, error)
     Start(ctx context.Context, id string) error
     Stop(ctx context.Context, id string, timeout time.Duration) error
     Remove(ctx context.Context, id string, force bool) error
@@ -733,13 +736,20 @@ type ContainerOrchestrator interface {
     // Status
     Get(ctx context.Context, id string) (*Container, error)
     List(ctx context.Context, opts ListOptions) ([]*Container, error)
+    Logs(ctx context.Context, id string, opts LogOptions) (io.ReadCloser, error)
 
     // Attestation
     Attest(ctx context.Context, id string) (*AttestationReport, error)
     VerifyAttestation(ctx context.Context, id string, evidence []byte) error
 
     // Policy
-    EvaluatePolicy(ctx context.Context, spec *ContainerSpec) (*PolicyDecision, error)
+    EvaluatePolicy(ctx context.Context, spec *OrchestratorContainerSpec) (*PolicyDecision, error)
+
+    // Images
+    PullImage(ctx context.Context, ref string, opts PullOptions) error
+    VerifyImage(ctx context.Context, ref string) (*ImageVerification, error)
+
+    Close() error
 }
 ```
 

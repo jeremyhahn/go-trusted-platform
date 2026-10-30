@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -755,8 +756,10 @@ func (h *KMSHandlers) handleRotateKey(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req KMSRotateKeyRequest
-	if r.Body != nil && r.ContentLength > 0 {
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	// ContentLength is -1 on a chunked request; an empty body decodes to
+	// io.EOF and means the request carried no options.
+	if r.Body != nil && r.ContentLength != 0 {
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
 			h.writeError(w, http.StatusBadRequest, ErrKMSRequestBodyInvalid{Reason: err.Error()})
 			return
 		}

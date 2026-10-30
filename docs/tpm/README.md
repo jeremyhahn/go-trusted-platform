@@ -1,6 +1,6 @@
 # TPM2 Module
 
-> **Status: REFERENCE** · Last verified: 2026-10-15
+> **Status: REFERENCE** · Last verified: 2026-10-27
 > Overview of the TPM 2.0 integration. The API contract is [api.md](api.md).
 
 The Trusted Platform Module (TPM) 2.0 integration provides hardware-backed security
@@ -140,8 +140,9 @@ The TPM key hierarchy follows TCG recommended guidance:
 
 ## Configuration
 
-TPM configuration is specified in the platform configuration file (as shipped in
-`configs/platform/templates/single-node/default.yaml`):
+TPM configuration is specified in the platform configuration file (the shipped
+block is in `configs/platform/templates/single-node/default.yaml`; the keys below
+are the ones the TPM configuration actually reads):
 
 ```yaml
 tpm:
@@ -154,16 +155,14 @@ tpm:
   # Endorsement Key (EK) - manufacturer-certified identity key
   ek:
     handle: 0x81010001
-    hash: SHA-256
     rsa:
-      size: 2048
+      keysize: 2048
 
   # Shared Storage Root Key (SSRK) - protects storage hierarchy
   ssrk:
     handle: 0x81000001
-    platform-policy: false
     rsa:
-      size: 2048
+      keysize: 2048
 
   # Initial Attestation Key (IAK) - for remote attestation
   iak:
@@ -171,18 +170,18 @@ tpm:
     hash: SHA-256
     signature-algorithm: SHA256-RSA
     rsa:
-      size: 2048
+      keysize: 2048
 
   # Initial Device ID (IDevID) - device identity certificate
   idevid:
     handle: 0x81020000
     cert-handle: 0x01C90000   # currently IGNORED (see configuration.md)
-    model: edge
-    serial: device-serial-001
+    model: control-plane
+    serial: tp-cp-01
     hash: SHA-256
     signature-algorithm: SHA256-RSA
     rsa:
-      size: 2048
+      keysize: 2048
 
   # PCR configuration
   platform-pcr: 23              # PCR for platform measurements

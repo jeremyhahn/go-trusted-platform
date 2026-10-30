@@ -373,3 +373,119 @@ func TestExtractAndCopyErrorPaths(t *testing.T) {
 		t.Errorf("findAPK with a bad pattern error = %v", err)
 	}
 }
+
+// TestStageBootFirmwareIntoStepFailures asserts that each staging step that
+// can fail reports itself: the step name or the offending package, so a
+// failed image build points at the input that broke it.
+func TestStageBootFirmwareIntoStepFailures(t *testing.T) {
+	tgt, err := New("rpi4")
+	if err != nil {
+		t.Fatal(err)
+	}
+	kernelAPK := "linux-rpi-6.12.85-r0.apk"
+
+	cases := []struct {
+		name  string
+		setup func(t *testing.T) (dest, prefetch string, art uboot.Artifacts)
+		check func(t *testing.T, prefetch string, err error)
+	}{
+		{
+			name: "staging directory under a regular file",
+			setup: func(t *testing.T) (string, string, uboot.Artifacts) {
+				file := filepath.Join(t.TempDir(), "file")
+				if err := os.WriteFile(file, nil, 0o644); err != nil {
+					t.Fatal(err)
+				}
+				return filepath.Join(file, "boot-firmware"), prefetchDir(t), ubootArtifacts(t)
+			},
+			check: wantStep("clearing the boot-firmware staging directory"),
+		},
+		{
+			name: "U-Boot binary is a directory",
+			setup: func(t *testing.T) (string, string, uboot.Artifacts) {
+				art := ubootArtifacts(t)
+				art.Binary = art.OverlaysDir
+				return filepath.Join(t.TempDir(), "boot-firmware"), prefetchDir(t), art
+			},
+			check: wantStep("staging U-Boot as kernel8.img"),
+		},
+		{
+			name: "U-Boot build without the TPM overlay",
+			setup: func(t *testing.T) (string, string, uboot.Artifacts) {
+				art := ubootArtifacts(t)
+				if err := os.Remove(filepath.Join(art.OverlaysDir, "tpm-soft-spi.dtbo")); err != nil {
+					t.Fatal(err)
+				}
+				return filepath.Join(t.TempDir(), "boot-firmware"), prefetchDir(t), art
+			},
+			check: wantStep("staging the TPM overlay"),
+		},
+		{
+			name: "kernel package not prefetched",
+			setup: func(t *testing.T) (string, string, uboot.Artifacts) {
+				prefetch := prefetchDir(t)
+				if err := os.Remove(filepath.Join(prefetch, kernelAPK)); err != nil {
+					t.Fatal(err)
+				}
+				return filepath.Join(t.TempDir(), "boot-firmware"), prefetch, ubootArtifacts(t)
+			},
+			check: func(t *testing.T, _ string, err error) {
+				var missing *PackageMissingError
+				if !errors.As(err, &missing) || missing.Package != KernelPackage {
+					t.Errorf("error = %v, want PackageMissingError for %s", err, KernelPackage)
+				}
+			},
+		},
+		{
+			name: "corrupt kernel package",
+			setup: func(t *testing.T) (string, string, uboot.Artifacts) {
+				prefetch := prefetchDir(t)
+				if err := os.WriteFile(filepath.Join(prefetch, kernelAPK), []byte("not gzip"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+				return filepath.Join(t.TempDir(), "boot-firmware"), prefetch, ubootArtifacts(t)
+			},
+			check: func(t *testing.T, prefetch string, err error) {
+				var pkgErr *PackageError
+				if !errors.As(err, &pkgErr) || pkgErr.Package != filepath.Join(prefetch, kernelAPK) {
+					t.Errorf("error = %v, want PackageError for the kernel apk", err)
+				}
+			},
+		},
+		{
+			name: "bootloader package occupies config.txt",
+			setup: func(t *testing.T) (string, string, uboot.Artifacts) {
+				prefetch := prefetchDir(t)
+				writeAPK(t, filepath.Join(prefetch, "raspberrypi-bootloader-1.20260619-r0.apk"), map[string]string{
+					"boot/start4.elf": "start4", "boot/fixup4.dat": "fixup4", "boot/config.txt/stale": "x",
+				})
+				return filepath.Join(t.TempDir(), "boot-firmware"), prefetch, ubootArtifacts(t)
+			},
+			check: wantStep("writing config.txt"),
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dest, prefetch, art := tc.setup(t)
+			err := tgt.StageBootFirmwareInto(context.Background(), dest, prefetch, art)
+			if err == nil {
+				t.Fatal("StageBootFirmwareInto succeeded")
+			}
+			tc.check(t, prefetch, err)
+		})
+	}
+}
+
+// wantStep returns a check that the error is a StageError for step.
+func wantStep(step string) func(t *testing.T, prefetch string, err error) {
+	return func(t *testing.T, _ string, err error) {
+		t.Helper()
+		var stage *StageError
+		if !errors.As(err, &stage) || stage.Step != step {
+			t.Errorf("error = %v, want StageError for %q", err, step)
+		}
+		if stage != nil && stage.Err == nil {
+			t.Errorf("StageError for %q carries no cause", step)
+		}
+	}
+}

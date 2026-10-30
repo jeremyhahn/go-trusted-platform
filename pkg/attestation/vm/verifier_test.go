@@ -14,13 +14,17 @@
 package vm
 
 import (
+	"bytes"
 	"context"
 	"crypto"
+	"crypto/ecdsa"
+	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/sha256"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/pem"
 	"errors"
 	"log/slog"
 	"math/big"
@@ -895,51 +899,107 @@ func TestVMVerifier_Close(t *testing.T) {
 }
 
 func TestParsePublicKey(t *testing.T) {
-	t.Run("DER format", func(t *testing.T) {
-		privKey, _ := rsa.GenerateKey(rand.Reader, 2048)
-		pubKeyBytes, _ := x509.MarshalPKIXPublicKey(&privKey.PublicKey)
+	privKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("GenerateKey: %v", err)
+	}
+	pkixDER, err := x509.MarshalPKIXPublicKey(&privKey.PublicKey)
+	if err != nil {
+		t.Fatalf("MarshalPKIXPublicKey: %v", err)
+	}
 
-		pubKey, err := parsePublicKey(pubKeyBytes)
-		if err != nil {
-			t.Errorf("parsePublicKey() unexpected error: %v", err)
-		}
-		if pubKey == nil {
-			t.Error("Expected non-nil public key")
-		}
-	})
+	tests := []struct {
+		name string
+		data []byte
+	}{
+		{name: "PKIX DER", data: pkixDER},
+		{name: "PKIX PEM", data: pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: pkixDER})},
+		{name: "PKCS#1 DER", data: x509.MarshalPKCS1PublicKey(&privKey.PublicKey)},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			pubKey, err := parsePublicKey(tt.data)
+			if err != nil {
+				t.Fatalf("parsePublicKey() unexpected error: %v", err)
+			}
+			rsaKey, ok := pubKey.(*rsa.PublicKey)
+			if !ok || !rsaKey.Equal(&privKey.PublicKey) {
+				t.Errorf("parsePublicKey() = %T, want the generated RSA public key", pubKey)
+			}
+		})
+	}
 
-	t.Run("invalid data", func(t *testing.T) {
-		_, err := parsePublicKey([]byte{0x00, 0x01, 0x02})
-		if err == nil {
-			t.Error("Expected error for invalid data")
-		}
-	})
+	refusals := []struct {
+		name string
+		data []byte
+	}{
+		{name: "garbage", data: []byte{0x00, 0x01, 0x02}},
+		{name: "PEM with a non-key body", data: pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: []byte{0x30, 0x00}})},
+	}
+	for _, tt := range refusals {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := parsePublicKey(tt.data)
+			var sigErr ErrSignatureInvalid
+			if !errors.As(err, &sigErr) {
+				t.Fatalf("want ErrSignatureInvalid, got %v", err)
+			}
+		})
+	}
 }
 
 func TestParseEKCertificate(t *testing.T) {
-	t.Run("DER format", func(t *testing.T) {
-		privKey, _ := rsa.GenerateKey(rand.Reader, 2048)
-		template := x509.Certificate{
-			SerialNumber: big.NewInt(1),
-			Subject:      pkix.Name{CommonName: "Test"},
-			NotBefore:    time.Now(),
-			NotAfter:     time.Now().Add(time.Hour),
-		}
-		certBytes, _ := x509.CreateCertificate(rand.Reader, &template, &template, &privKey.PublicKey, privKey)
+	privKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("GenerateKey: %v", err)
+	}
+	template := x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject:      pkix.Name{CommonName: "vm:vm-1@host:host-1"},
+		NotBefore:    time.Now(),
+		NotAfter:     time.Now().Add(time.Hour),
+	}
+	certDER, err := x509.CreateCertificate(rand.Reader, &template, &template, &privKey.PublicKey, privKey)
+	if err != nil {
+		t.Fatalf("CreateCertificate: %v", err)
+	}
 
-		cert, err := parseEKCertificate(certBytes)
-		if err != nil {
-			t.Errorf("parseEKCertificate() unexpected error: %v", err)
-		}
-		if cert == nil {
-			t.Error("Expected non-nil certificate")
-		}
-	})
+	tests := []struct {
+		name string
+		data []byte
+	}{
+		{name: "DER", data: certDER},
+		{name: "PEM", data: pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certDER})},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cert, err := parseEKCertificate(tt.data)
+			if err != nil {
+				t.Fatalf("parseEKCertificate() unexpected error: %v", err)
+			}
+			if !bytes.Equal(cert.Raw, certDER) {
+				t.Error("parseEKCertificate() returned a different certificate")
+			}
+		})
+	}
 
-	t.Run("invalid data", func(t *testing.T) {
-		_, err := parseEKCertificate([]byte{0x00, 0x01, 0x02})
-		if err == nil {
-			t.Error("Expected error for invalid data")
-		}
-	})
+	refusals := []struct {
+		name string
+		data []byte
+	}{
+		{name: "garbage", data: []byte{0x00, 0x01, 0x02}},
+		{name: "PEM of another type", data: pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: certDER})},
+		{name: "PEM certificate with a corrupt body", data: pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certDER[:len(certDER)/2]})},
+	}
+	for _, tt := range refusals {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := parseEKCertificate(tt.data)
+			var ekErr ErrEKCertificateInvalid
+			if !errors.As(err, &ekErr) {
+				t.Fatalf("want ErrEKCertificateInvalid, got %v", err)
+			}
+			if ekErr.Cause == nil {
+				t.Error("ErrEKCertificateInvalid should carry the x509 parse cause")
+			}
+		})
+	}
 }

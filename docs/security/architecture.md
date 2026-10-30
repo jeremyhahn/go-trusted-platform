@@ -61,7 +61,7 @@ release.
   and the platform default is `deny` (`config.DefaultPolicyAction ==
   DefaultActionDeny`).
 
-Six embedded policies:
+Seven embedded policies:
 
 | File / policy name | Rego package | Subject |
 |---|---|---|
@@ -71,6 +71,7 @@ Six embedded policies:
 | `image.rego` | `attestation.image` | Image admission |
 | `quote.rego` | `attestation.quote` | TPM quote acceptance |
 | `proxy_authz.rego` | `proxy.authz` | Edge-proxy request evidence (zone, attestation, method) — not access |
+| `vpn_posture.rego` | `vpn.posture` | Remote-access VPN client posture (Secure Boot, IMA, FDE, attestation verdict); a tenant may replace it through the posture-policy API ([`docs/vpn/engineering.md`](../vpn/engineering.md) §4) |
 
 **OPA answers evidence questions; it never answers access questions.** "May
 this principal perform this action on this resource" is the IAM decision, made
@@ -95,7 +96,7 @@ its `required-scopes` (#926).
 
 ---
 
-## 3. `pkg/security` — primitives with no callers
+## 3. `pkg/security` — `ratelimit` is wired, `validation` is not
 
 ### What they are
 
@@ -105,25 +106,28 @@ with `Allow` / `AllowN` / `Wait` / `WaitN` / `Reset` / `ResetAll` / `Close` and
 two implementations. `validation` offers a `Validator` interface, a
 `ValidationResult` accumulator, nine concrete validators, and three sanitizers.
 
-### What they are not
+### Where they are used
 
-**They are not wired into anything.** Grepping the repository for
-`go-trusted-platform/pkg/security/` on 2026-08-18 returns no non-test importer —
-the only matches are coverage-log lines. No transport applies a rate limit from
-this package. No handler sanitizes input with it.
+**`ratelimit` has three production importers**, all using
+`TokenBucketLimiter`:
 
-That is worth stating plainly rather than implying coverage the platform does
-not have:
+- `pkg/webservice` — every listener gets a per-source token bucket from its
+  `rate-limit: {requests-per-second, burst}` block (`pkg/webservice/v1/config.go`,
+  `RateLimitConfig`), applied by `rateLimitMiddleware` before any handler
+  (`webserver_v1.go`, #571). An edge listener with no `rate-limit` block gets
+  `EdgeRateLimitBurst` / `EdgeRateLimitPerSecond` (`edge.go`). A zero
+  `requests-per-second` disables the limiter.
+- `pkg/api/daemon/initonly.go` builds the `POST /init` attempt budget
+  (`newInitLimiter`) and hands it to `pkg/api/rest/init_handlers.go`
+  (`InitHandlersConfig.InitLimiter`), which refuses an over-budget caller
+  before the barrier is touched.
 
-- **There is no rate limiting on the platform's API surfaces from this
-  package.** Whatever rate limiting exists is elsewhere or absent. A brute-force
-  attempt against, say, EAB KeyIDs is not throttled by `pkg/security/ratelimit`.
-- **There is no input sanitization applied from this package.** Handlers
-  validate what they validate individually.
+`SlidingWindowLimiter` has no production caller.
 
-The packages are honest, tested building blocks awaiting a decision about where
-they belong. Documenting them as if they were deployed would be worse than
-documenting the gap.
+**`validation` is not wired into anything.** No non-test file imports
+`go-trusted-platform/pkg/security/validation`; no handler sanitizes input with
+it. Handlers validate what they validate individually. The package is an
+honest, tested building block awaiting a decision about where it belongs.
 
 ### Alternatives rejected
 
@@ -141,13 +145,14 @@ documenting the gap.
 
 | Piece | Location | Owner |
 |---|---|---|
-| `Limiter` interface, `TokenBucketLimiter`, `SlidingWindowLimiter` | `pkg/security/ratelimit/` | this repo — **unused** |
+| `Limiter` interface, `TokenBucketLimiter`, `SlidingWindowLimiter` | `pkg/security/ratelimit/` | this repo — token bucket used by `pkg/webservice` and the `/init` budget (§3) |
 | `Validator`, `ValidationResult`, nine validators | `pkg/security/validation/validators.go` | this repo — **unused** |
 | `Sanitizer`, `PathSanitizer`, `SQLSanitizer` | `pkg/security/validation/sanitize.go` | this repo — **unused** |
 | `PolicyEngine` / `PolicyWatcher` interfaces, `OPAEngine`, `FileWatcher`, `WatchedEngine` | `pkg/policy/opa/` | this repo |
-| Six embedded Rego policies | `pkg/policy/opa/policies/*.rego` | this repo |
+| Seven embedded Rego policies | `pkg/policy/opa/policies/*.rego` | this repo |
 | `PolicyConfig` (`engine`, `policy-dir`, `default-action`) | `pkg/config/attestation.go` | this repo |
-| `OPAEvaluator`, `OPAConfig` — the one production consumer | `pkg/sdn/gateway/proxysvc/opa.go` | this repo — [`docs/proxy/`](../proxy/) |
+| `OPAEvaluator`, `OPAConfig` — the proxy consumer | `pkg/sdn/gateway/proxysvc/opa.go` | this repo — [`docs/proxy/`](../proxy/) |
+| `CompilePosturePolicy` — the VPN posture consumer, one isolated engine per tenant policy | `pkg/sdn/gateway/services/vpn/tenant_posture.go` | this repo — [`docs/vpn/`](../vpn/) |
 | `proxy.PolicyEvaluator` — the seam that keeps `pkg/proxy` free of the OPA runtime | `pkg/proxy/policy.go` | this repo |
 | **The OPA runtime** (`github.com/open-policy-agent/opa/v1`) | third party | **not this repo** |
 | **The RBAC decision point** | go-qrdb, via go-quicbaas | **not this repo** — [`docs/iam/`](../iam/) |
@@ -317,8 +322,8 @@ Nothing. Policies live in the binary and on disk; the engine's store is
   exists; `proxysvc` loads once at startup.
 - **It does not expose any API.** No REST route, no gRPC service, no QUIC
   opcode, no MCP tool, no CLI verb. [api.md](api.md), [cli.md](cli.md).
-- **It does not rate-limit or sanitize anything**, because nothing imports
-  those packages. §3.
+- **It does not sanitize anything**, because nothing imports
+  `pkg/security/validation`. §3.
 
 ---
 
@@ -335,14 +340,14 @@ Recorded per `conventions/feature-docs.md` §7 — the code wins.
 | `validation.ValidateEmail(email)` | deleted legacy `docs/security/README.md` | No such function. The email surface is `NewEmailValidator(field string) *EmailValidator` implementing `Validator`. |
 | `safe := validation.SanitizePath(input)` (single return) | deleted legacy `docs/security/README.md` | `SanitizePath(path string) (string, error)` returns two values. There is also a method form, `(*PathSanitizer).SanitizePath(input string) (string, error)`. |
 | Coverage "Rate limiting 82%+, Audit 69%+, Validation 86%+" | deleted legacy `docs/security/README.md` | Current build log: ratelimit 95.6%, validation 98.7%, `pkg/policy/opa` 92.1%. Audit is not measured because it does not exist. |
-| The README does not mention `pkg/policy/opa` at all | deleted legacy `docs/security/README.md` | It is the only part of this section with a production consumer. |
+| The README does not mention `pkg/policy/opa` at all | deleted legacy `docs/security/README.md` | It has two production consumers, the proxy and the VPN posture check. `ratelimit` is also in production use (§3). |
 
 ---
 
 ## 9. Related
 
 - [engineering.md](engineering.md) · [cli.md](cli.md) · [api.md](api.md) · [user.md](user.md)
-- [`docs/proxy/`](../proxy/) — the one production consumer of the OPA engine
+- [`docs/proxy/`](../proxy/) and [`docs/vpn/`](../vpn/) — the production consumers of the OPA engine
 - [`docs/attestation/`](../attestation/) — the evidence the attestation policies evaluate
 - [`docs/auth/`](../auth/) · [`docs/iam/`](../iam/) — authentication and authorization
 - [`docs/sdn/`](../sdn/) — port authentication, a different engine

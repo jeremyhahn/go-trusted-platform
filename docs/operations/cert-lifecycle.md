@@ -18,7 +18,10 @@ intervene when the automatic flow needs a nudge.
    `app.CertTargets`.
 4. A single scheduler job `platform.cert-renewal.<nodeID>` fires
    daily at 02:00 (configurable), sweeps the registry, and
-   re-issues anything within 30 days of expiry (configurable).
+   re-issues anything within 30 days of expiry (configurable). It is
+   registered only on the embedded deployment; a node backed by a remote
+   go-quicbaas schedules no renewal (#1173, see
+   [Where the renewal job runs](#where-the-renewal-job-runs)).
 5. The job is pinned to its owning node via `NodeAffinity` so
    a 3-node cluster renews each node's own certs independently.
 
@@ -57,7 +60,8 @@ Cluster scheduling).
 
 ## Boot wiring
 
-`App.InitCertManagement` is called from **both** platformd boot paths in
+`App.InitCertManagement` is called, through `initCertManagement`
+(`pkg/daemon/commands/cert_renewal_wiring.go`), from **both** platformd boot paths in
 `pkg/daemon/commands/serve.go` — `runWithWebservices` and `runDaemonOnly`. A node
 with a `bmc:` block but no `webservices` takes the daemon-only path, and its BMC
 certificate still needs renewing.
@@ -222,17 +226,72 @@ entirely silent.
 
 Updating the stored job in place needs the scheduler's `UpdateJob`, whose
 `JobUpdateParams` type is not re-exported through `go-quicbaas/sdk/go`, and the
-platform may only import `sdk/go`. Filed upstream. The operator workaround is to
-delete the job so it is recreated from current configuration.
+platform may only import `sdk/go`. Filed upstream. There is no operator
+workaround on any deployment: the `platformctl scheduler` commands cannot reach
+this job (see below).
+
+## Where the renewal job runs
+
+Automatic renewal does not go through the SDK. `initCertManagement`
+(`pkg/daemon/commands/cert_renewal_wiring.go`) asks
+`App.CertManagementScheduler()` (`pkg/app/bmc_cert_init.go`) for the scheduler
+engine of the **in-process** go-quicbaas service, and `RegisterCertRenewal`
+registers both the handler and the job on that engine. The sweep therefore runs
+only on the default embedded deployment.
+
+⚠️ **A node backed by a remote go-quicbaas renews nothing.** On a remote
+transport the storage client holds no in-process service: `Client.Service()`
+(`pkg/storage/quicbaas/client.go`) returns nil, because the remote `Start` sets
+only the SDK client. `CertManagementScheduler()` then returns nil, and boot logs
+`certificate renewal NOT scheduled: no scheduler engine available` and returns
+before registering either the job or its handler. Every managed certificate on
+that node runs to expiry. This is issue #1173, blocked on go-quicbaas#1951: a
+remote scheduler client cannot register a job handler. There is no
+`platform.cert-renewal.<nodeID>` job for the remote scheduler to list, trigger,
+pause or update.
+
+On the embedded deployment the job exists, but the `platformctl scheduler`
+commands cannot reach it. They take a different path:
+`appservices.SchedulerService` (`pkg/appservices/scheduler.go`) calls the
+go-quicbaas SDK's Scheduler group. The pinned SDK, `sdk/go` v0.12.0-alpha, has no
+scheduler handlers in its embedded transport (`transport/embedded`), so `list`,
+`trigger`, `history`, `pause`, `resume`, `update` and `delete` fail with the
+transport's `UnknownMethodError`.
+
+**A restart does not renew early either.** On boot, a webservice whose
+certificate the CA already holds is loaded with `app.CA.PEM` and jumps to
+`certLoaded` without reading its expiry (`initWebServiceKeyAttributes`,
+`pkg/app/app.go`). A BMC is reissued at boot only when its certificate is
+unreadable, or does not chain to the configured issuer or match the configured
+identity (`bmcNeedsInitialProvisioning`, `pkg/app/bmc_cert_init.go`, applying the
+target's due rule in `pkg/app/bmc_cert.go`); being inside the renewal threshold
+does not trigger it. Registering the job does not run the sweep. A restarted
+node keeps serving a near-expiry certificate until the next scheduled sweep.
+
+So, today, on either deployment:
+
+- **Renew now:** there is no way. On an embedded node the next 02:00 sweep
+  renews every certificate inside its threshold; on a remote-backed node
+  nothing does (#1173).
+- **Pause renewals:** there is none. On an embedded node the job stays on the
+  in-process engine for the life of the process.
 
 ## Operator workflows
 
 ### Trigger an immediate renewal (no wait for the cron tick)
 
-The scheduler CLI commands (`platformctl schedule list`,
-`platformctl schedule trigger`, `platformctl schedule history`)
-are planned but not yet implemented. Monitor renewal outcomes
-via the platformd logs until the scheduler CLI is available.
+Not available on any deployment today
+([Where the renewal job runs](#where-the-renewal-job-runs)): the embedded
+transport has no scheduler handlers, and a remote-backed node registers no
+renewal job (#1173). Once the embedded handlers land, the workflow is to find the
+node's job by its name, `platform.cert-renewal.<nodeID>`, run it outside its
+schedule and read the result:
+
+```bash
+platformctl scheduler list
+platformctl scheduler trigger <job-id>
+platformctl scheduler history <job-id> -o json
+```
 
 The handler's JSON payload (in `JobResult.Output`) lists per-target
 outcomes:
@@ -247,9 +306,14 @@ outcomes:
 
 ### Pause renewals on a specific node (maintenance)
 
-Not yet exposed via CLI. Each node's renewal job is identified by
-its nodeID in the scheduler. Pausing and resuming will be available
-once the scheduler CLI is implemented.
+Each node's renewal job carries its nodeID in its name. There is no way to pause
+it yet: the embedded transport rejects the scheduler CLI, and a remote-backed
+node has no job to pause (#1173). Once the embedded handlers land:
+
+```bash
+platformctl scheduler pause <job-id>
+platformctl scheduler resume <job-id>
+```
 
 ### Force a specific cert to renew (bypass threshold)
 
@@ -260,8 +324,8 @@ in the registry (future: `platformctl cert target renew <name>`).
 For BMC certs specifically:
 
 ```bash
-# Explicit platformctl bmc cert replace bypasses the registry /
-# scheduler and just runs the issuance flow once.
+# platformctl bmc cert replace uploads the given certificate and key
+# to the BMC directly; it bypasses the registry, the scheduler and ACME.
 platformctl bmc cert replace \
     --profile-id <id> \
     --cert <path> --key <path>
@@ -269,13 +333,25 @@ platformctl bmc cert replace \
 
 ### Rotate all certs on a node
 
-Kill the platformd process -- on next boot `InitWebServer` +
-`InitCertManagement` re-issue every managed cert from scratch.
-Existing certs with time remaining aren't touched, but any near-
-expiry certs will be renewed.
+There is no procedure for this today. Restarting platformd does **not** renew
+near-expiry webservice or BMC certificates: boot reuses every such certificate
+the CA already holds, and reissues a BMC certificate only when it is unreadable
+or does not match the configured issuer and identity
+([Where the renewal job runs](#where-the-renewal-job-runs)). Otherwise boot
+issues a certificate only where none exists. Early renewal waits on the scheduler CLI
+reaching the job on the embedded deployment; a remote-backed node does not renew
+at all (#1173).
 
-Not a routine procedure. Prefer triggering the renewal job once
-the scheduler CLI is available.
+The exception is the daemon's own TLS server identity. At every start
+`provisionDaemonIdentity` (`pkg/daemon/commands/provision_identity.go:98`)
+reuses the held certificate only while `daemonServerCertCurrent`
+(`provision_identity.go:392`) finds it outside the 30-day `renewalThreshold`
+(`pkg/daemon/commands/serve.go:1807`), still covering the required SANs and
+chaining to the CA; otherwise `daemonServerIdentity` (`provision_identity.go:198`)
+issues a new one into the other slot and retires the old slot
+(`TestProvisionDaemonIdentity_RenewsNearExpiryIntoTheOtherSlot`,
+`pkg/daemon/commands/provision_identity_test.go:537`). A restart inside that
+window therefore renews the daemon TLS certificate.
 
 ## Troubleshooting
 
@@ -306,12 +382,16 @@ Operator intervention required for catastrophic case.
 
 Inspect the JSON payload for per-target errors. Common causes:
 
-- ACME rate limit hit -- wait, then trigger manually
+- ACME rate limit hit -- the next daily sweep retries (a manual trigger is not
+  available yet; see [Where the renewal job runs](#where-the-renewal-job-runs))
 - BMC unreachable -- network issue; next tick will retry
 - Local CA unavailable -- platform CA service not ready; check
   `platformctl ca info`
 
 ### Renewal job exists but never fires
+
+On a remote-backed node the job never exists: look for
+`certificate renewal NOT scheduled` in the boot log (#1173). On an embedded node:
 
 - Check `allow_cgi_fallback` if BMCs are involved
 - Check that `NodeAffinity` matches the node's current ID

@@ -14,8 +14,8 @@ commands that build or install a system, plus three `make` controls.
 | Control | Effect | Where |
 |---|---|---|
 | `WITH_FIPS=1` | Adds the `fips` build tag to every `make` build and test target | `Makefile:94`, `:293-295` |
-| `make -s print-build-tags [WITH_FIPS=1]` | Prints the assembled tag list; use it for any `go` command that `make` does not wrap | `Makefile:673-680` |
-| `make test-fips` | Builds `./...`, then runs `make test`, both tagged `fips` under `GOFIPS140=latest GODEBUG=fips140=only` | `Makefile:1365-1382` |
+| `make -s print-build-tags [WITH_FIPS=1]` | Prints the assembled tag list; use it for any `go` command that `make` does not wrap | `Makefile:674-681` |
+| `make test-fips` | Builds `./...`, then runs `make test`, both tagged `fips` under `GOFIPS140=latest GODEBUG=fips140=only`. The unit-test output also goes to `$(FIPS_LOG)`; when `make test` fails, the verdict is `scripts/foreignfailures -job fips`, which passes only if every failure is a listed panic of `$(FIPS_FOREIGN_BASELINE)` (`.github/foreign-failures-fips.tsv`) and the other tests of each panicked package pass when rerun by name (ruling 125, [the FIPS baseline](../test/integration.md#the-fips-baseline)). So the target's exit status is not simply that of `make test` | `Makefile:1366-1402` |
 
 ```sh
 make build WITH_FIPS=1
@@ -29,9 +29,9 @@ Each flag is a boolean, default `false`, never required.
 
 | Command | Effect on `main` | Where |
 |---|---|---|
-| `platformctl iso create --fips` | Builds a FIPS ISO: x86_64 only, FIPS kernel and OpenSSL provider, `fips=1`, `-fips` name suffix, `--fips` passed to the installer. The stock kernel is not prefetched (`pkg/iso/prefetch.go:299`) | `pkg/cli/commands/iso/create.go:141`, `:474` |
-| `platformctl install system --fips` | Sets `os.fips` (overriding the config file only when given). LUKS uses `pbkdf2`, and the FIPS kernel and OpenSSL provider are installed | `pkg/cli/commands/install/system.go:123`, `:334`, `:348`, `:506-508`, `:360-365` |
-| `platform-initrd boot --fips`, `platform-initrd recovery --fips` | Recorded in the initrd configuration (`pkg/initrd/types.go:113`) but **not read**. The keyslot KDF follows the kernel's FIPS mode (`pkg/initrd/install.go:160`) | `pkg/boot/commands/boot.go:103`, `recovery.go:75` |
+| `platformctl iso create --fips` | Builds a FIPS ISO: x86_64 only, FIPS kernel and OpenSSL provider, `fips=1`, `-fips` name suffix, `--fips` passed to the installer. The stock kernel is not prefetched (`pkg/iso/prefetch.go:299`) | `pkg/cli/commands/iso/create.go:151`, `:475` |
+| `platformctl install system --fips` | Sets `os.fips` (overriding the config file only when given). LUKS uses `pbkdf2`, and the FIPS kernel and OpenSSL provider are installed | `pkg/cli/commands/install/system.go:123`, `:360-365`, `:378`, `:536-538` |
+| `platform-initrd boot --fips`, `platform-initrd recovery --fips` | Recorded in the initrd configuration (`pkg/initrd/types.go:113`) but **not read**. The keyslot KDF follows the kernel's FIPS mode (`pkg/initrd/install.go:160`) | `pkg/boot/commands/boot.go:103`, `recovery.go:73` |
 | `platformctl firstboot --fips` | Parsed but **not read** | `pkg/cli/commands/firstboot/firstboot.go:103` |
 
 ```sh

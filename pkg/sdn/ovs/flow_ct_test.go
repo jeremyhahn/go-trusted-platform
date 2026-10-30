@@ -434,7 +434,7 @@ func TestDeleteFlowsByCookie_Validation(t *testing.T) {
 
 	t.Run("not connected", func(t *testing.T) {
 		client, _ := setupTestClient(t)
-		client.connected = false
+		client.connected.Store(false)
 		err := client.DeleteFlowsByCookie(ctx, "br0", 0x1, ^uint64(0))
 		assert.ErrorIs(t, err, ErrConnectionFailed)
 	})
@@ -481,7 +481,7 @@ func TestDeleteFlowStrict_Validation(t *testing.T) {
 
 	t.Run("not connected", func(t *testing.T) {
 		client, _ := setupTestClient(t)
-		client.connected = false
+		client.connected.Store(false)
 		err := client.DeleteFlowStrict(ctx, "br0", &FlowMod{Priority: 1, Cookie: "0xf1be000100000000"})
 		assert.ErrorIs(t, err, ErrConnectionFailed)
 	})
