@@ -130,11 +130,6 @@ var daemonMTLSOnlyRoutes = []string{
 	"/api/v1/users/{id}/factors/mtls/issue-cert", // as above
 	"/api/v1/tenants/{id}/security/mfa-policy",   // tenant MFA policy, outside the tenant guard
 	"/api/v1/vtpm/",                              // vTPM (SetVTPMService)
-	"/api/v1/sdn/bridges",                        // SDN (SetSDNService)
-	"/api/v1/sdn/flows",                          // SDN (SetSDNService)
-	"/api/v1/sdn/policies",                       // SDN (SetSDNService)
-	"/api/v1/sdn/vlans",                          // SDN (SetSDNService)
-	"/api/v1/sdn/zones",                          // SDN (SetSDNService)
 	"/api/v1/sdn/overlay",                        // overlay (SetOverlayHandlers)
 	"/api/v1/sdn/gateway",                        // gateway IPAM and status (SetGatewayIPAMService)
 	"/api/v1/proxy",                              // proxy (SetProxyService)

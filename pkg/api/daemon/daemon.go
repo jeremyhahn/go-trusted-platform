@@ -1656,7 +1656,11 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 
 	// Wire SDN service into REST server if both are available
 	if daemon.concreteRestServer != nil && daemon.sdnService != nil {
-		daemon.concreteRestServer.SetSDNService(daemon.sdnService)
+		if err := daemon.concreteRestServer.SetSDNService(daemon.sdnService, restGuard); err != nil {
+			constructErr := ErrTransportConstructionFailed{Transport: transportREST, Cause: err}
+			logger.Error(constructErr, "component", "rest_server")
+			return nil, constructErr
+		}
 		logger.Info("SDN service wired into REST server")
 	}
 

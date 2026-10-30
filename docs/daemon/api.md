@@ -587,6 +587,25 @@ webhook (`POST /api/v1/pxe/webhook/complete`, #238) and the per-MAC PXE gateway
 routes are the webservice's; the daemon does not mount them. The daemon refuses
 to start when either mount fails (`ErrTransportConstructionFailed`).
 
+**The daemon REST SDN routes check the RPC's scope (#997).** `SetSDNService`
+(`pkg/api/daemon/rest_sdn.go`) mounts the SDN handlers (`pkg/api/rest/sdn_handlers.go`,
+absolute `/api/v1/sdn` paths) on a matcher-less subrouter behind the REST scope
+guard: bridges, ports, flows, VLANs, policies and zones. Each route needs the
+`sdn` scope the gRPC catalog gives its `SDNService` rpc:
+
+| Routes | Scope |
+|--------|-------|
+| every SDN `GET` | `sdn:read` |
+| every SDN `POST` and `PUT`, and `DELETE /api/v1/sdn/bridges/{bridge_id}/ports/{port_id}/auth` (`RevokePortAuth`) | `sdn:write` |
+| every other SDN `DELETE` | `sdn:delete` |
+
+A missing credential answers 401 and a missing scope 403. Without an SDN
+service the routes still mount, behind the guard, and the non-zone routes answer
+503. A failed mount (no scope guard, `ErrSDNRESTUnavailable`) stops the daemon
+(`ErrTransportConstructionFailed`). The overlay (`/api/v1/sdn/overlay`) and
+gateway (`/api/v1/sdn/gateway`) routes are separate mounts and still rely on
+mTLS alone.
+
 `TestDaemonREST_EveryMountedRouteIsGuarded` (`pkg/api/daemon/rest_scope_test.go`)
 walks the daemon REST router and sends every route a request with no
 credential; each must answer 401 unless it is on one of two named exception

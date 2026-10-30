@@ -1238,6 +1238,16 @@ func (e ErrDNSRESTUnavailable) Error() string {
 	return "DNS REST routes unavailable: " + e.Reason
 }
 
+// ErrSDNRESTUnavailable reports that the SDN routes could not be mounted on
+// the daemon REST listener.
+type ErrSDNRESTUnavailable struct {
+	Reason string
+}
+
+func (e ErrSDNRESTUnavailable) Error() string {
+	return "SDN REST routes unavailable: " + e.Reason
+}
+
 // ErrPXERESTUnavailable reports that the PXE operator routes could not be
 // mounted on the daemon REST listener.
 type ErrPXERESTUnavailable struct {

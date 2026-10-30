@@ -92,7 +92,7 @@ func daemonRouteTable(t *testing.T, guard *restapi.ScopeGuard) (*RESTServer, []s
 	s.SetCAHandlers(routeTableCA{}, guard)
 	s.SetTPMHandlers(platformv1.UnimplementedTPMServiceServer{}, guard)
 	s.SetVTPMService(routeTableVTPM{})
-	s.SetSDNService(nil)
+	require.NoError(t, s.SetSDNService(nil, guard))
 	s.SetGatewayIPAMService(nil, nil)
 	s.SetProxyService(routeTableProxy{})
 	s.SetClusterService(nil)

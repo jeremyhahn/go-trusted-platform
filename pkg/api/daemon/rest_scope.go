@@ -51,6 +51,26 @@ func restRouteTemplate(r *http.Request) string {
 	return r.URL.Path
 }
 
+// sdnScopeResource is the scope resource of every SDN route: sdn:read,
+// sdn:write or sdn:delete. No SDN POST is read-only.
+const sdnScopeResource = "sdn"
+
+// sdnPortAuthRoute is RevokePortAuth's route. Its DELETE revokes a port's
+// authorization, which the gRPC catalog gives sdn:write, not sdn:delete.
+const sdnPortAuthRoute = "/api/v1/sdn/bridges/{bridge_id}/ports/{port_id}/auth"
+
+// sdnRouteScope is the scope an SDN request needs.
+func sdnRouteScope(method, route string) (string, error) {
+	if method == http.MethodDelete && route == sdnPortAuthRoute {
+		return sdnScopeResource + ":write", nil
+	}
+	action, err := restScopeAction(sdnScopeResource, nil, method, route)
+	if err != nil {
+		return "", err
+	}
+	return sdnScopeResource + ":" + action, nil
+}
+
 // restScopeAuthorization authenticates a daemon REST request through the
 // REST scope guard and requires the scope routeScope gives its method and
 // route template.
