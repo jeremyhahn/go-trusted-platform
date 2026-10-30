@@ -69,6 +69,17 @@ sdk/go/services/luks  (Service)          pkg/api/daemon transport adapters
   and applies the platform FIPS keyslot policy. FIDO2 and TPM enrollment go
   through pluggable handlers built on the go-xkms re-exports.
 
+**The initrd FIDO2 strategy** (`pkg/initrd/strategy_fido2.go`) keys its slot
+with the authenticator's hmac-secret output, which the SDK FIDO2 handler
+derives from the credential ID and a 32-byte salt (`UnlockWithKey`; enrolment
+takes a second touch, as `systemd-cryptenroll` does). The key is never stored.
+The credential ID, salt and relying party ID are kept in a LUKS2 header token
+bound to the keyslot, in the systemd-fido2 layout the installer also writes
+(base64 `fido2-credential` and `fido2-salt`, `fido2-rp`). At boot the strategy
+reads the lowest-ID token for the slot that carries a credential and a salt,
+whatever its type, so installer-enrolled (`fido2-manual`) volumes unlock too.
+If the token cannot be written, the slot is killed again.
+
 **As shipped, the chain is not connected at the server end** (see
 [engineering.md](engineering.md) §6): the platformd startup path injects
 neither the go-luks2 backend nor a root checker, so every server transport
