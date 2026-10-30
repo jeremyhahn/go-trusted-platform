@@ -6,10 +6,13 @@ import (
 	"net/http"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/gorilla/mux"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
 	restapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/rest"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
@@ -29,6 +32,12 @@ var attestationRESTCallers = iamRESTTokens{
 type recordingAttestationServer struct {
 	platformv1.UnimplementedAttestationServiceServer
 	builds, verifies, deletes atomic.Int32
+	listed                    *platformv1.ListManifestsRequest
+}
+
+func (s *recordingAttestationServer) ListManifests(_ context.Context, req *platformv1.ListManifestsRequest) (*platformv1.ListManifestsResponse, error) {
+	s.listed = req
+	return &platformv1.ListManifestsResponse{}, nil
 }
 
 func (s *recordingAttestationServer) BuildManifest(context.Context, *platformv1.BuildManifestRequest) (*platformv1.BuildManifestResponse, error) {
@@ -134,6 +143,46 @@ func TestAttestationREST_ScopePerRoute(t *testing.T) {
 	assert.Equal(t, int32(1), server.deletes.Load())
 
 	assert.Equal(t, http.StatusUnauthorized, serveIAM(s, http.MethodGet, "/api/v1/attestation/manifests", "").Code)
+}
+
+// Codex review 8545: the daemon mount hands the manifest list filters to the
+// service, and a malformed filter never reaches it.
+func TestAttestationREST_ListManifestsFilters(t *testing.T) {
+	tests := []struct {
+		name   string
+		query  string
+		status int
+		want   *platformv1.ListManifestsRequest
+	}{
+		{
+			name:   "filters reach the service",
+			query:  "?host_id=node-a&limit=10&offset=5&start_time=2026-10-01T00:00:00Z&end_time=2026-10-02T00:00:00Z",
+			status: http.StatusOK,
+			want: &platformv1.ListManifestsRequest{
+				HostId:    "node-a",
+				StartTime: timestamppb.New(time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)),
+				EndTime:   timestamppb.New(time.Date(2026, 10, 2, 0, 0, 0, 0, time.UTC)),
+				Limit:     10,
+				Offset:    5,
+			},
+		},
+		{name: "no filters", query: "", status: http.StatusOK, want: &platformv1.ListManifestsRequest{}},
+		{name: "malformed limit", query: "?limit=ten", status: http.StatusBadRequest},
+		{name: "start after end", query: "?start_time=2026-10-02T00:00:00Z&end_time=2026-10-01T00:00:00Z", status: http.StatusBadRequest},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := &recordingAttestationServer{}
+			s := attestationRESTServer(t, server)
+			recorder := serveIAM(s, http.MethodGet, "/api/v1/attestation/manifests"+tt.query, "attestation-reader")
+			require.Equal(t, tt.status, recorder.Code, recorder.Body.String())
+			if tt.want == nil {
+				assert.Nil(t, server.listed, "a rejected filter does not reach the service")
+				return
+			}
+			assert.True(t, proto.Equal(tt.want, server.listed), "want %v, got %v", tt.want, server.listed)
+		})
+	}
 }
 
 func TestAttestationRouteScope(t *testing.T) {
