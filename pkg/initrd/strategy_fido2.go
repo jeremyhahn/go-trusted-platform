@@ -17,6 +17,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"io"
 	"slices"
@@ -94,6 +95,7 @@ func (s *FIDO2Strategy) Unlock(ctx context.Context, volume *luks.VolumeConfig) e
 	s.logger.Infof("Attempting FIDO2 unlock for %s", volume.DevicePath)
 
 	// Find FIDO2 key slots
+	var slotErrs []error
 	for _, slot := range volume.KeySlots {
 		if slot.Type != luks.UnlockFIDO2 {
 			continue
@@ -112,6 +114,7 @@ func (s *FIDO2Strategy) Unlock(ctx context.Context, volume *luks.VolumeConfig) e
 		authConfig, err := s.loadAuthConfig(ctx, volume.DevicePath, slot)
 		if err != nil {
 			s.logger.Warnf("Failed to load auth config for slot %d: %v", slot.Index, err)
+			slotErrs = append(slotErrs, err)
 			continue
 		}
 
@@ -119,6 +122,7 @@ func (s *FIDO2Strategy) Unlock(ctx context.Context, volume *luks.VolumeConfig) e
 		key, err := s.platform.FIDO2.UnlockWithKey(authConfig)
 		if err != nil {
 			s.logger.Warnf("FIDO2 authentication failed for slot %d: %v", slot.Index, err)
+			slotErrs = append(slotErrs, err)
 			continue
 		}
 
@@ -138,9 +142,13 @@ func (s *FIDO2Strategy) Unlock(ctx context.Context, volume *luks.VolumeConfig) e
 		}
 
 		s.logger.Warnf("LUKS open failed with slot %d: %v", slot.Index, err)
+		slotErrs = append(slotErrs, err)
 	}
 
-	return &MessageError{Msg: "all FIDO2 slots failed"}
+	if len(slotErrs) == 0 {
+		return &MessageError{Msg: "all FIDO2 slots failed"}
+	}
+	return &WrappedError{Msg: "all FIDO2 slots failed", Err: errors.Join(slotErrs...)}
 }
 
 // Install performs installation-time setup for FIDO2 strategy
@@ -273,8 +281,10 @@ func (s *FIDO2Strategy) tokenHandler() (luks.TokenHandler, error) {
 
 // loadAuthConfig reads the FIDO2 enrolment for a slot from the LUKS2 header.
 // It uses the first token (lowest ID) bound to the slot that carries a
-// credential and a salt, whatever its type, so volumes enrolled by the
-// installer (type fido2-manual) unlock as well.
+// credential and a salt. The token type marks the key derivation: only
+// luks.TokenTypeFIDO2 slots are keyed with the SDK derivation UnlockWithKey
+// returns. Any other type keys the slot with the raw hmac-secret, so it
+// returns a FIDO2RawSecretTokenError and no key is tried.
 func (s *FIDO2Strategy) loadAuthConfig(ctx context.Context, devicePath string, slot luks.KeySlot) (*fido2.AuthenticationConfig, error) {
 	tokens, err := s.tokenHandler()
 	if err != nil {
@@ -300,6 +310,9 @@ func (s *FIDO2Strategy) loadAuthConfig(ctx context.Context, devicePath string, s
 		}
 		if !slices.Contains(token.Keyslots, slotID) {
 			continue
+		}
+		if token.Type != luks.TokenTypeFIDO2 {
+			return nil, &FIDO2RawSecretTokenError{DevicePath: devicePath, Slot: slot.Index, TokenID: id, Type: token.Type}
 		}
 		return decodeFIDO2Token(token, slot.Index)
 	}

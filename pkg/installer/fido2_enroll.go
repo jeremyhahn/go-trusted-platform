@@ -15,7 +15,6 @@ package installer
 
 import (
 	"context"
-	"crypto/sha256"
 	"encoding/base64"
 	"fmt"
 	"os"
@@ -23,12 +22,29 @@ import (
 	"strings"
 
 	"github.com/jeremyhahn/go-luks2/pkg/luks2"
+	"github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/fido2"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/fips"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/storage/luks"
 )
 
-// FIDO2Enrollment handles FIDO2 security key enrollment for LUKS
-// This follows the reference implementation at build/iso/alpine/amd64/scripts/host/fido2-enroll.sh
+// newFIDO2Handler opens the SDK FIDO2 handler on the HID transport. Tests
+// replace it with a fake authenticator.
+var newFIDO2Handler = func(cfg *fido2.Config) (fido2.Handler, error) {
+	return fido2.NewHandler(cfg, fido2.NewDefaultEnumerator())
+}
+
+// The go-luks2 header writes of the enrolment. Tests replace them with an
+// in-memory header.
+var (
+	luksAddKey            = luks2.AddKey
+	luksFindFreeTokenSlot = luks2.FindFreeTokenSlot
+	luksImportToken       = luks2.ImportToken
+)
+
+// FIDO2Enrollment handles FIDO2 security key enrollment for LUKS. The
+// credential and the slot key come from the SDK FIDO2 handler, so the slot
+// is keyed with the derivation the initrd FIDO2 strategy unlocks with.
 type FIDO2Enrollment struct {
 	config *FIDO2EnrollmentConfig
 }
@@ -143,13 +159,11 @@ func IsFIDO2Available() bool {
 // CheckRequiredTools verifies that all required tools are available
 func (f *FIDO2Enrollment) CheckRequiredTools() error {
 	// Note: cryptsetup is no longer required - LUKS operations use pure Go luks2 library
-	// Token import/export also uses pure Go luks2 library now
+	// Token import/export also uses pure Go luks2 library now.
+	// The credential and key derivation use the SDK FIDO2 handler over HID;
+	// fido2-token is still used to detect the device.
 	tools := []string{
 		"fido2-token",
-		"fido2-cred",
-		"fido2-assert",
-		"base64",
-		"xxd",
 	}
 
 	for _, tool := range tools {
@@ -232,8 +246,8 @@ func (f *FIDO2Enrollment) VerifyPassphrase() error {
 	return nil
 }
 
-// Enroll performs the complete FIDO2 enrollment process
-// This follows the reference at build/iso/alpine/amd64/scripts/host/fido2-enroll.sh
+// Enroll performs the complete FIDO2 enrollment process through the SDK
+// FIDO2 handler.
 func (f *FIDO2Enrollment) Enroll(ctx context.Context) error {
 	// Step 1: Check required tools
 	if err := f.CheckRequiredTools(); err != nil {
@@ -260,92 +274,25 @@ func (f *FIDO2Enrollment) Enroll(ctx context.Context) error {
 		fmt.Printf("Using FIDO2 device: %s\n", devicePath)
 	}
 
-	// Step 5: Generate enrollment parameters
-	// Generate salt (32 bytes)
-	salt := make([]byte, 32)
-	if _, err := randomRead(salt); err != nil {
-		return &WrappedError{Msg: "failed to generate salt", Err: err}
-	}
-	saltB64 := base64.StdEncoding.EncodeToString(salt)
-
-	// Generate challenge
-	challengeInput := []byte("luks-enrollment-challenge")
-	challengeHash := sha256.Sum256(challengeInput)
-	challengeB64 := base64.StdEncoding.EncodeToString(challengeHash[:])
-
-	// Generate user ID
-	userID := make([]byte, 32)
-	if _, err := randomRead(userID); err != nil {
-		return &WrappedError{Msg: "failed to generate user ID", Err: err}
-	}
-	userIDB64 := base64.StdEncoding.EncodeToString(userID)
-
-	// Step 6: Create FIDO2 credential with hmac-secret extension
-	fmt.Println("Creating FIDO2 credential (touch your security key)...")
-
-	credParams := fmt.Sprintf("%s\n%s\n%s\n%s\n",
-		challengeB64,
-		f.config.RelyingPartyID,
-		f.config.UserName,
-		userIDB64,
-	)
-
-	// Use standard credential (non-resident) - CanoKey QEMU has issues with resident keys
-	credCmd := exec.CommandContext(ctx, "fido2-cred", "-M", "-h", devicePath)
-	credCmd.Stdin = strings.NewReader(credParams)
-	credOutput, err := credCmd.CombinedOutput()
+	// Step 5: Enroll a credential and key the slot through the SDK handler
+	handler, err := newFIDO2Handler(f.handlerConfig(devicePath))
 	if err != nil {
-		if f.config.Debug {
-			fmt.Printf("fido2-cred input:\n%s\n", credParams)
-			fmt.Printf("fido2-cred output: %s\n", string(credOutput))
-		}
-		return &CommandOutputError{Msg: "failed to create credential", Err: err, Detail: fmt.Sprintf("\nDevice output: %s", string(credOutput))}
+		return &WrappedError{Msg: "failed to open the FIDO2 handler", Err: err}
 	}
-
-	// Parse fido2-cred output to extract credential ID
-	// fido2-cred -M output format (from libfido2 man page):
-	// Line 0: client_data_hash (base64) - the challenge echoed back
-	// Line 1: relying_party_id (UTF-8 string)
-	// Line 2: credential_format (UTF-8 string: "packed", "none", "fido-u2f")
-	// Line 3: authenticator_data (base64, CBOR encoded)
-	// Line 4: credential_id (base64) - THIS IS WHAT WE NEED
-	// Line 5: attestation_signature (base64)
-	// Line 6+: attestation_certificate (base64, if present)
-	credLines := strings.Split(strings.TrimSpace(string(credOutput)), "\n")
-
-	if f.config.Debug {
-		fmt.Printf("fido2-cred output (%d lines):\n", len(credLines))
-		for i, line := range credLines {
-			if len(line) > 60 {
-				fmt.Printf("  [%d] %s... (%d chars)\n", i, line[:60], len(line))
-			} else {
-				fmt.Printf("  [%d] %s\n", i, line)
-			}
-		}
+	err = f.enrollWithHandler(handler)
+	if closeErr := handler.Close(); closeErr != nil {
+		fmt.Printf("Warning: failed to close the FIDO2 handler: %v\n", closeErr)
 	}
-
-	if len(credLines) < 5 {
-		return &MessageError{Msg: fmt.Sprintf("failed to extract credential from fido2-cred output: expected at least 5 lines, got %d", len(credLines))}
-	}
-
-	// Line 4 is the credential ID (base64 encoded) - use it directly
-	credentialIDB64 := strings.TrimSpace(credLines[4])
-
-	// Validate it's valid base64
-	if _, err := base64.StdEncoding.DecodeString(credentialIDB64); err != nil {
-		return &WrappedError{Msg: "invalid credential ID (not valid base64)", Err: err}
-	}
-
-	if f.config.Debug {
-		fmt.Printf("Using credential ID from line 4: %s\n", credentialIDB64)
-	}
-
-	return f.enrollWithCredentialID(ctx, devicePath, credentialIDB64, saltB64, challengeB64)
+	return err
 }
 
-// findFreeTokenSlot finds the next available LUKS token slot using pure Go
-func (f *FIDO2Enrollment) findFreeTokenSlot() (int, error) {
-	return luks2.FindFreeTokenSlot(f.config.LUKSDevice)
+// handlerConfig returns the SDK handler configuration for the detected device.
+func (f *FIDO2Enrollment) handlerConfig(devicePath string) *fido2.Config {
+	cfg := fido2.DefaultConfig
+	cfg.DevicePath = devicePath
+	cfg.RelyingPartyID = f.config.RelyingPartyID
+	cfg.Debug = f.config.Debug
+	return &cfg
 }
 
 // randomRead fills the buffer with random bytes
@@ -362,57 +309,48 @@ func randomRead(b []byte) (n int, err error) {
 	return file.Read(b)
 }
 
-// enrollWithCredentialID performs FIDO2 enrollment using a known credential ID
-// This is used when we can extract the credential ID directly from fido2-cred output
-func (f *FIDO2Enrollment) enrollWithCredentialID(ctx context.Context, devicePath, credentialID, saltB64, challengeB64 string) error {
-	// Step 7: Derive LUKS key using hmac-secret
-	fmt.Println("Deriving LUKS key from FIDO2 device (touch your security key again)...")
+// enrollWithHandler creates the credential and keys the target slot with the
+// key the SDK derives from it (UnlockWithKey). That is the key the initrd
+// FIDO2 strategy derives at boot, so the slot is never keyed with the raw
+// hmac-secret. The token type luks.TokenTypeFIDO2 records that derivation.
+func (f *FIDO2Enrollment) enrollWithHandler(handler fido2.Handler) error {
+	userID := make([]byte, 32)
+	if _, err := randomRead(userID); err != nil {
+		return &WrappedError{Msg: "failed to generate user ID", Err: err}
+	}
 
-	// fido2-assert -G -h input format for non-resident credentials (per Yubico libfido2 documentation):
-	// Line 1: client_data_hash (challenge) - base64
-	// Line 2: relying_party_id
-	// Line 3: credential_id - base64 (required for non-resident credentials)
-	// Line 4: hmac_salt - base64 (for -h flag)
-	assertParams := fmt.Sprintf("%s\n%s\n%s\n%s\n",
-		challengeB64,
-		f.config.RelyingPartyID,
-		credentialID,
-		saltB64,
-	)
-
-	// Use non-resident credential format (no -r flag) - CanoKey QEMU has issues with resident keys
-	assertCmd := exec.CommandContext(ctx, "fido2-assert", "-G", "-h", devicePath)
-	assertCmd.Stdin = strings.NewReader(assertParams)
-	assertOutput, err := assertCmd.CombinedOutput()
+	fmt.Println("Creating FIDO2 credential (touch your security key)...")
+	result, err := handler.EnrollKey(&fido2.EnrollmentConfig{
+		RelyingParty: fido2.RelyingParty{ID: f.config.RelyingPartyID, Name: f.config.RelyingPartyID},
+		User:         fido2.User{ID: userID, Name: f.config.UserName, DisplayName: f.config.UserName},
+	})
 	if err != nil {
-		if f.config.Debug {
-			fmt.Printf("fido2-assert input:\n%s\n", assertParams)
-			fmt.Printf("fido2-assert output: %s\n", string(assertOutput))
+		return &FIDO2EnrollKeyError{Err: err}
+	}
+
+	salt := result.Salt
+	if len(salt) == 0 {
+		salt = make([]byte, 32)
+		if _, err := randomRead(salt); err != nil {
+			return &WrappedError{Msg: "failed to generate salt", Err: err}
 		}
-		return &CommandOutputError{Msg: "failed to get HMAC-secret", Err: err, Detail: fmt.Sprintf("\nDevice output: %s", string(assertOutput))}
+	}
+	rpID := result.RelyingParty.ID
+	if rpID == "" {
+		rpID = f.config.RelyingPartyID
 	}
 
-	// Extract HMAC-secret (last line, base64 encoded)
-	assertLines := strings.Split(strings.TrimSpace(string(assertOutput)), "\n")
-	if len(assertLines) == 0 {
-		return &MessageError{Msg: "failed to extract HMAC-secret from fido2-assert output"}
-	}
-	hmacSecretB64 := assertLines[len(assertLines)-1]
-
-	hmacSecret, err := base64.StdEncoding.DecodeString(hmacSecretB64)
+	fmt.Println("Deriving LUKS key from FIDO2 device (touch your security key again)...")
+	key, err := handler.UnlockWithKey(&fido2.AuthenticationConfig{
+		RelyingPartyID: rpID,
+		CredentialID:   result.CredentialID,
+		Salt:           salt,
+	})
 	if err != nil {
-		return &WrappedError{Msg: "failed to decode HMAC-secret", Err: err}
+		return &FIDO2DeriveKeyError{Err: err}
 	}
+	defer clear(key)
 
-	if len(hmacSecret) != 32 {
-		return &MessageError{Msg: fmt.Sprintf("invalid HMAC-secret length: expected 32 bytes, got %d", len(hmacSecret))}
-	}
-
-	if f.config.Debug {
-		fmt.Printf("HMAC-secret derived successfully (%d bytes)\n", len(hmacSecret))
-	}
-
-	// Step 8: Add LUKS keyslot with derived key using pure Go luks2 library
 	fmt.Printf("Adding LUKS key slot %d...\n", f.config.TargetKeyslot)
 
 	// Configure key add options
@@ -434,35 +372,30 @@ func (f *FIDO2Enrollment) enrollWithCredentialID(ctx context.Context, devicePath
 		return &WrappedError{Msg: "LUKS keyslot policy rejected the FIDO2 enrollment options", Err: err}
 	}
 
-	// Add the FIDO2-derived key to LUKS
-	if err := luks2.AddKey(f.config.LUKSDevice, []byte(f.config.LUKSPassphrase), hmacSecret, addKeyOpts); err != nil {
-		return &WrappedError{Msg: "failed to add LUKS key slot", Err: err}
+	if err := luksAddKey(f.config.LUKSDevice, []byte(f.config.LUKSPassphrase), key, addKeyOpts); err != nil {
+		return &FIDO2AddKeyError{Slot: f.config.TargetKeyslot, Err: err}
 	}
 
 	if f.config.Debug {
 		fmt.Printf("LUKS key slot %d added successfully\n", f.config.TargetKeyslot)
 	}
 
-	// Step 9: Store metadata in LUKS token using pure Go
 	fmt.Println("Storing FIDO2 metadata in LUKS token...")
 
-	tokenID, err := f.findFreeTokenSlot()
+	tokenID, err := luksFindFreeTokenSlot(f.config.LUKSDevice)
 	if err != nil {
 		fmt.Printf("Warning: %v\n", err)
 		fmt.Println("FIDO2 key enrolled but metadata not stored - manual unlock required")
 	} else {
-		// Create luks2.Token for import
 		luksToken := &luks2.Token{
-			Type:            "fido2-manual",
+			Type:            luks.TokenTypeFIDO2,
 			Keyslots:        []string{fmt.Sprintf("%d", f.config.TargetKeyslot)},
-			FIDO2Credential: credentialID,
-			FIDO2Salt:       saltB64,
-			FIDO2RP:         f.config.RelyingPartyID,
+			FIDO2Credential: base64.StdEncoding.EncodeToString(result.CredentialID),
+			FIDO2Salt:       base64.StdEncoding.EncodeToString(salt),
+			FIDO2RP:         rpID,
 			FIDO2UPRequired: true,
 		}
-
-		// Import token using pure Go luks2 library
-		if err := luks2.ImportToken(f.config.LUKSDevice, tokenID, luksToken); err != nil {
+		if err := luksImportToken(f.config.LUKSDevice, tokenID, luksToken); err != nil {
 			fmt.Printf("Warning: Failed to store FIDO2 metadata in token: %v\n", err)
 			fmt.Println("FIDO2 key enrolled but metadata not stored - manual unlock required")
 		} else if f.config.Debug {
@@ -474,4 +407,53 @@ func (f *FIDO2Enrollment) enrollWithCredentialID(ctx context.Context, devicePath
 	fmt.Printf("Your LUKS device can now be unlocked with your security key (slot %d)\n", f.config.TargetKeyslot)
 
 	return nil
+}
+
+// FIDO2EnrollKeyError reports that the SDK handler could not create the
+// FIDO2 credential.
+type FIDO2EnrollKeyError struct {
+	Err error
+}
+
+// Error implements the error interface.
+func (e *FIDO2EnrollKeyError) Error() string {
+	return fmt.Sprintf("fido2: failed to create the credential: %v", e.Err)
+}
+
+// Unwrap returns the handler error.
+func (e *FIDO2EnrollKeyError) Unwrap() error {
+	return e.Err
+}
+
+// FIDO2DeriveKeyError reports that the SDK handler could not derive the slot
+// key from the new credential.
+type FIDO2DeriveKeyError struct {
+	Err error
+}
+
+// Error implements the error interface.
+func (e *FIDO2DeriveKeyError) Error() string {
+	return fmt.Sprintf("fido2: failed to derive the LUKS key: %v", e.Err)
+}
+
+// Unwrap returns the handler error.
+func (e *FIDO2DeriveKeyError) Unwrap() error {
+	return e.Err
+}
+
+// FIDO2AddKeyError reports that the derived key could not be added to the
+// target keyslot.
+type FIDO2AddKeyError struct {
+	Slot int
+	Err  error
+}
+
+// Error implements the error interface.
+func (e *FIDO2AddKeyError) Error() string {
+	return fmt.Sprintf("fido2: failed to add LUKS key slot %d: %v", e.Slot, e.Err)
+}
+
+// Unwrap returns the go-luks2 error.
+func (e *FIDO2AddKeyError) Unwrap() error {
+	return e.Err
 }
