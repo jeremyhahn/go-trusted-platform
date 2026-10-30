@@ -28,11 +28,14 @@ type restScopeAuthorizer struct {
 	guard *restapi.ScopeGuard
 }
 
-// RequireScope admits a request whose credential carries scope; the guard
-// answers 401 without a credential and 403 without the scope.
+// RequireScope admits a request whose caller carries scope. It checks the
+// caller the parent restScopeAuthorization authenticated, from the request
+// context, and does not authenticate again: a second pass would present the
+// same DPoP proof and be refused as a replay. A request without an
+// authenticated caller is answered 401, one without the scope 403.
 func (a restScopeAuthorizer) RequireScope(scope string) func(next http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
-		return a.guard.Require(scope, next.ServeHTTP)
+		return a.guard.RequireAuthenticated(scope, next.ServeHTTP)
 	}
 }
 

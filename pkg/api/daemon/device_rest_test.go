@@ -2,14 +2,20 @@ package daemon
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
+	"github.com/golang-jwt/jwt/v5"
 	"github.com/gorilla/mux"
+	quicbaas "github.com/jeremyhahn/go-quicbaas/sdk/go"
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/platformtoken"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -160,25 +166,33 @@ func TestDeviceRouterREST_ScopePerRoute(t *testing.T) {
 	assert.Equal(t, http.StatusUnauthorized, serveIAM(s, http.MethodGet, "/api/v1/device/profiles/find-config?mac=x", "").Code)
 }
 
-// The per-route authorizer answers 401 without a credential and 403 without
-// the scope, and only an admitted request reaches the handler.
+// The per-route authorizer checks the caller in the request context: 401
+// without one, even when the request carries a valid credential, because it
+// never authenticates again; 403 for a caller without the scope. Only an
+// admitted request reaches the handler.
 func TestRestScopeAuthorizer_RequireScope(t *testing.T) {
 	authorizer := restScopeAuthorizer{guard: restapi.NewScopeGuard(deviceRESTCallers, nil, nil)}
 	reached := 0
 	handler := authorizer.RequireScope("device:write")(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { reached++ }))
-	serve := func(token string) int {
+	serve := func(caller *platformtoken.AuthorizedContext) int {
 		req := httptest.NewRequest(http.MethodPost, "/api/v1/devices/7/disable", nil)
-		if token != "" {
-			req.Header.Set("Authorization", "Bearer "+token)
+		req.Header.Set("Authorization", "Bearer device-writer")
+		if caller != nil {
+			req = req.WithContext(restapi.ContextWithCaller(req.Context(), caller))
 		}
 		recorder := httptest.NewRecorder()
 		handler.ServeHTTP(recorder, req)
 		return recorder.Code
 	}
-	assert.Equal(t, http.StatusUnauthorized, serve(""))
-	assert.Equal(t, http.StatusForbidden, serve("device-reader"))
+	reader, err := deviceRESTCallers.AuthorizeToken(context.Background(), "device-reader", "", "", "", "")
+	require.NoError(t, err)
+	writer, err := deviceRESTCallers.AuthorizeToken(context.Background(), "device-writer", "", "", "", "")
+	require.NoError(t, err)
+
+	assert.Equal(t, http.StatusUnauthorized, serve(nil))
+	assert.Equal(t, http.StatusForbidden, serve(reader))
 	assert.Zero(t, reached)
-	serve("device-writer")
+	serve(writer)
 	assert.Equal(t, 1, reached)
 }
 
@@ -215,13 +229,71 @@ func restRouteTemplates(t *testing.T, s *RESTServer, prefix string) []string {
 	return templates
 }
 
-// The router's own per-route check runs behind the path guard: the mount
-// installs the scope authorizer, so an admitted request is authorized twice,
-// once by the path-level check and once by the route's own.
+// The router's own per-route check runs behind the path guard on the caller
+// the path guard authenticated: an admitted request authenticates once.
 func TestDeviceRouterREST_RouterChecksItsOwnScope(t *testing.T) {
 	tokens := &countingTokens{}
 	s := deviceRESTServer(t, tokens, &recordingLifecycleServer{})
 	recorder := serveIAM(s, http.MethodPost, "/api/v1/devices/7/disable", "device-writer")
 	assertReachedHandler(t, recorder, recorder.Body.String())
-	assert.Equal(t, int32(2), tokens.authorizations.Load())
+	assert.Equal(t, int32(1), tokens.authorizations.Load())
+}
+
+// signDPoPBound mints a device:read token bound by cnf.jkt to the DPoP key
+// jkt, signed by key so the shared validator verifies it.
+func signDPoPBound(t *testing.T, key *ptIssuerKey, jkt string) string {
+	t.Helper()
+	now := time.Now()
+	claims := jwt.MapClaims{
+		"iss":       testPTIssuer,
+		"aud":       []string{testPTAudience},
+		"sub":       "device-reader",
+		"tenant_id": iamRESTTenantA,
+		"scp":       []string{"device:read"},
+		"exp":       now.Add(10 * time.Minute).Unix(),
+		"iat":       now.Unix(),
+		"jti":       "jti-dpop-device-reader",
+		"cnf":       map[string]string{"jkt": jkt},
+	}
+	token := jwt.NewWithClaims(jwt.SigningMethodES256, claims)
+	token.Header["kid"] = key.kid
+	token.Header["typ"] = "at+jwt"
+	signed, err := token.SignedString(key.priv)
+	require.NoError(t, err)
+	return signed
+}
+
+// A DPoP-bound token reaches a device route through the daemon's real
+// platform-token validator: the path guard and the router's own scope check
+// verify its proof once, so the proof is not refused as its own replay. The
+// same proof sent again is the replay, and is refused with 401.
+func TestDeviceRouterREST_DPoPProofVerifiedOnce(t *testing.T) {
+	issuer := newPTIssuerKey(t)
+	validator := newSharedValidator(t, issuer.jwksHandler(t).URL, false)
+	s := deviceRESTServer(t, validator, &recordingLifecycleServer{})
+
+	dpopKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	require.NoError(t, err)
+	jkt, err := quicbaas.DPoPThumbprint(dpopKey.Public())
+	require.NoError(t, err)
+	token := signDPoPBound(t, issuer, jkt)
+	const path = "/api/v1/device/profiles/find-config?mac=52:54:00:12:34:56"
+	proof, err := quicbaas.NewDPoPProof(dpopKey, http.MethodGet, "http://example.com/api/v1/device/profiles/find-config")
+	require.NoError(t, err)
+	serve := func() *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		req.Header.Set("Authorization", "Bearer "+token)
+		req.Header.Set("DPoP", proof)
+		recorder := httptest.NewRecorder()
+		s.router.ServeHTTP(recorder, req)
+		return recorder
+	}
+
+	recorder := serve()
+	assert.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+	assert.Contains(t, recorder.Body.String(), "edge")
+
+	recorder = serve()
+	assert.Equal(t, http.StatusUnauthorized, recorder.Code)
+	assert.Contains(t, recorder.Body.String(), "replay")
 }

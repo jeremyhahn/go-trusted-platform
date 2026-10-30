@@ -137,7 +137,9 @@ func (g *ScopeGuard) authorize(r *http.Request, scope string, tokenOnly bool) (*
 
 // Authenticate serves next to any authenticated caller, without a scope
 // check, and hands it the caller. It is for a router that makes its own
-// per-route scope decision on the caller (the daemon's IAM REST plane). A
+// per-route scope decision on the caller (the daemon's IAM REST plane). The
+// caller also rides in the request context (CallerFromContext), where
+// RequireAuthenticated checks a route's scope without authenticating again. A
 // nil guard answers 403 and a missing or invalid credential 401, as Require
 // does.
 func (g *ScopeGuard) Authenticate(next CallerHandlerFunc) http.HandlerFunc {
@@ -151,7 +153,48 @@ func (g *ScopeGuard) Authenticate(next CallerHandlerFunc) http.HandlerFunc {
 			writeGuardError(w, g.loggerOrDefault(), http.StatusUnauthorized, err)
 			return
 		}
-		next(w, r, caller)
+		next(w, r.WithContext(ContextWithCaller(r.Context(), caller)), caller)
+	}
+}
+
+// callerContextKey is the request context key of the caller Authenticate
+// authenticated.
+type callerContextKey struct{}
+
+// ContextWithCaller returns ctx carrying caller, the authenticated caller a
+// later scope check reads instead of authenticating the request again.
+func ContextWithCaller(ctx context.Context, caller *platformtoken.AuthorizedContext) context.Context {
+	return context.WithValue(ctx, callerContextKey{}, caller)
+}
+
+// CallerFromContext returns the caller ContextWithCaller put in ctx, and
+// whether there is one.
+func CallerFromContext(ctx context.Context) (*platformtoken.AuthorizedContext, bool) {
+	caller, ok := ctx.Value(callerContextKey{}).(*platformtoken.AuthorizedContext)
+	return caller, ok && caller != nil
+}
+
+// RequireAuthenticated is Require for a route behind Authenticate: it checks
+// scope against the caller Authenticate put in the request context and never
+// authenticates the request again, so a DPoP proof is verified once and is not
+// refused as its own replay. A request without a caller in its context is
+// refused with 401, never served.
+func (g *ScopeGuard) RequireAuthenticated(scope string, next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if g == nil {
+			writeGuardError(w, g.loggerOrDefault(), http.StatusForbidden, ErrRouteForbidden{Scope: scope, Reason: "no authorization is configured for this route"})
+			return
+		}
+		caller, ok := CallerFromContext(r.Context())
+		if !ok {
+			writeGuardError(w, g.loggerOrDefault(), http.StatusUnauthorized, ErrRouteUnauthenticated{Reason: "the request was not authenticated before its scope check"})
+			return
+		}
+		if err := caller.RequireScope(scope); err != nil {
+			writeGuardError(w, g.loggerOrDefault(), http.StatusForbidden, ErrRouteForbidden{Scope: scope, Reason: err.Error()})
+			return
+		}
+		next(w, r)
 	}
 }
 
