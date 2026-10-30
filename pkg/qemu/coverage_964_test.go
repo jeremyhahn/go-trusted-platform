@@ -3,6 +3,7 @@ package qemu
 import (
 	"context"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"io"
 	"net"
@@ -17,8 +18,11 @@ import (
 	"github.com/digitalocean/go-qemu/qmp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	vnl "github.com/vishvananda/netlink"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/netlink"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/uefi"
 )
 
 // qmpGreeting is the banner a QEMU QMP server sends on every new connection.
@@ -975,16 +979,78 @@ func TestOVSNetwork964_NewBuildsClientAndCloses(t *testing.T) {
 }
 
 func TestOVSNetwork964_CleanupReportsFailuresAndForgetsTAP(t *testing.T) {
-	n := ovsNetwork964(t)
-	// A name no host interface carries: the client is not connected and
-	// the TAP does not exist, so both removals fail and nothing changes.
-	n.tapName = "nx964tap"
+	// The netlink seam stands in for the kernel, so no host interface is
+	// looked up or deleted whatever name the TAP carries.
+	ops := &netlinkOps964{}
+	netlink.SetNetlinkOps(ops)
+	t.Cleanup(netlink.ResetNetlinkOps)
 
+	n := ovsNetwork964(t)
+	n.tapName = "tap964"
+
+	// The OVS client is not connected, so the port removal fails too; the
+	// TAP deletion runs last and is the error Cleanup reports.
 	err := n.Cleanup(context.Background())
 	var wrapped *WrappedError
 	require.ErrorAs(t, err, &wrapped)
+	assert.Equal(t, "failed to delete TAP device", wrapped.Msg)
+	var nlErr *netlink.NetlinkError
+	require.ErrorAs(t, err, &nlErr)
+	assert.Equal(t, netlink.ErrorTypeDeleteFailed, nlErr.Type)
+	var delErr *linkDelError964
+	require.ErrorAs(t, err, &delErr, "Cleanup must report the seam's deletion error")
+	assert.Equal(t, "tap964", delErr.name)
+	assert.Equal(t, []string{"tap964"}, ops.deleted, "Cleanup deletes the TAP through the seam")
+
 	assert.Empty(t, n.GetTAPName(), "Cleanup must forget the TAP even when removal fails")
 	assert.NoError(t, n.Cleanup(context.Background()), "a second Cleanup has nothing to remove")
+	assert.Len(t, ops.deleted, 1, "a second Cleanup must not delete again")
+}
+
+// linkDelError964 is the controlled deletion failure netlinkOps964 returns.
+type linkDelError964 struct{ name string }
+
+func (e *linkDelError964) Error() string { return "link delete refused: " + e.name }
+
+// unexpectedNetlinkCall964 reports a seam operation the test did not expect.
+type unexpectedNetlinkCall964 struct{ op string }
+
+func (e *unexpectedNetlinkCall964) Error() string { return "unexpected netlink call: " + e.op }
+
+// netlinkOps964 is a NetlinkOps fake: every link exists as a TAP, every
+// deletion is refused, and no call reaches the host kernel.
+type netlinkOps964 struct {
+	deleted []string
+}
+
+func (o *netlinkOps964) LinkByName(name string) (vnl.Link, error) {
+	return &vnl.Tuntap{LinkAttrs: vnl.LinkAttrs{Name: name}, Mode: vnl.TUNTAP_MODE_TAP}, nil
+}
+
+func (o *netlinkOps964) LinkDel(link vnl.Link) error {
+	name := link.Attrs().Name
+	o.deleted = append(o.deleted, name)
+	return &linkDelError964{name: name}
+}
+
+func (o *netlinkOps964) LinkAdd(vnl.Link) error {
+	return &unexpectedNetlinkCall964{op: "LinkAdd"}
+}
+
+func (o *netlinkOps964) LinkSetUp(vnl.Link) error {
+	return &unexpectedNetlinkCall964{op: "LinkSetUp"}
+}
+
+func (o *netlinkOps964) LinkSetDown(vnl.Link) error {
+	return &unexpectedNetlinkCall964{op: "LinkSetDown"}
+}
+
+func (o *netlinkOps964) LinkSetMTU(vnl.Link, int) error {
+	return &unexpectedNetlinkCall964{op: "LinkSetMTU"}
+}
+
+func (o *netlinkOps964) LinkList() ([]vnl.Link, error) {
+	return nil, &unexpectedNetlinkCall964{op: "LinkList"}
 }
 
 func TestOVSNetwork964_OwnershipIsCurrentUser(t *testing.T) {
@@ -1011,17 +1077,81 @@ func TestSecureBootEnroller964_ReenrollsAfterKeyRotation(t *testing.T) {
 	require.NoError(t, enroller.EnrollKeys(context.Background()))
 	require.True(t, enroller.IsEnrolled())
 
-	// Rotated keys are newer than the enrollment flag.
-	future := time.Now().Add(time.Hour)
-	for _, name := range []string{"PK.crt", "KEK.crt", "DB.crt"} {
-		require.NoError(t, os.Chtimes(filepath.Join(config.KeysDir, name), future, future))
+	nvramPath := filepath.Join(config.NVRAMDir, "OVMF_VARS.fd")
+	flagPath := filepath.Join(config.NVRAMDir, "OVMF_VARS_ENROLLED.flag")
+	oldKeys := secureBootKeys964(t, config.KeysDir)
+	assert.Equal(t, oldKeys, enrolledKeys964(t, nvramPath), "the first enrollment holds the original keys")
+
+	// Controlled timestamps, all in the past: the first enrollment is dated
+	// enrolledAt and the rotated keys rotatedAt, an hour later.
+	enrolledAt := time.Date(2026, time.January, 1, 0, 0, 0, 0, time.UTC)
+	rotatedAt := enrolledAt.Add(time.Hour)
+	require.NoError(t, os.Chtimes(flagPath, enrolledAt, enrolledAt))
+	for _, key := range secureBootKeyFiles964 {
+		path := filepath.Join(config.KeysDir, key.file)
+		require.NoError(t, os.WriteFile(path, generateTestCertificate(t, "Rotated "+key.variable), 0644))
+		require.NoError(t, os.Chtimes(path, rotatedAt, rotatedAt))
 	}
-	require.False(t, enroller.IsEnrolled())
+	newKeys := secureBootKeys964(t, config.KeysDir)
+	require.False(t, enroller.IsEnrolled(), "rotated keys are newer than the enrollment flag")
 
 	require.NoError(t, enroller.EnrollKeys(context.Background()))
-	flag, err := os.Stat(filepath.Join(config.NVRAMDir, "OVMF_VARS_ENROLLED.flag"))
+	enrolled := enrolledKeys964(t, nvramPath)
+	assert.Equal(t, newKeys, enrolled, "re-enrollment writes the rotated keys into NVRAM")
+	for variable, cert := range oldKeys {
+		assert.NotEqual(t, cert, enrolled[variable], "%s still holds the pre-rotation key", variable)
+	}
+
+	flag, err := os.Stat(flagPath)
 	require.NoError(t, err)
-	assert.True(t, flag.ModTime().After(time.Now().Add(-time.Minute)), "re-enrollment writes a fresh flag")
+	assert.True(t, flag.ModTime().After(rotatedAt), "re-enrollment writes a flag newer than the rotated keys")
+	assert.True(t, enroller.IsEnrolled(), "the rotated keys are enrolled")
+}
+
+// secureBootKeyFiles964 maps each Secure Boot key file to the NVRAM variable
+// it is enrolled into.
+var secureBootKeyFiles964 = []struct {
+	file     string
+	variable string
+	guid     uefi.GUID
+}{
+	{"PK.crt", "PK", uefi.EFIGlobalVariable},
+	{"KEK.crt", "KEK", uefi.EFIGlobalVariable},
+	{"DB.crt", "db", uefi.EFIImageSecurityDatabase},
+}
+
+// secureBootKeys964 returns the DER certificate of each key file, keyed by
+// the NVRAM variable it is enrolled into.
+func secureBootKeys964(t *testing.T, keysDir string) map[string][]byte {
+	t.Helper()
+	keys := make(map[string][]byte, len(secureBootKeyFiles964))
+	for _, key := range secureBootKeyFiles964 {
+		data, err := os.ReadFile(filepath.Join(keysDir, key.file))
+		require.NoError(t, err)
+		block, _ := pem.Decode(data)
+		require.NotNil(t, block, "%s is not PEM", key.file)
+		keys[key.variable] = block.Bytes
+	}
+	return keys
+}
+
+// enrolledKeys964 reads the certificate each Secure Boot variable holds in
+// the NVRAM file, keyed by variable name.
+func enrolledKeys964(t *testing.T, nvramPath string) map[string][]byte {
+	t.Helper()
+	nvram, err := uefi.OpenNVRAM(nvramPath)
+	require.NoError(t, err)
+	keys := make(map[string][]byte, len(secureBootKeyFiles964))
+	for _, key := range secureBootKeyFiles964 {
+		variable, err := nvram.GetVariable(key.variable, key.guid)
+		require.NoError(t, err, key.variable)
+		lists, err := uefi.ParseSignatureLists(variable.Data)
+		require.NoError(t, err, key.variable)
+		require.Len(t, lists, 1, key.variable)
+		require.Len(t, lists[0].Signatures, 1, key.variable)
+		keys[key.variable] = lists[0].Signatures[0].Data
+	}
+	return keys
 }
 
 func TestSecureBootEnroller964_NVRAMFailures(t *testing.T) {
