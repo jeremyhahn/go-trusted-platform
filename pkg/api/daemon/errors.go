@@ -1207,6 +1207,17 @@ func (e ErrKMSRESTUnavailable) Error() string {
 	return "KMS REST routes unavailable: " + e.Reason
 }
 
+// ErrKMSRESTNoTenant is returned when a KMS or secrets REST caller's
+// credential names no tenant. The SDK would run such a call in system scope,
+// so the route refuses it instead.
+type ErrKMSRESTNoTenant struct {
+	Subject string
+}
+
+func (e ErrKMSRESTNoTenant) Error() string {
+	return "KMS REST caller " + e.Subject + " has no tenant"
+}
+
 // ErrTenantBarrierShamirUnsupported is returned when InitTenantBarrier asks
 // for Shamir sharing. The per-tenant barrier initializes with its
 // deterministic credential only, and the init returns no shares, so

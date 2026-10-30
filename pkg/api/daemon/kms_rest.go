@@ -9,6 +9,7 @@ import (
 	kmsclient "github.com/jeremyhahn/go-quicbaas/sdk/go/client/kms"
 	secretsclient "github.com/jeremyhahn/go-quicbaas/sdk/go/client/secrets"
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/platformtoken"
+	sdktransport "github.com/jeremyhahn/go-quicbaas/sdk/go/transport"
 
 	restapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/rest"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
@@ -85,7 +86,13 @@ func (a kmsRESTAuthorization) authorize(next http.Handler) http.Handler {
 			a.respWriter.Error403(w, r, restapi.ErrRouteForbidden{Scope: scope, Reason: err.Error()}, nil)
 			return
 		}
-		next.ServeHTTP(w, r)
+		if caller.TenantID == "" {
+			a.respWriter.Error403(w, r, ErrKMSRESTNoTenant{Subject: caller.Subject}, nil)
+			return
+		}
+		// The KMS, crypto, DEK and secrets SDK calls take their tenant from
+		// the request context; without one they would run in system scope.
+		next.ServeHTTP(w, r.WithContext(sdktransport.ContextWithTenant(r.Context(), caller.TenantID)))
 	})
 }
 

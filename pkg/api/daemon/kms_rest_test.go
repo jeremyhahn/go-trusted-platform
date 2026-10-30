@@ -5,12 +5,15 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
 
 	"github.com/gorilla/mux"
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/client/kms"
+	"github.com/jeremyhahn/go-quicbaas/sdk/go/client/secrets"
+	sdktransport "github.com/jeremyhahn/go-quicbaas/sdk/go/transport"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -191,6 +194,118 @@ func TestKMSREST_AdmittedRequestReachesTheSDKClient(t *testing.T) {
 	recorder := serveIAM(s, http.MethodDelete, "/api/v1/kms/keys/k1", "kms-deleter")
 	assertReachedHandler(t, recorder, recorder.Body.String())
 	assert.Equal(t, int32(1), deletes.Load())
+}
+
+// kmsTenantCallers are two tenants' credentials over the same scopes, plus
+// credentials that name no tenant.
+var kmsTenantCallers = iamRESTTokens{
+	"a-secrets":       {Subject: "a-secrets", TenantID: iamRESTTenantA, Scopes: []string{"secrets:read"}},
+	"b-secrets":       {Subject: "b-secrets", TenantID: iamRESTTenantB, Scopes: []string{"secrets:read"}},
+	"a-kms":           {Subject: "a-kms", TenantID: iamRESTTenantA, Scopes: []string{"kms:delete"}},
+	"b-kms":           {Subject: "b-kms", TenantID: iamRESTTenantB, Scopes: []string{"kms:delete"}},
+	"no-tenant":       {Subject: "no-tenant", Scopes: []string{"secrets:read"}},
+	"no-tenant-admin": {Subject: "no-tenant-admin", Scopes: []string{mtlsOperatorScope}},
+}
+
+// errTenantSecretMissing is the tenant secrets fake's answer for a path its
+// caller's tenant does not hold.
+type errTenantSecretMissing struct {
+	tenant, path string
+}
+
+func (e errTenantSecretMissing) Error() string {
+	return "tenant " + e.tenant + " holds no secret " + e.path
+}
+
+// tenantSecretsClient keeps a namespace per tenant and answers Get from the
+// tenant the request context carries, recording each tenant it saw.
+type tenantSecretsClient struct {
+	secrets.Client
+	byTenant map[string]map[string]*secrets.Secret
+	seen     []string
+}
+
+func (c *tenantSecretsClient) Get(ctx context.Context, path string, _ ...secrets.GetOption) (*secrets.Secret, error) {
+	tenant := sdktransport.TenantFromContext(ctx)
+	c.seen = append(c.seen, tenant)
+	secret, ok := c.byTenant[tenant][path]
+	if !ok {
+		return nil, errTenantSecretMissing{tenant: tenant, path: path}
+	}
+	return secret, nil
+}
+
+// The tenant secrets fake marks each tenant's secret by its version, which the
+// router's response carries.
+const (
+	tenantASecretVersion  = 11
+	tenantBSecretVersion  = 22
+	tenantBPrivateVersion = 33
+)
+
+func newTenantSecretsClient() *tenantSecretsClient {
+	return &tenantSecretsClient{byTenant: map[string]map[string]*secrets.Secret{
+		iamRESTTenantA: {"db": {Path: "db", Version: tenantASecretVersion}},
+		iamRESTTenantB: {
+			"db":     {Path: "db", Version: tenantBSecretVersion},
+			"b-only": {Path: "b-only", Version: tenantBPrivateVersion},
+		},
+	}}
+}
+
+func kmsTenantRESTServer(t *testing.T, kmsClient kms.Client, secretsClient secrets.Client) *RESTServer {
+	t.Helper()
+	s := &RESTServer{router: mux.NewRouter(), logger: slog.Default()}
+	guard := restapi.NewScopeGuard(kmsTenantCallers, nil, nil)
+	require.NoError(t, s.SetKMSRouterHandlers(logging.DefaultLogger(), kmsClient, &platformMockCryptoClient{}, nil, secretsClient, guard))
+	return s
+}
+
+// secretVersionField is the response fragment naming a secret's version.
+func secretVersionField(version int) string {
+	return `"version":` + strconv.Itoa(version)
+}
+
+func TestKMSREST_SecretsRunInTheCallersTenant(t *testing.T) {
+	secretsClient := newTenantSecretsClient()
+	s := kmsTenantRESTServer(t, &platformMockKMSClient{}, secretsClient)
+
+	recorder := serveIAM(s, http.MethodGet, "/api/v1/kms/secrets/db", "a-secrets")
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+	assert.Contains(t, recorder.Body.String(), secretVersionField(tenantASecretVersion))
+
+	recorder = serveIAM(s, http.MethodGet, "/api/v1/kms/secrets/db", "b-secrets")
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+	assert.Contains(t, recorder.Body.String(), secretVersionField(tenantBSecretVersion))
+
+	recorder = serveIAM(s, http.MethodGet, "/api/v1/kms/secrets/b-only", "a-secrets")
+	assert.NotEqual(t, http.StatusOK, recorder.Code, "tenant A reads tenant B's secret")
+	assert.NotContains(t, recorder.Body.String(), secretVersionField(tenantBPrivateVersion))
+
+	assert.Equal(t, []string{iamRESTTenantA, iamRESTTenantB, iamRESTTenantA}, secretsClient.seen)
+}
+
+func TestKMSREST_KMSCallRunsInTheCallersTenant(t *testing.T) {
+	var seen []string
+	client := &platformMockKMSClient{deleteKeyFn: func(ctx context.Context, _ string) error {
+		seen = append(seen, sdktransport.TenantFromContext(ctx))
+		return nil
+	}}
+	s := kmsTenantRESTServer(t, client, newTenantSecretsClient())
+	assertReachedHandler(t, serveIAM(s, http.MethodDelete, "/api/v1/kms/keys/k1", "a-kms"))
+	assertReachedHandler(t, serveIAM(s, http.MethodDelete, "/api/v1/kms/keys/k1", "b-kms"))
+	assert.Equal(t, []string{iamRESTTenantA, iamRESTTenantB}, seen)
+}
+
+func TestKMSREST_CallerWithoutTenantIsRefused(t *testing.T) {
+	secretsClient := newTenantSecretsClient()
+	s := kmsTenantRESTServer(t, &platformMockKMSClient{}, secretsClient)
+	for _, token := range []string{"no-tenant", "no-tenant-admin"} {
+		recorder := serveIAM(s, http.MethodGet, "/api/v1/kms/secrets/db", token)
+		assert.Equal(t, http.StatusForbidden, recorder.Code, token)
+		assert.Contains(t, recorder.Body.String(), ErrKMSRESTNoTenant{Subject: token}.Error(), token)
+	}
+	assert.Empty(t, secretsClient.seen, "a caller with no tenant never reaches the SDK")
 }
 
 // The mTLS operator's *:* scope admits every method on every resource.
