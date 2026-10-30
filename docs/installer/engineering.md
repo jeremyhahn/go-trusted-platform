@@ -133,6 +133,21 @@ Profiles: `GetProfile`, `GetProfileWithDescription`, `ListProfiles`,
 FIDO2: `NewFIDO2Enrollment(*FIDO2EnrollmentConfig)`, `DetectFIDO2Device`,
 `IsFIDO2Available`, `NewFIDO2Unlock(luksDevice string, debug bool)`.
 
+FIDO2 enrolment (`FIDO2Enrollment.Enroll`) goes through the SDK FIDO2 handler
+(`go-quicbaas/sdk/go/xkms/fido2`, HID transport): `EnrollKey` creates the
+credential, then `UnlockWithKey` on that credential and a 32-byte salt returns
+the slot key. That key is the SDK derivation of the hmac-secret (64 bytes,
+`GenerateDerivedKey`), not the raw secret, and it is the key the initrd FIDO2
+strategy derives at boot. The installer adds it to `fido2.keyslot` (default 3)
+under the platform keyslot policy, zeroes it, and writes a LUKS2 token of type
+`fido2` (`luks.TokenTypeFIDO2`) bound to the slot, carrying base64
+`fido2-credential` and `fido2-salt`, `fido2-rp` and `fido2-up-required`. The
+type marks the derivation: the initrd refuses any other FIDO2 token type
+(`FIDO2RawSecretTokenError`, see [`docs/luks/architecture.md`](../luks/architecture.md) §3).
+`fido2-cred` and `fido2-assert` are no longer used; `fido2-token` still detects
+the device. Failures are typed: `FIDO2EnrollKeyError`, `FIDO2DeriveKeyError`,
+`FIDO2AddKeyError`.
+
 Network (host addressing by role, §7): `NetworkConfig.Validate(*netplan.Plan)`,
 `Config.Plan`, `HostRole` (`HostRoleGateway`, `HostRoleControlPlane`,
 `HostRoleCompute`), `PlatformVRFConfig` (`EffectiveName`, `EffectiveTable`),

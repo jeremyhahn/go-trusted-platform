@@ -1,6 +1,6 @@
 # LUKS Key-Slot Management — Architecture
 
-> **Status: NORMATIVE** · Scope: runtime LUKS2 key-slot management on a running host · Last verified: 2026-10-13
+> **Status: NORMATIVE** · Scope: runtime LUKS2 key-slot management on a running host · Last verified: 2026-10-30
 > Conflicts with this document are defects. Fix them here first.
 
 ---
@@ -70,15 +70,24 @@ sdk/go/services/luks  (Service)          pkg/api/daemon transport adapters
   through pluggable handlers built on the go-xkms re-exports.
 
 **The initrd FIDO2 strategy** (`pkg/initrd/strategy_fido2.go`) keys its slot
-with the authenticator's hmac-secret output, which the SDK FIDO2 handler
-derives from the credential ID and a 32-byte salt (`UnlockWithKey`; enrolment
-takes a second touch, as `systemd-cryptenroll` does). The key is never stored.
-The credential ID, salt and relying party ID are kept in a LUKS2 header token
-bound to the keyslot, in the systemd-fido2 layout the installer also writes
-(base64 `fido2-credential` and `fido2-salt`, `fido2-rp`). At boot the strategy
-reads the lowest-ID token for the slot that carries a credential and a salt,
-whatever its type, so installer-enrolled (`fido2-manual`) volumes unlock too.
+with the key the SDK FIDO2 handler returns from `UnlockWithKey` for the
+credential ID and a 32-byte salt: the SDK's 64-byte derivation of the
+authenticator's hmac-secret (`GenerateDerivedKey`), not the raw secret.
+Enrolment takes a second touch, as `systemd-cryptenroll` does. The key is
+never stored. The credential ID, salt and relying party ID are kept in a LUKS2
+header token bound to the keyslot (base64 `fido2-credential` and
+`fido2-salt`, `fido2-rp`). The token type records the key derivation: type
+`fido2` (`luks.TokenTypeFIDO2`) means the slot holds the SDK derivation. The
+installer's enrolment (`pkg/installer/fido2_enroll.go`) uses the same SDK
+calls and writes the same type ([installer engineering](../installer/engineering.md)).
 If the token cannot be written, the slot is killed again.
+
+At boot the strategy reads the lowest-ID token for the slot that carries a
+credential and a salt. A token of any other type (`fido2-manual` from earlier
+installers, `systemd-fido2`) keys its slot with the raw hmac-secret, which the
+pinned SDK cannot return; the strategy returns `FIDO2RawSecretTokenError`
+(naming go-xkms #1769) without touching the authenticator or trying the slot.
+Such a slot has to be re-enrolled.
 
 **As shipped, the chain is not connected at the server end** (see
 [engineering.md](engineering.md) §6): the platformd startup path injects
