@@ -59,15 +59,15 @@ var (
 // carries the host's OVMF firmware paths and probes for the br-int bridge.
 var (
 	defaultQEMUConfig = qemu.DefaultConfig
-	newQEMUVM     = qemu.NewVM
-	vmStart       = (*qemu.VM).Start
-	vmWait        = (*qemu.VM).Wait
-	vmStop        = (*qemu.VM).Stop
-	vmCreateDisk  = (*qemu.VM).CreateDisk
-	vmIsRunning   = (*qemu.VM).IsRunning
-	stopQEMUByTap = qemu.StopExistingByTap
-	startTPM      = harness.StartTPM
-	stopTPM       = harness.StopTPM
+	newQEMUVM         = qemu.NewVM
+	vmStart           = (*qemu.VM).Start
+	vmWait            = (*qemu.VM).Wait
+	vmStop            = (*qemu.VM).Stop
+	vmCreateDisk      = (*qemu.VM).CreateDisk
+	vmIsRunning       = (*qemu.VM).IsRunning
+	stopQEMUByTap     = qemu.StopExistingByTap
+	startTPM          = harness.StartTPM
+	stopTPM           = harness.StopTPM
 
 	newSecureBootEnroller = func(cfg *qemu.SecureBootEnrollerConfig, logger *logging.Logger) (secureBootEnroller, error) {
 		enroller, err := qemu.NewSecureBootEnroller(cfg, logger)

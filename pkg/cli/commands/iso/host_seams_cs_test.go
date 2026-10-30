@@ -49,12 +49,12 @@ type fakeNetwork struct {
 	phases   map[string]testenv.NetworkPhase
 }
 
-func (n *fakeNetwork) Setup() error                    { n.setups++; return n.setupErr }
-func (n *fakeNetwork) EnsureRules() error              { n.rules++; return n.rulesErr }
-func (n *fakeNetwork) Cleanup() error                  { n.cleanups++; return nil }
-func (n *fakeNetwork) Config() *testenv.NetworkConfig  { return n.cfg }
-func (n *fakeNetwork) ServerTapName() string           { return n.cfg.ServerTapName }
-func (n *fakeNetwork) ClientTapName() string           { return n.cfg.ClientTapName }
+func (n *fakeNetwork) Setup() error                   { n.setups++; return n.setupErr }
+func (n *fakeNetwork) EnsureRules() error             { n.rules++; return n.rulesErr }
+func (n *fakeNetwork) Cleanup() error                 { n.cleanups++; return nil }
+func (n *fakeNetwork) Config() *testenv.NetworkConfig { return n.cfg }
+func (n *fakeNetwork) ServerTapName() string          { return n.cfg.ServerTapName }
+func (n *fakeNetwork) ClientTapName() string          { return n.cfg.ClientTapName }
 func (n *fakeNetwork) SetPhase(port string, phase testenv.NetworkPhase) error {
 	n.phases[port] = phase
 	return nil
@@ -1055,6 +1055,27 @@ func TestHostSeams_RunTestPXE(t *testing.T) {
 			assert.ErrorIs(t, err, errHost)
 		})
 	}
+
+	t.Run("key enrollment failure is logged and the boot goes on", func(t *testing.T) {
+		pxe := withPXEFake(t)
+		vms := withVMFake(t)
+		withFirmware(t)
+		vms.enroller.enrollErr = errHost
+		workDir := pxeWorkDirWithNVRAM(t)
+		require.NoError(t, os.MkdirAll(filepath.Join(workDir, "secure-boot-keys"), 0o755))
+		withPXEFlags(t, kernelURL, initrdURL, "", "", workDir)
+		secureBoot := pxeSecureBoot
+		t.Cleanup(func() { pxeSecureBoot = secureBoot })
+		pxeSecureBoot = true
+
+		require.NoError(t, runTestPXE(getTestFlags(), nil, nil))
+
+		assert.Equal(t, 1, vms.enroller.enrolls, "enrollment is attempted")
+		require.Len(t, vms.configs, 1)
+		assert.True(t, vms.configs[0].SecureBoot)
+		assert.Equal(t, []string{string(qemu.BootModePXE)}, vms.modes, "the VM still boots from the network")
+		assert.Equal(t, 1, pxe.env.stops)
+	})
 
 	t.Run("PXE server never ready", func(t *testing.T) {
 		pxe := withPXEFake(t)

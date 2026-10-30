@@ -149,17 +149,17 @@ func (f *fakeEnroller) EnrollKeys(context.Context) error {
 // vmFake stands in for QEMU and swtpm. Each VM it hands out is a zero
 // qemu.VM that is never started.
 type vmFake struct {
-	configs  []*qemu.Config
-	modes    []string
-	waits    int
-	stops    int
-	disks    int
-	running  bool
-	tapStops []string
-	tpm      *fakeTPM
-	tpmState harness.TPMState
-	tpmStops int
-	enroller *fakeEnroller
+	configs         []*qemu.Config
+	modes           []string
+	waits           int
+	stops           int
+	disks           int
+	running         bool
+	tapStops        []string
+	tpm             *fakeTPM
+	tpmState        harness.TPMState
+	tpmStops        int
+	enroller        *fakeEnroller
 	enrollerConfigs []*qemu.SecureBootEnrollerConfig
 
 	newErr, startErr, waitErr, stopErr, diskErr, tapErr, tpmErr, enrollerErr error
@@ -315,9 +315,9 @@ func TestHostSeams_RunCreateKeyDecisions(t *testing.T) {
 
 func TestHostSeams_RunCreateStepFailures(t *testing.T) {
 	tests := []struct {
-		name  string
+		name   string
 		break_ func(*pipelineFake)
-		check func(t *testing.T, err error)
+		check  func(t *testing.T, err error)
 	}{
 		{
 			name:   "download",
@@ -422,10 +422,10 @@ func TestHostSeams_RunCustomize(t *testing.T) {
 	platformd := withSiblingPlatformd(t)
 	isoDir := t.TempDir()
 	flags := &customizeFlags{
-		isoDir:          isoDir,
-		overlay:         "/srv/overlay",
-		workDir:         t.TempDir(),
-		platformdPath:   platformd,
+		isoDir:        isoDir,
+		overlay:       "/srv/overlay",
+		workDir:       t.TempDir(),
+		platformdPath: platformd,
 	}
 
 	t.Run("customizes the given tree", func(t *testing.T) {
@@ -633,12 +633,12 @@ func installFlagsFor(t *testing.T) *testFlags {
 	iso := filepath.Join(dir, "trusted.iso")
 	require.NoError(t, os.WriteFile(iso, []byte("iso"), 0o600))
 	return &testFlags{
-		iso:       iso,
-		disk:      filepath.Join(dir, "disk.qcow2"),
-		diskSize:  "8G",
-		memory:    1024,
-		cpus:      1,
-		workDir:   filepath.Join(dir, "work"),
+		iso:      iso,
+		disk:     filepath.Join(dir, "disk.qcow2"),
+		diskSize: "8G",
+		memory:   1024,
+		cpus:     1,
+		workDir:  filepath.Join(dir, "work"),
 	}
 }
 
