@@ -101,6 +101,12 @@ func (f *fakeProdCA) ParseBundle(data []byte) ([]*x509.Certificate, error) {
 }
 func (f *fakeProdCA) CertStore() xkmssdk.CertStore { return f.certStore }
 
+// CACertificate is an issuer without a pathLenConstraint, so issuance.Issue
+// lets an isCA request through as a real root CA would (RFC 5280 §4.2.1.9).
+func (f *fakeProdCA) CACertificate() (*x509.Certificate, error) {
+	return &x509.Certificate{BasicConstraintsValid: true, IsCA: true, MaxPathLen: -1}, nil
+}
+
 // =============================================================================
 // Tests
 // =============================================================================

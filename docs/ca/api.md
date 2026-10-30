@@ -68,6 +68,22 @@ every transport (`pkg/ca/issuance.Issue`): the certificate carries
 basicConstraints cA=TRUE, keyCertSign, and a pathLenConstraint of
 `max_path_len`, where 0 means no subordinate CA below it.
 
+The issuing CA's own pathLenConstraint bounds the request (RFC 5280
+§4.2.1.9), checked once in `issuance.Issue` for every transport and for
+renewal:
+
+| Issuing CA | `is_ca` request | Result |
+|------------|-----------------|--------|
+| pathLen 0 | any | refused, `IssuerPathLenExhaustedError` |
+| pathLen n > 0 | `max_path_len` 0 … n-1 | issued with that pathLen |
+| pathLen n > 0 | `max_path_len` ≥ n, or negative (no limit) | refused, `SubordinatePathLenError` (issuer, requested, allowed) |
+| no pathLen | any | issued as requested |
+
+Both refusals satisfy `issuance.IsInvalidRequest`; the issuer is named in
+the error message the transport returns. A request
+without `is_ca` is never bounded. When the issuing CA's certificate cannot be
+read, an `is_ca` request fails with `IssuerCertificateError`, a server error.
+
 The daemon's QUIC handler speaks its own wire structs: a flat
 `CAIssueRequest` with a string `key_algorithm`, and a `Certificate` with
 unix-second times and string enums. That `Certificate` carries

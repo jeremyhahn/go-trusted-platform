@@ -58,8 +58,12 @@ func (m *baseMockCA) IssueCertificateWithProfile(_ context.Context, _ *xkmsca.CA
 }
 
 // Trust chain
-func (m *baseMockCA) CACertificate() (*x509.Certificate, error) { return nil, nil }
-func (m *baseMockCA) CABundle() ([]byte, error)                 { return nil, nil }
+// CACertificate is an issuer without a pathLenConstraint, so issuance.Issue
+// lets an isCA request through as a real root CA would (RFC 5280 §4.2.1.9).
+func (m *baseMockCA) CACertificate() (*x509.Certificate, error) {
+	return &x509.Certificate{BasicConstraintsValid: true, IsCA: true, MaxPathLen: -1}, nil
+}
+func (m *baseMockCA) CABundle() ([]byte, error) { return nil, nil }
 func (m *baseMockCA) CABundleFiltered(_ xkmssdk.StoreType, _ x509.PublicKeyAlgorithm) ([]byte, error) {
 	return nil, nil
 }

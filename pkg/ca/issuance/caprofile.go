@@ -2,6 +2,7 @@ package issuance
 
 import (
 	"context"
+	"crypto/x509"
 
 	quicbaasca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/ca"
 )
@@ -24,6 +25,9 @@ func (ErrNilCertificateRequest) Error() string {
 type Issuer interface {
 	IssueCertificate(ctx context.Context, req *quicbaasca.CACertificateRequest) (*quicbaasca.IssuedCertificate, error)
 	IssueCertificateWithProfile(ctx context.Context, req *quicbaasca.CACertificateRequest, profile string) (*quicbaasca.IssuedCertificate, error)
+	// CACertificate is the certificate the CA signs with, whose path length
+	// bounds the subordinate CAs it may issue.
+	CACertificate() (*x509.Certificate, error)
 }
 
 // Issue issues the certificate req describes. go-xkms IssueCertificate picks
@@ -40,7 +44,39 @@ func Issue(ctx context.Context, ca Issuer, req *quicbaasca.CACertificateRequest)
 	if !req.IsCA {
 		return ca.IssueCertificate(ctx, req)
 	}
+	issuer, err := ca.CACertificate()
+	if err != nil {
+		return nil, &IssuerCertificateError{Err: err}
+	}
+	if err := checkIssuerPathLen(issuer, req.MaxPathLen); err != nil {
+		return nil, err
+	}
 	caReq := *req
 	caReq.MaxPathLenZero = caReq.MaxPathLen == 0
 	return ca.IssueCertificateWithProfile(ctx, &caReq, caProfileName)
+}
+
+// checkIssuerPathLen refuses a subordinate CA the issuer's pathLenConstraint
+// does not allow (RFC 5280 §4.2.1.9): an issuer with pathLen 0 may issue no
+// CA certificate, and beneath an issuer with pathLen n the subordinate's own
+// pathLen is at most n-1. A requested pathLen below zero asks for no limit,
+// which a limited issuer cannot grant. An issuer without a pathLenConstraint
+// (MaxPathLen -1, or 0 without MaxPathLenZero) does not bound the request.
+func checkIssuerPathLen(issuer *x509.Certificate, requested int) error {
+	if issuer == nil {
+		return &IssuerCertificateError{}
+	}
+	limited := issuer.MaxPathLen > 0 || (issuer.MaxPathLen == 0 && issuer.MaxPathLenZero)
+	if !limited {
+		return nil
+	}
+	subject := issuer.Subject.String()
+	if issuer.MaxPathLen == 0 {
+		return &IssuerPathLenExhaustedError{Issuer: subject}
+	}
+	allowed := issuer.MaxPathLen - 1
+	if requested < 0 || requested > allowed {
+		return &SubordinatePathLenError{Issuer: subject, Requested: requested, Allowed: allowed}
+	}
+	return nil
 }

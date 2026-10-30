@@ -196,3 +196,53 @@ func (e *RenewError) Error() string {
 }
 
 func (e *RenewError) Unwrap() error { return e.Err }
+
+// IssuerCertificateError is an isCA request whose issuer certificate could not
+// be read, so its path length cannot be checked and no CA certificate is issued.
+type IssuerCertificateError struct {
+	Err error
+}
+
+func (e *IssuerCertificateError) Error() string {
+	if e.Err == nil {
+		return "the issuing CA has no certificate, so its path length cannot be checked"
+	}
+	return "read the issuing CA's certificate to check its path length: " + e.Err.Error()
+}
+
+func (e *IssuerCertificateError) Unwrap() error { return e.Err }
+
+// IssuerPathLenExhaustedError is an isCA request to an issuer whose
+// pathLenConstraint is 0, which may sign no subordinate CA (RFC 5280 §4.2.1.9).
+type IssuerPathLenExhaustedError struct {
+	// Issuer is the issuing CA's subject.
+	Issuer string
+}
+
+func (e *IssuerPathLenExhaustedError) Error() string {
+	return "issuer " + strconv.Quote(e.Issuer) + " has path length 0 and may issue no subordinate CA"
+}
+
+func (e *IssuerPathLenExhaustedError) invalidRequest() {}
+
+// SubordinatePathLenError is an isCA request for a path length the issuer's
+// pathLenConstraint does not allow: beneath an issuer with path length n the
+// subordinate's is at most n-1, and a negative request (no limit) is refused
+// (RFC 5280 §4.2.1.9).
+type SubordinatePathLenError struct {
+	// Issuer is the issuing CA's subject.
+	Issuer    string
+	Requested int
+	Allowed   int
+}
+
+func (e *SubordinatePathLenError) Error() string {
+	requested := strconv.Itoa(e.Requested)
+	if e.Requested < 0 {
+		requested = "unlimited"
+	}
+	return "a subordinate CA of issuer " + strconv.Quote(e.Issuer) + " may have path length at most " +
+		strconv.Itoa(e.Allowed) + ", not " + requested
+}
+
+func (e *SubordinatePathLenError) invalidRequest() {}
