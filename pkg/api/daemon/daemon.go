@@ -1549,6 +1549,22 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 		}
 	}
 
+	// The DNS and PXE routes serve the same DNSServiceServer and
+	// PXEGRPCService instances gRPC, QUIC, MCP and Unix serve, behind
+	// restGuard. A failed mount stops the daemon.
+	if daemon.concreteRestServer != nil {
+		if err := daemon.concreteRestServer.SetDNSRouterHandlers(logger, dnsGRPCService, restGuard); err != nil {
+			constructErr := ErrTransportConstructionFailed{Transport: transportREST, Cause: err}
+			logger.Error(constructErr, "component", "rest_server")
+			return nil, constructErr
+		}
+		if err := daemon.concreteRestServer.SetPXERouterHandlers(logger, pxeGRPCService, restGuard); err != nil {
+			constructErr := ErrTransportConstructionFailed{Transport: transportREST, Cause: err}
+			logger.Error(constructErr, "component", "rest_server")
+			return nil, constructErr
+		}
+	}
+
 	// Wire CA REST handlers if the CA service is available. Without this,
 	// /api/v1/ca/* would not be served and the REST adapter for
 	// `platformctl --protocol rest ca list` would 404. The handlers share

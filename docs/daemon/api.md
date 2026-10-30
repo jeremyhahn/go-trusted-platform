@@ -560,6 +560,33 @@ device routes (`/device/profile`, `/device/activate`, `/device/heartbeat`,
 stays with `SetConfigDeliveryHandler`. The daemon refuses to start when either
 device mount fails (`ErrTransportConstructionFailed`).
 
+**The daemon REST plane serves the DNS and PXE operator routes (#997).**
+`SetDNSRouterHandlers` (`pkg/api/daemon/dns_rest.go`) mounts the DNS router
+(`pkg/webservice/v1/rest/dns`) at `/api/v1/dns` over the same
+`DNSServiceServer` gRPC, QUIC, MCP and Unix serve: zones, records, `resolve`,
+`zones/{zone}/sign`, `zones/{zone}/dnssec` and `register`.
+`SetPXERouterHandlers` (`pkg/api/daemon/pxe_rest.go`) mounts the PXE operator
+routes (`pkg/webservice/v1/rest/pxe`) at `/api/v1/pxe` over the same
+`PXEGRPCService`: `status`, `start`, `stop` and `devices/**`. platformd sets no
+PXE backend, so every PXE route answers 503 `SERVICE_NOT_CONFIGURED`, as the
+other transports do. Both run behind the REST scope guard; the PXE router
+checks each route's scope itself through the guard:
+
+| Routes | Scope |
+|--------|-------|
+| every DNS `GET` | `dns:read` |
+| every DNS `POST` and `PUT` | `dns:write` |
+| every DNS `DELETE` | `dns:delete` |
+| every PXE `GET` | `pxe:read` |
+| every PXE `POST` and `PUT` | `pxe:write` |
+| `DELETE /api/v1/pxe/devices/{id}` | `pxe:delete` |
+
+Each scope is the one the gRPC catalog gives the matching rpc. A missing
+credential answers 401 and a missing scope 403. The credential-less install
+webhook (`POST /api/v1/pxe/webhook/complete`, #238) and the per-MAC PXE gateway
+routes are the webservice's; the daemon does not mount them. The daemon refuses
+to start when either mount fails (`ErrTransportConstructionFailed`).
+
 `TestDaemonREST_EveryMountedRouteIsGuarded` (`pkg/api/daemon/rest_scope_test.go`)
 walks the daemon REST router and sends every route a request with no
 credential; each must answer 401 unless it is on one of two named exception

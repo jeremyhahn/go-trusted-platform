@@ -1228,6 +1228,26 @@ func (e ErrDeviceRESTUnavailable) Error() string {
 	return "device REST routes unavailable: " + e.Reason
 }
 
+// ErrDNSRESTUnavailable reports that the DNS routes could not be mounted on
+// the daemon REST listener.
+type ErrDNSRESTUnavailable struct {
+	Reason string
+}
+
+func (e ErrDNSRESTUnavailable) Error() string {
+	return "DNS REST routes unavailable: " + e.Reason
+}
+
+// ErrPXERESTUnavailable reports that the PXE operator routes could not be
+// mounted on the daemon REST listener.
+type ErrPXERESTUnavailable struct {
+	Reason string
+}
+
+func (e ErrPXERESTUnavailable) Error() string {
+	return "PXE REST routes unavailable: " + e.Reason
+}
+
 // ErrTenantBarrierShamirUnsupported is returned when InitTenantBarrier asks
 // for Shamir sharing. The per-tenant barrier initializes with its
 // deterministic credential only, and the init returns no shares, so
