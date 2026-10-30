@@ -124,6 +124,8 @@ var daemonDivergentClaims = map[string]string{
 	"/platform.v1.DeviceService/BootCertificate": deviceMachineFacingOnWebservice,
 	"/platform.v1.DeviceService/BootDelivery":    deviceMachineFacingOnWebservice,
 
+	"/platform.v1.PXEService/WebhookComplete": pxeWebhookOnWebservice,
+
 	"/platform.v1.IDevIDService/ActivateCredential":       idevidOnTPMPrefix,
 	"/platform.v1.IDevIDService/CreateIAKCSR":             idevidOnTPMPrefix,
 	"/platform.v1.IDevIDService/CreateIDevIDCSR":          idevidOnTPMPrefix,
@@ -172,6 +174,7 @@ const (
 	// the daemon does not mount (#997 s3).
 	attestationQuoteOnWebservice    = "#452 (#997 s3): the quote and host collection routes take the caller-admission gate (RegisterQuoteRoutes), which the daemon does not mount"
 	deviceMachineFacingOnWebservice = "#452 (#997 s3): the machine-facing device routes (RegisterMachineFacingRoutes) are the webservice's; the daemon mounts none"
+	pxeWebhookOnWebservice          = "#452 (#997 s4): the credential-less install webhook (RegisterMachineFacingRoutes, #238) is the webservice route; the daemon mounts none"
 )
 
 // landsOnClaimedShape routes the claim through the daemon's table. It returns
