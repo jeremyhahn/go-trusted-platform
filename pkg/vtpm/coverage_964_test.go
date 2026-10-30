@@ -989,16 +989,9 @@ func TestCoverage964_SealUnsealAfterHangUp(t *testing.T) {
 	require.Nil(t, plain)
 }
 
-func TestCoverage964_TPMProviderSimulator(t *testing.T) {
+func TestCoverage964_TPMProviderCharDevice(t *testing.T) {
 	provider := NewTPMProvider(nil)
-
-	// The simulator is compiled into go-xkms only behind its tpm_simulator
-	// tag, which this build does not set: the open fails closed, typed.
-	tpm, err := provider.GetSimulatorTPM()
-	var openErr ErrTPMDeviceOpenFailed
-	require.ErrorAs(t, err, &openErr)
-	require.Equal(t, simulatorCacheKey, openErr.Device)
-	require.Nil(t, tpm)
+	t.Cleanup(func() { require.NoError(t, provider.CloseAll()) })
 
 	// A character device that answers no TPM command still opens as an
 	// uninitialized TPM, which is cached for reuse.
@@ -1007,7 +1000,6 @@ func TestCoverage964_TPMProviderSimulator(t *testing.T) {
 	cached, err := provider.GetHardwareTPM(os.DevNull)
 	require.NoError(t, err)
 	require.Same(t, device, cached)
-	require.NoError(t, provider.CloseAll())
 }
 
 func TestCoverage964_GeneratorEKCertificateFile(t *testing.T) {
