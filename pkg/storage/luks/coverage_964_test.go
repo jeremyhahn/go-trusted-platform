@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	goluks "github.com/jeremyhahn/go-luks2/pkg/luks2"
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/storage/drive"
 )
@@ -493,5 +494,230 @@ func TestCoverage964_FormatVolumeFailures(t *testing.T) {
 	err = m.FormatVolume(context.Background(), part, []byte("pass"))
 	if !errors.As(err, &wrapped) || wrapped.Msg != "failed to format LUKS volume" {
 		t.Errorf("FormatVolume(missing device) = %v, want WrappedError %q", err, "failed to format LUKS volume")
+	}
+}
+
+// imagePartition describes a LUKS2 partition that the manager resolves to an
+// image file through the devicePathFor seam.
+func imagePartition(t *testing.T) (*Manager, *drive.PartitionConfig, string) {
+	t.Helper()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "volume.img")
+	f, err := os.Create(path)
+	if err != nil {
+		t.Fatalf("create volume file: %v", err)
+	}
+	if err := f.Truncate(32 << 20); err != nil {
+		t.Fatalf("truncate volume file: %v", err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatalf("close volume file: %v", err)
+	}
+
+	m, err := NewManager(nil, &fakeTPM{}, nil, nil)
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+	m.devicePathFor = func(*drive.PartitionConfig) string { return path }
+
+	part := &drive.PartitionConfig{
+		ID:    "data",
+		Label: "cov964",
+		Encryption: &drive.EncryptionConfig{
+			Enabled:     true,
+			MappingName: "cov964-crypt",
+			LUKS:        &drive.LUKSConfig{Cipher: "aes-xts-plain64", KeySize: 512, Hash: "sha256", PBKDF: "pbkdf2"},
+			TPMSealing:  &drive.TPMSealingConfig{Enabled: true, KeySlot: 1, PCRPolicy: true},
+			RecoveryKey: &drive.RecoveryKeyConfig{
+				Generate:   true,
+				KeySlot:    2,
+				OutputPath: filepath.Join(dir, "recovery.key"),
+			},
+		},
+	}
+	return m, part, path
+}
+
+func TestCoverage964_NewManagerResolvesByPartLabel(t *testing.T) {
+	m, err := NewManager(nil, nil, nil, nil)
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+	part := &drive.PartitionConfig{Label: "root"}
+	if got := m.getDevicePath(part); got != "/dev/disk/by-partlabel/root" {
+		t.Errorf("getDevicePath = %q, want /dev/disk/by-partlabel/root", got)
+	}
+}
+
+func TestCoverage964_FormatVolumeAddsSealedAndRecoveryKeyslots(t *testing.T) {
+	ctx := context.Background()
+	m, part, path := imagePartition(t)
+	pass := []byte("coverage-964-passphrase")
+
+	if err := m.FormatVolume(ctx, part, pass); err != nil {
+		t.Fatalf("FormatVolume: %v", err)
+	}
+
+	slots, err := m.ListKeyslots(part)
+	if err != nil {
+		t.Fatalf("ListKeyslots: %v", err)
+	}
+	var ids []int
+	for _, ks := range slots {
+		ids = append(ids, ks.ID)
+	}
+	if len(ids) != 3 || ids[0] != 0 || ids[1] != 1 || ids[2] != 2 {
+		t.Fatalf("keyslots = %v, want [0 1 2]", ids)
+	}
+
+	sealing := part.Encryption.TPMSealing
+	if sealing.SealedData == nil || sealing.KeyAttributes == nil {
+		t.Fatalf("TPM sealing config not populated: %+v", sealing)
+	}
+	if sealing.KeyAttributes.CN != "luks-data" || sealing.KeyAttributes.Parent == nil {
+		t.Errorf("sealed key attributes = %+v, want CN luks-data with an SRK parent", sealing.KeyAttributes)
+	}
+
+	h, err := NewCryptsetupHandlerImpl(nil, nil)
+	if err != nil {
+		t.Fatalf("new handler: %v", err)
+	}
+	// The fake TPM hands out a zeroed 32-byte key; keyslot 1 must accept it.
+	if err := h.ChangeKey(ctx, path, 1, make([]byte, 32), []byte("rotated-tpm-key")); err != nil {
+		t.Errorf("sealed key does not open keyslot 1: %v", err)
+	}
+
+	written, err := os.ReadFile(part.Encryption.RecoveryKey.OutputPath)
+	if err != nil {
+		t.Fatalf("read recovery key: %v", err)
+	}
+	// The file carries "#" comment lines around the key itself.
+	var keyLine string
+	for _, line := range strings.Split(string(written), "\n") {
+		if line = strings.TrimSpace(line); line != "" && !strings.HasPrefix(line, "#") {
+			keyLine = line
+		}
+	}
+	recovery, err := goluks.ParseRecoveryKey(keyLine)
+	if err != nil {
+		t.Fatalf("parse recovery key: %v", err)
+	}
+	defer recovery.Destroy()
+	if err := recovery.WithBytes(func(key []byte) error {
+		return h.ChangeKey(ctx, path, 2, key, []byte("rotated-recovery-key"))
+	}); err != nil {
+		t.Errorf("recovery key does not open keyslot 2: %v", err)
+	}
+
+	info, err := m.GetVolumeInfo(part)
+	if err != nil {
+		t.Fatalf("GetVolumeInfo: %v", err)
+	}
+	if info.UUID == "" {
+		t.Error("GetVolumeInfo returned no UUID")
+	}
+}
+
+func TestCoverage964_FormatVolumeWrapsKeyslotFailures(t *testing.T) {
+	cases := []struct {
+		name    string
+		prepare func(m *Manager, part *drive.PartitionConfig)
+		wantMsg string
+	}{
+		{
+			name:    "TPM unavailable",
+			prepare: func(m *Manager, _ *drive.PartitionConfig) { m.tpm = nil },
+			wantMsg: "failed to add TPM-sealed key",
+		},
+		{
+			name: "recovery keyslot occupied",
+			prepare: func(_ *Manager, part *drive.PartitionConfig) {
+				part.Encryption.TPMSealing = nil
+				part.Encryption.RecoveryKey.KeySlot = 0
+			},
+			wantMsg: "failed to add recovery key",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			m, part, _ := imagePartition(t)
+			tc.prepare(m, part)
+			var wrapped *WrappedError
+			err := m.FormatVolume(context.Background(), part, []byte("coverage-964-passphrase"))
+			if !errors.As(err, &wrapped) || wrapped.Msg != tc.wantMsg {
+				t.Errorf("FormatVolume = %v, want WrappedError %q", err, tc.wantMsg)
+			}
+		})
+	}
+}
+
+func TestCoverage964_AddRecoveryKeyHonoursFormats(t *testing.T) {
+	ctx := context.Background()
+	m, part, _ := imagePartition(t)
+	pass := []byte("coverage-964-passphrase")
+	part.Encryption.TPMSealing = nil
+	part.Encryption.RecoveryKey = nil
+	if err := m.FormatVolume(ctx, part, pass); err != nil {
+		t.Fatalf("FormatVolume: %v", err)
+	}
+
+	dir := t.TempDir()
+	for i, format := range []drive.RecoveryKeyFormat{drive.RecoveryKeyFormatHex, drive.RecoveryKeyFormatBase64} {
+		out := filepath.Join(dir, string(format)+".key")
+		part.Encryption.RecoveryKey = &drive.RecoveryKeyConfig{Generate: true, KeySlot: 3 + i, Format: format, Length: 16, OutputPath: out}
+		if err := m.AddRecoveryKey(ctx, part, pass); err != nil {
+			t.Fatalf("AddRecoveryKey(%s): %v", format, err)
+		}
+		written, err := os.ReadFile(out)
+		if err != nil {
+			t.Fatalf("read %s recovery key: %v", format, err)
+		}
+		if len(strings.TrimSpace(string(written))) == 0 {
+			t.Errorf("%s recovery key file is empty", format)
+		}
+	}
+
+	slots, err := m.ListKeyslots(part)
+	if err != nil {
+		t.Fatalf("ListKeyslots: %v", err)
+	}
+	if len(slots) != 3 {
+		t.Errorf("keyslot count = %d, want 3 (passphrase plus two recovery keys)", len(slots))
+	}
+
+}
+
+func TestCoverage964_MakeFilesystemPassesMappingAndWrapsErrors(t *testing.T) {
+	original := makeFilesystem
+	t.Cleanup(func() { makeFilesystem = original })
+
+	m, err := NewManager(nil, nil, nil, nil)
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+	part := &drive.PartitionConfig{
+		ID:         "data",
+		Encryption: &drive.EncryptionConfig{Enabled: true, MappingName: "cov964-crypt"},
+		Filesystem: &drive.FilesystemConfig{Type: "ext4", Label: "cov964-fs"},
+	}
+
+	var gotDevice, gotType, gotLabel string
+	makeFilesystem = func(device, fsType, label string) error {
+		gotDevice, gotType, gotLabel = device, fsType, label
+		return nil
+	}
+	if err := m.MakeFilesystem(context.Background(), part); err != nil {
+		t.Fatalf("MakeFilesystem: %v", err)
+	}
+	if gotDevice != "cov964-crypt" || gotType != "ext4" || gotLabel != "cov964-fs" {
+		t.Errorf("mkfs called with (%q, %q, %q), want (cov964-crypt, ext4, cov964-fs)", gotDevice, gotType, gotLabel)
+	}
+
+	mkfsErr := errors.New("mkfs failed")
+	makeFilesystem = func(string, string, string) error { return mkfsErr }
+	var wrapped *WrappedError
+	err = m.MakeFilesystem(context.Background(), part)
+	if !errors.As(err, &wrapped) || wrapped.Msg != "failed to create filesystem" || !errors.Is(err, mkfsErr) {
+		t.Errorf("MakeFilesystem = %v, want WrappedError wrapping the mkfs error", err)
 	}
 }
