@@ -29,7 +29,7 @@ import (
 // Under mTLS the MCP transport admits the operator certificate as REST, gRPC
 // and QUIC do: the principal of the certificate's tenant holding the operator
 // grant. A certificate from another CA authenticates nobody.
-func TestNewMCPPeerAuthenticator_MTLS_AdmitsTheOperatorCertificate(t *testing.T) {
+func TestNewMCPPeerAuthenticator_MTLS_AuthenticatesANonOperatorCertificateWithoutScope(t *testing.T) {
 	t.Parallel()
 	trusted := testutil.GenerateTestTLSBundle(t)
 	foreign := testutil.GenerateTestTLSBundle(t)
@@ -46,7 +46,7 @@ func TestNewMCPPeerAuthenticator_MTLS_AdmitsTheOperatorCertificate(t *testing.T)
 	require.NoError(t, err)
 	require.NotEmpty(t, leaf.Subject.Organization)
 	assert.Equal(t, leaf.Subject.Organization[0], authCtx.TenantID, "the tenant is the certificate's")
-	assert.Equal(t, []string{mtlsOperatorScope}, authCtx.Scopes)
+	assert.Empty(t, authCtx.Scopes, "a certificate that does not name the operator is granted nothing")
 
 	_, err = peers.AuthenticatePeer(context.Background(), []*x509.Certificate{leafOf(t, foreign.ClientCert)})
 	assert.Error(t, err, "a certificate from another CA is not the operator")

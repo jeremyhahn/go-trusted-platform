@@ -486,6 +486,18 @@ type ErrPXEWebhookIdentityRequired struct {
 	Reason    string
 }
 
+// ErrInstallerRouteForbidden is returned by the REST listener when a verified
+// client certificate that is not the operator (an installer, a gateway, a
+// device) asks for a route outside the machine-facing allowlist.
+type ErrInstallerRouteForbidden struct {
+	Method string
+	Path   string
+}
+
+func (e ErrInstallerRouteForbidden) Error() string {
+	return "client certificate is not the operator: " + e.Method + " " + e.Path + " is not a machine-facing route"
+}
+
 func (e ErrPXEWebhookIdentityRequired) Error() string {
 	return "pxe webhook over " + e.Transport + " requires a verified device certificate: " + e.Reason
 }

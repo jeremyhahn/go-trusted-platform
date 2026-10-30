@@ -164,6 +164,54 @@ named. **Do not treat this table as the installer's API.**
 | Running-system LUKS operations | `LUKSService`, QUIC `0x9C` | [`docs/daemon/api.md`](../daemon/api.md) §4 |
 | BMC virtual-media boot of the ISO | `BMCService`, QUIC `0x9F`, 23 `platform_bmc_*` MCP tools | [`docs/provisioning/api.md`](../provisioning/api.md) §5 |
 
+**The installer certificate authorizes only the install-completion webhook
+(Codex 8200).** On gRPC the mTLS interceptor admits it only to
+`PXEService/WebhookComplete`, and every other method returns
+`PermissionDenied`. On REST it reaches only `POST /api/v1/pxe/webhook/complete`,
+which authenticates the certificate itself. Every scope-guarded route refuses it
+because it carries no scope. On QUIC the guard admits it only to the
+PXE `WebhookComplete` sub-opcode, and on MCP the checker admits it only to the
+`pxe_webhook_complete` tool (Codex 8263); every other PXE operation still
+requires `pxe:write` and refuses it. gRPC, QUIC and MCP read the one list of
+installer methods, `mtlsInstallerMethods` in
+`pkg/api/daemon/transport_auth.go`. The installer certificate need carry no
+subject organization: on those methods alone the gRPC interceptor, the QUIC
+guard and the MCP checker admit a verified certificate the authenticator
+refused only for having no tenant, and WebhookComplete then admits it only if
+its fingerprint is the one SetDeviceInstalling bound, as REST does. On every
+other method such a certificate is refused as unauthenticated. A verified client
+certificate falls in one of three classes (Codex 8279 P1-f). The **operator**
+(subject O the system tenant and SPIFFE ID
+`spiffe://<td>/tenant/system/user/admin`) and a **tenant principal** (exactly
+one subject O that is not the system tenant, plus a SPIFFE ID
+`spiffe://<td>/tenant/<that O>/user/<name>` in the operator trust domain) are
+granted the platform API, and tenant authorization then limits the tenant
+principal to its tenant. Every other certificate, every machine certificate
+included, is an **installer** and reaches only the installer methods above. A
+certificate's subject O alone never grants a scope: the daemon's own client
+certificate carries O "Trusted Platform" and no tenant user SPIFFE ID, so it
+stays an installer. See
+[`docs/auth/architecture.md`](../auth/architecture.md) §5.
+
+**The daemon REST listener enforces the boundary itself (Codex 8242).** Many
+daemon REST routes have no scope guard, among them
+`POST /api/v1/services/{service}/stop` and `DELETE /api/v1/kms/keys/{id}`, so a
+check that ran only where the guard runs would leave them open. A listener
+middleware (`installerBoundaryMiddleware`, `pkg/api/daemon/rest_service.go`)
+therefore answers 403 to a verified client certificate that is not the operator
+(installer, gateway or device) on every route except the machine-facing
+allowlist `installerMachineRoutes`. That allowlist covers the health and
+readiness probes (`/health`, `/health/live`, `/health/ready`,
+`/api/v1/health`), the public CA material (`/api/v1/ca/info`, `crl`,
+`bundle`), gatewayd's four control-plane routes under `/api/v1/gateway/`, which
+bind the request to the gateway the certificate names, and the device
+config-delivery routes (`provisioning/config/nonce`, `provisioning/config`,
+`provisioning/sign`, `provisioning/sessions/{sessionID}/poll`), which
+authenticate the device themselves. A bearer header does not lift the refusal.
+A request with no verified certificate goes to the route's own checks as
+before. The completion webhook is served by the webservice listener, not this
+one.
+
 ## 8. Errors as they would cross a transport
 
 There is no transport, so there is no wire mapping to record. For the day one

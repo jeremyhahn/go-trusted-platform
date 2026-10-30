@@ -149,20 +149,24 @@ type adminBundleIssuer struct {
 }
 
 // IssueAdminBundle issues the admin client certificate and key, carrying the
-// system-admin SPIFFE identity.
+// identity's tenant admin SPIFFE identity and that tenant as its subject O.
 func (a *adminBundleIssuer) IssueAdminBundle(ctx context.Context) (*AdminBundle, error) {
 	if err := a.identity.validate(); err != nil {
 		return nil, err
 	}
+	// The subject O names the same tenant as the SPIFFE ID, so the mTLS
+	// transports recognise the leaf as that tenant's principal.
+	req := AdminCertificateRequest()
+	req.Organization = a.identity.TenantID
 	var resp *certclient.IssueCertificateResponse
 	var err error
 	if local, ok := a.issuer.(*localCACertIssuer); ok {
-		resp, err = local.issue(ctx, AdminCertificateRequest(), &a.identity)
+		resp, err = local.issue(ctx, req, &a.identity)
 	} else {
 		// The SDK certificate request has no identity field. The server's CA
 		// adapter stamps the SAN only when it has a trust domain configured
 		// and the call carries a tenant.
-		resp, err = a.issuer.IssueCertificate(ctx, AdminCertificateRequest())
+		resp, err = a.issuer.IssueCertificate(ctx, req)
 	}
 	if err != nil {
 		return nil, err

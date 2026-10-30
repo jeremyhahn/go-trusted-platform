@@ -91,6 +91,12 @@ type Config struct {
 	EnableMTLS       bool           // Enable mutual TLS client certificate authentication
 	MTLSClientCAFile string         // Path to CA certificate file for validating client certs
 	MTLSClientCAPool *x509.CertPool // Pre-loaded CA cert pool (takes precedence over MTLSClientCAFile)
+	// MTLSOperatorTrustDomain is the SPIFFE trust domain of the operator's
+	// admin certificate. Only a client certificate naming the platform admin in
+	// this trust domain is the operator; every other certificate the pool
+	// admits authorizes only the install-completion webhook. Empty means no
+	// certificate is the operator.
+	MTLSOperatorTrustDomain string
 
 	// Service configurations
 	Services map[string]ServiceConfig

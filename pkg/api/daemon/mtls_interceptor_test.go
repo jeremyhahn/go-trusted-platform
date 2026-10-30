@@ -85,15 +85,16 @@ func (m *mockServerStream) Context() context.Context {
 
 // generateTestCert creates a minimal x509.Certificate for testing.
 func generateTestCert(cn string) *x509.Certificate {
-	return &x509.Certificate{
+	cert := &x509.Certificate{
 		Subject: pkix.Name{
-			CommonName:   cn,
-			Organization: []string{"Test Org"},
+			CommonName: cn,
 		},
 		SerialNumber: big.NewInt(1),
 		NotBefore:    time.Now().Add(-1 * time.Hour),
 		NotAfter:     time.Now().Add(24 * time.Hour),
 	}
+	nameOperator(cert, testOperatorTrustDomain)
+	return cert
 }
 
 // createTLSPeerContext creates a context with TLS peer info for testing.
@@ -334,8 +335,9 @@ func TestIdentityFromContextWrongType(t *testing.T) {
 
 func TestMTLSUnaryInterceptorSkipMethod(t *testing.T) {
 	cfg := &MTLSInterceptorConfig{
-		Authenticator: &mockAuthenticator{},
-		Logger:        logging.DefaultLogger(),
+		OperatorTrustDomain: testOperatorTrustDomain,
+		Authenticator:       &mockAuthenticator{},
+		Logger:              logging.DefaultLogger(),
 		SkipMethods: []string{
 			"/grpc.health.v1.Health/Check",
 		},
@@ -368,8 +370,9 @@ func TestMTLSUnaryInterceptorSkipMethod(t *testing.T) {
 
 func TestMTLSUnaryInterceptorNoPeer(t *testing.T) {
 	cfg := &MTLSInterceptorConfig{
-		Authenticator: &mockAuthenticator{},
-		Logger:        logging.DefaultLogger(),
+		OperatorTrustDomain: testOperatorTrustDomain,
+		Authenticator:       &mockAuthenticator{},
+		Logger:              logging.DefaultLogger(),
 	}
 
 	interceptor := MTLSUnaryInterceptor(cfg)
@@ -399,8 +402,9 @@ func TestMTLSUnaryInterceptorNoPeer(t *testing.T) {
 
 func TestMTLSUnaryInterceptorNoTLSInfo(t *testing.T) {
 	cfg := &MTLSInterceptorConfig{
-		Authenticator: &mockAuthenticator{},
-		Logger:        logging.DefaultLogger(),
+		OperatorTrustDomain: testOperatorTrustDomain,
+		Authenticator:       &mockAuthenticator{},
+		Logger:              logging.DefaultLogger(),
 	}
 
 	interceptor := MTLSUnaryInterceptor(cfg)
@@ -431,8 +435,9 @@ func TestMTLSUnaryInterceptorNoTLSInfo(t *testing.T) {
 
 func TestMTLSUnaryInterceptorNoCerts(t *testing.T) {
 	cfg := &MTLSInterceptorConfig{
-		Authenticator: &mockAuthenticator{},
-		Logger:        logging.DefaultLogger(),
+		OperatorTrustDomain: testOperatorTrustDomain,
+		Authenticator:       &mockAuthenticator{},
+		Logger:              logging.DefaultLogger(),
 	}
 
 	interceptor := MTLSUnaryInterceptor(cfg)
@@ -469,6 +474,7 @@ func TestMTLSUnaryInterceptorSuccess(t *testing.T) {
 	}
 
 	cfg := &MTLSInterceptorConfig{
+		OperatorTrustDomain: testOperatorTrustDomain,
 		Authenticator: &mockAuthenticator{
 			authenticateFunc: func(ctx context.Context, cert *x509.Certificate) (*auth.Identity, error) {
 				if cert.Subject.CommonName != "test-client" {
@@ -523,6 +529,7 @@ func TestMTLSUnaryInterceptorAuthenticatorError(t *testing.T) {
 	authErr := auth.ErrCertificateExpired{}
 
 	cfg := &MTLSInterceptorConfig{
+		OperatorTrustDomain: testOperatorTrustDomain,
 		Authenticator: &mockAuthenticator{
 			authenticateFunc: func(ctx context.Context, cert *x509.Certificate) (*auth.Identity, error) {
 				return nil, authErr
@@ -565,8 +572,9 @@ func TestMTLSUnaryInterceptorAuthenticatorError(t *testing.T) {
 
 func TestMTLSStreamInterceptorSkipMethod(t *testing.T) {
 	cfg := &MTLSInterceptorConfig{
-		Authenticator: &mockAuthenticator{},
-		Logger:        logging.DefaultLogger(),
+		OperatorTrustDomain: testOperatorTrustDomain,
+		Authenticator:       &mockAuthenticator{},
+		Logger:              logging.DefaultLogger(),
 		SkipMethods: []string{
 			"/grpc.health.v1.Health/Watch",
 		},
@@ -597,8 +605,9 @@ func TestMTLSStreamInterceptorSkipMethod(t *testing.T) {
 
 func TestMTLSStreamInterceptorNoPeer(t *testing.T) {
 	cfg := &MTLSInterceptorConfig{
-		Authenticator: &mockAuthenticator{},
-		Logger:        logging.DefaultLogger(),
+		OperatorTrustDomain: testOperatorTrustDomain,
+		Authenticator:       &mockAuthenticator{},
+		Logger:              logging.DefaultLogger(),
 	}
 
 	interceptor := MTLSStreamInterceptor(cfg)
@@ -630,8 +639,9 @@ func TestMTLSStreamInterceptorNoPeer(t *testing.T) {
 
 func TestMTLSStreamInterceptorNoTLSInfo(t *testing.T) {
 	cfg := &MTLSInterceptorConfig{
-		Authenticator: &mockAuthenticator{},
-		Logger:        logging.DefaultLogger(),
+		OperatorTrustDomain: testOperatorTrustDomain,
+		Authenticator:       &mockAuthenticator{},
+		Logger:              logging.DefaultLogger(),
 	}
 
 	interceptor := MTLSStreamInterceptor(cfg)
@@ -663,8 +673,9 @@ func TestMTLSStreamInterceptorNoTLSInfo(t *testing.T) {
 
 func TestMTLSStreamInterceptorNoCerts(t *testing.T) {
 	cfg := &MTLSInterceptorConfig{
-		Authenticator: &mockAuthenticator{},
-		Logger:        logging.DefaultLogger(),
+		OperatorTrustDomain: testOperatorTrustDomain,
+		Authenticator:       &mockAuthenticator{},
+		Logger:              logging.DefaultLogger(),
 	}
 
 	interceptor := MTLSStreamInterceptor(cfg)
@@ -702,6 +713,7 @@ func TestMTLSStreamInterceptorSuccess(t *testing.T) {
 	}
 
 	cfg := &MTLSInterceptorConfig{
+		OperatorTrustDomain: testOperatorTrustDomain,
 		Authenticator: &mockAuthenticator{
 			authenticateFunc: func(ctx context.Context, cert *x509.Certificate) (*auth.Identity, error) {
 				if cert.Subject.CommonName != "stream-client" {
@@ -754,6 +766,7 @@ func TestMTLSStreamInterceptorAuthenticatorError(t *testing.T) {
 	authErr := auth.ErrCertificateRevoked{}
 
 	cfg := &MTLSInterceptorConfig{
+		OperatorTrustDomain: testOperatorTrustDomain,
 		Authenticator: &mockAuthenticator{
 			authenticateFunc: func(ctx context.Context, cert *x509.Certificate) (*auth.Identity, error) {
 				return nil, authErr
@@ -834,8 +847,9 @@ func TestMTLSServerStreamContext(t *testing.T) {
 func TestMTLSInterceptorConfigNilLogger(t *testing.T) {
 	// Verify interceptors work with nil logger (no-op logging branches)
 	cfg := &MTLSInterceptorConfig{
-		Authenticator: &mockAuthenticator{},
-		Logger:        nil,
+		OperatorTrustDomain: testOperatorTrustDomain,
+		Authenticator:       &mockAuthenticator{},
+		Logger:              nil,
 	}
 
 	interceptor := MTLSUnaryInterceptor(cfg)
@@ -863,8 +877,9 @@ func TestMTLSInterceptorConfigNilLogger(t *testing.T) {
 
 func TestMTLSInterceptorConfigNilLoggerNoCerts(t *testing.T) {
 	cfg := &MTLSInterceptorConfig{
-		Authenticator: &mockAuthenticator{},
-		Logger:        nil,
+		OperatorTrustDomain: testOperatorTrustDomain,
+		Authenticator:       &mockAuthenticator{},
+		Logger:              nil,
 	}
 
 	interceptor := MTLSUnaryInterceptor(cfg)
@@ -884,8 +899,9 @@ func TestMTLSInterceptorConfigNilLoggerNoCerts(t *testing.T) {
 
 func TestMTLSInterceptorConfigNilLoggerNoTLS(t *testing.T) {
 	cfg := &MTLSInterceptorConfig{
-		Authenticator: &mockAuthenticator{},
-		Logger:        nil,
+		OperatorTrustDomain: testOperatorTrustDomain,
+		Authenticator:       &mockAuthenticator{},
+		Logger:              nil,
 	}
 
 	interceptor := MTLSUnaryInterceptor(cfg)
@@ -905,6 +921,7 @@ func TestMTLSInterceptorConfigNilLoggerNoTLS(t *testing.T) {
 
 func TestMTLSInterceptorConfigNilLoggerAuthFailed(t *testing.T) {
 	cfg := &MTLSInterceptorConfig{
+		OperatorTrustDomain: testOperatorTrustDomain,
 		Authenticator: &mockAuthenticator{
 			authenticateFunc: func(ctx context.Context, cert *x509.Certificate) (*auth.Identity, error) {
 				return nil, errors.New("test auth failure")
@@ -1030,8 +1047,9 @@ func TestContextKeyIdentityValue(t *testing.T) {
 
 func TestMTLSUnaryInterceptorMultipleSkipMethods(t *testing.T) {
 	cfg := &MTLSInterceptorConfig{
-		Authenticator: &mockAuthenticator{},
-		Logger:        logging.DefaultLogger(),
+		OperatorTrustDomain: testOperatorTrustDomain,
+		Authenticator:       &mockAuthenticator{},
+		Logger:              logging.DefaultLogger(),
 		SkipMethods: []string{
 			"/grpc.health.v1.Health/Check",
 			"/grpc.health.v1.Health/Watch",

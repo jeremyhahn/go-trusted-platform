@@ -34,7 +34,13 @@ import (
 	certclient "github.com/jeremyhahn/go-quicbaas/sdk/go/client/certificate"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/app"
+	appbackends "github.com/jeremyhahn/go-trusted-platform/pkg/app/backends"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/ca/issuance/issuancetest"
 )
+
+// harnessTestIdentity is the operator identity the system bundle is minted
+// with in these tests.
+var harnessTestIdentity = appbackends.AdminIdentity{TrustDomain: "platform.test", TenantID: app.SystemTenantID}
 
 // fakeIssuer is an appbackends.CertIssuer that mints client certificates
 // signed by a test root, with the requested tenant as the subject O, failing
@@ -107,7 +113,7 @@ func TestWriteHarnessAdminBundle_WritesVerifiableAdminCredential(t *testing.T) {
 	dir := t.TempDir()
 	issuer := newFakeIssuer(newTestRoot(t))
 
-	if err := writeHarnessAdminBundle(context.Background(), newTestLogger(), issuer, dir); err != nil {
+	if err := writeHarnessAdminBundle(context.Background(), newTestLogger(), issuer, harnessTestIdentity, dir); err != nil {
 		t.Fatalf("writeHarnessAdminBundle: %v", err)
 	}
 
@@ -145,7 +151,7 @@ func TestWriteHarnessAdminBundle_WritesVerifiableAdminCredential(t *testing.T) {
 }
 
 func TestWriteHarnessAdminBundle_NilIssuer(t *testing.T) {
-	err := writeHarnessAdminBundle(context.Background(), newTestLogger(), nil, t.TempDir())
+	err := writeHarnessAdminBundle(context.Background(), newTestLogger(), nil, harnessTestIdentity, t.TempDir())
 	var typed ErrProvisionMissingSDK
 	if !errors.As(err, &typed) {
 		t.Fatalf("expected ErrProvisionMissingSDK, got %T (%v)", err, err)
@@ -167,7 +173,7 @@ func TestWriteHarnessAdminBundle_IssuerFailure(t *testing.T) {
 			issuer := newFakeIssuer(newTestRoot(t))
 			issuer.failOnTenant = tc.failOnTenant
 
-			err := writeHarnessAdminBundle(context.Background(), newTestLogger(), issuer, dir)
+			err := writeHarnessAdminBundle(context.Background(), newTestLogger(), issuer, harnessTestIdentity, dir)
 			var typed ErrProvisionIssue
 			if !errors.As(err, &typed) || typed.Role != tc.wantRole {
 				t.Fatalf("expected ErrProvisionIssue{Role: %s}, got %T (%v)", tc.wantRole, err, err)
@@ -187,9 +193,85 @@ func TestWriteHarnessAdminBundle_PersistFailure(t *testing.T) {
 		t.Fatalf("seed not-a-dir: %v", err)
 	}
 
-	err := writeHarnessAdminBundle(context.Background(), newTestLogger(), newFakeIssuer(newTestRoot(t)), notADir)
+	err := writeHarnessAdminBundle(context.Background(), newTestLogger(), newFakeIssuer(newTestRoot(t)), harnessTestIdentity, notADir)
 	var typed ErrProvisionPersist
 	if !errors.As(err, &typed) {
 		t.Fatalf("expected ErrProvisionPersist, got %T (%v)", err, err)
+	}
+}
+
+// TestWriteHarnessAdminBundle_IncompleteIdentity asserts an operator identity
+// without a trust domain fails before any system bundle is written.
+func TestWriteHarnessAdminBundle_IncompleteIdentity(t *testing.T) {
+	dir := t.TempDir()
+	identity := appbackends.AdminIdentity{TenantID: app.SystemTenantID}
+
+	err := writeHarnessAdminBundle(context.Background(), newTestLogger(), newFakeIssuer(newTestRoot(t)), identity, dir)
+	var issue ErrProvisionIssue
+	// The tenant bundle is issued first and shares the trust domain, so it
+	// is the one that fails.
+	if !errors.As(err, &issue) || issue.Role != "tenant admin" {
+		t.Fatalf("expected ErrProvisionIssue{Role: tenant admin}, got %T (%v)", err, err)
+	}
+	var incomplete *appbackends.ErrAdminIdentityIncomplete
+	if !errors.As(issue.Cause, &incomplete) || incomplete.Field != "trust domain" {
+		t.Fatalf("expected *ErrAdminIdentityIncomplete{trust domain}, got %T (%v)", issue.Cause, issue.Cause)
+	}
+	for _, name := range []string{harnessTenantBundleName, harnessAdminBundleName} {
+		if _, statErr := os.Stat(filepath.Join(dir, name)); !os.IsNotExist(statErr) {
+			t.Errorf("an incomplete identity must leave no %s, stat err = %v", name, statErr)
+		}
+	}
+}
+
+// TestWriteHarnessAdminBundle_SystemBundleCarriesOperatorSPIFFEID mints
+// through the platform's local CA issuer and asserts the written system
+// bundle's leaf is the operator certificate: O = system tenant and exactly
+// the URI spiffe://<trust domain>/tenant/<system tenant>/user/admin.
+func TestWriteHarnessAdminBundle_SystemBundleCarriesOperatorSPIFFEID(t *testing.T) {
+	dir := t.TempDir()
+	issuer := appbackends.PlatformCertIssuer(issuancetest.NewCA(t), nil)
+
+	if err := writeHarnessAdminBundle(context.Background(), newTestLogger(), issuer, harnessTestIdentity, dir); err != nil {
+		t.Fatalf("writeHarnessAdminBundle: %v", err)
+	}
+
+	path := filepath.Join(dir, harnessAdminBundleName)
+	cert, err := tls.LoadX509KeyPair(path, path)
+	if err != nil {
+		t.Fatalf("bundle is not a cert + key pair: %v", err)
+	}
+	if org := cert.Leaf.Subject.Organization; len(org) != 1 || org[0] != app.SystemTenantID {
+		t.Errorf("bundle O = %v, want [%s]", org, app.SystemTenantID)
+	}
+	want := "spiffe://" + harnessTestIdentity.TrustDomain + "/tenant/" + app.SystemTenantID + "/user/admin"
+	if uris := cert.Leaf.URIs; len(uris) != 1 || uris[0].String() != want {
+		t.Errorf("bundle URIs = %v, want exactly [%s]", uris, want)
+	}
+}
+
+// TestWriteHarnessAdminBundle_TenantBundleCarriesTenantSPIFFEID proves the
+// tenant bundle is a tenant principal the mTLS transports admit (Codex 8279
+// P1-f): its one subject O is the harness tenant and its URI is that
+// tenant's admin user.
+func TestWriteHarnessAdminBundle_TenantBundleCarriesTenantSPIFFEID(t *testing.T) {
+	dir := t.TempDir()
+	issuer := appbackends.PlatformCertIssuer(issuancetest.NewCA(t), nil)
+
+	if err := writeHarnessAdminBundle(context.Background(), newTestLogger(), issuer, harnessTestIdentity, dir); err != nil {
+		t.Fatalf("writeHarnessAdminBundle: %v", err)
+	}
+
+	path := filepath.Join(dir, harnessTenantBundleName)
+	cert, err := tls.LoadX509KeyPair(path, path)
+	if err != nil {
+		t.Fatalf("tenant bundle is not a cert + key pair: %v", err)
+	}
+	if org := cert.Leaf.Subject.Organization; len(org) != 1 || org[0] != "harness-tenant" {
+		t.Errorf("tenant bundle O = %v, want [harness-tenant]", org)
+	}
+	want := "spiffe://platform.test/tenant/harness-tenant/user/admin"
+	if uris := cert.Leaf.URIs; len(uris) != 1 || uris[0].String() != want {
+		t.Errorf("tenant bundle URIs = %v, want exactly [%s]", uris, want)
 	}
 }
