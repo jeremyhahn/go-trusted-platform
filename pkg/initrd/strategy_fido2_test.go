@@ -15,6 +15,7 @@ package initrd
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
@@ -189,7 +190,7 @@ func TestFIDO2StrategyInstallNoFIDO2Slot(t *testing.T) {
 	}
 }
 
-func TestFIDO2StrategyLoadAuthConfig(t *testing.T) {
+func TestFIDO2StrategyLoadAuthConfigNoTokenSupport(t *testing.T) {
 	logger := logging.DefaultLogger()
 	platform := createTestPlatform()
 
@@ -200,60 +201,12 @@ func TestFIDO2StrategyLoadAuthConfig(t *testing.T) {
 		Type:  luks.UnlockFIDO2,
 	}
 
-	config, err := strategy.loadAuthConfig(slot)
-	if err != nil {
-		t.Fatalf("loadAuthConfig failed: %v", err)
+	config, err := strategy.loadAuthConfig(context.Background(), "/dev/sda2", slot)
+	var unsupported *FIDO2TokenUnsupportedError
+	if !errors.As(err, &unsupported) {
+		t.Fatalf("expected FIDO2TokenUnsupportedError, got %v", err)
 	}
-
-	if config == nil {
-		t.Fatal("loadAuthConfig returned nil config")
+	if config != nil {
+		t.Errorf("expected nil config, got %+v", config)
 	}
-
-	if config.RelyingPartyID != "luks-root" {
-		t.Errorf("expected relying party ID luks-root, got %s", config.RelyingPartyID)
-	}
-
-	if config.Timeout == 0 {
-		t.Error("expected non-zero timeout")
-	}
-}
-
-func TestFIDO2StrategyLoadAuthConfigDifferentSlots(t *testing.T) {
-	logger := logging.DefaultLogger()
-	platform := createTestPlatform()
-
-	strategy := NewFIDO2Strategy(platform, logger)
-
-	// Test with different slot indexes
-	for _, idx := range []int{0, 1, 5, 10} {
-		slot := luks.KeySlot{
-			Index: idx,
-			Type:  luks.UnlockFIDO2,
-		}
-
-		config, err := strategy.loadAuthConfig(slot)
-		if err != nil {
-			t.Errorf("loadAuthConfig failed for slot %d: %v", idx, err)
-			continue
-		}
-
-		if config == nil {
-			t.Errorf("loadAuthConfig returned nil for slot %d", idx)
-		}
-	}
-}
-
-func TestFIDO2StrategyStoreEnrollmentMetadata(t *testing.T) {
-	logger := logging.DefaultLogger()
-	platform := createTestPlatform()
-
-	strategy := NewFIDO2Strategy(platform, logger)
-
-	slot := &luks.KeySlot{
-		Index: 0,
-		Type:  luks.UnlockFIDO2,
-	}
-
-	// Should not panic - it's a no-op currently
-	strategy.storeEnrollmentMetadata(slot, nil)
 }
