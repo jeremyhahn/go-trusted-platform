@@ -2251,6 +2251,12 @@ MODULE_ENV_FILE ?= .devcontainer/.env
 # to rebuild against a fixed key.
 APT_REFRESH ?= $(eval APT_REFRESH := $$(shell scripts/apt-refresh-key.sh))$(APT_REFRESH)
 
+# The checksum of the Alpine package indexes the build resolves against
+# (scripts/apk-index-sum.sh, ci-standard.md §9). The devcontainer is Debian, so
+# CI's value is `none` and APT_REFRESH carries the package refresh; the build
+# argument is passed so the integration stages take it as the template does.
+APK_INDEX_SUM ?=
+
 DEVCONTAINER_BUILD_ARGS = --build-arg GO_IMAGE=$(GO_IMAGE) \
 	--build-arg APT_REFRESH=$(APT_REFRESH) \
 	$(if $(GO_BUILD_PROXY),--build-arg GO_BUILD_PROXY=$(GO_BUILD_PROXY)) \
@@ -2278,10 +2284,11 @@ docker-build: docker-build-integration docker-build-toolchain
 ## CI's image job gates $(IT_IMAGE) with `trivy image`: the integration stage,
 ## without the warm build cache docker-build-it adds.
 ## Its own target so CI's image job leases $(IT_IMAGE) before the toolchain
-## build starts (#1146): until a container names it, another job's reaper may
-## remove an image whose cached Created time is past its min-age.
+## build starts: the image job holds its lease only across this build and the
+## scan (ci-standard.md §9).
 docker-build-integration:
-	$(DEVCONTAINER_BUILD) $(DEVCONTAINER_BUILD_ARGS) --target integration -t $(IT_IMAGE) .
+	$(DEVCONTAINER_BUILD) $(DEVCONTAINER_BUILD_ARGS) --build-arg APK_INDEX_SUM=$(APK_INDEX_SUM) \
+		--target integration -t $(IT_IMAGE) .
 
 ## docker-build-toolchain: Build the toolchain image as $(TOOLCHAIN_IMAGE)
 docker-build-toolchain:
@@ -2303,8 +2310,29 @@ IT_BUILD_TARGET = $(if $(filter 0,$(IT_WARM_CACHE)),integration,integration-legs
 # `docker load` under pipefail, which dash (Debian's /bin/sh) does not have.
 docker-build-it: SHELL := /bin/bash
 docker-build-it:
-	$(if $(DEVCONTAINER_CLIENT_LOAD),set -o pipefail; )$(DEVCONTAINER_BUILD) $(DEVCONTAINER_BUILD_ARGS) --target $(IT_BUILD_TARGET) \
-		--build-arg IT_BUILD_TAGS="$(strip $(TEST_BUILD_TAGS))" -t $(IT_IMAGE) . $(if $(DEVCONTAINER_CLIENT_LOAD),| docker load)
+	$(if $(DEVCONTAINER_CLIENT_LOAD),set -o pipefail; )$(DEVCONTAINER_BUILD) $(DEVCONTAINER_BUILD_ARGS) --build-arg APK_INDEX_SUM=$(APK_INDEX_SUM) \
+		--target $(IT_BUILD_TARGET) 		--build-arg IT_BUILD_TAGS="$(strip $(TEST_BUILD_TAGS))" -t $(IT_IMAGE) . $(if $(DEVCONTAINER_CLIENT_LOAD),| docker load)
+
+# The integration image's content tag (ci-standard.md §9): a hash of the build
+# arguments that change the image (the stage, the warm cache's build tags, the
+# base and its package refresh) and of the whole build context, which is the
+# commit's tree, the diff of a dirty checkout and every untracked file
+# .gitignore keeps. An unchanged tree names the image it already built, so a
+# CI job reuses it; any change names a new one. IT_WARM_CACHE=0 names the
+# integration stage, as docker-build-integration builds it.
+IT_IMAGE_REPO := go-trusted-platform-ci-it
+
+.PHONY: it-image
+## it-image: Print the integration image's content tag, $(IT_IMAGE_REPO):<hash>
+it-image: SHELL := /bin/bash
+it-image:
+	@set -euo pipefail; \
+	{ printf '%s\n' 'GO_IMAGE=$(GO_IMAGE)' 'APT_REFRESH=$(APT_REFRESH)' 'APK_INDEX_SUM=$(APK_INDEX_SUM)' \
+		'TARGET=$(IT_BUILD_TARGET)' 'IT_BUILD_TAGS=$(if $(filter integration-legs,$(IT_BUILD_TARGET)),$(strip $(TEST_BUILD_TAGS)))'; \
+	  git rev-parse 'HEAD^{tree}'; \
+	  git diff --binary HEAD; \
+	  git ls-files -z --others --exclude-standard | xargs -0r sha256sum --; \
+	} | sha256sum | cut -c1-16 | sed 's|^|$(IT_IMAGE_REPO):|'
 
 .PHONY: toolchain-image
 ## toolchain-image: Print the toolchain image tag (CI reads it with make -s)
