@@ -158,34 +158,51 @@ func TestWaitForSocket_Failures(t *testing.T) {
 
 func TestStart_SocketTypeFollowsQEMUMode(t *testing.T) {
 	tests := []struct {
-		name     string
-		qemuMode bool
-		want     string
+		name       string
+		qemuMode   bool
+		longSocket bool
+		want       string
 	}{
 		{name: "data channel", qemuMode: false, want: "--server type=unixio,path="},
 		{name: "control channel", qemuMode: true, want: "--ctrl type=unixio,path="},
+		{name: "control channel on a socket path that takes the temp-directory fallback", qemuMode: true, longSocket: true, want: "--ctrl type=unixio,path="},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			argsFile := filepath.Join(t.TempDir(), "args")
 			fakeSWTPMScriptOnPath(t, "#!/bin/sh\necho \"$@\" > "+argsFile+"\n")
 			stateDir := t.TempDir()
-			socketPath := filepath.Join(t.TempDir(), "s.sock")
+			socketName := "s.sock"
+			if tt.longSocket {
+				socketName = strings.Repeat("s", unixSocketPathMax) + ".sock"
+			}
+			socketPath := filepath.Join(t.TempDir(), socketName)
 			s := &SWTPM{
 				config: &Config{StateDir: stateDir, SocketPath: socketPath, QEMUMode: tt.qemuMode, Debug: true, LogLevel: 5},
 				logger: logging.DefaultLogger(),
 			}
 
 			require.NoError(t, s.Start(context.Background()))
+			// The path Start handed to swtpm: the configured one, or the
+			// temp-directory fallback when the host's temp path is long.
+			effective := s.SocketPath()
 			<-s.exitCh
 			require.NoError(t, s.Stop(), "Stop must accept a daemon that already exited")
 
+			if tt.longSocket {
+				assert.NotEqual(t, socketPath, effective)
+				assert.Equal(t, os.TempDir(), filepath.Dir(filepath.Dir(effective)))
+				assert.True(t, strings.HasPrefix(filepath.Base(filepath.Dir(effective)), "swtpm-"))
+				assert.Equal(t, "swtpm.sock", filepath.Base(effective))
+				assert.Equal(t, socketPath, s.SocketPath(), "Stop restores the configured socket path")
+			}
+
 			args, err := os.ReadFile(argsFile)
 			require.NoError(t, err)
-			assert.Contains(t, string(args), tt.want+s.SocketPath())
+			assert.Contains(t, string(args), tt.want+effective)
 			assert.Contains(t, string(args), "--tpmstate dir=")
 			assert.Contains(t, string(args), "--log level=5")
-			assert.Contains(t, string(args), "--log file="+filepath.Join(filepath.Dir(s.SocketPath()), "swtpm.log"))
+			assert.Contains(t, string(args), "--log file="+filepath.Join(filepath.Dir(effective), "swtpm.log"))
 		})
 	}
 }
