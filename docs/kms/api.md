@@ -20,9 +20,17 @@ daemon also serves the go-quicbaas `quicbaas.kms.v1` services `KeyManagement`,
 listeners (`KMSService.RegisterGRPCServices`, `pkg/api/daemon/kms_service.go`).
 A gRPC cell written `Service.Method` names one of those.
 REST: base path `/api/v1/kms`. The webservice router
-(`pkg/webservice/v1/rest/kms/router.go`) serves the routes keyed by name; the
-daemon REST server (`RESTServer.SetKMSHandlers`, `pkg/api/daemon/rest_service.go`,
-mounting the handlers in `pkg/api/rest/kms_handlers.go`) serves export, the batch operations and rewrap.
+(`pkg/webservice/v1/rest/kms/router.go`) serves the routes keyed by name — keys,
+crypto, DEKs and secrets — on both planes. The daemon REST server mounts it
+first (`RESTServer.SetKMSRouterHandlers`, `pkg/api/daemon/kms_rest.go`, #997)
+behind its scope guard (§6), so it wins every path it shares with the daemon's
+own handlers. Those handlers (`RESTServer.SetKMSHandlers`,
+`pkg/api/daemon/rest_service.go`, mounting `pkg/api/rest/kms_handlers.go`) keep
+the paths the router does not serve: export, the batch operations, rewrap, the
+body-keyed `encrypt`, `decrypt`, `sign`, `verify` and `hmac`, and
+`GET /api/v1/kms/status`. The normative backend status route is
+`GET /api/v1/kms/backend/status` (`kms:read`) on both planes;
+`/api/v1/kms/status` is the daemon handlers' route and is not an alias.
 QUIC: key management `0xC0`–`0xCF`, crypto `0xD0`–`0xDA`, plus a **KMS
 extended category opcode `0xCD`** whose subs `0x08`–`0x10` are the DEK calls.
 The `OpDEK*` bytes `0xF0`–`0xF5` are reserved and unserved.
@@ -113,9 +121,11 @@ fields and decodes the reply into `key` and `metadata`. It refuses an algorithm
 or usage outside those lists as InvalidArgument before sending, because the
 route would answer 400.
 
-The daemon REST server's generate (`POST /api/v1/kms/keys`) and import
-(`POST /api/v1/kms/keys/import`) read `key_spec.algorithm` and `key_spec.usage`
-as names and send the KMS their `platform.v1` numbers
+The router serves generate and import on the daemon plane too (§1), so both
+planes read the flat body above. The daemon handlers' own generate and import
+(`pkg/api/rest/kms_handlers.go`), now shadowed by the router, read
+`key_spec.algorithm` and `key_spec.usage` as names and send the KMS their
+`platform.v1` numbers
 (`pkg/api/rest/kms_handlers.go` `kmsAlgorithmNumbers`, `kmsUsageNumbers`):
 
 | `key_spec.algorithm` | `platform.v1` `KMSKeyAlgorithm` |
@@ -405,6 +415,25 @@ is `v1Router.gated(common.ROLE_ADMIN)` in `pkg/webservice/v1/router.go`;
 and [`docs/api/rest-routers.md`](../api/rest-routers.md) the router-level
 picture. The REST gate is role-based; the gRPC and MCP positions are the scope
 catalogs above.
+
+### The daemon REST plane is gated on scopes (#997)
+
+On the daemon listener the router authenticates through the daemon REST scope
+guard ([`docs/daemon/api.md`](../daemon/api.md) §5): a `Bearer` platform token,
+else the verified client certificate as the `*:*` operator. A missing or
+invalid credential answers 401. The caller then needs the scope the route and
+method name, else 403:
+
+| Routes | `GET` | `POST`, `PUT`, `PATCH` | `DELETE` |
+|--------|-------|------------------------|----------|
+| `/api/v1/kms/secrets/**` | `secrets:read` | `secrets:write` | `secrets:delete` |
+| every other `/api/v1/kms/**` route of the router | `kms:read` | `kms:write` | `kms:delete` |
+
+`POST /api/v1/kms/decrypt/{name}`, `/verify/{name}`, `/hmac/{name}/verify`,
+`/hash` and `/random` change nothing and need `kms:read`, as gRPC `Decrypt`,
+`Verify`, `VerifyHMAC`, `Hash` and `GenerateRandom` do. Any other method is
+refused, never defaulted. Installer and machine certificates are not admitted:
+no `/api/v1/kms` route is on any installer or machine allowlist (#1153).
 
 ---
 

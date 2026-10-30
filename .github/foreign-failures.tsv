@@ -234,15 +234,6 @@ test	test/integration	TestMultiProtocolMatrix/dns/REST/ResolveTXT	go-trusted-pla
 test	test/integration	TestMultiProtocolMatrix/iam/REST/AssignRole	go-quicbaas#1778	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1778
 test	test/integration	TestMultiProtocolMatrix/iam/REST/CheckPermission	go-quicbaas#1810	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1810
 test	test/integration	TestMultiProtocolMatrix/iam/REST/CreateRole	go-quicbaas#1778	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1778
-test	test/integration	TestMultiProtocolMatrix/kms/REST/CreateKey	go-trusted-platform#997	the PR that carries the owner ruling on go-trusted-platform#997 (daemon REST surface, owner queue item 138) removes these rows
-test	test/integration	TestMultiProtocolMatrix/kms/REST/Decrypt	go-trusted-platform#997	the PR that carries the owner ruling on go-trusted-platform#997 (daemon REST surface, owner queue item 138) removes these rows
-test	test/integration	TestMultiProtocolMatrix/kms/REST/DeleteKey	go-trusted-platform#997	the PR that carries the owner ruling on go-trusted-platform#997 (daemon REST surface, owner queue item 138) removes these rows
-test	test/integration	TestMultiProtocolMatrix/kms/REST/Encrypt	go-trusted-platform#997	the PR that carries the owner ruling on go-trusted-platform#997 (daemon REST surface, owner queue item 138) removes these rows
-test	test/integration	TestMultiProtocolMatrix/kms/REST/GetKey	go-trusted-platform#997	the PR that carries the owner ruling on go-trusted-platform#997 (daemon REST surface, owner queue item 138) removes these rows
-test	test/integration	TestMultiProtocolMatrix/kms/REST/ListKeys	go-trusted-platform#997	the PR that carries the owner ruling on go-trusted-platform#997 (daemon REST surface, owner queue item 138) removes these rows
-test	test/integration	TestMultiProtocolMatrix/kms/REST/RotateKey	go-trusted-platform#997	the PR that carries the owner ruling on go-trusted-platform#997 (daemon REST surface, owner queue item 138) removes these rows
-test	test/integration	TestMultiProtocolMatrix/kms/REST/Sign	go-trusted-platform#997	the PR that carries the owner ruling on go-trusted-platform#997 (daemon REST surface, owner queue item 138) removes these rows
-test	test/integration	TestMultiProtocolMatrix/kms/REST/Verify	go-trusted-platform#997	the PR that carries the owner ruling on go-trusted-platform#997 (daemon REST surface, owner queue item 138) removes these rows
 test	test/integration	TestMultiProtocolMatrix/pxe/REST/GetDevice	go-trusted-platform#997	the PR that carries the owner ruling on go-trusted-platform#997 (daemon REST surface, owner queue item 138) removes these rows
 test	test/integration	TestMultiProtocolMatrix/pxe/REST/GetStatus	go-trusted-platform#997	the PR that carries the owner ruling on go-trusted-platform#997 (daemon REST surface, owner queue item 138) removes these rows
 test	test/integration	TestMultiProtocolMatrix/pxe/REST/ListDevices	go-trusted-platform#997	the PR that carries the owner ruling on go-trusted-platform#997 (daemon REST surface, owner queue item 138) removes these rows
@@ -259,15 +250,6 @@ test	test/integration	TestProtocolByName/REST/dns/ResolveTXT	go-trusted-platform
 test	test/integration	TestProtocolByName/REST/iam/AssignRole	go-quicbaas#1778	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1778
 test	test/integration	TestProtocolByName/REST/iam/CheckPermission	go-quicbaas#1810	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1810
 test	test/integration	TestProtocolByName/REST/iam/CreateRole	go-quicbaas#1778	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1778
-test	test/integration	TestProtocolByName/REST/kms/CreateKey	go-trusted-platform#997	the PR that carries the owner ruling on go-trusted-platform#997 (daemon REST surface, owner queue item 138) removes these rows
-test	test/integration	TestProtocolByName/REST/kms/Decrypt	go-trusted-platform#997	the PR that carries the owner ruling on go-trusted-platform#997 (daemon REST surface, owner queue item 138) removes these rows
-test	test/integration	TestProtocolByName/REST/kms/DeleteKey	go-trusted-platform#997	the PR that carries the owner ruling on go-trusted-platform#997 (daemon REST surface, owner queue item 138) removes these rows
-test	test/integration	TestProtocolByName/REST/kms/Encrypt	go-trusted-platform#997	the PR that carries the owner ruling on go-trusted-platform#997 (daemon REST surface, owner queue item 138) removes these rows
-test	test/integration	TestProtocolByName/REST/kms/GetKey	go-trusted-platform#997	the PR that carries the owner ruling on go-trusted-platform#997 (daemon REST surface, owner queue item 138) removes these rows
-test	test/integration	TestProtocolByName/REST/kms/ListKeys	go-trusted-platform#997	the PR that carries the owner ruling on go-trusted-platform#997 (daemon REST surface, owner queue item 138) removes these rows
-test	test/integration	TestProtocolByName/REST/kms/RotateKey	go-trusted-platform#997	the PR that carries the owner ruling on go-trusted-platform#997 (daemon REST surface, owner queue item 138) removes these rows
-test	test/integration	TestProtocolByName/REST/kms/Sign	go-trusted-platform#997	the PR that carries the owner ruling on go-trusted-platform#997 (daemon REST surface, owner queue item 138) removes these rows
-test	test/integration	TestProtocolByName/REST/kms/Verify	go-trusted-platform#997	the PR that carries the owner ruling on go-trusted-platform#997 (daemon REST surface, owner queue item 138) removes these rows
 test	test/integration	TestProtocolByName/REST/pxe/GetDevice	go-trusted-platform#997	the PR that carries the owner ruling on go-trusted-platform#997 (daemon REST surface, owner queue item 138) removes these rows
 test	test/integration	TestProtocolByName/REST/pxe/GetStatus	go-trusted-platform#997	the PR that carries the owner ruling on go-trusted-platform#997 (daemon REST surface, owner queue item 138) removes these rows
 test	test/integration	TestProtocolByName/REST/pxe/ListDevices	go-trusted-platform#997	the PR that carries the owner ruling on go-trusted-platform#997 (daemon REST surface, owner queue item 138) removes these rows
@@ -284,15 +266,6 @@ test	test/integration	TestServiceProtocolByName/dns/REST/ResolveTXT	go-trusted-p
 test	test/integration	TestServiceProtocolByName/iam/REST/AssignRole	go-quicbaas#1778	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1778
 test	test/integration	TestServiceProtocolByName/iam/REST/CheckPermission	go-quicbaas#1810	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1810
 test	test/integration	TestServiceProtocolByName/iam/REST/CreateRole	go-quicbaas#1778	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1778
-test	test/integration	TestServiceProtocolByName/kms/REST/CreateKey	go-trusted-platform#997	the PR that carries the owner ruling on go-trusted-platform#997 (daemon REST surface, owner queue item 138) removes these rows
-test	test/integration	TestServiceProtocolByName/kms/REST/Decrypt	go-trusted-platform#997	the PR that carries the owner ruling on go-trusted-platform#997 (daemon REST surface, owner queue item 138) removes these rows
-test	test/integration	TestServiceProtocolByName/kms/REST/DeleteKey	go-trusted-platform#997	the PR that carries the owner ruling on go-trusted-platform#997 (daemon REST surface, owner queue item 138) removes these rows
-test	test/integration	TestServiceProtocolByName/kms/REST/Encrypt	go-trusted-platform#997	the PR that carries the owner ruling on go-trusted-platform#997 (daemon REST surface, owner queue item 138) removes these rows
-test	test/integration	TestServiceProtocolByName/kms/REST/GetKey	go-trusted-platform#997	the PR that carries the owner ruling on go-trusted-platform#997 (daemon REST surface, owner queue item 138) removes these rows
-test	test/integration	TestServiceProtocolByName/kms/REST/ListKeys	go-trusted-platform#997	the PR that carries the owner ruling on go-trusted-platform#997 (daemon REST surface, owner queue item 138) removes these rows
-test	test/integration	TestServiceProtocolByName/kms/REST/RotateKey	go-trusted-platform#997	the PR that carries the owner ruling on go-trusted-platform#997 (daemon REST surface, owner queue item 138) removes these rows
-test	test/integration	TestServiceProtocolByName/kms/REST/Sign	go-trusted-platform#997	the PR that carries the owner ruling on go-trusted-platform#997 (daemon REST surface, owner queue item 138) removes these rows
-test	test/integration	TestServiceProtocolByName/kms/REST/Verify	go-trusted-platform#997	the PR that carries the owner ruling on go-trusted-platform#997 (daemon REST surface, owner queue item 138) removes these rows
 test	test/integration	TestServiceProtocolByName/pxe/REST/GetDevice	go-trusted-platform#997	the PR that carries the owner ruling on go-trusted-platform#997 (daemon REST surface, owner queue item 138) removes these rows
 test	test/integration	TestServiceProtocolByName/pxe/REST/GetStatus	go-trusted-platform#997	the PR that carries the owner ruling on go-trusted-platform#997 (daemon REST surface, owner queue item 138) removes these rows
 test	test/integration	TestServiceProtocolByName/pxe/REST/ListDevices	go-trusted-platform#997	the PR that carries the owner ruling on go-trusted-platform#997 (daemon REST surface, owner queue item 138) removes these rows
@@ -326,9 +299,7 @@ test	test/integration/device	TestDeviceMultiProtocol/REST/TemplateCRUD/ListTempl
 test	test/integration/device	TestDeviceMultiProtocol/REST/TemplateCRUD/UpdateTemplate	go-trusted-platform#997	the PR that carries the owner ruling on go-trusted-platform#997 (daemon REST surface, owner queue item 138) removes these rows
 test	test/integration/device	TestDeviceMultiProtocol/REST/TemplateToProfile/CreateProfileFromTemplate	go-trusted-platform#997	the PR that carries the owner ruling on go-trusted-platform#997 (daemon REST surface, owner queue item 138) removes these rows
 test	test/integration/dns	TestDNSMultiProtocol/REST	go-trusted-platform#997	the PR that carries the owner ruling on go-trusted-platform#997 (daemon REST surface, owner queue item 138) removes these rows
-test	test/integration/kms	TestKMSMultiProtocol/REST	go-trusted-platform#997	the PR that carries the owner ruling on go-trusted-platform#997 (daemon REST surface, owner queue item 138) removes these rows
 test	test/integration/registry	TestRegistryMultiProtocol/REST	go-trusted-platform#997	the PR that carries the owner ruling on go-trusted-platform#997 (daemon REST surface, owner queue item 138) removes these rows
-test	test/integration/secrets	TestSecretsMultiProtocol/REST	go-trusted-platform#997	the PR that carries the owner ruling on go-trusted-platform#997 (daemon REST surface, owner queue item 138) removes these rows
 # test/integration/iam REST leaves: same daemon 404 (#997, CA m1029 (C))
 test	test/integration/iam	TestIAMMultiProtocol/REST/GroupCRUD/GroupMembership	go-trusted-platform#906	go-quicbaas v0.16.0-alpha (the v0.16 bump PR removes these rows)
 test	test/integration/iam	TestIAMMultiProtocol/REST/PermissionCheck/CheckPermission_Allowed	go-quicbaas#1778	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1778

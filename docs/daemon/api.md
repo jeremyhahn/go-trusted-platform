@@ -484,6 +484,24 @@ Installer and machine certificates are not admitted to these routes: no
 daemon refuses to start when the IAM service is enabled and the routes cannot
 be mounted.
 
+**The daemon REST plane serves the KMS router at `/api/v1/kms/*` (#997).**
+`SetKMSRouterHandlers` (`pkg/api/daemon/kms_rest.go`) mounts the webservice KMS
+router (`pkg/webservice/v1/rest/kms`, 42 routes: keys, crypto, DEKs and
+secrets) over the SDK KMS, crypto, DEK and secrets clients, before
+`SetKMSHandlers`, so it wins every path both serve:
+
+| Routes | Credential | Scope |
+|--------|------------|-------|
+| `/api/v1/kms/secrets/**` | `ScopeGuard.Authenticate` (platform token or operator certificate) | `GET` `secrets:read`; `POST`, `PUT`, `PATCH` `secrets:write`; `DELETE` `secrets:delete` |
+| every other router route under `/api/v1/kms` | same | `GET` `kms:read`; `POST`, `PUT`, `PATCH` `kms:write`; `DELETE` `kms:delete`; `POST` decrypt, verify, hmac verify, hash and random `kms:read` |
+
+A missing credential answers 401, a missing scope 403, and any other method is
+refused. Installer and machine certificates are not admitted: no `/api/v1/kms`
+route is on any installer or machine allowlist (#1153). The daemon refuses to
+start when the KMS service is configured and the routes cannot be mounted.
+[`docs/kms/api.md`](../kms/api.md) §1 lists the paths `SetKMSHandlers` still
+serves.
+
 **QUIC authorizes every request before dispatch (#767).** Before #767 the QUIC
 dispatcher authenticated a token when a middleware was installed and then
 dispatched with no authorization at all: any valid token reached every

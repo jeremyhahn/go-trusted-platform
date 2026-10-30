@@ -1546,6 +1546,20 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 	// for `platformctl --protocol rest kms ...` would 404. The facade shares
 	// the same QuicBaaS SDK clients as the gRPC and embedded transports so
 	// all transports return identical results.
+	// The name-keyed KMS router (keys, crypto, DEKs and secrets, #997) mounts
+	// first, behind the REST scope guard: the first matching route wins, so
+	// it serves every path it shares with the daemon's own KMS handlers.
+	if daemon.concreteRestServer != nil && kmsService != nil {
+		restKMS, restCrypto, restDEK, restSecrets, kmsErr := kmsService.RESTClients()
+		if kmsErr == nil {
+			kmsErr = daemon.concreteRestServer.SetKMSRouterHandlers(logger, restKMS, restCrypto, restDEK, restSecrets, restGuard)
+		}
+		if kmsErr != nil {
+			constructErr := ErrTransportConstructionFailed{Transport: transportREST, Cause: kmsErr}
+			logger.Error(constructErr, "component", "rest_server")
+			return nil, constructErr
+		}
+	}
 	if daemon.concreteRestServer != nil && kmsPlatformBackend != nil {
 		daemon.concreteRestServer.SetKMSHandlers(NewPlatformKMSRESTFacade(kmsPlatformBackend))
 	}
