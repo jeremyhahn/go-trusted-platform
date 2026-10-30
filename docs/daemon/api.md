@@ -500,7 +500,25 @@ refused. Installer and machine certificates are not admitted: no `/api/v1/kms`
 route is on any installer or machine allowlist (#1153). The daemon refuses to
 start when the KMS service is configured and the routes cannot be mounted.
 [`docs/kms/api.md`](../kms/api.md) §1 lists the paths `SetKMSHandlers` still
-serves.
+serves. They run behind the same scope guard (`kmsRESTAuthorization`), with
+the same 401 and 403 answers:
+
+| Route | Scope |
+|-------|-------|
+| `GET /api/v1/kms/keys/{id}/export`, `GET /api/v1/kms/status` | `kms:read` |
+| `POST /api/v1/kms/decrypt`, `/batch-decrypt`, `/verify` | `kms:read` |
+| `POST /api/v1/kms/encrypt`, `/batch-encrypt`, `/rewrap`, `/sign`, `/hmac` | `kms:write` |
+
+A configured KMS facade that cannot be guarded (no scope guard) stops the
+daemon (`ErrTransportConstructionFailed`); it is never served unguarded.
+
+`TestDaemonREST_EveryMountedRouteIsGuarded` (`pkg/api/daemon/rest_scope_test.go`)
+walks the daemon REST router and sends every route a request with no
+credential; each must answer 401 unless it is on one of two named exception
+lists: `daemonPreAuthRoutes` (the health probes, [`docs/health/api.md`](../health/api.md) §7)
+and `daemonMTLSOnlyRoutes` (the mounts that rely on the listener's mTLS alone,
+known debt that #997 retires slice by slice). A route mounted without a guard
+and not on a list fails the build.
 
 **QUIC authorizes every request before dispatch (#767).** Before #767 the QUIC
 dispatcher authenticated a token when a middleware was installed and then

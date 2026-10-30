@@ -1561,7 +1561,11 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 		}
 	}
 	if daemon.concreteRestServer != nil && kmsPlatformBackend != nil {
-		daemon.concreteRestServer.SetKMSHandlers(NewPlatformKMSRESTFacade(kmsPlatformBackend))
+		if facadeErr := daemon.concreteRestServer.SetKMSHandlers(NewPlatformKMSRESTFacade(kmsPlatformBackend), restGuard); facadeErr != nil {
+			constructErr := ErrTransportConstructionFailed{Transport: transportREST, Cause: facadeErr}
+			logger.Error(constructErr, "component", "rest_server")
+			return nil, constructErr
+		}
 	}
 
 	// Wire platform tenant manager into REST handlers + gRPC server when

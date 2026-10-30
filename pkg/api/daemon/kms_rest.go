@@ -37,6 +37,9 @@ var kmsReadOnlyPosts = []string{
 	"/kms/hmac/{name}/verify",
 	"/kms/hash",
 	"/kms/random",
+	"/kms/decrypt",
+	"/kms/batch-decrypt",
+	"/kms/verify",
 }
 
 // SetKMSRouterHandlers mounts the name-keyed KMS router (keys, crypto, DEKs

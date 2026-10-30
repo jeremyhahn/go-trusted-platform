@@ -56,7 +56,7 @@ type (
 
 // daemonRouteTable builds a daemon REST server with every route-mounting
 // setter wired, and returns it with its built table.
-func daemonRouteTable(t *testing.T) (*RESTServer, []string) {
+func daemonRouteTable(t *testing.T, guard *restapi.ScopeGuard) (*RESTServer, []string) {
 	t.Helper()
 
 	cfg := DefaultConfig()
@@ -69,16 +69,16 @@ func daemonRouteTable(t *testing.T) (*RESTServer, []string) {
 	log := logging.DefaultLogger()
 	s.SetConfigDeliveryHandler(routeTableConfigDelivery{})
 	s.SetBMCHandler(routeTableBMC{})
-	s.SetNTPHandlers(platformv1.UnimplementedNTPServiceServer{}, nil)
-	s.SetVPNHandlers(platformv1.UnimplementedVPNServiceServer{}, nil)
-	s.SetAppServiceHandlers(restapi.AppServiceServers{}, nil)
+	s.SetNTPHandlers(platformv1.UnimplementedNTPServiceServer{}, guard)
+	s.SetVPNHandlers(platformv1.UnimplementedVPNServiceServer{}, guard)
+	s.SetAppServiceHandlers(restapi.AppServiceServers{}, guard)
 	s.SetDeviceHandlers(routeTableDevices{}, routeTableProfiles{}, platformv1.UnimplementedDeviceServiceServer{})
-	s.SetTenantHandlers(routeTableTenants{}, nil, "")
-	s.SetKMSHandlers(routeTableKMS{})
-	s.SetComputeHandlers(platformv1.UnimplementedComputeServiceServer{}, nil)
+	s.SetTenantHandlers(routeTableTenants{}, guard, "")
+	require.NoError(t, s.SetKMSHandlers(routeTableKMS{}, guard))
+	s.SetComputeHandlers(platformv1.UnimplementedComputeServiceServer{}, guard)
 	s.SetOverlayHandlers(routeTableOverlay{})
-	s.SetCAHandlers(routeTableCA{}, nil)
-	s.SetTPMHandlers(platformv1.UnimplementedTPMServiceServer{}, nil)
+	s.SetCAHandlers(routeTableCA{}, guard)
+	s.SetTPMHandlers(platformv1.UnimplementedTPMServiceServer{}, guard)
 	s.SetVTPMService(routeTableVTPM{})
 	s.SetSDNService(nil)
 	s.SetGatewayIPAMService(nil, nil)
@@ -189,7 +189,7 @@ func servedPrefixes(built []string) map[string]int {
 // daemonDivergentClaims. As there, the check runs one way; the daemon may
 // serve more than any SDK method calls.
 func TestDaemonRESTRouteClaims_ResolveAgainstBuiltRoutes(t *testing.T) {
-	s, built := daemonRouteTable(t)
+	s, built := daemonRouteTable(t, restapi.NewScopeGuard(nil, nil, nil))
 	served := servedPrefixes(built)
 	require.NotEmpty(t, served, "the fixture built no /api/v1 routes; this test would pass vacuously")
 
@@ -244,7 +244,7 @@ func TestDaemonRESTRouteClaims_ResolveAgainstBuiltRoutes(t *testing.T) {
 // an entry this server builds nothing under would leave those claims checked
 // by neither test.
 func TestDaemonOnlyPrefixes_DaemonServesEach(t *testing.T) {
-	_, built := daemonRouteTable(t)
+	_, built := daemonRouteTable(t, restapi.NewScopeGuard(nil, nil, nil))
 
 	routes := map[string]int{}
 	for _, route := range built {
@@ -270,7 +270,7 @@ func TestDaemonOnlyPrefixes_DaemonServesEach(t *testing.T) {
 // ratchet: an entry whose claim now lands on its own shape, which is no
 // longer a claim, or whose prefix the daemon no longer serves must be deleted.
 func TestDaemonDivergentClaims_StillDiverge(t *testing.T) {
-	s, built := daemonRouteTable(t)
+	s, built := daemonRouteTable(t, restapi.NewScopeGuard(nil, nil, nil))
 	served := servedPrefixes(built)
 
 	live := map[string]sdkrest.RouteClaim{}

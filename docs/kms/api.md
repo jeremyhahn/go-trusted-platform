@@ -31,6 +31,10 @@ body-keyed `encrypt`, `decrypt`, `sign`, `verify` and `hmac`, and
 `GET /api/v1/kms/status`. The normative backend status route is
 `GET /api/v1/kms/backend/status` (`kms:read`) on both planes;
 `/api/v1/kms/status` is the daemon handlers' route and is not an alias.
+The daemon handlers run behind the same scope guard as the router: a request
+with no credential gets 401, and one without the scope gets 403. Export,
+`status`, `decrypt`, `batch-decrypt` and `verify` need `kms:read`; `encrypt`,
+`batch-encrypt`, `rewrap`, `sign` and `hmac` need `kms:write`.
 QUIC: key management `0xC0`–`0xCF`, crypto `0xD0`–`0xDA`, plus a **KMS
 extended category opcode `0xCD`** whose subs `0x08`–`0x10` are the DEK calls.
 The `OpDEK*` bytes `0xF0`–`0xF5` are reserved and unserved.

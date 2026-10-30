@@ -36,9 +36,11 @@ import (
 	restapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/rest"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/app"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/ca/issuance"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/provisioning/configdelivery"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/vtpm"
 	bmcwebsvc "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/bmc"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
 	restgateway "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/gateway"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
@@ -466,14 +468,26 @@ func (s *RESTServer) SetTenantHandlers(manager restapi.TenantManagerInterface, g
 // /api/v1/kms/* endpoints are served. The service delegates to the same
 // QuicBaaS SDK KMS and Crypto clients used by the gRPC, QUIC, MCP, and
 // embedded transports, so keys created via REST are visible everywhere else
-// and vice-versa. Mirrors SetDeviceHandlers / SetTenantHandlers.
-func (s *RESTServer) SetKMSHandlers(service restapi.KMSService) {
+// and vice-versa. Every route runs behind guard, the kms:* scope check the KMS
+// router uses (kmsRouteScope). A nil service mounts nothing; a nil guard is
+// ErrKMSRESTUnavailable and mounts nothing, never an unguarded route.
+func (s *RESTServer) SetKMSHandlers(service restapi.KMSService, guard *restapi.ScopeGuard) error {
 	if service == nil {
-		return
+		return nil
 	}
-	handlers := restapi.NewKMSHandlers(service, s.logger)
-	handlers.RegisterRoutes(s.router)
+	if guard == nil {
+		return ErrKMSRESTUnavailable{Reason: "no REST scope guard"}
+	}
+	respWriter := response.NewResponseWriter(logging.NewFromSlog(s.logger), nil)
+	authz := kmsRESTAuthorization{guard: guard, respWriter: respWriter}
+	// A matcher-less subrouter matches only its own routes, so the KMS router
+	// mounted before it keeps every path the two share. RegisterRoutes
+	// registers full /api/v1/... paths, hence no /api/v1 prefix here.
+	sub := s.router.NewRoute().Subrouter()
+	sub.Use(authz.authorize)
+	restapi.NewKMSHandlers(service, s.logger).RegisterRoutes(sub)
 	s.logger.Info("KMS REST routes registered")
+	return nil
 }
 
 // SetComputeHandlers wires the compute (VM and container) REST handlers onto

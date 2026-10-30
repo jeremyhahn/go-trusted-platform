@@ -16,6 +16,7 @@ import (
 
 	restapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/rest"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/testutil"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
 )
 
@@ -229,16 +230,54 @@ func TestKMSREST_RouterTakesPrecedenceOverTheDaemonHandlers(t *testing.T) {
 		return &kms.BackendStatusResponse{}, nil
 	}}
 	s := kmsRESTServer(t, client)
-	s.SetKMSHandlers(NewPlatformKMSRESTFacade(NewPlatformKMSBackend(client, &platformMockCryptoClient{}, slog.Default())))
+	guard := restapi.NewScopeGuard(kmsRESTCallers, nil, nil)
+	require.NoError(t, s.SetKMSHandlers(NewPlatformKMSRESTFacade(NewPlatformKMSBackend(client, &platformMockCryptoClient{}, slog.Default())), guard))
 
 	assert.Equal(t, http.StatusUnauthorized, serveIAM(s, http.MethodGet, "/api/v1/kms/keys/k1", "").Code,
 		"the overlapping key route answers through the guard")
 	assert.Equal(t, http.StatusUnauthorized, serveIAM(s, http.MethodPost, "/api/v1/kms/keys", "").Code,
 		"the overlapping generate route answers through the guard")
 
-	recorder := serveIAM(s, http.MethodGet, "/api/v1/kms/status", "")
+	assert.Equal(t, http.StatusUnauthorized, serveIAM(s, http.MethodGet, "/api/v1/kms/status", "").Code,
+		"the facade-only status route answers through the guard")
+	recorder := serveIAM(s, http.MethodGet, "/api/v1/kms/status", "kms-reader")
 	assertReachedHandler(t, recorder, recorder.Body.String())
 	assert.Equal(t, int32(1), statusCalls.Load(), "/api/v1/kms/status still reaches the daemon facade")
+}
+
+func TestSetKMSHandlers_NilGuardIsRefused(t *testing.T) {
+	s := &RESTServer{router: mux.NewRouter(), logger: slog.Default()}
+	facade := NewPlatformKMSRESTFacade(NewPlatformKMSBackend(&platformMockKMSClient{}, &platformMockCryptoClient{}, slog.Default()))
+
+	err := s.SetKMSHandlers(facade, nil)
+
+	var unavailable ErrKMSRESTUnavailable
+	require.ErrorAs(t, err, &unavailable)
+	assert.NotContains(t, testutil.WalkRoutes(t, s.Router()), "GET /api/v1/kms/status",
+		"a refused facade mounts no route")
+}
+
+func TestSetKMSHandlers_NilServiceMountsNothing(t *testing.T) {
+	s := &RESTServer{router: mux.NewRouter(), logger: slog.Default()}
+
+	require.NoError(t, s.SetKMSHandlers(nil, restapi.NewScopeGuard(kmsRESTCallers, nil, nil)))
+	assert.Empty(t, testutil.WalkRoutes(t, s.Router()))
+}
+
+func TestSetKMSHandlers_FacadeOnlyPathNeedsScope(t *testing.T) {
+	client := &platformMockKMSClient{backendStatusFn: func(context.Context) (*kms.BackendStatusResponse, error) {
+		return &kms.BackendStatusResponse{}, nil
+	}}
+	s := kmsRESTServer(t, client)
+	guard := restapi.NewScopeGuard(kmsRESTCallers, nil, nil)
+	require.NoError(t, s.SetKMSHandlers(NewPlatformKMSRESTFacade(NewPlatformKMSBackend(client, &platformMockCryptoClient{}, slog.Default())), guard))
+
+	recorder := serveIAM(s, http.MethodPost, "/api/v1/kms/sign", "kms-reader")
+	assert.Equal(t, http.StatusForbidden, recorder.Code)
+	assert.Contains(t, recorder.Body.String(), "scope kms:write required")
+
+	recorder = serveIAM(s, http.MethodGet, "/api/v1/kms/status", "kms-reader")
+	assertReachedHandler(t, recorder, recorder.Body.String())
 }
 
 // A request whose method has no action is refused before the scope check.
@@ -273,6 +312,18 @@ func TestKMSRouteScope(t *testing.T) {
 		{http.MethodPut, "/api/v1/kms/secrets/{name}/policy", "secrets:write"},
 		{http.MethodGet, "/api/v1/kms/secrets", "secrets:read"},
 		{http.MethodDelete, "/api/v1/kms/secrets/{name}", "secrets:delete"},
+		// The daemon facade paths (SetKMSHandlers), scoped as the gRPC catalog.
+		{http.MethodGet, "/api/v1/kms/keys/{id}/export", "kms:read"},
+		{http.MethodPost, "/api/v1/kms/encrypt", "kms:write"},
+		{http.MethodPost, "/api/v1/kms/decrypt", "kms:read"},
+		{http.MethodPost, "/api/v1/kms/batch-encrypt", "kms:write"},
+		{http.MethodPost, "/api/v1/kms/batch-decrypt", "kms:read"},
+		{http.MethodPost, "/api/v1/kms/rewrap", "kms:write"},
+		{http.MethodPost, "/api/v1/kms/sign", "kms:write"},
+		{http.MethodPost, "/api/v1/kms/verify", "kms:read"},
+		{http.MethodPost, "/api/v1/kms/hmac", "kms:write"},
+		{http.MethodGet, "/api/v1/kms/status", "kms:read"},
+		{http.MethodPost, "/api/v1/kms/hmac/{name}/verify", "kms:read"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.method+" "+tc.route, func(t *testing.T) {
