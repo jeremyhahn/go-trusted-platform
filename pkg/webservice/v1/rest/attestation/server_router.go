@@ -15,8 +15,12 @@ package attestation
 
 import (
 	"net/http"
+	"net/url"
+	"strconv"
+	"time"
 
 	"github.com/gorilla/mux"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/channelbind"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
@@ -130,13 +134,73 @@ func (r *AttestationServerRouter) listManifests(w http.ResponseWriter, req *http
 	if !r.ensure(w, req) {
 		return
 	}
-	pbReq := &platformv1.ListManifestsRequest{}
+	pbReq, err := parseListManifestsRequest(req.URL.Query())
+	if err != nil {
+		r.respWriter.Error400(w, req, err)
+		return
+	}
 	resp, err := r.server.ListManifests(req.Context(), pbReq)
 	if err != nil {
 		protorest.WriteError(w, req, r.respWriter, err)
 		return
 	}
 	protorest.WriteSuccess(w, req, r.respWriter, resp)
+}
+
+// parseListManifestsRequest decodes the manifest list filters: host_id,
+// start_time and end_time (RFC 3339), limit and offset (unsigned 32-bit).
+// An absent parameter leaves its field unset.
+func parseListManifestsRequest(q url.Values) (*platformv1.ListManifestsRequest, error) {
+	pbReq := &platformv1.ListManifestsRequest{HostId: q.Get("host_id")}
+	start, err := queryTime(q, "start_time")
+	if err != nil {
+		return nil, err
+	}
+	end, err := queryTime(q, "end_time")
+	if err != nil {
+		return nil, err
+	}
+	if !start.IsZero() && !end.IsZero() && start.After(end) {
+		return nil, ErrManifestTimeRange{Start: start, End: end}
+	}
+	if !start.IsZero() {
+		pbReq.StartTime = timestamppb.New(start)
+	}
+	if !end.IsZero() {
+		pbReq.EndTime = timestamppb.New(end)
+	}
+	if pbReq.Limit, err = queryUint32(q, "limit"); err != nil {
+		return nil, err
+	}
+	if pbReq.Offset, err = queryUint32(q, "offset"); err != nil {
+		return nil, err
+	}
+	return pbReq, nil
+}
+
+// queryUint32 parses an optional unsigned 32-bit query parameter; absent is 0.
+func queryUint32(q url.Values, name string) (uint32, error) {
+	v := q.Get(name)
+	if v == "" {
+		return 0, nil
+	}
+	n, err := strconv.ParseUint(v, 10, 32)
+	if err != nil {
+		return 0, &protorest.ErrInvalidQuery{Name: name, Value: v, Cause: err}
+	}
+	return uint32(n), nil
+}
+
+// ErrManifestTimeRange is returned when a manifest list request's
+// start_time is after its end_time.
+type ErrManifestTimeRange struct {
+	Start time.Time
+	End   time.Time
+}
+
+func (e ErrManifestTimeRange) Error() string {
+	return "attestation: manifest list start_time " + e.Start.Format(time.RFC3339) +
+		" is after end_time " + e.End.Format(time.RFC3339)
 }
 
 func (r *AttestationServerRouter) buildManifest(w http.ResponseWriter, req *http.Request) {
