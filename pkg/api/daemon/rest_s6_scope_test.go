@@ -24,6 +24,13 @@ const s6OperatorToken = "s6-operator"
 var s6RouteScopes = []struct {
 	method, route, path, scope string
 }{
+	{http.MethodPost, "/api/v1/ceremony/init", "/api/v1/ceremony/init", "ceremony:initialize"},
+	{http.MethodGet, "/api/v1/ceremony/status", "/api/v1/ceremony/status", "ceremony:status"},
+	{http.MethodPost, "/api/v1/ceremony/claim-cert/begin", "/api/v1/ceremony/claim-cert/begin", "ceremony:claim_cert"},
+	{http.MethodPost, "/api/v1/ceremony/claim-cert/complete", "/api/v1/ceremony/claim-cert/complete", "ceremony:claim_cert"},
+	{http.MethodPost, "/api/v1/ceremony/claim-share/begin", "/api/v1/ceremony/claim-share/begin", "ceremony:claim_share_begin"},
+	{http.MethodPost, "/api/v1/ceremony/claim-share/complete", "/api/v1/ceremony/claim-share/complete", "ceremony:claim_share_complete"},
+	{http.MethodPost, "/api/v1/ceremony/sign-csr", "/api/v1/ceremony/sign-csr", "ceremony:sign_csr"},
 	{http.MethodGet, "/api/v1/piv/devices", "/api/v1/piv/devices", "piv:read"},
 	{http.MethodGet, "/api/v1/piv/devices/{device}/slots", "/api/v1/piv/devices/yk5/slots", "piv:read"},
 	{http.MethodGet, "/api/v1/piv/slots/{slot}", "/api/v1/piv/slots/9a", "piv:read"},
@@ -51,6 +58,8 @@ var s6RouteScopes = []struct {
 
 // s6Scopes is every scope the PIV, LUKS and FIDO2 routes use.
 var s6Scopes = []string{
+	"ceremony:initialize", "ceremony:status", "ceremony:claim_cert",
+	"ceremony:claim_share_begin", "ceremony:claim_share_complete", "ceremony:sign_csr",
 	"piv:read", "piv:write", "piv:use", "piv:delete",
 	"luks:read", "luks:write", "luks:delete",
 	"fido2:read", "fido2:write",
@@ -90,6 +99,7 @@ func newRESTServerWithS6(t *testing.T) *RESTServer {
 	log := logging.DefaultLogger()
 	s := &RESTServer{router: mux.NewRouter(), logger: slog.Default()}
 	guard := s6RESTGuard()
+	require.NoError(t, s.SetCeremonyService(NewCeremonyService(log, nil), guard))
 	require.NoError(t, s.SetPIVService(NewPIVService(log, nil), guard))
 	require.NoError(t, s.SetLUKSService(NewLUKSService(log, nil, rootYes()), guard))
 	require.NoError(t, s.SetFIDO2Service(NewFIDO2Service(log, nil), guard))
@@ -113,7 +123,7 @@ func TestS6REST_EveryRouteNeedsItsCatalogScope(t *testing.T) {
 		assert.Equal(t, http.StatusForbidden, recorder.Code, name)
 		assert.Contains(t, recorder.Body.String(), tc.scope, name)
 
-		// Every other PIV, LUKS and FIDO2 scope is not enough: the route
+		// Every other ceremony, PIV, LUKS and FIDO2 scope is not enough: the route
 		// needs its own action, not the one its HTTP method suggests.
 		recorder = serveIAM(s, tc.method, tc.path, "except:"+tc.scope)
 		assert.Equal(t, http.StatusForbidden, recorder.Code, name)
@@ -186,6 +196,8 @@ func TestS6Setters_RefuseANilGuard(t *testing.T) {
 		mount func(s *RESTServer) error
 		want  error
 	}{
+		{"Ceremony", func(s *RESTServer) error { return s.SetCeremonyService(NewCeremonyService(log, nil), nil) },
+			ErrCeremonyRESTUnavailable{Reason: "no REST scope guard"}},
 		{"PIV", func(s *RESTServer) error { return s.SetPIVService(NewPIVService(log, nil), nil) },
 			ErrPIVRESTUnavailable{Reason: "no REST scope guard"}},
 		{"LUKS", func(s *RESTServer) error { return s.SetLUKSService(NewLUKSService(log, nil, rootYes()), nil) },

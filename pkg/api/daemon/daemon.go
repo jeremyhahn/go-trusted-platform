@@ -1696,14 +1696,14 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 
 	// Wire Phase 3.5 services (ceremony/piv/luks/fido2) into REST server.
 	if daemon.concreteRestServer != nil {
-		if daemon.ceremonyService != nil && daemon.ceremonyService.service != nil {
-			daemon.concreteRestServer.SetCeremonyService(daemon.ceremonyService.service)
-		}
-		// The PIV, LUKS and FIDO2 routes run behind restGuard, each needing
-		// the scope the gRPC catalog gives its rpc. A failed mount stops the
-		// daemon.
+		// The ceremony, PIV, LUKS and FIDO2 routes run behind restGuard, each
+		// needing the scope the gRPC catalog gives its rpc. A failed mount
+		// stops the daemon.
 		var mountErr error
-		if daemon.pivService != nil && daemon.pivService.service != nil {
+		if daemon.ceremonyService != nil && daemon.ceremonyService.service != nil {
+			mountErr = daemon.concreteRestServer.SetCeremonyService(daemon.ceremonyService.service, restGuard)
+		}
+		if mountErr == nil && daemon.pivService != nil && daemon.pivService.service != nil {
 			mountErr = daemon.concreteRestServer.SetPIVService(daemon.pivService.service, restGuard)
 		}
 		if mountErr == nil && daemon.luksService != nil && daemon.luksService.service != nil {

@@ -89,9 +89,9 @@ func TestRESTServer_CeremonyRoutesNotMountedWithoutService(t *testing.T) {
 func TestRESTServer_CeremonyRoutesMounted(t *testing.T) {
 	s := newTestRESTServerForPhase35(t)
 	svc := NewCeremonyService(logging.DefaultLogger(), &fakeCeremonyBackend{})
-	s.SetCeremonyService(svc)
+	mustMountS6(t, s.SetCeremonyService(svc, s6RESTGuard()))
 
-	code, body := doJSON(t, s, http.MethodGet, "/api/v1/ceremony/status", nil)
+	code, body := doJSONAs(t, s, s6OperatorToken, http.MethodGet, "/api/v1/ceremony/status", nil)
 	if code != http.StatusOK {
 		t.Errorf("GET /ceremony/status: want 200, got %d (body=%s)", code, body)
 	}
@@ -104,7 +104,7 @@ func TestRESTServer_CeremonyRoutesMounted(t *testing.T) {
 	}
 
 	// POST /ceremony/init routes to Init on the service backend.
-	code, body = doJSON(t, s, http.MethodPost, "/api/v1/ceremony/init", map[string]interface{}{
+	code, body = doJSONAs(t, s, s6OperatorToken, http.MethodPost, "/api/v1/ceremony/init", map[string]interface{}{
 		"so_pin": "1234", "threshold": "2-of-3",
 	})
 	if code != http.StatusOK {
@@ -117,8 +117,8 @@ func TestRESTServer_CeremonyRoutes_BackendNotConfigured(t *testing.T) {
 	// Wire a service with a nil backend. The service layer returns
 	// ErrCeremonyNotConfigured which the handler maps to 503.
 	svc := NewCeremonyService(logging.DefaultLogger(), nil)
-	s.SetCeremonyService(svc)
-	code, _ := doJSON(t, s, http.MethodGet, "/api/v1/ceremony/status", nil)
+	mustMountS6(t, s.SetCeremonyService(svc, s6RESTGuard()))
+	code, _ := doJSONAs(t, s, s6OperatorToken, http.MethodGet, "/api/v1/ceremony/status", nil)
 	if code != http.StatusServiceUnavailable {
 		t.Errorf("want 503 from unconfigured backend, got %d", code)
 	}
@@ -127,8 +127,8 @@ func TestRESTServer_CeremonyRoutes_BackendNotConfigured(t *testing.T) {
 func TestRESTServer_SetCeremonyService_Nil(t *testing.T) {
 	s := newTestRESTServerForPhase35(t)
 	// Passing nil should be a no-op.
-	s.SetCeremonyService(nil)
-	code, _ := doJSON(t, s, http.MethodGet, "/api/v1/ceremony/status", nil)
+	mustMountS6(t, s.SetCeremonyService(nil, s6RESTGuard()))
+	code, _ := doJSONAs(t, s, s6OperatorToken, http.MethodGet, "/api/v1/ceremony/status", nil)
 	if code != http.StatusNotFound {
 		t.Errorf("want 404 after nil SetCeremonyService, got %d", code)
 	}
