@@ -257,7 +257,7 @@ func (s *CAGRPCService) IssueCertificate(
 	}
 
 	// Issue the certificate
-	issued, err := s.ca.IssueCertificate(ctx, caReq)
+	issued, err := issuance.Issue(ctx, s.ca, caReq)
 	if err != nil {
 		s.logger.Error(err, "failed to issue certificate")
 		return nil, status.Errorf(codes.Internal, "failed to issue certificate: %v", err)
@@ -589,7 +589,7 @@ func (s *CAGRPCService) RenewCertificate(
 	}
 
 	// Issue the renewed certificate
-	issuedRenew, err := s.ca.IssueCertificate(ctx, caReq)
+	issuedRenew, err := issuance.Issue(ctx, s.ca, caReq)
 	if err != nil {
 		s.logger.Error(err, "failed to renew certificate")
 		return nil, status.Errorf(codes.Internal, "failed to renew certificate: %v", err)

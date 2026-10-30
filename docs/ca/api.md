@@ -63,6 +63,11 @@ status, key family, signature algorithm, `is_ca`, `max_path_len`, key usages,
 extended key usages, the SHA-256 fingerprint, PEM, and DER when
 `include_der` asks for it.
 
+An issue request with `is_ca` set is signed with the go-xkms CA profile on
+every transport (`pkg/ca/issuance.Issue`): the certificate carries
+basicConstraints cA=TRUE, keyCertSign, and a pathLenConstraint of
+`max_path_len`, where 0 means no subordinate CA below it.
+
 The daemon's QUIC handler speaks its own wire structs: a flat
 `CAIssueRequest` with a string `key_algorithm`, and a `Certificate` with
 unix-second times and string enums. That `Certificate` carries

@@ -93,7 +93,7 @@ func (a *CAAuthorityAdapter) TrustedIntermediate() (*x509.Certificate, error) {
 // The production CA returns *IssuedCertificate; the adapter unwraps the
 // embedded x509 certificate for the REST handler.
 func (a *CAAuthorityAdapter) IssueCertificate(ctx context.Context, req *quicbaasca.CACertificateRequest) (*x509.Certificate, error) {
-	issued, err := a.ca.IssueCertificate(ctx, req)
+	issued, err := issuance.Issue(ctx, a.ca, req)
 	if err != nil {
 		return nil, err
 	}
