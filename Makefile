@@ -2983,7 +2983,10 @@ TEST_EXCLUDE := test/integration|sdk/go/gen|pkg/api/grpc/proto|pkg/api/grpc$$|cm
 # compatibility tests for the pinned SDK MCP transport. It lies outside the
 # ./pkg/... ./cmd/... discovery and TEST_EXCLUDE does not drop it; it runs in
 # about 1 s under -race.
-TEST_UNIT_PKGS := ./pkg/app/ ./pkg/daemon/commands/ ./pkg/cli/commands/bootstrap/ ./pkg/webservice/v1/ ./pkg/dns/ ./pkg/cli/commands/admin/ ./pkg/platform/ ./pkg/swtpm/ ./pkg/vtpm/ ./test/integration/helpers/surface/ ./test/integration/helpers/ ./test/integration/bmc/vbmc/ ./test/integration/bmc/rmcpsim/ ./test/integration/iso/ ./test/integration/tenant/ ./scripts/depscheck/ ./scripts/foreignfailures/ ./internal/quicbaas/
+# pkg/firstboot added 2026-10-31 (#964 step e): the tests swap every host seam
+# (commands, mounts, LUKS, TPM detection, host sync) and root file access under
+# t.TempDir(), so they need no root, TPM, device or mount.
+TEST_UNIT_PKGS := ./pkg/app/ ./pkg/daemon/commands/ ./pkg/cli/commands/bootstrap/ ./pkg/webservice/v1/ ./pkg/dns/ ./pkg/cli/commands/admin/ ./pkg/platform/ ./pkg/swtpm/ ./pkg/vtpm/ ./pkg/firstboot/ ./test/integration/helpers/surface/ ./test/integration/helpers/ ./test/integration/bmc/vbmc/ ./test/integration/bmc/rmcpsim/ ./test/integration/iso/ ./test/integration/tenant/ ./scripts/depscheck/ ./scripts/foreignfailures/ ./internal/quicbaas/
 
 # RACE_EXCLUDE: packages with data races that are KNOWN and TRACKED. The race
 # gate must be green to be a gate, so a package lands here only with an issue
