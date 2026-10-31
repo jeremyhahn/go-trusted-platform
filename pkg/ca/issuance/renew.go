@@ -98,9 +98,17 @@ var policyRestrictions = []struct {
 // name constraints, unrecognized extended key usages or certificate-policy
 // extensions renewalRequest cannot copy: the SDK request has no field for
 // any of them, so the replacement CA would silently lose them
-// (CARestrictionUnsupportedError).
+// (CARestrictionUnsupportedError). It refuses any certificate, CA or leaf,
+// that carries a critical extension Go does not process, for the same reason
+// (ErrUnhandledCriticalExtension).
 func checkRenewableRestrictions(existing *x509.Certificate) error {
-	if existing == nil || !existing.IsCA {
+	if existing == nil {
+		return nil
+	}
+	if len(existing.UnhandledCriticalExtensions) > 0 {
+		return ErrUnhandledCriticalExtension{OIDs: existing.UnhandledCriticalExtensions}
+	}
+	if !existing.IsCA {
 		return nil
 	}
 	if hasNameConstraints(existing) {

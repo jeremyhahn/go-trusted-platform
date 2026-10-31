@@ -149,3 +149,25 @@ func TestRenew_ACAWithoutPolicyExtensionsRenews(t *testing.T) {
 	require.Len(t, ca.issued, 1)
 	assert.True(t, ca.issued[0].IsCA, "the replacement is issued as a CA")
 }
+
+// A CA carrying a critical extension Go does not process would lose it in the
+// renewal request, turning a CA relying parties must reject into an accepted
+// one (Codex 8673 P1-2). The renewal is refused before anything is revoked,
+// rotated or issued, and the refusal names the OID.
+func TestRenew_ACAWithAnUnhandledCriticalExtensionIsRefusedBeforeRevocation(t *testing.T) {
+	ca := policyRenewalCA()
+	unknownOID := asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 99999, 7, 1}
+	existing := encodedCACert(t, withCriticalExtension(unknownOID, marshalExtensionValue(t, true)))
+	require.Len(t, existing.UnhandledCriticalExtensions, 1, "the test certificate carries the unknown extension")
+
+	_, err := Renew(context.Background(), ca, existing, RenewOptions{ValidDays: 30})
+
+	require.ErrorIs(t, err, ErrUnhandledCriticalExtension{})
+	var refusal ErrUnhandledCriticalExtension
+	require.ErrorAs(t, err, &refusal)
+	require.Len(t, refusal.OIDs, 1)
+	assert.True(t, refusal.OIDs[0].Equal(unknownOID))
+	assert.Contains(t, err.Error(), unknownOID.String())
+	assert.True(t, IsInvalidRequest(err))
+	assertRenewalUntouched(t, ca.renewCA)
+}

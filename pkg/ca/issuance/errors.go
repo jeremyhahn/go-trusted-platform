@@ -15,6 +15,7 @@ package issuance
 
 import (
 	"crypto/x509"
+	"encoding/asn1"
 	"errors"
 	"strconv"
 	"strings"
@@ -286,6 +287,37 @@ func (e *CARestrictionUnsupportedError) Error() string {
 }
 
 func (e *CARestrictionUnsupportedError) invalidRequest() {}
+
+// ErrUnhandledCriticalExtension is the renewal of a certificate that carries
+// a critical extension Go does not process (x509.Certificate's
+// UnhandledCriticalExtensions). The renewal request cannot carry it, so the
+// replacement would come out without an extension relying parties must
+// reject the certificate over, or process under its restrictions
+// (RFC 5280 §4.2). The renewal is refused before the old certificate is
+// revoked. errors.Is matches any ErrUnhandledCriticalExtension, whatever its
+// OIDs.
+type ErrUnhandledCriticalExtension struct {
+	// OIDs are the critical extensions the certificate carries unprocessed.
+	OIDs []asn1.ObjectIdentifier
+}
+
+func (e ErrUnhandledCriticalExtension) Error() string {
+	names := make([]string, 0, len(e.OIDs))
+	for _, oid := range e.OIDs {
+		names = append(names, oid.String())
+	}
+	return "a certificate with an unhandled critical extension (" + strings.Join(names, ", ") +
+		") cannot be renewed: the renewal request cannot carry it, " +
+		"so the renewed certificate would be issued without it"
+}
+
+// Is reports whether target is an ErrUnhandledCriticalExtension.
+func (ErrUnhandledCriticalExtension) Is(target error) bool {
+	_, ok := target.(ErrUnhandledCriticalExtension)
+	return ok
+}
+
+func (ErrUnhandledCriticalExtension) invalidRequest() {}
 
 // CAKeyUsageUnsupportedError is an isCA request, or the renewal of a CA
 // certificate, whose key usage differs from the one the SDK's CA profile

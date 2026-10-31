@@ -125,6 +125,14 @@ refusal is the same `CARestrictionUnsupportedError`, raised before anything is
 revoked, rotated or deleted, and its message names the SDK gap
 (`ca.CertificateRequest`).
 
+Renewal refuses any certificate, CA or leaf, that carries a critical extension
+Go does not process (`x509.Certificate.UnhandledCriticalExtensions`), with
+`ErrUnhandledCriticalExtension` naming the OIDs, before anything is revoked,
+rotated or deleted (Codex 8673). The renewal request cannot carry the
+extension, so the replacement would be accepted where relying parties had to
+reject the original or process it under the extension's restrictions
+(RFC 5280 §4.2).
+
 All these refusals satisfy `issuance.IsInvalidRequest` and are the caller's
 error on every transport: `InvalidArgument` on gRPC, Unix, MCP and the
 embedded SDK, `StatusInvalidArgument` on QUIC, and 400 on REST and the web
