@@ -17,6 +17,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"strconv"
@@ -82,6 +83,33 @@ const (
 // waiting delay between attempts. ErrTPMNotInitialized counts as open: the
 // TPM just has not been provisioned yet, which boot handles later. A ctx that
 // ends during a wait stops the retries at once.
+// Host paths and the TPM opener CreateManager and InitializeLogger reach.
+// Each defaults to the real path or call and production never sets it; a
+// unit test points it at a temporary directory or a fake and restores it.
+var (
+	// pcrBanksConfigPath is the pcr-banks file firstboot writes to the ESP.
+	pcrBanksConfigPath = "/boot/efi/tpm2/pcr-banks"
+
+	// tpmConfigPaths are the platform configs CreateManager reads, in
+	// priority order, when there is no pcr-banks file.
+	tpmConfigPaths = []string{
+		"/mnt/installer/etc/trusted-platform/config.yaml", // Installer mount (firstboot)
+		"/etc/trusted-platform/config.yaml",               // Encrypted root (after decryption)
+		"/etc/trusted-platform/platformd.yaml",
+		"/boot/efi/configs/platformd.yaml",
+		"/media/cdrom/configs/platformd.yaml",
+	}
+
+	// newTPM2 opens the TPM.
+	newTPM2 = xkmssdk.NewTPM2
+
+	// platformLogDir holds the file logs of the modes that log to a file.
+	platformLogDir = "/var/log/platformd"
+
+	// luksLogOutput is the stream the LUKS handler's logger writes to.
+	luksLogOutput io.Writer = os.Stdout
+)
+
 func openTPMWithRetry(ctx context.Context, logger *logging.Logger, open func() (xkmssdk.TrustedPlatformModule, error), attempts int, delay time.Duration) (xkmssdk.TrustedPlatformModule, error) {
 	var err error
 	for i := 0; i < attempts; i++ {
@@ -173,7 +201,7 @@ func CreateManager(ctx context.Context, logger *logging.Logger, config *platform
 
 	// FIRST: Try pcr-banks file on EFI (for BOOT mode after firstboot)
 	// This file contains platform config written during firstboot sealing
-	pcrBanksPath := "/boot/efi/tpm2/pcr-banks"
+	pcrBanksPath := pcrBanksConfigPath
 	if pcrBanksConfig := parsePCRBanksConfig(pcrBanksPath, logger); pcrBanksConfig != nil {
 		loadedTPMConfig = pcrBanksConfig
 		logger.Info("Loaded TPM config from pcr-banks",
@@ -184,15 +212,7 @@ func CreateManager(ctx context.Context, logger *logging.Logger, config *platform
 
 	// SECOND: Try config files (for FIRSTBOOT mode with installer, or after decryption)
 	if loadedTPMConfig == nil {
-		configPaths := []string{
-			"/mnt/installer/etc/trusted-platform/config.yaml", // Installer mount (firstboot)
-			"/etc/trusted-platform/config.yaml",               // Encrypted root (after decryption)
-			"/etc/trusted-platform/platformd.yaml",
-			"/boot/efi/configs/platformd.yaml",
-			"/media/cdrom/configs/platformd.yaml",
-		}
-
-		for _, configPath := range configPaths {
+		for _, configPath := range tpmConfigPaths {
 			if data, err := os.ReadFile(configPath); err == nil {
 				if tpmCfg := decodePlatformTPMConfig(data, configPath, logger); tpmCfg != nil {
 					loadedTPMConfig = tpmCfg
@@ -235,7 +255,7 @@ func CreateManager(ctx context.Context, logger *logging.Logger, config *platform
 	}
 
 	// In initramfs environment, TPM device may exist but not be ready yet
-	openTPM := func() (xkmssdk.TrustedPlatformModule, error) { return xkmssdk.NewTPM2(tpmParams) }
+	openTPM := func() (xkmssdk.TrustedPlatformModule, error) { return newTPM2(tpmParams) }
 	tpmModule, err := openTPMWithRetry(ctx, logger, openTPM, tpmOpenAttempts, tpmRetryDelay)
 	if err != nil {
 		return nil, err
@@ -245,7 +265,7 @@ func CreateManager(ctx context.Context, logger *logging.Logger, config *platform
 	luksConfig := storageluks.DefaultConfig()
 
 	// Convert logging.Logger to google/logger for LUKS
-	googleLog := googleLogger.Init("luks", false, false, os.Stdout)
+	googleLog := googleLogger.Init("luks", false, false, luksLogOutput)
 	defer googleLog.Close()
 
 	luksHandler, err := storageluks.NewCryptsetupHandler(luksConfig, googleLog)
@@ -338,7 +358,7 @@ func InitializeLogger(mode string, verbose, debug bool) (*logging.Logger, error)
 
 	// For other modes (recovery, etc.), use file logging with JSON format
 	// Create log directory
-	logDir := "/var/log/platformd"
+	logDir := platformLogDir
 	os.MkdirAll(logDir, 0755)
 
 	// Create log file

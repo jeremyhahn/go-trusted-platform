@@ -96,7 +96,6 @@ import (
 var (
 	ErrMissingEKWithoutEnabledCA        = errors.New("trusted-platform: EK certificate not found and unable to generate because the certificate authority is not enabled")
 	ErrInvalidLocalAttestationSignature = errors.New("trusted-platform: local attestation signature verification failed")
-	warnSimulatorWithEKCertHandle       = errors.New("trusted-platform: TPM Simulator w/ EK certificate (> 1024 bytes) configured for NV RAM storage. Using certificate store instead.")
 
 	EnvDev     Environment = "dev"
 	EnvPreProd Environment = "preprod"
@@ -3038,7 +3037,7 @@ func (app *App) ImportEndorsementKeyCertificate(ctx context.Context) (*x509.Cert
 	ekCert, err := app.TPM.EKCertificate()
 	if err != nil {
 
-		if err == xkmssdk.ErrTPMEndorsementCertNotFound {
+		if errors.Is(err, xkmssdk.ErrTPMEndorsementCertNotFound) {
 
 			var publicKey crypto.PublicKey
 
@@ -3118,7 +3117,7 @@ func (app *App) ImportEndorsementKeyCertificate(ctx context.Context) (*x509.Cert
 			}
 			fmt.Println(xkmssdk.CertToString(ekCert))
 
-			// Write the EK cert to TPM NV RAM
+			// Persist the EK cert: NV when it fits, the certificate store otherwise.
 			// Get hierarchy auth from config since ekAttrs from KeyAttributes() doesn't include it
 			var hierarchyAuth []byte
 			if app.TPMConfig.EK.HierarchyAuth != "" {
@@ -3127,34 +3126,8 @@ func (app *App) ImportEndorsementKeyCertificate(ctx context.Context) (*x509.Cert
 				hierarchyAuth = ekAttrs.TPMAttributes.HierarchyAuth.Bytes()
 			}
 
-			if err := app.TPM.ProvisionEKCert(hierarchyAuth, ekCert.Raw); err != nil {
-				// NOTE: TPM simulator throws an error here for certs
-				// greater than 1024 bytes. To work around this, a warning
-				// is emitted and the cert-handle attribute is ignored so
-				// the certificate can be imported to the certificate store
-				// instead of TPM NV RAM.
-				if len(ekCert.Raw) > 1024 && app.TPMConfig.UseSimulator {
-					if app.TPMConfig.EK.CertHandle > 0 {
-						app.Logger.Warn(warnSimulatorWithEKCertHandle.Error())
-					}
-					// Fall back to saving EK cert in TPM's certificate store
-					// since NVRAM write failed for simulator with large certs
-					if app.TPMCertStore != nil {
-						app.Logger.Info("Saving EK certificate to TPM cert store (NVRAM fallback)")
-						if err := app.TPMCertStore.Save(ekAttrs, ekCert); err != nil {
-							app.Logger.Errorf("Failed to save EK cert to TPM cert store: %v", err)
-							return nil, &WrappedError{Msg: "failed to save EK certificate", Err: err}
-						}
-					} else {
-						app.Logger.Warn("TPMCertStore not initialized, cannot save EK certificate")
-					}
-				} else {
-					// NVRAM provisioning failed for non-simulator case, fall back to CA import
-					app.Logger.Warnf("failed to provision EK cert to TPM NVRAM, falling back to CA import: %v", err)
-					if importErr := app.CA.ImportEndorsementKeyCertificate(ekCert); importErr != nil {
-						return nil, &CommandOutputError{Msg: "failed to import EK certificate after NVRAM provisioning failure", Err: importErr, Detail: fmt.Sprintf(" (original error: %v)", err)}
-					}
-				}
+			if err := app.provisionEKCertificate(hierarchyAuth, ekAttrs, ekCert); err != nil {
+				return nil, err
 			}
 			return ekCert, nil
 
@@ -3256,12 +3229,7 @@ func (app *App) LoadCA(ctx context.Context, soPIN, userPIN xkmssdk.Password) err
 	// through NewCA which auto-initializes both. We then re-load from
 	// storage via Load() to match the "lazy" (load existing) contract of
 	// this function.
-	root, intermediate, err := quicbaasca.NewCA(ctx, &quicbaasca.Params{
-		Identity:           app.CAConfig.Identity,
-		KeyStoreFactory:    keyStoreFactoryAdapter(storeFactory),
-		CertStoreFactory:   certStoreFactoryAdapter(storeFactory),
-		ObjectStoreFactory: objectStoreFactoryAdapter(storeFactory),
-	})
+	root, intermediate, err := quicbaasca.NewCA(ctx, app.caParams(storeFactory))
 	if err != nil {
 		return &WrappedError{Msg: "failed to create CA", Err: err}
 	}
@@ -3344,12 +3312,7 @@ func (app *App) InitCA(ctx context.Context, soPIN, userPIN xkmssdk.Password, ini
 	// per CA CN at platformDir/ca/<cn>/).
 	storeFactory := NewCAStoreFactory(app, app.PlatformDir, app.Storage, soPIN, userPIN)
 
-	root, intermediate, err := quicbaasca.NewCA(ctx, &quicbaasca.Params{
-		Identity:           app.CAConfig.Identity,
-		KeyStoreFactory:    keyStoreFactoryAdapter(storeFactory),
-		CertStoreFactory:   certStoreFactoryAdapter(storeFactory),
-		ObjectStoreFactory: objectStoreFactoryAdapter(storeFactory),
-	})
+	root, intermediate, err := quicbaasca.NewCA(ctx, app.caParams(storeFactory))
 	if err != nil {
 		return nil, &WrappedError{Msg: "failed to create CA", Err: err}
 	}
@@ -3405,6 +3368,20 @@ func (app *App) VerifyLocalQuote(
 // The adapter performs a type assertion to the xkms.Backend interface so that
 // shape mismatches fail fast at the factory boundary rather than during key
 // operations later.
+// caParams builds the SDK CA parameters LoadCA and InitCA hand to
+// quicbaasca.NewCA: the configured identities and the per-CA store
+// factories. The operator's require-key-password setting is not forwarded
+// while the pinned go-xkms drops the CA key password when it rebuilds the
+// identity (go-xkms #1768, #833).
+func (app *App) caParams(storeFactory *CAStoreFactory) *quicbaasca.Params {
+	return &quicbaasca.Params{
+		Identity:           app.CAConfig.Identity,
+		KeyStoreFactory:    keyStoreFactoryAdapter(storeFactory),
+		CertStoreFactory:   certStoreFactoryAdapter(storeFactory),
+		ObjectStoreFactory: objectStoreFactoryAdapter(storeFactory),
+	}
+}
+
 func keyStoreFactoryAdapter(f *CAStoreFactory) quicbaasca.KeyStoreFactoryFunc {
 	return func(cn string) (xkmsbackend.Backend, error) {
 		result, err := f.CreateKeyStore(cn)

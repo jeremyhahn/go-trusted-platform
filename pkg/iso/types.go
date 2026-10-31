@@ -183,16 +183,18 @@ type DirectoryConfig struct {
 
 // PlatformConfig holds platform binary and version configuration
 type PlatformConfig struct {
-	Version            string       `yaml:"version" json:"version"`
-	PlatformdBinary    string       `yaml:"platformd_binary" json:"platformd_binary"`
-	PlatformctlBinary  string       `yaml:"platformctl_binary" json:"platformctl_binary"` // Optional CLI binary
-	ObjcopyBinary      string       `yaml:"objcopy_binary" json:"objcopy_binary"`
-	ConfigFile         string       `yaml:"config_file" json:"config_file"`           // platformd.yaml config file path
-	CABundlePath       string       `yaml:"ca_bundle_path" json:"ca_bundle_path"`     // CA bundle to embed in ISO for client trust store
-	CAKeyAlgorithm     string       `yaml:"ca_key_algorithm" json:"ca_key_algorithm"` // Filter CA bundle by key algorithm (e.g., rsa, ecdsa, ed25519)
-	AfterInstallAction string       `yaml:"after_install_action" json:"after_install_action"`
-	WebUIPath          string       `yaml:"webui_path" json:"webui_path"`       // Path to public_html directory or tarball
-	PlatformType       PlatformType `yaml:"platform_type" json:"platform_type"` // Platform type: client or server
+	Version           string `yaml:"version" json:"version"`
+	PlatformdBinary   string `yaml:"platformd_binary" json:"platformd_binary"`
+	PlatformctlBinary string `yaml:"platformctl_binary" json:"platformctl_binary"` // CLI binary; unset means not installed
+	// PlatformctlStaticBinary is the static CLI for Alpine/musl; unset means not installed.
+	PlatformctlStaticBinary string       `yaml:"platformctl_static_binary" json:"platformctl_static_binary"`
+	ObjcopyBinary           string       `yaml:"objcopy_binary" json:"objcopy_binary"`
+	ConfigFile              string       `yaml:"config_file" json:"config_file"`           // platformd.yaml config file path
+	CABundlePath            string       `yaml:"ca_bundle_path" json:"ca_bundle_path"`     // CA bundle to embed in ISO for client trust store
+	CAKeyAlgorithm          string       `yaml:"ca_key_algorithm" json:"ca_key_algorithm"` // Filter CA bundle by key algorithm (e.g., rsa, ecdsa, ed25519)
+	AfterInstallAction      string       `yaml:"after_install_action" json:"after_install_action"`
+	WebUIPath               string       `yaml:"webui_path" json:"webui_path"`       // Path to public_html directory or tarball
+	PlatformType            PlatformType `yaml:"platform_type" json:"platform_type"` // Platform type: client or server
 
 	// Dynamic configuration for server-based config fetch at boot time
 	ConfigServerURL   string `yaml:"config_server_url" json:"config_server_url"`

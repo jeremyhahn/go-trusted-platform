@@ -1,8 +1,17 @@
-# ci-template: v1.29.3 (customized)
+# ci-template: v1.29.5 (customized)
 #
-# Template ref: handbook fb7fa19ac, software/templates/github-actions/ci.yml
-# at fb7fa19ac (v1.29.3), adopted over v1.29.2 (handbook bcff2e22a), itself
-# adopted over v1.28.0 (handbook 0d451ec).
+# Template ref: handbook f9730b11f, software/templates/github-actions/ci.yml
+# at f9730b11f (v1.29.5), adopted over v1.29.3 (handbook fb7fa19ac), itself
+# adopted over v1.29.2 (handbook bcff2e22a) and v1.28.0 (handbook 0d451ec).
+# v1.29.4 and v1.29.5, adopted here (#1353) in one CI-file PR (Company
+# Agent rulings 261(c) and 262(a); handbook f9730b11f): each image build
+# passes GO_BUILD_PROXY=<DEVCACHE_GOPROXY>|https://proxy.golang.org|direct when
+# the runner sets DEVCACHE_GOPROXY and the cache answers a 5-second probe, as
+# one quoted make argument, and the Makefile quotes it on its docker build
+# line, where an unquoted `|` is a shell pipe; the schedule guard reads
+# waiting before in_progress; scripts/in-toolchain-image.sh v4. This repository's
+# copy kept its memory bound and takes the scratch volume and the Athens-first
+# bridge GOPROXY; its five image builds take GO_BUILD_PROXY.
 # v1.29.3 (Company Agent ruling 255(10)/(11)(c), 2026-10-29): one schedule
 # run per repository, skipped when a main run is in flight. A schedule run's
 # concurrency group is `schedule-{repository}`, with no sha. A new
@@ -263,7 +272,10 @@ jobs:
           runs() {
             local st n
             N=0
-            for st in in_progress waiting; do
+            # v1.29.4: waiting is read before in_progress. A run only moves
+            # waiting, then in_progress, then done, so the other order lets a
+            # run start between the two queries and be counted by neither.
+            for st in waiting in_progress; do
               CODE=$(curl -sS --max-time 30 -o "$RUNNER_TEMP/runs.json" -w '%{http_code}' \
                 -H @<(printf 'Authorization: token %s\n' "$1") \
                 "$RUNS_API?event=push&branch=main&status=$st&limit=1") || CODE="curl exit $?"
@@ -428,7 +440,14 @@ jobs:
           if ! take_lease; then
             image_unlock
             echo "integration image $IT_IMAGE is missing or went before its lease; building it once"
-            make docker-build-integration MODULE_ENV_FILE="$RUNNER_TEMP/gomodauth.env" IT_IMAGE="$IT_IMAGE"
+            # v1.29.4 and v1.29.5: Athens first when the runner sets DEVCACHE_GOPROXY
+            # and the cache answers, `|` so any error falls through to the public
+            # proxy; "$bp" is one quoted make argument and the Makefile quotes it.
+            bp=
+            if [ -n "${DEVCACHE_GOPROXY:-}" ] && curl -s -o /dev/null --max-time 5 "$DEVCACHE_GOPROXY/"; then
+              bp="GO_BUILD_PROXY=$DEVCACHE_GOPROXY|https://proxy.golang.org|direct"
+            fi
+            make docker-build-integration ${bp:+"$bp"} MODULE_ENV_FILE="$RUNNER_TEMP/gomodauth.env" IT_IMAGE="$IT_IMAGE"
             image_lock || exit 1
             if ! take_lease; then
               echo "::error::the integration image $IT_IMAGE is missing after one rebuild, so this job holds no lease on it"
@@ -459,7 +478,14 @@ jobs:
 
       - name: Build the toolchain image
         run: |
-          make docker-build-toolchain MODULE_ENV_FILE="$RUNNER_TEMP/gomodauth.env"
+          # v1.29.4 and v1.29.5: Athens first when the runner sets DEVCACHE_GOPROXY
+          # and the cache answers, `|` so any error falls through to the public
+          # proxy; "$bp" is one quoted make argument and the Makefile quotes it.
+          bp=
+          if [ -n "${DEVCACHE_GOPROXY:-}" ] && curl -s -o /dev/null --max-time 5 "$DEVCACHE_GOPROXY/"; then
+            bp="GO_BUILD_PROXY=$DEVCACHE_GOPROXY|https://proxy.golang.org|direct"
+          fi
+          make docker-build-toolchain ${bp:+"$bp"} MODULE_ENV_FILE="$RUNNER_TEMP/gomodauth.env"
           echo "TOOLCHAIN_IMAGE=$(make -s toolchain-image)" >> "$GITHUB_ENV"
 
       # Lint: gofmt, vet, golangci-lint and actionlint with shellcheck
@@ -880,7 +906,14 @@ jobs:
           if ! take_lease; then
             image_unlock
             echo "integration image $IT_IMAGE is missing or went before its lease; building it once"
-            make docker-build-it MODULE_ENV_FILE="$RUNNER_TEMP/gomodauth.env" IT_IMAGE="$IT_IMAGE" BUILDX_CLIENT_LOAD=1
+            # v1.29.4 and v1.29.5: Athens first when the runner sets DEVCACHE_GOPROXY
+            # and the cache answers, `|` so any error falls through to the public
+            # proxy; "$bp" is one quoted make argument and the Makefile quotes it.
+            bp=
+            if [ -n "${DEVCACHE_GOPROXY:-}" ] && curl -s -o /dev/null --max-time 5 "$DEVCACHE_GOPROXY/"; then
+              bp="GO_BUILD_PROXY=$DEVCACHE_GOPROXY|https://proxy.golang.org|direct"
+            fi
+            make docker-build-it ${bp:+"$bp"} MODULE_ENV_FILE="$RUNNER_TEMP/gomodauth.env" IT_IMAGE="$IT_IMAGE" BUILDX_CLIENT_LOAD=1
             image_lock || exit 1
             if ! take_lease; then
               echo "::error::the build finished but $IT_IMAGE is not on the daemon this job uses (context $(docker context show), DOCKER_HOST=${DOCKER_HOST:-unset}); builder $BUILDX_BUILDER:"
@@ -1128,7 +1161,14 @@ jobs:
             image_lock || exit 1
             if ! take_lease; then
               image_unlock
-              make docker-build-it MODULE_ENV_FILE="$RUNNER_TEMP/gomodauth.env" IT_IMAGE="$IT_IMAGE" BUILDX_CLIENT_LOAD=1 IT_WARM_CACHE=0
+              # v1.29.4 and v1.29.5: Athens first when the runner sets DEVCACHE_GOPROXY
+              # and the cache answers, `|` so any error falls through to the public
+              # proxy; "$bp" is one quoted make argument and the Makefile quotes it.
+              bp=
+              if [ -n "${DEVCACHE_GOPROXY:-}" ] && curl -s -o /dev/null --max-time 5 "$DEVCACHE_GOPROXY/"; then
+                bp="GO_BUILD_PROXY=$DEVCACHE_GOPROXY|https://proxy.golang.org|direct"
+              fi
+              make docker-build-it ${bp:+"$bp"} MODULE_ENV_FILE="$RUNNER_TEMP/gomodauth.env" IT_IMAGE="$IT_IMAGE" BUILDX_CLIENT_LOAD=1 IT_WARM_CACHE=0
               image_lock || exit 1
               if ! take_lease; then
                 echo "::error::the fallback build finished but $IT_IMAGE is not on the daemon this leg uses (context $(docker context show), DOCKER_HOST=${DOCKER_HOST:-unset}); builder $BUILDX_BUILDER:"
@@ -1289,7 +1329,14 @@ jobs:
           if ! take_lease; then
             image_unlock
             echo "integration image $IT_IMAGE is missing or went before its lease; building it once"
-            make docker-build-it MODULE_ENV_FILE="$RUNNER_TEMP/gomodauth.env" IT_IMAGE="$IT_IMAGE" BUILDX_CLIENT_LOAD=1
+            # v1.29.4 and v1.29.5: Athens first when the runner sets DEVCACHE_GOPROXY
+            # and the cache answers, `|` so any error falls through to the public
+            # proxy; "$bp" is one quoted make argument and the Makefile quotes it.
+            bp=
+            if [ -n "${DEVCACHE_GOPROXY:-}" ] && curl -s -o /dev/null --max-time 5 "$DEVCACHE_GOPROXY/"; then
+              bp="GO_BUILD_PROXY=$DEVCACHE_GOPROXY|https://proxy.golang.org|direct"
+            fi
+            make docker-build-it ${bp:+"$bp"} MODULE_ENV_FILE="$RUNNER_TEMP/gomodauth.env" IT_IMAGE="$IT_IMAGE" BUILDX_CLIENT_LOAD=1
             image_lock || exit 1
             if ! take_lease; then
               echo "::error::the integration image $IT_IMAGE is missing after one rebuild, so this job holds no lease on it"
