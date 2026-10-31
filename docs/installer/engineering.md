@@ -149,9 +149,20 @@ detects the device. `Enroll` honours its context: it checks the context before
 each authenticator call, before the keyslot is added and before the token is
 written. It runs each blocking authenticator call in a goroutine and returns
 as soon as the context ends. A cancelled enrolment returns
-`FIDO2CanceledError`, which names the step and wraps `ctx.Err()`, and it adds
-no keyslot and writes no token. Other failures are typed: `FIDO2EnrollKeyError`,
-`FIDO2DeriveKeyError`, `FIDO2AddKeyError`.
+`FIDO2CanceledError`, which names the step and wraps `ctx.Err()`, and it writes
+no token. A cancellation after the keyslot is added rolls the slot back
+(`luks2.KillSlot`); if that fails, the error joins `FIDO2RollbackError`. Other
+failures are typed: `FIDO2EnrollKeyError`, `FIDO2DeriveKeyError`,
+`FIDO2AddKeyError`.
+
+The pinned SDK cannot stop an authenticator call: `Handler.EnrollKey` and
+`Handler.UnlockWithKey` take no context and `Handler.Close` does nothing. So
+every enrolment and unlock call in the process takes one operation slot
+(`fido2Operation`). When the caller's context ends during a call, a drain
+goroutine receives the late result, zeroes any derived key, closes the handler
+and only then frees the slot. A retry that finds the slot held prints a notice,
+waits for the abandoned call to end and honours its own context while it waits.
+Stopping the HID request itself is an SDK gap.
 
 FIDO2 unlock (`FIDO2Unlock`, used by the installer's unlock test) reads the
 same tokens through the same SDK handler. `GetTokenInfo` returns the lowest-ID

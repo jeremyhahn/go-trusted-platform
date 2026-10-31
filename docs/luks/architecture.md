@@ -85,6 +85,12 @@ When the installer's enrolment is cancelled after its keyslot is written and
 before the token is, it kills the slot again too, so boot is not left with a
 slot it cannot unlock and a retry can reuse the target slot. If that fails,
 the error joins `FIDO2CanceledError` and `FIDO2RollbackError`.
+The installer's unlock (`FIDO2Unlock`) checks its context before it asks for a
+touch and again before it maps the volume; an expired deadline counts as a
+cancellation. A cancelled unlock or enrolment never waits on the authenticator:
+the SDK call it abandons runs on in a drain that zeroes the late key, closes the
+handler and only then admits the next FIDO2 operation, so a retry cannot race
+it for the touch ([installer engineering](../installer/engineering.md)).
 
 At boot the strategy takes its slots from the header, not from the volume
 config: every token that carries a credential and a salt names its slots in
