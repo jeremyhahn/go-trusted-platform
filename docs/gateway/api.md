@@ -394,6 +394,10 @@ override mechanism. A
 request carrying no verified client certificate is refused **401**
 (`ErrGatewayIdentityRequired`); a verified certificate naming another gateway is
 refused **403** (`ErrGatewayIdentityMismatch`), and nothing is written or read.
+An installer certificate — one whose extended key usage carries the
+tp-pxeInstaller marker (OID 1.3.6.1.4.1.29377.101.22) — is never a gateway
+identity, whatever its Common Name: it is refused **403**
+(`ErrInstallerNotGateway`) before the CN is read.
 Identity comes from the connection's `VerifiedChains`, so the listener requests
 the certificate optionally (`tls.VerifyClientCertIfGiven`) and the TLS stack
 verifies it against the configured `ClientCAs` before any handler runs — clients
@@ -482,8 +486,8 @@ authenticated:** `POST /gateway/telemetry`, `GET
 /gateway/desired-config/{id}`, `PUT /gateway/vpn-leases/{id}` and `DELETE
 /gateway/vpn-leases/{id}/{tenant}/{lease}` require a **verified mTLS client certificate**
 and bind the request's `gateway_id` to that certificate's Common Name — 401
-without a certificate, 403 when the id names another gateway
-(`ControlPlane.authenticatedGateway`). Their caller is gatewayd, whose
+without a certificate, 403 when the id names another gateway or the certificate
+is an installer's (tp-pxeInstaller) (`ControlPlane.authenticatedGateway`). Their caller is gatewayd, whose
 credential is a certificate rather than a bearer token, so a role guard in
 front of them would break every gateway in the fleet.
 
