@@ -139,9 +139,9 @@ func (m *mockIAMClient) DeleteUser(ctx context.Context, tenantID, userID string)
 	return status.Error(codes.Unimplemented, "not implemented")
 }
 
-// SetUserRoles is a no-op unless the test sets setUserRolesFn: an update that
-// names no roles must not fail on it.
-func (m *mockIAMClient) SetUserRoles(ctx context.Context, tenantID, userID string, roles []string) error {
+// RequireUnchangedUserRoles is a no-op unless the test sets setUserRolesFn: an
+// update that names no roles must not fail on it.
+func (m *mockIAMClient) RequireUnchangedUserRoles(ctx context.Context, tenantID, userID string, roles []string) error {
 	if m.setUserRolesFn != nil {
 		return m.setUserRolesFn(ctx, tenantID, userID, roles)
 	}
@@ -795,7 +795,7 @@ func TestUpdateUser_NotFound(t *testing.T) {
 	assert.Equal(t, http.StatusNotFound, writer.lastStatus)
 }
 
-func TestUpdateUser_ReplacesRoles(t *testing.T) {
+func TestUpdateUser_PassesRolesToTheRoleCheck(t *testing.T) {
 	var setRoles []string
 	iamClient := &mockIAMClient{
 		setUserRolesFn: func(ctx context.Context, tenantID, userID string, roles []string) error {

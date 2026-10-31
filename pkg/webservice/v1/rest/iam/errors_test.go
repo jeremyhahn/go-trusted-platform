@@ -14,6 +14,7 @@
 package iam
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -441,6 +442,35 @@ func TestErrConflictingQueryTenant_ImplementsErrorInterface(t *testing.T) {
 	var conflict ErrConflictingQueryTenant
 	assert.ErrorAs(t, err, &conflict)
 	assert.Equal(t, "tenant-b", conflict.Query)
+}
+
+
+func TestErrRoleChangeUnsupported_Error(t *testing.T) {
+	err := ErrRoleChangeUnsupported{TenantID: "tenant-a", UserID: "user-1"}
+
+	assert.Equal(t, "rest/iam: changing the roles of user user-1 in tenant tenant-a is unsupported by the SDK", err.Error())
+}
+
+func TestErrRoleChangeUnsupported_Is(t *testing.T) {
+	wrapped := fmt.Errorf("update: %w", ErrRoleChangeUnsupported{TenantID: "tenant-a", UserID: "user-1"})
+
+	assert.ErrorIs(t, wrapped, ErrRoleChangeUnsupported{})
+	assert.NotErrorIs(t, wrapped, ErrTenantSettingsUnsupported{})
+	assert.NotErrorIs(t, ErrUserNotFound{}, ErrRoleChangeUnsupported{})
+}
+
+func TestErrTenantSettingsUnsupported_Error(t *testing.T) {
+	err := ErrTenantSettingsUnsupported{TenantID: "acme"}
+
+	assert.Equal(t, "rest/iam: updating the settings of tenant acme is unsupported by the SDK", err.Error())
+}
+
+func TestErrTenantSettingsUnsupported_Is(t *testing.T) {
+	wrapped := fmt.Errorf("update: %w", ErrTenantSettingsUnsupported{TenantID: "acme"})
+
+	assert.ErrorIs(t, wrapped, ErrTenantSettingsUnsupported{})
+	assert.NotErrorIs(t, wrapped, ErrRoleChangeUnsupported{})
+	assert.NotErrorIs(t, ErrTenantNotFound{}, ErrTenantSettingsUnsupported{})
 }
 
 func TestAllErrorTypesAreDistinct(t *testing.T) {

@@ -278,3 +278,39 @@ func (e ErrUserRolesSyncFailed) Error() string {
 func (e ErrUserRolesSyncFailed) Unwrap() error {
 	return e.Err
 }
+
+// ErrRoleChangeUnsupported is returned when a user update asks for a role set
+// other than the one the user holds. The pinned SDK's embedded transport
+// dispatches neither User/AssignRole nor User/RevokeRole, so the change is
+// refused before anything is written.
+type ErrRoleChangeUnsupported struct {
+	TenantID string
+	UserID   string
+}
+
+func (e ErrRoleChangeUnsupported) Error() string {
+	return fmt.Sprintf("rest/iam: changing the roles of user %s in tenant %s is unsupported by the SDK", e.UserID, e.TenantID)
+}
+
+// Is reports whether target is an ErrRoleChangeUnsupported, whatever its fields.
+func (e ErrRoleChangeUnsupported) Is(target error) bool {
+	_, ok := target.(ErrRoleChangeUnsupported)
+	return ok
+}
+
+// ErrTenantSettingsUnsupported is returned when a tenant update carries
+// settings. The pinned SDK's tenant update applies only the display name, so
+// settings are refused before dispatch rather than silently dropped.
+type ErrTenantSettingsUnsupported struct {
+	TenantID string
+}
+
+func (e ErrTenantSettingsUnsupported) Error() string {
+	return fmt.Sprintf("rest/iam: updating the settings of tenant %s is unsupported by the SDK", e.TenantID)
+}
+
+// Is reports whether target is an ErrTenantSettingsUnsupported, whatever its fields.
+func (e ErrTenantSettingsUnsupported) Is(target error) bool {
+	_, ok := target.(ErrTenantSettingsUnsupported)
+	return ok
+}

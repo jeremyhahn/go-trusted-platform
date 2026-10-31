@@ -16,6 +16,8 @@ package iam
 import (
 	"context"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	iamsdk "github.com/jeremyhahn/go-quicbaas/sdk/go/client/iam"
@@ -122,6 +124,7 @@ type recordingUserClient struct {
 	user      *iamsdk.User
 	assigned  []string
 	revoked   []string
+	updated   *iamsdk.UpdateUserRequest
 	assignErr error
 }
 
@@ -142,6 +145,23 @@ func (c *recordingUserClient) RevokeRole(_ context.Context, _, _, roleID string)
 	return nil
 }
 
+func (c *recordingUserClient) Update(_ context.Context, tenantID, userID string, req *iamsdk.UpdateUserRequest) (*iamsdk.User, error) {
+	c.updated = req
+	return &iamsdk.User{ID: userID, TenantID: tenantID, DisplayName: req.DisplayName}, nil
+}
+
+// recordingTenantClient records the tenant update it receives and answers it
+// the way the pinned embedded handler does: only the display name applies.
+type recordingTenantClient struct {
+	iamsdk.TenantClient
+	updated *iamsdk.UpdateTenantRequest
+}
+
+func (c *recordingTenantClient) Update(_ context.Context, tenantID string, req *iamsdk.UpdateTenantRequest) (*iamsdk.Tenant, error) {
+	c.updated = req
+	return &iamsdk.Tenant{ID: tenantID, Name: req.DisplayName}, nil
+}
+
 func (c *recordingUserClient) Create(_ context.Context, tenantID string, req *iamsdk.CreateUserRequest) (*iamsdk.User, error) {
 	c.created = req
 	return &iamsdk.User{ID: "user-1", TenantID: tenantID, Email: req.Email, Roles: req.Roles}, nil
@@ -150,8 +170,18 @@ func (c *recordingUserClient) Create(_ context.Context, tenantID string, req *ia
 // adapterSDKClient is an SDK client with only the user and role clients.
 type adapterSDKClient struct {
 	iamsdk.Client
-	users *recordingUserClient
-	roles *pagedRoleClient
+	users   *recordingUserClient
+	roles   *pagedRoleClient
+	tenants *recordingTenantClient
+}
+
+func (c *adapterSDKClient) Tenant() iamsdk.TenantClient { return c.tenants }
+
+// adapterHandlers serves the IAM handlers through the real SDK adapter over
+// client, so a test sees exactly which SDK calls a request makes.
+func adapterHandlers(client *adapterSDKClient) (*IAMHandlers, *mockHttpWriter) {
+	writer := &mockHttpWriter{}
+	return NewIAMHandlers(newTestLogger(), NewQuicBaaSIAMAdapter(client), &mockPEPClient{}, writer), writer
 }
 
 func (c *adapterSDKClient) User() iamsdk.UserClient { return c.users }
@@ -316,18 +346,119 @@ func TestQuicBaaSIAMAdapter_RevokeRole_RefusesUnknownRole(t *testing.T) {
 	assert.Empty(t, client.users.revoked)
 }
 
-func TestQuicBaaSIAMAdapter_SetUserRoles_ResolvesNames(t *testing.T) {
-	client := userHolding()
+func TestQuicBaaSIAMAdapter_RequireUnchangedUserRoles_PassesTheHeldRoles(t *testing.T) {
+	client := userHolding("0b5e-admin")
 
-	require.NoError(t, NewQuicBaaSIAMAdapter(client).SetUserRoles(context.Background(), "tenant-a", "user-1", []string{"admin"}))
+	require.NoError(t, NewQuicBaaSIAMAdapter(client).RequireUnchangedUserRoles(context.Background(), "tenant-a", "user-1", []string{"admin"}))
 
-	assert.Equal(t, []string{"0b5e-admin"}, client.users.assigned)
+	assert.Empty(t, client.users.assigned)
+	assert.Empty(t, client.users.revoked)
 }
 
-func TestQuicBaaSIAMAdapter_SetUserRoles_RefusesUnknownRole(t *testing.T) {
+func TestQuicBaaSIAMAdapter_RequireUnchangedUserRoles_RefusesARoleChange(t *testing.T) {
 	client := userHolding()
 
-	err := NewQuicBaaSIAMAdapter(client).SetUserRoles(context.Background(), "tenant-a", "user-1", []string{"owner"})
+	err := NewQuicBaaSIAMAdapter(client).RequireUnchangedUserRoles(context.Background(), "tenant-a", "user-1", []string{"admin"})
+
+	require.ErrorIs(t, err, ErrRoleChangeUnsupported{})
+	assert.Empty(t, client.users.assigned)
+	assert.Empty(t, client.users.revoked)
+}
+
+func TestRequireUnchangedUserRoles_SameSetInAnyOrderPasses(t *testing.T) {
+	client := userHolding("0b5e-admin", "0b5e-operator")
+
+	err := RequireUnchangedUserRoles(context.Background(), client, "tenant-a", "user-1", []string{"operator", "admin", "admin"})
+
+	require.NoError(t, err)
+}
+
+func TestRequireUnchangedUserRoles_DroppingARoleIsAChange(t *testing.T) {
+	client := userHolding("0b5e-admin", "0b5e-operator")
+
+	err := RequireUnchangedUserRoles(context.Background(), client, "tenant-a", "user-1", []string{"admin"})
+
+	var unsupported ErrRoleChangeUnsupported
+	require.ErrorAs(t, err, &unsupported)
+	assert.Equal(t, ErrRoleChangeUnsupported{TenantID: "tenant-a", UserID: "user-1"}, unsupported)
+	assert.Empty(t, client.users.revoked)
+}
+
+func TestRequireUnchangedUserRoles_NoReferencesReadsNothing(t *testing.T) {
+	require.NoError(t, RequireUnchangedUserRoles(context.Background(), nil, "tenant-a", "user-1", nil))
+}
+
+func TestRequireUnchangedUserRoles_NilClient(t *testing.T) {
+	err := RequireUnchangedUserRoles(context.Background(), nil, "tenant-a", "user-1", []string{"admin"})
+
+	require.ErrorIs(t, err, ErrIAMClientMissing{})
+}
+
+func TestUpdateUser_RoleChangeIsRefusedBeforeAnyWrite(t *testing.T) {
+	client := userHolding()
+	handlers, writer := adapterHandlers(client)
+
+	body := UpdateUserRequest{Name: "Renamed", Roles: []string{"admin"}}
+	req := createRequestWithVars(http.MethodPut, "/api/v1/iam/tenants/tenant-a/users/user-1", body, map[string]string{"tenant": "tenant-a", "id": "user-1"})
+	handlers.UpdateUser(httptest.NewRecorder(), req)
+
+	assert.Equal(t, http.StatusBadRequest, writer.lastStatus)
+	assert.Empty(t, client.users.assigned)
+	assert.Empty(t, client.users.revoked)
+	assert.Nil(t, client.users.updated, "a refused role change must not update the user")
+}
+
+func TestUpdateUser_UnchangedRolesUpdateTheOtherFields(t *testing.T) {
+	client := userHolding("0b5e-admin")
+	handlers, writer := adapterHandlers(client)
+
+	body := UpdateUserRequest{Name: "Renamed", Roles: []string{"admin"}}
+	req := createRequestWithVars(http.MethodPut, "/api/v1/iam/tenants/tenant-a/users/user-1", body, map[string]string{"tenant": "tenant-a", "id": "user-1"})
+	handlers.UpdateUser(httptest.NewRecorder(), req)
+
+	assert.Equal(t, http.StatusOK, writer.lastStatus)
+	require.NotNil(t, client.users.updated, "the update must reach the SDK")
+	assert.Equal(t, "Renamed", client.users.updated.DisplayName)
+	assert.Empty(t, client.users.assigned)
+	assert.Empty(t, client.users.revoked)
+}
+
+func TestQuicBaaSIAMAdapter_UpdateTenant_SendsTheNameAsDisplayName(t *testing.T) {
+	client := &adapterSDKClient{tenants: &recordingTenantClient{}}
+
+	resp, err := NewQuicBaaSIAMAdapter(client).UpdateTenant(context.Background(), "acme", &UpdateTenantRequest{Name: "renamed"})
+
+	require.NoError(t, err)
+	require.NotNil(t, client.tenants.updated)
+	assert.Equal(t, "renamed", client.tenants.updated.DisplayName)
+	assert.Equal(t, "renamed", resp.Name)
+}
+
+func TestQuicBaaSIAMAdapter_UpdateTenant_RefusesSettings(t *testing.T) {
+	client := &adapterSDKClient{tenants: &recordingTenantClient{}}
+
+	_, err := NewQuicBaaSIAMAdapter(client).UpdateTenant(context.Background(), "acme", &UpdateTenantRequest{Name: "renamed", Settings: &TenantSettings{}})
+
+	require.ErrorIs(t, err, ErrTenantSettingsUnsupported{})
+	assert.Nil(t, client.tenants.updated, "refused settings must not reach the SDK")
+}
+
+func TestUpdateTenant_SettingsAreABadRequest(t *testing.T) {
+	client := &adapterSDKClient{tenants: &recordingTenantClient{}}
+	handlers, writer := adapterHandlers(client)
+
+	body := UpdateTenantRequest{Settings: &TenantSettings{}}
+	req := createRequestWithVars(http.MethodPut, "/api/v1/iam/tenants/acme", body, map[string]string{"tenant": "acme"})
+	handlers.UpdateTenant(httptest.NewRecorder(), req)
+
+	assert.Equal(t, http.StatusBadRequest, writer.lastStatus)
+	assert.Nil(t, client.tenants.updated)
+}
+
+func TestQuicBaaSIAMAdapter_RequireUnchangedUserRoles_RefusesUnknownRole(t *testing.T) {
+	client := userHolding()
+
+	err := NewQuicBaaSIAMAdapter(client).RequireUnchangedUserRoles(context.Background(), "tenant-a", "user-1", []string{"owner"})
 
 	var notFound ErrRoleNotFound
 	require.ErrorAs(t, err, &notFound)

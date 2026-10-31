@@ -105,6 +105,54 @@ func SetUserRoles(ctx context.Context, client iamsdk.Client, tenantID, userID st
 	return syncUserRoles(ctx, client.User(), tenantID, userID, current, want)
 }
 
+
+// RequireUnchangedUserRoles refuses a user update whose role references name a
+// set other than the roles the user holds, with ErrRoleChangeUnsupported. The
+// pinned SDK's embedded transport dispatches neither User/AssignRole nor
+// User/RevokeRole, so a role change cannot be applied; it is refused before any
+// write. No references leaves the roles alone.
+func RequireUnchangedUserRoles(ctx context.Context, client iamsdk.Client, tenantID, userID string, refs []string) error {
+	if len(refs) == 0 {
+		return nil
+	}
+	if client == nil {
+		return ErrIAMClientMissing{}
+	}
+	want, err := ResolveRoleIDs(ctx, client.Role(), tenantID, refs)
+	if err != nil {
+		return err
+	}
+	user, err := client.User().Get(ctx, tenantID, userID)
+	if err != nil {
+		return err
+	}
+	var current []string
+	if user != nil {
+		current = user.Roles
+	}
+	if !sameRoleSet(current, want) {
+		return ErrRoleChangeUnsupported{TenantID: tenantID, UserID: userID}
+	}
+	return nil
+}
+
+// sameRoleSet reports whether a and b hold the same role IDs, ignoring order
+// and duplicates.
+func sameRoleSet(a, b []string) bool {
+	inA := make(map[string]struct{}, len(a))
+	for _, id := range a {
+		inA[id] = struct{}{}
+	}
+	inB := make(map[string]struct{}, len(b))
+	for _, id := range b {
+		if _, ok := inA[id]; !ok {
+			return false
+		}
+		inB[id] = struct{}{}
+	}
+	return len(inA) == len(inB)
+}
+
 // syncUserRoles brings a user holding the role IDs current to exactly the role
 // IDs want: it assigns each wanted role the user lacks, then revokes each role
 // the user holds that is not wanted. Assigning first means a failure part-way

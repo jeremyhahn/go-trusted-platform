@@ -207,10 +207,11 @@ func (a *QuicBaaSIAMAdapter) DeleteUser(ctx context.Context, tenantID, userID st
 	return a.client.User().Delete(ctx, tenantID, userID)
 }
 
-// SetUserRoles replaces the user's roles with the referenced ones
-// (SetUserRoles); no references leaves them alone.
-func (a *QuicBaaSIAMAdapter) SetUserRoles(ctx context.Context, tenantID, userID string, roles []string) error {
-	return SetUserRoles(ctx, a.client, tenantID, userID, roles)
+// RequireUnchangedUserRoles refuses referenced roles that differ from the
+// user's current roles (RequireUnchangedUserRoles); no references leaves them
+// alone.
+func (a *QuicBaaSIAMAdapter) RequireUnchangedUserRoles(ctx context.Context, tenantID, userID string, roles []string) error {
+	return RequireUnchangedUserRoles(ctx, a.client, tenantID, userID, roles)
 }
 
 // AssignRole delegates to iamsdk.UserClient.AssignRole, first resolving the
@@ -341,10 +342,12 @@ func (a *QuicBaaSIAMAdapter) UpdateTenant(ctx context.Context, tenantID string, 
 	if req == nil {
 		return nil, errors.New("update tenant request is required")
 	}
-	sdkReq := &iamsdk.UpdateTenantRequest{}
+	// The pinned SDK's tenant update applies only the display name; settings
+	// are refused rather than reported as written.
 	if req.Settings != nil {
-		sdkReq.Settings = encodeTenantSettings(req.Settings)
+		return nil, ErrTenantSettingsUnsupported{TenantID: tenantID}
 	}
+	sdkReq := &iamsdk.UpdateTenantRequest{DisplayName: req.Name}
 	t, err := a.client.Tenant().Update(ctx, tenantID, sdkReq)
 	if err != nil {
 		return nil, err

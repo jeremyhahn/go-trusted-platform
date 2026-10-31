@@ -54,9 +54,10 @@ type IAMClient interface {
 	GetUserByEmail(ctx context.Context, tenantID, email string) (*iamsdk.User, error)
 	ListUsers(ctx context.Context, tenantID string, req *iamsdk.ListUsersRequest) (*iamsdk.ListUsersResponse, error)
 	UpdateUser(ctx context.Context, tenantID, userID string, req *iamsdk.UpdateUserRequest) (*iamsdk.User, error)
-	// SetUserRoles replaces the user's roles with the referenced ones (role
-	// names or IDs); no references leaves them alone.
-	SetUserRoles(ctx context.Context, tenantID, userID string, roles []string) error
+	// RequireUnchangedUserRoles refuses referenced roles (names or IDs) that
+	// differ from the user's current roles with ErrRoleChangeUnsupported; no
+	// references leaves them alone.
+	RequireUnchangedUserRoles(ctx context.Context, tenantID, userID string, roles []string) error
 	DeleteUser(ctx context.Context, tenantID, userID string) error
 	AssignRole(ctx context.Context, tenantID, userID, roleID string) error
 	RevokeRole(ctx context.Context, tenantID, userID, roleID string) error
@@ -330,6 +331,9 @@ func (h *IAMHandlers) consistentTenant(next http.HandlerFunc) http.HandlerFunc {
 func (h *IAMHandlers) handleError(w http.ResponseWriter, r *http.Request, err error) {
 	errStr := err.Error()
 	switch {
+	case errors.Is(err, ErrRoleChangeUnsupported{}),
+		errors.Is(err, ErrTenantSettingsUnsupported{}):
+		h.respWriter.Error400(w, r, err)
 	case strings.Contains(errStr, "not found"):
 		h.respWriter.Error404(w, r, err)
 	case strings.Contains(errStr, "invalid"),
@@ -507,9 +511,10 @@ func (h *IAMHandlers) UpdateUser(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := h.createContext()
 	defer cancel()
 
-	// The SDK's update carries no roles; roles are replaced first, so an unknown
-	// role refuses the whole update before anything is written.
-	if err := h.iamClient.SetUserRoles(ctx, tenantID, userID, req.Roles); err != nil {
+	// The SDK's update carries no roles and the pinned SDK cannot assign or
+	// revoke them, so a role change (or an unknown role) refuses the whole
+	// update before anything is written.
+	if err := h.iamClient.RequireUnchangedUserRoles(ctx, tenantID, userID, req.Roles); err != nil {
 		h.handleError(w, r, err)
 		return
 	}
