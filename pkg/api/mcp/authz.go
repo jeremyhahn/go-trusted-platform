@@ -540,8 +540,8 @@ func toolPermissionCatalog() map[string]string {
 
 	// PXE tools (#704) require the scope of their gRPC PXEService method:
 	// pxe:read observes, pxe:write moves a device through the workflow or
-	// starts and stops the service (WebhookComplete included), pxe:delete
-	// removes a device. Each scope lives on its pxeTools entry.
+	// starts and stops the service, pxe:complete is the installer callback
+	// (WebhookComplete) and nothing else, pxe:delete removes a device. Each scope lives on its pxeTools entry.
 	for name, tool := range pxeTools {
 		permissions[name] = tool.scope
 	}

@@ -326,6 +326,13 @@ func (f *recordingPXEService) GetEvents(_ context.Context, deviceID string) ([]*
 
 func (f *recordingPXEService) RegisterEventHandler(_ pxe.EventHandler) {}
 
+func (f *recordingPXEService) IsInstallerCertificate(_ context.Context, certificateSHA256 string) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.record("IsInstallerCertificate", certificateSHA256)
+	return false, nil
+}
+
 func (f *recordingPXEService) Status() *pxe.ServiceStatus {
 	f.mu.Lock()
 	defer f.mu.Unlock()

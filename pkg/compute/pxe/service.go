@@ -57,6 +57,11 @@ type Service interface {
 	// only while the device is installing under installCertSHA256, and leaving
 	// installing clears the binding.
 	CompleteInstallation(ctx context.Context, deviceID, installCertSHA256 string, success bool, reason string) error
+	// IsInstallerCertificate reports whether the certificate with this
+	// lowercase hex SHA-256 is, or ever was, bound as an installer
+	// certificate. Unlike the binding, the answer survives the end of the
+	// installation: the certificate stays an installer's, never an operator's.
+	IsInstallerCertificate(ctx context.Context, certificateSHA256 string) (bool, error)
 	AuthorizeDevice(ctx context.Context, deviceID string, targetVLAN uint16) error
 	QuarantineDevice(ctx context.Context, deviceID string, reason string) error
 	RetryDevice(ctx context.Context, deviceID string) error
@@ -504,6 +509,15 @@ func (s *service) ListDevices(ctx context.Context, filter *DeviceFilter) ([]*Dev
 	}
 
 	return s.stateManager.List(filter), nil
+}
+
+// IsInstallerCertificate implements Service.
+func (s *service) IsInstallerCertificate(ctx context.Context, certificateSHA256 string) (bool, error) {
+	if !s.initialized.Load() {
+		return false, ErrServiceNotInitialized{}
+	}
+
+	return s.stateManager.IsInstallerCertificate(certificateSHA256), nil
 }
 
 // RemoveDevice removes a device from the service.

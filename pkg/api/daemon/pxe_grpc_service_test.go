@@ -44,12 +44,33 @@ type mockPXEService struct {
 	retryErr       error
 	eventsErr      error
 	enrollErr      error
+	installerErr   error
+	// installerCerts is every fingerprint SetDeviceInstalling ever bound, as
+	// pxe.StateManager keeps it: no transition removes one.
+	installerCerts map[string]struct{}
 }
 
 func newMockPXEService() *mockPXEService {
 	return &mockPXEService{
-		devices: make(map[string]*pxe.DeviceInfo),
-		running: false,
+		devices:        make(map[string]*pxe.DeviceInfo),
+		running:        false,
+		installerCerts: make(map[string]struct{}),
+	}
+}
+
+func (m *mockPXEService) IsInstallerCertificate(ctx context.Context, certificateSHA256 string) (bool, error) {
+	if m.installerErr != nil {
+		return false, m.installerErr
+	}
+	_, ok := m.installerCerts[certificateSHA256]
+	return ok, nil
+}
+
+// leaveInstalling mirrors pxe.StateManager: every transition out of
+// installing clears the device's install certificate binding.
+func leaveInstalling(device *pxe.DeviceInfo, state pxe.ProvisioningState) {
+	if state != pxe.StateInstalling {
+		device.InstallCertificateSHA256 = ""
 	}
 }
 
@@ -170,6 +191,7 @@ func (m *mockPXEService) UpdateDeviceState(ctx context.Context, deviceID string,
 		return pxe.ErrDeviceNotFound{DeviceID: deviceID}
 	}
 	device.State = state
+	leaveInstalling(device, state)
 	device.StateReason = reason
 	device.StateChangedAt = time.Now()
 	device.UpdatedAt = time.Now()
@@ -199,6 +221,7 @@ func (m *mockPXEService) SetDeviceInstalling(ctx context.Context, deviceID, inst
 		return pxe.ErrDeviceNotFound{DeviceID: deviceID}
 	}
 	device.InstallCertificateSHA256 = installCertSHA256
+	m.installerCerts[installCertSHA256] = struct{}{}
 	device.State = pxe.StateInstalling
 	device.StateReason = reason
 	device.UpdatedAt = time.Now()
@@ -250,6 +273,7 @@ func (m *mockPXEService) QuarantineDevice(ctx context.Context, deviceID string, 
 		return pxe.ErrDeviceNotFound{DeviceID: deviceID}
 	}
 	device.State = pxe.StateQuarantined
+	leaveInstalling(device, pxe.StateQuarantined)
 	device.StateReason = reason
 	device.UpdatedAt = time.Now()
 	return nil

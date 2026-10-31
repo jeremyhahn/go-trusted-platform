@@ -156,7 +156,7 @@ var pxeTools = map[string]pxeTool{
 	},
 	"pxe_webhook_complete": {
 		method:      platformv1.PXEService_WebhookComplete_FullMethodName,
-		scope:       "pxe:write",
+		scope:       "pxe:complete",
 		description: "Report that the OS installation on a device finished, successfully or not",
 		binding:     pxeToolMethod(platformv1.PXEServiceServer.WebhookComplete, "mac_address"),
 	},

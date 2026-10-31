@@ -255,18 +255,24 @@ func newMTLSPeerAuthenticator(authenticator auth.Authenticator, installs install
 	return mtlsPeerAuthenticator{authenticator: authenticator, installs: installs}
 }
 
-// installerScope is the one scope an install certificate holds: the PXE
-// webhook (WebhookComplete) takes it. It reaches no certs:* operation.
-const installerScope = "pxe:write"
+// installerScope is the one scope an install certificate holds: only the PXE
+// webhook (WebhookComplete) takes it, and the webhook then accepts the
+// certificate only for the device it is bound to. It reaches no certs:*
+// operation and none of the operator PXE operations, which take pxe:write
+// (Codex 8652).
+const installerScope = "pxe:complete"
 
 // installCertificateBindings reports whether a certificate, by the lowercase
-// hex SHA-256 of its DER, is bound as a device's install certificate.
+// hex SHA-256 of its DER, is or ever was bound as a device's install
+// certificate. The answer outlives the installation: an installer's
+// certificate is never the operator's (Codex 8652).
 type installCertificateBindings interface {
 	IsInstallCertificate(ctx context.Context, certificateSHA256 string) (bool, error)
 }
 
-// pxeInstallBindings reads install certificate bindings from the PXE store
-// the PXE handlers use (UpdateState and SetDeviceEnrolled bind and clear it).
+// pxeInstallBindings reads the installer identities of the PXE store the PXE
+// handlers use: every certificate a device's installation was ever bound to,
+// whether or not that installation has ended.
 type pxeInstallBindings struct {
 	service *PXEGRPCService
 }
@@ -277,11 +283,7 @@ func (b pxeInstallBindings) IsInstallCertificate(ctx context.Context, certificat
 	if b.service == nil || b.service.pxeService == nil {
 		return false, nil
 	}
-	devices, err := b.service.pxeService.ListDevices(ctx, &pxe.DeviceFilter{InstallCertificateSHA256: certificateSHA256})
-	if err != nil {
-		return false, err
-	}
-	return len(devices) > 0, nil
+	return b.service.pxeService.IsInstallerCertificate(ctx, certificateSHA256)
 }
 
 // InstallBindingLookupError is a verified certificate whose install binding
@@ -318,11 +320,14 @@ func (a mtlsPeerAuthenticator) AuthenticatePeer(ctx context.Context, chain []*x5
 	}, nil
 }
 
-// peerScopes is what a verified certificate may do. A certificate bound as a
-// device's install certificate is an installer, not the operator: the
+// peerScopes is what a verified certificate may do. A certificate ever bound
+// as a device's install certificate is an installer, not the operator: the
 // listener trusts it so the installer can report its result, so it holds only
-// the scope the PXE webhook takes (Codex 8646). Any other trusted certificate
-// is the operator's.
+// the scope the PXE webhook takes (Codex 8646), during its installation and
+// after it ends (Codex 8652). Any other trusted certificate is the
+// operator's: the platform CA sets no role, OU or EKU an operator certificate
+// carries and an installer's does not, so there is no positive operator
+// marker to require instead.
 func (a mtlsPeerAuthenticator) peerScopes(ctx context.Context, leaf *x509.Certificate) ([]string, error) {
 	if a.installs == nil {
 		return []string{mtlsOperatorScope}, nil

@@ -617,6 +617,25 @@ func retireInstallCert(device *DeviceInfo) {
 	device.UsedInstallCertificatesSHA256 = used
 }
 
+// IsInstallerCertificate reports whether certificateSHA256 is, or ever was,
+// bound as a device's installer certificate: a binding held now
+// (byInstallCert) or one an ended installation retired (retiredInstallCerts).
+// No transition and no Unregister removes a fingerprint from either, so the
+// certificate stays an installer's after its installation ends (Codex review
+// 8652): ending the installation does not end the certificate's validity.
+func (sm *StateManager) IsInstallerCertificate(certificateSHA256 string) bool {
+	if certificateSHA256 == "" {
+		return false
+	}
+	sm.installCertMu.Lock()
+	defer sm.installCertMu.Unlock()
+	if _, bound := sm.byInstallCert[certificateSHA256]; bound {
+		return true
+	}
+	_, retired := sm.retiredInstallCerts[certificateSHA256]
+	return retired
+}
+
 func copyDeviceInfo(src *DeviceInfo) *DeviceInfo {
 	if src == nil {
 		return nil

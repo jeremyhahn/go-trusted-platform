@@ -242,12 +242,13 @@ func TestGRPCMethodPermissions_WellFormed(t *testing.T) {
 		"objectstorage": true,
 	}
 	platformActions := map[string]bool{"read": true, "write": true, "delete": true}
-	// BMC, the daemon and the VPN posture policies carry the extra verbs; no
-	// other resource may.
+	// BMC, the daemon and the VPN posture policies carry the extra verbs, as
+	// does PXE for the installer's completion callback; no other resource may.
 	extraActions := map[string]map[string]bool{
 		"bmc":      {"power": true, "media": true, "admin": true},
 		"platform": {"admin": true},
 		"vpn":      {"admin": true},
+		"pxe":      {"complete": true},
 	}
 
 	for method, scope := range buildGRPCMethodPermissions() {

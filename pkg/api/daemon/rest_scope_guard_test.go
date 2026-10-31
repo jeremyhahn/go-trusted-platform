@@ -107,6 +107,7 @@ func pxeBindingsFor(leaf *x509.Certificate) pxeInstallBindings {
 		State:                    pxe.StateInstalling,
 		InstallCertificateSHA256: pxe.CertificateSHA256(leaf.Raw),
 	}
+	store.installerCerts[pxe.CertificateSHA256(leaf.Raw)] = struct{}{}
 	service := NewPXEGRPCService(logging.DefaultLogger(), nil)
 	service.SetPXEService(store)
 	return pxeInstallBindings{service: service}
@@ -149,7 +150,7 @@ func TestNewRESTScopeGuard_MTLS_OperatorCertificateStillReachesCAIssuance(t *tes
 func TestNewRESTScopeGuard_MTLS_UnreadableInstallBindingIsRefused(t *testing.T) {
 	t.Parallel()
 	store := newMockPXEService()
-	store.listErr = errors.New("pxe store offline")
+	store.installerErr = errors.New("pxe store offline")
 	service := NewPXEGRPCService(logging.DefaultLogger(), nil)
 	service.SetPXEService(store)
 	trusted := testutil.GenerateTestTLSBundle(t)

@@ -112,22 +112,24 @@ func isPreAuthMethod(fullMethod string) bool {
 // contract test pins the parity.
 func buildGRPCMethodPermissions() map[string]string {
 	const (
-		read   = "read"
-		write  = "write"
-		del    = "delete"
-		power  = "power"
-		media  = "media"
-		admin  = "admin"
-		vtpm   = "vtpm"
-		dns    = "dns"
-		device = "device"
-		sdn    = "sdn"
-		kms    = "kms"
-		iam    = "iam"
-		ca     = "ca"
-		prox   = "proxy"
-		ntp    = "ntp"
-		vpn    = "vpn"
+		read  = "read"
+		write = "write"
+		del   = "delete"
+		power = "power"
+		media = "media"
+		admin = "admin"
+		// complete is the installer callback's own verb: pxe:complete.
+		complete = "complete"
+		vtpm     = "vtpm"
+		dns      = "dns"
+		device   = "device"
+		sdn      = "sdn"
+		kms      = "kms"
+		iam      = "iam"
+		ca       = "ca"
+		prox     = "proxy"
+		ntp      = "ntp"
+		vpn      = "vpn"
 
 		cacheRes     = "cache"
 		schedulerRes = "scheduler"
@@ -900,8 +902,10 @@ func buildGRPCMethodPermissions() map[string]string {
 		"/platform.v1.PXEService/StartService":      scope(pxe, write),
 		"/platform.v1.PXEService/StopService":       scope(pxe, write),
 		"/platform.v1.PXEService/UpdateState":       scope(pxe, write),
-		"/platform.v1.PXEService/WebhookComplete":   scope(pxe, write),
-		"/platform.v1.PXEService/RemoveDevice":      scope(pxe, del),
+		// An installer certificate holds only pxe:complete (Codex 8652): it
+		// ends its own installation, and no other PXE operation takes it.
+		"/platform.v1.PXEService/WebhookComplete": scope(pxe, complete),
+		"/platform.v1.PXEService/RemoveDevice":    scope(pxe, del),
 
 		// ---------------------------------------------------------------------
 		// OCI registry (RegistryService)

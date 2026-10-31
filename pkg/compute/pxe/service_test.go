@@ -686,6 +686,59 @@ func TestService_SetDeviceInstalling_NotInitialized(t *testing.T) {
 	assert.IsType(t, ErrServiceNotInitialized{}, err)
 }
 
+// A certificate stays an installer's after its installation ends: no
+// transition and no removal forgets it (Codex 8652).
+func TestService_IsInstallerCertificate_OutlivesTheInstallation(t *testing.T) {
+	ends := map[string]func(t *testing.T, svc Service, deviceID string){
+		"completed and enrolled": func(t *testing.T, svc Service, deviceID string) {
+			ctx := context.Background()
+			require.NoError(t, svc.UpdateDeviceState(ctx, deviceID, StateInstallComplete, "installed"))
+			require.NoError(t, svc.UpdateDeviceState(ctx, deviceID, StateEnrolling, "enrolling"))
+			require.NoError(t, svc.SetDeviceEnrolled(ctx, deviceID, "0a"))
+		},
+		"quarantined": func(t *testing.T, svc Service, deviceID string) {
+			require.NoError(t, svc.QuarantineDevice(context.Background(), deviceID, "quarantine"))
+		},
+		"removed": func(t *testing.T, svc Service, deviceID string) {
+			require.NoError(t, svc.RemoveDevice(context.Background(), deviceID))
+		},
+	}
+	for name, end := range ends {
+		t.Run(name, func(t *testing.T) {
+			svc, _ := initializeTestService(t)
+			ctx := context.Background()
+			device, err := svc.RegisterDevice(ctx, "00:11:22:33:44:55", "port-1")
+			require.NoError(t, err)
+			require.NoError(t, svc.UpdateDeviceState(ctx, device.ID, StateBooting, "booting"))
+			fingerprint := CertificateSHA256([]byte("installer certificate"))
+			require.NoError(t, svc.SetDeviceInstalling(ctx, device.ID, fingerprint, "installing"))
+
+			installer, err := svc.IsInstallerCertificate(ctx, fingerprint)
+			require.NoError(t, err)
+			assert.True(t, installer, "bound now")
+
+			end(t, svc, device.ID)
+
+			installer, err = svc.IsInstallerCertificate(ctx, fingerprint)
+			require.NoError(t, err)
+			assert.True(t, installer, "the installation ended, the certificate is still an installer's")
+			other, err := svc.IsInstallerCertificate(ctx, CertificateSHA256([]byte("operator certificate")))
+			require.NoError(t, err)
+			assert.False(t, other, "a certificate no installation bound is not an installer's")
+		})
+	}
+}
+
+func TestService_IsInstallerCertificate_RefusesBadInput(t *testing.T) {
+	_, err := NewService().IsInstallerCertificate(context.Background(), CertificateSHA256([]byte("c")))
+	assert.IsType(t, ErrServiceNotInitialized{}, err)
+
+	svc, _ := initializeTestService(t)
+	installer, err := svc.IsInstallerCertificate(context.Background(), "")
+	require.NoError(t, err)
+	assert.False(t, installer, "an empty fingerprint is no certificate")
+}
+
 // installingTestDevice registers a device and moves it to installing under
 // the installer certificate fingerprint.
 func installingTestDevice(t *testing.T, svc Service, fingerprint string) *DeviceInfo {

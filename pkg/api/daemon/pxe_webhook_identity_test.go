@@ -97,7 +97,7 @@ func (i *webhookIssuer) issue(t *testing.T, serial int64) *x509.Certificate {
 	require.NoError(t, err)
 	template := &x509.Certificate{
 		SerialNumber: big.NewInt(serial),
-		Subject:      pkix.Name{CommonName: "node"},
+		Subject:      pkix.Name{CommonName: "node", Organization: []string{"Test Platform Client"}},
 		NotBefore:    i.cert.NotBefore,
 		NotAfter:     i.cert.NotAfter,
 		KeyUsage:     x509.KeyUsageDigitalSignature,

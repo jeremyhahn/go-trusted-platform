@@ -45,6 +45,8 @@ const (
 	actionDelete  = "delete"
 	actionAdmin   = "admin"
 	actionSignCSR = "sign-csr"
+	// actionComplete is the PXE installer callback's verb.
+	actionComplete = "complete"
 
 	// go-qrdb registers the certificate family with its own verbs; ca:write
 	// is not a permission any role can hold.
@@ -304,6 +306,9 @@ var (
 	pxeRead   = OpcodePermission{Resource: "pxe", Action: actionRead}
 	pxeWrite  = OpcodePermission{Resource: "pxe", Action: actionWrite}
 	pxeDelete = OpcodePermission{Resource: "pxe", Action: actionDelete}
+	// pxeComplete is the installer callback's own permission (Codex 8652):
+	// an installer certificate holds it and nothing else.
+	pxeComplete = OpcodePermission{Resource: "pxe", Action: actionComplete}
 )
 
 // opcodePermissions covers the opcodes routed on their own byte. A byte that
@@ -964,7 +969,7 @@ var categoryPermissions = map[byte]map[byte]OpcodePermission{
 		quicwire.PXESubGetStatus:         pxeRead,
 		quicwire.PXESubStartService:      pxeWrite,
 		quicwire.PXESubStopService:       pxeWrite,
-		quicwire.PXESubWebhookComplete:   pxeWrite,
+		quicwire.PXESubWebhookComplete:   pxeComplete,
 	},
 }
 

@@ -108,7 +108,7 @@ func TestLookupOperationPermission_CategorySubOpcodes(t *testing.T) {
 		{"pxe get status", quicwire.OpProvisioningCategory, quicwire.PXESubGetStatus, OpcodePermission{Resource: "pxe", Action: "read"}},
 		{"pxe start service", quicwire.OpProvisioningCategory, quicwire.PXESubStartService, OpcodePermission{Resource: "pxe", Action: "write"}},
 		{"pxe stop service", quicwire.OpProvisioningCategory, quicwire.PXESubStopService, OpcodePermission{Resource: "pxe", Action: "write"}},
-		{"pxe webhook complete", quicwire.OpProvisioningCategory, quicwire.PXESubWebhookComplete, OpcodePermission{Resource: "pxe", Action: "write"}},
+		{"pxe webhook complete", quicwire.OpProvisioningCategory, quicwire.PXESubWebhookComplete, OpcodePermission{Resource: "pxe", Action: "complete"}},
 		{"bmc enroll", quicwire.OpBMCCategory, quicwire.BMCSubEnroll, OpcodePermission{Resource: "bmc", Action: "admin"}},
 		{"bmc power status", quicwire.OpBMCCategory, quicwire.BMCSubPowerStatus, OpcodePermission{Resource: "bmc", Action: "read"}},
 		{"bmc power on", quicwire.OpBMCCategory, quicwire.BMCSubPowerOn, OpcodePermission{Resource: "bmc", Action: "write"}},
@@ -293,6 +293,7 @@ func TestOperationCatalog_EntriesAreWellFormed(t *testing.T) {
 	actions := map[string]bool{
 		actionRead: true, actionWrite: true, actionDelete: true, actionAdmin: true, actionSignCSR: true,
 		actionGenerate: true, actionRevoke: true, actionList: true, actionPower: true, actionMedia: true,
+		actionComplete: true,
 	}
 	check := func(where string, perm OpcodePermission) {
 		if perm.Resource == "" || !actions[perm.Action] {

@@ -181,7 +181,8 @@ func TestPXEToolsAreClassified(t *testing.T) {
 		"pxe_retry_device":        "pxe:write",
 		"pxe_start_service":       "pxe:write",
 		"pxe_stop_service":        "pxe:write",
-		"pxe_webhook_complete":    "pxe:write",
+		// The installer's completion callback; an installer holds only this.
+		"pxe_webhook_complete": "pxe:complete",
 		// Removes a device.
 		"pxe_remove_device": "pxe:delete",
 	} {
