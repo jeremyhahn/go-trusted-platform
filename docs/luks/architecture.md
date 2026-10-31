@@ -76,18 +76,35 @@ authenticator's hmac-secret (`GenerateDerivedKey`), not the raw secret.
 Enrolment takes a second touch, as `systemd-cryptenroll` does. The key is
 never stored. The credential ID, salt and relying party ID are kept in a LUKS2
 header token bound to the keyslot (base64 `fido2-credential` and
-`fido2-salt`, `fido2-rp`). The token type records the key derivation: type
-`fido2` (`luks.TokenTypeFIDO2`) means the slot holds the SDK derivation. The
-installer's enrolment (`pkg/installer/fido2_enroll.go`) uses the same SDK
-calls and writes the same type ([installer engineering](../installer/engineering.md)).
-If the token cannot be written, the slot is killed again.
+`fido2-salt`, `fido2-rp`). The installer's enrolment (`pkg/installer/fido2_enroll.go`) uses the same SDK
+calls and writes a type `fido2` (`luks.TokenTypeFIDO2`) token
+([installer engineering](../installer/engineering.md)); the runtime
+`DeriveEnroll` (`pkg/app/backends/luks_fido2_handler.go`) writes type
+`fido2-manual`. If the token cannot be written, the slot is killed again.
 
-At boot the strategy reads the lowest-ID token for the slot that carries a
-credential and a salt. A token of any other type (`fido2-manual` from earlier
-installers, `systemd-fido2`) keys its slot with the raw hmac-secret, which the
-pinned SDK cannot return; the strategy returns `FIDO2RawSecretTokenError`
-(naming go-xkms #1769) without touching the authenticator or trying the slot.
-Such a slot has to be re-enrolled.
+At boot the strategy takes its slots from the header, not from the volume
+config: every token that carries a credential and a salt names its slots in
+`keyslots`, and the lowest token ID wins a slot. The configured
+`FallbackMethods` index (2 by default) plays no part, so the installer's
+default slot 3 opens. Each slot is handled by its token type:
+
+| Type | Written by | Read as |
+|---|---|---|
+| `fido2` | installer | base64 credential and salt, relying party `fido2-rp` (default `luks-root`), no user verification |
+| `fido2-manual` | runtime `DeriveEnroll`, earlier installers | credential in hex or any base64 alphabet, `fido2-rp` (default the SDK's), `fido2-up-required` as user verification |
+| `systemd-fido2`, any other | `systemd-cryptenroll` | refused: `FIDO2RawSecretTokenError`, authenticator not asked |
+
+An `fido2-manual` token does not say which key its slot holds: the runtime
+keys it with the SDK derivation, earlier installers with the raw hmac-secret.
+The strategy derives once and lets LUKS check the key. If the slot rejects
+it, the error is `FIDO2RawSecretTokenError` (naming go-xkms #1769: the pinned
+SDK cannot return the raw secret) and the authenticator is not asked again.
+Such a slot has to be re-enrolled. The installer's `FIDO2Unlock` applies the
+same rules.
+
+No explicit derivation marker (`"derivation"`) is written: the go-luks2
+`v0.2.0-alpha` `Token` has no field for it and drops unknown JSON fields on
+import and read, so the token type is the only signal that survives.
 
 **As shipped, the chain is not connected at the server end** (see
 [engineering.md](engineering.md) §6): the platformd startup path injects

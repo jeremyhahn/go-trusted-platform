@@ -142,11 +142,26 @@ strategy derives at boot. The installer adds it to `fido2.keyslot` (default 3)
 under the platform keyslot policy, zeroes it, and writes a LUKS2 token of type
 `fido2` (`luks.TokenTypeFIDO2`) bound to the slot, carrying base64
 `fido2-credential` and `fido2-salt`, `fido2-rp` and `fido2-up-required`. The
-type marks the derivation: the initrd refuses any other FIDO2 token type
-(`FIDO2RawSecretTokenError`, see [`docs/luks/architecture.md`](../luks/architecture.md) §3).
+initrd finds the slot from this token's `keyslots`, not from its own
+configured slot index ([`docs/luks/architecture.md`](../luks/architecture.md) §3).
 `fido2-cred` and `fido2-assert` are no longer used; `fido2-token` still detects
 the device. Failures are typed: `FIDO2EnrollKeyError`, `FIDO2DeriveKeyError`,
 `FIDO2AddKeyError`.
+
+FIDO2 unlock (`FIDO2Unlock`, used by the installer's unlock test) reads the
+same tokens through the same SDK handler. `GetTokenInfo` returns the lowest-ID
+token bound to a keyslot that carries a credential and a salt and has a type
+it can derive for: `fido2` (installer layout, relying party `luks-alpine`, no
+user verification) or `fido2-manual` (runtime layout from `pkg/app/backends`:
+credential in hex or any base64 alphabet, `fido2-up-required` read as user
+verification). `DeriveKey` calls `UnlockWithKey`; it does not compute the
+hmac-secret itself. `Unlock` and `TestUnlock` hand the key to go-luks2 and
+let the header check it. A rejected key is `FIDO2KeyRejectedError`, except
+for an `fido2-manual` token, where it is `FIDO2RawSecretTokenError` (go-xkms
+#1769): an earlier installer keyed that slot with the raw secret. The
+authenticator is asked once. A `systemd-fido2` token is refused without
+asking it. Other failures: `FIDO2TokenNotFoundError`, `FIDO2TokenDecodeError`,
+`FIDO2DeriveKeyError`.
 
 Network (host addressing by role, §7): `NetworkConfig.Validate(*netplan.Plan)`,
 `Config.Plan`, `HostRole` (`HostRoleGateway`, `HostRoleControlPlane`,
