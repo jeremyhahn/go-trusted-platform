@@ -215,7 +215,8 @@ func renewableCACert(maxPathLen int) *x509.Certificate {
 	existing.BasicConstraintsValid = true
 	existing.MaxPathLen = maxPathLen
 	existing.MaxPathLenZero = maxPathLen == 0
-	existing.KeyUsage = x509.KeyUsageCertSign | x509.KeyUsageCRLSign
+	// The SDK's CA profile writes this mask; any other is refused on renewal.
+	existing.KeyUsage = caProfileKeyUsage
 	return existing
 }
 
@@ -322,6 +323,28 @@ func TestRenew_ACAWithARestrictionTheSDKCannotCarryIsRefusedBeforeRevocation(t *
 			assertRenewalUntouched(t, ca.renewCA)
 		})
 	}
+}
+
+// The SDK's CA profile replaces the request's KeyUsage with its own mask, so
+// renewing a CA restricted to keyCertSign alone would grant it cRLSign and
+// digitalSignature. The renewal is refused before anything is revoked.
+func TestRenew_ACAWithOnlyKeyCertSignIsRefusedBeforeRevocation(t *testing.T) {
+	ca := &renewIssuerCA{
+		renewCA: newRenewCA(),
+		issuer:  &x509.Certificate{Subject: pkix.Name{CommonName: "Root"}, IsCA: true, BasicConstraintsValid: true, MaxPathLen: -1},
+	}
+	existing := encodedCACert(t, func(c *x509.Certificate) { c.KeyUsage = x509.KeyUsageCertSign })
+	require.Equal(t, x509.KeyUsageCertSign, existing.KeyUsage)
+
+	_, err := Renew(context.Background(), ca, existing, RenewOptions{ValidDays: 30})
+
+	var refusal *CAKeyUsageUnsupportedError
+	require.ErrorAs(t, err, &refusal)
+	assert.Equal(t, x509.KeyUsageCertSign, refusal.Requested)
+	assert.Equal(t, caProfileKeyUsage, refusal.Profile)
+	assert.True(t, IsInvalidRequest(err))
+	assert.Contains(t, err.Error(), "ca.NewCAProfile", "the refusal names the SDK gap")
+	assertRenewalUntouched(t, ca.renewCA)
 }
 
 func TestCheckRenewableRestrictions_ALeafAndAnUnrestrictedCAPass(t *testing.T) {

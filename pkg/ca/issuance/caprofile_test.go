@@ -70,6 +70,41 @@ func TestIssue_CARequestReturnsCACertificate(t *testing.T) {
 	}
 }
 
+// The SDK's CA profile writes keyCertSign | cRLSign | digitalSignature. A CA
+// request for exactly that mask issues it unchanged; a narrower one is
+// refused, because the profile would grant usages the request withheld.
+func TestIssue_CAKeyUsageIsNeverBroadened(t *testing.T) {
+	root := newSoftwareRootCA(t)
+
+	t.Run("the profile mask issues exactly", func(t *testing.T) {
+		issued, err := Issue(context.Background(), root, &quicbaasca.CACertificateRequest{
+			Subject:  quicbaasca.CASubject{CommonName: "full-mask-ca", Organization: "Test Org", Country: "US"},
+			Valid:    1,
+			IsCA:     true,
+			KeyUsage: x509.KeyUsageCertSign | x509.KeyUsageCRLSign | x509.KeyUsageDigitalSignature,
+			Signer:   newECKey(t),
+		})
+		require.NoError(t, err)
+		assert.Equal(t, x509.KeyUsageCertSign|x509.KeyUsageCRLSign|x509.KeyUsageDigitalSignature,
+			issued.Certificate.KeyUsage)
+	})
+
+	t.Run("only keyCertSign is refused", func(t *testing.T) {
+		issued, err := Issue(context.Background(), root, &quicbaasca.CACertificateRequest{
+			Subject:  quicbaasca.CASubject{CommonName: "cert-sign-only-ca", Organization: "Test Org", Country: "US"},
+			Valid:    1,
+			IsCA:     true,
+			KeyUsage: x509.KeyUsageCertSign,
+			Signer:   newECKey(t),
+		})
+		assert.Nil(t, issued)
+		var refusal *CAKeyUsageUnsupportedError
+		require.ErrorAs(t, err, &refusal)
+		assert.Equal(t, x509.KeyUsageCertSign, refusal.Requested)
+		assert.True(t, IsInvalidRequest(err))
+	})
+}
+
 // TestIssue_LeafRequestReturnsLeaf checks a request without IsCA keeps the
 // default leaf profile.
 func TestIssue_LeafRequestReturnsLeaf(t *testing.T) {

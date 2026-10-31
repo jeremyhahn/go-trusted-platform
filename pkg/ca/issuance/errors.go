@@ -14,6 +14,7 @@
 package issuance
 
 import (
+	"crypto/x509"
 	"errors"
 	"strconv"
 	"strings"
@@ -285,3 +286,25 @@ func (e *CARestrictionUnsupportedError) Error() string {
 }
 
 func (e *CARestrictionUnsupportedError) invalidRequest() {}
+
+// CAKeyUsageUnsupportedError is an isCA request, or the renewal of a CA
+// certificate, whose key usage differs from the one the SDK's CA profile
+// writes. The pinned go-xkms ca.NewCAProfile replaces the request's KeyUsage
+// with keyCertSign | cRLSign | digitalSignature, so a CA restricted to fewer
+// usages would come out with authority it was not given (RFC 5280 §4.2.1.3).
+// The request is refused, before a renewal revokes the old certificate, until
+// the SDK profile carries the request's KeyUsage.
+type CAKeyUsageUnsupportedError struct {
+	// Requested is the key usage the request or the existing CA carries.
+	Requested x509.KeyUsage
+	// Profile is the key usage the SDK's CA profile writes.
+	Profile x509.KeyUsage
+}
+
+func (e *CAKeyUsageUnsupportedError) Error() string {
+	return "a CA certificate with key usage " + strconv.Itoa(int(e.Requested)) +
+		" cannot be issued: the SDK's CA profile (go-xkms ca.NewCAProfile) replaces the request's KeyUsage with " +
+		strconv.Itoa(int(e.Profile)) + ", so the CA would be issued with usages it was not given"
+}
+
+func (e *CAKeyUsageUnsupportedError) invalidRequest() {}

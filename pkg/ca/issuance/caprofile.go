@@ -13,6 +13,11 @@ import (
 // and fails if this name stops selecting the CA profile.
 const caProfileName = "ca"
 
+// caProfileKeyUsage is the key usage the pinned go-xkms ca.NewCAProfile
+// writes into every CA certificate, whatever the request asks for: its Apply
+// replaces the request's KeyUsage with this mask (RFC 5280 §4.2.1.3).
+const caProfileKeyUsage = x509.KeyUsageCertSign | x509.KeyUsageCRLSign | x509.KeyUsageDigitalSignature
+
 // ErrNilCertificateRequest is returned by Issue when it is given no request.
 type ErrNilCertificateRequest struct{}
 
@@ -69,6 +74,11 @@ func preflight(ca Issuer, req *quicbaasca.CACertificateRequest) error {
 	}
 	if len(req.ExtKeyUsage) > 0 {
 		return ErrCAExtKeyUsageUnsupported{}
+	}
+	// A zero KeyUsage asks for the profile's default; any other mask must be
+	// the profile's, or the CA would come out with authority it was not given.
+	if req.KeyUsage != 0 && req.KeyUsage != caProfileKeyUsage {
+		return &CAKeyUsageUnsupportedError{Requested: req.KeyUsage, Profile: caProfileKeyUsage}
 	}
 	issuer, err := ca.CACertificate()
 	if err != nil {
