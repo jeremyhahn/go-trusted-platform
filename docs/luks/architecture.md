@@ -99,8 +99,28 @@ keys it with the SDK derivation, earlier installers with the raw hmac-secret.
 The strategy derives once and lets LUKS check the key. If the slot rejects
 it, the error is `FIDO2RawSecretTokenError` (naming go-xkms #1769: the pinned
 SDK cannot return the raw secret) and the authenticator is not asked again.
-Such a slot has to be re-enrolled. The installer's `FIDO2Unlock` applies the
-same rules.
+The initrd cannot open such a slot, so it has to be re-enrolled.
+
+The installer's `FIDO2Unlock` (`pkg/installer/fido2_unlock.go`) reads the same
+token types and picks the unlock path the same way, with one difference for
+`fido2-manual`:
+
+| Type | Unlock path |
+|---|---|
+| `fido2` | SDK `UnlockWithKey`; `fido2-assert` is never run |
+| `fido2-manual` | SDK `UnlockWithKey` first; if the keyslot rejects that key, the raw hmac-secret from `fido2-token -L` and `fido2-assert -G -h` (run with `exec.CommandContext`), which is how earlier installers keyed the slot |
+| `systemd-fido2`, any other | refused: `FIDO2RawSecretTokenError` |
+
+Raw-secret failures are typed: `FIDO2AssertError` names the failed step and
+wraps `FIDO2NoDeviceError`, `FIDO2SecretLengthError` or the tool's error. A raw
+secret the slot also rejects gives `FIDO2KeyRejectedError`.
+
+At boot, `commands.CreateManager` (`pkg/boot/commands/manager.go`) opens the SDK
+FIDO2 handler (`fido2.NewHandler` on the default HID enumerator) and sets it as
+`Platform.FIDO2`, so the manager registers the FIDO2 strategy when
+`FallbackMethods` names it. If the handler cannot be opened, a warning is
+logged and the manager is built without FIDO2; the TPM and password strategies
+still run.
 
 No explicit derivation marker (`"derivation"`) is written: the go-luks2
 `v0.2.0-alpha` `Token` has no field for it and drops unknown JSON fields on

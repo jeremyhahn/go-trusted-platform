@@ -144,9 +144,14 @@ under the platform keyslot policy, zeroes it, and writes a LUKS2 token of type
 `fido2-credential` and `fido2-salt`, `fido2-rp` and `fido2-up-required`. The
 initrd finds the slot from this token's `keyslots`, not from its own
 configured slot index ([`docs/luks/architecture.md`](../luks/architecture.md) §3).
-`fido2-cred` and `fido2-assert` are no longer used; `fido2-token` still detects
-the device. Failures are typed: `FIDO2EnrollKeyError`, `FIDO2DeriveKeyError`,
-`FIDO2AddKeyError`.
+Enrolment does not use `fido2-cred` or `fido2-assert`; `fido2-token` still
+detects the device. `Enroll` honours its context: it checks the context before
+each authenticator call, before the keyslot is added and before the token is
+written. It runs each blocking authenticator call in a goroutine and returns
+as soon as the context ends. A cancelled enrolment returns
+`FIDO2CanceledError`, which names the step and wraps `ctx.Err()`, and it adds
+no keyslot and writes no token. Other failures are typed: `FIDO2EnrollKeyError`,
+`FIDO2DeriveKeyError`, `FIDO2AddKeyError`.
 
 FIDO2 unlock (`FIDO2Unlock`, used by the installer's unlock test) reads the
 same tokens through the same SDK handler. `GetTokenInfo` returns the lowest-ID
@@ -156,11 +161,17 @@ user verification) or `fido2-manual` (runtime layout from `pkg/app/backends`:
 credential in hex or any base64 alphabet, `fido2-up-required` read as user
 verification). `DeriveKey` calls `UnlockWithKey`; it does not compute the
 hmac-secret itself. `Unlock` and `TestUnlock` hand the key to go-luks2 and
-let the header check it. A rejected key is `FIDO2KeyRejectedError`, except
-for an `fido2-manual` token, where it is `FIDO2RawSecretTokenError` (go-xkms
-#1769): an earlier installer keyed that slot with the raw secret. The
-authenticator is asked once. A `systemd-fido2` token is refused without
-asking it. Other failures: `FIDO2TokenNotFoundError`, `FIDO2TokenDecodeError`,
+let the header check it. The token type picks the unlock path:
+
+| Type | Unlock path |
+|---|---|
+| `fido2` | the SDK key only; `fido2-assert` is never run. A rejected key is `FIDO2KeyRejectedError`. |
+| `fido2-manual` | the SDK key first, as the runtime service keys it. If the slot rejects it, the raw hmac-secret, as earlier installers keyed it: `fido2-token -L` finds the device and `fido2-assert -G -h` returns the secret for the token's credential and salt. Both run through `exec.CommandContext`. A raw secret the slot also rejects is `FIDO2KeyRejectedError`. |
+| `systemd-fido2` | refused without asking the authenticator: `FIDO2RawSecretTokenError` (go-xkms #1769). |
+
+Raw-secret failures are `FIDO2AssertError`, which names the step and wraps
+`FIDO2NoDeviceError`, `FIDO2SecretLengthError` or the tool's error. Other
+failures: `FIDO2TokenNotFoundError`, `FIDO2TokenDecodeError`,
 `FIDO2DeriveKeyError`.
 
 Network (host addressing by role, §7): `NetworkConfig.Validate(*netplan.Plan)`,
@@ -371,6 +382,9 @@ Strategy constructors: `NewKeyfileStrategy`, `NewTPMPCRStrategy`,
 
 `DefaultConfig().FallbackMethods` is
 `[UnlockTPMPCR, UnlockTPMUpgrade, UnlockFIDO2, UnlockPassword]`.
+At boot, `commands.CreateManager` sets `Platform.FIDO2` to the SDK FIDO2
+handler, so `FIDO2` is registered unless the handler cannot be opened (logged
+as a warning).
 
 **`TPM-Upgrade` has a reader and no production writer.** It is registered by
 default (`pkg/initrd/initrd.go:188-189`) and runs every boot: `CanUnlock`
