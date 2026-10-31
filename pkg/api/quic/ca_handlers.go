@@ -371,7 +371,7 @@ func (h *CAHandler) handleIssue(ctx context.Context, req *quicwire.Request) *qui
 		return h.errorResponse(quicwire.StatusInvalidArgument, err)
 	}
 
-	keyUsage, extKeyUsage, err := issuance.ParseRequestUsages(issueReq.IsCA, issueReq.KeyUsage, issueReq.ExtKeyUsage)
+	keyUsage, extKeyUsage, extensions, err := issuance.ParseRequestUsages(issueReq.IsCA, issueReq.KeyUsage, issueReq.ExtKeyUsage)
 	if err != nil {
 		return h.errorResponse(quicwire.StatusInvalidArgument, err)
 	}
@@ -387,11 +387,12 @@ func (h *CAHandler) handleIssue(ctx context.Context, req *quicwire.Request) *qui
 			Address:            issueReq.Subject.Address,
 			PostalCode:         issueReq.Subject.PostalCode,
 		},
-		Valid:       int(issueReq.ValidDays),
-		IsCA:        issueReq.IsCA,
-		MaxPathLen:  int(issueReq.MaxPathLen),
-		KeyUsage:    keyUsage,
-		ExtKeyUsage: extKeyUsage,
+		Valid:           int(issueReq.ValidDays),
+		IsCA:            issueReq.IsCA,
+		MaxPathLen:      int(issueReq.MaxPathLen),
+		KeyUsage:        keyUsage,
+		ExtKeyUsage:     extKeyUsage,
+		ExtraExtensions: extensions,
 	}
 
 	if issueReq.Sans != nil {

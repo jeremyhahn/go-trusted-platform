@@ -596,7 +596,7 @@ func (h *CAHandlers) handleIssueCertificate(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	keyUsage, extKeyUsage, err := issuance.ParseRequestUsages(certReq.GetIsCa(), certReq.GetKeyUsage(), certReq.GetExtKeyUsage())
+	keyUsage, extKeyUsage, extensions, err := issuance.ParseRequestUsages(certReq.GetIsCa(), certReq.GetKeyUsage(), certReq.GetExtKeyUsage())
 	if err != nil {
 		h.writeError(w, http.StatusBadRequest, err)
 		return
@@ -614,11 +614,12 @@ func (h *CAHandlers) handleIssueCertificate(w http.ResponseWriter, r *http.Reque
 			Address:            subject.GetAddress(),
 			PostalCode:         subject.GetPostalCode(),
 		},
-		Valid:       int(certReq.GetValidDays()),
-		IsCA:        certReq.GetIsCa(),
-		MaxPathLen:  int(certReq.GetMaxPathLen()),
-		KeyUsage:    keyUsage,
-		ExtKeyUsage: extKeyUsage,
+		Valid:           int(certReq.GetValidDays()),
+		IsCA:            certReq.GetIsCa(),
+		MaxPathLen:      int(certReq.GetMaxPathLen()),
+		KeyUsage:        keyUsage,
+		ExtKeyUsage:     extKeyUsage,
+		ExtraExtensions: extensions,
 	}
 
 	// Add SANs if provided

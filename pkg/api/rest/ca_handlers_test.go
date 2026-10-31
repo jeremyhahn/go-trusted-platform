@@ -52,14 +52,16 @@ import (
 // =============================================================================
 
 type mockCAService struct {
-	identity           string
-	initialized        bool
-	defaultKeyAlg      x509.PublicKeyAlgorithm
-	defaultValidity    time.Duration
-	rootCert           *x509.Certificate
-	intermediateCert   *x509.Certificate
-	certStore          *mockCertStore
-	issuedCerts        map[string]*x509.Certificate
+	identity         string
+	initialized      bool
+	defaultKeyAlg    x509.PublicKeyAlgorithm
+	defaultValidity  time.Duration
+	rootCert         *x509.Certificate
+	intermediateCert *x509.Certificate
+	certStore        *mockCertStore
+	issuedCerts      map[string]*x509.Certificate
+	// issueRequests records each request IssueCertificate was asked to sign.
+	issueRequests      []*quicbaasca.CACertificateRequest
 	issueErr           error
 	revokeErr          error
 	bundleErr          error
@@ -129,6 +131,7 @@ func (m *mockCAService) IssueCertificate(_ context.Context, req *quicbaasca.CACe
 	if m.issueErr != nil {
 		return nil, m.issueErr
 	}
+	m.issueRequests = append(m.issueRequests, req)
 	cert := generateTestCertificate(req.Subject.CommonName, req.IsCA, nil, req)
 	if cert == nil {
 		return nil, errors.New("failed to generate certificate")
@@ -586,6 +589,8 @@ func TestCAHandlers_IssueCertificate_UsageStrings(t *testing.T) {
 	}{
 		{"CA request with an EKU", usageRequest(true, nil, []string{"IPSEC_IKE"}), issuance.ErrCAExtKeyUsageUnsupported{}.Error()},
 		{"unknown key usage", usageRequest(false, []string{"NOT_A_USAGE"}, nil), issuance.ErrUnsupportedUsage{Name: "NOT_A_USAGE"}.Error()},
+		{"CA request naming PXE_INSTALLER", usageRequest(true, nil, []string{"PXE_INSTALLER"}), issuance.ErrCAExtKeyUsageUnsupported{}.Error()},
+		{"PXE_INSTALLER with SERVER_AUTH", usageRequest(false, nil, []string{"PXE_INSTALLER", "SERVER_AUTH"}), issuance.ErrInstallerExtKeyUsage{Name: "SERVER_AUTH"}.Error()},
 	}
 	for _, tc := range refusals {
 		t.Run(tc.name, func(t *testing.T) {
@@ -611,6 +616,23 @@ func TestCAHandlers_IssueCertificate_UsageStrings(t *testing.T) {
 
 		require.Equal(t, http.StatusCreated, rr.Code, rr.Body.String())
 		assert.Len(t, ca.issuedCerts, 1)
+		require.Len(t, ca.issueRequests, 1)
+		assert.Empty(t, ca.issueRequests[0].ExtraExtensions, "a plain leaf carries no installer marker")
+	})
+
+	t.Run("PXE_INSTALLER reaches the signer as the marker extension", func(t *testing.T) {
+		ca := newMockCAService()
+		_, router := setupCAHandlers(ca)
+
+		rr := postJSON(t, router, "/api/v1/ca/certificates",
+			usageRequest(false, []string{"DIGITAL_SIGNATURE"}, []string{"PXE_INSTALLER"}))
+
+		require.Equal(t, http.StatusCreated, rr.Code, rr.Body.String())
+		require.Len(t, ca.issueRequests, 1)
+		marker, err := issuance.InstallerMarkerExtension()
+		require.NoError(t, err)
+		assert.Equal(t, []pkix.Extension{marker}, ca.issueRequests[0].ExtraExtensions)
+		assert.Equal(t, []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth}, ca.issueRequests[0].ExtKeyUsage)
 	})
 }
 

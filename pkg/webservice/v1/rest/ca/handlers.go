@@ -723,7 +723,7 @@ func (h *CAHandlers) IssueCertificate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	keyUsage, extKeyUsage, err := issuance.ParseRequestUsages(certReq.GetIsCa(), certReq.GetKeyUsage(), certReq.GetExtKeyUsage())
+	keyUsage, extKeyUsage, extensions, err := issuance.ParseRequestUsages(certReq.GetIsCa(), certReq.GetKeyUsage(), certReq.GetExtKeyUsage())
 	if err != nil {
 		protorest.WriteError(w, r, h.respWriter, status.Error(codes.InvalidArgument, err.Error()))
 		return
@@ -740,11 +740,12 @@ func (h *CAHandlers) IssueCertificate(w http.ResponseWriter, r *http.Request) {
 			Address:            subject.GetAddress(),
 			PostalCode:         subject.GetPostalCode(),
 		},
-		Valid:       int(certReq.GetValidDays()),
-		IsCA:        certReq.GetIsCa(),
-		MaxPathLen:  int(certReq.GetMaxPathLen()),
-		KeyUsage:    keyUsage,
-		ExtKeyUsage: extKeyUsage,
+		Valid:           int(certReq.GetValidDays()),
+		IsCA:            certReq.GetIsCa(),
+		MaxPathLen:      int(certReq.GetMaxPathLen()),
+		KeyUsage:        keyUsage,
+		ExtKeyUsage:     extKeyUsage,
+		ExtraExtensions: extensions,
 	}
 
 	if sans := certReq.GetSans(); sans != nil {

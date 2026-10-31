@@ -2,6 +2,7 @@ package issuance
 
 import (
 	"crypto/x509"
+	"crypto/x509/pkix"
 	"errors"
 	"testing"
 
@@ -77,27 +78,59 @@ func TestParseExtKeyUsages_RefusesUnknownNames(t *testing.T) {
 // is refused before conversion: the CA profile would drop the restriction.
 func TestParseRequestUsages_RefusesAnyEKUOnACA(t *testing.T) {
 	for _, names := range [][]string{{"IPSEC_IKE"}, {"SERVER_AUTH"}} {
-		_, _, err := ParseRequestUsages(true, nil, names)
+		_, _, _, err := ParseRequestUsages(true, nil, names)
 		assert.ErrorIs(t, err, ErrCAExtKeyUsageUnsupported{}, "%v", names)
 	}
 }
 
 func TestParseRequestUsages(t *testing.T) {
-	keyUsage, extKeyUsage, err := ParseRequestUsages(false, []string{"DIGITAL_SIGNATURE"}, []string{"CLIENT_AUTH"})
+	keyUsage, extKeyUsage, extensions, err := ParseRequestUsages(false, []string{"DIGITAL_SIGNATURE"}, []string{"CLIENT_AUTH"})
 	require.NoError(t, err)
 	assert.Equal(t, x509.KeyUsageDigitalSignature, keyUsage)
 	assert.Equal(t, []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth}, extKeyUsage)
+	assert.Empty(t, extensions, "a plain client certificate carries no installer marker")
 
-	keyUsage, extKeyUsage, err = ParseRequestUsages(true, []string{"CERT_SIGN", "CRL_SIGN", "DIGITAL_SIGNATURE"}, nil)
+	keyUsage, extKeyUsage, extensions, err = ParseRequestUsages(true, []string{"CERT_SIGN", "CRL_SIGN", "DIGITAL_SIGNATURE"}, nil)
 	require.NoError(t, err)
 	assert.Equal(t, caProfileKeyUsage, keyUsage)
 	assert.Nil(t, extKeyUsage)
+	assert.Empty(t, extensions)
+}
+
+// A leaf request naming PXE_INSTALLER, in either spelling and case, is signed
+// with the installer marker extension and id-kp-clientAuth (#1362).
+func TestParseRequestUsages_PXEInstallerAddsTheMarkerExtension(t *testing.T) {
+	marker, err := InstallerMarkerExtension()
+	require.NoError(t, err)
+	for _, names := range [][]string{{"PXE_INSTALLER"}, {"pxeinstaller"}, {"CLIENT_AUTH", "pxe_installer"}} {
+		keyUsage, extKeyUsage, extensions, err := ParseRequestUsages(false, []string{"DIGITAL_SIGNATURE"}, names)
+		require.NoError(t, err, "%v", names)
+		assert.Equal(t, x509.KeyUsageDigitalSignature, keyUsage)
+		assert.Equal(t, []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth}, extKeyUsage, "%v", names)
+		assert.Equal(t, []pkix.Extension{marker}, extensions, "%v", names)
+	}
+}
+
+// The installer marker extension carries only id-kp-clientAuth beside the
+// marker, so another usage named with PXE_INSTALLER is refused, not dropped;
+// an isCA request naming it is refused like any extended key usage on a CA.
+func TestParseRequestUsages_PXEInstallerRefusals(t *testing.T) {
+	_, _, _, err := ParseRequestUsages(false, nil, []string{"PXE_INSTALLER", "SERVER_AUTH"})
+	assert.ErrorIs(t, err, ErrInstallerExtKeyUsage{})
+	assert.Contains(t, err.Error(), "SERVER_AUTH")
+	assert.True(t, IsInvalidRequest(err))
+
+	_, _, _, err = ParseRequestUsages(false, nil, []string{"PXE_INSTALLER", "IPSEC_IKE"})
+	assert.ErrorIs(t, err, ErrUnsupportedUsage{}, "an unknown name beside PXE_INSTALLER is still refused")
+
+	_, _, _, err = ParseRequestUsages(true, nil, []string{"PXE_INSTALLER"})
+	assert.ErrorIs(t, err, ErrCAExtKeyUsageUnsupported{})
 }
 
 func TestParseRequestUsages_RefusesUnknownNames(t *testing.T) {
-	_, _, err := ParseRequestUsages(true, []string{"SIGN_EVERYTHING"}, nil)
+	_, _, _, err := ParseRequestUsages(true, []string{"SIGN_EVERYTHING"}, nil)
 	assert.ErrorIs(t, err, ErrUnsupportedUsage{}, "an unknown key usage on a CA must not fall back to the profile")
 
-	_, _, err = ParseRequestUsages(false, nil, []string{"IPSEC_IKE"})
+	_, _, _, err = ParseRequestUsages(false, nil, []string{"IPSEC_IKE"})
 	assert.ErrorIs(t, err, ErrUnsupportedUsage{})
 }

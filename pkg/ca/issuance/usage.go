@@ -2,6 +2,7 @@ package issuance
 
 import (
 	"crypto/x509"
+	"crypto/x509/pkix"
 	"strings"
 )
 
@@ -77,21 +78,55 @@ func ParseExtKeyUsages(names []string) ([]x509.ExtKeyUsage, error) {
 	return usages, nil
 }
 
+// installerUsageNames are the names that ask for an installer certificate:
+// the critical tp-pxeInstaller extended key usage extension
+// (InstallerMarkerExtension), which carries id-kp-clientAuth beside the
+// marker. An x509.ExtKeyUsage cannot name a private OID, so these names are
+// held apart from extKeyUsageNames.
+var installerUsageNames = map[string]bool{
+	"PXEINSTALLER":  true,
+	"PXE_INSTALLER": true,
+}
+
 // ParseRequestUsages converts an issue request's usage names. An isCA request
 // carrying any extended key usage name is refused before conversion with
 // ErrCAExtKeyUsageUnsupported: the SDK's CA profile drops the restriction,
-// whatever the name (Codex 8662).
-func ParseRequestUsages(isCA bool, keyUsages, extKeyUsages []string) (x509.KeyUsage, []x509.ExtKeyUsage, error) {
+// whatever the name (Codex 8662). A leaf request naming PXE_INSTALLER gets
+// the installer marker extension, returned for the request's ExtraExtensions,
+// and may name no extended key usage beside it but CLIENT_AUTH, which the
+// extension already carries (ErrInstallerExtKeyUsage).
+func ParseRequestUsages(isCA bool, keyUsages, extKeyUsages []string) (x509.KeyUsage, []x509.ExtKeyUsage, []pkix.Extension, error) {
 	if isCA && len(extKeyUsages) > 0 {
-		return 0, nil, ErrCAExtKeyUsageUnsupported{}
+		return 0, nil, nil, ErrCAExtKeyUsageUnsupported{}
 	}
 	keyUsage, err := ParseKeyUsages(keyUsages)
 	if err != nil {
-		return 0, nil, err
+		return 0, nil, nil, err
 	}
-	extKeyUsage, err := ParseExtKeyUsages(extKeyUsages)
+	installer := false
+	standard := make([]string, 0, len(extKeyUsages))
+	for _, name := range extKeyUsages {
+		if installerUsageNames[strings.ToUpper(name)] {
+			installer = true
+			continue
+		}
+		standard = append(standard, name)
+	}
+	extKeyUsage, err := ParseExtKeyUsages(standard)
 	if err != nil {
-		return 0, nil, err
+		return 0, nil, nil, err
 	}
-	return keyUsage, extKeyUsage, nil
+	if !installer {
+		return keyUsage, extKeyUsage, nil, nil
+	}
+	for i, usage := range extKeyUsage {
+		if usage != x509.ExtKeyUsageClientAuth {
+			return 0, nil, nil, ErrInstallerExtKeyUsage{Name: standard[i]}
+		}
+	}
+	marker, err := InstallerMarkerExtension()
+	if err != nil {
+		return 0, nil, nil, err
+	}
+	return keyUsage, []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth}, []pkix.Extension{marker}, nil
 }

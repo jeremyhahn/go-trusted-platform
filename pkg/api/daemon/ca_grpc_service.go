@@ -140,7 +140,7 @@ func (s *CAGRPCService) IssueCertificate(ctx context.Context, req *platformv1.Is
 		return nil, status.Error(codes.InvalidArgument, "common name is required")
 	}
 
-	keyUsage, extKeyUsage, err := issuance.ParseRequestUsages(certReq.GetIsCa(), certReq.GetKeyUsage(), certReq.GetExtKeyUsage())
+	keyUsage, extKeyUsage, extensions, err := issuance.ParseRequestUsages(certReq.GetIsCa(), certReq.GetKeyUsage(), certReq.GetExtKeyUsage())
 	if err != nil {
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
@@ -157,11 +157,12 @@ func (s *CAGRPCService) IssueCertificate(ctx context.Context, req *platformv1.Is
 			Address:            subject.GetAddress(),
 			PostalCode:         subject.GetPostalCode(),
 		},
-		Valid:       int(certReq.GetValidDays()),
-		IsCA:        certReq.GetIsCa(),
-		MaxPathLen:  int(certReq.GetMaxPathLen()),
-		KeyUsage:    keyUsage,
-		ExtKeyUsage: extKeyUsage,
+		Valid:           int(certReq.GetValidDays()),
+		IsCA:            certReq.GetIsCa(),
+		MaxPathLen:      int(certReq.GetMaxPathLen()),
+		KeyUsage:        keyUsage,
+		ExtKeyUsage:     extKeyUsage,
+		ExtraExtensions: extensions,
 	}
 
 	// Add SANs if provided
