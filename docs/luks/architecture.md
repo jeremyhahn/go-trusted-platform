@@ -90,7 +90,10 @@ touch and again before it maps the volume; an expired deadline counts as a
 cancellation. A cancelled unlock or enrolment never waits on the authenticator:
 the SDK call it abandons runs on in a drain that zeroes the late key, closes the
 handler and only then admits the next FIDO2 operation, so a retry cannot race
-it for the touch ([installer engineering](../installer/engineering.md)).
+it for the touch ([installer engineering](../installer/engineering.md)). The
+`fido2-assert` of a `fido2-manual` unlock is one of those operations: it waits
+for the slot (a cancelled wait never launches it) and holds it until the tool
+exits.
 
 At boot the strategy takes its slots from the header, not from the volume
 config: every token that carries a credential and a salt names its slots in

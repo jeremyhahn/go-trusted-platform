@@ -413,6 +413,17 @@ func assertFIDO2OperationFree(t *testing.T) {
 	}
 }
 
+// awaitBusy waits until the unlock reports the busy authenticator, failing
+// at once if it returns without waiting for the slot.
+func awaitBusy(t *testing.T, busy chan struct{}, done chan error) {
+	t.Helper()
+	select {
+	case <-busy:
+	case err := <-done:
+		t.Fatalf("the unlock did not wait for the busy authenticator (err %v)", err)
+	}
+}
+
 // assertCalls counts the fido2-assert launches the fake tools recorded.
 func assertCalls(tools *fakeFIDO2Tools) int {
 	count := 0
@@ -438,7 +449,7 @@ func TestFIDO2UnlockRawSecretWaitsForOperation(t *testing.T) {
 		done := make(chan error, 1)
 		go func() { done <- NewFIDO2Unlock("/dev/fake-luks", false).Unlock(ctx, "cryptroot") }()
 
-		<-busy
+		awaitBusy(t, busy, done)
 		cancel()
 		err := <-done
 
@@ -463,7 +474,7 @@ func TestFIDO2UnlockRawSecretWaitsForOperation(t *testing.T) {
 		done := make(chan error, 1)
 		go func() { done <- NewFIDO2Unlock("/dev/fake-luks", false).Unlock(context.Background(), "cryptroot") }()
 
-		<-busy
+		awaitBusy(t, busy, done)
 		assert.Zero(t, assertCalls(fake.tools), "fido2-assert ran while the authenticator was busy")
 		release()
 
