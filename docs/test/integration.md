@@ -369,7 +369,18 @@ adapter (`cli_exec_test.go`), which need no daemon.
 the process-group command runner) and `grub_detector.go` carry no build tag,
 and their tests (`runner_test.go`, `grub_detector_test.go`) run in `make test`
 through `TEST_UNIT_PKGS`; `make integration-test-iso` runs the
-integration-tagged `multiprotocol_test.go` against `platformd`. The `device`
+integration-tagged `multiprotocol_test.go` against `platformd`. Its
+`iso customize` takes `platform-initrd` and `gatewayd` from beside `/tmp/platformctl`, so
+the runner's `prepare_iso_customize` builds `platform-initrd`, `gatewayd` and
+`platformctl-static` into `/tmp`. `/tmp/platformctl` is a CGO build, and
+customize refuses a dynamically linked installer (`DynamicBinaryError`), so
+`/tmp/platformctl-static` is the same CLI built `CGO_ENABLED=0` with the tags
+`make build` adds to the derived set (docs/installer/cli.md §4). The runner
+exports its path as `PLATFORMCTL_STATIC_PATH`, and the suite passes it to
+customize as `--platformctl-static-binary`: customize names the running
+`platformctl` as the installer and never looks beside it for the static one.
+The suite fails, rather than fall back to the CGO build, when
+`PLATFORMCTL_STATIC_PATH` is unset or names no file. The `device`
 suite keeps only its daemon-backed tests: the adapter decode tests that
 exercised the harness and no server were removed, and the wrong-ALPN handshake
 check is `TestServerRefusesAWrongALPNAtTheHandshake` in `pkg/api/quic`.
