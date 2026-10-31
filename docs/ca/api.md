@@ -91,7 +91,16 @@ go-xkms `ca` profile (`ca.NewCAProfile`), which drops the request's extended
 key usages, so the CA would come out unrestricted (RFC 5280 §4.2.1.12). A
 leaf keeps its `ext_key_usage`.
 
-All three refusals satisfy `issuance.IsInvalidRequest` and are the caller's
+Renewal also refuses a CA certificate that carries name constraints (any
+permitted or excluded DNS, IP, email or URI subtree, RFC 5280 §4.2.1.10) or an
+extended key usage OID Go does not recognize, with
+`CARestrictionUnsupportedError`, before the old certificate is revoked
+(`pkg/ca/issuance/renew.go` `checkRenewableRestrictions`). The SDK request
+(`sdk/go/xkms/ca.CACertificateRequest`, go-xkms `ca.CertificateRequest`) has no
+field for either, so the renewed CA would lose the restriction; the refusal
+stands until the SDK carries them.
+
+All these refusals satisfy `issuance.IsInvalidRequest` and are the caller's
 error on every transport: `InvalidArgument` on gRPC, Unix, MCP and the
 embedded SDK, `StatusInvalidArgument` on QUIC, and 400 on REST and the web
 service. The typed error's message, which names the issuer, is the message
