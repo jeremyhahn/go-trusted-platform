@@ -16,6 +16,7 @@ package iam
 import (
 	"context"
 	"errors"
+	"strconv"
 
 	quicbaassdk "github.com/jeremyhahn/go-quicbaas/sdk/go"
 	iamsdk "github.com/jeremyhahn/go-quicbaas/sdk/go/client/iam"
@@ -33,6 +34,15 @@ import (
 // The create keeps no subject selector either, and an empty selector
 // matches every subject, so a policy whose `subjects` names any role, group
 // or user is refused with ErrInvalidPolicySpec rather than widened.
+// policyRuleEffects maps the only two effect spellings a policy rule may
+// carry onto the engine's effects. Anything else — an omitted effect,
+// "DENY", "Allow", "permit" — is refused rather than defaulted, because a
+// defaulted allow on a wildcard rule is a tenant-wide grant.
+var policyRuleEffects = map[string]iamsdk.Effect{
+	"allow": iamsdk.EffectAllow,
+	"deny":  iamsdk.EffectDeny,
+}
+
 func parsePolicyRulesFromYAML(specYAML string) ([]iamsdk.Rule, error) {
 	if specYAML == "" {
 		return nil, nil
@@ -84,9 +94,10 @@ func parsePolicyRulesFromYAML(specYAML string) ([]iamsdk.Rule, error) {
 		if len(r.Unless) > 0 {
 			return nil, ErrPolicyConditionUnsupported{Rule: r.Name, Condition: "unless"}
 		}
-		effect := iamsdk.EffectAllow
-		if r.Effect == "deny" {
-			effect = iamsdk.EffectDeny
+		effect, ok := policyRuleEffects[r.Effect]
+		if !ok {
+			return nil, ErrInvalidPolicySpec{Reason: "rule " + strconv.Quote(r.Name) + " has effect " +
+				strconv.Quote(r.Effect) + "; a rule's effect must be exactly \"allow\" or \"deny\""}
 		}
 		actions := make([]iamsdk.ActionMatcher, 0, len(r.Actions))
 		for _, a := range r.Actions {
