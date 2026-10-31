@@ -213,6 +213,20 @@ type TPM2GetSRKRequest struct {
 	Handle uint32 `codec:"handle"`
 }
 
+// TPM2DeleteEKRequest names the EK handle to evict. Only the configured EK
+// handle is accepted; an absent payload is handle 0 and is refused, never
+// read as "the configured EK".
+type TPM2DeleteEKRequest struct {
+	Handle uint32 `codec:"handle"`
+}
+
+// TPM2DeleteSRKRequest names the SRK handle to evict. Only the configured
+// Shared SRK handle is accepted; an absent payload is handle 0 and is
+// refused, never read as "the SSRK".
+type TPM2DeleteSRKRequest struct {
+	Handle uint32 `codec:"handle"`
+}
+
 // TPM2MakeCredentialRequest represents a TPM2_MakeCredential request. When
 // EKCert and IAKPub are both present the verifier path is used; otherwise
 // the local EK is used together with AKName.
@@ -574,9 +588,21 @@ func (h *TPM2Handler) handleCreateEK(ctx context.Context, payload []byte) *quicw
 	})
 }
 
-// handleDeleteEK evicts the persisted Endorsement Key (tpmek.Delete).
+// handleDeleteEK evicts the persisted Endorsement Key (tpmek.Delete). The
+// payload's handle must name the configured EK; any other handle, or none,
+// is InvalidArgument and evicts nothing.
 func (h *TPM2Handler) handleDeleteEK(ctx context.Context, payload []byte) *quicwire.Response {
-	if _, err := tpmek.Delete(h.tpm); err != nil {
+	var req TPM2DeleteEKRequest
+	if len(payload) > 0 {
+		if err := quicwire.DecodePayload(payload, &req); err != nil {
+			return h.errorResponse(quicwire.StatusInvalidRequest, ErrTPM2OperationFailed{
+				Operation: "DeleteEK",
+				Cause:     err,
+			})
+		}
+	}
+
+	if _, err := tpmek.Delete(h.tpm, req.Handle); err != nil {
 		return h.tpmErrorResponse(err)
 	}
 
@@ -672,9 +698,21 @@ func (h *TPM2Handler) handleCreateSRK(ctx context.Context, payload []byte) *quic
 	})
 }
 
-// handleDeleteSRK evicts the persisted Shared SRK (tpmsrk.Delete).
+// handleDeleteSRK evicts the persisted Shared SRK (tpmsrk.Delete). The
+// payload's handle must name the configured SSRK; any other handle, or none,
+// is InvalidArgument and evicts nothing.
 func (h *TPM2Handler) handleDeleteSRK(ctx context.Context, payload []byte) *quicwire.Response {
-	if _, err := tpmsrk.Delete(h.tpm); err != nil {
+	var req TPM2DeleteSRKRequest
+	if len(payload) > 0 {
+		if err := quicwire.DecodePayload(payload, &req); err != nil {
+			return h.errorResponse(quicwire.StatusInvalidRequest, ErrTPM2OperationFailed{
+				Operation: "DeleteSRK",
+				Cause:     err,
+			})
+		}
+	}
+
+	if _, err := tpmsrk.Delete(h.tpm, req.Handle); err != nil {
 		return h.tpmErrorResponse(err)
 	}
 
