@@ -81,6 +81,10 @@ calls and writes a type `fido2` (`luks.TokenTypeFIDO2`) token
 ([installer engineering](../installer/engineering.md)); the runtime
 `DeriveEnroll` (`pkg/app/backends/luks_fido2_handler.go`) writes type
 `fido2-manual`. If the token cannot be written, the slot is killed again.
+When the installer's enrolment is cancelled after its keyslot is written and
+before the token is, it kills the slot again too, so boot is not left with a
+slot it cannot unlock and a retry can reuse the target slot. If that fails,
+the error joins `FIDO2CanceledError` and `FIDO2RollbackError`.
 
 At boot the strategy takes its slots from the header, not from the volume
 config: every token that carries a credential and a salt names its slots in
@@ -108,8 +112,18 @@ token types and picks the unlock path the same way, with one difference for
 | Type | Unlock path |
 |---|---|
 | `fido2` | SDK `UnlockWithKey`; `fido2-assert` is never run |
-| `fido2-manual` | SDK `UnlockWithKey` first; if the keyslot rejects that key, the raw hmac-secret from `fido2-token -L` and `fido2-assert -G -h` (run with `exec.CommandContext`), which is how earlier installers keyed the slot |
+| `fido2-manual` | the raw hmac-secret first, from `fido2-token -L` and `fido2-assert -G -h` (run with `exec.CommandContext`), which is how earlier installers keyed the slot; if that fails or the keyslot rejects it, SDK `UnlockWithKey` |
 | `systemd-fido2`, any other | refused: `FIDO2RawSecretTokenError` |
+
+Only the type `fido2` token marks the SDK derivation. Earlier installers wrote
+`fido2-manual` with `fido2-up-required=true` meaning user presence, which is
+what `fido2-assert` asks for by default. The runtime writes the same field
+meaning user verification, and the SDK fallback reads it that way, because the
+authenticator's hmac-secret differs with and without verification. Trying the
+raw hmac-secret first means a legacy slot never depends on an SDK assertion
+that asks for verification an authenticator without built-in UV refuses. A
+token that fails to decode is refused before the authenticator is asked. When
+both paths fail, the error joins the raw-secret failure and the SDK failure.
 
 Raw-secret failures are typed: `FIDO2AssertError` names the failed step and
 wraps `FIDO2NoDeviceError`, `FIDO2SecretLengthError` or the tool's error. A raw
