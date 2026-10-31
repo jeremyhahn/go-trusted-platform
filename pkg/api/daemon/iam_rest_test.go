@@ -140,9 +140,9 @@ func TestSetIAMHandlers_MountsEveryIAMRoute(t *testing.T) {
 		}
 		return nil
 	}))
-	// The IAM router's 71 routes, less the 18 (9 operations under both
-	// route forms) whose SDK operation the pinned embedded transport lacks.
-	assert.Len(t, iamRoutesAwaitingSDK, 18)
+	// The IAM router's 71 routes, less the 22 (11 operations under both
+	// route forms) the pinned embedded transport lacks or cannot serve.
+	assert.Len(t, iamRoutesAwaitingSDK, 22)
 	assert.Equal(t, 71-len(iamRoutesAwaitingSDK), routes)
 }
 
@@ -162,6 +162,26 @@ func TestIAMREST_RoutesAwaitingSDKAnswerNotFound(t *testing.T) {
 	}
 }
 
+// TestIAMREST_UnservableOperationsAnswerNotFound names the operations the
+// pinned SDK dispatches but cannot serve: app registration, whose response
+// drops the client secret, and the permission check, whose embedded handler
+// is unconfigured. Both route forms of each answer 404.
+func TestIAMREST_UnservableOperationsAnswerNotFound(t *testing.T) {
+	s := iamRESTServer(t)
+	for _, path := range []string{
+		"/api/v1/iam/apps",
+		"/api/v1/iam/tenants/" + iamRESTTenantA + "/apps",
+		"/api/v1/iam/permissions/check",
+		"/api/v1/iam/tenants/" + iamRESTTenantA + "/permissions/check",
+	} {
+		t.Run(path, func(t *testing.T) {
+			recorder := serveIAM(s, http.MethodPost, path, "operator")
+			assert.Equal(t, http.StatusNotFound, recorder.Code)
+			assert.Equal(t, "404 page not found\n", recorder.Body.String())
+		})
+	}
+}
+
 func TestIAMREST_ScopePerMethod(t *testing.T) {
 	const users = "/api/v1/iam/tenants/" + iamRESTTenantA + "/users"
 	cases := []struct {
@@ -175,12 +195,10 @@ func TestIAMREST_ScopePerMethod(t *testing.T) {
 		{"reader", http.MethodPost, users, "iam:write", false},
 		{"reader", http.MethodPut, users + "/u1", "iam:write", false},
 		{"reader", http.MethodDelete, users + "/u1", "iam:delete", false},
-		{"reader", http.MethodPost, "/api/v1/iam/tenants/" + iamRESTTenantA + "/permissions/check", "iam:read", true},
 		{"writer", http.MethodGet, users, "iam:read", false},
 		{"writer", http.MethodPost, users, "iam:write", true},
 		{"writer", http.MethodPut, users + "/u1", "iam:write", true},
 		{"writer", http.MethodDelete, users + "/u1", "iam:delete", false},
-		{"writer", http.MethodPost, "/api/v1/iam/tenants/" + iamRESTTenantA + "/permissions/check", "iam:read", false},
 		{"deleter", http.MethodDelete, users + "/u1", "iam:delete", true},
 		{"deleter", http.MethodPost, users, "iam:write", false},
 		{"other", http.MethodGet, users, "iam:read", false},
@@ -207,7 +225,6 @@ func TestIAMREST_OperatorPassesEveryMethod(t *testing.T) {
 		{http.MethodPost, "/api/v1/iam/tenants/tenant-a/users"},
 		{http.MethodPut, "/api/v1/iam/tenants/tenant-a/users/u1"},
 		{http.MethodDelete, "/api/v1/iam/tenants/tenant-a/users/u1"},
-		{http.MethodPost, "/api/v1/iam/tenants/tenant-a/permissions/check"},
 	} {
 		recorder := serveIAM(s, route.method, route.path, "operator")
 		assertReachedHandler(t, recorder, "%s %s: %s", route.method, route.path, recorder.Body.String())

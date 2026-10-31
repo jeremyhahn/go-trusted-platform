@@ -53,9 +53,8 @@ var iamSDKCollectionCalls = []struct {
 	{"ListRoles", func(t string) proto.Message {
 		return &platformv1.ListIAMRolesRequest{TenantId: t}
 	}, &platformv1.ListIAMRolesResponse{}},
-	{"CheckPermission", func(t string) proto.Message {
-		return &platformv1.CheckIAMPermissionRequest{TenantId: t}
-	}, &platformv1.CheckIAMPermissionResponse{}},
+	// CheckPermission is absent: the daemon leaves permissions/check out
+	// until the pinned SDK serves PEP (iamOperationsAwaitingSDK).
 }
 
 func invokeIAMThroughSDK(t *testing.T, method string, req, resp proto.Message) *httptest.ResponseRecorder {

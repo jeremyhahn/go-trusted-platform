@@ -65,7 +65,8 @@ type iamRouteKey struct {
 // dispatch on its embedded transport: transport/embedded/iam_dispatch.go
 // carries no handler for them, so mounted they answer 500 with
 // UnknownMethodError. The daemon leaves them out until the SDK v0.16 adoption
-// (#906) brings the operations.
+// (#906) brings the operations. The last two are dispatched but cannot be
+// served correctly, so they are left out for the same adoption.
 var iamOperationsAwaitingSDK = []iamRouteKey{
 	{http.MethodPost, "/users/{id}/roles/{role}"},      // quicbaas.IAM.User/AssignRole
 	{http.MethodDelete, "/users/{id}/roles/{role}"},    // quicbaas.IAM.User/RevokeRole
@@ -76,6 +77,13 @@ var iamOperationsAwaitingSDK = []iamRouteKey{
 	{http.MethodPut, "/policies/{id}"},                 // quicbaas.IAM.Policy/Update
 	{http.MethodPut, "/apps/{id}"},                     // quicbaas.IAM.App/Update
 	{http.MethodPost, "/apps/{id}/rotate"},             // quicbaas.IAM.App/RotateSecret
+	// quicbaas.IAM.App/Register: the embedded handleIAMAppRegister answers
+	// through sdkAppFromInternal, which drops ClientSecret, so registration
+	// would succeed without the only copy of the application's secret.
+	{http.MethodPost, "/apps"},
+	// quicbaas.IAM.PEP/Check: the embedded handleIAMPEPCheck always answers
+	// ServiceNotConfiguredError("IAM.PEP"), never a verdict.
+	{http.MethodPost, "/permissions/check"},
 }
 
 // iamRoutesAwaitingSDK is iamOperationsAwaitingSDK under both route forms:
