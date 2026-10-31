@@ -111,6 +111,8 @@ type mockCA struct {
 	baseMockCA
 	// issuedProfile is the profile the last IssueCertificateWithProfile got.
 	issuedProfile string
+	// issueCalls counts IssueCertificate calls, profile or not.
+	issueCalls    int
 	initialized   bool
 	identity      string
 	rootCert      *x509.Certificate
@@ -191,6 +193,7 @@ func (m *mockCA) CASigner(_ context.Context, _ xkmssdk.StoreType, _ x509.PublicK
 	return m, nil
 }
 func (m *mockCA) IssueCertificate(_ context.Context, req *xkmsca.CACertificateRequest) (*xkmsca.IssuedCertificate, error) {
+	m.issueCalls++
 	cert := generateTestCertificate(req.Subject.CommonName, req.IsCA, m.intermCert, m.privateKey)
 	if m.certStore != nil {
 		m.certStore.StoreCertificate(cert)
@@ -479,6 +482,50 @@ func TestCAHandler_HandleIssue_WithKeyUsage(t *testing.T) {
 	resp := handler.HandleRequest(context.Background(), req)
 
 	require.Equal(t, quicwire.StatusOK, resp.Status)
+}
+
+// TestCAHandler_HandleIssue_UsageStrings proves the handler refuses an EKU on a
+// CA request and an unknown usage name with StatusInvalidArgument before the
+// CA is asked to sign, and still signs recognized leaf usages.
+func TestCAHandler_HandleIssue_UsageStrings(t *testing.T) {
+	issue := func(t *testing.T, ca *mockCA, issueReq *CAIssueRequest) *quicwire.Response {
+		t.Helper()
+		payload, err := quicwire.EncodePayload(issueReq)
+		require.NoError(t, err)
+		handler := NewCAHandler(logging.DefaultLogger(), ca, nil)
+		return handler.HandleRequest(context.Background(), &quicwire.Request{Opcode: quicwire.OpCAIssue, Payload: payload})
+	}
+	subject := &Subject{CommonName: "usage.example.com"}
+
+	refusals := []struct {
+		name    string
+		req     *CAIssueRequest
+		message string
+	}{
+		{"CA request with an EKU", &CAIssueRequest{Subject: subject, ValidDays: 365, IsCA: true, ExtKeyUsage: []string{"IPSEC_IKE"}}, issuance.ErrCAExtKeyUsageUnsupported{}.Error()},
+		{"unknown key usage", &CAIssueRequest{Subject: subject, ValidDays: 365, KeyUsage: []string{"NOT_A_USAGE"}}, issuance.ErrUnsupportedUsage{Name: "NOT_A_USAGE"}.Error()},
+	}
+	for _, tc := range refusals {
+		t.Run(tc.name, func(t *testing.T) {
+			ca := newMockCA()
+
+			resp := issue(t, ca, tc.req)
+
+			assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
+			assert.Contains(t, string(resp.Payload), tc.message)
+			assert.Zero(t, ca.issueCalls, "the CA was asked to sign")
+		})
+	}
+
+	t.Run("recognized leaf usages sign", func(t *testing.T) {
+		ca := newMockCA()
+
+		resp := issue(t, ca, &CAIssueRequest{Subject: subject, ValidDays: 365,
+			KeyUsage: []string{"DIGITAL_SIGNATURE"}, ExtKeyUsage: []string{"SERVER_AUTH"}})
+
+		require.Equal(t, quicwire.StatusOK, resp.Status)
+		assert.Equal(t, 1, ca.issueCalls, "the CA was not asked to sign")
+	})
 }
 
 func TestCAHandler_HandleIssue_MissingCommonName(t *testing.T) {

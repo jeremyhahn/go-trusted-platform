@@ -56,6 +56,8 @@ type mockCertificateAuthority struct {
 	baseMockCA
 	// issuedProfile is the profile the last IssueCertificateWithProfile got.
 	issuedProfile string
+	// issueCalls counts IssueCertificate calls, profile or not.
+	issueCalls int
 
 	// Configuration
 	initialized       bool
@@ -157,6 +159,7 @@ func (m *mockCertificateAuthority) TrustedIntermediate() (*x509.Certificate, err
 	return m.intermediateCert, nil
 }
 func (m *mockCertificateAuthority) IssueCertificate(ctx context.Context, request *xkmsca.CACertificateRequest) (*xkmsca.IssuedCertificate, error) {
+	m.issueCalls++
 	if m.issueCertificateFn != nil {
 		return m.issueCertificateFn(ctx, request)
 	}
@@ -1010,7 +1013,7 @@ func TestIssueCertificate_Success(t *testing.T) {
 			"subject":{"commonName":"Intermediate CA"},
 			"isCa":true,
 			"maxPathLen":1,
-			"keyUsage":["certSign","crlSign"]
+			"keyUsage":["certSign","crlSign","digitalSignature"]
 		}}`)
 
 		req := httptest.NewRequest(http.MethodPost, "/api/v1/ca/certificates", bytes.NewReader(body))
@@ -1154,6 +1157,49 @@ func TestIssueCertificate_PathLen(t *testing.T) {
 		})
 
 		assert.Equal(t, http.StatusInternalServerError, writer.lastStatus)
+	})
+}
+
+// TestIssueCertificate_UsageStrings proves the handler refuses an EKU on a CA
+// request and an unknown usage name with 400 before the CA is asked to sign,
+// and still signs recognized leaf usages.
+func TestIssueCertificate_UsageStrings(t *testing.T) {
+	issue := func(mockCA *mockCertificateAuthority, body string) *mockHttpWriter {
+		handlers, writer := newTestHandlers(mockCA)
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/ca/certificates", bytes.NewReader([]byte(body)))
+		req.Header.Set("Content-Type", "application/json")
+		handlers.IssueCertificate(httptest.NewRecorder(), req)
+		return writer
+	}
+
+	refusals := []struct {
+		name    string
+		body    string
+		message string
+	}{
+		{"CA request with an EKU", `{"request":{"subject":{"commonName":"sub-ca.example.com"},"isCa":true,"extKeyUsage":["IPSEC_IKE"]}}`, issuance.ErrCAExtKeyUsageUnsupported{}.Error()},
+		{"unknown key usage", `{"request":{"subject":{"commonName":"leaf.example.com"},"keyUsage":["NOT_A_USAGE"]}}`, issuance.ErrUnsupportedUsage{Name: "NOT_A_USAGE"}.Error()},
+	}
+	for _, tc := range refusals {
+		t.Run(tc.name, func(t *testing.T) {
+			mockCA := &mockCertificateAuthority{initialized: true}
+
+			writer := issue(mockCA, tc.body)
+
+			assert.Equal(t, http.StatusBadRequest, writer.lastStatus)
+			require.NotNil(t, writer.lastError)
+			assert.Equal(t, tc.message, status.Convert(writer.lastError).Message())
+			assert.Zero(t, mockCA.issueCalls, "the CA was asked to sign")
+		})
+	}
+
+	t.Run("recognized leaf usages sign", func(t *testing.T) {
+		mockCA := &mockCertificateAuthority{initialized: true}
+
+		writer := issue(mockCA, `{"request":{"subject":{"commonName":"leaf.example.com"},"keyUsage":["DIGITAL_SIGNATURE"],"extKeyUsage":["SERVER_AUTH"]}}`)
+
+		assert.Nil(t, writer.lastError)
+		assert.Equal(t, 1, mockCA.issueCalls, "the CA was not asked to sign")
 	})
 }
 

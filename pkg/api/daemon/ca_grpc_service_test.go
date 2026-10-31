@@ -336,6 +336,72 @@ func TestCAGRPCService_IssueCertificate_PathLenRefusalIsInvalidArgument(t *testi
 	}
 }
 
+// TestCAGRPCService_IssueCertificate_UsageStrings proves the handler refuses
+// an EKU on a CA request and an unknown usage name with InvalidArgument before
+// the CA is asked to sign, and still signs recognized leaf usages.
+func TestCAGRPCService_IssueCertificate_UsageStrings(t *testing.T) {
+	t.Parallel()
+
+	usageRequest := func(isCA bool, keyUsage, extKeyUsage []string) *platformv1.IssueCertificateRequest {
+		return &platformv1.IssueCertificateRequest{Request: &platformv1.CertificateRequest{
+			Subject:      &platformv1.Subject{CommonName: "usage.example.com"},
+			KeyAlgorithm: platformv1.KeyAlgorithm_KEY_ALGORITHM_ECDSA_P256,
+			IsCa:         isCA,
+			KeyUsage:     keyUsage,
+			ExtKeyUsage:  extKeyUsage,
+			StoreType:    "software",
+		}}
+	}
+
+	refusals := []struct {
+		name    string
+		req     *platformv1.IssueCertificateRequest
+		message string
+	}{
+		{"CA request with an EKU", usageRequest(true, nil, []string{"IPSEC_IKE"}), issuance.ErrCAExtKeyUsageUnsupported{}.Error()},
+		{"unknown key usage", usageRequest(false, []string{"NOT_A_USAGE"}, nil), issuance.ErrUnsupportedUsage{Name: "NOT_A_USAGE"}.Error()},
+	}
+	for _, tc := range refusals {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			mockCA := &configurableMockCA{issuedCert: createTestCertificate(t)}
+			svc := &CAGRPCService{ca: mockCA}
+
+			resp, err := svc.IssueCertificate(context.Background(), tc.req)
+
+			if resp != nil {
+				t.Error("expected nil response")
+			}
+			assertGRPCError(t, err, codes.InvalidArgument)
+			if got := status.Convert(err).Message(); got != tc.message {
+				t.Errorf("message = %q, want %q", got, tc.message)
+			}
+			if mockCA.issueCalls != 0 {
+				t.Errorf("the CA was asked to sign %d time(s)", mockCA.issueCalls)
+			}
+		})
+	}
+
+	t.Run("recognized leaf usages sign", func(t *testing.T) {
+		t.Parallel()
+		mockCA := &configurableMockCA{issuedCert: createTestCertificate(t)}
+		svc := &CAGRPCService{ca: mockCA}
+
+		resp, err := svc.IssueCertificate(context.Background(),
+			usageRequest(false, []string{"DIGITAL_SIGNATURE"}, []string{"SERVER_AUTH"}))
+
+		if err != nil {
+			t.Fatalf("IssueCertificate: %v", err)
+		}
+		if resp == nil {
+			t.Fatal("expected a response")
+		}
+		if mockCA.issueCalls != 1 {
+			t.Errorf("the CA was asked to sign %d time(s), want 1", mockCA.issueCalls)
+		}
+	})
+}
+
 // A CA fault on a subordinate CA request stays a server error.
 func TestCAGRPCService_IssueCertificate_CAFaultIsInternal(t *testing.T) {
 	t.Parallel()
@@ -2695,6 +2761,8 @@ type configurableMockCA struct {
 	baseMockCA
 	// issuedProfile is the profile the last IssueCertificateWithProfile got.
 	issuedProfile string
+	// issueCalls counts IssueCertificate calls, profile or not.
+	issueCalls int
 	// revokedOpts records the options each RevokeCert got.
 	revokedOpts            []xkmsca.RevokeOptions
 	keyStore               *rotatingKeyStore
@@ -2794,6 +2862,7 @@ func (m *configurableMockCA) ParseBundle(_ []byte) ([]*x509.Certificate, error) 
 	return m.parsedBundle, nil
 }
 func (m *configurableMockCA) IssueCertificate(_ context.Context, _ *xkmsca.CACertificateRequest) (*xkmsca.IssuedCertificate, error) {
+	m.issueCalls++
 	if m.issueCertErr != nil {
 		return nil, m.issueCertErr
 	}

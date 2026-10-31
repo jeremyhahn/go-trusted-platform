@@ -565,6 +565,55 @@ func TestCAHandlers_IssueCertificate_InvalidKeyAlgorithm(t *testing.T) {
 	assert.Equal(t, want.Error(), resp.Error)
 }
 
+// TestCAHandlers_IssueCertificate_UsageStrings proves the handler refuses an
+// EKU on a CA request and an unknown usage name with 400 before the CA is
+// asked to sign, and still signs recognized leaf usages.
+func TestCAHandlers_IssueCertificate_UsageStrings(t *testing.T) {
+	usageRequest := func(isCA bool, keyUsage, extKeyUsage []string) *platformv1.IssueCertificateRequest {
+		return &platformv1.IssueCertificateRequest{Request: &platformv1.CertificateRequest{
+			Subject:      &platformv1.Subject{CommonName: "usage.example.com"},
+			KeyAlgorithm: platformv1.KeyAlgorithm_KEY_ALGORITHM_ECDSA_P256,
+			IsCa:         isCA,
+			KeyUsage:     keyUsage,
+			ExtKeyUsage:  extKeyUsage,
+		}}
+	}
+
+	refusals := []struct {
+		name    string
+		req     *platformv1.IssueCertificateRequest
+		message string
+	}{
+		{"CA request with an EKU", usageRequest(true, nil, []string{"IPSEC_IKE"}), issuance.ErrCAExtKeyUsageUnsupported{}.Error()},
+		{"unknown key usage", usageRequest(false, []string{"NOT_A_USAGE"}, nil), issuance.ErrUnsupportedUsage{Name: "NOT_A_USAGE"}.Error()},
+	}
+	for _, tc := range refusals {
+		t.Run(tc.name, func(t *testing.T) {
+			ca := newMockCAService()
+			_, router := setupCAHandlers(ca)
+
+			rr := postJSON(t, router, "/api/v1/ca/certificates", tc.req)
+
+			assert.Equal(t, http.StatusBadRequest, rr.Code)
+			var resp CAErrorResponse
+			require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &resp))
+			assert.Equal(t, tc.message, resp.Error)
+			assert.Empty(t, ca.issuedCerts, "the CA was asked to sign")
+		})
+	}
+
+	t.Run("recognized leaf usages sign", func(t *testing.T) {
+		ca := newMockCAService()
+		_, router := setupCAHandlers(ca)
+
+		rr := postJSON(t, router, "/api/v1/ca/certificates",
+			usageRequest(false, []string{"DIGITAL_SIGNATURE"}, []string{"SERVER_AUTH"}))
+
+		require.Equal(t, http.StatusCreated, rr.Code, rr.Body.String())
+		assert.Len(t, ca.issuedCerts, 1)
+	})
+}
+
 func TestCAHandlers_IssueCertificate_InvalidRequestBody(t *testing.T) {
 	ca := newMockCAService()
 	_, router := setupCAHandlers(ca)
