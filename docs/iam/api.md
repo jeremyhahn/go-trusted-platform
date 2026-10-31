@@ -335,6 +335,7 @@ the `*:*` operator. `RequireAdmin` requires the scope for the method:
 | `GET` | `iam:read` |
 | `POST`, `PUT`, `PATCH` | `iam:write` |
 | `DELETE` | `iam:delete` |
+| `DELETE .../users/{id}/roles/{role}`, `DELETE .../groups/{id}/members/{user}` (flat and tenant-scoped) | `iam:write`, the scope of gRPC `RevokeRole` and `RemoveGroupMember` — they change a membership and delete no record |
 | `POST .../policies/validate`, `POST .../policies/test`, `POST .../permissions/check` (flat and tenant-scoped) | `iam:read` — they evaluate the body and change nothing |
 | any other method | refused, `403` |
 
@@ -346,6 +347,16 @@ refused with `403`, because there is no session tenant to fall back on. Once
 handlers' `getTenantID` reads that value before the `{tenant}` segment and the
 session. The handlers never read the `tenant_id` query themselves; the webservice
 publishes no authorized tenant, so its behaviour is unchanged.
+The SDK finds an app by client ID in any tenant, so the daemon checks
+`.../apps/{id}` against the URL tenant's app list before a get, update, secret
+rotation or delete runs (`iamTenantApps`, `pkg/api/daemon/iam_rest.go`). A
+client ID of another tenant gets the `404` a missing app gets, and nothing is
+changed.
+The SDK's policy create keeps no rule conditions, so a policy spec with a
+`when` or `unless` rule is refused with `400` `ErrPolicyConditionUnsupported`
+(`pkg/webservice/v1/rest/iam/errors.go`), which names the rule and the
+condition, and nothing is stored. A conditional rule is never stored as an
+unconditional one.
 Installer and machine certificates are not admitted (#1153). The credential and
 the scopes are described in [`docs/daemon/api.md`](../daemon/api.md).
 
