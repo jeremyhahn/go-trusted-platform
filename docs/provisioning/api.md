@@ -226,7 +226,7 @@ services is classified in the gRPC catalog (`pkg/api/grpc/method_permissions.go`
 
 | Service | Requirement |
 |---|---|
-| `PXEService` | `pxe:read` for the five reads; `pxe:write` for `Authorize`, `Quarantine` and the other mutators; `pxe:delete` for `RemoveDevice` ([`docs/ipxe/api.md`](../ipxe/api.md) §5) |
+| `PXEService` | `pxe:read` for the five reads; `pxe:write` for `Authorize`, `Quarantine` and the other mutators; `pxe:complete` for `WebhookComplete` alone; `pxe:delete` for `RemoveDevice` ([`docs/ipxe/api.md`](../ipxe/api.md) §5) |
 | `ConfigDeliveryService` | `ListSessions` and `GetSession` need `provisioning:read`; `FulfillSession` needs `provisioning:write`. `GetNonce`, `FetchConfig`, `SignDigest` and `PollSession` are **pre-auth**: the machine authenticates inside the request (single-use nonce, EAB HMAC, EK-certificate binding) before it holds any platform credential |
 | `ProvisioningGateway` | `GetBootConfig` needs `provisioning:read`; `RegisterPXEDevice`, `ReportDeviceState` and `NotifyInstallComplete` need `provisioning:write` |
 | `BMCService` | `bmc:read` / `bmc:write` / `bmc:power` / `bmc:media` / `bmc:admin` ([`docs/bmc/api.md`](../bmc/api.md) §8) |
@@ -237,7 +237,8 @@ services is classified in the gRPC catalog (`pkg/api/grpc/method_permissions.go`
 | Scope | QUIC operations |
 |---|---|
 | `pxe:read` | `OpPXEListDevices`, `OpPXEGetDevice`; `0xCF` subs `PXESubGetDeviceByMAC`, `PXESubGetEvents`, `PXESubGetStatus` |
-| `pxe:write` | `OpPXERegisterDevice`, `OpPXEUpdateState`, `OpPXEAuthorize`, `OpPXEQuarantine`, `OpPXERetry`; `0xCF` subs `PXESubSetDeviceEnrolled`, `PXESubStartService`, `PXESubStopService`, `PXESubWebhookComplete` |
+| `pxe:write` | `OpPXERegisterDevice`, `OpPXEUpdateState`, `OpPXEAuthorize`, `OpPXEQuarantine`, `OpPXERetry`; `0xCF` subs `PXESubSetDeviceEnrolled`, `PXESubStartService`, `PXESubStopService` |
+| `pxe:complete` | `0xCF` sub `PXESubWebhookComplete` (the only permission an installer certificate holds) |
 | `pxe:delete` | `OpPXERemoveDevice` |
 | `provisioning:read` | `OpProvisioningCategory` (`0xCF`) subs `ListSessions`, `GetSession` |
 | `provisioning:write` | sub `FulfillSession` |

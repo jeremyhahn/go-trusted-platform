@@ -281,6 +281,15 @@ a body with no MAC is 400 (`InvalidArgument`, `ErrPXEWebhookMACRequired`,
 Transports with no peer certificate — Unix, MCP stdio, embedded — refuse the
 call. This binding is the only one: there is no separate certificate-binding RPC.
 
+**An installer certificate holds only `pxe:complete`.** The mTLS peer
+authenticator (`pkg/api/daemon/transport_auth.go`) gives a client certificate
+whose fingerprint was ever bound as an install certificate that one permission,
+and never a CA or other operator permission. The record of bound fingerprints
+keeps retired ones, so the restriction outlives the installation: once the
+device leaves `installing` or is removed, the same still-valid certificate is
+still an installer, not an operator (Codex 8652). The record is held in memory
+by the PXE state machine.
+
 **One installer certificate is bound to one device at a time.** Binding a
 fingerprint another device is installing under is refused with
 `ErrInstallCertificateInUse`, `AlreadyExists` on gRPC
@@ -416,10 +425,15 @@ RPC is in the gRPC scope catalog (`pkg/api/grpc/method_permissions.go`):
 | Permission | RPCs |
 |---|---|
 | `pxe:read` | `GetDevice`, `GetDeviceByMAC`, `GetEvents`, `GetStatus`, `ListDevices` |
-| `pxe:write` | `Authorize`, `Quarantine`, `RegisterDevice`, `Retry`, `SetDeviceEnrolled`, `StartService`, `StopService`, `UpdateState`, `WebhookComplete` |
+| `pxe:write` | `Authorize`, `Quarantine`, `RegisterDevice`, `Retry`, `SetDeviceEnrolled`, `StartService`, `StopService`, `UpdateState` |
+| `pxe:complete` | `WebhookComplete` |
 | `pxe:delete` | `RemoveDevice` |
 
 Authorizing or quarantining a PXE device therefore needs `pxe:write`.
+`pxe:complete` authorizes the install-complete webhook and nothing else: it is
+the only permission an installer certificate holds (§4), so an installer can
+report its own completion but cannot change another device's state, stop the
+service, or reach any CA operation (Codex 8652).
 
 **QUIC and MCP take the same scopes (#704).** Each QUIC opcode and `0xCF` sub
 carries the scope of its RPC (`pkg/api/quic/opcode_permissions.go`), and each of

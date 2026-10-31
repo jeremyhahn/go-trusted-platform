@@ -107,6 +107,16 @@ extended key usage OID Go does not recognize, with
 field for either, so the renewed CA would lose the restriction; the refusal
 stands until the SDK carries them.
 
+For the same reason renewal refuses a CA certificate that carries any
+certificate-policy extension: certificate policies (RFC 5280 §4.2.1.4), policy
+mappings (§4.2.1.5), policy constraints (§4.2.1.11, e.g. a critical
+`requireExplicitPolicy=0`) or inhibit anyPolicy (§4.2.1.14). The SDK request
+has no policy field and the SDK CA profile adds none, so a renewed CA would
+validate chains the original's policy restrictions prohibited (Codex 8652). The
+refusal is the same `CARestrictionUnsupportedError`, raised before anything is
+revoked, rotated or deleted, and its message names the SDK gap
+(`ca.CertificateRequest`).
+
 All these refusals satisfy `issuance.IsInvalidRequest` and are the caller's
 error on every transport: `InvalidArgument` on gRPC, Unix, MCP and the
 embedded SDK, `StatusInvalidArgument` on QUIC, and 400 on REST and the web
@@ -434,9 +444,12 @@ The daemon REST listener serves every CA certificate route behind its
 `ScopeGuard`, each with the scope of its gRPC twin
 (`pkg/api/rest/ca_handlers.go`). The mTLS peer authenticator
 (`pkg/api/daemon/transport_auth.go`) grants an operator client certificate
-`*:*`, but a client certificate whose SHA-256 is bound to a PXE device as its
-install certificate gets only `pxe:write`, so an installer is refused issue
-and renew with 403 (Codex 8238, Codex 8646). When the binding cannot be read
+`*:*`, but a client certificate whose SHA-256 was ever bound to a PXE device
+as its install certificate gets only `pxe:complete` and never a CA
+permission, so an installer is refused issue and renew with 403 (Codex 8238,
+Codex 8646). The installer record outlives the installation: leaving
+`installing` or removing the device does not turn the certificate into an
+operator (Codex 8652). When the binding cannot be read
 the peer is refused with 401:
 
 | Route | Scope |
