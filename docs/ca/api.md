@@ -91,6 +91,13 @@ go-xkms `ca` profile (`ca.NewCAProfile`), which drops the request's extended
 key usages, so the CA would come out unrestricted (RFC 5280 §4.2.1.12). A
 leaf keeps its `ext_key_usage`.
 
+The same profile replaces the request's key usage with `keyCertSign`,
+`cRLSign` and `digitalSignature`. The preflight therefore refuses an `is_ca`
+request, or the renewal of a CA certificate, whose key usage is set and is not
+exactly those three, with `CAKeyUsageUnsupportedError` (Codex 8646), so a CA is
+never issued with a usage it was not given (RFC 5280 §4.2.1.3). An `is_ca`
+request with no key usage gets the profile's three.
+
 Renewal also refuses a CA certificate that carries name constraints (any
 permitted or excluded DNS, IP, email or URI subtree, RFC 5280 §4.2.1.10) or an
 extended key usage OID Go does not recognize, with
@@ -103,8 +110,12 @@ stands until the SDK carries them.
 All these refusals satisfy `issuance.IsInvalidRequest` and are the caller's
 error on every transport: `InvalidArgument` on gRPC, Unix, MCP and the
 embedded SDK, `StatusInvalidArgument` on QUIC, and 400 on REST and the web
-service. The typed error's message, which names the issuer, is the message
-the transport returns; nothing is issued. Any other issuance failure stays a
+service. Renewal maps them the same way on gRPC, Unix, MCP, REST and the
+embedded SDK. QUIC renewal is the exception: the SDK QUIC adapter sends
+`valid_days` where the daemon's `CARenewRequest` reads `extend_days`, so a
+QUIC renewal is refused before issuance, and the QUIC handler answers a
+renewal failure with `StatusInternalError`. The typed error's message, which
+names the issuer, is the message the transport returns; nothing is issued. Any other issuance failure stays a
 server error (`Internal` / 500). A request
 without `is_ca` is never bounded. When the issuing CA's certificate cannot be
 read, an `is_ca` request fails with `IssuerCertificateError`, a server error.
@@ -421,8 +432,12 @@ of its gRPC twin:
 
 The daemon REST listener serves every CA certificate route behind its
 `ScopeGuard`, each with the scope of its gRPC twin
-(`pkg/api/rest/ca_handlers.go`), so an installer client certificate, which
-holds no scope, is refused issue and renew with 403 (Codex 8238):
+(`pkg/api/rest/ca_handlers.go`). The mTLS peer authenticator
+(`pkg/api/daemon/transport_auth.go`) grants an operator client certificate
+`*:*`, but a client certificate whose SHA-256 is bound to a PXE device as its
+install certificate gets only `pxe:write`, so an installer is refused issue
+and renew with 403 (Codex 8238, Codex 8646). When the binding cannot be read
+the peer is refused with 401:
 
 | Route | Scope |
 |---|---|
