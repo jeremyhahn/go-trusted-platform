@@ -563,6 +563,33 @@ func TestFIDO2EnrollmentCanceledBeforeWrites(t *testing.T) {
 		assert.Empty(t, header.slots, "a cancelled enrolment left its keyslot")
 		assert.Empty(t, header.tokens, "a cancelled enrolment wrote a token")
 	})
+	// Codex review 8667: the token-slot lookup reads the header without a
+	// context; a cancellation during it rolls the keyslot back and imports
+	// no token.
+	t.Run("during the token-slot lookup", func(t *testing.T) {
+		header := useFakeLUKSHeader(t)
+		ctx, cancel := context.WithCancel(context.Background())
+		find := luksFindFreeTokenSlot
+		luksFindFreeTokenSlot = func(device string) (int, error) {
+			cancel()
+			<-ctx.Done()
+			return find(device)
+		}
+		var imports int
+		luksImportToken = func(device string, tokenID int, token *luks2.Token) error {
+			imports++
+			return nil
+		}
+
+		err := newTestFIDO2Enrollment(t).enrollWithHandler(ctx, newSDKFakeFIDO2())
+		var canceled *FIDO2CanceledError
+		require.ErrorAs(t, err, &canceled)
+		assert.Equal(t, "import the token", canceled.Step)
+		assert.ErrorIs(t, err, context.Canceled)
+		require.Len(t, header.passedKeys, 1, "the keyslot was not written before the lookup")
+		assert.Empty(t, header.slots, "a cancelled enrolment left its keyslot")
+		assert.Zero(t, imports, "a cancelled enrolment imported a token")
+	})
 	t.Run("before the token, rollback fails", func(t *testing.T) {
 		header := useFakeLUKSHeader(t)
 		header.killErr = errFakeKillSlot

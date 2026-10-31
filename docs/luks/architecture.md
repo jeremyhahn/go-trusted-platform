@@ -82,7 +82,8 @@ calls and writes a type `fido2` (`luks.TokenTypeFIDO2`) token
 `DeriveEnroll` (`pkg/app/backends/luks_fido2_handler.go`) writes type
 `fido2-manual`. If the token cannot be written, the slot is killed again.
 When the installer's enrolment is cancelled after its keyslot is written and
-before the token is, it kills the slot again too, so boot is not left with a
+before the token is (the context is checked again after the token-slot
+lookup, which reads the header without one), it kills the slot again too, so boot is not left with a
 slot it cannot unlock and a retry can reuse the target slot. If that fails,
 the error joins `FIDO2CanceledError` and `FIDO2RollbackError`.
 The installer's unlock (`FIDO2Unlock`) checks its context before it asks for a

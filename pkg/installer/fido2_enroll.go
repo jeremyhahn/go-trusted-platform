@@ -406,6 +406,11 @@ func (f *FIDO2Enrollment) enrollWithHandler(ctx context.Context, handler fido2.H
 	fmt.Println("Storing FIDO2 metadata in LUKS token...")
 
 	tokenID, err := luksFindFreeTokenSlot(f.config.LUKSDevice)
+	// The lookup reads the header without a context, so a cancellation that
+	// arrived during it is checked again before the token is imported.
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return f.rollbackKeyslot(&FIDO2CanceledError{Step: "import the token", Err: ctxErr})
+	}
 	if err != nil {
 		fmt.Printf("Warning: %v\n", err)
 		fmt.Println("FIDO2 key enrolled but metadata not stored - manual unlock required")
