@@ -72,8 +72,10 @@ the SDK `MaxPathLen` 0 with `MaxPathLenZero` false, the crypto/x509 form of
 a basicConstraints with no pathLenConstraint.
 
 The issuing CA's own pathLenConstraint bounds the request (RFC 5280
-§4.2.1.9), checked once in `issuance.Issue` for every transport and for
-renewal:
+§4.2.1.9). The check runs in one preflight that `issuance.Issue` calls for
+every transport, and that `issuance.Renew` calls before it revokes the old
+certificate, rotates its key or deletes it from the store, so a refused
+renewal leaves the old certificate and key in place:
 
 | Issuing CA | `is_ca` request | Result |
 |------------|-----------------|--------|
@@ -82,7 +84,14 @@ renewal:
 | pathLen n > 0 | `max_path_len` ≥ n, or negative (no limit) | refused, `SubordinatePathLenError` (issuer, requested, allowed) |
 | no pathLen | any | issued as requested |
 
-Both refusals satisfy `issuance.IsInvalidRequest` and are the caller's
+The same preflight refuses an `is_ca` request with a non-empty
+`ext_key_usage`, and the renewal of a CA certificate that has one, with
+`ErrCAExtKeyUsageUnsupported`. The pinned SDK issues a CA only through the
+go-xkms `ca` profile (`ca.NewCAProfile`), which drops the request's extended
+key usages, so the CA would come out unrestricted (RFC 5280 §4.2.1.12). A
+leaf keeps its `ext_key_usage`.
+
+All three refusals satisfy `issuance.IsInvalidRequest` and are the caller's
 error on every transport: `InvalidArgument` on gRPC, Unix, MCP and the
 embedded SDK, `StatusInvalidArgument` on QUIC, and 400 on REST and the web
 service. The typed error's message, which names the issuer, is the message
