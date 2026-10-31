@@ -339,8 +339,7 @@ the `*:*` operator. `RequireAdmin` requires the scope for the method:
 | `GET` | `iam:read` |
 | `POST`, `PUT`, `PATCH` | `iam:write` |
 | `DELETE` | `iam:delete` |
-| `DELETE .../users/{id}/roles/{role}`, `DELETE .../groups/{id}/members/{user}` (flat and tenant-scoped) | `iam:write`, the scope of gRPC `RevokeRole` and `RemoveGroupMember` — they change a membership and delete no record |
-| `POST .../policies/validate`, `POST .../policies/test`, `POST .../permissions/check` (flat and tenant-scoped) | `iam:read` — they evaluate the body and change nothing |
+| `POST .../permissions/check` (flat and tenant-scoped) | `iam:read` — it evaluates the body and changes nothing |
 | any other method | refused, `403` |
 
 `RequireSystemTenant` and `RequireOwnTenant` apply the gRPC tenant rules in
@@ -352,8 +351,7 @@ handlers' `getTenantID` reads that value before the `{tenant}` segment and the
 session. The handlers never read the `tenant_id` query themselves; the webservice
 publishes no authorized tenant, so its behaviour is unchanged.
 The SDK finds an app by client ID in any tenant, so the daemon checks
-`.../apps/{id}` against the URL tenant's app list before a get, update, secret
-rotation or delete runs (`iamTenantApps`, `pkg/api/daemon/iam_rest.go`). A
+`.../apps/{id}` against the URL tenant's app list before a get or delete runs (`iamTenantApps`, `pkg/api/daemon/iam_rest.go`). A
 client ID of another tenant gets the `404` a missing app gets, and nothing is
 changed.
 The SDK's policy create keeps no rule conditions, so a policy spec with a
@@ -367,6 +365,31 @@ every subject in the tenant, so a policy whose `spec.subjects` (or top-level
 `400` `ErrInvalidPolicySpec`, whose message names the SDK gap, and nothing is
 stored. An admin-only grant is never stored as a grant to everyone; an empty
 `subjects` restricts nothing and is accepted.
+A rule's `effect` must be exactly `allow` or `deny`. A missing effect, `DENY`,
+`Allow`, `permit` or any other value is refused with `400`
+`ErrInvalidPolicySpec` and nothing is stored, because defaulting it to allow
+would turn a wildcard rule into a tenant-wide grant.
+
+The daemon mounts only the routes whose operation the pinned go-quicbaas SDK
+(v0.12.0-alpha) embedded transport dispatches (`iamOperationsAwaitingSDK`,
+`pkg/api/daemon/iam_rest.go`). The routes below are left out under both the flat
+`/api/v1/iam` and the `/api/v1/iam/tenants/{tenant}` form. They have no handler
+and answer `404` like any unknown path, and so does a method a mounted path does
+not serve. The Go SDK's REST AssignRole, RevokeRole, AddGroupMember and
+RemoveGroupMember (above) reach the webservice, not the daemon.
+
+Waiting on the SDK v0.16 adoption (#906):
+
+| Route | SDK operation |
+|---|---|
+| `POST`, `DELETE .../users/{id}/roles/{role}` | `User/AssignRole`, `User/RevokeRole` |
+| `POST`, `DELETE .../groups/{id}/members/{user}` | `Group/AddMember`, `Group/RemoveMember` |
+| `POST .../policies/validate` | `Policy/Validate` |
+| `POST .../policies/test` | `Policy/Test` |
+| `PUT .../policies/{id}` | `Policy/Update` |
+| `PUT .../apps/{id}` | `App/Update` |
+| `POST .../apps/{id}/rotate` | `App/RotateSecret` |
+
 Installer and machine certificates are not admitted (#1153). The credential and
 the scopes are described in [`docs/daemon/api.md`](../daemon/api.md).
 
