@@ -18,6 +18,8 @@ package daemon
 import (
 	"context"
 	"crypto/x509"
+	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -207,4 +209,41 @@ func TestRESTServer_SetCAHandlers_SignCSRUsesTheValidator(t *testing.T) {
 	t.Parallel()
 	assert.Equal(t, http.StatusUnauthorized, signCSRStatus(t, &platformTokenValidator{}, ""))
 	assert.Equal(t, http.StatusUnauthorized, signCSRStatus(t, &platformTokenValidator{}, "token"))
+}
+
+// issueSubCAOverREST posts a subordinate CA issue request with pathLen 0 to
+// the daemon's REST CA routes over ca, as a caller holding certs:generate.
+func issueSubCAOverREST(t *testing.T, ca *configurableMockCA) (int, restapi.CAErrorResponse) {
+	t.Helper()
+	router := mux.NewRouter()
+	guard := restapi.NewScopeGuard(tokenScopes{"op": {"certs:generate"}}, nil, nil)
+	restapi.NewCAHandlers(restapi.NewCAAuthorityAdapter(ca), nil, nil).WithScopeGuard(guard).RegisterRoutes(router)
+
+	body := `{"request":{"subject":{"common_name":"sub-ca.example.com"},"key_algorithm":"KEY_ALGORITHM_ECDSA_P256","store_type":"software","is_ca":true,"max_path_len":0}}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/ca/certificates", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer op")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	var resp restapi.CAErrorResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp), "body %s", w.Body.String())
+	return w.Code, resp
+}
+
+// A subordinate CA the issuer's path length forbids answers 400 with the
+// refusal's message.
+func TestRESTServer_CAIssue_PathLenRefusalIs400(t *testing.T) {
+	t.Parallel()
+	code, resp := issueSubCAOverREST(t, &configurableMockCA{issuedCert: createTestCertificate(t), caCertificate: pathLenZeroIssuer()})
+
+	assert.Equal(t, http.StatusBadRequest, code)
+	assert.Equal(t, pathLenZeroRefusal(), resp.Error)
+}
+
+// A CA fault on a subordinate CA request stays a 500.
+func TestRESTServer_CAIssue_CAFaultIs500(t *testing.T) {
+	t.Parallel()
+	code, _ := issueSubCAOverREST(t, &configurableMockCA{issueCertErr: errors.New("hsm offline")})
+
+	assert.Equal(t, http.StatusInternalServerError, code)
 }

@@ -24,6 +24,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/hex"
+	"errors"
 	"io"
 	"math/big"
 	"testing"
@@ -299,6 +300,37 @@ func TestQUICServiceHandler_CARouting_Issue(t *testing.T) {
 
 	assert.NotNil(t, issueResp.Certificate)
 	assert.Equal(t, "test.example.com", issueResp.Certificate.Subject.CommonName)
+}
+
+// issueSubCAOverQUIC routes a subordinate CA issue request with pathLen 0
+// through a daemon QUIC handler serving ca.
+func issueSubCAOverQUIC(t *testing.T, ca *configurableMockCA) *quicwire.Response {
+	t.Helper()
+	handler := newTestQUICServiceHandler(logging.DefaultLogger(), WithQUICCAService(ca))
+	payload, err := quicwire.EncodePayload(&quic.CAIssueRequest{
+		Subject:      &quic.Subject{CommonName: "sub-ca.example.com"},
+		KeyAlgorithm: "ECDSA",
+		IsCA:         true,
+		MaxPathLen:   0,
+	})
+	require.NoError(t, err)
+	return handler.HandleRequest(context.Background(), &quicwire.Request{Opcode: quicwire.OpCAIssue, Payload: payload})
+}
+
+// A subordinate CA the issuer's path length forbids answers the invalid
+// argument status with the refusal's message.
+func TestQUICServiceHandler_CARouting_Issue_PathLenRefusalIsInvalidArgument(t *testing.T) {
+	resp := issueSubCAOverQUIC(t, &configurableMockCA{issuedCert: createTestCertificate(t), caCertificate: pathLenZeroIssuer()})
+
+	assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
+	assert.Equal(t, pathLenZeroRefusal(), string(resp.Payload))
+}
+
+// A CA fault on a subordinate CA request stays a server error.
+func TestQUICServiceHandler_CARouting_Issue_CAFaultIsInternal(t *testing.T) {
+	resp := issueSubCAOverQUIC(t, &configurableMockCA{issueCertErr: errors.New("hsm offline")})
+
+	assert.Equal(t, quicwire.StatusInternalError, resp.Status)
 }
 
 func TestQUICServiceHandler_CARouting_Get(t *testing.T) {
