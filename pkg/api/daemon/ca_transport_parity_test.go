@@ -41,6 +41,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
@@ -432,6 +433,39 @@ func TestCACertificateParity(t *testing.T) {
 			require.NoError(t, err)
 			assert.NotNil(t, got.GetTimestamp())
 			assertSameCertificate(t, wantGot.GetCertificate(), got.GetCertificate())
+		})
+	}
+}
+
+// A subordinate CA beneath a pathLen-0 issuer is refused on every transport
+// as the same invalid request, carrying the refusal's message, and no
+// transport asks the CA to sign it (docs/ca/api.md, path length).
+func TestCAPathLenRefusalParity(t *testing.T) {
+	f := newCAParityFixture(t)
+	f.ca.caCertificate = pathLenZeroIssuer()
+	ctx := context.Background()
+
+	transports := []struct {
+		name   string
+		client func(*testing.T) platformv1.CAServiceClient
+	}{
+		{"gRPC", f.grpcClient},
+		{"Unix", f.unixClient},
+		{"REST", f.restClient},
+		{"QUIC", f.quicClient},
+		{"MCP", f.mcpClient},
+		{"Embedded", f.embeddedClient},
+	}
+	for _, tr := range transports {
+		t.Run(tr.name, func(t *testing.T) {
+			client := tr.client(t)
+			f.ca.last.Store(nil)
+
+			_, err := client.IssueCertificate(ctx, subCARequest())
+			require.Error(t, err)
+			assert.Equal(t, codes.InvalidArgument, status.Code(err), "error = %v", err)
+			assert.Contains(t, status.Convert(err).Message(), pathLenZeroRefusal())
+			assert.Nil(t, f.ca.last.Load(), "the CA was asked to sign a refused subordinate CA")
 		})
 	}
 }

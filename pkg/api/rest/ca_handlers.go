@@ -639,6 +639,10 @@ func (h *CAHandlers) handleIssueCertificate(w http.ResponseWriter, r *http.Reque
 	// Issue the certificate
 	cert, err := h.ca.IssueCertificate(r.Context(), caReq)
 	if err != nil {
+		if issuance.IsInvalidRequest(err) {
+			h.writeError(w, http.StatusBadRequest, err)
+			return
+		}
 		h.logger.Error("Failed to issue certificate", "error", err, "cn", subject.GetCommonName())
 		h.writeError(w, http.StatusInternalServerError, ErrCertificateIssueFailed{Err: err})
 		return

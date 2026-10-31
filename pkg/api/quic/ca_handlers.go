@@ -410,6 +410,9 @@ func (h *CAHandler) handleIssue(ctx context.Context, req *quicwire.Request) *qui
 
 	issued, err := issuance.Issue(ctx, h.ca, caReq)
 	if err != nil {
+		if issuance.IsInvalidRequest(err) {
+			return h.errorResponse(quicwire.StatusInvalidArgument, err)
+		}
 		h.logger.Error(err, "failed to issue certificate")
 		return h.errorResponse(quicwire.StatusInternalError, ErrCAIssueFailed{Cause: err})
 	}

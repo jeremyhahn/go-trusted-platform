@@ -36,6 +36,7 @@ import (
 	xkmsbackend "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/backend"
 	xkmsca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/ca"
 	grpcapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/ca/issuance"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/ca/issuance/issuancetest"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/util/peercred"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
@@ -304,6 +305,45 @@ func TestCAGRPCService_IssueCertificate_Error(t *testing.T) {
 	if resp != nil {
 		t.Error("expected nil response")
 	}
+	assertGRPCError(t, err, codes.Internal)
+}
+
+// pathLenZeroRefusal is the refusal of a subordinate CA beneath
+// pathLenZeroIssuer.
+func pathLenZeroRefusal() string {
+	return (&issuance.IssuerPathLenExhaustedError{Issuer: "CN=Issuing CA"}).Error()
+}
+
+// A subordinate CA the issuer's path length forbids is the caller's error:
+// InvalidArgument with the refusal's message, and the CA is never asked.
+func TestCAGRPCService_IssueCertificate_PathLenRefusalIsInvalidArgument(t *testing.T) {
+	t.Parallel()
+
+	mockCA := &configurableMockCA{issuedCert: createTestCertificate(t), caCertificate: pathLenZeroIssuer()}
+	svc := &CAGRPCService{ca: mockCA}
+
+	resp, err := svc.IssueCertificate(context.Background(), subCARequest())
+
+	if resp != nil {
+		t.Error("expected nil response")
+	}
+	assertGRPCError(t, err, codes.InvalidArgument)
+	if got := status.Convert(err).Message(); got != pathLenZeroRefusal() {
+		t.Errorf("message = %q, want %q", got, pathLenZeroRefusal())
+	}
+	if mockCA.issuedProfile != "" {
+		t.Errorf("the CA was asked to issue with profile %q", mockCA.issuedProfile)
+	}
+}
+
+// A CA fault on a subordinate CA request stays a server error.
+func TestCAGRPCService_IssueCertificate_CAFaultIsInternal(t *testing.T) {
+	t.Parallel()
+
+	svc := &CAGRPCService{ca: &configurableMockCA{issueCertErr: errors.New("hsm offline")}}
+
+	_, err := svc.IssueCertificate(context.Background(), subCARequest())
+
 	assertGRPCError(t, err, codes.Internal)
 }
 
@@ -2811,6 +2851,40 @@ type configurableMockCA struct {
 	certStore              xkmssdk.CertStore
 	caBundleCalled         bool
 	caBundleFilteredCalled bool
+	// caCertificate, when set, is the issuing CA certificate a subordinate
+	// CA request is checked against; otherwise the base mock's unconstrained
+	// CA answers.
+	caCertificate *x509.Certificate
+}
+
+func (m *configurableMockCA) CACertificate() (*x509.Certificate, error) {
+	if m.caCertificate != nil {
+		return m.caCertificate, nil
+	}
+	return m.baseMockCA.CACertificate()
+}
+
+// pathLenZeroIssuer is an issuing CA whose pathLen 0 lets it sign no
+// subordinate CA (RFC 5280 §4.2.1.9).
+func pathLenZeroIssuer() *x509.Certificate {
+	return &x509.Certificate{
+		Subject:               pkix.Name{CommonName: "Issuing CA"},
+		BasicConstraintsValid: true,
+		IsCA:                  true,
+		MaxPathLen:            0,
+		MaxPathLenZero:        true,
+	}
+}
+
+// subCARequest asks for a subordinate CA certificate with pathLen 0.
+func subCARequest() *platformv1.IssueCertificateRequest {
+	return &platformv1.IssueCertificateRequest{Request: &platformv1.CertificateRequest{
+		Subject:      &platformv1.Subject{CommonName: "sub-ca.example.com"},
+		KeyAlgorithm: platformv1.KeyAlgorithm_KEY_ALGORITHM_ECDSA_P256,
+		StoreType:    "software",
+		IsCa:         true,
+		MaxPathLen:   0,
+	}}
 }
 
 func (m *configurableMockCA) IsInitialized() bool { return m.isInitialized }

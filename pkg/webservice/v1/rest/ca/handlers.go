@@ -816,6 +816,10 @@ func (h *CAHandlers) IssueCertificate(w http.ResponseWriter, r *http.Request) {
 
 	issued, err := issuance.Issue(r.Context(), h.ca, caReq)
 	if err != nil {
+		if issuance.IsInvalidRequest(err) {
+			protorest.WriteError(w, r, h.respWriter, status.Error(codes.InvalidArgument, err.Error()))
+			return
+		}
 		protorest.WriteError(w, r, h.respWriter,
 			status.Error(codes.Internal, ErrInvalidCertificateRequest{Reason: err.Error()}.Error()))
 		return

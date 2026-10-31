@@ -184,6 +184,9 @@ func (s *CAGRPCService) IssueCertificate(ctx context.Context, req *platformv1.Is
 	// Issue the certificate
 	issued, err := issuance.Issue(ctx, s.ca, caReq)
 	if err != nil {
+		if issuance.IsInvalidRequest(err) {
+			return nil, status.Error(codes.InvalidArgument, err.Error())
+		}
 		s.logger.Error(err, "failed to issue certificate")
 		return nil, status.Error(codes.Internal, "failed to issue certificate: "+err.Error())
 	}
