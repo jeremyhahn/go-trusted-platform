@@ -9,7 +9,6 @@ import (
 	kmsclient "github.com/jeremyhahn/go-quicbaas/sdk/go/client/kms"
 	secretsclient "github.com/jeremyhahn/go-quicbaas/sdk/go/client/secrets"
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/platformtoken"
-	sdktransport "github.com/jeremyhahn/go-quicbaas/sdk/go/transport"
 
 	restapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/rest"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
@@ -74,8 +73,10 @@ type kmsRESTAuthorization struct {
 }
 
 // authorize answers 401 for a missing or invalid credential and 403 for a
-// caller without the route's scope.
-func (a kmsRESTAuthorization) authorize(next http.Handler) http.Handler {
+// caller without the route's scope, and 403 for every caller that passes:
+// no admitted request reaches the SDK-backed KMS router or daemon facade
+// handler yet (see below).
+func (a kmsRESTAuthorization) authorize(_ http.Handler) http.Handler {
 	return a.guard.Authenticate(func(w http.ResponseWriter, r *http.Request, caller *platformtoken.AuthorizedContext) {
 		scope, err := kmsRouteScope(r.Method, restRouteTemplate(r))
 		if err != nil {
@@ -90,9 +91,12 @@ func (a kmsRESTAuthorization) authorize(next http.Handler) http.Handler {
 			a.respWriter.Error403(w, r, ErrKMSRESTNoTenant{Subject: caller.Subject}, nil)
 			return
 		}
-		// The KMS, crypto, DEK and secrets SDK calls take their tenant from
-		// the request context; without one they would run in system scope.
-		next.ServeHTTP(w, r.WithContext(sdktransport.ContextWithTenant(r.Context(), caller.TenantID)))
+		// The embedded KMS, crypto, DEK and secrets services read the tenant
+		// from a context key the pinned SDK exports no setter for:
+		// transport.ContextWithTenant sets a different key the embedded
+		// transport passes through unread. A tenant call would run in system
+		// scope, so it fails closed until the SDK bridges the tenant.
+		a.respWriter.Error403(w, r, ErrKMSRESTTenantNotBridged{Subject: caller.Subject, TenantID: caller.TenantID}, nil)
 	})
 }
 

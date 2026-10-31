@@ -1218,6 +1218,21 @@ func (e ErrKMSRESTNoTenant) Error() string {
 	return "KMS REST caller " + e.Subject + " has no tenant"
 }
 
+// ErrKMSRESTTenantNotBridged is returned when a KMS or secrets REST caller
+// names a tenant. The pinned quicbaas SDK carries the tenant only under its
+// transport context key, which the embedded KMS and secrets services do not
+// read, so the call would run in system scope; the route refuses it until
+// the SDK bridges the tenant to the services.
+type ErrKMSRESTTenantNotBridged struct {
+	Subject  string
+	TenantID string
+}
+
+func (e ErrKMSRESTTenantNotBridged) Error() string {
+	return "KMS REST caller " + e.Subject + " of tenant " + e.TenantID +
+		" refused: the SDK does not bridge the tenant to the KMS and secrets services (SDK gap)"
+}
+
 // ErrTenantBarrierShamirUnsupported is returned when InitTenantBarrier asks
 // for Shamir sharing. The per-tenant barrier initializes with its
 // deterministic credential only, and the init returns no shares, so

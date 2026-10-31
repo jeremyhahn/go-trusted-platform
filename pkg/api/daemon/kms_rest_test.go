@@ -5,7 +5,6 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
-	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -13,7 +12,6 @@ import (
 	"github.com/gorilla/mux"
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/client/kms"
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/client/secrets"
-	sdktransport "github.com/jeremyhahn/go-quicbaas/sdk/go/transport"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -115,24 +113,10 @@ func TestSetKMSRouterHandlers_MountsEveryKMSRoute(t *testing.T) {
 		"GET /api/v1/kms/secrets/{name}":                    "secrets:read",
 		"DELETE /api/v1/kms/secrets/{name}":                 "secrets:delete",
 	}
-	s := kmsRESTServer(t, &platformMockKMSClient{})
 	got := map[string]string{}
-	require.NoError(t, s.router.Walk(func(route *mux.Route, _ *mux.Router, _ []*mux.Route) error {
-		template, err := route.GetPathTemplate()
-		if err != nil || !strings.HasPrefix(template, "/api/v1/kms") {
-			return nil
-		}
-		methods, err := route.GetMethods()
-		if err != nil {
-			return nil
-		}
-		for _, method := range methods {
-			scope, scopeErr := kmsRouteScope(method, template)
-			require.NoError(t, scopeErr, "%s %s", method, template)
-			got[method+" "+template] = scope
-		}
-		return nil
-	}))
+	for _, route := range kmsRouterRoutes(t, kmsRESTServer(t, &platformMockKMSClient{})) {
+		got[route.method+" "+route.template] = route.scope
+	}
 	assert.Len(t, got, 42)
 	assert.Equal(t, want, got)
 }
@@ -172,7 +156,7 @@ func TestKMSREST_ScopePerRoute(t *testing.T) {
 		t.Run(tc.token+" "+tc.method+" "+tc.path, func(t *testing.T) {
 			recorder := serveIAM(s, tc.method, tc.path, tc.token)
 			if tc.admit {
-				assertReachedHandler(t, recorder, recorder.Body.String())
+				assertTenantNotBridged(t, recorder, tc.token)
 				return
 			}
 			assert.Equal(t, http.StatusForbidden, recorder.Code)
@@ -181,76 +165,64 @@ func TestKMSREST_ScopePerRoute(t *testing.T) {
 	}
 }
 
-// An admitted request reaches the SDK client; a refused one never does.
-func TestKMSREST_AdmittedRequestReachesTheSDKClient(t *testing.T) {
-	var deletes atomic.Int32
-	client := &platformMockKMSClient{deleteKeyFn: func(context.Context, string) error {
-		deletes.Add(1)
-		return nil
-	}}
-	s := kmsRESTServer(t, client)
-	assert.Equal(t, http.StatusForbidden, serveIAM(s, http.MethodDelete, "/api/v1/kms/keys/k1", "kms-reader").Code)
-	assert.Zero(t, deletes.Load(), "a refused delete never reaches the client")
-	recorder := serveIAM(s, http.MethodDelete, "/api/v1/kms/keys/k1", "kms-deleter")
-	assertReachedHandler(t, recorder, recorder.Body.String())
-	assert.Equal(t, int32(1), deletes.Load())
+// kmsRoute is one method and path template the KMS router mounts, with the
+// scope the route needs.
+type kmsRoute struct {
+	method, template, scope string
 }
 
-// kmsTenantCallers are two tenants' credentials over the same scopes, plus
-// credentials that name no tenant.
+// kmsRouterRoutes walks the routes the KMS router mounted on s.
+func kmsRouterRoutes(t *testing.T, s *RESTServer) []kmsRoute {
+	t.Helper()
+	var routes []kmsRoute
+	require.NoError(t, s.router.Walk(func(route *mux.Route, _ *mux.Router, _ []*mux.Route) error {
+		template, err := route.GetPathTemplate()
+		if err != nil || !strings.HasPrefix(template, "/api/v1/kms") {
+			return nil
+		}
+		methods, err := route.GetMethods()
+		if err != nil {
+			return nil
+		}
+		for _, method := range methods {
+			scope, scopeErr := kmsRouteScope(method, template)
+			require.NoError(t, scopeErr, "%s %s", method, template)
+			routes = append(routes, kmsRoute{method: method, template: template, scope: scope})
+		}
+		return nil
+	}))
+	return routes
+}
+
+// kmsRoutePath fills a route template's variables with concrete values.
+var kmsRoutePath = strings.NewReplacer("{name}", "k1", "{version}", "1", "{path:.+}", "tenant/app")
+
+// assertTenantNotBridged asserts the caller passed the scope check and was
+// refused because its tenant cannot reach the SDK services.
+func assertTenantNotBridged(t *testing.T, recorder *httptest.ResponseRecorder, token string) {
+	t.Helper()
+	assert.Equal(t, http.StatusForbidden, recorder.Code, token)
+	assert.Contains(t, recorder.Body.String(), ErrKMSRESTTenantNotBridged{Subject: token, TenantID: iamRESTTenantA}.Error(), token)
+}
+
+// kmsTenantCallers are tenant credentials over the read scopes and over every
+// scope, plus credentials that name no tenant.
 var kmsTenantCallers = iamRESTTokens{
-	"a-secrets":       {Subject: "a-secrets", TenantID: iamRESTTenantA, Scopes: []string{"secrets:read"}},
-	"b-secrets":       {Subject: "b-secrets", TenantID: iamRESTTenantB, Scopes: []string{"secrets:read"}},
-	"a-kms":           {Subject: "a-kms", TenantID: iamRESTTenantA, Scopes: []string{"kms:delete"}},
-	"b-kms":           {Subject: "b-kms", TenantID: iamRESTTenantB, Scopes: []string{"kms:delete"}},
+	"a-reader":        {Subject: "a-reader", TenantID: iamRESTTenantA, Scopes: []string{"secrets:read", "kms:read"}},
+	"a-operator":      {Subject: "a-operator", TenantID: iamRESTTenantA, Scopes: []string{mtlsOperatorScope}},
 	"no-tenant":       {Subject: "no-tenant", Scopes: []string{"secrets:read"}},
 	"no-tenant-admin": {Subject: "no-tenant-admin", Scopes: []string{mtlsOperatorScope}},
 }
 
-// errTenantSecretMissing is the tenant secrets fake's answer for a path its
-// caller's tenant does not hold.
-type errTenantSecretMissing struct {
-	tenant, path string
-}
-
-func (e errTenantSecretMissing) Error() string {
-	return "tenant " + e.tenant + " holds no secret " + e.path
-}
-
-// tenantSecretsClient keeps a namespace per tenant and answers Get from the
-// tenant the request context carries, recording each tenant it saw.
-type tenantSecretsClient struct {
+// countingSecretsClient counts the Get calls that reach it.
+type countingSecretsClient struct {
 	secrets.Client
-	byTenant map[string]map[string]*secrets.Secret
-	seen     []string
+	gets atomic.Int32
 }
 
-func (c *tenantSecretsClient) Get(ctx context.Context, path string, _ ...secrets.GetOption) (*secrets.Secret, error) {
-	tenant := sdktransport.TenantFromContext(ctx)
-	c.seen = append(c.seen, tenant)
-	secret, ok := c.byTenant[tenant][path]
-	if !ok {
-		return nil, errTenantSecretMissing{tenant: tenant, path: path}
-	}
-	return secret, nil
-}
-
-// The tenant secrets fake marks each tenant's secret by its version, which the
-// router's response carries.
-const (
-	tenantASecretVersion  = 11
-	tenantBSecretVersion  = 22
-	tenantBPrivateVersion = 33
-)
-
-func newTenantSecretsClient() *tenantSecretsClient {
-	return &tenantSecretsClient{byTenant: map[string]map[string]*secrets.Secret{
-		iamRESTTenantA: {"db": {Path: "db", Version: tenantASecretVersion}},
-		iamRESTTenantB: {
-			"db":     {Path: "db", Version: tenantBSecretVersion},
-			"b-only": {Path: "b-only", Version: tenantBPrivateVersion},
-		},
-	}}
+func (c *countingSecretsClient) Get(context.Context, string, ...secrets.GetOption) (*secrets.Secret, error) {
+	c.gets.Add(1)
+	return &secrets.Secret{Path: "db"}, nil
 }
 
 func kmsTenantRESTServer(t *testing.T, kmsClient kms.Client, secretsClient secrets.Client) *RESTServer {
@@ -261,68 +233,70 @@ func kmsTenantRESTServer(t *testing.T, kmsClient kms.Client, secretsClient secre
 	return s
 }
 
-// secretVersionField is the response fragment naming a secret's version.
-func secretVersionField(version int) string {
-	return `"version":` + strconv.Itoa(version)
+// countingKMSClient is a KMS fake counting the calls that reach it.
+func countingKMSClient(calls *atomic.Int32) *platformMockKMSClient {
+	return &platformMockKMSClient{
+		deleteKeyFn: func(context.Context, string) error {
+			calls.Add(1)
+			return nil
+		},
+		backendStatusFn: func(context.Context) (*kms.BackendStatusResponse, error) {
+			calls.Add(1)
+			return &kms.BackendStatusResponse{}, nil
+		},
+	}
 }
 
-func TestKMSREST_SecretsRunInTheCallersTenant(t *testing.T) {
-	secretsClient := newTenantSecretsClient()
-	s := kmsTenantRESTServer(t, &platformMockKMSClient{}, secretsClient)
+// Codex 8555 P0: the pinned SDK does not carry the caller's tenant to the
+// embedded KMS and secrets services, which would run a tenant call in system
+// scope. Every mounted route refuses a tenant caller before any SDK call.
+func TestKMSREST_TenantCallerIsRefusedOnEveryRoute(t *testing.T) {
+	var kmsCalls atomic.Int32
+	secretsClient := &countingSecretsClient{}
+	s := kmsTenantRESTServer(t, countingKMSClient(&kmsCalls), secretsClient)
+	routes := kmsRouterRoutes(t, s)
+	require.Len(t, routes, 42)
 
-	recorder := serveIAM(s, http.MethodGet, "/api/v1/kms/secrets/db", "a-secrets")
-	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
-	assert.Contains(t, recorder.Body.String(), secretVersionField(tenantASecretVersion))
-
-	recorder = serveIAM(s, http.MethodGet, "/api/v1/kms/secrets/db", "b-secrets")
-	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
-	assert.Contains(t, recorder.Body.String(), secretVersionField(tenantBSecretVersion))
-
-	recorder = serveIAM(s, http.MethodGet, "/api/v1/kms/secrets/b-only", "a-secrets")
-	assert.NotEqual(t, http.StatusOK, recorder.Code, "tenant A reads tenant B's secret")
-	assert.NotContains(t, recorder.Body.String(), secretVersionField(tenantBPrivateVersion))
-
-	assert.Equal(t, []string{iamRESTTenantA, iamRESTTenantB, iamRESTTenantA}, secretsClient.seen)
+	for _, route := range routes {
+		path := kmsRoutePath.Replace(route.template)
+		assertTenantNotBridged(t, serveIAM(s, route.method, path, "a-operator"), "a-operator")
+		if strings.HasSuffix(route.scope, ":read") {
+			assertTenantNotBridged(t, serveIAM(s, route.method, path, "a-reader"), "a-reader")
+		}
+	}
+	assert.Zero(t, kmsCalls.Load(), "a tenant caller never reaches the SDK KMS client")
+	assert.Zero(t, secretsClient.gets.Load(), "a tenant caller never reaches the SDK secrets client")
 }
 
-func TestKMSREST_KMSCallRunsInTheCallersTenant(t *testing.T) {
-	var seen []string
-	client := &platformMockKMSClient{deleteKeyFn: func(ctx context.Context, _ string) error {
-		seen = append(seen, sdktransport.TenantFromContext(ctx))
-		return nil
-	}}
-	s := kmsTenantRESTServer(t, client, newTenantSecretsClient())
-	assertReachedHandler(t, serveIAM(s, http.MethodDelete, "/api/v1/kms/keys/k1", "a-kms"))
-	assertReachedHandler(t, serveIAM(s, http.MethodDelete, "/api/v1/kms/keys/k1", "b-kms"))
-	assert.Equal(t, []string{iamRESTTenantA, iamRESTTenantB}, seen)
+// A refused tenant caller never reaches the SDK client, whichever check
+// refuses it.
+func TestKMSREST_TenantCallerNeverReachesTheSDKClient(t *testing.T) {
+	var deletes atomic.Int32
+	s := kmsRESTServer(t, countingKMSClient(&deletes))
+	recorder := serveIAM(s, http.MethodDelete, "/api/v1/kms/keys/k1", "kms-reader")
+	assert.Equal(t, http.StatusForbidden, recorder.Code)
+	assert.Contains(t, recorder.Body.String(), "scope kms:delete required")
+	assertTenantNotBridged(t, serveIAM(s, http.MethodDelete, "/api/v1/kms/keys/k1", "kms-deleter"), "kms-deleter")
+	assert.Zero(t, deletes.Load(), "a refused delete never reaches the client")
 }
 
 func TestKMSREST_CallerWithoutTenantIsRefused(t *testing.T) {
-	secretsClient := newTenantSecretsClient()
+	secretsClient := &countingSecretsClient{}
 	s := kmsTenantRESTServer(t, &platformMockKMSClient{}, secretsClient)
 	for _, token := range []string{"no-tenant", "no-tenant-admin"} {
 		recorder := serveIAM(s, http.MethodGet, "/api/v1/kms/secrets/db", token)
 		assert.Equal(t, http.StatusForbidden, recorder.Code, token)
 		assert.Contains(t, recorder.Body.String(), ErrKMSRESTNoTenant{Subject: token}.Error(), token)
 	}
-	assert.Empty(t, secretsClient.seen, "a caller with no tenant never reaches the SDK")
+	assert.Zero(t, secretsClient.gets.Load(), "a caller with no tenant never reaches the SDK")
 }
 
-// The mTLS operator's *:* scope admits every method on every resource.
-func TestKMSREST_OperatorPassesEveryMethod(t *testing.T) {
-	s := kmsRESTServer(t, &platformMockKMSClient{})
-	for _, route := range []struct{ method, path string }{
-		{http.MethodGet, "/api/v1/kms/keys"},
-		{http.MethodPost, "/api/v1/kms/encrypt/k1"},
-		{http.MethodPut, "/api/v1/kms/keys/k1/policy"},
-		{http.MethodDelete, "/api/v1/kms/keys/k1"},
-		{http.MethodGet, "/api/v1/kms/secrets/db-password"},
-		{http.MethodDelete, "/api/v1/kms/secrets/db-password"},
-		{http.MethodPost, "/api/v1/kms/deks"},
-	} {
-		recorder := serveIAM(s, route.method, route.path, "operator")
-		assertReachedHandler(t, recorder, "%s %s: %s", route.method, route.path, recorder.Body.String())
-	}
+func TestErrKMSRESTTenantNotBridged(t *testing.T) {
+	err := ErrKMSRESTTenantNotBridged{Subject: "svc", TenantID: "tenant-a"}
+	assert.Contains(t, err.Error(), "svc")
+	assert.Contains(t, err.Error(), "tenant-a")
+	assert.Contains(t, err.Error(), "SDK gap")
+	assert.NotContains(t, ErrKMSRESTTenantNotBridged{Subject: "svc", TenantID: "tenant-b"}.Error(), "tenant-a")
 }
 
 func TestKMSREST_NoCredentialIsUnauthorized(t *testing.T) {
@@ -355,9 +329,10 @@ func TestKMSREST_RouterTakesPrecedenceOverTheDaemonHandlers(t *testing.T) {
 
 	assert.Equal(t, http.StatusUnauthorized, serveIAM(s, http.MethodGet, "/api/v1/kms/status", "").Code,
 		"the facade-only status route answers through the guard")
-	recorder := serveIAM(s, http.MethodGet, "/api/v1/kms/status", "kms-reader")
-	assertReachedHandler(t, recorder, recorder.Body.String())
-	assert.Equal(t, int32(1), statusCalls.Load(), "/api/v1/kms/status still reaches the daemon facade")
+	// The facade calls the same SDK client, so its tenant caller is refused
+	// too; the refusal, not a 404, shows the facade-only route is mounted.
+	assertTenantNotBridged(t, serveIAM(s, http.MethodGet, "/api/v1/kms/status", "kms-reader"), "kms-reader")
+	assert.Zero(t, statusCalls.Load(), "a tenant caller never reaches the facade's SDK client")
 }
 
 func TestSetKMSHandlers_NilGuardIsRefused(t *testing.T) {
@@ -391,8 +366,7 @@ func TestSetKMSHandlers_FacadeOnlyPathNeedsScope(t *testing.T) {
 	assert.Equal(t, http.StatusForbidden, recorder.Code)
 	assert.Contains(t, recorder.Body.String(), "scope kms:write required")
 
-	recorder = serveIAM(s, http.MethodGet, "/api/v1/kms/status", "kms-reader")
-	assertReachedHandler(t, recorder, recorder.Body.String())
+	assertTenantNotBridged(t, serveIAM(s, http.MethodGet, "/api/v1/kms/status", "kms-reader"), "kms-reader")
 }
 
 // A request whose method has no action is refused before the scope check.
