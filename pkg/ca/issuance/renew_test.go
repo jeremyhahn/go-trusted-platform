@@ -16,9 +16,13 @@ package issuance
 import (
 	"context"
 	"crypto"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/asn1"
 	"errors"
 	"math/big"
 	"net"
@@ -262,6 +266,68 @@ func TestRenew_AnEKURestrictedCAIsRefusedBeforeRevocation(t *testing.T) {
 	assert.ErrorIs(t, err, ErrCAExtKeyUsageUnsupported{})
 	assert.True(t, IsInvalidRequest(err))
 	assertRenewalUntouched(t, ca.renewCA)
+}
+
+// encodedCACert signs the CA template with a fresh key and parses the result,
+// so the restriction under test is the one a stored certificate's extensions
+// actually carry, not a field set on an in-memory struct.
+func encodedCACert(t *testing.T, restrict func(*x509.Certificate)) *x509.Certificate {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	require.NoError(t, err)
+	template := renewableCACert(0)
+	restrict(template)
+	der, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
+	require.NoError(t, err)
+	cert, err := x509.ParseCertificate(der)
+	require.NoError(t, err)
+	return cert
+}
+
+func TestRenew_ACAWithARestrictionTheSDKCannotCarryIsRefusedBeforeRevocation(t *testing.T) {
+	cases := map[string]struct {
+		restrict    func(*x509.Certificate)
+		restriction string
+	}{
+		"permitted DNS domain": {
+			restrict:    func(c *x509.Certificate) { c.PermittedDNSDomains = []string{"example.com"} },
+			restriction: "name constraints",
+		},
+		"excluded URI domain": {
+			restrict:    func(c *x509.Certificate) { c.ExcludedURIDomains = []string{"evil.example"} },
+			restriction: "name constraints",
+		},
+		"only an unknown EKU OID": {
+			restrict: func(c *x509.Certificate) {
+				c.UnknownExtKeyUsage = []asn1.ObjectIdentifier{{1, 3, 6, 1, 4, 1, 99999, 1}}
+			},
+			restriction: "an unrecognized extended key usage",
+		},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			ca := &renewIssuerCA{
+				renewCA: newRenewCA(),
+				issuer:  &x509.Certificate{Subject: pkix.Name{CommonName: "Root"}, IsCA: true, BasicConstraintsValid: true, MaxPathLen: -1},
+			}
+			existing := encodedCACert(t, tc.restrict)
+
+			_, err := Renew(context.Background(), ca, existing, RenewOptions{ValidDays: 30})
+
+			var refusal *CARestrictionUnsupportedError
+			require.ErrorAs(t, err, &refusal)
+			assert.Equal(t, tc.restriction, refusal.Restriction)
+			assert.True(t, IsInvalidRequest(err))
+			assert.Contains(t, err.Error(), "ca.CertificateRequest", "the refusal names the SDK gap")
+			assertRenewalUntouched(t, ca.renewCA)
+		})
+	}
+}
+
+func TestCheckRenewableRestrictions_ALeafAndAnUnrestrictedCAPass(t *testing.T) {
+	assert.NoError(t, checkRenewableRestrictions(nil))
+	assert.NoError(t, checkRenewableRestrictions(renewableCert()))
+	assert.NoError(t, checkRenewableRestrictions(encodedCACert(t, func(*x509.Certificate) {})))
 }
 
 // TestRenew_AnRSALeafRenewsOnARealSoftwareCA issues an RSA leaf on a

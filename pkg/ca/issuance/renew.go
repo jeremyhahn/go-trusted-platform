@@ -49,6 +49,9 @@ func Renew(ctx context.Context, ca quicbaasca.CACertificateAuthority, existing *
 
 	// Refuse before anything is revoked, rotated or deleted: a refusal from
 	// Issue after those steps would leave no usable certificate behind.
+	if err := checkRenewableRestrictions(existing); err != nil {
+		return nil, &RenewError{Step: "check the certificate's restrictions", Err: err}
+	}
 	req := renewalRequest(existing, opts)
 	if err := preflight(ca, req); err != nil {
 		return nil, &RenewError{Step: "check the renewal against the issuer", Err: err}
@@ -74,6 +77,32 @@ func Renew(ctx context.Context, ca quicbaasca.CACertificateAuthority, existing *
 		return nil, &RenewError{Step: "issue the renewed certificate", Err: err}
 	}
 	return issued.Certificate, nil
+}
+
+// checkRenewableRestrictions refuses the renewal of a CA certificate whose
+// name constraints or unrecognized extended key usages renewalRequest cannot
+// copy: the SDK request has no field for either, so the replacement CA would
+// silently lose them (CARestrictionUnsupportedError).
+func checkRenewableRestrictions(existing *x509.Certificate) error {
+	if existing == nil || !existing.IsCA {
+		return nil
+	}
+	if hasNameConstraints(existing) {
+		return &CARestrictionUnsupportedError{Restriction: "name constraints"}
+	}
+	if len(existing.UnknownExtKeyUsage) > 0 {
+		return &CARestrictionUnsupportedError{Restriction: "an unrecognized extended key usage"}
+	}
+	return nil
+}
+
+// hasNameConstraints reports whether the certificate carries any permitted or
+// excluded DNS, IP, email or URI name constraint (RFC 5280 §4.2.1.10).
+func hasNameConstraints(cert *x509.Certificate) bool {
+	return len(cert.PermittedDNSDomains) > 0 || len(cert.ExcludedDNSDomains) > 0 ||
+		len(cert.PermittedIPRanges) > 0 || len(cert.ExcludedIPRanges) > 0 ||
+		len(cert.PermittedEmailAddresses) > 0 || len(cert.ExcludedEmailAddresses) > 0 ||
+		len(cert.PermittedURIDomains) > 0 || len(cert.ExcludedURIDomains) > 0
 }
 
 // renewalRequest is the issue request for existing's renewal: its subject,

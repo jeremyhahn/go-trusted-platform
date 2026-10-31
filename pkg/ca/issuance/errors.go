@@ -264,3 +264,24 @@ func (ErrCAExtKeyUsageUnsupported) Error() string {
 }
 
 func (ErrCAExtKeyUsageUnsupported) invalidRequest() {}
+
+// CARestrictionUnsupportedError is the renewal of a CA certificate that
+// carries a restriction the SDK's certificate request cannot express: name
+// constraints (RFC 5280 §4.2.1.10) or an extended key usage OID Go does not
+// recognize (RFC 5280 §4.2.1.12). The go-xkms CertificateRequest the SDK
+// re-exports (quicbaas sdk/go/xkms/ca.CACertificateRequest) has no field for
+// either, so the renewed CA would come out without the restriction, able to
+// certify names or purposes the old one could not. The renewal is refused
+// before the old certificate is revoked until the SDK request carries them.
+type CARestrictionUnsupportedError struct {
+	// Restriction names what the certificate carries.
+	Restriction string
+}
+
+func (e *CARestrictionUnsupportedError) Error() string {
+	return "a CA certificate with " + e.Restriction + " cannot be renewed: " +
+		"the SDK certificate request (go-xkms ca.CertificateRequest) has no field for it, " +
+		"so the renewed CA would be issued without the restriction"
+}
+
+func (e *CARestrictionUnsupportedError) invalidRequest() {}
