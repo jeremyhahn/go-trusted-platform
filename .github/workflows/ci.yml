@@ -796,7 +796,7 @@ jobs:
     # no image is left for legs that never run. v1.29.3: schedule-guard as
     # the template has it, as on every bigdisk job.
     needs: [image, schedule-guard]
-    timeout-minutes: 60
+    timeout-minutes: 83
     outputs:
       image_id: ${{ steps.build.outputs.image_id }}
       # The image's identity on any daemon: a hash of its layers' diff ids,
